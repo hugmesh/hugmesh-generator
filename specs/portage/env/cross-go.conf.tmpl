@@ -1,0 +1,10 @@
+# Go cross-compilation environment for Kubernetes packages
+#
+# Variables substituted at build time:
+#   @@CROSS_TARGET@@    Target triplet
+
+CGO_ENABLED=1
+GOARCH=arm64
+GOOS=linux
+CC="@@CROSS_TARGET@@-gcc"
+CXX="@@CROSS_TARGET@@-g++"

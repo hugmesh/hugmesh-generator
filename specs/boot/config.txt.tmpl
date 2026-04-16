@@ -1,0 +1,28 @@
+# RPi 5 boot configuration (BCM2712) — hardened
+#
+# Variables substituted at build time:
+#   @@RPI_KERNEL_IMG@@   Kernel image filename
+#   @@PCIE_LINE@@        PCIe Gen 3 toggle (commented or uncommented)
+
+arm_64bit=1
+kernel=@@RPI_KERNEL_IMG@@
+disable_overscan=1
+dtparam=audio=on
+gpu_mem=64
+camera_auto_detect=1
+display_auto_detect=1
+
+dtparam=uart0=on
+enable_uart=1
+
+# PCIe — Gen 2 default
+@@PCIE_LINE@@
+
+# Fan control (active cooler / case fan)
+dtoverlay=pwm-fan,gpiopin=14,temp0=50000,temp1=60000,temp2=70000
+
+dtparam=power_led_trigger=default-on
+dtparam=pwr_led_activelow=off
+
+[all]
+arm_boost=1

@@ -1,0 +1,4 @@
+sys-kernel/raspberrypi-sources ~arm64
+sys-boot/raspberrypi-firmware ~arm64
+sys-firmware/raspberrypi-wifi-ucode ~arm64
+sys-apps/raspberrypi-utils ~arm64

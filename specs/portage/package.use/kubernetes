@@ -1,0 +1,4 @@
+app-containers/containerd btrfs device-mapper seccomp apparmor
+app-containers/runc seccomp apparmor
+sys-apps/ethtool -nls
+net-firewall/iptables nftables

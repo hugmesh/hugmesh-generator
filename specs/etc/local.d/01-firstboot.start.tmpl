@@ -1,0 +1,47 @@
+#!/bin/bash
+# First-boot setup — runs once, then self-destructs
+#
+# Variables substituted at build time:
+#   @@HOSTNAME@@           Target hostname
+#   @@DEFAULT_USER@@       Non-root user to create
+#   @@DEFAULT_USER_PASS@@  Password for default user
+#   @@ROOT_PASS@@          Root password
+
+locale-gen
+eselect locale set en_US.utf8
+env-update && source /etc/profile
+
+if ! id @@DEFAULT_USER@@ &>/dev/null; then
+    useradd -m -G wheel,audio,video,usb -s /bin/bash @@DEFAULT_USER@@
+    echo "@@DEFAULT_USER@@:@@DEFAULT_USER_PASS@@" | chpasswd
+    echo "root:@@ROOT_PASS@@" | chpasswd
+    echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
+fi
+
+for mod in overlay br_netfilter ip_vs ip_vs_rr ip_vs_wrr ip_vs_sh nf_conntrack vxlan; do
+    modprobe "${mod}" 2>/dev/null || true
+done
+sysctl --system
+
+if [ -d /usr/libexec/cni ] && [ -z "$(ls -A /opt/cni/bin 2>/dev/null)" ]; then
+    cp /usr/libexec/cni/* /opt/cni/bin/
+fi
+
+if [ -b /dev/nvme0n1 ]; then
+    echo "NVMe detected: $(nvme id-ctrl /dev/nvme0n1 -H 2>/dev/null | grep 'Model Number' || echo '/dev/nvme0n1')"
+fi
+
+echo ""
+echo "=== Gentoo RPi 5 (Hardened + Kubernetes) ==="
+echo "  Hostname:    @@HOSTNAME@@"
+echo "  Kubernetes:  $(kubelet --version 2>/dev/null || echo 'installed')"
+echo "  containerd:  $(containerd --version 2>/dev/null || echo 'installed')"
+echo ""
+echo "  Control plane:  kubeadm init --config /etc/kubernetes/kubeadm-config.yaml"
+echo "  Worker node:    kubeadm join <cp>:6443 --token <tok> --discovery-token-ca-cert-hash <hash>"
+echo ""
+echo "  Credentials:    root:@@ROOT_PASS@@  @@DEFAULT_USER@@:@@DEFAULT_USER_PASS@@"
+echo "  SSH:            key-only — add pubkey to ~/.ssh/authorized_keys"
+echo "=== CHANGE ALL DEFAULT PASSWORDS IMMEDIATELY ==="
+
+rm -f /etc/local.d/01-firstboot.start

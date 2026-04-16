@@ -1,0 +1,3 @@
+sys-kernel/raspberrypi-sources symlink
+sys-block/parted device-mapper
+net-misc/networkmanager wifi

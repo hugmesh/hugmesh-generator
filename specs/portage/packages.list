@@ -1,0 +1,60 @@
+# Stage4 package list — one atom per line
+# Lines starting with # are ignored
+# Edit this file to add or remove packages from the image
+
+# ── Kernel & firmware ──────────────────────────────────────────────
+sys-kernel/raspberrypi-sources
+sys-boot/raspberrypi-firmware
+sys-firmware/raspberrypi-wifi-ucode
+sys-apps/raspberrypi-utils
+
+# ── RPi 5 hardware ────────────────────────────────────────────────
+sys-fs/nvme-cli
+sys-block/parted
+sys-apps/pciutils
+sys-apps/usbutils
+sys-apps/i2c-tools
+
+# ── Networking ─────────────────────────────────────────────────────
+net-misc/networkmanager
+net-misc/openssh
+net-wireless/wpa_supplicant
+net-firewall/iptables
+net-firewall/conntrack-tools
+net-misc/socat
+net-dns/bind-tools
+
+# ── System ─────────────────────────────────────────────────────────
+app-admin/sudo
+sys-process/cronie
+sys-apps/haveged
+app-editors/nano
+app-misc/screen
+sys-boot/u-boot-tools
+
+# ── Hardened / security ────────────────────────────────────────────
+sys-apps/apparmor
+sys-apps/apparmor-utils
+sec-policy/apparmor-profiles
+sys-libs/libseccomp
+app-admin/auditd
+sys-process/audit
+
+# ── Container runtime ─────────────────────────────────────────────
+app-containers/containerd
+app-containers/runc
+app-containers/cni-plugins
+app-containers/cri-tools
+app-containers/nerdctl
+
+# ── Kubernetes ─────────────────────────────────────────────────────
+sys-cluster/kubelet
+sys-cluster/kubeadm
+sys-cluster/kubectl
+
+# ── K8s dependencies ──────────────────────────────────────────────
+net-misc/ethtool
+sys-apps/iproute2
+sys-fs/e2fsprogs
+sys-fs/xfsprogs
+sys-apps/util-linux

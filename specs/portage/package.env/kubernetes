@@ -1,0 +1,8 @@
+sys-cluster/kubelet cross-go.conf
+sys-cluster/kubeadm cross-go.conf
+sys-cluster/kubectl cross-go.conf
+app-containers/containerd cross-go.conf
+app-containers/cri-tools cross-go.conf
+app-containers/cni-plugins cross-go.conf
+app-containers/runc cross-go.conf
+app-containers/nerdctl cross-go.conf

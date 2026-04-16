@@ -1,0 +1,35 @@
+# Cross-compilation — @@RPI_CPU@@ — HARDENED
+#
+# Variables substituted at build time:
+#   @@CBUILD@@           Host compiler triplet
+#   @@CROSS_TARGET@@     Target triplet (e.g. aarch64-unknown-linux-gnu)
+#   @@RPI_CPU@@          GCC -mcpu / -mtune value
+#   @@JOBS@@             Parallel make jobs
+#   @@WORK_DIR@@         Base build directory
+
+CBUILD="@@CBUILD@@"
+CHOST="@@CROSS_TARGET@@"
+
+# Hardened CFLAGS
+CFLAGS="-mcpu=@@RPI_CPU@@ -mtune=@@RPI_CPU@@ -O2 -pipe -fstack-protector-strong -D_FORTIFY_SOURCE=2"
+CXXFLAGS="${CFLAGS}"
+LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
+
+MAKEOPTS="-j@@JOBS@@"
+FEATURES="buildpkg nostrip -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox"
+PKGDIR="@@WORK_DIR@@/pkgdir"
+DISTDIR="@@WORK_DIR@@/distfiles"
+
+# Hardened USE baseline + container runtime requirements
+USE="bindist hardened pie ssp -X -gtk -qt5 -qt6 -systemd -pulseaudio -bluetooth"
+USE="${USE} cgroup cgroup2 seccomp apparmor containers netlink"
+INPUT_DEVICES=""
+VIDEO_CARDS="v3d vc4"
+
+ACCEPT_LICENSE="*"
+ACCEPT_KEYWORDS="arm64 ~arm64"
+
+PYTHON_TARGETS="python3_12"
+PYTHON_SINGLE_TARGET="python3_12"
+
+PAX_MARKINGS="none"

@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+
+description="containerd container runtime"
+command="/usr/bin/containerd"
+command_args="--config /etc/containerd/config.toml"
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+start_stop_daemon_args="--stderr /var/log/containerd.err --stdout /var/log/containerd.log"
+
+depend() {
+    need net localmount
+    after firewall
+}

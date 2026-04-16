@@ -1,0 +1,9 @@
+sys-cluster/kubelet ~arm64
+sys-cluster/kubeadm ~arm64
+sys-cluster/kubectl ~arm64
+app-containers/containerd ~arm64
+app-containers/cri-tools ~arm64
+app-containers/cni-plugins ~arm64
+app-containers/runc ~arm64
+app-containers/nerdctl ~arm64
+net-firewall/conntrack-tools ~arm64
