@@ -43,6 +43,17 @@
     }
   },
 
+  "nodes": [
+    { "name": "snapdragon-pki",  "ip": "10.0.0.10", "role": "pki" },
+    { "name": "snapdragon-be-01", "ip": "10.0.0.20", "role": "backend" },
+    { "name": "snapdragon-fe-01", "ip": "10.0.0.21", "role": "frontend" },
+    { "name": "snapdragon-host", "ip": "10.0.0.30", "role": "host" }
+  ],
+
+  "binhost": {
+    "url": "http://10.0.0.30:8086/arm64"
+  },
+
   "selinux": {
     "type": "mcs",
     "mode": "permissive"

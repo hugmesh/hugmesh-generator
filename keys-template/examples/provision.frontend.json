@@ -24,6 +24,6 @@
   "snapdragon": {
     "role": "frontend",
     "cluster_domain": "snapdragon.systems",
-    "node_labels": { "snapdragon.systems/role": "frontend" }
+    "node_labels": { "snapdragon.systems/frontend": "true" }
   }
 }

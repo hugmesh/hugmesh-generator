@@ -25,8 +25,25 @@
     "role": "host",
     "cluster_domain": "snapdragon.systems",
     "node_labels": {
-      "snapdragon.systems/role": "games",
+      "snapdragon.systems/frontend": "true",
+      "snapdragon.systems/backend": "true",
+      "snapdragon.systems/games": "true",
+      "snapdragon.systems/devops": "true",
       "snapdragon.systems/compute": "gpu"
     }
+  },
+
+  "nodes": [
+    { "name": "snapdragon-pki", "ip": "10.0.0.10", "role": "pki" },
+    { "name": "snapdragon-host", "ip": "10.0.0.30", "role": "host" }
+  ],
+
+  "storage": {
+    "devices": [
+      { "match": "nvme", "mountpoint": "/mnt/data", "filesystem": "ext4", "format": false,
+        "options": "defaults,noatime", "use_for": ["containerd", "kubelet"] },
+      { "match": "usb", "mountpoint": "/mnt/usb", "filesystem": "ext4", "format": false,
+        "options": "defaults,noatime" }
+    ]
   }
 }

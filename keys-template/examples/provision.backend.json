@@ -24,8 +24,16 @@
   "snapdragon": {
     "role": "backend",
     "cluster_domain": "snapdragon.systems",
-    "node_labels": { "snapdragon.systems/role": "backend" }
+    "node_labels": { "snapdragon.systems/backend": "true" }
   },
+
+  "_comment_nodes": "Reach the pki control-plane + mesh + binhost by IP (written to /etc/hosts), so tailscale login_server and kubeadm api_server resolve before DNS exists.",
+  "nodes": [
+    { "name": "snapdragon-pki",  "ip": "10.0.0.10", "role": "pki" },
+    { "name": "snapdragon-host", "ip": "10.0.0.30", "role": "host" }
+  ],
+
+  "binhost": { "url": "http://10.0.0.30:8086/arm64" },
 
   "files": [
     {

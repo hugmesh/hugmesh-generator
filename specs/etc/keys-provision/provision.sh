@@ -780,6 +780,115 @@ provision_run_hooks() {
     done
 }
 
+# ── Java truststore + keystores from the USB cert chain ───────────
+# Builds a PKCS12 truststore (no Java needed) from the cluster CA / cert chain
+# on the KEYS stick, installs the per-service JKS keystores, and (on the
+# control-plane) publishes them as k8s Secrets the Java containers mount into
+# their JRE. Java IO then trusts the cluster CA: the gateways/Spring services
+# run with -Djavax.net.ssl.trustStore pointing at this store.
+provision_truststore() {
+    local pki=/etc/snapdragon/pki
+    local cas=()
+    [ -f "${BASE}/certs/cluster-ca.crt" ] && cas+=("${BASE}/certs/cluster-ca.crt")
+    for c in "${BASE}/certs/"*.crt; do [ -f "${c}" ] && cas+=("${c}"); done
+    [ "${#cas[@]}" -gt 0 ] || { log "No KEYS certs — skipping truststore"; return 0; }
+    mkdir -p "${pki}"
+    cat "${cas[@]}" > "${pki}/ca-chain.crt"
+    # PKCS12 truststore (Java reads it natively: trustStoreType=PKCS12).
+    local tspass; tspass="$(openssl rand -hex 16)"
+    openssl pkcs12 -export -nokeys -in "${pki}/ca-chain.crt" \
+        -out "${pki}/truststore.p12" -passout "pass:${tspass}" -name cluster-ca 2>/dev/null \
+        && { echo "${tspass}" > "${pki}/truststore.pass"; chmod 0600 "${pki}/truststore.pass"; \
+             log "Built Java truststore ${pki}/truststore.p12 from KEYS cert chain"; }
+    # Ship pre-generated JKS truststore + per-service keystores if present.
+    [ -d "${BASE}/keystores" ] && { cp -f "${BASE}/keystores/"*.jks "${pki}/" 2>/dev/null || true; \
+        log "Installed JKS keystores from KEYS/keystores"; }
+    chmod -R go-rwx "${pki}" 2>/dev/null || true
+
+    # Publish to the cluster so Java pods mount it (control-plane only).
+    if [ -f /etc/kubernetes/admin.conf ] && have kubectl; then
+        KUBECONFIG=/etc/kubernetes/admin.conf kubectl create secret generic snapdragon-truststore \
+            -n kube-system --from-file="${pki}/truststore.p12" \
+            --dry-run=client -o yaml 2>/dev/null | KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f - 2>/dev/null \
+            && log "Published truststore as Secret kube-system/snapdragon-truststore" || true
+    fi
+}
+
+# ── SELinux first-boot setup (load policy on the Pi; relabel; set mode) ──
+provision_selinux() {
+    [ -d /etc/selinux ] || { log "SELinux not installed — skipping"; return 0; }
+    have semodule || { log "semodule absent — skipping SELinux setup"; return 0; }
+    local type mode
+    type="$(jqm '.selinux.type // "mcs"')";  [ -n "${type}" ] && [ "${type}" != "null" ] || type=mcs
+    mode="$(jqm '.selinux.mode // "permissive"')"; [ -n "${mode}" ] && [ "${mode}" != "null" ] || mode=permissive
+    log "SELinux: type=${type} mode=${mode}"
+
+    # Config (start permissive by default so a mislabel never bricks the node).
+    cat > /etc/selinux/config <<EOF
+SELINUX=${mode}
+SELINUXTYPE=${type}
+EOF
+    # On the cross-built Pi image the policy modules were installed but not
+    # loaded (postinst can't run the target semodule). Build/load the store now,
+    # natively, then relabel the filesystem.
+    if ! ls /etc/selinux/"${type}"/policy/policy.* >/dev/null 2>&1; then
+        log "Loading SELinux base policy (${type})"
+        semodule -s "${type}" -B 2>/dev/null \
+            || semodule -s "${type}" -i /usr/share/selinux/"${type}"/*.pp 2>/dev/null \
+            || warn "semodule load failed; node will boot without loaded policy"
+    fi
+    log "Relabelling filesystem (this can take a while)"
+    if have setfiles && [ -f "/etc/selinux/${type}/contexts/files/file_contexts" ]; then
+        setfiles -F "/etc/selinux/${type}/contexts/files/file_contexts" / 2>/dev/null || \
+        restorecon -RF / 2>/dev/null || warn "relabel incomplete"
+    else
+        restorecon -RF / 2>/dev/null || warn "restorecon unavailable"
+    fi
+    touch /.autorelabel
+    log "SELinux configured (${mode}). Switch to enforcing after verifying: setenforce 1 + SELINUX=enforcing"
+}
+
+# ── Cluster node inventory -> /etc/hosts (reach peers by IP) ──────
+# So a joining node reaches the mesh (headscale/tailscale login_server) and the
+# k8s control-plane (kubeadm api_server) by IP even before DNS exists: the
+# hostname-based config resolves via these /etc/hosts entries.
+provision_hosts() {
+    jqe '.nodes' || return 0
+    local n i ip name dom
+    n="$(jqm '.nodes | length')"
+    dom="$(jqm '.snapdragon.cluster_domain // ""')"
+    log "Writing /etc/hosts for ${n} cluster node(s)"
+    sed -i '/# >>> snapdragon nodes/,/# <<< snapdragon nodes/d' /etc/hosts 2>/dev/null || true
+    {
+        echo "# >>> snapdragon nodes"
+        for ((i = 0; i < n; i++)); do
+            ip="$(jqm ".nodes[$i].ip")"; name="$(jqm ".nodes[$i].name")"
+            [ -n "${ip}" ] && [ "${ip}" != "null" ] && [ -n "${name}" ] || continue
+            if [ -n "${dom}" ] && [ "${dom}" != "null" ]; then
+                echo "${ip} ${name} ${name}.${dom}"
+            else
+                echo "${ip} ${name}"
+            fi
+        done
+        echo "# <<< snapdragon nodes"
+    } >> /etc/hosts
+}
+
+# ── Gentoo binhost client (binary OS updates over the VPN) ────────
+provision_binhost() {
+    local url; url="$(jqm '.binhost.url // ""')"
+    [ -n "${url}" ] && [ "${url}" != "null" ] || return 0
+    # make.conf may be a file or a dir; append a drop-in either way.
+    if [ -d /etc/portage/make.conf ]; then
+        printf 'PORTAGE_BINHOST="%s"\nFEATURES="${FEATURES} getbinpkg"\n' "${url}" \
+            > /etc/portage/make.conf/zz-binhost.conf
+    elif ! grep -q 'PORTAGE_BINHOST' /etc/portage/make.conf 2>/dev/null; then
+        printf '\n# snapdragon binhost (binary OS updates over the VPN)\nPORTAGE_BINHOST="%s"\nFEATURES="${FEATURES} getbinpkg"\n' \
+            "${url}" >> /etc/portage/make.conf
+    fi
+    log "Configured Gentoo binhost: ${url}"
+}
+
 # ── Main ───────────────────────────────────────────────────────────
 main() {
     log "=== keys-provision starting ==="
@@ -806,9 +915,12 @@ main() {
 
     provision_ssh_host_keys
     provision_identity
+    provision_hosts      # peers reachable by IP before mesh/k8s join
+    provision_binhost    # binary OS updates over the VPN
     provision_users
     provision_network
     provision_files
+    provision_truststore
     provision_storage
     provision_headscale
     provision_tailscale
@@ -817,6 +929,7 @@ main() {
     provision_snapdragon
     provision_vault
     provision_run_hooks
+    provision_selinux   # last: relabel the fully-provisioned filesystem
 
     date -u '+%Y-%m-%dT%H:%M:%SZ' > "${DONE_MARKER}"
     log "=== keys-provision complete ==="
