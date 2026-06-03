@@ -18,6 +18,21 @@ const accounts = new Map();                   // id -> {id, provider, registrati
 const sessions = new Map();                   // token -> id
 const grants = new Map();                     // actorId -> Set(namespace)  (admin-granted namespace access)
 const NAMESPACES = ['snapdragon-pki', 'snapdragon-backend', 'snapdragon-frontend', 'snapdragon-games', 'observability'];
+// Per-gateway role->URL external access rules (stands in for the Postgres
+// gateway_route_access table the gateways read + Cassandra-cache).
+let nextRule = 1;
+const routeAccess = [
+  { id: String(nextRule++), gateway: 'snapdragon-fe-gateway', url_pattern: '/admin/**', role: 'ROLE_ADMIN', allow: true },
+  { id: String(nextRule++), gateway: 'snapdragon-fe-gateway', url_pattern: '/social/**', role: 'ROLE_USER', allow: true },
+  { id: String(nextRule++), gateway: 'snapdragon-be-gateway', url_pattern: '/api/**', role: 'ROLE_USER', allow: true },
+];
+// Latest delivered ISO artifacts (stands in for the GitLab generic package "latest" links).
+const ISOS = [
+  { name: 'gentoo-rpi5-arm64-pki-k8s-2026.0.iso', url: 'https://gitlab.snapdragon.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-pki-k8s-2026.0.iso' },
+  { name: 'gentoo-rpi5-arm64-backend-k8s-2026.0.iso', url: 'https://gitlab.snapdragon.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-backend-k8s-2026.0.iso' },
+  { name: 'gentoo-rpi5-arm64-frontend-k8s-2026.0.iso', url: 'https://gitlab.snapdragon.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-frontend-k8s-2026.0.iso' },
+  { name: 'gentoo-x86-snapdragon-host-2026.0.iso', url: 'https://gitlab.snapdragon.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-x86-snapdragon-host-2026.0.iso' },
+];
 // Real-service brokering: the BFF mints Matrix (Synapse) + Mastodon tokens
 // server-side so the UI never holds homeserver admin creds. Point at the real
 // Synapse/Casdoor; default to the integration stack ports.
@@ -220,6 +235,32 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'DELETE') grants.get(user).delete(b.namespace);
       const out = [...grants.entries()].map(([u, ns]) => ({ user: u, namespaces: [...ns] }));
       return send(res, 200, { namespaces: NAMESPACES, grants: out });
+    }
+
+    // ── Admin: per-gateway role->URL external access rules (Postgres-backed) ──
+    if (p === '/bff/admin/route-access') {
+      if (!me || !me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' });
+      if (req.method === 'GET') return send(res, 200, { rules: routeAccess });
+      if (req.method === 'POST') {
+        const b = await bodyOf(req);
+        if (!b.gateway || !b.url_pattern || !b.role) return send(res, 400, { error: 'gateway+url_pattern+role required' });
+        const rule = { id: String(nextRule++), gateway: b.gateway, url_pattern: b.url_pattern,
+                       role: b.role, casdoor_user: b.casdoor_user || null, allow: b.allow !== false };
+        routeAccess.push(rule); record(me.id, me.roles, 'admin.route');
+        return send(res, 200, { rules: routeAccess, added: rule });
+      }
+      if (req.method === 'DELETE') {
+        const b = await bodyOf(req);
+        const i = routeAccess.findIndex((r) => r.id === b.id);
+        if (i >= 0) routeAccess.splice(i, 1);
+        return send(res, 200, { rules: routeAccess });
+      }
+    }
+
+    // ── Admin: latest delivered ISO download links (from the CI pipeline) ──
+    if (req.method === 'GET' && p === '/bff/admin/isos') {
+      if (!me || !me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' });
+      return send(res, 200, { isos: ISOS });
     }
 
     return send(res, 404, { error: 'not found', path: p });
