@@ -17,6 +17,12 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD="${REPO_DIR}/build-rpi5-stage4.sh"
 GENKEYS="${SCRIPT_DIR}/gen-provision-keys.sh"
 WORK_DIR="${WORK_DIR:-${REPO_DIR}/rpi5-stage4-build}"
+# Honor a -w/--work-dir passed through to the builder so the keys-<role> folders
+# land beside the ISOs (recommend a dir OUTSIDE an encrypted/$HOME mount, e.g.
+# /var/tmp/snap-build — Portage + eCryptfs filename limits don't mix well).
+for ((_i = 1; _i <= $#; _i++)); do
+    case "${!_i}" in -w|--work-dir) _j=$((_i + 1)); WORK_DIR="${!_j}" ;; esac
+done
 
 ROLES=(pki backend frontend)
 

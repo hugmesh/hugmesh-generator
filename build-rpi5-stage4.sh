@@ -3,8 +3,9 @@
 # Build a hardened Gentoo aarch64 (RPi 5) stage4 ISO with Kubernetes
 # using crossdev toolchain on x86_64
 #
-# No root/sudo required for the build itself.
-# The bundled install.sh (inside the ISO) requires root on the target.
+# Run as root (sudo): the cross-emerge merges into the sysroot's vdb and writes
+# the host emerge log/cache, so real root is required (fakeroot is NOT enough).
+# The bundled install.sh (inside the ISO) also requires root on the target.
 set -euo pipefail
 
 # ── Resolve SCRIPT_DIR (where specs/ lives) ────────────────────────
@@ -75,10 +76,11 @@ DESCRIPTION
     with a hardened kernel, AppArmor, auditing, and a full Kubernetes
     stack (containerd, kubelet, kubeadm, kubectl, CNI plugins).
 
-    No root or sudo is required for the build.  All intermediate and
-    output files are written under the work directory.  The bundled
-    install.sh inside the ISO does require root on the machine that
-    writes the image to an SD card or NVMe drive.
+    Run as root (sudo).  The cross-emerge merges into the sysroot's
+    package database and writes the host emerge log/cache, so real root
+    is required (fakeroot is not sufficient).  Most output files are
+    written under the work directory.  The bundled install.sh inside the
+    ISO also requires root on the machine that writes the image.
 
     All configuration is stored in individual spec files under the
     specs/ directory next to this script.  Edit them before building
@@ -528,7 +530,8 @@ info "Logging to ${LOG_FILE}"
 # ── 2. Fetch seed stage3 ──────────────────────────────────────────
 banner "Fetching latest arm64 stage3 seed tarball"
 
-STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | grep -v '^#' | head -1 | awk '{print $1}')
+# The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
+STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
 STAGE3_FULL_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/${STAGE3_FILE}"
 STAGE3_LOCAL="${WORK_DIR}/${STAGE3_BASENAME}"
@@ -546,11 +549,17 @@ banner "Extracting seed stage3 into sysroot"
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     info "Sysroot already populated and --resume set, skipping extraction"
 else
-    tar -C "${SYSROOT}" \
-        --xattrs-include='*.*' \
-        -xpf "${STAGE3_LOCAL}" 2>/dev/null || \
-    tar -C "${SYSROOT}" -xpf "${STAGE3_LOCAL}"
-    info "Extracted into ${SYSROOT}"
+    # The stage3 carries /dev device nodes (mknod) + root ownership. A non-root
+    # cross-build can't create those, so skip device nodes on extract (the
+    # target populates /dev via devtmpfs at boot) and don't try to chown. The
+    # final stage4 tarball is forced to root ownership below, so the on-disk
+    # build-user ownership here doesn't matter. (Harmless when run as root too.)
+    TAR_X=(--exclude='./dev/*')
+    [ "$(id -u)" -ne 0 ] && TAR_X+=(--no-same-owner)
+    tar -C "${SYSROOT}" --xattrs-include='*.*' "${TAR_X[@]}" -xpf "${STAGE3_LOCAL}" 2>/dev/null || \
+    tar -C "${SYSROOT}" "${TAR_X[@]}" -xpf "${STAGE3_LOCAL}"
+    mkdir -p "${SYSROOT}/dev"
+    info "Extracted into ${SYSROOT} (device nodes skipped; devtmpfs at boot)"
 fi
 
 # ── 4. Install spec files into sysroot portage ─────────────────────
@@ -566,8 +575,23 @@ fi
 # Portage directories
 mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.mask,profile,env,package.env,repos.conf}
 
-# Plain-copy portage specs
-cp "${SPECS_DIR}/portage/profile/parent"                  "${SYSROOT}/etc/portage/profile/parent"
+# Point the sysroot at the HOST's gentoo ebuild repo (absolute path) so the
+# cross-emerge — run with PORTAGE_CONFIGROOT=${SYSROOT} — can resolve the
+# profile + ebuilds. The stage3 ships a *relative* make.profile symlink that
+# resolves inside the (repo-less) sysroot and yields "profile is invalid".
+GENTOO_REPO="$(portageq get_repo_path / gentoo 2>/dev/null || echo /var/db/repos/gentoo)"
+cat > "${SYSROOT}/etc/portage/repos.conf/gentoo.conf" <<EOF
+[DEFAULT]
+main-repo = gentoo
+[gentoo]
+location = ${GENTOO_REPO}
+EOF
+# Select the profile via an ABSOLUTE make.profile symlink derived from
+# profile/parent (strip the "gentoo:" repo prefix). use.mask is layered on top
+# as a local override (NOT a base-profile selector).
+PROFILE_PATH="$(sed 's/^gentoo://' "${SPECS_DIR}/portage/profile/parent" | tr -d '[:space:]')"
+[ -d "${GENTOO_REPO}/profiles/${PROFILE_PATH}" ] || { err "profile not found: ${GENTOO_REPO}/profiles/${PROFILE_PATH}"; exit 1; }
+ln -sfn "${GENTOO_REPO}/profiles/${PROFILE_PATH}" "${SYSROOT}/etc/portage/make.profile"
 cp "${SPECS_DIR}/portage/profile/use.mask"                "${SYSROOT}/etc/portage/profile/use.mask"
 cp "${SPECS_DIR}/portage/package.accept_keywords/rpi"     "${SYSROOT}/etc/portage/package.accept_keywords/rpi"
 cp "${SPECS_DIR}/portage/package.accept_keywords/kubernetes" "${SYSROOT}/etc/portage/package.accept_keywords/kubernetes"
@@ -671,13 +695,19 @@ for svc in "${DEFAULT_SVCS[@]}"; do
     ln -sf "/etc/init.d/${svc}" "${SYSROOT}/etc/runlevels/default/${svc}" 2>/dev/null || true
 done
 
-info "Profile: $(cat "${SYSROOT}/etc/portage/profile/parent")"
+info "Profile: ${PROFILE_PATH}"
 
 # ── 5. Cross-emerge helper ────────────────────────────────────────
 cross_emerge() {
+    # Keep emerge's log + dependency-metadata cache inside the work dir instead
+    # of the host's /var/log + /var/cache/edb (which are root-owned). Still needs
+    # to run as root: portage merges into the sysroot vdb and writes host caches.
+    mkdir -p "${WORK_DIR}/log" "${WORK_DIR}/edb"
     ROOT="${SYSROOT}" \
     SYSROOT="${SYSROOT}" \
     PORTAGE_CONFIGROOT="${SYSROOT}" \
+    EMERGE_LOG_DIR="${WORK_DIR}/log" \
+    PORTAGE_DEPCACHEDIR="${WORK_DIR}/edb" \
     "${CROSS_TARGET}-emerge" \
         --jobs="${JOBS}" \
         --load-average="${JOBS}" \
@@ -826,15 +856,17 @@ banner "Phase 4: Packaging stage4 tarball"
 
 STAGE4_TARBALL="${WORK_DIR}/stage4-${CROSS_TARGET}-rpi5-${ROLE}-k8s-${REL_VERSION}.tar.xz"
 
+# Force root ownership in the archive (--owner/--group=0): a non-root build owns
+# the sysroot as the build user, but the installed system must be root-owned.
 tar -C "${SYSROOT}" \
     --xattrs-include='*.*' \
-    --numeric-owner \
+    --numeric-owner --owner=0 --group=0 \
     --exclude='./usr/src' \
     --exclude='./var/cache' \
     --exclude='./tmp/*' \
     -cJf "${STAGE4_TARBALL}" . 2>/dev/null || \
 tar -C "${SYSROOT}" \
-    --numeric-owner \
+    --numeric-owner --owner=0 --group=0 \
     --exclude='./usr/src' \
     --exclude='./var/cache' \
     --exclude='./tmp/*' \
@@ -890,7 +922,7 @@ echo "  RPi 5 Hardened + Kubernetes Stage4 Complete"
 echo "==============================================${RESET}"
 echo ""
 echo "  Board:            Raspberry Pi 5 (${RPI_DTB_PREFIX} / ${RPI_CPU})"
-echo "  Profile:          $(cat "${SYSROOT}/etc/portage/profile/parent")"
+echo "  Profile:          ${PROFILE_PATH}"
 echo "  Kernel:           ${RPI_DEFCONFIG} + specs/kernel/hardened-k8s.config"
 echo "  Role:             ${ROLE}   (cluster domain: ${CLUSTER_DOMAIN})"
 echo "  Brand:            ${BRAND} / \"${BRAND_TITLE}\" / ${ORG}${CONFIG_FILE:+   (profile: ${CONFIG_FILE})}"

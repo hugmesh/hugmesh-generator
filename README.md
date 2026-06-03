@@ -48,7 +48,8 @@ git-ignored since it can hold default passwords.
 
 ## Prerequisites (build host)
 
-- **RPi 5 images** (cross-compiled, no root for the build): `crossdev` with
+- **RPi 5 images** (cross-compiled, run with **sudo** — cross-emerge merges into
+  the sysroot + writes host caches; fakeroot is not enough): `crossdev` with
   `aarch64-unknown-linux-gnu` built, plus `curl`, `tar`, `file`, `xorrisofs`
   (`dev-libs/libisoburn`). `crossdev --stable --target aarch64-unknown-linux-gnu`.
 - **x86_64 host image** (native, **root** required): an amd64 Gentoo host with
@@ -58,11 +59,12 @@ git-ignored since it can hold default passwords.
 ## Quick start (one-liners)
 
 ```bash
-# 1. Build all three Pi role ISOs into the git-ignored work dir
-./scripts/build-all-roles.sh -j "$(nproc)"
+# 1. Build all three Pi role ISOs into the git-ignored work dir (root: cross-emerge
+#    merges into the sysroot + writes host caches — fakeroot is not sufficient)
+sudo ./scripts/build-all-roles.sh -j "$(nproc)"
 
 # …or just one role
-./build-rpi5-stage4.sh --role pki
+sudo ./build-rpi5-stage4.sh --role pki
 
 # 2. Build the x86_64 GPU host ISO (native amd64 Gentoo host, as root)
 sudo ./build-x86-host-stage4.sh -j "$(nproc)"

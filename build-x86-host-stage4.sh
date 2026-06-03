@@ -178,7 +178,8 @@ info "Work dir: ${WORK_DIR}"
 
 # ── 2. Seed stage3 ─────────────────────────────────────────────────
 banner "Fetching amd64 hardened stage3 seed"
-STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | grep -v '^#' | head -1 | awk '{print $1}')
+# The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
+STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 STAGE3_LOCAL="${WORK_DIR}/$(basename "${STAGE3_FILE}")"
 STAGE3_URL="https://distfiles.gentoo.org/releases/amd64/autobuilds/${STAGE3_FILE}"
 [ -f "${STAGE3_LOCAL}" ] || { info "Downloading $(basename "${STAGE3_FILE}")"; curl -L -o "${STAGE3_LOCAL}" "${STAGE3_URL}"; }

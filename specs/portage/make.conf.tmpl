@@ -16,7 +16,9 @@ CXXFLAGS="${CFLAGS}"
 LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
 
 MAKEOPTS="-j@@JOBS@@"
-FEATURES="buildpkg nostrip -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox"
+# -userfetch/-userpriv: don't drop to the 'portage' user (it can't traverse a
+# mode-700 / encrypted $HOME work dir). All sandboxing off for the cross-build.
+FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox -ipc-sandbox"
 PKGDIR="@@WORK_DIR@@/pkgdir"
 DISTDIR="@@WORK_DIR@@/distfiles"
 

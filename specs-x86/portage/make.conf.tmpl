@@ -15,7 +15,9 @@ CXXFLAGS="${COMMON_FLAGS}"
 LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
 
 MAKEOPTS="-j@@JOBS@@"
-FEATURES="buildpkg nostrip"
+# -userfetch/-userpriv: don't drop to the 'portage' user (can't traverse a
+# mode-700 / encrypted work dir). Sandbox off for the native chroot build.
+FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox -ipc-sandbox"
 PKGDIR="@@WORK_DIR@@/pkgdir"
 DISTDIR="@@WORK_DIR@@/distfiles"
 
