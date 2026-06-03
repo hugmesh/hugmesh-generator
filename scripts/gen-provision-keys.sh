@@ -111,6 +111,22 @@ else
     echo "  Add: kubernetes/pki/ca.crt, kubernetes join token, tailscale/authkey, certs/cluster-ca.crt"
 fi
 
+# ── Per-API JKS keystores + cluster truststore ─────────────────────
+# The cluster CA + per-service mTLS keystores + the Java truststore are
+# generated on the pki/config node. Workers receive only the CA cert +
+# truststore (copy keystores/truststore.* and certs/cluster-ca.crt from the
+# pki node's output); the per-service keystores are pushed to Vault by
+# scripts/gen-cluster-secrets.sh and synced into the namespaces.
+if [ "${ROLE}" = "pki" ]; then
+    echo; echo "==> Generating per-API JKS keystores + truststore (cluster CA)"
+    bash "${SCRIPT_DIR}/gen-keystores.sh" "${OUT_DIR}"
+    echo "  keystores in ${OUT_DIR}/keystores (push to Vault: ./scripts/gen-cluster-secrets.sh)"
+else
+    echo "  (worker) copy the cluster CA + truststore from the pki node:"
+    echo "    pki:${OUT_DIR}/certs/cluster-ca.crt        -> certs/cluster-ca.crt"
+    echo "    pki:${OUT_DIR}/keystores/truststore.jks    -> keystores/truststore.jks"
+fi
+
 echo
 echo "Next:"
 echo "  1. Review ${OUT_DIR}/provision.json"
