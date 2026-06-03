@@ -62,7 +62,7 @@ spec:
   template:
     metadata: { labels: { app: uptrace } }
     spec:
-      nodeSelector: { snapdragon.systems/role: backend }
+      nodeSelector: { snapdragon.systems/backend: "true" }
       containers:
         - name: uptrace
           image: uptrace/uptrace:latest

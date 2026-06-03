@@ -889,6 +889,38 @@ provision_binhost() {
     log "Configured Gentoo binhost: ${url}"
 }
 
+# ── Calico CNI config from KEYS (control-plane) ───────────────────
+# Renders the Tigera Installation CR from provision.json .calico, so pod CIDR /
+# encapsulation / NAT / block size are controlled by the USB config. The
+# operator itself is installed by ArgoCD (apps/01-calico.yaml); this applies the
+# Installation once a kubeconfig + the operator CRD exist.
+provision_calico() {
+    [ "$(jqm '.calico.enabled // false')" = "true" ] || { log "Calico config disabled"; return 0; }
+    [ -f /etc/kubernetes/admin.conf ] || { log "Calico: no kubeconfig yet (apply after kubeadm init)"; return 0; }
+    have kubectl || return 0
+    local cidr enc nat block
+    cidr="$(jqm '.calico.pod_cidr // "10.244.0.0/16"')"
+    enc="$(jqm '.calico.encapsulation // "VXLAN"')"
+    block="$(jqm '.calico.block_size // 26')"
+    [ "$(jqm '.calico.nat_outgoing // true')" = "true" ] && nat=Enabled || nat=Disabled
+    log "Applying Calico Installation from KEYS (cidr=${cidr} encap=${enc} nat=${nat})"
+    KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f - <<EOF 2>/dev/null \
+        || warn "Calico Installation apply failed (operator CRD not ready yet?)"
+apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata:
+  name: default
+spec:
+  calicoNetwork:
+    ipPools:
+      - name: default-ipv4-ippool
+        cidr: ${cidr}
+        encapsulation: ${enc}
+        natOutgoing: ${nat}
+        blockSize: ${block}
+EOF
+}
+
 # ── Main ───────────────────────────────────────────────────────────
 main() {
     log "=== keys-provision starting ==="
@@ -927,6 +959,7 @@ main() {
     provision_kubernetes
     provision_backup
     provision_snapdragon
+    provision_calico
     provision_vault
     provision_run_hooks
     provision_selinux   # last: relabel the fully-provisioned filesystem

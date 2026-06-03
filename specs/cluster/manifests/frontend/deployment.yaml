@@ -14,7 +14,7 @@ spec:
   template:
     metadata: { labels: { app: snapdragon-systems-web } }
     spec:
-      nodeSelector: { snapdragon.systems/role: frontend }
+      nodeSelector: { snapdragon.systems/frontend: "true" }
       containers:
         - name: web
           image: snapdragon-systems/snapdragon.systems:dev

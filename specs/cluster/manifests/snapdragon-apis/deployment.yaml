@@ -12,7 +12,7 @@ spec:
   template:
     metadata: { labels: { app: snapdragon-api } }
     spec:
-      nodeSelector: { snapdragon.systems/role: backend }
+      nodeSelector: { snapdragon.systems/backend: "true" }
       containers:
         - name: api
           # snapdragon-actions — "Spring Actions for snapdragon hybrid architecture"

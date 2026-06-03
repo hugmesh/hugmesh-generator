@@ -17,7 +17,7 @@ spec:
       labels: { app: casdoor }
     spec:
       nodeSelector:
-        snapdragon.systems/role: pki
+        snapdragon.systems/pki: "true"
       containers:
         - name: casdoor
           image: casbin/casdoor-all-in-one:latest

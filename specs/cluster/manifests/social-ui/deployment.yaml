@@ -15,7 +15,7 @@ spec:
   template:
     metadata: { labels: { app: snapdragon-matrix-ui } }
     spec:
-      nodeSelector: { snapdragon.systems/role: frontend }
+      nodeSelector: { snapdragon.systems/frontend: "true" }
       containers:
         - name: web
           image: snapdragon-systems/matrix-ui:dev
@@ -36,7 +36,7 @@ spec:
   template:
     metadata: { labels: { app: snapdragon-mastodon-ui } }
     spec:
-      nodeSelector: { snapdragon.systems/role: frontend }
+      nodeSelector: { snapdragon.systems/frontend: "true" }
       containers:
         - name: web
           image: snapdragon-systems/mastodon-ui:dev
@@ -57,7 +57,7 @@ spec:
   template:
     metadata: { labels: { app: snapdragon-login-ui } }
     spec:
-      nodeSelector: { snapdragon.systems/role: frontend }
+      nodeSelector: { snapdragon.systems/frontend: "true" }
       containers:
         - name: web
           image: snapdragon-systems/login-ui:dev
@@ -78,7 +78,7 @@ spec:
   template:
     metadata: { labels: { app: snapdragon-admin-ui } }
     spec:
-      nodeSelector: { snapdragon.systems/role: frontend }
+      nodeSelector: { snapdragon.systems/frontend: "true" }
       containers:
         - name: web
           image: snapdragon-systems/admin-ui:dev
