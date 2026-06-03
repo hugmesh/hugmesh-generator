@@ -45,6 +45,23 @@ routes:
 # Extra raw environment variables, e.g. SPRING_PROFILES_ACTIVE.
 extraEnv: []
 
+# Per-app mTLS keystore, built at startup from the Vault-PKI-issued, ESO-synced
+# TLS Secret (manifests/external-secrets/pki-externalsecrets.yaml). When enabled,
+# an initContainer assembles keystore.p12 (identity) + truststore.p12 (cluster
+# CA) into an in-pod tmpfs and emits application-tls.properties (snapdragon.tls.*
+# the app consumes for cross-namespace mTLS). The store password is generated
+# in-pod and never leaves it. Default OFF so existing plaintext deployments and
+# probes are unaffected; turn on per gateway in apps/20-gateway-*.yaml.
+keystore:
+  enabled: false
+  # ESO-synced kubernetes.io/tls Secret name; defaults to "<instance.name>-mtls".
+  secretName: ""
+  # Trust-anchor alias in the truststore.
+  caAlias: snapdragon-cluster-ca
+  # Also enable server.ssl (serve HTTPS). Leave false unless probes/Service are
+  # switched to HTTPS too — otherwise the http readiness probe will fail.
+  serverTls: false
+
 # Internal ingress (Cloudflare terminates the public name later; this is the
 # in-cluster host the tunnel / reverse proxy targets).
 ingress:

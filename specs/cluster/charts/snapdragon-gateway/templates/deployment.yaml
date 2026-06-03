@@ -36,6 +36,52 @@ spec:
       {{- with .Values.affinity }}
       affinity: {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.keystore.enabled }}
+      initContainers:
+        # Build the PKCS12 keystore (mTLS identity) + JRE truststore from the
+        # Vault-PKI-issued, ESO-synced PEM Secret
+        # ({{ .Values.keystore.secretName | default (printf "%s-mtls" .Values.instance.name) }}: tls.crt/tls.key/ca.crt).
+        # keytool + openssl ship in the JRE image, so reuse the gateway image.
+        # The store password is generated HERE, kept only in the tmpfs /stores
+        # emptyDir (never in git / a Secret / Vault), and emitted into a Spring
+        # properties file the app loads via SPRING_CONFIG_ADDITIONAL_LOCATION.
+        - name: build-keystore
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              P="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
+              # mTLS identity: key + cert -> PKCS12 (Spring reads PKCS12 natively)
+              openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
+                -certfile /pki/ca.crt -name {{ .Values.instance.name }} \
+                -out /stores/keystore.p12 -passout "pass:${P}"
+              # JRE truststore: the issuing (cluster) CA so we trust cluster peers
+              keytool -importcert -noprompt -alias {{ .Values.keystore.caAlias | quote }} \
+                -file /pki/ca.crt -keystore /stores/truststore.p12 \
+                -storetype PKCS12 -storepass "${P}"
+              # Spring SSL config — picked up from file:/stores/ (added to
+              # SPRING_CONFIG_ADDITIONAL_LOCATION). server.ssl is opt-in via
+              # keystore.serverTls so probes/Service stay plaintext by default.
+              umask 077
+              cat > /stores/application-tls.properties <<EOF
+              snapdragon.tls.key-store=/stores/keystore.p12
+              snapdragon.tls.key-store-type=PKCS12
+              snapdragon.tls.key-store-password=${P}
+              snapdragon.tls.trust-store=/stores/truststore.p12
+              snapdragon.tls.trust-store-type=PKCS12
+              snapdragon.tls.trust-store-password=${P}
+              server.ssl.enabled={{ .Values.keystore.serverTls }}
+              server.ssl.key-store=/stores/keystore.p12
+              server.ssl.key-store-type=PKCS12
+              server.ssl.key-store-password=${P}
+              EOF
+              echo "keystore + truststore + application-tls.properties built"
+          volumeMounts:
+            - { name: pki, mountPath: /pki, readOnly: true }
+            - { name: stores, mountPath: /stores }
+      {{- end }}
       containers:
         - name: gateway
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -50,7 +96,7 @@ spec:
             - name: PORT
               value: {{ .Values.service.port | quote }}
             - name: SPRING_CONFIG_ADDITIONAL_LOCATION
-              value: "file:/config/"
+              value: {{ if .Values.keystore.enabled }}"file:/config/,file:/stores/"{{ else }}"file:/config/"{{ end }}
             - name: CASDOOR_ISSUER_URI
               value: {{ .Values.casdoor.issuerUri | quote }}
             - name: CASDOOR_JWKS_URI
@@ -81,9 +127,24 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.keystore.enabled }}
+            - name: stores
+              mountPath: /stores
+              readOnly: true
+            {{- end }}
       volumes:
         - name: routes
           configMap:
             name: {{ include "snapdragon-gateway.name" . }}-routes
         - name: tmp
           emptyDir: {}
+        {{- if .Values.keystore.enabled }}
+        # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
+        - name: pki
+          secret:
+            secretName: {{ .Values.keystore.secretName | default (printf "%s-mtls" .Values.instance.name) }}
+        # tmpfs for the assembled PKCS12 stores + the pod-local SSL properties.
+        - name: stores
+          emptyDir:
+            medium: Memory
+        {{- end }}

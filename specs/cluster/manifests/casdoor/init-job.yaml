@@ -1,0 +1,142 @@
+# casdoor-init — reconciles the per-app OAuth2 APPLICATIONS in Casdoor and
+# injects their client-secrets from Vault (via the ESO Secret casdoor-app-secrets),
+# so no secret is ever committed. The org/roles/service-users themselves are
+# seeded declaratively by init_data.json (init-data-configmap.yaml). Idempotent;
+# ArgoCD re-runs it on each sync (PostSync hook).
+#
+# !!! The Casdoor REST API shape (login + application CRUD) is version-specific.
+# !!! This Job is a working scaffold; validate the endpoints/payloads against the
+# !!! deployed casbin/casdoor-all-in-one before relying on it in production.
+# Reads admin creds from Secret casdoor-admin (username/password) and per-app
+# client-secrets from Secret casdoor-app-secrets — both materialized by ESO from
+# Vault (manifests/external-secrets). Keys never touch git or any web interface.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: casdoor-init-script
+  namespace: snapdragon-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+data:
+  reconcile.py: |
+    #!/usr/bin/env python3
+    """Ensure each app's Casdoor OAuth2 application exists with its Vault secret.
+    Pure stdlib (urllib) so the image needs no extra packages / network installs."""
+    import json, os, time, urllib.request, urllib.parse, urllib.error, http.cookiejar
+
+    BASE = os.environ.get("CASDOOR_URL", "http://casdoor.snapdragon-pki.svc.cluster.local:8000")
+    ORG  = os.environ.get("CASDOOR_ORG", "snapdragon")
+    ADMIN_USER = open("/secrets/admin/username").read().strip()
+    ADMIN_PASS = open("/secrets/admin/password").read().strip()
+
+    # app name -> (redirectUris, role). Mirrors init_data.json + SECURITY.md.
+    APPS = {
+        "pki-gateway": "ROLE_GATEWAY", "be-gateway": "ROLE_GATEWAY",
+        "fe-gateway": "ROLE_GATEWAY", "auth": "ROLE_AUTH",
+        "api": "ROLE_API", "admin-bff": "ROLE_ADMIN_API",
+        "matrix": "ROLE_USER", "mastodon": "ROLE_USER",
+    }
+
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+
+    def call(path, payload=None, method="GET"):
+        url = BASE + path
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(url, data=data, method=method,
+                                     headers={"Content-Type": "application/json"})
+        with opener.open(req, timeout=15) as r:
+            return json.loads(r.read() or "{}")
+
+    def wait_ready():
+        for _ in range(60):
+            try:
+                opener.open(BASE + "/api/health", timeout=5); return
+            except Exception:
+                time.sleep(3)
+        raise SystemExit("casdoor not reachable")
+
+    def login():
+        # Casdoor admin login (session cookie). Built-in app/org host the admin.
+        body = {"application": "app-built-in", "organization": "built-in",
+                "username": ADMIN_USER, "password": ADMIN_PASS, "type": "login",
+                "autoSignin": True}
+        return call("/api/login", body, "POST")
+
+    def reconcile_app(name, role):
+        secret = open(f"/secrets/apps/{name}").read().strip()
+        appname = f"app-{name}"
+        app = {
+            "owner": "admin", "name": appname, "displayName": f"snapdragon {name}",
+            "organization": ORG, "clientId": appname, "clientSecret": secret,
+            "redirectUris": [f"https://{name}.snapdragon.systems/callback"],
+            "grantTypes": ["authorization_code", "client_credentials"],
+            "expireInHours": 168, "enablePassword": True, "enableSignUp": False,
+        }
+        try:
+            existing = call(f"/api/get-application?id=admin/{appname}")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call(f"/api/update-application?id=admin/{appname}", app, "POST")
+            print(f"  updated {appname} (role {role})")
+        else:
+            call("/api/add-application", app, "POST")
+            print(f"  added   {appname} (role {role})")
+
+    wait_ready()
+    login()
+    for name, role in APPS.items():
+        try:
+            reconcile_app(name, role)
+        except Exception as e:
+            print(f"  WARN {name}: {e}")
+    print("casdoor-init: done")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: casdoor-init
+  namespace: snapdragon-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: casdoor-init }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        snapdragon.systems/pki: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: reconcile
+          image: python:3.12-alpine
+          command: ["python3", "/script/reconcile.py"]
+          env:
+            - name: CASDOOR_URL
+              value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000"
+            - name: CASDOOR_ORG
+              value: "snapdragon"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script, mountPath: /script, readOnly: true }
+            - { name: admin, mountPath: /secrets/admin, readOnly: true }
+            - { name: apps, mountPath: /secrets/apps, readOnly: true }
+      volumes:
+        - name: script
+          configMap: { name: casdoor-init-script, defaultMode: 0555 }
+        # ESO-materialized from Vault — never committed.
+        - name: admin
+          secret: { secretName: casdoor-admin }
+        - name: apps
+          secret: { secretName: casdoor-app-secrets }

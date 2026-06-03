@@ -38,10 +38,20 @@ spec:
             periodSeconds: 10
           volumeMounts:
             - { name: data, mountPath: /var/lib/casdoor }
+            # Declarative seed (org / roles / service users). Casdoor imports
+            # init_data.json from its working dir on boot. NOTE: the exact mount
+            # path depends on the casbin/casdoor-all-in-one workdir — validate/
+            # adjust if auto-import doesn't fire; the casdoor-init Job seeds the
+            # OAuth2 applications + secrets regardless.
+            - { name: init-data, mountPath: /init_data.json, subPath: init_data.json, readOnly: true }
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits:   { cpu: "1",  memory: 768Mi }
       volumes:
-        # TODO: switch to a PersistentVolumeClaim for real deployments.
+        # Persistent DB so seeded orgs/roles/users/applications survive restarts.
         - name: data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: casdoor-data
+        - name: init-data
+          configMap:
+            name: casdoor-init-data

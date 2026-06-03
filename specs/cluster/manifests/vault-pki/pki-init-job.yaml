@@ -1,0 +1,64 @@
+# vault-pki-init — one-shot (re-runnable) Job that bootstraps the Vault
+# intermediate PKI engine + per-app issuing roles (see pki-init-configmap.yaml).
+# Runs on the pki/control-plane node alongside Vault. ArgoCD re-runs it on each
+# sync (hook) because the script is idempotent.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: vault-pki-init
+  namespace: vault
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: secrets }
+  annotations:
+    # Re-run on every ArgoCD sync; the script is idempotent. PostSync so Vault
+    # (synced from manifests/vault) is already up.
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: vault-pki-init }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        snapdragon.systems/pki: "true"
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: init
+          image: hashicorp/vault:1.18
+          command: ["/bin/sh", "/scripts/init-pki.sh"]
+          env:
+            - name: VAULT_ADDR
+              value: "http://vault.vault.svc.cluster.local:8200"
+            # Dev-mode root token by default; in production mount a scoped token.
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef: { name: vault-bootstrap, key: token, optional: true }
+            - name: CLUSTER_DOMAIN
+              value: "snapdragon.systems"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script, mountPath: /scripts, readOnly: true }
+            - { name: ca, mountPath: /ca, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: script
+          configMap: { name: vault-pki-init, defaultMode: 0555 }
+        # cluster CA cert+key — provisioned OFFLINE by keys-provision from the
+        # USB stick (certs/cluster-ca.*). optional so the Job can still set up
+        # roles in a dev stack where the CA is imported by hand.
+        - name: ca
+          secret: { secretName: cluster-ca, optional: true }
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,23 @@
+# Vault PKI bootstrap — enables the intermediate PKI engine + per-app issuing
+# roles inside the cluster Vault (chained to the cluster CA from gen-keystores.sh).
+# Synced after Vault (02) and before/with the ESO config (04) that issues from it.
+# The per-app TLS Secrets are materialized by ESO (pki-externalsecrets.yaml).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault-pki
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"   # after vault (manifests/vault), before apps
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/vault-pki
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vault
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
