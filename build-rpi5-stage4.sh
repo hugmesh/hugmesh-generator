@@ -718,8 +718,25 @@ cross_emerge() {
 # ── 6. Build @system ──────────────────────────────────────────────
 banner "Phase 1: Cross-building @system (hardened)"
 
+# A cross-built stage4 must NOT (cross-)rebuild the toolchain. Cross-building a
+# target gcc/glibc/binutils and their target libs fails under crossdev with
+# "configure: error: C compiler cannot create executables" (the build can't run
+# freshly-built target binaries on the x86 host). The crossdev cross-compiler
+# already provides the toolchain and the seed stage3 provides the target libc,
+# so keep them as-is. Opt back in (rarely works) with REBUILD_TOOLCHAIN=true.
+REBUILD_TOOLCHAIN="${REBUILD_TOOLCHAIN:-false}"
+if ${REBUILD_TOOLCHAIN}; then
+    CROSS_EXCLUDE=()
+    warn "Toolchain rebuild ENABLED — cross-building gcc/glibc/binutils (usually fails)"
+else
+    CROSS_EXCLUDE=(--exclude sys-devel/gcc --exclude sys-devel/gcc-config
+                   --exclude sys-libs/glibc --exclude sys-devel/binutils)
+    info "Keeping crossdev/seed toolchain (set REBUILD_TOOLCHAIN=true to cross-rebuild it)"
+fi
+
 cross_emerge --oneshot --update sys-apps/baselayout
-cross_emerge --update --deep --newuse @system
+cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" @system \
+    || warn "@system had package failures (--keep-going); continuing"
 
 # ── 7. Build stage4 packages ──────────────────────────────────────
 banner "Phase 2: Cross-building stage4 packages"
@@ -737,7 +754,8 @@ if [ -n "${EXTRA_PACKAGES}" ]; then
 fi
 
 info "Package count: ${#STAGE4_PACKAGES[@]}"
-cross_emerge --update "${STAGE4_PACKAGES[@]}"
+cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "${STAGE4_PACKAGES[@]}" \
+    || warn "Some stage4 packages failed to build (--keep-going); review ${LOG_FILE}"
 
 # ── 7b. Install mesh VPN (headscale + tailscale) ───────────────────
 if ${SKIP_MESH}; then
