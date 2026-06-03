@@ -3,7 +3,7 @@ apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: snapdragon-gateway-pki
-  namespace: argocd
+  namespace: devops
 spec:
   project: default
   source:
