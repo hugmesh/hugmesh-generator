@@ -16,6 +16,16 @@ if [ "${REAL_MATRIX:-0}" = "1" ]; then MATRIX_TARGET="${SYNAPSE_URL}"; else MATR
 [ -f "${CERTS}/server.crt" ] || bash "${HERE}/gen-certs.sh" "${CERTS}"
 [ -d "${UI_DIST}" ] || { echo "ERROR: built UI not found at ${UI_DIST}. Build it first (see README)."; exit 1; }
 
+# The host is a native-federation shell; the 4 remotes must be assembled under
+# ${UI_DIST}/_remotes/<name>/ (run-all.sh does this). Fail loudly here rather
+# than serve 404 chunks at test time.
+REMOTES_ROOT="${REMOTES_ROOT:-${UI_DIST}/_remotes}"
+for n in login matrix mastodon admin; do
+  [ -f "${REMOTES_ROOT}/${n}/remoteEntry.json" ] || {
+    echo "ERROR: federation remote '${n}' not assembled at ${REMOTES_ROOT}/${n}/remoteEntry.json"
+    echo "       Build + assemble the remotes first: tests/e2e/run-all.sh (step 1)."; exit 1; }
+done
+
 start() { # name cmd...
   local name="$1"; shift
   nohup "$@" >"${RUN}/${name}.log" 2>&1 &
@@ -26,10 +36,15 @@ start() { # name cmd...
 echo "==> Starting mock backends + UI"
 PORT="${MATRIX_PORT}"   start matrix   node "${HERE}/mock-matrix.mjs"
 PORT="${MASTODON_PORT}" start mastodon node "${HERE}/mock-mastodon.mjs"
+# The BFF brokers Matrix service tokens against the SAME matrix endpoint the UI
+# talks to (MATRIX_TARGET): the in-memory mock-matrix (:8401) by default, or the
+# real Synapse when REAL_MATRIX=1. (Previously this always pointed at :8008, so
+# in mock mode token brokering hit a dead port and matrix.token came back empty.)
 PORT="${BFF_PORT}" ADMIN_EMAILS="${ADMIN_EMAILS:-admin@snapdragon.systems}" \
-  SYNAPSE_URL="${SYNAPSE_URL}" MASTODON_URL="http://127.0.0.1:${MASTODON_PORT}" \
+  SYNAPSE_URL="${MATRIX_TARGET}" MASTODON_URL="http://127.0.0.1:${MASTODON_PORT}" \
   start bff node "${HERE}/mock-bff.mjs"
 CERTS="${CERTS}" UI_DIST="${UI_DIST}" PORT="${UI_PORT}" \
+  REMOTES_ROOT="${REMOTES_ROOT}" REMOTES="login,matrix,mastodon,admin" \
   MATRIX_TARGET="${MATRIX_TARGET}" MASTODON_TARGET="http://127.0.0.1:${MASTODON_PORT}" \
   BFF_TARGET="http://127.0.0.1:${BFF_PORT}" \
   start ui node "${HERE}/serve-ui.mjs"
@@ -37,7 +52,13 @@ echo "  (matrix target: ${MATRIX_TARGET})"
 
 echo "==> Waiting for https://localhost:${UI_PORT}"
 for i in $(seq 1 30); do
-  if curl -ksf "https://localhost:${UI_PORT}/" >/dev/null 2>&1; then echo "  up."; exit 0; fi
+  if curl -ksf "https://localhost:${UI_PORT}/" >/dev/null 2>&1; then
+    echo "  up."
+    curl -ksf "https://localhost:${UI_PORT}/assets/federation.manifest.json" >/dev/null 2>&1 \
+      && curl -ksf "https://localhost:${UI_PORT}/_remotes/matrix/remoteEntry.json" >/dev/null 2>&1 \
+      || echo "  WARN: federation manifest or a remoteEntry is not served — federated routes will fail"
+    exit 0
+  fi
   sleep 1
 done
 echo "  WARN: UI did not answer in 30s; see ${RUN}/*.log"; exit 1

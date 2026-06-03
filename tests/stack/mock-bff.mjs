@@ -17,6 +17,7 @@ const allowDiscord = new Set();               // Discord usernames an admin invi
 const accounts = new Map();                   // id -> {id, provider, registrationComplete, roles}
 const sessions = new Map();                   // token -> id
 const grants = new Map();                     // actorId -> Set(namespace)  (admin-granted namespace access)
+const usageMem = [];                          // in-memory usage events (fallback when ClickHouse is absent)
 const NAMESPACES = ['snapdragon-pki', 'snapdragon-backend', 'snapdragon-frontend', 'snapdragon-games', 'observability'];
 // Per-gateway role->URL external access rules (stands in for the Postgres
 // gateway_route_access table the gateways read + Cassandra-cache).
@@ -82,8 +83,26 @@ const MODULE_OF = { login: 'login-ui', register: 'login-ui', complete: 'login-ui
 function record(actor, roles, action) {
   const role = (roles || []).includes('admin') ? 'admin' : 'user';
   const mod = MODULE_OF[action] || 'host';
+  usageMem.push({ actor: String(actor), role, action, module: mod, ts: Date.now() });
   const esc = (s) => String(s).replace(/'/g, "\\'");
   ch(`INSERT INTO snapdragon.usage_events (actor, role, action, module) VALUES ('${esc(actor)}','${role}','${action}','${mod}')`).catch((e) => chErr('insert: ' + e.message));
+}
+// Aggregate usage from the in-memory log — the fallback the admin Usage view
+// reads when ClickHouse isn't running (e.g. the rootless mock stack).
+function usageFromMemory() {
+  const hourAgo = Date.now() - 3600_000;
+  const mods = new Map(), acts = new Map(), recent = new Set();
+  for (const e of usageMem) {
+    const m = mods.get(e.module) || { module: e.module, events: 0, users: new Set() };
+    m.events++; m.users.add(e.actor); mods.set(e.module, m);
+    acts.set(e.action, (acts.get(e.action) || 0) + 1);
+    if (e.ts > hourAgo) recent.add(e.actor);
+  }
+  return {
+    byModule: [...mods.values()].map((m) => ({ module: m.module, events: m.events, users: m.users.size })).sort((a, b) => b.events - a.events),
+    byAction: [...acts.entries()].map(([action, events]) => ({ action, events })).sort((a, b) => b.events - a.events),
+    activeUsers: recent.size, totalEvents: usageMem.length, source: 'in-memory',
+  };
 }
 
 // ── Real-service token brokering (Synapse / Mastodon) ──────────────
@@ -197,9 +216,13 @@ const server = http.createServer(async (req, res) => {
         const byAction = await J('SELECT action, count() AS events FROM snapdragon.usage_events GROUP BY action ORDER BY events DESC');
         const active = (await J("SELECT uniqExact(actor) AS n FROM snapdragon.usage_events WHERE ts > now() - INTERVAL 1 HOUR"))[0] || { n: 0 };
         const total = (await J('SELECT count() AS n FROM snapdragon.usage_events'))[0] || { n: 0 };
-        return send(res, 200, { byModule, byAction, activeUsers: Number(active.n), totalEvents: Number(total.n) });
+        const out = { byModule, byAction, activeUsers: Number(active.n), totalEvents: Number(total.n) };
+        // If ClickHouse is reachable but empty (no consumer wrote events), fall
+        // back to the in-memory log so the view still reflects this run.
+        return send(res, 200, out.totalEvents > 0 ? out : usageFromMemory());
       } catch (e) {
-        return send(res, 200, { byModule: [], byAction: [], activeUsers: 0, totalEvents: 0, error: String(e) });
+        // ClickHouse unavailable (rootless mock stack) — serve the in-memory log.
+        return send(res, 200, usageFromMemory());
       }
     }
     // ── Broker real Matrix/Mastodon service tokens (post full registration) ──

@@ -9,6 +9,11 @@ import path from 'node:path';
 const PORT = Number(process.env.PORT || 8443);
 const CERTS = process.env.CERTS || path.resolve('tests/stack/certs');
 const DIST = process.env.UI_DIST || path.resolve('tests/stack/.uidist');
+// Federated remotes (native-federation) — each served from its own dir under
+// /_remotes/<name>/ on THIS same HTTPS origin so the host loads them without
+// mixed-content/CORS. run-all.sh assembles them under ${UI_DIST}/_remotes/.
+const REMOTES_ROOT = process.env.REMOTES_ROOT || path.join(DIST, '_remotes');
+const REMOTES = (process.env.REMOTES || 'login,matrix,mastodon,admin').split(',').map((s) => s.trim()).filter(Boolean);
 const MATRIX_TARGET = process.env.MATRIX_TARGET || 'http://127.0.0.1:8401';
 const MASTODON_TARGET = process.env.MASTODON_TARGET || 'http://127.0.0.1:8402';
 const BFF_TARGET = process.env.BFF_TARGET || 'http://127.0.0.1:8403';
@@ -48,11 +53,42 @@ function serveStatic(req, res) {
   res.end(body);
 }
 
+// Same-origin, root-relative federation manifest. The browser resolves these
+// against the page origin (https://localhost:8443), so each remoteEntry.json
+// and every chunk it pulls load over HTTPS — no mixed content, no CORS. The
+// built host ships no assets/ dir (angular.json assets:[]), so this synth route
+// IS the manifest the host fetches at boot (initFederation('assets/federation.manifest.json')).
+function buildManifest() {
+  return JSON.stringify(Object.fromEntries(REMOTES.map((n) => [n, `/_remotes/${n}/remoteEntry.json`])));
+}
+
+// Serve a federated remote's static bundle from REMOTES_ROOT/<name>/. A missing
+// path returns a HARD 404 (never the SPA index.html) — handing HTML to the
+// es-module-shims importer would silently break the route.
+function serveRemote(req, res) {
+  const rel = decodeURIComponent(new URL(req.url, 'http://x').pathname).slice('/_remotes/'.length);
+  const seg = rel.split('/');
+  const name = seg.shift();
+  if (!REMOTES.includes(name)) { res.writeHead(404); return res.end('no such remote'); }
+  const remoteRoot = path.resolve(path.join(REMOTES_ROOT, name));
+  const resolved = path.resolve(path.join(remoteRoot, seg.join('/')));
+  if (resolved !== remoteRoot && !resolved.startsWith(remoteRoot + path.sep)) { res.writeHead(403); return res.end('forbidden'); }
+  if (!fs.existsSync(resolved) || fs.statSync(resolved).isDirectory()) { res.writeHead(404); return res.end('not found'); }
+  const ext = path.extname(resolved);
+  res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream' });
+  return res.end(fs.readFileSync(resolved));
+}
+
 const handler = (req, res) => {
   const p = new URL(req.url, 'http://x').pathname;
   if (p.startsWith('/_matrix/')) return proxy(req, res, MATRIX_TARGET);
   if (p.startsWith('/bff/')) return proxy(req, res, BFF_TARGET);
   if (p.startsWith('/api/') || p.startsWith('/oauth/')) return proxy(req, res, MASTODON_TARGET);
+  if (p === '/assets/federation.manifest.json') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(buildManifest());
+  }
+  if (p.startsWith('/_remotes/')) return serveRemote(req, res);
   return serveStatic(req, res);
 };
 
