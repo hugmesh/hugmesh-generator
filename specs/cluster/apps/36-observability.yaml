@@ -1,0 +1,19 @@
+# Observability: Uptrace + OpenTelemetry Collector (per-namespace logs/traces).
+# Admin-only; the UI is reached through the snapdragon-pki gateway.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-observability
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/catalyst-scripts.git
+    targetRevision: main
+    path: specs/cluster/manifests/observability
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

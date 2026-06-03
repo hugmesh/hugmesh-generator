@@ -1,0 +1,19 @@
+# Casdoor — the cluster's single OAuth2 / OIDC identity provider. Google login
+# (federated sign-up) + admin-created accounts. Control-plane (pki) node.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: casdoor
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/catalyst-scripts.git
+    targetRevision: main
+    path: specs/cluster/manifests/casdoor
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-pki
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

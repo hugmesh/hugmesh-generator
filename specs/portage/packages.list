@@ -58,3 +58,16 @@ sys-apps/iproute2
 sys-fs/e2fsprogs
 sys-fs/xfsprogs
 sys-apps/util-linux
+
+# ── KEYS USB provisioning + attached storage + backups ────────────
+# jq parses the JSON manifests; dosfstools provides fsck/mkfs for the
+# FAT32 KEYS partition; util-linux (above) provides blkid/findfs/wipefs;
+# nfs-utils/cifs-utils mount network backup shares.
+app-misc/jq
+sys-fs/dosfstools
+net-fs/nfs-utils
+net-fs/cifs-utils
+
+# NOTE: headscale and tailscale are NOT emerged here. They are installed
+# as upstream static arm64 binaries by build-rpi5-stage4.sh (the "mesh"
+# phase), which avoids overlay/keyword churn. See --skip-mesh / --skip-tailscale.

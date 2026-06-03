@@ -1,0 +1,24 @@
+# Override kubeadm config placed on the KEYS USB. Copied to
+# /etc/kubernetes/kubeadm-config.yaml at first boot. Edit controlPlaneEndpoint
+# and certSANs to match the PKI node's reachable address(es).
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: InitConfiguration
+nodeRegistration:
+  criSocket: unix:///run/containerd/containerd.sock
+---
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+kubernetesVersion: stable
+controlPlaneEndpoint: "snapdragon-pki:6443"
+apiServer:
+  certSANs:
+    - snapdragon-pki
+    - snapdragon-pki.snapdragon.local
+    - 127.0.0.1
+networking:
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/12"
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: cgroupfs

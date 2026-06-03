@@ -1,0 +1,18 @@
+# Usage analytics: ClickHouse + Kafka + Eureka + Spring admin BFF. Backend Pis.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-analytics
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/catalyst-scripts.git
+    targetRevision: main
+    path: specs/cluster/manifests/analytics
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

@@ -1,0 +1,40 @@
+# Native amd64 build — HARDENED — for the snapdragon-host k8s/GPU worker.
+#
+# Variables substituted at build time:
+#   @@CHOST@@       Host triplet (x86_64-pc-linux-gnu)
+#   @@JOBS@@        Parallel make jobs
+#   @@WORK_DIR@@    Base build directory
+
+CHOST="@@CHOST@@"
+
+# Generic, portable hardened flags. -march=native would tie the image to the
+# build host's CPU; x86-64-v2 is a safe baseline for modern desktops/servers.
+COMMON_FLAGS="-march=x86-64-v2 -O2 -pipe -fstack-protector-strong -D_FORTIFY_SOURCE=2"
+CFLAGS="${COMMON_FLAGS}"
+CXXFLAGS="${COMMON_FLAGS}"
+LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
+
+MAKEOPTS="-j@@JOBS@@"
+FEATURES="buildpkg nostrip"
+PKGDIR="@@WORK_DIR@@/pkgdir"
+DISTDIR="@@WORK_DIR@@/distfiles"
+
+# Hardened USE baseline + container runtime + vendor-agnostic GPU stack.
+USE="bindist hardened pie ssp -X -gtk -qt5 -qt6 -systemd -pulseaudio -bluetooth"
+USE="${USE} cgroup cgroup2 seccomp apparmor containers netlink"
+USE="${USE} vulkan vaapi vdpau gbm egl gles2"
+
+# Open, vendor-agnostic GPU: AMD (amdgpu/radeonsi), Intel (i915/iris),
+# NVIDIA via nouveau. No proprietary blobs.
+VIDEO_CARDS="amdgpu radeonsi intel iris nouveau"
+INPUT_DEVICES=""
+
+ACCEPT_LICENSE="* -@EULA"
+ACCEPT_KEYWORDS="amd64"
+
+GRUB_PLATFORMS="efi-64 pc"
+
+PYTHON_TARGETS="python3_12"
+PYTHON_SINGLE_TARGET="python3_12"
+
+PAX_MARKINGS="none"

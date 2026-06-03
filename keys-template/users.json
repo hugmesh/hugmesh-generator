@@ -1,0 +1,21 @@
+{
+  "users": [
+    {
+      "name": "admin",
+      "comment": "Snapdragon cluster admin",
+      "groups": ["wheel", "audio", "video", "usb"],
+      "shell": "/bin/bash",
+      "uid": 1000,
+      "sudo": true,
+      "sudo_nopasswd": false,
+      "password_hash": "REPLACE_WITH_SHA512_CRYPT_HASH",
+      "ssh_authorized_keys": [
+        "ssh-ed25519 AAAA...REPLACE_WITH_YOUR_PUBLIC_KEY... admin@workstation"
+      ]
+    }
+  ],
+  "root": {
+    "password_hash": "REPLACE_WITH_SHA512_CRYPT_HASH",
+    "ssh_authorized_keys": []
+  }
+}

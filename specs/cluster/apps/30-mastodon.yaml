@@ -1,0 +1,39 @@
+# Mastodon — mastodon.snapdragon.systems. Backend Pis.
+# Uses the official Mastodon Helm chart (lives in the mastodon git repo).
+# Sign-in via Casdoor OIDC (OMNIAUTH); see docs/architecture.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mastodon
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mastodon/mastodon.git
+    targetRevision: main
+    path: chart
+    helm:
+      releaseName: mastodon
+      values: |
+        mastodon:
+          local_domain: snapdragon.systems
+          web_domain: mastodon.snapdragon.systems
+          singleUserMode: false
+          # OIDC via Casdoor; admin accounts are created by an admin.
+          extraEnvVars:
+            - name: OIDC_ENABLED
+              value: "true"
+            - name: OIDC_ISSUER
+              value: "https://id.snapdragon.systems"
+        nodeSelector:
+          snapdragon.systems/role: backend
+        postgresql:
+          enabled: true
+        redis:
+          enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

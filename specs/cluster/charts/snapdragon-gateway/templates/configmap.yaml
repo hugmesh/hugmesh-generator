@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "snapdragon-gateway.name" . }}-routes
+  labels:
+    {{- include "snapdragon-gateway.labels" . | nindent 4 }}
+data:
+  # Loaded via SPRING_CONFIG_ADDITIONAL_LOCATION; merges over the image's
+  # baked-in application.yml. Defines this gateway's downstream routes.
+  application-routes.yml: |
+    spring:
+      cloud:
+        gateway:
+          routes:
+          {{- range .Values.routes }}
+            - id: {{ .id }}
+              uri: {{ .uri }}
+              predicates:
+                {{- if .host }}
+                - Host={{ .host }}
+                {{- end }}
+                {{- if .path }}
+                - Path={{ .path }}
+                {{- end }}
+              {{- with .filters }}
+              filters:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+          {{- end }}

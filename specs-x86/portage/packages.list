@@ -1,0 +1,63 @@
+# amd64 snapdragon-host stage4 package list — hardened k8s/GPU worker.
+# One atom per line; lines starting with # are ignored.
+
+# ── Kernel & firmware & bootloader ─────────────────────────────────
+sys-kernel/gentoo-sources
+sys-kernel/linux-firmware
+sys-firmware/intel-microcode
+sys-boot/grub
+sys-fs/dosfstools
+sys-block/parted
+
+# ── Vendor-agnostic GPU (Mesa / Vulkan, open drivers) ──────────────
+media-libs/mesa
+media-libs/vulkan-loader
+dev-util/vulkan-tools
+x11-libs/libdrm
+media-libs/libva
+app-misc/jq
+
+# ── Networking ─────────────────────────────────────────────────────
+net-misc/networkmanager
+net-misc/openssh
+net-firewall/iptables
+net-firewall/conntrack-tools
+net-misc/socat
+net-dns/bind-tools
+net-misc/ethtool
+sys-apps/iproute2
+
+# ── System / hardening ────────────────────────────────────────────
+app-admin/sudo
+sys-process/cronie
+sys-apps/haveged
+app-editors/nano
+app-misc/screen
+sys-apps/apparmor
+sys-apps/apparmor-utils
+sec-policy/apparmor-profiles
+sys-libs/libseccomp
+app-admin/auditd
+sys-process/audit
+
+# ── Container runtime + Kubernetes (worker) ───────────────────────
+app-containers/containerd
+app-containers/runc
+app-containers/cni-plugins
+app-containers/cri-tools
+app-containers/nerdctl
+sys-cluster/kubelet
+sys-cluster/kubeadm
+sys-cluster/kubectl
+
+# ── Filesystems + network backup shares ───────────────────────────
+sys-fs/e2fsprogs
+sys-fs/xfsprogs
+sys-apps/util-linux
+net-fs/nfs-utils
+net-fs/cifs-utils
+
+# NOTE: headscale + tailscale are installed as static x86_64 binaries by
+# build-x86-host-stage4.sh (mesh phase), like the RPi image. ArgoCD,
+# snapdragon.games and the backend workloads are deployed INTO the cluster
+# by ArgoCD, not emerged here.

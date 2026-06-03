@@ -1,0 +1,166 @@
+# Observability (Uptrace + OpenTelemetry Collector). Admin-only, reached through
+# the snapdragon-pki gateway (ROLE_ADMIN). Every workload in every namespace
+# registers telemetry here: the OTel Collector DaemonSet tails each pod's logs
+# (tagged with its namespace) and receives OTLP traces/metrics, exporting all of
+# it to Uptrace (which stores in the shared ClickHouse). Admins grant users
+# access to namespaces (snapdragon-admin-bff) to scope what they can view.
+---
+apiVersion: v1
+kind: Namespace
+metadata: { name: observability, labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: observability } }
+---
+# Uptrace backing Postgres (metadata; telemetry lives in ClickHouse).
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: uptrace-pg, namespace: observability, labels: { app: uptrace-pg } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: uptrace-pg } }
+  template:
+    metadata: { labels: { app: uptrace-pg } }
+    spec:
+      containers:
+        - name: pg
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_DB, value: uptrace }
+            - { name: POSTGRES_USER, value: uptrace }
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: uptrace-auth, key: pg-password } } }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes: [{ name: data, emptyDir: {} }]   # TODO: PVC
+---
+apiVersion: v1
+kind: Service
+metadata: { name: uptrace-pg, namespace: observability }
+spec: { selector: { app: uptrace-pg }, ports: [{ port: 5432, targetPort: 5432 }] }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: uptrace-config, namespace: observability }
+data:
+  uptrace.yml: |
+    listen:
+      http: { addr: ":14318" }    # UI + API + OTLP/HTTP
+      grpc: { addr: ":14317" }    # OTLP/gRPC
+    # Telemetry stored in the shared ClickHouse (snapdragon-backend).
+    ch:
+      dsn: "clickhouse://snap:${CLICKHOUSE_PASSWORD}@clickhouse.snapdragon-backend.svc.cluster.local:9000/uptrace?sslmode=disable"
+    pg:
+      dsn: "postgres://uptrace:${UPTRACE_PG_PASSWORD}@uptrace-pg:5432/uptrace?sslmode=disable"
+    projects:
+      - id: 1
+        name: snapdragon
+        token: ${UPTRACE_PROJECT_TOKEN}
+    # Auth is delegated to Casdoor via the pki gateway (OIDC); see docs.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: uptrace, namespace: observability, labels: { app: uptrace, app.kubernetes.io/part-of: snapdragon.systems } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: uptrace } }
+  template:
+    metadata: { labels: { app: uptrace } }
+    spec:
+      nodeSelector: { snapdragon.systems/role: backend }
+      containers:
+        - name: uptrace
+          image: uptrace/uptrace:latest
+          args: ["--config=/etc/uptrace/uptrace.yml"]
+          ports: [{ name: http, containerPort: 14318 }, { name: grpc, containerPort: 14317 }]
+          env:
+            - { name: CLICKHOUSE_PASSWORD, valueFrom: { secretKeyRef: { name: clickhouse-auth, key: password } } }
+            - { name: UPTRACE_PG_PASSWORD, valueFrom: { secretKeyRef: { name: uptrace-auth, key: pg-password } } }
+            - { name: UPTRACE_PROJECT_TOKEN, valueFrom: { secretKeyRef: { name: uptrace-auth, key: project-token } } }
+          volumeMounts: [{ name: cfg, mountPath: /etc/uptrace }]
+      volumes: [{ name: cfg, configMap: { name: uptrace-config } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: uptrace, namespace: observability }
+spec:
+  selector: { app: uptrace }
+  ports: [{ name: http, port: 14318, targetPort: http }, { name: grpc, port: 14317, targetPort: grpc }]
+---
+# OTel Collector — one per node (DaemonSet). Tails every pod's logs (with the
+# namespace attached) and receives OTLP from services, exporting to Uptrace.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: otel-collector, namespace: observability }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: otel-collector }
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces", "nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: otel-collector }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: otel-collector }
+subjects: [{ kind: ServiceAccount, name: otel-collector, namespace: observability }]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: otel-collector-config, namespace: observability }
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols: { grpc: { endpoint: 0.0.0.0:4317 }, http: { endpoint: 0.0.0.0:4318 } }
+      filelog:
+        include: ["/var/log/pods/*/*/*.log"]
+        include_file_path: true
+        operators:
+          - type: regex_parser
+            regex: '^/var/log/pods/(?P<namespace>[^_]+)_(?P<pod>[^_]+)_'
+            parse_from: attributes["log.file.path"]
+    processors:
+      k8sattributes: {}
+      batch: {}
+      resourcedetection: { detectors: [env, system] }
+    exporters:
+      otlp/uptrace:
+        endpoint: uptrace.observability.svc.cluster.local:14317
+        tls: { insecure: true }
+        headers: { uptrace-dsn: "http://${UPTRACE_PROJECT_TOKEN}@uptrace.observability.svc.cluster.local:14318/1" }
+    service:
+      pipelines:
+        traces:  { receivers: [otlp], processors: [k8sattributes, batch], exporters: [otlp/uptrace] }
+        metrics: { receivers: [otlp], processors: [k8sattributes, batch], exporters: [otlp/uptrace] }
+        logs:    { receivers: [filelog, otlp], processors: [k8sattributes, batch], exporters: [otlp/uptrace] }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: { name: otel-collector, namespace: observability, labels: { app: otel-collector } }
+spec:
+  selector: { matchLabels: { app: otel-collector } }
+  template:
+    metadata: { labels: { app: otel-collector } }
+    spec:
+      serviceAccountName: otel-collector
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:latest
+          args: ["--config=/etc/otel/config.yaml"]
+          env:
+            - { name: UPTRACE_PROJECT_TOKEN, valueFrom: { secretKeyRef: { name: uptrace-auth, key: project-token } } }
+            - { name: K8S_NODE_NAME, valueFrom: { fieldRef: { fieldPath: spec.nodeName } } }
+          ports: [{ name: otlp-grpc, containerPort: 4317 }, { name: otlp-http, containerPort: 4318 }]
+          volumeMounts:
+            - { name: cfg, mountPath: /etc/otel }
+            - { name: varlogpods, mountPath: /var/log/pods, readOnly: true }
+      volumes:
+        - { name: cfg, configMap: { name: otel-collector-config } }
+        - { name: varlogpods, hostPath: { path: /var/log/pods } }
+---
+# Cluster-wide service alias so workloads in any namespace export with one env:
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.observability.svc.cluster.local:4318
+apiVersion: v1
+kind: Service
+metadata: { name: otel-collector, namespace: observability }
+spec:
+  selector: { app: otel-collector }
+  ports: [{ name: otlp-grpc, port: 4317, targetPort: otlp-grpc }, { name: otlp-http, port: 4318, targetPort: otlp-http }]

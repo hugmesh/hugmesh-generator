@@ -1,0 +1,38 @@
+# Snapdragon cluster namespaces. Each carries the snapdragon-*-gateway that
+# fronts all of its traffic and validates the internal Casdoor OAuth2 JWT.
+#
+# Node placement (set by keys-provision node labels):
+#   snapdragon-pki       -> pki Pi (control-plane): headscale, Casdoor, auth
+#   snapdragon-backend   -> backend Pis: matrix, mastodon, spring APIs, DBs
+#   snapdragon-frontend  -> frontend Pis: snapdragon.systems Angular host + social-ui
+#   snapdragon-games     -> x86_64 GPU worker: snapdragon.games
+#   argocd               -> x86_64 worker: ArgoCD (GitOps engine)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: snapdragon-pki
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: pki }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: snapdragon-backend
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: backend }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: snapdragon-frontend
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: frontend }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: snapdragon-games
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: games }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: gitops }

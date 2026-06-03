@@ -1,0 +1,48 @@
+# OPTIONAL headscale config override placed on the KEYS USB.
+# If present (and headscale.config_file points here), it replaces the
+# baked-in /etc/headscale/config.yaml at first boot.
+#
+# The single value you almost certainly need to change is server_url —
+# set it to the address the other Pi nodes reach this PKI node at.
+
+server_url: http://snapdragon-pki:8080
+listen_addr: 0.0.0.0:8080
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+
+derp:
+  server:
+    enabled: false
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+
+disable_check_updates: true
+ephemeral_node_inactivity_timeout: 30m
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+
+log:
+  level: info
+  format: text
+
+dns:
+  magic_dns: true
+  base_domain: headnet.internal
+  nameservers:
+    global:
+      - 1.1.1.1
+      - 9.9.9.9
+
+unix_socket: /run/headscale/headscale.sock
+unix_socket_permission: "0770"

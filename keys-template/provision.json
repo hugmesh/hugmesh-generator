@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "hostname": "snapdragon-pki",
+  "timezone": "UTC",
+
+  "network": {
+    "wifi": {
+      "ssid": "",
+      "psk": "",
+      "country": "US"
+    }
+  },
+
+  "headscale": {
+    "enabled": true,
+    "config_file": "headscale/config.yaml",
+    "users": ["snapdragon"],
+    "preauthkeys": [
+      { "user": "snapdragon", "reusable": true, "ephemeral": false }
+    ]
+  },
+
+  "tailscale": {
+    "enabled": false,
+    "authkey_file": "tailscale/authkey",
+    "login_server": "http://snapdragon-pki:8080",
+    "up_args": "--accept-routes"
+  },
+
+  "kubernetes": {
+    "role": "control-plane",
+    "bootstrap": false,
+    "config_file": "kubernetes/kubeadm-config.yaml",
+    "pki_dir": "kubernetes/pki"
+  },
+
+  "snapdragon": {
+    "role": "pki",
+    "cluster_domain": "snapdragon.systems",
+    "gitops": {
+      "enabled": true,
+      "argocd": true
+    }
+  },
+
+  "storage": {
+    "devices": [
+      {
+        "match": "nvme",
+        "label": "SNAPDATA",
+        "filesystem": "ext4",
+        "format": false,
+        "mountpoint": "/mnt/data",
+        "options": "defaults,noatime",
+        "use_for": ["containerd", "kubelet"]
+      }
+    ]
+  },
+
+  "backup": {
+    "enabled": true,
+    "schedule": "0 3 * * *",
+    "retention_days": 14,
+    "targets": ["local", "nfs"],
+    "local": { "path": "/mnt/data/backups" },
+    "nfs": { "server": "10.0.0.5", "export": "/exports/snapdragon", "mountpoint": "/mnt/backup-nfs", "options": "rw,soft,_netdev,noatime" },
+    "cifs": { "unc": "//nas/snapdragon", "mountpoint": "/mnt/backup-cifs", "credentials_file": "secrets/cifs.cred" },
+    "etcd": true,
+    "postgres": [
+      { "namespace": "snapdragon-backend", "selector": "app.kubernetes.io/name=postgresql", "user": "postgres" }
+    ]
+  },
+
+  "files": [
+    {
+      "src": "certs/registry-ca.crt",
+      "dest": "/etc/containerd/certs.d/registry.snapdragon.local/ca.crt",
+      "mode": "0644",
+      "owner": "root:root"
+    }
+  ],
+
+  "run": [
+    "secrets/post-provision.sh"
+  ]
+}

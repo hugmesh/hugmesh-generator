@@ -26,12 +26,24 @@ SKIP_CLEAN=false
 RESUME=false
 EXTRA_PACKAGES=""
 TIMEZONE="UTC"
-HOSTNAME="gentoo-rpi5"
+HOSTNAME=""
+ROLE="generic"          # generic | pki | backend | frontend
+CLUSTER_DOMAIN="snapdragon.systems"
+BRAND="snapdragon"                  # name slug (namespaces, gateways, hostnames)
+BRAND_TITLE="Snapdragon Systems"    # human-readable title
+ORG="Snapdragon-Systems"            # GitHub org / image namespace
+CONFIG_FILE=""                      # optional drop-in brand profile (sourced)
 DEFAULT_USER="pi"
 DEFAULT_USER_PASS="raspberry"
 ROOT_PASS="gentoo"
 PCIE_GEN3=false
 SEED_STAGE3_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/latest-stage3-arm64-openrc.txt"
+
+# Mesh VPN (installed as upstream static arm64 binaries, not emerged)
+HEADSCALE_VERSION="0.23.0"
+TAILSCALE_VERSION="1.78.1"
+SKIP_MESH=false
+SKIP_TAILSCALE=false
 
 # ── Colors ─────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -106,11 +118,18 @@ DESCRIPTION
     │   │   └── kubelet-config.yaml     Hardened kubelet config
     │   ├── init.d/
     │   │   ├── containerd              OpenRC init script
-    │   │   └── kubelet                 OpenRC init script
+    │   │   ├── kubelet                 OpenRC init script
+    │   │   ├── headscale               OpenRC init script
+    │   │   ├── tailscaled              OpenRC init script
+    │   │   └── keys-provision          OpenRC first-boot service
+    │   ├── headscale/
+    │   │   └── config.yaml             Default headscale config
+    │   ├── keys-provision/
+    │   │   └── provision.sh            USB KEYS provisioning engine
     │   ├── ssh/sshd_config.d/
     │   │   └── hardened.conf           Hardened SSH config
     │   └── local.d/
-    │       └── 01-firstboot.start.tmpl First-boot script (templated)
+    │       └── 01-firstboot.start.tmpl First-boot finaliser (templated)
     ├── kernel/
     │   └── hardened-k8s.config         Kernel config fragment
     └── installer/
@@ -197,6 +216,25 @@ OPTIONS
         Space-separated list of additional Gentoo packages to
         cross-emerge into the stage4 image.  These are appended
         to specs/portage/packages.list at build time.
+
+  Mesh VPN (headscale + tailscale)
+        Headscale (the self-hosted Tailscale control server) and the
+        tailscale client are installed as upstream static aarch64
+        binaries rather than emerged, so no overlay is required.
+
+    --headscale-version VER
+        Headscale release to install (from GitHub releases).
+        Default: 0.23.0
+
+    --tailscale-version VER
+        Tailscale client release to install (from pkgs.tailscale.com).
+        Default: 1.78.1
+
+    --skip-tailscale
+        Install headscale only; omit the tailscale client.
+
+    --skip-mesh
+        Do not install headscale or tailscale at all.
 
   Phases
     --skip-kernel
@@ -306,6 +344,19 @@ MANEOF
 exit 0
 }
 
+# ── Drop-in brand profile (sourced before CLI; CLI flags override it) ──
+# Pre-scan for --config/-C; otherwise auto-detect ./brand.conf in the CWD.
+for ((_i = 1; _i <= $#; _i++)); do
+    case "${!_i}" in -C|--config) _j=$((_i + 1)); CONFIG_FILE="${!_j}" ;; esac
+done
+if [ -z "${CONFIG_FILE}" ] && [ -f "$(pwd)/brand.conf" ]; then CONFIG_FILE="$(pwd)/brand.conf"; fi
+if [ -n "${CONFIG_FILE}" ]; then
+    [ -f "${CONFIG_FILE}" ] || { err "config file not found: ${CONFIG_FILE}"; exit 1; }
+    # shellcheck disable=SC1090
+    . "${CONFIG_FILE}"
+    echo "Loaded brand profile: ${CONFIG_FILE} (brand=${BRAND}, domain=${CLUSTER_DOMAIN})"
+fi
+
 # ── Option parsing ─────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -321,11 +372,21 @@ while [[ $# -gt 0 ]]; do
         -v|--version)         REL_VERSION="$2";        shift 2 ;;
         --seed-url)           SEED_STAGE3_URL="$2";    shift 2 ;;
         -H|--hostname)        HOSTNAME="$2";           shift 2 ;;
+        -r|--role)            ROLE="$2";               shift 2 ;;
+        -C|--config)          CONFIG_FILE="$2";        shift 2 ;;  # sourced above
+        --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
+        --brand)              BRAND="$2";              shift 2 ;;
+        --brand-title)        BRAND_TITLE="$2";        shift 2 ;;
+        --org)                ORG="$2";                shift 2 ;;
         -T|--timezone)        TIMEZONE="$2";           shift 2 ;;
         -u|--user)            DEFAULT_USER="$2";       shift 2 ;;
         --user-password)      DEFAULT_USER_PASS="$2";  shift 2 ;;
         --root-password)      ROOT_PASS="$2";          shift 2 ;;
         -p|--extra-packages)  EXTRA_PACKAGES="$2";     shift 2 ;;
+        --headscale-version)  HEADSCALE_VERSION="$2";  shift 2 ;;
+        --tailscale-version)  TAILSCALE_VERSION="$2";  shift 2 ;;
+        --skip-mesh)          SKIP_MESH=true;          shift   ;;
+        --skip-tailscale)     SKIP_TAILSCALE=true;     shift   ;;
         --skip-kernel)        SKIP_KERNEL=true;        shift   ;;
         --skip-iso)           SKIP_ISO=true;           shift   ;;
         --skip-clean)         SKIP_CLEAN=true;         shift   ;;
@@ -348,6 +409,18 @@ done
 # Default work directory: ./rpi5-stage4-build under CWD
 if [ -z "${WORK_DIR}" ]; then
     WORK_DIR="$(pwd)/rpi5-stage4-build"
+fi
+
+# Validate role and derive a default hostname from it
+case "${ROLE}" in
+    generic|pki|backend|frontend) ;;
+    *) echo "ERROR: --role must be one of: generic pki backend frontend" >&2; exit 1 ;;
+esac
+if [ -z "${HOSTNAME}" ]; then
+    case "${ROLE}" in
+        generic) HOSTNAME="gentoo-rpi5" ;;
+        *)       HOSTNAME="${BRAND}-${ROLE}" ;;
+    esac
 fi
 
 # Derived paths
@@ -376,7 +449,38 @@ render_template() {
         -e "s|@@DEFAULT_USER@@|${DEFAULT_USER}|g" \
         -e "s|@@DEFAULT_USER_PASS@@|${DEFAULT_USER_PASS}|g" \
         -e "s|@@ROOT_PASS@@|${ROOT_PASS}|g" \
+        -e "s|@@BRAND@@|${BRAND}|g" \
+        -e "s|@@BRAND_TITLE@@|${BRAND_TITLE}|g" \
+        -e "s|@@DOMAIN@@|${CLUSTER_DOMAIN}|g" \
+        -e "s|@@ORG@@|${ORG}|g" \
         "${src}" > "${dst}"
+}
+
+# ── Rebrand the baked config tree (no-op for the default snapdragon names) ──
+# Rewrites the cluster GitOps payload + role markers from the default
+# "snapdragon"/"snapdragon.systems" naming to ${BRAND}/${CLUSTER_DOMAIN}/${ORG}.
+# Internal install paths (/var/lib/snapdragon, /etc/snapdragon) and the
+# provisioning JSON key are intentionally NOT touched (tool vendor namespace).
+rebrand_sysroot() {
+    if [ "${BRAND}" = "snapdragon" ] && [ "${CLUSTER_DOMAIN}" = "snapdragon.systems" ] \
+       && [ "${ORG}" = "Snapdragon-Systems" ] && [ "${BRAND_TITLE}" = "Snapdragon Systems" ]; then
+        info "Branding: default (snapdragon) — no rebrand"
+        return 0
+    fi
+    banner "Rebranding baked config -> brand=${BRAND} domain=${CLUSTER_DOMAIN} org=${ORG}"
+    local org_lc; org_lc="$(echo "${ORG}" | tr '[:upper:]' '[:lower:]')"
+    local roots=("${SYSROOT}/var/lib/snapdragon/cluster" "${SYSROOT}/etc/snapdragon")
+    local f
+    while IFS= read -r -d '' f; do
+        sed -i \
+            -e "s|Snapdragon Systems|${BRAND_TITLE}|g" \
+            -e "s|snapdragon-systems/|${org_lc}/|g" \
+            -e "s|Snapdragon-Systems|${ORG}|g" \
+            -e "s|snapdragon\.systems|${CLUSTER_DOMAIN}|g" \
+            -e "s|snapdragon-|${BRAND}-|g" \
+            "${f}"
+    done < <(find "${roots[@]}" -type f -print0 2>/dev/null)
+    info "Rebrand complete (compound names like '${BRAND}-systems-web' may want review)."
 }
 
 # ── 0. Verify prerequisites ───────────────────────────────────────
@@ -500,12 +604,40 @@ mkdir -p "${SYSROOT}/etc/kubernetes"
 cp "${SPECS_DIR}/etc/kubernetes/kubeadm-config.yaml"      "${SYSROOT}/etc/kubernetes/kubeadm-config.yaml"
 
 mkdir -p "${SYSROOT}/etc/init.d"
-cp "${SPECS_DIR}/etc/init.d/containerd"                   "${SYSROOT}/etc/init.d/containerd"
-cp "${SPECS_DIR}/etc/init.d/kubelet"                      "${SYSROOT}/etc/init.d/kubelet"
-chmod +x "${SYSROOT}/etc/init.d/containerd" "${SYSROOT}/etc/init.d/kubelet"
+for svc in containerd kubelet headscale tailscaled keys-provision; do
+    cp "${SPECS_DIR}/etc/init.d/${svc}" "${SYSROOT}/etc/init.d/${svc}"
+    chmod +x "${SYSROOT}/etc/init.d/${svc}"
+done
+
+# Headscale default config (overridable from the USB KEYS partition)
+mkdir -p "${SYSROOT}/etc/headscale"
+cp "${SPECS_DIR}/etc/headscale/config.yaml"               "${SYSROOT}/etc/headscale/config.yaml"
+
+# KEYS-USB provisioning engine
+mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/var/lib/keys-provision"
+cp "${SPECS_DIR}/etc/keys-provision/provision.sh"         "${SYSROOT}/usr/sbin/keys-provision"
+chmod +x "${SYSROOT}/usr/sbin/keys-provision"
+
+# Backup engine (etcd + PostgreSQL -> attached storage / network share)
+mkdir -p "${SYSROOT}/usr/local/sbin"
+cp "${SPECS_DIR}/usr/local/sbin/snapdragon-backup"        "${SYSROOT}/usr/local/sbin/snapdragon-backup"
+chmod +x "${SYSROOT}/usr/local/sbin/snapdragon-backup"
 
 mkdir -p "${SYSROOT}/etc/ssh/sshd_config.d"
 cp "${SPECS_DIR}/etc/ssh/sshd_config.d/hardened.conf"     "${SYSROOT}/etc/ssh/sshd_config.d/hardened.conf"
+
+# ── Cluster GitOps payload + node role marker ─────────────────────
+mkdir -p "${SYSROOT}/etc/snapdragon"
+echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
+echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
+if [ -d "${SPECS_DIR}/cluster" ]; then
+    mkdir -p "${SYSROOT}/var/lib/snapdragon"
+    cp -r "${SPECS_DIR}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
+    info "Installed cluster GitOps payload (role=${ROLE})"
+fi
+
+# Apply the configured brand/domain to the baked tree (no-op for defaults).
+rebrand_sysroot
 
 mkdir -p "${SYSROOT}/etc/local.d"
 render_template "${SPECS_DIR}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
@@ -526,7 +658,16 @@ mkdir -p "${SYSROOT}/etc/containerd/certs.d"
 
 # OpenRC service links
 mkdir -p "${SYSROOT}/etc/runlevels/default"
-for svc in sshd NetworkManager cronie haveged containerd kubelet auditd apparmor local; do
+DEFAULT_SVCS=(sshd NetworkManager cronie haveged keys-provision containerd kubelet auditd apparmor local)
+# headscale runs on the PKI/identity node (and on a generic all-in-one image)
+if [ "${ROLE}" = "pki" ] || [ "${ROLE}" = "generic" ]; then
+    DEFAULT_SVCS+=(headscale)
+fi
+# tailscale client everywhere unless the mesh / client is skipped
+if ! ${SKIP_MESH} && ! ${SKIP_TAILSCALE}; then
+    DEFAULT_SVCS+=(tailscaled)
+fi
+for svc in "${DEFAULT_SVCS[@]}"; do
     ln -sf "/etc/init.d/${svc}" "${SYSROOT}/etc/runlevels/default/${svc}" 2>/dev/null || true
 done
 
@@ -567,6 +708,44 @@ fi
 
 info "Package count: ${#STAGE4_PACKAGES[@]}"
 cross_emerge --update "${STAGE4_PACKAGES[@]}"
+
+# ── 7b. Install mesh VPN (headscale + tailscale) ───────────────────
+if ${SKIP_MESH}; then
+    banner "Phase 2.5: SKIPPED mesh VPN (--skip-mesh)"
+else
+    banner "Phase 2.5: Installing mesh VPN (headscale + tailscale)"
+
+    HS_URL="https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}/headscale_${HEADSCALE_VERSION}_linux_arm64"
+    HS_BIN="${SYSROOT}/usr/bin/headscale"
+    info "Fetching headscale ${HEADSCALE_VERSION}..."
+    if curl -fL -o "${HS_BIN}" "${HS_URL}"; then
+        chmod +x "${HS_BIN}"
+        file "${HS_BIN}" | grep -q 'ELF.*aarch64' \
+            || warn "headscale binary is not aarch64 — check --headscale-version"
+        info "headscale installed: /usr/bin/headscale"
+    else
+        warn "Could not fetch headscale ${HEADSCALE_VERSION}; the headscale service will be inert."
+    fi
+
+    if ${SKIP_TAILSCALE}; then
+        info "Skipping tailscale client (--skip-tailscale)"
+    else
+        TS_URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
+        TS_TGZ="${WORK_DIR}/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
+        info "Fetching tailscale ${TAILSCALE_VERSION}..."
+        if curl -fL -o "${TS_TGZ}" "${TS_URL}"; then
+            TS_TMP="$(mktemp -d)"
+            tar -C "${TS_TMP}" -xzf "${TS_TGZ}"
+            TS_SUB="$(find "${TS_TMP}" -maxdepth 1 -type d -name 'tailscale_*' | head -1)"
+            install -Dm0755 "${TS_SUB}/tailscale"  "${SYSROOT}/usr/bin/tailscale"
+            install -Dm0755 "${TS_SUB}/tailscaled" "${SYSROOT}/usr/sbin/tailscaled"
+            rm -rf "${TS_TMP}"
+            info "tailscale installed: /usr/bin/tailscale, /usr/sbin/tailscaled"
+        else
+            warn "Could not fetch tailscale ${TAILSCALE_VERSION}; the tailscaled service will be inert."
+        fi
+    fi
+fi
 
 # ── 8. Cross-compile the kernel ───────────────────────────────────
 if ${SKIP_KERNEL}; then
@@ -645,7 +824,7 @@ fi
 # ── 10. Package stage4 tarball ─────────────────────────────────────
 banner "Phase 4: Packaging stage4 tarball"
 
-STAGE4_TARBALL="${WORK_DIR}/stage4-${CROSS_TARGET}-rpi5-hardened-k8s-${REL_VERSION}.tar.xz"
+STAGE4_TARBALL="${WORK_DIR}/stage4-${CROSS_TARGET}-rpi5-${ROLE}-k8s-${REL_VERSION}.tar.xz"
 
 tar -C "${SYSROOT}" \
     --xattrs-include='*.*' \
@@ -691,11 +870,12 @@ else
     cp "${SPECS_DIR}/installer/install.sh" "${ISO_DIR}/install.sh"
     chmod +x "${ISO_DIR}/install.sh"
 
-    ISO_PATH="${WORK_DIR}/gentoo-rpi5-arm64-hardened-k8s-${REL_VERSION}.iso"
+    ISO_PATH="${WORK_DIR}/gentoo-rpi5-arm64-${ROLE}-k8s-${REL_VERSION}.iso"
+    VOLID="$(echo "GENTOO_RPI5_${ROLE}_K8S" | tr '[:lower:]' '[:upper:]' | cut -c1-32)"
 
     xorrisofs \
         -o "${ISO_PATH}" \
-        -volid "GENTOO_RPI5_K8S" \
+        -volid "${VOLID}" \
         -joliet -rock \
         "${ISO_DIR}"
 
@@ -712,6 +892,8 @@ echo ""
 echo "  Board:            Raspberry Pi 5 (${RPI_DTB_PREFIX} / ${RPI_CPU})"
 echo "  Profile:          $(cat "${SYSROOT}/etc/portage/profile/parent")"
 echo "  Kernel:           ${RPI_DEFCONFIG} + specs/kernel/hardened-k8s.config"
+echo "  Role:             ${ROLE}   (cluster domain: ${CLUSTER_DOMAIN})"
+echo "  Brand:            ${BRAND} / \"${BRAND_TITLE}\" / ${ORG}${CONFIG_FILE:+   (profile: ${CONFIG_FILE})}"
 echo "  Hostname:         ${HOSTNAME}"
 echo "  Timezone:         ${TIMEZONE}"
 echo "  Serial console:   ttyAMA10 (RP1 UART)"
@@ -733,6 +915,12 @@ echo "    - CNI plugins in /opt/cni/bin"
 echo "    - Cgroup v2 + full netfilter/IPVS/eBPF stack"
 echo "    - OverlayFS for container layers"
 echo "    - Kubelet: anon-auth off, webhook auth, seccomp default"
+echo ""
+echo "  Mesh VPN + provisioning:"
+echo "    - headscale ${HEADSCALE_VERSION} (control server) + tailscale ${TAILSCALE_VERSION}"
+echo "    - First-boot provisioning from a USB FAT32 'KEYS' partition"
+echo "      (users, ssh keys, passwords, certs, headscale/k8s config)"
+echo "    - keys-provision engine: /usr/sbin/keys-provision"
 echo ""
 echo "  Artifacts:"
 echo "    Work directory:  ${WORK_DIR}"

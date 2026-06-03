@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+
+description="Headscale — self-hosted Tailscale control server"
+command="/usr/bin/headscale"
+command_args="serve"
+command_background=true
+command_user="headscale:headscale"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/headscale.log"
+error_log="/var/log/headscale.err"
+
+depend() {
+    need net
+    use dns logger
+    after keys-provision firewall
+}
+
+start_pre() {
+    getent group  headscale >/dev/null || groupadd -r headscale
+    getent passwd headscale >/dev/null || \
+        useradd -r -g headscale -d /var/lib/headscale -s /sbin/nologin headscale
+    checkpath -d -o headscale:headscale -m 0750 /etc/headscale /var/lib/headscale /run/headscale
+}

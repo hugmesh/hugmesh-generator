@@ -1,0 +1,39 @@
+# snapdragon.systems Angular host — the gateway-forwarded front page.
+# Built from github.com/Snapdragon-Systems/snapdragon.systems (Dockerfile +
+# nginx.conf in that repo). Shows Matrix/Mastodon links to logged-in users;
+# login/registration is delegated to Casdoor (Google + admin accounts).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snapdragon-systems-web
+  namespace: snapdragon-frontend
+  labels: { app: snapdragon-systems-web, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: snapdragon-systems-web } }
+  template:
+    metadata: { labels: { app: snapdragon-systems-web } }
+    spec:
+      nodeSelector: { snapdragon.systems/role: frontend }
+      containers:
+        - name: web
+          image: snapdragon-systems/snapdragon.systems:dev
+          ports: [{ name: http, containerPort: 80 }]
+          env:
+            # The host reads these at runtime to render the social links and
+            # drive the Casdoor login button (no external login UI of its own).
+            - { name: CASDOOR_ISSUER, value: "https://id.snapdragon.systems" }
+            - { name: MATRIX_URL,   value: "https://matrix.snapdragon.systems" }
+            - { name: MASTODON_URL, value: "https://mastodon.snapdragon.systems" }
+            - { name: SOCIAL_UI_BASE, value: "/social" }
+          readinessProbe: { httpGet: { path: /, port: http }, initialDelaySeconds: 5 }
+          resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { cpu: 500m, memory: 256Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: snapdragon-systems-web
+  namespace: snapdragon-frontend
+spec:
+  selector: { app: snapdragon-systems-web }
+  ports: [{ name: http, port: 80, targetPort: http }]

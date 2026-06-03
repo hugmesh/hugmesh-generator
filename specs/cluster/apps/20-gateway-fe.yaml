@@ -1,0 +1,48 @@
+# snapdragon-fe-gateway — front door for snapdragon.systems (the Angular host
+# front page) + the integrated matrix/mastodon social-ui micro-frontends.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-gateway-fe
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/catalyst-scripts.git
+    targetRevision: main
+    path: specs/cluster/charts/snapdragon-gateway
+    helm:
+      releaseName: snapdragon-fe-gateway
+      values: |
+        instance:
+          name: snapdragon-fe-gateway
+        ingress:
+          enabled: true
+          host: snapdragon.systems
+        nodeSelector:
+          snapdragon.systems/role: frontend
+        routes:
+          # Each federated micro-frontend on its own nginx remote (specific
+          # paths first)…
+          - id: matrix-ui
+            uri: http://snapdragon-matrix-ui.snapdragon-frontend.svc.cluster.local:80
+            path: /social/matrix/**
+          - id: mastodon-ui
+            uri: http://snapdragon-mastodon-ui.snapdragon-frontend.svc.cluster.local:80
+            path: /social/mastodon/**
+          - id: login-ui
+            uri: http://snapdragon-login-ui.snapdragon-frontend.svc.cluster.local:80
+            path: /login/**
+          - id: admin-ui
+            uri: http://snapdragon-admin-ui.snapdragon-frontend.svc.cluster.local:80
+            path: /admin/**
+          # …then the snapdragon.systems Angular host catches everything else.
+          - id: frontend-host
+            uri: http://snapdragon-systems-web.snapdragon-frontend.svc.cluster.local:80
+            path: /**
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

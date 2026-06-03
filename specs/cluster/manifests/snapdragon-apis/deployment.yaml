@@ -1,0 +1,34 @@
+# Snapdragon Spring APIs. Resource servers behind the be-gateway; they trust
+# the Casdoor JWT and the External-* identity headers the gateway appends.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snapdragon-api
+  namespace: snapdragon-backend
+  labels: { app: snapdragon-api, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: snapdragon-api } }
+  template:
+    metadata: { labels: { app: snapdragon-api } }
+    spec:
+      nodeSelector: { snapdragon.systems/role: backend }
+      containers:
+        - name: api
+          # snapdragon-actions — "Spring Actions for snapdragon hybrid architecture"
+          image: snapdragon-systems/actions:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          env:
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.snapdragon.systems" }
+            - { name: SPRING_PROFILES_ACTIVE, value: "casdoor" }
+          readinessProbe: { httpGet: { path: /actuator/health/readiness, port: http }, initialDelaySeconds: 20 }
+          resources: { requests: { cpu: 100m, memory: 384Mi }, limits: { cpu: "1", memory: 1Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: snapdragon-api
+  namespace: snapdragon-backend
+spec:
+  selector: { app: snapdragon-api }
+  ports: [{ name: http, port: 8080, targetPort: http }]

@@ -1,0 +1,83 @@
+# Default values for snapdragon-gateway.
+# Each namespace's ArgoCD Application overrides `instance`, `routes` and
+# `ingress.host` (see cluster/apps/20-gateway-*.yaml).
+
+# Which logical gateway this release is. Sets SPRING_APPLICATION_NAME, which
+# the image uses to differentiate snapdragon-pki/be/fe-gateway behaviour.
+instance:
+  name: snapdragon-fe-gateway
+
+replicaCount: 1
+
+image:
+  repository: snapdragon-systems/gateway
+  tag: dev
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+serviceAccount:
+  create: true
+  name: ""
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Casdoor is the single OAuth2 issuer for the whole cluster. It lives in the
+# snapdragon-pki namespace on the control-plane (pki) Pi.
+casdoor:
+  issuerUri: http://casdoor.snapdragon-pki.svc.cluster.local:8000
+  jwksUri: http://casdoor.snapdragon-pki.svc.cluster.local:8000/.well-known/jwks
+
+# Cassandra backs the gateway's revocation list + URL registry (shared).
+cassandra:
+  contactPoints: cassandra.snapdragon-pki.svc.cluster.local:9042
+  keyspace: snapdragon_gateway
+  localDc: dc1
+
+# Downstream routes rendered into an application-routes.yml ConfigMap and
+# loaded via SPRING_CONFIG_ADDITIONAL_LOCATION. id/uri/path per route.
+routes:
+  - id: api-default
+    uri: http://snapdragon-api.snapdragon-backend.svc.cluster.local:8080
+    path: /api/**
+
+# Extra raw environment variables, e.g. SPRING_PROFILES_ACTIVE.
+extraEnv: []
+
+# Internal ingress (Cloudflare terminates the public name later; this is the
+# in-cluster host the tunnel / reverse proxy targets).
+ingress:
+  enabled: false
+  className: ""
+  host: snapdragon.systems
+  annotations: {}
+  tls: false
+
+# Pin a gateway to specific nodes (e.g. fe-gateway onto frontend Pis).
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 768Mi
+
+# Spring Boot Actuator readiness/liveness (gateway exposes /actuator/health).
+probes:
+  enabled: true
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]

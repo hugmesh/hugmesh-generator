@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+
+description="Provision the system from a USB KEYS partition (first boot)"
+
+depend() {
+    need localmount
+    use net dns logger
+    after containerd
+    before kubelet headscale tailscaled local netmount sshd
+}
+
+start() {
+    ebegin "Provisioning from KEYS partition"
+    /usr/sbin/keys-provision
+    eend $? "keys-provision reported an error (see /var/log/keys-provision.log)"
+}
+
+stop() {
+    return 0
+}
