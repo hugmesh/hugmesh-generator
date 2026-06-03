@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: snapdragon-pki
+resources:
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+
+# schema.sql is materialized into a ConfigMap and mounted into the Postgres
+# initdb directory (/docker-entrypoint-initdb.d) so the gateway_route_access
+# table + canonical seed are applied automatically on first start.
+configMapGenerator:
+  - name: route-access-schema
+    files:
+      - schema.sql
+
+# The Deployment references the ConfigMap by its fixed name; keep it stable so
+# ArgoCD self-heal does not churn the pod on every apply.
+generatorOptions:
+  disableNameSuffixHash: true

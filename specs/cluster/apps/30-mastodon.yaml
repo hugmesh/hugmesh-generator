@@ -15,6 +15,11 @@ spec:
     helm:
       releaseName: mastodon
       values: |
+        # Pin the chart fullname so the web Service is "mastodon-web", matching
+        # the be-gateway URI
+        # http://mastodon-web.snapdragon-backend.svc.cluster.local:3000
+        # (the official chart names the web Service <fullname>-web).
+        fullnameOverride: mastodon
         mastodon:
           local_domain: snapdragon.systems
           web_domain: mastodon.snapdragon.systems

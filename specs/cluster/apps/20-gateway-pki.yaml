@@ -17,6 +17,9 @@ spec:
           name: snapdragon-pki-gateway
         ingress:
           enabled: true
+          # Cloudflare Tunnel (manifests/cloudflared) is the primary external
+          # edge; this nginx Ingress is the in-cluster secondary path.
+          className: nginx
           host: id.snapdragon.systems
         nodeSelector:
           snapdragon.systems/pki: "true"

@@ -18,6 +18,10 @@ spec:
           name: snapdragon-fe-gateway
         ingress:
           enabled: true
+          # Cloudflare Tunnel (manifests/cloudflared) is the primary external
+          # edge; this nginx Ingress is the in-cluster alternative/secondary
+          # path. Either way only the gateway Service is exposed.
+          className: nginx
           host: snapdragon.systems
         nodeSelector:
           snapdragon.systems/frontend: "true"
@@ -41,6 +45,14 @@ spec:
           - id: admin-ui
             uri: http://snapdragon-admin-ui.snapdragon-frontend.svc.cluster.local:80
             path: /admin/**
+          # Same-origin BFF: /bff/** proxies to the admin-bff in the backend
+          # namespace, so the admin-ui's bff.service calls (login, register,
+          # provision, me, admin/route-access) are first-party to
+          # snapdragon.systems. The fe-gateway enforces the route-DB role rules
+          # (/bff/admin/** => ROLE_ADMIN) before the proxy.
+          - id: admin-bff
+            uri: http://admin-bff.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/**
           # …then the snapdragon.systems Angular host catches everything else.
           - id: frontend-host
             uri: http://snapdragon-systems-web.snapdragon-frontend.svc.cluster.local:80

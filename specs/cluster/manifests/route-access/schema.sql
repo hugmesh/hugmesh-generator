@@ -20,13 +20,38 @@ CREATE TABLE IF NOT EXISTS gateway_route_access (
 );
 CREATE INDEX IF NOT EXISTS idx_route_access_gw ON gateway_route_access (gateway, url_pattern);
 
--- Seed: public auth/login/registration on every gateway; admin paths admin-only.
+-- Canonical seed — one allow row per (gateway, url_pattern, role) in the routing
+-- contract. Role semantics (mirroring the snapdragon.games SecurityConfig
+-- casdoorAuthoritiesConverter):
+--   ROLE_ANONYMOUS  public: no Casdoor JWT required (login, OIDC discovery, the
+--                   front page). The gateway lets the request through unauth'd.
+--   ROLE_USER       the authenticated floor: any valid Casdoor principal holds
+--                   it (this is the "public-floor" of /api/auth/** etc.).
+--   ROLE_ADMIN      JWT "roles" claim contains admin, or the legacy isAdmin flag.
+-- A request is allowed iff the caller holds the role of a matching allow row for
+-- THIS gateway; the most specific matching url_pattern wins (admin paths first).
 INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
-  ('snapdragon-pki-gateway', '/api/auth/**',         'ROLE_USER',  true),
-  ('snapdragon-pki-gateway', '/login/**',            'ROLE_USER',  true),
-  ('snapdragon-fe-gateway',  '/login/**',            'ROLE_USER',  true),
-  ('snapdragon-fe-gateway',  '/social/**',           'ROLE_USER',  true),
-  ('snapdragon-fe-gateway',  '/admin/**',            'ROLE_ADMIN', true),
-  ('snapdragon-be-gateway',  '/api/admin/**',        'ROLE_ADMIN', true),
-  ('snapdragon-be-gateway',  '/api/**',              'ROLE_USER',  true)
+  -- pki-gateway (id.snapdragon.systems -> Casdoor)
+  ('snapdragon-pki-gateway', '/api/auth/**',          'ROLE_USER',      true),  -- public-floor
+  ('snapdragon-pki-gateway', '/login/**',             'ROLE_ANONYMOUS', true),  -- public
+  ('snapdragon-pki-gateway', '/.well-known/**',       'ROLE_ANONYMOUS', true),  -- public (OIDC/jwks)
+
+  -- be-gateway (api./matrix./mastodon.snapdragon.systems -> APIs/Matrix/Mastodon)
+  ('snapdragon-be-gateway',  '/_matrix/**',           'ROLE_USER',      true),  -- Matrix C-S API
+  ('snapdragon-be-gateway',  '/api/v1/**',            'ROLE_USER',      true),  -- Mastodon REST API
+  ('snapdragon-be-gateway',  '/oauth/**',             'ROLE_USER',      true),  -- Mastodon OAuth
+  ('snapdragon-be-gateway',  '/api/admin/**',         'ROLE_ADMIN',     true),  -- snapdragon admin API
+  ('snapdragon-be-gateway',  '/api/**',               'ROLE_USER',      true),  -- snapdragon APIs
+
+  -- fe-gateway (snapdragon.systems -> Angular host + MFEs + same-origin /bff)
+  ('snapdragon-fe-gateway',  '/',                     'ROLE_ANONYMOUS', true),  -- public front page
+  ('snapdragon-fe-gateway',  '/social/matrix/**',     'ROLE_USER',      true),
+  ('snapdragon-fe-gateway',  '/social/mastodon/**',   'ROLE_USER',      true),
+  ('snapdragon-fe-gateway',  '/login/**',             'ROLE_USER',      true),
+  ('snapdragon-fe-gateway',  '/admin/**',             'ROLE_ADMIN',     true),
+  ('snapdragon-fe-gateway',  '/bff/login',            'ROLE_USER',      true),
+  ('snapdragon-fe-gateway',  '/bff/register/**',      'ROLE_USER',      true),
+  ('snapdragon-fe-gateway',  '/bff/provision/**',     'ROLE_USER',      true),
+  ('snapdragon-fe-gateway',  '/bff/me/**',            'ROLE_USER',      true),
+  ('snapdragon-fe-gateway',  '/bff/admin/**',         'ROLE_ADMIN',     true)
 ON CONFLICT DO NOTHING;
