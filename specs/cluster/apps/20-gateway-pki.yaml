@@ -19,7 +19,15 @@ spec:
           enabled: true
           host: id.snapdragon.systems
         nodeSelector:
-          snapdragon.systems/role: pki
+          snapdragon.systems/pki: "true"
+        seLinux:
+          level: "s0:c11"
+        # Role->URL external-access rules: Postgres-backed (admin-api CRUD),
+        # Cassandra-cached; the gateway denies external access unless the
+        # request's Casdoor roles are permitted for the route.
+        extraEnv:
+          - name: ROUTE_ACCESS_R2DBC_URL
+            value: r2dbc:postgresql://route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
         routes:
           - id: casdoor-auth
             uri: http://casdoor.snapdragon-pki.svc.cluster.local:8000

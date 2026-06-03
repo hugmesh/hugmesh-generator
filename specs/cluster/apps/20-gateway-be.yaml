@@ -19,7 +19,12 @@ spec:
           enabled: true
           host: api.snapdragon.systems
         nodeSelector:
-          snapdragon.systems/role: backend
+          snapdragon.systems/backend: "true"
+        seLinux:
+          level: "s0:c12"
+        extraEnv:
+          - name: ROUTE_ACCESS_R2DBC_URL
+            value: r2dbc:postgresql://route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
         routes:
           - id: snapdragon-api
             uri: http://snapdragon-api.snapdragon-backend.svc.cluster.local:8080

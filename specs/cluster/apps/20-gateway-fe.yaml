@@ -20,7 +20,12 @@ spec:
           enabled: true
           host: snapdragon.systems
         nodeSelector:
-          snapdragon.systems/role: frontend
+          snapdragon.systems/frontend: "true"
+        seLinux:
+          level: "s0:c13"
+        extraEnv:
+          - name: ROUTE_ACCESS_R2DBC_URL
+            value: r2dbc:postgresql://route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
         routes:
           # Each federated micro-frontend on its own nginx remote (specific
           # paths first)…

@@ -76,6 +76,13 @@ podSecurityContext:
   runAsUser: 1000
   seccompProfile:
     type: RuntimeDefault
+
+# Per-app SELinux identity (set per gateway in apps/20-gateway-*.yaml). Rendered
+# as pod seLinuxOptions ONLY when level is set; the MCS level makes this app's
+# pods mutually isolated from other apps even within container_t.
+seLinux:
+  type: container_t
+  level: ""
 securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: true
