@@ -753,8 +753,17 @@ if [ -n "${EXTRA_PACKAGES}" ]; then
 fi
 
 info "Package count: ${#STAGE4_PACKAGES[@]}"
-cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "${STAGE4_PACKAGES[@]}" \
-    || warn "Some stage4 packages failed to build (--keep-going); review ${LOG_FILE}"
+# A single unsatisfiable atom (bad name, REQUIRED_USE, masked dep) fails the
+# WHOLE batch dependency calc — and --keep-going can't rescue a calc failure,
+# so nothing installs (incl. raspberrypi-sources → no kernel). If the batch
+# fails, fall back to per-package emerges so one bad atom can't sink the rest.
+if ! cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "${STAGE4_PACKAGES[@]}"; then
+    warn "Batch emerge failed (unsatisfiable atom?); retrying per-package so the rest still install"
+    for _pkg in "${STAGE4_PACKAGES[@]}"; do
+        cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "${_pkg}" \
+            || warn "  skipped ${_pkg}"
+    done
+fi
 
 # ── 7b. Install mesh VPN (headscale + tailscale) ───────────────────
 if ${SKIP_MESH}; then
@@ -899,6 +908,16 @@ if ${SKIP_ISO}; then
 else
     banner "Phase 5: Building bootable ISO"
 
+    # A bootable image needs the kernel. If it's absent (kernel build skipped or
+    # raspberrypi-sources failed to install), don't crash on cp — explain and
+    # skip the ISO; the stage4 tarball is still produced above.
+    if [ ! -f "${SYSROOT}/boot/${RPI_KERNEL_IMG}" ]; then
+        warn "Kernel ${RPI_KERNEL_IMG} not in sysroot — skipping ISO."
+        warn "Ensure sys-kernel/raspberrypi-sources installed and the kernel phase ran"
+        warn "(don't pass --skip-kernel). Stage4 tarball: ${STAGE4_TARBALL}"
+        ISO_PATH="(not built — kernel missing)"
+    else
+
     mkdir -p "${ISO_DIR}"/{boot,stage4,EFI/BOOT}
 
     # Boot files from sysroot
@@ -930,6 +949,7 @@ else
 
     info "ISO created: ${ISO_PATH}"
     info "Size: $(du -sh "${ISO_PATH}" | cut -f1)"
+    fi   # end kernel-present check
 fi
 
 # ── 12. Summary ────────────────────────────────────────────────────
