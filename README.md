@@ -1,306 +1,236 @@
-# Catalyst Scripts
+# snapdragon-generator
 
-Crossdev-based build scripts for producing hardened Gentoo Linux stage4 images targeting the Raspberry Pi 5 (BCM2712 / Cortex-A76) with a full Kubernetes stack, all cross-compiled from an x86_64 host.
+Crossdev / native build scripts that produce **hardened Gentoo images** for the
+Snapdragon cluster — three Raspberry Pi 5 (aarch64) role images plus an x86_64
+GPU host — and the **GitOps payload** that runs Casdoor, Matrix, Mastodon, the
+Spring APIs and snapdragon.games on them. Everything connects **behind
+`snapdragon.systems`** through per-namespace Spring Cloud Gateways.
 
-No root or sudo is required to run the build. The included SD card / NVMe installer (`install.sh` inside the ISO) is the only component that needs root, and only on the machine writing the image.
+Every image boots, then provisions itself at first boot from a USB **FAT32
+`KEYS` partition** (users, SSH keys, passwords, certificates, headscale/k8s
+config, attached storage, backups) — see [`keys-template/`](keys-template/).
 
-## What You Get
+> **Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full topology.**
 
-- **Hardened Gentoo** — `default/linux/arm64/23.0/hardened` profile, PIE/SSP/FORTIFY_SOURCE, full RELRO, AppArmor LSM, audit subsystem, hardened sysctl and SSH
-- **Kubernetes-ready** — containerd + runc, kubelet, kubeadm, kubectl, CNI plugins, cgroup v2, IPVS, eBPF/XDP (Cilium-ready), OverlayFS
-- **RPi 5 optimised** — `cortex-a76` tuning, RP1 south-bridge support, PCIe/NVMe, fan control, `kernel_2712.img`
-- **Portable config** — all spec files are separated from the build script so you can view, diff, and version them independently
+All build output lands in a **git-ignored** work directory
+(`rpi5-stage4-build/`, `x86-host-build/`).
 
-## Prerequisites
+## Images
 
-The following must already be installed on the x86_64 build host:
+| Image | Build command | Runs |
+|---|---|---|
+| **pki** (RPi 5) | `./build-rpi5-stage4.sh --role pki` | k8s control plane, headscale, Casdoor, Cassandra, pki-gateway |
+| **backend** (RPi 5) | `./build-rpi5-stage4.sh --role backend` | Matrix, Mastodon, Spring APIs, DBs, be-gateway |
+| **frontend** (RPi 5) | `./build-rpi5-stage4.sh --role frontend` | snapdragon.systems Angular host + social-ui, fe-gateway |
+| **host** (x86_64) | `sudo ./build-x86-host-stage4.sh` | GPU worker: ArgoCD, snapdragon.games, backend capacity |
 
-| Tool | Package |
-|---|---|
-| `crossdev` | `sys-devel/crossdev` |
-| `aarch64-unknown-linux-gnu-gcc` | Built via `crossdev --target aarch64-unknown-linux-gnu` |
-| `xorrisofs` | `dev-libs/libisoburn` |
-| `curl` | `net-misc/curl` |
-| `tar` | `app-arch/tar` |
-| `file` | `sys-apps/file` |
+## Rebranding (brand profile)
 
-Build the cross-toolchain once:
-
-```bash
-crossdev --stable --target aarch64-unknown-linux-gnu
-```
-
-## Quick Start
-
-```bash
-git clone https://github.com/Snapdragon-Systems/catalyst-scripts.git
-cd catalyst-scripts
-
-# Build with all defaults — output lands in ./rpi5-stage4-build/
-./build-rpi5-stage4.sh
-
-# Or point at a fast scratch disk
-./build-rpi5-stage4.sh -w /mnt/nvme/rpi-build
-```
-
-When the build finishes you get:
-
-```
-rpi5-stage4-build/
-├── stage4-aarch64-unknown-linux-gnu-rpi5-hardened-k8s-2026.0.tar.xz
-├── gentoo-rpi5-arm64-hardened-k8s-2026.0.iso
-├── sysroot/        # full root filesystem
-├── pkgdir/         # binary packages (reusable)
-└── build.log       # complete build log
-```
-
-## Writing to SD Card / NVMe
+Everything is **string-independent**: the default naming is `snapdragon` /
+`snapdragon.systems`, but you can build ISOs for any brand/domain. Drop a
+`brand.conf` (auto-detected in the CWD, or pass `--config FILE`) — a plain shell
+file the builders source. Precedence is **built-in defaults < brand.conf < CLI
+flags**, so an absent file changes nothing.
 
 ```bash
-# Mount the ISO
-mount -o loop rpi5-stage4-build/gentoo-rpi5-arm64-hardened-k8s-2026.0.iso /mnt/iso
-
-# SD card
-sudo /mnt/iso/install.sh /dev/sdX
-
-# NVMe (via M.2 HAT)
-sudo /mnt/iso/install.sh /dev/nvme0n1
+cp brand.conf.example brand.conf      # edit BRAND / BRAND_TITLE / ORG / CLUSTER_DOMAIN / default accounts
+./build-rpi5-stage4.sh --role pki     # picks up brand.conf automatically
+# or per-invocation, no file:
+./build-rpi5-stage4.sh --role backend --brand acme --domain acme.example --org Acme-Inc --brand-title "Acme Corp"
 ```
 
-Or extract the tarball directly:
+At build time the baked cluster payload is rewritten — every namespace
+(`acme-pki`/`acme-backend`/…), gateway name, ingress host (`matrix.acme.example`),
+image org (`acme-inc/…`), title and hostname — from the snapdragon defaults to
+your brand. (Internal install paths like `/var/lib/snapdragon` and the
+provisioning JSON key are kept as the tool's vendor namespace.) `brand.conf` is
+git-ignored since it can hold default passwords.
+
+## Prerequisites (build host)
+
+- **RPi 5 images** (cross-compiled, run with **sudo** — cross-emerge merges into
+  the sysroot + writes host caches; fakeroot is not enough): `crossdev` with
+  `aarch64-unknown-linux-gnu` built, plus `curl`, `tar`, `file`, `xorrisofs`
+  (`dev-libs/libisoburn`). `crossdev --stable --target aarch64-unknown-linux-gnu`.
+- **x86_64 host image** (native, **root** required): an amd64 Gentoo host with
+  `grub`, `squashfs-tools`, `libisoburn` (for `grub-mkrescue`/`xorriso`).
+- **QEMU test**: `app-emulation/qemu` (aarch64 target), `dosfstools`, `e2fsprogs`.
+
+## Quick start (one-liners)
 
 ```bash
-sudo parted /dev/sdX mklabel msdos
-sudo parted /dev/sdX mkpart primary fat32 1MiB 512MiB
-sudo parted /dev/sdX set 1 boot on
-sudo parted /dev/sdX mkpart primary ext4 512MiB 100%
-sudo mkfs.vfat -F32 /dev/sdX1 && sudo mkfs.ext4 /dev/sdX2
-sudo mount /dev/sdX2 /mnt/root && sudo mount /dev/sdX1 /mnt/root/boot
-sudo tar -C /mnt/root --xattrs-include='*.*' -xJf stage4-*.tar.xz
-sudo mv /mnt/root/boot/* /mnt/root/boot/   # already in place
+# 1. Build all three Pi role ISOs into the git-ignored work dir (root: cross-emerge
+#    merges into the sysroot + writes host caches — fakeroot is not sufficient)
+sudo ./scripts/build-all-roles.sh -j "$(nproc)"
+
+# …or just one role
+sudo ./build-rpi5-stage4.sh --role pki
+
+# 2. Build the x86_64 GPU host ISO (native amd64 Gentoo host, as root)
+sudo ./build-x86-host-stage4.sh -j "$(nproc)"
+
+# 3. Generate a filled-in KEYS directory (SSH keypair + hashed passwords)
+./scripts/gen-provision-keys.sh -r pki -o keys-pki      # -r backend|frontend too
+
+# 4. Write the KEYS provisioning stick (FAT32, label KEYS)
+sudo ./scripts/make-keys-usb.sh /dev/sdX keys-pki
+
+# 5. Write the OS image to an SD card / NVMe (Pi)
+sudo mount -o loop rpi5-stage4-build/gentoo-rpi5-arm64-pki-k8s-*.iso /mnt/iso
+sudo /mnt/iso/install.sh /dev/sdX           # or /dev/nvme0n1
+
+# 6. Boot the Pi with the KEYS stick inserted — it self-provisions.
+
+# 7. Integration-test an image under QEMU (root)
+sudo ./tests/qemu/run-qemu-test.sh --role pki
 ```
 
-## Default Credentials
+The x86_64 ISO is self-booting; boot it on the desktop and run
+`install-x86.sh /dev/sdX` (UEFI + BIOS GRUB) from its live environment.
 
-| User | Password |
-|---|---|
-| `root` | `gentoo` |
-| `pi` | `raspberry` |
+## USB KEYS provisioning
 
-SSH is key-only — add your public key to `~/.ssh/authorized_keys` after first boot.
+At first boot the `keys-provision` service finds the FAT32 `KEYS` partition,
+mounts it read-only, and applies (all optional):
 
-**Change all default passwords immediately.**
+- **users** from `users.json` (groups, sudo, SSH keys, SHA-512 password hashes)
+- **SSH** host keys + per-user `authorized_keys` (login is key-only)
+- **hostname / timezone / Wi-Fi / NetworkManager** profiles
+- **certificates** and arbitrary **files** at given paths
+- **headscale** (control server) + **tailscale** (client, preauth-key join)
+- **Kubernetes** PKI + kubeadm config; stage or run `kubeadm init`/`join`
+- **attached storage** — mount M.2/NVMe or USB, relocate containerd/kubelet data
+- **backups** — schedule etcd + PostgreSQL dumps to attached storage and/or
+  an NFS/CIFS share
+- **GitOps** — on the pki control plane, bootstrap ArgoCD + the app-of-apps
 
-## Options Reference
+If no KEYS stick is present the image still boots and creates a fallback user so
+you are never locked out. Full schema + examples: [`keys-template/`](keys-template/).
 
-### Directories
+## Cluster / GitOps
 
-| Flag | Short | Default | Description |
-|---|---|---|---|
-| `--work-dir DIR` | `-w` | `./rpi5-stage4-build` | Base directory for all build artifacts. Created under the current working directory if not specified. |
-| `--specs-dir DIR` | `-s` | `specs/` (next to script) | Path to the spec files directory. Copy and customise `specs/`, then point here. |
+The cluster manifests live in [`specs/cluster/`](specs/cluster/) and are baked
+into every image at `/var/lib/snapdragon/cluster`. The pki node installs ArgoCD
+and a root app-of-apps; ArgoCD syncs the `snapdragon-gateway` Helm chart (one
+release per namespace), Casdoor, Cassandra, Matrix, Mastodon, the Spring APIs,
+the Angular frontend, the social-ui and snapdragon.games. See
+[`specs/cluster/README.md`](specs/cluster/README.md).
 
-### Toolchain
+## Secrets (Vault + USB)
 
-| Flag | Short | Default | Description |
-|---|---|---|---|
-| `--target TUPLE` | `-t` | `aarch64-unknown-linux-gnu` | Cross-compilation target triplet. |
-| `--jobs N` | `-j` | `$(nproc)` | Number of parallel make/emerge jobs. |
+Cluster secrets are generated by
+[`scripts/gen-cluster-secrets.sh`](scripts/gen-cluster-secrets.sh) and pushed to
+**HashiCorp Vault** (KV v2, mount `secret/`, base path `snapdragon/`, tracking
+the brand slug). The **External Secrets Operator** syncs them into k8s via the
+ClusterSecretStore **`snapdragon-vault`** (one ExternalSecret per Secret,
+refreshed hourly) — the workloads keep their existing `secretKeyRef`s
+(`casdoor-google`, `clickhouse-auth`, `uptrace-auth`). The same values are also
+written to the KEYS stick at `vault/secrets.json` (with `vault/token` for online
+sync) so `keys-provision` can create the Secrets offline — **Vault first, USB
+fallback** — if Vault is unreachable. See [`specs/cluster/`](specs/cluster/).
 
-### Board / CPU
+## QEMU integration test
 
-| Flag | Short | Default | Description |
-|---|---|---|---|
-| `--cpu CPU` | `-c` | `cortex-a76` | GCC `-mcpu`/`-mtune` value. Use `cortex-a53` for RPi 3, `cortex-a72` for RPi 4. |
-| `--defconfig NAME` | `-d` | `bcm2712_defconfig` | Kernel defconfig. Use `bcmrpi3_defconfig` for RPi 3, `bcm2711_defconfig` for RPi 4. |
-| `--dtb-prefix PREFIX` | | `bcm2712` | Device-tree blob filename prefix. |
-| `--kernel-img NAME` | | `kernel_2712.img` | Output kernel image filename for `/boot`. |
-| `--pcie-gen3` | | off | Force PCIe Gen 3 for NVMe. Not all drives are stable — test first. |
+[`tests/qemu/run-qemu-test.sh`](tests/qemu/) boots a built image under
+`qemu-system-aarch64 -M virt` with a synthetic FAT32 KEYS disk and asserts that
+provisioning worked end-to-end (users, sshd, headscale, the k8s stack, the role
+marker). See [`tests/qemu/README.md`](tests/qemu/README.md).
 
-### Image
+## Integration tests (UI E2E + boot emulation)
 
-| Flag | Short | Default | Description |
-|---|---|---|---|
-| `--version STRING` | `-v` | `2026.0` | Release version stamp for filenames and ISO volume ID. |
-| `--seed-url URL` | | Gentoo arm64 autobuilds | URL to the `latest-stage3` index file for the seed tarball. |
+Two rootless test suites run on this machine with Docker:
 
-### System
+### A. UI end-to-end (Playwright + generated certs)
 
-| Flag | Short | Default | Description |
-|---|---|---|---|
-| `--hostname NAME` | `-H` | `gentoo-rpi5` | Target system hostname. |
-| `--timezone ZONE` | `-T` | `UTC` | Target timezone (e.g. `America/New_York`). |
-| `--user NAME` | `-u` | `pi` | Default non-root user created on first boot. |
-| `--user-password PASS` | | `raspberry` | Password for the default user. |
-| `--root-password PASS` | | `gentoo` | Root password. |
+Brings up a rootless stack — generated TLS certs + runtime values, plus
+multi-user **mock** Matrix/Mastodon/BFF servers — serves the built Angular host
+over HTTPS, and drives it with Playwright (browsers come from the local
+`snapdragongames-e2e` image, so no browser download). It proves, with
+screenshots in `tests/e2e/screenshots/`:
 
-### Packages
+1. front page loads over the **generated certs + values**,
+2. an admin (Casdoor admin role) manages the **Gmail + Discord allowlist**,
+3. registration is **Google/Discord-only and allowlist-gated** (denied otherwise),
+4. **two-stage registration** — Matrix/Mastodon stay locked until registration completes,
+5. **five users** fully register and reach both services,
+6. users **chat with each other** over Matrix and **post** to Mastodon through our UI.
 
-| Flag | Short | Default | Description |
-|---|---|---|---|
-| `--extra-packages "PKG ..."` | `-p` | *(none)* | Space-separated list of additional Gentoo packages to emerge. Appended to `specs/portage/packages.list`. |
+```bash
+# one-shot: build host, gen certs, up stack, run Playwright, screenshot, tear down
+./tests/e2e/run-all.sh
 
-### Build Phases
+# or, against an already-running stack (tests/stack/up.sh):
+./tests/e2e/run.sh
+```
+
+> `tests/stack/mock-*.mjs` are fast in-memory test doubles. For full fidelity,
+> `tests/stack/up-real.sh` brings up real Synapse + Casdoor + Mastodon (+ the
+> platform Cassandra) from `compose.real.yaml` — it generates the Synapse config
+> and Mastodon DB first, then `docker compose up -d`. Point the suite at it with
+> `SNAP_BASE_URL=...` (and `REAL_MATRIX=1` for the UI), and tear it down with
+> `tests/stack/down-real.sh`.
+
+### B. First-boot provisioning emulation (one of each node kind)
+
+Runs the **real** `keys-provision` engine inside a container against a generated
+KEYS directory (no block device needed) for each role — `pki`, `backend`,
+`frontend`, `host` — asserting users/SSH-keys/sudoers/host-keys/hostname/markers:
+
+```bash
+./tests/boot/emulate-firstboot.sh                 # all four roles
+./tests/boot/emulate-firstboot.sh pki backend     # specific roles
+```
+
+> This validates the boot-time provisioning the images run; it does not boot the
+> aarch64 kernel (that needs a built stage4 — see the QEMU section, which boots
+> the produced Image under `-M virt`).
+
+## Build options
+
+Run `./build-rpi5-stage4.sh --help` (and `./build-x86-host-stage4.sh --help`)
+for the full man-style reference. Highlights:
 
 | Flag | Default | Description |
 |---|---|---|
-| `--skip-kernel` | off | Skip kernel compilation. Useful when iterating on packages only. |
-| `--skip-iso` | off | Skip ISO generation. Only produce the stage4 tarball. |
-| `--skip-clean` | off | Keep debug symbols, headers, and docs in the sysroot. |
-| `--resume` | off | Resume a previous build. Skips seed extraction if the sysroot exists. |
+| `-r, --role` | `generic` | `pki` \| `backend` \| `frontend` (RPi). Sets hostname, services, GitOps payload. |
+| `--cluster-domain` | `snapdragon.systems` | Base domain for gateways / Casdoor. |
+| `-w, --work-dir` | `./rpi5-stage4-build` | Git-ignored output directory. |
+| `-j, --jobs` | `$(nproc)` | Parallel emerge/make jobs. |
+| `--headscale-version` / `--tailscale-version` | pinned | Mesh binary versions. |
+| `--skip-mesh` / `--skip-tailscale` | off | Omit mesh VPN / tailscale client. |
+| `--skip-kernel` / `--skip-iso` / `--skip-clean` / `--resume` | off | Build phases. |
+| `--pcie-gen3` | off | Force PCIe Gen 3 for NVMe (RPi, test your drive). |
 
-### General
+## Spec files
 
-| Flag | Short | Description |
-|---|---|---|
-| `--help` | `-h` | Show the full man-style help and exit. |
-
-## Examples
-
-```bash
-# Minimal — build everything with defaults
-./build-rpi5-stage4.sh
-
-# Fast scratch disk, 8 jobs, custom hostname, extra packages, PCIe Gen 3
-./build-rpi5-stage4.sh \
-    -w /mnt/nvme/rpi-build \
-    -j 8 \
-    -H k8s-node-01 \
-    -T America/New_York \
-    --pcie-gen3 \
-    -p "app-misc/tmux sys-fs/btrfs-progs net-misc/chrony"
-
-# Target RPi 4 instead of RPi 5
-./build-rpi5-stage4.sh \
-    -c cortex-a72 \
-    -d bcm2711_defconfig \
-    --dtb-prefix bcm2711 \
-    --kernel-img kernel8.img
-
-# Resume a failed build, tarball only, keep debug info
-./build-rpi5-stage4.sh \
-    -w ~/rpi5-stage4-build \
-    --resume \
-    --skip-iso \
-    --skip-clean
-
-# Use a customised specs directory
-cp -r specs ~/my-specs
-nano ~/my-specs/portage/packages.list
-nano ~/my-specs/kernel/hardened-k8s.config
-./build-rpi5-stage4.sh -s ~/my-specs
-
-# Full production build with every option
-./build-rpi5-stage4.sh \
-    -w /var/tmp/rpi5-build \
-    -s ./specs \
-    -t aarch64-unknown-linux-gnu \
-    -j 16 \
-    -c cortex-a76 \
-    -d bcm2712_defconfig \
-    --dtb-prefix bcm2712 \
-    --kernel-img kernel_2712.img \
-    --pcie-gen3 \
-    -v 2026.1 \
-    -H k8s-master \
-    -T Europe/London \
-    -u admin \
-    --user-password 'Ch@ng3Me!' \
-    --root-password 'S3cur3R00t!' \
-    -p "app-misc/tmux net-misc/chrony sys-fs/btrfs-progs dev-vcs/git"
-```
-
-## Spec Files
-
-All configuration lives in `specs/`. Edit these files to customise the image without touching the build script.
-
-| File | Description |
+| Path | Purpose |
 |---|---|
-| `portage/make.conf.tmpl` | Main portage config — CFLAGS, USE, FEATURES (templated) |
-| `portage/packages.list` | Stage4 package list, one atom per line |
-| `portage/profile/parent` | Gentoo profile selection (`hardened/arm64`) |
-| `portage/profile/use.mask` | Global USE flags to mask |
-| `portage/package.accept_keywords/rpi` | RPi firmware `~arm64` keywords |
-| `portage/package.accept_keywords/kubernetes` | K8s stack `~arm64` keywords |
-| `portage/package.use/rpi5` | RPi 5 per-package USE flags |
-| `portage/package.use/kubernetes` | K8s per-package USE flags |
-| `portage/env/cross-go.conf.tmpl` | Go cross-compile environment (templated) |
-| `portage/package.env/kubernetes` | Maps K8s packages to `cross-go.conf` |
-| `boot/config.txt.tmpl` | RPi 5 boot firmware config (templated) |
-| `boot/cmdline.txt` | Kernel command line — hardened + cgroup v2 |
-| `etc/fstab` | Filesystem table (SD + NVMe commented) |
-| `etc/modules-load.d/kubernetes.conf` | Kernel modules loaded at boot for K8s |
-| `etc/sysctl.d/10-hardened.conf` | Hardened sysctl parameters |
-| `etc/sysctl.d/99-kubernetes.conf` | K8s networking sysctl |
-| `etc/containerd/config.toml` | containerd CRI runtime config |
-| `etc/kubernetes/kubeadm-config.yaml` | kubeadm init defaults |
-| `etc/kubernetes/kubelet-config.yaml` | Hardened kubelet config |
-| `etc/init.d/containerd` | OpenRC init script for containerd |
-| `etc/init.d/kubelet` | OpenRC init script for kubelet |
-| `etc/ssh/sshd_config.d/hardened.conf` | Hardened SSH — key-only, restricted ciphers |
-| `etc/local.d/01-firstboot.start.tmpl` | First-boot user/locale/module setup (templated) |
-| `kernel/hardened-k8s.config` | Kernel config fragment — one option per line |
-| `installer/install.sh` | SD/NVMe installer bundled into the ISO |
+| `specs/portage/*` | Portage config (make.conf, packages, profile, keywords, USE) |
+| `specs/kernel/hardened-k8s.config` | RPi kernel fragment (hardened + k8s + USB/VFAT + virtio) |
+| `specs/etc/keys-provision/provision.sh` | USB KEYS provisioning engine |
+| `specs/etc/init.d/{containerd,kubelet,headscale,tailscaled,keys-provision}` | OpenRC services |
+| `specs/etc/headscale/config.yaml` | Default headscale config |
+| `specs/etc/kubernetes/*`, `specs/etc/containerd/config.toml` | k8s + CRI config |
+| `specs/etc/local.d/01-firstboot.start.tmpl` | First-boot finaliser (fallback user) |
+| `specs/usr/local/sbin/snapdragon-backup` | etcd + PostgreSQL backup engine |
+| `specs/cluster/**` | ArgoCD app-of-apps, gateway Helm chart, manifests, bootstrap |
+| `specs-x86/**` | x86_64 host portage/kernel/installer specs |
+| `keys-template/**` | The KEYS USB template + schema docs |
 
-### Templating
+## Repositories
 
-Files ending in `.tmpl` contain `@@VARIABLE@@` markers substituted at build time. The available variables are:
+This repo is the image/infra layer; application code lives in sibling repos —
+see the table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The new
+[`snapdragon-social-ui`](https://github.com/Snapdragon-Systems/snapdragon-social-ui)
+holds the Matrix + Mastodon Angular micro-frontends.
 
-| Variable | Source |
-|---|---|
-| `@@CBUILD@@` | Host compiler triplet (auto-detected) |
-| `@@CROSS_TARGET@@` | `--target` option |
-| `@@RPI_CPU@@` | `--cpu` option |
-| `@@JOBS@@` | `--jobs` option |
-| `@@WORK_DIR@@` | `--work-dir` option |
-| `@@RPI_KERNEL_IMG@@` | `--kernel-img` option |
-| `@@PCIE_LINE@@` | Resolved from `--pcie-gen3` flag |
-| `@@HOSTNAME@@` | `--hostname` option |
-| `@@TIMEZONE@@` | `--timezone` option |
-| `@@DEFAULT_USER@@` | `--user` option |
-| `@@DEFAULT_USER_PASS@@` | `--user-password` option |
-| `@@ROOT_PASS@@` | `--root-password` option |
+## Security notes
 
-### Kernel Config Fragment
-
-`specs/kernel/hardened-k8s.config` uses a simple format — one `scripts/config` action per line:
-
-```
-enable CONFIG_SECCOMP
-module CONFIG_IP_VS_RR
-disable CONFIG_DEVKMEM
-set-str CONFIG_LSM "apparmor,integrity"
-set-val CONFIG_DEFAULT_MMAP_MIN_ADDR 65536
-```
-
-Lines starting with `#` are comments. The fragment is applied on top of the board defconfig (`--defconfig`).
-
-## Post-Install: Bootstrapping Kubernetes
-
-After booting the RPi 5:
-
-```bash
-# 1. Change passwords
-passwd root
-passwd pi
-
-# 2. Add SSH keys
-ssh-copy-id pi@<rpi-ip>
-
-# 3. Initialize the control plane
-kubeadm init --config /etc/kubernetes/kubeadm-config.yaml
-
-# 4. Set up kubeconfig
-mkdir -p $HOME/.kube
-cp /etc/kubernetes/admin.conf $HOME/.kube/config
-
-# 5. Install a CNI (e.g. Flannel)
-kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
-
-# 6. Join worker nodes
-kubeadm token create --print-join-command
-# Run the output on each worker
-```
+- SSH is key-only; provide a key via KEYS or use the console fallback user.
+- Prefer `password_hash` over plaintext; generate with `gen-provision-keys.sh`.
+- The KEYS stick holds the cluster CA, preauth and backup credentials — keep it
+  offline once provisioning is done. Generated secrets and build output are
+  git-ignored.
 
 ## License
 

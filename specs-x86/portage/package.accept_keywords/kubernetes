@@ -1,0 +1,9 @@
+sys-cluster/kubelet ~amd64
+sys-cluster/kubeadm ~amd64
+sys-cluster/kubectl ~amd64
+app-containers/containerd ~amd64
+app-containers/cri-tools ~amd64
+app-containers/cni-plugins ~amd64
+app-containers/runc ~amd64
+app-containers/nerdctl ~amd64
+net-firewall/conntrack-tools ~amd64

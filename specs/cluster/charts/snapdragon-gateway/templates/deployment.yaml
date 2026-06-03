@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "snapdragon-gateway.name" . }}
+  labels:
+    {{- include "snapdragon-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "snapdragon-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/routes: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "snapdragon-gateway.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "snapdragon-gateway.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        {{- if .Values.seLinux.level }}
+        seLinuxOptions:
+          type: {{ .Values.seLinux.type | default "container_t" }}
+          level: {{ .Values.seLinux.level | quote }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+          env:
+            - name: SPRING_APPLICATION_NAME
+              value: {{ .Values.instance.name | quote }}
+            - name: PORT
+              value: {{ .Values.service.port | quote }}
+            - name: SPRING_CONFIG_ADDITIONAL_LOCATION
+              value: "file:/config/"
+            - name: CASDOOR_ISSUER_URI
+              value: {{ .Values.casdoor.issuerUri | quote }}
+            - name: CASDOOR_JWKS_URI
+              value: {{ .Values.casdoor.jwksUri | quote }}
+            - name: CASSANDRA_CONTACT_POINTS
+              value: {{ .Values.cassandra.contactPoints | quote }}
+            - name: CASSANDRA_KEYSPACE
+              value: {{ .Values.cassandra.keyspace | quote }}
+            - name: CASSANDRA_LOCAL_DC
+              value: {{ .Values.cassandra.localDc | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.probes.enabled }}
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            initialDelaySeconds: 45
+            periodSeconds: 15
+          {{- end }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: routes
+              mountPath: /config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: routes
+          configMap:
+            name: {{ include "snapdragon-gateway.name" . }}-routes
+        - name: tmp
+          emptyDir: {}

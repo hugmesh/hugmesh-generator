@@ -1,0 +1,91 @@
+# Federated micro-frontend remotes — EACH on its own nginx (own repo + pod) in
+# the snapdragon-frontend namespace, federated into the snapdragon.systems host:
+#   snapdragon-matrix-ui   (/social/matrix, /social/matrix/call)
+#   snapdragon-mastodon-ui (/social/mastodon)
+#   snapdragon-login-ui    (/login)
+#   snapdragon-admin-ui    (/admin, /admin/usage, /admin/namespaces — admin role)
+# Repos: github.com/Snapdragon-Systems/snapdragon-{matrix,mastodon,login,admin}-ui
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: snapdragon-matrix-ui, namespace: snapdragon-frontend, labels: { app: snapdragon-matrix-ui, app.kubernetes.io/part-of: snapdragon.systems } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: snapdragon-matrix-ui } }
+  template:
+    metadata: { labels: { app: snapdragon-matrix-ui } }
+    spec:
+      nodeSelector: { snapdragon.systems/frontend: "true" }
+      containers:
+        - name: web
+          image: snapdragon-systems/matrix-ui:dev
+          ports: [{ name: http, containerPort: 80 }]
+          resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: snapdragon-matrix-ui, namespace: snapdragon-frontend }
+spec: { selector: { app: snapdragon-matrix-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: snapdragon-mastodon-ui, namespace: snapdragon-frontend, labels: { app: snapdragon-mastodon-ui, app.kubernetes.io/part-of: snapdragon.systems } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: snapdragon-mastodon-ui } }
+  template:
+    metadata: { labels: { app: snapdragon-mastodon-ui } }
+    spec:
+      nodeSelector: { snapdragon.systems/frontend: "true" }
+      containers:
+        - name: web
+          image: snapdragon-systems/mastodon-ui:dev
+          ports: [{ name: http, containerPort: 80 }]
+          resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: snapdragon-mastodon-ui, namespace: snapdragon-frontend }
+spec: { selector: { app: snapdragon-mastodon-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: snapdragon-login-ui, namespace: snapdragon-frontend, labels: { app: snapdragon-login-ui, app.kubernetes.io/part-of: snapdragon.systems } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: snapdragon-login-ui } }
+  template:
+    metadata: { labels: { app: snapdragon-login-ui } }
+    spec:
+      nodeSelector: { snapdragon.systems/frontend: "true" }
+      containers:
+        - name: web
+          image: snapdragon-systems/login-ui:dev
+          ports: [{ name: http, containerPort: 80 }]
+          resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: snapdragon-login-ui, namespace: snapdragon-frontend }
+spec: { selector: { app: snapdragon-login-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: snapdragon-admin-ui, namespace: snapdragon-frontend, labels: { app: snapdragon-admin-ui, app.kubernetes.io/part-of: snapdragon.systems } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: snapdragon-admin-ui } }
+  template:
+    metadata: { labels: { app: snapdragon-admin-ui } }
+    spec:
+      nodeSelector: { snapdragon.systems/frontend: "true" }
+      containers:
+        - name: web
+          image: snapdragon-systems/admin-ui:dev
+          ports: [{ name: http, containerPort: 80 }]
+          resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: snapdragon-admin-ui, namespace: snapdragon-frontend }
+spec: { selector: { app: snapdragon-admin-ui }, ports: [{ name: http, port: 80, targetPort: http }] }

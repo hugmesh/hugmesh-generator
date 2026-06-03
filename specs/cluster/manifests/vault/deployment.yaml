@@ -1,0 +1,80 @@
+# HashiCorp Vault — the cluster's secret store. External Secrets Operator (ESO)
+# reads from this Vault (KV v2, mount "secret/", base path "snapdragon/") via the
+# ClusterSecretStore "snapdragon-vault" and materializes the k8s Secrets the
+# workloads consume.
+#
+# !!! DEV MODE ONLY !!!
+# This runs Vault in `server -dev`: in-memory storage, auto-unsealed, a single
+# root token, and TLS disabled. It exists so the integration stack has a working
+# secret backend out of the box. PRODUCTION MUST use a real, externally managed,
+# unsealed HA Vault (persistent storage, auto-unseal/KMS, TLS, audit, proper
+# auth) — repoint the ClusterSecretStore server at it and drop this Deployment.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vault
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: secrets }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault
+  namespace: vault
+  labels: { app: vault, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: vault }
+  template:
+    metadata:
+      labels: { app: vault }
+    spec:
+      # Vault lives on the pki/control-plane node (the identity tier). Pin it
+      # there and tolerate the control-plane taint so it schedules on it; every
+      # other node reaches it via the cluster Service vault.vault.svc:8200 (ESO)
+      # or the mesh name vault.<domain> (devices / online sync).
+      nodeSelector:
+        snapdragon.systems/pki: "true"
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: vault
+          image: hashicorp/vault:latest
+          # Dev mode: in-memory, auto-unsealed, listens on 0.0.0.0:8200.
+          args: ["server", "-dev", "-dev-listen-address=0.0.0.0:8200"]
+          env:
+            # The dev root token. In production this token does not exist; ESO
+            # authenticates with a scoped token / AppRole instead.
+            - name: VAULT_DEV_ROOT_TOKEN_ID
+              value: "root"
+            - name: VAULT_DEV_LISTEN_ADDRESS
+              value: "0.0.0.0:8200"
+            - name: VAULT_ADDR
+              value: "http://127.0.0.1:8200"
+          securityContext:
+            # `server -dev` needs IPC_LOCK to mlock memory.
+            capabilities:
+              add: ["IPC_LOCK"]
+          ports:
+            - { name: http, containerPort: 8200 }
+          readinessProbe:
+            httpGet: { path: /v1/sys/health, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m,  memory: 128Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: vault
+  labels: { app: vault }
+spec:
+  selector: { app: vault }
+  ports:
+    - { name: http, port: 8200, targetPort: http }

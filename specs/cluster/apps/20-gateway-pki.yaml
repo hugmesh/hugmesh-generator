@@ -1,0 +1,46 @@
+# snapdragon-pki-gateway — front door for the identity tier (Casdoor).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-gateway-pki
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/charts/snapdragon-gateway
+    helm:
+      releaseName: snapdragon-pki-gateway
+      values: |
+        instance:
+          name: snapdragon-pki-gateway
+        ingress:
+          enabled: true
+          host: id.snapdragon.systems
+        nodeSelector:
+          snapdragon.systems/pki: "true"
+        seLinux:
+          level: "s0:c11"
+        # Role->URL external-access rules: Postgres-backed (admin-api CRUD),
+        # Cassandra-cached; the gateway denies external access unless the
+        # request's Casdoor roles are permitted for the route.
+        extraEnv:
+          - name: ROUTE_ACCESS_R2DBC_URL
+            value: r2dbc:postgresql://route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
+        routes:
+          - id: casdoor-auth
+            uri: http://casdoor.snapdragon-pki.svc.cluster.local:8000
+            path: /api/auth/**
+          - id: casdoor-login
+            uri: http://casdoor.snapdragon-pki.svc.cluster.local:8000
+            path: /login/**
+          - id: casdoor-oidc
+            uri: http://casdoor.snapdragon-pki.svc.cluster.local:8000
+            path: /.well-known/**
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-pki
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

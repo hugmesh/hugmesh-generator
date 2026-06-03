@@ -1,0 +1,20 @@
+# HashiCorp Vault — the cluster secret store. Dev-mode for the integration stack
+# (see manifests/vault/deployment.yaml; production wants a real unsealed HA Vault).
+# External Secrets Operator reads from it to materialize the workload Secrets.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vault
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/vault
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vault
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

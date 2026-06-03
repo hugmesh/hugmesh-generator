@@ -1,0 +1,46 @@
+{
+  "_comment": "WORKER KEYS USB = KEYS ONLY. No users.json, no headscale/vault/gitops/storage/backup service config — those live ONLY on the pki node's USB + JSON config. A worker carries just: the cluster-join token + CA (kubernetes.*), the mesh authkey (tailscale), the cluster CA cert (files), and break-glass SSH keys (ssh/root.authorized_keys). It joins the pki control-plane and gets all service config + secrets from there (ArgoCD + Vault/ESO).",
+  "version": 1,
+  "hostname": "snapdragon-be-01",
+
+  "tailscale": {
+    "enabled": true,
+    "authkey_file": "tailscale/authkey",
+    "login_server": "http://snapdragon-pki:8080",
+    "up_args": "--accept-routes"
+  },
+
+  "kubernetes": {
+    "role": "worker",
+    "bootstrap": false,
+    "pki_dir": "kubernetes/pki",
+    "join": {
+      "api_server": "snapdragon-pki:6443",
+      "token": "REPLACE_WITH_KUBEADM_TOKEN",
+      "ca_cert_hash": "sha256:REPLACE_WITH_CA_CERT_HASH"
+    }
+  },
+
+  "snapdragon": {
+    "role": "backend",
+    "cluster_domain": "snapdragon.systems",
+    "node_labels": { "snapdragon.systems/backend": "true" }
+  },
+
+  "_comment_nodes": "Reach the pki control-plane + mesh + binhost by IP (written to /etc/hosts), so tailscale login_server and kubeadm api_server resolve before DNS exists.",
+  "nodes": [
+    { "name": "snapdragon-pki",  "ip": "10.0.0.10", "role": "pki" },
+    { "name": "snapdragon-host", "ip": "10.0.0.30", "role": "host" }
+  ],
+
+  "binhost": { "url": "http://10.0.0.30:8086/arm64" },
+
+  "files": [
+    {
+      "src": "certs/cluster-ca.crt",
+      "dest": "/usr/local/share/ca-certificates/snapdragon-cluster-ca.crt",
+      "mode": "0644",
+      "owner": "root:root"
+    }
+  ]
+}

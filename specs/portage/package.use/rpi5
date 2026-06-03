@@ -1,3 +1,5 @@
 sys-kernel/raspberrypi-sources symlink
 sys-block/parted device-mapper
 net-misc/networkmanager wifi
+# rpi-eeprom requires exactly-one-of ( pi4 pi5 ) — this is the Pi 5 image.
+dev-embedded/rpi-eeprom pi5

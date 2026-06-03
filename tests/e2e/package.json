@@ -1,0 +1,12 @@
+{
+  "name": "snapdragon-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Playwright integration tests: front page over generated certs, admin allowlist, Google/Discord registration gating, 5 users, Matrix chat, Mastodon posting.",
+  "scripts": {
+    "test": "playwright test -c playwright.config.ts --reporter=list"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

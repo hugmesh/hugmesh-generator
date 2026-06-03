@@ -1,0 +1,47 @@
+# snapdragon.games — scheduled onto the x86_64 GPU worker. Vendor-agnostic
+# Mesa/Vulkan: the container gets the host DRI render nodes (/dev/dri) rather
+# than a vendor device plugin, so it runs on any amdgpu/i915/nouveau card.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snapdragon-games
+  namespace: snapdragon-games
+  labels: { app: snapdragon-games, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: snapdragon-games } }
+  template:
+    metadata: { labels: { app: snapdragon-games } }
+    spec:
+      # Require the x86_64 GPU node (labelled by keys-provision on that image).
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        snapdragon.systems/compute: gpu
+      containers:
+        - name: games
+          image: snapdragon-systems/snapdragon.games-backend:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          env:
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.snapdragon.systems" }
+            # Mesa picks the best installed driver; force SW only if no GPU.
+            - { name: LIBGL_ALWAYS_SOFTWARE, value: "0" }
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits:   { cpu: "4",  memory: 4Gi }
+          volumeMounts:
+            - { name: dri, mountPath: /dev/dri }
+          securityContext:
+            # /dev/dri render node access for unprivileged GPU use.
+            seccompProfile: { type: RuntimeDefault }
+      volumes:
+        - name: dri
+          hostPath: { path: /dev/dri, type: Directory }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: snapdragon-games
+  namespace: snapdragon-games
+spec:
+  selector: { app: snapdragon-games }
+  ports: [{ name: http, port: 8080, targetPort: http }]

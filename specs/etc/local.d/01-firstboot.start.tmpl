@@ -1,23 +1,42 @@
 #!/bin/bash
-# First-boot setup — runs once, then self-destructs
+# First-boot finaliser — runs once, then self-destructs.
+#
+# Ordering: the keys-provision service runs earlier in the boot (it is
+# declared "before local"), so by the time this fires the USB KEYS
+# partition has already been processed. This script only fills in the
+# gaps:
+#
+#   * locale generation
+#   * Kubernetes kernel modules + sysctl
+#   * CNI plugin staging
+#   * a FALLBACK default user — created ONLY when keys-provision did not
+#     create any users (i.e. you booted without a KEYS stick), so you are
+#     never locked out of a fresh image.
 #
 # Variables substituted at build time:
 #   @@HOSTNAME@@           Target hostname
-#   @@DEFAULT_USER@@       Non-root user to create
-#   @@DEFAULT_USER_PASS@@  Password for default user
-#   @@ROOT_PASS@@          Root password
+#   @@DEFAULT_USER@@       Fallback non-root user
+#   @@DEFAULT_USER_PASS@@  Fallback user password
+#   @@ROOT_PASS@@          Fallback root password
 
 locale-gen
 eselect locale set en_US.utf8
 env-update && source /etc/profile
 
-if ! id @@DEFAULT_USER@@ &>/dev/null; then
-    useradd -m -G wheel,audio,video,usb -s /bin/bash @@DEFAULT_USER@@
-    echo "@@DEFAULT_USER@@:@@DEFAULT_USER_PASS@@" | chpasswd
-    echo "root:@@ROOT_PASS@@" | chpasswd
-    echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
+# ── Fallback user (only when KEYS provisioning created none) ───────
+if [ ! -f /var/lib/keys-provision/users.created ]; then
+    echo "No users provisioned from KEYS — creating fallback @@DEFAULT_USER@@"
+    if ! id @@DEFAULT_USER@@ &>/dev/null; then
+        useradd -m -G wheel,audio,video,usb -s /bin/bash @@DEFAULT_USER@@
+        echo "@@DEFAULT_USER@@:@@DEFAULT_USER_PASS@@" | chpasswd
+        echo "root:@@ROOT_PASS@@" | chpasswd
+        echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
+    fi
+else
+    echo "Users were provisioned from KEYS — skipping fallback user"
 fi
 
+# ── Kubernetes kernel modules + sysctl ─────────────────────────────
 for mod in overlay br_netfilter ip_vs ip_vs_rr ip_vs_wrr ip_vs_sh nf_conntrack vxlan; do
     modprobe "${mod}" 2>/dev/null || true
 done
@@ -32,16 +51,19 @@ if [ -b /dev/nvme0n1 ]; then
 fi
 
 echo ""
-echo "=== Gentoo RPi 5 (Hardened + Kubernetes) ==="
-echo "  Hostname:    @@HOSTNAME@@"
+echo "=== Gentoo RPi 5 (Hardened + Headscale + Kubernetes) ==="
+echo "  Hostname:    $(cat /etc/hostname 2>/dev/null || echo @@HOSTNAME@@)"
 echo "  Kubernetes:  $(kubelet --version 2>/dev/null || echo 'installed')"
 echo "  containerd:  $(containerd --version 2>/dev/null || echo 'installed')"
+echo "  Headscale:   $(headscale version 2>/dev/null || echo 'installed')"
 echo ""
+echo "  Provisioned from USB KEYS:  see /var/log/keys-provision.log"
 echo "  Control plane:  kubeadm init --config /etc/kubernetes/kubeadm-config.yaml"
 echo "  Worker node:    kubeadm join <cp>:6443 --token <tok> --discovery-token-ca-cert-hash <hash>"
 echo ""
-echo "  Credentials:    root:@@ROOT_PASS@@  @@DEFAULT_USER@@:@@DEFAULT_USER_PASS@@"
-echo "  SSH:            key-only — add pubkey to ~/.ssh/authorized_keys"
-echo "=== CHANGE ALL DEFAULT PASSWORDS IMMEDIATELY ==="
+echo "  SSH: key-only — keys come from the USB KEYS users.json / ssh/ directory."
+echo "  If you booted WITHOUT a KEYS stick, log in as the fallback user above"
+echo "  and CHANGE ALL DEFAULT PASSWORDS IMMEDIATELY."
+echo "========================================================"
 
 rm -f /etc/local.d/01-firstboot.start

@@ -1,0 +1,19 @@
+# snapdragon.systems Angular host — the gateway-forwarded front page.
+# Frontend Pis.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-systems-web
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/frontend
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

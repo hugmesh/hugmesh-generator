@@ -1,0 +1,49 @@
+# brand.conf — drop-in branding + default-account profile for the image builders.
+#
+# Copy to `brand.conf` (auto-detected) or pass with `--config FILE`. It is a
+# plain shell file the build scripts `source`. Order of precedence:
+#   built-in defaults  <  this file  <  explicit CLI flags
+#
+# The built-in defaults ARE the values below (the existing Snapdragon naming),
+# so an empty/absent file changes nothing. Set any subset to rebrand the ISOs:
+# every namespace, hostname, gateway name, image org, ingress host and title in
+# the baked cluster payload is rewritten from "snapdragon"/"snapdragon.systems"
+# to your brand/domain at build time.
+
+# ── Branding ────────────────────────────────────────────────────────
+BRAND="snapdragon"                  # short slug used in names (namespaces, gateways, hosts)
+BRAND_TITLE="Snapdragon Systems"    # human-readable title shown in UIs/messages
+ORG="Snapdragon-Systems"            # GitHub org / container-image namespace
+CLUSTER_DOMAIN="snapdragon.systems" # base domain (id./matrix./mastodon./api. derived)
+
+# ── Default accounts (fallback when no USB KEYS stick is present) ───
+DEFAULT_USER="pi"                   # fallback non-root user
+DEFAULT_USER_PASS="raspberry"       # CHANGE for real builds
+ROOT_PASS="gentoo"                  # CHANGE for real builds
+ADMIN_EMAILS="admin@snapdragon.systems"   # seeded Casdoor admin (BFF allowlist)
+
+# ── System ──────────────────────────────────────────────────────────
+TIMEZONE="UTC"
+# HOSTNAME=""                       # leave empty to derive as <BRAND>-<role>
+
+# ── Versions ────────────────────────────────────────────────────────
+HEADSCALE_VERSION="0.23.0"
+TAILSCALE_VERSION="1.78.1"
+
+# ── Vault (cluster secrets) ─────────────────────────────────────────
+# Used by scripts/gen-cluster-secrets.sh + the External Secrets Operator.
+# Secrets live at  <VAULT_KV_MOUNT>/<BRAND>/{casdoor,clickhouse,uptrace}.
+#
+# An EMPTY VAULT_ADDR means offline / USB-only secret delivery: the generator
+# still writes keys-out/vault/{secrets.json,token} for the KEYS stick, and no
+# Vault server is contacted. Set it (plus VAULT_TOKEN in the environment, never
+# committed here) to also push the secrets into Vault for online ESO sync.
+VAULT_ADDR=""                       # e.g. https://vault.snapdragon.systems  (empty = offline/USB-only)
+VAULT_KV_MOUNT="secret"             # KV v2 mount the ClusterSecretStore reads
+
+# Example rebrand (uncomment + edit to build "Acme" images on acme.example):
+#   BRAND="acme"
+#   BRAND_TITLE="Acme Corp"
+#   ORG="Acme-Inc"
+#   CLUSTER_DOMAIN="acme.example"
+#   ADMIN_EMAILS="admin@acme.example"

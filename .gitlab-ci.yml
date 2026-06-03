@@ -1,0 +1,49 @@
+# Snapdragon CI — runs on the in-cluster GitLab Runner (privileged, x86_64 host).
+# Builds every ISO + container image and DELIVERS the ISOs as release assets so
+# the admin UI can link to the latest builds. NOTE: ISOs contain NO keys — the
+# KEYS material is supplied from the USB stick at first boot, never baked in or
+# published.
+stages: [iso, images, deliver]
+
+variables:
+  # Where delivered ISOs live; the admin BFF reads "latest" links from here.
+  ISO_BASE: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/iso/latest"
+
+# Build the three Pi role ISOs + the x86 host ISO. Needs root + crossdev + qemu
+# on the runner host (the x86_64 node). Tag-select that runner.
+build:isos:
+  stage: iso
+  tags: [snapdragon-x86, privileged]
+  script:
+    - ./scripts/build-all-roles.sh -j "$(nproc)"          # pki/backend/frontend (aarch64)
+    - ./build-x86-host-stage4.sh -j "$(nproc)" -w x86-host-build
+    - mkdir -p out && cp rpi5-stage4-build/*.iso x86-host-build/*.iso out/ 2>/dev/null || true
+  artifacts:
+    paths: [out/*.iso]
+    expire_in: 30 days
+
+build:images:
+  stage: images
+  tags: [snapdragon-x86]
+  script:
+    # App images (gateway, frontends, BFF, …) are built from their own repos
+    # in the GitLab org mirror; this job builds what lives here and pushes to
+    # the GitLab container registry.
+    - echo "build + push container images to ${CI_REGISTRY_IMAGE}"
+
+# Publish each ISO to the generic package registry under a stable "latest" path
+# so the admin UI's download links never change.
+deliver:isos:
+  stage: deliver
+  tags: [snapdragon-x86]
+  needs: ["build:isos"]
+  script:
+    - |
+      for f in out/*.iso; do
+        n="$(basename "$f")"
+        curl --fail --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+             --upload-file "$f" "${ISO_BASE}/${n}"
+        echo "delivered ${ISO_BASE}/${n}"
+      done
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'

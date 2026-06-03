@@ -1,0 +1,211 @@
+# KEYS USB template
+
+This directory is the template for the **FAT32 "KEYS" USB partition** that
+the Gentoo RPi 5 image reads at first boot. Copy it onto a USB stick (label
+the FAT32 partition `KEYS`), fill in your secrets, and insert it before the
+first boot. The on-board `keys-provision` service finds it, mounts it
+read-only, and applies everything described below — then writes a marker so
+it won't run again unless you drop a `.provision-force` file on the stick.
+
+The easiest way to produce a stick is:
+
+```bash
+sudo ./scripts/make-keys-usb.sh /dev/sdX ./keys-template
+```
+
+…after running `./scripts/gen-provision-keys.sh` to fill in password hashes
+and SSH keys.
+
+## Two KEYS USB types: pki (config) vs worker (keys only)
+
+- **pki node USB** — the *config* stick: `users.json` (default accounts), the
+  full `provision.json` (**all service config**: headscale, Vault/ESO, GitOps,
+  kubernetes, storage, backups), the cluster CA/PKI, and the Vault token. The
+  pki node is the single source of truth.
+- **worker node USBs** (backend / frontend / host) — *keys only*: no
+  `users.json` and no service config — just the cluster-join token + CA
+  (`kubernetes.*`), the mesh authkey (`tailscale/authkey`), the cluster CA cert,
+  and a break-glass `ssh/root.authorized_keys`. A worker joins the pki
+  control-plane and gets **all** config + secrets from there (ArgoCD + Vault/ESO).
+  See `examples/provision.{backend,frontend,host}.json`.
+
+```bash
+./scripts/gen-provision-keys.sh --role pki     -o keys-pki      # full + users
+./scripts/gen-provision-keys.sh --role backend -o keys-backend  # keys only
+```
+
+`scripts/build-all-roles.sh` does this per role automatically, dropping a
+`keys-<role>` folder next to each ISO in the target directory.
+
+## Layout
+
+```
+KEYS/                                 (FAT32, volume label "KEYS")
+├── provision.json                    top-level manifest (see below)
+├── users.json                        user + root account definitions
+├── ssh/
+│   ├── <user>.authorized_keys        per-user SSH public keys
+│   └── host/ssh_host_*_key[.pub]     optional pinned host keys
+├── headscale/
+│   └── config.yaml                   optional headscale config override
+├── tailscale/
+│   └── authkey                       optional tailscale preauth key
+├── kubernetes/
+│   ├── kubeadm-config.yaml           optional kubeadm config override
+│   └── pki/                          shared cluster CA / certs
+├── vault/
+│   ├── token                         Vault token / AppRole secret-id (online sync)
+│   └── secrets.json                  offline copy of the materialized k8s Secrets
+├── certs/                            certificates (trust store + files[])
+└── secrets/
+    └── post-provision.sh             optional run[] hook
+```
+
+## `provision.json`
+
+| Key | Meaning |
+|---|---|
+| `hostname` | Sets `/etc/hostname` (overrides the build-time value). |
+| `timezone` | Sets the system timezone. |
+| `network.wifi.{ssid,psk,country}` | Synthesises a NetworkManager Wi-Fi profile. |
+| `network` *(or `network/*.nmconnection`)* | Verbatim NM connection profiles are also copied. |
+| `headscale.enabled` | Start the headscale control server (PKI node). |
+| `headscale.config_file` | Path on KEYS to a config that replaces the default. |
+| `headscale.users[]` | headscale users to create once it is up. |
+| `headscale.preauthkeys[]` | `{user,reusable,ephemeral}` preauth keys to mint. |
+| `tailscale.enabled` | Bring up the tailscale client. |
+| `tailscale.{authkey_file,login_server,up_args}` | How to `tailscale up`. |
+| `kubernetes.role` | `control-plane` \| `worker` \| `none`. |
+| `kubernetes.bootstrap` | If `true`, actually run `kubeadm init`/`join`. If `false` (default) only stage config — run kubeadm by hand. |
+| `kubernetes.config_file` | kubeadm config override on KEYS. |
+| `kubernetes.pki_dir` | Directory on KEYS copied to `/etc/kubernetes/pki`. |
+| `kubernetes.join.{api_server,token,ca_cert_hash}` | Worker join parameters. |
+| `snapdragon.role` | `pki` \| `backend` \| `frontend` — selects the cluster app set / namespace this node serves. |
+| `snapdragon.cluster_domain` | Base domain for gateways/ingress/Casdoor. |
+| `snapdragon.gitops.{enabled,argocd}` | On the PKI node, bootstrap ArgoCD + the app-of-apps. |
+| `vault.*` | Seed HashiCorp Vault / External Secrets Operator state; Vault is primary, USB is the offline fallback (see below). |
+| `storage.devices[]` | Set up attached M.2/NVMe or USB storage (see below). |
+| `backup.*` | Schedule etcd + PostgreSQL backups to attached storage / network share. |
+| `files[]` | `{src,dest,mode,owner}` — install arbitrary files from KEYS to absolute paths. |
+| `run[]` | Scripts on KEYS to execute (as root) at the end of provisioning. |
+
+### Attached storage (`storage.devices[]`)
+
+Each entry mounts an attached disk and (optionally) relocates service data onto
+it — handy for putting container/image layers on fast NVMe instead of the SD card.
+
+| Field | Meaning |
+|---|---|
+| `match` | `nvme` \| `usb` \| `/dev/...` \| `LABEL=x` \| `UUID=x`. (`usb` skips the KEYS stick.) |
+| `filesystem` | Filesystem (`ext4`, `xfs`, …). |
+| `format` | **Destructive.** If `true`, GPT-partition + `mkfs` the device. Default `false`. |
+| `label` | Filesystem label to apply when formatting. |
+| `mountpoint` | Where to mount; added to `/etc/fstab` by UUID. |
+| `options` | Mount options. |
+| `use_for[]` | Relocate data dirs onto it: `containerd` (`/var/lib/containerd`), `kubelet`, `rancher`. |
+
+### Backups (`backup.*`)
+
+Backs up Kubernetes `etcd` (control-plane) and PostgreSQL (via `kubectl exec`
+into the DB pods) on a cron schedule, to **any combination** of: attached
+storage (`local`), an NFS share, and/or a CIFS/SMB share. The config is written
+to `/etc/snapdragon/backup.json` (a plain file you can also edit on the device),
+and the run script is `/usr/local/sbin/snapdragon-backup`.
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Master switch. |
+| `schedule` | Cron expression (default `0 3 * * *`). |
+| `retention_days` | Prune artifacts older than N days (0 = keep all). |
+| `targets[]` | Any of `local`, `nfs`, `cifs` — each gets a copy. |
+| `local.path` | Directory on attached storage (e.g. `/mnt/data/backups`). |
+| `nfs.{server,export,mountpoint,options}` | NFS share, mounted via `/etc/fstab`. |
+| `cifs.{unc,mountpoint,credentials_file}` | SMB/CIFS share; `credentials_file` is a path on KEYS. |
+| `etcd` | If `true`, snapshot etcd (control-plane only). |
+| `postgres[]` | `{namespace,selector,database,user}` per database to dump. |
+
+### Secrets / Vault (`vault.*`)
+
+Application secrets live in **HashiCorp Vault** (KV v2, mount `secret`, under the
+brand base path — default `snapdragon/`). Vault is the **source of truth**; the
+USB stick carries an **offline copy** so a fresh device can come up with no
+reachable Vault. Integration is via the **External Secrets Operator (ESO)**: a
+`ClusterSecretStore` named `snapdragon-vault` plus one `ExternalSecret` per
+workload Secret (deployed by ArgoCD). The workloads keep their existing
+`secretKeyRef` usage unchanged — ESO just materializes the Secrets below.
+
+Runs after Kubernetes is up (requires `/etc/kubernetes/admin.conf`). Every step
+is guarded and logged; a failure never aborts the rest of provisioning.
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Master switch. If not `true`, Vault/ESO seeding is skipped. |
+| `address` | Vault URL (e.g. `https://vault.snapdragon.systems`). Empty ⇒ offline-only. |
+| `kv_mount` | KV v2 mount used by the `ClusterSecretStore` (default `secret`). |
+| `base_path` | Base segment under the mount; equals the brand slug (default `snapdragon`). |
+| `token_file` | Path on KEYS to a Vault token / AppRole secret-id (default `vault/token`). |
+| `install_eso` | Hint that ESO should be installed (ESO itself is deployed by ArgoCD). |
+
+**Online (primary).** When `address` is set **and** `KEYS/vault/token` exists,
+the token is loaded into a k8s Secret `vault-token` (key `token`) in the
+`external-secrets` namespace so the `snapdragon-vault` `ClusterSecretStore` can
+authenticate to Vault. ESO then keeps the workload Secrets in sync
+(`refreshInterval 1h`).
+
+**Offline (USB fallback).** `KEYS/vault/secrets.json` is an offline copy of the
+materialized k8s Secrets, shaped as:
+
+```json
+{
+  "<namespace>": {
+    "<secretName>": { "<k8sKey>": "<value>", ... }
+  }
+}
+```
+
+If this bundle is present it is **always** applied (and is the sole source when
+`address` is empty): each `namespace → secretName → {key: value}` is created via
+`kubectl create secret generic … --dry-run=client -o yaml | kubectl apply -f -`,
+so the Secrets exist even with no reachable Vault — i.e. they are *also available
+via the attached USB*. The bundle mirrors exactly what ESO would materialize:
+
+| Namespace | Secret | Keys (from Vault) |
+|---|---|---|
+| `snapdragon-pki` | `casdoor-google` | `clientId` ← `casdoor.google_client_id`, `clientSecret` ← `casdoor.google_client_secret` |
+| `snapdragon-backend` | `clickhouse-auth` | `password` ← `clickhouse.password` |
+| `observability` | `clickhouse-auth` | `password` ← `clickhouse.password` |
+| `observability` | `uptrace-auth` | `pg-password` ← `uptrace.pg_password`, `project-token` ← `uptrace.project_token` |
+
+The Vault paths backing these (KV v2, snake_case keys) are
+`secret/snapdragon/casdoor`, `secret/snapdragon/clickhouse`, and
+`secret/snapdragon/uptrace`.
+
+## `users.json`
+
+Each entry under `users[]`:
+
+| Field | Meaning |
+|---|---|
+| `name` | Login name (required). |
+| `comment`, `shell`, `uid`, `groups[]` | Standard account attributes. |
+| `password_hash` | SHA-512 crypt hash (`openssl passwd -6` / `mkpasswd -m sha512crypt`). Preferred. |
+| `password` | Plaintext fallback (hashed by the system on apply — avoid committing). |
+| `sudo` | Add a sudoers entry. |
+| `sudo_nopasswd` | Make that entry `NOPASSWD`. |
+| `ssh_authorized_keys[]` | Public keys → `~/.ssh/authorized_keys`. |
+| `ssh_authorized_keys_file` | Path on KEYS to an authorized_keys file. |
+
+`root` is an object with `password_hash` and `ssh_authorized_keys[]`.
+
+> **SSH is key-only.** A user with no key (and no console access) cannot log
+> in, so always provide at least one `ssh_authorized_keys` entry or a host
+> you can reach on the console.
+
+## Security notes
+
+- The stick is mounted `ro,nosuid,nodev,noexec`; provisioning never executes
+  anything off it in place (run[] hooks are copied out first).
+- Prefer `password_hash` over `password`. Generate hashes with
+  `./scripts/gen-provision-keys.sh`.
+- Keep the KEYS stick offline / in a safe once provisioning is done — it
+  holds the cluster CA and preauth keys. Re-encrypt or wipe before reuse.

@@ -1,0 +1,30 @@
+# Root "app-of-apps". Applied once by the bootstrap on the pki control-plane;
+# ArgoCD then syncs every Application under cluster/apps/ from the GitOps repo.
+#
+# repoURL / targetRevision are patched at bootstrap time from
+# /etc/snapdragon/gitops.env (SNAPDRAGON_GITOPS_REPO / _REV), default below.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-root
+  namespace: devops
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/apps
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true

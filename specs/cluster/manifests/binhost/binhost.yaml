@@ -1,0 +1,62 @@
+# Gentoo binary-package host (binhost) in the devops namespace.
+#
+# Serves prebuilt binpkgs over HTTP so every Gentoo node (Pi arm64 + x86 amd64)
+# can `emerge --getbinpkg` over the headscale/tailscale VPN — fast binary OS
+# updates instead of compiling on the Pi. Per-arch trees live under the PVC:
+#   /binpkgs/arm64   (from the RPi crossdev build's PKGDIR)
+#   /binpkgs/amd64   (from the x86 native build's PKGDIR)
+# Populate by rsyncing each build's pkgdir to the PVC over the mesh, e.g.:
+#   rsync -a rpi5-stage4-build/pkgdir/  root@<x86-vpn-ip>:/mnt/data/binpkgs/arm64/
+#
+# Pinned to the x86_64 host; exposed on hostPort 8086 so it is reachable at the
+# host's tailscale IP. Nodes set PORTAGE_BINHOST=http://<x86-vpn-ip>:8086/<arch>.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: binpkgs, namespace: devops }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: snapdragon-local
+  resources: { requests: { storage: 50Gi } }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: binhost-nginx, namespace: devops }
+data:
+  default.conf: |
+    server {
+      listen 8086;
+      server_name _;
+      root /binpkgs;
+      autoindex on;                 # Gentoo binhost = HTTP file listing + Packages index
+      location = /healthz { return 200 'ok'; add_header Content-Type text/plain; }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: binhost, namespace: devops, labels: { app: binhost } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: binhost } }
+  template:
+    metadata: { labels: { app: binhost } }
+    spec:
+      nodeSelector: { kubernetes.io/arch: amd64 }   # the build host + disks
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - { name: http, containerPort: 8086, hostPort: 8086 }   # reachable on the node's VPN IP
+          volumeMounts:
+            - { name: binpkgs, mountPath: /binpkgs, readOnly: true }
+            - { name: conf, mountPath: /etc/nginx/conf.d }
+          readinessProbe: { httpGet: { path: /healthz, port: http } }
+      volumes:
+        - { name: binpkgs, persistentVolumeClaim: { claimName: binpkgs } }
+        - { name: conf, configMap: { name: binhost-nginx } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: binhost, namespace: devops }
+spec:
+  selector: { app: binhost }
+  ports: [{ name: http, port: 8086, targetPort: http }]

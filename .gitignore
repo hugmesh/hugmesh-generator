@@ -1,0 +1,40 @@
+# ── Build output (the gitignored target build directories) ────────
+/rpi5-stage4-build/
+rpi5-stage4-build/
+/x86-host-build/
+x86-host-build/
+build/
+*.iso
+*.tar.xz
+*.tgz
+build.log
+
+# ── QEMU integration-test scratch ─────────────────────────────────
+qemu-test/
+*.img
+console.log
+
+# ── Generated secrets — NEVER commit ──────────────────────────────
+# Output of scripts/gen-provision-keys.sh and any filled-in KEYS dir.
+/keys-out/
+keys-out/
+keys-pki/
+keys-backend/
+keys-frontend/
+keys-host/
+*_ed25519
+*_rsa
+*.pem
+ssh_host_*_key
+ssh_host_*_key.pub
+# (keys-template/ itself is committed — it holds only placeholders.)
+
+# ── Editor / OS noise ─────────────────────────────────────────────
+*.swp
+*~
+.DS_Store
+.idea/
+.vscode/
+
+# Brand profile may hold default passwords — never commit the real one
+brand.conf

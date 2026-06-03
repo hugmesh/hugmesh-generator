@@ -1,0 +1,46 @@
+# snapdragon-be-gateway — front door for backend APIs + matrix + mastodon.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-gateway-be
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/charts/snapdragon-gateway
+    helm:
+      releaseName: snapdragon-be-gateway
+      values: |
+        instance:
+          name: snapdragon-be-gateway
+        ingress:
+          enabled: true
+          host: api.snapdragon.systems
+        nodeSelector:
+          snapdragon.systems/backend: "true"
+        seLinux:
+          level: "s0:c12"
+        extraEnv:
+          - name: ROUTE_ACCESS_R2DBC_URL
+            value: r2dbc:postgresql://route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
+        routes:
+          - id: snapdragon-api
+            uri: http://snapdragon-api.snapdragon-backend.svc.cluster.local:8080
+            path: /api/**
+          - id: matrix
+            host: matrix.snapdragon.systems
+            uri: http://matrix-synapse.snapdragon-backend.svc.cluster.local:8008
+          - id: matrix-wellknown
+            uri: http://matrix-synapse.snapdragon-backend.svc.cluster.local:8008
+            path: /_matrix/**
+          - id: mastodon-web
+            host: mastodon.snapdragon.systems
+            uri: http://mastodon-web.snapdragon-backend.svc.cluster.local:3000
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

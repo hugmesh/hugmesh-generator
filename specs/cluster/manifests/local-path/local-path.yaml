@@ -1,0 +1,84 @@
+# local-path-provisioner — backs cluster PVCs with the x86_64 host's local disks:
+# the device disk (/mnt/data) and the attached USB (/mnt/usb). Pinned to the
+# amd64 host (the disks live there). StorageClass "snapdragon-local" is the
+# cluster default, so ArgoCD (devops) and the stateful apps (postgres, redis,
+# cassandra, clickhouse, etcd backups) provision onto these disks.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: local-path-provisioner, namespace: devops }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: local-path-provisioner }
+rules:
+  - apiGroups: [""]
+    resources: [nodes, persistentvolumeclaims, configmaps, pods, pods/log]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [persistentvolumes]
+    verbs: [get, list, watch, create, patch, update, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  - apiGroups: ["storage.k8s.io"]
+    resources: [storageclasses]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: local-path-provisioner }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: local-path-provisioner }
+subjects:
+  - { kind: ServiceAccount, name: local-path-provisioner, namespace: devops }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: local-path-provisioner, namespace: devops }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: local-path-provisioner } }
+  template:
+    metadata: { labels: { app: local-path-provisioner } }
+    spec:
+      serviceAccountName: local-path-provisioner
+      nodeSelector: { kubernetes.io/arch: amd64 }   # disks live on the x86 host
+      containers:
+        - name: local-path-provisioner
+          image: rancher/local-path-provisioner:v0.0.30
+          command: [local-path-provisioner, --debug, start, --config, /etc/config/config.json]
+          env:
+            - { name: POD_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+          volumeMounts: [{ name: config-volume, mountPath: /etc/config/ }]
+      volumes:
+        - name: config-volume
+          configMap: { name: local-path-config }
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: snapdragon-local
+  annotations: { storageclass.kubernetes.io/is-default-class: "true" }
+provisioner: rancher.io/local-path
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: local-path-config, namespace: devops }
+data:
+  # Both the device disk and the attached USB are offered; the provisioner
+  # places each PV on one of these paths on the x86 host.
+  config.json: |
+    {
+      "nodePathMap": [
+        { "node": "DEFAULT_PATH_FOR_NON_LISTED_NODES", "paths": ["/mnt/data/local-path", "/mnt/usb/local-path"] }
+      ]
+    }
+  setup: |
+    #!/bin/sh
+    set -eu
+    mkdir -m 0777 -p "$VOL_DIR"
+  teardown: |
+    #!/bin/sh
+    set -eu
+    rm -rf "$VOL_DIR"

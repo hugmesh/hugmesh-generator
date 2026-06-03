@@ -1,0 +1,41 @@
+# Snapdragon cluster namespaces. Each carries the snapdragon-*-gateway that
+# fronts all of its traffic and validates the internal Casdoor OAuth2 JWT.
+#
+# Placement is by capability labels (booleans), not a single role, so the
+# x86_64 host can carry several. Workloads nodeSelect snapdragon.systems/<tier>=true:
+#   snapdragon-pki       pki=true        -> pki Pi (control-plane): headscale, Casdoor, auth
+#   snapdragon-backend   backend=true    -> backend Pis AND the x86_64 host
+#   snapdragon-frontend  frontend=true   -> frontend Pis AND the x86_64 host
+#   snapdragon-games     games=true,compute=gpu -> x86_64 host
+#   devops               devops=true; ArgoCD additionally kubernetes.io/arch=amd64 (x86 ONLY)
+# The x86_64 host is labelled frontend=backend=games=devops=true (+compute=gpu),
+# so it runs all of those; the Pis keep only their own tier label.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: snapdragon-pki
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: pki }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: snapdragon-backend
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: backend }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: snapdragon-frontend
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: frontend }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: snapdragon-games
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: games }
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: devops
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: devops }

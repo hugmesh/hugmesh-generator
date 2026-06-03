@@ -1,0 +1,39 @@
+# Matrix (Synapse) homeserver — matrix.snapdragon.systems. Backend Pis.
+# Uses the community matrix-synapse chart; values are a starting point —
+# set serverName, registration policy and DB secrets for production.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: matrix-synapse
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://ananace.gitlab.io/charts
+    chart: matrix-synapse
+    targetRevision: 3.x.x
+    helm:
+      releaseName: matrix-synapse
+      values: |
+        serverName: snapdragon.systems
+        publicServerName: matrix.snapdragon.systems
+        # Login/registration are mediated by Casdoor (OIDC) — see docs.
+        config:
+          enableRegistration: false
+          oidcProviders:
+            - idp_id: casdoor
+              idp_name: Snapdragon ID
+              issuer: https://id.snapdragon.systems
+              client_id: "REPLACE"
+              client_secret: "REPLACE"
+              scopes: ["openid", "profile", "email"]
+        nodeSelector:
+          snapdragon.systems/role: backend
+        postgresql:
+          enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

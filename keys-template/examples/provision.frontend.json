@@ -1,0 +1,29 @@
+{
+  "_comment": "WORKER KEYS USB = KEYS ONLY. No users.json or service config — see provision.backend.json. Carries only join/mesh/CA keys + break-glass ssh/root.authorized_keys; gets all config + secrets from the pki node (ArgoCD + Vault/ESO).",
+  "version": 1,
+  "hostname": "snapdragon-fe-01",
+
+  "tailscale": {
+    "enabled": true,
+    "authkey_file": "tailscale/authkey",
+    "login_server": "http://snapdragon-pki:8080",
+    "up_args": "--accept-routes"
+  },
+
+  "kubernetes": {
+    "role": "worker",
+    "bootstrap": false,
+    "pki_dir": "kubernetes/pki",
+    "join": {
+      "api_server": "snapdragon-pki:6443",
+      "token": "REPLACE_WITH_KUBEADM_TOKEN",
+      "ca_cert_hash": "sha256:REPLACE_WITH_CA_CERT_HASH"
+    }
+  },
+
+  "snapdragon": {
+    "role": "frontend",
+    "cluster_domain": "snapdragon.systems",
+    "node_labels": { "snapdragon.systems/frontend": "true" }
+  }
+}

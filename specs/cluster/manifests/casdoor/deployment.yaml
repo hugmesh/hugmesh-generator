@@ -1,0 +1,47 @@
+# Casdoor identity provider (all-in-one: Casdoor + bundled DB).
+# Issues the OAuth2/OIDC JWTs every snapdragon-*-gateway validates.
+# Federated registration via Google + admin-created accounts.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: casdoor
+  namespace: snapdragon-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: casdoor }
+  template:
+    metadata:
+      labels: { app: casdoor }
+    spec:
+      nodeSelector:
+        snapdragon.systems/pki: "true"
+      containers:
+        - name: casdoor
+          image: casbin/casdoor-all-in-one:latest
+          ports:
+            - { name: http, containerPort: 8000 }
+          env:
+            - name: RUNNING_IN_DOCKER
+              value: "true"
+            # Google federation client credentials (created by an admin in
+            # Casdoor, or seeded by the casdoor-init Job). Stored in a Secret.
+            - name: GOOGLE_CLIENT_ID
+              valueFrom: { secretKeyRef: { name: casdoor-google, key: clientId, optional: true } }
+            - name: GOOGLE_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: casdoor-google, key: clientSecret, optional: true } }
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/casdoor }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 768Mi }
+      volumes:
+        # TODO: switch to a PersistentVolumeClaim for real deployments.
+        - name: data
+          emptyDir: {}
