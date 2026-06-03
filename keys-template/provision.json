@@ -43,6 +43,25 @@
     }
   },
 
+  "selinux": {
+    "type": "mcs",
+    "mode": "permissive"
+  },
+
+  "calico": {
+    "enabled": true,
+    "pod_cidr": "10.244.0.0/16",
+    "encapsulation": "VXLAN",
+    "nat_outgoing": true,
+    "block_size": 26,
+    "bgp": { "enabled": false, "asn": 64512 }
+  },
+
+  "truststore": {
+    "ca_files": ["certs/cluster-ca.crt"],
+    "keystores_dir": "keystores"
+  },
+
   "vault": {
     "enabled": true,
     "address": "https://vault.snapdragon.systems",

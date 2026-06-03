@@ -198,8 +198,9 @@ banner "Installing spec files"
 mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,profile,env}
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
 cp "${SPECS_DIR}/portage/profile/parent"              "${SYSROOT}/etc/portage/profile/parent"
-cp "${SPECS_DIR}/portage/package.accept_keywords/kubernetes" "${SYSROOT}/etc/portage/package.accept_keywords/kubernetes"
-cp "${SPECS_DIR}/portage/package.use/gpu"             "${SYSROOT}/etc/portage/package.use/gpu"
+# Copy every file in these portage config dirs (so added spec files always land).
+cp "${SPECS_DIR}/portage/package.accept_keywords/"*   "${SYSROOT}/etc/portage/package.accept_keywords/"
+cp "${SPECS_DIR}/portage/package.use/"*               "${SYSROOT}/etc/portage/package.use/"
 
 # Shared (arch-agnostic) etc/ specs
 mkdir -p "${SYSROOT}/etc/"{sysctl.d,modules-load.d,containerd,kubernetes,init.d,ssh/sshd_config.d,local.d,headscale,keys-provision} \
@@ -237,12 +238,23 @@ mkdir -p "${SYSROOT}/opt/cni/bin" "${SYSROOT}/etc/cni/net.d" "${SYSROOT}/var/lib
 
 # Runlevels (headless: no headscale here — that lives on the pki Pi)
 mkdir -p "${SYSROOT}/etc/runlevels/default"
-SVCS=(sshd NetworkManager cronie haveged keys-provision containerd kubelet auditd apparmor local)
+SVCS=(sshd NetworkManager cronie haveged keys-provision containerd kubelet auditd local)
 ${SKIP_MESH} || ${SKIP_TAILSCALE} || SVCS+=(tailscaled)
 for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/default/${s}" 2>/dev/null || true; done
 
 # ── 5. Chroot setup + native emerge ────────────────────────────────
 banner "Native emerge inside chroot"
+
+# Guard: chrooting needs an amd64 sysroot. A common mistake is reusing the same
+# --work-dir as the RPi (aarch64) cross-build — then --resume keeps the foreign
+# sysroot and `chroot /bin/bash` dies with a confusing "No such file or directory".
+if [ -e "${SYSROOT}/bin/bash" ] && ! file -L "${SYSROOT}/bin/bash" 2>/dev/null | grep -qE 'x86-64|x86_64'; then
+    err "Sysroot ${SYSROOT} is NOT amd64 (looks like a foreign arch — e.g. the RPi aarch64 build)."
+    err "Use a SEPARATE --work-dir for the x86 build (e.g. -w /var/tmp/snap-x86-build),"
+    err "or remove the stale sysroot:  rm -rf '${SYSROOT}'  (then re-run without --resume)."
+    exit 1
+fi
+
 cp -L /etc/resolv.conf "${SYSROOT}/etc/resolv.conf" 2>/dev/null || true
 mount_chroot() {
     mount -t proc none "${SYSROOT}/proc"
