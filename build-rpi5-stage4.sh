@@ -593,11 +593,10 @@ PROFILE_PATH="$(sed 's/^gentoo://' "${SPECS_DIR}/portage/profile/parent" | tr -d
 [ -d "${GENTOO_REPO}/profiles/${PROFILE_PATH}" ] || { err "profile not found: ${GENTOO_REPO}/profiles/${PROFILE_PATH}"; exit 1; }
 ln -sfn "${GENTOO_REPO}/profiles/${PROFILE_PATH}" "${SYSROOT}/etc/portage/make.profile"
 cp "${SPECS_DIR}/portage/profile/use.mask"                "${SYSROOT}/etc/portage/profile/use.mask"
-cp "${SPECS_DIR}/portage/package.accept_keywords/rpi"     "${SYSROOT}/etc/portage/package.accept_keywords/rpi"
-cp "${SPECS_DIR}/portage/package.accept_keywords/kubernetes" "${SYSROOT}/etc/portage/package.accept_keywords/kubernetes"
-cp "${SPECS_DIR}/portage/package.use/rpi5"                "${SYSROOT}/etc/portage/package.use/rpi5"
-cp "${SPECS_DIR}/portage/package.use/kubernetes"          "${SYSROOT}/etc/portage/package.use/kubernetes"
-cp "${SPECS_DIR}/portage/package.env/kubernetes"          "${SYSROOT}/etc/portage/package.env/kubernetes"
+# Copy every file in these portage config dirs (so added spec files always land).
+cp "${SPECS_DIR}/portage/package.accept_keywords/"*       "${SYSROOT}/etc/portage/package.accept_keywords/"
+cp "${SPECS_DIR}/portage/package.use/"*                   "${SYSROOT}/etc/portage/package.use/"
+cp "${SPECS_DIR}/portage/package.env/"*                   "${SYSROOT}/etc/portage/package.env/"
 
 # Templated portage specs
 render_template "${SPECS_DIR}/portage/make.conf.tmpl"     "${SYSROOT}/etc/portage/make.conf"

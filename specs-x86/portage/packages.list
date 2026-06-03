@@ -24,7 +24,7 @@ net-firewall/iptables
 net-firewall/conntrack-tools
 net-misc/socat
 net-dns/bind-tools
-net-misc/ethtool
+sys-apps/ethtool
 sys-apps/iproute2
 
 # ── System / hardening ────────────────────────────────────────────
@@ -37,7 +37,6 @@ sys-apps/apparmor
 sys-apps/apparmor-utils
 sec-policy/apparmor-profiles
 sys-libs/libseccomp
-app-admin/auditd
 sys-process/audit
 
 # ── Container runtime + Kubernetes (worker) ───────────────────────

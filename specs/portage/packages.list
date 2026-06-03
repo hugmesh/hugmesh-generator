@@ -6,10 +6,11 @@
 sys-kernel/raspberrypi-sources
 sys-boot/raspberrypi-firmware
 sys-firmware/raspberrypi-wifi-ucode
-sys-apps/raspberrypi-utils
+dev-embedded/raspberrypi-utils
+dev-embedded/rpi-eeprom
 
 # ── RPi 5 hardware ────────────────────────────────────────────────
-sys-fs/nvme-cli
+sys-apps/nvme-cli
 sys-block/parted
 sys-apps/pciutils
 sys-apps/usbutils
@@ -30,14 +31,15 @@ sys-process/cronie
 sys-apps/haveged
 app-editors/nano
 app-misc/screen
-sys-boot/u-boot-tools
+dev-embedded/u-boot-tools
 
 # ── Hardened / security ────────────────────────────────────────────
 sys-apps/apparmor
-sys-apps/apparmor-utils
+# apparmor-utils (aa-* tools) needs libapparmor[python]; its swig bindings fail
+# to cross-compile and it's not needed on a headless appliance — dropped. The
+# apparmor_parser (sys-apps/apparmor) + profiles below enforce the LSM.
 sec-policy/apparmor-profiles
 sys-libs/libseccomp
-app-admin/auditd
 sys-process/audit
 
 # ── Container runtime ─────────────────────────────────────────────
@@ -53,7 +55,7 @@ sys-cluster/kubeadm
 sys-cluster/kubectl
 
 # ── K8s dependencies ──────────────────────────────────────────────
-net-misc/ethtool
+sys-apps/ethtool
 sys-apps/iproute2
 sys-fs/e2fsprogs
 sys-fs/xfsprogs
