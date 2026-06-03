@@ -1,9 +1,7 @@
 {
+  "_comment": "WORKER KEYS USB = KEYS ONLY. No users.json or service config — see provision.backend.json. Carries only join/mesh/CA keys + break-glass ssh/root.authorized_keys; gets all config + secrets from the pki node (ArgoCD + Vault/ESO).",
   "version": 1,
   "hostname": "snapdragon-fe-01",
-  "timezone": "UTC",
-
-  "headscale": { "enabled": false },
 
   "tailscale": {
     "enabled": true,
@@ -25,7 +23,7 @@
 
   "snapdragon": {
     "role": "frontend",
-    "cluster_domain": "snapdragon.local",
+    "cluster_domain": "snapdragon.systems",
     "node_labels": { "snapdragon.systems/role": "frontend" }
   }
 }

@@ -26,7 +26,8 @@ Options:
   -o, --out DIR       Output directory. Default: ${OUT_DIR}
   -t, --template DIR  Template to copy. Default: ${TEMPLATE}
   -u, --admin NAME    Admin username. Default: admin
-  -r, --role ROLE     pki | backend | frontend (selects example manifest). Default: pki
+  -r, --role ROLE     pki | backend | frontend | host. Default: pki
+                      pki = FULL config + default user accounts; workers = KEYS ONLY (no users.json).
       --random        Generate random passwords (printed once) instead of prompting.
   -h, --help          Show this help.
 
@@ -47,7 +48,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-for t in jq openssl ssh-keygen; do
+for t in openssl ssh-keygen python3; do
     command -v "$t" >/dev/null || { echo "ERROR: missing tool: $t" >&2; exit 1; }
 done
 [ -d "${TEMPLATE}" ] || { echo "ERROR: template not found: ${TEMPLATE}" >&2; exit 1; }
@@ -59,55 +60,59 @@ find "${OUT_DIR}" -name 'README.md' -delete 2>/dev/null || true
 
 # Select the role-specific manifest
 case "${ROLE}" in
-    pki) : ;;  # provision.json is already the pki example
-    backend|frontend)
+    pki) : ;;  # provision.json is already the pki example (full config + users)
+    backend|frontend|host)
         cp "${OUT_DIR}/examples/provision.${ROLE}.json" "${OUT_DIR}/provision.json" ;;
-    *) echo "ERROR: --role must be pki|backend|frontend" >&2; exit 1 ;;
+    *) echo "ERROR: --role must be pki|backend|frontend|host" >&2; exit 1 ;;
 esac
 rm -rf "${OUT_DIR}/examples"
 
-# ── SSH keypair ────────────────────────────────────────────────────
-KEYFILE="${OUT_DIR}/ssh/${ADMIN}_ed25519"
+# ── SSH keypair (break-glass) ──────────────────────────────────────
 mkdir -p "${OUT_DIR}/ssh"
-if [ ! -f "${KEYFILE}" ]; then
-    echo "==> Generating ed25519 keypair for ${ADMIN}"
-    ssh-keygen -t ed25519 -N '' -C "${ADMIN}@snapdragon" -f "${KEYFILE}" >/dev/null
-fi
+KEYFILE="${OUT_DIR}/ssh/${ADMIN}_ed25519"
+[ -f "${KEYFILE}" ] || { echo "==> Generating ed25519 keypair for ${ADMIN}"; ssh-keygen -t ed25519 -N '' -C "${ADMIN}@snapdragon" -f "${KEYFILE}" >/dev/null; }
 PUBKEY="$(cat "${KEYFILE}.pub")"
-cp "${KEYFILE}.pub" "${OUT_DIR}/ssh/${ADMIN}.authorized_keys"
 
-# ── Passwords ──────────────────────────────────────────────────────
-gen_hash() {
-    local who="$1" pw
-    if ${RANDOM_PW}; then
-        pw="$(openssl rand -base64 18)"
-        echo "  ${who} password: ${pw}" >&2
-    else
-        read -rsp "Password for ${who}: " pw; echo >&2
-    fi
-    openssl passwd -6 "${pw}"
-}
-echo "==> Setting password hashes"
-ADMIN_HASH="$(gen_hash "${ADMIN}")"
-ROOT_HASH="$(gen_hash root)"
+if [ "${ROLE}" = "pki" ]; then
+    # ── pki node: FULL config — default user accounts + hashed passwords ──
+    cp "${KEYFILE}.pub" "${OUT_DIR}/ssh/${ADMIN}.authorized_keys"
+    gen_hash() {
+        local who="$1" pw
+        if ${RANDOM_PW}; then pw="$(openssl rand -base64 18)"; echo "  ${who} password: ${pw}" >&2
+        else read -rsp "Password for ${who}: " pw; echo >&2; fi
+        openssl passwd -6 "${pw}"
+    }
+    echo "==> Setting password hashes (pki node)"
+    ADMIN_HASH="$(gen_hash "${ADMIN}")"; ROOT_HASH="$(gen_hash root)"
+    USERS="${OUT_DIR}/users.json"
+    python3 - "${USERS}" "${ADMIN}" "${ADMIN_HASH}" "${PUBKEY}" "${ROOT_HASH}" <<'PY'
+import json, sys
+f, name, h, key, rh = sys.argv[1:6]
+d = json.load(open(f))
+d.setdefault("users", [{}])
+d["users"][0].update({"name": name, "password_hash": h, "ssh_authorized_keys": [key]})
+d.setdefault("root", {})["password_hash"] = rh
+json.dump(d, open(f, "w"), indent=2)
+PY
+    echo; echo "Done (pki — config node). Generated:"
+    echo "  ${OUT_DIR}/users.json            (default accounts: admin '${ADMIN}' + root, hashed)"
+    echo "  ${OUT_DIR}/provision.json        (all-services config for the cluster)"
+    echo "  ${OUT_DIR}/ssh/${ADMIN}_ed25519       (PRIVATE key — keep safe)"
+else
+    # ── worker node: KEYS ONLY — no default users; break-glass root key only ──
+    # Default user accounts live ONLY on the pki node's USB. A worker carries
+    # keys (cluster join + CA + mesh authkey + break-glass SSH), joins the pki
+    # control-plane, and receives all config + secrets from there.
+    rm -f "${OUT_DIR}/users.json"
+    cp "${KEYFILE}.pub" "${OUT_DIR}/ssh/root.authorized_keys"
+    echo; echo "Done (worker '${ROLE}' — keys only, no users.json). Generated:"
+    echo "  ${OUT_DIR}/provision.json        (join/mesh/CA keys only — fill in the join token + CA hash)"
+    echo "  ${OUT_DIR}/ssh/root.authorized_keys   (break-glass SSH; ${ADMIN}_ed25519 is the private key)"
+    echo "  Add: kubernetes/pki/ca.crt, kubernetes join token, tailscale/authkey, certs/cluster-ca.crt"
+fi
 
-# ── Inject into users.json ─────────────────────────────────────────
-USERS="${OUT_DIR}/users.json"
-tmp="$(mktemp)"
-jq --arg name "${ADMIN}" --arg hash "${ADMIN_HASH}" --arg key "${PUBKEY}" --arg rhash "${ROOT_HASH}" '
-  .users[0].name = $name
-  | .users[0].password_hash = $hash
-  | .users[0].ssh_authorized_keys = [$key]
-  | .root.password_hash = $rhash
-' "${USERS}" > "${tmp}" && mv "${tmp}" "${USERS}"
-
-echo
-echo "Done. Generated:"
-echo "  ${OUT_DIR}/users.json            (admin '${ADMIN}' + root, hashed)"
-echo "  ${OUT_DIR}/ssh/${ADMIN}_ed25519       (PRIVATE key — keep safe, ssh in with this)"
-echo "  ${OUT_DIR}/ssh/${ADMIN}.authorized_keys"
 echo
 echo "Next:"
-echo "  1. Review ${OUT_DIR}/provision.json (hostname, domain, headscale/k8s)"
+echo "  1. Review ${OUT_DIR}/provision.json"
 echo "  2. sudo ./scripts/make-keys-usb.sh /dev/sdX ${OUT_DIR}"
-echo "  3. ssh -i ${OUT_DIR}/ssh/${ADMIN}_ed25519 ${ADMIN}@<pi-address>"
+echo "  3. ssh -i ${OUT_DIR}/ssh/${ADMIN}_ed25519 <user>@<node-address>"

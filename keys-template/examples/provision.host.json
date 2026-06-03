@@ -1,0 +1,32 @@
+{
+  "_comment": "WORKER KEYS USB (x86_64 GPU host) = KEYS ONLY. No users.json or service config — those live only on the pki node. Carries join/mesh/CA keys + break-glass ssh/root.authorized_keys; joins the pki control-plane and is labelled for the games/GPU tier. ArgoCD schedules ArgoCD + snapdragon.games + backend capacity here; Vault/ESO deliver secrets.",
+  "version": 1,
+  "hostname": "snapdragon-host",
+
+  "tailscale": {
+    "enabled": true,
+    "authkey_file": "tailscale/authkey",
+    "login_server": "http://snapdragon-pki:8080",
+    "up_args": "--accept-routes"
+  },
+
+  "kubernetes": {
+    "role": "worker",
+    "bootstrap": false,
+    "pki_dir": "kubernetes/pki",
+    "join": {
+      "api_server": "snapdragon-pki:6443",
+      "token": "REPLACE_WITH_KUBEADM_TOKEN",
+      "ca_cert_hash": "sha256:REPLACE_WITH_CA_CERT_HASH"
+    }
+  },
+
+  "snapdragon": {
+    "role": "host",
+    "cluster_domain": "snapdragon.systems",
+    "node_labels": {
+      "snapdragon.systems/role": "games",
+      "snapdragon.systems/compute": "gpu"
+    }
+  }
+}

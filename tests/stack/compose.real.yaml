@@ -59,7 +59,7 @@ services:
     env_file: [.mastodon.env]
     depends_on:
       mastodon-db: { condition: service_healthy }
-      redis: { condition: service_healthy }
+      mastodon-redis: { condition: service_healthy }
     ports: ["3000:3000"]
 
   mastodon-sidekiq:
@@ -68,7 +68,7 @@ services:
     env_file: [.mastodon.env]
     depends_on:
       mastodon-db: { condition: service_healthy }
-      redis: { condition: service_healthy }
+      mastodon-redis: { condition: service_healthy }
 
   mastodon-streaming:
     image: ghcr.io/mastodon/mastodon-streaming:v4.3.1
@@ -76,7 +76,7 @@ services:
     env_file: [.mastodon.env]
     depends_on:
       mastodon-db: { condition: service_healthy }
-      redis: { condition: service_healthy }
+      mastodon-redis: { condition: service_healthy }
     ports: ["4000:4000"]
 
 volumes:

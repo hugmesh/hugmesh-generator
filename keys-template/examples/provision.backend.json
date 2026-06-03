@@ -1,9 +1,7 @@
 {
+  "_comment": "WORKER KEYS USB = KEYS ONLY. No users.json, no headscale/vault/gitops/storage/backup service config — those live ONLY on the pki node's USB + JSON config. A worker carries just: the cluster-join token + CA (kubernetes.*), the mesh authkey (tailscale), the cluster CA cert (files), and break-glass SSH keys (ssh/root.authorized_keys). It joins the pki control-plane and gets all service config + secrets from there (ArgoCD + Vault/ESO).",
   "version": 1,
   "hostname": "snapdragon-be-01",
-  "timezone": "UTC",
-
-  "headscale": { "enabled": false },
 
   "tailscale": {
     "enabled": true,
@@ -25,7 +23,7 @@
 
   "snapdragon": {
     "role": "backend",
-    "cluster_domain": "snapdragon.local",
+    "cluster_domain": "snapdragon.systems",
     "node_labels": { "snapdragon.systems/role": "backend" }
   },
 

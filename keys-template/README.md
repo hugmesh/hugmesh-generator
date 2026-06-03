@@ -16,6 +16,27 @@ sudo ./scripts/make-keys-usb.sh /dev/sdX ./keys-template
 …after running `./scripts/gen-provision-keys.sh` to fill in password hashes
 and SSH keys.
 
+## Two KEYS USB types: pki (config) vs worker (keys only)
+
+- **pki node USB** — the *config* stick: `users.json` (default accounts), the
+  full `provision.json` (**all service config**: headscale, Vault/ESO, GitOps,
+  kubernetes, storage, backups), the cluster CA/PKI, and the Vault token. The
+  pki node is the single source of truth.
+- **worker node USBs** (backend / frontend / host) — *keys only*: no
+  `users.json` and no service config — just the cluster-join token + CA
+  (`kubernetes.*`), the mesh authkey (`tailscale/authkey`), the cluster CA cert,
+  and a break-glass `ssh/root.authorized_keys`. A worker joins the pki
+  control-plane and gets **all** config + secrets from there (ArgoCD + Vault/ESO).
+  See `examples/provision.{backend,frontend,host}.json`.
+
+```bash
+./scripts/gen-provision-keys.sh --role pki     -o keys-pki      # full + users
+./scripts/gen-provision-keys.sh --role backend -o keys-backend  # keys only
+```
+
+`scripts/build-all-roles.sh` does this per role automatically, dropping a
+`keys-<role>` folder next to each ISO in the target directory.
+
 ## Layout
 
 ```

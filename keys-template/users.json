@@ -1,4 +1,5 @@
 {
+  "_comment": "PKI NODE USB ONLY. Default user accounts belong on the pki node's KEYS stick (the config node). Worker nodes (backend/frontend/host) carry keys only — no users.json — and rely on the build-time fallback user + break-glass ssh/root.authorized_keys; operators manage them via the cluster.",
   "users": [
     {
       "name": "admin",
