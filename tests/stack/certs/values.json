@@ -1,8 +1,0 @@
-{
-  "clusterDomain": "snapdragon.systems",
-  "casdoorIssuer": "https://id.snapdragon.systems",
-  "matrixUrl": "https://matrix.snapdragon.systems",
-  "mastodonUrl": "https://mastodon.snapdragon.systems",
-  "sessionSecret": "db6693b53ca801a8b71b3ad4a3b7ff635f65302447466e49",
-  "generatedAt": "2026-06-03T14:00:52Z"
-}
