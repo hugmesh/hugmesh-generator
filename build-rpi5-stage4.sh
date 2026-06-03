@@ -608,6 +608,10 @@ render_template "${SPECS_DIR}/portage/env/cross-go.conf.tmpl" "${SYSROOT}/etc/po
 # pre-placing them made the firmware fail to merge — leaving the image with no
 # boot firmware (start4.elf, fixup4.dat, …) and therefore unbootable on a Pi 5.
 mkdir -p "${SYSROOT}/boot"
+# Clear any stale copies left by a previous interrupted/broken run, so the
+# firmware preinst can merge cleanly even on --resume of a dirty sysroot. Our
+# templated versions are (re)written after Phase 2.
+rm -f "${SYSROOT}/boot/config.txt" "${SYSROOT}/boot/cmdline.txt"
 
 # /etc config files
 cp "${SPECS_DIR}/etc/fstab"                               "${SYSROOT}/etc/fstab"
