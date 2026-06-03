@@ -8,7 +8,7 @@ CLUSTER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export KUBECONFIG="${KUBECONFIG:-/etc/kubernetes/admin.conf}"
 
 ARGOCD_VERSION="${ARGOCD_VERSION:-stable}"
-REPO="${SNAPDRAGON_GITOPS_REPO:-https://github.com/Snapdragon-Systems/catalyst-scripts.git}"
+REPO="${SNAPDRAGON_GITOPS_REPO:-https://github.com/Snapdragon-Systems/snapdragon-generator.git}"
 REV="${SNAPDRAGON_GITOPS_REV:-main}"
 
 command -v kubectl >/dev/null || { echo "kubectl not found" >&2; exit 1; }
@@ -34,7 +34,7 @@ echo "==> Waiting for ArgoCD to be ready"
 kubectl -n argocd rollout status deploy/argocd-repo-server --timeout=300s || true
 
 echo "==> Applying root app-of-apps (repo=${REPO} rev=${REV})"
-sed -e "s#repoURL: https://github.com/Snapdragon-Systems/catalyst-scripts.git#repoURL: ${REPO}#" \
+sed -e "s#repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git#repoURL: ${REPO}#" \
     -e "s#targetRevision: main#targetRevision: ${REV}#" \
     "${CLUSTER_DIR}/app-of-apps.yaml" | kubectl apply -f -
 

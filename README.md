@@ -1,4 +1,4 @@
-# catalyst-scripts
+# snapdragon-generator
 
 Crossdev / native build scripts that produce **hardened Gentoo images** for the
 Snapdragon cluster — three Raspberry Pi 5 (aarch64) role images plus an x86_64
@@ -164,8 +164,11 @@ screenshots in `tests/e2e/screenshots/`:
 ```
 
 > `tests/stack/mock-*.mjs` are fast in-memory test doubles. For full fidelity,
-> `tests/stack/compose.real.yaml` brings up real Synapse + Casdoor + a Mastodon
-> API + the gateway; point the suite at it with `SNAP_BASE_URL=...`.
+> `tests/stack/up-real.sh` brings up real Synapse + Casdoor + Mastodon (+ the
+> platform Cassandra) from `compose.real.yaml` — it generates the Synapse config
+> and Mastodon DB first, then `docker compose up -d`. Point the suite at it with
+> `SNAP_BASE_URL=...` (and `REAL_MATRIX=1` for the UI), and tear it down with
+> `tests/stack/down-real.sh`.
 
 ### B. First-boot provisioning emulation (one of each node kind)
 

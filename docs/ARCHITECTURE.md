@@ -109,7 +109,7 @@ unreachable.
 
 | Repo | Role |
 |---|---|
-| `Snapdragon-Systems/catalyst-scripts` | This repo — image builders, provisioning, GitOps payload |
+| `Snapdragon-Systems/snapdragon-generator` | This repo — image builders, provisioning, GitOps payload |
 | `Snapdragon-Systems/snapdragon-gateway` | Shared Spring Cloud Gateway code/image |
 | `Snapdragon-Systems/snapdragon-pki-gateway` | PKI/identity gateway (Casdoor OAuth2, Postgres routes) — renamed from `snapdragon-id-gateway` |
 | `Snapdragon-Systems/snapdragon-be-gateway` | Backend gateway (per-node, reuses the shared gateway image) |

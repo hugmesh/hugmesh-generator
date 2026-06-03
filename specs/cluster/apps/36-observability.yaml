@@ -8,7 +8,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/catalyst-scripts.git
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
     targetRevision: main
     path: specs/cluster/manifests/observability
   destination:
