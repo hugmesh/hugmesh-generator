@@ -33,12 +33,20 @@ app-editors/nano
 app-misc/screen
 dev-embedded/u-boot-tools
 
-# ── Hardened / security ────────────────────────────────────────────
-sys-apps/apparmor
-# apparmor-utils (aa-* tools) needs libapparmor[python]; its swig bindings fail
-# to cross-compile and it's not needed on a headless appliance — dropped. The
-# apparmor_parser (sys-apps/apparmor) + profiles below enforce the LSM.
-sec-policy/apparmor-profiles
+# ── Hardened / security (SELinux LSM) ──────────────────────────────
+# SELinux is the LSM (hardened/selinux profile). The policy packages'
+# pkg_postinst runs the TARGET `semodule`, which can't execute under aarch64
+# cross-emerge — so on the Pi the base policy is LOADED AT FIRST BOOT (native)
+# by keys-provision; the native x86 build loads it at build time. See SECURITY.md.
+sec-policy/selinux-base
+sec-policy/selinux-base-policy
+sec-policy/selinux-container
+sec-policy/selinux-virt
+sys-apps/policycoreutils
+sys-apps/semodule-utils
+sys-apps/checkpolicy
+app-admin/setools
+sys-libs/libselinux
 sys-libs/libseccomp
 sys-process/audit
 
@@ -47,7 +55,11 @@ app-containers/containerd
 app-containers/runc
 app-containers/cni-plugins
 app-containers/cri-tools
-app-containers/nerdctl
+# nerdctl is KEYWORDS="~amd64" only in ::gentoo (no arm64 keyword at all), so it
+# can't be installed on the Pi via accept_keywords — it just masks and is
+# skipped. k8s nodes drive containerd via crictl/cri-tools, so nerdctl is an
+# x86-only dev convenience (kept in specs-x86). Omitted here on purpose.
+# app-containers/nerdctl
 
 # ── Kubernetes ─────────────────────────────────────────────────────
 sys-cluster/kubelet

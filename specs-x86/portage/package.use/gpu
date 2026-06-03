@@ -1,6 +1,6 @@
 # Vendor-agnostic open GPU stack — Mesa with all open drivers + Vulkan.
 media-libs/mesa vulkan vaapi vdpau gles2 gbm egl llvm video_cards_amdgpu video_cards_radeonsi video_cards_intel video_cards_iris video_cards_nouveau
 media-libs/libva vaapi
-app-containers/containerd btrfs device-mapper seccomp apparmor
-app-containers/runc seccomp apparmor
+app-containers/containerd btrfs device-mapper seccomp selinux
+app-containers/runc seccomp selinux
 net-firewall/iptables nftables

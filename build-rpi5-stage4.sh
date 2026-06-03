@@ -602,10 +602,12 @@ cp "${SPECS_DIR}/portage/package.env/"*                   "${SYSROOT}/etc/portag
 render_template "${SPECS_DIR}/portage/make.conf.tmpl"     "${SYSROOT}/etc/portage/make.conf"
 render_template "${SPECS_DIR}/portage/env/cross-go.conf.tmpl" "${SYSROOT}/etc/portage/env/cross-go.conf"
 
-# Boot files
+# Boot files: config.txt + cmdline.txt are written AFTER Phase 2 (see below),
+# NOT here. sys-boot/raspberrypi-firmware's pkg_preinst hard-dies if it finds a
+# pre-existing /boot/config.txt or /boot/cmdline.txt (it owns those paths), so
+# pre-placing them made the firmware fail to merge — leaving the image with no
+# boot firmware (start4.elf, fixup4.dat, …) and therefore unbootable on a Pi 5.
 mkdir -p "${SYSROOT}/boot"
-render_template "${SPECS_DIR}/boot/config.txt.tmpl"       "${SYSROOT}/boot/config.txt"
-cp "${SPECS_DIR}/boot/cmdline.txt"                        "${SYSROOT}/boot/cmdline.txt"
 
 # /etc config files
 cp "${SPECS_DIR}/etc/fstab"                               "${SYSROOT}/etc/fstab"
@@ -681,7 +683,7 @@ mkdir -p "${SYSROOT}/etc/containerd/certs.d"
 
 # OpenRC service links
 mkdir -p "${SYSROOT}/etc/runlevels/default"
-DEFAULT_SVCS=(sshd NetworkManager cronie haveged keys-provision containerd kubelet auditd apparmor local)
+DEFAULT_SVCS=(sshd NetworkManager cronie haveged keys-provision containerd kubelet auditd local)
 # headscale runs on the PKI/identity node (and on a generic all-in-one image)
 if [ "${ROLE}" = "pki" ] || [ "${ROLE}" = "generic" ]; then
     DEFAULT_SVCS+=(headscale)
@@ -763,6 +765,16 @@ if ! cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "$
         cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "${_pkg}" \
             || warn "  skipped ${_pkg}"
     done
+fi
+
+# ── 7a. Boot config (AFTER firmware is merged) ─────────────────────
+# Written now — not in the spec-install phase — so raspberrypi-firmware's
+# pkg_preinst didn't die on a pre-existing /boot/config.txt|cmdline.txt. Our
+# templated versions are authoritative and overlay the firmware's defaults.
+if [ -d "${SYSROOT}/boot" ]; then
+    render_template "${SPECS_DIR}/boot/config.txt.tmpl" "${SYSROOT}/boot/config.txt"
+    cp "${SPECS_DIR}/boot/cmdline.txt"                  "${SYSROOT}/boot/cmdline.txt"
+    info "Boot config written (config.txt + cmdline.txt) over the firmware defaults"
 fi
 
 # ── 7b. Install mesh VPN (headscale + tailscale) ───────────────────

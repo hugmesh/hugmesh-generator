@@ -5,5 +5,6 @@ app-containers/containerd ~arm64
 app-containers/cri-tools ~arm64
 app-containers/cni-plugins ~arm64
 app-containers/runc ~arm64
-app-containers/nerdctl ~arm64
+# nerdctl has no arm64 keyword in ::gentoo (amd64-only), so accepting ~arm64 is a
+# no-op; it is omitted from the arm64 package list (see specs/portage/packages.list).
 net-firewall/conntrack-tools ~arm64
