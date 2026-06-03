@@ -266,14 +266,33 @@ trap umount_chroot EXIT
 mount_chroot
 
 PKGS=$(grep -v '^\s*#' "${SPECS_DIR}/portage/packages.list" | grep -v '^\s*$' | tr '\n' ' ')
+
+# A stage4 keeps the (already-built, hardened) seed toolchain — we do NOT want
+# @world to drag in a brand-new gcc/glibc/binutils (e.g. a bleeding-edge
+# gcc-16.x that may not even compile). Exclude the toolchain by default; opt in
+# with REBUILD_TOOLCHAIN=true. --keep-going so one optional package can't abort
+# the whole image.
+REBUILD_TOOLCHAIN="${REBUILD_TOOLCHAIN:-false}"
+if ${REBUILD_TOOLCHAIN}; then
+    EMERGE_EXCLUDE=""
+    info "Toolchain rebuild ENABLED (REBUILD_TOOLCHAIN=true)"
+else
+    EMERGE_EXCLUDE="--exclude sys-devel/gcc --exclude sys-libs/glibc --exclude sys-devel/binutils"
+    info "Keeping seed toolchain (set REBUILD_TOOLCHAIN=true to rebuild gcc/glibc/binutils)"
+fi
+
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 export MAKEOPTS="-j${JOBS}"
 if [ ! -d /var/db/repos/gentoo/metadata ] && ! mountpoint -q /var/db/repos/gentoo; then
     emerge-webrsync
 fi
-emerge --oneshot --update sys-apps/baselayout
-emerge --update --deep --newuse @world
-emerge --noreplace ${PKGS}
+emerge --oneshot --update --newuse sys-apps/baselayout || true
+# Apply our profile/USE across @world without churning the toolchain.
+emerge --update --deep --newuse --keep-going ${EMERGE_EXCLUDE} @world \
+    || echo "[build-x86] WARN: @world had package failures (--keep-going); continuing"
+# Ensure the stage4 package set is present (deps included).
+emerge --update --deep --newuse --keep-going ${EMERGE_EXCLUDE} ${PKGS} \
+    || echo "[build-x86] WARN: some stage4 packages failed; review the emerge output"
 CHROOT
 
 # ── 6. Mesh VPN (amd64 static binaries) ────────────────────────────
