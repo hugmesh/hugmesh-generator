@@ -1,7 +1,0 @@
-# Cross-compiling libapparmor's swig perl/python language bindings fails with
-# "emake failed" in libraries/libapparmor (the bindings are built during the
-# core `make` under crossdev). The appliance only needs the C library +
-# apparmor_parser + profiles to enforce the LSM, not the bindings — so disable
-# them. (sys-apps/apparmor-utils, the aa-* tools, requires libapparmor[python]
-# and is therefore dropped from packages.list.)
-sys-libs/libapparmor -perl -python -doc
