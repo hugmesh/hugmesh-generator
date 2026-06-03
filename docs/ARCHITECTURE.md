@@ -78,6 +78,24 @@ syncs Casdoor, Cassandra, the three gateways, Matrix, Mastodon, the Spring APIs,
 the frontend host, the social-ui, and snapdragon.games. See
 [`specs/cluster/README.md`](../specs/cluster/README.md).
 
+## Secrets (Vault + USB)
+
+Cluster secrets are generated once by
+[`scripts/gen-cluster-secrets.sh`](../scripts/gen-cluster-secrets.sh) and pushed
+to **HashiCorp Vault** (KV v2, mount `secret/`, base path `snapdragon/` — the
+base segment tracks the brand slug). The **External Secrets Operator** then
+materializes the k8s Secrets the workloads already consume — `casdoor-google`
+(`snapdragon-pki`), `clickhouse-auth` (`snapdragon-backend` + `observability`)
+and `uptrace-auth` (`observability`) — via a ClusterSecretStore
+**`snapdragon-vault`** (provider `vault`, token auth from the `vault-token`
+Secret in `external-secrets`), one ExternalSecret per Secret, refreshed hourly.
+Workload `secretKeyRef`s are unchanged.
+
+The same materialized secrets are also written to the KEYS stick at
+`vault/secrets.json` (plus `vault/token` for online sync), so `keys-provision`
+can create them offline — **Vault first, USB fallback** — when Vault is
+unreachable.
+
 ## Mesh, storage & backups
 
 - **Mesh:** headscale on the pki node; every node runs the tailscale client and

@@ -4,7 +4,8 @@ namespace: snapdragon-pki
 resources:
   - deployment.yaml
   - service.yaml
-# Provide the Google federation credentials out-of-band (sealed-secret / SOPS /
-# from the KEYS USB). Example (do NOT commit real secrets):
-#   kubectl -n snapdragon-pki create secret generic casdoor-google \
-#     --from-literal=clientId=XXX --from-literal=clientSecret=YYY
+# The "casdoor-google" Secret (clientId / clientSecret) is now materialized by
+# External Secrets Operator from Vault (ClusterSecretStore "snapdragon-vault",
+# remote path secret/snapdragon/casdoor) — see manifests/external-secrets.
+# The offline/USB path (KEYS/vault/secrets.json) is created by keys-provision.
+# The casdoor Deployment keeps its existing secretKeyRef usage unchanged.

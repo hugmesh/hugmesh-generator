@@ -32,6 +32,9 @@ KEYS/                                 (FAT32, volume label "KEYS")
 ├── kubernetes/
 │   ├── kubeadm-config.yaml           optional kubeadm config override
 │   └── pki/                          shared cluster CA / certs
+├── vault/
+│   ├── token                         Vault token / AppRole secret-id (online sync)
+│   └── secrets.json                  offline copy of the materialized k8s Secrets
 ├── certs/                            certificates (trust store + files[])
 └── secrets/
     └── post-provision.sh             optional run[] hook
@@ -59,6 +62,7 @@ KEYS/                                 (FAT32, volume label "KEYS")
 | `snapdragon.role` | `pki` \| `backend` \| `frontend` — selects the cluster app set / namespace this node serves. |
 | `snapdragon.cluster_domain` | Base domain for gateways/ingress/Casdoor. |
 | `snapdragon.gitops.{enabled,argocd}` | On the PKI node, bootstrap ArgoCD + the app-of-apps. |
+| `vault.*` | Seed HashiCorp Vault / External Secrets Operator state; Vault is primary, USB is the offline fallback (see below). |
 | `storage.devices[]` | Set up attached M.2/NVMe or USB storage (see below). |
 | `backup.*` | Schedule etcd + PostgreSQL backups to attached storage / network share. |
 | `files[]` | `{src,dest,mode,owner}` — install arbitrary files from KEYS to absolute paths. |
@@ -98,6 +102,62 @@ and the run script is `/usr/local/sbin/snapdragon-backup`.
 | `cifs.{unc,mountpoint,credentials_file}` | SMB/CIFS share; `credentials_file` is a path on KEYS. |
 | `etcd` | If `true`, snapshot etcd (control-plane only). |
 | `postgres[]` | `{namespace,selector,database,user}` per database to dump. |
+
+### Secrets / Vault (`vault.*`)
+
+Application secrets live in **HashiCorp Vault** (KV v2, mount `secret`, under the
+brand base path — default `snapdragon/`). Vault is the **source of truth**; the
+USB stick carries an **offline copy** so a fresh device can come up with no
+reachable Vault. Integration is via the **External Secrets Operator (ESO)**: a
+`ClusterSecretStore` named `snapdragon-vault` plus one `ExternalSecret` per
+workload Secret (deployed by ArgoCD). The workloads keep their existing
+`secretKeyRef` usage unchanged — ESO just materializes the Secrets below.
+
+Runs after Kubernetes is up (requires `/etc/kubernetes/admin.conf`). Every step
+is guarded and logged; a failure never aborts the rest of provisioning.
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Master switch. If not `true`, Vault/ESO seeding is skipped. |
+| `address` | Vault URL (e.g. `https://vault.snapdragon.systems`). Empty ⇒ offline-only. |
+| `kv_mount` | KV v2 mount used by the `ClusterSecretStore` (default `secret`). |
+| `base_path` | Base segment under the mount; equals the brand slug (default `snapdragon`). |
+| `token_file` | Path on KEYS to a Vault token / AppRole secret-id (default `vault/token`). |
+| `install_eso` | Hint that ESO should be installed (ESO itself is deployed by ArgoCD). |
+
+**Online (primary).** When `address` is set **and** `KEYS/vault/token` exists,
+the token is loaded into a k8s Secret `vault-token` (key `token`) in the
+`external-secrets` namespace so the `snapdragon-vault` `ClusterSecretStore` can
+authenticate to Vault. ESO then keeps the workload Secrets in sync
+(`refreshInterval 1h`).
+
+**Offline (USB fallback).** `KEYS/vault/secrets.json` is an offline copy of the
+materialized k8s Secrets, shaped as:
+
+```json
+{
+  "<namespace>": {
+    "<secretName>": { "<k8sKey>": "<value>", ... }
+  }
+}
+```
+
+If this bundle is present it is **always** applied (and is the sole source when
+`address` is empty): each `namespace → secretName → {key: value}` is created via
+`kubectl create secret generic … --dry-run=client -o yaml | kubectl apply -f -`,
+so the Secrets exist even with no reachable Vault — i.e. they are *also available
+via the attached USB*. The bundle mirrors exactly what ESO would materialize:
+
+| Namespace | Secret | Keys (from Vault) |
+|---|---|---|
+| `snapdragon-pki` | `casdoor-google` | `clientId` ← `casdoor.google_client_id`, `clientSecret` ← `casdoor.google_client_secret` |
+| `snapdragon-backend` | `clickhouse-auth` | `password` ← `clickhouse.password` |
+| `observability` | `clickhouse-auth` | `password` ← `clickhouse.password` |
+| `observability` | `uptrace-auth` | `pg-password` ← `uptrace.pg_password`, `project-token` ← `uptrace.project_token` |
+
+The Vault paths backing these (KV v2, snake_case keys) are
+`secret/snapdragon/casdoor`, `secret/snapdragon/clickhouse`, and
+`secret/snapdragon/uptrace`.
 
 ## `users.json`
 

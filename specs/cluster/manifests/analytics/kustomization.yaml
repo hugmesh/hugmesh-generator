@@ -3,5 +3,8 @@ kind: Kustomization
 namespace: snapdragon-backend
 resources:
   - deployment.yaml
-# Provide ClickHouse auth out-of-band (sealed-secret / from KEYS):
-#   kubectl -n snapdragon-backend create secret generic clickhouse-auth --from-literal=password=...
+# The "clickhouse-auth" Secret (password) is now materialized by External Secrets
+# Operator from Vault (ClusterSecretStore "snapdragon-vault", remote path
+# secret/snapdragon/clickhouse) — see manifests/external-secrets.
+# The offline/USB path (KEYS/vault/secrets.json) is created by keys-provision.
+# The workloads keep their existing secretKeyRef usage unchanged.

@@ -30,6 +30,17 @@ TIMEZONE="UTC"
 HEADSCALE_VERSION="0.23.0"
 TAILSCALE_VERSION="1.78.1"
 
+# ── Vault (cluster secrets) ─────────────────────────────────────────
+# Used by scripts/gen-cluster-secrets.sh + the External Secrets Operator.
+# Secrets live at  <VAULT_KV_MOUNT>/<BRAND>/{casdoor,clickhouse,uptrace}.
+#
+# An EMPTY VAULT_ADDR means offline / USB-only secret delivery: the generator
+# still writes keys-out/vault/{secrets.json,token} for the KEYS stick, and no
+# Vault server is contacted. Set it (plus VAULT_TOKEN in the environment, never
+# committed here) to also push the secrets into Vault for online ESO sync.
+VAULT_ADDR=""                       # e.g. https://vault.snapdragon.systems  (empty = offline/USB-only)
+VAULT_KV_MOUNT="secret"             # KV v2 mount the ClusterSecretStore reads
+
 # Example rebrand (uncomment + edit to build "Acme" images on acme.example):
 #   BRAND="acme"
 #   BRAND_TITLE="Acme Corp"

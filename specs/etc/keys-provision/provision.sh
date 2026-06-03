@@ -484,7 +484,13 @@ provision_kubernetes() {
                     cp -f /etc/kubernetes/admin.conf "${home}/.kube/config"
                     chown -R "${nm}:" "${home}/.kube"
                 done
-                log "Control plane initialised"
+                # Label this (pki) node with its snapdragon role and allow the
+                # pki-tier workloads (Vault, Casdoor, Cassandra, headscale) to
+                # schedule on the control-plane — they all nodeSelector role=pki.
+                local sr; sr="$(jqm '.snapdragon.role // "pki"')"
+                KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node "$(hostname)" "snapdragon.systems/role=${sr}" --overwrite 2>/dev/null || true
+                KUBECONFIG=/etc/kubernetes/admin.conf kubectl taint nodes "$(hostname)" node-role.kubernetes.io/control-plane- 2>/dev/null || true
+                log "Control plane initialised (node labelled role=${sr}, control-plane taint removed)"
             else
                 warn "kubeadm init failed — inspect ${LOG}"
             fi
@@ -659,6 +665,105 @@ provision_snapdragon() {
     KUBECONFIG=/etc/kubernetes/admin.conf bash "${bs}" || warn "GitOps bootstrap returned non-zero"
 }
 
+# ── Vault / External Secrets (k8s Secrets, online + USB fallback) ──
+# Vault is the source of truth; ESO + the ClusterSecretStore/ExternalSecrets
+# are deployed by ArgoCD. Here we only seed the bits a fresh cluster needs:
+#   * online : the "vault-token" Secret so ESO's ClusterSecretStore can auth.
+#   * offline: materialize the workload Secrets directly from KEYS/vault/
+#              secrets.json so they exist even with no reachable Vault.
+provision_vault() {
+    jqe '.vault' || { log "No .vault block — skipping Vault/ESO seeding"; return 0; }
+    [ "$(jqm '.vault.enabled // false')" = "true" ] || { log "Vault disabled in manifest"; return 0; }
+
+    [ -f /etc/kubernetes/admin.conf ] || { warn "No kubeconfig yet — skipping Vault/ESO seeding"; return 0; }
+    have kubectl || { warn "kubectl not installed — skipping Vault/ESO seeding"; return 0; }
+    local kc=/etc/kubernetes/admin.conf
+
+    local address kv_mount base_path token_file install_eso
+    address="$(jqm '.vault.address // ""')"
+    kv_mount="$(jqm '.vault.kv_mount // "secret"')"
+    base_path="$(jqm '.vault.base_path // "snapdragon"')"
+    token_file="$(jqm '.vault.token_file // "vault/token"')"
+    install_eso="$(jqm '.vault.install_eso // false')"
+    [ "${address}" = "null" ] && address=""
+    log "Vault seeding: address='${address}' kv_mount=${kv_mount} base_path=${base_path} install_eso=${install_eso}"
+
+    # ── ONLINE: hand ESO a Vault token so its ClusterSecretStore can auth ──
+    local tok_path="${BASE}/${token_file}"
+    if [ -n "${address}" ] && [ -f "${tok_path}" ]; then
+        local token
+        token="$(tr -d '[:space:]' < "${tok_path}" 2>/dev/null)"
+        if [ -n "${token}" ]; then
+            KUBECONFIG="${kc}" kubectl create namespace external-secrets \
+                --dry-run=client -o yaml 2>/dev/null | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null \
+                || warn "could not ensure namespace external-secrets"
+            if KUBECONFIG="${kc}" kubectl create secret generic vault-token \
+                    -n external-secrets --from-literal=token="${token}" \
+                    --dry-run=client -o yaml 2>/dev/null \
+                    | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null; then
+                log "Created k8s Secret external-secrets/vault-token for ESO ClusterSecretStore 'snapdragon-vault'"
+            else
+                warn "failed to create external-secrets/vault-token"
+            fi
+        else
+            warn "Vault token file ${tok_path} is empty"
+        fi
+    else
+        if [ -z "${address}" ]; then
+            log "No Vault address — relying on USB offline secrets bundle"
+        else
+            log "No Vault token at ${tok_path} — relying on USB offline secrets bundle"
+        fi
+    fi
+
+    # ── OFFLINE / USB FALLBACK: materialize the workload Secrets directly ──
+    # Always attempt this if the bundle exists so the *-auth / casdoor-google
+    # Secrets are present even with no reachable Vault.
+    local bundle="${BASE}/vault/secrets.json"
+    if [ ! -f "${bundle}" ]; then
+        log "No offline secrets bundle at ${bundle} — Vault must materialize Secrets via ESO"
+        return 0
+    fi
+    if ! jq -e . "${bundle}" >/dev/null 2>&1; then
+        warn "Offline secrets bundle ${bundle} is not valid JSON — skipping"
+        return 0
+    fi
+    log "Materializing k8s Secrets from offline bundle ${bundle} (USB fallback)"
+
+    local ns name
+    while IFS= read -r ns; do
+        [ -n "${ns}" ] || continue
+        KUBECONFIG="${kc}" kubectl create namespace "${ns}" \
+            --dry-run=client -o yaml 2>/dev/null | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null \
+            || warn "could not ensure namespace ${ns}"
+
+        while IFS= read -r name; do
+            [ -n "${name}" ] || continue
+            # Build the --from-literal=<k8sKey>=<value> args from the JSON object.
+            local args=() k v
+            while IFS= read -r k; do
+                [ -n "${k}" ] || continue
+                v="$(jq -r --arg ns "${ns}" --arg s "${name}" --arg k "${k}" \
+                        '.[$ns][$s][$k] // ""' "${bundle}" 2>/dev/null)"
+                args+=(--from-literal="${k}=${v}")
+            done < <(jq -r --arg ns "${ns}" --arg s "${name}" \
+                        '.[$ns][$s] | keys[]' "${bundle}" 2>/dev/null)
+
+            if [ "${#args[@]}" -eq 0 ]; then
+                warn "secret ${ns}/${name} has no keys in bundle — skipping"
+                continue
+            fi
+            if KUBECONFIG="${kc}" kubectl create secret generic "${name}" -n "${ns}" \
+                    "${args[@]}" --dry-run=client -o yaml 2>/dev/null \
+                    | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null; then
+                log "Applied Secret ${ns}/${name} (${#args[@]} key(s)) from USB"
+            else
+                warn "failed to apply Secret ${ns}/${name} from USB"
+            fi
+        done < <(jq -r --arg ns "${ns}" '.[$ns] | keys[]' "${bundle}" 2>/dev/null)
+    done < <(jq -r 'keys[]' "${bundle}" 2>/dev/null)
+}
+
 # ── User-supplied hooks ────────────────────────────────────────────
 provision_run_hooks() {
     jqe '.run' || return 0
@@ -710,6 +815,7 @@ main() {
     provision_kubernetes
     provision_backup
     provision_snapdragon
+    provision_vault
     provision_run_hooks
 
     date -u '+%Y-%m-%dT%H:%M:%SZ' > "${DONE_MARKER}"

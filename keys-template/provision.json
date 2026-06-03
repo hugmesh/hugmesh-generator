@@ -43,6 +43,15 @@
     }
   },
 
+  "vault": {
+    "enabled": true,
+    "address": "https://vault.snapdragon.systems",
+    "kv_mount": "secret",
+    "base_path": "snapdragon",
+    "token_file": "vault/token",
+    "install_eso": true
+  },
+
   "storage": {
     "devices": [
       {
