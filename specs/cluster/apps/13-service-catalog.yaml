@@ -1,0 +1,48 @@
+# Service catalog (Phase 6) — turns "a deploy descriptor in each repo" into
+# deployable ArgoCD Applications. An ApplicationSet scans the in-cluster Forgejo
+# org and generates one Application per repo that opts in by carrying a
+# `snapdragon-deploy.yaml` + a `deploy/` kustomize dir (see catalog/
+# snapdragon-deploy.example.yaml). Admins spin up / update instances by editing
+# the descriptor + deploy/ and pushing — no hand-written Application per service.
+#
+# ⚠️ PREREQUISITES (scaffold until met): Forgejo seeded with the org repos
+# (Phase 5 activation); a read token in Secret forgejo-scm-token (ns devops);
+# repos adopting the snapdragon-deploy.yaml + deploy/ convention. Confirm the
+# ApplicationSet controller is installed with ArgoCD (it is, in recent versions).
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: snapdragon-catalog
+  namespace: devops
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - scmProvider:
+        gitea:
+          owner: Snapdragon-Systems
+          api: http://forgejo.snapdragon-pki.svc.cluster.local:3000
+          allBranches: false
+          tokenRef:
+            secretName: forgejo-scm-token
+            key: token
+        filters:
+          - repositoryMatch: "^snapdragon-"
+            pathsExist: ["snapdragon-deploy.yaml", "deploy"]
+  template:
+    metadata:
+      name: "{{ .repository }}"
+      labels:
+        app.kubernetes.io/part-of: snapdragon.systems
+        snapdragon.systems/catalog: "true"
+    spec:
+      project: default
+      source:
+        repoURL: "{{ .url }}"
+        targetRevision: "{{ .branch }}"
+        path: deploy
+      destination:
+        server: https://kubernetes.default.svc
+      syncPolicy:
+        automated: { prune: true, selfHeal: true }
+        syncOptions: [CreateNamespace=true]

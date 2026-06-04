@@ -1,0 +1,20 @@
+# Spring Cloud Config Server (Phase 6). Central config backed by the in-cluster
+# Forgejo config repo. ⚠️ needs the snapdragon-systems/config-server image built +
+# Forgejo seeded (see manifests/config-server).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: config-server
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/config-server
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
