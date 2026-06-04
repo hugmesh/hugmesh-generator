@@ -23,6 +23,10 @@ spec:
           # done by the gateway's Host predicates regardless of ingress.
           className: nginx
           host: api.snapdragon.systems
+          # Also front the headscale endpoint; forwarded to the pki gateway (the
+          # headscale-forward route) so external tailscale clients never hit pki direct.
+          extraHosts:
+            - scale.snapdragon.systems
         nodeSelector:
           snapdragon.systems/backend: "true"
         seLinux:
@@ -31,6 +35,12 @@ spec:
           - name: ROUTE_ACCESS_R2DBC_URL
             value: r2dbc:postgresql://route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
         routes:
+          # headscale forwarding: external tailscale clients hit scale.<domain> on
+          # this backend gateway and are forwarded to the pki gateway -> headscale,
+          # so the pki gateway never faces the internet (no direct external path).
+          - id: headscale-forward
+            host: scale.snapdragon.systems
+            uri: http://snapdragon-pki-gateway.snapdragon-pki.svc.cluster.local:8080
           # --- Mastodon (mastodon.snapdragon.systems) — specific paths first ---
           # Mastodon's OAuth endpoints (authorize/token). Same downstream pod as
           # the rest of Mastodon; broken out so the route DB can gate /oauth/**

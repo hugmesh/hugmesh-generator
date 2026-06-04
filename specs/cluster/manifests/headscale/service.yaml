@@ -1,0 +1,20 @@
+# headscale runs as a HOST OpenRC service on the pki node (it must be up for nodes
+# to join the VPN independently of k8s, so it is NOT a pod). This selector-less
+# Service + a bootstrap-managed Endpoints expose it in-cluster: the pki gateway
+# routes scale.<domain> here, and the backend gateway forwards external tailscale
+# clients backend -> pki -> headscale so the pki gateway never faces the internet.
+# The Endpoints (pki node internal IP:8080) is injected by bootstrap.sh because
+# the node IP is per-deployment.
+apiVersion: v1
+kind: Service
+metadata:
+  name: headscale
+  namespace: snapdragon-pki
+  labels:
+    app.kubernetes.io/name: headscale
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

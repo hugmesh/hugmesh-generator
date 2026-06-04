@@ -2,10 +2,13 @@
 # If present (and headscale.config_file points here), it replaces the
 # baked-in /etc/headscale/config.yaml at first boot.
 #
-# The single value you almost certainly need to change is server_url —
-# set it to the address the other Pi nodes reach this PKI node at.
+# The single value you almost certainly need to change is server_url — the public
+# facade clients connect to. It must match the facade the backend gateway fronts
+# (scale.<domain>): traffic flows tailscale-client -> backend gateway -> pki
+# gateway -> this headscale. Internal nodes resolve the same name to the pki node
+# IP via /etc/hosts (the provision_hosts facade alias).
 
-server_url: http://snapdragon-pki:8080
+server_url: https://scale.snapdragon.systems
 listen_addr: 0.0.0.0:8080
 metrics_listen_addr: 127.0.0.1:9090
 grpc_listen_addr: 127.0.0.1:50443

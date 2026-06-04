@@ -45,6 +45,14 @@ spec:
           - id: casdoor-oidc
             uri: http://casdoor.snapdragon-pki.svc.cluster.local:8000
             path: /.well-known/**
+          # headscale (VPN control server) — a HOST OpenRC service on the pki node,
+          # exposed in-cluster by the selector-less headscale Service (apps/
+          # 07-headscale-svc.yaml; Endpoints injected by bootstrap.sh). scale.<domain>
+          # arrives via the pki node's internal ingress (LAN/VPN) or forwarded from
+          # the backend gateway (external tailscale clients) — never pki-direct.
+          - id: headscale
+            host: scale.snapdragon.systems
+            uri: http://headscale.snapdragon-pki.svc.cluster.local:8080
   destination:
     server: https://kubernetes.default.svc
     namespace: snapdragon-pki
