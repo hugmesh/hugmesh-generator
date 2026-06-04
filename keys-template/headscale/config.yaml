@@ -10,7 +10,11 @@
 
 server_url: https://scale.snapdragon.systems
 listen_addr: 0.0.0.0:8080
+# /metrics + /debug — bound to loopback; scrape via a node-local exporter or an
+# Endpoints that targets the pki node, and keep it off the public facade.
 metrics_listen_addr: 127.0.0.1:9090
+# Local gRPC for the headscale CLI / a co-located admin UI; remote exposure
+# (0.0.0.0:50443) requires valid certs.
 grpc_listen_addr: 127.0.0.1:50443
 
 noise:
@@ -46,6 +50,53 @@ dns:
     global:
       - 1.1.1.1
       - 9.9.9.9
+    # Split DNS: route the internal zone to the cluster CoreDNS (reachable over
+    # the tailnet) so in-cluster lookups stay private. Pin the resolver address
+    # for this deployment, e.g.:
+    #   split:
+    #     snapdragon.systems:
+    #       - 100.64.0.1   # tailnet IP of the cluster DNS resolver (CoreDNS)
+
+# ACL policy is managed in the database via the API/CLI (`headscale policy set`).
+# With no policy loaded the tailnet is allow-all among members, so the OIDC-gated
+# join below is the membership boundary; harden later with a default-deny,
+# tag-based policy. Provisioning also accepts an acl.hujson placed in headscale/
+# on the KEYS USB (copied to /etc/headscale/) if you prefer file mode.
+# Ref: https://tailscale.com/kb/1018/acls/
+policy:
+  mode: database
+
+# OpenID Connect — node authentication via the platform's Casdoor IdP. A node
+# joins the tailnet by logging in through Casdoor; only members of the group
+# below are admitted.
+oidc:
+  # Don't block headscale startup on the IdP — resilient first boot.
+  only_start_if_oidc_is_available: false
+  # The same authority the snapdragon-*-gateway services validate against
+  # (CASDOOR_ISSUER_URI). headscale runs on the pki node, so it must be able to
+  # resolve + reach this in-cluster address, and the value MUST equal the `iss`
+  # claim Casdoor mints. Override if Casdoor is fronted on a different origin.
+  issuer: "http://casdoor.snapdragon-pki.svc.cluster.local:8000"
+  client_id: "headscale-service-snapdragon-systems"
+  # Secret delivered out-of-band (Vault / ESO) to /var/lib/headscale — never in
+  # git. On a KEYS USB it can ship as headscale/*.key (copied to /var/lib/headscale).
+  client_secret_path: /var/lib/headscale/oidc_client_secret
+  # Re-auth cadence once a node is authenticated ("0" = never expire).
+  expiry: 180d
+  use_expiry_from_token: false
+  scope: ["openid", "profile", "email"]
+  email_verified_required: true
+  # Hint Casdoor toward the right org/domain on the authorization request.
+  extra_params:
+    domain_hint: snapdragon.systems
+  # The /headscale group must exist in Casdoor and be granted to the operators
+  # allowed to enrol nodes.
+  allowed_groups:
+    - /headscale
+  # PKCE hardens the OAuth 2.0 auth-code flow against interception (S256).
+  pkce:
+    enabled: true
+    method: S256
 
 unix_socket: /run/headscale/headscale.sock
 unix_socket_permission: "0770"
