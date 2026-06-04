@@ -53,6 +53,16 @@ spec:
           - id: admin-bff
             uri: http://admin-bff.snapdragon-backend.svc.cluster.local:8080
             path: /bff/**
+          # Default cross-namespace scope: snapdragon.systems/be/** -> the backend
+          # gateway (StripPrefix drops /be so /be/api -> /api at the be-gateway).
+          # Ships by default; once DB-driven route definitions land (Phase 2 core,
+          # in the gateway/admin-bff repos) an admin can re-point this entry via
+          # the routing DB + admin UI without a redeploy.
+          - id: be-default
+            uri: http://snapdragon-be-gateway.snapdragon-backend.svc.cluster.local:8080
+            path: /be/**
+            filters:
+              - StripPrefix=1
           # …then the snapdragon.systems Angular host catches everything else.
           - id: frontend-host
             uri: http://snapdragon-systems-web.snapdragon-frontend.svc.cluster.local:80
