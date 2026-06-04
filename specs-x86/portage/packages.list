@@ -33,9 +33,16 @@ sys-process/cronie
 sys-apps/haveged
 app-editors/nano
 app-misc/screen
-sys-apps/apparmor
-sys-apps/apparmor-utils
-sec-policy/apparmor-profiles
+# SELinux LSM (native build → policy loads at build time via semodule).
+sec-policy/selinux-base
+sec-policy/selinux-base-policy
+sec-policy/selinux-container
+sec-policy/selinux-virt
+sys-apps/policycoreutils
+sys-apps/semodule-utils
+sys-apps/checkpolicy
+app-admin/setools
+sys-libs/libselinux
 sys-libs/libseccomp
 sys-process/audit
 

@@ -7,7 +7,7 @@ layers, and the container runtime + network are confined to those identities.
 
 All images (RPi `pki`/`backend`/`frontend`, x86_64 `host`) build from the
 `hardened/selinux` profile with SELinux as the LSM
-(`CONFIG_LSM="yama,integrity,selinux,bpf"`, `lsm=...,selinux` on the kernel
+(`CONFIG_LSM="yama,selinux,bpf"`, `lsm=...,selinux` on the kernel
 cmdline). AppArmor is removed.
 
 - **Pi (cross-built):** SELinux policy packages' `pkg_postinst` runs the *target*

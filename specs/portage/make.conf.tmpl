@@ -24,7 +24,12 @@ DISTDIR="@@WORK_DIR@@/distfiles"
 
 # Hardened USE baseline + container runtime requirements
 USE="bindist hardened pie ssp -X -gtk -qt5 -qt6 -systemd -pulseaudio -bluetooth"
-USE="${USE} cgroup cgroup2 seccomp apparmor containers netlink"
+USE="${USE} cgroup cgroup2 seccomp selinux containers netlink"
+
+# Build only the MCS SELinux policy: provision_selinux() and containerd's per-pod
+# MCS labelling both target type=mcs. Pinning this avoids relying on the profile
+# default and skips compiling the unused strict/targeted/mls stores (faster build).
+POLICY_TYPES="mcs"
 INPUT_DEVICES=""
 VIDEO_CARDS="v3d vc4"
 

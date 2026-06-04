@@ -25,7 +25,11 @@ TEST_DIR=""
 MEM="2048"
 SMP="2"
 SSH_PORT="2222"
-TIMEOUT="900"
+# 1800s, not 900: first boot runs provision_selinux()'s full-filesystem setfiles
+# relabel before sshd starts (keys-provision is `before sshd`), and that relabel
+# is slow under aarch64 TCG emulation. SELinux boots permissive, so the longer
+# wait is harmless — it just gives a good image head-room to become reachable.
+TIMEOUT="1800"
 QEMU_CPU="max"
 QEMU_MACHINE="virt,gic-version=3"
 KEEP=false
@@ -182,7 +186,7 @@ umount "${TEST_DIR}/mnt"
 # ── Boot QEMU ──────────────────────────────────────────────────────
 step "Booting QEMU (machine=${QEMU_MACHINE}, cpu=${QEMU_CPU}, mem=${MEM}M)"
 CMDLINE="root=/dev/vda rw rootwait console=ttyAMA0,115200 net.ifnames=0 \
-lsm=apparmor cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 \
+lsm=yama,selinux,bpf selinux=1 cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 \
 systemd.unified_cgroup_hierarchy=1 slab_nomerge"
 
 qemu-system-aarch64 \

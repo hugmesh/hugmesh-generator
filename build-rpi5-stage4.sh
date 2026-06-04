@@ -73,7 +73,7 @@ SYNOPSIS
 DESCRIPTION
     Cross-compiles a complete Gentoo Linux stage4 image targeting the
     Raspberry Pi 5 (BCM2712 / Cortex-A76).  The resulting image ships
-    with a hardened kernel, AppArmor, auditing, and a full Kubernetes
+    with a hardened kernel, SELinux, auditing, and a full Kubernetes
     stack (containerd, kubelet, kubeadm, kubectl, CNI plugins).
 
     Run as root (sudo).  The cross-emerge merges into the sysroot's
@@ -846,10 +846,18 @@ else
 
             # Parse: "enable CONFIG_FOO" / "module CONFIG_FOO" / etc.
             read -r action rest <<< "${line}"
-            scripts/config "--${action}" ${rest}
+            eval "scripts/config --${action} ${rest}"
         done < "${SPECS_DIR}/kernel/hardened-k8s.config"
 
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" olddefconfig
+
+        # Refuse to ship a kernel that silently lost SELinux (e.g. a defconfig
+        # bump dropping a dep that olddefconfig then prunes), mirroring the x86
+        # build's guard. A malformed CONFIG_LSM == SELinux disabled at boot.
+        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
+            grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
+        done
+        grep -q '^CONFIG_LSM="yama,selinux,bpf"$' .config || { err "CONFIG_LSM malformed (expected yama,selinux,bpf); SELinux would not activate"; exit 1; }
 
         # Build
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" -j"${JOBS}" \
@@ -986,7 +994,7 @@ echo "  PCIe Gen 3:       ${PCIE_GEN3}"
 echo ""
 echo "  Hardening:"
 echo "    - PIE/SSP/FORTIFY_SOURCE compiler flags"
-echo "    - AppArmor LSM (kernel + userspace)"
+echo "    - SELinux LSM (kernel + userspace; per-pod MCS container isolation)"
 echo "    - ASLR / KASLR / stack protector / slab hardening"
 echo "    - Hardened sysctl (ptrace, dmesg, kptr restricted)"
 echo "    - SSH: key-only, no root password login"

@@ -23,8 +23,13 @@ DISTDIR="@@WORK_DIR@@/distfiles"
 
 # Hardened USE baseline + container runtime + vendor-agnostic GPU stack.
 USE="bindist hardened pie ssp -X -gtk -qt5 -qt6 -systemd -pulseaudio -bluetooth"
-USE="${USE} cgroup cgroup2 seccomp apparmor containers netlink"
+USE="${USE} cgroup cgroup2 seccomp selinux containers netlink"
 USE="${USE} vulkan vaapi vdpau gbm egl gles2"
+
+# Build only the MCS SELinux policy: provision_selinux() and containerd's per-pod
+# MCS labelling both target type=mcs. Pinning this avoids relying on the profile
+# default and skips compiling the unused strict/targeted/mls stores (faster build).
+POLICY_TYPES="mcs"
 
 # Open, vendor-agnostic GPU: AMD (amdgpu/radeonsi), Intel (i915/iris),
 # NVIDIA via nouveau. No proprietary blobs.
