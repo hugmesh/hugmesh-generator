@@ -1,0 +1,12 @@
+# Networking / filesystem USE tuning for the hardened minimal worker.
+
+# cifs-utils: drop `acl` so we don't drag in the whole net-fs/samba stack (and
+# its net-libs/ngtcp2[gnutls] QUIC dependency) onto a hardened k8s worker.
+# mount.cifs — all we need to mount the backup shares — is always built; the
+# acl helpers (get/setcifsacl, which need libsmbclient from samba) are not
+# required. Keeps the attack surface + image size down.
+net-fs/cifs-utils -acl
+
+# If you DO need CIFS ACL helpers, drop the line above and instead allow:
+#   net-libs/ngtcp2 gnutls
+# which lets net-fs/samba (pulled by cifs-utils[acl]) resolve.

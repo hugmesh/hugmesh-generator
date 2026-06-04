@@ -303,7 +303,14 @@ emerge --oneshot --update --newuse sys-apps/baselayout || true
 emerge --update --deep --newuse --keep-going ${EMERGE_EXCLUDE} @world \
     || echo "[build-x86] WARN: @world had package failures (--keep-going); continuing"
 # Ensure the stage4 package set is present (deps included).
-emerge --update --deep --newuse --keep-going ${EMERGE_EXCLUDE} ${PKGS} \
+# --autounmask-continue auto-applies any required USE-flag change and continues
+# the merge (so a dep needing e.g. a USE flag doesn't ABORT resolution the way a
+# bare emerge does), but --autounmask-keep-keywords / -keep-masks keep keyword &
+# mask decisions EXPLICIT — those are pre-seeded in package.accept_keywords for a
+# reproducible hardened build rather than silently pulling unstable/masked pkgs.
+emerge --update --deep --newuse --keep-going \
+    --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y \
+    ${EMERGE_EXCLUDE} ${PKGS} \
     || echo "[build-x86] WARN: some stage4 packages failed; review the emerge output"
 CHROOT
 
@@ -328,13 +335,29 @@ else
     fi
 fi
 
-# ── 7. Kernel (hardened gentoo-sources + GPU/k8s fragment) ─────────
+# ── 7. Kernel (Gentoo HARDENED kernel) ─────────────────────────────
+# sys-kernel/hardened-sources (grsecurity) was removed from Gentoo in 2017. The
+# modern Gentoo hardened kernel = sys-kernel/gentoo-sources built under the
+# hardened profile (PIE/SSP toolchain) with the KSPP + SELinux hardening config
+# fragment applied below. This step is SELF-SUFFICIENT + idempotent: the main
+# package emerge may have aborted, so it re-ensures the sources + /usr/src/linux
+# symlink exist before building, and fails loudly if core hardening didn't take.
 if ${SKIP_KERNEL}; then
     banner "Kernel SKIPPED"
 else
-    banner "Building hardened kernel (gentoo-sources + GPU/k8s fragment)"
+    banner "Building Gentoo hardened kernel (gentoo-sources + KSPP/SELinux + GPU/k8s fragment)"
     cp "${SPECS_DIR}/kernel/hardened-k8s-gpu.config" "${SYSROOT}/tmp/k.config"
     chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
+# (Re)ensure the hardened kernel sources are installed and /usr/src/linux is set
+# — independent of whether the main stage4 emerge completed.
+if [ ! -e /usr/src/linux/Makefile ]; then
+    emerge --noreplace --quiet-build sys-kernel/gentoo-sources \
+        || emerge --quiet-build sys-kernel/gentoo-sources
+fi
+eselect kernel set 1 || true
+if [ ! -e /usr/src/linux/Makefile ]; then
+    echo "[build-x86] ERROR: /usr/src/linux is not set up (sys-kernel/gentoo-sources missing)"; exit 1
+fi
 cd /usr/src/linux
 make defconfig
 while IFS= read -r line; do
@@ -344,12 +367,17 @@ while IFS= read -r line; do
     scripts/config "--\${action}" \${rest}
 done < /tmp/k.config
 make olddefconfig
+# Refuse to ship a kernel that silently lost its hardening (e.g. a symbol that
+# olddefconfig pruned for an unmet dep). Stable, long-standing KSPP/LSM symbols.
+for must in CONFIG_SECURITY_SELINUX CONFIG_STACKPROTECTOR_STRONG CONFIG_FORTIFY_SOURCE CONFIG_HARDENED_USERCOPY; do
+    grep -q "^\${must}=y" .config || { echo "[build-x86] ERROR: hardened kernel option \${must} not enabled after olddefconfig"; exit 1; }
+done
 make -j${JOBS} bzImage modules
 make modules_install
 make install
 CHROOT
     rm -f "${SYSROOT}/tmp/k.config"
-    info "Kernel built and installed to ${SYSROOT}/boot"
+    info "Gentoo hardened kernel built and installed to ${SYSROOT}/boot"
 fi
 
 # ── 8. Clean ───────────────────────────────────────────────────────
@@ -427,6 +455,7 @@ fi
 # ── 11. Summary ────────────────────────────────────────────────────
 echo -e "\n${CYAN}${BOLD}=== Snapdragon x86_64 Host (hardened k8s/GPU worker) ===${RST}"
 echo "  Profile:    $(cat "${SYSROOT}/etc/portage/profile/parent")"
+echo "  Kernel:     $(${SKIP_KERNEL} && echo 'skipped' || echo 'Gentoo hardened (gentoo-sources + hardened profile + KSPP/SELinux config)')"
 echo "  Role:       ${ROLE}   (cluster domain: ${CLUSTER_DOMAIN})"
 echo "  Brand:      ${BRAND} / \"${BRAND_TITLE}\" / ${ORG}${CONFIG_FILE:+   (profile: ${CONFIG_FILE})}"
 echo "  GPU:        vendor-agnostic Mesa/Vulkan (amdgpu/i915/nouveau)"

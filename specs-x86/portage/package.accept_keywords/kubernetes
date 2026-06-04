@@ -7,3 +7,10 @@ app-containers/cni-plugins ~amd64
 app-containers/runc ~amd64
 app-containers/nerdctl ~amd64
 net-firewall/conntrack-tools ~amd64
+
+# The container/k8s stack is written in Go; recent containerd/runc/etc. require
+# a newer Go than stable amd64 carries (e.g. containerd-2.3.1 needs
+# >=dev-lang/go-1.26.3, which is ~amd64). Accept the testing Go toolchain so
+# dependency resolution doesn't abort. Go is a BUILD-time dep only — it is
+# excluded from the final stage4 image (see scripts/strip in the builder).
+dev-lang/go ~amd64

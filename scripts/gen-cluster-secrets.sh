@@ -87,6 +87,24 @@ CASDOOR_GOOGLE_CLIENT_SECRET="REPLACE_WITH_GOOGLE_OAUTH_CLIENT_SECRET"
 CASDOOR_CLIENT_ID="$(openssl rand -hex 16)"
 CASDOOR_CLIENT_SECRET="$(openssl rand -hex 32)"
 
+# Per-application Casdoor SERVICE identities. Each app/UI/API gets its own
+# OAuth2 application client-secret (and, where it logs in as a machine user, a
+# service-user password). Names mirror docs/SECURITY.md's identity matrix and
+# the Casdoor applications declared in manifests/casdoor/init-data (which seeds
+# the apps/users/roles structure; these secrets are injected by casdoor-init).
+# The init Job needs the admin PLAINTEXT to call the Casdoor API, so we keep it
+# alongside the -6 hash. Secrets live only in Vault / the USB bundle, never git.
+CASDOOR_APPS="pki-gateway be-gateway fe-gateway auth api admin-bff matrix mastodon"
+CASDOOR_APP_KV_ARGS=()
+CASDOOR_APP_JSON_ENV=()
+for _app in ${CASDOOR_APPS}; do
+    _sec="$(openssl rand -hex 32)"
+    _var="APPSEC_$(echo "${_app}" | tr 'a-z-' 'A-Z_')"
+    printf -v "${_var}" '%s' "${_sec}"
+    CASDOOR_APP_KV_ARGS+=("${_app}=${_sec}")
+    CASDOOR_APP_JSON_ENV+=("${_var}")
+done
+
 CLICKHOUSE_PASSWORD="$(openssl rand -base64 24)"
 
 UPTRACE_PG_PASSWORD="$(openssl rand -base64 24)"
@@ -111,7 +129,10 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
             google_client_secret="${CASDOOR_GOOGLE_CLIENT_SECRET}" \
             client_id="${CASDOOR_CLIENT_ID}" \
             client_secret="${CASDOOR_CLIENT_SECRET}" \
-            admin_password="${CASDOOR_ADMIN_HASH}"
+            admin_password="${CASDOOR_ADMIN_HASH}" \
+            admin_password_plain="${CASDOOR_ADMIN_PLAIN}"
+        # Per-app service OAuth2 client-secrets (one KV key per app).
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/casdoor-apps" "${CASDOOR_APP_KV_ARGS[@]}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/clickhouse" \
             password="${CLICKHOUSE_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/uptrace" \
@@ -133,9 +154,21 @@ TOKEN_FILE="${OUT_DIR}/token"
 
 # Emit valid JSON via python3 (jq may be absent on the host). The shape is the
 # materialized k8s Secrets: namespace -> secretName -> k8sKey -> value.
+# Per-app service secrets as a JSON object {app: secret} for the bundle.
+CASDOOR_APP_SECRETS_JSON="{"
+_first=1
+for _var in "${CASDOOR_APP_JSON_ENV[@]}"; do
+    _app="$(echo "${_var#APPSEC_}" | tr 'A-Z_' 'a-z-')"
+    [ "${_first}" = 1 ] || CASDOOR_APP_SECRETS_JSON+=","
+    CASDOOR_APP_SECRETS_JSON+="\"${_app}\":\"${!_var}\""; _first=0
+done
+CASDOOR_APP_SECRETS_JSON+="}"
+
 BRAND="${BRAND}" \
 CASDOOR_GOOGLE_CLIENT_ID="${CASDOOR_GOOGLE_CLIENT_ID}" \
 CASDOOR_GOOGLE_CLIENT_SECRET="${CASDOOR_GOOGLE_CLIENT_SECRET}" \
+CASDOOR_ADMIN_PLAIN="${CASDOOR_ADMIN_PLAIN}" \
+CASDOOR_APP_SECRETS_JSON="${CASDOOR_APP_SECRETS_JSON}" \
 CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD}" \
 UPTRACE_PG_PASSWORD="${UPTRACE_PG_PASSWORD}" \
 UPTRACE_PROJECT_TOKEN="${UPTRACE_PROJECT_TOKEN}" \
@@ -143,12 +176,20 @@ python3 - "${SECRETS_JSON}" <<'PY'
 import json, os, sys
 
 brand = os.environ["BRAND"]
+app_secrets = json.loads(os.environ["CASDOOR_APP_SECRETS_JSON"])
 data = {
     f"{brand}-pki": {
         "casdoor-google": {
             "clientId": os.environ["CASDOOR_GOOGLE_CLIENT_ID"],
             "clientSecret": os.environ["CASDOOR_GOOGLE_CLIENT_SECRET"],
         },
+        # admin plaintext for the casdoor-init Job's API login.
+        "casdoor-admin": {
+            "username": "admin",
+            "password": os.environ["CASDOOR_ADMIN_PLAIN"],
+        },
+        # one key per app: the OAuth2 application client-secret.
+        "casdoor-app-secrets": app_secrets,
     },
     f"{brand}-backend": {
         "clickhouse-auth": {
