@@ -854,10 +854,24 @@ EOF
 # hostname-based config resolves via these /etc/hosts entries.
 provision_hosts() {
     jqe '.nodes' || return 0
-    local n i ip name dom
+    local n i ip name dom facade pki_ip
     n="$(jqm '.nodes | length')"
     dom="$(jqm '.snapdragon.cluster_domain // ""')"
-    log "Writing /etc/hosts for ${n} cluster node(s)"
+    # Facade alias: internal nodes/laptops must resolve the public facade name to
+    # the pki node's INTERNAL ip (the pki node DNATs :443 -> pki gateway), so
+    # VPN/LAN traffic — especially reaching headscale via the pki gateway — never
+    # loops back out to the router/external IP. Public DNS still points the same
+    # name at the external IP. Override via .snapdragon.facade_host; defaults to
+    # scale.<cluster_domain>.
+    facade="$(jqm '.snapdragon.facade_host // ""')"
+    if [ -z "${facade}" ] || [ "${facade}" = "null" ]; then
+        { [ -n "${dom}" ] && [ "${dom}" != "null" ]; } && facade="scale.${dom}" || facade=""
+    fi
+    pki_ip=""
+    for ((i = 0; i < n; i++)); do
+        [ "$(jqm ".nodes[$i].role")" = "pki" ] && { pki_ip="$(jqm ".nodes[$i].ip")"; break; }
+    done
+    log "Writing /etc/hosts for ${n} cluster node(s)${facade:+ + facade ${facade}}"
     sed -i '/# >>> snapdragon nodes/,/# <<< snapdragon nodes/d' /etc/hosts 2>/dev/null || true
     {
         echo "# >>> snapdragon nodes"
@@ -870,6 +884,9 @@ provision_hosts() {
                 echo "${ip} ${name}"
             fi
         done
+        # Public facade name -> pki node internal IP (internal/VPN path to the pki
+        # gateway + headscale; bypasses the external IP for in-cluster nodes).
+        [ -n "${facade}" ] && [ -n "${pki_ip}" ] && [ "${pki_ip}" != "null" ] && echo "${pki_ip} ${facade}"
         echo "# <<< snapdragon nodes"
     } >> /etc/hosts
 }

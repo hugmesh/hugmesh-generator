@@ -15,12 +15,19 @@ spec:
       values: |
         instance:
           name: snapdragon-pki-gateway
-        ingress:
+        # Cross-namespace mTLS client identity (Vault-PKI/ESO snapdragon-pki-gateway-mtls).
+        keystore:
           enabled: true
-          # Cloudflare Tunnel (manifests/cloudflared) is the primary external
-          # edge; this nginx Ingress is the in-cluster secondary path.
-          className: nginx
-          host: id.snapdragon.systems
+        ingress:
+          # pki is NOT internet-facing. Served ONLY by the internal ingress-nginx
+          # on the pki node (class nginx-internal, 11-ingress-nginx-internal.yaml),
+          # reachable on the pki node's :443 via the scale.<domain> -> pki-node-IP
+          # /etc/hosts alias (VPN/LAN only). The public backend-node ingress
+          # (class nginx) never serves this class. End-user auth still reaches
+          # casdoor THROUGH the backend gateway (routing tables, Phase 2).
+          enabled: true
+          className: nginx-internal
+          host: scale.snapdragon.systems
         nodeSelector:
           snapdragon.systems/pki: "true"
         seLinux:
@@ -41,6 +48,14 @@ spec:
           - id: casdoor-oidc
             uri: http://casdoor.snapdragon-pki.svc.cluster.local:8000
             path: /.well-known/**
+          # headscale (VPN control server) — a HOST OpenRC service on the pki node,
+          # exposed in-cluster by the selector-less headscale Service (apps/
+          # 07-headscale-svc.yaml; Endpoints injected by bootstrap.sh). scale.<domain>
+          # arrives via the pki node's internal ingress (LAN/VPN) or forwarded from
+          # the backend gateway (external tailscale clients) — never pki-direct.
+          - id: headscale
+            host: scale.snapdragon.systems
+            uri: http://headscale.snapdragon-pki.svc.cluster.local:8080
   destination:
     server: https://kubernetes.default.svc
     namespace: snapdragon-pki

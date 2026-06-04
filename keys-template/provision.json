@@ -37,6 +37,7 @@
   "snapdragon": {
     "role": "pki",
     "cluster_domain": "snapdragon.systems",
+    "facade_host": "scale.snapdragon.systems",
     "gitops": {
       "enabled": true,
       "argocd": true

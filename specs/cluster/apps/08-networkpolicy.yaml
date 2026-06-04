@@ -1,0 +1,26 @@
+# Tier-level NetworkPolicies (Phase 3 segmentation).
+#
+# MANUAL SYNC ON PURPOSE: a default-deny ingress policy that's missing a real
+# flow will silently break connectivity, and the exact flows can only be
+# confirmed on a live cluster. So this Application does NOT auto-sync — an
+# operator reviews the diff and syncs it deliberately (argocd app sync
+# networkpolicy) after verifying nothing is cut off. Once validated, switch
+# syncPolicy to automated like the other apps.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: networkpolicy
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/networkpolicy
+  destination:
+    server: https://kubernetes.default.svc
+  # No `automated:` block — manual sync until validated on-cluster (see header).
+  syncPolicy:
+    syncOptions: [CreateNamespace=false]

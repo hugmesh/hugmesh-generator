@@ -68,6 +68,9 @@ ingress:
   enabled: false
   className: ""
   host: snapdragon.systems
+  # Additional hosts this gateway's Ingress serves (same backend). Used e.g. by
+  # the be-gateway to front scale.<domain> (headscale) and forward it to pki.
+  extraHosts: []
   annotations: {}
   tls: false
 

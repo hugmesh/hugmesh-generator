@@ -52,5 +52,30 @@ sed -e "s#repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.gi
     -e "s#targetRevision: main#targetRevision: ${REV}#" \
     "${CLUSTER_DIR}/app-of-apps.yaml" | kubectl apply -f -
 
+# headscale runs as a HOST OpenRC service on the pki node (it must be up for nodes
+# to join the VPN independently of k8s). Point the selector-less headscale Service
+# (apps/07-headscale-svc.yaml) at the pki node's internal IP so the pki gateway can
+# reach it. The node IP is per-deployment, so inject the Endpoints here.
+echo "==> headscale Endpoints (host service on the pki node)"
+PKI_IP="$(kubectl get node -l snapdragon.systems/pki=true -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
+[ -n "${PKI_IP}" ] || PKI_IP="$(kubectl get node "$(hostname)" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
+if [ -n "${PKI_IP}" ]; then
+    kubectl apply -f - <<EOF && echo "   headscale -> ${PKI_IP}:8080" || true
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: headscale
+  namespace: snapdragon-pki
+subsets:
+  - addresses:
+      - ip: ${PKI_IP}
+    ports:
+      - name: http
+        port: 8080
+EOF
+else
+    echo "   WARN: could not resolve pki node InternalIP; create the headscale Endpoints by hand"
+fi
+
 echo "==> Done. ArgoCD (in '${ARGOCD_NS}', x86-only) will now sync every Application under specs/cluster/apps."
 echo "    argocd admin password: kubectl -n ${ARGOCD_NS} get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"

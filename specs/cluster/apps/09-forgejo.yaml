@@ -1,0 +1,36 @@
+# Forgejo — primary in-cluster git on the pki namespace (Phase 5).
+#
+# ACTIVATION (one-time, after first sync — documented, not automated, because it
+# touches credentials + must be verified):
+#   1. Admin user:   kubectl -n snapdragon-pki exec sts/forgejo -- \
+#                      forgejo admin user create --admin --username snapadmin \
+#                      --email admin@snapdragon.systems --random-password
+#   2. Casdoor OIDC: forgejo admin auth add-oauth --name casdoor \
+#                      --provider openidConnect \
+#                      --auto-discovery-url https://id.snapdragon.systems/.well-known/openid-configuration \
+#                      --key <client-id> --secret <client-secret>
+#   3. Seed from GitHub (mirror the org), then flip the GitOps source:
+#        re-run bootstrap.sh with SNAPDRAGON_GITOPS_REPO=\
+#          http://forgejo.snapdragon-pki.svc.cluster.local:3000/Snapdragon-Systems/snapdragon-generator.git
+#      (kept on GitHub until Forgejo is seeded so ArgoCD's own bootstrap never breaks).
+#   4. Replicas: configure pull-mirrors of the pki Forgejo on backend + devops
+#      (a lightweight Forgejo/git-daemon mirror; read-only standby copies).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: forgejo
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/forgejo
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-pki
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
