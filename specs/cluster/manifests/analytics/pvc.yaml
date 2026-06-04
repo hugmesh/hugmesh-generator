@@ -1,0 +1,26 @@
+# Persistent storage for the analytics datastores. With the previous emptyDir,
+# the ClickHouse warehouse and the Kafka (KRaft) event log were wiped on every
+# pod restart — losing usage history and any unconsumed events plus the broker's
+# cluster metadata. snapdragon-local (local-path provisioner) backs these on the
+# backend node's disk; the pods are pinned there via nodeSelector.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: clickhouse-data
+  namespace: snapdragon-backend
+  labels: { app: clickhouse, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: snapdragon-local
+  resources: { requests: { storage: 20Gi } }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kafka-data
+  namespace: snapdragon-backend
+  labels: { app: kafka, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: snapdragon-local
+  resources: { requests: { storage: 5Gi } }

@@ -27,7 +27,7 @@ spec:
             - { name: CLICKHOUSE_USER, value: snap }
             - { name: CLICKHOUSE_PASSWORD, valueFrom: { secretKeyRef: { name: clickhouse-auth, key: password } } }
           volumeMounts: [{ name: data, mountPath: /var/lib/clickhouse }]
-      volumes: [{ name: data, emptyDir: {} }]   # TODO: PVC in production
+      volumes: [{ name: data, persistentVolumeClaim: { claimName: clickhouse-data } }]
 ---
 apiVersion: v1
 kind: Service
@@ -62,7 +62,7 @@ spec:
             - { name: KAFKA_CFG_CONTROLLER_LISTENER_NAMES, value: "CONTROLLER" }
             - { name: KAFKA_CFG_ADVERTISED_LISTENERS, value: "PLAINTEXT://kafka:9092" }
           volumeMounts: [{ name: data, mountPath: /bitnami/kafka }]
-      volumes: [{ name: data, emptyDir: {} }]
+      volumes: [{ name: data, persistentVolumeClaim: { claimName: kafka-data } }]
 ---
 apiVersion: v1
 kind: Service
