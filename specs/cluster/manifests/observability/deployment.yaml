@@ -27,7 +27,7 @@ spec:
             - { name: POSTGRES_USER, value: uptrace }
             - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: uptrace-auth, key: pg-password } } }
           volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
-      volumes: [{ name: data, emptyDir: {} }]   # TODO: PVC
+      volumes: [{ name: data, persistentVolumeClaim: { claimName: uptrace-pg-data } }]
 ---
 apiVersion: v1
 kind: Service

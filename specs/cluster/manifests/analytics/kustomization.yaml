@@ -3,6 +3,7 @@ kind: Kustomization
 namespace: snapdragon-backend
 resources:
   - deployment.yaml
+  - pvc.yaml
 # The "clickhouse-auth" Secret (password) is now materialized by External Secrets
 # Operator from Vault (ClusterSecretStore "snapdragon-vault", remote path
 # secret/snapdragon/clickhouse) — see manifests/external-secrets.
