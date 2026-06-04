@@ -16,9 +16,12 @@ spec:
         instance:
           name: snapdragon-pki-gateway
         ingress:
-          enabled: true
-          # Cloudflare Tunnel (manifests/cloudflared) is the primary external
-          # edge; this nginx Ingress is the in-cluster secondary path.
+          # pki is NOT internet-facing: no public Ingress on the backend-node
+          # ingress-nginx facade. End-user auth (Casdoor /login,/oauth,
+          # /.well-known) reaches the pki gateway only THROUGH the backend gateway
+          # (routing tables); internal/VPN access is via the pki node's :443 ->
+          # pki gateway DNAT (scale.<domain> -> pki node internal IP).
+          enabled: false
           className: nginx
           host: id.snapdragon.systems
         nodeSelector:
