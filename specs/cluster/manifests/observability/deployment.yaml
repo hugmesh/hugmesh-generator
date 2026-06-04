@@ -65,7 +65,7 @@ spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
       containers:
         - name: uptrace
-          image: uptrace/uptrace:latest
+          image: uptrace/uptrace:2.0.3
           args: ["--config=/etc/uptrace/uptrace.yml"]
           ports: [{ name: http, containerPort: 14318 }, { name: grpc, containerPort: 14317 }]
           env:
@@ -143,7 +143,7 @@ spec:
       serviceAccountName: otel-collector
       containers:
         - name: otel-collector
-          image: otel/opentelemetry-collector-contrib:latest
+          image: otel/opentelemetry-collector-contrib:0.153.0
           args: ["--config=/etc/otel/config.yaml"]
           env:
             - { name: UPTRACE_PROJECT_TOKEN, valueFrom: { secretKeyRef: { name: uptrace-auth, key: project-token } } }

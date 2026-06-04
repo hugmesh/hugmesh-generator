@@ -42,7 +42,7 @@ spec:
           effect: NoSchedule
       containers:
         - name: vault
-          image: hashicorp/vault:latest
+          image: hashicorp/vault:1.21.4   # pinned to latest stable 1.x; evaluate the 2.x major separately
           # Dev mode: in-memory, auto-unsealed, listens on 0.0.0.0:8200.
           args: ["server", "-dev", "-dev-listen-address=0.0.0.0:8200"]
           env:
