@@ -1,0 +1,94 @@
+# tuwunel — Matrix homeserver (Rust Conduit/conduwuit fork), replaces Synapse.
+# Single binary + embedded RocksDB → far lighter than Synapse on a Pi. Serves the
+# Matrix client/server API on :8008 (the be-gateway already routes /_matrix/** and
+# the matrix.snapdragon.systems host here). Matrix-spec compatible, so the existing
+# snapdragon-matrix-ui keeps working.
+#
+# ⚠️ VALIDATE ON CLUSTER: confirm the image tag + the exact config keys/env-prefix
+# against the tuwunel docs (github.com/matrix-construct/tuwunel) — Conduit-family
+# config has churned (CONDUIT_* / CONDUWUIT_* / TUWUNEL_*). This ships a config.toml
+# via env to avoid prefix ambiguity. OIDC/Casdoor + Synapse→tuwunel migration are
+# follow-ups (Conduit-family OIDC support must be confirmed).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tuwunel-config
+  namespace: snapdragon-backend
+data:
+  tuwunel.toml: |
+    [global]
+    server_name = "snapdragon.systems"
+    address = "0.0.0.0"
+    port = 8008
+    database_path = "/var/lib/tuwunel"
+    database_backend = "rocksdb"
+    allow_registration = false
+    allow_federation = true
+    # The client/server .well-known is served by the gateway host
+    # matrix.snapdragon.systems (be-gateway route matrix-wellknown).
+    well_known_client = "https://matrix.snapdragon.systems"
+    well_known_server = "matrix.snapdragon.systems:443"
+    trusted_servers = ["matrix.org"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tuwunel
+  namespace: snapdragon-backend
+  labels:
+    app.kubernetes.io/name: tuwunel
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # single RocksDB writer
+  selector:
+    matchLabels: { app.kubernetes.io/name: tuwunel }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: tuwunel }
+    spec:
+      nodeSelector:
+        snapdragon.systems/backend: "true"
+      containers:
+        - name: tuwunel
+          image: ghcr.io/matrix-construct/tuwunel:latest   # ⚠️ pin a real tag
+          ports:
+            - { name: http, containerPort: 8008 }
+          env:
+            - { name: TUWUNEL_CONFIG, value: /etc/tuwunel/tuwunel.toml }
+          volumeMounts:
+            - { name: config, mountPath: /etc/tuwunel }
+            - { name: data,   mountPath: /var/lib/tuwunel }
+          readinessProbe:
+            httpGet: { path: /_matrix/client/versions, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+      volumes:
+        - name: config
+          configMap: { name: tuwunel-config }
+        - name: data
+          persistentVolumeClaim: { claimName: tuwunel-data }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tuwunel-data
+  namespace: snapdragon-backend
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tuwunel
+  namespace: snapdragon-backend
+  labels:
+    app.kubernetes.io/name: tuwunel
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: tuwunel
+  ports:
+    - { name: http, port: 8008, targetPort: http }

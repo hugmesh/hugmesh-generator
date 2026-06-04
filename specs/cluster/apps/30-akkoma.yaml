@@ -1,0 +1,21 @@
+# Akkoma — fediverse server (replaces Mastodon). mastodon.snapdragon.systems,
+# backend namespace. Mastodon-API compatible, so snapdragon-mastodon-ui is
+# unchanged. Raw manifests (no official Akkoma Helm chart). See manifests/akkoma
+# for the one-time setup/validation notes.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: akkoma
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/akkoma
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

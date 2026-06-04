@@ -52,31 +52,31 @@ spec:
           # (ROLE_USER) distinctly.
           - id: mastodon-oauth
             host: mastodon.snapdragon.systems
-            uri: http://mastodon-web.snapdragon-backend.svc.cluster.local:3000
+            uri: http://akkoma.snapdragon-backend.svc.cluster.local:4000
             path: /oauth/**
           # Mastodon REST API (statuses, timelines, …) under the mastodon host.
           - id: mastodon-api
             host: mastodon.snapdragon.systems
-            uri: http://mastodon-web.snapdragon-backend.svc.cluster.local:3000
+            uri: http://akkoma.snapdragon-backend.svc.cluster.local:4000
             path: /api/v1/**
           # Everything else on the mastodon host (web UI, streaming, .well-known).
           - id: mastodon-web
             host: mastodon.snapdragon.systems
-            uri: http://mastodon-web.snapdragon-backend.svc.cluster.local:3000
+            uri: http://akkoma.snapdragon-backend.svc.cluster.local:4000
           # --- Matrix (matrix.snapdragon.systems) ---
           # The Matrix client/server API. Present both as a host route and a
           # path route so /_matrix/** resolves whether or not the Host header is
           # the matrix subdomain (federation .well-known hits the apex too).
           - id: matrix-api
             host: matrix.snapdragon.systems
-            uri: http://matrix-synapse.snapdragon-backend.svc.cluster.local:8008
+            uri: http://tuwunel.snapdragon-backend.svc.cluster.local:8008
             path: /_matrix/**
           - id: matrix-wellknown
-            uri: http://matrix-synapse.snapdragon-backend.svc.cluster.local:8008
+            uri: http://tuwunel.snapdragon-backend.svc.cluster.local:8008
             path: /_matrix/**
           - id: matrix
             host: matrix.snapdragon.systems
-            uri: http://matrix-synapse.snapdragon-backend.svc.cluster.local:8008
+            uri: http://tuwunel.snapdragon-backend.svc.cluster.local:8008
           # --- Snapdragon Spring APIs (api.snapdragon.systems) ---
           - id: snapdragon-api
             uri: http://snapdragon-api.snapdragon-backend.svc.cluster.local:8080

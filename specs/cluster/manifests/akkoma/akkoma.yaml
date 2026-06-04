@@ -1,0 +1,138 @@
+# Akkoma — fediverse server (Pleroma fork, Elixir), replaces Mastodon. Postgres-
+# only (no Redis), lighter than Mastodon. Mastodon-API compatible, so the existing
+# snapdragon-mastodon-ui keeps working. Served on :4000; the be-gateway routes the
+# mastodon.snapdragon.systems host + /api/v1,/oauth here.
+#
+# ⚠️ VALIDATE ON CLUSTER + one-time SETUP (Akkoma is stateful/Elixir; a bare
+# Deployment won't self-configure):
+#   - secrets: generate SECRET_KEY_BASE + salts (`pleroma_ctl` / mix pleroma.instance
+#     gen) and put them in the akkoma-secrets Secret (placeholders below).
+#   - migrate: the initContainer runs `pleroma_ctl migrate` (verify the path/cmd
+#     for the chosen image tag).
+#   - admin + OIDC(Casdoor via ueberauth_oidcc) + Mastodon->Akkoma data import are
+#     follow-ups (documented in docs/architecture).
+#   - confirm the image ref (git.akkoma.dev/AkkomaGang/akkoma OR ghcr mirror).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: akkoma-secrets
+  namespace: snapdragon-backend
+type: Opaque
+stringData:
+  # ⚠️ placeholders — replace via `pleroma_ctl` gen or ESO before first boot.
+  SECRET_KEY_BASE: "REPLACE_secret_key_base"
+  SIGNING_SALT: "REPLACE_signing_salt"
+  DB_PASSWORD: "REPLACE_akkoma_db_pw"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: akkoma-config
+  namespace: snapdragon-backend
+data:
+  config.exs: |
+    import Config
+    config :pleroma, Pleroma.Web.Endpoint,
+      url: [host: "mastodon.snapdragon.systems", scheme: "https", port: 443],
+      http: [ip: {0, 0, 0, 0}, port: 4000],
+      secret_key_base: System.get_env("SECRET_KEY_BASE"),
+      signing_salt: System.get_env("SIGNING_SALT")
+    config :pleroma, :instance,
+      name: "Snapdragon",
+      email: "admin@snapdragon.systems",
+      registrations_open: false
+    config :pleroma, Pleroma.Repo,
+      adapter: Ecto.Adapters.Postgres,
+      username: "akkoma",
+      password: System.get_env("DB_PASSWORD"),
+      database: "akkoma",
+      hostname: "akkoma-db"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: akkoma-db, namespace: snapdragon-backend, labels: { app.kubernetes.io/name: akkoma-db } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app.kubernetes.io/name: akkoma-db } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: akkoma-db } }
+    spec:
+      nodeSelector: { snapdragon.systems/backend: "true" }
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_USER, value: akkoma }
+            - { name: POSTGRES_DB,   value: akkoma }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: akkoma-secrets, key: DB_PASSWORD } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ name: pg, containerPort: 5432 }]
+          volumeMounts: [{ name: db, mountPath: /var/lib/postgresql/data }]
+      volumes:
+        - name: db
+          persistentVolumeClaim: { claimName: akkoma-db }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: akkoma-db, namespace: snapdragon-backend }
+spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 20Gi } } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: akkoma-db, namespace: snapdragon-backend }
+spec:
+  selector: { app.kubernetes.io/name: akkoma-db }
+  ports: [{ name: pg, port: 5432, targetPort: pg }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: akkoma, namespace: snapdragon-backend, labels: { app.kubernetes.io/name: akkoma } }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app.kubernetes.io/name: akkoma } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: akkoma } }
+    spec:
+      nodeSelector: { snapdragon.systems/backend: "true" }
+      initContainers:
+        - name: migrate
+          image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag
+          command: ["/opt/akkoma/bin/pleroma_ctl", "migrate"]
+          envFrom: [{ secretRef: { name: akkoma-secrets } }]
+          volumeMounts: [{ name: config, mountPath: /etc/akkoma }]
+      containers:
+        - name: akkoma
+          image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag
+          envFrom: [{ secretRef: { name: akkoma-secrets } }]
+          ports: [{ name: http, containerPort: 4000 }]
+          volumeMounts:
+            - { name: config,  mountPath: /etc/akkoma }
+            - { name: uploads, mountPath: /var/lib/akkoma/uploads }
+          readinessProbe:
+            httpGet: { path: /api/v1/instance, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+      volumes:
+        - name: config
+          configMap: { name: akkoma-config }
+        - name: uploads
+          persistentVolumeClaim: { claimName: akkoma-uploads }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: akkoma-uploads, namespace: snapdragon-backend }
+spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 20Gi } } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: akkoma
+  namespace: snapdragon-backend
+  labels: { app.kubernetes.io/name: akkoma }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: akkoma }
+  ports: [{ name: http, port: 4000, targetPort: http }]
