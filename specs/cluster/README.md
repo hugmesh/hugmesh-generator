@@ -11,7 +11,7 @@ later (not configured here).
 | Namespace | Runs on | Front door | Contents |
 |---|---|---|---|
 | `snapdragon-pki` | pki Pi (control-plane) | `snapdragon-pki-gateway` (`id.snapdragon.systems`) | Casdoor (Google + admin login), Cassandra, headscale/auth |
-| `snapdragon-backend` | backend Pis | `snapdragon-be-gateway` (`api.` / `matrix.` / `mastodon.`) | Matrix (Synapse), Mastodon, Spring APIs, DBs |
+| `snapdragon-backend` | backend Pis | `snapdragon-be-gateway` (`api.` / `matrix.` / `mastodon.`) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs, DBs |
 | `snapdragon-frontend` | frontend Pis | `snapdragon-fe-gateway` (`snapdragon.systems`) | snapdragon.systems Angular host + social-ui micro-frontends |
 | `snapdragon-games` | x86_64 GPU worker | (internal) | snapdragon.games (Mesa/Vulkan via `/dev/dri`) |
 | `argocd` | x86_64 worker | (internal) | ArgoCD GitOps engine |
@@ -88,7 +88,7 @@ unchanged.
 - Casdoor uses an `emptyDir` and the all-in-one image — switch to a PVC + an
   external DB, and seed the Google provider (`casdoor-google` Secret) + the
   gateway OAuth2 client.
-- Cassandra / Matrix / Mastodon reference upstream charts; pin chart versions
-  and supply DB/secret values.
+- Cassandra references an upstream chart; Akkoma + tuwunel are raw manifests
+  (no official charts) — pin image tags and supply DB/secret values.
 - Secrets are never committed here — they flow from Vault via ESO (or the USB
   KEYS fallback); see **Secrets (Vault + USB)** above.

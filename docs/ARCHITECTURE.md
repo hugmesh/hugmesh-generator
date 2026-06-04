@@ -10,7 +10,7 @@ those gateways (configured later, out of scope here).
 | Image | Build | Arch | Role in the cluster |
 |---|---|---|---|
 | `pki` | `build-rpi5-stage4.sh --role pki` | aarch64 (RPi 5) | **Kubernetes control plane** + identity: headscale (mesh control), Casdoor, Cassandra, `snapdragon-pki-gateway` |
-| `backend` | `build-rpi5-stage4.sh --role backend` | aarch64 (RPi 5) | Matrix (Synapse), Mastodon, Spring APIs, databases, `snapdragon-be-gateway` |
+| `backend` | `build-rpi5-stage4.sh --role backend` | aarch64 (RPi 5) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs, databases, `snapdragon-be-gateway` |
 | `frontend` | `build-rpi5-stage4.sh --role frontend` | aarch64 (RPi 5) | `snapdragon.systems` Angular host + `snapdragon-social-ui`, `snapdragon-fe-gateway` |
 | `host` | `build-x86-host-stage4.sh` | x86_64 (desktop/server) | GPU worker: ArgoCD, `snapdragon.games`, extra backend capacity (Mesa/Vulkan via `/dev/dri`) |
 
@@ -74,8 +74,9 @@ Casdoor (`id.snapdragon.systems`) is the single IdP:
 
 The pki control-plane installs ArgoCD (pinned to the x86_64 worker) and a root
 **app-of-apps** pointing at [`specs/cluster`](../specs/cluster). ArgoCD then
-syncs Casdoor, Cassandra, the three gateways, Matrix, Mastodon, the Spring APIs,
-the frontend host, the social-ui, and snapdragon.games. See
+syncs Casdoor, Cassandra, the three gateways (behind an ingress-nginx facade),
+Akkoma + tuwunel, Forgejo (in-cluster git), the Spring APIs, the frontend host,
+the social-ui, and snapdragon.games. See
 [`specs/cluster/README.md`](../specs/cluster/README.md).
 
 ## Secrets (Vault + USB)
