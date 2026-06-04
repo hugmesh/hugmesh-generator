@@ -1,0 +1,59 @@
+# route-access-db — Postgres source of truth for the gateway_route_access table
+# (the role->URL external-access rules). Lives in snapdragon-pki next to Casdoor
+# (the identity tier owns the access policy). ClusterIP only; the only writers
+# are the admin-bff (CRUD), and the only readers are the three gateways
+# (R2DBC at ROUTE_ACCESS_R2DBC_URL), which then read-cache the rows in Cassandra.
+#
+# !!! DEV credentials !!! The password here is a placeholder. Production must
+# source POSTGRES_PASSWORD from Vault via External Secrets (like clickhouse-auth)
+# and switch the admin-bff / gateways to a least-privilege role.
+#
+# Schema bootstrap: schema.sql is mounted into Postgres's
+# /docker-entrypoint-initdb.d, so the gateway_route_access table + the canonical
+# seed are applied automatically the first time the data directory is empty.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: route-access-db
+  namespace: snapdragon-pki
+  labels: { app: route-access-db, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # single writer over a RWO PVC
+  selector: { matchLabels: { app: route-access-db } }
+  template:
+    metadata: { labels: { app: route-access-db } }
+    spec:
+      nodeSelector: { snapdragon.systems/pki: "true" }
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ name: postgres, containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_DB,   value: "gateway" }
+            - { name: POSTGRES_USER, value: "gateway" }
+            # DEV placeholder password. PRODUCTION: create a Secret
+            # "route-access-db-auth" (key "password") from Vault via External
+            # Secrets and replace this literal value with a secretKeyRef.
+            - { name: POSTGRES_PASSWORD, value: "gateway" }
+            - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256" }
+            - { name: PGDATA, value: "/var/lib/postgresql/data/pgdata" }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "gateway", "-d", "gateway"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "gateway", "-d", "gateway"] }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+          volumeMounts:
+            - { name: data,   mountPath: /var/lib/postgresql/data }
+            - { name: schema, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: route-access-db }
+        - name: schema
+          configMap: { name: route-access-schema }

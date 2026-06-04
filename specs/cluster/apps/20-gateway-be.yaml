@@ -17,6 +17,11 @@ spec:
           name: snapdragon-be-gateway
         ingress:
           enabled: true
+          # Cloudflare Tunnel (manifests/cloudflared) fronts api./matrix./
+          # mastodon.snapdragon.systems; this nginx Ingress is the in-cluster
+          # secondary path for the api host. Host routing for matrix/mastodon is
+          # done by the gateway's Host predicates regardless of ingress.
+          className: nginx
           host: api.snapdragon.systems
         nodeSelector:
           snapdragon.systems/backend: "true"
@@ -26,18 +31,41 @@ spec:
           - name: ROUTE_ACCESS_R2DBC_URL
             value: r2dbc:postgresql://route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
         routes:
-          - id: snapdragon-api
-            uri: http://snapdragon-api.snapdragon-backend.svc.cluster.local:8080
-            path: /api/**
-          - id: matrix
-            host: matrix.snapdragon.systems
-            uri: http://matrix-synapse.snapdragon-backend.svc.cluster.local:8008
-          - id: matrix-wellknown
-            uri: http://matrix-synapse.snapdragon-backend.svc.cluster.local:8008
-            path: /_matrix/**
+          # --- Mastodon (mastodon.snapdragon.systems) — specific paths first ---
+          # Mastodon's OAuth endpoints (authorize/token). Same downstream pod as
+          # the rest of Mastodon; broken out so the route DB can gate /oauth/**
+          # (ROLE_USER) distinctly.
+          - id: mastodon-oauth
+            host: mastodon.snapdragon.systems
+            uri: http://mastodon-web.snapdragon-backend.svc.cluster.local:3000
+            path: /oauth/**
+          # Mastodon REST API (statuses, timelines, …) under the mastodon host.
+          - id: mastodon-api
+            host: mastodon.snapdragon.systems
+            uri: http://mastodon-web.snapdragon-backend.svc.cluster.local:3000
+            path: /api/v1/**
+          # Everything else on the mastodon host (web UI, streaming, .well-known).
           - id: mastodon-web
             host: mastodon.snapdragon.systems
             uri: http://mastodon-web.snapdragon-backend.svc.cluster.local:3000
+          # --- Matrix (matrix.snapdragon.systems) ---
+          # The Matrix client/server API. Present both as a host route and a
+          # path route so /_matrix/** resolves whether or not the Host header is
+          # the matrix subdomain (federation .well-known hits the apex too).
+          - id: matrix-api
+            host: matrix.snapdragon.systems
+            uri: http://matrix-synapse.snapdragon-backend.svc.cluster.local:8008
+            path: /_matrix/**
+          - id: matrix-wellknown
+            uri: http://matrix-synapse.snapdragon-backend.svc.cluster.local:8008
+            path: /_matrix/**
+          - id: matrix
+            host: matrix.snapdragon.systems
+            uri: http://matrix-synapse.snapdragon-backend.svc.cluster.local:8008
+          # --- Snapdragon Spring APIs (api.snapdragon.systems) ---
+          - id: snapdragon-api
+            uri: http://snapdragon-api.snapdragon-backend.svc.cluster.local:8080
+            path: /api/**
   destination:
     server: https://kubernetes.default.svc
     namespace: snapdragon-backend

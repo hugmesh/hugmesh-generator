@@ -1,0 +1,21 @@
+# admin-bff — Backend-For-Frontend for the snapdragon-admin-ui. ClusterIP in
+# snapdragon-backend; the ONLY way in is the fe-gateway /bff/** route (same
+# origin as snapdragon.systems). Writes the gateway_route_access table that the
+# gateways read-cache for their external access rules.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: admin-bff
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/admin-bff
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

@@ -15,6 +15,10 @@ spec:
     helm:
       releaseName: matrix-synapse
       values: |
+        # Pin the chart's resource names so the be-gateway URI
+        # http://matrix-synapse.snapdragon-backend.svc.cluster.local:8008
+        # resolves to the Synapse Service regardless of the release name.
+        fullnameOverride: matrix-synapse
         serverName: snapdragon.systems
         publicServerName: matrix.snapdragon.systems
         # Login/registration are mediated by Casdoor (OIDC) — see docs.
