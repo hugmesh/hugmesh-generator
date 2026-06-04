@@ -202,6 +202,10 @@ cp "${SPECS_DIR}/portage/profile/parent"              "${SYSROOT}/etc/portage/pr
 cp "${SPECS_DIR}/portage/package.accept_keywords/"*   "${SYSROOT}/etc/portage/package.accept_keywords/"
 cp "${SPECS_DIR}/portage/package.use/"*               "${SYSROOT}/etc/portage/package.use/"
 
+# x86 GRUB cmdline (SELinux LSM + KSPP hardening); grub-mkconfig reads it at install.
+mkdir -p "${SYSROOT}/etc/default"
+cp "${SPECS_DIR}/etc/default/grub"                    "${SYSROOT}/etc/default/grub"
+
 # Shared (arch-agnostic) etc/ specs
 mkdir -p "${SYSROOT}/etc/"{sysctl.d,modules-load.d,containerd,kubernetes,init.d,ssh/sshd_config.d,local.d,headscale,keys-provision} \
          "${SYSROOT}/var/lib/kubelet" "${SYSROOT}/usr/sbin"
@@ -364,7 +368,7 @@ while IFS= read -r line; do
     [[ "\${line}" =~ ^[[:space:]]*# ]] && continue
     [[ -z "\${line// }" ]] && continue
     read -r action rest <<< "\${line}"
-    scripts/config "--\${action}" \${rest}
+    eval "scripts/config --\${action} \${rest}"
 done < /tmp/k.config
 make olddefconfig
 # Refuse to ship a kernel that silently lost its hardening (e.g. a symbol that
@@ -372,6 +376,10 @@ make olddefconfig
 for must in CONFIG_SECURITY_SELINUX CONFIG_STACKPROTECTOR_STRONG CONFIG_FORTIFY_SOURCE CONFIG_HARDENED_USERCOPY; do
     grep -q "^\${must}=y" .config || { echo "[build-x86] ERROR: hardened kernel option \${must} not enabled after olddefconfig"; exit 1; }
 done
+# SELinux only activates if CONFIG_LSM is a clean, well-formed string. x86 has no
+# lsm= on the GRUB cmdline to override a corrupted builtin, so a stray quote here
+# would silently ship SELinux DISABLED. Assert the exact intended value.
+grep -q '^CONFIG_LSM="yama,selinux,bpf"\$' .config || { echo "[build-x86] ERROR: CONFIG_LSM malformed (expected yama,selinux,bpf); SELinux would not activate"; exit 1; }
 make -j${JOBS} bzImage modules
 make modules_install
 make install
@@ -428,7 +436,7 @@ CHROOT
 set timeout=5
 set default=0
 menuentry "Snapdragon Host (live/install)" {
-    linux /boot/vmlinuz root=live:CDLABEL=SNAPDRAGON_HOST rd.live.dir=/LiveOS rd.live.squashimg=squashfs.img console=tty0
+    linux /boot/vmlinuz root=live:CDLABEL=SNAPDRAGON_HOST rd.live.dir=/LiveOS rd.live.squashimg=squashfs.img console=tty0 lsm=yama,selinux,bpf selinux=1
     initrd /boot/initramfs.img
 }
 EOF

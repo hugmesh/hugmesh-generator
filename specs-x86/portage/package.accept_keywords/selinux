@@ -1,0 +1,4 @@
+# SELinux core/policy packages still ~amd64 — accept them.
+sys-libs/libselinux ~amd64
+sec-policy/selinux-base ~amd64
+sec-policy/selinux-base-policy ~amd64

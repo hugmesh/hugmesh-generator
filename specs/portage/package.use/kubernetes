@@ -1,4 +1,4 @@
-app-containers/containerd btrfs device-mapper seccomp apparmor
-app-containers/runc seccomp apparmor
+app-containers/containerd btrfs device-mapper seccomp selinux
+app-containers/runc seccomp selinux
 sys-apps/ethtool -nls
 net-firewall/iptables nftables
