@@ -21,6 +21,10 @@ spec:
       containers:
         - name: clickhouse
           image: clickhouse/clickhouse-server:25.3-alpine
+          # Conservative baselines — tune to the backend node's headroom.
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits:   { cpu: "1",  memory: 2Gi }
           ports: [{ name: http, containerPort: 8123 }, { name: native, containerPort: 9000 }]
           env:
             - { name: CLICKHOUSE_DB, value: snapdragon }
@@ -53,6 +57,9 @@ spec:
       containers:
         - name: kafka
           image: bitnamilegacy/kafka:3.7.1-debian-12-r9
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits:   { cpu: 500m, memory: 1Gi }
           ports: [{ name: kafka, containerPort: 9092 }]
           env:
             - { name: KAFKA_CFG_NODE_ID, value: "0" }
@@ -125,6 +132,9 @@ spec:
       containers:
         - name: eureka
           image: snapdragon-systems/eureka:dev
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 250m, memory: 512Mi }
           ports: [{ name: http, containerPort: 8761 }]
 ---
 apiVersion: v1
