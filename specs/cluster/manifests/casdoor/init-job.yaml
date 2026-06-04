@@ -83,6 +83,32 @@ data:
             call("/api/add-application", app, "POST")
             print(f"  added   {appname} (role {role})")
 
+    def reconcile_google_provider():
+        """Seed the Google OAuth federation provider (clientId/secret from Vault).
+        Skipped when the casdoor-google secret is absent (provider is optional)."""
+        try:
+            cid  = open("/secrets/google/clientId").read().strip()
+            csec = open("/secrets/google/clientSecret").read().strip()
+        except FileNotFoundError:
+            print("  google provider: casdoor-google secret absent — skipping")
+            return
+        provider = {
+            "owner": "admin", "name": "google", "displayName": "Google",
+            "category": "OAuth", "type": "Google",
+            "clientId": cid, "clientSecret": csec,
+            "scopes": "profile email", "enableSignUp": True,
+        }
+        try:
+            existing = call("/api/get-provider?id=admin/google")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call("/api/update-provider?id=admin/google", provider, "POST")
+            print("  updated google provider")
+        else:
+            call("/api/add-provider", provider, "POST")
+            print("  added   google provider")
+
     wait_ready()
     login()
     for name, role in APPS.items():
@@ -90,6 +116,10 @@ data:
             reconcile_app(name, role)
         except Exception as e:
             print(f"  WARN {name}: {e}")
+    try:
+        reconcile_google_provider()
+    except Exception as e:
+        print(f"  WARN google provider: {e}")
     print("casdoor-init: done")
 ---
 apiVersion: batch/v1
@@ -132,6 +162,7 @@ spec:
             - { name: script, mountPath: /script, readOnly: true }
             - { name: admin, mountPath: /secrets/admin, readOnly: true }
             - { name: apps, mountPath: /secrets/apps, readOnly: true }
+            - { name: google, mountPath: /secrets/google, readOnly: true }
       volumes:
         - name: script
           configMap: { name: casdoor-init-script, defaultMode: 0555 }
@@ -140,3 +171,6 @@ spec:
           secret: { secretName: casdoor-admin }
         - name: apps
           secret: { secretName: casdoor-app-secrets }
+        # Google federation client — optional; provider seeding is skipped if absent.
+        - name: google
+          secret: { secretName: casdoor-google, optional: true }

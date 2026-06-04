@@ -1,6 +1,6 @@
-# Casdoor identity provider (all-in-one: Casdoor + bundled DB).
-# Issues the OAuth2/OIDC JWTs every snapdragon-*-gateway validates.
-# Federated registration via Google + admin-created accounts.
+# Casdoor identity provider on an EXTERNAL Postgres (casdoor-pg) — no longer the
+# all-in-one bundled DB. Issues the OAuth2/OIDC JWTs every snapdragon-*-gateway
+# validates. Federated registration via Google + admin-created accounts.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,12 +20,18 @@ spec:
         snapdragon.systems/pki: "true"
       containers:
         - name: casdoor
-          image: casbin/casdoor-all-in-one:3.80.0
+          image: casbin/casdoor:3.80.0
           ports:
             - { name: http, containerPort: 8000 }
           env:
             - name: RUNNING_IN_DOCKER
               value: "true"
+            # External Postgres credentials — interpolated into conf/app.conf
+            # (casdoor-app-conf). Materialized by ESO from Vault.
+            - name: CASDOOR_DB_USER
+              valueFrom: { secretKeyRef: { name: casdoor-db, key: username } }
+            - name: CASDOOR_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: casdoor-db, key: password } }
             # Google federation client credentials (created by an admin in
             # Casdoor, or seeded by the casdoor-init Job). Stored in a Secret.
             - name: GOOGLE_CLIENT_ID
@@ -37,21 +43,25 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 10
           volumeMounts:
-            - { name: data, mountPath: /var/lib/casdoor }
+            # app.conf override that points Casdoor at the external Postgres.
+            # NOTE: the conf path is image-version-specific (casbin/casdoor reads
+            # conf/app.conf from its workdir) — validate against the deployed image.
+            - { name: app-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }
             # Declarative seed (org / roles / service users). Casdoor imports
             # init_data.json from its working dir on boot. NOTE: the exact mount
-            # path depends on the casbin/casdoor-all-in-one workdir — validate/
-            # adjust if auto-import doesn't fire; the casdoor-init Job seeds the
-            # OAuth2 applications + secrets regardless.
+            # path depends on the casbin/casdoor workdir — validate/adjust if
+            # auto-import doesn't fire; the casdoor-init Job seeds the OAuth2
+            # applications + secrets regardless.
             - { name: init-data, mountPath: /init_data.json, subPath: init_data.json, readOnly: true }
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits:   { cpu: "1",  memory: 768Mi }
       volumes:
-        # Persistent DB so seeded orgs/roles/users/applications survive restarts.
-        - name: data
-          persistentVolumeClaim:
-            claimName: casdoor-data
+        # DB state now lives in casdoor-pg (external Postgres); this configMap
+        # just points Casdoor at it.
+        - name: app-conf
+          configMap:
+            name: casdoor-app-conf
         - name: init-data
           configMap:
             name: casdoor-init-data
