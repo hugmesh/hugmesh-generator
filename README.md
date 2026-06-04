@@ -2,7 +2,7 @@
 
 Crossdev / native build scripts that produce **hardened Gentoo images** for the
 Snapdragon cluster — three Raspberry Pi 5 (aarch64) role images plus an x86_64
-GPU host — and the **GitOps payload** that runs Casdoor, Matrix, Mastodon, the
+GPU host — and the **GitOps payload** that runs Casdoor, tuwunel (Matrix) + Akkoma (fediverse), the
 Spring APIs and snapdragon.games on them. Everything connects **behind
 `snapdragon.systems`** through per-namespace Spring Cloud Gateways.
 
@@ -20,7 +20,7 @@ All build output lands in a **git-ignored** work directory
 | Image | Build command | Runs |
 |---|---|---|
 | **pki** (RPi 5) | `./build-rpi5-stage4.sh --role pki` | k8s control plane, headscale, Casdoor, Cassandra, pki-gateway |
-| **backend** (RPi 5) | `./build-rpi5-stage4.sh --role backend` | Matrix, Mastodon, Spring APIs, DBs, be-gateway |
+| **backend** (RPi 5) | `./build-rpi5-stage4.sh --role backend` | tuwunel (Matrix) + Akkoma (fediverse), Spring APIs, DBs, be-gateway |
 | **frontend** (RPi 5) | `./build-rpi5-stage4.sh --role frontend` | snapdragon.systems Angular host + social-ui, fe-gateway |
 | **host** (x86_64) | `sudo ./build-x86-host-stage4.sh` | GPU worker: ArgoCD, snapdragon.games, backend capacity |
 
@@ -56,37 +56,64 @@ git-ignored since it can hold default passwords.
   `grub`, `squashfs-tools`, `libisoburn` (for `grub-mkrescue`/`xorriso`).
 - **QEMU test**: `app-emulation/qemu` (aarch64 target), `dosfstools`, `e2fsprogs`.
 
-## Quick start (one-liners)
+## Quick start — build locally on Gentoo (copy-paste)
+
+Run the builds as **root** (the cross-emerge merges into the sysroot's package DB
+and writes host caches; fakeroot is not enough). Artifacts land in the git-ignored
+`./rpi5-stage4-build/` and `./x86-host-build/`.
 
 ```bash
-# 1. Build all three Pi role ISOs into the git-ignored work dir (root: cross-emerge
-#    merges into the sysroot + writes host caches — fakeroot is not sufficient)
-sudo ./scripts/build-all-roles.sh -j "$(nproc)"
+# 0. Build-host prerequisites (one-time). RPi5 cross-toolchain + ISO tooling:
+sudo emerge -an dev-libs/libisoburn app-arch/tar sys-apps/file net-misc/curl
+sudo crossdev --stable --target aarch64-unknown-linux-gnu
+#    x86_64 host image also needs:  sys-boot/grub sys-fs/squashfs-tools
+#    QEMU integration test also needs:  app-emulation/qemu sys-fs/dosfstools sys-fs/e2fsprogs
 
-# …or just one role
-sudo ./build-rpi5-stage4.sh --role pki
+# 1. Build the images (one bootable ISO per role)
+sudo ./scripts/build-all-roles.sh -j "$(nproc)"          # all three Pi roles: pki, backend, frontend
+sudo ./build-rpi5-stage4.sh --role pki -j "$(nproc)"     # …or just one Pi role
+sudo ./build-x86-host-stage4.sh -j "$(nproc)"            # x86_64 GPU host (native amd64 Gentoo)
 
-# 2. Build the x86_64 GPU host ISO (native amd64 Gentoo host, as root)
-sudo ./build-x86-host-stage4.sh -j "$(nproc)"
+# 2. Cluster secrets + a per-node KEYS provisioning stick (users, SSH, certs, k8s join, GitOps)
+./scripts/gen-cluster-secrets.sh                         # cluster-wide secrets (Vault + USB fallback) — once
+./scripts/gen-provision-keys.sh -r pki -o keys-pki       # also: -r backend | -r frontend | -r host
+sudo ./scripts/make-keys-usb.sh /dev/sdY keys-pki        # FAT32 stick labelled KEYS (one per node)
 
-# 3. Generate a filled-in KEYS directory (SSH keypair + hashed passwords)
-./scripts/gen-provision-keys.sh -r pki -o keys-pki      # -r backend|frontend too
-
-# 4. Write the KEYS provisioning stick (FAT32, label KEYS)
-sudo ./scripts/make-keys-usb.sh /dev/sdX keys-pki
-
-# 5. Write the OS image to an SD card / NVMe (Pi)
+# 3. Flash the OS to each node's SD/NVMe (boot a Linux live env, mount the role's ISO)
 sudo mount -o loop rpi5-stage4-build/gentoo-rpi5-arm64-pki-k8s-*.iso /mnt/iso
-sudo /mnt/iso/install.sh /dev/sdX           # or /dev/nvme0n1
+sudo /mnt/iso/install.sh /dev/sdX                        # SD card, or /dev/nvme0n1
+sudo umount /mnt/iso
+#    x86 host: boot the gentoo-x86-*.iso live image, then run  install-x86.sh /dev/sdX  from it.
 
-# 6. Boot the Pi with the KEYS stick inserted — it self-provisions.
+# 4. Boot each node with its KEYS stick inserted — first boot self-provisions.
 
-# 7. Integration-test an image under QEMU (root)
+# 5. (optional) Integration-test an image under QEMU before flashing (root)
 sudo ./tests/qemu/run-qemu-test.sh --role pki
 ```
 
-The x86_64 ISO is self-booting; boot it on the desktop and run
-`install-x86.sh /dev/sdX` (UEFI + BIOS GRUB) from its live environment.
+## Generate the cluster
+
+Boot the **pki** node first — it is the Kubernetes control plane. If its KEYS
+manifest sets `snapdragon.gitops.enabled=true`, `keys-provision` runs `kubeadm init`
+and the GitOps bootstrap automatically; otherwise run the bootstrap by hand on the
+pki node:
+
+```bash
+# On the pki node, after kubeadm init:
+export KUBECONFIG=/etc/kubernetes/admin.conf
+sudo -E /var/lib/snapdragon/cluster/bootstrap/bootstrap.sh   # installs ArgoCD + the root app-of-apps
+
+# Backend / frontend / x86-host nodes join automatically at first boot (the kubeadm
+# join token rides on their KEYS stick) — or run  kubeadm join <pki>:6443 …  manually.
+
+# Watch ArgoCD converge the platform (Calico, Vault+ESO, Casdoor, Cassandra, the three
+# gateways behind ingress-nginx, Akkoma, tuwunel, Forgejo, the Spring APIs, the
+# frontends, snapdragon.games):
+kubectl -n devops get applications
+kubectl get pods -A
+# ArgoCD admin password:
+kubectl -n devops get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+```
 
 ## USB KEYS provisioning
 
@@ -112,9 +139,10 @@ you are never locked out. Full schema + examples: [`keys-template/`](keys-templa
 The cluster manifests live in [`specs/cluster/`](specs/cluster/) and are baked
 into every image at `/var/lib/snapdragon/cluster`. The pki node installs ArgoCD
 and a root app-of-apps; ArgoCD syncs the `snapdragon-gateway` Helm chart (one
-release per namespace), Casdoor, Cassandra, Matrix, Mastodon, the Spring APIs,
-the Angular frontend, the social-ui and snapdragon.games. See
-[`specs/cluster/README.md`](specs/cluster/README.md).
+release per namespace, fronted by an **ingress-nginx** facade on the backend node),
+Casdoor, Cassandra, **Akkoma** (fediverse) + **tuwunel** (Matrix), **Forgejo**
+(in-cluster git on pki), the Spring APIs, the Angular frontend, the social-ui and
+snapdragon.games. See [`specs/cluster/README.md`](specs/cluster/README.md).
 
 ## Secrets (Vault + USB)
 
