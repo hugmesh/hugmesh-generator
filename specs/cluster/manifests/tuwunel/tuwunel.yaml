@@ -50,7 +50,7 @@ spec:
         snapdragon.systems/backend: "true"
       containers:
         - name: tuwunel
-          image: ghcr.io/matrix-construct/tuwunel:latest   # ⚠️ pin a real tag
+          image: ghcr.io/matrix-construct/tuwunel:v1.7.0
           ports:
             - { name: http, containerPort: 8008 }
           env:

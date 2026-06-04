@@ -20,7 +20,7 @@ spec:
         snapdragon.systems/pki: "true"
       containers:
         - name: casdoor
-          image: casbin/casdoor-all-in-one:latest
+          image: casbin/casdoor-all-in-one:3.80.0
           ports:
             - { name: http, containerPort: 8000 }
           env:
