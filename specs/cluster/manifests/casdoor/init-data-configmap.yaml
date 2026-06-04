@@ -1,0 +1,53 @@
+# Casdoor declarative seed (init_data.json) — the per-app SERVICE-IDENTITY
+# structure: one organization, the platform roles, and a machine user per
+# app/UI/API. Mounted read-only into Casdoor at /init_data.json; Casdoor imports
+# it on boot (idempotent — only missing objects are created).
+#
+# IMPORTANT: this file declares ONLY non-secret structure (orgs, roles, users).
+# NO client-secrets / passwords are committed here — the OAuth2 applications and
+# their secrets are created/injected by the casdoor-init Job from the ESO
+# Secret "casdoor-app-secrets" (sourced from Vault). The Casdoor roles map 1:1
+# to the SELinux roles in docs/SECURITY.md (ROLE_GATEWAY/ROLE_API/ROLE_ADMIN_API
+# /ROLE_AUTH), so a workload's container_t MCS identity and its Casdoor identity
+# line up.
+#
+# NOTE: the init_data.json object schema is Casdoor-version-specific. Validate
+# against the deployed casbin/casdoor-all-in-one before relying on auto-import.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: casdoor-init-data
+  namespace: snapdragon-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+data:
+  init_data.json: |
+    {
+      "organizations": [
+        {
+          "owner": "admin",
+          "name": "snapdragon",
+          "displayName": "Snapdragon Systems",
+          "websiteUrl": "https://snapdragon.systems",
+          "passwordType": "plain",
+          "languages": ["en"],
+          "enableSoftDeletion": false,
+          "isProfilePublic": false
+        }
+      ],
+      "roles": [
+        { "owner": "snapdragon", "name": "ROLE_ADMIN",     "displayName": "Platform Admin",  "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_GATEWAY",   "displayName": "Gateway service", "users": ["snapdragon/svc-pki-gateway","snapdragon/svc-be-gateway","snapdragon/svc-fe-gateway"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_AUTH",      "displayName": "Auth service",    "users": ["snapdragon/svc-auth"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_API",       "displayName": "API service",     "users": ["snapdragon/svc-api"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_ADMIN_API", "displayName": "Admin API",       "users": ["snapdragon/svc-admin-bff"], "roles": [], "domains": [], "isEnabled": true }
+      ],
+      "users": [
+        { "owner": "snapdragon", "name": "svc-pki-gateway", "displayName": "svc-pki-gateway", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "snapdragon", "name": "svc-be-gateway",  "displayName": "svc-be-gateway",  "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "snapdragon", "name": "svc-fe-gateway",  "displayName": "svc-fe-gateway",  "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "snapdragon", "name": "svc-auth",        "displayName": "svc-auth",        "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "snapdragon", "name": "svc-api",         "displayName": "svc-api",         "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "snapdragon", "name": "svc-admin-bff",   "displayName": "svc-admin-bff",   "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false }
+      ]
+    }

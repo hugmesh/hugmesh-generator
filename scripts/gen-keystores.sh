@@ -14,10 +14,19 @@
 #   keystores/<svc>.keystore.jks   per-service identity keystore (key + cert chain)
 #   keystores/truststore.jks       trust store (cluster CA) — JKS
 #   keystores/truststore.p12       trust store — PKCS12 (for non-keytool consumers)
-#   keystores/passwords.json       Vault-managed store passwords (pushed by gen-cluster-secrets.sh)
+#   keystores/passwords.json       store passwords (offline/USB fallback)
 #
-# Vault-managed: gen-cluster-secrets.sh reads keystores/ + passwords.json and
-# pushes them to Vault (KV); External Secrets syncs them into the namespaces.
+# Two cert paths exist:
+#   • OFFLINE / USB (this script): the cluster CA (cluster-ca.crt is the trust
+#     anchor that goes on every KEYS stick) + per-service fallback keystores.
+#     keys-provision installs the truststore into each node's JRE from the USB.
+#   • IN-CLUSTER (preferred): Vault PKI imports THIS cluster CA (provisioned to
+#     the vault ns as the "cluster-ca" Secret from the pki USB) and issues a
+#     short-lived cert per app; External Secrets Operator syncs each into a
+#     <app>-mtls TLS Secret and the workload assembles its JKS/PKCS12 keystore
+#     at startup. See specs/cluster/manifests/vault-pki + .../external-secrets.
+# Because the in-cluster certs chain to this same cluster CA, the offline
+# truststore validates them. The CA private key never leaves the pki USB / Vault.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

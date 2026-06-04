@@ -5,3 +5,7 @@ kind: Kustomization
 # installed via Helm (apps/03-external-secrets.yaml).
 resources:
   - secretstore.yaml
+  # Per-app mTLS certs issued by Vault PKI (pki_int/issue/<app>) and synced into
+  # kubernetes.io/tls Secrets <app>-mtls. Requires the Vault PKI engine (set up
+  # by apps/06-vault-pki.yaml) + a per-namespace vault-token Secret.
+  - pki-externalsecrets.yaml

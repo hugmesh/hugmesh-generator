@@ -1,0 +1,79 @@
+# Vault PKI bootstrap script. Run by the vault-pki-init Job (hashicorp/vault
+# image → the `vault` CLI is on PATH). Idempotent: safe to re-run / re-sync under
+# ArgoCD. Enables an intermediate PKI engine chained to the SAME cluster CA that
+# gen-keystores.sh produced (certs/cluster-ca.{crt,key}) — so certs Vault issues
+# validate against the existing truststore (kube-system/snapdragon-truststore +
+# the per-service truststores), and creates one issuing role per Java app.
+#
+# The cluster CA cert+key are mounted at /ca (tls.crt/tls.key) from the k8s
+# Secret "cluster-ca" in the vault namespace, provisioned OFFLINE by
+# keys-provision from the USB KEYS stick (certs/cluster-ca.*). The CA key NEVER
+# lives in git — only on the pki USB and inside Vault after this import.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-pki-init
+  namespace: vault
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: secrets }
+data:
+  init-pki.sh: |
+    #!/bin/sh
+    set -eu
+    export VAULT_ADDR="${VAULT_ADDR:-http://vault.vault.svc.cluster.local:8200}"
+    export VAULT_TOKEN="${VAULT_TOKEN:-root}"   # dev-mode root; prod uses a scoped token
+    DOMAIN="${CLUSTER_DOMAIN:-snapdragon.systems}"
+    PKI="pki_int"
+
+    echo "==> waiting for Vault at ${VAULT_ADDR}"
+    i=0
+    until vault status >/dev/null 2>&1 || [ $? -eq 2 ]; do   # rc 2 = sealed-but-up
+      i=$((i+1)); [ "$i" -gt 60 ] && { echo "vault not reachable"; exit 1; }
+      sleep 3
+    done
+
+    # 1) Enable the intermediate PKI engine (idempotent).
+    if ! vault secrets list -format=json | grep -q "\"${PKI}/\""; then
+      echo "==> enabling ${PKI} (max-lease-ttl 5y)"
+      vault secrets enable -path="${PKI}" -max-lease-ttl=43800h pki
+    else
+      echo "==> ${PKI} already enabled"
+    fi
+
+    # 2) Configure ${PKI}'s signing CA (idempotent — skip if already set).
+    #    PROD: import the cluster CA (cert+key) so issued certs chain to the
+    #    trust anchor already in the truststores. DEV: if no cluster CA Secret is
+    #    mounted, self-generate an internal root so issuance works out of the box
+    #    (ESO publishes ca.crt from issuing_ca, so peers still trust each other).
+    if vault read "${PKI}/cert/ca" >/dev/null 2>&1 \
+       && [ -n "$(vault read -field=certificate "${PKI}/cert/ca" 2>/dev/null)" ]; then
+      echo "==> ${PKI} CA already configured"
+    elif [ -s /ca/tls.crt ] && [ -s /ca/tls.key ]; then
+      echo "==> importing cluster CA into ${PKI} (chains to the existing truststore)"
+      cat /ca/tls.key /ca/tls.crt > /tmp/ca-bundle.pem
+      vault write "${PKI}/config/ca" pem_bundle=@/tmp/ca-bundle.pem
+      rm -f /tmp/ca-bundle.pem
+    else
+      echo "WARN: no 'cluster-ca' Secret mounted — self-generating an internal ${PKI} root (DEV)." >&2
+      echo "      For production, provision the cluster CA from the USB KEYS stick so issued" >&2
+      echo "      certs chain to the same anchor as the offline gen-keystores.sh truststore." >&2
+      vault write "${PKI}/root/generate/internal" \
+        common_name="${BRAND:-snapdragon} Vault Intermediate CA" ttl=43800h key_type=rsa key_bits=2048 >/dev/null
+    fi
+
+    vault write "${PKI}/config/urls" \
+      issuing_certificates="${VAULT_ADDR}/v1/${PKI}/ca" \
+      crl_distribution_points="${VAULT_ADDR}/v1/${PKI}/crl"
+
+    # 3) One issuing role per Java machine-user (matches gen-keystores.sh
+    #    SERVICES + docs/SECURITY.md identity matrix). serverAuth+clientAuth for
+    #    cross-namespace mTLS. Names mirror <svc>.<ns>.svc.cluster.local.
+    for app in snapdragon-pki-gateway snapdragon-be-gateway snapdragon-fe-gateway \
+               snapdragon-auth snapdragon-api snapdragon-admin-bff; do
+      echo "==> role ${PKI}/roles/${app}"
+      vault write "${PKI}/roles/${app}" \
+        allowed_domains="${app},${app}.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
+        allow_subdomains=true allow_glob_domains=true allow_bare_domains=true \
+        allow_localhost=false server_flag=true client_flag=true \
+        key_type=rsa key_bits=2048 max_ttl=2160h ttl=720h
+    done
+    echo "==> Vault PKI bootstrap complete"
