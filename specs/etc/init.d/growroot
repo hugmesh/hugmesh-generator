@@ -1,0 +1,88 @@
+#!/sbin/openrc-run
+# growroot — first boot: expand the root partition + ext4 filesystem to fill the
+# whole disk. The images are flashed compact (stage4 + headroom); this reclaims
+# the rest of the SD card / SSD / USB / NVMe so the node runs read-write on the
+# full medium. Strictly NON-FATAL and idempotent: any failure is logged and the
+# boot continues; a done-marker stops it re-running. Ordered before keys-provision
+# so first-boot provisioning sees the full disk.
+
+description="Expand the root filesystem to fill the disk (first boot)"
+
+done_marker="/var/lib/growroot.done"
+
+depend() {
+    after  localmount
+    before keys-provision
+    keyword -docker -lxc -prefix -vserver
+}
+
+start() {
+    if [ -f "${done_marker}" ]; then
+        einfo "growroot: already expanded; nothing to do"
+        return 0
+    fi
+    ebegin "Expanding the root filesystem to fill the disk"
+
+    local src dev name pn disk
+    src="$(findmnt -fno SOURCE / 2>/dev/null)"
+    case "${src}" in
+        /dev/*) dev="${src}" ;;
+        *) ewarn "growroot: root '${src:-unknown}' is not a plain block device; skipping"
+           touch "${done_marker}"; eend 0; return 0 ;;
+    esac
+
+    name="${dev##*/}"
+    if [ ! -r "/sys/class/block/${name}/partition" ]; then
+        ewarn "growroot: ${dev} is not a partition; skipping"
+        touch "${done_marker}"; eend 0; return 0
+    fi
+    pn="$(cat "/sys/class/block/${name}/partition" 2>/dev/null)"
+    disk="/dev/$(lsblk -ndo PKNAME "${dev}" 2>/dev/null)"
+    if [ ! -b "${disk}" ] || [ -z "${pn}" ]; then
+        ewarn "growroot: could not resolve parent disk of ${dev}; skipping"
+        touch "${done_marker}"; eend 0; return 0
+    fi
+
+    # Grow the (last) partition to the end of the disk. sfdisk rewrites the table
+    # and, on GPT, relocates the backup header to the new end-of-disk; partx -u
+    # then syncs the kernel's view without a reboot (the disk is busy/mounted).
+    if command -v sfdisk >/dev/null 2>&1; then
+        if echo ', +' | sfdisk --force --no-reread -N "${pn}" "${disk}" >/dev/null 2>&1; then
+            partx -u "${disk}" >/dev/null 2>&1 || partprobe "${disk}" >/dev/null 2>&1 || true
+        else
+            ewarn "growroot: partition grow skipped (no free space, or sfdisk error)"
+        fi
+    else
+        ewarn "growroot: sfdisk not found; only resizing within the current partition"
+    fi
+
+    # Online-grow the mounted ext4 root into the (now larger) partition.
+    resize2fs "${dev}" >/dev/null 2>&1 || ewarn "growroot: resize2fs reported an error"
+
+    # Only mark the job done once the root partition actually reaches (within 64 MiB
+    # of) the end of the disk — i.e. the medium was already full, or we just grew it.
+    # If a transient sfdisk/partx error left a large unused tail, leave the marker
+    # OFF so the next boot retries; cap attempts so a permanent quirk can't loop
+    # forever. Either way the boot continues (eend 0). All sizes are 512-byte sectors.
+    local disk_sz pstart psz free_sec attempts=0
+    [ -r /var/lib/growroot.attempts ] && attempts="$(cat /var/lib/growroot.attempts 2>/dev/null || echo 0)"
+    disk_sz="$(cat "/sys/class/block/${disk##*/}/size" 2>/dev/null || echo 0)"
+    pstart="$(cat "/sys/class/block/${name}/start" 2>/dev/null || echo 0)"
+    psz="$(cat "/sys/class/block/${name}/size"  2>/dev/null || echo 0)"
+    free_sec=$(( disk_sz - pstart - psz ))
+
+    if [ "${disk_sz}" -gt 0 ] && [ "${free_sec}" -le 131072 ]; then
+        rm -f /var/lib/growroot.attempts
+        touch "${done_marker}"
+        einfo "growroot: root filesystem now fills the disk"
+    else
+        attempts=$(( attempts + 1 ))
+        echo "${attempts}" > /var/lib/growroot.attempts
+        ewarn "growroot: ${free_sec} sectors still unused after the root partition (attempt ${attempts}); will retry next boot"
+        if [ "${attempts}" -ge 5 ]; then
+            ewarn "growroot: giving up after ${attempts} attempts — grow manually: sfdisk -N ${pn} ${disk} then resize2fs ${dev}"
+            touch "${done_marker}"
+        fi
+    fi
+    eend 0   # never block the boot
+}
