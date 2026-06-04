@@ -8,9 +8,13 @@
 # The bundled install.sh (inside the ISO) also requires root on the target.
 set -euo pipefail
 
-# ── Resolve SCRIPT_DIR (where specs/ lives) ────────────────────────
+# ── Resolve SCRIPT_DIR (where the spec trees live) ─────────────────
+# Mirrors the x86 host builder's split: SPECS_DIR holds the aarch64/RPi5-specific
+# specs (portage, boot, kernel, installer, fstab), SHARED_SPECS holds the
+# arch-agnostic specs shared with the x86 build (etc/, cluster/, usr/).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SPECS_DIR="${SCRIPT_DIR}/specs"
+SPECS_DIR="${SCRIPT_DIR}/specs-rpi5"     # aarch64/RPi5-specific specs
+SHARED_SPECS="${SCRIPT_DIR}/specs"       # arch-agnostic specs (etc/, cluster/, usr/)
 
 # ── Defaults ───────────────────────────────────────────────────────
 WORK_DIR=""
@@ -82,11 +86,13 @@ DESCRIPTION
     written under the work directory.  The bundled install.sh inside the
     ISO also requires root on the machine that writes the image.
 
-    All configuration is stored in individual spec files under the
-    specs/ directory next to this script.  Edit them before building
-    to customise the image without touching the build script itself.
+    Configuration lives in two spec trees next to this script, mirroring
+    the x86 host builder's layout: specs-rpi5/ holds the aarch64/RPi5-
+    specific specs and specs/ holds the arch-agnostic specs shared with
+    the x86 build.  Edit them before building to customise the image
+    without touching the build script itself.
 
-    specs/
+    specs-rpi5/                     aarch64/RPi5-specific (this build only)
     ├── portage/                    Portage configuration
     │   ├── make.conf.tmpl              Main portage config (templated)
     │   ├── packages.list               Stage4 package list
@@ -107,7 +113,14 @@ DESCRIPTION
     │   ├── config.txt.tmpl             RPi boot config (templated)
     │   └── cmdline.txt                 Kernel command line
     ├── etc/
-    │   ├── fstab                       Filesystem table
+    │   └── fstab                       Filesystem table (RPi /boot firmware)
+    ├── kernel/
+    │   └── hardened-k8s.config         Kernel config fragment
+    └── installer/
+        └── install.sh                  SD/NVMe installer (ships in ISO)
+
+    specs/                          arch-agnostic (shared with the x86 build)
+    ├── etc/
     │   ├── modules-load.d/
     │   │   └── kubernetes.conf         K8s kernel modules
     │   ├── sysctl.d/
@@ -132,10 +145,9 @@ DESCRIPTION
     │   │   └── hardened.conf           Hardened SSH config
     │   └── local.d/
     │       └── 01-firstboot.start.tmpl First-boot finaliser (templated)
-    ├── kernel/
-    │   └── hardened-k8s.config         Kernel config fragment
-    └── installer/
-        └── install.sh                  SD/NVMe installer (ships in ISO)
+    ├── usr/local/sbin/
+    │   └── snapdragon-backup           etcd + PostgreSQL backup engine
+    └── cluster/                    ArgoCD app-of-apps + GitOps payload
 
 OPTIONS
   Directories
@@ -145,8 +157,10 @@ OPTIONS
         the current working directory).
 
     -s, --specs-dir DIR
-        Path to the specs/ directory.  Default: specs/ next to
-        this script.  Use this to point at a customised copy.
+        Path to the aarch64/RPi5-specific specs directory.  Default:
+        specs-rpi5/ next to this script.  Use this to point at a
+        customised copy.  (The arch-agnostic specs/ tree is always read
+        from next to this script.)
 
   Toolchain
     -t, --target TUPLE
@@ -217,7 +231,7 @@ OPTIONS
     -p, --extra-packages "PKG1 PKG2 ..."
         Space-separated list of additional Gentoo packages to
         cross-emerge into the stage4 image.  These are appended
-        to specs/portage/packages.list at build time.
+        to specs-rpi5/portage/packages.list at build time.
 
   Mesh VPN (headscale + tailscale)
         Headscale (the self-hosted Tailscale control server) and the
@@ -266,8 +280,8 @@ EXAMPLES
     # Specify a work directory on a fast NVMe scratch disk
     ./build-rpi5-stage4.sh -w /mnt/nvme/rpi-build
 
-    # Use a customised specs directory
-    ./build-rpi5-stage4.sh -s ~/my-rpi5-specs
+    # Use a customised RPi5-specific specs directory
+    ./build-rpi5-stage4.sh -s ~/my-specs-rpi5
 
     # Use 8 jobs, set hostname, add packages, force PCIe Gen 3
     ./build-rpi5-stage4.sh \
@@ -294,7 +308,7 @@ EXAMPLES
     # Full production build with all options
     ./build-rpi5-stage4.sh \
         -w /var/tmp/rpi5-build \
-        -s ./specs \
+        -s ./specs-rpi5 \
         -t aarch64-unknown-linux-gnu \
         -j 16 \
         -c cortex-a76 \
@@ -331,10 +345,12 @@ NOTES
     All host tools (xorrisofs, curl, tar, file, etc.) must be
     present in PATH.
 
-    All configuration lives in the specs/ directory.  Copy it,
-    edit the files you need, and pass --specs-dir to use your
-    version.  Files ending in .tmpl contain @@VARIABLE@@ markers
-    that are replaced at build time.  Plain files are copied as-is.
+    Configuration lives in two trees: specs-rpi5/ (aarch64/RPi5-
+    specific) and specs/ (arch-agnostic, shared with the x86 build).
+    Copy specs-rpi5/, edit the files you need, and pass --specs-dir to
+    use your version.  Files ending in .tmpl contain @@VARIABLE@@
+    markers that are replaced at build time.  Plain files are copied
+    as-is.
 
     The bundled install.sh inside the ISO requires root privileges
     to partition, format, and mount block devices.
@@ -488,13 +504,19 @@ rebrand_sysroot() {
 # ── 0. Verify prerequisites ───────────────────────────────────────
 banner "Verifying prerequisites"
 
-# Check specs directory
+# Check spec directories (arch-specific + shared)
 if [ ! -d "${SPECS_DIR}" ]; then
-    err "Specs directory not found: ${SPECS_DIR}"
+    err "RPi5 specs directory not found: ${SPECS_DIR}"
     err "Expected to find it next to this script, or pass --specs-dir."
     exit 1
 fi
-info "Specs directory: ${SPECS_DIR}"
+if [ ! -d "${SHARED_SPECS}" ]; then
+    err "Shared specs directory not found: ${SHARED_SPECS}"
+    err "Expected to find specs/ next to this script."
+    exit 1
+fi
+info "RPi5 specs:   ${SPECS_DIR}"
+info "Shared specs: ${SHARED_SPECS}"
 
 # Check toolchain
 for tool in "${CROSS_TARGET}-gcc" "${CROSS_TARGET}-strip" curl tar file; do
@@ -614,54 +636,56 @@ mkdir -p "${SYSROOT}/boot"
 rm -f "${SYSROOT}/boot/config.txt" "${SYSROOT}/boot/cmdline.txt"
 
 # /etc config files
+# fstab is RPi-specific (mounts the /boot firmware partition) -> SPECS_DIR.
 cp "${SPECS_DIR}/etc/fstab"                               "${SYSROOT}/etc/fstab"
 
+# Everything below is arch-agnostic and shared with the x86 build -> SHARED_SPECS.
 mkdir -p "${SYSROOT}/etc/modules-load.d"
-cp "${SPECS_DIR}/etc/modules-load.d/kubernetes.conf"      "${SYSROOT}/etc/modules-load.d/kubernetes.conf"
+cp "${SHARED_SPECS}/etc/modules-load.d/kubernetes.conf"   "${SYSROOT}/etc/modules-load.d/kubernetes.conf"
 
 mkdir -p "${SYSROOT}/etc/sysctl.d"
-cp "${SPECS_DIR}/etc/sysctl.d/10-hardened.conf"           "${SYSROOT}/etc/sysctl.d/10-hardened.conf"
-cp "${SPECS_DIR}/etc/sysctl.d/99-kubernetes.conf"         "${SYSROOT}/etc/sysctl.d/99-kubernetes.conf"
+cp "${SHARED_SPECS}/etc/sysctl.d/10-hardened.conf"        "${SYSROOT}/etc/sysctl.d/10-hardened.conf"
+cp "${SHARED_SPECS}/etc/sysctl.d/99-kubernetes.conf"      "${SYSROOT}/etc/sysctl.d/99-kubernetes.conf"
 
 mkdir -p "${SYSROOT}/etc/containerd"
-cp "${SPECS_DIR}/etc/containerd/config.toml"              "${SYSROOT}/etc/containerd/config.toml"
+cp "${SHARED_SPECS}/etc/containerd/config.toml"           "${SYSROOT}/etc/containerd/config.toml"
 
 mkdir -p "${SYSROOT}/var/lib/kubelet"
-cp "${SPECS_DIR}/etc/kubernetes/kubelet-config.yaml"      "${SYSROOT}/var/lib/kubelet/config.yaml"
+cp "${SHARED_SPECS}/etc/kubernetes/kubelet-config.yaml"   "${SYSROOT}/var/lib/kubelet/config.yaml"
 
 mkdir -p "${SYSROOT}/etc/kubernetes"
-cp "${SPECS_DIR}/etc/kubernetes/kubeadm-config.yaml"      "${SYSROOT}/etc/kubernetes/kubeadm-config.yaml"
+cp "${SHARED_SPECS}/etc/kubernetes/kubeadm-config.yaml"   "${SYSROOT}/etc/kubernetes/kubeadm-config.yaml"
 
 mkdir -p "${SYSROOT}/etc/init.d"
 for svc in containerd kubelet headscale tailscaled keys-provision; do
-    cp "${SPECS_DIR}/etc/init.d/${svc}" "${SYSROOT}/etc/init.d/${svc}"
+    cp "${SHARED_SPECS}/etc/init.d/${svc}" "${SYSROOT}/etc/init.d/${svc}"
     chmod +x "${SYSROOT}/etc/init.d/${svc}"
 done
 
 # Headscale default config (overridable from the USB KEYS partition)
 mkdir -p "${SYSROOT}/etc/headscale"
-cp "${SPECS_DIR}/etc/headscale/config.yaml"               "${SYSROOT}/etc/headscale/config.yaml"
+cp "${SHARED_SPECS}/etc/headscale/config.yaml"            "${SYSROOT}/etc/headscale/config.yaml"
 
 # KEYS-USB provisioning engine
 mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/var/lib/keys-provision"
-cp "${SPECS_DIR}/etc/keys-provision/provision.sh"         "${SYSROOT}/usr/sbin/keys-provision"
+cp "${SHARED_SPECS}/etc/keys-provision/provision.sh"      "${SYSROOT}/usr/sbin/keys-provision"
 chmod +x "${SYSROOT}/usr/sbin/keys-provision"
 
 # Backup engine (etcd + PostgreSQL -> attached storage / network share)
 mkdir -p "${SYSROOT}/usr/local/sbin"
-cp "${SPECS_DIR}/usr/local/sbin/snapdragon-backup"        "${SYSROOT}/usr/local/sbin/snapdragon-backup"
+cp "${SHARED_SPECS}/usr/local/sbin/snapdragon-backup"     "${SYSROOT}/usr/local/sbin/snapdragon-backup"
 chmod +x "${SYSROOT}/usr/local/sbin/snapdragon-backup"
 
 mkdir -p "${SYSROOT}/etc/ssh/sshd_config.d"
-cp "${SPECS_DIR}/etc/ssh/sshd_config.d/hardened.conf"     "${SYSROOT}/etc/ssh/sshd_config.d/hardened.conf"
+cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf"  "${SYSROOT}/etc/ssh/sshd_config.d/hardened.conf"
 
 # ── Cluster GitOps payload + node role marker ─────────────────────
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
-if [ -d "${SPECS_DIR}/cluster" ]; then
+if [ -d "${SHARED_SPECS}/cluster" ]; then
     mkdir -p "${SYSROOT}/var/lib/snapdragon"
-    cp -r "${SPECS_DIR}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
+    cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
     info "Installed cluster GitOps payload (role=${ROLE})"
 fi
 
@@ -669,7 +693,7 @@ fi
 rebrand_sysroot
 
 mkdir -p "${SYSROOT}/etc/local.d"
-render_template "${SPECS_DIR}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
+render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
 
 # Hostname, timezone, locale
@@ -984,7 +1008,7 @@ echo "==============================================${RESET}"
 echo ""
 echo "  Board:            Raspberry Pi 5 (${RPI_DTB_PREFIX} / ${RPI_CPU})"
 echo "  Profile:          ${PROFILE_PATH}"
-echo "  Kernel:           ${RPI_DEFCONFIG} + specs/kernel/hardened-k8s.config"
+echo "  Kernel:           ${RPI_DEFCONFIG} + specs-rpi5/kernel/hardened-k8s.config"
 echo "  Role:             ${ROLE}   (cluster domain: ${CLUSTER_DOMAIN})"
 echo "  Brand:            ${BRAND} / \"${BRAND_TITLE}\" / ${ORG}${CONFIG_FILE:+   (profile: ${CONFIG_FILE})}"
 echo "  Hostname:         ${HOSTNAME}"
@@ -1027,7 +1051,8 @@ echo "  Default credentials:"
 echo "    root:${ROOT_PASS}   ${DEFAULT_USER}:${DEFAULT_USER_PASS}"
 echo ""
 echo "  Spec files used:"
-echo "    ${SPECS_DIR}/"
+echo "    ${SPECS_DIR}/   (aarch64/RPi5-specific)"
+echo "    ${SHARED_SPECS}/   (arch-agnostic, shared with x86)"
 echo ""
 echo "  === Post-install ==="
 echo "  1. Boot RPi 5, change all default passwords"

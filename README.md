@@ -231,18 +231,27 @@ for the full man-style reference. Highlights:
 
 ## Spec files
 
+The specs are split by architecture, mirroring the same pattern for both
+builders: `specs-rpi5/` (aarch64/RPi5-specific) and `specs-x86/` (amd64-specific)
+each hold that arch's portage/kernel/boot/installer specs, while `specs/` holds
+the **arch-agnostic** specs both builds share (the `etc/` services, the KEYS
+provisioning engine, the backup engine, and the `cluster/` GitOps payload).
+
 | Path | Purpose |
 |---|---|
-| `specs/portage/*` | Portage config (make.conf, packages, profile, keywords, USE) |
-| `specs/kernel/hardened-k8s.config` | RPi kernel fragment (hardened + k8s + USB/VFAT + virtio) |
-| `specs/etc/keys-provision/provision.sh` | USB KEYS provisioning engine |
-| `specs/etc/init.d/{containerd,kubelet,headscale,tailscaled,keys-provision}` | OpenRC services |
-| `specs/etc/headscale/config.yaml` | Default headscale config |
-| `specs/etc/kubernetes/*`, `specs/etc/containerd/config.toml` | k8s + CRI config |
-| `specs/etc/local.d/01-firstboot.start.tmpl` | First-boot finaliser (fallback user) |
-| `specs/usr/local/sbin/snapdragon-backup` | etcd + PostgreSQL backup engine |
-| `specs/cluster/**` | ArgoCD app-of-apps, gateway Helm chart, manifests, bootstrap |
-| `specs-x86/**` | x86_64 host portage/kernel/installer specs |
+| `specs-rpi5/portage/*` | RPi5 portage config (make.conf, packages, profile, keywords, USE) |
+| `specs-rpi5/kernel/hardened-k8s.config` | RPi kernel fragment (hardened + k8s + USB/VFAT + virtio) |
+| `specs-rpi5/boot/{config.txt.tmpl,cmdline.txt}` | RPi firmware boot config + kernel command line |
+| `specs-rpi5/etc/fstab` | RPi filesystem table (mounts the `/boot` firmware partition) |
+| `specs-rpi5/installer/install.sh` | SD/NVMe installer (ships in the RPi5 ISO) |
+| `specs-x86/**` | amd64 host portage/kernel/installer/grub specs |
+| `specs/etc/keys-provision/provision.sh` | USB KEYS provisioning engine (shared) |
+| `specs/etc/init.d/{containerd,kubelet,headscale,tailscaled,keys-provision}` | OpenRC services (shared) |
+| `specs/etc/headscale/config.yaml` | Default headscale config (shared) |
+| `specs/etc/kubernetes/*`, `specs/etc/containerd/config.toml` | k8s + CRI config (shared) |
+| `specs/etc/local.d/01-firstboot.start.tmpl` | First-boot finaliser (fallback user, shared) |
+| `specs/usr/local/sbin/snapdragon-backup` | etcd + PostgreSQL backup engine (shared) |
+| `specs/cluster/**` | ArgoCD app-of-apps, gateway Helm chart, manifests, bootstrap (shared) |
 | `keys-template/**` | The KEYS USB template + schema docs |
 
 ## Repositories

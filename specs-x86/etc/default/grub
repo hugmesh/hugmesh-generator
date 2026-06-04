@@ -1,7 +1,7 @@
 # GRUB defaults for the installed x86_64 host image.
 #
 # Mirrors the SELinux + KSPP hardening kernel parameters that the RPi5 image
-# bakes into specs/boot/cmdline.txt, so both architectures boot with the same
+# bakes into specs-rpi5/boot/cmdline.txt, so both architectures boot with the same
 # LSM, audit and slab/ASLR hardening. The installer's grub-mkconfig reads this.
 # (root= and console= are derived by grub-mkconfig, so they're not set here.)
 GRUB_TIMEOUT=5
