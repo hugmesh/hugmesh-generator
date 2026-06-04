@@ -6,7 +6,9 @@
 # objects (see the snapdragon-gateway chart). It makes NO routing/authz decisions
 # of its own — the be-gateway remains the routing authority (admin-ui/BFF + the
 # gateway routing tables). pki/frontend nodes stay off the public path; the pki
-# gateway is reached only internally (node-internal-IP:443 DNAT, VPN/LAN).
+# gateway is served only by a separate INTERNAL ingress-nginx on the pki node
+# (11-ingress-nginx-internal.yaml), reachable on the pki node's :443 via the
+# scale.<domain> -> pki-node-IP /etc/hosts alias (VPN/LAN only).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -34,10 +36,14 @@ spec:
           nodeSelector:
             snapdragon.systems/backend: "true"
           # arm64 + amd64 nodes both run here; the image is multi-arch.
+          # Two ingress-nginx instances coexist (public here; internal on pki):
+          # each needs a distinct class name, controllerValue, and election ID.
+          electionID: ingress-nginx-public-leader
           ingressClassResource:
             name: nginx
             enabled: true
             default: true
+            controllerValue: "k8s.io/ingress-nginx"
           ingressClass: nginx
           # hostNetwork edge: no cloud LB / NodePort Service needed.
           service:

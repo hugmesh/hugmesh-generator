@@ -16,14 +16,15 @@ spec:
         instance:
           name: snapdragon-pki-gateway
         ingress:
-          # pki is NOT internet-facing: no public Ingress on the backend-node
-          # ingress-nginx facade. End-user auth (Casdoor /login,/oauth,
-          # /.well-known) reaches the pki gateway only THROUGH the backend gateway
-          # (routing tables); internal/VPN access is via the pki node's :443 ->
-          # pki gateway DNAT (scale.<domain> -> pki node internal IP).
-          enabled: false
-          className: nginx
-          host: id.snapdragon.systems
+          # pki is NOT internet-facing. Served ONLY by the internal ingress-nginx
+          # on the pki node (class nginx-internal, 11-ingress-nginx-internal.yaml),
+          # reachable on the pki node's :443 via the scale.<domain> -> pki-node-IP
+          # /etc/hosts alias (VPN/LAN only). The public backend-node ingress
+          # (class nginx) never serves this class. End-user auth still reaches
+          # casdoor THROUGH the backend gateway (routing tables, Phase 2).
+          enabled: true
+          className: nginx-internal
+          host: scale.snapdragon.systems
         nodeSelector:
           snapdragon.systems/pki: "true"
         seLinux:
