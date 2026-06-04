@@ -657,7 +657,7 @@ mkdir -p "${SYSROOT}/etc/kubernetes"
 cp "${SHARED_SPECS}/etc/kubernetes/kubeadm-config.yaml"   "${SYSROOT}/etc/kubernetes/kubeadm-config.yaml"
 
 mkdir -p "${SYSROOT}/etc/init.d"
-for svc in containerd kubelet headscale tailscaled keys-provision; do
+for svc in growroot containerd kubelet headscale tailscaled keys-provision; do
     cp "${SHARED_SPECS}/etc/init.d/${svc}" "${SYSROOT}/etc/init.d/${svc}"
     chmod +x "${SYSROOT}/etc/init.d/${svc}"
 done
@@ -711,7 +711,9 @@ mkdir -p "${SYSROOT}/etc/containerd/certs.d"
 
 # OpenRC service links
 mkdir -p "${SYSROOT}/etc/runlevels/default"
-DEFAULT_SVCS=(sshd NetworkManager cronie haveged keys-provision containerd kubelet auditd local)
+# growroot expands the root fs to fill the medium on first boot; it orders itself
+# before keys-provision so provisioning sees the full disk (no-op in containers).
+DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision containerd kubelet auditd local)
 # headscale runs on the PKI/identity node (and on a generic all-in-one image)
 if [ "${ROLE}" = "pki" ] || [ "${ROLE}" = "generic" ]; then
     DEFAULT_SVCS+=(headscale)
