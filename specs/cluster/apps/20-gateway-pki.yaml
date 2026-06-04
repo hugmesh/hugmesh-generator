@@ -15,6 +15,9 @@ spec:
       values: |
         instance:
           name: snapdragon-pki-gateway
+        # Cross-namespace mTLS client identity (Vault-PKI/ESO snapdragon-pki-gateway-mtls).
+        keystore:
+          enabled: true
         ingress:
           # pki is NOT internet-facing. Served ONLY by the internal ingress-nginx
           # on the pki node (class nginx-internal, 11-ingress-nginx-internal.yaml),

@@ -15,6 +15,11 @@ spec:
       values: |
         instance:
           name: snapdragon-be-gateway
+        # Cross-namespace mTLS client identity (Vault-PKI/ESO snapdragon-be-gateway-mtls).
+        # initContainer assembles keystore/truststore; server.ssl stays off so the
+        # http readiness probe and the ingress hand-off are unaffected.
+        keystore:
+          enabled: true
         ingress:
           enabled: true
           # Cloudflare Tunnel (manifests/cloudflared) fronts api./matrix./

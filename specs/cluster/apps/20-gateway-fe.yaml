@@ -16,6 +16,9 @@ spec:
       values: |
         instance:
           name: snapdragon-fe-gateway
+        # Cross-namespace mTLS client identity (Vault-PKI/ESO snapdragon-fe-gateway-mtls).
+        keystore:
+          enabled: true
         ingress:
           enabled: true
           # Cloudflare Tunnel (manifests/cloudflared) is the primary external

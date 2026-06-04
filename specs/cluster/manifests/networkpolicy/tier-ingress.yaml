@@ -1,0 +1,71 @@
+# Tier-level network segmentation (Phase 3). Each app namespace becomes
+# default-deny for INGRESS except from the namespaces it actually serves. This
+# blocks lateral movement (e.g. snapdragon-games or observability -> snapdragon-pki
+# Casdoor/Cassandra). Only Ingress is constrained — egress (incl. DNS) is left
+# open so nothing breaks on that axis.
+#
+# Matched by the auto-applied `kubernetes.io/metadata.name` namespace label.
+# NOTE: tier-level (namespace) granularity. Per-app / per-port tightening (e.g.
+# only the gateways+admin-bff -> route-access-db:5432) is a follow-up that needs
+# the live pod labels + on-cluster connectivity validation — which is also why
+# this set ships behind a MANUAL-sync ArgoCD app (apps/08-networkpolicy.yaml).
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tier-ingress
+  namespace: snapdragon-pki
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    # casdoor / cassandra / route-access-db / pki-gateway consumers:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-pki } }       # self (pki-gateway -> casdoor/cassandra/headscale)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }    # be-gateway + admin-bff -> route-access-db/cassandra/casdoor; headscale-forward -> pki-gateway
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }                # ArgoCD reconcile
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx-internal } }# internal facade -> pki-gateway (LAN/VPN)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tier-ingress
+  namespace: snapdragon-backend
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }    # self (be-gateway -> mastodon/matrix/api; admin-bff -> clickhouse/eureka)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }   # fe-gateway -> be-gateway (/be) + admin-bff (/bff)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }                # ArgoCD reconcile
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }         # public facade -> be-gateway
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tier-ingress
+  namespace: snapdragon-frontend
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }   # self (fe-gateway -> UIs)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }                # ArgoCD reconcile
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }         # public facade -> fe-gateway
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tier-ingress
+  namespace: snapdragon-games
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-games } }      # self
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }    # be-gateway -> games workloads
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }   # fe-gateway -> games UI
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }                # ArgoCD reconcile
