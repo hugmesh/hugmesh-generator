@@ -1,6 +1,8 @@
 # Cassandra — backs every gateway's revocation list + URL registry.
-# Lives on the pki control-plane node. NOTE: verify chart repo/version for
-# your environment (Bitnami images now require their legacy registry).
+# Lives on the pki control-plane node. Chart pinned to bitnami/cassandra 12.3.11
+# (Cassandra 5.0.5); the image is pulled from the bitnamilegacy registry because
+# Bitnami moved the free images there (the charts now default to subscription
+# images). Bump the pin deliberately, not on every sync.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -11,10 +13,19 @@ spec:
   source:
     repoURL: https://charts.bitnami.com/bitnami
     chart: cassandra
-    targetRevision: 12.x.x
+    targetRevision: 12.3.11
     helm:
       releaseName: cassandra
       values: |
+        # Bitnami's free images live under the bitnamilegacy registry now; the
+        # chart otherwise points at subscription images that won't pull. Use the
+        # legacy image matching this pinned chart (Cassandra 5.0.5).
+        global:
+          security:
+            allowInsecureImages: true
+        image:
+          registry: docker.io
+          repository: bitnamilegacy/cassandra
         replicaCount: 1
         cluster:
           name: SnapdragonGatewayCluster
