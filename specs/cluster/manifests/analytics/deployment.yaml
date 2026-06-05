@@ -17,7 +17,10 @@ spec:
   template:
     metadata: { labels: { app: clickhouse } }
     spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
+      # The analytics/telemetry warehouse runs on the x86_64 host: snapdragon-local
+      # storage (the data disks at /mnt/data + /mnt/usb) lives there, so the
+      # clickhouse-data PV is node-local to that host. (backend Pis have no big disk.)
+      nodeSelector: { kubernetes.io/arch: amd64 }
       containers:
         - name: clickhouse
           image: clickhouse/clickhouse-server:25.3-alpine
@@ -53,7 +56,9 @@ spec:
   template:
     metadata: { labels: { app: kafka } }
     spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
+      # Kafka's log dir is on snapdragon-local too — pin to the x86_64 host that
+      # holds the data disks so the kafka-data PV mounts.
+      nodeSelector: { kubernetes.io/arch: amd64 }
       containers:
         - name: kafka
           image: bitnamilegacy/kafka:3.7.1-debian-12-r9
