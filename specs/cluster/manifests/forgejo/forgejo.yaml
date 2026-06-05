@@ -25,6 +25,9 @@ spec:
         snapdragon.systems/pki: "true"
       securityContext:
         fsGroup: 1000
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c16"
       containers:
         - name: forgejo
           image: codeberg.org/forgejo/forgejo:9

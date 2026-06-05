@@ -17,6 +17,10 @@ spec:
       nodeSelector:
         kubernetes.io/arch: amd64
         snapdragon.systems/compute: gpu
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c33"
       containers:
         - name: games
           image: snapdragon-systems/snapdragon.games-backend:dev

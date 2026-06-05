@@ -28,6 +28,10 @@ spec:
     metadata: { labels: { app: casdoor-pg } }
     spec:
       nodeSelector: { snapdragon.systems/pki: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c14"
       containers:
         - name: pg
           image: postgres:16-alpine

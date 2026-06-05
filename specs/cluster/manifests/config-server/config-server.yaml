@@ -19,6 +19,10 @@ spec:
     metadata: { labels: { app.kubernetes.io/name: config-server } }
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c18"
       containers:
         - name: config-server
           image: snapdragon-systems/config-server:dev   # ⚠️ build this image

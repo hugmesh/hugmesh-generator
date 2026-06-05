@@ -25,6 +25,10 @@ spec:
     metadata: { labels: { app: route-access-db } }
     spec:
       nodeSelector: { snapdragon.systems/pki: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c15"
       containers:
         - name: postgres
           image: postgres:16-alpine

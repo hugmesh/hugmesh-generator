@@ -42,6 +42,9 @@ spec:
     spec:
       serviceAccountName: local-path-provisioner
       nodeSelector: { kubernetes.io/arch: amd64 }   # disks live on the x86 host
+      securityContext:
+        seLinuxOptions:
+          type: spc_t
       containers:
         - name: local-path-provisioner
           image: rancher/local-path-provisioner:v0.0.30

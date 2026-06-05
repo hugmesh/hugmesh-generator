@@ -1,0 +1,77 @@
+################################################################
+# otel_collector.te
+# Tight confined domain for the observability/otel-collector
+# DaemonSet, replacing spc_t. One pod per node; tails host pod
+# logs (/var/log/pods, container_log_t) and exports OTLP to
+# Uptrace + calls the in-cluster kube-apiserver (k8sattributes).
+# v1 derived from observability/deployment.yaml; INFERRED lines
+# are best-effort guesses to be confirmed/trimmed in the
+# permissive AVC pass.
+################################################################
+policy_module(otel_collector, 1.0.0)
+
+require {
+	type container_log_t;        # /var/log/pods/*  (host pod logs)
+	type container_file_t;       # kubelet-projected configMap/secret mounts
+	type container_var_lib_t;    # containerd log target of /var/log/pods symlinks (INFERRED)
+}
+
+# Per-app container domain: membership in container_domain gives the
+# base container.te self rules (caps cap_userns, process perms, self
+# file/fifo/sock, tmpfs). domain_type + mcs_constrained + container role.
+container_domain_template(otel_collector)
+
+# Make containerd/kubelet (container_runtime_t) transition the pod INTO
+# this type instead of spc_t/container_t. Without this the
+# seLinuxOptions.type is denied and the pod stays container_t.
+kubernetes_container(otel_collector_t)
+
+########################################
+# Read host pod logs  (CERTAIN: deployment.yaml L180,183 + container.fc)
+########################################
+container_search_logs(otel_collector_t)
+container_list_log_dirs(otel_collector_t)
+read_files_pattern(otel_collector_t, container_log_t, container_log_t)
+read_lnk_files_pattern(otel_collector_t, container_log_t, container_log_t)
+allow otel_collector_t container_log_t:dir watch;   # filelog tails/rotates
+# INFERRED: /var/log/pods/*/*.log symlinks point into the containerd
+# log dir (container_var_lib_t). Confirm/trim against AVCs.
+read_files_pattern(otel_collector_t, container_var_lib_t, container_var_lib_t)
+list_dirs_pattern(otel_collector_t, container_var_lib_t, container_var_lib_t)
+
+########################################
+# Read own mounted config + secret (CERTAIN L179,175)
+########################################
+read_files_pattern(otel_collector_t, container_file_t, container_file_t)
+read_lnk_files_pattern(otel_collector_t, container_file_t, container_file_t)
+list_dirs_pattern(otel_collector_t, container_file_t, container_file_t)
+
+########################################
+# resourcedetection {env,system}: host facts (CERTAIN config L143)
+########################################
+kernel_read_system_state(otel_collector_t)
+kernel_read_network_state(otel_collector_t)
+dev_read_sysfs(otel_collector_t)
+files_read_etc_files(otel_collector_t)
+
+########################################
+# Networking
+########################################
+# DNS for *.svc.cluster.local (uptrace, kube-apiserver) — CERTAIN.
+sysnet_dns_name_resolve(otel_collector_t)
+# Receive OTLP: bind + accept TCP on 4317/4318 from any cluster peer.
+# INFERRED-WIDE: base ships no dedicated otlp port type; use all-ports
+# for v1, narrow to a declared otel_port_t (4317-4318) after AVCs.
+allow otel_collector_t self:tcp_socket { create_stream_socket_perms accept listen };
+corenet_tcp_bind_generic_node(otel_collector_t)
+corenet_tcp_sendrecv_generic_node(otel_collector_t)
+corenet_tcp_bind_all_ports(otel_collector_t)        # INFERRED-WIDE
+corenet_tcp_sendrecv_all_ports(otel_collector_t)
+# Egress: connect OUT to Uptrace 14317/14318 + kube-apiserver 443/6443.
+corenet_tcp_connect_all_ports(otel_collector_t)     # INFERRED-WIDE; narrow post-AVC
+
+########################################
+# NO Linux capabilities, NO privileged_container_domain attribute, NO
+# storage_raw_rw, NO mount, NO setenforce. dac_read_search for root-owned
+# 0600 pod logs is DELIBERATELY omitted and left to the AVC pass.
+################################################################

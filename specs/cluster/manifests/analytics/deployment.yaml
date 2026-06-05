@@ -21,6 +21,10 @@ spec:
       # storage (the data disks at /mnt/data + /mnt/usb) lives there, so the
       # clickhouse-data PV is node-local to that host. (backend Pis have no big disk.)
       nodeSelector: { kubernetes.io/arch: amd64 }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c19"
       containers:
         - name: clickhouse
           image: clickhouse/clickhouse-server:25.3-alpine
@@ -59,6 +63,10 @@ spec:
       # Kafka's log dir is on snapdragon-local too — pin to the x86_64 host that
       # holds the data disks so the kafka-data PV mounts.
       nodeSelector: { kubernetes.io/arch: amd64 }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c20"
       containers:
         - name: kafka
           image: bitnamilegacy/kafka:3.7.1-debian-12-r9
@@ -98,6 +106,10 @@ spec:
     metadata: { labels: { app: eureka } }
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c17"
       containers:
         - name: eureka
           image: snapdragon-systems/eureka:dev

@@ -23,7 +23,12 @@ net-wireless/wpa_supplicant
 net-firewall/iptables
 net-firewall/conntrack-tools
 net-misc/socat
-net-dns/bind-tools
+# net-dns/bind-tools — DROPPED: it is now a dummy package that RDEPENDs on the
+# full net-dns/bind-9.18 server, which does NOT cross-compile for aarch64 (fails
+# src_compile). dig/host are non-essential on a k8s worker (cluster DNS is
+# CoreDNS; the node resolves via /etc/resolv.conf). To restore dig-like tooling
+# later, prefer net-dns/ldns[drill] (a clean, cross-friendly `drill`) or fix the
+# bind cross-build — validate either separately before re-adding here.
 
 # ── System ─────────────────────────────────────────────────────────
 app-admin/sudo

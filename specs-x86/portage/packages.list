@@ -1,20 +1,17 @@
-# amd64 snapdragon-host stage4 package list — hardened k8s/GPU worker.
+# amd64 snapdragon stage4 package list — BASE (role-independent, hardened k8s).
 # One atom per line; lines starting with # are ignored.
+#
+# The vendor-agnostic GPU stack (Mesa/Vulkan/libva) lives in packages-gpu.list
+# and is concatenated by the builder ONLY for the be+gpu / omnibus roles.
 
-# ── Kernel & firmware & bootloader ─────────────────────────────────
+# ── Kernel & firmware & bootloader & initramfs ─────────────────────
 sys-kernel/gentoo-sources
 sys-kernel/linux-firmware
 sys-firmware/intel-microcode
+sys-kernel/dracut
 sys-boot/grub
 sys-fs/dosfstools
 sys-block/parted
-
-# ── Vendor-agnostic GPU (Mesa / Vulkan, open drivers) ──────────────
-media-libs/mesa
-media-libs/vulkan-loader
-dev-util/vulkan-tools
-x11-libs/libdrm
-media-libs/libva
 app-misc/jq
 
 # ── Networking ─────────────────────────────────────────────────────

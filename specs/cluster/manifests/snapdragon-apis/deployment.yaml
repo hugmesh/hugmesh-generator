@@ -13,6 +13,10 @@ spec:
     metadata: { labels: { app: snapdragon-api } }
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c22"
       containers:
         - name: api
           # snapdragon-actions — "Spring Actions for snapdragon hybrid architecture"

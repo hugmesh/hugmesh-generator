@@ -5,11 +5,16 @@
 # copies a keys directory (default: ./keys-template) onto it. The RPi 5
 # image's keys-provision service reads this partition at first boot.
 #
-# Requires root (it partitions and formats a block device).
+# Requires root (it partitions and formats a block device). The destructive
+# safety (typed-path confirm, child unmount, partition naming, table settle)
+# lives in scripts/_disk-lib.sh, shared with flash-disk.sh.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# shellcheck source=scripts/_disk-lib.sh
+source "${SCRIPT_DIR}/_disk-lib.sh"
 
 DEVICE=""
 SRC_DIR="${REPO_DIR}/keys-template"
@@ -53,16 +58,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[ "$(id -u)" -eq 0 ] || { echo "ERROR: run as root (sudo)." >&2; exit 1; }
+dl_require_root
 [ -n "${DEVICE}" ]    || usage 1
-[ -b "${DEVICE}" ]    || { echo "ERROR: ${DEVICE} is not a block device." >&2; exit 1; }
+dl_is_block "${DEVICE}" || { echo "ERROR: ${DEVICE} is not a block device." >&2; exit 1; }
 [ -d "${SRC_DIR}" ]   || { echo "ERROR: keys dir not found: ${SRC_DIR}" >&2; exit 1; }
-for t in parted mkfs.vfat lsblk; do
-    command -v "$t" >/dev/null || { echo "ERROR: missing tool: $t (emerge sys-fs/dosfstools sys-block/parted)" >&2; exit 1; }
-done
+dl_require_tools parted mkfs.vfat lsblk
 
-# Partition naming (sdX1 vs nvme0n1p1 vs mmcblk0p1)
-if [[ "${DEVICE}" =~ (nvme|mmcblk|loop) ]]; then PART="${DEVICE}p1"; else PART="${DEVICE}1"; fi
+# Partition naming (sdX1 vs nvme0n1p1 vs mmcblk0p1 vs loopXp1)
+PART="$(dl_partdev "${DEVICE}" 1)"
 
 echo "Device : ${DEVICE}"
 echo "Keys   : ${SRC_DIR}"
@@ -70,21 +73,18 @@ echo "Format : ${DO_FORMAT}   Label: ${LABEL}"
 lsblk -o NAME,SIZE,TYPE,MOUNTPOINT "${DEVICE}" || true
 echo
 if ${DO_FORMAT}; then
-    read -rp "This will ERASE all data on ${DEVICE}. Type the device path to confirm: " c
-    [ "${c}" = "${DEVICE}" ] || { echo "Aborted."; exit 1; }
+    dl_confirm_destroy "${DEVICE}"
 fi
 
 # Unmount anything currently mounted from the device
-for m in $(lsblk -ln -o MOUNTPOINT "${DEVICE}" | grep -v '^$' || true); do
-    umount "${m}" 2>/dev/null || true
-done
+dl_unmount_children "${DEVICE}"
 
 if ${DO_FORMAT}; then
     echo "==> Partitioning ${DEVICE} (msdos, one FAT32)..."
     parted -s "${DEVICE}" mklabel msdos
     parted -s "${DEVICE}" mkpart primary fat32 1MiB 100%
     parted -s "${DEVICE}" set 1 lba on
-    sleep 1; partprobe "${DEVICE}" 2>/dev/null || true; sleep 1
+    dl_wait_settle "${DEVICE}"
     echo "==> Formatting ${PART} as FAT32 (label ${LABEL})..."
     mkfs.vfat -F 32 -n "${LABEL}" "${PART}"
 fi

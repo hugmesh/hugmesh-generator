@@ -1,0 +1,11 @@
+# otel_collector.fc
+# No host file contexts required for v1.
+#  - /var/log/pods/* is already container_log_t (shipped container.fc).
+#  - The configMap (/etc/otel) and secret env are kubelet-projected as
+#    container_file_t at the pod MCS level at runtime.
+#  - otel_collector_t is entered via the containerd runtime transition
+#    (kubernetes_container in the .te), NOT by labelling a host binary,
+#    so there is no otel_collector_exec_t entry.
+#
+# If a host-side exec wrapper were ever added, its single line would be:
+#   /usr/local/bin/otel-wrapper -- gen_context(system_u:object_r:otel_collector_exec_t,s0)

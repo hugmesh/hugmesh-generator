@@ -48,6 +48,10 @@ spec:
     spec:
       nodeSelector:
         snapdragon.systems/backend: "true"
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c32"
       containers:
         - name: tuwunel
           image: ghcr.io/matrix-construct/tuwunel:v1.7.0
