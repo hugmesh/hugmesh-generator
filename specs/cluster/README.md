@@ -74,6 +74,7 @@ ClusterSecretStore **`snapdragon-vault`** (provider `vault`, token auth from the
 | `casdoor` (`google_client_id`/`google_client_secret`) | `casdoor-google` (`clientId`/`clientSecret`) | `snapdragon-pki` |
 | `clickhouse` (`password`) | `clickhouse-auth` (`password`) | `snapdragon-backend`, `observability` |
 | `uptrace` (`pg_password`/`project_token`) | `uptrace-auth` (`pg-password`/`project-token`) | `observability` |
+| `gitlab-registry` (`username`/`token`) | `gitlab-registry` (`.dockerconfigjson`) | `snapdragon-backend`, `snapdragon-frontend`, `snapdragon-games` |
 
 The same materialized Secrets are also written to the KEYS stick at
 `vault/secrets.json` (with `vault/token` for online sync), so `keys-provision`
@@ -83,8 +84,12 @@ unchanged.
 
 ## Notes / TODO before production
 
-- Image tags are `:dev` placeholders — pin real tags (and a private registry +
-  imagePullSecret) per app.
+- First-party images now pull from the in-cluster GitLab registry
+  (`registry.snapdragon.systems/snapdragon/<repo>:main`, set per app via kustomize
+  `images:`) with the ESO-materialized `gitlab-registry` imagePullSecret.
+  PREREQUISITE: create a GitLab **group deploy token** (scope `read_registry`) and
+  store it at Vault `snapdragon/gitlab-registry` (`username`/`token`). `eureka` +
+  `config-server` have no source repo yet, so they stay `:dev` until built.
 - Casdoor uses an `emptyDir` and the all-in-one image — switch to a PVC + an
   external DB, and seed the Google provider (`casdoor-google` Secret) + the
   gateway OAuth2 client.
