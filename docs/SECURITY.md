@@ -83,6 +83,93 @@ Calico is the CNI (`specs/cluster/apps/01-calico.yaml`). Its tunable config
 mTLS) are Vault-managed via External Secrets. Default-deny NetworkPolicies per
 namespace complement the SELinux isolation.
 
+### Fleet mesh — headscale/tailscale flat L3 (fleet-scoped, default-deny)
+
+Every node joins one tailnet via headscale (control server on the pki/omnibus
+node). The mesh is governed by a **default-deny, tag-based ACL** shipped as
+`specs/etc/headscale/policy.hujson` and loaded with
+`policy.mode: file` + `headscale policy set` (run by `provision_headscale`).
+
+- **Membership tag.** Nodes self-apply `tag:snapdragon` (+ a per-role
+  `tag:pki`/`tag:be`/`tag:fe`/`tag:host`) at join via
+  `tailscale up --advertise-tags=...`. `tagOwners` restricts those tags to the
+  `snapdragon` headscale user (the preauth-key owner), so only enrolled nodes
+  can claim them. With OIDC join, the Casdoor `/headscale` group gates enrolment
+  — two independent membership layers.
+- **Full intra-fleet mesh.** The only `accept` rules are
+  `tag:snapdragon → tag:snapdragon:*` (every node reaches every node, all ports)
+  and `tag:snapdragon → {10.244.0.0/16, 10.96.0.0/12}:*` (pods + ClusterIP
+  services). There is **no internet-wide `*` grant and no exit-node access** —
+  the tailnet is fleet-scoped.
+- **Pods/services as one LAN.** Each node advertises the cluster pod
+  (`10.244.0.0/16`) and service (`10.96.0.0/12`) CIDRs
+  (`--advertise-routes=...`) and accepts approved routes (`--accept-routes`).
+  `autoApprovers.routes` maps exactly those two CIDRs to `tag:snapdragon`, so
+  advertised subnet routes are **auto-approved** (no manual
+  `headscale nodes approve-routes`); `provision_headscale` also backfills
+  approval for any node that registered before the policy loaded.
+  `--snat-subnet-routes=false` preserves real pod source IPs. IP forwarding for
+  the subnet routers is already enabled cluster-wide
+  (`specs/etc/sysctl.d/99-kubernetes.conf`: `net.ipv4.ip_forward=1`,
+  `net.ipv6.conf.all.forwarding=1`).
+
+The CIDRs in `policy.hujson`, the `--advertise-routes` flags, and
+`kubeadm-config.yaml` (`podSubnet`/`serviceSubnet`) / `provision.json`
+`.calico.pod_cidr` must stay in sync.
+
+### Local-first mesh endpoint (no public domain required)
+
+The control server's `server_url` is resolved **local-first** at first boot by
+`provision_headscale` (`resolve_endpoint`), so a node provisioned before any
+public DNS exists is still reachable by its LAN peers. Precedence (highest
+first): `provision.json .headscale.server_url` → `.mesh.endpoint` → the baked
+brand `HEADSCALE_URL` (`/etc/snapdragon/headscale-url`, written at build time
+because env does not survive to first boot) → **default** `http://<the pki
+node's primary RFC1918 LAN IPv4>:8080`. The single `server_url:` line in
+`/etc/headscale/config.yaml` is rewritten **in place** (idempotent) *before*
+`headscale` starts; the baked `http://127.0.0.1:8080` is only an ultimate
+fallback. The tailscale **client** mirrors this: an empty
+`.tailscale.login_server` defaults to the same resolved endpoint. A public
+facade (`scale.<domain>`) can be published later without re-imaging — the
+MagicDNS control-plane name stays stable across the IP→domain transition, so
+clients only re-pin if `login_server` itself changes. `--snat-subnet-routes=
+false` and the fleet-scoped, default-deny ACL are unchanged; the endpoint stays
+on the tailnet/LAN by default (no internet-wide grant).
+
+### HA control plane + VPN→k8s autodiscovery
+
+The Kubernetes control plane is **N-node HA** and uses a **stable MagicDNS
+endpoint**, never a node IP, as `controlPlaneEndpoint`:
+
+- **Stable name.** `provision.json .mesh.cp_dns_name` (default
+  `kube-api.<base_domain>`, i.e. `kube-api.headnet.internal`) is set as
+  `controlPlaneEndpoint` in `kubeadm-config.yaml` and as every join target.
+  After the control node is on the tailnet, `publish_cp_dns_record` resolves its
+  **tailnet IP** (`tailscale ip -4`, fallback `headscale nodes list`) and writes
+  a `dns.extra_records` A-record (`cp_dns_name → tailnet IP`) into the headscale
+  config, then reloads headscale — so any mesh node resolves the API over the
+  tailnet with **no baked-in control-plane IP**. `provision_hosts` also writes
+  `cp_dns_name → pki IP` to `/etc/hosts` for the first-boot window before
+  MagicDNS converges.
+- **First vs additional control-plane** is data-driven and idempotent. The
+  **first** CP (`role=control-plane`, `bootstrap=true`, `first` defaults true)
+  runs `kubeadm init --upload-certs` and persists fresh join material
+  (`/etc/snapdragon/kubeadm-join.cmd` + `kubeadm-certificate-key`, mode 0600).
+  An **additional** CP (`first=false`, full `.kubernetes.join` incl.
+  `certificate_key`) runs `kubeadm join … --control-plane --certificate-key`.
+  The robust default keys off a probe of `https://<cp_dns_name>:6443/healthz`:
+  if the cluster already answers, the node joins as **additional** regardless of
+  the flag (so a re-imaged or mis-flagged node never re-inits a second cluster).
+  Every branch guards on `/etc/kubernetes/{admin,kubelet}.conf` for
+  idempotency.
+- **Workers** (`role=worker`) `kubeadm join` the same `cp_dns_name:6443`. The
+  `certSANs` in `kubeadm-config.yaml` cover the MagicDNS name, the control-node
+  hostname, and loopback so additional CPs/clients validate the API cert.
+- **N-per-role is unconstrained on the mesh.** `tag:snapdragon` (+ per-role
+  tags) are all owned by the single `snapdragon` headscale user and the preauth
+  key is `reusable`, so `tagOwners` gates *which* tags a node may claim, not
+  *how many* nodes — N nodes per role join and mesh with no policy change.
+
 ## Status / validation
 
 - LSM switch, container SELinux, truststore-from-USB, and keystore generation are

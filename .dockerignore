@@ -1,0 +1,37 @@
+# .dockerignore — keep the build context tiny. The repo is BIND-MOUNTED at
+# runtime (-v $(CURDIR):/src), so the build context only needs to be small
+# enough for `docker build` to be fast; we exclude VCS metadata, build output,
+# emulator scratch and large generated artifacts.
+
+# Version control
+.git
+.gitignore
+.gitlab-ci.yml
+
+# Build output / target dirs (mounted at /out at runtime anyway)
+rpi5-stage4-build
+x86-host-build
+build
+out
+
+# QEMU / emulator scratch
+qemu-test
+
+# Node / Playwright deps (installed fresh where needed)
+node_modules
+tests/e2e/node_modules
+
+# Large generated artifacts
+*.img
+*.iso
+*.tar.xz
+*.tgz
+*.squashfs
+
+# Logs / editor / OS noise
+*.log
+*.swp
+*~
+.DS_Store
+.idea
+.vscode

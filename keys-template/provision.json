@@ -11,9 +11,17 @@
     }
   },
 
+  "_comment_mesh": "Local-first mesh endpoint + stable MagicDNS names. Leave endpoint empty to DEFAULT to the pki node's primary LAN IPv4 (http://<lanip>:8080) so the node works before any public DNS exists. Set endpoint (or .headscale.server_url, or the brand HEADSCALE_URL) to a public facade ONLY once it is published. cp_dns_name is the STABLE control-plane name used as kubeadm controlPlaneEndpoint + every join target; magic_dns_domain is headscale dns.base_domain.",
+  "mesh": {
+    "endpoint": "",
+    "magic_dns_domain": "headnet.internal",
+    "cp_dns_name": "kube-api.headnet.internal"
+  },
+
   "headscale": {
     "enabled": true,
     "config_file": "headscale/config.yaml",
+    "server_url": "",
     "users": ["snapdragon"],
     "preauthkeys": [
       { "user": "snapdragon", "reusable": true, "ephemeral": false }
@@ -21,15 +29,18 @@
   },
 
   "tailscale": {
-    "enabled": false,
+    "enabled": true,
     "authkey_file": "tailscale/authkey",
-    "login_server": "http://snapdragon-pki:8080",
-    "up_args": "--accept-routes"
+    "login_server": "",
+    "mesh_routes": "10.244.0.0/16,10.96.0.0/12",
+    "up_args": "--advertise-tags=tag:snapdragon,tag:pki --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false"
   },
 
+  "_comment_kubernetes": "FIRST control-plane: role=control-plane + bootstrap=true (+ first defaults true) -> kubeadm init --upload-certs. ADDITIONAL control-plane: role=control-plane, bootstrap=true, first=false, and a full join block incl. certificate_key -> kubeadm join --control-plane. Workers: role=worker + a join block. Leave join.api_server empty to auto-target the stable cp_dns_name:6443.",
   "kubernetes": {
     "role": "control-plane",
     "bootstrap": false,
+    "first": true,
     "config_file": "kubernetes/kubeadm-config.yaml",
     "pki_dir": "kubernetes/pki"
   },

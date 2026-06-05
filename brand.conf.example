@@ -41,6 +41,18 @@ TAILSCALE_VERSION="1.78.1"
 VAULT_ADDR=""                       # e.g. https://vault.snapdragon.systems  (empty = offline/USB-only)
 VAULT_KV_MOUNT="secret"             # KV v2 mount the ClusterSecretStore reads
 
+# ── External CA (optional — use an EXISTING CA as the cert issuer) ──
+# By default the cert generator mints a fresh self-signed root CA. To instead
+# sign every generated leaf/service cert with an EXISTING CA (so the certs chain
+# to a CA you already trust, e.g. an org/offline root), point these at the CA
+# cert + its private key. The provided CA is bundled into the truststore and is
+# NEVER overwritten. When unset, the self-signed-root behavior is unchanged.
+# CA_KEY/CA_KEY_PASS are SECRETS — set real paths/passphrases here (gitignored
+# ./brand.conf) or in the environment, NOT in a committed brands/*.conf.
+# CA_CERT=""                        # path to the CA certificate (PEM)
+# CA_KEY=""                         # path to the CA private key (PEM; may be encrypted)
+# CA_KEY_PASS=""                    # passphrase for CA_KEY (only if it is encrypted)
+
 # Example rebrand (uncomment + edit to build "Acme" images on acme.example):
 #   BRAND="acme"
 #   BRAND_TITLE="Acme Corp"

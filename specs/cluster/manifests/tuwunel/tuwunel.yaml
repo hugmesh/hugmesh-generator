@@ -29,6 +29,28 @@ data:
     well_known_client = "https://matrix.snapdragon.systems"
     well_known_server = "matrix.snapdragon.systems:443"
     trusted_servers = ["matrix.org"]
+    # --- Matrix authority: ROLE_ADMIN = server-admin / ROLE_MOD = room-moderator ---
+    # Conduit-family (tuwunel) has NO Synapse-style /_synapse/admin REST API, no
+    # OIDC-group->admin auto-promotion, and NO homeserver moderator tier: server
+    # admin == membership of the auto-created admin room (#admins:snapdragon.systems).
+    # The tuwunel admin bot honours ban/redact/room-management commands from members
+    # of that room.
+    #   ROLE_ADMIN is mapped to Matrix SERVER admin by reconciling members INTO
+    #     #admins (network-wide ban/redact/rooms).
+    #   ROLE_MOD is mapped to room-level MODERATOR (power level 50: ban/redact/kick)
+    #     in the managed community/public rooms via the admin bot's set-power-level
+    #     command — NOT admin-room membership, NOT server admin, NOT PL100. (Since
+    #     Conduit-family has no homeserver moderator tier, room PL50 is how mod is
+    #     expressed.)
+    # See the PostSync Job below (tuwunel-admin-sync). Neither mapping exposes any
+    # extra HTTP surface at the be-gateway (so the route-access boundary is unchanged).
+    #
+    # emergency_password is the break-glass promotion of the @conduit server user.
+    # It is NEVER committed: sourced from Vault/ESO into the Secret tuwunel-admin
+    # and injected at runtime (TUWUNEL_EMERGENCY_PASSWORD), so this manifest holds
+    # intent only. Leave it unset here.
+    # emergency_password = "<from Vault/ESO via Secret tuwunel-admin>"
+    admin_room_default = "#admins:snapdragon.systems"
 ---
 apiVersion: apps/v1
 kind: Deployment

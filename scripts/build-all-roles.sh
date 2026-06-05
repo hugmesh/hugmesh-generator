@@ -15,8 +15,8 @@
 #   ./scripts/build-all-roles.sh -j 16 --cluster-domain snapdragon.systems
 #
 # Env:
-#   WORK_DIR    work/target dir (default ./rpi5-stage4-build). Keep in sync with
-#               any -w/--work-dir you pass through.
+#   WORK_DIR    work/target dir (default ./out, local + gitignored). Keep in sync
+#               with any -w/--work-dir you pass through.
 #   SKIP_KEYS=1 don't generate the per-role keys folders (Pi roles).
 set -euo pipefail
 
@@ -25,7 +25,7 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_RPI="${REPO_DIR}/build-rpi5-stage4.sh"
 BUILD_X86="${REPO_DIR}/build-x86-host-stage4.sh"
 GENKEYS="${SCRIPT_DIR}/gen-provision-keys.sh"
-WORK_DIR="${WORK_DIR:-${REPO_DIR}/rpi5-stage4-build}"
+WORK_DIR="${WORK_DIR:-${REPO_DIR}/out}"
 # Honor a -w/--work-dir passed through to the builders so the keys-<role> folders
 # land beside the images (recommend a dir OUTSIDE an encrypted/$HOME mount).
 for ((_i = 1; _i <= $#; _i++)); do
@@ -61,12 +61,6 @@ for role in "${RPI_ROLES[@]}"; do
     echo "#  Building RPi5 role: ${role}"
     echo "############################################################"
     "${BUILD_RPI}" --role "${role}" "$@"
-
-    if [ "${SKIP_KEYS:-0}" != "1" ]; then
-        echo "==> Generating keys folder: ${WORK_DIR}/keys-${role}"
-        "${GENKEYS}" --role "${role}" --out "${WORK_DIR}/keys-${role}" --random || \
-            echo "   (keys generation skipped/failed for ${role} — run gen-provision-keys.sh manually)"
-    fi
 done
 
 for role in "${X86_BUILD_ROLES[@]}"; do
@@ -75,6 +69,22 @@ for role in "${X86_BUILD_ROLES[@]}"; do
     echo "############################################################"
     "${BUILD_X86}" --role "${role}" "$@"
 done
+
+# ── Generate provisioning keys ───────────────────────────────────────
+# All images are built first; keys are created LAST, in one pass over every
+# built role. gen-provision-keys.sh only knows the RPi/host role names, so we
+# key off the RPi roles here (the per-role KEYS folder the make-keys-usb.sh
+# stick consumes). Set SKIP_KEYS=1 to skip this entirely.
+if [ "${SKIP_KEYS:-0}" != "1" ]; then
+    echo "############################################################"
+    echo "#  Generate provisioning keys (all built roles)"
+    echo "############################################################"
+    for role in "${RPI_ROLES[@]}"; do
+        echo "==> Generating keys folder: ${WORK_DIR}/keys-${role}"
+        "${GENKEYS}" --role "${role}" --out "${WORK_DIR}/keys-${role}" --random || \
+            echo "   (keys generation skipped/failed for ${role} — run gen-provision-keys.sh manually)"
+    done
+fi
 
 echo
 echo "==> Done. In ${WORK_DIR}:"

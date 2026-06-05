@@ -7,8 +7,18 @@
 # Tested against headscale 0.23.x. Newer/older releases occasionally rename
 # keys — check the upstream example-config if headscale refuses to start.
 
-# The externally reachable URL of this control server. CHANGE THIS to the
-# DNS name or IP the Pi is reachable at, e.g. https://headscale.example.com
+# The externally reachable URL of this control server.
+#
+# LOCAL-FIRST: this loopback value is ONLY an ultimate fallback. At first boot
+# keys-provision (provision_headscale -> resolve_endpoint) rewrites this single
+# line in place to the resolved endpoint BEFORE starting headscale, with
+# precedence:
+#   1. provision.json .headscale.server_url
+#   2. provision.json .mesh.endpoint
+#   3. the baked brand var HEADSCALE_URL (/etc/snapdragon/headscale-url)
+#   4. DEFAULT: http://<this node's primary LAN IPv4>:8080
+# So a node provisioned before any public DNS exists is reachable by LAN peers,
+# and a public domain can be published later without re-imaging.
 server_url: http://127.0.0.1:8080
 
 listen_addr: 0.0.0.0:8080
@@ -18,6 +28,20 @@ grpc_allow_insecure: false
 
 noise:
   private_key_path: /var/lib/headscale/noise_private.key
+
+# ACL policy — fleet full-mesh, file mode.
+#
+# Loads the shipped /etc/headscale/policy.hujson: a default-deny policy that
+# opens fleet-internal traffic (tag:snapdragon <-> tag:snapdragon, all ports)
+# plus the cluster pod (10.244.0.0/16) and service (10.96.0.0/12) CIDRs, and
+# auto-approves those advertised subnet routes. Nodes self-apply tag:snapdragon
+# (+ a per-role tag) and advertise the two CIDRs at `tailscale up`; every node
+# runs --accept-routes, so pods/ClusterIPs become reachable cross-node "as one
+# LAN". keys-provision also runs `headscale policy set -f` on this file so the
+# DB/file stay in sync. No internet-wide grant; fleet-scoped by design.
+policy:
+  mode: file
+  path: /etc/headscale/policy.hujson
 
 # Tailnet address ranges handed out to nodes.
 prefixes:

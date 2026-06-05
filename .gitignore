@@ -38,3 +38,7 @@ ssh_host_*_key.pub
 
 # Brand profile may hold default passwords — never commit the real one
 brand.conf
+/out/
+*.img.xz
+*.fs.tar.xz
+*.qcow2

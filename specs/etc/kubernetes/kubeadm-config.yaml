@@ -6,6 +6,22 @@ nodeRegistration:
 apiVersion: kubeadm.k8s.io/v1beta3
 kind: ClusterConfiguration
 kubernetesVersion: stable
+# Stable MagicDNS control-plane endpoint (NOT a node IP) so additional
+# control-plane nodes, workers, and autodiscovering mesh nodes all target the
+# same name. keys-provision publishes kube-api.<base_domain> -> the pki node's
+# tailnet IP via headscale dns.extra_records, and writes it to /etc/hosts for
+# the first-boot window before MagicDNS converges. Override the base domain via
+# provision.json .mesh.magic_dns_domain / the name via .mesh.cp_dns_name.
+controlPlaneEndpoint: "kube-api.headnet.internal:6443"
+apiServer:
+  # SANs covering every way the API is reached: the stable MagicDNS name, the
+  # control node hostname, its tailnet + LAN IPs, and loopback. Additional CPs
+  # and the LB VIP validate against these.
+  certSANs:
+    - kube-api.headnet.internal
+    - snapdragon-pki
+    - snapdragon-pki.headnet.internal
+    - 127.0.0.1
 networking:
   podSubnet: "10.244.0.0/16"
   serviceSubnet: "10.96.0.0/12"

@@ -28,10 +28,16 @@ and SSH keys.
   and a break-glass `ssh/root.authorized_keys`. A worker joins the pki
   control-plane and gets **all** config + secrets from there (ArgoCD + Vault/ESO).
   See `examples/provision.{backend,frontend,host}.json`.
+- **additional HA control-plane USBs** — a 2nd/3rd pki node that
+  `kubeadm join --control-plane`s the existing cluster (instead of starting a
+  second one). Carries the first CP's join token + CA hash + `certificate_key`
+  (from `kubeadm init phase upload-certs`) + the shared `kubernetes/pki`. See
+  `examples/provision.control-plane-additional.json`.
 
 ```bash
 ./scripts/gen-provision-keys.sh --role pki     -o keys-pki      # full + users
 ./scripts/gen-provision-keys.sh --role backend -o keys-backend  # keys only
+./scripts/gen-provision-keys.sh --role control-plane-additional -o keys-pki-02  # HA CP
 ```
 
 `scripts/build-all-roles.sh` does this per role automatically, dropping a
@@ -69,17 +75,23 @@ KEYS/                                 (FAT32, volume label "KEYS")
 | `timezone` | Sets the system timezone. |
 | `network.wifi.{ssid,psk,country}` | Synthesises a NetworkManager Wi-Fi profile. |
 | `network` *(or `network/*.nmconnection`)* | Verbatim NM connection profiles are also copied. |
+| `mesh.endpoint` | Mesh control-server URL override. **Empty = local-first**: defaults to the pki node's primary LAN IPv4 (`http://<lanip>:8080`), so the node works before any public DNS exists. |
+| `mesh.magic_dns_domain` | headscale `dns.base_domain` (default `headnet.internal`). |
+| `mesh.cp_dns_name` | **Stable** MagicDNS control-plane name (default `kube-api.<magic_dns_domain>`) used as kubeadm `controlPlaneEndpoint` + every join target. |
 | `headscale.enabled` | Start the headscale control server (PKI node). |
 | `headscale.config_file` | Path on KEYS to a config that replaces the default. |
+| `headscale.server_url` | Highest-precedence endpoint override (else `mesh.endpoint`, else baked `HEADSCALE_URL`, else LAN IP). Rewrites `server_url:` in place before headscale starts. |
 | `headscale.users[]` | headscale users to create once it is up. |
-| `headscale.preauthkeys[]` | `{user,reusable,ephemeral}` preauth keys to mint. |
+| `headscale.preauthkeys[]` | `{user,reusable,ephemeral}` preauth keys to mint. `reusable:true` lets **N nodes per role** share one key. |
 | `tailscale.enabled` | Bring up the tailscale client. |
-| `tailscale.{authkey_file,login_server,up_args}` | How to `tailscale up`. |
+| `tailscale.{authkey_file,login_server,up_args}` | How to `tailscale up`. Empty `login_server` defaults to the same local-first endpoint. |
 | `kubernetes.role` | `control-plane` \| `worker` \| `none`. |
 | `kubernetes.bootstrap` | If `true`, actually run `kubeadm init`/`join`. If `false` (default) only stage config — run kubeadm by hand. |
-| `kubernetes.config_file` | kubeadm config override on KEYS. |
-| `kubernetes.pki_dir` | Directory on KEYS copied to `/etc/kubernetes/pki`. |
-| `kubernetes.join.{api_server,token,ca_cert_hash}` | Worker join parameters. |
+| `kubernetes.first` | First (`true`) vs additional (`false`) **HA control-plane**. First → `kubeadm init --upload-certs`; additional → `kubeadm join --control-plane`. A live-endpoint probe overrides this so a node never re-inits an existing cluster. |
+| `kubernetes.config_file` | kubeadm config override on KEYS (`controlPlaneEndpoint` = the stable `mesh.cp_dns_name`). |
+| `kubernetes.pki_dir` | Directory on KEYS copied to `/etc/kubernetes/pki` (shared CA across control-plane nodes). |
+| `kubernetes.join.{api_server,token,ca_cert_hash}` | Worker join parameters. Empty `api_server` auto-targets `mesh.cp_dns_name:6443`. |
+| `kubernetes.join.certificate_key` | **Additional control-plane only**: the `--certificate-key` from the first CP's `kubeadm init phase upload-certs` (also persisted at `/etc/snapdragon/kubeadm-certificate-key`). |
 | `snapdragon.role` | `pki` \| `backend` \| `frontend` — selects the cluster app set / namespace this node serves. |
 | `snapdragon.cluster_domain` | Base domain for gateways/ingress/Casdoor. |
 | `snapdragon.gitops.{enabled,argocd}` | On the PKI node, bootstrap ArgoCD + the app-of-apps. |

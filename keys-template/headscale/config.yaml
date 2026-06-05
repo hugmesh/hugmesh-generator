@@ -2,12 +2,19 @@
 # If present (and headscale.config_file points here), it replaces the
 # baked-in /etc/headscale/config.yaml at first boot.
 #
-# The single value you almost certainly need to change is server_url — the public
-# facade clients connect to. It must match the facade the backend gateway fronts
-# (scale.<domain>): traffic flows tailscale-client -> backend gateway -> pki
-# gateway -> this headscale. Internal nodes resolve the same name to the pki node
-# IP via /etc/hosts (the provision_hosts facade alias).
-
+# LOCAL-FIRST ENDPOINT: you usually do NOT need to set server_url here. At first
+# boot keys-provision rewrites this `server_url:` line in place to the resolved
+# endpoint (provision_headscale -> resolve_endpoint), with precedence:
+#   1. provision.json .headscale.server_url
+#   2. provision.json .mesh.endpoint
+#   3. the baked brand var HEADSCALE_URL (/etc/snapdragon/headscale-url)
+#   4. DEFAULT: http://<the pki node's primary LAN IPv4>:8080
+# So a node provisioned before any public DNS exists is reachable by LAN peers.
+# Set a PUBLIC facade below (or via the config above) ONLY once that domain is
+# published — traffic then flows tailscale-client -> backend gateway -> pki
+# gateway -> this headscale, and internal nodes resolve the same name to the pki
+# node IP via /etc/hosts (the provision_hosts facade alias). The MagicDNS
+# control-plane name stays stable across the IP->domain transition.
 server_url: https://scale.snapdragon.systems
 listen_addr: 0.0.0.0:8080
 # /metrics + /debug — bound to loopback; scrape via a node-local exporter or an
@@ -57,14 +64,22 @@ dns:
     #     snapdragon.systems:
     #       - 100.64.0.1   # tailnet IP of the cluster DNS resolver (CoreDNS)
 
-# ACL policy is managed in the database via the API/CLI (`headscale policy set`).
-# With no policy loaded the tailnet is allow-all among members, so the OIDC-gated
-# join below is the membership boundary; harden later with a default-deny,
-# tag-based policy. Provisioning also accepts an acl.hujson placed in headscale/
-# on the KEYS USB (copied to /etc/headscale/) if you prefer file mode.
-# Ref: https://tailscale.com/kb/1018/acls/
+# ACL policy — fleet full-mesh, file mode.
+#
+# Loads headscale/policy.hujson from this KEYS USB (copied to
+# /etc/headscale/policy.hujson and applied with `headscale policy set -f` by
+# provision_headscale). It is a default-deny, tag-based policy: fleet members
+# (tag:snapdragon) reach each other on all ports + the cluster pod/service
+# CIDRs, and those advertised subnet routes are auto-approved — so pods/services
+# are reachable cross-node "as one LAN". This replaces the old allow-all
+# behaviour; combined with the OIDC join below it gives two membership layers
+# (IdP gates enrolment, tagOwners gates which tags a node may claim).
+# Switch to `mode: database` only if you intend to manage policy purely via the
+# API/CLI instead of this file.
+# Ref: https://tailscale.com/kb/1018/acls/  https://headscale.net/stable/ref/acls/
 policy:
-  mode: database
+  mode: file
+  path: /etc/headscale/policy.hujson
 
 # OpenID Connect — node authentication via the platform's Casdoor IdP. A node
 # joins the tailnet by logging in through Casdoor; only members of the group

@@ -1,0 +1,238 @@
+# tuwunel-admin-sync — maps Casdoor roles to Matrix authority. Conduit-family
+# (tuwunel) has NO homeserver moderator tier, so the two roles map differently:
+#   ROLE_ADMIN -> Matrix SERVER admin: MEMBERSHIP of the admin room
+#                 (#admins:snapdragon.systems). Conduit-family grants server admin
+#                 via that room membership, NOT a REST API or an OIDC-group claim.
+#   ROLE_MOD   -> per-ROOM MODERATOR (power level 50: ban/redact/kick) in the
+#                 managed community/public rooms, set via the admin bot's
+#                 set-power-level command. NOT server admin, NOT the #admins room,
+#                 NOT PL100. Because Conduit-family exposes no homeserver moderator
+#                 tier, room PL50 is how "moderator" is expressed.
+# This PostSync reconcile Job is the hook that realises the Casdoor-group -> Matrix
+# link (mirroring the casdoor-init Job pattern: runAsNonRoot, drop ALL caps,
+# readOnlyRootFilesystem, Vault-sourced admin token, idempotent, ArgoCD PostSync).
+#
+# Flow: read ROLE_ADMIN + ROLE_MOD membership from Casdoor, derive each member's
+# @<localpart>:snapdragon.systems MXID. ROLE_ADMIN members are invited/joined into
+# the server admin room (membership IS server admin: network-wide). ROLE_MOD
+# members are set to power level 50 in each managed room via the admin bot's
+# set-power-level command (room-scoped moderation only). The Matrix admin/mod
+# surfaces are NOT routes, so no gateway_route_access row is needed (the
+# route-access boundary is unchanged).
+#
+# !!! The tuwunel admin command channel + Casdoor membership API shapes are
+# !!! version-specific. This is a working scaffold — validate the admin command
+# !!! transport (admin room / appservice / emergency_password) and the
+# !!! set-power-level command against the deployed tuwunel before relying on it
+# !!! in production.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tuwunel-admin-sync-script
+  namespace: snapdragon-backend
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: snapdragon.systems }
+data:
+  sync.py: |
+    #!/usr/bin/env python3
+    """Reconcile Casdoor roles into Matrix authority. Conduit-family has no
+    homeserver moderator tier, so:
+      ROLE_ADMIN -> server admin: membership of the admin room
+                    (#admins:snapdragon.systems).
+      ROLE_MOD   -> per-room MODERATOR: power level 50 (ban/redact/kick) in each
+                    managed community/public room, via the admin bot's
+                    set-power-level command. NOT server admin, NOT #admins, NOT PL100.
+    Pure stdlib (urllib) — no extra packages."""
+    import json, os, time, urllib.request, urllib.error, http.cookiejar
+
+    CASDOOR = os.environ.get("CASDOOR_URL", "http://casdoor.snapdragon-pki.svc.cluster.local:8000")
+    ORG     = os.environ.get("CASDOOR_ORG", "snapdragon")
+    MATRIX  = os.environ.get("MATRIX_URL", "http://tuwunel.snapdragon-backend.svc.cluster.local:8008")
+    SERVER  = os.environ.get("MATRIX_SERVER_NAME", "snapdragon.systems")
+    ADMIN_ROOM = os.environ.get("MATRIX_ADMIN_ROOM", "#admins:snapdragon.systems")
+    # Managed community/public rooms where ROLE_MOD gets room-level moderator (PL50).
+    # Comma-separated room aliases; placeholder list — set to the real managed rooms.
+    MANAGED_ROOMS = [r.strip() for r in os.environ.get(
+        "MATRIX_MANAGED_ROOMS", "#general:snapdragon.systems,#lounge:snapdragon.systems"
+    ).split(",") if r.strip()]
+    # ROLE_ADMIN -> Matrix SERVER admin (admin-room membership). Network-wide.
+    ADMIN_ROLES = ["ROLE_ADMIN"]
+    # ROLE_MOD -> per-ROOM moderator (PL50) in MANAGED_ROOMS. NOT server admin.
+    MOD_ROLES   = ["ROLE_MOD"]
+
+    CASDOOR_CLIENT_ID     = open("/secrets/casdoor/clientId").read().strip()
+    CASDOOR_CLIENT_SECRET = open("/secrets/casdoor/clientSecret").read().strip()
+    # Privileged Matrix access token for the @conduit server user / an admin
+    # account — materialized by ESO from Vault (Secret tuwunel-admin), never committed.
+    MATRIX_TOKEN = open("/secrets/matrix/token").read().strip()
+
+    def _get(url, headers=None):
+        req = urllib.request.Request(url, headers=headers or {})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read() or "{}")
+
+    def _post(url, payload, headers=None):
+        h = {"Content-Type": "application/json"}
+        h.update(headers or {})
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST", headers=h)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read() or "{}")
+
+    def wait_ready():
+        for _ in range(60):
+            try:
+                urllib.request.urlopen(MATRIX + "/_matrix/client/versions", timeout=5); return
+            except Exception:
+                time.sleep(3)
+        raise SystemExit("tuwunel not reachable")
+
+    def casdoor_members(role):
+        """Return the localparts of users holding `role` in Casdoor."""
+        token = CASDOOR_CLIENT_ID + ":" + CASDOOR_CLIENT_SECRET
+        import base64
+        auth = {"Authorization": "Basic " + base64.b64encode(token.encode()).decode()}
+        try:
+            data = _get(f"{CASDOOR}/api/get-role?id={ORG}/{role}", auth)
+        except urllib.error.HTTPError as e:
+            print(f"  WARN get-role {role}: {e}"); return []
+        users = (data.get("data") or {}).get("users") or []
+        # entries are "snapdragon/<name>" -> take the bare localpart
+        return [u.split("/")[-1] for u in users]
+
+    def mxid(localpart):
+        return f"@{localpart}:{SERVER}"
+
+    def resolve_room(alias):
+        """Resolve a room alias (#name:server) to its room id, or None."""
+        h = {"Authorization": "Bearer " + MATRIX_TOKEN}
+        enc = alias.replace("#", "%23").replace(":", "%3A")
+        try:
+            room = _get(f"{MATRIX}/_matrix/client/v3/directory/room/{enc}", h)
+            return room.get("room_id")
+        except urllib.error.HTTPError as e:
+            print(f"  WARN room {alias} not resolvable: {e}"); return None
+
+    def promote(localpart):
+        """Invite/join the user into the admin room via the tuwunel admin channel.
+        Membership of the admin room == SERVER admin in Conduit-family servers.
+        Only ROLE_ADMIN members are passed here — never ROLE_MOD."""
+        h = {"Authorization": "Bearer " + MATRIX_TOKEN}
+        user = mxid(localpart)
+        room_id = resolve_room(ADMIN_ROOM)
+        if not room_id:
+            print(f"  WARN admin room {ADMIN_ROOM} not resolvable"); return
+        rid = room_id.replace(":", "%3A")
+        try:
+            _post(f"{MATRIX}/_matrix/client/v3/rooms/{rid}/invite", {"user_id": user}, h)
+            print(f"  invited {user} to {ADMIN_ROOM} (Matrix SERVER admin)")
+        except urllib.error.HTTPError as e:
+            # already a member / already invited -> idempotent no-op
+            print(f"  note {user}: {e}")
+
+    def moderate(localpart):
+        """Grant the user ROOM-level moderator (power level 50: ban/redact/kick) in
+        every MANAGED_ROOMS room — NOT server admin, NOT #admins, NEVER PL100.
+        Conduit-family has no homeserver moderator tier, so this room PL50 is how
+        ROLE_MOD is expressed. The literal 50 is hardcoded on purpose.
+        The tuwunel admin bot applies power via its admin command channel; we send
+        the documented `set-power-level <user_id> <room> <level>` command into the
+        admin room (the bot reads commands posted there) over the same MATRIX_TOKEN
+        + _post transport promote() uses. !!! Validate this admin-command transport
+        against the deployed tuwunel (admin room / appservice) before production."""
+        h = {"Authorization": "Bearer " + MATRIX_TOKEN}
+        user = mxid(localpart)
+        admin_room_id = resolve_room(ADMIN_ROOM)
+        if not admin_room_id:
+            print(f"  WARN admin room {ADMIN_ROOM} not resolvable; cannot issue set-power-level"); return
+        arid = admin_room_id.replace(":", "%3A")
+        for room in MANAGED_ROOMS:
+            # PL50 = moderator (ban/redact/kick). NEVER 100 (that is admin).
+            cmd = f"!admin users set-power-level {user} {room} 50"
+            try:
+                _post(f"{MATRIX}/_matrix/client/v3/rooms/{arid}/send/m.room.message",
+                      {"msgtype": "m.text", "body": cmd}, h)
+                print(f"  set {user} PL50 (moderator) in {room}")
+            except urllib.error.HTTPError as e:
+                print(f"  note {user} {room}: {e}")
+
+    wait_ready()
+    # 1) ROLE_ADMIN -> server admin (admin-room membership). Admin supersedes mod.
+    admins = set()
+    for role in ADMIN_ROLES:
+        for lp in casdoor_members(role):
+            if lp in admins:
+                continue
+            admins.add(lp)
+            try:
+                promote(lp)
+            except Exception as e:
+                print(f"  WARN admin {lp}: {e}")
+    # 2) ROLE_MOD -> per-room PL50 moderator in MANAGED_ROOMS. Skip anyone who is
+    #    already a server admin (admin supersedes — no PL50 downgrade pass for them).
+    mods = set()
+    for role in MOD_ROLES:
+        for lp in casdoor_members(role):
+            if lp in admins or lp in mods:
+                continue
+            mods.add(lp)
+            try:
+                moderate(lp)
+            except Exception as e:
+                print(f"  WARN mod {lp}: {e}")
+    print(f"tuwunel-admin-sync: reconciled {len(admins)} server-admin + "
+          f"{len(mods)} room-moderator (PL50) member(s)")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: tuwunel-admin-sync
+  namespace: snapdragon-backend
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: snapdragon.systems }
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: tuwunel-admin-sync }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        snapdragon.systems/backend: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: sync
+          image: python:3.12-alpine
+          command: ["python3", "/script/sync.py"]
+          env:
+            - { name: CASDOOR_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000" }
+            - { name: CASDOOR_ORG, value: "snapdragon" }
+            - { name: MATRIX_URL,  value: "http://tuwunel.snapdragon-backend.svc.cluster.local:8008" }
+            - { name: MATRIX_SERVER_NAME, value: "snapdragon.systems" }
+            # ROLE_ADMIN -> server admin via membership of this room.
+            - { name: MATRIX_ADMIN_ROOM,  value: "#admins:snapdragon.systems" }
+            # ROLE_MOD -> room-level moderator (PL50) in these managed community/
+            # public rooms (placeholder list — set to the real managed rooms).
+            - { name: MATRIX_MANAGED_ROOMS, value: "#general:snapdragon.systems,#lounge:snapdragon.systems" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script, mountPath: /script, readOnly: true }
+            - { name: casdoor, mountPath: /secrets/casdoor, readOnly: true }
+            - { name: matrix, mountPath: /secrets/matrix, readOnly: true }
+      volumes:
+        - name: script
+          configMap: { name: tuwunel-admin-sync-script, defaultMode: 0555 }
+        # ESO-materialized from Vault — never committed.
+        # casdoor-app-secrets holds the OAuth2 client used to read role membership;
+        # tuwunel-admin holds a privileged Matrix access token (key "token").
+        - name: casdoor
+          secret: { secretName: casdoor-app-secrets }
+        - name: matrix
+          secret: { secretName: tuwunel-admin }
