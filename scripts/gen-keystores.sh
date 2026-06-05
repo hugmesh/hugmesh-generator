@@ -49,7 +49,7 @@ SERVICES=(
   "${BRAND}-fe-gateway:${BRAND}-frontend"
   "${BRAND}-auth:${BRAND}-pki"
   "${BRAND}-api:${BRAND}-backend"
-  "${BRAND}-admin-bff:${BRAND}-backend"
+  "admin-bff:${BRAND}-backend"
 )
 
 for t in openssl keytool; do command -v "$t" >/dev/null || { echo "ERROR: need $t" >&2; exit 1; }; done
