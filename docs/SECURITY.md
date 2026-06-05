@@ -38,7 +38,7 @@ Vault-managed mTLS keystore:
 | `snapdragon-fe-gateway` | `sa-fe-gateway` | `s0:c13` | `svc-fe-gateway` / `ROLE_GATEWAY` | `snapdragon-fe-gateway.snapdragon-frontend.svc` |
 | `snapdragon-auth` | `sa-auth` | `s0:c21` | `svc-auth` / `ROLE_AUTH` | `snapdragon-auth.snapdragon-pki.svc` |
 | `snapdragon-api` (actions) | `sa-api` | `s0:c22` | `svc-api` / `ROLE_API` | `snapdragon-api.snapdragon-backend.svc` |
-| `snapdragon-admin-bff` | `sa-admin-bff` | `s0:c23` | `svc-admin-bff` / `ROLE_ADMIN_API` | `snapdragon-admin-bff.snapdragon-backend.svc` |
+| `admin-bff` | `sa-admin-bff` | `s0:c23` | `svc-admin-bff` / `ROLE_ADMIN_API` | `admin-bff.snapdragon-backend.svc` |
 | matrix / mastodon / casdoor / games | per-app SA | `s0:c3x` | per-app svc user | (non-Java: PEM, no JKS) |
 
 The matrix is the contract: `seLinuxOptions.level` per Deployment (added to each

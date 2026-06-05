@@ -3,7 +3,7 @@
 # registers telemetry here: the OTel Collector DaemonSet tails each pod's logs
 # (tagged with its namespace) and receives OTLP traces/metrics, exporting all of
 # it to Uptrace (which stores in the shared ClickHouse). Admins grant users
-# access to namespaces (snapdragon-admin-bff) to scope what they can view.
+# access to namespaces (admin-bff) to scope what they can view.
 ---
 apiVersion: v1
 kind: Namespace
