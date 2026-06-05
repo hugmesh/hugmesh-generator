@@ -72,6 +72,7 @@ ClusterSecretStore **`snapdragon-vault`** (provider `vault`, token auth from the
 | Vault path (`secret/snapdragon/…`) | → k8s Secret | Namespace |
 |---|---|---|
 | `casdoor` (`google_client_id`/`google_client_secret`) | `casdoor-google` (`clientId`/`clientSecret`) | `snapdragon-pki` |
+| `casdoor` (`db_password_plain`) | `casdoor-db` (`username`=`casdoor`/`password`) | `snapdragon-pki` |
 | `clickhouse` (`password`) | `clickhouse-auth` (`password`) | `snapdragon-backend`, `observability` |
 | `uptrace` (`pg_password`/`project_token`) | `uptrace-auth` (`pg-password`/`project-token`) | `observability` |
 

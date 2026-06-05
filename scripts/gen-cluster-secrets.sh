@@ -78,6 +78,11 @@ echo "==> Generating cluster secrets for base 'secret/${BASE}/' (brand=${BRAND})
 CASDOOR_ADMIN_PLAIN="$(openssl rand -base64 18)"
 CASDOOR_ADMIN_HASH="$(openssl passwd -6 "${CASDOOR_ADMIN_PLAIN}")"
 
+# Casdoor external Postgres (casdoor-pg) password. The DB user is the fixed
+# "casdoor" (set in the casdoor-db ExternalSecret template); only the password
+# is minted/stored.
+CASDOOR_DB_PASSWORD="$(openssl rand -base64 24)"
+
 # Google OAuth client values are issued by Google; generate placeholders the
 # operator replaces. They still populate the casdoor-google k8s Secret.
 CASDOOR_GOOGLE_CLIENT_ID="REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID"
@@ -130,7 +135,8 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
             client_id="${CASDOOR_CLIENT_ID}" \
             client_secret="${CASDOOR_CLIENT_SECRET}" \
             admin_password="${CASDOOR_ADMIN_HASH}" \
-            admin_password_plain="${CASDOOR_ADMIN_PLAIN}"
+            admin_password_plain="${CASDOOR_ADMIN_PLAIN}" \
+            db_password_plain="${CASDOOR_DB_PASSWORD}"
         # Per-app service OAuth2 client-secrets (one KV key per app).
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/casdoor-apps" "${CASDOOR_APP_KV_ARGS[@]}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/clickhouse" \
@@ -168,6 +174,7 @@ BRAND="${BRAND}" \
 CASDOOR_GOOGLE_CLIENT_ID="${CASDOOR_GOOGLE_CLIENT_ID}" \
 CASDOOR_GOOGLE_CLIENT_SECRET="${CASDOOR_GOOGLE_CLIENT_SECRET}" \
 CASDOOR_ADMIN_PLAIN="${CASDOOR_ADMIN_PLAIN}" \
+CASDOOR_DB_PASSWORD="${CASDOOR_DB_PASSWORD}" \
 CASDOOR_APP_SECRETS_JSON="${CASDOOR_APP_SECRETS_JSON}" \
 CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD}" \
 UPTRACE_PG_PASSWORD="${UPTRACE_PG_PASSWORD}" \
@@ -187,6 +194,11 @@ data = {
         "casdoor-admin": {
             "username": "admin",
             "password": os.environ["CASDOOR_ADMIN_PLAIN"],
+        },
+        # external Postgres (casdoor-pg) credentials for Casdoor + the DB pod.
+        "casdoor-db": {
+            "username": "casdoor",
+            "password": os.environ["CASDOOR_DB_PASSWORD"],
         },
         # one key per app: the OAuth2 application client-secret.
         "casdoor-app-secrets": app_secrets,

@@ -21,10 +21,11 @@ data:
     runmode = prod
     copyrequestbody = true
     SessionOn = true
-    # External Postgres (casdoor-pg). Casdoor appends dbName to dataSourceName, so
-    # leave dbname= empty here. Credentials come from env (ESO Secret casdoor-db).
+    # External Postgres (casdoor-pg). For the postgres driver Casdoor uses the
+    # dataSourceName verbatim (it only appends dbName for MySQL), so dbname= must
+    # be set inline here. Credentials come from env (ESO Secret casdoor-db).
     driverName = postgres
-    dataSourceName = "user=${CASDOOR_DB_USER||casdoor} password=${CASDOOR_DB_PASSWORD||} host=casdoor-pg port=5432 sslmode=disable dbname="
+    dataSourceName = "user=${CASDOOR_DB_USER||casdoor} password=${CASDOOR_DB_PASSWORD||} host=casdoor-pg port=5432 sslmode=disable dbname=casdoor"
     dbName = casdoor
     tableNamePrefix =
     showSql = false
