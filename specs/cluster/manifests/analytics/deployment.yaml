@@ -78,42 +78,6 @@ spec:
   selector: { app: kafka }
   ports: [{ name: kafka, port: 9092, targetPort: kafka }]
 ---
-# Spring admin BFF — Eureka-registered, role-locked, owns the allowlist +
-# usage aggregation. Talks to Casdoor through the snapdragon-pki gateway.
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: snapdragon-admin-bff
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-admin-bff, app.kubernetes.io/part-of: snapdragon.systems }
-spec:
-  replicas: 1
-  selector: { matchLabels: { app: snapdragon-admin-bff } }
-  template:
-    metadata: { labels: { app: snapdragon-admin-bff } }
-    spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
-      containers:
-        - name: bff
-          image: snapdragon-systems/admin-bff:dev
-          ports: [{ name: http, containerPort: 8080 }]
-          env:
-            - { name: SPRING_PROFILES_ACTIVE, value: "casdoor,eureka,clickhouse" }
-            - { name: CASDOOR_ISSUER_URI, value: "https://id.snapdragon.systems" }
-            - { name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE, value: "http://eureka.snapdragon-backend.svc.cluster.local:8761/eureka" }
-            - { name: SPRING_KAFKA_BOOTSTRAP_SERVERS, value: "kafka:9092" }
-            - { name: CLICKHOUSE_URL, value: "http://clickhouse:8123" }
-            - { name: SPRING_DATASOURCE_URL, value: "jdbc:postgresql://snapdragon-pg:5432/snapdragon" }
-            - { name: CASSANDRA_CONTACT_POINTS, value: "cassandra.snapdragon-pki.svc.cluster.local:9042" }
-          readinessProbe: { httpGet: { path: /actuator/health/readiness, port: http }, initialDelaySeconds: 20 }
----
-apiVersion: v1
-kind: Service
-metadata: { name: snapdragon-admin-bff, namespace: snapdragon-backend }
-spec:
-  selector: { app: snapdragon-admin-bff }
-  ports: [{ name: http, port: 8080, targetPort: http }]
----
 # Spring Cloud Netflix Eureka — service discovery for the Spring tier
 # (admin-bff, gateways, APIs register here).
 apiVersion: apps/v1
