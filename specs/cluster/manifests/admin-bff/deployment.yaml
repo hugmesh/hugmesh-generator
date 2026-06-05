@@ -42,8 +42,23 @@ spec:
             # R2DBC handle to the gateway_route_access Postgres (snapdragon-pki).
             - name: ROUTE_ACCESS_R2DBC_URL
               value: "r2dbc:postgresql://route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway"
+            # This BFF also owns the usage-analytics aggregation (the role the
+            # removed snapdragon-admin-bff copy used to run): Eureka-registered,
+            # consumes the Kafka usage-event bus into ClickHouse, serves
+            # /bff/admin/usage. Hence the eureka + clickhouse profiles + wiring.
             - name: SPRING_PROFILES_ACTIVE
-              value: "casdoor"
+              value: "casdoor,eureka,clickhouse"
+            - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+              value: "http://eureka.snapdragon-backend.svc.cluster.local:8761/eureka"
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:9092"
+            - name: CLICKHOUSE_URL
+              value: "http://clickhouse:8123"
+            # Config datastore (separate from the route-access R2DBC handle above).
+            - name: SPRING_DATASOURCE_URL
+              value: "jdbc:postgresql://snapdragon-pg:5432/snapdragon"
+            - name: CASSANDRA_CONTACT_POINTS
+              value: "cassandra.snapdragon-pki.svc.cluster.local:9042"
           readinessProbe:
             httpGet: { path: /actuator/health/readiness, port: http }
             initialDelaySeconds: 20
