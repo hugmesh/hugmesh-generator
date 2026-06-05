@@ -1,0 +1,40 @@
+# Casdoor app.conf override that points Casdoor at the external Postgres
+# (casdoor-pg) instead of the all-in-one image's bundled DB. Mounted over the
+# image's conf/app.conf. NO secrets here — the DB user/password are interpolated
+# at startup from env (CASDOOR_DB_USER / CASDOOR_DB_PASSWORD), which the
+# Deployment sources from the ESO Secret "casdoor-db".
+#
+# !!! Casdoor's app.conf keys and the beego "${ENV||default}" interpolation are
+# !!! version-specific. This is a working scaffold — validate the field set and
+# !!! the Postgres dataSourceName against the deployed casbin/casdoor image; if
+# !!! Casdoor refuses to start, diff against that image's bundled conf/app.conf.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: casdoor-app-conf
+  namespace: snapdragon-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+data:
+  app.conf: |
+    appname = casdoor
+    httpport = 8000
+    runmode = prod
+    copyrequestbody = true
+    SessionOn = true
+    # External Postgres (casdoor-pg). For the postgres driver Casdoor uses the
+    # dataSourceName verbatim (it only appends dbName for MySQL), so dbname= must
+    # be set inline here. Credentials come from env (ESO Secret casdoor-db).
+    driverName = postgres
+    dataSourceName = "user=${CASDOOR_DB_USER||casdoor} password=${CASDOOR_DB_PASSWORD||} host=casdoor-pg port=5432 sslmode=disable dbname=casdoor"
+    dbName = casdoor
+    tableNamePrefix =
+    showSql = false
+    redisEndpoint =
+    isCloudIntranet = false
+    authState = "casdoor"
+    socks5Proxy = ""
+    verificationCodeTimeout = 10
+    initScore = 0
+    logPostOnly = true
+    origin = "https://id.snapdragon.systems"
+    enableGzip = true
