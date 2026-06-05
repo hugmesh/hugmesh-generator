@@ -21,10 +21,12 @@ FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandb
 PKGDIR="@@WORK_DIR@@/pkgdir"
 DISTDIR="@@WORK_DIR@@/distfiles"
 
-# Hardened USE baseline + container runtime + vendor-agnostic GPU stack.
+# Hardened USE baseline + container runtime + (optional) vendor-agnostic GPU stack.
+# @@GPU_USE@@ expands to the GPU USE flags (vulkan vaapi vdpau gbm egl gles2) for
+# the be+gpu / omnibus roles, and to nothing for the headless pki/be/fe roles.
 USE="bindist hardened pie ssp -X -gtk -qt5 -qt6 -systemd -pulseaudio -bluetooth"
 USE="${USE} cgroup cgroup2 seccomp selinux containers netlink"
-USE="${USE} vulkan vaapi vdpau gbm egl gles2"
+USE="${USE} @@GPU_USE@@"
 
 # Build only the MCS SELinux policy: provision_selinux() and containerd's per-pod
 # MCS labelling both target type=mcs. Pinning this avoids relying on the profile
@@ -32,8 +34,10 @@ USE="${USE} vulkan vaapi vdpau gbm egl gles2"
 POLICY_TYPES="mcs"
 
 # Open, vendor-agnostic GPU: AMD (amdgpu/radeonsi), Intel (i915/iris),
-# NVIDIA via nouveau. No proprietary blobs.
-VIDEO_CARDS="amdgpu radeonsi intel iris nouveau"
+# NVIDIA via nouveau. No proprietary blobs. @@VIDEO_CARDS@@ expands to that list
+# for the be+gpu / omnibus roles, and to nothing (no DRI drivers) for headless
+# pki/be/fe roles.
+VIDEO_CARDS="@@VIDEO_CARDS@@"
 INPUT_DEVICES=""
 
 ACCEPT_LICENSE="* -@EULA"

@@ -22,6 +22,10 @@ spec:
       # uptrace-pg-data is snapdragon-local — pin to the x86_64 host that holds
       # the data disks so the PV mounts (it previously had no selector).
       nodeSelector: { kubernetes.io/arch: amd64 }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c50"
       containers:
         - name: pg
           image: postgres:16-alpine
@@ -72,6 +76,10 @@ spec:
       # queries — all on the x86_64 host. (The OTel Collector DaemonSet below
       # stays cluster-wide; it must tail every node's logs.)
       nodeSelector: { kubernetes.io/arch: amd64 }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c51"
       containers:
         - name: uptrace
           image: uptrace/uptrace:2.0.3
@@ -153,6 +161,9 @@ spec:
     metadata: { labels: { app: otel-collector } }
     spec:
       serviceAccountName: otel-collector
+      securityContext:
+        seLinuxOptions:
+          type: spc_t
       containers:
         - name: otel-collector
           image: otel/opentelemetry-collector-contrib:0.153.0

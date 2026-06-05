@@ -16,6 +16,10 @@ spec:
     metadata: { labels: { app: snapdragon-matrix-ui } }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c41"
       containers:
         - name: web
           image: snapdragon-systems/matrix-ui:dev
@@ -37,6 +41,10 @@ spec:
     metadata: { labels: { app: snapdragon-mastodon-ui } }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c42"
       containers:
         - name: web
           image: snapdragon-systems/mastodon-ui:dev
@@ -58,6 +66,10 @@ spec:
     metadata: { labels: { app: snapdragon-login-ui } }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c43"
       containers:
         - name: web
           image: snapdragon-systems/login-ui:dev
@@ -79,6 +91,10 @@ spec:
     metadata: { labels: { app: snapdragon-admin-ui } }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c44"
       containers:
         - name: web
           image: snapdragon-systems/admin-ui:dev

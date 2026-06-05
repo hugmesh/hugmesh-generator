@@ -1,0 +1,12 @@
+# localpath_provisioner.fc
+# The local-path storage roots live OUTSIDE /var/lib (they are on the
+# amd64 host's data disk + USB), so they do NOT inherit container_file_t
+# from the default contexts. Label them explicitly so the helper domain's
+# manage/relabel allows apply. provision_selinux()'s first-boot relabel
+# (setfiles / restorecon -RF /) applies these.
+#
+# If the disks are mounted AFTER provisioning, add to the storage-mount
+# step:  restorecon -RF /mnt/data/local-path /mnt/usb/local-path
+
+/mnt/data/local-path(/.*)?    gen_context(system_u:object_r:container_file_t,s0)
+/mnt/usb/local-path(/.*)?     gen_context(system_u:object_r:container_file_t,s0)

@@ -27,6 +27,9 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000
         seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c23"
       containers:
         - name: admin-bff
           image: snapdragon-systems/admin-bff:dev

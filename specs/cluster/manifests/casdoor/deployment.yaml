@@ -18,6 +18,10 @@ spec:
     spec:
       nodeSelector:
         snapdragon.systems/pki: "true"
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c21"
       containers:
         - name: casdoor
           image: casbin/casdoor:3.80.0

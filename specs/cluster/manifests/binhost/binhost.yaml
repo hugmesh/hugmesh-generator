@@ -41,6 +41,10 @@ spec:
     metadata: { labels: { app: binhost } }
     spec:
       nodeSelector: { kubernetes.io/arch: amd64 }   # the build host + disks
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c60"
       containers:
         - name: nginx
           image: nginx:1.27-alpine

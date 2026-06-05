@@ -59,6 +59,10 @@ spec:
     metadata: { labels: { app.kubernetes.io/name: akkoma-db } }
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c31"
       containers:
         - name: postgres
           image: postgres:16-alpine
@@ -97,6 +101,10 @@ spec:
     metadata: { labels: { app.kubernetes.io/name: akkoma } }
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c30"
       initContainers:
         - name: migrate
           image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag

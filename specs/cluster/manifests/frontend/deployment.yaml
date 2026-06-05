@@ -15,6 +15,10 @@ spec:
     metadata: { labels: { app: snapdragon-systems-web } }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c40"
       containers:
         - name: web
           image: snapdragon-systems/snapdragon.systems:dev

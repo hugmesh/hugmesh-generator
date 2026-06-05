@@ -29,6 +29,17 @@ SKIP_KERNEL=false
 SKIP_ISO=false
 SKIP_CLEAN=false
 RESUME=false
+
+# Output artifact: the raw partitioned .img is the ONLY default Pi artifact — it
+# is the Pi's bootable, read-write, run-off-USB live system (RPi firmware boots
+# the FAT partition; a Pi cannot boot a 9660 ISO, and there is no installer for
+# the Pi). The installer ISO remains available as an opt-in transport via --iso.
+BUILD_IMG=true          # produce the flashable raw .img (the Pi live USB)
+BUILD_ISO=false         # no installer/ISO by default for the Pi (--iso to force)
+BUILD_TAR=true          # also emit the mounted-filesystem tarball (.fs.tar.xz)
+ROOT_MiB=6144           # ext4 root partition size in the .img (growroot expands it on first boot)
+SD_ONLY=false           # use literal /dev/mmcblk0p2 instead of PARTUUID/LABEL identity
+COMPRESS_IMG=false      # xz -9 the finished .img
 EXTRA_PACKAGES=""
 TIMEZONE="UTC"
 HOSTNAME=""
@@ -201,6 +212,37 @@ OPTIONS
         Release version stamp used in filenames and the ISO volume ID.
         Default: 2026.0
 
+  Artifacts
+        By default the build produces a raw, partitioned, flashable .img
+        (a FAT32 /boot + ext4 root, ready for `dd`/Imager).  The installer
+        ISO is no longer built unless explicitly requested.
+
+    --img
+        Produce the raw .img.  This is the DEFAULT.
+
+    --no-img
+        Do not produce the .img (e.g. when you only want the ISO).
+
+    --iso
+        ALSO produce the bootable installer ISO (in addition to the .img).
+
+    --both
+        Produce both the .img and the installer ISO.
+
+    --img-size MiB
+        Size (in MiB) of the ext4 root partition baked into the .img.
+        growroot expands it to fill the medium on first boot, so this only
+        needs to fit the stage4 plus a little headroom.
+        Default: 6144
+
+    --sd-only
+        Bake a fixed root=/dev/mmcblk0p2 (and device-path fstab) into the
+        .img instead of resolving the root by PARTUUID/LABEL.  Use only for
+        SD-card-only images; the PARTUUID default also boots from USB/NVMe.
+
+    --compress
+        xz -9 the finished .img (produces <img>.xz).
+
     --seed-url URL
         URL to the latest-stage3 index file used to locate the seed
         tarball.
@@ -258,7 +300,9 @@ OPTIONS
         packages only.
 
     --skip-iso
-        Skip ISO generation.  Only produce the stage4 tarball.
+        Alias for --no-iso: do not build the installer ISO (the default).
+        Retained for backwards compatibility; with the .img default this
+        means "img only".
 
     --skip-clean
         Do not strip binaries or remove docs/headers from the
@@ -406,7 +450,17 @@ while [[ $# -gt 0 ]]; do
         --skip-mesh)          SKIP_MESH=true;          shift   ;;
         --skip-tailscale)     SKIP_TAILSCALE=true;     shift   ;;
         --skip-kernel)        SKIP_KERNEL=true;        shift   ;;
-        --skip-iso)           SKIP_ISO=true;           shift   ;;
+        --img)                BUILD_IMG=true;          shift   ;;
+        --no-img)             BUILD_IMG=false;         shift   ;;
+        --iso)                BUILD_ISO=true;          shift   ;;
+        --both)               BUILD_IMG=true; BUILD_ISO=true; shift ;;
+        --img-size)           ROOT_MiB="$2";           shift 2 ;;
+        --sd-only)            SD_ONLY=true;            shift   ;;
+        --compress)           COMPRESS_IMG=true;       shift   ;;
+        --tar)                BUILD_TAR=true;          shift   ;;
+        --no-tar)             BUILD_TAR=false;         shift   ;;
+        # --skip-iso / --no-iso: don't build the installer ISO (now the default).
+        --skip-iso|--no-iso)  BUILD_ISO=false;         shift   ;;
         --skip-clean)         SKIP_CLEAN=true;         shift   ;;
         --resume)             RESUME=true;             shift   ;;
         -h|--help)            usage                           ;;
@@ -428,6 +482,11 @@ done
 if [ -z "${WORK_DIR}" ]; then
     WORK_DIR="$(pwd)/rpi5-stage4-build"
 fi
+
+# Reconcile the legacy SKIP_ISO switch with the new BUILD_ISO design. The ISO is
+# now opt-in: SKIP_ISO is simply the negation of BUILD_ISO so the existing
+# prerequisite check (xorrisofs) and the Phase 5 gate keep working unchanged.
+if ${BUILD_ISO}; then SKIP_ISO=false; else SKIP_ISO=true; fi
 
 # Validate role and derive a default hostname from it
 case "${ROLE}" in
@@ -526,6 +585,42 @@ for tool in "${CROSS_TARGET}-gcc" "${CROSS_TARGET}-strip" curl tar file; do
     fi
 done
 
+# ── Host SELinux policy build tools ────────────────────────────────
+# sec-policy/selinux-base's src_compile runs refpolicy's `emake base`, which
+# assembles base.pp with the HOST binaries checkpolicy/checkmodule (sys-apps/
+# checkpolicy) AND semodule_package (sys-apps/semodule-utils). refpolicy
+# hardcodes their absolute /usr/bin paths (Makefile SEMOD_PKG ?= $(BINDIR)/
+# semodule_package), so they must exist on the x86 BUILD host — a cross/target
+# copy is aarch64 and can't run here, and --with-bdeps=n means portage won't
+# pull the ebuild BDEPEND anyway (selinux-base's BDEPEND even omits semodule-
+# utils). Without semodule_package, `emake base` dies and selinux-base fails
+# src_compile, so NO .pp ships and keys-provision has nothing to load at first
+# boot. Provision them natively here. Building base.pp at compile time loads
+# nothing into a kernel (selinux-base has no pkg_postinst); the policy-store
+# load stays deferred to first boot (provision_selinux). Build runs as root.
+HOST_POLICY_TOOLS=()
+command -v checkpolicy       &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/checkpolicy)
+command -v checkmodule       &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/checkpolicy)
+command -v semodule_package  &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/semodule-utils)
+command -v m4                &>/dev/null || HOST_POLICY_TOOLS+=(sys-devel/m4)
+if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
+    readarray -t HOST_POLICY_TOOLS < <(printf '%s\n' "${HOST_POLICY_TOOLS[@]}" | sort -u)
+    if [ "$(id -u)" -eq 0 ] && command -v emerge &>/dev/null; then
+        warn "Missing host SELinux build tools: ${HOST_POLICY_TOOLS[*]} — emerging natively"
+        # NATIVE host emerge (no ROOT/SYSROOT/PORTAGE_CONFIGROOT overrides):
+        # these are x86 build tools, NOT part of the aarch64 sysroot.
+        emerge --noreplace --quiet "${HOST_POLICY_TOOLS[@]}" \
+            || { err "Failed to install host SELinux build tools (${HOST_POLICY_TOOLS[*]})."; \
+                 err "selinux-base src_compile (emake base) needs host checkpolicy + semodule_package."; exit 1; }
+    else
+        err "Missing host SELinux build tools: ${HOST_POLICY_TOOLS[*]}"
+        err "Install on the BUILD host (NOT the sysroot): emerge sys-apps/checkpolicy sys-apps/semodule-utils sys-devel/m4"
+        err "selinux-base's 'emake base' assembles base.pp with the host checkpolicy/checkmodule/semodule_package."
+        exit 1
+    fi
+fi
+info "Host SELinux policy build tools present (checkpolicy, checkmodule, semodule_package, m4)"
+
 if ! ${SKIP_ISO} && ! command -v xorrisofs &>/dev/null; then
     err "xorrisofs not found in PATH (needed for ISO generation)."
     err "Pass --skip-iso to skip, or install dev-libs/libisoburn."
@@ -619,6 +714,9 @@ cp "${SPECS_DIR}/portage/profile/use.mask"                "${SYSROOT}/etc/portag
 cp "${SPECS_DIR}/portage/package.accept_keywords/"*       "${SYSROOT}/etc/portage/package.accept_keywords/"
 cp "${SPECS_DIR}/portage/package.use/"*                   "${SYSROOT}/etc/portage/package.use/"
 cp "${SPECS_DIR}/portage/package.env/"*                   "${SYSROOT}/etc/portage/package.env/"
+# Plain (non-templated) per-package env files, e.g. python-cross.conf. The .tmpl
+# env files (cross-go.conf) are rendered separately just below.
+cp "${SPECS_DIR}/portage/env/"*.conf                      "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 
 # Templated portage specs
 render_template "${SPECS_DIR}/portage/make.conf.tmpl"     "${SYSROOT}/etc/portage/make.conf"
@@ -951,12 +1049,183 @@ tar -C "${SYSROOT}" \
 info "Stage4 tarball: ${STAGE4_TARBALL}"
 info "Size: $(du -sh "${STAGE4_TARBALL}" | cut -f1)"
 
-# ── 11. Build bootable ISO ─────────────────────────────────────────
+# ── 10b. Build a raw, flashable .img (DEFAULT artifact) ────────────
+# Produces a partitioned disk image (FAT32 /boot + ext4 root) that boots a Pi 5
+# directly — no installer step. Same naming as the ISO so the flasher/launchers
+# autodetect it. growroot expands the (last) ext4 partition to fill the medium
+# on first boot, so ROOT_MiB only needs to fit the stage4 plus headroom.
+#
+# Runs entirely as root (the build is already privileged): losetup, mkfs, mount
+# and xattr-preserving extraction all require it. A cleanup trap tears down the
+# mounts and the loop device on ANY failure or early return.
+IMG_PATH="(not built)"
+FS_TAR_PATH="(not built)"
+build_img() {
+    local img_size_mib loop boot_part root_part
+    local root_mnt
+    local p2_uuid p1_uuid
+    loop=""; root_mnt=""
+
+    IMG_PATH="${WORK_DIR}/gentoo-rpi5-arm64-${ROLE}-k8s-${REL_VERSION}.img"
+
+    # 1MiB alignment gap + 512MiB FAT boot + ROOT_MiB ext4 root + 1MiB slack.
+    img_size_mib=$(( 1 + 512 + ROOT_MiB + 1 ))
+
+    # Teardown helper — registered on ERR/EXIT so a failure mid-build never leaks
+    # a mounted filesystem or an orphaned loop device.
+    _img_cleanup() {
+        local rc=$?
+        set +e
+        [ -n "${root_mnt}" ] && mountpoint -q "${root_mnt}/boot" && umount "${root_mnt}/boot"
+        [ -n "${root_mnt}" ] && mountpoint -q "${root_mnt}" && umount "${root_mnt}"
+        [ -n "${loop}" ] && losetup "${loop}" &>/dev/null && losetup -d "${loop}"
+        [ -n "${root_mnt}" ] && rmdir "${root_mnt}" 2>/dev/null
+        return "${rc}"
+    }
+    trap '_img_cleanup' ERR EXIT
+
+    info "Image size: ${img_size_mib} MiB (1 gap + 512 FAT + ${ROOT_MiB} ext4 + 1 slack)"
+    rm -f "${IMG_PATH}"
+    truncate -s "${img_size_mib}MiB" "${IMG_PATH}"
+
+    # msdos table: p1 FAT32 boot (1..513MiB, boot flag), p2 ext4 root (513..100%).
+    # p2 is LAST so growroot can expand it to the end of the medium on first boot.
+    parted -s "${IMG_PATH}" mklabel msdos
+    parted -s "${IMG_PATH}" mkpart primary fat32 1MiB 513MiB
+    parted -s "${IMG_PATH}" set 1 boot on
+    parted -s "${IMG_PATH}" mkpart primary ext4 513MiB 100%
+
+    loop="$(losetup --show -fP "${IMG_PATH}")"
+    boot_part="${loop}p1"
+    root_part="${loop}p2"
+    # Settle the partition device nodes that losetup -P just created.
+    udevadm settle &>/dev/null || sleep 1
+
+    info "Formatting ${boot_part} (FAT32 RPI_BOOT) and ${root_part} (ext4 RPI_ROOT)"
+    mkfs.vfat -F 32 -n RPI_BOOT "${boot_part}"
+    mkfs.ext4 -q -L RPI_ROOT -F "${root_part}"
+
+    root_mnt="$(mktemp -d "${WORK_DIR}/img-root.XXXXXX")"
+    mount "${root_part}" "${root_mnt}"
+
+    # Extract the stage4 into the ext4 root. Mirror install.sh's xattr fallback:
+    # try xattr-preserving extraction, fall back to a plain one if the FS/tar
+    # can't carry the security.* attrs.
+    info "Extracting stage4 into ${root_mnt}"
+    tar -C "${root_mnt}" --xattrs-include='*.*' -xpf "${STAGE4_TARBALL}" 2>/dev/null || \
+    tar -C "${root_mnt}" -xpf "${STAGE4_TARBALL}"
+
+    # The /boot firmware lives on the FAT partition. Mount the FAT over the root's
+    # /boot mountpoint and move the firmware there, so the ext4 /boot is just a
+    # mountpoint (no duplicate firmware burning ext4 space).
+    rm -rf "${root_mnt:?}/boot"
+    mkdir -p "${root_mnt}/boot"
+    mount "${boot_part}" "${root_mnt}/boot"
+
+    # Populate /boot from the sysroot's boot tree (kernel_2712.img, config.txt,
+    # cmdline.txt, bcm2712*.dtb, overlays/, firmware) — the same files the ISO
+    # stages. Copy the staged ISO boot tree if present (built by Phase 5), else
+    # fall back to the authoritative sysroot/boot.
+    local boot_src="${SYSROOT}/boot"
+    if [ -d "${ISO_DIR}/boot" ] && [ -f "${ISO_DIR}/boot/${RPI_KERNEL_IMG}" ]; then
+        boot_src="${ISO_DIR}/boot"
+    fi
+    info "Staging boot files from ${boot_src}"
+    cp "${boot_src}/${RPI_KERNEL_IMG}"        "${root_mnt}/boot/"
+    cp "${boot_src}/config.txt"               "${root_mnt}/boot/"
+    cp "${boot_src}/cmdline.txt"              "${root_mnt}/boot/"
+    cp "${boot_src}/"${RPI_DTB_PREFIX}*.dtb   "${root_mnt}/boot/" 2>/dev/null || true
+    cp -r "${boot_src}/overlays"              "${root_mnt}/boot/" 2>/dev/null || true
+    for fw in bootcode.bin fixup*.dat start*.elf; do
+        cp "${SYSROOT}/boot/${fw}"            "${root_mnt}/boot/" 2>/dev/null || true
+    done
+
+    # ── Root identity ─────────────────────────────────────────────────
+    # Default: address the root (and /boot) by PARTUUID/LABEL so the image boots
+    # unchanged from SD, USB or NVMe. --sd-only bakes the fixed mmcblk0p2 path.
+    if ${SD_ONLY}; then
+        info "Root identity: /dev/mmcblk0p2 (--sd-only; device-path fstab)"
+        # cmdline.txt already ships root=/dev/mmcblk0p2; fstab already mounts the
+        # mmcblk0p1/p2 device paths — nothing to rewrite.
+    else
+        p2_uuid="$(blkid -s PARTUUID -o value "${root_part}")"
+        p1_uuid="$(blkid -s PARTUUID -o value "${boot_part}")"
+        info "Root identity: PARTUUID=${p2_uuid} (boot PARTUUID=${p1_uuid})"
+
+        # Rewrite root= in the cmdline.txt that landed on the FAT partition,
+        # preserving every other token on the line.
+        sed -i -E \
+            "s#root=[^ ]+#root=PARTUUID=${p2_uuid}#; s#rootfstype=[^ ]+#rootfstype=ext4#" \
+            "${root_mnt}/boot/cmdline.txt"
+        grep -q 'rootfstype=' "${root_mnt}/boot/cmdline.txt" || \
+            sed -i -E "s#(root=PARTUUID=${p2_uuid})#\1 rootfstype=ext4#" "${root_mnt}/boot/cmdline.txt"
+        grep -q 'rootwait'    "${root_mnt}/boot/cmdline.txt" || \
+            sed -i -E "s#(root=PARTUUID=${p2_uuid})#\1 rootwait#" "${root_mnt}/boot/cmdline.txt"
+
+        # Rewrite the ext4 root's /etc/fstab to mount /boot and / by identity.
+        sed -i -E \
+            -e "s#^/dev/mmcblk0p1#PARTUUID=${p1_uuid}#" \
+            -e "s#^/dev/mmcblk0p2#PARTUUID=${p2_uuid}#" \
+            "${root_mnt}/etc/fstab"
+    fi
+
+    # ── Filesystem tarball ────────────────────────────────────────────
+    # Capture the FULLY-MOUNTED tree (ext4 root with the FAT /boot mounted in
+    # place) as one tar, so it can be untarred onto pre-mounted partitions (mount
+    # the boot/EFI partition at /boot first) to provision a disk without dd. tar
+    # crosses the /boot mountpoint by default, so the firmware is captured at
+    # /boot/*. This is the .img's exact final filesystem (PARTUUID fstab + cmdline
+    # baked in) — the rootfs "as if mounted".
+    if ${BUILD_TAR}; then
+        local fs_tar="${WORK_DIR}/gentoo-rpi5-arm64-${ROLE}-k8s-${REL_VERSION}.fs.tar.xz"
+        info "Filesystem tarball (mounted tree) -> ${fs_tar}"
+        tar -C "${root_mnt}" --xattrs --xattrs-include='*.*' --numeric-owner -cpf - . 2>/dev/null \
+            | xz -T0 -6 > "${fs_tar}" \
+          || tar -C "${root_mnt}" --numeric-owner -cpf - . | xz -T0 -6 > "${fs_tar}"
+        FS_TAR_PATH="${fs_tar}"
+    fi
+
+    sync
+    umount "${root_mnt}/boot"
+    umount "${root_mnt}"
+    rmdir  "${root_mnt}"; root_mnt=""
+    losetup -d "${loop}"; loop=""
+
+    # Disarm the trap — the happy path tore everything down cleanly.
+    trap - ERR EXIT
+
+    if ${COMPRESS_IMG}; then
+        info "Compressing image (xz -T0 -9)..."
+        xz -T0 -9 -f "${IMG_PATH}"
+        IMG_PATH="${IMG_PATH}.xz"
+    fi
+
+    info "Image created: ${IMG_PATH}"
+    info "Size: $(du -sh "${IMG_PATH}" | cut -f1)"
+}
+
+if ${BUILD_IMG}; then
+    banner "Phase 5: Building raw .img"
+    # A bootable image needs the kernel. Guard with the same check Phase 5 (ISO)
+    # uses: if the kernel is absent, skip the .img rather than crash on cp.
+    if [ ! -f "${SYSROOT}/boot/${RPI_KERNEL_IMG}" ]; then
+        warn "Kernel ${RPI_KERNEL_IMG} not in sysroot — skipping .img."
+        warn "Ensure sys-kernel/raspberrypi-sources installed and the kernel phase ran"
+        warn "(don't pass --skip-kernel). Stage4 tarball: ${STAGE4_TARBALL}"
+        IMG_PATH="(not built — kernel missing)"
+    else
+        build_img
+    fi
+else
+    banner "Phase 5: SKIPPED .img (--no-img)"
+fi
+
+# ── 11. Build bootable installer ISO (opt-in: --iso / --both) ──────
 if ${SKIP_ISO}; then
-    banner "Phase 5: SKIPPED (--skip-iso)"
+    banner "Phase 6: SKIPPED installer ISO (default; pass --iso to build it)"
     ISO_PATH="(not built)"
 else
-    banner "Phase 5: Building bootable ISO"
+    banner "Phase 6: Building bootable installer ISO"
 
     # A bootable image needs the kernel. If it's absent (kernel build skipped or
     # raspberrypi-sources failed to install), don't crash on cp — explain and
@@ -1045,6 +1314,7 @@ echo "  Artifacts:"
 echo "    Work directory:  ${WORK_DIR}"
 echo "    Sysroot:         ${SYSROOT}"
 echo "    Stage4 tarball:  ${STAGE4_TARBALL}"
+echo "    Image (.img):    ${IMG_PATH}"
 echo "    ISO:             ${ISO_PATH}"
 echo "    Binary packages: ${WORK_DIR}/pkgdir"
 echo "    Build log:       ${LOG_FILE}"

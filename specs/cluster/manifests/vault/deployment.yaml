@@ -40,6 +40,10 @@ spec:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
           effect: NoSchedule
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c70"
       containers:
         - name: vault
           image: hashicorp/vault:1.21.4   # pinned to latest stable 1.x; evaluate the 2.x major separately

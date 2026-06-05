@@ -39,4 +39,9 @@ ACCEPT_KEYWORDS="arm64 ~arm64"
 PYTHON_TARGETS="python3_12"
 PYTHON_SINGLE_TARGET="python3_12"
 
+# NOTE: the cross-compile chflags() configure fix for dev-lang/python lives in
+# package.env (env/python-cross.conf), NOT here — a GLOBAL EXTRA_ECONF leaks the
+# ac_cv_* cache args into packages with hand-written configure scripts (e.g.
+# sys-apps/iproute2) that reject unknown options and die.
+
 PAX_MARKINGS="none"

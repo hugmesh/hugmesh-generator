@@ -1,0 +1,6 @@
+# Role-independent container runtime + firewall USE flags (always installed).
+# (Split out of package.use/gpu so the headless pki/be/fe roles, which skip the
+# gpu file, still get these.)
+app-containers/containerd btrfs device-mapper seccomp selinux
+app-containers/runc seccomp selinux
+net-firewall/iptables nftables
