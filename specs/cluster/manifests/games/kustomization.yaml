@@ -3,3 +3,18 @@ kind: Kustomization
 namespace: snapdragon-games
 resources:
   - deployment.yaml
+
+# First-party images now pull from the in-cluster GitLab container registry
+# (registry.snapdragon.systems = the GitLab chart's hosts.domain default; project
+# path = <group>/<repo>). The CI in each repo pushes :<branch> + :<sha>; we track
+# the moving :main here for dev. Pulls need the gitlab-registry imagePullSecret
+# (ESO-materialized, see manifests/external-secrets).
+images:
+  - { name: snapdragon-systems/snapdragon.games-backend, newName: registry.snapdragon.systems/snapdragon/snapdragon.games/backend, newTag: main }
+patches:
+  - target: { kind: Deployment }
+    patch: |
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: gitlab-registry

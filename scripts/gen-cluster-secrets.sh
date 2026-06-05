@@ -88,6 +88,13 @@ CASDOOR_DB_PASSWORD="$(openssl rand -base64 24)"
 CASDOOR_GOOGLE_CLIENT_ID="REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID"
 CASDOOR_GOOGLE_CLIENT_SECRET="REPLACE_WITH_GOOGLE_OAUTH_CLIENT_SECRET"
 
+# GitLab registry pull credentials — a GROUP DEPLOY TOKEN (scope: read_registry)
+# created by an admin in GitLab. Placeholders the operator replaces; ESO builds
+# the gitlab-registry dockerconfigjson imagePullSecret from these in each app
+# namespace. (In-cluster registry, so no offline-bundle entry.)
+GITLAB_REGISTRY_USER="${GITLAB_REGISTRY_USER:-snapdragon-deploy}"
+GITLAB_REGISTRY_TOKEN="${GITLAB_REGISTRY_TOKEN:-REPLACE_WITH_GITLAB_DEPLOY_TOKEN}"
+
 # Casdoor's own OIDC application client_id / client_secret (used by the BFF).
 CASDOOR_CLIENT_ID="$(openssl rand -hex 16)"
 CASDOOR_CLIENT_SECRET="$(openssl rand -hex 32)"
@@ -144,7 +151,12 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/uptrace" \
             pg_password="${UPTRACE_PG_PASSWORD}" \
             project_token="${UPTRACE_PROJECT_TOKEN}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,clickhouse,uptrace}"
+        # GitLab registry pull token (imagePullSecret source). Replace the
+        # placeholder with a real read_registry deploy token post-bootstrap.
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/gitlab-registry" \
+            username="${GITLAB_REGISTRY_USER}" \
+            token="${GITLAB_REGISTRY_TOKEN}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,clickhouse,uptrace,gitlab-registry}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
