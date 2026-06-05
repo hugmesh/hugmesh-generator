@@ -5,11 +5,13 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STACK="${REPO}/tests/stack"
 E2E="${REPO}/tests/e2e"
-# The host shell + the Matrix remote live in the social-ui repo; mastodon/login/
-# admin are their own native-federation remote repos. NOTE: serve-ui.mjs owns the
-# federation manifest for the test stack (synthesizes a same-origin one), so the
-# host build's empty assets:[] is intentional here, not a serve bug.
-UI_REPO="${SOCIAL_UI_REPO:-${REPO}/../snapdragon-social-ui}"          # host + matrix
+# The host shell + the Matrix remote both live in snapdragon-matrix-ui (the repo
+# carries the `host` and `matrix` ng projects; it was renamed from social-ui).
+# mastodon/login/admin are their own native-federation remote repos. NOTE:
+# serve-ui.mjs owns the federation manifest for the test stack (synthesizes a
+# same-origin one), so the host build's empty assets:[] is intentional here.
+# Override with SOCIAL_UI_REPO (or MATRIX_UI_REPO) if your checkout differs.
+UI_REPO="${SOCIAL_UI_REPO:-${MATRIX_UI_REPO:-${REPO}/../snapdragon-matrix-ui}}"   # host + matrix
 MASTODON_UI_REPO="${MASTODON_UI_REPO:-${REPO}/../snapdragon-mastodon-ui}"
 LOGIN_UI_REPO="${LOGIN_UI_REPO:-${REPO}/../snapdragon-login-ui}"
 ADMIN_UI_REPO="${ADMIN_UI_REPO:-${REPO}/../snapdragon-admin-ui}"
