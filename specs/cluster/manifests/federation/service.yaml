@@ -1,0 +1,16 @@
+# ClusterIP — reached in-cluster by the be-gateway (/api/federation/** route),
+# admin-bff, and the remote-fragment sync sidecar. The Service NAME is load-bearing:
+# clients hard-code the FQDN
+#   snapdragon-federation.snapdragon-backend.svc.cluster.local:8080
+# (remote-fragment/deployment.yaml, the be-gateway route). Do NOT rename.
+apiVersion: v1
+kind: Service
+metadata:
+  name: snapdragon-federation
+  namespace: snapdragon-backend
+  labels: { app: snapdragon-federation }
+spec:
+  type: ClusterIP
+  selector: { app: snapdragon-federation }
+  ports:
+    - { name: http, port: 8080, targetPort: http }

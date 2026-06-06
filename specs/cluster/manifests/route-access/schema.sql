@@ -91,6 +91,15 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- still yields the AND, and any single role is default-deny. More specific than
   -- the /api/** ROLE_USER floor, so it wins the most-specific match.
   ('snapdragon-be-gateway',  '/games/api/admin/**',   'ROLE_GAMES_ADMIN', true),  -- games namespace admin API (games + (admin|mod) ONLY)
+  -- snapdragon-federation module-federation registry/manifest/bundles API. MORE
+  -- SPECIFIC than the /api/** floor below, so it wins the most-specific match.
+  -- Single ROLE_USER row = the coarse authenticated floor (lets a logged-in
+  -- caller reach the manifest + bundles); fine-grained authz (modules/overrides=
+  -- ROLE_ADMIN, moderation=ROLE_MOD/ADMIN) is enforced INSIDE federation's
+  -- SecurityConfig, NOT mirrored here (the converter does not auto-grant ROLE_USER
+  -- to admins/mods, so per-subpath ROLE_ADMIN/ROLE_MOD rows would have to be
+  -- duplicated — the single floor row keeps it self-contained, matching /api/**).
+  ('snapdragon-be-gateway',  '/api/federation/**',    'ROLE_USER',      true),  -- federation registry/manifest/bundles (authenticated floor; ADMIN/MOD enforced in federation)
   ('snapdragon-be-gateway',  '/api/**',               'ROLE_USER',      true),  -- snapdragon APIs
 
   -- fe-gateway (snapdragon.systems -> Angular host + MFEs + same-origin /bff)
