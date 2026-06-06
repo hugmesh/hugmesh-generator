@@ -205,6 +205,14 @@ ssh-keygen -t ed25519 -N '' -C qemu-e2e -f "${SSHKEY}" >/dev/null
 "${SCRIPT_DIR}/seed-accounts.sh" --emit "${KEYS_DIR}" --pubkey "${SSHKEY}.pub" \
     --ssh-user "${SSH_USER}"
 
+# Render the FULL Casdoor RBAC role matrix (systems + games) into the KEYS payload
+# so the rbac-*.spec.ts JWT-role assertions have a seeded Casdoor to log into.
+# casdoor-systems-roles.json / casdoor-games-users.json + apply-systems-roles.sh
+# land under ${KEYS_DIR}/roles/ — the node's casdoor-init consumes them (or
+# apply-systems-roles.sh can be run over SSH against the booted Casdoor). The
+# games-admin-sync Job then materializes ROLE_GAMES_ADMIN from the seeded grants.
+"${SCRIPT_DIR}/seed-accounts.sh" --roles "${KEYS_DIR}"
+
 # Wire the seed hook into provision.json so it runs on first boot.
 if command -v jq >/dev/null 2>&1; then
     PJ="${KEYS_DIR}/provision.json"
