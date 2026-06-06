@@ -14,6 +14,11 @@
 # Any extra args are passed through to BOTH builders, e.g.:
 #   ./scripts/build-all-roles.sh -j 16 --cluster-domain snapdragon.systems
 #
+# Build ENV (baked at image creation) is just another pass-through flag:
+#   ./scripts/build-all-roles.sh --env test  --config brands/local.conf  # LAN fleet
+#   ./scripts/build-all-roles.sh --env prod                              # go-live fleet
+# Default (no --env) is the builders' own default = test (local-first/safe).
+#
 # Env:
 #   WORK_DIR    work/target dir (default ./out, local + gitignored). Keep in sync
 #               with any -w/--work-dir you pass through.
@@ -28,8 +33,12 @@ GENKEYS="${SCRIPT_DIR}/gen-provision-keys.sh"
 WORK_DIR="${WORK_DIR:-${REPO_DIR}/out}"
 # Honor a -w/--work-dir passed through to the builders so the keys-<role> folders
 # land beside the images (recommend a dir OUTSIDE an encrypted/$HOME mount).
+BUILD_ENV="test"   # mirror the builders' default for the summary line below
 for ((_i = 1; _i <= $#; _i++)); do
-    case "${!_i}" in -w|--work-dir) _j=$((_i + 1)); WORK_DIR="${!_j}" ;; esac
+    case "${!_i}" in
+        -w|--work-dir) _j=$((_i + 1)); WORK_DIR="${!_j}" ;;
+        --env)         _j=$((_i + 1)); BUILD_ENV="${!_j}" ;;
+    esac
 done
 
 RPI_ROLES=(pki backend frontend)
@@ -52,6 +61,7 @@ fi
 
 echo "==> RPi5 roles:  ${RPI_ROLES[*]}"
 echo "==> x86 roles:   ${X86_BUILD_ROLES[*]:-(none)}"
+echo "==> Build ENV:   ${BUILD_ENV}  $([ "${BUILD_ENV}" = test ] && echo '(LAN-first; cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
 echo "    Work/target dir: ${WORK_DIR}"
 echo "    Pass-through args: $*"
 echo

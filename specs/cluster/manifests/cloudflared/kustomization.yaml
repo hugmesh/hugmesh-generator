@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# cloudflared — the PROD-ONLY go-live edge. A Cloudflare Tunnel that maps the
+# REAL public domain (api./matrix./mastodon./apex) to the in-cluster ingress,
+# the dir the gateway comments (apps/20-gateway-*) already promise. It is the
+# OPT-IN external path: in ENV=test images apps/12-cloudflared.yaml is pruned, so
+# none of this is deployed. The internal cluster-CA TLS (Vault-PKI) stays the
+# default issuer in BOTH envs; this only ADDS the public edge.
+#
+# Credentials are read-if-present from the keys USB via External Secrets (the
+# cloudflared-tunnel-token Secret). If the creds are absent, the Deployment stays
+# down harmlessly (no token -> no tunnel) — nothing else is affected.
+namespace: devops
+resources:
+  - externalsecret.yaml
+  - configmap.yaml
+  - deployment.yaml

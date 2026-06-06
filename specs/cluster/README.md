@@ -2,9 +2,29 @@
 
 This tree is baked into every image at `/var/lib/snapdragon/cluster` and is the
 single source of truth ArgoCD syncs from. Everything sits **behind
-snapdragon.systems** via the per-namespace Spring Cloud Gateways; Cloudflare
-maps the public `snapdragon.systems` / `snapdragon.games` names to the gateways
-later (not configured here).
+snapdragon.systems** via the per-namespace Spring Cloud Gateways.
+
+## Build ENV: test (LAN) vs prod (public)
+
+Images are baked for one of two environments (`--env test|prod`, default
+**test**; written to `/etc/snapdragon/env`):
+
+- **test** (LAN-first, default — `make local` / `brands/local.conf` =
+  `snapdragon.test`): an in-cluster **wildcard DNS** resolver (`apps/09-lan-dns.yaml`
+  + `manifests/lan-dns`) answers `*.<domain>` for LAN clients, so a browser or
+  the e2e runner resolves `id.`/`api.`/`matrix.`/`mastodon.`/apex to the backend
+  ingress node — **no public internet, Cloudflare, OAuth, or SMTP required**.
+  Point your router/clients' DNS at the backend node once; see
+  [`docs/LOCAL-TESTING.md`](../../docs/LOCAL-TESTING.md).
+- **prod**: bakes the real public domain. A **Cloudflare Tunnel**
+  (`apps/12-cloudflared.yaml` + `manifests/cloudflared`) maps the public names to
+  the gateways, with creds read-if-present from the keys USB. The LAN wildcard-DNS
+  app is pruned (public DNS is authoritative).
+
+The builders prune the ENV-irrelevant app from the baked tree (test prunes
+cloudflared; prod prunes lan-dns), so ArgoCD only ever sees the right one.
+Internal cluster-CA TLS (Vault-PKI) is the default issuer in **both** envs; prod
+merely **adds** Cloudflare/ACME on top.
 
 ## Topology
 

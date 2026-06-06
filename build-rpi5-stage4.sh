@@ -48,6 +48,14 @@ CLUSTER_DOMAIN="snapdragon.systems"
 BRAND="snapdragon"                  # name slug (namespaces, gateways, hostnames)
 BRAND_TITLE="Snapdragon Systems"    # human-readable title
 ORG="Snapdragon-Systems"            # GitHub org / image namespace
+# ── Build ENV selector (BAKED into the image) ──────────────────────
+# test (DEFAULT, local-first/safe): LAN-only — cluster wildcard DNS ON, the
+#   go-live cloudflared/external-dns/ACME app is PRUNED from the baked apps/,
+#   OAuth/SMTP/Cloudflare optional/absent. Internal cluster-CA TLS only.
+# prod: bakes the REAL public domain — public DNS / Cloudflare, ACME ALLOWED on
+#   top of the internal CA, OAuth/SMTP/Cloudflare from the keys USB. A LOUD
+#   announced banner prints before the build because it bakes the real domain.
+ENV="test"
 CONFIG_FILE=""                      # optional drop-in brand profile (sourced)
 DEFAULT_USER="pi"
 DEFAULT_USER_PASS="raspberry"
@@ -313,6 +321,18 @@ OPTIONS
         the sysroot is already populated and passes --update to
         cross-emerge.
 
+  Build ENV (baked into the image)
+    --env test|prod
+        Select the build ENV, BAKED into the image at /etc/snapdragon/env.
+        Default: test.
+        test = LAN-only: the cluster wildcard-DNS app (09-lan-dns.yaml) is kept
+               and authoritative; the go-live cloudflared/ACME app is pruned;
+               OAuth/SMTP/Cloudflare optional/absent. Internal cluster-CA only.
+        prod = bakes the REAL public domain: the cloudflared/external-dns/ACME
+               go-live app is kept (creds from the keys USB) and the LAN wildcard
+               DNS app is pruned. ACME is ADDITIVE to the internal cluster CA.
+               Prints a LOUD announced banner before building.
+
   General
     -h, --help
         Show this help and exit.
@@ -436,6 +456,7 @@ while [[ $# -gt 0 ]]; do
         -H|--hostname)        HOSTNAME="$2";           shift 2 ;;
         -r|--role)            ROLE="$2";               shift 2 ;;
         -C|--config)          CONFIG_FILE="$2";        shift 2 ;;  # sourced above
+        --env)                ENV="$2";                shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
         --brand)              BRAND="$2";              shift 2 ;;
         --brand-title)        BRAND_TITLE="$2";        shift 2 ;;
@@ -500,6 +521,32 @@ if [ -z "${HOSTNAME}" ]; then
     esac
 fi
 
+# ── Validate + announce the build ENV (baked into the image) ──────────────
+case "${ENV}" in
+    test|prod) ;;
+    *) err "--env must be one of: test | prod  (got '${ENV}')"; exit 1 ;;
+esac
+if [ "${ENV}" = "prod" ]; then
+    # LOUD announced banner — a prod image bakes the REAL public domain and
+    # expects Cloudflare/OAuth/SMTP creds from the keys USB.
+    echo -e "${RED}${BOLD}"
+    echo "############################################################################"
+    echo "##                                                                        ##"
+    echo "##   BUILDING PROD IMAGE for ${CLUSTER_DOMAIN}"
+    echo "##                                                                        ##"
+    echo "##   - bakes the REAL public domain (no .test wildcard DNS authority)     ##"
+    echo "##   - Cloudflare / external-dns / ACME go-live app is KEPT (creds: USB)  ##"
+    echo "##   - OAuth / SMTP expected from the keys USB                            ##"
+    echo "##   - internal cluster-CA TLS still applies (ACME is additive)           ##"
+    echo "##                                                                        ##"
+    echo "##   For a LAN test image use:  --env test  (or 'make local')             ##"
+    echo "##                                                                        ##"
+    echo "############################################################################"
+    echo -e "${RESET}"
+else
+    info "Build ENV: test (LAN-first; cluster wildcard DNS; cloudflared/ACME pruned)"
+fi
+
 # Derived paths
 SYSROOT="${WORK_DIR}/sysroot"
 ISO_DIR="${WORK_DIR}/isoroot"
@@ -530,7 +577,35 @@ render_template() {
         -e "s|@@BRAND_TITLE@@|${BRAND_TITLE}|g" \
         -e "s|@@DOMAIN@@|${CLUSTER_DOMAIN}|g" \
         -e "s|@@ORG@@|${ORG}|g" \
+        -e "s|@@ENV@@|${ENV}|g" \
         "${src}" > "${dst}"
+}
+
+# ── ENV app-gate (deterministic prune of the BAKED apps/ tree) ─────────────
+# ArgoCD recurses specs/cluster/apps with recurse:true, so physically removing
+# a YAML from the baked copy is the gate (no live-cluster conditional needed).
+# Operates ONLY on ${SYSROOT}/var/lib/snapdragon/cluster/apps — never the repo.
+#   prod => prune the LAN wildcard-DNS app (public DNS is authoritative instead).
+#   test => prune the go-live cloudflared app (no Cloudflare/ACME on a LAN). The
+#           LAN wildcard-DNS app is kept ONLY for a `.test` domain, so it can
+#           never become authoritative for a real public domain (e.g. a default
+#           ENV=test build still on snapdragon.systems keeps neither edge).
+gate_env_apps() {
+    local apps="${SYSROOT}/var/lib/snapdragon/cluster/apps"
+    [ -d "${apps}" ] || return 0
+    if [ "${ENV}" = "prod" ]; then
+        rm -f "${apps}/09-lan-dns.yaml" && \
+            info "ENV=prod: pruned LAN wildcard-DNS app 09-lan-dns.yaml from the baked tree"
+        return 0
+    fi
+    # ENV=test
+    rm -f "${apps}/12-cloudflared.yaml" && \
+        info "ENV=test: pruned go-live app 12-cloudflared.yaml from the baked tree"
+    case "${CLUSTER_DOMAIN}" in
+        *.test) info "ENV=test: LAN wildcard DNS authoritative for ${CLUSTER_DOMAIN}" ;;
+        *) rm -f "${apps}/09-lan-dns.yaml" && \
+               warn "ENV=test but domain '${CLUSTER_DOMAIN}' is not .test — pruned 09-lan-dns.yaml so it cannot hijack a real domain (use brands/local.conf / 'make local' for a .test LAN build)" ;;
+    esac
 }
 
 # ── Rebrand the baked config tree (no-op for the default snapdragon names) ──
@@ -784,6 +859,9 @@ cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf"  "${SYSROOT}/etc/ssh/ss
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
+# Runtime ENV marker (test|prod). Read by bootstrap/provision; also documents
+# the image's posture. test => LAN wildcard DNS authoritative; prod => public.
+echo "${ENV}"            > "${SYSROOT}/etc/snapdragon/env"
 # Bake the brand's mesh control-server URL so keys-provision can read it at
 # first boot (env does not survive to first boot). Empty = local-first: the
 # control node defaults server_url to its own LAN IP (resolve_endpoint).
@@ -795,9 +873,12 @@ if [ -d "${SHARED_SPECS}/cluster" ]; then
     mkdir -p "${SYSROOT}/var/lib/snapdragon"
     cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
     info "Installed cluster GitOps payload (role=${ROLE})"
+    gate_env_apps   # prune ENV-specific ArgoCD apps from the baked copy
 fi
 
 # Apply the configured brand/domain to the baked tree (no-op for defaults).
+# Runs AFTER gate_env_apps so the surviving lan-dns/cloudflared manifests get
+# their snapdragon.systems -> ${CLUSTER_DOMAIN} rewrite too.
 rebrand_sysroot
 
 mkdir -p "${SYSROOT}/etc/local.d"
@@ -1291,6 +1372,7 @@ echo "  Board:            Raspberry Pi 5 (${RPI_DTB_PREFIX} / ${RPI_CPU})"
 echo "  Profile:          ${PROFILE_PATH}"
 echo "  Kernel:           ${RPI_DEFCONFIG} + specs-rpi5/kernel/hardened-k8s.config"
 echo "  Role:             ${ROLE}   (cluster domain: ${CLUSTER_DOMAIN})"
+echo "  ENV:              ${ENV}   $([ "${ENV}" = test ] && echo '(LAN-first: cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
 echo "  Brand:            ${BRAND} / \"${BRAND_TITLE}\" / ${ORG}${CONFIG_FILE:+   (profile: ${CONFIG_FILE})}"
 echo "  Hostname:         ${HOSTNAME}"
 echo "  Timezone:         ${TIMEZONE}"

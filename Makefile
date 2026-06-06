@@ -35,6 +35,15 @@ ARCH     ?= x86
 DEV      ?=
 IMG_FLAGS ?=
 
+# ── Build ENV selector (BAKED at image creation) ───────────────────────────────
+# ENV=test (DEFAULT, local-first/safe): LAN-only — cluster wildcard DNS app kept,
+#          cloudflared/ACME go-live app pruned from the baked tree, no public
+#          internet / OAuth / SMTP needed.
+# ENV=prod: bakes the REAL public domain (Cloudflare/ACME kept, creds from the
+#          keys USB). The builders print a LOUD announced banner for prod.
+# Convenience: `make local` (ENV=test, BRAND=local) / `make prod` (ENV=prod).
+ENV      ?= test
+
 # ── Branding (different brand + domain + its own mesh) ─────────────────────────
 # BRAND=<name>   select the committed brand profile brands/<name>.conf (sourced by
 #                the builders via --config). See brands/README.md + brands/example.conf.
@@ -72,6 +81,10 @@ ifneq ($(strip $(DOMAIN)),)
 BRAND_FLAGS += --cluster-domain $(DOMAIN)
 endif
 
+# ENV_FLAGS — the baked build ENV (test|prod), threaded into every builder
+# invocation. --env is a real builder flag, so it overrides any profile default.
+ENV_FLAGS := --env $(ENV)
+
 # BRAND_ENV — leading VAR=val env assignments for things the builders read from
 # the profile/env rather than a CLI flag (the brand's own mesh control server).
 BRAND_ENV :=
@@ -82,7 +95,7 @@ endif
 # BRAND_PASS — brand make-vars forwarded into the in-container `make` re-invoke
 # (the Docker dispatch path) so BRAND_FLAGS/BRAND_ENV are rebuilt identically
 # inside the builder image. brands/ is mounted at /src/brands via -v $(CURDIR):/src.
-BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)'
+BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' ENV='$(ENV)'
 
 # ── Docker-vs-native dispatch ─────────────────────────────────────────────────
 # IMAGE        the builder image tag (build it with `make docker-image`).
@@ -120,9 +133,9 @@ endef
 # BRAND_ENV prefixes the brand's own-mesh env (HEADSCALE_URL); BRAND_FLAGS adds
 # --config brands/<BRAND>.conf (+ --cluster-domain DOMAIN). build-all-roles.sh
 # passes BRAND_FLAGS through to BOTH builders via its "$@" passthrough.
-RPI := $(BRAND_ENV) $(SUDO) ./build-rpi5-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(BRAND_FLAGS)
-X86 := $(BRAND_ENV) $(SUDO) ./build-x86-host-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(BRAND_FLAGS)
-ALL := $(BRAND_ENV) $(SUDO) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(BRAND_FLAGS)
+RPI := $(BRAND_ENV) $(SUDO) ./build-rpi5-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
+X86 := $(BRAND_ENV) $(SUDO) ./build-x86-host-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
+ALL := $(BRAND_ENV) $(SUDO) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(ENV_FLAGS) $(BRAND_FLAGS)
 
 RPI_ROLES := pki backend frontend
 X86_ROLES := pki be fe be+gpu
@@ -130,7 +143,7 @@ X86_ROLES := pki be fe be+gpu
 .DEFAULT_GOAL := help
 .PHONY: help clean build-all rebuild rpi x86 omnibus flash qemu qemu-rpi qemu-x86 \
         playwright-deps e2e ci ci-quick docker-image ensure-image \
-        docker docker-build
+        docker docker-build local prod
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z0-9_.+-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -143,6 +156,10 @@ help: ## list targets
 	@echo "  Branding:   make build-all BRAND=acme DOMAIN=acme.example"
 	@echo "              (-> --config brands/acme.conf; its own domain + mesh;"
 	@echo "               optional HEADSCALE_URL=https://hs.acme.example). See brands/README.md."
+	@echo "  Build ENV:  ENV=test (DEFAULT, baked) = LAN-only (cluster wildcard DNS; no"
+	@echo "              Cloudflare/OAuth/SMTP). ENV=prod = real public domain (announced)."
+	@echo "              Shortcuts:  make local   (ENV=test BRAND=local -> snapdragon.test)"
+	@echo "                          make prod    (ENV=prod, real domain — creds from keys USB)"
 	@echo "  Output:     products land in ./out (WORK_DIR=$(CURDIR)/out; local + gitignored)."
 
 ## ── build ─────────────────────────────────────────────────────────────
@@ -161,6 +178,17 @@ else
 	$(ALL) $(RESUME)
 	$(chown-artifacts)
 endif
+
+local: ## build the LAN .test fleet (ENV=test, BRAND=local -> snapdragon.test; no internet)
+	@echo "==> LOCAL build: ENV=test, brand=local (snapdragon.test). LAN-only — no public"
+	@echo "    internet, no Cloudflare, no OAuth/SMTP. Cluster wildcard DNS serves *.snapdragon.test."
+	@echo "    After boot, point your router/clients DNS at the backend node:53 (see docs/LOCAL-TESTING.md)."
+	$(MAKE) build-all ENV=test BRAND=local
+
+prod: ## build the PROD fleet (ENV=prod, REAL domain) — announced; creds from the keys USB
+	@echo -e "\033[1;31m==> PROD build: ENV=prod. This bakes the REAL public domain and expects"
+	@echo -e "    Cloudflare/OAuth/SMTP creds from the keys USB. For a LAN test use 'make local'.\033[0m"
+	$(MAKE) build-all ENV=prod
 
 rebuild: ## from-scratch: wipe the work dir, then build the whole default fleet
 ifndef NATIVE

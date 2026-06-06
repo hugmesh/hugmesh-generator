@@ -77,5 +77,34 @@ else
     echo "   WARN: could not resolve pki node InternalIP; create the headscale Endpoints by hand"
 fi
 
+# ── LAN wildcard DNS — inject the backend ingress node IP (ENV=test only) ──────
+# The lan-dns CoreDNS resolver answers *.<domain> with the backend node's LAN IP
+# (the same node ingress-nginx is pinned to). The IP is per-deployment, so patch
+# the placeholder __LAN_INGRESS_IP__ in the lan-dns-corefile ConfigMap here —
+# mirroring the headscale PKI_IP injection above. No-op in ENV=prod images (the
+# lan-dns app is pruned, so the ConfigMap never exists). Idempotent: re-derives
+# and re-patches the live IP every run.
+echo "==> lan-dns wildcard resolver (backend ingress node IP)"
+BACKEND_IP="$(kubectl get node -l snapdragon.systems/backend=true -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
+[ -n "${BACKEND_IP}" ] || BACKEND_IP="$(kubectl get node "$(hostname)" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
+if [ -n "${BACKEND_IP}" ] && kubectl -n kube-system get configmap lan-dns-corefile >/dev/null 2>&1; then
+    # Swap the placeholder (or a previously-injected A-record IP) for the current
+    # backend IP, re-apply, and restart CoreDNS to reload. The two A-record forms
+    # are: the literal __LAN_INGRESS_IP__ token (first boot) and an already
+    # injected dotted-quad after "60 IN A " (re-run / IP changed).
+    COREFILE="$(kubectl -n kube-system get configmap lan-dns-corefile -o jsonpath='{.data.Corefile}')"
+    NEW_COREFILE="$(printf '%s' "${COREFILE}" \
+        | sed -E "s/(60 IN A )(__LAN_INGRESS_IP__|([0-9]{1,3}\.){3}[0-9]{1,3})/\1${BACKEND_IP}/g")"
+    kubectl -n kube-system create configmap lan-dns-corefile \
+        --from-literal=Corefile="${NEW_COREFILE}" \
+        --dry-run=client -o yaml | kubectl apply -f - \
+        && echo "   lan-dns *.<domain> -> ${BACKEND_IP}" || true
+    kubectl -n kube-system rollout restart deploy/lan-dns >/dev/null 2>&1 || true
+elif kubectl -n kube-system get configmap lan-dns-corefile >/dev/null 2>&1; then
+    echo "   WARN: lan-dns present but could not resolve backend InternalIP; patch __LAN_INGRESS_IP__ by hand"
+else
+    echo "   (lan-dns not deployed — ENV=prod image, or app pruned; skipping)"
+fi
+
 echo "==> Done. ArgoCD (in '${ARGOCD_NS}', x86-only) will now sync every Application under specs/cluster/apps."
 echo "    argocd admin password: kubectl -n ${ARGOCD_NS} get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
