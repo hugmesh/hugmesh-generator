@@ -11,8 +11,13 @@ time, and points the node at the brand's own headscale control plane.
 | File | Committed? | Contains |
 |------|-----------|----------|
 | `example.conf` | yes | a complete, safe-to-commit example (no secrets) |
+| `local.conf` | yes | the **LAN `.test` profile** — `snapdragon.test`, no OAuth/SMTP/Cloudflare, wildcard DNS on. Used by `make local` (ENV=test). |
 | `<yourbrand>.conf` | yes | your brand's branding + domain + mesh (no secrets) |
 | `../brand.conf` | **no** (gitignored) | the same vars **with real passwords/tokens** |
+
+> **Local-first:** `make local` builds the whole fleet against `brands/local.conf`
+> with `--env test`, so the cluster is LAN-testable before any public address or
+> Cloudflare. See [`docs/LOCAL-TESTING.md`](../docs/LOCAL-TESTING.md).
 
 > Never put real secrets (`DEFAULT_USER_PASS`, `ROOT_PASS`, `VAULT_TOKEN`, …) in
 > a committed `brands/*.conf`. Real values go in the gitignored `./brand.conf`

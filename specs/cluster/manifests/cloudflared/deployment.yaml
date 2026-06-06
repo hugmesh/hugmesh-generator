@@ -1,0 +1,76 @@
+# cloudflared — the PROD-ONLY Cloudflare Tunnel edge. Runs the token-based tunnel
+# (TUNNEL_TOKEN from the cloudflared-tunnel-token Secret, sourced read-if-present
+# from the keys USB via External Secrets). It is the OPT-IN public path promised
+# by the gateway comments; in ENV=test images apps/12-cloudflared.yaml is pruned,
+# so this never deploys. The internal cluster-CA TLS stays the default issuer in
+# BOTH envs — this only ADDS the public Cloudflare edge.
+#
+# If the token Secret is ABSENT (no creds on the USB), the env var resolves empty
+# (secretKeyRef optional:true) and cloudflared exits — the pod stays down
+# harmlessly without affecting anything else in the cluster.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: devops
+  labels:
+    app.kubernetes.io/name: cloudflared
+    app.kubernetes.io/part-of: snapdragon.systems
+spec:
+  replicas: 2                       # HA: two tunnel connectors
+  selector:
+    matchLabels: { app.kubernetes.io/name: cloudflared }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: cloudflared }
+    spec:
+      # The public edge co-locates with the backend ingress (same node ingress-
+      # nginx and lan-dns/prod pin to). cloudflared dials OUT to Cloudflare, so it
+      # needs no host ports.
+      nodeSelector:
+        snapdragon.systems/backend: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c21"
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:2024.10.0
+          args:
+            - tunnel
+            - --no-autoupdate
+            - --metrics
+            - 0.0.0.0:2000
+            - run
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: cloudflared-tunnel-token
+                  key: token
+                  optional: true          # absent creds => empty => stays down
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - { name: metrics, containerPort: 2000, protocol: TCP }
+          livenessProbe:
+            httpGet: { path: /ready, port: 2000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+          volumeMounts:
+            - { name: config, mountPath: /etc/cloudflared, readOnly: true }
+      volumes:
+        - name: config
+          configMap:
+            name: cloudflared-config
+            items:
+              - { key: config.yaml, path: config.yaml }

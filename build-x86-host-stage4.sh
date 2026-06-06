@@ -26,6 +26,16 @@ CLUSTER_DOMAIN="snapdragon.systems"
 BRAND="snapdragon"
 BRAND_TITLE="Snapdragon Systems"
 ORG="Snapdragon-Systems"
+# ── Build ENV selector (BAKED into the image) ──────────────────────
+# test (DEFAULT, local-first/safe): LAN-only — cluster wildcard DNS ON, the
+#   go-live cloudflared/external-dns/ACME app is PRUNED from the baked apps/,
+#   OAuth/SMTP/Cloudflare optional/absent. Internal cluster-CA TLS only.
+# prod: bakes the REAL public domain — public DNS / Cloudflare, ACME ALLOWED on
+#   top of the internal CA, OAuth/SMTP/Cloudflare expected from the keys USB. The
+#   build prints a LOUD announced banner because it bakes the real domain.
+# The chosen ENV is written to /etc/snapdragon/env and gates which ArgoCD apps
+# survive in the baked /var/lib/snapdragon/cluster/apps tree (gate_env_apps).
+ENV="test"
 CONFIG_FILE=""
 TIMEZONE="UTC"
 DEFAULT_USER="snap"
@@ -64,6 +74,11 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             Default: ${ROLE}. Gates GPU stack, labels, init/join.
   -H, --hostname NAME       Hostname. Default: derived from --role.
   -T, --timezone ZONE       Timezone. Default: ${TIMEZONE}
+      --env test|prod       Build ENV, BAKED into the image. Default: ${ENV}.
+                            test = LAN-only (cluster wildcard DNS; cloudflared/ACME
+                            pruned; OAuth/SMTP optional). prod = real public domain
+                            (Cloudflare/ACME allowed; creds from keys USB) — prints
+                            a LOUD announced banner before building.
       --cluster-domain D    Default: ${CLUSTER_DOMAIN}
   -u, --user NAME           Fallback user. Default: ${DEFAULT_USER}
       --user-password PASS  Default: ${DEFAULT_USER_PASS}
@@ -115,6 +130,7 @@ while [[ $# -gt 0 ]]; do
         -H|--hostname) HOSTNAME="$2"; shift 2 ;;
         -T|--timezone) TIMEZONE="$2"; shift 2 ;;
         -C|--config) CONFIG_FILE="$2"; shift 2 ;;
+        --env) ENV="$2"; shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
         --brand) BRAND="$2"; shift 2 ;;
         --brand-title) BRAND_TITLE="$2"; shift 2 ;;
@@ -188,6 +204,33 @@ case "${ROLE}" in
         exit 1 ;;
 esac
 
+# ── Validate + announce the build ENV (baked into the image) ──────────────
+case "${ENV}" in
+    test|prod) ;;
+    *) err "--env must be one of: test | prod  (got '${ENV}')"; exit 1 ;;
+esac
+if [ "${ENV}" = "prod" ]; then
+    # LOUD announced banner — a prod image bakes the REAL public domain and
+    # expects Cloudflare/OAuth/SMTP creds from the keys USB. Make it impossible
+    # to miss that this is NOT a throwaway LAN image.
+    echo -e "${RED}${BOLD}"
+    echo "############################################################################"
+    echo "##                                                                        ##"
+    echo "##   BUILDING PROD IMAGE for ${CLUSTER_DOMAIN}"
+    echo "##                                                                        ##"
+    echo "##   - bakes the REAL public domain (no .test wildcard DNS authority)     ##"
+    echo "##   - Cloudflare / external-dns / ACME go-live app is KEPT (creds: USB)  ##"
+    echo "##   - OAuth / SMTP expected from the keys USB                            ##"
+    echo "##   - internal cluster-CA TLS still applies (ACME is additive)           ##"
+    echo "##                                                                        ##"
+    echo "##   For a LAN test image use:  --env test  (or 'make local')             ##"
+    echo "##                                                                        ##"
+    echo "############################################################################"
+    echo -e "${RST}"
+else
+    info "Build ENV: test (LAN-first; cluster wildcard DNS; cloudflared/ACME pruned)"
+fi
+
 [ "$(id -u)" -eq 0 ] || { err "Run as root (chroot emerge + ISO build need it)."; exit 1; }
 [ -z "${WORK_DIR}" ] && WORK_DIR="$(pwd)/out"
 [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-host"
@@ -216,8 +259,36 @@ render_template() {
         -e "s|@@DEFAULT_USER_PASS@@|${DEFAULT_USER_PASS}|g" -e "s|@@ROOT_PASS@@|${ROOT_PASS}|g" \
         -e "s|@@BRAND@@|${BRAND}|g" -e "s|@@BRAND_TITLE@@|${BRAND_TITLE}|g" \
         -e "s|@@DOMAIN@@|${CLUSTER_DOMAIN}|g" -e "s|@@ORG@@|${ORG}|g" \
+        -e "s|@@ENV@@|${ENV}|g" \
         -e "s|@@GPU_USE@@|${GPU_USE}|g" -e "s|@@VIDEO_CARDS@@|${VIDEO_CARDS}|g" \
         "$1" > "$2"
+}
+
+# ── ENV app-gate (deterministic prune of the BAKED apps/ tree) ─────────────
+# ArgoCD recurses specs/cluster/apps with recurse:true, so physically removing
+# a YAML from the baked copy is the gate (no live-cluster conditional needed).
+# Operates ONLY on ${SYSROOT}/var/lib/snapdragon/cluster/apps — never the repo.
+#   prod => prune the LAN wildcard-DNS app (public DNS is authoritative instead).
+#   test => prune the go-live cloudflared app (no Cloudflare/ACME on a LAN). The
+#           LAN wildcard-DNS app is kept ONLY for a `.test` domain, so it can
+#           never become authoritative for a real public domain (e.g. a default
+#           ENV=test build still on snapdragon.systems keeps neither edge).
+gate_env_apps() {
+    local apps="${SYSROOT}/var/lib/snapdragon/cluster/apps"
+    [ -d "${apps}" ] || return 0
+    if [ "${ENV}" = "prod" ]; then
+        rm -f "${apps}/09-lan-dns.yaml" && \
+            info "ENV=prod: pruned LAN wildcard-DNS app 09-lan-dns.yaml from the baked tree"
+        return 0
+    fi
+    # ENV=test
+    rm -f "${apps}/12-cloudflared.yaml" && \
+        info "ENV=test: pruned go-live app 12-cloudflared.yaml from the baked tree"
+    case "${CLUSTER_DOMAIN}" in
+        *.test) info "ENV=test: LAN wildcard DNS authoritative for ${CLUSTER_DOMAIN}" ;;
+        *) rm -f "${apps}/09-lan-dns.yaml" && \
+               warn "ENV=test but domain '${CLUSTER_DOMAIN}' is not .test — pruned 09-lan-dns.yaml so it cannot hijack a real domain (use brands/local.conf / 'make local' for a .test LAN build)" ;;
+    esac
 }
 
 # Rebrand the baked cluster tree (no-op for default snapdragon naming).
@@ -339,6 +410,9 @@ chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
 mkdir -p "${SYSROOT}/etc/snapdragon" "${SYSROOT}/var/lib/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
+# Runtime ENV marker (test|prod). Read by bootstrap/provision; also documents
+# the image's posture. test => LAN wildcard DNS authoritative; prod => public.
+echo "${ENV}"            > "${SYSROOT}/etc/snapdragon/env"
 # Bake the brand's mesh control-server URL so keys-provision can read it at
 # first boot (env does not survive to first boot). Empty = local-first: the
 # control node defaults server_url to its own LAN IP (resolve_endpoint).
@@ -347,7 +421,8 @@ if [ -n "${HEADSCALE_URL:-}" ]; then
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/snapdragon/headscale-url"
 fi
 cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
-rebrand_sysroot
+gate_env_apps      # prune ENV-specific ArgoCD apps from the baked copy
+rebrand_sysroot    # rewrites snapdragon.systems -> ${CLUSTER_DOMAIN} (incl. lan-dns/cloudflared)
 
 # Identity, locale, CNI dirs
 echo "${HOSTNAME}" > "${SYSROOT}/etc/hostname"
@@ -795,6 +870,7 @@ echo -e "\n${CYAN}${BOLD}=== ${BRAND_TITLE} x86_64 (hardened k8s, role=${ROLE}) 
 echo "  Profile:    $(cat "${SYSROOT}/etc/portage/profile/parent")"
 echo "  Kernel:     $(${SKIP_KERNEL} && echo 'skipped' || echo 'Gentoo hardened (gentoo-sources + hardened profile + KSPP/SELinux config)')"
 echo "  Role:       ${ROLE}   (cluster domain: ${CLUSTER_DOMAIN})"
+echo "  ENV:        ${ENV}   $([ "${ENV}" = test ] && echo '(LAN-first: cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
 echo "  Brand:      ${BRAND} / \"${BRAND_TITLE}\" / ${ORG}${CONFIG_FILE:+   (profile: ${CONFIG_FILE})}"
 echo "  GPU:        $(${GPU} && echo 'vendor-agnostic Mesa/Vulkan (amdgpu/i915/nouveau) + DRM kernel' || echo 'headless (no Mesa/Vulkan, virtio-gpu console only)')"
 echo "  k8s:        ${ROLE_K8S}  (init/join/single-node is applied at runtime by the KEYS stick)"

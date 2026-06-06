@@ -28,6 +28,10 @@ keys-host/
 ssh_host_*_key
 ssh_host_*_key.pub
 # (keys-template/ itself is committed — it holds only placeholders.)
+# Cloudflare go-live tunnel creds (PROD only) — never commit the real value.
+keys-template/cloudflared/tunnel-token
+keys-template/cloudflared/credentials.json
+**/cloudflared/credentials.json
 
 # ── Editor / OS noise ─────────────────────────────────────────────
 *.swp

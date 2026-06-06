@@ -57,7 +57,15 @@ secret/<brand>/casdoor    : google_client_id, google_client_secret,
                             client_id, client_secret, admin_password
 secret/<brand>/clickhouse : password
 secret/<brand>/uptrace    : pg_password, project_token
+secret/<brand>/cloudflared: tunnel_token     (PROD go-live ONLY — read-if-present)
 ```
+
+The `cloudflared` entry is the **PROD-only** go-live edge credential. It is
+**read-if-present**: the `cloudflared-tunnel-token` ExternalSecret
+(`manifests/cloudflared`) materializes it into the `cloudflared` Deployment's
+`TUNNEL_TOKEN`. Absent => the tunnel stays down harmlessly. In **ENV=test**
+images the cloudflared app is pruned at build time, so this key is never read.
+Put the raw token in `KEYS/cloudflared/tunnel-token` (see that folder's README).
 
 ## Regenerating
 

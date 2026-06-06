@@ -1,0 +1,43 @@
+# cloudflared tunnel config (PROD only). Maps the REAL public hostnames to the
+# in-cluster ingress-nginx (which then hands off to the Spring Cloud Gateways,
+# exactly as the public path documents in apps/10-ingress-nginx.yaml).
+#
+# This config is used by the token-less `cloudflared tunnel run` path when a
+# named tunnel + credentials.json are supplied. When a TUNNEL_TOKEN is used
+# instead (the default below), Cloudflare serves the ingress rules from the
+# dashboard and this ingress: block is advisory — kept here so the brand fork can
+# switch to the credentials.json path without re-deriving the hostnames.
+#
+# Hostnames are authored as snapdragon.systems so rebrand_sysroot rewrites them
+# to the brand domain in the baked tree. The service target is the public
+# ingress-nginx controller Service inside the cluster.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-config
+  namespace: devops
+  labels:
+    app.kubernetes.io/name: cloudflared
+    app.kubernetes.io/part-of: snapdragon.systems
+data:
+  config.yaml: |
+    # No-op for the TUNNEL_TOKEN path; used by the credentials.json path.
+    # tunnel: <tunnel-uuid>            # set when using credentials.json
+    # credentials-file: /etc/cloudflared/creds/credentials.json
+    metrics: 0.0.0.0:2000
+    no-autoupdate: true
+    ingress:
+      - hostname: snapdragon.systems
+        service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
+        originRequest: { noTLSVerify: true }
+      - hostname: api.snapdragon.systems
+        service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
+        originRequest: { noTLSVerify: true }
+      - hostname: matrix.snapdragon.systems
+        service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
+        originRequest: { noTLSVerify: true }
+      - hostname: mastodon.snapdragon.systems
+        service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
+        originRequest: { noTLSVerify: true }
+      # Catch-all (required last rule).
+      - service: http_status:404
