@@ -26,7 +26,20 @@ spec:
           image: snapdragon-systems/snapdragon.games-backend:dev
           ports: [{ name: http, containerPort: 8080 }]
           env:
-            - { name: CASDOOR_ISSUER_URI, value: "https://id.snapdragon.systems" }
+            # GAMES-realm Casdoor (casdoor-games, org "threewizards") — the SEPARATE,
+            # INDEPENDENT games identity provider, NOT the systems Casdoor. The games
+            # BFF reads these exact env var names (see snapdragon.games
+            # backend/src/main/resources/application.yml): CASDOOR_ENDPOINT drives both
+            # the JWKS endpoint (${CASDOOR_ENDPOINT}/.well-known/jwks) and casdoor.endpoint.
+            - { name: CASDOOR_ENDPOINT, value: "http://casdoor-games.snapdragon-games.svc.cluster.local:8000" }
+            - { name: CASDOOR_ORGANIZATION, value: "threewizards" }
+            # threewizards-app OAuth2 client — clientId/clientSecret from the ESO-
+            # materialized casdoor-games-app Secret (Vault secret/<brand>/casdoor-games).
+            - { name: CASDOOR_CLIENT_ID,     valueFrom: { secretKeyRef: { name: casdoor-games-app, key: clientId } } }
+            - { name: CASDOOR_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: casdoor-games-app, key: clientSecret } } }
+            # Public issuer of the games realm (brandable: snapdragon.games), used where
+            # an issuer claim / external URL is needed.
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.snapdragon.games" }
             # Mesa picks the best installed driver; force SW only if no GPU.
             - { name: LIBGL_ALWAYS_SOFTWARE, value: "0" }
           resources:

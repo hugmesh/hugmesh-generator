@@ -20,6 +20,20 @@
 # Uses the SAME Casdoor admin-session transport as casdoor-init (login -> cookie ->
 # get-role/update-role) since update-role requires an admin session.
 #
+# SCOPE: this Job runs ENTIRELY INSIDE the systems Casdoor (org "snapdragon"). It only
+# MATERIALIZES the intersection role ROLE_GAMES_ADMIN within systems; it does NOT touch
+# the games realm. The games realm is a SEPARATE, INDEPENDENT Casdoor (manifests/
+# casdoor-games, org "threewizards") with its OWN native users/roles (GitHub-OAuth
+# players, player / uploader / mod / publisher / play-* roles) that need NOT exist in
+# systems — and vice versa. The ONE thing auto-synced systems -> games is a DIFFERENT,
+# scheduled snapdragon-actions job (manifests/snapdragon-apis): it mirrors EXACTLY this
+# role's membership, ROLE_GAMES_ADMIN (systems) -> admin (games). So the pipeline is:
+#   (1) THIS Job:  ROLE_GAMES_ADMIN = ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD)   [systems-only]
+#   (2) actions:   ROLE_GAMES_ADMIN (systems)            -> admin (games)     [cross-realm]
+# Net effect: only admins/mods who hold the games role in systems become games admins.
+# Granting a normal user plain ROLE_GAMES does NOT auto-create a games login; that
+# on-demand provisioning is a separate admin-UI snapdragon-action (future), not this Job.
+#
 # !!! The Casdoor REST API shape (login + get-role/update-role) is version-specific.
 # !!! This is a working scaffold — validate the endpoints/payloads against the
 # !!! deployed casbin/casdoor-all-in-one before relying on it in production.

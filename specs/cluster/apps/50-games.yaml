@@ -1,9 +1,13 @@
 # snapdragon.games — runs on the x86_64 GPU worker (vendor-agnostic Mesa/Vulkan).
+# The games BFF validates JWTs from the GAMES-realm Casdoor (casdoor-games), so it
+# syncs in wave "2" — AFTER casdoor-games (apps/06-casdoor-games, wave "1").
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: snapdragon-games
   namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   project: default
   source:

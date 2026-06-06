@@ -1,0 +1,44 @@
+# casdoor-games app.conf override — points the GAMES-realm Casdoor at its OWN
+# external Postgres (casdoor-games-pg, db "threewizards") instead of the all-in-one
+# image's bundled DB. Mirrors manifests/casdoor/app-conf-configmap.yaml but for the
+# SEPARATE games identity provider. Mounted over the image's conf/app.conf. NO
+# secrets here — the DB user/password are interpolated at startup from env
+# (CASDOOR_DB_USER / CASDOOR_DB_PASSWORD), which the Deployment sources from the ESO
+# Secret "casdoor-games-db".
+#
+# !!! Casdoor's app.conf keys and the beego "${ENV||default}" interpolation are
+# !!! version-specific. This is a working scaffold — validate the field set and the
+# !!! Postgres dataSourceName against the deployed casbin/casdoor image; if Casdoor
+# !!! refuses to start, diff against that image's bundled conf/app.conf.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: casdoor-games-app-conf
+  namespace: snapdragon-games
+  labels: { app: casdoor-games, app.kubernetes.io/part-of: snapdragon.games }
+data:
+  app.conf: |
+    appname = casdoor
+    httpport = 8000
+    runmode = prod
+    copyrequestbody = true
+    SessionOn = true
+    # External Postgres (casdoor-games-pg, db "threewizards"). For the postgres
+    # driver Casdoor uses the dataSourceName verbatim (it only appends dbName for
+    # MySQL), so dbname= must be set inline here. Credentials come from env (ESO
+    # Secret casdoor-games-db).
+    driverName = postgres
+    dataSourceName = "user=${CASDOOR_DB_USER||threewizards} password=${CASDOOR_DB_PASSWORD||} host=casdoor-games-pg port=5432 sslmode=disable dbname=threewizards"
+    dbName = threewizards
+    tableNamePrefix =
+    showSql = false
+    redisEndpoint =
+    isCloudIntranet = false
+    authState = "casdoor"
+    socks5Proxy = ""
+    verificationCodeTimeout = 10
+    initScore = 0
+    logPostOnly = true
+    # Public issuer of the games realm — brand domain for snapdragon.games.
+    origin = "https://id.snapdragon.games"
+    enableGzip = true

@@ -39,6 +39,20 @@
 # route-access row (manifests/route-access/schema.sql) is keyed on ROLE_GAMES_ADMIN
 # ONLY, so the gateway's OR-of-allow-rows table still yields the required AND.
 #
+# THIS IS THE SYSTEMS CASDOOR (org "snapdragon"). The games realm is a SEPARATE,
+# INDEPENDENT Casdoor (manifests/casdoor-games, org "threewizards") that mirrors the
+# canonical snapdragon.games realm. That games Casdoor has its OWN native users and
+# roles — GitHub-OAuth players plus player / uploader / mod / publisher / play-three-
+# wizards / play-dodecahedron — which need NOT exist here in systems, and the systems
+# roles above (ROLE_GAMES, ROLE_GAMES_ADMIN, the svc-* service identities, etc.) need
+# NOT exist in the games realm. The TWO realms are wired together by EXACTLY ONE
+# automatic, scheduled mirror, run by snapdragon-actions (manifests/snapdragon-apis):
+#       ROLE_GAMES_ADMIN (systems)  ->  admin (games)
+# i.e. "only admins/mods who hold the games role in systems are added automatically"
+# as games admins. Granting a normal user ROLE_GAMES here does NOT auto-create a games
+# login: that on-demand provisioning is a separate admin-UI snapdragon-action (future),
+# NOT this scheduled job and NOT the games-admin intersection Job below.
+#
 # NOTE: the init_data.json object schema is Casdoor-version-specific. Validate
 # against the deployed casbin/casdoor-all-in-one before relying on auto-import.
 apiVersion: v1

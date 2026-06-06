@@ -23,8 +23,32 @@ spec:
           image: snapdragon-systems/actions:dev
           ports: [{ name: http, containerPort: 8080 }]
           env:
-            - { name: CASDOOR_ISSUER_URI, value: "https://id.snapdragon.systems" }
             - { name: SPRING_PROFILES_ACTIVE, value: "casdoor" }
+            # ── Two-Casdoor sync (GameMasterAdminSyncAction) ──────────────────────
+            # snapdragon-actions polls TWO independent Casdoor instances and mirrors
+            # ONE systems role into ONE games role, one-way (systems -> games), pruning
+            # stale members. The ONLY automatic sync is:
+            #     ROLE_GAMES_ADMIN (systems)  ->  admin (games)
+            # i.e. only systems admins/mods who ALSO hold ROLE_GAMES (= the materialized
+            # ROLE_GAMES_ADMIN intersection) become games admins. Granting a user plain
+            # ROLE_GAMES does NOT auto-create a games login here; that on-demand
+            # provisioning is a separate admin-UI action, not this scheduled job.
+            #
+            # SYSTEMS side — the in-cluster systems Casdoor (org "snapdragon"). Its
+            # JWKS also backs the actions resource server (application.yml issuer-uri
+            # defaults to ${CASDOOR_SYSTEMS_URL}).
+            - { name: CASDOOR_SYSTEMS_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000" }
+            - { name: CASDOOR_SYSTEMS_ORG, value: "snapdragon" }
+            - { name: CASDOOR_SYSTEMS_CLIENT_ID,     valueFrom: { secretKeyRef: { name: casdoor-sync-systems, key: clientId } } }
+            - { name: CASDOOR_SYSTEMS_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: casdoor-sync-systems, key: clientSecret } } }
+            # GAMES side — the SEPARATE in-cluster games Casdoor (org "threewizards").
+            - { name: CASDOOR_GAMES_URL, value: "http://casdoor-games.snapdragon-games.svc.cluster.local:8000" }
+            - { name: CASDOOR_GAMES_ORG, value: "threewizards" }
+            - { name: CASDOOR_GAMES_CLIENT_ID,     valueFrom: { secretKeyRef: { name: casdoor-sync-games, key: clientId } } }
+            - { name: CASDOOR_GAMES_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: casdoor-sync-games, key: clientSecret } } }
+            # The single automatic mirror: ROLE_GAMES_ADMIN(systems) -> admin(games).
+            - { name: GM_SYNC_SYSTEMS_ROLE, value: "ROLE_GAMES_ADMIN" }
+            - { name: GM_SYNC_GAMES_ROLE,   value: "admin" }
           readinessProbe: { httpGet: { path: /actuator/health/readiness, port: http }, initialDelaySeconds: 20 }
           resources: { requests: { cpu: 100m, memory: 384Mi }, limits: { cpu: "1", memory: 1Gi } }
 ---
