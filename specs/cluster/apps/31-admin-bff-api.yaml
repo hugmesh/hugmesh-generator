@@ -5,14 +5,14 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: admin-bff
+  name: admin-bff-api
   namespace: devops
 spec:
   project: default
   source:
     repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
     targetRevision: main
-    path: specs/cluster/manifests/admin-bff
+    path: specs/cluster/manifests/admin-bff-api
   destination:
     server: https://kubernetes.default.svc
     namespace: snapdragon-backend

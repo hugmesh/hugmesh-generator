@@ -1,4 +1,4 @@
-# Persistent storage for the snapdragon-federation Postgres data directory
+# Persistent storage for the snapdragon-federation-api Postgres data directory
 # (federation_modules / user_modules / moderation_requests / federation_override).
 apiVersion: v1
 kind: PersistentVolumeClaim

@@ -1,4 +1,4 @@
-# Bundle storage for snapdragon-federation's filesystem BundleStorage
+# Bundle storage for snapdragon-federation-api's filesystem BundleStorage
 # (app.bundles.storage=filesystem, app.bundles.dir=/var/snapdragon/federation/bundles).
 # FilesystemBundleStorage writes content-addressed bundle bytes here
 # (<dir>/<slug>/<contentHash>/...). The pod runs readOnlyRootFilesystem: true, so
@@ -13,7 +13,7 @@ kind: PersistentVolumeClaim
 metadata:
   name: federation-bundles
   namespace: snapdragon-backend
-  labels: { app: snapdragon-federation }
+  labels: { app: snapdragon-federation-api }
 spec:
   accessModes: [ReadWriteOnce]
   storageClassName: snapdragon-local

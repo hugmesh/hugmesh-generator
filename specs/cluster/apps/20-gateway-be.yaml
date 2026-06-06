@@ -77,7 +77,7 @@ spec:
           - id: matrix
             host: matrix.snapdragon.systems
             uri: http://tuwunel.snapdragon-backend.svc.cluster.local:8008
-          # --- snapdragon-federation (api.snapdragon.systems) — the module-
+          # --- snapdragon-federation-api (api.snapdragon.systems) — the module-
           # federation registry/manifest/bundles API. MORE SPECIFIC than the
           # /api/** snapdragon-api catch-all below, so it MUST be declared FIRST
           # (Spring Cloud Gateway matches routes in declared order) or the broad
@@ -85,8 +85,8 @@ spec:
           # (modules/overrides=ADMIN, moderation=MOD/ADMIN, manifest GET +
           # bundles=authenticated) is enforced inside federation's SecurityConfig;
           # the route DB gates the coarse authenticated floor (ROLE_USER).
-          - id: federation
-            uri: http://snapdragon-federation.snapdragon-backend.svc.cluster.local:8080
+          - id: federation-api
+            uri: http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080
             path: /api/federation/**
           # --- Snapdragon Spring APIs (api.snapdragon.systems) ---
           - id: snapdragon-api

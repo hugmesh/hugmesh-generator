@@ -91,7 +91,7 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- still yields the AND, and any single role is default-deny. More specific than
   -- the /api/** ROLE_USER floor, so it wins the most-specific match.
   ('snapdragon-be-gateway',  '/games/api/admin/**',   'ROLE_GAMES_ADMIN', true),  -- games namespace admin API (games + (admin|mod) ONLY)
-  -- snapdragon-federation module-federation registry/manifest/bundles API. MORE
+  -- snapdragon-federation-api module-federation registry/manifest/bundles API. MORE
   -- SPECIFIC than the /api/** floor below, so it wins the most-specific match.
   -- Single ROLE_USER row = the coarse authenticated floor (lets a logged-in
   -- caller reach the manifest + bundles); fine-grained authz (modules/overrides=

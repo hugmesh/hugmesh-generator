@@ -1,4 +1,4 @@
-# snapdragon-federation — module-federation REGISTRY + manifest/bundles API
+# snapdragon-federation-api — module-federation REGISTRY + manifest/bundles API
 # (reactive WebFlux + R2DBC + Liquibase). snapdragon-backend, ClusterIP, reached
 # via the be-gateway /api/federation/** route. Pure OAuth2 resource server (no
 # outbound creds / Casdoor app of its own).
@@ -12,7 +12,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: snapdragon-federation
+  name: snapdragon-federation-api
   namespace: devops
   annotations:
     argocd.argoproj.io/sync-wave: "2"
@@ -21,7 +21,7 @@ spec:
   source:
     repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
     targetRevision: main
-    path: specs/cluster/manifests/federation
+    path: specs/cluster/manifests/federation-api
   destination:
     server: https://kubernetes.default.svc
     namespace: snapdragon-backend

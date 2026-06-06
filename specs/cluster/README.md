@@ -31,7 +31,7 @@ merely **adds** Cloudflare/ACME on top.
 | Namespace | Runs on | Front door | Contents |
 |---|---|---|---|
 | `snapdragon-pki` | pki Pi (control-plane) | `snapdragon-pki-gateway` (`id.snapdragon.systems`) | Casdoor (Google + admin login), Cassandra, headscale/auth |
-| `snapdragon-backend` | backend Pis | `snapdragon-be-gateway` (`api.` / `matrix.` / `mastodon.`) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs (incl. `snapdragon-federation` module-federation registry at `/api/federation/**`), DBs |
+| `snapdragon-backend` | backend Pis | `snapdragon-be-gateway` (`api.` / `matrix.` / `mastodon.`) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs (incl. `snapdragon-federation-api` module-federation registry at `/api/federation/**`), DBs |
 | `snapdragon-frontend` | frontend Pis | `snapdragon-fe-gateway` (`snapdragon.systems`) | snapdragon.systems Angular host + social-ui micro-frontends + remote-fragment fleet (DB-hosted federation fragment bundles at `/_fragments/**`) |
 | `snapdragon-games` | x86_64 GPU worker | (internal) | snapdragon.games (Mesa/Vulkan via `/dev/dri`) |
 | `argocd` | x86_64 worker | (internal) | ArgoCD GitOps engine |
@@ -117,7 +117,7 @@ unchanged.
   gateway OAuth2 client.
 - Cassandra references an upstream chart; Akkoma + tuwunel are raw manifests
   (no official charts) — pin image tags and supply DB/secret values.
-- `snapdragon-federation` (the module-federation registry / manifest + bundles API
+- `snapdragon-federation-api` (the module-federation registry / manifest + bundles API
   upstream of `admin-bff` and the `remote-fragment` sync fleet) stores fragment
   bundle bytes on a **filesystem RWO PVC** (`federation-bundles`, 5Gi), so it runs
   **single-replica** with `strategy: Recreate`. PRODUCTION: set

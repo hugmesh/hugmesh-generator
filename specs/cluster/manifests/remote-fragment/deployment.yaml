@@ -59,7 +59,7 @@ spec:
             - { name: SERVER_PORT, value: "8081" }
             - { name: SYNC_TARGET_DIR, value: "/usr/share/nginx/html" }
             - name: FEDERATION_BASE_URL
-              value: "http://snapdragon-federation.snapdragon-backend.svc.cluster.local:8080"
+              value: "http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080"
             - name: CASDOOR_TOKEN_URL
               value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000/api/login/oauth/access_token"
             - { name: CASDOOR_ORG, value: "snapdragon" }
@@ -104,7 +104,7 @@ spec:
             - { name: SYNC_TARGET_DIR, value: "/usr/share/nginx/html" }
             # The federation registry/bundle API this fleet syncs FROM (backend ns).
             - name: FEDERATION_BASE_URL
-              value: "http://snapdragon-federation.snapdragon-backend.svc.cluster.local:8080"
+              value: "http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080"
             # Casdoor client-credentials token mint (machine account app-fragment-sync).
             # The minted RS256 JWT is validated by federation's resource server
             # (issuer https://id.snapdragon.systems); manifest+bundles need only the
