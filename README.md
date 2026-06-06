@@ -10,32 +10,122 @@ Every image boots, then provisions itself at first boot from a USB **FAT32
 `KEYS` partition** (users, SSH keys, passwords, certificates, headscale/k8s
 config, attached storage, backups) — see [`keys-template/`](keys-template/).
 
-> **Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full topology.**
+Every build is stamped with a **build ENV** — `test` (default, LAN-only) or
+`prod` (real public domain) — baked into the image at creation. The simplest
+way in is `make local` (a LAN `.test` fleet) or `make prod`; see
+**[Build ENV](#build-env-testprod-baked-at-image-creation)** below.
 
-All build output lands in a **git-ignored** work directory
-(`rpi5-stage4-build/`, `x86-host-build/`).
+> **Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full topology
+> and [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md) for LAN testing.**
+
+All build output lands in a **git-ignored** work directory (`./out` by default
+when driving via `make`; `rpi5-stage4-build/` / `x86-host-build/` when calling
+the scripts directly).
 
 ## Images
 
 | Image | Build command | Runs |
 |---|---|---|
 | **pki** (RPi 5) | `./build-rpi5-stage4.sh --role pki` | k8s control plane, headscale, Casdoor, Cassandra, pki-gateway |
-| **backend** (RPi 5) | `./build-rpi5-stage4.sh --role backend` | tuwunel (Matrix) + Akkoma (fediverse), Spring APIs, DBs, be-gateway |
-| **frontend** (RPi 5) | `./build-rpi5-stage4.sh --role frontend` | snapdragon.systems Angular host + social-ui, fe-gateway |
+| **backend** (RPi 5) | `./build-rpi5-stage4.sh --role backend` | tuwunel (Matrix) + Akkoma (fediverse), Spring APIs, DBs, be-gateway, LAN wildcard DNS (test) |
+| **frontend** (RPi 5) | `./build-rpi5-stage4.sh --role frontend` | snapdragon.systems Angular host + login/matrix/mastodon remotes, fe-gateway |
 | **host** (x86_64) | `sudo ./build-x86-host-stage4.sh` | GPU worker: ArgoCD, snapdragon.games, backend capacity |
 
-## Rebranding (brand profile)
+> The friendlier path is the **Makefile** (`make local` / `make prod` /
+> `make build-all`), which dispatches the same builders inside a self-contained
+> Docker builder — no host toolchain, no host sudo. See
+> [Quick start](#quick-start) and [Build options](#build-options).
 
-Everything is **string-independent**: the default naming is `snapdragon` /
-`snapdragon.systems`, but you can build ISOs for any brand/domain. Drop a
-`brand.conf` (auto-detected in the CWD, or pass `--config FILE`) — a plain shell
-file the builders source. Precedence is **built-in defaults < brand.conf < CLI
-flags**, so an absent file changes nothing.
+## Build ENV (`test`|`prod`) — baked at image creation
+
+Each image is stamped with a **build ENV** at creation time, written to
+`/etc/snapdragon/env` in the image and threaded through the whole build
+(`--env test|prod` on every builder, `ENV=test|prod` through `make`). The ENV
+bakes the right posture into the image — you do **not** flip it at runtime.
+
+| | **`test`** (default) | **`prod`** |
+|---|---|---|
+| domain | `<brand>.test` (e.g. `snapdragon.test`) | the **real** domain (e.g. `snapdragon.systems`) |
+| DNS mode | in-cluster **wildcard DNS** (`apps/09-lan-dns.yaml` kept — **only for a `.test` domain**) | public DNS / Cloudflare (`apps/12-cloudflared.yaml` kept) |
+| the other DNS app | `12-cloudflared.yaml` **pruned** from the baked tree (and `09-lan-dns.yaml` is **also** pruned if the domain is **not** `.test`, so an `ENV=test` build on a real domain keeps neither edge) | `09-lan-dns.yaml` **pruned** from the baked tree |
+| cloudflared / external-DNS / ACME | off | on (go-live edge; creds from the keys USB) |
+| TLS | internal cluster CA only (Vault-PKI / self-signed root) | cluster CA **+** ACME/public (ACME is **additive**) |
+| OAuth / SMTP | optional / absent → Casdoor **native** login, admin-approval registration | creds **expected** from the keys USB (still optional if absent) |
+| build banner | quiet | **LOUD announced** (`BUILDING PROD IMAGE for <domain>`) |
+
+The default is **`test`** (local-first / safe). `prod` is explicit and
+announced because it bakes the real public domain. The builders prune the
+ENV-irrelevant ArgoCD app from `/var/lib/snapdragon/cluster/apps` so ArgoCD only
+ever syncs the right one for the baked ENV.
 
 ```bash
-cp brand.conf.example brand.conf      # edit BRAND / BRAND_TITLE / ORG / CLUSTER_DOMAIN / default accounts
-./build-rpi5-stage4.sh --role pki     # picks up brand.conf automatically
-# or per-invocation, no file:
+make local                                  # ENV=test + brands/local.conf (snapdragon.test) — LAN fleet
+make prod                                   # ENV=prod, real domain (announced)
+make build-all ENV=test BRAND=acme          # any brand, test
+make build-all ENV=prod BRAND=acme DOMAIN=acme.example
+./build-x86-host-stage4.sh --env test --config brands/local.conf --role be+gpu
+./scripts/build-all-roles.sh --env prod
+```
+
+> Full reference: [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md).
+
+## LAN testing (no public internet, no Cloudflare)
+
+An `ENV=test` fleet is **fully testable on a LAN before any public address**.
+Two pieces make that work with zero internet:
+
+1. **Cluster-served wildcard DNS.** Cluster *nodes* already resolve each other
+   (`provision.sh` writes `/etc/hosts`), but LAN *clients* (your browser, the
+   Playwright runner) are not on the mesh and have no record for `id.<domain>`,
+   `api.<domain>`, `matrix.<domain>`, `mastodon.<domain>` or the apex.
+   `apps/09-lan-dns.yaml` deploys a **CoreDNS** resolver (`manifests/lan-dns`)
+   that runs `hostNetwork` on the **backend node** (the same node ingress-nginx
+   binds `:80/:443` on) and binds host **`:53` (udp+tcp)**, answering every name
+   under the brand domain with that node's LAN IP (injected by `bootstrap.sh`).
+   Point your **router's DHCP DNS** (fleet-wide) or a single client's resolver
+   at the **backend/ingress node `:53`** once, and every LAN device resolves
+   `*.<domain>` → the cluster.
+
+   ```bash
+   # backend node IP (the one your router forwards 80/443 to):
+   kubectl get node -l snapdragon.systems/backend=true \
+     -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'
+   # point a client at it, then:
+   dig @<BACKEND_IP> id.snapdragon.test +short      # -> the backend node IP
+   curl -k https://id.snapdragon.test/              # reaches Casdoor via ingress
+   ```
+
+2. **Internal cluster-CA TLS.** All certs chain to the internal cluster CA
+   (Vault-PKI / self-signed root) — **no ACME, no public CA, no internet**. This
+   is the *same* offline issuer prod uses; prod merely **adds** the public edge.
+
+So `ENV=test` needs **no public internet, no Cloudflare, no OAuth, no SMTP** —
+just Casdoor's native login, the internal cluster CA, and the in-cluster
+wildcard resolver. See [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md).
+
+## Rebranding (brand profiles in `brands/`)
+
+Everything is **string-independent**: the default naming is `snapdragon` /
+`snapdragon.systems`, but you can build images for any brand/domain. A **brand
+profile** is a plain shell file the builders `source` (via `--config FILE`, or an
+auto-detected `./brand.conf`). Precedence is **built-in defaults < profile < CLI
+flags**, so an absent file changes nothing. See [`brands/README.md`](brands/).
+
+Committed profiles live in [`brands/`](brands/):
+
+| File | Contains |
+|---|---|
+| [`brands/local.conf`](brands/local.conf) | the **LAN `.test` profile** — `snapdragon.test`, `MAIL_PROVIDER=none`, OAuth/Cloudflare off, local-first mesh. Used by `make local`. |
+| [`brands/example.conf`](brands/example.conf) | a complete, safe-to-commit example (`example.test`) to copy. |
+| `brands/<yourbrand>.conf` | your brand's `BRAND` / `BRAND_TITLE` / `ORG` / `CLUSTER_DOMAIN` / `MAIL_PROVIDER` / mesh (no secrets). |
+| `../brand.conf` *(gitignored)* | the same vars **with** real passwords/tokens. |
+
+```bash
+cp brands/example.conf brands/acme.conf   # edit BRAND / BRAND_TITLE / ORG / CLUSTER_DOMAIN / MAIL_PROVIDER
+make build-all BRAND=acme                  # threads --config brands/acme.conf into every builder
+make build-all BRAND=acme DOMAIN=acme.example   # DOMAIN= overrides the profile's CLUSTER_DOMAIN
+# or directly, no make:
+./build-rpi5-stage4.sh --config brands/acme.conf --role backend
 ./build-rpi5-stage4.sh --role backend --brand acme --domain acme.example --org Acme-Inc --brand-title "Acme Corp"
 ```
 
@@ -43,8 +133,49 @@ At build time the baked cluster payload is rewritten — every namespace
 (`acme-pki`/`acme-backend`/…), gateway name, ingress host (`matrix.acme.example`),
 image org (`acme-inc/…`), title and hostname — from the snapdragon defaults to
 your brand. (Internal install paths like `/var/lib/snapdragon` and the
-provisioning JSON key are kept as the tool's vendor namespace.) `brand.conf` is
-git-ignored since it can hold default passwords.
+provisioning JSON key are kept as the tool's vendor namespace.) Never put real
+secrets in a committed `brands/*.conf`; those go in the gitignored `./brand.conf`
+or the environment.
+
+## OAuth + mail (optional; native login by default)
+
+Both OAuth and mail are **optional and absent by default**. With neither, the
+platform falls back to **Casdoor's native user/pass login** and
+**admin-approval** registration (no email verification) — exactly what an
+`ENV=test` LAN fleet uses.
+
+**OAuth federation providers (seeded into Casdoor when creds are present).**
+The provider seeding in the Casdoor init jobs is **read-if-present, else
+skipped** — an absent client secret no-ops the provider:
+
+- **Systems realm** (`manifests/casdoor/init-job.yaml`): the **Google** OAuth
+  provider, seeded from the `casdoor-google` Secret
+  (Vault `secret/<brand>/casdoor: google_client_id/google_client_secret`).
+- **Games realm** (`manifests/casdoor-games/init-job.yaml`): a **GitHub** OAuth
+  provider that creates native games `player`s, seeded from `casdoor-games-github`
+  (Vault `casdoor-games: github_client_id/github_client_secret`).
+
+> The games realm is a **separate Casdoor** (org `threewizards`, issuer
+> `id.<domain.games>`) from the platform realm (org `snapdragon`); see
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+**Mail (SMTP).** A `MAIL_PROVIDER` brand knob selects the mail posture;
+`none` (the `brands/local.conf` default) disables mail entirely, which is the
+typical local/test setting — registration stays admin-approval rather than
+email-verify. Set it in your `brands/<x>.conf`:
+
+```sh
+MAIL_PROVIDER="none"       # none | smtp   (none = no mail; the LAN/test default)
+```
+
+**Credentials flow.** OAuth client IDs/secrets, cluster app secrets and the
+Cloudflare go-live token are produced by
+[`scripts/gen-cluster-secrets.sh`](scripts/gen-cluster-secrets.sh) and delivered
+either online via **Vault → External Secrets Operator** or offline via the
+**KEYS USB** (`KEYS/vault/secrets.json`, plus `KEYS/cloudflared/tunnel-token` for
+the prod edge) — Vault first, USB fallback, all **read-if-present**. See
+[`keys-template/vault/README.md`](keys-template/vault/) and
+[`keys-template/cloudflared/README.md`](keys-template/cloudflared/).
 
 ## Prerequisites (build host)
 
@@ -56,7 +187,31 @@ git-ignored since it can hold default passwords.
   `grub`, `squashfs-tools`, `libisoburn` (for `grub-mkrescue`/`xorriso`).
 - **QEMU test**: `app-emulation/qemu` (aarch64 target), `dosfstools`, `e2fsprogs`.
 
-## Quick start — build locally on Gentoo (copy-paste)
+## Quick start
+
+### The easy path — `make` (Docker builder; no host toolchain, no sudo)
+
+The Makefile is the front door. Its **default** build path runs inside a
+self-contained Gentoo builder image (`Dockerfile.build`), so the host needs no
+cross-toolchain and no sudo. Build the builder image once (LONG — it compiles
+the aarch64 cross-toolchain), then build images:
+
+```bash
+make docker-image       # one-time: build the self-contained Gentoo builder image (LONG)
+
+make local              # LAN .test fleet: ENV=test + brands/local.conf (snapdragon.test)
+make prod               # PROD fleet: ENV=prod, real domain (announced)
+
+make build-all          # the default fleet (3 Pi + x86 pki/be/fe/be+gpu), ENV defaults to test
+make rpi                # all 3 Pi roles        make rpi-frontend     # one Pi role
+make x86                # the 4 x86 roles       make x86-be+gpu       # one x86 role
+make omnibus            # opt-in x86 all-in-one node
+```
+
+Products land in `./out` (gitignored). Run `make help` for every target. Use
+`NATIVE=1` to run the scripts directly on a local Gentoo host instead of Docker.
+
+### The native path — build on Gentoo (copy-paste)
 
 Run the builds as **root** (the cross-emerge merges into the sysroot's package DB
 and writes host caches; fakeroot is not enough). Artifacts land in the git-ignored
@@ -69,7 +224,7 @@ sudo crossdev --stable --target aarch64-unknown-linux-gnu
 #    x86_64 host image also needs:  sys-boot/grub sys-fs/squashfs-tools
 #    QEMU integration test also needs:  app-emulation/qemu sys-fs/dosfstools sys-fs/e2fsprogs
 
-# 1. Build the images (one bootable ISO per role)
+# 1. Build the images (--env defaults to test; add --env prod for a go-live image)
 sudo ./scripts/build-all-roles.sh -j "$(nproc)"          # all three Pi roles: pki, backend, frontend
 sudo ./build-rpi5-stage4.sh --role pki -j "$(nproc)"     # …or just one Pi role
 sudo ./build-x86-host-stage4.sh -j "$(nproc)"            # x86_64 GPU host (native amd64 Gentoo)
@@ -115,6 +270,11 @@ kubectl get pods -A
 kubectl -n devops get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
 ```
 
+> `bootstrap.sh` also injects the backend node's LAN IP into the resolver
+> Corefile (`ENV=test` only) so the in-cluster wildcard DNS answers
+> `*.<domain>` → that node. After bootstrap, point your router/clients at the
+> backend node `:53` — see [LAN testing](#lan-testing-no-public-internet-no-cloudflare).
+
 ## USB KEYS provisioning
 
 At first boot the `keys-provision` service finds the FAT32 `KEYS` partition,
@@ -141,8 +301,11 @@ into every image at `/var/lib/snapdragon/cluster`. The pki node installs ArgoCD
 and a root app-of-apps; ArgoCD syncs the `snapdragon-gateway` Helm chart (one
 release per namespace, fronted by an **ingress-nginx** facade on the backend node),
 Casdoor, Cassandra, **Akkoma** (fediverse) + **tuwunel** (Matrix), **Forgejo**
-(in-cluster git on pki), the Spring APIs, the Angular frontend, the social-ui and
-snapdragon.games. See [`specs/cluster/README.md`](specs/cluster/README.md).
+(in-cluster git on pki), the Spring APIs, the Angular host + federated remotes
+(login/matrix/mastodon/admin) and snapdragon.games. In `ENV=test` it also syncs
+the in-cluster wildcard-DNS resolver (`apps/09-lan-dns.yaml`); in `ENV=prod` the
+cloudflared go-live edge instead. See
+[`specs/cluster/README.md`](specs/cluster/README.md).
 
 ## Secrets (Vault + USB)
 
@@ -221,6 +384,8 @@ for the full man-style reference. Highlights:
 | Flag | Default | Description |
 |---|---|---|
 | `-r, --role` | `generic` | `pki` \| `backend` \| `frontend` (RPi). Sets hostname, services, GitOps payload. |
+| `--env test\|prod` | `test` | **Build ENV, baked into `/etc/snapdragon/env`.** `test` = LAN-only (wildcard DNS kept, cloudflared/ACME pruned, internal CA); `prod` = real public domain (cloudflared/ACME kept, announced banner). See [Build ENV](#build-env-testprod-baked-at-image-creation). |
+| `-C, --config FILE` | auto `./brand.conf` | Source a brand profile (e.g. `brands/local.conf`). |
 | `--cluster-domain` | `snapdragon.systems` | Base domain for gateways / Casdoor. |
 | `-w, --work-dir` | `./rpi5-stage4-build` | Git-ignored output directory. |
 | `-j, --jobs` | `$(nproc)` | Parallel emerge/make jobs. |
@@ -228,6 +393,28 @@ for the full man-style reference. Highlights:
 | `--skip-mesh` / `--skip-tailscale` | off | Omit mesh VPN / tailscale client. |
 | `--skip-kernel` / `--skip-iso` / `--skip-clean` / `--resume` | off | Build phases. |
 | `--pcie-gen3` | off | Force PCIe Gen 3 for NVMe (RPi, test your drive). |
+
+### `make` targets
+
+`make` is the front door over the builders + tooling (run `make help` for the
+live list). Common overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`,
+`HEADSCALE_URL=`, `WORK_DIR=`, `JOBS=`, `ROLE=`, `ARCH=x86|arm64`, `DEV=/dev/sdX`,
+`IMG_FLAGS='--no-iso'`, `NATIVE=1`, `CA_CERT=`/`CA_KEY=`.
+
+| Target | What it does |
+|---|---|
+| `make docker-image` (alias `docker`) | build the self-contained Gentoo builder image (LONG first time). |
+| `make local` | ENV=test + `brands/local.conf` → the LAN `snapdragon.test` fleet. |
+| `make prod` | ENV=prod, real domain (announced; creds from the keys USB). |
+| `make build-all` / `make rebuild` | the default fleet (3 Pi + x86 pki/be/fe/be+gpu); `rebuild` wipes first. |
+| `make rpi` / `make rpi-<role>` | all 3 Pi roles / one Pi role (`rpi-frontend`). |
+| `make x86` / `make x86-<role>` | the 4 x86 roles / one (`x86-be+gpu`, `x86-pki`, `x86-omnibus`). |
+| `make omnibus` | the opt-in x86 all-namespaces-on-one-node image. |
+| `make flash DEV=/dev/sdX ROLE=frontend ARCH=arm64` | write a role image to a disk (`.img` preferred). |
+| `make qemu` (`qemu-rpi` / `qemu-x86`) | boot a role image under QEMU (`ARCH=arm64`→Pi, `x86`→q35+OVMF). |
+| `make e2e` | boot a role VM under QEMU and run the Playwright e2e with seeded accounts. |
+| `make ci` / `make ci-quick` | full pipeline (rebuild fleet → e2e) / fast (build x86 be+gpu → e2e). |
+| `make clean` | wipe the work dir. |
 
 ## Spec files
 
@@ -257,9 +444,23 @@ provisioning engine, the backup engine, and the `cluster/` GitOps payload).
 ## Repositories
 
 This repo is the image/infra layer; application code lives in sibling repos —
-see the table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The new
-[`snapdragon-social-ui`](https://github.com/Snapdragon-Systems/snapdragon-social-ui)
-holds the Matrix + Mastodon Angular micro-frontends.
+see the table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
+`snapdragon.systems` host shell federates the per-feature remotes
+(`snapdragon-login-ui`, `snapdragon-matrix-ui`, `snapdragon-mastodon-ui`,
+`snapdragon-admin-ui`) over module federation.
+
+## CI
+
+Continuous integration runs on **GitLab** ([`.gitlab-ci.yml`](.gitlab-ci.yml)):
+GitHub is pull-mirrored into an in-cluster GitLab, and a privileged runner on
+the x86 node builds the role ISOs + container images and delivers the ISOs as
+generic-package release assets (latest-link path) for the admin UI's download
+links. ISOs carry **no keys** — KEYS material is supplied from the USB at first
+boot, never baked in or published.
+
+> **GitHub Actions is intentionally absent** — Actions is billing-blocked
+> org-wide (jobs fail at setup). Do **not** add `.github/workflows`; CI lives in
+> GitLab.
 
 ## Security notes
 
