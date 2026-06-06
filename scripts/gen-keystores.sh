@@ -99,7 +99,6 @@ SERVICES=(
   "${BRAND}-pki-gateway:${BRAND}-pki"
   "${BRAND}-be-gateway:${BRAND}-backend"
   "${BRAND}-fe-gateway:${BRAND}-frontend"
-  "${BRAND}-auth:${BRAND}-pki"
   "${BRAND}-api:${BRAND}-backend"
   "admin-bff:${BRAND}-backend"
 )

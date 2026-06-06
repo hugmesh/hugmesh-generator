@@ -68,7 +68,7 @@ test.describe('PENDING (Phase 8/10): games-admin gate at the real UI', () => {
 
 test.describe('PENDING (Phase 8/10): svc-* service identities', () => {
   test.skip('svc-* identities authenticate with ONLY their service role and reach nothing user-facing', async () => {
-    // TODO: the svc-pki-gateway / svc-be-gateway / svc-fe-gateway / svc-auth /
+    // TODO: the svc-pki-gateway / svc-be-gateway / svc-fe-gateway /
     // svc-api / svc-admin-bff machine users (manifests/casdoor init-data) are not
     // seeded or asserted by any harness. When a stack provisions them, assert each
     // svc-* token reaches ONLY its declared service surface and is denied the
