@@ -41,6 +41,23 @@ data:
       name: "Snapdragon",
       email: "admin@snapdragon.systems",
       registrations_open: false
+    # --- Admin / moderation + Casdoor OIDC (ROLE_ADMIN + ROLE_MOD) ---
+    # Akkoma/Pleroma admin & moderator are per-USER DB flags (users.is_admin /
+    # users.is_moderator), NOT derived from OIDC claims automatically. OIDC login
+    # (ueberauth_oidcc against Casdoor / id.snapdragon.systems) signs users in as
+    # NORMAL accounts only. The Casdoor 'moderator' group (ROLE_MOD) is mapped to
+    # fediverse moderation by a PostSync reconcile Job (admin-sync-job.yaml) that
+    # runs `pleroma_ctl user set <nick> --moderator` for ROLE_MOD members (and
+    # --admin for ROLE_ADMIN). The moderation REST surface lives under
+    # /api/v1/pleroma/admin/** (+ legacy /api/pleroma/admin/**) and AdminFE under
+    # /pleroma/admin — those are role-gated for ROLE_MOD/ROLE_ADMIN at the
+    # be-gateway via gateway_route_access (manifests/route-access/schema.sql).
+    config :ueberauth, Ueberauth,
+      providers: [
+        # Casdoor OIDC — login only; moderation authority is the DB flag set by
+        # the admin-sync Job, not this claim. clientId/secret from Vault/ESO.
+        oidc: {Ueberauth.Strategy.Oidcc, [issuer: "https://id.snapdragon.systems"]}
+      ]
     config :pleroma, Pleroma.Repo,
       adapter: Ecto.Adapters.Postgres,
       username: "akkoma",

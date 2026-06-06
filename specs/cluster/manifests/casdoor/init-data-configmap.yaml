@@ -11,6 +11,48 @@
 # /ROLE_AUTH), so a workload's container_t MCS identity and its Casdoor identity
 # line up.
 #
+# ROLE_MOD ("Network Moderator", group 'moderator') is the network-wide
+# moderation authority — a SIBLING of ROLE_ADMIN (NOT nested under it: its
+# "roles" array stays empty so it inherits no ROLE_ADMIN authorities). It grants
+# Matrix room-level moderation (tuwunel set-power-level PL50 in the managed rooms,
+# see manifests/tuwunel/admin-sync-job.yaml — NOT server admin) and fediverse
+# moderation (akkoma --moderator, see manifests/akkoma/admin-sync-job.yaml), but
+# is DENY-by-default everywhere else: the gateway_route_access seed
+# (manifests/route-access/schema.sql) grants ROLE_MOD ONLY the Matrix/Mastodon
+# (user + moderation) URL patterns — it never matches the infra/admin rows
+# (/api/admin/**, /admin/**, /bff/admin/** stay ROLE_ADMIN) and has no route to
+# vault/k8s or observability. Members are assigned to ROLE_MOD later via the
+# Casdoor UI / admin-allowlist (users []).
+#
+# ROLE_GAMES ("Games Member") is a network-wide SIBLING of ROLE_ADMIN/ROLE_MOD
+# (empty "roles" array — no inheritance, so it grants nothing on its own and is
+# default-deny everywhere it has no route row). ROLE_GAMES_ADMIN ("Games Namespace
+# Admin") is a DERIVED/composite role whose membership =
+#   ROLE_GAMES  INTERSECT  (ROLE_ADMIN UNION ROLE_MOD).
+# That intersection is MATERIALIZED by the games-admin reconcile Job (manifests/
+# games-admin-sync/, mirroring tuwunel/akkoma-admin-sync): it reads ROLE_GAMES,
+# ROLE_ADMIN, ROLE_MOD membership from Casdoor, computes the intersection, and
+# writes ONLY that verified set into ROLE_GAMES_ADMIN (idempotent; it also removes
+# anyone who no longer qualifies). ROLE_GAMES_ADMIN stays EMPTY in this seed.
+# Holding ROLE_GAMES alone, or ROLE_ADMIN alone, does NOT grant games-namespace
+# admin — only the combination does (default-deny). The single games-admin
+# route-access row (manifests/route-access/schema.sql) is keyed on ROLE_GAMES_ADMIN
+# ONLY, so the gateway's OR-of-allow-rows table still yields the required AND.
+#
+# THIS IS THE SYSTEMS CASDOOR (org "snapdragon"). The games realm is a SEPARATE,
+# INDEPENDENT Casdoor (manifests/casdoor-games, org "threewizards") that mirrors the
+# canonical snapdragon.games realm. That games Casdoor has its OWN native users and
+# roles — GitHub-OAuth players plus player / uploader / mod / publisher / play-three-
+# wizards / play-dodecahedron — which need NOT exist here in systems, and the systems
+# roles above (ROLE_GAMES, ROLE_GAMES_ADMIN, the svc-* service identities, etc.) need
+# NOT exist in the games realm. The TWO realms are wired together by EXACTLY ONE
+# automatic, scheduled mirror, run by snapdragon-actions (manifests/snapdragon-apis):
+#       ROLE_GAMES_ADMIN (systems)  ->  admin (games)
+# i.e. "only admins/mods who hold the games role in systems are added automatically"
+# as games admins. Granting a normal user ROLE_GAMES here does NOT auto-create a games
+# login: that on-demand provisioning is a separate admin-UI snapdragon-action (future),
+# NOT this scheduled job and NOT the games-admin intersection Job below.
+#
 # NOTE: the init_data.json object schema is Casdoor-version-specific. Validate
 # against the deployed casbin/casdoor-all-in-one before relying on auto-import.
 apiVersion: v1
@@ -36,6 +78,9 @@ data:
       ],
       "roles": [
         { "owner": "snapdragon", "name": "ROLE_ADMIN",     "displayName": "Platform Admin",  "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_MOD",       "displayName": "Network Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_GAMES",       "displayName": "Games Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_GAMES_ADMIN", "displayName": "Games Namespace Admin", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GATEWAY",   "displayName": "Gateway service", "users": ["snapdragon/svc-pki-gateway","snapdragon/svc-be-gateway","snapdragon/svc-fe-gateway"], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_AUTH",      "displayName": "Auth service",    "users": ["snapdragon/svc-auth"], "roles": [], "domains": [], "isEnabled": true },

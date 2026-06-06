@@ -3,19 +3,27 @@
   "version": 1,
   "hostname": "snapdragon-fe-01",
 
+  "_comment_mesh": "Leave endpoint empty to default tailscale login_server to the pki node's LAN IP (works before public DNS). cp_dns_name is the stable control-plane name the kubeadm join targets over the mesh.",
+  "mesh": {
+    "endpoint": "",
+    "magic_dns_domain": "headnet.internal",
+    "cp_dns_name": "kube-api.headnet.internal"
+  },
+
   "tailscale": {
     "enabled": true,
     "authkey_file": "tailscale/authkey",
-    "login_server": "http://snapdragon-pki:8080",
-    "up_args": "--accept-routes"
+    "login_server": "",
+    "up_args": "--advertise-tags=tag:snapdragon,tag:fe --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false"
   },
 
+  "_comment_kubernetes": "Worker join. api_server left empty auto-targets cp_dns_name:6443 over the mesh. token + ca_cert_hash come from the first control-plane's `kubeadm token create --print-join-command`.",
   "kubernetes": {
     "role": "worker",
     "bootstrap": false,
     "pki_dir": "kubernetes/pki",
     "join": {
-      "api_server": "snapdragon-pki:6443",
+      "api_server": "",
       "token": "REPLACE_WITH_KUBEADM_TOKEN",
       "ca_cert_hash": "sha256:REPLACE_WITH_CA_CERT_HASH"
     }
@@ -25,5 +33,11 @@
     "role": "frontend",
     "cluster_domain": "snapdragon.systems",
     "node_labels": { "snapdragon.systems/frontend": "true" }
-  }
+  },
+
+  "_comment_nodes": "Reach the pki control-plane + mesh by IP (written to /etc/hosts), so tailscale login_server (-> pki node) and the kubeadm cp_dns_name target resolve before MagicDNS/public DNS exists.",
+  "nodes": [
+    { "name": "snapdragon-pki",  "ip": "10.0.0.10", "role": "pki" },
+    { "name": "snapdragon-host", "ip": "10.0.0.30", "role": "host" }
+  ]
 }

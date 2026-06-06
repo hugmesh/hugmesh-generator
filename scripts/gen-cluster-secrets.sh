@@ -99,6 +99,19 @@ GITLAB_REGISTRY_TOKEN="${GITLAB_REGISTRY_TOKEN:-REPLACE_WITH_GITLAB_DEPLOY_TOKEN
 CASDOOR_CLIENT_ID="$(openssl rand -hex 16)"
 CASDOOR_CLIENT_SECRET="$(openssl rand -hex 32)"
 
+# ── GAMES-realm Casdoor (casdoor-games, org "threewizards") ─────────
+# A SEPARATE, INDEPENDENT Casdoor from the systems one above, mirroring the
+# canonical snapdragon.games realm. Its secrets live under a distinct Vault path
+# (secret/<brand>/casdoor-games). The threewizards-app clientId is the fixed
+# "twclient001" (set in the casdoor-games-app ExternalSecret template); only the
+# client-secret, admin password, DB password, and GitHub provider creds are minted.
+CASDOOR_GAMES_ADMIN_PLAIN="$(openssl rand -base64 18)"
+CASDOOR_GAMES_DB_PASSWORD="$(openssl rand -base64 24)"
+CASDOOR_GAMES_CLIENT_SECRET="$(openssl rand -hex 32)"
+# GitHub OAuth client (issued by GitHub) — placeholders the operator replaces.
+CASDOOR_GAMES_GITHUB_CLIENT_ID="REPLACE_WITH_GITHUB_OAUTH_CLIENT_ID"
+CASDOOR_GAMES_GITHUB_CLIENT_SECRET="REPLACE_WITH_GITHUB_OAUTH_CLIENT_SECRET"
+
 # Per-application Casdoor SERVICE identities. Each app/UI/API gets its own
 # OAuth2 application client-secret (and, where it logs in as a machine user, a
 # service-user password). Names mirror docs/SECURITY.md's identity matrix and
@@ -146,6 +159,13 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
             db_password_plain="${CASDOOR_DB_PASSWORD}"
         # Per-app service OAuth2 client-secrets (one KV key per app).
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/casdoor-apps" "${CASDOOR_APP_KV_ARGS[@]}"
+        # GAMES-realm Casdoor (casdoor-games) — separate path, separate instance.
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/casdoor-games" \
+            client_secret="${CASDOOR_GAMES_CLIENT_SECRET}" \
+            admin_password_plain="${CASDOOR_GAMES_ADMIN_PLAIN}" \
+            db_password_plain="${CASDOOR_GAMES_DB_PASSWORD}" \
+            github_client_id="${CASDOOR_GAMES_GITHUB_CLIENT_ID}" \
+            github_client_secret="${CASDOOR_GAMES_GITHUB_CLIENT_SECRET}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/clickhouse" \
             password="${CLICKHOUSE_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/uptrace" \
@@ -156,7 +176,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/gitlab-registry" \
             username="${GITLAB_REGISTRY_USER}" \
             token="${GITLAB_REGISTRY_TOKEN}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,clickhouse,uptrace,gitlab-registry}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-games,clickhouse,uptrace,gitlab-registry}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -187,6 +207,13 @@ CASDOOR_GOOGLE_CLIENT_ID="${CASDOOR_GOOGLE_CLIENT_ID}" \
 CASDOOR_GOOGLE_CLIENT_SECRET="${CASDOOR_GOOGLE_CLIENT_SECRET}" \
 CASDOOR_ADMIN_PLAIN="${CASDOOR_ADMIN_PLAIN}" \
 CASDOOR_DB_PASSWORD="${CASDOOR_DB_PASSWORD}" \
+CASDOOR_CLIENT_ID="${CASDOOR_CLIENT_ID}" \
+CASDOOR_CLIENT_SECRET="${CASDOOR_CLIENT_SECRET}" \
+CASDOOR_GAMES_ADMIN_PLAIN="${CASDOOR_GAMES_ADMIN_PLAIN}" \
+CASDOOR_GAMES_DB_PASSWORD="${CASDOOR_GAMES_DB_PASSWORD}" \
+CASDOOR_GAMES_CLIENT_SECRET="${CASDOOR_GAMES_CLIENT_SECRET}" \
+CASDOOR_GAMES_GITHUB_CLIENT_ID="${CASDOOR_GAMES_GITHUB_CLIENT_ID}" \
+CASDOOR_GAMES_GITHUB_CLIENT_SECRET="${CASDOOR_GAMES_GITHUB_CLIENT_SECRET}" \
 CASDOOR_APP_SECRETS_JSON="${CASDOOR_APP_SECRETS_JSON}" \
 CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD}" \
 UPTRACE_PG_PASSWORD="${UPTRACE_PG_PASSWORD}" \
@@ -218,6 +245,35 @@ data = {
     f"{brand}-backend": {
         "clickhouse-auth": {
             "password": os.environ["CLICKHOUSE_PASSWORD"],
+        },
+        # snapdragon-actions two-Casdoor sync: admin client per side. SYSTEMS side
+        # reuses the systems Casdoor OIDC client; GAMES side reuses threewizards-app.
+        "casdoor-sync-systems": {
+            "clientId": os.environ["CASDOOR_CLIENT_ID"],
+            "clientSecret": os.environ["CASDOOR_CLIENT_SECRET"],
+        },
+        "casdoor-sync-games": {
+            "clientId": "twclient001",
+            "clientSecret": os.environ["CASDOOR_GAMES_CLIENT_SECRET"],
+        },
+    },
+    # GAMES-realm Casdoor (casdoor-games) — SEPARATE instance in the games namespace.
+    f"{brand}-games": {
+        "casdoor-games-db": {
+            "username": "threewizards",
+            "password": os.environ["CASDOOR_GAMES_DB_PASSWORD"],
+        },
+        "casdoor-games-admin": {
+            "username": "admin",
+            "password": os.environ["CASDOOR_GAMES_ADMIN_PLAIN"],
+        },
+        "casdoor-games-app": {
+            "clientId": "twclient001",
+            "clientSecret": os.environ["CASDOOR_GAMES_CLIENT_SECRET"],
+        },
+        "casdoor-games-github": {
+            "clientId": os.environ["CASDOOR_GAMES_GITHUB_CLIENT_ID"],
+            "clientSecret": os.environ["CASDOOR_GAMES_GITHUB_CLIENT_SECRET"],
         },
     },
     "observability": {

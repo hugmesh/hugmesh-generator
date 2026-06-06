@@ -1,0 +1,173 @@
+# games-admin-sync — materializes the DERIVED Casdoor role ROLE_GAMES_ADMIN, whose
+# membership is the INTERSECTION that the games-namespace-admin gate requires:
+#
+#     ROLE_GAMES_ADMIN  =  ROLE_GAMES  INTERSECT  (ROLE_ADMIN UNION ROLE_MOD)
+#
+# i.e. a user becomes a snapdragon-games namespace admin ONLY if they hold
+# ROLE_GAMES AND (ROLE_ADMIN OR ROLE_MOD). Casdoor role nesting is UNION
+# (inheritance), never intersection, so the intersection cannot be expressed by a
+# nested "roles" array — it must be reconciled here. This Job reads ROLE_GAMES,
+# ROLE_ADMIN, ROLE_MOD membership from Casdoor, computes the intersection, and
+# writes EXACTLY that verified set into ROLE_GAMES_ADMIN's users[] (idempotent: it
+# also REMOVES anyone who no longer qualifies — default-deny). ROLE_GAMES_ADMIN is
+# the ONLY role on the games-admin route-access rows (/games/api/admin/** on
+# be-gateway, /games/admin/** on fe-gateway — see manifests/route-access/schema.sql),
+# so the gateway's OR-of-allow-rows table yields the required AND: ROLE_GAMES alone
+# or ROLE_ADMIN alone never reaches the games-admin surface.
+#
+# Mirrors the casdoor-init / tuwunel-admin-sync / akkoma-admin-sync pattern:
+# runAsNonRoot, drop ALL caps, readOnlyRootFilesystem, idempotent, ArgoCD PostSync.
+# Uses the SAME Casdoor admin-session transport as casdoor-init (login -> cookie ->
+# get-role/update-role) since update-role requires an admin session.
+#
+# SCOPE: this Job runs ENTIRELY INSIDE the systems Casdoor (org "snapdragon"). It only
+# MATERIALIZES the intersection role ROLE_GAMES_ADMIN within systems; it does NOT touch
+# the games realm. The games realm is a SEPARATE, INDEPENDENT Casdoor (manifests/
+# casdoor-games, org "threewizards") with its OWN native users/roles (GitHub-OAuth
+# players, player / uploader / mod / publisher / play-* roles) that need NOT exist in
+# systems — and vice versa. The ONE thing auto-synced systems -> games is a DIFFERENT,
+# scheduled snapdragon-actions job (manifests/snapdragon-apis): it mirrors EXACTLY this
+# role's membership, ROLE_GAMES_ADMIN (systems) -> admin (games). So the pipeline is:
+#   (1) THIS Job:  ROLE_GAMES_ADMIN = ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD)   [systems-only]
+#   (2) actions:   ROLE_GAMES_ADMIN (systems)            -> admin (games)     [cross-realm]
+# Net effect: only admins/mods who hold the games role in systems become games admins.
+# Granting a normal user plain ROLE_GAMES does NOT auto-create a games login; that
+# on-demand provisioning is a separate admin-UI snapdragon-action (future), not this Job.
+#
+# !!! The Casdoor REST API shape (login + get-role/update-role) is version-specific.
+# !!! This is a working scaffold — validate the endpoints/payloads against the
+# !!! deployed casbin/casdoor-all-in-one before relying on it in production.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: games-admin-sync-script
+  namespace: snapdragon-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+data:
+  sync.py: |
+    #!/usr/bin/env python3
+    """Reconcile ROLE_GAMES_ADMIN = ROLE_GAMES intersect (ROLE_ADMIN union ROLE_MOD).
+    Default-deny: writes only the verified intersection and prunes everyone else.
+    Pure stdlib (urllib) — no extra packages."""
+    import json, os, time, urllib.request, urllib.error, http.cookiejar
+
+    BASE = os.environ.get("CASDOOR_URL", "http://casdoor.snapdragon-pki.svc.cluster.local:8000")
+    ORG  = os.environ.get("CASDOOR_ORG", "snapdragon")
+    # The derived role we own/materialize, and the three input roles.
+    GAMES_ADMIN_ROLE = os.environ.get("GAMES_ADMIN_ROLE", "ROLE_GAMES_ADMIN")
+    GAMES_ROLE       = os.environ.get("GAMES_ROLE", "ROLE_GAMES")
+    PRIV_ROLES       = ["ROLE_ADMIN", "ROLE_MOD"]   # the (admin OR mod) side of the AND
+
+    ADMIN_USER = open("/secrets/admin/username").read().strip()
+    ADMIN_PASS = open("/secrets/admin/password").read().strip()
+
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+
+    def call(path, payload=None, method="GET"):
+        url = BASE + path
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(url, data=data, method=method,
+                                     headers={"Content-Type": "application/json"})
+        with opener.open(req, timeout=15) as r:
+            return json.loads(r.read() or "{}")
+
+    def wait_ready():
+        for _ in range(60):
+            try:
+                opener.open(BASE + "/api/health", timeout=5); return
+            except Exception:
+                time.sleep(3)
+        raise SystemExit("casdoor not reachable")
+
+    def login():
+        body = {"application": "app-built-in", "organization": "built-in",
+                "username": ADMIN_USER, "password": ADMIN_PASS, "type": "login",
+                "autoSignin": True}
+        return call("/api/login", body, "POST")
+
+    def role_obj(role):
+        """Full role object (so update-role can round-trip every field)."""
+        data = call(f"/api/get-role?id={ORG}/{role}")
+        return (data or {}).get("data") or {}
+
+    def members(role_object):
+        """Normalized member ids ("snapdragon/<name>") from a role object."""
+        return set((role_object or {}).get("users") or [])
+
+    wait_ready()
+    login()
+
+    games   = members(role_obj(GAMES_ROLE))
+    priv    = set()
+    for r in PRIV_ROLES:
+        priv |= members(role_obj(r))
+    # The AND: games members who ALSO hold admin or mod.
+    qualified = sorted(games & priv)
+
+    target = role_obj(GAMES_ADMIN_ROLE)
+    if not target:
+        raise SystemExit(f"{GAMES_ADMIN_ROLE} not found — seed it in init_data.json")
+    current = members(target)
+
+    if set(qualified) == current:
+        print(f"games-admin-sync: {GAMES_ADMIN_ROLE} already == {len(qualified)} qualified member(s); no change")
+    else:
+        # Overwrite users[] with EXACTLY the verified intersection. This both ADDs
+        # newly-qualified users and PRUNES anyone who lost ROLE_GAMES or admin/mod
+        # (default-deny). Preserve all other fields of the role object.
+        target["users"] = qualified
+        call(f"/api/update-role?id={ORG}/{GAMES_ADMIN_ROLE}", target, "POST")
+        added   = sorted(set(qualified) - current)
+        removed = sorted(current - set(qualified))
+        print(f"games-admin-sync: {GAMES_ADMIN_ROLE} -> {len(qualified)} member(s) "
+              f"(+{len(added)} added, -{len(removed)} removed)")
+        if added:   print("  + " + ", ".join(added))
+        if removed: print("  - " + ", ".join(removed))
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: games-admin-sync
+  namespace: snapdragon-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: games-admin-sync }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        snapdragon.systems/pki: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: sync
+          image: python:3.12-alpine
+          command: ["python3", "/script/sync.py"]
+          env:
+            - { name: CASDOOR_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000" }
+            - { name: CASDOOR_ORG, value: "snapdragon" }
+            - { name: GAMES_ADMIN_ROLE, value: "ROLE_GAMES_ADMIN" }
+            - { name: GAMES_ROLE,       value: "ROLE_GAMES" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script, mountPath: /script, readOnly: true }
+            - { name: admin, mountPath: /secrets/admin, readOnly: true }
+      volumes:
+        - name: script
+          configMap: { name: games-admin-sync-script, defaultMode: 0555 }
+        # ESO-materialized from Vault — never committed. casdoor-admin holds the
+        # admin username/password used to open the session for update-role.
+        - name: admin
+          secret: { secretName: casdoor-admin }

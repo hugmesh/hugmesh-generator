@@ -8,6 +8,7 @@ resources:
   - service.yaml
   - init-data-configmap.yaml   # declarative org/roles/service-users seed
   - init-job.yaml              # per-app OAuth2 apps + google provider + secrets
+  - games-admin-sync-job.yaml  # materializes ROLE_GAMES_ADMIN = ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD)
 # The "casdoor-google" Secret (clientId / clientSecret) is now materialized by
 # External Secrets Operator from Vault (ClusterSecretStore "snapdragon-vault",
 # remote path secret/snapdragon/casdoor) — see manifests/external-secrets.

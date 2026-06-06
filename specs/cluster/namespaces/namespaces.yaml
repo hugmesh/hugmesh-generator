@@ -6,7 +6,11 @@
 #   snapdragon-pki       pki=true        -> pki Pi (control-plane): headscale, Casdoor, auth
 #   snapdragon-backend   backend=true    -> backend Pis AND the x86_64 host
 #   snapdragon-frontend  frontend=true   -> frontend Pis AND the x86_64 host
-#   snapdragon-games     games=true,compute=gpu -> x86_64 host
+#   snapdragon-games     games=true,compute=gpu -> x86_64 host. ALSO hosts the
+#                        SEPARATE GAMES-realm Casdoor (casdoor-games, org
+#                        "threewizards") + its Postgres (casdoor-games-pg) — an
+#                        independent identity provider from the systems Casdoor in
+#                        snapdragon-pki.
 #   devops               devops=true; ArgoCD additionally kubernetes.io/arch=amd64 (x86 ONLY)
 # The x86_64 host is labelled frontend=backend=games=devops=true (+compute=gpu),
 # so it runs all of those; the Pis keep only their own tier label.

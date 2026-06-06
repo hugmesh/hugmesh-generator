@@ -57,7 +57,7 @@ usage() {
 cat <<EOF
 build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
 
-  -w, --work-dir DIR        Build dir. Default: ./x86-host-build
+  -w, --work-dir DIR        Build dir. Default: ./out  (local + gitignored)
   -j, --jobs N              Parallel jobs. Default: $(nproc)
   -v, --version STR         Version stamp. Default: ${REL_VERSION}
   -r, --role ROLE           pki | be | fe | be+gpu | omnibus  (host = be+gpu alias).
@@ -189,7 +189,7 @@ case "${ROLE}" in
 esac
 
 [ "$(id -u)" -eq 0 ] || { err "Run as root (chroot emerge + ISO build need it)."; exit 1; }
-[ -z "${WORK_DIR}" ] && WORK_DIR="$(pwd)/x86-host-build"
+[ -z "${WORK_DIR}" ] && WORK_DIR="$(pwd)/out"
 [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-host"
 SYSROOT="${WORK_DIR}/sysroot"
 ISO_DIR="${WORK_DIR}/isoroot"
@@ -325,6 +325,7 @@ cp "${SHARED_SPECS}/etc/kubernetes/kubeadm-config.yaml" "${SYSROOT}/etc/kubernet
 cp "${SHARED_SPECS}/etc/kubernetes/kubelet-config.yaml" "${SYSROOT}/var/lib/kubelet/config.yaml"
 cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf" "${SYSROOT}/etc/ssh/sshd_config.d/"
 cp "${SHARED_SPECS}/etc/headscale/config.yaml"        "${SYSROOT}/etc/headscale/"
+cp "${SHARED_SPECS}/etc/headscale/policy.hujson"      "${SYSROOT}/etc/headscale/"   # fleet full-mesh ACL (policy.mode: file)
 cp "${SHARED_SPECS}/etc/keys-provision/provision.sh"  "${SYSROOT}/usr/sbin/keys-provision"; chmod +x "${SYSROOT}/usr/sbin/keys-provision"
 mkdir -p "${SYSROOT}/usr/local/sbin"
 cp "${SHARED_SPECS}/usr/local/sbin/snapdragon-backup"  "${SYSROOT}/usr/local/sbin/snapdragon-backup"; chmod +x "${SYSROOT}/usr/local/sbin/snapdragon-backup"
@@ -338,6 +339,13 @@ chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
 mkdir -p "${SYSROOT}/etc/snapdragon" "${SYSROOT}/var/lib/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
+# Bake the brand's mesh control-server URL so keys-provision can read it at
+# first boot (env does not survive to first boot). Empty = local-first: the
+# control node defaults server_url to its own LAN IP (resolve_endpoint).
+if [ -n "${HEADSCALE_URL:-}" ]; then
+    echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/snapdragon/headscale-url"
+    info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/snapdragon/headscale-url"
+fi
 cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
 rebrand_sysroot
 

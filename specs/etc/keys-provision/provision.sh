@@ -54,6 +54,89 @@ log()  { echo "[keys-provision $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 warn() { log "WARNING: $*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# ── Local-first mesh endpoint resolution ───────────────────────────
+# A node provisioned before any public DNS exists must still be reachable by
+# its LAN peers. So the mesh endpoint defaults to this node's primary LAN
+# IPv4 and is only overridden by explicit config. Precedence (highest first):
+#   1. provision.json .headscale.server_url
+#   2. provision.json .mesh.endpoint
+#   3. the baked brand var HEADSCALE_URL (written to /etc/snapdragon/headscale-url
+#      at build time — env does not survive to first boot)
+#   4. DEFAULT: http://<primary-LAN-IPv4>:8080
+# Because peers also get MagicDNS (.mesh.magic_dns_domain) + the control node's
+# stable hostname, a LAN-IP endpoint keeps working after a public domain is
+# later published: the MagicDNS control-plane name is stable across the
+# IP->domain transition; clients only re-pin if login_server itself changes.
+
+# Primary outbound LAN IPv4 (RFC1918 only). Empty if none can be determined.
+resolve_lan_ip() {
+    local ip=""
+    ip="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)"
+    [ -n "${ip}" ] || ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    case "${ip}" in
+        10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) echo "${ip}" ;;
+        *) [ -n "${ip}" ] && echo "${ip}" || true ;;  # last resort: any resolved IP
+    esac
+}
+
+# Resolve the mesh control-server endpoint (full URL, e.g. http://1.2.3.4:8080).
+resolve_endpoint() {
+    local ep=""
+    ep="$(jqm '.headscale.server_url // ""')"
+    if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then ep="$(jqm '.mesh.endpoint // ""')"; fi
+    if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
+        [ -r /etc/snapdragon/headscale-url ] && ep="$(tr -d '[:space:]' < /etc/snapdragon/headscale-url 2>/dev/null)"
+    fi
+    if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
+        local lan; lan="$(resolve_lan_ip)"
+        [ -n "${lan}" ] && ep="http://${lan}:8080"
+    fi
+    [ "${ep}" = "null" ] && ep=""
+    echo "${ep}"
+}
+
+# Control-node (pki) headscale endpoint as seen by a WORKER / additional CP.
+# A non-control node has no local headscale, so its mesh login_server must point
+# at the pki node, not at itself. Precedence: explicit override (server_url /
+# mesh.endpoint) else the baked brand HEADSCALE_URL else the pki node's LAN IP
+# from .nodes[] (the same inventory provision_hosts uses, so a pre-domain worker
+# still reaches the control server). Empty if none of these are known.
+resolve_control_endpoint() {
+    local ep=""
+    ep="$(jqm '.headscale.server_url // ""')"
+    if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then ep="$(jqm '.mesh.endpoint // ""')"; fi
+    if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
+        [ -r /etc/snapdragon/headscale-url ] && ep="$(tr -d '[:space:]' < /etc/snapdragon/headscale-url 2>/dev/null)"
+    fi
+    if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
+        local pki_ip n i
+        n="$(jqm '.nodes // [] | length')"
+        for ((i = 0; i < n; i++)); do
+            if [ "$(jqm ".nodes[$i].role")" = "pki" ]; then
+                pki_ip="$(jqm ".nodes[$i].ip")"; break
+            fi
+        done
+        [ -n "${pki_ip:-}" ] && [ "${pki_ip}" != "null" ] && ep="http://${pki_ip}:8080"
+    fi
+    [ "${ep}" = "null" ] && ep=""
+    echo "${ep}"
+}
+
+# MagicDNS base domain (overridable by .mesh.magic_dns_domain).
+resolve_magic_dns_domain() {
+    local d; d="$(jqm '.mesh.magic_dns_domain // ""')"
+    { [ -z "${d}" ] || [ "${d}" = "null" ]; } && d="headnet.internal"
+    echo "${d}"
+}
+
+# Stable, role-independent MagicDNS name for the k8s control plane
+# (overridable by .mesh.cp_dns_name). Defaults to kube-api.<magic_dns_domain>.
+resolve_cp_dns_name() {
+    local n; n="$(jqm '.mesh.cp_dns_name // ""')"
+    { [ -z "${n}" ] || [ "${n}" = "null" ]; } && n="kube-api.$(resolve_magic_dns_domain)"
+    echo "${n}"
+}
+
 # ── Always: ensure SSH host keys exist so sshd can start ───────────
 ensure_host_keys() {
     if ! ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
@@ -361,6 +444,36 @@ provision_headscale() {
         cp -f "${BASE}/headscale/"*.hujson    /etc/headscale/     2>/dev/null || true
         cp -f "${BASE}/headscale/"derp*.yaml  /etc/headscale/     2>/dev/null || true
     fi
+    # Fleet full-mesh ACL: prefer a USB-supplied policy.hujson, else fall back
+    # to the baked-in /etc/headscale/policy.hujson shipped in the image.
+    local policy_file=""
+    if   [ -f "${BASE}/headscale/policy.hujson" ]; then policy_file=/etc/headscale/policy.hujson
+    elif [ -f /etc/headscale/policy.hujson ];      then policy_file=/etc/headscale/policy.hujson
+    fi
+    # ── Local-first endpoint: rewrite server_url BEFORE starting the server ──
+    # The baked config.yaml ships server_url=http://127.0.0.1:8080 (a placeholder
+    # that loopback-only peers cannot reach). Resolve the real endpoint
+    # (configured override else this node's LAN IP) and rewrite the single
+    # server_url line idempotently so LAN peers can register at first boot.
+    if [ -f /etc/headscale/config.yaml ]; then
+        local endpoint dnsdom
+        endpoint="$(resolve_endpoint)"
+        if [ -n "${endpoint}" ]; then
+            # Escape sed replacement metacharacters in the URL.
+            local esc; esc="$(printf '%s' "${endpoint}" | sed -e 's/[&|\\/]/\\&/g')"
+            sed -i "s|^server_url:.*|server_url: ${esc}|" /etc/headscale/config.yaml
+            log "headscale server_url set to ${endpoint}"
+        else
+            warn "Could not resolve a mesh endpoint (no config + no LAN IP) — keeping baked server_url"
+        fi
+        # Overridable MagicDNS base domain.
+        dnsdom="$(resolve_magic_dns_domain)"
+        if [ -n "${dnsdom}" ]; then
+            sed -i "s|^\(\s*\)base_domain:.*|\1base_domain: ${dnsdom}|" /etc/headscale/config.yaml
+            log "headscale MagicDNS base_domain set to ${dnsdom}"
+        fi
+    fi
+
     chown -R headscale:headscale /etc/headscale /var/lib/headscale /run/headscale
     chmod 0600 /var/lib/headscale/*.key 2>/dev/null || true
 
@@ -399,6 +512,92 @@ provision_headscale() {
             log "Created headscale preauth key for ${pu}"
         fi
     done
+
+    # ── Fleet full-mesh ACL + subnet-route auto-approval ──────────────────
+    # Load the fleet policy (tagOwners + autoApprovers + intra-fleet accepts)
+    # so nodes can self-tag (tag:snapdragon/+role) and their advertised pod +
+    # service routes are auto-approved. Idempotent: re-running just re-applies.
+    if [ -n "${policy_file}" ] && [ -f "${policy_file}" ]; then
+        if headscale policy set -f "${policy_file}" 2>/dev/null; then
+            log "Loaded headscale ACL policy from ${policy_file}"
+        else
+            warn "headscale policy set failed for ${policy_file} (check hujson syntax / mode: file)"
+        fi
+    else
+        warn "No headscale policy.hujson found — tailnet runs allow-all (no tags/route approval)"
+    fi
+
+    # Defensive backfill: approve the pod + service routes for any fleet node
+    # that registered before the policy was loaded. autoApprovers makes this a
+    # no-op for nodes that join afterwards. Routes/CIDRs mirror
+    # kubernetes/kubeadm-config.yaml (podSubnet/serviceSubnet).
+    local mesh_routes id
+    mesh_routes="$(jqm '.tailscale.mesh_routes // "10.244.0.0/16,10.96.0.0/12"')"
+    [ -n "${mesh_routes}" ] && [ "${mesh_routes}" != "null" ] || mesh_routes="10.244.0.0/16,10.96.0.0/12"
+    if headscale nodes list -o json >/dev/null 2>&1; then
+        for id in $(headscale nodes list -o json 2>/dev/null | jq -r '.[].id' 2>/dev/null); do
+            [ -n "${id}" ] && [ "${id}" != "null" ] || continue
+            headscale nodes approve-routes -i "${id}" -r "${mesh_routes}" 2>/dev/null \
+                && log "Approved routes ${mesh_routes} for headscale node ${id}" || true
+        done
+    fi
+}
+
+# ── Stable MagicDNS control-plane record (autodiscovery anchor) ────
+# Give the k8s control plane a fixed, role-independent name resolvable over the
+# tailnet so additional control-plane nodes + workers + freshly-joined mesh
+# nodes can target it WITHOUT a baked-in CP IP. We map .mesh.cp_dns_name
+# (default kube-api.<base_domain>) -> the control node's TAILNET IP via
+# headscale dns.extra_records, then reload headscale so MagicDNS serves it.
+# Idempotent: re-running replaces the managed block. Only meaningful on the
+# control (headscale) node, after it has joined its own tailnet.
+publish_cp_dns_record() {
+    have headscale || return 0
+    [ -f /etc/headscale/config.yaml ] || return 0
+    local cpname tip
+    cpname="$(resolve_cp_dns_name)"
+    [ -n "${cpname}" ] || return 0
+    # This node's tailnet IP (it is the control plane / first CP). Prefer the
+    # local client; fall back to whatever headscale recorded for this node.
+    tip="$(tailscale ip -4 2>/dev/null | head -1)"
+    if [ -z "${tip}" ] && have headscale; then
+        tip="$(headscale nodes list -o json 2>/dev/null \
+                | jq -r --arg h "$(hostname)" '.[] | select(.given_name==$h or .name==$h) | .ip_addresses[]?' 2>/dev/null \
+                | grep -E '^100\.' | head -1)"
+    fi
+    [ -n "${tip}" ] || { warn "No tailnet IP yet for CP DNS record ${cpname} — skipping"; return 0; }
+
+    # Build a managed extra_records block and splice it into config.yaml,
+    # replacing any previous managed block. headscale 0.23.x accepts an inline
+    # dns.extra_records list of {name,type,value}.
+    python3 - "$cpname" "$tip" <<'PY' 2>/dev/null || { warn "Failed to write CP DNS record"; return 0; }
+import sys, re, io
+cpname, tip = sys.argv[1], sys.argv[2]
+p = "/etc/headscale/config.yaml"
+txt = open(p).read()
+block = ("  # >>> snapdragon cp dns (managed)\n"
+         "  extra_records:\n"
+         f"    - name: \"{cpname}\"\n"
+         "      type: \"A\"\n"
+         f"      value: \"{tip}\"\n"
+         "  # <<< snapdragon cp dns (managed)\n")
+# Drop any prior managed block.
+txt = re.sub(r"  # >>> snapdragon cp dns \(managed\).*?  # <<< snapdragon cp dns \(managed\)\n",
+             "", txt, flags=re.S)
+# Insert under the top-level dns: mapping (after its first line).
+lines = txt.splitlines(keepends=True)
+out, inserted = [], False
+for i, ln in enumerate(lines):
+    out.append(ln)
+    if not inserted and re.match(r"^dns:\s*$", ln):
+        out.append(block); inserted = True
+if not inserted:
+    out.append("\ndns:\n  magic_dns: true\n"); out.append(block)
+open(p, "w").write("".join(out))
+PY
+    chown headscale:headscale /etc/headscale/config.yaml 2>/dev/null || true
+    log "Published MagicDNS CP record ${cpname} -> ${tip}"
+    rc-service headscale restart 2>/dev/null || warn "headscale reload after CP DNS record failed"
 }
 
 # ── Tailscale client ───────────────────────────────────────────────
@@ -416,18 +615,140 @@ provision_tailscale() {
     local akf authkey login up_args
     akf="$(jqm '.tailscale.authkey_file // "tailscale/authkey"')"
     [ -f "${BASE}/${akf}" ] && authkey="$(tr -d '[:space:]' < "${BASE}/${akf}")" || authkey=""
+    # Control-node self-join: on the headscale node the KEYS stick carries no
+    # tailscale/authkey (it MINTS keys). Fall back to the preauth key headscale
+    # just minted for the fleet user so the control node also joins its own mesh
+    # (advertises tag:snapdragon + pod/service routes, --accept-routes). Without
+    # this the pki node stays off the tailnet and its pki-tier pods/ClusterIPs
+    # (Vault, Casdoor, headscale, control-plane) are unreachable cross-node.
+    if [ -z "${authkey}" ]; then
+        local mintkey
+        mintkey="$(ls -1 /var/lib/headscale/preauthkeys/*.key 2>/dev/null | head -1)"
+        [ -n "${mintkey}" ] && [ -f "${mintkey}" ] && {
+            authkey="$(tr -d '[:space:]' < "${mintkey}")"
+            [ -n "${authkey}" ] && log "Using locally-minted headscale preauth key for control-node self-join"
+        }
+    fi
     login="$(jqm '.tailscale.login_server // ""')"
+    # Local-first: if no explicit login_server, derive the control server URL.
+    # On the CONTROL node (headscale enabled) that is its own resolve_endpoint
+    # (configured override else its own LAN IP). On a WORKER / additional CP it
+    # is resolve_control_endpoint -> the PKI node (override / brand HEADSCALE_URL
+    # / the pki node's LAN IP from .nodes[]), never the worker's own LAN IP. So a
+    # pre-public-domain worker still reaches the control server over the LAN.
+    if [ -z "${login}" ] || [ "${login}" = "null" ]; then
+        if [ "$(jqm '.headscale.enabled // false')" = "true" ]; then
+            login="$(resolve_endpoint)"
+        else
+            login="$(resolve_control_endpoint)"
+        fi
+        [ -n "${login}" ] && log "tailscale login_server defaulted to ${login}"
+    fi
     up_args="$(jqm '.tailscale.up_args // ""')"
     if [ -n "${authkey}" ]; then
         local cmd=(tailscale up --authkey "${authkey}")
         [ -n "${login}" ] && [ "${login}" != "null" ] && cmd+=(--login-server "${login}")
         # shellcheck disable=SC2206
         [ -n "${up_args}" ] && [ "${up_args}" != "null" ] && cmd+=(${up_args})
-        "${cmd[@]}" 2>/dev/null && log "tailscale up succeeded" || warn "tailscale up failed"
+        if "${cmd[@]}" 2>/dev/null; then
+            log "tailscale up succeeded"
+        else
+            warn "tailscale up failed"
+        fi
+    fi
+
+    # On the control (headscale) node, now that we are on the tailnet, publish
+    # the stable MagicDNS control-plane record so additional CPs / workers /
+    # autodiscovering nodes can resolve the API endpoint over the mesh.
+    if [ "$(jqm '.headscale.enabled // false')" = "true" ] && have headscale; then
+        publish_cp_dns_record
     fi
 }
 
 # ── Kubernetes ─────────────────────────────────────────────────────
+# Shared kubeadm join helper. Workers omit the extra args; additional
+# control-plane nodes pass `--control-plane --certificate-key <ck>`.
+# Idempotent: a node that already has a kubelet.conf is treated as joined.
+_kubeadm_join() {
+    local api="$1" token="$2" hash="$3"; shift 3
+    local extra=("$@")
+    if [ -f /etc/kubernetes/kubelet.conf ]; then
+        log "kubelet.conf present — node already joined, skipping kubeadm join"
+        return 0
+    fi
+    if [ -z "${api}" ] || [ -z "${token}" ] || [ -z "${hash}" ]; then
+        warn "Incomplete kubernetes.join block (api/token/ca_cert_hash) — cannot join"
+        return 1
+    fi
+    log "Running kubeadm join against ${api}${extra:+ (${extra[*]})}"
+    if kubeadm join "${api}" --token "${token}" \
+            --discovery-token-ca-cert-hash "${hash}" "${extra[@]}"; then
+        log "Joined cluster (${api})"
+        return 0
+    fi
+    warn "kubeadm join failed against ${api}"
+    return 1
+}
+
+# Distribute /etc/kubernetes/admin.conf to root + sudo users (control-plane).
+_distribute_kubeconfig() {
+    mkdir -p /root/.kube
+    cp -f /etc/kubernetes/admin.conf /root/.kube/config 2>/dev/null || return 0
+    local f="${BASE}/users.json"; [ -f "${f}" ] || f="${MANIFEST}"
+    local n i nm home
+    n="$(jq '(.users // []) | length' "${f}" 2>/dev/null || echo 0)"
+    for ((i = 0; i < n; i++)); do
+        [ "$(jq -r ".users[$i].sudo // false" "${f}")" = "true" ] || continue
+        nm="$(jq -r ".users[$i].name" "${f}")"
+        home="$(getent passwd "${nm}" | cut -d: -f6)"
+        [ -n "${home}" ] || continue
+        mkdir -p "${home}/.kube"
+        cp -f /etc/kubernetes/admin.conf "${home}/.kube/config"
+        chown -R "${nm}:" "${home}/.kube"
+    done
+}
+
+# Label this control-plane node role=pki and remove the control-plane taint so
+# the pki-tier workloads (Vault, Casdoor, Cassandra, headscale) schedule here.
+_label_control_plane() {
+    local sr; sr="$(jqm '.snapdragon.role // "pki"')"
+    KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node "$(hostname)" "snapdragon.systems/role=${sr}" --overwrite 2>/dev/null || true
+    KUBECONFIG=/etc/kubernetes/admin.conf kubectl taint nodes "$(hostname)" node-role.kubernetes.io/control-plane- 2>/dev/null || true
+    log "Control-plane node labelled role=${sr}, control-plane taint removed"
+}
+
+# Decide whether THIS control-plane node is the FIRST (bootstrap) CP or an
+# ADDITIONAL one joining an existing HA control plane. Robust default: probe the
+# stable control-plane endpoint's apiserver healthz over the mesh; if it answers
+# the cluster already exists -> additional. Fall back to .kubernetes.bootstrap
+# (true => first) when no probe target / curl is available.
+_is_first_control_plane() {
+    local cpep; cpep="$(resolve_cp_dns_name)"
+    if [ -n "${cpep}" ] && have curl; then
+        if curl -ksS -m 4 "https://${cpep}:6443/healthz" >/dev/null 2>&1; then
+            log "Control-plane endpoint ${cpep}:6443 already healthy — joining as ADDITIONAL control-plane"
+            return 1   # not first
+        fi
+    fi
+    # No reachable endpoint: trust the explicit flag.
+    # NOTE: read `first` WITHOUT jq's `//` alternative — `//` collapses the
+    # boolean literal false to the default, so `.kubernetes.first // "x"` reads
+    # first:false as "x". Use an explicit null test instead ("unset" only when
+    # the key is truly absent).
+    local first; first="$(jqm '.kubernetes.first | if .==null then "unset" else tostring end')"
+    # An explicit first=false ALWAYS means "additional CP" — even when the
+    # healthz probe failed (MagicDNS not yet converged / first CP briefly
+    # unreachable at boot). Honouring it here is critical: falling through to
+    # "first" would run `kubeadm init` and start a SECOND split-brain cluster.
+    if [ "${first}" = "false" ]; then
+        warn "first=false but control-plane endpoint not reachable yet — treating as ADDITIONAL (kubeadm join will retry the endpoint)"
+        return 1       # additional
+    fi
+    [ "${first}" = "true" ] && return 0     # explicit first control plane
+    # first unset: bootstrap=true (or anything else with no endpoint up) => first.
+    return 0
+}
+
 provision_kubernetes() {
     local role bootstrap cfg
     role="$(jqm '.kubernetes.role // "none"')"
@@ -466,33 +787,51 @@ provision_kubernetes() {
 
     case "${role}" in
         control-plane|master|server)
-            log "Running kubeadm init"
-            if kubeadm init --config /etc/kubernetes/kubeadm-config.yaml --upload-certs; then
-                mkdir -p /root/.kube
-                cp -f /etc/kubernetes/admin.conf /root/.kube/config
-                # distribute kubeconfig to sudo users
-                local f="${BASE}/users.json"; [ -f "${f}" ] || f="${MANIFEST}"
-                local n i
-                n="$(jq '(.users // []) | length' "${f}" 2>/dev/null || echo 0)"
-                for ((i = 0; i < n; i++)); do
-                    local nm home
-                    [ "$(jq -r ".users[$i].sudo // false" "${f}")" = "true" ] || continue
-                    nm="$(jq -r ".users[$i].name" "${f}")"
-                    home="$(getent passwd "${nm}" | cut -d: -f6)"
-                    [ -n "${home}" ] || continue
-                    mkdir -p "${home}/.kube"
-                    cp -f /etc/kubernetes/admin.conf "${home}/.kube/config"
-                    chown -R "${nm}:" "${home}/.kube"
-                done
-                # Label this (pki) node with its snapdragon role and allow the
-                # pki-tier workloads (Vault, Casdoor, Cassandra, headscale) to
-                # schedule on the control-plane — they all nodeSelector role=pki.
-                local sr; sr="$(jqm '.snapdragon.role // "pki"')"
-                KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node "$(hostname)" "snapdragon.systems/role=${sr}" --overwrite 2>/dev/null || true
-                KUBECONFIG=/etc/kubernetes/admin.conf kubectl taint nodes "$(hostname)" node-role.kubernetes.io/control-plane- 2>/dev/null || true
-                log "Control plane initialised (node labelled role=${sr}, control-plane taint removed)"
+            # ── HA control plane: FIRST node inits, ADDITIONAL nodes join ──
+            if [ -f /etc/kubernetes/admin.conf ]; then
+                log "admin.conf present — control-plane already initialised, skipping"
+                _distribute_kubeconfig
+                _label_control_plane
+            elif _is_first_control_plane; then
+                # FIRST control plane: init with --upload-certs so additional
+                # control-plane nodes can pull the shared certs by cert-key. The
+                # kubeadm-config.yaml controlPlaneEndpoint is the stable MagicDNS
+                # name (kube-api.<base_domain>) so every later join targets it.
+                log "Running kubeadm init (first control-plane) --upload-certs"
+                if kubeadm init --config /etc/kubernetes/kubeadm-config.yaml --upload-certs; then
+                    _distribute_kubeconfig
+                    _label_control_plane
+                    # Persist fresh join material for additional CPs / workers so
+                    # an operator can read it off this node (token + ca hash +
+                    # certificate-key) without re-deriving by hand.
+                    mkdir -p /etc/snapdragon
+                    { kubeadm token create --print-join-command 2>/dev/null; } > /etc/snapdragon/kubeadm-join.cmd
+                    local ck
+                    ck="$(kubeadm init phase upload-certs --upload-certs 2>/dev/null \
+                            | grep -Eo '[0-9a-f]{64}' | tail -1)"
+                    [ -n "${ck}" ] && { echo "${ck}" > /etc/snapdragon/kubeadm-certificate-key; chmod 0600 /etc/snapdragon/kubeadm-certificate-key; }
+                    chmod 0600 /etc/snapdragon/kubeadm-join.cmd 2>/dev/null || true
+                    log "First control plane initialised; join material in /etc/snapdragon/kubeadm-join.cmd"
+                else
+                    warn "kubeadm init failed — inspect ${LOG}"
+                fi
             else
-                warn "kubeadm init failed — inspect ${LOG}"
+                # ADDITIONAL control plane: join the existing HA control plane.
+                local api token hash certkey
+                api="$(jqm '.kubernetes.join.api_server // ""')"
+                token="$(jqm '.kubernetes.join.token // ""')"
+                hash="$(jqm '.kubernetes.join.ca_cert_hash // ""')"
+                certkey="$(jqm '.kubernetes.join.certificate_key // ""')"
+                # Default the join target to the stable MagicDNS CP endpoint.
+                { [ -z "${api}" ] || [ "${api}" = "null" ]; } && api="$(resolve_cp_dns_name):6443"
+                if [ -z "${certkey}" ] || [ "${certkey}" = "null" ]; then
+                    warn "Additional control-plane requires .kubernetes.join.certificate_key — cannot join"
+                else
+                    if _kubeadm_join "${api}" "${token}" "${hash}" --control-plane --certificate-key "${certkey}"; then
+                        _distribute_kubeconfig
+                        _label_control_plane
+                    fi
+                fi
             fi
             ;;
         worker|node|agent)
@@ -500,14 +839,10 @@ provision_kubernetes() {
             api="$(jqm '.kubernetes.join.api_server // ""')"
             token="$(jqm '.kubernetes.join.token // ""')"
             hash="$(jqm '.kubernetes.join.ca_cert_hash // ""')"
-            if [ -n "${api}" ] && [ -n "${token}" ] && [ -n "${hash}" ]; then
-                log "Running kubeadm join against ${api}"
-                kubeadm join "${api}" --token "${token}" \
-                    --discovery-token-ca-cert-hash "${hash}" \
-                    && log "Joined cluster" || warn "kubeadm join failed"
-            else
-                warn "Incomplete kubernetes.join block — cannot join"
-            fi
+            # Default the join target to the stable MagicDNS CP endpoint so
+            # workers autodiscover the API over the mesh (no baked CP IP needed).
+            { [ -z "${api}" ] || [ "${api}" = "null" ]; } && api="$(resolve_cp_dns_name):6443"
+            _kubeadm_join "${api}" "${token}" "${hash}"
             ;;
         *)
             warn "Unknown kubernetes.role: ${role}"
@@ -871,7 +1206,12 @@ provision_hosts() {
     for ((i = 0; i < n; i++)); do
         [ "$(jqm ".nodes[$i].role")" = "pki" ] && { pki_ip="$(jqm ".nodes[$i].ip")"; break; }
     done
-    log "Writing /etc/hosts for ${n} cluster node(s)${facade:+ + facade ${facade}}"
+    # Stable control-plane MagicDNS name for the first-boot window: until the
+    # joining node's MagicDNS converges, resolve the CP endpoint to the pki
+    # node's IP so `kubeadm join <cp_dns_name>:6443` works immediately. MagicDNS
+    # then takes over (and survives a pki IP change).
+    local cpname; cpname="$(resolve_cp_dns_name)"
+    log "Writing /etc/hosts for ${n} cluster node(s)${facade:+ + facade ${facade}}${cpname:+ + cp ${cpname}}"
     sed -i '/# >>> snapdragon nodes/,/# <<< snapdragon nodes/d' /etc/hosts 2>/dev/null || true
     {
         echo "# >>> snapdragon nodes"
@@ -887,6 +1227,8 @@ provision_hosts() {
         # Public facade name -> pki node internal IP (internal/VPN path to the pki
         # gateway + headscale; bypasses the external IP for in-cluster nodes).
         [ -n "${facade}" ] && [ -n "${pki_ip}" ] && [ "${pki_ip}" != "null" ] && echo "${pki_ip} ${facade}"
+        # Stable control-plane name -> pki IP (first-boot bridge before MagicDNS).
+        [ -n "${cpname}" ] && [ -n "${pki_ip}" ] && [ "${pki_ip}" != "null" ] && echo "${pki_ip} ${cpname}"
         echo "# <<< snapdragon nodes"
     } >> /etc/hosts
 }

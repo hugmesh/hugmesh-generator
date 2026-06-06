@@ -1,0 +1,106 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerfile.build — self-contained Gentoo builder image (Phase 5).
+#
+# Goal: the DEFAULT `make build-all` runs INSIDE this image so the HOST needs
+# ZERO build toolchain and ZERO sudo. The image ships the full toolchain the
+# build/flash/test scripts need (crossdev + the aarch64 cross-toolchain, the
+# image/loop/fs tools, the SELinux policy tools, archivers, etc.). It runs as
+# root, so the native scripts run WITHOUT sudo inside it.
+#
+# The repo is bind-mounted at /src and the output dir at /out at RUNTIME
+# (`docker run -v $(CURDIR):/src -v $(WORK_DIR):/out`). Nothing about a
+# particular checkout is baked in — only the toolchain.
+#
+# WARNING: the cross-toolchain build (`crossdev`) compiles binutils + gcc +
+# glibc + linux-headers for aarch64 from source. The FIRST `make docker-image`
+# is LONG (tens of minutes to hours, depending on the host). It is fully cached
+# in this image layer, so subsequent runs reuse it instantly.
+#
+# Build:  make docker-image      (or: docker build -f Dockerfile.build -t snapdragon-builder .)
+# Run:    make build-all         (Docker is the default path — see the Makefile)
+
+# ── Stage 1: a synced Gentoo base with an up-to-date portage tree ─────────────
+FROM docker.io/gentoo/stage3:amd64 AS base
+
+# Non-interactive emerge; keep going where a single optional dep fails the merge.
+ENV FEATURES="-news binpkg-multi-instance" \
+    EMERGE_DEFAULT_OPTS="--quiet-build=y --jobs=4 --load-average=8" \
+    MAKEOPTS="-j4"
+
+# Refresh the portage tree. emerge-webrsync ships a snapshot tarball and needs
+# no rsync mirror handshake, so it is the most reliable inside a container; fall
+# back to `emerge --sync` if the snapshot is unavailable. `getuto` seeds the
+# binpkg trust keyring used by gentoo's stage3.
+RUN getuto 2>/dev/null || true; \
+    emerge-webrsync || emerge --sync
+
+# ── Stage 2: the toolchain image ─────────────────────────────────────────────
+FROM base AS toolchain
+
+# The portage profile/USE flags the host SELinux policy + grub EFI tools need.
+RUN mkdir -p /etc/portage/package.use && \
+    printf '%s\n' 'sys-boot/grub:2 grub_platforms_efi-64' \
+      > /etc/portage/package.use/snapdragon-builder && \
+    printf '%s\n' 'sys-apps/util-linux caps' \
+      >> /etc/portage/package.use/snapdragon-builder
+
+# The FULL build/image/test toolchain the scripts call so the HOST needs none:
+#   sys-devel/crossdev          — builds the aarch64 cross-toolchain (below)
+#   sys-block/parted            — partition the image (build_img)
+#   sys-fs/dosfstools           — mkfs.vfat for the ESP
+#   sys-fs/e2fsprogs            — mkfs.ext4 for the rootfs
+#   sys-apps/util-linux         — losetup / mount / blkid (loop-mount the image)
+#   dev-libs/libisoburn         — xorriso / xorrisofs (build the x86 live ISO)
+#   sys-fs/mtools               — mformat/mcopy (grub-mkrescue's embedded EFI FAT image)
+#   sys-fs/squashfs-tools       — mksquashfs (live ISO squashfs)
+#   sys-boot/grub:2[efi-64]     — grub-install / grub-mkimage (EFI boot)
+#   sys-apps/checkpolicy        — checkpolicy/checkmodule (host SELinux policy)
+#   sys-apps/semodule-utils     — semodule_package (host SELinux policy)
+#   sys-devel/m4                — m4 (SELinux policy macro expansion)
+#   app-arch/{tar,xz-utils,zstd}— stage4 .fs.tar.xz / artifact (de)compression
+#   net-misc/curl               — fetch stage3 / firmware / sources
+#   sys-apps/file               — file(1) artifact/type detection
+#   dev-vcs/git                 — clone sources where the scripts need it
+RUN emerge --verbose --noreplace \
+        sys-devel/crossdev \
+        sys-block/parted \
+        sys-fs/dosfstools \
+        sys-fs/e2fsprogs \
+        sys-apps/util-linux \
+        dev-libs/libisoburn \
+        sys-fs/mtools \
+        sys-fs/squashfs-tools \
+        sys-boot/grub:2 \
+        sys-apps/checkpolicy \
+        sys-apps/semodule-utils \
+        sys-devel/m4 \
+        app-arch/tar \
+        app-arch/xz-utils \
+        app-arch/zstd \
+        net-misc/curl \
+        sys-apps/file \
+        dev-vcs/git
+
+# ── Stage 3: the cross-toolchain (slow; cached in this layer) ─────────────────
+# crossdev needs its own overlay to drop the generated cross ebuilds into.
+RUN mkdir -p /var/db/repos/crossdev/{metadata,profiles} && \
+    echo 'crossdev' > /var/db/repos/crossdev/profiles/repo_name && \
+    printf '%s\n' 'masters = gentoo' 'thin-manifests = true' \
+      > /var/db/repos/crossdev/metadata/layout.conf && \
+    mkdir -p /etc/portage/repos.conf && \
+    printf '%s\n' '[crossdev]' 'location = /var/db/repos/crossdev' 'masters = gentoo' 'priority = 10' \
+      > /etc/portage/repos.conf/crossdev.conf
+
+# Build binutils + gcc + glibc + linux-headers for aarch64. THIS IS THE LONG
+# STEP — it compiles a full cross-toolchain from source and is cached here.
+RUN crossdev --stable -t aarch64-unknown-linux-gnu
+
+# ── Runtime defaults ──────────────────────────────────────────────────────────
+# The repo is bind-mounted here at runtime; output at /out. No ENTRYPOINT — we
+# do NOT want to hide `make`, so the container is a thin `make` wrapper. The
+# default CMD runs the whole fleet on the NATIVE (in-container, no-sudo) path
+# and writes to the mounted /out. Override by appending a make target to
+# `docker run ... snapdragon-builder <target>`.
+WORKDIR /src
+CMD ["make", "build-all", "NATIVE=1", "WORK_DIR=/out"]

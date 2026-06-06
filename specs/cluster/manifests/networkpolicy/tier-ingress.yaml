@@ -64,8 +64,14 @@ spec:
   podSelector: {}
   policyTypes: [Ingress]
   ingress:
+    # snapdragon-games also hosts the GAMES-realm Casdoor (casdoor-games) + its
+    # Postgres (casdoor-games-pg). The self rule covers the games BFF -> casdoor-games
+    # (JWT validation) and casdoor-games -> casdoor-games-pg (intra-namespace DB);
+    # the snapdragon-backend rule additionally covers the snapdragon-actions
+    # ROLE_GAMES_ADMIN -> admin sync job -> casdoor-games. Egress is left open
+    # (see header), so casdoor-games reaching its Postgres needs no egress rule.
     - from:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-games } }      # self
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }    # be-gateway -> games workloads
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-games } }      # self (games BFF -> casdoor-games; casdoor-games -> casdoor-games-pg)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }    # be-gateway -> games workloads; snapdragon-actions sync -> casdoor-games
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }   # fe-gateway -> games UI
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }                # ArgoCD reconcile

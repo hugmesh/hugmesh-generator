@@ -164,8 +164,8 @@ OPTIONS
   Directories
     -w, --work-dir DIR
         Base directory for all build artifacts (sysroot, tarballs,
-        ISO, caches).  Default: ./rpi5-stage4-build (created under
-        the current working directory).
+        ISO, caches).  Default: ./out (created under the current
+        working directory; local + gitignored).
 
     -s, --specs-dir DIR
         Path to the aarch64/RPi5-specific specs directory.  Default:
@@ -478,9 +478,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Default work directory: ./rpi5-stage4-build under CWD
+# Default work directory: ./out under CWD (local + gitignored)
 if [ -z "${WORK_DIR}" ]; then
-    WORK_DIR="$(pwd)/rpi5-stage4-build"
+    WORK_DIR="$(pwd)/out"
 fi
 
 # Reconcile the legacy SKIP_ISO switch with the new BUILD_ISO design. The ISO is
@@ -760,9 +760,12 @@ for svc in growroot containerd kubelet headscale tailscaled keys-provision; do
     chmod +x "${SYSROOT}/etc/init.d/${svc}"
 done
 
-# Headscale default config (overridable from the USB KEYS partition)
+# Headscale default config + fleet full-mesh ACL (overridable from KEYS USB).
+# policy.hujson is referenced by config.yaml (policy.mode: file) and applied by
+# keys-provision via `headscale policy set`.
 mkdir -p "${SYSROOT}/etc/headscale"
 cp "${SHARED_SPECS}/etc/headscale/config.yaml"            "${SYSROOT}/etc/headscale/config.yaml"
+cp "${SHARED_SPECS}/etc/headscale/policy.hujson"          "${SYSROOT}/etc/headscale/policy.hujson"
 
 # KEYS-USB provisioning engine
 mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/var/lib/keys-provision"
@@ -781,6 +784,13 @@ cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf"  "${SYSROOT}/etc/ssh/ss
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
+# Bake the brand's mesh control-server URL so keys-provision can read it at
+# first boot (env does not survive to first boot). Empty = local-first: the
+# control node defaults server_url to its own LAN IP (resolve_endpoint).
+if [ -n "${HEADSCALE_URL:-}" ]; then
+    echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/snapdragon/headscale-url"
+    info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/snapdragon/headscale-url"
+fi
 if [ -d "${SHARED_SPECS}/cluster" ]; then
     mkdir -p "${SYSROOT}/var/lib/snapdragon"
     cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
