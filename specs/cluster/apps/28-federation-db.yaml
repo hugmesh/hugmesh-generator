@@ -1,4 +1,4 @@
-# federation-db — dedicated Postgres for snapdragon-federation's OWN tables
+# federation-db — dedicated Postgres for snapdragon-federation-api's OWN tables
 # (federation_modules / user_modules / moderation_requests / federation_override).
 # snapdragon-backend, ClusterIP. No initdb seed — federation owns its schema via
 # Liquibase (applied by the app at startup), so this DB just needs to exist EMPTY.

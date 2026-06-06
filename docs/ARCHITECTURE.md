@@ -116,7 +116,7 @@ unreachable.
 | `Snapdragon-Systems/snapdragon-be-gateway` | Backend gateway (per-node, reuses the shared gateway image) |
 | `Snapdragon-Systems/snapdragon-fe-gateway` | Frontend gateway (per-node, reuses the shared gateway image) |
 | `Snapdragon-Systems/snapdragon-actions` | Spring APIs |
-| `Snapdragon-Systems/snapdragon-admin-bff` | Spring admin BFF (allowlist, namespace access, usage, token broker) |
+| `Snapdragon-Systems/snapdragon-admin-bff-api` | Spring admin BFF (allowlist, namespace access, usage, token broker) |
 | `Snapdragon-Systems/snapdragon.systems` | Angular host front page (federates the remotes) |
 | `Snapdragon-Systems/snapdragon-matrix-ui` | Matrix chat + WebRTC video micro-frontend (renamed from `snapdragon-social-ui`) |
 | `Snapdragon-Systems/snapdragon-mastodon-ui` | Mastodon micro-frontend |

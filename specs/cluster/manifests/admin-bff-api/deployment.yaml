@@ -46,7 +46,7 @@ spec:
             - name: ROUTE_ACCESS_R2DBC_URL
               value: "r2dbc:postgresql://route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway"
             # This BFF also owns the usage-analytics aggregation (the role the
-            # removed snapdragon-admin-bff copy used to run): Eureka-registered,
+            # removed snapdragon-admin-bff-api copy used to run): Eureka-registered,
             # consumes the Kafka usage-event bus into ClickHouse, serves
             # /bff/admin/usage. Hence the eureka + clickhouse profiles + wiring.
             - name: SPRING_PROFILES_ACTIVE

@@ -1,14 +1,14 @@
-# snapdragon-federation — the module-federation REGISTRY + manifest/bundles API
+# snapdragon-federation-api — the module-federation REGISTRY + manifest/bundles API
 # (reactive WebFlux + R2DBC + Liquibase). It owns the enabled-MFE registry
 # (federation_modules / user_modules / moderation_requests / federation_override),
 # renders the manifest the host's loadRemoteModule consumes, and stores the
 # uploaded fragment bundle bytes.
 #
 # It is UPSTREAM of two runtime clients (both already retry, so this is a soft
-# dependency, but it should reconcile first — see apps/29-federation.yaml):
+# dependency, but it should reconcile first — see apps/29-federation-api.yaml):
 #   - admin-bff calls federation as a JWT-authenticated client; and
 #   - the snapdragon-remote-fragment sync sidecar polls
-#     http://snapdragon-federation.snapdragon-backend.svc.cluster.local:8080 for the
+#     http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080 for the
 #     manifest + bundles and serves them statically at /_fragments/**.
 #
 # Security model: federation is purely an OAuth2 RESOURCE SERVER. It VALIDATES the
@@ -25,15 +25,15 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-federation
+  name: snapdragon-federation-api
   namespace: snapdragon-backend
-  labels: { app: snapdragon-federation, app.kubernetes.io/part-of: snapdragon.systems }
+  labels: { app: snapdragon-federation-api, app.kubernetes.io/part-of: snapdragon.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over the RWO bundles PVC
-  selector: { matchLabels: { app: snapdragon-federation } }
+  selector: { matchLabels: { app: snapdragon-federation-api } }
   template:
-    metadata: { labels: { app: snapdragon-federation } }
+    metadata: { labels: { app: snapdragon-federation-api } }
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
       securityContext:
@@ -44,8 +44,8 @@ spec:
           type: container_t
           level: "s0:c24"
       containers:
-        - name: snapdragon-federation
-          image: snapdragon-systems/snapdragon-federation:dev
+        - name: snapdragon-federation-api
+          image: snapdragon-systems/snapdragon-federation-api:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
             allowPrivilegeEscalation: false

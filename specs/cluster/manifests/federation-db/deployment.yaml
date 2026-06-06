@@ -1,7 +1,7 @@
-# federation-db — dedicated Postgres for snapdragon-federation's OWN tables
+# federation-db — dedicated Postgres for snapdragon-federation-api's OWN tables
 # (federation_modules / user_modules / moderation_requests / federation_override).
 # Lives in snapdragon-backend next to the federation app it serves. ClusterIP only;
-# the only client is snapdragon-federation (R2DBC at runtime + a JDBC handle that
+# the only client is snapdragon-federation-api (R2DBC at runtime + a JDBC handle that
 # Liquibase uses ONCE at startup to apply the changelog).
 #
 # NOTE: the literal hostname `snapdragon-pg` that federation's application.yml
