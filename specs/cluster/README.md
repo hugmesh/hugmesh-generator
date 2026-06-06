@@ -89,8 +89,8 @@ unchanged.
   (`registry.snapdragon.systems/snapdragon/<repo>:main`, set per app via kustomize
   `images:`) with the ESO-materialized `gitlab-registry` imagePullSecret.
   PREREQUISITE: create a GitLab **group deploy token** (scope `read_registry`) and
-  store it at Vault `snapdragon/gitlab-registry` (`username`/`token`). `eureka` +
-  `config-server` have no source repo yet, so they stay `:dev` until built.
+  store it at Vault `snapdragon/gitlab-registry` (`username`/`token`). `eureka`
+  has no source repo yet, so it stays `:dev` until built.
 - Casdoor uses an `emptyDir` and the all-in-one image — switch to a PVC + an
   external DB, and seed the Google provider (`casdoor-google` Secret) + the
   gateway OAuth2 client.

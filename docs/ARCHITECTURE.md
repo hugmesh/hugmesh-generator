@@ -115,7 +115,6 @@ unreachable.
 | `Snapdragon-Systems/snapdragon-pki-gateway` | PKI/identity gateway (Casdoor OAuth2, Postgres routes) — renamed from `snapdragon-id-gateway` |
 | `Snapdragon-Systems/snapdragon-be-gateway` | Backend gateway (per-node, reuses the shared gateway image) |
 | `Snapdragon-Systems/snapdragon-fe-gateway` | Frontend gateway (per-node, reuses the shared gateway image) |
-| `Snapdragon-Systems/snapdragon-auth` | Spring Authorization Server |
 | `Snapdragon-Systems/snapdragon-actions` | Spring APIs |
 | `Snapdragon-Systems/snapdragon-admin-bff` | Spring admin BFF (allowlist, namespace access, usage, token broker) |
 | `Snapdragon-Systems/snapdragon.systems` | Angular host front page (federates the remotes) |

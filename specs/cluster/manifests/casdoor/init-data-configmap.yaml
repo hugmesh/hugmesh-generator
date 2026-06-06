@@ -7,9 +7,8 @@
 # NO client-secrets / passwords are committed here — the OAuth2 applications and
 # their secrets are created/injected by the casdoor-init Job from the ESO
 # Secret "casdoor-app-secrets" (sourced from Vault). The Casdoor roles map 1:1
-# to the SELinux roles in docs/SECURITY.md (ROLE_GATEWAY/ROLE_API/ROLE_ADMIN_API
-# /ROLE_AUTH), so a workload's container_t MCS identity and its Casdoor identity
-# line up.
+# to the SELinux roles in docs/SECURITY.md (ROLE_GATEWAY/ROLE_API/ROLE_ADMIN_API),
+# so a workload's container_t MCS identity and its Casdoor identity line up.
 #
 # ROLE_MOD ("Network Moderator", group 'moderator') is the network-wide
 # moderation authority — a SIBLING of ROLE_ADMIN (NOT nested under it: its
@@ -83,7 +82,6 @@ data:
         { "owner": "snapdragon", "name": "ROLE_GAMES_ADMIN", "displayName": "Games Namespace Admin", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GATEWAY",   "displayName": "Gateway service", "users": ["snapdragon/svc-pki-gateway","snapdragon/svc-be-gateway","snapdragon/svc-fe-gateway"], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_AUTH",      "displayName": "Auth service",    "users": ["snapdragon/svc-auth"], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_API",       "displayName": "API service",     "users": ["snapdragon/svc-api"], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_ADMIN_API", "displayName": "Admin API",       "users": ["snapdragon/svc-admin-bff"], "roles": [], "domains": [], "isEnabled": true }
       ],
@@ -91,7 +89,6 @@ data:
         { "owner": "snapdragon", "name": "svc-pki-gateway", "displayName": "svc-pki-gateway", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
         { "owner": "snapdragon", "name": "svc-be-gateway",  "displayName": "svc-be-gateway",  "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
         { "owner": "snapdragon", "name": "svc-fe-gateway",  "displayName": "svc-fe-gateway",  "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
-        { "owner": "snapdragon", "name": "svc-auth",        "displayName": "svc-auth",        "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
         { "owner": "snapdragon", "name": "svc-api",         "displayName": "svc-api",         "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
         { "owner": "snapdragon", "name": "svc-admin-bff",   "displayName": "svc-admin-bff",   "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false }
       ]

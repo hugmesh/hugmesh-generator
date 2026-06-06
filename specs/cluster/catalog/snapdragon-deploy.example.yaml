@@ -4,9 +4,9 @@
 # deployable on demand through ArgoCD. The catalog ApplicationSet
 # (apps/13-service-catalog.yaml) discovers every repo in the in-cluster Forgejo
 # org that contains a `snapdragon-deploy.yaml` + a `deploy/` kustomize dir and
-# generates an ArgoCD Application from it. Spring Cloud Config (apps/
-# 12-config-server.yaml) then supplies per-environment config to the pod, and
-# Spring Cloud Kubernetes (added in each service) picks up ConfigMaps/Secrets.
+# generates an ArgoCD Application from it. Per-environment config flows to the pod
+# via ConfigMaps + ESO; Spring Cloud Kubernetes (added in each service) picks up
+# those ConfigMaps/Secrets.
 #
 # This file is the human-facing contract; the actual manifests live in the repo's
 # deploy/ kustomize (image tag, ports, replicas, namespace, route). An admin
@@ -21,5 +21,3 @@ route:
   gateway: snapdragon-be-gateway
   path: /api/example/**
   stripPrefix: 0
-# Optional Spring Cloud Config profile served by the config-server:
-configProfile: prod

@@ -31,7 +31,7 @@ data:
     # app name -> (redirectUris, role). Mirrors init_data.json + SECURITY.md.
     APPS = {
         "pki-gateway": "ROLE_GATEWAY", "be-gateway": "ROLE_GATEWAY",
-        "fe-gateway": "ROLE_GATEWAY", "auth": "ROLE_AUTH",
+        "fe-gateway": "ROLE_GATEWAY",
         "api": "ROLE_API", "admin-bff": "ROLE_ADMIN_API",
         "matrix": "ROLE_USER", "mastodon": "ROLE_USER",
     }
