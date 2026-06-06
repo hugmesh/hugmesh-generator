@@ -41,6 +41,26 @@ data:
       name: "Snapdragon",
       email: "admin@snapdragon.systems",
       registrations_open: false
+    # --- Outbound mail (Pleroma.Mailer) — OPTIONAL, ABSENT-BY-DEFAULT ---
+    # SMTP creds come from env (AKKOMA_SMTP_*), loaded from the OPTIONAL secret
+    # akkoma-smtp (ESO <- Vault secret/<brand>/mail, seeded per the brand's
+    # MAIL_PROVIDER; default protonmail). When that secret is ABSENT the env are
+    # unset, AKKOMA_SMTP_RELAY is "" and the mailer is DISABLED (enabled: false) —
+    # Akkoma sends no mail and registration stays admin-approval (registrations_open
+    # is left as-is above). Provide the secret to switch on SMTP delivery.
+    config :pleroma, Pleroma.Mailer,
+      enabled: System.get_env("AKKOMA_SMTP_RELAY", "") != "",
+      adapter: Swoosh.Adapters.SMTP,
+      relay: System.get_env("AKKOMA_SMTP_RELAY"),
+      port: String.to_integer(System.get_env("AKKOMA_SMTP_PORT") || "587"),
+      username: System.get_env("AKKOMA_SMTP_USER"),
+      password: System.get_env("AKKOMA_SMTP_PASSWORD"),
+      # tls: "always" => :always (STARTTLS), "if_available" or "never" honored too.
+      tls: String.to_atom(System.get_env("AKKOMA_SMTP_TLS") || "if_available"),
+      auth: :always,
+      retries: 2
+    config :pleroma, :instance,
+      notify_email: System.get_env("AKKOMA_SMTP_FROM", "noreply@snapdragon.systems")
     # --- Admin / moderation + Casdoor OIDC (ROLE_ADMIN + ROLE_MOD) ---
     # Akkoma/Pleroma admin & moderator are per-USER DB flags (users.is_admin /
     # users.is_moderator), NOT derived from OIDC claims automatically. OIDC login
@@ -131,7 +151,13 @@ spec:
       containers:
         - name: akkoma
           image: git.akkoma.dev/akkomagang/akkoma:stable   # ⚠️ pin a real tag
-          envFrom: [{ secretRef: { name: akkoma-secrets } }]
+          # akkoma-smtp is OPTIONAL (optional: true): when ESO has not materialized
+          # it (no SMTP creds) the env stay unset, AKKOMA_SMTP_RELAY is "" and the
+          # Pleroma.Mailer is disabled. When present it injects the AKKOMA_SMTP_*
+          # env config.exs reads to enable outbound mail.
+          envFrom:
+            - secretRef: { name: akkoma-secrets }
+            - secretRef: { name: akkoma-smtp, optional: true }
           ports: [{ name: http, containerPort: 4000 }]
           volumeMounts:
             - { name: config,  mountPath: /etc/akkoma }

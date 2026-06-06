@@ -42,6 +42,21 @@ spec:
               valueFrom: { secretKeyRef: { name: casdoor-google, key: clientId, optional: true } }
             - name: GOOGLE_CLIENT_SECRET
               valueFrom: { secretKeyRef: { name: casdoor-google, key: clientSecret, optional: true } }
+            # SMTP (optional, absent-by-default). Loaded from the OPTIONAL secret
+            # casdoor-smtp (ESO <- Vault secret/<brand>/mail). When the secret is
+            # absent these env are simply unset, the app.conf SMTP keys default to
+            # empty, and Casdoor stays on native user/pass + admin-approval — no
+            # mail wired. Interpolated into conf/app.conf (smtp* keys).
+            - name: CASDOOR_SMTP_HOST
+              valueFrom: { secretKeyRef: { name: casdoor-smtp, key: CASDOOR_SMTP_HOST, optional: true } }
+            - name: CASDOOR_SMTP_PORT
+              valueFrom: { secretKeyRef: { name: casdoor-smtp, key: CASDOOR_SMTP_PORT, optional: true } }
+            - name: CASDOOR_SMTP_USER
+              valueFrom: { secretKeyRef: { name: casdoor-smtp, key: CASDOOR_SMTP_USER, optional: true } }
+            - name: CASDOOR_SMTP_PASSWORD
+              valueFrom: { secretKeyRef: { name: casdoor-smtp, key: CASDOOR_SMTP_PASSWORD, optional: true } }
+            - name: CASDOOR_SMTP_FROM
+              valueFrom: { secretKeyRef: { name: casdoor-smtp, key: CASDOOR_SMTP_FROM, optional: true } }
           readinessProbe:
             httpGet: { path: /api/health, port: http }
             initialDelaySeconds: 20

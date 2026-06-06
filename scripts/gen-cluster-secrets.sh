@@ -30,6 +30,24 @@ if [ -f "${REPO_DIR}/brand.conf" ]; then
     # shellcheck disable=SC1091
     . "${REPO_DIR}/brand.conf"
 fi
+# brands/<BRAND>.conf (the committed brand profile) may also set MAIL_*/OAuth
+# presets; honor it like the other generators do. ./brand.conf (above) and the
+# environment still win.
+if [ -n "${BRAND:-}" ] && [ -f "${REPO_DIR}/brands/${BRAND}.conf" ]; then
+    # shellcheck disable=SC1090
+    . "${REPO_DIR}/brands/${BRAND}.conf"
+fi
+
+# Optional keys file with OAuth + mail creds the operator drops next to the
+# generator (or points KEYS_FILE at). Lets gen-cluster-secrets.sh pick up the
+# same secret/<brand>/mail + casdoor github_/discord_ props the keys USB carries,
+# WITHOUT putting them in a committed brand profile. JSON shape (all optional):
+#   { "github":  {"client_id":"...","client_secret":"..."},
+#     "discord": {"client_id":"...","client_secret":"..."},
+#     "mail":    {"provider":"gmail","host":"...","port":"587","tls":"starttls",
+#                 "user":"...","password":"...","from":"...","dkim_key":"..."} }
+# Missing fields fall back to env -> brand preset -> placeholder/empty.
+KEYS_FILE="${KEYS_FILE:-${REPO_DIR}/keys-out/secrets/cluster-creds.json}"
 
 usage() {
 cat <<EOF
@@ -87,6 +105,103 @@ CASDOOR_DB_PASSWORD="$(openssl rand -base64 24)"
 # operator replaces. They still populate the casdoor-google k8s Secret.
 CASDOOR_GOOGLE_CLIENT_ID="REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID"
 CASDOOR_GOOGLE_CLIENT_SECRET="REPLACE_WITH_GOOGLE_OAUTH_CLIENT_SECRET"
+
+# ── Optional keys file reader (no jq dependency) ────────────────────
+# keyfile_get <dotted.path> -> prints the value (empty if file/key absent).
+# Uses python3 (already required) so we don't add a jq dependency.
+keyfile_get() {
+    [ -f "${KEYS_FILE}" ] || { printf ''; return 0; }
+    KF="${KEYS_FILE}" python3 - "$1" <<'PY' 2>/dev/null || true
+import json, os, sys
+try:
+    d = json.load(open(os.environ["KF"]))
+except Exception:
+    sys.exit(0)
+for k in sys.argv[1].split("."):
+    if isinstance(d, dict) and k in d:
+        d = d[k]
+    else:
+        sys.exit(0)
+if d is None:
+    sys.exit(0)
+sys.stdout.write(str(d))
+PY
+}
+if [ -f "${KEYS_FILE}" ]; then
+    echo "==> Reading optional OAuth/mail creds from keys file: ${KEYS_FILE}"
+fi
+
+# ── GitHub + Discord OAuth federation providers (systems Casdoor) ───
+# Client id/secret are issued by GitHub/Discord. Resolution order:
+#   env (GITHUB_CLIENT_ID/…) -> keys file (github.client_id/…) -> placeholder.
+# These populate the OPTIONAL casdoor-github / casdoor-discord k8s Secrets; the
+# casdoor-init Job skips provider seeding when the secret is absent (it stays a
+# placeholder => still wired through, but the operator replaces it with reals).
+CASDOOR_GITHUB_CLIENT_ID="${GITHUB_CLIENT_ID:-$(keyfile_get github.client_id)}"
+CASDOOR_GITHUB_CLIENT_SECRET="${GITHUB_CLIENT_SECRET:-$(keyfile_get github.client_secret)}"
+CASDOOR_GITHUB_CLIENT_ID="${CASDOOR_GITHUB_CLIENT_ID:-REPLACE_WITH_GITHUB_OAUTH_CLIENT_ID}"
+CASDOOR_GITHUB_CLIENT_SECRET="${CASDOOR_GITHUB_CLIENT_SECRET:-REPLACE_WITH_GITHUB_OAUTH_CLIENT_SECRET}"
+
+CASDOOR_DISCORD_CLIENT_ID="${DISCORD_CLIENT_ID:-$(keyfile_get discord.client_id)}"
+CASDOOR_DISCORD_CLIENT_SECRET="${DISCORD_CLIENT_SECRET:-$(keyfile_get discord.client_secret)}"
+CASDOOR_DISCORD_CLIENT_ID="${CASDOOR_DISCORD_CLIENT_ID:-REPLACE_WITH_DISCORD_OAUTH_CLIENT_ID}"
+CASDOOR_DISCORD_CLIENT_SECRET="${CASDOOR_DISCORD_CLIENT_SECRET:-REPLACE_WITH_DISCORD_OAUTH_CLIENT_SECRET}"
+
+# ── Outbound mail (OPTIONAL, ABSENT-BY-DEFAULT) ─────────────────────
+# secret/<brand>/mail props (host/port/tls/user/password/from/dkim_key). The knob
+# MAIL_PROVIDER (brand.conf, default protonmail) only selects host/port/tls
+# PRESETS; mail is only switched ON when a real MAIL_USER + MAIL_PASSWORD resolve
+# (env -> keys file). With no user/pass we leave the props EMPTY: the Vault path
+# carries blanks and provisioning still materializes a (blank) Secret, but the
+# casdoor/akkoma manifests treat empty host/relay as "mail disabled" (Akkoma's
+# enabled: is RELAY != "") so registration stays admin-approval — no mail wired.
+MAIL_PROVIDER="${MAIL_PROVIDER:-$(keyfile_get mail.provider)}"
+MAIL_PROVIDER="${MAIL_PROVIDER:-protonmail}"
+# Provider host/port/TLS presets (overridable by explicit MAIL_HOST/PORT/TLS).
+# TLS value is the Swoosh/Pleroma.Mailer :tls option the akkoma manifest passes
+# verbatim as an atom: "always" (=STARTTLS) | "if_available" | "never". Casdoor
+# ignores the literal and infers TLS from the port. gmail/outlook/protonmail all
+# use STARTTLS on the submission port => "always".
+case "${MAIL_PROVIDER}" in
+    gmail)      _MAIL_HOST_DEF="smtp.gmail.com";     _MAIL_PORT_DEF="587";  _MAIL_TLS_DEF="always" ;;
+    outlook)    _MAIL_HOST_DEF="smtp.office365.com"; _MAIL_PORT_DEF="587";  _MAIL_TLS_DEF="always" ;;
+    protonmail) _MAIL_HOST_DEF="127.0.0.1";          _MAIL_PORT_DEF="1025"; _MAIL_TLS_DEF="always" ;;
+    smtp)       _MAIL_HOST_DEF="";                    _MAIL_PORT_DEF="587";  _MAIL_TLS_DEF="always" ;;
+    none|"")    _MAIL_HOST_DEF="";                    _MAIL_PORT_DEF="";     _MAIL_TLS_DEF="" ;;
+    *)          echo "WARNING: unknown MAIL_PROVIDER='${MAIL_PROVIDER}', treating as 'smtp'" >&2
+                _MAIL_HOST_DEF="";                    _MAIL_PORT_DEF="587";  _MAIL_TLS_DEF="always" ;;
+esac
+MAIL_HOST="${MAIL_HOST:-$(keyfile_get mail.host)}";         MAIL_HOST="${MAIL_HOST:-${_MAIL_HOST_DEF}}"
+MAIL_PORT="${MAIL_PORT:-$(keyfile_get mail.port)}";         MAIL_PORT="${MAIL_PORT:-${_MAIL_PORT_DEF}}"
+MAIL_TLS="${MAIL_TLS:-$(keyfile_get mail.tls)}";            MAIL_TLS="${MAIL_TLS:-${_MAIL_TLS_DEF}}"
+# Normalize friendly TLS aliases to the Swoosh :tls atom values the manifest uses
+# ("always" | "if_available" | "never"); keep "" untouched (mail disabled).
+case "${MAIL_TLS}" in
+    starttls|tls|STARTTLS|TLS|always) MAIL_TLS="always" ;;
+    if_available|ifavailable|auto)    MAIL_TLS="if_available" ;;
+    none|off|never)                   MAIL_TLS="never" ;;
+    "")                               : ;;  # disabled — leave empty
+esac
+MAIL_USER="${MAIL_USER:-$(keyfile_get mail.user)}"
+MAIL_PASSWORD="${MAIL_PASSWORD:-$(keyfile_get mail.password)}"
+MAIL_FROM="${MAIL_FROM:-$(keyfile_get mail.from)}";         MAIL_FROM="${MAIL_FROM:-noreply@${CLUSTER_DOMAIN}}"
+MAIL_DKIM_KEY="${MAIL_DKIM_KEY:-$(keyfile_get mail.dkim_key)}"
+# DKIM private key may be a PATH (read the file) or already-inline PEM text.
+MAIL_DKIM=""
+if [ -n "${MAIL_DKIM_KEY}" ]; then
+    if [ -f "${MAIL_DKIM_KEY}" ]; then MAIL_DKIM="$(cat "${MAIL_DKIM_KEY}")"
+    else MAIL_DKIM="${MAIL_DKIM_KEY}"; fi
+fi
+# Mail is "live" only with BOTH a user and a password (and provider != none).
+# Otherwise blank EVERYTHING so the manifests see empty host/relay = disabled.
+if [ "${MAIL_PROVIDER}" = "none" ] || [ -z "${MAIL_USER}" ] || [ -z "${MAIL_PASSWORD}" ]; then
+    MAIL_HOST=""; MAIL_PORT=""; MAIL_TLS=""; MAIL_USER=""; MAIL_PASSWORD=""; MAIL_DKIM=""
+    MAIL_ENABLED=0
+    echo "==> Mail: DISABLED (provider=${MAIL_PROVIDER}; no MAIL_USER/MAIL_PASSWORD) — no SMTP wired"
+else
+    MAIL_ENABLED=1
+    echo "==> Mail: ENABLED via provider '${MAIL_PROVIDER}' (${MAIL_HOST}:${MAIL_PORT}, tls=${MAIL_TLS}, from=${MAIL_FROM})"
+fi
 
 # GitLab registry pull credentials — a GROUP DEPLOY TOKEN (scope: read_registry)
 # created by an admin in GitLab. Placeholders the operator replaces; ESO builds
@@ -152,6 +267,10 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/casdoor" \
             google_client_id="${CASDOOR_GOOGLE_CLIENT_ID}" \
             google_client_secret="${CASDOOR_GOOGLE_CLIENT_SECRET}" \
+            github_client_id="${CASDOOR_GITHUB_CLIENT_ID}" \
+            github_client_secret="${CASDOOR_GITHUB_CLIENT_SECRET}" \
+            discord_client_id="${CASDOOR_DISCORD_CLIENT_ID}" \
+            discord_client_secret="${CASDOOR_DISCORD_CLIENT_SECRET}" \
             client_id="${CASDOOR_CLIENT_ID}" \
             client_secret="${CASDOOR_CLIENT_SECRET}" \
             admin_password="${CASDOOR_ADMIN_HASH}" \
@@ -171,12 +290,23 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/uptrace" \
             pg_password="${UPTRACE_PG_PASSWORD}" \
             project_token="${UPTRACE_PROJECT_TOKEN}"
+        # Outbound mail (OPTIONAL). Empty props when disabled => ESO renders blank
+        # casdoor-smtp/akkoma-smtp Secrets that the manifests treat as "no SMTP".
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/mail" \
+            provider="${MAIL_PROVIDER}" \
+            host="${MAIL_HOST}" \
+            port="${MAIL_PORT}" \
+            tls="${MAIL_TLS}" \
+            user="${MAIL_USER}" \
+            password="${MAIL_PASSWORD}" \
+            from="${MAIL_FROM}" \
+            dkim_key="${MAIL_DKIM}"
         # GitLab registry pull token (imagePullSecret source). Replace the
         # placeholder with a real read_registry deploy token post-bootstrap.
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/gitlab-registry" \
             username="${GITLAB_REGISTRY_USER}" \
             token="${GITLAB_REGISTRY_TOKEN}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-games,clickhouse,uptrace,gitlab-registry}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-games,clickhouse,uptrace,mail,gitlab-registry}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -205,6 +335,17 @@ CASDOOR_APP_SECRETS_JSON+="}"
 BRAND="${BRAND}" \
 CASDOOR_GOOGLE_CLIENT_ID="${CASDOOR_GOOGLE_CLIENT_ID}" \
 CASDOOR_GOOGLE_CLIENT_SECRET="${CASDOOR_GOOGLE_CLIENT_SECRET}" \
+CASDOOR_GITHUB_CLIENT_ID="${CASDOOR_GITHUB_CLIENT_ID}" \
+CASDOOR_GITHUB_CLIENT_SECRET="${CASDOOR_GITHUB_CLIENT_SECRET}" \
+CASDOOR_DISCORD_CLIENT_ID="${CASDOOR_DISCORD_CLIENT_ID}" \
+CASDOOR_DISCORD_CLIENT_SECRET="${CASDOOR_DISCORD_CLIENT_SECRET}" \
+MAIL_ENABLED="${MAIL_ENABLED}" \
+MAIL_HOST="${MAIL_HOST}" \
+MAIL_PORT="${MAIL_PORT}" \
+MAIL_TLS="${MAIL_TLS}" \
+MAIL_USER="${MAIL_USER}" \
+MAIL_PASSWORD="${MAIL_PASSWORD}" \
+MAIL_FROM="${MAIL_FROM}" \
 CASDOOR_ADMIN_PLAIN="${CASDOOR_ADMIN_PLAIN}" \
 CASDOOR_DB_PASSWORD="${CASDOOR_DB_PASSWORD}" \
 CASDOOR_CLIENT_ID="${CASDOOR_CLIENT_ID}" \
@@ -228,6 +369,18 @@ data = {
         "casdoor-google": {
             "clientId": os.environ["CASDOOR_GOOGLE_CLIENT_ID"],
             "clientSecret": os.environ["CASDOOR_GOOGLE_CLIENT_SECRET"],
+        },
+        # GitHub / Discord OAuth federation clients (optional providers). Always
+        # emitted (placeholder until the operator supplies reals), mirroring the
+        # casdoor-github / casdoor-discord ExternalSecrets. The casdoor-init Job
+        # seeds the provider only when the value is non-placeholder/non-empty.
+        "casdoor-github": {
+            "clientId": os.environ["CASDOOR_GITHUB_CLIENT_ID"],
+            "clientSecret": os.environ["CASDOOR_GITHUB_CLIENT_SECRET"],
+        },
+        "casdoor-discord": {
+            "clientId": os.environ["CASDOOR_DISCORD_CLIENT_ID"],
+            "clientSecret": os.environ["CASDOOR_DISCORD_CLIENT_SECRET"],
         },
         # admin plaintext for the casdoor-init Job's API login.
         "casdoor-admin": {
@@ -286,6 +439,30 @@ data = {
         },
     },
 }
+
+# ── Outbound mail (OPTIONAL, ABSENT-BY-DEFAULT) ─────────────────────
+# Only emit the casdoor-smtp / akkoma-smtp Secrets into the offline bundle when
+# mail is ENABLED (real user+password resolved). When disabled we emit NOTHING,
+# so provisioning never creates an (empty) SMTP Secret and the casdoor/akkoma
+# manifests stay on native login + admin-approval — no mail wired. The k8s keys
+# below mirror the casdoor-smtp / akkoma-smtp ExternalSecret template.data shapes.
+if os.environ.get("MAIL_ENABLED") == "1":
+    data[f"{brand}-pki"]["casdoor-smtp"] = {
+        "CASDOOR_SMTP_HOST": os.environ["MAIL_HOST"],
+        "CASDOOR_SMTP_PORT": os.environ["MAIL_PORT"],
+        "CASDOOR_SMTP_USER": os.environ["MAIL_USER"],
+        "CASDOOR_SMTP_PASSWORD": os.environ["MAIL_PASSWORD"],
+        "CASDOOR_SMTP_FROM": os.environ["MAIL_FROM"],
+    }
+    data[f"{brand}-backend"]["akkoma-smtp"] = {
+        "AKKOMA_SMTP_RELAY": os.environ["MAIL_HOST"],
+        "AKKOMA_SMTP_PORT": os.environ["MAIL_PORT"],
+        "AKKOMA_SMTP_USER": os.environ["MAIL_USER"],
+        "AKKOMA_SMTP_PASSWORD": os.environ["MAIL_PASSWORD"],
+        "AKKOMA_SMTP_TLS": os.environ["MAIL_TLS"],
+        "AKKOMA_SMTP_FROM": os.environ["MAIL_FROM"],
+    }
+
 with open(sys.argv[1], "w") as f:
     json.dump(data, f, indent=2, sort_keys=True)
     f.write("\n")
@@ -304,8 +481,19 @@ echo "Casdoor admin password (PLAINTEXT, shown once — seed Casdoor with this):
 echo "  ${CASDOOR_ADMIN_PLAIN}"
 echo "  (a -6 hash is what was stored under secret/${BASE}/casdoor.admin_password)"
 echo
-echo "Note: casdoor google_client_id/secret are placeholders — replace them with"
-echo "      your real Google OAuth credentials (in Vault and/or the bundle)."
+echo "Note: casdoor google/github/discord client_id/secret are placeholders unless"
+echo "      supplied via env (GITHUB_CLIENT_ID/…, DISCORD_CLIENT_ID/…) or the keys"
+echo "      file (${KEYS_FILE}). The casdoor-init Job skips seeding a provider whose"
+echo "      secret is still a placeholder. Replace them with your real OAuth creds."
+if [ "${MAIL_ENABLED}" = "1" ]; then
+    echo
+    echo "Mail: ENABLED (provider=${MAIL_PROVIDER}, ${MAIL_HOST}:${MAIL_PORT}, from=${MAIL_FROM})."
+    echo "      casdoor-smtp + akkoma-smtp Secrets are in Vault and the offline bundle."
+else
+    echo
+    echo "Mail: DISABLED (no MAIL_USER/MAIL_PASSWORD or MAIL_PROVIDER=none). No SMTP is"
+    echo "      wired; casdoor/akkoma stay on native login + admin-approval registration."
+fi
 echo
 echo "Next:"
 echo "  - Copy ${OUT_DIR} onto the KEYS stick under vault/, or"

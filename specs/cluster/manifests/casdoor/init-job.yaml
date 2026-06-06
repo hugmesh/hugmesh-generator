@@ -92,6 +92,12 @@ data:
         except FileNotFoundError:
             print("  google provider: casdoor-google secret absent — skipping")
             return
+        # gen-cluster-secrets seeds a REPLACE_WITH_* placeholder when no real creds
+        # are supplied; treat an empty/placeholder clientId as "absent" so we never
+        # seed a broken provider (keeps native login + admin-approval).
+        if not cid or cid.startswith("REPLACE_WITH_"):
+            print("  google provider: clientId is placeholder/empty — skipping")
+            return
         provider = {
             "owner": "admin", "name": "google", "displayName": "Google",
             "category": "OAuth", "type": "Google",
@@ -109,6 +115,78 @@ data:
             call("/api/add-provider", provider, "POST")
             print("  added   google provider")
 
+    def reconcile_github_provider():
+        """Seed the GitHub OAuth federation provider (clientId/secret from Vault).
+        Skipped when the casdoor-github secret is absent (provider is optional).
+        Available to ALL roles; registration -> admin-approval assigns the role."""
+        try:
+            cid  = open("/secrets/github/clientId").read().strip()
+            csec = open("/secrets/github/clientSecret").read().strip()
+        except FileNotFoundError:
+            print("  github provider: casdoor-github secret absent — skipping")
+            return
+        # gen-cluster-secrets seeds a REPLACE_WITH_* placeholder when no real creds
+        # are supplied; treat an empty/placeholder clientId as "absent" so we never
+        # seed a broken provider (keeps native login + admin-approval).
+        if not cid or cid.startswith("REPLACE_WITH_"):
+            print("  github provider: clientId is placeholder/empty — skipping")
+            return
+        provider = {
+            "owner": "admin", "name": "github", "displayName": "GitHub",
+            "category": "OAuth", "type": "GitHub",
+            "clientId": cid, "clientSecret": csec,
+            "scopes": "user:email read:user", "enableSignUp": True,
+        }
+        try:
+            existing = call("/api/get-provider?id=admin/github")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call("/api/update-provider?id=admin/github", provider, "POST")
+            print("  updated github provider")
+        else:
+            call("/api/add-provider", provider, "POST")
+            print("  added   github provider")
+
+    def reconcile_discord_provider():
+        """Seed the Discord OAuth federation provider (clientId/secret from Vault).
+        Skipped when the casdoor-discord secret is absent (provider is optional).
+        Discord is a Custom-category OAuth provider in Casdoor; supply the OAuth2
+        endpoints explicitly. Available to ALL roles; registration ->
+        admin-approval assigns the role. (The Discord registration UI +
+        admin-bff allowlist already exist — this just seeds the casdoor side.)"""
+        try:
+            cid  = open("/secrets/discord/clientId").read().strip()
+            csec = open("/secrets/discord/clientSecret").read().strip()
+        except FileNotFoundError:
+            print("  discord provider: casdoor-discord secret absent — skipping")
+            return
+        # gen-cluster-secrets seeds a REPLACE_WITH_* placeholder when no real creds
+        # are supplied; treat an empty/placeholder clientId as "absent" so we never
+        # seed a broken provider (keeps native login + admin-approval).
+        if not cid or cid.startswith("REPLACE_WITH_"):
+            print("  discord provider: clientId is placeholder/empty — skipping")
+            return
+        provider = {
+            "owner": "admin", "name": "discord", "displayName": "Discord",
+            "category": "OAuth", "type": "Custom", "customType": "Discord",
+            "clientId": cid, "clientSecret": csec,
+            "customAuthUrl":     "https://discord.com/oauth2/authorize",
+            "customTokenUrl":    "https://discord.com/api/oauth2/token",
+            "customUserInfoUrl": "https://discord.com/api/users/@me",
+            "scopes": "identify email", "enableSignUp": True,
+        }
+        try:
+            existing = call("/api/get-provider?id=admin/discord")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call("/api/update-provider?id=admin/discord", provider, "POST")
+            print("  updated discord provider")
+        else:
+            call("/api/add-provider", provider, "POST")
+            print("  added   discord provider")
+
     wait_ready()
     login()
     for name, role in APPS.items():
@@ -120,6 +198,14 @@ data:
         reconcile_google_provider()
     except Exception as e:
         print(f"  WARN google provider: {e}")
+    try:
+        reconcile_github_provider()
+    except Exception as e:
+        print(f"  WARN github provider: {e}")
+    try:
+        reconcile_discord_provider()
+    except Exception as e:
+        print(f"  WARN discord provider: {e}")
     print("casdoor-init: done")
 ---
 apiVersion: batch/v1
@@ -163,6 +249,8 @@ spec:
             - { name: admin, mountPath: /secrets/admin, readOnly: true }
             - { name: apps, mountPath: /secrets/apps, readOnly: true }
             - { name: google, mountPath: /secrets/google, readOnly: true }
+            - { name: github, mountPath: /secrets/github, readOnly: true }
+            - { name: discord, mountPath: /secrets/discord, readOnly: true }
       volumes:
         - name: script
           configMap: { name: casdoor-init-script, defaultMode: 0555 }
@@ -174,3 +262,9 @@ spec:
         # Google federation client — optional; provider seeding is skipped if absent.
         - name: google
           secret: { secretName: casdoor-google, optional: true }
+        # GitHub federation client — optional; provider seeding is skipped if absent.
+        - name: github
+          secret: { secretName: casdoor-github, optional: true }
+        # Discord federation client — optional; provider seeding is skipped if absent.
+        - name: discord
+          secret: { secretName: casdoor-discord, optional: true }

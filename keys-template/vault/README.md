@@ -42,9 +42,22 @@ unchanged — only the source of the Secret differs.
 | Namespace            | Secret           | Keys                          | Sourced from Vault                              |
 |----------------------|------------------|-------------------------------|-------------------------------------------------|
 | `<brand>-pki`        | `casdoor-google` | `clientId`, `clientSecret`    | `casdoor.google_client_id` / `google_client_secret` |
+| `<brand>-pki`        | `casdoor-github` | `clientId`, `clientSecret`    | `casdoor.github_client_id` / `github_client_secret` |
+| `<brand>-pki`        | `casdoor-discord`| `clientId`, `clientSecret`    | `casdoor.discord_client_id` / `discord_client_secret` |
+| `<brand>-pki`        | `casdoor-smtp` *(opt)* | `CASDOOR_SMTP_{HOST,PORT,USER,PASSWORD,FROM}` | `mail.{host,port,user,password,from}` |
 | `<brand>-backend`    | `clickhouse-auth`| `password`                    | `clickhouse.password`                           |
+| `<brand>-backend`    | `akkoma-smtp` *(opt)*  | `AKKOMA_SMTP_{RELAY,PORT,USER,PASSWORD,TLS,FROM}` | `mail.{host,port,user,password,tls,from}` |
 | `observability`      | `clickhouse-auth`| `password`                    | `clickhouse.password`                           |
 | `observability`      | `uptrace-auth`   | `pg-password`, `project-token`| `uptrace.pg_password` / `project_token`         |
+
+The `casdoor-github` / `casdoor-discord` providers and the `casdoor-smtp` /
+`akkoma-smtp` mail Secrets are **OPTIONAL / absent by default**. OAuth client
+ids/secrets default to placeholders (the `casdoor-init` Job skips seeding a
+provider whose secret is still a placeholder); the mail Secrets are only written
+to the offline bundle when real `mail.user` + `mail.password` resolve — otherwise
+Casdoor + Akkoma stay on native login + admin-approval registration with **no
+SMTP wired**. See `scripts/gen-cluster-secrets.sh` and the brand `MAIL_PROVIDER`
+knob (`protonmail` default | `gmail` | `outlook` | `smtp` | `none`).
 
 `<brand>` defaults to `snapdragon` (the Vault base path segment equals the
 brand slug). Vault stores keys in `snake_case`; the materialized k8s Secrets use
@@ -54,10 +67,14 @@ The full Vault contract (superset of what the bundle materializes):
 
 ```
 secret/<brand>/casdoor    : google_client_id, google_client_secret,
+                            github_client_id, github_client_secret,
+                            discord_client_id, discord_client_secret,
                             client_id, client_secret, admin_password
 secret/<brand>/clickhouse : password
 secret/<brand>/uptrace    : pg_password, project_token
 secret/<brand>/cloudflared: tunnel_token     (PROD go-live ONLY — read-if-present)
+secret/<brand>/mail       : provider, host, port, tls, user, password, from,
+                            dkim_key  (OPTIONAL — empty user/password = disabled)
 ```
 
 The `cloudflared` entry is the **PROD-only** go-live edge credential. It is

@@ -22,6 +22,54 @@ DEFAULT_USER_PASS="raspberry"       # CHANGE for real builds
 ROOT_PASS="gentoo"                  # CHANGE for real builds
 ADMIN_EMAILS="admin@snapdragon.systems"   # seeded Casdoor admin (BFF allowlist)
 
+# ── Outbound mail (OPTIONAL — absent by default) ───────────────────
+# Selects the SMTP preset Casdoor (email-verify / password-reset) and Akkoma
+# (Pleroma.Mailer) use. THIS KNOB ONLY PICKS HOST/PORT/TLS PRESETS — it wires
+# NOTHING on its own. Mail is only switched on once gen-cluster-secrets.sh has a
+# real MAIL_USER + MAIL_PASSWORD (from the keys USB / prompt / env); with no
+# creds the Vault secret/<brand>/mail path stays empty, ESO never creates the
+# casdoor-smtp / akkoma-smtp Secrets, and both apps stay on native login +
+# admin-approval registration (no email needed). Safe to leave at the default.
+#
+#   MAIL_PROVIDER = protonmail (DEFAULT/RECOMMENDED) | gmail | outlook | smtp | none
+#     protonmail  Proton Mail Bridge / submission relay (DKIM-signed by Proton).
+#                 host/port/TLS below are the Bridge defaults; set MAIL_HOST to
+#                 your Bridge address. RECOMMENDED (privacy + DKIM out of the box).
+#     gmail       smtp.gmail.com:587 STARTTLS (needs an App Password as MAIL_PASSWORD).
+#     outlook     smtp.office365.com:587 STARTTLS (Microsoft 365 / Outlook.com).
+#     smtp        fully custom — set MAIL_HOST/MAIL_PORT/MAIL_TLS yourself.
+#     none        mail disabled (same effect as supplying no creds).
+MAIL_PROVIDER="protonmail"          # protonmail(default) | gmail | outlook | smtp | none
+
+# Per-provider host/port/TLS. Leave UNSET to take the preset for MAIL_PROVIDER
+# (resolved by scripts/gen-cluster-secrets.sh); set to override (required for
+# MAIL_PROVIDER=smtp). MAIL_TLS accepts starttls|tls|always (=STARTTLS) |
+# if_available | none|never; gen-cluster-secrets.sh normalizes it to the Swoosh
+# :tls atom the Akkoma mailer uses (always | if_available | never). Casdoor
+# infers TLS from the port. gmail/outlook/protonmail all STARTTLS on submission.
+#   gmail      -> smtp.gmail.com      :587 STARTTLS (always)
+#   outlook    -> smtp.office365.com  :587 STARTTLS (always)
+#   protonmail -> 127.0.0.1           :1025 STARTTLS (always)  (Proton Bridge default; override MAIL_HOST)
+# MAIL_HOST=""                      # SMTP server host (empty = provider preset)
+# MAIL_PORT=""                      # SMTP server port (empty = provider preset)
+# MAIL_TLS=""                       # starttls|always | if_available | none (empty = provider preset)
+MAIL_FROM=""                        # From: address (empty = noreply@<CLUSTER_DOMAIN>)
+# MAIL_USER / MAIL_PASSWORD are SECRETS — do NOT set them here in a committed file.
+# Provide them via the keys USB (KEYS/secrets/mail.json), the interactive prompt
+# in gen-provision-keys.sh, or the environment. Empty => mail stays disabled.
+# MAIL_USER=""                      # (SECRET) SMTP username (env / keys USB only)
+# MAIL_PASSWORD=""                  # (SECRET) SMTP password / app-password (env / keys USB only)
+# MAIL_DKIM_KEY=""                  # (SECRET) path to a DKIM private key (PEM), optional
+
+# ── OAuth federation providers (OPTIONAL — absent by default) ──────
+# Casdoor's GitHub + Discord login providers are OPTIONAL. Their client id/secret
+# are SECRETS — supply them via the environment or the keys USB (never a committed
+# file). With no creds the casdoor-init Job skips seeding the provider, so Casdoor
+# stays on native user/pass + admin-approval registration. Resolution order in
+# scripts/gen-cluster-secrets.sh: env -> keys file -> placeholder (= skipped).
+#   GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET     (env / keys USB only — do NOT commit)
+#   DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET   (env / keys USB only — do NOT commit)
+
 # ── System ──────────────────────────────────────────────────────────
 TIMEZONE="UTC"
 # HOSTNAME=""                       # leave empty to derive as <BRAND>-<role>
