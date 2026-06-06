@@ -13,14 +13,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: admin-bff
+  name: snapdragon-admin-bff-api
   namespace: snapdragon-backend
-  labels: { app: admin-bff, app.kubernetes.io/part-of: snapdragon.systems }
+  labels: { app: snapdragon-admin-bff-api, app.kubernetes.io/part-of: snapdragon.systems }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: admin-bff } }
+  selector: { matchLabels: { app: snapdragon-admin-bff-api } }
   template:
-    metadata: { labels: { app: admin-bff } }
+    metadata: { labels: { app: snapdragon-admin-bff-api } }
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
       securityContext:
@@ -31,8 +31,8 @@ spec:
           type: container_t
           level: "s0:c23"
       containers:
-        - name: admin-bff
-          image: snapdragon-systems/admin-bff:dev
+        - name: snapdragon-admin-bff-api
+          image: snapdragon-systems/admin-bff-api:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
             allowPrivilegeEscalation: false

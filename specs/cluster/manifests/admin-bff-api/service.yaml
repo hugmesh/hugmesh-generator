@@ -3,11 +3,11 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: admin-bff
+  name: snapdragon-admin-bff-api
   namespace: snapdragon-backend
-  labels: { app: admin-bff }
+  labels: { app: snapdragon-admin-bff-api }
 spec:
   type: ClusterIP
-  selector: { app: admin-bff }
+  selector: { app: snapdragon-admin-bff-api }
   ports:
     - { name: http, port: 8080, targetPort: http }
