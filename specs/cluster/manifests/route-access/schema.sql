@@ -23,7 +23,7 @@ CREATE INDEX IF NOT EXISTS idx_route_access_gw ON gateway_route_access (gateway,
 -- Canonical seed — one allow row per (gateway, url_pattern, role) in the routing
 -- contract. Role semantics (mirroring the snapdragon.games SecurityConfig
 -- casdoorAuthoritiesConverter):
---   ROLE_ANONYMOUS  public: no Casdoor JWT required (login, OIDC discovery, the
+--   PUBLIC          public: no Casdoor JWT required (login, OIDC discovery, the
 --                   front page). The gateway lets the request through unauth'd.
 --   ROLE_USER       the authenticated floor: any valid Casdoor principal holds
 --                   it (this is the "public-floor" of /api/auth/** etc.).
@@ -52,8 +52,8 @@ CREATE INDEX IF NOT EXISTS idx_route_access_gw ON gateway_route_access (gateway,
 INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- pki-gateway (id.snapdragon.systems -> Casdoor)
   ('snapdragon-pki-gateway', '/api/auth/**',          'ROLE_USER',      true),  -- public-floor
-  ('snapdragon-pki-gateway', '/login/**',             'ROLE_ANONYMOUS', true),  -- public
-  ('snapdragon-pki-gateway', '/.well-known/**',       'ROLE_ANONYMOUS', true),  -- public (OIDC/jwks)
+  ('snapdragon-pki-gateway', '/login/**',             'PUBLIC', true),  -- public
+  ('snapdragon-pki-gateway', '/.well-known/**',       'PUBLIC', true),  -- public (OIDC/jwks)
 
   -- be-gateway (api./matrix./mastodon.snapdragon.systems -> APIs/Matrix/Mastodon)
   -- ROLE_MOD moderation surfaces — MORE SPECIFIC than the ROLE_USER /api/v1/**
@@ -103,7 +103,7 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-be-gateway',  '/api/**',               'ROLE_USER',      true),  -- snapdragon APIs
 
   -- fe-gateway (snapdragon.systems -> Angular host + MFEs + same-origin /bff)
-  ('snapdragon-fe-gateway',  '/',                     'ROLE_ANONYMOUS', true),  -- public front page
+  ('snapdragon-fe-gateway',  '/',                     'PUBLIC', true),  -- public front page
   ('snapdragon-fe-gateway',  '/social/matrix/**',     'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/social/mastodon/**',   'ROLE_USER',      true),
   -- DB-hosted module-federation FRAGMENT bundles served by the remote-fragment
@@ -112,7 +112,7 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- bytes and visibility is enforced upstream (federation emits only enabled/
   -- visible modules into its manifest), so the gateway gate is the ROLE_USER floor
   -- (the host itself loads them only after login). If anonymous profile cards are
-  -- ever needed, add a sibling ROLE_ANONYMOUS row for the public sub-path.
+  -- ever needed, add a sibling PUBLIC row for the public sub-path.
   ('snapdragon-fe-gateway',  '/_fragments/**',        'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/login/**',             'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/admin/**',             'ROLE_ADMIN',     true),
