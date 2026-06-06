@@ -32,7 +32,7 @@ merely **adds** Cloudflare/ACME on top.
 |---|---|---|---|
 | `snapdragon-pki` | pki Pi (control-plane) | `snapdragon-pki-gateway` (`id.snapdragon.systems`) | Casdoor (Google + admin login), Cassandra, headscale/auth |
 | `snapdragon-backend` | backend Pis | `snapdragon-be-gateway` (`api.` / `matrix.` / `mastodon.`) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs, DBs |
-| `snapdragon-frontend` | frontend Pis | `snapdragon-fe-gateway` (`snapdragon.systems`) | snapdragon.systems Angular host + social-ui micro-frontends |
+| `snapdragon-frontend` | frontend Pis | `snapdragon-fe-gateway` (`snapdragon.systems`) | snapdragon.systems Angular host + social-ui micro-frontends + remote-fragment fleet (DB-hosted federation fragment bundles at `/_fragments/**`) |
 | `snapdragon-games` | x86_64 GPU worker | (internal) | snapdragon.games (Mesa/Vulkan via `/dev/dri`) |
 | `argocd` | x86_64 worker | (internal) | ArgoCD GitOps engine |
 
@@ -96,6 +96,7 @@ ClusterSecretStore **`snapdragon-vault`** (provider `vault`, token auth from the
 | `clickhouse` (`password`) | `clickhouse-auth` (`password`) | `snapdragon-backend`, `observability` |
 | `uptrace` (`pg_password`/`project_token`) | `uptrace-auth` (`pg-password`/`project-token`) | `observability` |
 | `gitlab-registry` (`username`/`token`) | `gitlab-registry` (`.dockerconfigjson`) | `snapdragon-backend`, `snapdragon-frontend`, `snapdragon-games` |
+| `casdoor-apps` (`fragment-sync`) | `fragment-sync-casdoor` (`clientId`=`app-fragment-sync`/`clientSecret`) | `snapdragon-frontend` |
 
 The same materialized Secrets are also written to the KEYS stick at
 `vault/secrets.json` (with `vault/token` for online sync), so `keys-provision`

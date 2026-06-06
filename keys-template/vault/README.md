@@ -70,6 +70,16 @@ secret/<brand>/casdoor    : google_client_id, google_client_secret,
                             github_client_id, github_client_secret,
                             discord_client_id, discord_client_secret,
                             client_id, client_secret, admin_password
+secret/<brand>/casdoor-apps : one key per Casdoor OAuth2 application = that app's
+                            client_secret (pki-gateway, be-gateway, fe-gateway,
+                            api, admin-bff, matrix, mastodon, fragment-sync).
+                            fragment-sync = the app-fragment-sync machine account
+                            the remote-fragment sync sidecar uses (client_credentials
+                            -> SERVICE JWT for the federation manifest/bundles).
+                            Materialized by the casdoor-app-secrets ExternalSecret
+                            (dataFrom extract) AND, for the sidecar, the
+                            fragment-sync-casdoor ExternalSecret (ns
+                            snapdragon-frontend, clientId pinned to app-fragment-sync).
 secret/<brand>/clickhouse : password
 secret/<brand>/uptrace    : pg_password, project_token
 secret/<brand>/cloudflared: tunnel_token     (PROD go-live ONLY — read-if-present)

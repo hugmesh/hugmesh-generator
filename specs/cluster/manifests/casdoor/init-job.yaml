@@ -34,6 +34,12 @@ data:
         "fe-gateway": "ROLE_GATEWAY",
         "api": "ROLE_API", "admin-bff": "ROLE_ADMIN_API",
         "matrix": "ROLE_USER", "mastodon": "ROLE_USER",
+        # client-credentials machine app for the remote-fragment sync sidecar: it
+        # mints a SERVICE JWT to read the federation manifest/bundles. ROLE_USER is
+        # the floor (manifest/bundles only need authenticated()); the minted token
+        # then sees the PUBLIC fragments. Bind it to a ROLE_INTERNAL/ROLE_ADMIN-
+        # mapping role here + in init_data.json IF internal fragments must sync.
+        "fragment-sync": "ROLE_USER",
     }
 
     cj = http.cookiejar.CookieJar()
