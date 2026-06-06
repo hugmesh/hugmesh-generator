@@ -31,6 +31,24 @@
 #
 # Rootless + sudo-free by design: --emit needs nothing but a shell; --ssh needs
 # ssh + a key. Arg parsing + payload rendering are testable without a VM.
+#
+# RBAC ROLE MATRIX (--roles): the legacy modes above seed only a BINARY allowlist
+# (user|admin) into the BFF. The RBAC e2e specs (tests/e2e/specs/rbac-*.spec.ts)
+# need the FULL systems Casdoor role matrix — ROLE_ADMIN / ROLE_MOD / ROLE_GAMES /
+# ROLE_GAMES_ADMIN(derived) / ROLE_USER / pending — plus a games-realm native
+# player. `--roles DIR` renders, into DIR/roles/:
+#   * casdoor-systems-roles.json   — role->member grants for the SYSTEMS Casdoor
+#       (org "snapdragon"), to MERGE into manifests/casdoor init_data. NOTE it
+#       grants ROLE_GAMES + ROLE_ADMIN to e2e-gamesadmin but does NOT put anyone
+#       in ROLE_GAMES_ADMIN — that derived role is materialized by the
+#       games-admin-sync Job ( = ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD) ).
+#   * casdoor-games-users.json     — one native player for the GAMES Casdoor
+#       (org "threewizards"). The games admin appears via the systems->games sync,
+#       not seeded here.
+#   * apply-systems-roles.sh       — idempotent Casdoor add-user/update-role hook
+#       (login -> add-user with the deterministic e2e password -> update-role) so
+#       a REAL seeded Casdoor carries the right `roles` JWT claim.
+# The catalogue is kept in lock-step with tests/e2e/specs/rbac-roles.ts.
 set -euo pipefail
 
 # ── Identity defaults (kept in lock-step with tests/e2e/specs + mock-bff.mjs) ──
@@ -42,8 +60,30 @@ DISCORD_USERS="${DISCORD_USERS:-${DISCORD_USERS_DEFAULT}}"
 SVC_PASSWORD="${SVC_PASSWORD:-snapdragon-svc-pw}"
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-snapdragon.systems}"
 
+# ── RBAC role matrix (kept in lock-step with tests/e2e/specs/rbac-roles.ts) ──
+# Deterministic e2e password, same convention as the games harness (E2E_PASSWORD
+# default 'e2e-pass', per-user override via E2E_<UPPER>_PASSWORD).
+E2E_PASSWORD="${E2E_PASSWORD:-e2e-pass}"
+SYSTEMS_CASDOOR_ORG="${SYSTEMS_CASDOOR_ORG:-snapdragon}"
+GAMES_CASDOOR_ORG="${GAMES_CASDOOR_ORG:-threewizards}"
+SYSTEMS_CASDOOR_URL="${SYSTEMS_CASDOOR_URL:-http://127.0.0.1:8000}"
+# SYSTEMS seed users: "username:ROLE_A,ROLE_B:passwordEnv". ROLE_GAMES_ADMIN is
+# NEVER listed here — it is derived by the games-admin-sync Job. e2e-pending holds
+# no roles (awaiting approval).
+SYSTEMS_ROLE_USERS="${SYSTEMS_ROLE_USERS:-\
+e2e-admin:ROLE_ADMIN,ROLE_USER:E2E_ADMIN_PASSWORD \
+e2e-mod:ROLE_MOD:E2E_MOD_PASSWORD \
+e2e-gamesadmin:ROLE_GAMES,ROLE_ADMIN,ROLE_USER:E2E_GAMESADMIN_PASSWORD \
+e2e-gamesonly:ROLE_GAMES,ROLE_USER:E2E_GAMESONLY_PASSWORD \
+e2e-adminonly:ROLE_ADMIN,ROLE_USER:E2E_ADMINONLY_PASSWORD \
+e2e-user:ROLE_USER:E2E_USER_PASSWORD \
+e2e-pending::E2E_PENDING_PASSWORD}"
+# GAMES seed users (native): "username:role:passwordEnv".
+GAMES_ROLE_USERS="${GAMES_ROLE_USERS:-e2e-player:player:E2E_PLAYER_PASSWORD}"
+
 # ── Mode / target defaults ──
 EMIT_DIR=""
+ROLES_DIR=""
 SSH_HOST=""
 SSH_USER="${SSH_USER:-tester}"
 SSH_PORT="${SSH_PORT:-2222}"
@@ -58,9 +98,16 @@ Usage: $0 (--emit DIR | --ssh HOST | --print) [OPTIONS]
 
 Seeds the identities the Playwright e2e specs assume into a real Snapdragon node.
 
-Modes (at least one of --emit/--ssh/--print):
+Modes (at least one of --emit/--roles/--ssh/--print):
   --emit DIR        Render a KEYS provisioning payload into DIR (users.json +
                     accounts.json + a boot-time BFF-seed hook). Rootless.
+  --roles DIR       Render the FULL systems+games Casdoor RBAC role matrix into
+                    DIR/roles/ (casdoor-systems-roles.json + casdoor-games-users.json
+                    + apply-systems-roles.sh). Seeds ROLE_ADMIN/ROLE_MOD/ROLE_GAMES/
+                    ROLE_USER + a games player with deterministic e2e passwords, so
+                    the rbac-*.spec.ts JWT-role assertions work against a REAL
+                    Casdoor. ROLE_GAMES_ADMIN is left to the games-admin-sync Job.
+                    Rootless.
   --ssh HOST        Push the identities into the booted node's BFF allowlist
                     over SSH (admin API). Needs --ssh-key or an agent.
   --print           Print the accounts.json to stdout and exit (dry run).
@@ -103,6 +150,7 @@ localpart() { echo "${1%%@*}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._=\
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --emit)         EMIT_DIR="$2"; shift 2 ;;
+        --roles)        ROLES_DIR="$2"; shift 2 ;;
         --ssh)          SSH_HOST="$2"; shift 2 ;;
         --print)        PRINT_JSON=true; shift ;;
         --admin)        ADMIN_EMAIL="$2"; shift 2 ;;
@@ -120,8 +168,18 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[ -n "${EMIT_DIR}" ] || [ -n "${SSH_HOST}" ] || ${PRINT_JSON} || {
-    echo "ERROR: choose a mode: --emit DIR, --ssh HOST, or --print" >&2; usage 1; }
+[ -n "${EMIT_DIR}" ] || [ -n "${ROLES_DIR}" ] || [ -n "${SSH_HOST}" ] || ${PRINT_JSON} || {
+    echo "ERROR: choose a mode: --emit DIR, --roles DIR, --ssh HOST, or --print" >&2; usage 1; }
+
+# Resolve a seed user's deterministic e2e password: per-user env override
+# (E2E_<UPPER>_PASSWORD) -> shared E2E_PASSWORD -> 'e2e-pass'. Mirrors
+# tests/e2e/specs/rbac-roles.ts passwordFor() + games e2e roles.ts.
+role_password() {  # <passwordEnvName>
+    local env_name="$1" val=""
+    [ -n "${env_name}" ] && val="$(printenv "${env_name}" 2>/dev/null || true)"
+    [ -n "${val}" ] || val="${E2E_PASSWORD}"
+    printf '%s' "${val}"
+}
 
 # ── Build the canonical accounts.json (the seed schema) ────────────────────
 # Uses jq if present for safe JSON; falls back to a hand-built document. The
@@ -330,6 +388,152 @@ REMOTE
     echo "==> SSH seed complete"
 }
 
-[ -n "${EMIT_DIR}" ] && emit_keys "${EMIT_DIR}"
-[ -n "${SSH_HOST}" ] && push_ssh "${SSH_HOST}"
+# ── Mode C: emit the FULL Casdoor RBAC role matrix (systems + games) ────────
+# Renders DIR/roles/ with:
+#   casdoor-systems-roles.json   role->member grants to MERGE into the systems
+#                                Casdoor init_data (org "snapdragon"). Every seed
+#                                user + the deterministic password it logs in with.
+#                                ROLE_GAMES_ADMIN is intentionally EMPTY (derived
+#                                by the games-admin-sync Job).
+#   casdoor-games-users.json     native player(s) for the games Casdoor (org
+#                                "threewizards"). The synced games admin is NOT
+#                                seeded here (it appears via systems->games sync).
+#   apply-systems-roles.sh       idempotent Casdoor admin-API hook (add-user with
+#                                the e2e password, then update-role) so a REAL
+#                                Casdoor carries the right JWT `roles` claim.
+emit_roles() {
+    local dir="$1/roles"
+    mkdir -p "${dir}"
+    command -v jq >/dev/null 2>&1 || { echo "ERROR: --roles needs jq" >&2; return 1; }
+
+    # Build the per-user objects + invert into role->members. We emit BOTH a
+    # users[] array (with deterministic password) and a roles[] array (members),
+    # which is the shape Casdoor's init_data / update-role consume.
+    local users_json="[]" role_members_json="{}"
+    local declared_roles="ROLE_ADMIN ROLE_MOD ROLE_GAMES ROLE_GAMES_ADMIN ROLE_USER"
+    # Seed every declared role as an empty member set first (so ROLE_GAMES_ADMIN
+    # is present-but-empty — the games-admin-sync Job fills it).
+    for r in ${declared_roles}; do
+        role_members_json="$(echo "${role_members_json}" | jq --arg r "${r}" '. + {($r): []}')"
+    done
+
+    for spec in ${SYSTEMS_ROLE_USERS}; do
+        local uname roles_csv penv pass
+        uname="${spec%%:*}"; spec="${spec#*:}"
+        roles_csv="${spec%%:*}"; penv="${spec##*:}"
+        pass="$(role_password "${penv}")"
+        users_json="$(echo "${users_json}" | jq \
+            --arg u "${uname}" --arg p "${pass}" --arg org "${SYSTEMS_CASDOOR_ORG}" \
+            --arg penv "${penv}" \
+            '. + [{owner:$org, name:$u, displayName:$u, password:$p, passwordEnv:$penv,
+                   type:"normal-user", isAdmin:false, isForbidden:false, isDeleted:false}]')"
+        # Add this user as a member of each of its (directly-granted) roles.
+        local IFS=','
+        for r in ${roles_csv}; do
+            [ -n "${r}" ] || continue
+            role_members_json="$(echo "${role_members_json}" | jq \
+                --arg r "${r}" --arg m "${SYSTEMS_CASDOOR_ORG}/${uname}" \
+                '.[$r] = ((.[$r] // []) + [$m] | unique)')"
+        done
+        unset IFS
+    done
+
+    # Render the systems roles file: organization + roles[] (with members) + users[].
+    jq -n \
+        --arg org "${SYSTEMS_CASDOOR_ORG}" \
+        --argjson members "${role_members_json}" \
+        --argjson users "${users_json}" \
+        '{
+           realm: "systems",
+           organization: $org,
+           note: "ROLE_GAMES_ADMIN stays EMPTY here — materialized by games-admin-sync = ROLE_GAMES INTERSECT (ROLE_ADMIN UNION ROLE_MOD).",
+           roles: ($members | to_entries | map({owner:$org, name:.key, users:.value, isEnabled:true})),
+           users: $users
+         }' > "${dir}/casdoor-systems-roles.json"
+
+    # Render the games native players file.
+    local gusers_json="[]"
+    for spec in ${GAMES_ROLE_USERS}; do
+        local uname role penv pass
+        uname="${spec%%:*}"; spec="${spec#*:}"
+        role="${spec%%:*}"; penv="${spec##*:}"
+        pass="$(role_password "${penv}")"
+        gusers_json="$(echo "${gusers_json}" | jq \
+            --arg u "${uname}" --arg p "${pass}" --arg role "${role}" \
+            --arg org "${GAMES_CASDOOR_ORG}" --arg penv "${penv}" \
+            '. + [{owner:$org, name:$u, displayName:$u, password:$p, passwordEnv:$penv,
+                   role:$role, type:"normal-user", isAdmin:false}]')"
+    done
+    jq -n \
+        --arg org "${GAMES_CASDOOR_ORG}" \
+        --argjson users "${gusers_json}" \
+        '{
+           realm: "games",
+           organization: $org,
+           note: "Native players only. The games admin appears via the systems->games sync (ROLE_GAMES_ADMIN -> admin), asserted by snapdragon-actions/e2e — NOT seeded here.",
+           users: $users
+         }' > "${dir}/casdoor-games-users.json"
+
+    # The apply hook: login as the Casdoor admin, ensure each user (with its
+    # deterministic e2e password) exists, then set each role's members. Idempotent.
+    cat > "${dir}/apply-systems-roles.sh" <<'APPLY'
+#!/usr/bin/env bash
+# apply-systems-roles.sh — push the systems RBAC role matrix into a REAL Casdoor
+# (org "snapdragon") so the rbac-*.spec.ts JWT-role assertions work. Reads the
+# sibling casdoor-systems-roles.json. Idempotent: add-user is skipped if present,
+# update-role overwrites the member set. Requires curl + jq + Casdoor admin creds.
+#
+#   CASDOOR_URL          (default http://127.0.0.1:8000)
+#   CASDOOR_ADMIN_USER   (default admin)
+#   CASDOOR_ADMIN_PASS   (required)
+#   CASDOOR_ORG          (default snapdragon)
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROLES_JSON="${HERE}/casdoor-systems-roles.json"
+BASE="${CASDOOR_URL:-http://127.0.0.1:8000}"
+ORG="${CASDOOR_ORG:-snapdragon}"
+AU="${CASDOOR_ADMIN_USER:-admin}"
+AP="${CASDOOR_ADMIN_PASS:?CASDOOR_ADMIN_PASS required}"
+CJ="$(mktemp)"; trap 'rm -f "${CJ}"' EXIT
+log() { echo "[apply-roles] $*"; }
+
+# Admin session cookie (same transport casdoor-init / games-admin-sync use).
+curl -sf -c "${CJ}" "${BASE}/api/login" -H 'content-type: application/json' \
+  -d "{\"application\":\"app-built-in\",\"organization\":\"built-in\",\"username\":\"${AU}\",\"password\":\"${AP}\",\"type\":\"login\",\"autoSignin\":true}" >/dev/null \
+  || { log "admin login failed at ${BASE}"; exit 1; }
+
+# Ensure every seed user exists with its deterministic e2e password.
+jq -c '.users[]' "${ROLES_JSON}" | while read -r u; do
+  name="$(echo "$u" | jq -r '.name')"
+  exists="$(curl -s -b "${CJ}" "${BASE}/api/get-user?id=${ORG}/${name}" | jq -r '.data.name // empty')"
+  if [ -n "${exists}" ]; then log "user ${name} exists"; continue; fi
+  curl -s -b "${CJ}" "${BASE}/api/add-user" -H 'content-type: application/json' \
+    -d "$(echo "$u" | jq -c '{owner, name, displayName, password, type, isAdmin, isForbidden, isDeleted, signupApplication:"app-built-in"}')" \
+    | jq -r '.status // "?"' | sed "s/^/[apply-roles] add-user ${name} -> /"
+done
+
+# Set each role's member set to EXACTLY the seeded list (round-trip the existing
+# role object so other fields survive). ROLE_GAMES_ADMIN is sent EMPTY on purpose.
+jq -c '.roles[]' "${ROLES_JSON}" | while read -r r; do
+  rname="$(echo "$r" | jq -r '.name')"
+  cur="$(curl -s -b "${CJ}" "${BASE}/api/get-role?id=${ORG}/${rname}" | jq -c '.data // empty')"
+  [ -n "${cur}" ] || { log "role ${rname} missing — seed it in init_data.json; skip"; continue; }
+  upd="$(echo "${cur}" | jq -c --argjson members "$(echo "$r" | jq -c '.users')" '.users = $members')"
+  curl -s -b "${CJ}" "${BASE}/api/update-role?id=${ORG}/${rname}" \
+    -H 'content-type: application/json' -d "${upd}" \
+    | jq -r '.status // "?"' | sed "s/^/[apply-roles] update-role ${rname} -> /"
+done
+log "done — REMEMBER to run the games-admin-sync Job so ROLE_GAMES_ADMIN materializes."
+APPLY
+    chmod +x "${dir}/apply-systems-roles.sh"
+
+    echo "==> RBAC role matrix rendered in ${dir}"
+    echo "    casdoor-systems-roles.json : $(jq '.users|length' "${dir}/casdoor-systems-roles.json") systems users across $(jq '.roles|length' "${dir}/casdoor-systems-roles.json") roles (ROLE_GAMES_ADMIN derived/empty)"
+    echo "    casdoor-games-users.json   : $(jq '.users|length' "${dir}/casdoor-games-users.json") native games player(s)"
+    echo "    apply-systems-roles.sh     : Casdoor admin-API hook (CASDOOR_ADMIN_PASS=... ./apply-systems-roles.sh)"
+}
+
+[ -n "${EMIT_DIR}" ]  && emit_keys  "${EMIT_DIR}"
+[ -n "${ROLES_DIR}" ] && emit_roles "${ROLES_DIR}"
+[ -n "${SSH_HOST}" ]  && push_ssh   "${SSH_HOST}"
 exit 0
