@@ -64,8 +64,20 @@ KEYS/                                 (FAT32, volume label "KEYS")
 │   └── secrets.json                  offline copy of the materialized k8s Secrets
 ├── certs/                            certificates (trust store + files[])
 └── secrets/
-    └── post-provision.sh             optional run[] hook
+    ├── post-provision.sh             optional run[] hook
+    ├── mail.json                     OPTIONAL SMTP creds (empty = mail disabled)
+    └── cluster-creds.json            OPTIONAL mail + GitHub/Discord OAuth creds
 ```
+
+> `secrets/mail.json` + `secrets/cluster-creds.json` are **OPTIONAL and absent by
+> default**. They carry outbound-mail (SMTP) and OAuth-provider client creds for
+> `scripts/gen-cluster-secrets.sh` (which seeds Vault `secret/<brand>/mail` + the
+> `casdoor-github`/`casdoor-discord`/`casdoor-smtp`/`akkoma-smtp` Secrets). Empty
+> `user`/`password` ⇒ **no SMTP wired**: Casdoor + Akkoma keep native login +
+> admin-approval registration. The brand `MAIL_PROVIDER` knob (`protonmail`
+> default | `gmail` | `outlook` | `smtp` | `none`) selects the host/port/TLS
+> preset. See `secrets/*.example.json` for the shape; `gen-provision-keys.sh`
+> writes the real files (prompting with a 10s timeout, or copying from `--keys-src`).
 
 ## `provision.json`
 
@@ -184,13 +196,20 @@ via the attached USB*. The bundle mirrors exactly what ESO would materialize:
 | Namespace | Secret | Keys (from Vault) |
 |---|---|---|
 | `snapdragon-pki` | `casdoor-google` | `clientId` ← `casdoor.google_client_id`, `clientSecret` ← `casdoor.google_client_secret` |
+| `snapdragon-pki` | `casdoor-github` | `clientId` ← `casdoor.github_client_id`, `clientSecret` ← `casdoor.github_client_secret` |
+| `snapdragon-pki` | `casdoor-discord` | `clientId` ← `casdoor.discord_client_id`, `clientSecret` ← `casdoor.discord_client_secret` |
+| `snapdragon-pki` | `casdoor-smtp` *(opt)* | `CASDOOR_SMTP_*` ← `mail.{host,port,user,password,from}` |
 | `snapdragon-backend` | `clickhouse-auth` | `password` ← `clickhouse.password` |
+| `snapdragon-backend` | `akkoma-smtp` *(opt)* | `AKKOMA_SMTP_*` ← `mail.{host,port,user,password,tls,from}` |
 | `observability` | `clickhouse-auth` | `password` ← `clickhouse.password` |
 | `observability` | `uptrace-auth` | `pg-password` ← `uptrace.pg_password`, `project-token` ← `uptrace.project_token` |
 
-The Vault paths backing these (KV v2, snake_case keys) are
-`secret/snapdragon/casdoor`, `secret/snapdragon/clickhouse`, and
-`secret/snapdragon/uptrace`.
+The `casdoor-smtp` / `akkoma-smtp` rows are **optional**: the bundle only carries
+them when real `mail.user` + `mail.password` resolve (otherwise no SMTP is wired).
+`casdoor-github` / `casdoor-discord` are seeded with placeholders until real OAuth
+client creds are supplied. The Vault paths backing these (KV v2, snake_case keys)
+are `secret/snapdragon/casdoor`, `secret/snapdragon/clickhouse`,
+`secret/snapdragon/uptrace`, and `secret/snapdragon/mail`.
 
 ## `users.json`
 
