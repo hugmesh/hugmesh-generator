@@ -53,8 +53,8 @@ spec:
           # provision, me, admin/route-access) are first-party to
           # snapdragon.systems. The fe-gateway enforces the route-DB role rules
           # (/bff/admin/** => ROLE_ADMIN) before the proxy.
-          - id: admin-bff
-            uri: http://admin-bff.snapdragon-backend.svc.cluster.local:8080
+          - id: snapdragon-admin-bff-api
+            uri: http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
             path: /bff/**
           # DB-hosted module-federation FRAGMENT bundles (user-profile/card +
           # admin "contained pages"). The authenticated host's loadRemoteModule

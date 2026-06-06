@@ -100,7 +100,7 @@ SERVICES=(
   "${BRAND}-be-gateway:${BRAND}-backend"
   "${BRAND}-fe-gateway:${BRAND}-frontend"
   "${BRAND}-api:${BRAND}-backend"
-  "admin-bff:${BRAND}-backend"
+  "${BRAND}-admin-bff-api:${BRAND}-backend"
 )
 
 for t in openssl keytool; do command -v "$t" >/dev/null || { echo "ERROR: need $t" >&2; exit 1; }; done

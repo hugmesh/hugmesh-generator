@@ -10,7 +10,7 @@ resources:
 # the moving :main here for dev. Pulls need the gitlab-registry imagePullSecret
 # (ESO-materialized, see manifests/external-secrets).
 images:
-  - { name: snapdragon-systems/admin-bff, newName: registry.snapdragon.systems/snapdragon/snapdragon-admin-bff-api, newTag: main }
+  - { name: snapdragon-systems/admin-bff-api, newName: registry.snapdragon.systems/snapdragon/snapdragon-admin-bff-api, newTag: main }
 patches:
   - target: { kind: Deployment }
     patch: |
