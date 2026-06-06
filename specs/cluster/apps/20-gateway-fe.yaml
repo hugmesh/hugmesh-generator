@@ -56,6 +56,16 @@ spec:
           - id: admin-bff
             uri: http://admin-bff.snapdragon-backend.svc.cluster.local:8080
             path: /bff/**
+          # DB-hosted module-federation FRAGMENT bundles (user-profile/card +
+          # admin "contained pages"). The authenticated host's loadRemoteModule
+          # fetches /_fragments/<slug>/<contentHash>/...remoteEntry.json from the
+          # remote-fragment static fleet. Content-addressed + immutable; the
+          # federation manifest only emits enabled/visible modules, so visibility
+          # is enforced upstream and these are content-addressed (non-secret) bytes
+          # — gated to the ROLE_USER floor (the host loads them after login).
+          - id: remote-fragment
+            uri: http://snapdragon-remote-fragment.snapdragon-frontend.svc.cluster.local:80
+            path: /_fragments/**
           # Default cross-namespace scope: snapdragon.systems/be/** -> the backend
           # gateway (StripPrefix drops /be so /be/api -> /api at the be-gateway).
           # Ships by default; once DB-driven route definitions land (Phase 2 core,

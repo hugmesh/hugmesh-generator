@@ -97,6 +97,14 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-fe-gateway',  '/',                     'ROLE_ANONYMOUS', true),  -- public front page
   ('snapdragon-fe-gateway',  '/social/matrix/**',     'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/social/mastodon/**',   'ROLE_USER',      true),
+  -- DB-hosted module-federation FRAGMENT bundles served by the remote-fragment
+  -- static fleet (user-profile/card + admin contained-pages). The authenticated
+  -- host's loadRemoteModule fetches them; they are content-addressed (non-secret)
+  -- bytes and visibility is enforced upstream (federation emits only enabled/
+  -- visible modules into its manifest), so the gateway gate is the ROLE_USER floor
+  -- (the host itself loads them only after login). If anonymous profile cards are
+  -- ever needed, add a sibling ROLE_ANONYMOUS row for the public sub-path.
+  ('snapdragon-fe-gateway',  '/_fragments/**',        'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/login/**',             'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/admin/**',             'ROLE_ADMIN',     true),
   -- snapdragon-games namespace admin UI (games admin surface, namespaced under
