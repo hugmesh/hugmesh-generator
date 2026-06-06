@@ -1,0 +1,66 @@
+# federation-db — dedicated Postgres for snapdragon-federation's OWN tables
+# (federation_modules / user_modules / moderation_requests / federation_override).
+# Lives in snapdragon-backend next to the federation app it serves. ClusterIP only;
+# the only client is snapdragon-federation (R2DBC at runtime + a JDBC handle that
+# Liquibase uses ONCE at startup to apply the changelog).
+#
+# NOTE: the literal hostname `snapdragon-pg` that federation's application.yml
+# defaults to does NOT exist anywhere in the cluster; this dedicated `federation-db`
+# Service is the real backing store, and the federation Deployment OVERRIDES the
+# R2DBC/Liquibase URLs to point here.
+#
+# Schema bootstrap: there is NO initdb schema.sql — federation owns its schema via
+# Liquibase (classpath:db/changelog/db.changelog-master.xml, changesets 010-013),
+# applied by the app at boot. This DB only needs to exist EMPTY (POSTGRES_DB).
+#
+# !!! DEV credentials !!! The password here is a placeholder. Production must
+# source POSTGRES_PASSWORD from Vault via External Secrets (like clickhouse-auth)
+# and switch federation to a least-privilege role + a secretKeyRef.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: federation-db
+  namespace: snapdragon-backend
+  labels: { app: federation-db, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # single writer over a RWO PVC
+  selector: { matchLabels: { app: federation-db } }
+  template:
+    metadata: { labels: { app: federation-db } }
+    spec:
+      nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c25"
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ name: postgres, containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_DB,   value: "federation" }
+            - { name: POSTGRES_USER, value: "federation" }
+            # DEV placeholder password. PRODUCTION: create a Secret
+            # "federation-db-auth" (key "password") from Vault via External Secrets
+            # and replace this literal value with a secretKeyRef (mirror the
+            # federation Deployment's SPRING_R2DBC_PASSWORD / SPRING_LIQUIBASE_PASSWORD).
+            - { name: POSTGRES_PASSWORD, value: "federation" }
+            - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256" }
+            - { name: PGDATA, value: "/var/lib/postgresql/data/pgdata" }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "federation", "-d", "federation"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "federation", "-d", "federation"] }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: federation-db }

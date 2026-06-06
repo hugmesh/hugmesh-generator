@@ -1,0 +1,120 @@
+# snapdragon-federation — the module-federation REGISTRY + manifest/bundles API
+# (reactive WebFlux + R2DBC + Liquibase). It owns the enabled-MFE registry
+# (federation_modules / user_modules / moderation_requests / federation_override),
+# renders the manifest the host's loadRemoteModule consumes, and stores the
+# uploaded fragment bundle bytes.
+#
+# It is UPSTREAM of two runtime clients (both already retry, so this is a soft
+# dependency, but it should reconcile first — see apps/29-federation.yaml):
+#   - admin-bff calls federation as a JWT-authenticated client; and
+#   - the snapdragon-remote-fragment sync sidecar polls
+#     http://snapdragon-federation.snapdragon-backend.svc.cluster.local:8080 for the
+#     manifest + bundles and serves them statically at /_fragments/**.
+#
+# Security model: federation is purely an OAuth2 RESOURCE SERVER. It VALIDATES the
+# cluster Casdoor JWTs presented by those clients (CASDOOR_ISSUER_URI, JWKS
+# auto-discovered) — it mints/holds NO outbound creds, so it needs NO Casdoor app
+# or client secret of its own. Fine-grained authz (modules/overrides=ROLE_ADMIN,
+# moderation=ROLE_MOD/ADMIN, manifest GET + bundles=authenticated) is enforced in
+# federation's own SecurityConfig; the be-gateway route is the coarse
+# authenticated floor (see manifests/route-access/schema.sql).
+#
+# Storage: bundles live on a RWO PVC (filesystem mode) => replicas: 1 + Recreate.
+# PRODUCTION: switch APP_BUNDLES_STORAGE=s3 (MinIO/S3 + the APP_BUNDLES_S3_* env)
+# and drop the PVC to run multi-replica.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snapdragon-federation
+  namespace: snapdragon-backend
+  labels: { app: snapdragon-federation, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # single writer over the RWO bundles PVC
+  selector: { matchLabels: { app: snapdragon-federation } }
+  template:
+    metadata: { labels: { app: snapdragon-federation } }
+    spec:
+      nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c24"
+      containers:
+        - name: snapdragon-federation
+          image: snapdragon-systems/snapdragon-federation:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            # OAuth2 resource server: validate the cluster Casdoor JWTs presented
+            # by admin-bff + the remote-fragment sync sidecar. JWKS auto-discovered
+            # from the issuer well-known; no jwk-set-uri / client secret needed.
+            - name: CASDOOR_ISSUER_URI
+              value: "https://id.snapdragon.systems"
+            # Runtime reactive handle to federation's OWN Postgres (federation-db).
+            # NOT the dangling `snapdragon-pg` the app default points at.
+            - name: SPRING_R2DBC_URL
+              value: "r2dbc:postgresql://federation-db.snapdragon-backend.svc.cluster.local:5432/federation"
+            - name: SPRING_R2DBC_USERNAME
+              value: "federation"
+            # DEV placeholder password (matches federation-db POSTGRES_PASSWORD).
+            # PRODUCTION: secretKeyRef -> ESO Secret federation-db-auth (key password).
+            - name: SPRING_R2DBC_PASSWORD
+              value: "federation"
+            # JDBC handle used ONLY by Liquibase at startup (same DB, JDBC scheme).
+            - name: SPRING_LIQUIBASE_URL
+              value: "jdbc:postgresql://federation-db.snapdragon-backend.svc.cluster.local:5432/federation"
+            - name: SPRING_LIQUIBASE_USER
+              value: "federation"
+            - name: SPRING_LIQUIBASE_PASSWORD
+              value: "federation"
+            # Bundle storage: filesystem mode -> the PVC mounted below. The dir
+            # MUST equal the volumeMount path. PROD swap: APP_BUNDLES_STORAGE=s3.
+            - name: APP_BUNDLES_STORAGE
+              value: "filesystem"
+            - name: APP_BUNDLES_DIR
+              value: "/var/snapdragon/federation/bundles"
+            # Best-effort manifest write-through cache. Left DISABLED for first
+            # deploy (renders from Postgres; NoopManifestCache). To enable best-
+            # effort like admin-bff, flip MANIFEST_CACHE_ENABLED to "true" — any
+            # Cassandra failure is swallowed and never blocks startup (the
+            # Cassandra autoconfig is excluded in application.yml). The contact
+            # point matches admin-bff's CASSANDRA host.
+            - name: MANIFEST_CACHE_ENABLED
+              value: "false"
+            - name: MANIFEST_CACHE_CASSANDRA
+              value: "cassandra.snapdragon-pki.svc.cluster.local:9042"
+            - name: MANIFEST_CACHE_KEYSPACE
+              value: "snapdragon_federation"
+            - name: MANIFEST_CACHE_LOCAL_DC
+              value: "dc1"
+            # No SPRING_PROFILES_ACTIVE: the prod SecurityConfig chain
+            # (@Profile("!dev & !test")) is the default and gates the OpenAPI spec
+            # /swagger-ui to ROLE_ADMIN. Setting dev/test would make the spec
+            # public, so it is deliberately UNSET. federation has no
+            # eureka/kafka/clickhouse deps, so admin-bff's extra profiles do not apply.
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            initialDelaySeconds: 45
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 768Mi }
+          volumeMounts:
+            - { name: tmp,     mountPath: /tmp }
+            - { name: bundles, mountPath: /var/snapdragon/federation/bundles }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: bundles
+          persistentVolumeClaim: { claimName: federation-bundles }
