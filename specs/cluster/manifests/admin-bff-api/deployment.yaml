@@ -57,9 +57,28 @@ spec:
               value: "kafka:9092"
             - name: CLICKHOUSE_URL
               value: "http://clickhouse:8123"
-            # Config datastore (separate from the route-access R2DBC handle above).
-            - name: SPRING_DATASOURCE_URL
-              value: "jdbc:postgresql://snapdragon-pg:5432/snapdragon"
+            # Config datastore: the durable accounts / allowlist / sessions /
+            # namespace-grants / iso_artifacts / gateway_route_access tables.
+            # The app's application.yml defaults spring.r2dbc + spring.liquibase to
+            # a literal `snapdragon-pg` host that does NOT exist; OVERRIDE both here
+            # to the dedicated admin-bff-db (mirrors how federation overrides to
+            # federation-db). R2DBC is the runtime handle; the JDBC handle is used
+            # by Liquibase ONCE at startup. (The old dead SPRING_DATASOURCE_URL env
+            # is removed — the app reads spring.r2dbc/spring.liquibase, not
+            # spring.datasource.)  !!! DEV password — prod: ESO admin-bff-db-auth +
+            # secretKeyRef, see docs/HANDOFF.md §3.3.
+            - name: SPRING_R2DBC_URL
+              value: "r2dbc:postgresql://admin-bff-db.snapdragon-backend.svc.cluster.local:5432/adminbff"
+            - name: SPRING_R2DBC_USERNAME
+              value: "adminbff"
+            - name: SPRING_R2DBC_PASSWORD
+              value: "adminbff"
+            - name: SPRING_LIQUIBASE_URL
+              value: "jdbc:postgresql://admin-bff-db.snapdragon-backend.svc.cluster.local:5432/adminbff"
+            - name: SPRING_LIQUIBASE_USER
+              value: "adminbff"
+            - name: SPRING_LIQUIBASE_PASSWORD
+              value: "adminbff"
             - name: CASSANDRA_CONTACT_POINTS
               value: "cassandra.snapdragon-pki.svc.cluster.local:9042"
           readinessProbe:
