@@ -25,8 +25,18 @@ service:
 
 # Casdoor is the single OAuth2 issuer for the whole cluster. It lives in the
 # snapdragon-pki namespace on the control-plane (pki) Pi.
+#
+# issuerUri MUST equal the `iss` claim Casdoor mints (its configured origin,
+# https://id.snapdragon.systems — see manifests/casdoor app-conf `origin`), because
+# the gateway sets BOTH spring...jwt.issuer-uri AND jwk-set-uri, so Spring Boot
+# fetches keys from jwk-set-uri but ALSO adds a JwtIssuerValidator that enforces
+# token.iss == issuer-uri. Pointing issuerUri at the internal casdoor svc URL made
+# the validator reject EVERY token (iss mismatch). Because jwk-set-uri is set
+# explicitly, issuerUri is used ONLY for the iss string match — no OIDC-discovery
+# fetch — so the public URL need not resolve in-cluster. jwksUri stays the INTERNAL
+# casdoor svc so key fetch works without leaving the cluster.
 casdoor:
-  issuerUri: http://casdoor.snapdragon-pki.svc.cluster.local:8000
+  issuerUri: https://id.snapdragon.systems
   jwksUri: http://casdoor.snapdragon-pki.svc.cluster.local:8000/.well-known/jwks
 
 # Cassandra backs the gateway's revocation list + URL registry (shared).
