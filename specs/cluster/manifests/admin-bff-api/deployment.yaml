@@ -65,20 +65,29 @@ spec:
             # federation-db). R2DBC is the runtime handle; the JDBC handle is used
             # by Liquibase ONCE at startup. (The old dead SPRING_DATASOURCE_URL env
             # is removed — the app reads spring.r2dbc/spring.liquibase, not
-            # spring.datasource.)  !!! DEV password — prod: ESO admin-bff-db-auth +
-            # secretKeyRef, see docs/HANDOFF.md §3.3.
+            # spring.datasource.)  Password sourced from Vault via External Secrets
+            # (ESO Secret admin-bff-db-auth, key password) — the SAME Secret the
+            # admin-bff-db pod's POSTGRES_PASSWORD mounts, so the DB and its consumer
+            # stay in sync. See docs/HANDOFF.md §3.3.
             - name: SPRING_R2DBC_URL
               value: "r2dbc:postgresql://admin-bff-db.snapdragon-backend.svc.cluster.local:5432/adminbff"
             - name: SPRING_R2DBC_USERNAME
               value: "adminbff"
             - name: SPRING_R2DBC_PASSWORD
-              value: "adminbff"
+              valueFrom:
+                secretKeyRef:
+                  name: admin-bff-db-auth
+                  key: password
             - name: SPRING_LIQUIBASE_URL
               value: "jdbc:postgresql://admin-bff-db.snapdragon-backend.svc.cluster.local:5432/adminbff"
             - name: SPRING_LIQUIBASE_USER
               value: "adminbff"
+            # Same ESO Secret admin-bff-db-auth (key password) as R2DBC above.
             - name: SPRING_LIQUIBASE_PASSWORD
-              value: "adminbff"
+              valueFrom:
+                secretKeyRef:
+                  name: admin-bff-db-auth
+                  key: password
             - name: CASSANDRA_CONTACT_POINTS
               value: "cassandra.snapdragon-pki.svc.cluster.local:9042"
           readinessProbe:

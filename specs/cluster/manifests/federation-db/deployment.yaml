@@ -13,9 +13,10 @@
 # Liquibase (classpath:db/changelog/db.changelog-master.xml, changesets 010-013),
 # applied by the app at boot. This DB only needs to exist EMPTY (POSTGRES_DB).
 #
-# !!! DEV credentials !!! The password here is a placeholder. Production must
-# source POSTGRES_PASSWORD from Vault via External Secrets (like clickhouse-auth)
-# and switch federation to a least-privilege role + a secretKeyRef.
+# Credentials: POSTGRES_PASSWORD is sourced from Vault via External Secrets (ESO
+# Secret federation-db-auth, key password <- secret/snapdragon/federation-db),
+# mirroring the clickhouse-auth pattern. The federation app references the SAME
+# Secret. (A future hardening step can still switch to a least-privilege role.)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -41,11 +42,16 @@ spec:
           env:
             - { name: POSTGRES_DB,   value: "federation" }
             - { name: POSTGRES_USER, value: "federation" }
-            # DEV placeholder password. PRODUCTION: create a Secret
-            # "federation-db-auth" (key "password") from Vault via External Secrets
-            # and replace this literal value with a secretKeyRef (mirror the
-            # federation Deployment's SPRING_R2DBC_PASSWORD / SPRING_LIQUIBASE_PASSWORD).
-            - { name: POSTGRES_PASSWORD, value: "federation" }
+            # Password sourced from Vault via External Secrets (ESO Secret
+            # "federation-db-auth", key "password" <- secret/snapdragon/federation-db;
+            # see manifests/external-secrets/secretstore.yaml). The snapdragon-federation-api
+            # consumer references the SAME Secret (SPRING_R2DBC_PASSWORD /
+            # SPRING_LIQUIBASE_PASSWORD) so they stay in sync. DB/USER stay literal.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: federation-db-auth
+                  key: password
             - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256" }
             - { name: PGDATA, value: "/var/lib/postgresql/data/pgdata" }
           readinessProbe:
