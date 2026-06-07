@@ -97,6 +97,12 @@ data:
         except FileNotFoundError:
             print("  github provider: casdoor-games-github secret absent — skipping")
             return
+        # gen-cluster-secrets seeds a REPLACE_WITH_* placeholder when no real creds
+        # are supplied; treat an empty/placeholder clientId as "absent" so we never
+        # seed a broken provider (keeps native games-player signup working).
+        if not cid or cid.startswith("REPLACE_WITH_"):
+            print("  github provider: clientId is placeholder/empty — skipping")
+            return
         provider = {
             "owner": "admin", "name": "github", "displayName": "GitHub",
             "category": "OAuth", "type": "GitHub",
