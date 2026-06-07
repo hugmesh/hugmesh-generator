@@ -1,11 +1,16 @@
 # Tier-level NetworkPolicies (Phase 3 segmentation).
 #
-# MANUAL SYNC ON PURPOSE: a default-deny ingress policy that's missing a real
-# flow will silently break connectivity, and the exact flows can only be
-# confirmed on a live cluster. So this Application does NOT auto-sync — an
-# operator reviews the diff and syncs it deliberately (argocd app sync
-# networkpolicy) after verifying nothing is cut off. Once validated, switch
-# syncPolicy to automated like the other apps.
+# AUTO-SYNC (enabled). The tier-ingress policies have been reviewed and the new
+# services (federation-api/db, admin-bff-api/db, remote-fragment) all live in
+# already-covered namespaces, so this Application now auto-syncs like the others.
+#
+# ⚠ VALIDATE ON THE LIVE CLUSTER right after this first syncs: a default-deny
+# ingress policy missing a real flow silently breaks connectivity, and k8s
+# NetworkPolicy bugs only surface live. Smoke-test login + each gateway hop + the
+# BFF/DB/casdoor/cassandra paths. ROLLBACK if anything is cut off: revert this
+# `automated:` block (back to manual) or `kubectl delete -k manifests/networkpolicy`
+# — the policies are ingress-only (egress stays open), so removing them fully
+# restores connectivity.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -21,6 +26,6 @@ spec:
     path: specs/cluster/manifests/networkpolicy
   destination:
     server: https://kubernetes.default.svc
-  # No `automated:` block — manual sync until validated on-cluster (see header).
   syncPolicy:
+    automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=false]
