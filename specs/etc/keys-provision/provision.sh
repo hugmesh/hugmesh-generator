@@ -1040,6 +1040,27 @@ provision_vault() {
             else
                 warn "failed to create external-secrets/vault-token"
             fi
+            # The per-service mTLS generators (manifests/external-secrets/
+            # pki-externalsecrets.yaml) run a VaultDynamicSecret IN EACH workload
+            # namespace and auth with a 'vault-token' Secret in THAT namespace. Seed
+            # it everywhere a generator lives — not just external-secrets — or the
+            # <svc>-mtls TLS Secrets never materialize and keystore-enabled gateways
+            # cannot start. Namespaces are also created by ArgoCD (CreateNamespace);
+            # ensuring them here is idempotent.
+            local gen_ns
+            for gen_ns in snapdragon-pki snapdragon-backend snapdragon-frontend; do
+                KUBECONFIG="${kc}" kubectl create namespace "${gen_ns}" \
+                    --dry-run=client -o yaml 2>/dev/null | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null \
+                    || warn "could not ensure namespace ${gen_ns}"
+                if KUBECONFIG="${kc}" kubectl create secret generic vault-token \
+                        -n "${gen_ns}" --from-literal=token="${token}" \
+                        --dry-run=client -o yaml 2>/dev/null \
+                        | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null; then
+                    log "Created k8s Secret ${gen_ns}/vault-token for the per-service mTLS ESO generators"
+                else
+                    warn "failed to create ${gen_ns}/vault-token"
+                fi
+            done
         else
             warn "Vault token file ${tok_path} is empty"
         fi
@@ -1049,6 +1070,30 @@ provision_vault() {
         else
             log "No Vault token at ${tok_path} — relying on USB offline secrets bundle"
         fi
+    fi
+
+    # ── Vault PKI trust anchor: import the cluster CA (cert+key) ──────
+    # manifests/vault-pki's init Job mounts a 'cluster-ca' Secret (tls.crt/tls.key)
+    # in the vault ns and imports it as pki_int's signing CA, so Vault-issued leaf
+    # certs chain to the SAME anchor as the offline gen-keystores.sh truststore.
+    # Absent => Vault self-generates a DEV root and cross-service mTLS trust breaks.
+    # The CA key comes ONLY from the pki KEYS stick (never git); kubectl reads the
+    # files, no key material is printed. Runs regardless of online/offline.
+    local ca_crt="${BASE}/certs/cluster-ca.crt" ca_key="${BASE}/certs/cluster-ca.key"
+    if [ -f "${ca_crt}" ] && [ -f "${ca_key}" ]; then
+        KUBECONFIG="${kc}" kubectl create namespace vault \
+            --dry-run=client -o yaml 2>/dev/null | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null \
+            || warn "could not ensure namespace vault"
+        if KUBECONFIG="${kc}" kubectl create secret tls cluster-ca \
+                -n vault --cert="${ca_crt}" --key="${ca_key}" \
+                --dry-run=client -o yaml 2>/dev/null \
+                | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null; then
+            log "Created k8s Secret vault/cluster-ca (Vault pki_int imports the cluster CA → leaf certs chain to the truststore)"
+        else
+            warn "failed to create vault/cluster-ca"
+        fi
+    else
+        log "No cluster CA cert+key on KEYS (certs/cluster-ca.{crt,key}) — Vault pki_int will self-generate a DEV root"
     fi
 
     # ── OFFLINE / USB FALLBACK: materialize the workload Secrets directly ──
