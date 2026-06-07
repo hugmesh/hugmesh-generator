@@ -63,17 +63,25 @@ spec:
               value: "r2dbc:postgresql://federation-db.snapdragon-backend.svc.cluster.local:5432/federation"
             - name: SPRING_R2DBC_USERNAME
               value: "federation"
-            # DEV placeholder password (matches federation-db POSTGRES_PASSWORD).
-            # PRODUCTION: secretKeyRef -> ESO Secret federation-db-auth (key password).
+            # Password sourced from Vault via External Secrets — the SAME ESO Secret
+            # (federation-db-auth, key password) the federation-db pod's
+            # POSTGRES_PASSWORD mounts, so the DB and its consumer stay in sync.
             - name: SPRING_R2DBC_PASSWORD
-              value: "federation"
+              valueFrom:
+                secretKeyRef:
+                  name: federation-db-auth
+                  key: password
             # JDBC handle used ONLY by Liquibase at startup (same DB, JDBC scheme).
             - name: SPRING_LIQUIBASE_URL
               value: "jdbc:postgresql://federation-db.snapdragon-backend.svc.cluster.local:5432/federation"
             - name: SPRING_LIQUIBASE_USER
               value: "federation"
+            # Same ESO Secret federation-db-auth (key password) as R2DBC above.
             - name: SPRING_LIQUIBASE_PASSWORD
-              value: "federation"
+              valueFrom:
+                secretKeyRef:
+                  name: federation-db-auth
+                  key: password
             # Bundle storage: filesystem mode -> the PVC mounted below. The dir
             # MUST equal the volumeMount path. PROD swap: APP_BUNDLES_STORAGE=s3.
             - name: APP_BUNDLES_STORAGE

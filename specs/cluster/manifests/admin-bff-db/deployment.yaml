@@ -13,10 +13,11 @@
 # (classpath:db/changelog/db.changelog-master.xml), applied by the app at boot.
 # This DB only needs to exist EMPTY (POSTGRES_DB).
 #
-# !!! DEV credentials !!! The password here is a placeholder (same convention as
-# federation-db / route-access-db). Production must source POSTGRES_PASSWORD from
-# Vault via External Secrets (like clickhouse-auth) and switch admin-bff to a
-# least-privilege role + a secretKeyRef. See docs/HANDOFF.md §3.3.
+# Credentials: POSTGRES_PASSWORD is sourced from Vault via External Secrets (ESO
+# Secret admin-bff-db-auth, key password <- secret/snapdragon/admin-bff-db),
+# mirroring the clickhouse-auth pattern. The admin-bff app references the SAME
+# Secret. (A future hardening step can still switch to a least-privilege role.)
+# See docs/HANDOFF.md §3.3.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -42,11 +43,16 @@ spec:
           env:
             - { name: POSTGRES_DB,   value: "adminbff" }
             - { name: POSTGRES_USER, value: "adminbff" }
-            # DEV placeholder password. PRODUCTION: create a Secret
-            # "admin-bff-db-auth" (key "password") from Vault via External Secrets
-            # and replace this literal value with a secretKeyRef (mirror the
-            # admin-bff Deployment's SPRING_R2DBC_PASSWORD / SPRING_LIQUIBASE_PASSWORD).
-            - { name: POSTGRES_PASSWORD, value: "adminbff" }
+            # Password sourced from Vault via External Secrets (ESO Secret
+            # "admin-bff-db-auth", key "password" <- secret/snapdragon/admin-bff-db;
+            # see manifests/external-secrets/secretstore.yaml). The snapdragon-admin-bff-api
+            # consumer references the SAME Secret (SPRING_R2DBC_PASSWORD /
+            # SPRING_LIQUIBASE_PASSWORD) so they stay in sync. DB/USER stay literal.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: admin-bff-db-auth
+                  key: password
             - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256" }
             - { name: PGDATA, value: "/var/lib/postgresql/data/pgdata" }
           readinessProbe:
