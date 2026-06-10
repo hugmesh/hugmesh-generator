@@ -30,6 +30,50 @@ spec:
         seLinuxOptions:
           type: container_t
           level: "s0:c23"
+      # ── API-to-API mTLS identity (build-keystore) ───────────────────────────
+      # Mirrors the snapdragon-gateway chart's build-keystore initContainer. It
+      # turns the Vault-PKI-issued, ESO-synced TLS Secret
+      # (snapdragon-admin-bff-api-mtls: tls.crt/tls.key/ca.crt) into the PKCS12
+      # keystore.p12 (this service's identity) + truststore.p12 (cluster CA) that
+      # the server-side server.ssl.* config (merged) loads to REQUIRE a client cert
+      # chaining to the cluster CA (client-auth=need). keytool + openssl ship in
+      # the eclipse-temurin JRE image, so we reuse the app image. The store
+      # password is generated HERE, kept only in the tmpfs /stores emptyDir (never
+      # in git / a Secret / Vault), and emitted into application-tls.properties that
+      # the app loads via SPRING_CONFIG_ADDITIONAL_LOCATION=file:/stores/ — so the
+      # SSL_*_PASSWORD env vars stay empty in the pod spec and the secret never
+      # leaves the pod.
+      initContainers:
+        - name: build-keystore
+          image: snapdragon-systems/admin-bff-api:dev
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              P="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
+              # mTLS identity: key + cert -> PKCS12 (Spring reads PKCS12 natively).
+              openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
+                -certfile /pki/ca.crt -name snapdragon-admin-bff-api \
+                -out /stores/keystore.p12 -passout "pass:${P}"
+              # Truststore: the issuing (cluster) CA so we trust cluster peers.
+              keytool -importcert -noprompt -alias snapdragon-cluster-ca \
+                -file /pki/ca.crt -keystore /stores/truststore.p12 \
+                -storetype PKCS12 -storepass "${P}"
+              # Spring SSL config picked up from file:/stores/ (added to
+              # SPRING_CONFIG_ADDITIONAL_LOCATION). Sets ONLY the in-pod-generated
+              # store passwords; SSL_ENABLED / SSL_CLIENT_AUTH / paths come from env.
+              umask 077
+              cat > /stores/application-tls.properties <<EOF
+              server.ssl.key-store-password=${P}
+              server.ssl.trust-store-password=${P}
+              EOF
+              echo "keystore + truststore + application-tls.properties built"
+          volumeMounts:
+            - { name: pki,    mountPath: /pki, readOnly: true }
+            - { name: stores, mountPath: /stores }
       containers:
         - name: snapdragon-admin-bff-api
           image: snapdragon-systems/admin-bff-api:dev
@@ -42,6 +86,21 @@ spec:
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - name: CASDOOR_ISSUER_URI
               value: "https://id.snapdragon.systems"
+            # ── API-to-API mTLS (server side) ─────────────────────────────────
+            # Enforce a client cert chaining to the cluster CA. The store passwords
+            # come from /stores/application-tls.properties (in-pod generated, loaded
+            # via SPRING_CONFIG_ADDITIONAL_LOCATION) — NOT set here, so the secret
+            # never enters the pod spec. DEPLOY-ORDER: keep this in lockstep with the
+            # gateway/BFF client-cert wave (see PR body) — flipping client-auth=need
+            # before callers present certs rejects in-cluster traffic.
+            - { name: SSL_ENABLED,          value: "true" }
+            - { name: SSL_CLIENT_AUTH,      value: "need" }
+            - { name: SSL_KEY_STORE,        value: "/stores/keystore.p12" }
+            - { name: SSL_KEY_STORE_TYPE,   value: "PKCS12" }
+            - { name: SSL_TRUST_STORE,      value: "/stores/truststore.p12" }
+            - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
+            # Load the in-pod-generated store passwords (application-tls.properties).
+            - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
             # R2DBC handle to the gateway_route_access Postgres (snapdragon-pki).
             # Least-privilege: admin-bff is the ONLY writer, so it logs in as its
             # OWN role `admin_bff` (SELECT/INSERT/UPDATE/DELETE on
@@ -106,19 +165,51 @@ spec:
                   key: password
             - name: CASSANDRA_CONTACT_POINTS
               value: "cassandra.snapdragon-pki.svc.cluster.local:9042"
+          # Probes are HTTPS now that server.ssl is enabled. Because client-auth=need
+          # rejects the TLS handshake of any caller WITHOUT a client cert, a plain
+          # kubelet httpGet (which presents none) would fail — so the probe is an
+          # exec'd curl that PRESENTS this pod's own client cert (/pki PEM, same
+          # material the keystore was built from) and validates the server cert
+          # against the cluster CA. --resolve maps the cert SAN (snapdragon-admin-bff-api)
+          # to loopback so hostname verification passes. Exercises mTLS end to end.
           readinessProbe:
-            httpGet: { path: /actuator/health/readiness, port: http }
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >-
+                  curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
+                  --resolve snapdragon-admin-bff-api:8080:127.0.0.1
+                  https://snapdragon-admin-bff-api:8080/actuator/health/readiness
             initialDelaySeconds: 20
             periodSeconds: 10
           livenessProbe:
-            httpGet: { path: /actuator/health/liveness, port: http }
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >-
+                  curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
+                  --resolve snapdragon-admin-bff-api:8080:127.0.0.1
+                  https://snapdragon-admin-bff-api:8080/actuator/health/liveness
             initialDelaySeconds: 45
             periodSeconds: 15
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits:   { cpu: "1",  memory: 768Mi }
           volumeMounts:
-            - { name: tmp, mountPath: /tmp }
+            - { name: tmp,    mountPath: /tmp }
+            - { name: stores, mountPath: /stores, readOnly: true }
+            # PEM identity, read-only — used by the exec probe's curl client cert.
+            - { name: pki,    mountPath: /pki,    readOnly: true }
       volumes:
         - name: tmp
           emptyDir: {}
+        # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
+        - name: pki
+          secret:
+            secretName: snapdragon-admin-bff-api-mtls
+        # tmpfs for the assembled PKCS12 stores + the in-pod SSL properties.
+        - name: stores
+          emptyDir:
+            medium: Memory

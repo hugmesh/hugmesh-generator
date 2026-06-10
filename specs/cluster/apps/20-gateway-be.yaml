@@ -17,7 +17,11 @@ spec:
           name: snapdragon-be-gateway
         # Cross-namespace mTLS client identity (Vault-PKI/ESO snapdragon-be-gateway-mtls).
         # initContainer assembles keystore/truststore; server.ssl stays off so the
-        # http readiness probe and the ingress hand-off are unaffected.
+        # http readiness probe and the ingress hand-off are unaffected. The DOWNSTREAM
+        # (gateway -> API) leg now PRESENTS this client cert + validates backend server
+        # certs — gated on by SNAPDRAGON_GATEWAY_MTLS_ENABLED below (snapdragon-gateway
+        # repo, feat/mtls-client-presentation). PUBLIC/upstream callers are unaffected
+        # (no client cert required of them).
         keystore:
           enabled: true
         ingress:
@@ -48,6 +52,14 @@ spec:
                 key: password
           - name: ROUTE_ACCESS_R2DBC_URL
             value: r2dbc:postgresql://be_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
+          # Activate the DOWNSTREAM client-cert presentation + backend-cert
+          # validation in the gateway image (snapdragon-gateway repo). When true the
+          # gateway's reactor-netty HttpClient loads /stores/keystore.p12 (this
+          # gateway's identity) + /stores/truststore.p12 (cluster CA) and presents
+          # the cert to the now-mTLS https:// backends below. Default off in the
+          # image so dev/local/tests with plain-http backends are unaffected.
+          - name: SNAPDRAGON_GATEWAY_MTLS_ENABLED
+            value: "true"
         routes:
           # headscale forwarding: external tailscale clients hit scale.<domain> on
           # this backend gateway and are forwarded to the pki gateway -> headscale,
@@ -94,12 +106,15 @@ spec:
           # (modules/overrides=ADMIN, moderation=MOD/ADMIN, manifest GET +
           # bundles=authenticated) is enforced inside federation's SecurityConfig;
           # the route DB gates the coarse authenticated floor (ROLE_USER).
+          # https:// — federation-api now enforces mTLS (client-auth=need); the
+          # gateway presents its client cert on this leg (SNAPDRAGON_GATEWAY_MTLS_ENABLED).
           - id: federation-api
-            uri: http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080
+            uri: https://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080
             path: /api/federation/**
           # --- Snapdragon Spring APIs (api.snapdragon.systems) ---
+          # https:// — snapdragon-api now enforces mTLS (client-auth=need).
           - id: snapdragon-api
-            uri: http://snapdragon-api.snapdragon-backend.svc.cluster.local:8080
+            uri: https://snapdragon-api.snapdragon-backend.svc.cluster.local:8080
             path: /api/**
   destination:
     server: https://kubernetes.default.svc

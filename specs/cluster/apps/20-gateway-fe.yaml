@@ -17,6 +17,10 @@ spec:
         instance:
           name: snapdragon-fe-gateway
         # Cross-namespace mTLS client identity (Vault-PKI/ESO snapdragon-fe-gateway-mtls).
+        # The DOWNSTREAM (gateway -> BFF/federation) leg PRESENTS this client cert +
+        # validates backend server certs — gated on by SNAPDRAGON_GATEWAY_MTLS_ENABLED
+        # below. PUBLIC/upstream callers (browsers via Cloudflare/ingress) are NOT asked
+        # for a client cert; only the downstream leg to the now-mTLS https:// backends.
         keystore:
           enabled: true
         ingress:
@@ -53,6 +57,11 @@ spec:
                 key: password
           - name: ROUTE_ACCESS_R2DBC_URL
             value: r2dbc:postgresql://fe_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
+          # Activate downstream client-cert presentation + backend-cert validation
+          # for the now-mTLS https:// BFF/federation backends (snapdragon-gateway repo).
+          # Default off in the image; the UI remotes (port 80) and be-gateway stay http.
+          - name: SNAPDRAGON_GATEWAY_MTLS_ENABLED
+            value: "true"
         routes:
           # Each federated micro-frontend on its own nginx remote (specific
           # paths first)…
@@ -95,14 +104,16 @@ spec:
           #                  /bff/provision, /bff/me, /bff/admin/** — /bff/admin/**
           #                  => ROLE_ADMIN). The fe-gateway enforces the route-DB
           #                  role rules before each proxy.
+          # https:// — the three BFFs now enforce mTLS (client-auth=need); the
+          # gateway presents its client cert on these legs (SNAPDRAGON_GATEWAY_MTLS_ENABLED).
           - id: snapdragon-mod-bff-api
-            uri: http://snapdragon-mod-bff-api.snapdragon-backend.svc.cluster.local:8080
+            uri: https://snapdragon-mod-bff-api.snapdragon-backend.svc.cluster.local:8080
             path: /bff/mod/**
           - id: snapdragon-user-bff-api
-            uri: http://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
             path: /bff/user/**
           - id: snapdragon-admin-bff-api
-            uri: http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
+            uri: https://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
             path: /bff/**
           # DB-hosted module-federation FRAGMENT bundles (user-profile/card +
           # admin "contained pages"). The authenticated host's loadRemoteModule
@@ -174,9 +185,13 @@ spec:
           # two-repo pass and is documented as a deferral in the federation-api
           # README. The generator side (wildcard ingress host + Host predicate
           # route + direct federation target) is complete and renders clean.
+          # https:// — federation-api now enforces mTLS; this direct (non-be-gateway)
+          # hop presents the fe-gateway client cert. The vanity resolve is still a
+          # PUBLIC read at the federation app layer (permitAll GET vanity/**) — mTLS
+          # only authenticates the GATEWAY pod to federation, not the end user.
           - id: vanity-subdomain
             host: "*.snapdragon.systems"
-            uri: http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080
+            uri: https://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080
             filters:
               - SetPath=/api/federation/vanity
           # …then the snapdragon.systems Angular host catches everything else
