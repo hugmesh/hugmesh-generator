@@ -1,0 +1,128 @@
+# =============================================================================
+# CANONICAL RESERVED PREFIX / USERNAME LIST — single auditable source of truth.
+# =============================================================================
+# These labels are RESERVED: a vanity username / profile handle
+# (<label>.snapdragon.systems, snapdragon.systems/<label>, and the equivalent
+# *.snapdragon.games surfaces) may NEVER be one of these, because each label is
+# (or may become) a DEDICATED app path-prefix or subdomain route on the
+# fe/be/pki gateways. If a user could register one of these handles their vanity
+# host/path would SHADOW (or be shadowed by) a real platform route — a
+# vanity-collision. So this list is the union of:
+#
+#   * every dedicated fe/be/pki gateway route PREFIX (path first-segment),
+#   * every reserved service SUBDOMAIN (first DNS label),
+#   * the snapdragon.games app prefixes, and
+#   * defensive standard web names (well-known/favicon/robots/health/…).
+#
+# THE RULE (enforced here + in the app repos):
+#   Every dedicated gateway route prefix MUST appear in `reserved`. A newly
+#   added route prefix that is NOT in this list is DRIFT and the route-consistency
+#   check (scripts/validate-reserved-prefixes.sh) FAILS the build/sync.
+#
+# WHO ELSE HOLDS A COPY (keep in sync — see docs/RESERVED-PREFIXES.md):
+#   federation-api   ReservedNames  (vanity-resolve  VanityController)
+#   user-bff-api     ReservedNames  (profile DB / registration)
+#   snapdragon-actions             (registration guard)
+#   admin-bff-api    ReservedNames  (admin route management)
+#   THIS repo (GitOps)             reserved-prefixes.yaml  <-- canonical source
+#
+# HOW IT IS ENFORCED IN THE CLUSTER:
+#   * reserved-prefixes-configmap.yaml mirrors the `reserved` list below into a
+#     ConfigMap (snapdragon-policy/reserved-prefixes) — the in-cluster auditable
+#     copy the Kyverno policy reads at admission time.
+#   * manifests/policy/reserved-prefixes-policy.yaml (Kyverno ClusterPolicy)
+#     validates Ingress / Gateway-API HTTPRoute hosts (and, defensively, any
+#     user/profile/vanity CRD handle) against that ConfigMap so a reserved label
+#     cannot be used where it would create a vanity-shadowing collision.
+#   * scripts/validate-reserved-prefixes.sh asserts `reserved` ⊇ every deployed
+#     gateway route prefix (drift check), wired into .gitlab-ci.yml.
+#
+# IMPORTANT: this file is the SOURCE. If you edit the list, ALSO update the
+# ConfigMap is unnecessary — the ConfigMap is generated to match; just re-run
+# scripts/sync-reserved-configmap.sh (or edit both). The validate script asserts
+# the ConfigMap and this file agree.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ReservedPrefixSpec          # informational kind (not a CRD) — a plain data doc
+metadata:
+  name: snapdragon-reserved-prefixes
+  # Bump when the list changes so app-repo copies can detect a newer source.
+  revision: "1"
+spec:
+  # The canonical 60-label reserved set. KEEP SORTED BY CATEGORY (comments) but
+  # the validator treats it as an unordered SET. Do not duplicate; the validator
+  # also asserts there are no duplicates.
+  reserved:
+    # --- platform / role gateway route prefixes (fe/be/pki) ---
+    - admin
+    - apidocs
+    - api-docs
+    - be
+    - bff
+    - _fragments
+    - fragments
+    - login
+    - logout
+    - mod
+    - user
+    - users
+    - api
+    - docs
+    # --- federated social / identity surfaces ---
+    - _matrix
+    - matrix
+    - mastodon
+    # `pleroma`: akkoma's AdminFE is served at /pleroma/admin/** on the be-gateway
+    # (gateway_route_access seed), a DEDICATED first-segment route prefix — so it
+    # must be reserved too. Added by the route-consistency check (it is the ONE
+    # deployed prefix beyond the original 60-label union). The app-repo
+    # ReservedNames copies (federation-api/user-bff-api/snapdragon-actions/
+    # admin-bff-api) MUST add `pleroma` as well to stay in sync.
+    - pleroma
+    - oauth
+    - oauth2
+    - id
+    - auth
+    - social
+    - gm
+    # --- VPN / mesh / identity subdomains ---
+    - scale
+    - headscale
+    # --- reserved service subdomains + defensive web names ---
+    - www
+    - root
+    - static
+    - assets
+    - public
+    - health
+    - healthz
+    - actuator
+    - metrics
+    - well-known
+    - favicon
+    - robots
+    - sitemap
+    - status
+    - support
+    - help
+    # --- infra / ops names (never a user) ---
+    - pki
+    - vault
+    - argocd
+    - gitlab
+    - registry
+    # --- snapdragon.games app prefixes ---
+    - games
+    - play
+    - wasm
+    - producer
+    - publisher
+    - banned
+    - _remotes
+    - producer-registration
+    - registration
+    - wasm-fragment
+    - games-dodecahedron
+    - games-rpg-maker
+    - games-three-wizards
+    - games-vn-maker

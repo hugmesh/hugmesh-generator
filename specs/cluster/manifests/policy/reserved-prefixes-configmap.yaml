@@ -1,0 +1,25 @@
+# reserved-prefixes ConfigMap — the IN-CLUSTER auditable mirror of the canonical
+# source of truth (specs/cluster/reserved-prefixes.yaml). The Kyverno
+# ClusterPolicy (reserved-prefixes-policy.yaml) reads `reserved.json` from this
+# ConfigMap at admission time, so the policy and the GitOps list cannot drift:
+# scripts/validate-reserved-prefixes.sh asserts THIS list == the canonical
+# source's `spec.reserved`.
+#
+# GENERATED FROM specs/cluster/reserved-prefixes.yaml. If you change the list,
+# change it in the canonical source and re-run scripts/sync-reserved-configmap.sh
+# (or edit both); the validate script fails the build if they disagree.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reserved-prefixes
+  namespace: snapdragon-policy
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/component: policy
+  annotations:
+    snapdragon.systems/source: specs/cluster/reserved-prefixes.yaml
+data:
+  # JSON array — consumed by the Kyverno policy via a configMap context +
+  # `parseJson` so the reserved set is a first-class list in JMESPath.
+  reserved.json: |
+    ["_fragments","_matrix","_remotes","actuator","admin","api","api-docs","apidocs","argocd","assets","auth","banned","be","bff","docs","favicon","fragments","games","games-dodecahedron","games-rpg-maker","games-three-wizards","games-vn-maker","gitlab","gm","headscale","health","healthz","help","id","login","logout","mastodon","matrix","metrics","mod","oauth","oauth2","pki","play","pleroma","producer","producer-registration","public","publisher","registration","registry","robots","root","scale","sitemap","social","static","status","support","user","users","vault","wasm","wasm-fragment","well-known","www"]
