@@ -60,7 +60,17 @@ apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: snapdragon-local
-  annotations: { storageclass.kubernetes.io/is-default-class: "true" }
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+    # ── Encryption at rest ────────────────────────────────────────
+    # local-path is NOT a CSI driver: it has no encryption parameter of its own.
+    # It just creates per-PV directories under /mnt/data (+ /mnt/usb) on the x86
+    # host. keys-provision (provision_storage) wraps those data partitions in
+    # LUKS2 (aes-xts-plain64, argon2id) BEFORE mounting them, so EVERY PV/PVC
+    # carved from this class is encrypted at rest by INHERITANCE from the node
+    # disk — the same disk that holds etcd + Vault state. See
+    # docs/ENCRYPTION-AT-REST.md.
+    snapdragon.systems/encryption-at-rest: "luks2-node-inherited"
 provisioner: rancher.io/local-path
 volumeBindingMode: WaitForFirstConsumer
 reclaimPolicy: Delete
