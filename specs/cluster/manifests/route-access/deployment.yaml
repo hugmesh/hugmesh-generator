@@ -4,13 +4,26 @@
 # are the admin-bff (CRUD), and the only readers are the three gateways
 # (R2DBC at ROUTE_ACCESS_R2DBC_URL), which then read-cache the rows in Cassandra.
 #
-# !!! DEV credentials !!! The password here is a placeholder. Production must
-# source POSTGRES_PASSWORD from Vault via External Secrets (like clickhouse-auth)
-# and switch the admin-bff / gateways to a least-privilege role.
+# Credentials: ALL passwords come from the ESO Secret route-access-db-roles (Vault
+# secret/snapdragon/route-access-db; in test the offline bundle materializes the
+# SAME Secret — no committed literal). The OWNER role is only used for DDL; every
+# runtime consumer logs in as its OWN least-privilege, non-owner role (see below).
 #
-# Schema bootstrap: schema.sql is mounted into Postgres's
-# /docker-entrypoint-initdb.d, so the gateway_route_access table + the canonical
-# seed are applied automatically the first time the data directory is empty.
+# Per-machine-user least-privilege: the four runtime consumers each get their OWN
+# login role + OWN password (admin-bff = writer; pki/be/fe-gateway = readers),
+# created by initdb/10-roles.sh from the per-user Secrets mounted as env below
+# (route-access-admin-bff / -pki-gateway / -be-gateway / -fe-gateway, each key
+# "password"). DEV placeholders here; PROD = ESO from Vault. See the role/grant
+# matrix in docs/POSTGRES-HARDENING.md.
+#
+# Schema bootstrap: the initdb/ ConfigMap is mounted into Postgres's
+# /docker-entrypoint-initdb.d and its files run in order on first start —
+# 00-hardening.sql (REVOKE PUBLIC + timeouts), 10-roles.sh (least-privilege login
+# roles), 20-schema.sql (table + seed + GRANTs), 90-citus.sh (opt-in sharding).
+#
+# Sharding (opt-in, default OFF): set SHARDING_CITUS=on AND switch the image to a
+# Citus-enabled Postgres (citusdata/citus:12-pg16) to distribute the table; the
+# default postgres:16-alpine path below is unchanged.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -31,17 +44,55 @@ spec:
           level: "s0:c15"
       containers:
         - name: postgres
+          # DEFAULT (single-node): postgres:16-alpine. To shard, override to a
+          # Citus-enabled image (citusdata/citus:12-pg16) AND set SHARDING_CITUS=on.
           image: postgres:16-alpine
           ports: [{ name: postgres, containerPort: 5432 }]
           env:
             - { name: POSTGRES_DB,   value: "gateway" }
+            # OWNER role (DDL only). Runtime consumers do NOT use it — they log in
+            # as their own least-privilege role below. Owner password from the ESO
+            # Secret route-access-db-roles (key owner_password); in test the offline
+            # bundle materializes the SAME Secret, so there is no committed literal.
             - { name: POSTGRES_USER, value: "gateway" }
-            # DEV placeholder password. PRODUCTION: create a Secret
-            # "route-access-db-auth" (key "password") from Vault via External
-            # Secrets and replace this literal value with a secretKeyRef.
-            - { name: POSTGRES_PASSWORD, value: "gateway" }
-            - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256" }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: route-access-db-roles
+                  key: owner_password
+            # ── Per-machine-user least-privilege role passwords (consumed by
+            # initdb/10-roles.sh). Each is a SEPARATE key in the route-access-db-roles
+            # ESO Secret; the matching consumer Deployment mounts the SAME value from
+            # its own per-namespace Secret (route-access-<user>) so role + cred match.
+            - name: ROUTE_ACCESS_ADMIN_BFF_PASSWORD
+              valueFrom: { secretKeyRef: { name: route-access-db-roles, key: admin_bff_password } }
+            - name: ROUTE_ACCESS_PKI_GATEWAY_PASSWORD
+              valueFrom: { secretKeyRef: { name: route-access-db-roles, key: pki_gateway_password } }
+            - name: ROUTE_ACCESS_BE_GATEWAY_PASSWORD
+              valueFrom: { secretKeyRef: { name: route-access-db-roles, key: be_gateway_password } }
+            - name: ROUTE_ACCESS_FE_GATEWAY_PASSWORD
+              valueFrom: { secretKeyRef: { name: route-access-db-roles, key: fe_gateway_password } }
+            # Opt-in Citus sharding. "off" (default) => 90-citus.sh is a no-op and
+            # the single-node deployment is unchanged. Set "on" only with a
+            # Citus-enabled image (see image: above).
+            - { name: SHARDING_CITUS, value: "off" }
+            - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256 --auth-local=scram-sha-256" }
             - { name: PGDATA, value: "/var/lib/postgresql/data/pgdata" }
+          # Server-level hardening passed as runtime flags (applied every boot, not
+          # just initdb): force scram, cap total connections, log connections +
+          # slow DDL so an unexpected superuser login is visible. Per-DB
+          # statement/idle timeouts are set in initdb/00-hardening.sql.
+          args:
+            - -c
+            - password_encryption=scram-sha-256
+            - -c
+            - max_connections=50
+            - -c
+            - log_connections=on
+            - -c
+            - log_disconnections=on
+            - -c
+            - log_min_duration_statement=2000
           readinessProbe:
             exec: { command: ["pg_isready", "-U", "gateway", "-d", "gateway"] }
             initialDelaySeconds: 10

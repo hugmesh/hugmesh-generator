@@ -41,9 +41,18 @@ spec:
           snapdragon.systems/frontend: "true"
         seLinux:
           level: "s0:c13"
+        # Least-privilege DB identity: this gateway logs in as its OWN read-only
+        # role `fe_gateway` (SELECT-only on gateway_route_access), NOT the DB owner.
+        # Password from its OWN ESO Secret (route-access-fe-gateway, key password);
+        # k8s interpolates it into the R2DBC URL via $(VAR).
         extraEnv:
+          - name: ROUTE_ACCESS_DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: route-access-fe-gateway
+                key: password
           - name: ROUTE_ACCESS_R2DBC_URL
-            value: r2dbc:postgresql://route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
+            value: r2dbc:postgresql://fe_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
         routes:
           # Each federated micro-frontend on its own nginx remote (specific
           # paths first)…

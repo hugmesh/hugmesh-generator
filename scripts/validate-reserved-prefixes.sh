@@ -30,7 +30,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 CANONICAL="${REPO_ROOT}/specs/cluster/reserved-prefixes.yaml"
 CONFIGMAP="${REPO_ROOT}/specs/cluster/manifests/policy/reserved-prefixes-configmap.yaml"
-SCHEMA_SQL="${REPO_ROOT}/specs/cluster/manifests/route-access/schema.sql"
+SCHEMA_SQL="${REPO_ROOT}/specs/cluster/manifests/route-access/initdb/20-schema.sql"
 GATEWAY_GLOB="${REPO_ROOT}/specs/cluster/apps"
 
 for f in "$CANONICAL" "$CONFIGMAP" "$SCHEMA_SQL"; do
