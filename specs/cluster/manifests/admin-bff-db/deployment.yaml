@@ -13,11 +13,15 @@
 # (classpath:db/changelog/db.changelog-master.xml), applied by the app at boot.
 # This DB only needs to exist EMPTY (POSTGRES_DB).
 #
-# Credentials: POSTGRES_PASSWORD is sourced from Vault via External Secrets (ESO
-# Secret admin-bff-db-auth, key password <- secret/snapdragon/admin-bff-db),
-# mirroring the clickhouse-auth pattern. The admin-bff app references the SAME
-# Secret. (A future hardening step can still switch to a least-privilege role.)
-# See docs/HANDOFF.md §3.3.
+# Credentials: the OWNER POSTGRES_PASSWORD is sourced from Vault via External
+# Secrets (ESO Secret admin-bff-db-auth, key password). The OWNER role is now used
+# by the admin-bff app for DDL/Liquibase ONLY. At RUNTIME the app logs in as the
+# dedicated NON-OWNER least-privilege role `adminbff_app` (its OWN password, ESO
+# Secret admin-bff-db-app-auth, created by initdb/10-roles.sh). See the role/grant
+# matrix in docs/POSTGRES-HARDENING.md and docs/HANDOFF.md §3.3.
+#
+# Sharding (opt-in, default OFF): set SHARDING_CITUS=on AND switch the image to a
+# Citus-enabled Postgres (citusdata/citus:12-pg16); the default path is unchanged.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -38,23 +42,46 @@ spec:
           level: "s0:c26"
       containers:
         - name: postgres
+          # DEFAULT (single-node): postgres:16-alpine. To shard, override to a
+          # Citus-enabled image (citusdata/citus:12-pg16) AND set SHARDING_CITUS=on.
           image: postgres:16-alpine
           ports: [{ name: postgres, containerPort: 5432 }]
           env:
             - { name: POSTGRES_DB,   value: "adminbff" }
+            # OWNER role (DDL/Liquibase). Same ESO Secret the admin-bff app's
+            # SPRING_LIQUIBASE_PASSWORD mounts.
             - { name: POSTGRES_USER, value: "adminbff" }
-            # Password sourced from Vault via External Secrets (ESO Secret
-            # "admin-bff-db-auth", key "password" <- secret/snapdragon/admin-bff-db;
-            # see manifests/external-secrets/secretstore.yaml). The snapdragon-admin-bff-api
-            # consumer references the SAME Secret (SPRING_R2DBC_PASSWORD /
-            # SPRING_LIQUIBASE_PASSWORD) so they stay in sync. DB/USER stay literal.
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: admin-bff-db-auth
                   key: password
-            - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256" }
+            # Per-machine-user least-privilege role password (consumed by
+            # initdb/10-roles.sh to create adminbff_app). PRODUCTION sources this
+            # from its OWN ESO Secret admin-bff-db-app-auth (key password); the
+            # admin-bff app's RUNTIME SPRING_R2DBC_PASSWORD mounts the SAME Secret.
+            - name: ADMINBFF_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: admin-bff-db-app-auth
+                  key: password
+            # Opt-in Citus sharding (default off => 90-citus.sh is a no-op).
+            - { name: SHARDING_CITUS, value: "off" }
+            - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256 --auth-local=scram-sha-256" }
             - { name: PGDATA, value: "/var/lib/postgresql/data/pgdata" }
+          # Server-level hardening (every boot): scram, capped connections, logged
+          # connections + slow statements. Per-DB timeouts are in 00-hardening.sql.
+          args:
+            - -c
+            - password_encryption=scram-sha-256
+            - -c
+            - max_connections=60
+            - -c
+            - log_connections=on
+            - -c
+            - log_disconnections=on
+            - -c
+            - log_min_duration_statement=2000
           readinessProbe:
             exec: { command: ["pg_isready", "-U", "adminbff", "-d", "adminbff"] }
             initialDelaySeconds: 10
@@ -67,7 +94,10 @@ spec:
             requests: { cpu: 100m, memory: 256Mi }
             limits:   { cpu: "1",  memory: 512Mi }
           volumeMounts:
-            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: data,   mountPath: /var/lib/postgresql/data }
+            - { name: initdb, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: admin-bff-db }
+        - name: initdb
+          configMap: { name: admin-bff-db-initdb }

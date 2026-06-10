@@ -52,8 +52,12 @@ services:
   # ════════════════════════════════════════════════════════════════════
 
   # route-access-db — gateway_route_access source of truth (specs/cluster/
-  # manifests/route-access). schema.sql seeds the table on first init. The dev
-  # password "gateway" matches the cluster dev placeholder.
+  # manifests/route-access). initdb/20-schema.sql seeds the table on first init.
+  # The local stack connects every gateway as the OWNER `gateway` user (dev
+  # convenience), so it mounts ONLY the table DDL — NOT the cluster's
+  # initdb/10-roles.sh per-machine-user role setup (that needs the per-user Secret
+  # passwords ESO injects in-cluster). The dev password "gateway" matches the
+  # cluster dev placeholder.
   route-access-db:
     <<: *amd64
     image: postgres:16-alpine
@@ -63,7 +67,7 @@ services:
       POSTGRES_PASSWORD: gateway
     volumes:
       - route-access-pg:/var/lib/postgresql/data
-      - ../../specs/cluster/manifests/route-access/schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+      - ../../specs/cluster/manifests/route-access/initdb/20-schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
       interval: 5s

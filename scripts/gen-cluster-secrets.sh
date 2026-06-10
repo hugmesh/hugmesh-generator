@@ -248,13 +248,29 @@ done
 CLICKHOUSE_PASSWORD="$(openssl rand -base64 24)"
 
 # Dedicated per-app Postgres passwords (federation-db / admin-bff-db / mod-bff-db /
-# user-bff-db). Each DB and its single consumer reference the SAME Vault key so
-# they stay in sync. The DB name + user stay literal (federation / adminbff /
-# modbff / userbff); only the password is minted.
+# user-bff-db). The OWNER password (DDL/Liquibase) stays the existing `password`
+# key; a SEPARATE app_password is the non-owner least-privilege runtime role
+# (federation_app / adminbff_app / modbff_app / userbff_app). DB pod + consumer
+# reference the SAME Vault key so role + cred stay in sync.
 FEDERATION_DB_PASSWORD="$(openssl rand -base64 24)"
 ADMIN_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 MOD_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 USER_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
+# Non-owner least-privilege RUNTIME role passwords (one per single-consumer DB).
+FEDERATION_DB_APP_PASSWORD="$(openssl rand -base64 24)"
+ADMIN_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
+MOD_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
+USER_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
+
+# route-access-db per-machine-user least-privilege passwords. The owner (DDL) plus
+# one password per consuming machine-user: admin-bff (the ONLY writer) and the
+# three gateways (read-only). Each gateway/admin-bff Deployment mounts ONLY its own
+# password; the route-access-db pod seeds all four roles from route-access-db-roles.
+ROUTE_ACCESS_OWNER_PASSWORD="$(openssl rand -base64 24)"
+ROUTE_ACCESS_ADMIN_BFF_PASSWORD="$(openssl rand -base64 24)"
+ROUTE_ACCESS_PKI_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
+ROUTE_ACCESS_BE_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
+ROUTE_ACCESS_FE_GATEWAY_PASSWORD="$(openssl rand -base64 24)"
 
 UPTRACE_PG_PASSWORD="$(openssl rand -base64 24)"
 UPTRACE_PROJECT_TOKEN="$(openssl rand -hex 32)"
@@ -297,15 +313,28 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/clickhouse" \
             password="${CLICKHOUSE_PASSWORD}"
         # Dedicated per-app Postgres passwords (federation-db / admin-bff-db /
-        # mod-bff-db / user-bff-db).
+        # mod-bff-db / user-bff-db): owner `password` (DDL) + `app_password`
+        # (non-owner least-privilege runtime role).
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/federation-db" \
-            password="${FEDERATION_DB_PASSWORD}"
+            password="${FEDERATION_DB_PASSWORD}" \
+            app_password="${FEDERATION_DB_APP_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/admin-bff-db" \
-            password="${ADMIN_BFF_DB_PASSWORD}"
+            password="${ADMIN_BFF_DB_PASSWORD}" \
+            app_password="${ADMIN_BFF_DB_APP_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/mod-bff-db" \
-            password="${MOD_BFF_DB_PASSWORD}"
+            password="${MOD_BFF_DB_PASSWORD}" \
+            app_password="${MOD_BFF_DB_APP_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/user-bff-db" \
-            password="${USER_BFF_DB_PASSWORD}"
+            password="${USER_BFF_DB_PASSWORD}" \
+            app_password="${USER_BFF_DB_APP_PASSWORD}"
+        # route-access-db per-machine-user least-privilege passwords (owner + the
+        # four consumers). admin-bff = writer; pki/be/fe-gateway = read-only.
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/route-access-db" \
+            owner_password="${ROUTE_ACCESS_OWNER_PASSWORD}" \
+            admin_bff_password="${ROUTE_ACCESS_ADMIN_BFF_PASSWORD}" \
+            pki_gateway_password="${ROUTE_ACCESS_PKI_GATEWAY_PASSWORD}" \
+            be_gateway_password="${ROUTE_ACCESS_BE_GATEWAY_PASSWORD}" \
+            fe_gateway_password="${ROUTE_ACCESS_FE_GATEWAY_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/uptrace" \
             pg_password="${UPTRACE_PG_PASSWORD}" \
             project_token="${UPTRACE_PROJECT_TOKEN}"
@@ -325,7 +354,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/gitlab-registry" \
             username="${GITLAB_REGISTRY_USER}" \
             token="${GITLAB_REGISTRY_TOKEN}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-games,clickhouse,federation-db,admin-bff-db,mod-bff-db,user-bff-db,uptrace,mail,gitlab-registry}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-games,clickhouse,federation-db,admin-bff-db,mod-bff-db,user-bff-db,route-access-db,uptrace,mail,gitlab-registry}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -380,6 +409,15 @@ FEDERATION_DB_PASSWORD="${FEDERATION_DB_PASSWORD}" \
 ADMIN_BFF_DB_PASSWORD="${ADMIN_BFF_DB_PASSWORD}" \
 MOD_BFF_DB_PASSWORD="${MOD_BFF_DB_PASSWORD}" \
 USER_BFF_DB_PASSWORD="${USER_BFF_DB_PASSWORD}" \
+FEDERATION_DB_APP_PASSWORD="${FEDERATION_DB_APP_PASSWORD}" \
+ADMIN_BFF_DB_APP_PASSWORD="${ADMIN_BFF_DB_APP_PASSWORD}" \
+MOD_BFF_DB_APP_PASSWORD="${MOD_BFF_DB_APP_PASSWORD}" \
+USER_BFF_DB_APP_PASSWORD="${USER_BFF_DB_APP_PASSWORD}" \
+ROUTE_ACCESS_OWNER_PASSWORD="${ROUTE_ACCESS_OWNER_PASSWORD}" \
+ROUTE_ACCESS_ADMIN_BFF_PASSWORD="${ROUTE_ACCESS_ADMIN_BFF_PASSWORD}" \
+ROUTE_ACCESS_PKI_GATEWAY_PASSWORD="${ROUTE_ACCESS_PKI_GATEWAY_PASSWORD}" \
+ROUTE_ACCESS_BE_GATEWAY_PASSWORD="${ROUTE_ACCESS_BE_GATEWAY_PASSWORD}" \
+ROUTE_ACCESS_FE_GATEWAY_PASSWORD="${ROUTE_ACCESS_FE_GATEWAY_PASSWORD}" \
 UPTRACE_PG_PASSWORD="${UPTRACE_PG_PASSWORD}" \
 UPTRACE_PROJECT_TOKEN="${UPTRACE_PROJECT_TOKEN}" \
 python3 - "${SECRETS_JSON}" <<'PY'
@@ -417,14 +455,27 @@ data = {
         },
         # one key per app: the OAuth2 application client-secret.
         "casdoor-app-secrets": app_secrets,
+        # route-access-db pod role passwords (owner + the four machine-users). The
+        # DB pod seeds every login role from this Secret; the consumers each mount
+        # only their own matching per-namespace Secret with the SAME value.
+        "route-access-db-roles": {
+            "owner_password":        os.environ["ROUTE_ACCESS_OWNER_PASSWORD"],
+            "admin_bff_password":    os.environ["ROUTE_ACCESS_ADMIN_BFF_PASSWORD"],
+            "pki_gateway_password":  os.environ["ROUTE_ACCESS_PKI_GATEWAY_PASSWORD"],
+            "be_gateway_password":   os.environ["ROUTE_ACCESS_BE_GATEWAY_PASSWORD"],
+            "fe_gateway_password":   os.environ["ROUTE_ACCESS_FE_GATEWAY_PASSWORD"],
+        },
+        # pki-gateway's OWN read-only route-access password (user pki_gateway).
+        "route-access-pki-gateway": {
+            "password": os.environ["ROUTE_ACCESS_PKI_GATEWAY_PASSWORD"],
+        },
     },
     f"{brand}-backend": {
         "clickhouse-auth": {
             "password": os.environ["CLICKHOUSE_PASSWORD"],
         },
-        # Dedicated per-app Postgres passwords. The DB pod and its single consumer
-        # both reference the same Secret (federation-db-auth / admin-bff-db-auth)
-        # so they stay in sync. Mirrors the clickhouse-auth ExternalSecret pattern.
+        # Dedicated per-app Postgres OWNER passwords (DDL/Liquibase). The DB pod and
+        # its consumer both reference the same Secret. Mirrors clickhouse-auth.
         "federation-db-auth": {
             "password": os.environ["FEDERATION_DB_PASSWORD"],
         },
@@ -436,6 +487,28 @@ data = {
         },
         "user-bff-db-auth": {
             "password": os.environ["USER_BFF_DB_PASSWORD"],
+        },
+        # Non-owner least-privilege RUNTIME role passwords (federation_app etc.).
+        "federation-db-app-auth": {
+            "password": os.environ["FEDERATION_DB_APP_PASSWORD"],
+        },
+        "admin-bff-db-app-auth": {
+            "password": os.environ["ADMIN_BFF_DB_APP_PASSWORD"],
+        },
+        "mod-bff-db-app-auth": {
+            "password": os.environ["MOD_BFF_DB_APP_PASSWORD"],
+        },
+        "user-bff-db-app-auth": {
+            "password": os.environ["USER_BFF_DB_APP_PASSWORD"],
+        },
+        # route-access machine-user passwords reachable from the backend ns:
+        # be-gateway (read-only) + admin-bff (writer). Each Deployment mounts ONLY
+        # its own Secret; the value matches the route-access-db-roles key (pki ns).
+        "route-access-be-gateway": {
+            "password": os.environ["ROUTE_ACCESS_BE_GATEWAY_PASSWORD"],
+        },
+        "route-access-admin-bff": {
+            "password": os.environ["ROUTE_ACCESS_ADMIN_BFF_PASSWORD"],
         },
         # snapdragon-actions two-Casdoor sync: admin client per side. SYSTEMS side
         # reuses the systems Casdoor OIDC client; GAMES side reuses threewizards-app.
@@ -465,6 +538,13 @@ data = {
         "casdoor-games-github": {
             "clientId": os.environ["CASDOOR_GAMES_GITHUB_CLIENT_ID"],
             "clientSecret": os.environ["CASDOOR_GAMES_GITHUB_CLIENT_SECRET"],
+        },
+    },
+    # fe-gateway runs in the frontend ns and needs its OWN read-only route-access
+    # password (user fe_gateway); value matches the route-access-db-roles key.
+    f"{brand}-frontend": {
+        "route-access-fe-gateway": {
+            "password": os.environ["ROUTE_ACCESS_FE_GATEWAY_PASSWORD"],
         },
     },
     "observability": {

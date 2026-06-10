@@ -150,3 +150,38 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-fe-gateway',  '/bff/mod/**',           'ROLE_ADMIN',     true),  -- (admins superset)
   ('snapdragon-fe-gateway',  '/bff/user/**',          'ROLE_USER',      true)   -- user self-service BFF
 ON CONFLICT DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Per-machine-user LEAST-PRIVILEGE grants. The login roles are created in
+-- 10-roles.sh (which runs first in the CLUSTER initdb); the table exists now, so
+-- grant exactly the privileges each consumer needs and nothing more:
+--   admin-bff   = the ONLY writer (CRUD)          -> SELECT/INSERT/UPDATE/DELETE
+--   *-gateway   = read-only rule loaders          -> SELECT
+-- No role gets DDL/owner rights: the table is owned by the "gateway" owner role
+-- (POSTGRES_USER), which the admin-bff uses for its DDL/migration path only.
+--
+-- GUARDED on role existence so this same file is reusable in the LOCAL DEV stack
+-- (tests/stack/compose.local.yaml), which mounts ONLY this DDL and connects as the
+-- owner `gateway` — the per-user roles do not exist there, so the grants are
+-- simply skipped instead of erroring out initdb.
+-- ─────────────────────────────────────────────────────────────────────────────
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'admin_bff') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE ON gateway_route_access TO admin_bff;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pki_gateway') THEN
+    GRANT SELECT ON gateway_route_access TO pki_gateway;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'be_gateway') THEN
+    GRANT SELECT ON gateway_route_access TO be_gateway;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fe_gateway') THEN
+    GRANT SELECT ON gateway_route_access TO fe_gateway;
+  END IF;
+END
+$$;
+
+-- gen_random_uuid() default needs no sequence; there is no SERIAL column here, so
+-- no sequence GRANTs are required. If a future migration adds a sequence, grant
+-- USAGE on it to admin_bff (writer) explicitly.

@@ -6,7 +6,19 @@ resources:
   - deployment.yaml
   - service.yaml
 
-# No configMapGenerator / initdb schema: admin-bff owns its tables via Liquibase
-# (applied by the app at startup), so this DB only needs to exist EMPTY. Contrast
-# route-access-db, which mounts a schema.sql seed because the gateways do not run
-# migrations themselves.
+# admin-bff owns its TABLES via Liquibase (applied by the app at startup), so no
+# table DDL is seeded here. The initdb/ ConfigMap below is hardening + role setup
+# only (runs once on an empty data dir, in alphabetical order):
+#   00-hardening.sql  REVOKE PUBLIC + per-DB timeouts + scram password_encryption
+#   10-roles.sh       the NON-OWNER least-privilege app login role (adminbff_app)
+#                     from ADMINBFF_APP_PASSWORD env — never committed
+#   90-citus.sh       OPT-IN Citus extension (no-op unless SHARDING_CITUS=on)
+configMapGenerator:
+  - name: admin-bff-db-initdb
+    files:
+      - initdb/00-hardening.sql
+      - initdb/10-roles.sh
+      - initdb/90-citus.sh
+
+generatorOptions:
+  disableNameSuffixHash: true

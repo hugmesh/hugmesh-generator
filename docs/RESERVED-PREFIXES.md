@@ -105,7 +105,7 @@ which parses:
 
 - `specs/cluster/apps/20-gateway-*.yaml` (route `path:`/`host:` + ingress
   `host`/`extraHosts`), and
-- `specs/cluster/manifests/route-access/schema.sql` (`url_pattern` rows),
+- `specs/cluster/manifests/route-access/initdb/20-schema.sql` (`url_pattern` rows),
 
 and asserts the canonical reserved set is a **superset** of every first-segment
 prefix / first-label subdomain found. It also asserts the **ConfigMap mirror ==

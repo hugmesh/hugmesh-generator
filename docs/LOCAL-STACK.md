@@ -188,7 +188,7 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
   cluster seeds them via `manifests/casdoor/init-*`). Expect the UIs to load but
   auth-gated flows to 401 until you configure Casdoor (apps for admin-bff,
   fragment-sync, actions; a test user). The route-access DB **does** seed from
-  `manifests/route-access/schema.sql`.
+  `manifests/route-access/initdb/20-schema.sql`.
 - **Fragment fleet serves an empty set** until federation has enabled modules +
   a valid `app-fragment-sync` Casdoor client — so `/_fragments/**` is up but
   empty. It is the standalone sync image on `:8081` (in k8s it is nginx + a sync

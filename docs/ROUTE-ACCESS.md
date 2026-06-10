@@ -9,7 +9,7 @@ already-known services.
 ## Data model (Postgres + Cassandra cache)
 
 - **Source of truth:** Postgres table `gateway_route_access`
-  ([schema.sql](../specs/cluster/manifests/route-access/schema.sql)) —
+  ([20-schema.sql](../specs/cluster/manifests/route-access/initdb/20-schema.sql)) —
   `(gateway, url_pattern, role, casdoor_user?, allow)`.
 - **Cache:** each gateway caches its rows in **Cassandra** and refreshes on a
   tick (same mechanism as the gateways' existing revocation-list / URL-registry

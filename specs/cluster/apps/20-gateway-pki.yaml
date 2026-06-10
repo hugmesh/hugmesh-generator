@@ -35,9 +35,20 @@ spec:
         # Role->URL external-access rules: Postgres-backed (admin-api CRUD),
         # Cassandra-cached; the gateway denies external access unless the
         # request's Casdoor roles are permitted for the route.
+        #
+        # Least-privilege DB identity: this gateway logs in as its OWN read-only
+        # role `pki_gateway` (SELECT-only on gateway_route_access), NOT the DB
+        # owner. The per-user password comes from its OWN ESO Secret
+        # (route-access-pki-gateway, key password); k8s interpolates it into the
+        # R2DBC URL via $(VAR). DEV placeholder secret in test; Vault/ESO in prod.
         extraEnv:
+          - name: ROUTE_ACCESS_DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: route-access-pki-gateway
+                key: password
           - name: ROUTE_ACCESS_R2DBC_URL
-            value: r2dbc:postgresql://route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
+            value: r2dbc:postgresql://pki_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
         routes:
           - id: casdoor-auth
             uri: http://casdoor.snapdragon-pki.svc.cluster.local:8000

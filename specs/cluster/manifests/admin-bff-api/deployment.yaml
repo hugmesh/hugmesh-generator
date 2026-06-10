@@ -43,8 +43,18 @@ spec:
             - name: CASDOOR_ISSUER_URI
               value: "https://id.snapdragon.systems"
             # R2DBC handle to the gateway_route_access Postgres (snapdragon-pki).
+            # Least-privilege: admin-bff is the ONLY writer, so it logs in as its
+            # OWN role `admin_bff` (SELECT/INSERT/UPDATE/DELETE on
+            # gateway_route_access — NOT the DB owner). Password from its OWN ESO
+            # Secret (route-access-admin-bff, key password); k8s interpolates it
+            # into the URL via $(VAR). DEV placeholder secret in test; Vault in prod.
+            - name: ROUTE_ACCESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: route-access-admin-bff
+                  key: password
             - name: ROUTE_ACCESS_R2DBC_URL
-              value: "r2dbc:postgresql://route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway"
+              value: "r2dbc:postgresql://admin_bff:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway"
             # This BFF also owns the usage-analytics aggregation (the role the
             # removed snapdragon-admin-bff-api copy used to run): Eureka-registered,
             # consumes the Kafka usage-event bus into ClickHouse, serves
@@ -69,20 +79,26 @@ spec:
             # (ESO Secret admin-bff-db-auth, key password) — the SAME Secret the
             # admin-bff-db pod's POSTGRES_PASSWORD mounts, so the DB and its consumer
             # stay in sync. See docs/HANDOFF.md §3.3.
+            # RUNTIME handle: log in as the dedicated NON-OWNER least-privilege role
+            # `adminbff_app` (DML only, no DDL), created by admin-bff-db's
+            # initdb/10-roles.sh. Password from its OWN ESO Secret
+            # admin-bff-db-app-auth (the SAME the DB pod's ADMINBFF_APP_PASSWORD mounts).
             - name: SPRING_R2DBC_URL
               value: "r2dbc:postgresql://admin-bff-db.snapdragon-backend.svc.cluster.local:5432/adminbff"
             - name: SPRING_R2DBC_USERNAME
-              value: "adminbff"
+              value: "adminbff_app"
             - name: SPRING_R2DBC_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: admin-bff-db-auth
+                  name: admin-bff-db-app-auth
                   key: password
+            # JDBC handle used ONLY by Liquibase at startup. DDL needs the OWNER, so
+            # Liquibase keeps the owner role `adminbff` + the owner ESO Secret
+            # admin-bff-db-auth (the SAME the DB pod's POSTGRES_PASSWORD mounts).
             - name: SPRING_LIQUIBASE_URL
               value: "jdbc:postgresql://admin-bff-db.snapdragon-backend.svc.cluster.local:5432/adminbff"
             - name: SPRING_LIQUIBASE_USER
               value: "adminbff"
-            # Same ESO Secret admin-bff-db-auth (key password) as R2DBC above.
             - name: SPRING_LIQUIBASE_PASSWORD
               valueFrom:
                 secretKeyRef:
