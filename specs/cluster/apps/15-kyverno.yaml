@@ -1,0 +1,42 @@
+# Kyverno — the cluster admission/policy engine. Deployed so the reserved-prefix
+# ClusterPolicy (apps/16-reserved-prefixes-policy.yaml -> manifests/policy) can
+# enforce the vanity-collision rule at admission/sync time. Synced in an EARLY
+# wave (-1, alongside ingress-nginx/calico) so the CRDs exist before the policy
+# Application (wave default 0) applies the ClusterPolicy.
+#
+# Kyverno is the chosen policy engine because the reserved set is a small data
+# list the policy can read from a ConfigMap (single source of truth) — no custom
+# webhook image to build/maintain. See docs/RESERVED-PREFIXES.md for the
+# rationale + the always-on fallbacks (validate script + CI lint + PreSync hook).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kyverno
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"   # CRDs before the ClusterPolicy
+spec:
+  project: default
+  source:
+    repoURL: https://kyverno.github.io/kyverno/
+    chart: kyverno
+    targetRevision: 3.2.*
+    helm:
+      releaseName: kyverno
+      values: |
+        # Single-replica admission controller is plenty for this small cluster;
+        # the policy is the only consumer. amd64/arm64 images are multi-arch.
+        admissionController:
+          replicas: 1
+        backgroundController:
+          replicas: 1
+        cleanupController:
+          enabled: false
+        reportsController:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

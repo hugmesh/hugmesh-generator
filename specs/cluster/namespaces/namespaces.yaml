@@ -43,3 +43,13 @@ kind: Namespace
 metadata:
   name: devops
   labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: devops }
+---
+# snapdragon-policy — holds the cluster admission-policy plumbing: the
+# reserved-prefixes ConfigMap (mirror of specs/cluster/reserved-prefixes.yaml)
+# read by the Kyverno ClusterPolicy that blocks vanity-shadowing route/host
+# collisions. No workloads; just policy data + (cluster-scoped) policy objects.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: snapdragon-policy
+  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: devops }
