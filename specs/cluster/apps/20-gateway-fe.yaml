@@ -26,6 +26,17 @@ spec:
           # path. Either way only the gateway Service is exposed.
           className: nginx
           host: snapdragon.systems
+          # VANITY SUBDOMAINS: admit *.snapdragon.systems so the ingress accepts
+          # <username>.snapdragon.systems and hands it to this gateway, where the
+          # Host=*.snapdragon.systems route (below) resolves the public profile.
+          # The wildcard DNS (manifests/lan-dns in test; Cloudflare wildcard in
+          # prod) already points *.snapdragon.systems at the backend ingress; this
+          # extraHosts entry makes the fe-gateway ingress admit the vanity hosts.
+          # The reserved service hosts (id. api. matrix. mastodon. scale.
+          # headscale.) are served by the BE gateway ingress + cloudflared, not
+          # this one, so they are unaffected.
+          extraHosts:
+            - "*.snapdragon.systems"
         nodeSelector:
           snapdragon.systems/frontend: "true"
         seLinux:
@@ -76,7 +87,63 @@ spec:
             path: /be/**
             filters:
               - StripPrefix=1
-          # …then the snapdragon.systems Angular host catches everything else.
+          # --- VANITY SUBDOMAINS: <username>.snapdragon.systems ---
+          # A Host=*.snapdragon.systems predicate. Spring Cloud Gateway matches
+          # routes FIRST-IN-DECLARED-ORDER, so PRECEDENCE is everything here:
+          #
+          #   * The Host=*.<domain> wildcard predicate matches ANY single-label
+          #     subdomain (alice.<domain>) but NOT the apex <domain> itself (the
+          #     `*` requires at least one label), so the apex still falls through
+          #     to `frontend-host` below.
+          #   * The RESERVED service subdomains (id. api. matrix. mastodon. scale.
+          #     headscale.) are fronted by the BE gateway ingress + cloudflared and
+          #     never routed to THIS fe-gateway, so they cannot be captured here.
+          #     (Defence-in-depth: federation's VanityController also refuses those
+          #     reserved first-labels.)
+          #   * This route is declared AFTER the apex/path routes above and BEFORE
+          #     `frontend-host` (the path=/** catch-all). The earlier routes are
+          #     path-scoped and host-agnostic; a vanity host hitting one of those
+          #     specific paths (/login, /admin, …) is rare and intentional. The key
+          #     ordering guarantee is wildcard-vanity BEFORE the /** frontend-host,
+          #     so a vanity host with no special path resolves to the profile
+          #     instead of the apex front page.
+          #
+          # The request is forwarded DIRECTLY to federation-api (NOT via the
+          # be-gateway) with the path REWRITTEN to the public vanity-resolve
+          # endpoint via SetPath. The Host header is PRESERVED (Spring Cloud
+          # Gateway forwards it by default), so federation-api extracts the
+          # username from the FIRST DNS LABEL of the Host
+          # (VanityController.resolveByHost) — no username needs parsing here.
+          # federation returns the public profile-fragment descriptor; the
+          # host/remote-fragment then renders the fragment (see the federation-api
+          # README "Vanity subdomains" + its honest SERVING note).
+          #
+          # WHY DIRECT (not via be-gateway): the vanity resolve is a PUBLIC read
+          # (no JWT — it IS the public profile). The be-gateway would interpose its
+          # own auth and 401 the anonymous request. federation-api's SecurityConfig
+          # already permitAll's `GET /api/federation/vanity/**`, so a direct hop is
+          # the public path with no extra auth layer to satisfy.
+          #
+          # HONEST CROSS-SERVICE CAVEAT (deferred — needs a snapdragon-gateway
+          # change, a THIRD repo): the shared gateway image's SecurityConfig
+          # (snapdragon-gateway repo) ends every chain with
+          # `anyExchange().authenticated()` and permits only a hardcoded
+          # PUBLIC_PATHS allowlist (/api/auth, /api/registration, /api/login, the
+          # login/registration/banned remotes). `/api/federation/vanity/**` is NOT
+          # in that list, so THIS fe-gateway pod would itself 401 the anonymous
+          # vanity request before proxying. To make the public vanity host actually
+          # reachable, add `/api/federation/vanity/**` (or a Host=*.<domain> public
+          # rule) to the gateway PUBLIC_PATHS. That edit is out of scope for this
+          # two-repo pass and is documented as a deferral in the federation-api
+          # README. The generator side (wildcard ingress host + Host predicate
+          # route + direct federation target) is complete and renders clean.
+          - id: vanity-subdomain
+            host: "*.snapdragon.systems"
+            uri: http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080
+            filters:
+              - SetPath=/api/federation/vanity
+          # …then the snapdragon.systems Angular host catches everything else
+          # (the apex + any path the routes above did not claim).
           - id: frontend-host
             uri: http://snapdragon-systems-web.snapdragon-frontend.svc.cluster.local:80
             path: /**
