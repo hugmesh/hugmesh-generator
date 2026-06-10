@@ -68,7 +68,11 @@ same stick that carries the cluster CA and Vault seal material) and/or the node
   etcd, Vault prod storage, backups) is on the LUKS `/mnt/data` (layer 1), and
   etcd Secrets are independently encrypted (layer 3). **Migration path**: add a
   LUKS-root + initramfs unlock (TPM2/USB-KEYS) stage to the image builder, then
-  relocate the remaining root-resident state.
+  relocate the remaining root-resident state. **`growroot` is already
+  LUKS-aware** so this migration will not have to revisit the first-boot grow:
+  when `/` resolves to a `/dev/mapper/*` device it grows the *backing* partition,
+  runs `cryptsetup resize`, then `resize2fs` the mapper (partition → crypt
+  container → filesystem). With today's plaintext root that code path is inert.
 - **etcd not relocated → on root (layer 4/6)**. Relocate etcd onto `/mnt/data`
   via `storage.devices[].use_for` (or the root-FDE followup) for full-KV at-rest
   encryption. Secret objects are already encrypted regardless (layer 3).

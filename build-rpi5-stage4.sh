@@ -45,6 +45,7 @@ BUILD_IMG=true          # produce the flashable raw .img (the Pi live USB)
 BUILD_ISO=false         # no installer/ISO by default for the Pi (--iso to force)
 BUILD_TAR=true          # also emit the mounted-filesystem tarball (.fs.tar.xz)
 ROOT_MiB=6144           # ext4 root partition size in the .img (growroot expands it on first boot)
+GROW_POLICY="fill"      # first-boot grow policy baked into /etc/growfs.conf: fill|none|<size> (see growroot)
 SD_ONLY=false           # use literal /dev/mmcblk0p2 instead of PARTUUID/LABEL identity
 COMPRESS_IMG=false      # xz -9 the finished .img
 EXTRA_PACKAGES=""
@@ -253,10 +254,28 @@ OPTIONS
         Produce both the .img and the installer ISO.
 
     --img-size MiB
-        Size (in MiB) of the ext4 root partition baked into the .img.
-        growroot expands it to fill the medium on first boot, so this only
-        needs to fit the stage4 plus a little headroom.
+        Size (in MiB) of the ext4 root partition baked into the .img. The
+        .img is built COMPACT — only as large as this root plus the 512MiB
+        boot partition and alignment — so it flashes fast and is NOT padded
+        to the size of the target USB. growroot then expands the root to fill
+        the medium (or the --grow cap) on first boot, so this only needs to
+        fit the stage4 plus a little headroom.
         Default: 6144
+
+    --grow fill|none|<size>
+        First-boot grow policy baked into the image (/etc/growfs.conf, read
+        by the growroot service). The LAST partition is the growable one.
+          fill    (DEFAULT) expand the root to fill the WHOLE USB/SD/NVMe.
+          none    do not grow — keep the compact flashed layout (use as
+                  little of the medium as needed).
+          <size>  cap the root filesystem at an absolute size, e.g. 16G,
+                  12000M or 50% (percent of the device); the remaining tail
+                  is left free for a separate data partition.
+        Override per-device WITHOUT rebuilding: edit GROW= in growfs.conf on
+        the FAT /boot partition, or add a growfs=<value> token to the kernel
+        cmdline (cmdline.txt). Precedence: cmdline > /boot/growfs.conf >
+        /etc/growfs.conf > built-in fill.
+        Default: fill
 
     --sd-only
         Bake a fixed root=/dev/mmcblk0p2 (and device-path fstab) into the
@@ -506,6 +525,8 @@ while [[ $# -gt 0 ]]; do
         --iso)                BUILD_ISO=true;          shift   ;;
         --both)               BUILD_IMG=true; BUILD_ISO=true; shift ;;
         --img-size)           ROOT_MiB="$2";           shift 2 ;;
+        --grow)               GROW_POLICY="$2";        shift 2 ;;
+        --no-grow)            GROW_POLICY="none";      shift   ;;
         --sd-only)            SD_ONLY=true;            shift   ;;
         --compress)           COMPRESS_IMG=true;       shift   ;;
         --tar)                BUILD_TAR=true;          shift   ;;
@@ -550,6 +571,17 @@ if [ -z "${HOSTNAME}" ]; then
         *)       HOSTNAME="${BRAND}-${ROLE}" ;;
     esac
 fi
+
+# ── Validate/normalize the first-boot grow policy (baked into /etc/growfs.conf) ──
+# fill (DEFAULT, fill the whole medium) | none/off/0 (keep compact) | a concrete
+# size (16G, 12000M, 50% ...). Concrete sizes are passed through to resize2fs on
+# the node at first boot, so we only sanity-check the shape here.
+GROW_POLICY="$(printf '%s' "${GROW_POLICY}" | tr '[:upper:]' '[:lower:]')"
+case "${GROW_POLICY}" in
+    fill|none|off|no|false|0) ;;
+    *[0-9]g|*[0-9]m|*[0-9]k|*[0-9]t|*[0-9]gib|*[0-9]mib|*[0-9]kib|*[0-9]%|*[0-9]) ;;
+    *) err "--grow must be: fill | none | <size> (e.g. 16G, 12000M, 50%)  (got '${GROW_POLICY}')"; exit 1 ;;
+esac
 
 # ── Validate + announce the build ENV (baked into the image) ──────────────
 case "${ENV}" in
@@ -625,6 +657,25 @@ render_template() {
         -e "s|@@ORG@@|${ORG}|g" \
         -e "s|@@ENV@@|${ENV}|g" \
         "${src}" > "${dst}"
+}
+
+# ── write_growfs_conf <dest> ──────────────────────────────────────────────────
+# Emit the first-boot grow policy file consumed by the growroot service. GROW=
+# carries fill|none|<size>; the comment header documents the per-device overrides
+# so an operator editing the copy on the FAT /boot needs no external docs.
+write_growfs_conf() {
+    local dest="$1"
+    mkdir -p "$(dirname "${dest}")"
+    cat > "${dest}" <<GROWFS_EOF
+# growfs.conf — first-boot root-grow policy (read by the growroot service).
+#   GROW=fill    grow the root to fill the WHOLE USB/SD/NVMe (DEFAULT)
+#   GROW=none    do not grow; keep the compact flashed layout
+#   GROW=<size>  cap the root filesystem, e.g. 16G, 12000M, 50% (% of device)
+# Precedence (first wins): kernel cmdline growfs=<v> > this file on /boot >
+#   /etc/growfs.conf (baked) > built-in fill. Edit this copy on the FAT /boot
+#   partition to retune a single flashed medium without rebuilding the image.
+GROW=${GROW_POLICY}
+GROWFS_EOF
 }
 
 # ── ENV app-gate (deterministic prune of the BAKED apps/ tree) ─────────────
@@ -883,6 +934,14 @@ for svc in growroot containerd kubelet headscale tailscaled keys-provision; do
     cp "${SHARED_SPECS}/etc/init.d/${svc}" "${SYSROOT}/etc/init.d/${svc}"
     chmod +x "${SYSROOT}/etc/init.d/${svc}"
 done
+
+# First-boot grow policy (read by the growroot service). Default "fill" => the
+# root expands to fill the whole USB/SD/NVMe on first boot; --grow none keeps the
+# compact flashed layout; --grow <size> caps the root filesystem. A copy is also
+# dropped on the FAT /boot in build_img so it can be edited per-device after a
+# flash without rebuilding. Precedence at boot: kernel cmdline growfs= >
+# /boot/growfs.conf > /etc/growfs.conf > built-in fill.
+write_growfs_conf "${SYSROOT}/etc/growfs.conf"
 
 # Headscale default config + fleet full-mesh ACL (overridable from KEYS USB).
 # policy.hujson is referenced by config.yaml (policy.mode: file) and applied by
@@ -1279,6 +1338,11 @@ build_img() {
     for fw in bootcode.bin fixup*.dat start*.elf; do
         cp "${SYSROOT}/boot/${fw}"            "${root_mnt}/boot/" 2>/dev/null || true
     done
+
+    # Drop a per-device-editable growfs.conf on the FAT /boot so an operator can
+    # retune the first-boot grow (fill|none|<size>) on a flashed card WITHOUT a
+    # rebuild. growroot reads /boot/growfs.conf ahead of the baked /etc copy.
+    write_growfs_conf "${root_mnt}/boot/growfs.conf"
 
     # ── Root identity ─────────────────────────────────────────────────
     # Default: address the root (and /boot) by PARTUUID/LABEL so the image boots

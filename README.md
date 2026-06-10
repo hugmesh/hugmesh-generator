@@ -298,6 +298,49 @@ kubectl -n devops get secret argocd-initial-admin-secret -o jsonpath='{.data.pas
 > `*.<domain>` → that node. After bootstrap, point your router/clients at the
 > backend node `:53` — see [LAN testing](#lan-testing-no-public-internet-no-cloudflare).
 
+## Disk growth on first boot (growable USB)
+
+The `.img` artifacts are built **compact** — only as large as the ext4 root
+(`--img-size`, default 6144 MiB on the Pi / 8192 MiB on x86) plus the 512 MiB
+boot/ESP partition and alignment. They are **never padded** to the size of the
+target USB, so they flash fast and a small image can be written to a large
+medium. The root (ext4) partition is the **LAST** partition in the table.
+
+On first boot the `growroot` OpenRC service expands that last partition — and its
+filesystem — to fill the medium, then disables itself (a `/var/lib/growroot.done`
+marker makes it idempotent and re-run safe; it is strictly non-fatal so a quirk
+never blocks boot). Device detection is dynamic (`findmnt` → `/sys/class/block`
+→ `lsblk PKNAME`), so the **same image** works on Pi SD/USB (`mmcblk*`, `sda`)
+and on x86 SATA/USB/NVMe (`sd*`, `nvme*`) with no hard-coded device name.
+
+**Grow policy — default `fill`, configurable.** "Fill the whole USB, or use as
+little of it as needed unless specified":
+
+| value | effect |
+|---|---|
+| `fill` (default) | expand the root to fill the **whole** USB/SD/NVMe |
+| `none` (`--no-grow`) | do not grow — keep the compact flashed layout |
+| `<size>` | cap the root filesystem, e.g. `16G`, `12000M`, `50%` (% of device); the rest is left free for a separate data partition |
+
+Set it at **build time** with `--grow <value>` / `--no-grow`, or `GROW_POLICY=`
+in `brand.conf`. It is baked to `/etc/growfs.conf` and a copy is dropped on the
+FAT `/boot` (Pi) / ESP (x86) as `growfs.conf` so you can **retune a single
+flashed medium without a rebuild**. Runtime precedence (first wins):
+
+1. kernel cmdline token `growfs=<value>` (`cmdline.txt` on the Pi, the GRUB line on x86)
+2. `growfs.conf` on the boot/ESP partition (`GROW=<value>`)
+3. `/etc/growfs.conf` baked from `--grow` / `GROW_POLICY`
+4. built-in `fill`
+
+> **Encryption-at-rest note.** The encrypted volumes (LUKS2) are the *attached*
+> data partitions provisioned by `keys-provision` (`.storage.devices[]`), which
+> are created at `100%` of their device already; the **root** that `growroot`
+> expands is plaintext ext4, so the grow never touches LUKS today. `growroot` is
+> nonetheless LUKS-aware: if `/` is ever mounted from a `/dev/mapper/*` LUKS
+> device it grows the backing partition, runs `cryptsetup resize`, then
+> `resize2fs` (partition → crypt container → filesystem). See
+> [`docs/ENCRYPTION-AT-REST.md`](docs/ENCRYPTION-AT-REST.md).
+
 ## USB KEYS provisioning
 
 At first boot the `keys-provision` service finds the FAT32 `KEYS` partition,
@@ -530,6 +573,7 @@ provisioning engine, the backup engine, and the `cluster/` GitOps payload).
 | `specs-x86/**` | amd64 host portage/kernel/installer/grub specs |
 | `specs/etc/keys-provision/provision.sh` | USB KEYS provisioning engine (shared) |
 | `specs/etc/init.d/{containerd,kubelet,headscale,tailscaled,keys-provision}` | OpenRC services (shared) |
+| `specs/etc/init.d/growroot` | First-boot disk-grow service (fill the medium / `growfs.conf` cap; shared) |
 | `specs/etc/headscale/config.yaml` | Default headscale config (shared) |
 | `specs/etc/kubernetes/*`, `specs/etc/containerd/config.toml` | k8s + CRI config (shared) |
 | `specs/etc/local.d/01-firstboot.start.tmpl` | First-boot finaliser (fallback user, shared) |
