@@ -22,6 +22,20 @@ apiServer:
     - snapdragon-pki
     - snapdragon-pki.headnet.internal
     - 127.0.0.1
+  # ── Encryption at rest for etcd Secrets ───────────────────────────
+  # The apiserver encrypts Secret objects before writing them to etcd using the
+  # EncryptionConfiguration at the path below. keys-provision WRITES that file
+  # (with an aescbc/secretbox key minted offline, or carried in the USB bundle)
+  # BEFORE `kubeadm init`, so the key never lives in git. extraVolumes mounts the
+  # host file into the static apiserver pod. See docs/ENCRYPTION-AT-REST.md.
+  extraArgs:
+    encryption-provider-config: /etc/kubernetes/encryption-config.yaml
+  extraVolumes:
+    - name: encryption-config
+      hostPath: /etc/kubernetes/encryption-config.yaml
+      mountPath: /etc/kubernetes/encryption-config.yaml
+      readOnly: true
+      pathType: File
 networking:
   podSubnet: "10.244.0.0/16"
   serviceSubnet: "10.96.0.0/12"

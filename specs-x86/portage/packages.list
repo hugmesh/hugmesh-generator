@@ -59,6 +59,13 @@ sys-fs/xfsprogs
 sys-apps/util-linux
 net-fs/nfs-utils
 net-fs/cifs-utils
+# Encryption-at-rest (LUKS2/dm-crypt) for attached data partitions that back the
+# cluster PVCs / relocated containerd|kubelet|Vault state. keys-provision's
+# provision_storage luksFormat/opens these (aes-xts-plain64, argon2id). On x86
+# (TPM-equipped) systemd-cryptenroll provides TPM2 auto-unlock; the USB-KEYS
+# keyfile is the recovery slot. See docs/ENCRYPTION-AT-REST.md.
+sys-fs/cryptsetup
+sys-fs/lvm2
 
 # NOTE: headscale + tailscale are installed as static x86_64 binaries by
 # build-x86-host-stage4.sh (mesh phase), like the RPi image. ArgoCD,

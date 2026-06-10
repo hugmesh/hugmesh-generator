@@ -36,7 +36,7 @@
     "up_args": "--advertise-tags=tag:snapdragon,tag:pki --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false"
   },
 
-  "_comment_kubernetes": "FIRST control-plane: role=control-plane + bootstrap=true (+ first defaults true) -> kubeadm init --upload-certs. ADDITIONAL control-plane: role=control-plane, bootstrap=true, first=false, and a full join block incl. certificate_key -> kubeadm join --control-plane. Workers: role=worker + a join block. Leave join.api_server empty to auto-target the stable cp_dns_name:6443.",
+  "_comment_kubernetes": "FIRST control-plane: role=control-plane + bootstrap=true (+ first defaults true) -> kubeadm init --upload-certs. ADDITIONAL control-plane: role=control-plane, bootstrap=true, first=false, and a full join block incl. certificate_key -> kubeadm join --control-plane. Workers: role=worker + a join block. Leave join.api_server empty to auto-target the stable cp_dns_name:6443. ETCD SECRET ENCRYPTION-AT-REST: keys-provision writes /etc/kubernetes/encryption-config.yaml (aescbc) before kubeadm init so the apiserver encrypts Secrets in etcd. Put the shared key at kubernetes/encryption-key on THIS stick (base64 32 bytes; same file on every control plane) so all apiservers decrypt the same etcd — else a fresh key is minted on the first CP and must be copied by hand. NEVER in git.",
   "kubernetes": {
     "role": "control-plane",
     "bootstrap": false,
@@ -102,13 +102,18 @@
     "dkim_key_file": ""
   },
 
+  "_comment_storage": "Attached data disk(s) that back the cluster PVCs (/mnt/data via the snapdragon-local StorageClass) + relocated containerd/kubelet/Vault state. ENCRYPTION AT REST (LUKS2, aes-xts-plain64, argon2id) is ON by default per device (encrypt:true); set a device's encrypt:false only to opt out. Key custody (NEVER in git): luks_keyfile points at a keyfile on THIS KEYS stick (default secrets/luks.key) — the Pi5-without-TPM unlock slot; luks_tpm2:true additionally enrolls TPM2 auto-unlock (systemd-cryptenroll/clevis) on x86 / TPM-equipped nodes so they boot without the USB, with the keyfile as recovery. format:true is REQUIRED to luksFormat a blank disk (destroys data); an already-LUKS disk is just reopened. See docs/ENCRYPTION-AT-REST.md.",
   "storage": {
+    "luks_keyfile": "secrets/luks.key",
+    "luks_tpm2": true,
     "devices": [
       {
         "match": "nvme",
         "label": "SNAPDATA",
         "filesystem": "ext4",
         "format": false,
+        "encrypt": true,
+        "luks_name": "cryptdata",
         "mountpoint": "/mnt/data",
         "options": "defaults,noatime",
         "use_for": ["containerd", "kubelet"]

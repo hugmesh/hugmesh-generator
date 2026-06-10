@@ -49,6 +49,15 @@ ssh_host_*_key.pub
 keys-template/cloudflared/tunnel-token
 keys-template/cloudflared/credentials.json
 **/cloudflared/credentials.json
+# Encryption-at-rest key material — LUKS data-disk keyfile + etcd Secret
+# encryption key. Custody is the offline USB-KEYS stick / Vault, NEVER git.
+keys-template/secrets/luks.key
+**/secrets/luks.key
+*.luks.key
+luks.key
+keys-template/kubernetes/encryption-key
+**/kubernetes/encryption-key
+etcd-encryption.key
 
 # Brand profile may hold default passwords — never commit the real one
 # (brand.conf.example is the committed template).

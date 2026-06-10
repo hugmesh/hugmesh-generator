@@ -76,7 +76,17 @@ spec:
               server.ssl.key-store=/stores/keystore.p12
               server.ssl.key-store-type=PKCS12
               server.ssl.key-store-password=${P}
+              # TLS protocol floor — TLSv1.3 by default (forward-secret, AEAD-only,
+              # prerequisite for PQC hybrid key exchange). See docs/CRYPTO-AUDIT.md.
+              server.ssl.enabled-protocols={{ .Values.keystore.tlsProtocols | default "TLSv1.3" }}
               EOF
+              {{- if .Values.keystore.pqcGroups }}
+              # POST-QUANTUM HYBRID KEY EXCHANGE (gated; only when pqcGroups set and
+              # the JVM supports the group). Prepend the hybrid group, keep classical
+              # fallbacks so a peer that can't do PQC still negotiates X25519/secp384r1.
+              echo "server.ssl.protocol=TLS" >> /stores/application-tls.properties
+              echo "snapdragon.tls.named-groups={{ .Values.keystore.pqcGroups }},x25519,secp384r1,secp256r1" >> /stores/application-tls.properties
+              {{- end }}
               echo "keystore + truststore + application-tls.properties built"
           volumeMounts:
             - { name: pki, mountPath: /pki, readOnly: true }

@@ -71,6 +71,21 @@ keystore:
   # Also enable server.ssl (serve HTTPS). Leave false unless probes/Service are
   # switched to HTTPS too — otherwise the http readiness probe will fail.
   serverTls: false
+  # TLS protocol floor for the assembled keystore (crypto agility — see
+  # docs/CRYPTO-AUDIT.md). TLSv1.3 only by default: forward-secret, AEAD-only,
+  # and the prerequisite for post-quantum hybrid key exchange. The build-keystore
+  # initContainer writes server.ssl.enabled-protocols=<this> into
+  # application-tls.properties. Set to "TLSv1.3,TLSv1.2" only if a legacy peer
+  # cannot negotiate 1.3.
+  tlsProtocols: "TLSv1.3"
+  # POST-QUANTUM HYBRID KEY EXCHANGE (documented migration path, gated OFF).
+  # When the deployed JVM/proxy advertises a hybrid PQC group (e.g.
+  # X25519MLKEM768 — ML-KEM-768 + X25519, the IETF/NIST-aligned default landing
+  # in JDK 24+/BoringSSL/OpenSSL 3.5+), set pqcGroups to it and the initContainer
+  # appends jdk.tls.namedGroups so the handshake negotiates it where BOTH peers
+  # support it, falling back to classical X25519/secp384r1 otherwise. Empty =
+  # classical groups only (no PQC forced onto a JVM that can't do it).
+  pqcGroups: ""
 
 # Internal ingress (Cloudflare terminates the public name later; this is the
 # in-cluster host the tunnel / reverse proxy targets).

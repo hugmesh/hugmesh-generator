@@ -749,6 +749,57 @@ _is_first_control_plane() {
     return 0
 }
 
+# ── etcd Secret encryption-at-rest config (control-plane) ──────────
+# Writes /etc/kubernetes/encryption-config.yaml so the apiserver encrypts Secret
+# objects before persisting them to etcd. The kubeadm-config.yaml apiServer
+# extraArgs point at this path; it MUST exist before `kubeadm init`/`join` so the
+# static apiserver pod can mount it. Key custody (never in git):
+#   1. KEYS/kubernetes/encryption-key on the USB stick (shared across control
+#      planes so every apiserver decrypts the same etcd) — preferred.
+#   2. else mint a fresh 32-byte key here (single-CP / dev) and persist it under
+#      /etc/snapdragon so an operator can copy it to additional CPs.
+# Provider: aescbc (AES-256-CBC, kube-native, no external KMS). A documented KMS
+# path (Vault Transit) is in docs/ENCRYPTION-AT-REST.md. Idempotent: never
+# rewrites an existing config (rotating the key would orphan existing Secrets).
+ensure_encryption_config() {
+    local cfg=/etc/kubernetes/encryption-config.yaml
+    [ -f "${cfg}" ] && { log "encryption-config.yaml already present — keeping existing key"; return 0; }
+    local key="" ksrc="${BASE}/kubernetes/encryption-key"
+    if [ -f "${ksrc}" ]; then
+        key="$(tr -d '[:space:]' < "${ksrc}" 2>/dev/null)"
+        [ -n "${key}" ] && log "etcd encryption key loaded from KEYS (${ksrc#${BASE}/})"
+    fi
+    if [ -z "${key}" ] && [ -f /etc/snapdragon/etcd-encryption.key ]; then
+        key="$(tr -d '[:space:]' < /etc/snapdragon/etcd-encryption.key 2>/dev/null)"
+    fi
+    if [ -z "${key}" ]; then
+        key="$(head -c 32 /dev/urandom | base64 -w0 2>/dev/null || head -c 32 /dev/urandom | base64 | tr -d '\n')"
+        mkdir -p /etc/snapdragon
+        printf '%s\n' "${key}" > /etc/snapdragon/etcd-encryption.key
+        chmod 0600 /etc/snapdragon/etcd-encryption.key
+        warn "minted a fresh etcd Secret-encryption key at /etc/snapdragon/etcd-encryption.key — COPY it to KEYS/kubernetes/encryption-key + every other control plane (or their etcd won't decrypt these Secrets)"
+    fi
+    mkdir -p /etc/kubernetes
+    umask 077
+    cat > "${cfg}" <<EOF
+apiVersion: apiserver.config.k8s.io/v1
+kind: EncryptionConfiguration
+resources:
+  - resources:
+      - secrets
+    providers:
+      - aescbc:
+          keys:
+            - name: key1
+              secret: ${key}
+      # identity LAST so already-written plaintext Secrets are still readable
+      # during the migration, then re-encrypted on next write.
+      - identity: {}
+EOF
+    chmod 0600 "${cfg}"
+    log "Wrote ${cfg} (aescbc) — apiserver will encrypt etcd Secrets at rest"
+}
+
 provision_kubernetes() {
     local role bootstrap cfg
     role="$(jqm '.kubernetes.role // "none"')"
@@ -787,6 +838,10 @@ provision_kubernetes() {
 
     case "${role}" in
         control-plane|master|server)
+            # etcd Secret encryption-at-rest config MUST exist before the
+            # apiserver static pod starts (kubeadm-config apiServer.extraArgs
+            # references it). Runs for first AND additional control planes.
+            ensure_encryption_config
             # ── HA control plane: FIRST node inits, ADDITIONAL nodes join ──
             if [ -f /etc/kubernetes/admin.conf ]; then
                 log "admin.conf present — control-plane already initialised, skipping"
@@ -868,13 +923,107 @@ resolve_storage_dev() {
     esac
 }
 
+# ── LUKS2 encryption-at-rest for attached data partitions ─────────
+# Resolve the LUKS passphrase/keyfile (key custody, never in git). Precedence:
+#   1. KEYS/secrets/luks.key on the offline USB stick (same custody model as the
+#      cluster CA + Vault seal keys) — the Pi5-without-TPM default.
+#   2. provision.json .storage.luks_keyfile (a path on the KEYS media).
+# Prints the resolved keyfile path to stdout, empty if none found. TPM2 auto-
+# unlock is enrolled SEPARATELY (luks_try_tpm2_enroll) so the volume can later
+# open with NO keyfile present; the USB keyfile stays the recovery slot.
+luks_keyfile() {
+    local kf
+    kf="$(jqm '.storage.luks_keyfile // ""')"
+    { [ -z "${kf}" ] || [ "${kf}" = "null" ]; } && kf="secrets/luks.key"
+    [ -f "${BASE}/${kf}" ] && { printf '%s\n' "${BASE}/${kf}"; return 0; }
+    [ -f "${BASE}/secrets/luks.key" ] && { printf '%s\n' "${BASE}/secrets/luks.key"; return 0; }
+    printf ''
+}
+
+# Best-effort TPM2 auto-unlock enrolment so the node unlocks at boot WITHOUT the
+# USB key present (x86 + Pi-with-TPM). Tries systemd-cryptenroll first, then
+# clevis (tang/tpm2). No-op (and harmless) where no TPM / tool exists — the USB
+# keyfile slot remains the unlock path. Idempotent: skips if a token is enrolled.
+# Best-effort TPM2 auto-unlock enrolment so the node unlocks at boot WITHOUT the
+# USB key present (x86 + Pi-with-TPM). Tries systemd-cryptenroll first, then
+# clevis (tang/tpm2). No-op (and harmless) where no TPM / tool exists — the USB
+# keyfile slot remains the unlock path. Idempotent: skips if a token is enrolled.
+# ALL output is diagnostic (no stdout contract) — callers in a command-subst
+# context redirect this to stderr.
+luks_try_tpm2_enroll() {
+    local part="$1" keyfile="$2"
+    [ "$(jqm '.storage.luks_tpm2 // true')" = "true" ] || { log "TPM2 auto-unlock disabled in manifest"; return 0; }
+    [ -e /dev/tpmrm0 ] || [ -e /dev/tpm0 ] || { log "No TPM device — keeping USB-keyfile unlock for ${part}"; return 0; }
+    if have systemd-cryptenroll; then
+        if cryptsetup luksDump "${part}" 2>/dev/null | grep -qi 'systemd-tpm2'; then
+            log "TPM2 already enrolled on ${part}"; return 0
+        fi
+        if PASSWORD="$(cat "${keyfile}")" systemd-cryptenroll --tpm2-device=auto \
+                --tpm2-pcrs=7 "${part}" 2>/dev/null; then
+            log "Enrolled TPM2 auto-unlock on ${part} (systemd-cryptenroll, PCR7)"; return 0
+        fi
+        warn "systemd-cryptenroll TPM2 enrolment failed on ${part} — USB keyfile remains the unlock path"
+    elif have clevis; then
+        if clevis luks bind -d "${part}" tpm2 '{"pcr_ids":"7"}' -k "${keyfile}" 2>/dev/null; then
+            log "Bound TPM2 auto-unlock on ${part} (clevis)"; return 0
+        fi
+        warn "clevis TPM2 bind failed on ${part} — USB keyfile remains the unlock path"
+    else
+        log "Neither systemd-cryptenroll nor clevis present — USB-keyfile unlock only for ${part}"
+    fi
+}
+
+# Wrap a raw partition in LUKS2 and open it. STDOUT CONTRACT: emits exactly the
+# device the caller should mkfs+mount — the unlocked mapper (/dev/mapper/<name>)
+# on success, or the raw partition unchanged on any fallback. ALL diagnostics go
+# to STDERR so `dev=$(luks_open_or_format …)` captures only the device path.
+# aes-xts-plain64, 512-bit key, sha512/argon2id PBKDF — strong + interoperable.
+# Idempotent: an already-LUKS partition is just opened, never re-formatted (so
+# re-provisioning never destroys encrypted data). Returns non-zero on fallback.
+luks_open_or_format() {
+    local part="$1" name="$2" do_format="$3" keyfile="$4"
+    have cryptsetup || { warn "cryptsetup not installed — cannot encrypt ${part}; falling back to PLAINTEXT" >&2; printf '%s\n' "${part}"; return 1; }
+    [ -n "${keyfile}" ] || { warn "no LUKS keyfile (KEYS/secrets/luks.key) — cannot encrypt ${part}; falling back to PLAINTEXT" >&2; printf '%s\n' "${part}"; return 1; }
+    local mapper="/dev/mapper/${name}"
+    if cryptsetup isLuks "${part}" 2>/dev/null; then
+        log "${part} is already LUKS — opening as ${name}" >&2
+    else
+        if [ "${do_format}" != "true" ]; then
+            warn "${part} is not LUKS and format=false — refusing to encrypt in place; PLAINTEXT" >&2
+            printf '%s\n' "${part}"; return 1
+        fi
+        log "luksFormat ${part} (LUKS2 aes-xts-plain64, 512-bit, argon2id) — destroying existing data" >&2
+        cryptsetup luksFormat --type luks2 --cipher aes-xts-plain64 --key-size 512 \
+            --hash sha512 --pbkdf argon2id --batch-mode "${part}" "${keyfile}" \
+            || { warn "luksFormat ${part} failed — PLAINTEXT fallback" >&2; printf '%s\n' "${part}"; return 1; }
+    fi
+    if [ ! -b "${mapper}" ]; then
+        cryptsetup open --key-file "${keyfile}" "${part}" "${name}" \
+            || { warn "cryptsetup open ${part} failed — PLAINTEXT fallback" >&2; printf '%s\n' "${part}"; return 1; }
+    fi
+    # Persist a crypttab entry so the volume re-opens on every boot. Key source is
+    # the USB keyfile path; TPM2 (if enrolled) unlocks without it. tpm2-device=
+    # auto lets systemd try the TPM token first, falling back to the keyfile.
+    local puuid; puuid="$(blkid -s UUID -o value "${part}" 2>/dev/null)"
+    if [ -n "${puuid}" ] && { [ ! -f /etc/crypttab ] || ! grep -q "${name}" /etc/crypttab; }; then
+        printf '%s UUID=%s /etc/snapdragon/luks/%s.key luks,tpm2-device=auto\n' \
+            "${name}" "${puuid}" "${name}" >> /etc/crypttab
+        # Install the recovery keyfile off the read-only USB into a 0600 root path
+        # so crypttab can read it at boot (TPM2 unlock makes it a fallback only).
+        install -Dm0600 "${keyfile}" "/etc/snapdragon/luks/${name}.key" 2>/dev/null || true
+        log "Added ${name} to /etc/crypttab (UUID=${puuid}, TPM2-or-keyfile unlock)" >&2
+    fi
+    luks_try_tpm2_enroll "${part}" "${keyfile}" >&2
+    printf '%s\n' "${mapper}"
+}
+
 provision_storage() {
     jqe '.storage.devices' || return 0
     local n i
     n="$(jqm '.storage.devices | length')"
     log "Configuring ${n} attached storage device(s)"
     for ((i = 0; i < n; i++)); do
-        local match fs fmt mp opts label dev part uuid usefor
+        local match fs fmt mp opts label dev part uuid usefor encrypt luksname blkdev
         match="$(jqm ".storage.devices[$i].match")"
         fs="$(jqm ".storage.devices[$i].filesystem // \"ext4\"")"
         fmt="$(jqm ".storage.devices[$i].format // false")"
@@ -882,11 +1031,17 @@ provision_storage() {
         opts="$(jqm ".storage.devices[$i].options // \"defaults,noatime\"")"
         label="$(jqm ".storage.devices[$i].label // \"\"")"
         usefor="$(jqm ".storage.devices[$i].use_for // [] | join(\" \")")"
+        # Encryption-at-rest (LUKS2). Default ON: cluster data partitions (the
+        # disks that back PVCs + relocated containerd/kubelet/Vault state) are
+        # encrypted unless a device explicitly opts out with encrypt:false.
+        encrypt="$(jqm ".storage.devices[$i].encrypt // true")"
+        luksname="$(jqm ".storage.devices[$i].luks_name // \"\"")"
+        { [ -z "${luksname}" ] || [ "${luksname}" = "null" ]; } && luksname="cryptdata${i}"
 
         dev="$(resolve_storage_dev "${match}")"
         [ -n "${dev}" ] && [ -b "${dev}" ] || { warn "storage[$i]: no device for match '${match}'"; continue; }
         [ -n "${mp}" ] || { warn "storage[$i]: no mountpoint"; continue; }
-        log "storage[$i]: ${match} -> ${dev}  mount ${mp} (${fs}, format=${fmt})"
+        log "storage[$i]: ${match} -> ${dev}  mount ${mp} (${fs}, format=${fmt}, encrypt=${encrypt})"
 
         if [ "${fmt}" = "true" ]; then
             warn "Formatting ${dev} as ${fs} (single GPT partition) — destroying existing data"
@@ -897,13 +1052,28 @@ provision_storage() {
         fi
         if [[ "${dev}" =~ [0-9]$ ]]; then part="${dev}p1"; else part="${dev}1"; fi
         [ -b "${part}" ] || part="${dev}"   # whole-disk fs fallback
+
+        # ── Encryption-at-rest: wrap the partition in LUKS2 before mkfs ──
+        # blkdev becomes the device we mkfs + mount (the /dev/mapper/<name> when
+        # encrypted, else the raw partition). On any failure luks_open_or_format
+        # echoes the raw partition and returns non-zero -> documented plaintext
+        # fallback so the node still boots (logged as a WARNING).
+        blkdev="${part}"
+        if [ "${encrypt}" = "true" ]; then
+            local kf; kf="$(luks_keyfile)"
+            blkdev="$(luks_open_or_format "${part}" "${luksname}" "${fmt}" "${kf}")" || \
+                warn "storage[$i]: encryption unavailable — ${part} mounted PLAINTEXT (see docs/ENCRYPTION-AT-REST.md)"
+        fi
+
         if [ "${fmt}" = "true" ]; then
-            "mkfs.${fs}" ${label:+-L "${label}"} -F "${part}" 2>/dev/null || "mkfs.${fs}" "${part}"
+            "mkfs.${fs}" ${label:+-L "${label}"} -F "${blkdev}" 2>/dev/null || "mkfs.${fs}" "${blkdev}"
         fi
 
         mkdir -p "${mp}"
-        mount -o "${opts}" "${part}" "${mp}" || { warn "mount ${part} failed"; continue; }
-        uuid="$(blkid -s UUID -o value "${part}" 2>/dev/null)"
+        mount -o "${opts}" "${blkdev}" "${mp}" || { warn "mount ${blkdev} failed"; continue; }
+        # fstab references the unlocked mapper by its UUID for encrypted volumes
+        # (crypttab opens it first), or the raw partition UUID for plaintext.
+        uuid="$(blkid -s UUID -o value "${blkdev}" 2>/dev/null)"
         if [ -n "${uuid}" ] && ! grep -q "${uuid}" /etc/fstab; then
             printf 'UUID=%s  %s  %s  %s  0 2\n' "${uuid}" "${mp}" "${fs}" "${opts}" >> /etc/fstab
             log "Added ${mp} to /etc/fstab (UUID=${uuid})"

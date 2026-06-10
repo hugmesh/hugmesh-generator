@@ -86,6 +86,13 @@ app-misc/jq
 sys-fs/dosfstools
 net-fs/nfs-utils
 net-fs/cifs-utils
+# Encryption-at-rest (LUKS2/dm-crypt) for the attached data partition that backs
+# the cluster PVCs / relocated containerd|kubelet|Vault state. The Pi5 has no
+# TPM by default, so keys-provision uses the USB-KEYS keyfile (secrets/luks.key)
+# as the unlock slot (clevis-tpm2 is enrolled instead on a Pi WITH a TPM HAT).
+# See docs/ENCRYPTION-AT-REST.md.
+sys-fs/cryptsetup
+sys-fs/lvm2
 
 # NOTE: headscale and tailscale are NOT emerged here. They are installed
 # as upstream static arm64 binaries by build-rpi5-stage4.sh (the "mesh"

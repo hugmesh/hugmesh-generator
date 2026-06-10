@@ -1,0 +1,20 @@
+# etcd Secret encryption-at-rest key (apiserver EncryptionConfiguration).
+#
+# This .example is a PLACEHOLDER. The real key is the AES key the kube-apiserver
+# uses to encrypt Kubernetes Secret objects before persisting them to etcd. It
+# MUST NEVER be committed — custody is this offline USB-KEYS stick (or Vault).
+#
+# Generate a 32-byte base64 key and drop it next to this file as
+#   kubernetes/encryption-key   (gitignored)
+# e.g.:
+#   head -c 32 /dev/urandom | base64 -w0 > kubernetes/encryption-key
+#
+# IMPORTANT for HA: put the SAME key file on EVERY control-plane node's KEYS
+# stick. All apiservers share one etcd, so they must share one key or an
+# additional control plane cannot decrypt Secrets the first one wrote.
+#
+# keys-provision (ensure_encryption_config) reads this before `kubeadm init`/
+# `join` and writes /etc/kubernetes/encryption-config.yaml (aescbc provider). If
+# absent, a fresh key is minted on the first control plane and saved to
+# /etc/snapdragon/etcd-encryption.key with a WARNING to copy it to the other CPs.
+# See docs/ENCRYPTION-AT-REST.md (KMS-via-Vault-Transit is the documented upgrade).
