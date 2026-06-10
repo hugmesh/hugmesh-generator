@@ -224,6 +224,22 @@ Run the builds as **root** (the cross-emerge merges into the sysroot's package D
 and writes host caches; fakeroot is not enough). Artifacts land in the git-ignored
 `./rpi5-stage4-build/` and `./x86-host-build/`.
 
+Every artifact of one build run is **brand- and timestamp-named** so test vs prod
+images are distinguishable and runs never clobber each other:
+
+```
+<brand>-<arch>-<role>-<env>-<UTC-stamp>.<ext>
+
+# e.g. (test)  snapdragon-rpi5-arm64-frontend-test-20260610T193045Z.img
+#      (prod)  snapdragon-x86-amd64-host-prod-20260610T193045Z.img
+```
+
+`<arch>` is `rpi5-arm64` or `x86-amd64`; `<env>` is `test` or `prod`; `<UTC-stamp>`
+is `date -u +%Y%m%dT%H%M%SZ`, computed once per run so the `.img`, `.iso`,
+`.stage4.tar.xz` and `.fs.tar.xz` all share it. The `make flash` / `make qemu`
+targets and `flash-disk.sh` autodetect the newest matching image, so you rarely
+type the full name.
+
 ```bash
 # 0. Build-host prerequisites (one-time). RPi5 cross-toolchain + ISO tooling:
 sudo emerge -an dev-libs/libisoburn app-arch/tar sys-apps/file net-misc/curl
@@ -242,10 +258,10 @@ sudo ./build-x86-host-stage4.sh -j "$(nproc)"            # x86_64 GPU host (nati
 sudo ./scripts/make-keys-usb.sh /dev/sdY keys-pki        # FAT32 stick labelled KEYS (one per node)
 
 # 3. Flash the OS to each node's SD/NVMe (boot a Linux live env, mount the role's ISO)
-sudo mount -o loop rpi5-stage4-build/gentoo-rpi5-arm64-pki-k8s-*.iso /mnt/iso
+sudo mount -o loop rpi5-stage4-build/snapdragon-rpi5-arm64-pki-*.iso /mnt/iso
 sudo /mnt/iso/install.sh /dev/sdX                        # SD card, or /dev/nvme0n1
 sudo umount /mnt/iso
-#    x86 host: boot the gentoo-x86-*.iso live image, then run  install-x86.sh /dev/sdX  from it.
+#    x86 host: boot the snapdragon-x86-amd64-*.iso live image, then run  install-x86.sh /dev/sdX  from it.
 
 # 4. Boot each node with its KEYS stick inserted — first boot self-provisions.
 

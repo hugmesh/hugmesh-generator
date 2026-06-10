@@ -1,20 +1,28 @@
-# ── Build output (the gitignored target build directories) ────────
+# ── Build output directories (default work dirs) ──────────────────
+# build-rpi5-stage4.sh / build-x86-host-stage4.sh default WORK_DIRs and the
+# Makefile's $(CURDIR)/out. Repo-root-anchored: these only ever exist at root.
 /rpi5-stage4-build/
-rpi5-stage4-build/
 /x86-host-build/
-x86-host-build/
-# Per-arch heavy build trees (sysroot/distfiles/pkgdir) under any WORK_DIR.
+/out/
+
+# ── Per-arch heavy build trees (sysroot/distfiles/pkgdir) under any WORK_DIR ──
 snap-build-pi5/
 snap-build-x86/
-build/
+
+# ── Build artifacts ───────────────────────────────────────────────
+# Disk images, ISOs, stage4 / filesystem tarballs (*.fs.tar.xz, *.stage4.tar.xz
+# both match *.tar.xz), package bundles, and the build log. These are large and
+# rebuilt from source; never commit them.
+*.img
+*.img.xz
 *.iso
 *.tar.xz
 *.tgz
+*.qcow2
 build.log
 
 # ── QEMU integration-test scratch ─────────────────────────────────
 qemu-test/
-*.img
 console.log
 
 # ── Local docker-compose stack (clone+build+run) ──────────────────
@@ -24,9 +32,9 @@ console.log
 tests/stack/.mastodon.env
 
 # ── Generated secrets — NEVER commit ──────────────────────────────
-# Output of scripts/gen-provision-keys.sh and any filled-in KEYS dir.
+# Output of scripts/gen-provision-keys.sh, gen-cluster-secrets.sh, gen-keystores.sh
+# (keys-out/) and any filled-in per-role KEYS dir.
 /keys-out/
-keys-out/
 keys-pki/
 keys-backend/
 keys-frontend/
@@ -36,11 +44,15 @@ keys-host/
 *.pem
 ssh_host_*_key
 ssh_host_*_key.pub
-# (keys-template/ itself is committed — it holds only placeholders.)
+# (keys-template/ itself is committed — it holds only placeholders / *.example.)
 # Cloudflare go-live tunnel creds (PROD only) — never commit the real value.
 keys-template/cloudflared/tunnel-token
 keys-template/cloudflared/credentials.json
 **/cloudflared/credentials.json
+
+# Brand profile may hold default passwords — never commit the real one
+# (brand.conf.example is the committed template).
+brand.conf
 
 # ── Editor / OS noise ─────────────────────────────────────────────
 *.swp
@@ -49,9 +61,5 @@ keys-template/cloudflared/credentials.json
 .idea/
 .vscode/
 
-# Brand profile may hold default passwords — never commit the real one
-brand.conf
-/out/
-*.img.xz
-*.fs.tar.xz
-*.qcow2
+# Claude Code agent worktrees / scratch — never commit
+.claude/
