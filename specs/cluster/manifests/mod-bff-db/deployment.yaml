@@ -1,0 +1,71 @@
+# mod-bff-db — dedicated Postgres for snapdragon-mod-bff-api's config datastore
+# (the mod_action table the moderation BFF owns). Lives in snapdragon-backend
+# next to the BFF it serves. ClusterIP only.
+#
+# NOTE: like admin-bff, the mod-bff app's application.yml defaults its
+# spring.r2dbc/spring.liquibase to a literal `snapdragon-pg` host that does NOT
+# exist anywhere in the cluster; this dedicated `mod-bff-db` Service is the real
+# backing store, and the mod-bff Deployment OVERRIDES the R2DBC/Liquibase URLs to
+# point here (mirrors how federation-db backs federation, admin-bff-db backs admin-bff).
+#
+# Schema bootstrap: NO initdb schema.sql — mod-bff owns its schema via Liquibase
+# (classpath:db/changelog/db.changelog-master.xml), applied by the app at boot.
+# This DB only needs to exist EMPTY (POSTGRES_DB).
+#
+# Credentials: POSTGRES_PASSWORD is sourced from Vault via External Secrets (ESO
+# Secret mod-bff-db-auth, key password <- secret/snapdragon/mod-bff-db),
+# mirroring the admin-bff-db / clickhouse-auth pattern. The mod-bff app references
+# the SAME Secret. (A future hardening step can still switch to a least-privilege role.)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mod-bff-db
+  namespace: snapdragon-backend
+  labels: { app: mod-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # single writer over a RWO PVC
+  selector: { matchLabels: { app: mod-bff-db } }
+  template:
+    metadata: { labels: { app: mod-bff-db } }
+    spec:
+      nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c28"
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ name: postgres, containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_DB,   value: "modbff" }
+            - { name: POSTGRES_USER, value: "modbff" }
+            # Password sourced from Vault via External Secrets (ESO Secret
+            # "mod-bff-db-auth", key "password" <- secret/snapdragon/mod-bff-db;
+            # see manifests/external-secrets/secretstore.yaml). The snapdragon-mod-bff-api
+            # consumer references the SAME Secret (SPRING_R2DBC_PASSWORD /
+            # SPRING_LIQUIBASE_PASSWORD) so they stay in sync. DB/USER stay literal.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mod-bff-db-auth
+                  key: password
+            - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256" }
+            - { name: PGDATA, value: "/var/lib/postgresql/data/pgdata" }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "modbff", "-d", "modbff"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "modbff", "-d", "modbff"] }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: mod-bff-db }

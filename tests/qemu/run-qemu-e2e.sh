@@ -128,7 +128,13 @@ autodetect_x86() {
 }
 autodetect_pi() {
     if [ -z "${KERNEL}" ]; then
-        for c in "${WORK_DIR}/isoroot/boot/${KERNEL_IMG_NAME}" "${WORK_DIR}/sysroot/boot/${KERNEL_IMG_NAME}"; do
+        # Per-arch build subdir first (snap-build-pi5); bare paths kept as a
+        # fallback for trees built before the per-arch split.
+        PI_BUILD_SUBDIR="${PI_BUILD_SUBDIR:-snap-build-pi5}"
+        for c in "${WORK_DIR}/${PI_BUILD_SUBDIR}/isoroot/boot/${KERNEL_IMG_NAME}" \
+                 "${WORK_DIR}/${PI_BUILD_SUBDIR}/sysroot/boot/${KERNEL_IMG_NAME}" \
+                 "${WORK_DIR}/isoroot/boot/${KERNEL_IMG_NAME}" \
+                 "${WORK_DIR}/sysroot/boot/${KERNEL_IMG_NAME}"; do
             [ -f "${c}" ] && { KERNEL="${c}"; break; }
         done
     fi

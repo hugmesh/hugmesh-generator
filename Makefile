@@ -26,6 +26,10 @@
 # Branding:          make build-all BRAND=acme DOMAIN=acme.example  (-> brands/acme.conf)
 #
 # Products land in a local, gitignored ./out by default (WORK_DIR=$(CURDIR)/out).
+# Each arch's heavy build tree (sysroot/distfiles/pkgdir) lives in a PER-ARCH
+# subdir under WORK_DIR — snap-build-pi5 (aarch64) and snap-build-x86 (amd64) —
+# so the Pi and x86 builds never share a sysroot. Products (.img/.iso/keys-*)
+# still land in WORK_DIR itself. `make clean` wipes WORK_DIR (subdirs included).
 
 SHELL    := /bin/bash
 WORK_DIR ?= $(CURDIR)/out
@@ -143,7 +147,8 @@ X86_ROLES := pki be fe be+gpu
 .DEFAULT_GOAL := help
 .PHONY: help clean build-all rebuild rpi x86 omnibus flash qemu qemu-rpi qemu-x86 \
         playwright-deps e2e ci ci-quick docker-image ensure-image \
-        docker docker-build local prod
+        docker docker-build local prod \
+        stack-clone stack-mastodon-env stack-build stack-up stack-down stack-logs stack-ps
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z0-9_.+-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -161,6 +166,8 @@ help: ## list targets
 	@echo "              Shortcuts:  make local   (ENV=test BRAND=local -> snapdragon.test)"
 	@echo "                          make prod    (ENV=prod, real domain — creds from keys USB)"
 	@echo "  Output:     products land in ./out (WORK_DIR=$(CURDIR)/out; local + gitignored)."
+	@echo "              Per-arch build trees: ./out/snap-build-pi5 + ./out/snap-build-x86"
+	@echo "              (sysroot/distfiles/pkgdir; the two arches never share a sysroot)."
 
 ## ── build ─────────────────────────────────────────────────────────────
 # Every build target dispatches: NATIVE unset -> re-invoke inside the builder
@@ -289,3 +296,71 @@ docker: docker-image ## alias for docker-image (build the builder image)
 docker-build: ## DEPRECATED: builds now default to Docker — just run `make build-all`
 	@echo "Builds default to Docker now: run 'make build-all' (or 'make <target>')."
 	@echo "Use NATIVE=1 for a local-Gentoo (host/in-container) build."
+
+## ── LOCAL STACK (docker-compose; clone+build+run the whole platform) ──────────
+# Runs the ENTIRE Snapdragon platform on x86_64 via docker-compose, building every
+# service from its cloned repo. Linux: `make stack-up`. Windows (Docker Desktop):
+# scripts/stack-up.ps1. See docs/LOCAL-STACK.md.
+#
+# ENV selector (same test|prod knob as the image build): test = local placeholder
+# Casdoor issuer (http://localhost:8000); prod = the REAL issuer (CASDOOR_ISSUER
+# or https://id.<DOMAIN>; prod creds come from your env / keys USB, NOT committed).
+# SOCIAL=1 also brings up the heavy Synapse/Mastodon tier (the `social` profile).
+STACK_COMPOSE   := tests/stack/compose.local.yaml
+STACK_SRC       ?= $(CURDIR)/.stack-src
+PUBLIC_HOST_PORT ?= 8088
+GIT_BASE        ?= https://github.com/Snapdragon-Systems
+GIT_REF         ?= main
+SOCIAL          ?=
+# ENV -> Casdoor issuer URI used by every service (overridable via CASDOOR_ISSUER).
+ifeq ($(ENV),prod)
+CASDOOR_ISSUER ?= https://id.$(if $(strip $(DOMAIN)),$(DOMAIN),snapdragon.systems)
+else
+CASDOOR_ISSUER ?= http://localhost:8000
+endif
+# Env exported into every compose invocation (build contexts + service env).
+STACK_ENV := STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
+             PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)'
+STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
+COMPOSE_CMD   ?= docker compose
+# When SOCIAL=1, the included compose.real.yaml mastodon services need an
+# env_file (tests/stack/.mastodon.env). Ensure it exists before any social
+# compose call so the profile renders/runs (NOT needed for the core stack).
+STACK_SOCIAL_DEP := $(if $(strip $(SOCIAL)),stack-mastodon-env,)
+
+stack-clone: ## clone/update all snapdragon repos into ./.stack-src (idempotent)
+	STACK_SRC='$(STACK_SRC)' GIT_BASE='$(GIT_BASE)' GIT_REF='$(GIT_REF)' \
+	  bash scripts/clone-all-repos.sh
+
+# Guarantee tests/stack/.mastodon.env exists with non-empty dev secrets (only the
+# SOCIAL=1 path needs it). For a fully prepped social tier (Synapse config +
+# Mastodon db:prepare) use tests/stack/up-real.sh instead — see docs/LOCAL-STACK.md.
+stack-mastodon-env:
+	@if [ ! -f tests/stack/.mastodon.env ]; then \
+	  echo "==> Generating dev tests/stack/.mastodon.env (SOCIAL tier)"; \
+	  { echo "LOCAL_DOMAIN=localhost"; \
+	    echo "SECRET_KEY_BASE=$$(openssl rand -hex 64)"; \
+	    echo "OTP_SECRET=$$(openssl rand -hex 64)"; \
+	    echo "DB_HOST=mastodon-db"; echo "DB_USER=mastodon"; echo "DB_NAME=mastodon"; echo "DB_PASS=mastodon"; \
+	    echo "REDIS_HOST=mastodon-redis"; \
+	  } > tests/stack/.mastodon.env; \
+	fi
+
+stack-build: stack-clone $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) build
+
+stack-up: stack-clone $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
+	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)"
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) up -d
+	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  | Casdoor: http://localhost:8000"
+	@echo "    Logs: make stack-logs   Down: make stack-down"
+
+stack-down: ## stop the local stack and drop its volumes
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social down -v
+
+stack-logs: ## tail logs from the running local stack
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) logs -f --tail=100
+
+stack-ps: ## list the local stack's containers + status
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) ps

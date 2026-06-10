@@ -169,8 +169,14 @@ fi
     "no golden .img found (pass --img, or build one into ${WORK_DIR}). role=${ROLE}"
 
 # ── Resolve the kernel (run-qemu-test.sh convention) ────────────────────────
+# The Pi build keeps its sysroot/isoroot under a per-arch subdir
+# (${WORK_DIR}/${PI_BUILD_SUBDIR:-snap-build-pi5}); the bare ${WORK_DIR}/sysroot
+# paths are kept as a fallback for trees built before the per-arch split.
 if [ -z "${KERNEL}" ]; then
-    for c in "${WORK_DIR}/sysroot/boot/${KERNEL_IMG_NAME}" \
+    PI_BUILD_SUBDIR="${PI_BUILD_SUBDIR:-snap-build-pi5}"
+    for c in "${WORK_DIR}/${PI_BUILD_SUBDIR}/sysroot/boot/${KERNEL_IMG_NAME}" \
+             "${WORK_DIR}/${PI_BUILD_SUBDIR}/isoroot/boot/${KERNEL_IMG_NAME}" \
+             "${WORK_DIR}/sysroot/boot/${KERNEL_IMG_NAME}" \
              "${WORK_DIR}/isoroot/boot/${KERNEL_IMG_NAME}"; do
         [ -f "${c}" ] && { KERNEL="${c}"; break; }
     done

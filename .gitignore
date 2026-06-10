@@ -5,6 +5,10 @@
 /x86-host-build/
 /out/
 
+# ── Per-arch heavy build trees (sysroot/distfiles/pkgdir) under any WORK_DIR ──
+snap-build-pi5/
+snap-build-x86/
+
 # ── Build artifacts ───────────────────────────────────────────────
 # Disk images, ISOs, stage4 / filesystem tarballs (*.fs.tar.xz, *.stage4.tar.xz
 # both match *.tar.xz), package bundles, and the build log. These are large and
@@ -20,6 +24,12 @@ build.log
 # ── QEMU integration-test scratch ─────────────────────────────────
 qemu-test/
 console.log
+
+# ── Local docker-compose stack (clone+build+run) ──────────────────
+# Cloned source repos the local stack builds from (scripts/clone-all-repos.sh).
+/.stack-src/
+# Generated Mastodon dev env (SOCIAL=1 tier) — holds generated secrets.
+tests/stack/.mastodon.env
 
 # ── Generated secrets — NEVER commit ──────────────────────────────
 # Output of scripts/gen-provision-keys.sh, gen-cluster-secrets.sh, gen-keystores.sh
@@ -50,3 +60,6 @@ brand.conf
 .DS_Store
 .idea/
 .vscode/
+
+# Claude Code agent worktrees / scratch — never commit
+.claude/

@@ -59,11 +59,39 @@ spec:
           - id: admin-ui
             uri: http://snapdragon-admin-ui.snapdragon-frontend.svc.cluster.local:80
             path: /admin/**
-          # Same-origin BFF: /bff/** proxies to the admin-bff in the backend
-          # namespace, so the admin-ui's bff.service calls (login, register,
-          # provision, me, admin/route-access) are first-party to
-          # snapdragon.systems. The fe-gateway enforces the route-DB role rules
-          # (/bff/admin/** => ROLE_ADMIN) before the proxy.
+          # Moderation micro-frontend remote (/mod/** -> snapdragon-mod-ui). Role
+          # floor ROLE_MOD (route-DB), declared with the other path-scoped MFE
+          # remotes; the host loads its remoteEntry after a moderator logs in.
+          - id: mod-ui
+            uri: http://snapdragon-mod-ui.snapdragon-frontend.svc.cluster.local:80
+            path: /mod/**
+          # Self-service user micro-frontend remote (/user/** -> snapdragon-user-ui).
+          # Role floor ROLE_USER (route-DB).
+          - id: user-ui
+            uri: http://snapdragon-user-ui.snapdragon-frontend.svc.cluster.local:80
+            path: /user/**
+          # API documentation micro-frontend remote (/apidocs/** -> snapdragon-api-docs).
+          # Role floor ROLE_ADMIN (route-DB) — the rendered OpenAPI/spec docs are
+          # admin-only, matching federation's spec floor.
+          - id: api-docs
+            uri: http://snapdragon-api-docs.snapdragon-frontend.svc.cluster.local:80
+            path: /apidocs/**
+          # Same-origin BFFs: the /bff/** family proxies to the role BFFs in the
+          # backend namespace, so the UIs' bff.service calls are first-party to
+          # snapdragon.systems. Spring Cloud Gateway matches FIRST-IN-DECLARED-ORDER,
+          # so the MORE SPECIFIC subpaths are declared BEFORE the /bff/** catch-all:
+          #   /bff/mod/**  -> mod-bff-api   (ROLE_MOD,  +ADMIN superset)
+          #   /bff/user/** -> user-bff-api  (ROLE_USER)
+          #   /bff/**      -> admin-bff-api (the remaining /bff/login, /bff/register,
+          #                  /bff/provision, /bff/me, /bff/admin/** — /bff/admin/**
+          #                  => ROLE_ADMIN). The fe-gateway enforces the route-DB
+          #                  role rules before each proxy.
+          - id: snapdragon-mod-bff-api
+            uri: http://snapdragon-mod-bff-api.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/mod/**
+          - id: snapdragon-user-bff-api
+            uri: http://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/user/**
           - id: snapdragon-admin-bff-api
             uri: http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
             path: /bff/**

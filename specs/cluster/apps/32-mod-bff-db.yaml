@@ -1,0 +1,28 @@
+# mod-bff-db — dedicated Postgres for snapdragon-mod-bff-api's config datastore
+# (the mod_action moderation-audit table). snapdragon-backend, ClusterIP. No
+# initdb seed — mod-bff owns its schema via Liquibase (applied by the app at
+# startup), so this DB just needs to exist EMPTY.
+#
+# sync-wave "1": reconcile the DB BEFORE the mod-bff app (apps/33, wave 0) so
+# Liquibase has a target. mod-bff retries (k8s restarts the pod until the DB is
+# Ready), so this ordering is helpful, not a hard gate — same posture as
+# admin-bff-db (wave 1) / federation-db (wave 1).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mod-bff-db
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/mod-bff-db
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

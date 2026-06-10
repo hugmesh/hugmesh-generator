@@ -1,0 +1,19 @@
+# Normalize line endings so the local-stack shell scripts + compose configs stay
+# LF even when checked out on Windows (Docker Desktop). Bash/sh, YAML and the
+# gateway route configs MUST be LF inside the Linux containers; PowerShell may be
+# CRLF on Windows. Without this, a Windows checkout would give shell scripts CRLF
+# and `bash` would fail with `\r` errors inside the build/orchestrator containers.
+
+# Default: let git decide text vs binary, normalize to LF in the repo.
+* text=auto eol=lf
+
+# Force LF for everything the Linux containers execute / parse.
+*.sh        text eol=lf
+*.bash      text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+Dockerfile* text eol=lf
+*.conf      text eol=lf
+
+# PowerShell is Windows-side; CRLF is fine and conventional there.
+*.ps1       text eol=crlf
