@@ -398,9 +398,16 @@ FILES
         distfiles/          Portage source archives
         pkgdir/             Binary packages
         isoroot/            ISO staging area
-        stage4-*.tar.xz     Final stage4 tarball
-        gentoo-*.iso        Bootable ISO with installer
         build.log           Full build log
+
+    Output artifacts are named (all share one UTC build stamp):
+        <brand>-rpi5-arm64-<role>-<env>-<UTC-stamp>.img            Flashable disk image (default)
+        <brand>-rpi5-arm64-<role>-<env>-<UTC-stamp>.stage4.tar.xz  Final stage4 tarball
+        <brand>-rpi5-arm64-<role>-<env>-<UTC-stamp>.fs.tar.xz      Mounted-tree filesystem tarball
+        <brand>-rpi5-arm64-<role>-<env>-<UTC-stamp>.iso           Bootable ISO with installer (--iso)
+    e.g. snapdragon-rpi5-arm64-frontend-test-20260610T193045Z.img
+    The <brand> prefix + <role>/<env> tokens keep the QEMU launchers and
+    flash-disk.sh autodetect globs matching.
 
 NOTES
     The cross-toolchain (crossdev) must already be installed and
@@ -551,6 +558,15 @@ fi
 SYSROOT="${WORK_DIR}/sysroot"
 ISO_DIR="${WORK_DIR}/isoroot"
 LOG_FILE="${WORK_DIR}/build.log"
+
+# Single, sortable UTC build stamp shared by EVERY artifact of this run, so the
+# .img / .iso / stage4 / fs tarball all carry the same identifier. Computed once
+# here at build start. Artifacts are named:
+#   ${BRAND}-rpi5-arm64-${ROLE}-${ENV}-${BUILD_TS}.<ext>
+# (the ${BRAND}- prefix + role token keep the QEMU launchers' and flash-disk.sh's
+#  'snapdragon-rpi5-*-<role>-*' / '*-<role>-*' autodetect globs matching.)
+BUILD_TS="$(date -u +%Y%m%dT%H%M%SZ)"
+info "Build stamp: ${BUILD_TS} (UTC; brand=${BRAND}, env=${ENV})"
 
 # ── Template helper ────────────────────────────────────────────────
 # Copies a file, replacing @@VAR@@ markers with shell variable values.
@@ -1119,7 +1135,7 @@ fi
 # ── 10. Package stage4 tarball ─────────────────────────────────────
 banner "Phase 4: Packaging stage4 tarball"
 
-STAGE4_TARBALL="${WORK_DIR}/stage4-${CROSS_TARGET}-rpi5-${ROLE}-k8s-${REL_VERSION}.tar.xz"
+STAGE4_TARBALL="${WORK_DIR}/${BRAND}-rpi5-arm64-${ROLE}-${ENV}-${BUILD_TS}.stage4.tar.xz"
 
 # Force root ownership in the archive (--owner/--group=0): a non-root build owns
 # the sysroot as the build user, but the installed system must be root-owned.
@@ -1157,7 +1173,7 @@ build_img() {
     local p2_uuid p1_uuid
     loop=""; root_mnt=""
 
-    IMG_PATH="${WORK_DIR}/gentoo-rpi5-arm64-${ROLE}-k8s-${REL_VERSION}.img"
+    IMG_PATH="${WORK_DIR}/${BRAND}-rpi5-arm64-${ROLE}-${ENV}-${BUILD_TS}.img"
 
     # 1MiB alignment gap + 512MiB FAT boot + ROOT_MiB ext4 root + 1MiB slack.
     img_size_mib=$(( 1 + 512 + ROOT_MiB + 1 ))
@@ -1268,7 +1284,7 @@ build_img() {
     # /boot/*. This is the .img's exact final filesystem (PARTUUID fstab + cmdline
     # baked in) — the rootfs "as if mounted".
     if ${BUILD_TAR}; then
-        local fs_tar="${WORK_DIR}/gentoo-rpi5-arm64-${ROLE}-k8s-${REL_VERSION}.fs.tar.xz"
+        local fs_tar="${WORK_DIR}/${BRAND}-rpi5-arm64-${ROLE}-${ENV}-${BUILD_TS}.fs.tar.xz"
         info "Filesystem tarball (mounted tree) -> ${fs_tar}"
         tar -C "${root_mnt}" --xattrs --xattrs-include='*.*' --numeric-owner -cpf - . 2>/dev/null \
             | xz -T0 -6 > "${fs_tar}" \
@@ -1348,7 +1364,7 @@ else
     cp "${SPECS_DIR}/installer/install.sh" "${ISO_DIR}/install.sh"
     chmod +x "${ISO_DIR}/install.sh"
 
-    ISO_PATH="${WORK_DIR}/gentoo-rpi5-arm64-${ROLE}-k8s-${REL_VERSION}.iso"
+    ISO_PATH="${WORK_DIR}/${BRAND}-rpi5-arm64-${ROLE}-${ENV}-${BUILD_TS}.iso"
     VOLID="$(echo "GENTOO_RPI5_${ROLE}_K8S" | tr '[:lower:]' '[:upper:]' | cut -c1-32)"
 
     xorrisofs \

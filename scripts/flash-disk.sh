@@ -83,7 +83,7 @@ Examples:
   sudo $0 --arch x86 --role host --no-confirm /dev/nvme0n1
 
   # explicit artifact
-  sudo $0 --artifact /path/to/gentoo-rpi5-arm64-backend-k8s-2026.0.img /dev/sdb
+  sudo $0 --artifact /path/to/snapdragon-rpi5-arm64-backend-test-20260610T193045Z.img /dev/sdb
 
   # just see what would be flashed (works without sudo)
   $0 --role frontend --list

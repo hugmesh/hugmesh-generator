@@ -238,6 +238,15 @@ SYSROOT="${WORK_DIR}/sysroot"
 ISO_DIR="${WORK_DIR}/isoroot"
 CHOST="x86_64-pc-linux-gnu"
 
+# Single, sortable UTC build stamp shared by EVERY artifact of this run, so the
+# .img / .iso / stage4 / fs tarball all carry the same identifier. Computed once
+# here at build start. Artifacts are named:
+#   ${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.<ext>
+# (the ${BRAND}- prefix + role token keep the QEMU launcher's and flash-disk.sh's
+#  'snapdragon-x86-*' / 'snapdragon-*-<role>-*' autodetect globs matching.)
+BUILD_TS="$(date -u +%Y%m%dT%H%M%SZ)"
+info "Build stamp: ${BUILD_TS} (UTC; brand=${BRAND}, env=${ENV})"
+
 # GPU-derived make.conf tokens (gate the open Mesa/Vulkan stack + DRI drivers).
 if ${GPU}; then
     GPU_USE="vulkan vaapi vdpau gbm egl gles2"
@@ -627,7 +636,7 @@ case "${ROLE}" in
     be+gpu) ROLE_TAG="host" ;;
     *)      ROLE_TAG="${ROLE}" ;;
 esac
-STAGE4="${WORK_DIR}/stage4-amd64-snapdragon-${ROLE_TAG}-${REL_VERSION}.tar.xz"
+STAGE4="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.stage4.tar.xz"
 tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
     --exclude='./var/cache' --exclude='./tmp/*' -cJf "${STAGE4}" . 2>/dev/null || \
@@ -652,7 +661,7 @@ build_img() {
     local img_size_mib loop esp_part root_part root_mnt esp_uuid root_uuid kver vmlinuz initrd
     loop=""; root_mnt=""
 
-    IMG_PATH="${WORK_DIR}/gentoo-x86-amd64-${ROLE_TAG}-k8s-${REL_VERSION}.img"
+    IMG_PATH="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.img"
 
     # 1MiB alignment gap + 512MiB ESP + ROOT_MiB ext4 root + 1MiB slack.
     img_size_mib=$(( 1 + 512 + ROOT_MiB + 1 ))
@@ -763,7 +772,7 @@ build_img() {
     # .img's exact final filesystem (PARTUUID fstab + grub.cfg baked in) — the
     # rootfs "as if mounted". Mirrors the rpi5 build's FS-tarball step.
     if ${BUILD_TAR}; then
-        local fs_tar="${WORK_DIR}/gentoo-x86-amd64-${ROLE_TAG}-k8s-${REL_VERSION}.fs.tar.xz"
+        local fs_tar="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.fs.tar.xz"
         info "Filesystem tarball (mounted tree) -> ${fs_tar}"
         tar -C "${root_mnt}" --xattrs --xattrs-include='*.*' --numeric-owner -cpf - . 2>/dev/null \
             | xz -T0 -6 > "${fs_tar}" \
@@ -809,7 +818,7 @@ if ! ${SKIP_ISO}; then
     VMLINUZ="$(ls -1 "${SYSROOT}/boot/vmlinuz-"* 2>/dev/null | sort -V | tail -1 || true)"
 
     if ${LIVE_ISO} && [ -n "${VMLINUZ}" ] && [ -n "${KVER}" ]; then
-        ISO_PATH="${WORK_DIR}/gentoo-x86-amd64-${ROLE_TAG}-live-${REL_VERSION}.iso"
+        ISO_PATH="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.live.iso"
         banner "Building bootable LIVE ISO (grub-mkrescue + squashfs)"
         # Live initramfs (dmsquash-live) built inside the chroot.
         mount_chroot; trap umount_chroot EXIT
@@ -846,7 +855,7 @@ EOF
     fi
 
     if ${INSTALLER_ISO}; then
-        INSTALLER_ISO_PATH="${WORK_DIR}/gentoo-x86-amd64-${ROLE_TAG}-installer-${REL_VERSION}.iso"
+        INSTALLER_ISO_PATH="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.installer.iso"
         banner "Building installer ISO (stage4 + install-x86.sh; boot a live USB to install)"
         INST_DIR="${WORK_DIR}/isoroot-installer"
         rm -rf "${INST_DIR}"; mkdir -p "${INST_DIR}/stage4"
