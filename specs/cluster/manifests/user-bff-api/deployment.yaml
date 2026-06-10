@@ -1,0 +1,99 @@
+# user-bff — the Backend-For-Frontend the snapdragon-user-ui talks to for the
+# self-service user surfaces (/bff/user/**): profile, preferences, and block list.
+# It owns the user_profile / user_preference / user_block tables in its OWN
+# dedicated Postgres (user-bff-db) and calls federation-api (as a JWT-bearing
+# WebClient) for the user's federated module/profile data.
+#
+# It is a ClusterIP-only service in snapdragon-backend: nothing reaches it from
+# outside except via the fe-gateway, which routes same-origin /bff/user/** to it
+# AND enforces the Casdoor role rules (/bff/user/** => ROLE_USER) from the route
+# DB first.
+#
+# Security model: like federation-api, user-bff is purely an OAuth2 RESOURCE
+# SERVER. It VALIDATES the cluster Casdoor JWT itself (CASDOOR_ISSUER_URI, JWKS
+# auto-discovered) and FORWARDS the caller's bearer token onward to federation-api
+# — it mints/holds NO outbound client creds, so it needs NO Casdoor app or client
+# secret of its own.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snapdragon-user-bff-api
+  namespace: snapdragon-backend
+  labels: { app: snapdragon-user-bff-api, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: snapdragon-user-bff-api } }
+  template:
+    metadata: { labels: { app: snapdragon-user-bff-api } }
+    spec:
+      nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c29"
+      containers:
+        - name: snapdragon-user-bff-api
+          image: snapdragon-systems/user-bff-api:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            # OAuth2 resource server: validate the cluster Casdoor JWT itself.
+            # JWKS auto-discovered from the issuer well-known; no jwk-set-uri /
+            # client secret needed (pure resource server, like federation-api).
+            - name: CASDOOR_ISSUER_URI
+              value: "https://id.snapdragon.systems"
+            # WebClient to the federation-api module-federation registry (the
+            # user BFF reads the user's federated module/profile data there,
+            # forwarding the caller JWT).
+            - name: FEDERATION_API_URL
+              value: "http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080"
+            # Config datastore: the user_profile / user_preference / user_block
+            # tables. The app's application.yml defaults spring.r2dbc +
+            # spring.liquibase to a literal `snapdragon-pg` host that does NOT
+            # exist; OVERRIDE both here to the dedicated user-bff-db (mirrors how
+            # admin-bff/federation override to their dedicated dbs). R2DBC is the
+            # runtime handle; the JDBC handle is used by Liquibase ONCE at startup.
+            # Password sourced from Vault via External Secrets (ESO Secret
+            # user-bff-db-auth, key password) — the SAME Secret the user-bff-db
+            # pod's POSTGRES_PASSWORD mounts, so the DB and its consumer stay in sync.
+            - name: SPRING_R2DBC_URL
+              value: "r2dbc:postgresql://user-bff-db.snapdragon-backend.svc.cluster.local:5432/userbff"
+            - name: SPRING_R2DBC_USERNAME
+              value: "userbff"
+            - name: SPRING_R2DBC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-db-auth
+                  key: password
+            - name: SPRING_LIQUIBASE_URL
+              value: "jdbc:postgresql://user-bff-db.snapdragon-backend.svc.cluster.local:5432/userbff"
+            - name: SPRING_LIQUIBASE_USER
+              value: "userbff"
+            # Same ESO Secret user-bff-db-auth (key password) as R2DBC above.
+            - name: SPRING_LIQUIBASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-db-auth
+                  key: password
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            initialDelaySeconds: 45
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 768Mi }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}

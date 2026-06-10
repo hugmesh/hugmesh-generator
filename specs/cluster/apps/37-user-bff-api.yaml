@@ -1,0 +1,22 @@
+# user-bff — Backend-For-Frontend for the snapdragon-user-ui. ClusterIP in
+# snapdragon-backend; the ONLY way in is the fe-gateway /bff/user/** route (same
+# origin as snapdragon.systems). Owns the user_profile / user_preference /
+# user_block tables in user-bff-db and calls federation-api (JWT-bearing WebClient)
+# for the user's federated module/profile data.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: user-bff-api
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/user-bff-api
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

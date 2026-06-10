@@ -1,0 +1,31 @@
+# snapdragon-api-docs — the API documentation Angular micro-frontend remote. Its
+# own nginx (own repo + pod) in the snapdragon-frontend namespace, federated into
+# the snapdragon.systems host: it serves a remoteEntry.json the host's
+# loadRemoteModule consumes, mounted at /apidocs (admin role — the rendered
+# OpenAPI/spec docs are gated to ROLE_ADMIN, matching federation's spec floor).
+# Repo: github.com/Snapdragon-Systems/snapdragon-api-docs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: snapdragon-api-docs, namespace: snapdragon-frontend, labels: { app: snapdragon-api-docs, app.kubernetes.io/part-of: snapdragon.systems } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: snapdragon-api-docs } }
+  template:
+    metadata: { labels: { app: snapdragon-api-docs } }
+    spec:
+      nodeSelector: { snapdragon.systems/frontend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c48"
+      containers:
+        - name: web
+          image: snapdragon-systems/api-docs:dev
+          ports: [{ name: http, containerPort: 80 }]
+          resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: snapdragon-api-docs, namespace: snapdragon-frontend }
+spec: { selector: { app: snapdragon-api-docs }, ports: [{ name: http, port: 80, targetPort: http }] }

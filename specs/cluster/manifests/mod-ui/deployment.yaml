@@ -1,0 +1,31 @@
+# snapdragon-mod-ui — the moderation Angular micro-frontend remote. Its own nginx
+# (own repo + pod) in the snapdragon-frontend namespace, federated into the
+# snapdragon.systems host: it serves a remoteEntry.json the host's loadRemoteModule
+# consumes, mounted at /mod (mod role). Talks to mod-bff-api via the same-origin
+# /bff/mod/** fe-gateway route.
+# Repo: github.com/Snapdragon-Systems/snapdragon-mod-ui
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: snapdragon-mod-ui, namespace: snapdragon-frontend, labels: { app: snapdragon-mod-ui, app.kubernetes.io/part-of: snapdragon.systems } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: snapdragon-mod-ui } }
+  template:
+    metadata: { labels: { app: snapdragon-mod-ui } }
+    spec:
+      nodeSelector: { snapdragon.systems/frontend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c46"
+      containers:
+        - name: web
+          image: snapdragon-systems/mod-ui:dev
+          ports: [{ name: http, containerPort: 80 }]
+          resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: snapdragon-mod-ui, namespace: snapdragon-frontend }
+spec: { selector: { app: snapdragon-mod-ui }, ports: [{ name: http, port: 80, targetPort: http }] }

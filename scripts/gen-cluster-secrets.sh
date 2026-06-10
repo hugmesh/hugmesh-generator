@@ -247,11 +247,14 @@ done
 
 CLICKHOUSE_PASSWORD="$(openssl rand -base64 24)"
 
-# Dedicated per-app Postgres passwords (federation-db / admin-bff-db). Each DB and
-# its single consumer reference the SAME Vault key so they stay in sync. The DB
-# name + user stay literal (federation / adminbff); only the password is minted.
+# Dedicated per-app Postgres passwords (federation-db / admin-bff-db / mod-bff-db /
+# user-bff-db). Each DB and its single consumer reference the SAME Vault key so
+# they stay in sync. The DB name + user stay literal (federation / adminbff /
+# modbff / userbff); only the password is minted.
 FEDERATION_DB_PASSWORD="$(openssl rand -base64 24)"
 ADMIN_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
+MOD_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
+USER_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 
 UPTRACE_PG_PASSWORD="$(openssl rand -base64 24)"
 UPTRACE_PROJECT_TOKEN="$(openssl rand -hex 32)"
@@ -293,11 +296,16 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
             github_client_secret="${CASDOOR_GAMES_GITHUB_CLIENT_SECRET}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/clickhouse" \
             password="${CLICKHOUSE_PASSWORD}"
-        # Dedicated per-app Postgres passwords (federation-db / admin-bff-db).
+        # Dedicated per-app Postgres passwords (federation-db / admin-bff-db /
+        # mod-bff-db / user-bff-db).
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/federation-db" \
             password="${FEDERATION_DB_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/admin-bff-db" \
             password="${ADMIN_BFF_DB_PASSWORD}"
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/mod-bff-db" \
+            password="${MOD_BFF_DB_PASSWORD}"
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/user-bff-db" \
+            password="${USER_BFF_DB_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/uptrace" \
             pg_password="${UPTRACE_PG_PASSWORD}" \
             project_token="${UPTRACE_PROJECT_TOKEN}"
@@ -317,7 +325,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/gitlab-registry" \
             username="${GITLAB_REGISTRY_USER}" \
             token="${GITLAB_REGISTRY_TOKEN}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-games,clickhouse,federation-db,admin-bff-db,uptrace,mail,gitlab-registry}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-games,clickhouse,federation-db,admin-bff-db,mod-bff-db,user-bff-db,uptrace,mail,gitlab-registry}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -370,6 +378,8 @@ CASDOOR_APP_SECRETS_JSON="${CASDOOR_APP_SECRETS_JSON}" \
 CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD}" \
 FEDERATION_DB_PASSWORD="${FEDERATION_DB_PASSWORD}" \
 ADMIN_BFF_DB_PASSWORD="${ADMIN_BFF_DB_PASSWORD}" \
+MOD_BFF_DB_PASSWORD="${MOD_BFF_DB_PASSWORD}" \
+USER_BFF_DB_PASSWORD="${USER_BFF_DB_PASSWORD}" \
 UPTRACE_PG_PASSWORD="${UPTRACE_PG_PASSWORD}" \
 UPTRACE_PROJECT_TOKEN="${UPTRACE_PROJECT_TOKEN}" \
 python3 - "${SECRETS_JSON}" <<'PY'
@@ -420,6 +430,12 @@ data = {
         },
         "admin-bff-db-auth": {
             "password": os.environ["ADMIN_BFF_DB_PASSWORD"],
+        },
+        "mod-bff-db-auth": {
+            "password": os.environ["MOD_BFF_DB_PASSWORD"],
+        },
+        "user-bff-db-auth": {
+            "password": os.environ["USER_BFF_DB_PASSWORD"],
         },
         # snapdragon-actions two-Casdoor sync: admin client per side. SYSTEMS side
         # reuses the systems Casdoor OIDC client; GAMES side reuses threewizards-app.
