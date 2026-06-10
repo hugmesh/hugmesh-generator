@@ -1,0 +1,33 @@
+# be-gateway routes (compose). Translated from specs/cluster/apps/20-gateway-be.yaml
+# to compose service DNS. The mastodon/* + matrix routes target the OPT-IN social
+# tier (mastodon-web:3000 / synapse:8008); they only resolve when the stack is
+# brought up with `--profile social` (otherwise those routes simply 503 — the rest
+# of the be-gateway works). federation-api MUST precede the /api/** catch-all.
+spring:
+  cloud:
+    gateway:
+      routes:
+        # --- Mastodon (opt-in social tier) ---
+        - id: mastodon-oauth
+          uri: http://mastodon-web:3000
+          predicates:
+            - Path=/oauth/**
+        - id: mastodon-api
+          uri: http://mastodon-web:3000
+          predicates:
+            - Path=/api/v1/**
+        # --- Matrix (opt-in social tier) ---
+        - id: matrix-api
+          uri: http://synapse:8008
+          predicates:
+            - Path=/_matrix/**
+        # --- snapdragon-federation-api (MORE specific than /api/** — declared first) ---
+        - id: federation-api
+          uri: http://snapdragon-federation-api:8080
+          predicates:
+            - Path=/api/federation/**
+        # --- Snapdragon Spring APIs (snapdragon-actions) ---
+        - id: snapdragon-api
+          uri: http://snapdragon-api:8080
+          predicates:
+            - Path=/api/**
