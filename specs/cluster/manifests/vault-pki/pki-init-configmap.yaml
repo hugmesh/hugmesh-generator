@@ -85,7 +85,8 @@ data:
     #    cross-namespace mTLS. Names mirror <svc>.<ns>.svc.cluster.local.
     for app in snapdragon-pki-gateway snapdragon-be-gateway snapdragon-fe-gateway \
                snapdragon-api snapdragon-admin-bff-api \
-               snapdragon-mod-bff-api snapdragon-user-bff-api; do
+               snapdragon-mod-bff-api snapdragon-user-bff-api \
+               snapdragon-federation-api; do
       echo "==> role ${PKI}/roles/${app}"
       vault write "${PKI}/roles/${app}" \
         allowed_domains="${app},${app}.svc.cluster.local,svc.cluster.local,${DOMAIN}" \

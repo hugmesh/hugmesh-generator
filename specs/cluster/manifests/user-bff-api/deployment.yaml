@@ -34,6 +34,40 @@ spec:
         seLinuxOptions:
           type: container_t
           level: "s0:c29"
+      # ── API-to-API mTLS identity (build-keystore) ───────────────────────────
+      # Mirrors the snapdragon-gateway chart's build-keystore initContainer: turns
+      # the Vault-PKI-issued, ESO-synced TLS Secret (snapdragon-user-bff-api-mtls:
+      # tls.crt/tls.key/ca.crt) into keystore.p12 (identity) + truststore.p12
+      # (cluster CA) for the server.ssl.* config to REQUIRE a client cert chaining
+      # to the cluster CA. Store password generated in-pod, kept only in the tmpfs
+      # /stores emptyDir, emitted into application-tls.properties loaded via
+      # SPRING_CONFIG_ADDITIONAL_LOCATION — never in git / a Secret / the pod spec.
+      initContainers:
+        - name: build-keystore
+          image: snapdragon-systems/user-bff-api:dev
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              P="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
+              openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
+                -certfile /pki/ca.crt -name snapdragon-user-bff-api \
+                -out /stores/keystore.p12 -passout "pass:${P}"
+              keytool -importcert -noprompt -alias snapdragon-cluster-ca \
+                -file /pki/ca.crt -keystore /stores/truststore.p12 \
+                -storetype PKCS12 -storepass "${P}"
+              umask 077
+              cat > /stores/application-tls.properties <<EOF
+              server.ssl.key-store-password=${P}
+              server.ssl.trust-store-password=${P}
+              EOF
+              echo "keystore + truststore + application-tls.properties built"
+          volumeMounts:
+            - { name: pki,    mountPath: /pki, readOnly: true }
+            - { name: stores, mountPath: /stores }
       containers:
         - name: snapdragon-user-bff-api
           image: snapdragon-systems/user-bff-api:dev
@@ -43,6 +77,18 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
           env:
+            # ── API-to-API mTLS (server side) ─────────────────────────────────
+            # Require a client cert chaining to the cluster CA. Store passwords come
+            # from /stores/application-tls.properties (in-pod generated, loaded via
+            # SPRING_CONFIG_ADDITIONAL_LOCATION) so they never enter the pod spec.
+            # DEPLOY-ORDER: deploy with the gateway/BFF client-cert wave (see PR body).
+            - { name: SSL_ENABLED,          value: "true" }
+            - { name: SSL_CLIENT_AUTH,      value: "need" }
+            - { name: SSL_KEY_STORE,        value: "/stores/keystore.p12" }
+            - { name: SSL_KEY_STORE_TYPE,   value: "PKCS12" }
+            - { name: SSL_TRUST_STORE,      value: "/stores/truststore.p12" }
+            - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
+            - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             # JWKS auto-discovered from the issuer well-known; no jwk-set-uri /
             # client secret needed (pure resource server, like federation-api).
@@ -87,19 +133,47 @@ spec:
                 secretKeyRef:
                   name: user-bff-db-auth
                   key: password
+          # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
+          # so curl PRESENTS this pod's client cert and validates the server cert
+          # against the cluster CA (--resolve maps the SAN to loopback). See
+          # admin-bff-api for the rationale.
           readinessProbe:
-            httpGet: { path: /actuator/health/readiness, port: http }
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >-
+                  curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
+                  --resolve snapdragon-user-bff-api:8080:127.0.0.1
+                  https://snapdragon-user-bff-api:8080/actuator/health/readiness
             initialDelaySeconds: 20
             periodSeconds: 10
           livenessProbe:
-            httpGet: { path: /actuator/health/liveness, port: http }
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - >-
+                  curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
+                  --resolve snapdragon-user-bff-api:8080:127.0.0.1
+                  https://snapdragon-user-bff-api:8080/actuator/health/liveness
             initialDelaySeconds: 45
             periodSeconds: 15
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits:   { cpu: "1",  memory: 768Mi }
           volumeMounts:
-            - { name: tmp, mountPath: /tmp }
+            - { name: tmp,    mountPath: /tmp }
+            - { name: stores, mountPath: /stores, readOnly: true }
+            - { name: pki,    mountPath: /pki,    readOnly: true }
       volumes:
         - name: tmp
           emptyDir: {}
+        # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
+        - name: pki
+          secret:
+            secretName: snapdragon-user-bff-api-mtls
+        # tmpfs for the assembled PKCS12 stores + the in-pod SSL properties.
+        - name: stores
+          emptyDir:
+            medium: Memory
