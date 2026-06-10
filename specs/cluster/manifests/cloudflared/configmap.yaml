@@ -39,5 +39,18 @@ data:
       - hostname: mastodon.snapdragon.systems
         service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
         originRequest: { noTLSVerify: true }
+      # VANITY SUBDOMAINS: *.snapdragon.systems -> the same in-cluster ingress.
+      # MUST come AFTER the reserved service hosts above (id./api./matrix./
+      # mastodon./scale.) — cloudflared matches ingress rules TOP-DOWN and the
+      # first match wins, so the explicit reserved hostnames are claimed first and
+      # the wildcard only catches the remaining <username>.<domain> hosts. The
+      # in-cluster fe-gateway ingress (apps/20-gateway-fe.yaml extraHosts) then
+      # admits the wildcard host and the fe-gateway Host=*.<domain> route resolves
+      # the public profile. (With the TUNNEL_TOKEN path this block is advisory —
+      # the equivalent wildcard public hostname must also exist in the Cloudflare
+      # dashboard tunnel config + a *.<domain> DNS record.)
+      - hostname: "*.snapdragon.systems"
+        service: https://ingress-nginx-controller.ingress-nginx.svc.cluster.local:443
+        originRequest: { noTLSVerify: true }
       # Catch-all (required last rule).
       - service: http_status:404

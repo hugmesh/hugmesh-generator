@@ -51,6 +51,100 @@ login UI** — login is internal to Casdoor. Routes per release are rendered int
 an `application-routes.yml` ConfigMap and loaded via
 `SPRING_CONFIG_ADDITIONAL_LOCATION`.
 
+## Vanity subdomains (`<username>.snapdragon.systems`)
+
+A user serves their **public** profile at `https://<username>.snapdragon.systems`.
+End-to-end the request path is:
+
+```
+<username>.snapdragon.systems
+   │  wildcard DNS  (manifests/lan-dns answers the whole brand zone in test;
+   │                 Cloudflare wildcard + manifests/cloudflared in prod)
+   ▼
+backend ingress  (ingress-nginx)
+   │  admitted because apps/20-gateway-fe.yaml ingress.extraHosts includes
+   │  "*.snapdragon.systems"
+   ▼
+snapdragon-fe-gateway   (charts/snapdragon-gateway, fe release)
+   │  Host=*.snapdragon.systems route (apps/20-gateway-fe.yaml, id: vanity-subdomain)
+   │  SetPath=/api/federation/vanity, Host header preserved, forwarded DIRECT to
+   │  federation-api (NOT via be-gateway — see "direct hop" below)
+   ▼
+snapdragon-federation-api   (GET /api/federation/vanity, public read / permitAll)
+   resolves the username (= first DNS label of the preserved Host) to the user's
+   PUBLIC profile-fragment descriptor (slug profile-<username>, kind=fragment,
+   visibility=public) — or 404 if no such public fragment exists.
+```
+
+### Routing precedence (the load-bearing detail)
+
+Spring Cloud Gateway matches routes **first-in-declared-order**, so ordering in
+`apps/20-gateway-fe.yaml` is the whole game:
+
+1. **Reserved service subdomains** (`id. api. matrix. mastodon. scale.
+   headscale.`) are fronted by the **be-gateway**/pki-gateway ingresses +
+   cloudflared and **never reach the fe-gateway**, so the wildcard route cannot
+   capture them. The cloudflared `*.<domain>` rule in `manifests/cloudflared` is
+   likewise ordered **after** the explicit reserved hostnames (cloudflared is
+   first-match-top-down) and **before** the 404 catch-all. Defence-in-depth:
+   federation-api's `VanityController` also refuses those reserved first-labels.
+2. **The apex** `snapdragon.systems` is **not** matched by `Host=*.<domain>` (the
+   `*` requires ≥1 label), so it falls through to the `frontend-host` `Path=/**`
+   catch-all (the Angular host front page).
+3. **`<username>.<domain>`** matches the `vanity-subdomain` route, which is
+   declared **after** the apex/path routes and **before** `frontend-host`, so a
+   vanity host with no special path resolves to the profile instead of the front
+   page.
+
+**Username extraction:** the gateway does **not** parse the username. It preserves
+the `Host` header and `SetPath`s to `/api/federation/vanity` (no `{username}`),
+and federation-api's `VanityController.resolveByHost` takes the **first DNS label**
+of the `Host` header as the username. (The canonical, tested contract is the path
+form `GET /api/federation/vanity/{username}`; the host form rides on it.)
+
+**Direct hop (no be-gateway):** the resolve is a **public read** — it *is* the
+public profile, no JWT — and federation-api `permitAll`s `GET
+/api/federation/vanity/**`. Routing via the be-gateway would interpose its auth
+chain and 401 the anonymous request, so the wildcard route targets
+`snapdragon-federation-api` directly.
+
+### Cross-service flow: PUBLISH → RESOLVE → SERVE
+
+This generator pass wires the **RESOLVE + routing** half. The full lifecycle and
+its honest deferrals:
+
+| Stage | What happens | Status |
+|---|---|---|
+| **Opt-in / source of truth** | A user sets `user_profile.visibility=public` + `vanity_subdomain_enabled=true` in **user-bff-api**. These two flags are the upstream gate that *governs whether the profile is published public*. | Exists (user-bff-api). |
+| **PUBLISH** | On that save, user-bff-api must (1) publish the profile-fragment bundle and (2) upsert a **federation_modules** row `slug=profile-<username>, kind=fragment, owner_user_id=<username>, visibility=public, content_hash=…` in federation-api. The federation manifest + the vanity resolve read **only** from `federation_modules`. | **DEFERRED.** `ProfileService.save` persists the flags but makes **no** federation call; `FederationApiClient.PUT /api/federation/bundles/{slug}` writes only a `user_modules` row, not a `federation_modules` row (that registration is currently ROLE_ADMIN via `ModuleRegistryController`). Recommended follow-up: an **owner-scoped self-publish** endpoint in federation (e.g. owner-gated `PUT /api/federation/vanity/{username}`) rather than widening admin CRUD. Documented in the federation-api README. |
+| **RESOLVE** | fe-gateway `Host=*.<domain>` route → federation-api `GET /api/federation/vanity` returns the public fragment descriptor (`slug`, `remoteEntryUrl`, `exposedModule`, `contentHash`, the `/_fragments/<slug>/<hash>/` static path) iff `visibility=public` (+ enabled + circuit closed); else 404. **Public-only is double-enforced** (DB finder filters `visibility=public`, and the service re-asserts), so an internal/disabled/kill-switched fragment can never leak. | **Implemented this pass** (federation-api PR) + the routing here. |
+| **SERVE** | The `snapdragon-remote-fragment` fleet (apps/41-remote-fragment.yaml) already syncs every `kind=fragment` module in the manifest to `/_fragments/<slug>/<contentHash>/` and nginx-serves it; the fe-gateway already routes `/_fragments/**`. So the fragment bytes are served **once its `federation_modules` row exists** (i.e. once PUBLISH runs). | Substrate **exists**; the vanity **host shell page** (the Angular shell that `loadRemoteModule`s the fragment's `remoteEntry.json` and renders the profile under the bare vanity host) is a **frontend follow-up**, not built this pass. |
+
+### Gate: source of truth
+
+- **user-bff-api** (`visibility=public` + `vanity_subdomain_enabled=true`) is the
+  **upstream** gate — it decides whether the profile gets published as a public
+  `federation_modules` row.
+- **federation-api** is the **last-line** gate — it serves the resolve **only**
+  when `federation_modules.visibility='public'` (never internal). Both gates must
+  agree; federation is public-only by construction.
+
+### Honest cross-service deferral — shared gateway `PUBLIC_PATHS` (a THIRD repo)
+
+The shared gateway image (`snapdragon-gateway` repo) ends every security chain
+with `anyExchange().authenticated()` and permits only a hardcoded `PUBLIC_PATHS`
+allowlist (`/api/auth`, `/api/registration`, `/api/login`, the
+login/registration/banned remotes). `/api/federation/vanity/**` is **not** in it,
+so the fe-gateway pod would itself **401** the anonymous vanity request before
+proxying. **To make the public vanity host actually reachable,
+`/api/federation/vanity/**` (or a `Host=*.<domain>` public rule) must be added to
+the gateway `PUBLIC_PATHS` in the `snapdragon-gateway` repo** — out of scope for
+this generator/federation-api pass, documented as a deferral here, inline in
+`apps/20-gateway-fe.yaml`, and in the federation-api README. The generator side
+(wildcard DNS already in place, fe-gateway ingress wildcard host, the ordered
+`Host=*.<domain>` route to federation-api, the cloudflared wildcard rule) is
+complete and renders clean.
+
 ## Layout
 
 ```
