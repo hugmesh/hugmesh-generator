@@ -16,6 +16,16 @@ BRAND_TITLE="Snapdragon Systems"    # human-readable title shown in UIs/messages
 ORG="Snapdragon-Systems"            # GitHub org / container-image namespace
 CLUSTER_DOMAIN="snapdragon.systems" # base domain (id./matrix./mastodon./api. derived)
 
+# ── Image / disk options ────────────────────────────────────────────
+# First-boot root-grow policy baked into the .img (see --grow). The .img is
+# built compact (only ROOT_MiB + boot), so it flashes fast and is NOT padded to
+# the size of the target USB; growroot then expands the LAST partition on first
+# boot per this policy. CLI --grow / --no-grow override this file.
+#   GROW_POLICY=fill    grow the root to fill the WHOLE USB/SD/NVMe (DEFAULT)
+#   GROW_POLICY=none    do not grow; keep the compact flashed layout
+#   GROW_POLICY=<size>  cap the root filesystem, e.g. 16G, 12000M, 50% (% of dev)
+# GROW_POLICY="fill"
+
 # ── Default accounts (fallback when no USB KEYS stick is present) ───
 DEFAULT_USER="pi"                   # fallback non-root user
 DEFAULT_USER_PASS="raspberry"       # CHANGE for real builds

@@ -1,10 +1,45 @@
 #!/sbin/openrc-run
 # growroot — first boot: expand the root partition + ext4 filesystem to fill the
-# whole disk. The images are flashed compact (stage4 + headroom); this reclaims
-# the rest of the SD card / SSD / USB / NVMe so the node runs read-write on the
-# full medium. Strictly NON-FATAL and idempotent: any failure is logged and the
-# boot continues; a done-marker stops it re-running. Ordered before keys-provision
-# so first-boot provisioning sees the full disk.
+# whole disk (or a configured cap). The images are flashed COMPACT (stage4 +
+# headroom, see ROOT_MiB in the build scripts); this reclaims the rest of the SD
+# card / SSD / USB / NVMe so the node runs read-write on the full medium without
+# the .img ever being padded to a fixed size. Strictly NON-FATAL and idempotent:
+# any failure is logged and the boot continues; a done-marker stops it re-running.
+# Ordered before keys-provision so first-boot provisioning sees the full disk.
+#
+# ── Grow policy (DEFAULT: fill the whole device) ───────────────────────────────
+# "Grow to fill the USB by default, or use as little of the USB as needed unless
+# specified." The amount grown is controlled by a GROW directive whose value is
+# one of:
+#     fill        grow the last partition to the end of the device (DEFAULT)
+#     none|off|0  do NOT grow — leave the image's compact layout as flashed
+#                 ("as little of the USB as needed")
+#     <size>      grow the root FILESYSTEM to an absolute size, e.g. 16G, 12000M,
+#                 32768MiB, 50% (a percentage of the whole device). The partition
+#                 is still extended to the device end (cheap, reversible), but
+#                 resize2fs caps the live filesystem at <size> so the operator can
+#                 hand the remaining tail to a separate data partition / LVM / etc.
+#
+# Resolution precedence (FIRST hit wins) — lets an operator cap or disable the
+# grow at flash- or boot-time WITHOUT rebuilding the image:
+#     1. kernel cmdline token   growfs=<value>     (no reflash; edit cmdline.txt
+#                                                    or the GRUB line, or set once
+#                                                    at the boot prompt)
+#     2. /boot firmware file     growfs.conf  -> GROW=<value>   (edit the FAT
+#                                /boot, /boot/firmware or ESP partition on any PC)
+#     3. baked default file      /etc/growfs.conf -> GROW=<value>  (written by the
+#                                build from --grow / config; ships "fill")
+#     4. built-in fallback       fill
+#
+# ── LUKS awareness (encryption-at-rest) ────────────────────────────────────────
+# As of the merged encryption-at-rest work, ATTACHED DATA partitions
+# (.storage.devices[] in provision.json) are wrapped in LUKS2 by keys-provision,
+# while the ROOT partition this service grows is PLAINTEXT ext4 — so the normal
+# path here never touches LUKS. We still handle the LUKS case defensively: if /
+# is ever mounted from a /dev/mapper/* device backed by a LUKS partition, we
+# grow the backing partition, `cryptsetup resize` the mapper, THEN resize2fs the
+# mapper. That makes the ordering correct (partition -> crypt container ->
+# filesystem) whether or not LUKS is in play. See docs/ENCRYPTION-AT-REST.md.
 
 description="Expand the root filesystem to fill the disk (first boot)"
 
@@ -16,14 +51,60 @@ depend() {
     keyword -docker -lxc -prefix -vserver
 }
 
+# ── Grow-policy resolver ───────────────────────────────────────────────────────
+# Echoes the effective GROW value (lower-cased). Honours the precedence above.
+# Pure POSIX sh; tolerant of missing files / malformed lines.
+_growroot_policy() {
+    local v="" line tok cmdline f
+
+    # 1. Kernel cmdline: growfs=<value> (highest precedence; survives no reflash).
+    if [ -r /proc/cmdline ]; then
+        cmdline="$(cat /proc/cmdline 2>/dev/null)"
+        for tok in ${cmdline}; do
+            case "${tok}" in
+                growfs=*) v="${tok#growfs=}" ;;
+            esac
+        done
+    fi
+
+    # 2/3. Config files: GROW=<value> in /boot firmware, then the baked /etc copy.
+    if [ -z "${v}" ]; then
+        for f in /boot/growfs.conf /boot/firmware/growfs.conf /boot/efi/growfs.conf /etc/growfs.conf; do
+            [ -r "${f}" ] || continue
+            line="$(grep -E '^[[:space:]]*GROW[[:space:]]*=' "${f}" 2>/dev/null | tail -n1)"
+            [ -n "${line}" ] || continue
+            v="${line#*=}"
+            # strip surrounding whitespace, quotes and inline comments
+            v="${v%%#*}"
+            v="$(printf '%s' "${v}" | tr -d "\"' " | tr -d '[:space:]')"
+            [ -n "${v}" ] && break
+        done
+    fi
+
+    # 4. Default.
+    [ -n "${v}" ] || v="fill"
+    printf '%s' "${v}" | tr '[:upper:]' '[:lower:]'
+}
+
 start() {
     if [ -f "${done_marker}" ]; then
         einfo "growroot: already expanded; nothing to do"
         return 0
     fi
-    ebegin "Expanding the root filesystem to fill the disk"
 
-    local src dev name pn disk
+    local policy
+    policy="$(_growroot_policy)"
+    case "${policy}" in
+        none|off|no|false|0)
+            einfo "growroot: grow disabled (GROW=${policy}); leaving the compact layout as flashed"
+            touch "${done_marker}"
+            return 0
+            ;;
+    esac
+
+    ebegin "Expanding the root filesystem (GROW=${policy})"
+
+    local src dev name pn disk crypt_part crypt_name
     src="$(findmnt -fno SOURCE / 2>/dev/null)"
     case "${src}" in
         /dev/*) dev="${src}" ;;
@@ -31,7 +112,34 @@ start() {
            touch "${done_marker}"; eend 0; return 0 ;;
     esac
 
+    # ── LUKS-aware indirection ─────────────────────────────────────────────────
+    # If / sits on a device-mapper node (e.g. /dev/mapper/cryptroot), the thing we
+    # repartition is the UNDERLYING block device, not the mapper. Resolve the
+    # mapper's single slave (the LUKS partition) and remember the mapper name so we
+    # can `cryptsetup resize` it after the partition grows and before resize2fs.
+    crypt_part=""; crypt_name=""
     name="${dev##*/}"
+    case "${dev}" in
+        /dev/mapper/*|/dev/dm-*)
+            local slave slave_dev
+            crypt_name="$(dmsetup info -c --noheadings -o name "${dev}" 2>/dev/null)"
+            # A LUKS root has exactly one slave: the backing partition.
+            for slave in "/sys/class/block/${name}/slaves/"*; do
+                [ -e "${slave}" ] || continue
+                slave_dev="/dev/${slave##*/}"
+                [ -b "${slave_dev}" ] && crypt_part="${slave_dev}"
+            done
+            if [ -n "${crypt_part}" ]; then
+                einfo "growroot: root is LUKS/dm on ${crypt_part} (mapper ${crypt_name:-?}); growing the backing partition"
+                dev="${crypt_part}"
+                name="${dev##*/}"
+            else
+                ewarn "growroot: root '${src}' is a dm device but its backing partition is unresolved; skipping"
+                touch "${done_marker}"; eend 0; return 0
+            fi
+            ;;
+    esac
+
     if [ ! -r "/sys/class/block/${name}/partition" ]; then
         ewarn "growroot: ${dev} is not a partition; skipping"
         touch "${done_marker}"; eend 0; return 0
@@ -46,6 +154,8 @@ start() {
     # Grow the (last) partition to the end of the disk. sfdisk rewrites the table
     # and, on GPT, relocates the backup header to the new end-of-disk; partx -u
     # then syncs the kernel's view without a reboot (the disk is busy/mounted).
+    # We ALWAYS extend the partition to the device end (it is free and reversible);
+    # a non-"fill" policy then caps the FILESYSTEM below, not the partition.
     if command -v sfdisk >/dev/null 2>&1; then
         if echo ', +' | sfdisk --force --no-reread -N "${pn}" "${disk}" >/dev/null 2>&1; then
             partx -u "${disk}" >/dev/null 2>&1 || partprobe "${disk}" >/dev/null 2>&1 || true
@@ -56,9 +166,73 @@ start() {
         ewarn "growroot: sfdisk not found; only resizing within the current partition"
     fi
 
-    # Online-grow the mounted ext4 root into the (now larger) partition.
-    resize2fs "${dev}" >/dev/null 2>&1 || ewarn "growroot: resize2fs reported an error"
+    # ── LUKS container resize ──────────────────────────────────────────────────
+    # When root is encrypted, the crypt container must be enlarged into the now-
+    # larger partition BEFORE the filesystem can use the new space. No-op (and
+    # absent code path) on the normal plaintext root.
+    if [ -n "${crypt_name}" ]; then
+        if command -v cryptsetup >/dev/null 2>&1; then
+            cryptsetup resize "${crypt_name}" >/dev/null 2>&1 \
+                || ewarn "growroot: cryptsetup resize ${crypt_name} reported an error"
+        else
+            ewarn "growroot: cryptsetup not found; cannot grow the LUKS container — skipping fs resize"
+            touch "${done_marker}"; eend 0; return 0
+        fi
+    fi
 
+    # The device resize2fs operates on: the mapper when encrypted, else the
+    # partition. (We re-derive from the live mount in case the mapper path was
+    # rewritten above to point at the backing partition.)
+    local fs_dev
+    fs_dev="$(findmnt -fno SOURCE / 2>/dev/null)"
+    [ -b "${fs_dev}" ] || fs_dev="${dev}"
+
+    # Online-grow the mounted ext4 root. "fill" -> grow to the whole partition
+    # (resize2fs with no size). A concrete cap (<size>) -> grow only up to that
+    # size so the operator can reserve the remaining tail.
+    case "${policy}" in
+        fill|""|max|all|100%)
+            resize2fs "${fs_dev}" >/dev/null 2>&1 || ewarn "growroot: resize2fs reported an error"
+            ;;
+        *)
+            # Percentage of the whole device (e.g. 50%) -> convert to an absolute
+            # ext4 size in MiB; otherwise pass the size through to resize2fs, which
+            # accepts K/M/G/T suffixes and bare 4K-block counts.
+            local target="${policy}"
+            case "${policy}" in
+                *%)
+                    local pct disk_sz_sec dev_mib
+                    pct="${policy%\%}"
+                    disk_sz_sec="$(cat "/sys/class/block/${disk##*/}/size" 2>/dev/null || echo 0)"
+                    dev_mib=$(( disk_sz_sec / 2048 ))           # 512B sectors -> MiB
+                    if [ "${dev_mib}" -gt 0 ] && [ "${pct}" -gt 0 ] 2>/dev/null; then
+                        target="$(( dev_mib * pct / 100 ))M"
+                    else
+                        ewarn "growroot: bad percentage '${policy}'; falling back to fill"
+                        target=""
+                    fi
+                    ;;
+            esac
+            if [ -n "${target}" ]; then
+                einfo "growroot: capping the root filesystem at ${target}"
+                if ! resize2fs "${fs_dev}" "${target}" >/dev/null 2>&1; then
+                    ewarn "growroot: resize2fs to ${target} failed (too small / invalid?); growing to fill instead"
+                    resize2fs "${fs_dev}" >/dev/null 2>&1 || ewarn "growroot: resize2fs reported an error"
+                fi
+            else
+                resize2fs "${fs_dev}" >/dev/null 2>&1 || ewarn "growroot: resize2fs reported an error"
+            fi
+            # A capped grow is a deliberate, terminal choice: mark done so we don't
+            # keep retrying against an intentionally-unused tail.
+            rm -f /var/lib/growroot.attempts
+            touch "${done_marker}"
+            einfo "growroot: root filesystem sized to ${policy}"
+            eend 0
+            return 0
+            ;;
+    esac
+
+    # ── fill: confirm we actually reached the end of the disk ──────────────────
     # Only mark the job done once the root partition actually reaches (within 64 MiB
     # of) the end of the disk — i.e. the medium was already full, or we just grew it.
     # If a transient sfdisk/partx error left a large unused tail, leave the marker

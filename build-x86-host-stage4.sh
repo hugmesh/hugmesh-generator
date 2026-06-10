@@ -59,6 +59,7 @@ RESUME=false
 # ── Artifact selection (mirrors rpi5): .img is now the DEFAULT deliverable ──
 BUILD_IMG=true          # produce the flashable raw .img (DEFAULT)
 ROOT_MiB=8192           # ext4 root partition size in the .img (growroot expands it on first boot)
+GROW_POLICY="fill"      # first-boot grow policy baked into /etc/growfs.conf: fill|none|<size>
 COMPRESS_IMG=false      # xz -9 the finished .img
 LIVE_ISO=true           # self-booting live squashfs ISO (DEFAULT; --no-live-iso to skip)
 INSTALLER_ISO=false     # stage4 + install-x86.sh data ISO (opt-in: --installer-iso)
@@ -105,7 +106,14 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --skip-clean          Keep docs/headers/symbols.
   Artifacts (.img + live ISO are the DEFAULT; installer ISO is opt-in):
       --no-img              Don't build the raw .img.
-      --img-size MiB        ext4 root size in the .img. Default: ${ROOT_MiB}.
+      --img-size MiB        ext4 root size in the .img (built COMPACT, not
+                            padded to the USB). Default: ${ROOT_MiB}.
+      --grow V              First-boot grow policy baked in (/etc/growfs.conf):
+                            fill (DEFAULT, fill the whole USB/SD/NVMe) | none
+                            (keep compact) | <size> e.g. 16G, 12000M, 50%.
+                            Override per-device via growfs.conf on the ESP or a
+                            growfs=<v> kernel cmdline token (no rebuild).
+      --no-grow             Shorthand for --grow none.
       --compress            xz -9 the finished .img.
       --live-iso            Force-build the self-booting live squashfs ISO (DEFAULT).
       --no-live-iso         Skip the live ISO (clean disable; no installer ISO implied).
@@ -163,6 +171,8 @@ while [[ $# -gt 0 ]]; do
         --img) BUILD_IMG=true; shift ;;
         --no-img) BUILD_IMG=false; shift ;;
         --img-size) ROOT_MiB="$2"; shift 2 ;;
+        --grow)     GROW_POLICY="$2"; shift 2 ;;
+        --no-grow)  GROW_POLICY="none"; shift ;;
         --compress) COMPRESS_IMG=true; shift ;;
         --live-iso) LIVE_ISO=true; shift ;;
         --installer-iso) INSTALLER_ISO=true; shift ;;
@@ -216,6 +226,16 @@ case "${ROLE}" in
     *)
         err "--role must be one of: pki | be | fe | be+gpu | omnibus  (host = be+gpu alias)"
         exit 1 ;;
+esac
+
+# ── Validate/normalize the first-boot grow policy (baked into /etc/growfs.conf) ──
+# fill (DEFAULT) | none/off/0 (keep the compact flashed layout) | concrete size
+# (16G, 12000M, 50% ...). Concrete sizes pass through to resize2fs on the node.
+GROW_POLICY="$(printf '%s' "${GROW_POLICY}" | tr '[:upper:]' '[:lower:]')"
+case "${GROW_POLICY}" in
+    fill|none|off|no|false|0) ;;
+    *[0-9]g|*[0-9]m|*[0-9]k|*[0-9]t|*[0-9]gib|*[0-9]mib|*[0-9]kib|*[0-9]%|*[0-9]) ;;
+    *) err "--grow must be: fill | none | <size> (e.g. 16G, 12000M, 50%)  (got '${GROW_POLICY}')"; exit 1 ;;
 esac
 
 # ── Validate + announce the build ENV (baked into the image) ──────────────
@@ -291,6 +311,25 @@ render_template() {
         -e "s|@@ENV@@|${ENV}|g" \
         -e "s|@@GPU_USE@@|${GPU_USE}|g" -e "s|@@VIDEO_CARDS@@|${VIDEO_CARDS}|g" \
         "$1" > "$2"
+}
+
+# ── write_growfs_conf <dest> ──────────────────────────────────────────────────
+# Emit the first-boot grow policy file consumed by the growroot service (GROW=
+# fill|none|<size>). The comment header documents the per-device overrides so an
+# operator editing the copy on the ESP needs no external docs.
+write_growfs_conf() {
+    local dest="$1"
+    mkdir -p "$(dirname "${dest}")"
+    cat > "${dest}" <<GROWFS_EOF
+# growfs.conf — first-boot root-grow policy (read by the growroot service).
+#   GROW=fill    grow the root to fill the WHOLE USB/SSD/NVMe (DEFAULT)
+#   GROW=none    do not grow; keep the compact flashed layout
+#   GROW=<size>  cap the root filesystem, e.g. 16G, 12000M, 50% (% of device)
+# Precedence (first wins): kernel cmdline growfs=<v> > this file on the ESP >
+#   /etc/growfs.conf (baked) > built-in fill. Edit this copy on the ESP to
+#   retune a single flashed medium without rebuilding the image.
+GROW=${GROW_POLICY}
+GROWFS_EOF
 }
 
 # ── ENV app-gate (deterministic prune of the BAKED apps/ tree) ─────────────
@@ -436,6 +475,12 @@ for svc in containerd kubelet headscale tailscaled keys-provision growroot; do
 done
 render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
+
+# First-boot grow policy (read by the growroot service). Default "fill" => the
+# root expands to fill the whole USB/SSD/NVMe on first boot; --grow none keeps the
+# compact flashed layout; --grow <size> caps the root filesystem. A copy is also
+# dropped on the ESP in build_img so it can be edited per-device after a flash.
+write_growfs_conf "${SYSROOT}/etc/growfs.conf"
 
 # Cluster GitOps payload + role markers
 mkdir -p "${SYSROOT}/etc/snapdragon" "${SYSROOT}/var/lib/snapdragon"
@@ -788,6 +833,11 @@ build_img() {
         fi
         echo "}"
     } > "${root_mnt}/boot/grub/grub.cfg"
+
+    # Drop a per-device-editable growfs.conf on the ESP so an operator can retune
+    # the first-boot grow (fill|none|<size>) on a flashed disk WITHOUT a rebuild.
+    # growroot reads /boot/efi/growfs.conf ahead of the baked /etc copy.
+    write_growfs_conf "${root_mnt}/boot/efi/growfs.conf"
 
     # ── Filesystem tarball ────────────────────────────────────────────
     # Capture the FULLY-MOUNTED tree (ext4 root with the FAT ESP mounted at
