@@ -26,6 +26,10 @@
 # Branding:          make build-all BRAND=acme DOMAIN=acme.example  (-> brands/acme.conf)
 #
 # Products land in a local, gitignored ./out by default (WORK_DIR=$(CURDIR)/out).
+# Each arch's heavy build tree (sysroot/distfiles/pkgdir) lives in a PER-ARCH
+# subdir under WORK_DIR — snap-build-pi5 (aarch64) and snap-build-x86 (amd64) —
+# so the Pi and x86 builds never share a sysroot. Products (.img/.iso/keys-*)
+# still land in WORK_DIR itself. `make clean` wipes WORK_DIR (subdirs included).
 
 SHELL    := /bin/bash
 WORK_DIR ?= $(CURDIR)/out
@@ -161,6 +165,8 @@ help: ## list targets
 	@echo "              Shortcuts:  make local   (ENV=test BRAND=local -> snapdragon.test)"
 	@echo "                          make prod    (ENV=prod, real domain — creds from keys USB)"
 	@echo "  Output:     products land in ./out (WORK_DIR=$(CURDIR)/out; local + gitignored)."
+	@echo "              Per-arch build trees: ./out/snap-build-pi5 + ./out/snap-build-x86"
+	@echo "              (sysroot/distfiles/pkgdir; the two arches never share a sysroot)."
 
 ## ── build ─────────────────────────────────────────────────────────────
 # Every build target dispatches: NATIVE unset -> re-invoke inside the builder
