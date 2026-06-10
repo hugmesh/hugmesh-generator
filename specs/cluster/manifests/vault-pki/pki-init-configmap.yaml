@@ -24,6 +24,21 @@ data:
     DOMAIN="${CLUSTER_DOMAIN:-snapdragon.systems}"
     PKI="pki_int"
 
+    # ── Crypto agility knobs (override via the Job env) ────────────────
+    # Centralised so the brand/operator tunes the issued-cert strength in one
+    # place; kept in lockstep with scripts/gen-keystores.sh (see
+    # docs/CRYPTO-AUDIT.md). Defaults are the strongest Vault + the JVM/openssl
+    # truststore validate interoperably TODAY:
+    #   PKI_KEY_TYPE  rsa | ec   — leaf/role key family.
+    #   PKI_KEY_BITS  RSA modulus (rsa) 4096 [was 2048], or curve size (ec) 384.
+    #   PKI_SIG_BITS  X.509 signature digest size: 384 => SHA-384 (sha384With…
+    #                 RSA / ecdsa-with-SHA384). SHA-3 cert signatures are not yet
+    #                 portable to the SunRsaSign JCA provider, so they remain a
+    #                 documented migration path, not the default.
+    PKI_KEY_TYPE="${PKI_KEY_TYPE:-rsa}"
+    PKI_KEY_BITS="${PKI_KEY_BITS:-4096}"
+    PKI_SIG_BITS="${PKI_SIG_BITS:-384}"
+
     echo "==> waiting for Vault at ${VAULT_ADDR}"
     i=0
     until vault status >/dev/null 2>&1 || [ $? -eq 2 ]; do   # rc 2 = sealed-but-up
@@ -57,7 +72,8 @@ data:
       echo "      For production, provision the cluster CA from the USB KEYS stick so issued" >&2
       echo "      certs chain to the same anchor as the offline gen-keystores.sh truststore." >&2
       vault write "${PKI}/root/generate/internal" \
-        common_name="${BRAND:-snapdragon} Vault Intermediate CA" ttl=43800h key_type=rsa key_bits=2048 >/dev/null
+        common_name="${BRAND:-snapdragon} Vault Intermediate CA" ttl=43800h \
+        key_type="${PKI_KEY_TYPE}" key_bits="${PKI_KEY_BITS}" signature_bits="${PKI_SIG_BITS}" >/dev/null
     fi
 
     vault write "${PKI}/config/urls" \
@@ -75,6 +91,7 @@ data:
         allowed_domains="${app},${app}.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
         allow_subdomains=true allow_glob_domains=true allow_bare_domains=true \
         allow_localhost=false server_flag=true client_flag=true \
-        key_type=rsa key_bits=2048 max_ttl=2160h ttl=720h
+        key_type="${PKI_KEY_TYPE}" key_bits="${PKI_KEY_BITS}" signature_bits="${PKI_SIG_BITS}" \
+        max_ttl=2160h ttl=720h
     done
     echo "==> Vault PKI bootstrap complete"

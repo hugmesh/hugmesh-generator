@@ -90,7 +90,46 @@ done
 OUT="${OUT:-${REPO}/keys-out}"
 KS="${OUT}/keystores"
 CA="${OUT}/certs"
-KEYALG="RSA"; KEYBITS=2048; DAYS=825
+
+# ── Crypto agility knobs (override via env / brand.conf) ────────────
+# Centralised so the brand/operator can tune the whole keystore chain in one
+# place. Defaults are the strongest the openssl+keytool+JVM toolchain handles
+# interoperably TODAY (see docs/CRYPTO-AUDIT.md):
+#   KEY_TYPE  rsa | ec        — asymmetric key family for the CA + every leaf.
+#   KEY_BITS  RSA modulus bits (rsa) — 4096 (was 2048; raised, never lowered).
+#   EC_CURVE  named curve (ec) — P-384 (ecdsa-with-SHA384 class).
+#   SIG_HASH  X.509 signature digest — sha384 (sha384WithRSAEncryption /
+#             ecdsa-with-SHA384; validated by every JVM + openssl). SHA-3 in the
+#             cert SIGNATURE is NOT yet portable to the SunRsaSign JCA provider,
+#             so it stays a documented migration path, not the default.
+#   FP_HASH   internal key/cert FINGERPRINT digest (no interop constraint) —
+#             sha3-512 (post-quantum-grade high-bit hash) where openssl supports
+#             it, else sha512.
+# Back-compat: a value still set via the old KEYALG/KEYBITS names is honoured.
+KEY_TYPE="${KEY_TYPE:-${KEYALG:-rsa}}"
+KEY_TYPE="$(printf '%s' "${KEY_TYPE}" | tr '[:upper:]' '[:lower:]')"
+KEY_BITS="${KEY_BITS:-${KEYBITS:-4096}}"
+EC_CURVE="${EC_CURVE:-P-384}"
+SIG_HASH="${SIG_HASH:-sha384}"
+DAYS="${DAYS:-825}"
+# Pick the strongest fingerprint digest openssl actually provides on this host.
+if [ -z "${FP_HASH:-}" ]; then
+  if echo x | openssl dgst -sha3-512 >/dev/null 2>&1; then FP_HASH="sha3-512"; else FP_HASH="sha512"; fi
+fi
+# Human-readable size suffix for the log line ("-4096" / " P-384").
+case "${KEY_TYPE}" in ec) KEY_TYPE_DESC=" ${EC_CURVE}" ;; *) KEY_TYPE_DESC="-${KEY_BITS}" ;; esac
+
+# Generate a private key of the configured family into $1. Used for both the
+# self-signed CA key and every per-service leaf key, so the whole chain shares
+# one algorithm decision (crypto-agility).
+gen_private_key() {
+  local out="$1"
+  case "${KEY_TYPE}" in
+    ec)  openssl genpkey -algorithm EC  -pkeyopt "ec_paramgen_curve:${EC_CURVE}" -out "${out}" 2>/dev/null ;;
+    rsa) openssl genpkey -algorithm RSA -pkeyopt "rsa_keygen_bits:${KEY_BITS}"   -out "${out}" 2>/dev/null ;;
+    *)   echo "ERROR: unsupported KEY_TYPE='${KEY_TYPE}' (use rsa|ec)" >&2; exit 1 ;;
+  esac
+}
 
 # Java API machine-users that get an mTLS identity keystore: "name:namespace".
 # (Casdoor=Go, Synapse=Python, Mastodon=Ruby are not Java; they consume the same
@@ -133,10 +172,11 @@ validate_external_ca() {
     exit 1
   fi
   # Key-matches-cert: compare public keys (works for RSA and EC). Compare hashes
-  # so no key/cert material is ever emitted.
+  # (strongest digest available — FP_HASH, sha3-512 where supported) so no
+  # key/cert material is ever emitted.
   local cert_pub key_pub
-  cert_pub="$(openssl x509 -in "${cert}" -noout -pubkey 2>/dev/null | openssl sha256 2>/dev/null)"
-  key_pub="$(openssl pkey -in "${key}" ${CA_KEY_PASS:+-passin env:CA_KEY_PASS} -pubout 2>/dev/null | openssl sha256 2>/dev/null)"
+  cert_pub="$(openssl x509 -in "${cert}" -noout -pubkey 2>/dev/null | openssl dgst "-${FP_HASH}" 2>/dev/null)"
+  key_pub="$(openssl pkey -in "${key}" ${CA_KEY_PASS:+-passin env:CA_KEY_PASS} -pubout 2>/dev/null | openssl dgst "-${FP_HASH}" 2>/dev/null)"
   if [ -z "${cert_pub}" ] || [ "${cert_pub}" != "${key_pub}" ]; then
     echo "ERROR: CA private key does not match the CA certificate (public-key mismatch)." >&2
     exit 1
@@ -171,9 +211,11 @@ if [ -n "${CA_CERT}" ] || [ -n "${CA_KEY}" ]; then
     CA_KEY_FILE="${CA_KEY}"
   fi
 elif [ ! -f "${CA}/cluster-ca.crt" ] || [ ! -f "${CA}/cluster-ca.key" ]; then
-  echo "==> Generating cluster CA"
-  openssl req -x509 -newkey "${KEYALG}:${KEYBITS}" -nodes -days 3650 \
-    -keyout "${CA}/cluster-ca.key" -out "${CA}/cluster-ca.crt" \
+  echo "==> Generating cluster CA (${KEY_TYPE^^}${KEY_TYPE_DESC:-}, ${SIG_HASH} signature)"
+  # Key first (uniform RSA/EC path), then self-sign with the chosen digest.
+  gen_private_key "${CA}/cluster-ca.key"
+  openssl req -x509 -key "${CA}/cluster-ca.key" -nodes -days 3650 "-${SIG_HASH}" \
+    -out "${CA}/cluster-ca.crt" \
     -subj "/O=${BRAND} cluster/CN=${BRAND} Cluster CA" 2>/dev/null
 else
   echo "==> Reusing existing cluster CA at ${CA}/cluster-ca.crt"
@@ -198,15 +240,18 @@ for entry in "${SERVICES[@]}"; do
   pass="$(randpass)"
   tmp="$(mktemp -d)"
   echo "  - ${svc} (CN=${cn})"
-  openssl genpkey -algorithm "${KEYALG}" -pkeyopt "rsa_keygen_bits:${KEYBITS}" -out "${tmp}/key.pem" 2>/dev/null
+  gen_private_key "${tmp}/key.pem"
   openssl req -new -key "${tmp}/key.pem" -out "${tmp}/csr.pem" -subj "/O=${BRAND}/CN=${cn}" 2>/dev/null
+  # keyEncipherment only applies to RSA key-transport suites; EC leaves use ECDHE
+  # (keyAgreement) so emit the family-appropriate keyUsage.
+  case "${KEY_TYPE}" in ec) _KU="digitalSignature,keyAgreement" ;; *) _KU="digitalSignature,keyEncipherment" ;; esac
   cat > "${tmp}/ext" <<EXT
 subjectAltName = DNS:${cn},DNS:${svc}.${ns},DNS:${svc}.${DOMAIN}
 extendedKeyUsage = serverAuth,clientAuth
-keyUsage = digitalSignature,keyEncipherment
+keyUsage = ${_KU}
 EXT
   openssl x509 -req -in "${tmp}/csr.pem" -CA "${CA_CRT_FILE}" -CAkey "${CA_KEY_FILE}" "${CA_PASSIN[@]}" \
-    -CAcreateserial -days "${DAYS}" -extfile "${tmp}/ext" -out "${tmp}/cert.pem" 2>/dev/null
+    -CAcreateserial -days "${DAYS}" "-${SIG_HASH}" -extfile "${tmp}/ext" -out "${tmp}/cert.pem" 2>/dev/null
   cat "${tmp}/cert.pem" "${CA_CRT_FILE}" > "${tmp}/chain.pem"
   # key + chain -> PKCS12 -> JKS (mTLS identity; trusts the CA too)
   openssl pkcs12 -export -inkey "${tmp}/key.pem" -in "${tmp}/cert.pem" -certfile "${CA_CRT_FILE}" \

@@ -7,8 +7,10 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BRAND="${BRAND:-snapdragon}"
+# Mirror scripts/gen-keystores.sh SERVICES (the Java machine-users that get an
+# mTLS identity keystore).
 EXPECT=("${BRAND}-pki-gateway" "${BRAND}-be-gateway" "${BRAND}-fe-gateway"
-        "${BRAND}-auth" "${BRAND}-api" "${BRAND}-admin-bff")
+        "${BRAND}-api" "${BRAND}-admin-bff-api" "${BRAND}-mod-bff-api" "${BRAND}-user-bff-api")
 
 for t in openssl keytool python3; do command -v "$t" >/dev/null || { echo "SKIP: need $t"; exit 0; }; done
 
