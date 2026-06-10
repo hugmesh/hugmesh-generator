@@ -3,6 +3,9 @@
 rpi5-stage4-build/
 /x86-host-build/
 x86-host-build/
+# Per-arch heavy build trees (sysroot/distfiles/pkgdir) under any WORK_DIR.
+snap-build-pi5/
+snap-build-x86/
 build/
 *.iso
 *.tar.xz

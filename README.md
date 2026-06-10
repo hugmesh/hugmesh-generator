@@ -18,9 +18,16 @@ way in is `make local` (a LAN `.test` fleet) or `make prod`; see
 > **Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full topology
 > and [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md) for LAN testing.**
 
-All build output lands in a **git-ignored** work directory (`./out` by default
-when driving via `make`; `rpi5-stage4-build/` / `x86-host-build/` when calling
-the scripts directly).
+All build output lands in a **git-ignored** work directory (`./out` by default,
+for both `make` and the scripts called directly; override with `WORK_DIR=` /
+`-w`). The finished **products** (`.img`, `.iso`, `.fs.tar.xz`, `stage4-*`,
+`keys-<role>/`) land directly in the work dir. Each arch's **heavy build tree**
+(sysroot, distfiles, pkgdir, ISO staging) lives in a **per-arch subdirectory**
+under it — `out/snap-build-pi5` (aarch64) and `out/snap-build-x86` (amd64) — so
+the Pi and x86 builds **never share a sysroot**, even when the whole fleet builds
+into one work dir via `make build-all`. Override a subdir name with
+`--build-subdir NAME` (or `BUILD_SUBDIR=NAME`). `make clean` wipes the work dir,
+subdirs included.
 
 ## Images
 

@@ -17,6 +17,13 @@ SHARED_SPECS="${SCRIPT_DIR}/specs"       # arch-agnostic specs (etc/, cluster/)
 
 # ── Defaults ───────────────────────────────────────────────────────
 WORK_DIR=""
+# Per-arch build subdirectory under WORK_DIR. The heavy, ARCH-SPECIFIC build
+# tree (sysroot, ISO staging, distfiles, pkgdir, seed/binary downloads) lives
+# under WORK_DIR/${BUILD_SUBDIR} so the amd64 (x86) and aarch64 (Pi) builds NEVER
+# share a sysroot when they run against the same WORK_DIR (e.g. build-all-roles).
+# Override with --build-subdir NAME or BUILD_SUBDIR=NAME in the env. The finished
+# PRODUCTS (.img/.iso/.fs.tar.xz/stage4/keys-*) still land in WORK_DIR itself.
+BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-x86}"
 JOBS="$(nproc)"
 REL_VERSION="2026.0"
 HOSTNAME=""
@@ -67,7 +74,13 @@ usage() {
 cat <<EOF
 build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
 
-  -w, --work-dir DIR        Build dir. Default: ./out  (local + gitignored)
+  -w, --work-dir DIR        Products dir (.img/.iso/.fs.tar.xz/stage4/keys-*).
+                            Default: ./out  (local + gitignored)
+  --build-subdir NAME       Per-arch subdir under --work-dir for the heavy build
+                            tree (sysroot/distfiles/pkgdir/ISO staging). Default:
+                            snap-build-x86 (or BUILD_SUBDIR=NAME). Keeps the amd64
+                            build from sharing a sysroot with the Pi (aarch64)
+                            build under a shared --work-dir (build-all-roles.sh).
   -j, --jobs N              Parallel jobs. Default: $(nproc)
   -v, --version STR         Version stamp. Default: ${REL_VERSION}
   -r, --role ROLE           pki | be | fe | be+gpu | omnibus  (host = be+gpu alias).
@@ -124,6 +137,7 @@ fi
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -w|--work-dir) WORK_DIR="$2"; shift 2 ;;
+        --build-subdir) BUILD_SUBDIR="$2"; shift 2 ;;
         -j|--jobs) JOBS="$2"; shift 2 ;;
         -v|--version) REL_VERSION="$2"; shift 2 ;;
         -r|--role) ROLE="$2"; shift 2 ;;
@@ -234,8 +248,14 @@ fi
 [ "$(id -u)" -eq 0 ] || { err "Run as root (chroot emerge + ISO build need it)."; exit 1; }
 [ -z "${WORK_DIR}" ] && WORK_DIR="$(pwd)/out"
 [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-host"
-SYSROOT="${WORK_DIR}/sysroot"
-ISO_DIR="${WORK_DIR}/isoroot"
+# BUILD_ROOT = the per-arch heavy build tree under WORK_DIR (default
+# WORK_DIR/snap-build-x86). The sysroot, ISO staging, distfiles, pkgdir, seed
+# tarball and downloads all live here so the amd64 build never collides with the
+# aarch64 (Pi) build that shares the same WORK_DIR. Finished PRODUCTS
+# (.img/.iso/.fs.tar.xz/stage4) still go to WORK_DIR (see STAGE4/IMG_PATH below).
+BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"
+SYSROOT="${BUILD_ROOT}/sysroot"
+ISO_DIR="${BUILD_ROOT}/isoroot"
 CHOST="x86_64-pc-linux-gnu"
 
 # GPU-derived make.conf tokens (gate the open Mesa/Vulkan stack + DRI drivers).
@@ -254,7 +274,7 @@ if ${LIVE_ISO} || ${INSTALLER_ISO}; then SKIP_ISO=false; else SKIP_ISO=true; fi
 
 render_template() {
     sed -e "s|@@CHOST@@|${CHOST}|g" -e "s|@@JOBS@@|${JOBS}|g" \
-        -e "s|@@WORK_DIR@@|${WORK_DIR}|g" -e "s|@@HOSTNAME@@|${HOSTNAME}|g" \
+        -e "s|@@WORK_DIR@@|${BUILD_ROOT}|g" -e "s|@@HOSTNAME@@|${HOSTNAME}|g" \
         -e "s|@@TIMEZONE@@|${TIMEZONE}|g" -e "s|@@DEFAULT_USER@@|${DEFAULT_USER}|g" \
         -e "s|@@DEFAULT_USER_PASS@@|${DEFAULT_USER_PASS}|g" -e "s|@@ROOT_PASS@@|${ROOT_PASS}|g" \
         -e "s|@@BRAND@@|${BRAND}|g" -e "s|@@BRAND_TITLE@@|${BRAND_TITLE}|g" \
@@ -339,14 +359,16 @@ fi
 
 # ── 1. Directories ─────────────────────────────────────────────────
 banner "Preparing build directories"
-mkdir -p "${WORK_DIR}"/{distfiles,pkgdir} "${SYSROOT}" "${ISO_DIR}"
-info "Work dir: ${WORK_DIR}"
+mkdir -p "${WORK_DIR}" "${BUILD_ROOT}"/{distfiles,pkgdir} "${SYSROOT}" "${ISO_DIR}"
+info "Work dir:   ${WORK_DIR}  (products land here)"
+info "Build root: ${BUILD_ROOT}  (per-arch sysroot/distfiles/pkgdir)"
 
 # ── 2. Seed stage3 ─────────────────────────────────────────────────
 banner "Fetching amd64 hardened stage3 seed"
 # The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
 STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
-STAGE3_LOCAL="${WORK_DIR}/$(basename "${STAGE3_FILE}")"
+# Per-arch: the amd64 seed must not be reused by (or clobber) the aarch64 build.
+STAGE3_LOCAL="${BUILD_ROOT}/$(basename "${STAGE3_FILE}")"
 STAGE3_URL="https://distfiles.gentoo.org/releases/amd64/autobuilds/${STAGE3_FILE}"
 [ -f "${STAGE3_LOCAL}" ] || { info "Downloading $(basename "${STAGE3_FILE}")"; curl -L -o "${STAGE3_LOCAL}" "${STAGE3_URL}"; }
 
@@ -444,13 +466,17 @@ for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/de
 # ── 5. Chroot setup + native emerge ────────────────────────────────
 banner "Native emerge inside chroot"
 
-# Guard: chrooting needs an amd64 sysroot. A common mistake is reusing the same
-# --work-dir as the RPi (aarch64) cross-build — then --resume keeps the foreign
-# sysroot and `chroot /bin/bash` dies with a confusing "No such file or directory".
+# Guard: chrooting needs an amd64 sysroot. The amd64 and aarch64 builds now keep
+# their sysroots in SEPARATE per-arch subdirs (snap-build-x86 vs snap-build-pi5),
+# so a shared --work-dir no longer collides. This guard only trips if someone
+# overrode --build-subdir to point both arches at the SAME subdir, or hand-built
+# a foreign sysroot here; then `chroot /bin/bash` would die with a confusing
+# "No such file or directory".
 if [ -e "${SYSROOT}/bin/bash" ] && ! file -L "${SYSROOT}/bin/bash" 2>/dev/null | grep -qE 'x86-64|x86_64'; then
     err "Sysroot ${SYSROOT} is NOT amd64 (looks like a foreign arch — e.g. the RPi aarch64 build)."
-    err "Use a SEPARATE --work-dir for the x86 build (e.g. -w /var/tmp/snap-x86-build),"
-    err "or remove the stale sysroot:  rm -rf '${SYSROOT}'  (then re-run without --resume)."
+    err "The x86 build uses its own --build-subdir (default snap-build-x86); make sure it does"
+    err "NOT match the Pi build's subdir (snap-build-pi5), or use a separate --work-dir."
+    err "Or remove the stale sysroot:  rm -rf '${SYSROOT}'  (then re-run without --resume)."
     exit 1
 fi
 
@@ -529,7 +555,7 @@ else
         chmod +x "${SYSROOT}/usr/bin/headscale"; info "headscale installed"
     else warn "headscale fetch failed"; fi
     if ! ${SKIP_TAILSCALE}; then
-        TGZ="${WORK_DIR}/tailscale_${TAILSCALE_VERSION}_amd64.tgz"
+        TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_amd64.tgz"
         if curl -fL -o "${TGZ}" "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz"; then
             TMP="$(mktemp -d)"; tar -C "${TMP}" -xzf "${TGZ}"
             SUB="$(find "${TMP}" -maxdepth 1 -type d -name 'tailscale_*' | head -1)"
@@ -689,7 +715,7 @@ build_img() {
     mkfs.vfat -F 32 -n SNAP_ESP "${esp_part}"
     mkfs.ext4 -q -L SNAP_ROOT -F "${root_part}"
 
-    root_mnt="$(mktemp -d "${WORK_DIR}/img-root.XXXXXX")"
+    root_mnt="$(mktemp -d "${BUILD_ROOT}/img-root.XXXXXX")"
     mount "${root_part}" "${root_mnt}"
 
     info "Extracting stage4 into ${root_mnt}"
@@ -848,7 +874,7 @@ EOF
     if ${INSTALLER_ISO}; then
         INSTALLER_ISO_PATH="${WORK_DIR}/gentoo-x86-amd64-${ROLE_TAG}-installer-${REL_VERSION}.iso"
         banner "Building installer ISO (stage4 + install-x86.sh; boot a live USB to install)"
-        INST_DIR="${WORK_DIR}/isoroot-installer"
+        INST_DIR="${BUILD_ROOT}/isoroot-installer"
         rm -rf "${INST_DIR}"; mkdir -p "${INST_DIR}/stage4"
         cp "${STAGE4}" "${INST_DIR}/stage4/"
         cp "${SPECS_DIR}/installer/install-x86.sh" "${INST_DIR}/install-x86.sh"; chmod +x "${INST_DIR}/install-x86.sh"
@@ -876,6 +902,7 @@ echo "  GPU:        $(${GPU} && echo 'vendor-agnostic Mesa/Vulkan (amdgpu/i915/n
 echo "  k8s:        ${ROLE_K8S}  (init/join/single-node is applied at runtime by the KEYS stick)"
 echo "  Labels:     ${ROLE_LABELS}  (set on the KEYS stick: .snapdragon.node_labels)"
 echo "  headscale:  $(${ROLE_HEADSCALE} && echo 'in runlevel (identity/mesh control server)' || echo 'no (tailscale client only)')"
+echo "  Work dir:   ${WORK_DIR}  (products below); build root: ${BUILD_ROOT}"
 echo "  Stage4:     ${STAGE4}"
 echo "  Image:      ${IMG_PATH}"
 echo "  FS tarball: ${FS_TAR_PATH}"

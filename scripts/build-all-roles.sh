@@ -21,7 +21,11 @@
 #
 # Env:
 #   WORK_DIR    work/target dir (default ./out, local + gitignored). Keep in sync
-#               with any -w/--work-dir you pass through.
+#               with any -w/--work-dir you pass through. The finished PRODUCTS
+#               (.img/.iso/.fs.tar.xz/stage4/keys-*) land directly in WORK_DIR;
+#               each arch's HEAVY build tree (sysroot/distfiles/pkgdir) lives in a
+#               PER-ARCH subdir (WORK_DIR/snap-build-pi5 vs WORK_DIR/snap-build-x86)
+#               so the aarch64 (Pi) and amd64 (x86) builds never share a sysroot.
 #   SKIP_KEYS=1 don't generate the per-role keys folders (Pi roles).
 set -euo pipefail
 
@@ -97,7 +101,8 @@ if [ "${SKIP_KEYS:-0}" != "1" ]; then
 fi
 
 echo
-echo "==> Done. In ${WORK_DIR}:"
+echo "==> Done. Products in ${WORK_DIR}:"
+echo "    (per-arch build trees: ${WORK_DIR}/snap-build-pi5, ${WORK_DIR}/snap-build-x86)"
 ls -1 "${WORK_DIR}/"*.img 2>/dev/null | sed 's/^/   img:  /' || echo "   (no *.img)"
 ls -1 "${WORK_DIR}/"*.iso 2>/dev/null | sed 's/^/   iso:  /' || true
 ls -1d "${WORK_DIR}/"keys-* 2>/dev/null | sed 's/^/   keys: /' || true

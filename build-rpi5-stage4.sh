@@ -18,6 +18,13 @@ SHARED_SPECS="${SCRIPT_DIR}/specs"       # arch-agnostic specs (etc/, cluster/, 
 
 # ── Defaults ───────────────────────────────────────────────────────
 WORK_DIR=""
+# Per-arch build subdirectory under WORK_DIR. The heavy, ARCH-SPECIFIC build
+# tree (sysroot, ISO staging, distfiles, pkgdir, seed/binary downloads) lives
+# under WORK_DIR/${BUILD_SUBDIR} so the aarch64 (Pi) and amd64 (x86) builds NEVER
+# share a sysroot when they run against the same WORK_DIR (e.g. build-all-roles).
+# Override with --build-subdir NAME or BUILD_SUBDIR=NAME in the env. The finished
+# PRODUCTS (.img/.iso/.fs.tar.xz/stage4/keys-*) still land in WORK_DIR itself.
+BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-pi5}"
 CROSS_TARGET="aarch64-unknown-linux-gnu"
 REL_VERSION="2026.0"
 RPI_CPU="cortex-a76"
@@ -171,9 +178,17 @@ DESCRIPTION
 OPTIONS
   Directories
     -w, --work-dir DIR
-        Base directory for all build artifacts (sysroot, tarballs,
-        ISO, caches).  Default: ./out (created under the current
-        working directory; local + gitignored).
+        Base directory for the finished PRODUCTS (.img, .iso,
+        .fs.tar.xz, stage4, keys-*).  Default: ./out (created under
+        the current working directory; local + gitignored).
+
+    --build-subdir NAME
+        Per-arch subdirectory under --work-dir that holds the heavy,
+        ARCH-SPECIFIC build tree (sysroot, ISO staging, distfiles,
+        pkgdir, seed tarball, emerge caches).  Default: snap-build-pi5
+        (also settable via BUILD_SUBDIR=NAME).  This keeps the aarch64
+        (Pi) and amd64 (x86) builds from ever sharing a sysroot when
+        they run against the same --work-dir (e.g. build-all-roles.sh).
 
     -s, --specs-dir DIR
         Path to the aarch64/RPi5-specific specs directory.  Default:
@@ -393,14 +408,19 @@ EXIT STATUS
     1   Missing dependency, invalid option, or build failure.
 
 FILES
-    <work-dir>/
-        sysroot/            Cross-compiled root filesystem
-        distfiles/          Portage source archives
-        pkgdir/             Binary packages
-        isoroot/            ISO staging area
-        stage4-*.tar.xz     Final stage4 tarball
-        gentoo-*.iso        Bootable ISO with installer
-        build.log           Full build log
+    <work-dir>/                     finished products (shared with the x86 build)
+        stage4-*.tar.xz             Final stage4 tarball
+        gentoo-rpi5-*-*.img         Flashable raw image (default deliverable)
+        gentoo-rpi5-*-*.iso         Bootable ISO with installer (opt-in)
+        gentoo-rpi5-*.fs.tar.xz     Exact root filesystem tarball
+        keys-<role>/                Per-role provisioning keys (build-all-roles)
+        build.log                   Full build log
+    <work-dir>/snap-build-pi5/      per-arch heavy build tree (--build-subdir)
+        sysroot/                    Cross-compiled aarch64 root filesystem
+        distfiles/                  Portage source archives
+        pkgdir/                     Binary packages
+        isoroot/                    ISO staging area
+        log/  edb/                  emerge log + dep-metadata cache
 
 NOTES
     The cross-toolchain (crossdev) must already be installed and
@@ -443,6 +463,7 @@ fi
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -w|--work-dir)        WORK_DIR="$2";           shift 2 ;;
+        --build-subdir)       BUILD_SUBDIR="$2";       shift 2 ;;
         -s|--specs-dir)       SPECS_DIR="$2";          shift 2 ;;
         -t|--target)          CROSS_TARGET="$2";       shift 2 ;;
         -j|--jobs)            JOBS="$2";               shift 2 ;;
@@ -548,8 +569,15 @@ else
 fi
 
 # Derived paths
-SYSROOT="${WORK_DIR}/sysroot"
-ISO_DIR="${WORK_DIR}/isoroot"
+# BUILD_ROOT = the per-arch heavy build tree under WORK_DIR (default
+# WORK_DIR/snap-build-pi5). The sysroot, ISO staging, distfiles, pkgdir, seed
+# tarball and emerge caches all live here so the aarch64 build never collides
+# with the amd64 build that shares the same WORK_DIR. Finished PRODUCTS
+# (.img/.iso/.fs.tar.xz/stage4) still go to WORK_DIR (see STAGE4_TARBALL/IMG_PATH
+# below) so build-all-roles.sh + the Makefile + make-keys-usb keep finding them.
+BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"
+SYSROOT="${BUILD_ROOT}/sysroot"
+ISO_DIR="${BUILD_ROOT}/isoroot"
 LOG_FILE="${WORK_DIR}/build.log"
 
 # ── Template helper ────────────────────────────────────────────────
@@ -565,7 +593,7 @@ render_template() {
         -e "s|@@CROSS_TARGET@@|${CROSS_TARGET}|g" \
         -e "s|@@RPI_CPU@@|${RPI_CPU}|g" \
         -e "s|@@JOBS@@|${JOBS}|g" \
-        -e "s|@@WORK_DIR@@|${WORK_DIR}|g" \
+        -e "s|@@WORK_DIR@@|${BUILD_ROOT}|g" \
         -e "s|@@RPI_KERNEL_IMG@@|${RPI_KERNEL_IMG}|g" \
         -e "s|@@PCIE_LINE@@|${PCIE_LINE}|g" \
         -e "s|@@HOSTNAME@@|${HOSTNAME}|g" \
@@ -708,11 +736,13 @@ info "Jobs: ${JOBS}"
 # ── 1. Directory layout ───────────────────────────────────────────
 banner "Preparing build directories"
 
-mkdir -p "${WORK_DIR}"/{distfiles,pkgdir,log}
+mkdir -p "${WORK_DIR}"
+mkdir -p "${BUILD_ROOT}"/{distfiles,pkgdir,log}
 mkdir -p "${SYSROOT}"
 mkdir -p "${ISO_DIR}"
 
-info "Work directory: ${WORK_DIR}"
+info "Work directory: ${WORK_DIR}  (products land here)"
+info "Build root:     ${BUILD_ROOT}  (per-arch sysroot/distfiles/pkgdir)"
 info "Sysroot:        ${SYSROOT}"
 
 # Start build log
@@ -726,7 +756,8 @@ banner "Fetching latest arm64 stage3 seed tarball"
 STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
 STAGE3_FULL_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/${STAGE3_FILE}"
-STAGE3_LOCAL="${WORK_DIR}/${STAGE3_BASENAME}"
+# Per-arch: the aarch64 seed must not be reused by (or clobber) the amd64 build.
+STAGE3_LOCAL="${BUILD_ROOT}/${STAGE3_BASENAME}"
 
 if [ ! -f "${STAGE3_LOCAL}" ]; then
     info "Downloading ${STAGE3_BASENAME}..."
@@ -922,12 +953,12 @@ cross_emerge() {
     # Keep emerge's log + dependency-metadata cache inside the work dir instead
     # of the host's /var/log + /var/cache/edb (which are root-owned). Still needs
     # to run as root: portage merges into the sysroot vdb and writes host caches.
-    mkdir -p "${WORK_DIR}/log" "${WORK_DIR}/edb"
+    mkdir -p "${BUILD_ROOT}/log" "${BUILD_ROOT}/edb"
     ROOT="${SYSROOT}" \
     SYSROOT="${SYSROOT}" \
     PORTAGE_CONFIGROOT="${SYSROOT}" \
-    EMERGE_LOG_DIR="${WORK_DIR}/log" \
-    PORTAGE_DEPCACHEDIR="${WORK_DIR}/edb" \
+    EMERGE_LOG_DIR="${BUILD_ROOT}/log" \
+    PORTAGE_DEPCACHEDIR="${BUILD_ROOT}/edb" \
     "${CROSS_TARGET}-emerge" \
         --jobs="${JOBS}" \
         --load-average="${JOBS}" \
@@ -1018,7 +1049,7 @@ else
         info "Skipping tailscale client (--skip-tailscale)"
     else
         TS_URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
-        TS_TGZ="${WORK_DIR}/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
+        TS_TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
         info "Fetching tailscale ${TAILSCALE_VERSION}..."
         if curl -fL -o "${TS_TGZ}" "${TS_URL}"; then
             TS_TMP="$(mktemp -d)"
@@ -1196,7 +1227,7 @@ build_img() {
     mkfs.vfat -F 32 -n RPI_BOOT "${boot_part}"
     mkfs.ext4 -q -L RPI_ROOT -F "${root_part}"
 
-    root_mnt="$(mktemp -d "${WORK_DIR}/img-root.XXXXXX")"
+    root_mnt="$(mktemp -d "${BUILD_ROOT}/img-root.XXXXXX")"
     mount "${root_part}" "${root_mnt}"
 
     # Extract the stage4 into the ext4 root. Mirror install.sh's xattr fallback:
@@ -1403,12 +1434,13 @@ echo "      (users, ssh keys, passwords, certs, headscale/k8s config)"
 echo "    - keys-provision engine: /usr/sbin/keys-provision"
 echo ""
 echo "  Artifacts:"
-echo "    Work directory:  ${WORK_DIR}"
+echo "    Work directory:  ${WORK_DIR}  (products land here)"
+echo "    Build root:      ${BUILD_ROOT}  (per-arch sysroot/distfiles/pkgdir)"
 echo "    Sysroot:         ${SYSROOT}"
 echo "    Stage4 tarball:  ${STAGE4_TARBALL}"
 echo "    Image (.img):    ${IMG_PATH}"
 echo "    ISO:             ${ISO_PATH}"
-echo "    Binary packages: ${WORK_DIR}/pkgdir"
+echo "    Binary packages: ${BUILD_ROOT}/pkgdir"
 echo "    Build log:       ${LOG_FILE}"
 echo ""
 echo "  Default credentials:"
