@@ -1,0 +1,421 @@
+# compose.local.yaml — the ENTIRE Snapdragon platform, built from source and run
+# locally on x86_64 (Linux AND Docker Desktop for Windows).
+#
+# WHAT THIS IS: a docker-compose translation of the k8s topology in
+# specs/cluster/ (the authoritative source). Every FIRST-PARTY service is
+# `build:`-ed from its cloned repo under ${STACK_SRC} (default ../../.stack-src,
+# i.e. ./.stack-src at the repo root; populated by scripts/clone-all-repos.sh).
+# The datastores + identity (Casdoor,
+# Postgres x3, Cassandra) come up alongside them. The heavy third-party social
+# servers (Synapse/Matrix + the full Mastodon tier) are OPT-IN behind the
+# `social` compose profile, included from compose.real.yaml — the core platform
+# comes up WITHOUT them.
+#
+# Bring up with:  make stack-up         (clone -> build -> up -d)
+# or directly:    STACK_SRC=../../.stack-src docker compose -f compose.local.yaml up -d --build
+# Tear down:      make stack-down       (docker compose down -v)
+#
+# ── ENV=test vs prod (Makefile threads these in as the variables below) ──
+#   CASDOOR_ISSUER_URI  test: http://localhost:8000     prod: https://id.<domain>
+#   PUBLIC_HOST_PORT    the published port the host (fe-gateway) listens on
+# All other creds are DEV PLACEHOLDERS matching the cluster dev placeholders
+# (route-access-db password "gateway", etc.). NO real secrets live here.
+#
+# Service names are the in-compose DNS the services resolve each other by — they
+# replace the k8s <svc>.<ns>.svc.cluster.local FQDNs (e.g.
+# r2dbc:postgresql://federation-db:5432/federation,
+# http://snapdragon-federation-api:8080).
+name: snapdragon-local
+
+# Pull in the heavy third-party social tier (Synapse + Mastodon web/sidekiq/
+# streaming + their Postgres/Redis) from the existing real-services compose.
+# Those services are tagged with the `social` profile via the override below, so
+# `docker compose up` (no profile) skips them and the core platform comes up
+# alone. Enable with `--profile social` (or `make stack-up SOCIAL=1`).
+include:
+  - path: compose.real.yaml
+  # Overlay that tags the synapse/mastodon services with the `social` profile so
+  # they are OPT-IN (`--profile social`); casdoor/cassandra stay core (always up).
+  - path: compose.social-profile.yaml
+
+# x86_64 only — first-party images are amd64 (Temurin JRE / node-alpine / nginx).
+# On Docker Desktop for Windows this matches the default linux/amd64 engine.
+
+x-amd64: &amd64
+  platform: linux/amd64
+
+services:
+  # ════════════════════════════════════════════════════════════════════
+  #  DATASTORES (postgres:16-alpine x3 + Cassandra). Cassandra + Casdoor +
+  #  casdoor-db come from compose.real.yaml (included above); the three
+  #  per-service Postgres instances are platform components defined here.
+  # ════════════════════════════════════════════════════════════════════
+
+  # route-access-db — gateway_route_access source of truth (specs/cluster/
+  # manifests/route-access). schema.sql seeds the table on first init. The dev
+  # password "gateway" matches the cluster dev placeholder.
+  route-access-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: gateway
+      POSTGRES_USER: gateway
+      POSTGRES_PASSWORD: gateway
+    volumes:
+      - route-access-pg:/var/lib/postgresql/data
+      - ../../specs/cluster/manifests/route-access/schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 5s
+      retries: 20
+
+  # federation-db — federation-api's own Postgres (Liquibase owns the schema, so
+  # this just needs to exist EMPTY). specs/cluster/manifests/federation-db.
+  federation-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: federation
+      POSTGRES_USER: federation
+      POSTGRES_PASSWORD: federation
+    volumes:
+      - federation-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U federation -d federation"]
+      interval: 5s
+      retries: 20
+
+  # admin-bff-db — admin-bff's config datastore (Liquibase-owned schema, EMPTY DB).
+  # specs/cluster/manifests/admin-bff-db.
+  admin-bff-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: adminbff
+      POSTGRES_USER: adminbff
+      POSTGRES_PASSWORD: adminbff
+    volumes:
+      - admin-bff-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adminbff -d adminbff"]
+      interval: 5s
+      retries: 20
+
+  # ════════════════════════════════════════════════════════════════════
+  #  GATEWAYS — ONE image (snapdragon-gateway), run 3x as pki/be/fe. The
+  #  per-gateway route table is mounted from gateway-routes/<role>.yml into
+  #  /config (SPRING_CONFIG_ADDITIONAL_LOCATION=file:/config/), translating
+  #  specs/cluster/apps/20-gateway-{pki,be,fe}.yaml's routes to compose DNS.
+  #  SPRING_APPLICATION_NAME differentiates the instance (per the chart).
+  # ════════════════════════════════════════════════════════════════════
+
+  snapdragon-pki-gateway:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-gateway
+    environment:
+      SPRING_APPLICATION_NAME: snapdragon-pki-gateway
+      PORT: "8080"
+      SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
+      CASSANDRA_CONTACT_POINTS: "cassandra:9042"
+      CASSANDRA_KEYSPACE: snapdragon_gateway
+      CASSANDRA_LOCAL_DC: dc1
+      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+    volumes:
+      - ./gateway-routes/pki:/config:ro
+    depends_on:
+      casdoor: { condition: service_started }
+      cassandra: { condition: service_healthy }
+      route-access-db: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  snapdragon-be-gateway:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-gateway
+    environment:
+      SPRING_APPLICATION_NAME: snapdragon-be-gateway
+      PORT: "8080"
+      SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
+      CASSANDRA_CONTACT_POINTS: "cassandra:9042"
+      CASSANDRA_KEYSPACE: snapdragon_gateway
+      CASSANDRA_LOCAL_DC: dc1
+      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+    volumes:
+      - ./gateway-routes/be:/config:ro
+    depends_on:
+      casdoor: { condition: service_started }
+      cassandra: { condition: service_healthy }
+      route-access-db: { condition: service_healthy }
+      snapdragon-federation-api: { condition: service_started }
+      snapdragon-api: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # fe-gateway is the platform FRONT DOOR — published to the host so the browser
+  # reaches the whole stack at http://localhost:${PUBLIC_HOST_PORT}.
+  snapdragon-fe-gateway:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-gateway
+    environment:
+      SPRING_APPLICATION_NAME: snapdragon-fe-gateway
+      PORT: "8080"
+      SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
+      CASSANDRA_CONTACT_POINTS: "cassandra:9042"
+      CASSANDRA_KEYSPACE: snapdragon_gateway
+      CASSANDRA_LOCAL_DC: dc1
+      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+    volumes:
+      - ./gateway-routes/fe:/config:ro
+    ports:
+      - "${PUBLIC_HOST_PORT:-8088}:8080"
+    depends_on:
+      casdoor: { condition: service_started }
+      cassandra: { condition: service_healthy }
+      route-access-db: { condition: service_healthy }
+      snapdragon-admin-bff-api: { condition: service_started }
+      snapdragon-systems-web: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # ════════════════════════════════════════════════════════════════════
+  #  SPRING BACKEND SERVICES
+  # ════════════════════════════════════════════════════════════════════
+
+  # federation-api — module-federation registry + manifest/bundles (WebFlux +
+  # R2DBC + Liquibase). specs/cluster/manifests/federation-api/deployment.yaml.
+  snapdragon-federation-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-federation-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      SPRING_R2DBC_URL: "r2dbc:postgresql://federation-db:5432/federation"
+      SPRING_R2DBC_USERNAME: federation
+      SPRING_R2DBC_PASSWORD: federation
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://federation-db:5432/federation"
+      SPRING_LIQUIBASE_USER: federation
+      SPRING_LIQUIBASE_PASSWORD: federation
+      APP_BUNDLES_STORAGE: filesystem
+      APP_BUNDLES_DIR: /var/snapdragon/federation/bundles
+      MANIFEST_CACHE_ENABLED: "false"
+      MANIFEST_CACHE_CASSANDRA: "cassandra:9042"
+      MANIFEST_CACHE_KEYSPACE: snapdragon_federation
+      MANIFEST_CACHE_LOCAL_DC: dc1
+    volumes:
+      - federation-bundles:/var/snapdragon/federation/bundles
+    depends_on:
+      federation-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # admin-bff — the Backend-For-Frontend for the admin-ui (route-access CRUD).
+  # specs/cluster/manifests/admin-bff-api/deployment.yaml. The eureka/kafka/
+  # clickhouse analytics wiring is OMITTED here (no Eureka/Kafka/ClickHouse in the
+  # local core stack) — only the "casdoor" profile is active so the route-DB CRUD
+  # surface comes up. Analytics endpoints (/bff/admin/usage) are NOT exercised
+  # locally (documented limitation).
+  snapdragon-admin-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-admin-bff-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      SPRING_PROFILES_ACTIVE: casdoor
+      ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+      SPRING_R2DBC_URL: "r2dbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_R2DBC_USERNAME: adminbff
+      SPRING_R2DBC_PASSWORD: adminbff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_LIQUIBASE_USER: adminbff
+      SPRING_LIQUIBASE_PASSWORD: adminbff
+      CASSANDRA_CONTACT_POINTS: "cassandra:9042"
+    depends_on:
+      admin-bff-db: { condition: service_healthy }
+      route-access-db: { condition: service_healthy }
+      cassandra: { condition: service_healthy }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # mod-bff / user-bff — the moderator + user BFFs. Not yet in specs/cluster (the
+  # admin-bff is the only BFF deployed there); wired here by analogy so the full
+  # repo set builds + runs. Each is a Spring OAuth2 resource server validating the
+  # cluster Casdoor JWT. They get the admin-bff-db handle as a placeholder config
+  # datastore; swap to dedicated DBs when their cluster manifests land.
+  snapdragon-mod-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-mod-bff-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      SPRING_PROFILES_ACTIVE: casdoor
+      FEDERATION_BASE_URL: "http://snapdragon-federation-api:8080"
+    depends_on:
+      casdoor: { condition: service_started }
+      snapdragon-federation-api: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  snapdragon-user-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-user-bff-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      SPRING_PROFILES_ACTIVE: casdoor
+      FEDERATION_BASE_URL: "http://snapdragon-federation-api:8080"
+    depends_on:
+      casdoor: { condition: service_started }
+      snapdragon-federation-api: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # snapdragon-actions — the Spring "actions" service behind the be-gateway
+  # /api/** route (the snapdragon-api Deployment in specs/cluster). The two-Casdoor
+  # sync (systems<->games) is DEV-stubbed: both Casdoor URLs point at the single
+  # local Casdoor with placeholder client creds, so the sync job is inert locally
+  # (no games Casdoor in the local stack — documented limitation).
+  snapdragon-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-actions
+    environment:
+      SPRING_PROFILES_ACTIVE: casdoor
+      CASDOOR_SYSTEMS_URL: "http://casdoor:8000"
+      CASDOOR_SYSTEMS_ORG: snapdragon
+      CASDOOR_SYSTEMS_CLIENT_ID: dev-systems-client
+      CASDOOR_SYSTEMS_CLIENT_SECRET: dev-systems-secret
+      CASDOOR_GAMES_URL: "http://casdoor:8000"
+      CASDOOR_GAMES_ORG: threewizards
+      CASDOOR_GAMES_CLIENT_ID: dev-games-client
+      CASDOOR_GAMES_CLIENT_SECRET: dev-games-secret
+      GM_SYNC_SYSTEMS_ROLE: ROLE_GAMES_ADMIN
+      GM_SYNC_GAMES_ROLE: admin
+    depends_on:
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # ════════════════════════════════════════════════════════════════════
+  #  STATIC FRAGMENT FLEET — the remote-fragment SYNC image (Spring-Native).
+  #  In k8s this is an nginx pod + a sync sidecar over a shared volume; for
+  #  compose we run the sync service standalone in `once`->serve mode. The
+  #  CASDOOR_CLIENT_* are dev placeholders (machine account app-fragment-sync);
+  #  with no matching Casdoor app it has no enabled fragments to pull, so it
+  #  serves an empty set — fine for bring-up (documented limitation).
+  # ════════════════════════════════════════════════════════════════════
+  snapdragon-remote-fragment:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-remote-fragment
+    environment:
+      SYNC_MODE: loop
+      SERVER_PORT: "8081"
+      SYNC_TARGET_DIR: /usr/share/nginx/html
+      FEDERATION_BASE_URL: "http://snapdragon-federation-api:8080"
+      CASDOOR_TOKEN_URL: "http://casdoor:8000/api/login/oauth/access_token"
+      CASDOOR_ORG: snapdragon
+      CASDOOR_CLIENT_ID: dev-fragment-sync-client
+      CASDOOR_CLIENT_SECRET: dev-fragment-sync-secret
+    depends_on:
+      snapdragon-federation-api: { condition: service_started }
+      casdoor: { condition: service_started }
+
+  # ════════════════════════════════════════════════════════════════════
+  #  ANGULAR HOST + FEDERATED REMOTES (each Dockerfile -> nginx :80)
+  # ════════════════════════════════════════════════════════════════════
+
+  # snapdragon.systems — the Angular host (front page). The fe-gateway catch-all
+  # route forwards /** here. specs/cluster/manifests/frontend/deployment.yaml.
+  snapdragon-systems-web:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon.systems
+    environment:
+      CASDOOR_ISSUER: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      MATRIX_URL: ${MATRIX_URL:-http://localhost:8008}
+      MASTODON_URL: ${MASTODON_URL:-http://localhost:3000}
+      SOCIAL_UI_BASE: /social
+
+  snapdragon-admin-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-admin-ui
+
+  snapdragon-mod-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-mod-ui
+
+  snapdragon-user-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-user-ui
+
+  snapdragon-login-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-login-ui
+
+  snapdragon-mastodon-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-mastodon-ui
+
+  snapdragon-matrix-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-matrix-ui
+
+  snapdragon-api-docs:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-api-docs
+
+volumes:
+  route-access-pg:
+  federation-pg:
+  admin-bff-pg:
+  federation-bundles:

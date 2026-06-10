@@ -1,0 +1,61 @@
+# fe-gateway routes (compose) — the PLATFORM FRONT DOOR. Translated from
+# specs/cluster/apps/20-gateway-fe.yaml to compose service DNS. This gateway is the
+# one published to the host (http://localhost:${PUBLIC_HOST_PORT}); it fans out to
+# the federated UI remotes, the same-origin /bff/** admin BFF, the /_fragments/**
+# static fleet, /be/** -> the be-gateway, and the catch-all -> the Angular host.
+spring:
+  cloud:
+    gateway:
+      routes:
+        - id: matrix-ui
+          uri: http://snapdragon-matrix-ui:80
+          predicates:
+            - Path=/social/matrix/**
+        - id: mastodon-ui
+          uri: http://snapdragon-mastodon-ui:80
+          predicates:
+            - Path=/social/mastodon/**
+        - id: login-ui
+          uri: http://snapdragon-login-ui:80
+          predicates:
+            - Path=/login/**
+        - id: admin-ui
+          uri: http://snapdragon-admin-ui:80
+          predicates:
+            - Path=/admin/**
+        # Federated remotes added for the full local repo set (mod/user UIs +
+        # api-docs); they have no cluster route yet but are reachable here.
+        - id: mod-ui
+          uri: http://snapdragon-mod-ui:80
+          predicates:
+            - Path=/mod/**
+        - id: user-ui
+          uri: http://snapdragon-user-ui:80
+          predicates:
+            - Path=/user/**
+        - id: api-docs
+          uri: http://snapdragon-api-docs:80
+          predicates:
+            - Path=/api-docs/**
+        # Same-origin BFF: /bff/** -> the admin BFF (route-DB role rules apply).
+        - id: snapdragon-admin-bff-api
+          uri: http://snapdragon-admin-bff-api:8080
+          predicates:
+            - Path=/bff/**
+        # DB-hosted module-federation FRAGMENT bundles (static fleet).
+        - id: remote-fragment
+          uri: http://snapdragon-remote-fragment:8081
+          predicates:
+            - Path=/_fragments/**
+        # snapdragon.systems/be/** -> the backend gateway (StripPrefix drops /be).
+        - id: be-default
+          uri: http://snapdragon-be-gateway:8080
+          predicates:
+            - Path=/be/**
+          filters:
+            - StripPrefix=1
+        # …then the Angular host catches everything else.
+        - id: frontend-host
+          uri: http://snapdragon-systems-web:80
+          predicates:
+            - Path=/**

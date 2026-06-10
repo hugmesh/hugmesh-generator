@@ -14,6 +14,12 @@ qemu-test/
 *.img
 console.log
 
+# ── Local docker-compose stack (clone+build+run) ──────────────────
+# Cloned source repos the local stack builds from (scripts/clone-all-repos.sh).
+/.stack-src/
+# Generated Mastodon dev env (SOCIAL=1 tier) — holds generated secrets.
+tests/stack/.mastodon.env
+
 # ── Generated secrets — NEVER commit ──────────────────────────────
 # Output of scripts/gen-provision-keys.sh and any filled-in KEYS dir.
 /keys-out/
