@@ -1,0 +1,12 @@
+# Persistent storage for the snapdragon-user-bff-api Postgres data directory
+# (the user_profile / user_preference / user_block tables).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: user-bff-db
+  namespace: snapdragon-backend
+  labels: { app: user-bff-db }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: snapdragon-local
+  resources: { requests: { storage: 2Gi } }

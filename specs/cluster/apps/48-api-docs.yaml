@@ -1,0 +1,20 @@
+# snapdragon-api-docs — API documentation Angular micro-frontend, served at
+# /apidocs and federated into the snapdragon.systems host. Frontend Pis. The
+# rendered OpenAPI/spec docs are gated to ROLE_ADMIN at the fe-gateway.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-api-docs
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/api-docs
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

@@ -1,0 +1,12 @@
+# Persistent storage for the snapdragon-mod-bff-api Postgres data directory
+# (the mod_action moderation-audit table).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mod-bff-db
+  namespace: snapdragon-backend
+  labels: { app: mod-bff-db }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: snapdragon-local
+  resources: { requests: { storage: 2Gi } }

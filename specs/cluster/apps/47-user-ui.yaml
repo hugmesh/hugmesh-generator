@@ -1,0 +1,19 @@
+# snapdragon-user-ui — self-service user Angular micro-frontend, served at /user
+# and federated into the snapdragon.systems host. Frontend Pis.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-user-ui
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/user-ui
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

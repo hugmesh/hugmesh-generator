@@ -116,6 +116,19 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-fe-gateway',  '/_fragments/**',        'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/login/**',             'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/admin/**',             'ROLE_ADMIN',     true),
+  -- Moderation micro-frontend UI (snapdragon-mod-ui at /mod/**). ROLE_MOD floor;
+  -- ROLE_ADMIN paired so admins (a superset that the converter does NOT
+  -- auto-grant ROLE_MOD/USER to) keep reaching the moderation UI. More specific
+  -- than the /** front-page catch-all, so it wins the most-specific match.
+  ('snapdragon-fe-gateway',  '/mod/**',               'ROLE_MOD',       true),  -- moderation UI (mod floor)
+  ('snapdragon-fe-gateway',  '/mod/**',               'ROLE_ADMIN',     true),  -- (admins superset)
+  -- Self-service user micro-frontend UI (snapdragon-user-ui at /user/**). The
+  -- authenticated floor — any logged-in principal reaches their own profile/prefs.
+  ('snapdragon-fe-gateway',  '/user/**',              'ROLE_USER',      true),  -- user self-service UI
+  -- API documentation micro-frontend UI (snapdragon-api-docs at /apidocs/**).
+  -- ROLE_ADMIN only — the rendered OpenAPI/spec docs are admin-gated, matching
+  -- federation's spec floor (its swagger-ui is ROLE_ADMIN).
+  ('snapdragon-fe-gateway',  '/apidocs/**',           'ROLE_ADMIN',     true),  -- API docs UI (admin only)
   -- snapdragon-games namespace admin UI (games admin surface, namespaced under
   -- /games/** so it does NOT collide with the platform /admin/** row above). Same
   -- games + (admin|mod) gate: keyed on the DERIVED composite ROLE_GAMES_ADMIN
@@ -127,5 +140,13 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-fe-gateway',  '/bff/register/**',      'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/provision/**',     'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/me/**',            'ROLE_USER',      true),
-  ('snapdragon-fe-gateway',  '/bff/admin/**',         'ROLE_ADMIN',     true)
+  ('snapdragon-fe-gateway',  '/bff/admin/**',         'ROLE_ADMIN',     true),
+  -- Same-origin role BFFs (fe-gateway proxies /bff/** subpaths to the dedicated
+  -- BFFs in the backend ns). The /bff/mod/** + /bff/user/** prefixes are SIBLINGS
+  -- of /bff/admin/** above (non-overlapping prefixes), each gated to its own role
+  -- floor. /bff/mod/** pairs ROLE_ADMIN so admins (a superset the converter does
+  -- NOT auto-grant ROLE_MOD/USER to) keep reaching the moderation BFF.
+  ('snapdragon-fe-gateway',  '/bff/mod/**',           'ROLE_MOD',       true),  -- moderation BFF (mod floor)
+  ('snapdragon-fe-gateway',  '/bff/mod/**',           'ROLE_ADMIN',     true),  -- (admins superset)
+  ('snapdragon-fe-gateway',  '/bff/user/**',          'ROLE_USER',      true)   -- user self-service BFF
 ON CONFLICT DO NOTHING;
