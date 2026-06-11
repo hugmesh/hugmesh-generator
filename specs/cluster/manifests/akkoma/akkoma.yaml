@@ -41,6 +41,28 @@ data:
       name: "Snapdragon",
       email: "admin@snapdragon.systems",
       registrations_open: false
+    # --- DOMAIN-LOCK MRF (homeserver.domainlock.enabled) — GATED / SHIPS DARK ---
+    # The custom ForceLocalForUsers MRF (manifests/akkoma/mrf/, compiled into the
+    # custom image built from manifests/akkoma/Dockerfile) is the AUTHORITATIVE
+    # Mastodon leg of domain-lock: for any actor in the force-local set it filters
+    # outbound delivery to LOCAL inboxes only (ALL visibilities + boosts/replies/
+    # profile-Update/Follow), not just rewriting as:Public.
+    #
+    # SHIPS DARK: the MRF is NOT enabled below by default. A plain akkoma:stable
+    # (the image pinned in this file until the custom image is built + pinned) does
+    # NOT carry the module, so enabling it on the stock image would crash-loop —
+    # hence it is commented out. To turn domain-lock ON (homeserver.domainlock.enabled):
+    #   1. build + pin the custom image (manifests/akkoma/Dockerfile) in this file
+    #      and in domainlock-sync-job.yaml,
+    #   2. add the policy to the :mrf policies list and the empty default set below,
+    #   3. wire domainlock-sync-job.yaml into the akkoma kustomization so the
+    #      force-local set is materialized from ROLE_MASTODON_DOMAINLOCKED.
+    # Even once enabled, an EMPTY forced_actors set is a no-op for every actor.
+    #
+    # config :pleroma, :mrf,
+    #   policies: [Pleroma.Web.ActivityPub.MRF.ForceLocalForUsersPolicy]
+    # config :pleroma, Pleroma.Web.ActivityPub.MRF.ForceLocalForUsersPolicy,
+    #   forced_actors: []   # materialized live by akkoma-domainlock-sync
     # --- Outbound mail (Pleroma.Mailer) — OPTIONAL, ABSENT-BY-DEFAULT ---
     # SMTP creds come from env (AKKOMA_SMTP_*), loaded from the OPTIONAL secret
     # akkoma-smtp (ESO <- Vault secret/<brand>/mail, seeded per the brand's
