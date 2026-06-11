@@ -36,7 +36,7 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }    # self (be-gateway -> mastodon/matrix/api; admin-bff -> clickhouse/eureka)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }    # self (be-gateway -> mastodon/matrix/api; admin-bff -> clickhouse/kafka)
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }   # fe-gateway -> be-gateway (/be) + admin-bff (/bff)
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }                # ArgoCD reconcile
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }         # public facade -> be-gateway
