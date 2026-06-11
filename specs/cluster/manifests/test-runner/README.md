@@ -65,3 +65,28 @@ seed + lean-test gate runs as a **blocking PreSync/PostSync hook** wave-ordered
 before the dependent app waves; a failing lean run blocks the next wave and
 records a FAILED run-id surfaced in the console (it never silently passes). See
 `docs/TEST-ARCHITECTURE.md` for the restructuring rationale.
+
+The harness itself is deployed by `apps/99-test-runner.yaml` (wave 99, ENV=test
+only — the build prunes it + this whole bundle for prod). The **prod-hygiene gate**
+that keeps it (and the akkoma-peer) out of prod is `apps/00-prod-hygiene.yaml`
+(`manifests/prod-hygiene/` — a Kyverno ClusterPolicy + a RUNTIME PreSync hook Job).
+
+## Status — what is implemented
+
+| piece | file | status |
+|---|---|---|
+| orchestrator (lean+heavy edges) | `orchestrator.yaml` | DONE |
+| LEAN Job template | `test-job-lean.yaml` | DONE |
+| HEAVY Job template | `test-job-heavy.yaml` | DONE |
+| non-federation observer peer | `akkoma-peer.yaml` | DONE (image tags pinned at build) |
+| RBAC + PVC + kustomization | `namespace-rbac.yaml` `pvc.yaml` `kustomization.yaml` | DONE |
+| heavy-tier ArgoCD app split | `apps/35-analytics-*.yaml` `36-observability.yaml` | DONE (`docs/HEAVY-TIER.md`) |
+| runtime prod-hygiene gate | `apps/00-prod-hygiene.yaml` `manifests/prod-hygiene/` | DONE |
+| non-federation specs 19-22 | `tests/e2e/specs/19-22-*.spec.ts` | DONE (skip honestly until peer+gate live) |
+| scaled-concurrent sweep | `tests/e2e/specs/24-final-e2e-sweep.spec.ts` + `swarm-driver.ts` | FRAMEWORK + representative scenarios (`docs/FINAL-E2E-SWEEP-MATRIX.md`) |
+| custom reporter (role/layer pivot, secret scrub, SSE) | `tests/e2e/reporters/snapdragon-reporter.ts` | DONE |
+
+Documented gaps (intentional, honest): the heavy/peer images carry the `:dev`
+floating tag pinned at build; the live federation/SSE/disabled-UI assertions
+activate when the domain-lock gate + role-conditional UI land (the framework
+primitives already exist — see the spec-18-style stubs).
