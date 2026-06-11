@@ -1,7 +1,10 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# Dev-mode HashiCorp Vault (Namespace + Deployment + Service). Backs the
-# ClusterSecretStore "snapdragon-vault" consumed by External Secrets Operator.
-# Production: replace with a real unsealed HA Vault (see deployment.yaml).
+# Persistent, auto-unsealing HashiCorp Vault (Namespace + config/TLS/unseal
+# ConfigMaps + StatefulSet + Service). Raft integrated storage on a LUKS-backed
+# PVC, a TLS listener, and a sidecar that auto-unseals from the USB-KEYS-seeded
+# `vault-unseal` Secret on restart. Backs the ClusterSecretStore
+# "snapdragon-vault" consumed by External Secrets Operator. See deployment.yaml
+# for the one-time `vault operator init` + multi-replica-HA follow-up notes.
 resources:
   - deployment.yaml

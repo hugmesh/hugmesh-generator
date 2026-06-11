@@ -11,7 +11,8 @@ the stick by `scripts/make-keys-usb.sh`).
 ```
 KEYS/vault/
 ├── secrets.json   the materialized k8s Secrets (namespace -> secretName -> key -> value)
-└── token          a Vault token (or AppRole secret-id) for later online sync
+├── token          a Vault token (or AppRole secret-id) for later online sync
+└── unseal-key     the Shamir unseal key for the persistent Vault (auto-unseal)
 ```
 
 - **`secrets.json`** is the *offline* path: it already holds the exact k8s
@@ -19,7 +20,56 @@ KEYS/vault/
   them directly with no Vault. See `secrets.example.json` for the (redacted)
   shape.
 - **`token`** lets a node that *does* have network reach Vault and reconcile via
-  the External Secrets Operator. Treat it as highly sensitive.
+  the External Secrets Operator. Treat it as highly sensitive. `keys-provision`
+  also materializes it into the `vault/vault-bootstrap` Secret the
+  `vault-pki-init` Job authenticates with.
+- **`unseal-key`** is the Shamir unseal key for the **persistent** Vault
+  (`manifests/vault`: Raft integrated storage on the LUKS `/mnt/data`, TLS
+  listener). `keys-provision` materializes it into the `vault/vault-unseal`
+  Secret; the Vault `vault-unseal` sidecar submits it via
+  `vault operator unseal` on **every (re)start**, so Vault comes back
+  **unattended** after a restart. Treat it as highly sensitive — it (with the
+  root token) is the keys-to-the-kingdom.
+
+## Persistent Vault: ONE-TIME `vault operator init`
+
+The persistent Vault uses **Raft + a Shamir seal**, so it must be initialized
+**once** to mint the unseal key + root token. Auto-unseal then needs no operator.
+For the single-control-plane offline model use a single key share:
+
+```bash
+# 1) After the Vault pod is Running (sealed, uninitialized), exec into it:
+kubectl -n vault exec -it vault-0 -c vault -- sh
+export VAULT_ADDR=https://127.0.0.1:8200 VAULT_CACERT=/vault/tls/ca.crt
+
+# 2) Initialize with a single unseal key share (offline-USB custody model):
+vault operator init -key-shares=1 -key-threshold=1
+#   -> prints "Unseal Key 1: <KEY>" and "Initial Root Token: <TOKEN>"
+
+# 3) Unseal once now (the sidecar auto-unseals on every later restart):
+vault operator unseal <KEY>
+```
+
+Then **persist both to the offline KEYS stick** so future provisioning is
+unattended (and seed the live cluster Secrets so the running pod survives a
+restart before the next re-provision):
+
+```bash
+printf '%s' '<KEY>'   > KEYS/vault/unseal-key
+printf '%s' '<TOKEN>' > KEYS/vault/token     # the bootstrap/root token
+kubectl -n vault create secret generic vault-unseal   --from-literal=unseal-key='<KEY>'   --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n vault create secret generic vault-bootstrap --from-literal=token='<TOKEN>'     --dry-run=client -o yaml | kubectl apply -f -
+```
+
+After this, restarting the Vault pod is unattended: it reloads Raft state from
+the LUKS-encrypted PVC and the sidecar re-unseals it from `vault/vault-unseal`.
+
+> The dev Vault had no durable state, so the `pki_int` engine + the per-app
+> issuing roles must be **re-initialized once** against the fresh persistent
+> Vault. That is exactly what the existing `vault-pki-init` Job does (it is
+> idempotent and re-imports the cluster CA from the mounted `cluster-ca`
+> Secret); just let ArgoCD re-run it after init, or run it by hand. See
+> `manifests/vault-pki` + `docs/ENCRYPTION-AT-REST.md`.
 
 ## Provisioning order: Vault first, USB second
 
