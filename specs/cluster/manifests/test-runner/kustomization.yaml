@@ -9,8 +9,7 @@ resources:
   - namespace-rbac.yaml   # SA + read-mostly ClusterRole + Job create/delete Role
   - pvc.yaml              # test-reports PVC (lean/ + heavy/ run artifacts)
   - orchestrator.yaml     # orchestrator ConfigMap + the trigger Deployment
-  # akkoma-peer.yaml (TEST-ONLY 2nd federating peer for the non-federation proof)
-  # is added by the non-federation-harness commit on this branch.
+  - akkoma-peer.yaml      # TEST-ONLY 2nd federating peer (the non-federation proof's external observer, specs 19-22)
 
 # The lean/heavy Job TEMPLATES are mounted into the orchestrator as the
 # test-job-lean / test-job-heavy ConfigMaps (projected volume in orchestrator.yaml)
