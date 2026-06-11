@@ -1,9 +1,11 @@
 # Usage-analytics pipeline (backend namespace). Admin-only.
 #   UI/gateways/services emit usage events -> Kafka -> consumer -> ClickHouse.
-#   The Spring admin BFF (Eureka-registered, Spring Cloud) aggregates from
-#   ClickHouse (+ Postgres for config, Cassandra for the gateway cache) and
-#   serves /bff/admin/usage to the admin micro-frontend. Role-locked at BOTH
-#   the be-gateway (ROLE_ADMIN) and inside the BFF (method security).
+#   The Spring admin BFF aggregates from ClickHouse (+ Postgres for config,
+#   Cassandra for the gateway cache) and serves /bff/admin/usage to the admin
+#   micro-frontend. Role-locked at BOTH the be-gateway (ROLE_ADMIN) and inside
+#   the BFF (method security). The BFF reaches ClickHouse/Kafka by static
+#   cluster DNS (clickhouse:8123 / kafka:9092) — there is no service-discovery
+#   registry: nothing does discovery lookups, so Eureka was retired.
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -90,37 +92,7 @@ metadata: { name: kafka, namespace: snapdragon-backend }
 spec:
   selector: { app: kafka }
   ports: [{ name: kafka, port: 9092, targetPort: kafka }]
----
-# Spring Cloud Netflix Eureka — service discovery for the Spring tier
-# (admin-bff, gateways, APIs register here).
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: eureka
-  namespace: snapdragon-backend
-  labels: { app: eureka, app.kubernetes.io/part-of: snapdragon.systems }
-spec:
-  replicas: 1
-  selector: { matchLabels: { app: eureka } }
-  template:
-    metadata: { labels: { app: eureka } }
-    spec:
-      nodeSelector: { snapdragon.systems/backend: "true" }
-      securityContext:
-        seLinuxOptions:
-          type: container_t
-          level: "s0:c17"
-      containers:
-        - name: eureka
-          image: snapdragon-systems/eureka:dev
-          resources:
-            requests: { cpu: 100m, memory: 256Mi }
-            limits:   { cpu: 250m, memory: 512Mi }
-          ports: [{ name: http, containerPort: 8761 }]
----
-apiVersion: v1
-kind: Service
-metadata: { name: eureka, namespace: snapdragon-backend }
-spec:
-  selector: { app: eureka }
-  ports: [{ name: http, port: 8761, targetPort: http }]
+# NOTE: a Spring Cloud Netflix Eureka Deployment + Service used to live here.
+# It was orphaned — nothing performed service discovery against it (no
+# DiscoveryClient / lb:// anywhere; gateways route by static DNS and the
+# analytics pipeline reaches ClickHouse/Kafka by DNS too) — so it was retired.
