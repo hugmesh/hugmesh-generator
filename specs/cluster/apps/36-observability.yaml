@@ -1,5 +1,12 @@
 # Observability: Uptrace + OpenTelemetry Collector (per-namespace logs/traces).
 # Admin-only; the UI is reached through the snapdragon-pki gateway.
+#
+# HEAVY amd64 tier — MANUAL-sync (part of the heavy-tier split, see
+# docs/HEAVY-TIER.md). Uptrace + its Postgres are amd64-pinned (nodeSelector, NOT a
+# taint) and Uptrace DEPENDS on ClickHouse (35-analytics-clickhouse, also MANUAL),
+# so it must not auto-sync on a Pi-only cluster (it would churn Progressing forever
+# waiting for an unschedulable pod + an absent ClickHouse). An operator syncs it
+# deliberately AFTER attaching the x86 host and syncing analytics-clickhouse.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -14,6 +21,7 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: observability
+  # MANUAL: no automated{} — operator opt-in only (heavy amd64; depends on
+  # ClickHouse). CreateNamespace so a deliberate sync still provisions cleanly.
   syncPolicy:
-    automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

@@ -1,0 +1,33 @@
+# test-runner — the ENV=test e2e harness (orchestrator + lean/heavy Job templates +
+# the non-federation akkoma-peer + RBAC + the test-reports PVC).
+#
+# ⚠ ENV=test ONLY. The build (build-x86-host-stage4.sh rewrite_prod_image_tags)
+# PRUNES this app + manifests/test-runner from the baked prod tree, the prod-hygiene
+# Kyverno ClusterPolicy + the runtime PreSync hook REJECT every tier:test resource,
+# and the static prod-hygiene gate FAILS a prod bake that still carries it. So this
+# can never run in prod even if the file survived.
+#
+# Wave 99 (LAST) so the harness deploys after every app it tests. The orchestrator
+# then watches readiness and spawns the lean Job (x86 absent) / heavy Job (x86
+# present) itself — see manifests/test-runner/README.md + docs/TEST-ARCHITECTURE.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-test-runner
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "99"
+  labels:
+    snapdragon.systems/tier: test
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/test-runner
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

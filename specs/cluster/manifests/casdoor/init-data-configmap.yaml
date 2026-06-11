@@ -76,33 +76,6 @@
 #   allow-predicate becomes false), reconciled by the admin-bff loop; there is no
 #   allow=false / ban role row anywhere.
 #
-# ROLE_MATRIX_EXTERNAL_CLIENT ("Matrix External Client") and
-# ROLE_MASTODON_EXTERNAL_CLIENT ("Mastodon External Client") are the
-# personal-client / native-app passthrough roles — ADDITIVE siblings of
-# ROLE_MATRIX/ROLE_MASTODON (empty "roles" array, no inheritance). They are
-# SEPARATE from the base access roles, and the distinction is the point:
-#   - The BASE role (ROLE_MATRIX/ROLE_MASTODON) = use the homeserver via OUR UI
-#     (a brokered token minted by our BFFs). The base role gates token-USAGE
-#     (/_matrix/**, /api/v1/**, /api/v2/**, media/streaming) at the be-gateway.
-#   - The EXTERNAL-CLIENT role ADDITIONALLY = may register/use the user's OWN
-#     native client (Element/Tusky/Ivory: an OAuth app or a Matrix device login)
-#     through the gateway passthrough. It gates only the token-ISSUANCE sub-paths
-#     (Mastodon /oauth/** + /api/v1/apps ; Matrix /_matrix/client/*/login +
-#     device registration), NOT token-usage — see manifests/route-access/20-schema.sql.
-# Mods + admins control (grant/revoke via their UI) who may use their own clients.
-# Congruent with ban-by-role-removal: removing the external-client role REVOKES the
-# user's personal-client tokens/sessions at the gateway (the
-# HomeserverTokenRevocationFilter checks external-client:<localpart>:<platform> for
-# kind=personal tokens ONLY) WITHOUT touching their our-UI access — the user keeps
-# the base ROLE_MATRIX/ROLE_MASTODON so the brokered token keeps working. A FULL
-# platform ban removes the BASE role (and writes the coarse key) which kills
-# everything; external-client removal is the narrower, our-UI-preserving revoke.
-# They auto-convert to ROLE_MATRIX_EXTERNAL_CLIENT / ROLE_MASTODON_EXTERNAL_CLIENT
-# via the EXISTING casdoorAuthoritiesConverter (each "roles" entry -> ROLE_<UPPER>);
-# NO converter change. They seed EMPTY (users []); membership is granted by the
-# admin-bff external-client flow (user_external_clients desired-state -> the
-# single-writer reconcile loop -> Casdoor addUserToRole/removeUserFromRole).
-#
 # ROLE_SERVICE ("Internal service-to-service") is the machine role for internal
 # client-credentials callers that need the INTERNAL/ROLE_SERVICE endpoints (e.g.
 # the signup-gate proxy calling the federation username-availability check). Its
@@ -110,51 +83,6 @@
 # manifests/signup-gate/ + the casdoor-init APPS map). It grants no route-access
 # rows of its own — it exists so the federation availability endpoint can require
 # ROLE_SERVICE and the minted client-credentials token satisfies that gate.
-#
-# ROLE_FORUM ("Forum Access") is the per-PLATFORM access role for the phpBB forum
-# (a sibling of ROLE_MATRIX/ROLE_MASTODON/ROLE_GAMES — empty "roles" array, no
-# inheritance, default-deny everywhere it has no route row). It gates the forum
-# surfaces: ROLE_FORUM -> /social/forum/** (forum-ui) + /bff/forum/** (forum-bff)
-# (see manifests/route-access/20-schema.sql). A ban is the ABSENCE of the role
-# (removal -> the forum allow-predicate becomes false on the next refresh,
-# congruent into phpBB by the forum reconcile Job). ROLE_ADMIN reaches the forum
-# via the gateway admin-bypass WITHOUT ROLE_FORUM, so the forum floor rows pair no
-# ROLE_ADMIN (matching the matrix/mastodon floors).
-#
-# ROLE_FORUM_MOD ("Forum Moderator") is the DERIVED composite role
-#   ROLE_FORUM_MOD = ROLE_MOD INTERSECT ROLE_FORUM
-# (mirroring ROLE_GAMES_ADMIN = ROLE_GAMES INTERSECT (ROLE_ADMIN UNION ROLE_MOD)).
-# The gateway's OR-of-allow-rows table cannot express "ROLE_MOD AND ROLE_FORUM", so
-# the forum moderation row (/bff/forum/moderation/**) keys on this single derived
-# role. It seeds EMPTY; the forum reconcile Job (the forum-admin-sync pattern,
-# mirroring games-admin-sync) reads ROLE_MOD + ROLE_FORUM membership, computes the
-# intersection, and writes ONLY that verified set into ROLE_FORUM_MOD (idempotent;
-# also removes anyone who no longer qualifies). A plain ROLE_MOD WITHOUT ROLE_FORUM
-# is NOT a forum moderator (default-deny at /bff/forum/moderation/**).
-#
-# ROLE_MATRIX_DOMAINLOCKED ("Matrix local-only") and ROLE_MASTODON_DOMAINLOCKED
-# ("Mastodon local-only") are the DOMAIN-LOCK markers — ADDITIVE siblings of
-# ROLE_MATRIX/ROLE_MASTODON (empty "roles" array, no inheritance). They are
-# fundamentally different from a platform ban:
-#   - A ban is the ABSENCE of ROLE_MATRIX/ROLE_MASTODON (REMOVE-semantics — the
-#     allow-predicate goes false, the be-gateway route row stops matching, access
-#     is denied). The admin-bff access_suspension table drives that REMOVE.
-#   - A domain-lock is the PRESENCE of *_DOMAINLOCKED ALONGSIDE the kept access
-#     role (ADD-semantics — the user STILL holds ROLE_MATRIX/ROLE_MASTODON, so the
-#     be-gateway route rows are UNTOUCHED and the user keeps full local access; the
-#     new marker only switches on the force-local / no-federation enforcement legs).
-# Because the gateway is intentionally untouched, the be-gateway route-access seed
-# (manifests/route-access/20-schema.sql) is NOT changed for these roles — a
-# domain-locked user reaches the same client surfaces, they just cannot federate
-# outbound. Enforcement is the homeserver/egress leg (the akkoma ForceLocalForUsers
-# MRF + the homeserver-egress NetworkPolicy/egress-proxy in manifests/networkpolicy
-# + manifests/egress-proxy), NOT a gateway deny row. The two roles auto-convert to
-# ROLE_MATRIX_DOMAINLOCKED / ROLE_MASTODON_DOMAINLOCKED via the EXISTING
-# casdoorAuthoritiesConverter (each "roles" entry -> ROLE_<UPPER>); NO converter
-# change. They seed EMPTY (users []); membership is granted by the admin-bff/mod-bff
-# domain-lock flow (DomainLockService desired-state + reconcile), the analogue of
-# the access-suspension flow but writing a SEPARATE domain_lock table (ADD-active)
-# rather than overloading access_suspension (REMOVE).
 #
 # NOTE: the init_data.json object schema is Casdoor-version-specific. Validate
 # against the deployed casbin/casdoor-all-in-one before relying on auto-import.
@@ -184,14 +112,12 @@ data:
         { "owner": "snapdragon", "name": "ROLE_MOD",       "displayName": "Network Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_MATRIX",    "displayName": "Matrix Access",   "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_MASTODON",  "displayName": "Mastodon Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_MATRIX_EXTERNAL_CLIENT",   "displayName": "Matrix External Client",   "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_MASTODON_EXTERNAL_CLIENT", "displayName": "Mastodon External Client", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_MATRIX_DOMAINLOCKED",   "displayName": "Matrix local-only",   "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_MASTODON_DOMAINLOCKED", "displayName": "Mastodon local-only", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_MATRIX_EXTERNAL_CLIENT",   "displayName": "Matrix external client",   "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_MASTODON_EXTERNAL_CLIENT", "displayName": "Mastodon external client", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GAMES",       "displayName": "Games Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GAMES_ADMIN", "displayName": "Games Namespace Admin", "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_FORUM",       "displayName": "Forum Access",          "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_FORUM_MOD",   "displayName": "Forum Moderator",       "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GATEWAY",   "displayName": "Gateway service", "users": ["snapdragon/svc-pki-gateway","snapdragon/svc-be-gateway","snapdragon/svc-fe-gateway"], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_API",       "displayName": "API service",     "users": ["snapdragon/svc-api"], "roles": [], "domains": [], "isEnabled": true },

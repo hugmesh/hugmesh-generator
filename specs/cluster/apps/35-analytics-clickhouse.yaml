@@ -1,0 +1,33 @@
+# Analytics ClickHouse — HEAVY amd64 datastore. MANUAL-sync (operator opt-in).
+#
+# NO `syncPolicy.automated` block: ArgoCD will NOT auto-sync or self-heal this app.
+# An operator syncs it deliberately (argocd app sync snapdragon-analytics-clickhouse
+# / the UI Sync button) once the x86_64 host is attached and its snapdragon-local
+# data disk is mounted — the warehouse pod is amd64-pinned (nodeSelector, NOT a
+# taint, so the shared x86 host stays schedulable for everything else) and needs
+# the 20Gi node-local PV. The clickhouse Service is in the always-on floor
+# (35-analytics-discovery), so DNS resolves even before this is synced; the admin
+# BFF degrades to the in-memory usage fallback until the warehouse attaches.
+#
+# Split from the former single auto-sync snapdragon-analytics app — the manifests
+# were RESTRUCTURED (manifests/analytics/clickhouse), not deleted. See docs/HEAVY-TIER.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-analytics-clickhouse
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/analytics/clickhouse
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  # MANUAL: no automated{} — operator opt-in only (heavy amd64). CreateNamespace
+  # so a deliberate sync still provisions cleanly.
+  syncPolicy:
+    syncOptions: [CreateNamespace=true]

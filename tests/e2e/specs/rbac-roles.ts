@@ -37,6 +37,13 @@ export type SystemsRole =
   | 'ROLE_MOD'
   | 'ROLE_GAMES'
   | 'ROLE_GAMES_ADMIN'   // DERIVED — never seeded directly; listed only as an expectation
+  | 'ROLE_MATRIX'                    // per-platform ACCESS role (use Matrix via OUR UI)
+  | 'ROLE_MASTODON'                  // per-platform ACCESS role (use Mastodon via OUR UI)
+  | 'ROLE_MATRIX_EXTERNAL_CLIENT'    // may register/use own native Matrix client (gateway passthrough)
+  | 'ROLE_MASTODON_EXTERNAL_CLIENT'  // may register/use own native Mastodon client
+  | 'ROLE_MATRIX_DOMAINLOCKED'       // forced local-only: Matrix federation blocked for this user
+  | 'ROLE_MASTODON_DOMAINLOCKED'     // forced local-only: Mastodon (akkoma) federation blocked
+  | 'ROLE_FORUM'                     // forum (phpBB) ACCESS role
   | 'ROLE_USER';
 
 export interface SystemsSeedUser {
@@ -52,6 +59,19 @@ export interface SystemsSeedUser {
   expectGamesAdmin: boolean;
   /** Registration-complete? `false` models the awaiting-approval pending user. */
   registrationComplete: boolean;
+  /** When this user is a domain-locked CONTROL or SUBJECT for the local-only
+   *  non-federation e2e (specs 19-23): which platform the lock is asserted on.
+   *  `undefined` for non-federation-test users. The matching DOMAINLOCKED role is
+   *  in `roles`; the federation-liveness CONTROL users (e2e-matrix / e2e-mastodon)
+   *  set this WITHOUT the domainlocked role (they MUST federate). */
+  federationProbe?: 'matrix' | 'mastodon';
+  /** True for the federating CONTROL user in the non-federation proof: it holds
+   *  the base ROLE_MATRIX/ROLE_MASTODON but NOT the domainlocked role, so its post
+   *  MUST reach the peer (the positive control / the clock). */
+  federationControl?: boolean;
+  /** A pinned (role, route, expect) DENY triple for the single-role-DENIED user,
+   *  so the deny is reproducible rather than "something 403s somewhere". */
+  pinnedDeny?: { route: string; expectStatus: number; reason: string };
   /** One-line note used in spec titles + the user matrix. */
   note: string;
 }
@@ -106,6 +126,92 @@ export const SYSTEMS_SEED_USERS: SystemsSeedUser[] = [
     registrationComplete: true,
     note: 'Plain member — reaches Matrix/Mastodon user surfaces; DENIED every admin/mod/games-admin route.',
   },
+
+  // ── per-platform ACCESS roles (use Matrix/Mastodon via OUR UI) ──────────
+  {
+    username: 'e2e-matrix',
+    passwordEnv: 'E2E_MATRIX_PASSWORD',
+    roles: ['ROLE_MATRIX', 'ROLE_USER'],
+    expectGamesAdmin: false,
+    registrationComplete: true,
+    federationProbe: 'matrix',
+    federationControl: true,
+    note: 'Matrix access (NOT domain-locked) — the federating CONTROL user: its events MUST reach the peer (positive control for spec 20).',
+  },
+  {
+    username: 'e2e-mastodon',
+    passwordEnv: 'E2E_MASTODON_PASSWORD',
+    roles: ['ROLE_MASTODON', 'ROLE_USER'],
+    expectGamesAdmin: false,
+    registrationComplete: true,
+    federationProbe: 'mastodon',
+    federationControl: true,
+    note: 'Mastodon access (NOT domain-locked) — the federating CONTROL user: its toot MUST reach the peer (positive control for specs 19/22).',
+  },
+
+  // ── DOMAIN-LOCKED roles (forced local-only; subject of the non-federation proof) ─
+  {
+    username: 'e2e-matrix-domainlocked',
+    passwordEnv: 'E2E_MATRIX_DOMAINLOCKED_PASSWORD',
+    roles: ['ROLE_MATRIX', 'ROLE_MATRIX_DOMAINLOCKED', 'ROLE_USER'],
+    expectGamesAdmin: false,
+    registrationComplete: true,
+    federationProbe: 'matrix',
+    note: 'Matrix domain-locked — cross-server create/join/invite blocked at gateway+egress; a remote room/event must NOT reach the peer (spec 20).',
+  },
+  {
+    username: 'e2e-mastodon-domainlocked',
+    passwordEnv: 'E2E_MASTODON_DOMAINLOCKED_PASSWORD',
+    roles: ['ROLE_MASTODON', 'ROLE_MASTODON_DOMAINLOCKED', 'ROLE_USER'],
+    expectGamesAdmin: false,
+    registrationComplete: true,
+    federationProbe: 'mastodon',
+    note: 'Mastodon domain-locked — MRF forces every delivery local; even a RAW-API visibility=public toot must NOT reach the peer (spec 19).',
+  },
+
+  // ── EXTERNAL-CLIENT roles (native client passthrough via the gateway) ──────
+  {
+    username: 'e2e-matrix-external-client',
+    passwordEnv: 'E2E_MATRIX_EXTERNAL_CLIENT_PASSWORD',
+    roles: ['ROLE_MATRIX', 'ROLE_MATRIX_EXTERNAL_CLIENT', 'ROLE_USER'],
+    expectGamesAdmin: false,
+    registrationComplete: true,
+    note: 'Matrix external-client — may register/use a native client (Element) through the gateway passthrough; revoked on role removal.',
+  },
+  {
+    username: 'e2e-mastodon-external-client',
+    passwordEnv: 'E2E_MASTODON_EXTERNAL_CLIENT_PASSWORD',
+    roles: ['ROLE_MASTODON', 'ROLE_MASTODON_EXTERNAL_CLIENT', 'ROLE_USER'],
+    expectGamesAdmin: false,
+    registrationComplete: true,
+    note: 'Mastodon external-client — may register/use a native client (Tusky) through the gateway OAuth passthrough; revoked on role removal.',
+  },
+
+  // ── forum (phpBB) access ──────────────────────────────────────────────────
+  {
+    username: 'e2e-forum',
+    passwordEnv: 'E2E_FORUM_PASSWORD',
+    roles: ['ROLE_FORUM', 'ROLE_USER'],
+    expectGamesAdmin: false,
+    registrationComplete: true,
+    note: 'Forum participant — reaches forum-ui/forum-bff; DENIED admin/mod/forum-mod surfaces.',
+  },
+
+  // ── single-role-DENIED — a PINNED (role, route, expect=403) triple ─────────
+  {
+    username: 'e2e-denied',
+    passwordEnv: 'E2E_DENIED_PASSWORD',
+    roles: ['ROLE_USER'],
+    expectGamesAdmin: false,
+    registrationComplete: true,
+    pinnedDeny: {
+      route: '/bff/admin/domain-lock',
+      expectStatus: 403,
+      reason: 'ROLE_USER only — must be DENIED the admin domain-lock surface (a concrete, reproducible deny).',
+    },
+    note: 'Single-role DENIED — holds ONLY ROLE_USER; pinned 403 on GET /bff/admin/domain-lock (admin-only).',
+  },
+
   {
     username: 'e2e-pending',
     passwordEnv: 'E2E_PENDING_PASSWORD',
@@ -115,6 +221,89 @@ export const SYSTEMS_SEED_USERS: SystemsSeedUser[] = [
     note: 'Awaiting approval — no roles, registration incomplete; DENIED until an admin approves.',
   },
 ];
+
+// ── Procedural SWARM generator (the scaled-concurrent final sweep, spec 24) ──
+// The final e2e sweep drives a POPULATION acting simultaneously: 120 plain users,
+// 4 mods (who moderate the users below them), and 2 admins. The swarm is
+// PROCEDURAL + DETERMINISTIC so the seed (seed-accounts.sh --swarm N) and the
+// spec agree on every identity WITHOUT a 126-line table. Passwords derive from a
+// single E2E_SWARM_PASSWORD (default below) so a real Casdoor login carries the
+// right `roles` claim. The numbers are overridable for a smaller CI smoke.
+export const SWARM_DEFAULTS = { users: 120, mods: 4, admins: 2 } as const;
+
+/** Deterministic password for a swarm member — `E2E_SWARM_PASSWORD` (shared) so
+ *  a single env var unlocks the whole population. NOT per-user (126 distinct env
+ *  vars would be unusable); the seed uses the identical derivation. */
+export function swarmPassword(): string {
+  return process.env['E2E_SWARM_PASSWORD'] ?? process.env['E2E_PASSWORD'] ?? 'e2e-swarm-pass';
+}
+
+export interface SwarmMember extends SystemsSeedUser {
+  /** Swarm tier — drives what the actor DOES in spec 24. */
+  swarmTier: 'user' | 'mod' | 'admin';
+  /** Zero-based index within the tier (for deterministic moderation targeting:
+   *  mod m moderates the users in [m * usersPerMod, (m+1) * usersPerMod)). */
+  tierIndex: number;
+}
+
+/** Generate the swarm population deterministically. Usernames are
+ *  e2e-swarm-user-000 … -119, e2e-swarm-mod-0 … -3, e2e-swarm-admin-0 … -1.
+ *  Kept in lock-step with seed-accounts.sh --swarm. */
+export function generateSwarm(
+  counts: { users: number; mods: number; admins: number } = SWARM_DEFAULTS,
+): SwarmMember[] {
+  const out: SwarmMember[] = [];
+  const pad = (n: number, w: number) => String(n).padStart(w, '0');
+  for (let i = 0; i < counts.users; i++) {
+    out.push({
+      username: `e2e-swarm-user-${pad(i, 3)}`,
+      passwordEnv: 'E2E_SWARM_PASSWORD',
+      roles: ['ROLE_USER', 'ROLE_MATRIX', 'ROLE_MASTODON'],
+      expectGamesAdmin: false,
+      registrationComplete: true,
+      swarmTier: 'user',
+      tierIndex: i,
+      note: `Swarm plain user #${i} — a moderation TARGET; asserts its own per-principal SSE + disabled-helptext.`,
+    });
+  }
+  for (let i = 0; i < counts.mods; i++) {
+    out.push({
+      username: `e2e-swarm-mod-${i}`,
+      passwordEnv: 'E2E_SWARM_PASSWORD',
+      roles: ['ROLE_MOD', 'ROLE_MATRIX', 'ROLE_MASTODON', 'ROLE_USER'],
+      expectGamesAdmin: false,
+      registrationComplete: true,
+      swarmTier: 'mod',
+      tierIndex: i,
+      note: `Swarm mod #${i} — moderates the user-block assigned to it; asserted to FAIL on admins/peers.`,
+    });
+  }
+  for (let i = 0; i < counts.admins; i++) {
+    out.push({
+      username: `e2e-swarm-admin-${i}`,
+      passwordEnv: 'E2E_SWARM_PASSWORD',
+      roles: ['ROLE_ADMIN', 'ROLE_MATRIX', 'ROLE_MASTODON', 'ROLE_USER'],
+      expectGamesAdmin: false,
+      registrationComplete: true,
+      swarmTier: 'admin',
+      tierIndex: i,
+      note: `Swarm admin #${i} — global suspension/role-assignment/allowlist/reconcile.`,
+    });
+  }
+  return out;
+}
+
+/** Which users a given mod moderates (deterministic, non-overlapping blocks) —
+ *  shared by the seed + the sweep so "mod m moderates users below it" is exact. */
+export function swarmTargetsForMod(modIndex: number, counts = SWARM_DEFAULTS): string[] {
+  const perMod = Math.ceil(counts.users / counts.mods);
+  const start = modIndex * perMod;
+  const end = Math.min(start + perMod, counts.users);
+  const pad = (n: number) => String(n).padStart(3, '0');
+  const out: string[] = [];
+  for (let i = start; i < end; i++) out.push(`e2e-swarm-user-${pad(i)}`);
+  return out;
+}
 
 /** The GAMES realm (org "threewizards", issuer id.snapdragon.games) is an
  *  INDEPENDENT Casdoor. The only systems->games automatic sync is

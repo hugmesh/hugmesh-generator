@@ -1,0 +1,37 @@
+# prod-hygiene — the RUNTIME prod (ENV=prod) gate. Deploys:
+#   * the Kyverno `prod-hygiene` ClusterPolicy (admission backstop: no tier:test
+#     resource, no Vault dev server, no :dev/*-dev first-party image), and
+#   * the ArgoCD PreSync HOOK Job (manifests/prod-hygiene/job.yaml) that runs
+#     scripts/validate-prod-hygiene.sh --runtime against the LIVE cluster and
+#     BLOCKS the dependent sync wave on a violation (a templated/conditional dev
+#     server or an un-flipped no-op STUB-SEAM that a static grep cannot see).
+#
+# Syncs EARLY (wave -2): after kyverno (apps/15-kyverno.yaml, wave -1 installs the
+# ClusterPolicy CRD) but it carries the PreSync hook at hook-wave -10 so the
+# RUNTIME gate runs before the app waves on EVERY sync. The namespace
+# snapdragon-policy is the same one the reserved-prefixes policy uses.
+#
+# ⚠ ENV-SCOPED: this is a PROD gate. On an ENV=test build leave this app in place
+# (the runtime Job is harmless in test — a test cluster legitimately runs the
+# harness, so the gate is intended to be applied to a PROD GitOps root only). The
+# explicit-waved prod app-of-apps (apps/00-app-of-apps-waved.yaml) wires this hook
+# as the blocking floor; see docs/TEST-ARCHITECTURE.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: prod-hygiene
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/prod-hygiene
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-policy
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

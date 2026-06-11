@@ -1,0 +1,25 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: snapdragon-policy
+resources:
+  - rbac.yaml          # SA + read-mostly ClusterRole + Vault-exec + probe Roles
+  - clusterpolicy.yaml # Kyverno admission backstop (no tier:test / dev vault / dev image)
+  - job.yaml           # the ArgoCD PreSync hook Job that runs --runtime + BLOCKS the wave
+
+# The runtime gate script is materialized into the prod-hygiene-script ConfigMap
+# and mounted read-only into the hook Job at /gate. FIXED name (the Job mounts it
+# by name); kept stable so a content change re-renders the Job's hook each sync.
+configMapGenerator:
+  - name: prod-hygiene-script
+    files:
+      # In-cluster copy of scripts/validate-prod-hygiene.sh (kustomize forbids
+      # loading files outside the bundle root). The CI lint (.gitlab-ci.yml)
+      # asserts this copy == scripts/validate-prod-hygiene.sh byte-for-byte, the
+      # same mirror+drift-check idiom as the reserved-prefixes ConfigMap.
+      - validate-prod-hygiene.sh
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    app.kubernetes.io/name: prod-hygiene
+    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/component: policy

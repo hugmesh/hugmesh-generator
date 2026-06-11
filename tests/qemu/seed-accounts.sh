@@ -77,7 +77,26 @@ e2e-gamesadmin:ROLE_GAMES,ROLE_ADMIN,ROLE_USER:E2E_GAMESADMIN_PASSWORD \
 e2e-gamesonly:ROLE_GAMES,ROLE_USER:E2E_GAMESONLY_PASSWORD \
 e2e-adminonly:ROLE_ADMIN,ROLE_USER:E2E_ADMINONLY_PASSWORD \
 e2e-user:ROLE_USER:E2E_USER_PASSWORD \
+e2e-matrix:ROLE_MATRIX,ROLE_USER:E2E_MATRIX_PASSWORD \
+e2e-mastodon:ROLE_MASTODON,ROLE_USER:E2E_MASTODON_PASSWORD \
+e2e-matrix-domainlocked:ROLE_MATRIX,ROLE_MATRIX_DOMAINLOCKED,ROLE_USER:E2E_MATRIX_DOMAINLOCKED_PASSWORD \
+e2e-mastodon-domainlocked:ROLE_MASTODON,ROLE_MASTODON_DOMAINLOCKED,ROLE_USER:E2E_MASTODON_DOMAINLOCKED_PASSWORD \
+e2e-matrix-external-client:ROLE_MATRIX,ROLE_MATRIX_EXTERNAL_CLIENT,ROLE_USER:E2E_MATRIX_EXTERNAL_CLIENT_PASSWORD \
+e2e-mastodon-external-client:ROLE_MASTODON,ROLE_MASTODON_EXTERNAL_CLIENT,ROLE_USER:E2E_MASTODON_EXTERNAL_CLIENT_PASSWORD \
+e2e-forum:ROLE_FORUM,ROLE_USER:E2E_FORUM_PASSWORD \
+e2e-denied:ROLE_USER:E2E_DENIED_PASSWORD \
 e2e-pending::E2E_PENDING_PASSWORD}"
+# ── SWARM (the scaled-concurrent final sweep, tests/e2e/specs/24-final-e2e-sweep) ──
+# A PROCEDURAL population acting simultaneously: SWARM_USERS plain users +
+# SWARM_MODS mods (moderating the users below them) + SWARM_ADMINS admins. All
+# share one deterministic password (E2E_SWARM_PASSWORD) so a single env var
+# unlocks the population (per-user env vars for 126 identities would be unusable).
+# Kept in lock-step with tests/e2e/specs/rbac-roles.ts generateSwarm().
+E2E_SWARM_PASSWORD="${E2E_SWARM_PASSWORD:-e2e-swarm-pass}"
+SWARM_USERS="${SWARM_USERS:-120}"
+SWARM_MODS="${SWARM_MODS:-4}"
+SWARM_ADMINS="${SWARM_ADMINS:-2}"
+SWARM_N=""   # set by --swarm N (overrides SWARM_USERS); mods/admins keep their defaults
 # GAMES seed users (native): "username:role:passwordEnv".
 GAMES_ROLE_USERS="${GAMES_ROLE_USERS:-e2e-player:player:E2E_PLAYER_PASSWORD}"
 
@@ -103,11 +122,21 @@ Modes (at least one of --emit/--roles/--ssh/--print):
                     accounts.json + a boot-time BFF-seed hook). Rootless.
   --roles DIR       Render the FULL systems+games Casdoor RBAC role matrix into
                     DIR/roles/ (casdoor-systems-roles.json + casdoor-games-users.json
-                    + apply-systems-roles.sh). Seeds ROLE_ADMIN/ROLE_MOD/ROLE_GAMES/
-                    ROLE_USER + a games player with deterministic e2e passwords, so
-                    the rbac-*.spec.ts JWT-role assertions work against a REAL
-                    Casdoor. ROLE_GAMES_ADMIN is left to the games-admin-sync Job.
-                    Rootless.
+                    + apply-systems-roles.sh). Seeds the FULL role matrix with
+                    deterministic e2e passwords (ROLE_ADMIN/ROLE_MOD/ROLE_MATRIX/
+                    ROLE_MASTODON/ROLE_*_DOMAINLOCKED/ROLE_*_EXTERNAL_CLIENT/
+                    ROLE_FORUM/ROLE_GAMES/ROLE_USER + control/denied/pending + a
+                    games player) so the rbac-*.spec.ts + local-only specs JWT-role
+                    assertions work against a REAL Casdoor. ROLE_GAMES_ADMIN is left
+                    to the games-admin-sync Job. Rootless.
+  --swarm N         (with --roles) ALSO emit the procedural concurrent-sweep
+                    population for tests/e2e/specs/24-final-e2e-sweep: N plain users
+                    (default ${SWARM_USERS}) + ${SWARM_MODS} mods + ${SWARM_ADMINS}
+                    admins, all with the shared deterministic E2E_SWARM_PASSWORD.
+                    Usernames are e2e-swarm-{user-000..,mod-0..,admin-0..} — kept in
+                    lock-step with rbac-roles.ts generateSwarm(). The apply hook
+                    PRE-MINTS + caches a JWT per swarm member so 126 logins do not
+                    serialize at Casdoor token-minting at sweep start.
   --ssh HOST        Push the identities into the booted node's BFF allowlist
                     over SSH (admin API). Needs --ssh-key or an agent.
   --print           Print the accounts.json to stdout and exit (dry run).
@@ -151,6 +180,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --emit)         EMIT_DIR="$2"; shift 2 ;;
         --roles)        ROLES_DIR="$2"; shift 2 ;;
+        --swarm)        SWARM_N="$2"; shift 2 ;;
         --ssh)          SSH_HOST="$2"; shift 2 ;;
         --print)        PRINT_JSON=true; shift ;;
         --admin)        ADMIN_EMAIL="$2"; shift 2 ;;
@@ -170,6 +200,39 @@ done
 
 [ -n "${EMIT_DIR}" ] || [ -n "${ROLES_DIR}" ] || [ -n "${SSH_HOST}" ] || ${PRINT_JSON} || {
     echo "ERROR: choose a mode: --emit DIR, --roles DIR, --ssh HOST, or --print" >&2; usage 1; }
+
+# ── Procedural SWARM expansion (the scaled-concurrent final sweep) ──────────
+# When --swarm N is given, fold the deterministic population into
+# SYSTEMS_ROLE_USERS so the SAME emit_roles path seeds it. All swarm members share
+# E2E_SWARM_PASSWORD (passwordEnv literally "E2E_SWARM_PASSWORD"). Usernames +
+# role sets MUST match tests/e2e/specs/rbac-roles.ts generateSwarm().
+if [ -n "${SWARM_N}" ]; then
+    [ -n "${ROLES_DIR}" ] || { echo "ERROR: --swarm requires --roles DIR (it folds into the role matrix)" >&2; usage 1; }
+    case "${SWARM_N}" in
+        ''|*[!0-9]*) echo "ERROR: --swarm needs a non-negative integer, got '${SWARM_N}'" >&2; usage 1 ;;
+    esac
+    SWARM_USERS="${SWARM_N}"
+    swarm_specs=""
+    i=0
+    while [ "${i}" -lt "${SWARM_USERS}" ]; do
+        printf -v idx '%03d' "${i}"
+        swarm_specs+="e2e-swarm-user-${idx}:ROLE_USER,ROLE_MATRIX,ROLE_MASTODON:E2E_SWARM_PASSWORD "
+        i=$((i+1))
+    done
+    i=0
+    while [ "${i}" -lt "${SWARM_MODS}" ]; do
+        swarm_specs+="e2e-swarm-mod-${i}:ROLE_MOD,ROLE_MATRIX,ROLE_MASTODON,ROLE_USER:E2E_SWARM_PASSWORD "
+        i=$((i+1))
+    done
+    i=0
+    while [ "${i}" -lt "${SWARM_ADMINS}" ]; do
+        swarm_specs+="e2e-swarm-admin-${i}:ROLE_ADMIN,ROLE_MATRIX,ROLE_MASTODON,ROLE_USER:E2E_SWARM_PASSWORD "
+        i=$((i+1))
+    done
+    SYSTEMS_ROLE_USERS="${SYSTEMS_ROLE_USERS} ${swarm_specs}"
+    echo "==> --swarm ${SWARM_USERS}: +$((SWARM_USERS + SWARM_MODS + SWARM_ADMINS)) procedural members" \
+         "(${SWARM_USERS} users + ${SWARM_MODS} mods + ${SWARM_ADMINS} admins, shared E2E_SWARM_PASSWORD)"
+fi
 
 # Resolve a seed user's deterministic e2e password: per-user env override
 # (E2E_<UPPER>_PASSWORD) -> shared E2E_PASSWORD -> 'e2e-pass'. Mirrors
@@ -410,7 +473,13 @@ emit_roles() {
     # users[] array (with deterministic password) and a roles[] array (members),
     # which is the shape Casdoor's init_data / update-role consume.
     local users_json="[]" role_members_json="{}"
-    local declared_roles="ROLE_ADMIN ROLE_MOD ROLE_GAMES ROLE_GAMES_ADMIN ROLE_USER"
+    # HARD PREREQUISITE: every role any seed user is granted MUST be declared here
+    # (present-but-empty first) so the round-trip update-role finds a real Casdoor
+    # role object. Mirrors manifests/casdoor/init-data-configmap.yaml `roles[]`.
+    local declared_roles="ROLE_ADMIN ROLE_MOD ROLE_MATRIX ROLE_MASTODON \
+ROLE_MATRIX_DOMAINLOCKED ROLE_MASTODON_DOMAINLOCKED \
+ROLE_MATRIX_EXTERNAL_CLIENT ROLE_MASTODON_EXTERNAL_CLIENT \
+ROLE_FORUM ROLE_GAMES ROLE_GAMES_ADMIN ROLE_USER"
     # Seed every declared role as an empty member set first (so ROLE_GAMES_ADMIN
     # is present-but-empty — the games-admin-sync Job fills it).
     for r in ${declared_roles}; do
@@ -524,6 +593,37 @@ jq -c '.roles[]' "${ROLES_JSON}" | while read -r r; do
     | jq -r '.status // "?"' | sed "s/^/[apply-roles] update-role ${rname} -> /"
 done
 log "done — REMEMBER to run the games-admin-sync Job so ROLE_GAMES_ADMIN materializes."
+
+# ── Pre-mint + cache a JWT per seed user (CRITICAL for the swarm) ───────────
+# Casdoor is replicas:1; the concurrent sweep (spec 24) would serialize 126
+# logins at token-minting time if every actor logged in at sweep start. Pre-mint
+# each user's access token NOW (right after seeding) into PREMINT_DIR so the
+# harness loads cached tokens instead of racing the login endpoint. The harness
+# then asserts a real concurrency invariant (max in-flight >= N) so a silently
+# serialized run still FAILS rather than passing slowly.
+PREMINT_DIR="${PREMINT_DIR:-${HERE}/jwt-cache}"
+APP="${PREMINT_APP:-app-built-in}"
+mkdir -p "${PREMINT_DIR}"
+minted=0
+jq -c '.users[]' "${ROLES_JSON}" | while read -r u; do
+  name="$(echo "$u" | jq -r '.name')"
+  pass="$(echo "$u" | jq -r '.password')"
+  # Resource-Owner password grant against the seeded app (best-effort; some
+  # Casdoor configs disable the password grant — then the harness falls back to
+  # interactive login and the concurrency invariant catches serialization).
+  tok="$(curl -s "${BASE}/api/login/oauth/access_token" \
+          -H 'content-type: application/x-www-form-urlencoded' \
+          --data-urlencode "grant_type=password" \
+          --data-urlencode "username=${ORG}/${name}" \
+          --data-urlencode "password=${pass}" \
+          --data-urlencode "client_id=${APP}" 2>/dev/null \
+        | jq -r '.access_token // empty')"
+  if [ -n "${tok}" ]; then
+    printf '%s' "${tok}" > "${PREMINT_DIR}/${name}.jwt"
+    minted=$((minted+1))
+  fi
+done
+log "pre-minted JWTs into ${PREMINT_DIR} (load them in the swarm harness to avoid serializing Casdoor logins)"
 APPLY
     chmod +x "${dir}/apply-systems-roles.sh"
 
