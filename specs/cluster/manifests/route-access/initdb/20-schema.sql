@@ -136,6 +136,16 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- is default-deny. More specific than /admin/** (different prefix) and self-
   -- contained — the one allow row encodes the AND.
   ('snapdragon-fe-gateway',  '/games/admin/**',       'ROLE_GAMES_ADMIN', true),  -- games namespace admin UI (games + (admin|mod) ONLY)
+  -- PUBLIC announcements read surface for the anonymous LOGIN page banner
+  -- (admin-bff GET /bff/public/announcements/login -> permitAll, see the admin-bff
+  -- SecurityConfig + the shared announcements API contract). The login page is
+  -- shown BEFORE a Casdoor JWT exists, so this read path must pass the gateway
+  -- unauth'd — mirror the front-page '/' PUBLIC row. More SPECIFIC than the
+  -- /bff/login + /bff/admin/** etc. ROLE_USER/ROLE_ADMIN rows below (distinct
+  -- /bff/public/ prefix), so most-specific-match keeps it anonymous WITHOUT
+  -- opening any other /bff/** subpath. Anonymous body_html is sanitized
+  -- server-side at write + rendered in a sandboxed srcdoc iframe by the UI.
+  ('snapdragon-fe-gateway',  '/bff/public/announcements/**', 'PUBLIC', true),  -- public login-page announcements (UNAUTHENTICATED)
   ('snapdragon-fe-gateway',  '/bff/login',            'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/register/**',      'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/provision/**',     'ROLE_USER',      true),
