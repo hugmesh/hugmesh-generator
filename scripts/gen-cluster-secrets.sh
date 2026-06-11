@@ -234,7 +234,7 @@ CASDOOR_GAMES_GITHUB_CLIENT_SECRET="REPLACE_WITH_GITHUB_OAUTH_CLIENT_SECRET"
 # the apps/users/roles structure; these secrets are injected by casdoor-init).
 # The init Job needs the admin PLAINTEXT to call the Casdoor API, so we keep it
 # alongside the -6 hash. Secrets live only in Vault / the USB bundle, never git.
-CASDOOR_APPS="pki-gateway be-gateway fe-gateway api admin-bff matrix mastodon fragment-sync"
+CASDOOR_APPS="pki-gateway be-gateway fe-gateway api admin-bff matrix mastodon fragment-sync signup-gate"
 CASDOOR_APP_KV_ARGS=()
 CASDOOR_APP_JSON_ENV=()
 for _app in ${CASDOOR_APPS}; do
@@ -244,6 +244,14 @@ for _app in ${CASDOOR_APPS}; do
     CASDOOR_APP_KV_ARGS+=("${_app}=${_sec}")
     CASDOOR_APP_JSON_ENV+=("${_var}")
 done
+# Shared-secret for the signup-gate POST-signup reconcile webhook (Casdoor ->
+# signup-gate /casdoor/webhook header X-Signup-Gate-Secret). NOT a Casdoor app
+# secret — co-located in the casdoor-apps path (property signup-gate-webhook) so
+# the proxy + casdoor-init read it from one place. Optional in the manifests; we
+# seed it here so the ExternalSecret property resolves.
+SIGNUP_GATE_WEBHOOK_SECRET="$(openssl rand -hex 32)"
+CASDOOR_APP_KV_ARGS+=("signup-gate-webhook=${SIGNUP_GATE_WEBHOOK_SECRET}")
+CASDOOR_APP_JSON_ENV+=("SIGNUP_GATE_WEBHOOK_SECRET")
 
 CLICKHOUSE_PASSWORD="$(openssl rand -base64 24)"
 

@@ -1,0 +1,24 @@
+# signup-gate — the Casdoor PRE-SIGNUP confusable/uniqueness gate (thin
+# reverse-proxy in front of Casdoor's signup endpoints). Deploys after casdoor
+# (05) and federation-api (29) exist; the gateway self-signup routes target this
+# Service so a confusable/look-alike handle is rejected before a login is minted.
+# See manifests/signup-gate/ + docs/USERNAME-CONFUSABLE.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: signup-gate
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/signup-gate
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-pki
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

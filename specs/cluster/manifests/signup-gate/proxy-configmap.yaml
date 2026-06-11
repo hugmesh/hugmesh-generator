@@ -1,0 +1,333 @@
+# signup-gate proxy — the Casdoor PRE-SIGNUP confusable/uniqueness gate.
+#
+# WHY THIS EXISTS
+#   Casdoor LOGIN is the PRIMARY identity mint for the platform (the universal
+#   self-signup), but Casdoor's native forbidden-username list is EXACT-MATCH
+#   ONLY. The username-confusable design (see docs/USERNAME-CONFUSABLE.md +
+#   docs/RESERVED-PREFIXES.md) requires that a self-signup handle be rejected when
+#   it is a CONFUSABLE / look-alike of an existing username or a reserved label
+#   (e.g. `4dmin`, `аdmin` [Cyrillic], `r00t`, `akk0ma`) — which an exact list can
+#   never catch. The confusable engine lives ONLY in federation-api
+#   (GET /api/federation/username/{candidate}/availability, INTERNAL/ROLE_SERVICE).
+#   This proxy is the REQUIRED, FAIL-CLOSED enforcement seam that runs that check
+#   in front of Casdoor's signup endpoints so a colliding handle is never minted.
+#
+# HOW IT WORKS (thin reverse-proxy in front of Casdoor)
+#   The fe/be gateways route the self-signup traffic (POST /api/signup and the
+#   OAuth-provider signup-completion POST /api/login with type=signup) to THIS
+#   Service instead of straight to casdoor:8000. For those POSTs the proxy:
+#     1. reads the candidate username from the JSON body,
+#     2. mints a Casdoor client-credentials SERVICE JWT (app-signup-gate /
+#        ROLE_SERVICE) and calls the federation availability endpoint,
+#     3. on collide=true -> returns HTTP 409 with {reason, matchedWith}; the
+#        signup is NEVER forwarded to Casdoor (so no confusable login is minted),
+#     4. otherwise forwards the ORIGINAL request verbatim to casdoor:8000 and
+#        streams Casdoor's response back unchanged.
+#   Every other path is a transparent pass-through to Casdoor.
+#
+#   FAIL-CLOSED: if the availability call errors or times out (short timeout +
+#   one retry), the proxy REJECTS the signup (503) rather than admit a possible
+#   confusable during a federation outage — matching the design's recommended
+#   fail-closed posture for the confusable gate. reserved/exact still have their
+#   own local + DB backstops; this gate adds the confusable dimension.
+#
+#   POST-SIGNUP WEBHOOK BACKSTOP (/casdoor/webhook): Casdoor's native webhook
+#   (configured by casdoor-init, see manifests/casdoor/init-job.yaml) POSTs a
+#   signup/update event here AFTER the fact. The handler re-runs availability for
+#   the new username and, on a confusable collision that slipped past the pre-gate
+#   (race / backfill / ICU skeleton shift), DISABLES the login via Casdoor
+#   setForbidden — a reconcile backstop, not the primary gate.
+#
+# NO SECRETS HERE. The client-credentials clientId/clientSecret come from the ESO
+# Secret signup-gate-casdoor (Vault secret/<brand>/casdoor-apps key signup-gate);
+# the webhook shared-secret from signup-gate-webhook. Pure stdlib (urllib) so the
+# python:3.12-alpine image needs no network installs.
+#
+# !!! Casdoor's signup request/response shape, the OAuth signup-completion flow,
+# !!! and the webhook event schema are version-specific. This is a working,
+# !!! reviewed SCAFFOLD — validate the field names (username location in the body,
+# !!! the /api/login type=signup branch, the webhook JSON) against the deployed
+# !!! casbin/casdoor:3.80.0 before relying on it as the sole gate. Until verified
+# !!! on the live image, also keep the post-signup reconcile/sweep job (admin-bff
+# !!! CasdoorReservedSync) enabled as the belt-and-braces backstop.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: signup-gate-proxy
+  namespace: snapdragon-pki
+  labels: { app: signup-gate, app.kubernetes.io/part-of: snapdragon.systems }
+data:
+  proxy.py: |
+    #!/usr/bin/env python3
+    """Casdoor pre-signup confusable/uniqueness gate (thin reverse-proxy).
+
+    Forwards everything to Casdoor EXCEPT self-signup POSTs, which are first
+    checked against the federation username-availability endpoint and rejected on
+    a confusable/exact/reserved collision. Pure stdlib; fail-CLOSED on the check.
+    """
+    import json
+    import os
+    import time
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    # --- config (env; no secrets in code) ------------------------------------
+    LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "8080"))
+    CASDOOR_URL = os.environ.get(
+        "CASDOOR_URL", "http://casdoor.snapdragon-pki.svc.cluster.local:8000"
+    ).rstrip("/")
+    # federation availability endpoint base (INTERNAL/ROLE_SERVICE). Call the
+    # Service DIRECTLY (resource-server JWT validation) — not via the be-gateway,
+    # which would add a second auth hop. Requires a pki->backend NetworkPolicy.
+    FEDERATION_URL = os.environ.get(
+        "FEDERATION_URL",
+        "https://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080",
+    ).rstrip("/")
+    CASDOOR_ORG = os.environ.get("CASDOOR_ORG", "snapdragon")
+    CLIENT_ID = os.environ.get("CASDOOR_CLIENT_ID", "app-signup-gate")
+    CLIENT_SECRET = os.environ.get("CASDOOR_CLIENT_SECRET", "")
+    WEBHOOK_SECRET = os.environ.get("WEBHOOK_SHARED_SECRET", "")
+    # FAIL-CLOSED confusable gate: reject when the check is unreachable.
+    FAIL_OPEN = os.environ.get("AVAILABILITY_FAIL_OPEN", "false").lower() == "true"
+    CHECK_TIMEOUT = float(os.environ.get("AVAILABILITY_TIMEOUT_SECONDS", "3"))
+
+    # Paths whose POST body carries a self-signup candidate username.
+    SIGNUP_PATHS = {"/api/signup"}
+    # /api/login also completes an OAuth-provider signup (type == "signup").
+    LOGIN_PATH = "/api/login"
+
+    _token = {"value": None, "exp": 0.0}
+
+    def _http(method, url, *, data=None, headers=None, timeout=10):
+        req = urllib.request.Request(
+            url, data=data, method=method, headers=headers or {}
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, dict(r.headers), r.read()
+
+    def service_token():
+        """Mint/cache a Casdoor client-credentials SERVICE JWT (ROLE_SERVICE)."""
+        now = time.time()
+        if _token["value"] and now < _token["exp"] - 30:
+            return _token["value"]
+        body = urllib.parse.urlencode(
+            {
+                "grant_type": "client_credentials",
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+            }
+        ).encode()
+        status, _, raw = _http(
+            "POST",
+            f"{CASDOOR_URL}/api/login/oauth/access_token",
+            data=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=CHECK_TIMEOUT,
+        )
+        tok = json.loads(raw or "{}")
+        _token["value"] = tok.get("access_token")
+        _token["exp"] = now + float(tok.get("expires_in", 3600))
+        return _token["value"]
+
+    def check_availability(username):
+        """Return (collide, reason, matchedWith). Retries once; raises on failure
+        so the caller can FAIL-CLOSED."""
+        candidate = urllib.parse.quote(username, safe="")
+        url = f"{FEDERATION_URL}/api/federation/username/{candidate}/availability"
+        last = None
+        for _ in range(2):
+            try:
+                tok = service_token()
+                status, _, raw = _http(
+                    "GET",
+                    url,
+                    headers={"Authorization": f"Bearer {tok}"},
+                    timeout=CHECK_TIMEOUT,
+                )
+                d = json.loads(raw or "{}")
+                return (
+                    bool(d.get("collide")),
+                    d.get("reason"),
+                    d.get("matchedWith"),
+                )
+            except Exception as e:  # noqa: BLE001
+                last = e
+                time.sleep(0.25)
+        raise RuntimeError(f"availability check failed: {last}")
+
+    def extract_username(path, body_bytes):
+        """Pull the candidate username out of a signup/login-signup JSON body.
+        Returns None when this request is not a username-minting signup."""
+        try:
+            body = json.loads(body_bytes or b"{}")
+        except Exception:  # noqa: BLE001
+            return None
+        if path in SIGNUP_PATHS:
+            return body.get("username") or body.get("name")
+        if path == LOGIN_PATH:
+            # OAuth provider signup-completion: only gate the signup branch.
+            if str(body.get("type", "")).lower() in {"signup", "signup-oauth"}:
+                return body.get("username") or body.get("name")
+        return None
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args):  # quieter; rely on explicit prints
+            return
+
+        def _send(self, status, payload, ctype="application/json"):
+            data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _read_body(self):
+            n = int(self.headers.get("Content-Length", "0") or "0")
+            return self.rfile.read(n) if n else b""
+
+        def _proxy(self, body):
+            """Transparent pass-through to Casdoor (verbatim method/headers/body)."""
+            url = f"{CASDOOR_URL}{self.path}"
+            fwd = {
+                k: v
+                for k, v in self.headers.items()
+                if k.lower() not in {"host", "content-length", "connection"}
+            }
+            try:
+                req = urllib.request.Request(
+                    url, data=body or None, method=self.command, headers=fwd
+                )
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    data = r.read()
+                    self.send_response(r.status)
+                    for k, v in r.headers.items():
+                        if k.lower() not in {"transfer-encoding", "connection", "content-length"}:
+                            self.send_header(k, v)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+            except urllib.error.HTTPError as e:
+                data = e.read()
+                self.send_response(e.code)
+                self.send_header("Content-Type", e.headers.get("Content-Type", "application/json"))
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        def do_GET(self):
+            if self.path == "/healthz":
+                return self._send(200, {"status": "ok"})
+            return self._proxy(b"")
+
+        def do_POST(self):
+            body = self._read_body()
+            # ---- post-signup webhook backstop -------------------------------
+            if self.path == "/casdoor/webhook":
+                return self._handle_webhook(body)
+            # ---- pre-signup confusable/uniqueness gate ----------------------
+            username = extract_username(self.path, body)
+            if username:
+                try:
+                    collide, reason, matched = check_availability(username)
+                except Exception as e:  # noqa: BLE001
+                    if FAIL_OPEN:
+                        print(f"signup-gate: availability FAIL-OPEN for {username!r}: {e}")
+                    else:
+                        print(f"signup-gate: availability FAIL-CLOSED for {username!r}: {e}")
+                        return self._send(
+                            503,
+                            {
+                                "status": "error",
+                                "msg": "username availability check unavailable; "
+                                "please retry",
+                            },
+                        )
+                else:
+                    if collide:
+                        print(
+                            f"signup-gate: REJECT {username!r} "
+                            f"(reason={reason}, matchedWith={matched})"
+                        )
+                        return self._send(
+                            409,
+                            {
+                                "status": "error",
+                                "msg": "That username is not available "
+                                "(too similar to an existing or reserved name).",
+                                "reason": reason,
+                                "matchedWith": matched,
+                            },
+                        )
+            return self._proxy(body)
+
+        def do_PUT(self):
+            return self._proxy(self._read_body())
+
+        def do_DELETE(self):
+            return self._proxy(self._read_body())
+
+        def _handle_webhook(self, body):
+            # Shared-secret check (header set when casdoor-init registers the
+            # webhook). Reconcile-only; never the primary gate.
+            if WEBHOOK_SECRET and self.headers.get("X-Signup-Gate-Secret") != WEBHOOK_SECRET:
+                return self._send(401, {"status": "error", "msg": "bad webhook secret"})
+            try:
+                event = json.loads(body or b"{}")
+            except Exception:  # noqa: BLE001
+                return self._send(400, {"status": "error", "msg": "bad json"})
+            user = (event.get("object") or event.get("user") or {})
+            username = user.get("name") or user.get("username")
+            action = str(event.get("action", "")).lower()
+            if username and action in {"signup", "add-user", "update-user"}:
+                try:
+                    collide, reason, matched = check_availability(username)
+                    if collide and reason != "exact":
+                        # confusable/reserved slipped past the pre-gate -> disable.
+                        self._disable_user(username)
+                        print(
+                            f"signup-gate webhook: DISABLED {username!r} "
+                            f"(reason={reason}, matchedWith={matched})"
+                        )
+                except Exception as e:  # noqa: BLE001
+                    print(f"signup-gate webhook: reconcile error for {username!r}: {e}")
+            return self._send(200, {"status": "ok"})
+
+        def _disable_user(self, username):
+            """Best-effort Casdoor setForbidden on a confusable login the pre-gate
+            missed. Uses the service token; tolerant of the version-specific API."""
+            tok = service_token()
+            payload = json.dumps(
+                {
+                    "owner": CASDOOR_ORG,
+                    "name": username,
+                    "isForbidden": True,
+                }
+            ).encode()
+            url = (
+                f"{CASDOOR_URL}/api/update-user?id="
+                f"{urllib.parse.quote(CASDOOR_ORG)}/{urllib.parse.quote(username)}"
+            )
+            self_headers = {
+                "Authorization": f"Bearer {tok}",
+                "Content-Type": "application/json",
+            }
+            try:
+                _http("POST", url, data=payload, headers=self_headers, timeout=CHECK_TIMEOUT)
+            except Exception as e:  # noqa: BLE001
+                print(f"signup-gate webhook: setForbidden({username!r}) failed: {e}")
+
+    def main():
+        srv = ThreadingHTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
+        print(
+            f"signup-gate: listening :{LISTEN_PORT} -> casdoor {CASDOOR_URL} "
+            f"| availability {FEDERATION_URL} | fail_open={FAIL_OPEN}"
+        )
+        srv.serve_forever()
+
+    if __name__ == "__main__":
+        main()

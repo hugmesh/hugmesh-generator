@@ -47,11 +47,32 @@ kind: ReservedPrefixSpec          # informational kind (not a CRD) — a plain d
 metadata:
   name: snapdragon-reserved-prefixes
   # Bump when the list changes so app-repo copies can detect a newer source.
-  revision: "1"
+  # revision 1 -> 2: added the publicly-routable homeserver surface prefixes
+  # (`media`, `_synapse`) that the route-access seed already deploys, plus the
+  # PLANNED `forum`/`phpbb` reserves (see the planned subsection below). The four
+  # app-repo ReservedNames copies must add the same labels to stay in sync (the
+  # validate script's code-copy assertion flags them when the sibling repos are
+  # present in CI).
+  revision: "2"
 spec:
-  # The canonical 60-label reserved set. KEEP SORTED BY CATEGORY (comments) but
+  # The canonical reserved set (65 labels). KEEP SORTED BY CATEGORY (comments) but
   # the validator treats it as an unordered SET. Do not duplicate; the validator
   # also asserts there are no duplicates.
+  #
+  # SCOPE — what belongs here (and what does NOT):
+  #   This is the union of PUBLICLY-ROUTABLE first-segment route prefixes and
+  #   reserved service SUBDOMAINS — the labels a vanity username could SHADOW on a
+  #   real gateway route. It is NOT a list of every Kubernetes Service. Internal,
+  #   non-publicly-routable Services (akkoma-proxy / tuwunel-proxy mTLS sidecars,
+  #   *-db / *-pg datastores, kafka / eureka / cassandra / clickhouse, lan-dns,
+  #   the per-pod helpers) are reached ONLY in-cluster behind an already-reserved
+  #   public host (mastodon./matrix./api.) or are isolated by namespace — they are
+  #   NEVER a public first-label, so reserving them would only bloat the username
+  #   namespace. The validate script enforces this scope: it requires a label here
+  #   for every PUBLICLY-ROUTABLE route prefix (gateway route path/host first-seg +
+  #   route-access url_pattern first-seg + reserved gateway hosts), and treats the
+  #   internal Services as exempt via an allowlist — see
+  #   scripts/validate-reserved-prefixes.sh.
   reserved:
     # --- platform / role gateway route prefixes (fe/be/pki) ---
     - admin
@@ -72,6 +93,15 @@ spec:
     - _matrix
     - matrix
     - mastodon
+    # `_synapse` + `media`: PUBLICLY-ROUTABLE homeserver client surfaces deployed by
+    # the route-access seed (manifests/route-access/initdb/20-schema.sql) on the
+    # be-gateway — `/_synapse/**` (Matrix Synapse-compat, host-scoped on the matrix
+    # host) and `/media/**` (Mastodon media). They are real first-segment route
+    # prefixes, so a vanity username equal to either would shadow a live route. The
+    # route-consistency check surfaces them; reserved here for parity. The app-repo
+    # ReservedNames copies MUST add `_synapse` + `media` too.
+    - _synapse
+    - media
     # `pleroma`: akkoma's AdminFE is served at /pleroma/admin/** on the be-gateway
     # (gateway_route_access seed), a DEDICATED first-segment route prefix — so it
     # must be reserved too. Added by the route-consistency check (it is the ONE
@@ -126,3 +156,15 @@ spec:
     - games-rpg-maker
     - games-three-wizards
     - games-vn-maker
+    # --- planned / not-yet-deployed publicly-routable services -----------------
+    # These have NO kind:Service / gateway route in the GitOps tree YET, so the
+    # route-consistency drift check will NOT demand them — they are reserved here
+    # PROACTIVELY so a user cannot squat the handle before the service ships. The
+    # phpBB community forum is referenced as a planned/announced surface in
+    # snapdragon.systems/src/app/announcements/announcement.model.ts. When the
+    # forum lands (a `forum.snapdragon.systems` subdomain + a be/fe gateway route),
+    # move these up into the routable categories above; until then they are a
+    # forward-reserve, NOT drift. The app-repo ReservedNames copies should add them
+    # too so the handle is forbidden at registration before the route exists.
+    - forum
+    - phpbb

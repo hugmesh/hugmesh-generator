@@ -76,6 +76,14 @@
 #   allow-predicate becomes false), reconciled by the admin-bff loop; there is no
 #   allow=false / ban role row anywhere.
 #
+# ROLE_SERVICE ("Internal service-to-service") is the machine role for internal
+# client-credentials callers that need the INTERNAL/ROLE_SERVICE endpoints (e.g.
+# the signup-gate proxy calling the federation username-availability check). Its
+# only seeded member is svc-signup-gate (the app-signup-gate machine account, see
+# manifests/signup-gate/ + the casdoor-init APPS map). It grants no route-access
+# rows of its own — it exists so the federation availability endpoint can require
+# ROLE_SERVICE and the minted client-credentials token satisfies that gate.
+#
 # NOTE: the init_data.json object schema is Casdoor-version-specific. Validate
 # against the deployed casbin/casdoor-all-in-one before relying on auto-import.
 apiVersion: v1
@@ -109,13 +117,15 @@ data:
         { "owner": "snapdragon", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GATEWAY",   "displayName": "Gateway service", "users": ["snapdragon/svc-pki-gateway","snapdragon/svc-be-gateway","snapdragon/svc-fe-gateway"], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_API",       "displayName": "API service",     "users": ["snapdragon/svc-api"], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_ADMIN_API", "displayName": "Admin API",       "users": ["snapdragon/svc-admin-bff"], "roles": [], "domains": [], "isEnabled": true }
+        { "owner": "snapdragon", "name": "ROLE_ADMIN_API", "displayName": "Admin API",       "users": ["snapdragon/svc-admin-bff"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_SERVICE",   "displayName": "Internal service-to-service", "users": ["snapdragon/svc-signup-gate"], "roles": [], "domains": [], "isEnabled": true }
       ],
       "users": [
         { "owner": "snapdragon", "name": "svc-pki-gateway", "displayName": "svc-pki-gateway", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
         { "owner": "snapdragon", "name": "svc-be-gateway",  "displayName": "svc-be-gateway",  "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
         { "owner": "snapdragon", "name": "svc-fe-gateway",  "displayName": "svc-fe-gateway",  "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
         { "owner": "snapdragon", "name": "svc-api",         "displayName": "svc-api",         "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
-        { "owner": "snapdragon", "name": "svc-admin-bff",   "displayName": "svc-admin-bff",   "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false }
+        { "owner": "snapdragon", "name": "svc-admin-bff",   "displayName": "svc-admin-bff",   "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "snapdragon", "name": "svc-signup-gate", "displayName": "svc-signup-gate", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false }
       ]
     }

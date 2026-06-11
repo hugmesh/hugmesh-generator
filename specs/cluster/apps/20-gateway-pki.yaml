@@ -50,6 +50,22 @@ spec:
           - name: ROUTE_ACCESS_R2DBC_URL
             value: r2dbc:postgresql://pki_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
         routes:
+          # PRE-SIGNUP CONFUSABLE/UNIQUENESS GATE — these two paths MINT a username
+          # (native self-signup + OAuth provider signup-completion), so they route
+          # through the signup-gate proxy FIRST (manifests/signup-gate), which calls
+          # the federation availability endpoint and rejects a confusable/look-alike
+          # before Casdoor creates the login. Casdoor's native forbidden-list is
+          # exact-only, so this proxy is the confusable enforcement seam. The proxy
+          # transparently forwards everything (incl. non-signup /api/login) to
+          # casdoor:8000; ordering matters — keep these BEFORE the casdoor-* routes.
+          # NOTE: validate /api/signup + the /api/login type=signup branch against
+          # the deployed casbin/casdoor:3.80.0 signup flow (see proxy-configmap.yaml).
+          - id: signup-gate-signup
+            uri: http://signup-gate.snapdragon-pki.svc.cluster.local:8000
+            path: /api/signup
+          - id: signup-gate-login
+            uri: http://signup-gate.snapdragon-pki.svc.cluster.local:8000
+            path: /api/login
           - id: casdoor-auth
             uri: http://casdoor.snapdragon-pki.svc.cluster.local:8000
             path: /api/auth/**
