@@ -1,0 +1,55 @@
+# ClickHouse — the usage-analytics warehouse. HEAVY amd64 datastore (MANUAL-sync:
+# apps/35-analytics-clickhouse.yaml has NO automated syncPolicy, so an operator
+# opts in deliberately on the x86 host). The Service lives in the auto-sync floor
+# (manifests/analytics/discovery) so `clickhouse:8123` always resolves; this app
+# brings the actual warehouse pod + its node-local PV. Admin-only; the admin BFF
+# aggregates from here by static cluster DNS (no service-discovery registry).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clickhouse
+  namespace: snapdragon-backend
+  labels: { app: clickhouse, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: clickhouse } }
+  template:
+    metadata: { labels: { app: clickhouse } }
+    spec:
+      # The analytics/telemetry warehouse runs on the x86_64 host: snapdragon-local
+      # storage (the data disks at /mnt/data + /mnt/usb) lives there, so the
+      # clickhouse-data PV is node-local to that host. (backend Pis have no big disk.)
+      # nodeSelector — NOT a taint: the shared x86 host stays schedulable for
+      # everything else; this pod just REQUESTS amd64. Removing the analytics app
+      # never tainted the node and neither does this split.
+      nodeSelector: { kubernetes.io/arch: amd64 }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c19"
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:25.3-alpine
+          # Conservative baselines — tune to the backend node's headroom.
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits:   { cpu: "1",  memory: 2Gi }
+          ports: [{ name: http, containerPort: 8123 }, { name: native, containerPort: 9000 }]
+          env:
+            - { name: CLICKHOUSE_DB, value: snapdragon }
+            - { name: CLICKHOUSE_USER, value: snap }
+            - { name: CLICKHOUSE_PASSWORD, valueFrom: { secretKeyRef: { name: clickhouse-auth, key: password } } }
+          volumeMounts: [{ name: data, mountPath: /var/lib/clickhouse }]
+      volumes: [{ name: data, persistentVolumeClaim: { claimName: clickhouse-data } }]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: clickhouse-data
+  namespace: snapdragon-backend
+  labels: { app: clickhouse, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: snapdragon-local
+  resources: { requests: { storage: 20Gi } }
