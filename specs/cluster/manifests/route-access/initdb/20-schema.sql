@@ -115,6 +115,35 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-be-gateway',  '/api/v1/streaming/**',      'ROLE_MASTODON', true),  -- Mastodon streaming
   ('snapdragon-be-gateway',  '/api/v1/streaming/**',      'ROLE_MOD',      true),  -- (mod superset)
   ('snapdragon-be-gateway',  '/api/v1/streaming/**',      'ROLE_ADMIN',    true),  -- (admin superset)
+  -- ── EXTERNAL-CLIENT (personal-client / native-app) ISSUANCE rows ───────────
+  -- Personal native clients (Element/Tusky/Ivory) reach the homeservers ONLY
+  -- through the gateway (sole ingress; raw homeserver unreachable per the
+  -- NetworkPolicy+mTLS isolation). The token-ISSUANCE sub-paths are gated by the
+  -- DEDICATED external-client roles ROLE_MATRIX_EXTERNAL_CLIENT /
+  -- ROLE_MASTODON_EXTERNAL_CLIENT (seeded in manifests/casdoor/init-data-configmap.yaml),
+  -- which are SEPARATE from the base ROLE_MATRIX/ROLE_MASTODON. Base role =
+  -- use-via-OUR-UI (brokered token); external-client role = may register/use a
+  -- NATIVE client through the passthrough. Mods/admins grant/revoke the external-
+  -- client role; removing it revokes the user's personal-client tokens at the
+  -- gateway (HomeserverTokenRevocationFilter, external-client:<localpart>:<platform>,
+  -- kind=personal only) WITHOUT touching our-UI access. PARITY with the gateway
+  -- CanonicalSeed (snapdragon-gateway). Token-USAGE (/_matrix/**, /api/v1/**,
+  -- /api/v2/**) stays gated by the base roles above + the revocation filter.
+  --
+  -- The brokered mint our BFFs run does NOT traverse these issuance paths: it runs
+  -- as an INTERNAL service identity that the GatewayRouteAccessFilter short-circuits
+  -- (or via an internal route bypassing this gate), so these external-client rows
+  -- govern only genuine native-client issuance traffic and never lock out
+  -- ROLE_USER/MOD/ADMIN using OUR UI. Versioned Matrix login variants (v3, r0) are
+  -- enumerated explicitly rather than assuming one '*' covers them.
+  --   Mastodon issuance: OAuth flow + dynamic app registration.
+  ('snapdragon-be-gateway',  '/oauth/**',                 'ROLE_MASTODON_EXTERNAL_CLIENT',  true),  -- Mastodon OAuth (token/authorize) — external client
+  ('snapdragon-be-gateway',  '/api/v1/apps',              'ROLE_MASTODON_EXTERNAL_CLIENT',  true),  -- Mastodon app registration — external client
+  --   Matrix issuance: client login + device registration (versioned).
+  ('snapdragon-be-gateway',  '/_matrix/client/v3/login',  'ROLE_MATRIX_EXTERNAL_CLIENT',    true),  -- Matrix login (v3) — external client
+  ('snapdragon-be-gateway',  '/_matrix/client/r0/login',  'ROLE_MATRIX_EXTERNAL_CLIENT',    true),  -- Matrix login (r0) — external client
+  ('snapdragon-be-gateway',  '/_matrix/client/v3/register', 'ROLE_MATRIX_EXTERNAL_CLIENT',  true),  -- Matrix register/device (v3) — external client
+  ('snapdragon-be-gateway',  '/_matrix/client/r0/register', 'ROLE_MATRIX_EXTERNAL_CLIENT',  true),  -- Matrix register/device (r0) — external client
   ('snapdragon-be-gateway',  '/api/admin/**',         'ROLE_ADMIN',     true),  -- snapdragon admin API (NOT ROLE_MOD)
   -- snapdragon-games NAMESPACE admin (games BFF /api/admin/** surface, namespaced
   -- under /games/** so it does NOT collide with the platform /api/admin/** row
