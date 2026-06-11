@@ -95,6 +95,7 @@ data:
     for app in snapdragon-pki-gateway snapdragon-be-gateway snapdragon-fe-gateway \
                snapdragon-api snapdragon-admin-bff-api \
                snapdragon-mod-bff-api snapdragon-user-bff-api \
+               snapdragon-forum-bff-api \
                snapdragon-federation-api \
                akkoma-proxy tuwunel-proxy; do
       echo "==> role ${PKI}/roles/${app}"

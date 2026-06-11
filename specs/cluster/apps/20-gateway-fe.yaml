@@ -71,6 +71,15 @@ spec:
           - id: mastodon-ui
             uri: http://snapdragon-mastodon-ui.snapdragon-frontend.svc.cluster.local:80
             path: /social/mastodon/**
+          # phpBB forum micro-frontend remote, served at the apex PATH
+          # /social/forum/** (NOT a forum. subdomain — the *.snapdragon.systems
+          # vanity wildcard would swallow forum.<domain>). Congruent with the
+          # matrix/mastodon shells. The phpBB pod itself is NEVER routed (backend-
+          # only, isolated in snapdragon-forum); only this Angular remote + the
+          # /bff/forum BFF below are public. Role floor ROLE_FORUM (route-DB).
+          - id: forum-ui
+            uri: http://snapdragon-forum-ui.snapdragon-frontend.svc.cluster.local:80
+            path: /social/forum/**
           - id: login-ui
             uri: http://snapdragon-login-ui.snapdragon-frontend.svc.cluster.local:80
             path: /login/**
@@ -112,6 +121,19 @@ spec:
           - id: snapdragon-user-bff-api
             uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
             path: /bff/user/**
+          # Forum BFF (/bff/forum/** -> snapdragon-forum-bff-api), the SINGLE
+          # browser->phpBB path. SIBLING of /bff/mod/** + /bff/user/** above (each a
+          # non-overlapping prefix gated to its own role floor). The moderation
+          # subpath is declared FIRST (more specific) so it keeps its ROLE_FORUM_MOD
+          # gate; the /bff/forum/** floor (ROLE_FORUM) follows. Both BEFORE the
+          # /bff/** admin-bff catch-all. https:// — forum-bff enforces mTLS
+          # (client-auth=need); the gateway presents its client cert on this leg.
+          - id: snapdragon-forum-bff-api-moderation
+            uri: https://snapdragon-forum-bff-api.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/forum/moderation/**
+          - id: snapdragon-forum-bff-api
+            uri: https://snapdragon-forum-bff-api.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/forum/**
           - id: snapdragon-admin-bff-api
             uri: https://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
             path: /bff/**

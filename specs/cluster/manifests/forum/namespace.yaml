@@ -1,0 +1,29 @@
+# snapdragon-forum — DEDICATED namespace for the phpBB forum homeserver + its DB
+# + the snapdragon/json-api extension. phpBB is BACKEND-ONLY: it has NO gateway
+# route and NO ingress; it is reachable ONLY in-cluster as forum-bff-api's upstream
+# (+ admin-bff-api/the reconcile Job for the admin console).
+#
+# WHY A DEDICATED NAMESPACE (not snapdragon-backend like the BFFs):
+#   The snapdragon-backend tier policy (manifests/networkpolicy/tier-ingress.yaml)
+#   is a namespace-wide `podSelector: {}` allow, and k8s NetworkPolicy is
+#   ADDITIVE-allow (no deny/exclude). A per-pod policy in snapdragon-backend CANNOT
+#   subtract that tier allow, so every backend pod could reach phpbb:80 directly,
+#   bypassing forum-bff's role/ban enforcement. Carving phpBB into its OWN namespace
+#   whose ONLY NetworkPolicy is default-deny (network-policy.yaml) gives a REAL
+#   isolation boundary: ingress is admitted ONLY from forum-bff-api + admin-bff-api
+#   + the forum-admin-sync Job. This is intentionally STRICTER than akkoma/tuwunel
+#   (which have NO per-pod isolation), not a mirror of them.
+#
+# forum-bff-api + forum-bff-db stay in snapdragon-backend with the other BFFs
+# (forum-bff is the egress SOURCE into snapdragon-forum). Only phpBB + phpbb-db
+# live here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: snapdragon-forum
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    # Selectable by NetworkPolicy namespaceSelector from the backend ns (the
+    # forum-bff / admin-bff ingress allow rules key on this label).
+    kubernetes.io/metadata.name: snapdragon-forum
+    snapdragon.systems/tier: forum
