@@ -36,9 +36,16 @@ spec:
           image: hashicorp/vault:1.18
           command: ["/bin/sh", "/scripts/init-pki.sh"]
           env:
+            # Vault now serves HTTPS (persistent + TLS). Trust the cluster CA that
+            # signed the listener cert — the SAME cluster-ca cert mounted at /ca and
+            # imported as pki_int's signing CA below, so the chain is self-consistent.
             - name: VAULT_ADDR
-              value: "http://vault.vault.svc.cluster.local:8200"
-            # Dev-mode root token by default; in production mount a scoped token.
+              value: "https://vault.vault.svc.cluster.local:8200"
+            - name: VAULT_CACERT
+              value: "/ca/tls.crt"
+            # Bootstrap root/scoped token from the offline KEYS bundle (key "token").
+            # No dev-mode "root" default any more — the persistent Vault has no
+            # static root token. Provision it via the vault-bootstrap Secret.
             - name: VAULT_TOKEN
               valueFrom:
                 secretKeyRef: { name: vault-bootstrap, key: token, optional: true }

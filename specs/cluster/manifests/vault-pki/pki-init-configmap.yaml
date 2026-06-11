@@ -19,8 +19,12 @@ data:
   init-pki.sh: |
     #!/bin/sh
     set -eu
-    export VAULT_ADDR="${VAULT_ADDR:-http://vault.vault.svc.cluster.local:8200}"
-    export VAULT_TOKEN="${VAULT_TOKEN:-root}"   # dev-mode root; prod uses a scoped token
+    # Vault serves HTTPS (persistent + TLS). VAULT_CACERT (the cluster CA) is set
+    # by the Job env so `vault` validates the listener cert. VAULT_TOKEN comes from
+    # the vault-bootstrap Secret (the init/root or a scoped token); the persistent
+    # Vault has NO static dev "root" token, so there is no insecure default here.
+    export VAULT_ADDR="${VAULT_ADDR:-https://vault.vault.svc.cluster.local:8200}"
+    export VAULT_TOKEN="${VAULT_TOKEN:-}"
     DOMAIN="${CLUSTER_DOMAIN:-snapdragon.systems}"
     PKI="pki_int"
 

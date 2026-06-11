@@ -1262,8 +1262,67 @@ provision_vault() {
         else
             warn "failed to create vault/cluster-ca"
         fi
+        # ── vault-ca: the PUBLIC cluster CA CERT in every generator namespace ──
+        # The persistent Vault serves HTTPS with a cluster-CA-signed listener cert.
+        # ESO's per-service VaultDynamicSecret generators (pki-externalsecrets.yaml)
+        # + the ClusterSecretStore validate it via caProvider -> a 'vault-ca' Secret
+        # (key ca.crt) in their namespace. Only the CERT is published (no CA key) —
+        # the cert is public trust material. Seed it alongside the vault-token.
+        local ca_ns
+        for ca_ns in vault snapdragon-pki snapdragon-backend snapdragon-frontend; do
+            KUBECONFIG="${kc}" kubectl create namespace "${ca_ns}" \
+                --dry-run=client -o yaml 2>/dev/null | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null \
+                || warn "could not ensure namespace ${ca_ns}"
+            if KUBECONFIG="${kc}" kubectl create secret generic vault-ca \
+                    -n "${ca_ns}" --from-file=ca.crt="${ca_crt}" \
+                    --dry-run=client -o yaml 2>/dev/null \
+                    | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null; then
+                log "Created k8s Secret ${ca_ns}/vault-ca (CA cert for Vault HTTPS trust)"
+            else
+                warn "failed to create ${ca_ns}/vault-ca"
+            fi
+        done
     else
-        log "No cluster CA cert+key on KEYS (certs/cluster-ca.{crt,key}) — Vault pki_int will self-generate a DEV root"
+        log "No cluster CA cert+key on KEYS (certs/cluster-ca.{crt,key}) — Vault pki_int will self-generate a DEV root + a self-signed TLS listener cert"
+    fi
+
+    # ── Persistent Vault: auto-unseal key + bootstrap token (offline custody) ──
+    # The persistent Vault (manifests/vault, Raft + Shamir seal) auto-unseals on
+    # every restart from the `vault-unseal` Secret (key unseal-key); the vault-pki
+    # init Job authenticates with the `vault-bootstrap` Secret (key token). BOTH
+    # come ONLY from the offline USB KEYS bundle (vault/unseal-key + vault/token) —
+    # same custody as the cluster CA + luks.key, NEVER git. kubectl reads the files;
+    # no key material is printed. Absent => the operator must run the one-time
+    # `vault operator init` and seed these by hand (see keys-template/vault/README).
+    local unseal_file="${BASE}/vault/unseal-key" tok_file="${BASE}/${token_file}"
+    if [ -f "${unseal_file}" ] || [ -f "${tok_file}" ]; then
+        KUBECONFIG="${kc}" kubectl create namespace vault \
+            --dry-run=client -o yaml 2>/dev/null | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null \
+            || warn "could not ensure namespace vault"
+    fi
+    if [ -f "${unseal_file}" ]; then
+        local unseal_key; unseal_key="$(tr -d '[:space:]' < "${unseal_file}" 2>/dev/null)"
+        if [ -n "${unseal_key}" ] && KUBECONFIG="${kc}" kubectl create secret generic vault-unseal \
+                -n vault --from-literal=unseal-key="${unseal_key}" \
+                --dry-run=client -o yaml 2>/dev/null \
+                | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null; then
+            log "Created k8s Secret vault/vault-unseal (auto-unseal sidecar unseals Vault on restart)"
+        else
+            warn "failed to create vault/vault-unseal (empty key or apply error)"
+        fi
+    else
+        log "No Vault unseal key on KEYS (vault/unseal-key) — run the one-time 'vault operator init' and seed vault/vault-unseal by hand"
+    fi
+    if [ -f "${tok_file}" ]; then
+        local boot_tok; boot_tok="$(tr -d '[:space:]' < "${tok_file}" 2>/dev/null)"
+        if [ -n "${boot_tok}" ] && KUBECONFIG="${kc}" kubectl create secret generic vault-bootstrap \
+                -n vault --from-literal=token="${boot_tok}" \
+                --dry-run=client -o yaml 2>/dev/null \
+                | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null; then
+            log "Created k8s Secret vault/vault-bootstrap (vault-pki-init authenticates with this token)"
+        else
+            warn "failed to create vault/vault-bootstrap"
+        fi
     fi
 
     # ── OFFLINE / USB FALLBACK: materialize the workload Secrets directly ──

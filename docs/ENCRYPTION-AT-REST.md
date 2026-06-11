@@ -18,7 +18,7 @@ same stick that carries the cluster CA and Vault seal material) and/or the node
 | 2 | **Kubernetes PVCs** (StorageClass `snapdragon-local`) | Postgres, Redis, Cassandra, ClickHouse, GitLab, etcd-backup PVs | **Inherited** from layer 1 — local-path just makes dirs under the LUKS `/mnt/data` | (inherits layer 1) | (inherits layer 1) | **Implemented** (by inheritance; annotated on the StorageClass) |
 | 3 | **etcd Secrets** (kube-apiserver) | Every Kubernetes `Secret` object | **EncryptionConfiguration** `aescbc` (AES-256-CBC) provider; apiserver encrypts before writing to etcd | USB-KEYS `kubernetes/encryption-key` (shared across CPs) or minted on first CP | apiserver reads `/etc/kubernetes/encryption-config.yaml` (kubeadm `apiServer.extraArgs`/`extraVolumes`); `keys-provision` writes it before `kubeadm init`/`join` | **Implemented** |
 | 4 | **etcd data dir at rest** (`/var/lib/etcd`) | The whole etcd KV (incl. non-Secret objects) | **Inherited** from layer 1 **when etcd is relocated onto `/mnt/data`** (`storage.devices[].use_for`); otherwise on the root partition (layer 6) | (inherits layer 1) | (inherits layer 1) | **Implemented when relocated** (else see layer 6) |
-| 5 | **Vault storage** | Vault's own secret store | DEV: in-memory (nothing at rest). PROD: persistent storage on `/mnt/data` → **inherits layer 1 LUKS**; Vault seal/unseal keys stay on USB-KEYS, never git | USB-KEYS (seal keys) + layer 1 (storage) | Vault unseal at start; storage decrypts via layer 1 | **Implemented for the prod storage path** (DEV Vault is ephemeral by design) |
+| 5 | **Vault storage** | Vault's own secret store (KV, `pki_int`, planned Transit-KMS) | **Raft integrated storage** on a PVC from StorageClass `snapdragon-local` → the Raft data dir (`/vault/data`) lands under the LUKS `/mnt/data` on the pki node → **inherits layer 1 LUKS**. Vault serves a **TLS listener** (cluster-CA-signed, self-signed bootstrap fallback). **Shamir** seal; the unseal key + bootstrap root token stay on USB-KEYS, never git | USB-KEYS (`vault/unseal-key` + `vault/token`) + layer 1 (storage) | `vault operator init` ONCE; the `vault-unseal` sidecar runs `vault operator unseal` from the mounted key on **every restart** (unattended); Raft state decrypts via layer 1 | **Implemented** (persistent + auto-unseal; was dev `server -dev` in-memory before) |
 | 6 | **Node root partition** (`/`) | OS, `/etc/kubernetes`, kubelet certs, default `/var/lib/etcd` if not relocated | **Not yet LUKS** — see "Documented followup" | n/a | n/a | **Documented followup** |
 | 7 | **Build artifacts** (`out/*.img`, `*.fs.tar.xz`) | Flashable node images | Encrypt the artifact host disk / transport; images carry NO secrets (all secrets arrive at first boot from USB-KEYS) | operator's build host | n/a | **Mitigated** (images are secret-free by design) |
 | 8 | **USB-KEYS stick itself** | CA key, LUKS keyfile, etcd key, Vault token | Physically offline; FAT32 (mounted `ro,nosuid,nodev,noexec`). Optionally a LUKS-encrypted KEYS stick | physical custody | n/a | **Mitigated** (offline, physically controlled) |
@@ -47,7 +47,9 @@ same stick that carries the cluster CA and Vault seal material) and/or the node
 | `secrets/luks.key` | USB-KEYS (gitignored) | LUKS data-partition unlock (recovery slot) |
 | TPM2-sealed LUKS key | node TPM (PCR7) | LUKS auto-unlock on x86 / TPM nodes |
 | `kubernetes/encryption-key` | USB-KEYS (gitignored), shared across CPs | etcd Secret `aescbc` encryption |
-| cluster CA key, Vault seal keys, Vault token | USB-KEYS / Vault | PKI + secret backend (pre-existing model) |
+| `vault/unseal-key` | USB-KEYS (gitignored) | Persistent Vault Shamir unseal (auto-unseal sidecar) |
+| `vault/token` | USB-KEYS (gitignored) | Vault bootstrap/root token (vault-pki-init + ESO token) |
+| cluster CA key | USB-KEYS / Vault `pki_int` | PKI trust anchor (pre-existing model) |
 
 ## Per-node defaults
 
@@ -80,8 +82,23 @@ same stick that carries the cluster CA and Vault seal material) and/or the node
   The `EncryptionConfiguration` provider can be swapped to `kms` once a
   Vault-Transit KMS plugin endpoint exists in-cluster; kept as a documented
   upgrade so bootstrap has no chicken-and-egg dependency on Vault.
-- **DEV Vault is ephemeral** (in-memory) by design; the PROD HA Vault stores on
-  the LUKS `/mnt/data` and is the supported at-rest path (layer 5).
+- **Vault `pki_int` one-time re-init.** The previous dev Vault (`server -dev`)
+  held NO durable state, so converting to the persistent Vault starts from an
+  empty store: the `pki_int` engine + per-app issuing roles must be set up once
+  against the fresh Vault. The existing `manifests/vault-pki` bootstrap Job does
+  exactly this and is **idempotent** — it re-imports the cluster CA from the
+  mounted `cluster-ca` Secret (provisioned offline from the USB stick) so issued
+  leaf certs still chain to `certs/cluster-ca` and the existing truststores.
+  ArgoCD re-runs it (PostSync hook) after Vault is initialized + unsealed; no
+  manifest change is needed. See `keys-template/vault/README.md` for the one-time
+  `vault operator init` (mint + persist the unseal key/root token to USB-KEYS).
+- **Multi-replica Raft HA (Vault).** The persistent Vault runs a **single-node**
+  Raft cluster today. On this single-control-plane topology the pki Pi is the
+  availability floor, so multi-replica HA has limited value: persistent +
+  auto-unseal (survives restart) is the real fix shipped now. Scaling Raft to 3
+  replicas (with `retry_join`, an anti-affinity spread, and auto-unseal via a
+  Transit/KMS seal so peers unseal without the operator) is a **documented
+  follow-up** for when additional control-plane nodes exist.
 
 ## What was NOT weakened
 

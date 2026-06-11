@@ -58,6 +58,12 @@ luks.key
 keys-template/kubernetes/encryption-key
 **/kubernetes/encryption-key
 etcd-encryption.key
+# Persistent Vault unseal/recovery key + bootstrap/root token. Custody is the
+# offline USB-KEYS stick, NEVER git (only the README placeholders are committed).
+keys-template/vault/unseal-key
+keys-template/vault/token
+**/vault/unseal-key
+**/vault/token
 
 # Brand profile may hold default passwords — never commit the real one
 # (brand.conf.example is the committed template).

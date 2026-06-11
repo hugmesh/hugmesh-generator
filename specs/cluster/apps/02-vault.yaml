@@ -1,6 +1,9 @@
-# HashiCorp Vault — the cluster secret store. Dev-mode for the integration stack
-# (see manifests/vault/deployment.yaml; production wants a real unsealed HA Vault).
-# External Secrets Operator reads from it to materialize the workload Secrets.
+# HashiCorp Vault — the cluster secret store. Persistent + auto-unsealing: Raft
+# integrated storage on a LUKS-backed PVC, a TLS listener, and a sidecar that
+# auto-unseals from the USB-KEYS-seeded vault-unseal Secret on restart (see
+# manifests/vault/deployment.yaml; multi-replica Raft HA is a documented
+# follow-up). External Secrets Operator reads from it (HTTPS, cluster-CA trust)
+# to materialize the workload Secrets.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
