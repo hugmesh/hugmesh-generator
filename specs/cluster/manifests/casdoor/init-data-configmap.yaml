@@ -105,6 +105,30 @@
 # also removes anyone who no longer qualifies). A plain ROLE_MOD WITHOUT ROLE_FORUM
 # is NOT a forum moderator (default-deny at /bff/forum/moderation/**).
 #
+# ROLE_MATRIX_DOMAINLOCKED ("Matrix local-only") and ROLE_MASTODON_DOMAINLOCKED
+# ("Mastodon local-only") are the DOMAIN-LOCK markers — ADDITIVE siblings of
+# ROLE_MATRIX/ROLE_MASTODON (empty "roles" array, no inheritance). They are
+# fundamentally different from a platform ban:
+#   - A ban is the ABSENCE of ROLE_MATRIX/ROLE_MASTODON (REMOVE-semantics — the
+#     allow-predicate goes false, the be-gateway route row stops matching, access
+#     is denied). The admin-bff access_suspension table drives that REMOVE.
+#   - A domain-lock is the PRESENCE of *_DOMAINLOCKED ALONGSIDE the kept access
+#     role (ADD-semantics — the user STILL holds ROLE_MATRIX/ROLE_MASTODON, so the
+#     be-gateway route rows are UNTOUCHED and the user keeps full local access; the
+#     new marker only switches on the force-local / no-federation enforcement legs).
+# Because the gateway is intentionally untouched, the be-gateway route-access seed
+# (manifests/route-access/20-schema.sql) is NOT changed for these roles — a
+# domain-locked user reaches the same client surfaces, they just cannot federate
+# outbound. Enforcement is the homeserver/egress leg (the akkoma ForceLocalForUsers
+# MRF + the homeserver-egress NetworkPolicy/egress-proxy in manifests/networkpolicy
+# + manifests/egress-proxy), NOT a gateway deny row. The two roles auto-convert to
+# ROLE_MATRIX_DOMAINLOCKED / ROLE_MASTODON_DOMAINLOCKED via the EXISTING
+# casdoorAuthoritiesConverter (each "roles" entry -> ROLE_<UPPER>); NO converter
+# change. They seed EMPTY (users []); membership is granted by the admin-bff/mod-bff
+# domain-lock flow (DomainLockService desired-state + reconcile), the analogue of
+# the access-suspension flow but writing a SEPARATE domain_lock table (ADD-active)
+# rather than overloading access_suspension (REMOVE).
+#
 # NOTE: the init_data.json object schema is Casdoor-version-specific. Validate
 # against the deployed casbin/casdoor-all-in-one before relying on auto-import.
 apiVersion: v1
@@ -133,6 +157,8 @@ data:
         { "owner": "snapdragon", "name": "ROLE_MOD",       "displayName": "Network Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_MATRIX",    "displayName": "Matrix Access",   "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_MASTODON",  "displayName": "Mastodon Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_MATRIX_DOMAINLOCKED",   "displayName": "Matrix local-only",   "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_MASTODON_DOMAINLOCKED", "displayName": "Mastodon local-only", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GAMES",       "displayName": "Games Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GAMES_ADMIN", "displayName": "Games Namespace Admin", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_FORUM",       "displayName": "Forum Access",          "users": [], "roles": [], "domains": [], "isEnabled": true },

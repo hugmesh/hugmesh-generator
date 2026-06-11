@@ -3,3 +3,11 @@ kind: Kustomization
 resources:
   - akkoma.yaml
   - admin-sync-job.yaml   # maps Casdoor ROLE_MOD -> akkoma --moderator, ROLE_ADMIN -> --admin
+  # DOMAIN-LOCK (homeserver.domainlock.enabled) — SHIPS DARK, NOT wired by default.
+  # domainlock-sync-job.yaml materializes ROLE_MASTODON_DOMAINLOCKED -> the
+  # ForceLocalForUsers MRF force-local set. It requires the CUSTOM akkoma image
+  # (Dockerfile + mrf/force_local_for_users_policy.ex) compiled with the module +
+  # the :mrf policies block enabled in akkoma.yaml. Uncomment the line below ONLY
+  # after the custom image is built + pinned (else the Job runs against a stock
+  # image with no MRF). See docs/DOMAIN-LOCK.md.
+  # - domainlock-sync-job.yaml
