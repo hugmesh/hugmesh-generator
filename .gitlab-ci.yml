@@ -37,6 +37,11 @@ lint:prod-hygiene:
   before_script:
     - pip install --quiet pyyaml
   script:
+    # 0) The in-cluster copy (manifests/prod-hygiene/validate-prod-hygiene.sh,
+    #    materialized into the prod-hygiene-script ConfigMap the PreSync hook Job
+    #    mounts) MUST equal the canonical scripts/ copy byte-for-byte — kustomize
+    #    forbids loading a file outside the bundle root, so the copy is the mirror.
+    - diff -u scripts/validate-prod-hygiene.sh specs/cluster/manifests/prod-hygiene/validate-prod-hygiene.sh
     # Bake a prod tree.
     - RELEASE_TAG="${CI_COMMIT_SHORT_SHA:-$(date -u +%Y%m%d)}"
     - rm -rf /tmp/prodbake && mkdir -p /tmp/prodbake && cp -r specs/cluster /tmp/prodbake/cluster

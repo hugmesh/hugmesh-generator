@@ -374,6 +374,21 @@ rewrite_prod_image_tags() {
           "${SYSROOT}/var/lib/snapdragon/cluster/apps/00-app-of-apps-waved.yaml" 2>/dev/null || true
     rm -rf "${SYSROOT}/var/lib/snapdragon/cluster/manifests/test-runner" 2>/dev/null || true
     info "ENV=prod: pruned the test-runner wave (apps/99-test-runner.yaml + manifests/test-runner) from the baked tree"
+    # STATIC prod-hygiene self-check over the BAKED tree — hard-fail the build if
+    # any dev-only server / tier:test resource / floating :dev tag survived the
+    # prune + rewrite above. (The RUNTIME leg — the seam/seal/live-pod probe — is
+    # the ArgoCD PreSync hook Job apps/00-prod-hygiene.yaml runs in-cluster.)
+    local hygiene="${SCRIPT_DIR}/scripts/validate-prod-hygiene.sh"
+    if [ -x "${hygiene}" ] || [ -f "${hygiene}" ]; then
+        if bash "${hygiene}" "${tree}"; then
+            info "ENV=prod: prod-hygiene static gate PASSED on the baked tree"
+        else
+            err "ENV=prod: prod-hygiene static gate FAILED on the baked tree (a dev-only server / test harness / floating :dev tag survived) — refusing to build a prod image"
+            exit 1
+        fi
+    else
+        warn "prod-hygiene gate script not found at ${hygiene}; skipping the static self-check"
+    fi
 }
 
 gate_env_apps() {
