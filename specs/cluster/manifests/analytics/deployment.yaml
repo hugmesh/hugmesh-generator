@@ -5,7 +5,7 @@
 #   micro-frontend. Role-locked at BOTH the be-gateway (ROLE_ADMIN) and inside
 #   the BFF (method security). The BFF reaches ClickHouse/Kafka by static
 #   cluster DNS (clickhouse:8123 / kafka:9092) — there is no service-discovery
-#   registry: nothing does discovery lookups, so Eureka was retired.
+#   registry in the cluster; everything addresses everything by stable k8s DNS.
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -92,7 +92,6 @@ metadata: { name: kafka, namespace: snapdragon-backend }
 spec:
   selector: { app: kafka }
   ports: [{ name: kafka, port: 9092, targetPort: kafka }]
-# NOTE: a Spring Cloud Netflix Eureka Deployment + Service used to live here.
-# It was orphaned — nothing performed service discovery against it (no
-# DiscoveryClient / lb:// anywhere; gateways route by static DNS and the
-# analytics pipeline reaches ClickHouse/Kafka by DNS too) — so it was retired.
+# NOTE: there is no service-discovery registry in this analytics pipeline (or the
+# cluster) — nothing uses a DiscoveryClient / lb:// anywhere; gateways route by
+# static k8s DNS and the analytics pipeline reaches ClickHouse/Kafka by DNS too.

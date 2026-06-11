@@ -145,6 +145,42 @@ this generator/federation-api pass, documented as a deferral here, inline in
 `Host=*.<domain>` route to federation-api, the cloudflared wildcard rule) is
 complete and renders clean.
 
+## AI-cloak / media poisoning (`manifests/media-poisoner`, OPTIONAL x86/GPU)
+
+`snapdragon-media-poisoner` is the **optional** x86/GPU heavy-tier worker that
+applies an AI-cloak / poison perturbation to image bytes **before** the homeserver
+ingests them (*poison-before-ingest*). It is the compute half of the design; the
+policy decision, the round-trip survival gate, and all honest UI copy live in
+`snapdragon-user-bff-api`. The worker source skeleton (a small FastAPI service +
+Dockerfile) ships under `manifests/media-poisoner/worker/`.
+
+* **Flow.** The UI uploads to the BFF media-proxy (`/bff/user/media/upload`), not
+  direct-to-homeserver. The BFF holds the bytes, calls the worker
+  (`POST /poison`), then does the **real** homeserver upload of the poisoned bytes
+  via the existing `akkoma-proxy` / `tuwunel-proxy` mTLS proxies. The worker
+  **never** mounts the homeserver RWO PVCs (`akkoma-uploads` / `tuwunel-data` are
+  `ReadWriteOnce`, already mounted by the homeserver pod) — it is pure
+  byte-in/byte-out.
+* **Scheduling.** Clones the `snapdragon-games` contract verbatim
+  (`nodeSelector` `kubernetes.io/arch: amd64` + `snapdragon.systems/compute: gpu`,
+  vendor-agnostic GPU via the `/dev/dri` hostPath). The ArgoCD app
+  (`apps/51-media-poisoner.yaml`) is **MANUAL** (no `automated:` block) so an
+  operator opts in only on a GPU-equipped cluster.
+* **Lean fallback.** On a Pi5-only cluster the pod stays `Pending`, its
+  `ClusterIP:8080` Service has **no Ready endpoints**, and the BFF's `/health`
+  capability probe reports the heavy tier **absent** → `MEDIA_POISONING_FALLBACK_MODE`
+  (default `warn_before_post`). Pure k8s protocol-probe availability — no
+  Eureka/Config/Task. The `MEDIA_POISONING_*` env on the user-bff-api Deployment
+  points at the worker Service and ships **disabled** (`MEDIA_POISONING_ENABLED=false`)
+  until the BFF media-proxy is verified end-to-end.
+* **Honesty + license.** Best-effort training-set hygiene, **not** a guarantee
+  (removable by re-encode/downscale; already-federated copies and personal-client
+  uploads are uncloseable). The shipped backend is a lean CPU perturbation; the GPU
+  path uses the **open PyTorch reference** (PGD vs the Stable-Diffusion VAE/encoder),
+  **never** the non-commercial SAND Lab Glaze/Nightshade binaries. The full
+  Glaze/Nightshade integration is a documented follow-up in
+  `manifests/media-poisoner/worker/README.md`.
+
 ## Layout
 
 ```
@@ -152,7 +188,7 @@ cluster/
 ├── app-of-apps.yaml        root ArgoCD Application (recurses apps/)
 ├── apps/                   one ArgoCD Application per workload
 ├── charts/snapdragon-gateway/   the gateway Helm chart (pki/be/fe)
-├── manifests/              in-repo kustomize manifests (casdoor, apis, frontend, social-ui, games)
+├── manifests/              in-repo kustomize manifests (casdoor, apis, frontend, social-ui, games, media-poisoner)
 ├── namespaces/namespaces.yaml
 └── bootstrap/bootstrap.sh  installs ArgoCD + applies the root app
 ```
@@ -204,8 +240,8 @@ unchanged.
   (`registry.snapdragon.systems/snapdragon/<repo>:main`, set per app via kustomize
   `images:`) with the ESO-materialized `gitlab-registry` imagePullSecret.
   PREREQUISITE: create a GitLab **group deploy token** (scope `read_registry`) and
-  store it at Vault `snapdragon/gitlab-registry` (`username`/`token`). `eureka`
-  has no source repo yet, so it stays `:dev` until built.
+  store it at Vault `snapdragon/gitlab-registry` (`username`/`token`). Any app
+  without a source repo yet stays `:dev` until built.
 - Casdoor uses an `emptyDir` and the all-in-one image — switch to a PVC + an
   external DB, and seed the Google provider (`casdoor-google` Secret) + the
   gateway OAuth2 client.

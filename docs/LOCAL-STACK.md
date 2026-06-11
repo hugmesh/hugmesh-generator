@@ -194,8 +194,8 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
   empty. It is the standalone sync image on `:8081` (in k8s it is nginx + a sync
   sidecar over a shared volume).
 - **admin-bff analytics is off:** the local stack runs only the `casdoor`
-  profile, not `eureka,clickhouse` — there is no Eureka/Kafka/ClickHouse here, so
-  `/bff/admin/usage` is not exercised. Route-access CRUD works.
+  profile, not the cluster's `casdoor,clickhouse` — there is no Kafka/ClickHouse
+  here, so `/bff/admin/usage` is not exercised. Route-access CRUD works.
 - **mod-bff / user-bff** have no cluster manifest yet; their env here is wired by
   analogy (Casdoor resource server + federation URL) and may need adjustment when
   their real manifests land.

@@ -1,0 +1,22 @@
+# Model-weights store for snapdragon-media-poisoner.
+#
+# The LEAN (shipped) perturbation needs NO weights — this PVC + the model-weights-seed
+# initContainer exist so the GPU / SD-VAE PGD follow-up only has to swap the worker
+# image + the seed command, with the volume wiring already proven. A GPU image variant
+# would fetch the Stable-Diffusion VAE/encoder weights here once and read them
+# read-only at runtime.
+#
+# RWO => single-replica + Recreate (one writer over node-local storage), pinned to the
+# same x86_64 GPU node the Deployment nodeSelects. On a Pi5-only cluster the pod is
+# Pending and this PVC simply stays unbound until the GPU node exists — no effect on
+# the rest of the cluster.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: media-poisoner-models
+  namespace: snapdragon-backend
+  labels: { app: snapdragon-media-poisoner }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: snapdragon-local
+  resources: { requests: { storage: 8Gi } }
