@@ -3,3 +3,4 @@ kind: Kustomization
 resources:
   - tier-ingress.yaml
   - homeserver-isolation.yaml
+  - homeserver-egress.yaml   # default-deny egress on akkoma/tuwunel: DNS + akkoma-db + egress-proxy only (domain-lock/no-federation backstop)
