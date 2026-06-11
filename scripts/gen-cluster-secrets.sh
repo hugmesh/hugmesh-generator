@@ -264,11 +264,21 @@ FEDERATION_DB_PASSWORD="$(openssl rand -base64 24)"
 ADMIN_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 MOD_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 USER_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
+FORUM_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 # Non-owner least-privilege RUNTIME role passwords (one per single-consumer DB).
 FEDERATION_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 ADMIN_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 MOD_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 USER_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
+FORUM_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
+
+# phpBB forum (backend-only). phpbb-db OWNER (install/migrate) + phpbb_app runtime
+# role + the phpBB first-install admin. Kept on their OWN Vault paths (forum,
+# forum-db) so the isolated snapdragon-forum namespace's phpbb-secrets /
+# phpbb-db-app-auth ExternalSecrets resolve them.
+PHPBB_DB_PASSWORD="$(openssl rand -base64 24)"
+PHPBB_DB_APP_PASSWORD="$(openssl rand -base64 24)"
+PHPBB_ADMIN_PASSWORD="$(openssl rand -base64 24)"
 
 # route-access-db per-machine-user least-privilege passwords. The owner (DDL) plus
 # one password per consuming machine-user: admin-bff (the ONLY writer) and the
@@ -335,6 +345,17 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/user-bff-db" \
             password="${USER_BFF_DB_PASSWORD}" \
             app_password="${USER_BFF_DB_APP_PASSWORD}"
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/forum-bff-db" \
+            password="${FORUM_BFF_DB_PASSWORD}" \
+            app_password="${FORUM_BFF_DB_APP_PASSWORD}"
+        # phpBB forum (backend-only, isolated snapdragon-forum ns). phpbb-secrets
+        # multi-key (DB_PASSWORD owner + ADMIN_PASSWORD first-install admin) at
+        # /forum; the phpbb_app runtime role password at /forum-db (app_password).
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/forum" \
+            DB_PASSWORD="${PHPBB_DB_PASSWORD}" \
+            ADMIN_PASSWORD="${PHPBB_ADMIN_PASSWORD}"
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/forum-db" \
+            app_password="${PHPBB_DB_APP_PASSWORD}"
         # route-access-db per-machine-user least-privilege passwords (owner + the
         # four consumers). admin-bff = writer; pki/be/fe-gateway = read-only.
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/route-access-db" \
@@ -362,7 +383,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/gitlab-registry" \
             username="${GITLAB_REGISTRY_USER}" \
             token="${GITLAB_REGISTRY_TOKEN}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-games,clickhouse,federation-db,admin-bff-db,mod-bff-db,user-bff-db,route-access-db,uptrace,mail,gitlab-registry}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-games,clickhouse,federation-db,admin-bff-db,mod-bff-db,user-bff-db,forum-bff-db,forum,forum-db,route-access-db,uptrace,mail,gitlab-registry}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -417,10 +438,15 @@ FEDERATION_DB_PASSWORD="${FEDERATION_DB_PASSWORD}" \
 ADMIN_BFF_DB_PASSWORD="${ADMIN_BFF_DB_PASSWORD}" \
 MOD_BFF_DB_PASSWORD="${MOD_BFF_DB_PASSWORD}" \
 USER_BFF_DB_PASSWORD="${USER_BFF_DB_PASSWORD}" \
+FORUM_BFF_DB_PASSWORD="${FORUM_BFF_DB_PASSWORD}" \
 FEDERATION_DB_APP_PASSWORD="${FEDERATION_DB_APP_PASSWORD}" \
 ADMIN_BFF_DB_APP_PASSWORD="${ADMIN_BFF_DB_APP_PASSWORD}" \
 MOD_BFF_DB_APP_PASSWORD="${MOD_BFF_DB_APP_PASSWORD}" \
 USER_BFF_DB_APP_PASSWORD="${USER_BFF_DB_APP_PASSWORD}" \
+FORUM_BFF_DB_APP_PASSWORD="${FORUM_BFF_DB_APP_PASSWORD}" \
+PHPBB_DB_PASSWORD="${PHPBB_DB_PASSWORD}" \
+PHPBB_DB_APP_PASSWORD="${PHPBB_DB_APP_PASSWORD}" \
+PHPBB_ADMIN_PASSWORD="${PHPBB_ADMIN_PASSWORD}" \
 ROUTE_ACCESS_OWNER_PASSWORD="${ROUTE_ACCESS_OWNER_PASSWORD}" \
 ROUTE_ACCESS_ADMIN_BFF_PASSWORD="${ROUTE_ACCESS_ADMIN_BFF_PASSWORD}" \
 ROUTE_ACCESS_PKI_GATEWAY_PASSWORD="${ROUTE_ACCESS_PKI_GATEWAY_PASSWORD}" \
@@ -496,6 +522,9 @@ data = {
         "user-bff-db-auth": {
             "password": os.environ["USER_BFF_DB_PASSWORD"],
         },
+        "forum-bff-db-auth": {
+            "password": os.environ["FORUM_BFF_DB_PASSWORD"],
+        },
         # Non-owner least-privilege RUNTIME role passwords (federation_app etc.).
         "federation-db-app-auth": {
             "password": os.environ["FEDERATION_DB_APP_PASSWORD"],
@@ -508,6 +537,9 @@ data = {
         },
         "user-bff-db-app-auth": {
             "password": os.environ["USER_BFF_DB_APP_PASSWORD"],
+        },
+        "forum-bff-db-app-auth": {
+            "password": os.environ["FORUM_BFF_DB_APP_PASSWORD"],
         },
         # route-access machine-user passwords reachable from the backend ns:
         # be-gateway (read-only) + admin-bff (writer). Each Deployment mounts ONLY
@@ -554,6 +586,19 @@ data = {
         "route-access-fe-gateway": {
             "password": os.environ["ROUTE_ACCESS_FE_GATEWAY_PASSWORD"],
         },
+    },
+    # phpBB forum — the ISOLATED backend-only namespace (phpBB + phpbb-db). phpbb-db
+    # OWNER + first-install admin in phpbb-secrets (multi-key); the phpbb_app runtime
+    # role in phpbb-db-app-auth; the forum-admin-sync Job reuses casdoor-app-secrets.
+    f"{brand}-forum": {
+        "phpbb-secrets": {
+            "DB_PASSWORD": os.environ["PHPBB_DB_PASSWORD"],
+            "ADMIN_PASSWORD": os.environ["PHPBB_ADMIN_PASSWORD"],
+        },
+        "phpbb-db-app-auth": {
+            "password": os.environ["PHPBB_DB_APP_PASSWORD"],
+        },
+        "casdoor-app-secrets": app_secrets,
     },
     "observability": {
         "clickhouse-auth": {

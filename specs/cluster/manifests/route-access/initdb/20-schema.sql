@@ -137,12 +137,29 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- to admins/mods, so per-subpath ROLE_ADMIN/ROLE_MOD rows would have to be
   -- duplicated — the single floor row keeps it self-contained, matching /api/**).
   ('snapdragon-be-gateway',  '/api/federation/**',    'ROLE_USER',      true),  -- federation registry/manifest/bundles (authenticated floor; ADMIN/MOD enforced in federation)
+  -- Forum admin-console seam on the api host (admin-bff -> forum-bff, if exposed
+  -- on the be-gateway). ADMIN-only, MORE SPECIFIC than the /api/** floor so it wins
+  -- the most-specific match. There is NO /api/forum/** floor row for phpBB itself —
+  -- phpBB is backend-only and has NO be-gateway route (it is reachable ONLY as
+  -- forum-bff's in-cluster upstream inside the snapdragon-forum default-deny ns).
+  ('snapdragon-be-gateway',  '/api/forum/admin/**',   'ROLE_ADMIN',     true),  -- forum admin seam (admin-only; NO phpbb floor row)
   ('snapdragon-be-gateway',  '/api/**',               'ROLE_USER',      true),  -- snapdragon APIs
 
   -- fe-gateway (snapdragon.systems -> Angular host + MFEs + same-origin /bff)
   ('snapdragon-fe-gateway',  '/',                     'PUBLIC', true),  -- public front page
   ('snapdragon-fe-gateway',  '/social/matrix/**',     'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/social/mastodon/**',   'ROLE_USER',      true),
+  -- phpBB forum micro-frontend UI (snapdragon-forum-ui at /social/forum/**),
+  -- served at the apex PATH (NOT a forum. subdomain — the *.snapdragon.systems
+  -- vanity wildcard would swallow forum.<domain>). Gated by the dedicated forum
+  -- ACCESS role ROLE_FORUM (the new Casdoor forum-access role) — congruent with
+  -- how /social/matrix + /social/mastodon gate the social shells, and the model
+  -- ban-by-role-removal uses (drop ROLE_FORUM -> this row default-denies on the
+  -- next refresh). Admins reach it via the gateway admin-bypass (the converter does
+  -- NOT grant admins ROLE_FORUM), so do NOT pair ROLE_ADMIN here — matching the
+  -- matrix/mastodon floors which pair no ROLE_ADMIN. The phpBB pod itself has NO
+  -- route row (backend-only, isolated in snapdragon-forum).
+  ('snapdragon-fe-gateway',  '/social/forum/**',      'ROLE_FORUM',     true),  -- phpBB forum UI (forum-access floor)
   -- DB-hosted module-federation FRAGMENT bundles served by the remote-fragment
   -- static fleet (user-profile/card + admin contained-pages). The authenticated
   -- host's loadRemoteModule fetches them; they are content-addressed (non-secret)
@@ -195,7 +212,28 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- NOT auto-grant ROLE_MOD/USER to) keep reaching the moderation BFF.
   ('snapdragon-fe-gateway',  '/bff/mod/**',           'ROLE_MOD',       true),  -- moderation BFF (mod floor)
   ('snapdragon-fe-gateway',  '/bff/mod/**',           'ROLE_ADMIN',     true),  -- (admins superset)
-  ('snapdragon-fe-gateway',  '/bff/user/**',          'ROLE_USER',      true)   -- user self-service BFF
+  ('snapdragon-fe-gateway',  '/bff/user/**',          'ROLE_USER',      true),  -- user self-service BFF
+  -- Forum BFF (/bff/forum/** -> snapdragon-forum-bff-api), the SINGLE
+  -- browser->phpBB path. SIBLING of /bff/mod/** + /bff/user/** above. Most-specific
+  -- match wins, so the subpaths are gated tighter than the floor:
+  --   /bff/forum/admin/**      = ROLE_ADMIN      (the admin-console seam admin-bff
+  --                              calls; admins reach it via the bypass WITHOUT
+  --                              ROLE_FORUM, so it is gated ROLE_ADMIN end-to-end)
+  --   /bff/forum/moderation/** = ROLE_FORUM_MOD  (the DERIVED composite role =
+  --                              ROLE_MOD intersect ROLE_FORUM, materialized in
+  --                              Casdoor by the forum reconcile Job — the gateway's
+  --                              OR-of-allow table cannot express MOD AND FORUM, so
+  --                              this single derived-role row encodes the AND, like
+  --                              ROLE_GAMES_ADMIN. A plain ROLE_MOD WITHOUT the
+  --                              forum role is default-deny here.)
+  --   /bff/forum/**            = ROLE_FORUM      (the forum-access floor)
+  -- Do NOT pair ROLE_ADMIN on the ROLE_FORUM / ROLE_FORUM_MOD floor rows: the
+  -- gateway admin-bypass already lets admins through, and the matrix/mastodon seed
+  -- pairs only its non-admin floors (never ROLE_ADMIN). ROLE_ADMIN stays only on
+  -- the genuinely admin-only /bff/forum/admin/** row.
+  ('snapdragon-fe-gateway',  '/bff/forum/admin/**',       'ROLE_ADMIN',     true),  -- forum admin-console seam (admin-only, end-to-end)
+  ('snapdragon-fe-gateway',  '/bff/forum/moderation/**',  'ROLE_FORUM_MOD', true),  -- forum moderation (derived MOD ∩ FORUM)
+  ('snapdragon-fe-gateway',  '/bff/forum/**',             'ROLE_FORUM',     true)   -- forum BFF (forum-access floor)
 ON CONFLICT DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────────

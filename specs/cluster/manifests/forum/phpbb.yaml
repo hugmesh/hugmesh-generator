@@ -1,0 +1,197 @@
+# phpbb — the BACKEND-ONLY phpBB forum homeserver, wrapped headless by
+# snapdragon-forum-bff-api (users) + snapdragon-admin-bff-api (admin console). It
+# has NO gateway route and NO ingress; the only ingress is forum-bff-api +
+# admin-bff-api + the reconcile Job, enforced by network-policy.yaml in this
+# isolated snapdragon-forum namespace.
+#
+# HEADLESS MECHANISM: phpBB has NO official REST API. The chosen mechanism is a
+# thin CUSTOM phpBB extension `snapdragon/json-api` (phpBB 3.1+ ships Symfony
+# HttpKernel/Controller/Routing; the extension registers config/routing.yml +
+# controllers returning JsonResponse, DI-injecting phpBB's own services so reads
+# AND writes honor phpBB's consistency/permission logic) exposed at
+# /api/v1/snapdragon/**. The extension validates the Casdoor JWT (JWKS) on every
+# request, re-derives groups/ROLE_ADMIN from the verified token (never caller-
+# supplied data), and binds the phpBB user by Casdoor `sub` (not localpart).
+#
+# ⚠️ GATED STUB-SEAM (this pass): the snapdragon/json-api extension shape is not
+# yet pinned. forum-bff-api boots with external.forum.enabled=false (stub +
+# always-audit), so the FULL stack deploys and is isolated/wired WITHOUT a
+# live extension. The custom phpBB IMAGE (official phpBB + the baked extension) is
+# referenced via the image placeholder below; flip external.forum.enabled=true in
+# forum-bff-api only after the extension is built + validated on-cluster.
+#
+# BLOCKING THE DEFAULT phpBB UIs (our Angular forum-ui is the single source of
+# truth): there is NO route to phpBB AT ALL (the NetworkPolicy + no-ingress is the
+# control). In addition the bootstrap lockdown (initContainer) disables
+# registration, sets the board to maintenance/disabled for anonymous, and locks
+# the native login UCP path; forum-bff strips Set-Cookie + drops any text/html
+# phpBB body so a board/ACP/login page can never transit to a browser.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: phpbb-config
+  namespace: snapdragon-forum
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: snapdragon.systems }
+data:
+  # phpBB DB connection + lockdown knobs the install/bootstrap initContainer reads.
+  # The RUNTIME login is the NON-OWNER least-privilege role phpbb_app (DML only);
+  # the install/migrate step uses the OWNER role (phpbb) — see the initContainer.
+  # config.php values phpBB consumes ($dbms=postgres, $dbhost=phpbb-db, …); the
+  # passwords come from env (the phpbb-secrets / phpbb-db-app-auth Secrets), never
+  # baked into this ConfigMap.
+  phpbb.env: |
+    PHPBB_DB_DRIVER=phpbb\db\driver\postgres
+    PHPBB_DB_HOST=phpbb-db.snapdragon-forum.svc.cluster.local
+    PHPBB_DB_PORT=5432
+    PHPBB_DB_NAME=phpbb
+    # RUNTIME DB user = the least-privilege app role (password injected from
+    # phpbb-db-app-auth as PHPBB_APP_PASSWORD by the container env).
+    PHPBB_DB_USER=phpbb_app
+    # --- bootstrap lockdown: our Angular UI is the truth ---
+    PHPBB_REGISTRATION_DISABLED=1
+    PHPBB_BOARD_DISABLED=1
+    PHPBB_NATIVE_LOGIN_LOCKED=1
+    PHPBB_EXTENSION=snapdragon/json-api
+  # The bootstrap-lockdown script the install initContainer runs. It is a SCAFFOLD:
+  # the exact phpBB install CLI (install/phpbbcli.php install) + the lockdown SQL
+  # are version/image-specific; validate against the chosen phpBB image before the
+  # extension shape is flipped live. The intent (NOT the exact bytes) is load-bearing:
+  #   1. install/migrate phpBB into phpbb-db AS THE OWNER role (DDL once);
+  #   2. disable registration + set board maintenance/disabled for anonymous;
+  #   3. lock the native login UCP path (return non-200 for /ucp.php?mode=login
+  #      and /adm/index.php) so only the json-api extension surface answers;
+  #   4. enable the snapdragon/json-api extension.
+  bootstrap.sh: |
+    #!/bin/sh
+    # phpBB bootstrap lockdown (SCAFFOLD — validate per the chosen phpBB image).
+    set -eu
+    echo "[phpbb-bootstrap] starting install + lockdown"
+    # shellcheck disable=SC1091
+    . /config/phpbb.env || true
+    # 1) install/migrate — runs as the DB OWNER (phpbb) the FIRST time only.
+    #    (idempotent: phpbbcli.php detects an already-installed board and migrates.)
+    #    The OWNER password is injected as DB_PASSWORD from phpbb-secrets.
+    echo "[phpbb-bootstrap] install/migrate as owner role 'phpbb' (DDL once)"
+    # php /var/www/html/install/phpbbcli.php install /config/install-config.yml || true
+    # php /var/www/html/bin/phpbbcli.php db:migrate || true
+    # 2) lockdown: registration off + anonymous board disabled + native login locked
+    echo "[phpbb-bootstrap] registration disabled=${PHPBB_REGISTRATION_DISABLED:-1} board disabled=${PHPBB_BOARD_DISABLED:-1} native-login locked=${PHPBB_NATIVE_LOGIN_LOCKED:-1}"
+    # php /var/www/html/bin/phpbbcli.php config:set require_activation 3   # admin approval
+    # php /var/www/html/bin/phpbbcli.php config:set board_disable 1        # board maintenance for anon
+    # 3) enable the headless extension
+    echo "[phpbb-bootstrap] enabling extension ${PHPBB_EXTENSION:-snapdragon/json-api}"
+    # php /var/www/html/bin/phpbbcli.php extension:enable snapdragon/json-api || true
+    echo "[phpbb-bootstrap] complete — only /api/v1/snapdragon/** answers; board/ACP/login locked"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phpbb
+  namespace: snapdragon-forum
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app.kubernetes.io/name: phpbb } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: phpbb } }
+    spec:
+      nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c51"
+      initContainers:
+        # One-time install + bootstrap lockdown (registration off, board maintenance,
+        # native login locked, extension enabled). Uses the OWNER DB role for the
+        # install DDL (DB_PASSWORD from phpbb-secrets). Idempotent on re-run.
+        - name: bootstrap
+          # ⚠️ Custom image = official phpBB + the snapdragon/json-api extension baked
+          # in (immutable, version-locked). Placeholder pinned to the in-cluster
+          # registry; replace newTag when the extension image is built (kustomization).
+          image: snapdragon-systems/phpbb:dev
+          command: ["/bin/sh", "/config/bootstrap.sh"]
+          env:
+            # OWNER role password for the install/migrate DDL (from phpbb-secrets).
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: phpbb-secrets, key: DB_PASSWORD } }
+            # Runtime app-role password (written into config.php for phpbb_app).
+            - name: PHPBB_APP_PASSWORD
+              valueFrom: { secretKeyRef: { name: phpbb-db-app-auth, key: password } }
+            # First-install admin password (from phpbb-secrets); the reconcile Job
+            # then maintains ROLE_ADMIN->ADMINISTRATORS congruence.
+            - name: ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: phpbb-secrets, key: ADMIN_PASSWORD } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: config, mountPath: /config, readOnly: true }
+            - { name: data,   mountPath: /var/www/html/store }
+      containers:
+        - name: phpbb
+          image: snapdragon-systems/phpbb:dev
+          ports:
+            - { name: http, containerPort: 80 }
+          env:
+            # RUNTIME DB login = the least-privilege app role phpbb_app.
+            - name: PHPBB_APP_PASSWORD
+              valueFrom: { secretKeyRef: { name: phpbb-db-app-auth, key: password } }
+            # The extension's JWT validation config (Casdoor JWKS issuer ref). The
+            # extension validates X-Snapdragon-JWT/Authorization against this issuer.
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.snapdragon.systems" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          # Readiness on the EXTENSION health endpoint — NOT a board page (the board
+          # is disabled). Proves the json-api surface answers; the board/ACP/login
+          # are intentionally non-200.
+          readinessProbe:
+            httpGet: { path: /api/v1/snapdragon/health, port: http }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          livenessProbe:
+            httpGet: { path: /api/v1/snapdragon/health, port: http }
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 768Mi }
+          volumeMounts:
+            - { name: config, mountPath: /config, readOnly: true }
+            # attachments/avatars/cache/extension files
+            - { name: data,   mountPath: /var/www/html/store }
+      volumes:
+        - name: config
+          configMap: { name: phpbb-config, defaultMode: 0555 }
+        - name: data
+          persistentVolumeClaim: { claimName: phpbb-data }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: phpbb-data
+  namespace: snapdragon-forum
+  labels: { app.kubernetes.io/name: phpbb }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: snapdragon-local
+  resources: { requests: { storage: 10Gi } }
+---
+# ClusterIP, internal-only. Reached ONLY by forum-bff-api / admin-bff-api / the
+# sync Job (enforced by network-policy.yaml). NEVER routed by a gateway/ingress.
+# DNS: phpbb.snapdragon-forum.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: phpbb
+  namespace: snapdragon-forum
+  labels: { app.kubernetes.io/name: phpbb }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: phpbb }
+  ports:
+    - { name: http, port: 80, targetPort: http }

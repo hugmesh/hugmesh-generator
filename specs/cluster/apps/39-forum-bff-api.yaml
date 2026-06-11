@@ -1,0 +1,27 @@
+# forum-bff — Backend-For-Frontend for the snapdragon-forum-ui. ClusterIP in
+# snapdragon-backend; the ONLY way in is the fe-gateway /bff/forum/** route (same
+# origin as snapdragon.systems). It is the SINGLE browser->phpBB path and the
+# egress source into the isolated snapdragon-forum namespace. Owns the
+# forum_user_role / forum_action tables in forum-bff-db.
+#
+# DEPLOY ORDERING: lands AFTER forum-bff-db (38) + phpBB (30) + its mTLS/db ESO
+# secrets. It boots clean with EXTERNAL_FORUM_ENABLED=false (stub-seam) even if the
+# json-api extension is not yet live; flip the stub true once validated. Deploy
+# with the gateway/BFF client-cert mTLS wave (SSL_CLIENT_AUTH=need).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: forum-bff-api
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/forum-bff-api
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

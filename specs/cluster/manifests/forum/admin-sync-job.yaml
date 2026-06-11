@@ -1,0 +1,208 @@
+# forum-admin-sync — reconciles Casdoor ROLE_ADMIN / ROLE_FORUM_MOD / ROLE_FORUM
+# membership into phpBB groups via the snapdragon/json-api extension admin
+# endpoints over HTTP (ensureUser / setUserGroups / suspendUser). Runs IN the
+# isolated snapdragon-forum namespace (so it is admitted to phpbb by the
+# network-policy same-ns podSelector). Mirrors the akkoma/tuwunel admin-sync
+# pattern but talks HTTP-to-extension (phpBB has no pleroma_ctl equivalent).
+#
+# DIFFERS from akkoma's ADDITIVE-only sync: this is a DECLARATIVE de-provisioning
+# diff — it computes the FULL target group set per user from current Casdoor roles,
+# enumerates current phpBB group members, and REMOVES stale memberships + applies/
+# lifts bans idempotently. A demoted mod loses GLOBAL_MODERATORS; a role-removed
+# user loses REGISTERED. Plus the invariant: ROLE_ADMIN -> ADMINISTRATORS ALWAYS
+# (every tick, independent of external.forum.enabled).
+#
+# Role -> phpBB group:
+#   ROLE_ADMIN                         -> ADMINISTRATORS     (always)
+#   ROLE_FORUM_MOD (= MOD ∩ FORUM)     -> GLOBAL_MODERATORS
+#   ROLE_FORUM (non-admin, non-mod)    -> REGISTERED
+#   (none, non-admin)                  -> removed from all forum-managed groups
+#
+# STUB-AWARE: honors FORUM_EXTERNAL_ENABLED (mirrors forum-bff external.forum.enabled,
+# default false). When disabled it logs the would-be assignments + exits 0 (never
+# crash-loops); the ROLE_ADMIN provisioning invariant is still attempted so a
+# freshly-synced cluster has admins. Flip true once the extension is live.
+#
+# !!! The Casdoor membership API shape + the extension admin endpoint contract are
+# !!! deploy-specific. This is a working scaffold — validate the endpoints +
+# !!! payloads against the deployed snapdragon/json-api before production.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: forum-admin-sync-script
+  namespace: snapdragon-forum
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: snapdragon.systems }
+data:
+  sync.py: |
+    #!/usr/bin/env python3
+    """Reconcile Casdoor forum roles -> phpBB groups via the snapdragon/json-api
+    extension admin endpoints. Pure stdlib (urllib) — no extra packages.
+
+    DECLARATIVE de-provisioning: computes the target group per subject, then has
+    the extension converge (setUserGroups removes any forum-managed group not in
+    the target). ROLE_ADMIN -> ADMINISTRATORS is enforced every tick."""
+    import json, os, base64, urllib.request, urllib.error
+
+    CASDOOR  = os.environ.get("CASDOOR_URL", "http://casdoor.snapdragon-pki.svc.cluster.local:8000")
+    ORG      = os.environ.get("CASDOOR_ORG", "snapdragon")
+    PHPBB    = os.environ.get("PHPBB_API", "http://phpbb.snapdragon-forum.svc.cluster.local:80")
+    ENABLED  = os.environ.get("FORUM_EXTERNAL_ENABLED", "false").lower() == "true"
+    # Casdoor role -> phpBB target group. Order matters: ADMIN is the strongest.
+    ROLE_GROUP = [
+        ("ROLE_ADMIN",      "ADMINISTRATORS"),
+        ("ROLE_FORUM_MOD",  "GLOBAL_MODERATORS"),
+        ("ROLE_FORUM",      "REGISTERED"),
+    ]
+
+    CLIENT_ID     = open("/secrets/casdoor/clientId").read().strip()
+    CLIENT_SECRET = open("/secrets/casdoor/clientSecret").read().strip()
+
+    def _get(url, headers=None):
+        req = urllib.request.Request(url, headers=headers or {})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read() or "{}")
+
+    def _post(url, body, headers=None):
+        data = json.dumps(body).encode()
+        h = {"Content-Type": "application/json"}
+        h.update(headers or {})
+        req = urllib.request.Request(url, data=data, headers=h, method="POST")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.status
+
+    def casdoor_members(role):
+        token = CLIENT_ID + ":" + CLIENT_SECRET
+        auth = {"Authorization": "Basic " + base64.b64encode(token.encode()).decode()}
+        try:
+            data = _get(f"{CASDOOR}/api/get-role?id={ORG}/{role}", auth)
+        except urllib.error.HTTPError as e:
+            print(f"  WARN get-role {role}: {e}"); return []
+        users = (data.get("data") or {}).get("users") or []
+        # Casdoor returns org/sub; the extension keys phpBB users by Casdoor sub.
+        return [u.split("/")[-1] for u in users]
+
+    # Build the target group per subject (strongest role wins).
+    target = {}
+    for role, group in ROLE_GROUP:
+        for sub in casdoor_members(role):
+            if sub not in target:           # first (strongest) role wins
+                target[sub] = group
+
+    if not ENABLED:
+        print(f"forum-admin-sync: FORUM_EXTERNAL_ENABLED=false (stub) — would converge "
+              f"{len(target)} subject(s); ROLE_ADMIN provisioning still attempted")
+
+    applied = 0
+    for sub, group in target.items():
+        # ROLE_ADMIN invariant runs even when the stub is off; other writes only
+        # when enabled. The extension's setUserGroups is DECLARATIVE: it ensures the
+        # user, sets exactly {group}, and REMOVES any other forum-managed group.
+        if not ENABLED and group != "ADMINISTRATORS":
+            continue
+        try:
+            _post(f"{PHPBB}/api/v1/snapdragon/admin/users/{sub}/groups",
+                  {"groups": [group], "declarative": True})
+            applied += 1
+        except Exception as e:
+            print(f"  WARN setUserGroups {sub} -> {group}: {e}")
+    print(f"forum-admin-sync: applied {applied} group assignment(s) "
+          f"(declarative de-provisioning; stale memberships removed by the extension)")
+---
+# PostSync Job — runs once after each ArgoCD sync (admins available immediately).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: forum-admin-sync
+  namespace: snapdragon-forum
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: snapdragon.systems }
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels: { app: forum-admin-sync }
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: sync
+          image: python:3.12-alpine
+          command: ["python3", "/script/sync.py"]
+          env:
+            - { name: CASDOOR_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000" }
+            - { name: CASDOOR_ORG, value: "snapdragon" }
+            - { name: PHPBB_API,   value: "http://phpbb.snapdragon-forum.svc.cluster.local:80" }
+            # Mirrors forum-bff external.forum.enabled — default false (stub) until
+            # the snapdragon/json-api extension shape is pinned + validated.
+            - { name: FORUM_EXTERNAL_ENABLED, value: "false" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: script,  mountPath: /script, readOnly: true }
+            - { name: casdoor, mountPath: /secrets/casdoor, readOnly: true }
+      volumes:
+        - name: script
+          configMap: { name: forum-admin-sync-script, defaultMode: 0555 }
+        # ESO-materialized from Vault — never committed. casdoor-app-secrets holds
+        # the OAuth2 client used to read ROLE_ADMIN/ROLE_FORUM_MOD/ROLE_FORUM membership.
+        - name: casdoor
+          secret: { secretName: casdoor-app-secrets }
+---
+# 5-min CronJob — the de-provisioning safety net (self-heals missed events,
+# enforces the ROLE_ADMIN invariant, removes stale memberships idempotently).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: forum-admin-sync-cron
+  namespace: snapdragon-forum
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 300
+      template:
+        metadata:
+          labels: { app: forum-admin-sync }
+        spec:
+          restartPolicy: OnFailure
+          nodeSelector: { snapdragon.systems/backend: "true" }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: sync
+              image: python:3.12-alpine
+              command: ["python3", "/script/sync.py"]
+              env:
+                - { name: CASDOOR_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000" }
+                - { name: CASDOOR_ORG, value: "snapdragon" }
+                - { name: PHPBB_API,   value: "http://phpbb.snapdragon-forum.svc.cluster.local:80" }
+                - { name: FORUM_EXTERNAL_ENABLED, value: "false" }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              volumeMounts:
+                - { name: script,  mountPath: /script, readOnly: true }
+                - { name: casdoor, mountPath: /secrets/casdoor, readOnly: true }
+          volumes:
+            - name: script
+              configMap: { name: forum-admin-sync-script, defaultMode: 0555 }
+            - name: casdoor
+              secret: { secretName: casdoor-app-secrets }

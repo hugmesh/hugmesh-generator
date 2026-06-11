@@ -1,0 +1,22 @@
+# forum-bff-db — dedicated Postgres for snapdragon-forum-bff-api's config datastore
+# (forum_user_role / forum_action). In snapdragon-backend with the other BFF dbs
+# (NOT in the isolated snapdragon-forum ns — only phpBB + phpbb-db are isolated
+# there). Lands BEFORE forum-bff-api (39) so the DB + least-privilege roles exist
+# when the BFF boots its Liquibase migration.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: forum-bff-db
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/forum-bff-db
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

@@ -84,6 +84,27 @@
 # rows of its own — it exists so the federation availability endpoint can require
 # ROLE_SERVICE and the minted client-credentials token satisfies that gate.
 #
+# ROLE_FORUM ("Forum Access") is the per-PLATFORM access role for the phpBB forum
+# (a sibling of ROLE_MATRIX/ROLE_MASTODON/ROLE_GAMES — empty "roles" array, no
+# inheritance, default-deny everywhere it has no route row). It gates the forum
+# surfaces: ROLE_FORUM -> /social/forum/** (forum-ui) + /bff/forum/** (forum-bff)
+# (see manifests/route-access/20-schema.sql). A ban is the ABSENCE of the role
+# (removal -> the forum allow-predicate becomes false on the next refresh,
+# congruent into phpBB by the forum reconcile Job). ROLE_ADMIN reaches the forum
+# via the gateway admin-bypass WITHOUT ROLE_FORUM, so the forum floor rows pair no
+# ROLE_ADMIN (matching the matrix/mastodon floors).
+#
+# ROLE_FORUM_MOD ("Forum Moderator") is the DERIVED composite role
+#   ROLE_FORUM_MOD = ROLE_MOD INTERSECT ROLE_FORUM
+# (mirroring ROLE_GAMES_ADMIN = ROLE_GAMES INTERSECT (ROLE_ADMIN UNION ROLE_MOD)).
+# The gateway's OR-of-allow-rows table cannot express "ROLE_MOD AND ROLE_FORUM", so
+# the forum moderation row (/bff/forum/moderation/**) keys on this single derived
+# role. It seeds EMPTY; the forum reconcile Job (the forum-admin-sync pattern,
+# mirroring games-admin-sync) reads ROLE_MOD + ROLE_FORUM membership, computes the
+# intersection, and writes ONLY that verified set into ROLE_FORUM_MOD (idempotent;
+# also removes anyone who no longer qualifies). A plain ROLE_MOD WITHOUT ROLE_FORUM
+# is NOT a forum moderator (default-deny at /bff/forum/moderation/**).
+#
 # NOTE: the init_data.json object schema is Casdoor-version-specific. Validate
 # against the deployed casbin/casdoor-all-in-one before relying on auto-import.
 apiVersion: v1
@@ -114,6 +135,8 @@ data:
         { "owner": "snapdragon", "name": "ROLE_MASTODON",  "displayName": "Mastodon Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GAMES",       "displayName": "Games Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GAMES_ADMIN", "displayName": "Games Namespace Admin", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_FORUM",       "displayName": "Forum Access",          "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_FORUM_MOD",   "displayName": "Forum Moderator",       "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GATEWAY",   "displayName": "Gateway service", "users": ["snapdragon/svc-pki-gateway","snapdragon/svc-be-gateway","snapdragon/svc-fe-gateway"], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_API",       "displayName": "API service",     "users": ["snapdragon/svc-api"], "roles": [], "domains": [], "isEnabled": true },

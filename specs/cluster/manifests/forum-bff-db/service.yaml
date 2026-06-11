@@ -1,0 +1,14 @@
+# ClusterIP — reached only in-cluster by snapdragon-forum-bff-api (R2DBC runtime +
+# the JDBC handle Liquibase uses at startup). DNS:
+#   forum-bff-db.snapdragon-backend.svc.cluster.local:5432
+apiVersion: v1
+kind: Service
+metadata:
+  name: forum-bff-db
+  namespace: snapdragon-backend
+  labels: { app: forum-bff-db }
+spec:
+  type: ClusterIP
+  selector: { app: forum-bff-db }
+  ports:
+    - { name: postgres, port: 5432, targetPort: postgres }

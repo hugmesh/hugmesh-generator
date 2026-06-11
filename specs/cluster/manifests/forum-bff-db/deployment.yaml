@@ -1,0 +1,103 @@
+# forum-bff-db — dedicated Postgres for snapdragon-forum-bff-api's config datastore
+# (the forum_user_role + forum_action tables the forum BFF owns). Lives in
+# snapdragon-backend next to the BFF it serves (NOT in snapdragon-forum — only
+# phpBB + phpbb-db are isolated there; the BFF + its config DB sit with the other
+# BFFs). ClusterIP only.
+#
+# NOTE: like user-bff/admin-bff, the forum-bff app's application.yml defaults its
+# spring.r2dbc/spring.liquibase to a literal `snapdragon-pg` host that does NOT
+# exist; this dedicated `forum-bff-db` Service is the real backing store and the
+# forum-bff Deployment OVERRIDES the R2DBC/Liquibase URLs to point here.
+#
+# Schema bootstrap: NO initdb schema.sql — forum-bff owns its schema via Liquibase
+# (001-forum-user-role-cache.xml: forum_user_role(casdoor_subject UNIQUE key);
+# 002-forum-audit.xml: forum_action), applied by the app at boot. This DB only
+# needs to exist EMPTY (POSTGRES_DB).
+#
+# Credentials: the OWNER POSTGRES_PASSWORD is sourced from Vault via ESO (Secret
+# forum-bff-db-auth, key password); used by forum-bff for DDL/Liquibase ONLY. At
+# RUNTIME the app logs in as the dedicated NON-OWNER least-privilege role
+# `forumbff_app` (its OWN password, ESO Secret forum-bff-db-app-auth, created by
+# initdb/10-roles.sh). See the role/grant matrix in docs/POSTGRES-HARDENING.md.
+#
+# Sharding (opt-in, default OFF): set SHARDING_CITUS=on AND switch the image to a
+# Citus-enabled Postgres; the default path is unchanged.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forum-bff-db
+  namespace: snapdragon-backend
+  labels: { app: forum-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # single writer over a RWO PVC
+  selector: { matchLabels: { app: forum-bff-db } }
+  template:
+    metadata: { labels: { app: forum-bff-db } }
+    spec:
+      nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c52"
+      containers:
+        - name: postgres
+          # DEFAULT (single-node): postgres:16-alpine. To shard, override to a
+          # Citus-enabled image (citusdata/citus:12-pg16) AND set SHARDING_CITUS=on.
+          image: postgres:16-alpine
+          ports: [{ name: postgres, containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_DB,   value: "forumbff" }
+            # OWNER role (DDL/Liquibase). Same ESO Secret the forum-bff app's
+            # SPRING_LIQUIBASE_PASSWORD mounts.
+            - { name: POSTGRES_USER, value: "forumbff" }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: forum-bff-db-auth
+                  key: password
+            # Per-machine-user least-privilege role password (consumed by
+            # initdb/10-roles.sh to create forumbff_app). PRODUCTION sources this
+            # from its OWN ESO Secret forum-bff-db-app-auth (key password); the
+            # forum-bff app's RUNTIME SPRING_R2DBC_PASSWORD mounts the SAME Secret.
+            - name: FORUMBFF_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: forum-bff-db-app-auth
+                  key: password
+            # Opt-in Citus sharding (default off => 90-citus.sh is a no-op).
+            - { name: SHARDING_CITUS, value: "off" }
+            - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256 --auth-local=scram-sha-256" }
+            - { name: PGDATA, value: "/var/lib/postgresql/data/pgdata" }
+          # Server-level hardening (every boot): scram, capped connections, logged
+          # connections + slow statements. Per-DB timeouts are in 00-hardening.sql.
+          args:
+            - -c
+            - password_encryption=scram-sha-256
+            - -c
+            - max_connections=60
+            - -c
+            - log_connections=on
+            - -c
+            - log_disconnections=on
+            - -c
+            - log_min_duration_statement=2000
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "forumbff", "-d", "forumbff"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "forumbff", "-d", "forumbff"] }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+          volumeMounts:
+            - { name: data,   mountPath: /var/lib/postgresql/data }
+            - { name: initdb, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: forum-bff-db }
+        - name: initdb
+          configMap: { name: forum-bff-db-initdb }
