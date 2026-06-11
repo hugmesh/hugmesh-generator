@@ -52,6 +52,52 @@ data:
     # emergency_password = "<from Vault/ESO via Secret tuwunel-admin>"
     admin_room_default = "#admins:snapdragon.systems"
 ---
+# tuwunel mTLS PROXY (nginx) sidecar config. Terminates a cluster-CA client cert on
+# :4443 (ssl_verify_client on) and forwards plaintext to tuwunel on localhost:8008.
+# Reuses the merged mTLS CLIENT-PRESENTATION machinery (be-gateway/mod-bff/admin-bff
+# present their Vault-PKI client certs). Server cert + cluster CA from the ESO Secret
+# tuwunel-proxy-mtls (manifests/external-secrets/homeserver-proxy-externalsecrets.yaml),
+# mounted as PEM at /pki. Matrix sync (long-poll /_matrix) needs WebSocket/keepalive
+# upgrade passthrough, handled below.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tuwunel-proxy-nginx
+  namespace: snapdragon-backend
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: snapdragon.systems }
+data:
+  nginx.conf: |
+    worker_processes 1;
+    events { worker_connections 1024; }
+    http {
+      access_log off;
+      map $http_upgrade $http_connection { default upgrade; "" close; }
+      server {
+        listen 4443 ssl;
+        # Server identity (Vault-PKI/ESO tuwunel-proxy-mtls).
+        ssl_certificate     /pki/tls.crt;
+        ssl_certificate_key /pki/tls.key;
+        # REQUIRE a client cert chaining to the cluster CA (mutual TLS).
+        ssl_client_certificate /pki/ca.crt;
+        ssl_verify_client on;
+        ssl_verify_depth 2;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        # Forward verified traffic to tuwunel in the same pod (localhost:8008).
+        location / {
+          proxy_pass http://127.0.0.1:8008;
+          proxy_set_header Host              $host;
+          proxy_set_header X-Real-IP         $remote_addr;
+          proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto https;
+          proxy_set_header X-Client-Cert-DN  $ssl_client_s_dn;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade    $http_upgrade;
+          proxy_set_header Connection $http_connection;
+          proxy_read_timeout 300s;   # Matrix /sync long-poll
+        }
+      }
+    }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -88,11 +134,44 @@ spec:
             httpGet: { path: /_matrix/client/versions, port: http }
             initialDelaySeconds: 15
             periodSeconds: 15
+        # ── mTLS proxy sidecar (tuwunel-proxy) ───────────────────────────────
+        # Fronts tuwunel on :4443 requiring a cluster-CA client cert and forwards to
+        # localhost:8008. The tuwunel-proxy Service points at THIS port; the
+        # be-gateway/mod-bff/admin-bff repoint their matrix base-urls to it. See the
+        # tuwunel-proxy-nginx ConfigMap above + tuwunel-proxy-mtls ESO Secret.
+        - name: proxy
+          image: nginxinc/nginx-unprivileged:1.27-alpine
+          ports: [{ name: mtls, containerPort: 4443 }]
+          volumeMounts:
+            - { name: proxy-conf, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf, readOnly: true }
+            - { name: proxy-pki,  mountPath: /pki, readOnly: true }
+          readinessProbe:
+            tcpSocket: { port: mtls }
+            initialDelaySeconds: 10
+            periodSeconds: 15
       volumes:
         - name: config
           configMap: { name: tuwunel-config }
         - name: data
           persistentVolumeClaim: { claimName: tuwunel-data }
+        - name: proxy-conf
+          configMap: { name: tuwunel-proxy-nginx }
+        # Vault-PKI-issued server cert + cluster CA, synced by ESO (kubernetes.io/tls).
+        - name: proxy-pki
+          secret:
+            secretName: tuwunel-proxy-mtls
+---
+# tuwunel-proxy — the mTLS front the gateway/BFFs target instead of tuwunel:8008.
+apiVersion: v1
+kind: Service
+metadata:
+  name: tuwunel-proxy
+  namespace: snapdragon-backend
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: tuwunel }
+  ports: [{ name: mtls, port: 4443, targetPort: mtls }]
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

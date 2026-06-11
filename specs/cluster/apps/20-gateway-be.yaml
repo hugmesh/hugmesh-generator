@@ -68,36 +68,44 @@ spec:
             host: scale.snapdragon.systems
             uri: http://snapdragon-pki-gateway.snapdragon-pki.svc.cluster.local:8080
           # --- Mastodon (mastodon.snapdragon.systems) — specific paths first ---
-          # Mastodon's OAuth endpoints (authorize/token). Same downstream pod as
-          # the rest of Mastodon; broken out so the route DB can gate /oauth/**
-          # (ROLE_USER) distinctly.
+          # ⚠️ REPOINTED to the akkoma-proxy mTLS sidecar (:4443, https) — the
+          # homeservers are network-isolated (manifests/networkpolicy/homeserver-
+          # isolation.yaml) and reachable only via the cluster-CA-mTLS proxy. The
+          # gateway PRESENTS its client cert here (SNAPDRAGON_GATEWAY_MTLS_ENABLED=true,
+          # already set above) and validates the proxy's server cert against the
+          # cluster CA. Route-DB gating is now ROLE_MASTODON/ROLE_MOD/ROLE_ADMIN
+          # (per-platform access roles, see manifests/route-access/20-schema.sql),
+          # not the broad ROLE_USER floor.
+          # Mastodon's OAuth endpoints (authorize/token), gated /oauth/** distinctly.
           - id: mastodon-oauth
             host: mastodon.snapdragon.systems
-            uri: http://akkoma.snapdragon-backend.svc.cluster.local:4000
+            uri: https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443
             path: /oauth/**
           # Mastodon REST API (statuses, timelines, …) under the mastodon host.
           - id: mastodon-api
             host: mastodon.snapdragon.systems
-            uri: http://akkoma.snapdragon-backend.svc.cluster.local:4000
+            uri: https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443
             path: /api/v1/**
           # Everything else on the mastodon host (web UI, streaming, .well-known).
           - id: mastodon-web
             host: mastodon.snapdragon.systems
-            uri: http://akkoma.snapdragon-backend.svc.cluster.local:4000
+            uri: https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443
           # --- Matrix (matrix.snapdragon.systems) ---
+          # ⚠️ REPOINTED to the tuwunel-proxy mTLS sidecar (:4443, https) — same
+          # isolation + client-cert presentation as the mastodon routes above.
           # The Matrix client/server API. Present both as a host route and a
           # path route so /_matrix/** resolves whether or not the Host header is
           # the matrix subdomain (federation .well-known hits the apex too).
           - id: matrix-api
             host: matrix.snapdragon.systems
-            uri: http://tuwunel.snapdragon-backend.svc.cluster.local:8008
+            uri: https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443
             path: /_matrix/**
           - id: matrix-wellknown
-            uri: http://tuwunel.snapdragon-backend.svc.cluster.local:8008
+            uri: https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443
             path: /_matrix/**
           - id: matrix
             host: matrix.snapdragon.systems
-            uri: http://tuwunel.snapdragon-backend.svc.cluster.local:8008
+            uri: https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443
           # --- snapdragon-federation-api (api.snapdragon.systems) — the module-
           # federation registry/manifest/bundles API. MORE SPECIFIC than the
           # /api/** snapdragon-api catch-all below, so it MUST be declared FIRST

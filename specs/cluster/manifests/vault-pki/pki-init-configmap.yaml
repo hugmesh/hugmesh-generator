@@ -83,10 +83,16 @@ data:
     # 3) One issuing role per Java machine-user (matches gen-keystores.sh
     #    SERVICES + docs/SECURITY.md identity matrix). serverAuth+clientAuth for
     #    cross-namespace mTLS. Names mirror <svc>.<ns>.svc.cluster.local.
+    #    akkoma-proxy / tuwunel-proxy = the homeserver mTLS PROXY sidecars
+    #    (manifests/akkoma|tuwunel) — SERVER certs only (the be-gateway/mod-bff/
+    #    admin-bff present THEIR existing client certs to these). They are NOT
+    #    snapdragon-* prefixed (they front the non-JVM homeservers), so the
+    #    allowed_domains below covers the bare + .svc.cluster.local SANs.
     for app in snapdragon-pki-gateway snapdragon-be-gateway snapdragon-fe-gateway \
                snapdragon-api snapdragon-admin-bff-api \
                snapdragon-mod-bff-api snapdragon-user-bff-api \
-               snapdragon-federation-api; do
+               snapdragon-federation-api \
+               akkoma-proxy tuwunel-proxy; do
       echo "==> role ${PKI}/roles/${app}"
       vault write "${PKI}/roles/${app}" \
         allowed_domains="${app},${app}.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
