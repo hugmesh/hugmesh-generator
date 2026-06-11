@@ -1,0 +1,106 @@
+# HEAVY test Job template (ENV=test only). Rendered by the orchestrator with a
+# unique ${RUN_ID} and kubectl-applied when the HEAVY edge fires — i.e. the ACTUAL
+# amd64 workloads are up (kafka + clickhouse Deployments availableReplicas>=1 AND a
+# Ready kubernetes.io/arch=amd64 Node), NOT when the analytics ArgoCD Application
+# merely reports Synced (on a Pi-only cluster it is Synced-but-Pending forever).
+#
+# It re-runs the SAME real-services Playwright suite as LEAN, but flips the heavy
+# expectation: SNAP_EXPECT_HEAVY=1 so the usage/observability specs require the
+# REAL Kafka-producer + ClickHouse path (the admin-bff usage endpoint must NOT
+# return the in-memory-fallback marker) instead of the x86-absent fallback LEAN
+# asserts. This is the proof that "the heavy tier, once attached, is actually
+# exercised end-to-end", not just that the pods scheduled.
+#
+# Reports land in the SAME test-reports PVC under heavy/${RUN_ID}/ (the admin-bff
+# TestReportsController lists lean/ and heavy/ side by side). Secrets are scrubbed
+# at write time by the snapdragon reporter AND by the belt-and-braces sed pass
+# below. The whole bundle is pruned for ENV=prod (snapdragon.systems/tier: test).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-runner-heavy-${RUN_ID}
+  namespace: snapdragon-backend
+  labels:
+    app.kubernetes.io/name: test-runner
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/tier: test
+    snapdragon.systems/test-tier: heavy
+  annotations:
+    snapdragon.systems/run-id: "${RUN_ID}"
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: test-runner-heavy
+        snapdragon.systems/tier: test
+    spec:
+      restartPolicy: Never
+      serviceAccountName: snapdragon-test-runner
+      # The heavy run exercises Kafka/ClickHouse which live ONLY on the x86_64
+      # host (nodeSelector kubernetes.io/arch=amd64 in manifests/analytics). Pin
+      # the heavy Job to that host too so its in-cluster producer/consumer probes
+      # take the same node-local path the app does. (LEAN has no such pin — it runs
+      # anywhere, since x86 is ABSENT for the LEAN edge.)
+      nodeSelector: { kubernetes.io/arch: amd64 }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: e2e
+          # SAME generator-built image as LEAN (tests/e2e + Chromium +
+          # seed-accounts.sh). Pinned by the build; :dev here, pruned for prod.
+          image: registry.snapdragon.systems/snapdragon-test-runner:dev
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              export SNAP_REPORT_DIR="/reports/heavy/${RUN_ID}"
+              export SNAP_REPORT_TIER=HEAVY
+              export SNAP_REAL_SERVICES=1
+              # HEAVY: the amd64 datastores are present, so the usage/observability
+              # specs require the REAL Kafka+ClickHouse path (no in-memory fallback).
+              export SNAP_EXPECT_HEAVY=1
+              export SNAP_RUN_ID="${RUN_ID}"
+              mkdir -p "$SNAP_REPORT_DIR/logs"
+              # Run the full real-services suite; never abort the report on test
+              # failure (a FAILED run must still be recorded + surfaced, not lost).
+              node_modules/.bin/playwright test 2>&1 | tee "$SNAP_REPORT_DIR/logs/run.log" || true
+              # Belt-and-braces secret scrub on the durable artifacts (the custom
+              # reporter already scrubs; this catches stray tokens in raw logs).
+              find "$SNAP_REPORT_DIR" -type f \( -name '*.log' -o -name '*.json' -o -name '*.xml' \) \
+                -exec sed -i -E 's/(Bearer|access_token"?[:=]"?)[[:space:]]*[A-Za-z0-9._-]+/\1 REDACTED/g' {} + || true
+          env:
+            - { name: SNAP_BASE_URL, value: "https://snapdragon-systems-web.snapdragon-frontend.svc.cluster.local:8443" }
+            - { name: SYSTEMS_CASDOOR_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000" }
+            - { name: LIVE_GATEWAY, value: "1" }
+            # The admin-bff ingest endpoint the reporter POSTs live events to.
+            - { name: SNAP_INGEST_URL, value: "http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080/bff/admin/test-reports/ingest" }
+            # Heavy-tier datastore endpoints the usage/observability specs probe
+            # directly (static cluster DNS — there is no service-discovery registry).
+            - { name: SNAP_CLICKHOUSE_URL, value: "http://clickhouse.snapdragon-backend.svc.cluster.local:8123" }
+            - { name: SNAP_KAFKA_BOOTSTRAP, value: "kafka.snapdragon-backend.svc.cluster.local:9092" }
+            # Shared swarm password + per-role passwords come from the test-seed
+            # Secret (rendered by seed-accounts.sh --roles, never committed).
+          envFrom:
+            - secretRef: { name: test-seed-passwords, optional: true }
+          resources:
+            requests: { cpu: 250m, memory: 768Mi }
+            limits:   { cpu: "2",  memory: 2Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: reports, mountPath: /reports }
+            - { name: tmp, mountPath: /tmp }
+            - { name: home, mountPath: /home/runner }
+      volumes:
+        - name: reports
+          persistentVolumeClaim: { claimName: test-reports }
+        - name: tmp
+          emptyDir: {}
+        - name: home
+          emptyDir: {}

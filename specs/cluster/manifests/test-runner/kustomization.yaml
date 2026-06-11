@@ -1,0 +1,33 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# ENV=test ONLY. This whole bundle (and its ArgoCD app apps/99-test-runner.yaml)
+# is pruned from the baked prod tree by build-x86-host-stage4.sh gate_env_apps and
+# rejected by the prod-hygiene Kyverno ClusterPolicy on its snapdragon.systems/
+# tier: test label. Do NOT add prod workloads here.
+namespace: snapdragon-backend
+resources:
+  - namespace-rbac.yaml   # SA + read-mostly ClusterRole + Job create/delete Role
+  - pvc.yaml              # test-reports PVC (lean/ + heavy/ run artifacts)
+  - orchestrator.yaml     # orchestrator ConfigMap + the trigger Deployment
+  # akkoma-peer.yaml (TEST-ONLY 2nd federating peer for the non-federation proof)
+  # is added by the non-federation-harness commit on this branch.
+
+# The lean/heavy Job TEMPLATES are mounted into the orchestrator as the
+# test-job-lean / test-job-heavy ConfigMaps (projected volume in orchestrator.yaml)
+# under a SINGLE key matching the file name, so the orchestrator can
+# `envsubst < /templates/test-job-<tier>.yaml | kubectl apply -f -`. The names are
+# FIXED (disableNameSuffixHash) because the projected volume references them by
+# name; a hash suffix would break the mount on every content change.
+configMapGenerator:
+  - name: test-job-lean
+    files:
+      - test-job-lean.yaml
+  - name: test-job-heavy
+    files:
+      - test-job-heavy.yaml
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    app.kubernetes.io/name: test-runner
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/tier: test
