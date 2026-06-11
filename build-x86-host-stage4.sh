@@ -43,6 +43,11 @@ ORG="Snapdragon-Systems"
 # The chosen ENV is written to /etc/snapdragon/env and gates which ArgoCD apps
 # survive in the baked /var/lib/snapdragon/cluster/apps tree (gate_env_apps).
 ENV="test"
+# Pinned first-party release tag for ENV=prod. The prod tag-rewrite in
+# gate_env_apps replaces every floating `:dev` first-party image tag with this so
+# the prod-hygiene gate (scripts/validate-prod-hygiene.sh) finds no floating tag.
+# Default = a deterministic build stamp; override with --release-tag.
+RELEASE_TAG="${RELEASE_TAG:-$(date -u +%Y%m%d)}"
 CONFIG_FILE=""
 TIMEZONE="UTC"
 DEFAULT_USER="snap"
@@ -153,6 +158,7 @@ while [[ $# -gt 0 ]]; do
         -T|--timezone) TIMEZONE="$2"; shift 2 ;;
         -C|--config) CONFIG_FILE="$2"; shift 2 ;;
         --env) ENV="$2"; shift 2 ;;
+        --release-tag) RELEASE_TAG="$2"; shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
         --brand) BRAND="$2"; shift 2 ;;
         --brand-title) BRAND_TITLE="$2"; shift 2 ;;
@@ -341,12 +347,42 @@ GROWFS_EOF
 #           LAN wildcard-DNS app is kept ONLY for a `.test` domain, so it can
 #           never become authoritative for a real public domain (e.g. a default
 #           ENV=test build still on snapdragon.systems keeps neither edge).
+# Pin first-party FLOATING image tags (`:dev`) to the pinned RELEASE_TAG for prod
+# so the prod-hygiene gate finds no floating tag, and PRUNE the ENV=test e2e
+# harness wave (the test-runner app + its test-only manifests) from the baked
+# prod tree. Runs ONLY for ENV=prod (called from gate_env_apps). Conservative sed:
+# only first-party image lines (image: ...snapdragon-.../...-{api,ui,bff,web,gateway}:dev
+# + the akkoma/tuwunel pins) are rewritten; third-party `:dev`-less images untouched.
+rewrite_prod_image_tags() {
+    local tree="${SYSROOT}/var/lib/snapdragon/cluster"
+    [ -d "${tree}" ] || return 0
+    local n=0 f
+    while IFS= read -r -d '' f; do
+        # Any first-party image (its repo path contains 'snapdragon') tagged :dev
+        # -> :RELEASE_TAG. Matches `image: <registry>/snapdragon.../<name>:dev`.
+        # The repo-path char class EXCLUDES ':' so the greedy match stops before
+        # the ':dev' tag (image repo paths carry no ':' except a registry port,
+        # which our first-party images do not use).
+        if grep -qE 'image:[[:space:]]*[^[:space:]:]*snapdragon[^[:space:]:]*:dev([[:space:]]|$)' "${f}" 2>/dev/null; then
+            sed -i -E "s|(image:[[:space:]]*[^[:space:]:]*snapdragon[^[:space:]:]*):dev|\\1:${RELEASE_TAG}|g" "${f}"
+            n=$((n+1))
+        fi
+    done < <(find "${tree}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 2>/dev/null)
+    info "ENV=prod: pinned first-party :dev image tags -> :${RELEASE_TAG} in ${n} file(s)"
+    # Prune the ENV=test e2e harness (forbidden in prod by the hygiene gate).
+    rm -f "${SYSROOT}/var/lib/snapdragon/cluster/apps/99-test-runner.yaml" \
+          "${SYSROOT}/var/lib/snapdragon/cluster/apps/00-app-of-apps-waved.yaml" 2>/dev/null || true
+    rm -rf "${SYSROOT}/var/lib/snapdragon/cluster/manifests/test-runner" 2>/dev/null || true
+    info "ENV=prod: pruned the test-runner wave (apps/99-test-runner.yaml + manifests/test-runner) from the baked tree"
+}
+
 gate_env_apps() {
     local apps="${SYSROOT}/var/lib/snapdragon/cluster/apps"
     [ -d "${apps}" ] || return 0
     if [ "${ENV}" = "prod" ]; then
         rm -f "${apps}/09-lan-dns.yaml" && \
             info "ENV=prod: pruned LAN wildcard-DNS app 09-lan-dns.yaml from the baked tree"
+        rewrite_prod_image_tags
         return 0
     fi
     # ENV=test

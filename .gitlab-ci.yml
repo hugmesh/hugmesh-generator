@@ -23,6 +23,51 @@ lint:reserved-prefixes:
   script:
     - bash scripts/validate-reserved-prefixes.sh
 
+# Production-hygiene gate. Bakes a PROD copy of the GitOps tree (the same
+# transforms gate_env_apps applies: prune 09-lan-dns + the test wave, pin :dev
+# first-party tags) and asserts scripts/validate-prod-hygiene.sh PASSES on it, AND
+# that it FAILS on an injected vault `-dev` + a test-only peer (so the gate itself
+# is proven to bite). A floating :dev tag, a dev-only server, a test-only
+# component, or an un-pruned test wave surviving a prod bake FAILS here. Cheap; no
+# privileged runner needed.
+lint:prod-hygiene:
+  stage: lint
+  image: python:3-slim
+  tags: [snapdragon-x86]
+  before_script:
+    - pip install --quiet pyyaml
+  script:
+    # Bake a prod tree.
+    - RELEASE_TAG="${CI_COMMIT_SHORT_SHA:-$(date -u +%Y%m%d)}"
+    - rm -rf /tmp/prodbake && mkdir -p /tmp/prodbake && cp -r specs/cluster /tmp/prodbake/cluster
+    - rm -f /tmp/prodbake/cluster/apps/09-lan-dns.yaml /tmp/prodbake/cluster/apps/99-test-runner.yaml /tmp/prodbake/cluster/apps/00-app-of-apps-waved.yaml
+    - rm -rf /tmp/prodbake/cluster/manifests/test-runner
+    - >
+      find /tmp/prodbake/cluster -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 |
+      while IFS= read -r -d '' f; do
+        if grep -qE 'image:[[:space:]]*[^[:space:]:]*snapdragon[^[:space:]:]*:dev([[:space:]]|$)' "$f"; then
+          sed -i -E "s|(image:[[:space:]]*[^[:space:]:]*snapdragon[^[:space:]:]*):dev|\\1:${RELEASE_TAG}|g" "$f";
+        fi;
+      done
+    # 1) the baked prod tree must PASS.
+    - ENV=prod bash scripts/validate-prod-hygiene.sh /tmp/prodbake/cluster
+    # 2) the gate must FAIL on an injected vault -dev + a test-only peer.
+    - mkdir -p /tmp/prodbake/cluster/manifests/inject
+    - |
+      cat > /tmp/prodbake/cluster/manifests/inject/bad.yaml <<'EOF'
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: vault-injected, namespace: snapdragon-pki }
+      spec:
+        selector: { matchLabels: { app: vault } }
+        template:
+          metadata: { labels: { app: vault } }
+          spec:
+            containers:
+              - { name: vault, image: hashicorp/vault:1.15, args: ["server","-dev"] }
+      EOF
+    - if ENV=prod bash scripts/validate-prod-hygiene.sh /tmp/prodbake/cluster >/dev/null 2>&1; then echo "GATE DID NOT BITE on injected vault -dev"; exit 1; else echo "gate correctly failed on injected violation"; fi
+
 # Build the three Pi role ISOs + the x86 host ISO. Needs root + crossdev + qemu
 # on the runner host (the x86_64 node). Tag-select that runner.
 build:isos:
