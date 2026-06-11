@@ -114,14 +114,13 @@ spec:
                   key: password
             - name: ROUTE_ACCESS_R2DBC_URL
               value: "r2dbc:postgresql://admin_bff:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway"
-            # This BFF also owns the usage-analytics aggregation (the role the
-            # removed snapdragon-admin-bff-api copy used to run): it consumes the
+            # This BFF also owns the usage-analytics aggregation: it consumes the
             # Kafka usage-event bus into ClickHouse and serves /bff/admin/usage.
-            # Hence the clickhouse profile + Kafka/ClickHouse wiring. (Eureka was
-            # dropped: the gateway addresses this BFF by its stable k8s Service DNS
-            # — snapdragon-admin-bff-api.snapdragon-backend.svc — so client-side
-            # service discovery is unused; the eureka profile + DEFAULTZONE env are
-            # removed.)
+            # Hence the clickhouse profile + Kafka/ClickHouse wiring. The gateway
+            # addresses this BFF by its stable k8s Service DNS
+            # (snapdragon-admin-bff-api.snapdragon-backend.svc) — there is no
+            # client-side service discovery, so the active profiles are exactly
+            # casdoor + clickhouse and no DEFAULTZONE env is set.
             - name: SPRING_PROFILES_ACTIVE
               value: "casdoor,clickhouse"
             - name: SPRING_KAFKA_BOOTSTRAP_SERVERS

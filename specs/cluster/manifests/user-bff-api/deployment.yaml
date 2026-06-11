@@ -99,6 +99,26 @@ spec:
             # forwarding the caller JWT).
             - name: FEDERATION_API_URL
               value: "http://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080"
+            # ── AI-cloak / media-poisoning (poison-before-ingest) ────────────────
+            # The media-proxy (/bff/user/media/upload) routes image uploads through
+            # the OPTIONAL snapdragon-media-poisoner worker BEFORE the real homeserver
+            # upload, so bytes are cloaked before any thumbnail/federation happens.
+            # WORKER_URL is the worker's in-cluster ClusterIP DNS; the BFF probes its
+            # /health for capability (cuda|rocm|cpu|none) and POSTs /poison per upload.
+            # On a Pi5-only cluster the worker pod is Pending (nodeSelector amd64+gpu)
+            # so this Service has no Ready endpoints, the probe reports the heavy tier
+            # ABSENT, and the BFF degrades to FALLBACK_MODE (warn-before-post). HONEST
+            # framing: best-effort training-set hygiene, NOT a guarantee — the BFF marks
+            # a result 'protected' only after its round-trip survival check.
+            - { name: MEDIA_POISONING_ENABLED,        value: "false" }
+            - name: MEDIA_POISONING_WORKER_URL
+              value: "http://snapdragon-media-poisoner.snapdragon-backend.svc.cluster.local:8080"
+            - { name: MEDIA_POISONING_DEFAULT_MODE,   value: "glaze" }
+            - { name: MEDIA_POISONING_FALLBACK_MODE,  value: "warn_before_post" }
+            - { name: MEDIA_POISONING_TIMEOUT_MS,     value: "120000" }
+            # Served sizes the worker must own so no clean derivative exists (akkoma
+            # "small"; Matrix 240x240 thumbnail). CSV of the longest-edge px.
+            - { name: MEDIA_POISONING_THUMBNAIL_SIZES, value: "240,480" }
             # Config datastore: the user_profile / user_preference / user_block
             # tables. The app's application.yml defaults spring.r2dbc +
             # spring.liquibase to a literal `snapdragon-pg` host that does NOT

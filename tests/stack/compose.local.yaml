@@ -239,11 +239,11 @@ services:
       start_period: 60s
 
   # admin-bff — the Backend-For-Frontend for the admin-ui (route-access CRUD).
-  # specs/cluster/manifests/admin-bff-api/deployment.yaml. The eureka/kafka/
-  # clickhouse analytics wiring is OMITTED here (no Eureka/Kafka/ClickHouse in the
-  # local core stack) — only the "casdoor" profile is active so the route-DB CRUD
-  # surface comes up. Analytics endpoints (/bff/admin/usage) are NOT exercised
-  # locally (documented limitation).
+  # specs/cluster/manifests/admin-bff-api/deployment.yaml. The kafka/clickhouse
+  # analytics wiring is OMITTED here (no Kafka/ClickHouse in the local core stack)
+  # — only the "casdoor" profile is active so the route-DB CRUD surface comes up.
+  # Analytics endpoints (/bff/admin/usage) are NOT exercised locally (documented
+  # limitation).
   snapdragon-admin-bff-api:
     <<: *amd64
     build:

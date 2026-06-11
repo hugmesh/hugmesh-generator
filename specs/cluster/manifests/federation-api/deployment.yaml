@@ -156,7 +156,7 @@ spec:
             # (@Profile("!dev & !test")) is the default and gates the OpenAPI spec
             # /swagger-ui to ROLE_ADMIN. Setting dev/test would make the spec
             # public, so it is deliberately UNSET. federation has no
-            # eureka/kafka/clickhouse deps, so admin-bff's extra profiles do not apply.
+            # kafka/clickhouse deps, so admin-bff's extra profiles do not apply.
           # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
           # so curl PRESENTS this pod's client cert and validates the server cert
           # against the cluster CA (--resolve maps the SAN to loopback). See

@@ -1,4 +1,5 @@
-# Usage analytics: ClickHouse + Kafka + Eureka + Spring admin BFF. Backend Pis.
+# Usage-analytics datastores: ClickHouse + Kafka (the usage-event bus the admin BFF
+# consumes from). Backend Pis / x86_64 host. No service-discovery registry.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
