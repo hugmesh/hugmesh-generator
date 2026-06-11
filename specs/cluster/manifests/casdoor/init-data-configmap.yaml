@@ -76,6 +76,33 @@
 #   allow-predicate becomes false), reconciled by the admin-bff loop; there is no
 #   allow=false / ban role row anywhere.
 #
+# ROLE_MATRIX_EXTERNAL_CLIENT ("Matrix External Client") and
+# ROLE_MASTODON_EXTERNAL_CLIENT ("Mastodon External Client") are the
+# personal-client / native-app passthrough roles — ADDITIVE siblings of
+# ROLE_MATRIX/ROLE_MASTODON (empty "roles" array, no inheritance). They are
+# SEPARATE from the base access roles, and the distinction is the point:
+#   - The BASE role (ROLE_MATRIX/ROLE_MASTODON) = use the homeserver via OUR UI
+#     (a brokered token minted by our BFFs). The base role gates token-USAGE
+#     (/_matrix/**, /api/v1/**, /api/v2/**, media/streaming) at the be-gateway.
+#   - The EXTERNAL-CLIENT role ADDITIONALLY = may register/use the user's OWN
+#     native client (Element/Tusky/Ivory: an OAuth app or a Matrix device login)
+#     through the gateway passthrough. It gates only the token-ISSUANCE sub-paths
+#     (Mastodon /oauth/** + /api/v1/apps ; Matrix /_matrix/client/*/login +
+#     device registration), NOT token-usage — see manifests/route-access/20-schema.sql.
+# Mods + admins control (grant/revoke via their UI) who may use their own clients.
+# Congruent with ban-by-role-removal: removing the external-client role REVOKES the
+# user's personal-client tokens/sessions at the gateway (the
+# HomeserverTokenRevocationFilter checks external-client:<localpart>:<platform> for
+# kind=personal tokens ONLY) WITHOUT touching their our-UI access — the user keeps
+# the base ROLE_MATRIX/ROLE_MASTODON so the brokered token keeps working. A FULL
+# platform ban removes the BASE role (and writes the coarse key) which kills
+# everything; external-client removal is the narrower, our-UI-preserving revoke.
+# They auto-convert to ROLE_MATRIX_EXTERNAL_CLIENT / ROLE_MASTODON_EXTERNAL_CLIENT
+# via the EXISTING casdoorAuthoritiesConverter (each "roles" entry -> ROLE_<UPPER>);
+# NO converter change. They seed EMPTY (users []); membership is granted by the
+# admin-bff external-client flow (user_external_clients desired-state -> the
+# single-writer reconcile loop -> Casdoor addUserToRole/removeUserFromRole).
+#
 # ROLE_SERVICE ("Internal service-to-service") is the machine role for internal
 # client-credentials callers that need the INTERNAL/ROLE_SERVICE endpoints (e.g.
 # the signup-gate proxy calling the federation username-availability check). Its
@@ -136,6 +163,8 @@ data:
         { "owner": "snapdragon", "name": "ROLE_MOD",       "displayName": "Network Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_MATRIX",    "displayName": "Matrix Access",   "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_MASTODON",  "displayName": "Mastodon Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_MATRIX_EXTERNAL_CLIENT",   "displayName": "Matrix External Client",   "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_MASTODON_EXTERNAL_CLIENT", "displayName": "Mastodon External Client", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_MATRIX_DOMAINLOCKED",   "displayName": "Matrix local-only",   "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_MASTODON_DOMAINLOCKED", "displayName": "Mastodon local-only", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GAMES",       "displayName": "Games Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
