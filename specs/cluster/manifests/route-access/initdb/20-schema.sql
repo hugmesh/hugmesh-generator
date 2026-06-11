@@ -56,28 +56,65 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-pki-gateway', '/.well-known/**',       'PUBLIC', true),  -- public (OIDC/jwks)
 
   -- be-gateway (api./matrix./mastodon.snapdragon.systems -> APIs/Matrix/Mastodon)
-  -- ROLE_MOD moderation surfaces — MORE SPECIFIC than the ROLE_USER /api/v1/**
-  -- floor below, so they win the most-specific match and gate akkoma moderation
-  -- to moderators/admins (NOT plain ROLE_USER). ROLE_ADMIN is paired on each so
-  -- admins (a superset) keep reaching these moderation surfaces. Matrix admin is
-  -- enforced by admin-room membership (tuwunel-admin-sync), not an HTTP surface,
-  -- so no /_synapse/admin/** row is needed (Conduit-family exposes none).
+  -- ROLE_MOD moderation surfaces — MORE SPECIFIC than the ROLE_MASTODON /api/v1/**
+  -- platform-access floor below, so they win the most-specific match and gate
+  -- akkoma moderation to moderators/admins (NOT plain ROLE_MASTODON). ROLE_ADMIN is
+  -- paired on each so admins (a superset) keep reaching these moderation surfaces.
+  -- Matrix admin is enforced by admin-room membership (tuwunel-admin-sync), not an
+  -- HTTP surface, so no /_synapse/admin/** row is needed (Conduit-family exposes none).
   ('snapdragon-be-gateway',  '/api/v1/pleroma/admin/**', 'ROLE_MOD',    true),  -- akkoma moderation REST
   ('snapdragon-be-gateway',  '/api/v1/pleroma/admin/**', 'ROLE_ADMIN',  true),  -- (admins superset)
   ('snapdragon-be-gateway',  '/api/pleroma/admin/**',    'ROLE_MOD',    true),  -- legacy akkoma admin
   ('snapdragon-be-gateway',  '/api/pleroma/admin/**',    'ROLE_ADMIN',  true),  -- (admins superset)
   ('snapdragon-be-gateway',  '/pleroma/admin/**',        'ROLE_MOD',    true),  -- AdminFE assets
   ('snapdragon-be-gateway',  '/pleroma/admin/**',        'ROLE_ADMIN',  true),  -- (admins superset)
-  -- ROLE_MOD user-floor mirror — the casdoorAuthoritiesConverter does NOT
-  -- auto-grant ROLE_USER to ROLE_MOD principals, so mirror the ROLE_USER rows on
-  -- the Matrix/Mastodon surfaces to keep ROLE_MOD self-contained (a moderator can
-  -- use Matrix/Mastodon normally without also holding ROLE_USER in Casdoor).
-  ('snapdragon-be-gateway',  '/_matrix/**',           'ROLE_MOD',       true),  -- Matrix C-S API (mod floor)
-  ('snapdragon-be-gateway',  '/api/v1/**',            'ROLE_MOD',       true),  -- Mastodon REST API (mod floor)
-  ('snapdragon-be-gateway',  '/oauth/**',             'ROLE_MOD',       true),  -- Mastodon OAuth (mod floor)
-  ('snapdragon-be-gateway',  '/_matrix/**',           'ROLE_USER',      true),  -- Matrix C-S API
-  ('snapdragon-be-gateway',  '/api/v1/**',            'ROLE_USER',      true),  -- Mastodon REST API
-  ('snapdragon-be-gateway',  '/oauth/**',             'ROLE_USER',      true),  -- Mastodon OAuth
+  -- ── PER-PLATFORM ACCESS roles (ban/congruence foundation) ─────────────────
+  -- The homeserver client surfaces are now gated by the per-PLATFORM access roles
+  -- ROLE_MATRIX / ROLE_MASTODON (seeded in manifests/casdoor/init-data-configmap.yaml),
+  -- NOT the broad ROLE_USER floor. Holding ROLE_USER alone no longer reaches Matrix
+  -- or Mastodon — a principal must hold the matching platform role. A platform BAN
+  -- is the ABSENCE of the role: removal makes every allow-predicate here false, so
+  -- the path becomes governed-but-ungranted -> DENY (no allow=false / ban row).
+  -- ADMIN/MOD remain a superset (paired on each row) because the
+  -- casdoorAuthoritiesConverter does NOT auto-grant the platform roles to them.
+  --
+  -- ⚠️ The broad ROLE_USER homeserver rows ( /_matrix/**, /api/v1/**, /oauth/** )
+  -- and the bare ROLE_MOD floor rows that used to live here were REMOVED at this
+  -- flip. DEPLOY-TOGETHER with the Casdoor seed+BACKFILL: every current homeserver
+  -- holder must be granted ROLE_MATRIX/ROLE_MASTODON BEFORE this row set reaches a
+  -- live cluster, or they lock out (see init-data-configmap.yaml deploy note).
+  --
+  -- Matrix client surface: /_matrix/** + the spec-required /.well-known/matrix/**
+  -- delegation + /_synapse/** (host-scoped catch-all on the matrix host so the
+  -- broader /api/** ROLE_USER floor below can never win the most-specific match on
+  -- a matrix-host request that lacks an /_matrix prefix).
+  ('snapdragon-be-gateway',  '/_matrix/**',               'ROLE_MATRIX',   true),  -- Matrix C-S API
+  ('snapdragon-be-gateway',  '/_matrix/**',               'ROLE_MOD',      true),  -- (mod superset)
+  ('snapdragon-be-gateway',  '/_matrix/**',               'ROLE_ADMIN',    true),  -- (admin superset)
+  ('snapdragon-be-gateway',  '/.well-known/matrix/**',    'ROLE_MATRIX',   true),  -- Matrix client/server discovery
+  ('snapdragon-be-gateway',  '/.well-known/matrix/**',    'ROLE_MOD',      true),  -- (mod superset)
+  ('snapdragon-be-gateway',  '/.well-known/matrix/**',    'ROLE_ADMIN',    true),  -- (admin superset)
+  ('snapdragon-be-gateway',  '/_synapse/**',              'ROLE_MATRIX',   true),  -- Synapse-compat surface (host-scoped)
+  ('snapdragon-be-gateway',  '/_synapse/**',              'ROLE_MOD',      true),  -- (mod superset)
+  ('snapdragon-be-gateway',  '/_synapse/**',              'ROLE_ADMIN',    true),  -- (admin superset)
+  -- Mastodon client surface: /api/v1/** + /api/v2/** + /oauth/** + media/streaming
+  -- (the host-scoped catch-alls so the /api/** ROLE_USER floor never wins on a
+  -- mastodon-host request).
+  ('snapdragon-be-gateway',  '/api/v1/**',                'ROLE_MASTODON', true),  -- Mastodon REST API v1
+  ('snapdragon-be-gateway',  '/api/v1/**',                'ROLE_MOD',      true),  -- (mod superset)
+  ('snapdragon-be-gateway',  '/api/v1/**',                'ROLE_ADMIN',    true),  -- (admin superset)
+  ('snapdragon-be-gateway',  '/api/v2/**',                'ROLE_MASTODON', true),  -- Mastodon REST API v2
+  ('snapdragon-be-gateway',  '/api/v2/**',                'ROLE_MOD',      true),  -- (mod superset)
+  ('snapdragon-be-gateway',  '/api/v2/**',                'ROLE_ADMIN',    true),  -- (admin superset)
+  ('snapdragon-be-gateway',  '/oauth/**',                 'ROLE_MASTODON', true),  -- Mastodon OAuth
+  ('snapdragon-be-gateway',  '/oauth/**',                 'ROLE_MOD',      true),  -- (mod superset)
+  ('snapdragon-be-gateway',  '/oauth/**',                 'ROLE_ADMIN',    true),  -- (admin superset)
+  ('snapdragon-be-gateway',  '/media/**',                 'ROLE_MASTODON', true),  -- Mastodon media
+  ('snapdragon-be-gateway',  '/media/**',                 'ROLE_MOD',      true),  -- (mod superset)
+  ('snapdragon-be-gateway',  '/media/**',                 'ROLE_ADMIN',    true),  -- (admin superset)
+  ('snapdragon-be-gateway',  '/api/v1/streaming/**',      'ROLE_MASTODON', true),  -- Mastodon streaming
+  ('snapdragon-be-gateway',  '/api/v1/streaming/**',      'ROLE_MOD',      true),  -- (mod superset)
+  ('snapdragon-be-gateway',  '/api/v1/streaming/**',      'ROLE_ADMIN',    true),  -- (admin superset)
   ('snapdragon-be-gateway',  '/api/admin/**',         'ROLE_ADMIN',     true),  -- snapdragon admin API (NOT ROLE_MOD)
   -- snapdragon-games NAMESPACE admin (games BFF /api/admin/** surface, namespaced
   -- under /games/** so it does NOT collide with the platform /api/admin/** row

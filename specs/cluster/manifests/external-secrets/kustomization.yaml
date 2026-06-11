@@ -9,3 +9,6 @@ resources:
   # kubernetes.io/tls Secrets <app>-mtls. Requires the Vault PKI engine (set up
   # by apps/06-vault-pki.yaml) + a per-namespace vault-token Secret.
   - pki-externalsecrets.yaml
+  # Homeserver mTLS proxy SERVER certs (akkoma-proxy/tuwunel-proxy) + the homeserver
+  # ADMIN tokens (akkoma-admin/tuwunel-admin) backing the gated admin-effect seam.
+  - homeserver-proxy-externalsecrets.yaml

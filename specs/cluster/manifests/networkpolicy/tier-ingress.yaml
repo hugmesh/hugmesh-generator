@@ -32,7 +32,19 @@ metadata:
   name: tier-ingress
   namespace: snapdragon-backend
 spec:
-  podSelector: {}
+  # EXCLUDES the homeserver (akkoma/tuwunel), their proxy sidecars, and akkoma-db
+  # from this BROAD namespace+frontend admittance — they are isolated per-pod by
+  # homeserver-isolation.yaml (reachable only from be-gateway + mod-bff + admin-bff
+  # + the sync jobs). k8s NetworkPolicy is additive with no exclude, so the broad
+  # from-set below MUST NOT select the homeserver pods or it would re-admit the
+  # whole namespace + frontend to them. The two app pods carry their proxy sidecar,
+  # so excluding app.kubernetes.io/name {akkoma,tuwunel,akkoma-db} covers the proxy
+  # ports too. Keep this list in sync with homeserver-isolation.yaml.
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: NotIn
+        values: [akkoma, tuwunel, akkoma-db]
   policyTypes: [Ingress]
   ingress:
     - from:

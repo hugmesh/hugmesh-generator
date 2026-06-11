@@ -85,6 +85,55 @@ data:
       database: "akkoma",
       hostname: "akkoma-db"
 ---
+# akkoma mTLS PROXY (nginx) sidecar config. Terminates a cluster-CA client cert on
+# :4443 (ssl_verify_client on — rejects any caller that does NOT present a cert
+# chaining to the cluster CA) and forwards plaintext to akkoma on localhost:4000.
+# Reuses the merged mTLS CLIENT-PRESENTATION machinery: the be-gateway / mod-bff /
+# admin-bff already present their Vault-PKI client certs (keystore.p12) to the
+# now-https backends, so they present the same cert here. The server cert + the
+# cluster CA come from the ESO Secret akkoma-proxy-mtls (see
+# manifests/external-secrets/homeserver-proxy-externalsecrets.yaml), mounted as PEM
+# at /pki. This is the SAME isolation pattern as the Spring APIs' server.ssl
+# client-auth=need, expressed for the non-JVM homeserver via an nginx front.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: akkoma-proxy-nginx
+  namespace: snapdragon-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: snapdragon.systems }
+data:
+  nginx.conf: |
+    worker_processes 1;
+    events { worker_connections 1024; }
+    http {
+      access_log off;
+      server {
+        listen 4443 ssl;
+        # Server identity (Vault-PKI/ESO akkoma-proxy-mtls).
+        ssl_certificate     /pki/tls.crt;
+        ssl_certificate_key /pki/tls.key;
+        # REQUIRE a client cert chaining to the cluster CA (mutual TLS).
+        ssl_client_certificate /pki/ca.crt;
+        ssl_verify_client on;
+        ssl_verify_depth 2;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        # Forward verified traffic to akkoma in the same pod (localhost:4000).
+        location / {
+          proxy_pass http://127.0.0.1:4000;
+          proxy_set_header Host              $host;
+          proxy_set_header X-Real-IP         $remote_addr;
+          proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto https;
+          # Surface the verified client identity to akkoma if it ever wants it.
+          proxy_set_header X-Client-Cert-DN  $ssl_client_s_dn;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade    $http_upgrade;
+          proxy_set_header Connection $http_connection;
+        }
+      }
+      map $http_upgrade $http_connection { default upgrade; "" close; }
+    }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: { name: akkoma-db, namespace: snapdragon-backend, labels: { app.kubernetes.io/name: akkoma-db } }
@@ -166,11 +215,44 @@ spec:
             httpGet: { path: /api/v1/instance, port: http }
             initialDelaySeconds: 30
             periodSeconds: 15
+        # ── mTLS proxy sidecar (akkoma-proxy) ────────────────────────────────
+        # Fronts akkoma on :4443 requiring a cluster-CA client cert and forwards to
+        # localhost:4000. The akkoma-proxy Service points at THIS port; the
+        # be-gateway/mod-bff/admin-bff repoint their mastodon base-urls to it. See
+        # the akkoma-proxy-nginx ConfigMap above + akkoma-proxy-mtls ESO Secret.
+        - name: proxy
+          image: nginxinc/nginx-unprivileged:1.27-alpine
+          ports: [{ name: mtls, containerPort: 4443 }]
+          volumeMounts:
+            - { name: proxy-conf, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf, readOnly: true }
+            - { name: proxy-pki,  mountPath: /pki, readOnly: true }
+          readinessProbe:
+            tcpSocket: { port: mtls }
+            initialDelaySeconds: 10
+            periodSeconds: 15
       volumes:
         - name: config
           configMap: { name: akkoma-config }
         - name: uploads
           persistentVolumeClaim: { claimName: akkoma-uploads }
+        - name: proxy-conf
+          configMap: { name: akkoma-proxy-nginx }
+        # Vault-PKI-issued server cert + cluster CA, synced by ESO (kubernetes.io/tls).
+        - name: proxy-pki
+          secret:
+            secretName: akkoma-proxy-mtls
+---
+# akkoma-proxy — the mTLS front the gateway/BFFs target instead of akkoma:4000.
+apiVersion: v1
+kind: Service
+metadata:
+  name: akkoma-proxy
+  namespace: snapdragon-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: akkoma }
+  ports: [{ name: mtls, port: 4443, targetPort: mtls }]
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
