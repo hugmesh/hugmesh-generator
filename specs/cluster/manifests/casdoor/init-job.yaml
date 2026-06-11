@@ -40,6 +40,14 @@ data:
         # then sees the PUBLIC fragments. Bind it to a ROLE_INTERNAL/ROLE_ADMIN-
         # mapping role here + in init_data.json IF internal fragments must sync.
         "fragment-sync": "ROLE_USER",
+        # client-credentials machine app for the signup-gate proxy: it mints a
+        # SERVICE JWT to call the INTERNAL/ROLE_SERVICE federation username
+        # availability endpoint (GET /api/federation/username/{candidate}/
+        # availability) BEFORE a self-signup username is accepted, rejecting a
+        # confusable/look-alike collision Casdoor's exact-only forbidden-list misses.
+        # See manifests/signup-gate/. Bound to ROLE_SERVICE in init_data.json so the
+        # minted token satisfies the endpoint's INTERNAL/ROLE_SERVICE gate.
+        "signup-gate": "ROLE_SERVICE",
     }
 
     cj = http.cookiejar.CookieJar()
@@ -193,6 +201,47 @@ data:
             call("/api/add-provider", provider, "POST")
             print("  added   discord provider")
 
+    def reconcile_signup_webhook():
+        """Register the POST-signup reconcile webhook so Casdoor notifies the
+        signup-gate proxy AFTER a user signup/update. This is the BACKSTOP to the
+        pre-signup proxy gate (manifests/signup-gate): the proxy re-checks the new
+        username against the federation availability endpoint and disables
+        (setForbidden) any confusable that slipped past the pre-gate (race /
+        backfill / ICU skeleton shift). The PRIMARY gate is the proxy in front of
+        the signup endpoint — Casdoor webhooks fire AFTER the fact, so they cannot
+        veto a signup, only reconcile it. Optional shared-secret from
+        signup-gate-webhook (header X-Signup-Gate-Secret).
+
+        !!! Casdoor's webhook object schema (events[], headers[], isEnabled) is
+        !!! version-specific — validate against the deployed casbin/casdoor before
+        !!! relying on auto-import; the pre-signup proxy gate works regardless."""
+        try:
+            secret = open("/secrets/webhook/secret").read().strip()
+        except FileNotFoundError:
+            secret = ""
+        url = ("http://signup-gate.snapdragon-pki.svc.cluster.local:8000"
+               "/casdoor/webhook")
+        webhook = {
+            "owner": "admin", "name": "signup-gate-reconcile",
+            "organization": ORG, "url": url, "method": "POST",
+            "contentType": "application/json",
+            # signup + user mutations — the events that can introduce a confusable.
+            "events": ["signup", "add-user", "update-user"],
+            "isUserExtended": True, "isEnabled": True,
+            "headers": ([{"name": "X-Signup-Gate-Secret", "value": secret}]
+                        if secret else []),
+        }
+        try:
+            existing = call("/api/get-webhook?id=admin/signup-gate-reconcile")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call("/api/update-webhook?id=admin/signup-gate-reconcile", webhook, "POST")
+            print("  updated signup-gate-reconcile webhook")
+        else:
+            call("/api/add-webhook", webhook, "POST")
+            print("  added   signup-gate-reconcile webhook")
+
     wait_ready()
     login()
     for name, role in APPS.items():
@@ -212,6 +261,10 @@ data:
         reconcile_discord_provider()
     except Exception as e:
         print(f"  WARN discord provider: {e}")
+    try:
+        reconcile_signup_webhook()
+    except Exception as e:
+        print(f"  WARN signup-gate webhook: {e}")
     print("casdoor-init: done")
 ---
 apiVersion: batch/v1
@@ -257,6 +310,7 @@ spec:
             - { name: google, mountPath: /secrets/google, readOnly: true }
             - { name: github, mountPath: /secrets/github, readOnly: true }
             - { name: discord, mountPath: /secrets/discord, readOnly: true }
+            - { name: webhook, mountPath: /secrets/webhook, readOnly: true }
       volumes:
         - name: script
           configMap: { name: casdoor-init-script, defaultMode: 0555 }
@@ -274,3 +328,8 @@ spec:
         # Discord federation client — optional; provider seeding is skipped if absent.
         - name: discord
           secret: { secretName: casdoor-discord, optional: true }
+        # signup-gate reconcile-webhook shared-secret — optional; the webhook is
+        # registered without a secret header if absent (pre-signup proxy gate is
+        # the primary enforcement regardless).
+        - name: webhook
+          secret: { secretName: signup-gate-webhook, optional: true }
