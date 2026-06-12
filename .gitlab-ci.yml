@@ -3,7 +3,7 @@
 # the admin UI can link to the latest builds. NOTE: ISOs contain NO keys — the
 # KEYS material is supplied from the USB stick at first boot, never baked in or
 # published.
-stages: [lint, iso, images, deliver]
+stages: [lint, iso, images, deliver, sca, dast]
 
 variables:
   # Where delivered ISOs live; the admin BFF reads "latest" links from here.
@@ -45,8 +45,8 @@ lint:prod-hygiene:
     # Bake a prod tree.
     - RELEASE_TAG="${CI_COMMIT_SHORT_SHA:-$(date -u +%Y%m%d)}"
     - rm -rf /tmp/prodbake && mkdir -p /tmp/prodbake && cp -r specs/cluster /tmp/prodbake/cluster
-    - rm -f /tmp/prodbake/cluster/apps/09-lan-dns.yaml /tmp/prodbake/cluster/apps/99-test-runner.yaml /tmp/prodbake/cluster/apps/00-app-of-apps-waved.yaml
-    - rm -rf /tmp/prodbake/cluster/manifests/test-runner
+    - rm -f /tmp/prodbake/cluster/apps/09-lan-dns.yaml /tmp/prodbake/cluster/apps/99-test-runner.yaml /tmp/prodbake/cluster/apps/98-pentest-runner.yaml /tmp/prodbake/cluster/apps/00-app-of-apps-waved.yaml
+    - rm -rf /tmp/prodbake/cluster/manifests/test-runner /tmp/prodbake/cluster/manifests/pentest-runner
     - >
       find /tmp/prodbake/cluster -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 |
       while IFS= read -r -d '' f; do
@@ -95,6 +95,36 @@ build:images:
     # the GitLab container registry.
     - echo "build + push container images to ${CI_REGISTRY_IMAGE}"
 
+# Build the ENV=test pentest-runner image — the single container the k8s pentest
+# CronJob + Job (specs/cluster/manifests/pentest-runner/) and the superadmin
+# UI-triggered run use. It bundles the OWASP toolchain (ZAP + Dependency-Check +
+# nuclei) + k6 + the tests/pentest harness so one image drives spin->seed->scan->
+# report in-cluster. Pushed to registry.snapdragon.systems/snapdragon-pentest-runner.
+# Additive to build:images; this whole TEST-tier image never ships to prod (the
+# manifests that reference it carry snapdragon.systems/tier: test and are pruned).
+build:pentest-runner-image:
+  stage: images
+  tags: [snapdragon-x86, privileged]
+  variables:
+    PENTEST_IMAGE: "registry.snapdragon.systems/snapdragon-pentest-runner"
+  script:
+    # Buildah/podman on the privileged runner; the Dockerfile lives next to the
+    # harness so the build context is tests/pentest (ZAP plan + probes + wrappers).
+    - >
+      buildah bud
+      -f tests/pentest/Dockerfile
+      -t "${PENTEST_IMAGE}:dev"
+      -t "${PENTEST_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+      tests/pentest
+    - buildah push "${PENTEST_IMAGE}:dev"
+    - buildah push "${PENTEST_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+  rules:
+    # Only build when the harness or its Dockerfile changes, plus on the default
+    # branch + scheduled pipelines (so the CronJob always has a fresh :dev).
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - changes: [tests/pentest/**/*]
+
 # Publish each ISO to the generic package registry under a stable "latest" path
 # so the admin UI's download links never change.
 deliver:isos:
@@ -111,3 +141,138 @@ deliver:isos:
       done
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
+
+# =============================================================================
+# sca — OWASP Dependency-Check SCA over the org's first-party repos.
+#
+# A parallel:matrix fans one job out per repo so a single noisy repo's CVEs don't
+# mask the others, and so the HTML+SARIF artifacts are per-repo. Each job clones
+# the target repo from the GitLab org mirror, runs Dependency-Check with
+# --failOnCVSS 7 (a CVSS>=7 finding fails THAT repo's job), and persists the NVD
+# feed in a CI cache keyed on the feed month so re-runs don't re-download ~250MB.
+#
+# snapdragon.games is DELIBERATELY EXCLUDED from this matrix: it is a DISTINCT
+# stack with its OWN .gitlab-ci.yml that runs SCA in its own pipeline (incl. its
+# Rust bridge) — see snapdragon-pentest-standard "TWO SEPARATE WORKFLOWS" + PR6.
+# Likewise the static sites (usidiamond.github.io) + the generator-meta repos that
+# carry no dependency manifest are out of scope here.
+sca:dependency-check:
+  stage: sca
+  image:
+    name: owasp/dependency-check:latest
+    entrypoint: [""]
+  tags: [snapdragon-x86]
+  parallel:
+    matrix:
+      - REPO:
+          - snapdragon-gateway
+          - snapdragon-fe-gateway
+          - snapdragon-be-gateway
+          - snapdragon-pki-gateway
+          - snapdragon-admin-bff-api
+          - snapdragon-mod-bff-api
+          - snapdragon-user-bff-api
+          - snapdragon-forum-bff-api
+          - snapdragon-federation-api
+          - snapdragon-admin-ui
+          - snapdragon-mod-ui
+          - snapdragon-user-ui
+          - snapdragon-login-ui
+          - snapdragon-forum-ui
+          - snapdragon-matrix-ui
+          - snapdragon-mastodon-ui
+          - snapdragon-remote-fragment
+          - snapdragon-actions
+          - snapdragon-api-docs
+          - snapdragon-generator
+        # NOTE: snapdragon.games is intentionally NOT in this list — it owns its
+        # own pipeline + SCA stage (the games two-Casdoor stack, incl. the Rust
+        # snapdragon-bridge). Adding it here would double-scan + cross workflows.
+  cache:
+    # Persist the NVD feed across runs. Keyed on the feed month so the monthly
+    # full-feed refresh rotates the cache without an unbounded stale entry.
+    key: "nvd-cache-$CI_COMMIT_REF_SLUG-$(date +%Y%m 2>/dev/null || echo feed)"
+    paths: [.nvd-cache/]
+  variables:
+    GIT_STRATEGY: none   # we clone the *target* repo, not check this one out.
+  before_script:
+    - mkdir -p .nvd-cache reports/${REPO}
+    # Clone the matrix repo from the same org mirror this pipeline lives in,
+    # using the CI job token (read-only, no secret committed).
+    - ORG_BASE="$(dirname "${CI_REPOSITORY_URL}")"
+    - git clone --depth 1 "${ORG_BASE}/${REPO}.git" "src/${REPO}" || git clone --depth 1 "${ORG_BASE%/}/${REPO}.git" "src/${REPO}"
+  script:
+    - >
+      /usr/share/dependency-check/bin/dependency-check.sh
+      --project "snapdragon-${REPO}"
+      --scan "src/${REPO}"
+      --out "reports/${REPO}"
+      --data ".nvd-cache"
+      --failOnCVSS 7
+      --enableExperimental
+      --format HTML --format SARIF --format JSON
+      ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"}
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - reports/${REPO}/dependency-check-report.html
+      - reports/${REPO}/dependency-check-report.sarif
+      - reports/${REPO}/dependency-check-report.json
+    reports:
+      # Surface findings in the MR security widget (GitLab reads SARIF here).
+      sast: reports/${REPO}/dependency-check-report.sarif
+  rules:
+    # On every MR + the default branch (gate new High/Critical) and on schedule
+    # (the nightly full feed refresh). NEVER on the games-only ref.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+
+# =============================================================================
+# dast — authenticated OWASP ZAP DAST against a spun-up two-brand env-test-build,
+# driven by the SHARED harness (tests/pentest/run-pentest.sh). The harness stands
+# up the compose env-test-build, seeds the attacker + load personas across
+# brandA/brandB (seed-personas.sh, creds from CI variables — NEVER git), scans as
+# every persona, and merges ZAP+SCA+probe findings into the scorecard + SARIF.
+#
+#   dast:main-baseline  runs on every MR + the default branch — fast feedback:
+#                       passiveScan + spider + the custom boundary probes.
+#   dast:main-full      runs ONLY on a scheduled pipeline (the nightly cadence) —
+#                       the above + the ENABLED activeScan.
+#
+# Needs Docker (the harness spins compose + runs the zaproxy image), so it lands
+# on the privileged x86 runner, same tag convention as build:isos.
+.dast-base:
+  stage: dast
+  tags: [snapdragon-x86, privileged]
+  variables:
+    # The harness reads creds for the throwaway TEST realm from CI variables at
+    # runtime (masked/protected in GitLab) and never writes them to git. See
+    # tests/pentest/seed-personas.sh + the test-seed-passwords contract.
+    PENTEST_REPORTS: "${CI_PROJECT_DIR}/out/pentest"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths: [out/pentest/]
+  # The env-test-build stand-up is inherently flaky (two stacks + empty-Casdoor
+  # first boot); a non-blocking retry on the runner-system/stuck classes only.
+  retry:
+    max: 1
+    when: [runner_system_failure, stuck_or_timeout_failure]
+
+dast:main-baseline:
+  extends: .dast-base
+  script:
+    - bash tests/pentest/run-pentest.sh --env compose --scan baseline --pipeline main
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+dast:main-full:
+  extends: .dast-base
+  timeout: 3h   # active scan over every persona/brand is long.
+  script:
+    - bash tests/pentest/run-pentest.sh --env compose --scan full --pipeline main
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
