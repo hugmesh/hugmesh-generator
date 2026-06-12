@@ -271,9 +271,17 @@ provision_users() {
 
     # root account
     if jq -e '.root' "${f}" >/dev/null 2>&1; then
-        local rhash
+        local rhash rlocked
         rhash="$(jq -r '.root.password_hash // ""' "${f}")"
-        if [ -n "${rhash}" ]; then
+        rlocked="$(jq -r '.root.locked // false' "${f}")"
+        # HARDENED DEFAULT: with .root.locked=true (or no hash supplied) root login
+        # is DISABLED — `passwd -l root` locks the password field and PermitRootLogin
+        # prohibit-password (sshd hardened.conf) already blocks root password SSH.
+        # Only an explicit non-empty .root.password_hash with locked!=true enables it.
+        if [ "${rlocked}" = "true" ] || [ -z "${rhash}" ]; then
+            passwd -l root >/dev/null 2>&1 && log "root login LOCKED (passwd -l root — no root password)" \
+                || warn "failed to lock root account"
+        else
             printf 'root:%s\n' "${rhash}" | chpasswd -e && log "Set root password hash"
         fi
         install_root_keys "${f}"

@@ -15,8 +15,10 @@
       ]
     }
   ],
+  "_comment_root": "HARDENED DEFAULT: root login is LOCKED. gen-provision-keys.sh leaves password_hash empty + locked:true unless --root-password (or GEN_ROOT_PASSWORD=true) is given, in which case it stores a SALTED+HASHED password here (never plaintext) and sets locked:false. provision.sh runs `passwd -l root` when locked/empty. Operators reach the node via the privileged user over Tailscale SSH (break-glass ssh/root.authorized_keys on worker sticks).",
   "root": {
-    "password_hash": "REPLACE_WITH_SHA512_CRYPT_HASH",
+    "password_hash": "",
+    "locked": true,
     "ssh_authorized_keys": []
   }
 }
