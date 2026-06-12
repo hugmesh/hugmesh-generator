@@ -76,10 +76,19 @@ Options:
   -o, --out DIR       Output directory. Default: ${OUT_DIR}
   -t, --template DIR  Template to copy. Default: ${TEMPLATE}
   -u, --admin NAME    Admin username. Default: admin
-  -r, --role ROLE     pki | backend | frontend | host | control-plane-additional. Default: pki
+  -r, --role ROLE     pki | backend | frontend | host | control-plane-additional |
+                      mesh-extension. Default: pki
                       (control-plane-additional = a 2nd/3rd HA control-plane that
                        kubeadm join --control-plane's the existing cluster)
+                      (mesh-extension = an ADMIN-owned Layer-B registry-ENFORCED
+                       node — the ONLY role that emits KEYS/device-registry/ and
+                       selects owner_type=ADMIN sshd enforcement)
                       pki = FULL config + default user accounts; workers = KEYS ONLY (no users.json).
+      --registry-pub FILE  Layer-B (mesh-extension role): the BAKED public verifying
+                      half of the BFF device-registry signing key (PEM or base64
+                      X.509 SPKI DER). NEVER a private key. Absent => a PLACEHOLDER
+                      is written that fails CLOSED until replaced on the key-USB.
+                      (env: REGISTRY_PUB / REGISTRY_PUB_FILE)
       --random        Generate random passwords instead of prompting (hashes are
                       written to the key-USB config; NOT echoed in plaintext).
       --root-password Generate a ROOT password too (default: NO root password —
@@ -125,6 +134,7 @@ while [[ $# -gt 0 ]]; do
         --ca-key)      CA_KEY="$2"; shift 2 ;;
         --ca-key-pass) CA_KEY_PASS="$2"; shift 2 ;;
         --keys-src)    KEYS_SRC="$2"; shift 2 ;;
+        --registry-pub) REGISTRY_PUB_FILE="$2"; shift 2 ;;   # Layer-B: baked verifying key (mesh-extension role)
         -h|--help)     usage 0 ;;
         *)             echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
@@ -149,9 +159,104 @@ case "${ROLE}" in
         # Additional HA control-plane: kubeadm join --control-plane (needs the
         # first CP's token + ca_cert_hash + certificate_key + shared kubernetes/pki).
         cp "${OUT_DIR}/examples/provision.control-plane-additional.json" "${OUT_DIR}/provision.json" ;;
-    *) echo "ERROR: --role must be pki|backend|frontend|host|control-plane-additional" >&2; exit 1 ;;
+    mesh-extension)
+        # ADMIN-owned mesh-extension node (Layer-B registry-ENFORCED). Today the
+        # admin image_builder path is the documented TODO, so we reuse the `host`
+        # worker manifest as the base (KEYS-only, joins the mesh) and stamp the
+        # device_registry block below so provision_device_registry() selects
+        # owner_type=ADMIN. This is the ONLY role that emits KEYS/device-registry/.
+        cp "${OUT_DIR}/examples/provision.host.json" "${OUT_DIR}/provision.json" ;;
+    *) echo "ERROR: --role must be pki|backend|frontend|host|control-plane-additional|mesh-extension" >&2; exit 1 ;;
 esac
 rm -rf "${OUT_DIR}/examples"
+
+# The keys-template ships a device-registry/ doc dir (its README is deleted with
+# the others above). Remove the now-empty dir for EVERY role except the ADMIN
+# mesh-extension role (which repopulates it below) so SUPERADMIN/primary keys-out
+# carry NO device-registry material at all.
+[ "${ROLE}" = "mesh-extension" ] || rm -rf "${OUT_DIR}/device-registry"
+
+# ── Layer-B device-license registry: per-node identity + verifying key ─────────
+# ONLY the ADMIN-owned `mesh-extension` role emits this. SUPERADMIN/primary roles
+# (pki|backend|frontend|host|control-plane-additional) emit NOTHING new — they keep
+# the #66 owner-key sshd path; provision_device_registry() no-ops on them.
+#
+# Emitted under KEYS/device-registry/ (consumed by provision_device_registry):
+#   * registry-pub.ed25519  — the BAKED public verifying half of the BFF signing
+#       key (base64 X.509 SPKI DER == RegistrySigner.publicKeyBase64()). Sourced
+#       OUT-OF-BAND: --registry-pub FILE, else REGISTRY_PUB env/brand.conf, else a
+#       PLACEHOLDER is written (the operator MUST replace it on the key-USB — a
+#       placeholder fails CLOSED, never authorises). NEVER a real signing PRIVATE
+#       key, NEVER committed to git.
+#   * machine_key_fp        — the node's headscale machine-key fp; if minted only
+#       at `tailscale up`, left EMPTY here and pinned POST-join by provision.
+#   * mesh_id               — the node's mesh id (also stamped into provision.json
+#       .device_registry.mesh_id).
+if [ "${ROLE}" = "mesh-extension" ]; then
+    DR_DIR="${OUT_DIR}/device-registry"
+    mkdir -p "${DR_DIR}"
+
+    # Stamp the manifest so provision_device_registry() selects owner_type=ADMIN.
+    PROV="${OUT_DIR}/provision.json"
+    DR_MESH_ID="${REGISTRY_MESH_ID:-${MESH_ID:-}}"
+    [ -f "${PROV}" ] && DR_MESH_ID="${DR_MESH_ID}" python3 - "${PROV}" <<'PY'
+import json, os, sys
+f = sys.argv[1]
+d = json.load(open(f))
+dr = d.setdefault("device_registry", {})
+dr["owner_type"] = "ADMIN"
+dr["image_type"] = "mesh-extension"
+mesh = os.environ.get("DR_MESH_ID", "")
+if mesh:
+    dr["mesh_id"] = mesh
+# BFF /export transport (the SUPERADMIN-equivalent in-cluster mTLS identity). Left
+# as overridable placeholders; a missing URL/cert makes the sync agent a verified
+# no-op (bootstrap/offline) — the node fail-closes to break-glass + the baked key.
+dr.setdefault("bff_export_url", os.environ.get("REGISTRY_BFF_URL", ""))
+dr.setdefault("bff_client_cert", os.environ.get("REGISTRY_BFF_CLIENT_CERT", ""))
+dr.setdefault("bff_client_key", os.environ.get("REGISTRY_BFF_CLIENT_KEY", ""))
+json.dump(d, open(f, "w"), indent=2)
+PY
+
+    # mesh_id file (provision also reads .device_registry.mesh_id / .mesh.id).
+    printf '%s\n' "${DR_MESH_ID}" > "${DR_DIR}/mesh_id"
+
+    # machine_key_fp: baked if known up-front (REGISTRY_MACHINE_KEY_FP), else EMPTY
+    # so provision pins it POST-`tailscale up` (write-once). It MUST equal the fp
+    # the admin-bff stored in device_registry.machine_key_fp — alignment is the
+    # highest-risk integration point (see device-registry README).
+    printf '%s\n' "${REGISTRY_MACHINE_KEY_FP:-}" > "${DR_DIR}/machine_key_fp"
+
+    # registry-pub.ed25519: the BAKED public verifying half. NEVER a private key.
+    REGISTRY_PUB_FILE="${REGISTRY_PUB_FILE:-}"
+    if [ -n "${REGISTRY_PUB_FILE}" ] && [ -f "${REGISTRY_PUB_FILE}" ]; then
+        # Accept either a PEM (-----BEGIN PUBLIC KEY-----) or raw base64 SPKI DER;
+        # normalise to the base64-SPKI-DER one-liner the node verifies with.
+        if grep -q 'BEGIN PUBLIC KEY' "${REGISTRY_PUB_FILE}" 2>/dev/null; then
+            openssl pkey -pubin -in "${REGISTRY_PUB_FILE}" -outform DER 2>/dev/null \
+                | base64 -w0 > "${DR_DIR}/registry-pub.ed25519"
+        else
+            tr -d '[:space:]' < "${REGISTRY_PUB_FILE}" > "${DR_DIR}/registry-pub.ed25519"
+        fi
+        echo "  ${DR_DIR}/registry-pub.ed25519  (BAKED registry verifying key from ${REGISTRY_PUB_FILE})"
+    elif [ -n "${REGISTRY_PUB:-}" ]; then
+        printf '%s' "${REGISTRY_PUB}" | tr -d '[:space:]' > "${DR_DIR}/registry-pub.ed25519"
+        echo "  ${DR_DIR}/registry-pub.ed25519  (BAKED registry verifying key from REGISTRY_PUB env)"
+    else
+        # PLACEHOLDER — fails CLOSED. The operator MUST replace this on the key-USB
+        # with the brand's real public half before the node can verify any export.
+        cat > "${DR_DIR}/registry-pub.ed25519" <<'PLACEHOLDER'
+# PLACEHOLDER — NOT A REAL KEY. Replace with the base64 X.509 SPKI DER of the
+# brand's device-registry signing public half (RegistrySigner.publicKeyBase64()).
+# Until replaced, Layer-B fail-closes: the node denies ALL ssh except the
+# console break-glass. NEVER place a PRIVATE key here.
+PLACEHOLDER
+        echo "  ${DR_DIR}/registry-pub.ed25519  (PLACEHOLDER — replace on the key-USB with the real public half; fails CLOSED until then)"
+        echo "    -> set --registry-pub FILE / REGISTRY_PUB env, or drop the real key onto the USB."
+    fi
+    chmod 0644 "${DR_DIR}/"* 2>/dev/null || true
+    echo "  ${DR_DIR}/  (Layer-B ADMIN mesh-extension node identity + verifying key)"
+fi
 
 # ── SSH keypair (break-glass) ──────────────────────────────────────
 mkdir -p "${OUT_DIR}/ssh"

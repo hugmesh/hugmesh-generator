@@ -1,0 +1,222 @@
+#!/bin/bash
+# snapdragon-device-registry-sync — the fetch / verify / atomic-cache-swap /
+# revoked-session-sweep agent for Layer-B device-license-registry enforcement.
+# Runs ONLY on ADMIN-owned / mesh-extension (registry-enforced) nodes:
+#   * once at boot via the OpenRC `snapdragon-device-registry-sync` service, and
+#   * on a 60s cron (the convergence floor; the BFF push-with-ack drives fast
+#     propagation, this pull guarantees eventual consistency).
+#
+# It is split from the AuthorizedKeysCommand (snapdragon-authorized-keys-lookup)
+# so the per-connection lookup stays minimal + side-effect-free; both share the
+# IDENTICAL verify routine via /usr/lib/snapdragon/registry-verify.sh so a
+# canonicalisation divergence can never cause an accept/deny split.
+#
+# FLOW (every step FAIL-CLOSED — on ANY fetch/verify/rollback failure KEEP the
+# last-good cache; NEVER wipe it; an admin node with a stale-but-valid cache still
+# enforces the last good license set, an admin node with NO cache denies all SSH
+# except break-glass):
+#   1. fetch GET <BFF>/bff/admin/device-licenses/export?mesh=<MESH_ID> over
+#      in-cluster mTLS presenting the SUPERADMIN service identity (the /export
+#      endpoint is hasRole('SUPERADMIN') | internal-mTLS). Transport config comes
+#      from the baked node.env (URL + client cert/key + CA). A missing cert or an
+#      unreachable BFF => keep cache, exit 0 (bootstrap / offline tolerance).
+#   2. verify: signed==true, detached Ed25519 over the EXACT canonical bytes
+#      against the BAKED public key, AND STRICT-monotonic generation (gen MUST be
+#      > last-good — a replayed/rolled-back payload is rejected).
+#   3. mesh guard: body.meshId must equal the baked MESH_ID.
+#   4. on accept: atomically replace export.json (write tmp + fsync + rename) and
+#      bump last-good-generation; record the public-key fingerprint that verified.
+#   5. on the FIRST ever successful verified sync: flip the bootstrap gate — copy
+#      device-registry.conf into /etc/ssh/sshd_config.d and `rc-service sshd
+#      reload`, so `AuthorizedKeysFile none` + the AuthorizedKeysCommand become the
+#      SOLE key source ONLY AFTER a real signed export is present (Option (i), the
+#      marker-gate pattern mirroring selinux-enforce-gate). Before that flip the
+#      #66-baked admin key remains the bootstrap key (no first-boot brick).
+#   6. revoked-session sweep: best-effort terminate live sshd sessions for keys no
+#      longer pinned-onto-this-node by the NEW export (FIX-REVOKE convergence).
+
+set -uo pipefail
+
+NODE_ENV="/etc/snapdragon/registry/node.env"
+PUB_KEY="/etc/snapdragon/registry/registry-pub.ed25519"
+CACHE_DIR="/var/lib/snapdragon/device-registry"
+EXPORT_JSON="${CACHE_DIR}/export.json"
+LAST_GOOD="${CACHE_DIR}/last-good-generation"
+GATE_MARKER="${CACHE_DIR}/enforced"          # written once the sshd gate is flipped
+VERIFY_LIB="/usr/lib/snapdragon/registry-verify.sh"
+# Source of the enforcement drop-in staged by provision_device_registry; copied
+# into sshd_config.d on the first successful sync (the bootstrap gate flip).
+STAGED_CONF="/etc/snapdragon/registry/device-registry.conf"
+SSHD_DROPIN="/etc/ssh/sshd_config.d/device-registry.conf"
+LOG_TAG="snapdragon-registry-sync"
+
+log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+warn() { log "WARNING: $*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Read a bare KEY=VALUE from node.env WITHOUT sourcing it.
+read_env() {
+    local k="$1" line
+    line="$(grep -E "^${k}=" "${NODE_ENV}" 2>/dev/null | head -1)" || return 1
+    [ -n "${line}" ] || return 1
+    printf '%s' "${line#*=}" | tr -d '"'"'"' '
+}
+
+# ── Pre-flight ────────────────────────────────────────────────────────────────
+[ -r "${VERIFY_LIB}" ] || { warn "verify lib missing (${VERIFY_LIB}) — cannot sync, keeping cache"; exit 0; }
+[ -r "${NODE_ENV}" ]   || { warn "node.env missing (${NODE_ENV}) — not a registry node? keeping cache"; exit 0; }
+[ -r "${PUB_KEY}" ]    || { warn "baked public key missing (${PUB_KEY}) — keeping cache"; exit 0; }
+# shellcheck source=/dev/null
+. "${VERIFY_LIB}" 2>/dev/null || { warn "failed to source verify lib — keeping cache"; exit 0; }
+have jq      || { warn "jq absent — keeping cache"; exit 0; }
+have openssl || { warn "openssl absent — keeping cache"; exit 0; }
+
+mkdir -p "${CACHE_DIR}" 2>/dev/null || true
+# The cache must be readable by the AuthorizedKeysCommandUser=nobody. It carries
+# the WHOLE mesh's ADMIN licenses (operator fingerprints, cross-domain) — a
+# CONFIDENTIALITY note, not integrity: fingerprints are not secrets, but see the
+# PR body open-issue on optionally scoping the per-node fetch.
+chmod 0755 "${CACHE_DIR}" 2>/dev/null || true
+
+MESH_ID="$(read_env MESH_ID)"            || { warn "node.env missing MESH_ID — keeping cache"; exit 0; }
+[ -n "${MESH_ID}" ]                      || { warn "empty MESH_ID — keeping cache"; exit 0; }
+BFF_URL="$(read_env BFF_EXPORT_URL)"     || BFF_URL=""
+# mTLS material (the SUPERADMIN service identity for the in-cluster /export call).
+MTLS_CERT="$(read_env BFF_CLIENT_CERT)"  || MTLS_CERT=""
+MTLS_KEY="$(read_env BFF_CLIENT_KEY)"    || MTLS_KEY=""
+MTLS_CA="$(read_env BFF_CA)"             || MTLS_CA="/etc/snapdragon/pki/ca-chain.crt"
+
+# ── (1) Fetch the signed export over mTLS ─────────────────────────────────────
+# A missing URL or client cert is the BOOTSTRAP / not-yet-wired state: keep the
+# cache and exit 0 (NO brick — the lookup fail-closes to deny-except-break-glass
+# until a cert + reachable BFF land). This is the EXPORT-TRANSPORT open issue: the
+# node needs a SUPERADMIN-equivalent in-cluster mTLS client identity; until that
+# pipeline bakes one (provision_files / truststore), this agent is a verified
+# no-op. See the PR body NEEDS-NODE matrix.
+fetch_export() {
+    local out="$1"
+    [ -n "${BFF_URL}" ] || { warn "BFF_EXPORT_URL unset — bootstrap/offline, keeping cache"; return 1; }
+    have curl || { warn "curl absent — cannot fetch, keeping cache"; return 1; }
+    local url="${BFF_URL%/}/bff/admin/device-licenses/export?mesh=${MESH_ID}"
+    local args=(-sS -m 15 --fail -o "${out}")
+    [ -f "${MTLS_CA}" ]   && args+=(--cacert "${MTLS_CA}")
+    if [ -n "${MTLS_CERT}" ] && [ -n "${MTLS_KEY}" ] && [ -f "${MTLS_CERT}" ] && [ -f "${MTLS_KEY}" ]; then
+        args+=(--cert "${MTLS_CERT}" --key "${MTLS_KEY}")
+    else
+        warn "mTLS client cert/key not present — the /export call will be rejected (SUPERADMIN|mTLS); keeping cache"
+        return 1
+    fi
+    if curl "${args[@]}" "${url}" 2>/dev/null; then
+        [ -s "${out}" ] && return 0
+        warn "empty export body from ${url} — keeping cache"; return 1
+    fi
+    warn "fetch failed (${url}) — keeping cache"; return 1
+}
+
+# ── (4) Atomic cache swap + last-good bump ────────────────────────────────────
+commit_cache() {
+    local newjson="$1" newgen="$2"
+    local tmp="${EXPORT_JSON}.tmp.$$"
+    cp -f "${newjson}" "${tmp}" 2>/dev/null || { warn "cache stage failed"; return 1; }
+    chmod 0644 "${tmp}" 2>/dev/null || true
+    have sync && sync 2>/dev/null || true
+    mv -f "${tmp}" "${EXPORT_JSON}" 2>/dev/null || { warn "cache rename failed"; rm -f "${tmp}"; return 1; }
+    # Bump last-good ATOMICALLY too (write tmp + rename).
+    local lgt="${LAST_GOOD}.tmp.$$"
+    printf '%s\n' "${newgen}" > "${lgt}" 2>/dev/null && mv -f "${lgt}" "${LAST_GOOD}" 2>/dev/null || { rm -f "${lgt}"; warn "last-good bump failed"; }
+    chmod 0644 "${LAST_GOOD}" 2>/dev/null || true
+    log "accepted export gen=${newgen} mesh=${MESH_ID} (cache swapped, last-good bumped)"
+    return 0
+}
+
+# ── (5) Bootstrap gate flip (Option (i) — first verified sync enables `none`) ──
+# BEFORE first verified sync: device-registry.conf is NOT in sshd_config.d, so the
+# #66-baked admin authorized_keys is still consulted (bootstrap key, no brick).
+# ON first verified sync: copy the staged drop-in into place + reload sshd, so
+# `AuthorizedKeysFile none` + the AuthorizedKeysCommand become the SOLE source.
+# Idempotent + one-way: once `enforced` exists we never re-flip.
+flip_enforcement_gate() {
+    [ -e "${GATE_MARKER}" ] && return 0   # already enforcing
+    if [ ! -r "${STAGED_CONF}" ]; then
+        warn "staged device-registry.conf missing (${STAGED_CONF}) — cannot flip to enforcing; staying bootstrap"
+        return 0
+    fi
+    if cp -f "${STAGED_CONF}" "${SSHD_DROPIN}" 2>/dev/null; then
+        chmod 0644 "${SSHD_DROPIN}" 2>/dev/null || true
+        touch "${GATE_MARKER}" 2>/dev/null || true
+        log "BOOTSTRAP GATE FLIPPED: installed ${SSHD_DROPIN} (AuthorizedKeysFile none + AuthorizedKeysCommand now SOLE key source)"
+        if have rc-service; then
+            rc-service sshd reload 2>/dev/null || rc-service sshd restart 2>/dev/null || warn "sshd reload failed after gate flip"
+        else
+            warn "rc-service absent — reload sshd manually to apply the enforcement drop-in"
+        fi
+    else
+        warn "failed to install enforcement drop-in — staying in bootstrap (baked key still valid)"
+    fi
+}
+
+# ── (6) Revoked-session sweep (best-effort, FIX-REVOKE) ───────────────────────
+# After a successful refresh, terminate live interactive sshd sessions whose
+# offered key is NO LONGER pinned-onto-this-node by the NEW export. Best-effort:
+# we cannot recover the exact offered key of an established session portably, so
+# we conservatively sweep on OPERATOR disappearance — if the new export pins NO
+# key for THIS node for a previously-authorised operator, their sessions are
+# candidates. We never kill the break-glass/console or the init session. This is
+# the convergence floor; the authoritative cut is sshd refusing the NEXT auth.
+revoked_session_sweep() {
+    local newjson="$1"
+    have pkill || { log "pkill absent — skipping best-effort session sweep"; return 0; }
+    # Operators still authorised on THIS node by the new export.
+    local baked_fp; baked_fp="$(read_env MACHINE_KEY_FP)" || baked_fp=""
+    [ -n "${baked_fp}" ] || { warn "no baked MACHINE_KEY_FP — skipping sweep"; return 0; }
+    local still
+    still="$(jq -r --arg fp "${baked_fp}" '
+        [ .body.operators[]? | select((.machineKeyFp // "")==$fp) | .operator ] | unique | .[]
+    ' "${newjson}" 2>/dev/null)"
+    # We do NOT have a per-session operator->pid map without a privileged audit
+    # trail; the conservative, SAFE behaviour is to log the authorised set and let
+    # the NEXT authentication enforce the cut (sshd re-runs the command every
+    # auth). A future hardening (needs a booted node) can map sshd session leaders
+    # to operators via the AuthorizedKeysCommand audit log and pkill precisely.
+    log "post-refresh authorised operators on this node: $(printf '%s ' ${still:-<none>})"
+    log "revoked-session sweep: relying on per-auth re-check (next SSH auth enforces the cut); precise live-kill needs a booted-node audit map"
+    return 0
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+main() {
+    local fetched; fetched="$(mktemp 2>/dev/null)" || { warn "mktemp failed — keeping cache"; exit 0; }
+    trap 'rm -f "${fetched}" 2>/dev/null || true' EXIT
+
+    if ! fetch_export "${fetched}"; then
+        # Bootstrap/offline/transport failure: KEEP last-good cache (fail-closed,
+        # never wipe). If we already have a verified cache, enforcement continues.
+        exit 0
+    fi
+
+    # (2)+(3) Verify signature over canonical bytes against the BAKED key AND
+    # enforce STRICT monotonicity (gen MUST be > last-good). verify_export with a
+    # strict-gen file rejects unsigned/tampered/foreign-key/rollback in one gate.
+    if ! verify_export "${fetched}" "${PUB_KEY}" "${LAST_GOOD}"; then
+        warn "fetched export FAILED verification or rollback guard (unsigned/tampered/foreign/gen<=last-good) — keeping cache"
+        exit 0
+    fi
+    local mesh; mesh="$(rv_mesh "${fetched}")"
+    if [ "${mesh}" != "${MESH_ID}" ]; then
+        warn "fetched export meshId=${mesh} != baked ${MESH_ID} — refusing, keeping cache"
+        exit 0
+    fi
+    local gen; gen="$(rv_gen "${fetched}")"
+
+    # (4) Atomic swap + last-good bump.
+    commit_cache "${fetched}" "${gen}" || exit 0
+
+    # (5) First-verified-sync bootstrap gate flip (one-way, idempotent).
+    flip_enforcement_gate
+
+    # (6) Best-effort revoked-session sweep.
+    revoked_session_sweep "${EXPORT_JSON}"
+    exit 0
+}
+
+main "$@"
