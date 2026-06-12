@@ -1,0 +1,191 @@
+# =============================================================================
+# optional-services.yaml — the SINGLE source-of-truth registry for the OPTIONAL
+# (non-architecture) services that an operator may ADD or REMOVE by command on
+# ANY generated USB image, regardless of platform (Pi5 arm64 / x86 amd64 / mix).
+# =============================================================================
+#
+# The platform splits into two tiers:
+#   * ARCHITECTURE (core, always present): gateways (pki/be/fe), Casdoor/PKI, the
+#     federation API + remote-fragment + host shell, admin/user/mod BFFs + UIs.
+#   * OPTIONAL services (THIS file): akkoma (Mastodon), tuwunel (Matrix), phpbb
+#     (forum), games. Add/remove-by-command; the rest of the stack degrades
+#     gracefully (greyed-out, never 500/502) when any/all of them are omitted.
+#
+# This file is the ONE list that names the installed set. Today "presence of a
+# YAML in apps/ IS the decision" (app-of-apps recurse:true + prune:true), but
+# nothing enumerates the optional set — this registry is that missing list.
+#
+# WHO READS IT:
+#   * BUILD-TIME: gate_optional_services() in build-x86-host-stage4.sh /
+#     build-rpi5-stage4.sh prunes everything an unselected slug OWNS from the
+#     baked GitOps tree (its apps/*.yaml, gateway host-route entries, ESO half,
+#     route-access rows). Driven by OPTIONAL_SERVICES (brand.conf) +
+#     --optional-services (CLI). Precedence: built-in default (all on) <
+#     brand.conf < CLI flag.
+#   * RUNTIME (model): rendered into the installed-services ConfigMap
+#     (manifests/policy/installed-services-configmap.yaml) that the
+#     13-service-catalog-style optional-services ApplicationSet keys off, so a
+#     live add/remove flips ONE list instead of editing baked files the running
+#     ArgoCD never re-reads (see docs/OPTIONAL-SERVICES.md, "Runtime add/remove").
+#
+# EDIT THIS ONE FILE; the generator derives the rest. Keep it in sync with the
+# reserved-prefixes.yaml labels (games/forum/phpbb/mastodon/matrix are already
+# reserved) and the apps/ tree.
+#
+# ⚠️ KNOWN CROSS-FILE COUPLINGS the build-time gate must honor (verified):
+#   * The homeserver ESO secrets are split per-service
+#     (external-secrets/akkoma-externalsecrets.yaml +
+#     tuwunel-externalsecrets.yaml) so removing one homeserver does NOT orphan
+#     the other's mTLS-proxy + admin-token half.
+#   * Gateway host routes live in apps/20-gateway-{be,fe}.yaml and route-access
+#     rows in manifests/route-access/initdb/20-schema.sql. A leftover ROUTE to a
+#     deleted upstream => 502; a leftover ROLE row => stale 403 grant. Remove
+#     BOTH.
+#   * The gateway image's baked CanonicalSeed.java floor (snapdragon-GATEWAY
+#     repo) must match the pruned route-access rows or the in-image snapshot
+#     re-enforces removed rows on datastore fallback. That is a SEPARATE repo /
+#     image rebuild — tracked as a TODO for the gateway wave, NOT pruned here.
+#   * 45-social-ui.yaml serves BOTH the matrix + mastodon micro-frontends from
+#     one app, so it is SHARED — it is NOT owned by akkoma or tuwunel alone and
+#     is left in place (the UI greys the absent platform via the federation
+#     manifest). Only remove it if BOTH homeservers are deselected (see the
+#     sharedApps note on each slug).
+
+apiVersion: snapdragon.systems/v1
+kind: OptionalServiceRegistry
+metadata:
+  name: optional-services
+spec:
+  services:
+    # ── akkoma — fediverse / Mastodon-API homeserver ───────────────────────────
+    - slug: akkoma
+      displayName: "Akkoma (Mastodon)"
+      namespace: snapdragon-backend
+      default: on
+      # ArgoCD Application YAMLs this slug OWNS (pruned when deselected). The
+      # shared social-ui is listed under sharedApps, NOT here.
+      apps:
+        - apps/30-akkoma.yaml
+      # apps shared with another slug (tuwunel) — only prune when ALL owners are
+      # deselected. gate_optional_services keeps it unless both akkoma+tuwunel go.
+      sharedApps:
+        - { path: apps/45-social-ui.yaml, sharedWith: [tuwunel] }
+      manifestPath: manifests/akkoma
+      # Per-service ExternalSecret file (post-split). Removing akkoma deletes ONLY
+      # this; tuwunel's half lives in its own file.
+      esoFile: manifests/external-secrets/akkoma-externalsecrets.yaml
+      esoKeys: [akkoma-proxy-mtls, akkoma-admin]
+      # Public host fronted by the be-gateway (Host predicate routes).
+      gatewayHost: mastodon.${CLUSTER_DOMAIN}
+      # be-gateway route ids (in apps/20-gateway-be.yaml) to drop on removal.
+      gatewayRouteIds: [mastodon-oauth, mastodon-api, mastodon-web]
+      # route-access seed rows (manifests/route-access/initdb/20-schema.sql) whose
+      # url_pattern this slug owns on the named gateway. Drop on removal so a
+      # matched-but-upstream-absent route cannot stale-grant.
+      routeAccessRows:
+        - { gateway: snapdragon-be-gateway, urlPattern: /api/v1/pleroma/admin/** }
+        - { gateway: snapdragon-be-gateway, urlPattern: /api/pleroma/admin/** }
+        - { gateway: snapdragon-be-gateway, urlPattern: /pleroma/admin/** }
+      # federation_modules registration (federation-api repo — separate wave).
+      federationModule: { slug: akkoma, mountAt: /social/mastodon, changeset: "023-register-akkoma-module.xml" }
+      casdoorSeed: null
+
+    # ── tuwunel — Matrix homeserver (Conduit fork) ─────────────────────────────
+    - slug: tuwunel
+      displayName: "tuwunel (Matrix)"
+      namespace: snapdragon-backend
+      default: on
+      apps:
+        - apps/30-tuwunel.yaml
+      sharedApps:
+        - { path: apps/45-social-ui.yaml, sharedWith: [akkoma] }
+      manifestPath: manifests/tuwunel
+      esoFile: manifests/external-secrets/tuwunel-externalsecrets.yaml
+      esoKeys: [tuwunel-proxy-mtls, tuwunel-admin]
+      gatewayHost: matrix.${CLUSTER_DOMAIN}
+      gatewayRouteIds: [matrix-api, matrix-wellknown, matrix]
+      routeAccessRows:
+        - { gateway: snapdragon-be-gateway, urlPattern: /_matrix/** }
+        - { gateway: snapdragon-be-gateway, urlPattern: /.well-known/matrix/** }
+        - { gateway: snapdragon-be-gateway, urlPattern: /_synapse/** }
+      federationModule: { slug: tuwunel, mountAt: /social/matrix, changeset: "024-register-tuwunel-module.xml" }
+      casdoorSeed: null
+
+    # ── phpbb — forum homeserver (backend-only, isolated namespace) ────────────
+    # phpBB has NO gateway HOST and NO public ingress: it is reachable only as
+    # forum-bff's in-cluster upstream inside the snapdragon-forum default-deny ns.
+    # The browser->phpBB path is the forum-bff (/bff/forum/**) + the forum-ui
+    # micro-frontend (/social/forum/**), both on the fe-gateway.
+    - slug: phpbb
+      displayName: "phpBB (Forum)"
+      namespace: snapdragon-forum
+      default: on
+      apps:
+        - apps/30-phpbb.yaml
+        - apps/38-forum-bff-db.yaml
+        - apps/39-forum-bff-api.yaml
+        - apps/49-forum-ui.yaml
+      sharedApps: []
+      manifestPath: manifests/forum
+      esoFile: null
+      esoKeys: []
+      gatewayHost: null
+      # fe-gateway route ids serving the forum UI + BFF (apps/20-gateway-fe.yaml).
+      gatewayRouteIds: [forum-ui, snapdragon-forum-bff-api, snapdragon-forum-bff-api-moderation]
+      routeAccessRows:
+        - { gateway: snapdragon-fe-gateway, urlPattern: /social/forum/** }
+        - { gateway: snapdragon-fe-gateway, urlPattern: /bff/forum/admin/** }
+        - { gateway: snapdragon-fe-gateway, urlPattern: /bff/forum/moderation/** }
+        - { gateway: snapdragon-fe-gateway, urlPattern: /bff/forum/** }
+        - { gateway: snapdragon-be-gateway, urlPattern: /api/forum/admin/** }
+      federationModule: { slug: forum, mountAt: /social/forum, changeset: "022-register-forum-module.xml" }
+      casdoorSeed: null
+
+    # ── games — snapdragon.games portal (x86 GPU worker) + games-realm Casdoor ─
+    # games owns its OWN Casdoor (casdoor-games, two-Casdoor architecture). The
+    # public host is GAMES_DOMAIN (default games.${CLUSTER_DOMAIN}); see the
+    # gamesDomain block + docs/OPTIONAL-SERVICES.md "Games subdomain".
+    - slug: games
+      displayName: "Snapdragon Games"
+      namespace: snapdragon-games
+      default: on
+      apps:
+        - apps/06-casdoor-games.yaml
+        - apps/50-games.yaml
+      sharedApps: []
+      manifestPath: manifests/games
+      # casdoor-games has its own manifest dir, also pruned with the slug.
+      extraManifestPaths:
+        - manifests/casdoor-games
+      esoFile: null
+      esoKeys: [casdoor-games-db, casdoor-games-app]
+      # NOTE: the games host is GAMES_DOMAIN (parameterized below), NOT a
+      # snapdragon.systems subdomain literal — see gamesDomain.
+      gatewayHost: games.${GAMES_DOMAIN}
+      gatewayRouteIds: [games]
+      routeAccessRows:
+        - { gateway: snapdragon-be-gateway, urlPattern: /games/api/admin/** }
+        - { gateway: snapdragon-be-gateway, urlPattern: /games/** }
+        - { gateway: snapdragon-fe-gateway, urlPattern: /games/admin/** }
+      federationModule: { slug: games, mountAt: /games, changeset: "025-register-games-module.xml" }
+      casdoorSeed: casdoor-games
+
+  # ── games subdomain / TLD configuration ──────────────────────────────────────
+  # GAMES_DOMAIN (brand.conf knob, default games.${CLUSTER_DOMAIN}) is the single
+  # value that drives every games host / OIDC issuer / redirect URI. The default
+  # serves games as a SUBDOMAIN of the primary domain until the real .games TLD
+  # is obtained; flip GAMES_DOMAIN=<brand>.games to switch (see the TLD-flip
+  # section of docs/OPTIONAL-SERVICES.md). rebrand_sysroot rewrites the baked
+  # snapdragon.games literals to ${GAMES_DOMAIN}; these files carry the values:
+  gamesDomain:
+    knob: GAMES_DOMAIN
+    default: "games.${CLUSTER_DOMAIN}"
+    parameterizedFiles:
+      - manifests/casdoor-games/app-conf-configmap.yaml      # origin (OIDC iss)
+      - manifests/casdoor-games/init-data-configmap.yaml     # redirectUris + websiteUrl/homepageUrl
+      - manifests/casdoor-games/init-job.yaml                # redirectUris (reconcile.py re-pins on every PostSync)
+      - manifests/games/deployment.yaml                      # CASDOOR_ISSUER_URI
+    gatewayHostRoute:
+      app: apps/20-gateway-be.yaml
+      routeId: games
+      uri: http://snapdragon-games.snapdragon-games.svc.cluster.local:8080

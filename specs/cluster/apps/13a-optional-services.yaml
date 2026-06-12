@@ -1,0 +1,72 @@
+# Optional-services ApplicationSet (Phase 6 runtime add/remove) — turns the 4
+# OPTIONAL services (akkoma/tuwunel/phpbb/games) from hardcoded apps/30-*/50-*
+# Applications into ONE list whose membership is the install-state. Modelled on
+# apps/13-service-catalog.yaml (the ApplicationSet pattern already proven here).
+#
+# WHY: build-time `rm -f` of a baked Application only stops the bootstrap seed;
+# the live cluster's ArgoCD root app syncs apps/ from the gitops REPO and would
+# re-create a pruned file. To add/remove a service on a LIVE cluster you flip ONE
+# list — the `installed` flag on its element here (mirrored from
+# manifests/policy/installed-services ConfigMap) — and the ApplicationSet's
+# `selector` (installed=="true") makes ArgoCD prune/create that slug's Application.
+# No baked-file surgery, no redeploy.
+#
+# HOW THE SELECTOR GATES MEMBERSHIP: the list generator emits one param set per
+# slug, each carrying installed:"true|false"; the generator-level `selector`
+# (matchLabels installed:"true") keeps only the installed ones, so a slug flipped
+# to "false" is dropped from the generated set and its Application is pruned
+# (prune:true). This is the single-list flip the design calls for.
+#
+# ⚠ COEXISTENCE: while the legacy hardcoded apps/30-akkoma.yaml etc. still exist,
+# this ApplicationSet would create a DUPLICATE-named Application. It is therefore
+# scaffolded with a DISTINCT name suffix and DISABLED-by-default membership note;
+# the cut-over (delete the 4 hardcoded apps, let this own them) is a follow-up
+# documented in docs/OPTIONAL-SERVICES.md "Runtime add/remove". Until cut-over,
+# keep every element installed:"false" so it creates nothing and cannot collide.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: optional-services
+  namespace: devops
+  annotations:
+    # Build/runtime: the installed flags here are mirrored from the
+    # installed-services ConfigMap (rendered from optional-services.yaml). Flip a
+    # slug's installed value to add/remove it at runtime.
+    snapdragon.systems/source-of-truth: specs/cluster/optional-services.yaml
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - list:
+        # One element per OPTIONAL service. `installed` is the toggle (mirrored
+        # from the installed-services ConfigMap). Scaffolded "false" until the
+        # cut-over from the hardcoded apps/30-*/50-* (see header) to avoid
+        # duplicate-named Applications.
+        elements:
+          - { slug: akkoma,  path: specs/cluster/manifests/akkoma,        namespace: snapdragon-backend, installed: "false" }
+          - { slug: tuwunel, path: specs/cluster/manifests/tuwunel,       namespace: snapdragon-backend, installed: "false" }
+          - { slug: phpbb,   path: specs/cluster/manifests/forum,         namespace: snapdragon-forum,   installed: "false" }
+          - { slug: games,   path: specs/cluster/manifests/games,         namespace: snapdragon-games,   installed: "false" }
+        # Keep ONLY installed elements — a slug flipped to "false" is dropped and
+        # its Application pruned. This is the runtime add/remove lever.
+      selector:
+        matchLabels:
+          installed: "true"
+  template:
+    metadata:
+      name: "optional-{{ .slug }}"
+      labels:
+        app.kubernetes.io/part-of: snapdragon.systems
+        snapdragon.systems/optional-service: "{{ .slug }}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+        targetRevision: main
+        path: "{{ .path }}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{ .namespace }}"
+      syncPolicy:
+        automated: { prune: true, selfHeal: true }
+        syncOptions: [CreateNamespace=true]

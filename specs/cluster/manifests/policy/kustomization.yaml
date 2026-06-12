@@ -7,3 +7,7 @@ kind: Kustomization
 resources:
   - reserved-prefixes-configmap.yaml
   - reserved-prefixes-policy.yaml
+  # Runtime install-state of the OPTIONAL services, rendered from
+  # specs/cluster/optional-services.yaml — read by the optional-services
+  # ApplicationSet (apps/13a-optional-services.yaml) + the admin console.
+  - installed-services-configmap.yaml
