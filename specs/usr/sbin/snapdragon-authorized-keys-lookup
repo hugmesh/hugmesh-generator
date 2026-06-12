@@ -1,0 +1,160 @@
+#!/bin/bash
+# snapdragon-authorized-keys-lookup — the sshd AuthorizedKeysCommand for a
+# device-license-registry-ENFORCED node (Layer-B). It is the SOLE key source on
+# ADMIN-owned / mesh-extension cluster nodes (the sibling device-registry.conf
+# sets `AuthorizedKeysFile none`, so NOTHING else authorizes a key).
+#
+# It is INTENTIONALLY minimal + side-effect-free: it only READS the last-good
+# signed export cache, verifies it, and prints the authorized_keys line for the
+# OFFERED key iff an active signed license pins it onto THIS node. All fetching /
+# cache mutation / session sweeping lives in the separate sync agent.
+#
+# INVOCATION (configured in device-registry.conf):
+#   AuthorizedKeysCommand /usr/sbin/snapdragon-authorized-keys-lookup %u %f %t %k
+#     $1 = %u  login user (the local account sshd is authenticating)
+#     $2 = %f  fingerprint of the OFFERED ssh public key (e.g. SHA256:base64...)
+#     $3 = %t  key type of the offered key (e.g. ssh-ed25519)
+#     $4 = %k  base64 blob of the offered key
+#   AuthorizedKeysCommandUser nobody   (runs unprivileged; reads world-readable
+#                                       cache + baked pub key + node.env only)
+#
+# WHY %t + %k as well as %f: the signed export pins only key FINGERPRINTS
+# [FIX-PINKEY], not full key blobs. sshd already computed %f from the offered key;
+# we authorise that exact offered key by RE-EMITTING it (`%t %k`) iff its %f is in
+# the pinned set for this node. The emitted line is therefore exactly the key the
+# client presented, and the fingerprint pin is the authorisation gate. sshd then
+# re-validates the offered key against the line we print — defence in depth.
+#
+# FAIL-CLOSED CONTRACT: EVERY failure path prints NOTHING and exits 0 (an empty
+# AuthorizedKeysCommand output = NO authorized key = DENY). We never exit non-zero
+# in a way that could be interpreted as "fall through to a file" — with
+# `AuthorizedKeysFile none` there is no file to fall through to, and empty output
+# is an unconditional deny. Any error, missing file, bad signature, rollback,
+# mesh mismatch, or no matching pinned entry => empty => deny.
+#
+# THE HARD RULES THIS UPHOLDS (all from the ONE signed export + provision-time
+# class selection; see snapdragon-device-license-registry memory):
+#   * A SUPERADMIN-owned/core node NEVER runs this command (provision installs it
+#     only on owner_type=ADMIN nodes), so a superadmin owner is NEVER locked out
+#     by an empty export — their key stays the #66 statically-baked owner key.
+#   * On an ADMIN node the export NEVER contains a superadmin entry (the BFF skips
+#     superadmin-owned nodes + grantDevice 422-rejects them), so `via` is logged
+#     as PROVENANCE only and is NEVER used as an authorisation gate (residual (e)).
+#   * Cross-domain admins have no entry targeting this node's machine_key_fp =>
+#     empty => deny. Default-deny is the steady state.
+
+set -uo pipefail
+
+# ── Paths (all baked at provision time; pub/export/node.env world-readable so
+#    `nobody` can read them — there are NO private secrets in any of them) ───────
+NODE_ENV="/etc/snapdragon/registry/node.env"
+PUB_KEY="/etc/snapdragon/registry/registry-pub.ed25519"
+CACHE_DIR="/var/lib/snapdragon/device-registry"
+EXPORT_JSON="${CACHE_DIR}/export.json"
+LAST_GOOD="${CACHE_DIR}/last-good-generation"
+VERIFY_LIB="/usr/lib/snapdragon/registry-verify.sh"
+LOG_TAG="snapdragon-authkeys"
+
+# Audit to syslog (never to stdout — stdout is the authorized_keys channel).
+# `logger` may be absent for `nobody`; degrade silently (audit best-effort).
+audit() { command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+
+# deny() — the single exit point for EVERY rejection: print nothing, succeed.
+deny() {
+    [ -n "${1:-}" ] && audit "deny user=${LOGIN_USER:-?} fp=${OFFERED_FP:-?}: $1"
+    exit 0
+}
+
+LOGIN_USER="${1:-}"
+OFFERED_FP="${2:-}"
+OFFERED_TYPE="${3:-}"
+OFFERED_KEY="${4:-}"
+
+# ── Pre-flight: required inputs + files (any missing => deny) ───────────────────
+[ -n "${OFFERED_FP}" ]   || deny "no offered fingerprint (%f empty)"
+[ -n "${OFFERED_TYPE}" ] || deny "no offered key type (%t empty)"
+[ -n "${OFFERED_KEY}" ]  || deny "no offered key blob (%k empty)"
+[ -r "${VERIFY_LIB}" ]   || deny "verify lib missing: ${VERIFY_LIB}"
+[ -r "${NODE_ENV}" ]     || deny "node identity missing: ${NODE_ENV}"
+[ -r "${PUB_KEY}" ]      || deny "baked public key missing: ${PUB_KEY}"
+[ -r "${EXPORT_JSON}" ]  || deny "no export cache yet (bootstrap / first-sync pending)"
+
+# shellcheck source=/dev/null
+. "${VERIFY_LIB}" 2>/dev/null || deny "failed to source verify lib"
+
+# ── (1) Load baked node identity (NEVER self-derived at SSH time) ──────────────
+# node.env is a tiny KEY=VALUE file written write-once by provision_device_registry.
+# We parse it WITHOUT sourcing (nobody must not execute arbitrary content) — only
+# the two keys we expect, value after the first '='.
+read_env() {
+    local k="$1" line
+    line="$(grep -E "^${k}=" "${NODE_ENV}" 2>/dev/null | head -1)" || return 1
+    [ -n "${line}" ] || return 1
+    printf '%s' "${line#*=}" | tr -d '"'"'"' '
+}
+MACHINE_KEY_FP="$(read_env MACHINE_KEY_FP)" || deny "node.env missing MACHINE_KEY_FP"
+MESH_ID="$(read_env MESH_ID)"               || deny "node.env missing MESH_ID"
+[ -n "${MACHINE_KEY_FP}" ] || deny "empty baked MACHINE_KEY_FP"
+[ -n "${MESH_ID}" ]        || deny "empty baked MESH_ID"
+
+# ── (2)+(3) Verify signature over the EXACT canonical bytes against the BAKED key.
+# verify_export enforces: signed==true, signature present, detached Ed25519 over
+# the reconstructed canonical bytes verifies against PUB_KEY. We deliberately DO
+# NOT pass the strict-gen file here: the steady-state cache equals last-good, and
+# the lookup must keep accepting it. Rollback of the ON-DISK cache below the
+# recorded last-good is rejected separately in step (4).
+verify_export "${EXPORT_JSON}" "${PUB_KEY}" || deny "signature/verify failed (unsigned/tampered/foreign-key)"
+
+# ── (4) Reject cache ROLLBACK: a cached export whose generation is BELOW the
+# recorded last-good is a tampered/replaced cache (the sync agent only ever writes
+# forward). Equal is the steady state (accept). Absent last-good => accept (first
+# run before the sync agent has recorded one, but the cache already verified).
+CACHE_GEN="$(rv_gen "${EXPORT_JSON}")" || deny "cannot read export generation"
+case "${CACHE_GEN}" in ''|*[!0-9]*) deny "non-numeric export generation: ${CACHE_GEN}" ;; esac
+if [ -r "${LAST_GOOD}" ]; then
+    LG="$(tr -dc '0-9' < "${LAST_GOOD}" 2>/dev/null)"
+    if [ -n "${LG}" ] && [ "${CACHE_GEN}" -lt "${LG}" ] 2>/dev/null; then
+        deny "cache rollback: gen=${CACHE_GEN} < last-good=${LG}"
+    fi
+fi
+
+# ── (5) Reject mesh mismatch: a cache for a DIFFERENT mesh must never authorise.
+EXPORT_MESH="$(rv_mesh "${EXPORT_JSON}")" || deny "cannot read export meshId"
+[ "${EXPORT_MESH}" = "${MESH_ID}" ] || deny "mesh mismatch: export=${EXPORT_MESH} baked=${MESH_ID}"
+
+# ── (6) Select entries where entry.fp == baked MACHINE_KEY_FP AND %f ∈ entry.keys.
+# entry.fp is the HEADSCALE machine-key fingerprint (node identity) — matched
+# against the node's BAKED MACHINE_KEY_FP. entry.keys are SSH-key fingerprints
+# [FIX-PINKEY] — the SAME space as the offered %f. We do NOT conflate the two:
+# fp == node identity; keys ∋ %f == the operator's permitted ssh key.
+#
+# jq emits 1 line per (operator) whose entry targets THIS node AND pins the
+# OFFERED fingerprint. `via` is selected for the AUDIT line ONLY (provenance) and
+# is NEVER part of the predicate. If ANY matching entry pins %f, we authorise.
+MATCH="$(jq -r --arg fp "${MACHINE_KEY_FP}" --arg k "${OFFERED_FP}" '
+    .body.operators[]?
+    | select((.machineKeyFp // "") == $fp)
+    | select(((.keyFingerprints // []) | index($k)) != null)
+    | (.operator // "?") + "\t" + (.via // "?")
+' "${EXPORT_JSON}" 2>/dev/null)" || deny "jq selection failed"
+
+[ -n "${MATCH}" ] || deny "no active license pins this key onto this node"
+
+# At least one active license authorises the offered key. Audit each match
+# (operator + via as PROVENANCE), then emit the authorized_keys line = the EXACT
+# offered key (%t %k), with hardening options. Because the line is the offered key
+# itself, sshd accepts the in-flight authentication; the fingerprint pin already
+# gated it. We restrict the key with conservative options (no agent/port/X11
+# forwarding, no pty escalation beyond what the session needs is left to the
+# user's shell). The login user (%u) is the local account; the registry licenses
+# an OPERATOR to a KEY — the local-account mapping is the node's existing user
+# model (the operator logs in as the provisioned admin user, same as #66).
+while IFS=$'\t' read -r op via; do
+    [ -n "${op}" ] || continue
+    audit "allow user=${LOGIN_USER} fp=${OFFERED_FP} operator=${op} via=${via} mesh=${MESH_ID} node=${MACHINE_KEY_FP}"
+done <<< "${MATCH}"
+
+# Emit ONE authorized_keys line for the offered key. Restrictive options harden
+# the granted session (no forwarding); sshd validates the offered key against it.
+printf 'restrict %s %s snapdragon-device-registry\n' "${OFFERED_TYPE}" "${OFFERED_KEY}"
+exit 0

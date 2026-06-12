@@ -716,6 +716,192 @@ provision_tailscale() {
     fi
 }
 
+# ── Device-license registry (Layer-B per-node sshd enforcement) ────
+# Wire the signed-export-driven sshd key source on the CORRECT node class. This is
+# the load-bearing host boundary (Layer-A headscale is advisory until the OIDC
+# join lands), shipped FIRST and INDEPENDENT of policy.hujson.
+#
+# HOST-KEY MODEL (Option (A), the only defensible choice — see
+# snapdragon-device-license-registry memory):
+#   * owner_type==ADMIN (mesh-extension nodes): the registry IS the key source.
+#     We stage device-registry.conf (AuthorizedKeysFile none + AuthorizedKeysCommand
+#     + AuthorizedKeysCommandUser nobody), install break-glass.conf, bake node.env
+#     (MACHINE_KEY_FP + MESH_ID + the BFF transport config), copy the BAKED
+#     registry public verifying key, prime the (empty => fail-closed) cache, and
+#     enable the sync service + 60s cron. The enforcement drop-in is NOT placed in
+#     sshd_config.d yet — the sync agent flips it on the FIRST verified sync
+#     (Option (i) bootstrap gate, mirroring selinux-enforce-gate) so the #66-baked
+#     admin key remains the bootstrap key until a real signed export exists (no
+#     first-boot brick).
+#   * owner_type==SUPERADMIN (primary / core nodes, the DEFAULT): DO NOTHING to
+#     sshd. The #66 install_authorized_keys path stays the SOLE key source for the
+#     superadmin owner; we never install the command/conf. A core node's export
+#     entry does not exist by design (the BFF SKIPS superadmin-owned nodes), so an
+#     AuthorizedKeysCommand here would lock the owner out — the structural reason
+#     a core node is simply NOT a registry-enforced node. Reachability for the
+#     superadmin is the Layer-A headscale concern.
+#
+# NO client (laptop/Chromebook) Layer-B: client images are decrypt-to-desktop
+# end-user devices, not SSH-serving cluster nodes; they neither run the command
+# nor the sync agent (image_type=client is an inventory record, not an sshd host).
+provision_device_registry() {
+    local reg_dir=/etc/snapdragon/registry
+    local cache_dir=/var/lib/snapdragon/device-registry
+
+    # (a) Resolve the OWNER TYPE / image class. Today only PRIMARY images exist
+    # (the admin mesh-extension build path is the documented TODO), so the SAFE
+    # default is SUPERADMIN; ADMIN is selected explicitly via the manifest. Honour
+    # (in precedence) .device_registry.owner_type, else an ADMIN image_type, else
+    # SUPERADMIN. .device_registry.image_type∈{primary,mesh-extension,client}.
+    local owner_type image_type
+    owner_type="$(jqm '.device_registry.owner_type // ""')"
+    image_type="$(jqm '.device_registry.image_type // ""')"
+    if [ -z "${owner_type}" ] || [ "${owner_type}" = "null" ]; then
+        case "${image_type}" in
+            mesh-extension) owner_type="ADMIN" ;;
+            *)              owner_type="SUPERADMIN" ;;   # primary/client/unknown
+        esac
+    fi
+
+    if [ "${owner_type}" != "ADMIN" ]; then
+        # (c) SUPERADMIN / core / client: registry-enforced sshd is NOT installed.
+        log "device-registry: owner_type=${owner_type} (image_type=${image_type:-primary}) — KEEPING #66 owner-key sshd; NOT installing registry enforcement (correct for core/client nodes)"
+        return 0
+    fi
+
+    # ── owner_type==ADMIN: install Layer-B enforcement (gated, fail-closed) ─────
+    log "device-registry: owner_type=ADMIN (mesh-extension) — installing Layer-B sshd enforcement (gated on first verified sync)"
+    mkdir -p "${reg_dir}" "${cache_dir}"
+    # The cache + baked pub + node.env must be readable by AuthorizedKeysCommandUser
+    # =nobody. They carry NO private material (fingerprints + a public key only).
+    chmod 0755 "${cache_dir}" "${reg_dir}" 2>/dev/null || true
+
+    # The lookup + sync + verify helper are BAKED into the image rootfs by the
+    # builders. Sanity-check they are present + executable (additive: a stale image
+    # without them just stays in bootstrap, never bricks).
+    [ -x /usr/sbin/snapdragon-authorized-keys-lookup ] \
+        || warn "device-registry: /usr/sbin/snapdragon-authorized-keys-lookup missing from image (Layer-B will fail-closed deny until baked)"
+    [ -x /usr/sbin/snapdragon-device-registry-sync ] \
+        || warn "device-registry: /usr/sbin/snapdragon-device-registry-sync missing from image (no sync; cache stays empty)"
+    [ -r /usr/lib/snapdragon/registry-verify.sh ] \
+        || warn "device-registry: /usr/lib/snapdragon/registry-verify.sh missing from image (verify unavailable)"
+
+    # Install the break-glass drop-in (console/loopback-only, default-OFF — the
+    # referenced /etc/ssh/break-glass.keys is absent, so it yields NO bypass until
+    # an operator physically drops a key). The staged copy lives at
+    # ${reg_dir}/break-glass.conf (baked); place it into sshd_config.d now so the
+    # console recovery path exists even before the enforcement gate flips.
+    if [ -f "${reg_dir}/break-glass.conf" ]; then
+        cp -f "${reg_dir}/break-glass.conf" /etc/ssh/sshd_config.d/break-glass.conf
+        chmod 0644 /etc/ssh/sshd_config.d/break-glass.conf
+        log "device-registry: installed console-only break-glass drop-in (default-OFF)"
+    else
+        warn "device-registry: break-glass.conf not baked at ${reg_dir} — console break-glass unavailable"
+    fi
+    # The enforcement drop-in (device-registry.conf) is STAGED at ${reg_dir} and
+    # left OUT of sshd_config.d — the sync agent installs it on the FIRST verified
+    # sync (Option (i) gate). It is baked to ${reg_dir}/device-registry.conf by the
+    # builders. If absent, warn (the node stays bootstrap forever, never enforced).
+    [ -f "${reg_dir}/device-registry.conf" ] \
+        || warn "device-registry: device-registry.conf not staged at ${reg_dir} — enforcement gate can never flip (staying bootstrap)"
+
+    # ── Baked node identity (NEVER self-claimed at SSH time) ───────────────────
+    # MACHINE_KEY_FP: the node's headscale machine-key fingerprint. Preferred
+    # source = KEYS/device-registry/machine_key_fp (baked by gen-provision-keys).
+    # If empty (the fp is minted only at `tailscale up`), populate it POST-join
+    # from local tailscale state and PIN it write-once. MESH_ID: KEYS file else
+    # .mesh / .device_registry.mesh_id.
+    local mkey mesh_id
+    mkey=""
+    [ -f "${BASE}/device-registry/machine_key_fp" ] && mkey="$(tr -d '[:space:]' < "${BASE}/device-registry/machine_key_fp" 2>/dev/null)"
+    if [ -z "${mkey}" ]; then
+        # POST-join self-read (write-once below). The headscale machine-key fp this
+        # node reports locally MUST equal what the admin-bff stored in
+        # device_registry.machine_key_fp — an fp-format mismatch fails closed
+        # (everyone denied). This alignment is the highest-risk integration point;
+        # see the PR body / device-registry README.
+        mkey="$(tailscale status --json 2>/dev/null | jq -r '.Self.PublicKey // empty' 2>/dev/null)"
+        [ -n "${mkey}" ] && log "device-registry: read MACHINE_KEY_FP from local tailscale state (post-join, write-once)"
+    fi
+    mesh_id="$(jqm '.device_registry.mesh_id // ""')"
+    { [ -z "${mesh_id}" ] || [ "${mesh_id}" = "null" ]; } && mesh_id="$(jqm '.mesh.id // ""')"
+    { [ -z "${mesh_id}" ] || [ "${mesh_id}" = "null" ]; } && [ -f "${BASE}/device-registry/mesh_id" ] \
+        && mesh_id="$(tr -d '[:space:]' < "${BASE}/device-registry/mesh_id" 2>/dev/null)"
+
+    # BFF /export transport config (the SUPERADMIN-equivalent in-cluster mTLS
+    # identity). All optional: a missing URL/cert leaves the sync agent a verified
+    # no-op (bootstrap/offline) and the node fail-closes to break-glass + the #66
+    # baked key until a cert + reachable BFF land (EXPORT-TRANSPORT open issue).
+    local bff_url bff_cert bff_key bff_ca
+    bff_url="$(jqm '.device_registry.bff_export_url // ""')"
+    bff_cert="$(jqm '.device_registry.bff_client_cert // ""')"
+    bff_key="$(jqm '.device_registry.bff_client_key // ""')"
+    bff_ca="$(jqm '.device_registry.bff_ca // "/etc/snapdragon/pki/ca-chain.crt"')"
+
+    # Write node.env WRITE-ONCE for the identity fields (never a mutable self-claim
+    # thereafter). If node.env already pins MACHINE_KEY_FP we keep it; we always
+    # refresh the (non-identity) transport config.
+    local existing_mkey=""
+    [ -f "${reg_dir}/node.env" ] && existing_mkey="$(grep -E '^MACHINE_KEY_FP=' "${reg_dir}/node.env" 2>/dev/null | head -1 | cut -d= -f2-)"
+    [ -n "${existing_mkey}" ] && mkey="${existing_mkey}"
+    {
+        echo "# device-registry node identity + BFF transport (Layer-B). MACHINE_KEY_FP"
+        echo "# and MESH_ID are BAKED self-identity, NOT self-claimed at SSH time."
+        echo "MACHINE_KEY_FP=${mkey}"
+        echo "MESH_ID=${mesh_id}"
+        echo "BFF_EXPORT_URL=${bff_url}"
+        echo "BFF_CLIENT_CERT=${bff_cert}"
+        echo "BFF_CLIENT_KEY=${bff_key}"
+        echo "BFF_CA=${bff_ca}"
+    } > "${reg_dir}/node.env"
+    chmod 0644 "${reg_dir}/node.env"
+    [ -n "${mkey}" ] || warn "device-registry: MACHINE_KEY_FP still EMPTY (not baked, no tailscale fp) — lookup will fail-closed deny until pinned"
+    [ -n "${mesh_id}" ] || warn "device-registry: MESH_ID empty — sync + mesh guard will fail-closed"
+    log "device-registry: wrote node.env (machine_key_fp=${mkey:-<unset>} mesh=${mesh_id:-<unset>})"
+
+    # ── BAKED registry public verifying key (key-USB custody) ──────────────────
+    # Copy the public half the node verifies the signed export against. NEVER the
+    # advertised publicKey field. Source = KEYS/device-registry/registry-pub.ed25519.
+    # Absent => the node fail-closes (denies all but break-glass) until baked.
+    if [ -f "${BASE}/device-registry/registry-pub.ed25519" ] \
+            && [ -s "${BASE}/device-registry/registry-pub.ed25519" ]; then
+        cp -f "${BASE}/device-registry/registry-pub.ed25519" "${reg_dir}/registry-pub.ed25519"
+        chmod 0644 "${reg_dir}/registry-pub.ed25519"
+        log "device-registry: installed BAKED registry public key (export verified against THIS key)"
+    else
+        warn "device-registry: KEYS/device-registry/registry-pub.ed25519 ABSENT/empty — Layer-B fail-closes (deny all but break-glass) until the public half is baked onto the key-USB"
+    fi
+
+    # ── Prime the cache (empty => fail-closed until first verified sync) ────────
+    # We do NOT seed any export here: an empty cache means the lookup denies (the
+    # bootstrap path is the #66-baked admin key, valid until the gate flips). The
+    # last-good-generation starts unset (first sync of any gen>=0 is accepted).
+    [ -f "${cache_dir}/last-good-generation" ] || : > /dev/null
+
+    # ── Enable the sync service (boot oneshot) + 60s cron (convergence floor) ──
+    if [ -f /etc/init.d/snapdragon-device-registry-sync ]; then
+        rc-update add snapdragon-device-registry-sync default 2>/dev/null \
+            && log "device-registry: enabled snapdragon-device-registry-sync (boot sync)" \
+            || warn "device-registry: rc-update add snapdragon-device-registry-sync failed"
+    else
+        warn "device-registry: init.d/snapdragon-device-registry-sync not baked — no boot sync"
+    fi
+    if [ -f "${reg_dir}/cron-device-registry-sync" ]; then
+        cp -f "${reg_dir}/cron-device-registry-sync" /etc/cron.d/snapdragon-device-registry-sync
+        chmod 0644 /etc/cron.d/snapdragon-device-registry-sync
+        log "device-registry: installed 60s sync cron (convergence floor)"
+    else
+        warn "device-registry: cron drop-in not baked at ${reg_dir} — no 60s convergence poll"
+    fi
+
+    # Kick a first sync NOW (best-effort): if the BFF is already reachable this
+    # immediately verifies + flips the enforcement gate; otherwise it keeps the
+    # (empty) cache and the node stays in bootstrap (no brick).
+    if [ -x /usr/sbin/snapdragon-device-registry-sync ]; then
+        /usr/sbin/snapdragon-device-registry-sync 2>/dev/null || true
+    fi
+}
+
 # ── Kubernetes ─────────────────────────────────────────────────────
 # Shared kubeadm join helper. Workers omit the extra args; additional
 # control-plane nodes pass `--control-plane --certificate-key <ck>`.
@@ -1640,6 +1826,7 @@ main() {
     provision_storage
     provision_headscale
     provision_tailscale
+    provision_device_registry   # Layer-B sshd enforcement (ADMIN nodes) — after mesh join, before k8s
     provision_kubernetes
     provision_backup
     provision_snapdragon

@@ -1254,6 +1254,28 @@ chmod +x "${SYSROOT}/usr/local/sbin/snapdragon-backup"
 mkdir -p "${SYSROOT}/etc/ssh/sshd_config.d"
 cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf"  "${SYSROOT}/etc/ssh/sshd_config.d/hardened.conf"
 
+# ── Layer-B device-license-registry sshd enforcement (ADMIN/mesh-extension) ─────
+# Bake the SOLE-key-source plumbing into the rootfs. These files are INERT on a
+# SUPERADMIN/core node: provision_device_registry() only ACTIVATES them (installs
+# the conf into sshd_config.d, enables the service+cron) when owner_type=ADMIN, so
+# baking them unconditionally does NOT alter the #66 owner-key path on core nodes.
+# The enforcement drop-in (device-registry.conf) + break-glass.conf + the cron are
+# STAGED under /etc/snapdragon/registry so provision installs them on ADMIN nodes
+# only (device-registry.conf is gate-flipped on the first verified sync).
+mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/usr/lib/snapdragon" \
+         "${SYSROOT}/etc/snapdragon/registry" "${SYSROOT}/var/lib/snapdragon/device-registry"
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-authorized-keys-lookup" "${SYSROOT}/usr/sbin/snapdragon-authorized-keys-lookup"
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-device-registry-sync"   "${SYSROOT}/usr/sbin/snapdragon-device-registry-sync"
+chmod +x "${SYSROOT}/usr/sbin/snapdragon-authorized-keys-lookup" "${SYSROOT}/usr/sbin/snapdragon-device-registry-sync"
+cp "${SHARED_SPECS}/usr/lib/snapdragon/registry-verify.sh"      "${SYSROOT}/usr/lib/snapdragon/registry-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-device-registry-sync" "${SYSROOT}/etc/init.d/snapdragon-device-registry-sync"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-device-registry-sync"
+# Staged (NOT placed into sshd_config.d / cron.d here — provision installs them on
+# ADMIN nodes only; device-registry.conf is gate-flipped on first verified sync).
+cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/device-registry.conf" "${SYSROOT}/etc/snapdragon/registry/device-registry.conf"
+cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/break-glass.conf"     "${SYSROOT}/etc/snapdragon/registry/break-glass.conf"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-device-registry-sync" "${SYSROOT}/etc/snapdragon/registry/cron-device-registry-sync"
+
 # ── Cluster GitOps payload + node role marker ─────────────────────
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
