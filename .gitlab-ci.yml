@@ -45,8 +45,8 @@ lint:prod-hygiene:
     # Bake a prod tree.
     - RELEASE_TAG="${CI_COMMIT_SHORT_SHA:-$(date -u +%Y%m%d)}"
     - rm -rf /tmp/prodbake && mkdir -p /tmp/prodbake && cp -r specs/cluster /tmp/prodbake/cluster
-    - rm -f /tmp/prodbake/cluster/apps/09-lan-dns.yaml /tmp/prodbake/cluster/apps/99-test-runner.yaml /tmp/prodbake/cluster/apps/98-pentest-runner.yaml /tmp/prodbake/cluster/apps/00-app-of-apps-waved.yaml
-    - rm -rf /tmp/prodbake/cluster/manifests/test-runner /tmp/prodbake/cluster/manifests/pentest-runner
+    - rm -f /tmp/prodbake/cluster/apps/09-lan-dns.yaml /tmp/prodbake/cluster/apps/99-test-runner.yaml /tmp/prodbake/cluster/apps/00-app-of-apps-waved.yaml
+    - rm -rf /tmp/prodbake/cluster/manifests/test-runner
     - >
       find /tmp/prodbake/cluster -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 |
       while IFS= read -r -d '' f; do
@@ -95,35 +95,12 @@ build:images:
     # the GitLab container registry.
     - echo "build + push container images to ${CI_REGISTRY_IMAGE}"
 
-# Build the ENV=test pentest-runner image — the single container the k8s pentest
-# CronJob + Job (specs/cluster/manifests/pentest-runner/) and the superadmin
-# UI-triggered run use. It bundles the OWASP toolchain (ZAP + Dependency-Check +
-# nuclei) + k6 + the tests/pentest harness so one image drives spin->seed->scan->
-# report in-cluster. Pushed to registry.snapdragon.systems/snapdragon-pentest-runner.
-# Additive to build:images; this whole TEST-tier image never ships to prod (the
-# manifests that reference it carry snapdragon.systems/tier: test and are pruned).
-build:pentest-runner-image:
-  stage: images
-  tags: [snapdragon-x86, privileged]
-  variables:
-    PENTEST_IMAGE: "registry.snapdragon.systems/snapdragon-pentest-runner"
-  script:
-    # Buildah/podman on the privileged runner; the Dockerfile lives next to the
-    # harness so the build context is tests/pentest (ZAP plan + probes + wrappers).
-    - >
-      buildah bud
-      -f tests/pentest/Dockerfile
-      -t "${PENTEST_IMAGE}:dev"
-      -t "${PENTEST_IMAGE}:${CI_COMMIT_SHORT_SHA}"
-      tests/pentest
-    - buildah push "${PENTEST_IMAGE}:dev"
-    - buildah push "${PENTEST_IMAGE}:${CI_COMMIT_SHORT_SHA}"
-  rules:
-    # Only build when the harness or its Dockerfile changes, plus on the default
-    # branch + scheduled pipelines (so the CronJob always has a fresh :dev).
-    - if: '$CI_PIPELINE_SOURCE == "schedule"'
-    - if: '$CI_COMMIT_BRANCH == "main"'
-    - changes: [tests/pentest/**/*]
+# NOTE: there is no longer a bundled `snapdragon-pentest-runner` image stage. The
+# pen-test is DEV/CI-pipeline-only: the `sca` + `dast` stages below run the OWASP
+# toolchain from PUBLIC images directly (owasp/dependency-check for SCA;
+# ghcr.io/zaproxy/zaproxy:stable, pulled by the harness, for DAST), and the reusable
+# per-repo stage template (tests/pentest/ci/pentest-stage.gitlab-ci.yml) does the
+# same — so no in-cluster CronJob image needs to be built or published.
 
 # Publish each ISO to the generic package registry under a stable "latest" path
 # so the admin UI's download links never change.

@@ -468,14 +468,14 @@ rewrite_prod_image_tags() {
         fi
     done < <(find "${tree}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 2>/dev/null)
     info "ENV=prod: pinned first-party :dev image tags -> :${RELEASE_TAG} in ${n} file(s)"
-    # Prune the ENV=test e2e harness + the pen-test harness (both forbidden in
-    # prod by the hygiene gate's tier:test rule).
+    # Prune the ENV=test e2e harness (forbidden in prod by the hygiene gate's
+    # tier:test rule). NOTE: the pen-test is now DEV/CI-pipeline-only (a per-repo
+    # ArgoCD CI stage + a build option), NOT a deployed cluster wave — there is no
+    # pentest-runner app/manifest to prune anymore.
     rm -f "${SYSROOT}/var/lib/snapdragon/cluster/apps/99-test-runner.yaml" \
-          "${SYSROOT}/var/lib/snapdragon/cluster/apps/98-pentest-runner.yaml" \
           "${SYSROOT}/var/lib/snapdragon/cluster/apps/00-app-of-apps-waved.yaml" 2>/dev/null || true
-    rm -rf "${SYSROOT}/var/lib/snapdragon/cluster/manifests/test-runner" \
-           "${SYSROOT}/var/lib/snapdragon/cluster/manifests/pentest-runner" 2>/dev/null || true
-    info "ENV=prod: pruned the test-runner + pentest-runner waves (apps/99-test-runner.yaml + apps/98-pentest-runner.yaml + manifests/{test,pentest}-runner) from the baked tree"
+    rm -rf "${SYSROOT}/var/lib/snapdragon/cluster/manifests/test-runner" 2>/dev/null || true
+    info "ENV=prod: pruned the test-runner wave (apps/99-test-runner.yaml + manifests/test-runner) from the baked tree"
     # STATIC prod-hygiene self-check over the BAKED tree — hard-fail the build if
     # any dev-only server / tier:test resource / floating :dev tag survived the
     # prune + rewrite above. (The RUNTIME leg — the seam/seal/live-pod probe — is
