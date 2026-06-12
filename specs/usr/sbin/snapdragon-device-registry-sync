@@ -15,9 +15,13 @@
 # last-good cache; NEVER wipe it; an admin node with a stale-but-valid cache still
 # enforces the last good license set, an admin node with NO cache denies all SSH
 # except break-glass):
-#   1. fetch GET <BFF>/bff/admin/device-licenses/export?mesh=<MESH_ID> over
+#   1. fetch GET <BFF>/bff/admin/device-licenses/export?node=<MACHINE_KEY_FP> over
 #      in-cluster mTLS presenting the SUPERADMIN service identity (the /export
-#      endpoint is hasRole('SUPERADMIN') | internal-mTLS). Transport config comes
+#      endpoint is hasRole('SUPERADMIN') | internal-mTLS). The PER-NODE export mode
+#      (admin-bff #31) returns ONLY the operators authorized onto THIS node, so the
+#      world-readable cache holds only our own operators (no cross-domain fingerprint
+#      leak). Layer-A (the headscale CONTROL node) still uses ?mesh=<MESH_ID> — it
+#      needs every node in the mesh to render the policy. Transport config comes
 #      from the baked node.env (URL + client cert/key + CA). A missing cert or an
 #      unreachable BFF => keep cache, exit 0 (bootstrap / offline tolerance).
 #   2. verify: signed==true, detached Ed25519 over the EXACT canonical bytes
@@ -72,14 +76,22 @@ have jq      || { warn "jq absent — keeping cache"; exit 0; }
 have openssl || { warn "openssl absent — keeping cache"; exit 0; }
 
 mkdir -p "${CACHE_DIR}" 2>/dev/null || true
-# The cache must be readable by the AuthorizedKeysCommandUser=nobody. It carries
-# the WHOLE mesh's ADMIN licenses (operator fingerprints, cross-domain) — a
-# CONFIDENTIALITY note, not integrity: fingerprints are not secrets, but see the
-# PR body open-issue on optionally scoping the per-node fetch.
+# The cache must be readable by the AuthorizedKeysCommandUser=nobody. With the
+# per-node ?node=<MACHINE_KEY_FP> fetch (admin-bff #31) it now carries ONLY THIS
+# node's own authorized operators — the cross-domain fingerprint leak that the
+# whole-mesh ?mesh= export caused in an admin node's world-readable cache is
+# closed. (Integrity was never affected; this fixes confidentiality.)
 chmod 0755 "${CACHE_DIR}" 2>/dev/null || true
 
 MESH_ID="$(read_env MESH_ID)"            || { warn "node.env missing MESH_ID — keeping cache"; exit 0; }
 [ -n "${MESH_ID}" ]                      || { warn "empty MESH_ID — keeping cache"; exit 0; }
+# MACHINE_KEY_FP scopes the PER-NODE Layer-B fetch to THIS node's own authorized
+# operators (admin-bff #31 `?node=<fp>` export mode), so the cache holds ONLY our
+# own operators and never leaks cross-domain operator fingerprints into an admin
+# node's world-readable cache. It is REQUIRED for the per-node fetch: absent/empty
+# => FAIL CLOSED (keep cache, do NOT fall back to ?mesh= which would re-leak).
+MACHINE_KEY_FP="$(read_env MACHINE_KEY_FP)" || { warn "node.env missing MACHINE_KEY_FP — cannot scope per-node fetch, keeping cache"; exit 0; }
+[ -n "${MACHINE_KEY_FP}" ]               || { warn "empty MACHINE_KEY_FP — cannot scope per-node fetch (refusing ?mesh= fallback to avoid re-leak), keeping cache"; exit 0; }
 BFF_URL="$(read_env BFF_EXPORT_URL)"     || BFF_URL=""
 # mTLS material (the SUPERADMIN service identity for the in-cluster /export call).
 MTLS_CERT="$(read_env BFF_CLIENT_CERT)"  || MTLS_CERT=""
@@ -97,7 +109,14 @@ fetch_export() {
     local out="$1"
     [ -n "${BFF_URL}" ] || { warn "BFF_EXPORT_URL unset — bootstrap/offline, keeping cache"; return 1; }
     have curl || { warn "curl absent — cannot fetch, keeping cache"; return 1; }
-    local url="${BFF_URL%/}/bff/admin/device-licenses/export?mesh=${MESH_ID}"
+    # PER-NODE export (admin-bff #31): ?node=<MACHINE_KEY_FP> returns ONLY the
+    # operators authorized onto THIS node, so the world-readable cache cannot leak
+    # other nodes'/domains' operator fingerprints. The signed envelope is otherwise
+    # IDENTICAL (same v1/mesh/generation header + sorted op lines, just fewer of
+    # them), so the canonical-bytes verify + monotonic + mesh guards are unchanged.
+    # NB: Layer-A (gen-headscale-policy.sh) intentionally keeps ?mesh=<MESH_ID> —
+    # it must see EVERY node in the mesh to render the headscale policy.
+    local url="${BFF_URL%/}/bff/admin/device-licenses/export?node=${MACHINE_KEY_FP}"
     local args=(-sS -m 15 --fail -o "${out}")
     [ -f "${MTLS_CA}" ]   && args+=(--cacert "${MTLS_CA}")
     if [ -n "${MTLS_CERT}" ] && [ -n "${MTLS_KEY}" ] && [ -f "${MTLS_CERT}" ] && [ -f "${MTLS_KEY}" ]; then
