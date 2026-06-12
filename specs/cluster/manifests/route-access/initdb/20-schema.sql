@@ -16,8 +16,23 @@ CREATE TABLE IF NOT EXISTS gateway_route_access (
     role         text        NOT NULL,   -- Casdoor role, e.g. ROLE_ADMIN, ROLE_USER
     casdoor_user text,                   -- optional: pin to a specific Casdoor user
     allow        boolean     NOT NULL DEFAULT true,
+    -- Per-row BRAND scope (multi-brand architecture tier). NULL/'default' = applies
+    -- to ANY target domain (back-compat: every canonical seed row below leaves it
+    -- NULL/unscoped, so single-tenant + the in-image CanonicalSeed floor are
+    -- unchanged). The merged gateway (GatewayRouteAccessService.loadFromPostgres +
+    -- the Cassandra mirror) now SELECTs this column, and its domainApplies()/
+    -- appliesTo() treat NULL/blank/'default' as unscoped; without the column the
+    -- deployed gateway's row load fails outright. A per-brand row carries its own
+    -- domain so a brand-Y `/api/admin/** -> ROLE_ADMIN` grant can NEVER be
+    -- re-granted to a brand-X admin — the gateway filter passes the request's
+    -- target domain (derived from Host) and a scoped row only applies to its own
+    -- brand. Defense-in-depth alongside the filter's hard-deny on domain mismatch.
+    domain       text,
     updated_at   timestamptz NOT NULL DEFAULT now()
 );
+-- Idempotent add for a table created by an EARLIER (pre-domain) initdb run so an
+-- in-place cluster upgrade gains the column the merged gateway now SELECTs.
+ALTER TABLE gateway_route_access ADD COLUMN IF NOT EXISTS domain text;
 CREATE INDEX IF NOT EXISTS idx_route_access_gw ON gateway_route_access (gateway, url_pattern);
 
 -- Canonical seed — one allow row per (gateway, url_pattern, role) in the routing
@@ -144,6 +159,20 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-be-gateway',  '/_matrix/client/r0/login',  'ROLE_MATRIX_EXTERNAL_CLIENT',    true),  -- Matrix login (r0) — external client
   ('snapdragon-be-gateway',  '/_matrix/client/v3/register', 'ROLE_MATRIX_EXTERNAL_CLIENT',  true),  -- Matrix register/device (v3) — external client
   ('snapdragon-be-gateway',  '/_matrix/client/r0/register', 'ROLE_MATRIX_EXTERNAL_CLIENT',  true),  -- Matrix register/device (r0) — external client
+  -- ── Image-builder console seam (build-distribution) + superadmin infra console ─
+  -- PARITY with the merged gateway CanonicalSeed.java (snapdragon-gateway repo).
+  -- The mesh-WORKLOAD image-build surface is gated on the GRANTED capability
+  -- ROLE_IMAGE_BUILDER (NOT an admin default): an admin reaches it ONLY if
+  -- separately granted that role. Do NOT pair ROLE_ADMIN on /bff/image-builds/** —
+  -- that would let every per-domain admin build images, breaking the build≠run /
+  -- workload-vs-arch boundary. The arch/core build sub-surface + the superadmin
+  -- infra console stay SUPERADMIN-only by longest-pattern-match: /bff/image-builds/
+  -- arch/** is LONGER than /bff/image-builds/**, so it wins. SUPERADMIN reaches
+  -- ordinary admin paths via the gateway cross-domain bypass, so it needs no
+  -- per-surface row there.
+  ('snapdragon-be-gateway',  '/bff/image-builds/arch/**', 'ROLE_SUPERADMIN',    true),  -- arch/core builds: superadmin only (wins, longer)
+  ('snapdragon-be-gateway',  '/bff/image-builds/**',      'ROLE_IMAGE_BUILDER', true),  -- mesh-workload builds: image_builder (admins granted it)
+  ('snapdragon-be-gateway',  '/bff/superadmin/**',        'ROLE_SUPERADMIN',    true),  -- superadmin infra console (tailnet)
   ('snapdragon-be-gateway',  '/api/admin/**',         'ROLE_ADMIN',     true),  -- snapdragon admin API (NOT ROLE_MOD)
   -- snapdragon-games NAMESPACE admin (games BFF /api/admin/** surface, namespaced
   -- under /games/** so it does NOT collide with the platform /api/admin/** row
