@@ -312,6 +312,86 @@ Artifacts are **brand- and UTC-timestamp-named** so test/prod runs never clobber
 `snapdragon-rpi5-arm64-frontend-test-20260610T193045Z.img`). The flash/QEMU
 helpers autodetect the newest matching image, so you rarely type the full name.
 
+### 3d. Frite light-desktop image (Libre Computer Le/La Frite)
+
+An **opt-in, lean desktop client image** for the Amlogic arm64 **Libre Computer**
+SBCs, built by `build-frite-stage4.sh`. It is **not** a cluster node and **not**
+in the default fleet, but it reuses the same aarch64 cross path and the **same
+mesh + KEYS-USB provisioning + hardened key-only SSH** as every other client
+image — so a Frite **joins the same tailnet** and does **Casdoor login** exactly
+like the Pi/x86 nodes, and honors the device-license SSH posture (no broad SSH).
+
+```bash
+make frite                                   # La Frite, BOTH live + installer (default)
+make frite FRITE_BOARD=le-potato             # the pricier S905X sibling (has microSD)
+make frite-live                              # LIVE image only        make frite-installer  # INSTALLER only
+FRITE=1      ./scripts/build-all-roles.sh    # ALSO build the Frite alongside the fleet
+FRITE_ONLY=1 ./scripts/build-all-roles.sh    # ONLY the Frite (skip Pi + x86)
+# directly:
+sudo ./build-frite-stage4.sh --board la-frite --flavor both
+```
+
+**Generation option — the knobs** (`brand.conf` or CLI; CLI wins):
+
+| Knob | brand.conf / env | CLI flag | Values (default **bold**) |
+|---|---|---|---|
+| board variant | `FRITE_BOARD` | `--board` | **`la-frite`** (S805X) · `le-potato` (S905X) · `sweet-potato` (S905X-CC-V2) |
+| live/installer | `FRITE_FLAVOR` | `--flavor` (`--live`/`--installer`) | **`both`** · `live` · `installer` |
+| desktop set | — | `--desktop` | **`light`** (lean LXDE) · `none` (headless base) |
+| prebuilt u-boot | `FRITE_UBOOT_URL` | `--uboot-url` | empty (provide a FIP-signed board image — see caveat) |
+| (shared) | `--env`/`--brand`/`--cluster-domain`/`-H`/`-T`/`-u`/`--*-password`/`--skip-mesh`/`--enable-wifi`… | same as the other builders |
+
+**Light desktop** = a lean **LXDE-class** stack (Openbox WM + LXpanel + PCManFM +
+LightDM + a small browser), **not** the full Plasma + gaming stage4. The set
+lives in `specs-frite/portage/packages-light-desktop.list`; the always-on base is
+`specs-frite/portage/packages.list`. `--desktop none` ships the headless base.
+
+**Board / boot-media reality:**
+
+| Board | Board id | SoC | microSD? | LIVE root | INSTALLER target | u-boot |
+|---|---|---|---|---|---|---|
+| `la-frite` | AML-S805X-AC | S805X | **no** | **USB** | **eMMC** | SPI NOR (`libretech-ac`) |
+| `le-potato` | AML-S905X-CC | S905X | yes | SD/USB | eMMC/SD | SD/eMMC (`libretech-cc`) |
+| `sweet-potato` | AML-S905X-CC-V2 | S905X | yes | SD/USB | eMMC/SD | SD/eMMC/SPI (`libretech-cc-v2`) |
+
+> **La Frite has NO microSD slot.** The LIVE image boots off **USB** (u-boot in
+> **SPI NOR**); the INSTALLER (`install-frite.sh`) writes the desktop to the
+> **eMMC** module. The **512 MB and 1 GB RAM SKUs are the SAME image** (RAM
+> auto-detected; the 512 MB SKU leans on a zram swap configured at first boot).
+
+**Flashing the Frite** (the artifacts are bootable ISO/live media — write with
+`dd`, *not* `flash-disk.sh`, which is built for the partitioned Pi/x86 `.img`):
+
+```bash
+# LIVE off USB (La Frite has no SD):
+sudo dd if=out/<brand>-frite-la-frite-arm64-desktop-test-<UTC>.live.iso of=/dev/sdX bs=4M status=progress conv=fsync
+# INSTALLER: boot it off USB, then on the Frite run:
+sudo install-frite.sh /dev/mmcblk0      # write the light desktop to the eMMC module
+```
+
+> **u-boot caveat (HONEST).** Amlogic GXL u-boot needs Amlogic's **proprietary
+> FIP/BL31 blobs** to be flashable — mainline u-boot alone is not. The builder
+> does **not** vendor those blobs (licensing). Provide a prebuilt, signed board
+> image with `--uboot-url` (e.g. a [Tow-Boot](https://tow-boot.org) release for
+> the board) and it is staged into the installer's `uboot/` for an optional SPI
+> write; otherwise flash u-boot once with the vendor/Tow-Boot tooling and the
+> images boot on top of it.
+
+**VERIFIED here vs NEEDS REAL HARDWARE** (be honest about what was testable in CI
+vs what needs a board + a full Gentoo cross-build):
+
+- **VERIFIED (syntactic / structural):** `bash -n` on `build-frite-stage4.sh` +
+  `install-frite.sh`; option/knob parsing and the board→DTB/defconfig/u-boot
+  table; the `make frite*` targets and the `build-all-roles.sh` `FRITE=`/
+  `FRITE_ONLY=` wiring; template rendering (extlinux/make.conf) with no leftover
+  markers; that it reuses the shared `specs/` mesh + provisioning + sshd exactly
+  like the Pi5 builder; that the **Pi5 and x86 paths are untouched** (additive).
+- **NEEDS A REAL BOARD / FULL GENTOO BUILD:** the actual aarch64 cross-emerge of
+  the LXDE stack; the mainline kernel build + the exact in-tree `meson-gxl-*.dtb`
+  names for the chosen kernel; the u-boot FIP signing; booting the squashfs LIVE
+  image off USB on a real La Frite; the eMMC install. These steps mirror the
+  proven Pi5 flow but **cannot be end-to-end tested without the hardware.**
+
 ---
 
 ## 4. Generate cluster secrets

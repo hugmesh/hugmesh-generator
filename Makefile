@@ -139,13 +139,22 @@ endef
 # passes BRAND_FLAGS through to BOTH builders via its "$@" passthrough.
 RPI := $(BRAND_ENV) $(SUDO) ./build-rpi5-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 X86 := $(BRAND_ENV) $(SUDO) ./build-x86-host-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
+FRITE := $(BRAND_ENV) $(SUDO) ./build-frite-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(ENV_FLAGS) $(BRAND_FLAGS)
 ALL := $(BRAND_ENV) $(SUDO) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(ENV_FLAGS) $(BRAND_FLAGS)
 
 RPI_ROLES := pki backend frontend
 X86_ROLES := pki be fe be+gpu
 
+# Libre Computer Le/La Frite LIGHT-DESKTOP client image (Amlogic arm64).
+#   FRITE_BOARD  = la-frite (DEFAULT) | le-potato | sweet-potato
+#   FRITE_FLAVOR = both (DEFAULT) | live | installer
+FRITE_BOARD  ?= la-frite
+FRITE_FLAVOR ?= both
+FRITE_PASS   := FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)'
+
 .DEFAULT_GOAL := help
-.PHONY: help clean build-all rebuild rpi x86 omnibus flash qemu qemu-rpi qemu-x86 \
+.PHONY: help clean build-all rebuild rpi x86 omnibus frite frite-live frite-installer \
+        flash qemu qemu-rpi qemu-x86 \
         playwright-deps e2e ci ci-quick docker-image ensure-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-build stack-up stack-down stack-logs stack-ps
@@ -251,6 +260,21 @@ else
 	$(X86) --role $*
 	$(chown-artifacts)
 endif
+
+frite: ## build the Frite light desktop (FRITE_BOARD=la-frite|le-potato, FRITE_FLAVOR=both|live|installer)
+ifndef NATIVE
+	$(MAKE) ensure-image
+	$(DOCKER_RUN) make frite NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) $(BRAND_PASS) $(FRITE_PASS)
+else
+	$(FRITE) --board $(FRITE_BOARD) --flavor $(FRITE_FLAVOR)
+	$(chown-artifacts)
+endif
+
+frite-live: ## build the Frite light desktop LIVE image only (boots ephemerally off USB/SD)
+	$(MAKE) frite FRITE_FLAVOR=live
+
+frite-installer: ## build the Frite light desktop INSTALLER image only (writes to eMMC/SD)
+	$(MAKE) frite FRITE_FLAVOR=installer
 
 ## ── docker (cross-platform builder; Phase 5) ──────────────────────────
 docker-image: ## build the self-contained Gentoo builder image (LONG first time: cross-toolchain)

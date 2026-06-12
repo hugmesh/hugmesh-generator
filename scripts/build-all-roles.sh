@@ -11,6 +11,14 @@
 #   X86_ROLES="pki omnibus" ./scripts/build-all-roles.sh   # an explicit subset
 #   SKIP_X86=1    ./scripts/build-all-roles.sh  # Pi roles only (no x86 at all)
 #
+# The Libre Computer Le/La Frite LIGHT-DESKTOP client image is OPT-IN (it is a
+# desktop appliance, not a cluster node, so it is NOT in the default fleet):
+#   FRITE=1       ./scripts/build-all-roles.sh  # ALSO build the Frite (la-frite, both flavors)
+#   FRITE_BOARD=le-potato FRITE=1 ./scripts/build-all-roles.sh   # the pricier S905X sibling
+#   FRITE_ONLY=1  ./scripts/build-all-roles.sh  # ONLY the Frite (skip Pi + x86)
+#   FRITE_FLAVOR=live FRITE=1 ./scripts/build-all-roles.sh       # live image only
+# (build-frite-stage4.sh — see docs/RUNNING.md §"Frite light-desktop image".)
+#
 # Any extra args are passed through to BOTH builders, e.g.:
 #   ./scripts/build-all-roles.sh -j 16 --cluster-domain snapdragon.systems
 #
@@ -33,6 +41,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_RPI="${REPO_DIR}/build-rpi5-stage4.sh"
 BUILD_X86="${REPO_DIR}/build-x86-host-stage4.sh"
+BUILD_FRITE="${REPO_DIR}/build-frite-stage4.sh"
 GENKEYS="${SCRIPT_DIR}/gen-provision-keys.sh"
 WORK_DIR="${WORK_DIR:-${REPO_DIR}/out}"
 # Honor a -w/--work-dir passed through to the builders so the keys-<role> folders
@@ -63,8 +72,20 @@ else
     X86_BUILD_ROLES=(pki be fe be+gpu)
 fi
 
-echo "==> RPi5 roles:  ${RPI_ROLES[*]}"
+# Frite light-desktop is OPT-IN. FRITE_ONLY=1 builds ONLY the Frite (skip Pi/x86).
+BUILD_FRITE_IMG=false
+if [ "${FRITE_ONLY:-0}" = "1" ]; then
+    BUILD_FRITE_IMG=true
+    RPI_ROLES=(); X86_BUILD_ROLES=()
+elif [ "${FRITE:-0}" = "1" ]; then
+    BUILD_FRITE_IMG=true
+fi
+FRITE_BOARD_SEL="${FRITE_BOARD:-la-frite}"
+FRITE_FLAVOR_SEL="${FRITE_FLAVOR:-both}"
+
+echo "==> RPi5 roles:  ${RPI_ROLES[*]:-(none)}"
 echo "==> x86 roles:   ${X86_BUILD_ROLES[*]:-(none)}"
+echo "==> Frite:       $([ "${BUILD_FRITE_IMG}" = true ] && echo "${FRITE_BOARD_SEL} (flavor=${FRITE_FLAVOR_SEL})" || echo '(off — set FRITE=1)')"
 echo "==> Build ENV:   ${BUILD_ENV}  $([ "${BUILD_ENV}" = test ] && echo '(LAN-first; cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
 echo "    Work/target dir: ${WORK_DIR}"
 echo "    Pass-through args: $*"
@@ -84,6 +105,13 @@ for role in "${X86_BUILD_ROLES[@]}"; do
     "${BUILD_X86}" --role "${role}" "$@"
 done
 
+if [ "${BUILD_FRITE_IMG}" = true ]; then
+    echo "############################################################"
+    echo "#  Building Frite light desktop: ${FRITE_BOARD_SEL} (flavor=${FRITE_FLAVOR_SEL})"
+    echo "############################################################"
+    "${BUILD_FRITE}" --board "${FRITE_BOARD_SEL}" --flavor "${FRITE_FLAVOR_SEL}" "$@"
+fi
+
 # ── Generate provisioning keys ───────────────────────────────────────
 # All images are built first; keys are created LAST, in one pass over every
 # built role. gen-provision-keys.sh only knows the RPi/host role names, so we
@@ -98,6 +126,14 @@ if [ "${SKIP_KEYS:-0}" != "1" ]; then
         "${GENKEYS}" --role "${role}" --out "${WORK_DIR}/keys-${role}" --random || \
             echo "   (keys generation skipped/failed for ${role} — run gen-provision-keys.sh manually)"
     done
+    # The Frite light-desktop client provisions from the SAME KEYS USB mechanism.
+    # It is a client appliance (no users.json / no cluster join), so it uses the
+    # 'host' worker-key profile: break-glass root key + mesh join material only.
+    if [ "${BUILD_FRITE_IMG}" = true ]; then
+        echo "==> Generating keys folder: ${WORK_DIR}/keys-frite (host profile)"
+        "${GENKEYS}" --role host --out "${WORK_DIR}/keys-frite" --random || \
+            echo "   (keys generation skipped/failed for frite — run gen-provision-keys.sh manually)"
+    fi
 fi
 
 echo

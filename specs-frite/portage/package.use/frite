@@ -1,0 +1,16 @@
+# Per-package USE flags — Libre Computer Le/La Frite (Amlogic arm64) light desktop.
+
+# gentoo-sources: install the source symlink so the kernel build can find it.
+sys-kernel/gentoo-sources symlink
+
+# parted needs device-mapper for the installer's partitioning helpers.
+sys-block/parted device-mapper
+
+# NetworkManager: keep wifi USE (a USB dongle may be present) but the radio is
+# rfkill-blocked + module-blacklisted by default (harden_radios in the builder).
+net-misc/networkmanager wifi
+
+# Lean desktop USE trims:
+#   xterm: no toolbar bloat.
+#   lxpanel/pcmanfm: GTK only, no extra plugins.
+x11-misc/xterm -toolbar
