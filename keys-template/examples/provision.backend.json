@@ -2,21 +2,19 @@
   "_comment": "WORKER KEYS USB = KEYS ONLY. No users.json, no headscale/vault/gitops/storage/backup service config — those live ONLY on the pki node's USB + JSON config. A worker carries just: the cluster-join token + CA (kubernetes.*), the mesh authkey (tailscale), the cluster CA cert (files), and break-glass SSH keys (ssh/root.authorized_keys). It joins the pki control-plane and gets all service config + secrets from there (ArgoCD + Vault/ESO).",
   "version": 1,
   "hostname": "snapdragon-be-01",
-
   "_comment_mesh": "Leave endpoint empty to default tailscale login_server to the pki node's LAN IP (works before public DNS). cp_dns_name is the stable control-plane name the kubeadm join targets over the mesh.",
   "mesh": {
     "endpoint": "",
     "magic_dns_domain": "headnet.internal",
     "cp_dns_name": "kube-api.headnet.internal"
   },
-
   "tailscale": {
     "enabled": true,
     "authkey_file": "tailscale/authkey",
     "login_server": "",
-    "up_args": "--advertise-tags=tag:snapdragon,tag:be --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false"
+    "up_args": "--advertise-tags=tag:snapdragon,tag:be --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false --ssh",
+    "ssh": true
   },
-
   "_comment_kubernetes": "Worker join. api_server left empty auto-targets cp_dns_name:6443 (resolved over the mesh / via the first-boot /etc/hosts bridge). token + ca_cert_hash come from `kubeadm token create --print-join-command` on the first control-plane.",
   "kubernetes": {
     "role": "worker",
@@ -28,21 +26,29 @@
       "ca_cert_hash": "sha256:REPLACE_WITH_CA_CERT_HASH"
     }
   },
-
   "snapdragon": {
     "role": "backend",
     "cluster_domain": "snapdragon.systems",
-    "node_labels": { "snapdragon.systems/backend": "true" }
+    "node_labels": {
+      "snapdragon.systems/backend": "true"
+    }
   },
-
   "_comment_nodes": "Reach the pki control-plane + mesh + binhost by IP (written to /etc/hosts), so tailscale login_server and kubeadm api_server resolve before DNS exists.",
   "nodes": [
-    { "name": "snapdragon-pki",  "ip": "10.0.0.10", "role": "pki" },
-    { "name": "snapdragon-host", "ip": "10.0.0.30", "role": "host" }
+    {
+      "name": "snapdragon-pki",
+      "ip": "10.0.0.10",
+      "role": "pki"
+    },
+    {
+      "name": "snapdragon-host",
+      "ip": "10.0.0.30",
+      "role": "host"
+    }
   ],
-
-  "binhost": { "url": "http://10.0.0.30:8086/arm64" },
-
+  "binhost": {
+    "url": "http://10.0.0.30:8086/arm64"
+  },
   "files": [
     {
       "src": "certs/cluster-ca.crt",
