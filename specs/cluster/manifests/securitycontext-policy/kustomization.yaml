@@ -1,0 +1,10 @@
+# Pod securityContext baseline policy bundle (AUDIT / report-only). Kept in its
+# OWN directory + ArgoCD Application (apps/16a-securitycontext-policy.yaml) so it
+# is independently togglable and never co-owns resources with the reserved-prefix
+# bundle. The single Kyverno ClusterPolicy here reports container-hardening drift
+# (CIS K8s 5.2/5.3, NIST 800-190 §4.5) and does NOT block pods. The Audit ->
+# Enforce flip is sequenced in docs/CLUSTER-HARDENING-PLAN.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - securitycontext-baseline-policy.yaml

@@ -17,6 +17,11 @@ spec:
         {{- include "snapdragon-gateway.selectorLabels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "snapdragon-gateway.serviceAccountName" . }}
+      # The gateway is a Spring Cloud Gateway resource server: it validates the
+      # Casdoor JWT + routes to upstreams and NEVER calls the Kubernetes API, so
+      # its ServiceAccount token must not be mounted. NIST 800-53 AC-6 (least
+      # privilege), 800-190 §4.5.5; closes the SA-token theft -> API-access path.
+      automountServiceAccountToken: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
