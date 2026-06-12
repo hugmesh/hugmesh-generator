@@ -599,7 +599,10 @@ write_growfs_conf "${SYSROOT}/etc/growfs.conf"
 
 mkdir -p "${SYSROOT}/etc/headscale"
 cp "${SHARED_SPECS}/etc/headscale/config.yaml"   "${SYSROOT}/etc/headscale/config.yaml"
-cp "${SHARED_SPECS}/etc/headscale/policy.hujson" "${SYSROOT}/etc/headscale/policy.hujson"
+# Layer-A: bake the BOOTSTRAP policy AS the initial policy.hujson (NO any-to-any
+# :22 hole; KEEPS the k8s CIDR data-plane rule). First verified Layer-A sync
+# re-renders it from policy.hujson.tmpl. (See build-x86-host-stage4.sh rationale.)
+cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson" "${SYSROOT}/etc/headscale/policy.hujson"
 
 mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/var/lib/keys-provision"
 cp "${SHARED_SPECS}/etc/keys-provision/provision.sh" "${SYSROOT}/usr/sbin/keys-provision"
@@ -628,6 +631,19 @@ chmod +x "${SYSROOT}/etc/init.d/snapdragon-device-registry-sync"
 cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/device-registry.conf" "${SYSROOT}/etc/snapdragon/registry/device-registry.conf"
 cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/break-glass.conf"     "${SYSROOT}/etc/snapdragon/registry/break-glass.conf"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-device-registry-sync" "${SYSROOT}/etc/snapdragon/registry/cron-device-registry-sync"
+
+# ── Layer-A device-license-registry headscale policy (CONTROL/pki node only) ────
+# provision_headscale_policy_sync() ACTIVATES these only when headscale.enabled
+# (the control node). Inert on a non-control node. REUSES Layer-B's registry-verify.sh
+# + baked registry-pub.ed25519 (no duplication).
+cp "${SHARED_SPECS}/usr/sbin/gen-headscale-policy.sh"          "${SYSROOT}/usr/sbin/gen-headscale-policy.sh"
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-headscale-forcetags"   "${SYSROOT}/usr/sbin/snapdragon-headscale-forcetags"
+chmod +x "${SYSROOT}/usr/sbin/gen-headscale-policy.sh" "${SYSROOT}/usr/sbin/snapdragon-headscale-forcetags"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-policy-sync"         "${SYSROOT}/etc/init.d/snapdragon-policy-sync"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-policy-sync"
+cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson"     "${SYSROOT}/etc/headscale/policy.bootstrap.hujson"
+cp "${SHARED_SPECS}/etc/headscale/policy.hujson.tmpl"          "${SYSROOT}/etc/headscale/policy.hujson.tmpl"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-policy-sync"         "${SYSROOT}/etc/snapdragon/registry/cron-policy-sync"
 
 # Node role + domain + env markers (read by keys-provision / first-boot).
 mkdir -p "${SYSROOT}/etc/snapdragon"

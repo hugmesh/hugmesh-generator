@@ -1,0 +1,89 @@
+{
+  // ── Snapdragon Layer-A BOOTSTRAP headscale policy (device-license registry) ──
+  //
+  // This is the MINIMAL policy baked into the image and applied by
+  // provision_headscale during the bootstrap window — BEFORE the BFF
+  // /bff/admin/device-licenses/export endpoint exists / is reachable, so the
+  // mesh can still come up and the privileged operator can reach nodes during
+  // provisioning. The FIRST verified Layer-A sync (gen-headscale-policy.sh)
+  // WHOLESALE re-renders /etc/headscale/policy.hujson from policy.hujson.tmpl +
+  // the signed export and re-applies it (`headscale policy set -f`), replacing
+  // this bootstrap policy with the generated default-deny per-edge SSH block.
+  //
+  // DELIBERATE DIFFERENCE FROM #66's policy.hujson: the flat any-to-any
+  //   {src:[tag:snapdragon], dst:[tag:snapdragon:*]}
+  // ACL (which exposed EVERY node's :22 to every other node) is DROPPED even
+  // here, pre-export. That hole need not exist at ANY time — k8s pod/ClusterIP
+  // traffic rides the 10.244/10.96 data-plane rule below (NOT :22), and SSH
+  // rides the explicit ssh[] block. The two-phase flip mirrors Layer-B's
+  // selinux-style enforce gate: this conservative bootstrap policy holds until
+  // the first verified export, then the generated per-edge edges replace it.
+  //
+  // hujson = JSON + comments + trailing commas; headscale parses it natively.
+
+  // ── Who may apply which tags ──────────────────────────────────────────────
+  // tag:snapdragon STAYS self-applied (the data-plane MEMBERSHIP tag gating the
+  // CIDR rule + route auto-approval); the mesh-join flow (preauth key,
+  // --advertise-tags=tag:snapdragon) is UNTOUCHED by Layer-A.
+  //
+  // The SECURITY tags below — tag:dev_*, tag:dom_*, tag:mesh_*, tag:superadmin —
+  // are owned by the "snapdragon" control user ONLY and are SERVER-FORCED via
+  // `headscale nodes tag` at approval (snapdragon-headscale-forcetags). A node
+  // CANNOT self-advertise them; that is the FIX-SERVERTAG hardening that makes
+  // the SSH dst non-forgeable. They appear in the bootstrap tagOwners so the
+  // policy parses and forced-tag assignment is permitted even before the first
+  // export render. NOTE: headscale tagOwners keys must be exact tag strings;
+  // the per-node/per-domain tags are minted dynamically by the renderer, so the
+  // bootstrap file lists only the STATIC tags (tag:superadmin) + leaves the
+  // dynamic families to the rendered policy. tag:dev_*/tag:dom_*/tag:mesh_* are
+  // force-assigned by the control node, which already owns every node, so a
+  // forced tag does not require a tagOwners entry to be APPLIED — tagOwners only
+  // gates SELF-advertisement, which we forbid by never minting a preauth key for
+  // these tags. (See FORCETAGS note in gen-headscale-policy.sh.)
+  "tagOwners": {
+    "tag:snapdragon": ["snapdragon"],
+    "tag:pki": ["snapdragon"],
+    "tag:be": ["snapdragon"],
+    "tag:fe": ["snapdragon"],
+    "tag:host": ["snapdragon"],
+    "tag:superadmin": ["snapdragon"]
+  },
+
+  // ── Subnet-route auto-approval (UNCHANGED from #66) ───────────────────────
+  // Fleet nodes advertise the cluster pod + service CIDRs; auto-approve exactly
+  // those prefixes for tag:snapdragon. Keep in sync with kubeadm-config.yaml.
+  "autoApprovers": {
+    "routes": {
+      "10.244.0.0/16": ["tag:snapdragon"],
+      "10.96.0.0/12": ["tag:snapdragon"]
+    }
+  },
+
+  // ── Access rules (default-deny; only these accepts apply) ─────────────────
+  // KEPT: the k8s "one-LAN" pod/ClusterIP data-plane rule. DROPPED: the
+  // any-to-any tag:snapdragon -> tag:snapdragon:* rule (the :22 hole).
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["tag:snapdragon"],
+      "dst": ["10.244.0.0/16:*", "10.96.0.0/12:*"]
+    }
+  ],
+
+  // ── Tailscale SSH — bootstrap window only (#66 behaviour) ─────────────────
+  // A SINGLE conservative accept so the privileged operator can reach nodes
+  // during provisioning. keys-provision rewrites @@TS_SSH_USER@@ to the
+  // provisioned privileged user (provision.json .tailscale.ssh_user) before
+  // `headscale policy set`. headscale SSH is itself default-deny, so this one
+  // accept IS the whole SSH surface in the bootstrap window. The FIRST verified
+  // Layer-A sync OVERWRITES this with the per-edge generated block (and removes
+  // the @@TS_SSH_USER@@ placeholder entirely).
+  "ssh": [
+    {
+      "action": "accept",
+      "src": ["tag:snapdragon"],
+      "dst": ["tag:snapdragon"],
+      "users": ["@@TS_SSH_USER@@"]
+    }
+  ]
+}

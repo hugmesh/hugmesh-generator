@@ -858,7 +858,14 @@ cp "${SHARED_SPECS}/etc/kubernetes/kubeadm-config.yaml" "${SYSROOT}/etc/kubernet
 cp "${SHARED_SPECS}/etc/kubernetes/kubelet-config.yaml" "${SYSROOT}/var/lib/kubelet/config.yaml"
 cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf" "${SYSROOT}/etc/ssh/sshd_config.d/"
 cp "${SHARED_SPECS}/etc/headscale/config.yaml"        "${SYSROOT}/etc/headscale/"
-cp "${SHARED_SPECS}/etc/headscale/policy.hujson"      "${SYSROOT}/etc/headscale/"   # fleet full-mesh ACL (policy.mode: file)
+# Layer-A: bake the BOOTSTRAP policy AS the initial /etc/headscale/policy.hujson
+# (NO any-to-any tag:snapdragon->tag:snapdragon:* :22 hole; KEEPS the k8s CIDR
+# data-plane rule + a single conservative @@TS_SSH_USER@@ ssh rule). The #66
+# full-mesh policy.hujson is intentionally NOT baked here — its any-to-any :22 hole
+# must not exist at any time. The first verified Layer-A sync wholesale re-renders
+# this from policy.hujson.tmpl. (provision_headscale also restages this from
+# policy.bootstrap.hujson at provision time as a belt-and-braces.)
+cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson" "${SYSROOT}/etc/headscale/policy.hujson"   # Layer-A bootstrap (policy.mode: file)
 cp "${SHARED_SPECS}/etc/keys-provision/provision.sh"  "${SYSROOT}/usr/sbin/keys-provision"; chmod +x "${SYSROOT}/usr/sbin/keys-provision"
 mkdir -p "${SYSROOT}/usr/local/sbin"
 cp "${SHARED_SPECS}/usr/local/sbin/snapdragon-backup"  "${SYSROOT}/usr/local/sbin/snapdragon-backup"; chmod +x "${SYSROOT}/usr/local/sbin/snapdragon-backup"
@@ -879,6 +886,19 @@ cp "${SHARED_SPECS}/etc/init.d/snapdragon-device-registry-sync" "${SYSROOT}/etc/
 cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/device-registry.conf" "${SYSROOT}/etc/snapdragon/registry/device-registry.conf"
 cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/break-glass.conf"     "${SYSROOT}/etc/snapdragon/registry/break-glass.conf"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-device-registry-sync" "${SYSROOT}/etc/snapdragon/registry/cron-device-registry-sync"
+
+# ── Layer-A device-license-registry headscale policy (CONTROL/pki node only) ────
+# CENTRALIZED: provision_headscale_policy_sync() ACTIVATES these only when
+# headscale.enabled==true (the control node). The renderer + forced-tag pass + the
+# bootstrap policy + the render template are baked into every host image (inert on
+# a non-control node); REUSES the SAME registry-verify.sh + baked
+# registry-pub.ed25519 as Layer-B (no duplication).
+cp "${SHARED_SPECS}/usr/sbin/gen-headscale-policy.sh"          "${SYSROOT}/usr/sbin/gen-headscale-policy.sh";          chmod +x "${SYSROOT}/usr/sbin/gen-headscale-policy.sh"
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-headscale-forcetags"   "${SYSROOT}/usr/sbin/snapdragon-headscale-forcetags";   chmod +x "${SYSROOT}/usr/sbin/snapdragon-headscale-forcetags"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-policy-sync"         "${SYSROOT}/etc/init.d/snapdragon-policy-sync";         chmod +x "${SYSROOT}/etc/init.d/snapdragon-policy-sync"
+cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson"     "${SYSROOT}/etc/headscale/policy.bootstrap.hujson"
+cp "${SHARED_SPECS}/etc/headscale/policy.hujson.tmpl"          "${SYSROOT}/etc/headscale/policy.hujson.tmpl"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-policy-sync"         "${SYSROOT}/etc/snapdragon/registry/cron-policy-sync"
 
 render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"

@@ -474,8 +474,24 @@ provision_headscale() {
         cp -f "${BASE}/headscale/"*.hujson    /etc/headscale/     2>/dev/null || true
         cp -f "${BASE}/headscale/"derp*.yaml  /etc/headscale/     2>/dev/null || true
     fi
-    # Fleet full-mesh ACL: prefer a USB-supplied policy.hujson, else fall back
-    # to the baked-in /etc/headscale/policy.hujson shipped in the image.
+    # ── Layer-A BOOTSTRAP policy (device-license registry) ────────────────────
+    # During the bootstrap window — BEFORE the BFF /export exists / is reachable —
+    # apply the MINIMAL baked bootstrap policy (tagOwners + autoApprovers + the
+    # KEPT 10.244/10.96 data-plane rule + a single conservative @@TS_SSH_USER@@
+    # ssh rule, and NO any-to-any tag:snapdragon->tag:snapdragon:* hole). The
+    # FIRST verified Layer-A sync (gen-headscale-policy.sh, enabled by
+    # provision_headscale_policy_sync) WHOLESALE re-renders /etc/headscale/
+    # policy.hujson and re-applies it, replacing this bootstrap policy with the
+    # generated default-deny per-edge ssh block. A USB-supplied policy.hujson
+    # override still wins (operator escape hatch). If neither the bootstrap file
+    # nor a USB/baked policy.hujson exists, fall back to whatever is present.
+    if [ ! -f "${BASE}/headscale/policy.hujson" ] && [ -f /etc/headscale/policy.bootstrap.hujson ]; then
+        cp -f /etc/headscale/policy.bootstrap.hujson /etc/headscale/policy.hujson \
+            && log "headscale: staged Layer-A BOOTSTRAP policy (no any-to-any :22 rule; replaced by first verified Layer-A sync)" \
+            || warn "headscale: failed to stage bootstrap policy — using whatever policy.hujson is present"
+    fi
+    # Fleet ACL source: prefer a USB-supplied policy.hujson, else the baked-in
+    # /etc/headscale/policy.hujson (now the bootstrap policy on a clean image).
     local policy_file=""
     if   [ -f "${BASE}/headscale/policy.hujson" ]; then policy_file=/etc/headscale/policy.hujson
     elif [ -f /etc/headscale/policy.hujson ];      then policy_file=/etc/headscale/policy.hujson
@@ -713,6 +729,12 @@ provision_tailscale() {
     # autodiscovering nodes can resolve the API endpoint over the mesh.
     if [ "$(jqm '.headscale.enabled // false')" = "true" ] && have headscale; then
         publish_cp_dns_record
+        # Layer-A: wire the headscale-policy renderer + server-forced-tag pass +
+        # boot/cron sync (CENTRALIZED on the control node ONLY). The socket + mesh
+        # are up now, so the first best-effort render can apply immediately if the
+        # BFF /export is already reachable; otherwise the baked bootstrap policy
+        # holds (no mesh outage). gated internally on headscale.enabled.
+        provision_headscale_policy_sync
     fi
 }
 
@@ -899,6 +921,118 @@ provision_device_registry() {
     # (empty) cache and the node stays in bootstrap (no brick).
     if [ -x /usr/sbin/snapdragon-device-registry-sync ]; then
         /usr/sbin/snapdragon-device-registry-sync 2>/dev/null || true
+    fi
+}
+
+# ── Device-license registry — LAYER A (headscale tailnet ACL) ──────
+# CENTRALIZED: wire the signed-export-driven headscale policy renderer + the
+# server-forced-tag pass + the boot/cron sync ONLY on the headscale CONTROL (pki)
+# node — the one node that holds the headscale socket + binary + DB. This is the
+# SECOND enforcement layer off the SAME signed export Layer-B consumes (Layer-A is
+# ADVISORY on the SSH source until OIDC users land; Layer-B is the load-bearing
+# host boundary). The mesh-join flow (preauth key, self-applied tag:snapdragon) is
+# UNTOUCHED; only the ACL/SSH plane headscale enforces is re-architected.
+#
+# Called from provision_tailscale's control-node branch (AFTER the control node
+# has joined its own tailnet, so the socket + mesh are up), gated on
+# `have headscale` && .headscale.enabled==true.
+#
+# It (a) stages /etc/snapdragon/registry/node.env transport reuse — the SAME file
+# layout Layer-B reads (BFF_EXPORT_URL/CERT/KEY/CA + MESH_ID) PLUS a Layer-A-only
+# TS_SSH_USER (the node-local privileged ssh account the generated ssh `users`
+# list opens AS); (b) copies the BAKED registry-pub.ed25519 (REUSE Layer-B's
+# baked key — never re-bake); (c) enables snapdragon-policy-sync + installs the
+# 60s cron; (d) kicks one best-effort gen-headscale-policy.sh. FAIL-SOFT: a
+# missing piece leaves the node on the baked bootstrap policy (no mesh outage).
+provision_headscale_policy_sync() {
+    have headscale || return 0
+    [ "$(jqm '.headscale.enabled // false')" = "true" ] || return 0
+
+    local reg_dir=/etc/snapdragon/registry
+    local cache_dir=/var/lib/snapdragon/headscale-policy
+    mkdir -p "${reg_dir}" "${cache_dir}"
+    chmod 0700 "${cache_dir}" 2>/dev/null || true   # control-node-only; root reads
+
+    # ── node.env (SHARED layout with Layer-B; Layer-A adds TS_SSH_USER) ─────────
+    # On a SUPERADMIN/core control node, provision_device_registry returns early
+    # and does NOT write node.env, so Layer-A writes it here. If Layer-B already
+    # wrote one (an ADMIN control node — atypical), we PRESERVE its identity
+    # fields and only ensure MESH_ID / TS_SSH_USER / the BFF transport are set.
+    local mesh_id bff_url bff_cert bff_key bff_ca ssh_user
+    mesh_id="$(jqm '.device_registry.mesh_id // ""')"
+    { [ -z "${mesh_id}" ] || [ "${mesh_id}" = "null" ]; } && mesh_id="$(jqm '.mesh.id // ""')"
+    { [ -z "${mesh_id}" ] || [ "${mesh_id}" = "null" ]; } && [ -f "${BASE}/device-registry/mesh_id" ] \
+        && mesh_id="$(tr -d '[:space:]' < "${BASE}/device-registry/mesh_id" 2>/dev/null)"
+    bff_url="$(jqm '.device_registry.bff_export_url // ""')"
+    bff_cert="$(jqm '.device_registry.bff_client_cert // ""')"
+    bff_key="$(jqm '.device_registry.bff_client_key // ""')"
+    bff_ca="$(jqm '.device_registry.bff_ca // "/etc/snapdragon/pki/ca-chain.crt"')"
+    ssh_user="$(resolve_ssh_user)"   # the LOCAL privileged unix account (NOT the operator)
+
+    # Preserve an existing MACHINE_KEY_FP line if Layer-B already wrote node.env.
+    local existing_mkey="" existing_line=""
+    if [ -f "${reg_dir}/node.env" ]; then
+        existing_line="$(grep -E '^MACHINE_KEY_FP=' "${reg_dir}/node.env" 2>/dev/null | head -1)"
+        existing_mkey="${existing_line#MACHINE_KEY_FP=}"
+    fi
+    {
+        echo "# device-registry node identity + BFF transport. Shared layout with"
+        echo "# Layer-B (snapdragon-device-registry-sync) + Layer-A (gen-headscale-policy.sh)."
+        echo "# MACHINE_KEY_FP / MESH_ID are BAKED self-identity, never self-claimed."
+        echo "MACHINE_KEY_FP=${existing_mkey}"
+        echo "MESH_ID=${mesh_id}"
+        echo "BFF_EXPORT_URL=${bff_url}"
+        echo "BFF_CLIENT_CERT=${bff_cert}"
+        echo "BFF_CLIENT_KEY=${bff_key}"
+        echo "BFF_CA=${bff_ca}"
+        echo "# TS_SSH_USER (Layer-A): the node-local privileged unix account the"
+        echo "# generated headscale ssh 'users' list opens a session AS (NOT the operator)."
+        echo "TS_SSH_USER=${ssh_user}"
+    } > "${reg_dir}/node.env"
+    chmod 0644 "${reg_dir}/node.env"
+    [ -n "${mesh_id}" ] || warn "policy-sync: MESH_ID empty — Layer-A sync + mesh guard will fail-closed (keep bootstrap policy)"
+    log "policy-sync: wrote node.env (mesh=${mesh_id:-<unset>} ssh_user=${ssh_user})"
+
+    # ── BAKED registry public verifying key (REUSE Layer-B's key-USB custody) ───
+    if [ ! -s "${reg_dir}/registry-pub.ed25519" ] \
+            && [ -f "${BASE}/device-registry/registry-pub.ed25519" ] \
+            && [ -s "${BASE}/device-registry/registry-pub.ed25519" ]; then
+        cp -f "${BASE}/device-registry/registry-pub.ed25519" "${reg_dir}/registry-pub.ed25519"
+        chmod 0644 "${reg_dir}/registry-pub.ed25519"
+        log "policy-sync: installed BAKED registry public key (Layer-A verifies the export against THIS key)"
+    elif [ ! -s "${reg_dir}/registry-pub.ed25519" ]; then
+        warn "policy-sync: registry-pub.ed25519 ABSENT — Layer-A fail-closes (keeps bootstrap policy) until the public half is baked onto the key-USB"
+    fi
+
+    # Sanity: the renderer + forcetags + template must be baked into the image.
+    [ -x /usr/sbin/gen-headscale-policy.sh ] \
+        || warn "policy-sync: /usr/sbin/gen-headscale-policy.sh missing from image (no Layer-A render; staying on bootstrap policy)"
+    [ -x /usr/sbin/snapdragon-headscale-forcetags ] \
+        || warn "policy-sync: /usr/sbin/snapdragon-headscale-forcetags missing (server-forced dst tags NOT applied; generated edges won't match)"
+    [ -r /etc/headscale/policy.hujson.tmpl ] \
+        || warn "policy-sync: /etc/headscale/policy.hujson.tmpl missing (renderer has no template; staying on bootstrap policy)"
+
+    # ── Enable the boot sync service + 60s cron (convergence floor) ─────────────
+    if [ -f /etc/init.d/snapdragon-policy-sync ]; then
+        rc-update add snapdragon-policy-sync default 2>/dev/null \
+            && log "policy-sync: enabled snapdragon-policy-sync (boot render+apply)" \
+            || warn "policy-sync: rc-update add snapdragon-policy-sync failed"
+    else
+        warn "policy-sync: init.d/snapdragon-policy-sync not baked — no boot sync"
+    fi
+    if [ -f "${reg_dir}/cron-policy-sync" ]; then
+        cp -f "${reg_dir}/cron-policy-sync" /etc/cron.d/snapdragon-policy-sync
+        chmod 0644 /etc/cron.d/snapdragon-policy-sync
+        log "policy-sync: installed 60s render cron (convergence floor)"
+    else
+        warn "policy-sync: cron drop-in not baked at ${reg_dir} — no 60s convergence poll"
+    fi
+
+    # Kick a first render NOW (best-effort): if the BFF is already reachable this
+    # renders + applies the generated default-deny policy + forces server tags;
+    # otherwise it KEEPS the baked bootstrap policy (no mesh outage, fail-closed).
+    if [ -x /usr/sbin/gen-headscale-policy.sh ]; then
+        /usr/sbin/gen-headscale-policy.sh 2>/dev/null || true
     fi
 }
 

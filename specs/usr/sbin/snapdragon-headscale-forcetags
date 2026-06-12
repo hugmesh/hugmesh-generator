@@ -1,0 +1,170 @@
+#!/bin/bash
+# snapdragon-headscale-forcetags — Layer-A SERVER-ASSIGNED forced-tag assigner.
+# Runs ONLY on the headscale CONTROL (pki) node (where the headscale socket +
+# binary live). Invoked by gen-headscale-policy.sh after a verified export is
+# applied (and may be run standalone after node approval).
+#
+# WHY (FIX-SERVERTAG): on main, tags are SELF-APPLIED at join
+# (--advertise-tags=tag:snapdragon). A node could therefore advertise
+# tag:dev_<otherfp> / tag:dom_<otherdomain> and MASQUERADE as a different SSH
+# destination. Forced tags set via `headscale nodes tag` OVERRIDE
+# --advertise-tags, so once the control node force-assigns a node's
+# tag:dev_<fp> / tag:dom_<domain> / tag:mesh_<id>, the node can no longer
+# self-advertise a DIFFERENT one. That makes the SSH dst (which the generated
+# policy keys on these tags) NON-FORGEABLE. tag:snapdragon stays self-applied
+# (data-plane membership only — CIDR rule + route auto-approval, NOT a :22
+# src/dst).
+#
+# WHAT IT FORCES, per node:
+#   * tag:mesh_<MESH_ID>  on EVERY approved node in this mesh — including
+#       superadmin/core nodes the export deliberately omits. This is the dst of
+#       the ALWAYS-emitted SUPERADMIN mesh rule, so it MUST cover core nodes
+#       (that is exactly why superadmin reach to core nodes rides this tag, NOT
+#       the export). headscale is the mesh-membership source of truth.
+#   * tag:dev_<shorthash(machine_key_fp)>  on each node that appears in the
+#       verified Layer-A export cache (matched by machine key). This is the dst
+#       of that node's generated ssh edge.
+#   * tag:dom_<domain>  BEST-EFFORT: the export AuthorizedOperator carries NO
+#       domain field (see OPERATOR-IDENTITY / the export contract), so a reliable
+#       per-node domain is not available from the signed export alone. We force
+#       tag:dom_* ONLY when a node-local domain hint is present
+#       (/etc/snapdragon/registry/node-domains.tsv: "<machine_key>\t<domain>"
+#       lines, optionally seeded out-of-band). Absent => we skip tag:dom_* (the
+#       load-bearing dst is tag:dev_<fp>; tag:dom_* is a coarser future grouping).
+#   * tag:superadmin  is NOT force-assigned here by default — it binds to the
+#       superadmin OPERATOR (laptop/console) identity, a deliberate control-node
+#       admin action keyed to a known machine. List those machine keys (one per
+#       line) in /etc/snapdragon/registry/superadmin-machines.txt to have this
+#       script force tag:superadmin on them. RESIDUAL: until OIDC, the trust in
+#       tag:superadmin's SOURCE is only as strong as this manual list + the
+#       reusable preauth key the operator joined with (documented advisory).
+#
+# THE HIGHEST-RISK CONTRACT (shared with Layer-B): the registry machine_key_fp
+# MUST be byte-identical to what `headscale nodes list -o json` reports for the
+# node's machine key. A format drift means this script tags the WRONG/NO node and
+# the ssh edge's dst never matches => the node is unreachable over SSH (fail-
+# closed, never over-broad). CONFIRM on a booted control node which JSON field
+# (`.machineKey` / `.machine_key` / `.nodeKey`) holds the string the registry
+# stores; this script tries several (see machine_key_of).
+#
+# FAIL-SOFT: a tag op that errors on one node never aborts the others; the script
+# logs + continues. It NEVER removes tags it did not add (we append the forced set
+# idempotently; headscale `nodes tag -t` replaces the forced-tag list per call, so
+# we compute the FULL forced set per node and set it in one call).
+
+set -uo pipefail
+
+NODE_ENV="/etc/snapdragon/registry/node.env"
+CACHE_DIR="/var/lib/snapdragon/headscale-policy"
+EXPORT_JSON="${CACHE_DIR}/export.json"
+DOMAIN_HINTS="/etc/snapdragon/registry/node-domains.tsv"
+SUPERADMIN_MACHINES="/etc/snapdragon/registry/superadmin-machines.txt"
+LOG_TAG="snapdragon-forcetags"
+
+log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+warn() { log "WARNING: $*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+read_env() {
+    local k="$1" line
+    line="$(grep -E "^${k}=" "${NODE_ENV}" 2>/dev/null | head -1)" || return 1
+    [ -n "${line}" ] || return 1
+    printf '%s' "${line#*=}" | tr -d '"'"'"' '
+}
+
+# BYTE-IDENTICAL copy of gen-headscale-policy.sh:dev_tag_for_fp (sourcing that
+# file would execute its main()). Keep these two in lockstep.
+dev_tag_for_fp() {
+    local fp="$1" h
+    [ -n "${fp}" ] || { echo ""; return 1; }
+    h="$(printf '%s' "${fp}" | openssl dgst -sha256 2>/dev/null | awk '{print $NF}' | cut -c1-12)"
+    [ -n "${h}" ] || { echo ""; return 1; }
+    echo "dev_${h}"
+}
+
+# Same sanitiser gen-headscale-policy.sh uses for tag:mesh_<id> / tag:dom_<domain>.
+sanitise_tag() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//'
+}
+
+# Best-effort: pull the machine-key string headscale reports for a node id. The
+# field name varies by headscale version; try the common shapes and return the
+# first non-empty. CONFIRM the live field on a booted node (NEEDS-HEADSCALE).
+machine_key_of() {
+    local nodes_json="$1" id="$2"
+    printf '%s' "${nodes_json}" | jq -r --arg id "${id}" '
+        ( .[]? | select((.id|tostring)==$id)
+          | (.machineKey // .machine_key // .machineKeyFp // .nodeKey // .node_key // "") )
+    ' 2>/dev/null | head -1
+}
+
+main() {
+    have headscale || { warn "headscale binary absent — not the control node? nothing to force"; exit 0; }
+    have jq        || { warn "jq absent — cannot force tags"; exit 0; }
+    have openssl   || { warn "openssl absent — cannot compute dev tags"; exit 0; }
+    [ -r "${NODE_ENV}" ] || { warn "node.env missing — cannot resolve MESH_ID"; exit 0; }
+
+    local mesh_id mesh_tag
+    mesh_id="$(read_env MESH_ID)" || mesh_id=""
+    [ -n "${mesh_id}" ] || { warn "empty MESH_ID — cannot force tag:mesh_*"; exit 0; }
+    mesh_tag="tag:mesh_$(sanitise_tag "${mesh_id}")"
+
+    local nodes_json
+    nodes_json="$(headscale nodes list -o json 2>/dev/null)" || nodes_json=""
+    [ -n "${nodes_json}" ] || { warn "headscale nodes list returned nothing — no nodes to tag"; exit 0; }
+
+    # Build a machine_key -> dev_tag map from the verified export cache (if any).
+    # The export's fp == the registry machine_key_fp; we match it against the
+    # headscale-reported machine key (the HIGHEST-RISK contract).
+    local export_fps=""
+    if [ -r "${EXPORT_JSON}" ]; then
+        export_fps="$(jq -r '[ .body.operators[]?.machineKeyFp // empty ] | unique | .[]' "${EXPORT_JSON}" 2>/dev/null)"
+    fi
+
+    local ids id mkey forced devtag domtag count=0
+    ids="$(printf '%s' "${nodes_json}" | jq -r '.[]?.id | tostring' 2>/dev/null)"
+    while IFS= read -r id; do
+        [ -n "${id}" ] && [ "${id}" != "null" ] || continue
+        mkey="$(machine_key_of "${nodes_json}" "${id}")"
+
+        # Every node gets tag:mesh_<id> (superadmin reach + membership truth).
+        forced="${mesh_tag}"
+
+        # tag:dev_<fp> iff this node's machine key matches an export fp.
+        if [ -n "${mkey}" ] && [ -n "${export_fps}" ]; then
+            if printf '%s\n' "${export_fps}" | grep -Fxq "${mkey}"; then
+                devtag="$(dev_tag_for_fp "${mkey}")"
+                [ -n "${devtag}" ] && forced="${forced},tag:${devtag}"
+            fi
+        fi
+
+        # tag:dom_<domain> best-effort from the node-domain hint file.
+        if [ -n "${mkey}" ] && [ -r "${DOMAIN_HINTS}" ]; then
+            local dom
+            dom="$(awk -F'\t' -v k="${mkey}" '$1==k {print $2; exit}' "${DOMAIN_HINTS}" 2>/dev/null)"
+            if [ -n "${dom}" ]; then
+                domtag="dom_$(sanitise_tag "${dom}")"
+                forced="${forced},tag:${domtag}"
+            fi
+        fi
+
+        # tag:superadmin iff this machine key is on the superadmin-operator list.
+        if [ -n "${mkey}" ] && [ -r "${SUPERADMIN_MACHINES}" ]; then
+            if grep -Fxq "${mkey}" "${SUPERADMIN_MACHINES}" 2>/dev/null; then
+                forced="${forced},tag:superadmin"
+            fi
+        fi
+
+        if headscale nodes tag -i "${id}" -t "${forced}" >/dev/null 2>&1; then
+            log "forced tags on node ${id}: ${forced}"
+            count=$((count + 1))
+        else
+            warn "headscale nodes tag failed for node ${id} (tags=${forced}) — continuing"
+        fi
+    done <<< "${ids}"
+
+    log "force-tag pass complete: ${count} node(s) updated (mesh=${mesh_id})"
+    exit 0
+}
+
+main "$@"

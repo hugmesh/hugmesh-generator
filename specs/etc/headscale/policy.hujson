@@ -43,18 +43,20 @@
   },
 
   // ── Access rules (default-deny; only these accepts apply) ─────────────────
+  // Layer-A (device-license registry) [FIX-DROPMESHRULE]: the any-to-any
+  //   {src:[tag:snapdragon], dst:[tag:snapdragon:*]}
+  // rule is DROPPED — it exposed EVERY node's :22 to every other node and that
+  // hole need not exist at any time. NOTE: the builders now bake
+  // policy.bootstrap.hujson AS the initial /etc/headscale/policy.hujson, so this
+  // file is retained for reference / non-Layer-A callers only; the runtime
+  // policy is the bootstrap policy until the first verified Layer-A sync
+  // re-renders it from policy.hujson.tmpl with the generated per-edge ssh block.
   "acls": [
-    // 1) Full intra-fleet mesh: any fleet node -> any fleet node, all ports.
-    {
-      "action": "accept",
-      "src": ["tag:snapdragon"],
-      "dst": ["tag:snapdragon:*"]
-    },
-
-    // 2) "One LAN" reachability: any fleet node -> any pod IP or ClusterIP,
-    //    all ports. Combined with the advertised+auto-approved subnet routes
-    //    above, this lets every tailnet member reach pods/services on any node
-    //    (including non-k8s admin members and off-node ClusterIP access).
+    // "One LAN" reachability: any fleet node -> any pod IP or ClusterIP, all
+    // ports (k8s pod/ClusterIP data plane — NOT SSH). Combined with the
+    // advertised+auto-approved subnet routes above, every tailnet member reaches
+    // pods/services on any node (incl. non-k8s admin members + off-node
+    // ClusterIP access). This is the rule Layer-A KEEPS.
     {
       "action": "accept",
       "src": ["tag:snapdragon"],

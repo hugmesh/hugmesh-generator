@@ -1,0 +1,17 @@
+# snapdragon-policy-sync — Layer-A convergence timer (60s default).
+#
+# The TIMER half of the device-license-registry headscale policy sync (the OpenRC
+# service runs the agent once at boot; this cron entry re-runs it every 60s).
+# cronie reads /etc/cron.d (the same mechanism Layer-B + provision.sh use).
+# Installed ONLY on the headscale CONTROL (pki) node by
+# provision_headscale_policy_sync().
+#
+# cron has 1-minute granularity, so the floor poll is 60s. The agent is
+# FAIL-CLOSED and idempotent: a failed fetch/verify keeps the last-applied policy;
+# a successful one re-renders policy.hujson and, ONLY on a content-hash change,
+# runs `headscale policy set -f` + the server-forced-tag pass. The authoritative
+# fast path is the BFF push-with-ack (FIX-REVOKE) poking this same agent; this
+# pull is the convergence FLOOR for missed pushes / reboots.
+#
+# Field order: min hour dom month dow user command
+* * * * * root /usr/sbin/gen-headscale-policy.sh >> /var/log/snapdragon-policy-sync.log 2>&1
