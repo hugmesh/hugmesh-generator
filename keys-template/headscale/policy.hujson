@@ -38,12 +38,15 @@
     }
   },
 
+  // Layer-A (device-license registry): the any-to-any
+  //   {src:[tag:snapdragon], dst:[tag:snapdragon:*]}
+  // rule is DROPPED [FIX-DROPMESHRULE]. It exposed EVERY node's :22 to every
+  // other node; that hole need not exist at any time. k8s pod/ClusterIP traffic
+  // rides the CIDR data-plane rule below (NOT :22); SSH rides the ssh[] block.
+  // This override file is now a bootstrap-equivalent; the control node's first
+  // verified Layer-A sync re-renders /etc/headscale/policy.hujson with the
+  // generated default-deny per-edge ssh block + the SUPERADMIN mesh rule.
   "acls": [
-    {
-      "action": "accept",
-      "src": ["tag:snapdragon"],
-      "dst": ["tag:snapdragon:*"]
-    },
     {
       "action": "accept",
       "src": ["tag:snapdragon"],
