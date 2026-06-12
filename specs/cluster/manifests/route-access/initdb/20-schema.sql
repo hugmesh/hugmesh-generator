@@ -268,6 +268,13 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- opening any other /bff/** subpath. Anonymous body_html is sanitized
   -- server-side at write + rendered in a sandboxed srcdoc iframe by the UI.
   ('snapdragon-fe-gateway',  '/bff/public/announcements/**', 'PUBLIC', true),  -- public login-page announcements (UNAUTHENTICATED)
+  -- PUBLIC appeal-contact resolver for the login-ui appeal page shown to a
+  -- banned/suspended (or logged-out) user (admin-bff GET /bff/public/appeal-contact
+  -- -> permitAll, returns {"email":"..."}, no PII). Reached BEFORE a Casdoor JWT
+  -- exists, so it must pass the gateway unauth'd. Mirrors the gateway CanonicalSeed
+  -- fe() row + SecurityConfig PUBLIC_PATHS (snapdragon-gateway PR #22). EXACT path
+  -- (not /bff/public/**) so most-specific-match keeps ONLY this resolver anonymous.
+  ('snapdragon-fe-gateway',  '/bff/public/appeal-contact', 'PUBLIC', true),  -- public appeal-contact resolver (UNAUTHENTICATED)
   ('snapdragon-fe-gateway',  '/bff/login',            'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/register/**',      'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/provision/**',     'ROLE_USER',      true),
