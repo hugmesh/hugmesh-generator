@@ -19,6 +19,18 @@
 #   FRITE_FLAVOR=live FRITE=1 ./scripts/build-all-roles.sh       # live image only
 # (build-frite-stage4.sh — see docs/RUNNING.md §"Frite light-desktop image".)
 #
+# Pen-test build OPTION (DEV / CI-pipeline only) — run the OWASP pen-test harness
+# as part of the build (memory snapdragon-pentest-standard "an OPTION in the BUILD
+# pipeline"). It is NOT a deployed runner; it drives tests/pentest/run-pentest.sh
+# against an env-test-build using PUBLIC images (owasp/dependency-check + zaproxy):
+#   PENTEST=1     ./scripts/build-all-roles.sh   # run the pen-test after the build
+#   ./scripts/build-all-roles.sh --pentest       # same, as a flag
+#   PENTEST=1 PENTEST_ENV=local PENTEST_SCAN=full ./scripts/build-all-roles.sh
+# Knobs:  PENTEST_ENV   = compose (default) | local | cluster   (run-pentest --env)
+#         PENTEST_SCAN  = baseline (default) | full             (run-pentest --scan)
+#         PENTEST_PIPELINE = main (default) | games             (run-pentest --pipeline)
+# PENTEST_ONLY=1 runs ONLY the pen-test (skips the image builds + keys).
+#
 # Any extra args are passed through to BOTH builders, e.g.:
 #   ./scripts/build-all-roles.sh -j 16 --cluster-domain snapdragon.systems
 #
@@ -47,14 +59,36 @@ WORK_DIR="${WORK_DIR:-${REPO_DIR}/out}"
 # Honor a -w/--work-dir passed through to the builders so the keys-<role> folders
 # land beside the images (recommend a dir OUTSIDE an encrypted/$HOME mount).
 BUILD_ENV="test"   # mirror the builders' default for the summary line below
+# --pentest is consumed HERE (not a builder flag); collect the remaining args so it
+# is NOT forwarded to the per-role builders. PENTEST=1 sets the same toggle.
+PENTEST="${PENTEST:-0}"
+PASS_ARGS=()
+_skip_next=0
 for ((_i = 1; _i <= $#; _i++)); do
+    # The token AFTER -w/--env is its value: capture it, then pass it through (once).
+    if [ "${_skip_next}" = 1 ]; then _skip_next=0; PASS_ARGS+=("${!_i}"); continue; fi
     case "${!_i}" in
-        -w|--work-dir) _j=$((_i + 1)); WORK_DIR="${!_j}" ;;
-        --env)         _j=$((_i + 1)); BUILD_ENV="${!_j}" ;;
+        -w|--work-dir) _j=$((_i + 1)); WORK_DIR="${!_j}"; PASS_ARGS+=("${!_i}"); _skip_next=1 ;;
+        --env)         _j=$((_i + 1)); BUILD_ENV="${!_j}"; PASS_ARGS+=("${!_i}"); _skip_next=1 ;;
+        --pentest)     PENTEST=1 ;;   # consumed — do NOT pass through to builders
+        *)             PASS_ARGS+=("${!_i}") ;;
     esac
 done
+# Replace the positional params with the pass-through set (sans --pentest) so the
+# builder invocations below keep using "$@" unchanged.
+set -- "${PASS_ARGS[@]+"${PASS_ARGS[@]}"}"
 
-RPI_ROLES=(pki backend frontend)
+# PENTEST_ONLY=1 implies PENTEST=1 and skips the image builds + keys.
+if [ "${PENTEST_ONLY:-0}" = "1" ]; then
+    PENTEST=1
+    SKIP_X86=1; SKIP_KEYS=1
+fi
+
+if [ "${PENTEST_ONLY:-0}" = "1" ]; then
+    RPI_ROLES=()   # pentest-only: no image builds
+else
+    RPI_ROLES=(pki backend frontend)
+fi
 
 # x86 role set. Default = every role EXCEPT omnibus (pki be fe be+gpu). Only the
 # omnibus all-in-one role is opt-in: X86_OMNIBUS=1 appends it; X86_ALL=1 expands
@@ -87,6 +121,7 @@ echo "==> RPi5 roles:  ${RPI_ROLES[*]:-(none)}"
 echo "==> x86 roles:   ${X86_BUILD_ROLES[*]:-(none)}"
 echo "==> Frite:       $([ "${BUILD_FRITE_IMG}" = true ] && echo "${FRITE_BOARD_SEL} (flavor=${FRITE_FLAVOR_SEL})" || echo '(off — set FRITE=1)')"
 echo "==> Build ENV:   ${BUILD_ENV}  $([ "${BUILD_ENV}" = test ] && echo '(LAN-first; cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
+echo "==> Pen-test:    $([ "${PENTEST}" = 1 ] && echo "ON (env=${PENTEST_ENV:-compose} scan=${PENTEST_SCAN:-baseline} pipeline=${PENTEST_PIPELINE:-main})$([ "${PENTEST_ONLY:-0}" = 1 ] && echo ' [PENTEST_ONLY]')" || echo '(off — set PENTEST=1 / --pentest)')"
 echo "    Work/target dir: ${WORK_DIR}"
 echo "    Pass-through args: $*"
 echo
@@ -144,3 +179,24 @@ ls -1 "${WORK_DIR}/"*.iso 2>/dev/null | sed 's/^/   iso:  /' || true
 ls -1d "${WORK_DIR}/"keys-* 2>/dev/null | sed 's/^/   keys: /' || true
 echo
 echo "Write a stick for a role with:  sudo ./scripts/make-keys-usb.sh /dev/sdX ${WORK_DIR}/keys-<role>"
+
+# ── Pen-test build OPTION (DEV / CI-pipeline only) ───────────────────────────
+# When PENTEST=1 / --pentest, run the OWASP pen-test harness as part of the build.
+# This drives tests/pentest/run-pentest.sh (public images: owasp/dependency-check
+# + zaproxy) against an env-test-build — it is NOT a deployed runner. A non-zero
+# scan result fails the build so the pen-test gates the pipeline like any test.
+if [ "${PENTEST}" = "1" ]; then
+    PENTEST_SH="${REPO_DIR}/tests/pentest/run-pentest.sh"
+    echo
+    echo "############################################################"
+    echo "#  Pen-test (build option): env=${PENTEST_ENV:-compose} scan=${PENTEST_SCAN:-baseline} pipeline=${PENTEST_PIPELINE:-main}"
+    echo "############################################################"
+    if [ ! -x "${PENTEST_SH}" ]; then
+        echo "!! pen-test harness not found/executable: ${PENTEST_SH}" >&2
+        exit 1
+    fi
+    "${PENTEST_SH}" \
+        --env "${PENTEST_ENV:-compose}" \
+        --scan "${PENTEST_SCAN:-baseline}" \
+        --pipeline "${PENTEST_PIPELINE:-main}"
+fi

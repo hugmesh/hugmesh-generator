@@ -39,6 +39,25 @@ ARCH     ?= x86
 DEV      ?=
 IMG_FLAGS ?=
 
+# ── Pen-test build OPTION (DEV / CI-pipeline only) ─────────────────────────────
+# PENTEST=1 runs the OWASP pen-test harness as part of a build (NOT a deployed
+# runner; public images via tests/pentest/run-pentest.sh). PENTEST_ONLY=1 runs ONLY
+# the pen-test (no image builds). Knobs map onto run-pentest.sh:
+#   PENTEST_ENV=compose|local|cluster  PENTEST_SCAN=baseline|full  PENTEST_PIPELINE=main|games
+#   make build-all PENTEST=1            # build the fleet THEN pen-test it
+#   make pentest                        # pen-test only (no image build)
+#   make pentest PENTEST_SCAN=full PENTEST_ENV=local
+PENTEST          ?=
+PENTEST_ONLY     ?=
+PENTEST_ENV      ?= compose
+PENTEST_SCAN     ?= baseline
+PENTEST_PIPELINE ?= main
+# Threaded into scripts/build-all-roles.sh (which reads these from the env) on the
+# native leg, and forwarded into the in-container `make` re-invoke on the Docker leg.
+PENTEST_ENVVARS := PENTEST='$(PENTEST)' PENTEST_ONLY='$(PENTEST_ONLY)' \
+                   PENTEST_ENV='$(PENTEST_ENV)' PENTEST_SCAN='$(PENTEST_SCAN)' \
+                   PENTEST_PIPELINE='$(PENTEST_PIPELINE)'
+
 # ── Build ENV selector (BAKED at image creation) ───────────────────────────────
 # ENV=test (DEFAULT, local-first/safe): LAN-only — cluster wildcard DNS app kept,
 #          cloudflared/ACME go-live app pruned from the baked tree, no public
@@ -140,7 +159,7 @@ endef
 RPI := $(BRAND_ENV) $(SUDO) ./build-rpi5-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 X86 := $(BRAND_ENV) $(SUDO) ./build-x86-host-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 FRITE := $(BRAND_ENV) $(SUDO) ./build-frite-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(ENV_FLAGS) $(BRAND_FLAGS)
-ALL := $(BRAND_ENV) $(SUDO) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(ENV_FLAGS) $(BRAND_FLAGS)
+ALL := $(PENTEST_ENVVARS) $(BRAND_ENV) $(SUDO) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(ENV_FLAGS) $(BRAND_FLAGS)
 
 RPI_ROLES := pki backend frontend
 X86_ROLES := pki be fe be+gpu
@@ -153,7 +172,7 @@ FRITE_FLAVOR ?= both
 FRITE_PASS   := FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)'
 
 .DEFAULT_GOAL := help
-.PHONY: help clean build-all rebuild rpi x86 omnibus frite frite-live frite-installer \
+.PHONY: help clean build-all pentest rebuild rpi x86 omnibus frite frite-live frite-installer \
         flash qemu qemu-rpi qemu-x86 \
         playwright-deps e2e ci ci-quick docker-image ensure-image \
         docker docker-build local prod \
@@ -189,11 +208,17 @@ clean: ## wipe the work dir (forces a from-scratch rebuild)
 build-all: ## build the DEFAULT fleet: 3 Pi + x86 pki/be/fe/be+gpu (--resume reuses sysroots)
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make build-all NATIVE=1 WORK_DIR=/out RESUME='$(RESUME)' IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
+	$(DOCKER_RUN) make build-all NATIVE=1 WORK_DIR=/out RESUME='$(RESUME)' IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS)
 else
 	$(ALL) $(RESUME)
 	$(chown-artifacts)
 endif
+
+pentest: ## run the OWASP pen-test harness only (no image build); PENTEST_SCAN/ENV/PIPELINE knobs
+	@echo "==> Pen-test (build option): env=$(PENTEST_ENV) scan=$(PENTEST_SCAN) pipeline=$(PENTEST_PIPELINE)"
+	PENTEST_ONLY=1 PENTEST=1 PENTEST_ENV='$(PENTEST_ENV)' PENTEST_SCAN='$(PENTEST_SCAN)' \
+	  PENTEST_PIPELINE='$(PENTEST_PIPELINE)' SKIP_KEYS=1 SKIP_X86=1 \
+	  $(SUDO) ./scripts/build-all-roles.sh -w $(WORK_DIR)
 
 local: ## build the LAN .test fleet (ENV=test, BRAND=local -> snapdragon.test; no internet)
 	@echo "==> LOCAL build: ENV=test, brand=local (snapdragon.test). LAN-only — no public"

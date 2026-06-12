@@ -1,0 +1,52 @@
+# =============================================================================
+# repo.gitlab-ci.yml — the per-repo CI template the generator EMITS for repos
+# onboarded into the ArgoCD pipeline (the service-catalog ApplicationSet
+# apps/13-service-catalog.yaml + the per-brand handlebars-generated repos, see
+# memory snapdragon-multitenancy 3d + snapdragon-superadmin-appstore).
+#
+# WHAT IT DOES: drop this file in (as `.gitlab-ci.yml`) when onboarding a repo —
+# either a per-brand generated repo or a service added through the superadmin
+# app-store — so the repo gets the OWASP pen-test stage (`sca` + `dast`) BY
+# DEFAULT, the moment it joins the GitOps/ArgoCD pipeline. This realizes the
+# pentest standard's rule: "a STAGE in the per-repo pipeline of every repo ADDED
+# to the ArgoCD pipeline" — onboarding a repo automatically security-tests it.
+#
+# It pulls the reusable hidden `.pentest-*` jobs from the generator (single source
+# of truth: tests/pentest/ci/pentest-stage.gitlab-ci.yml) and binds thin concrete
+# jobs to the `pentest` stage. A repo may extend/override (e.g. SCA_SCAN_DIR) or
+# add its own build/test/deploy stages above the pentest stage.
+#
+# DEV / CI-PIPELINE ONLY — no deployed runner, no superadmin trigger. Toolchain is
+# public images (owasp/dependency-check + ghcr.io/zaproxy/zaproxy:stable). NEVER a
+# .github/workflows file (CI is GitLab). Persona creds come from CI variables /
+# the key-USB at runtime, never git.
+#
+# (When the generator renders per-brand repos via handlebars, this is the CI file
+# that ships in each generated repo. The generator may pin `ref:` to the brand's
+# generator revision and template the include path; the include below targets the
+# org generator on `main`.)
+# =============================================================================
+
+include:
+  - project: 'Snapdragon-Systems/snapdragon-generator'
+    ref: main
+    file: '/tests/pentest/ci/pentest-stage.gitlab-ci.yml'
+
+stages:
+  # Onboarded repos add their own build/test stages ahead of `pentest`; the
+  # pen-test stage is appended so every ArgoCD-onboarded repo carries it.
+  - pentest
+
+# SCA over THIS repo's dependency manifests (Java/npm/Go/Rust), --failOnCVSS 7.
+pentest:sca:
+  extends: .pentest-sca
+
+# Authenticated OWASP ZAP DAST against the spun-up env-test-build (baseline on
+# MR/default; the scheduled pipeline picks up pentest:dast-full for the active
+# scan). The harness ships in the generator at tests/pentest; a repo that does
+# not vendor it sets PENTEST_HARNESS_DIR to where it fetches the harness.
+pentest:dast:
+  extends: .pentest-dast-baseline
+
+pentest:dast-full:
+  extends: .pentest-dast-full

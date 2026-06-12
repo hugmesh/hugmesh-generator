@@ -5,6 +5,11 @@
 # snapdragon-deploy.example.yaml). Admins spin up / update instances by editing
 # the descriptor + deploy/ and pushing — no hand-written Application per service.
 #
+# CI SIDE (dev/CI-pipeline only): an onboarded repo also ships the pen-test CI stage
+# (catalog/ci/repo.gitlab-ci.yml, which include:s tests/pentest/ci/
+# pentest-stage.gitlab-ci.yml) so joining the ArgoCD pipeline gives it the OWASP
+# sca+dast stage by default. That is CI-only — NOT a deployed runner here.
+#
 # ⚠️ PREREQUISITES (scaffold until met): Forgejo seeded with the org repos
 # (Phase 5 activation); a read token in Secret forgejo-scm-token (ns devops);
 # repos adopting the snapdragon-deploy.yaml + deploy/ convention. Confirm the
