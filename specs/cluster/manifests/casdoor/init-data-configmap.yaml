@@ -76,6 +76,29 @@
 #   allow-predicate becomes false), reconciled by the admin-bff loop; there is no
 #   allow=false / ban role row anywhere.
 #
+# ROLE_SUPERADMIN ("Platform Superadmin") is the CROSS-DOMAIN infrastructure
+# control-plane role — the top of the cascade superadmin -> admin -> mod -> user.
+# It is a SIBLING of ROLE_ADMIN here (empty "roles" array — no Casdoor inheritance;
+# the cascade/bypass is enforced in the gateway + BFFs, not by nesting). The
+# casdoorAuthoritiesConverter auto-maps the role name -> ROLE_SUPERADMIN, so no
+# converter change is needed for the authority to flow. It gates the superadmin
+# infra console + the arch/core image-build surface at the be-gateway:
+# /bff/superadmin/** and /bff/image-builds/arch/** (see
+# manifests/route-access/20-schema.sql). Seeds EMPTY (users []); the BUILD-TIME
+# superadmin BOOTSTRAP login is provisioned separately through the key-USB
+# key-generation flow (salted+hashed credential, NEVER committed here).
+#
+# ROLE_IMAGE_BUILDER ("Image Builder") is the GRANTED capability for the
+# mesh-WORKLOAD image-build surface (/bff/image-builds/**) — a SIBLING of
+# ROLE_ADMIN (empty "roles" array). It is NOT an admin default: it is grantable to
+# a trusted per-domain ADMIN "in some cases", and SUPERADMIN reaches the same
+# surface via the cross-domain bypass. The converter auto-maps the name ->
+# ROLE_IMAGE_BUILDER (no converter change). The route row keys on it ALONE (no
+# paired ROLE_ADMIN) so an ordinary admin does NOT reach the build surface unless
+# separately granted this role — preserving the build≠run / workload-vs-arch
+# boundary (arch/core builds stay ROLE_SUPERADMIN by longest-pattern-match). Seeds
+# EMPTY (users []); membership is granted via the admin-bff/casdoor grant flow.
+#
 # ROLE_SERVICE ("Internal service-to-service") is the machine role for internal
 # client-credentials callers that need the INTERNAL/ROLE_SERVICE endpoints (e.g.
 # the signup-gate proxy calling the federation username-availability check). Its
@@ -109,6 +132,8 @@ data:
       ],
       "roles": [
         { "owner": "snapdragon", "name": "ROLE_ADMIN",     "displayName": "Platform Admin",  "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_SUPERADMIN",    "displayName": "Platform Superadmin", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_IMAGE_BUILDER", "displayName": "Image Builder",       "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_MOD",       "displayName": "Network Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_MATRIX",    "displayName": "Matrix Access",   "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_MASTODON",  "displayName": "Mastodon Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
