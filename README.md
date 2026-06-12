@@ -15,8 +15,11 @@ Every build is stamped with a **build ENV** — `test` (default, LAN-only) or
 way in is `make local` (a LAN `.test` fleet) or `make prod`; see
 **[Build ENV](#build-env-testprod-baked-at-image-creation)** below.
 
-> **Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full topology
-> and [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md) for LAN testing.**
+> **New operator? Start with [`docs/RUNNING.md`](docs/RUNNING.md)** — the
+> end-to-end runbook (prerequisites → clone → `brand.conf` + build knobs → build
+> → keys + KEYS USB → flash → provision → cluster). Then read
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full topology and
+> [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md) for LAN testing.
 
 All build output lands in a **git-ignored** work directory (`./out` by default,
 for both `make` and the scripts called directly; override with `WORK_DIR=` /
@@ -195,6 +198,10 @@ the prod edge) — Vault first, USB fallback, all **read-if-present**. See
 - **QEMU test**: `app-emulation/qemu` (aarch64 target), `dosfstools`, `e2fsprogs`.
 
 ## Quick start
+
+> For a step-by-step walkthrough of the **whole** pipeline (configure → build →
+> keys → flash → boot → cluster), with every flag and the per-arch recipes, see
+> the operator runbook: **[`docs/RUNNING.md`](docs/RUNNING.md)**.
 
 ### The easy path — `make` (Docker builder; no host toolchain, no sudo)
 
