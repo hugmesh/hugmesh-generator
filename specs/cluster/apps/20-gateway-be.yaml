@@ -36,6 +36,13 @@ spec:
           # headscale-forward route) so external tailscale clients never hit pki direct.
           extraHosts:
             - scale.snapdragon.systems
+            # games.<GAMES_DOMAIN> — the games portal host. Default GAMES_DOMAIN =
+            # games.<CLUSTER_DOMAIN>, so this literal rebrands with the primary
+            # domain; a custom GAMES_DOMAIN (e.g. the real .games TLD) is rewritten
+            # by parameterize_games_domain() in the stage4 builders. The host route
+            # is the `games` route below; the federation manifest greys it out when
+            # the games slug is omitted (gate_optional_services prunes the route).
+            - games.snapdragon.systems
         nodeSelector:
           snapdragon.systems/backend: "true"
         seLinux:
@@ -106,6 +113,20 @@ spec:
           - id: matrix
             host: matrix.snapdragon.systems
             uri: https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443
+          # --- Snapdragon Games (games.<GAMES_DOMAIN>) ---
+          # Host route for the games portal. Default GAMES_DOMAIN =
+          # games.<CLUSTER_DOMAIN> so this literal rebrands with the primary domain
+          # and rides the *.<primary> wildcard (CoreDNS in test, cloudflared in
+          # prod) with NO new DNS/cert; a custom GAMES_DOMAIN (the real .games TLD)
+          # is rewritten by parameterize_games_domain() in the stage4 builders.
+          # ⚠ OPTIONAL slug `games`: gate_optional_services REMOVES this route (and
+          # the extraHost above + the games route-access rows) when games is
+          # deselected, so a games-less build does not 502 on games.<domain>.
+          # TODO(gateway wave): keep CanonicalSeed.java (snapdragon-gateway repo)
+          # + cloudflared games hostname in sync — see docs/OPTIONAL-SERVICES.md.
+          - id: games
+            host: games.snapdragon.systems
+            uri: http://snapdragon-games.snapdragon-games.svc.cluster.local:8080
           # --- snapdragon-federation-api (api.snapdragon.systems) — the module-
           # federation registry/manifest/bundles API. MORE SPECIFIC than the
           # /api/** snapdragon-api catch-all below, so it MUST be declared FIRST

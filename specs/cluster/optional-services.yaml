@@ -165,6 +165,7 @@ spec:
       gatewayRouteIds: [games]
       routeAccessRows:
         - { gateway: snapdragon-be-gateway, urlPattern: /games/api/admin/** }
+        - { gateway: snapdragon-be-gateway, urlPattern: /games/** }
         - { gateway: snapdragon-fe-gateway, urlPattern: /games/admin/** }
       federationModule: { slug: games, mountAt: /games, changeset: "025-register-games-module.xml" }
       casdoorSeed: casdoor-games

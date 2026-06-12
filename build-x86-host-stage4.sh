@@ -33,6 +33,20 @@ CLUSTER_DOMAIN="snapdragon.systems"
 BRAND="snapdragon"
 BRAND_TITLE="Snapdragon Systems"
 ORG="Snapdragon-Systems"
+# Games portal domain. DEFAULT serves games as a SUBDOMAIN of the primary domain
+# (games.<CLUSTER_DOMAIN>) until the real .games TLD is obtained; flip to the TLD
+# later with GAMES_DOMAIN=<brand>.games. The default literal "games.snapdragon.systems"
+# composes with rebrand_sysroot (its snapdragon.systems->CLUSTER_DOMAIN rule turns
+# it into games.<CLUSTER_DOMAIN>); a custom value is rebrand-neutral. Drives the
+# games host + OIDC issuer/redirects via parameterize_games_domain(). See
+# docs/OPTIONAL-SERVICES.md.
+GAMES_DOMAIN="games.snapdragon.systems"
+# OPTIONAL services selected on this image (space-separated subset of:
+# akkoma tuwunel phpbb games). Built-in default = ALL on. brand.conf may narrow
+# it; the --optional-services flag overrides both (built-in < brand.conf < flag).
+# Each unselected slug is pruned from the baked GitOps tree by
+# gate_optional_services(). See specs/cluster/optional-services.yaml.
+OPTIONAL_SERVICES="akkoma tuwunel phpbb games"
 # ── Build ENV selector (BAKED into the image) ──────────────────────
 # test (DEFAULT, local-first/safe): LAN-only — cluster wildcard DNS ON, the
 #   go-live cloudflared/external-dns/ACME app is PRUNED from the baked apps/,
@@ -163,6 +177,8 @@ while [[ $# -gt 0 ]]; do
         --brand) BRAND="$2"; shift 2 ;;
         --brand-title) BRAND_TITLE="$2"; shift 2 ;;
         --org) ORG="$2"; shift 2 ;;
+        --games-domain) GAMES_DOMAIN="$2"; shift 2 ;;
+        --optional-services) OPTIONAL_SERVICES="$2"; shift 2 ;;
         -u|--user) DEFAULT_USER="$2"; shift 2 ;;
         --user-password) DEFAULT_USER_PASS="$2"; shift 2 ;;
         --root-password) ROOT_PASS="$2"; shift 2 ;;
@@ -391,6 +407,243 @@ rewrite_prod_image_tags() {
     fi
 }
 
+# ── OPTIONAL-SERVICE gate ───────────────────────────────────────────────────
+# Prune every OPTIONAL service (akkoma/tuwunel/phpbb/games) NOT selected in
+# OPTIONAL_SERVICES from the baked GitOps tree, enumerated by
+# specs/cluster/optional-services.yaml. Mirrors the gate_env_apps `rm -f` design
+# (physically removing a baked YAML IS the gate: ArgoCD recurse:true never
+# instantiates a removed Application). For each unselected slug it removes the
+# owned apps/*.yaml + manifests dir, its per-service ESO file (+ its kustomization
+# line), its gateway HOST routes (apps/20-gateway-*.yaml) and route-access rows
+# (route-access/initdb/20-schema.sql) so a matched route to a deleted upstream
+# cannot 502 and a leftover role row cannot stale-grant. Shared apps (social-ui,
+# serving BOTH homeservers) are removed only when ALL owners are deselected.
+#
+# ⚠ RUNTIME NOTE: build-time prune only stops the ONE-TIME bootstrap seed; the
+# live cluster syncs apps/ from the gitops repo. True runtime add/remove uses the
+# installed-services ConfigMap + the optional-services ApplicationSet
+# (apps/13a-optional-services.yaml). See docs/OPTIONAL-SERVICES.md.
+#
+# ⚠ CROSS-REPO TODO (gateway wave): CanonicalSeed.java (snapdragon-gateway) bakes
+# a route-access floor + the cloudflared configmap hardcodes matrix./mastodon.
+# reserved hostnames — keep those in sync with the rows pruned here. NOT edited by
+# this build (separate repo / image rebuild).
+_opt_selected() {
+    # $1 = slug; returns 0 if selected (present in OPTIONAL_SERVICES), else 1.
+    local s; for s in ${OPTIONAL_SERVICES}; do [ "${s}" = "$1" ] && return 0; done
+    return 1
+}
+gate_optional_services() {
+    local tree="${SYSROOT}/var/lib/snapdragon/cluster"
+    local apps="${tree}/apps"
+    [ -d "${apps}" ] || return 0
+    local slug
+    for slug in akkoma tuwunel phpbb games; do
+        _opt_selected "${slug}" && continue
+        info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
+        case "${slug}" in
+            akkoma)
+                rm -f "${apps}/30-akkoma.yaml"
+                rm -rf "${tree}/manifests/akkoma"
+                rm -f "${tree}/manifests/external-secrets/akkoma-externalsecrets.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" akkoma-externalsecrets.yaml
+                _opt_drop_route "${apps}/20-gateway-be.yaml" mastodon-oauth mastodon-api mastodon-web
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/api/v1/pleroma/admin/**' '/api/pleroma/admin/**' '/pleroma/admin/**'
+                ;;
+            tuwunel)
+                rm -f "${apps}/30-tuwunel.yaml"
+                rm -rf "${tree}/manifests/tuwunel"
+                rm -f "${tree}/manifests/external-secrets/tuwunel-externalsecrets.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" tuwunel-externalsecrets.yaml
+                _opt_drop_route "${apps}/20-gateway-be.yaml" matrix-api matrix-wellknown matrix
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/_matrix/**' '/.well-known/matrix/**' '/_synapse/**'
+                ;;
+            phpbb)
+                rm -f "${apps}/30-phpbb.yaml" "${apps}/38-forum-bff-db.yaml" \
+                      "${apps}/39-forum-bff-api.yaml" "${apps}/49-forum-ui.yaml"
+                rm -rf "${tree}/manifests/forum"
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" forum-ui snapdragon-forum-bff-api snapdragon-forum-bff-api-moderation
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                    '/social/forum/**' '/bff/forum/admin/**' '/bff/forum/moderation/**' '/bff/forum/**'
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/api/forum/admin/**'
+                ;;
+            games)
+                rm -f "${apps}/06-casdoor-games.yaml" "${apps}/50-games.yaml"
+                rm -rf "${tree}/manifests/games" "${tree}/manifests/casdoor-games"
+                _opt_drop_route     "${apps}/20-gateway-be.yaml" games
+                _opt_drop_extrahost "${apps}/20-gateway-be.yaml" games.
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/games/api/admin/**' '/games/**'
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                    '/games/admin/**'
+                ;;
+        esac
+    done
+    # Shared social-ui (matrix + mastodon micro-frontends in ONE app) — remove only
+    # when BOTH homeservers are deselected (otherwise the surviving platform keeps
+    # its UI; the federation manifest greys out the absent one).
+    if ! _opt_selected akkoma && ! _opt_selected tuwunel; then
+        rm -f "${apps}/45-social-ui.yaml"
+        info "OPTIONAL_SERVICES: both homeservers deselected — pruned shared apps/45-social-ui.yaml"
+    fi
+    # Repair a possible trailing comma: if pruning removed the LAST VALUES row of an
+    # INSERT (the one that ended with ')' not '),'), the new last row ends with ','
+    # -> a fatal trailing comma before ON CONFLICT. Re-terminate the last data row.
+    _opt_fix_trailing_comma "${tree}/manifests/route-access/initdb/20-schema.sql"
+    # Re-render the installed-services ConfigMap from the surviving selection so the
+    # runtime ApplicationSet + admin console see the build-time install-state.
+    _opt_render_installed_services
+}
+# Fix the dangling trailing comma left when the LAST VALUES row of an INSERT was
+# pruned: rewrite the trailing '),' of the final data row before 'ON CONFLICT' to
+# ')'. Operates only on the data row immediately preceding the ON CONFLICT line.
+_opt_fix_trailing_comma() {
+    local f="$1"
+    [ -f "${f}" ] || return 0
+    awk '
+        { lines[NR]=$0 }
+        END {
+            # find the ON CONFLICT line; walk back to the last VALUES data row.
+            oc=0
+            for (i=NR; i>=1; i--) { if (lines[i] ~ /ON CONFLICT/) { oc=i; break } }
+            if (oc>0) {
+                for (i=oc-1; i>=1; i--) {
+                    if (lines[i] ~ /^[[:space:]]*\(.*\)[[:space:]]*,([[:space:]]*--.*)?$/) {
+                        # strip the comma right after the closing paren of this row.
+                        sub(/\)[[:space:]]*,/, ")", lines[i]); break
+                    }
+                    if (lines[i] ~ /^[[:space:]]*\(.*\)([[:space:]]*--.*)?$/) break  # already terminated
+                }
+            }
+            for (i=1;i<=NR;i++) print lines[i]
+        }
+    ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
+}
+# Drop a `- <resource>` line from a kustomize resources: list.
+_opt_drop_kustomize_line() {
+    local f="$1" res="$2"
+    [ -f "${f}" ] || return 0
+    sed -i -E "\\|^[[:space:]]*-[[:space:]]+${res}([[:space:]].*)?\$|d" "${f}"
+}
+# Delete one or more Spring-Cloud-Gateway route blocks (a `- id: <rid>` item plus
+# its indented continuation lines) from a baked gateway app's helm values.
+_opt_drop_route() {
+    local f="$1"; shift
+    [ -f "${f}" ] || return 0
+    local rid
+    for rid in "$@"; do
+        awk -v rid="${rid}" '
+            BEGIN { skip=0; ind=-1 }
+            {
+                line=$0
+                # indentation of this line (leading spaces)
+                match(line, /^ */); cur=RLENGTH
+                if (skip) {
+                    # a comment ABOVE the next sibling can attach; stop skipping
+                    # once we reach a line at or below the captured item indent
+                    # that begins a new list item or a shallower key.
+                    if (line ~ /^ *- id:/ && cur<=ind) { skip=0 }
+                    else if (line !~ /^ *$/ && cur<=ind && line !~ /^ *#/) { skip=0 }
+                    else { next }
+                }
+                if (line ~ ("^ *- id: " rid "$")) { skip=1; ind=cur; next }
+                print line
+            }
+        ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
+    done
+}
+# Drop the `- <host-prefix>...` extraHosts entry (+ any leading comment block) for
+# a games-style host from a gateway app's ingress.extraHosts.
+_opt_drop_extrahost() {
+    local f="$1" prefix="$2"
+    [ -f "${f}" ] || return 0
+    sed -i -E "\\|^[[:space:]]*-[[:space:]]+\"?${prefix}[^[:space:]\"]*\"?[[:space:]]*\$|d" "${f}"
+}
+# Delete gateway_route_access INSERT VALUES rows matching (gateway, url_pattern)
+# from the baked schema.sql. Rows are `  ('<gw>', '<pat>', 'ROLE', bool), -- ...`.
+# Uses awk with LITERAL substring matching (the url_patterns carry ** / . which are
+# regex metachars) on the row's leading `('<gw>', '<pat>',` so only the data rows
+# are removed and the surrounding comments are left intact.
+_opt_drop_rows() {
+    local f="$1" gw="$2"; shift 2
+    [ -f "${f}" ] || return 0
+    local pat
+    for pat in "$@"; do
+        awk -v gw="${gw}" -v pat="${pat}" '
+            BEGIN { needle = "(\x27" gw "\x27" }   # ('gw'   (x27 = single quote)
+            {
+                line=$0
+                # Strip leading whitespace for the prefix test.
+                t=line; sub(/^[[:space:]]+/, "", t)
+                if (index(t, needle)==1) {
+                    # This is a VALUES row for THIS gateway; check the url_pattern is
+                    # the 2nd quoted field and equals pat exactly.
+                    rest=t; sub(/^\([[:space:]]*\x27[^\x27]*\x27[[:space:]]*,[[:space:]]*\x27/, "", rest)
+                    # rest now begins with the url_pattern; cut at its closing quote.
+                    q=index(rest, "\x27")
+                    if (q>0 && substr(rest,1,q-1)==pat) { next }
+                }
+                print line
+            }
+        ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
+    done
+}
+# Render manifests/policy/installed-services-configmap.yaml install-state booleans
+# from the surviving OPTIONAL_SERVICES selection (the runtime ApplicationSet +
+# admin console read this). Idempotent: rewrites the data: block in place.
+_opt_render_installed_services() {
+    local cm="${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy/installed-services-configmap.yaml"
+    [ -f "${cm}" ] || return 0
+    local slug val
+    for slug in akkoma tuwunel phpbb games; do
+        if _opt_selected "${slug}"; then val="true"; else val="false"; fi
+        # '#'-delimited so the (true|false) alternation does not collide with the delimiter.
+        sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
+    done
+    info "OPTIONAL_SERVICES: rendered installed-services ConfigMap (selected: ${OPTIONAL_SERVICES:-none})"
+}
+# Parameterize the games-realm OIDC identity on GAMES_DOMAIN. rebrand_sysroot does
+# NOT touch the .games literals (its rules match snapdragon.systems / snapdragon-),
+# so the games host + issuer + redirects would otherwise stay snapdragon.games and
+# break iss-strict JWT validation under the subdomain default. Runs UNCONDITIONALLY
+# (even for the default brand) and BEFORE rebrand_sysroot so the default literal
+# games.snapdragon.systems composes with the snapdragon.systems->CLUSTER_DOMAIN
+# rule. A custom GAMES_DOMAIN (e.g. <brand>.games) is rebrand-neutral.
+parameterize_games_domain() {
+    local tree="${SYSROOT}/var/lib/snapdragon/cluster"
+    [ -d "${tree}" ] || return 0
+    local f n=0
+    # URL-SCHEME-ANCHORED: only rewrite snapdragon.games when it is a HOST (right
+    # after the // of https://...), so the games-realm origin/issuer/redirect/website
+    # URLs flip to ${GAMES_DOMAIN} while the canonical IMAGE repo paths
+    # (snapdragon-systems/snapdragon.games-backend, .../snapdragon.games/backend) are
+    # left untouched. id.snapdragon.games -> id.${GAMES_DOMAIN}; bare host -> ${GAMES_DOMAIN}.
+    while IFS= read -r -d '' f; do
+        if grep -q '//id\.snapdragon\.games\|//snapdragon\.games' "${f}" 2>/dev/null; then
+            sed -i -E \
+                -e "s|//id\\.snapdragon\\.games|//id.${GAMES_DOMAIN}|g" \
+                -e "s|//snapdragon\\.games|//${GAMES_DOMAIN}|g" \
+                "${f}"
+            n=$((n+1))
+        fi
+    done < <(find "${tree}" -type f \( -name '*.yaml' -o -name '*.yml' -o -name '*.sql' \) -print0 2>/dev/null)
+    info "Games domain: parameterized games host URLs -> ${GAMES_DOMAIN} in ${n} file(s)"
+    # The games PUBLIC host literal (gateway-be route host + ingress extraHost) is
+    # "games.snapdragon.systems" so it composes with the snapdragon.systems ->
+    # CLUSTER_DOMAIN rebrand into games.<CLUSTER_DOMAIN> = the DEFAULT GAMES_DOMAIN.
+    # If the operator set a CUSTOM GAMES_DOMAIN (e.g. the real <brand>.games TLD),
+    # the host must follow it instead of the subdomain default — rewrite it here,
+    # BEFORE rebrand (which would otherwise only map the snapdragon.systems suffix).
+    if [ "${GAMES_DOMAIN}" != "games.snapdragon.systems" ]; then
+        local be="${tree}/apps/20-gateway-be.yaml"
+        [ -f "${be}" ] && sed -i -E "s#games\\.snapdragon\\.systems#${GAMES_DOMAIN}#g" "${be}"
+        info "Games domain: custom GAMES_DOMAIN — games host rewritten to ${GAMES_DOMAIN}"
+    fi
+}
+
 gate_env_apps() {
     local apps="${SYSROOT}/var/lib/snapdragon/cluster/apps"
     [ -d "${apps}" ] || return 0
@@ -424,6 +677,8 @@ rebrand_sysroot() {
             -e "s|Snapdragon Systems|${BRAND_TITLE}|g" \
             -e "s|snapdragon-systems/|${org_lc}/|g" \
             -e "s|Snapdragon-Systems|${ORG}|g" \
+            -e "s|//id\.snapdragon\.games|//id.${GAMES_DOMAIN}|g" \
+            -e "s|//snapdragon\.games|//${GAMES_DOMAIN}|g" \
             -e "s|snapdragon\.systems|${CLUSTER_DOMAIN}|g" \
             -e "s|snapdragon-|${BRAND}-|g" \
             "${f}"
@@ -548,8 +803,10 @@ if [ -n "${HEADSCALE_URL:-}" ]; then
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/snapdragon/headscale-url"
 fi
 cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
-gate_env_apps      # prune ENV-specific ArgoCD apps from the baked copy
-rebrand_sysroot    # rewrites snapdragon.systems -> ${CLUSTER_DOMAIN} (incl. lan-dns/cloudflared)
+parameterize_games_domain  # rewrite .games -> ${GAMES_DOMAIN} (BEFORE rebrand; fixes games OIDC iss on the subdomain default)
+gate_env_apps             # prune ENV-specific ArgoCD apps from the baked copy
+gate_optional_services    # prune OPTIONAL services (akkoma/tuwunel/phpbb/games) not in OPTIONAL_SERVICES
+rebrand_sysroot           # rewrites snapdragon.systems -> ${CLUSTER_DOMAIN} (incl. lan-dns/cloudflared/games)
 
 # Identity, locale, CNI dirs
 echo "${HOSTNAME}" > "${SYSROOT}/etc/hostname"

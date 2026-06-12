@@ -157,6 +157,16 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- still yields the AND, and any single role is default-deny. More specific than
   -- the /api/** ROLE_USER floor, so it wins the most-specific match.
   ('snapdragon-be-gateway',  '/games/api/admin/**',   'ROLE_GAMES_ADMIN', true),  -- games namespace admin API (games + (admin|mod) ONLY)
+  -- ── OPTIONAL slug `games` — games portal floor on the games.<GAMES_DOMAIN> host ──
+  -- The games BFF/portal surface under /games/** (games members reach the portal;
+  -- the more-specific /games/api/admin/** row above wins for the admin API). Keyed
+  -- on the network-wide ROLE_GAMES access role; a games BAN is role removal ->
+  -- governed-but-ungranted -> DENY. ADMIN/MOD paired so they keep reaching it.
+  -- ⚠ gate_optional_services REMOVES these rows + the games host route when the
+  -- games slug is deselected (see optional-services.yaml games.routeAccessRows).
+  ('snapdragon-be-gateway',  '/games/**',             'ROLE_GAMES',     true),  -- games portal floor (games-access)
+  ('snapdragon-be-gateway',  '/games/**',             'ROLE_ADMIN',     true),  -- (admins superset)
+  ('snapdragon-be-gateway',  '/games/**',             'ROLE_MOD',       true),  -- (mods superset)
   -- snapdragon-federation-api module-federation registry/manifest/bundles API. MORE
   -- SPECIFIC than the /api/** floor below, so it wins the most-specific match.
   -- Single ROLE_USER row = the coarse authenticated floor (lets a logged-in

@@ -39,6 +39,12 @@ data:
     verificationCodeTimeout = 10
     initScore = 0
     logPostOnly = true
-    # Public issuer of the games realm — brand domain for snapdragon.games.
+    # Public issuer (OIDC `iss` origin) of the games realm. Parameterized on
+    # GAMES_DOMAIN by parameterize_games_domain() in the stage4 builders: the
+    # literal id.snapdragon.games is rewritten to id.${GAMES_DOMAIN} so the iss
+    # the Casdoor stamps into every games JWT matches the actual games host (the
+    # default GAMES_DOMAIN=games.<CLUSTER_DOMAIN> -> id.games.<CLUSTER_DOMAIN>).
+    # Leaving it as snapdragon.games would break iss-strict JWT validation on the
+    # subdomain default — see docs/OPTIONAL-SERVICES.md "Games subdomain".
     origin = "https://id.snapdragon.games"
     enableGzip = true

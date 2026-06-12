@@ -37,8 +37,11 @@ spec:
             # materialized casdoor-games-app Secret (Vault secret/<brand>/casdoor-games).
             - { name: CASDOOR_CLIENT_ID,     valueFrom: { secretKeyRef: { name: casdoor-games-app, key: clientId } } }
             - { name: CASDOOR_CLIENT_SECRET, valueFrom: { secretKeyRef: { name: casdoor-games-app, key: clientSecret } } }
-            # Public issuer of the games realm (brandable: snapdragon.games), used where
-            # an issuer claim / external URL is needed.
+            # Public issuer of the games realm — the value the games BFF enforces
+            # as the expected `iss`. Parameterized on GAMES_DOMAIN by
+            # parameterize_games_domain() in the stage4 builders (id.snapdragon.games
+            # -> id.${GAMES_DOMAIN}); MUST match casdoor-games origin above or the
+            # iss-strict JwtIssuerValidator rejects every games token.
             - { name: CASDOOR_ISSUER_URI, value: "https://id.snapdragon.games" }
             # Mesa picks the best installed driver; force SW only if no GPU.
             - { name: LIBGL_ALWAYS_SOFTWARE, value: "0" }
