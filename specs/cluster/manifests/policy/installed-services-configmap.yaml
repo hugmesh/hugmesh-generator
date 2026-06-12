@@ -1,0 +1,48 @@
+# installed-services — the RUNTIME install-state mirror of the OPTIONAL services
+# (akkoma/tuwunel/phpbb/games), rendered from specs/cluster/optional-services.yaml.
+#
+# WHY THIS EXISTS: build-time `rm -f` of a baked Application only stops the
+# ONE-TIME bootstrap seed; the live cluster's ArgoCD root app syncs apps/ from the
+# gitops REPO, not the baked copy, so it would re-create a pruned Application. The
+# durable, runtime add/remove model keys the optional-services ApplicationSet
+# (apps/13a-optional-services.yaml, a list generator) off THIS ConfigMap: flipping
+# a slug's `installed` boolean here (admin task / GitOps commit) makes ArgoCD
+# create or prune that slug's Application — one list, no baked-file surgery.
+#
+# It is ALSO the public-safe install-state source the admin console + the host's
+# greying-out predicate can read (the federation /api/federation/manifest is
+# authenticated()+visibility-filtered and cannot be used for logged-out greying;
+# see the federation-api capabilities wave).
+#
+# BUILD-TIME: _opt_render_installed_services() in the stage4 builders rewrites the
+# booleans below to match the surviving OPTIONAL_SERVICES selection, so a USB built
+# WITHOUT a slug ships with installed:"false" and the ApplicationSet never creates
+# it even on a repo-synced cluster.
+#
+# Deployed by the policy bundle (manifests/policy/kustomization.yaml ->
+# apps/16-reserved-prefixes-policy.yaml, namespace snapdragon-policy).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: installed-services
+  namespace: snapdragon-policy
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/registry: optional-services
+data:
+  # Per-slug install-state. "true" = installed (ApplicationSet creates its app);
+  # "false" = removed (ApplicationSet prunes it). Rendered from optional-services.yaml
+  # at build time; flip at runtime for live add/remove.
+  akkoma: "true"
+  tuwunel: "true"
+  phpbb: "true"
+  games: "true"
+  # Per-slug metadata the admin console + greying-out predicate read (mountAt =
+  # where the federation manifest mounts the remote; namespace = its k8s ns).
+  services.json: |
+    [
+      { "slug": "akkoma",  "displayName": "Akkoma (Mastodon)", "namespace": "snapdragon-backend", "mountAt": "/social/mastodon" },
+      { "slug": "tuwunel", "displayName": "tuwunel (Matrix)",  "namespace": "snapdragon-backend", "mountAt": "/social/matrix" },
+      { "slug": "phpbb",   "displayName": "phpBB (Forum)",     "namespace": "snapdragon-forum",   "mountAt": "/social/forum" },
+      { "slug": "games",   "displayName": "Snapdragon Games",  "namespace": "snapdragon-games",   "mountAt": "/games" }
+    ]

@@ -35,6 +35,13 @@ metadata:
   name: casdoor-games-init-data
   namespace: snapdragon-games
   labels: { app: casdoor-games, app.kubernetes.io/part-of: snapdragon.games }
+# NOTE: the websiteUrl/homepageUrl + redirectUris in the init_data.json below are
+# parameterized on GAMES_DOMAIN by parameterize_games_domain() in the stage4
+# builders (https://snapdragon.games -> https://${GAMES_DOMAIN}). They MUST point
+# at the real games host or the OAuth callback is rejected. The default GAMES_DOMAIN
+# serves games as a subdomain (games.<CLUSTER_DOMAIN>); flip to the .games TLD with
+# GAMES_DOMAIN=<brand>.games. Keep in sync with init-job.yaml (reconcile.py re-pins
+# the same redirectUris on every PostSync). (No comments INSIDE the JSON — invalid.)
 data:
   init_data.json: |
     {

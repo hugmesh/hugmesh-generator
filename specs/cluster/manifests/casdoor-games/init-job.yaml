@@ -67,6 +67,11 @@ data:
             "owner": "admin", "name": APP_NAME, "displayName": "Snapdragon Games",
             "organization": ORG, "clientId": CLIENT_ID, "clientSecret": secret,
             "cert": "cert-built-in", "signingCert": "cert-built-in",
+            # reconcile.py RE-PINS these redirectUris on EVERY ArgoCD PostSync, so
+            # they MUST be parameterized on GAMES_DOMAIN at build time (the stage4
+            # parameterize_games_domain() rewrites https://snapdragon.games ->
+            # https://${GAMES_DOMAIN}) — otherwise each sync reverts them to the
+            # wrong host and games OAuth breaks. Keep in sync with init-data-configmap.
             "redirectUris": [
                 "https://snapdragon.games/callback",
                 "https://snapdragon.games/silent-refresh.html",
