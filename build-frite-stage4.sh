@@ -34,13 +34,24 @@
 # ── VERIFIED vs NEEDS-HARDWARE (read this) ─────────────────────────────────────
 # VERIFIED HERE: bash -n syntax; option parsing; the board table + DTB/defconfig
 #   mapping; that it reuses the shared specs/ provisioning + mesh exactly like the
-#   Pi5 builder; template rendering; that the Pi5/x86 paths are untouched.
+#   Pi5 builder; template rendering (live emits `INITRD /initrd.img`, installer
+#   does not); that the Pi5/x86 paths are untouched.
 # NEEDS REAL HARDWARE / A FULL GENTOO CROSS-BUILD TO VERIFY: the actual aarch64
 #   cross-emerge of the LXDE stack; the mainline kernel build + the in-tree
 #   meson-gxl DTB names; the u-boot FIP/BL31 signing (needs Amlogic proprietary
-#   blobs); booting the squashfs LIVE image off USB on a real La Frite; the eMMC
-#   install. These steps are written to MIRROR the proven Pi5 flow but cannot be
-#   end-to-end tested in this environment (no board, no full Gentoo builder).
+#   blobs); the cross-generated dmsquash-live initramfs ACTUALLY mounting the
+#   squashfs as the ephemeral overlay root and booting off USB on a real La Frite;
+#   the eMMC install. These steps are written to MIRROR the proven Pi5 flow but
+#   cannot be end-to-end tested in this environment (no board, no full Gentoo
+#   builder).
+#
+# LIVE-BOOT FIX (Phase 4 §11b + §13): earlier the LIVE cmdline set dracut
+# directives (root=live:/rd.live.*) but NO initramfs was built and NO INITRD line
+# was emitted, so the squashfs was never mounted and the LIVE image was unbootable
+# by design. The LIVE flavor now pulls in sys-kernel/dracut (packages-live.list),
+# GENERATES a dmsquash-live initramfs against the built module tree, stages it as
+# /initrd.img next to the kernel, and the extlinux render emits the matching
+# `INITRD /initrd.img`. The INSTALLER flavor is unchanged (real partitioned root).
 set -euo pipefail
 
 # ── Resolve SCRIPT_DIR (where the spec trees live) ─────────────────
@@ -677,6 +688,15 @@ if [ "${DESKTOP}" = "light" ]; then
     mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
         grep -v '^\s*#' "${SPECS_DIR}/portage/packages-light-desktop.list" | grep -v '^\s*$')
 fi
+# LIVE flavor only: pull in sys-kernel/dracut so the builder can generate a
+# dmsquash-live initramfs (the bare kernel cannot mount root=live:/rd.live.* —
+# that is a dracut job). The INSTALLER flavor boots a real partitioned rootfs and
+# does NOT need this, so dracut stays out of the always-installed base set.
+if ${BUILD_LIVE}; then
+    info "LIVE flavor selected — appending packages-live.list (dracut for the live initramfs)"
+    mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
+        grep -v '^\s*#' "${SPECS_DIR}/portage/packages-live.list" | grep -v '^\s*$')
+fi
 if [ -n "${EXTRA_PACKAGES}" ]; then
     read -ra _extras <<< "${EXTRA_PACKAGES}"
     STAGE4_PACKAGES+=("${_extras[@]}")
@@ -725,6 +745,10 @@ else
 fi
 
 # ── 8. Cross-compile the kernel (mainline; ship the Amlogic DTB) ──
+# FRITE_KVER is captured here (from `make kernelrelease`) so Phase 4 can point
+# dracut --kver at the EXACT module tree this build installs under
+# ${SYSROOT}/lib/modules/. Empty if the kernel is skipped/unbuilt.
+FRITE_KVER=""
 if ${SKIP_KERNEL}; then
     banner "Phase 3: SKIPPED (--skip-kernel)"
 else
@@ -748,6 +772,9 @@ else
             grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
         grep -q '^CONFIG_LSM="yama,selinux,bpf"$' .config || { err "CONFIG_LSM malformed (expected yama,selinux,bpf)"; exit 1; }
+        # The kernelrelease string is the module-tree dir name (lib/modules/<kver>),
+        # which dracut needs as --kver for the live initramfs.
+        FRITE_KVER="$(make -s ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" kernelrelease 2>/dev/null | tail -1)"
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" -j"${JOBS}" Image modules dtbs
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" INSTALL_MOD_PATH="${SYSROOT}" modules_install
         mkdir -p "${SYSROOT}/boot/dtb/amlogic"
@@ -810,6 +837,72 @@ else
     warn "Kernel ${FRITE_KERNEL_IMG} not in sysroot — the boot tree will be incomplete."
 fi
 
+# ── 11b. Build the LIVE dmsquash-live initramfs (the boot fix) ─────
+# WHY: the LIVE flavor's cmdline uses dracut directives — root=live:LABEL=...,
+# rd.live.dir=/LiveOS, rd.live.squashimg=squashfs.img. Those are interpreted by a
+# dracut dmsquash-live initramfs, NOT by a bare kernel. Without an INITRD the
+# kernel would never find/mount the squashfs as the ephemeral overlay root and
+# the LIVE image would be UNBOOTABLE. So for the LIVE flavor we GENERATE a real
+# initramfs here (dmsquash-live module) and stage it next to the kernel; the
+# extlinux render then emits the matching `INITRD /initrd.img` line. The INSTALLER
+# flavor boots a real partitioned root (root=LABEL=FRITE_ROOT) and gets NO live
+# initramfs — see build_installer_iso (it leaves FRITE_INITRD a comment).
+#
+# Cross-build note (NEEDS-HARDWARE to fully confirm): dracut is a POSIX-sh/python
+# generator, so we run it as a HOST tool pointed at the aarch64 SYSROOT's module
+# tree (the tools it packs INTO the initramfs are the target's own aarch64
+# binaries, which is correct). We prefer the sysroot's own dracut script, falling
+# back to a host dracut with --kmoddir. This is structurally validated here
+# (bash -n, arg shape) but the actual cross-generated initramfs can only be
+# proven to boot on a real La Frite board with a full Gentoo cross-build.
+FRITE_LIVE_INITRD=""        # set non-empty once the live initramfs is staged
+build_live_initramfs() {
+    [ -f "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" ] || {
+        warn "no kernel in boot stage — cannot build the live initramfs; LIVE image will NOT boot."
+        return 1; }
+    # Resolve the kernel module dir to target. Prefer the captured kernelrelease;
+    # otherwise fall back to the single module tree modules_install just created.
+    local kver="${FRITE_KVER}"
+    if [ -z "${kver}" ] || [ ! -d "${SYSROOT}/lib/modules/${kver}" ]; then
+        kver="$(find "${SYSROOT}/lib/modules" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
+    fi
+    [ -n "${kver}" ] && [ -d "${SYSROOT}/lib/modules/${kver}" ] || {
+        warn "no module tree under ${SYSROOT}/lib/modules — cannot build the live initramfs; LIVE image will NOT boot."
+        return 1; }
+
+    local out="${BOOT_STAGE}/initrd.img"
+    local mods="dmsquash-live base udev-rules rootfs-block"
+    info "Generating live initramfs (dracut dmsquash-live, kver=${kver}) ..."
+
+    # Prefer the sysroot's own dracut (matches the target's module/tool versions);
+    # fall back to a host dracut. Either is pointed at the target module tree.
+    local sysroot_dracut="${SYSROOT}/usr/bin/dracut"
+    if [ -x "${sysroot_dracut}" ] && command -v sh >/dev/null; then
+        sh "${sysroot_dracut}" --force --no-hostonly \
+            --kver "${kver}" --kmoddir "${SYSROOT}/lib/modules/${kver}" \
+            --modules "${mods}" "${out}" 2>/dev/null && [ -s "${out}" ] && {
+                FRITE_LIVE_INITRD="${out}"
+                info "Live initramfs staged: ${out} ($(du -h "${out}" | cut -f1))"
+                return 0; }
+        warn "sysroot dracut did not produce an initramfs; trying a host dracut."
+    fi
+    if command -v dracut >/dev/null; then
+        dracut --force --no-hostonly \
+            --kver "${kver}" --kmoddir "${SYSROOT}/lib/modules/${kver}" \
+            --modules "${mods}" "${out}" 2>/dev/null && [ -s "${out}" ] && {
+                FRITE_LIVE_INITRD="${out}"
+                info "Live initramfs staged (host dracut): ${out} ($(du -h "${out}" | cut -f1))"
+                return 0; }
+    fi
+    warn "Could not generate the live initramfs (no usable dracut). The LIVE image"
+    warn "would be UNBOOTABLE without it — ensure sys-kernel/dracut is in the live"
+    warn "package set and the kernel module tree exists. (Needs the full cross-build.)"
+    return 1
+}
+if ${BUILD_LIVE} && ! ${SKIP_KERNEL}; then
+    build_live_initramfs || warn "Live initramfs not built — see warnings above."
+fi
+
 # ── 12. Package the stage4 tarball ────────────────────────────────
 banner "Phase 4: Packaging stage4 tarball"
 STAGE4_TARBALL="${WORK_DIR}/${ART_PREFIX}.stage4.tar.xz"
@@ -835,19 +928,33 @@ build_live_iso() {
     command -v mksquashfs >/dev/null || { warn "mksquashfs missing — skipping LIVE image."; return 0; }
     [ -f "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" ] || { warn "no kernel in boot stage — skipping LIVE image."; return 0; }
 
+    # The LIVE flavor is unbootable without the dmsquash-live initramfs (the
+    # cmdline below is all dracut directives). Refuse to package a LIVE image that
+    # has no initramfs rather than ship a known-dead boot.
+    if [ -z "${FRITE_LIVE_INITRD}" ] || [ ! -s "${FRITE_LIVE_INITRD}" ]; then
+        warn "No live initramfs was generated (Phase 4 §11b). The LIVE image would NOT"
+        warn "boot (root=live:/rd.live.* need a dracut dmsquash-live initramfs). Skipping"
+        warn "the LIVE image. Build with dracut available, or use --flavor installer."
+        return 0
+    fi
+
     local live_root="${STAGE_DIR}/live"
     rm -rf "${live_root}"; mkdir -p "${live_root}/LiveOS" "${live_root}/extlinux" "${live_root}/dtb"
     cp "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" "${live_root}/"
     cp -r "${BOOT_STAGE}/dtb/." "${live_root}/dtb/" 2>/dev/null || true
+    # Stage the dmsquash-live initramfs next to the kernel (extlinux INITRD line).
+    cp "${FRITE_LIVE_INITRD}" "${live_root}/initrd.img"
 
     info "Squashing the rootfs (LIVE) ..."
     mksquashfs "${SYSROOT}" "${live_root}/LiveOS/squashfs.img" \
         -noappend -comp xz -e boot/dtb 2>/dev/null \
         || mksquashfs "${SYSROOT}" "${live_root}/LiveOS/squashfs.img" -noappend
 
-    # extlinux for the LIVE boot: point root= at the live squashfs overlay.
-    FRITE_INITRD_LINE="    # (no initrd — squashfs mounted by the kernel's dmsquash/overlay)"
-    FRITE_APPEND="${APPEND_BASE} root=live:LABEL=FRITE_LIVE rd.live.dir=/LiveOS rd.live.squashimg=squashfs.img"
+    # extlinux for the LIVE boot: emit the INITRD line so u-boot loads the
+    # dmsquash-live initramfs, which then mounts LiveOS/squashfs.img as the
+    # read-only base and stacks a tmpfs overlay = the ephemeral root.
+    FRITE_INITRD_LINE="    INITRD /initrd.img"
+    FRITE_APPEND="${APPEND_BASE} root=live:LABEL=FRITE_LIVE rd.live.dir=/LiveOS rd.live.squashimg=squashfs.img rd.live.overlay.overlayfs=1"
     render_template "${SPECS_DIR}/boot/extlinux.conf.tmpl" "${live_root}/extlinux/extlinux.conf"
 
     if command -v xorriso >/dev/null; then
