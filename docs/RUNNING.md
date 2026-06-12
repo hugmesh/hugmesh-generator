@@ -295,8 +295,17 @@ Full flag reference: `./build-rpi5-stage4.sh --help` and
 | `-w, --work-dir` | `./out` | products dir |
 | `-j, --jobs N` | `$(nproc)` | parallel emerge/make jobs |
 | `--skip-mesh` / `--skip-tailscale` / `--skip-kernel` / `--skip-clean` / `--resume` | off | phases |
+| `--enable-wifi` / `--enable-bluetooth` | **off** | WiFi + Bluetooth are **disabled by default** (rfkill block + blacklisted modules + no service); these re-enable them. Ethernet + the tailnet are unaffected. (env/brand.conf: `ENABLE_WIFI` / `ENABLE_BLUETOOTH`) |
 | Pi: `--pcie-gen3`, `-c/--cpu`, `-d/--defconfig` | off / cortex-a76 / bcm2712 | board tuning |
 | x86: `--installer-iso`, `--no-live-iso`, `--no-tar` | off / live ISO on / tar on | x86 artifacts |
+
+> **Hardened radio defaults:** both builders disable **WiFi and Bluetooth** by
+> default to shrink the attack surface — at first boot a `/etc/local.d` action
+> `rfkill`-blocks both radios, their kernel modules are blacklisted
+> (`/etc/modprobe.d/snapdragon-radio-blacklist.conf`), and no WiFi/Bluetooth
+> service is enabled. **Ethernet + the Tailscale tailnet are never touched.**
+> Re-enable per build with `--enable-wifi` / `--enable-bluetooth` (or
+> `ENABLE_WIFI=true` / `ENABLE_BLUETOOTH=true` in `brand.conf`/env).
 
 Artifacts are **brand- and UTC-timestamp-named** so test/prod runs never clobber:
 `<brand>-<arch>-<role>-<env>-<UTC>.<ext>` (e.g.
@@ -348,13 +357,32 @@ Roles: `pki | backend | frontend | host | control-plane-additional`. Options:
 | Flag | Meaning |
 |---|---|
 | `-o, --out DIR` | output KEYS dir (default `keys-out`) |
-| `-u, --admin NAME` | admin username (default `admin`) |
-| `--random` | random passwords (printed once) instead of the 10s prompt — use for non-interactive/CI |
+| `-u, --admin NAME` | admin username (default `admin`) — the privileged login/SSH user (the superadmin on the primary images) |
+| `--random` | random passwords instead of the 10s prompt — hashes are written to the KEYS config, NOT echoed in plaintext (use for non-interactive/CI) |
+| `--root-password` | **also** generate a root password (default: NONE — root login is **LOCKED** on the image). When set it is stored salted+hashed in `users.json`, never printed. (env/brand.conf: `GEN_ROOT_PASSWORD=true`) |
+| `--sudo-nopasswd` | make the privileged user's sudo NOPASSWD (default: sudo is **password-gated** by the device/superadmin password) |
 | `--ca-cert` / `--ca-key` / `--ca-key-pass` | use an existing CA as the mTLS issuer (also seeds it as the kubeadm CA on the pki role) |
 | `--keys-src DIR` | copy optional mail/OAuth creds from an existing KEYS tree |
 
+> **Device-security hardening defaults** (key-gen + provisioning):
+> - **Root password is OPT-IN.** By default no root password is generated and
+>   `provision.sh` runs `passwd -l root` — root login is locked. Opt in with
+>   `--root-password` / `GEN_ROOT_PASSWORD=true`. Passwords are **never** echoed
+>   in plaintext (only salted+hashed in the KEYS `users.json`).
+> - **The privileged user has sudo** — with root locked, sudo is the
+>   superadmin/admin's escalation path. It is **password-gated** by default
+>   (`--sudo-nopasswd` to relax). `provision.sh` writes `/etc/sudoers.d/10-<user>`.
+> - **SSH over Tailscale, privileged-user-only.** gen-keys writes
+>   `keys-<role>/ssh/<admin>_ed25519` — the **private** key stays on the KEYS USB
+>   (off-image, gitignored via `*_ed25519`); its **public** key is baked into the
+>   privileged user's `authorized_keys`. `tailscale up --ssh` + the headscale SSH
+>   ACL (`headscale/policy.hujson`, scoped to `tailscale.ssh_user`) admit **only**
+>   that user over the tailnet — root + others are denied. SSH in with
+>   `ssh -i keys-<role>/ssh/<admin>_ed25519 <admin>@<tailnet-ip>`.
+
 What each role gets:
-- **pki** — `users.json` (admin + root, hashed), full `provision.json`, the
+- **pki** — `users.json` (the privileged admin/superadmin user, hashed + sudo;
+  root **locked** unless `--root-password`), full `provision.json`, the
   per-service JKS keystores + `truststore.jks`, `certs/cluster-ca.{crt,key}`, and
   the optional `secrets/{mail.json,cluster-creds.json}`. Mail/OAuth prompts have a
   10s timeout; empty = disabled (`--random`/`NONINTERACTIVE=1` skips them).

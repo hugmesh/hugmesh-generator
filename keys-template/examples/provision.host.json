@@ -2,21 +2,19 @@
   "_comment": "WORKER KEYS USB (x86_64 GPU host) = KEYS ONLY. No users.json or service config — those live only on the pki node. Carries join/mesh/CA keys + break-glass ssh/root.authorized_keys; joins the pki control-plane and is labelled for the games/GPU tier. ArgoCD schedules ArgoCD + snapdragon.games + backend capacity here; Vault/ESO deliver secrets.",
   "version": 1,
   "hostname": "snapdragon-host",
-
   "_comment_mesh": "Leave endpoint empty to default tailscale login_server to the pki node's LAN IP (works before public DNS). cp_dns_name is the stable control-plane name the kubeadm join targets over the mesh.",
   "mesh": {
     "endpoint": "",
     "magic_dns_domain": "headnet.internal",
     "cp_dns_name": "kube-api.headnet.internal"
   },
-
   "tailscale": {
     "enabled": true,
     "authkey_file": "tailscale/authkey",
     "login_server": "",
-    "up_args": "--advertise-tags=tag:snapdragon,tag:host --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false"
+    "up_args": "--advertise-tags=tag:snapdragon,tag:host --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false --ssh",
+    "ssh": true
   },
-
   "_comment_kubernetes": "Worker join. api_server left empty auto-targets cp_dns_name:6443 over the mesh. To run THIS node as an ADDITIONAL HA control-plane instead, set role=control-plane, bootstrap=true, first=false, and add join.certificate_key (from `kubeadm init phase upload-certs --upload-certs` on the first CP).",
   "kubernetes": {
     "role": "worker",
@@ -28,7 +26,6 @@
       "ca_cert_hash": "sha256:REPLACE_WITH_CA_CERT_HASH"
     }
   },
-
   "snapdragon": {
     "role": "host",
     "cluster_domain": "snapdragon.systems",
@@ -40,18 +37,38 @@
       "snapdragon.systems/compute": "gpu"
     }
   },
-
   "nodes": [
-    { "name": "snapdragon-pki", "ip": "10.0.0.10", "role": "pki" },
-    { "name": "snapdragon-host", "ip": "10.0.0.30", "role": "host" }
+    {
+      "name": "snapdragon-pki",
+      "ip": "10.0.0.10",
+      "role": "pki"
+    },
+    {
+      "name": "snapdragon-host",
+      "ip": "10.0.0.30",
+      "role": "host"
+    }
   ],
-
   "storage": {
     "devices": [
-      { "match": "nvme", "mountpoint": "/mnt/data", "filesystem": "ext4", "format": false,
-        "options": "defaults,noatime", "use_for": ["containerd", "kubelet"] },
-      { "match": "usb", "mountpoint": "/mnt/usb", "filesystem": "ext4", "format": false,
-        "options": "defaults,noatime" }
+      {
+        "match": "nvme",
+        "mountpoint": "/mnt/data",
+        "filesystem": "ext4",
+        "format": false,
+        "options": "defaults,noatime",
+        "use_for": [
+          "containerd",
+          "kubelet"
+        ]
+      },
+      {
+        "match": "usb",
+        "mountpoint": "/mnt/usb",
+        "filesystem": "ext4",
+        "format": false,
+        "options": "defaults,noatime"
+      }
     ]
   }
 }

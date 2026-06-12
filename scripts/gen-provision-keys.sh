@@ -24,6 +24,28 @@ ADMIN="admin"
 ROLE="pki"
 RANDOM_PW=false
 
+# ── Root password (OPTIONAL, default OFF — hardened posture) ────────
+# By DEFAULT no root password is generated: root login is LOCKED on the image
+# (the pki users.json carries .root.locked=true -> provision.sh runs `passwd -l
+# root`, no hash) and the worker break-glass key is the only path in. Only when
+# GEN_ROOT_PASSWORD=true (env / brand.conf) or --root-password is passed do we
+# generate a root password and store it SALTED+HASHED in users.json — NEVER
+# echoed in plaintext. Precedence: built-in (false) < brand.conf < CLI flag.
+GEN_ROOT_PASSWORD="${GEN_ROOT_PASSWORD:-false}"
+
+# ── Superadmin sudo (ALWAYS on for the privileged user; password-gated) ─────
+# The privileged login/SSH user on the PRIMARY images is the SUPERADMIN, and
+# with root login LOCKED by default sudo is its ONLY escalation path — so the
+# generated users.json ALWAYS grants that user sudo (provision.sh writes
+# /etc/sudoers.d/10-<user>). By DEFAULT sudo is PASSWORD-GATED (the device/
+# superadmin password), NOT NOPASSWD. Set SUDO_NOPASSWD=true (env/brand.conf) or
+# pass --sudo-nopasswd to opt into NOPASSWD. Precedence: built-in (false) <
+# brand.conf < CLI flag.
+# TODO(admin-mesh-extension): when the image_builder admin mesh-extension build
+# path lands, that flow likewise grants the building ADMIN host-scoped sudo
+# (same users.json .sudo=true mechanism, scoped to the admin's domain).
+SUDO_NOPASSWD="${SUDO_NOPASSWD:-false}"
+
 # ── Optional mail + OAuth creds (ABSENT BY DEFAULT) ─────────────────
 # Source, in order: an existing keys USB (KEYS/secrets/mail.json + an optional
 # KEYS/secrets/dkim-private.key) pointed at by KEYS_SRC; else an interactive
@@ -58,7 +80,16 @@ Options:
                       (control-plane-additional = a 2nd/3rd HA control-plane that
                        kubeadm join --control-plane's the existing cluster)
                       pki = FULL config + default user accounts; workers = KEYS ONLY (no users.json).
-      --random        Generate random passwords (printed once) instead of prompting.
+      --random        Generate random passwords instead of prompting (hashes are
+                      written to the key-USB config; NOT echoed in plaintext).
+      --root-password Generate a ROOT password too (default: NO root password —
+                      root login is LOCKED on the image). When set, the root
+                      password is stored SALTED+HASHED in users.json (key-USB),
+                      never printed. (env/brand.conf: GEN_ROOT_PASSWORD=true)
+      --sudo-nopasswd The privileged (superadmin/admin) user ALWAYS gets sudo —
+                      with root login locked, sudo is its escalation path. By
+                      default sudo is PASSWORD-GATED; this flag makes it NOPASSWD.
+                      (env/brand.conf: SUDO_NOPASSWD=true)
       --ca-cert FILE  Use an EXISTING CA cert (PEM) as the issuer for the mTLS
                       certs (forwarded to gen-keystores.sh). Default: self-signed.
       --ca-key FILE   Private key for --ca-cert (PEM; may be encrypted).
@@ -88,6 +119,8 @@ while [[ $# -gt 0 ]]; do
         -u|--admin)    ADMIN="$2"; shift 2 ;;
         -r|--role)     ROLE="$2"; shift 2 ;;
         --random)      RANDOM_PW=true; shift ;;
+        --root-password) GEN_ROOT_PASSWORD=true; shift ;;
+        --sudo-nopasswd) SUDO_NOPASSWD=true; shift ;;
         --ca-cert)     CA_CERT="$2"; shift 2 ;;
         --ca-key)      CA_KEY="$2"; shift 2 ;;
         --ca-key-pass) CA_KEY_PASS="$2"; shift 2 ;;
@@ -237,39 +270,98 @@ PY
 if [ "${ROLE}" = "pki" ]; then
     # ── pki node: FULL config — default user accounts + hashed passwords ──
     cp "${KEYFILE}.pub" "${OUT_DIR}/ssh/${ADMIN}.authorized_keys"
+    # gen_hash WHO — prompts (or --random mints) a password, prints only a
+    # NON-SECRET note (never the cleartext), and emits the SHA-512 crypt hash on
+    # stdout for storage in the key-USB users.json. The plaintext NEVER reaches
+    # the console (was: `echo "${who} password: ${pw}"` — removed for hardening).
     gen_hash() {
         local who="$1" pw
-        if ${RANDOM_PW}; then pw="$(openssl rand -base64 18)"; echo "  ${who} password: ${pw}" >&2
+        if ${RANDOM_PW}; then
+            pw="$(openssl rand -base64 18)"
+            echo "  ${who}: random password generated (stored salted+hashed in users.json — not printed)" >&2
         else
             if ! read -t 10 -rsp "Password for ${who} (10s, default=random): " pw || [ -z "${pw}" ]; then
                 pw="$(openssl rand -base64 18)"
-                echo "  (timeout/empty -> random ${who} password: ${pw})" >&2
+                echo >&2
+                echo "  ${who}: timeout/empty -> random password generated (stored salted+hashed in users.json — not printed)" >&2
+            else
+                echo >&2
             fi
-            echo >&2
         fi
         openssl passwd -6 "${pw}"
     }
     echo "==> Setting password hashes (pki node)"
-    ADMIN_HASH="$(gen_hash "${ADMIN}")"; ROOT_HASH="$(gen_hash root)"
+    ADMIN_HASH="$(gen_hash "${ADMIN}")"
+    # ROOT password is OPTIONAL (default OFF). Without it root login is LOCKED on
+    # the image (users.json .root.locked=true; no hash). With --root-password /
+    # GEN_ROOT_PASSWORD=true we generate one and store ONLY its salted+hashed form.
+    ROOT_HASH=""
+    if [ "${GEN_ROOT_PASSWORD}" = true ]; then
+        ROOT_HASH="$(gen_hash root)"
+        echo "  root login: ENABLED (password salted+hashed in users.json — not printed)"
+    else
+        echo "  root login: LOCKED (no root password generated — default hardened posture; use --root-password to enable)"
+    fi
     USERS="${OUT_DIR}/users.json"
-    python3 - "${USERS}" "${ADMIN}" "${ADMIN_HASH}" "${PUBKEY}" "${ROOT_HASH}" <<'PY'
-import json, sys
+    if [ "${SUDO_NOPASSWD}" = true ]; then
+        echo "  sudo: GRANTED to '${ADMIN}' (NOPASSWD — escalates without re-entering the password)"
+    else
+        echo "  sudo: GRANTED to '${ADMIN}' (password-gated by the device/superadmin password; root login is locked)"
+    fi
+    SUDO_NOPASSWD="${SUDO_NOPASSWD}" python3 - "${USERS}" "${ADMIN}" "${ADMIN_HASH}" "${PUBKEY}" "${ROOT_HASH}" <<'PY'
+import json, os, sys
 f, name, h, key, rh = sys.argv[1:6]
 d = json.load(open(f))
 d.setdefault("users", [{}])
-d["users"][0].update({"name": name, "password_hash": h, "ssh_authorized_keys": [key]})
-d.setdefault("root", {})["password_hash"] = rh
+# The privileged user (the SUPERADMIN on primary images) ALWAYS gets sudo: with
+# root login locked by default, sudo is its only escalation path. password-gated
+# by default; NOPASSWD only when SUDO_NOPASSWD=true. Default groups include wheel.
+nopw = os.environ.get("SUDO_NOPASSWD", "false") == "true"
+d["users"][0].setdefault("groups", ["wheel", "audio", "video", "usb"])
+d["users"][0].update({"name": name, "password_hash": h, "ssh_authorized_keys": [key],
+                      "sudo": True, "sudo_nopasswd": nopw})
+root = d.setdefault("root", {})
+if rh:
+    # Root login enabled: store ONLY the salted+hashed password, clear any lock.
+    root["password_hash"] = rh
+    root["locked"] = False
+else:
+    # Default hardened posture: no root password; provision.sh locks the account.
+    root["password_hash"] = ""
+    root["locked"] = True
+json.dump(d, open(f, "w"), indent=2)
+PY
+    # Pin the privileged Tailscale-SSH user to this admin (the superadmin for the
+    # primary core/cluster-node images). The headscale SSH ACL (policy.hujson)
+    # then admits ONLY this user over the tailnet; root + others are denied.
+    PROV="${OUT_DIR}/provision.json"
+    [ -f "${PROV}" ] && python3 - "${PROV}" "${ADMIN}" <<'PY'
+import json, sys
+f, name = sys.argv[1:3]
+d = json.load(open(f))
+ts = d.setdefault("tailscale", {})
+ts["ssh_user"] = name          # the operator/superadmin SSH login over the tailnet
+ts.setdefault("ssh", True)     # expose Tailscale SSH (ACL-scoped to ssh_user)
+ua = ts.get("up_args", "")
+if "--ssh" not in ua.split():
+    ts["up_args"] = (ua + " --ssh").strip()
 json.dump(d, open(f, "w"), indent=2)
 PY
     # Optional outbound-mail + GitHub/Discord OAuth creds for the cluster (pki
     # node carries the cluster config + secrets). Absent by default.
     provision_mail_oauth
     echo; echo "Done (pki — config node). Generated:"
-    echo "  ${OUT_DIR}/users.json            (default accounts: admin '${ADMIN}' + root, hashed)"
+    if [ "${GEN_ROOT_PASSWORD}" = true ]; then
+        echo "  ${OUT_DIR}/users.json            (default accounts: admin '${ADMIN}' hashed + root login ENABLED, hashed)"
+    else
+        echo "  ${OUT_DIR}/users.json            (default account: admin '${ADMIN}' hashed; root login LOCKED — no password)"
+    fi
     echo "  ${OUT_DIR}/provision.json        (all-services config for the cluster)"
     echo "  ${OUT_DIR}/secrets/mail.json     (OPTIONAL SMTP creds; empty = mail disabled)"
     echo "  ${OUT_DIR}/secrets/cluster-creds.json  (OPTIONAL mail+OAuth; read by gen-cluster-secrets.sh)"
-    echo "  ${OUT_DIR}/ssh/${ADMIN}_ed25519       (PRIVATE key — keep safe)"
+    echo "  ${OUT_DIR}/ssh/${ADMIN}.authorized_keys  (operator PUBLIC key -> baked into '${ADMIN}' authorized_keys)"
+    echo "  ${OUT_DIR}/ssh/${ADMIN}_ed25519       (operator PRIVATE SSH key — stays on the key-USB, off-image;"
+    echo "                                          SSH into the node AS '${ADMIN}' over Tailscale: ssh -i ssh/${ADMIN}_ed25519 ${ADMIN}@<tailnet-ip>)"
 else
     # ── worker node: KEYS ONLY — no default users; break-glass root key only ──
     # Default user accounts live ONLY on the pki node's USB. A worker carries

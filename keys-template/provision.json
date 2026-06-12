@@ -28,12 +28,15 @@
     ]
   },
 
+  "_comment_tailscale_ssh": "HARDENED: Tailscale SSH (--ssh in up_args) is on by default and the headscale SSH ACL (policy.hujson) restricts SSH sessions to ssh_user ONLY (root + others denied). ssh_user is the image's PRIVILEGED user — the SUPERADMIN/admin in users.json; leave empty to default to the first sudo user. The operator SSHs in over the tailnet with the keys-out/ssh/<admin>_ed25519 PRIVATE key (off-image, key-USB custody); its public key is baked into that user's authorized_keys. Set tailscale.ssh=false to opt a node out.",
   "tailscale": {
     "enabled": true,
     "authkey_file": "tailscale/authkey",
     "login_server": "",
+    "ssh_user": "",
+    "ssh": true,
     "mesh_routes": "10.244.0.0/16,10.96.0.0/12",
-    "up_args": "--advertise-tags=tag:snapdragon,tag:pki --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false"
+    "up_args": "--advertise-tags=tag:snapdragon,tag:pki --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false --ssh"
   },
 
   "_comment_kubernetes": "FIRST control-plane: role=control-plane + bootstrap=true (+ first defaults true) -> kubeadm init --upload-certs. ADDITIONAL control-plane: role=control-plane, bootstrap=true, first=false, and a full join block incl. certificate_key -> kubeadm join --control-plane. Workers: role=worker + a join block. Leave join.api_server empty to auto-target the stable cp_dns_name:6443. ETCD SECRET ENCRYPTION-AT-REST: keys-provision writes /etc/kubernetes/encryption-config.yaml (aescbc) before kubeadm init so the apiserver encrypts Secrets in etcd. Put the shared key at kubernetes/encryption-key on THIS stick (base64 32 bytes; same file on every control plane) so all apiservers decrypt the same etcd — else a fresh key is minted on the first CP and must be copied by hand. NEVER in git.",

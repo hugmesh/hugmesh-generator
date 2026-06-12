@@ -2,21 +2,19 @@
   "_comment": "ADDITIONAL HA CONTROL-PLANE KEYS USB. Use this to add a 2nd/3rd pki/control-plane node to an EXISTING cluster (HA). It does kubeadm join --control-plane (NOT init), so it joins the same etcd/control plane instead of starting a second cluster. Prereqs from the FIRST control-plane: (1) `kubeadm token create --print-join-command` -> token + ca_cert_hash; (2) `kubeadm init phase upload-certs --upload-certs` -> certificate_key (also persisted on the first CP at /etc/snapdragon/kubeadm-certificate-key). All three go in kubernetes.join below. It also needs the shared cluster PKI (kubernetes/pki) so the joining apiserver/etcd trust the same CA.",
   "version": 1,
   "hostname": "snapdragon-pki-02",
-
   "_comment_mesh": "Same mesh as the first control-plane. endpoint empty -> tailscale login_server defaults to the pki node's LAN IP. cp_dns_name is the STABLE control-plane endpoint this node joins (resolved over the mesh / via the first-boot /etc/hosts bridge).",
   "mesh": {
     "endpoint": "",
     "magic_dns_domain": "headnet.internal",
     "cp_dns_name": "kube-api.headnet.internal"
   },
-
   "tailscale": {
     "enabled": true,
     "authkey_file": "tailscale/authkey",
     "login_server": "",
-    "up_args": "--advertise-tags=tag:snapdragon,tag:pki --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false"
+    "up_args": "--advertise-tags=tag:snapdragon,tag:pki --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false --ssh",
+    "ssh": true
   },
-
   "_comment_kubernetes": "role=control-plane + bootstrap=true + first=false => ADDITIONAL control-plane (kubeadm join --control-plane). keys-provision also probes https://<cp_dns_name>:6443/healthz: if the cluster is already up it joins as additional regardless of the flag. join.api_server empty auto-targets cp_dns_name:6443. certificate_key is REQUIRED for a control-plane join.",
   "kubernetes": {
     "role": "control-plane",
@@ -31,20 +29,31 @@
       "certificate_key": "REPLACE_WITH_UPLOAD_CERTS_CERTIFICATE_KEY"
     }
   },
-
   "snapdragon": {
     "role": "pki",
     "cluster_domain": "snapdragon.systems",
-    "node_labels": { "snapdragon.systems/role": "pki" }
+    "node_labels": {
+      "snapdragon.systems/role": "pki"
+    }
   },
-
   "_comment_nodes": "Reach the first pki control-plane + mesh by IP (written to /etc/hosts) so tailscale login_server and the cp_dns_name kubeadm target resolve before MagicDNS converges.",
   "nodes": [
-    { "name": "snapdragon-pki",    "ip": "10.0.0.10", "role": "pki" },
-    { "name": "snapdragon-pki-02", "ip": "10.0.0.11", "role": "pki" },
-    { "name": "snapdragon-host",   "ip": "10.0.0.30", "role": "host" }
+    {
+      "name": "snapdragon-pki",
+      "ip": "10.0.0.10",
+      "role": "pki"
+    },
+    {
+      "name": "snapdragon-pki-02",
+      "ip": "10.0.0.11",
+      "role": "pki"
+    },
+    {
+      "name": "snapdragon-host",
+      "ip": "10.0.0.30",
+      "role": "host"
+    }
   ],
-
   "files": [
     {
       "src": "certs/cluster-ca.crt",

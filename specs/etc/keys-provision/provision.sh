@@ -122,6 +122,28 @@ resolve_control_endpoint() {
     echo "${ep}"
 }
 
+# Privileged Tailscale-SSH user. HARDENED DEFAULT: only ONE local user may open a
+# Tailscale-SSH session into the node (root + others denied). For the PRIMARY
+# core/cluster-node images that user is the SUPERADMIN; the admin-created
+# mesh-extension flow (when built) provisions the building ADMIN instead — both
+# arrive here as .tailscale.ssh_user. Precedence: explicit .tailscale.ssh_user
+# else the first sudo user in users.json (the provisioned admin/superadmin) else
+# "admin". Used to (a) scope the headscale SSH ACL (@@TS_SSH_USER@@) and (b) is
+# implied by `tailscale up --ssh`.
+# TODO(admin-mesh-extension): when the image_builder admin mesh-extension build
+# path lands, set .tailscale.ssh_user to the building admin (domain-scoped) at
+# that pipeline's gen-keys step; this resolver already honours it.
+resolve_ssh_user() {
+    local u f
+    u="$(jqm '.tailscale.ssh_user // ""')"
+    if [ -z "${u}" ] || [ "${u}" = "null" ]; then
+        f="${BASE}/users.json"; [ -f "${f}" ] || f="${MANIFEST}"
+        u="$(jq -r 'first((.users // [])[] | select(.sudo==true) | .name) // ""' "${f}" 2>/dev/null)"
+    fi
+    { [ -z "${u}" ] || [ "${u}" = "null" ]; } && u="admin"
+    echo "${u}"
+}
+
 # MagicDNS base domain (overridable by .mesh.magic_dns_domain).
 resolve_magic_dns_domain() {
     local d; d="$(jqm '.mesh.magic_dns_domain // ""')"
@@ -271,9 +293,17 @@ provision_users() {
 
     # root account
     if jq -e '.root' "${f}" >/dev/null 2>&1; then
-        local rhash
+        local rhash rlocked
         rhash="$(jq -r '.root.password_hash // ""' "${f}")"
-        if [ -n "${rhash}" ]; then
+        rlocked="$(jq -r '.root.locked // false' "${f}")"
+        # HARDENED DEFAULT: with .root.locked=true (or no hash supplied) root login
+        # is DISABLED — `passwd -l root` locks the password field and PermitRootLogin
+        # prohibit-password (sshd hardened.conf) already blocks root password SSH.
+        # Only an explicit non-empty .root.password_hash with locked!=true enables it.
+        if [ "${rlocked}" = "true" ] || [ -z "${rhash}" ]; then
+            passwd -l root >/dev/null 2>&1 && log "root login LOCKED (passwd -l root — no root password)" \
+                || warn "failed to lock root account"
+        else
             printf 'root:%s\n' "${rhash}" | chpasswd -e && log "Set root password hash"
         fi
         install_root_keys "${f}"
@@ -513,11 +543,22 @@ provision_headscale() {
         fi
     done
 
-    # ── Fleet full-mesh ACL + subnet-route auto-approval ──────────────────
-    # Load the fleet policy (tagOwners + autoApprovers + intra-fleet accepts)
-    # so nodes can self-tag (tag:snapdragon/+role) and their advertised pod +
-    # service routes are auto-approved. Idempotent: re-running just re-applies.
+    # ── Fleet full-mesh ACL + subnet-route auto-approval + SSH ACL ────────
+    # Load the fleet policy (tagOwners + autoApprovers + intra-fleet accepts +
+    # the privileged-user-only Tailscale-SSH rule) so nodes can self-tag
+    # (tag:snapdragon/+role), their advertised pod + service routes are
+    # auto-approved, and ONLY the privileged user may open a Tailscale-SSH
+    # session. Idempotent: re-running just re-applies.
     if [ -n "${policy_file}" ] && [ -f "${policy_file}" ]; then
+        # Scope the SSH ACL to the provisioned privileged user (superadmin for
+        # primary images / the building admin for mesh-extension images). The
+        # @@TS_SSH_USER@@ placeholder is rewritten in place; root + others stay
+        # denied an SSH session. Skipped cleanly if the file carries no SSH rule.
+        if grep -q '@@TS_SSH_USER@@' "${policy_file}" 2>/dev/null; then
+            local ssh_user; ssh_user="$(resolve_ssh_user)"
+            sed -i "s/@@TS_SSH_USER@@/${ssh_user}/g" "${policy_file}"
+            log "headscale SSH ACL scoped to privileged user '${ssh_user}' (root + others denied)"
+        fi
         if headscale policy set -f "${policy_file}" 2>/dev/null; then
             log "Loaded headscale ACL policy from ${policy_file}"
         else
@@ -650,6 +691,16 @@ provision_tailscale() {
         [ -n "${login}" ] && [ "${login}" != "null" ] && cmd+=(--login-server "${login}")
         # shellcheck disable=SC2206
         [ -n "${up_args}" ] && [ "${up_args}" != "null" ] && cmd+=(${up_args})
+        # HARDENED DEFAULT: expose Tailscale SSH (--ssh) so the operator can reach
+        # the node over the tailnet — but ONLY as the privileged user, enforced by
+        # the headscale SSH ACL (provision_headscale, scoped to resolve_ssh_user;
+        # root + others denied). Opt out per-node with .tailscale.ssh=false; or if
+        # up_args already carries --ssh we don't duplicate it. SSH stays tailnet-
+        # only (Tailscale SSH binds the tailnet, not the public interface).
+        local ts_ssh; ts_ssh="$(jqm '.tailscale.ssh // true')"
+        if [ "${ts_ssh}" != "false" ] && [[ " ${up_args} " != *" --ssh "* ]]; then
+            cmd+=(--ssh)
+        fi
         if "${cmd[@]}" 2>/dev/null; then
             log "tailscale up succeeded"
         else

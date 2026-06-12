@@ -60,5 +60,27 @@
       "src": ["tag:snapdragon"],
       "dst": ["10.244.0.0/16:*", "10.96.0.0/12:*"]
     }
+  ],
+
+  // ── Tailscale SSH (privileged-user-only) ──────────────────────────────────
+  // Hardened default: ONLY the image's PRIVILEGED user (the superadmin for the
+  // primary core/cluster-node images; the building admin for admin-created
+  // mesh-extension images) may SSH into a fleet node over the tailnet. root and
+  // every other local account are DENIED an SSH session — `tailscale up --ssh`
+  // exposes Tailscale SSH and this rule scopes which tailnet identities may open
+  // it AS which local users. The "users" list below is the single privileged
+  // username; "autogroup:nonroot" would broaden it and "root" is deliberately
+  // excluded. keys-provision rewrites @@TS_SSH_USER@@ to the provisioned
+  // privileged user (provision.json .tailscale.ssh_user, default = the admin
+  // account in users.json) before `headscale policy set`. SSH is reachable on
+  // the tailnet only (tailscaled binds the tailnet; the public iface is not
+  // exposed by Tailscale SSH).
+  "ssh": [
+    {
+      "action": "accept",
+      "src": ["tag:snapdragon"],
+      "dst": ["tag:snapdragon"],
+      "users": ["@@TS_SSH_USER@@"]
+    }
   ]
 }

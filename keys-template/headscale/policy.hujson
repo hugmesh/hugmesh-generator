@@ -49,5 +49,19 @@
       "src": ["tag:snapdragon"],
       "dst": ["10.244.0.0/16:*", "10.96.0.0/12:*"]
     }
+  ],
+
+  // Tailscale SSH — privileged-user-only. ONLY the image's privileged user
+  // (@@TS_SSH_USER@@, rewritten by keys-provision from provision.json
+  // .tailscale.ssh_user) may open a Tailscale-SSH session; root + other accounts
+  // are denied. Pair with `tailscale up --ssh` (provision.json tailscale.up_args
+  // / the keys-provision default). SSH is tailnet-only.
+  "ssh": [
+    {
+      "action": "accept",
+      "src": ["tag:snapdragon"],
+      "dst": ["tag:snapdragon"],
+      "users": ["@@TS_SSH_USER@@"]
+    }
   ]
 }
