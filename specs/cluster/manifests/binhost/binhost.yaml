@@ -41,22 +41,48 @@ spec:
     metadata: { labels: { app: binhost } }
     spec:
       nodeSelector: { kubernetes.io/arch: amd64 }   # the build host + disks
+      # POD-level hardening (replicates the media-poisoner exemplar): CIS K8s
+      # 5.2.6 (runAsNonRoot) + 5.7.2 (seccompProfile RuntimeDefault). NIST 800-53
+      # AC-6/SC-39, 800-190 §4.5.3. Switched to nginxinc/nginx-unprivileged so the
+      # server runs as the baked-in UID 101 with the pid/temp dirs already
+      # relocated out of the (now read-only) root filesystem.
       securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
         seLinuxOptions:
           type: container_t
           level: "s0:c60"
       containers:
         - name: nginx
-          image: nginx:1.27-alpine
+          # nginx-unprivileged UID 101 pattern (audit). The binhost ConfigMap
+          # overrides the listen port to 8086 (an unprivileged port), so UID 101
+          # with ALL caps dropped binds it fine. Pinned tag (no floating :stable).
+          image: nginxinc/nginx-unprivileged:1.27-alpine
+          # CONTAINER-level hardening. CIS K8s 5.2.5 / 5.2.7-5.2.9. UID 101 = the
+          # nginx user in the unprivileged image; readOnlyRootFilesystem needs an
+          # emptyDir for every path nginx writes (cache/pid/temp).
+          securityContext:
+            runAsUser: 101
+            runAsGroup: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
           ports:
             - { name: http, containerPort: 8086, hostPort: 8086 }   # reachable on the node's VPN IP
           volumeMounts:
             - { name: binpkgs, mountPath: /binpkgs, readOnly: true }
             - { name: conf, mountPath: /etc/nginx/conf.d }
+            # readOnlyRootFilesystem:true => writable tmpfs for nginx scratch.
+            - { name: tmp, mountPath: /tmp }
+            - { name: nginx-cache, mountPath: /var/cache/nginx }
+            - { name: nginx-run, mountPath: /var/run }
           readinessProbe: { httpGet: { path: /healthz, port: http } }
       volumes:
         - { name: binpkgs, persistentVolumeClaim: { claimName: binpkgs } }
         - { name: conf, configMap: { name: binhost-nginx } }
+        - { name: tmp, emptyDir: {} }
+        - { name: nginx-cache, emptyDir: {} }
+        - { name: nginx-run, emptyDir: {} }
 ---
 apiVersion: v1
 kind: Service

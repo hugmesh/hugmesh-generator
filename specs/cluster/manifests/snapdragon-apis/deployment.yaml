@@ -13,7 +13,14 @@ spec:
     metadata: { labels: { app: snapdragon-api } }
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
+      # POD-level hardening (replicates the media-poisoner exemplar): CIS K8s
+      # 5.2.6 (runAsNonRoot) + 5.7.2 (seccompProfile RuntimeDefault). NIST 800-53
+      # AC-6/SC-39, 800-190 §4.5.3. UID 1000 = the unprivileged app user the
+      # snapdragon-actions JRE image runs as (same UID the exemplar pins).
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
         seLinuxOptions:
           type: container_t
           level: "s0:c22"
@@ -29,6 +36,14 @@ spec:
       initContainers:
         - name: build-keystore
           image: snapdragon-systems/actions:dev
+          # CONTAINER-level hardening (audit: pod-only seLinux, no container ctx).
+          # CIS K8s 5.2.5 / 5.2.7-5.2.9. The store password is generated here and
+          # written ONLY to the /stores tmpfs (already a Memory emptyDir, RW);
+          # readOnlyRootFilesystem keeps the rest of the rootfs immutable.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
           command: ["/bin/sh", "-ec"]
           args:
             - |
@@ -48,11 +63,20 @@ spec:
           volumeMounts:
             - { name: pki,    mountPath: /pki, readOnly: true }
             - { name: stores, mountPath: /stores }
+            # keytool/openssl scratch under readOnlyRootFilesystem.
+            - { name: tmp,    mountPath: /tmp }
       containers:
         - name: api
           # snapdragon-actions — "Spring Actions for snapdragon hybrid architecture"
           image: snapdragon-systems/actions:dev
           ports: [{ name: http, containerPort: 8080 }]
+          # CONTAINER-level hardening. CIS K8s 5.2.5 / 5.2.7-5.2.9. The JVM needs a
+          # writable /tmp (perfdata, JIT scratch) and the RW /stores tmpfs the init
+          # container built; everything else is read-only.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
           env:
             - { name: SPRING_PROFILES_ACTIVE, value: "casdoor" }
             # ── API-to-API mTLS (server side) ─────────────────────────────────
@@ -109,6 +133,8 @@ spec:
           volumeMounts:
             - { name: stores, mountPath: /stores, readOnly: true }
             - { name: pki,    mountPath: /pki,    readOnly: true }
+            # readOnlyRootFilesystem:true => the JVM needs a writable /tmp.
+            - { name: tmp,    mountPath: /tmp }
       volumes:
         # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
         - name: pki
@@ -118,6 +144,9 @@ spec:
         - name: stores
           emptyDir:
             medium: Memory
+        # JVM/keytool scratch space under readOnlyRootFilesystem.
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

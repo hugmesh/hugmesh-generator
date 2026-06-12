@@ -30,7 +30,10 @@ spec:
           level: "s0:c16"
       containers:
         - name: forgejo
-          image: codeberg.org/forgejo/forgejo:9
+          # Pinned to a fixed patch (NIST 800-190 §4.3 image provenance; CIS
+          # Docker 4.x). Was the floating major tag :9; pin the final 9.x patch so
+          # an upstream re-push of the moving tag can't silently change the image.
+          image: codeberg.org/forgejo/forgejo:9.0.3
           ports:
             - { name: http, containerPort: 3000 }
             - { name: ssh,  containerPort: 22 }

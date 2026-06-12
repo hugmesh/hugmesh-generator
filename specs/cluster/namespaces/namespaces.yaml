@@ -14,35 +14,73 @@
 #   devops               devops=true; ArgoCD additionally kubernetes.io/arch=amd64 (x86 ONLY)
 # The x86_64 host is labelled frontend=backend=games=devops=true (+compute=gpu),
 # so it runs all of those; the Pis keep only their own tier label.
+# Pod Security Admission (PSA) labels are applied in WARN + AUDIT mode ONLY (the
+# `restricted` profile) — NEVER `enforce`. warn/audit surface workloads drifting
+# from the restricted baseline (a kubectl warning + an audit-log annotation) but
+# NEVER block a pod from scheduling, so they carry ZERO runtime risk while the
+# per-workload container-hardening rollout proceeds (docs/CLUSTER-HARDENING-PLAN
+# .md). Pin the version so a cluster upgrade can't silently tighten the check.
+# Controls: CIS K8s 5.2/5.3, NIST 800-190 §4.5, DISA K8s STIG. The enforce flip
+# is a deliberate, separate change gated on the drift report being clean.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: snapdragon-pki
-  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: pki }
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/tier: pki
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: snapdragon-backend
-  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: backend }
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/tier: backend
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: snapdragon-frontend
-  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: frontend }
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/tier: frontend
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: snapdragon-games
-  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: games }
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/tier: games
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
 ---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: devops
-  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: devops }
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/tier: devops
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
 ---
 # snapdragon-policy — holds the cluster admission-policy plumbing: the
 # reserved-prefixes ConfigMap (mirror of specs/cluster/reserved-prefixes.yaml)

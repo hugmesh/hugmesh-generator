@@ -75,7 +75,9 @@ spec:
             - { name: tmp, mountPath: /tmp }
       containers:
         - name: web
-          image: nginxinc/nginx-unprivileged
+          # Pinned tag (was untagged => floating :latest). NIST 800-190 §4.3,
+          # CIS Docker 4.x. Matches the binhost nginx-unprivileged pin.
+          image: nginxinc/nginx-unprivileged:1.27-alpine
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
             allowPrivilegeEscalation: false

@@ -1,0 +1,32 @@
+# securitycontext-policy — the GitOps/ArgoCD layer of the container-hardening
+# AUDIT baseline. Applies the Kyverno ClusterPolicy `securitycontext-baseline`
+# (manifests/securitycontext-policy/) that REPORTS — in Audit mode, never blocks
+# — workloads drifting from the media-poisoner hardened pattern (runAsNonRoot +
+# drop ALL + allowPrivilegeEscalation:false + seccompProfile RuntimeDefault +
+# automountServiceAccountToken:false). Controls: CIS K8s 5.2/5.3, NIST 800-190
+# §4.5, NIST 800-53 AC-6/SC-39.
+#
+# Syncs in the default wave (0), AFTER kyverno (apps/15-kyverno.yaml, wave -1) so
+# the ClusterPolicy CRD exists. Kept SEPARATE from reserved-prefixes-policy so
+# the two policies are independently togglable and never co-own resources.
+#
+# This Application stays AUDIT-only; flipping the policy to Enforce is a
+# deliberate, separate change gated on the drift report being clean — see
+# docs/CLUSTER-HARDENING-PLAN.md.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: securitycontext-policy
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/securitycontext-policy
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-policy
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

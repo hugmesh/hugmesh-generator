@@ -159,12 +159,23 @@ resolve_cp_dns_name() {
     echo "${n}"
 }
 
-# ── Always: ensure SSH host keys exist so sshd can start ───────────
+# ── Always: ensure an Ed25519-ONLY SSH host key exists so sshd can start ───────
+# FIPS 186-5 approved (Ed25519); NIST 800-53 IA-5/SC-13, DISA SSH STIG. We do NOT
+# use `ssh-keygen -A` (which also mints RSA/ECDSA/DSA host keys). hardened.conf
+# pins `HostKeyAlgorithms ssh-ed25519` + `HostKey ssh_host_ed25519_key`, so any
+# legacy RSA/ECDSA/DSA host key is unused AND removed here so it cannot be
+# negotiated. provision_ssh_host_keys() may still install a pre-generated
+# Ed25519 host key from the KEYS partition; this is the no-USB-keys fallback.
 ensure_host_keys() {
-    if ! ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
-        log "Generating SSH host keys"
-        ssh-keygen -A
+    if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
+        log "Generating Ed25519-only SSH host key"
+        ssh-keygen -t ed25519 -N '' -f /etc/ssh/ssh_host_ed25519_key </dev/null
     fi
+    # Defence-in-depth: strip any non-Ed25519 host keys (e.g. from a prior
+    # ssh-keygen -A) so a stale RSA/ECDSA/DSA key can never be offered.
+    for legacy in rsa ecdsa dsa; do
+        rm -f "/etc/ssh/ssh_host_${legacy}_key" "/etc/ssh/ssh_host_${legacy}_key.pub" 2>/dev/null || true
+    done
 }
 
 # ── Locate + mount the KEYS partition ──────────────────────────────
