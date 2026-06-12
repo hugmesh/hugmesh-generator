@@ -1,0 +1,16 @@
+# fstab — Libre Computer Le/La Frite (Amlogic arm64) light desktop.
+#
+# The boot media varies by board + flavor (La Frite: SPI u-boot + USB/eMMC root,
+# NO microSD slot; Le Potato: microSD/eMMC). So the .img build rewrites the / and
+# /boot entries to PARTUUID= at assembly time (build_img), exactly like the RPi5
+# image, so ONE image boots from USB, eMMC or microSD unchanged. The placeholder
+# device paths below are replaced; do not rely on them literally.
+#
+# <device>         <mount>  <type>   <options>                              <dump> <pass>
+LABEL=FRITE_BOOT   /boot    vfat     defaults,noatime,nosuid,nodev,noexec   0      2
+LABEL=FRITE_ROOT   /        ext4     defaults,noatime                       0      1
+tmpfs              /tmp     tmpfs    defaults,nosuid,nodev,noexec,size=128m 0      0
+tmpfs              /run     tmpfs    defaults,nosuid,nodev,mode=0755        0      0
+
+# zram swap is configured at first boot by the builder's zram helper (the 512 MB
+# SKU benefits from it). See build-frite-stage4.sh + RUNNING.md (SKU note).

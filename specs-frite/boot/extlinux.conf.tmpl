@@ -1,0 +1,27 @@
+# extlinux.conf — u-boot distro-boot config for Libre Computer Le/La Frite
+# (Amlogic GXL). u-boot (libretech-ac / libretech-cc) scans the first partition
+# for /extlinux/extlinux.conf and boots the entry below. This REPLACES the RPi5
+# config.txt/cmdline.txt model entirely (no raspberrypi-firmware on this board).
+#
+# Variables substituted at build time (render_template in build-frite-stage4.sh):
+#   @@FRITE_KERNEL_IMG@@   Kernel image filename in /boot (e.g. Image)
+#   @@FRITE_DTB@@          Board DTB path under /dtb (e.g.
+#                          amlogic/meson-gxl-s805x-libretech-ac.dtb)
+#   @@FRITE_INITRD_LINE@@  INITRD line (live image) or a comment (installer/disk)
+#   @@BRAND_TITLE@@        Menu label brand
+#
+# IMPORTANT (La Frite, kernel >= 5.8): boot the DTB that ships WITH THE KERNEL
+# (copied to /boot/dtb by the builder), NOT the DTB embedded in u-boot — the USB
+# controller nodes changed and the in-u-boot DTB is stale. extlinux's FDT line
+# below points at the kernel's own DTB for exactly this reason.
+
+DEFAULT frite
+TIMEOUT 20
+MENU TITLE @@BRAND_TITLE@@ — Libre Computer Frite
+
+LABEL frite
+    MENU LABEL @@BRAND_TITLE@@ light desktop
+    LINUX /@@FRITE_KERNEL_IMG@@
+    FDT /dtb/@@FRITE_DTB@@
+@@FRITE_INITRD_LINE@@
+    APPEND @@FRITE_APPEND@@

@@ -40,11 +40,17 @@ subdirs included.
 | **backend** (RPi 5) | `./build-rpi5-stage4.sh --role backend` | tuwunel (Matrix) + Akkoma (fediverse), Spring APIs, DBs, be-gateway, LAN wildcard DNS (test) |
 | **frontend** (RPi 5) | `./build-rpi5-stage4.sh --role frontend` | snapdragon.systems Angular host + login/matrix/mastodon remotes, fe-gateway |
 | **host** (x86_64) | `sudo ./build-x86-host-stage4.sh` | GPU worker: ArgoCD, snapdragon.games, backend capacity |
+| **Frite light desktop** (Libre Computer, arm64) — *opt-in client* | `make frite` (or `./build-frite-stage4.sh`) | LEAN LXDE desktop on the Amlogic La Frite / Le Potato SBC; joins the tailnet + Casdoor login. LIVE + INSTALLER flavors |
 
 > The friendlier path is the **Makefile** (`make local` / `make prod` /
 > `make build-all`), which dispatches the same builders inside a self-contained
 > Docker builder — no host toolchain, no host sudo. See
 > [Quick start](#quick-start) and [Build options](#build-options).
+
+> The **Frite light desktop** is an *opt-in client appliance*, not a cluster
+> node — it is **not** part of the default fleet. It reuses the arm64 cross path
+> and the SAME mesh + KEYS-USB provisioning + hardened key-only SSH as the other
+> client images. See [Frite light desktop](#frite-light-desktop-libre-computer-lela-frite).
 
 ## Build ENV (`test`|`prod`) — baked at image creation
 
@@ -146,6 +152,56 @@ your brand. (Internal install paths like `/var/lib/snapdragon` and the
 provisioning JSON key are kept as the tool's vendor namespace.) Never put real
 secrets in a committed `brands/*.conf`; those go in the gitignored `./brand.conf`
 or the environment.
+
+## Frite light desktop (Libre Computer Le/La Frite)
+
+An **opt-in, lean desktop client image** for the Amlogic arm64 **Libre Computer**
+SBCs, built by `build-frite-stage4.sh`. It is a *desktop appliance*, **not** a
+cluster node — it is **not** in the default fleet. It reuses the same aarch64
+cross path as the Pi5 image, and the **same** mesh + KEYS-USB provisioning +
+hardened key-only SSH, so a Frite **joins the same Tailscale/headscale tailnet**
+and does **Casdoor login** exactly like every other client image (and honors the
+device-license SSH posture — no broad SSH access is baked in).
+
+**Light** here means a **lean LXDE-class desktop** (Openbox + LXpanel + PCManFM +
+a small browser), explicitly **not** the full Plasma + gaming stage4 — sized for
+the low-end SBC.
+
+```bash
+make frite                                   # La Frite, BOTH live + installer (default)
+make frite FRITE_BOARD=le-potato             # the pricier S905X sibling (has microSD)
+make frite-live                              # LIVE image only (boots ephemerally off USB/SD)
+make frite-installer                         # INSTALLER image only (writes to onboard eMMC/SD)
+FRITE=1 ./scripts/build-all-roles.sh         # ALSO build the Frite alongside the fleet
+FRITE_ONLY=1 ./scripts/build-all-roles.sh    # ONLY the Frite
+# or directly:
+./build-frite-stage4.sh --board la-frite --flavor both
+```
+
+**Board variants** (`--board` / `FRITE_BOARD`):
+
+| Board | Board id | SoC | microSD? | LIVE root | INSTALLER target |
+|---|---|---|---|---|---|
+| `la-frite` (default) | AML-S805X-AC | Amlogic S805X | **no** | **USB** | **eMMC** module |
+| `le-potato` | AML-S905X-CC | Amlogic S905X | yes | SD or USB | eMMC or SD |
+| `sweet-potato` | AML-S905X-CC-V2 | Amlogic S905X | yes | SD or USB | eMMC or SD |
+
+> **La Frite has NO microSD slot.** Its u-boot lives in **SPI NOR**; the LIVE
+> image boots off **USB** and the INSTALLER writes to the **eMMC** module. The
+> 512 MB and 1 GB **RAM SKUs are the SAME image** (RAM is auto-detected; the
+> 512 MB SKU leans on a zram swap configured at first boot).
+
+**Two flavors** (`--flavor` / `FRITE_FLAVOR`, default `both`): **`live`** boots
+and runs ephemerally (squashfs in RAM, no persistence); **`installer`** is a live
+medium that *also* carries `install-frite.sh` + the stage4 to write the desktop
+to onboard storage.
+
+> **u-boot caveat (honest):** Amlogic GXL u-boot needs Amlogic's **proprietary
+> FIP/BL31 blobs** to be flashable — mainline u-boot alone is not. The builder
+> does **not** vendor those blobs; pass a prebuilt, signed board image with
+> `--uboot-url` (e.g. a [Tow-Boot](https://tow-boot.org) release) or flash u-boot
+> separately. See [`docs/RUNNING.md`](docs/RUNNING.md#frite-light-desktop-image)
+> for the VERIFIED-vs-NEEDS-HARDWARE matrix.
 
 ## OAuth + mail (optional; native login by default)
 

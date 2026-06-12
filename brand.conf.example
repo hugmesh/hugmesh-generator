@@ -49,6 +49,32 @@ CLUSTER_DOMAIN="snapdragon.systems" # base domain (id./matrix./mastodon./api. de
 #   GROW_POLICY=<size>  cap the root filesystem, e.g. 16G, 12000M, 50% (% of dev)
 # GROW_POLICY="fill"
 
+# ── Libre Computer Le/La Frite — LIGHT-DESKTOP client image ─────────
+# An OPT-IN, lean desktop appliance image for the Amlogic arm64 Frite SBCs (NOT a
+# cluster node, and NOT in the default fleet). It joins the SAME Tailscale mesh +
+# Casdoor login + device-license SSH posture as every other client image. Built
+# by build-frite-stage4.sh — `make frite`, or `FRITE=1 ./scripts/build-all-roles.sh`.
+# These knobs are read by the Frite builder (CLI flags override them). See
+# docs/RUNNING.md §"Frite light-desktop image" + memory snapdragon-client-images.
+#
+#   FRITE_BOARD  — which board this image targets:
+#     la-frite     (DEFAULT) AML-S805X-AC, Amlogic S805X. The 512MB and 1GB RAM
+#                  SKUs are the SAME image (RAM auto-detected; 512MB leans on
+#                  zram). NOTE: La Frite has NO microSD slot — LIVE boots off USB,
+#                  the INSTALLER targets the eMMC module.
+#     le-potato    AML-S905X-CC, Amlogic S905X — the pricier sibling; HAS microSD.
+#     sweet-potato AML-S905X-CC-V2 (S905X, onboard UEFI/SystemReady).
+#   FRITE_FLAVOR — which artifact(s) the build emits:
+#     both       (DEFAULT) the LIVE image AND the INSTALLER image.
+#     live       boots-and-runs ephemerally off USB (La Frite) / SD (Le Potato).
+#     installer  a live medium that ALSO writes the desktop to onboard eMMC/SD.
+#   FRITE_UBOOT_URL — OPTIONAL prebuilt, FIP-signed board u-boot.bin to vendor in
+#     (Amlogic GXL u-boot needs proprietary BL31/FIP blobs to be flashable;
+#     mainline u-boot alone is not). e.g. a Tow-Boot release for the board.
+# FRITE_BOARD="la-frite"
+# FRITE_FLAVOR="both"
+# FRITE_UBOOT_URL=""
+
 # ── Default accounts (fallback when no USB KEYS stick is present) ───
 DEFAULT_USER="pi"                   # fallback non-root user
 DEFAULT_USER_PASS="raspberry"       # CHANGE for real builds
