@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# build-frite-stage4.sh
 # Build a hardened Gentoo aarch64 LIGHT-DESKTOP image for the Libre Computer
 # Le/La Frite family (Amlogic GXL: S805X / S905X) using the same crossdev
 # toolchain + shared mesh/provisioning plumbing as the Pi5/x86 client images.
@@ -356,7 +355,6 @@ if [ "${FRITE_HAS_SD}" = "false" ] && ${BUILD_LIVE}; then
     info "La Frite has NO microSD slot — the LIVE image boots off USB (u-boot in SPI NOR)."
 fi
 
-# Default hostname
 if [ -z "${HOSTNAME}" ]; then
     case "${ROLE}" in
         desktop|generic) HOSTNAME="${BRAND}-frite" ;;
@@ -364,7 +362,6 @@ if [ -z "${HOSTNAME}" ]; then
     esac
 fi
 
-# Derived paths
 BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"
 SYSROOT="${BUILD_ROOT}/sysroot"
 STAGE_DIR="${BUILD_ROOT}/staging"     # boot tree + ISO/installer staging
@@ -518,11 +515,13 @@ if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
         exit 1
     fi
 fi
-# The LIVE/INSTALLER images need mksquashfs + xorriso to wrap the squashfs ISO.
+# The LIVE/INSTALLER images need a squasher (mksquashfs, or tar2sqfs from
+# squashfs-tools-ng) + xorriso to wrap the squashfs ISO.
 if ${BUILD_LIVE} || ${BUILD_INSTALLER}; then
-    for t in mksquashfs xorriso; do
-        command -v "$t" >/dev/null || warn "missing ${t} — the live/installer image step will warn + skip"
-    done
+    command -v xorriso >/dev/null || warn "missing xorriso — the live/installer image step will warn + skip"
+    if ! command -v mksquashfs >/dev/null && ! command -v tar2sqfs >/dev/null; then
+        warn "missing mksquashfs AND tar2sqfs — the live/installer image step will warn + skip"
+    fi
 fi
 info "Cross-compiler: $(${CROSS_TARGET}-gcc --version | head -1)"
 info "Jobs: ${JOBS}"
@@ -575,7 +574,6 @@ cp "${SPECS_DIR}/portage/package.env/"*             "${SYSROOT}/etc/portage/pack
 cp "${SPECS_DIR}/portage/env/"*.conf               "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
 
-# /etc config files
 cp "${SPECS_DIR}/etc/fstab" "${SYSROOT}/etc/fstab"
 
 # ── Shared (arch-agnostic) mesh + provisioning + sshd — the SAME plumbing the
@@ -649,15 +647,17 @@ fi
 rebrand_sysroot
 
 # First-boot finaliser (shared template) + radio hardening + zram swap.
+# Rendered UNCONDITIONALLY (like the rpi5/x86 siblings): the finaliser is what
+# wires up first-boot provisioning, so a missing template is a hard error rather
+# than a silently-skipped image that never finalises.
 mkdir -p "${SYSROOT}/etc/local.d"
-if [ -f "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" ]; then
-    render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
-    chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
-fi
+[ -f "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" ] || {
+    err "missing first-boot finaliser template: ${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl"; exit 1; }
+render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
+chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
 harden_radios "${SYSROOT}"
 write_zram_firstboot "${SYSROOT}"
 
-# Hostname / timezone / locale
 echo "${HOSTNAME}" > "${SYSROOT}/etc/hostname"
 mkdir -p "${SYSROOT}/etc/conf.d"
 echo "hostname=\"${HOSTNAME}\"" > "${SYSROOT}/etc/conf.d/hostname"
@@ -684,7 +684,8 @@ if [ "${DESKTOP}" = "light" ]; then
     # decide WHICH DM to launch; lightdm ships no OpenRC service of its own. Without
     # it the service falls back to xdm and the image boots to a bare console / wrong
     # greeter (the packages-light-desktop.list comment promised the builder writes it
-    # but nothing did — fixed here).
+    # but nothing did). Keeps dbus+elogind (superset of the parallel main fix).
+    mkdir -p "${SYSROOT}/etc/conf.d"
     echo 'DISPLAYMANAGER="lightdm"' > "${SYSROOT}/etc/conf.d/display-manager"
 fi
 for svc in "${DEFAULT_SVCS[@]}"; do
@@ -721,12 +722,14 @@ if [ "${DESKTOP}" = "light" ]; then
     mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
         grep -v '^\s*#' "${SPECS_DIR}/portage/packages-light-desktop.list" | grep -v '^\s*$')
 fi
-# LIVE flavor only: pull in sys-kernel/dracut so the builder can generate a
-# dmsquash-live initramfs (the bare kernel cannot mount root=live:/rd.live.* —
-# that is a dracut job). The INSTALLER flavor boots a real partitioned rootfs and
-# does NOT need this, so dracut stays out of the always-installed base set.
-if ${BUILD_LIVE}; then
-    info "LIVE flavor selected — appending packages-live.list (dracut for the live initramfs)"
+# LIVE *and* INSTALLER flavors: pull in sys-kernel/dracut so the builder can
+# generate a dmsquash-live initramfs (the bare kernel cannot mount
+# root=live:/rd.live.* — that is a dracut job). The INSTALLER medium is itself a
+# LIVE boot (it must come up so the operator can run install-frite.sh — see
+# install-frite.sh's own header), so it needs the same initramfs. dracut stays out
+# of the always-installed base set and is added here for both bootable flavors.
+if ${BUILD_LIVE} || ${BUILD_INSTALLER}; then
+    info "Bootable flavor selected — appending packages-live.list (dracut for the live initramfs)"
     mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
         grep -v '^\s*#' "${SPECS_DIR}/portage/packages-live.list" | grep -v '^\s*$')
 fi
@@ -735,6 +738,10 @@ if [ -n "${EXTRA_PACKAGES}" ]; then
     STAGE4_PACKAGES+=("${_extras[@]}")
     info "Extra packages: ${EXTRA_PACKAGES}"
 fi
+# The package set is MANDATORY: an empty list means the grep/specs path is broken
+# and we would emerge nothing and emit a payload-less stage4.
+[ -s "${SPECS_DIR}/portage/packages.list" ] || { err "packages.list is empty/missing: ${SPECS_DIR}/portage/packages.list"; exit 1; }
+[ "${#STAGE4_PACKAGES[@]}" -gt 0 ] || { err "no stage4 packages resolved from the package lists — refusing to build a payload-less image."; exit 1; }
 info "Package count: ${#STAGE4_PACKAGES[@]}"
 if ! cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "${STAGE4_PACKAGES[@]}"; then
     warn "Batch emerge failed (unsatisfiable atom?); retrying per-package so the rest still install"
@@ -744,35 +751,91 @@ if ! cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "$
     done
 fi
 
+# ── Post-emerge payload assert (mirrors the x86 "stage4 payload incomplete"
+# guard) ──────────────────────────────────────────────────────────────────
+# The @system/packages.list emerges above are warn-only (--keep-going + the
+# per-package retry), so a broken package set would otherwise silently produce a
+# HOLLOW stage4. Assert the role-defining binaries actually landed in the sysroot
+# and fail LOUDLY listing any that are missing. CROSS-COMPILE: these are aarch64
+# target binaries, so we use FILE-EXISTENCE checks across the usual bindirs (NOT
+# `command -v`, which would test the host).
+have_in_sysroot() {
+    # $1 = binary basename; true if it exists in any of the target's bindirs.
+    local b="$1" d
+    for d in usr/bin usr/sbin bin sbin usr/local/bin usr/local/sbin; do
+        [ -e "${SYSROOT}/${d}/${b}" ] && return 0
+    done
+    return 1
+}
+# Base payload (always required): networking + login + base utils.
+REQUIRED_BINS=(NetworkManager nmcli sshd nano)
+# Light desktop: the display server + LXDE session + the lightdm display manager
+# (the runlevel enables `display-manager` only when DESKTOP=light — see above).
+if [ "${DESKTOP}" = "light" ]; then
+    REQUIRED_BINS+=(Xorg openbox lxsession pcmanfm lightdm)
+fi
+# Bootable flavors (LIVE or INSTALLER): dracut must be present to GENERATE the
+# dmsquash-live initramfs that both media boot from.
+if ${BUILD_LIVE} || ${BUILD_INSTALLER}; then
+    REQUIRED_BINS+=(dracut)
+fi
+payload_missing=""
+for _b in "${REQUIRED_BINS[@]}"; do
+    have_in_sysroot "${_b}" || payload_missing="${payload_missing} ${_b}"
+done
+if [ -n "${payload_missing}" ]; then
+    err "stage4 payload incomplete — missing role-defining binaries in ${SYSROOT}:${payload_missing}"
+    err "       the packages.list/light-desktop emerge did not complete; review the emerge output above."
+    exit 1
+fi
+# display-manager OpenRC service: enabled in the runlevel for DESKTOP=light, so the
+# init script (from gui-libs/display-manager-init) MUST exist or the image boots to
+# a console with a dead service link. Assert it now that the desktop set emerged.
+if [ "${DESKTOP}" = "light" ] && [ ! -e "${SYSROOT}/etc/init.d/display-manager" ]; then
+    err "DESKTOP=light enables the 'display-manager' service but ${SYSROOT}/etc/init.d/display-manager is missing"
+    err "       (gui-libs/display-manager-init did not emerge) — the desktop would boot to a console. Aborting."
+    exit 1
+fi
+info "stage4 payload assert OK (${#REQUIRED_BINS[@]} role binaries present)."
+
+# ── 7. Install mesh VPN (headscale + tailscale) — same as Pi5 ─────
 if ${SKIP_MESH}; then
     banner "Phase 2.5: SKIPPED mesh VPN (--skip-mesh)"
 else
     banner "Phase 2.5: Installing mesh VPN (headscale + tailscale)"
     HS_URL="https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}/headscale_${HEADSCALE_VERSION}_linux_arm64"
     HS_BIN="${SYSROOT}/usr/bin/headscale"
-    if curl -fL -o "${HS_BIN}" "${HS_URL}"; then
-        chmod +x "${HS_BIN}"
-        file "${HS_BIN}" | grep -q 'ELF.*aarch64' || warn "headscale binary is not aarch64"
-        info "headscale installed: /usr/bin/headscale"
-    else
-        warn "Could not fetch headscale ${HEADSCALE_VERSION}; the headscale service will be inert."
+    # Fetch failure is FATAL (mirrors x86/rpi5): the image bakes mesh plumbing and
+    # this is the only place the binary is staged — a network blip must NOT silently
+    # ship a mesh-less image. Opt out explicitly with --skip-mesh.
+    if ! curl -fL -o "${HS_BIN}" "${HS_URL}"; then
+        err "headscale ${HEADSCALE_VERSION} fetch failed (${HS_URL}) — the image bakes the mesh; aborting (use --skip-mesh to opt out)."; exit 1
     fi
+    chmod +x "${HS_BIN}"
+    file "${HS_BIN}" | grep -q 'ELF.*aarch64' || { err "headscale binary is NOT aarch64 (wrong/corrupt download) — refusing to ship it."; exit 1; }
+    info "headscale installed: /usr/bin/headscale"
     if ${SKIP_TAILSCALE}; then
         info "Skipping tailscale client (--skip-tailscale)"
     else
         TS_URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
         TS_TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
-        if curl -fL -o "${TS_TGZ}" "${TS_URL}"; then
-            TS_TMP="$(mktemp -d)"
-            tar -C "${TS_TMP}" -xzf "${TS_TGZ}"
-            TS_SUB="$(find "${TS_TMP}" -maxdepth 1 -type d -name 'tailscale_*' | head -1)"
-            install -Dm0755 "${TS_SUB}/tailscale"  "${SYSROOT}/usr/bin/tailscale"
-            install -Dm0755 "${TS_SUB}/tailscaled" "${SYSROOT}/usr/sbin/tailscaled"
-            rm -rf "${TS_TMP}"
-            info "tailscale installed: /usr/bin/tailscale, /usr/sbin/tailscaled"
-        else
-            warn "Could not fetch tailscale ${TAILSCALE_VERSION}; the tailscaled service will be inert."
+        # Fetch failure is FATAL: tailscaled is enabled in the default runlevel, so a
+        # missing binary = a dead service on a mesh-less node. Opt out with
+        # --skip-tailscale (or --skip-mesh).
+        if ! curl -fL -o "${TS_TGZ}" "${TS_URL}"; then
+            err "tailscale ${TAILSCALE_VERSION} fetch failed (${TS_URL}) — tailscaled is enabled in the runlevel; aborting (use --skip-tailscale to opt out)."; exit 1
         fi
+        TS_TMP="$(mktemp -d)"
+        tar -C "${TS_TMP}" -xzf "${TS_TGZ}"
+        TS_SUB="$(find "${TS_TMP}" -maxdepth 1 -type d -name 'tailscale_*' | head -1)"
+        install -Dm0755 "${TS_SUB}/tailscale"  "${SYSROOT}/usr/bin/tailscale"
+        install -Dm0755 "${TS_SUB}/tailscaled" "${SYSROOT}/usr/sbin/tailscaled"
+        rm -rf "${TS_TMP}"
+        # Both binaries MUST be aarch64 (mirrors x86/rpi5) — only after this is the
+        # tailscaled runlevel link backed by a real, correct-arch binary.
+        file "${SYSROOT}/usr/bin/tailscale"   | grep -q 'ELF.*aarch64' || { err "tailscale binary is NOT aarch64 (wrong/corrupt download) — refusing to ship it."; exit 1; }
+        file "${SYSROOT}/usr/sbin/tailscaled" | grep -q 'ELF.*aarch64' || { err "tailscaled binary is NOT aarch64 (wrong/corrupt download) — refusing to ship it."; exit 1; }
+        info "tailscale installed: /usr/bin/tailscale, /usr/sbin/tailscaled"
     fi
 fi
 
@@ -815,8 +878,12 @@ else
         # FDT line). On La Frite (kernel >=5.8) the kernel's OWN DTB is mandatory.
         cp -r arch/arm64/boot/dts/amlogic "${SYSROOT}/boot/dtb/" 2>/dev/null || \
             cp arch/arm64/boot/dts/amlogic/*.dtb "${SYSROOT}/boot/dtb/amlogic/" 2>/dev/null || true
+        # The board FDT is MANDATORY on Amlogic GXL (kernel >=5.8): extlinux's FDT
+        # line points at it and the board will NOT boot without it. We just built the
+        # kernel, so a missing DTB is a hard error, not a warning.
         if [ ! -f "${SYSROOT}/boot/dtb/${FRITE_DTB}" ]; then
-            warn "Selected DTB ${FRITE_DTB} not found in the built tree — verify the in-tree name for this kernel."
+            err "Selected DTB ${FRITE_DTB} not found under ${SYSROOT}/boot/dtb after the kernel build — the board would not boot. Verify the in-tree DTB name for this kernel."
+            exit 1
         fi
         popd >/dev/null
         info "Kernel build complete (Image + Amlogic DTBs staged under /boot)."
@@ -929,7 +996,9 @@ build_live_initramfs() {
     warn "package set and the kernel module tree exists. (Needs the full cross-build.)"
     return 1
 }
-if ${BUILD_LIVE} && ! ${SKIP_KERNEL}; then
+# Both bootable flavors need the dmsquash-live initramfs (the INSTALLER medium is
+# itself a live boot — see build_installer_iso).
+if { ${BUILD_LIVE} || ${BUILD_INSTALLER}; } && ! ${SKIP_KERNEL}; then
     build_live_initramfs || warn "Live initramfs not built — see warnings above."
 fi
 
@@ -953,7 +1022,9 @@ build_live_iso() {
     #   /  LiveOS/squashfs.img                        (the rootfs)
     # u-boot (SPI/SD) + extlinux find squashfs.img and the kernel mounts it
     # read-only with an overlay (kernel has SQUASHFS + OVERLAY_FS + LOOP).
-    command -v mksquashfs >/dev/null || { warn "mksquashfs missing — skipping LIVE image."; return 0; }
+    if ! command -v mksquashfs >/dev/null && ! command -v tar2sqfs >/dev/null; then
+        warn "mksquashfs/tar2sqfs missing — skipping LIVE image."; return 0
+    fi
     [ -f "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" ] || { warn "no kernel in boot stage — skipping LIVE image."; return 0; }
 
     # The LIVE flavor is unbootable without the dmsquash-live initramfs (the
@@ -970,13 +1041,22 @@ build_live_iso() {
     rm -rf "${live_root}"; mkdir -p "${live_root}/LiveOS" "${live_root}/extlinux" "${live_root}/dtb"
     cp "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" "${live_root}/"
     cp -r "${BOOT_STAGE}/dtb/." "${live_root}/dtb/" 2>/dev/null || true
+    # The board FDT MUST be on the medium — extlinux's FDT line references it and the
+    # board will not boot without it. Refuse to package a DTB-less LIVE image.
+    [ -f "${live_root}/dtb/${FRITE_DTB}" ] || { err "LIVE image: board DTB ${FRITE_DTB} missing from ${live_root}/dtb — refusing to package a non-booting medium."; exit 1; }
     # Stage the dmsquash-live initramfs next to the kernel (extlinux INITRD line).
     cp "${FRITE_LIVE_INITRD}" "${live_root}/initrd.img"
 
     info "Squashing the rootfs (LIVE) ..."
-    mksquashfs "${SYSROOT}" "${live_root}/LiveOS/squashfs.img" \
-        -noappend -comp xz -e boot/dtb 2>/dev/null \
-        || mksquashfs "${SYSROOT}" "${live_root}/LiveOS/squashfs.img" -noappend
+    if command -v mksquashfs >/dev/null; then
+        mksquashfs "${SYSROOT}" "${live_root}/LiveOS/squashfs.img" \
+            -noappend -comp xz -e boot/dtb 2>/dev/null \
+            || mksquashfs "${SYSROOT}" "${live_root}/LiveOS/squashfs.img" -noappend
+    else
+        # squashfs-tools-ng fallback: tar stream with the same boot/dtb exclude.
+        tar -C "${SYSROOT}" --numeric-owner --exclude='./boot/dtb' -cpf - . \
+            | tar2sqfs -q -c xz -j "${JOBS}" "${live_root}/LiveOS/squashfs.img"
+    fi
 
     # extlinux for the LIVE boot: emit the INITRD line so u-boot loads the
     # dmsquash-live initramfs, which then mounts LiveOS/squashfs.img as the
@@ -994,27 +1074,84 @@ build_live_iso() {
         LIVE_PATH="${live_root} (tree; no xorriso to wrap an ISO)"
         warn "no xorriso — LIVE tree left at ${live_root}"
     fi
-    ${COMPRESS_IMG} && [ -f "${LIVE_PATH}" ] && { xz -T0 -9 -f "${LIVE_PATH}"; LIVE_PATH="${LIVE_PATH}.xz"; }
+    # if-form (NOT a trailing &&-chain): the &&-chain returns 1 when COMPRESS_IMG is
+    # false (the default), which under `set -e` would abort the script right here —
+    # killing the INSTALLER phase and the summary. Return 0 explicitly on success.
+    if ${COMPRESS_IMG} && [ -f "${LIVE_PATH}" ]; then
+        xz -T0 -9 -f "${LIVE_PATH}"; LIVE_PATH="${LIVE_PATH}.xz"
+    fi
+    return 0
 }
 
 build_installer_iso() {
-    # The INSTALLER flavor: the LIVE boot tree PLUS the stage4 tarball + the
-    # install-frite.sh script, so an operator boots it (off USB) and writes the
-    # light desktop to onboard eMMC/SD. Reuses the same boot tree as LIVE.
-    command -v xorriso >/dev/null || { warn "xorriso missing — skipping INSTALLER image."; return 0; }
-    [ -f "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" ] || { warn "no kernel in boot stage — skipping INSTALLER image."; return 0; }
+    # The INSTALLER flavor: a LIVE-booting medium (the operator boots it off USB,
+    # gets a running system, then runs install-frite.sh to write the light desktop
+    # to onboard eMMC/SD — see install-frite.sh's own header).
+    #
+    # WHY THIS IS A LIVE BOOT, not a bare kernel: the previous version emitted the
+    # medium's extlinux with `root=LABEL=FRITE_ROOT` and NO initramfs. But
+    # FRITE_ROOT is the label install-frite.sh creates on the TARGET disk — it does
+    # NOT exist on the installer medium, so that medium was UNBOOTABLE (it could
+    # never find a root). The medium must boot ephemerally from a squashfs (exactly
+    # like the LIVE flavor) so the installer can actually run; the disk's
+    # `root=LABEL=FRITE_ROOT` cmdline belongs on the PAYLOAD boot tree we stage for
+    # install-frite.sh to copy onto the target, NOT on the medium itself.
+    command -v xorriso >/dev/null || { err "xorriso missing — cannot build the INSTALLER ISO. Install xorriso or drop --flavor installer."; exit 1; }
+    [ -f "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" ] || { err "no kernel in boot stage — the INSTALLER medium cannot boot. Build the kernel (drop --skip-kernel)."; exit 1; }
+    if ! command -v mksquashfs >/dev/null && ! command -v tar2sqfs >/dev/null; then
+        err "mksquashfs/tar2sqfs missing — cannot build the INSTALLER medium's live rootfs. Install squashfs-tools (or squashfs-tools-ng)."; exit 1
+    fi
+    # The medium boots root=live:/rd.live.* — those are dracut directives, so the
+    # dmsquash-live initramfs is MANDATORY. Refuse to emit a known-dead installer
+    # rather than the previous silent, unbootable one (mirrors the LIVE gate).
+    if [ -z "${FRITE_LIVE_INITRD}" ] || [ ! -s "${FRITE_LIVE_INITRD}" ]; then
+        err "No live initramfs was generated (Phase 4 §11b). The INSTALLER medium boots"
+        err "from a squashfs (root=live:/rd.live.*) and is UNBOOTABLE without a dracut"
+        err "dmsquash-live initramfs. Ensure sys-kernel/dracut emerged and the kernel"
+        err "module tree exists (do not pass --skip-kernel for the installer flavor)."
+        exit 1
+    fi
 
     local inst_root="${STAGE_DIR}/installer"
-    rm -rf "${inst_root}"; mkdir -p "${inst_root}"/{stage4,boot,uboot}
-    # Boot tree (kernel + DTB + extlinux) so the installer medium itself boots.
+    rm -rf "${inst_root}"; mkdir -p "${inst_root}"/{LiveOS,extlinux,dtb,stage4,boot,uboot}
+
+    # ── The medium's OWN live boot (kernel + DTB + dmsquash-live initramfs) ──
+    cp "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" "${inst_root}/"
+    cp -r "${BOOT_STAGE}/dtb/." "${inst_root}/dtb/" 2>/dev/null || true
+    [ -f "${inst_root}/dtb/${FRITE_DTB}" ] || { err "INSTALLER medium: board DTB ${FRITE_DTB} missing from ${inst_root}/dtb — refusing to package a non-booting medium."; exit 1; }
+    cp "${FRITE_LIVE_INITRD}" "${inst_root}/initrd.img"
+
+    info "Squashing the rootfs (INSTALLER live medium) ..."
+    if command -v mksquashfs >/dev/null; then
+        mksquashfs "${SYSROOT}" "${inst_root}/LiveOS/squashfs.img" \
+            -noappend -comp xz -e boot/dtb 2>/dev/null \
+            || mksquashfs "${SYSROOT}" "${inst_root}/LiveOS/squashfs.img" -noappend
+    else
+        tar -C "${SYSROOT}" --numeric-owner --exclude='./boot/dtb' -cpf - . \
+            | tar2sqfs -q -c xz -j "${JOBS}" "${inst_root}/LiveOS/squashfs.img"
+    fi
+    [ -s "${inst_root}/LiveOS/squashfs.img" ] || { err "INSTALLER medium: squashfs.img was not produced — aborting."; exit 1; }
+
+    # The medium's extlinux boots the squashfs ephemerally (FRITE_INSTALL volid).
+    FRITE_INITRD_LINE="    INITRD /initrd.img"
+    FRITE_APPEND="${APPEND_BASE} root=live:LABEL=FRITE_INSTALL rd.live.dir=/LiveOS rd.live.squashimg=squashfs.img rd.live.overlay.overlayfs=1"
+    render_template "${SPECS_DIR}/boot/extlinux.conf.tmpl" "${inst_root}/extlinux/extlinux.conf"
+
+    # ── The INSTALL PAYLOAD that install-frite.sh consumes from its own dir ──
+    # install-frite.sh reads ${SCRIPT_DIR}/stage4/*.tar.xz and copies ${SCRIPT_DIR}/boot/
+    # (the DISK boot tree) onto the target's FAT. dmsquash-live mounts the medium at
+    # /run/initramfs/live, so the operator runs /run/initramfs/live/install-frite.sh.
+    cp "${STAGE4_TARBALL}" "${inst_root}/stage4/"
+    # The disk boot tree: kernel + DTB + extlinux with the INSTALLED root cmdline
+    # (root=LABEL=FRITE_ROOT, no live initramfs). install-frite.sh re-points root= at
+    # the target's PARTUUID after partitioning.
+    mkdir -p "${inst_root}/boot/extlinux" "${inst_root}/boot/dtb"
     cp "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" "${inst_root}/boot/"
-    cp -r "${BOOT_STAGE}/dtb" "${inst_root}/boot/" 2>/dev/null || true
-    mkdir -p "${inst_root}/boot/extlinux"
-    FRITE_INITRD_LINE="    # (installer boots the same lean kernel)"
+    cp -r "${BOOT_STAGE}/dtb/." "${inst_root}/boot/dtb/" 2>/dev/null || true
+    [ -f "${inst_root}/boot/dtb/${FRITE_DTB}" ] || { err "INSTALLER payload: disk-boot DTB ${FRITE_DTB} missing from ${inst_root}/boot/dtb — the installed system would not boot. Aborting."; exit 1; }
+    FRITE_INITRD_LINE="    # (installed system boots a real partitioned rootfs)"
     FRITE_APPEND="${APPEND_BASE} root=LABEL=FRITE_ROOT"
     render_template "${SPECS_DIR}/boot/extlinux.conf.tmpl" "${inst_root}/boot/extlinux/extlinux.conf"
-    # Payload: the stage4 + the installer + any staged u-boot.
-    cp "${STAGE4_TARBALL}" "${inst_root}/stage4/"
     cp "${SPECS_DIR}/installer/install-frite.sh" "${inst_root}/install-frite.sh"
     chmod +x "${inst_root}/install-frite.sh"
     [ -f "${STAGE_DIR}/uboot/u-boot.bin" ] && cp "${STAGE_DIR}/uboot/u-boot.bin" "${inst_root}/uboot/" 2>/dev/null || true
@@ -1023,7 +1160,12 @@ build_installer_iso() {
     xorriso -as mkisofs -o "${INSTALLER_PATH}" -volid FRITE_INSTALL -joliet -rock "${inst_root}" \
         && info "INSTALLER image: ${INSTALLER_PATH} ($(du -sh "${INSTALLER_PATH}" | cut -f1))" \
         || { warn "xorriso failed; leaving the installer tree at ${inst_root}"; INSTALLER_PATH="${inst_root} (tree)"; }
-    ${COMPRESS_IMG} && [ -f "${INSTALLER_PATH}" ] && { xz -T0 -9 -f "${INSTALLER_PATH}"; INSTALLER_PATH="${INSTALLER_PATH}.xz"; }
+    # if-form (NOT a trailing &&-chain): see build_live_iso — the &&-chain returns 1
+    # under the default COMPRESS_IMG=false and would abort the caller under set -e.
+    if ${COMPRESS_IMG} && [ -f "${INSTALLER_PATH}" ]; then
+        xz -T0 -9 -f "${INSTALLER_PATH}"; INSTALLER_PATH="${INSTALLER_PATH}.xz"
+    fi
+    return 0
 }
 
 if ${BUILD_LIVE}; then
@@ -1067,8 +1209,10 @@ echo "  the 512MB SKU leans on the zram swap configured at first boot."
 echo ""
 echo "  === Post-build ==="
 echo "  LIVE:      write ${LIVE_PATH##*/} to a USB stick (La Frite has no SD) and boot."
-echo "  INSTALLER: boot the installer medium, then run  install-frite.sh /dev/mmcblk0  to"
-echo "             write the light desktop to onboard eMMC (or SD on Le Potato)."
+echo "  INSTALLER: write ${INSTALLER_PATH##*/} to USB and boot it (it boots LIVE off the"
+echo "             squashfs); the medium auto-mounts at /run/initramfs/live, then run"
+echo "               sudo /run/initramfs/live/install-frite.sh /dev/mmcblk0"
+echo "             to write the light desktop to onboard eMMC (or SD on Le Potato)."
 echo "  u-boot:    on Amlogic GXL u-boot needs proprietary FIP/BL31 blobs — provide a"
 echo "             prebuilt signed image via --uboot-url (e.g. Tow-Boot) if not already flashed."
 echo ""
