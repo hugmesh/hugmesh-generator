@@ -152,22 +152,34 @@ fi
 # built role. gen-provision-keys.sh only knows the RPi/host role names, so we
 # key off the RPi roles here (the per-role KEYS folder the make-keys-usb.sh
 # stick consumes). Set SKIP_KEYS=1 to skip this entirely.
+# A keys-generation failure is FATAL for the run (the keys folder IS the
+# deliverable a node provisions from): every role is still attempted, the
+# partial output dir is removed (a half-written keys-<role> must never be
+# mistaken for a deliverable), and the orchestrator exits nonzero at the end
+# listing every role whose keys failed.
+KEYS_FAILED=()
 if [ "${SKIP_KEYS:-0}" != "1" ]; then
     echo "############################################################"
     echo "#  Generate provisioning keys (all built roles)"
     echo "############################################################"
     for role in "${RPI_ROLES[@]}"; do
         echo "==> Generating keys folder: ${WORK_DIR}/keys-${role}"
-        "${GENKEYS}" --role "${role}" --out "${WORK_DIR}/keys-${role}" --random || \
-            echo "   (keys generation skipped/failed for ${role} — run gen-provision-keys.sh manually)"
+        if ! "${GENKEYS}" --role "${role}" --out "${WORK_DIR}/keys-${role}" --random; then
+            echo "!! keys generation FAILED for ${role} — removing partial ${WORK_DIR}/keys-${role}" >&2
+            rm -rf "${WORK_DIR}/keys-${role}"
+            KEYS_FAILED+=("${role}")
+        fi
     done
     # The Frite light-desktop client provisions from the SAME KEYS USB mechanism.
     # It is a client appliance (no users.json / no cluster join), so it uses the
     # 'host' worker-key profile: break-glass root key + mesh join material only.
     if [ "${BUILD_FRITE_IMG}" = true ]; then
         echo "==> Generating keys folder: ${WORK_DIR}/keys-frite (host profile)"
-        "${GENKEYS}" --role host --out "${WORK_DIR}/keys-frite" --random || \
-            echo "   (keys generation skipped/failed for frite — run gen-provision-keys.sh manually)"
+        if ! "${GENKEYS}" --role host --out "${WORK_DIR}/keys-frite" --random; then
+            echo "!! keys generation FAILED for frite — removing partial ${WORK_DIR}/keys-frite" >&2
+            rm -rf "${WORK_DIR}/keys-frite"
+            KEYS_FAILED+=(frite)
+        fi
     fi
 fi
 
@@ -199,4 +211,17 @@ if [ "${PENTEST}" = "1" ]; then
         --env "${PENTEST_ENV:-compose}" \
         --scan "${PENTEST_SCAN:-baseline}" \
         --pipeline "${PENTEST_PIPELINE:-main}"
+fi
+
+# ── Keys-failure gate (LAST so every role/build above was still attempted) ────
+# A run whose keys folders failed has NO usable provisioning deliverable for
+# those roles: fail the orchestrator loudly instead of exiting 0.
+if [ "${#KEYS_FAILED[@]}" -gt 0 ]; then
+    echo >&2
+    echo "!! BUILD FAILED: provisioning-keys generation failed for: ${KEYS_FAILED[*]}" >&2
+    echo "!! The partial keys folders were removed. Re-run gen-provision-keys.sh per role:" >&2
+    for _r in "${KEYS_FAILED[@]}"; do
+        echo "!!   ${GENKEYS} --role ${_r/frite/host} --out ${WORK_DIR}/keys-${_r} --random" >&2
+    done
+    exit 1
 fi
