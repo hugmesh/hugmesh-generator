@@ -1069,7 +1069,18 @@ emerge --update --deep --newuse --keep-going ${EMERGE_EXCLUDE} @world \
 emerge --update --deep --newuse --keep-going \
     --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y \
     ${EMERGE_EXCLUDE} ${PKGS} \
-    || echo "[build-x86] WARN: some stage4 packages failed; review the emerge output"
+    || { echo "[build-x86] WARN: some stage4 packages failed; review the emerge output"
+         # DIAGNOSTIC: --autounmask-continue is NOT applying needed USE changes in
+         # this chroot, so resolution dies one conflict at a time. A PRETEND
+         # --autounmask pass computes the COMPLETE set of USE changes the payload
+         # needs in one go — dump it so they can all be pre-seeded into the
+         # package.use specs at once instead of whack-a-mole.
+         echo "[build-x86] ===== AUTOUNMASK-PRETEND: full USE/keyword changes the payload needs ====="
+         emerge --pretend --autounmask=y --autounmask-write=n --autounmask-backtrack=y \
+             --keep-going ${EMERGE_EXCLUDE} ${PKGS} 2>&1 \
+             | grep -E 'USE changes|keyword changes|^# |^>=|^<|^=|Change USE|necessary|masked by' \
+             || true
+         echo "[build-x86] ===== END AUTOUNMASK-PRETEND ====="; }
 # Rebuild the dynamic-linker cache: with sandbox/postinst hooks disabled in this
 # chroot, ldconfig can be skipped after a merge, leaving e.g. libsqlite3.so.0
 # present on disk but absent from /etc/ld.so.cache — python wheel builds then die
