@@ -308,7 +308,19 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- the genuinely admin-only /bff/forum/admin/** row.
   ('snapdragon-fe-gateway',  '/bff/forum/admin/**',       'ROLE_ADMIN',     true),  -- forum admin-console seam (admin-only, end-to-end)
   ('snapdragon-fe-gateway',  '/bff/forum/moderation/**',  'ROLE_FORUM_MOD', true),  -- forum moderation (derived MOD ∩ FORUM)
-  ('snapdragon-fe-gateway',  '/bff/forum/**',             'ROLE_FORUM',     true)   -- forum BFF (forum-access floor)
+  ('snapdragon-fe-gateway',  '/bff/forum/**',             'ROLE_FORUM',     true),  -- forum BFF (forum-access floor)
+  -- Owncast BFF (/bff/owncast/** -> snapdragon-owncast-bff-api). Admins reach
+  -- /bff/owncast/admin/** for per-user broadcast grants; ROLE_OWNCAST holders
+  -- (granted by admin) reach the user-facing console.
+  ('snapdragon-fe-gateway',  '/bff/owncast/admin/**',  'ROLE_ADMIN',   true),  -- owncast admin grant surface
+  ('snapdragon-fe-gateway',  '/bff/owncast/**',        'ROLE_OWNCAST', true),  -- owncast user console
+  -- Tube BFF (/bff/tube/** -> snapdragon-tube-bff-api) + media serving
+  -- (/tube/content/** -> tube-media Nginx, signed-URL-gated).
+  -- ROLE_TUBE = "may use LocalTube" (granted by admin). The media row sits on
+  -- be-gateway (same role) so the HMAC-signed URL check + owner two-wall in
+  -- tube-bff are the domain enforcement; the gateway only checks role.
+  ('snapdragon-fe-gateway',  '/bff/tube/**',          'ROLE_TUBE',    true),  -- tube BFF (tube-access floor)
+  ('snapdragon-be-gateway',  '/tube/content/**',       'ROLE_TUBE',    true)   -- tube media serving (signed URL)
 ON CONFLICT DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────────

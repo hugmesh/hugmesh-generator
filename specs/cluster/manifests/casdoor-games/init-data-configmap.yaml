@@ -52,7 +52,7 @@ data:
           "displayName": "Snapdragon Games",
           "websiteUrl": "https://snapdragon.games",
           "favicon": "",
-          "passwordType": "plain",
+          "passwordType": "pbkdf2-salt",
           "phonePrefix": "1",
           "defaultAvatar": "",
           "tags": [],

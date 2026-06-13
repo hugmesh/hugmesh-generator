@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: snapdragon-tube
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/optional: "true"
+    snapdragon.systems/slug: tube

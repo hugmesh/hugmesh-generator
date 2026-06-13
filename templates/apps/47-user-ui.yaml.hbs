@@ -1,0 +1,25 @@
+# {{BRAND_TITLE}} user-ui — self-service Angular MFE remote (/user/**).
+# Generated from snapdragon-generator/templates/apps/47-user-ui.yaml.hbs
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{BRAND}}-user-ui
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/user-ui
+    kustomize:
+      namespace: {{BRAND}}-frontend
+      images:
+        - name: snapdragon-systems/user-ui
+          newName: registry.{{CLUSTER_DOMAIN}}/{{GITLAB_GROUP}}/{{BRAND}}-user-ui
+          newTag: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{BRAND}}-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

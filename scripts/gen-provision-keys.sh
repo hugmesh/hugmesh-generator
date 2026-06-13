@@ -284,7 +284,6 @@ PLACEHOLDER
     echo "  ${DR_DIR}/  (Layer-B ADMIN mesh-extension node identity + verifying key)"
 fi
 
-# ── SSH keypair (break-glass) ──────────────────────────────────────
 mkdir -p "${OUT_DIR}/ssh"
 KEYFILE="${OUT_DIR}/ssh/${ADMIN}_ed25519"
 [ -f "${KEYFILE}" ] || { echo "==> Generating ed25519 keypair for ${ADMIN}"; ssh-keygen -t ed25519 -N '' -C "${ADMIN}@snapdragon" -f "${KEYFILE}" >/dev/null; }

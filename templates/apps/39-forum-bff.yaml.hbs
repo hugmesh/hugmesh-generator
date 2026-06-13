@@ -1,0 +1,25 @@
+# {{BRAND_TITLE}} forum-bff — phpBB forum BFF (ROLE_FORUM); sole browser→phpBB path.
+# Generated from snapdragon-generator/templates/apps/39-forum-bff.yaml.hbs
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{BRAND}}-forum-bff-api
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/forum-bff-api
+    kustomize:
+      namespace: {{BRAND}}-backend
+      images:
+        - name: snapdragon-systems/forum-bff-api
+          newName: registry.{{CLUSTER_DOMAIN}}/{{GITLAB_GROUP}}/{{BRAND}}-forum-bff-api
+          newTag: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{BRAND}}-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

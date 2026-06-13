@@ -86,6 +86,23 @@ keystore:
   # support it, falling back to classical X25519/secp384r1 otherwise. Empty =
   # classical groups only (no PQC forced onto a JVM that can't do it).
   pqcGroups: ""
+  # TRUST TIER — multi-tenancy PR5 (NARROW/WIDE; default NARROW).
+  # Controls which CA certs are imported into the JRE truststore at pod startup.
+  #
+  # NARROW (default): only this instance's own-domain CA (/pki/ca.crt) — per-brand
+  # isolation enforced at the trust anchor.  A peer from another brand cannot even
+  # present a trusted cert to this gateway.  Correct for all per-brand gateways.
+  #
+  # WIDE: all domain CA certs, sourced from /pki/ca-bundle.crt (all roots
+  # concatenated as PEM).  Required for the architecture-tier gateway (or any
+  # gateway that must accept mTLS peers from multiple brands).  The ESO
+  # ExternalSecret for this instance MUST sync a ca-bundle.crt field containing
+  # all per-domain CA certs (see scripts/gen-keystores.sh — the WIDE truststore
+  # is baked at build time from the same concatenated bundle).
+  #
+  # The authoritative access control is still the gateway domain-match predicate +
+  # BFF @PreAuthorize; trustTier is defense-in-depth at the TLS layer.
+  trustTier: "NARROW"
 
 # Internal ingress (Cloudflare terminates the public name later; this is the
 # in-cluster host the tunnel / reverse proxy targets).
