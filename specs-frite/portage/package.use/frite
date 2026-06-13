@@ -13,4 +13,4 @@ net-misc/networkmanager wifi
 # Lean desktop USE trims:
 #   xterm: no toolbar bloat.
 #   lxpanel/pcmanfm: GTK only, no extra plugins.
-x11-misc/xterm -toolbar
+x11-terms/xterm -toolbar

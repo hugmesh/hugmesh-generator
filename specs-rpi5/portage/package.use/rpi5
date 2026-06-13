@@ -3,3 +3,7 @@ sys-block/parted device-mapper
 net-misc/networkmanager wifi
 # rpi-eeprom requires exactly-one-of ( pi4 pi5 ) — this is the Pi 5 image.
 dev-embedded/rpi-eeprom pi5
+
+# networkmanager[wifi] (forced above) hard-requires wpa_supplicant[dbus] (NM drives
+# it over D-Bus). dbus is not a default USE; pre-seed it or payload resolution aborts.
+net-wireless/wpa_supplicant dbus
