@@ -73,6 +73,41 @@ lint:prod-hygiene:
       EOF
     - if ENV=prod bash scripts/validate-prod-hygiene.sh /tmp/prodbake/cluster >/dev/null 2>&1; then echo "GATE DID NOT BITE on injected vault -dev"; exit 1; else echo "gate correctly failed on injected violation"; fi
 
+# Nuclei template lint — validates every *.yaml in tests/pentest/nuclei/ against
+# the fixture servers (no live platform, loopback only). Proves each template FIRES
+# on the deliberately-vulnerable fixture at its expected path AND stays silent on
+# the hardened fixture. Requires nuclei (pinned v3.9.0), node, and curl on the runner.
+# COVERAGE gate: an unpaired template (no positive+negative case) fails the job
+# with "GATE DID NOT BITE", so a new template that ships without fixtures is caught here.
+lint:pentest-templates:
+  stage: lint
+  tags: [snapdragon-x86]
+  variables:
+    NUCLEI_VERSION: "3.9.0"
+  before_script:
+    - |
+      # Download pinned nuclei if the runner doesn't already have it.
+      NEED_INSTALL=true
+      if command -v nuclei >/dev/null 2>&1; then
+        INSTALLED="$(nuclei -version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        [ "${INSTALLED}" = "${NUCLEI_VERSION}" ] && NEED_INSTALL=false
+      fi
+      if [ "${NEED_INSTALL}" = "true" ]; then
+        echo "[nuclei] installing v${NUCLEI_VERSION} to /usr/local/bin/"
+        curl -sL \
+          "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip" \
+          -o /tmp/nuclei.zip
+        unzip -qo /tmp/nuclei.zip nuclei -d /usr/local/bin/
+        chmod +x /usr/local/bin/nuclei
+        rm -f /tmp/nuclei.zip
+      fi
+      nuclei -version
+  script:
+    - bash tests/pentest/nuclei/test-templates.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
 # Build the three Pi role ISOs + the x86 host ISO. Needs root + crossdev + qemu
 # on the runner host (the x86_64 node). Tag-select that runner.
 build:isos:
