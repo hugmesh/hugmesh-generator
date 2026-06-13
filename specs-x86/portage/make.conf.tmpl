@@ -27,6 +27,11 @@ FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandb
 # roles in one shared sysroot so role 2-4 reuse role 1's binpkgs (--usepkg).
 PKGDIR="/var/cache/binpkgs"
 DISTDIR="/var/cache/distfiles"
+# Persist per-package build logs (default temp build.log is wiped on clean, so a
+# compile failure's cause is lost). Keeps every package's log under this dir for
+# post-mortem of OOM/compile failures. Excluded from artifacts (it's under /var/log
+# which the stage4 keeps, but it's small text; harmless).
+PORTAGE_LOGDIR="/var/log/portage/build"
 
 # Hardened USE baseline + container runtime + (optional) vendor-agnostic GPU stack.
 # @@GPU_USE@@ expands to the GPU USE flags (vulkan vaapi vdpau gbm egl gles2) for

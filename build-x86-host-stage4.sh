@@ -1030,19 +1030,22 @@ else
     info "Keeping seed toolchain (set REBUILD_TOOLCHAIN=true to rebuild gcc/glibc/binutils)"
 fi
 
-# Package-level emerge parallelism: MAKEOPTS only parallelizes INSIDE one
-# package; the long tail of small python/perl/configure-heavy packages
-# otherwise serializes on a single job while 27 threads idle. Several emerge
-# jobs run concurrently, governed by --load-average so one big -j${JOBS} C++
-# build can still take the whole machine.
-EMERGE_JOBS=$(( JOBS / 4 )); [ "${EMERGE_JOBS}" -lt 2 ] && EMERGE_JOBS=2
+# Package-level emerge parallelism, MEMORY-BOUNDED. EMERGE_JOBS concurrent
+# packages, each make -j${JOBS} -l${JOBS}. C builds self-throttle on the shared
+# system load via -l (all makes read the same loadavg). Go builds (kubelet, runc,
+# cni-plugins, containerd, nerdctl) IGNORE make's jobserver and -l, defaulting to
+# GOMAXPROCS=ncpu — so several concurrent Go builds each spawning 28-way blew past
+# 32 GB RAM and the OOM killer failed 6 diverse packages at once. Cap both: fewer
+# concurrent packages (JOBS/7) AND a hard GOMAXPROCS so Go can't grab the machine.
+EMERGE_JOBS=$(( JOBS / 7 )); [ "${EMERGE_JOBS}" -lt 2 ] && EMERGE_JOBS=2
+GO_PROCS=$(( JOBS / 4 )); [ "${GO_PROCS}" -lt 2 ] && GO_PROCS=2
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
-# -l\${JOBS}: cap make's load so EMERGE_JOBS concurrent packages each running
-# make -j\${JOBS} don't multiply into runaway oversubscription (observed load
-# ~80 on 28 cores with <300 MB free — an OOM risk that fails compiles). emerge's
-# own --load-average gates new PACKAGE jobs; make's -l gates new COMPILER jobs.
 export MAKEOPTS="-j${JOBS} -l${JOBS}"
 export EMERGE_DEFAULT_OPTS="--jobs ${EMERGE_JOBS} --load-average ${JOBS} --usepkg=y --binpkg-respect-use=y"
+# Bound Go's self-managed parallelism (it ignores MAKEOPTS/-l) so concurrent
+# kubelet/runc/containerd builds don't exhaust RAM → OOM-killed compile failures.
+export GOMAXPROCS=${GO_PROCS}
+export GOFLAGS="-p=${GO_PROCS}"
 # Build chroot: /boot/efi exists in the baked fstab but is never mounted here.
 # Without this, mount-boot.eclass (linux-firmware, grub-themes) dies in
 # pkg_pretend ("/boot/efi not mounted") and ABORTS the ENTIRE package-set
