@@ -1,6 +1,14 @@
 sys-kernel/raspberrypi-sources symlink
 sys-block/parted device-mapper
-net-misc/networkmanager wifi
+# wifi: NM manages the Pi's wlan. -modemmanager: NM[+modemmanager] (default-on) pulls
+# net-misc/modemmanager -> net-libs/libqmi[qrtr] -> net-libs/libqrtr-glib, which
+# HARD-RDEPENDs dev-libs/gobject-introspection (IUSE has no introspection gate; it always
+# passes -Dintrospection=true) and thereby FORCES glib[introspection] back ON despite our
+# global -introspection -> glib's g-ir-scanner dies (host py3.14 vs target py3.12
+# _giscanner ABI). A headless k8s node has no cellular WWAN modem, so drop the whole
+# ModemManager stack. Safe: NM REQUIRED_USE only forces modemmanager via bluetooth, which
+# is off (-bluetooth in make.conf). This is the SOLE gobject-introspection puller.
+net-misc/networkmanager wifi -modemmanager
 # rpi-eeprom requires exactly-one-of ( pi4 pi5 ) — this is the Pi 5 image.
 dev-embedded/rpi-eeprom pi5
 
