@@ -789,9 +789,14 @@ if ${BUILD_IMG}; then
     fi
 fi
 if ${LIVE_ISO}; then
-    for t in grub-mkrescue mksquashfs xorriso; do
+    for t in grub-mkrescue xorriso; do
         command -v "$t" >/dev/null || { warn "missing ${t}; disabling --live-iso"; LIVE_ISO=false; break; }
     done
+    # Either mksquashfs (sys-fs/squashfs-tools) or tar2sqfs (sys-fs/squashfs-tools-ng)
+    # can squash the rootfs; the squash step below picks whichever is present.
+    if ${LIVE_ISO} && ! command -v mksquashfs >/dev/null && ! command -v tar2sqfs >/dev/null; then
+        warn "missing mksquashfs AND tar2sqfs; disabling --live-iso"; LIVE_ISO=false
+    fi
 fi
 if ${INSTALLER_ISO}; then
     command -v xorriso >/dev/null || warn "no xorriso; installer ISO will be left as a plain tree"
@@ -1016,8 +1021,29 @@ else
     info "Keeping seed toolchain (set REBUILD_TOOLCHAIN=true to rebuild gcc/glibc/binutils)"
 fi
 
+# Package-level emerge parallelism: MAKEOPTS only parallelizes INSIDE one
+# package; the long tail of small python/perl/configure-heavy packages
+# otherwise serializes on a single job while 27 threads idle. Several emerge
+# jobs run concurrently, governed by --load-average so one big -j${JOBS} C++
+# build can still take the whole machine.
+EMERGE_JOBS=$(( JOBS / 4 )); [ "${EMERGE_JOBS}" -lt 2 ] && EMERGE_JOBS=2
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
-export MAKEOPTS="-j${JOBS}"
+# -l\${JOBS}: cap make's load so EMERGE_JOBS concurrent packages each running
+# make -j\${JOBS} don't multiply into runaway oversubscription (observed load
+# ~80 on 28 cores with <300 MB free — an OOM risk that fails compiles). emerge's
+# own --load-average gates new PACKAGE jobs; make's -l gates new COMPILER jobs.
+export MAKEOPTS="-j${JOBS} -l${JOBS}"
+export EMERGE_DEFAULT_OPTS="--jobs ${EMERGE_JOBS} --load-average ${JOBS} --usepkg=y --binpkg-respect-use=y"
+# Build chroot: /boot/efi exists in the baked fstab but is never mounted here.
+# Without this, mount-boot.eclass (linux-firmware, grub-themes) dies in
+# pkg_pretend ("/boot/efi not mounted") and ABORTS the ENTIRE package-set
+# emerge before anything merges — producing a payload-less stage4.
+export DONT_MOUNT_BOOT=1
+# Refresh ld.so.cache up front so any libs INHERITED from a warm/reused sysroot
+# (e.g. an interrupted prior run that merged sqlite but never ran ldconfig) are
+# resolvable before the python-dependent package emerge needs them — otherwise
+# wheel builds die on "libsqlite3.so.0: cannot open shared object file".
+ldconfig 2>/dev/null || true
 if [ ! -d /var/db/repos/gentoo/metadata ] && ! mountpoint -q /var/db/repos/gentoo; then
     emerge-webrsync
 fi
@@ -1035,6 +1061,24 @@ emerge --update --deep --newuse --keep-going \
     --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y \
     ${EMERGE_EXCLUDE} ${PKGS} \
     || echo "[build-x86] WARN: some stage4 packages failed; review the emerge output"
+# Rebuild the dynamic-linker cache: with sandbox/postinst hooks disabled in this
+# chroot, ldconfig can be skipped after a merge, leaving e.g. libsqlite3.so.0
+# present on disk but absent from /etc/ld.so.cache — python wheel builds then die
+# with "libsqlite3.so.0: cannot open shared object file" and cascade-fail the
+# whole python-dependent package set. Refresh it explicitly before depending on it.
+ldconfig 2>/dev/null || true
+# The packages.list payload is MANDATORY for a usable role image — fail LOUDLY
+# if the core set is missing rather than emit a payload-less stage4 (this
+# happened silently for every x86 role until the DONT_MOUNT_BOOT fix above).
+missing=""
+for b in grub-install dracut parted jq nmcli kubelet kubeadm containerd; do
+    command -v "\${b}" >/dev/null || missing="\${missing} \${b}"
+done
+if [ -n "\${missing}" ]; then
+    echo "[build-x86] ERROR: stage4 payload incomplete — missing:\${missing}"
+    echo "[build-x86]        packages.list did not merge; review the emerge output above."
+    exit 1
+fi
 CHROOT
 
 # ── 6. Mesh VPN (amd64 static binaries) ────────────────────────────
@@ -1045,7 +1089,7 @@ else
     if curl -fL -o "${SYSROOT}/usr/bin/headscale" \
         "https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}/headscale_${HEADSCALE_VERSION}_linux_amd64"; then
         chmod +x "${SYSROOT}/usr/bin/headscale"; info "headscale installed"
-    else warn "headscale fetch failed"; fi
+    else err "headscale fetch failed — the image enables its service in the runlevel; aborting (use --skip-mesh to opt out)"; exit 1; fi
     if ! ${SKIP_TAILSCALE}; then
         TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_amd64.tgz"
         if curl -fL -o "${TGZ}" "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz"; then
@@ -1054,7 +1098,7 @@ else
             install -Dm0755 "${SUB}/tailscale" "${SYSROOT}/usr/bin/tailscale"
             install -Dm0755 "${SUB}/tailscaled" "${SYSROOT}/usr/sbin/tailscaled"
             rm -rf "${TMP}"; info "tailscale installed"
-        else warn "tailscale fetch failed"; fi
+        else err "tailscale fetch failed — tailscaled is enabled in the runlevel; aborting (use --skip-tailscale to opt out)"; exit 1; fi
     fi
 fi
 
@@ -1146,12 +1190,15 @@ case "${ROLE}" in
     *)      ROLE_TAG="${ROLE}" ;;
 esac
 STAGE4="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.stage4.tar.xz"
+# Multi-threaded xz (-T0) over the tar stream — -cJf is single-threaded and
+# left 27 cores idle on the multi-GB sysroot; mirrors the fs.tar codepath below.
 tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
-    --exclude='./var/cache' --exclude='./tmp/*' -cJf "${STAGE4}" . 2>/dev/null || \
-tar -C "${SYSROOT}" --numeric-owner \
+    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./home/magus' -cpf - . 2>/dev/null \
+    | xz -T0 -6 > "${STAGE4}" \
+  || tar -C "${SYSROOT}" --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
-    --exclude='./var/cache' --exclude='./tmp/*' -cJf "${STAGE4}" .
+    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./home/magus' -cpf - . | xz -T0 -6 > "${STAGE4}"
 info "Stage4: ${STAGE4} ($(du -sh "${STAGE4}" | cut -f1))"
 
 # ── 10. Raw .img (DEFAULT deliverable) ─────────────────────────────
@@ -1231,7 +1278,7 @@ build_img() {
 
     # ── Locate the kernel + disk initramfs on the ext4 /boot ──────────
     kver="$(ls "${root_mnt}/lib/modules" 2>/dev/null | sort -V | tail -1)"
-    vmlinuz="$(ls -1 "${root_mnt}/boot/vmlinuz-"* 2>/dev/null | sort -V | tail -1 || true)"
+    vmlinuz="$(ls -1 "${root_mnt}/boot/vmlinuz-"* "${root_mnt}/boot/vmlinuz" 2>/dev/null | sort -V | tail -1 || true)"
     initrd="$(ls -1 "${root_mnt}/boot/initramfs-"*.img 2>/dev/null | grep -v 'initramfs-live' | sort -V | tail -1 || true)"
     vmlinuz="${vmlinuz##*/}"; initrd="${initrd##*/}"
 
@@ -1239,12 +1286,16 @@ build_img() {
     # Writes ${ESP}/EFI/BOOT/BOOTX64.EFI (removable fallback path) + ${root}/boot/grub.
     # No host NVRAM entry, no os-prober — safe to run against a loop-mounted image.
     info "Installing GRUB-EFI (--removable, --no-nvram) into the image ESP"
+    # Bootloader install failure must be FATAL: the .img is the default
+    # deliverable and an empty ESP means a brick announced as success.
     grub-install --target=x86_64-efi \
         --efi-directory="${root_mnt}/boot/efi" \
         --boot-directory="${root_mnt}/boot" \
         --removable --no-nvram \
         --modules="part_gpt fat ext2 normal linux search search_fs_uuid configfile gzio all_video" \
-        2>/dev/null || warn "grub-install reported an error (image may not be UEFI-bootable)"
+        || { err "grub-install FAILED — .img would not be UEFI-bootable"; exit 1; }
+    [ -f "${root_mnt}/boot/efi/EFI/BOOT/BOOTX64.EFI" ] \
+        || { err "ESP has no EFI/BOOT/BOOTX64.EFI after grub-install — refusing to ship a non-booting .img"; exit 1; }
 
     # ── Hand-written grub.cfg (no grub-mkconfig => no host os-prober/chroot) ──
     # Source the hardened cmdline from the grub defaults so the .img and the live
@@ -1315,7 +1366,7 @@ if ${BUILD_IMG}; then
     banner "Building raw .img (UEFI GPT: ESP + ext4 root, GRUB-EFI --removable)"
     # A bootable image needs a kernel on the ext4 /boot. Guard like the ISO path:
     # if no vmlinuz is present (kernel skipped / build failed), skip rather than crash.
-    if [ -z "$(ls -1 "${SYSROOT}/boot/vmlinuz-"* 2>/dev/null)" ]; then
+    if [ -z "$(ls -1 "${SYSROOT}/boot/vmlinuz-"* "${SYSROOT}/boot/vmlinuz" 2>/dev/null)" ]; then
         warn "No vmlinuz in ${SYSROOT}/boot — skipping .img (don't pass --skip-kernel)."
         IMG_PATH="(not built — kernel missing)"
     else
@@ -1329,27 +1380,46 @@ fi
 ISO_PATH="(not built)"
 if ! ${SKIP_ISO}; then
     KVER="$(ls "${SYSROOT}/lib/modules" 2>/dev/null | sort -V | tail -1)"
-    VMLINUZ="$(ls -1 "${SYSROOT}/boot/vmlinuz-"* 2>/dev/null | sort -V | tail -1 || true)"
+    VMLINUZ="$(ls -1 "${SYSROOT}/boot/vmlinuz-"* "${SYSROOT}/boot/vmlinuz" 2>/dev/null | sort -V | tail -1 || true)"
 
     if ${LIVE_ISO} && [ -n "${VMLINUZ}" ] && [ -n "${KVER}" ]; then
         ISO_PATH="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.live.iso"
         banner "Building bootable LIVE ISO (grub-mkrescue + squashfs)"
         # Live initramfs (dmsquash-live) built inside the chroot.
         mount_chroot; trap umount_chroot EXIT
-        chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT || warn "dracut step failed"
-command -v dracut >/dev/null && dracut --force --no-hostonly \
+        chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT || warn "live-initramfs dracut step FAILED (live ISO will be skipped)"
+if ! command -v dracut >/dev/null; then
+    echo "[build-x86] ERROR: dracut not installed in sysroot"; exit 1
+fi
+dracut --force --no-hostonly \
     --add "dmsquash-live" \
     --add-drivers "squashfs iso9660 loop sr_mod usb_storage ahci nvme" \
-    --kver "${KVER}" /boot/initramfs-live.img || echo "dracut not installed"
+    --kver "${KVER}" /boot/initramfs-live.img
 CHROOT
         umount_chroot; trap - EXIT
 
+        if [ ! -s "${SYSROOT}/boot/initramfs-live.img" ]; then
+            err "no live initramfs was generated — a live ISO without it cannot boot (root=live:/rd.live.* are dracut directives). Skipping live ISO."
+            ISO_PATH="(not built — live initramfs missing)"
+            SKIP_LIVE_PACK=true
+        else
+            SKIP_LIVE_PACK=false
+        fi
+        if ! ${SKIP_LIVE_PACK}; then
         mkdir -p "${ISO_DIR}/boot/grub" "${ISO_DIR}/LiveOS"
         cp "${VMLINUZ}" "${ISO_DIR}/boot/vmlinuz"
-        [ -f "${SYSROOT}/boot/initramfs-live.img" ] && cp "${SYSROOT}/boot/initramfs-live.img" "${ISO_DIR}/boot/initramfs.img"
+        cp "${SYSROOT}/boot/initramfs-live.img" "${ISO_DIR}/boot/initramfs.img"
         info "Squashing rootfs (this can take a while)..."
-        mksquashfs "${SYSROOT}" "${ISO_DIR}/LiveOS/squashfs.img" \
-            -comp zstd -e proc sys dev run var/cache/distfiles >/dev/null
+        if command -v mksquashfs >/dev/null; then
+            mksquashfs "${SYSROOT}" "${ISO_DIR}/LiveOS/squashfs.img" \
+                -comp zstd -e proc sys dev run var/cache/distfiles home/magus >/dev/null
+        else
+            # squashfs-tools-ng fallback: same excludes, xz (kernel has SQUASHFS_XZ).
+            tar -C "${SYSROOT}" --numeric-owner \
+                --exclude='./proc' --exclude='./sys' --exclude='./dev' \
+                --exclude='./run' --exclude='./var/cache/distfiles' --exclude='./home/magus' \
+                -cpf - . | tar2sqfs -q -c xz -j "${JOBS}" "${ISO_DIR}/LiveOS/squashfs.img"
+        fi
         # Unify the cmdline with the .img: source GRUB_CMDLINE_LINUX from the same
         # grub defaults (full KSPP/LSM/audit/cgroup hardening), not a short literal.
         LIVE_CMDLINE="$(. "${SPECS_DIR}/etc/default/grub"; printf '%s' "${GRUB_CMDLINE_LINUX:-lsm=yama,selinux,bpf selinux=1}")"
@@ -1364,6 +1434,7 @@ EOF
         grub-mkrescue -o "${ISO_PATH}" "${ISO_DIR}" -volid SNAPDRAGON_LIVE 2>/dev/null \
             && info "Bootable live ISO: ${ISO_PATH}" \
             || { warn "grub-mkrescue failed; live ISO not produced"; ISO_PATH="(not built — grub-mkrescue failed)"; }
+        fi
     elif ${LIVE_ISO}; then
         warn "Live ISO requested but no vmlinuz/modules present — skipping (don't pass --skip-kernel)"
     fi
