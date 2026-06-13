@@ -1124,6 +1124,21 @@ banner "Extracting seed stage3 into sysroot"
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     info "Sysroot already populated and --resume set, skipping extraction"
 else
+    # A non-resume build over an ALREADY-POPULATED sysroot must start CLEAN.
+    # `tar -xpf` only OVERLAYS the stage3 — it never deletes the leftovers of a
+    # prior attempt. Stacking attempts leaves a HYBRID sysroot whose libraries
+    # carry stale, DANGLING .so dev symlinks: once a rebuild bumps a soname,
+    # libgpg-error.so still points at the gone libgpg-error.so.0.41.2 and
+    # libunistring.so.5 at the gone 5.2.0, so the cross-linker dies
+    # "cannot find -lgpg-error" / "libunistring.so.5 not found" on @system
+    # packages (pinentry, elfutils via libpsl, gnutls...). Wipe first so every
+    # library is installed exactly once with a symlink that matches its soname.
+    # (Mirrors the x86 builder's 894584e wipe-before-extract.)
+    if [ -f "${SYSROOT}/etc/gentoo-release" ]; then
+        warn "Sysroot already populated and NOT --resume: wiping for a clean stage3 extract (stale dangling .so symlinks otherwise break the cross-link of pinentry/elfutils/gnutls)"
+        rm -rf "${SYSROOT:?}"
+        mkdir -p "${SYSROOT}"
+    fi
     # The stage3 carries /dev device nodes (mknod) + root ownership. A non-root
     # cross-build can't create those, so skip device nodes on extract (the
     # target populates /dev via devtmpfs at boot) and don't try to chown. The
