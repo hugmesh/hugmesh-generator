@@ -822,6 +822,15 @@ banner "Extracting stage3"
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     info "Sysroot populated and --resume — skipping extraction"
 else
+    # A non-resume build must start from a CLEAN sysroot. Extracting stage3 OVER a
+    # populated tree leaves stale packages (e.g. extra python slots, old kubelet)
+    # in var/db/pkg — a HYBRID db that breaks dep resolution (observed: 3 python
+    # slots surviving + libselinux[python] conflicts). Wipe first so the extract
+    # is pristine. (Warm reuse is the explicit --resume path above.)
+    if [ -f "${SYSROOT}/etc/gentoo-release" ]; then
+        warn "Non-resume build over a populated sysroot — wiping for a clean stage3 extract"
+        rm -rf "${SYSROOT}"; mkdir -p "${SYSROOT}"
+    fi
     tar -C "${SYSROOT}" --xattrs-include='*.*' -xpf "${STAGE3_LOCAL}" 2>/dev/null || \
         tar -C "${SYSROOT}" -xpf "${STAGE3_LOCAL}"
 fi
