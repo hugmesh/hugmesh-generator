@@ -1,0 +1,7 @@
+# SELinux userland python bindings — IDENTICAL need to x86 (same hardened/selinux
+# profile + policycoreutils->selinux-python pulling libselinux[python]+audit[python]).
+# rpi5's cross_emerge has NO --autounmask, so a missing pre-seed ABORTS payload
+# resolution outright. (Do NOT add libsemanage — it has no plain `python` USE flag,
+# auto-satisfies via [python(+)]; an explicit entry errors "USE flag python not found".)
+sys-libs/libselinux python
+sys-process/audit    python

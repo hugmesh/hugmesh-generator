@@ -30,8 +30,16 @@ FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandb
 PKGDIR="@@WORK_DIR@@/pkgdir"
 DISTDIR="@@WORK_DIR@@/distfiles"
 
-# Hardened USE baseline + container runtime requirements
-USE="bindist hardened pie ssp -X -gtk -qt5 -qt6 -systemd -pulseaudio -bluetooth"
+# Hardened USE baseline + container runtime requirements.
+# -introspection: GObject-introspection generates .gir files by RUNNING g-ir-scanner,
+# which loads a compiled _giscanner.cpython-<ver>.so. In this CROSS build g-ir-scanner
+# runs under the HOST python (3.14) but the extension is built for PYTHON_SINGLE_TARGET
+# (python3_12) -> "ImportError: _giscanner.cpython-314-...so: cannot open shared object
+# file" -> glib-2.88's bundled gobject-introspection bootstrap dies in configure ->
+# NetworkManager/nmcli (a payload-MANDATORY pkg) never builds. A headless k8s node has
+# no gir consumer, so disable introspection fleet-wide for the Pi cross-build. (The x86
+# NATIVE build is unaffected: it runs g-ir-scanner inside a chroot whose python matches.)
+USE="bindist hardened pie ssp -X -gtk -qt5 -qt6 -systemd -pulseaudio -bluetooth -introspection"
 USE="${USE} cgroup cgroup2 seccomp selinux containers netlink"
 
 # Build only the MCS SELinux policy: provision_selinux() and containerd's per-pod
