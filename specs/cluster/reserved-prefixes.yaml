@@ -64,7 +64,7 @@ spec:
   #   reserved service SUBDOMAINS — the labels a vanity username could SHADOW on a
   #   real gateway route. It is NOT a list of every Kubernetes Service. Internal,
   #   non-publicly-routable Services (akkoma-proxy / tuwunel-proxy mTLS sidecars,
-  #   *-db / *-pg datastores, kafka / eureka / cassandra / clickhouse, lan-dns,
+  #   *-db / *-pg datastores, kafka / cassandra / clickhouse, lan-dns,
   #   the per-pod helpers) are reached ONLY in-cluster behind an already-reserved
   #   public host (mastodon./matrix./api.) or are isolated by namespace — they are
   #   NEVER a public first-label, so reserving them would only bloat the username
