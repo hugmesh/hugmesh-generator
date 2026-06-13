@@ -96,6 +96,15 @@ echo "==> Generating cluster secrets for base 'secret/${BASE}/' (brand=${BRAND})
 CASDOOR_ADMIN_PLAIN="$(openssl rand -base64 18)"
 CASDOOR_ADMIN_HASH="$(openssl passwd -6 "${CASDOOR_ADMIN_PLAIN}")"
 
+# Platform SUPERADMIN bootstrap Casdoor login. Username is configurable
+# (CASDOOR_SUPERADMIN_USERNAME env / brand.conf, default "superadmin"); the
+# password is always freshly generated and stored ONLY in Vault + the USB
+# offline bundle — never printed, never committed. The casdoor-init Job reads
+# these from the casdoor-superadmin k8s Secret and calls POST /api/add-user,
+# then assigns ROLE_SUPERADMIN. Absent => the Job skips gracefully.
+CASDOOR_SUPERADMIN_USERNAME="${CASDOOR_SUPERADMIN_USERNAME:-superadmin}"
+CASDOOR_SUPERADMIN_PASSWORD="$(openssl rand -base64 24)"
+
 # Casdoor external Postgres (casdoor-pg) password. The DB user is the fixed
 # "casdoor" (set in the casdoor-db ExternalSecret template); only the password
 # is minted/stored.
@@ -321,6 +330,9 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
             db_password_plain="${CASDOOR_DB_PASSWORD}"
         # Per-app service OAuth2 client-secrets (one KV key per app).
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/casdoor-apps" "${CASDOOR_APP_KV_ARGS[@]}"
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/casdoor-superadmin" \
+            username="${CASDOOR_SUPERADMIN_USERNAME}" \
+            password="${CASDOOR_SUPERADMIN_PASSWORD}"
         # GAMES-realm Casdoor (casdoor-games) — separate path, separate instance.
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/casdoor-games" \
             client_secret="${CASDOOR_GAMES_CLIENT_SECRET}" \
@@ -383,7 +395,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/gitlab-registry" \
             username="${GITLAB_REGISTRY_USER}" \
             token="${GITLAB_REGISTRY_TOKEN}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-games,clickhouse,federation-db,admin-bff-db,mod-bff-db,user-bff-db,forum-bff-db,forum,forum-db,route-access-db,uptrace,mail,gitlab-registry}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,mod-bff-db,user-bff-db,forum-bff-db,forum,forum-db,route-access-db,uptrace,mail,gitlab-registry}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -424,6 +436,8 @@ MAIL_USER="${MAIL_USER}" \
 MAIL_PASSWORD="${MAIL_PASSWORD}" \
 MAIL_FROM="${MAIL_FROM}" \
 CASDOOR_ADMIN_PLAIN="${CASDOOR_ADMIN_PLAIN}" \
+CASDOOR_SUPERADMIN_USERNAME="${CASDOOR_SUPERADMIN_USERNAME}" \
+CASDOOR_SUPERADMIN_PASSWORD="${CASDOOR_SUPERADMIN_PASSWORD}" \
 CASDOOR_DB_PASSWORD="${CASDOOR_DB_PASSWORD}" \
 CASDOOR_CLIENT_ID="${CASDOOR_CLIENT_ID}" \
 CASDOOR_CLIENT_SECRET="${CASDOOR_CLIENT_SECRET}" \
@@ -481,6 +495,11 @@ data = {
         "casdoor-admin": {
             "username": "admin",
             "password": os.environ["CASDOOR_ADMIN_PLAIN"],
+        },
+        # platform SUPERADMIN bootstrap user (casdoor-init creates + assigns ROLE_SUPERADMIN).
+        "casdoor-superadmin": {
+            "username": os.environ["CASDOOR_SUPERADMIN_USERNAME"],
+            "password": os.environ["CASDOOR_SUPERADMIN_PASSWORD"],
         },
         # external Postgres (casdoor-pg) credentials for Casdoor + the DB pod.
         "casdoor-db": {
