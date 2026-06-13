@@ -122,5 +122,5 @@ unreachable.
 | `Snapdragon-Systems/snapdragon-mastodon-ui` | Mastodon micro-frontend |
 | `Snapdragon-Systems/snapdragon-login-ui` | Login/registration micro-frontend |
 | `Snapdragon-Systems/snapdragon-admin-ui` | Admin console micro-frontend (role-gated) |
-| `Snapdragon-Systems/snapdragon.games` | Game (runs on the x86_64 GPU worker) |
+| `Snapdragon-Systems/snapdragon.games` | Game studio and portal (runs on the x86_64 GPU worker) |
 | `Snapdragon-Systems/sdn` | headscale / SDN config |
