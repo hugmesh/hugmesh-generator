@@ -68,6 +68,50 @@ kernel mesh routing. On Docker Desktop / locked-down hosts it falls back to
 
 ---
 
+## Install it (app icon, menu/Start shortcuts, autostart, task-bar tray)
+
+For a non-technical user, the installers add a **task-bar icon** + menu/Start-Menu
+shortcuts so the mesh node can be joined/left without a terminal. All per-user — **no
+root/admin**. The keys folder + role are recorded once (`launch.env`) and reused by
+every shortcut and the tray.
+
+### Linux
+
+```sh
+# install launcher + app icon + menu entries (Join / Status / Leave)
+./install.sh --keys ./mykeys --role user
+
+# also start the node at login, and add a system-tray indicator
+./install.sh --keys ./mykeys --role user --autostart --tray
+
+# remove everything (keeps your keys + config)
+./install.sh --uninstall
+```
+
+The tray (`tray/snapdragon-mesh-tray.py`) needs an AppIndicator GI typelib —
+Debian/Ubuntu `gir1.2-ayatanaappindicator3-0.1 python3-gi`, Fedora
+`libayatana-appindicator-gtk3 python3-gobject`. Without it the menu entries +
+autostart still work.
+
+### Windows (Docker Desktop)
+
+```powershell
+# Start-Menu shortcuts (Join / Status / Leave) with the app icon
+.\install.ps1 -Keys .\mykeys -Role user
+
+# also a Desktop shortcut, login autostart, and a task-bar (NotifyIcon) tray
+.\install.ps1 -Keys .\mykeys -Role user -Desktop -Autostart -Tray
+
+# remove the shortcuts (keeps your keys + config)
+.\install.ps1 -Uninstall
+```
+
+The task-bar tray (both platforms) shows the live state — `stopped` /
+`registered (awaiting approval)` / `joined` — and offers Join / Logs / Leave.
+Icons live in [`icons/`](icons) (`.svg` + `.png` for Linux, `.ico` for Windows).
+
+---
+
 ## Keys layout
 
 The keys folder mirrors the KEYS-USB layout the appliance images consume
@@ -144,4 +188,9 @@ Anything in the keys folder can be overridden by env vars (handy for the raw
 | `mesh-node.sh` | Linux launcher (`docker run` wrapper) |
 | `mesh-node.ps1` | Windows / Docker Desktop launcher |
 | `mesh-node.cmd` | double-clickable cmd.exe wrapper for the `.ps1` |
+| `install.sh` | Linux installer: app icon + menu entries + optional autostart/tray |
+| `install.ps1` | Windows installer: Start-Menu/Desktop shortcuts + optional autostart/tray |
+| `tray/snapdragon-mesh-tray.py` | Linux task-bar tray indicator (AppIndicator) |
+| `tray/snapdragon-mesh-tray.ps1` | Windows task-bar tray (NotifyIcon) |
+| `icons/` | app icon (`.svg` + `.png` for Linux, `.ico` for Windows) |
 | `keys.example/` | worked keys-folder layout (placeholders, no real secrets) |
