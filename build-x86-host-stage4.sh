@@ -386,8 +386,10 @@ fi
 if ${ROLE_CLIENT}; then
     CLIENT_USE="X gtk dbus elogind udev"
     [ "${DESKTOP}" = "full" ] && CLIENT_USE="${CLIENT_USE} pulseaudio pipewire"
+    INPUT_DEVICES="libinput"   # Xorg keyboard/mouse/touchpad (via x11-base/xorg-drivers)
 else
     CLIENT_USE=""
+    INPUT_DEVICES=""           # headless nodes run no X server
 fi
 
 # Reconcile the legacy SKIP_ISO switch with the new opt-in ISO design: an ISO
@@ -404,7 +406,7 @@ render_template() {
         -e "s|@@DOMAIN@@|${CLUSTER_DOMAIN}|g" -e "s|@@ORG@@|${ORG}|g" \
         -e "s|@@ENV@@|${ENV}|g" \
         -e "s|@@GPU_USE@@|${GPU_USE}|g" -e "s|@@VIDEO_CARDS@@|${VIDEO_CARDS}|g" \
-        -e "s|@@CLIENT_USE@@|${CLIENT_USE}|g" \
+        -e "s|@@CLIENT_USE@@|${CLIENT_USE}|g" -e "s|@@INPUT_DEVICES@@|${INPUT_DEVICES}|g" \
         "$1" > "$2"
 }
 
@@ -1045,6 +1047,23 @@ if ${ROLE_CLIENT}; then
     # CLIENT desktop: NO containerd/kubelet/headscale (not a k8s node). Add the
     # desktop session stack: dbus + elogind (seat/login) + display-manager (lightdm).
     SVCS=(sshd NetworkManager cronie haveged growroot keys-provision auditd local dbus elogind display-manager)
+    # gui-libs/display-manager-init's /etc/init.d/display-manager reads this to decide
+    # WHICH DM to launch; lightdm ships no OpenRC service. Without it the service falls
+    # back to xdm and the image boots to a bare console (mirrors the frite fix).
+    mkdir -p "${SYSROOT}/etc/conf.d"
+    echo 'DISPLAYMANAGER="lightdm"' > "${SYSROOT}/etc/conf.d/display-manager"
+    # lightdm needs a greeter + a default session wired explicitly: with only
+    # lightdm-gtk-greeter installed the stock greeter-session (example-gtk-gnome) is
+    # absent → blank greeter. Thin = openbox, full = xfce. Written pre-emerge so
+    # CONFIG_PROTECT keeps it over the package default (same pattern as frite).
+    _user_session="openbox"; [ "${DESKTOP}" = "full" ] && _user_session="xfce"
+    mkdir -p "${SYSROOT}/etc/lightdm"
+    cat > "${SYSROOT}/etc/lightdm/lightdm.conf" <<LIGHTDM
+[LightDM]
+[Seat:*]
+greeter-session=lightdm-gtk-greeter
+user-session=${_user_session}
+LIGHTDM
 else
     SVCS=(sshd NetworkManager cronie haveged growroot keys-provision containerd kubelet auditd local)
     ${ROLE_HEADSCALE} && SVCS+=(headscale)

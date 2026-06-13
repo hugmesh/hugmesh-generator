@@ -687,6 +687,16 @@ if [ "${DESKTOP}" = "light" ]; then
     # but nothing did). Keeps dbus+elogind (superset of the parallel main fix).
     mkdir -p "${SYSROOT}/etc/conf.d"
     echo 'DISPLAYMANAGER="lightdm"' > "${SYSROOT}/etc/conf.d/display-manager"
+    # Wire the greeter + default session explicitly: with only lightdm-gtk-greeter
+    # installed the stock greeter-session (example-gtk-gnome) is absent → blank
+    # greeter. openbox is the light session. (CONFIG_PROTECT keeps this pre-emerge.)
+    mkdir -p "${SYSROOT}/etc/lightdm"
+    cat > "${SYSROOT}/etc/lightdm/lightdm.conf" <<'LIGHTDM'
+[LightDM]
+[Seat:*]
+greeter-session=lightdm-gtk-greeter
+user-session=openbox
+LIGHTDM
 fi
 for svc in "${DEFAULT_SVCS[@]}"; do
     ln -sf "/etc/init.d/${svc}" "${SYSROOT}/etc/runlevels/default/${svc}" 2>/dev/null || true

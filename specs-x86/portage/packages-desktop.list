@@ -5,6 +5,11 @@
 
 # Display server + basic X utilities
 x11-base/xorg-server
+# Materializes the X drivers from INPUT_DEVICES (libinput: keyboard/mouse/touchpad)
+# and VIDEO_CARDS (amdgpu/intel/nouveau DDX). Without it Xorg has no input/video
+# driver and the greeter is unusable (modesetting/simpledrm still cover QEMU + UEFI
+# fallback, but real touchpads/keyboards need xf86-input-libinput).
+x11-base/xorg-drivers
 x11-apps/xrandr
 x11-apps/xset
 x11-apps/setxkbmap
