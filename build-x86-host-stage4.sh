@@ -1052,6 +1052,12 @@ emerge --update --deep --newuse --keep-going \
     --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y \
     ${EMERGE_EXCLUDE} ${PKGS} \
     || echo "[build-x86] WARN: some stage4 packages failed; review the emerge output"
+# Rebuild the dynamic-linker cache: with sandbox/postinst hooks disabled in this
+# chroot, ldconfig can be skipped after a merge, leaving e.g. libsqlite3.so.0
+# present on disk but absent from /etc/ld.so.cache — python wheel builds then die
+# with "libsqlite3.so.0: cannot open shared object file" and cascade-fail the
+# whole python-dependent package set. Refresh it explicitly before depending on it.
+ldconfig 2>/dev/null || true
 # The packages.list payload is MANDATORY for a usable role image — fail LOUDLY
 # if the core set is missing rather than emit a payload-less stage4 (this
 # happened silently for every x86 role until the DONT_MOUNT_BOOT fix above).
