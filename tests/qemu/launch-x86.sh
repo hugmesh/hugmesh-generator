@@ -56,6 +56,8 @@ HS_PORT="8081"                 # host -> guest 8080 (headscale)
 TIMEOUT="900"                  # KVM boot is fast; generous for TCG fallback
 KEEP=false                     # keep RUN_DIR (and overlay) on exit
 FOREGROUND=false               # -nographic in the foreground instead of -daemonize
+KEYS_IMG=""                    # optional FAT32 "KEYS" disk (client/provisioning tests)
+GPU_DEV=false                  # attach a virtio-gpu (desktop/client images render a greeter)
 
 usage() {
 cat <<EOF
@@ -83,6 +85,8 @@ QEMU / guest:
       --machine M      QEMU -machine type. Default: ${QEMU_MACHINE}
       --overlay-size SZ  qcow2 overlay size (qemu-img resize). Default: ${OVERLAY_SIZE}
       --run-dir DIR    Scratch dir for overlay/vars/pidfile/console. Default: <work>/qemu-run-x86
+      --keys-img FILE  Attach a FAT32 "KEYS" disk (provisioning/client tests).
+      --gpu            Attach a virtio-GPU (client/desktop greeter rendering).
 
 Port forwards (host -> guest):
       --ssh-port PORT  host -> guest 22.   Default: ${SSH_PORT}
@@ -125,6 +129,8 @@ while [[ $# -gt 0 ]]; do
         --api-port)      API_PORT="$2"; shift 2 ;;
         --hs-port)       HS_PORT="$2"; shift 2 ;;
         -t|--timeout)    TIMEOUT="$2"; shift 2 ;;
+        --keys-img)      KEYS_IMG="$2"; shift 2 ;;
+        --gpu)           GPU_DEV=true; shift ;;
         --foreground)    FOREGROUND=true; shift ;;
         --keep)          KEEP=true; shift ;;
         -h|--help)       usage 0 ;;
@@ -222,6 +228,21 @@ QEMU_ARGS=(
     -device virtio-net-pci,netdev=net0
     -pidfile "${PIDFILE}"
 )
+# Optional KEYS provisioning disk (FAT32, label KEYS) — second virtio-blk disk the
+# keys-provision first-boot engine discovers by label (client/provisioning tests).
+if [ -n "${KEYS_IMG}" ]; then
+    [ -f "${KEYS_IMG}" ] || die "keys-img not found: ${KEYS_IMG}"
+    QEMU_ARGS+=(-drive "file=${KEYS_IMG},format=raw,if=none,id=keys,readonly=on"
+                -device virtio-blk-pci,drive=keys)
+    info "keys   : ${KEYS_IMG} (attached as a virtio KEYS disk)"
+fi
+# Optional virtio-GPU so client/desktop images can bring up Xorg (modesetting) +
+# the lightdm greeter; node images don't need it (serial console only).
+if ${GPU_DEV}; then
+    QEMU_ARGS+=(-device virtio-gpu-pci)
+    info "gpu    : virtio-gpu attached (desktop/greeter rendering)"
+fi
+
 # -enable-kvm is implied by accel=kvm; only add it explicitly when KVM is in use.
 [[ "${ACCEL}" == *kvm* ]] && QEMU_ARGS+=(-enable-kvm)
 

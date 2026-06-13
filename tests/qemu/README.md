@@ -58,6 +58,37 @@ runner polls until `--timeout`. Console output is captured to
 
 | File | Purpose |
 |---|---|
-| `run-qemu-test.sh` | Orchestrates: build disks, boot QEMU, wait for SSH, assert, power off. |
-| `make-test-keys.sh` | Packs a directory into a FAT32 `KEYS` image (reusable). |
-| `assertions.sh` | The checks, executed inside the guest over SSH. |
+| `run-qemu-test.sh` | Pi: orchestrates build disks, boot QEMU, wait for SSH, assert, power off (root). |
+| `run-qemu-e2e.sh` | Node E2E: boot a role image + run the Playwright suite against the forwarded UI (root). |
+| `verify-client.sh` | Client desktop: non-root boot + console-assertion verification (laptop/chromebook/desktop). |
+| `launch-x86.sh` | Boot a self-booting x86 `.img` under OVMF/KVM (`--gpu`, `--keys-img`, `--run-dir`). |
+| `launch-pi.sh` | Boot a Pi kernel+stage4 under `-M virt` with a KEYS disk. |
+| `make-test-keys.sh` | Packs a directory into a FAT32 `KEYS` image (reusable, non-root with mtools). |
+| `assertions.sh` | The node checks, executed inside the guest over SSH. |
+| `seed-accounts.sh` | Renders/pushes the E2E account + Casdoor-role fixtures. |
+
+## Client desktop images (`verify-client.sh`)
+
+The node E2E (`run-qemu-e2e.sh`) drives the cluster UI with Playwright — that does
+**not** apply to a **client** desktop image (`--role laptop|chromebook|desktop`),
+which is a person's device that joins the mesh and runs no BFF/gateway. For those,
+`verify-client.sh` does a **non-root** boot + console-assertion pass (the lighter
+Pi-style approach): build a synthetic KEYS disk (`mcopy`), boot the self-booting x86
+`.img` under `launch-x86.sh --gpu --keys-img`, and assert boot + first-boot
+provisioning on the serial console — kernel boot, `keys-provision`, user + SSH key,
+`sshd`, `tailscaled`, `display-manager`/lightdm, and (superadmin) the device-password.
+
+```bash
+# build a client image first (needs root):
+sudo ./build-x86-host-stage4.sh --role laptop --person-role user \
+     --domains acme.example -w /home/me/x86-client-build
+
+# then verify it (NON-root; user in the kvm group):
+./tests/qemu/verify-client.sh -w /home/me/x86-client-build --role laptop
+./tests/qemu/verify-client.sh -w /home/me/x86-client-build --role chromebook --person-role superadmin
+./tests/qemu/verify-client.sh --dry-run --role laptop      # validate the KEYS payload, don't boot
+```
+
+The greeter renders under QEMU because the client kernel now carries a generic
+framebuffer fallback (`simpledrm`/sysfb + bochs/qxl; virtio-gpu is in the base
+fragment) and `launch-x86.sh --gpu` attaches a virtio-GPU.
