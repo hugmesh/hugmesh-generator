@@ -1,6 +1,12 @@
-# sys-apps/policycoreutils (in packages.list) requires libselinux built WITH the
-# python bindings: >=sys-libs/libselinux-3.10:=[python,python_targets_python3_12].
-# Pre-seed it explicitly — the package-set emerge's --autounmask-continue did NOT
-# apply this USE change on its own and stalled with "no ebuilds built with USE
-# flags to satisfy ...libselinux...[python]", which fails the whole payload.
+# sys-apps/policycoreutils (in packages.list) pulls the SELinux python toolchain
+# (sys-apps/selinux-python), which needs the WHOLE stack built WITH the python
+# USE flag: libselinux[python], libsemanage[python], audit[python], etc.
+# The package-set emerge's --autounmask-continue does NOT auto-apply these USE
+# changes (it stalls one-at-a-time with "no ebuilds built with USE flags to
+# satisfy ...[python]"), so pre-seed the full stack explicitly — this matches the
+# build's philosophy of EXPLICIT, reproducible USE decisions (cf. package.accept_keywords).
 sys-libs/libselinux python
+sys-libs/libsemanage python
+sys-process/audit python
+# checkpolicy + setools are python tools by nature; selinux-python is the meta.
+# If a further "...[python]" stall appears, add that package here too.
