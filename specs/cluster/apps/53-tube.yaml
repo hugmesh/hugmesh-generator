@@ -1,0 +1,21 @@
+# LocalTube (YouTube archive) — GPU-gated x86 optional service (DEFAULT-OFF).
+# tube-bff-api (R2DBC + Google OAuth queue) + tube-ui + media Nginx sidecar.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-tube
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/tube
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-tube
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
