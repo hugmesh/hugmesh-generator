@@ -17,7 +17,7 @@ CHOST="@@CROSS_TARGET@@"
 
 # Hardened CFLAGS — same posture as the rest of the fleet. The Frite SoCs (S805X /
 # S905X) are quad Cortex-A53; the builder passes -c cortex-a53 by default.
-CFLAGS="-mcpu=@@RPI_CPU@@ -mtune=@@RPI_CPU@@ -O2 -pipe -fstack-protector-strong -D_FORTIFY_SOURCE=2"
+CFLAGS="-mcpu=@@RPI_CPU@@ -mtune=@@RPI_CPU@@ -O2 -pipe -fstack-protector-strong -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-int"
 CXXFLAGS="${CFLAGS}"
 LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
 

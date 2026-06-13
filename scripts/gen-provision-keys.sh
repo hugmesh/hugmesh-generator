@@ -12,10 +12,17 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # brand.conf / brands/<BRAND>.conf may set CA_CERT/CA_KEY/CA_KEY_PASS (and BRAND).
 # Source them so the pki-role kubeadm-CA seeding decision below sees a CA set via
 # a profile; env + CLI flags (parsed later) still take precedence.
-[ -f "${REPO_DIR}/brand.conf" ] && . "${REPO_DIR}/brand.conf" || true
+# A MISSING brand.conf is fine (it is optional); a PRESENT one that fails to
+# source is FATAL — silently continuing would bake the wrong brand/CA.
+if [ -f "${REPO_DIR}/brand.conf" ]; then
+  # shellcheck disable=SC1091
+  . "${REPO_DIR}/brand.conf" \
+    || { echo "ERROR: failed to source ${REPO_DIR}/brand.conf — fix or remove it (refusing to bake the wrong brand/CA)" >&2; exit 1; }
+fi
 if [ -n "${BRAND:-}" ] && [ -f "${REPO_DIR}/brands/${BRAND}.conf" ]; then
   # shellcheck disable=SC1090
-  . "${REPO_DIR}/brands/${BRAND}.conf"
+  . "${REPO_DIR}/brands/${BRAND}.conf" \
+    || { echo "ERROR: failed to source ${REPO_DIR}/brands/${BRAND}.conf" >&2; exit 1; }
 fi
 
 OUT_DIR="${REPO_DIR}/keys-out"
@@ -150,7 +157,6 @@ rm -rf "${OUT_DIR}"
 cp -r "${TEMPLATE}" "${OUT_DIR}"
 find "${OUT_DIR}" -name 'README.md' -delete 2>/dev/null || true
 
-# Select the role-specific manifest
 case "${ROLE}" in
     pki) : ;;  # provision.json is already the pki example (full config + users)
     backend|frontend|host)
@@ -228,19 +234,39 @@ PY
     printf '%s\n' "${REGISTRY_MACHINE_KEY_FP:-}" > "${DR_DIR}/machine_key_fp"
 
     # registry-pub.ed25519: the BAKED public verifying half. NEVER a private key.
+    # validate_registry_pub FILE SRC — the written one-liner MUST round-trip as
+    # an Ed25519 PUBLIC key (base64 X.509 SPKI DER == RegistrySigner.
+    # publicKeyBase64()). openssl -pubin also REJECTS private-key input, so a
+    # mistakenly-supplied signing key can never be baked. Anything else (raw
+    # garbage, wrong algorithm, truncated base64) is a hard error: baking
+    # unverifiable bytes as the Layer-B verifying key would brick (or worse,
+    # corrupt) the node's registry verification while announcing success.
+    validate_registry_pub() {
+        local f="$1" src="$2"
+        if ! base64 -d "${f}" 2>/dev/null \
+                | openssl pkey -pubin -inform DER -noout -text 2>/dev/null \
+                | grep -qi 'ED25519'; then
+            echo "ERROR: ${src} does not parse as an Ed25519 PUBLIC key" >&2
+            echo "       (expected PEM 'BEGIN PUBLIC KEY' or base64 X.509 SPKI DER; NEVER a private key)" >&2
+            rm -f "${f}"
+            exit 1
+        fi
+    }
     REGISTRY_PUB_FILE="${REGISTRY_PUB_FILE:-}"
     if [ -n "${REGISTRY_PUB_FILE}" ] && [ -f "${REGISTRY_PUB_FILE}" ]; then
         # Accept either a PEM (-----BEGIN PUBLIC KEY-----) or raw base64 SPKI DER;
         # normalise to the base64-SPKI-DER one-liner the node verifies with.
         if grep -q 'BEGIN PUBLIC KEY' "${REGISTRY_PUB_FILE}" 2>/dev/null; then
-            openssl pkey -pubin -in "${REGISTRY_PUB_FILE}" -outform DER 2>/dev/null \
+            openssl pkey -pubin -in "${REGISTRY_PUB_FILE}" -outform DER \
                 | base64 -w0 > "${DR_DIR}/registry-pub.ed25519"
         else
             tr -d '[:space:]' < "${REGISTRY_PUB_FILE}" > "${DR_DIR}/registry-pub.ed25519"
         fi
+        validate_registry_pub "${DR_DIR}/registry-pub.ed25519" "--registry-pub ${REGISTRY_PUB_FILE}"
         echo "  ${DR_DIR}/registry-pub.ed25519  (BAKED registry verifying key from ${REGISTRY_PUB_FILE})"
     elif [ -n "${REGISTRY_PUB:-}" ]; then
         printf '%s' "${REGISTRY_PUB}" | tr -d '[:space:]' > "${DR_DIR}/registry-pub.ed25519"
+        validate_registry_pub "${DR_DIR}/registry-pub.ed25519" "REGISTRY_PUB env"
         echo "  ${DR_DIR}/registry-pub.ed25519  (BAKED registry verifying key from REGISTRY_PUB env)"
     else
         # PLACEHOLDER — fails CLOSED. The operator MUST replace this on the key-USB
@@ -281,6 +307,14 @@ provision_mail_oauth() {
     local creds_out="${sdir}/cluster-creds.json"
 
     # 1) Copy from an existing KEYS tree if asked and present.
+    # If --keys-src was EXPLICITLY given it MUST carry secrets/mail.json — a wrong
+    # or unmounted path silently falling through to empty creds would ship a prod
+    # keys USB with SMTP + OAuth quietly absent. Hard-error instead of degrading.
+    if [ -n "${KEYS_SRC}" ] && [ ! -f "${KEYS_SRC}/secrets/mail.json" ]; then
+        echo "ERROR: --keys-src given (${KEYS_SRC}) but ${KEYS_SRC}/secrets/mail.json not found" >&2
+        echo "       (wrong path, USB not mounted, or no carried creds — refusing to fall through to empty mail/OAuth)" >&2
+        exit 1
+    fi
     if [ -n "${KEYS_SRC}" ] && [ -f "${KEYS_SRC}/secrets/mail.json" ]; then
         echo "==> Mail/OAuth: copying creds from ${KEYS_SRC}/secrets/"
         cp "${KEYS_SRC}/secrets/mail.json" "${mail_json}"

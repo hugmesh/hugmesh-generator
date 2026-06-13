@@ -58,6 +58,26 @@ PENTEST_ENVVARS := PENTEST='$(PENTEST)' PENTEST_ONLY='$(PENTEST_ONLY)' \
                    PENTEST_ENV='$(PENTEST_ENV)' PENTEST_SCAN='$(PENTEST_SCAN)' \
                    PENTEST_PIPELINE='$(PENTEST_PIPELINE)'
 
+# ── build-all-roles.sh ROLE-SELECTOR env knobs ─────────────────────────────────
+# build-all-roles.sh reads these from the ENVIRONMENT to pick the fleet
+# (FRITE/FRITE_ONLY add the Frite; X86_OMNIBUS/X86_ALL/X86_ROLES pick the x86 set;
+# SKIP_X86/SKIP_KEYS drop work). They default EMPTY so a plain build keeps the
+# script's own defaults; `?=` lets `X86_OMNIBUS=1 make build-all` (env) and
+# `make build-all X86_OMNIBUS=1` (CLI) both set them. Threaded onto the native
+# leg via $(ALL) and forwarded into the in-container `make` re-invoke (Docker leg)
+# exactly like PENTEST_ENVVARS — otherwise the Docker path silently drops them and
+# builds only the default fleet while echoing the requested roles past.
+FRITE       ?=
+FRITE_ONLY  ?=
+X86_OMNIBUS ?=
+X86_ALL     ?=
+X86_ROLES   ?=
+SKIP_X86    ?=
+SKIP_KEYS   ?=
+ROLESET_ENVVARS := FRITE='$(FRITE)' FRITE_ONLY='$(FRITE_ONLY)' \
+                   X86_OMNIBUS='$(X86_OMNIBUS)' X86_ALL='$(X86_ALL)' X86_ROLES='$(X86_ROLES)' \
+                   SKIP_X86='$(SKIP_X86)' SKIP_KEYS='$(SKIP_KEYS)'
+
 # ── Build ENV selector (BAKED at image creation) ───────────────────────────────
 # ENV=test (DEFAULT, local-first/safe): LAN-only — cluster wildcard DNS app kept,
 #          cloudflared/ACME go-live app pruned from the baked tree, no public
@@ -131,13 +151,31 @@ HOST_UID := $(shell id -u)
 HOST_GID := $(shell id -g)
 SUDO     := $(shell [ "$$(id -u)" = 0 ] || echo sudo)
 
+# External-CA mount (Docker leg). CA_CERT/CA_KEY are HOST paths; only $(CURDIR)
+# and $(WORK_DIR) are bind-mounted, so a CA outside the repo tree does NOT exist
+# in-container — gen-keystores.sh validate_external_ca then exits 'CA not readable'
+# and (pre-fix) build-all-roles.sh swallowed it into a warn, shipping keys WITHOUT
+# the requested external CA. Mount each set CA file read-only at a fixed in-container
+# path and pass THAT path as the env var, so external-CA builds work from any path.
+# Unset = self-signed root: forward the (empty) env vars as before.
+CA_DOCKER_MOUNTS :=
+CA_DOCKER_ENV    := -e CA_CERT -e CA_KEY -e CA_KEY_PASS
+ifneq ($(strip $(CA_CERT)),)
+CA_DOCKER_MOUNTS += -v $(abspath $(CA_CERT)):/ca/ca.crt:ro
+CA_DOCKER_ENV    := -e CA_CERT=/ca/ca.crt -e CA_KEY_PASS
+ifneq ($(strip $(CA_KEY)),)
+CA_DOCKER_MOUNTS += -v $(abspath $(CA_KEY)):/ca/ca.key:ro
+CA_DOCKER_ENV    := -e CA_CERT=/ca/ca.crt -e CA_KEY=/ca/ca.key -e CA_KEY_PASS
+endif
+endif
+
 # Launch the builder image: privileged (build_img needs /dev/loop + mount),
 # repo at /src, output at /out, and the invoking uid/gid forwarded so the
 # in-container NATIVE build can chown artifacts back to the host user.
 DOCKER_RUN := docker run --rm --privileged \
   -v $(CURDIR):/src -v $(WORK_DIR):/out -w /src \
   -e HOST_UID=$(HOST_UID) -e HOST_GID=$(HOST_GID) \
-  -e CA_CERT -e CA_KEY -e CA_KEY_PASS $(IMAGE)
+  $(CA_DOCKER_MOUNTS) $(CA_DOCKER_ENV) $(IMAGE)
 
 # ensure-image — auto-build the builder image if it is missing.
 ensure-image:
@@ -158,11 +196,14 @@ endef
 # passes BRAND_FLAGS through to BOTH builders via its "$@" passthrough.
 RPI := $(BRAND_ENV) $(SUDO) ./build-rpi5-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 X86 := $(BRAND_ENV) $(SUDO) ./build-x86-host-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
-FRITE := $(BRAND_ENV) $(SUDO) ./build-frite-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(ENV_FLAGS) $(BRAND_FLAGS)
-ALL := $(PENTEST_ENVVARS) $(BRAND_ENV) $(SUDO) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(ENV_FLAGS) $(BRAND_FLAGS)
+FRITE_BUILD := $(BRAND_ENV) $(SUDO) ./build-frite-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(ENV_FLAGS) $(BRAND_FLAGS)
+ALL := $(ROLESET_ENVVARS) $(PENTEST_ENVVARS) $(BRAND_ENV) $(SUDO) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(ENV_FLAGS) $(BRAND_FLAGS)
 
 RPI_ROLES := pki backend frontend
-X86_ROLES := pki be fe be+gpu
+# X86_ROLE_LIST: the role list the local `x86` target loops over. Deliberately NOT
+# named X86_ROLES: that is a build-all-roles.sh ENV KNOB (see ROLESET_ENVVARS) and
+# a same-named := make-var would shadow a user's `X86_ROLES=... make build-all`.
+X86_ROLE_LIST := pki be fe be+gpu
 
 # Libre Computer Le/La Frite LIGHT-DESKTOP client image (Amlogic arm64).
 #   FRITE_BOARD  = la-frite (DEFAULT) | le-potato | sweet-potato
@@ -208,7 +249,7 @@ clean: ## wipe the work dir (forces a from-scratch rebuild)
 build-all: ## build the DEFAULT fleet: 3 Pi + x86 pki/be/fe/be+gpu (--resume reuses sysroots)
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make build-all NATIVE=1 WORK_DIR=/out RESUME='$(RESUME)' IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS)
+	$(DOCKER_RUN) make build-all NATIVE=1 WORK_DIR=/out RESUME='$(RESUME)' IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS) $(ROLESET_ENVVARS)
 else
 	$(ALL) $(RESUME)
 	$(chown-artifacts)
@@ -234,7 +275,7 @@ prod: ## build the PROD fleet (ENV=prod, REAL domain) — announced; creds from 
 rebuild: ## from-scratch: wipe the work dir, then build the whole default fleet
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make rebuild NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
+	$(DOCKER_RUN) make rebuild NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS) $(PENTEST_ENVVARS) $(ROLESET_ENVVARS)
 else
 	$(MAKE) clean NATIVE=1
 	$(ALL)
@@ -255,7 +296,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make x86 NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
 else
-	@for r in $(X86_ROLES); do echo "==> x86 $$r"; $(X86) --role $$r || exit 1; done
+	@for r in $(X86_ROLE_LIST); do echo "==> x86 $$r"; $(X86) --role $$r || exit 1; done
 	$(chown-artifacts)
 endif
 
@@ -291,7 +332,7 @@ ifndef NATIVE
 	$(MAKE) ensure-image
 	$(DOCKER_RUN) make frite NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) $(BRAND_PASS) $(FRITE_PASS)
 else
-	$(FRITE) --board $(FRITE_BOARD) --flavor $(FRITE_FLAVOR)
+	$(FRITE_BUILD) --board $(FRITE_BOARD) --flavor $(FRITE_FLAVOR)
 	$(chown-artifacts)
 endif
 
