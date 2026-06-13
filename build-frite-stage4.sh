@@ -524,11 +524,13 @@ if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
         exit 1
     fi
 fi
-# The LIVE/INSTALLER images need mksquashfs + xorriso to wrap the squashfs ISO.
+# The LIVE/INSTALLER images need a squasher (mksquashfs, or tar2sqfs from
+# squashfs-tools-ng) + xorriso to wrap the squashfs ISO.
 if ${BUILD_LIVE} || ${BUILD_INSTALLER}; then
-    for t in mksquashfs xorriso; do
-        command -v "$t" >/dev/null || warn "missing ${t} — the live/installer image step will warn + skip"
-    done
+    command -v xorriso >/dev/null || warn "missing xorriso — the live/installer image step will warn + skip"
+    if ! command -v mksquashfs >/dev/null && ! command -v tar2sqfs >/dev/null; then
+        warn "missing mksquashfs AND tar2sqfs — the live/installer image step will warn + skip"
+    fi
 fi
 info "Cross-compiler: $(${CROSS_TARGET}-gcc --version | head -1)"
 info "Jobs: ${JOBS}"
@@ -959,7 +961,9 @@ build_live_iso() {
     #   /  LiveOS/squashfs.img                        (the rootfs)
     # u-boot (SPI/SD) + extlinux find squashfs.img and the kernel mounts it
     # read-only with an overlay (kernel has SQUASHFS + OVERLAY_FS + LOOP).
-    command -v mksquashfs >/dev/null || { warn "mksquashfs missing — skipping LIVE image."; return 0; }
+    if ! command -v mksquashfs >/dev/null && ! command -v tar2sqfs >/dev/null; then
+        warn "mksquashfs/tar2sqfs missing — skipping LIVE image."; return 0
+    fi
     [ -f "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" ] || { warn "no kernel in boot stage — skipping LIVE image."; return 0; }
 
     # The LIVE flavor is unbootable without the dmsquash-live initramfs (the
@@ -980,9 +984,15 @@ build_live_iso() {
     cp "${FRITE_LIVE_INITRD}" "${live_root}/initrd.img"
 
     info "Squashing the rootfs (LIVE) ..."
-    mksquashfs "${SYSROOT}" "${live_root}/LiveOS/squashfs.img" \
-        -noappend -comp xz -e boot/dtb 2>/dev/null \
-        || mksquashfs "${SYSROOT}" "${live_root}/LiveOS/squashfs.img" -noappend
+    if command -v mksquashfs >/dev/null; then
+        mksquashfs "${SYSROOT}" "${live_root}/LiveOS/squashfs.img" \
+            -noappend -comp xz -e boot/dtb 2>/dev/null \
+            || mksquashfs "${SYSROOT}" "${live_root}/LiveOS/squashfs.img" -noappend
+    else
+        # squashfs-tools-ng fallback: tar stream with the same boot/dtb exclude.
+        tar -C "${SYSROOT}" --numeric-owner --exclude='./boot/dtb' -cpf - . \
+            | tar2sqfs -q -c xz -j "${JOBS}" "${live_root}/LiveOS/squashfs.img"
+    fi
 
     # extlinux for the LIVE boot: emit the INITRD line so u-boot loads the
     # dmsquash-live initramfs, which then mounts LiveOS/squashfs.img as the

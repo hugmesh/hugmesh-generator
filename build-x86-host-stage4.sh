@@ -789,9 +789,14 @@ if ${BUILD_IMG}; then
     fi
 fi
 if ${LIVE_ISO}; then
-    for t in grub-mkrescue mksquashfs xorriso; do
+    for t in grub-mkrescue xorriso; do
         command -v "$t" >/dev/null || { warn "missing ${t}; disabling --live-iso"; LIVE_ISO=false; break; }
     done
+    # Either mksquashfs (sys-fs/squashfs-tools) or tar2sqfs (sys-fs/squashfs-tools-ng)
+    # can squash the rootfs; the squash step below picks whichever is present.
+    if ${LIVE_ISO} && ! command -v mksquashfs >/dev/null && ! command -v tar2sqfs >/dev/null; then
+        warn "missing mksquashfs AND tar2sqfs; disabling --live-iso"; LIVE_ISO=false
+    fi
 fi
 if ${INSTALLER_ISO}; then
     command -v xorriso >/dev/null || warn "no xorriso; installer ISO will be left as a plain tree"
@@ -1018,6 +1023,11 @@ fi
 
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 export MAKEOPTS="-j${JOBS}"
+# Build chroot: /boot/efi exists in the baked fstab but is never mounted here.
+# Without this, mount-boot.eclass (linux-firmware, grub-themes) dies in
+# pkg_pretend ("/boot/efi not mounted") and ABORTS the ENTIRE package-set
+# emerge before anything merges — producing a payload-less stage4.
+export DONT_MOUNT_BOOT=1
 if [ ! -d /var/db/repos/gentoo/metadata ] && ! mountpoint -q /var/db/repos/gentoo; then
     emerge-webrsync
 fi
@@ -1035,6 +1045,18 @@ emerge --update --deep --newuse --keep-going \
     --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y \
     ${EMERGE_EXCLUDE} ${PKGS} \
     || echo "[build-x86] WARN: some stage4 packages failed; review the emerge output"
+# The packages.list payload is MANDATORY for a usable role image — fail LOUDLY
+# if the core set is missing rather than emit a payload-less stage4 (this
+# happened silently for every x86 role until the DONT_MOUNT_BOOT fix above).
+missing=""
+for b in grub-install dracut parted jq nmcli; do
+    command -v "\${b}" >/dev/null || missing="\${missing} \${b}"
+done
+if [ -n "\${missing}" ]; then
+    echo "[build-x86] ERROR: stage4 payload incomplete — missing:\${missing}"
+    echo "[build-x86]        packages.list did not merge; review the emerge output above."
+    exit 1
+fi
 CHROOT
 
 # ── 6. Mesh VPN (amd64 static binaries) ────────────────────────────
@@ -1231,7 +1253,7 @@ build_img() {
 
     # ── Locate the kernel + disk initramfs on the ext4 /boot ──────────
     kver="$(ls "${root_mnt}/lib/modules" 2>/dev/null | sort -V | tail -1)"
-    vmlinuz="$(ls -1 "${root_mnt}/boot/vmlinuz-"* 2>/dev/null | sort -V | tail -1 || true)"
+    vmlinuz="$(ls -1 "${root_mnt}/boot/vmlinuz-"* "${root_mnt}/boot/vmlinuz" 2>/dev/null | sort -V | tail -1 || true)"
     initrd="$(ls -1 "${root_mnt}/boot/initramfs-"*.img 2>/dev/null | grep -v 'initramfs-live' | sort -V | tail -1 || true)"
     vmlinuz="${vmlinuz##*/}"; initrd="${initrd##*/}"
 
@@ -1315,7 +1337,7 @@ if ${BUILD_IMG}; then
     banner "Building raw .img (UEFI GPT: ESP + ext4 root, GRUB-EFI --removable)"
     # A bootable image needs a kernel on the ext4 /boot. Guard like the ISO path:
     # if no vmlinuz is present (kernel skipped / build failed), skip rather than crash.
-    if [ -z "$(ls -1 "${SYSROOT}/boot/vmlinuz-"* 2>/dev/null)" ]; then
+    if [ -z "$(ls -1 "${SYSROOT}/boot/vmlinuz-"* "${SYSROOT}/boot/vmlinuz" 2>/dev/null)" ]; then
         warn "No vmlinuz in ${SYSROOT}/boot — skipping .img (don't pass --skip-kernel)."
         IMG_PATH="(not built — kernel missing)"
     else
@@ -1329,7 +1351,7 @@ fi
 ISO_PATH="(not built)"
 if ! ${SKIP_ISO}; then
     KVER="$(ls "${SYSROOT}/lib/modules" 2>/dev/null | sort -V | tail -1)"
-    VMLINUZ="$(ls -1 "${SYSROOT}/boot/vmlinuz-"* 2>/dev/null | sort -V | tail -1 || true)"
+    VMLINUZ="$(ls -1 "${SYSROOT}/boot/vmlinuz-"* "${SYSROOT}/boot/vmlinuz" 2>/dev/null | sort -V | tail -1 || true)"
 
     if ${LIVE_ISO} && [ -n "${VMLINUZ}" ] && [ -n "${KVER}" ]; then
         ISO_PATH="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.live.iso"
@@ -1348,8 +1370,16 @@ CHROOT
         cp "${VMLINUZ}" "${ISO_DIR}/boot/vmlinuz"
         [ -f "${SYSROOT}/boot/initramfs-live.img" ] && cp "${SYSROOT}/boot/initramfs-live.img" "${ISO_DIR}/boot/initramfs.img"
         info "Squashing rootfs (this can take a while)..."
-        mksquashfs "${SYSROOT}" "${ISO_DIR}/LiveOS/squashfs.img" \
-            -comp zstd -e proc sys dev run var/cache/distfiles >/dev/null
+        if command -v mksquashfs >/dev/null; then
+            mksquashfs "${SYSROOT}" "${ISO_DIR}/LiveOS/squashfs.img" \
+                -comp zstd -e proc sys dev run var/cache/distfiles >/dev/null
+        else
+            # squashfs-tools-ng fallback: same excludes, xz (kernel has SQUASHFS_XZ).
+            tar -C "${SYSROOT}" --numeric-owner \
+                --exclude='./proc' --exclude='./sys' --exclude='./dev' \
+                --exclude='./run' --exclude='./var/cache/distfiles' \
+                -cpf - . | tar2sqfs -q -c xz -j "${JOBS}" "${ISO_DIR}/LiveOS/squashfs.img"
+        fi
         # Unify the cmdline with the .img: source GRUB_CMDLINE_LINUX from the same
         # grub defaults (full KSPP/LSM/audit/cgroup hardening), not a short literal.
         LIVE_CMDLINE="$(. "${SPECS_DIR}/etc/default/grub"; printf '%s' "${GRUB_CMDLINE_LINUX:-lsm=yama,selinux,bpf selinux=1}")"
