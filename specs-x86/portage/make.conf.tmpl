@@ -9,7 +9,14 @@ CHOST="@@CHOST@@"
 
 # Generic, portable hardened flags. -march=native would tie the image to the
 # build host's CPU; x86-64-v2 is a safe baseline for modern desktops/servers.
-COMMON_FLAGS="-march=x86-64-v2 -O2 -pipe -fstack-protector-strong -D_FORTIFY_SOURCE=2"
+# NOTE: do NOT add -D_FORTIFY_SOURCE here — the hardened profile/toolchain already
+# defines it, and a second definition on the command line makes packages that set
+# their own (e.g. sys-apps/policycoreutils, which builds -Werror) fail with
+# "_FORTIFY_SOURCE redefined [-Werror]". FORTIFY is retained via the hardened default.
+# -Wno-error=... downgrades GCC-15's now-default *errors* (implicit-function-
+# declaration etc.) back to warnings so older C (e.g. grub's makedev in getroot.c)
+# still builds; KSPP/SSP/relro hardening is unaffected.
+COMMON_FLAGS="-march=x86-64-v2 -O2 -pipe -fstack-protector-strong -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-int"
 CFLAGS="${COMMON_FLAGS}"
 CXXFLAGS="${COMMON_FLAGS}"
 LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
@@ -18,8 +25,20 @@ MAKEOPTS="-j@@JOBS@@"
 # -userfetch/-userpriv: don't drop to the 'portage' user (can't traverse a
 # mode-700 / encrypted work dir). Sandbox off for the native chroot build.
 FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox -ipc-sandbox"
-PKGDIR="@@WORK_DIR@@/pkgdir"
-DISTDIR="@@WORK_DIR@@/distfiles"
+# Chroot-INTERNAL cache paths. The old @@WORK_DIR@@/{pkgdir,distfiles} rendered
+# to the HOST-absolute build dir, which inside the chroot resolves UNDER the
+# sysroot (sysroot/home/...): binpkgs+distfiles (2.4 GB) then got baked into
+# every stage4/.img/squashfs (var/cache IS excluded; that home path was not),
+# leaking host paths and bloating artifacts. /var/cache is excluded from the
+# stage4 tar + squashfs, so these never ship, and they persist across the 4
+# roles in one shared sysroot so role 2-4 reuse role 1's binpkgs (--usepkg).
+PKGDIR="/var/cache/binpkgs"
+DISTDIR="/var/cache/distfiles"
+# Persist per-package build logs (default temp build.log is wiped on clean, so a
+# compile failure's cause is lost). Keeps every package's log under this dir for
+# post-mortem of OOM/compile failures. Excluded from artifacts (it's under /var/log
+# which the stage4 keeps, but it's small text; harmless).
+PORTAGE_LOGDIR="/var/log/portage/build"
 
 # Hardened USE baseline + container runtime + (optional) vendor-agnostic GPU stack.
 # @@GPU_USE@@ expands to the GPU USE flags (vulkan vaapi vdpau gbm egl gles2) for

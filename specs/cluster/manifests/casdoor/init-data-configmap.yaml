@@ -124,7 +124,7 @@ data:
           "name": "snapdragon",
           "displayName": "Snapdragon Systems",
           "websiteUrl": "https://snapdragon.systems",
-          "passwordType": "plain",
+          "passwordType": "pbkdf2-salt",
           "languages": ["en"],
           "enableSoftDeletion": false,
           "isProfilePublic": false

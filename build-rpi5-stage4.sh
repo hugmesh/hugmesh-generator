@@ -16,7 +16,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPECS_DIR="${SCRIPT_DIR}/specs-rpi5"     # aarch64/RPi5-specific specs
 SHARED_SPECS="${SCRIPT_DIR}/specs"       # arch-agnostic specs (etc/, cluster/, usr/)
 
-# ── Defaults ───────────────────────────────────────────────────────
 WORK_DIR=""
 # Per-arch build subdirectory under WORK_DIR. The heavy, ARCH-SPECIFIC build
 # tree (sysroot, ISO staging, distfiles, pkgdir, seed/binary downloads) lives
@@ -95,7 +94,6 @@ TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
 
-# ── Colors ─────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
@@ -108,7 +106,6 @@ info()   { echo -e "${GREEN}    $1${RESET}"; }
 warn()   { echo -e "${YELLOW}    WARNING: $1${RESET}"; }
 err()    { echo -e "${RED}    ERROR: $1${RESET}" >&2; }
 
-# ── Usage / man page ──────────────────────────────────────────────
 usage() {
 cat <<'MANEOF'
 NAME
@@ -514,7 +511,6 @@ if [ -n "${CONFIG_FILE}" ]; then
     echo "Loaded brand profile: ${CONFIG_FILE} (brand=${BRAND}, domain=${CLUSTER_DOMAIN})"
 fi
 
-# ── Option parsing ─────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -w|--work-dir)        WORK_DIR="$2";           shift 2 ;;
@@ -1023,10 +1019,8 @@ rebrand_sysroot() {
     info "Rebrand complete (compound names like '${BRAND}-systems-web' may want review)."
 }
 
-# ── 0. Verify prerequisites ───────────────────────────────────────
 banner "Verifying prerequisites"
 
-# Check spec directories (arch-specific + shared)
 if [ ! -d "${SPECS_DIR}" ]; then
     err "RPi5 specs directory not found: ${SPECS_DIR}"
     err "Expected to find it next to this script, or pass --specs-dir."
@@ -1040,7 +1034,6 @@ fi
 info "RPi5 specs:   ${SPECS_DIR}"
 info "Shared specs: ${SHARED_SPECS}"
 
-# Check toolchain
 for tool in "${CROSS_TARGET}-gcc" "${CROSS_TARGET}-strip" curl tar file; do
     if ! command -v "${tool}" &>/dev/null; then
         err "${tool} not found in PATH."
@@ -1093,7 +1086,6 @@ fi
 info "Cross-compiler: $(${CROSS_TARGET}-gcc --version | head -1)"
 info "Jobs: ${JOBS}"
 
-# ── 1. Directory layout ───────────────────────────────────────────
 banner "Preparing build directories"
 
 mkdir -p "${WORK_DIR}"
@@ -1105,11 +1097,9 @@ info "Work directory: ${WORK_DIR}  (products land here)"
 info "Build root:     ${BUILD_ROOT}  (per-arch sysroot/distfiles/pkgdir)"
 info "Sysroot:        ${SYSROOT}"
 
-# Start build log
 exec > >(tee -a "${LOG_FILE}") 2>&1
 info "Logging to ${LOG_FILE}"
 
-# ── 2. Fetch seed stage3 ──────────────────────────────────────────
 banner "Fetching latest arm64 stage3 seed tarball"
 
 # The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
@@ -1126,7 +1116,6 @@ else
     info "Using cached ${STAGE3_BASENAME}"
 fi
 
-# ── 3. Extract seed stage3 into sysroot ────────────────────────────
 banner "Extracting seed stage3 into sysroot"
 
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
@@ -1145,7 +1134,6 @@ else
     info "Extracted into ${SYSROOT} (device nodes skipped; devtmpfs at boot)"
 fi
 
-# ── 4. Install spec files into sysroot portage ─────────────────────
 banner "Installing spec files into sysroot (hardened profile)"
 
 # Compute PCIE_LINE for templates
@@ -1155,7 +1143,6 @@ else
     PCIE_LINE="# dtparam=pciex1_gen=3"
 fi
 
-# Portage directories
 mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.mask,profile,env,package.env,repos.conf}
 
 # Point the sysroot at the HOST's gentoo ebuild repo (absolute path) so the
@@ -1184,7 +1171,6 @@ cp "${SPECS_DIR}/portage/package.env/"*                   "${SYSROOT}/etc/portag
 # env files (cross-go.conf) are rendered separately just below.
 cp "${SPECS_DIR}/portage/env/"*.conf                      "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 
-# Templated portage specs
 render_template "${SPECS_DIR}/portage/make.conf.tmpl"     "${SYSROOT}/etc/portage/make.conf"
 render_template "${SPECS_DIR}/portage/env/cross-go.conf.tmpl" "${SYSROOT}/etc/portage/env/cross-go.conf"
 
@@ -1244,7 +1230,6 @@ cp "${SHARED_SPECS}/etc/headscale/config.yaml"            "${SYSROOT}/etc/headsc
 # re-renders it from policy.hujson.tmpl. (See build-x86-host-stage4.sh rationale.)
 cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson" "${SYSROOT}/etc/headscale/policy.hujson"
 
-# KEYS-USB provisioning engine
 mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/var/lib/keys-provision"
 cp "${SHARED_SPECS}/etc/keys-provision/provision.sh"      "${SYSROOT}/usr/sbin/keys-provision"
 chmod +x "${SYSROOT}/usr/sbin/keys-provision"
@@ -1292,7 +1277,6 @@ cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson"     "${SYSROOT}/etc/h
 cp "${SHARED_SPECS}/etc/headscale/policy.hujson.tmpl"          "${SYSROOT}/etc/headscale/policy.hujson.tmpl"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-policy-sync"         "${SYSROOT}/etc/snapdragon/registry/cron-policy-sync"
 
-# ── Cluster GitOps payload + node role marker ─────────────────────
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
@@ -1324,7 +1308,6 @@ mkdir -p "${SYSROOT}/etc/local.d"
 render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
 
-# Hostname, timezone, locale
 echo "${HOSTNAME}" > "${SYSROOT}/etc/hostname"
 mkdir -p "${SYSROOT}/etc/conf.d"
 echo "hostname=\"${HOSTNAME}\"" > "${SYSROOT}/etc/conf.d/hostname"
@@ -1332,12 +1315,10 @@ echo "${TIMEZONE}" > "${SYSROOT}/etc/timezone"
 ln -sf "/usr/share/zoneinfo/${TIMEZONE}" "${SYSROOT}/etc/localtime"
 echo "en_US.UTF-8 UTF-8" > "${SYSROOT}/etc/locale.gen"
 
-# CNI / containerd directories
 mkdir -p "${SYSROOT}/opt/cni/bin"
 mkdir -p "${SYSROOT}/etc/cni/net.d"
 mkdir -p "${SYSROOT}/etc/containerd/certs.d"
 
-# OpenRC service links
 mkdir -p "${SYSROOT}/etc/runlevels/default"
 # growroot expands the root fs to fill the medium on first boot; it orders itself
 # before keys-provision so provisioning sees the full disk (no-op in containers).
@@ -1362,7 +1343,6 @@ harden_radios "${SYSROOT}"
 
 info "Profile: ${PROFILE_PATH}"
 
-# ── 5. Cross-emerge helper ────────────────────────────────────────
 cross_emerge() {
     # Keep emerge's log + dependency-metadata cache inside the work dir instead
     # of the host's /var/log + /var/cache/edb (which are root-owned). Still needs
@@ -1380,7 +1360,6 @@ cross_emerge() {
         "$@"
 }
 
-# ── 6. Build @system ──────────────────────────────────────────────
 banner "Phase 1: Cross-building @system (hardened)"
 
 # A cross-built stage4 must NOT (cross-)rebuild the toolchain. Cross-building a
@@ -1403,15 +1382,12 @@ cross_emerge --oneshot --update sys-apps/baselayout
 cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" @system \
     || warn "@system had package failures (--keep-going); continuing"
 
-# ── 7. Build stage4 packages ──────────────────────────────────────
 banner "Phase 2: Cross-building stage4 packages"
 
-# Read package list from spec file, stripping comments and blanks
 mapfile -t STAGE4_PACKAGES < <(
     grep -v '^\s*#' "${SPECS_DIR}/portage/packages.list" | grep -v '^\s*$'
 )
 
-# Append user-specified extra packages
 if [ -n "${EXTRA_PACKAGES}" ]; then
     read -ra _extras <<< "${EXTRA_PACKAGES}"
     STAGE4_PACKAGES+=("${_extras[@]}")
@@ -1441,7 +1417,6 @@ if [ -d "${SYSROOT}/boot" ]; then
     info "Boot config written (config.txt + cmdline.txt) over the firmware defaults"
 fi
 
-# ── 7b. Install mesh VPN (headscale + tailscale) ───────────────────
 if ${SKIP_MESH}; then
     banner "Phase 2.5: SKIPPED mesh VPN (--skip-mesh)"
 else
@@ -1479,7 +1454,6 @@ else
     fi
 fi
 
-# ── 8. Cross-compile the kernel ───────────────────────────────────
 if ${SKIP_KERNEL}; then
     banner "Phase 3: SKIPPED (--skip-kernel)"
 else
@@ -1538,7 +1512,6 @@ else
     fi
 fi
 
-# ── 9. Clean sysroot ──────────────────────────────────────────────
 if ${SKIP_CLEAN}; then
     banner "Cleaning: SKIPPED (--skip-clean)"
 else
@@ -1561,7 +1534,6 @@ else
     info "Sysroot cleaned and binaries stripped."
 fi
 
-# ── 10. Package stage4 tarball ─────────────────────────────────────
 banner "Phase 4: Packaging stage4 tarball"
 
 STAGE4_TARBALL="${WORK_DIR}/${BRAND}-rpi5-arm64-${ROLE}-${ENV}-${BUILD_TS}.stage4.tar.xz"
@@ -1761,7 +1733,6 @@ else
     banner "Phase 5: SKIPPED .img (--no-img)"
 fi
 
-# ── 11. Build bootable installer ISO (opt-in: --iso / --both) ──────
 if ${SKIP_ISO}; then
     banner "Phase 6: SKIPPED installer ISO (default; pass --iso to build it)"
     ISO_PATH="(not built)"
@@ -1780,7 +1751,6 @@ else
 
     mkdir -p "${ISO_DIR}"/{boot,stage4,EFI/BOOT}
 
-    # Boot files from sysroot
     cp "${SYSROOT}/boot/${RPI_KERNEL_IMG}" "${ISO_DIR}/boot/"
     cp "${SYSROOT}/boot/config.txt"        "${ISO_DIR}/boot/"
     cp "${SYSROOT}/boot/cmdline.txt"       "${ISO_DIR}/boot/"
@@ -1791,10 +1761,8 @@ else
         cp "${SYSROOT}/boot/${fw}" "${ISO_DIR}/boot/" 2>/dev/null || true
     done
 
-    # Stage4 tarball
     cp "${STAGE4_TARBALL}" "${ISO_DIR}/stage4/"
 
-    # Installer script from spec file
     cp "${SPECS_DIR}/installer/install.sh" "${ISO_DIR}/install.sh"
     chmod +x "${ISO_DIR}/install.sh"
 
@@ -1812,7 +1780,6 @@ else
     fi   # end kernel-present check
 fi
 
-# ── 12. Summary ────────────────────────────────────────────────────
 echo ""
 echo -e "${CYAN}${BOLD}=============================================="
 echo "  RPi 5 Hardened + Kubernetes Stage4 Complete"

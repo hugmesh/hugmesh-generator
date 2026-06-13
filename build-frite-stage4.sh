@@ -54,12 +54,10 @@
 # `INITRD /initrd.img`. The INSTALLER flavor is unchanged (real partitioned root).
 set -euo pipefail
 
-# ── Resolve SCRIPT_DIR (where the spec trees live) ─────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPECS_DIR="${SCRIPT_DIR}/specs-frite"    # aarch64/Frite-specific specs
 SHARED_SPECS="${SCRIPT_DIR}/specs"       # arch-agnostic specs (mesh, provisioning, sshd)
 
-# ── Defaults ───────────────────────────────────────────────────────
 WORK_DIR=""
 BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-frite}"   # per-arch isolation (never shares the Pi/x86 sysroot)
 CROSS_TARGET="aarch64-unknown-linux-gnu"
@@ -130,7 +128,6 @@ SKIP_TAILSCALE=false
 FRITE_UBOOT_URL="${FRITE_UBOOT_URL:-}"          # optional: prebuilt board u-boot.bin URL
 SKIP_UBOOT=false
 
-# ── Colors ─────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[0;33m'
 BOLD='\033[1m'; RESET='\033[0m'
 banner() { echo -e "\n${CYAN}${BOLD}==> $1${RESET}"; }
@@ -138,7 +135,6 @@ info()   { echo -e "${GREEN}    $1${RESET}"; }
 warn()   { echo -e "${YELLOW}    WARNING: $1${RESET}"; }
 err()    { echo -e "${RED}    ERROR: $1${RESET}" >&2; }
 
-# ── Usage ──────────────────────────────────────────────────────────
 usage() {
 cat <<'MANEOF'
 NAME
@@ -241,7 +237,6 @@ if [ -n "${CONFIG_FILE}" ]; then
     echo "Loaded brand profile: ${CONFIG_FILE} (brand=${BRAND}, domain=${CLUSTER_DOMAIN})"
 fi
 
-# ── Option parsing ─────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -w|--work-dir)        WORK_DIR="$2";              shift 2 ;;
@@ -497,7 +492,6 @@ rebrand_sysroot() {
     done < <(find "${SYSROOT}/etc/snapdragon" -type f -print0 2>/dev/null)
 }
 
-# ── 0. Verify prerequisites ───────────────────────────────────────
 banner "Verifying prerequisites"
 [ -d "${SPECS_DIR}" ]    || { err "Frite specs directory not found: ${SPECS_DIR}"; exit 1; }
 [ -d "${SHARED_SPECS}" ] || { err "Shared specs directory not found: ${SHARED_SPECS}"; exit 1; }
@@ -533,13 +527,11 @@ fi
 info "Cross-compiler: $(${CROSS_TARGET}-gcc --version | head -1)"
 info "Jobs: ${JOBS}"
 
-# ── 1. Directory layout ───────────────────────────────────────────
 banner "Preparing build directories"
 mkdir -p "${WORK_DIR}" "${BUILD_ROOT}"/{distfiles,pkgdir,log} "${SYSROOT}" "${STAGE_DIR}"
 exec > >(tee -a "${LOG_FILE}") 2>&1
 info "Logging to ${LOG_FILE}"
 
-# ── 2. Fetch + extract seed stage3 ─────────────────────────────────
 banner "Fetching latest arm64 stage3 seed tarball"
 STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
@@ -564,7 +556,6 @@ else
     info "Extracted into ${SYSROOT} (device nodes skipped; devtmpfs at boot)"
 fi
 
-# ── 3. Install spec files into sysroot portage ─────────────────────
 banner "Installing spec files into sysroot (hardened profile)"
 mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.mask,profile,env,package.env,repos.conf}
 GENTOO_REPO="$(portageq get_repo_path / gentoo 2>/dev/null || echo /var/db/repos/gentoo)"
@@ -691,7 +682,6 @@ done
 
 info "Profile: ${PROFILE_PATH}"
 
-# ── 4. Cross-emerge helper ────────────────────────────────────────
 cross_emerge() {
     mkdir -p "${BUILD_ROOT}/log" "${BUILD_ROOT}/edb"
     ROOT="${SYSROOT}" SYSROOT="${SYSROOT}" PORTAGE_CONFIGROOT="${SYSROOT}" \
@@ -708,13 +698,11 @@ else
                    --exclude sys-libs/glibc --exclude sys-devel/binutils)
 fi
 
-# ── 5. Build @system ──────────────────────────────────────────────
 banner "Phase 1: Cross-building @system (hardened)"
 cross_emerge --oneshot --update sys-apps/baselayout
 cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" @system \
     || warn "@system had package failures (--keep-going); continuing"
 
-# ── 6. Build stage4 packages (base + light desktop) ───────────────
 banner "Phase 2: Cross-building stage4 packages"
 mapfile -t STAGE4_PACKAGES < <(grep -v '^\s*#' "${SPECS_DIR}/portage/packages.list" | grep -v '^\s*$')
 if [ "${DESKTOP}" = "light" ]; then
@@ -745,7 +733,6 @@ if ! cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "$
     done
 fi
 
-# ── 7. Install mesh VPN (headscale + tailscale) — same as Pi5 ─────
 if ${SKIP_MESH}; then
     banner "Phase 2.5: SKIPPED mesh VPN (--skip-mesh)"
 else
@@ -845,7 +832,6 @@ else
     fi
 fi
 
-# ── 10. Clean sysroot ─────────────────────────────────────────────
 if ${SKIP_CLEAN}; then
     banner "Cleaning: SKIPPED (--skip-clean)"
 else
@@ -859,7 +845,6 @@ else
     info "Sysroot cleaned and binaries stripped."
 fi
 
-# ── 11. Stage the boot tree (kernel + DTB + extlinux.conf) ────────
 banner "Phase 4: Staging the boot tree"
 BOOT_STAGE="${STAGE_DIR}/boot"
 rm -rf "${BOOT_STAGE}"; mkdir -p "${BOOT_STAGE}/extlinux" "${BOOT_STAGE}/dtb"
@@ -937,7 +922,6 @@ if ${BUILD_LIVE} && ! ${SKIP_KERNEL}; then
     build_live_initramfs || warn "Live initramfs not built — see warnings above."
 fi
 
-# ── 12. Package the stage4 tarball ────────────────────────────────
 banner "Phase 4: Packaging stage4 tarball"
 STAGE4_TARBALL="${WORK_DIR}/${ART_PREFIX}.stage4.tar.xz"
 tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner --owner=0 --group=0 \
@@ -948,7 +932,6 @@ tar -C "${SYSROOT}" --numeric-owner --owner=0 --group=0 \
     -cJf "${STAGE4_TARBALL}" .
 info "Stage4 tarball: ${STAGE4_TARBALL} ($(du -sh "${STAGE4_TARBALL}" | cut -f1))"
 
-# ── 13. Build the LIVE image (squashfs rootfs; boots ephemerally) ──
 LIVE_PATH="(not built)"
 INSTALLER_PATH="(not built)"
 
@@ -1003,7 +986,6 @@ build_live_iso() {
     ${COMPRESS_IMG} && [ -f "${LIVE_PATH}" ] && { xz -T0 -9 -f "${LIVE_PATH}"; LIVE_PATH="${LIVE_PATH}.xz"; }
 }
 
-# ── 14. Build the INSTALLER image (live + install-frite.sh + stage4) ──
 build_installer_iso() {
     # The INSTALLER flavor: the LIVE boot tree PLUS the stage4 tarball + the
     # install-frite.sh script, so an operator boots it (off USB) and writes the
@@ -1042,7 +1024,6 @@ if ${BUILD_INSTALLER}; then
     build_installer_iso
 fi
 
-# ── 15. Summary ───────────────────────────────────────────────────
 echo ""
 echo -e "${CYAN}${BOLD}=============================================="
 echo "  Libre Computer Frite — Light Desktop Complete"

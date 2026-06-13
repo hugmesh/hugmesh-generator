@@ -31,6 +31,12 @@ lxde-base/lxappearance
 # autostart Openbox from .xinitrc and drop lightdm — see RUNNING.md.
 x11-misc/lightdm
 x11-misc/lightdm-gtk-greeter
+# The OpenRC `display-manager` init script does NOT ship with lightdm itself —
+# it is provided by gui-libs/display-manager-init (configured via
+# /etc/conf.d/display-manager DISPLAYMANAGER="lightdm", written by the builder).
+# Without this the builder would enable a service the image never provides and
+# the light-desktop image would boot to a bare console.
+gui-libs/display-manager-init
 
 # ── Minimal apps ───────────────────────────────────────────────────
 media-gfx/feh
