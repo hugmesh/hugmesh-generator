@@ -1,0 +1,25 @@
+# {{BRAND_TITLE}} federation-api — dynamic module-federation registry + manifest API.
+# Generated from snapdragon-generator/templates/apps/29-federation-api.yaml.hbs
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{BRAND}}-federation-api
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/federation-api
+    kustomize:
+      namespace: {{BRAND}}-backend
+      images:
+        - name: snapdragon-systems/federation-api
+          newName: registry.{{CLUSTER_DOMAIN}}/{{GITLAB_GROUP}}/{{BRAND}}-federation-api
+          newTag: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{BRAND}}-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
