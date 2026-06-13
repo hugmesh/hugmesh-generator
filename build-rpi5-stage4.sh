@@ -1357,13 +1357,19 @@ cross_emerge() {
     # of the host's /var/log + /var/cache/edb (which are root-owned). Still needs
     # to run as root: portage merges into the sysroot vdb and writes host caches.
     mkdir -p "${BUILD_ROOT}/log" "${BUILD_ROOT}/edb"
+    # LANG/LC_ALL: a working locale (stage3 has none) or btrfs-progs etc. die with
+    # "locale.Error: unsupported locale setting". --jobs=1: SERIALIZE package
+    # builds — the payload's Go packages (kubelet/runc/cni-plugins...) were
+    # OOM-killed at high concurrency on x86; one cross-Go build at a time keeps
+    # RAM bounded (override with CROSS_EMERGE_JOBS). (Mirrors the x86 builder.)
+    LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     ROOT="${SYSROOT}" \
     SYSROOT="${SYSROOT}" \
     PORTAGE_CONFIGROOT="${SYSROOT}" \
     EMERGE_LOG_DIR="${BUILD_ROOT}/log" \
     PORTAGE_DEPCACHEDIR="${BUILD_ROOT}/edb" \
     "${CROSS_TARGET}-emerge" \
-        --jobs="${JOBS}" \
+        --jobs="${CROSS_EMERGE_JOBS:-1}" \
         --load-average="${JOBS}" \
         --with-bdeps=n \
         "$@"

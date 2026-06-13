@@ -8,3 +8,7 @@ GOARCH=arm64
 GOOS=linux
 CC="@@CROSS_TARGET@@-gcc"
 CXX="@@CROSS_TARGET@@-g++"
+# Bound Go's internal build parallelism so a single cross-Go build (kubelet/runc/
+# cni-plugins) doesn't spike host RAM → OOM-killed compile (mirrors x86 GOMAXPROCS cap).
+GOFLAGS="-p=4"
+GOMAXPROCS=4
