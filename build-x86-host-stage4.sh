@@ -1028,7 +1028,11 @@ fi
 # build can still take the whole machine.
 EMERGE_JOBS=$(( JOBS / 4 )); [ "${EMERGE_JOBS}" -lt 2 ] && EMERGE_JOBS=2
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
-export MAKEOPTS="-j${JOBS}"
+# -l\${JOBS}: cap make's load so EMERGE_JOBS concurrent packages each running
+# make -j\${JOBS} don't multiply into runaway oversubscription (observed load
+# ~80 on 28 cores with <300 MB free — an OOM risk that fails compiles). emerge's
+# own --load-average gates new PACKAGE jobs; make's -l gates new COMPILER jobs.
+export MAKEOPTS="-j${JOBS} -l${JOBS}"
 export EMERGE_DEFAULT_OPTS="--jobs ${EMERGE_JOBS} --load-average ${JOBS} --usepkg=y --binpkg-respect-use=y"
 # Build chroot: /boot/efi exists in the baked fstab but is never mounted here.
 # Without this, mount-boot.eclass (linux-firmware, grub-themes) dies in
