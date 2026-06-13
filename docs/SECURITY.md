@@ -53,6 +53,25 @@ cross-namespace calls.
 - **Generated** by [`scripts/gen-keystores.sh`](../scripts/gen-keystores.sh) from
   one cluster CA (run by `gen-provision-keys.sh` on the pki node). Verified by
   [`tests/keystores/test-keystores.sh`](../tests/keystores/test-keystores.sh).
+- **Multi-tenancy (per-domain CA loop):** by default the generator provisions a
+  single domain — byte-/functionally-identical to the pre-multi-tenancy output. A
+  build can list multiple brands/domains in
+  [`brands/domains.conf`](../brands/domains.conf); the generator then loops,
+  **generating an independent-root CA (default) or importing a provided one**
+  (the same `--ca-cert`/`--ca-key` seam, now per-domain) for each, and writing
+  that domain's keystores under `keystores/<brand>/`. Each domain gets a **NARROW
+  truststore** (its own root only) so per-brand gateway/BFF/UI instances deny
+  cross-domain mTLS at the trust anchor (defense in depth). One **WIDE
+  multi-anchor truststore** (every domain's root) is built under
+  `keystores/architecture/` for the **architecture tier ONLY** (Vault /
+  federation / superadmin), which must validate cross-domain mTLS. With one
+  domain the wide store holds exactly the one root (== the narrow store). The
+  single-domain byte-identical invariant + the N≥2 narrow/wide tiers + the
+  per-domain import path are proven by
+  [`tests/keystores/test-keystores-multidomain.sh`](../tests/keystores/test-keystores-multidomain.sh)
+  (which diffs the refactored output against a frozen pre-refactor golden).
+  **CA private keys never go in git** — only public certs/truststores; an
+  imported `CA_KEY` path must point at the key-USB / a secret dir.
 - **Vault-managed:** `gen-cluster-secrets.sh` pushes `keystores/*.jks` +
   `passwords.json` to Vault (KV); the External Secrets Operator syncs each into
   its namespace as a Secret; the pod mounts it and runs with
