@@ -19,6 +19,9 @@ CHOST="@@CROSS_TARGET@@"
 CFLAGS="-mcpu=@@RPI_CPU@@ -mtune=@@RPI_CPU@@ -O2 -pipe -fstack-protector-strong -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-int"
 CXXFLAGS="${CFLAGS}"
 LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
+# Persist per-package build logs so cross-compile failures (gnutls/curl/elfutils
+# etc.) are diagnosable after the temp dir is cleaned (mirrors the x86 builder).
+PORTAGE_LOGDIR="/var/log/portage/build"
 
 MAKEOPTS="-j@@JOBS@@"
 # -userfetch/-userpriv: don't drop to the 'portage' user (it can't traverse a
