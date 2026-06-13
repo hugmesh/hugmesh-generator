@@ -1,0 +1,6 @@
+# sys-apps/policycoreutils (in packages.list) requires libselinux built WITH the
+# python bindings: >=sys-libs/libselinux-3.10:=[python,python_targets_python3_12].
+# Pre-seed it explicitly — the package-set emerge's --autounmask-continue did NOT
+# apply this USE change on its own and stalled with "no ebuilds built with USE
+# flags to satisfy ...libselinux...[python]", which fails the whole payload.
+sys-libs/libselinux python
