@@ -62,10 +62,26 @@ spec:
               openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
                 -certfile /pki/ca.crt -name {{ .Values.instance.name }} \
                 -out /stores/keystore.p12 -passout "pass:${P}"
-              # JRE truststore: the issuing (cluster) CA so we trust cluster peers
+              {{- if eq .Values.keystore.trustTier "WIDE" }}
+              # WIDE trust tier: import each CA from the all-domain bundle so the
+              # architecture-tier gateway accepts mTLS peers from any brand.
+              # Requires /pki/ca-bundle.crt (all domain roots, PEM-concatenated)
+              # in the ESO-synced Secret.
+              awk '/-----BEGIN CERTIFICATE-----/{n++; f="/tmp/ca-" n ".pem"} f{print >> f}' /pki/ca-bundle.crt
+              for _f in /tmp/ca-*.pem; do
+                _i=$(basename "${_f}" .pem | tr -cd '0-9')
+                keytool -importcert -noprompt \
+                  -alias {{ .Values.keystore.caAlias | quote }}-${_i} \
+                  -file "${_f}" -keystore /stores/truststore.p12 \
+                  -storetype PKCS12 -storepass "${P}"
+              done
+              {{- else }}
+              # NARROW trust tier (default): only the issuing domain CA — per-brand
+              # isolation at the mTLS trust anchor.
               keytool -importcert -noprompt -alias {{ .Values.keystore.caAlias | quote }} \
                 -file /pki/ca.crt -keystore /stores/truststore.p12 \
                 -storetype PKCS12 -storepass "${P}"
+              {{- end }}
               # Spring SSL config — picked up from file:/stores/ (added to
               # SPRING_CONFIG_ADDITIONAL_LOCATION). server.ssl is opt-in via
               # keystore.serverTls so probes/Service stay plaintext by default.
