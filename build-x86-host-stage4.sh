@@ -1056,7 +1056,10 @@ if ${ROLE_CLIENT}; then
     # lightdm-gtk-greeter installed the stock greeter-session (example-gtk-gnome) is
     # absent → blank greeter. Thin = openbox, full = xfce. Written pre-emerge so
     # CONFIG_PROTECT keeps it over the package default (same pattern as frite).
-    _user_session="openbox"; [ "${DESKTOP}" = "full" ] && _user_session="xfce"
+    # thin = LXDE (lxsession: openbox WM + lxpanel + pcmanfm — the turnkey LXDE-lite
+    # stack in packages-desktop.list), full = xfce. Both ship an /usr/share/xsessions
+    # .desktop of that name.
+    _user_session="LXDE"; [ "${DESKTOP}" = "full" ] && _user_session="xfce"
     mkdir -p "${SYSROOT}/etc/lightdm"
     cat > "${SYSROOT}/etc/lightdm/lightdm.conf" <<LIGHTDM
 [LightDM]

@@ -695,7 +695,7 @@ if [ "${DESKTOP}" = "light" ]; then
 [LightDM]
 [Seat:*]
 greeter-session=lightdm-gtk-greeter
-user-session=openbox
+user-session=LXDE
 LIGHTDM
 fi
 for svc in "${DEFAULT_SVCS[@]}"; do
