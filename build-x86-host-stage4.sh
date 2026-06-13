@@ -898,12 +898,18 @@ mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,profile,e
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
 cp "${SPECS_DIR}/portage/profile/parent"              "${SYSROOT}/etc/portage/profile/parent"
 # Copy every file in these portage config dirs (so added spec files always land).
-cp "${SPECS_DIR}/portage/package.accept_keywords/"*   "${SYSROOT}/etc/portage/package.accept_keywords/"
+# The 'desktop' files (LXDE ~amd64 keywords / GTK+netsurf USE) are client-only — a
+# k8s NODE image stays stable-keyworded and never references desktop USE flags.
+for akf in "${SPECS_DIR}/portage/package.accept_keywords/"*; do
+    [ "$(basename "${akf}")" = "desktop" ] && ! ${ROLE_CLIENT} && continue
+    cp "${akf}" "${SYSROOT}/etc/portage/package.accept_keywords/"
+done
 # package.use: copy all role-independent files; the GPU-only 'gpu' file (Mesa
-# vulkan/vaapi video_cards_*) is copied ONLY for GPU roles so a headless image
-# never references VIDEO_CARDS it isn't building.
+# vulkan/vaapi video_cards_*) is copied ONLY for GPU roles, and 'desktop' ONLY for
+# client roles, so a headless image never references USE/cards it isn't building.
 for puf in "${SPECS_DIR}/portage/package.use/"*; do
     [ "$(basename "${puf}")" = "gpu" ] && ! ${GPU} && continue
+    [ "$(basename "${puf}")" = "desktop" ] && ! ${ROLE_CLIENT} && continue
     cp "${puf}" "${SYSROOT}/etc/portage/package.use/"
 done
 

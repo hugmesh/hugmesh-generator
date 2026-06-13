@@ -1,0 +1,12 @@
+# CLIENT desktop (laptop/chromebook/desktop) ONLY — copied into the sysroot by
+# build-x86-host-stage4.sh solely for ROLE_CLIENT (nodes don't run X). The complete
+# set of USE changes the desktop payload needs, from `emerge --pretend --autounmask`
+# replayed against the build sysroot:
+#   freetype[harfbuzz] — the GTK3 stack (pango → openbox/lxpanel/lightdm-gtk-greeter)
+#   libdom[xml]        — www-client/netsurf (svgtiny/svg)
+#   nftables[...]      — net-firewall/firewalld backend (FD-06 shields-up)
+#   libdrm[radeon]     — xf86-video-ati DDX pulled by xorg-drivers (VIDEO_CARDS radeon*)
+media-libs/freetype harfbuzz
+net-libs/libdom xml
+net-firewall/nftables python json xtables
+x11-libs/libdrm video_cards_radeon
