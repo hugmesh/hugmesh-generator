@@ -1,0 +1,25 @@
+# {{BRAND_TITLE}} mod-bff — moderation BFF (ROLE_MOD + ROLE_ADMIN).
+# Generated from snapdragon-generator/templates/apps/33-mod-bff.yaml.hbs
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{BRAND}}-mod-bff-api
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/mod-bff-api
+    kustomize:
+      namespace: {{BRAND}}-backend
+      images:
+        - name: snapdragon-systems/mod-bff-api
+          newName: registry.{{CLUSTER_DOMAIN}}/{{GITLAB_GROUP}}/{{BRAND}}-mod-bff-api
+          newTag: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{BRAND}}-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

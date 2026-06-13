@@ -1,0 +1,102 @@
+# {{BRAND_TITLE}} fe-gateway — front door for {{CLUSTER_DOMAIN}} (Angular host) + MFE remotes.
+# Generated from snapdragon-generator/templates/apps/20-gateway-fe.yaml.hbs
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{BRAND}}-gateway-fe
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/charts/snapdragon-gateway
+    helm:
+      releaseName: {{BRAND}}-fe-gateway
+      values: |
+        instance:
+          name: {{BRAND}}-fe-gateway
+        keystore:
+          enabled: true
+        ingress:
+          enabled: true
+          className: nginx
+          host: {{CLUSTER_DOMAIN}}
+          extraHosts:
+            - "*.{{CLUSTER_DOMAIN}}"
+        nodeSelector:
+          {{CLUSTER_DOMAIN}}/frontend: "true"
+        seLinux:
+          level: "s0:c13"
+        extraEnv:
+          - name: ROUTE_ACCESS_DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: route-access-fe-gateway
+                key: password
+          - name: ROUTE_ACCESS_R2DBC_URL
+            value: r2dbc:postgresql://fe_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.{{BRAND}}-pki.svc.cluster.local:5432/gateway
+          - name: SNAPDRAGON_GATEWAY_MTLS_ENABLED
+            value: "true"
+        routes:
+          - id: matrix-ui
+            uri: http://{{BRAND}}-matrix-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /social/matrix/**
+          - id: mastodon-ui
+            uri: http://{{BRAND}}-mastodon-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /social/mastodon/**
+          - id: forum-ui
+            uri: http://{{BRAND}}-forum-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /social/forum/**
+          - id: login-ui
+            uri: http://{{BRAND}}-login-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /login/**
+          - id: admin-ui
+            uri: http://{{BRAND}}-admin-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /admin/**
+          - id: mod-ui
+            uri: http://{{BRAND}}-mod-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /mod/**
+          - id: user-ui
+            uri: http://{{BRAND}}-user-ui.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /user/**
+          - id: api-docs
+            uri: http://{{BRAND}}-api-docs.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /apidocs/**
+          - id: {{BRAND}}-mod-bff-api
+            uri: https://{{BRAND}}-mod-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/mod/**
+          - id: {{BRAND}}-user-bff-api
+            uri: https://{{BRAND}}-user-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/user/**
+          - id: {{BRAND}}-forum-bff-api-moderation
+            uri: https://{{BRAND}}-forum-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/forum/moderation/**
+          - id: {{BRAND}}-forum-bff-api
+            uri: https://{{BRAND}}-forum-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/forum/**
+          - id: {{BRAND}}-admin-bff-api
+            uri: https://{{BRAND}}-admin-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /bff/**
+          - id: remote-fragment
+            uri: http://{{BRAND}}-remote-fragment.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /_fragments/**
+          - id: be-default
+            uri: http://{{BRAND}}-be-gateway.{{BRAND}}-backend.svc.cluster.local:8080
+            path: /be/**
+            filters:
+              - StripPrefix=1
+          - id: vanity-subdomain
+            host: "*.{{CLUSTER_DOMAIN}}"
+            uri: https://{{BRAND}}-federation-api.{{BRAND}}-backend.svc.cluster.local:8080
+            filters:
+              - SetPath=/api/federation/vanity
+          - id: frontend-host
+            uri: http://{{BRAND}}-systems-web.{{BRAND}}-frontend.svc.cluster.local:80
+            path: /**
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{BRAND}}-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
