@@ -1447,7 +1447,7 @@ fi
 # matching "stage4 payload incomplete" assert). Binaries are aarch64, so test
 # for file presence in the sysroot rather than command -v.
 _payload_missing=""
-for _b in kubelet kubeadm kubectl containerd NetworkManager nmcli sshd auditd crond jq parted; do
+for _b in kubelet kubeadm kubectl containerd NetworkManager nmcli sshd auditd crond jq parted flashrom rpi-eeprom-update; do
     _found=false
     for _d in usr/bin usr/sbin bin sbin; do
         if [ -e "${SYSROOT}/${_d}/${_b}" ]; then _found=true; break; fi
@@ -1459,7 +1459,7 @@ if [ -n "${_payload_missing}" ]; then
     err "packages.list did not fully merge; review the emerge output above."
     exit 1
 fi
-info "Stage4 payload verified (kubelet kubeadm kubectl containerd NetworkManager nmcli sshd auditd crond jq parted)"
+info "Stage4 payload verified (kubelet kubeadm kubectl containerd NetworkManager nmcli sshd auditd crond jq parted flashrom rpi-eeprom-update)"
 
 # ── 7a. Boot config (AFTER firmware is merged) ─────────────────────
 # Written now — not in the spec-install phase — so raspberrypi-firmware's

@@ -7,3 +7,12 @@ dev-embedded/rpi-eeprom pi5
 # networkmanager[wifi] (forced above) hard-requires wpa_supplicant[dbus] (NM drives
 # it over D-Bus). dbus is not a default USE; pre-seed it or payload resolution aborts.
 net-wireless/wpa_supplicant dbus
+
+# flashrom's asm106x programmer is +-default, but its meson.build requires libpci while
+# the ebuild OMITS asm106x from the `*? ( sys-apps/pciutils )` dependency block (upstream
+# bug) — so the cross-sysroot has no usable pciutils/pci.h and configure dies "asm106x
+# selected but dependency libpci not found". flashrom is an UNCONDITIONAL RDEPEND of
+# dev-embedded/rpi-eeprom (the Pi bootloader EEPROM updater, in packages.list), so without
+# this both silently fail to install. asm106x is a USB-SATA programmer irrelevant to Pi
+# EEPROM flashing; the other default programmers don't need libpci.
+sys-apps/flashrom -asm106x
