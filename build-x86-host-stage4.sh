@@ -1077,7 +1077,12 @@ fi
 EMERGE_JOBS=1
 GO_PROCS=$(( JOBS / 7 )); [ "${GO_PROCS}" -lt 2 ] && GO_PROCS=2
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
-export MAKEOPTS="-j${JOBS} -l${JOBS}"
+# NOTE: MAKEOPTS is NOT exported here on purpose. It comes from the chroot's
+# make.conf (rendered "-j${JOBS} -l${JOBS}"). An exported MAKEOPTS env var takes
+# precedence over package.env, which would SHADOW the per-package -j4 cap in
+# env/llvm-lowmem.conf and let llvm-core/llvm + clang OOM-crash the host at -j28
+# (observed). make.conf MAKEOPTS, by contrast, IS overridable by package.env —
+# its canonical use — so the cap actually applies. Do not re-add the export.
 export EMERGE_DEFAULT_OPTS="--jobs ${EMERGE_JOBS} --load-average ${JOBS} --usepkg=y --binpkg-respect-use=y"
 # Bound Go's self-managed parallelism (it ignores MAKEOPTS/-l) so even a single
 # kubelet/runc build doesn't spike RAM → OOM-killed compile.

@@ -21,7 +21,11 @@ CFLAGS="${COMMON_FLAGS}"
 CXXFLAGS="${COMMON_FLAGS}"
 LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
 
-MAKEOPTS="-j@@JOBS@@"
+# -l@@JOBS@@ lets the parallel C builds self-throttle on shared load average.
+# This is the SOLE global MAKEOPTS source (the chroot heredoc no longer exports
+# one) so that per-package package.env caps (env/llvm-lowmem.conf -> llvm/clang
+# at -j4) actually override it; an exported MAKEOPTS would shadow package.env.
+MAKEOPTS="-j@@JOBS@@ -l@@JOBS@@"
 # -userfetch/-userpriv: don't drop to the 'portage' user (can't traverse a
 # mode-700 / encrypted work dir). Sandbox off for the native chroot build.
 FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox -ipc-sandbox"
