@@ -822,6 +822,15 @@ banner "Extracting stage3"
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
     info "Sysroot populated and --resume — skipping extraction"
 else
+    # A non-resume build must start from a CLEAN sysroot. Extracting stage3 OVER a
+    # populated tree leaves stale packages (e.g. extra python slots, old kubelet)
+    # in var/db/pkg — a HYBRID db that breaks dep resolution (observed: 3 python
+    # slots surviving + libselinux[python] conflicts). Wipe first so the extract
+    # is pristine. (Warm reuse is the explicit --resume path above.)
+    if [ -f "${SYSROOT}/etc/gentoo-release" ]; then
+        warn "Non-resume build over a populated sysroot — wiping for a clean stage3 extract"
+        rm -rf "${SYSROOT}"; mkdir -p "${SYSROOT}"
+    fi
     tar -C "${SYSROOT}" --xattrs-include='*.*' -xpf "${STAGE3_LOCAL}" 2>/dev/null || \
         tar -C "${SYSROOT}" -xpf "${STAGE3_LOCAL}"
 fi
@@ -991,8 +1000,24 @@ mount_chroot() {
     else
         HOST_REPO_MOUNTED=false
     fi
+    # Package build scratch on a NON-eCryptfs filesystem. The work dir often lives
+    # on eCryptfs (/home/.Private), whose ~143-char filename limit makes Go builds
+    # (kubelet/runc/cni-plugins/containerd — long vendored/cache paths) die with
+    # "File name too long". Bind the chroot's /var/tmp/portage onto a host xfs dir
+    # so package builds dodge the limit; INSTALLED files (short names) still land in
+    # the eCryptfs sysroot fine. Only kicks in when the sysroot is actually eCryptfs.
+    PORTAGE_SCRATCH_MOUNTED=false
+    if df -T "${SYSROOT}" 2>/dev/null | awk 'NR==2{exit($2=="ecryptfs"?0:1)}'; then
+        local scratch="/var/tmp/snap-portage-${BUILD_SUBDIR}"
+        local availg; availg=$(df -BG --output=avail /var/tmp 2>/dev/null | tail -1 | tr -dc '0-9')
+        [ "${availg:-99}" -lt 15 ] && warn "only ${availg}G free on /var/tmp (xfs) for build scratch; a large parallel build may fill it (EMERGE_JOBS is held low to bound this)."
+        mkdir -p "${scratch}" "${SYSROOT}/var/tmp/portage"
+        mount --bind "${scratch}" "${SYSROOT}/var/tmp/portage" && PORTAGE_SCRATCH_MOUNTED=true
+        info "Build scratch -> non-eCryptfs xfs ${scratch} (eCryptfs 143-char filename-limit workaround)"
+    fi
 }
 umount_chroot() {
+    ${PORTAGE_SCRATCH_MOUNTED:-false} && umount -l "${SYSROOT}/var/tmp/portage" 2>/dev/null || true
     ${HOST_REPO_MOUNTED:-false} && umount -l "${SYSROOT}/var/db/repos/gentoo" 2>/dev/null || true
     for m in run dev sys proc; do umount -lR "${SYSROOT}/$m" 2>/dev/null || true; done
 }
@@ -1021,19 +1046,37 @@ else
     info "Keeping seed toolchain (set REBUILD_TOOLCHAIN=true to rebuild gcc/glibc/binutils)"
 fi
 
-# Package-level emerge parallelism: MAKEOPTS only parallelizes INSIDE one
-# package; the long tail of small python/perl/configure-heavy packages
-# otherwise serializes on a single job while 27 threads idle. Several emerge
-# jobs run concurrently, governed by --load-average so one big -j${JOBS} C++
-# build can still take the whole machine.
-EMERGE_JOBS=$(( JOBS / 4 )); [ "${EMERGE_JOBS}" -lt 2 ] && EMERGE_JOBS=2
+# Package-level emerge parallelism, MEMORY-BOUNDED. EMERGE_JOBS concurrent
+# packages, each make -j${JOBS} -l${JOBS}. C builds self-throttle on the shared
+# system load via -l (all makes read the same loadavg). Go builds (kubelet, runc,
+# cni-plugins, containerd, nerdctl) IGNORE make's jobserver and -l, defaulting to
+# GOMAXPROCS=ncpu — so several concurrent Go builds each spawning 28-way blew past
+# 32 GB RAM and the OOM killer failed 6 diverse packages at once. Cap both: fewer
+# concurrent packages (JOBS/7) AND a hard GOMAXPROCS so Go can't grab the machine.
+# Held LOW (2): package build scratch is bind-mounted onto the 20 GB xfs / (the
+# eCryptfs filename-limit workaround in mount_chroot), so few concurrent package
+# builds keeps peak scratch within that budget — and also bounds the Go-build RAM
+# that OOM-killed the payload. The kernel builds in /usr/src (sysroot), not here.
+# EMERGE_JOBS=1: SERIALIZE package builds. At 2 concurrent, the payload's 8 Go
+# packages (kubelet/runc/cni-plugins/containerd/nerdctl/cri-tools/...) overlapped
+# and their shared-runtime recompiles were OOM-KILLED (silent death, no compiler
+# error — confirmed). One package at a time means a single Go build has the whole
+# 32 GB, so concurrent-build OOM is structurally impossible. Also keeps the
+# bind-mounted scratch within the 20 GB xfs / budget. (Raise once known-good.)
+EMERGE_JOBS=1
+GO_PROCS=$(( JOBS / 7 )); [ "${GO_PROCS}" -lt 2 ] && GO_PROCS=2
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
-# -l\${JOBS}: cap make's load so EMERGE_JOBS concurrent packages each running
-# make -j\${JOBS} don't multiply into runaway oversubscription (observed load
-# ~80 on 28 cores with <300 MB free — an OOM risk that fails compiles). emerge's
-# own --load-average gates new PACKAGE jobs; make's -l gates new COMPILER jobs.
 export MAKEOPTS="-j${JOBS} -l${JOBS}"
 export EMERGE_DEFAULT_OPTS="--jobs ${EMERGE_JOBS} --load-average ${JOBS} --usepkg=y --binpkg-respect-use=y"
+# Bound Go's self-managed parallelism (it ignores MAKEOPTS/-l) so even a single
+# kubelet/runc build doesn't spike RAM → OOM-killed compile.
+export GOMAXPROCS=${GO_PROCS}
+export GOFLAGS="-p=${GO_PROCS}"
+# A working locale: the stage3 has none configured, so build steps that call
+# setlocale (e.g. sys-fs/btrfs-progs' docs/python tooling) die with
+# "locale.Error: unsupported locale setting". C.UTF-8 is built into glibc (no
+# locale-gen needed) and is always valid.
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
 # Build chroot: /boot/efi exists in the baked fstab but is never mounted here.
 # Without this, mount-boot.eclass (linux-firmware, grub-themes) dies in
 # pkg_pretend ("/boot/efi not mounted") and ABORTS the ENTIRE package-set
@@ -1060,7 +1103,18 @@ emerge --update --deep --newuse --keep-going ${EMERGE_EXCLUDE} @world \
 emerge --update --deep --newuse --keep-going \
     --autounmask-continue=y --autounmask-keep-keywords=y --autounmask-keep-masks=y \
     ${EMERGE_EXCLUDE} ${PKGS} \
-    || echo "[build-x86] WARN: some stage4 packages failed; review the emerge output"
+    || { echo "[build-x86] WARN: some stage4 packages failed; review the emerge output"
+         # DIAGNOSTIC: --autounmask-continue is NOT applying needed USE changes in
+         # this chroot, so resolution dies one conflict at a time. A PRETEND
+         # --autounmask pass computes the COMPLETE set of USE changes the payload
+         # needs in one go — dump it so they can all be pre-seeded into the
+         # package.use specs at once instead of whack-a-mole.
+         echo "[build-x86] ===== AUTOUNMASK-PRETEND: full USE/keyword changes the payload needs ====="
+         emerge --pretend --autounmask=y --autounmask-write=n --autounmask-backtrack=y \
+             --keep-going ${EMERGE_EXCLUDE} ${PKGS} 2>&1 \
+             | grep -E 'USE changes|keyword changes|^# |^>=|^<|^=|Change USE|necessary|masked by' \
+             || true
+         echo "[build-x86] ===== END AUTOUNMASK-PRETEND ====="; }
 # Rebuild the dynamic-linker cache: with sandbox/postinst hooks disabled in this
 # chroot, ldconfig can be skipped after a merge, leaving e.g. libsqlite3.so.0
 # present on disk but absent from /etc/ld.so.cache — python wheel builds then die

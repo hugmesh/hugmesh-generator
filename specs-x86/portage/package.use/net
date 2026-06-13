@@ -10,3 +10,9 @@ net-fs/cifs-utils -acl
 # If you DO need CIFS ACL helpers, drop the line above and instead allow:
 #   net-libs/ngtcp2 gnutls
 # which lets net-fs/samba (pulled by cifs-utils[acl]) resolve.
+
+# NetworkManager is built WITH wifi (capability compiled in, runtime-blocked by
+# rfkill/blacklist unless ENABLE_WIFI=true) → it pulls net-wireless/wpa_supplicant,
+# which NetworkManager drives over D-Bus, so wpa_supplicant needs [dbus]. emerge's
+# --autounmask-continue did not apply this on its own; pre-seed it explicitly.
+net-wireless/wpa_supplicant dbus
