@@ -8,13 +8,23 @@
 # cluster CA chain) is what every Java JRE/JDK trusts — it is installed into the
 # container's JRE at runtime (built from the certs on the USB KEYS stick).
 #
-# Output (under OUTDIR):
+# Output (under OUTDIR) — DEFAULT single-domain layout (unchanged):
 #   certs/cluster-ca.crt           the cluster CA (trust anchor; goes on the KEYS stick)
 #   certs/cluster-ca.key           CA private key (KEEP OFFLINE; pki stick only)
 #   keystores/<svc>.keystore.jks   per-service identity keystore (key + cert chain)
-#   keystores/truststore.jks       trust store (cluster CA) — JKS
-#   keystores/truststore.p12       trust store — PKCS12 (for non-keytool consumers)
+#   keystores/truststore.jks       NARROW trust store (this domain's CA) — JKS
+#   keystores/truststore.p12       NARROW trust store — PKCS12 (non-keytool consumers)
 #   keystores/passwords.json       store passwords (offline/USB fallback)
+#   keystores/architecture/        WIDE multi-anchor trust store (every domain root)
+#                                  for the ARCHITECTURE TIER (Vault/federation/superadmin);
+#                                  with one domain it holds exactly that one root.
+#
+# MULTI-DOMAIN (brands/domains.conf with >1 active row) ADDS, per extra brand:
+#   certs/<brand>/cluster-ca.{crt,key}   that domain's independent (or imported) CA
+#   keystores/<brand>/<svc>.keystore.jks per-service identity keystores
+#   keystores/<brand>/truststore.{jks,p12} that domain's NARROW own-root trust store
+#   keystores/<brand>/passwords.json     store passwords
+# (the single default domain keeps the flat top-level layout above — byte-identical).
 #
 # Two cert paths exist:
 #   • OFFLINE / USB (this script): the cluster CA (cluster-ca.crt is the trust
@@ -42,6 +52,38 @@ if [ -n "${BRAND:-}" ] && [ -f "${REPO}/brands/${BRAND}.conf" ]; then
 fi
 DOMAIN="${CLUSTER_DOMAIN:-snapdragon.systems}"
 BRAND="${BRAND:-snapdragon}"
+
+# ── Multi-tenancy: per-domain CA loop (PR4) ─────────────────────────
+# By DEFAULT this script provisions ONE domain (the single ${BRAND}/${DOMAIN}
+# above) — and that single-domain run is BYTE-/functionally-IDENTICAL to the
+# pre-multi-tenancy behavior: the loop below runs with N=1 as a pure no-op
+# transformation (same paths, same CA subject, same aliases, same service certs,
+# and a WIDE truststore that then holds exactly the one root == the narrow one).
+#
+# A build opts into MULTIPLE domains/brands baked in from the start by listing
+# them in brands/domains.conf (or a file named via DOMAINS_CONF). Each non-blank,
+# non-`#` line is one domain row, whitespace-separated:
+#
+#     DOMAIN [BRAND] [CA_CERT] [CA_KEY]
+#
+#   DOMAIN   (required) the brand's CLUSTER_DOMAIN.
+#   BRAND    (optional) slug used in names; defaults to DOMAIN's first label.
+#   CA_CERT  (optional) path to an EXISTING CA cert (PEM) to IMPORT as that
+#            domain's issuer instead of GENERATING an independent root.
+#   CA_KEY   (optional, REQUIRED with CA_CERT) the imported CA's private key
+#            (PEM). SECRET — keep it OFF git (an absolute path on the key-USB /
+#            a secret dir; NEVER commit it).
+#
+# Per-domain CA model (multi-tenancy fork, DEFAULT = independent root): each
+# domain GENERATES its own independent-root CA, OR IMPORTS a provided one (reuses
+# the same --ca-cert/--ca-key seam, now per-domain). Each domain gets a NARROW
+# truststore (its own root ONLY) under keystores/ (single domain) or
+# keystores/<brand>/ (multi-domain). ONE WIDE multi-anchor truststore (every
+# domain's root) is built for the ARCHITECTURE TIER ONLY (Vault / federation /
+# superadmin), which must validate cross-domain mTLS; per-brand gateway instances
+# keep the narrow own-domain truststore. With N=1 the wide truststore holds
+# exactly the one root, so nothing changes for a default build.
+DOMAINS_CONF="${DOMAINS_CONF:-${REPO}/brands/domains.conf}"
 
 # ── External CA inputs (optional) ──────────────────────────────────
 # Provide an EXISTING CA to use as the issuer for every generated leaf cert,
@@ -134,15 +176,19 @@ gen_private_key() {
 # Java API machine-users that get an mTLS identity keystore: "name:namespace".
 # (Casdoor=Go, Synapse=Python, Mastodon=Ruby are not Java; they consume the same
 #  CA via PEM and are issued certs by gen-cluster-secrets if needed.)
-SERVICES=(
-  "${BRAND}-pki-gateway:${BRAND}-pki"
-  "${BRAND}-be-gateway:${BRAND}-backend"
-  "${BRAND}-fe-gateway:${BRAND}-frontend"
-  "${BRAND}-api:${BRAND}-backend"
-  "${BRAND}-admin-bff-api:${BRAND}-backend"
-  "${BRAND}-mod-bff-api:${BRAND}-backend"
-  "${BRAND}-user-bff-api:${BRAND}-backend"
-)
+# Parameterised by brand so each domain in the loop gets its own brand's service
+# set; with the single default brand this yields exactly the historical list.
+services_for_brand() {
+  local b="$1"
+  printf '%s\n' \
+    "${b}-pki-gateway:${b}-pki" \
+    "${b}-be-gateway:${b}-backend" \
+    "${b}-fe-gateway:${b}-frontend" \
+    "${b}-api:${b}-backend" \
+    "${b}-admin-bff-api:${b}-backend" \
+    "${b}-mod-bff-api:${b}-backend" \
+    "${b}-user-bff-api:${b}-backend"
+}
 
 for t in openssl keytool; do command -v "$t" >/dev/null || { echo "ERROR: need $t" >&2; exit 1; }; done
 mkdir -p "${KS}" "${CA}"
@@ -183,92 +229,200 @@ validate_external_ca() {
   fi
 }
 
-# ── Cluster CA: provided external CA  >  reuse on disk  >  self-signed ──
-# Signing inputs the per-service loop uses; defaulted to the on-disk pair and
-# overridden below when an external CA key is kept off the output directory.
-CA_CRT_FILE="${CA}/cluster-ca.crt"
-CA_KEY_FILE="${CA}/cluster-ca.key"
-CA_PASSIN=()   # extra `-passin env:CA_KEY_PASS` args for openssl when key is encrypted
+# ── provision_domain: one domain's CA + narrow truststore + keystores ─
+# Provisions exactly ONE domain into the given cert/keystore dirs. The body is
+# the verbatim pre-multi-tenancy single-domain logic, lifted into a function and
+# parameterised by the per-domain brand/domain/CA-input + target dirs:
+#   $1 d_brand     brand slug for this domain
+#   $2 d_domain    CLUSTER_DOMAIN for this domain (SAN suffix)
+#   $3 d_ca_cert   external CA cert to IMPORT (empty => GENERATE independent root)
+#   $4 d_ca_key    external CA key (required iff d_ca_cert non-empty)
+#   $5 d_ca_pass   passphrase for d_ca_key (empty if unencrypted) — read via env
+#   $6 d_ca_dir    cert output dir   (cluster-ca.{crt,key} live here)
+#   $7 d_ks_dir    keystore output dir (truststore + per-svc keystores + passwords.json)
+# Side effect: prints this domain's published CA cert path to FD 3 (the loop
+# collects them into the WIDE multi-anchor truststore for the architecture tier).
+provision_domain() {
+  local d_brand="$1" d_domain="$2" d_ca_cert="$3" d_ca_key="$4" d_ca_pass="$5" d_ca_dir="$6" d_ks_dir="$7"
+  mkdir -p "${d_ca_dir}" "${d_ks_dir}"
 
-if [ -n "${CA_CERT}" ] || [ -n "${CA_KEY}" ]; then
-  # External CA requested — require BOTH halves.
-  [ -n "${CA_CERT}" ] && [ -n "${CA_KEY}" ] \
-    || { echo "ERROR: provide BOTH CA_CERT and CA_KEY (got only one)." >&2; exit 1; }
-  export CA_KEY_PASS   # so `-passin env:CA_KEY_PASS` can read it (never on argv)
-  validate_external_ca "${CA_CERT}" "${CA_KEY}"
-  echo "==> Using PROVIDED external CA as issuer (no CA generated)"
-  # Publish the provided CA cert as the trust anchor (copy; never modify input).
-  cat "${CA_CERT}" > "${CA}/cluster-ca.crt"
-  CA_CRT_FILE="${CA}/cluster-ca.crt"
-  if [ -n "${CA_KEY_PASS}" ]; then
-    # Encrypted key: sign in place from the ORIGINAL path with -passin env:, so
-    # the private key is never written (decrypted) into the output directory.
-    CA_KEY_FILE="${CA_KEY}"
-    CA_PASSIN=(-passin env:CA_KEY_PASS)
+  # Cluster CA: provided external CA  >  reuse on disk  >  self-signed.
+  # Signing inputs the per-service loop uses; defaulted to the on-disk pair and
+  # overridden below when an external CA key is kept off the output directory.
+  local CA_CRT_FILE="${d_ca_dir}/cluster-ca.crt"
+  local CA_KEY_FILE="${d_ca_dir}/cluster-ca.key"
+  local CA_PASSIN=()   # extra `-passin env:CA_KEY_PASS` args for openssl when key is encrypted
+
+  if [ -n "${d_ca_cert}" ] || [ -n "${d_ca_key}" ]; then
+    # External CA requested for this domain — require BOTH halves.
+    [ -n "${d_ca_cert}" ] && [ -n "${d_ca_key}" ] \
+      || { echo "ERROR: provide BOTH CA_CERT and CA_KEY (got only one)." >&2; exit 1; }
+    CA_KEY_PASS="${d_ca_pass}"
+    export CA_KEY_PASS   # so `-passin env:CA_KEY_PASS` can read it (never on argv)
+    validate_external_ca "${d_ca_cert}" "${d_ca_key}"
+    echo "==> Using PROVIDED external CA as issuer (no CA generated)"
+    # Publish the provided CA cert as the trust anchor (copy; never modify input).
+    cat "${d_ca_cert}" > "${d_ca_dir}/cluster-ca.crt"
+    CA_CRT_FILE="${d_ca_dir}/cluster-ca.crt"
+    if [ -n "${d_ca_pass}" ]; then
+      # Encrypted key: sign in place from the ORIGINAL path with -passin env:, so
+      # the private key is never written (decrypted) into the output directory.
+      CA_KEY_FILE="${d_ca_key}"
+      CA_PASSIN=(-passin env:CA_KEY_PASS)
+    else
+      # Unencrypted key: the signing openssl calls need a key path; keep using the
+      # original path directly (still not copied into OUT).
+      CA_KEY_FILE="${d_ca_key}"
+    fi
+  elif [ ! -f "${d_ca_dir}/cluster-ca.crt" ] || [ ! -f "${d_ca_dir}/cluster-ca.key" ]; then
+    echo "==> Generating cluster CA (${KEY_TYPE^^}${KEY_TYPE_DESC:-}, ${SIG_HASH} signature)"
+    # Key first (uniform RSA/EC path), then self-sign with the chosen digest.
+    gen_private_key "${d_ca_dir}/cluster-ca.key"
+    openssl req -x509 -key "${d_ca_dir}/cluster-ca.key" -nodes -days 3650 "-${SIG_HASH}" \
+      -out "${d_ca_dir}/cluster-ca.crt" \
+      -subj "/O=${d_brand} cluster/CN=${d_brand} Cluster CA" 2>/dev/null
   else
-    # Unencrypted key: the signing openssl calls need a key path; keep using the
-    # original path directly (still not copied into OUT).
-    CA_KEY_FILE="${CA_KEY}"
+    echo "==> Reusing existing cluster CA at ${d_ca_dir}/cluster-ca.crt"
   fi
-elif [ ! -f "${CA}/cluster-ca.crt" ] || [ ! -f "${CA}/cluster-ca.key" ]; then
-  echo "==> Generating cluster CA (${KEY_TYPE^^}${KEY_TYPE_DESC:-}, ${SIG_HASH} signature)"
-  # Key first (uniform RSA/EC path), then self-sign with the chosen digest.
-  gen_private_key "${CA}/cluster-ca.key"
-  openssl req -x509 -key "${CA}/cluster-ca.key" -nodes -days 3650 "-${SIG_HASH}" \
-    -out "${CA}/cluster-ca.crt" \
-    -subj "/O=${BRAND} cluster/CN=${BRAND} Cluster CA" 2>/dev/null
-else
-  echo "==> Reusing existing cluster CA at ${CA}/cluster-ca.crt"
-fi
 
-# ── Truststore (cluster CA) — JKS + PKCS12 ─────────────────────────
-TS_PASS="$(randpass)"
-rm -f "${KS}/truststore.jks" "${KS}/truststore.p12"
-keytool -importcert -noprompt -alias "${BRAND}-cluster-ca" \
-  -file "${CA_CRT_FILE}" -keystore "${KS}/truststore.jks" \
-  -storetype JKS -storepass "${TS_PASS}" 2>/dev/null
-openssl pkcs12 -export -nokeys -in "${CA_CRT_FILE}" \
-  -out "${KS}/truststore.p12" -passout "pass:${TS_PASS}" -name "${BRAND}-cluster-ca"
-echo "==> Truststore built (JKS + PKCS12)"
+  # ── NARROW truststore (this domain's CA ONLY) — JKS + PKCS12 ───────
+  # Per-brand gateway/BFF/UI instances anchor on their OWN domain's root only;
+  # cross-domain trust is denied by namespace + this narrow anchor (defense in
+  # depth). The architecture tier gets the WIDE store assembled after the loop.
+  local TS_PASS; TS_PASS="$(randpass)"
+  rm -f "${d_ks_dir}/truststore.jks" "${d_ks_dir}/truststore.p12"
+  keytool -importcert -noprompt -alias "${d_brand}-cluster-ca" \
+    -file "${CA_CRT_FILE}" -keystore "${d_ks_dir}/truststore.jks" \
+    -storetype JKS -storepass "${TS_PASS}" 2>/dev/null
+  openssl pkcs12 -export -nokeys -in "${CA_CRT_FILE}" \
+    -out "${d_ks_dir}/truststore.p12" -passout "pass:${TS_PASS}" -name "${d_brand}-cluster-ca"
+  echo "==> Truststore built (JKS + PKCS12)"
 
-# ── Per-service identity keystores ─────────────────────────────────
-PW_JSON="{\"truststore\":\"${TS_PASS}\",\"services\":{"
-first=1
-for entry in "${SERVICES[@]}"; do
-  svc="${entry%%:*}"; ns="${entry##*:}"
-  cn="${svc}.${ns}.svc.cluster.local"
-  pass="$(randpass)"
-  tmp="$(mktemp -d)"
-  echo "  - ${svc} (CN=${cn})"
-  gen_private_key "${tmp}/key.pem"
-  openssl req -new -key "${tmp}/key.pem" -out "${tmp}/csr.pem" -subj "/O=${BRAND}/CN=${cn}" 2>/dev/null
-  # keyEncipherment only applies to RSA key-transport suites; EC leaves use ECDHE
-  # (keyAgreement) so emit the family-appropriate keyUsage.
-  case "${KEY_TYPE}" in ec) _KU="digitalSignature,keyAgreement" ;; *) _KU="digitalSignature,keyEncipherment" ;; esac
-  cat > "${tmp}/ext" <<EXT
-subjectAltName = DNS:${cn},DNS:${svc}.${ns},DNS:${svc}.${DOMAIN}
+  # ── Per-service identity keystores ───────────────────────────────
+  local PW_JSON="{\"truststore\":\"${TS_PASS}\",\"services\":{"
+  local first=1 entry svc ns cn pass tmp _KU
+  while IFS= read -r entry; do
+    svc="${entry%%:*}"; ns="${entry##*:}"
+    cn="${svc}.${ns}.svc.cluster.local"
+    pass="$(randpass)"
+    tmp="$(mktemp -d)"
+    echo "  - ${svc} (CN=${cn})"
+    gen_private_key "${tmp}/key.pem"
+    openssl req -new -key "${tmp}/key.pem" -out "${tmp}/csr.pem" -subj "/O=${d_brand}/CN=${cn}" 2>/dev/null
+    # keyEncipherment only applies to RSA key-transport suites; EC leaves use ECDHE
+    # (keyAgreement) so emit the family-appropriate keyUsage.
+    case "${KEY_TYPE}" in ec) _KU="digitalSignature,keyAgreement" ;; *) _KU="digitalSignature,keyEncipherment" ;; esac
+    cat > "${tmp}/ext" <<EXT
+subjectAltName = DNS:${cn},DNS:${svc}.${ns},DNS:${svc}.${d_domain}
 extendedKeyUsage = serverAuth,clientAuth
 keyUsage = ${_KU}
 EXT
-  openssl x509 -req -in "${tmp}/csr.pem" -CA "${CA_CRT_FILE}" -CAkey "${CA_KEY_FILE}" "${CA_PASSIN[@]}" \
-    -CAcreateserial -days "${DAYS}" "-${SIG_HASH}" -extfile "${tmp}/ext" -out "${tmp}/cert.pem" 2>/dev/null
-  cat "${tmp}/cert.pem" "${CA_CRT_FILE}" > "${tmp}/chain.pem"
-  # key + chain -> PKCS12 -> JKS (mTLS identity; trusts the CA too)
-  openssl pkcs12 -export -inkey "${tmp}/key.pem" -in "${tmp}/cert.pem" -certfile "${CA_CRT_FILE}" \
-    -name "${svc}" -out "${tmp}/${svc}.p12" -passout "pass:${pass}"
-  keytool -importkeystore -noprompt \
-    -srckeystore "${tmp}/${svc}.p12" -srcstoretype PKCS12 -srcstorepass "${pass}" \
-    -destkeystore "${KS}/${svc}.keystore.jks" -deststoretype JKS -deststorepass "${pass}" 2>/dev/null
-  rm -rf "${tmp}"
-  [ "${first}" = 1 ] || PW_JSON+=","
-  PW_JSON+="\"${svc}\":\"${pass}\""; first=0
+    openssl x509 -req -in "${tmp}/csr.pem" -CA "${CA_CRT_FILE}" -CAkey "${CA_KEY_FILE}" "${CA_PASSIN[@]}" \
+      -CAcreateserial -days "${DAYS}" "-${SIG_HASH}" -extfile "${tmp}/ext" -out "${tmp}/cert.pem" 2>/dev/null
+    cat "${tmp}/cert.pem" "${CA_CRT_FILE}" > "${tmp}/chain.pem"
+    # key + chain -> PKCS12 -> JKS (mTLS identity; trusts the CA too)
+    openssl pkcs12 -export -inkey "${tmp}/key.pem" -in "${tmp}/cert.pem" -certfile "${CA_CRT_FILE}" \
+      -name "${svc}" -out "${tmp}/${svc}.p12" -passout "pass:${pass}"
+    keytool -importkeystore -noprompt \
+      -srckeystore "${tmp}/${svc}.p12" -srcstoretype PKCS12 -srcstorepass "${pass}" \
+      -destkeystore "${d_ks_dir}/${svc}.keystore.jks" -deststoretype JKS -deststorepass "${pass}" 2>/dev/null
+    rm -rf "${tmp}"
+    [ "${first}" = 1 ] || PW_JSON+=","
+    PW_JSON+="\"${svc}\":\"${pass}\""; first=0
+  done < <(services_for_brand "${d_brand}")
+  PW_JSON+="}}"
+  printf '%s\n' "${PW_JSON}" | (command -v jq >/dev/null && jq . || cat) > "${d_ks_dir}/passwords.json"
+  # Lock down the password file and the CA key. With an external CA the private
+  # key is NEVER copied into ${d_ca_dir}, so only chmod cluster-ca.key when we own it.
+  chmod 0600 "${d_ks_dir}/passwords.json" 2>/dev/null || true
+  [ -f "${d_ca_dir}/cluster-ca.key" ] && chmod 0600 "${d_ca_dir}/cluster-ca.key" 2>/dev/null || true
+
+  # Hand this domain's published CA cert (the trust anchor) back to the loop so
+  # it can be added to the WIDE multi-anchor architecture-tier truststore.
+  printf '%s\t%s\n' "${d_brand}" "${CA_CRT_FILE}" >&3
+}
+
+# ── Build the domain list (DEFAULT = exactly one row = current single domain) ──
+# Each row is "brand<TAB>domain<TAB>ca_cert<TAB>ca_key". With no brands/domains.conf
+# (or an empty one) the list is exactly the historical single {BRAND, DOMAIN,
+# CA_CERT, CA_KEY}, so the loop below is a no-op transformation (N=1).
+DOMAIN_ROWS=()
+if [ -f "${DOMAINS_CONF}" ] && grep -qE '^[[:space:]]*[^#[:space:]]' "${DOMAINS_CONF}"; then
+  echo "==> Multi-domain build from ${DOMAINS_CONF}"
+  while IFS= read -r _line || [ -n "${_line}" ]; do
+    # Strip comments (full-line and trailing) + surrounding whitespace; skip blanks.
+    _line="${_line%%#*}"
+    # shellcheck disable=SC2086
+    set -- ${_line}
+    [ "$#" -ge 1 ] || continue
+    _d="$1"; _b="${2:-}"; _cc="${3:-}"; _ck="${4:-}"
+    # Default brand = the domain's first DNS label (e.g. acme.test -> acme).
+    [ -n "${_b}" ] || _b="${_d%%.*}"
+    DOMAIN_ROWS+=("${_b}"$'\t'"${_d}"$'\t'"${_cc}"$'\t'"${_ck}")
+  done < "${DOMAINS_CONF}"
+fi
+# Fallback / default: the single current domain. This is the BYTE-IDENTICAL path.
+if [ "${#DOMAIN_ROWS[@]}" -eq 0 ]; then
+  DOMAIN_ROWS+=("${BRAND}"$'\t'"${DOMAIN}"$'\t'"${CA_CERT}"$'\t'"${CA_KEY}")
+fi
+N_DOMAINS="${#DOMAIN_ROWS[@]}"
+
+# ── Loop: provision each domain; collect each root for the WIDE store ──
+# WIDE_ANCHORS accumulates "brand<TAB>ca-cert-path" lines for the architecture
+# tier. For N=1 the single domain writes directly into ${CA}/${KS} (no nesting),
+# so every output path/alias/subject equals the pre-refactor script's — the
+# single-domain output is byte-/functionally-identical (see tests/keystores).
+WIDE_ANCHORS=""
+WIDE_FILE="$(mktemp)"
+for _row in "${DOMAIN_ROWS[@]}"; do
+  IFS=$'\t' read -r _b _d _cc _ck <<<"${_row}"
+  # CA_KEY_PASS: per-domain rows don't carry a passphrase (imported CA keys on a
+  # multi-domain build are expected unencrypted, or the single-domain CA_KEY_PASS
+  # env applies to the single row). Single-domain keeps the historical env value.
+  if [ "${N_DOMAINS}" -eq 1 ]; then
+    # SINGLE DOMAIN (default): write into the canonical ${CA}/${KS} (no per-brand
+    # subdir) so the layout is identical to the historical single-domain output.
+    _ca_dir="${CA}"; _ks_dir="${KS}"; _pass="${CA_KEY_PASS}"
+  else
+    echo "==> [domain ${_b} / ${_d}]"
+    _ca_dir="${CA}/${_b}"; _ks_dir="${KS}/${_b}"; _pass=""
+  fi
+  provision_domain "${_b}" "${_d}" "${_cc}" "${_ck}" "${_pass}" "${_ca_dir}" "${_ks_dir}" 3>>"${WIDE_FILE}"
 done
-PW_JSON+="}}"
-printf '%s\n' "${PW_JSON}" | (command -v jq >/dev/null && jq . || cat) > "${KS}/passwords.json"
-# Lock down the password file and the CA key. With an external CA the private
-# key is NEVER copied into ${CA}, so only chmod cluster-ca.key when we own it.
-chmod 0600 "${KS}/passwords.json" 2>/dev/null || true
-[ -f "${CA}/cluster-ca.key" ] && chmod 0600 "${CA}/cluster-ca.key" 2>/dev/null || true
+WIDE_ANCHORS="$(cat "${WIDE_FILE}")"; rm -f "${WIDE_FILE}"
+
+# ── WIDE multi-anchor truststore (ARCHITECTURE TIER ONLY) ──────────
+# Vault / federation-api / the superadmin module are cross-domain: they must
+# validate mTLS from EVERY domain, so they trust EVERY domain's root. Per-brand
+# gateway/BFF/UI instances do NOT use this store (they use their narrow own-domain
+# truststore from provision_domain). This extends the historical one-anchor import
+# path to import N anchors — and for N=1 it contains exactly the one root, making
+# it functionally identical to that single domain's narrow truststore.
+build_wide_truststore() {
+  local out_dir="${KS}/architecture"
+  mkdir -p "${out_dir}"
+  local ts_pass; ts_pass="$(randpass)"
+  rm -f "${out_dir}/truststore.jks" "${out_dir}/truststore.p12"
+  local concat; concat="$(mktemp)"
+  local b crt
+  while IFS=$'\t' read -r b crt; do
+    [ -n "${crt}" ] && [ -f "${crt}" ] || continue
+    # Import each domain root under its own alias (so N anchors coexist).
+    keytool -importcert -noprompt -alias "${b}-cluster-ca" \
+      -file "${crt}" -keystore "${out_dir}/truststore.jks" \
+      -storetype JKS -storepass "${ts_pass}" 2>/dev/null
+    cat "${crt}" >> "${concat}"
+  done <<<"${WIDE_ANCHORS}"
+  # PKCS12 wide truststore (Java reads it natively) — all roots, no keys.
+  openssl pkcs12 -export -nokeys -in "${concat}" \
+    -out "${out_dir}/truststore.p12" -passout "pass:${ts_pass}" -name architecture-truststore 2>/dev/null
+  rm -f "${concat}"
+  printf '{"truststore":"%s","tier":"architecture","anchors":%s}\n' "${ts_pass}" "${N_DOMAINS}" \
+    > "${out_dir}/passwords.json"
+  chmod 0600 "${out_dir}/passwords.json" 2>/dev/null || true
+  echo "==> WIDE architecture-tier truststore built (${N_DOMAINS} anchor(s)) in ${out_dir}"
+}
+build_wide_truststore
 
 echo "==> Done. Keystores in ${KS}:"
 ls -1 "${KS}"
