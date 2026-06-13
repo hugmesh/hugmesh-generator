@@ -6,7 +6,11 @@
 # satisfy ...[python]"), so pre-seed the full stack explicitly — this matches the
 # build's philosophy of EXPLICIT, reproducible USE decisions (cf. package.accept_keywords).
 sys-libs/libselinux python
-sys-libs/libsemanage python
 sys-process/audit python
-# checkpolicy + setools are python tools by nature; selinux-python is the meta.
-# If a further "...[python]" stall appears, add that package here too.
+# Verified against selinux-python's RDEPEND + each ebuild's IUSE: ONLY libselinux
+# and audit expose an optional `python` USE flag that must be enabled. libsemanage
+# is pulled as [python(+)] but has NO `python` flag (inherits python-r1 →
+# python_targets only), so the (+) operator auto-satisfies it — adding
+# `libsemanage python` here would error with "USE flag python not found".
+# setools/checkpolicy/selinux-python are python-intrinsic (python_targets via
+# PYTHON_USEDEP, no plain `python` flag).
