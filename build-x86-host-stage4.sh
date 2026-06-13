@@ -1179,11 +1179,11 @@ STAGE4="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.stage4.tar
 # left 27 cores idle on the multi-GB sysroot; mirrors the fs.tar codepath below.
 tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
-    --exclude='./var/cache' --exclude='./tmp/*' -cpf - . 2>/dev/null \
+    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./home/magus' -cpf - . 2>/dev/null \
     | xz -T0 -6 > "${STAGE4}" \
   || tar -C "${SYSROOT}" --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
-    --exclude='./var/cache' --exclude='./tmp/*' -cpf - . | xz -T0 -6 > "${STAGE4}"
+    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./home/magus' -cpf - . | xz -T0 -6 > "${STAGE4}"
 info "Stage4: ${STAGE4} ($(du -sh "${STAGE4}" | cut -f1))"
 
 # ── 10. Raw .img (DEFAULT deliverable) ─────────────────────────────
@@ -1397,12 +1397,12 @@ CHROOT
         info "Squashing rootfs (this can take a while)..."
         if command -v mksquashfs >/dev/null; then
             mksquashfs "${SYSROOT}" "${ISO_DIR}/LiveOS/squashfs.img" \
-                -comp zstd -e proc sys dev run var/cache/distfiles >/dev/null
+                -comp zstd -e proc sys dev run var/cache/distfiles home/magus >/dev/null
         else
             # squashfs-tools-ng fallback: same excludes, xz (kernel has SQUASHFS_XZ).
             tar -C "${SYSROOT}" --numeric-owner \
                 --exclude='./proc' --exclude='./sys' --exclude='./dev' \
-                --exclude='./run' --exclude='./var/cache/distfiles' \
+                --exclude='./run' --exclude='./var/cache/distfiles' --exclude='./home/magus' \
                 -cpf - . | tar2sqfs -q -c xz -j "${JOBS}" "${ISO_DIR}/LiveOS/squashfs.img"
         fi
         # Unify the cmdline with the .img: source GRUB_CMDLINE_LINUX from the same
