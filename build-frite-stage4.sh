@@ -676,14 +676,17 @@ if ! ${SKIP_MESH} && ! ${SKIP_TAILSCALE}; then
     DEFAULT_SVCS+=(tailscaled)
 fi
 if [ "${DESKTOP}" = "light" ]; then
-    DEFAULT_SVCS+=(display-manager)
-    # The OpenRC `display-manager` service (gui-libs/display-manager-init, added to
-    # packages-light-desktop.list) needs to know WHICH DM to start; without this it
-    # does nothing and the desktop image boots to a console. lightdm is the lean DM
-    # from packages-light-desktop.list. (The init script itself is asserted present
-    # after Phase 2 emerges — these are just the runlevel symlinks.)
+    # lightdm + its greeter + a modern X session need a running system bus (dbus)
+    # and a seat/login manager (elogind), plus the display-manager OpenRC service.
+    # Without dbus+elogind the greeter/session bring-up is unreliable.
+    DEFAULT_SVCS+=(dbus elogind display-manager)
+    # gui-libs/display-manager-init's /etc/init.d/display-manager reads this conf to
+    # decide WHICH DM to launch; lightdm ships no OpenRC service of its own. Without
+    # it the service falls back to xdm and the image boots to a bare console / wrong
+    # greeter (the packages-light-desktop.list comment promised the builder writes it
+    # but nothing did). Keeps dbus+elogind (superset of the parallel main fix).
     mkdir -p "${SYSROOT}/etc/conf.d"
-    printf 'DISPLAYMANAGER="lightdm"\n' > "${SYSROOT}/etc/conf.d/display-manager"
+    echo 'DISPLAYMANAGER="lightdm"' > "${SYSROOT}/etc/conf.d/display-manager"
 fi
 for svc in "${DEFAULT_SVCS[@]}"; do
     ln -sf "/etc/init.d/${svc}" "${SYSROOT}/etc/runlevels/default/${svc}" 2>/dev/null || true

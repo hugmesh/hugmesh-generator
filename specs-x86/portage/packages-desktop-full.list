@@ -1,0 +1,23 @@
+# x86 CLIENT desktop — FULL (thick) extras, appended ONLY for --desktop full on a
+# client role (on top of packages.list + packages-desktop.list). The opt-in heavier
+# desktop per FD-04 (full desktop is opt-in; thin laptop/Chromebook are defaults).
+# See docs/CLIENT-IMAGES.md.
+
+# Heavier desktop environment (XFCE) on top of the base openbox/lxpanel session
+xfce-base/xfce4-meta
+xfce-base/xfce4-session
+x11-terms/xfce4-terminal
+
+# A full-featured browser (binary to avoid a multi-hour from-source build)
+www-client/firefox-bin
+
+# Modern audio stack (thin profile is ALSA-only)
+media-video/pipewire
+media-video/wireplumber
+
+# Media + office basics
+media-video/vlc
+app-arch/file-roller
+
+# Printing
+net-print/cups

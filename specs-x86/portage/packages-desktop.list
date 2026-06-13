@@ -1,0 +1,48 @@
+# x86 CLIENT desktop stack (thin) — appended onto packages.list for ROLE_CLIENT
+# builds (laptop/chromebook/desktop). Mirrors the proven specs-frite light desktop
+# (LXDE/openbox + lightdm) plus x86 laptop bits. The --desktop full weight adds
+# packages-desktop-full.list on top. See docs/CLIENT-IMAGES.md.
+
+# Display server + basic X utilities
+x11-base/xorg-server
+x11-apps/xrandr
+x11-apps/xset
+x11-apps/setxkbmap
+x11-misc/xterm
+
+# Session: LXDE-lite — openbox WM + lxpanel + pcmanfm (lean, turnkey)
+x11-wm/openbox
+lxde-base/lxpanel
+lxde-base/lxsession
+lxde-base/pcmanfm
+lxde-base/lxappearance
+
+# Login / seat: lightdm + greeter + the OpenRC `display-manager` service
+# (gui-libs/display-manager-init provides the service; lightdm ships none).
+x11-misc/lightdm
+x11-misc/lightdm-gtk-greeter
+gui-libs/display-manager-init
+
+# System bus + seat/login manager (enabled in the client runlevel)
+sys-apps/dbus
+sys-auth/elogind
+
+# Networking UI + laptop power management
+gnome-extra/nm-applet
+sys-power/acpid
+
+# Firewall — FD-06 superadmin shields-up uses firewalld; harmless on all clients
+net-firewall/firewalld
+
+# CPU microcode + firmware blobs (Intel/AMD laptops, wifi/bt firmware)
+sys-firmware/intel-microcode
+sys-kernel/linux-firmware
+
+# Lean browser for the thin profile (full profile swaps in firefox/chromium)
+www-client/netsurf
+
+# Fonts + a file/image viewer + console editor
+media-fonts/dejavu
+media-fonts/noto
+media-gfx/feh
+app-editors/nano
