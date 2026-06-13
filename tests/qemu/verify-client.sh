@@ -27,6 +27,7 @@ IMG=""
 SSH_USER="${SSH_USER:-tester}"
 SSH_PORT="${SSH_PORT:-2222}"
 MEM="${MEM:-4096}"; SMP="${SMP:-4}"
+TEST_DIR="${TEST_DIR:-}"             # scratch (overlay/KEYS/console); default under WORK_DIR
 TIMEOUT="${TIMEOUT:-900}"            # console-milestone deadline (TCG-generous)
 SSH_TIMEOUT="${SSH_TIMEOUT:-120}"    # extra wait to try SSH after milestones
 KEEP=false; DRY_RUN=false
@@ -43,6 +44,7 @@ while [[ $# -gt 0 ]]; do
         --ssh-port)      SSH_PORT="$2"; shift 2 ;;
         -m|--mem)        MEM="$2"; shift 2 ;;
         --smp)           SMP="$2"; shift 2 ;;
+        --test-dir)      TEST_DIR="$2"; shift 2 ;;
         --timeout)       TIMEOUT="$2"; shift 2 ;;
         --keep)          KEEP=true; shift ;;
         --dry-run)       DRY_RUN=true; shift ;;
@@ -75,7 +77,9 @@ if [ -z "${IMG}" ] || [ ! -f "${IMG}" ]; then
     warn "dry-run: no .img resolved — using a placeholder (build it before a real run)"
 fi
 
-TEST_DIR="${WORK_DIR}/qemu-verify-client"
+# Scratch defaults under WORK_DIR, but WORK_DIR is often root-owned (a sudo build
+# made it), so allow --test-dir to point at a magus-writable location for non-root runs.
+[ -n "${TEST_DIR}" ] || TEST_DIR="${WORK_DIR}/qemu-verify-client"
 RUN_DIR="${TEST_DIR}/run"
 KEYS_DIR="${TEST_DIR}/keys"
 KEYS_IMG="${TEST_DIR}/keys.img"
