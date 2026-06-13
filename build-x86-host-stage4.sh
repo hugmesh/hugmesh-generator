@@ -1246,13 +1246,18 @@ esac
 STAGE4="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.stage4.tar.xz"
 # Multi-threaded xz (-T0) over the tar stream — -cJf is single-threaded and
 # left 27 cores idle on the multi-GB sysroot; mirrors the fs.tar codepath below.
+# --exclude=./usr/src: the kernel was built in /usr/src/linux (its modules +
+# vmlinuz are already installed to /lib/modules + /boot), so the multi-GB build
+# tree (.o/.cmd objects) is pure cruft in the image — and baking it in overflowed
+# the fixed ROOT_MiB ext4 root partition ("No space left on device" mid-.img
+# population). The rpi5 builder already strips it (rm /usr/src/* + --exclude); match it.
 tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
-    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./home/magus' -cpf - . 2>/dev/null \
+    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude='./home/magus' -cpf - . 2>/dev/null \
     | xz -T0 -6 > "${STAGE4}" \
   || tar -C "${SYSROOT}" --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
-    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./home/magus' -cpf - . | xz -T0 -6 > "${STAGE4}"
+    --exclude='./var/cache' --exclude='./tmp/*' --exclude='./usr/src' --exclude='./home/magus' -cpf - . | xz -T0 -6 > "${STAGE4}"
 info "Stage4: ${STAGE4} ($(du -sh "${STAGE4}" | cut -f1))"
 
 # ── 10. Raw .img (DEFAULT deliverable) ─────────────────────────────
