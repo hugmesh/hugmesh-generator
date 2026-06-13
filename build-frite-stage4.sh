@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# build-frite-stage4.sh
 # Build a hardened Gentoo aarch64 LIGHT-DESKTOP image for the Libre Computer
 # Le/La Frite family (Amlogic GXL: S805X / S905X) using the same crossdev
 # toolchain + shared mesh/provisioning plumbing as the Pi5/x86 client images.
@@ -361,7 +360,6 @@ if [ "${FRITE_HAS_SD}" = "false" ] && ${BUILD_LIVE}; then
     info "La Frite has NO microSD slot — the LIVE image boots off USB (u-boot in SPI NOR)."
 fi
 
-# Default hostname
 if [ -z "${HOSTNAME}" ]; then
     case "${ROLE}" in
         desktop|generic) HOSTNAME="${BRAND}-frite" ;;
@@ -369,7 +367,6 @@ if [ -z "${HOSTNAME}" ]; then
     esac
 fi
 
-# Derived paths
 BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"
 SYSROOT="${BUILD_ROOT}/sysroot"
 STAGE_DIR="${BUILD_ROOT}/staging"     # boot tree + ISO/installer staging
@@ -586,7 +583,6 @@ cp "${SPECS_DIR}/portage/package.env/"*             "${SYSROOT}/etc/portage/pack
 cp "${SPECS_DIR}/portage/env/"*.conf               "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
 
-# /etc config files
 cp "${SPECS_DIR}/etc/fstab" "${SYSROOT}/etc/fstab"
 
 # ── Shared (arch-agnostic) mesh + provisioning + sshd — the SAME plumbing the
@@ -668,7 +664,6 @@ fi
 harden_radios "${SYSROOT}"
 write_zram_firstboot "${SYSROOT}"
 
-# Hostname / timezone / locale
 echo "${HOSTNAME}" > "${SYSROOT}/etc/hostname"
 mkdir -p "${SYSROOT}/etc/conf.d"
 echo "hostname=\"${HOSTNAME}\"" > "${SYSROOT}/etc/conf.d/hostname"
@@ -1030,7 +1025,6 @@ build_installer_iso() {
     FRITE_INITRD_LINE="    # (installer boots the same lean kernel)"
     FRITE_APPEND="${APPEND_BASE} root=LABEL=FRITE_ROOT"
     render_template "${SPECS_DIR}/boot/extlinux.conf.tmpl" "${inst_root}/boot/extlinux/extlinux.conf"
-    # Payload: the stage4 + the installer + any staged u-boot.
     cp "${STAGE4_TARBALL}" "${inst_root}/stage4/"
     cp "${SPECS_DIR}/installer/install-frite.sh" "${inst_root}/install-frite.sh"
     chmod +x "${inst_root}/install-frite.sh"

@@ -1029,7 +1029,7 @@ fi
 EMERGE_JOBS=$(( JOBS / 4 )); [ "${EMERGE_JOBS}" -lt 2 ] && EMERGE_JOBS=2
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 export MAKEOPTS="-j${JOBS}"
-export EMERGE_DEFAULT_OPTS="--jobs ${EMERGE_JOBS} --load-average ${JOBS}"
+export EMERGE_DEFAULT_OPTS="--jobs ${EMERGE_JOBS} --load-average ${JOBS} --usepkg=y --binpkg-respect-use=y"
 # Build chroot: /boot/efi exists in the baked fstab but is never mounted here.
 # Without this, mount-boot.eclass (linux-firmware, grub-themes) dies in
 # pkg_pretend ("/boot/efi not mounted") and ABORTS the ENTIRE package-set
@@ -1175,12 +1175,15 @@ case "${ROLE}" in
     *)      ROLE_TAG="${ROLE}" ;;
 esac
 STAGE4="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.stage4.tar.xz"
+# Multi-threaded xz (-T0) over the tar stream — -cJf is single-threaded and
+# left 27 cores idle on the multi-GB sysroot; mirrors the fs.tar codepath below.
 tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
-    --exclude='./var/cache' --exclude='./tmp/*' -cJf "${STAGE4}" . 2>/dev/null || \
-tar -C "${SYSROOT}" --numeric-owner \
+    --exclude='./var/cache' --exclude='./tmp/*' -cpf - . 2>/dev/null \
+    | xz -T0 -6 > "${STAGE4}" \
+  || tar -C "${SYSROOT}" --numeric-owner \
     --exclude='./proc/*' --exclude='./sys/*' --exclude='./dev/*' --exclude='./run/*' \
-    --exclude='./var/cache' --exclude='./tmp/*' -cJf "${STAGE4}" .
+    --exclude='./var/cache' --exclude='./tmp/*' -cpf - . | xz -T0 -6 > "${STAGE4}"
 info "Stage4: ${STAGE4} ($(du -sh "${STAGE4}" | cut -f1))"
 
 # ── 10. Raw .img (DEFAULT deliverable) ─────────────────────────────

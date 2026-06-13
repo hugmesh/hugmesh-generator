@@ -18,8 +18,15 @@ MAKEOPTS="-j@@JOBS@@"
 # -userfetch/-userpriv: don't drop to the 'portage' user (can't traverse a
 # mode-700 / encrypted work dir). Sandbox off for the native chroot build.
 FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox -ipc-sandbox"
-PKGDIR="@@WORK_DIR@@/pkgdir"
-DISTDIR="@@WORK_DIR@@/distfiles"
+# Chroot-INTERNAL cache paths. The old @@WORK_DIR@@/{pkgdir,distfiles} rendered
+# to the HOST-absolute build dir, which inside the chroot resolves UNDER the
+# sysroot (sysroot/home/...): binpkgs+distfiles (2.4 GB) then got baked into
+# every stage4/.img/squashfs (var/cache IS excluded; that home path was not),
+# leaking host paths and bloating artifacts. /var/cache is excluded from the
+# stage4 tar + squashfs, so these never ship, and they persist across the 4
+# roles in one shared sysroot so role 2-4 reuse role 1's binpkgs (--usepkg).
+PKGDIR="/var/cache/binpkgs"
+DISTDIR="/var/cache/distfiles"
 
 # Hardened USE baseline + container runtime + (optional) vendor-agnostic GPU stack.
 # @@GPU_USE@@ expands to the GPU USE flags (vulkan vaapi vdpau gbm egl gles2) for

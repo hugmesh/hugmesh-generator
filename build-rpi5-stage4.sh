@@ -8,7 +8,6 @@
 # The bundled install.sh (inside the ISO) also requires root on the target.
 set -euo pipefail
 
-# ── Resolve SCRIPT_DIR (where the spec trees live) ─────────────────
 # Mirrors the x86 host builder's split: SPECS_DIR holds the aarch64/RPi5-specific
 # specs (portage, boot, kernel, installer, fstab), SHARED_SPECS holds the
 # arch-agnostic specs shared with the x86 build (etc/, cluster/, usr/).
@@ -16,7 +15,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPECS_DIR="${SCRIPT_DIR}/specs-rpi5"     # aarch64/RPi5-specific specs
 SHARED_SPECS="${SCRIPT_DIR}/specs"       # arch-agnostic specs (etc/, cluster/, usr/)
 
-# ── Defaults ───────────────────────────────────────────────────────
 WORK_DIR=""
 # Per-arch build subdirectory under WORK_DIR. The heavy, ARCH-SPECIFIC build
 # tree (sysroot, ISO staging, distfiles, pkgdir, seed/binary downloads) lives
@@ -95,7 +93,6 @@ TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
 
-# ── Colors ─────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
@@ -108,7 +105,6 @@ info()   { echo -e "${GREEN}    $1${RESET}"; }
 warn()   { echo -e "${YELLOW}    WARNING: $1${RESET}"; }
 err()    { echo -e "${RED}    ERROR: $1${RESET}" >&2; }
 
-# ── Usage / man page ──────────────────────────────────────────────
 usage() {
 cat <<'MANEOF'
 NAME
@@ -514,7 +510,6 @@ if [ -n "${CONFIG_FILE}" ]; then
     echo "Loaded brand profile: ${CONFIG_FILE} (brand=${BRAND}, domain=${CLUSTER_DOMAIN})"
 fi
 
-# ── Option parsing ─────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -w|--work-dir)        WORK_DIR="$2";           shift 2 ;;
@@ -661,7 +656,6 @@ LOG_FILE="${WORK_DIR}/build.log"
 BUILD_TS="$(date -u +%Y%m%dT%H%M%SZ)"
 info "Build stamp: ${BUILD_TS} (UTC; brand=${BRAND}, env=${ENV})"
 
-# ── Template helper ────────────────────────────────────────────────
 # Copies a file, replacing @@VAR@@ markers with shell variable values.
 # Usage: render_template <src> <dst>
 render_template() {
@@ -690,7 +684,6 @@ render_template() {
         "${src}" > "${dst}"
 }
 
-# ── harden_radios <sysroot> ───────────────────────────────────────────────────
 # WiFi + Bluetooth are DISABLED BY DEFAULT (hardened posture). For each radio
 # left OFF (ENABLE_WIFI / ENABLE_BLUETOOTH = false) we (a) blacklist its kernel
 # modules in /etc/modprobe.d/ so they don't autoload (on the Pi 5 the onboard
@@ -751,7 +744,6 @@ harden_radios() {
     [ -s "${bl}" ] || echo "# (no radios blacklisted — both WiFi and Bluetooth enabled)" > "${bl}"
 }
 
-# ── write_growfs_conf <dest> ──────────────────────────────────────────────────
 # Emit the first-boot grow policy file consumed by the growroot service. GROW=
 # carries fill|none|<size>; the comment header documents the per-device overrides
 # so an operator editing the copy on the FAT /boot needs no external docs.
@@ -994,7 +986,6 @@ gate_env_apps() {
     esac
 }
 
-# ── Rebrand the baked config tree (no-op for the default snapdragon names) ──
 # Rewrites the cluster GitOps payload + role markers from the default
 # "snapdragon"/"snapdragon.systems" naming to ${BRAND}/${CLUSTER_DOMAIN}/${ORG}.
 # Internal install paths (/var/lib/snapdragon, /etc/snapdragon) and the
@@ -1023,7 +1014,6 @@ rebrand_sysroot() {
     info "Rebrand complete (compound names like '${BRAND}-systems-web' may want review)."
 }
 
-# ── 0. Verify prerequisites ───────────────────────────────────────
 banner "Verifying prerequisites"
 
 # Check spec directories (arch-specific + shared)
@@ -1093,12 +1083,16 @@ fi
 info "Cross-compiler: $(${CROSS_TARGET}-gcc --version | head -1)"
 info "Jobs: ${JOBS}"
 
-# ── 1. Directory layout ───────────────────────────────────────────
 banner "Preparing build directories"
 
 mkdir -p "${WORK_DIR}"
 mkdir -p "${BUILD_ROOT}"/{distfiles,pkgdir,log}
 mkdir -p "${SYSROOT}"
+# The isoroot is per-run OUTPUT staging, never an input: a stale tree from a
+# previous run used to poison build_img with an old kernel/config.txt and
+# accumulate timestamped stage4 tarballs the installer then picked arbitrarily
+# (unsorted find | head -1). Start every run clean.
+rm -rf "${ISO_DIR}"
 mkdir -p "${ISO_DIR}"
 
 info "Work directory: ${WORK_DIR}  (products land here)"
@@ -1109,7 +1103,6 @@ info "Sysroot:        ${SYSROOT}"
 exec > >(tee -a "${LOG_FILE}") 2>&1
 info "Logging to ${LOG_FILE}"
 
-# ── 2. Fetch seed stage3 ──────────────────────────────────────────
 banner "Fetching latest arm64 stage3 seed tarball"
 
 # The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
@@ -1126,7 +1119,6 @@ else
     info "Using cached ${STAGE3_BASENAME}"
 fi
 
-# ── 3. Extract seed stage3 into sysroot ────────────────────────────
 banner "Extracting seed stage3 into sysroot"
 
 if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
@@ -1145,7 +1137,6 @@ else
     info "Extracted into ${SYSROOT} (device nodes skipped; devtmpfs at boot)"
 fi
 
-# ── 4. Install spec files into sysroot portage ─────────────────────
 banner "Installing spec files into sysroot (hardened profile)"
 
 # Compute PCIE_LINE for templates
@@ -1292,7 +1283,6 @@ cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson"     "${SYSROOT}/etc/h
 cp "${SHARED_SPECS}/etc/headscale/policy.hujson.tmpl"          "${SYSROOT}/etc/headscale/policy.hujson.tmpl"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-policy-sync"         "${SYSROOT}/etc/snapdragon/registry/cron-policy-sync"
 
-# ── Cluster GitOps payload + node role marker ─────────────────────
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
@@ -1362,7 +1352,6 @@ harden_radios "${SYSROOT}"
 
 info "Profile: ${PROFILE_PATH}"
 
-# ── 5. Cross-emerge helper ────────────────────────────────────────
 cross_emerge() {
     # Keep emerge's log + dependency-metadata cache inside the work dir instead
     # of the host's /var/log + /var/cache/edb (which are root-owned). Still needs
@@ -1380,7 +1369,6 @@ cross_emerge() {
         "$@"
 }
 
-# ── 6. Build @system ──────────────────────────────────────────────
 banner "Phase 1: Cross-building @system (hardened)"
 
 # A cross-built stage4 must NOT (cross-)rebuild the toolchain. Cross-building a
@@ -1403,7 +1391,6 @@ cross_emerge --oneshot --update sys-apps/baselayout
 cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" @system \
     || warn "@system had package failures (--keep-going); continuing"
 
-# ── 7. Build stage4 packages ──────────────────────────────────────
 banner "Phase 2: Cross-building stage4 packages"
 
 # Read package list from spec file, stripping comments and blanks
@@ -1431,6 +1418,28 @@ if ! cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "$
     done
 fi
 
+# The packages.list payload is MANDATORY for a usable role image — fail LOUDLY
+# if the core set is missing rather than ship a payload-less stage4. The
+# '|| warn' emerges above are allowed to continue (so one bad atom can't sink
+# the whole list), which means THIS is the gate: the exact silent-failure
+# class that shipped hollow x86 images for weeks (see build-x86-host-stage4.sh's
+# matching "stage4 payload incomplete" assert). Binaries are aarch64, so test
+# for file presence in the sysroot rather than command -v.
+_payload_missing=""
+for _b in kubelet kubeadm kubectl containerd NetworkManager nmcli sshd auditd crond jq parted; do
+    _found=false
+    for _d in usr/bin usr/sbin bin sbin; do
+        if [ -e "${SYSROOT}/${_d}/${_b}" ]; then _found=true; break; fi
+    done
+    ${_found} || _payload_missing="${_payload_missing} ${_b}"
+done
+if [ -n "${_payload_missing}" ]; then
+    err "stage4 payload incomplete — missing:${_payload_missing}"
+    err "packages.list did not fully merge; review the emerge output above."
+    exit 1
+fi
+info "Stage4 payload verified (kubelet kubeadm kubectl containerd NetworkManager nmcli sshd auditd crond jq parted)"
+
 # ── 7a. Boot config (AFTER firmware is merged) ─────────────────────
 # Written now — not in the spec-install phase — so raspberrypi-firmware's
 # pkg_preinst didn't die on a pre-existing /boot/config.txt|cmdline.txt. Our
@@ -1441,7 +1450,6 @@ if [ -d "${SYSROOT}/boot" ]; then
     info "Boot config written (config.txt + cmdline.txt) over the firmware defaults"
 fi
 
-# ── 7b. Install mesh VPN (headscale + tailscale) ───────────────────
 if ${SKIP_MESH}; then
     banner "Phase 2.5: SKIPPED mesh VPN (--skip-mesh)"
 else
@@ -1452,11 +1460,18 @@ else
     info "Fetching headscale ${HEADSCALE_VERSION}..."
     if curl -fL -o "${HS_BIN}" "${HS_URL}"; then
         chmod +x "${HS_BIN}"
-        file "${HS_BIN}" | grep -q 'ELF.*aarch64' \
-            || warn "headscale binary is not aarch64 — check --headscale-version"
+        file "${HS_BIN}" | grep -q 'ELF.*aarch64' || {
+            rm -f "${HS_BIN}"
+            err "headscale binary is not aarch64 — check --headscale-version"
+            exit 1
+        }
         info "headscale installed: /usr/bin/headscale"
     else
-        warn "Could not fetch headscale ${HEADSCALE_VERSION}; the headscale service will be inert."
+        rm -f "${HS_BIN}"   # curl -o may leave a truncated file behind
+        err "headscale ${HEADSCALE_VERSION} fetch failed — the image enables the headscale"
+        err "service in the default runlevel, so this would ship an inert mesh control plane."
+        err "Retry, or pass --skip-mesh to opt out of the mesh VPN entirely."
+        exit 1
     fi
 
     if ${SKIP_TAILSCALE}; then
@@ -1474,12 +1489,14 @@ else
             rm -rf "${TS_TMP}"
             info "tailscale installed: /usr/bin/tailscale, /usr/sbin/tailscaled"
         else
-            warn "Could not fetch tailscale ${TAILSCALE_VERSION}; the tailscaled service will be inert."
+            err "tailscale ${TAILSCALE_VERSION} fetch failed — the image enables tailscaled"
+            err "in the default runlevel, so this would ship an inert mesh client."
+            err "Retry, or pass --skip-tailscale (or --skip-mesh) to opt out."
+            exit 1
         fi
     fi
 fi
 
-# ── 8. Cross-compile the kernel ───────────────────────────────────
 if ${SKIP_KERNEL}; then
     banner "Phase 3: SKIPPED (--skip-kernel)"
 else
@@ -1511,11 +1528,14 @@ else
 
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" olddefconfig
 
-        # Refuse to ship a kernel that silently lost SELinux (e.g. a defconfig
-        # bump dropping a dep that olddefconfig then prunes), mirroring the x86
-        # build's guard. A malformed CONFIG_LSM == SELinux disabled at boot.
-        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
-            grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
+        # Refuse to ship a kernel that silently lost SELinux or its KSPP
+        # hardening (e.g. a defconfig bump dropping a dep that olddefconfig
+        # then prunes), mirroring the x86 build's guard — stable, long-standing
+        # KSPP/LSM symbols only. A malformed CONFIG_LSM == SELinux disabled.
+        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM \
+                    CONFIG_STACKPROTECTOR_STRONG CONFIG_FORTIFY_SOURCE \
+                    CONFIG_HARDENED_USERCOPY; do
+            grep -q "^${must}=y" .config || { err "hardened kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
         grep -q '^CONFIG_LSM="yama,selinux,bpf"$' .config || { err "CONFIG_LSM malformed (expected yama,selinux,bpf); SELinux would not activate"; exit 1; }
 
@@ -1538,7 +1558,6 @@ else
     fi
 fi
 
-# ── 9. Clean sysroot ──────────────────────────────────────────────
 if ${SKIP_CLEAN}; then
     banner "Cleaning: SKIPPED (--skip-clean)"
 else
@@ -1561,7 +1580,6 @@ else
     info "Sysroot cleaned and binaries stripped."
 fi
 
-# ── 10. Package stage4 tarball ─────────────────────────────────────
 banner "Phase 4: Packaging stage4 tarball"
 
 STAGE4_TARBALL="${WORK_DIR}/${BRAND}-rpi5-arm64-${ROLE}-${ENV}-${BUILD_TS}.stage4.tar.xz"
@@ -1660,12 +1678,10 @@ build_img() {
 
     # Populate /boot from the sysroot's boot tree (kernel_2712.img, config.txt,
     # cmdline.txt, bcm2712*.dtb, overlays/, firmware) — the same files the ISO
-    # stages. Copy the staged ISO boot tree if present (built by Phase 5), else
-    # fall back to the authoritative sysroot/boot.
+    # stages. ${SYSROOT}/boot is ALWAYS the authoritative, freshly-built source.
+    # (The isoroot is staged AFTER this phase and is wiped at run start — a
+    # leftover tree from a previous run once silently shipped a stale kernel.)
     local boot_src="${SYSROOT}/boot"
-    if [ -d "${ISO_DIR}/boot" ] && [ -f "${ISO_DIR}/boot/${RPI_KERNEL_IMG}" ]; then
-        boot_src="${ISO_DIR}/boot"
-    fi
     info "Staging boot files from ${boot_src}"
     cp "${boot_src}/${RPI_KERNEL_IMG}"        "${root_mnt}/boot/"
     cp "${boot_src}/config.txt"               "${root_mnt}/boot/"
@@ -1675,6 +1691,26 @@ build_img() {
     for fw in bootcode.bin fixup*.dat start*.elf; do
         cp "${SYSROOT}/boot/${fw}"            "${root_mnt}/boot/" 2>/dev/null || true
     done
+
+    # The copies above are failure-tolerant (some files are board-optional),
+    # but a boot partition without a device tree is UNBOOTABLE — the Pi
+    # firmware needs a matching DTB to even start the kernel. Pi 3/4 boards
+    # additionally need the GPU firmware (start*.elf/fixup*.dat); the Pi 5
+    # boots from EEPROM. Assert the boot-mandatory payload landed instead of
+    # shipping a brickable .img with exit 0.
+    if ! ls "${root_mnt}/boot/"${RPI_DTB_PREFIX}*.dtb >/dev/null 2>&1; then
+        err "no ${RPI_DTB_PREFIX}*.dtb on the .img boot partition — the image would be unbootable"
+        err "(kernel-phase DTB install failed or the sysroot boot tree is incomplete)"
+        exit 1
+    fi
+    if [ "${RPI_DTB_PREFIX}" != "bcm2712" ]; then
+        if ! ls "${root_mnt}/boot/"start*.elf  >/dev/null 2>&1 || \
+           ! ls "${root_mnt}/boot/"fixup*.dat >/dev/null 2>&1; then
+            err "GPU firmware (start*.elf / fixup*.dat) missing from the .img boot partition —"
+            err "${RPI_DTB_PREFIX} boards cannot boot without it (did sys-boot/raspberrypi-firmware merge?)"
+            exit 1
+        fi
+    fi
 
     # Drop a per-device-editable growfs.conf on the FAT /boot so an operator can
     # retune the first-boot grow (fill|none|<size>) on a flashed card WITHOUT a
@@ -1747,35 +1783,37 @@ build_img() {
 
 if ${BUILD_IMG}; then
     banner "Phase 5: Building raw .img"
-    # A bootable image needs the kernel. Guard with the same check Phase 5 (ISO)
-    # uses: if the kernel is absent, skip the .img rather than crash on cp.
+    # The .img is the DEFAULT artifact — the only directly bootable Pi
+    # deliverable, and the .fs.tar.xz is produced inside build_img too. A
+    # missing kernel means the build already failed (raspberrypi-sources
+    # didn't merge or the kernel phase didn't run): fail LOUDLY instead of
+    # printing the success banner over a deliverable-less run.
     if [ ! -f "${SYSROOT}/boot/${RPI_KERNEL_IMG}" ]; then
-        warn "Kernel ${RPI_KERNEL_IMG} not in sysroot — skipping .img."
-        warn "Ensure sys-kernel/raspberrypi-sources installed and the kernel phase ran"
-        warn "(don't pass --skip-kernel). Stage4 tarball: ${STAGE4_TARBALL}"
-        IMG_PATH="(not built — kernel missing)"
-    else
-        build_img
+        err "Kernel ${RPI_KERNEL_IMG} not in sysroot — cannot build the .img (the default artifact)."
+        err "Ensure sys-kernel/raspberrypi-sources installed and the kernel phase ran"
+        err "(don't pass --skip-kernel). Pass --no-img for a stage4-tarball-only build."
+        exit 1
     fi
+    build_img
 else
     banner "Phase 5: SKIPPED .img (--no-img)"
 fi
 
-# ── 11. Build bootable installer ISO (opt-in: --iso / --both) ──────
 if ${SKIP_ISO}; then
     banner "Phase 6: SKIPPED installer ISO (default; pass --iso to build it)"
     ISO_PATH="(not built)"
 else
     banner "Phase 6: Building bootable installer ISO"
 
-    # A bootable image needs the kernel. If it's absent (kernel build skipped or
-    # raspberrypi-sources failed to install), don't crash on cp — explain and
-    # skip the ISO; the stage4 tarball is still produced above.
+    # A bootable ISO needs the kernel. The ISO is opt-in (--iso), so if it was
+    # requested and the kernel is absent (kernel build skipped or
+    # raspberrypi-sources failed to install) the run cannot deliver what was
+    # asked for — fail loudly rather than warn-and-skip.
     if [ ! -f "${SYSROOT}/boot/${RPI_KERNEL_IMG}" ]; then
-        warn "Kernel ${RPI_KERNEL_IMG} not in sysroot — skipping ISO."
-        warn "Ensure sys-kernel/raspberrypi-sources installed and the kernel phase ran"
-        warn "(don't pass --skip-kernel). Stage4 tarball: ${STAGE4_TARBALL}"
-        ISO_PATH="(not built — kernel missing)"
+        err "Kernel ${RPI_KERNEL_IMG} not in sysroot — cannot build the requested ISO."
+        err "Ensure sys-kernel/raspberrypi-sources installed and the kernel phase ran"
+        err "(don't pass --skip-kernel), or drop --iso for a tarball/.img-only build."
+        exit 1
     else
 
     mkdir -p "${ISO_DIR}"/{boot,stage4,EFI/BOOT}
@@ -1791,7 +1829,18 @@ else
         cp "${SYSROOT}/boot/${fw}" "${ISO_DIR}/boot/" 2>/dev/null || true
     done
 
-    # Stage4 tarball
+    # Same boot-mandatory assert as the .img: no DTB on the ISO boot tree means
+    # the installed system can't boot, and the copies above are '|| true'.
+    if ! ls "${ISO_DIR}/boot/"${RPI_DTB_PREFIX}*.dtb >/dev/null 2>&1; then
+        err "no ${RPI_DTB_PREFIX}*.dtb in the ISO boot tree — the installed image would be unbootable"
+        exit 1
+    fi
+
+    # Stage4 tarball — the staging dir must hold EXACTLY this run's tarball:
+    # names embed BUILD_TS, and the bundled installer picks one with an
+    # unsorted `find | head -1`. Belt-and-braces with the run-start isoroot
+    # wipe (covers a future code path that repopulates within one run).
+    rm -f "${ISO_DIR}/stage4/"*.tar.xz
     cp "${STAGE4_TARBALL}" "${ISO_DIR}/stage4/"
 
     # Installer script from spec file
@@ -1812,7 +1861,6 @@ else
     fi   # end kernel-present check
 fi
 
-# ── 12. Summary ────────────────────────────────────────────────────
 echo ""
 echo -e "${CYAN}${BOLD}=============================================="
 echo "  RPi 5 Hardened + Kubernetes Stage4 Complete"
