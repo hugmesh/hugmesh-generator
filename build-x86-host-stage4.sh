@@ -850,6 +850,17 @@ for puf in "${SPECS_DIR}/portage/package.use/"*; do
     cp "${puf}" "${SYSROOT}/etc/portage/package.use/"
 done
 
+# Per-package build env (e.g. env/llvm-lowmem.conf caps MAKEOPTS for the
+# memory-hungry llvm-core/llvm+clang that mesa[llvm] pulls for the be+gpu role —
+# at the global -j28 they OOM-crashed the host). Copy the env/ snippets + the
+# package.env mapping when present (the headless roles carry them harmlessly).
+if [ -d "${SPECS_DIR}/portage/env" ]; then
+    mkdir -p "${SYSROOT}/etc/portage/env"
+    cp "${SPECS_DIR}/portage/env/"* "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
+fi
+[ -f "${SPECS_DIR}/portage/package.env" ] && \
+    cp "${SPECS_DIR}/portage/package.env" "${SYSROOT}/etc/portage/package.env"
+
 # x86 GRUB cmdline (SELinux LSM + KSPP hardening). Disable os-prober so a
 # grub-mkconfig (installer / chroot) can never enumerate the host's other disks.
 mkdir -p "${SYSROOT}/etc/default"
