@@ -675,7 +675,18 @@ DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision local)
 if ! ${SKIP_MESH} && ! ${SKIP_TAILSCALE}; then
     DEFAULT_SVCS+=(tailscaled)
 fi
-[ "${DESKTOP}" = "light" ] && DEFAULT_SVCS+=(display-manager)
+if [ "${DESKTOP}" = "light" ]; then
+    # lightdm + its greeter + a modern X session need a running system bus (dbus)
+    # and a seat/login manager (elogind), plus the display-manager OpenRC service.
+    # Without dbus+elogind the greeter/session bring-up is unreliable.
+    DEFAULT_SVCS+=(dbus elogind display-manager)
+    # gui-libs/display-manager-init's /etc/init.d/display-manager reads this conf to
+    # decide WHICH DM to launch; lightdm ships no OpenRC service of its own. Without
+    # it the service falls back to xdm and the image boots to a bare console / wrong
+    # greeter (the packages-light-desktop.list comment promised the builder writes it
+    # but nothing did — fixed here).
+    echo 'DISPLAYMANAGER="lightdm"' > "${SYSROOT}/etc/conf.d/display-manager"
+fi
 for svc in "${DEFAULT_SVCS[@]}"; do
     ln -sf "/etc/init.d/${svc}" "${SYSROOT}/etc/runlevels/default/${svc}" 2>/dev/null || true
 done

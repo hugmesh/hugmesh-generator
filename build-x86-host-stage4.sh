@@ -29,6 +29,12 @@ REL_VERSION="2026.0"
 HOSTNAME=""
 ROLE="be+gpu"          # default role (= the legacy 'host'); 'host' is accepted as an alias
 GPU=true               # derived from ROLE below; gates Mesa/Vulkan + DRM kernel + VIDEO_CARDS
+# ── CLIENT (person-device) image config — see docs/CLIENT-IMAGES.md (FD-04..09) ──
+# A client is a person's DESKTOP that joins the mesh + runs the platform UI, NOT a
+# k8s node. The device-class role arms (laptop|chromebook|desktop) set ROLE_CLIENT.
+PERSON_ROLE=""         # FD-08 identity role for client images: user|mod|admin|superadmin
+DOMAINS=""             # FD-08 domain tie (comma/space separated; first = primary domain)
+DESKTOP="thin"         # client desktop weight: thin (LXDE/openbox) | full (heavier DE)
 CLUSTER_DOMAIN="snapdragon.systems"
 BRAND="snapdragon"
 BRAND_TITLE="Snapdragon Systems"
@@ -113,8 +119,15 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             build under a shared --work-dir (build-all-roles.sh).
   -j, --jobs N              Parallel jobs. Default: $(nproc)
   -v, --version STR         Version stamp. Default: ${REL_VERSION}
-  -r, --role ROLE           pki | be | fe | be+gpu | omnibus  (host = be+gpu alias).
-                            Default: ${ROLE}. Gates GPU stack, labels, init/join.
+  -r, --role ROLE           NODE: pki | be | fe | be+gpu | omnibus  (host = be+gpu alias).
+                            CLIENT (person device, see docs/CLIENT-IMAGES.md):
+                              laptop | chromebook | desktop  (desktop = full/thick).
+                            Default: ${ROLE}. Gates GPU/desktop stack, services, k8s.
+  --person-role ROLE        CLIENT only — FD-08 identity: user|mod|admin|superadmin
+                            (default user). Baked to /etc/snapdragon/identity-role.
+  --domains LIST            CLIENT only — domain tie (space/comma separated; first =
+                            primary). Baked to /etc/snapdragon/domains + filename tag.
+  --desktop WEIGHT          CLIENT only — thin (LXDE/openbox, default) | full (XFCE+).
   -H, --hostname NAME       Hostname. Default: derived from --role.
   -T, --timezone ZONE       Timezone. Default: ${TIMEZONE}
       --env test|prod       Build ENV, BAKED into the image. Default: ${ENV}.
@@ -184,6 +197,10 @@ while [[ $# -gt 0 ]]; do
         -j|--jobs) JOBS="$2"; shift 2 ;;
         -v|--version) REL_VERSION="$2"; shift 2 ;;
         -r|--role) ROLE="$2"; shift 2 ;;
+        # ── Client (person-device) image flags (FD-08); see docs/CLIENT-IMAGES.md ──
+        --person-role) PERSON_ROLE="$2"; shift 2 ;;   # user|mod|admin|superadmin
+        --domains) DOMAINS="$2"; shift 2 ;;           # first = primary domain
+        --desktop) DESKTOP="$2"; shift 2 ;;           # thin|full
         -H|--hostname) HOSTNAME="$2"; shift 2 ;;
         -T|--timezone) TIMEZONE="$2"; shift 2 ;;
         -C|--config) CONFIG_FILE="$2"; shift 2 ;;
@@ -241,6 +258,7 @@ esac
 ROLE_HEADSCALE=false         # headscale runs in the runlevel (pki/omnibus)
 ROLE_K8S="worker"            # kubeadm join vs init vs single-node
 ROLE_LABELS=""               # informational: node labels the KEYS stick should set
+ROLE_CLIENT=false            # true for person-device desktop roles (laptop/chromebook/desktop)
 case "${ROLE}" in
     pki)
         GPU=false; ROLE_HEADSCALE=true; ROLE_K8S="control-plane"
@@ -263,10 +281,38 @@ case "${ROLE}" in
         GPU=true; ROLE_HEADSCALE=true; ROLE_K8S="single-node"
         ROLE_LABELS="snapdragon.systems/pki=true,snapdragon.systems/backend=true,snapdragon.systems/frontend=true,snapdragon.systems/compute=gpu"
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-omnibus" ;;
+    # ── CLIENT (person-device) roles — see docs/CLIENT-IMAGES.md (ADR-16/FD-04..08).
+    # These are DESKTOPS that join the tailnet + run the UI, NOT k8s nodes: no
+    # headscale/containerd/kubelet, GPU on for DRI, ROLE_K8S=none, person-role+domain
+    # tied. chromebook == laptop image targeting coreboot-UEFI (ADR-16; quirks land in
+    # the desktop kernel fragment). 'desktop' is the opt-in full/thick variant.
+    laptop|chromebook)
+        GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
+        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-${ROLE}" ;;
+    desktop)
+        GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
+        [ "${DESKTOP}" = "thin" ] && DESKTOP="full"   # 'desktop' role defaults to the full/thick weight
+        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-desktop" ;;
     *)
-        err "--role must be one of: pki | be | fe | be+gpu | omnibus  (host = be+gpu alias)"
+        err "--role must be one of: pki | be | fe | be+gpu | omnibus  (host = be+gpu alias)  |  laptop | chromebook | desktop  (client devices)"
         exit 1 ;;
 esac
+
+# ── Client person-role + domain validation (FD-08) ──────────────────
+# Client images are tied at build time to a person-role and domain(s). Default the
+# person-role to 'user' and warn if no domain was given (the device still builds;
+# the domain tie + Casdoor binding are applied by keys-provision from the KEYS USB).
+if ${ROLE_CLIENT}; then
+    [ -z "${PERSON_ROLE}" ] && PERSON_ROLE="user"
+    case "${PERSON_ROLE}" in
+        user|mod|admin|superadmin) : ;;
+        *) err "--person-role must be one of: user | mod | admin | superadmin (got '${PERSON_ROLE}')"; exit 1 ;;
+    esac
+    case "${DESKTOP}" in thin|full) : ;; *) err "--desktop must be thin | full (got '${DESKTOP}')"; exit 1 ;; esac
+    [ -z "${DOMAINS}" ] && warn "client role '${ROLE}' built with no --domains; the device will be domain-tied at provision time from the KEYS USB."
+elif [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; then
+    warn "--person-role/--domains are ignored for non-client role '${ROLE}'."
+fi
 
 # ── Validate/normalize the first-boot grow policy (baked into /etc/growfs.conf) ──
 # fill (DEFAULT) | none/off/0 (keep the compact flashed layout) | concrete size
@@ -335,6 +381,14 @@ else
     GPU_USE=""
     VIDEO_CARDS=""
 fi
+# Client-desktop make.conf USE (appended LAST in make.conf.tmpl so it overrides the
+# hardened headless -X/-gtk posture for client roles only). Nodes leave it empty.
+if ${ROLE_CLIENT}; then
+    CLIENT_USE="X gtk dbus elogind udev"
+    [ "${DESKTOP}" = "full" ] && CLIENT_USE="${CLIENT_USE} pulseaudio pipewire"
+else
+    CLIENT_USE=""
+fi
 
 # Reconcile the legacy SKIP_ISO switch with the new opt-in ISO design: an ISO
 # build runs only when --live-iso or --installer-iso was requested. The prereq
@@ -350,6 +404,7 @@ render_template() {
         -e "s|@@DOMAIN@@|${CLUSTER_DOMAIN}|g" -e "s|@@ORG@@|${ORG}|g" \
         -e "s|@@ENV@@|${ENV}|g" \
         -e "s|@@GPU_USE@@|${GPU_USE}|g" -e "s|@@VIDEO_CARDS@@|${VIDEO_CARDS}|g" \
+        -e "s|@@CLIENT_USE@@|${CLIENT_USE}|g" \
         "$1" > "$2"
 }
 
@@ -937,11 +992,23 @@ if [ -n "${HEADSCALE_URL:-}" ]; then
     echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/snapdragon/headscale-url"
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/snapdragon/headscale-url"
 fi
-cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
-parameterize_games_domain  # rewrite .games -> ${GAMES_DOMAIN} (BEFORE rebrand; fixes games OIDC iss on the subdomain default)
-gate_env_apps             # prune ENV-specific ArgoCD apps from the baked copy
-gate_optional_services    # prune OPTIONAL services (akkoma/tuwunel/phpbb/games) not in OPTIONAL_SERVICES
-rebrand_sysroot           # rewrites snapdragon.systems -> ${CLUSTER_DOMAIN} (incl. lan-dns/cloudflared/games)
+if ${ROLE_CLIENT}; then
+    # CLIENT (person device): bake the FD-08 person-role + domain tie and SKIP the
+    # whole k8s/ArgoCD cluster GitOps tree — a client is a desktop, not a node. The
+    # Casdoor binding + multi-domain tie are applied at first boot by keys-provision
+    # (provision_client_identity) from the KEYS USB. See docs/CLIENT-IMAGES.md.
+    echo "${PERSON_ROLE}" > "${SYSROOT}/etc/snapdragon/identity-role"
+    { for d in ${DOMAINS//,/ }; do echo "${d}"; done; } > "${SYSROOT}/etc/snapdragon/domains"
+    echo "${DESKTOP}"     > "${SYSROOT}/etc/snapdragon/desktop-weight"
+    info "Client device: person-role=${PERSON_ROLE} domains='${DOMAINS:-<provision-time>}' desktop=${DESKTOP} (no k8s cluster payload)"
+    rebrand_sysroot       # still rebrand markers/desktop configs snapdragon.systems -> ${CLUSTER_DOMAIN}
+else
+    cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
+    parameterize_games_domain  # rewrite .games -> ${GAMES_DOMAIN} (BEFORE rebrand; fixes games OIDC iss on the subdomain default)
+    gate_env_apps             # prune ENV-specific ArgoCD apps from the baked copy
+    gate_optional_services    # prune OPTIONAL services (akkoma/tuwunel/phpbb/games) not in OPTIONAL_SERVICES
+    rebrand_sysroot           # rewrites snapdragon.systems -> ${CLUSTER_DOMAIN} (incl. lan-dns/cloudflared/games)
+fi
 
 # Identity, locale, CNI dirs
 echo "${HOSTNAME}" > "${SYSROOT}/etc/hostname"
@@ -955,8 +1022,14 @@ mkdir -p "${SYSROOT}/opt/cni/bin" "${SYSROOT}/etc/cni/net.d" "${SYSROOT}/var/lib
 # headscale (identity/mesh control server) runs only on the pki / omnibus nodes;
 # worker roles (be/fe/be+gpu) reach the mesh as a tailscale client.
 mkdir -p "${SYSROOT}/etc/runlevels/default"
-SVCS=(sshd NetworkManager cronie haveged growroot keys-provision containerd kubelet auditd local)
-${ROLE_HEADSCALE} && SVCS+=(headscale)
+if ${ROLE_CLIENT}; then
+    # CLIENT desktop: NO containerd/kubelet/headscale (not a k8s node). Add the
+    # desktop session stack: dbus + elogind (seat/login) + display-manager (lightdm).
+    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision auditd local dbus elogind display-manager)
+else
+    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision containerd kubelet auditd local)
+    ${ROLE_HEADSCALE} && SVCS+=(headscale)
+fi
 ${SKIP_MESH} || ${SKIP_TAILSCALE} || SVCS+=(tailscaled)
 for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/default/${s}" 2>/dev/null || true; done
 
@@ -1028,7 +1101,18 @@ mount_chroot
 # ONLY for GPU roles (be+gpu / omnibus) so pki/be/fe images stay slim.
 PKG_LISTS=("${SPECS_DIR}/portage/packages.list")
 ${GPU} && PKG_LISTS+=("${SPECS_DIR}/portage/packages-gpu.list")
+if ${ROLE_CLIENT}; then
+    # Client desktop stack (Xorg/lightdm/openbox/NM-applet/browser/fonts/firewalld/
+    # acpid). NOTE: the shared packages.list still carries the k8s atoms
+    # (kubelet/containerd) for now — built but never enabled in a client SVCS set;
+    # factoring them into a separate packages-k8s.list for a leaner thin client is a
+    # documented follow-up (docs/CLIENT-IMAGES.md, Increment 1b).
+    PKG_LISTS+=("${SPECS_DIR}/portage/packages-desktop.list")
+    [ "${DESKTOP}" = "full" ] && [ -f "${SPECS_DIR}/portage/packages-desktop-full.list" ] \
+        && PKG_LISTS+=("${SPECS_DIR}/portage/packages-desktop-full.list")
+fi
 PKGS=$(grep -hv '^\s*#' "${PKG_LISTS[@]}" | grep -v '^\s*$' | tr '\n' ' ')
+${ROLE_CLIENT} && info "Client desktop role: including desktop stack (packages-desktop.list, weight=${DESKTOP})"
 ${GPU} && info "GPU role: including Mesa/Vulkan stack (packages-gpu.list)" \
         || info "Headless role: skipping Mesa/Vulkan stack"
 
@@ -1065,6 +1149,10 @@ fi
 # bind-mounted scratch within the 20 GB xfs / budget. (Raise once known-good.)
 EMERGE_JOBS=1
 GO_PROCS=$(( JOBS / 7 )); [ "${GO_PROCS}" -lt 2 ] && GO_PROCS=2
+# Role-specific mandatory-binary set for the post-emerge payload assert (expanded
+# into the chroot heredoc on the host): clients assert the desktop stack, nodes the
+# k8s stack. The base (grub-install dracut parted jq nmcli) is common to both.
+if ${ROLE_CLIENT}; then SNAP_ROLE_BINS="Xorg lightdm openbox"; else SNAP_ROLE_BINS="kubelet kubeadm containerd"; fi
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 export MAKEOPTS="-j${JOBS} -l${JOBS}"
 export EMERGE_DEFAULT_OPTS="--jobs ${EMERGE_JOBS} --load-average ${JOBS} --usepkg=y --binpkg-respect-use=y"
@@ -1125,7 +1213,7 @@ ldconfig 2>/dev/null || true
 # if the core set is missing rather than emit a payload-less stage4 (this
 # happened silently for every x86 role until the DONT_MOUNT_BOOT fix above).
 missing=""
-for b in grub-install dracut parted jq nmcli kubelet kubeadm containerd; do
+for b in grub-install dracut parted jq nmcli ${SNAP_ROLE_BINS}; do
     command -v "\${b}" >/dev/null || missing="\${missing} \${b}"
 done
 if [ -n "\${missing}" ]; then
@@ -1175,6 +1263,13 @@ else
         info "Kernel: appending GPU/DRM fragment (gpu.config)"
     else
         info "Kernel: headless (no AMD/Intel/Nouveau DRM drivers)"
+    fi
+    # Client desktops also need the input/HID/sound/storage/laptop-power bits the
+    # k8s+GPU fragments don't carry (KMS comes from gpu.config above, GPU=true on
+    # clients). chromebook adds coreboot/firmware quirks via the same fragment.
+    if ${ROLE_CLIENT}; then
+        cat "${SPECS_DIR}/kernel/desktop.config" >> "${SYSROOT}/tmp/k.config"
+        info "Kernel: appending desktop fragment (desktop.config) for client role ${ROLE}"
     fi
     chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 # (Re)ensure the hardened kernel sources are installed and /usr/src/linux is set
@@ -1243,6 +1338,14 @@ case "${ROLE}" in
     be+gpu) ROLE_TAG="host" ;;
     *)      ROLE_TAG="${ROLE}" ;;
 esac
+# FD-08: client device artifacts carry the person-role + primary-domain tag so the
+# filename identifies who/what the device is tied to (cosmetic per ADR-12 — the real
+# isolation is per-domain authz, not the name). e.g. laptop-user-acme_example.
+if ${ROLE_CLIENT}; then
+    _primary_domain="${DOMAINS%%[ ,]*}"                       # first domain (space/comma sep)
+    _domtag="${_primary_domain//./_}"                         # filesystem-safe
+    ROLE_TAG="${ROLE}-${PERSON_ROLE}${_domtag:+-${_domtag}}"
+fi
 STAGE4="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.stage4.tar.xz"
 # Multi-threaded xz (-T0) over the tar stream — -cJf is single-threaded and
 # left 27 cores idle on the multi-GB sysroot; mirrors the fs.tar codepath below.

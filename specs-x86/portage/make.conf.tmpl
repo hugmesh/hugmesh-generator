@@ -46,6 +46,11 @@ PORTAGE_LOGDIR="/var/log/portage/build"
 USE="bindist hardened pie ssp -X -gtk -qt5 -qt6 -systemd -pulseaudio -bluetooth"
 USE="${USE} cgroup cgroup2 seccomp selinux containers netlink"
 USE="${USE} @@GPU_USE@@"
+# @@CLIENT_USE@@ expands to the desktop USE (X gtk dbus elogind udev [+pulseaudio
+# pipewire for --desktop full]) for the CLIENT roles (laptop/chromebook/desktop),
+# and to nothing for node roles. It is appended LAST so it OVERRIDES the hardened
+# headless -X/-gtk posture above on client builds only.
+USE="${USE} @@CLIENT_USE@@"
 
 # Build only the MCS SELinux policy: provision_selinux() and containerd's per-pod
 # MCS labelling both target type=mcs. Pinning this avoids relying on the profile
