@@ -24,7 +24,7 @@
     "server_url": "",
     "users": ["snapdragon"],
     "preauthkeys": [
-      { "user": "snapdragon", "reusable": true, "ephemeral": false }
+      { "user": "snapdragon", "reusable": false, "ephemeral": false }
     ]
   },
 
