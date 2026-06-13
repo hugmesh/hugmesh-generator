@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: snapdragon-tube
+resources:
+  - namespace.yaml
+  - deployment.yaml
+
+images:
+  - { name: nginx, newName: nginx, newTag: "1.27-alpine" }
+  - { name: snapdragon-systems/tube-bff-api, newName: registry.snapdragon.systems/snapdragon/snapdragon-tube-bff-api, newTag: main }
+  - { name: snapdragon-systems/tube-ui, newName: registry.snapdragon.systems/snapdragon/snapdragon-tube-ui, newTag: main }
