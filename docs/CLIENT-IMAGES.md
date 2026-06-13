@@ -62,10 +62,27 @@ the native amd64 chroot build with grub-EFI.
   recovery. PAM-OIDC for the post-unlock lightdm login. Auto-login decrypt→desktop
   unless MFA configured (greetd MFA greeter).
 
-### 3 — FD-04 Chromebook arm + superadmin variants
-- `chromebook` arm (coreboot-UEFI target + chromebook kernel quirks).
-- superadmin variants: separate **superadmin device password** build-config level
-  (salted+hashed, KEYS-USB custody, mirrors the Casdoor superadmin-seed).
+### 3 — FD-04 Chromebook arm + superadmin variants — DONE
+- **Chromebook boot path:** already correct from Increment 1 — the `.img` installs
+  GRUB-EFI `--removable --no-nvram` into `/EFI/BOOT/BOOTX64.EFI`, exactly the path a
+  coreboot-UEFI (Tianocore payload, e.g. MrChromebox) Chromebook auto-boots. No
+  NVRAM entry needed.
+- **Chromebook kernel quirks:** new `specs-x86/kernel/chromebook.config`, appended
+  on top of `desktop.config` ONLY for `--role chromebook`. Adds the chromebook
+  peripherals a generic laptop image lacks: DesignWare I2C bus + I2C-HID, the
+  I2C-attached touchpads (elan/atmel/cyapa), the I2S audio codecs + jack detect +
+  Intel SOC machine drivers (max98090/ts3a227e/rt5677/da7219/SKL/SOF), the Chrome-EC
+  sub-devices (charger/extcon/sensors), the on-board cr50 TPM, and pstore-RAM.
+  (`desktop.config` already carries the EC core + EC keyboard + pstore + i801.)
+- **superadmin device-password variant:** building with `--person-role superadmin`
+  bakes the marker `/etc/snapdragon/device-password-required`. At first boot,
+  keys-provision's `provision_device_password()` sets the superadmin account's local
+  login password from a **salted+hashed** value on the KEYS USB
+  (`.client.device_password_hash`, else `secrets/device-password.hash`). Plaintext
+  NEVER touches git or the image (mirrors the Casdoor superadmin-seed custody); a
+  non-crypt(3) value is refused. The hash applies to `resolve_ssh_user()` (the
+  device's superadmin account). FD-07 LUKS keyslot enrollment from this same
+  password is Increment 2; FD-06 VPN-lock/expiry is Increment 4.
 
 ### 4 — FD-06 VPN-locked, expiring superadmin field devices
 - firewalld shields-up/panic default (allow only Tailscale + `superadmin.<domain>`
@@ -92,10 +109,17 @@ the native amd64 chroot build with grub-EFI.
   "identity_role": "user|mod|admin|superadmin",   // FD-08 person role
   "domains": ["acme.example", "..."],              // FD-08 domain tie
   "primary_domain": "acme.example",
-  "casdoor": { "issuer": "id.<primary_domain>", "client_id": "...", "pkce": true }
+  "casdoor": { "issuer": "id.<primary_domain>", "client_id": "...", "pkce": true },
+  // Increment 3: superadmin client variant only. crypt(3) hash (mkpasswd -m
+  // sha512crypt / -m yescrypt). Plaintext NEVER in git/image. May instead live on
+  // the KEYS USB at secrets/device-password.hash (manifest takes precedence).
+  "device_password_hash": "$6$...."
 }
 ```
-`provision_client_identity()` (new, called after `provision_users`) writes
-`/etc/snapdragon/{identity-role,domains}` and validates the role; a later
-`provision_casdoor_desktop()` wires the OIDC desktop login + the FD-07 keyslot.
-`device_registry.image_type=="client"` already exists (inventory only).
+The build bakes `/etc/snapdragon/{identity-role,domains,desktop-weight}` directly
+(no provision step needed for those). For the superadmin variant the build also
+bakes `/etc/snapdragon/device-password-required`, and `provision_device_password()`
+(called after `provision_users`) applies `device_password_hash` to the superadmin
+account at first boot. A later `provision_casdoor_desktop()` will wire the OIDC
+desktop login + the FD-07 keyslot. `device_registry.image_type=="client"` already
+exists (inventory only).
