@@ -141,12 +141,12 @@ spec:
       federationModule: { slug: forum, mountAt: /social/forum, changeset: "022-register-forum-module.xml" }
       casdoorSeed: null
 
-    # ── games — snapdragon.games portal (x86 GPU worker) + games-realm Casdoor ─
+    # ── games — Snapdragon Game Studio (x86 GPU worker) + games-realm Casdoor ──
     # games owns its OWN Casdoor (casdoor-games, two-Casdoor architecture). The
     # public host is GAMES_DOMAIN (default games.${CLUSTER_DOMAIN}); see the
     # gamesDomain block + docs/OPTIONAL-SERVICES.md "Games subdomain".
     - slug: games
-      displayName: "Snapdragon Games"
+      displayName: "Snapdragon Game Studio"
       namespace: snapdragon-games
       default: on
       apps:
