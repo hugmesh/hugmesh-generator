@@ -1011,6 +1011,14 @@ if ${ROLE_CLIENT}; then
     echo "${PERSON_ROLE}" > "${SYSROOT}/etc/snapdragon/identity-role"
     { for d in ${DOMAINS//,/ }; do echo "${d}"; done; } > "${SYSROOT}/etc/snapdragon/domains"
     echo "${DESKTOP}"     > "${SYSROOT}/etc/snapdragon/desktop-weight"
+    # superadmin field device (FD-04/FD-06): require a SEPARATE device password set at
+    # first boot from a salted+hashed value on the KEYS USB (NEVER baked into the image
+    # — mirrors the Casdoor superadmin-seed custody). The marker tells keys-provision's
+    # provision_device_password() to enforce it. See docs/CLIENT-IMAGES.md.
+    if [ "${PERSON_ROLE}" = "superadmin" ]; then
+        : > "${SYSROOT}/etc/snapdragon/device-password-required"
+        info "Client device: superadmin variant — device password REQUIRED at first boot (hash from KEYS, not baked)"
+    fi
     info "Client device: person-role=${PERSON_ROLE} domains='${DOMAINS:-<provision-time>}' desktop=${DESKTOP} (no k8s cluster payload)"
     rebrand_sysroot       # still rebrand markers/desktop configs snapdragon.systems -> ${CLUSTER_DOMAIN}
 else
@@ -1286,6 +1294,13 @@ else
     if ${ROLE_CLIENT}; then
         cat "${SPECS_DIR}/kernel/desktop.config" >> "${SYSROOT}/tmp/k.config"
         info "Kernel: appending desktop fragment (desktop.config) for client role ${ROLE}"
+        # chromebook (coreboot-UEFI target, ADR-16): on top of the generic desktop
+        # fragment, pull the chromebook-specific peripheral quirks (I2C-attached
+        # touchpads, the I2S audio codecs + jack detect, EC backlight/charger).
+        if [ "${ROLE}" = "chromebook" ]; then
+            cat "${SPECS_DIR}/kernel/chromebook.config" >> "${SYSROOT}/tmp/k.config"
+            info "Kernel: appending chromebook quirks fragment (chromebook.config)"
+        fi
     fi
     chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 # (Re)ensure the hardened kernel sources are installed and /usr/src/linux is set

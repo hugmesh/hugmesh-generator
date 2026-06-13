@@ -322,6 +322,40 @@ provision_users() {
     fi
 }
 
+# ── superadmin DEVICE password (FD-04 / FD-06 superadmin client variant) ────────
+# A superadmin CLIENT device (built with `--person-role superadmin`) bakes the marker
+# /etc/snapdragon/device-password-required. Here we set that device's interactive
+# login password from a SALTED+HASHED value supplied on the KEYS USB — the plaintext
+# NEVER touches git or the image (same custody model as the Casdoor superadmin-seed).
+# Precedence: manifest `.client.device_password_hash`, else KEYS `secrets/device-
+# password.hash`. The value must be a crypt(3) hash (e.g. `mkpasswd -m sha512crypt`
+# or `-m yescrypt`). FD-07 LUKS keyslot enrollment from this password is a separate
+# increment; here it sets the local account password only. See docs/CLIENT-IMAGES.md.
+DEVPW_MARKER="/etc/snapdragon/device-password-required"
+provision_device_password() {
+    [ -f "${DEVPW_MARKER}" ] || return 0
+    local user hash
+    user="$(resolve_ssh_user)"          # the superadmin account on this device
+    hash="$(jqm '.client.device_password_hash // ""')"
+    if { [ -z "${hash}" ] || [ "${hash}" = "null" ]; } && [ -f "${BASE}/secrets/device-password.hash" ]; then
+        hash="$(tr -d ' \n' < "${BASE}/secrets/device-password.hash")"
+    fi
+    if [ -z "${hash}" ] || [ "${hash}" = "null" ]; then
+        warn "superadmin device requires a device password but none supplied (.client.device_password_hash or KEYS secrets/device-password.hash) — leaving login unset"
+        return 0
+    fi
+    # crypt(3) hashes begin with $<id>$ ($6$=sha512crypt, $y$=yescrypt, $2b$=bcrypt).
+    # Refuse to apply a bare plaintext value (would be set verbatim by chpasswd -e).
+    case "${hash}" in
+        \$*\$*) ;;
+        *) warn "device_password_hash is not a crypt(3) hash ('\$id\$...') — refusing to apply"; return 0 ;;
+    esac
+    id "${user}" >/dev/null 2>&1 || { warn "device-password: target user '${user}' does not exist yet — skipping"; return 0; }
+    printf '%s:%s\n' "${user}" "${hash}" | chpasswd -e \
+        && log "Set superadmin DEVICE password for ${user} (from KEYS hash; plaintext never stored)" \
+        || warn "failed to set device password for ${user}"
+}
+
 install_authorized_keys() {
     local name="$1" f="$2" i="$3"
     local home ssh_dir tmp
@@ -1965,6 +1999,7 @@ main() {
     provision_hosts      # peers reachable by IP before mesh/k8s join
     provision_binhost    # binary OS updates over the VPN
     provision_users
+    provision_device_password   # superadmin client variant: set device password from KEYS hash
     provision_network
     provision_files
     provision_truststore
