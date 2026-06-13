@@ -1000,8 +1000,24 @@ mount_chroot() {
     else
         HOST_REPO_MOUNTED=false
     fi
+    # Package build scratch on a NON-eCryptfs filesystem. The work dir often lives
+    # on eCryptfs (/home/.Private), whose ~143-char filename limit makes Go builds
+    # (kubelet/runc/cni-plugins/containerd — long vendored/cache paths) die with
+    # "File name too long". Bind the chroot's /var/tmp/portage onto a host xfs dir
+    # so package builds dodge the limit; INSTALLED files (short names) still land in
+    # the eCryptfs sysroot fine. Only kicks in when the sysroot is actually eCryptfs.
+    PORTAGE_SCRATCH_MOUNTED=false
+    if df -T "${SYSROOT}" 2>/dev/null | awk 'NR==2{exit($2=="ecryptfs"?0:1)}'; then
+        local scratch="/var/tmp/snap-portage-${BUILD_SUBDIR}"
+        local availg; availg=$(df -BG --output=avail /var/tmp 2>/dev/null | tail -1 | tr -dc '0-9')
+        [ "${availg:-99}" -lt 15 ] && warn "only ${availg}G free on /var/tmp (xfs) for build scratch; a large parallel build may fill it (EMERGE_JOBS is held low to bound this)."
+        mkdir -p "${scratch}" "${SYSROOT}/var/tmp/portage"
+        mount --bind "${scratch}" "${SYSROOT}/var/tmp/portage" && PORTAGE_SCRATCH_MOUNTED=true
+        info "Build scratch -> non-eCryptfs xfs ${scratch} (eCryptfs 143-char filename-limit workaround)"
+    fi
 }
 umount_chroot() {
+    ${PORTAGE_SCRATCH_MOUNTED:-false} && umount -l "${SYSROOT}/var/tmp/portage" 2>/dev/null || true
     ${HOST_REPO_MOUNTED:-false} && umount -l "${SYSROOT}/var/db/repos/gentoo" 2>/dev/null || true
     for m in run dev sys proc; do umount -lR "${SYSROOT}/$m" 2>/dev/null || true; done
 }
@@ -1037,7 +1053,11 @@ fi
 # GOMAXPROCS=ncpu — so several concurrent Go builds each spawning 28-way blew past
 # 32 GB RAM and the OOM killer failed 6 diverse packages at once. Cap both: fewer
 # concurrent packages (JOBS/7) AND a hard GOMAXPROCS so Go can't grab the machine.
-EMERGE_JOBS=$(( JOBS / 7 )); [ "${EMERGE_JOBS}" -lt 2 ] && EMERGE_JOBS=2
+# Held LOW (2): package build scratch is bind-mounted onto the 20 GB xfs / (the
+# eCryptfs filename-limit workaround in mount_chroot), so few concurrent package
+# builds keeps peak scratch within that budget — and also bounds the Go-build RAM
+# that OOM-killed the payload. The kernel builds in /usr/src (sysroot), not here.
+EMERGE_JOBS=2
 GO_PROCS=$(( JOBS / 4 )); [ "${GO_PROCS}" -lt 2 ] && GO_PROCS=2
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 export MAKEOPTS="-j${JOBS} -l${JOBS}"
