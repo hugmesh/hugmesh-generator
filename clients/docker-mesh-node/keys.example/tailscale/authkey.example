@@ -1,0 +1,5 @@
+PASTE_YOUR_ONE-TIME_HEADSCALE_PREAUTH_KEY_HERE
+# Rename this file to `authkey` (drop the .example) and replace the contents with a
+# one-time pre-auth key issued by your superadmin (headscale `preauthkeys create`,
+# or the superadmin UI). SEC-08: keys are single-use — request a fresh one per node.
+# NEVER commit a real key to git; the keys dir is mounted read-only at runtime only.
