@@ -1021,8 +1021,15 @@ else
     info "Keeping seed toolchain (set REBUILD_TOOLCHAIN=true to rebuild gcc/glibc/binutils)"
 fi
 
+# Package-level emerge parallelism: MAKEOPTS only parallelizes INSIDE one
+# package; the long tail of small python/perl/configure-heavy packages
+# otherwise serializes on a single job while 27 threads idle. Several emerge
+# jobs run concurrently, governed by --load-average so one big -j${JOBS} C++
+# build can still take the whole machine.
+EMERGE_JOBS=$(( JOBS / 4 )); [ "${EMERGE_JOBS}" -lt 2 ] && EMERGE_JOBS=2
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 export MAKEOPTS="-j${JOBS}"
+export EMERGE_DEFAULT_OPTS="--jobs ${EMERGE_JOBS} --load-average ${JOBS}"
 # Build chroot: /boot/efi exists in the baked fstab but is never mounted here.
 # Without this, mount-boot.eclass (linux-firmware, grub-themes) dies in
 # pkg_pretend ("/boot/efi not mounted") and ABORTS the ENTIRE package-set
@@ -1049,7 +1056,7 @@ emerge --update --deep --newuse --keep-going \
 # if the core set is missing rather than emit a payload-less stage4 (this
 # happened silently for every x86 role until the DONT_MOUNT_BOOT fix above).
 missing=""
-for b in grub-install dracut parted jq nmcli; do
+for b in grub-install dracut parted jq nmcli kubelet kubeadm containerd; do
     command -v "\${b}" >/dev/null || missing="\${missing} \${b}"
 done
 if [ -n "\${missing}" ]; then
@@ -1067,7 +1074,7 @@ else
     if curl -fL -o "${SYSROOT}/usr/bin/headscale" \
         "https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}/headscale_${HEADSCALE_VERSION}_linux_amd64"; then
         chmod +x "${SYSROOT}/usr/bin/headscale"; info "headscale installed"
-    else warn "headscale fetch failed"; fi
+    else err "headscale fetch failed — the image enables its service in the runlevel; aborting (use --skip-mesh to opt out)"; exit 1; fi
     if ! ${SKIP_TAILSCALE}; then
         TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_amd64.tgz"
         if curl -fL -o "${TGZ}" "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz"; then
@@ -1076,7 +1083,7 @@ else
             install -Dm0755 "${SUB}/tailscale" "${SYSROOT}/usr/bin/tailscale"
             install -Dm0755 "${SUB}/tailscaled" "${SYSROOT}/usr/sbin/tailscaled"
             rm -rf "${TMP}"; info "tailscale installed"
-        else warn "tailscale fetch failed"; fi
+        else err "tailscale fetch failed — tailscaled is enabled in the runlevel; aborting (use --skip-tailscale to opt out)"; exit 1; fi
     fi
 fi
 
@@ -1261,12 +1268,16 @@ build_img() {
     # Writes ${ESP}/EFI/BOOT/BOOTX64.EFI (removable fallback path) + ${root}/boot/grub.
     # No host NVRAM entry, no os-prober — safe to run against a loop-mounted image.
     info "Installing GRUB-EFI (--removable, --no-nvram) into the image ESP"
+    # Bootloader install failure must be FATAL: the .img is the default
+    # deliverable and an empty ESP means a brick announced as success.
     grub-install --target=x86_64-efi \
         --efi-directory="${root_mnt}/boot/efi" \
         --boot-directory="${root_mnt}/boot" \
         --removable --no-nvram \
         --modules="part_gpt fat ext2 normal linux search search_fs_uuid configfile gzio all_video" \
-        2>/dev/null || warn "grub-install reported an error (image may not be UEFI-bootable)"
+        || { err "grub-install FAILED — .img would not be UEFI-bootable"; exit 1; }
+    [ -f "${root_mnt}/boot/efi/EFI/BOOT/BOOTX64.EFI" ] \
+        || { err "ESP has no EFI/BOOT/BOOTX64.EFI after grub-install — refusing to ship a non-booting .img"; exit 1; }
 
     # ── Hand-written grub.cfg (no grub-mkconfig => no host os-prober/chroot) ──
     # Source the hardened cmdline from the grub defaults so the .img and the live
@@ -1358,17 +1369,28 @@ if ! ${SKIP_ISO}; then
         banner "Building bootable LIVE ISO (grub-mkrescue + squashfs)"
         # Live initramfs (dmsquash-live) built inside the chroot.
         mount_chroot; trap umount_chroot EXIT
-        chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT || warn "dracut step failed"
-command -v dracut >/dev/null && dracut --force --no-hostonly \
+        chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT || warn "live-initramfs dracut step FAILED (live ISO will be skipped)"
+if ! command -v dracut >/dev/null; then
+    echo "[build-x86] ERROR: dracut not installed in sysroot"; exit 1
+fi
+dracut --force --no-hostonly \
     --add "dmsquash-live" \
     --add-drivers "squashfs iso9660 loop sr_mod usb_storage ahci nvme" \
-    --kver "${KVER}" /boot/initramfs-live.img || echo "dracut not installed"
+    --kver "${KVER}" /boot/initramfs-live.img
 CHROOT
         umount_chroot; trap - EXIT
 
+        if [ ! -s "${SYSROOT}/boot/initramfs-live.img" ]; then
+            err "no live initramfs was generated — a live ISO without it cannot boot (root=live:/rd.live.* are dracut directives). Skipping live ISO."
+            ISO_PATH="(not built — live initramfs missing)"
+            SKIP_LIVE_PACK=true
+        else
+            SKIP_LIVE_PACK=false
+        fi
+        if ! ${SKIP_LIVE_PACK}; then
         mkdir -p "${ISO_DIR}/boot/grub" "${ISO_DIR}/LiveOS"
         cp "${VMLINUZ}" "${ISO_DIR}/boot/vmlinuz"
-        [ -f "${SYSROOT}/boot/initramfs-live.img" ] && cp "${SYSROOT}/boot/initramfs-live.img" "${ISO_DIR}/boot/initramfs.img"
+        cp "${SYSROOT}/boot/initramfs-live.img" "${ISO_DIR}/boot/initramfs.img"
         info "Squashing rootfs (this can take a while)..."
         if command -v mksquashfs >/dev/null; then
             mksquashfs "${SYSROOT}" "${ISO_DIR}/LiveOS/squashfs.img" \
@@ -1394,6 +1416,7 @@ EOF
         grub-mkrescue -o "${ISO_PATH}" "${ISO_DIR}" -volid SNAPDRAGON_LIVE 2>/dev/null \
             && info "Bootable live ISO: ${ISO_PATH}" \
             || { warn "grub-mkrescue failed; live ISO not produced"; ISO_PATH="(not built — grub-mkrescue failed)"; }
+        fi
     elif ${LIVE_ISO}; then
         warn "Live ISO requested but no vmlinuz/modules present — skipping (don't pass --skip-kernel)"
     fi
