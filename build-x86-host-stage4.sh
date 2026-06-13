@@ -1057,15 +1057,26 @@ fi
 # eCryptfs filename-limit workaround in mount_chroot), so few concurrent package
 # builds keeps peak scratch within that budget — and also bounds the Go-build RAM
 # that OOM-killed the payload. The kernel builds in /usr/src (sysroot), not here.
-EMERGE_JOBS=2
-GO_PROCS=$(( JOBS / 4 )); [ "${GO_PROCS}" -lt 2 ] && GO_PROCS=2
+# EMERGE_JOBS=1: SERIALIZE package builds. At 2 concurrent, the payload's 8 Go
+# packages (kubelet/runc/cni-plugins/containerd/nerdctl/cri-tools/...) overlapped
+# and their shared-runtime recompiles were OOM-KILLED (silent death, no compiler
+# error — confirmed). One package at a time means a single Go build has the whole
+# 32 GB, so concurrent-build OOM is structurally impossible. Also keeps the
+# bind-mounted scratch within the 20 GB xfs / budget. (Raise once known-good.)
+EMERGE_JOBS=1
+GO_PROCS=$(( JOBS / 7 )); [ "${GO_PROCS}" -lt 2 ] && GO_PROCS=2
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 export MAKEOPTS="-j${JOBS} -l${JOBS}"
 export EMERGE_DEFAULT_OPTS="--jobs ${EMERGE_JOBS} --load-average ${JOBS} --usepkg=y --binpkg-respect-use=y"
-# Bound Go's self-managed parallelism (it ignores MAKEOPTS/-l) so concurrent
-# kubelet/runc/containerd builds don't exhaust RAM → OOM-killed compile failures.
+# Bound Go's self-managed parallelism (it ignores MAKEOPTS/-l) so even a single
+# kubelet/runc build doesn't spike RAM → OOM-killed compile.
 export GOMAXPROCS=${GO_PROCS}
 export GOFLAGS="-p=${GO_PROCS}"
+# A working locale: the stage3 has none configured, so build steps that call
+# setlocale (e.g. sys-fs/btrfs-progs' docs/python tooling) die with
+# "locale.Error: unsupported locale setting". C.UTF-8 is built into glibc (no
+# locale-gen needed) and is always valid.
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
 # Build chroot: /boot/efi exists in the baked fstab but is never mounted here.
 # Without this, mount-boot.eclass (linux-firmware, grub-themes) dies in
 # pkg_pretend ("/boot/efi not mounted") and ABORTS the ENTIRE package-set

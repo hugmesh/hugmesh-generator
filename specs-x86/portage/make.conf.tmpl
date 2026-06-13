@@ -9,7 +9,14 @@ CHOST="@@CHOST@@"
 
 # Generic, portable hardened flags. -march=native would tie the image to the
 # build host's CPU; x86-64-v2 is a safe baseline for modern desktops/servers.
-COMMON_FLAGS="-march=x86-64-v2 -O2 -pipe -fstack-protector-strong -D_FORTIFY_SOURCE=2"
+# NOTE: do NOT add -D_FORTIFY_SOURCE here — the hardened profile/toolchain already
+# defines it, and a second definition on the command line makes packages that set
+# their own (e.g. sys-apps/policycoreutils, which builds -Werror) fail with
+# "_FORTIFY_SOURCE redefined [-Werror]". FORTIFY is retained via the hardened default.
+# -Wno-error=... downgrades GCC-15's now-default *errors* (implicit-function-
+# declaration etc.) back to warnings so older C (e.g. grub's makedev in getroot.c)
+# still builds; KSPP/SSP/relro hardening is unaffected.
+COMMON_FLAGS="-march=x86-64-v2 -O2 -pipe -fstack-protector-strong -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-int"
 CFLAGS="${COMMON_FLAGS}"
 CXXFLAGS="${COMMON_FLAGS}"
 LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
