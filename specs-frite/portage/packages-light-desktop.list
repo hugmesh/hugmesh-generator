@@ -14,7 +14,7 @@ x11-base/xorg-server
 x11-apps/xrandr
 x11-apps/xset
 x11-apps/setxkbmap
-x11-misc/xterm
+x11-terms/xterm
 
 # ── Desktop session: LXDE-lite (PCManFM + Openbox + LXpanel) ───────
 # LXDE is the canonical "lean desktop": GTK-based, no compositor required, runs
@@ -23,7 +23,7 @@ x11-misc/xterm
 x11-wm/openbox
 lxde-base/lxpanel
 lxde-base/lxsession
-lxde-base/pcmanfm
+x11-misc/pcmanfm
 lxde-base/lxappearance
 
 # ── Login / session bring-up ───────────────────────────────────────

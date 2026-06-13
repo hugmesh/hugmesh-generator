@@ -1051,6 +1051,31 @@ done
 # boot. Provision them natively here. Building base.pp at compile time loads
 # nothing into a kernel (selinux-base has no pkg_postinst); the policy-store
 # load stays deferred to first boot (provision_selinux). Build runs as root.
+#
+# containerd[selinux] (selinux is profile-FORCED on the hardened/selinux profile) pulls
+# the docker/container SELinux policy, whose resolution drags in a HOST selinux-python/
+# policycoreutils toolchain to compile + manage the .pp modules. Those are CBUILD/x86
+# packages — note the ABI_X86 + host PYTHON_TARGETS=3.12/3.13/3.14 in the emerge plan —
+# so they read the HOST's /etc/portage, NOT the cross sysroot's (PORTAGE_CONFIGROOT only
+# governs the aarch64 ROOT). That toolchain needs libselinux[python]+audit[python], but
+# the host config carries no such pre-seed and cross_emerge runs WITHOUT --autounmask, so
+# the whole chain (and thus app-containers/containerd, a payload-MANDATORY binary) is
+# silently SKIPPED and trips the stage4 assert. Pre-seed the HOST config so the host
+# selinux toolchain can build with python. (specs-rpi5/portage/package.use/selinux covers
+# the TARGET libselinux/audit; this covers the HOST x86 build tools — distinct configs.)
+if [ "$(id -u)" -eq 0 ]; then
+    mkdir -p /etc/portage/package.use
+    cat > /etc/portage/package.use/snapdragon-cross-host-selinux <<'HOSTSELINUX'
+# Auto-written by build-rpi5-stage4.sh (rpi5 CROSS build). The HOST x86 selinux-python/
+# policycoreutils toolchain — pulled to compile the docker/container policy that
+# containerd[selinux] requires — needs python bindings. Without this the cross_emerge
+# (no --autounmask) silently skips containerd. Safe to delete on a non-build host.
+sys-libs/libselinux python
+sys-process/audit    python
+HOSTSELINUX
+    info "Pre-seeded HOST /etc/portage/package.use: libselinux[python]+audit[python] (containerd selinux toolchain)"
+fi
+
 HOST_POLICY_TOOLS=()
 command -v checkpolicy       &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/checkpolicy)
 command -v checkmodule       &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/checkpolicy)

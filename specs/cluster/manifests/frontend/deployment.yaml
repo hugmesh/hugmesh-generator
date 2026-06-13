@@ -30,7 +30,7 @@ spec:
       containers:
         - name: web
           image: snapdragon-systems/snapdragon.systems:dev
-          ports: [{ name: http, containerPort: 80 }]
+          ports: [{ name: http, containerPort: 8080 }]  # nginx-unprivileged listens on 8080 (non-root can't bind 80); probe + Service targetPort follow the named 'http' port
           # CONTAINER-level hardening (audit: pod-only seLinuxOptions had NO
           # container securityContext). CIS K8s 5.2.5 (allowPrivilegeEscalation:
           # false), 5.2.7-5.2.9 (drop ALL caps), 5.2.x (readOnlyRootFilesystem).

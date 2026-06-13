@@ -121,7 +121,6 @@ if ${DO_FORMAT}; then
     dl_confirm_destroy "${DEVICE}"
 fi
 
-# Unmount anything currently mounted from the device
 dl_unmount_children "${DEVICE}"
 
 if ${DO_FORMAT}; then
