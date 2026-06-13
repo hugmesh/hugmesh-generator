@@ -1035,6 +1035,11 @@ export EMERGE_DEFAULT_OPTS="--jobs ${EMERGE_JOBS} --load-average ${JOBS} --usepk
 # pkg_pretend ("/boot/efi not mounted") and ABORTS the ENTIRE package-set
 # emerge before anything merges — producing a payload-less stage4.
 export DONT_MOUNT_BOOT=1
+# Refresh ld.so.cache up front so any libs INHERITED from a warm/reused sysroot
+# (e.g. an interrupted prior run that merged sqlite but never ran ldconfig) are
+# resolvable before the python-dependent package emerge needs them — otherwise
+# wheel builds die on "libsqlite3.so.0: cannot open shared object file".
+ldconfig 2>/dev/null || true
 if [ ! -d /var/db/repos/gentoo/metadata ] && ! mountpoint -q /var/db/repos/gentoo; then
     emerge-webrsync
 fi
