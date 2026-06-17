@@ -1,5 +1,15 @@
 # HANDOFF — infra finish-list + app-layer resume guide
 
+> ⚠ **SUPERSEDED — historical snapshot (2026-06-06).** Large swaths of the work
+> framed below as *PAUSED* / *open PRs to review* / *partial unvalidated
+> scaffolds* have since **shipped to `main`**: the mod / user / forum BFFs + UIs,
+> `federation-api`, owncast, tube, node-storage, egress-VPN, the games App-Store
+> control plane, the notifications in-app MVP, and the superadmin App-Store
+> (data layer + tailnet gateway + Kaniko builder, PR #110). Treat this document
+> as a point-in-time record, **not** the current finish-list. For current state
+> see the per-feature docs ([index](README.md)) and `git log`; for what remains
+> planned see the Roadmap in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
 Snapshot of where the snapdragon.systems build stands after the
 **image / k8s / networking / security / role** focus pass, and where to pick up
 everything else. Dated 2026-06-06.

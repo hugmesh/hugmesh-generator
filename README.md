@@ -32,6 +32,36 @@ into one work dir via `make build-all`. Override a subdir name with
 `--build-subdir NAME` (or `BUILD_SUBDIR=NAME`). `make clean` wipes the work dir,
 subdirs included.
 
+## Platform capabilities
+
+Beyond the build/keys/DNS story below, the GitOps payload this repo bakes now
+ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
+**🚧 in-flight** · **🔭 planned**.
+
+- **✅ Multi-tenancy / multi-brand + superadmin** — per-domain CA loop
+  (`brands/domains.conf`), per-domain namespace + mTLS isolation, and a real
+  code-enforced **superadmin → admin → mod → user** role cascade enforced at the
+  gateway. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/SECURITY.md`](docs/SECURITY.md).
+- **✅ Optional services (add/remove)** — akkoma / tuwunel / phpBB / games; the UI
+  greys out when a service is absent, games defaults to `games.<domain>`. Build-time
+  prune ships; the **🚧 live ApplicationSet cut-over is pending**. See
+  [`docs/OPTIONAL-SERVICES.md`](docs/OPTIONAL-SERVICES.md).
+- **✅ Egress-VPN** — admins drop provider WireGuard/OpenVPN `.conf` for outgoing
+  public egress, split-tunnel keeps the tailnet direct. [`docs/EGRESS-VPN.md`](docs/EGRESS-VPN.md).
+- **✅ Node storage** — attach + register extra storage to a node, node-pinned
+  local PV / local-path (FDE), capacity-aware scheduling. [`docs/NODE-STORAGE.md`](docs/NODE-STORAGE.md).
+- **✅ Games App-Store control plane**, **✅ owncast** + **✅ tube** (GPU-dependent
+  video), **✅ notifications in-app MVP**, and the **✅ superadmin App-Store**
+  (data layer + tailnet superadmin-gateway + Kaniko builder, PR #110).
+  [`docs/GAMES-APPSTORE.md`](docs/GAMES-APPSTORE.md).
+- **✅ Device-license registry** — physical-ownership / domain-residency / SSH
+  operate-licenses; per-node sshd obeys the signed export. [`docs/DEVICE-REGISTRY-KEY-ROTATION.md`](docs/DEVICE-REGISTRY-KEY-ROTATION.md).
+- **✅ Pen-test CI** — continuous OWASP (ZAP + Dependency-Check + nuclei + k6) as a
+  GitLab pipeline stage, not a deployed CronJob. [`docs/PENTEST-SCHEDULES.md`](docs/PENTEST-SCHEDULES.md).
+- **🚧 / 🔭 Roadmap** — Workload Console (RBAC backstop on `main`, ships dark),
+  Casdoor MFA, desktop app governance, notifications external channels, generator
+  supply-chain hardening. See the Roadmap section of [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 ## Images
 
 | Image | Build command | Runs |
@@ -647,10 +677,13 @@ provisioning engine, the backup engine, and the `cluster/` GitOps payload).
 ## Repositories
 
 This repo is the image/infra layer; application code lives in sibling repos —
-see the table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
+see the full table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
 `snapdragon.systems` host shell federates the per-feature remotes
 (`snapdragon-login-ui`, `snapdragon-matrix-ui`, `snapdragon-mastodon-ui`,
-`snapdragon-admin-ui`) over module federation.
+`snapdragon-admin-ui`, `snapdragon-mod-ui`, `snapdragon-user-ui`,
+`snapdragon-forum-ui`) over module federation, backed by the
+`snapdragon-{admin,mod,user,forum}-bff-api` Spring BFFs and
+`snapdragon-federation-api` (vanity-subdomain / public-profile resolver).
 
 ## CI
 
