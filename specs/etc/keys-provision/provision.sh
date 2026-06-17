@@ -1690,10 +1690,19 @@ provision_vpn() {
 provision_desktop_governance() {
     local tpl=/etc/snapdragon/desktop-governance
     # Only client desktops carry the baked templates. Absent => not a governed
-    # client image (or a cluster node) => nothing to do (ships-dark, not error).
+    # client image (or a cluster node). When NOT baked into the image, fall back
+    # to the KEYS-USB copy at KEYS/desktop-governance/ (same delivery idiom as
+    # egress-VPN configs / certs / files[]). This keeps the whole feature
+    # functional WITHOUT editing the per-arch image builders: an admin drops the
+    # desktop-governance templates on the KEYS USB and provisioning renders them.
     if [ ! -d "${tpl}" ]; then
-        log "desktop-governance: no ${tpl} templates baked — skipping (not a governed client desktop)"
-        return 0
+        if [ -d "${BASE}/desktop-governance" ]; then
+            tpl="${BASE}/desktop-governance"
+            log "desktop-governance: using KEYS-USB templates at ${tpl} (not baked into the image)"
+        else
+            log "desktop-governance: no templates baked (/etc/snapdragon/desktop-governance) and none on KEYS (desktop-governance/) — skipping (not a governed client desktop)"
+            return 0
+        fi
     fi
 
     # Resolve this node's OWN domain. Precedence: manifest .client.primary_domain,
