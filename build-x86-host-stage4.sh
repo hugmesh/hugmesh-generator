@@ -48,11 +48,17 @@ ORG="Snapdragon-Systems"
 # docs/OPTIONAL-SERVICES.md.
 GAMES_DOMAIN="games.snapdragon.systems"
 # OPTIONAL services selected on this image (space-separated subset of:
-# akkoma tuwunel phpbb games). Built-in default = ALL on. brand.conf may narrow
-# it; the --optional-services flag overrides both (built-in < brand.conf < flag).
-# Each unselected slug is pruned from the baked GitOps tree by
-# gate_optional_services(). See specs/cluster/optional-services.yaml.
-OPTIONAL_SERVICES="akkoma tuwunel phpbb games"
+# akkoma tuwunel phpbb games). Built-in default = "akkoma tuwunel phpbb".
+# GAMES IS OPT-IN / OFF BY DEFAULT — the games subdomain (games.<CLUSTER_DOMAIN>),
+# casdoor-games and the games app-store are baked ONLY when games is explicitly
+# selected (--enable-games / ENABLE_GAMES=true, or by listing 'games' in
+# --optional-services). brand.conf may narrow; --optional-services overrides both
+# (built-in < brand.conf < flag). Each unselected slug is pruned from the baked
+# GitOps tree by gate_optional_services(). See specs/cluster/optional-services.yaml.
+OPTIONAL_SERVICES="akkoma tuwunel phpbb"
+# Games opt-in toggle. --enable-games or ENABLE_GAMES=true folds 'games' into
+# OPTIONAL_SERVICES (post-arg-parse, idempotent), baking the games subdomain.
+ENABLE_GAMES="${ENABLE_GAMES:-false}"
 # ── Build ENV selector (BAKED into the image) ──────────────────────
 # test (DEFAULT, local-first/safe): LAN-only — cluster wildcard DNS ON, the
 #   go-live cloudflared/external-dns/ACME app is PRUNED from the baked apps/,
@@ -149,6 +155,10 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --enable-bluetooth    Re-enable Bluetooth (DISABLED by default: rfkill block
                             + blacklisted modules + no bluetooth service).
                             (env/brand.conf: ENABLE_BLUETOOTH=true)
+      --enable-games        Bake the Snapdragon Game Studio optional service +
+                            games.<CLUSTER_DOMAIN> subdomain (OPT-IN; OFF by
+                            default). Equivalent to adding 'games' to
+                            --optional-services. (env/brand.conf: ENABLE_GAMES=true)
       --skip-mesh           Don't install headscale/tailscale.
       --skip-tailscale      headscale only.
       --skip-kernel         Don't build the kernel.
@@ -221,6 +231,7 @@ while [[ $# -gt 0 ]]; do
         --seed-url) SEED_STAGE3_URL="$2"; shift 2 ;;
         --enable-wifi) ENABLE_WIFI=true; shift ;;
         --enable-bluetooth) ENABLE_BLUETOOTH=true; shift ;;
+        --enable-games) ENABLE_GAMES=true; shift ;;
         --skip-mesh) SKIP_MESH=true; shift ;;
         --skip-tailscale) SKIP_TAILSCALE=true; shift ;;
         --skip-kernel) SKIP_KERNEL=true; shift ;;
@@ -247,6 +258,17 @@ while [[ $# -gt 0 ]]; do
         *) err "Unknown option: $1"; usage 1 ;;
     esac
 done
+
+# Games is OPT-IN (off by default): fold it into the selection when --enable-games
+# / ENABLE_GAMES=true. Idempotent — a no-op when 'games' is already listed (e.g. via
+# --optional-services). When games stays unselected, gate_optional_services() prunes
+# the games apps + the games.<domain> subdomain extrahost from the baked tree.
+if [ "${ENABLE_GAMES}" = "true" ]; then
+    case " ${OPTIONAL_SERVICES} " in
+        *" games "*) ;;
+        *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} games" ;;
+    esac
+fi
 
 # ── Validate role; derive GPU, hostname, node labels and init/join intent ──
 # Node labels/taints are applied at RUNTIME by provision.sh from the KEYS stick;
@@ -1043,7 +1065,11 @@ if ${ROLE_CLIENT}; then
     rebrand_sysroot       # still rebrand markers/desktop configs snapdragon.systems -> ${CLUSTER_DOMAIN}
 else
     cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
-    parameterize_games_domain  # rewrite .games -> ${GAMES_DOMAIN} (BEFORE rebrand; fixes games OIDC iss on the subdomain default)
+    # Only parameterize the games host URLs when games is actually selected; when
+    # games is opt-out (default) gate_optional_services prunes it below anyway.
+    case " ${OPTIONAL_SERVICES} " in
+        *" games "*) parameterize_games_domain ;;  # rewrite .games -> ${GAMES_DOMAIN} (BEFORE rebrand; fixes games OIDC iss on the subdomain default)
+    esac
     gate_env_apps             # prune ENV-specific ArgoCD apps from the baked copy
     gate_optional_services    # prune OPTIONAL services (akkoma/tuwunel/phpbb/games) not in OPTIONAL_SERVICES
     rebrand_sysroot           # rewrites snapdragon.systems -> ${CLUSTER_DOMAIN} (incl. lan-dns/cloudflared/games)

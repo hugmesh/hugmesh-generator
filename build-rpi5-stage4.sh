@@ -66,9 +66,16 @@ ORG="Snapdragon-Systems"            # GitHub org / image namespace
 # Drives the games host + OIDC issuer/redirects via parameterize_games_domain().
 GAMES_DOMAIN="games.snapdragon.systems"
 # OPTIONAL services selected on this image (subset of: akkoma tuwunel phpbb games).
-# Built-in default = ALL on; brand.conf narrows; --optional-services overrides both
-# (built-in < brand.conf < flag). Unselected slugs are pruned by gate_optional_services.
-OPTIONAL_SERVICES="akkoma tuwunel phpbb games"
+# Built-in default = "akkoma tuwunel phpbb". GAMES IS OPT-IN / OFF BY DEFAULT — the
+# games subdomain (games.<CLUSTER_DOMAIN>) + casdoor-games + games app-store are baked
+# only when games is explicitly selected (--enable-games / ENABLE_GAMES=true, or by
+# listing 'games' in --optional-services). brand.conf narrows; --optional-services
+# overrides both (built-in < brand.conf < flag). Unselected slugs are pruned by
+# gate_optional_services.
+OPTIONAL_SERVICES="akkoma tuwunel phpbb"
+# Games opt-in toggle. --enable-games / ENABLE_GAMES=true folds 'games' into
+# OPTIONAL_SERVICES (post-arg-parse, idempotent), baking the games subdomain.
+ENABLE_GAMES="${ENABLE_GAMES:-false}"
 # ── Build ENV selector (BAKED into the image) ──────────────────────
 # test (DEFAULT, local-first/safe): LAN-only — cluster wildcard DNS ON, the
 #   go-live cloudflared/external-dns/ACME app is PRUNED from the baked apps/,
@@ -367,6 +374,11 @@ OPTIONS
         Re-enable Bluetooth. DISABLED by default (rfkill block + blacklisted
         modules + no bluetooth service). (env/brand.conf: ENABLE_BLUETOOTH=true)
 
+    --enable-games
+        Bake the Snapdragon Game Studio optional service + games.<CLUSTER_DOMAIN>
+        subdomain. OPT-IN; OFF by default. Equivalent to adding 'games' to
+        --optional-services. (env/brand.conf: ENABLE_GAMES=true)
+
   Phases
     --skip-kernel
         Skip kernel compilation.  Useful when iterating on userspace
@@ -552,6 +564,7 @@ while [[ $# -gt 0 ]]; do
         --tailscale-version)  TAILSCALE_VERSION="$2";  shift 2 ;;
         --enable-wifi)        ENABLE_WIFI=true;        shift   ;;
         --enable-bluetooth)   ENABLE_BLUETOOTH=true;   shift   ;;
+        --enable-games)       ENABLE_GAMES=true;       shift   ;;
         --skip-mesh)          SKIP_MESH=true;          shift   ;;
         --skip-tailscale)     SKIP_TAILSCALE=true;     shift   ;;
         --skip-kernel)        SKIP_KERNEL=true;        shift   ;;
@@ -584,6 +597,17 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Games is OPT-IN (off by default): fold it into the selection when --enable-games
+# / ENABLE_GAMES=true. Idempotent — a no-op when 'games' is already listed (e.g. via
+# --optional-services). When games stays unselected, gate_optional_services() prunes
+# the games apps + the games.<domain> subdomain extrahost from the baked tree.
+if [ "${ENABLE_GAMES}" = "true" ]; then
+    case " ${OPTIONAL_SERVICES} " in
+        *" games "*) ;;
+        *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} games" ;;
+    esac
+fi
 
 # Default work directory: ./out under CWD (local + gitignored)
 if [ -z "${WORK_DIR}" ]; then
@@ -1505,7 +1529,11 @@ if [ -d "${SHARED_SPECS}/cluster" ]; then
     mkdir -p "${SYSROOT}/var/lib/snapdragon"
     cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
     info "Installed cluster GitOps payload (role=${ROLE})"
-    parameterize_games_domain  # rewrite .games -> ${GAMES_DOMAIN} (BEFORE rebrand; fixes games OIDC iss on the subdomain default)
+    # Only parameterize the games host URLs when games is actually selected; when
+    # games is opt-out (default) gate_optional_services prunes it below anyway.
+    case " ${OPTIONAL_SERVICES} " in
+        *" games "*) parameterize_games_domain ;;  # rewrite .games -> ${GAMES_DOMAIN} (BEFORE rebrand; fixes games OIDC iss on the subdomain default)
+    esac
     gate_env_apps              # prune ENV-specific ArgoCD apps from the baked copy
     gate_optional_services     # prune OPTIONAL services (akkoma/tuwunel/phpbb/games) not in OPTIONAL_SERVICES
 fi
