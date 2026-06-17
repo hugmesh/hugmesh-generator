@@ -643,6 +643,16 @@ cp "${SHARED_SPECS}/usr/sbin/snapdragon-vpn-runner"   "${SYSROOT}/usr/sbin/snapd
 chmod +x "${SYSROOT}/usr/sbin/snapdragon-vpn-runner"
 mkdir -p "${SYSROOT}/etc/snapdragon/vpn"; chmod 0700 "${SYSROOT}/etc/snapdragon/vpn"
 
+# ── Egress-VPN reconcile bridge (signed per-node export consumer) — DEFAULT-OFF ─
+# Bake the reconcile agent + verify lib + OpenRC service; INERT until enabled
+# (REUSES the baked registry-pub.ed25519; the cron is staged for the gate).
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-vpn-reconcile" "${SYSROOT}/usr/sbin/snapdragon-vpn-reconcile"
+chmod +x "${SYSROOT}/usr/sbin/snapdragon-vpn-reconcile"
+cp "${SHARED_SPECS}/usr/lib/snapdragon/vpn-verify.sh" "${SYSROOT}/usr/lib/snapdragon/vpn-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile"
+
 # Node role + domain + env markers (read by keys-provision / first-boot).
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
