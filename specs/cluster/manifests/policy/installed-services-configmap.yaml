@@ -1,5 +1,6 @@
 # installed-services — the RUNTIME install-state mirror of the OPTIONAL services
-# (akkoma/tuwunel/phpbb/games), rendered from specs/cluster/optional-services.yaml.
+# (akkoma/tuwunel/phpbb/games/owncast/tube + workloadConsole/anubis), rendered from
+# specs/cluster/optional-services.yaml.
 #
 # WHY THIS EXISTS: build-time `rm -f` of a baked Application only stops the
 # ONE-TIME bootstrap seed; the live cluster's ArgoCD root app syncs apps/ from the
@@ -37,6 +38,14 @@ data:
   tuwunel: "true"
   phpbb: "true"
   games: "true"
+  # owncast / tube — GPU-gated x86 OPTIONAL services (DEFAULT-OFF in
+  # optional-services.yaml: each needs an amd64 GPU worker). Rendered true/false by
+  # _opt_render_installed_services from OPTIONAL_SERVICES; the literal baseline below
+  # is the SAFE DEFAULT (off) so an image built WITHOUT them ships installed:"false"
+  # and the optional-services ApplicationSet never creates them even on a repo-synced
+  # cluster. The user/admin consoles grey out the live-stream + tube panels when "false".
+  owncast: "false"
+  tube: "false"
   # workloadConsole — the podman/OpenShift-equivalent pod console (RBAC + route-access).
   # DEFAULT "false" (ships dark); rendered to true/false by _opt_render_installed_services
   # from OPTIONAL_SERVICES. The admin console greys out the Workload Console remote when
@@ -67,6 +76,8 @@ data:
       { "slug": "phpbb",   "displayName": "phpBB (Forum)",     "namespace": "snapdragon-forum",   "mountAt": "/social/forum" },
       { "slug": "games",   "displayName": "Snapdragon Games",  "namespace": "snapdragon-games",   "mountAt": "/games" },
       { "slug": "games-services", "displayName": "Games App Store", "namespace": "snapdragon-games-instances", "mountAt": "/admin/games-services", "dependsOn": "games" },
+      { "slug": "owncast", "displayName": "Owncast (live streaming)", "namespace": "snapdragon-owncast", "mountAt": "/owncast" },
+      { "slug": "tube",    "displayName": "LocalTube (YouTube archive)", "namespace": "snapdragon-tube", "mountAt": "/tube" },
       { "slug": "workloadConsole", "displayName": "Workload Console", "namespace": "snapdragon-backend", "mountAt": "/admin/workloads", "hidden": true },
       { "slug": "anubis",  "displayName": "Anubis (anti-scraper PoW gate)", "namespace": "snapdragon-frontend", "mountAt": null }
     ]
