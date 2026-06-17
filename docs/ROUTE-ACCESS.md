@@ -48,3 +48,13 @@ enforcing filter (Spring Cloud Gateway `ResourceAccessFilter` reading
 Postgres→Cassandra) lives in `snapdragon-gateway`, the CRUD endpoints in the
 Spring admin-api, and the management view in `snapdragon-admin-ui` — to be
 implemented against this schema.
+
+## 🔭 Planned — MFA-required gating (Casdoor MFA)
+
+Design-complete (admin-bff Liquibase 150-band), **not yet implemented**: a
+`gateway_route_access.mfa_required` column lets a route demand a satisfied
+multi-factor challenge, enforced **fail-closed** at the gateway. The factor state
+arrives as `amr`/`acr → MFA_SATISFIED` (or, in the opaque-session world, a
+`mfa_satisfied` flag stamped into the `bff_session`), and the same machinery backs
+generalized **step-up** for sudo / SSH-via-UI / remote-install / superadmin ops.
+Per-role defaults: superadmin/admin required, mod relaxable, user optional.

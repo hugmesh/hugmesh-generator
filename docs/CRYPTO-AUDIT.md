@@ -74,3 +74,14 @@ Re-tune the whole chain by overriding these — no logic edits required:
 - Secret generation: `openssl rand` CSPRNG — kept.
 - No algorithm was weakened. RSA only went **up** (2048 → 4096); digests only
   went **up** (SHA-256 → SHA-384 / SHA-3).
+
+## 🚧 Planned — supply-chain hardening (in-flight)
+
+Not yet landed; tracked here so the build's trust roots are visible:
+
+- **Verify the Gentoo stage3 tarball** by GPG signature + published SHA before
+  unpacking (today the builder trusts the downloaded tarball).
+- **Verify headscale / tailscale binary checksums** against the upstream
+  published digests on download.
+- **De-default any baked-in credentials** so no image ships a guessable default
+  secret — fail the build if a placeholder credential survives into the artifact.

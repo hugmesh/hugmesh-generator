@@ -1,10 +1,20 @@
 # Per-user client device images (FD-04 … FD-09)
 
-Status: **in progress.** This document is the staged implementation plan for the
-per-user *client* device images, distinct from the five Kubernetes **node** roles
-(`pki / be / fe / be+gpu / omnibus`). A *client* is a **person's device** — a
-desktop that joins the Tailscale mesh and runs the platform UI — not a cluster
-node.
+Status: **FD-04 shipped; later increments deferred.** This document is the staged
+implementation plan for the per-user *client* device images, distinct from the
+five Kubernetes **node** roles (`pki / be / fe / be+gpu / omnibus`). A *client* is
+a **person's device** — a desktop that joins the Tailscale mesh and runs the
+platform UI — not a cluster node.
+
+- **✅ shipped:** the x86 laptop / thin-Chromebook / superadmin-desktop client arms
+  (FD-04, Increments 1 and 3), including the grub-mkimage / ESP fix (PR #93). The
+  laptop client image has been QEMU-verified to the lightdm greeter + tailnet join
+  (`tests/qemu/verify-client.sh`).
+- **🔭 deferred / roadmap:** FD-07 (LUKS2-decrypt == Casdoor), FD-06 (VPN-lock /
+  expiry), FD-08 (delegated ArgoCD pipeline), egress-VPN net atoms baking into the
+  x86 client, and **desktop app governance** (per-license SSO-enforced sudo +
+  admin-curated Plasma Discover store + user install-requests + admin
+  remote-install over the device-SSH-license).
 
 ## Two orthogonal axes (do not overload `--role`)
 
@@ -48,11 +58,12 @@ the native amd64 chroot build with grub-EFI.
 - `PERSON_ROLE` + `DOMAINS` build flags → `/etc/snapdragon/{identity-role,domains}`
   markers; `provision_client_identity()` applies them; person-role+domain in the
   artifact tag.
-- **Build-untested** until run under sudo (`build-x86-host-stage4.sh --role laptop
-  --person-role user --domains acme.example`). QEMU-verify: boots to the lightdm
-  greeter + joins the tailnet.
+- **✅ DONE** — laptop image **QEMU-verified to the lightdm greeter + tailnet
+  join** (`build-x86-host-stage4.sh --role laptop --person-role user --domains
+  acme.example`); the grub-mkimage / ESP boot fix landed in PR #93. Verified via
+  `tests/qemu/verify-client.sh`.
 
-### 2 — FD-07 LUKS2 decrypt-to-desktop
+### 2 — FD-07 LUKS2 decrypt-to-desktop — 🔭 DEFERRED (roadmap)
 - LUKS2 root in the installer/`build_img` (cryptsetup luksFormat aes-xts-plain64,
   argon2id — reuse `provision.sh` `luks_open_or_format` ~1358-1399), dracut
   `--add crypt`, `rd.luks.uuid` on the grub cmdline. `growroot` is already
@@ -84,7 +95,7 @@ the native amd64 chroot build with grub-EFI.
   device's superadmin account). FD-07 LUKS keyslot enrollment from this same
   password is Increment 2; FD-06 VPN-lock/expiry is Increment 4.
 
-### 4 — FD-06 VPN-locked, expiring superadmin field devices
+### 4 — FD-06 VPN-locked, expiring superadmin field devices — 🔭 DEFERRED (roadmap)
 - firewalld shields-up/panic default (allow only Tailscale + `superadmin.<domain>`
   per ADR-17), a desktop shield-state applet, generation-time `ending_at` →
   auto-revoke tailnet membership + ROLE_SUPERADMIN claim + short-lived device cert
@@ -97,10 +108,18 @@ the native amd64 chroot build with grub-EFI.
   ADR-14 mesh-join latch + register-and-approve admission. **Not** `make stack-up`
   (that's the local-dev full-stack runner).
 
-### 6 — FD-08 delegated build pipeline
+### 6 — FD-08 delegated build pipeline — 🔭 DEFERRED (roadmap)
 - superadmin-owned, role-gated ArgoCD pipeline: admin **configures** a
   domain-scoped user-device request; the pipeline **executes** the privileged
   stage4 (admin never gets privileged build access or core secrets; ADR-12/ADR-24).
+
+### 7 — Desktop app governance — 🔭 PLANNED (design + queued)
+- Extends the shipped FD-04 client images with **per-license SSO-enforced sudo**
+  (revocable at the IdP), an **admin-curated Plasma Discover store**
+  (default-NONE, domain-locked Flatpak / OCI registry, `discover`-role gated),
+  **user install-requests**, and **admin remote-install** (one-click + an in-UI
+  SSH terminal over the device-SSH-license). Rides the existing device-SSH-license
+  transport. Not yet implemented.
 
 ## Provisioning manifest additions (keys-provision)
 

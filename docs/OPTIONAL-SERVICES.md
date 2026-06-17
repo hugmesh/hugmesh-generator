@@ -183,6 +183,14 @@ Internal mTLS / `svc.cluster.local` SANs are unaffected.
 
 ## 7. Runtime add/remove on a LIVE cluster
 
+> **STATUS: build-time prune ✅ SHIPPED · live ApplicationSet cut-over 🚧 PENDING.**
+> On `main` every element in `apps/13a-optional-services.yaml` is still
+> `installed: "false"` and the hardcoded `30-akkoma` / `30-tuwunel` / `30-phpbb`
+> / `50-games` Applications still own the workloads. The cut-over (delete the
+> hardcoded apps, let the ApplicationSet own them, wire the admin-bff
+> `TasksController` / `ArgoController`) is the roadmap step that makes *live*
+> runtime add/remove real — do not assume it works yet.
+
 Because ArgoCD syncs from the repo (not the baked copy), live add/remove uses the
 **runtime model**, not baked-file surgery:
 
