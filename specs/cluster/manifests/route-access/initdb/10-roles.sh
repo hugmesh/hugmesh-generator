@@ -17,6 +17,7 @@
 #   pki-gateway   -> SELECT on gateway_route_access                       (reader)
 #   be-gateway    -> SELECT on gateway_route_access                       (reader)
 #   fe-gateway    -> SELECT on gateway_route_access                       (reader)
+#   superadmin-gateway -> SELECT on gateway_route_access  (tailnet superadmin reader)
 # (No url_registry table lives in this DB — the gateway URL registry is in
 #  Cassandra — so route-access grants cover gateway_route_access only.)
 set -euo pipefail
@@ -34,6 +35,7 @@ require ROUTE_ACCESS_ADMIN_BFF_PASSWORD  "admin-bff"
 require ROUTE_ACCESS_PKI_GATEWAY_PASSWORD "pki-gateway"
 require ROUTE_ACCESS_BE_GATEWAY_PASSWORD  "be-gateway"
 require ROUTE_ACCESS_FE_GATEWAY_PASSWORD  "fe-gateway"
+require ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD "superadmin-gateway"
 
 # psql connected to the target DB as the bootstrap superuser. ON_ERROR_STOP so any
 # failure aborts initdb (the pod restarts and retries on an empty volume).
@@ -48,7 +50,8 @@ psql_db \
   -v ab_pw="$ROUTE_ACCESS_ADMIN_BFF_PASSWORD" \
   -v pki_pw="$ROUTE_ACCESS_PKI_GATEWAY_PASSWORD" \
   -v be_pw="$ROUTE_ACCESS_BE_GATEWAY_PASSWORD" \
-  -v fe_pw="$ROUTE_ACCESS_FE_GATEWAY_PASSWORD" <<'SQL'
+  -v fe_pw="$ROUTE_ACCESS_FE_GATEWAY_PASSWORD" \
+  -v sa_pw="$ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD" <<'SQL'
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'admin_bff') THEN
@@ -63,6 +66,10 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fe_gateway') THEN
     CREATE ROLE fe_gateway  LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT CONNECTION LIMIT 5;
   END IF;
+  -- The TAILNET superadmin-gateway's own read-only loader identity.
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'superadmin_gateway') THEN
+    CREATE ROLE superadmin_gateway LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT CONNECTION LIMIT 5;
+  END IF;
 END
 $$;
 
@@ -71,11 +78,12 @@ ALTER ROLE admin_bff   WITH PASSWORD :'ab_pw';
 ALTER ROLE pki_gateway WITH PASSWORD :'pki_pw';
 ALTER ROLE be_gateway  WITH PASSWORD :'be_pw';
 ALTER ROLE fe_gateway  WITH PASSWORD :'fe_pw';
+ALTER ROLE superadmin_gateway WITH PASSWORD :'sa_pw';
 
 -- Explicit CONNECT (PUBLIC connect was revoked in 00-hardening.sql) + USAGE on
 -- the schema. NO CREATE on the schema for any of them.
-GRANT CONNECT ON DATABASE gateway TO admin_bff, pki_gateway, be_gateway, fe_gateway;
-GRANT USAGE   ON SCHEMA  public   TO admin_bff, pki_gateway, be_gateway, fe_gateway;
+GRANT CONNECT ON DATABASE gateway TO admin_bff, pki_gateway, be_gateway, fe_gateway, superadmin_gateway;
+GRANT USAGE   ON SCHEMA  public   TO admin_bff, pki_gateway, be_gateway, fe_gateway, superadmin_gateway;
 SQL
 
-echo "[route-access initdb] created least-privilege login roles: admin_bff, pki_gateway, be_gateway, fe_gateway"
+echo "[route-access initdb] created least-privilege login roles: admin_bff, pki_gateway, be_gateway, fe_gateway, superadmin_gateway"

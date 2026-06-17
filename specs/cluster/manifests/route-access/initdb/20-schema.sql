@@ -366,7 +366,24 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- be-gateway (same role) so the HMAC-signed URL check + owner two-wall in
   -- tube-bff are the domain enforcement; the gateway only checks role.
   ('snapdragon-fe-gateway',  '/bff/tube/**',          'ROLE_TUBE',    true),  -- tube BFF (tube-access floor)
-  ('snapdragon-be-gateway',  '/tube/content/**',       'ROLE_TUBE',    true)   -- tube media serving (signed URL)
+  ('snapdragon-be-gateway',  '/tube/content/**',       'ROLE_TUBE',    true),  -- tube media serving (signed URL)
+  -- ── SUPERADMIN APP-STORE — TAILNET-ONLY superadmin-gateway (snapdragon-superadmin-
+  -- appstore design, V6) ──────────────────────────────────────────────────────────
+  -- The superadmin infra control plane is served by its OWN gateway
+  -- (snapdragon-superadmin-gateway, apps/22-gateway-superadmin.yaml) on the
+  -- nginx-internal class on the pki node — TAILNET-ONLY, off every public-ingress
+  -- gateway, with NO be-gateway forward of the superadmin host. These are the
+  -- gateway-NAME-scoped ROLE_SUPERADMIN floor rows (lock #2 of the three tailnet
+  -- locks: network NetworkPolicy + these rows + the Angular superadminGuard).
+  --
+  -- NOTE the existing be-gateway '/bff/superadmin/**' -> ROLE_SUPERADMIN row above
+  -- is RETAINED (it also fronts the merged games-services superadmin surface
+  -- /bff/superadmin/games-services/** and is itself ROLE_SUPERADMIN-gated); adding
+  -- the superadmin-gateway is ADDITIVE — it does not remove that row. The NEW
+  -- App-Store CONSOLE path is reachable ONLY via the tailnet superadmin-gateway.
+  ('snapdragon-superadmin-gateway', '/bff/superadmin/**',        'ROLE_SUPERADMIN', true),  -- App-Store BFF control plane (tailnet)
+  ('snapdragon-superadmin-gateway', '/superadmin/appstore/**',   'ROLE_SUPERADMIN', true),  -- appstore-ui federated remote (tailnet)
+  ('snapdragon-superadmin-gateway', '/api/federation/**',        'ROLE_SUPERADMIN', true)   -- federation manifest/bundles for the superadmin shell (tailnet)
 ON CONFLICT DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -396,6 +413,10 @@ BEGIN
   END IF;
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'fe_gateway') THEN
     GRANT SELECT ON gateway_route_access TO fe_gateway;
+  END IF;
+  -- The TAILNET superadmin-gateway's own read-only rule loader.
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'superadmin_gateway') THEN
+    GRANT SELECT ON gateway_route_access TO superadmin_gateway;
   END IF;
 END
 $$;

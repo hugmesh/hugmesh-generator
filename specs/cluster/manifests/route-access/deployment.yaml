@@ -72,6 +72,8 @@ spec:
               valueFrom: { secretKeyRef: { name: route-access-db-roles, key: be_gateway_password } }
             - name: ROUTE_ACCESS_FE_GATEWAY_PASSWORD
               valueFrom: { secretKeyRef: { name: route-access-db-roles, key: fe_gateway_password } }
+            - name: ROUTE_ACCESS_SUPERADMIN_GATEWAY_PASSWORD
+              valueFrom: { secretKeyRef: { name: route-access-db-roles, key: superadmin_gateway_password } }
             # Opt-in Citus sharding. "off" (default) => 90-citus.sh is a no-op and
             # the single-node deployment is unchanged. Set "on" only with a
             # Citus-enabled image (see image: above).
