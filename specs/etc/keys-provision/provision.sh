@@ -1129,8 +1129,16 @@ _distribute_kubeconfig() {
 _label_control_plane() {
     local sr; sr="$(jqm '.snapdragon.role // "pki"')"
     KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node "$(hostname)" "snapdragon.systems/role=${sr}" --overwrite 2>/dev/null || true
+    # NODE-STORAGE: the control-plane (x86 host) holds the cluster disks (/mnt/data,
+    # /mnt/usb), so it ALWAYS carries snapdragon.systems/local-path=true — the label
+    # the local-path-provisioner DaemonSet schedules on. This is FULL BACK-COMPAT: the
+    # provisioner runs here exactly as the old Deployment did (it kept its DEFAULT_PATH
+    # nodePathMap). A node-storage node ALSO gets this label when its first pool is
+    # provisioned (node-agent reconcile, PR6), which is what lets a pool on another node
+    # get its own provisioner instance + nodePathMap entry.
+    KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node "$(hostname)" "snapdragon.systems/local-path=true" --overwrite 2>/dev/null || true
     KUBECONFIG=/etc/kubernetes/admin.conf kubectl taint nodes "$(hostname)" node-role.kubernetes.io/control-plane- 2>/dev/null || true
-    log "Control-plane node labelled role=${sr}, control-plane taint removed"
+    log "Control-plane node labelled role=${sr} + local-path=true, control-plane taint removed"
 }
 
 # Decide whether THIS control-plane node is the FIRST (bootstrap) CP or an
@@ -1397,7 +1405,11 @@ luks_try_tpm2_enroll() {
 # Idempotent: an already-LUKS partition is just opened, never re-formatted (so
 # re-provisioning never destroys encrypted data). Returns non-zero on fallback.
 luks_open_or_format() {
-    local part="$1" name="$2" do_format="$3" keyfile="$4"
+    # $5 (optional) = EXTRA crypttab options appended after the base `luks,
+    # tpm2-device=auto` — node-storage passes `nofail` so a removed pool disk
+    # DEGRADES the pool rather than blocking the boot. Unset = system-disk
+    # behaviour unchanged (no nofail; a missing system disk SHOULD halt the boot).
+    local part="$1" name="$2" do_format="$3" keyfile="$4" extra_opts="${5:-}"
     have cryptsetup || { warn "cryptsetup not installed — cannot encrypt ${part}; falling back to PLAINTEXT" >&2; printf '%s\n' "${part}"; return 1; }
     [ -n "${keyfile}" ] || { warn "no LUKS keyfile (KEYS/secrets/luks.key) — cannot encrypt ${part}; falling back to PLAINTEXT" >&2; printf '%s\n' "${part}"; return 1; }
     local mapper="/dev/mapper/${name}"
@@ -1422,8 +1434,11 @@ luks_open_or_format() {
     # auto lets systemd try the TPM token first, falling back to the keyfile.
     local puuid; puuid="$(blkid -s UUID -o value "${part}" 2>/dev/null)"
     if [ -n "${puuid}" ] && { [ ! -f /etc/crypttab ] || ! grep -q "${name}" /etc/crypttab; }; then
-        printf '%s UUID=%s /etc/snapdragon/luks/%s.key luks,tpm2-device=auto\n' \
-            "${name}" "${puuid}" "${name}" >> /etc/crypttab
+        # Base options + any caller extras (node-storage appends `nofail`).
+        local cryptopts="luks,tpm2-device=auto"
+        [ -n "${extra_opts}" ] && cryptopts="${cryptopts},${extra_opts}"
+        printf '%s UUID=%s /etc/snapdragon/luks/%s.key %s\n' \
+            "${name}" "${puuid}" "${name}" "${cryptopts}" >> /etc/crypttab
         # Install the recovery keyfile off the read-only USB into a 0600 root path
         # so crypttab can read it at boot (TPM2 unlock makes it a fallback only).
         install -Dm0600 "${keyfile}" "/etc/snapdragon/luks/${name}.key" 2>/dev/null || true
@@ -1434,12 +1449,29 @@ luks_open_or_format() {
 }
 
 provision_storage() {
+    # ── NODE-STORAGE pool mode ──────────────────────────────────────────────
+    # `provision_storage --pool` (re-run by the node-agent reconcile, PR6)
+    # provisions ONLY the device(s) carrying a `pool:{}` marker — the ADDITIONAL
+    # storage an operator attached + registered — and SKIPS the cluster/system
+    # disks. Calling it with no argument is the FIRST-BOOT path: it provisions
+    # ALL .storage.devices[] exactly as before (system disks AND any pool disks
+    # baked into the manifest). The function is otherwise VERBATIM — a registered
+    # pool disk is just a new .storage.devices[] element with `pool:{}` set; the
+    # ONLY behavioural change is `,nofail` on a pool's crypttab/fstab so a removed
+    # pool disk DEGRADES the pool, never blocks the boot.
+    local only_pool=false
+    [ "${1:-}" = "--pool" ] && only_pool=true
+
     jqe '.storage.devices' || return 0
     local n i
     n="$(jqm '.storage.devices | length')"
-    log "Configuring ${n} attached storage device(s)"
+    if [ "${only_pool}" = "true" ]; then
+        log "Reconciling node-storage pool device(s) only (--pool)"
+    else
+        log "Configuring ${n} attached storage device(s)"
+    fi
     for ((i = 0; i < n; i++)); do
-        local match fs fmt mp opts label dev part uuid usefor encrypt luksname blkdev
+        local match fs fmt mp opts label dev part uuid usefor encrypt luksname blkdev is_pool
         match="$(jqm ".storage.devices[$i].match")"
         fs="$(jqm ".storage.devices[$i].filesystem // \"ext4\"")"
         fmt="$(jqm ".storage.devices[$i].format // false")"
@@ -1447,6 +1479,12 @@ provision_storage() {
         opts="$(jqm ".storage.devices[$i].options // \"defaults,noatime\"")"
         label="$(jqm ".storage.devices[$i].label // \"\"")"
         usefor="$(jqm ".storage.devices[$i].use_for // [] | join(\" \")")"
+        # NODE-STORAGE: a device with a `pool` object is an attached, registered
+        # storage pool (node-pinned local-path space) — NOT a system/cluster disk.
+        is_pool=false
+        jqe ".storage.devices[$i].pool" && is_pool=true
+        # In --pool mode skip non-pool (system) disks; on first boot do everything.
+        if [ "${only_pool}" = "true" ] && [ "${is_pool}" != "true" ]; then continue; fi
         # Encryption-at-rest (LUKS2). Default ON: cluster data partitions (the
         # disks that back PVCs + relocated containerd/kubelet/Vault state) are
         # encrypted unless a device explicitly opts out with encrypt:false.
@@ -1477,7 +1515,11 @@ provision_storage() {
         blkdev="${part}"
         if [ "${encrypt}" = "true" ]; then
             local kf; kf="$(luks_keyfile)"
-            blkdev="$(luks_open_or_format "${part}" "${luksname}" "${fmt}" "${kf}")" || \
+            # NODE-STORAGE: a pool disk gets `nofail` in crypttab so a removed pool
+            # disk DEGRADES the pool, never blocks the boot.
+            local crypt_extra=""
+            [ "${is_pool}" = "true" ] && crypt_extra="nofail"
+            blkdev="$(luks_open_or_format "${part}" "${luksname}" "${fmt}" "${kf}" "${crypt_extra}")" || \
                 warn "storage[$i]: encryption unavailable — ${part} mounted PLAINTEXT (see docs/ENCRYPTION-AT-REST.md)"
         fi
 
@@ -1489,10 +1531,20 @@ provision_storage() {
         mount -o "${opts}" "${blkdev}" "${mp}" || { warn "mount ${blkdev} failed"; continue; }
         # fstab references the unlocked mapper by its UUID for encrypted volumes
         # (crypttab opens it first), or the raw partition UUID for plaintext.
+        # NODE-STORAGE: append `,nofail` to a pool's fstab options so a removed pool
+        # disk DEGRADES the pool rather than dropping the node to an emergency shell.
+        local fstab_opts="${opts}"
+        if [ "${is_pool}" = "true" ] && [[ ",${fstab_opts}," != *",nofail,"* ]]; then
+            fstab_opts="${fstab_opts},nofail"
+        fi
         uuid="$(blkid -s UUID -o value "${blkdev}" 2>/dev/null)"
         if [ -n "${uuid}" ] && ! grep -q "${uuid}" /etc/fstab; then
-            printf 'UUID=%s  %s  %s  %s  0 2\n' "${uuid}" "${mp}" "${fs}" "${opts}" >> /etc/fstab
-            log "Added ${mp} to /etc/fstab (UUID=${uuid})"
+            printf 'UUID=%s  %s  %s  %s  0 2\n' "${uuid}" "${mp}" "${fs}" "${fstab_opts}" >> /etc/fstab
+            if [ "${is_pool}" = "true" ]; then
+                log "Added node-storage pool ${mp} to /etc/fstab (UUID=${uuid}, nofail)"
+            else
+                log "Added ${mp} to /etc/fstab (UUID=${uuid})"
+            fi
         fi
 
         # Relocate service data directories onto the attached storage.

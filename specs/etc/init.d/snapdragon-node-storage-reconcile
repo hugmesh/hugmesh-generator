@@ -1,0 +1,36 @@
+#!/sbin/openrc-run
+
+description="Reconcile attached + registered NODE-STORAGE pools from the signed per-node export"
+
+# Node-storage convergence service: runs the fetch/verify/reconcile/label/patch/ack agent
+# ONCE at boot (a oneshot). The 60s timer half is a cron.d drop-in
+# (/etc/cron.d/snapdragon-node-storage-reconcile) — OpenRC has no native timer and cronie is
+# already in the node image. The BFF push-with-ack drives FAST propagation; this
+# boot-oneshot + cron pull is the convergence FLOOR.
+#
+# Installed (rc-update add) ONLY on nodes that may host attached storage pools. The agent is
+# FAIL-CLOSED: on any fetch/verify failure it keeps the last-good cache and exits 0, so a
+# failed reconcile never faults the boot. With NO registered pool the signed export is the
+# empty body and the agent provisions nothing (inert).
+
+depend() {
+    need net
+    use dns logger
+    # AFTER first-boot provisioning (node.env + baked public key) and after tailscaled brings
+    # the node onto the mesh so the in-cluster BFF is reachable; AFTER kubelet so kubectl can
+    # label the node + patch the local-path ConfigMap.
+    after keys-provision tailscaled
+}
+
+command="/usr/sbin/snapdragon-node-storage-reconcile"
+command_background=false
+
+start() {
+    ebegin "Reconciling node-storage pools (fail-closed; keeps last-good cache on error)"
+    "${command}"
+    eend $? "node-storage reconcile reported an unexpected error (cache preserved)"
+}
+
+stop() {
+    return 0
+}

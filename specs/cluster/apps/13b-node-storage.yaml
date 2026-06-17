@@ -1,0 +1,100 @@
+# Node-storage ApplicationSet (capacity-aware placement + GitOps rebalance) — turns each
+# ACTIVE storage_service_assignment row (admin-bff 085) into ONE Application whose presence
+# is the placement-state. Modelled BYTE-FOR-BYTE on apps/13a-optional-services.yaml (the
+# list-generator + selector pattern already proven there): a single LIST whose membership is
+# gated by a `state: "active"` selector. A revoke drops the element -> prune deletes the
+# placement (nodeAffinity + PVC patch). No baked-file surgery, no redeploy.
+#
+# WHY (same reasoning as 13a): the live cluster's ArgoCD root app syncs apps/ from the gitops
+# repo, so build-time `rm -f` cannot remove a placement. To place/unplace a service on a LIVE
+# cluster you flip ONE list — the element's `state` here, mirrored from the
+# node-storage-assignments ConfigMap (rendered from the BFF's active
+# storage_service_assignment rows) — and the generator-level `selector`
+# (matchLabels state:"active") makes ArgoCD prune/create that assignment's Application.
+#
+# WHAT EACH ELEMENT CARRIES (per ACTIVE assignment row):
+#   id          — the assignment id (the Application name suffix + the dedup key).
+#   service     — the workload being placed (service_name).
+#   pvc         — the PVC the patch binds to the node-pinned PV (pvc_name).
+#   nodeName    — the node the pool is pinned to (resolved from the pool's device residency);
+#                 the patch sets the service's nodeAffinity to THIS node so the pod schedules
+#                 where the disk is, and WaitForFirstConsumer + the per-node nodePathMap
+#                 entry (node-agent, PR6) bind the PV on that node. PV-BINDS-TO-CORRECT-NODE.
+#   poolPath    — the pool's node-local path (for the PV/patch annotation/audit).
+#   namespace   — the service's namespace.
+#   requested   — the slice (Gi) the PVC requests (capacity-aware; the BFF already rejected
+#                 over-subscription at assign time).
+#
+# HOW THE PATCH WORKS: the per-assignment Application sources a Kustomize overlay
+# (manifests/node-storage-placement) parameterised by the element vars; the overlay injects a
+# strategic-merge patch adding nodeAffinity to the target Deployment/StatefulSet AND a PVC
+# bound to the node's local-path StorageClass. Pruning the element (revoke) removes the
+# overlay Application -> the patch is reverted by ArgoCD (the service loses its pin + PVC; the
+# operator must have scaled it to zero first for a stateful svc — see PR8 migration Job).
+#
+# SHIPS INERT: the elements list is EMPTY (zero placements). With no active assignment this
+# ApplicationSet generates NOTHING — today's behaviour exactly. The node-storage-assignments
+# ConfigMap (the source of truth) is populated by the BFF reconcile from the active rows; a
+# rendered element appears here only when an operator assigns a service to a pool.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: node-storage
+  namespace: devops
+  annotations:
+    # The elements here are mirrored from the node-storage-assignments ConfigMap (rendered
+    # from the BFF's ACTIVE storage_service_assignment rows). Flip an element's `state` (or
+    # remove it) to unplace at runtime; the BFF CAS-revoke is what removes it upstream.
+    snapdragon.systems/source-of-truth: bff:/bff/admin/device-storage-pools (active storage_service_assignment rows)
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - list:
+        # One element per ACTIVE storage_service_assignment. EMPTY by default (ships inert):
+        # a placement element is rendered here only when the BFF has an active assignment.
+        # An example element (commented) documents the shape the renderer emits:
+        #   - { id: "a-1", service: owncast, pvc: owncast-data, nodeName: pi-edge-01,
+        #       poolPath: /mnt/pool-1, namespace: snapdragon-backend, requested: "4", state: "active" }
+        elements: []
+        # Keep ONLY active assignments — a revoked/absent row is dropped and its placement
+        # Application pruned (nodeAffinity + PVC patch reverted). This is the runtime
+        # place/unplace + rebalance lever.
+      selector:
+        matchLabels:
+          state: "active"
+  template:
+    metadata:
+      name: "node-storage-{{ .id }}"
+      labels:
+        app.kubernetes.io/part-of: snapdragon.systems
+        snapdragon.systems/storage-assignment: "{{ .id }}"
+        snapdragon.systems/storage-service: "{{ .service }}"
+      annotations:
+        snapdragon.systems/storage-node: "{{ .nodeName }}"
+        snapdragon.systems/storage-pool-path: "{{ .poolPath }}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+        targetRevision: main
+        path: specs/cluster/manifests/node-storage-placement
+        kustomize:
+          # The placement overlay reads these via a Kustomize component/replacement to inject
+          # the nodeAffinity + PVC for THIS assignment. (The overlay is generic; the per-
+          # assignment values come from these labels/annotations + the rendered ConfigMap.)
+          commonAnnotations:
+            snapdragon.systems/storage-assignment-id: "{{ .id }}"
+            snapdragon.systems/storage-service: "{{ .service }}"
+            snapdragon.systems/storage-pvc: "{{ .pvc }}"
+            snapdragon.systems/storage-node: "{{ .nodeName }}"
+            snapdragon.systems/storage-requested-gi: "{{ .requested }}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{ .namespace }}"
+      syncPolicy:
+        # prune:true is the unplace lever — a revoked assignment drops from the list and its
+        # placement Application (nodeAffinity + PVC patch) is pruned. selfHeal keeps the pin
+        # converged. CreateNamespace is harmless (the service's ns already exists).
+        automated: { prune: true, selfHeal: true }
+        syncOptions: [CreateNamespace=true, ApplyOutOfSyncOnly=true]
