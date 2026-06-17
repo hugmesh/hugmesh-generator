@@ -42,6 +42,54 @@ FN="$(extract_fn)"
 [ -n "${FN}" ] || { echo "  FAIL could not extract provision_desktop_governance()"; exit 1; }
 export __FN__="${FN}"
 
+# Also extract provision_users() + the shared desktop_governance_governed()
+# helper, so we can prove the HIGH-severity fix: on a governed image provision_users
+# writes NO static /etc/sudoers.d grant and gives the user NO sudo-conferring wheel
+# membership (sudo flows only via the desktop-sudo SSO claim/polkit); a non-governed
+# image keeps its existing sudoers.d behavior.
+extract_named_fn() { awk -v fn="$1" 'index($0, fn"() {")==1{p=1} p{print} /^\}/{if(p){exit}}' "${SRC}"; }
+USERS_FN="$(extract_named_fn provision_users)"
+GOV_HELPER_FN="$(extract_named_fn desktop_governance_governed)"
+[ -n "${USERS_FN}" ] || { echo "  FAIL could not extract provision_users()"; exit 1; }
+[ -n "${GOV_HELPER_FN}" ] || { echo "  FAIL could not extract desktop_governance_governed()"; exit 1; }
+export __USERS_FN__="${USERS_FN}" __GOV_HELPER_FN__="${GOV_HELPER_FN}"
+
+# Run provision_users() in the sandbox with all system mutators stubbed. The
+# stubbed `useradd` records the -G group list to ${ETCROOT}/useradd-groups so we
+# can assert wheel was/was not conferred. A users.json with one `sudo:true` user
+# is written into the KEYS BASE. Governance is decided by whether the sandbox has
+# baked/KEYS desktop-governance templates (new_sandbox arg).
+run_users() {
+    local sudo_nopw="${1:-false}"
+    cat > "${BASE}/users.json" <<JSON
+{ "users": [ { "name": "alice", "sudo": true, "sudo_nopasswd": ${sudo_nopw} } ] }
+JSON
+    ETCROOT="${ETCROOT}" BASE="${BASE}" \
+    bash -c '
+        set -uo pipefail
+        log(){ :; }; warn(){ :; }; have(){ return 1; }
+        MANIFEST="/dev/null"; USERS_MARKER="${ETCROOT}/users.created"
+        # System mutators -> harmless stubs.
+        groupadd(){ :; }
+        getent(){ return 1; }                 # group/passwd lookups: pretend absent
+        chpasswd(){ cat >/dev/null; }
+        id(){ return 1; }                      # user "does not exist yet" => useradd path
+        install_authorized_keys(){ :; }
+        jq(){ command jq "$@"; }
+        # Record the -G groups arg useradd is called with.
+        useradd(){
+            local g=""; while [ $# -gt 0 ]; do [ "$1" = "-G" ] && { g="$2"; shift; }; shift; done
+            printf "%s\n" "${g}" > "${ETCROOT}/useradd-groups"
+            return 0
+        }
+        body="$(printf "%s\n%s" "${__GOV_HELPER_FN__}" "${__USERS_FN__}" \
+            | sed -e "s#/etc/sudoers#${ETCROOT}/etc/sudoers#g" \
+                  -e "s#/etc/snapdragon/desktop-governance#${ETCROOT}/etc/snapdragon/desktop-governance#g")"
+        eval "${body}"
+        provision_users
+    '
+}
+
 SANDBOXES=()
 cleanup(){ for d in "${SANDBOXES[@]:-}"; do rm -rf "${d}" 2>/dev/null; done; }
 trap cleanup EXIT
@@ -204,6 +252,136 @@ run_gov "" "" "acme.example" >/dev/null 2>&1
     || bad "KEYS-USB fallback did not render the Discover remote"
 [ -f "${ETCROOT}/etc/polkit-1/rules.d/49-snapdragon-desktop-sudo.rules" ] \
     && ok "KEYS-USB fallback: polkit sudo gate rendered" || bad "KEYS-USB fallback: no polkit gate"
+
+# ── Case 10: HIGH FIX — GOVERNED image suppresses static sudoers.d + wheel-sudo ─
+# A `sudo:true` KEYS user on a governed image must get NO /etc/sudoers.d/10-<name>
+# grant and must NOT be placed in the sudo-conferring `wheel` group. Sudo flows
+# only via the desktop-sudo SSO claim / polkit gate.
+new_sandbox with-templates
+mkdir -p "${ETCROOT}/etc/sudoers.d"
+run_users false >/dev/null 2>&1
+[ ! -e "${ETCROOT}/etc/sudoers.d/10-alice" ] \
+    && ok "governed: NO static /etc/sudoers.d/10-alice grant for a sudo:true user" \
+    || bad "governed: static sudoers.d grant written (standing root bypass)"
+if [ -f "${ETCROOT}/useradd-groups" ] && ! grep -qw 'wheel' "${ETCROOT}/useradd-groups"; then
+    ok "governed: user NOT placed in sudo-conferring wheel group"
+else
+    bad "governed: user given wheel-group sudo ($(cat "${ETCROOT}/useradd-groups" 2>/dev/null))"
+fi
+# Non-wheel supplementary groups are preserved.
+grep -q 'audio' "${ETCROOT}/useradd-groups" 2>/dev/null \
+    && ok "governed: non-sudo groups (audio/video/usb) preserved" \
+    || bad "governed: dropped non-sudo supplementary groups too"
+
+# ── Case 11: GOVERNED image — provision_desktop_governance STRIPS a pre-existing
+# standing /etc/sudoers.d/10-* grant (defense-in-depth, after provision_users).
+new_sandbox with-templates
+mkdir -p "${ETCROOT}/etc/sudoers.d"
+printf 'bob ALL=(ALL) ALL\n' > "${ETCROOT}/etc/sudoers.d/10-bob"
+printf 'carol ALL=(ALL:ALL) NOPASSWD: ALL\n' > "${ETCROOT}/etc/sudoers.d/90-carol"
+run_gov "" "" "acme.example" >/dev/null 2>&1
+[ ! -e "${ETCROOT}/etc/sudoers.d/10-bob" ] \
+    && ok "governed: pre-existing 10-<name> standing sudoers.d grant stripped" \
+    || bad "governed: standing 10-bob grant survived"
+if grep -Eq '^carol[[:space:]]+ALL=' "${ETCROOT}/etc/sudoers.d/90-carol" 2>/dev/null; then
+    bad "governed: other standing sudoers.d ALL=(ALL) grant left active"
+else
+    ok "governed: other standing sudoers.d ALL=(ALL) grant neutralized"
+fi
+
+# ── Case 12: NON-governed image keeps existing sudoers.d behavior (regression) ──
+new_sandbox no-templates
+mkdir -p "${ETCROOT}/etc/sudoers.d"
+run_users false >/dev/null 2>&1
+[ -f "${ETCROOT}/etc/sudoers.d/10-alice" ] \
+    && grep -q 'alice ALL=(ALL) ALL' "${ETCROOT}/etc/sudoers.d/10-alice" \
+    && ok "non-governed: existing static /etc/sudoers.d/10-alice grant preserved" \
+    || bad "non-governed: sudoers.d grant missing/wrong (broke un-governed behavior)"
+grep -qw 'wheel' "${ETCROOT}/useradd-groups" 2>/dev/null \
+    && ok "non-governed: default wheel group membership preserved" \
+    || bad "non-governed: wheel group dropped (broke un-governed behavior)"
+# NOPASSWD variant still honored on a non-governed image.
+new_sandbox no-templates
+mkdir -p "${ETCROOT}/etc/sudoers.d"
+run_users true >/dev/null 2>&1
+grep -q 'alice ALL=(ALL) NOPASSWD: ALL' "${ETCROOT}/etc/sudoers.d/10-alice" 2>/dev/null \
+    && ok "non-governed: sudo_nopasswd:true still writes NOPASSWD grant" \
+    || bad "non-governed: NOPASSWD grant not written"
+
+# ── Case 13: MED FIX — bearer-forward uses PER-USER scope + clears on logout ────
+# Render bearer-forward.sh and assert it never touches the shared/system flatpak
+# config, uses `flatpak --user`, installs a logout clear hook, and does NOT export
+# the token into the environment.
+new_sandbox with-templates
+run_gov "" "" "acme.example" >/dev/null 2>&1
+BF="${ETCROOT}/etc/snapdragon/desktop-governance/bearer-forward.sh"
+if [ -f "${BF}" ]; then
+    grep -q 'flatpak --user config --set http.extra-headers' "${BF}" \
+        && ok "bearer-forward: writes header via flatpak --user (per-user scope)" \
+        || bad "bearer-forward: not using --user scope"
+    ! grep -Eq 'flatpak[[:space:]]+config[[:space:]]+--set' "${BF}" \
+        && ! grep -q -- '--system config' "${BF}" \
+        && ok "bearer-forward: never writes the shared/system flatpak config" \
+        || bad "bearer-forward: still writes system/shared flatpak config"
+    grep -q 'plasma-workspace/shutdown' "${BF}" && grep -q 'install_logout_clear' "${BF}" \
+        && ok "bearer-forward: installs a logout hook that clears the header on session end" \
+        || bad "bearer-forward: no logout clear hook"
+    grep -q -- '--clear' "${BF}" \
+        && ok "bearer-forward: supports --clear mode (invoked by the logout hook)" \
+        || bad "bearer-forward: no --clear mode"
+    ! grep -q 'export SNAPDRAGON_REGISTRY_BEARER' "${BF}" \
+        && ok "bearer-forward: does NOT export the bearer token into the environment" \
+        || bad "bearer-forward: still exports SNAPDRAGON_REGISTRY_BEARER (token leak)"
+else
+    bad "bearer-forward.sh not rendered"
+fi
+
+# ── Case 14: MED FIX — malicious domain with sed metachars / newline is REJECTED
+# (fail-closed) so it cannot inject into / break the rendered config. Crafted
+# domains: a `/`-injection that would rewrite the sed replacement, a `&`/`\`
+# payload, and an embedded newline. None must render any config or grant sudo.
+for craft in 'evil.example/g; s/Title/HACKED' 'a&b\c.example' $'good.example\ninjected line'; do
+    new_sandbox with-templates
+    run_gov "${craft}" "" "" >/dev/null 2>&1; rc=$?
+    if [ "${rc}" -eq 0 ] \
+       && [ ! -e "${ETCROOT}/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo" ] \
+       && [ ! -e "${ETCROOT}/etc/polkit-1/rules.d/49-snapdragon-desktop-sudo.rules" ]; then
+        ok "malicious domain rejected fail-closed (no render, no sudo): $(printf '%q' "${craft}")"
+    else
+        bad "malicious domain NOT rejected (render or sudo happened): $(printf '%q' "${craft}") rc=${rc}"
+    fi
+done
+# And a benign domain still escapes harmlessly + renders correctly (no injection
+# of a stray sed command, exactly one Url line).
+new_sandbox with-templates
+run_gov "good.example" "" "" >/dev/null 2>&1
+REPO_F="${ETCROOT}/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo"
+if [ -f "${REPO_F}" ] \
+   && grep -q 'Url=https://api.good.example/bff/desktop/registry/' "${REPO_F}" \
+   && ! grep -qi 'HACKED' "${REPO_F}"; then
+    ok "benign domain renders correctly with escaping (no injected content)"
+else
+    bad "benign domain render wrong/injected"
+fi
+
+# ── Case 15: the two template copies are BYTE-IDENTICAL for the config templates
+# rendered onto the system (KEYS-USB fallback must render the same bytes as the
+# baked path). README docs may differ in framing and are excluded.
+KEYS_TPL="${REPO}/keys-template/desktop-governance"
+if [ -d "${KEYS_TPL}" ]; then
+    parity_ok=1
+    while IFS= read -r rel; do
+        case "${rel}" in */README.md|README.md) continue ;; esac
+        if ! cmp -s "${TPL_SRC}/${rel}" "${KEYS_TPL}/${rel}"; then
+            parity_ok=0; echo "    (differs: ${rel})"
+        fi
+    done < <(cd "${TPL_SRC}" && find . -type f | sed 's#^\./##')
+    [ "${parity_ok}" -eq 1 ] \
+        && ok "config templates byte-identical between specs/etc/... and keys-template/..." \
+        || bad "config templates DIFFER between the two template copies"
+else
+    bad "keys-template/desktop-governance not found"
+fi
 
 echo "== RESULT: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]
