@@ -37,7 +37,13 @@ data:
   akkoma: "true"
   tuwunel: "true"
   phpbb: "true"
-  games: "true"
+  # games — DEFAULT-OFF (policy 2026-06-17): the games subdomain + casdoor-games +
+  # games app-store are OPT-IN, baked only when 'games' is explicitly selected
+  # (--enable-games / 'games' in --optional-services / OPTIONAL_SERVICES=all).
+  # _opt_render_installed_services rewrites this to "true" when selected; the literal
+  # baseline below is the SAFE DEFAULT (off) so a repo-synced cluster whose render
+  # never ran ships games dark and the ApplicationSet never re-forces it on.
+  games: "false"
   # owncast / tube — GPU-gated x86 OPTIONAL services (DEFAULT-OFF in
   # optional-services.yaml: each needs an amd64 GPU worker). Rendered true/false by
   # _opt_render_installed_services from OPTIONAL_SERVICES; the literal baseline below

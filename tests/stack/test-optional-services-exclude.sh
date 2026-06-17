@@ -18,7 +18,12 @@
 #     "false", and the 13a ApplicationSet element is installed:"false";
 #   * INCLUDED => app present, manifests present, ConfigMap "true", 13a "true";
 #   * the EXCLUDE_SERVICES subtractive knob removes a slug from a full positive
-#     selection (force-OFF regardless of how it was selected).
+#     selection (force-OFF regardless of how it was selected);
+#   * the DEFAULT-INCLUSION POLICY (user 2026-06-17): a DEFAULT build (no
+#     OPTIONAL_SERVICES) renders akkoma+tuwunel+phpbb and PRUNES games+owncast+tube;
+#     OPTIONAL_SERVICES=all renders everything; a default-off slug is included when
+#     explicitly added; EXCLUDE_SERVICES removes a default-ON slug. games is now
+#     DEFAULT-OFF (registry default: off + ConfigMap baseline "false").
 #
 # Arch-neutral: the gate operates on the shared specs/cluster tree (the rpi5
 # builder is the canonical cluster-node builder; build-x86-host-stage4.sh is a
@@ -52,6 +57,28 @@ ok "extracted the real gate + helper functions from build-rpi5-stage4.sh"
 
 # ── The user-level OPTIONAL services this requirement targets ─────────────────
 USER_SERVICES="akkoma tuwunel phpbb games owncast tube"
+# DEFAULT-INCLUSION POLICY (user 2026-06-17): the built-in default when NO
+# OPTIONAL_SERVICES is given, and the DEFAULT-OFF set that must be explicitly added.
+DEFAULT_ON="akkoma tuwunel phpbb"
+DEFAULT_OFF="games owncast tube"
+
+# resolve_selection — mirror the BUILDER's OPTIONAL_SERVICES resolution so the test
+# tracks it: (1) built-in default when unset, (2) the `all` sentinel expands to the
+# full user-level set, (3) EXCLUDE_SERVICES subtracts LAST. Echoes the final list.
+# $1 = OPTIONAL_SERVICES (empty => built-in default), $2 = EXCLUDE_SERVICES.
+resolve_selection() {
+  local opt="$1" excl="${2:-}" _x _s _kept
+  [ -n "${opt}" ] || opt="${DEFAULT_ON}"                 # built-in default
+  case " ${opt} " in *" all "*) opt="${USER_SERVICES}";; esac   # full-set sentinel
+  if [ -n "${excl//[[:space:],]/}" ]; then               # EXCLUDE_SERVICES subtracts
+    for _x in ${excl//,/ }; do
+      _kept=""
+      for _s in ${opt}; do [ "${_s}" = "${_x}" ] || _kept="${_kept} ${_s}"; done
+      opt="${_kept# }"
+    done
+  fi
+  echo "${opt}"
+}
 
 # ── 1) registry: every user-level slug is registered ─────────────────────────
 if command -v python3 >/dev/null; then
@@ -190,6 +217,92 @@ out="$(apply_exclude "akkoma" "owncast")"
 # the builder actually wires the knob (regex-anchored to the source line).
 grep -q 'EXCLUDE_SERVICES' "${BUILDER}" && ok "builder defines/reads EXCLUDE_SERVICES" || bad "builder missing EXCLUDE_SERVICES"
 grep -q -- '--exclude-services' "${BUILDER}" && ok "builder accepts --exclude-services CLI flag" || bad "builder missing --exclude-services flag"
+
+# ── 4b) DEFAULT-INCLUSION POLICY (user 2026-06-17) ────────────────────────────
+echo "-- DEFAULT-INCLUSION POLICY: default set / 'all' sentinel / opt-in / default-on exclude --"
+
+# resolve_selection must agree with the REAL builder's resolution (built-in default
+# < all-sentinel < EXCLUDE last). Spot-check the builder actually wires each leg.
+grep -q 'OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"' "${BUILDER}" \
+  && ok "builder built-in default is 'akkoma tuwunel phpbb' (games/owncast/tube OFF)" \
+  || bad "builder built-in default is not 'akkoma tuwunel phpbb'"
+grep -q -- '--all-services' "${BUILDER}" && ok "builder accepts --all-services CLI flag" || bad "builder missing --all-services flag"
+grep -qE 'OPTIONAL_SERVICES="\$\{USER_LEVEL_SERVICES\}"' "${BUILDER}" \
+  && ok "builder expands the 'all' sentinel to USER_LEVEL_SERVICES" || bad "builder missing 'all' sentinel expansion"
+
+# (a) DEFAULT build — NO OPTIONAL_SERVICES given: renders akkoma+tuwunel+phpbb and
+#     PRUNES games+owncast+tube (Applications/manifests/ConfigMap=false/13a=false).
+seed_tree "default-set"
+OPTIONAL_SERVICES="$(resolve_selection "" "")"
+[ "${OPTIONAL_SERVICES}" = "${DEFAULT_ON}" ] \
+  && ok "DEFAULT resolution = '${DEFAULT_ON}' (no OPTIONAL_SERVICES given)" \
+  || bad "DEFAULT resolution wrong (got: ${OPTIONAL_SERVICES})"
+gate_optional_services
+for slug in ${DEFAULT_ON}; do
+  app="${OWNED_APP[$slug]}"; dir="${OWNED_DIR[$slug]}"
+  [ -f "${TREE}/apps/${app}" ] && [ -d "${TREE}/manifests/${dir}" ] \
+    && ok "DEFAULT: ${slug} PRESENT (app + manifests)" || bad "DEFAULT: ${slug} pruned despite default-on"
+  grep -qE "^[[:space:]]*${slug}:[[:space:]]*\"true\"" "${TREE}/manifests/policy/installed-services-configmap.yaml" \
+    && ok "DEFAULT: ${slug} ConfigMap true" || bad "DEFAULT: ${slug} ConfigMap not true"
+done
+for slug in ${DEFAULT_OFF}; do
+  app="${OWNED_APP[$slug]}"; dir="${OWNED_DIR[$slug]}"
+  [ ! -f "${TREE}/apps/${app}" ] && ok "DEFAULT: ${slug} Application PRUNED (default-off)" || bad "DEFAULT: ${slug} app survived (should be default-off)"
+  [ ! -d "${TREE}/manifests/${dir}" ] && ok "DEFAULT: ${slug} manifests PRUNED (default-off)" || bad "DEFAULT: ${slug} manifests survived (should be default-off)"
+  grep -qE "^[[:space:]]*${slug}:[[:space:]]*\"false\"" "${TREE}/manifests/policy/installed-services-configmap.yaml" \
+    && ok "DEFAULT: ${slug} ConfigMap false" || bad "DEFAULT: ${slug} ConfigMap not false"
+  grep -qE "\{[[:space:]]*slug:[[:space:]]*${slug}[[:space:]]*,.*installed:[[:space:]]*\"false\"" "${TREE}/apps/13a-optional-services.yaml" \
+    && ok "DEFAULT: ${slug} 13a element absent (installed:\"false\")" || bad "DEFAULT: ${slug} 13a not false"
+done
+# games is the headline policy move: DEFAULT-OFF.
+case " ${DEFAULT_ON} " in *" games "*) bad "POLICY REGRESSION: games is in the default-on set" ;; *) ok "POLICY: games is DEFAULT-OFF (not in built-in default)" ;; esac
+
+# (b) OPTIONAL_SERVICES=all — renders EVERYTHING.
+seed_tree "all-sentinel"
+OPTIONAL_SERVICES="$(resolve_selection "all" "")"
+[ "${OPTIONAL_SERVICES}" = "${USER_SERVICES}" ] \
+  && ok "'all' sentinel resolved to every user-level slug" || bad "'all' resolution wrong (got: ${OPTIONAL_SERVICES})"
+gate_optional_services
+for slug in ${USER_SERVICES}; do
+  app="${OWNED_APP[$slug]}"
+  [ -f "${TREE}/apps/${app}" ] && ok "all: ${slug} PRESENT" || bad "all: ${slug} pruned despite 'all'"
+  grep -qE "^[[:space:]]*${slug}:[[:space:]]*\"true\"" "${TREE}/manifests/policy/installed-services-configmap.yaml" \
+    && ok "all: ${slug} ConfigMap true" || bad "all: ${slug} ConfigMap not true under 'all'"
+done
+
+# (c) adding a default-OFF service (default set + games) — games is now INCLUDED.
+seed_tree "add-games"
+OPTIONAL_SERVICES="$(resolve_selection "akkoma tuwunel phpbb games" "")"
+gate_optional_services
+[ -f "${TREE}/apps/${OWNED_APP[games]}" ] && ok "opt-in: explicitly-added 'games' is INCLUDED (50-games.yaml present)" || bad "opt-in: games pruned despite explicit selection"
+grep -qE "^[[:space:]]*games:[[:space:]]*\"true\"" "${TREE}/manifests/policy/installed-services-configmap.yaml" \
+  && ok "opt-in: games ConfigMap true when added" || bad "opt-in: games ConfigMap not true when added"
+[ ! -f "${TREE}/apps/${OWNED_APP[owncast]}" ] && ok "opt-in: still-unlisted owncast PRUNED" || bad "opt-in: owncast survived without selection"
+
+# (d) EXCLUDE_SERVICES=phpbb removes a DEFAULT-ON service from the default set.
+seed_tree "exclude-default-on"
+OPTIONAL_SERVICES="$(resolve_selection "" "phpbb")"   # default set minus phpbb
+case " ${OPTIONAL_SERVICES} " in *" phpbb "*) bad "EXCLUDE_SERVICES=phpbb did not drop the default-on phpbb (got: ${OPTIONAL_SERVICES})" ;; *" akkoma "*) ok "EXCLUDE_SERVICES=phpbb removed the DEFAULT-ON phpbb, kept akkoma+tuwunel (got: ${OPTIONAL_SERVICES})" ;; *) bad "EXCLUDE on default set produced unexpected result (got: ${OPTIONAL_SERVICES})" ;; esac
+gate_optional_services
+[ ! -f "${TREE}/apps/${OWNED_APP[phpbb]}" ] && ok "EXCLUDE phpbb: 30-phpbb.yaml PRUNED" || bad "EXCLUDE phpbb: app survived"
+grep -qE "^[[:space:]]*phpbb:[[:space:]]*\"false\"" "${TREE}/manifests/policy/installed-services-configmap.yaml" \
+  && ok "EXCLUDE phpbb: ConfigMap false" || bad "EXCLUDE phpbb: ConfigMap not false"
+# 'all' + EXCLUDE still subtracts.
+out="$(resolve_selection "all" "games owncast")"
+case " ${out} " in *" games "*|*" owncast "*) bad "'all' + EXCLUDE_SERVICES did not subtract (got: ${out})" ;; *" tube "*) ok "'all' + EXCLUDE_SERVICES='games owncast' = all-but-those (got: ${out})" ;; *) bad "'all'+EXCLUDE unexpected (got: ${out})" ;; esac
+
+# Registry + ConfigMap literal baselines record the DEFAULT-OFF policy for games
+# (so a render-less repo-synced cluster ships games dark, never re-forcing it on).
+if command -v python3 >/dev/null; then
+  python3 - "${REG}" <<'PY' && ok "registry: games default: off (DEFAULT-OFF policy)" || bad "registry: games is not default: off"
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+g = next(s for s in d["spec"]["services"] if s["slug"] == "games")
+assert g["default"] in (False, "off"), f"games default={g['default']!r}"
+PY
+fi
+grep -qE '^[[:space:]]*games:[[:space:]]*"false"' "${SRC}/manifests/policy/installed-services-configmap.yaml" \
+  && ok "ConfigMap baseline: games \"false\" (safe default for render-less repo sync)" || bad "ConfigMap baseline games not \"false\""
 
 # ── 5) the surviving baked artefacts still parse (YAML + JSON + bash) ─────────
 echo "-- artefact integrity after pruning --"

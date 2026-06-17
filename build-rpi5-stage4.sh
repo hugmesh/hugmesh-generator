@@ -65,13 +65,24 @@ ORG="Snapdragon-Systems"            # GitHub org / image namespace
 # default literal composes with rebrand_sysroot (snapdragon.systems->CLUSTER_DOMAIN).
 # Drives the games host + OIDC issuer/redirects via parameterize_games_domain().
 GAMES_DOMAIN="games.snapdragon.systems"
-# OPTIONAL services selected on this image (subset of: akkoma tuwunel phpbb games).
-# Built-in default = "akkoma tuwunel phpbb". GAMES IS OPT-IN / OFF BY DEFAULT — the
-# games subdomain (games.<CLUSTER_DOMAIN>) + casdoor-games + games app-store are baked
-# only when games is explicitly selected (--enable-games / ENABLE_GAMES=true, or by
-# listing 'games' in --optional-services). brand.conf narrows; --optional-services
-# overrides both (built-in < brand.conf < flag). Unselected slugs are pruned by
-# gate_optional_services.
+# ── DEFAULT-INCLUSION POLICY (user 2026-06-17) ───────────────────────
+# USER_LEVEL_SERVICES is the SINGLE source-of-truth set of user-level OPTIONAL
+# slugs (matches specs/cluster/optional-services.yaml; excludes the non-user-level
+# infra slugs egress-vpn / workloadConsole / anubis). It is what OPTIONAL_SERVICES=all
+# / --all-services expands to.
+USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube"
+# OPTIONAL services selected on this image (subset of USER_LEVEL_SERVICES).
+#   DEFAULT-ON  (the built-in default when NO selection is given): akkoma tuwunel phpbb.
+#   DEFAULT-OFF (must be specifically added): games owncast tube (and any future
+#               user-level service) — pruned unless explicitly selected.
+# FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services) expands to EVERY
+# user-level slug (USER_LEVEL_SERVICES) just before EXCLUDE_SERVICES subtracts, so
+# `all` + EXCLUDE_SERVICES="games" still drops games. GAMES IS OPT-IN / OFF BY
+# DEFAULT — the games subdomain (games.<CLUSTER_DOMAIN>) + casdoor-games + games
+# app-store are baked only when games is explicitly selected (--enable-games /
+# ENABLE_GAMES=true, by listing 'games' in --optional-services, or via 'all').
+# brand.conf narrows; --optional-services overrides both (built-in < brand.conf <
+# flag). Unselected slugs are pruned by gate_optional_services.
 OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
 # EXCLUDE_SERVICES — the SUBTRACTIVE build-time exclusion knob (brand.conf /
 # --exclude-services). Any user-level slug listed here is REMOVED from the final
@@ -392,10 +403,17 @@ OPTIONS
 
     --optional-services "<slugs>"
         The SUBSET of user-level OPTIONAL services to bake (allow-list). Choose from
-        akkoma tuwunel phpbb games owncast tube. Unlisted slugs are pruned from the
-        baked GitOps tree by gate_optional_services. Built-in default is
-        "akkoma tuwunel phpbb" (games/owncast/tube are off by default).
-        (env/brand.conf: OPTIONAL_SERVICES)
+        akkoma tuwunel phpbb games owncast tube, or the literal "all" (every
+        user-level slug). Unlisted slugs are pruned from the baked GitOps tree by
+        gate_optional_services. Built-in DEFAULT (no selection given) is
+        "akkoma tuwunel phpbb"; games/owncast/tube are DEFAULT-OFF (opt-in).
+        (env/brand.conf: OPTIONAL_SERVICES; OPTIONAL_SERVICES=all = the full set)
+
+    --all-services
+        Bake EVERY user-level OPTIONAL service (akkoma tuwunel phpbb games owncast
+        tube) — the FULL-SET shortcut, equivalent to --optional-services all.
+        EXCLUDE_SERVICES still subtracts (e.g. --all-services with
+        --exclude-services "games" bakes everything but games).
 
     --exclude-services "<slugs>"
         The SUBTRACTIVE build-time exclusion list: force-OFF these user-level slugs
@@ -578,6 +596,7 @@ while [[ $# -gt 0 ]]; do
         --org)                ORG="$2";                shift 2 ;;
         --games-domain)       GAMES_DOMAIN="$2";       shift 2 ;;
         --optional-services)  OPTIONAL_SERVICES="$2";  shift 2 ;;
+        --all-services)       OPTIONAL_SERVICES="all"; shift   ;;
         --exclude-services)   EXCLUDE_SERVICES="$2";   shift 2 ;;
         -T|--timezone)        TIMEZONE="$2";           shift 2 ;;
         -u|--user)            DEFAULT_USER="$2";       shift 2 ;;
@@ -624,6 +643,20 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services, which sets the same
+# token) expands to EVERY user-level slug. Done HERE — after arg parse, before the
+# games opt-in fold and BEFORE EXCLUDE_SERVICES subtracts — so `all` is just a
+# positive allow-list of the whole set and EXCLUDE_SERVICES still removes from it
+# (e.g. OPTIONAL_SERVICES=all + EXCLUDE_SERVICES="games owncast" => everything but
+# games/owncast). A bare `all` anywhere in the list expands the whole token to the
+# full set (operators write `all`, not `all akkoma`).
+case " ${OPTIONAL_SERVICES} " in
+    *" all "*)
+        OPTIONAL_SERVICES="${USER_LEVEL_SERVICES}"
+        info "OPTIONAL_SERVICES: 'all' sentinel expanded to every user-level slug: ${OPTIONAL_SERVICES}"
+        ;;
+esac
 
 # Games is OPT-IN (off by default): fold it into the selection when --enable-games
 # / ENABLE_GAMES=true. Idempotent — a no-op when 'games' is already listed (e.g. via

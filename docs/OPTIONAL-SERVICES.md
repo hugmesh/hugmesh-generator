@@ -55,38 +55,62 @@ the `federation_modules` seed.
 
 ## 3. Build-time: select services on a USB
 
+### Default-inclusion policy (user 2026-06-17)
+
+| Tier | Slugs | When baked |
+|---|---|---|
+| **DEFAULT-ON** (the built-in default when no selection is given) | `akkoma`, `tuwunel` (Matrix), `phpbb` | always, unless `EXCLUDE_SERVICES` removes them |
+| **DEFAULT-OFF** (must be specifically added) | `games`, `owncast`, `tube` — and any future user-level service | only when explicitly selected |
+| **FULL-SET** | `OPTIONAL_SERVICES=all` / `--all-services` | every user-level slug |
+
+> ⚠ **`games` is DEFAULT-OFF** (it was previously default-on). Add it with
+> `--enable-games` / `ENABLE_GAMES=true`, by naming `games` in `OPTIONAL_SERVICES`,
+> or via the full set. `owncast`/`tube` are GPU-gated x86 services, also off by default.
+
 Two inputs, in precedence order **built-in default (`akkoma tuwunel phpbb`;
-games OFF) < `brand.conf` < `--optional-services` CLI flag**. **`games` is
-opt-in / off by default** — enable it with `--enable-games` (or `ENABLE_GAMES=true`),
-or by naming `games` in `--optional-services`:
+games/owncast/tube OFF) < `brand.conf` < `--optional-services` CLI flag**:
 
 - **`brand.conf`** knob (sourced by both builders):
   ```sh
   OPTIONAL_SERVICES="akkoma games"      # forum-less + Matrix-less appliance, WITH games
   ENABLE_GAMES=true                     # or keep the default list and just add games
+  OPTIONAL_SERVICES="all"               # the FULL set (every user-level slug)
   ```
 - **CLI flag** (overrides `brand.conf`):
   ```sh
-  ./build-x86-host-stage4.sh  --optional-services "akkoma games"   # explicit list incl games
-  ./build-x86-host-stage4.sh  --enable-games                       # default list + games subdomain
-  ./build-rpi5-stage4.sh      --enable-games
+  ./build-rpi5-stage4.sh      --optional-services "akkoma games"   # explicit list incl games
+  ./build-rpi5-stage4.sh      --enable-games                       # default list + games subdomain
+  ./build-rpi5-stage4.sh      --all-services                       # every user-level slug
+  ./build-rpi5-stage4.sh      --optional-services all              # same thing, explicit sentinel
   ```
+
+**FULL-SET sentinel.** `OPTIONAL_SERVICES=all` (and the equivalent `--all-services`
+CLI flag) expands to **every user-level slug** (`akkoma tuwunel phpbb games owncast
+tube`) right after arg parsing — before `EXCLUDE_SERVICES`, so the subtractive knob
+still removes from it (e.g. `--all-services --exclude-services "games"` bakes
+everything *except* games). A bare `all` anywhere in the list expands the whole token.
 
 **`EXCLUDE_SERVICES` — the SUBTRACTIVE force-OFF knob.** Applied **last**, after
 every positive source is resolved, it removes any user-level slug from the final
 selection no matter how it became selected (default / `brand.conf` /
-`--optional-services` / the games opt-in). It is the one-liner that turns OFF an
-on-by-default service without re-enumerating the whole positive list; each excluded
+`--optional-services` / `all` / the games opt-in). It is the one-liner that turns OFF
+an on-by-default service without re-enumerating the whole positive list; each excluded
 slug is then pruned + rendered `installed:"false"` exactly like an unselected one.
 ```sh
 # brand.conf
 EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the rest
 # or the CLI flag (whitespace/comma separated):
 ./build-rpi5-stage4.sh --exclude-services "phpbb tuwunel"
+./build-rpi5-stage4.sh --all-services --exclude-services "games"   # all-but-games
 ```
 > Precedence summary: `OPTIONAL_SERVICES` (default `akkoma tuwunel phpbb`) is the
-> positive allow-list (built-in < brand.conf < `--optional-services`), then the
-> games opt-in folds `games` in, then **`EXCLUDE_SERVICES` subtracts last**.
+> positive allow-list (built-in < brand.conf < `--optional-services`; `all` expands
+> to the full set), then the games opt-in folds `games` in, then **`EXCLUDE_SERVICES`
+> subtracts last**.
+>
+> The `--all-services` flag + the `all` sentinel are wired in **`build-rpi5-stage4.sh`**
+> (the canonical cluster-node builder). The x86 builder (`build-x86-host-stage4.sh`,
+> a protected client-image area) gets the same wiring in a follow-up that owns that file.
 
 `gate_optional_services()` (in **both** `build-x86-host-stage4.sh` and
 `build-rpi5-stage4.sh`, authored per-script and anchored to the
