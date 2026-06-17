@@ -106,6 +106,15 @@ CLUSTER_DOMAIN="snapdragon.systems"
 BRAND="snapdragon"
 BRAND_TITLE="Snapdragon Systems"
 ORG="Snapdragon-Systems"
+# ENV (test|prod) selector — kept for parity with the cluster builders (it shapes
+# the same branding/creds knobs), BUT this Frite image is a LEAN DESKTOP CLIENT,
+# NOT a K8s cluster node: it bakes NO specs/cluster GitOps tree (see the
+# rebrand_sysroot note below) and therefore has NO installed-services ConfigMap,
+# NO optional-services gate, and NO public ingress. The Anubis PUBLIC PoW-shield
+# ENV policy (prod-on / test-off + the fe-gateway ingress reroute) lives ONLY in
+# the cluster builders that bake specs/cluster — build-rpi5-stage4.sh (done here)
+# and the PROTECTED build-x86-host-stage4.sh (flagged in PR #107). Nothing for the
+# desktop client to render, so no _opt_render_installed_services exists here.
 ENV="test"
 CONFIG_FILE=""
 DEFAULT_USER="frite"

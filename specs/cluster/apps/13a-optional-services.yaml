@@ -47,6 +47,13 @@ spec:
           - { slug: tuwunel, path: specs/cluster/manifests/tuwunel,       namespace: snapdragon-backend,  installed: "false" }
           - { slug: phpbb,   path: specs/cluster/manifests/forum,         namespace: snapdragon-forum,    installed: "false" }
           - { slug: games,   path: specs/cluster/manifests/games,         namespace: snapdragon-games,    installed: "false" }
+          # anubis — PUBLIC PoW shield. ENV-CONDITIONAL default: the generator's
+          # _opt_render_installed_services() renders the installed-services
+          # ConfigMap anubis flag ON for PROD builds ("all shields up") and OFF for
+          # TEST builds (explicit --optional-services anubis / -anubis overrides).
+          # The scaffold value here stays "false" (the safe test baseline + the
+          # pre-cut-over no-collision rule); the ConfigMap mirror is the real
+          # toggle this selector reads at runtime.
           - { slug: anubis,  path: specs/cluster/manifests/anubis,        namespace: snapdragon-frontend, installed: "false" }
         # Keep ONLY installed elements — a slug flipped to "false" is dropped and
         # its Application pruned. This is the runtime add/remove lever.

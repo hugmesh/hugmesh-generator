@@ -37,10 +37,15 @@ data:
   tuwunel: "true"
   phpbb: "true"
   games: "true"
-  # anubis — proof-of-work anti-scraper gate fronting public ingress. DEFAULT-OFF
-  # (adds a PoW interstitial to the front door, so operators opt in). When "false"
-  # the admin console greys out the Anubis status panel and the admin-bff's
-  # AnubisClient resolves to "unreachable" with no 503 cascade.
+  # anubis — PUBLIC proof-of-work anti-scraper shield fronting public ingress.
+  # ENV-CONDITIONAL default (NOT a plain on/off): the generator renders this ON
+  # for PROD builds ("all shields up": fe-gateway public Ingress rerouted THROUGH
+  # Anubis :8923) and OFF for TEST builds. Explicit --optional-services
+  # anubis / -anubis overrides either way. The literal below is the SAFE TEST
+  # BASELINE; _opt_render_installed_services() (build-rpi5-stage4.sh) flips it to
+  # "true" for prod. When "false" the admin console greys out the Anubis status
+  # panel and the admin-bff's AnubisClient resolves to "unreachable" (no 503), and
+  # the public ingress routes straight to the fe-gateway (direct path).
   anubis: "false"
   # Per-slug metadata the admin console + greying-out predicate read (mountAt =
   # where the federation manifest mounts the remote; namespace = its k8s ns).

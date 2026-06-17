@@ -115,6 +115,14 @@ ingress:
   extraHosts: []
   annotations: {}
   tls: false
+  # PUBLIC POW SHIELD (Anubis). By default the Ingress backend is THIS gateway's
+  # own Service (empty => the template falls back to .name / .service.port). When
+  # the Anubis PoW gate is installed (PROD default), the generator sets these so
+  # the public Ingress routes THROUGH Anubis (:8923), which then forwards verified
+  # requests to this fe-gateway (Anubis TARGET=fe-gateway:8080). Leave empty for
+  # the direct path (test default / Anubis deselected).
+  backendServiceName: ""
+  backendServicePort: ""
 
 # Pin a gateway to specific nodes (e.g. fe-gateway onto frontend Pis).
 nodeSelector: {}

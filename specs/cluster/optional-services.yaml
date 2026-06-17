@@ -270,14 +270,31 @@ spec:
     # fe-gateway (TARGET=snapdragon-fe-gateway) on its :8923 PoW gate and exposes a
     # :9090 metrics/health listener that the superadmin admin-bff proxies
     # (/bff/admin/anubis/{status,metrics}; ANUBIS_ENABLED/ANUBIS_MANAGEMENT_URL).
-    # DEFAULT-OFF: it adds a PoW challenge interstitial to the public front door, so
-    # operators opt in. No gatewayHost/route-access rows (it is an INGRESS-layer gate,
-    # not a /bff/** upstream); when deselected the BFF's AnubisClient degrades to
-    # "unreachable" (no 503) and the public ingress routes straight to the fe-gateway.
+    #
+    # ENV-CONDITIONAL DEFAULT (the PUBLIC PoW shield policy — NOT a plain default):
+    #   * ENV=prod  => ON  by default ("all shields up": the public front door is
+    #                  PoW-gated, and the build reroutes the fe-gateway public
+    #                  Ingress THROUGH Anubis :8923 -> fe-gateway).
+    #   * ENV=test  => OFF by default (no PoW interstitial on a LAN/test build).
+    #   * Explicit operator choice ALWAYS wins: list "anubis" to force ON, or
+    #     "-anubis"/"no-anubis" to force OFF (in either ENV).
+    # The `default: off` below is the SAFE TEST BASELINE shipped in the ConfigMap;
+    # _opt_render_installed_services() in build-rpi5-stage4.sh (via
+    # _opt_anubis_installed) FLIPS it to "true" for PROD builds. No gatewayHost/
+    # route-access rows (it is an INGRESS-layer gate, not a /bff/** upstream); when
+    # OFF the BFF's AnubisClient degrades to "unreachable" (no 503) and the public
+    # ingress routes straight to the fe-gateway (direct, unshielded path).
     - slug: anubis
       displayName: "Anubis (anti-scraper PoW gate)"
       namespace: snapdragon-frontend
+      # SAFE TEST BASELINE. PROD flips this on at build time (ENV-conditional —
+      # see the ENV policy note above); the operator can override either way.
       default: off
+      # The public PoW shield obeys the ENV policy (prod-on / test-off) rather than
+      # plain presence in OPTIONAL_SERVICES.
+      envConditional:
+        prod: on
+        test: off
       # NO hardcoded apps/*.yaml: unlike akkoma/games (which ship a bootstrap-seed
       # Application that the build-time gate prunes), Anubis is wired ONLY through
       # the runtime optional-services ApplicationSet (apps/13a) with installed:

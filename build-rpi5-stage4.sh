@@ -960,17 +960,92 @@ _opt_drop_rows() {
         ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
     done
 }
+# An operator can EXPLICITLY DESELECT a slug by listing a negative token in
+# OPTIONAL_SERVICES / --optional-services: either "-<slug>" or "no-<slug>". This
+# is what lets a PROD build turn OFF an otherwise on-by-default service (anubis):
+# absence alone cannot mean "off" in prod, since the default list never names
+# anubis. The negative token always loses to nothing (it ONLY suppresses an
+# implicit default); an explicit positive "<slug>" still wins (handled by the
+# caller checking _opt_selected first).
+_opt_explicitly_deselected() {
+    local s
+    for s in ${OPTIONAL_SERVICES}; do
+        [ "${s}" = "-$1" ] && return 0
+        [ "${s}" = "no-$1" ] && return 0
+    done
+    return 1
+}
+# ENV-aware install decision for anubis (the public PoW shield):
+#   * explicit positive selection ("anubis" in the list)  => ON  (operator wins)
+#   * explicit deselection ("-anubis"/"no-anubis")          => OFF (operator wins)
+#   * otherwise: ENV=prod => ON  (all shields up by default in prod)
+#               ENV=test => OFF (PoW interstitial off for local/test builds)
+# Mirrors the gate_env_apps ENV=prod vs ENV=test split. Echoes "true"/"false".
+_opt_anubis_installed() {
+    if _opt_selected anubis; then echo "true"; return 0; fi
+    if _opt_explicitly_deselected anubis; then echo "false"; return 0; fi
+    if [ "${ENV}" = "prod" ]; then echo "true"; else echo "false"; fi
+}
 _opt_render_installed_services() {
     local cm="${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy/installed-services-configmap.yaml"
     [ -f "${cm}" ] || return 0
     local slug val
-    # anubis is rendered here too so an explicit selection flips the ConfigMap
-    # flag the optional-services ApplicationSet keys off (default stays "false").
-    for slug in akkoma tuwunel phpbb games anubis; do
+    # The 4 base optional services follow plain presence in OPTIONAL_SERVICES.
+    for slug in akkoma tuwunel phpbb games; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
     done
-    info "OPTIONAL_SERVICES: rendered installed-services ConfigMap (selected: ${OPTIONAL_SERVICES:-none})"
+    # anubis is ENV-CONDITIONAL (NOT plain presence): the PUBLIC PoW shield is ON
+    # by default in PROD ("all shields up") and OFF by default in TEST, unless the
+    # operator explicitly selects/deselects it. The optional-services.yaml baseline
+    # stays default:off (safe for test); PROD flips it on here.
+    val="$(_opt_anubis_installed)"
+    sed -i -E "s#^([[:space:]]*)anubis:[[:space:]]*\"(true|false)\"#\\1anubis: \"${val}\"#" "${cm}"
+    # Wire/unwire the PUBLIC ingress PoW reroute to match the install decision so
+    # the shield is genuinely in-path when installed (idempotent + reversible).
+    _opt_wire_anubis_ingress "${val}"
+    info "OPTIONAL_SERVICES: rendered installed-services ConfigMap (selected: ${OPTIONAL_SERVICES:-none}; ENV=${ENV}; anubis=${val})"
+}
+# Put the Anubis PoW gate genuinely IN FRONT of public ingress when installed.
+# The fe-gateway chart renders the public Ingress (host snapdragon.systems +
+# *.snapdragon.systems) with its backend Service overridable via the new
+# `ingress.backendServiceName`/`ingress.backendServicePort` values. When Anubis is
+# installed we point that Ingress backend at the anubis Service (:8923); Anubis
+# forwards verified requests to the fe-gateway (its TARGET=fe-gateway:8080). When
+# NOT installed the values stay absent and the Ingress backend defaults to the
+# fe-gateway Service (unchanged direct path). IDEMPOTENT (re-derives the two lines
+# from $1 every run) and REVERSIBLE (removes them when $1=false). Only the
+# fe-gateway Application carries the public web ingress.
+_opt_wire_anubis_ingress() {
+    local installed="$1"
+    local fe="${SYSROOT}/var/lib/snapdragon/cluster/apps/20-gateway-fe.yaml"
+    [ -f "${fe}" ] || return 0
+    # 1) Always strip any previously-wired override lines + their marker comment
+    #    (idempotent reset, so re-running never accumulates duplicates).
+    sed -i -E '/^[[:space:]]*# PoW shield UP: route public ingress THROUGH Anubis/d' "${fe}"
+    sed -i -E '/^[[:space:]]*backendServiceName:[[:space:]]*anubis[[:space:]]*(#.*)?$/d' "${fe}"
+    sed -i -E '/^[[:space:]]*backendServicePort:[[:space:]]*8923[[:space:]]*(#.*)?$/d' "${fe}"
+    [ "${installed}" = "true" ] || { info "ENV=${ENV}: Anubis NOT installed — public ingress routes DIRECT to fe-gateway (no PoW reroute)"; return 0; }
+    # 2) Insert the override directly under the fe-gateway `ingress:` block's
+    #    `enabled: true` line so the chart points the public Ingress backend at the
+    #    anubis Service (:8923) instead of the fe-gateway Service. Anubis then
+    #    forwards verified traffic to the fe-gateway (TARGET). The indentation
+    #    matches the sibling `className:`/`host:` keys (10 spaces under values |).
+    awk '
+        BEGIN { done=0 }
+        {
+            print
+            if (!done && $0 ~ /^[[:space:]]*ingress:[[:space:]]*$/) { in_ing=1; next }
+            if (in_ing && !done && $0 ~ /^[[:space:]]*enabled:[[:space:]]*true[[:space:]]*$/) {
+                match($0, /^[[:space:]]*/); pad=substr($0,1,RLENGTH)
+                print pad "# PoW shield UP: route public ingress THROUGH Anubis (:8923) -> fe-gateway."
+                print pad "backendServiceName: anubis"
+                print pad "backendServicePort: 8923"
+                done=1; in_ing=0
+            }
+        }
+    ' "${fe}" > "${fe}.tmp" && mv "${fe}.tmp" "${fe}"
+    info "ENV=${ENV}: Anubis installed — public ingress REROUTED through the Anubis PoW gate (:8923) -> fe-gateway (all shields up)"
 }
 # Parameterize the games-realm OIDC identity on GAMES_DOMAIN (rebrand_sysroot does
 # not touch .games). Runs UNCONDITIONALLY and BEFORE rebrand so the default literal
