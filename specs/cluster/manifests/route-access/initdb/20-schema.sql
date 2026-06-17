@@ -218,6 +218,21 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-be-gateway',  '/games/servers/**',     'ROLE_GAMES_SERVICES', true),  -- per-instance HTTP console floor
   ('snapdragon-be-gateway',  '/games/servers/**',     'ROLE_ADMIN',          true),  -- (admins superset)
   ('snapdragon-be-gateway',  '/games/servers/**',     'ROLE_MOD',            true),  -- (mods superset)
+  -- ── WORKLOAD CONSOLE (podman/OpenShift-equivalent pod-mgmt + live-log + exec) ──────
+  -- The admin-bff surfaces /bff/admin/workloads/** (ADMIN read-only own-domain, grant-gated)
+  -- and /bff/superadmin/workloads/** (SUPERADMIN cross-cluster read + RUNTIME_MUTATE/exec/
+  -- port-forward/lifecycle). The admin-bff itself is the TOTAL authz predicate (the central
+  -- WebFilter: dangerous-tier kill + namespace allowlist + grant + step-up + Lease + device/
+  -- SSH-license); these gateway rows are the coarse defence-in-depth, MORE SPECIFIC than the
+  -- /bff/admin/** and /bff/superadmin/** floors so they win the most-specific match. The
+  -- DANGEROUS surfaces (logs-stream / exec / exec-tty WS / port-forward) are reachable ONLY
+  -- over the TAILNET (the superadmin surface is tailnet-only by deployment — same posture as
+  -- /bff/superadmin/** infra console). SHIPS DARK: the admin-bff gate
+  -- (app.workload-console.enabled) + the DB master flag + an active grant all default off.
+  -- ⚠ gate_optional_services REMOVES these rows when the workloadConsole slug is deselected
+  -- (see optional-services.yaml workloadConsole.routeAccessRows). DEFAULT: deselected.
+  ('snapdragon-be-gateway',  '/bff/superadmin/workloads/**', 'ROLE_SUPERADMIN', true),  -- workload console superadmin (cross-cluster read + mutate/exec/port-forward; tailnet-only)
+  ('snapdragon-be-gateway',  '/bff/admin/workloads/**',      'ROLE_ADMIN',      true),  -- workload console admin (read-only own-domain, grant-gated by the BFF)
   -- snapdragon-federation-api module-federation registry/manifest/bundles API. MORE
   -- SPECIFIC than the /api/** floor below, so it wins the most-specific match.
   -- Single ROLE_USER row = the coarse authenticated floor (lets a logged-in

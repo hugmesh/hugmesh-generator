@@ -37,6 +37,12 @@ data:
   tuwunel: "true"
   phpbb: "true"
   games: "true"
+  # workloadConsole — the podman/OpenShift-equivalent pod console (RBAC + route-access).
+  # DEFAULT "false" (ships dark); rendered to true/false by _opt_render_installed_services
+  # from OPTIONAL_SERVICES. The admin console greys out the Workload Console remote when
+  # this is "false". Even when "true" the admin-bff is independently dark until
+  # app.workload-console.enabled + the DB master flag + an active grant.
+  workloadConsole: "false"
   # anubis — PUBLIC proof-of-work anti-scraper shield fronting public ingress.
   # ENV-CONDITIONAL default (NOT a plain on/off): the generator renders this ON
   # for PROD builds ("all shields up": fe-gateway public Ingress rerouted THROUGH
@@ -61,5 +67,6 @@ data:
       { "slug": "phpbb",   "displayName": "phpBB (Forum)",     "namespace": "snapdragon-forum",   "mountAt": "/social/forum" },
       { "slug": "games",   "displayName": "Snapdragon Games",  "namespace": "snapdragon-games",   "mountAt": "/games" },
       { "slug": "games-services", "displayName": "Games App Store", "namespace": "snapdragon-games-instances", "mountAt": "/admin/games-services", "dependsOn": "games" },
+      { "slug": "workloadConsole", "displayName": "Workload Console", "namespace": "snapdragon-backend", "mountAt": "/admin/workloads", "hidden": true },
       { "slug": "anubis",  "displayName": "Anubis (anti-scraper PoW gate)", "namespace": "snapdragon-frontend", "mountAt": null }
     ]
