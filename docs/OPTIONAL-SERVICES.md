@@ -41,7 +41,7 @@ registry is that missing list). Each service entry carries:
 | `routeAccessRows` | the `gateway_route_access` rows it owns (dropped so a matched route to a deleted upstream cannot 502 / stale-grant) |
 | `federationModule` | the `federation_modules` registration (federation-api wave) |
 | `casdoorSeed` | a dedicated Casdoor it owns (games → `casdoor-games`) |
-| `default` | `on` (all four default on) |
+| `default` | `akkoma`/`tuwunel`/`phpbb` → `on`; **`games` → `off` (opt-in)** |
 
 There is also a `gamesDomain` block (the `GAMES_DOMAIN` knob + the
 parameterized files) — see §5.
@@ -52,17 +52,21 @@ the `federation_modules` seed.
 
 ## 3. Build-time: select services on a USB
 
-Two inputs, in precedence order **built-in default (all on) < `brand.conf` <
-`--optional-services` CLI flag**:
+Two inputs, in precedence order **built-in default (`akkoma tuwunel phpbb`;
+games OFF) < `brand.conf` < `--optional-services` CLI flag**. **`games` is
+opt-in / off by default** — enable it with `--enable-games` (or `ENABLE_GAMES=true`),
+or by naming `games` in `--optional-services`:
 
 - **`brand.conf`** knob (sourced by both builders):
   ```sh
-  OPTIONAL_SERVICES="akkoma games"      # build a forum-less + Matrix-less appliance
+  OPTIONAL_SERVICES="akkoma games"      # forum-less + Matrix-less appliance, WITH games
+  ENABLE_GAMES=true                     # or keep the default list and just add games
   ```
 - **CLI flag** (overrides `brand.conf`):
   ```sh
-  ./build-x86-host-stage4.sh  --optional-services "akkoma games"
-  ./build-rpi5-stage4.sh      --optional-services "akkoma games"
+  ./build-x86-host-stage4.sh  --optional-services "akkoma games"   # explicit list incl games
+  ./build-x86-host-stage4.sh  --enable-games                       # default list + games subdomain
+  ./build-rpi5-stage4.sh      --enable-games
   ```
 
 `gate_optional_services()` (in **both** `build-x86-host-stage4.sh` and
@@ -118,12 +122,13 @@ grep -E '^  (akkoma|tuwunel|phpbb|games):' manifests/policy/installed-services-c
 On the cluster, `argocd app list` shows no `akkoma`/`phpbb`/`forum-*` apps;
 `recurse:true`+`prune:true` never instantiated them.
 
-## 5. Games subdomain (the default)
+## 5. Games subdomain (opt-in; subdomain by default when enabled)
 
-Games normally lives at its own TLD, but **by default** it is served as a
-**subdomain of the primary domain** — `games.<CLUSTER_DOMAIN>` (e.g.
-`games.snapdragon.systems`) — until the real `.games` TLD is obtained. One knob
-drives it:
+Games is **opt-in** (see §3 — off by default; enable with `--enable-games`).
+**When games is enabled**, it normally lives at its own TLD, but **by default**
+it is served as a **subdomain of the primary domain** — `games.<CLUSTER_DOMAIN>`
+(e.g. `games.snapdragon.systems`) — until the real `.games` TLD is obtained. One
+knob drives it (only consulted when games is selected):
 
 ```sh
 GAMES_DOMAIN="games.${CLUSTER_DOMAIN}"   # brand.conf default
