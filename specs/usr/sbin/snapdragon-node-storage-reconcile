@@ -160,6 +160,52 @@ provision_pools() {
     SNAPDRAGON_PROVISION_MANIFEST="${POOL_MANIFEST}" ${cmd} || warn "provision_storage --pool reported a non-zero (pool may be degraded)"
 }
 
+# ── (5b') graceful degrade: detect a mount-lost pool + ack `degraded` ──────────
+# A removed pool disk DEGRADES the pool (the `,nofail` crypttab/fstab from PR5 keeps the
+# node BOOTING). After provisioning, check each export pool's poolPath: if it is NOT a live
+# mountpoint, the pool is DEGRADED — its PVs are unavailable but the node + cluster stay up.
+# We ack `degraded` per affected pool so the UI propagation chip turns red, and we leave the
+# placement in place (the operator decides: re-attach the disk, or migrate via the rsync Job
+# stub — node-storage-migrate.yaml). We NEVER auto-delete data or silently migrate. Echoes
+# the degraded pool ids to stdout (for the test) and returns 1 iff any pool is degraded.
+detect_degraded_pools() {
+    local export_json="$1"
+    have jq || return 0
+    local degraded=0 pid path
+    while IFS=$'\t' read -r pid path; do
+        [ -n "${path}" ] || continue
+        if ! is_mounted "${path}"; then
+            warn "pool ${pid} path ${path} is NOT mounted — DEGRADED (disk removed/unreadable). PVs on it are unavailable; node stays up (,nofail). Re-attach the disk or migrate (node-storage-migrate Job)."
+            ack_pool_state "${pid}" "degraded"
+            echo "${pid}"
+            degraded=1
+        fi
+    done < <(jq -r '.body.pools[]? | "\(.poolId)\t\(.poolPath)"' "${export_json}" 2>/dev/null)
+    return "${degraded}"
+}
+
+# Is <path> a live mountpoint? Prefer mountpoint(1), fall back to a /proc/mounts scan so the
+# logic test can stub it. Returns 0 iff mounted.
+is_mounted() {
+    local path="$1"
+    if have mountpoint; then mountpoint -q "${path}" 2>/dev/null && return 0 || return 1; fi
+    grep -qE " ${path} " /proc/mounts 2>/dev/null
+}
+
+# Best-effort POST the per-pool propagation state (applied|degraded) to the BFF so the UI
+# chip reflects reality. The BFF reconciles forward regardless (best-effort, never blocks).
+ack_pool_state() {
+    local pid="$1" state="$2"
+    [ -n "${BFF_URL}" ] || return 0
+    have curl || return 0
+    local url="${BFF_URL%/}/bff/admin/device-storage-pools/ack?pool=${pid}&state=${state}"
+    local args=(-sS -m 10 --fail -X POST -o /dev/null)
+    [ -f "${MTLS_CA}" ] && args+=(--cacert "${MTLS_CA}")
+    [ -n "${MTLS_CERT}" ] && [ -n "${MTLS_KEY}" ] && args+=(--cert "${MTLS_CERT}" --key "${MTLS_KEY}")
+    curl "${args[@]}" "${url}" 2>/dev/null || log "ack pool ${pid} state=${state} best-effort failed"
+    return 0
+}
+
 # ── (5c) label THIS node local-path=true + CAS-patch the nodePathMap ──────────
 # The DaemonSet (PR5) schedules a provisioner on every snapdragon.systems/local-path=true
 # node; the nodePathMap entry makes THIS node's provisioner serve PVs from the pool path.
@@ -276,7 +322,11 @@ main() {
         label_and_patch_nodepathmap "${EXPORT_JSON}"
     fi
 
-    # (6) ack.
+    # (5b') graceful degrade: ack `degraded` for any pool whose disk is no longer mounted
+    # (the ,nofail boot survived; the PVs are just unavailable). Never auto-migrates.
+    detect_degraded_pools "${EXPORT_JSON}" >/dev/null || true
+
+    # (6) ack the applied generation.
     ack_generation "${gen}"
     exit 0
 }
