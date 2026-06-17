@@ -36,6 +36,12 @@ spec:
   {{- with .Values.ingress.className }}
   ingressClassName: {{ . }}
   {{- end }}
+  {{- /* PoW shield: the public Ingress backend defaults to THIS gateway Service,
+         but when an anti-scraper PoW gate (Anubis) is installed the generator sets
+         ingress.backendServiceName/Port so the public front door routes THROUGH
+         the PoW gate first (it forwards verified traffic to this gateway). */ -}}
+  {{- $beName := default (include "snapdragon-gateway.name" .) .Values.ingress.backendServiceName }}
+  {{- $bePort := default .Values.service.port .Values.ingress.backendServicePort }}
   rules:
     - host: {{ .Values.ingress.host | quote }}
       http:
@@ -44,9 +50,9 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "snapdragon-gateway.name" . }}
+                name: {{ $beName }}
                 port:
-                  number: {{ .Values.service.port }}
+                  number: {{ $bePort }}
     {{- range .Values.ingress.extraHosts }}
     - host: {{ . | quote }}
       http:
@@ -55,9 +61,9 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "snapdragon-gateway.name" $ }}
+                name: {{ $beName }}
                 port:
-                  number: {{ $.Values.service.port }}
+                  number: {{ $bePort }}
     {{- end }}
   {{- if .Values.ingress.tls }}
   tls:

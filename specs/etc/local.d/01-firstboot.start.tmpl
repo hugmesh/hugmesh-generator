@@ -13,11 +13,20 @@
 #     create any users (i.e. you booted without a KEYS stick), so you are
 #     never locked out of a fresh image.
 #
+# SUPPLY-CHAIN / OWASP: this finaliser NO LONGER bakes a known default password
+# into the image. Earlier, the builders substituted @@DEFAULT_USER_PASS@@ /
+# @@ROOT_PASS@@ (e.g. "raspberry"/"gentoo"/"snapdragon") into the line below, so
+# every image of a given flavour shipped with the SAME well-known credentials —
+# a classic "default creds baked into image" finding. The real credentials come
+# from the KEYS USB (users.json $6$-hashes via keys-provision; see
+# scripts/gen-provision-keys.sh + specs/etc/keys-provision/provision.sh). The
+# fallback below exists ONLY for a keyless boot and now mints a RANDOM one-time
+# password at first boot (never a known default), locks root, and forces a
+# password change on first login. Nothing secret is in the image or in git.
+#
 # Variables substituted at build time:
 #   @@HOSTNAME@@           Target hostname
-#   @@DEFAULT_USER@@       Fallback non-root user
-#   @@DEFAULT_USER_PASS@@  Fallback user password
-#   @@ROOT_PASS@@          Fallback root password
+#   @@DEFAULT_USER@@       Fallback non-root user (NAME ONLY — no baked password)
 
 locale-gen
 eselect locale set en_US.utf8
@@ -25,12 +34,34 @@ env-update && source /etc/profile
 
 # ── Fallback user (only when KEYS provisioning created none) ───────
 if [ ! -f /var/lib/keys-provision/users.created ]; then
-    echo "No users provisioned from KEYS — creating fallback @@DEFAULT_USER@@"
+    echo "No users provisioned from KEYS — creating fallback @@DEFAULT_USER@@ with a RANDOM one-time password"
     if ! id @@DEFAULT_USER@@ &>/dev/null; then
         useradd -m -G wheel,audio,video,usb -s /bin/bash @@DEFAULT_USER@@
-        echo "@@DEFAULT_USER@@:@@DEFAULT_USER_PASS@@" | chpasswd
-        echo "root:@@ROOT_PASS@@" | chpasswd
+        # Mint a random one-time password at FIRST BOOT — never a baked default.
+        # Prefer openssl; fall back to /dev/urandom so this works on a minimal
+        # image. The plaintext is printed ONCE to the boot console below and is
+        # NOT stored anywhere (only the crypt hash lands in /etc/shadow).
+        if command -v openssl >/dev/null 2>&1; then
+            FB_PW="$(openssl rand -base64 18)"
+        else
+            FB_PW="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+        fi
+        echo "@@DEFAULT_USER@@:${FB_PW}" | chpasswd
+        # Root login stays LOCKED on a keyless boot (matches the hardened
+        # keys-provision default: root is `passwd -l`'d unless a hash is supplied).
+        passwd -l root
+        # Force the fallback user to change the random password at first login.
+        chage -d 0 @@DEFAULT_USER@@ 2>/dev/null || passwd -e @@DEFAULT_USER@@ 2>/dev/null || true
         echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
+        echo ""
+        echo "###############################################################"
+        echo "#  KEYLESS BOOT — random one-time login (CHANGE IT IMMEDIATELY) "
+        echo "#    user: @@DEFAULT_USER@@"
+        echo "#    pass: ${FB_PW}"
+        echo "#  root is LOCKED. This password is shown ONCE and not stored.  "
+        echo "###############################################################"
+        echo ""
+        unset FB_PW
     fi
 else
     echo "Users were provisioned from KEYS — skipping fallback user"

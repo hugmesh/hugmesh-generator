@@ -15,6 +15,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPECS_DIR="${SCRIPT_DIR}/specs-rpi5"     # aarch64/RPi5-specific specs
 SHARED_SPECS="${SCRIPT_DIR}/specs"       # arch-agnostic specs (etc/, cluster/, usr/)
 
+# Supply-chain download verification (OWASP). Shared helper so the stage3 seed,
+# headscale, and tailscale fetches are GPG/checksum-verified by ONE audited
+# implementation instead of trusting a bare `curl`. See scripts/_download-lib.sh.
+# shellcheck source=scripts/_download-lib.sh
+source "${SCRIPT_DIR}/scripts/_download-lib.sh"
+
 WORK_DIR=""
 # Per-arch build subdirectory under WORK_DIR. The heavy, ARCH-SPECIFIC build
 # tree (sysroot, ISO staging, distfiles, pkgdir, seed/binary downloads) lives
@@ -73,8 +79,10 @@ OPTIONAL_SERVICES="akkoma tuwunel phpbb games"
 ENV="test"
 CONFIG_FILE=""                      # optional drop-in brand profile (sourced)
 DEFAULT_USER="pi"
-DEFAULT_USER_PASS="raspberry"
-ROOT_PASS="gentoo"
+# NO baked default password. Real creds come from the KEYS USB ($6$ hashes in
+# users.json via keys-provision). On a keyless boot the first-boot finaliser
+# (specs/etc/local.d/01-firstboot.start.tmpl) mints a RANDOM one-time password
+# and locks root — see the OWASP "default creds baked into image" fix.
 PCIE_GEN3=false
 # ── Radio attack surface (DISABLED BY DEFAULT — hardened posture) ───
 # WiFi + Bluetooth are OFF by default to shrink the attack surface: at first boot
@@ -317,13 +325,13 @@ OPTIONS
         Default non-root user created on first boot.
         Default: pi
 
-    --user-password PASS
-        Password for the default user (change on first boot!).
-        Default: raspberry
-
-    --root-password PASS
-        Root password (change on first boot!).
-        Default: gentoo
+    --user-password PASS   (DEPRECATED, ignored)
+    --root-password PASS   (DEPRECATED, ignored)
+        No password is baked into the image. Real credentials come from the
+        KEYS USB ($6$ hashes in users.json via keys-provision). On a keyless
+        boot the first-boot finaliser mints a RANDOM one-time password for the
+        default user (printed to the console) and LOCKS root. These flags are
+        accepted but ignored so old call sites do not break.
 
   Packages
     -p, --extra-packages "PKG1 PKG2 ..."
@@ -441,8 +449,6 @@ EXAMPLES
         -H k8s-master \
         -T Europe/London \
         -u admin \
-        --user-password 'Ch@ng3Me!' \
-        --root-password 'S3cur3R00t!' \
         -p "app-misc/tmux net-misc/chrony sys-fs/btrfs-progs dev-vcs/git"
 
 EXIT STATUS
@@ -536,8 +542,11 @@ while [[ $# -gt 0 ]]; do
         --optional-services)  OPTIONAL_SERVICES="$2";  shift 2 ;;
         -T|--timezone)        TIMEZONE="$2";           shift 2 ;;
         -u|--user)            DEFAULT_USER="$2";       shift 2 ;;
-        --user-password)      DEFAULT_USER_PASS="$2";  shift 2 ;;
-        --root-password)      ROOT_PASS="$2";          shift 2 ;;
+        # DEPRECATED no-ops: images no longer bake a fallback password (random
+        # one-time password is minted at first boot; real creds come from KEYS).
+        # Accepted-and-ignored so existing callers/CI do not break.
+        --user-password)      warn "--user-password is ignored: no password is baked into the image (random first-boot fallback + KEYS provisioning)"; shift 2 ;;
+        --root-password)      warn "--root-password is ignored: root is locked on keyless boot; set root via the KEYS USB users.json hash"; shift 2 ;;
         -p|--extra-packages)  EXTRA_PACKAGES="$2";     shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";  shift 2 ;;
         --tailscale-version)  TAILSCALE_VERSION="$2";  shift 2 ;;
@@ -674,8 +683,6 @@ render_template() {
         -e "s|@@HOSTNAME@@|${HOSTNAME}|g" \
         -e "s|@@TIMEZONE@@|${TIMEZONE}|g" \
         -e "s|@@DEFAULT_USER@@|${DEFAULT_USER}|g" \
-        -e "s|@@DEFAULT_USER_PASS@@|${DEFAULT_USER_PASS}|g" \
-        -e "s|@@ROOT_PASS@@|${ROOT_PASS}|g" \
         -e "s|@@BRAND@@|${BRAND}|g" \
         -e "s|@@BRAND_TITLE@@|${BRAND_TITLE}|g" \
         -e "s|@@DOMAIN@@|${CLUSTER_DOMAIN}|g" \
@@ -953,15 +960,92 @@ _opt_drop_rows() {
         ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
     done
 }
+# An operator can EXPLICITLY DESELECT a slug by listing a negative token in
+# OPTIONAL_SERVICES / --optional-services: either "-<slug>" or "no-<slug>". This
+# is what lets a PROD build turn OFF an otherwise on-by-default service (anubis):
+# absence alone cannot mean "off" in prod, since the default list never names
+# anubis. The negative token always loses to nothing (it ONLY suppresses an
+# implicit default); an explicit positive "<slug>" still wins (handled by the
+# caller checking _opt_selected first).
+_opt_explicitly_deselected() {
+    local s
+    for s in ${OPTIONAL_SERVICES}; do
+        [ "${s}" = "-$1" ] && return 0
+        [ "${s}" = "no-$1" ] && return 0
+    done
+    return 1
+}
+# ENV-aware install decision for anubis (the public PoW shield):
+#   * explicit positive selection ("anubis" in the list)  => ON  (operator wins)
+#   * explicit deselection ("-anubis"/"no-anubis")          => OFF (operator wins)
+#   * otherwise: ENV=prod => ON  (all shields up by default in prod)
+#               ENV=test => OFF (PoW interstitial off for local/test builds)
+# Mirrors the gate_env_apps ENV=prod vs ENV=test split. Echoes "true"/"false".
+_opt_anubis_installed() {
+    if _opt_selected anubis; then echo "true"; return 0; fi
+    if _opt_explicitly_deselected anubis; then echo "false"; return 0; fi
+    if [ "${ENV}" = "prod" ]; then echo "true"; else echo "false"; fi
+}
 _opt_render_installed_services() {
     local cm="${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy/installed-services-configmap.yaml"
     [ -f "${cm}" ] || return 0
     local slug val
+    # The 4 base optional services follow plain presence in OPTIONAL_SERVICES.
     for slug in akkoma tuwunel phpbb games; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
     done
-    info "OPTIONAL_SERVICES: rendered installed-services ConfigMap (selected: ${OPTIONAL_SERVICES:-none})"
+    # anubis is ENV-CONDITIONAL (NOT plain presence): the PUBLIC PoW shield is ON
+    # by default in PROD ("all shields up") and OFF by default in TEST, unless the
+    # operator explicitly selects/deselects it. The optional-services.yaml baseline
+    # stays default:off (safe for test); PROD flips it on here.
+    val="$(_opt_anubis_installed)"
+    sed -i -E "s#^([[:space:]]*)anubis:[[:space:]]*\"(true|false)\"#\\1anubis: \"${val}\"#" "${cm}"
+    # Wire/unwire the PUBLIC ingress PoW reroute to match the install decision so
+    # the shield is genuinely in-path when installed (idempotent + reversible).
+    _opt_wire_anubis_ingress "${val}"
+    info "OPTIONAL_SERVICES: rendered installed-services ConfigMap (selected: ${OPTIONAL_SERVICES:-none}; ENV=${ENV}; anubis=${val})"
+}
+# Put the Anubis PoW gate genuinely IN FRONT of public ingress when installed.
+# The fe-gateway chart renders the public Ingress (host snapdragon.systems +
+# *.snapdragon.systems) with its backend Service overridable via the new
+# `ingress.backendServiceName`/`ingress.backendServicePort` values. When Anubis is
+# installed we point that Ingress backend at the anubis Service (:8923); Anubis
+# forwards verified requests to the fe-gateway (its TARGET=fe-gateway:8080). When
+# NOT installed the values stay absent and the Ingress backend defaults to the
+# fe-gateway Service (unchanged direct path). IDEMPOTENT (re-derives the two lines
+# from $1 every run) and REVERSIBLE (removes them when $1=false). Only the
+# fe-gateway Application carries the public web ingress.
+_opt_wire_anubis_ingress() {
+    local installed="$1"
+    local fe="${SYSROOT}/var/lib/snapdragon/cluster/apps/20-gateway-fe.yaml"
+    [ -f "${fe}" ] || return 0
+    # 1) Always strip any previously-wired override lines + their marker comment
+    #    (idempotent reset, so re-running never accumulates duplicates).
+    sed -i -E '/^[[:space:]]*# PoW shield UP: route public ingress THROUGH Anubis/d' "${fe}"
+    sed -i -E '/^[[:space:]]*backendServiceName:[[:space:]]*anubis[[:space:]]*(#.*)?$/d' "${fe}"
+    sed -i -E '/^[[:space:]]*backendServicePort:[[:space:]]*8923[[:space:]]*(#.*)?$/d' "${fe}"
+    [ "${installed}" = "true" ] || { info "ENV=${ENV}: Anubis NOT installed — public ingress routes DIRECT to fe-gateway (no PoW reroute)"; return 0; }
+    # 2) Insert the override directly under the fe-gateway `ingress:` block's
+    #    `enabled: true` line so the chart points the public Ingress backend at the
+    #    anubis Service (:8923) instead of the fe-gateway Service. Anubis then
+    #    forwards verified traffic to the fe-gateway (TARGET). The indentation
+    #    matches the sibling `className:`/`host:` keys (10 spaces under values |).
+    awk '
+        BEGIN { done=0 }
+        {
+            print
+            if (!done && $0 ~ /^[[:space:]]*ingress:[[:space:]]*$/) { in_ing=1; next }
+            if (in_ing && !done && $0 ~ /^[[:space:]]*enabled:[[:space:]]*true[[:space:]]*$/) {
+                match($0, /^[[:space:]]*/); pad=substr($0,1,RLENGTH)
+                print pad "# PoW shield UP: route public ingress THROUGH Anubis (:8923) -> fe-gateway."
+                print pad "backendServiceName: anubis"
+                print pad "backendServicePort: 8923"
+                done=1; in_ing=0
+            }
+        }
+    ' "${fe}" > "${fe}.tmp" && mv "${fe}.tmp" "${fe}"
+    info "ENV=${ENV}: Anubis installed — public ingress REROUTED through the Anubis PoW gate (:8923) -> fe-gateway (all shields up)"
 }
 # Parameterize the games-realm OIDC identity on GAMES_DOMAIN (rebrand_sysroot does
 # not touch .games). Runs UNCONDITIONALLY and BEFORE rebrand so the default literal
@@ -1161,7 +1245,8 @@ banner "Fetching latest arm64 stage3 seed tarball"
 # The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
 STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
-STAGE3_FULL_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/${STAGE3_FILE}"
+STAGE3_BASE_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds"
+STAGE3_FULL_URL="${STAGE3_BASE_URL}/${STAGE3_FILE}"
 # Per-arch: the aarch64 seed must not be reused by (or clobber) the amd64 build.
 STAGE3_LOCAL="${BUILD_ROOT}/${STAGE3_BASENAME}"
 
@@ -1170,6 +1255,20 @@ if [ ! -f "${STAGE3_LOCAL}" ]; then
     curl -L -o "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}"
 else
     info "Using cached ${STAGE3_BASENAME}"
+fi
+
+# SUPPLY-CHAIN: verify the seed's integrity+authenticity before we trust a single
+# byte of it. dlv_verify_stage3 fetches the matching .DIGESTS(.asc), GPG-verifies
+# it against the pinned Gentoo release-engineering key, then checks the tarball's
+# SHA512/SHA256 against the signed DIGESTS — ABORTING on any signature/checksum
+# mismatch. A poisoned mirror or MITM can no longer slip a backdoored seed in.
+banner "Verifying stage3 seed signature + checksum"
+if ! dlv_verify_stage3 "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}.DIGESTS"; then
+    rm -f "${STAGE3_LOCAL}"   # drop the unverified file so a re-run re-fetches
+    err "stage3 seed failed verification (bad signature or checksum) — aborting."
+    err "If Gentoo rotated its signing key, set DLV_GENTOO_KEY=<fingerprint>; for an"
+    err "air-gapped build set DLV_OFFLINE_KEYRING=<keyfile>. Refusing unverified seed."
+    exit 1
 fi
 
 banner "Extracting seed stage3 into sysroot"
@@ -1595,17 +1694,31 @@ if ${SKIP_MESH}; then
 else
     banner "Phase 2.5: Installing mesh VPN (headscale + tailscale)"
 
-    HS_URL="https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}/headscale_${HEADSCALE_VERSION}_linux_arm64"
+    # Pinned versions (HEADSCALE_VERSION / TAILSCALE_VERSION) + publisher checksum
+    # verification: headscale releases ship checksums.txt; tailscale ships a
+    # <tgz>.sha256 sidecar. We fetch the manifest, verify sha256, and ABORT on any
+    # mismatch — a tampered binary can no longer reach the mesh runlevel. The
+    # file(1) ELF-arch check is kept as cheap defense-in-depth.
+    HS_REL="https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}"
+    HS_URL="${HS_REL}/headscale_${HEADSCALE_VERSION}_linux_arm64"
     HS_BIN="${SYSROOT}/usr/bin/headscale"
     info "Fetching headscale ${HEADSCALE_VERSION}..."
     if curl -fL -o "${HS_BIN}" "${HS_URL}"; then
+        # Verify sha256 against the release checksums.txt BEFORE trusting it.
+        HS_SUMS="${BUILD_ROOT}/headscale_${HEADSCALE_VERSION}_checksums.txt"
+        if ! dlv_fetch "${HS_REL}/checksums.txt" "${HS_SUMS}" \
+           || ! dlv_verify_from_sumsfile "${HS_BIN}" "headscale_${HEADSCALE_VERSION}_linux_arm64" "${HS_SUMS}" sha256; then
+            rm -f "${HS_BIN}"
+            err "headscale ${HEADSCALE_VERSION} checksum verification FAILED — refusing to ship an unverified control-plane binary."
+            exit 1
+        fi
         chmod +x "${HS_BIN}"
         file "${HS_BIN}" | grep -q 'ELF.*aarch64' || {
             rm -f "${HS_BIN}"
             err "headscale binary is not aarch64 — check --headscale-version"
             exit 1
         }
-        info "headscale installed: /usr/bin/headscale"
+        info "headscale installed + sha256-verified: /usr/bin/headscale"
     else
         rm -f "${HS_BIN}"   # curl -o may leave a truncated file behind
         err "headscale ${HEADSCALE_VERSION} fetch failed — the image enables the headscale"
@@ -1621,13 +1734,21 @@ else
         TS_TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
         info "Fetching tailscale ${TAILSCALE_VERSION}..."
         if curl -fL -o "${TS_TGZ}" "${TS_URL}"; then
+            # Verify sha256 against the published <tgz>.sha256 sidecar BEFORE extracting.
+            TS_SHA="${TS_TGZ}.sha256"
+            if ! dlv_fetch "${TS_URL}.sha256" "${TS_SHA}" \
+               || ! dlv_verify_sha256_sidecar "${TS_TGZ}" "${TS_SHA}"; then
+                rm -f "${TS_TGZ}"
+                err "tailscale ${TAILSCALE_VERSION} checksum verification FAILED — refusing to ship an unverified mesh client."
+                exit 1
+            fi
             TS_TMP="$(mktemp -d)"
             tar -C "${TS_TMP}" -xzf "${TS_TGZ}"
             TS_SUB="$(find "${TS_TMP}" -maxdepth 1 -type d -name 'tailscale_*' | head -1)"
             install -Dm0755 "${TS_SUB}/tailscale"  "${SYSROOT}/usr/bin/tailscale"
             install -Dm0755 "${TS_SUB}/tailscaled" "${SYSROOT}/usr/sbin/tailscaled"
             rm -rf "${TS_TMP}"
-            info "tailscale installed: /usr/bin/tailscale, /usr/sbin/tailscaled"
+            info "tailscale installed + sha256-verified: /usr/bin/tailscale, /usr/sbin/tailscaled"
         else
             err "tailscale ${TAILSCALE_VERSION} fetch failed — the image enables tailscaled"
             err "in the default runlevel, so this would ship an inert mesh client."
@@ -2050,8 +2171,11 @@ echo "    ISO:             ${ISO_PATH}"
 echo "    Binary packages: ${BUILD_ROOT}/pkgdir"
 echo "    Build log:       ${LOG_FILE}"
 echo ""
-echo "  Default credentials:"
-echo "    root:${ROOT_PASS}   ${DEFAULT_USER}:${DEFAULT_USER_PASS}"
+echo "  Credentials:"
+echo "    No default password is baked in. With a KEYS USB, users come from"
+echo "    users.json (\$6\$ hashes). Without one, first boot mints a RANDOM"
+echo "    one-time password for '${DEFAULT_USER}' (printed to the boot console)"
+echo "    and LOCKS root — change it immediately."
 echo ""
 echo "  Spec files used:"
 echo "    ${SPECS_DIR}/   (aarch64/RPi5-specific)"
