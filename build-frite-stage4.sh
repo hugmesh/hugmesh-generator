@@ -57,6 +57,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPECS_DIR="${SCRIPT_DIR}/specs-frite"    # aarch64/Frite-specific specs
 SHARED_SPECS="${SCRIPT_DIR}/specs"       # arch-agnostic specs (mesh, provisioning, sshd)
 
+# Supply-chain download verification (OWASP). Shared helper so the stage3 seed,
+# headscale, and tailscale fetches are GPG/checksum-verified by ONE audited
+# implementation instead of trusting a bare `curl`. See scripts/_download-lib.sh.
+# shellcheck source=scripts/_download-lib.sh
+source "${SCRIPT_DIR}/scripts/_download-lib.sh"
+
 WORK_DIR=""
 BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-frite}"   # per-arch isolation (never shares the Pi/x86 sysroot)
 CROSS_TARGET="aarch64-unknown-linux-gnu"
@@ -100,11 +106,22 @@ CLUSTER_DOMAIN="snapdragon.systems"
 BRAND="snapdragon"
 BRAND_TITLE="Snapdragon Systems"
 ORG="Snapdragon-Systems"
+# ENV (test|prod) selector — kept for parity with the cluster builders (it shapes
+# the same branding/creds knobs), BUT this Frite image is a LEAN DESKTOP CLIENT,
+# NOT a K8s cluster node: it bakes NO specs/cluster GitOps tree (see the
+# rebrand_sysroot note below) and therefore has NO installed-services ConfigMap,
+# NO optional-services gate, and NO public ingress. The Anubis PUBLIC PoW-shield
+# ENV policy (prod-on / test-off + the fe-gateway ingress reroute) lives ONLY in
+# the cluster builders that bake specs/cluster — build-rpi5-stage4.sh (done here)
+# and the PROTECTED build-x86-host-stage4.sh (flagged in PR #107). Nothing for the
+# desktop client to render, so no _opt_render_installed_services exists here.
 ENV="test"
 CONFIG_FILE=""
 DEFAULT_USER="frite"
-DEFAULT_USER_PASS="frite"
-ROOT_PASS="gentoo"
+# NO baked default password. Real creds come from the KEYS USB ($6$ hashes in
+# users.json via keys-provision). On a keyless boot the first-boot finaliser
+# (specs/etc/local.d/01-firstboot.start.tmpl) mints a RANDOM one-time password
+# and locks root — see the OWASP "default creds baked into image" fix.
 
 # ── Radio attack surface (DISABLED BY DEFAULT — hardened posture) ──
 # The Frite boards have NO onboard WiFi/Bluetooth, so these default OFF and only
@@ -179,7 +196,9 @@ OPTIONS
 
   Branding / env / system  (same knobs as the other builders)
     --brand / --brand-title / --org / --cluster-domain / --env test|prod
-    -H hostname / -T timezone / -u user / --user-password / --root-password
+    -H hostname / -T timezone / -u user
+    (--user-password / --root-password are DEPRECATED no-ops: no password is
+     baked in; keyless boot mints a random one-time password + locks root)
     -C, --config FILE   drop-in brand.conf profile (sourced; CLI overrides it).
 
   Image
@@ -266,8 +285,10 @@ while [[ $# -gt 0 ]]; do
         --org)                ORG="$2";                   shift 2 ;;
         -T|--timezone)        TIMEZONE="$2";              shift 2 ;;
         -u|--user)            DEFAULT_USER="$2";          shift 2 ;;
-        --user-password)      DEFAULT_USER_PASS="$2";     shift 2 ;;
-        --root-password)      ROOT_PASS="$2";             shift 2 ;;
+        # DEPRECATED no-ops: images no longer bake a fallback password (random
+        # one-time password is minted at first boot; real creds come from KEYS).
+        --user-password)      warn "--user-password is ignored: no password is baked into the image (random first-boot fallback + KEYS provisioning)"; shift 2 ;;
+        --root-password)      warn "--root-password is ignored: root is locked on keyless boot; set root via the KEYS USB users.json hash"; shift 2 ;;
         -p|--extra-packages)  EXTRA_PACKAGES="$2";        shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";     shift 2 ;;
         --tailscale-version)  TAILSCALE_VERSION="$2";     shift 2 ;;
@@ -404,8 +425,6 @@ render_template() {
         -e "s|@@HOSTNAME@@|${HOSTNAME}|g" \
         -e "s|@@TIMEZONE@@|${TIMEZONE}|g" \
         -e "s|@@DEFAULT_USER@@|${DEFAULT_USER}|g" \
-        -e "s|@@DEFAULT_USER_PASS@@|${DEFAULT_USER_PASS}|g" \
-        -e "s|@@ROOT_PASS@@|${ROOT_PASS}|g" \
         -e "s|@@BRAND@@|${BRAND}|g" \
         -e "s|@@BRAND_TITLE@@|${BRAND_TITLE}|g" \
         -e "s|@@DOMAIN@@|${CLUSTER_DOMAIN}|g" \
@@ -541,6 +560,17 @@ if [ ! -f "${STAGE3_LOCAL}" ]; then
     curl -L -o "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}"
 else
     info "Using cached ${STAGE3_BASENAME}"
+fi
+
+# SUPPLY-CHAIN: verify the seed (signed DIGESTS + SHA512/SHA256) before trusting
+# it; ABORT on any signature/checksum mismatch. See scripts/_download-lib.sh.
+banner "Verifying stage3 seed signature + checksum"
+if ! dlv_verify_stage3 "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}.DIGESTS"; then
+    rm -f "${STAGE3_LOCAL}"
+    err "stage3 seed failed verification (bad signature or checksum) — aborting."
+    err "If Gentoo rotated its signing key, set DLV_GENTOO_KEY=<fingerprint>; for an"
+    err "air-gapped build set DLV_OFFLINE_KEYRING=<keyfile>. Refusing unverified seed."
+    exit 1
 fi
 
 banner "Extracting seed stage3 into sysroot"
@@ -832,7 +862,11 @@ if ${SKIP_MESH}; then
     banner "Phase 2.5: SKIPPED mesh VPN (--skip-mesh)"
 else
     banner "Phase 2.5: Installing mesh VPN (headscale + tailscale)"
-    HS_URL="https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}/headscale_${HEADSCALE_VERSION}_linux_arm64"
+    # Pinned versions + publisher checksum verification (headscale checksums.txt /
+    # tailscale <tgz>.sha256): ABORT on any sha256 mismatch so a tampered binary
+    # cannot reach the mesh runlevel. file(1) ELF-arch check kept as defense-in-depth.
+    HS_REL="https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}"
+    HS_URL="${HS_REL}/headscale_${HEADSCALE_VERSION}_linux_arm64"
     HS_BIN="${SYSROOT}/usr/bin/headscale"
     # Fetch failure is FATAL (mirrors x86/rpi5): the image bakes mesh plumbing and
     # this is the only place the binary is staged — a network blip must NOT silently
@@ -840,9 +874,15 @@ else
     if ! curl -fL -o "${HS_BIN}" "${HS_URL}"; then
         err "headscale ${HEADSCALE_VERSION} fetch failed (${HS_URL}) — the image bakes the mesh; aborting (use --skip-mesh to opt out)."; exit 1
     fi
+    HS_SUMS="${BUILD_ROOT}/headscale_${HEADSCALE_VERSION}_checksums.txt"
+    if ! dlv_fetch "${HS_REL}/checksums.txt" "${HS_SUMS}" \
+       || ! dlv_verify_from_sumsfile "${HS_BIN}" "headscale_${HEADSCALE_VERSION}_linux_arm64" "${HS_SUMS}" sha256; then
+        rm -f "${HS_BIN}"
+        err "headscale ${HEADSCALE_VERSION} checksum verification FAILED — refusing to ship an unverified control-plane binary."; exit 1
+    fi
     chmod +x "${HS_BIN}"
     file "${HS_BIN}" | grep -q 'ELF.*aarch64' || { err "headscale binary is NOT aarch64 (wrong/corrupt download) — refusing to ship it."; exit 1; }
-    info "headscale installed: /usr/bin/headscale"
+    info "headscale installed + sha256-verified: /usr/bin/headscale"
     if ${SKIP_TAILSCALE}; then
         info "Skipping tailscale client (--skip-tailscale)"
     else
@@ -854,6 +894,12 @@ else
         if ! curl -fL -o "${TS_TGZ}" "${TS_URL}"; then
             err "tailscale ${TAILSCALE_VERSION} fetch failed (${TS_URL}) — tailscaled is enabled in the runlevel; aborting (use --skip-tailscale to opt out)."; exit 1
         fi
+        TS_SHA="${TS_TGZ}.sha256"
+        if ! dlv_fetch "${TS_URL}.sha256" "${TS_SHA}" \
+           || ! dlv_verify_sha256_sidecar "${TS_TGZ}" "${TS_SHA}"; then
+            rm -f "${TS_TGZ}"
+            err "tailscale ${TAILSCALE_VERSION} checksum verification FAILED — refusing to ship an unverified mesh client."; exit 1
+        fi
         TS_TMP="$(mktemp -d)"
         tar -C "${TS_TMP}" -xzf "${TS_TGZ}"
         TS_SUB="$(find "${TS_TMP}" -maxdepth 1 -type d -name 'tailscale_*' | head -1)"
@@ -864,7 +910,7 @@ else
         # tailscaled runlevel link backed by a real, correct-arch binary.
         file "${SYSROOT}/usr/bin/tailscale"   | grep -q 'ELF.*aarch64' || { err "tailscale binary is NOT aarch64 (wrong/corrupt download) — refusing to ship it."; exit 1; }
         file "${SYSROOT}/usr/sbin/tailscaled" | grep -q 'ELF.*aarch64' || { err "tailscaled binary is NOT aarch64 (wrong/corrupt download) — refusing to ship it."; exit 1; }
-        info "tailscale installed: /usr/bin/tailscale, /usr/sbin/tailscaled"
+        info "tailscale installed + sha256-verified: /usr/bin/tailscale, /usr/sbin/tailscaled"
     fi
 fi
 

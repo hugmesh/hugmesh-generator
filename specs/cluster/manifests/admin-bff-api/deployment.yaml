@@ -166,6 +166,20 @@ spec:
                   key: password
             - name: CASSANDRA_CONTACT_POINTS
               value: "cassandra.snapdragon-pki.svc.cluster.local:9042"
+            # ── Anubis PoW anti-scraper sidecar proxy (SUPERADMIN BFF surface) ──
+            # The anubis package (GET /bff/admin/anubis/{status,metrics}) proxies
+            # the Anubis management port. ANUBIS_ENABLED=true wires the BFF surface;
+            # the Anubis component itself (manifests/anubis, snapdragon-frontend) is a
+            # DEFAULT-OFF optional service created via the optional-services
+            # ApplicationSet (apps/13a, installed flag in the installed-services
+            # ConfigMap). MANAGEMENT_URL is the in-cluster Service DNS of the
+            # metrics/health listener (:9090) — NOT the public PoW gate (:8923) —
+            # reachable cross-namespace from this BFF pod once Anubis is enabled.
+            # While Anubis is OFF the BFF's AnubisClient onErrorResume path returns a
+            # structured "unreachable" instead of cascading 503s, so enabling the
+            # proxy here is safe and it lights up the moment the operator flips Anubis on.
+            - { name: ANUBIS_ENABLED,        value: "true" }
+            - { name: ANUBIS_MANAGEMENT_URL, value: "http://anubis.snapdragon-frontend.svc.cluster.local:9090" }
           # Probes are HTTPS now that server.ssl is enabled. Because client-auth=need
           # rejects the TLS handshake of any caller WITHOUT a client cert, a plain
           # kubelet httpGet (which presents none) would fail — so the probe is an

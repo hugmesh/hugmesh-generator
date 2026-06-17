@@ -297,6 +297,54 @@ spec:
       federationModule: null
       casdoorSeed: null
 
+    # ── anubis — proof-of-work anti-scraper gate fronting public ingress ──────
+    # Anubis (github.com/TecharoHQ, ghcr.io/techarohq/anubis) sits in front of the
+    # fe-gateway (TARGET=snapdragon-fe-gateway) on its :8923 PoW gate and exposes a
+    # :9090 metrics/health listener that the superadmin admin-bff proxies
+    # (/bff/admin/anubis/{status,metrics}; ANUBIS_ENABLED/ANUBIS_MANAGEMENT_URL).
+    #
+    # ENV-CONDITIONAL DEFAULT (the PUBLIC PoW shield policy — NOT a plain default):
+    #   * ENV=prod  => ON  by default ("all shields up": the public front door is
+    #                  PoW-gated, and the build reroutes the fe-gateway public
+    #                  Ingress THROUGH Anubis :8923 -> fe-gateway).
+    #   * ENV=test  => OFF by default (no PoW interstitial on a LAN/test build).
+    #   * Explicit operator choice ALWAYS wins: list "anubis" to force ON, or
+    #     "-anubis"/"no-anubis" to force OFF (in either ENV).
+    # The `default: off` below is the SAFE TEST BASELINE shipped in the ConfigMap;
+    # _opt_render_installed_services() in build-rpi5-stage4.sh (via
+    # _opt_anubis_installed) FLIPS it to "true" for PROD builds. No gatewayHost/
+    # route-access rows (it is an INGRESS-layer gate, not a /bff/** upstream); when
+    # OFF the BFF's AnubisClient degrades to "unreachable" (no 503) and the public
+    # ingress routes straight to the fe-gateway (direct, unshielded path).
+    - slug: anubis
+      displayName: "Anubis (anti-scraper PoW gate)"
+      namespace: snapdragon-frontend
+      # SAFE TEST BASELINE. PROD flips this on at build time (ENV-conditional —
+      # see the ENV policy note above); the operator can override either way.
+      default: off
+      # The public PoW shield obeys the ENV policy (prod-on / test-off) rather than
+      # plain presence in OPTIONAL_SERVICES.
+      envConditional:
+        prod: on
+        test: off
+      # NO hardcoded apps/*.yaml: unlike akkoma/games (which ship a bootstrap-seed
+      # Application that the build-time gate prunes), Anubis is wired ONLY through
+      # the runtime optional-services ApplicationSet (apps/13a) with installed:
+      # "false". This keeps it genuinely DEFAULT-OFF without a build-time prune
+      # branch (the recurse root would otherwise auto-deploy a baked Application),
+      # and it is created/pruned by flipping the `anubis` flag in the
+      # installed-services ConfigMap — the documented live add/remove lever.
+      apps: []
+      sharedApps: []
+      manifestPath: manifests/anubis
+      esoFile: null
+      esoKeys: []
+      gatewayHost: null
+      gatewayRouteIds: []
+      routeAccessRows: []
+      federationModule: null
+      casdoorSeed: null
+
   # ── games subdomain / TLD configuration ──────────────────────────────────────
   # GAMES_DOMAIN (brand.conf knob, default games.${CLUSTER_DOMAIN}) is the single
   # value that drives every games host / OIDC issuer / redirect URI. The default
