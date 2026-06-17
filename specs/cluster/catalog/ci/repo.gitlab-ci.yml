@@ -50,3 +50,10 @@ pentest:dast:
 
 pentest:dast-full:
   extends: .pentest-dast-full
+
+# OPT-IN k6 LOAD / DoS-resilience stage — OFF BY DEFAULT. Gated on PENTEST_LOAD=1
+# (a GitLab Schedule or a manual trigger), NEVER on a plain MR / default-branch
+# push, so it never slows an onboarded repo's normal CI. Drives the SAME harness
+# (run-pentest.sh --load) reading the SAME per-persona tokens.env as the dast jobs.
+pentest:load:
+  extends: .pentest-load
