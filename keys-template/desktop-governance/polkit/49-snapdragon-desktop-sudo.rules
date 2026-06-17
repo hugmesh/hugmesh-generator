@@ -1,8 +1,13 @@
 // 49-snapdragon-desktop-sudo.rules
 //
 // SSO-CLAIM SUDO GATE for governed client desktops (laptop / chromebook /
-// desktop). DEFAULT = NO privilege escalation for ANY user. There is NO static
-// sudoers entry anywhere on the image; this polkit rule is the SOLE gate.
+// desktop). DEFAULT = NO privilege escalation for ANY user. On a governed image
+// the SSO `desktop-sudo` claim is the SOLE sudo path: keys-provision SUPPRESSES
+// the per-user static /etc/sudoers.d grants and the standing wheel-group sudo
+// conferral (provision_users), strips any pre-existing standing sudoers.d/%wheel
+// grant (provision_desktop_governance), and installs THIS polkit rule as the
+// only escalation route. So on a governed image there is no static sudoers entry
+// and this rule is the gate.
 //
 // A user is granted the privileged polkit actions (pkexec / "run as admin",
 // which is how a governed desktop performs sudo-equivalent operations) ONLY

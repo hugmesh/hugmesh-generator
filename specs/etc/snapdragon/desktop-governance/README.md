@@ -29,13 +29,19 @@ image's `/etc/snapdragon/domains` already carries the brand domain).
    admin curates apps into the BFF registry (gated by the `discover` role), the
    store shows nothing. An empty store is the correct, non-error degrade state.
 
-2. **PAM/polkit sudo gate via the `desktop-sudo` SSO claim.** Default = **NO
-   sudo for anyone.** There is **no static sudoers entry**. A polkit JS rule
-   grants the admin/`exec` actions ONLY when the active session's user is in the
-   `desktop-sudo` group, which SSSD-OIDC populates from the `desktop-sudo`
-   claim/role carried in the user's OIDC token for this domain. The admin-bff
-   sudo-grant drives that claim at the IdP; **revoking it at the IdP removes sudo
-   at the next login / token refresh** — nothing on the device needs editing.
+2. **PAM/polkit sudo gate via the `desktop-sudo` SSO claim — the SOLE sudo
+   path.** Default = **NO sudo for anyone.** On a governed image the SSO claim is
+   the only escalation route: `keys-provision` **suppresses the per-user static
+   `/etc/sudoers.d/10-<name>` grant and the standing `wheel`-group sudo
+   conferral** that `provision_users` would otherwise write (a KEYS `sudo:true`
+   is treated as IdP-claim eligibility, not a device-local sudoers entry), and
+   `provision_desktop_governance` additionally **strips any pre-existing standing
+   `sudoers.d`/`%wheel` grant**. A polkit JS rule then grants the admin/`exec`
+   actions ONLY when the active session's user is in the `desktop-sudo` group,
+   which SSSD-OIDC populates from the `desktop-sudo` claim/role carried in the
+   user's OIDC token for this domain. The admin-bff sudo-grant drives that claim
+   at the IdP; **revoking it at the IdP removes sudo at the next login / token
+   refresh** — nothing on the device needs editing.
 
 3. **SSO desktop-login bearer forwarded to the registry endpoint.** Discover's
    Flatpak backend reads the logged-in user's bearer token (deposited by the

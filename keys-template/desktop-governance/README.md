@@ -17,10 +17,13 @@ node's own domain (resolved from `.client.primary_domain` →
   with **Flathub + every default backend disabled**. Empty until a domain admin
   curates apps (gated by the `discover` role). An empty store is the correct
   state, not an error.
-- **polkit sudo gate**: NO static sudoers; sudo only for the `desktop-sudo`
-  group, which SSSD-OIDC populates from the `desktop-sudo` OIDC claim for this
-  domain. The admin-bff sudo-grant drives the claim; revoke at the IdP → sudo
-  gone at next login.
+- **polkit sudo gate — the SOLE sudo path on a governed image**: keys-provision
+  suppresses the per-user static `/etc/sudoers.d` grant + standing `wheel`-group
+  sudo (a KEYS `sudo:true` becomes IdP-claim eligibility, not a device sudoers
+  entry) and strips any pre-existing standing grant, so sudo flows only through
+  the `desktop-sudo` group, which SSSD-OIDC populates from the `desktop-sudo`
+  OIDC claim for this domain. The admin-bff sudo-grant drives the claim; revoke
+  at the IdP → sudo gone at next login.
 - **SSO bearer forwarded** to the registry host so Discover authenticates as the
   logged-in user.
 
