@@ -1,0 +1,111 @@
+#!/bin/bash
+# snapdragon-device-enrollment-report — the node-side ONE-SHOT LIVENESS self-report
+# for the machine_key_fp AUTO-CAPTURE flow (HEADSCALE-ANCHORED HYBRID).
+#
+# A registry-enrolled node POSTs ONCE at first boot (after `tailscale up`, after
+# provision baked MACHINE_KEY_FP) to:
+#     POST <BFF>/bff/internal/device-enrollment/self-report   (mTLS, NO JWT)
+# recording the fingerprint IT believes it baked + reconciliation hints
+# (hostname/meshId/tailnetId), so a superadmin can cross-check the node's self-claim
+# against what headscale reports when picking from the PENDING list.
+#
+# ⚠ THIS IS RECONCILIATION TELEMETRY, NOT AUTHORITY. The self-report confers NO access
+# — the trust gate is HEADSCALE (it mints the machine keys) and authorization lives
+# entirely in the SUPERADMIN-assigned device_registry + device_ssh_license. The BFF
+# endpoint takes no JWT and stores no authorizing columns; a node self-claim is
+# trivially spoofable, so it can never grant anything. This script just announces "I am
+# alive and I think my fp is X" over the SAME in-cluster mTLS transport Layer-B uses.
+#
+# FAIL-SOFT (best-effort): on ANY missing input / unreachable BFF / non-2xx, log + exit
+# 0. A failed self-report NEVER blocks boot and NEVER affects SSH enforcement (that is
+# Layer-B's signed-export pull, a separate agent). The superadmin can still pick the
+# node from the headscale-backed pending list even with zero self-reports.
+#
+# Reuses the EXACT node.env layout + read_env + mTLS curl idiom from
+# snapdragon-device-registry-sync (the Layer-B sync agent) so there is one transport
+# contract. Run once at provision; optionally re-run (the BFF UPSERTs + bumps a count).
+
+set -uo pipefail
+
+NODE_ENV="/etc/snapdragon/registry/node.env"
+MARKER="/var/lib/snapdragon/device-registry/self-reported"   # one-shot guard (best-effort)
+LOG_TAG="snapdragon-device-enrollment-report"
+
+log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+warn() { log "WARNING: $*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Read a bare KEY=VALUE from node.env WITHOUT sourcing it (identical to the sync agent).
+read_env() {
+    local k="$1" line
+    line="$(grep -E "^${k}=" "${NODE_ENV}" 2>/dev/null | head -1)" || return 1
+    [ -n "${line}" ] || return 1
+    printf '%s' "${line#*=}" | tr -d '"'"'"' '
+}
+
+# A tiny JSON string escaper (backslash, quote, control chars) so a hostname with an
+# odd char cannot break the body. Fingerprints/mesh ids are opaque tokens; escape too.
+json_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/$(printf '\t')/\\\\t/g"
+}
+
+main() {
+    # Allow an explicit --force to re-report (the BFF UPSERTs + bumps the count).
+    local force=0
+    [ "${1:-}" = "--force" ] && force=1
+
+    [ -r "${NODE_ENV}" ] || { warn "node.env missing (${NODE_ENV}) — not a registry node? skipping self-report"; exit 0; }
+    have curl || { warn "curl absent — cannot self-report (skip)"; exit 0; }
+
+    if [ "${force}" -eq 0 ] && [ -e "${MARKER}" ]; then
+        log "already self-reported (marker ${MARKER}); pass --force to re-report; skipping"
+        exit 0
+    fi
+
+    local fp mesh host tn bff cert key ca
+    fp="$(read_env MACHINE_KEY_FP)"   || fp=""
+    [ -n "${fp}" ] || { warn "MACHINE_KEY_FP not baked in node.env — nothing to self-report (skip; lookup fail-closes anyway)"; exit 0; }
+    mesh="$(read_env MESH_ID)"        || mesh=""
+    bff="$(read_env BFF_EXPORT_URL)"  || bff=""
+    cert="$(read_env BFF_CLIENT_CERT)"|| cert=""
+    key="$(read_env BFF_CLIENT_KEY)"  || key=""
+    ca="$(read_env BFF_CA)"           || ca="/etc/snapdragon/pki/ca-chain.crt"
+    host="$(hostname 2>/dev/null || true)"
+    # Tailnet id, best-effort from local tailscale state (advisory hint only).
+    tn=""
+    if have tailscale; then
+        tn="$(tailscale status --json 2>/dev/null | { have jq && jq -r '.Self.ID // empty' 2>/dev/null || true; })"
+    fi
+
+    [ -n "${bff}" ] || { warn "BFF_EXPORT_URL unset — bootstrap/offline, skipping self-report (no brick)"; exit 0; }
+    # The /bff/internal/** prefix is mTLS-gated (no JWT). Present the SAME in-cluster
+    # client identity Layer-B uses for /export; without it the handshake is rejected.
+    if [ -z "${cert}" ] || [ -z "${key}" ] || [ ! -f "${cert}" ] || [ ! -f "${key}" ]; then
+        warn "mTLS client cert/key not present — the /self-report call would be rejected; skipping"
+        exit 0
+    fi
+
+    local url="${bff%/}/bff/internal/device-enrollment/self-report"
+    local body
+    body="$(printf '{"machineKeyFp":"%s","hostname":"%s","meshId":"%s","tailnetId":"%s"}' \
+        "$(json_escape "${fp}")" "$(json_escape "${host}")" "$(json_escape "${mesh}")" "$(json_escape "${tn}")")"
+
+    local args=(-sS -m 15 --fail -X POST -H 'Content-Type: application/json' -d "${body}")
+    [ -f "${ca}" ] && args+=(--cacert "${ca}")
+    args+=(--cert "${cert}" --key "${key}")
+
+    if curl "${args[@]}" "${url}" >/dev/null 2>&1; then
+        mkdir -p "$(dirname "${MARKER}")" 2>/dev/null || true
+        : > "${MARKER}" 2>/dev/null || true
+        log "self-reported fp=${fp} host=${host:-<unset>} mesh=${mesh:-<unset>} to ${url}"
+    else
+        warn "self-report POST failed (${url}) — best-effort, skipping (the sync agent + headscale pending list are unaffected)"
+    fi
+    exit 0
+}
+
+# Guard main behind a BASH_SOURCE check so tests can source the functions
+# (json_escape / read_env) without running the POST flow.
+if [ "${BASH_SOURCE[0]:-$0}" = "${0}" ]; then
+    main "$@"
+fi

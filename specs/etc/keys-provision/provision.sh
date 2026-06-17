@@ -967,6 +967,20 @@ provision_device_registry() {
     if [ -x /usr/sbin/snapdragon-device-registry-sync ]; then
         /usr/sbin/snapdragon-device-registry-sync 2>/dev/null || true
     fi
+
+    # ── One-shot LIVENESS self-report (machine_key_fp AUTO-CAPTURE, reconciliation) ─
+    # Announce this node's baked MACHINE_KEY_FP + hostname/mesh to the BFF's
+    # mTLS-gated /bff/internal/device-enrollment/self-report (NO JWT, NO authorizing
+    # data) so a superadmin can cross-check the node's self-claim against headscale
+    # when picking from the PENDING list. RECONCILIATION TELEMETRY ONLY — it confers
+    # no access (the trust gate is headscale + the superadmin assignment) and is
+    # fail-soft: an unreachable BFF / missing cert is a no-op (NEVER blocks boot,
+    # NEVER affects Layer-B SSH enforcement). admin-bff #68 (ships dark / advisory).
+    if [ -x /usr/sbin/snapdragon-device-enrollment-report ]; then
+        /usr/sbin/snapdragon-device-enrollment-report 2>/dev/null || true
+    else
+        warn "device-registry: /usr/sbin/snapdragon-device-enrollment-report missing from image (no liveness self-report; pending pick-list relies on headscale only)"
+    fi
 }
 
 # ── Device-license registry — LAYER A (headscale tailnet ACL) ──────
