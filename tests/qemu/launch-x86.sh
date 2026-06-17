@@ -41,7 +41,8 @@ WORK_DIR="${WORK_DIR:-${REPO_DIR}/x86-host-build}"
 ROLE="${ROLE:-host}"
 IMG=""                         # explicit .img (else autodetect)
 RUN_DIR=""                     # scratch dir for overlay/vars/pidfile/console
-OVERLAY_SIZE="16G"             # qcow2 overlay grows so growroot can expand
+OVERLAY_SIZE="32G"             # qcow2 overlay grows so growroot can expand; must exceed
+                               # the backing .img (client desktop roots are 16–24 GiB)
 MEM="4096"                     # x86 host image is heavier than the Pi
 SMP="4"
 ACCEL="kvm:tcg"                # try KVM, fall back to TCG

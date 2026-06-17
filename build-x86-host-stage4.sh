@@ -94,6 +94,7 @@ ENABLE_BLUETOOTH="${ENABLE_BLUETOOTH:-false}"
 # ── Artifact selection (mirrors rpi5): .img is now the DEFAULT deliverable ──
 BUILD_IMG=true          # produce the flashable raw .img (DEFAULT)
 ROOT_MiB=8192           # ext4 root partition size in the .img (growroot expands it on first boot)
+IMG_SIZE_SET=false      # true once --img-size is given, so the client auto-bump below defers to it
 GROW_POLICY="fill"      # first-boot grow policy baked into /etc/growfs.conf: fill|none|<size>
 COMPRESS_IMG=false      # xz -9 the finished .img
 LIVE_ISO=true           # self-booting live squashfs ISO (DEFAULT; --no-live-iso to skip)
@@ -227,7 +228,7 @@ while [[ $# -gt 0 ]]; do
         # ── Artifact selection ──
         --img) BUILD_IMG=true; shift ;;
         --no-img) BUILD_IMG=false; shift ;;
-        --img-size) ROOT_MiB="$2"; shift 2 ;;
+        --img-size) ROOT_MiB="$2"; IMG_SIZE_SET=true; shift 2 ;;
         --grow)     GROW_POLICY="$2"; shift 2 ;;
         --no-grow)  GROW_POLICY="none"; shift ;;
         --compress) COMPRESS_IMG=true; shift ;;
@@ -310,6 +311,17 @@ if ${ROLE_CLIENT}; then
     esac
     case "${DESKTOP}" in thin|full) : ;; *) err "--desktop must be thin | full (got '${DESKTOP}')"; exit 1 ;; esac
     [ -z "${DOMAINS}" ] && warn "client role '${ROLE}' built with no --domains; the device will be domain-tied at provision time from the KEYS USB."
+    # Desktop payloads (linux-firmware ~1.5G + Xorg/mesa/GTK/LXDE) overflow the 8 GiB
+    # node-sized compact root → "No space left on device" mid-.img. Size the compact
+    # root for the client payload (growroot still expands to the disk on first boot).
+    # An explicit --img-size always wins.
+    if ! ${IMG_SIZE_SET}; then
+        # Measured thin payload ≈13.6 GiB after the binpkgs cleanup below (linux-firmware
+        # ~1.9G + Xorg/mesa/GTK/LXDE); full adds firefox/xfce/vlc/pipewire/cups. Size with
+        # headroom (ext4 overhead ~5%). growroot still expands to the disk on first boot.
+        [ "${DESKTOP}" = "full" ] && ROOT_MiB=24576 || ROOT_MiB=16384
+        info "Client desktop: compact root sized to ${ROOT_MiB} MiB for the ${DESKTOP} payload (override with --img-size)"
+    fi
 elif [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; then
     warn "--person-role/--domains are ignored for non-client role '${ROLE}'."
 fi
@@ -1384,7 +1396,13 @@ fi
 umount_chroot; trap - EXIT
 if ! ${SKIP_CLEAN}; then
     banner "Cleaning sysroot"
+    # FEATURES=buildpkg writes a binpkg copy of every package into the chroot's
+    # /var/cache/binpkgs (~2.4 GiB for the desktop set) — pure build-artifact bloat in
+    # the image (devices get updates from the binhost, not their own cache). Drop it
+    # along with docs/man/info + distfiles + tmp. (Deeper minification — strip, locale
+    # pruning, INSTALL_MASK — lands in the dedicated minification PR.)
     rm -rf "${SYSROOT}"/usr/share/{doc,man,info}/* "${SYSROOT}"/var/cache/distfiles/* \
+           "${SYSROOT}"/var/cache/binpkgs/* \
            "${SYSROOT}"/var/tmp/* "${SYSROOT}"/tmp/* 2>/dev/null || true
 fi
 
@@ -1442,6 +1460,20 @@ build_img() {
 
     # 1MiB alignment gap + 512MiB ESP + ROOT_MiB ext4 root + 1MiB slack.
     img_size_mib=$(( 1 + 512 + ROOT_MiB + 1 ))
+
+    # Pre-flight (fail in seconds, not after a long extraction): does the finished
+    # payload fit the ROOT_MiB root partition? Converts the cryptic mid-tar "No space
+    # left on device" into an upfront, actionable error. -x stays on the sysroot fs so
+    # any still-bound mounts aren't counted.
+    local payload_mib cap_mib
+    payload_mib="$(du -sxBM "${SYSROOT}" 2>/dev/null | cut -f1 | tr -dc '0-9')"
+    cap_mib=$(( ROOT_MiB * 93 / 100 ))   # ext4 metadata + 5% reserved ≈ 7% overhead
+    if [ -n "${payload_mib}" ] && [ "${payload_mib}" -gt "${cap_mib}" ]; then
+        err "Payload ${payload_mib} MiB exceeds the ${ROOT_MiB} MiB root partition (usable ~${cap_mib} MiB)."
+        err "Re-run with a bigger root, e.g.  --img-size $(( (payload_mib * 115 / 100 / 1024 + 1) * 1024 ))"
+        exit 1
+    fi
+    info "Pre-flight: payload ${payload_mib:-?} MiB fits the ${ROOT_MiB} MiB root (usable ~${cap_mib} MiB)"
 
     _img_cleanup() {
         local rc=$?
