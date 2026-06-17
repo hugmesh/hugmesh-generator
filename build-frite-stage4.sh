@@ -634,6 +634,15 @@ cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson"     "${SYSROOT}/etc/h
 cp "${SHARED_SPECS}/etc/headscale/policy.hujson.tmpl"          "${SYSROOT}/etc/headscale/policy.hujson.tmpl"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-policy-sync"         "${SYSROOT}/etc/snapdragon/registry/cron-policy-sync"
 
+# ── Egress VPN (split-tunnel, fail-closed) — node-level, DEFAULT-OFF ────────────
+# Bake the OpenRC service + the split-tunnel runner into every node image; INERT
+# until enabled (not linked into a runlevel here; no active.conf => runner no-op).
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-egress-vpn" "${SYSROOT}/etc/init.d/snapdragon-egress-vpn"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-egress-vpn"
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-vpn-runner"   "${SYSROOT}/usr/sbin/snapdragon-vpn-runner"
+chmod +x "${SYSROOT}/usr/sbin/snapdragon-vpn-runner"
+mkdir -p "${SYSROOT}/etc/snapdragon/vpn"; chmod 0700 "${SYSROOT}/etc/snapdragon/vpn"
+
 # Node role + domain + env markers (read by keys-provision / first-boot).
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
