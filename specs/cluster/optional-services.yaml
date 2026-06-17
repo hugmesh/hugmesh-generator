@@ -152,21 +152,36 @@ spec:
       apps:
         - apps/06-casdoor-games.yaml
         - apps/50-games.yaml
+        # GAMES APP-STORE (games-services control plane) rides the games slug: it needs
+        # the games namespace up, so it is pruned/installed WITH games (gate_optional_
+        # services games) case + _opt_render_installed_services flips 13c's installed flag).
+        - apps/13c-games-instances.yaml
       sharedApps: []
       manifestPath: manifests/games
-      # casdoor-games has its own manifest dir, also pruned with the slug.
+      # casdoor-games has its own manifest dir, also pruned with the slug. The games-
+      # services control plane adds the per-instance isolation manifests (games-instances)
+      # — pruned with games too.
       extraManifestPaths:
         - manifests/casdoor-games
+        - manifests/games-instances
       esoFile: null
       esoKeys: [casdoor-games-db, casdoor-games-app]
       # NOTE: the games host is GAMES_DOMAIN (parameterized below), NOT a
       # snapdragon.systems subdomain literal — see gamesDomain.
       gatewayHost: games.${GAMES_DOMAIN}
-      gatewayRouteIds: [games]
+      # games = the games portal host route; games-servers-console = the games app-store
+      # per-instance HTTP console path-route (both pruned when games is deselected).
+      gatewayRouteIds: [games, games-servers-console]
       routeAccessRows:
         - { gateway: snapdragon-be-gateway, urlPattern: /games/api/admin/** }
         - { gateway: snapdragon-be-gateway, urlPattern: /games/** }
         - { gateway: snapdragon-fe-gateway, urlPattern: /games/admin/** }
+        # ── games-services control-plane rows (degrade with games) ──
+        - { gateway: snapdragon-be-gateway, urlPattern: /bff/superadmin/games-services/** }
+        - { gateway: snapdragon-be-gateway, urlPattern: /bff/games-services/instances/** }
+        - { gateway: snapdragon-be-gateway, urlPattern: /bff/games-services/catalog/** }
+        - { gateway: snapdragon-be-gateway, urlPattern: /games/servers/** }
+        - { gateway: snapdragon-fe-gateway, urlPattern: /admin/games-services/** }
       federationModule: { slug: games, mountAt: /games, changeset: "025-register-games-module.xml" }
       casdoorSeed: casdoor-games
 
