@@ -845,11 +845,11 @@ banner "Verifying prerequisites"
 [ -d "${SPECS_DIR}" ]   || { err "Missing ${SPECS_DIR}"; exit 1; }
 [ -d "${SHARED_SPECS}" ] || { err "Missing ${SHARED_SPECS}"; exit 1; }
 for t in curl tar file; do command -v "$t" >/dev/null || { err "missing tool: $t"; exit 1; }; done
-# .img builder tools (default deliverable) — losetup/mkfs/parted/grub-install must
-# be present and the build must run as root (already enforced). grub-install must
-# support the x86_64-efi target for the GRUB-EFI --removable install.
+# .img builder tools (default deliverable) — losetup/mkfs/parted/grub-mkimage must
+# be present and the build must run as root (already enforced). grub-mkimage must
+# support the x86_64-efi target for the GRUB-EFI removable install.
 if ${BUILD_IMG}; then
-    for t in parted losetup mkfs.vfat mkfs.ext4 blkid grub-install; do
+    for t in parted losetup mkfs.vfat mkfs.ext4 blkid grub-mkimage; do
         command -v "$t" >/dev/null || { warn "missing ${t}; disabling .img build"; BUILD_IMG=false; break; }
     done
     if ${BUILD_IMG} && [ ! -d /usr/lib/grub/x86_64-efi ]; then
@@ -1452,7 +1452,7 @@ info "Stage4: ${STAGE4} ($(du -sh "${STAGE4}" | cut -f1))"
 # image is dd'd onto (no NVRAM entry — --no-nvram + --removable fallback path).
 #
 # Runs entirely as root (the build is already privileged): losetup, mkfs, mount,
-# grub-install and xattr-preserving extraction all require it. A cleanup trap
+# grub-mkimage and xattr-preserving extraction all require it. A cleanup trap
 # tears down the ESP+root mounts and the loop device on ANY failure/early return.
 IMG_PATH="(not built)"
 INSTALLER_ISO_PATH="(not built)"
@@ -1540,20 +1540,31 @@ build_img() {
     initrd="$(ls -1 "${root_mnt}/boot/initramfs-"*.img 2>/dev/null | grep -v 'initramfs-live' | sort -V | tail -1 || true)"
     vmlinuz="${vmlinuz##*/}"; initrd="${initrd##*/}"
 
-    # ── GRUB-EFI --removable into the ESP (host-safe: --no-nvram) ──────
-    # Writes ${ESP}/EFI/BOOT/BOOTX64.EFI (removable fallback path) + ${root}/boot/grub.
-    # No host NVRAM entry, no os-prober — safe to run against a loop-mounted image.
-    info "Installing GRUB-EFI (--removable, --no-nvram) into the image ESP"
-    # Bootloader install failure must be FATAL: the .img is the default
-    # deliverable and an empty ESP means a brick announced as success.
-    grub-install --target=x86_64-efi \
-        --efi-directory="${root_mnt}/boot/efi" \
-        --boot-directory="${root_mnt}/boot" \
-        --removable --no-nvram \
-        --modules="part_gpt fat ext2 normal linux search search_fs_uuid configfile gzio all_video" \
-        || { err "grub-install FAILED — .img would not be UEFI-bootable"; exit 1; }
+    # ── GRUB-EFI via grub-mkimage (loop-device-safe) ──────────────────
+    # grub-install probes the backing disk via hostdisk// which fails for loop
+    # devices — GRUB's native disk layer cannot open a loop-device backing file.
+    # grub-mkimage bypasses the probe: it embeds a search-by-fs-uuid config that
+    # finds the root partition at runtime, disk-order-independent. The module tree
+    # is copied to the ext4 /boot so the running GRUB can load fonts/themes.
+    info "Building GRUB-EFI core image (grub-mkimage, loop-device-safe)"
+    mkdir -p "${root_mnt}/boot/efi/EFI/BOOT"
+    mkdir -p "${root_mnt}/boot/grub/x86_64-efi"
+    cp -a /usr/lib/grub/x86_64-efi/. "${root_mnt}/boot/grub/x86_64-efi/"
+    local grub_embed; grub_embed="$(mktemp)"
+    printf 'search --no-floppy --fs-uuid --set=root %s\nset prefix=($root)/boot/grub\nconfigfile ($root)/boot/grub/grub.cfg\n' \
+        "${root_fsuuid}" > "${grub_embed}"
+    grub-mkimage \
+        --directory /usr/lib/grub/x86_64-efi \
+        --output "${root_mnt}/boot/efi/EFI/BOOT/BOOTX64.EFI" \
+        --format x86_64-efi \
+        --config "${grub_embed}" \
+        --prefix '/boot/grub' \
+        part_gpt fat ext2 normal linux search search_fs_uuid configfile gzio all_video \
+        || { rm -f "${grub_embed}"; err "grub-mkimage FAILED — .img would not be UEFI-bootable"; exit 1; }
+    rm -f "${grub_embed}"
+    # Bootloader must be present before sealing the image.
     [ -f "${root_mnt}/boot/efi/EFI/BOOT/BOOTX64.EFI" ] \
-        || { err "ESP has no EFI/BOOT/BOOTX64.EFI after grub-install — refusing to ship a non-booting .img"; exit 1; }
+        || { err "ESP has no EFI/BOOT/BOOTX64.EFI after grub-mkimage — refusing to ship a non-booting .img"; exit 1; }
 
     # ── Hand-written grub.cfg (no grub-mkconfig => no host os-prober/chroot) ──
     # Source the hardened cmdline from the grub defaults so the .img and the live
