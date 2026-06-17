@@ -31,17 +31,27 @@ roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: local-p
 subjects:
   - { kind: ServiceAccount, name: local-path-provisioner, namespace: devops }
 ---
+# NODE-STORAGE: a DaemonSet (not a single Deployment) gated on the node label
+# snapdragon.systems/local-path=true. The control-plane (x86 host) ALWAYS carries
+# that label (keys-provision _label_control_plane), so the provisioner runs there
+# exactly as the old Deployment did — FULL BACK-COMPAT, since the nodePathMap below
+# still carries only the DEFAULT_PATH entry. When an operator attaches + registers a
+# storage pool on ANOTHER node, the node-agent reconcile (PR6) labels THAT node
+# local-path=true and CAS-patches a per-node nodePathMap entry, so a provisioner
+# instance comes up there and serves PVs from the attached disk. local-path is a
+# per-node provisioner keyed on the PV's selected node, so one instance per
+# local-path node is correct (each only ever provisions its own node's PVs under
+# WaitForFirstConsumer + the PV's nodeAffinity).
 apiVersion: apps/v1
-kind: Deployment
+kind: DaemonSet
 metadata: { name: local-path-provisioner, namespace: devops }
 spec:
-  replicas: 1
   selector: { matchLabels: { app: local-path-provisioner } }
   template:
     metadata: { labels: { app: local-path-provisioner } }
     spec:
       serviceAccountName: local-path-provisioner
-      nodeSelector: { kubernetes.io/arch: amd64 }   # disks live on the x86 host
+      nodeSelector: { snapdragon.systems/local-path: "true" }   # the x86 host + any node-storage node
       securityContext:
         seLinuxOptions:
           type: spc_t

@@ -1,0 +1,15 @@
+# snapdragon-games-instances — the namespace + isolation manifests for the per-domain
+# game-server instances of the games app-store. The LIVE per-instance workloads are
+# rendered by the 13c ApplicationSet (apps/13c-games-instances.yaml) from the admin-bff
+# per-domain ConfigMaps; THIS kustomization provides the surrounding hardening that every
+# instance pod lands inside:
+#   namespace.yaml       dedicated ns + enforced restricted PodSecurity
+#   network-policy.yaml  default-deny ingress+egress + the narrow be-gateway/DNS allows
+#   podsecurity.yaml     the restrictive securityContext exemplar (replicas:0 reference)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: snapdragon-games-instances
+resources:
+  - namespace.yaml
+  - network-policy.yaml
+  - podsecurity.yaml

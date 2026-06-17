@@ -1,0 +1,68 @@
+# Games app-store INSTANCES ApplicationSet (PR5) — the per-domain FOSS game-server
+# instances control plane. Modelled on apps/13a-optional-services.yaml (the proven
+# list-generator + installed-flag + selector pattern) and gated by the SAME games-up
+# install-state.
+#
+# WHAT IT OWNS: the snapdragon-games-instances namespace + its default-deny NetworkPolicy
+# + enforced restricted PodSecurity + the per-instance Deployment/Service/PVC hardening
+# exemplar (manifests/games-instances). The base element below installs that surrounding
+# hardening so every per-instance pod lands inside the isolation boundary.
+#
+# HOW PER-INSTANCE WORKLOADS APPEAR: admin-bff is the SINGLE writer of the per-domain
+# ACTIVE-instance ConfigMaps (games-instances-<domain>, written by the Lease-gated
+# GameInstanceReconciler — admin-bff PR4). The reconciler renders each domain's active
+# game_instance rows into its ConfigMap; ArgoCD is apply-only. The Lease +
+# propagation_state are the SOLE coordination (admin-bff is the only writer; ArgoCD never
+# mutates the desired set), so instances do not flap. The per-instance Deployment/Service/
+# PVC are produced from those ConfigMaps inside the games-instances namespace (the
+# manifests/games-instances podsecurity.yaml exemplar is the exact shape each renders).
+#
+# GATING (games-up): the `installed` flag mirrors the games slug's install-state from the
+# installed-services ConfigMap (gate_optional_services -> PR10). When the games namespace
+# is NOT up, this element is dropped by the selector (installed=="true") and ArgoCD prunes
+# the Application — the whole instances control plane degrades cleanly with games.
+#
+# ⚠ SHIPS DARK: scaffolded installed:"false" (matching 13a) so it creates nothing until
+# the games-up wiring (PR10) flips it on for a games-enabled cluster. Distinct
+# ApplicationSet name (games-instances) so it never collides with optional-services.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: games-instances
+  namespace: devops
+  annotations:
+    # The installed flag here is mirrored from the games slug in the installed-services
+    # ConfigMap (rendered from optional-services.yaml). Flipped on for a games cluster by
+    # gate_optional_services (PR10).
+    snapdragon.systems/source-of-truth: specs/cluster/optional-services.yaml
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - list:
+        # The games-instances base: namespace + NetworkPolicy + PodSecurity hardening that
+        # every per-instance pod lands inside. `installed` mirrors the games slug's state.
+        # Scaffolded "false" (ships dark) until PR10 wires the games-up flip.
+        elements:
+          - { slug: games-instances, path: specs/cluster/manifests/games-instances, namespace: snapdragon-games-instances, installed: "false" }
+      selector:
+        matchLabels:
+          installed: "true"
+  template:
+    metadata:
+      name: "games-{{ .slug }}"
+      labels:
+        app.kubernetes.io/part-of: snapdragon.systems
+        snapdragon.systems/games-instances: "{{ .slug }}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+        targetRevision: main
+        path: "{{ .path }}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{ .namespace }}"
+      syncPolicy:
+        automated: { prune: true, selfHeal: true }
+        syncOptions: [CreateNamespace=true]

@@ -42,6 +42,11 @@ net-misc/networkmanager
 net-misc/openssh
 net-firewall/iptables
 net-misc/socat
+# Egress VPN (split-tunnel, fail-closed) — wg-quick (WireGuard, first-class) +
+# openvpn (fallback) for the node-level snapdragon-egress-vpn OpenRC service
+# (DEFAULT-OFF; pruned by the optional-services gate when not selected — PR6).
+net-vpn/wireguard-tools
+net-vpn/openvpn
 # WiFi supplicant is present so a USB WiFi dongle CAN work, but WiFi is OFF by
 # default (hardened posture; the Frite has no onboard radio anyway — see
 # harden_radios in the builder). Ethernet + the tailnet are the path.

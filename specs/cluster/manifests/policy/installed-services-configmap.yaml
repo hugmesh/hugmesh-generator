@@ -39,10 +39,16 @@ data:
   games: "true"
   # Per-slug metadata the admin console + greying-out predicate read (mountAt =
   # where the federation manifest mounts the remote; namespace = its k8s ns).
+  # The games-services (app-store operator UI) capability RIDES the `games` install
+  # flag (its `dependsOn: games`): when games is "false" the app-store operator UI at
+  # /admin/games-services is greyed out too, since the whole control plane is pruned
+  # with the games slug (gate_optional_services games) case). No separate boolean is
+  # rendered — the admin console reads dependsOn -> the games flag.
   services.json: |
     [
       { "slug": "akkoma",  "displayName": "Akkoma (Mastodon)", "namespace": "snapdragon-backend", "mountAt": "/social/mastodon" },
       { "slug": "tuwunel", "displayName": "tuwunel (Matrix)",  "namespace": "snapdragon-backend", "mountAt": "/social/matrix" },
       { "slug": "phpbb",   "displayName": "phpBB (Forum)",     "namespace": "snapdragon-forum",   "mountAt": "/social/forum" },
-      { "slug": "games",   "displayName": "Snapdragon Games",  "namespace": "snapdragon-games",   "mountAt": "/games" }
+      { "slug": "games",   "displayName": "Snapdragon Games",  "namespace": "snapdragon-games",   "mountAt": "/games" },
+      { "slug": "games-services", "displayName": "Games App Store", "namespace": "snapdragon-games-instances", "mountAt": "/admin/games-services", "dependsOn": "games" }
     ]

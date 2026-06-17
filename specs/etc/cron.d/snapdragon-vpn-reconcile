@@ -1,0 +1,16 @@
+# snapdragon-vpn-reconcile — egress-VPN convergence timer (60s default).
+#
+# The TIMER half of the egress-VPN reconcile (the OpenRC service runs the agent
+# once at boot; this cron entry re-runs it every 60s). cronie reads /etc/cron.d
+# (the same mechanism provision.sh uses for /etc/cron.d/snapdragon-backup +
+# snapdragon-device-registry-sync). Installed ONLY when the egress-VPN optional
+# service is selected (PR6 gate).
+#
+# The agent is FAIL-CLOSED + idempotent: a failed fetch/verify keeps the last-good
+# cache + leaves the running tunnel as-is; a successful one writes the Secret-backed
+# config, flips active.conf, restarts the service + leak-checks. The authoritative
+# fast path is the BFF; this pull is the convergence FLOOR for missed pushes /
+# reboots.
+#
+# Field order: min hour dom month dow user command
+* * * * * root /usr/sbin/snapdragon-vpn-reconcile >> /var/log/snapdragon-vpn-reconcile.log 2>&1

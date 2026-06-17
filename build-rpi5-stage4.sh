@@ -800,7 +800,7 @@ gate_optional_services() {
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     local slug
-    for slug in akkoma tuwunel phpbb games; do
+    for slug in akkoma tuwunel phpbb games egress-vpn; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -841,6 +841,34 @@ gate_optional_services() {
                     '/games/api/admin/**' '/games/**'
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
                     '/games/admin/**'
+                # ── GAMES APP-STORE (games-services control plane) — degrade with games ──
+                # The app-store rides the games slug (it needs the games namespace up), so
+                # deselecting games prunes the WHOLE control plane: the 13c instances
+                # ApplicationSet + the games-instances namespace/isolation manifests, the two
+                # intersection-sync Jobs (+ their casdoor/kustomization lines), the be-gateway
+                # HTTP-console route, and the games-services route-access rows (be + fe).
+                rm -f "${apps}/13c-games-instances.yaml"
+                rm -rf "${tree}/manifests/games-instances"
+                rm -f "${tree}/manifests/casdoor/games-services-admin-sync-job.yaml" \
+                      "${tree}/manifests/casdoor/games-services-runner-sync-job.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" games-services-admin-sync-job.yaml
+                _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" games-services-runner-sync-job.yaml
+                _opt_drop_route "${apps}/20-gateway-be.yaml" games-servers-console
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/bff/superadmin/games-services/**' '/bff/games-services/instances/**' \
+                    '/bff/games-services/catalog/**' '/games/servers/**'
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                    '/admin/games-services/**'
+                ;;
+            egress-vpn)
+                # NODE service (not a cluster Application). Prune the per-service
+                # NetworkPolicy interaction (file + kustomization line) so no
+                # vpn-egress label is ever honoured; the node-package prune + the
+                # reconcile service-link SKIP are handled OUTSIDE this loop
+                # (filter_node_packages / link_node_services) since they touch the
+                # rootfs, not the GitOps tree.
+                rm -f "${tree}/manifests/networkpolicy/egress-vpn-interaction.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" egress-vpn-interaction.yaml
                 ;;
         esac
     done
@@ -1323,6 +1351,32 @@ cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson"     "${SYSROOT}/etc/h
 cp "${SHARED_SPECS}/etc/headscale/policy.hujson.tmpl"          "${SYSROOT}/etc/headscale/policy.hujson.tmpl"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-policy-sync"         "${SYSROOT}/etc/snapdragon/registry/cron-policy-sync"
 
+# ── Egress VPN (split-tunnel, fail-closed) — node-level, DEFAULT-OFF ────────────
+# Bake the OpenRC service + the split-tunnel runner into every node image. They
+# are INERT until enabled: the service is NOT linked into a runlevel here (the
+# optional-services gate / signed reconcile enables it), and with no
+# /etc/snapdragon/vpn/active.conf the runner is a no-op. Baking unconditionally
+# does NOT alter egress on a node that never selects the VPN.
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-egress-vpn" "${SYSROOT}/etc/init.d/snapdragon-egress-vpn"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-egress-vpn"
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-vpn-runner"   "${SYSROOT}/usr/sbin/snapdragon-vpn-runner"
+chmod +x "${SYSROOT}/usr/sbin/snapdragon-vpn-runner"
+mkdir -p "${SYSROOT}/etc/snapdragon/vpn"; chmod 0700 "${SYSROOT}/etc/snapdragon/vpn"
+
+# ── Egress-VPN reconcile bridge (signed per-node export consumer) — DEFAULT-OFF ─
+# Bake the reconcile agent + its verify lib + the OpenRC service into every node
+# image. INERT until enabled (the optional-services gate enables the service + cron
+# when the egress-VPN service is selected; with no transport/assignment it is a
+# verified no-op). REUSES the baked registry-pub.ed25519 (Layer-B's key — never
+# re-bake). The cron drop-in is STAGED at /etc/snapdragon/registry (the gate places
+# it into /etc/cron.d on selection), mirroring the device-registry-sync staging.
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-vpn-reconcile" "${SYSROOT}/usr/sbin/snapdragon-vpn-reconcile"
+chmod +x "${SYSROOT}/usr/sbin/snapdragon-vpn-reconcile"
+cp "${SHARED_SPECS}/usr/lib/snapdragon/vpn-verify.sh" "${SYSROOT}/usr/lib/snapdragon/vpn-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile"
+
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
@@ -1379,6 +1433,22 @@ fi
 # tailscale client everywhere unless the mesh / client is skipped
 if ! ${SKIP_MESH} && ! ${SKIP_TAILSCALE}; then
     DEFAULT_SVCS+=(tailscaled)
+fi
+# Egress VPN (DEFAULT-OFF optional service): link the signed-export RECONCILE
+# agent into the default runlevel ONLY when egress-vpn is selected. The
+# snapdragon-egress-vpn service itself is NOT linked here — the reconcile agent
+# enables it (rc-update add) once a verified assignment lands, so a selected-but-
+# unassigned node carries the agent + an inert service (no tunnel, no leak). The
+# 60s reconcile cron drop-in (staged at /etc/snapdragon/registry/cron-vpn-reconcile)
+# is installed alongside.
+if _opt_selected egress-vpn; then
+    DEFAULT_SVCS+=(snapdragon-vpn-reconcile)
+    if [ -f "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile" ]; then
+        mkdir -p "${SYSROOT}/etc/cron.d"
+        cp -f "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile" \
+              "${SYSROOT}/etc/cron.d/snapdragon-vpn-reconcile"
+        info "OPTIONAL_SERVICES: egress-vpn selected — linked snapdragon-vpn-reconcile + 60s cron"
+    fi
 fi
 for svc in "${DEFAULT_SVCS[@]}"; do
     ln -sf "/etc/init.d/${svc}" "${SYSROOT}/etc/runlevels/default/${svc}" 2>/dev/null || true
@@ -1450,6 +1520,23 @@ banner "Phase 2: Cross-building stage4 packages"
 mapfile -t STAGE4_PACKAGES < <(
     grep -v '^\s*#' "${SPECS_DIR}/portage/packages.list" | grep -v '^\s*$'
 )
+
+# Egress VPN (DEFAULT-OFF optional service): the node packages.list always lists
+# net-vpn/wireguard-tools + net-vpn/openvpn, but they are ONLY needed when the
+# egress-vpn service is selected. PRUNE them from the install set otherwise so an
+# image that does not use the VPN does not carry wg-quick/openvpn (parity with the
+# gate that prunes the cluster apps of an unselected slug).
+if ! _opt_selected egress-vpn; then
+    _kept=()
+    for _pkg in "${STAGE4_PACKAGES[@]}"; do
+        case "${_pkg}" in
+            net-vpn/wireguard-tools|net-vpn/openvpn) ;;   # drop (egress-vpn not selected)
+            *) _kept+=("${_pkg}") ;;
+        esac
+    done
+    STAGE4_PACKAGES=("${_kept[@]}")
+    info "OPTIONAL_SERVICES: egress-vpn NOT selected — pruned net-vpn/wireguard-tools + net-vpn/openvpn from the node packages"
+fi
 
 # Append user-specified extra packages
 if [ -n "${EXTRA_PACKAGES}" ]; then

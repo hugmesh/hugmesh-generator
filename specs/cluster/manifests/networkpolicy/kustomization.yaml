@@ -4,3 +4,4 @@ resources:
   - tier-ingress.yaml
   - homeserver-isolation.yaml
   - homeserver-egress.yaml   # default-deny egress on akkoma/tuwunel: DNS + akkoma-db + egress-proxy only (domain-lock/no-federation backstop)
+  - egress-vpn-interaction.yaml   # per-service opt-in (snapdragon.systems/vpn-egress=true) direct egress for the node split-tunnel; PRUNED when egress-vpn is not selected (default-off)

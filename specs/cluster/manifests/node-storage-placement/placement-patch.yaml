@@ -1,0 +1,29 @@
+# The nodeAffinity placement patch (strategic-merge) applied to an assigned service's
+# Deployment/StatefulSet. It pins the pod to the node the pool is physically attached to
+# (snapdragon.systems/local-path=true + the specific node), so the pod schedules where the
+# disk + the node-pinned PV are. Combined with WaitForFirstConsumer (snapdragon-local) this is
+# the PV-BINDS-TO-CORRECT-NODE guarantee.
+#
+# The metadata.name (the target workload) + the node hostname are templated per assignment by
+# the BFF render (from service_name + the pool's node). The placeholders below are replaced at
+# render time; with ZERO active assignments this patch is never applied (inert).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: PLACEHOLDER_SERVICE_NAME        # <- assignment.service_name (rendered)
+spec:
+  template:
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  # Pin to the EXACT node the pool is attached to (the disk lives there).
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values: [PLACEHOLDER_NODE_NAME]   # <- the pool's node (rendered)
+                  # Defensive: only ever a local-path-capable node.
+                  - key: snapdragon.systems/local-path
+                    operator: In
+                    values: ["true"]
