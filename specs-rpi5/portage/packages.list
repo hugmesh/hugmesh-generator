@@ -23,6 +23,12 @@ net-wireless/wpa_supplicant
 net-firewall/iptables
 net-firewall/conntrack-tools
 net-misc/socat
+# Egress VPN (split-tunnel, fail-closed) — wg-quick (WireGuard, first-class) +
+# openvpn (fallback) for the node-level snapdragon-egress-vpn OpenRC service. The
+# service is DEFAULT-OFF; the optional-services gate PRUNES these two atoms when
+# the egress-VPN service is not selected (see PR6 / gate_optional_services).
+net-vpn/wireguard-tools
+net-vpn/openvpn
 # net-dns/bind-tools — DROPPED: it is now a dummy package that RDEPENDs on the
 # full net-dns/bind-9.18 server, which does NOT cross-compile for aarch64 (fails
 # src_compile). dig/host are non-essential on a k8s worker (cluster DNS is

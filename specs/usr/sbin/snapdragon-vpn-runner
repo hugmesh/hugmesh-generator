@@ -1,0 +1,238 @@
+#!/bin/bash
+# snapdragon-vpn-runner — bring the egress VPN up/down with a SPLIT-TUNNEL,
+# FAIL-CLOSED routing policy. Driven by the snapdragon-egress-vpn OpenRC service.
+#
+# WHY a node-level runner (not a per-pod sidecar): one wg-quick interface carries
+# the node's PUBLIC egress (coturn UDP audio/video, made-public services, and —
+# only on explicit assignment — akkoma/matrix federation) while the tailnet
+# control plane + cluster-internal traffic stay DIRECT. Carrying that policy once
+# per node (vs once per pod) keeps the kill-switch + ip-rule priorities in ONE
+# place and lets the reconcile agent (PR5) flip a single interface.
+#
+# SPLIT-TUNNEL via `ip rule` PRIORITY + wg-quick `Table=off`:
+#   * wg-quick is told Table=off so it installs NO routes of its own; THIS script
+#     owns routing. The VPN table (176) has a SINGLE route: `default dev wg0`.
+#   * DIRECT rules (prio 10-40) on table `main` ALWAYS beat the VPN catch-all
+#     (prio 100, fwmark 0x76 -> table 176):
+#       - prio 10: iif tailscale0            (replies to tailnet ingress)
+#       - prio 20: from 100.64.0.0/10        (tailnet/CGNAT source)
+#       - prio 30: to 10.244.0.0/16          (pod CIDR — cluster-internal)
+#       - prio 40: to 10.96.0.0/12           (service CIDR — cluster-internal)
+#     so tailnet + cluster traffic NEVER enters the VPN regardless of fwmark.
+#   * Only packets MARKED 0x76 (by the reconcile agent / nft for the assigned
+#     public pods, PR5) match the prio-100 rule and egress via wg0.
+#   * KILL-SWITCH / FAIL-CLOSED: table 176's only route is `default dev wg0` plus
+#     a lower-metric `blackhole default` guard. If wg0 is DOWN, marked traffic has
+#     NO route (blackhole -> EPERM) instead of falling through to the WAN — a VPN
+#     outage takes the PUBLIC egress offline rather than LEAKING the node WAN IP.
+#     Tailnet/cluster traffic is unaffected (higher-prio DIRECT rules on main).
+#   * IPv6 gets the SAME table-176 `default dev wg0` + blackhole (DNS/v6 leak
+#     guard) so a v6-capable marked flow cannot bypass the v4 kill-switch.
+#
+# active.conf type-sniff: a WireGuard config ([Interface]/[Peer]) -> wg-quick;
+# an OpenVPN config -> openvpn (the OpenVPN path sets the same rules but routes
+# via the tun device openvpn creates). WireGuard is FIRST-CLASS.
+#
+# Usage: snapdragon-vpn-runner {up|down|status|check}
+set -uo pipefail
+
+VPN_ETC="${VPN_ETC:-/etc/snapdragon/vpn}"
+ACTIVE="${VPN_ETC}/active.conf"
+WG_IF="${WG_IF:-wg0}"
+OVPN_PID="${OVPN_PID:-/run/snapdragon-egress-vpn.ovpn.pid}"
+
+# Split-tunnel knobs (overridable for tests / non-default CIDRs).
+FWMARK="${FWMARK:-0x76}"                 # 0x76 == 118 (assigned public pods)
+VPN_TABLE="${VPN_TABLE:-176}"
+TAILNET_IF="${TAILNET_IF:-tailscale0}"
+TAILNET_CIDR="${TAILNET_CIDR:-100.64.0.0/10}"
+POD_CIDR="${POD_CIDR:-10.244.0.0/16}"
+SVC_CIDR="${SVC_CIDR:-10.96.0.0/12}"
+
+# ip-rule priorities (DIRECT < VPN so DIRECT always wins).
+PRIO_TAILNET_IIF=10
+PRIO_TAILNET_SRC=20
+PRIO_POD=30
+PRIO_SVC=40
+PRIO_VPN=100
+
+# IP binary indirection so the netns test harness can inject a fake `ip`.
+IP="${IP_CMD:-ip}"
+
+log()  { echo "[vpn-runner] $*"; }
+warn() { echo "[vpn-runner] WARNING: $*" >&2; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Detect the config kind of active.conf: "wg" | "ovpn" | "none".
+sniff_kind() {
+    local f="$1"
+    [ -f "${f}" ] || { echo none; return; }
+    # WireGuard configs carry an [Interface] section + a Key=; OpenVPN configs
+    # carry `remote ` / `client` / `dev tun`. Prefer WireGuard when ambiguous.
+    if grep -qiE '^\[Interface\]' "${f}" 2>/dev/null; then echo wg; return; fi
+    if grep -qiE '^[[:space:]]*(remote|client|dev[[:space:]]+tun|proto)[[:space:]]' "${f}" 2>/dev/null; then echo ovpn; return; fi
+    # A .ovpn extension target with no markers still routes to OpenVPN.
+    case "$(readlink -f "${f}" 2>/dev/null || echo "${f}")" in
+        *.ovpn) echo ovpn ;;
+        *) echo wg ;;
+    esac
+}
+
+# ── Split-tunnel rules: install the DIRECT carve-outs + the VPN catch-all + the
+# fail-closed blackhole guard. Idempotent (each rule is deleted-then-added). The
+# VPN table's ONLY forward route is `default dev <if>`; the blackhole guarantees
+# fail-closed if the device is gone. Applied for BOTH v4 and v6.
+install_split_tunnel() {
+    local dev="$1"   # the VPN egress device (wg0 / tun0)
+    local fam
+    for fam in -4 -6; do
+        # DIRECT carve-outs (table main wins by lower priority).
+        ${IP} ${fam} rule del priority ${PRIO_TAILNET_IIF} 2>/dev/null || true
+        ${IP} ${fam} rule add priority ${PRIO_TAILNET_IIF} iif "${TAILNET_IF}" lookup main 2>/dev/null || true
+        ${IP} ${fam} rule del priority ${PRIO_POD} 2>/dev/null || true
+        ${IP} ${fam} rule del priority ${PRIO_SVC} 2>/dev/null || true
+        # The VPN catch-all: only fwmark 0x76 -> table 176.
+        ${IP} ${fam} rule del priority ${PRIO_VPN} 2>/dev/null || true
+        ${IP} ${fam} rule add priority ${PRIO_VPN} fwmark "${FWMARK}" lookup "${VPN_TABLE}" 2>/dev/null || true
+    done
+    # v4-only source/dest CIDR carve-outs (the cluster CIDRs are v4).
+    ${IP} -4 rule del priority ${PRIO_TAILNET_SRC} 2>/dev/null || true
+    ${IP} -4 rule add priority ${PRIO_TAILNET_SRC} from "${TAILNET_CIDR}" lookup main 2>/dev/null || true
+    ${IP} -4 rule add priority ${PRIO_POD} to "${POD_CIDR}" lookup main 2>/dev/null || true
+    ${IP} -4 rule add priority ${PRIO_SVC} to "${SVC_CIDR}" lookup main 2>/dev/null || true
+
+    # The VPN table: a SINGLE default via the VPN device + a blackhole guard at a
+    # WORSE metric. While the device is up the `default dev <if>` wins; if the
+    # device is gone the route is withdrawn and the blackhole catches the marked
+    # packet -> EPERM (FAIL CLOSED), never the WAN default.
+    ${IP} -4 route replace default dev "${dev}" table "${VPN_TABLE}" 2>/dev/null \
+        || warn "v4: could not set default dev ${dev} table ${VPN_TABLE}"
+    ${IP} -4 route replace blackhole default metric 1000 table "${VPN_TABLE}" 2>/dev/null || true
+    ${IP} -6 route replace default dev "${dev}" table "${VPN_TABLE}" 2>/dev/null || true
+    ${IP} -6 route replace blackhole default metric 1000 table "${VPN_TABLE}" 2>/dev/null || true
+    log "split-tunnel installed (DIRECT prio ${PRIO_TAILNET_IIF}-${PRIO_SVC}; VPN fwmark ${FWMARK} -> table ${VPN_TABLE} dev ${dev}; blackhole kill-switch)"
+}
+
+# Remove the split-tunnel rules (down path). The blackhole stays as long as the
+# table exists is fine, but we tear the whole VPN table + rules down so a DOWN
+# means DIRECT only (no marked traffic should exist when the service is stopped).
+remove_split_tunnel() {
+    local fam
+    for fam in -4 -6; do
+        ${IP} ${fam} rule del priority ${PRIO_TAILNET_IIF} 2>/dev/null || true
+        ${IP} ${fam} rule del priority ${PRIO_VPN} 2>/dev/null || true
+    done
+    ${IP} -4 rule del priority ${PRIO_TAILNET_SRC} 2>/dev/null || true
+    ${IP} -4 rule del priority ${PRIO_POD} 2>/dev/null || true
+    ${IP} -4 rule del priority ${PRIO_SVC} 2>/dev/null || true
+    ${IP} -4 route flush table "${VPN_TABLE}" 2>/dev/null || true
+    ${IP} -6 route flush table "${VPN_TABLE}" 2>/dev/null || true
+    log "split-tunnel removed (DIRECT only)"
+}
+
+up_wg() {
+    local conf="$1"
+    have wg-quick || { warn "wg-quick not installed — cannot bring up WireGuard egress"; return 1; }
+    # Force Table=off so wg-quick installs NO routes; THIS script owns routing.
+    # wg-quick reads the interface name from the config filename, so we hand it a
+    # temp named ${WG_IF}.conf with an injected `Table = off` (idempotent).
+    local tmp="/run/snapdragon-egress-${WG_IF}.conf"
+    install -m 0600 /dev/null "${tmp}"
+    # Strip any Table= the operator's config carried and force Table = off.
+    grep -viE '^[[:space:]]*Table[[:space:]]*=' "${conf}" > "${tmp}"
+    # Insert Table = off into the [Interface] section.
+    sed -i '0,/^\[Interface\]/s//[Interface]\nTable = off/' "${tmp}"
+    if wg-quick up "${tmp}" 2>/dev/null; then
+        log "WireGuard ${WG_IF} up (Table=off)"
+        install_split_tunnel "${WG_IF}"
+        return 0
+    fi
+    warn "wg-quick up failed — egress VPN DOWN (public egress fails closed)"
+    return 1
+}
+
+down_wg() {
+    local tmp="/run/snapdragon-egress-${WG_IF}.conf"
+    have wg-quick && wg-quick down "${tmp}" 2>/dev/null || true
+    rm -f "${tmp}" 2>/dev/null || true
+}
+
+up_ovpn() {
+    local conf="$1"
+    have openvpn || { warn "openvpn not installed — cannot bring up OpenVPN egress"; return 1; }
+    # OpenVPN: --route-noexec so it installs NO routes (we own routing); it creates
+    # a tun device we then point table 176 at. The device name is fixed via --dev.
+    local dev="${OVPN_DEV:-tun-egress}"
+    if openvpn --config "${conf}" --route-noexec --dev "${dev}" --daemon \
+               --writepid "${OVPN_PID}" 2>/dev/null; then
+        # Give the tun device a moment to appear.
+        local i
+        for i in 1 2 3 4 5; do
+            ${IP} link show "${dev}" >/dev/null 2>&1 && break
+            sleep 1
+        done
+        log "OpenVPN ${dev} up (route-noexec)"
+        install_split_tunnel "${dev}"
+        return 0
+    fi
+    warn "openvpn up failed — egress VPN DOWN (public egress fails closed)"
+    return 1
+}
+
+down_ovpn() {
+    [ -f "${OVPN_PID}" ] && kill "$(cat "${OVPN_PID}")" 2>/dev/null || true
+    rm -f "${OVPN_PID}" 2>/dev/null || true
+}
+
+cmd_up() {
+    local kind; kind="$(sniff_kind "${ACTIVE}")"
+    case "${kind}" in
+        wg)   up_wg   "${ACTIVE}" ;;
+        ovpn) up_ovpn "${ACTIVE}" ;;
+        none) warn "no ${ACTIVE} — egress VPN not configured (service is a no-op; public egress falls back to the Squid proxy / direct)"; return 0 ;;
+        *)    warn "unknown config kind '${kind}' for ${ACTIVE}"; return 1 ;;
+    esac
+}
+
+cmd_down() {
+    remove_split_tunnel
+    down_wg
+    down_ovpn
+    return 0
+}
+
+# Status: is the VPN device up and is the kill-switch in place?
+cmd_status() {
+    if ${IP} link show "${WG_IF}" >/dev/null 2>&1; then
+        echo "egress-vpn: ${WG_IF} UP"
+    elif [ -f "${OVPN_PID}" ] && kill -0 "$(cat "${OVPN_PID}" 2>/dev/null)" 2>/dev/null; then
+        echo "egress-vpn: openvpn UP"
+    else
+        echo "egress-vpn: DOWN"
+        return 3
+    fi
+}
+
+# Leak-check: the egress public IP via the VPN MUST differ from the node WAN IP.
+# Used by the reconcile agent (PR5) after a flip. fwmark the probe so it routes
+# through table 176. Returns 0 only if egress IP != WAN IP.
+cmd_check() {
+    have curl || { warn "curl unavailable — cannot run leak-check"; return 2; }
+    local wan vpn
+    wan="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+    vpn="$(curl -fsS --max-time 5 --interface "${WG_IF}" https://api.ipify.org 2>/dev/null || true)"
+    if [ -z "${vpn}" ]; then warn "leak-check: no egress IP via ${WG_IF} (VPN down?)"; return 3; fi
+    if [ -n "${wan}" ] && [ "${vpn}" = "${wan}" ]; then
+        warn "leak-check: egress IP ${vpn} EQUALS node WAN IP — LEAK (fail)"; return 1
+    fi
+    log "leak-check OK: egress ${vpn} != WAN ${wan:-<unknown>}"
+    return 0
+}
+
+case "${1:-}" in
+    up)     cmd_up ;;
+    down)   cmd_down ;;
+    status) cmd_status ;;
+    check)  cmd_check ;;
+    *) echo "Usage: $0 {up|down|status|check}" >&2; exit 64 ;;
+esac

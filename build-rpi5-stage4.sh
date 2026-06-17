@@ -1323,6 +1323,18 @@ cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson"     "${SYSROOT}/etc/h
 cp "${SHARED_SPECS}/etc/headscale/policy.hujson.tmpl"          "${SYSROOT}/etc/headscale/policy.hujson.tmpl"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-policy-sync"         "${SYSROOT}/etc/snapdragon/registry/cron-policy-sync"
 
+# ── Egress VPN (split-tunnel, fail-closed) — node-level, DEFAULT-OFF ────────────
+# Bake the OpenRC service + the split-tunnel runner into every node image. They
+# are INERT until enabled: the service is NOT linked into a runlevel here (the
+# optional-services gate / signed reconcile enables it), and with no
+# /etc/snapdragon/vpn/active.conf the runner is a no-op. Baking unconditionally
+# does NOT alter egress on a node that never selects the VPN.
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-egress-vpn" "${SYSROOT}/etc/init.d/snapdragon-egress-vpn"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-egress-vpn"
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-vpn-runner"   "${SYSROOT}/usr/sbin/snapdragon-vpn-runner"
+chmod +x "${SYSROOT}/usr/sbin/snapdragon-vpn-runner"
+mkdir -p "${SYSROOT}/etc/snapdragon/vpn"; chmod 0700 "${SYSROOT}/etc/snapdragon/vpn"
+
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
