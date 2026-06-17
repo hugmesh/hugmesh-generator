@@ -3,7 +3,7 @@
 # the admin UI can link to the latest builds. NOTE: ISOs contain NO keys — the
 # KEYS material is supplied from the USB stick at first boot, never baked in or
 # published.
-stages: [lint, iso, images, deliver, sca, dast]
+stages: [lint, iso, images, deliver, sca, dast, load]
 
 variables:
   # Where delivered ISOs live; the admin BFF reads "latest" links from here.
@@ -288,3 +288,62 @@ dast:main-full:
     - bash tests/pentest/run-pentest.sh --env compose --scan full --pipeline main
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
+
+# =============================================================================
+# load — the OPT-IN k6 LOAD / DoS-resilience stage. DEV / CI-PIPELINE ONLY and
+# OFF BY DEFAULT: it is gated on the CI variable PENTEST_LOAD ("1"), set either by
+# triggering the manual job or by a GitLab Schedule that defines PENTEST_LOAD=1
+# (see docs/PENTEST-SCHEDULES.md). It is slow/heavy (a full ramp + hold + the
+# stress past-the-limit run), so it never runs on a plain MR or default-branch
+# push — only when PENTEST_LOAD is explicitly set.
+#
+# It reuses the SAME harness as the dast stage: run-pentest.sh stands up the
+# two-brand compose env-test-build, seeds the attacker + LOAD personas across
+# brandA/brandB (seed-personas.sh, creds from CI variables — NEVER git), then the
+# --load flag drives tests/pentest/load/main-mixed.js AS the real seeded roles
+# reading the SAME per-persona tokens.env the ZAP harness mints. The k6 scenarios:
+#   realistic-mixed  per-(role x domain) pools at prod-shaped ratios (browse-heavy
+#                    reads, login burst, occasional admin write) — ramp 0->target
+#                    2m, hold 5m; the SLO gate (p95/p99 latency + <1% 5xx).
+#   stress           ramp PAST the nginx limit_req zone rates to force 429s and
+#                    verify graceful degradation — a 429 is EXPECTED/PASS, a 5xx is
+#                    FAIL (the error budget separates the two).
+# load-report.py renders throughput / p50-p99 latency / error-rate HTML in the
+# test-standard style with the gated thresholds shown pass/fail.
+#
+# Needs Docker (compose + the public grafana/k6 image), so it lands on the same
+# privileged x86 runner as the dast stage.
+.load-base:
+  stage: load
+  tags: [snapdragon-x86, privileged]
+  variables:
+    PENTEST_REPORTS: "${CI_PROJECT_DIR}/out/pentest"
+    # k6 load intensity — overridable per-schedule (a heavier nightly, a lighter
+    # manual smoke). Defaults live in main-mixed.js.
+    PENTEST_LOAD_PROFILES: "realistic-mixed stress"
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths: [out/pentest/]
+  retry:
+    max: 1
+    when: [runner_system_failure, stuck_or_timeout_failure]
+
+load:main:
+  extends: .load-base
+  # The whole staged ramp (realistic-mixed hold + the stress past-limit run) is
+  # long; give it room. The soak profile (nightly) extends this further via
+  # PENTEST_LOAD_PROFILES + PENTEST_LOAD_SOAK_DURATION (see PENTEST-SCHEDULES.md).
+  timeout: 4h
+  script:
+    - bash tests/pentest/run-pentest.sh --env compose --pipeline main --load
+  rules:
+    # OFF BY DEFAULT. Only when PENTEST_LOAD is set:
+    #   * a SCHEDULED pipeline that defines PENTEST_LOAD=1 (the nightly load run),
+    #   * or a manual run with PENTEST_LOAD=1 (a dev kicking it from the UI/API).
+    # NEVER on a plain MR or default-branch push (no `merge_request_event` /
+    # `$CI_COMMIT_BRANCH` rule here), so it cannot slow normal CI.
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $PENTEST_LOAD == "1"'
+    - if: '$PENTEST_LOAD == "1"'
+      when: manual
+      allow_failure: true
