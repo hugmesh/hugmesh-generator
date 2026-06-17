@@ -1323,6 +1323,20 @@ cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson"     "${SYSROOT}/etc/h
 cp "${SHARED_SPECS}/etc/headscale/policy.hujson.tmpl"          "${SYSROOT}/etc/headscale/policy.hujson.tmpl"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-policy-sync"         "${SYSROOT}/etc/snapdragon/registry/cron-policy-sync"
 
+# ── Egress-VPN reconcile bridge (signed per-node export consumer) — DEFAULT-OFF ─
+# Bake the reconcile agent + its verify lib + the OpenRC service into every node
+# image. INERT until enabled (the optional-services gate enables the service + cron
+# when the egress-VPN service is selected; with no transport/assignment it is a
+# verified no-op). REUSES the baked registry-pub.ed25519 (Layer-B's key — never
+# re-bake). The cron drop-in is STAGED at /etc/snapdragon/registry (the gate places
+# it into /etc/cron.d on selection), mirroring the device-registry-sync staging.
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-vpn-reconcile" "${SYSROOT}/usr/sbin/snapdragon-vpn-reconcile"
+chmod +x "${SYSROOT}/usr/sbin/snapdragon-vpn-reconcile"
+cp "${SHARED_SPECS}/usr/lib/snapdragon/vpn-verify.sh" "${SYSROOT}/usr/lib/snapdragon/vpn-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile"
+
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
