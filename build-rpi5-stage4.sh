@@ -72,7 +72,18 @@ GAMES_DOMAIN="games.snapdragon.systems"
 # listing 'games' in --optional-services). brand.conf narrows; --optional-services
 # overrides both (built-in < brand.conf < flag). Unselected slugs are pruned by
 # gate_optional_services.
-OPTIONAL_SERVICES="akkoma tuwunel phpbb"
+OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
+# EXCLUDE_SERVICES — the SUBTRACTIVE build-time exclusion knob (brand.conf /
+# --exclude-services). Any user-level slug listed here is REMOVED from the final
+# selection AFTER all positive sources (built-in default, brand.conf
+# OPTIONAL_SERVICES, --optional-services, the games opt-in) are resolved, so it is
+# pruned from the baked tree by gate_optional_services no matter how it got
+# selected. This is the one knob that can turn OFF an on-by-default service
+# (akkoma/tuwunel/phpbb) without having to re-enumerate the whole positive list.
+# Example (brand.conf): EXCLUDE_SERVICES="phpbb tuwunel"  (forum-less + Matrix-less).
+# Equivalent to listing the slug as a "-<slug>"/"no-<slug>" negative token in
+# OPTIONAL_SERVICES; EXCLUDE_SERVICES is just the readable, dedicated list form.
+EXCLUDE_SERVICES="${EXCLUDE_SERVICES:-}"
 # Games opt-in toggle. --enable-games / ENABLE_GAMES=true folds 'games' into
 # OPTIONAL_SERVICES (post-arg-parse, idempotent), baking the games subdomain.
 ENABLE_GAMES="${ENABLE_GAMES:-false}"
@@ -379,6 +390,21 @@ OPTIONS
         subdomain. OPT-IN; OFF by default. Equivalent to adding 'games' to
         --optional-services. (env/brand.conf: ENABLE_GAMES=true)
 
+    --optional-services "<slugs>"
+        The SUBSET of user-level OPTIONAL services to bake (allow-list). Choose from
+        akkoma tuwunel phpbb games owncast tube. Unlisted slugs are pruned from the
+        baked GitOps tree by gate_optional_services. Built-in default is
+        "akkoma tuwunel phpbb" (games/owncast/tube are off by default).
+        (env/brand.conf: OPTIONAL_SERVICES)
+
+    --exclude-services "<slugs>"
+        The SUBTRACTIVE build-time exclusion list: force-OFF these user-level slugs
+        no matter how they were selected (default / brand.conf / --optional-services
+        / --enable-games). Applied LAST. Each excluded slug's Application + manifests
+        + gateway routes + route-access rows are pruned and its installed-services
+        ConfigMap + 13a ApplicationSet flag is rendered "false" (graceful degrade).
+        Example: --exclude-services "phpbb tuwunel". (env/brand.conf: EXCLUDE_SERVICES)
+
   Phases
     --skip-kernel
         Skip kernel compilation.  Useful when iterating on userspace
@@ -552,6 +578,7 @@ while [[ $# -gt 0 ]]; do
         --org)                ORG="$2";                shift 2 ;;
         --games-domain)       GAMES_DOMAIN="$2";       shift 2 ;;
         --optional-services)  OPTIONAL_SERVICES="$2";  shift 2 ;;
+        --exclude-services)   EXCLUDE_SERVICES="$2";   shift 2 ;;
         -T|--timezone)        TIMEZONE="$2";           shift 2 ;;
         -u|--user)            DEFAULT_USER="$2";       shift 2 ;;
         # DEPRECATED no-ops: images no longer bake a fallback password (random
@@ -607,6 +634,28 @@ if [ "${ENABLE_GAMES}" = "true" ]; then
         *" games "*) ;;
         *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} games" ;;
     esac
+fi
+
+# EXCLUDE_SERVICES — apply the SUBTRACTIVE build-time exclusion LAST, so a slug
+# listed here is force-OFF regardless of how it became selected (built-in default,
+# brand.conf, --optional-services, or the games opt-in). gate_optional_services
+# then prunes every excluded slug's Application/manifests/routes/rows from the
+# baked tree and _opt_render_installed_services renders it installed:"false" in
+# BOTH the ConfigMap and the 13a ApplicationSet, so the rest of the stack degrades
+# gracefully. A slug may legitimately appear in EXCLUDE_SERVICES even if it was
+# never selected (idempotent no-op). Whitespace/comma separated.
+if [ -n "${EXCLUDE_SERVICES//[[:space:],]/}" ]; then
+    _excl_x=""
+    for _x in ${EXCLUDE_SERVICES//,/ }; do
+        _kept=""
+        for _s in ${OPTIONAL_SERVICES}; do
+            [ "${_s}" = "${_x}" ] || _kept="${_kept} ${_s}"
+        done
+        OPTIONAL_SERVICES="${_kept# }"
+        _excl_x="${_excl_x} ${_x}"
+    done
+    info "OPTIONAL_SERVICES: EXCLUDE_SERVICES removed:${_excl_x} (final selection: ${OPTIONAL_SERVICES:-none})"
+    unset _excl_x _x _s _kept
 fi
 
 # Default work directory: ./out under CWD (local + gitignored)
@@ -831,7 +880,7 @@ gate_optional_services() {
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     local slug
-    for slug in akkoma tuwunel phpbb games egress-vpn workloadConsole; do
+    for slug in akkoma tuwunel phpbb games owncast tube egress-vpn workloadConsole; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -890,6 +939,33 @@ gate_optional_services() {
                     '/bff/games-services/catalog/**' '/games/servers/**'
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
                     '/admin/games-services/**'
+                ;;
+            owncast)
+                # Owncast live-streaming — GPU-gated x86 service (DEFAULT-OFF). Owns its
+                # bootstrap Application + manifests dir + its fe-gateway BFF route-access
+                # rows (no gateway HOST route + no per-service ESO today). When deselected
+                # the user/admin live-stream panels grey out (installed-services "false").
+                rm -f "${apps}/52-owncast.yaml"
+                rm -rf "${tree}/manifests/owncast"
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" snapdragon-owncast-bff-api
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                    '/bff/owncast/admin/**' '/bff/owncast/**'
+                ;;
+            tube)
+                # LocalTube (YouTube archive) — GPU-gated x86 service (DEFAULT-OFF). Owns
+                # its bootstrap Application + manifests dir + its per-service ESO file
+                # (tube-externalsecrets.yaml; standalone, not in the ESO kustomization) +
+                # its fe/be route-access rows. When deselected the tube panel greys out.
+                rm -f "${apps}/53-tube.yaml"
+                rm -rf "${tree}/manifests/tube"
+                rm -f "${tree}/manifests/external-secrets/tube-externalsecrets.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" tube-externalsecrets.yaml
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" snapdragon-tube-bff-api tube-content
+                _opt_drop_route "${apps}/20-gateway-be.yaml" tube-content
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                    '/bff/tube/**'
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/tube/content/**'
                 ;;
             egress-vpn)
                 # NODE service (not a cluster Application). Prune the per-service
@@ -1022,14 +1098,35 @@ _opt_anubis_installed() {
     if _opt_explicitly_deselected anubis; then echo "false"; return 0; fi
     if [ "${ENV}" = "prod" ]; then echo "true"; else echo "false"; fi
 }
+# Mirror a slug's install-state into its optional-services ApplicationSet element
+# (apps/13a-optional-services.yaml). This COMPLETES the cut-over: the runtime
+# `selector` keeps only installed=="true" elements, so rendering the flag from the
+# build-time selection makes the 13a generator agree with both the pruned bootstrap
+# apps/ tree AND the installed-services ConfigMap — a deselected slug is therefore
+# absent from EVERY path (bootstrap seed pruned + 13a element dropped by the
+# selector), so a repo-synced ArgoCD can never re-force a deselected service on.
+# Idempotent: rewrites only the `installed: "..."` field of the matching `slug:` element.
+_opt_render_appset_flag() {
+    local slug="$1" val="$2"
+    local appset="${SYSROOT}/var/lib/snapdragon/cluster/apps/13a-optional-services.yaml"
+    [ -f "${appset}" ] || return 0
+    # Match a list element line `- { slug: <slug>, ..., installed: "true|false" }`
+    # and rewrite ONLY its installed value (the slug token is the line anchor).
+    sed -i -E "s#(\{[[:space:]]*slug:[[:space:]]*${slug}[[:space:]]*,.*installed:[[:space:]]*\")(true|false)(\")#\\1${val}\\3#" "${appset}"
+}
 _opt_render_installed_services() {
     local cm="${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy/installed-services-configmap.yaml"
     [ -f "${cm}" ] || return 0
     local slug val
     # The base optional services follow plain presence in OPTIONAL_SERVICES.
-    for slug in akkoma tuwunel phpbb games workloadConsole; do
+    for slug in akkoma tuwunel phpbb games owncast tube workloadConsole; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
+        # Mirror the same flag into the optional-services ApplicationSet element so the
+        # runtime selector (installed=="true") agrees with the build-time selection: a
+        # deselected slug is dropped from BOTH the bootstrap apps/ tree (pruned above)
+        # AND the 13a generator list, so a repo-synced ArgoCD never re-forces it on.
+        _opt_render_appset_flag "${slug}" "${val}"
     done
     # anubis is ENV-CONDITIONAL (NOT plain presence): the PUBLIC PoW shield is ON
     # by default in PROD ("all shields up") and OFF by default in TEST, unless the
@@ -1037,6 +1134,7 @@ _opt_render_installed_services() {
     # stays default:off (safe for test); PROD flips it on here.
     val="$(_opt_anubis_installed)"
     sed -i -E "s#^([[:space:]]*)anubis:[[:space:]]*\"(true|false)\"#\\1anubis: \"${val}\"#" "${cm}"
+    _opt_render_appset_flag anubis "${val}"
     # Wire/unwire the PUBLIC ingress PoW reroute to match the install decision so
     # the shield is genuinely in-path when installed (idempotent + reversible).
     _opt_wire_anubis_ingress "${val}"
