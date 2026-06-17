@@ -1,0 +1,76 @@
+# Egress-VPN ↔ NetworkPolicy interaction (per-service opt-in, default-off).
+#
+# THE PROBLEM THIS SOLVES: homeserver-egress.yaml default-DENIES the akkoma +
+# tuwunel pods all direct egress, forcing every outbound flow through the Squid
+# egress-proxy (the domain-lock backstop). That is correct for v1 — akkoma/tuwunel
+# HTTP federation STAYS on the Squid proxy. But the egress VPN (the node-level
+# split-tunnel wg-quick service) needs SOME public pods to egress DIRECT (so the
+# node's `ip rule` fwmark 0x76 catch-all captures them and routes them through
+# wg0) — primarily coturn UDP audio/video + made-public services, and — ONLY on an
+# explicit assignment — akkoma/matrix federation.
+#
+# THE MODEL: a pod opts INTO VPN egress by carrying the label
+# `snapdragon.systems/vpn-egress=true`. The egress-VPN reconcile agent (PR5) sets
+# that label on the pods named by an ACTIVE assignment (a DOMAIN assignment marks
+# every public pod in the brand; a per-service assignment marks just akkoma /
+# tuwunel / coturn). This NetworkPolicy RE-ALLOWS direct internet egress for
+# vpn-egress-labelled pods — the node's split-tunnel then transparently tunnels
+# that "direct" egress through the VPN (the pod sees a normal default route; the
+# node's fwmark rule sends it out wg0, fail-closed via the table-176 blackhole).
+#
+# WHY THIS IS SAFE / DEFAULT-OFF:
+#   * A pod with NO vpn-egress label is UNAFFECTED — homeserver-egress.yaml still
+#     default-denies its direct egress, so akkoma/tuwunel keep federating via the
+#     Squid proxy exactly as before. This policy only adds an allow rule for the
+#     OPT-IN label; it removes nothing.
+#   * The label is set ONLY by the reconcile agent on an explicit assignment. With
+#     no assignment, no pod is labelled, so this policy is inert (a pure structural
+#     allow that matches nothing) — the "loosen akkoma/tuwunel onto the VPN only on
+#     assignment" requirement is met by the LABEL gating, not by editing the
+#     homeserver-egress lock.
+#   * The whole egress-vpn optional service is DEFAULT-OFF; when it is not selected
+#     the gate prunes this manifest from the kustomization (no label is ever set).
+#
+# ⚠ ORDERING / atomicity: k8s NetworkPolicy is ADDITIVE (union of allow rules
+# across all policies selecting a pod), so adding this allow for a vpn-egress pod
+# composes with homeserver-egress.yaml WITHOUT a window where the pod loses DNS/DB
+# — the homeserver-egress DNS + DB + proxy allows still apply; this ADDS the direct
+# internet allow. The agent labels the pod and the node marks it 0x76 in the SAME
+# reconcile pass, so the loosen + the tunnel-capture land together.
+---
+# Allow DIRECT egress (the node split-tunnel tunnels it via wg0) for any pod that
+# has explicitly opted into VPN egress. Selecting on the label keeps this inert
+# until the reconcile agent labels a pod on an assignment.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-vpn-allow-marked
+  namespace: snapdragon-backend
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/optional-service: egress-vpn
+spec:
+  podSelector:
+    matchLabels:
+      snapdragon.systems/vpn-egress: "true"
+  policyTypes: [Egress]
+  egress:
+    # DNS still needed (CoreDNS in kube-system) — keep it explicit so a
+    # vpn-egress pod that is NOT also selected by homeserver-egress still resolves.
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Direct egress to the world — captured + tunnelled by the node's split-tunnel
+    # (fwmark 0x76 -> table 176 -> wg0; fail-closed via the table-176 blackhole if
+    # wg0 is down). Cluster-internal CIDRs are EXCLUDED so cluster traffic stays
+    # direct on table main (mirrors the node ip-rule carve-outs).
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.244.0.0/16   # pod CIDR  (cluster-internal — stays direct)
+              - 10.96.0.0/12    # service CIDR (cluster-internal — stays direct)
+              - 100.64.0.0/10   # tailnet/CGNAT (control plane — stays direct)
