@@ -1,0 +1,106 @@
+# snapdragon-anubis — the Anubis proof-of-work anti-scraper gate that fronts the
+# public front door (snapdragon-fe-gateway). Anubis (github.com/TecharoHQ/anubis)
+# weighs each connection with a SHA-256 proof-of-work challenge before forwarding
+# it upstream, throttling AI scrapers / abusive bots off the public ingress.
+#
+# TOPOLOGY (matches the admin-bff `anubis` package expectations):
+#   * BIND :8923         — the PoW challenge gate. TARGET forwards verified
+#                          requests to the fe-gateway Service. This is what the
+#                          public ingress should point at (PoW-gate-in-front).
+#   * METRICS_BIND :9090 — internal-only Prometheus /metrics + /healthz listener.
+#                          The superadmin admin-bff (snapdragon-backend) reaches
+#                          THIS port via the in-cluster Service DNS to render
+#                          /bff/admin/anubis/{status,metrics}. Never published to
+#                          public ingress.
+#
+# OPTIONAL SERVICE: default-OFF, gated through specs/cluster/optional-services.yaml
+# + the optional-services ApplicationSet (apps/13a). When absent, the admin-bff's
+# AnubisClient resolves to a structured "unreachable" (no 503 cascade), and the
+# public ingress simply routes straight to the fe-gateway (no PoW gate).
+#
+# Image is PINNED (supply-chain): ghcr.io/techarohq/anubis at an explicit tag,
+# rewritten/overridable via kustomization. No :latest in the deployed spec.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snapdragon-anubis
+  namespace: snapdragon-frontend
+  labels:
+    app: snapdragon-anubis
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/optional: "true"
+    snapdragon.systems/slug: anubis
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: snapdragon-anubis } }
+  template:
+    metadata: { labels: { app: snapdragon-anubis } }
+    spec:
+      # Co-locate with the rest of the front door (frontend Pis / x86 host carry
+      # this label), same as the snapdragon.systems web host + fe-gateway.
+      nodeSelector: { snapdragon.systems/frontend: "true" }
+      # POD-level hardening (mirrors the frontend/media-poisoner exemplars):
+      # CIS K8s 5.2.6 (runAsNonRoot), 5.7.2 (seccomp RuntimeDefault). The upstream
+      # Anubis image runs fine as an unprivileged user binding high ports (8923/9090).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+        seLinuxOptions:
+          # Fresh MCS level in the frontend range (web/gateway take their own).
+          type: container_t
+          level: "s0:c41"
+      containers:
+        - name: anubis
+          image: ghcr.io/techarohq/anubis:v1.25.0
+          ports:
+            - { name: gate,    containerPort: 8923 }  # public PoW challenge gate
+            - { name: metrics, containerPort: 9090 }  # internal metrics + /healthz
+          # CONTAINER-level hardening: drop ALL caps, no privilege escalation,
+          # read-only rootfs (Anubis writes nothing persistent in this mode).
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            # The address Anubis listens on for the PoW gate (challenge pages).
+            - { name: BIND,         value: ":8923" }
+            # Internal Prometheus metrics + /healthz listener — what the admin-bff
+            # ANUBIS_MANAGEMENT_URL points at. Default :9090 (admin-bff default).
+            - { name: METRICS_BIND, value: ":9090" }
+            # Upstream that verified requests are forwarded to: the fe-gateway.
+            - { name: TARGET,       value: "http://snapdragon-fe-gateway.snapdragon-frontend.svc.cluster.local:8080" }
+            # PoW difficulty (leading-zero count). Mirrored to ANUBIS_DIFFICULTY on
+            # the admin-bff purely for display; keep the two in sync if changed.
+            - { name: DIFFICULTY,   value: "5" }
+            # Serve a default robots.txt that disallows scrapers, belt-and-braces.
+            - { name: SERVE_ROBOTS_TXT, value: "true" }
+          # /healthz is served on the metrics listener (:9090), returns "OK".
+          readinessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m,  memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anubis
+  namespace: snapdragon-frontend
+  labels:
+    app: snapdragon-anubis
+    app.kubernetes.io/part-of: snapdragon.systems
+spec:
+  selector: { app: snapdragon-anubis }
+  ports:
+    # Public PoW gate — the front-door ingress targets this port.
+    - { name: gate,    port: 8923, targetPort: gate }
+    # Internal management (metrics + /healthz) — the admin-bff reaches this via
+    # http://anubis.snapdragon-frontend.svc.cluster.local:9090 (ANUBIS_MANAGEMENT_URL).
+    - { name: metrics, port: 9090, targetPort: metrics }

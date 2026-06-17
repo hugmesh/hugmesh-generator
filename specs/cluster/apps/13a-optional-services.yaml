@@ -43,10 +43,11 @@ spec:
         # cut-over from the hardcoded apps/30-*/50-* (see header) to avoid
         # duplicate-named Applications.
         elements:
-          - { slug: akkoma,  path: specs/cluster/manifests/akkoma,        namespace: snapdragon-backend, installed: "false" }
-          - { slug: tuwunel, path: specs/cluster/manifests/tuwunel,       namespace: snapdragon-backend, installed: "false" }
-          - { slug: phpbb,   path: specs/cluster/manifests/forum,         namespace: snapdragon-forum,   installed: "false" }
-          - { slug: games,   path: specs/cluster/manifests/games,         namespace: snapdragon-games,   installed: "false" }
+          - { slug: akkoma,  path: specs/cluster/manifests/akkoma,        namespace: snapdragon-backend,  installed: "false" }
+          - { slug: tuwunel, path: specs/cluster/manifests/tuwunel,       namespace: snapdragon-backend,  installed: "false" }
+          - { slug: phpbb,   path: specs/cluster/manifests/forum,         namespace: snapdragon-forum,    installed: "false" }
+          - { slug: games,   path: specs/cluster/manifests/games,         namespace: snapdragon-games,    installed: "false" }
+          - { slug: anubis,  path: specs/cluster/manifests/anubis,        namespace: snapdragon-frontend, installed: "false" }
         # Keep ONLY installed elements — a slug flipped to "false" is dropped and
         # its Application pruned. This is the runtime add/remove lever.
       selector:

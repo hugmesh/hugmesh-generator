@@ -37,6 +37,11 @@ data:
   tuwunel: "true"
   phpbb: "true"
   games: "true"
+  # anubis — proof-of-work anti-scraper gate fronting public ingress. DEFAULT-OFF
+  # (adds a PoW interstitial to the front door, so operators opt in). When "false"
+  # the admin console greys out the Anubis status panel and the admin-bff's
+  # AnubisClient resolves to "unreachable" with no 503 cascade.
+  anubis: "false"
   # Per-slug metadata the admin console + greying-out predicate read (mountAt =
   # where the federation manifest mounts the remote; namespace = its k8s ns).
   # The games-services (app-store operator UI) capability RIDES the `games` install
@@ -50,5 +55,6 @@ data:
       { "slug": "tuwunel", "displayName": "tuwunel (Matrix)",  "namespace": "snapdragon-backend", "mountAt": "/social/matrix" },
       { "slug": "phpbb",   "displayName": "phpBB (Forum)",     "namespace": "snapdragon-forum",   "mountAt": "/social/forum" },
       { "slug": "games",   "displayName": "Snapdragon Games",  "namespace": "snapdragon-games",   "mountAt": "/games" },
-      { "slug": "games-services", "displayName": "Games App Store", "namespace": "snapdragon-games-instances", "mountAt": "/admin/games-services", "dependsOn": "games" }
+      { "slug": "games-services", "displayName": "Games App Store", "namespace": "snapdragon-games-instances", "mountAt": "/admin/games-services", "dependsOn": "games" },
+      { "slug": "anubis",  "displayName": "Anubis (anti-scraper PoW gate)", "namespace": "snapdragon-frontend", "mountAt": null }
     ]
