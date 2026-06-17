@@ -1091,6 +1091,11 @@ else
 fi
 ${SKIP_MESH} || ${SKIP_TAILSCALE} || SVCS+=(tailscaled)
 for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/default/${s}" 2>/dev/null || true; done
+# Belt-and-suspenders for shared / --resume sysroots: `ln -sf` only ADDS, so a prior
+# role's run can leave a headscale runlevel symlink behind that a worker/client image
+# would background-start. Remove it unless THIS role runs the control server. (Same
+# Pi audit finding; clients + be/fe have ROLE_HEADSCALE=false.)
+${ROLE_HEADSCALE} || rm -f "${SYSROOT}/etc/runlevels/default/headscale"
 
 # ── Radio hardening: WiFi + Bluetooth DISABLED BY DEFAULT ──────────────────
 # Shrink the attack surface — by default neither radio comes up: their kernel
