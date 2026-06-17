@@ -65,14 +65,36 @@ ORG="Snapdragon-Systems"            # GitHub org / image namespace
 # default literal composes with rebrand_sysroot (snapdragon.systems->CLUSTER_DOMAIN).
 # Drives the games host + OIDC issuer/redirects via parameterize_games_domain().
 GAMES_DOMAIN="games.snapdragon.systems"
-# OPTIONAL services selected on this image (subset of: akkoma tuwunel phpbb games).
-# Built-in default = "akkoma tuwunel phpbb". GAMES IS OPT-IN / OFF BY DEFAULT — the
-# games subdomain (games.<CLUSTER_DOMAIN>) + casdoor-games + games app-store are baked
-# only when games is explicitly selected (--enable-games / ENABLE_GAMES=true, or by
-# listing 'games' in --optional-services). brand.conf narrows; --optional-services
-# overrides both (built-in < brand.conf < flag). Unselected slugs are pruned by
-# gate_optional_services.
-OPTIONAL_SERVICES="akkoma tuwunel phpbb"
+# ── DEFAULT-INCLUSION POLICY (user 2026-06-17) ───────────────────────
+# USER_LEVEL_SERVICES is the SINGLE source-of-truth set of user-level OPTIONAL
+# slugs (matches specs/cluster/optional-services.yaml; excludes the non-user-level
+# infra slugs egress-vpn / workloadConsole / anubis). It is what OPTIONAL_SERVICES=all
+# / --all-services expands to.
+USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube"
+# OPTIONAL services selected on this image (subset of USER_LEVEL_SERVICES).
+#   DEFAULT-ON  (the built-in default when NO selection is given): akkoma tuwunel phpbb.
+#   DEFAULT-OFF (must be specifically added): games owncast tube (and any future
+#               user-level service) — pruned unless explicitly selected.
+# FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services) expands to EVERY
+# user-level slug (USER_LEVEL_SERVICES) just before EXCLUDE_SERVICES subtracts, so
+# `all` + EXCLUDE_SERVICES="games" still drops games. GAMES IS OPT-IN / OFF BY
+# DEFAULT — the games subdomain (games.<CLUSTER_DOMAIN>) + casdoor-games + games
+# app-store are baked only when games is explicitly selected (--enable-games /
+# ENABLE_GAMES=true, by listing 'games' in --optional-services, or via 'all').
+# brand.conf narrows; --optional-services overrides both (built-in < brand.conf <
+# flag). Unselected slugs are pruned by gate_optional_services.
+OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
+# EXCLUDE_SERVICES — the SUBTRACTIVE build-time exclusion knob (brand.conf /
+# --exclude-services). Any user-level slug listed here is REMOVED from the final
+# selection AFTER all positive sources (built-in default, brand.conf
+# OPTIONAL_SERVICES, --optional-services, the games opt-in) are resolved, so it is
+# pruned from the baked tree by gate_optional_services no matter how it got
+# selected. This is the one knob that can turn OFF an on-by-default service
+# (akkoma/tuwunel/phpbb) without having to re-enumerate the whole positive list.
+# Example (brand.conf): EXCLUDE_SERVICES="phpbb tuwunel"  (forum-less + Matrix-less).
+# Equivalent to listing the slug as a "-<slug>"/"no-<slug>" negative token in
+# OPTIONAL_SERVICES; EXCLUDE_SERVICES is just the readable, dedicated list form.
+EXCLUDE_SERVICES="${EXCLUDE_SERVICES:-}"
 # Games opt-in toggle. --enable-games / ENABLE_GAMES=true folds 'games' into
 # OPTIONAL_SERVICES (post-arg-parse, idempotent), baking the games subdomain.
 ENABLE_GAMES="${ENABLE_GAMES:-false}"
@@ -379,6 +401,28 @@ OPTIONS
         subdomain. OPT-IN; OFF by default. Equivalent to adding 'games' to
         --optional-services. (env/brand.conf: ENABLE_GAMES=true)
 
+    --optional-services "<slugs>"
+        The SUBSET of user-level OPTIONAL services to bake (allow-list). Choose from
+        akkoma tuwunel phpbb games owncast tube, or the literal "all" (every
+        user-level slug). Unlisted slugs are pruned from the baked GitOps tree by
+        gate_optional_services. Built-in DEFAULT (no selection given) is
+        "akkoma tuwunel phpbb"; games/owncast/tube are DEFAULT-OFF (opt-in).
+        (env/brand.conf: OPTIONAL_SERVICES; OPTIONAL_SERVICES=all = the full set)
+
+    --all-services
+        Bake EVERY user-level OPTIONAL service (akkoma tuwunel phpbb games owncast
+        tube) — the FULL-SET shortcut, equivalent to --optional-services all.
+        EXCLUDE_SERVICES still subtracts (e.g. --all-services with
+        --exclude-services "games" bakes everything but games).
+
+    --exclude-services "<slugs>"
+        The SUBTRACTIVE build-time exclusion list: force-OFF these user-level slugs
+        no matter how they were selected (default / brand.conf / --optional-services
+        / --enable-games). Applied LAST. Each excluded slug's Application + manifests
+        + gateway routes + route-access rows are pruned and its installed-services
+        ConfigMap + 13a ApplicationSet flag is rendered "false" (graceful degrade).
+        Example: --exclude-services "phpbb tuwunel". (env/brand.conf: EXCLUDE_SERVICES)
+
   Phases
     --skip-kernel
         Skip kernel compilation.  Useful when iterating on userspace
@@ -552,6 +596,8 @@ while [[ $# -gt 0 ]]; do
         --org)                ORG="$2";                shift 2 ;;
         --games-domain)       GAMES_DOMAIN="$2";       shift 2 ;;
         --optional-services)  OPTIONAL_SERVICES="$2";  shift 2 ;;
+        --all-services)       OPTIONAL_SERVICES="all"; shift   ;;
+        --exclude-services)   EXCLUDE_SERVICES="$2";   shift 2 ;;
         -T|--timezone)        TIMEZONE="$2";           shift 2 ;;
         -u|--user)            DEFAULT_USER="$2";       shift 2 ;;
         # DEPRECATED no-ops: images no longer bake a fallback password (random
@@ -598,6 +644,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services, which sets the same
+# token) expands to EVERY user-level slug. Done HERE — after arg parse, before the
+# games opt-in fold and BEFORE EXCLUDE_SERVICES subtracts — so `all` is just a
+# positive allow-list of the whole set and EXCLUDE_SERVICES still removes from it
+# (e.g. OPTIONAL_SERVICES=all + EXCLUDE_SERVICES="games owncast" => everything but
+# games/owncast). A bare `all` anywhere in the list expands the whole token to the
+# full set (operators write `all`, not `all akkoma`).
+case " ${OPTIONAL_SERVICES} " in
+    *" all "*)
+        OPTIONAL_SERVICES="${USER_LEVEL_SERVICES}"
+        info "OPTIONAL_SERVICES: 'all' sentinel expanded to every user-level slug: ${OPTIONAL_SERVICES}"
+        ;;
+esac
+
 # Games is OPT-IN (off by default): fold it into the selection when --enable-games
 # / ENABLE_GAMES=true. Idempotent — a no-op when 'games' is already listed (e.g. via
 # --optional-services). When games stays unselected, gate_optional_services() prunes
@@ -607,6 +667,28 @@ if [ "${ENABLE_GAMES}" = "true" ]; then
         *" games "*) ;;
         *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} games" ;;
     esac
+fi
+
+# EXCLUDE_SERVICES — apply the SUBTRACTIVE build-time exclusion LAST, so a slug
+# listed here is force-OFF regardless of how it became selected (built-in default,
+# brand.conf, --optional-services, or the games opt-in). gate_optional_services
+# then prunes every excluded slug's Application/manifests/routes/rows from the
+# baked tree and _opt_render_installed_services renders it installed:"false" in
+# BOTH the ConfigMap and the 13a ApplicationSet, so the rest of the stack degrades
+# gracefully. A slug may legitimately appear in EXCLUDE_SERVICES even if it was
+# never selected (idempotent no-op). Whitespace/comma separated.
+if [ -n "${EXCLUDE_SERVICES//[[:space:],]/}" ]; then
+    _excl_x=""
+    for _x in ${EXCLUDE_SERVICES//,/ }; do
+        _kept=""
+        for _s in ${OPTIONAL_SERVICES}; do
+            [ "${_s}" = "${_x}" ] || _kept="${_kept} ${_s}"
+        done
+        OPTIONAL_SERVICES="${_kept# }"
+        _excl_x="${_excl_x} ${_x}"
+    done
+    info "OPTIONAL_SERVICES: EXCLUDE_SERVICES removed:${_excl_x} (final selection: ${OPTIONAL_SERVICES:-none})"
+    unset _excl_x _x _s _kept
 fi
 
 # Default work directory: ./out under CWD (local + gitignored)
@@ -831,7 +913,7 @@ gate_optional_services() {
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     local slug
-    for slug in akkoma tuwunel phpbb games egress-vpn workloadConsole; do
+    for slug in akkoma tuwunel phpbb games owncast tube egress-vpn workloadConsole; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -890,6 +972,33 @@ gate_optional_services() {
                     '/bff/games-services/catalog/**' '/games/servers/**'
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
                     '/admin/games-services/**'
+                ;;
+            owncast)
+                # Owncast live-streaming — GPU-gated x86 service (DEFAULT-OFF). Owns its
+                # bootstrap Application + manifests dir + its fe-gateway BFF route-access
+                # rows (no gateway HOST route + no per-service ESO today). When deselected
+                # the user/admin live-stream panels grey out (installed-services "false").
+                rm -f "${apps}/52-owncast.yaml"
+                rm -rf "${tree}/manifests/owncast"
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" snapdragon-owncast-bff-api
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                    '/bff/owncast/admin/**' '/bff/owncast/**'
+                ;;
+            tube)
+                # LocalTube (YouTube archive) — GPU-gated x86 service (DEFAULT-OFF). Owns
+                # its bootstrap Application + manifests dir + its per-service ESO file
+                # (tube-externalsecrets.yaml; standalone, not in the ESO kustomization) +
+                # its fe/be route-access rows. When deselected the tube panel greys out.
+                rm -f "${apps}/53-tube.yaml"
+                rm -rf "${tree}/manifests/tube"
+                rm -f "${tree}/manifests/external-secrets/tube-externalsecrets.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" tube-externalsecrets.yaml
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" snapdragon-tube-bff-api tube-content
+                _opt_drop_route "${apps}/20-gateway-be.yaml" tube-content
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                    '/bff/tube/**'
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/tube/content/**'
                 ;;
             egress-vpn)
                 # NODE service (not a cluster Application). Prune the per-service
@@ -1022,14 +1131,35 @@ _opt_anubis_installed() {
     if _opt_explicitly_deselected anubis; then echo "false"; return 0; fi
     if [ "${ENV}" = "prod" ]; then echo "true"; else echo "false"; fi
 }
+# Mirror a slug's install-state into its optional-services ApplicationSet element
+# (apps/13a-optional-services.yaml). This COMPLETES the cut-over: the runtime
+# `selector` keeps only installed=="true" elements, so rendering the flag from the
+# build-time selection makes the 13a generator agree with both the pruned bootstrap
+# apps/ tree AND the installed-services ConfigMap — a deselected slug is therefore
+# absent from EVERY path (bootstrap seed pruned + 13a element dropped by the
+# selector), so a repo-synced ArgoCD can never re-force a deselected service on.
+# Idempotent: rewrites only the `installed: "..."` field of the matching `slug:` element.
+_opt_render_appset_flag() {
+    local slug="$1" val="$2"
+    local appset="${SYSROOT}/var/lib/snapdragon/cluster/apps/13a-optional-services.yaml"
+    [ -f "${appset}" ] || return 0
+    # Match a list element line `- { slug: <slug>, ..., installed: "true|false" }`
+    # and rewrite ONLY its installed value (the slug token is the line anchor).
+    sed -i -E "s#(\{[[:space:]]*slug:[[:space:]]*${slug}[[:space:]]*,.*installed:[[:space:]]*\")(true|false)(\")#\\1${val}\\3#" "${appset}"
+}
 _opt_render_installed_services() {
     local cm="${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy/installed-services-configmap.yaml"
     [ -f "${cm}" ] || return 0
     local slug val
     # The base optional services follow plain presence in OPTIONAL_SERVICES.
-    for slug in akkoma tuwunel phpbb games workloadConsole; do
+    for slug in akkoma tuwunel phpbb games owncast tube workloadConsole; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
+        # Mirror the same flag into the optional-services ApplicationSet element so the
+        # runtime selector (installed=="true") agrees with the build-time selection: a
+        # deselected slug is dropped from BOTH the bootstrap apps/ tree (pruned above)
+        # AND the 13a generator list, so a repo-synced ArgoCD never re-forces it on.
+        _opt_render_appset_flag "${slug}" "${val}"
     done
     # anubis is ENV-CONDITIONAL (NOT plain presence): the PUBLIC PoW shield is ON
     # by default in PROD ("all shields up") and OFF by default in TEST, unless the
@@ -1037,6 +1167,7 @@ _opt_render_installed_services() {
     # stays default:off (safe for test); PROD flips it on here.
     val="$(_opt_anubis_installed)"
     sed -i -E "s#^([[:space:]]*)anubis:[[:space:]]*\"(true|false)\"#\\1anubis: \"${val}\"#" "${cm}"
+    _opt_render_appset_flag anubis "${val}"
     # Wire/unwire the PUBLIC ingress PoW reroute to match the install decision so
     # the shield is genuinely in-path when installed (idempotent + reversible).
     _opt_wire_anubis_ingress "${val}"

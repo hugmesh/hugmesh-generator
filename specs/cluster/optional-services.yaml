@@ -8,8 +8,30 @@
 #   * ARCHITECTURE (core, always present): gateways (pki/be/fe), Casdoor/PKI, the
 #     federation API + remote-fragment + host shell, admin/user/mod BFFs + UIs.
 #   * OPTIONAL services (THIS file): akkoma (Mastodon), tuwunel (Matrix), phpbb
-#     (forum), games. Add/remove-by-command; the rest of the stack degrades
-#     gracefully (greyed-out, never 500/502) when any/all of them are omitted.
+#     (forum), games, owncast (live streaming), tube (LocalTube). Add/remove-by-
+#     command; the rest of the stack degrades gracefully (greyed-out, never
+#     500/502) when any/all of them are omitted. (Plus the non-user-level slugs
+#     egress-vpn / workloadConsole / anubis, gated the same way.)
+#
+# DEFAULT-INCLUSION POLICY (user 2026-06-17):
+#   * DEFAULT-ON  (the built-in default when NO selection is given): akkoma, tuwunel
+#     (Matrix), phpbb.
+#   * DEFAULT-OFF (must be specifically added): games, owncast, tube — and any
+#     future user-level service. games moved from default-on to DEFAULT-OFF here.
+#   * FULL-SET sentinel: OPTIONAL_SERVICES=all (and --all-services) selects EVERY
+#     user-level slug (akkoma tuwunel phpbb games owncast tube).
+# The per-slug `default: on|off` below records THIS policy (akkoma/tuwunel/phpbb on;
+# games/owncast/tube off).
+#
+# BUILD-TIME EXCLUSION (the per-service generation-time enable/disable): the
+# builder resolves a positive allow-list OPTIONAL_SERVICES (built-in default
+# "akkoma tuwunel phpbb" < brand.conf < --optional-services; OPTIONAL_SERVICES=all
+# expands to every user-level slug; + the games opt-in) and then applies the
+# SUBTRACTIVE knob EXCLUDE_SERVICES (brand.conf / --exclude-services) LAST. Any
+# user-level slug NOT in the final selection is pruned by gate_optional_services
+# (its Application + manifests + gateway routes + route-access rows + ESO half) and
+# rendered installed:"false" in BOTH the installed-services ConfigMap AND the 13a
+# ApplicationSet element, so a deselected service is absent from every path.
 #
 # This file is the ONE list that names the installed set. Today "presence of a
 # YAML in apps/ IS the decision" (app-of-apps recurse:true + prune:true), but
@@ -148,7 +170,9 @@ spec:
     - slug: games
       displayName: "Snapdragon Game Studio"
       namespace: snapdragon-games
-      default: on
+      # DEFAULT-OFF (policy 2026-06-17): games is OPT-IN — add it explicitly
+      # (--enable-games / 'games' in --optional-services / OPTIONAL_SERVICES=all).
+      default: off
       apps:
         - apps/06-casdoor-games.yaml
         - apps/50-games.yaml

@@ -16,18 +16,40 @@ BRAND_TITLE="Snapdragon Systems"    # human-readable title shown in UIs/messages
 ORG="Snapdragon-Systems"            # GitHub org / container-image namespace
 CLUSTER_DOMAIN="snapdragon.systems" # base domain (id./matrix./mastodon./api. derived)
 
-# ── Optional services (add/remove-by-command) ──────────────────────
-# The OPTIONAL (non-architecture) services: akkoma (Mastodon), tuwunel (Matrix),
-# phpbb (forum), games. Set OPTIONAL_SERVICES to the SUBSET you want baked into
-# the image; unselected slugs are pruned from the GitOps tree at build time by
-# gate_optional_services (Application YAMLs, gateway host routes, route-access
-# rows, the per-service ESO half — all enumerated by
-# specs/cluster/optional-services.yaml). The rest of the stack degrades
-# gracefully (greyed-out, never 502) when any/all are omitted. Precedence:
-# built-in default (ALL on) < this file < the --optional-services CLI flag.
-# Leave commented to keep all four. Example (forum-less + Matrix-less appliance):
-#   OPTIONAL_SERVICES="akkoma games"
+# ── Optional services (build-time excludable, add/remove-by-command) ──────────
+# The OPTIONAL (non-architecture) user-level services: akkoma (Mastodon), tuwunel
+# (Matrix), phpbb (forum), games, owncast (live streaming), tube (LocalTube).
+# Set OPTIONAL_SERVICES to the SUBSET you want baked into the image; unselected
+# slugs are pruned from the GitOps tree at build time by gate_optional_services
+# (Application YAMLs, gateway host/BFF routes, route-access rows, the per-service
+# ESO half — all enumerated by specs/cluster/optional-services.yaml) AND rendered
+# installed:"false" in the installed-services ConfigMap + the 13a ApplicationSet.
+# The rest of the stack degrades gracefully (greyed-out, never 502) when any/all
+# are omitted. Precedence: built-in default < this file < the --optional-services
+# CLI flag.
+#
+# DEFAULT-INCLUSION POLICY:
+#   * DEFAULT-ON  (the built-in default when no selection is given): akkoma, tuwunel
+#     (Matrix), phpbb.
+#   * DEFAULT-OFF (must be specifically added): games, owncast, tube (and any future
+#     user-level service). games is OPT-IN via ENABLE_GAMES / --enable-games or by
+#     listing 'games'; owncast/tube are GPU-gated x86 services.
+#   * FULL-SET: OPTIONAL_SERVICES="all" (or the --all-services CLI flag) selects
+#     EVERY user-level slug. EXCLUDE_SERVICES still subtracts (see below).
+# Leave commented to keep the DEFAULT set (akkoma tuwunel phpbb). Examples:
+#   OPTIONAL_SERVICES="akkoma tuwunel games"        # add games, drop forum
+#   OPTIONAL_SERVICES="akkoma tuwunel phpbb games"  # default set + games
+#   OPTIONAL_SERVICES="all"                         # every user-level service
 # OPTIONAL_SERVICES="akkoma tuwunel phpbb games"
+#
+# EXCLUDE_SERVICES — the SUBTRACTIVE build-time exclusion list. Applied LAST, it
+# force-OFFs any user-level slug no matter how it became selected (default / this
+# file / --optional-services / OPTIONAL_SERVICES=all / the games opt-in), so it is
+# the one-liner that turns OFF an on-by-default service without re-enumerating the
+# whole positive list. Each excluded slug is pruned + rendered installed:"false"
+# exactly like an unselected one. CLI: --exclude-services "<slugs>". Examples:
+#   EXCLUDE_SERVICES="phpbb tuwunel"      # forum-less + Matrix-less appliance
+#   OPTIONAL_SERVICES="all" EXCLUDE_SERVICES="games"   # all-but-games
 
 # Games portal domain. BY DEFAULT games is served as a SUBDOMAIN of the primary
 # domain (games.<CLUSTER_DOMAIN>, e.g. games.snapdragon.systems) until the real

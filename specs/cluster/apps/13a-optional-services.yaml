@@ -1,7 +1,8 @@
-# Optional-services ApplicationSet (Phase 6 runtime add/remove) — turns the 4
-# OPTIONAL services (akkoma/tuwunel/phpbb/games) from hardcoded apps/30-*/50-*
-# Applications into ONE list whose membership is the install-state. Modelled on
-# apps/13-service-catalog.yaml (the ApplicationSet pattern already proven here).
+# Optional-services ApplicationSet (Phase 6 runtime add/remove) — turns the
+# OPTIONAL user-level services (akkoma/tuwunel/phpbb/games/owncast/tube) from
+# hardcoded apps/30-*/50-*/52-*/53-* Applications into ONE list whose membership is
+# the install-state. Modelled on apps/13-service-catalog.yaml (the ApplicationSet
+# pattern already proven here).
 #
 # WHY: build-time `rm -f` of a baked Application only stops the bootstrap seed;
 # the live cluster's ArgoCD root app syncs apps/ from the gitops REPO and would
@@ -47,6 +48,12 @@ spec:
           - { slug: tuwunel, path: specs/cluster/manifests/tuwunel,       namespace: snapdragon-backend,  installed: "false" }
           - { slug: phpbb,   path: specs/cluster/manifests/forum,         namespace: snapdragon-forum,    installed: "false" }
           - { slug: games,   path: specs/cluster/manifests/games,         namespace: snapdragon-games,    installed: "false" }
+          # owncast / tube — GPU-gated x86 optional services (DEFAULT-OFF). Same
+          # runtime add/remove model: the installed flag here is mirrored from the
+          # installed-services ConfigMap by _opt_render_installed_services. Scaffolded
+          # "false" (DEFAULT-OFF baseline + the pre-cut-over no-collision rule).
+          - { slug: owncast, path: specs/cluster/manifests/owncast,       namespace: snapdragon-owncast,  installed: "false" }
+          - { slug: tube,    path: specs/cluster/manifests/tube,          namespace: snapdragon-tube,     installed: "false" }
           # anubis — PUBLIC PoW shield. ENV-CONDITIONAL default: the generator's
           # _opt_render_installed_services() renders the installed-services
           # ConfigMap anubis flag ON for PROD builds ("all shields up") and OFF for

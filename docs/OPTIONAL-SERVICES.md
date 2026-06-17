@@ -1,4 +1,4 @@
-# Optional Services — add/remove by command (akkoma · tuwunel · phpBB · games)
+# Optional Services — add/remove by command (akkoma · tuwunel · phpBB · games · owncast · tube)
 
 ## 1. Purpose & scope
 
@@ -9,7 +9,10 @@ The platform splits into two tiers:
   BFFs + UIs.
 - **Optional services (this doc):** **akkoma** (Mastodon-API fediverse server),
   **tuwunel** (Matrix homeserver), **phpbb** (forum), **games** (the
-  snapdragon.games portal + its own games-realm Casdoor).
+  snapdragon.games portal + its own games-realm Casdoor), **owncast** (HLS
+  live-streaming, GPU-gated x86), **tube** (LocalTube YouTube archive, GPU-gated
+  x86). (Plus the non-user-level optional slugs **egress-vpn** / **workloadConsole**
+  / **anubis**, gated by the same registry.)
 
 The optional services are **add/remove-by-command on any generated USB image**,
 **identically on Pi5 (arm64) and x86 (amd64)** — the gate operates on the
@@ -31,7 +34,7 @@ registry is that missing list). Each service entry carries:
 
 | field | meaning |
 |---|---|
-| `slug` | `akkoma` / `tuwunel` / `phpbb` / `games` |
+| `slug` | `akkoma` / `tuwunel` / `phpbb` / `games` / `owncast` / `tube` (+ `egress-vpn` / `workloadConsole` / `anubis`) |
 | `namespace` | the k8s namespace it lands in |
 | `apps` | the ArgoCD Application YAMLs it **owns** (pruned on removal) |
 | `sharedApps` | apps shared with another slug (e.g. `45-social-ui.yaml`); pruned only when **all** owners are deselected |
@@ -41,7 +44,7 @@ registry is that missing list). Each service entry carries:
 | `routeAccessRows` | the `gateway_route_access` rows it owns (dropped so a matched route to a deleted upstream cannot 502 / stale-grant) |
 | `federationModule` | the `federation_modules` registration (federation-api wave) |
 | `casdoorSeed` | a dedicated Casdoor it owns (games → `casdoor-games`) |
-| `default` | `akkoma`/`tuwunel`/`phpbb` → `on`; **`games` → `off` (opt-in)** |
+| `default` | `akkoma`/`tuwunel`/`phpbb` → `on`; **`games`/`owncast`/`tube` → `off` (opt-in; owncast/tube are GPU-gated x86)** |
 
 There is also a `gamesDomain` block (the `GAMES_DOMAIN` knob + the
 parameterized files) — see §5.
@@ -52,22 +55,62 @@ the `federation_modules` seed.
 
 ## 3. Build-time: select services on a USB
 
+### Default-inclusion policy (user 2026-06-17)
+
+| Tier | Slugs | When baked |
+|---|---|---|
+| **DEFAULT-ON** (the built-in default when no selection is given) | `akkoma`, `tuwunel` (Matrix), `phpbb` | always, unless `EXCLUDE_SERVICES` removes them |
+| **DEFAULT-OFF** (must be specifically added) | `games`, `owncast`, `tube` — and any future user-level service | only when explicitly selected |
+| **FULL-SET** | `OPTIONAL_SERVICES=all` / `--all-services` | every user-level slug |
+
+> ⚠ **`games` is DEFAULT-OFF** (it was previously default-on). Add it with
+> `--enable-games` / `ENABLE_GAMES=true`, by naming `games` in `OPTIONAL_SERVICES`,
+> or via the full set. `owncast`/`tube` are GPU-gated x86 services, also off by default.
+
 Two inputs, in precedence order **built-in default (`akkoma tuwunel phpbb`;
-games OFF) < `brand.conf` < `--optional-services` CLI flag**. **`games` is
-opt-in / off by default** — enable it with `--enable-games` (or `ENABLE_GAMES=true`),
-or by naming `games` in `--optional-services`:
+games/owncast/tube OFF) < `brand.conf` < `--optional-services` CLI flag**:
 
 - **`brand.conf`** knob (sourced by both builders):
   ```sh
   OPTIONAL_SERVICES="akkoma games"      # forum-less + Matrix-less appliance, WITH games
   ENABLE_GAMES=true                     # or keep the default list and just add games
+  OPTIONAL_SERVICES="all"               # the FULL set (every user-level slug)
   ```
 - **CLI flag** (overrides `brand.conf`):
   ```sh
-  ./build-x86-host-stage4.sh  --optional-services "akkoma games"   # explicit list incl games
-  ./build-x86-host-stage4.sh  --enable-games                       # default list + games subdomain
-  ./build-rpi5-stage4.sh      --enable-games
+  ./build-rpi5-stage4.sh      --optional-services "akkoma games"   # explicit list incl games
+  ./build-rpi5-stage4.sh      --enable-games                       # default list + games subdomain
+  ./build-rpi5-stage4.sh      --all-services                       # every user-level slug
+  ./build-rpi5-stage4.sh      --optional-services all              # same thing, explicit sentinel
   ```
+
+**FULL-SET sentinel.** `OPTIONAL_SERVICES=all` (and the equivalent `--all-services`
+CLI flag) expands to **every user-level slug** (`akkoma tuwunel phpbb games owncast
+tube`) right after arg parsing — before `EXCLUDE_SERVICES`, so the subtractive knob
+still removes from it (e.g. `--all-services --exclude-services "games"` bakes
+everything *except* games). A bare `all` anywhere in the list expands the whole token.
+
+**`EXCLUDE_SERVICES` — the SUBTRACTIVE force-OFF knob.** Applied **last**, after
+every positive source is resolved, it removes any user-level slug from the final
+selection no matter how it became selected (default / `brand.conf` /
+`--optional-services` / `all` / the games opt-in). It is the one-liner that turns OFF
+an on-by-default service without re-enumerating the whole positive list; each excluded
+slug is then pruned + rendered `installed:"false"` exactly like an unselected one.
+```sh
+# brand.conf
+EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the rest
+# or the CLI flag (whitespace/comma separated):
+./build-rpi5-stage4.sh --exclude-services "phpbb tuwunel"
+./build-rpi5-stage4.sh --all-services --exclude-services "games"   # all-but-games
+```
+> Precedence summary: `OPTIONAL_SERVICES` (default `akkoma tuwunel phpbb`) is the
+> positive allow-list (built-in < brand.conf < `--optional-services`; `all` expands
+> to the full set), then the games opt-in folds `games` in, then **`EXCLUDE_SERVICES`
+> subtracts last**.
+>
+> The `--all-services` flag + the `all` sentinel are wired in **`build-rpi5-stage4.sh`**
+> (the canonical cluster-node builder). The x86 builder (`build-x86-host-stage4.sh`,
+> a protected client-image area) gets the same wiring in a follow-up that owns that file.
 
 `gate_optional_services()` (in **both** `build-x86-host-stage4.sh` and
 `build-rpi5-stage4.sh`, authored per-script and anchored to the
@@ -75,8 +118,11 @@ or by naming `games` in `--optional-services`:
 
 - its owned `apps/*.yaml` (e.g. `30-akkoma.yaml`; phpbb also drops
   `38-forum-bff-db`/`39-forum-bff-api`/`49-forum-ui`; games also drops
-  `06-casdoor-games.yaml`);
-- its `manifests/<dir>` (games also drops `manifests/casdoor-games`);
+  `06-casdoor-games.yaml`/`13c-games-instances.yaml`; **owncast → `52-owncast.yaml`;
+  tube → `53-tube.yaml`**);
+- its `manifests/<dir>` (games also drops `manifests/casdoor-games` +
+  `manifests/games-instances`; **owncast → `manifests/owncast`; tube →
+  `manifests/tube` + its standalone `tube-externalsecrets.yaml`**);
 - its **per-service ESO file** (`akkoma-externalsecrets.yaml` /
   `tuwunel-externalsecrets.yaml`) **and** that line in the external-secrets
   `kustomization.yaml`;
@@ -188,13 +234,20 @@ Internal mTLS / `svc.cluster.local` SANs are unaffected.
 
 ## 7. Runtime add/remove on a LIVE cluster
 
-> **STATUS: build-time prune ✅ SHIPPED · live ApplicationSet cut-over 🚧 PENDING.**
-> On `main` every element in `apps/13a-optional-services.yaml` is still
-> `installed: "false"` and the hardcoded `30-akkoma` / `30-tuwunel` / `30-phpbb`
-> / `50-games` Applications still own the workloads. The cut-over (delete the
-> hardcoded apps, let the ApplicationSet own them, wire the admin-bff
-> `TasksController` / `ArgoController`) is the roadmap step that makes *live*
-> runtime add/remove real — do not assume it works yet.
+> **STATUS: build-time prune ✅ SHIPPED · build-time 13a render ✅ SHIPPED ·
+> live admin-driven flip 🚧 PENDING (cross-repo admin-bff wave).**
+> The build now renders each slug's `installed` flag into BOTH the
+> `installed-services` ConfigMap **and** the `apps/13a-optional-services.yaml`
+> element (`_opt_render_appset_flag`), so the 13a generator selector agrees with the
+> build-time selection: a deselected slug is pruned from the bootstrap `apps/` tree
+> **and** dropped from the 13a list, so a repo-synced ArgoCD can never re-force a
+> deselected service on — this is what "no hardcoded `30-*`/`50-*` app forces a
+> service on" means in practice. The hardcoded `30-*`/`50-*`/`52-*`/`53-*`
+> Applications remain the build-time *owners* of the surviving (selected) workloads;
+> migrating *runtime ownership* to the ApplicationSet so an **admin can flip a slug on
+> a live cluster** (delete the hardcoded apps, wire the admin-bff `TasksController` /
+> `ArgoController` + a `service_state` reconcile) is the remaining cross-repo step
+> (§10). The build-time *exclusion* requirement is fully satisfied today.
 
 Because ArgoCD syncs from the repo (not the baked copy), live add/remove uses the
 **runtime model**, not baked-file surgery:
