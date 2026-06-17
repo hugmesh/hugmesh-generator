@@ -196,6 +196,28 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-be-gateway',  '/games/**',             'ROLE_GAMES',     true),  -- games portal floor (games-access)
   ('snapdragon-be-gateway',  '/games/**',             'ROLE_ADMIN',     true),  -- (admins superset)
   ('snapdragon-be-gateway',  '/games/**',             'ROLE_MOD',       true),  -- (mods superset)
+  -- ── GAMES APP-STORE (games-services control plane) — admin-bff surfaces ──────────
+  -- The per-domain FOSS game-server app-store control plane (catalog + offers +
+  -- instances) lives in the admin-bff under /bff/superadmin/games-services/** (global
+  -- catalog curation, SUPERADMIN ONLY) and /bff/games-services/** (per-domain
+  -- admin/runner instance ops). The admin-bff itself ALSO enforces these via
+  -- @PreAuthorize + DomainScope; these gateway rows are the coarse defence-in-depth
+  -- (most-specific match wins, ahead of the /bff/admin/** floor). The DERIVED roles
+  -- ROLE_GAMES_SERVICES_ADMIN (= ROLE_GAMES_SERVICES ∩ (ROLE_ADMIN ∪ ROLE_MOD)) and
+  -- ROLE_GAMES_SERVICES_RUNNER (= ROLE_GAMES_SERVICES ∩ ROLE_MOD) are materialized by
+  -- games-services-{admin,runner}-sync (manifests/casdoor); keying a surface on a
+  -- single derived role yields the required AND (any single input role is default-deny).
+  -- ⚠ gate_optional_services REMOVES these rows when the games slug is deselected
+  -- (see optional-services.yaml games.routeAccessRows).
+  ('snapdragon-be-gateway',  '/bff/superadmin/games-services/**', 'ROLE_SUPERADMIN', true),  -- global catalog + per-domain offers (SUPERADMIN ONLY)
+  ('snapdragon-be-gateway',  '/bff/games-services/instances/**',  'ROLE_GAMES_SERVICES_ADMIN',  true),  -- create/run/stop instances (games-services ∩ (admin|mod))
+  ('snapdragon-be-gateway',  '/bff/games-services/instances/**',  'ROLE_GAMES_SERVICES_RUNNER', true),  -- mod-delegated run/stop (games-services ∩ mod)
+  ('snapdragon-be-gateway',  '/bff/games-services/catalog/**',    'ROLE_GAMES_SERVICES',        true),  -- read offered catalog (games-services-access floor)
+  -- HTTP game consoles, path-routed by be-gateway to per-instance Services (PR7). A
+  -- games-services member reaches a running console; admins/mods are supersets.
+  ('snapdragon-be-gateway',  '/games/servers/**',     'ROLE_GAMES_SERVICES', true),  -- per-instance HTTP console floor
+  ('snapdragon-be-gateway',  '/games/servers/**',     'ROLE_ADMIN',          true),  -- (admins superset)
+  ('snapdragon-be-gateway',  '/games/servers/**',     'ROLE_MOD',            true),  -- (mods superset)
   -- snapdragon-federation-api module-federation registry/manifest/bundles API. MORE
   -- SPECIFIC than the /api/** floor below, so it wins the most-specific match.
   -- Single ROLE_USER row = the coarse authenticated floor (lets a logged-in
@@ -258,6 +280,15 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- is default-deny. More specific than /admin/** (different prefix) and self-
   -- contained — the one allow row encodes the AND.
   ('snapdragon-fe-gateway',  '/games/admin/**',       'ROLE_GAMES_ADMIN', true),  -- games namespace admin UI (games + (admin|mod) ONLY)
+  -- GAMES APP-STORE operator UI (the admin-ui federated remote at /admin/games-services,
+  -- PR8). Keyed on the DERIVED ROLE_GAMES_SERVICES_ADMIN ONLY (= ROLE_GAMES_SERVICES ∩
+  -- (ROLE_ADMIN ∪ ROLE_MOD)), so a single role is default-deny — the one allow row
+  -- encodes the AND. The RUNNER (mod) reaches the same operator UI for run/stop; the UI
+  -- greys-out create/enable for a runner (the BFF authz is the real gate). More specific
+  -- than the /admin/** floor (longer prefix). ⚠ gate_optional_services REMOVES this row
+  -- when the games slug is deselected.
+  ('snapdragon-fe-gateway',  '/admin/games-services/**', 'ROLE_GAMES_SERVICES_ADMIN',  true),  -- games app-store operator UI (games-services ∩ (admin|mod))
+  ('snapdragon-fe-gateway',  '/admin/games-services/**', 'ROLE_GAMES_SERVICES_RUNNER', true),  -- runner reaches the operator UI for run/stop (BFF greys-out create)
   -- PUBLIC announcements read surface for the anonymous LOGIN page banner
   -- (admin-bff GET /bff/public/announcements/login -> permitAll, see the admin-bff
   -- SecurityConfig + the shared announcements API contract). The login page is

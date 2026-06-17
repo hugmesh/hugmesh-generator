@@ -1,0 +1,74 @@
+# snapdragon-games-instances DEFAULT-DENY + the narrow allow-list — the PRIMARY isolation
+# control for the per-domain game-server instances (arbitrary curated FOSS containers).
+#
+# A game-server instance pod is reachable ONLY by:
+#   * snapdragon-be-gateway   (snapdragon-backend) — HTTP console path-routing
+#                              (/games/servers/<slug>/**, ROLE_GAMES_SERVICES; PR7)
+#   * the per-instance NodePort — raw L4 game protocol from the node (kube-proxy hairpin);
+#                              NodePort traffic is not subject to pod NetworkPolicy source
+#                              filtering, so the NodePort itself is the L4 exposure (see the
+#                              residual note + the reserved-pool allocator in PR7).
+# Everything else (the rest of snapdragon-backend, snapdragon-frontend, snapdragon-games,
+# other instances, observability) is DENIED. EGRESS is also default-denied except DNS +
+# the cluster API is NOT reachable — a curated game server has no business dialing the
+# control plane.
+#
+# k8s NetworkPolicy is additive-allow; this is a FRESH namespace with NO tier-ingress
+# policy selecting it, so the default-deny below is authoritative. KEEP these the only
+# policies in the namespace.
+---
+# ── default-deny ALL ingress + egress in snapdragon-games-instances ────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: games-instances-default-deny
+  namespace: snapdragon-games-instances
+  labels: { app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  # No ingress/egress rules => deny all (the allow policies below are additive).
+---
+# ── allow DNS egress (so the game server can resolve names) ────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: games-instances-allow-dns-egress
+  namespace: snapdragon-games-instances
+  labels: { app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# ── allow be-gateway -> instance HTTP console ──────────────────────────────────────────
+# Every instance pod carries the label snapdragon.systems/games-instance: "true" (the
+# 13c ApplicationSet template stamps it). Ingress to the console port is admitted ONLY
+# from the be-gateway pod in snapdragon-backend (defence-in-depth: namespace label AND
+# pod label both required).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: games-instances-allow-be-gateway-console
+  namespace: snapdragon-games-instances
+  labels: { app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  podSelector:
+    matchLabels: { snapdragon.systems/games-instance: "true" }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: snapdragon-backend }
+          podSelector:
+            matchLabels: { app: snapdragon-be-gateway }
+      ports:
+        # HTTP console port (the per-instance Service targets the container's console_port).
+        - { protocol: TCP, port: 8080 }

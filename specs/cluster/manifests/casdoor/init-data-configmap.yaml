@@ -38,6 +38,22 @@
 # route-access row (manifests/route-access/schema.sql) is keyed on ROLE_GAMES_ADMIN
 # ONLY, so the gateway's OR-of-allow-rows table still yields the required AND.
 #
+# GAMES APP-STORE (games-services control plane) adds THREE more roles in the SAME
+# pattern (the per-domain FOSS game-server catalog + instances — distinct from the
+# games REALM above):
+#   ROLE_GAMES_SERVICES         — base app-store access (SUPERADMIN grants; a network-wide
+#                                 SIBLING with empty "roles", default-deny on its own).
+#   ROLE_GAMES_SERVICES_ADMIN   — DERIVED = ROLE_GAMES_SERVICES ∩ (ROLE_ADMIN ∪ ROLE_MOD);
+#                                 catalog-enable + create/run instances. Materialized by
+#                                 games-services-admin-sync-job.yaml (clone of
+#                                 games-admin-sync). STAYS EMPTY in this seed.
+#   ROLE_GAMES_SERVICES_RUNNER  — DERIVED = ROLE_GAMES_SERVICES ∩ ROLE_MOD; mod-delegated
+#                                 run/stop only. Materialized by
+#                                 games-services-runner-sync-job.yaml. STAYS EMPTY here.
+# Each derived role is the ONLY role on its games-services route-access rows, so the
+# gateway's OR-of-allow-rows table yields the required AND (holding any single input
+# role never reaches the games-services admin/runner surface — default-deny).
+#
 # THIS IS THE SYSTEMS CASDOOR (org "snapdragon"). The games realm is a SEPARATE,
 # INDEPENDENT Casdoor (manifests/casdoor-games, org "threewizards") that mirrors the
 # canonical snapdragon.games realm. That games Casdoor has its OWN native users and
@@ -143,6 +159,9 @@ data:
         { "owner": "snapdragon", "name": "ROLE_MASTODON_EXTERNAL_CLIENT", "displayName": "Mastodon external client", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GAMES",       "displayName": "Games Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GAMES_ADMIN", "displayName": "Games Namespace Admin", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_GAMES_SERVICES",        "displayName": "Games App-Store Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_GAMES_SERVICES_ADMIN",  "displayName": "Games App-Store Admin",  "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_GAMES_SERVICES_RUNNER", "displayName": "Games App-Store Runner", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_TUBE",    "displayName": "Tube Access",    "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_OWNCAST", "displayName": "Owncast Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },

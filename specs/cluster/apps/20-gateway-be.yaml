@@ -127,6 +127,22 @@ spec:
           - id: games
             host: games.snapdragon.systems
             uri: http://snapdragon-games.snapdragon-games.svc.cluster.local:8080
+          # --- Games app-store per-instance HTTP CONSOLES (PR7) ---
+          # /games/servers/<slug>/<name>/** path-routes to the per-instance HTTP console
+          # Services in snapdragon-games-instances. Raw L4 game protocols do NOT come here
+          # (Spring Cloud Gateway is L7-only) — they are exposed per-instance via the
+          # reserved-pool NodePort the admin-bff allocates (31000-31099); RCON/admin ports
+          # stay tailnet-only ClusterIP and are never routed. This route is keyed on
+          # ROLE_GAMES_SERVICES at the route-access DB (manifests/route-access, PR3); the
+          # console dispatcher Service resolves the <slug>/<name> path segment to the
+          # matching per-instance Service (rendered by apps/13c from the admin-bff
+          # ConfigMaps). MORE SPECIFIC than the games host route above — declared after it
+          # but on a distinct path prefix, so no collision.
+          # ⚠ OPTIONAL slug `games`: gate_optional_services REMOVES this route + its
+          # route-access rows when games is deselected (PR10).
+          - id: games-servers-console
+            uri: http://games-instances-console.snapdragon-games-instances.svc.cluster.local:8080
+            path: /games/servers/**
           # --- snapdragon-federation-api (api.snapdragon.systems) — the module-
           # federation registry/manifest/bundles API. MORE SPECIFIC than the
           # /api/** snapdragon-api catch-all below, so it MUST be declared FIRST
