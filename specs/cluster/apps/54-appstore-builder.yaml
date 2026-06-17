@@ -1,0 +1,26 @@
+# snapdragon-appstore-builder — the SUPERADMIN App-Store Kaniko build namespace + its
+# default-deny ingress NetworkPolicy (snapdragon-superadmin-appstore design, V2 builder).
+#
+# This Application syncs ONLY the build NAMESPACE + NetworkPolicy (manifests/appstore-builder
+# kustomization). The per-build Kaniko Job is a TEMPLATE the admin-bff AddService task
+# instantiates per DOCKERFILE/ZIP build — it is NOT in the kustomization, so ArgoCD never
+# applies it. The namespace + policy are inert until a build lands there (ships dark).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: appstore-builder
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/appstore-builder
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    # The kustomization creates its own namespace resource; ArgoCD must not also try.
+    syncOptions: [CreateNamespace=false]

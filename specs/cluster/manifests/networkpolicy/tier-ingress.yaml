@@ -19,12 +19,18 @@ spec:
   podSelector: {}
   policyTypes: [Ingress]
   ingress:
-    # casdoor / cassandra / route-access-db / pki-gateway consumers:
+    # casdoor / cassandra / route-access-db / pki-gateway / superadmin-gateway consumers.
+    # NOTE: the TAILNET superadmin-gateway (apps/22-gateway-superadmin.yaml) deploys
+    # into THIS (snapdragon-pki) namespace, so it inherits this default-deny-except
+    # policy: it is admitted from ingress-nginx-INTERNAL (the LAN/VPN facade) but NOT
+    # from the public ingress-nginx (which is absent from this from-set) — exactly the
+    # tailnet-only network lock the App-Store design requires (no public path, no
+    # be-gateway forward of the superadmin host).
     - from:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-pki } }       # self (pki-gateway -> casdoor/cassandra/headscale)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-pki } }       # self (pki/superadmin-gateway -> casdoor/cassandra/headscale)
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }    # be-gateway + admin-bff -> route-access-db/cassandra/casdoor; headscale-forward -> pki-gateway
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }                # ArgoCD reconcile
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx-internal } }# internal facade -> pki-gateway (LAN/VPN)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx-internal } }# internal facade -> pki/superadmin-gateway (LAN/VPN)
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

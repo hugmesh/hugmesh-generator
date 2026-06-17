@@ -93,6 +93,7 @@ data:
     #    snapdragon-* prefixed (they front the non-JVM homeservers), so the
     #    allowed_domains below covers the bare + .svc.cluster.local SANs.
     for app in snapdragon-pki-gateway snapdragon-be-gateway snapdragon-fe-gateway \
+               snapdragon-superadmin-gateway \
                snapdragon-api snapdragon-admin-bff-api \
                snapdragon-mod-bff-api snapdragon-user-bff-api \
                snapdragon-forum-bff-api \
