@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# bearer-forward.sh (TEMPLATE) -> /etc/snapdragon/desktop-governance/bearer-forward.sh
+#
+# Forwards the logged-in user's SSO bearer token to the admin-bff desktop
+# registry host, so Plasma Discover's Flatpak backend authenticates as the user
+# when it queries the registry remote. The BFF then enforces the `discover`
+# role + domain-lock + enabled-only filter per user. Without a token the BFF
+# returns an EMPTY registry (ships-dark), so an unauthenticated / unentitled
+# session simply sees an empty store — never an error.
+#
+# @@CLUSTER_DOMAIN@@ is substituted at FIRST BOOT by provision_desktop_governance().
+#
+# WHERE THE TOKEN COMES FROM: the SSO desktop-login integration deposits the
+# current user's OIDC access token at ${XDG_RUNTIME_DIR}/snapdragon/oidc-token
+# (user-private, 0600, wiped on logout). This script reads it and configures the
+# PER-USER Flatpak installation's http extra-headers to carry it as a Bearer on
+# requests to the registry host. It is invoked from the user's session start
+# (see provisioning).
+#
+# SCOPE + LIFETIME (security): the bearer is written ONLY to the calling user's
+# PER-USER flatpak config (`flatpak --user config`), NEVER to the system/shared
+# installation — so it cannot leak to other users, and it is removed when the
+# user's flatpak data is torn down. It is also NOT exported into the environment.
+# At session start we install a Plasma logout hook that CLEARS the header on
+# session end, so the token does not persist in the per-user flatpak config past
+# logout (independent of whether bearer-forward is re-invoked next login).
+# Invoke with `--clear` (the logout hook does this) to unset the header now.
+set -uo pipefail
+
+REGISTRY_HOST="api.@@CLUSTER_DOMAIN@@"
+TOKEN_FILE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/snapdragon/oidc-token"
+
+# Per-user flatpak config only — never the shared/system installation.
+clear_header() {
+    flatpak --user config --unset http.extra-headers 2>/dev/null || true
+}
+
+# Logout hook: clear the per-user bearer header when the Plasma session ends.
+# Plasma runs every executable in ~/.config/plasma-workspace/shutdown/ at logout.
+install_logout_clear() {
+    local hookdir="${XDG_CONFIG_HOME:-${HOME}/.config}/plasma-workspace/shutdown"
+    local hook="${hookdir}/zz-snapdragon-bearer-clear.sh"
+    mkdir -p "${hookdir}" 2>/dev/null || return 0
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf '# Auto-installed by snapdragon bearer-forward: clear the per-user\n'
+        printf '# registry bearer on logout so it never persists past the session.\n'
+        printf 'flatpak --user config --unset http.extra-headers 2>/dev/null || true\n'
+    } > "${hook}" 2>/dev/null || return 0
+    chmod 0700 "${hook}" 2>/dev/null || true
+}
+
+# `--clear` / `logout` mode (used by the logout hook): just unset and exit.
+case "${1:-}" in
+    --clear|logout) clear_header; exit 0 ;;
+esac
+
+# No token (not logged in via SSO, or no session yet) => clear any stale header
+# and exit clean: Discover will get an empty registry from the BFF (ships-dark).
+if [ ! -r "${TOKEN_FILE}" ]; then
+    clear_header
+    exit 0
+fi
+
+TOKEN="$(tr -d '[:space:]' < "${TOKEN_FILE}" 2>/dev/null)"
+if [ -z "${TOKEN}" ]; then
+    clear_header
+    exit 0
+fi
+
+# Ensure the header is cleared at logout even if this script never runs again.
+install_logout_clear
+
+# Attach the bearer for requests to the registry host only, in the PER-USER
+# flatpak installation. flatpak's libsoup http backend honors extra-headers; the
+# Authorization header rides every registry request Discover makes through the
+# snapdragon-discover remote. We do NOT write the token to the shared/system
+# config and do NOT export it into the environment (no leak past this process).
+flatpak --user config --set http.extra-headers \
+    "Authorization: Bearer ${TOKEN}" 2>/dev/null || true
+
+# Non-secret hint for the bearer-aware appstream refresh path (host only — the
+# token itself is never exported).
+export SNAPDRAGON_REGISTRY_HOST="${REGISTRY_HOST}"

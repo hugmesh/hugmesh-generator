@@ -67,6 +67,11 @@ KEYS/                                 (FAT32, volume label "KEYS")
 │   └── <domain>/                     OPTIONAL egress-VPN provider configs (per-domain)
 │       ├── <name>.conf               ProtonVPN WireGuard config (FIRST-CLASS, SECRET)
 │       └── <name>.ovpn               OpenVPN config (fallback, SECRET)
+├── desktop-governance/               OPTIONAL desktop app-governance config (client desktops)
+│   ├── flatpak/                      Discover -> BFF registry remote + Flathub-off list
+│   ├── polkit/                       SSO-claim sudo gate (desktop-sudo)
+│   ├── sssd/                         OIDC claim->group mapping (id.<domain> issuer)
+│   └── discover/                     bearer-forward helper
 └── secrets/
     ├── post-provision.sh             optional run[] hook
     ├── mail.json                     OPTIONAL SMTP creds (empty = mail disabled)
@@ -83,6 +88,16 @@ KEYS/                                 (FAT32, volume label "KEYS")
 > installed on this node (per-domain isolation). Stage them with
 > `gen-provision-keys.sh --vpn-src DIR [--vpn-domain D]` (copies verbatim — these
 > are **secrets**, never committed). See `keys-template/vpn/README.md`.
+
+> `desktop-governance/` is **OPTIONAL and absent by default**. It carries the
+> desktop app-governance config TEMPLATES for client desktops (laptop /
+> chromebook / desktop). `provision_desktop_governance()` uses these only if the
+> image did not bake them at `/etc/snapdragon/desktop-governance/`, then renders
+> them (substituting the node's domain) into Discover/Flatpak, polkit, and SSSD.
+> Default-deny / empty-store / ships-dark: no config ⇒ empty Discover store, no
+> user has sudo. These files are **not secrets** (they carry hosts + the
+> `desktop-sudo` claim name, never tokens). See
+> `keys-template/desktop-governance/README.md`.
 
 > `secrets/mail.json` + `secrets/cluster-creds.json` are **OPTIONAL and absent by
 > default**. They carry outbound-mail (SMTP) and OAuth-provider client creds for

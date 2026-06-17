@@ -239,6 +239,23 @@ jqe()  { jq -e "$1" "${MANIFEST}" >/dev/null 2>&1; }         # test existence
 kf()   { printf '%s/%s\n' "${BASE}" "$1"; }                  # resolve KEYS path
 
 # ── Users + root ───────────────────────────────────────────────────
+# ── Desktop-governance detection (shared signal) ────────────────────────────
+# Returns 0 (true) iff THIS image is desktop-governance-GOVERNED, i.e. it carries
+# the desktop-governance config templates either baked into the image
+# (/etc/snapdragon/desktop-governance) or supplied on the KEYS USB
+# (KEYS/desktop-governance/). This is the SAME signal provision_desktop_governance()
+# keys off to decide whether to render the SSO-claim sudo gate, so the two stay in
+# lockstep. On a governed image, sudo MUST flow ONLY through the `desktop-sudo`
+# group/polkit claim (revocable at the IdP) — so provision_users() suppresses the
+# per-user static sudoers.d grant + the standing wheel-group sudo conferral, and
+# provision_desktop_governance() installs the polkit gate. Non-governed images
+# keep their existing behavior unchanged.
+desktop_governance_governed() {
+    [ -d /etc/snapdragon/desktop-governance ] && return 0
+    [ -d "${BASE}/desktop-governance" ] && return 0
+    return 1
+}
+
 provision_users() {
     local f="${BASE}/users.json"
     [ -f "${f}" ] || f="${MANIFEST}"          # users may live in provision.json
@@ -260,6 +277,25 @@ provision_users() {
         groups="$(jq -r ".users[$i].groups // [\"wheel\",\"audio\",\"video\",\"usb\"] | join(\",\")" "${f}")"
         sudo="$(jq -r ".users[$i].sudo // false" "${f}")"
         nopw="$(jq -r ".users[$i].sudo_nopasswd // false" "${f}")"
+
+        # On a desktop-governance-GOVERNED image, sudo is the SSO `desktop-sudo`
+        # claim's job ONLY (revocable at the IdP). Strip the sudo-conferring
+        # `wheel` group from this user's supplementary groups so no KEYS user
+        # ever gets STANDING root via the base image's `%wheel ALL=(ALL) ALL`
+        # line. Non-wheel groups (audio/video/usb/...) are preserved. polkit's
+        # 49-snapdragon-desktop-sudo.rules is the sole escalation route.
+        if desktop_governance_governed; then
+            local _kept _gg; _kept=""
+            IFS=',' read -ra _gg <<< "${groups}"
+            for _g in "${_gg[@]}"; do
+                [ -z "${_g}" ] && continue
+                [ "${_g}" = "wheel" ] && continue
+                _kept="${_kept:+${_kept},}${_g}"
+            done
+            [ "${groups}" != "${_kept}" ] && \
+                log "desktop-governance: governed image — dropping sudo-conferring 'wheel' from ${name}'s groups (sudo via desktop-sudo SSO claim only)"
+            groups="${_kept}"
+        fi
         phash="$(jq -r ".users[$i].password_hash // \"\"" "${f}")"
         plain="$(jq -r ".users[$i].password // \"\"" "${f}")"
 
@@ -290,14 +326,25 @@ provision_users() {
         install_authorized_keys "${name}" "${f}" "${i}"
 
         if [ "${sudo}" = "true" ]; then
-            mkdir -p /etc/sudoers.d
-            if [ "${nopw}" = "true" ]; then
-                echo "${name} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/10-${name}"
+            if desktop_governance_governed; then
+                # GOVERNED image: do NOT write a static /etc/sudoers.d grant. A
+                # static grant would confer STANDING root independent of the OIDC
+                # claim/SSSD/polkit and could never be revoked at the IdP. On these
+                # images sudo flows SOLELY through the `desktop-sudo` group/polkit
+                # claim (provision_desktop_governance installs the gate). The
+                # KEYS `sudo:true` is honored as IdP-claim eligibility, not as a
+                # device-local sudoers entry.
+                log "desktop-governance: governed image — SUPPRESSING static /etc/sudoers.d grant for ${name} (sudo via desktop-sudo SSO claim only)"
             else
-                echo "${name} ALL=(ALL) ALL" > "/etc/sudoers.d/10-${name}"
+                mkdir -p /etc/sudoers.d
+                if [ "${nopw}" = "true" ]; then
+                    echo "${name} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/10-${name}"
+                else
+                    echo "${name} ALL=(ALL) ALL" > "/etc/sudoers.d/10-${name}"
+                fi
+                chmod 0440 "/etc/sudoers.d/10-${name}"
+                log "Granted sudo to ${name} (nopasswd=${nopw})"
             fi
-            chmod 0440 "/etc/sudoers.d/10-${name}"
-            log "Granted sudo to ${name} (nopasswd=${nopw})"
         fi
         touch "${USERS_MARKER}"
     done
@@ -1672,6 +1719,174 @@ provision_vpn() {
     log "egress-vpn: staged ${installed} config(s) for domain ${dom} (service NOT started — default-off optional service)"
 }
 
+# ── Desktop app governance (client desktops: laptop / chromebook / desktop) ──
+# Renders the baked desktop-governance config TEMPLATES into their live system
+# locations at first boot, parameterized on the node's OWN domain. Three legs,
+# all DEFAULT-DENY / ships-dark:
+#   1. Plasma Discover / Flatpak -> the admin-bff registry remote at
+#      https://api.<domain>/bff/desktop/registry/ ; Flathub + every other default
+#      backend removed; EMPTY until a domain admin curates apps (discover role).
+#   2. polkit sudo gate: NO static sudoers; sudo (admin polkit actions) ONLY for
+#      the `desktop-sudo` group, which SSSD-OIDC populates from the `desktop-sudo`
+#      OIDC claim/role for this domain (admin-bff sudo-grant drives the claim;
+#      IdP revocation drops sudo at next login/refresh).
+#   3. SSO bearer forwarded to the registry host so Discover authenticates as the
+#      logged-in user (BFF enforces discover-role + domain-lock + enabled-only).
+# No admin config => empty store, no user has sudo. This is a no-op on non-client
+# (k8s) nodes and a no-op when the templates were not baked.
+provision_desktop_governance() {
+    local tpl=/etc/snapdragon/desktop-governance
+    # Only client desktops carry the baked templates. Absent => not a governed
+    # client image (or a cluster node). When NOT baked into the image, fall back
+    # to the KEYS-USB copy at KEYS/desktop-governance/ (same delivery idiom as
+    # egress-VPN configs / certs / files[]). This keeps the whole feature
+    # functional WITHOUT editing the per-arch image builders: an admin drops the
+    # desktop-governance templates on the KEYS USB and provisioning renders them.
+    if [ ! -d "${tpl}" ]; then
+        if [ -d "${BASE}/desktop-governance" ]; then
+            tpl="${BASE}/desktop-governance"
+            log "desktop-governance: using KEYS-USB templates at ${tpl} (not baked into the image)"
+        else
+            log "desktop-governance: no templates baked (/etc/snapdragon/desktop-governance) and none on KEYS (desktop-governance/) — skipping (not a governed client desktop)"
+            return 0
+        fi
+    fi
+
+    # Resolve this node's OWN domain. Precedence: manifest .client.primary_domain,
+    # else the first line of the baked /etc/snapdragon/domains, else
+    # .snapdragon.cluster_domain. This is the domain the registry host + OIDC
+    # issuer are parameterized on.
+    local dom
+    dom="$(jqm '.client.primary_domain // ""')"
+    if [ -z "${dom}" ] || [ "${dom}" = "null" ]; then
+        [ -r /etc/snapdragon/domains ] && dom="$(grep -m1 -v '^[[:space:]]*$' /etc/snapdragon/domains 2>/dev/null | tr -d '[:space:]')"
+    fi
+    if [ -z "${dom}" ] || [ "${dom}" = "null" ]; then
+        dom="$(jqm '.snapdragon.cluster_domain // ""')"
+    fi
+    if [ -z "${dom}" ] || [ "${dom}" = "null" ]; then
+        warn "desktop-governance: no node domain (.client.primary_domain / /etc/snapdragon/domains / .snapdragon.cluster_domain) — skipping (store stays empty, no sudo granted)"
+        return 0
+    fi
+    # FAIL-CLOSED domain validation. `dom` is interpolated into a sed replacement
+    # (and into a URL/issuer); a value containing sed metacharacters (/ & \) or a
+    # newline would break or INJECT into the rendered config. A legitimate
+    # cluster domain is a hostname: lowercase letters, digits, dot, hyphen only.
+    # Anything else => render NOTHING (return 0, ships-dark) rather than emit a
+    # corrupted/injected config or grant sudo off a malformed domain. NOTE: a
+    # bash `[[ =~ ]]` match anchors the WHOLE string, so an embedded newline (a
+    # multi-line injection payload) is rejected here — unlike a `grep` pipe, which
+    # would match line-by-line and accept the first valid-looking line.
+    if [[ ! "${dom}" =~ ^[a-z0-9.-]+$ ]]; then
+        warn "desktop-governance: node domain is not a valid hostname ([a-z0-9.-]) — refusing to render (no config, no sudo granted)"
+        return 0
+    fi
+    log "desktop-governance: provisioning for domain ${dom}"
+    # Defense-in-depth: escape sed replacement metacharacters in the (already
+    # hostname-validated) domain before interpolation — mirrors the headscale
+    # server_url escaping. With the strict regex above this can only ever escape
+    # the harmless `.`/`-`, but keeps render_gov injection-proof if the validator
+    # is ever loosened.
+    local dom_esc; dom_esc="$(printf '%s' "${dom}" | sed 's/[&/\]/\\&/g')"
+
+    # Render a @@CLUSTER_DOMAIN@@ template into a destination, dropping the
+    # template's leading comment block is NOT needed (Flatpak/SSSD/ini tolerate #).
+    render_gov() {  # $1=src-tmpl  $2=dst  $3=mode
+        local src="$1" dst="$2" mode="$3"
+        [ -f "${src}" ] || { warn "desktop-governance: template missing: ${src}"; return 1; }
+        mkdir -p "$(dirname "${dst}")"
+        sed "s/@@CLUSTER_DOMAIN@@/${dom_esc}/g" "${src}" > "${dst}"
+        chmod "${mode}" "${dst}" 2>/dev/null || true
+        chown root:root "${dst}" 2>/dev/null || true
+        log "desktop-governance: rendered ${dst} (mode ${mode})"
+    }
+
+    # ── 1. Discover/Flatpak -> BFF registry remote (Flathub OFF) ──────────────
+    # Install our remote definition.
+    render_gov "${tpl}/flatpak/snapdragon-discover.flatpakrepo.tmpl" \
+               /etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo 0644
+    # Add/refresh the remote in the system flatpak install (idempotent). Safe if
+    # flatpak is not yet installed — we just skip the live add; the .flatpakrepo
+    # preset is honored when flatpak/Discover land.
+    if have flatpak; then
+        flatpak remote-add --system --if-not-exists --no-gpg-verify \
+            snapdragon-discover "/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo" 2>/dev/null \
+            && log "desktop-governance: flatpak remote 'snapdragon-discover' added (system)" \
+            || warn "desktop-governance: flatpak remote-add returned non-zero (will be honored from the preset)"
+        # Flathub + every other default backend OFF — sole source is our registry.
+        local rm_name
+        if [ -r "${tpl}/flatpak/flathub-disable.conf" ]; then
+            while IFS= read -r rm_name; do
+                case "${rm_name}" in ''|\#*) continue ;; esac
+                flatpak remote-delete --system --force "${rm_name}" 2>/dev/null \
+                    && log "desktop-governance: disabled default remote '${rm_name}'" || true
+            done < "${tpl}/flatpak/flathub-disable.conf"
+        fi
+    else
+        log "desktop-governance: flatpak not installed — remote preset staged; Flathub-off enforced when flatpak lands"
+    fi
+    # Also remove any baked/preset Flathub .flatpakrepo files so a fresh flatpak
+    # never auto-adds them (covers the preset-file delivery path).
+    local rm_name
+    if [ -r "${tpl}/flatpak/flathub-disable.conf" ]; then
+        while IFS= read -r rm_name; do
+            case "${rm_name}" in ''|\#*) continue ;; esac
+            rm -f "/etc/flatpak/remotes.d/${rm_name}.flatpakrepo" 2>/dev/null || true
+        done < "${tpl}/flatpak/flathub-disable.conf"
+    fi
+
+    # ── 2. polkit SSO-claim sudo gate (no static sudoers) ─────────────────────
+    render_gov "${tpl}/polkit/49-snapdragon-desktop-sudo.rules" \
+               /etc/polkit-1/rules.d/49-snapdragon-desktop-sudo.rules 0644
+    # Defense-in-depth: ensure NO static sudo is granted. We do not write a
+    # sudoers entry; we also strip a stock `%wheel ALL=(ALL) ALL` if a base image
+    # shipped one, so the polkit/SSO path is the only escalation route.
+    if [ -f /etc/sudoers ]; then
+        sed -i 's/^\(%wheel[[:space:]].*\)$/# \1  # snapdragon: sudo is SSO-claim gated via polkit (desktop-sudo)/' \
+            /etc/sudoers 2>/dev/null || true
+    fi
+    # Belt-and-suspenders: provision_users() already suppresses the per-user
+    # static grant on governed images, but strip any pre-existing standing
+    # /etc/sudoers.d grant (e.g. left by a base image, a prior un-governed
+    # provision run, or hand edits) so the SSO `desktop-sudo` claim is provably
+    # the SOLE sudo path. We remove our own 10-<name> grants and disable any
+    # other file that hands a non-system account blanket sudo, but leave
+    # package-owned drop-ins (e.g. NOPASSWD for service automation) alone unless
+    # they grant `ALL=(ALL)`-class root to a login user.
+    if [ -d /etc/sudoers.d ]; then
+        local sdf base
+        for sdf in /etc/sudoers.d/*; do
+            [ -f "${sdf}" ] || continue
+            base="$(basename "${sdf}")"
+            case "${base}" in
+                10-*)
+                    rm -f "${sdf}" 2>/dev/null \
+                        && log "desktop-governance: stripped standing sudoers.d grant ${sdf} (sudo via desktop-sudo SSO claim only)" || true
+                    ;;
+                README|*.rpmsave|*.rpmnew) : ;;
+                *)
+                    # Any drop-in that confers `ALL=(ALL[:ALL]) ... ALL` to a
+                    # named (non-%group) login user is a standing root grant —
+                    # neutralize it (comment out the offending lines).
+                    if grep -Eq '^[^#%[:space:]][^[:space:]]*[[:space:]]+ALL=\(ALL(:ALL)?\)' "${sdf}" 2>/dev/null; then
+                        sed -i -E 's/^([^#%[:space:]][^[:space:]]*[[:space:]]+ALL=\(ALL(:ALL)?\).*)$/# \1  # snapdragon: sudo is SSO-claim gated (desktop-sudo)/' \
+                            "${sdf}" 2>/dev/null \
+                            && log "desktop-governance: neutralized standing sudoers.d grant in ${sdf}" || true
+                    fi
+                    ;;
+            esac
+        done
+    fi
+
+    # ── 3. SSSD-OIDC claim->group mapping + bearer forwarder ──────────────────
+    render_gov "${tpl}/sssd/snapdragon-oidc.conf.tmpl" \
+               /etc/sssd/conf.d/snapdragon-oidc.conf 0600
+    render_gov "${tpl}/discover/bearer-forward.sh.tmpl" \
+               "${tpl}/bearer-forward.sh" 0755
+
+    log "desktop-governance: done (domain ${dom}; store empty until admin curates; sudo only for the desktop-sudo SSO claim)"
+}
+
 # ── Backups (etcd + PostgreSQL) to attached storage and/or network share ──
 provision_backup() {
     jqe '.backup' || return 0
@@ -2161,6 +2376,7 @@ main() {
     provision_truststore
     provision_storage
     provision_vpn        # egress-VPN provider configs (own-domain-only, 0600; service default-off)
+    provision_desktop_governance   # client desktops: Discover->BFF registry remote, SSO-claim sudo gate (default-deny, empty store)
     provision_headscale
     provision_tailscale
     provision_device_registry   # Layer-B sshd enforcement (ADMIN nodes) — after mesh join, before k8s

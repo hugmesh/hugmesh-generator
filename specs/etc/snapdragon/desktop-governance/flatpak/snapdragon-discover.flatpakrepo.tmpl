@@ -1,0 +1,22 @@
+# snapdragon-discover.flatpakrepo (TEMPLATE)
+#
+# The ONLY Flatpak remote on a governed client desktop. It points Plasma
+# Discover's Flatpak backend at the admin-bff desktop-app registry for this
+# domain. Flathub and all other default remotes are disabled (see
+# flathub-disable.conf) so this is the sole software source.
+#
+# @@CLUSTER_DOMAIN@@ is substituted at FIRST BOOT by
+# provision_desktop_governance() with the node's own domain (read from
+# /etc/snapdragon/domains). Do NOT hardcode a domain here.
+#
+# EMPTY BY DEFAULT: until a domain admin curates apps into the BFF registry
+# (gated by the `discover` role), this remote enumerates zero apps — the store
+# is empty, which is the correct ships-dark state, not an error.
+[Flatpak Repo]
+Title=@@CLUSTER_DOMAIN@@ App Store
+Url=https://api.@@CLUSTER_DOMAIN@@/bff/desktop/registry/
+Homepage=https://api.@@CLUSTER_DOMAIN@@/
+Comment=Domain-curated applications for @@CLUSTER_DOMAIN@@ (admin-bff registry).
+Description=Applications approved and published by your domain administrators. Managed via the snapdragon admin-bff desktop registry; gated by the `discover` role and locked to this domain.
+# No GPGKey line: app signatures are validated per-app by the BFF registry's
+# OCI/Flatpak metadata, not by a static remote-level key baked into the image.
