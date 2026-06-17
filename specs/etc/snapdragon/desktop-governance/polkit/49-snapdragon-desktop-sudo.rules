@@ -1,0 +1,51 @@
+// 49-snapdragon-desktop-sudo.rules
+//
+// SSO-CLAIM SUDO GATE for governed client desktops (laptop / chromebook /
+// desktop). DEFAULT = NO privilege escalation for ANY user. There is NO static
+// sudoers entry anywhere on the image; this polkit rule is the SOLE gate.
+//
+// A user is granted the privileged polkit actions (pkexec / "run as admin",
+// which is how a governed desktop performs sudo-equivalent operations) ONLY
+// when their active local session belongs to the `desktop-sudo` UNIX group.
+// That group is NOT populated statically: SSSD-OIDC adds the logged-in user to
+// `desktop-sudo` IFF the user's OIDC token for THIS domain carries the
+// `desktop-sudo` claim/role (see ../sssd/snapdragon-oidc.conf.tmpl). The
+// admin-bff sudo-grant drives that claim at the IdP.
+//
+// REVOCATION: revoke the claim at the IdP and, at the user's next login / token
+// refresh, SSSD no longer maps them into `desktop-sudo`, so this rule denies
+// them again. Nothing on the device is edited to revoke.
+//
+// This file installs to /etc/polkit-1/rules.d/ verbatim (no domain
+// substitution needed — the domain binding is enforced by the OIDC issuer +
+// claim, handled in SSSD).
+
+polkit.addAdminRule(function(action, subject) {
+    // Replace the default admin identities (wheel/sudo) with a single source of
+    // truth: the SSO-driven `desktop-sudo` group. A user in this group may
+    // authenticate as the administrator for any action that requires admin auth.
+    if (subject.isInGroup("desktop-sudo")) {
+        return ["unix-group:desktop-sudo"];
+    }
+    // No SSO sudo claim => no admin identity => the user CANNOT authenticate
+    // through any auth_admin* check. Default-deny.
+    return [];
+});
+
+polkit.addRule(function(action, subject) {
+    // Belt-and-suspenders for the explicit pkexec/escalation actions: hard YES
+    // only for `desktop-sudo`, otherwise fall through (NOT_HANDLED) to the
+    // default-deny posture above. We do NOT blanket-allow on group membership;
+    // we require the action to still pass its own authentication, but only
+    // members of `desktop-sudo` can ever be the admin identity for it.
+    if (action.id == "org.freedesktop.policykit.exec" ||
+        action.id.indexOf("org.freedesktop.policykit.") == 0) {
+        if (subject.isInGroup("desktop-sudo")) {
+            // Require the user to authenticate (their own password) before
+            // escalating — SSO grants the *eligibility*, not passwordless sudo.
+            return polkit.Result.AUTH_SELF_KEEP;
+        }
+        return polkit.Result.NO;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

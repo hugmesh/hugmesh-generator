@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# bearer-forward.sh (TEMPLATE) -> /etc/snapdragon/desktop-governance/bearer-forward.sh
+#
+# Forwards the logged-in user's SSO bearer token to the admin-bff desktop
+# registry host, so Plasma Discover's Flatpak backend authenticates as the user
+# when it queries the registry remote. The BFF then enforces the `discover`
+# role + domain-lock + enabled-only filter per user. Without a token the BFF
+# returns an EMPTY registry (ships-dark), so an unauthenticated / unentitled
+# session simply sees an empty store — never an error.
+#
+# @@CLUSTER_DOMAIN@@ is substituted at FIRST BOOT by provision_desktop_governance().
+#
+# WHERE THE TOKEN COMES FROM: the SSO desktop-login integration deposits the
+# current user's OIDC access token at ${XDG_RUNTIME_DIR}/snapdragon/oidc-token
+# (user-private, 0600, wiped on logout). This script reads it and configures the
+# Flatpak system http extra-headers to carry it as a Bearer on requests to the
+# registry host. It is invoked from the user's session start (see provisioning).
+set -uo pipefail
+
+REGISTRY_HOST="api.@@CLUSTER_DOMAIN@@"
+TOKEN_FILE="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/snapdragon/oidc-token"
+
+# No token (not logged in via SSO, or no session yet) => clear any stale header
+# and exit clean: Discover will get an empty registry from the BFF (ships-dark).
+if [ ! -r "${TOKEN_FILE}" ]; then
+    flatpak config --unset http.extra-headers 2>/dev/null || true
+    exit 0
+fi
+
+TOKEN="$(tr -d '[:space:]' < "${TOKEN_FILE}" 2>/dev/null)"
+if [ -z "${TOKEN}" ]; then
+    flatpak config --unset http.extra-headers 2>/dev/null || true
+    exit 0
+fi
+
+# Attach the bearer for requests to the registry host only. flatpak's libsoup
+# http backend honors extra-headers; the Authorization header rides every
+# registry request Discover makes through the snapdragon-discover remote.
+flatpak config --set http.extra-headers \
+    "Authorization: Bearer ${TOKEN}" 2>/dev/null || true
+
+# Belt-and-suspenders: also export for any helper that reads the environment
+# (the bearer-aware appstream refresh path).
+export SNAPDRAGON_REGISTRY_HOST="${REGISTRY_HOST}"
+export SNAPDRAGON_REGISTRY_BEARER="${TOKEN}"

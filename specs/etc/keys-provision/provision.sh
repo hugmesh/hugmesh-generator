@@ -1672,6 +1672,114 @@ provision_vpn() {
     log "egress-vpn: staged ${installed} config(s) for domain ${dom} (service NOT started — default-off optional service)"
 }
 
+# ── Desktop app governance (client desktops: laptop / chromebook / desktop) ──
+# Renders the baked desktop-governance config TEMPLATES into their live system
+# locations at first boot, parameterized on the node's OWN domain. Three legs,
+# all DEFAULT-DENY / ships-dark:
+#   1. Plasma Discover / Flatpak -> the admin-bff registry remote at
+#      https://api.<domain>/bff/desktop/registry/ ; Flathub + every other default
+#      backend removed; EMPTY until a domain admin curates apps (discover role).
+#   2. polkit sudo gate: NO static sudoers; sudo (admin polkit actions) ONLY for
+#      the `desktop-sudo` group, which SSSD-OIDC populates from the `desktop-sudo`
+#      OIDC claim/role for this domain (admin-bff sudo-grant drives the claim;
+#      IdP revocation drops sudo at next login/refresh).
+#   3. SSO bearer forwarded to the registry host so Discover authenticates as the
+#      logged-in user (BFF enforces discover-role + domain-lock + enabled-only).
+# No admin config => empty store, no user has sudo. This is a no-op on non-client
+# (k8s) nodes and a no-op when the templates were not baked.
+provision_desktop_governance() {
+    local tpl=/etc/snapdragon/desktop-governance
+    # Only client desktops carry the baked templates. Absent => not a governed
+    # client image (or a cluster node) => nothing to do (ships-dark, not error).
+    if [ ! -d "${tpl}" ]; then
+        log "desktop-governance: no ${tpl} templates baked — skipping (not a governed client desktop)"
+        return 0
+    fi
+
+    # Resolve this node's OWN domain. Precedence: manifest .client.primary_domain,
+    # else the first line of the baked /etc/snapdragon/domains, else
+    # .snapdragon.cluster_domain. This is the domain the registry host + OIDC
+    # issuer are parameterized on.
+    local dom
+    dom="$(jqm '.client.primary_domain // ""')"
+    if [ -z "${dom}" ] || [ "${dom}" = "null" ]; then
+        [ -r /etc/snapdragon/domains ] && dom="$(grep -m1 -v '^[[:space:]]*$' /etc/snapdragon/domains 2>/dev/null | tr -d '[:space:]')"
+    fi
+    if [ -z "${dom}" ] || [ "${dom}" = "null" ]; then
+        dom="$(jqm '.snapdragon.cluster_domain // ""')"
+    fi
+    if [ -z "${dom}" ] || [ "${dom}" = "null" ]; then
+        warn "desktop-governance: no node domain (.client.primary_domain / /etc/snapdragon/domains / .snapdragon.cluster_domain) — skipping (store stays empty, no sudo granted)"
+        return 0
+    fi
+    log "desktop-governance: provisioning for domain ${dom}"
+
+    # Render a @@CLUSTER_DOMAIN@@ template into a destination, dropping the
+    # template's leading comment block is NOT needed (Flatpak/SSSD/ini tolerate #).
+    render_gov() {  # $1=src-tmpl  $2=dst  $3=mode
+        local src="$1" dst="$2" mode="$3"
+        [ -f "${src}" ] || { warn "desktop-governance: template missing: ${src}"; return 1; }
+        mkdir -p "$(dirname "${dst}")"
+        sed "s/@@CLUSTER_DOMAIN@@/${dom}/g" "${src}" > "${dst}"
+        chmod "${mode}" "${dst}" 2>/dev/null || true
+        chown root:root "${dst}" 2>/dev/null || true
+        log "desktop-governance: rendered ${dst} (mode ${mode})"
+    }
+
+    # ── 1. Discover/Flatpak -> BFF registry remote (Flathub OFF) ──────────────
+    # Install our remote definition.
+    render_gov "${tpl}/flatpak/snapdragon-discover.flatpakrepo.tmpl" \
+               /etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo 0644
+    # Add/refresh the remote in the system flatpak install (idempotent). Safe if
+    # flatpak is not yet installed — we just skip the live add; the .flatpakrepo
+    # preset is honored when flatpak/Discover land.
+    if have flatpak; then
+        flatpak remote-add --system --if-not-exists --no-gpg-verify \
+            snapdragon-discover "/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo" 2>/dev/null \
+            && log "desktop-governance: flatpak remote 'snapdragon-discover' added (system)" \
+            || warn "desktop-governance: flatpak remote-add returned non-zero (will be honored from the preset)"
+        # Flathub + every other default backend OFF — sole source is our registry.
+        local rm_name
+        if [ -r "${tpl}/flatpak/flathub-disable.conf" ]; then
+            while IFS= read -r rm_name; do
+                case "${rm_name}" in ''|\#*) continue ;; esac
+                flatpak remote-delete --system --force "${rm_name}" 2>/dev/null \
+                    && log "desktop-governance: disabled default remote '${rm_name}'" || true
+            done < "${tpl}/flatpak/flathub-disable.conf"
+        fi
+    else
+        log "desktop-governance: flatpak not installed — remote preset staged; Flathub-off enforced when flatpak lands"
+    fi
+    # Also remove any baked/preset Flathub .flatpakrepo files so a fresh flatpak
+    # never auto-adds them (covers the preset-file delivery path).
+    local rm_name
+    if [ -r "${tpl}/flatpak/flathub-disable.conf" ]; then
+        while IFS= read -r rm_name; do
+            case "${rm_name}" in ''|\#*) continue ;; esac
+            rm -f "/etc/flatpak/remotes.d/${rm_name}.flatpakrepo" 2>/dev/null || true
+        done < "${tpl}/flatpak/flathub-disable.conf"
+    fi
+
+    # ── 2. polkit SSO-claim sudo gate (no static sudoers) ─────────────────────
+    render_gov "${tpl}/polkit/49-snapdragon-desktop-sudo.rules" \
+               /etc/polkit-1/rules.d/49-snapdragon-desktop-sudo.rules 0644
+    # Defense-in-depth: ensure NO static sudo is granted. We do not write a
+    # sudoers entry; we also strip a stock `%wheel ALL=(ALL) ALL` if a base image
+    # shipped one, so the polkit/SSO path is the only escalation route.
+    if [ -f /etc/sudoers ]; then
+        sed -i 's/^\(%wheel[[:space:]].*\)$/# \1  # snapdragon: sudo is SSO-claim gated via polkit (desktop-sudo)/' \
+            /etc/sudoers 2>/dev/null || true
+    fi
+
+    # ── 3. SSSD-OIDC claim->group mapping + bearer forwarder ──────────────────
+    render_gov "${tpl}/sssd/snapdragon-oidc.conf.tmpl" \
+               /etc/sssd/conf.d/snapdragon-oidc.conf 0600
+    render_gov "${tpl}/discover/bearer-forward.sh.tmpl" \
+               "${tpl}/bearer-forward.sh" 0755
+
+    log "desktop-governance: done (domain ${dom}; store empty until admin curates; sudo only for the desktop-sudo SSO claim)"
+}
+
 # ── Backups (etcd + PostgreSQL) to attached storage and/or network share ──
 provision_backup() {
     jqe '.backup' || return 0
@@ -2161,6 +2269,7 @@ main() {
     provision_truststore
     provision_storage
     provision_vpn        # egress-VPN provider configs (own-domain-only, 0600; service default-off)
+    provision_desktop_governance   # client desktops: Discover->BFF registry remote, SSO-claim sudo gate (default-deny, empty store)
     provision_headscale
     provision_tailscale
     provision_device_registry   # Layer-B sshd enforcement (ADMIN nodes) — after mesh join, before k8s
