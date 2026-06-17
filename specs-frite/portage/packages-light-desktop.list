@@ -11,6 +11,9 @@
 
 # ── Display server (X11; lean) ─────────────────────────────────────
 x11-base/xorg-server
+# Materializes the X drivers from INPUT_DEVICES=libinput + VIDEO_CARDS=lima; without
+# it Xorg has no input/video driver and the greeter is unusable.
+x11-base/xorg-drivers
 x11-apps/xrandr
 x11-apps/xset
 x11-apps/setxkbmap

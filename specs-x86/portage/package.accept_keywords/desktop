@@ -1,0 +1,13 @@
+# CLIENT desktop (laptop/chromebook/desktop) ONLY — copied into the sysroot by
+# build-x86-host-stage4.sh solely for ROLE_CLIENT, so the k8s NODE images stay
+# stable-keyworded. The LXDE-lite session stack (+ its libfm/common/icon-theme deps,
+# pulled in transitively via lightdm-gtk-greeter[gnome]→accountsservice→polkit[gtk])
+# is ~amd64-only upstream. Determined by replaying `emerge --pretend --autounmask`
+# against the build sysroot — these are the complete keyword unmasks the desktop set
+# needs (the build's own single-pass pretend missed libfm/lxde-common/lxde-icon-theme).
+lxde-base/lxpanel ~amd64
+lxde-base/lxsession ~amd64
+lxde-base/lxde-common ~amd64
+lxde-base/lxde-icon-theme ~amd64
+x11-libs/libfm ~amd64
+x11-misc/pcmanfm ~amd64

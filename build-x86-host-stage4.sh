@@ -94,6 +94,7 @@ ENABLE_BLUETOOTH="${ENABLE_BLUETOOTH:-false}"
 # ── Artifact selection (mirrors rpi5): .img is now the DEFAULT deliverable ──
 BUILD_IMG=true          # produce the flashable raw .img (DEFAULT)
 ROOT_MiB=8192           # ext4 root partition size in the .img (growroot expands it on first boot)
+IMG_SIZE_SET=false      # true once --img-size is given, so the client auto-bump below defers to it
 GROW_POLICY="fill"      # first-boot grow policy baked into /etc/growfs.conf: fill|none|<size>
 COMPRESS_IMG=false      # xz -9 the finished .img
 LIVE_ISO=true           # self-booting live squashfs ISO (DEFAULT; --no-live-iso to skip)
@@ -227,7 +228,7 @@ while [[ $# -gt 0 ]]; do
         # ── Artifact selection ──
         --img) BUILD_IMG=true; shift ;;
         --no-img) BUILD_IMG=false; shift ;;
-        --img-size) ROOT_MiB="$2"; shift 2 ;;
+        --img-size) ROOT_MiB="$2"; IMG_SIZE_SET=true; shift 2 ;;
         --grow)     GROW_POLICY="$2"; shift 2 ;;
         --no-grow)  GROW_POLICY="none"; shift ;;
         --compress) COMPRESS_IMG=true; shift ;;
@@ -310,6 +311,17 @@ if ${ROLE_CLIENT}; then
     esac
     case "${DESKTOP}" in thin|full) : ;; *) err "--desktop must be thin | full (got '${DESKTOP}')"; exit 1 ;; esac
     [ -z "${DOMAINS}" ] && warn "client role '${ROLE}' built with no --domains; the device will be domain-tied at provision time from the KEYS USB."
+    # Desktop payloads (linux-firmware ~1.5G + Xorg/mesa/GTK/LXDE) overflow the 8 GiB
+    # node-sized compact root → "No space left on device" mid-.img. Size the compact
+    # root for the client payload (growroot still expands to the disk on first boot).
+    # An explicit --img-size always wins.
+    if ! ${IMG_SIZE_SET}; then
+        # Measured thin payload ≈13.6 GiB after the binpkgs cleanup below (linux-firmware
+        # ~1.9G + Xorg/mesa/GTK/LXDE); full adds firefox/xfce/vlc/pipewire/cups. Size with
+        # headroom (ext4 overhead ~5%). growroot still expands to the disk on first boot.
+        [ "${DESKTOP}" = "full" ] && ROOT_MiB=24576 || ROOT_MiB=16384
+        info "Client desktop: compact root sized to ${ROOT_MiB} MiB for the ${DESKTOP} payload (override with --img-size)"
+    fi
 elif [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; then
     warn "--person-role/--domains are ignored for non-client role '${ROLE}'."
 fi
@@ -386,8 +398,10 @@ fi
 if ${ROLE_CLIENT}; then
     CLIENT_USE="X gtk dbus elogind udev"
     [ "${DESKTOP}" = "full" ] && CLIENT_USE="${CLIENT_USE} pulseaudio pipewire"
+    INPUT_DEVICES="libinput"   # Xorg keyboard/mouse/touchpad (via x11-base/xorg-drivers)
 else
     CLIENT_USE=""
+    INPUT_DEVICES=""           # headless nodes run no X server
 fi
 
 # Reconcile the legacy SKIP_ISO switch with the new opt-in ISO design: an ISO
@@ -404,7 +418,7 @@ render_template() {
         -e "s|@@DOMAIN@@|${CLUSTER_DOMAIN}|g" -e "s|@@ORG@@|${ORG}|g" \
         -e "s|@@ENV@@|${ENV}|g" \
         -e "s|@@GPU_USE@@|${GPU_USE}|g" -e "s|@@VIDEO_CARDS@@|${VIDEO_CARDS}|g" \
-        -e "s|@@CLIENT_USE@@|${CLIENT_USE}|g" \
+        -e "s|@@CLIENT_USE@@|${CLIENT_USE}|g" -e "s|@@INPUT_DEVICES@@|${INPUT_DEVICES}|g" \
         "$1" > "$2"
 }
 
@@ -831,11 +845,11 @@ banner "Verifying prerequisites"
 [ -d "${SPECS_DIR}" ]   || { err "Missing ${SPECS_DIR}"; exit 1; }
 [ -d "${SHARED_SPECS}" ] || { err "Missing ${SHARED_SPECS}"; exit 1; }
 for t in curl tar file; do command -v "$t" >/dev/null || { err "missing tool: $t"; exit 1; }; done
-# .img builder tools (default deliverable) — losetup/mkfs/parted/grub-install must
-# be present and the build must run as root (already enforced). grub-install must
-# support the x86_64-efi target for the GRUB-EFI --removable install.
+# .img builder tools (default deliverable) — losetup/mkfs/parted/grub-mkimage must
+# be present and the build must run as root (already enforced). grub-mkimage must
+# support the x86_64-efi target for the GRUB-EFI removable install.
 if ${BUILD_IMG}; then
-    for t in parted losetup mkfs.vfat mkfs.ext4 blkid grub-install; do
+    for t in parted losetup mkfs.vfat mkfs.ext4 blkid grub-mkimage; do
         command -v "$t" >/dev/null || { warn "missing ${t}; disabling .img build"; BUILD_IMG=false; break; }
     done
     if ${BUILD_IMG} && [ ! -d /usr/lib/grub/x86_64-efi ]; then
@@ -896,12 +910,18 @@ mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,profile,e
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
 cp "${SPECS_DIR}/portage/profile/parent"              "${SYSROOT}/etc/portage/profile/parent"
 # Copy every file in these portage config dirs (so added spec files always land).
-cp "${SPECS_DIR}/portage/package.accept_keywords/"*   "${SYSROOT}/etc/portage/package.accept_keywords/"
+# The 'desktop' files (LXDE ~amd64 keywords / GTK+netsurf USE) are client-only — a
+# k8s NODE image stays stable-keyworded and never references desktop USE flags.
+for akf in "${SPECS_DIR}/portage/package.accept_keywords/"*; do
+    [ "$(basename "${akf}")" = "desktop" ] && ! ${ROLE_CLIENT} && continue
+    cp "${akf}" "${SYSROOT}/etc/portage/package.accept_keywords/"
+done
 # package.use: copy all role-independent files; the GPU-only 'gpu' file (Mesa
-# vulkan/vaapi video_cards_*) is copied ONLY for GPU roles so a headless image
-# never references VIDEO_CARDS it isn't building.
+# vulkan/vaapi video_cards_*) is copied ONLY for GPU roles, and 'desktop' ONLY for
+# client roles, so a headless image never references USE/cards it isn't building.
 for puf in "${SPECS_DIR}/portage/package.use/"*; do
     [ "$(basename "${puf}")" = "gpu" ] && ! ${GPU} && continue
+    [ "$(basename "${puf}")" = "desktop" ] && ! ${ROLE_CLIENT} && continue
     cp "${puf}" "${SYSROOT}/etc/portage/package.use/"
 done
 
@@ -1045,12 +1065,37 @@ if ${ROLE_CLIENT}; then
     # CLIENT desktop: NO containerd/kubelet/headscale (not a k8s node). Add the
     # desktop session stack: dbus + elogind (seat/login) + display-manager (lightdm).
     SVCS=(sshd NetworkManager cronie haveged growroot keys-provision auditd local dbus elogind display-manager)
+    # gui-libs/display-manager-init's /etc/init.d/display-manager reads this to decide
+    # WHICH DM to launch; lightdm ships no OpenRC service. Without it the service falls
+    # back to xdm and the image boots to a bare console (mirrors the frite fix).
+    mkdir -p "${SYSROOT}/etc/conf.d"
+    echo 'DISPLAYMANAGER="lightdm"' > "${SYSROOT}/etc/conf.d/display-manager"
+    # lightdm needs a greeter + a default session wired explicitly: with only
+    # lightdm-gtk-greeter installed the stock greeter-session (example-gtk-gnome) is
+    # absent → blank greeter. Thin = openbox, full = xfce. Written pre-emerge so
+    # CONFIG_PROTECT keeps it over the package default (same pattern as frite).
+    # thin = LXDE (lxsession: openbox WM + lxpanel + pcmanfm — the turnkey LXDE-lite
+    # stack in packages-desktop.list), full = xfce. Both ship an /usr/share/xsessions
+    # .desktop of that name.
+    _user_session="LXDE"; [ "${DESKTOP}" = "full" ] && _user_session="xfce"
+    mkdir -p "${SYSROOT}/etc/lightdm"
+    cat > "${SYSROOT}/etc/lightdm/lightdm.conf" <<LIGHTDM
+[LightDM]
+[Seat:*]
+greeter-session=lightdm-gtk-greeter
+user-session=${_user_session}
+LIGHTDM
 else
     SVCS=(sshd NetworkManager cronie haveged growroot keys-provision containerd kubelet auditd local)
     ${ROLE_HEADSCALE} && SVCS+=(headscale)
 fi
 ${SKIP_MESH} || ${SKIP_TAILSCALE} || SVCS+=(tailscaled)
 for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/default/${s}" 2>/dev/null || true; done
+# Belt-and-suspenders for shared / --resume sysroots: `ln -sf` only ADDS, so a prior
+# role's run can leave a headscale runlevel symlink behind that a worker/client image
+# would background-start. Remove it unless THIS role runs the control server. (Same
+# Pi audit finding; clients + be/fe have ROLE_HEADSCALE=false.)
+${ROLE_HEADSCALE} || rm -f "${SYSROOT}/etc/runlevels/default/headscale"
 
 # ── Radio hardening: WiFi + Bluetooth DISABLED BY DEFAULT ──────────────────
 # Shrink the attack surface — by default neither radio comes up: their kernel
@@ -1356,7 +1401,13 @@ fi
 umount_chroot; trap - EXIT
 if ! ${SKIP_CLEAN}; then
     banner "Cleaning sysroot"
+    # FEATURES=buildpkg writes a binpkg copy of every package into the chroot's
+    # /var/cache/binpkgs (~2.4 GiB for the desktop set) — pure build-artifact bloat in
+    # the image (devices get updates from the binhost, not their own cache). Drop it
+    # along with docs/man/info + distfiles + tmp. (Deeper minification — strip, locale
+    # pruning, INSTALL_MASK — lands in the dedicated minification PR.)
     rm -rf "${SYSROOT}"/usr/share/{doc,man,info}/* "${SYSROOT}"/var/cache/distfiles/* \
+           "${SYSROOT}"/var/cache/binpkgs/* \
            "${SYSROOT}"/var/tmp/* "${SYSROOT}"/tmp/* 2>/dev/null || true
 fi
 
@@ -1401,7 +1452,7 @@ info "Stage4: ${STAGE4} ($(du -sh "${STAGE4}" | cut -f1))"
 # image is dd'd onto (no NVRAM entry — --no-nvram + --removable fallback path).
 #
 # Runs entirely as root (the build is already privileged): losetup, mkfs, mount,
-# grub-install and xattr-preserving extraction all require it. A cleanup trap
+# grub-mkimage and xattr-preserving extraction all require it. A cleanup trap
 # tears down the ESP+root mounts and the loop device on ANY failure/early return.
 IMG_PATH="(not built)"
 INSTALLER_ISO_PATH="(not built)"
@@ -1414,6 +1465,20 @@ build_img() {
 
     # 1MiB alignment gap + 512MiB ESP + ROOT_MiB ext4 root + 1MiB slack.
     img_size_mib=$(( 1 + 512 + ROOT_MiB + 1 ))
+
+    # Pre-flight (fail in seconds, not after a long extraction): does the finished
+    # payload fit the ROOT_MiB root partition? Converts the cryptic mid-tar "No space
+    # left on device" into an upfront, actionable error. -x stays on the sysroot fs so
+    # any still-bound mounts aren't counted.
+    local payload_mib cap_mib
+    payload_mib="$(du -sxBM "${SYSROOT}" 2>/dev/null | cut -f1 | tr -dc '0-9')"
+    cap_mib=$(( ROOT_MiB * 93 / 100 ))   # ext4 metadata + 5% reserved ≈ 7% overhead
+    if [ -n "${payload_mib}" ] && [ "${payload_mib}" -gt "${cap_mib}" ]; then
+        err "Payload ${payload_mib} MiB exceeds the ${ROOT_MiB} MiB root partition (usable ~${cap_mib} MiB)."
+        err "Re-run with a bigger root, e.g.  --img-size $(( (payload_mib * 115 / 100 / 1024 + 1) * 1024 ))"
+        exit 1
+    fi
+    info "Pre-flight: payload ${payload_mib:-?} MiB fits the ${ROOT_MiB} MiB root (usable ~${cap_mib} MiB)"
 
     _img_cleanup() {
         local rc=$?
@@ -1475,20 +1540,31 @@ build_img() {
     initrd="$(ls -1 "${root_mnt}/boot/initramfs-"*.img 2>/dev/null | grep -v 'initramfs-live' | sort -V | tail -1 || true)"
     vmlinuz="${vmlinuz##*/}"; initrd="${initrd##*/}"
 
-    # ── GRUB-EFI --removable into the ESP (host-safe: --no-nvram) ──────
-    # Writes ${ESP}/EFI/BOOT/BOOTX64.EFI (removable fallback path) + ${root}/boot/grub.
-    # No host NVRAM entry, no os-prober — safe to run against a loop-mounted image.
-    info "Installing GRUB-EFI (--removable, --no-nvram) into the image ESP"
-    # Bootloader install failure must be FATAL: the .img is the default
-    # deliverable and an empty ESP means a brick announced as success.
-    grub-install --target=x86_64-efi \
-        --efi-directory="${root_mnt}/boot/efi" \
-        --boot-directory="${root_mnt}/boot" \
-        --removable --no-nvram \
-        --modules="part_gpt fat ext2 normal linux search search_fs_uuid configfile gzio all_video" \
-        || { err "grub-install FAILED — .img would not be UEFI-bootable"; exit 1; }
+    # ── GRUB-EFI via grub-mkimage (loop-device-safe) ──────────────────
+    # grub-install probes the backing disk via hostdisk// which fails for loop
+    # devices — GRUB's native disk layer cannot open a loop-device backing file.
+    # grub-mkimage bypasses the probe: it embeds a search-by-fs-uuid config that
+    # finds the root partition at runtime, disk-order-independent. The module tree
+    # is copied to the ext4 /boot so the running GRUB can load fonts/themes.
+    info "Building GRUB-EFI core image (grub-mkimage, loop-device-safe)"
+    mkdir -p "${root_mnt}/boot/efi/EFI/BOOT"
+    mkdir -p "${root_mnt}/boot/grub/x86_64-efi"
+    cp -a /usr/lib/grub/x86_64-efi/. "${root_mnt}/boot/grub/x86_64-efi/"
+    local grub_embed; grub_embed="$(mktemp)"
+    printf 'search --no-floppy --fs-uuid --set=root %s\nset prefix=($root)/boot/grub\nconfigfile ($root)/boot/grub/grub.cfg\n' \
+        "${root_fsuuid}" > "${grub_embed}"
+    grub-mkimage \
+        --directory /usr/lib/grub/x86_64-efi \
+        --output "${root_mnt}/boot/efi/EFI/BOOT/BOOTX64.EFI" \
+        --format x86_64-efi \
+        --config "${grub_embed}" \
+        --prefix '/boot/grub' \
+        part_gpt fat ext2 normal linux search search_fs_uuid configfile gzio all_video \
+        || { rm -f "${grub_embed}"; err "grub-mkimage FAILED — .img would not be UEFI-bootable"; exit 1; }
+    rm -f "${grub_embed}"
+    # Bootloader must be present before sealing the image.
     [ -f "${root_mnt}/boot/efi/EFI/BOOT/BOOTX64.EFI" ] \
-        || { err "ESP has no EFI/BOOT/BOOTX64.EFI after grub-install — refusing to ship a non-booting .img"; exit 1; }
+        || { err "ESP has no EFI/BOOT/BOOTX64.EFI after grub-mkimage — refusing to ship a non-booting .img"; exit 1; }
 
     # ── Hand-written grub.cfg (no grub-mkconfig => no host os-prober/chroot) ──
     # Source the hardened cmdline from the grub defaults so the .img and the live

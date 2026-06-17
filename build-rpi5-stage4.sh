@@ -1383,6 +1383,13 @@ fi
 for svc in "${DEFAULT_SVCS[@]}"; do
     ln -sf "/etc/init.d/${svc}" "${SYSROOT}/etc/runlevels/default/${svc}" 2>/dev/null || true
 done
+# Belt-and-suspenders for shared / --resume sysroots: `ln -sf` only ADDS, so a prior
+# role's run (the cross-build does pki first) can leave a headscale runlevel symlink
+# behind that a worker image would then background-start. Remove it for any role that
+# must NOT run the control server. (Pi audit finding, 2026-06-13.)
+if [ "${ROLE}" != "pki" ] && [ "${ROLE}" != "generic" ]; then
+    rm -f "${SYSROOT}/etc/runlevels/default/headscale"
+fi
 
 # ── Radio hardening: WiFi + Bluetooth DISABLED BY DEFAULT ──────────────────
 # Shrink the attack surface — by default neither radio comes up (modprobe.d
