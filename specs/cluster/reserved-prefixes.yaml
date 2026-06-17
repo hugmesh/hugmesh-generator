@@ -53,9 +53,18 @@ metadata:
   # app-repo ReservedNames copies must add the same labels to stay in sync (the
   # validate script's code-copy assertion flags them when the sibling repos are
   # present in CI).
-  revision: "2"
+  # revision 2 -> 3: reconcile the canonical YAML with the four app-repo
+  # ReservedNames copies (drift). Added the DEPLOYED publicly-routable prefixes the
+  # YAML was missing — `tube` (the `/tube/content/**` be-gateway media route,
+  # ROLE_TUBE) and `games-instances-console` (the per-instance game-server console
+  # dispatcher Service the `/games/servers/**` route targets) — plus the optional
+  # video/wiki services `owncast` + `wiki` as FORWARD-RESERVES (sibling of
+  # forum/phpbb): real services whose only public surfaces today ride already-
+  # reserved prefixes (`/bff/owncast/**`, `/bff/wiki/**`, `/social/wiki/**`), so a
+  # vanity `owncast.`/`wiki.` handle is forbidden before any future subdomain ships.
+  revision: "3"
 spec:
-  # The canonical reserved set (65 labels). KEEP SORTED BY CATEGORY (comments) but
+  # The canonical reserved set (70 labels). KEEP SORTED BY CATEGORY (comments) but
   # the validator treats it as an unordered SET. Do not duplicate; the validator
   # also asserts there are no duplicates.
   #
@@ -162,6 +171,21 @@ spec:
     - games-rpg-maker
     - games-three-wizards
     - games-vn-maker
+    # --- optional-service / games-console DEPLOYED route prefixes --------------
+    # `tube`: the LocalTube media route `/tube/content/**` is a DEDICATED first-
+    # segment route on the be-gateway (gateway_route_access seed, ROLE_TUBE signed-
+    # URL content serving) — a real publicly-routable prefix, so a vanity `tube`
+    # handle would shadow it. The route-consistency check (stage 3) demands it.
+    # `games-instances-console`: the per-instance game-server console dispatcher
+    # Service the `/games/servers/**` route uri TARGETS
+    # (apps/20-gateway-be.yaml route[games-servers-console]). Its public path first-
+    # segment is `games` (already reserved), but the scoped Service-drift check
+    # (stage 4) requires the routed Service's first-label be reserved or allowlisted;
+    # reserving the label here keeps it the source of truth (the app-repo copies
+    # already carry it). Both were added to the four ReservedNames copies in the
+    # prior tube/games-instances-console fix; this brings the canonical YAML to match.
+    - tube
+    - games-instances-console
     # --- planned / not-yet-deployed publicly-routable services -----------------
     # These have NO kind:Service / gateway route in the GitOps tree YET, so the
     # route-consistency drift check will NOT demand them — they are reserved here
@@ -172,5 +196,17 @@ spec:
     # move these up into the routable categories above; until then they are a
     # forward-reserve, NOT drift. The app-repo ReservedNames copies should add them
     # too so the handle is forbidden at registration before the route exists.
+    #
+    # `owncast` (Owncast live-streaming) and `wiki` (the Kiwix/Postgres wiki) are
+    # the same shape: REAL optional services (deployed manifests / dedicated repos)
+    # whose ONLY public surfaces today ride an already-reserved prefix —
+    # `/bff/owncast/**`, `/bff/wiki/**` (first-segment `bff`) and `/social/wiki/**`
+    # (first-segment `social`). Neither has its OWN top-level `/owncast/**`,
+    # `/wiki/**` route or `owncast.`/`wiki.` subdomain in the GitOps tree yet, so
+    # the route-consistency check does not demand them; they are forward-reserved so
+    # a vanity `owncast.`/`wiki.` handle can never collide if/when one ships. The
+    # federation-api / user-bff-api ReservedNames copies already carried both.
     - forum
     - phpbb
+    - owncast
+    - wiki
