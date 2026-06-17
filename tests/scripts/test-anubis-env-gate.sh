@@ -33,7 +33,7 @@ echo "== anubis ENV-policy gate unit test =="
 # ── Extract the REAL helper functions from the builder (so the test tracks them) ─
 extract_fn() { awk "/^$1\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}" "${BUILDER}"; }
 for fn in _opt_selected _opt_explicitly_deselected _opt_anubis_installed \
-          _opt_render_installed_services _opt_wire_anubis_ingress; do
+          _opt_render_installed_services _opt_wire_anubis_ingress _opt_render_appset_flag; do
   eval "$(extract_fn "${fn}")"
   type "${fn}" >/dev/null 2>&1 || { echo "  FAIL could not extract ${fn}"; exit 1; }
 done

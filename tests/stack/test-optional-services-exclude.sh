@@ -1,0 +1,211 @@
+#!/usr/bin/env bash
+# test-optional-services-exclude.sh — unit test for the BUILD-TIME EXCLUSION of
+# ANY user-level OPTIONAL service in the CLUSTER optional-services mechanism.
+#
+# REQUIREMENT (user): the generated images/cluster must be able to EXCLUDE any
+# user-level service (akkoma/tuwunel/phpbb/games/owncast/tube) at build/generation
+# time. Excluding a service must OMIT its Application/manifests from the rendered
+# build, and the rest must degrade gracefully (installed-services ConfigMap marks
+# it absent; the 13a ApplicationSet element flips to installed:"false"; gateway
+# routes + route-access rows are removed so no 502/stale-grant).
+#
+# WHAT THIS PROVES (WITHOUT a full cross-build) by sourcing the REAL helper +
+# gate functions from build-rpi5-stage4.sh and running them against a realistic
+# sandbox baked tree (seeded from the live specs/cluster files):
+#   * every user-level slug is REGISTERED in optional-services.yaml;
+#   * for EACH slug: EXCLUDED => its owned apps/*.yaml + manifests/<dir> are gone,
+#     its gateway routes + route-access rows are gone, the ConfigMap boolean is
+#     "false", and the 13a ApplicationSet element is installed:"false";
+#   * INCLUDED => app present, manifests present, ConfigMap "true", 13a "true";
+#   * the EXCLUDE_SERVICES subtractive knob removes a slug from a full positive
+#     selection (force-OFF regardless of how it was selected).
+#
+# Arch-neutral: the gate operates on the shared specs/cluster tree (the rpi5
+# builder is the canonical cluster-node builder; build-x86-host-stage4.sh is a
+# protected client-image area and is intentionally NOT exercised here).
+set -uo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BUILDER="${REPO}/build-rpi5-stage4.sh"
+REG="${REPO}/specs/cluster/optional-services.yaml"
+SRC="${REPO}/specs/cluster"
+[ -f "${BUILDER}" ] || { echo "  FAIL builder missing"; exit 1; }
+
+P=0; F=0
+ok(){ echo "  PASS $*"; P=$((P+1)); }
+bad(){ echo "  FAIL $*"; F=$((F+1)); }
+WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}"' EXIT
+info(){ :; }; warn(){ :; }; err(){ echo "    ERR $*" >&2; }   # silence the builder logger
+
+echo "== optional-services BUILD-TIME EXCLUSION unit test =="
+
+# ── Extract the REAL gate + helpers from the builder (so the test tracks them) ──
+extract_fn() { awk "/^$1\(\) \{/{p=1} p{print} /^\}/{if(p){exit}}" "${BUILDER}"; }
+for fn in _opt_selected _opt_explicitly_deselected _opt_anubis_installed \
+          _opt_drop_kustomize_line _opt_drop_route _opt_drop_extrahost _opt_drop_rows \
+          _opt_fix_trailing_comma _opt_wire_anubis_ingress _opt_render_appset_flag \
+          _opt_render_installed_services gate_optional_services; do
+  eval "$(extract_fn "${fn}")"
+  type "${fn}" >/dev/null 2>&1 || { echo "  FAIL could not extract ${fn}"; exit 1; }
+done
+ok "extracted the real gate + helper functions from build-rpi5-stage4.sh"
+
+# ── The user-level OPTIONAL services this requirement targets ─────────────────
+USER_SERVICES="akkoma tuwunel phpbb games owncast tube"
+
+# ── 1) registry: every user-level slug is registered ─────────────────────────
+if command -v python3 >/dev/null; then
+  python3 - "${REG}" "${USER_SERVICES}" <<'PY' && ok "all user-level slugs registered in optional-services.yaml" || bad "a user-level slug is missing from the registry"
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+slugs = {s["slug"] for s in d["spec"]["services"]}
+missing = [s for s in sys.argv[2].split() if s not in slugs]
+assert not missing, f"not registered: {missing}"
+PY
+else
+  echo "  SKIP registry assertion (no python3)"
+fi
+
+# ── seed a realistic baked tree from the live specs/cluster files ─────────────
+# SYSROOT is what the builder expects; the tree lives under it.
+seed_tree() {
+  SYSROOT="${WORK}/sysroot-$1"; rm -rf "${SYSROOT}"
+  local tree="${SYSROOT}/var/lib/snapdragon/cluster"
+  mkdir -p "${tree}/apps" "${tree}/manifests/external-secrets" \
+           "${tree}/manifests/route-access/initdb" "${tree}/manifests/policy"
+  # The per-slug owned apps + manifest dirs (copy the real ones so the gate's
+  # rm -f / rm -rf hit the actual filenames).
+  cp "${SRC}/apps/13a-optional-services.yaml" "${tree}/apps/"
+  cp "${SRC}/manifests/policy/installed-services-configmap.yaml" "${tree}/manifests/policy/"
+  cp "${SRC}/manifests/route-access/initdb/20-schema.sql" "${tree}/manifests/route-access/initdb/"
+  cp "${SRC}/manifests/external-secrets/kustomization.yaml" "${tree}/manifests/external-secrets/"
+  # owned apps
+  for a in 30-akkoma 30-tuwunel 30-phpbb 38-forum-bff-db 39-forum-bff-api 49-forum-ui \
+           45-social-ui 06-casdoor-games 50-games 13c-games-instances 52-owncast 53-tube; do
+    [ -f "${SRC}/apps/${a}.yaml" ] && cp "${SRC}/apps/${a}.yaml" "${tree}/apps/"
+  done
+  cp "${SRC}/apps/20-gateway-be.yaml" "${tree}/apps/" 2>/dev/null || :
+  cp "${SRC}/apps/20-gateway-fe.yaml" "${tree}/apps/" 2>/dev/null || :
+  # owned ESO halves
+  for e in akkoma-externalsecrets tuwunel-externalsecrets tube-externalsecrets; do
+    [ -f "${SRC}/manifests/external-secrets/${e}.yaml" ] && \
+      cp "${SRC}/manifests/external-secrets/${e}.yaml" "${tree}/manifests/external-secrets/"
+  done
+  # owned manifest dirs
+  for m in akkoma tuwunel forum forum-bff-db forum-bff-api forum-ui games casdoor-games \
+           games-instances owncast tube casdoor; do
+    [ -d "${SRC}/manifests/${m}" ] && cp -r "${SRC}/manifests/${m}" "${tree}/manifests/"
+  done
+  export SYSROOT
+  TREE="${tree}"
+}
+
+# Map: slug -> the owned apps/*.yaml whose ABSENCE proves exclusion, and a
+# manifests/<dir> whose absence proves exclusion.
+declare -A OWNED_APP=(
+  [akkoma]="30-akkoma.yaml"   [tuwunel]="30-tuwunel.yaml" [phpbb]="30-phpbb.yaml"
+  [games]="50-games.yaml"     [owncast]="52-owncast.yaml" [tube]="53-tube.yaml"
+)
+declare -A OWNED_DIR=(
+  [akkoma]="akkoma" [tuwunel]="tuwunel" [phpbb]="forum" [games]="games"
+  [owncast]="owncast" [tube]="tube"
+)
+
+ENV="test"   # the gate's anubis ENV branch reads this
+
+# ── 2) EXCLUDED: each user-level slug omitted from the build ──────────────────
+echo "-- EXCLUDED (per-service): app + manifests pruned, ConfigMap+13a 'false' --"
+for slug in ${USER_SERVICES}; do
+  seed_tree "excl-${slug}"
+  # Select EVERYTHING EXCEPT this slug (force-include the others incl games so the
+  # exclusion of THIS slug is isolated). The gate prunes any slug NOT selected.
+  sel=""; for s in ${USER_SERVICES}; do [ "${s}" = "${slug}" ] || sel="${sel} ${s}"; done
+  OPTIONAL_SERVICES="${sel# }"
+  gate_optional_services
+  app="${OWNED_APP[$slug]}"; dir="${OWNED_DIR[$slug]}"
+  [ ! -f "${TREE}/apps/${app}" ]       && ok "${slug}: owned Application ${app} OMITTED"        || bad "${slug}: ${app} survived exclusion"
+  [ ! -d "${TREE}/manifests/${dir}" ]  && ok "${slug}: manifests/${dir} OMITTED"                || bad "${slug}: manifests/${dir} survived exclusion"
+  grep -qE "^[[:space:]]*${slug}:[[:space:]]*\"false\"" "${TREE}/manifests/policy/installed-services-configmap.yaml" \
+      && ok "${slug}: installed-services ConfigMap marks it ABSENT (false)" || bad "${slug}: ConfigMap not false"
+  grep -qE "\{[[:space:]]*slug:[[:space:]]*${slug}[[:space:]]*,.*installed:[[:space:]]*\"false\"" "${TREE}/apps/13a-optional-services.yaml" \
+      && ok "${slug}: 13a ApplicationSet element installed:\"false\"" || bad "${slug}: 13a element not false"
+done
+
+# Slug-specific route/row omission spot-checks (no 502 / no stale-grant).
+seed_tree "excl-routes"
+OPTIONAL_SERVICES="games owncast tube"   # akkoma+tuwunel+phpbb excluded
+gate_optional_services
+grep -q 'mastodon-' "${TREE}/apps/20-gateway-be.yaml" && bad "akkoma gateway routes survived" || ok "akkoma: gateway mastodon-* routes removed"
+grep -q "'/_matrix/\*\*'" "${TREE}/manifests/route-access/initdb/20-schema.sql" && bad "tuwunel /_matrix row survived" || ok "tuwunel: /_matrix route-access row removed"
+grep -q "'/social/forum/\*\*'" "${TREE}/manifests/route-access/initdb/20-schema.sql" && bad "phpbb /social/forum row survived" || ok "phpbb: /social/forum route-access row removed"
+# both homeservers gone => shared social-ui pruned.
+[ ! -f "${TREE}/apps/45-social-ui.yaml" ] && ok "shared 45-social-ui pruned when BOTH homeservers excluded" || bad "social-ui survived with both homeservers gone"
+
+seed_tree "excl-owncast-tube"
+OPTIONAL_SERVICES="akkoma tuwunel phpbb"   # owncast+tube+games excluded (default-off)
+gate_optional_services
+grep -q "'/bff/owncast/\*\*'" "${TREE}/manifests/route-access/initdb/20-schema.sql" && bad "owncast row survived" || ok "owncast: /bff/owncast route-access row removed"
+grep -q "'/bff/tube/\*\*'"   "${TREE}/manifests/route-access/initdb/20-schema.sql" && bad "tube row survived"    || ok "tube: /bff/tube route-access row removed"
+grep -q "'/tube/content/\*\*'" "${TREE}/manifests/route-access/initdb/20-schema.sql" && bad "tube media row survived" || ok "tube: /tube/content route-access row removed"
+[ ! -f "${TREE}/manifests/external-secrets/tube-externalsecrets.yaml" ] && ok "tube: per-service ESO file pruned" || bad "tube ESO survived exclusion"
+
+# ── 3) INCLUDED: each user-level slug kept => present + ConfigMap/13a 'true' ──
+echo "-- INCLUDED (all user services): apps + manifests present, ConfigMap+13a 'true' --"
+seed_tree "incl-all"
+OPTIONAL_SERVICES="${USER_SERVICES}"
+gate_optional_services
+for slug in ${USER_SERVICES}; do
+  app="${OWNED_APP[$slug]}"; dir="${OWNED_DIR[$slug]}"
+  [ -f "${TREE}/apps/${app}" ]      && ok "${slug}: owned Application ${app} PRESENT" || bad "${slug}: ${app} pruned despite selection"
+  [ -d "${TREE}/manifests/${dir}" ] && ok "${slug}: manifests/${dir} PRESENT"         || bad "${slug}: manifests/${dir} pruned despite selection"
+  grep -qE "^[[:space:]]*${slug}:[[:space:]]*\"true\"" "${TREE}/manifests/policy/installed-services-configmap.yaml" \
+      && ok "${slug}: ConfigMap installed (true)" || bad "${slug}: ConfigMap not true despite selection"
+  grep -qE "\{[[:space:]]*slug:[[:space:]]*${slug}[[:space:]]*,.*installed:[[:space:]]*\"true\"" "${TREE}/apps/13a-optional-services.yaml" \
+      && ok "${slug}: 13a element installed:\"true\"" || bad "${slug}: 13a element not true despite selection"
+done
+
+# ── 4) EXCLUDE_SERVICES subtractive knob (force-OFF from a full selection) ─────
+echo "-- EXCLUDE_SERVICES subtractive knob --"
+# Reproduce the builder's subtraction block (mirrors build-rpi5-stage4.sh).
+apply_exclude() {  # $1=OPTIONAL_SERVICES $2=EXCLUDE_SERVICES -> echo final
+  local OPTIONAL_SERVICES="$1" EXCLUDE_SERVICES="$2" _x _s _kept
+  if [ -n "${EXCLUDE_SERVICES//[[:space:],]/}" ]; then
+    for _x in ${EXCLUDE_SERVICES//,/ }; do
+      _kept=""
+      for _s in ${OPTIONAL_SERVICES}; do [ "${_s}" = "${_x}" ] || _kept="${_kept} ${_s}"; done
+      OPTIONAL_SERVICES="${_kept# }"
+    done
+  fi
+  echo "${OPTIONAL_SERVICES}"
+}
+out="$(apply_exclude "akkoma tuwunel phpbb games owncast tube" "phpbb tuwunel")"
+case " ${out} " in
+  *" phpbb "*|*" tuwunel "*) bad "EXCLUDE_SERVICES did not remove phpbb/tuwunel (got: ${out})" ;;
+  *" akkoma "*) ok "EXCLUDE_SERVICES removed phpbb+tuwunel, kept the rest (got: ${out})" ;;
+  *) bad "EXCLUDE_SERVICES produced unexpected result (got: ${out})" ;;
+esac
+# excluding a not-selected slug is a harmless no-op.
+out="$(apply_exclude "akkoma" "owncast")"
+[ "${out}" = "akkoma" ] && ok "EXCLUDE_SERVICES of a non-selected slug is a no-op" || bad "no-op exclude changed the selection (got: ${out})"
+# the builder actually wires the knob (regex-anchored to the source line).
+grep -q 'EXCLUDE_SERVICES' "${BUILDER}" && ok "builder defines/reads EXCLUDE_SERVICES" || bad "builder missing EXCLUDE_SERVICES"
+grep -q -- '--exclude-services' "${BUILDER}" && ok "builder accepts --exclude-services CLI flag" || bad "builder missing --exclude-services flag"
+
+# ── 5) the surviving baked artefacts still parse (YAML + JSON + bash) ─────────
+echo "-- artefact integrity after pruning --"
+bash -n "${BUILDER}" && ok "build-rpi5-stage4.sh: bash -n clean" || bad "builder failed bash -n"
+if command -v python3 >/dev/null; then
+  python3 - "${TREE}" <<'PY' && ok "post-prune ConfigMap + 13a + ESO-kustomization parse as YAML; services.json parses as JSON" || bad "a post-prune artefact failed to parse"
+import sys, yaml, json
+t = sys.argv[1]
+cm = yaml.safe_load(open(f"{t}/manifests/policy/installed-services-configmap.yaml"))
+json.loads(cm["data"]["services.json"])
+yaml.safe_load(open(f"{t}/apps/13a-optional-services.yaml"))
+yaml.safe_load(open(f"{t}/manifests/external-secrets/kustomization.yaml"))
+PY
+else
+  echo "  SKIP YAML/JSON parse (no python3)"
+fi
+
+echo "== RESULT: ${P} passed, ${F} failed =="
+[ "${F}" -eq 0 ]

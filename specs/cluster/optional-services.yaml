@@ -8,8 +8,19 @@
 #   * ARCHITECTURE (core, always present): gateways (pki/be/fe), Casdoor/PKI, the
 #     federation API + remote-fragment + host shell, admin/user/mod BFFs + UIs.
 #   * OPTIONAL services (THIS file): akkoma (Mastodon), tuwunel (Matrix), phpbb
-#     (forum), games. Add/remove-by-command; the rest of the stack degrades
-#     gracefully (greyed-out, never 500/502) when any/all of them are omitted.
+#     (forum), games, owncast (live streaming), tube (LocalTube). Add/remove-by-
+#     command; the rest of the stack degrades gracefully (greyed-out, never
+#     500/502) when any/all of them are omitted. (Plus the non-user-level slugs
+#     egress-vpn / workloadConsole / anubis, gated the same way.)
+#
+# BUILD-TIME EXCLUSION (the per-service generation-time enable/disable): the
+# builder resolves a positive allow-list OPTIONAL_SERVICES (built-in default <
+# brand.conf < --optional-services, + the games opt-in) and then applies the
+# SUBTRACTIVE knob EXCLUDE_SERVICES (brand.conf / --exclude-services) LAST. Any
+# user-level slug NOT in the final selection is pruned by gate_optional_services
+# (its Application + manifests + gateway routes + route-access rows + ESO half) and
+# rendered installed:"false" in BOTH the installed-services ConfigMap AND the 13a
+# ApplicationSet element, so a deselected service is absent from every path.
 #
 # This file is the ONE list that names the installed set. Today "presence of a
 # YAML in apps/ IS the decision" (app-of-apps recurse:true + prune:true), but
