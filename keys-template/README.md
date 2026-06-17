@@ -63,11 +63,26 @@ KEYS/                                 (FAT32, volume label "KEYS")
 │   ├── token                         Vault token / AppRole secret-id (online sync)
 │   └── secrets.json                  offline copy of the materialized k8s Secrets
 ├── certs/                            certificates (trust store + files[])
+├── vpn/
+│   └── <domain>/                     OPTIONAL egress-VPN provider configs (per-domain)
+│       ├── <name>.conf               ProtonVPN WireGuard config (FIRST-CLASS, SECRET)
+│       └── <name>.ovpn               OpenVPN config (fallback, SECRET)
 └── secrets/
     ├── post-provision.sh             optional run[] hook
     ├── mail.json                     OPTIONAL SMTP creds (empty = mail disabled)
     └── cluster-creds.json            OPTIONAL mail + GitHub/Discord OAuth creds
 ```
+
+> `vpn/<domain>/` is **OPTIONAL and absent by default** (the egress-VPN is a
+> default-off optional service). It carries the provider-downloaded WireGuard
+> (`.conf`, first-class) / OpenVPN (`.ovpn`, fallback) configs the mesh node uses
+> for OUTGOING / egress traffic on public flows. `provision_vpn()` installs ONLY
+> the node's OWN domain's configs (`.egress_vpn.domain` else
+> `.snapdragon.cluster_domain`), mode `0600`, root-owned, into
+> `/etc/snapdragon/vpn/`. A config under another tenant's `<domain>/` is never
+> installed on this node (per-domain isolation). Stage them with
+> `gen-provision-keys.sh --vpn-src DIR [--vpn-domain D]` (copies verbatim — these
+> are **secrets**, never committed). See `keys-template/vpn/README.md`.
 
 > `secrets/mail.json` + `secrets/cluster-creds.json` are **OPTIONAL and absent by
 > default**. They carry outbound-mail (SMTP) and OAuth-provider client creds for
@@ -107,6 +122,7 @@ KEYS/                                 (FAT32, volume label "KEYS")
 | `snapdragon.role` | `pki` \| `backend` \| `frontend` — selects the cluster app set / namespace this node serves. |
 | `snapdragon.cluster_domain` | Base domain for gateways/ingress/Casdoor. |
 | `snapdragon.gitops.{enabled,argocd}` | On the PKI node, bootstrap ArgoCD + the app-of-apps. |
+| `egress_vpn.domain` | OPTIONAL override for the node's own brand domain used to pick `KEYS/vpn/<domain>/` (defaults to `snapdragon.cluster_domain`). `provision_vpn()` installs ONLY this domain's configs, 0600. |
 | `vault.*` | Seed HashiCorp Vault / External Secrets Operator state; Vault is primary, USB is the offline fallback (see below). |
 | `storage.devices[]` | Set up attached M.2/NVMe or USB storage (see below). |
 | `backup.*` | Schedule etcd + PostgreSQL backups to attached storage / network share. |

@@ -1,0 +1,5 @@
+# Placeholder. A real KEYS/vpn/<domain>/ directory holds the provider-downloaded
+# WireGuard (.conf, FIRST-CLASS) or OpenVPN (.ovpn) configs for THAT brand domain
+# ONLY. provision_vpn() installs only the node's OWN domain's configs, 0600.
+# Replace 'example.com' with your brand's cluster_domain. NEVER commit a real
+# config — a .conf/.ovpn carries the private VPN key (a secret).

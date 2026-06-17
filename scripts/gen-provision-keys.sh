@@ -66,6 +66,14 @@ KEYS_SRC="${KEYS_SRC:-}"            # path to an existing KEYS tree to copy cred
 NONINTERACTIVE="${NONINTERACTIVE:-}"
 MAIL_PROVIDER="${MAIL_PROVIDER:-protonmail}"
 
+# Optional egress-VPN provider configs to stage onto KEYS/vpn/<domain>/. Secrets
+# (a WireGuard .conf / OpenVPN .ovpn carries the private key) — NEVER generated,
+# only COPIED from an out-of-band source dir. VPN_SRC may hold the configs flat
+# (copied under the node's own domain) or already laid out as <domain>/<file>.
+# VPN_DOMAIN is the node's own brand domain (else CLUSTER_DOMAIN / brand.conf).
+VPN_SRC="${VPN_SRC:-}"              # dir of provider .conf/.ovpn to stage (own domain)
+VPN_DOMAIN="${VPN_DOMAIN:-${CLUSTER_DOMAIN:-}}"
+
 # Optional EXISTING CA to use as the issuer for the generated mTLS certs (passed
 # through to gen-keystores.sh). May also be set via env or brand.conf / brands/.
 CA_CERT="${CA_CERT:-}"
@@ -114,6 +122,13 @@ Options:
                       (DIR/secrets/mail.json + DIR/secrets/dkim-private.key). If
                       absent, the pki role PROMPTS for mail creds (10s timeout);
                       decline/empty => mail stays disabled. (env: KEYS_SRC)
+      --vpn-src DIR   Egress-VPN: stage provider .conf/.ovpn configs onto
+                      KEYS/vpn/<domain>/ (own domain ONLY). The configs are
+                      SECRETS (private VPN key) — COPIED verbatim 0600, NEVER
+                      generated. DIR may hold the files flat or under a <domain>/
+                      subdir. (env: VPN_SRC)
+      --vpn-domain D  Egress-VPN: the node's OWN brand domain for --vpn-src
+                      (else CLUSTER_DOMAIN). (env: VPN_DOMAIN)
   -h, --help          Show this help.
 
   Mail/OAuth creds are OPTIONAL and ABSENT BY DEFAULT. NONINTERACTIVE=1 (or
@@ -142,6 +157,8 @@ while [[ $# -gt 0 ]]; do
         --ca-key-pass) CA_KEY_PASS="$2"; shift 2 ;;
         --keys-src)    KEYS_SRC="$2"; shift 2 ;;
         --registry-pub) REGISTRY_PUB_FILE="$2"; shift 2 ;;   # Layer-B: baked verifying key (mesh-extension role)
+        --vpn-src)     VPN_SRC="$2"; shift 2 ;;               # egress-VPN: provider .conf/.ovpn to stage (own domain)
+        --vpn-domain)  VPN_DOMAIN="$2"; shift 2 ;;            # egress-VPN: the node's own brand domain
         -h|--help)     usage 0 ;;
         *)             echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
@@ -282,6 +299,46 @@ PLACEHOLDER
     fi
     chmod 0644 "${DR_DIR}/"* 2>/dev/null || true
     echo "  ${DR_DIR}/  (Layer-B ADMIN mesh-extension node identity + verifying key)"
+fi
+
+# ── Egress VPN: stage provider configs onto KEYS/vpn/<domain>/ (secrets) ───────
+# The keys-template ships a vpn/ doc dir (README deleted above) + a placeholder
+# vpn/example.com/.gitkeep tree. Strip the placeholder from keys-out so a real
+# stick carries ONLY the node's own-domain configs. If --vpn-src DIR is given,
+# copy its .conf/.ovpn under vpn/<VPN_DOMAIN>/ (own domain only); the configs are
+# secrets (private VPN key) — copied verbatim 0600, NEVER generated. With no
+# --vpn-src the dir stays empty and provision_vpn() no-ops (service default-off).
+rm -rf "${OUT_DIR}/vpn/example.com"
+if [ -n "${VPN_SRC}" ]; then
+    if [ ! -d "${VPN_SRC}" ]; then
+        echo "ERROR: --vpn-src given (${VPN_SRC}) but it is not a directory" >&2
+        exit 1
+    fi
+    if [ -z "${VPN_DOMAIN}" ]; then
+        echo "ERROR: --vpn-src given but no --vpn-domain / CLUSTER_DOMAIN — refusing to stage VPN configs without a target domain" >&2
+        echo "       (provision_vpn() installs ONLY the node's OWN domain's configs; the staging dir MUST be domain-scoped)" >&2
+        exit 1
+    fi
+    VPN_DIR="${OUT_DIR}/vpn/${VPN_DOMAIN}"
+    mkdir -p "${VPN_DIR}"
+    vpn_staged=0
+    # Accept either flat (DIR/*.conf|*.ovpn) or already domain-laid-out
+    # (DIR/<VPN_DOMAIN>/*). Prefer the domain subdir if it exists.
+    vpn_from="${VPN_SRC}"
+    [ -d "${VPN_SRC}/${VPN_DOMAIN}" ] && vpn_from="${VPN_SRC}/${VPN_DOMAIN}"
+    for ext in conf ovpn; do
+        for vf in "${vpn_from}/"*."${ext}"; do
+            [ -f "${vf}" ] || continue
+            cp -f "${vf}" "${VPN_DIR}/"
+            chmod 0600 "${VPN_DIR}/$(basename "${vf}")" 2>/dev/null || true
+            vpn_staged=$((vpn_staged + 1))
+        done
+    done
+    if [ "${vpn_staged}" -eq 0 ]; then
+        echo "WARNING: --vpn-src ${vpn_from} carried no *.conf / *.ovpn — KEYS/vpn/${VPN_DOMAIN}/ staged empty (service stays off)" >&2
+    else
+        echo "  ${VPN_DIR}/  (${vpn_staged} egress-VPN config(s) for domain ${VPN_DOMAIN}, mode 0600 — SECRET)"
+    fi
 fi
 
 mkdir -p "${OUT_DIR}/ssh"

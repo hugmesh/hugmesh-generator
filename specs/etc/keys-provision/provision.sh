@@ -1516,6 +1516,96 @@ provision_storage() {
     done
 }
 
+# ── Egress VPN — provider configs (per-domain, own-domain-only, 0600) ──
+# Installs the provider-downloaded VPN configs (ProtonVPN WireGuard `.conf`
+# FIRST-CLASS; OpenVPN `.ovpn` fallback) the egress-VPN OpenRC service
+# (snapdragon-egress-vpn, a DEFAULT-OFF optional service) uses for OUTGOING /
+# egress traffic on PUBLIC-facing flows (coturn UDP, made-public services, and —
+# only on explicit assignment — akkoma/matrix federation). The tailnet control
+# plane + cluster-internal traffic stay DIRECT (split-tunnel; see PR2 runner).
+#
+# SECRETS OFF-GIT, PER-DOMAIN, OWN-DOMAIN-ONLY (defence-in-depth, mirrors the
+# device-registry tenant scoping): the configs ride the key-USB under
+# KEYS/vpn/<domain>/ and this reads ONLY the node's OWN domain's directory — a
+# config staged under another tenant's domain is NEVER installed here. The node's
+# own domain is .egress_vpn.domain else .snapdragon.cluster_domain (the brand
+# residency provision_hosts already uses). With no own-domain dir (or an empty
+# one) NOTHING is installed and the service stays stopped (fail-closed: public
+# flows fall back to the Squid egress-proxy / direct, never leak — see PR2).
+#
+# This function does NOT start the service (default-off optional service; the
+# OpenRC service + split-tunnel runner ship in PR2, the signed-reconcile flip in
+# PR5). It only stages the own-domain configs 0600 root-owned into
+# /etc/snapdragon/vpn/ and points active.conf at the first config so a manually-
+# started service has something to bring up. The runtime UI path delivers a
+# config via a K8s Secret (ESO) instead; this is the key-USB delivery path.
+provision_vpn() {
+    local vpn_etc=/etc/snapdragon/vpn
+    # Resolve the node's OWN domain (residency). Precedence: explicit
+    # .egress_vpn.domain, else the brand .snapdragon.cluster_domain.
+    local dom
+    dom="$(jqm '.egress_vpn.domain // ""')"
+    { [ -z "${dom}" ] || [ "${dom}" = "null" ]; } && dom="$(jqm '.snapdragon.cluster_domain // ""')"
+    if [ -z "${dom}" ] || [ "${dom}" = "null" ]; then
+        log "egress-vpn: no node domain (.egress_vpn.domain / .snapdragon.cluster_domain) — skipping (service stays off)"
+        return 0
+    fi
+
+    # OWN-DOMAIN-ONLY: read strictly KEYS/vpn/<own-domain>/. A config under any
+    # other tenant's directory is invisible to this node (per-domain isolation).
+    local src="${BASE}/vpn/${dom}"
+    if [ ! -d "${src}" ]; then
+        log "egress-vpn: no KEYS/vpn/${dom}/ on the key-USB — skipping (service stays off; public egress falls back to the Squid proxy / direct)"
+        return 0
+    fi
+
+    mkdir -p "${vpn_etc}"
+    # 0700 dir, root-only: the .conf/.ovpn carry the private VPN key (secret).
+    chmod 0700 "${vpn_etc}" 2>/dev/null || true
+
+    local installed=0 first=""
+    local f base
+    # WireGuard .conf FIRST (first-class), then OpenVPN .ovpn (fallback). The first
+    # WireGuard config installed becomes active.conf; only if none exists does the
+    # first .ovpn become active.conf.
+    for f in "${src}/"*.conf; do
+        [ -f "${f}" ] || continue
+        base="$(basename "${f}")"
+        cp -f "${f}" "${vpn_etc}/${base}"
+        chmod 0600 "${vpn_etc}/${base}"; chown root:root "${vpn_etc}/${base}" 2>/dev/null || true
+        installed=$((installed + 1))
+        [ -z "${first}" ] && first="${base}"
+        log "egress-vpn: installed ${vpn_etc}/${base} (WireGuard, domain ${dom}, mode 0600)"
+    done
+    for f in "${src}/"*.ovpn; do
+        [ -f "${f}" ] || continue
+        base="$(basename "${f}")"
+        cp -f "${f}" "${vpn_etc}/${base}"
+        chmod 0600 "${vpn_etc}/${base}"; chown root:root "${vpn_etc}/${base}" 2>/dev/null || true
+        installed=$((installed + 1))
+        [ -z "${first}" ] && first="${base}"
+        log "egress-vpn: installed ${vpn_etc}/${base} (OpenVPN, domain ${dom}, mode 0600)"
+    done
+
+    if [ "${installed}" -eq 0 ]; then
+        log "egress-vpn: KEYS/vpn/${dom}/ present but carries no *.conf / *.ovpn — skipping (service stays off)"
+        return 0
+    fi
+
+    # Point active.conf at the first config (a WireGuard .conf wins over an .ovpn)
+    # so a manually-started service / first-boot has something to bring up. The
+    # signed reconcile (PR5) or the runtime UI path re-points active.conf later.
+    if [ -n "${first}" ] && [ ! -e "${vpn_etc}/active.conf" ]; then
+        ln -sfn "${vpn_etc}/${first}" "${vpn_etc}/active.conf"
+        log "egress-vpn: active.conf -> ${first}"
+    fi
+
+    # DEFAULT-OFF optional service: we do NOT rc-update add / start it here. The
+    # operator (or the optional-services gate, PR6) enables it; PR5's reconcile
+    # flips it on per assignment.
+    log "egress-vpn: staged ${installed} config(s) for domain ${dom} (service NOT started — default-off optional service)"
+}
+
 # ── Backups (etcd + PostgreSQL) to attached storage and/or network share ──
 provision_backup() {
     jqe '.backup' || return 0
@@ -2004,6 +2094,7 @@ main() {
     provision_files
     provision_truststore
     provision_storage
+    provision_vpn        # egress-VPN provider configs (own-domain-only, 0600; service default-off)
     provision_headscale
     provision_tailscale
     provision_device_registry   # Layer-B sshd enforcement (ADMIN nodes) — after mesh join, before k8s
