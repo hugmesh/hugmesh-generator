@@ -1,0 +1,290 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# WORKLOAD CONSOLE — per-APP-TIER-namespace Role + RoleBinding pairs.
+#
+# The read/mutate Roles are bound in EACH app-tier namespace, NEVER in an infra tier
+# (snapdragon-pki / snapdragon-policy / vault / devops / observability) — that exclusion
+# is the authoritative cross-TIER wall (the namespace allowlist the BFF also checks at
+# STEP 0b mirrors exactly this set). The read SA gets the read Role everywhere; the mutate
+# SA gets the mutate Role everywhere. The SAs themselves live in snapdragon-backend.
+#
+# APP-TIER namespaces (the allowlist): snapdragon-backend, snapdragon-frontend,
+# snapdragon-forum, snapdragon-games, snapdragon-games-instances, snapdragon-tube,
+# snapdragon-owncast.
+# ════════════════════════════════════════════════════════════════════════════════
+
+# ── snapdragon-backend (also the SA home) ──────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-read
+  namespace: snapdragon-backend
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-read }
+subjects:
+  - kind: ServiceAccount
+    name: workload-console-read
+    namespace: snapdragon-backend
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-mutate
+  namespace: snapdragon-backend
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-mutate }
+subjects:
+  - kind: ServiceAccount
+    name: workload-console-mutate
+    namespace: snapdragon-backend
+---
+# ── snapdragon-frontend ────────────────────────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-read
+  namespace: snapdragon-frontend
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/component: rbac-read, app.kubernetes.io/part-of: snapdragon.systems }
+rules:
+  - { apiGroups: [""], resources: ["pods", "pods/log", "events", "services", "endpoints", "persistentvolumeclaims"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["apps"], resources: ["deployments", "statefulsets", "daemonsets", "replicasets"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["networking.k8s.io"], resources: ["networkpolicies"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["metrics.k8s.io"], resources: ["pods"], verbs: ["get", "list"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-mutate
+  namespace: snapdragon-frontend
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/component: rbac-mutate, app.kubernetes.io/part-of: snapdragon.systems }
+rules:
+  - { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "delete"] }
+  - { apiGroups: [""], resources: ["pods/exec"], verbs: ["create"] }
+  - { apiGroups: [""], resources: ["pods/portforward"], verbs: ["create"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-read
+  namespace: snapdragon-frontend
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-read }
+subjects: [{ kind: ServiceAccount, name: workload-console-read, namespace: snapdragon-backend }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-mutate
+  namespace: snapdragon-frontend
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-mutate }
+subjects: [{ kind: ServiceAccount, name: workload-console-mutate, namespace: snapdragon-backend }]
+---
+# ── snapdragon-forum ───────────────────────────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-read
+  namespace: snapdragon-forum
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/component: rbac-read, app.kubernetes.io/part-of: snapdragon.systems }
+rules:
+  - { apiGroups: [""], resources: ["pods", "pods/log", "events", "services", "endpoints", "persistentvolumeclaims"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["apps"], resources: ["deployments", "statefulsets", "daemonsets", "replicasets"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["networking.k8s.io"], resources: ["networkpolicies"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["metrics.k8s.io"], resources: ["pods"], verbs: ["get", "list"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-mutate
+  namespace: snapdragon-forum
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/component: rbac-mutate, app.kubernetes.io/part-of: snapdragon.systems }
+rules:
+  - { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "delete"] }
+  - { apiGroups: [""], resources: ["pods/exec"], verbs: ["create"] }
+  - { apiGroups: [""], resources: ["pods/portforward"], verbs: ["create"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-read
+  namespace: snapdragon-forum
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-read }
+subjects: [{ kind: ServiceAccount, name: workload-console-read, namespace: snapdragon-backend }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-mutate
+  namespace: snapdragon-forum
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-mutate }
+subjects: [{ kind: ServiceAccount, name: workload-console-mutate, namespace: snapdragon-backend }]
+---
+# ── snapdragon-games ───────────────────────────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-read
+  namespace: snapdragon-games
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/component: rbac-read, app.kubernetes.io/part-of: snapdragon.systems }
+rules:
+  - { apiGroups: [""], resources: ["pods", "pods/log", "events", "services", "endpoints", "persistentvolumeclaims"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["apps"], resources: ["deployments", "statefulsets", "daemonsets", "replicasets"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["networking.k8s.io"], resources: ["networkpolicies"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["metrics.k8s.io"], resources: ["pods"], verbs: ["get", "list"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-mutate
+  namespace: snapdragon-games
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/component: rbac-mutate, app.kubernetes.io/part-of: snapdragon.systems }
+rules:
+  - { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "delete"] }
+  - { apiGroups: [""], resources: ["pods/exec"], verbs: ["create"] }
+  - { apiGroups: [""], resources: ["pods/portforward"], verbs: ["create"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-read
+  namespace: snapdragon-games
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-read }
+subjects: [{ kind: ServiceAccount, name: workload-console-read, namespace: snapdragon-backend }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-mutate
+  namespace: snapdragon-games
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-mutate }
+subjects: [{ kind: ServiceAccount, name: workload-console-mutate, namespace: snapdragon-backend }]
+---
+# ── snapdragon-games-instances ─────────────────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-read
+  namespace: snapdragon-games-instances
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/component: rbac-read, app.kubernetes.io/part-of: snapdragon.systems }
+rules:
+  - { apiGroups: [""], resources: ["pods", "pods/log", "events", "services", "endpoints", "persistentvolumeclaims"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["apps"], resources: ["deployments", "statefulsets", "daemonsets", "replicasets"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["networking.k8s.io"], resources: ["networkpolicies"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["metrics.k8s.io"], resources: ["pods"], verbs: ["get", "list"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-mutate
+  namespace: snapdragon-games-instances
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/component: rbac-mutate, app.kubernetes.io/part-of: snapdragon.systems }
+rules:
+  - { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "delete"] }
+  - { apiGroups: [""], resources: ["pods/exec"], verbs: ["create"] }
+  - { apiGroups: [""], resources: ["pods/portforward"], verbs: ["create"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-read
+  namespace: snapdragon-games-instances
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-read }
+subjects: [{ kind: ServiceAccount, name: workload-console-read, namespace: snapdragon-backend }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-mutate
+  namespace: snapdragon-games-instances
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-mutate }
+subjects: [{ kind: ServiceAccount, name: workload-console-mutate, namespace: snapdragon-backend }]
+---
+# ── snapdragon-tube (GPU-gated optional) ───────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-read
+  namespace: snapdragon-tube
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/component: rbac-read, app.kubernetes.io/part-of: snapdragon.systems }
+rules:
+  - { apiGroups: [""], resources: ["pods", "pods/log", "events", "services", "endpoints", "persistentvolumeclaims"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["apps"], resources: ["deployments", "statefulsets", "daemonsets", "replicasets"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["networking.k8s.io"], resources: ["networkpolicies"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["metrics.k8s.io"], resources: ["pods"], verbs: ["get", "list"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-mutate
+  namespace: snapdragon-tube
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/component: rbac-mutate, app.kubernetes.io/part-of: snapdragon.systems }
+rules:
+  - { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "delete"] }
+  - { apiGroups: [""], resources: ["pods/exec"], verbs: ["create"] }
+  - { apiGroups: [""], resources: ["pods/portforward"], verbs: ["create"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-read
+  namespace: snapdragon-tube
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-read }
+subjects: [{ kind: ServiceAccount, name: workload-console-read, namespace: snapdragon-backend }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-mutate
+  namespace: snapdragon-tube
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-mutate }
+subjects: [{ kind: ServiceAccount, name: workload-console-mutate, namespace: snapdragon-backend }]
+---
+# ── snapdragon-owncast (GPU-gated optional) ────────────────────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-read
+  namespace: snapdragon-owncast
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/component: rbac-read, app.kubernetes.io/part-of: snapdragon.systems }
+rules:
+  - { apiGroups: [""], resources: ["pods", "pods/log", "events", "services", "endpoints", "persistentvolumeclaims"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["apps"], resources: ["deployments", "statefulsets", "daemonsets", "replicasets"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["networking.k8s.io"], resources: ["networkpolicies"], verbs: ["get", "list", "watch"] }
+  - { apiGroups: ["metrics.k8s.io"], resources: ["pods"], verbs: ["get", "list"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-console-mutate
+  namespace: snapdragon-owncast
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/component: rbac-mutate, app.kubernetes.io/part-of: snapdragon.systems }
+rules:
+  - { apiGroups: [""], resources: ["pods"], verbs: ["get", "list", "delete"] }
+  - { apiGroups: [""], resources: ["pods/exec"], verbs: ["create"] }
+  - { apiGroups: [""], resources: ["pods/portforward"], verbs: ["create"] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-read
+  namespace: snapdragon-owncast
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-read }
+subjects: [{ kind: ServiceAccount, name: workload-console-read, namespace: snapdragon-backend }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-console-mutate
+  namespace: snapdragon-owncast
+  labels: { app.kubernetes.io/name: workload-console, app.kubernetes.io/part-of: snapdragon.systems }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: workload-console-mutate }
+subjects: [{ kind: ServiceAccount, name: workload-console-mutate, namespace: snapdragon-backend }]

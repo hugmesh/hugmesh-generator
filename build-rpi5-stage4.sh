@@ -800,7 +800,7 @@ gate_optional_services() {
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     local slug
-    for slug in akkoma tuwunel phpbb games egress-vpn; do
+    for slug in akkoma tuwunel phpbb games egress-vpn workloadConsole; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -869,6 +869,18 @@ gate_optional_services() {
                 # rootfs, not the GitOps tree.
                 rm -f "${tree}/manifests/networkpolicy/egress-vpn-interaction.yaml"
                 _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" egress-vpn-interaction.yaml
+                ;;
+            workloadConsole)
+                # The WORKLOAD CONSOLE is RBAC + route-access ONLY (the BFF endpoints live in
+                # the always-present admin-bff). Deselecting it prunes the two-SA RBAC
+                # Application + its manifests (so the SA tokens are never minted) AND the two
+                # route-access rows, so the gateway 404s the whole /bff/{admin,superadmin}/
+                # workloads/** prefix. The admin-bff ALSO ships dark independently
+                # (app.workload-console.enabled=false), so even an un-pruned tree is inert.
+                rm -f "${apps}/14-workload-console-rbac.yaml"
+                rm -rf "${tree}/manifests/workload-console-rbac"
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/bff/superadmin/workloads/**' '/bff/admin/workloads/**'
                 ;;
         esac
     done
@@ -957,7 +969,7 @@ _opt_render_installed_services() {
     local cm="${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy/installed-services-configmap.yaml"
     [ -f "${cm}" ] || return 0
     local slug val
-    for slug in akkoma tuwunel phpbb games; do
+    for slug in akkoma tuwunel phpbb games workloadConsole; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
     done

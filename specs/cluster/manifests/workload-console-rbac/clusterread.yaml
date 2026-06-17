@@ -1,0 +1,64 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# WORKLOAD CONSOLE — the SUPERADMIN cluster-wide READ SA + ClusterRole.
+#
+# The /bff/superadmin/workloads/** cross-cluster READ surface needs to list pods across
+# every app-tier namespace. Rather than enumerate per-namespace RoleBindings for the
+# superadmin path, a SEPARATE SA (workload-console-superadmin-read) gets a read-only
+# ClusterRole. It is STILL read-only: get/list/watch on pods/pods.log/events/services/
+# endpoints/pvcs/apps/networkpolicies/metrics — NO secrets, NO configmaps, NO exec, NO
+# portforward, NO delete, NO write. The DANGEROUS cross-tier reads the spec keeps
+# SUPERADMIN-only (e.g. system df) are still bounded by the BFF's STEP-0b namespace
+# allowlist (so even this cluster-read SA is only ever asked about app-tier namespaces).
+#
+# This ClusterRole is on the SUPERADMIN path ONLY — there is NO ClusterRole on the
+# admin-read path (the admin reads go through the per-namespace Roles in bindings.yaml).
+# ════════════════════════════════════════════════════════════════════════════════
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workload-console-superadmin-read
+  namespace: snapdragon-backend
+  labels:
+    app.kubernetes.io/name: workload-console
+    app.kubernetes.io/component: rbac-superadmin-read
+    app.kubernetes.io/part-of: snapdragon.systems
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: workload-console-superadmin-read
+  labels:
+    app.kubernetes.io/name: workload-console
+    app.kubernetes.io/component: rbac-superadmin-read
+    app.kubernetes.io/part-of: snapdragon.systems
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "events", "services", "endpoints", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: workload-console-superadmin-read
+  labels:
+    app.kubernetes.io/name: workload-console
+    app.kubernetes.io/component: rbac-superadmin-read
+    app.kubernetes.io/part-of: snapdragon.systems
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: workload-console-superadmin-read
+subjects:
+  - kind: ServiceAccount
+    name: workload-console-superadmin-read
+    namespace: snapdragon-backend

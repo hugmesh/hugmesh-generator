@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# The WORKLOAD CONSOLE RBAC: two least-privilege app-tier SAs (read app-tier-only /
+# mutate) bound ONLY in the app-tier namespaces (never pki/policy/vault/devops/
+# observability), the SUPERADMIN cluster-read SA + ClusterRole (read-only), and the
+# deploy-provenance Kyverno ClusterPolicy (digest-pinned own-registry only). SHIPS DARK:
+# the admin-bff leaves app.workload-console.k8s.enabled=false (NoopWorkloadClient) until
+# deliberately enabled, so these tokens are unused until then.
+resources:
+  - serviceaccounts.yaml
+  - read-role.yaml
+  - mutate-role.yaml
+  - bindings.yaml
+  - clusterread.yaml
+  - deploy-provenance-policy.yaml

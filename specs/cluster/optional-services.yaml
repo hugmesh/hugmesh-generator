@@ -265,6 +265,38 @@ spec:
       # The per-service opt-in label the NetworkPolicy interaction keys off.
       vpnEgressLabel: snapdragon.systems/vpn-egress
 
+    # ── workloadConsole — podman/OpenShift-equivalent pod console (DEFAULT-OFF) ──
+    # UNLIKE the deployed services, the Workload Console is RBAC + route-access ONLY:
+    # the BFF endpoints (/bff/{admin,superadmin}/workloads/**) live in the always-present
+    # admin-bff, and the federated admin-ui remote is a HIDDEN-tier module the host loads
+    # only when the grant guard passes. This slug owns the two-SA RBAC Application
+    # (apps/14-workload-console-rbac.yaml + manifests/workload-console-rbac: read app-tier-
+    # only + mutate SAs + the superadmin cluster-read SA/ClusterRole + the deploy-provenance
+    # Kyverno policy) and the two route-access rows. SHIPS DARK: default off; even when
+    # selected the admin-bff is independently dark until app.workload-console.enabled + the
+    # DB master flag + an active grant. The DANGEROUS surfaces are tailnet-only by deployment.
+    - slug: workloadConsole
+      displayName: "Workload Console"
+      namespace: snapdragon-backend
+      default: off
+      apps:
+        - apps/14-workload-console-rbac.yaml
+      sharedApps: []
+      manifestPath: manifests/workload-console-rbac
+      esoFile: null
+      esoKeys: []
+      gatewayHost: null
+      gatewayRouteIds: []
+      # The console UI remote is a HIDDEN federation tier (registered but never auto-
+      # surfaced; the host loads it only when the grant guard passes) — NOT a normal
+      # auto-mounted federationModule.
+      hiddenModule: { slug: workloadConsole, mountAt: /admin/workloads }
+      routeAccessRows:
+        - { gateway: snapdragon-be-gateway, urlPattern: /bff/superadmin/workloads/** }
+        - { gateway: snapdragon-be-gateway, urlPattern: /bff/admin/workloads/** }
+      federationModule: null
+      casdoorSeed: null
+
   # ── games subdomain / TLD configuration ──────────────────────────────────────
   # GAMES_DOMAIN (brand.conf knob, default games.${CLUSTER_DOMAIN}) is the single
   # value that drives every games host / OIDC issuer / redirect URI. The default
