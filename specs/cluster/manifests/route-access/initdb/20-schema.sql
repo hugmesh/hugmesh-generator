@@ -28,11 +28,31 @@ CREATE TABLE IF NOT EXISTS gateway_route_access (
     -- target domain (derived from Host) and a scoped row only applies to its own
     -- brand. Defense-in-depth alongside the filter's hard-deny on domain mismatch.
     domain       text,
+    -- Per-row MFA REQUIREMENT (Casdoor MFA tier — D6/D8). DEFAULT false = INERT:
+    -- every canonical seed row below omits this column from its INSERT list, so the
+    -- default applies and the deployed posture is BYTE-IDENTICAL until an operator
+    -- flips a row to true. This column is the DUAL-WRITE PARTNER of the gateway G4
+    -- CanonicalSeed mfa_required field (snapdragon-gateway) + the admin-bff
+    -- 001-copy RouteRule/RouteAccessRepository mirror — the merged gateway's
+    -- GatewayRouteAccessService.loadFromPostgres SELECTs this column, and
+    -- GatewayRouteAccessFilter.decide() (when app.mfa.enabled) requires the
+    -- principal to hold MFA_SATISFIED on a matched true row, else 403 fail-closed.
+    -- A row with mfa_required=false never gates on MFA, so legacy/single-issuer
+    -- tokens with no MFA claim are unaffected = additive. ⚠ MUST merge in LOCKSTEP
+    -- with the gateway G4 + admin-bff 001-copy so all three sides SELECT/write the
+    -- same column (mirrors the domain-column dual-write idiom directly above).
+    mfa_required boolean     NOT NULL DEFAULT false,
     updated_at   timestamptz NOT NULL DEFAULT now()
 );
 -- Idempotent add for a table created by an EARLIER (pre-domain) initdb run so an
 -- in-place cluster upgrade gains the column the merged gateway now SELECTs.
 ALTER TABLE gateway_route_access ADD COLUMN IF NOT EXISTS domain text;
+-- Idempotent add (mirrors the domain-column idiom) so an in-place upgrade of a
+-- pre-MFA cluster gains the mfa_required column the merged gateway now SELECTs.
+-- DEFAULT false keeps every existing row inert (no MFA gate) until an operator
+-- flips it — byte-identical to today. Dual-write partner of gateway G4 +
+-- admin-bff 001-copy (see the CREATE-TABLE note above).
+ALTER TABLE gateway_route_access ADD COLUMN IF NOT EXISTS mfa_required boolean DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_route_access_gw ON gateway_route_access (gateway, url_pattern);
 
 -- Canonical seed — one allow row per (gateway, url_pattern, role) in the routing
