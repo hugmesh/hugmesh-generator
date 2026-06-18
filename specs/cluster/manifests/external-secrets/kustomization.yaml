@@ -16,3 +16,8 @@ resources:
   # slug is deselected the build prunes BOTH its app(s) AND its line here.
   - akkoma-externalsecrets.yaml    # akkoma-proxy-mtls + akkoma-admin
   - tuwunel-externalsecrets.yaml   # tuwunel-proxy-mtls + tuwunel-admin
+  # Velero object-store credentials (ns velero, key `cloud`) — the Velero server +
+  # BSL credential, templated from Vault secret/<brand>/velero. ESO/Vault only,
+  # never inline. Materializes only once the velero namespace exists + the Vault
+  # path is populated (ships dark with the rest of the cloud-backups feature).
+  - velero-externalsecrets.yaml    # velero-cloud-credentials

@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# The Velero cloud-backups CONFIG (applied by apps/56-velero-config.yaml AFTER the
+# Velero server + CRDs from apps/55-velero.yaml):
+#   - backupstoragelocation.yaml — the `default` BSL (TOTAL/superadmin + the
+#     effector's blank-destination_ref fallback) + VolumeSnapshotLocation + the
+#     per-brand BSL template. Names match the effector's storageLocationRef
+#     contract (destination_ref, fallback "default").
+#   - rbac.yaml — least-privilege SAs/Roles: backups-effector (admin-bff creates/
+#     gets Backup/Restore CRs) + backups-sweep (CronJob reads/annotates). Not
+#     cluster-admin, not the Velero server SA.
+#   - sweep-cronjob.yaml — the CR-read half of the status sweep (suspend:true until
+#     backups are enabled); the catalog-write half is an admin-bff reconciler
+#     hand-off (see the sweep file header + docs/CLOUD-BACKUPS.md).
+# Credentials (velero-cloud-credentials) are materialized by ESO from Vault in
+# manifests/external-secrets/velero-externalsecrets.yaml — never inline here.
+resources:
+  - backupstoragelocation.yaml
+  - rbac.yaml
+  - sweep-cronjob.yaml

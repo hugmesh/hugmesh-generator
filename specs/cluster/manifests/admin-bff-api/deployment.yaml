@@ -23,6 +23,16 @@ spec:
     metadata: { labels: { app: snapdragon-admin-bff-api } }
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
+      # ── Cloud-backups effector identity (least-privilege Velero CR apply) ────
+      # The cloudbackup VeleroBackupEffector's fabric8 in-cluster client runs as
+      # THIS pod's ServiceAccount. backups-effector (manifests/velero/rbac.yaml) is
+      # bound ONLY to create/get/list/patch velero.io Backup/Restore CRs in the
+      # `velero` namespace — NOT cluster-admin, NOT the Velero server SA. The token
+      # is unused while the effector ships dark (BACKUPS_EFFECTOR_ENABLED=false
+      # below); enabling backups (a superadmin opt-in) is what lights this seam up.
+      # automount is required so the in-cluster client can read the SA token.
+      serviceAccountName: backups-effector
+      automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -180,6 +190,23 @@ spec:
             # proxy here is safe and it lights up the moment the operator flips Anubis on.
             - { name: ANUBIS_ENABLED,        value: "true" }
             - { name: ANUBIS_MANAGEMENT_URL, value: "http://anubis.snapdragon-frontend.svc.cluster.local:9090" }
+            # ── Cloud-backups effector (the Velero leg) — SHIPS DARK ───────────
+            # BACKUPS_EFFECTOR_ENABLED gates the REAL VeleroBackupEffector
+            # (app.backups.effector.enabled). DEFAULT-OFF: while false the
+            # foundation's NoopBackupEffector + StubRunningServiceProvider stay the
+            # beans — a created backup_set is written to the catalog but NO Velero
+            # CR is emitted and NO cluster ConfigMap is read, so installing Velero
+            # does NOT silently start real backups. A SUPERADMIN turns backups on by
+            # flipping this to "true" (and un-suspending the sweep CronJob) AFTER
+            # apps/55-velero.yaml + apps/56-velero-config.yaml are synced and the
+            # object store + Vault secret/<brand>/velero are provisioned. See
+            # docs/CLOUD-BACKUPS.md. The other BACKUPS_* values are the effector's
+            # defaults (velero ns, be/fe brand suffixes, 30d TTL, installed-services
+            # ConfigMap ns) and are inert while the flag is off.
+            - { name: BACKUPS_EFFECTOR_ENABLED,            value: "false" }
+            - { name: BACKUPS_VELERO_NAMESPACE,            value: "velero" }
+            - { name: BACKUPS_BRAND_NAMESPACE_SUFFIXES,    value: "be,fe" }
+            - { name: BACKUPS_INSTALLED_SERVICES_NAMESPACE, value: "snapdragon-backend" }
           # Probes are HTTPS now that server.ssl is enabled. Because client-auth=need
           # rejects the TLS handshake of any caller WITHOUT a client cert, a plain
           # kubelet httpGet (which presents none) would fail — so the probe is an
