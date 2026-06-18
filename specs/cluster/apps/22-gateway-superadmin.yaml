@@ -1,5 +1,5 @@
 # snapdragon-superadmin-gateway — the TAILNET-ONLY front door for the SUPERADMIN
-# infra control plane (the App-Store console + appstore-ui federated remote).
+# infra control plane (the Service Catalog console + service-catalog-ui federated remote).
 #
 # ⚠ TAILNET-ONLY by THREE locks (snapdragon-superadmin-appstore design, V6):
 #   1. NETWORK: served ONLY by the internal ingress-nginx on the pki node
@@ -12,7 +12,7 @@
 #      superadmin host. The superadmin surface is off EVERY public-ingress gateway.
 #   2. ROUTE-ACCESS: every route here is gated ROLE_SUPERADMIN in the
 #      gateway_route_access table under THIS gateway name (manifests/route-access).
-#   3. AUTHGUARD: the appstore-ui carries an Angular superadminGuard (in the UI repo).
+#   3. AUTHGUARD: the service-catalog-ui carries an Angular superadminGuard (in the UI repo).
 #
 # Mirrors the pki-gateway (apps/20-gateway-pki.yaml): nginx-internal class + the pki
 # nodeSelector, its OWN least-privilege read-only route-access DB role. It does NOT
@@ -64,25 +64,25 @@ spec:
           - name: ROUTE_ACCESS_R2DBC_URL
             value: r2dbc:postgresql://superadmin_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
           # Present the downstream client cert to the now-mTLS admin-bff + the
-          # remote-fragment nginx serving the appstore-ui (same as be-gateway).
+          # remote-fragment nginx serving the service-catalog-ui (same as be-gateway).
           - name: SNAPDRAGON_GATEWAY_MTLS_ENABLED
             value: "true"
         routes:
-          # The SUPERADMIN App-Store BFF control plane (admin-bff /bff/superadmin/**).
+          # The SUPERADMIN Service Catalog BFF control plane (admin-bff /bff/superadmin/**).
           # Tailnet-only here; the route-access rows under this gateway gate it
           # ROLE_SUPERADMIN. https:// — admin-bff enforces mTLS (client-auth=need).
           - id: superadmin-bff
             uri: https://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
             path: /bff/superadmin/**
-          # The appstore-ui federated REMOTE (remoteEntry + bundles), served by the
+          # The service-catalog-ui federated REMOTE (remoteEntry + bundles), served by the
           # remote-fragment nginx fleet. The federation registration marks it
           # kind=remote-shell, visibility=internal, requiresRole=SUPERADMIN so it is
           # discoverable/authorized ONLY for superadmin over the tailnet.
-          - id: superadmin-appstore-ui
-            uri: http://snapdragon-superadmin-appstore-ui.snapdragon-frontend.svc.cluster.local:8080
-            path: /superadmin/appstore/**
+          - id: superadmin-service-catalog-ui
+            uri: http://snapdragon-superadmin-service-catalog-ui.snapdragon-frontend.svc.cluster.local:8080
+            path: /superadmin/service-catalog/**
           # The federation manifest/bundles the superadmin console shell reads to
-          # mount the appstore remote (the internal-visibility tier is enforced
+          # mount the service-catalog remote (the internal-visibility tier is enforced
           # inside federation-api by requiresRole=SUPERADMIN; this coarse row is the
           # tailnet-gateway floor). https:// — federation-api enforces mTLS.
           - id: superadmin-federation

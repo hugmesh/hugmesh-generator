@@ -85,8 +85,8 @@ spec:
   reserved:
     # --- platform / role gateway route prefixes (fe/be/pki) ---
     - admin
-    # `superadmin`: the TAILNET superadmin App-Store console remote is served at
-    # /superadmin/appstore/** on the superadmin-gateway (gateway_route_access seed,
+    # `superadmin`: the TAILNET superadmin Service Catalog console remote is served at
+    # /superadmin/service-catalog/** on the superadmin-gateway (gateway_route_access seed,
     # apps/22-gateway-superadmin.yaml) — a DEDICATED first-segment route prefix, so a
     # vanity username equal to it would shadow a live route. The app-repo ReservedNames
     # copies SHOULD add `superadmin` too to stay in sync.

@@ -1,5 +1,5 @@
-# register-superadmin-appstore.descriptor.yaml — the federation_modules registration
-# DESCRIPTOR for the SUPERADMIN App-Store console remote (snapdragon-superadmin-appstore design,
+# register-superadmin-service-catalog.descriptor.yaml — the federation_modules registration
+# DESCRIPTOR for the SUPERADMIN Service Catalog console remote (snapdragon-superadmin-appstore design,
 # tailnet-only V6). NOT applied directly: like the optional-services federationModule entries
 # (optional-services.yaml — akkoma/tuwunel/forum/games), the actual `federation_modules` INSERT
 # is owned by the federation-api repo's Liquibase changeset (forward-referenced by name below).
@@ -7,7 +7,7 @@
 # registration's exact shape lives with the GitOps tree that deploys the gateway + route-access.
 #
 # WHY a remote-shell / internal / SUPERADMIN tier:
-#   The App-Store console (snapdragon-superadmin-appstore-ui, exposing ./Appstore) is a federated
+#   The Service Catalog console (snapdragon-superadmin-service-catalog-ui, exposing ./ServiceCatalog) is a federated
 #   REMOTE served by the remote-fragment nginx fleet. It must be discoverable/authorized ONLY
 #   for SUPERADMIN over the TAILNET — never on the public UI. The three federation fields below
 #   pin that: kind=remote-shell (a top-level shell remote, not a per-user MFE), visibility=internal
@@ -19,21 +19,21 @@
 apiVersion: snapdragon.systems/v1
 kind: FederationModuleRegistration
 metadata:
-  name: superadmin-appstore
+  name: superadmin-service-catalog
   # The federation-api Liquibase changeset that performs the INSERT (forward-reference,
   # mirroring optional-services.yaml's `changeset` field — the federation-api wave owns it).
-  changeset: "040-register-superadmin-appstore-module.xml"
+  changeset: "040-register-superadmin-service-catalog-module.xml"
 spec:
   # The federation_modules row this descriptor stands for. Column shape matches the
   # federation-api federation_modules registry (slug + remoteEntry + exposedModule + mountAt
   # + kind + visibility + requiresRole).
-  slug: superadmin-appstore
-  displayName: "Superadmin App-Store"
+  slug: superadmin-service-catalog
+  displayName: "Superadmin Service Catalog"
   # The remote-fragment nginx service that serves the remoteEntry + bundles for the
-  # snapdragon-superadmin-appstore-ui remote (exposes ./Appstore as name "appstore").
-  remoteEntry: "http://snapdragon-superadmin-appstore-ui.snapdragon-frontend.svc.cluster.local:8080/remoteEntry.json"
-  exposedModule: "./Appstore"
-  mountAt: /superadmin/appstore
+  # snapdragon-superadmin-service-catalog-ui remote (exposes ./ServiceCatalog as name "service-catalog").
+  remoteEntry: "http://snapdragon-superadmin-service-catalog-ui.snapdragon-frontend.svc.cluster.local:8080/remoteEntry.json"
+  exposedModule: "./ServiceCatalog"
+  mountAt: /superadmin/service-catalog
   # ⚠ TAILNET-ONLY federation tier:
   kind: remote-shell        # top-level superadmin console shell remote (not a per-user MFE)
   visibility: internal      # NOT public — withheld from the public manifest (superadmin tier)

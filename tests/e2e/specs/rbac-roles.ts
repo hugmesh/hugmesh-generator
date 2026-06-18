@@ -34,7 +34,7 @@
 
 export type SystemsRole =
   | 'ROLE_SUPERADMIN'  // infra control-plane tier; ABOVE admin. Reaches the tailnet-only
-                       // superadmin-gateway (snapdragon-superadmin-gateway) App-Store/console
+                       // superadmin-gateway (snapdragon-superadmin-gateway) Service Catalog/console
                        // surface. NOT a superset that auto-grants admin: it is its OWN ROLE_*.
   | 'ROLE_ADMIN'
   | 'ROLE_MOD'
@@ -91,7 +91,7 @@ export const SYSTEMS_SEED_USERS: SystemsSeedUser[] = [
     roles: ['ROLE_SUPERADMIN'],
     expectGamesAdmin: false,
     registrationComplete: true,
-    note: 'Infra superadmin — reaches the tailnet-only snapdragon-superadmin-gateway App-Store/console (/bff/superadmin/**, /superadmin/appstore/**, /api/federation/**); ADMIN must NOT reach these.',
+    note: 'Infra superadmin — reaches the tailnet-only snapdragon-superadmin-gateway Service Catalog/console (/bff/superadmin/**, /superadmin/service-catalog/**, /api/federation/**); ADMIN must NOT reach these.',
   },
   {
     username: 'e2e-admin',
@@ -322,7 +322,7 @@ export function swarmTargetsForMod(modIndex: number, counts = SWARM_DEFAULTS): s
 }
 
 // ── ROLE_SUPERADMIN tier — the tailnet-only infra control plane ──────────────
-// The superadmin App-Store/console is served by its OWN gateway
+// The superadmin Service Catalog/console is served by its OWN gateway
 // (snapdragon-superadmin-gateway, specs/cluster/apps/22-gateway-superadmin.yaml),
 // NOT by the public fe/be/pki gateways. Every route under that gateway name is
 // gated ROLE_SUPERADMIN in gateway_route_access
@@ -335,8 +335,8 @@ export const SUPERADMIN_GATEWAY = 'snapdragon-superadmin-gateway' as const;
  *  seeded in 20-schema.sql under gateway = snapdragon-superadmin-gateway, plus a
  *  representative concrete path to probe each glob with. */
 export const SUPERADMIN_ALLOW_ROUTES: { urlPattern: string; probe: string; what: string }[] = [
-  { urlPattern: '/bff/superadmin/**',      probe: '/bff/superadmin/appstore/catalog', what: 'App-Store BFF control plane (tailnet)' },
-  { urlPattern: '/superadmin/appstore/**', probe: '/superadmin/appstore/remoteEntry.js', what: 'appstore-ui federated remote (tailnet)' },
+  { urlPattern: '/bff/superadmin/**',      probe: '/bff/superadmin/service-store/catalog', what: 'Service Catalog BFF control plane (tailnet)' },
+  { urlPattern: '/superadmin/service-catalog/**', probe: '/superadmin/service-catalog/remoteEntry.js', what: 'service-catalog-ui federated remote (tailnet)' },
   { urlPattern: '/api/federation/**',      probe: '/api/federation/manifest', what: 'federation manifest/bundles for the superadmin shell (tailnet)' },
 ];
 

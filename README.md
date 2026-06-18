@@ -51,7 +51,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 - **✅ Node storage** — attach + register extra storage to a node, node-pinned
   local PV / local-path (FDE), capacity-aware scheduling. [`docs/NODE-STORAGE.md`](docs/NODE-STORAGE.md).
 - **✅ Games App-Store control plane**, **✅ owncast** + **✅ tube** (GPU-dependent
-  video), **✅ notifications in-app MVP**, and the **✅ superadmin App-Store**
+  video), **✅ notifications in-app MVP**, and the **✅ superadmin Service Catalog**
   (data layer + tailnet superadmin-gateway + Kaniko builder, PR #110).
   [`docs/GAMES-APPSTORE.md`](docs/GAMES-APPSTORE.md).
 - **✅ Device-license registry** — physical-ownership / domain-residency / SSH

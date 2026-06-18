@@ -76,7 +76,7 @@ flowchart TD
     class ROADMAP,WC,MFA,DESKGOV,NOTIFY planned;
 ```
 
-> The **superadmin App-Store** surface (tailnet-only `snapdragon-superadmin-gateway`
+> The **superadmin Service Catalog** surface (tailnet-only `snapdragon-superadmin-gateway`
 > + Kaniko build namespace) is now ✅ shipped on `main` but is reachable **only**
 > over the headscale tailnet via the internal ingress on the pki node — it is
 > deliberately off every public-ingress gateway, so it is not drawn on the public
@@ -163,10 +163,10 @@ domain-scoped, enforced at the gateway) governs every surface.
   per-domain namespace + mTLS isolation as the authoritative cross-domain
   boundary; one admin-bff ↔ one Casdoor org ↔ one homeserver per brand.
 - **Superadmin (✅ shipped):** a real code-enforced role owning device-licenses and
-  domain CRUD. Its App-Store console + `appstore-ui` remote are served by the
+  domain CRUD. Its Service Catalog console + `service-catalog-ui` remote are served by the
   tailnet-only `snapdragon-superadmin-gateway` (`apps/22-gateway-superadmin.yaml`)
   on the pki node's internal ingress — off every public gateway.
-- **Superadmin App-Store (✅ shipped on `main`):** the data layer (admin-bff
+- **Superadmin Service Catalog (✅ shipped on `main`):** the data layer (admin-bff
   service-curation / app-profile / service-deployment) **and** the infra legs —
   the tailnet superadmin-gateway plus the Kaniko in-cluster build namespace
   (`apps/54-appstore-builder.yaml`, ships dark until a build lands) merged via
@@ -238,7 +238,7 @@ backstops noted below may already be present but inert.
 | `Snapdragon-Systems/snapdragon-user-ui` | User console micro-frontend |
 | `Snapdragon-Systems/snapdragon-forum-ui` | Forum micro-frontend |
 | `Snapdragon-Systems/snapdragon-remote-fragment` | Shared federated-remote fragment scaffolding |
-| `Snapdragon-Systems/snapdragon-superadmin-appstore-ui` | Superadmin App-Store console (genesis / 🚧 in-flight) |
+| `Snapdragon-Systems/snapdragon-superadmin-service-catalog-ui` | Superadmin Service Catalog console (genesis / 🚧 in-flight) |
 | `owncast` / LocalTube (`tube`) | GPU-dependent video services (per-domain enable, federated per-user remotes) |
 | `Snapdragon-Systems/snapdragon.games` | Game studio and portal (runs on the x86_64 GPU worker) |
 | `Snapdragon-Systems/sdn` | headscale / SDN config |

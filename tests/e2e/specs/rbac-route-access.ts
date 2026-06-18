@@ -77,7 +77,7 @@ export const ROUTE_ACCESS: RouteRule[] = [
   // so admin is default-denied. NB /api/federation/** is ROLE_USER on the be-gateway
   // but ROLE_SUPERADMIN on THIS gateway — the gateway NAME scopes the decision.
   { gateway: 'snapdragon-superadmin-gateway', urlPattern: '/bff/superadmin/**',      role: 'ROLE_SUPERADMIN' },
-  { gateway: 'snapdragon-superadmin-gateway', urlPattern: '/superadmin/appstore/**', role: 'ROLE_SUPERADMIN' },
+  { gateway: 'snapdragon-superadmin-gateway', urlPattern: '/superadmin/service-catalog/**', role: 'ROLE_SUPERADMIN' },
   { gateway: 'snapdragon-superadmin-gateway', urlPattern: '/api/federation/**',      role: 'ROLE_SUPERADMIN' },
 ];
 

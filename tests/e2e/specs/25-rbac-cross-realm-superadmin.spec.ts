@@ -140,7 +140,7 @@ test.describe('RBAC: cross-realm issuer isolation (systems ⟂ games)', () => {
         { gw: 'snapdragon-be-gateway', path: '/api/admin/route-access' },
         { gw: 'snapdragon-fe-gateway', path: '/games/admin/sessions' },
         { gw: 'snapdragon-be-gateway', path: '/games/api/admin/role-grants' },
-        { gw: SUPERADMIN_GATEWAY as Gateway, path: '/bff/superadmin/appstore/catalog' },
+        { gw: SUPERADMIN_GATEWAY as Gateway, path: '/bff/superadmin/service-store/catalog' },
       ];
       for (const p of probes) {
         expect(gatewayDecision(p.gw, p.path, crossRealmRoles),

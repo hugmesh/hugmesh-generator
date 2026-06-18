@@ -1,5 +1,5 @@
 # {{BRAND_TITLE}} superadmin-gateway — the TAILNET-ONLY front door for the SUPERADMIN
-# infra control plane (the App-Store console + appstore-ui federated remote).
+# infra control plane (the Service Catalog console + service-catalog-ui federated remote).
 # Generated from snapdragon-generator/templates/apps/22-gateway-superadmin.yaml.hbs
 #
 # ⚠ TAILNET-ONLY by THREE locks (V6): network (nginx-internal + pki nodeSelector,
@@ -46,9 +46,9 @@ spec:
           - id: superadmin-bff
             uri: https://{{BRAND}}-admin-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
             path: /bff/superadmin/**
-          - id: superadmin-appstore-ui
-            uri: http://{{BRAND}}-superadmin-appstore-ui.{{BRAND}}-frontend.svc.cluster.local:8080
-            path: /superadmin/appstore/**
+          - id: superadmin-service-catalog-ui
+            uri: http://{{BRAND}}-superadmin-service-catalog-ui.{{BRAND}}-frontend.svc.cluster.local:8080
+            path: /superadmin/service-catalog/**
           - id: superadmin-federation
             uri: https://{{BRAND}}-federation-api.{{BRAND}}-backend.svc.cluster.local:8080
             path: /api/federation/**

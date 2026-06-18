@@ -4,7 +4,7 @@
 > framed below as *PAUSED* / *open PRs to review* / *partial unvalidated
 > scaffolds* have since **shipped to `main`**: the mod / user / forum BFFs + UIs,
 > `federation-api`, owncast, tube, node-storage, egress-VPN, the games App-Store
-> control plane, the notifications in-app MVP, and the superadmin App-Store
+> control plane, the notifications in-app MVP, and the superadmin Service Catalog
 > (data layer + tailnet gateway + Kaniko builder, PR #110). Treat this document
 > as a point-in-time record, **not** the current finish-list. For current state
 > see the per-feature docs ([index](README.md)) and `git log`; for what remains

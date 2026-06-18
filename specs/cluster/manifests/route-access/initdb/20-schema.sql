@@ -403,7 +403,7 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- the superadmin-gateway is ADDITIVE — it does not remove that row. The NEW
   -- App-Store CONSOLE path is reachable ONLY via the tailnet superadmin-gateway.
   ('snapdragon-superadmin-gateway', '/bff/superadmin/**',        'ROLE_SUPERADMIN', true),  -- App-Store BFF control plane (tailnet)
-  ('snapdragon-superadmin-gateway', '/superadmin/appstore/**',   'ROLE_SUPERADMIN', true),  -- appstore-ui federated remote (tailnet)
+  ('snapdragon-superadmin-gateway', '/superadmin/service-catalog/**', 'ROLE_SUPERADMIN', true),  -- service-catalog-ui federated remote (tailnet)
   ('snapdragon-superadmin-gateway', '/api/federation/**',        'ROLE_SUPERADMIN', true)   -- federation manifest/bundles for the superadmin shell (tailnet)
 ON CONFLICT DO NOTHING;
 
