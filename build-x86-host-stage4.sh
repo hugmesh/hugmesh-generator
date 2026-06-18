@@ -1089,6 +1089,16 @@ fi
 # Identity, locale, CNI dirs
 echo "${HOSTNAME}" > "${SYSROOT}/etc/hostname"
 mkdir -p "${SYSROOT}/etc/conf.d"; echo "hostname=\"${HOSTNAME}\"" > "${SYSROOT}/etc/conf.d/hostname"
+
+# Serial-console getty: the amd64 stage3 ships the ttyS0 agetty line COMMENTED (PC
+# default = VGA), so headless x86 nodes had NO serial login prompt — unlike the
+# aarch64 stage3, which ships ttyAMA0 active. Activate ttyS0 at 115200 (matching the
+# grub console=ttyS0,115200) for serial-console parity with the Pi images and so a
+# headless node can be logged in over a serial/hypervisor console, not just SSH.
+if grep -qE '^#\s*s0:12345:respawn:/sbin/agetty -L [0-9]+ ttyS0 ' "${SYSROOT}/etc/inittab" 2>/dev/null; then
+    sed -i -E 's|^#\s*(s0:12345:respawn:/sbin/agetty -L )[0-9]+( ttyS0 vt100)|\1115200\2|' "${SYSROOT}/etc/inittab"
+    info "Activated ttyS0 serial getty (115200) in /etc/inittab for serial-console access"
+fi
 echo "${TIMEZONE}" > "${SYSROOT}/etc/timezone"
 echo "en_US.UTF-8 UTF-8" > "${SYSROOT}/etc/locale.gen"
 mkdir -p "${SYSROOT}/opt/cni/bin" "${SYSROOT}/etc/cni/net.d" "${SYSROOT}/var/lib/keys-provision"
