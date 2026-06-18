@@ -51,3 +51,22 @@ media-fonts/dejavu
 media-fonts/noto
 media-gfx/feh
 app-editors/nano
+
+# Desktop app governance (FD-09 increment 7 / admin-bff PR #115) — the
+# admin-curated, domain-locked "Plasma Discover store" the keys-provision
+# provision_desktop_governance() config targets. Discover is pointed at the
+# admin-bff registry endpoint (a single Flatpak remote, Flathub removed, empty
+# default) and installs governed apps as Flatpaks; without these packages the
+# baked/USB-delivered #115 config has nothing to apply to.
+#   sys-apps/flatpak       — the runtime the `flatpak remote` config + bearer-
+#                            forward rely on (stable on amd64).
+#   kde-plasma/discover    — the store front-end; USE=flatpak (package.use/desktop)
+#                            builds its Flatpak backend → sys-apps/flatpak.
+# DEP-WEIGHT NOTE: Discover is a Qt6/KF6 app and pulls the full Qt6 + KDE
+# Frameworks 6 stack (qtbase/qtdeclarative/qtwebview + kconfig/kio/kirigami/…)
+# onto this otherwise LXDE/openbox image — a material build-size/time increase.
+# This is the lightest way to satisfy the design's "Plasma Discover" intent
+# (the feature UI/contract is built around Discover specifically); no full
+# Plasma desktop/meta package is added.
+sys-apps/flatpak
+kde-plasma/discover

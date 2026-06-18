@@ -6,7 +6,16 @@
 #   libdom[xml]        — www-client/netsurf (svgtiny/svg)
 #   nftables[...]      — net-firewall/firewalld backend (FD-06 shields-up)
 #   libdrm[radeon]     — xf86-video-ati DDX pulled by xorg-drivers (VIDEO_CARDS radeon*)
+#   discover[flatpak]  — the desktop-app-governance store backend (FD-09 inc 7 /
+#                        admin-bff #115): builds Discover's Flatpak backend so the
+#                        provision_desktop_governance() Flatpak-remote config has a
+#                        backend to drive; pulls sys-apps/flatpak. Other backends
+#                        (snap/firmware/webengine) left OFF — the governed store is
+#                        Flatpak-over-OCI only. (Discover's Qt6/KF6 deps are
+#                        Qt6-native packages, NOT gated by the make.conf -qt6, so
+#                        no qt USE override is needed here.)
 media-libs/freetype harfbuzz
 net-libs/libdom xml
 net-firewall/nftables python json xtables
 x11-libs/libdrm video_cards_radeon
+kde-plasma/discover flatpak
