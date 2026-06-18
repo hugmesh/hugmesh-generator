@@ -41,10 +41,22 @@ stages:
 pentest:sca:
   extends: .pentest-sca
 
-# Authenticated OWASP ZAP DAST against the spun-up env-test-build (baseline on
-# MR/default; the scheduled pipeline picks up pentest:dast-full for the active
-# scan). The harness ships in the generator at tests/pentest; a repo that does
-# not vendor it sets PENTEST_HARNESS_DIR to where it fetches the harness.
+# Authenticated OWASP ZAP DAST + nuclei boundary templates against the spun-up
+# env-test-build (baseline on MR/default; the scheduled pipeline picks up
+# pentest:dast-full for the active scan). The harness ships in the generator at
+# tests/pentest; a repo that does not vendor it sets PENTEST_HARNESS_DIR to where
+# it fetches the harness.
+#
+# PER-REPO TARGET (DAST_TARGET): by default the harness spins the two-brand
+# compose env-test-build and scans its gateway front door. An onboarded repo
+# whose in-CI service is NOT that compose gateway sets the DAST_TARGET CI variable
+# (or job variable) to the base URL of its OWN spun-up env-test-build service —
+# the authz-matrix / nuclei / ZAP passes then point at it. ONE variable, no
+# harness edit. Uncomment + set for such a repo:
+#
+#   variables:
+#     DAST_TARGET: "https://my-service.localtest.me:8443"
+#
 pentest:dast:
   extends: .pentest-dast-baseline
 
