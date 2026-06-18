@@ -61,7 +61,7 @@ the `federation_modules` seed.
 |---|---|---|
 | **DEFAULT-ON** (the built-in default when no selection is given) | `akkoma`, `tuwunel` (Matrix), `phpbb` | always, unless `EXCLUDE_SERVICES` removes them |
 | **DEFAULT-OFF** (must be specifically added) | `games`, `owncast`, `tube` — and any future user-level service | only when explicitly selected |
-| **FULL-SET** | `OPTIONAL_SERVICES=all` / `--all-services` | every user-level slug |
+| **FULL-SET** | `OPTIONAL_SERVICES=all` / `--all-services` | every user-level slug — **rpi5 builder only today** (see caveat below) |
 
 > ⚠ **`games` is DEFAULT-OFF** (it was previously default-on). Add it with
 > `--enable-games` / `ENABLE_GAMES=true`, by naming `games` in `OPTIONAL_SERVICES`,
@@ -96,6 +96,8 @@ selection no matter how it became selected (default / `brand.conf` /
 `--optional-services` / `all` / the games opt-in). It is the one-liner that turns OFF
 an on-by-default service without re-enumerating the whole positive list; each excluded
 slug is then pruned + rendered `installed:"false"` exactly like an unselected one.
+**This knob (like the `all` sentinel) is wired in `build-rpi5-stage4.sh` only today;
+the x86 builder does not yet honor it — see the rpi5-only caveat below.**
 ```sh
 # brand.conf
 EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the rest
@@ -108,9 +110,14 @@ EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the res
 > to the full set), then the games opt-in folds `games` in, then **`EXCLUDE_SERVICES`
 > subtracts last**.
 >
-> The `--all-services` flag + the `all` sentinel are wired in **`build-rpi5-stage4.sh`**
-> (the canonical cluster-node builder). The x86 builder (`build-x86-host-stage4.sh`,
-> a protected client-image area) gets the same wiring in a follow-up that owns that file.
+> ⚠ **rpi5-only today.** The FULL-SET sentinel (`OPTIONAL_SERVICES=all` /
+> `--all-services`) **and** the subtractive `EXCLUDE_SERVICES` / `--exclude-services`
+> knob are wired in **`build-rpi5-stage4.sh`** (the canonical cluster-node builder)
+> only. The x86 builder (`build-x86-host-stage4.sh`, a protected client-image area)
+> currently supports just `--optional-services` + the `--enable-games` / `ENABLE_GAMES`
+> opt-in (its `OPTIONAL_SERVICES` default is the fixed `akkoma tuwunel phpbb` list with
+> no `all`-sentinel expansion and no exclude pass). Bringing the FULL-SET sentinel +
+> the subtractive knob to x86 is an **owed follow-up** in that protected file.
 
 `gate_optional_services()` (in **both** `build-x86-host-stage4.sh` and
 `build-rpi5-stage4.sh`, authored per-script and anchored to the
@@ -235,7 +242,17 @@ Internal mTLS / `svc.cluster.local` SANs are unaffected.
 ## 7. Runtime add/remove on a LIVE cluster
 
 > **STATUS: build-time prune ✅ SHIPPED · build-time 13a render ✅ SHIPPED ·
-> live admin-driven flip 🚧 PENDING (cross-repo admin-bff wave).**
+> federation `OverrideService` + public `GET /api/federation/capabilities` ✅ SHIPPED ·
+> host (snapdragon.systems) capabilities consumption + `menu.component` `enabled()`
+> greying ✅ SHIPPED · live admin-driven flip 🚧 PENDING (the admin-bff
+> `ApplicationSet` cut-over + `service_state` effector — the one remaining step).**
+> The UI hide/show path is now LIVE end-to-end: the federation-api `OverrideService`
+> kill-switch flips `federation_modules.enabled`/`circuit_state`, the public
+> capabilities endpoint drives logged-out greying, and the host shell consumes that
+> install-state to grey out nav + home cards. What remains is migrating *runtime
+> ownership* of the surviving Applications to the ApplicationSet so an admin can flip
+> a slug on a live cluster (the admin-bff `TasksController`/`ArgoController` +
+> `service_state` reconcile + the cut-over in §10).
 > The build now renders each slug's `installed` flag into BOTH the
 > `installed-services` ConfigMap **and** the `apps/13a-optional-services.yaml`
 > element (`_opt_render_appset_flag`), so the 13a generator selector agrees with the
@@ -309,30 +326,38 @@ When a service is **absent**, a user sees:
   route-access floor in `CanonicalSeed.java` (**snapdragon-gateway** repo) used as
   the in-memory fallback when Postgres/Cassandra are unreachable. It must match
   the route-access rows pruned here, or the in-image snapshot re-enforces removed
-  rows on datastore fallback. That is a **separate repo / image rebuild** — see
-  §10 (it cannot be GitOps-pruned).
+  rows on datastore fallback. The games host floor is now **baked in
+  `CanonicalSeed.java`** (✅ shipped, §10); it cannot be GitOps-pruned, so any future
+  route-access change still needs a matching gateway image rebuild.
 - **cloudflared reserved hostnames (cross-repo / prod):** prod cloudflared
   hardcodes `matrix.`/`mastodon.` reserved hostnames before the `*.<primary>`
   wildcard; a games TLD flip also needs a games hostname entry there.
 
-## 10. Cross-repo TODOs (not in this generator wave)
+## 10. Cross-repo: shipped work + the one remaining TODO
 
-- **snapdragon-gateway:** keep `CanonicalSeed.java`'s baked route-access floor in
-  sync with the rows pruned by `gate_optional_services`; add the games host
-  floor + a `games.<GAMES_DOMAIN>` cloudflared hostname.
-- **snapdragon-federation-api:** add idempotent changesets
+**✅ SHIPPED (cross-repo waves now landed):**
+
+- **snapdragon-federation-api ✅:** the idempotent changesets
   `023-register-akkoma-module.xml` / `024-register-tuwunel-module.xml` /
-  `025-register-games-module.xml` (mirror `022-register-forum-module.xml`); add a
-  **public** `GET /api/federation/capabilities` projection (the `…/manifest`
-  endpoint is `authenticated()` + visibility-filtered and cannot drive
-  logged-out greying).
-- **snapdragon.systems (host):** consume install-state at bootstrap (HttpClient →
-  the public capabilities endpoint), extend `menu.component` `enabled()`, add the
-  data-driven home-services cards (reconcile with the UI/a11y wave).
+  `025-register-games-module.xml` (mirroring `022-register-forum-module.xml`) are in,
+  and the **public** `GET /api/federation/capabilities` projection now drives
+  logged-out greying (the `…/manifest` endpoint stays `authenticated()` +
+  visibility-filtered).
+- **snapdragon-gateway ✅:** `CanonicalSeed.java`'s baked route-access floor now
+  carries the `games.<GAMES_DOMAIN>` host floor in sync with the rows
+  `gate_optional_services` prunes.
+- **snapdragon.systems (host) ✅:** the host shell consumes install-state at
+  bootstrap (HttpClient → the public capabilities endpoint) and `menu.component`'s
+  `enabled()` greys out absent services (nav + data-driven home-services cards).
+
+**🚧 REMAINING TODO (the only open cross-repo step):**
+
 - **snapdragon-admin-bff-api:** implement the `TasksController` /
   `ArgoController` seams + a `service_state` desired-state table + leader-gated
   reconcile effector (reuse the SuspensionService/DomainLockService pattern) for
-  live add/remove; complete the ApplicationSet cut-over (§7).
+  live add/remove; complete the ApplicationSet cut-over (§7) — delete the four
+  hardcoded `30-*`/`50-*` Applications and let the ApplicationSet own the surviving
+  workloads so an admin can flip a slug on a live cluster.
 
 ## 11. Verification & rollback
 
