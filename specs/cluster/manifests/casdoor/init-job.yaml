@@ -76,6 +76,32 @@ data:
                 "autoSignin": True}
         return call("/api/login", body, "POST")
 
+    # --- D6+D8 JWT-Custom token shape (LYNCHPIN-VALIDATED against casbin/casdoor:3.80.0) ---
+    # The DEFAULT tokenFormat=JWT serializes the FULL user object as flat claims, leaking
+    # totpSecret / recoveryCodes / password / passwordSalt into every minted token (a real
+    # secret-leak that exists TODAY, independent of MFA — any place a casdoor JWT is
+    # stored/logged/XSS-reachable, or written to a device file by GEN-SSO #135, exposes them).
+    # tokenFormat=JWT-Custom is an ALLOW-LIST: ONLY the listed tokenFields/tokenAttributes are
+    # emitted, so the secrets are excluded BY OMISSION. This SAME config also carries the MFA
+    # outcome the BFF stamps into the user's Properties (flat snake_case top-level claims
+    # `mfa_satisfied` + `mfa_satisfied_at`, emitted as STRINGS — casdoor properties are
+    # map[string]string, so the gateway must Long.parseLong the *_at value).
+    # ⚠ An EMPTY/WRONG tokenFields set strips roles/permissions/isAdmin and breaks ALL authz
+    # across 11 repos — the curated set below is empirically pinned and guarded by the
+    # held-until-live token-mint regression test (tests/casdoor_jwt_custom_test.py).
+    JWT_CUSTOM_TOKEN_FIELDS = [
+        "Id", "Name", "Email", "IsAdmin",
+        "Properties.mfa_satisfied", "Properties.mfa_satisfied_at",
+    ]
+    JWT_CUSTOM_TOKEN_ATTRIBUTES = [
+        {"name": "roles",       "category": "Existing Field", "value": "Roles",       "type": "Array"},
+        {"name": "permissions", "category": "Existing Field", "value": "Permissions", "type": "Array"},
+    ]
+    # NOTE: EXCLUDED by omission (allow-list) — totpSecret, recoveryCodes, password,
+    # passwordSalt, passwordType, preferredMfaType, mfaEmailEnabled, mfaPhoneEnabled,
+    # webauthnCredentials, accessKey/accessSecret, AND the bare "Properties" map (we emit
+    # ONLY the two named Properties.* keys, never the whole map).
+
     def reconcile_app(name, role):
         secret = open(f"/secrets/apps/{name}").read().strip()
         appname = f"app-{name}"
@@ -83,8 +109,15 @@ data:
             "owner": "admin", "name": appname, "displayName": f"snapdragon {name}",
             "organization": ORG, "clientId": appname, "clientSecret": secret,
             "redirectUris": [f"https://{name}.snapdragon.systems/callback"],
-            "grantTypes": ["authorization_code", "client_credentials"],
+            # password grant kept (custom BFF login uses it) + authorization_code +
+            # client_credentials (existing machine apps).
+            "grantTypes": ["authorization_code", "client_credentials", "password"],
             "expireInHours": 168, "enablePassword": True, "enableSignUp": False,
+            # D6+D8: JWT-Custom allow-list — fixes the secret-leak AND emits the MFA claim.
+            "tokenFormat": "JWT-Custom",
+            "tokenSigningMethod": "RS256",
+            "tokenFields": JWT_CUSTOM_TOKEN_FIELDS,
+            "tokenAttributes": JWT_CUSTOM_TOKEN_ATTRIBUTES,
         }
         try:
             existing = call(f"/api/get-application?id=admin/{appname}")
@@ -96,6 +129,87 @@ data:
         else:
             call("/api/add-application", app, "POST")
             print(f"  added   {appname} (role {role})")
+
+    def reconcile_desktop_client():
+        """D6+D8 / GEN-SSO #135 — seed the snapdragon-desktop PKCE PUBLIC client.
+
+        sssd-oidc.conf.tmpl references oidc_client_id=snapdragon-desktop with
+        oidc_use_pkce=True, but the client was NEVER seeded in Casdoor. GEN-SSO #135
+        deposits the minted token to a device file (${XDG_RUNTIME_DIR}/snapdragon/
+        oidc-token); under casdoor's DEFAULT tokenFormat=JWT that file would contain
+        totpSecret/recoveryCodes/password/passwordSalt. We seed it here with the SAME
+        JWT-Custom allow-list as the systems apps so the on-device token is clean and
+        carries the MFA claim.
+
+        PUBLIC client: clientSecret is EMPTY (PKCE, no secret baked into the image);
+        redirectUris are the native loopback + OOB URIs the desktop OIDC flow uses.
+        """
+        appname = "snapdragon-desktop"
+        app = {
+            "owner": "admin", "name": appname,
+            "displayName": "Snapdragon Desktop (PKCE)",
+            "organization": ORG, "clientId": appname,
+            # PUBLIC client — NO secret (PKCE). Empty string, never read from Vault.
+            "clientSecret": "",
+            # Native loopback (RFC 8252) + OOB redirects for the desktop SSO flow.
+            "redirectUris": [
+                "http://127.0.0.1/callback",
+                "http://localhost/callback",
+                "urn:ietf:wg:oauth:2.0:oob",
+            ],
+            # PKCE authorization_code only (no password / client_credentials for a
+            # public client); refresh_token so the device can refresh after the BFF
+            # stamps the MFA Property.
+            "grantTypes": ["authorization_code", "refresh_token"],
+            "expireInHours": 168, "enablePassword": False, "enableSignUp": False,
+            # D6+D8: SAME JWT-Custom allow-list as the systems apps — leak-fix + MFA claim.
+            "tokenFormat": "JWT-Custom",
+            "tokenSigningMethod": "RS256",
+            "tokenFields": JWT_CUSTOM_TOKEN_FIELDS,
+            "tokenAttributes": JWT_CUSTOM_TOKEN_ATTRIBUTES,
+        }
+        try:
+            existing = call(f"/api/get-application?id=admin/{appname}")
+        except urllib.error.HTTPError:
+            existing = None
+        if existing and existing.get("data"):
+            call(f"/api/update-application?id=admin/{appname}", app, "POST")
+            print(f"  updated {appname} (PKCE public client, JWT-Custom)")
+        else:
+            call("/api/add-application", app, "POST")
+            print(f"  added   {appname} (PKCE public client, JWT-Custom)")
+
+    def reconcile_org_mfa():
+        """D8 — enable the org MFA CAPABILITY (WebAuthn + TOTP available) and set the
+        WebAuthn RP / TOTP issuer. SHIPS DARK: we make MFA AVAILABLE but do NOT mark it
+        required — enforcement is a later, operator-flipped step. GET-then-merge so we
+        never clobber org fields seeded by init_data.json (passwordType, languages, ...).
+        """
+        org_id = f"admin/{ORG}"
+        try:
+            resp = call(f"/api/get-organization?id={org_id}")
+            org = (resp.get("data") or {}) if resp else {}
+        except Exception as e:
+            print(f"  WARN org-mfa: failed to fetch organization {ORG}: {e}")
+            return
+        if not org:
+            print(f"  org-mfa: organization {ORG} not found yet — skipping (init_data import pending)")
+            return
+        # Capability ON, NOT required (dark): mfaItems list MFA types that are AVAILABLE.
+        # `rule: "Optional"` => offered but not forced (enforcement flipped later).
+        org["enableMfa"] = True
+        org["mfaItems"] = [
+            {"name": "WebAuthn", "rule": "Optional"},
+            {"name": "TOTP",     "rule": "Optional"},
+        ]
+        # WebAuthn relying-party + TOTP issuer scope the platform brand.
+        org["mfaRememberInHours"] = 0
+        org["websiteUrl"] = org.get("websiteUrl") or "https://snapdragon.systems"
+        try:
+            call(f"/api/update-organization?id={org_id}", org, "POST")
+            print(f"  org-mfa: enabled MFA capability (WebAuthn+TOTP available, NOT required) on {ORG}")
+        except Exception as e:
+            print(f"  WARN org-mfa: update-organization failed: {e}")
 
     def reconcile_google_provider():
         """Seed the Google OAuth federation provider (clientId/secret from Vault).
@@ -299,11 +413,22 @@ data:
 
     wait_ready()
     login()
+    # D8: enable the org MFA capability (dark — available, not required) BEFORE the
+    # apps so the WebAuthn RP / TOTP issuer scope exists when clients are reconciled.
+    try:
+        reconcile_org_mfa()
+    except Exception as e:
+        print(f"  WARN org-mfa: {e}")
     for name, role in APPS.items():
         try:
             reconcile_app(name, role)
         except Exception as e:
             print(f"  WARN {name}: {e}")
+    # D6+D8 / GEN-SSO #135: seed the snapdragon-desktop PKCE public client (JWT-Custom).
+    try:
+        reconcile_desktop_client()
+    except Exception as e:
+        print(f"  WARN snapdragon-desktop: {e}")
     try:
         reconcile_google_provider()
     except Exception as e:
