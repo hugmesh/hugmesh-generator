@@ -35,6 +35,11 @@ tests/stack/.mastodon.env
 # Output of scripts/gen-provision-keys.sh, gen-cluster-secrets.sh, gen-keystores.sh
 # (keys-out/) and any filled-in per-role KEYS dir.
 /keys-out/
+# In-UI SSH-terminal DIAL PRIVATE key + Vault-seed tree (NEVER baked/bundled/git).
+# Belt-and-braces if gen-provision-keys.sh is pointed at a custom --out dir inside
+# the repo: the dial private key and its vault-seed tree must never be committed.
+vault-seed/
+dial_private_key
 keys-pki/
 keys-backend/
 keys-frontend/

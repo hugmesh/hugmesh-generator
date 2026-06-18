@@ -142,6 +142,13 @@ echo "==> Copying keys..."
 cp -rT "${SRC_DIR}" "${MNT}/"
 # FAT can't hold unix perms; provisioning re-applies them. Drop READMEs.
 find "${MNT}" -name 'README.md' -delete 2>/dev/null || true
+# ── vault-seed/ NEVER rides the physical KEYS stick ────────────────────────────
+# gen-provision-keys.sh writes the in-UI SSH-terminal DIAL PRIVATE key (+ ingest
+# metadata) under keys-out/vault-seed/. That tree is destined for VAULT ONLY (the
+# per-device ExternalSecret mounts it into the BFF) — it must NEVER be baked into
+# an image NOR bundled onto the provisioning KEYS stick a device reads at boot.
+# Strip it after the copy so the dial private key cannot leak onto the deliverable.
+rm -rf "${MNT}/vault-seed" 2>/dev/null || true
 sync
 
 # ── Post-write verification: the core files MUST exist on the mounted stick ───

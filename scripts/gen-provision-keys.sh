@@ -3,7 +3,21 @@
 # secrets (SSH keypair + SHA-512 password hashes) by editing copies of the
 # templates. Output is a ready-to-write directory you hand to make-keys-usb.sh.
 #
-# No root required. Requires: jq, openssl, ssh-keygen.
+# In-UI SSH-terminal key model (default ON; GEN_DEVICE_SSH=false to skip), it ALSO
+# mints, per device, the two keypairs the BFF-dialed in-UI SSH terminal needs:
+#   keys-out/ssh/host/ssh_host_ed25519_key{,.pub}  device sshd HOST keypair, BAKED
+#       into the image by provision_ssh_host_keys() (stable host id the BFF PINS).
+#   keys-out/ssh/<dial_user>.authorized_keys       BFF DIAL PUBLIC key (baked into
+#       the dial user's authorized_keys so the BFF can auth) — PUBLIC only.
+#   keys-out/vault-seed/device/<id>/ssh/dial_private_key   BFF DIAL PRIVATE key —
+#       ⇒ VAULT ONLY. NEVER baked into an image, NEVER bundled onto the KEYS stick
+#       (make-keys-usb.sh strips vault-seed/), NEVER logged. The per-device
+#       ExternalSecret (specs/cluster/.../device-ssh-externalsecret.tpl.yaml)
+#       mounts it into the BFF.
+#   keys-out/vault-seed/device/<id>/ingest.json    NON-secret metadata (host_key_fp,
+#       dial_pub_fp, dial_user, public keys) the image-gen Job POSTs to the BFF.
+#
+# No root required. Requires: jq, openssl, ssh-keygen, python3.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -74,6 +88,24 @@ MAIL_PROVIDER="${MAIL_PROVIDER:-protonmail}"
 VPN_SRC="${VPN_SRC:-}"              # dir of provider .conf/.ovpn to stage (own domain)
 VPN_DOMAIN="${VPN_DOMAIN:-${CLUSTER_DOMAIN:-}}"
 
+# ── In-UI SSH-terminal key model: per-device sshd HOST + BFF DIAL keypairs ──────
+# The in-UI SSH terminal lets the BFF dial a device over the tailnet to drive an
+# operator console. That needs TWO per-device keypairs minted here, off-image-build:
+#   * a device sshd HOST keypair — baked into the image (the protected
+#     provision_ssh_host_keys() installs it at /etc/ssh/), so the device presents a
+#     STABLE host identity the BFF can PIN (closing TOFU).
+#   * a BFF DIAL keypair — its PUBLIC half goes into the device's authorized_keys
+#     (so the BFF can auth as the dial user); its PRIVATE half goes to Vault ONLY,
+#     mounted into the BFF per device. The private half is NEVER baked into an image
+#     and NEVER bundled onto a downloadable key-USB image leg.
+# Default ON for every role (each image is one device). Set GEN_DEVICE_SSH=false to
+# skip (e.g. a non-device keys bundle). DEVICE_ID names the Vault-seed/ingest path
+# (default: a random short id). DIAL_USER is the unprivileged login the BFF dials as.
+# Precedence: built-in < env/brand.conf < CLI flag.
+GEN_DEVICE_SSH="${GEN_DEVICE_SSH:-true}"
+DEVICE_ID="${DEVICE_ID:-}"          # stable per-device id (Vault path segment); auto if empty
+DIAL_USER="${DIAL_USER:-bff-dial}"  # unprivileged login the BFF dials in AS
+
 # Optional EXISTING CA to use as the issuer for the generated mTLS certs (passed
 # through to gen-keystores.sh). May also be set via env or brand.conf / brands/.
 CA_CERT="${CA_CERT:-}"
@@ -129,6 +161,15 @@ Options:
                       subdir. (env: VPN_SRC)
       --vpn-domain D  Egress-VPN: the node's OWN brand domain for --vpn-src
                       (else CLUSTER_DOMAIN). (env: VPN_DOMAIN)
+      --device-id ID  In-UI SSH terminal: stable per-device id used as the Vault
+                      path / ingest-metadata segment for this device's host + dial
+                      key material. Default: a random short id. (env: DEVICE_ID)
+      --dial-user U   In-UI SSH terminal: the unprivileged login the BFF dials in
+                      AS (its authorized_keys gets the dial PUBLIC key). Default:
+                      bff-dial. (env: DIAL_USER)
+      --no-device-ssh In-UI SSH terminal: skip generating the per-device sshd HOST
+                      keypair + BFF DIAL keypair + ingest metadata (default: ON —
+                      each image is one device). (env: GEN_DEVICE_SSH=false)
   -h, --help          Show this help.
 
   Mail/OAuth creds are OPTIONAL and ABSENT BY DEFAULT. NONINTERACTIVE=1 (or
@@ -159,6 +200,9 @@ while [[ $# -gt 0 ]]; do
         --registry-pub) REGISTRY_PUB_FILE="$2"; shift 2 ;;   # Layer-B: baked verifying key (mesh-extension role)
         --vpn-src)     VPN_SRC="$2"; shift 2 ;;               # egress-VPN: provider .conf/.ovpn to stage (own domain)
         --vpn-domain)  VPN_DOMAIN="$2"; shift 2 ;;            # egress-VPN: the node's own brand domain
+        --device-id)   DEVICE_ID="$2"; shift 2 ;;            # in-UI SSH terminal: per-device Vault-seed path segment
+        --dial-user)   DIAL_USER="$2"; shift 2 ;;            # in-UI SSH terminal: unprivileged login the BFF dials as
+        --no-device-ssh) GEN_DEVICE_SSH=false; shift ;;      # in-UI SSH terminal: skip host+dial keypair generation
         -h|--help)     usage 0 ;;
         *)             echo "Unknown arg: $1" >&2; usage 1 ;;
     esac
@@ -345,6 +389,108 @@ mkdir -p "${OUT_DIR}/ssh"
 KEYFILE="${OUT_DIR}/ssh/${ADMIN}_ed25519"
 [ -f "${KEYFILE}" ] || { echo "==> Generating ed25519 keypair for ${ADMIN}"; ssh-keygen -t ed25519 -N '' -C "${ADMIN}@snapdragon" -f "${KEYFILE}" >/dev/null; }
 PUBKEY="$(cat "${KEYFILE}.pub")"
+
+# ── In-UI SSH-terminal key model: per-device HOST + BFF DIAL keypairs ───────────
+# Mints, into ${OUT_DIR} (the key-USB tree), the two keypairs the in-UI SSH
+# terminal needs and emits non-secret ingest metadata. The split below is the
+# whole point — three DISTINCT destinations, only one of which is ever baked:
+#
+#   keys-out/ssh/host/ssh_host_ed25519_key{,.pub}   -> BAKED into the image by the
+#       protected provision_ssh_host_keys() (installs to /etc/ssh/). Gives the
+#       device a STABLE host identity; host_key_fp is what the BFF PINS (closes
+#       TOFU). The PRIVATE host key is baked (it is the device's own identity) —
+#       this is the established host-key path, unchanged here.
+#
+#   keys-out/ssh/${DIAL_USER}.authorized_keys       -> the DIAL PUBLIC key, in the
+#       existing `ssh/<user>.authorized_keys` convention. The client-image session
+#       bakes it into the dial user's authorized_keys so the BFF can auth. PUBLIC
+#       key only — safe to bake/bundle.
+#
+#   keys-out/vault-seed/device/<id>/ssh/dial_private_key  -> the DIAL PRIVATE key.
+#       ⇒ VAULT ONLY. NEVER bake into an image. NEVER bundle into a downloadable
+#       artifact. NEVER log. It lives under vault-seed/ (a sibling of, NOT inside,
+#       the image-baked ssh/ tree) precisely so make-keys-usb.sh / the build never
+#       picks it up. It is pushed to Vault (secret/<brand>/device/<id>/ssh) and the
+#       per-device ExternalSecret mounts it into the BFF.
+#
+#   keys-out/vault-seed/device/<id>/ingest.json     -> NON-secret metadata
+#       (host_key_fp, dial_pub_fp, dial_user, dial_pub) the image-gen Job POSTs
+#       back to the BFF ingest so the BFF can register + PIN the device.
+#
+# Idempotent (regenerates nothing already present); guarded by GEN_DEVICE_SSH.
+if [ "${GEN_DEVICE_SSH}" = true ]; then
+    # Resolve a stable device id (Vault path / ingest segment). Default: a short
+    # random hex id; an operator-supplied --device-id / DEVICE_ID is sanitised to
+    # the [a-z0-9-] charset a k8s object name / Vault path segment allows.
+    if [ -z "${DEVICE_ID}" ]; then
+        DEVICE_ID="dev-$(openssl rand -hex 4)"
+    else
+        DEVICE_ID="$(printf '%s' "${DEVICE_ID}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | tr -s '-' | sed -e 's/^-*//' -e 's/-*$//')"
+        [ -n "${DEVICE_ID}" ] || { echo "ERROR: --device-id / DEVICE_ID reduced to empty after sanitising (use [a-z0-9-])" >&2; exit 1; }
+    fi
+
+    echo "==> In-UI SSH terminal: per-device key material (device_id=${DEVICE_ID}, dial_user=${DIAL_USER})"
+
+    # (1) Device sshd HOST keypair -> keys-out/ssh/host/ (BAKED at provision time).
+    HOST_DIR="${OUT_DIR}/ssh/host"
+    mkdir -p "${HOST_DIR}"
+    HOST_KEY="${HOST_DIR}/ssh_host_ed25519_key"
+    if [ ! -f "${HOST_KEY}" ]; then
+        ssh-keygen -t ed25519 -N '' -C "host@${DEVICE_ID}" -f "${HOST_KEY}" >/dev/null
+    fi
+    chmod 0600 "${HOST_KEY}" 2>/dev/null || true
+    chmod 0644 "${HOST_KEY}.pub" 2>/dev/null || true
+    # SHA256 host-key fingerprint the BFF pins (matches `ssh-keygen -lf`, base64 form).
+    HOST_KEY_FP="$(ssh-keygen -lf "${HOST_KEY}.pub" | awk '{print $2}')"
+
+    # (2) BFF DIAL keypair. The PRIVATE half is written DIRECTLY under vault-seed/
+    # (NEVER under the baked ssh/ tree); the PUBLIC half is copied into the
+    # ssh/<dial_user>.authorized_keys baked-key convention.
+    VSEED_DIR="${OUT_DIR}/vault-seed/device/${DEVICE_ID}/ssh"
+    mkdir -p "${VSEED_DIR}"
+    DIAL_KEY="${VSEED_DIR}/dial_private_key"   # ⇒ Vault only — NEVER baked/bundled/logged
+    if [ ! -f "${DIAL_KEY}" ]; then
+        # -C carries the dial user so the authorized_keys entry is self-describing.
+        ssh-keygen -t ed25519 -N '' -C "${DIAL_USER}@${DEVICE_ID}" -f "${DIAL_KEY}" >/dev/null
+    fi
+    chmod 0600 "${DIAL_KEY}" 2>/dev/null || true
+    DIAL_PUB_FP="$(ssh-keygen -lf "${DIAL_KEY}.pub" | awk '{print $2}')"
+    DIAL_PUB="$(cat "${DIAL_KEY}.pub")"
+    # Stage the dial PUBLIC key for the BFF dial user via the existing
+    # install_authorized_keys ssh/<name>.authorized_keys convention. PUBLIC only.
+    printf '%s\n' "${DIAL_PUB}" > "${OUT_DIR}/ssh/${DIAL_USER}.authorized_keys"
+    chmod 0644 "${OUT_DIR}/ssh/${DIAL_USER}.authorized_keys" 2>/dev/null || true
+    # The dial PUBLIC key never belongs in the Vault-seed dir's pub sibling being
+    # mistaken for the image-baked one; keep the .pub next to the private key for
+    # the ingest step but DO NOT leave it where the image bake globs ssh/host/.
+
+    # (3) Non-secret ingest metadata the image-gen Job POSTs to the BFF. Contains
+    # ONLY fingerprints + dial_user + dial PUBLIC key — NO private material.
+    INGEST="${OUT_DIR}/vault-seed/device/${DEVICE_ID}/ingest.json"
+    DEVICE_ID="${DEVICE_ID}" DIAL_USER="${DIAL_USER}" \
+    HOST_KEY_FP="${HOST_KEY_FP}" DIAL_PUB_FP="${DIAL_PUB_FP}" \
+    HOST_KEY_PUB="$(cat "${HOST_KEY}.pub")" DIAL_PUB="${DIAL_PUB}" \
+    python3 - "${INGEST}" <<'PY'
+import json, os, sys
+meta = {
+    "device_id":   os.environ["DEVICE_ID"],
+    "dial_user":   os.environ["DIAL_USER"],
+    "host_key_fp": os.environ["HOST_KEY_FP"],   # SHA256:... — the BFF PINS this
+    "host_key_pub": os.environ["HOST_KEY_PUB"], # device sshd HOST public key (non-secret)
+    "dial_pub_fp": os.environ["DIAL_PUB_FP"],   # SHA256:... of the dial PUBLIC key
+    "dial_pub":    os.environ["DIAL_PUB"],      # dial PUBLIC key (non-secret)
+}
+with open(sys.argv[1], "w") as fh:
+    json.dump(meta, fh, indent=2)
+    fh.write("\n")
+PY
+    chmod 0644 "${INGEST}" 2>/dev/null || true
+
+    echo "  ${HOST_KEY}{,.pub}        (device sshd HOST keypair -> BAKED to /etc/ssh by provision_ssh_host_keys; fp ${HOST_KEY_FP})"
+    echo "  ${OUT_DIR}/ssh/${DIAL_USER}.authorized_keys   (dial PUBLIC key -> baked into ${DIAL_USER} authorized_keys; PUBLIC only)"
+    echo "  ${DIAL_KEY}   (dial PRIVATE key -> VAULT ONLY: never baked, never bundled, never logged)"
+    echo "  ${INGEST}     (non-secret ingest metadata the image-gen Job POSTs to the BFF: fingerprints + dial_user + public keys)"
+fi
 
 # ── Optional mail + OAuth creds (ABSENT BY DEFAULT) ─────────────────
 # Populates ${OUT_DIR}/secrets/{mail.json,dkim-private.key} + a combined

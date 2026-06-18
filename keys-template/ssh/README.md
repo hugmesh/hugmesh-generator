@@ -30,3 +30,31 @@ To pin SSH **host** identity across reflashes, place pre-generated host
 keys in `ssh/host/` (`ssh_host_ed25519_key`, `ssh_host_ed25519_key.pub`,
 `ssh_host_rsa_key`, ...). They are installed into `/etc/ssh/` with correct
 permissions, so clients don't see a changed host key after a rebuild.
+
+## In-UI SSH terminal — per-device HOST + BFF DIAL keypairs
+
+When `GEN_DEVICE_SSH=true` (the default; `--no-device-ssh` to skip),
+`gen-provision-keys.sh` mints the two keypairs the in-UI SSH terminal needs so
+the BFF can dial this device over the tailnet and drive an operator console:
+
+- **`ssh/host/ssh_host_ed25519_key{,.pub}`** — the **device sshd HOST keypair**.
+  Generated here (no passphrase) and **baked** into the image by the host-key
+  path above (`provision_ssh_host_keys()` installs it to `/etc/ssh/`). It gives
+  the device a **stable host identity**; the BFF **pins** `host_key_fp`, closing
+  trust-on-first-use. The private host key is the device's own identity, so it is
+  legitimately baked.
+- **`ssh/<dial_user>.authorized_keys`** — the **BFF DIAL PUBLIC key** (default
+  dial user `bff-dial`, set with `--dial-user`). Baked into the dial user's
+  `authorized_keys` via the per-user convention above so the BFF can authenticate.
+  **PUBLIC** key only — safe to bake/bundle.
+
+The matching **DIAL PRIVATE key** is **NOT** written here. It is written to
+`keys-out/vault-seed/device/<id>/ssh/dial_private_key` (a sibling of, NOT inside,
+this image-baked `ssh/` tree) and is **VAULT ONLY** — `make-keys-usb.sh` strips
+`vault-seed/` so it never rides the KEYS stick, it is never baked into an image,
+and it is never logged. The per-device `ExternalSecret`
+(`specs/cluster/manifests/external-secrets/device-ssh-externalsecret.tpl.yaml`)
+mounts it into the BFF. Alongside it, `vault-seed/device/<id>/ingest.json` carries
+the **non-secret** ingest metadata (`host_key_fp`, `dial_pub_fp`, `dial_user`, and
+the two public keys) the image-gen Job POSTs back to the BFF to register + pin the
+device.
