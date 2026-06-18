@@ -1448,14 +1448,68 @@ fi
 umount_chroot; trap - EXIT
 if ! ${SKIP_CLEAN}; then
     banner "Cleaning sysroot"
-    # FEATURES=buildpkg writes a binpkg copy of every package into the chroot's
-    # /var/cache/binpkgs (~2.4 GiB for the desktop set) — pure build-artifact bloat in
-    # the image (devices get updates from the binhost, not their own cache). Drop it
-    # along with docs/man/info + distfiles + tmp. (Deeper minification — strip, locale
-    # pruning, INSTALL_MASK — lands in the dedicated minification PR.)
-    rm -rf "${SYSROOT}"/usr/share/{doc,man,info}/* "${SYSROOT}"/var/cache/distfiles/* \
+    # Build-artifact bloat: binpkgs (~2.4 GiB), distfiles, docs, tmp.
+    rm -rf "${SYSROOT}"/usr/share/{doc,man,info}/* \
+           "${SYSROOT}"/var/cache/distfiles/* \
            "${SYSROOT}"/var/cache/binpkgs/* \
            "${SYSROOT}"/var/tmp/* "${SYSROOT}"/tmp/* 2>/dev/null || true
+
+    # Locale data: keep en/en_US/POSIX, prune the rest (~50 MiB of LC archives).
+    find "${SYSROOT}"/usr/share/locale -maxdepth 1 -mindepth 1 -type d \
+         ! -name 'en' ! -name 'en_US' ! -name 'POSIX' \
+         -exec rm -rf {} + 2>/dev/null || true
+    find "${SYSROOT}"/usr/lib/locale -maxdepth 1 -mindepth 1 -type d \
+         ! -name 'en_US.utf8' ! -name 'C.utf8' \
+         -exec rm -rf {} + 2>/dev/null || true
+
+    # Static libraries: already linked into binaries; not needed at runtime.
+    find "${SYSROOT}"/usr/lib{,64} -name '*.a' -delete 2>/dev/null || true
+
+    # Python bytecode cache: reproducible from source; not needed at runtime.
+    find "${SYSROOT}" -name '*.pyc' -delete 2>/dev/null || true
+    find "${SYSROOT}" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+
+    # Strip debug symbols from kernel modules (~30-60% size reduction per .ko).
+    find "${SYSROOT}"/lib/modules -name '*.ko' \
+         -exec strip --strip-debug {} \; 2>/dev/null || true
+
+    # Strip unneeded symbols from ELF executables and shared libraries.
+    find "${SYSROOT}"/{usr/bin,usr/sbin,usr/lib,usr/lib64,lib64} \
+         -type f -executable 2>/dev/null | while read -r f; do
+        strip --strip-unneeded "$f" 2>/dev/null || true
+    done
+
+    # Firmware pruning: headless server nodes don't need WiFi / Bluetooth /
+    # audio firmware; GPU firmware is pruned for the non-GPU roles (pki/be/fe).
+    if ! ${ROLE_CLIENT}; then
+        rm -rf \
+            "${SYSROOT}"/lib/firmware/ath/ \
+            "${SYSROOT}"/lib/firmware/ath6k/ \
+            "${SYSROOT}"/lib/firmware/ath10k/ \
+            "${SYSROOT}"/lib/firmware/ath11k/ \
+            "${SYSROOT}"/lib/firmware/ath12k/ \
+            "${SYSROOT}"/lib/firmware/brcm/ \
+            "${SYSROOT}"/lib/firmware/iwlwifi-* \
+            "${SYSROOT}"/lib/firmware/rtw88/ \
+            "${SYSROOT}"/lib/firmware/rtw89/ \
+            "${SYSROOT}"/lib/firmware/mediatek/ \
+            "${SYSROOT}"/lib/firmware/libertas/ \
+            "${SYSROOT}"/lib/firmware/mwlwifi/ \
+            "${SYSROOT}"/lib/firmware/mwifiex/ \
+            "${SYSROOT}"/lib/firmware/carl9170* \
+            "${SYSROOT}"/lib/firmware/wfx/ \
+            2>/dev/null || true
+        if ! ${GPU}; then
+            rm -rf \
+                "${SYSROOT}"/lib/firmware/amdgpu/ \
+                "${SYSROOT}"/lib/firmware/i915/ \
+                "${SYSROOT}"/lib/firmware/nouveau/ \
+                "${SYSROOT}"/lib/firmware/radeon/ \
+                2>/dev/null || true
+        fi
+    fi
+
+    info "Sysroot cleaned: locale/static-libs/pyc/ko-dbg/elf stripped; firmware pruned."
 fi
 
 # ── 9. Stage4 tarball ──────────────────────────────────────────────

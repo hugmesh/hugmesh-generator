@@ -2004,12 +2004,32 @@ else
     rm -rf "${SYSROOT}"/var/tmp/*
     rm -rf "${SYSROOT}"/tmp/*
 
+    # Locale data: keep en/en_US/POSIX, prune the rest (~50 MiB of LC archives).
+    find "${SYSROOT}"/usr/share/locale -maxdepth 1 -mindepth 1 -type d \
+         ! -name 'en' ! -name 'en_US' ! -name 'POSIX' \
+         -exec rm -rf {} + 2>/dev/null || true
+    find "${SYSROOT}"/usr/lib/locale -maxdepth 1 -mindepth 1 -type d \
+         ! -name 'en_US.utf8' ! -name 'C.utf8' \
+         -exec rm -rf {} + 2>/dev/null || true
+
+    # Static libraries: already linked into binaries; not needed at runtime.
+    find "${SYSROOT}"/usr/lib{,64} -name '*.a' -delete 2>/dev/null || true
+
+    # Python bytecode cache: reproducible from source; not needed at runtime.
+    find "${SYSROOT}" -name '*.pyc' -delete 2>/dev/null || true
+    find "${SYSROOT}" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+
+    # Strip debug symbols from kernel modules (~30-60% size reduction per .ko).
+    find "${SYSROOT}"/lib/modules -name '*.ko' \
+         -exec "${CROSS_TARGET}-strip" --strip-debug {} \; 2>/dev/null || true
+
+    # Strip ELF binaries (cross-strip for aarch64 target).
     find "${SYSROOT}"/{usr/bin,usr/sbin,usr/lib64,lib64} \
         -type f -executable 2>/dev/null | while read -r f; do
         file "$f" | grep -q 'ELF.*aarch64' && "${CROSS_TARGET}-strip" --strip-unneeded "$f" 2>/dev/null || true
     done
 
-    info "Sysroot cleaned and binaries stripped."
+    info "Sysroot cleaned: locale/static-libs/pyc/ko-dbg/elf stripped."
 fi
 
 banner "Phase 4: Packaging stage4 tarball"
