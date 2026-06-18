@@ -16,7 +16,22 @@ metadata:
   name: tier-ingress
   namespace: snapdragon-pki
 spec:
-  podSelector: {}
+  # EXCLUDES route-access-db + Cassandra from this BROAD namespace admittance —
+  # they are isolated per-pod by db-ingress.yaml (reachable only from the gateways
+  # + admin-bff-api/federation-api). k8s NetworkPolicy is additive with no exclude,
+  # so the broad from-set below MUST NOT select these DB pods or it would re-admit
+  # the whole from-set to them (ADR-32 DB-hardening). Keep this NotIn list in sync
+  # with db-ingress.yaml. (route-access-db carries `app: route-access-db`;
+  # Cassandra carries `app.kubernetes.io/name: cassandra` — two different label
+  # keys, so each needs its own NotIn term.)
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: NotIn
+        values: [route-access-db]
+      - key: app.kubernetes.io/name
+        operator: NotIn
+        values: [cassandra]
   policyTypes: [Ingress]
   ingress:
     # casdoor / cassandra / route-access-db / pki-gateway / superadmin-gateway consumers.
@@ -46,11 +61,21 @@ spec:
   # whole namespace + frontend to them. The two app pods carry their proxy sidecar,
   # so excluding app.kubernetes.io/name {akkoma,tuwunel,akkoma-db} covers the proxy
   # ports too. Keep this list in sync with homeserver-isolation.yaml.
+  #
+  # ALSO EXCLUDES the five backend BFF/federation Postgres pods (ADR-32 DB-hardening)
+  # so the broad namespace+frontend from-set no longer re-admits them — they are
+  # isolated per-pod by db-ingress.yaml (each reachable only from its real *-api
+  # consumer). The DB pods carry the `app` label (e.g. app: admin-bff-db), distinct
+  # from the homeservers' `app.kubernetes.io/name`, so they need their own NotIn
+  # term. Keep this list in sync with db-ingress.yaml.
   podSelector:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: NotIn
         values: [akkoma, tuwunel, akkoma-db]
+      - key: app
+        operator: NotIn
+        values: [admin-bff-db, mod-bff-db, user-bff-db, federation-db, forum-bff-db]
   policyTypes: [Ingress]
   ingress:
     - from:

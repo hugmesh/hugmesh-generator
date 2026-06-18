@@ -2,6 +2,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - tier-ingress.yaml
+  - db-ingress.yaml   # ADR-32 DB-hardening: per-DB-pod (Postgres :5432) + Cassandra (:9042) Ingress policies; paired with tier-ingress NotIn excludes (ships dark, MANUAL-sync, live-validate-only)
   - homeserver-isolation.yaml
   - homeserver-egress.yaml   # default-deny egress on akkoma/tuwunel: DNS + akkoma-db + egress-proxy only (domain-lock/no-federation backstop)
   - egress-vpn-interaction.yaml   # per-service opt-in (snapdragon.systems/vpn-egress=true) direct egress for the node split-tunnel; PRUNED when egress-vpn is not selected (default-off)

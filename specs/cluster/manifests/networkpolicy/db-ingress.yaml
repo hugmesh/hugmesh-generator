@@ -1,0 +1,216 @@
+# Per-DB-pod Ingress NetworkPolicies (ADR-32 DB-hardening — network backstop).
+#
+# tier-ingress.yaml admits the WHOLE owning namespace (+ frontend / ingress) to
+# every pod it selects via podSelector:{}. Under tier-ingress ALONE, any pod in
+# snapdragon-backend could open a Postgres socket directly to admin-bff-db /
+# mod-bff-db / user-bff-db / federation-db / forum-bff-db, and any pod in
+# snapdragon-pki (plus the cross-namespace from-set) could reach route-access-db
+# and Cassandra — bypassing the BFF / route-access authz that those stores back.
+#
+# This file is the per-pod backstop that closes that lateral path: each DB pod
+# becomes default-deny for Ingress and is reachable ONLY from its real consumers,
+# matched by the EXACT pod labels those consumers carry (verified against the
+# deployment manifests): the *-bff-api / federation-api pods (app: snapdragon-*)
+# and, for route-access-db + Cassandra, the four gateways
+# (app.kubernetes.io/instance: snapdragon-*-gateway — same convention used by
+# homeserver-isolation.yaml).
+#
+# IMPORTANT — k8s NetworkPolicy is ADDITIVE (union of all selecting policies); it
+# has NO deny/exclude. So this isolation only holds once the BROAD tier-ingress
+# policies STOP selecting these DB pods. tier-ingress.yaml (snapdragon-backend +
+# snapdragon-pki) was therefore narrowed with a podSelector matchExpressions that
+# EXCLUDES the DB pods (app NotIn the set) — mirroring the homeserver NotIn trick.
+# This file and tier-ingress.yaml are a PAIR — keep the exclude lists in sync.
+#
+# CROSS-NAMESPACE: route-access-db + Cassandra live in snapdragon-pki but are
+# consumed by gateways/APIs in snapdragon-backend and snapdragon-frontend. A
+# NetworkPolicy podSelector only matches pods in the policy's OWN namespace, so
+# those cross-namespace consumers are admitted by a combined
+# namespaceSelector + podSelector peer (AND within one from-entry) that pins both
+# the source namespace AND the source pod label. Same-namespace consumers
+# (pki/superadmin gateways) use a plain podSelector.
+#
+# DEPLOY: ships behind the same MANUAL-sync ArgoCD app as tier-ingress
+# (apps/08-networkpolicy) and needs LIVE on-cluster connectivity validation
+# (real pod labels + Citus/initdb cross-DB role bootstrap traffic) BEFORE it is
+# relied upon. Ships DARK until then.
+---
+# ── route-access-db (Postgres, snapdragon-pki) ─────────────────────────────────
+# Consumers: all four gateways (route-access lookups) + admin-bff-api (route-access
+# admin writes via the `admin_bff` role / ROUTE_ACCESS_DB url). be-gateway lives in
+# snapdragon-backend, fe-gateway in snapdragon-frontend, pki-gateway +
+# superadmin-gateway in snapdragon-pki (self).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-route-access-db
+  namespace: snapdragon-pki
+  labels: { app: route-access-db, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  podSelector:
+    matchLabels: { app: route-access-db }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # be-gateway (snapdragon-backend) — route-access lookups.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+          podSelector:
+            matchLabels: { app.kubernetes.io/instance: snapdragon-be-gateway }
+        # admin-bff-api (snapdragon-backend) — route-access admin writes.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+          podSelector:
+            matchLabels: { app: snapdragon-admin-bff-api }
+        # fe-gateway (snapdragon-frontend) — route-access lookups.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }
+          podSelector:
+            matchLabels: { app.kubernetes.io/instance: snapdragon-fe-gateway }
+        # pki-gateway (snapdragon-pki, self) — route-access lookups.
+        - podSelector:
+            matchLabels: { app.kubernetes.io/instance: snapdragon-pki-gateway }
+        # superadmin-gateway (snapdragon-pki, self) — route-access lookups.
+        - podSelector:
+            matchLabels: { app.kubernetes.io/instance: snapdragon-superadmin-gateway }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# ── admin-bff-db (Postgres, snapdragon-backend) ────────────────────────────────
+# Consumer: admin-bff-api only (adminbff datasource).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-admin-bff-db
+  namespace: snapdragon-backend
+  labels: { app: admin-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  podSelector:
+    matchLabels: { app: admin-bff-db }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: snapdragon-admin-bff-api }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# ── mod-bff-db (Postgres, snapdragon-backend) ──────────────────────────────────
+# Consumer: mod-bff-api only (modbff datasource).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-mod-bff-db
+  namespace: snapdragon-backend
+  labels: { app: mod-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  podSelector:
+    matchLabels: { app: mod-bff-db }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: snapdragon-mod-bff-api }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# ── user-bff-db (Postgres, snapdragon-backend) ─────────────────────────────────
+# Consumer: user-bff-api only (userbff datasource).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-user-bff-db
+  namespace: snapdragon-backend
+  labels: { app: user-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  podSelector:
+    matchLabels: { app: user-bff-db }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: snapdragon-user-bff-api }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# ── federation-db (Postgres, snapdragon-backend) ───────────────────────────────
+# Consumers: federation-api (federation datasource) + admin-bff-api (the admin-bff
+# cross-DB federation handle — see admin-bff-api deployment JDBC/R2DBC to
+# federation-db).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-federation-db
+  namespace: snapdragon-backend
+  labels: { app: federation-db, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  podSelector:
+    matchLabels: { app: federation-db }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: snapdragon-federation-api }
+        - podSelector:
+            matchLabels: { app: snapdragon-admin-bff-api }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# ── forum-bff-db (Postgres, snapdragon-backend) ────────────────────────────────
+# Consumer: forum-bff-api only (forumbff datasource).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-forum-bff-db
+  namespace: snapdragon-backend
+  labels: { app: forum-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  podSelector:
+    matchLabels: { app: forum-bff-db }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: snapdragon-forum-bff-api }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# ── cassandra (snapdragon-pki, port 9042) ──────────────────────────────────────
+# Consumers: admin-bff-api (CASSANDRA_CONTACT_POINTS) + federation-api
+# (MANIFEST_CACHE_CASSANDRA), both in snapdragon-backend, plus the gateways. Pod
+# matched by the standard app.kubernetes.io/name: cassandra label. Same default-
+# deny-except shape as the DB policies above; cross-namespace consumers pinned by
+# namespaceSelector + podSelector.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-cassandra
+  namespace: snapdragon-pki
+  labels: { app.kubernetes.io/name: cassandra, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: cassandra }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # admin-bff-api (snapdragon-backend) — CASSANDRA_CONTACT_POINTS.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+          podSelector:
+            matchLabels: { app: snapdragon-admin-bff-api }
+        # federation-api (snapdragon-backend) — MANIFEST_CACHE_CASSANDRA.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+          podSelector:
+            matchLabels: { app: snapdragon-federation-api }
+        # be-gateway (snapdragon-backend).
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+          podSelector:
+            matchLabels: { app.kubernetes.io/instance: snapdragon-be-gateway }
+        # fe-gateway (snapdragon-frontend).
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }
+          podSelector:
+            matchLabels: { app.kubernetes.io/instance: snapdragon-fe-gateway }
+        # pki-gateway (snapdragon-pki, self).
+        - podSelector:
+            matchLabels: { app.kubernetes.io/instance: snapdragon-pki-gateway }
+        # superadmin-gateway (snapdragon-pki, self).
+        - podSelector:
+            matchLabels: { app.kubernetes.io/instance: snapdragon-superadmin-gateway }
+      ports:
+        - { protocol: TCP, port: 9042 }
