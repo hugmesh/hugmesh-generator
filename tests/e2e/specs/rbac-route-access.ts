@@ -24,7 +24,8 @@
 export type Gateway =
   | 'snapdragon-pki-gateway'
   | 'snapdragon-be-gateway'
-  | 'snapdragon-fe-gateway';
+  | 'snapdragon-fe-gateway'
+  | 'snapdragon-superadmin-gateway';   // tailnet-only infra control plane (ROLE_SUPERADMIN)
 
 export interface RouteRule {
   gateway: Gateway;
@@ -70,6 +71,14 @@ export const ROUTE_ACCESS: RouteRule[] = [
   { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/provision/**',   role: 'ROLE_USER' },
   { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/me/**',          role: 'ROLE_USER' },
   { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/admin/**',       role: 'ROLE_ADMIN' },
+
+  // superadmin-gateway — TAILNET-ONLY infra control plane (apps/22-gateway-superadmin.yaml).
+  // Every row here is ROLE_SUPERADMIN; there is NO down-cascade row for ROLE_ADMIN,
+  // so admin is default-denied. NB /api/federation/** is ROLE_USER on the be-gateway
+  // but ROLE_SUPERADMIN on THIS gateway — the gateway NAME scopes the decision.
+  { gateway: 'snapdragon-superadmin-gateway', urlPattern: '/bff/superadmin/**',      role: 'ROLE_SUPERADMIN' },
+  { gateway: 'snapdragon-superadmin-gateway', urlPattern: '/superadmin/appstore/**', role: 'ROLE_SUPERADMIN' },
+  { gateway: 'snapdragon-superadmin-gateway', urlPattern: '/api/federation/**',      role: 'ROLE_SUPERADMIN' },
 ];
 
 /** Translate a Spring path pattern (`/a/**`, `/a/b`) into a matcher + a

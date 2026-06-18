@@ -33,6 +33,9 @@
 // claim; the mock stack (mock-bff) reads the same catalogue for its role grants.
 
 export type SystemsRole =
+  | 'ROLE_SUPERADMIN'  // infra control-plane tier; ABOVE admin. Reaches the tailnet-only
+                       // superadmin-gateway (snapdragon-superadmin-gateway) App-Store/console
+                       // surface. NOT a superset that auto-grants admin: it is its OWN ROLE_*.
   | 'ROLE_ADMIN'
   | 'ROLE_MOD'
   | 'ROLE_GAMES'
@@ -77,6 +80,19 @@ export interface SystemsSeedUser {
 }
 
 export const SYSTEMS_SEED_USERS: SystemsSeedUser[] = [
+  {
+    username: 'e2e-superadmin',
+    passwordEnv: 'E2E_SUPERADMIN_PASSWORD',
+    // ROLE_SUPERADMIN is its OWN tier — it does NOT carry ROLE_ADMIN. The
+    // superadmin-gateway routes are keyed on ROLE_SUPERADMIN alone (schema.sql
+    // 20-schema.sql), so the tier is asserted purely on that role. We do NOT
+    // grant ROLE_ADMIN here so the DENY-down-cascade (admin cannot reach
+    // superadmin) is provable without role bleed.
+    roles: ['ROLE_SUPERADMIN'],
+    expectGamesAdmin: false,
+    registrationComplete: true,
+    note: 'Infra superadmin — reaches the tailnet-only snapdragon-superadmin-gateway App-Store/console (/bff/superadmin/**, /superadmin/appstore/**, /api/federation/**); ADMIN must NOT reach these.',
+  },
   {
     username: 'e2e-admin',
     passwordEnv: 'E2E_ADMIN_PASSWORD',
@@ -304,6 +320,42 @@ export function swarmTargetsForMod(modIndex: number, counts = SWARM_DEFAULTS): s
   for (let i = start; i < end; i++) out.push(`e2e-swarm-user-${pad(i)}`);
   return out;
 }
+
+// ── ROLE_SUPERADMIN tier — the tailnet-only infra control plane ──────────────
+// The superadmin App-Store/console is served by its OWN gateway
+// (snapdragon-superadmin-gateway, specs/cluster/apps/22-gateway-superadmin.yaml),
+// NOT by the public fe/be/pki gateways. Every route under that gateway name is
+// gated ROLE_SUPERADMIN in gateway_route_access
+// (specs/cluster/manifests/route-access/initdb/20-schema.sql). These are the
+// ALLOW routes (copied 1:1 from the manifest's superadmin-gateway rows) the
+// spec asserts ROLE_SUPERADMIN reaches and ROLE_ADMIN is DENIED (no down-cascade).
+export const SUPERADMIN_GATEWAY = 'snapdragon-superadmin-gateway' as const;
+
+/** The ROLE_SUPERADMIN ALLOW routes on the superadmin-gateway — the three rows
+ *  seeded in 20-schema.sql under gateway = snapdragon-superadmin-gateway, plus a
+ *  representative concrete path to probe each glob with. */
+export const SUPERADMIN_ALLOW_ROUTES: { urlPattern: string; probe: string; what: string }[] = [
+  { urlPattern: '/bff/superadmin/**',      probe: '/bff/superadmin/appstore/catalog', what: 'App-Store BFF control plane (tailnet)' },
+  { urlPattern: '/superadmin/appstore/**', probe: '/superadmin/appstore/remoteEntry.js', what: 'appstore-ui federated remote (tailnet)' },
+  { urlPattern: '/api/federation/**',      probe: '/api/federation/manifest', what: 'federation manifest/bundles for the superadmin shell (tailnet)' },
+];
+
+/** The DENY-down-cascade expectation: ROLE_ADMIN (and any non-superadmin tier)
+ *  must NOT reach the superadmin-gateway routes — ROLE_SUPERADMIN is a distinct
+ *  tier, not a subset that admin inherits, so there is NO down-cascade. The spec
+ *  asserts every non-superadmin role in this list is DENIED every route above. */
+export const SUPERADMIN_DENY_ROLES: SystemsRole[] = [
+  'ROLE_ADMIN', 'ROLE_MOD', 'ROLE_GAMES_ADMIN', 'ROLE_USER',
+];
+
+// ── Cross-realm issuer isolation invariant ──────────────────────────────────
+// The two realms are INDEPENDENT Casdoors with distinct issuers. A token minted
+// by one issuer carries that realm's roles ONLY; the other realm's gateways must
+// treat its ROLE_*/role claims as absent (issuer isolation). The spec uses these
+// to assert a games-realm identity carries NO systems ROLE_* into a systems
+// gateway decision (and vice-versa).
+export const SYSTEMS_ISSUER = 'id.snapdragon.systems' as const;  // org "snapdragon"
+export const GAMES_ISSUER = 'id.snapdragon.games' as const;      // org "threewizards"
 
 /** The GAMES realm (org "threewizards", issuer id.snapdragon.games) is an
  *  INDEPENDENT Casdoor. The only systems->games automatic sync is
