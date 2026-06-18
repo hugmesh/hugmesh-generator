@@ -126,6 +126,25 @@ facade) plus the tailnet-only superadmin gateway, Akkoma + tuwunel, Forgejo
 remotes (the `social-ui` ArgoCD grouping), and snapdragon.games. See
 [`specs/cluster/README.md`](../specs/cluster/README.md).
 
+> **GitOps source migration — ⏳ PARTIAL.** Today the root app-of-apps syncs from
+> the **GitHub** `snapdragon-generator` repo. The move to an **in-cluster Forgejo**
+> source-of-truth is scaffolded — the Forgejo deploy (`apps/09-forgejo.yaml`), the
+> service-catalog `scmProvider` ApplicationSet (`apps/13-service-catalog.yaml`,
+> already configured to scan the in-cluster Forgejo) and the deploy contract
+> (`catalog/snapdragon-deploy.example.yaml`) all exist — but the source flip is
+> **live-gated** (needs a booted Forgejo + admin + OIDC + the org mirror +
+> `forgejo-scm-token`), and **no service repo has adopted `snapdragon-deploy.yaml`
+> + a `deploy/` kustomize tree yet** (prep-able now). See [`DEVOPS.md`](DEVOPS.md).
+
+### Autoscaling
+
+CPU-based **HPA** is wired on many workloads — `frontend`, `social-ui`,
+`remote-fragment`, `mod-bff-api`, `admin-bff-api`, `user-bff-api`, `forum-bff-api`,
+`user-ui`, `mod-ui`, `forum-ui`, `api-docs` (`manifests/<svc>/hpa.yaml`) — backed
+by **metrics-server** (`apps/01-metrics-server.yaml`). **KEDA** is also present
+(`apps/01b-keda.yaml`) for event/queue-driven scaling. ⏳ **Remaining:**
+latency/memory-based scaling beyond CPU.
+
 ## Secrets (Vault + USB)
 
 Cluster secrets are generated once by

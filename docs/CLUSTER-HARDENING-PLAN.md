@@ -21,6 +21,28 @@ Kubernetes STIG, FIPS 140-3 / 186-5. See also `docs/CRYPTO-AUDIT.md`,
 | SSH/crypto | AEAD-only ciphers (dropped `aes256-ctr`), Ed25519-only host key + `HostKeyAlgorithms ssh-ed25519` | FIPS 186-5; 800-53 SC-8/SC-13/IA-5; DISA SSH STIG |
 | Gateway chart | `automountServiceAccountToken: false` | 800-53 AC-6; 800-190 §4.5.5 |
 | Image pinning | `forgejo:9` → `9.0.3`; `nginxinc/nginx-unprivileged` (untagged) → `:1.27-alpine` | 800-190 §4.3; CIS Docker 4.x |
+| Tier ingress segmentation (auto-sync) | `apps/08-networkpolicy.yaml` tier default-deny ingress auto-syncs (merged **PR #40**); per-pod homeserver/forum isolation (merged **PR #56**) | NIST 800-53 SC-7/AC-4; CIS K8s 5.3.2 |
+| Per-port DB ingress (ships dark, ADR-32) | `manifests/networkpolicy/db-ingress.yaml` — admit only each store's real client on its real port (6 Postgres `:5432` + cassandra `:9042`), merged **PR #128** | NIST 800-53 SC-7; 800-204A |
+| Per-app least-privilege Postgres roles | 6+ dedicated DBs (route-access / federation / admin-bff / mod-bff / user-bff / forum), each its own owner + non-owner `_app` role + own ESO password, SCRAM-SHA-256, `REVOKE … FROM PUBLIC` (see `initdb/00-hardening.sql` + `10-roles.sh`) | NIST 800-53 AC-6/IA-5; see `docs/POSTGRES-HARDENING.md` |
+| Per-DB Vault-PKI server certs (ships dark, ADR-32) | `<db>-mtls` cert mounted at `/etc/postgres-tls`, `ssl=off` (wire path byte-identical), merged **PR #124** | NIST 800-53 SC-8; see `docs/POSTGRES-HARDENING.md` |
+
+> **ADR-32** is a commit/PR convention for the DB-hardening band (#124 / #128 plus
+> the held #132 / #133) — there is no standalone `docs/ADR-32` file.
+
+---
+
+## What REMAINS and is ⏳ LIVE-GATED (held; enabling blind risks crash-loops)
+
+These steps are intentionally parked on held PRs / open items until they can be
+validated **one workload at a time on a booted cluster** — applying them blind
+risks a crash-loop or a black-holed service:
+
+| Item | State | Why held |
+|------|-------|----------|
+| **Postgres `ssl=on` flip** | ⏳ held **PR #133** (do-not-merge-until-enabled) | per-DB certs already on disk (#124); flipping `ssl=on` + `sslMode=require` blind risks DB/consumer connect failure — validate per-DB live |
+| **Tier EGRESS default-deny per tier** | ⏳ held **PR #132** (do-not-merge-until-live) | egress default-deny without every allow rule silently severs a service / wedges ArgoCD's own reconcile — stage per-namespace live |
+| **Cassandra auth** | ⏳ remaining | `apps/00-cassandra.yaml` runs the bitnami chart with **no authenticator configured** (effectively AllowAll); enabling `PasswordAuthenticator` + per-app creds needs a live cluster to avoid wedging every gateway's revocation-list / route-access cache. Foundational segmentation merged in PR #32 (registry into GitOps) and PR #85 (hollow-image / pre-seed fixes) is in place; auth itself is not |
+| **Cassandra TLS** | ⏳ remaining | inter-node + client TLS for the gateway revocation/registry store; follows Cassandra auth, same live-gate |
 
 ---
 
@@ -178,6 +200,14 @@ are the image's documented non-root user; **confirm against the running image**
 ---
 
 ## B. NetworkPolicy default-deny extension
+
+> **Status update:** the tier **ingress** default-deny is now auto-synced (merged
+> **PR #40**), per-pod homeserver/forum isolation is in (merged **PR #56**), and
+> **per-port DB ingress** micro-segmentation (route-access-db / federation-db /
+> admin-bff-db / mod-bff-db / user-bff-db / forum-bff-db `:5432` + cassandra
+> `:9042`, only from their real clients) is DONE (merged **PR #128**, ADR-32). The
+> remaining piece below — extending to `devops`/observability and the **egress**
+> default-deny per tier — is ⏳ held on **PR #132** (do-not-merge-until-live).
 
 - **File:** `specs/cluster/apps/08-networkpolicy.yaml` → extend to cover
   `devops` (ArgoCD) + the observability/OTel paths; add the matching

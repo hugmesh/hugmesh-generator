@@ -25,7 +25,7 @@ specs/cluster/
                                   akkoma-peer (non-federation observer) + RBAC + PVC
     analytics/{discovery,clickhouse,kafka}   the split heavy bundle
 scripts/validate-prod-hygiene.sh  --static (CI/build) + --runtime (in-cluster)
-tests/e2e/                        Playwright suite (specs 01-24) + the swarm driver
+tests/e2e/                        Playwright suite (specs 01-25) + the swarm driver
 tests/qemu/seed-accounts.sh       --roles (role matrix) + --swarm N (the population)
 ```
 
@@ -85,6 +85,19 @@ test-runner `99`).
 > waved root therefore ships as an opt-in topology (the build prunes it from the
 > baked prod tree; the operator assembles the prod root). The default root remains
 > the shipped topology; the waved root is how you turn the blocking gate on.
+
+## RBAC role e2e (⏳ PARTIAL — per-realm + cross-realm-superadmin present)
+
+The role/RBAC e2e coverage is **partial**:
+
+- ✅ **Present:** per-realm login (`specs/15-rbac-per-realm-login.spec.ts`) and
+  cross-realm **superadmin** (`specs/25-rbac-cross-realm-superadmin.spec.ts`), plus
+  the route-access / admin-API gating + mod-sibling-scope + user/pending specs
+  (12–18).
+- ⏳ **Remaining:** there is **no full systems × games × forum cross-realm role
+  matrix** yet (every role asserted across all three realms). The two-Casdoor
+  (systems `snapdragon` / games `threewizards`) boundary is exercised only at the
+  superadmin edge today.
 
 ## The non-federation proof (domain-lock)
 

@@ -135,14 +135,34 @@ Applied via each DB Deployment's `POSTGRES_*` env + container `args` and the
 - **Auditable logins** — `log_connections`, `log_disconnections`, and
   `log_min_duration_statement=2000` (slow-statement log) so an unexpected superuser
   login or runaway query is visible.
-- **In-cluster TLS** — DB Services are ClusterIP-only and confined by SELinux MCS
-  levels + NetworkPolicy. For wire encryption between an app and its DB, mount the
-  Vault-PKI server cert and start Postgres with `-c ssl=on -c
-  ssl_cert_file=… -c ssl_key_file=…`, then add `?sslMode=require` (R2DBC) /
-  `sslmode=require` (JDBC) to the consumer URLs. This is **documented but not
-  enabled by default** here because the DBs are single-node, same-namespace, and
-  already MCS+NetworkPolicy-confined; it is the natural next step once the
-  Vault-PKI server-cert ESO Secret is wired per DB (tracked as a deferral).
+- **Per-port DB ingress NetworkPolicies** (✅ DONE — merged PR #128, ADR-32) —
+  `manifests/networkpolicy/db-ingress.yaml` adds a default-deny-except Ingress per
+  DB pod that admits ONLY each store's real clients on its real port: the six
+  Postgres pods (`route-access-db`, `admin-bff-db`, `mod-bff-db`, `user-bff-db`,
+  `federation-db`, `forum-bff-db`) on `:5432` and `cassandra` on `:9042`, pinned by
+  namespaceSelector AND podSelector peers. These ship in the **auto-synced**
+  `apps/08-networkpolicy.yaml` Application (tier segmentation auto-sync was
+  activated in merged PR #40; per-pod homeserver/forum isolation in merged PR #56);
+  they are ingress-only (egress stays open), so a missed allow restores
+  connectivity on removal.
+- **Per-DB Vault-PKI server certs** (✅ DONE, ships dark — merged PR #124, ADR-32) —
+  each dedicated Postgres DB now gets a Vault-PKI server cert on disk via the
+  existing Vault-PKI + ESO pattern: `pki-externalsecrets.yaml` issues a per-DB
+  `VaultDynamicSecret` (`pki_int/issue/<db>`) → `kubernetes.io/tls` Secret
+  `<db>-mtls`, mounted read-only at `/etc/postgres-tls` (`optional: true` so the
+  pod still starts before ESO). Postgres is **NOT** started with `ssl=on` and no
+  consumer URL sets `sslMode`, so the **default wire path stays byte-identical**
+  (cert present but unused).
+- **In-cluster TLS — ssl=on FLIP is ⏳ live-gated (held PR #133, do-not-merge-until-enabled).**
+  With the per-DB certs already on disk (#124), enabling wire encryption is the
+  remaining step: start Postgres with `-c ssl=on -c ssl_cert_file=… -c ssl_key_file=…`
+  and add `?sslMode=require` (R2DBC) / `sslmode=require` (JDBC) to the consumer
+  URLs. This is deliberately **held on a live cluster** — flipping it blind risks a
+  DB crash-loop / consumer-connect failure, so PR #133 is parked until it can be
+  validated one DB at a time on a booted cluster. The DBs are single-node,
+  same-namespace, and already MCS + per-port-NetworkPolicy confined in the
+  meantime. (ADR-32 is a commit/PR convention spanning #124/#128/#132/#133, not a
+  standalone doc file.)
 
 ---
 

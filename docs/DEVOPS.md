@@ -19,7 +19,14 @@ web interface.**
 `.gitlab-ci.yml` (runs on the privileged x86 runner):
 
 1. **iso** — `scripts/build-all-roles.sh` (pki/backend/frontend, aarch64) + `build-x86-host-stage4.sh` (x86 host).
-2. **images** — builds + pushes app container images to the GitLab registry.
+2. **images** — ⏳ **stub.** The `build:images` job is currently an `echo`
+   placeholder; the **app** container images (gateway, frontends, BFFs, …) are
+   built from **their own repos in the GitLab org mirror**, not by this job. A
+   general Argo / in-cluster image-build pipeline is **NOT started**. The one
+   in-cluster image builder that IS done is the **service-catalog Kaniko builder**
+   (`apps/54-service-catalog-builder.yaml` + `manifests/service-catalog-builder/`,
+   merged **PR #110**, ships dark): a per-build Kaniko Job template the admin-bff
+   `AddService` task instantiates — it is not the general app-image pipeline.
 3. **deliver** — uploads each ISO to the GitLab generic package registry under a
    stable `…/packages/generic/iso/latest/<name>.iso` path.
 
@@ -35,6 +42,25 @@ ISO artifacts (admin-only; the BFF exposes `/bff/admin/isos`).
 Snapdragon-Systems GitHub repo (`mirror_trigger_builds=true`), so CI builds from
 a complete in-VPN copy. Repos contain no secrets (keys are git-ignored and live
 only on the USB + Vault), so the mirror exposes nothing sensitive.
+
+## Forgejo + the GitOps source migration (⏳ PARTIAL — scaffold present, flip live-gated)
+
+The move from "ArgoCD syncs straight from GitHub" toward an **in-cluster Forgejo**
+source-of-truth is **scaffolded but not cut over**:
+
+- ✅ **Present (Phase 5/6 scaffold):** the Forgejo deploy (`apps/09-forgejo.yaml`),
+  the catalog ApplicationSet (`apps/13-service-catalog.yaml`) — already configured
+  with an `scmProvider` generator pointing at the **in-cluster Forgejo**
+  (`http://forgejo.snapdragon-pki.svc.cluster.local:3000`, `repositoryMatch
+  ^snapdragon-`) — and the deploy contract
+  (`specs/cluster/catalog/snapdragon-deploy.example.yaml`).
+- ⏳ **Remaining (live-gated):** the actual GitOps **source flip** needs a booted
+  Forgejo + an admin + OIDC + the GitHub→Forgejo org mirror + a read token in the
+  `forgejo-scm-token` Secret (ns `devops`) before the ApplicationSet can scan
+  anything real (the manifest itself flags these as prerequisites). And **no
+  service repo has adopted `snapdragon-deploy.yaml` + a `deploy/` kustomize tree
+  yet** — that adoption is prep-able now (no live cluster required), it just hasn't
+  been done.
 
 ## Fast binary OS updates via the binhost
 

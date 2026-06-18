@@ -689,10 +689,14 @@ see the full table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
 
 Continuous integration runs on **GitLab** ([`.gitlab-ci.yml`](.gitlab-ci.yml)):
 GitHub is pull-mirrored into an in-cluster GitLab, and a privileged runner on
-the x86 node builds the role ISOs + container images and delivers the ISOs as
-generic-package release assets (latest-link path) for the admin UI's download
-links. ISOs carry **no keys** — KEYS material is supplied from the USB at first
-boot, never baked in or published.
+the x86 node builds the role ISOs and delivers them as generic-package release
+assets (latest-link path) for the admin UI's download links. ISOs carry **no
+keys** — KEYS material is supplied from the USB at first boot, never baked in or
+published. The **app** container images (gateway, frontends, BFFs, …) are built
+from their own repos in the GitLab org mirror — the `build:images` job here is
+currently an `echo` stub, and a general in-cluster image-build pipeline is not
+started (the service-catalog Kaniko builder, PR #110, is the one in-cluster
+image builder, and ships dark). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 
 > **GitHub Actions is intentionally absent** — Actions is billing-blocked
 > org-wide (jobs fail at setup). Do **not** add `.github/workflows`; CI lives in
