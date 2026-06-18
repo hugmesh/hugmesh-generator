@@ -1545,11 +1545,23 @@ cp "${SHARED_SPECS}/etc/kubernetes/kubelet-config.yaml"   "${SYSROOT}/var/lib/ku
 mkdir -p "${SYSROOT}/etc/kubernetes"
 cp "${SHARED_SPECS}/etc/kubernetes/kubeadm-config.yaml"   "${SYSROOT}/etc/kubernetes/kubeadm-config.yaml"
 
-mkdir -p "${SYSROOT}/etc/init.d"
+mkdir -p "${SYSROOT}/etc/init.d" "${SYSROOT}/etc/firewalld/zones"
 for svc in growroot containerd kubelet headscale tailscaled keys-provision; do
     cp "${SHARED_SPECS}/etc/init.d/${svc}" "${SYSROOT}/etc/init.d/${svc}"
     chmod +x "${SYSROOT}/etc/init.d/${svc}"
 done
+# firewalld installs /etc/init.d/firewalld; alias 'firewall' so the `after firewall`
+# deps in tailscaled/kubelet/headscale/containerd/egress-vpn still resolve.
+ln -sfn firewalld "${SYSROOT}/etc/init.d/firewall"
+# Bake ENV-appropriate firewalld config: prod = hardened (DefaultZone=drop, tailscale0-only
+# via trusted.xml), test = permissive (DefaultZone=trusted) so CI harnesses can connect
+# without a tailnet.
+if [ "${ENV}" = "prod" ]; then
+    cp "${SHARED_SPECS}/etc/firewalld/firewalld-prod.conf" "${SYSROOT}/etc/firewalld/firewalld.conf"
+else
+    cp "${SHARED_SPECS}/etc/firewalld/firewalld-test.conf" "${SYSROOT}/etc/firewalld/firewalld.conf"
+fi
+cp "${SHARED_SPECS}/etc/firewalld/zones/trusted.xml" "${SYSROOT}/etc/firewalld/zones/trusted.xml"
 
 # First-boot grow policy (read by the growroot service). Default "fill" => the
 # root expands to fill the whole USB/SD/NVMe on first boot; --grow none keeps the
@@ -1695,7 +1707,7 @@ mkdir -p "${SYSROOT}/etc/containerd/certs.d"
 mkdir -p "${SYSROOT}/etc/runlevels/default"
 # growroot expands the root fs to fill the medium on first boot; it orders itself
 # before keys-provision so provisioning sees the full disk (no-op in containers).
-DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision containerd kubelet auditd local)
+DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall containerd kubelet auditd local)
 # headscale runs on the PKI/identity node (and on a generic all-in-one image)
 if [ "${ROLE}" = "pki" ] || [ "${ROLE}" = "generic" ]; then
     DEFAULT_SVCS+=(headscale)

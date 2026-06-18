@@ -21,6 +21,8 @@ net-misc/networkmanager
 net-misc/openssh
 net-wireless/wpa_supplicant
 net-firewall/iptables
+net-firewall/nftables
+net-firewall/firewalld
 net-firewall/conntrack-tools
 net-misc/socat
 # Egress VPN (split-tunnel, fail-closed) — wg-quick (WireGuard, first-class) +

@@ -60,4 +60,7 @@ PYTHON_SINGLE_TARGET="python3_12"
 # ac_cv_* cache args into packages with hand-written configure scripts (e.g.
 # sys-apps/iproute2) that reject unknown options and die.
 
+# Pi nodes are always headless servers — skip documentation and man pages.
+INSTALL_MASK="/usr/share/doc /usr/share/man /usr/share/info"
+
 PAX_MARKINGS="none"

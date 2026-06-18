@@ -432,9 +432,12 @@ if ${ROLE_CLIENT}; then
     CLIENT_USE="X gtk dbus elogind udev"
     [ "${DESKTOP}" = "full" ] && CLIENT_USE="${CLIENT_USE} pulseaudio pipewire"
     INPUT_DEVICES="libinput"   # Xorg keyboard/mouse/touchpad (via x11-base/xorg-drivers)
+    # Client roles keep man pages; doc/info still skipped (not needed at runtime).
+    INSTALL_MASK="/usr/share/doc /usr/share/info"
 else
     CLIENT_USE=""
     INPUT_DEVICES=""           # headless nodes run no X server
+    INSTALL_MASK="/usr/share/doc /usr/share/man /usr/share/info"
 fi
 
 # Reconcile the legacy SKIP_ISO switch with the new opt-in ISO design: an ISO
@@ -452,6 +455,7 @@ render_template() {
         -e "s|@@ENV@@|${ENV}|g" \
         -e "s|@@GPU_USE@@|${GPU_USE}|g" -e "s|@@VIDEO_CARDS@@|${VIDEO_CARDS}|g" \
         -e "s|@@CLIENT_USE@@|${CLIENT_USE}|g" -e "s|@@INPUT_DEVICES@@|${INPUT_DEVICES}|g" \
+        -e "s|@@INSTALL_MASK@@|${INSTALL_MASK}|g" \
         "$1" > "$2"
 }
 
@@ -981,7 +985,7 @@ grep -q '^GRUB_DISABLE_OS_PROBER=' "${SYSROOT}/etc/default/grub" || \
 cp "${SPECS_DIR}/etc/fstab"                           "${SYSROOT}/etc/fstab"
 
 # Shared (arch-agnostic) etc/ specs
-mkdir -p "${SYSROOT}/etc/"{sysctl.d,modules-load.d,containerd,kubernetes,init.d,ssh/sshd_config.d,local.d,headscale,keys-provision} \
+mkdir -p "${SYSROOT}/etc/"{sysctl.d,modules-load.d,containerd,kubernetes,init.d,ssh/sshd_config.d,local.d,headscale,keys-provision,firewalld/zones} \
          "${SYSROOT}/var/lib/kubelet" "${SYSROOT}/usr/sbin"
 cp "${SHARED_SPECS}/etc/sysctl.d/10-hardened.conf"    "${SYSROOT}/etc/sysctl.d/"
 cp "${SHARED_SPECS}/etc/sysctl.d/99-kubernetes.conf"  "${SYSROOT}/etc/sysctl.d/"
@@ -1005,6 +1009,18 @@ cp "${SHARED_SPECS}/usr/local/sbin/snapdragon-backup"  "${SYSROOT}/usr/local/sbi
 for svc in containerd kubelet headscale tailscaled keys-provision growroot; do
     cp "${SHARED_SPECS}/etc/init.d/${svc}" "${SYSROOT}/etc/init.d/${svc}"; chmod +x "${SYSROOT}/etc/init.d/${svc}"
 done
+# firewalld installs /etc/init.d/firewalld; alias 'firewall' so the `after firewall`
+# deps in tailscaled/kubelet/headscale/containerd/egress-vpn still resolve.
+ln -sfn firewalld "${SYSROOT}/etc/init.d/firewall"
+# Bake ENV-appropriate firewalld config: prod = hardened (DefaultZone=drop, tailscale0-only
+# via trusted.xml), test = permissive (DefaultZone=trusted) so CI harnesses can reach
+# the node without a tailnet.
+if [ "${ENV}" = "prod" ]; then
+    cp "${SHARED_SPECS}/etc/firewalld/firewalld-prod.conf" "${SYSROOT}/etc/firewalld/firewalld.conf"
+else
+    cp "${SHARED_SPECS}/etc/firewalld/firewalld-test.conf" "${SYSROOT}/etc/firewalld/firewalld.conf"
+fi
+cp "${SHARED_SPECS}/etc/firewalld/zones/trusted.xml" "${SYSROOT}/etc/firewalld/zones/trusted.xml"
 
 # ── Layer-B device-license-registry sshd enforcement (ADMIN/mesh-extension) ─────
 # INERT on a SUPERADMIN/core host: provision_device_registry() ACTIVATES it only
@@ -1111,7 +1127,7 @@ mkdir -p "${SYSROOT}/etc/runlevels/default"
 if ${ROLE_CLIENT}; then
     # CLIENT desktop: NO containerd/kubelet/headscale (not a k8s node). Add the
     # desktop session stack: dbus + elogind (seat/login) + display-manager (lightdm).
-    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision auditd local dbus elogind display-manager)
+    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall auditd local dbus elogind display-manager)
     # gui-libs/display-manager-init's /etc/init.d/display-manager reads this to decide
     # WHICH DM to launch; lightdm ships no OpenRC service. Without it the service falls
     # back to xdm and the image boots to a bare console (mirrors the frite fix).
@@ -1133,7 +1149,7 @@ greeter-session=lightdm-gtk-greeter
 user-session=${_user_session}
 LIGHTDM
 else
-    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision containerd kubelet auditd local)
+    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall containerd kubelet auditd local)
     ${ROLE_HEADSCALE} && SVCS+=(headscale)
 fi
 ${SKIP_MESH} || ${SKIP_TAILSCALE} || SVCS+=(tailscaled)

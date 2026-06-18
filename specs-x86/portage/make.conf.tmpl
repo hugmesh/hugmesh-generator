@@ -78,4 +78,9 @@ GRUB_PLATFORMS="efi-64 pc"
 PYTHON_TARGETS="python3_12"
 PYTHON_SINGLE_TARGET="python3_12"
 
+# Server nodes have no interactive users; skip documentation and man pages.
+# Client roles keep man pages (desktop users) but still drop doc/info.
+# @@INSTALL_MASK@@ is substituted by the builder based on ROLE_CLIENT.
+INSTALL_MASK="@@INSTALL_MASK@@"
+
 PAX_MARKINGS="none"

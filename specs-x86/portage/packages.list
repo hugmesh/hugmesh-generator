@@ -18,6 +18,8 @@ app-misc/jq
 net-misc/networkmanager
 net-misc/openssh
 net-firewall/iptables
+net-firewall/nftables
+net-firewall/firewalld
 net-firewall/conntrack-tools
 net-misc/socat
 net-dns/bind-tools
