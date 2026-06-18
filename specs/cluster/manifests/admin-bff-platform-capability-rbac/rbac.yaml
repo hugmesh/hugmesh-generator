@@ -1,0 +1,147 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# ADMIN-BFF PLATFORM-CAPABILITY PROBE RBAC — least privilege, READ-ONLY ONLY.
+#
+# GROUNDS the merged platform-capability probe (admin-bff
+# PlatformCapabilitiesController + Fabric8PlatformCapabilityProbe). That probe runs
+# as the admin-bff pod's in-cluster ServiceAccount (backups-effector, created with
+# the admin-bff in manifests/admin-bff-api/backups-effector-sa.yaml and named on the
+# Deployment's serviceAccountName) and does ONLY these three read-only fabric8 calls
+# (see Fabric8PlatformCapabilityProbe.Fabric8K8sReader):
+#
+#   • customResourceDefinitions().withName(crd).get()  — applications.argoproj.io
+#       (ArgoCD) + backups.velero.io (Velero) CRD presence → apiextensions.k8s.io
+#       customresourcedefinitions: GET (cluster-scoped).
+#   • apps().deployments().inNamespace(ns).withName(name).get() — argocd-server in
+#       `argocd` + velero in `velero` → apps deployments: GET/LIST scoped to those
+#       two namespaces ONLY.
+#   • nodes().list() — the x86 build-node label/arch scan → core nodes: LIST
+#       (cluster-scoped, no per-node binding possible).
+#
+# Without these grants every read RBAC-DENIES; the probe FAILS SAFE (each primitive
+# returns null on a denial → capability reported absent + a warning) so the BFF
+# never lies, but ArgoCD / Velero / build-node are reported "undetectable" instead
+# of their true presence. This file is the AUTHORITY half; nothing here is WRITE.
+#
+# Mirrors the workload-console-rbac / velero backups-effector least-privilege
+# pattern: a cluster-read ClusterRole + ClusterRoleBinding for the genuinely
+# cluster-scoped reads (CRDs, Nodes), and a namespaced read Role + RoleBinding in
+# EACH of argocd + velero for the Deployment gets — so Deployment read is bounded to
+# exactly the two infra namespaces the probe names, never cluster-wide. No secrets,
+# no configmaps, no pods, no exec, no write verbs anywhere. SHIPS DARK: the admin-bff
+# leaves app.platform-capabilities.k8s.enabled=false (NoopPlatformCapabilityProbe)
+# until deliberately enabled, so these grants are unexercised until then.
+# ════════════════════════════════════════════════════════════════════════════════
+#
+# ── Cluster-scoped reads: CRD presence (get) + Node list ────────────────────────
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: admin-bff-platform-capability-probe
+  labels:
+    app.kubernetes.io/name: platform-capabilities
+    app.kubernetes.io/component: probe-rbac
+    app.kubernetes.io/part-of: snapdragon.systems
+rules:
+  # CRD presence checks (.customResourceDefinitions().withName(crd).get()). A named
+  # .get() needs `get`; no list/watch, no create/patch/delete. resourceNames is
+  # intentionally OMITTED — RBAC resourceNames does not gate `get` on a named lookup
+  # any more cheaply than the verb itself, and pinning the two CRD names here would
+  # be brittle for no extra safety (the verb is already read-only on a cluster-scoped
+  # registry that carries no secret material).
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get"]
+  # Build-node scan (.nodes().list()). Node objects are cluster-scoped, so the list
+  # cannot be namespace-bound; read-only `list` only (no get/watch needed, no write).
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: admin-bff-platform-capability-probe
+  labels:
+    app.kubernetes.io/name: platform-capabilities
+    app.kubernetes.io/component: probe-rbac
+    app.kubernetes.io/part-of: snapdragon.systems
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin-bff-platform-capability-probe
+subjects:
+  - kind: ServiceAccount
+    name: backups-effector
+    namespace: snapdragon-backend
+---
+# ── Namespaced reads: argocd-server Deployment in `argocd` ──────────────────────
+# (.apps().deployments().inNamespace("argocd").withName("argocd-server").get()).
+# A named .get() needs `get`; `list` is added because the probe's fail-safe is
+# unforgiving and a future inNamespace().list() filter would otherwise RBAC-deny.
+# NOTHING else: no other apps kinds, no write, no other namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: admin-bff-platform-capability-probe
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: platform-capabilities
+    app.kubernetes.io/component: probe-rbac
+    app.kubernetes.io/part-of: snapdragon.systems
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: admin-bff-platform-capability-probe
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: platform-capabilities
+    app.kubernetes.io/component: probe-rbac
+    app.kubernetes.io/part-of: snapdragon.systems
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: admin-bff-platform-capability-probe
+subjects:
+  - kind: ServiceAccount
+    name: backups-effector
+    namespace: snapdragon-backend
+---
+# ── Namespaced reads: velero Deployment in `velero` ─────────────────────────────
+# (.apps().deployments().inNamespace("velero").withName("velero").get()). Same
+# minimal read Role + RoleBinding, scoped to the `velero` namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: admin-bff-platform-capability-probe
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: platform-capabilities
+    app.kubernetes.io/component: probe-rbac
+    app.kubernetes.io/part-of: snapdragon.systems
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: admin-bff-platform-capability-probe
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: platform-capabilities
+    app.kubernetes.io/component: probe-rbac
+    app.kubernetes.io/part-of: snapdragon.systems
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: admin-bff-platform-capability-probe
+subjects:
+  - kind: ServiceAccount
+    name: backups-effector
+    namespace: snapdragon-backend

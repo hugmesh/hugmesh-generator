@@ -1,0 +1,34 @@
+# ADMIN-BFF PLATFORM-CAPABILITY PROBE RBAC — the least-privilege READ-ONLY grants the
+# merged platform-capability probe (admin-bff PlatformCapabilitiesController +
+# Fabric8PlatformCapabilityProbe) needs to detect ArgoCD / Velero / x86 build-node
+# presence from the in-cluster API. Bound to the admin-bff pod's backups-effector
+# ServiceAccount (manifests/admin-bff-api/backups-effector-sa.yaml). A cluster-read
+# ClusterRole + ClusterRoleBinding (CRDs get, Nodes list) plus namespaced read Role +
+# RoleBinding in argocd + velero (Deployments get/list). NOTHING write.
+#
+# AUTOMATED sync (alongside the admin-bff-api Application) so the grants exist whenever
+# the BFF runs — the probe still SHIPS DARK (app.platform-capabilities.k8s.enabled=false
+# → NoopPlatformCapabilityProbe) until deliberately enabled, so these tokens are
+# unexercised until then; granting them early just means a clean answer the moment the
+# probe is switched on. The argocd / velero RoleBindings reference namespaces that may
+# not exist yet when this syncs; the cluster tolerates a RoleBinding whose namespace
+# exists (CreateNamespace=false leaves argocd/velero to their own owning Applications)
+# — the ClusterRole/ClusterRoleBinding apply regardless and the namespaced halves bind
+# the moment those namespaces are present.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: admin-bff-platform-capability-rbac
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/admin-bff-platform-capability-rbac
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=false]
