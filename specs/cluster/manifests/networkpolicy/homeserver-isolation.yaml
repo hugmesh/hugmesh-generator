@@ -9,12 +9,14 @@
 # revocation that a platform ban relies on.
 #
 # This file is the per-pod backstop that makes the ban REAL at the network layer:
-# the homeserver client/admin surfaces become reachable ONLY from the four
-# legitimate callers — the be-gateway (user/mod traffic, route-access-gated), the
-# mod-bff-api (immediate ban deactivate), the admin-bff-api (the reconcile loop +
-# ServiceTokenBroker), and the akkoma/tuwunel admin-sync jobs (backstop reconcile).
-# Everything else (snapdragon-frontend, the rest of snapdragon-backend, games,
-# observability) is DENIED by the default-deny these per-pod policies create.
+# the homeserver client/admin surfaces become reachable ONLY from the legitimate
+# callers — the be-gateway (user/mod traffic, route-access-gated), the mod-bff-api
+# (immediate ban deactivate), the admin-bff-api (the reconcile loop +
+# ServiceTokenBroker), the user-bff-api (the D6 self-service homeserver-proxy
+# caller — SHIPS DARK behind app.hs-token.enabled), and the akkoma/tuwunel
+# admin-sync jobs (backstop reconcile). Everything else (snapdragon-frontend, the
+# rest of snapdragon-backend, games, observability) is DENIED by the default-deny
+# these per-pod policies create.
 #
 # IMPORTANT — k8s NetworkPolicy is ADDITIVE (union of all selecting policies), it
 # has NO deny/exclude. So this isolation only holds if the BROAD tier-ingress
@@ -61,6 +63,17 @@ spec:
         # admin-bff-api — the reconcile loop + ServiceTokenBroker register/login.
         - podSelector:
             matchLabels: { app: snapdragon-admin-bff-api }
+        # user-bff-api — the D6 self-service homeserver-proxy caller. user-bff mints
+        # + custody-holds the homeserver-NATIVE token server-side and forwards it
+        # through akkoma-proxy:4443 (the nginx mTLS front passes the bearer through
+        # unchanged), so the user's /bff/user/** self-service surfaces reach akkoma
+        # WITHOUT the be-gateway hop. It presents its OWN cluster-CA client cert
+        # (snapdragon-user-bff-api-mtls — the same PEM its server keystore is built
+        # from). SHIPS DARK: this rule only OPENS the network path; the user-bff
+        # hs-token mint/proxy code stays inert behind app.hs-token.enabled (default
+        # false), so until that flag flips no traffic actually flows on it.
+        - podSelector:
+            matchLabels: { app: snapdragon-user-bff-api }
         # akkoma admin-sync Job — the ROLE_MOD/ROLE_ADMIN (+ ban-absence) backstop.
         - podSelector:
             matchLabels: { app: akkoma-admin-sync }
@@ -107,6 +120,13 @@ spec:
             matchLabels: { app: snapdragon-mod-bff-api }
         - podSelector:
             matchLabels: { app: snapdragon-admin-bff-api }
+        # user-bff-api — the D6 self-service homeserver-proxy caller (Matrix side).
+        # Forwards the server-side-held tuwunel-NATIVE token through tuwunel-proxy:4443
+        # for the user's /bff/user/** self-service surfaces, presenting its own
+        # cluster-CA client cert. SHIPS DARK behind app.hs-token.enabled (default
+        # false) — this rule only OPENS the path; no traffic flows until it flips.
+        - podSelector:
+            matchLabels: { app: snapdragon-user-bff-api }
         - podSelector:
             matchLabels: { app: tuwunel-admin-sync }
       ports:
