@@ -207,6 +207,22 @@ spec:
             - { name: BACKUPS_VELERO_NAMESPACE,            value: "velero" }
             - { name: BACKUPS_BRAND_NAMESPACE_SUFFIXES,    value: "be,fe" }
             - { name: BACKUPS_INSTALLED_SERVICES_NAMESPACE, value: "snapdragon-backend" }
+            # ── MFA TOTP-secret encryption key (app.mfa.factor-key) — SHIPS DARK ─
+            # APP_MFA_FACTOR_KEY is the 256-bit AES-GCM data key MfaSecretCipher uses
+            # to encrypt each enrolled TOTP secret at rest (and seed the recovery-code
+            # keyed hash). Sourced from the ESO Secret admin-bff-mfa (key factor-key),
+            # which ESO materializes from Vault secret/<brand>/admin-bff-mfa.factor_key
+            # (gen-cluster-secrets mints `openssl rand -base64 32`). DARK: the whole MFA
+            # surface stays off behind app.casdoor.mfa.enabled (default false); with no
+            # key the cipher is INERT and TOTP enroll refuses (no plaintext fallback).
+            # Providing the key only PROVISIONS it — it does NOT turn MFA on. optional:
+            # true so the pod still starts if the Secret is absent (cipher stays inert).
+            - name: APP_MFA_FACTOR_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: admin-bff-mfa
+                  key: factor-key
+                  optional: true
           # Probes are HTTPS now that server.ssl is enabled. Because client-auth=need
           # rejects the TLS handshake of any caller WITHOUT a client cert, a plain
           # kubelet httpGet (which presents none) would fail — so the probe is an

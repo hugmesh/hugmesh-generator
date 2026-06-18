@@ -281,6 +281,17 @@ MOD_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 USER_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 FORUM_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 
+# admin-bff MFA TOTP-secret encryption key (app.mfa.factor-key / env
+# APP_MFA_FACTOR_KEY). The admin-bff's MfaSecretCipher AES-256-GCM-encrypts each
+# enrolled TOTP secret at rest with this 256-bit data key (the same key also seeds
+# the recovery-code keyed hash). The cipher PREFERS a base64-decoded 32-byte key —
+# `openssl rand -base64 32` mints exactly that (32 random bytes => 44 base64 chars),
+# matching the existing high-entropy-secret idiom. SHIPS DARK: the whole MFA surface
+# stays off behind app.casdoor.mfa.enabled (default false) and the cipher is INERT
+# with an empty key, so this only PROVISIONS the key — it does not enable MFA. The
+# value lives ONLY in Vault + the offline USB bundle, never committed to git.
+ADMIN_BFF_MFA_FACTOR_KEY="$(openssl rand -base64 32)"
+
 # phpBB forum (backend-only). phpbb-db OWNER (install/migrate) + phpbb_app runtime
 # role + the phpBB first-install admin. Kept on their OWN Vault paths (forum,
 # forum-db) so the isolated snapdragon-forum namespace's phpbb-secrets /
@@ -351,6 +362,10 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/admin-bff-db" \
             password="${ADMIN_BFF_DB_PASSWORD}" \
             app_password="${ADMIN_BFF_DB_APP_PASSWORD}"
+        # admin-bff MFA TOTP-secret encryption key (app.mfa.factor-key). Own path so
+        # it is independent of the admin-bff DB creds. SHIPS DARK (MFA off by default).
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/admin-bff-mfa" \
+            factor_key="${ADMIN_BFF_MFA_FACTOR_KEY}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/mod-bff-db" \
             password="${MOD_BFF_DB_PASSWORD}" \
             app_password="${MOD_BFF_DB_APP_PASSWORD}"
@@ -395,7 +410,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/gitlab-registry" \
             username="${GITLAB_REGISTRY_USER}" \
             token="${GITLAB_REGISTRY_TOKEN}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,mod-bff-db,user-bff-db,forum-bff-db,forum,forum-db,route-access-db,uptrace,mail,gitlab-registry}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,mod-bff-db,user-bff-db,forum-bff-db,forum,forum-db,route-access-db,uptrace,mail,gitlab-registry}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -455,6 +470,7 @@ USER_BFF_DB_PASSWORD="${USER_BFF_DB_PASSWORD}" \
 FORUM_BFF_DB_PASSWORD="${FORUM_BFF_DB_PASSWORD}" \
 FEDERATION_DB_APP_PASSWORD="${FEDERATION_DB_APP_PASSWORD}" \
 ADMIN_BFF_DB_APP_PASSWORD="${ADMIN_BFF_DB_APP_PASSWORD}" \
+ADMIN_BFF_MFA_FACTOR_KEY="${ADMIN_BFF_MFA_FACTOR_KEY}" \
 MOD_BFF_DB_APP_PASSWORD="${MOD_BFF_DB_APP_PASSWORD}" \
 USER_BFF_DB_APP_PASSWORD="${USER_BFF_DB_APP_PASSWORD}" \
 FORUM_BFF_DB_APP_PASSWORD="${FORUM_BFF_DB_APP_PASSWORD}" \
@@ -550,6 +566,12 @@ data = {
         },
         "admin-bff-db-app-auth": {
             "password": os.environ["ADMIN_BFF_DB_APP_PASSWORD"],
+        },
+        # admin-bff MFA TOTP-secret encryption key (app.mfa.factor-key /
+        # APP_MFA_FACTOR_KEY). The k8s key is `factor-key`; the admin-bff
+        # Deployment mounts it via secretKeyRef. SHIPS DARK (MFA off by default).
+        "admin-bff-mfa": {
+            "factor-key": os.environ["ADMIN_BFF_MFA_FACTOR_KEY"],
         },
         "mod-bff-db-app-auth": {
             "password": os.environ["MOD_BFF_DB_APP_PASSWORD"],
