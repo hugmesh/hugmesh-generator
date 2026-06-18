@@ -126,25 +126,33 @@ echo "    Work/target dir: ${WORK_DIR}"
 echo "    Pass-through args: $*"
 echo
 
+# Image builds are failure-TOLERANT: under `set -e` a bare builder call aborts the WHOLE
+# run on the first role failure — skipping every later image AND the keys block below
+# (whose FATAL gate then never runs). Accumulate failures and report them loudly at the
+# end instead, so one role's transient failure (fetch/OOM/ENOSPC) never voids the rest.
+BUILDS_FAILED=()
 for role in "${RPI_ROLES[@]}"; do
     echo "############################################################"
     echo "#  Building RPi5 role: ${role}"
     echo "############################################################"
-    "${BUILD_RPI}" --role "${role}" "$@"
+    "${BUILD_RPI}" --role "${role}" "$@" \
+        || { echo "!! RPi5 role '${role}' build FAILED — continuing with the remaining roles" >&2; BUILDS_FAILED+=("rpi5:${role}"); }
 done
 
 for role in "${X86_BUILD_ROLES[@]}"; do
     echo "############################################################"
     echo "#  Building x86 role: ${role}"
     echo "############################################################"
-    "${BUILD_X86}" --role "${role}" "$@"
+    "${BUILD_X86}" --role "${role}" "$@" \
+        || { echo "!! x86 role '${role}' build FAILED — continuing with the remaining roles" >&2; BUILDS_FAILED+=("x86:${role}"); }
 done
 
 if [ "${BUILD_FRITE_IMG}" = true ]; then
     echo "############################################################"
     echo "#  Building Frite light desktop: ${FRITE_BOARD_SEL} (flavor=${FRITE_FLAVOR_SEL})"
     echo "############################################################"
-    "${BUILD_FRITE}" --board "${FRITE_BOARD_SEL}" --flavor "${FRITE_FLAVOR_SEL}" "$@"
+    "${BUILD_FRITE}" --board "${FRITE_BOARD_SEL}" --flavor "${FRITE_FLAVOR_SEL}" "$@" \
+        || { echo "!! Frite build FAILED — continuing" >&2; BUILDS_FAILED+=("frite:${FRITE_BOARD_SEL}"); }
 fi
 
 # ── Generate provisioning keys ───────────────────────────────────────
@@ -213,15 +221,24 @@ if [ "${PENTEST}" = "1" ]; then
         --pipeline "${PENTEST_PIPELINE:-main}"
 fi
 
-# ── Keys-failure gate (LAST so every role/build above was still attempted) ────
-# A run whose keys folders failed has NO usable provisioning deliverable for
-# those roles: fail the orchestrator loudly instead of exiting 0.
+# ── Failure gates (LAST so every role/build above was still attempted) ────────
+# Image builds + keys are failure-tolerant above; report any failures loudly here and
+# exit nonzero so a partial run is never mistaken for a complete success.
+if [ "${#BUILDS_FAILED[@]}" -gt 0 ]; then
+    echo >&2
+    echo "!! IMAGE BUILD FAILED for: ${BUILDS_FAILED[*]}  (the other roles + keys were still produced)" >&2
+    echo "!! Re-run a failed role with its per-arch builder:" >&2
+    echo "!!   ./build-rpi5-stage4.sh --role <r>  |  ./build-x86-host-stage4.sh --role <r>  |  ./build-frite-stage4.sh --board <b>" >&2
+fi
+# A run whose keys folders failed has NO usable provisioning deliverable for those roles.
 if [ "${#KEYS_FAILED[@]}" -gt 0 ]; then
     echo >&2
-    echo "!! BUILD FAILED: provisioning-keys generation failed for: ${KEYS_FAILED[*]}" >&2
+    echo "!! KEYS generation FAILED for: ${KEYS_FAILED[*]}" >&2
     echo "!! The partial keys folders were removed. Re-run gen-provision-keys.sh per role:" >&2
     for _r in "${KEYS_FAILED[@]}"; do
         echo "!!   ${GENKEYS} --role ${_r/frite/host} --out ${WORK_DIR}/keys-${_r} --random" >&2
     done
+fi
+if [ "${#BUILDS_FAILED[@]}" -gt 0 ] || [ "${#KEYS_FAILED[@]}" -gt 0 ]; then
     exit 1
 fi

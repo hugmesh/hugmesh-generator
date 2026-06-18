@@ -1,0 +1,13 @@
+# net-fs/cifs-utils ships mount.cifs for the network backup-share mounts (see
+# packages.list). Its default-on +acl hard-RDEPENDs >=net-fs/samba, whose chain pulls
+# >=net-libs/ngtcp2[gnutls] as an AUTOUNMASK USE change. The Pi cross_emerge runs
+# WITHOUT --autounmask (build-rpi5-stage4.sh), so that requirement ABORTS cifs-utils
+# dependency resolution; the per-package fallback then silently SKIPS it (cifs-utils is
+# not in the payload-mandatory gate), and the image ships with NO mount.cifs — defeating
+# the documented purpose while the build still reports success.
+#
+# Dropping acl/ads removes the samba + krb5/keyutils + ngtcp2 chain entirely. mount.cifs
+# itself needs neither: acl only adds the cifsacl/cifsidmap helpers, ads adds AD/Kerberos
+# — both unused on a headless k8s node. Verified: the dep graph drops to ~18-20 pkgs with
+# no samba/ngtcp2 and no autounmask prompt, and mount.cifs is still built+installed.
+net-fs/cifs-utils -acl -ads

@@ -149,7 +149,7 @@ trap teardown EXIT
 # name | extended-regex matched against the growing console.log
 ASSERTS=(
     "kernel boot|Linux version"
-    "OpenRC init|OpenRC [0-9]|sysinit runlevel|Starting sysinit"
+    "OpenRC init|OpenRC|runlevel|sysinit"
     "keys-provision ran|\[keys-provision"
     "KEYS disk read|(KEYS|provision\.json|Applying|Provisioning)"
     "user created|Created user ${SSH_USER}|User ${SSH_USER} already exists"

@@ -348,6 +348,17 @@ elif [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; then
     warn "--person-role/--domains are ignored for non-client role '${ROLE}'."
 fi
 
+# ── Cluster NODE compact-root sizing (pki/be/fe/be+gpu/omnibus) ──────────────────────
+# The k8s node payload (kubeadm/kubelet/containerd + mesh binaries + base) is ~11.2 GiB
+# and overflows the historical 8 GiB ROOT_MiB default → the .img pre-flight (build_img)
+# aborts with "Payload NNNN MiB exceeds the 8192 MiB root partition". Mirror the client
+# auto-bump for nodes: GPU/omnibus roles add the mesa/vulkan runtime so they get more.
+# An explicit --img-size always wins; growroot still expands to the disk on first boot.
+if ! ${ROLE_CLIENT} && ! ${IMG_SIZE_SET}; then
+    if ${GPU}; then ROOT_MiB=20480; else ROOT_MiB=14336; fi
+    info "Cluster node '${ROLE}': compact root sized to ${ROOT_MiB} MiB for the k8s payload (override with --img-size)"
+fi
+
 # ── Validate/normalize the first-boot grow policy (baked into /etc/growfs.conf) ──
 # fill (DEFAULT) | none/off/0 (keep the compact flashed layout) | concrete size
 # (16G, 12000M, 50% ...). Concrete sizes pass through to resize2fs on the node.
@@ -1323,13 +1334,13 @@ if ${SKIP_MESH}; then
     banner "Mesh VPN SKIPPED"
 else
     banner "Installing mesh VPN (headscale + tailscale, amd64)"
-    if curl -fL -o "${SYSROOT}/usr/bin/headscale" \
+    if curl -fL --retry 5 --retry-delay 5 --retry-connrefused -o "${SYSROOT}/usr/bin/headscale" \
         "https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}/headscale_${HEADSCALE_VERSION}_linux_amd64"; then
         chmod +x "${SYSROOT}/usr/bin/headscale"; info "headscale installed"
     else err "headscale fetch failed — the image enables its service in the runlevel; aborting (use --skip-mesh to opt out)"; exit 1; fi
     if ! ${SKIP_TAILSCALE}; then
         TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_amd64.tgz"
-        if curl -fL -o "${TGZ}" "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz"; then
+        if curl -fL --retry 5 --retry-delay 5 --retry-connrefused -o "${TGZ}" "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz"; then
             TMP="$(mktemp -d)"; tar -C "${TMP}" -xzf "${TGZ}"
             SUB="$(find "${TMP}" -maxdepth 1 -type d -name 'tailscale_*' | head -1)"
             install -Dm0755 "${SUB}/tailscale" "${SYSROOT}/usr/bin/tailscale"
