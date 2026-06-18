@@ -1,6 +1,6 @@
-# appstore-builder — in-cluster Kaniko image builder for the SUPERADMIN App-Store
+# service-catalog-builder — in-cluster Kaniko image builder for the SUPERADMIN Service Catalog
 
-The SUPERADMIN App-Store has four service sources (snapdragon-superadmin-appstore design):
+The SUPERADMIN Service Catalog has four service sources (snapdragon-superadmin-appstore design):
 
 | source | needs a build? | path |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ builder existed, so the admin-bff `AddServiceEffector` **guards** DOCKERFILE/ZIP
   `readOnlyRootFilesystem` (Kaniko workdir on `emptyDir`), `automountServiceAccountToken:false`,
   `ttlSecondsAfterFinished` + `activeDeadlineSeconds` reaping.
 
-- **`namespace-and-netpol.yaml`** — the `snapdragon-appstore-builds` namespace + a default-deny
+- **`namespace-and-netpol.yaml`** — the `snapdragon-service-catalog-builds` namespace + a default-deny
   ingress NetworkPolicy (build pods serve nothing; egress to the registry + DNS is left open
   like the other tier policies). ArgoCD-managed (listed in `kustomization.yaml`).
 
@@ -34,7 +34,7 @@ builder existed, so the admin-bff `AddServiceEffector` **guards** DOCKERFILE/ZIP
 The Job template is **not** applied by ArgoCD (it is not in `kustomization.yaml`) — it is
 instantiated only when the effector is enabled (`app.appstore.effector.enabled=true` in
 admin-bff) and a DOCKERFILE/ZIP deployment is provisioned. The namespace + NetworkPolicy are
-inert until a build lands there. Registry push creds (`appstore-builder-registry`,
+inert until a build lands there. Registry push creds (`service-catalog-builder-registry`,
 `dockerconfigjson`) are ESO-materialized into the build namespace — **never in git**.
 
 ## What the admin-bff side still needs (follow-on, NOT in this PR)

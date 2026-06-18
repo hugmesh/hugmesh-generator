@@ -169,7 +169,7 @@ domain-scoped, enforced at the gateway) governs every surface.
 - **Superadmin Service Catalog (✅ shipped on `main`):** the data layer (admin-bff
   service-curation / app-profile / service-deployment) **and** the infra legs —
   the tailnet superadmin-gateway plus the Kaniko in-cluster build namespace
-  (`apps/54-appstore-builder.yaml`, ships dark until a build lands) merged via
+  (`apps/54-service-catalog-builder.yaml`, ships dark until a build lands) merged via
   PR #110. The per-build Kaniko Job is a template the admin-bff `AddService` task
   instantiates; ArgoCD never applies it directly.
 - **Device-license + node-storage registries (✅ shipped):** see

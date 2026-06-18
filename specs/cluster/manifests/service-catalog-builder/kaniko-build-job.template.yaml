@@ -1,5 +1,5 @@
 # kaniko-build-job.template.yaml — the per-build ROOTLESS Kaniko Job TEMPLATE for the
-# SUPERADMIN App-Store DOCKERFILE (iii) + ZIP-repo (iv) service sources
+# SUPERADMIN Service Catalog DOCKERFILE (iii) + ZIP-repo (iv) service sources
 # (snapdragon-superadmin-appstore design, V2: the build:images path was an echo STUB, no
 # in-cluster builder existed — this is that builder).
 #
@@ -22,7 +22,7 @@
 #
 # ${PLACEHOLDERS} (bound by the AddService task per build):
 #   ${BUILD_NAME}      a DNS-safe per-build id (e.g. acme-test-owncast-<short-sha>)
-#   ${BUILD_NAMESPACE} the build namespace (default snapdragon-appstore-builds)
+#   ${BUILD_NAMESPACE} the build namespace (default snapdragon-service-catalog-builds)
 #   ${CONTEXT}         the Kaniko build context: git://<repo>#<ref> (DOCKERFILE in a repo) OR
 #                      the uploaded zip materialized to a context (ZIP); see docs.
 #   ${DOCKERFILE}      the Dockerfile path within the context (default Dockerfile)
@@ -34,7 +34,7 @@ metadata:
   name: appstore-build-${BUILD_NAME}
   namespace: ${BUILD_NAMESPACE}
   labels:
-    app.kubernetes.io/name: appstore-builder
+    app.kubernetes.io/name: service-catalog-builder
     app.kubernetes.io/part-of: snapdragon.systems
     snapdragon.systems/appstore-build: "${BUILD_NAME}"
 spec:
@@ -45,7 +45,7 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: appstore-builder
+        app.kubernetes.io/name: service-catalog-builder
         snapdragon.systems/appstore-build: "${BUILD_NAME}"
     spec:
       restartPolicy: Never
@@ -100,7 +100,7 @@ spec:
       volumes:
         - name: docker-config
           secret:
-            secretName: appstore-builder-registry
+            secretName: service-catalog-builder-registry
             items:
               - key: .dockerconfigjson
                 path: config.json
