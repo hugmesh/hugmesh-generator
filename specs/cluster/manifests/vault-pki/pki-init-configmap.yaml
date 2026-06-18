@@ -92,12 +92,21 @@ data:
     #    admin-bff present THEIR existing client certs to these). They are NOT
     #    snapdragon-* prefixed (they front the non-JVM homeservers), so the
     #    allowed_domains below covers the bare + .svc.cluster.local SANs.
+    #
+    #    *-db = the per-DB Postgres SERVER certs (DB-hardening PR-C1, SHIPS DARK).
+    #    Same server_flag+client_flag role shape so the issued cert supports EITHER
+    #    server-only TLS or full mutual TLS when enablement (PR-C2) lands; the cert
+    #    is only mounted on disk today (Deployment volume) — Postgres is NOT started
+    #    with ssl=on yet. Names mirror <db>.<ns>.svc.cluster.local; allowed_domains
+    #    (svc.cluster.local) covers them. See docs/POSTGRES-HARDENING.md:138-145.
     for app in snapdragon-pki-gateway snapdragon-be-gateway snapdragon-fe-gateway \
                snapdragon-superadmin-gateway \
                snapdragon-api snapdragon-admin-bff-api \
                snapdragon-mod-bff-api snapdragon-user-bff-api \
                snapdragon-forum-bff-api \
                snapdragon-federation-api \
+               route-access-db admin-bff-db mod-bff-db user-bff-db \
+               federation-db forum-bff-db \
                akkoma-proxy tuwunel-proxy; do
       echo "==> role ${PKI}/roles/${app}"
       vault write "${PKI}/roles/${app}" \

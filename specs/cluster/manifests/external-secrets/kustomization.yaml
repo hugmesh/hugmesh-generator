@@ -8,6 +8,12 @@ resources:
   # Per-app mTLS certs issued by Vault PKI (pki_int/issue/<app>) and synced into
   # kubernetes.io/tls Secrets <app>-mtls. Requires the Vault PKI engine (set up
   # by apps/06-vault-pki.yaml) + a per-namespace vault-token Secret.
+  #
+  # ALSO holds the per-DB Postgres server certs (<db>-mtls for route-access-db /
+  # admin-bff-db / mod-bff-db / user-bff-db / federation-db / forum-bff-db) added
+  # by DB-hardening PR-C1. Those SHIP DARK: the cert is mounted on each PG pod but
+  # Postgres is NOT started with ssl=on and no consumer URL sets sslMode yet —
+  # flipping ssl=on + sslMode=require is the deferred PR-C2 enablement step.
   - pki-externalsecrets.yaml
   # Homeserver mTLS proxy SERVER certs + homeserver ADMIN tokens backing the gated
   # admin-effect seam. SPLIT PER-SERVICE (was homeserver-proxy-externalsecrets.yaml)

@@ -95,8 +95,22 @@ spec:
           volumeMounts:
             - { name: data,   mountPath: /var/lib/postgresql/data }
             - { name: initdb, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+            # PR-C1 (SHIPS DARK): Vault-PKI server cert mounted READ-ONLY but UNUSED —
+            # Postgres is NOT started with `-c ssl=on` (args: above unchanged) and no
+            # consumer URL sets sslMode, so the default wire path is byte-identical.
+            # PR-C2 enablement = add `-c ssl=on -c ssl_cert_file=/etc/postgres-tls/tls.crt
+            # -c ssl_key_file=/etc/postgres-tls/tls.key` to args + `?sslMode=require`
+            # (R2DBC)/`sslmode=require` (JDBC) on consumers.
+            - { name: pg-tls, mountPath: /etc/postgres-tls, readOnly: true }
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: mod-bff-db }
         - name: initdb
           configMap: { name: mod-bff-db-initdb }
+        # Vault-PKI server cert (kubernetes.io/tls Secret mod-bff-db-mtls, wired in
+        # external-secrets/pki-externalsecrets.yaml). Mounted but unused until PR-C2.
+        - name: pg-tls
+          secret:
+            secretName: mod-bff-db-mtls
+            optional: true   # SHIPS DARK: pod still starts before ESO materializes it
+            defaultMode: 0600
