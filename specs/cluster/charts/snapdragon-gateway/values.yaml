@@ -137,6 +137,23 @@ resources:
     cpu: "1"
     memory: 768Mi
 
+# HorizontalPodAutoscaler (plain autoscaling/v2, CPU + memory Resource metrics —
+# modelled on manifests/remote-fragment/hpa.yaml). DEFAULT OFF: the gateway is the
+# single ingress for its tier and several instances (e.g. pki) are pinned 1:1 to a
+# control-plane node, so autoscaling is opt-in PER gateway via
+# apps/20-gateway-*.yaml. When enabled, templates/hpa.yaml renders an HPA whose
+# scaleTargetRef points at THIS release's Deployment; it REQUIRES metrics-server
+# (apps/01-metrics-server.yaml, already live) and stays inert until the metrics
+# API answers. The targets read the resources.requests above (cpu:100m,
+# memory:256Mi). minReplicas does NOT raise replicaCount (the Deployment floor is
+# held); it only sets the bottom of the band the HPA may move within.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
 # Spring Boot Actuator readiness/liveness (gateway exposes /actuator/health).
 probes:
   enabled: true

@@ -1,0 +1,46 @@
+# KEDA (Kubernetes Event-Driven Autoscaling) — the cluster's autoscaling control
+# plane. Installs the KEDA operator + metrics-apiserver into the `keda` namespace.
+#
+# Why now: the stateless BFF/UI fleet (manifests/<svc>/hpa.yaml) and the gateway
+# chart (charts/snapdragon-gateway autoscaling block) now ship plain
+# autoscaling/v2 CPU+memory HorizontalPodAutoscalers, modelled on the existing
+# manifests/remote-fragment/hpa.yaml. Those v2 HPAs only need metrics-server
+# (already live at apps/01-metrics-server.yaml). KEDA is installed alongside as the
+# substrate for the DEFERRED 2nd pass — KEDA ScaledObjects driven by latency/Kafka
+# (lag) triggers, which compile down to HPAs but read external/queue metrics the
+# resource-metrics API cannot. No ScaledObjects are shipped in this pass, so KEDA
+# sits idle (operator only) until the event-driven triggers land; the v2 HPAs do
+# the CPU/memory scaling in the meantime.
+#
+# sync-wave "-1": same early wave as metrics-server / calico / ingress, so the
+# autoscaling substrate exists before the autoscaled workload waves apply. KEDA's
+# own CRDs/operator do not depend on any first-party service.
+#
+# Multi-arch: the upstream kedacore images are multi-arch (arm64 pki/frontend +
+# amd64 backend), so no nodeSelector pin is needed.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keda
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"   # before autoscaled workloads (like metrics-server)
+spec:
+  project: default
+  source:
+    repoURL: https://kedacore.github.io/charts
+    chart: keda
+    targetRevision: 2.14.*
+    helm:
+      releaseName: keda
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: keda
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions:
+      - CreateNamespace=true
+      # KEDA ships large CRDs (ScaledObject/ScaledJob/TriggerAuthentication); use
+      # server-side apply so the last-applied annotation does not blow the
+      # metadata size limit (standard for CRD-heavy upstream charts).
+      - ServerSideApply=true
