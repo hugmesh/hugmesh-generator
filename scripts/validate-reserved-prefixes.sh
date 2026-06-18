@@ -354,8 +354,45 @@ def parse_java_reserved(path):
     m = SET_OF_RE.search(src)
     if not m:
         return None
-    return {s.lower() for s in STRLIT_RE.findall(m.group(1))}
+    # Strip comments from the captured Set.of(...) body BEFORE harvesting string
+    # literals, so a quoted token that only appears inside a // or /* */ comment
+    # (e.g. an illustrative example) is NOT falsely picked up as a reserved label
+    # and treated as drift. Block comments first, then line comments.
+    body = m.group(1)
+    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    body = re.sub(r"//[^\n]*", "", body)
+    return {s.lower() for s in STRLIT_RE.findall(body)}
 
+
+# Regression assertion: a quoted token inside a comment within the Set.of body
+# must NOT be harvested (the comment-stripping above). We exercise the same code
+# path by writing a tiny throwaway file and parsing it, asserting the commented
+# token is absent and the real tokens are present.
+def _self_test_comment_stripping():
+    import tempfile
+    sample = (
+        "package x;\n"
+        "class T {\n"
+        "  static final Set<String> RESERVED = Set.of(\n"
+        '    "real-one",        // do NOT reserve "fake-line", it is an example\n'
+        '    /* also avoid "fake-block" here */ "real-two"\n'
+        "  );\n"
+        "}\n"
+    )
+    with tempfile.NamedTemporaryFile(
+            "w", suffix=".java", delete=False, encoding="utf-8") as tf:
+        tf.write(sample)
+        tmp_path = tf.name
+    try:
+        parsed = parse_java_reserved(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+    assert parsed == {"real-one", "real-two"}, (
+        f"comment-stripping regression FAILED: expected only the real tokens, "
+        f"got {sorted(parsed) if parsed else parsed}")
+
+
+_self_test_comment_stripping()
 
 print()
 print("== ReservedNames.java code-copy assertion ==")
