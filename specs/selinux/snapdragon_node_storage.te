@@ -1,0 +1,113 @@
+################################################################
+# snapdragon_node_storage.te
+# Confined domain for the node-storage reconcile agent
+# (/usr/sbin/snapdragon-node-storage-reconcile), the boot-oneshot + 60s-cron
+# Layer-B twin of the device-registry sync agent. On a node an operator has
+# attached + registered a storage pool to, it:
+#   1. lsblk-detects candidate disks and publishes them to a local cache,
+#   2. fetches the signed per-node storage export over in-cluster mTLS,
+#   3. verifies it (shared Ed25519 verify via storage-verify.sh -> the SAME
+#      registry-verify.sh primitives + the baked registry-pub.ed25519),
+#   4. builds a pool-manifest and runs `provision.sh --pool` (FDE/LUKS reuse,
+#      mount the pool disk at poolPath),
+#   5. labels THIS node snapdragon.systems/local-path=true + CAS-patches the
+#      local-path-config nodePathMap via kubectl.
+#
+# WHY a dedicated domain: today it runs as an UNCONFINED initrc domain. It needs
+# block-device admin (lsblk/cryptsetup/mkfs/mount via provision.sh), kubectl
+# egress, mTLS egress, and the shared registry-cache reads. Granting only those
+# keeps it least-priv while letting the FDE pool reconcile work on enforcing.
+#
+# NOTE on provision.sh: the agent execs /etc/keys-provision/provision.sh --pool
+# (a PROTECTED, fleet-owned script). The heavy STORAGE-ADMIN privileges
+# (cryptsetup/mkfs/mount) properly belong to provision.sh's own domain — under
+# enforcing provision.sh should transition into a storage-admin domain (refpolicy
+# fsadm-style) rather than inherit all of it into this agent's domain. v1
+# INFERRED-WIDE grants the agent enough to exec it + read its own cache; the
+# AVC pass decides whether provision.sh transitions or runs in-domain.
+#
+# v1 derived from snapdragon-node-storage-reconcile + storage-verify.sh +
+# the init.d/cron; INFERRED-WIDE lines refined in the permissive AVC pass.
+#
+# NOTE (load path): authored in refpolicy style; NOT yet compiled/installed by
+# any build step — see docs/selinux-module-loading.md + SECURITY.md §3.
+################################################################
+policy_module(snapdragon_node_storage, 1.0.0)
+
+require {
+	type snapdragon_authkeys_cache_t;   # /etc/snapdragon/registry/* (node.env + pubkey) — shared registry cache
+}
+
+########################################
+# 1. The agent domain + entrypoint (OpenRC oneshot + cron).
+########################################
+type snapdragon_node_storage_t;
+type snapdragon_node_storage_exec_t;
+init_daemon_domain(snapdragon_node_storage_t, snapdragon_node_storage_exec_t)
+
+# Its private cache (/var/lib/snapdragon/node-storage: export.json, candidates,
+# pool-manifest.json, last-good-generation) labelled by the .fc below.
+type snapdragon_node_storage_cache_t;
+files_type(snapdragon_node_storage_cache_t)
+
+########################################
+# 2. Read the shared registry cache (node.env + baked pubkey) — the SAME inputs
+#    Layer-B reads (snapdragon_authkeys_cache_t). CERTAIN.
+########################################
+read_files_pattern(snapdragon_node_storage_t, snapdragon_authkeys_cache_t, snapdragon_authkeys_cache_t)
+read_lnk_files_pattern(snapdragon_node_storage_t, snapdragon_authkeys_cache_t, snapdragon_authkeys_cache_t)
+list_dirs_pattern(snapdragon_node_storage_t, snapdragon_authkeys_cache_t, snapdragon_authkeys_cache_t)
+
+########################################
+# 3. Manage its private cache. CERTAIN: it writes export.json/candidates/
+#    pool-manifest.json/last-good under /var/lib/snapdragon/node-storage.
+########################################
+manage_files_pattern(snapdragon_node_storage_t, snapdragon_node_storage_cache_t, snapdragon_node_storage_cache_t)
+manage_dirs_pattern(snapdragon_node_storage_t, snapdragon_node_storage_cache_t, snapdragon_node_storage_cache_t)
+manage_lnk_files_pattern(snapdragon_node_storage_t, snapdragon_node_storage_cache_t, snapdragon_node_storage_cache_t)
+files_search_var_lib(snapdragon_node_storage_t)
+
+########################################
+# 4. STORAGE ADMIN: lsblk the block devices + exec provision.sh --pool (which
+#    does cryptsetup/mkfs/mount). INFERRED-WIDE — this is the privileged core;
+#    narrow caps + prefer a provision.sh domain transition after the AVC pass.
+########################################
+allow snapdragon_node_storage_t self:capability { sys_admin dac_override mknod };  # INFERRED-WIDE: narrow after QEMU enforcing AVC pass
+storage_raw_read_fixed_disk(snapdragon_node_storage_t)                              # INFERRED-WIDE: lsblk + provision.sh disk probe
+storage_raw_write_fixed_disk(snapdragon_node_storage_t)                             # INFERRED-WIDE: cryptsetup/mkfs (via provision.sh)
+dev_read_sysfs(snapdragon_node_storage_t)                                           # lsblk serial/type
+fs_getattr_all_fs(snapdragon_node_storage_t)                                        # INFERRED-WIDE: mountpoint(1) checks
+files_mounton_all_mountpoints(snapdragon_node_storage_t)                            # INFERRED-WIDE: mount the pool at poolPath (or via provision.sh domain)
+
+########################################
+# 5. Fetch the export + /ack over in-cluster mTLS, and drive kubectl
+#    (label node + CAS-patch the local-path-config nodePathMap). INFERRED-WIDE
+#    port set; narrow to the declared BFF + apiserver ports post-AVC.
+########################################
+sysnet_dns_name_resolve(snapdragon_node_storage_t)
+auth_use_nsswitch(snapdragon_node_storage_t)
+allow snapdragon_node_storage_t self:tcp_socket create_stream_socket_perms;
+corenet_tcp_sendrecv_generic_node(snapdragon_node_storage_t)
+corenet_tcp_connect_all_ports(snapdragon_node_storage_t)                            # INFERRED-WIDE: narrow after QEMU enforcing AVC pass
+
+########################################
+# 6. Exec helpers (lsblk/jq/openssl/curl/kubectl + provision.sh) + read usr/etc.
+########################################
+files_read_etc_files(snapdragon_node_storage_t)
+files_read_usr_files(snapdragon_node_storage_t)
+auth_read_all_files_except_shadow(snapdragon_node_storage_t)                         # INFERRED-WIDE: reads /etc/kubernetes/admin.conf + mTLS certs; narrow to those types post-AVC
+corecmd_exec_bin(snapdragon_node_storage_t)                                          # INFERRED-WIDE: lsblk/jq/openssl/curl/kubectl
+corecmd_exec_shell(snapdragon_node_storage_t)                                        # provision.sh is bash — INFERRED-WIDE (prefer a provision.sh domain transition)
+logging_send_syslog_msg(snapdragon_node_storage_t)
+
+########################################
+# storage-verify.sh (specs/usr/lib/snapdragon/storage-verify.sh) is SOURCED by
+# the agent and runs IN-DOMAIN; like registry-verify.sh it needs no separate
+# entrypoint label, so no .te domain is added for it here.
+#
+# HIGHEST RISK: the storage-admin privileges (storage_raw_*, mounton, sys_admin)
+# are the privileged core and are the strongest argument for transitioning
+# provision.sh into its own fsadm-style domain rather than inheriting them here.
+# Confirm via the AVC pass; if a provision.sh domain is introduced, MOVE these
+# four rules there and drop them from this agent.
+################################################################

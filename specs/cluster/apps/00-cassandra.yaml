@@ -27,6 +27,23 @@ spec:
           registry: docker.io
           repository: bitnamilegacy/cassandra
         replicaCount: 1
+        # SELinux MCS identity (SECURITY.md §3): pin Cassandra to the free
+        # category s0:c63 so its category-isolated data volume cannot be read
+        # by another workload. The bitnami cassandra 12.3.11 chart renders
+        # arbitrary seLinuxOptions under BOTH podSecurityContext (pod-level —
+        # governs the volume relabel context) and containerSecurityContext
+        # (container-level — the audit precedent in this repo sets it at BOTH
+        # levels). We set only seLinuxOptions.level and leave every other
+        # securityContext default the chart ships untouched, so this is a clean,
+        # supported values override (no fork, no template patch).
+        podSecurityContext:
+          enabled: true
+          seLinuxOptions:
+            level: "s0:c63"
+        containerSecurityContext:
+          enabled: true
+          seLinuxOptions:
+            level: "s0:c63"
         cluster:
           name: SnapdragonGatewayCluster
           datacenter: dc1

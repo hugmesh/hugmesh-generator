@@ -1,0 +1,23 @@
+# snapdragon_vpn.fc
+# Label the egress-VPN node binaries as the entrypoints of their domains and
+# the VPN config dir + /run staging as the types the domains manage. The
+# binaries are copied to /usr/sbin by the (protected) build script; the
+# OpenRC init script (snapdragon-egress-vpn) + the reconcile init/cron are
+# baked alongside. provision_selinux()'s first-boot relabel (setfiles /
+# restorecon -RF /) applies these.
+#
+# /etc/snapdragon/vpn is created 0700 at runtime by the runner's start_pre /
+# the reconcile agent; labelling it snapdragon_vpn_etc_t lets the reconcile
+# agent (writer) drop 0600 .conf files + flip the active.conf symlink and the
+# runner (reader) read active.conf. The /run staging conf the runner writes is
+# snapdragon_vpn_runtime_t. The reconcile agent's own /var/lib cache is left
+# var_lib_t in v1 (see the .te INFERRED-WIDE note — narrow to a private type
+# after the AVC pass if AVCs show a cross-type denial).
+
+/usr/sbin/snapdragon-vpn-runner       --    gen_context(system_u:object_r:snapdragon_vpn_runner_exec_t,s0)
+/usr/sbin/snapdragon-vpn-reconcile    --    gen_context(system_u:object_r:snapdragon_vpn_reconcile_exec_t,s0)
+
+/etc/snapdragon/vpn(/.*)?                   gen_context(system_u:object_r:snapdragon_vpn_etc_t,s0)
+
+/run/snapdragon-egress-.*\.conf       --    gen_context(system_u:object_r:snapdragon_vpn_runtime_t,s0)
+/run/snapdragon-egress-vpn\.ovpn\.pid --    gen_context(system_u:object_r:snapdragon_vpn_runtime_t,s0)

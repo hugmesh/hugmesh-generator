@@ -1,0 +1,148 @@
+################################################################
+# snapdragon_vpn.te
+# Confined domains for the egress-VPN node services (split-tunnel,
+# fail-closed public egress). TWO host domains:
+#   snapdragon_vpn_runner_t    - /usr/sbin/snapdragon-vpn-runner, the
+#                                OpenRC-driven up/down/status/check runner
+#                                that owns wg-quick/openvpn + the ip-rule
+#                                priorities + the fwmark 0x76 -> table 176
+#                                kill-switch (NET ADMIN heavy).
+#   snapdragon_vpn_reconcile_t - /usr/sbin/snapdragon-vpn-reconcile, the
+#                                boot-oneshot + 60s-cron agent that fetches
+#                                the signed per-node export over in-cluster
+#                                mTLS, verifies it (shared Ed25519 verify via
+#                                vpn-verify.sh), writes 0600 config files,
+#                                flips active.conf, and `rc-service ... restart`s
+#                                the runner.
+#
+# WHY dedicated domains: today both run as UNCONFINED initrc domains with a
+# default bin_t script — no confinement. The runner needs net_admin + raw
+# socket + the wg/tun device class; the reconcile agent needs mTLS egress +
+# the same registry cache reads as Layer-B + write of /etc/snapdragon/vpn +
+# the ability to signal/restart the runner via init. Granting only those keeps
+# each least-priv while letting the fail-closed split-tunnel work on enforcing.
+#
+# v1 derived from snapdragon-vpn-runner + snapdragon-vpn-reconcile +
+# snapdragon-egress-vpn (init.d) + vpn-verify.sh; INFERRED-WIDE lines are
+# best-effort and refined in the permissive AVC pass.
+#
+# NOTE (load path): like localpath_provisioner/otel_collector + the other
+# node modules, this is authored in refpolicy style and is NOT yet
+# compiled/installed by any build step — see docs/selinux-module-loading.md
+# (the fleet build-script wiring) and SECURITY.md §3.
+################################################################
+policy_module(snapdragon_vpn, 1.0.0)
+
+require {
+	type snapdragon_authkeys_cache_t;   # /etc/snapdragon/registry/* (node.env + pubkey) — shared registry cache
+	type bin_t;                          # default label of /usr/sbin until .fc relabel
+}
+
+########################################
+# 1. The runner domain + entrypoint (OpenRC-started).
+########################################
+type snapdragon_vpn_runner_t;
+type snapdragon_vpn_runner_exec_t;
+init_daemon_domain(snapdragon_vpn_runner_t, snapdragon_vpn_runner_exec_t)
+
+# Its config dir (/etc/snapdragon/vpn, the wg/ovpn .conf + active.conf symlink)
+# and its /run staging conf are labelled by the .fc below.
+type snapdragon_vpn_etc_t;
+files_type(snapdragon_vpn_etc_t)
+type snapdragon_vpn_runtime_t;
+files_type(snapdragon_vpn_runtime_t)
+
+########################################
+# 2. NET ADMIN: bring wg0/tun up/down, install ip-rules + the kill-switch.
+#    INFERRED-WIDE — this is the privileged core; narrow caps + the exact
+#    interface/route ops after the AVC pass.
+########################################
+allow snapdragon_vpn_runner_t self:capability { net_admin net_raw dac_override setuid setgid };  # INFERRED-WIDE: narrow after QEMU enforcing AVC pass
+allow snapdragon_vpn_runner_t self:netlink_route_socket create_netlink_socket_perms;             # ip rule / ip route (rtnetlink)
+allow snapdragon_vpn_runner_t self:rawip_socket create_socket_perms;                              # INFERRED-WIDE: narrow after QEMU enforcing AVC pass
+allow snapdragon_vpn_runner_t self:udp_socket create_socket_perms;                                # wireguard UDP
+allow snapdragon_vpn_runner_t self:tcp_socket create_stream_socket_perms;                         # openvpn / leak-check curl
+allow snapdragon_vpn_runner_t self:tun_socket { create_socket_perms relabelfrom relabelto };      # tun device (openvpn) — INFERRED-WIDE
+# Manage its WireGuard/tun network interfaces + the kernel routing config.
+corenet_rw_tun_tap_dev(snapdragon_vpn_runner_t)                                                   # INFERRED-WIDE: /dev/net/tun
+sysnet_manage_config(snapdragon_vpn_runner_t)                                                     # INFERRED-WIDE: ip route/rule + resolv writes
+kernel_rw_net_sysctls(snapdragon_vpn_runner_t)                                                    # INFERRED-WIDE: net.ipv4/ipv6 toggles
+modutils_domtrans_insmod(snapdragon_vpn_runner_t)                                                 # INFERRED-WIDE: start_pre modprobe wireguard/tun
+# Egress for the leak-check probe (curl --interface wg0 to api.ipify.org).
+sysnet_dns_name_resolve(snapdragon_vpn_runner_t)
+corenet_tcp_sendrecv_generic_node(snapdragon_vpn_runner_t)
+corenet_tcp_connect_all_ports(snapdragon_vpn_runner_t)                                            # INFERRED-WIDE: narrow after QEMU enforcing AVC pass
+
+########################################
+# 3. Read its config (active.conf + the wg/ovpn .conf) and stage the
+#    /run temp conf with Table=off. CERTAIN: runner reads ${VPN_ETC}/active.conf
+#    and writes /run/snapdragon-egress-${WG_IF}.conf.
+########################################
+read_files_pattern(snapdragon_vpn_runner_t, snapdragon_vpn_etc_t, snapdragon_vpn_etc_t)
+read_lnk_files_pattern(snapdragon_vpn_runner_t, snapdragon_vpn_etc_t, snapdragon_vpn_etc_t)
+list_dirs_pattern(snapdragon_vpn_runner_t, snapdragon_vpn_etc_t, snapdragon_vpn_etc_t)
+manage_files_pattern(snapdragon_vpn_runner_t, snapdragon_vpn_runtime_t, snapdragon_vpn_runtime_t)
+files_pid_filetrans(snapdragon_vpn_runner_t, snapdragon_vpn_runtime_t, file)                      # /run pid + staged conf
+files_read_etc_files(snapdragon_vpn_runner_t)
+files_read_usr_files(snapdragon_vpn_runner_t)
+corecmd_exec_bin(snapdragon_vpn_runner_t)                                                         # wg-quick/openvpn/ip/curl helpers — INFERRED-WIDE
+corecmd_exec_shell(snapdragon_vpn_runner_t)
+logging_send_syslog_msg(snapdragon_vpn_runner_t)
+
+########################################
+# 4. The reconcile agent domain + entrypoint (OpenRC oneshot + cron).
+########################################
+type snapdragon_vpn_reconcile_t;
+type snapdragon_vpn_reconcile_exec_t;
+init_daemon_domain(snapdragon_vpn_reconcile_t, snapdragon_vpn_reconcile_exec_t)
+
+# Read the shared registry cache (node.env + baked registry-pub.ed25519) — the
+# SAME inputs Layer-B reads (snapdragon_authkeys_cache_t). CERTAIN: the agent
+# reads /etc/snapdragon/registry/node.env + registry-pub.ed25519.
+read_files_pattern(snapdragon_vpn_reconcile_t, snapdragon_authkeys_cache_t, snapdragon_authkeys_cache_t)
+read_lnk_files_pattern(snapdragon_vpn_reconcile_t, snapdragon_authkeys_cache_t, snapdragon_authkeys_cache_t)
+list_dirs_pattern(snapdragon_vpn_reconcile_t, snapdragon_authkeys_cache_t, snapdragon_authkeys_cache_t)
+
+# Write the materialised config + active.conf symlink + its own cache
+# (/var/lib/snapdragon/egress-vpn). CERTAIN: it writes ${VPN_ETC}/*.conf 0600,
+# flips active.conf, and maintains ${CACHE_DIR}.
+manage_files_pattern(snapdragon_vpn_reconcile_t, snapdragon_vpn_etc_t, snapdragon_vpn_etc_t)
+manage_lnk_files_pattern(snapdragon_vpn_reconcile_t, snapdragon_vpn_etc_t, snapdragon_vpn_etc_t)
+manage_dirs_pattern(snapdragon_vpn_reconcile_t, snapdragon_vpn_etc_t, snapdragon_vpn_etc_t)
+files_search_var_lib(snapdragon_vpn_reconcile_t)
+allow snapdragon_vpn_reconcile_t var_lib_t:dir { search read write add_name remove_name };        # INFERRED-WIDE: /var/lib/snapdragon/egress-vpn cache
+allow snapdragon_vpn_reconcile_t var_lib_t:file manage_file_perms;                                # INFERRED-WIDE: narrow to a private cache type post-AVC
+
+# Fetch the per-node export over in-cluster mTLS: DNS + TCP egress. INFERRED-WIDE
+# port set (the BFF endpoint); narrow to the declared port post-AVC.
+sysnet_dns_name_resolve(snapdragon_vpn_reconcile_t)
+auth_use_nsswitch(snapdragon_vpn_reconcile_t)
+allow snapdragon_vpn_reconcile_t self:tcp_socket create_stream_socket_perms;
+corenet_tcp_sendrecv_generic_node(snapdragon_vpn_reconcile_t)
+corenet_tcp_connect_all_ports(snapdragon_vpn_reconcile_t)                                          # INFERRED-WIDE: narrow after QEMU enforcing AVC pass
+
+# Restart the runner after a verified flip (CERTAIN: `rc-service
+# snapdragon-egress-vpn restart` + `rc-update add`). Signal + run the init script.
+init_signal_script(snapdragon_vpn_reconcile_t)
+init_telinit(snapdragon_vpn_reconcile_t)                                                           # INFERRED-WIDE: rc-service/rc-update
+allow snapdragon_vpn_reconcile_t snapdragon_vpn_runner_t:process signal;                           # INFERRED-WIDE: restart path
+
+# Run helpers (jq/openssl/curl verify + the runner check) + read usr/etc.
+files_read_etc_files(snapdragon_vpn_reconcile_t)
+files_read_usr_files(snapdragon_vpn_reconcile_t)
+corecmd_exec_bin(snapdragon_vpn_reconcile_t)                                                       # INFERRED-WIDE: jq/openssl/curl/runner
+corecmd_exec_shell(snapdragon_vpn_reconcile_t)
+logging_send_syslog_msg(snapdragon_vpn_reconcile_t)
+
+########################################
+# vpn-verify.sh (specs/usr/lib/snapdragon/vpn-verify.sh) is SOURCED by the
+# reconcile agent and runs IN-DOMAIN (snapdragon_vpn_reconcile_t); like
+# registry-verify.sh it needs no separate entrypoint label, so no .te domain
+# is added for it here — confine it only if the AVC pass shows a transition.
+#
+# NO privileged_container, NO mount of arbitrary FS, NO setenforce, NO write
+# outside /etc/snapdragon/vpn + the agent's own cache. The runner's net_admin
+# capability set + the rawip/tun sockets are the unavoidable privileged core;
+# everything tagged INFERRED-WIDE is to be narrowed against real AVCs once the
+# devel Makefile + the QEMU enforcing pass exist on the fleet build host.
+################################################################

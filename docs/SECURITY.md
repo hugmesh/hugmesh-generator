@@ -81,6 +81,7 @@ Vault-managed mTLS keystore:
 | tube | per-app SA | `s0:c55` | per-app svc user | — |
 | phpbb (forum) | per-app SA | `s0:c51` | per-app svc user | — |
 | phpbb-db (forum) | per-app SA | `s0:c50` | (DB) | — |
+| `cassandra` (gateway revocation + URL registry) | per-app SA | `s0:c63` | (DB) | (non-Java) |
 
 The matrix is the contract: `seLinuxOptions.level` per Deployment (added to each
 chart/manifest), a `ServiceAccount` per app, a Casdoor service user+role created
@@ -96,14 +97,39 @@ cannot read another's category-isolated volumes.
 > non-colliding identity; the Deployment must carry
 > `securityContext.seLinuxOptions: { type: container_t, level: "s0:c49" }`.
 
+> **`cassandra` MCS note:** category `s0:c63` is injected via the bitnami
+> cassandra 12.3.11 chart's **supported** `podSecurityContext.seLinuxOptions`
+> **and** `containerSecurityContext.seLinuxOptions` values keys
+> (`specs/cluster/apps/00-cassandra.yaml`) — only `seLinuxOptions.level` is set;
+> all other securityContext chart defaults are untouched. This is a clean values
+> override (no chart fork / template patch), so it is **not** an exemption.
+
 > **Node-service custom domains:** the host-service SELinux domains in
-> [`specs/selinux/*.te`](../specs/selinux/) (`localpath_provisioner_t`,
-> `otel_collector_t`, and the node domains
-> `snapdragon_authkeys_t`, `snapdragon_device_registry_sync_t`,
-> `snapdragon_breakglass`) are part of this contract for **node** processes (not
-> pods). See §2 — note that today these custom modules are authored but
-> **not yet compiled/installed by any build step**; wiring the loader is a
-> fleet-owned (protected) build-script change (tracked separately).
+> [`specs/selinux/*.te`](../specs/selinux/) are part of this contract for
+> **node** processes (not pods). The full set:
+>
+> | Module (`.te`/`.fc`) | Domain(s) | Confines | Binary / labelled path |
+> |---|---|---|---|
+> | `localpath_provisioner` | `localpath_provisioner_t`, `localpath_provisioner_helper_t` | local-path-provisioner controller + busybox helper (pod, runtime transition) | `/mnt/{data,usb}/local-path` |
+> | `otel_collector` | `otel_collector_t` | otel-collector DaemonSet (pod, runtime transition) | (no host exec; `/var/log/pods`) |
+> | `snapdragon_authkeys` | `snapdragon_authkeys_t` (+ `snapdragon_authkeys_cache_t`) | the AuthorizedKeysCommand (sshd_t domtrans, runs as nobody) — **security-load-bearing** | `/usr/sbin/snapdragon-authorized-keys-lookup`; `/etc/snapdragon/registry` |
+> | `snapdragon_device_registry_sync` | `snapdragon_device_registry_sync_t` | Layer-B registry sync daemon (writes the export cache + the sshd_config.d drop-in, reloads sshd) | `/usr/sbin/snapdragon-device-registry-sync` |
+> | `snapdragon_breakglass` | (label only — `ssh_home_t`) | the loopback break-glass authorized_keys file so sshd reads it on enforcing | `/etc/ssh/break-glass.keys` |
+> | `snapdragon_vpn` | `snapdragon_vpn_runner_t`, `snapdragon_vpn_reconcile_t` (+ `snapdragon_vpn_etc_t`, `snapdragon_vpn_runtime_t`) | egress-VPN runner (net_admin: wg/tun + ip-rule kill-switch) + the signed-export reconcile agent | `/usr/sbin/snapdragon-vpn-runner`, `/usr/sbin/snapdragon-vpn-reconcile`; `/etc/snapdragon/vpn` |
+> | `snapdragon_node_storage` | `snapdragon_node_storage_t` (+ `snapdragon_node_storage_cache_t`) | node-storage reconcile agent (lsblk + FDE pool provision via provision.sh + kubectl nodePathMap patch) | `/usr/sbin/snapdragon-node-storage-reconcile`; `/var/lib/snapdragon/node-storage` |
+> | `snapdragon_policy_sync` | `snapdragon_policy_sync_t` | Layer-A headscale policy-sync agent (pki/control node only; renders + applies policy.hujson) | `/usr/sbin/gen-headscale-policy.sh` |
+> | `snapdragon_oidc_token` | (label only — `user_runtime_t`) | the per-user SSO OIDC-token deposit dir read by the desktop bearer-forward GEN-SSO artifact | `/run/user/%{uid}/snapdragon` |
+>
+> Each row is a **node module** that loads via the **build-host policy compile**
+> (the `.pp` is built on the x86 BUILD host, NOT first-boot — the Pi cannot run
+> the refpolicy devel toolchain). The shared registry cache type
+> `snapdragon_authkeys_cache_t` (declared in `snapdragon_authkeys.te`) is the
+> on-disk handoff reused by the device-registry-sync, vpn-reconcile,
+> node-storage, and policy-sync domains. See §2 — note that today these custom
+> modules are authored but **not yet compiled/installed by any build step**;
+> wiring the loader is a fleet-owned (protected) build-script change, precisely
+> specified in [`docs/selinux-module-loading.md`](selinux-module-loading.md)
+> (tracked separately, NOT applied in that doc's PR).
 
 ## 4. mTLS between namespaces — Vault-managed JKS keystores
 

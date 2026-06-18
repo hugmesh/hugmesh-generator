@@ -1,0 +1,84 @@
+################################################################
+# snapdragon_policy_sync.te
+# Confined domain for the Layer-A headscale policy-sync agent
+# (/usr/sbin/gen-headscale-policy.sh), driven by the snapdragon-policy-sync
+# OpenRC oneshot + a 60s cron.d drop-in. Installed ONLY on the headscale
+# CONTROL (pki) node. It fetches the signed device-license-registry headscale
+# policy, verifies it (shared Ed25519 verify, reusing registry-verify.sh's
+# primitives + the baked registry-pub.ed25519), renders policy.hujson, and
+# applies it via the headscale socket (`headscale policy set` / policy.mode:
+# file). FAIL-CLOSED: on any fetch/verify failure it keeps the last-applied
+# (or baked bootstrap) policy and exits 0.
+#
+# WHY a dedicated domain: today it runs as an UNCONFINED initrc domain with a
+# default bin_t script. It needs the shared registry-cache reads, mTLS egress
+# to the BFF, write of the rendered policy.hujson, and the ability to invoke
+# the headscale CLI/socket to reload. Granting only those keeps it least-priv
+# while letting the fail-closed ACL convergence work on enforcing.
+#
+# v1 derived from snapdragon-policy-sync (init.d) + the gen-headscale-policy.sh
+# contract; INFERRED-WIDE lines refined in the permissive AVC pass.
+#
+# NOTE (load path): authored in refpolicy style; NOT yet compiled/installed by
+# any build step — see docs/selinux-module-loading.md + SECURITY.md §3.
+################################################################
+policy_module(snapdragon_policy_sync, 1.0.0)
+
+require {
+	type snapdragon_authkeys_cache_t;   # /etc/snapdragon/registry/* (node.env + pubkey) — shared registry cache
+	type etc_t;                          # /etc/headscale/policy.hujson render target (default etc_t)
+}
+
+########################################
+# 1. The agent domain + entrypoint (OpenRC oneshot + cron).
+########################################
+type snapdragon_policy_sync_t;
+type snapdragon_policy_sync_exec_t;
+init_daemon_domain(snapdragon_policy_sync_t, snapdragon_policy_sync_exec_t)
+
+########################################
+# 2. Read the shared registry cache (node.env + baked pubkey) — the SAME inputs
+#    Layer-B reads. CERTAIN.
+########################################
+read_files_pattern(snapdragon_policy_sync_t, snapdragon_authkeys_cache_t, snapdragon_authkeys_cache_t)
+read_lnk_files_pattern(snapdragon_policy_sync_t, snapdragon_authkeys_cache_t, snapdragon_authkeys_cache_t)
+list_dirs_pattern(snapdragon_policy_sync_t, snapdragon_authkeys_cache_t, snapdragon_authkeys_cache_t)
+
+########################################
+# 3. Render the headscale policy into /etc/headscale (policy.hujson). The target
+#    is etc_t in v1; if AVCs show a dedicated headscale_etc_t (or the headscale
+#    refpolicy module ships one), narrow to it after the permissive pass.
+########################################
+files_search_etc(snapdragon_policy_sync_t)
+allow snapdragon_policy_sync_t etc_t:dir { search read write add_name remove_name };   # INFERRED-WIDE: /etc/headscale dir
+allow snapdragon_policy_sync_t etc_t:file { create open read write getattr setattr rename unlink };  # INFERRED-WIDE: policy.hujson render+swap
+files_read_etc_files(snapdragon_policy_sync_t)
+
+########################################
+# 4. Fetch the signed policy over in-cluster mTLS. INFERRED-WIDE port set;
+#    narrow to the declared BFF port post-AVC.
+########################################
+sysnet_dns_name_resolve(snapdragon_policy_sync_t)
+auth_use_nsswitch(snapdragon_policy_sync_t)
+allow snapdragon_policy_sync_t self:tcp_socket create_stream_socket_perms;
+corenet_tcp_sendrecv_generic_node(snapdragon_policy_sync_t)
+corenet_tcp_connect_all_ports(snapdragon_policy_sync_t)                                 # INFERRED-WIDE: narrow after QEMU enforcing AVC pass
+
+########################################
+# 5. Apply the policy via the headscale CLI/socket reload. INFERRED-WIDE:
+#    `headscale policy set` talks to the headscale unix socket; the exact
+#    socket type + the headscale domain transition are confirmed against AVCs
+#    (the headscale daemon may run unconfined/initrc_t today). Connect to the
+#    local socket + exec the CLI.
+########################################
+allow snapdragon_policy_sync_t self:unix_stream_socket connect_socket_perms;            # INFERRED-WIDE: headscale local socket
+corecmd_exec_bin(snapdragon_policy_sync_t)                                              # INFERRED-WIDE: headscale CLI / jq / openssl / curl
+corecmd_exec_shell(snapdragon_policy_sync_t)                                            # the agent is a shell script
+files_read_usr_files(snapdragon_policy_sync_t)
+logging_send_syslog_msg(snapdragon_policy_sync_t)
+
+########################################
+# NO net_admin, NO storage, NO setenforce, NO write outside /etc/headscale +
+# the registry cache reads. The headscale socket reload + the exact policy
+# directory type are the two items to confirm/narrow in the AVC pass.
+################################################################
