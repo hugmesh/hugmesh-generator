@@ -65,6 +65,55 @@ subjects:
     name: backups-effector
     namespace: snapdragon-backend
 ---
+# ── (1b) effector MENU-READ authority — Role + RoleBinding in `snapdragon-backend` ─
+# The partner admin-bff effector's ConfigMapRunningServiceProvider reads the
+# per-brand installed-services ConfigMap
+# (`snapdragon-installed-services-<domainSlug>`, a single
+#  configMaps().inNamespace("snapdragon-backend").withName(cm).get()) to FILTER a
+# scoped admin's per-service backup menu down to their brand's real footprint. With
+# no `configmaps:get` here that read 403s and the provider FAILS SAFE to the full
+# documented catalog (a degraded menu, never a security hole) — but the correct
+# behaviour needs this minimal grant. ONLY `get` on core `configmaps` (the provider
+# does a named .get(), never list/watch). resourceNames is intentionally OMITTED:
+# the ConfigMap name is DYNAMIC per brand (prefix `snapdragon-installed-services`
+# + domain slug), and RBAC resourceNames has no prefix/wildcard match, so pinning
+# would silently break every brand but one. NO other verbs, NO other resources,
+# NO cluster scope. Same manual-sync authority half as (1): inert until Velero +
+# the effector flag arrive together.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backups-effector-menu-read
+  namespace: snapdragon-backend
+  labels:
+    app.kubernetes.io/name: cloud-backups
+    app.kubernetes.io/component: effector
+    app.kubernetes.io/part-of: snapdragon.systems
+rules:
+  # Named .get() of the per-brand installed-services ConfigMap; the provider never
+  # lists or watches. get only — no list, no watch, no write, no other resources.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backups-effector-menu-read
+  namespace: snapdragon-backend
+  labels:
+    app.kubernetes.io/name: cloud-backups
+    app.kubernetes.io/component: effector
+    app.kubernetes.io/part-of: snapdragon.systems
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: backups-effector-menu-read
+subjects:
+  - kind: ServiceAccount
+    name: backups-effector
+    namespace: snapdragon-backend
+---
 # ── (2) sweep SA — runs the status-sweep CronJob (in the `velero` namespace) ────
 apiVersion: v1
 kind: ServiceAccount
