@@ -24,8 +24,9 @@ spec:
       nodeSelector: { kubernetes.io/arch: amd64 }
       securityContext:
         seLinuxOptions:
+          # c50 reused the forum band (phpbb-db); observability pg->c59 (free).
           type: container_t
-          level: "s0:c50"
+          level: "s0:c59"
       containers:
         - name: pg
           image: postgres:16-alpine
@@ -78,8 +79,9 @@ spec:
       nodeSelector: { kubernetes.io/arch: amd64 }
       securityContext:
         seLinuxOptions:
+          # c51 reused the forum band (phpbb); observability uptrace->c61 (free).
           type: container_t
-          level: "s0:c51"
+          level: "s0:c61"
       containers:
         - name: uptrace
           image: uptrace/uptrace:2.0.3

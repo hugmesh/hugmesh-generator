@@ -22,8 +22,9 @@ spec:
         snapdragon.systems/compute: gpu
       securityContext:
         seLinuxOptions:
+          # c34 was a 3-way collision (casdoor-games-pg keeps c34); owncast->c39.
           type: container_t
-          level: "s0:c34"
+          level: "s0:c39"
       containers:
         # ── owncast — HLS live-streaming server ──────────────────────────────────
         - name: owncast

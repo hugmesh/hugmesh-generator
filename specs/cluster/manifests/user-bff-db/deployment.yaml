@@ -37,8 +37,9 @@ spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
       securityContext:
         seLinuxOptions:
+          # c36 collided with signup-gate; user-bff-db takes c38 (free).
           type: container_t
-          level: "s0:c36"
+          level: "s0:c38"
       containers:
         - name: postgres
           # DEFAULT (single-node): postgres:16-alpine. To shard, override to a

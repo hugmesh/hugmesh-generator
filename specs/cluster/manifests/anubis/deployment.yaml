@@ -48,8 +48,9 @@ spec:
         seccompProfile: { type: RuntimeDefault }
         seLinuxOptions:
           # Fresh MCS level in the frontend range (web/gateway take their own).
+          # c41 collided with social-ui (matrix); anubis->c62 (free).
           type: container_t
-          level: "s0:c41"
+          level: "s0:c62"
       containers:
         - name: anubis
           image: ghcr.io/techarohq/anubis:v1.25.0

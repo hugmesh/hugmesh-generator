@@ -34,8 +34,9 @@ spec:
         runAsUser: 65532
         runAsGroup: 65532
         seLinuxOptions:
+          # c21 collided with casdoor; cloudflared->c56 (free).
           type: container_t
-          level: "s0:c21"
+          level: "s0:c56"
       containers:
         - name: cloudflared
           image: cloudflare/cloudflared:2024.10.0

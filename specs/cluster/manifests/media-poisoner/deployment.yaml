@@ -47,9 +47,10 @@ spec:
         seccompProfile: { type: RuntimeDefault }
         seLinuxOptions:
           # Fresh MCS level in the backend range (analytics clickhouse c19, kafka
-          # c20, admin/user/mod-bff in their own; this worker takes c34, next free).
+          # c20, admin/user/mod-bff in their own). c34 was a 3-way collision
+          # (casdoor-games-pg keeps c34); this worker takes c18 (free).
           type: container_t
-          level: "s0:c34"
+          level: "s0:c18"
       # Seed the model weights ONCE into the shared volume. The lean (shipped)
       # backend needs NO weights, so this is a no-op placeholder for the GPU/SD-VAE
       # follow-up: a GPU image variant would fetch/copy the SD VAE here. Kept as a

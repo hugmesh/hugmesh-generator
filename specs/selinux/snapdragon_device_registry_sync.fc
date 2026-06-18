@@ -1,0 +1,12 @@
+# snapdragon_device_registry_sync.fc
+# Label the sync daemon binary (OpenRC service + cron copy) as the
+# entrypoint of snapdragon_device_registry_sync_t. The signed-export cache
+# it writes (/etc/snapdragon/registry/*) is labelled by
+# snapdragon_authkeys.fc as snapdragon_authkeys_cache_t — the shared
+# on-disk handoff between the sync daemon (writer) and the
+# AuthorizedKeysCommand (reader). provision_selinux()'s first-boot relabel
+# (setfiles / restorecon -RF /) applies these.
+#
+# The binary is copied to /usr/sbin by the (protected) build script.
+
+/usr/sbin/snapdragon-device-registry-sync    --    gen_context(system_u:object_r:snapdragon_device_registry_sync_exec_t,s0)

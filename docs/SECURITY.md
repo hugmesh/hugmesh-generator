@@ -36,13 +36,74 @@ Vault-managed mTLS keystore:
 | `snapdragon-pki-gateway` | `sa-pki-gateway` | `s0:c11` | `svc-pki-gateway` / `ROLE_GATEWAY` | `snapdragon-pki-gateway.snapdragon-pki.svc` |
 | `snapdragon-be-gateway` | `sa-be-gateway` | `s0:c12` | `svc-be-gateway` / `ROLE_GATEWAY` | `snapdragon-be-gateway.snapdragon-backend.svc` |
 | `snapdragon-fe-gateway` | `sa-fe-gateway` | `s0:c13` | `svc-fe-gateway` / `ROLE_GATEWAY` | `snapdragon-fe-gateway.snapdragon-frontend.svc` |
+| `snapdragon-gateway-superadmin` | `sa-gateway-superadmin` | `s0:c17` | `svc-gateway-superadmin` / `ROLE_GATEWAY` | `snapdragon-gateway-superadmin.snapdragon-pki.svc` |
 | `snapdragon-api` (actions) | `sa-api` | `s0:c22` | `svc-api` / `ROLE_API` | `snapdragon-api.snapdragon-backend.svc` |
-| `admin-bff` | `sa-admin-bff` | `s0:c23` | `svc-admin-bff` / `ROLE_ADMIN_API` | `admin-bff.snapdragon-backend.svc` |
-| tuwunel (matrix) / akkoma (mastodon) / casdoor / games | per-app SA | `s0:c3x` | per-app svc user | (non-Java: PEM, no JKS) |
+| `admin-bff` (api) | `sa-admin-bff` | `s0:c23` | `svc-admin-bff` / `ROLE_ADMIN_API` | `admin-bff.snapdragon-backend.svc` |
+| `admin-bff-db` | `sa-admin-bff-db` | `s0:c26` | (DB) | (non-Java: PEM, no JKS) |
+| `federation-api` | `sa-federation` | `s0:c24` | `svc-federation` / `ROLE_FEDERATION` | `federation-api.snapdragon-backend.svc` |
+| `federation-db` | `sa-federation-db` | `s0:c25` | (DB) | (non-Java: PEM, no JKS) |
+| `mod-bff-api` | `sa-mod-bff` | `s0:c27` | `svc-mod-bff` / `ROLE_MOD_API` | `mod-bff.snapdragon-backend.svc` |
+| `mod-bff-db` | `sa-mod-bff-db` | `s0:c28` | (DB) | (non-Java: PEM, no JKS) |
+| `user-bff-api` | `sa-user-bff` | `s0:c29` | `svc-user-bff` / `ROLE_USER_API` | `user-bff.snapdragon-backend.svc` |
+| `user-bff-db` | `sa-user-bff-db` | `s0:c38` | (DB) | (non-Java: PEM, no JKS) |
+| `forum-bff-api` | `sa-forum-bff` | `s0:c53` | `svc-forum-bff` / `ROLE_FORUM_API` | `forum-bff.snapdragon-backend.svc` |
+| `forum-bff-db` | `sa-forum-bff-db` | `s0:c52` | (DB) | (non-Java: PEM, no JKS) |
+| `service-catalog-ui` (no Deployment yet — see note) | `sa-service-catalog-ui` | `s0:c49` *(reserved)* | `svc-service-catalog-ui` / `ROLE_SUPERADMIN_UI` | `snapdragon-superadmin-service-catalog-ui.snapdragon-frontend.svc` |
+| `service-catalog-builder` (Kaniko build pods) | (per-build) | `s0:c54` | (build pod) | (non-Java: no JKS) |
+| `route-access` | `sa-route-access` | `s0:c15` | (DB) | — |
+| `forgejo` (GitOps) | `sa-forgejo` | `s0:c16` | per-app svc user | — |
+| `clickhouse` (analytics) | per-app SA | `s0:c19` | (DB) | — |
+| `kafka` (analytics) | per-app SA | `s0:c20` | per-app svc user | — |
+| `lan-dns` (coredns) | per-app SA | `s0:c57` | — | — |
+| `cloudflared` | per-app SA | `s0:c56` | — | — |
+| `casdoor` | per-app SA | `s0:c21` | (IdP) | (non-Java: PEM, no JKS) |
+| `casdoor-pg` | per-app SA | `s0:c14` | (DB) | — |
+| `signup-gate` | per-app SA | `s0:c36` | per-app svc user | — |
+| `media-poisoner` | per-app SA | `s0:c18` | — | — |
+| `egress-proxy` | per-app SA | `s0:c37` | — | — |
+| `binhost` | per-app SA | `s0:c60` | — | — |
+| `vault` | per-app SA | `s0:c70` | — | — |
+| `anubis` (PoW gate) | per-app SA | `s0:c62` | — | — |
+| `frontend` (host web) | per-app SA | `s0:c40` | — | — |
+| `social-ui` (host-web / matrix / mastodon / login) | per-app SA | `s0:c41` / `s0:c42` / `s0:c43` / `s0:c44` | per-app svc user | — |
+| `remote-fragment` | per-app SA | `s0:c45` | — | — |
+| `mod-ui` | per-app SA | `s0:c46` | — | — |
+| `user-ui` | per-app SA | `s0:c47` | — | — |
+| `api-docs` | per-app SA | `s0:c48` | — | — |
+| `forum-ui` | per-app SA | `s0:c58` | — | — |
+| `observability` (postgres / uptrace) | per-app SA | `s0:c59` / `s0:c61` | — | — |
+| akkoma (mastodon) | per-app SA | `s0:c30` / `s0:c31` | per-app svc user | (non-Java: PEM, no JKS) |
+| tuwunel (matrix) | per-app SA | `s0:c32` | per-app svc user | (non-Java: PEM, no JKS) |
+| games | per-app SA | `s0:c33` | per-app svc user | (non-Java: PEM, no JKS) |
+| casdoor-games | per-app SA | `s0:c35` | (IdP) | (non-Java: PEM, no JKS) |
+| casdoor-games-pg | per-app SA | `s0:c34` | (DB) | — |
+| owncast | per-app SA | `s0:c39` | per-app svc user | — |
+| tube | per-app SA | `s0:c55` | per-app svc user | — |
+| phpbb (forum) | per-app SA | `s0:c51` | per-app svc user | — |
+| phpbb-db (forum) | per-app SA | `s0:c50` | (DB) | — |
 
 The matrix is the contract: `seLinuxOptions.level` per Deployment (added to each
 chart/manifest), a `ServiceAccount` per app, a Casdoor service user+role created
-at bootstrap, and a JKS keystore issued by `gen-keystores.sh`.
+at bootstrap, and a JKS keystore issued by `gen-keystores.sh`. Each MCS category
+(`s0:cNN`) is **unique** — no two workloads may share one, so a compromised pod
+cannot read another's category-isolated volumes.
+
+> **service-catalog-ui note:** the rebranded `snapdragon-superadmin-service-catalog-ui`
+> currently ships only a federation descriptor
+> (`manifests/federation-api/register-superadmin-service-catalog.descriptor.yaml`),
+> **not** a Deployment. Category `s0:c49` and SA `sa-service-catalog-ui` are
+> **reserved** here so that when its Deployment is added it inherits a
+> non-colliding identity; the Deployment must carry
+> `securityContext.seLinuxOptions: { type: container_t, level: "s0:c49" }`.
+
+> **Node-service custom domains:** the host-service SELinux domains in
+> [`specs/selinux/*.te`](../specs/selinux/) (`localpath_provisioner_t`,
+> `otel_collector_t`, and the node domains
+> `snapdragon_authkeys_t`, `snapdragon_device_registry_sync_t`,
+> `snapdragon_breakglass`) are part of this contract for **node** processes (not
+> pods). See §2 — note that today these custom modules are authored but
+> **not yet compiled/installed by any build step**; wiring the loader is a
+> fleet-owned (protected) build-script change (tracked separately).
 
 ## 4. mTLS between namespaces — Vault-managed JKS keystores
 

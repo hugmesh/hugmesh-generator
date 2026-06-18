@@ -50,7 +50,9 @@ spec:
           snapdragon.systems/pki: "true"
         seLinux:
           # Own MCS category, distinct from pki (c11) / be (c12) / fe (c13).
-          level: "s0:c14"
+          # c14 is owned by casdoor-pg; this gateway takes c17 (free, adjacent
+          # to the gateway band c11-c13) to resolve that collision.
+          level: "s0:c17"
         # Least-privilege DB identity: this gateway logs in as its OWN read-only role
         # `superadmin_gateway` (SELECT-only on gateway_route_access), NOT the DB owner.
         # Password from its OWN ESO Secret (route-access-superadmin-gateway, key

@@ -23,8 +23,9 @@ spec:
         snapdragon.systems/compute: gpu
       securityContext:
         seLinuxOptions:
+          # c35 collided with casdoor-games; tube->c55 (free).
           type: container_t
-          level: "s0:c35"
+          level: "s0:c55"
       containers:
         # ── tube-bff-api — Spring Boot BFF (Google OAuth sync + download queue) ──
         - name: tube-bff-api

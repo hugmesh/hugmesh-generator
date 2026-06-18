@@ -19,8 +19,9 @@ spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
       securityContext:
         seLinuxOptions:
+          # c48 collided with api-docs; forum-ui->c58 (free).
           type: container_t
-          level: "s0:c48"
+          level: "s0:c58"
       containers:
         - name: web
           image: snapdragon-systems/forum-ui:dev
