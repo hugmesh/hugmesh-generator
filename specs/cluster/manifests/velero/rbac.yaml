@@ -1,0 +1,112 @@
+# ════════════════════════════════════════════════════════════════════════════════
+# Velero cloud-backups RBAC — least privilege, NOT cluster-admin, NOT the Velero
+# server SA. Two distinct identities:
+#
+#   (1) backups-effector  — the Role/RoleBinding that GRANT the admin-bff pod's
+#       backups-effector SA (created with the admin-bff in
+#       manifests/admin-bff-api/backups-effector-sa.yaml so it exists when the pod
+#       schedules) the ability to CREATE/GET velero.io Backup/Restore CRs in the
+#       `velero` namespace (VeleroBackupEffector.apply → genericKubernetesResources
+#       .inNamespace("velero").serverSideApply()). ONLY create/get/list/patch on
+#       velero.io backups + restores in ONE namespace. NOTHING else — no pods, no
+#       secrets, no exec, no cluster scope. The SA itself is NOT recreated here
+#       (it lives with the admin-bff); this file is the AUTHORITY half, applied by
+#       the manual-sync velero-config so authority arrives only when Velero does.
+#
+#   (2) backups-sweep     — the SA the status-sweep CronJob runs as: get/list/watch
+#       + patch (annotate) velero.io backups/restores in `velero` to mirror
+#       .status.phase. It CANNOT create/delete CRs and has no other access.
+#
+# Mirrors the workload-console-rbac least-privilege pattern (manifests/
+# workload-console-rbac): app-tier-scoped SAs, automountServiceAccountToken:false,
+# namespaced Roles (never ClusterRoles), and the generator lint asserting the verb
+# set stays minimal. SHIPS DARK: the admin-bff effector flag is off by default, so
+# the (1) token is unused until a superadmin enables it; the (2) CronJob is
+# suspend:true until then.
+# ════════════════════════════════════════════════════════════════════════════════
+#
+# ── (1) effector AUTHORITY — Role + RoleBinding in the `velero` namespace ───────
+# (The backups-effector SA itself is created with the admin-bff in
+#  manifests/admin-bff-api/backups-effector-sa.yaml; here we only GRANT it.)
+# Role in the `velero` namespace: create/apply + read the Backup/Restore CRs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backups-effector
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: cloud-backups
+    app.kubernetes.io/component: effector
+    app.kubernetes.io/part-of: snapdragon.systems
+rules:
+  # The effector server-side-applies (create+patch) Backup/Restore CRs and reads
+  # them back. NO delete, NO other velero.io kinds (BSL/schedule/etc.), NO core
+  # resources. server-side-apply needs create + patch; get/list support idempotent
+  # re-apply + the effector's own status checks.
+  - apiGroups: ["velero.io"]
+    resources: ["backups", "restores"]
+    verbs: ["create", "get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backups-effector
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: cloud-backups
+    app.kubernetes.io/component: effector
+    app.kubernetes.io/part-of: snapdragon.systems
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: backups-effector
+subjects:
+  - kind: ServiceAccount
+    name: backups-effector
+    namespace: snapdragon-backend
+---
+# ── (2) sweep SA — runs the status-sweep CronJob (in the `velero` namespace) ────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backups-sweep
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: cloud-backups
+    app.kubernetes.io/component: sweep
+    app.kubernetes.io/part-of: snapdragon.systems
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backups-sweep
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: cloud-backups
+    app.kubernetes.io/component: sweep
+    app.kubernetes.io/part-of: snapdragon.systems
+rules:
+  # The sweep READS Backup/Restore .status.phase and ANNOTATES the CR with the
+  # mirrored terminal state (the read half). It cannot create or delete CRs.
+  - apiGroups: ["velero.io"]
+    resources: ["backups", "restores"]
+    verbs: ["get", "list", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backups-sweep
+  namespace: velero
+  labels:
+    app.kubernetes.io/name: cloud-backups
+    app.kubernetes.io/component: sweep
+    app.kubernetes.io/part-of: snapdragon.systems
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: backups-sweep
+subjects:
+  - kind: ServiceAccount
+    name: backups-sweep
+    namespace: velero
