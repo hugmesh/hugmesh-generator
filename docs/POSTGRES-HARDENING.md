@@ -153,16 +153,41 @@ Applied via each DB Deployment's `POSTGRES_*` env + container `args` and the
   pod still starts before ESO). Postgres is **NOT** started with `ssl=on` and no
   consumer URL sets `sslMode`, so the **default wire path stays byte-identical**
   (cert present but unused).
-- **In-cluster TLS — ssl=on FLIP is ⏳ live-gated (held PR #133, do-not-merge-until-enabled).**
-  With the per-DB certs already on disk (#124), enabling wire encryption is the
-  remaining step: start Postgres with `-c ssl=on -c ssl_cert_file=… -c ssl_key_file=…`
-  and add `?sslMode=require` (R2DBC) / `sslmode=require` (JDBC) to the consumer
-  URLs. This is deliberately **held on a live cluster** — flipping it blind risks a
-  DB crash-loop / consumer-connect failure, so PR #133 is parked until it can be
-  validated one DB at a time on a booted cluster. The DBs are single-node,
-  same-namespace, and already MCS + per-port-NetworkPolicy confined in the
-  meantime. (ADR-32 is a commit/PR convention spanning #124/#128/#132/#133, not a
-  standalone doc file.)
+- **In-cluster TLS — gated, ships dark (`PG_TLS_ENABLED`, default `false`).** DB
+  Services are ClusterIP-only and confined by SELinux MCS levels + NetworkPolicy.
+  Wire encryption between an app and its DB is **wired but inert**: each of the six
+  DB pods (admin-bff-db, mod-bff-db, user-bff-db, federation-db, forum-bff-db,
+  route-access-db) mounts its Vault-PKI server cert read-only at `/etc/postgres-tls`
+  AND boots through a small init wrapper `entrypoint/pg-tls-entrypoint.sh`
+  (a SEPARATE ConfigMap, not in the initdb dir) that mirrors the egress-proxy
+  entrypoint idiom:
+  - `PG_TLS_ENABLED=false` (DEFAULT): the wrapper runs Postgres with the SAME static
+    server args as before — **no `-c ssl=on`** — so the cert is unused and the wire
+    path is **byte-identical** to the pre-TLS deployment.
+  - `PG_TLS_ENABLED=true`: the wrapper appends
+    `-c ssl=on -c ssl_cert_file=/etc/postgres-tls/tls.crt
+    -c ssl_key_file=/etc/postgres-tls/tls.key`, so Postgres serves TLS. Server
+    `ssl=on` still **accepts** non-TLS `host` connections, so flipping the server
+    gate alone does NOT break consumers that have not yet set `sslmode`; tighten the
+    consumer URLs to `?sslMode=require` (R2DBC) / `sslmode=require` (JDBC) and
+    `pg_hba` to `hostssl` as a follow-up once every consumer negotiates TLS.
+
+  **GATE / enablement (the documented "PR-C2" step):** flip `PG_TLS_ENABLED` to
+  `"true"` in the DB Deployment (config-only — no new cert plumbing) ONLY after the
+  Vault-PKI server-cert ESO Secret `<db>-mtls` is provisioned/materialized per DB.
+  Until then it stays off; the DBs are single-node, same-namespace, and already
+  MCS+NetworkPolicy-confined, so the default-off posture is safe. **Out of scope**
+  (no dark-TLS cert mounted — would need new ESO certs first): casdoor/casdoor-games
+  Postgres, akkoma-db, the phpBB forum Postgres, observability Postgres.
+
+  **fsGroup / cert readability (live-verify fix):** a live container verify proved
+  that with `PG_TLS_ENABLED=true` the pod crash-loops because the `<db>-mtls` Secret
+  mounts root-owned `defaultMode: 0600` and postgres (uid 70) cannot read the key.
+  Each TLS-enabled DB pod therefore sets pod-level `securityContext.fsGroup: 70`
+  (the postgres group) alongside its `seLinuxOptions`, so the mounted cert/key are
+  group-readable by postgres. `fsGroup: 70` is **harmless while ssl is off** and
+  makes the future flip pure-config.
+
 
 ---
 

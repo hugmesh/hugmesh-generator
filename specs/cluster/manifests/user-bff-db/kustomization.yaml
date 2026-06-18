@@ -13,12 +13,20 @@ resources:
 #   10-roles.sh       the NON-OWNER least-privilege app login role (userbff_app)
 #                     from USERBFF_APP_PASSWORD env — never committed
 #   90-citus.sh       OPT-IN Citus extension (no-op unless SHARDING_CITUS=on)
+# entrypoint/pg-tls-entrypoint.sh is a SEPARATE ConfigMap (NOT in the initdb dir,
+# or docker-entrypoint would run it as an init script). It is the GATED in-cluster
+# TLS wrapper: PG_TLS_ENABLED (default "false") selects ssl-off (default, byte-
+# identical wire path) vs ssl=on. Ships dark — see deployment.yaml + docs/POSTGRES-
+# HARDENING.md §B.
 configMapGenerator:
   - name: user-bff-db-initdb
     files:
       - initdb/00-hardening.sql
       - initdb/10-roles.sh
       - initdb/90-citus.sh
+  - name: user-bff-db-entrypoint
+    files:
+      - entrypoint/pg-tls-entrypoint.sh
 
 generatorOptions:
   disableNameSuffixHash: true

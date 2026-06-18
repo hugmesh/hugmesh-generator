@@ -40,6 +40,11 @@ spec:
           # c36 collided with signup-gate; user-bff-db takes c38 (free).
           type: container_t
           level: "s0:c38"
+        # Live-verify fix: the <db>-mtls cert Secret mounts root-owned 0600, so
+        # postgres (uid 70) cannot read tls.key when PG_TLS_ENABLED=true → crash-loop.
+        # fsGroup:70 (postgres group) makes the mounted cert/key group-readable; it
+        # is harmless while ssl is off and makes the future ssl=on flip pure-config.
+        fsGroup: 70
       containers:
         - name: postgres
           # DEFAULT (single-node): postgres:16-alpine. To shard, override to a
@@ -69,19 +74,19 @@ spec:
             - { name: SHARDING_CITUS, value: "off" }
             - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256 --auth-local=scram-sha-256" }
             - { name: PGDATA, value: "/var/lib/postgresql/data/pgdata" }
+            # GATED in-cluster TLS — DEFAULT OFF (ships dark). When "false" the
+            # pg-tls-entrypoint.sh wrapper runs Postgres with the SAME static args
+            # as before (no `-c ssl=on`); the mounted cert stays unused and the wire
+            # path is byte-identical. Flip to "true" ONLY after the Vault-PKI server
+            # cert is provisioned (ESO Secret user-bff-db-mtls materialized) — then
+            # Postgres serves TLS. See docs/POSTGRES-HARDENING.md §B.
+            - { name: PG_TLS_ENABLED, value: "false" }
           # Server-level hardening (every boot): scram, capped connections, logged
           # connections + slow statements. Per-DB timeouts are in 00-hardening.sql.
-          args:
-            - -c
-            - password_encryption=scram-sha-256
-            - -c
-            - max_connections=60
-            - -c
-            - log_connections=on
-            - -c
-            - log_disconnections=on
-            - -c
-            - log_min_duration_statement=2000
+          # The static args now live in the pg-tls-entrypoint.sh wrapper, which
+          # appends `-c ssl=on …` ONLY when PG_TLS_ENABLED=true (gated; default off).
+          # The wrapper exec's the stock docker-entrypoint.sh so initdb is unchanged.
+          command: ["/bin/sh", "/usr/local/bin/pg-tls-entrypoint.sh"]
           readinessProbe:
             exec: { command: ["pg_isready", "-U", "userbff", "-d", "userbff"] }
             initialDelaySeconds: 10
@@ -96,18 +101,23 @@ spec:
           volumeMounts:
             - { name: data,   mountPath: /var/lib/postgresql/data }
             - { name: initdb, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
-            # PR-C1 (SHIPS DARK): Vault-PKI server cert mounted READ-ONLY but UNUSED —
-            # Postgres is NOT started with `-c ssl=on` (args: above unchanged) and no
-            # consumer URL sets sslMode, so the default wire path is byte-identical.
-            # PR-C2 enablement = add `-c ssl=on -c ssl_cert_file=/etc/postgres-tls/tls.crt
-            # -c ssl_key_file=/etc/postgres-tls/tls.key` to args + `?sslMode=require`
-            # (R2DBC)/`sslmode=require` (JDBC) on consumers.
+            # GATED-TLS entrypoint wrapper (separate from initdb so it is NOT run as
+            # an init script). Selects ssl-off (default) vs ssl=on by PG_TLS_ENABLED.
+            - { name: entrypoint, mountPath: /usr/local/bin/pg-tls-entrypoint.sh, subPath: pg-tls-entrypoint.sh, readOnly: true }
+            # SHIPS DARK: Vault-PKI server cert mounted READ-ONLY but UNUSED while
+            # PG_TLS_ENABLED=false (default) — the wrapper does NOT add `-c ssl=on`,
+            # so the wire path is byte-identical. PR-C2 enablement (gated on this cert
+            # being provisioned) = flip PG_TLS_ENABLED to "true" (config-only); the
+            # wrapper then serves TLS from these files. Optionally add `?sslMode=require`
+            # (R2DBC)/`sslmode=require` (JDBC) to consumers once all negotiate TLS.
             - { name: pg-tls, mountPath: /etc/postgres-tls, readOnly: true }
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: user-bff-db }
         - name: initdb
           configMap: { name: user-bff-db-initdb }
+        - name: entrypoint
+          configMap: { name: user-bff-db-entrypoint, defaultMode: 0555 }
         # Vault-PKI server cert (kubernetes.io/tls Secret user-bff-db-mtls, wired in
         # external-secrets/pki-externalsecrets.yaml). Mounted but unused until PR-C2.
         - name: pg-tls
