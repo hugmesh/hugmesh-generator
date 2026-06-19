@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Only the namespace + its default-deny NetworkPolicy are ArgoCD-managed. The generic Kaniko
+# build Job is a TEMPLATE (kaniko-build-job.template.yaml) a driver (the .gitlab-ci.yml
+# build:images job, an ArgoCD sync hook, or an Argo-Workflows step) instantiates per build —
+# it is deliberately NOT a resource here (ships dark; nothing runs until a build is dispatched).
+# Models the proven #110 service-catalog-builder kustomization 1:1.
+resources:
+  - namespace-and-netpol.yaml

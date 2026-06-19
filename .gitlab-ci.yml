@@ -140,11 +140,46 @@ build:isos:
 build:images:
   stage: images
   tags: [snapdragon-x86]
+  # Dispatch into the IN-CLUSTER Kaniko image-build pipeline
+  # (specs/cluster/manifests/image-builder/) instead of the former echo STUB. The pipeline
+  # is OPT-IN: its namespace ships only when an operator enables the ArgoCD Application
+  # (apps-optional/60-image-builder.yaml). This job is therefore guarded — it runs the real
+  # in-cluster build ONLY when IMAGE_BUILDER_ENABLED is set (and KUBECONFIG points at the
+  # cluster); otherwise it is a documented no-op so merging changes nothing live and the
+  # pipeline stays green before the (kernel-blocked) cluster exists.
+  variables:
+    # The in-cluster build namespace (must match manifests/image-builder/namespace-and-netpol.yaml).
+    BUILD_NAMESPACE: "snapdragon-image-builds"
+    # The per-app source repo + Dockerfile + destination image. Override per pipeline
+    # (CI variables / matrix) to build each first-party app. Destination matches the app
+    # kustomizations' newName convention (registry.snapdragon.systems/snapdragon/<app>:<tag>).
+    IMAGE_CONTEXT: "git://github.com/Snapdragon-Systems/snapdragon-gateway.git#${CI_COMMIT_SHA}"
+    IMAGE_DOCKERFILE: "Dockerfile"
+    DEST_IMAGE: "registry.snapdragon.systems/snapdragon/snapdragon-gateway:${CI_COMMIT_SHORT_SHA}"
   script:
-    # App images (gateway, frontends, BFF, …) are built from their own repos
-    # in the GitLab org mirror; this job builds what lives here and pushes to
-    # the GitLab container registry.
-    - echo "build + push container images to ${CI_REGISTRY_IMAGE}"
+    - |
+      if [ -z "${IMAGE_BUILDER_ENABLED:-}" ]; then
+        echo "in-cluster image-builder is OPT-IN and disabled (IMAGE_BUILDER_ENABLED unset)."
+        echo "to enable: sync apps-optional/60-image-builder.yaml into specs/cluster/apps/,"
+        echo "point KUBECONFIG at the cluster, and set IMAGE_BUILDER_ENABLED=1."
+        exit 0
+      fi
+      # Render the ships-dark Kaniko Job template with this build's parameters and apply it
+      # into the in-cluster build namespace. The template lives in the GitOps repo; the build
+      # pod (rootless Kaniko) pushes to registry.snapdragon.systems using the ESO-materialized
+      # image-builder-registry dockerconfigjson. No secrets are passed from CI.
+      BUILD_NAME="$(echo "${DEST_IMAGE}" | sed -E 's#.*/##; s#[:@].*##')-${CI_COMMIT_SHORT_SHA}"
+      # Use | as the sed delimiter (the git-ref CONTEXT contains '#', so '#' must not delimit).
+      sed \
+        -e "s|\${BUILD_NAME}|${BUILD_NAME}|g" \
+        -e "s|\${BUILD_NAMESPACE}|${BUILD_NAMESPACE}|g" \
+        -e "s|\${CONTEXT}|${IMAGE_CONTEXT}|g" \
+        -e "s|\${DOCKERFILE}|${IMAGE_DOCKERFILE}|g" \
+        -e "s|\${DEST_IMAGE}|${DEST_IMAGE}|g" \
+        specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml \
+        | kubectl -n "${BUILD_NAMESPACE}" apply -f -
+      kubectl -n "${BUILD_NAMESPACE}" wait --for=condition=complete \
+        "job/image-build-${BUILD_NAME}" --timeout=1800s
 
 # NOTE: there is no longer a bundled `snapdragon-pentest-runner` image stage. The
 # pen-test is DEV/CI-pipeline-only: the `sca` + `dast` stages below run the OWASP
