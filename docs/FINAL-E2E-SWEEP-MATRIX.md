@@ -77,6 +77,51 @@ serializes (correct results, one at a time) **FAILS** — concurrency is contrac
 | X4 | pending (no roles, registration incomplete) → denied every user surface | gateway+ui | **DOC** (spec 17/18) |
 | X5 | every DISABLED UI control carries helptext (why-denied) | ui | **DOC** stub (E) — primitive `assertDisabledHasHelptext` ready; activates with the role-conditional host shell |
 
+## Cross-realm authz matrix — systems × games × forum (spec 26)
+
+`tests/e2e/specs/26-rbac-cross-realm-matrix.spec.ts` is the **full cross-realm
+matrix** sibling of the single-invariant cross-realm spec 25. For each realm PAIR
+and each role it asserts **(a) ALLOW** (right realm+role+domain reaches its own
+resources), **(b) DENY isolation** (a principal from realm A / domain X is refused
+the cross-realm + cross-domain resources — a generic `DENY`, never a 404-vs-403
+existence leak), **(c) ROLE_SUPERADMIN cross-realm reach where designed**, and
+**(d) the per-domain least-privilege cascade** (the multi-tenant brand wall). The
+systems + superadmin decisions go through the SHARED `rbac-route-access` oracle;
+the forum rows + the `domain` column (absent from that oracle) are mirrored 1:1 from
+`route-access/initdb/20-schema.sql` **locally in the spec** so specs 12–18/25 are
+unperturbed. **VALIDATES OFFLINE** (no cluster); **LIVE pending a kernel-fixed x86
+image** (the QEMU cluster cannot boot yet).
+
+The realms: **SYSTEMS** (org `snapdragon`, issuer `id.snapdragon.systems`, native
+`ROLE_*`), **GAMES** (org `threewizards`, issuer `id.snapdragon.games`, independent
+Casdoor, native lowercase `player`/`admin`; namespace surfaces `/games/admin/**` +
+`/games/api/admin/**` gated on the DERIVED systems `ROLE_GAMES_ADMIN`), **FORUM**
+(phpBB via forum-bff: `/social/forum/**` + `/bff/forum/**`, access role `ROLE_FORUM`,
+derived `ROLE_FORUM_MOD = ROLE_MOD ∩ ROLE_FORUM`; phpBB itself has NO gateway route).
+
+| # | realm pair / role | assertion | kind | status |
+|---|---|---|---|---|
+| CR1 | SYSTEMS↔FORUM · ROLE_FORUM | reaches `/bff/forum/**` floor | (a) ALLOW | **WIRED** |
+| CR2 | SYSTEMS↔FORUM · ROLE_FORUM | refused forum moderation + admin (no forum-mod bleed) | (b) DENY | **WIRED** |
+| CR3 | SYSTEMS↔FORUM · ROLE_MOD (no ROLE_FORUM) | refused `/bff/forum/moderation/**` (derived MOD∩FORUM) | (b) DENY | **WIRED** |
+| CR4 | SYSTEMS↔FORUM · ROLE_ADMIN | reaches forum admin seam but NOT via the ROLE_FORUM floor | (a)/(b) | **WIRED** |
+| CR5 | SYSTEMS↔GAMES | the two realms have DISTINCT issuers | premise | **WIRED** |
+| CR6 | SYSTEMS↔GAMES · ROLE_GAMES_ADMIN | reaches `/games/admin/**` + `/games/api/admin/**` | (a) ALLOW | **WIRED** |
+| CR7 | SYSTEMS↔GAMES · ROLE_GAMES / ROLE_ADMIN alone | each refused the games-admin surfaces (no half earns the AND) | (b) DENY | **WIRED** |
+| CR8 | SYSTEMS↔GAMES · games-realm identity | refused EVERY systems + games-namespace + forum + superadmin surface (issuer isolation, generic deny) | (b) DENY | **WIRED** |
+| CR9 | SYSTEMS↔GAMES · systems identity | carries no games-native role into games (synced admin is a games ROW, not a token bleed) | (b) DENY | **WIRED** |
+| CR10 | SUPERADMIN cross-realm | ROLE_SUPERADMIN reaches the cross-realm infra surface (service-catalog + federation); admin DENIED | (c) | **WIRED** |
+| CR11 | SUPERADMIN tier | ROLE_SUPERADMIN does NOT auto-grant the public ROLE_USER floor (own tier, not a universal superset) | (c)-neg | **WIRED** |
+| CR12 | per-domain · ROLE_ADMIN | brand-X admin reaches brand-X admin surface | (a) ALLOW | **WIRED** |
+| CR13 | per-domain · ROLE_ADMIN | brand-X admin refused brand-Y admin resources (no cross-brand re-grant) | (d) DENY | **WIRED** |
+| CR14 | per-domain · ROLE_GAMES_ADMIN | cross-brand wall holds for the forum + games surfaces | (d) DENY | **WIRED** |
+| CR15 | per-domain · model | `domainApplies`: NULL/blank/`default` unscoped; a brand row applies to its brand only | fidelity | **WIRED** |
+
+NB the systems→games SYNC **propagation** proof (`ROLE_GAMES_ADMIN`→games `admin`)
+is owned by `snapdragon-actions/e2e` (`sync-steps.ts`) and is NOT duplicated here;
+spec 26 asserts only the cross-realm **authz isolation** half (the catalogue +
+issuer-isolation invariants).
+
 ## WIRED vs DOC — why split
 
 The gateway/bff **contract** assertions are already exhaustively covered by specs
