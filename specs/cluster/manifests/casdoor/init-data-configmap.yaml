@@ -162,6 +162,7 @@ data:
         { "owner": "snapdragon", "name": "ROLE_GAMES_SERVICES",        "displayName": "Games App-Store Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GAMES_SERVICES_ADMIN",  "displayName": "Games App-Store Admin",  "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GAMES_SERVICES_RUNNER", "displayName": "Games App-Store Runner", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "desktop-sudo", "displayName": "Desktop SSO sudo (governed desktop polkit gate)", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_TUBE",    "displayName": "Tube Access",    "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_OWNCAST", "displayName": "Owncast Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },

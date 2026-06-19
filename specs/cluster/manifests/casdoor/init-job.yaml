@@ -133,16 +133,37 @@ data:
     def reconcile_desktop_client():
         """D6+D8 / GEN-SSO #135 — seed the snapdragon-desktop PKCE PUBLIC client.
 
-        sssd-oidc.conf.tmpl references oidc_client_id=snapdragon-desktop with
-        oidc_use_pkce=True, but the client was NEVER seeded in Casdoor. GEN-SSO #135
-        deposits the minted token to a device file (${XDG_RUNTIME_DIR}/snapdragon/
-        oidc-token); under casdoor's DEFAULT tokenFormat=JWT that file would contain
-        totpSecret/recoveryCodes/password/passwordSalt. We seed it here with the SAME
-        JWT-Custom allow-list as the systems apps so the on-device token is clean and
-        carries the MFA claim.
+        The OIDC client the GOVERNED desktop images log into. sssd-oidc.conf.tmpl
+        references oidc_client_id=snapdragon-desktop with oidc_use_pkce=True, but the
+        client was NEVER seeded in Casdoor. Without this client the desktop SSO login
+        can obtain NO token, so the `desktop-sudo` sudo claim is never issuable AND the
+        bearer forwarded to the BFF app-store registry never exists — i.e. the whole
+        desktop-governance feature is inert (RESIDUAL #9a; see
+        specs/etc/snapdragon/desktop-governance/README.md). The `desktop-sudo`
+        claim/role is what the admin-bff sudo-grant places on the user at the IdP; the
+        on-device SSSD maps that claim into the local `desktop-sudo` group (oidc_group_
+        claim=roles) and polkit gates sudo on it (default-deny). The `desktop-sudo`
+        Casdoor role itself is seeded declaratively in init_data.json
+        (init-data-configmap.yaml).
 
-        PUBLIC client: clientSecret is EMPTY (PKCE, no secret baked into the image);
-        redirectUris are the native loopback + OOB URIs the desktop OIDC flow uses.
+        GEN-SSO #135 deposits the minted token to a device file (${XDG_RUNTIME_DIR}/
+        snapdragon/oidc-token); under casdoor's DEFAULT tokenFormat=JWT that file would
+        contain totpSecret/recoveryCodes/password/passwordSalt. We seed it here with the
+        SAME JWT-Custom allow-list as the systems apps so the on-device token is clean
+        and carries the MFA claim AND the `roles` claim (incl. desktop-sudo) SSSD-OIDC
+        reads.
+
+        PUBLIC client: clientSecret is EMPTY (PKCE, no secret baked into the image),
+        isPublic=True marks it as a public client; redirectUris are the native loopback
+        + OOB URIs the desktop OIDC flow uses. Idempotent (update-if-exists).
+        Single-domain seed today, matching the confidential apps' `…snapdragon.systems`
+        convention — per-brand domains are layered by the rebrand path, not by this
+        bootstrap seed.
+
+        !!! The PKCE-public-client object shape (isPublic vs empty clientSecret,
+        !!! tokenFormat key, native-redirect handling) is Casdoor-version-specific —
+        !!! validate against the deployed Casdoor. Failing this reconcile leaves the
+        !!! feature ships-dark (no token => empty store + no sudo), not broken.
         """
         appname = "snapdragon-desktop"
         app = {
@@ -151,18 +172,24 @@ data:
             "organization": ORG, "clientId": appname,
             # PUBLIC client — NO secret (PKCE). Empty string, never read from Vault.
             "clientSecret": "",
+            "isPublic": True,
             # Native loopback (RFC 8252) + OOB redirects for the desktop SSO flow.
             "redirectUris": [
-                "http://127.0.0.1/callback",
-                "http://localhost/callback",
+                "http://127.0.0.1/callback", "http://localhost/callback",
                 "urn:ietf:wg:oauth:2.0:oob",
             ],
-            # PKCE authorization_code only (no password / client_credentials for a
-            # public client); refresh_token so the device can refresh after the BFF
-            # stamps the MFA Property.
-            "grantTypes": ["authorization_code", "refresh_token"],
+            # PKCE authorization_code (+ device_code for a headless/seat enrolment);
+            # refresh_token so the device can refresh after the BFF stamps the MFA
+            # Property. NO password / client_credentials for a public client.
+            "grantTypes": [
+                "authorization_code",
+                "refresh_token",
+                "urn:ietf:params:oauth:grant-type:device_code",
+            ],
             "expireInHours": 168, "enablePassword": False, "enableSignUp": False,
             # D6+D8: SAME JWT-Custom allow-list as the systems apps — leak-fix + MFA claim.
+            # JWT-Custom still carries the `roles` claim (incl. desktop-sudo) via
+            # tokenAttributes, which SSSD-OIDC maps to the local desktop-sudo group.
             "tokenFormat": "JWT-Custom",
             "tokenSigningMethod": "RS256",
             "tokenFields": JWT_CUSTOM_TOKEN_FIELDS,
@@ -174,10 +201,10 @@ data:
             existing = None
         if existing and existing.get("data"):
             call(f"/api/update-application?id=admin/{appname}", app, "POST")
-            print(f"  updated {appname} (PKCE public client, JWT-Custom)")
+            print(f"  updated {appname} (PKCE public client, JWT-Custom; desktop-sudo claim source)")
         else:
             call("/api/add-application", app, "POST")
-            print(f"  added   {appname} (PKCE public client, JWT-Custom)")
+            print(f"  added   {appname} (PKCE public client, JWT-Custom; desktop-sudo claim source)")
 
     def reconcile_org_mfa():
         """D8 — enable the org MFA CAPABILITY (WebAuthn + TOTP available) and set the
@@ -424,11 +451,13 @@ data:
             reconcile_app(name, role)
         except Exception as e:
             print(f"  WARN {name}: {e}")
-    # D6+D8 / GEN-SSO #135: seed the snapdragon-desktop PKCE public client (JWT-Custom).
+    # D6+D8 / GEN-SSO #135 / RESIDUAL #9a: seed the snapdragon-desktop PKCE public
+    # client (JWT-Custom). A failure here leaves the desktop feature ships-dark (no
+    # token => empty store, no sudo claim), never broken — so we warn and continue.
     try:
         reconcile_desktop_client()
     except Exception as e:
-        print(f"  WARN snapdragon-desktop: {e}")
+        print(f"  WARN snapdragon-desktop client: {e}")
     try:
         reconcile_google_provider()
     except Exception as e:

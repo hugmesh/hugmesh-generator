@@ -33,6 +33,42 @@ These files carry hosts and the `desktop-sudo` claim NAME only — never tokens 
 keys. They may be copied as-is. The bearer token is deposited per-session by the
 SSO desktop-login at runtime, never staged here.
 
+## GEN-SSO session-start (Seams #1 + #2)
+
+`provision_desktop_governance()` renders only the four config templates above; it
+does **not** deposit the OIDC token bearer-forward needs (Seam #1) nor invoke
+bearer-forward at login (Seam #2). Those are delivered by these NEW files +
+a KEYS `run[]` hook (all governed-gated + ships-dark):
+
+- `discover/oidc-token-deposit.sh.tmpl` → deposits the SSO access token at
+  `${XDG_RUNTIME_DIR}/snapdragon/oidc-token` (per-user, 0600, never exported,
+  `--clear` on logout); inert when ungoverned / no token (empty store).
+- `autostart/snapdragon-desktop-sso.desktop.tmpl` → XDG autostart (LXDE + XFCE,
+  no `OnlyShowIn`) → the session-start wrapper.
+- `autostart/snapdragon-desktop-sso-start.sh.tmpl` → session-start wrapper:
+  clears stale token/header, installs an LXDE/XFCE `~/.bash_logout` clear (the
+  merged bearer-forward's Plasma-only `shutdown/` hook never fires here), chains
+  deposit → bearer-forward.
+- `autostart/session-install.sh.tmpl` (+ a ready-to-run `session-install.sh` at
+  this dir root) → renders the three templates and publishes the `.desktop`,
+  with the SAME domain resolution + fail-closed `[a-z0-9.-]` validation as
+  `provision.sh`.
+
+### Wire the run[] hook
+
+Add to your KEYS `provision.json` so it runs as root at end of first boot, after
+`provision_desktop_governance()`:
+
+```json
+"run": [ "desktop-governance/session-install.sh" ]
+```
+
+### RESIDUAL #9a
+
+The desktop SSO login uses `oidc_client_id = snapdragon-desktop` (PKCE public
+client). This PR seeds that client + the `desktop-sudo` role in `casdoor-init`
+(`specs/cluster/manifests/casdoor/`); without it SSO-sudo is inert.
+
 ## Files
 
 Mirror of `specs/etc/snapdragon/desktop-governance/` — edit in place if a domain

@@ -1,0 +1,18 @@
+[Desktop Entry]
+# snapdragon-desktop-sso.desktop (TEMPLATE) -> /etc/xdg/autostart/snapdragon-desktop-sso.desktop
+#
+# GEN-SSO Seam #2: XDG autostart entry that runs the session-start wrapper at
+# login. Deliberately carries NO OnlyShowIn key, so it is honored by BOTH
+# lxsession/LXDE and xfce4-session/XFCE (the image's session managers), as well
+# as any other freedesktop-compliant session. The wrapper itself is
+# governed-gated, so this entry is INERT on an ungoverned image (the wrapper
+# exits immediately, depositing/forwarding nothing).
+#
+# @@CLUSTER_DOMAIN@@ appears only in this comment; the entry is domain-agnostic.
+Type=Application
+Name=Snapdragon Desktop SSO
+Comment=Deposit the SSO bearer and authenticate Discover to the app registry at login
+Exec=/etc/snapdragon/desktop-governance/snapdragon-desktop-sso-start.sh
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

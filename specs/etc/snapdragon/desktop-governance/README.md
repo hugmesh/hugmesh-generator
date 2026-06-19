@@ -6,14 +6,22 @@ FD-04 client images (amd64 **laptop** + thin **Chromebook**, and the full
 `specs/etc/snapdragon/...` tree (NOT under the protected `specs-x86/` portage
 tree and NOT inline in `build-x86-host-stage4.sh`).
 
-The image build copies this whole directory into the sysroot at
-`/etc/snapdragon/desktop-governance/` (see the `ROLE_CLIENT` leg of the build:
-`provision_files` / the shared-specs copy step). At **first boot**,
-`keys-provision`'s `provision_desktop_governance()`
+At **first boot**, `keys-provision`'s `provision_desktop_governance()`
 (`specs/etc/keys-provision/provision.sh`) reads the node's own domain from
-`/etc/snapdragon/domains` (one domain per line; the first/primary is used) and
-**renders** these templates into their live system locations, substituting the
-`@@CLUSTER_DOMAIN@@` placeholder with the node's domain.
+`.client.primary_domain` → `/etc/snapdragon/domains` (first/primary line) →
+`.snapdragon.cluster_domain` and **renders** the FOUR NAMED config templates
+(flatpakrepo, polkit, sssd, bearer-forward) into their live system locations,
+substituting the `@@CLUSTER_DOMAIN@@` placeholder with the node's domain.
+
+> **Delivery note (corrected).** The `provision_desktop_governance()` function
+> render_gov's only its four *named* templates — it has **no generic loop** and
+> does **not** touch `/etc/xdg/autostart`. Neither the function nor the x86
+> builder (`build-x86-host-stage4.sh`) currently *bakes* this directory into the
+> sysroot, so the only working delivery today is the **KEYS-USB fallback**: drop
+> `KEYS/desktop-governance/` on the (read-only) KEYS stick and
+> `provision_desktop_governance()` finds it via its `${BASE}/desktop-governance`
+> branch. The earlier "the build copies this whole dir into the sysroot" claim
+> was stale/false.
 
 Because the host is resolved at first boot from the baked domain marker, the
 config is correctly domain-parameterized whether or not `rebrand_sysroot` ran at
@@ -58,3 +66,45 @@ image's `/etc/snapdragon/domains` already carries the brand domain).
 | `polkit/49-snapdragon-desktop-sudo.rules` | `/etc/polkit-1/rules.d/49-snapdragon-desktop-sudo.rules` | sudo ONLY for the `desktop-sudo` group; else deny |
 | `sssd/snapdragon-oidc.conf.tmpl` | `/etc/sssd/conf.d/snapdragon-oidc.conf` | OIDC claim→group mapping (`desktop-sudo`), domain-parameterized issuer |
 | `discover/bearer-forward.sh.tmpl` | `/etc/snapdragon/desktop-governance/bearer-forward.sh` (+ Flatpak `http.extra-headers`) | forward the SSO bearer to the registry host |
+
+### GEN-SSO session-start (Seams #1 + #2)
+
+These four NEW files close the two genuinely-unwired seams: nothing deposited the
+OIDC token bearer-forward reads (Seam #1), and bearer-forward was never invoked at
+login (Seam #2). All are **governed-gated + ships-dark** (inert on an ungoverned
+image / with no resolvable domain).
+
+| template | rendered to | purpose |
+|----------|-------------|---------|
+| `discover/oidc-token-deposit.sh.tmpl` | `/etc/snapdragon/desktop-governance/oidc-token-deposit.sh` | **Seam #1.** Deposits the validated OIDC access token at `${XDG_RUNTIME_DIR}/snapdragon/oidc-token` (umask 077, pre-created 0600, never world-readable, never exported/logged). `--clear`/logout removes it. Token source: `SNAPDRAGON_OIDC_ACCESS_TOKEN` (greeter/PAM-surfaced) or a user-private greeter drop; no source ⇒ empty store (fail closed). |
+| `autostart/snapdragon-desktop-sso.desktop.tmpl` | `/etc/xdg/autostart/snapdragon-desktop-sso.desktop` | **Seam #2.** XDG autostart (no `OnlyShowIn` ⇒ honored by BOTH lxsession/LXDE and xfce4-session/XFCE) → the session-start wrapper. |
+| `autostart/snapdragon-desktop-sso-start.sh.tmpl` | `/etc/snapdragon/desktop-governance/snapdragon-desktop-sso-start.sh` | Session-start wrapper: governed-gated; clears stale token/header first, installs an **LXDE/XFCE `~/.bash_logout` clear** (the merged bearer-forward's `plasma-workspace/shutdown/` hook is **Plasma-only and never fires on this image**), then chains deposit → bearer-forward once per login. |
+| `autostart/session-install.sh.tmpl` | run as the KEYS `run[]` hook | Self-contained deployment glue (the no-`provision.sh`-edit vector): renders the three templates above with the SAME `@@CLUSTER_DOMAIN@@` substitution + fail-closed `[a-z0-9.-]` hostname validation + sed-escape as `provision.sh`, and publishes the `.desktop`. Idempotent, governed-gated, invalid-domain-refusing. |
+
+### Session-start delivery (run[] hook)
+
+`provision_desktop_governance()` is **protected** and renders only its four named
+templates with no `/etc/xdg/autostart` handling, so the three GEN-SSO templates are
+deployed by a **KEYS `run[]` hook** that `keys-provision`'s `provision_run_hooks()`
+runs **as root at end of first boot** (with `KEYS_BASE` exported), **after**
+`provision_desktop_governance()` has run. Wire it in the KEYS `provision.json`:
+
+```json
+"run": [ "desktop-governance/session-install.sh" ]
+```
+
+A ready-to-run `0755` copy lives at `keys-template/desktop-governance/session-install.sh`
+so that exact `run[]` entry resolves directly. (We do **not** add the entry to the
+shared `keys-template/provision.json` example — it is used by all node types and
+JSON has no comments.)
+
+### RESIDUAL #9a — `snapdragon-desktop` PKCE public client
+
+The SSSD-OIDC conf points the desktop login at `oidc_client_id = snapdragon-desktop`
+(a PKCE public client) but `casdoor-init` did **not** seed it — so the login could
+obtain no token, the `desktop-sudo` claim was never issuable, and SSO-sudo was
+inert. This PR adds `reconcile_desktop_client()` to
+`specs/cluster/manifests/casdoor/init-job.yaml` (PUBLIC client, empty secret, PKCE,
+JWT tokens, native/loopback+OOB redirects, `authorization_code`+`device_code`) and
+seeds the `desktop-sudo` role in `init-data-configmap.yaml`. The exact Casdoor
+object shape is version-specific — validate against the deployed Casdoor.

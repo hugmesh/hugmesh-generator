@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# oidc-token-deposit.sh (TEMPLATE) -> /etc/snapdragon/desktop-governance/oidc-token-deposit.sh
+#
+# GEN-SSO Seam #1: deposit the logged-in user's validated OIDC ACCESS TOKEN at the
+# per-user runtime path that bearer-forward.sh reads, so Discover's Flatpak backend
+# can authenticate as the user to the admin-bff registry. Without this deposit
+# bearer-forward never finds a token => the BFF returns an EMPTY registry
+# (ships-dark) and Discover shows nothing even after an admin curates the store.
+#
+# @@CLUSTER_DOMAIN@@ is substituted at FIRST BOOT (only present in this header
+# comment; the script logic is domain-agnostic — the token, not the host, is what
+# this script handles). Substitution is harmless either way.
+#
+# SECURITY / SHIPS-DARK:
+#   * GOVERNED-GATED: if this image is not desktop-governance-governed (no rendered
+#     /etc/sssd/conf.d/snapdragon-oidc.conf and no /etc/snapdragon/desktop-governance
+#     bearer-forward.sh), deposit NOTHING and exit clean. Inert by default.
+#   * USER-SCOPED + 0600: the token is written ONLY under the calling user's
+#     ${XDG_RUNTIME_DIR} (tmpfs, mode 0700, per-user, wiped on logout by the
+#     session manager). The file itself is pre-created 0600 with umask 077 BEFORE
+#     any bytes land, so it is never momentarily world-readable.
+#   * NEVER EXPORTED, NEVER LOGGED: the token value is not echoed, not exported
+#     into the environment, and not written anywhere but the runtime file.
+#   * --clear / logout removes the deposited token (the session-start wrapper and
+#     the logout hook both call this).
+#
+# TOKEN SOURCE (environment-dependent — see README "Token source"): the per-domain
+# SSO desktop-login surfaces the user's access token into the session as
+#   SNAPDRAGON_OIDC_ACCESS_TOKEN  (greeter/PAM-exported env), OR
+#   a user-private greeter drop at ${XDG_RUNTIME_DIR}/snapdragon/oidc-token.src
+# If NEITHER is present this script fails CLOSED: it removes any stale token and
+# exits 0 (empty store, no error). Wiring the actual export from the SSO greeter
+# is a protected-greeter follow-up; this depositor consumes whatever it surfaces.
+set -uo pipefail
+
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+TOKEN_DIR="${RUNTIME_DIR}/snapdragon"
+TOKEN_FILE="${TOKEN_DIR}/oidc-token"
+TOKEN_SRC_FILE="${TOKEN_DIR}/oidc-token.src"
+
+# is_governed(): true iff this image carries rendered desktop-governance config.
+# Mirrors provision.sh desktop_governance_governed() (the rendered SSSD-OIDC conf
+# or the rendered bearer-forward.sh — both are produced only on a governed image
+# with a resolvable domain). Ungoverned => no deposit.
+is_governed() {
+    [ -r /etc/sssd/conf.d/snapdragon-oidc.conf ] && return 0
+    [ -x /etc/snapdragon/desktop-governance/bearer-forward.sh ] && return 0
+    return 1
+}
+
+# Remove any deposited token (and its source drop), best-effort.
+clear_token() {
+    rm -f "${TOKEN_FILE}" 2>/dev/null || true
+}
+
+# --clear / logout: wipe the deposited token and exit. Always honored (even when
+# ungoverned) so a logout hook can clean up unconditionally.
+case "${1:-}" in
+    --clear|logout) clear_token; exit 0 ;;
+esac
+
+# Ungoverned image => never deposit anything (ships-dark / default-deny).
+if ! is_governed; then
+    clear_token
+    exit 0
+fi
+
+# Resolve the token from the greeter-surfaced env, else a user-private drop.
+TOKEN=""
+if [ -n "${SNAPDRAGON_OIDC_ACCESS_TOKEN:-}" ]; then
+    TOKEN="${SNAPDRAGON_OIDC_ACCESS_TOKEN}"
+elif [ -r "${TOKEN_SRC_FILE}" ]; then
+    TOKEN="$(tr -d '[:space:]' < "${TOKEN_SRC_FILE}" 2>/dev/null)"
+fi
+
+# No token available (not an SSO login, or greeter did not surface one) => fail
+# closed: clear any stale token and exit clean. bearer-forward then leaves the
+# store empty.
+if [ -z "${TOKEN}" ]; then
+    clear_token
+    exit 0
+fi
+
+# Deposit user-scoped, 0600, never world-readable for an instant. umask first so
+# the directory + pre-created file are tight from creation.
+umask 077
+mkdir -p "${TOKEN_DIR}" 2>/dev/null || { exit 0; }
+# Pre-create the file 0600 BEFORE writing the token bytes.
+: > "${TOKEN_FILE}" 2>/dev/null || exit 0
+chmod 0600 "${TOKEN_FILE}" 2>/dev/null || true
+# Write the token (no trailing newline noise; bearer-forward strips whitespace).
+printf '%s' "${TOKEN}" > "${TOKEN_FILE}" 2>/dev/null || { clear_token; exit 0; }
+chmod 0600 "${TOKEN_FILE}" 2>/dev/null || true
+
+# Do NOT export the token, do NOT log it. Done.
+exit 0
