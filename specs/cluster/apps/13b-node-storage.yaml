@@ -32,10 +32,21 @@
 # overlay Application -> the patch is reverted by ArgoCD (the service loses its pin + PVC; the
 # operator must have scaled it to zero first for a stateful svc — see PR8 migration Job).
 #
-# SHIPS INERT: the elements list is EMPTY (zero placements). With no active assignment this
-# ApplicationSet generates NOTHING — today's behaviour exactly. The node-storage-assignments
-# ConfigMap (the source of truth) is populated by the BFF reconcile from the active rows; a
-# rendered element appears here only when an operator assigns a service to a pool.
+# SHIPS INERT: the element source is the node-storage-assignments ConfigMap's `elements`
+# key, which is an EMPTY JSON array (`[]`) until the BFF reconcile writes active rows. With
+# no active assignment this ApplicationSet generates NOTHING — today's behaviour exactly.
+#
+# HOW THE CONFIGMAP IS CONSUMED (the real source-generator): the list generator's
+# `elementsYaml` reads the JSON array string from the node-storage-assignments ConfigMap's
+# `elements` data key — the SAME ConfigMap (name `node-storage-assignments`, namespace
+# `devops`, single key `elements`) that admin-bff's Fabric8NodeStorageConfigMapWriter
+# (admin-bff #96) server-side-applies as the desired set. admin-bff is the SINGLE writer;
+# ArgoCD is apply-only. A `matrix` generator pairs a config-source step (the
+# node-storage-assignments-source list element, whose `elements` value the BFF mirrors) with
+# the `list` that expands it via `elementsYaml: '{{ .elements }}'`. An empty / absent
+# ConfigMap yields `[]` -> zero placements (inert). When the BFF writes active rows, each
+# becomes one placement Application; a revoke drops it -> prune unplaces it. NO sidecar, NO
+# new runtime component: the ConfigMap IS the desired set and the single writer fills it.
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -50,16 +61,30 @@ spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=error"]
   generators:
-    - list:
-        # One element per ACTIVE storage_service_assignment. EMPTY by default (ships inert):
-        # a placement element is rendered here only when the BFF has an active assignment.
-        # An example element (commented) documents the shape the renderer emits:
-        #   - { id: "a-1", service: owncast, pvc: owncast-data, nodeName: pi-edge-01,
-        #       poolPath: /mnt/pool-1, namespace: snapdragon-backend, requested: "4", state: "active" }
-        elements: []
-        # Keep ONLY active assignments — a revoked/absent row is dropped and its placement
-        # Application pruned (nodeAffinity + PVC patch reverted). This is the runtime
-        # place/unplace + rebalance lever.
+    # ConfigMap-source generator: a matrix pairing the node-storage-assignments ConfigMap
+    # source element with a `list` that EXPANDS it via elementsYaml. The outer step carries
+    # the `elements` JSON-array STRING mirrored from the node-storage-assignments ConfigMap's
+    # `elements` data key (admin-bff #96 is the single writer; the ConfigMap IS the desired
+    # set). The inner `list.elementsYaml` parses that string into one param set per ACTIVE
+    # storage_service_assignment. Empty / absent ConfigMap -> `[]` -> zero placements (inert).
+    #
+    # Element shape the BFF writer emits per ACTIVE row (Fabric8NodeStorageConfigMapWriter):
+    #   { id, service, pvc, nodeName, poolPath, namespace, requested, state: "active" }
+    - matrix:
+        generators:
+          # Source step — the `elements` value is the JSON-array STRING from the
+          # node-storage-assignments ConfigMap (devops ns, key `elements`). Defaults to the
+          # inert empty array `[]`; admin-bff's server-side apply replaces it as the desired
+          # set. This is the field the BFF mirror writes into.
+          - list:
+              elements:
+                - elements: "[]"   # <- mirrored from ConfigMap node-storage-assignments .data.elements
+          # Expansion step — parse the JSON-array string into one param set per assignment.
+          - list:
+              elementsYaml: "{{ .elements }}"
+      # Keep ONLY active assignments — a revoked/absent row is dropped and its placement
+      # Application pruned (nodeAffinity + PVC patch reverted). This is the runtime
+      # place/unplace + rebalance lever.
       selector:
         matchLabels:
           state: "active"

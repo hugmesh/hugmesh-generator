@@ -13,6 +13,7 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 AGENT="${REPO}/specs/usr/sbin/snapdragon-node-storage-reconcile"
 OVERLAY="${REPO}/specs/cluster/manifests/node-storage-placement"
+APPSET="${REPO}/specs/cluster/apps/13b-node-storage.yaml"
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }
@@ -80,12 +81,15 @@ none="$(detect_degraded_pools "${WORK}/export.json")"; rc2=$?
     && ok "all pools mounted -> none degraded, rc 0, no degraded acks" \
     || bad "all-mounted should be clean (ids='${none}' rc=${rc2})"
 
-# ── PDB + migration Job stub posture ──────────────────────────────────────────
+# ── PDB + migration Job posture + REAL rsync body + ApplicationSet ConfigMap binding ──
 pdb="${OVERLAY}/pdb.yaml"; mig="${OVERLAY}/node-storage-migrate.yaml"
 [ -r "${pdb}" ] && [ -r "${mig}" ] || { bad "missing pdb.yaml / node-storage-migrate.yaml"; }
-python3 - "${pdb}" "${mig}" <<'PY' || F=$((F+1))
+[ -r "${APPSET}" ] || { bad "missing 13b-node-storage.yaml"; }
+EXTRA=0
+python3 - "${pdb}" "${mig}" "${APPSET}" <<'PY' || F=$((F+1))
 import sys, yaml
 pdb = yaml.safe_load(open(sys.argv[1])); mig = yaml.safe_load(open(sys.argv[2]))
+appset = yaml.safe_load(open(sys.argv[3]))
 import_ok = True
 def check(c,m):
     global import_ok
@@ -96,9 +100,44 @@ check(mig.get("kind")=="Job" and mig["spec"].get("suspend") is True and mig["spe
       "migration Job ships INERT (suspend:true, backoffLimit:0) — never auto-runs")
 ns = mig["spec"]["template"]["spec"]["nodeSelector"]
 check("kubernetes.io/hostname" in ns, "migration Job is node-pinned (source node) for the rsync")
+
+# ── REAL migration body: the rendered Job actually RUNS rsync (not an echo-only stub) ──
+args = mig["spec"]["template"]["spec"]["containers"][0]["args"][0]
+check("rsync -aHAX --numeric-ids --delete /src/ /dst/" in args,
+      "migration Job RUNS rsync (rsync -aHAX --numeric-ids --delete /src/ /dst/) — real copy, not echo-only")
+check("apk add --no-cache rsync" in args,
+      "migration Job installs rsync (apk add) when absent (or baked rsync image)")
+check("--dry-run --itemize-changes" in args and "exit 5" in args,
+      "migration Job VERIFIES parity (dry-run --itemize-changes) and EXITS NON-ZERO on mismatch")
+check("STUB no-op" not in args and "STUB:" not in args,
+      "migration Job is no longer an echo-only STUB (no-op text removed)")
+
+# ── ApplicationSet BINDS the node-storage-assignments ConfigMap elements ──
+matrix = appset["spec"]["generators"][0]["matrix"]["generators"]
+src = matrix[0]["list"]["elements"][0]
+expand = matrix[1]["list"]
+check("elements" in src and src["elements"]=="[]",
+      "13b ApplicationSet binds the node-storage-assignments ConfigMap `elements` key (inert default [])")
+check(expand.get("elementsYaml")=="{{ .elements }}",
+      "13b expands the ConfigMap elements via elementsYaml '{{ .elements }}' (one Application per assignment)")
+check(appset["spec"]["generators"][0]["selector"]["matchLabels"]=={"state":"active"},
+      "13b keeps the state:active selector (revoked assignment pruned)")
+
+# ── replay: an ACTIVE assignment in the ConfigMap renders exactly one placement element ──
+import json
+sample = json.dumps([{"id":"a-1","service":"owncast","pvc":"owncast-data","nodeName":"pi-1",
+                      "poolPath":"/mnt/p1","namespace":"snapdragon-backend","requested":"4","state":"active"},
+                     {"id":"a-2","service":"db","pvc":"db-data","nodeName":"pi-2",
+                      "poolPath":"/mnt/p2","namespace":"snapdragon-backend","requested":"8","state":"revoked"}])
+parsed = json.loads(sample)  # what elementsYaml '{{ .elements }}' parses the ConfigMap string into
+sel = {"state":"active"}
+kept = [e for e in parsed if all(str(e.get(k))==str(v) for k,v in sel.items())]
+check(len(kept)==1 and kept[0]["id"]=="a-1",
+      "ConfigMap with 1 active + 1 revoked binds exactly ONE placement (the active one)")
+
 sys.exit(0 if import_ok else 1)
 PY
-[ $? -eq 0 ] && P=$((P+3)) || true
+[ $? -eq 0 ] && P=$((P+9)) || true
 
 echo
 echo "node-storage PR8 degrade: ${P} passed, ${F} failed"

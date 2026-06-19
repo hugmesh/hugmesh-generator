@@ -33,10 +33,29 @@ check(a.get("kind")=="ApplicationSet" and a["metadata"]["name"]=="node-storage" 
       "13b is an ApplicationSet 'node-storage' in devops", "13b must be ApplicationSet node-storage/devops")
 
 gens = a["spec"]["generators"]
-listgen = gens[0]["list"]
 
-# 2. ships INERT: zero elements.
-check(listgen.get("elements")==[], "ships INERT: elements: [] (zero placements = today's behaviour)", "elements must be empty (inert): %r" % listgen.get("elements"))
+# The 13b generator is a ConfigMap-source matrix: a SOURCE list element carrying the
+# `elements` JSON-array string mirrored from the node-storage-assignments ConfigMap, paired
+# with an expansion list that parses it via elementsYaml.
+matrix = gens[0]["matrix"]
+mgens = matrix["generators"]
+source_gen = mgens[0]["list"]
+expand_gen = mgens[1]["list"]
+
+# 2a. ConfigMap-source: the source step carries an `elements` JSON-array string (the ConfigMap
+#     .data.elements mirror), and the expansion step parses it via elementsYaml.
+src_elems = source_gen.get("elements")
+check(isinstance(src_elems, list) and len(src_elems)==1 and "elements" in src_elems[0],
+      "ConfigMap-source: source list carries the node-storage-assignments `elements` key",
+      "source list must carry an `elements` key (the ConfigMap mirror): %r" % src_elems)
+check(expand_gen.get("elementsYaml")=="{{ .elements }}",
+      "expansion via elementsYaml '{{ .elements }}' (parses the ConfigMap JSON array)",
+      "expansion must be elementsYaml '{{ .elements }}': %r" % expand_gen.get("elementsYaml"))
+
+# 2b. ships INERT: the source `elements` value is the empty JSON array `[]` (zero placements).
+check(src_elems[0].get("elements")=="[]",
+      "ships INERT: source elements value is `[]` (empty ConfigMap => zero placements)",
+      "source elements must default to '[]' (inert): %r" % src_elems[0].get("elements"))
 
 # 3. selector gates on state:active (the place/unplace lever), like 13a's installed:true.
 sel = gens[0]["selector"]["matchLabels"]
@@ -54,14 +73,18 @@ check("{{ .id }}" in nm, "template name keyed on assignment id: %s" % nm, "templ
 path = a["spec"]["template"]["spec"]["source"]["path"]
 check(path.endswith("node-storage-placement"), "source path is the placement overlay (nodeAffinity+PVC)", "source path wrong: %s" % path)
 
-# 7. modelled on 13a: same generator SHAPE (a single list generator + a sibling selector +
-#    prune:true). Compare structural keys, not values.
+# 7. modelled on 13a: a sibling state-selector + prune:true (13b adds the ConfigMap-source
+#    matrix wrapper around the proven list-generator + selector + prune lever).
 b = yaml.safe_load(open(a13a_p))
-def shape(doc):
-    g = doc["spec"]["generators"][0]
-    return ("list" in g, "selector" in g,
-            doc["spec"]["template"]["spec"]["syncPolicy"]["automated"].get("prune"))
-check(shape(a)==shape(b), "modelled on 13a: list-generator + sibling selector + prune:true", "13b generator shape diverges from 13a: %r vs %r" % (shape(a), shape(b)))
+g13a = b["spec"]["generators"][0]
+check("list" in g13a and "selector" in g13a, "13a is the proven list-generator + sibling selector pattern", "13a shape unexpected")
+# 13b wraps the same list mechanism in a matrix (ConfigMap-source) but keeps the SAME sibling
+# selector + prune:true lever.
+check("selector" in gens[0]
+      and a["spec"]["template"]["spec"]["syncPolicy"]["automated"].get("prune") is True
+      and b["spec"]["template"]["spec"]["syncPolicy"]["automated"].get("prune") is True,
+      "modelled on 13a: sibling state-selector + prune:true (matrix-wrapped list source)",
+      "13b must keep the 13a sibling selector + prune:true lever")
 
 # 8. SELECTOR LEVER semantics — replay ArgoCD's list-generator + matchLabels filter.
 def argocd_select(elements, match):
