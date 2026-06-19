@@ -12,7 +12,13 @@ The platform splits into two tiers:
   snapdragon.games portal + its own games-realm Casdoor), **owncast** (HLS
   live-streaming, GPU-gated x86), **tube** (LocalTube YouTube archive, GPU-gated
   x86). (Plus the non-user-level optional slugs **egress-vpn** / **workloadConsole**
-  / **anubis**, gated by the same registry.)
+  / **anubis** / **coturn**, gated by the same registry.)
+
+  **coturn** (TURN/STUN relay for Matrix WebRTC audio/video) is a DEFAULT-OFF,
+  **runtime-only** slug (anubis pattern: `apps: []`, no baked Application) that
+  lands in `snapdragon-backend` next to tuwunel so they share one TURN secret. When
+  off, Matrix calls keep host-only ICE (`iceServers: []`) — byte-identical to
+  mainline. See [`docs/COTURN.md`](COTURN.md).
 
 The optional services are **add/remove-by-command on any generated USB image**,
 **identically on Pi5 (arm64) and x86 (amd64)** — the gate operates on the

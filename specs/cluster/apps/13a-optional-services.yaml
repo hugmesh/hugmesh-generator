@@ -62,6 +62,14 @@ spec:
           # pre-cut-over no-collision rule); the ConfigMap mirror is the real
           # toggle this selector reads at runtime.
           - { slug: anubis,  path: specs/cluster/manifests/anubis,        namespace: snapdragon-frontend, installed: "false" }
+          # coturn — TURN/STUN relay for Matrix WebRTC (DEFAULT-OFF, RUNTIME-ONLY).
+          # Like anubis, coturn ships NO baked bootstrap Application: it is wired
+          # ONLY here. installed:"false" is the SAFE DEFAULT (no pod, clients keep
+          # host-only ICE). Flip to "true" (+ the installed-services ConfigMap
+          # coturn flag) to add it on a LIVE cluster — the per-domain add/remove
+          # lever. lands in snapdragon-backend so it shares the TURN shared secret
+          # with tuwunel.
+          - { slug: coturn,  path: specs/cluster/manifests/coturn,        namespace: snapdragon-backend,  installed: "false" }
         # Keep ONLY installed elements — a slug flipped to "false" is dropped and
         # its Application pruned. This is the runtime add/remove lever.
       selector:

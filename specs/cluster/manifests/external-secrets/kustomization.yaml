@@ -22,6 +22,12 @@ resources:
   # slug is deselected the build prunes BOTH its app(s) AND its line here.
   - akkoma-externalsecrets.yaml    # akkoma-proxy-mtls + akkoma-admin
   - tuwunel-externalsecrets.yaml   # tuwunel-proxy-mtls + tuwunel-admin
+  # coturn TURN/STUN long-term-credential SHARED SECRET (key `secret`), ESO/Vault
+  # only (secret/snapdragon/coturn-shared-secret) — NEVER inline. Materializes only
+  # once that Vault path is populated; coturn is DEFAULT-OFF so a default build never
+  # mounts it. The SAME Secret is consumed by both coturn (validates client creds)
+  # and tuwunel (mints them) so there is one source of truth and no drift.
+  - coturn-externalsecrets.yaml    # coturn-shared-secret
   # Velero object-store credentials (ns velero, key `cloud`) — the Velero server +
   # BSL credential, templated from Vault secret/<brand>/velero. ESO/Vault only,
   # never inline. Materializes only once the velero namespace exists + the Vault

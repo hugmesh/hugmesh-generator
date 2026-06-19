@@ -1,0 +1,70 @@
+# coturn NetworkPolicy — PUBLIC STUN/TURN ingress + DNS/relay egress.
+#
+# UNLIKE the homeservers (akkoma/tuwunel, which are default-DENY egress and
+# reachable only via their mTLS proxy), coturn is a PUBLIC-facing UDP relay: STUN
+# binding requests + TURN allocations + the relayed media MUST be reachable from
+# arbitrary clients, and relayed packets MUST egress directly to public peers. This
+# policy therefore allows broad ingress on the STUN/TURN ports + relay window and
+# direct egress on the relay window, while still default-denying everything else.
+#
+# coturn carries app=snapdragon-coturn (NOT app.kubernetes.io/name in the
+# homeserver NotIn set), so the homeserver-isolation/homeserver-egress backstops do
+# NOT select it — it is a distinct app with its own policy here.
+#
+# EGRESS-VPN INTERACTION (optional): when egress-vpn is selected AND coturn is named
+# in an assignment, the reconcile agent adds snapdragon.systems/vpn-egress=true to
+# the coturn pod and the egress-vpn-interaction NetworkPolicy tunnels its direct
+# egress through wg0. coturn works WITHOUT that label (public relay, not federated),
+# so the label is OPTIONAL — this policy always permits direct relay egress.
+#
+# SAFE-BY-DEFAULT: this manifest ships only when coturn is deployed (the whole
+# manifests/coturn dir is gated behind the DEFAULT-OFF coturn toggle), so a default
+# build adds no policy and is byte-identical to today's mainline.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: coturn-allow
+  namespace: snapdragon-backend
+  labels:
+    app.kubernetes.io/name: coturn
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/optional-service: coturn
+spec:
+  podSelector:
+    matchLabels:
+      app: snapdragon-coturn
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # STUN/TURN (RFC 5389/5766) 3478 + TLS 5349 — public service, any source.
+    - from:
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - { protocol: UDP, port: 3478 }
+        - { protocol: TCP, port: 3478 }
+        - { protocol: UDP, port: 5349 }
+        - { protocol: TCP, port: 5349 }
+    # TURN relay window (UDP) — must match min-port/max-port in turnserver.conf.
+    - from:
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - { protocol: UDP, port: 49152, endPort: 49200 }
+  egress:
+    # DNS (CoreDNS in kube-system).
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # Direct relay egress to PUBLIC peers (UDP). Cluster-internal CIDRs are
+    # EXCLUDED — coturn must NOT relay into the pod/service/tailnet ranges (the
+    # turnserver.conf denied-peer-ip lines are the in-process backstop for the same
+    # rule). The relayed media leaves on ephemeral source ports, so the relay-window
+    # destination ports are not constrained here.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.244.0.0/16   # pod CIDR
+              - 10.96.0.0/12    # service CIDR
+              - 100.64.0.0/10   # tailnet/CGNAT

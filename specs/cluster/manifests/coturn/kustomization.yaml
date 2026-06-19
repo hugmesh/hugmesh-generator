@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: snapdragon-backend
+resources:
+  - service-account.yaml
+  - deployment.yaml        # ConfigMap (turnserver.conf, secret-free) + Deployment + Service
+  - network-policy.yaml
+
+# coturn is an UPSTREAM (third-party) image pinned to an explicit tag for
+# supply-chain reasons (like anubis); it is pulled from Docker Hub, NOT rewritten
+# to the in-cluster GitLab registry. Pin bumps happen here.
+images:
+  - { name: coturn/coturn, newName: coturn/coturn, newTag: 4.6.2 }

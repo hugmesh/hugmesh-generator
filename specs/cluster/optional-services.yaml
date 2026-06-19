@@ -253,6 +253,47 @@ spec:
       federationModule: { slug: owncast, mountAt: /owncast, changeset: "031-register-owncast-module.xml" }
       casdoorSeed: null
 
+    # ── coturn — TURN/STUN relay for Matrix WebRTC audio/video (DEFAULT-OFF) ───
+    # coturn relays peer-to-peer Matrix (tuwunel) voice/video when a direct ICE
+    # path fails. It lands in snapdragon-backend ALONGSIDE tuwunel so the
+    # long-term-credential shared secret (Secret coturn-shared-secret, ESO-synced
+    # from Vault) is reachable by BOTH coturn (validates client creds) and tuwunel
+    # (mints them — turn_secret in tuwunel.toml references the SAME secret).
+    #
+    # RUNTIME-ONLY (anubis pattern): NO hardcoded apps/*.yaml. Unlike akkoma/owncast
+    # (which ship a bootstrap-seed Application the build-time gate prunes), coturn is
+    # wired ONLY through the runtime optional-services ApplicationSet (apps/13a) with
+    # installed:"false". This keeps it genuinely DEFAULT-OFF without a build-time
+    # prune branch (the recurse root would otherwise auto-deploy a baked Application),
+    # and it is created/pruned at runtime by flipping the `coturn` flag in the
+    # installed-services ConfigMap (the documented live add/remove lever) + the 13a
+    # element. A DEFAULT build is byte-identical to today's mainline (no pod, Matrix
+    # clients keep host-only ICE: iceServers:[]).
+    #
+    # coturn owns NO gateway HOST and NO gateway routes: it is a direct UDP/TCP relay
+    # (3478 STUN/TURN + 5349 TLS + a relay window), discovered by clients via the
+    # Matrix voip/turnServer endpoint tuwunel serves — NOT via the be-gateway. PUBLIC
+    # reachability of those ports (NodePort/LoadBalancer + external-ip + firewall) is
+    # DEFERRED operator/cluster-topology work (docs/COTURN.md).
+    - slug: coturn
+      displayName: "coturn (TURN/STUN server)"
+      namespace: snapdragon-backend
+      default: off
+      # RUNTIME-ONLY: no bootstrap Application (see header) — gated solely by the
+      # 13a ApplicationSet element + the installed-services ConfigMap flag.
+      apps: []
+      sharedApps: []
+      manifestPath: manifests/coturn
+      # Per-service ExternalSecret file (the TURN long-term-credential shared
+      # secret; ESO/Vault only, never inline). Shared by coturn + tuwunel.
+      esoFile: manifests/external-secrets/coturn-externalsecrets.yaml
+      esoKeys: [coturn-shared-secret]
+      gatewayHost: null           # no public HTTP host; direct UDP/TCP relay
+      gatewayRouteIds: []         # no gateway routes
+      routeAccessRows: []         # no gateway route-access gating
+      federationModule: null      # signalled to clients via Matrix voip/turnServer
+      casdoorSeed: null
+
     # ── egress-vpn — node-level split-tunnel egress VPN (DEFAULT-OFF) ──────────
     # UNLIKE the others, egress-vpn is a NODE service (a wg-quick/openvpn OpenRC
     # service + a signed-export reconcile agent on the MESH NODES), NOT a cluster

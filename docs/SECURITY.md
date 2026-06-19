@@ -85,6 +85,7 @@ Vault-managed mTLS keystore:
 | `velero` (cloud-backup controller — server) | `velero` | `s0:c64` | — (no Casdoor user; cluster controller) | (non-Java: no JKS) |
 | `velero-node-agent` (Kopia filesystem/PV backups) | `velero` | `s0:c65` | — | (non-Java: no JKS) |
 | `backups-status-sweep` (cloud-backup CR-status sweep CronJob) | `backups-sweep` | `s0:c66` | — | (non-Java: no JKS) |
+| coturn (TURN/STUN — optional, default-off) | `sa-coturn` | `s0:c67` | per-app svc user | (non-Java: no JKS) |
 
 The matrix is the contract: `seLinuxOptions.level` per Deployment (added to each
 chart/manifest), a `ServiceAccount` per app, a Casdoor service user+role created
@@ -125,6 +126,18 @@ cannot read another's category-isolated volumes.
 > its own. The whole leg ships dark (app 55/56 manual-sync + the admin-bff
 > `app.backups.effector.enabled=false` default), so these categories are reserved
 > correct-by-construction and become live only on a deliberate superadmin opt-in.
+
+> **`coturn` TURN-relay MCS note:** the OPTIONAL, DEFAULT-OFF coturn relay
+> (`specs/cluster/manifests/coturn/`) carries category `s0:c67` on its pod
+> `securityContext.seLinuxOptions.level` (`deployment.yaml`) and runs as the
+> dedicated SA `sa-coturn` (`service-account.yaml`,
+> `automountServiceAccountToken:false` — coturn needs no Kubernetes API). It
+> co-resides in `snapdragon-backend` with tuwunel (`s0:c32`) so they can share the
+> ESO-synced TURN long-term-credential secret (`coturn-shared-secret`), but the
+> unique MCS category keeps the two pods category-isolated. coturn ships dark
+> (RUNTIME-ONLY: no baked Application; gated by the apps/13a element +
+> `installed-services` ConfigMap `coturn:"false"`), so the category becomes live
+> only on a deliberate per-domain opt-in. See [`docs/COTURN.md`](COTURN.md).
 
 > **Node-service custom domains:** the host-service SELinux domains in
 > [`specs/selinux/*.te`](../specs/selinux/) are part of this contract for
