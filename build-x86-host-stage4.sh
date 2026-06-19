@@ -1438,7 +1438,7 @@ done
 # SELinux only activates if CONFIG_LSM is a clean, well-formed string. x86 has no
 # lsm= on the GRUB cmdline to override a corrupted builtin, so a stray quote here
 # would silently ship SELinux DISABLED. Assert the exact intended value.
-grep -q '^CONFIG_LSM="yama,selinux,bpf"\$' .config || { echo "[build-x86] ERROR: CONFIG_LSM malformed (expected yama,selinux,bpf); SELinux would not activate"; exit 1; }
+grep -q '^CONFIG_LSM="lockdown,yama,selinux,bpf"\$' .config || { echo "[build-x86] ERROR: CONFIG_LSM malformed (expected lockdown,yama,selinux,bpf); SELinux would not activate"; exit 1; }
 make -j${JOBS} bzImage modules
 make modules_install
 make install
@@ -1690,7 +1690,7 @@ build_img() {
     if [ -f "${root_mnt}/etc/default/grub" ]; then
         cmdline="$(. "${root_mnt}/etc/default/grub"; printf '%s' "${GRUB_CMDLINE_LINUX:-}")"
     fi
-    [ -z "${cmdline}" ] && cmdline="lsm=yama,selinux,bpf selinux=1 audit=1"
+    [ -z "${cmdline}" ] && cmdline="lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1"
     mkdir -p "${root_mnt}/boot/grub"
     {
         echo "set timeout=5"
@@ -1808,7 +1808,7 @@ CHROOT
         fi
         # Unify the cmdline with the .img: source GRUB_CMDLINE_LINUX from the same
         # grub defaults (full KSPP/LSM/audit/cgroup hardening), not a short literal.
-        LIVE_CMDLINE="$(. "${SPECS_DIR}/etc/default/grub"; printf '%s' "${GRUB_CMDLINE_LINUX:-lsm=yama,selinux,bpf selinux=1}")"
+        LIVE_CMDLINE="$(. "${SPECS_DIR}/etc/default/grub"; printf '%s' "${GRUB_CMDLINE_LINUX:-lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1}")"
         cat > "${ISO_DIR}/boot/grub/grub.cfg" <<EOF
 set timeout=5
 set default=0
