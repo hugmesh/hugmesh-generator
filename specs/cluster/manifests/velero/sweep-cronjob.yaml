@@ -82,6 +82,14 @@ spec:
             runAsNonRoot: true
             runAsUser: 65532
             seccompProfile: { type: RuntimeDefault }
+            # SELinux MCS isolation (docs/SECURITY.md §3): the status-sweep is its
+            # own pod in the `velero` namespace, so it carries a unique MCS category
+            # `s0:c66` (server c64 / node-agent c65). The effector identity itself
+            # runs INSIDE the admin-bff pod (already `s0:c23`), so it needs no level
+            # here. seLinuxOptions set pod-level; all other securityContext above
+            # left as-is.
+            seLinuxOptions:
+              level: "s0:c66"
           containers:
             - name: sweep
               # kubectl pinned (no :latest) — the only tool the sweep needs.

@@ -105,6 +105,20 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits:   { cpu: "1",  memory: 1Gi }
+          # ── SELinux MCS isolation (node-agent pod) ──────────────────────────
+          # The node-agent is a SEPARATE pod from the Velero server, so per the
+          # docs/SECURITY.md §3 contract it carries its OWN unique MCS category
+          # `s0:c65` (the server takes `s0:c64`). Set at BOTH the pod level (the
+          # volume-relabel context) and the container level — the same supported
+          # values-override shape the cassandra leg uses (apps/00-cassandra.yaml),
+          # only `seLinuxOptions.level` set, every other chart securityContext
+          # default left untouched (no fork, no template patch).
+          podSecurityContext:
+            seLinuxOptions:
+              level: "s0:c65"
+          containerSecurityContext:
+            seLinuxOptions:
+              level: "s0:c65"
 
         # ── Velero server ─────────────────────────────────────────────────────
         # Pin the server onto a devops/amd64 node (same placement ArgoCD uses).
@@ -113,6 +127,21 @@ spec:
         resources:
           requests: { cpu: 100m, memory: 256Mi }
           limits:   { cpu: "1",  memory: 1Gi }
+
+        # ── SELinux MCS isolation (server pod) ────────────────────────────────
+        # docs/SECURITY.md §3: the Velero server gets the first free unique MCS
+        # category `s0:c64` so a compromised server pod cannot read another
+        # workload's category-isolated volumes. Set at BOTH pod level (governs the
+        # volume relabel context) and container level, mirroring the cassandra
+        # precedent (apps/00-cassandra.yaml) — a clean, supported values override
+        # of ONLY `seLinuxOptions.level`; all other chart securityContext defaults
+        # untouched (no fork). The node-agent (above) carries `s0:c65`.
+        podSecurityContext:
+          seLinuxOptions:
+            level: "s0:c64"
+        containerSecurityContext:
+          seLinuxOptions:
+            level: "s0:c64"
 
         # Server metrics for the observability stack (no public exposure).
         metrics:

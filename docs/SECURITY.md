@@ -82,6 +82,9 @@ Vault-managed mTLS keystore:
 | phpbb (forum) | per-app SA | `s0:c51` | per-app svc user | — |
 | phpbb-db (forum) | per-app SA | `s0:c50` | (DB) | — |
 | `cassandra` (gateway revocation + URL registry) | per-app SA | `s0:c63` | (DB) | (non-Java) |
+| `velero` (cloud-backup controller — server) | `velero` | `s0:c64` | — (no Casdoor user; cluster controller) | (non-Java: no JKS) |
+| `velero-node-agent` (Kopia filesystem/PV backups) | `velero` | `s0:c65` | — | (non-Java: no JKS) |
+| `backups-status-sweep` (cloud-backup CR-status sweep CronJob) | `backups-sweep` | `s0:c66` | — | (non-Java: no JKS) |
 
 The matrix is the contract: `seLinuxOptions.level` per Deployment (added to each
 chart/manifest), a `ServiceAccount` per app, a Casdoor service user+role created
@@ -103,6 +106,25 @@ cannot read another's category-isolated volumes.
 > (`specs/cluster/apps/00-cassandra.yaml`) — only `seLinuxOptions.level` is set;
 > all other securityContext chart defaults are untouched. This is a clean values
 > override (no chart fork / template patch), so it is **not** an exemption.
+
+> **`velero` cloud-backups MCS note:** the opt-in/inert cloud-backups leg
+> (`specs/cluster/apps/55-velero.yaml`, `specs/cluster/manifests/velero/`) runs
+> THREE distinct pods in the `velero` namespace, each with its own unique
+> category: the Velero **server** `s0:c64` and the **node-agent** DaemonSet
+> `s0:c65` are injected via the upstream Velero 12.0.3 chart's **supported**
+> `podSecurityContext.seLinuxOptions` + `containerSecurityContext.seLinuxOptions`
+> (and `nodeAgent.podSecurityContext` / `nodeAgent.containerSecurityContext`)
+> values keys — only `seLinuxOptions.level` set, all other chart securityContext
+> defaults untouched (same clean values override as cassandra, no fork). The
+> `backups-status-sweep` CronJob carries `s0:c66` on its pod `securityContext`
+> (`specs/cluster/manifests/velero/sweep-cronjob.yaml`). The admin-bff
+> `cloudbackup` **effector** identity (k8s SA `backups-effector`, granted
+> create/get/list/patch on `velero.io` Backup/Restore via
+> `specs/cluster/manifests/velero/rbac.yaml`) runs INSIDE the `admin-bff` pod and
+> therefore inherits `admin-bff`'s `s0:c23` — it does **not** take a category of
+> its own. The whole leg ships dark (app 55/56 manual-sync + the admin-bff
+> `app.backups.effector.enabled=false` default), so these categories are reserved
+> correct-by-construction and become live only on a deliberate superadmin opt-in.
 
 > **Node-service custom domains:** the host-service SELinux domains in
 > [`specs/selinux/*.te`](../specs/selinux/) are part of this contract for
