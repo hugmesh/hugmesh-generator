@@ -342,6 +342,13 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- fe() row + SecurityConfig PUBLIC_PATHS (snapdragon-gateway PR #22). EXACT path
   -- (not /bff/public/**) so most-specific-match keeps ONLY this resolver anonymous.
   ('snapdragon-fe-gateway',  '/bff/public/appeal-contact', 'PUBLIC', true),  -- public appeal-contact resolver (UNAUTHENTICATED)
+  -- SSO OIDC callback (UNAUTHENTICATED): Casdoor redirects the browser back here with
+  -- the auth code BEFORE any session exists, so login-ui POSTs the code to user-bff
+  -- /bff/auth/callback with no bff_/JWT. Must be PUBLIC at the gateway (the matching
+  -- gateway SecurityConfig PUBLIC_PATHS entry lets the anonymous POST reach it). Exact
+  -- path so most-specific-match keeps ONLY the callback anonymous; the swap filter +
+  -- the ROLE_USER/ROLE_ADMIN rows still gate every post-login /bff/** call.
+  ('snapdragon-fe-gateway',  '/bff/auth/callback',    'PUBLIC',         true),
   ('snapdragon-fe-gateway',  '/bff/login',            'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/register/**',      'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/provision/**',     'ROLE_USER',      true),

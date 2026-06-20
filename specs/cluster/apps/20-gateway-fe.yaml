@@ -134,6 +134,32 @@ spec:
           - id: snapdragon-forum-bff-api
             uri: https://snapdragon-forum-bff-api.snapdragon-backend.svc.cluster.local:8080
             path: /bff/forum/**
+          # SSO login/session/registration RELOCATED admin-bff -> user-bff-api: login
+          # is a user concern, so the user BFF now owns /bff/login, /bff/register,
+          # /bff/me, /bff/session, /bff/provision AND the new OIDC token-handler
+          # callback (/bff/auth/callback). These are MORE-SPECIFIC than the /bff/**
+          # admin-bff catch-all below, so — like the mod/user/forum siblings above —
+          # they MUST be declared FIRST to win the route match. (The internal
+          # bff_->JWT exchange endpoint /bff/internal/** is NOT routed here: the
+          # gateway's BffJwtExchangeWebFilter calls user-bff in-cluster directly.)
+          - id: snapdragon-user-bff-api-login
+            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/login
+          - id: snapdragon-user-bff-api-register
+            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/register/**
+          - id: snapdragon-user-bff-api-me
+            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/me/**
+          - id: snapdragon-user-bff-api-session
+            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/session
+          - id: snapdragon-user-bff-api-provision
+            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/provision/**
+          - id: snapdragon-user-bff-api-oidc-callback
+            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/auth/callback
           - id: snapdragon-admin-bff-api
             uri: https://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
             path: /bff/**

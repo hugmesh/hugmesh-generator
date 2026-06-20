@@ -33,6 +33,12 @@ data:
         "pki-gateway": "ROLE_GATEWAY", "be-gateway": "ROLE_GATEWAY",
         "fe-gateway": "ROLE_GATEWAY",
         "api": "ROLE_API", "admin-bff": "ROLE_ADMIN_API",
+        # user-bff is the SSO TOKEN-HANDLER confidential client: login-ui drives a
+        # Casdoor OIDC authorization-code redirect and user-bff does the server-side
+        # code->token exchange + refresh, custody-holding the JWT keyed to the opaque
+        # bff_ session (browser never sees the JWT). reconcile_app() gives it the
+        # OIDC-specific overrides (refresh_token grant + login-ui callback redirect).
+        "user-bff": "ROLE_API",
         "matrix": "ROLE_USER", "mastodon": "ROLE_USER",
         # client-credentials machine app for the remote-fragment sync sidecar: it
         # mints a SERVICE JWT to read the federation manifest/bundles. ROLE_USER is
@@ -119,6 +125,19 @@ data:
             "tokenFields": JWT_CUSTOM_TOKEN_FIELDS,
             "tokenAttributes": JWT_CUSTOM_TOKEN_ATTRIBUTES,
         }
+        # SSO token-handler overrides for the user-bff confidential client (the BFF
+        # that login-ui's OIDC redirect lands in, via the gateway). It does the
+        # server-side authorization_code -> token exchange and refreshes the held
+        # JWT, so it needs the refresh_token grant + the LOGIN-UI callback registered
+        # as a redirect_uri (must byte-match what login-ui sends at /login/callback)
+        # + a shorter access-token lifetime (refresh_token covers longevity, keeping
+        # the held-JWT/MFA-freshness window short). Single-domain seed
+        # (…snapdragon.systems) matching the confidential apps' convention; per-brand
+        # callback hosts layer via the rebrand/handlebars path, not here.
+        if name == "user-bff":
+            app["grantTypes"] = app["grantTypes"] + ["refresh_token"]
+            app["redirectUris"] = ["https://snapdragon.systems/login/callback"]
+            app["expireInHours"] = 4
         try:
             existing = call(f"/api/get-application?id=admin/{appname}")
         except urllib.error.HTTPError:
