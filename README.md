@@ -32,6 +32,88 @@ into one work dir via `make build-all`. Override a subdir name with
 `--build-subdir NAME` (or `BUILD_SUBDIR=NAME`). `make clean` wipes the work dir,
 subdirs included.
 
+## Current State
+
+_As of 2026-06-20. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
+
+- **✅ Hardened image fleet** — three RPi 5 role images (pki / backend / frontend)
+  + the x86_64 GPU host, all SELinux **ENFORCING** with per-app MCS identities,
+  built compact and grown on first boot; the opt-in Frite light desktop client
+  rides the same arm64 cross path + mesh/KEYS provisioning.
+- **✅ Unified Spring baseline** — the baked GitOps payload now targets **Spring
+  Boot 4.0.2 / Spring Cloud 2025.1** on Java, with the shared Maven artifacts
+  **`snapdragon-parent`** (metapom, 2.0.0), **`snapdragon-commons`** (shared
+  security/tenancy, `systems.snapdragon.commons.*`, 2.0.0) and the new
+  **`snapdragon-auth-core`** (2.0.0 — shared account/session/MFA/Casdoor-admin
+  infra; depends on commons; consumed by **user-bff + admin-bff only**).
+  `federation-api` was migrated onto this baseline.
+- **✅ SSO auth model wired into the cluster payload (data plane)** — Casdoor is
+  the SSO IdP. `login-ui` does a Casdoor OIDC authorization-code (PKCE) redirect;
+  **user-bff** does the server-side code→token exchange and holds per-session JWT
+  custody/refresh. The browser only ever holds an **OPAQUE `bff_`-prefixed**
+  session (the user never sees their own Casdoor JWT). The gateway is a pure
+  Casdoor-JWT OAuth2 resource server: a pre-security exchange filter swaps
+  `bff_` → the internal custody JWT so JWT validation + the role gate run
+  unchanged. Authorization is **data-driven by the `gateway_route_access`
+  Postgres table** (source of truth) via `GatewayRouteAccessFilter` —
+  ADMIN/GAME-MASTER bypass within own domain, SUPERADMIN cross-domain. Cloudflare
+  fronts prod. **Login/session/account logic is RELOCATING from admin-bff →
+  user-bff** (the shared core lives in `snapdragon-auth-core`); account/session
+  **data stays in admin-bff-db**, reached by user-bff via admin-bff
+  `/bff/internal` over mTLS + `X-Internal-Token`. The generator leg of this
+  relocation (user-bff Casdoor OIDC client, relocated `/bff/login|register|me|
+  session|provision` + `/bff/auth/callback` fe-gateway routes, PUBLIC callback
+  route-access seed) is **🚧 in-flight (PR-1/5, ships dark)**.
+- **✅ SCG-5 route config** — Spring Cloud Gateway 5.0 moved route config from
+  `spring.cloud.gateway.routes` to `spring.cloud.gateway.server.webflux.routes`
+  (the legacy prefix silently binds nothing). The `snapdragon-gateway` chart
+  templates + every generator route file render the corrected namespace; the
+  `routes:` lists in `apps/2x-gateway-*.yaml` are chart **values** the chart maps
+  onto the new prefix.
+- **✅ Multi-tenancy / multi-brand + superadmin** — per-domain CA loop
+  (`brands/domains.conf`), per-domain namespace + mTLS isolation, and a real
+  code-enforced **superadmin → admin → mod → user** role cascade enforced at the
+  gateway.
+- **✅ Optional services (add/remove)** — akkoma / tuwunel / phpBB / games /
+  owncast / LocalTube; the UI greys out when a service is absent, games defaults
+  to `games.<domain>`. Build-time prune ships; the **🚧 live ApplicationSet
+  cut-over is pending**. A/V is currently **LAN-only** (no TURN/SFU yet).
+- **✅ Egress-VPN**, **✅ Node storage**, **✅ Games App-Store control plane**,
+  **✅ Device-license registry** (per-node sshd obeys the signed export),
+  **✅ Superadmin Service Catalog** (data layer + tailnet superadmin-gateway +
+  Kaniko builder, ships dark), **✅ Pen-test CI** (OWASP ZAP + Dependency-Check +
+  nuclei + k6 as a **GitLab** pipeline stage, not a deployed CronJob).
+- **✅ Data-access standard** — the Spring services use **Spring Data R2DBC
+  reactive repositories** (no raw SQL strings / inline `@Query`).
+
+> The auth model is documented in depth in [`docs/SECURITY.md`](docs/SECURITY.md)
+> and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the application-side login
+> relocation + OIDC token-handler live in `snapdragon-user-bff-api`,
+> `snapdragon-admin-bff-api`, `snapdragon-auth-core` and the `snapdragon-gateway`
+> repos.
+
+## Roadmap
+
+_Designed / in-flight — see the Roadmap section of
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)._
+
+- **🚧 SSO end-to-end, live + e2e** — finish the admin-bff → user-bff login
+  relocation (PR-1/5 → 5/5), prove the `bff_` → custody-JWT swap end-to-end
+  through the gateway, and cover it with the multi-user UI e2e.
+- **🔭 Casdoor MFA** — WebAuthn + TOTP + recovery, per-role defaults, step-up
+  (sudo / SSH-via-UI / superadmin ops); `mfa_satisfied` stamped into the opaque
+  `bff_` session, gateway `amr` → `MFA_SATISFIED` authority + per-route
+  `mfa_required`.
+- **🔭 Encrypted versioned backups** — Velero + kopia/restic to attached node
+  storage or total-cloud; per-domain + superadmin, step-up gated.
+- **🔭 Egress VPN drop-in** — admin-supplied WireGuard/OpenVPN `.conf` for node
+  public egress; split-tunnel keeps the tailnet direct.
+- **🔭 Per-node attached storage**, **🔭 desktop app governance** (SSO sudo +
+  curated Plasma Discover), **🔭 Workload Console** (pod mgmt + live logs; RBAC
+  backstop on `main`, ships dark).
+- **🔭 A/V via coturn/TURN**, **🔭 OWASP pen-test + nuclei in CI** (continuous),
+  **🔭 binhost auto-update fleet distribution**.
+
 ## Platform capabilities
 
 Beyond the build/keys/DNS story below, the GitOps payload this repo bakes now
@@ -239,6 +321,14 @@ Both OAuth and mail are **optional and absent by default**. With neither, the
 platform falls back to **Casdoor's native user/pass login** and
 **admin-approval** registration (no email verification) — exactly what an
 `ENV=test` LAN fleet uses.
+
+> **Where login runs.** Casdoor is the SSO IdP; `login-ui` performs the OIDC
+> authorization-code (PKCE) redirect and **user-bff** (not admin-bff) does the
+> server-side code→token exchange and holds the per-session JWT, handing the
+> browser only an opaque `bff_` session. The gateway swaps `bff_` → the custody
+> JWT before its JWT/role checks. Login/session/account logic is relocating from
+> admin-bff → user-bff (shared in `snapdragon-auth-core`); see
+> [Current State](#current-state).
 
 **OAuth federation providers (seeded into Casdoor when creds are present).**
 The provider seeding in the Casdoor init jobs is **read-if-present, else
@@ -466,6 +556,14 @@ the in-cluster wildcard-DNS resolver (`apps/09-lan-dns.yaml`); in `ENV=prod` the
 cloudflared go-live edge instead. See
 [`specs/cluster/README.md`](specs/cluster/README.md).
 
+> **Gateway route config (SCG 5.0).** The `snapdragon-gateway` chart renders its
+> `routes:` values into the **`spring.cloud.gateway.server.webflux.routes`**
+> namespace required by Spring Cloud Gateway 5.0 (the legacy
+> `spring.cloud.gateway.routes` prefix silently binds nothing). Authorization is
+> not in the route YAML — it is data-driven by the `gateway_route_access`
+> Postgres table (`manifests/route-access/initdb/20-schema.sql`) read by the
+> gateway's `GatewayRouteAccessFilter`.
+
 ### Vanity subdomains (`<username>.snapdragon.systems`)
 
 A user can serve their PUBLIC profile at `https://<username>.snapdragon.systems`.
@@ -685,6 +783,17 @@ see the full table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
 `snapdragon-{admin,mod,user,forum}-bff-api` Spring BFFs and
 `snapdragon-federation-api` (vanity-subdomain / public-profile resolver).
 
+The Spring services share a unified Maven baseline — **Spring Boot 4.0.2 /
+Spring Cloud 2025.1** — built on three shared artifacts: **`snapdragon-parent`**
+(metapom), **`snapdragon-commons`** (shared security/tenancy,
+`systems.snapdragon.commons.*`) and **`snapdragon-auth-core`** (shared
+account/session/MFA/Casdoor-admin infra, consumed by **user-bff + admin-bff**).
+SSO login/session/account ownership is being **relocated from admin-bff →
+user-bff** (`login-ui` OIDC redirect → user-bff token-handler → opaque `bff_`
+session; the gateway swaps `bff_` → custody JWT). Account/session **data stays in
+admin-bff-db**; user-bff reaches it via admin-bff `/bff/internal` over mTLS +
+`X-Internal-Token`. See [Current State](#current-state).
+
 ## CI
 
 Continuous integration runs on **GitLab** ([`.gitlab-ci.yml`](.gitlab-ci.yml)):
@@ -696,7 +805,9 @@ published. The **app** container images (gateway, frontends, BFFs, …) are buil
 from their own repos in the GitLab org mirror — the `build:images` job here is
 currently an `echo` stub, and a general in-cluster image-build pipeline is not
 started (the service-catalog Kaniko builder, PR #110, is the one in-cluster
-image builder, and ships dark). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
+image builder, and ships dark). The OWASP pen-test suite (ZAP + Dependency-Check
++ nuclei + k6) runs as a GitLab pipeline stage, not a deployed CronJob. See
+[`docs/DEVOPS.md`](docs/DEVOPS.md).
 
 > **GitHub Actions is intentionally absent** — Actions is billing-blocked
 > org-wide (jobs fail at setup). Do **not** add `.github/workflows`; CI lives in
@@ -709,6 +820,9 @@ image builder, and ships dark). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 - The KEYS stick holds the cluster CA, preauth and backup credentials — keep it
   offline once provisioning is done. Generated secrets and build output are
   git-ignored.
+- Nodes boot SELinux **ENFORCING** (hardened/selinux) with per-app MCS
+  identities; API-to-API traffic is mTLS; per-app SCRAM Postgres roles; secrets
+  via Vault/ESO. See [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ## License
 
