@@ -11,19 +11,25 @@ data:
     spring:
       cloud:
         gateway:
-          routes:
-          {{- range .Values.routes }}
-            - id: {{ .id }}
-              uri: {{ .uri }}
-              predicates:
-                {{- if .host }}
-                - Host={{ .host }}
-                {{- end }}
-                {{- if .path }}
-                - Path={{ .path }}
-                {{- end }}
-              {{- with .filters }}
-              filters:
-                {{- toYaml . | nindent 16 }}
+          # SCG 5.0 (Spring Boot 4) moved route config to
+          # spring.cloud.gateway.server.webflux.*; the legacy spring.cloud.gateway.routes
+          # prefix binds nothing under SCG 5.0, so these downstream routes must live
+          # under server.webflux to be honoured.
+          server:
+            webflux:
+              routes:
+              {{- range .Values.routes }}
+                - id: {{ .id }}
+                  uri: {{ .uri }}
+                  predicates:
+                    {{- if .host }}
+                    - Host={{ .host }}
+                    {{- end }}
+                    {{- if .path }}
+                    - Path={{ .path }}
+                    {{- end }}
+                  {{- with .filters }}
+                  filters:
+                    {{- toYaml . | nindent 20 }}
+                  {{- end }}
               {{- end }}
-          {{- end }}

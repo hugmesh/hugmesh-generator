@@ -6,28 +6,32 @@
 spring:
   cloud:
     gateway:
-      routes:
-        # --- Mastodon (opt-in social tier) ---
-        - id: mastodon-oauth
-          uri: http://mastodon-web:3000
-          predicates:
-            - Path=/oauth/**
-        - id: mastodon-api
-          uri: http://mastodon-web:3000
-          predicates:
-            - Path=/api/v1/**
-        # --- Matrix (opt-in social tier) ---
-        - id: matrix-api
-          uri: http://synapse:8008
-          predicates:
-            - Path=/_matrix/**
-        # --- snapdragon-federation-api (MORE specific than /api/** — declared first) ---
-        - id: federation-api
-          uri: http://snapdragon-federation-api:8080
-          predicates:
-            - Path=/api/federation/**
-        # --- Snapdragon Spring APIs (snapdragon-actions) ---
-        - id: snapdragon-api
-          uri: http://snapdragon-api:8080
-          predicates:
-            - Path=/api/**
+      # SCG 5.0 (Spring Boot 4): route config moved to
+      # spring.cloud.gateway.server.webflux.* (legacy prefix binds nothing under SCG 5.0).
+      server:
+        webflux:
+          routes:
+            # --- Mastodon (opt-in social tier) ---
+            - id: mastodon-oauth
+              uri: http://mastodon-web:3000
+              predicates:
+                - Path=/oauth/**
+            - id: mastodon-api
+              uri: http://mastodon-web:3000
+              predicates:
+                - Path=/api/v1/**
+            # --- Matrix (opt-in social tier) ---
+            - id: matrix-api
+              uri: http://synapse:8008
+              predicates:
+                - Path=/_matrix/**
+            # --- snapdragon-federation-api (MORE specific than /api/** — declared first) ---
+            - id: federation-api
+              uri: http://snapdragon-federation-api:8080
+              predicates:
+                - Path=/api/federation/**
+            # --- Snapdragon Spring APIs (snapdragon-actions) ---
+            - id: snapdragon-api
+              uri: http://snapdragon-api:8080
+              predicates:
+                - Path=/api/**
