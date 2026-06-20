@@ -192,7 +192,8 @@ umount "${TEST_DIR}/mnt"
 # ── Boot QEMU ──────────────────────────────────────────────────────
 step "Booting QEMU (machine=${QEMU_MACHINE}, cpu=${QEMU_CPU}, mem=${MEM}M)"
 CMDLINE="root=/dev/vda rw rootwait console=ttyAMA0,115200 net.ifnames=0 \
-lsm=yama,selinux,bpf selinux=1 cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 \
+lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1 \
+cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 \
 systemd.unified_cgroup_hierarchy=1 slab_nomerge"
 
 qemu-system-aarch64 \

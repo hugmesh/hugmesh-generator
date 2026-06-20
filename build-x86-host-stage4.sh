@@ -941,6 +941,23 @@ else
         tar -C "${SYSROOT}" -xpf "${STAGE3_LOCAL}"
 fi
 
+# Portage pkg_postinst calls sudo internally (as the portage build user); stage3
+# sudoers has requiretty which breaks non-interactive builds. Patch the main
+# sudoers file directly (sudoers.d may not be included by the stage3 default)
+# and grant the portage user NOPASSWD. These patches are inside the build sysroot
+# only and are never shipped — the cleanup section removes them before imaging.
+if [[ -f "${SYSROOT}/etc/sudoers" ]]; then
+    sed -i 's/^Defaults\s\+requiretty/Defaults !requiretty/' "${SYSROOT}/etc/sudoers"
+    # Ensure sudoers.d drop-ins are loaded (stage3 may omit this)
+    grep -q '#includedir /etc/sudoers.d' "${SYSROOT}/etc/sudoers" || \
+        printf '\n#includedir /etc/sudoers.d # build-added\n' >> "${SYSROOT}/etc/sudoers"
+fi
+mkdir -p "${SYSROOT}/etc/sudoers.d"
+# Allow portage build user to sudo without password or tty
+printf 'Defaults !requiretty\nportage ALL=(ALL) NOPASSWD: ALL\n' \
+    > "${SYSROOT}/etc/sudoers.d/build-notty"
+chmod 440 "${SYSROOT}/etc/sudoers.d/build-notty"
+
 # ── 4. Install spec files ──────────────────────────────────────────
 banner "Installing spec files"
 mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,profile,env}
@@ -1435,10 +1452,10 @@ make olddefconfig
 for must in CONFIG_SECURITY_SELINUX CONFIG_STACKPROTECTOR_STRONG CONFIG_FORTIFY_SOURCE CONFIG_HARDENED_USERCOPY; do
     grep -q "^\${must}=y" .config || { echo "[build-x86] ERROR: hardened kernel option \${must} not enabled after olddefconfig"; exit 1; }
 done
-# SELinux only activates if CONFIG_LSM is a clean, well-formed string. x86 has no
-# lsm= on the GRUB cmdline to override a corrupted builtin, so a stray quote here
-# would silently ship SELinux DISABLED. Assert the exact intended value.
-grep -q '^CONFIG_LSM="lockdown,yama,selinux,bpf"\$' .config || { echo "[build-x86] ERROR: CONFIG_LSM malformed (expected lockdown,yama,selinux,bpf); SELinux would not activate"; exit 1; }
+# SELinux only activates if CONFIG_LSM is a clean, well-formed string. lockdown is
+# listed FIRST so it engages before any other LSM; a stray quote or wrong order here
+# would silently ship SELinux or lockdown DISABLED. Assert the exact intended value.
+grep -q '^CONFIG_LSM="lockdown,yama,selinux,bpf"\$' .config || { echo "[build-x86] ERROR: CONFIG_LSM malformed (expected lockdown,yama,selinux,bpf); lockdown/SELinux would not activate"; exit 1; }
 make -j${JOBS} bzImage modules
 make modules_install
 make install
@@ -1455,15 +1472,79 @@ if command -v dracut >/dev/null; then
 else
     echo "[build-x86] WARN: dracut not installed; no disk initramfs (sys-kernel/dracut should be in packages.list)"
 fi
+# Unified Kernel Image (UKI) for Secure Boot: bundles kernel+initramfs+cmdline
+# as a single signed PE/EFI binary. Requires dracut uefi USE flag + CONFIG_EFI_STUB.
+# build_img() will sign the unsigned UKI with the org key and install it to the ESP.
+CMDLINE="\$(. /etc/default/grub 2>/dev/null; printf '%s' "\${GRUB_CMDLINE_LINUX:-lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1}")"
+if command -v dracut >/dev/null && dracut --help 2>/dev/null | grep -q -- '--uefi'; then
+    dracut --force --no-hostonly --uefi \
+        --add-drivers "ext4 vfat nvme ahci sd_mod usb_storage uas virtio_blk virtio_pci virtio_net" \
+        --kernel-cmdline "\${CMDLINE}" \
+        --kver "\${KVER}" "/boot/snapdragon-unsigned.efi" \
+        && echo "[build-x86] UKI built: /boot/snapdragon-unsigned.efi" \
+        || echo "[build-x86] WARN: dracut --uefi failed; UKI not built (secure boot chain needs manual rebuild)"
+else
+    echo "[build-x86] INFO: dracut --uefi not available; UKI skipped (add 'uefi' USE to sys-kernel/dracut)"
+fi
 CHROOT
     rm -f "${SYSROOT}/tmp/k.config"
     info "Gentoo hardened kernel + disk-boot initramfs installed to ${SYSROOT}/boot"
+fi
+
+# ── Secure Boot: org signing-key generation + UKI signing ─────────
+# Signing happens on the HOST (not in chroot) so the key stays outside the image.
+# The unsigned UKI was built by dracut --uefi above inside the chroot.
+# SBDIR persists across builds in WORK_DIR so the same org cert covers all roles.
+SBDIR="${WORK_DIR}/secureboot"
+SBKEY="${SBDIR}/sb.key"; SBCRT="${SBDIR}/sb.crt"; SBCER="${SBDIR}/sb.cer"
+UKI_UNSIGNED="${SYSROOT}/boot/snapdragon-unsigned.efi"
+UKI_SIGNED="${SYSROOT}/boot/snapdragon.efi"
+if command -v sbsign >/dev/null 2>&1 && [ -f "${UKI_UNSIGNED}" ]; then
+    mkdir -p "${SBDIR}"
+    if [ ! -f "${SBKEY}" ]; then
+        info "Generating Snapdragon org Secure Boot signing key (RSA-4096, 10 yr)"
+        openssl req -newkey rsa:4096 -nodes -sha256 \
+            -keyout "${SBKEY}" -x509 -days 3650 \
+            -subj "/O=Snapdragon Systems/CN=Snapdragon Secure Boot ${BRAND}/" \
+            -out "${SBCRT}" 2>/dev/null
+        openssl x509 -inform PEM -outform DER -in "${SBCRT}" -out "${SBCER}"
+        if command -v cert-to-efi-sig-list >/dev/null && command -v sign-efi-sig-list >/dev/null; then
+            _sb_guid="$(cat /proc/sys/kernel/random/uuid)"
+            cert-to-efi-sig-list -g "${_sb_guid}" "${SBCRT}" "${SBDIR}/db.esl"
+            sign-efi-sig-list -k "${SBKEY}" -c "${SBCRT}" db \
+                "${SBDIR}/db.esl" "${SBDIR}/db.auth" 2>/dev/null \
+                && info "EFI db.auth enrollment payload generated at ${SBDIR}/db.auth"
+        fi
+    fi
+    info "Signing UKI with org Secure Boot key"
+    sbsign --key "${SBKEY}" --cert "${SBCRT}" \
+        --output "${UKI_SIGNED}" "${UKI_UNSIGNED}" \
+        && info "Signed UKI: ${UKI_SIGNED}" \
+        || { warn "sbsign failed; copying unsigned UKI (not verifiable under Secure Boot)"; cp "${UKI_UNSIGNED}" "${UKI_SIGNED}"; }
+    rm -f "${UKI_UNSIGNED}"
+    # Install org cert into the rootfs for keys-provision mokutil enrollment.
+    mkdir -p "${SYSROOT}/etc/snapdragon/secureboot"
+    cp "${SBCRT}" "${SYSROOT}/etc/snapdragon/secureboot/sb.crt"
+    cp "${SBCER}" "${SYSROOT}/etc/snapdragon/secureboot/sb.cer"
+    [ -f "${SBDIR}/db.auth" ] && cp "${SBDIR}/db.auth" "${SYSROOT}/etc/snapdragon/secureboot/db.auth"
+    info "Org Secure Boot cert installed to sysroot /etc/snapdragon/secureboot/"
+elif [ -f "${UKI_UNSIGNED}" ]; then
+    warn "sbsign not found on build host (install app-crypt/sbsigntools); UKI unsigned — Secure Boot chain won't verify"
+    cp "${UKI_UNSIGNED}" "${UKI_SIGNED}"; rm -f "${UKI_UNSIGNED}"
 fi
 
 # ── 8. Clean ───────────────────────────────────────────────────────
 umount_chroot; trap - EXIT
 if ! ${SKIP_CLEAN}; then
     banner "Cleaning sysroot"
+    # Remove build-only sudoers patches (added to allow portage pkg_postinst to run
+    # sudo without a tty; not needed or wanted in the deployed image).
+    rm -f "${SYSROOT}/etc/sudoers.d/build-notty"
+    # Revert main sudoers: restore requiretty and remove the includedir line we added
+    if [[ -f "${SYSROOT}/etc/sudoers" ]]; then
+        sed -i 's/^Defaults !requiretty/Defaults requiretty/' "${SYSROOT}/etc/sudoers"
+        sed -i '/^#includedir \/etc\/sudoers.d # build-added$/d' "${SYSROOT}/etc/sudoers"
+    fi
     # Build-artifact bloat: binpkgs (~2.4 GiB), distfiles, docs, tmp.
     rm -rf "${SYSROOT}"/usr/share/{doc,man,info}/* \
            "${SYSROOT}"/var/cache/distfiles/* \
@@ -1683,6 +1764,55 @@ build_img() {
     [ -f "${root_mnt}/boot/efi/EFI/BOOT/BOOTX64.EFI" ] \
         || { err "ESP has no EFI/BOOT/BOOTX64.EFI after grub-mkimage — refusing to ship a non-booting .img"; exit 1; }
 
+    # ── UKI → ESP (Secure Boot direct-boot path) ──────────────────
+    # The signed UKI (kernel+initramfs+cmdline as a PE binary) was built and signed
+    # outside the chroot. Install it into the ESP so UEFI / shim / GRUB can load it.
+    local uki_src="${SYSROOT}/boot/snapdragon.efi"
+    if [ -f "${uki_src}" ]; then
+        mkdir -p "${root_mnt}/boot/efi/EFI/Linux"
+        cp "${uki_src}" "${root_mnt}/boot/efi/EFI/Linux/snapdragon.efi"
+        info "UKI installed to ESP: EFI/Linux/snapdragon.efi"
+        # Org cert and db.auth: keys-provision enrolls via mokutil on first boot.
+        if [ -d "${SYSROOT}/etc/snapdragon/secureboot" ]; then
+            mkdir -p "${root_mnt}/boot/efi/EFI/snapdragon"
+            cp "${SYSROOT}"/etc/snapdragon/secureboot/*.{crt,cer,auth} \
+               "${root_mnt}/boot/efi/EFI/snapdragon/" 2>/dev/null || true
+            info "Org Secure Boot cert installed to ESP: EFI/snapdragon/"
+        fi
+    else
+        info "No signed UKI at ${uki_src} — .img boots via GRUB+vmlinuz only (no Secure Boot UKI)"
+    fi
+
+    # ── Shim → ESP (replaces bare GRUB for Secure Boot chain) ─────
+    # shim (Microsoft-signed) lets the image boot on hardware with Secure Boot in
+    # User Mode without needing to enroll a custom PK. shim loads grubx64.efi
+    # (signed with the org key) which then loads the UKI or vmlinuz.
+    # Find shim on the build host (sys-boot/shim installs to /usr/share/shim).
+    local shim_src; shim_src="$(find /usr/share/shim /usr/lib/shim 2>/dev/null \
+        -name 'BOOTX64.EFI' -o -name 'shimx64.efi' 2>/dev/null | head -1 || true)"
+    local mmgr_src; mmgr_src="$(find /usr/share/shim /usr/lib/shim 2>/dev/null \
+        -name 'mmx64.efi' -o -name 'MokManager.efi' 2>/dev/null | head -1 || true)"
+    if [ -n "${shim_src}" ] && [ -f "${shim_src}" ]; then
+        # Move GRUB image to grubx64.efi so shim loads it as the second stage.
+        if [ -f "${root_mnt}/boot/efi/EFI/BOOT/BOOTX64.EFI" ]; then
+            cp "${root_mnt}/boot/efi/EFI/BOOT/BOOTX64.EFI" \
+               "${root_mnt}/boot/efi/EFI/BOOT/grubx64.efi"
+        fi
+        # Sign GRUB with org key so shim verifies it.
+        if command -v sbsign >/dev/null && [ -f "${SBKEY:-}" ] && [ -f "${SBCRT:-}" ]; then
+            sbsign --key "${SBKEY}" --cert "${SBCRT}" \
+                --output "${root_mnt}/boot/efi/EFI/BOOT/grubx64.efi" \
+                "${root_mnt}/boot/efi/EFI/BOOT/grubx64.efi" 2>/dev/null \
+                && info "GRUB EFI signed with org key → grubx64.efi"
+        fi
+        cp "${shim_src}" "${root_mnt}/boot/efi/EFI/BOOT/BOOTX64.EFI"
+        [ -n "${mmgr_src}" ] && [ -f "${mmgr_src}" ] && \
+            cp "${mmgr_src}" "${root_mnt}/boot/efi/EFI/BOOT/mmx64.efi"
+        info "Shim installed as EFI/BOOT/BOOTX64.EFI (Secure Boot chain: shim→grubx64.efi→UKI)"
+    else
+        info "Shim not found on build host (install sys-boot/shim); .img uses bare GRUB at BOOTX64.EFI"
+    fi
+
     # ── Hand-written grub.cfg (no grub-mkconfig => no host os-prober/chroot) ──
     # Source the hardened cmdline from the grub defaults so the .img and the live
     # ISO share ONE cmdline (lsm=,selinux=1,audit=1,cgroup,slab,ASLR hardening).
@@ -1698,6 +1828,13 @@ build_img() {
         echo "insmod part_gpt"
         echo "insmod ext2"
         echo "insmod search_fs_uuid"
+        echo "insmod chainloader"
+        # UKI entry: direct chainload from ESP — preferred when Secure Boot is active.
+        if [ -f "${root_mnt}/boot/efi/EFI/Linux/snapdragon.efi" ]; then
+            echo "menuentry \"${BRAND_TITLE} (${ROLE}) — Secure Boot UKI\" {"
+            echo "    chainloader /EFI/Linux/snapdragon.efi"
+            echo "}"
+        fi
         echo "menuentry \"${BRAND_TITLE} (${ROLE})\" {"
         echo "    search --no-floppy --fs-uuid --set=root ${root_fsuuid}"
         if [ -n "${vmlinuz}" ]; then
@@ -1795,6 +1932,7 @@ CHROOT
         mkdir -p "${ISO_DIR}/boot/grub" "${ISO_DIR}/LiveOS"
         cp "${VMLINUZ}" "${ISO_DIR}/boot/vmlinuz"
         cp "${SYSROOT}/boot/initramfs-live.img" "${ISO_DIR}/boot/initramfs.img"
+        rm -f "${ISO_DIR}/LiveOS/squashfs.img"
         info "Squashing rootfs (this can take a while)..."
         if command -v mksquashfs >/dev/null; then
             mksquashfs "${SYSROOT}" "${ISO_DIR}/LiveOS/squashfs.img" \
@@ -1817,9 +1955,59 @@ menuentry "${BRAND_TITLE} ${ROLE} (live)" {
     initrd /boot/initramfs.img
 }
 EOF
+        # Build the ISO via grub-mkrescue (GRUB at EFI/BOOT/BOOTX64.EFI).
+        # Then, if shim is on the build host, post-process: move GRUB to grubx64.efi,
+        # sign it with the org key, and install shim as BOOTX64.EFI so the ISO boots
+        # on Secure Boot hardware without requiring a Microsoft-trusted firmware cert.
         grub-mkrescue -o "${ISO_PATH}" "${ISO_DIR}" -volid SNAPDRAGON_LIVE 2>/dev/null \
             && info "Bootable live ISO: ${ISO_PATH}" \
             || { warn "grub-mkrescue failed; live ISO not produced"; ISO_PATH="(not built — grub-mkrescue failed)"; }
+        # ── Shim post-processing for Secure Boot live boot ──────────
+        _shim_src="$(find /usr/share/shim /usr/lib/shim 2>/dev/null \
+            \( -name 'BOOTX64.EFI' -o -name 'shimx64.efi' \) 2>/dev/null | head -1 || true)"
+        if [ -f "${ISO_PATH}" ] && [ -n "${_shim_src}" ] && [ -f "${_shim_src}" ] \
+                && command -v xorriso >/dev/null && command -v grub-mkstandalone >/dev/null; then
+            info "Post-processing live ISO to add shim (Secure Boot: shim→signed GRUB→kernel)"
+            _iso_tmp="${ISO_PATH}.shim-work"
+            mkdir -p "${_iso_tmp}/EFI/BOOT"
+            # Extract GRUB EFI from the ISO into grubx64.efi.
+            xorriso -indev "${ISO_PATH}" -osirrox on \
+                -extract EFI/BOOT/BOOTX64.EFI "${_iso_tmp}/EFI/BOOT/grubx64.efi" 2>/dev/null || true
+            # Sign GRUB with org key if available.
+            if [ -f "${_iso_tmp}/EFI/BOOT/grubx64.efi" ] \
+                    && command -v sbsign >/dev/null && [ -f "${SBKEY:-}" ]; then
+                sbsign --key "${SBKEY}" --cert "${SBCRT}" \
+                    --output "${_iso_tmp}/EFI/BOOT/grubx64.efi" \
+                    "${_iso_tmp}/EFI/BOOT/grubx64.efi" 2>/dev/null \
+                    && info "Live GRUB EFI signed with org key"
+            fi
+            # Add shim + MOK manager.
+            cp "${_shim_src}" "${_iso_tmp}/EFI/BOOT/BOOTX64.EFI"
+            _mmgr="$(find /usr/share/shim /usr/lib/shim 2>/dev/null \
+                \( -name 'mmx64.efi' -o -name 'MokManager.efi' \) | head -1 || true)"
+            [ -n "${_mmgr}" ] && cp "${_mmgr}" "${_iso_tmp}/EFI/BOOT/mmx64.efi" 2>/dev/null || true
+            # Add org cert for enrollment inside live env.
+            if [ -d "${SYSROOT}/etc/snapdragon/secureboot" ]; then
+                mkdir -p "${_iso_tmp}/EFI/snapdragon"
+                cp "${SYSROOT}"/etc/snapdragon/secureboot/*.{crt,cer,auth} \
+                   "${_iso_tmp}/EFI/snapdragon/" 2>/dev/null || true
+            fi
+            # Patch the ISO: replace EFI directory with shim-based structure.
+            _iso_new="${ISO_PATH%.iso}-sb.iso"
+            xorriso -indev "${ISO_PATH}" -outdev "${_iso_new}" \
+                -map "${_iso_tmp}/EFI/BOOT/BOOTX64.EFI" "/EFI/BOOT/BOOTX64.EFI" \
+                -map "${_iso_tmp}/EFI/BOOT/grubx64.efi"  "/EFI/BOOT/grubx64.efi" \
+                $([ -f "${_iso_tmp}/EFI/BOOT/mmx64.efi" ] && \
+                  echo "-map ${_iso_tmp}/EFI/BOOT/mmx64.efi /EFI/BOOT/mmx64.efi") \
+                $([ -d "${_iso_tmp}/EFI/snapdragon" ] && \
+                  echo "-map ${_iso_tmp}/EFI/snapdragon /EFI/snapdragon") \
+                -- 2>/dev/null \
+                && { mv "${_iso_new}" "${ISO_PATH}"; info "Shim added to live ISO (Secure Boot ready)"; } \
+                || { warn "xorriso shim post-processing failed; live ISO uses bare GRUB (no shim)"; rm -f "${_iso_new}"; }
+            rm -rf "${_iso_tmp}"
+        elif [ -f "${ISO_PATH}" ]; then
+            info "Shim not found on build host (install sys-boot/shim); live ISO uses bare GRUB (no Secure Boot chain)"
+        fi
         fi
     elif ${LIVE_ISO}; then
         warn "Live ISO requested but no vmlinuz/modules present — skipping (don't pass --skip-kernel)"

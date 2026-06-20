@@ -1981,7 +1981,7 @@ else
                     CONFIG_HARDENED_USERCOPY; do
             grep -q "^${must}=y" .config || { err "hardened kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
-        grep -q '^CONFIG_LSM="lockdown,yama,selinux,bpf"$' .config || { err "CONFIG_LSM malformed (expected lockdown,yama,selinux,bpf); SELinux would not activate"; exit 1; }
+        grep -q '^CONFIG_LSM="lockdown,yama,selinux,bpf"$' .config || { err "CONFIG_LSM malformed (expected lockdown,yama,selinux,bpf); lockdown/SELinux would not activate"; exit 1; }
 
         # Build
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" -j"${JOBS}" \

@@ -548,7 +548,12 @@ provision_headscale() {
     have headscale || { log "headscale not installed — skipping"; return 0; }
     local enabled
     enabled="$(jqm '.headscale.enabled // false')"
-    [ "${enabled}" = "true" ] || { log "headscale disabled in manifest"; return 0; }
+    if [ "${enabled}" != "true" ]; then
+        log "headscale disabled in manifest — removing from runlevel"
+        rc-update del headscale default 2>/dev/null || true
+        rc-service headscale stop 2>/dev/null || true
+        return 0
+    fi
 
     getent group  headscale >/dev/null || groupadd -r headscale
     getent passwd headscale >/dev/null || \
@@ -754,7 +759,12 @@ provision_tailscale() {
     have tailscaled || { log "tailscaled not installed — skipping"; return 0; }
     local enabled
     enabled="$(jqm '.tailscale.enabled // false')"
-    [ "${enabled}" = "true" ] || { log "tailscale disabled in manifest"; return 0; }
+    if [ "${enabled}" != "true" ]; then
+        log "tailscale disabled in manifest — removing from runlevel"
+        rc-update del tailscaled default 2>/dev/null || true
+        rc-service tailscaled stop 2>/dev/null || true
+        return 0
+    fi
 
     mkdir -p /var/lib/tailscale /run/tailscale
     rc-update add tailscaled default 2>/dev/null || true
@@ -2341,6 +2351,41 @@ spec:
 EOF
 }
 
+# Enroll the org Secure Boot signing cert into MokList so the UEFI firmware
+# (via shim) trusts our signed UKI and GRUB on subsequent boots. Does nothing if:
+#  - not an EFI system (no /sys/firmware/efi)
+#  - mokutil not available (Pi, or an image built without sbsigntools)
+#  - cert already enrolled
+# Enrollment is pending-reboot (MokManager confirms at next boot); the system
+# continues to boot normally (shim falls through to unsigned-boot prompts until
+# the cert is confirmed, after which no further action is needed).
+provision_secureboot() {
+    local cert_pem="/etc/snapdragon/secureboot/sb.crt"
+    local cert_der="/etc/snapdragon/secureboot/sb.cer"
+    local esp_cert="/boot/efi/EFI/snapdragon/sb.cer"
+    # Skip on Pi / non-EFI systems (no EFI runtime services).
+    [ -d /sys/firmware/efi ] || { log "secureboot: non-EFI system — skipping cert enrollment"; return 0; }
+    # Prefer DER cert from ESP (guaranteed fresh after each build); fall back to rootfs copy.
+    local import_cert="${cert_der}"
+    [ -f "${import_cert}" ] || import_cert="${esp_cert}"
+    [ -f "${import_cert}" ] || { log "secureboot: no org cert at ${cert_der} or ${esp_cert} — skipping"; return 0; }
+    command -v mokutil >/dev/null || { log "secureboot: mokutil not installed — skipping cert enrollment"; return 0; }
+    # Check if our cert is already in MokList or the UEFI db.
+    local fp; fp="$(openssl x509 -noout -fingerprint -sha256 -in "${cert_pem}" 2>/dev/null | cut -d= -f2 | tr -d ':')"
+    if [ -n "${fp}" ] && mokutil --list-enrolled 2>/dev/null | grep -qi "${fp}"; then
+        log "secureboot: org cert already enrolled in MokList — nothing to do"
+        return 0
+    fi
+    log "secureboot: scheduling org Secure Boot cert for MokList enrollment (will prompt at next reboot)"
+    # --root-pw uses the root password (set by provision_users) for confirmation,
+    # avoiding an interactive passphrase prompt in the headless provisioning flow.
+    if mokutil --import "${import_cert}" --root-pw 2>/dev/null; then
+        log "secureboot: org cert scheduled — confirm in MokManager on next reboot to activate Secure Boot chain"
+    else
+        log "secureboot: WARN mokutil import failed (check /var/log/keys-provision.log); Secure Boot may not verify images until cert is enrolled manually"
+    fi
+}
+
 # ── Main ───────────────────────────────────────────────────────────
 main() {
     log "=== keys-provision starting ==="
@@ -2385,6 +2430,7 @@ main() {
     provision_snapdragon
     provision_calico
     provision_vault
+    provision_secureboot   # schedule org SB cert MOK enrollment (EFI systems only)
     provision_run_hooks
     provision_selinux   # last: relabel the fully-provisioned filesystem
 

@@ -62,6 +62,7 @@ TIMEOUT="2400"                 # generous: aarch64 TCG first boot is slow
 KEEP=false                     # keep RUN_DIR (and overlay) on exit
 FOREGROUND=false               # -nographic in the foreground instead of -daemonize
 EXTRA_APPEND=""                # extra kernel cmdline appended verbatim
+KEYS_IMG=""                    # optional FAT32 "KEYS" disk (provisioning tests)
 
 usage() {
 cat <<EOF
@@ -97,6 +98,7 @@ Port forwards (host -> guest):
 
 Lifecycle:
   -t, --timeout SEC    Boot/SSH wait budget (info only here). Default: ${TIMEOUT}
+      --keys-img FILE  Attach a FAT32 "KEYS" disk (provisioning tests).
       --foreground     Run -nographic attached to this terminal (no -daemonize).
       --keep           Don't delete the run dir / overlay on exit.
   -h, --help           Show this help.
@@ -130,6 +132,7 @@ while [[ $# -gt 0 ]]; do
         --api-port)        API_PORT="$2"; shift 2 ;;
         --hs-port)         HS_PORT="$2"; shift 2 ;;
         -t|--timeout)      TIMEOUT="$2"; shift 2 ;;
+        --keys-img)        KEYS_IMG="$2"; shift 2 ;;
         --foreground)      FOREGROUND=true; shift ;;
         --keep)            KEEP=true; shift ;;
         -h|--help)         usage 0 ;;
@@ -229,7 +232,7 @@ trap cleanup EXIT
 # ── Kernel cmdline: PARTUUID image, ext4 root on vda2, PL011 console ─────────
 # Mirrors specs-rpi5/boot/cmdline.txt hardening so the emulated boot matches silicon.
 CMDLINE="root=${ROOT_PART} rootfstype=ext4 rw rootwait console=ttyAMA0,115200 net.ifnames=0 \
-lsm=yama,selinux,bpf selinux=1 audit=1 cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 \
+lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1 cgroup_enable=cpuset cgroup_enable=memory cgroup_memory=1 \
 systemd.unified_cgroup_hierarchy=1 slab_nomerge init_on_alloc=1 randomize_kstack_offset=on"
 [ -n "${EXTRA_APPEND}" ] && CMDLINE="${CMDLINE} ${EXTRA_APPEND}"
 
@@ -250,6 +253,14 @@ QEMU_ARGS=(
     -device virtio-net-pci,netdev=net0
     -pidfile "${PIDFILE}"
 )
+# Optional KEYS provisioning disk (FAT32, label KEYS) — second virtio-blk disk the
+# keys-provision first-boot engine discovers by label (fresh / re-provision tests).
+if [ -n "${KEYS_IMG}" ]; then
+    [ -f "${KEYS_IMG}" ] || die "keys-img not found: ${KEYS_IMG}"
+    QEMU_ARGS+=(-drive "file=${KEYS_IMG},format=raw,if=none,id=keys,readonly=on"
+                -device virtio-blk-pci,drive=keys)
+    info "keys   : ${KEYS_IMG} (attached as a virtio KEYS disk)"
+fi
 
 step "Booting QEMU (machine=${QEMU_MACHINE}, cpu=${QEMU_CPU}, ${SMP} vCPU, ${MEM}M; TCG — slow)"
 info "forwards: ssh:${SSH_PORT}->22 ui:${UI_PORT}->443 http:${HTTP_PORT}->80 api:${API_PORT}->6443 hs:${HS_PORT}->8080"

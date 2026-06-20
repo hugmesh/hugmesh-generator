@@ -4,5 +4,7 @@
 app-containers/containerd btrfs device-mapper seccomp selinux
 app-containers/runc seccomp selinux
 net-firewall/iptables nftables
-net-firewall/nftables python json
+net-firewall/nftables python json xtables
 net-firewall/firewalld nftables
+# dracut uefi USE enables dracut --uefi mode to produce Unified Kernel Images (UKIs).
+sys-kernel/dracut uefi

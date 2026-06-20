@@ -26,6 +26,12 @@ net-dns/bind-tools
 sys-apps/ethtool
 sys-apps/iproute2
 
+# ── Secure Boot / UKI signing ────────────────────────────────────
+# sbsign: sign PE/EFI binaries (UKI, GRUB) with org key for Secure Boot.
+# efitools: cert-to-efi-sig-list + sign-efi-sig-list for db.auth generation.
+app-crypt/sbsigntools
+app-crypt/efitools
+
 # ── System / hardening ────────────────────────────────────────────
 app-admin/sudo
 sys-process/cronie
