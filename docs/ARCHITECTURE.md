@@ -70,10 +70,16 @@ flowchart TD
         MFA["Casdoor MFA (design done)"]
         DESKGOV["Desktop app governance (queued)"]
         NOTIFY["Notifications: external channels (in-flight)"]
+        subgraph SSO["SSO / BFF JWT custody (ships dark)"]
+            AUTHCORE["auth-core: account/session/MFA + custody seams (✅ 2.0.0 · 🚧 2.1.0)"]
+            GWEXCH["gateway bff_-exchange filter (🚧 PR-C)"]
+            LOGINOIDC["login-ui Casdoor OIDC + PKCE (🚧 PR-4)"]
+            UBRELOC["user-bff OIDC login relocation (🚧 PR-A3)"]
+        end
     end
 
     classDef planned stroke-dasharray:4,stroke:#888,color:#555;
-    class ROADMAP,WC,MFA,DESKGOV,NOTIFY planned;
+    class ROADMAP,WC,MFA,DESKGOV,NOTIFY,SSO,AUTHCORE,GWEXCH,LOGINOIDC,UBRELOC planned;
 ```
 
 > The **superadmin Service Catalog** surface (tailnet-only `snapdragon-superadmin-gateway`
@@ -115,6 +121,122 @@ Casdoor (`id.snapdragon.systems`) is the single IdP:
   Angular micro-frontends never render their own login forms. The public
   hostnames stay `matrix.<domain>` / `mastodon.<domain>` for API compatibility,
   but the backing servers are tuwunel / Akkoma (never Synapse / Mastodon).
+
+## Authentication / SSO (BFF JWT custody)
+
+> **State convention:** ✅ shipped = merged to `main` · 🚧 in-flight = code on an
+> open branch/PR, not yet merged · 🔭 planned = design-complete, no code. The whole
+> ensemble **ships dark** behind flags that default off/blank, so a default
+> deployment is byte-identical to today.
+
+**The mandate:** SSO login works end-to-end with the Casdoor JWT kept **internal** —
+the browser holds **only** an opaque `bff_` session cookie; the gateway swaps
+`bff_` → an internal custody JWT just before resource-server validation; the user
+never sees their own JWT. This relocates login out of the gateway (which keeps the
+r2dbc/Casdoor management stack off its classpath) and into the BFF tier.
+
+**Component ownership** (post auth-relocation):
+
+- **`snapdragon-auth-core`** (shared jar `systems.snapdragon:snapdragon-auth-core`) —
+  the stateful auth stack: `AccountStore`/`BffSession` (account + session + MFA),
+  `OidcExchangeClient` (code→token + refresh), `BffCustodyCipher` (AES-256-GCM
+  encrypt-at-rest for the held JWT), `SessionCookieService` (the opaque `bff_`
+  cookie), `InternalTokenWebFilter` (mTLS + `X-Internal-Token` guard for
+  `/bff/internal/**`). Consumed by **admin-bff + user-bff only** — never the gateway.
+- **`snapdragon-admin-bff-api`** — owns account/session **data** (admin-bff-db) +
+  the in-cluster `/bff/internal` account/session API + the custody/stamp + the
+  session/exchange endpoints.
+- **`snapdragon-user-bff-api`** — owns the login/OIDC **endpoints**
+  (`/bff/auth/callback`, `/bff/login`, …); reads/writes account + session data over
+  admin-bff `/bff/internal` (never touches admin-bff-db — the two BFF databases are
+  mutually denied at the NetworkPolicy layer).
+- **`snapdragon-gateway`** — the `BffJwtExchangeWebFilter` that swaps `bff_` →
+  custody JWT (pre-security, fail-closed, dark) + the PUBLIC `/bff/auth/callback`
+  route-access seed.
+- **`snapdragon-login-ui`** — the Casdoor OIDC authorization-code + PKCE redirect +
+  `/login/callback`.
+- **`snapdragon-generator`** (this repo) — the `app-user-bff` Casdoor OIDC
+  confidential client + the PUBLIC `/bff/auth/callback` route-access seed (#156).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser (login-ui)
+    participant C as Casdoor (IdP)
+    participant GW as snapdragon-gateway
+    participant UB as user-bff
+    participant AB as admin-bff (+ admin-bff-db)
+    Note over B: "Sign in" - generate PKCE verifier+S256 challenge, state, nonce
+    B->>C: redirect /login/oauth/authorize (code, S256)
+    C-->>B: redirect /login/callback?code&state
+    B->>GW: POST /bff/auth/callback {code, verifier} [PUBLIC route]
+    GW->>UB: forward
+    UB->>C: OidcExchangeClient.exchangeCode(code, verifier)
+    C-->>UB: Casdoor JWTs [access + refresh]
+    UB->>AB: /bff/internal ensureAccount, createSession - opaque bff_
+    UB->>AB: /bff/internal custody/stamp [BffCustodyCipher.encrypt] - stored in bff_session.*_enc
+    UB-->>B: Set-Cookie bff_ [opaque] - browser NEVER sees the JWT
+    Note over B,GW: subsequent requests carry the opaque bff_
+    B->>GW: Authorization: Bearer bff_... [any /api or /bff route]
+    GW->>AB: /bff/internal/session/exchange [mTLS + X-Internal-Token]
+    AB-->>GW: custody JWT [lazy-refresh near expiry, fail-closed]
+    Note over GW: rewrite Authorization: Bearer custody-jwt, THEN resource-server JWT validation + route-access/revocation/MFA
+    GW->>UB: forward [downstream sees a normal Casdoor JWT]
+```
+
+**Invariants** (the security contract — must hold in every deployment):
+
+- The browser holds **only** the opaque `bff_` — the Casdoor JWT is never sent to
+  or stored in the client.
+- The custody JWT is **encrypted at rest** (AES-256-GCM) in `bff_session`
+  (`access_token_enc` / `refresh_token_enc`).
+- The gateway swap is **pre-security** and **fail-closed**: any exchange error ⇒
+  `401`, and the raw `bff_` is **never** forwarded downstream.
+- The `/bff/internal/**` surface is reachable only over mTLS + `X-Internal-Token`,
+  and the two BFF databases (admin-bff-db / user-bff-db) are mutually denied at the
+  NetworkPolicy layer.
+
+**Ships-dark flags** (all default off/blank): `app.bff.oidc.enabled`
+(user-bff/auth-core) · `app.bff.custody-key` (`BffCustodyCipher`) ·
+`app.session.cookie.enabled` (the `bff_` cookie) ·
+`snapdragon.gateway.bff-exchange.enabled` (gateway swap) · `__SNAP_OIDC_ENABLED__`
+(login-ui).
+
+### Progress (as of 2026-06-20)
+
+**✅ shipped (merged to `main`):**
+
+- **auth-core extracted + published `2.0.0`** — shared account/session/MFA/Casdoor
+  stack + the custody seams (`OidcExchangeClient`, `BffCustodyCipher`,
+  `SessionCookieService`, `InternalTokenWebFilter`).
+- **admin-bff adopted auth-core** (PR #111) — behavior-preserving, 1517 tests green.
+- **admin-bff `/bff/internal` account/session API** (PR #113) —
+  ensure / get / complete / allowlist / sessions / namespaces, guarded by
+  `InternalTokenWebFilter`; ships inert.
+- (prior) gateway live + raw-API security proven + the SCG-5 route-namespace bug fixed.
+
+**🚧 in-flight (open draft PRs, all dark):**
+
+- **auth-core `2.1.0`** — `BffSession` JWT-custody columns
+  (`access_token_enc` / `refresh_token_enc` / `access_token_expires_at` /
+  `custody_updated_at`) + `stampCustody` / `clearCustody` / `sessionRow` (additive
+  minor; `2.0.0` stays immutable).
+- **gateway PR-C** — `BffJwtExchangeWebFilter` (`bff_` → custody-JWT, pre-security,
+  fail-closed, `snapdragon.gateway.bff-exchange.enabled`).
+- **login-ui PR-4** — Casdoor OIDC + PKCE + `/login/callback` (`__SNAP_OIDC_ENABLED__`).
+- **user-bff PR-A3** — OIDC login relocation + admin-bff internal client
+  (`app.bff.oidc.enabled`).
+
+**🔭 planned / next:**
+
+- **admin-bff custody tail** — Liquibase band-180 (`bff_session` custody columns) +
+  `/bff/internal/sessions/{token}/custody/stamp` + `/bff/internal/session/exchange`;
+  bumps the auth-core dep to `2.1.0` in lockstep (lands after `2.1.0` publishes).
+- **generator #156** — `app-user-bff` Casdoor OIDC client + PUBLIC
+  `/bff/auth/callback` route seed.
+- a cross-repo **NetworkPolicy egress peer** user-bff → admin-bff internal `:8080`
+  (manifests/generator).
+- **SSO end-to-end live e2e** — kind + Playwright, proving the browser holds only `bff_`.
 
 ## GitOps
 
