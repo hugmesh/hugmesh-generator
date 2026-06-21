@@ -3,7 +3,7 @@
 # the admin UI can link to the latest builds. NOTE: ISOs contain NO keys — the
 # KEYS material is supplied from the USB stick at first boot, never baked in or
 # published.
-stages: [lint, iso, images, deliver, sca, dast, load]
+stages: [lint, verify, iso, images, deliver, sca, dast, load]
 
 variables:
   # Where delivered ISOs live; the admin BFF reads "latest" links from here.
@@ -123,6 +123,42 @@ lint:pentest-templates:
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# =============================================================================
+# verify — the MANDATORY pre-flip gate for the casdoor JWT-Custom token shape.
+#
+# GEN2 set casdoor tokenFormat=JWT-Custom with an empirically-pinned allow-list
+# that (a) closes the default-JWT secret leak — totpSecret / recoveryCodes /
+# password / passwordSalt are excluded BY OMISSION — and (b) carries the MFA
+# outcome claims (mfa_satisfied + mfa_satisfied_at) the BFF stamps into the user's
+# Properties. A WRONG/EMPTY tokenFields set silently strips roles/permissions/
+# isAdmin and breaks ALL authz across ~11 repos, OR re-opens the secret leak — and
+# NO Java test catches it (it's Casdoor-config-level only). So this gate mints a
+# REAL RS256 token against casbin/casdoor:3.80.0 and asserts the 4 secrets ABSENT
+# + the authz claims present + the MFA claim shape, BEFORE the config can flip live.
+#
+# Spins the casdoor + postgres containers via the host docker socket (same idiom as
+# build:isos / .dast-base — no `image:`, on the privileged x86 runner). The script
+# SKIPs (exit 0) with a reason when no container runtime is present, so it never
+# blocks a runner that lacks docker; a runtime-present runner MUST pass. To run
+# this against a mirror, set CASDOOR_IMAGE / POSTGRES_IMAGE (e.g. a $CI_REGISTRY
+# proxy) — no secret is committed.
+casdoor-jwt-custom-gate:
+  stage: verify
+  tags: [snapdragon-x86, privileged]
+  script:
+    - bash tests/casdoor/test-jwt-custom-token.sh
+  rules:
+    # BLOCKING pre-flip gate: always run (and fail the pipeline) when the casdoor
+    # config that this guards changes, OR the test/gate itself changes.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - specs/cluster/manifests/casdoor/**/*
+        - tests/casdoor/test-jwt-custom-token.sh
+        - .gitlab-ci.yml
+    # And on the default branch so a merged casdoor change is re-validated before
+    # it can ship (the live flip happens off main).
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
 # Build the three Pi role ISOs + the x86 host ISO. Needs root + crossdev + qemu
 # on the runner host (the x86_64 node). Tag-select that runner.

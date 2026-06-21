@@ -25,8 +25,10 @@
 # blocks a CI box without docker — but a runtime-present box MUST pass.
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMG="casbin/casdoor:3.80.0"
-PGIMG="postgres:16-alpine"
+# Images are overridable so CI can pull from a mirror/registry (e.g. a $CI_REGISTRY
+# proxy) instead of Docker Hub — defaults are the empirically-pinned upstream tags.
+IMG="${CASDOOR_IMAGE:-casbin/casdoor:3.80.0}"
+PGIMG="${POSTGRES_IMAGE:-postgres:16-alpine}"
 ORG="snapdragon"
 HOSTPORT="${CASDOOR_TEST_PORT:-18000}"
 BASE="http://127.0.0.1:${HOSTPORT}"

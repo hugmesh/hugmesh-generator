@@ -94,7 +94,7 @@ data:
     # map[string]string, so the gateway must Long.parseLong the *_at value).
     # ⚠ An EMPTY/WRONG tokenFields set strips roles/permissions/isAdmin and breaks ALL authz
     # across 11 repos — the curated set below is empirically pinned and guarded by the
-    # held-until-live token-mint regression test (tests/casdoor_jwt_custom_test.py).
+    # held-until-live token-mint regression test (tests/casdoor/test-jwt-custom-token.sh).
     JWT_CUSTOM_TOKEN_FIELDS = [
         "Id", "Name", "Email", "IsAdmin",
         "Properties.mfa_satisfied", "Properties.mfa_satisfied_at",
