@@ -1,0 +1,18 @@
+# snapdragon_domain_reconcile.fc
+# Label the domain-registry -> brand-repo bridge binary as the entrypoint of
+# snapdragon_domain_reconcile_t and its private /var/lib staging dir as
+# snapdragon_domain_reconcile_cache_t. The binary is copied to /usr/sbin by the
+# (protected) build script, gated behind the `domain-registry-bridge` optional
+# service; the OpenRC init + cron are baked alongside. provision_selinux()'s
+# first-boot relabel (setfiles / restorecon -RF /) applies these.
+#
+# The staging dir is created at runtime by the agent (mkdir -p
+# /var/lib/snapdragon/domain-registry); labelling it here lets the agent manage
+# export.json/last-good/domains.conf + the emitted out/<brand>-gitops/ and
+# out/keys/ trees. The registry cache it reads (/etc/snapdragon/registry/*) is
+# labelled snapdragon_authkeys_cache_t by snapdragon_authkeys.fc — the shared
+# on-disk handoff (node.env + baked pubkey).
+
+/usr/sbin/snapdragon-domain-reconcile          --    gen_context(system_u:object_r:snapdragon_domain_reconcile_exec_t,s0)
+
+/var/lib/snapdragon/domain-registry(/.*)?            gen_context(system_u:object_r:snapdragon_domain_reconcile_cache_t,s0)

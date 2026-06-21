@@ -1,0 +1,337 @@
+#!/bin/bash
+# snapdragon-domain-reconcile — the DOMAIN-REGISTRY -> brand-repo bridge (#4).
+#
+# Runs on a node that has the `domain-registry-bridge` OPTIONAL SERVICE selected. It is the
+# pull-half twin of the device-registry / egress-VPN / node-storage reconcile agents and REUSES
+# their idioms verbatim: a boot oneshot + a 60s cron floor, fetch over the in-cluster mTLS
+# SUPERADMIN identity, the SHARED Ed25519 verify + strict-monotonic rollback guard
+# (domain-verify.sh -> registry-verify.sh + the baked registry-pub.ed25519), and
+# FAIL-CLOSED-keep-last-good on ANY error.
+#
+# WHAT IT DOES (INGEST + EMIT only — see WRITEBACK below): it fetches the signed CROSS-DOMAIN
+# domain-registry export (#118), verifies it fail-closed, and for each domain that is
+# registered-but-not-fully-provisioned (caProvisioned==false OR appsetRegistered==false) it
+# drives the EXISTING build-time generators to emit, under a node-local staging dir:
+#   * the per-domain CA + mTLS keystores via scripts/gen-keystores.sh (synthesising a
+#     brands/domains.conf row from each entry), and
+#   * the per-brand GitOps repo (12 ArgoCD Application CRDs) via generate-brand-repos.sh
+#     (synthesising a transient brand profile from each entry).
+# It does NOT mutate any repo-tracked file at runtime; it writes only under its cache/staging.
+#
+# ────────────────────────────────────────────────────────────────────────────────────────────
+# SHIPS DARK — THREE INDEPENDENT GATES, ALL must be true for this agent to do ANYTHING:
+#   1. OPTIONAL-SERVICE NOT SELECTED (primary gate). The agent + its verify lib + init.d + cron
+#      are baked ONLY inside `if _opt_selected domain-registry-bridge` in the stage4 builders.
+#      A default image does not carry the agent in a runlevel and has no cron drop-in -> ZERO
+#      boot/cron execution.
+#   2. PLACEHOLDER PUBLIC KEY (fail-closed crypto gate). If registry-pub.ed25519 is the baked
+#      PLACEHOLDER (no real admin-bff key on the key-USB), verify_sig fails -> no verified
+#      export -> NO CA, NO brand repo. Same fail-closed posture as device-registry.
+#   3. NO TRANSPORT (bootstrap gate). Absent BFF_EXPORT_URL / mTLS certs in node.env -> keep
+#      cache, exit 0 -> NO fetch, NO emit.
+# So a default-built image (not selected, placeholder key, no BFF URL) does NOTHING. Even a
+# selected-but-keyless image fails closed at verify.
+# ────────────────────────────────────────────────────────────────────────────────────────────
+#
+# FIELD GAP (derived, NOT authoritative — flagged for #118 follow-up): the #118 DomainEntry
+# supplies brand/org/clusterDomain/meshTag/nsPrefix/casdoorOrg but NOT the BRAND_TITLE or
+# HEADSCALE_URL that generate-brand-repos.sh REQUIRES. This agent DERIVES them deterministically:
+#   BRAND_TITLE := brand            (slug fallback title)
+#   HEADSCALE_URL := https://headscale.<clusterDomain>   (brands/example.conf:30 convention)
+# Closing this gap needs either two new DomainEntry fields in admin-bff #118 or a static per-mesh
+# map baked at provision time. nsPrefix/casdoorOrg have NO {{TOKEN}} slot in the 12 templates
+# today, so they are carried (and signature-covered) but currently unused by generation.
+#
+# WRITEBACK (deferred): admin-bff #118 has NO status-setter for ca_provisioned/appset_registered/
+# last_reconciled_generation (band-190 ships dark; the columns are written only by THIS future
+# effector over internal-mTLS, and no endpoint exists yet). This agent therefore records the
+# applied generation LOCALLY only (last-good-generation), exactly like egress-VPN's report_state.
+# The ack_generation() stub below is present-but-INERT (guarded behind an unset DOMAIN_ACK_URL,
+# never called) so the follow-up is a one-line enablement once the internal-mTLS setter lands.
+
+set -uo pipefail
+
+NODE_ENV="${DR_NODE_ENV:-/etc/snapdragon/registry/node.env}"
+PUB_KEY="${DR_PUB_KEY:-/etc/snapdragon/registry/registry-pub.ed25519}"
+CACHE_DIR="${DR_CACHE_DIR:-/var/lib/snapdragon/domain-registry}"
+EXPORT_JSON="${CACHE_DIR}/export.json"
+LAST_GOOD="${CACHE_DIR}/last-good-generation"
+STATE_FILE="${CACHE_DIR}/state"
+OUT_DIR="${DR_OUT_DIR:-${CACHE_DIR}/out}"            # node-local staging for emitted brand repos
+DOMAINS_CONF_OUT="${DR_DOMAINS_CONF:-${CACHE_DIR}/domains.conf}"  # synthesised CA-loop input
+VERIFY_LIB="${DR_VERIFY_LIB:-/usr/lib/snapdragon/domain-verify.sh}"
+# The two EXISTING build-time generators the bridge drives (repo-shipped; on a node image they
+# are baked under /usr/share/snapdragon/generator/ by the builders — overridable for the test).
+GEN_KEYSTORES="${DR_GEN_KEYSTORES:-/usr/share/snapdragon/generator/scripts/gen-keystores.sh}"
+GEN_BRAND_REPOS="${DR_GEN_BRAND_REPOS:-/usr/share/snapdragon/generator/generate-brand-repos.sh}"
+# WRITEBACK target — DELIBERATELY UNSET. There is NO admin-bff status-setter endpoint today
+# (band-190 ships dark); leaving this empty keeps ack_generation() inert. A follow-up PR sets
+# DOMAIN_ACK_URL (or reads it from node.env) once the internal-mTLS setter lands.
+DOMAIN_ACK_URL="${DOMAIN_ACK_URL:-}"
+LOG_TAG="snapdragon-domain-reconcile"
+
+log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+warn() { log "WARNING: $*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Read a bare KEY=VALUE from node.env WITHOUT sourcing it (copy of the proven read_env helper).
+read_env() {
+    local k="$1" line
+    line="$(grep -E "^${k}=" "${NODE_ENV}" 2>/dev/null | head -1)" || return 1
+    [ -n "${line}" ] || return 1
+    printf '%s' "${line#*=}" | tr -d '"'"'"' '
+}
+
+report_state() {
+    local st="$1"
+    mkdir -p "${CACHE_DIR}" 2>/dev/null || true
+    printf '%s\n' "${st}" > "${STATE_FILE}" 2>/dev/null || true
+    log "reconcile_state=${st}"
+}
+
+# ── (2) fetch the signed CROSS-DOMAIN export over in-cluster mTLS ──────────────────
+# GET <BFF>/bff/admin/domains/export?node=<MACHINE_KEY_FP>. ?node= is PROVENANCE-only; the body
+# is the FULL cross-domain set regardless. Missing URL/cert => keep cache (bootstrap/offline).
+fetch_export() {
+    local out="$1"
+    [ -n "${BFF_URL}" ] || { warn "BFF_EXPORT_URL unset — bootstrap/offline, keeping cache"; return 1; }
+    have curl || { warn "curl absent — keeping cache"; return 1; }
+    local url="${BFF_URL%/}/bff/admin/domains/export?node=${MACHINE_KEY_FP}"
+    local args=(-sS -m 15 --fail -o "${out}")
+    [ -f "${MTLS_CA}" ] && args+=(--cacert "${MTLS_CA}")
+    if [ -n "${MTLS_CERT}" ] && [ -n "${MTLS_KEY}" ] && [ -f "${MTLS_CERT}" ] && [ -f "${MTLS_KEY}" ]; then
+        args+=(--cert "${MTLS_CERT}" --key "${MTLS_KEY}")
+    else
+        warn "mTLS client cert/key absent — /export rejected (SUPERADMIN|mTLS); keeping cache"; return 1
+    fi
+    if curl "${args[@]}" "${url}" 2>/dev/null; then
+        [ -s "${out}" ] && return 0
+        warn "empty export body — keeping cache"; return 1
+    fi
+    warn "fetch failed (${url}) — keeping cache"; return 1
+}
+
+# ── (4) atomic cache swap + last-good bump (tmp + fsync + rename) ──────────────────
+commit_cache() {
+    local newjson="$1" newgen="$2"
+    local tmp="${EXPORT_JSON}.tmp.$$"
+    cp -f "${newjson}" "${tmp}" 2>/dev/null || { warn "cache stage failed"; return 1; }
+    have sync && sync 2>/dev/null || true
+    mv -f "${tmp}" "${EXPORT_JSON}" 2>/dev/null || { warn "cache rename failed"; rm -f "${tmp}"; return 1; }
+    local lgt="${LAST_GOOD}.tmp.$$"
+    printf '%s\n' "${newgen}" > "${lgt}" 2>/dev/null && mv -f "${lgt}" "${LAST_GOOD}" 2>/dev/null || rm -f "${lgt}"
+    log "accepted domain export gen=${newgen} (cross-domain set; cache swapped)"
+    return 0
+}
+
+# ── (5a) synthesise a brands/domains.conf row per registered-not-provisioned domain ─
+# Row schema (brands/domains.conf:16): DOMAIN [BRAND] [CA_CERT] [CA_KEY]. caRef drives the
+# import-vs-generate decision in gen-keystores.sh provision_domain():
+#   caRef=="generate" or empty -> self-signed root branch (NO cert/key columns).
+#   else -> caRef is a Vault PKI path / ESO secret name; the bridge would resolve it to off-git
+#           PEM paths via an ESO-mounted secret. We NEVER put key material in the row; if the
+#           ref cannot be resolved to readable PEM paths we FALL BACK to "generate" (self-signed)
+#           and warn (fail-safe: a domain still gets a CA; the operator can re-point caRef later).
+# Soft-disabled domains are OMITTED from the export entirely, so we never emit a row for them.
+build_domains_conf() {
+    local export_json="$1"
+    have jq || { warn "jq absent — cannot synthesise domains.conf"; return 1; }
+    mkdir -p "$(dirname "${DOMAINS_CONF_OUT}")" 2>/dev/null || true
+    {
+        echo "# synthesised by snapdragon-domain-reconcile from the verified #118 domain export."
+        echo "# DO NOT EDIT — regenerated each reconcile. One row per registered-not-provisioned domain."
+        # Iterate entries in ARRAY ORDER (server-sorted by clusterDomain).
+        local n i dom brand caref ca_prov appset
+        n="$(jq -r '.body.entries | length' "${export_json}" 2>/dev/null || echo 0)"
+        for ((i = 0; i < n; i++)); do
+            dom="$(jq -r ".body.entries[$i].clusterDomain // empty" "${export_json}" 2>/dev/null)"
+            brand="$(jq -r ".body.entries[$i].brand // empty" "${export_json}" 2>/dev/null)"
+            caref="$(jq -r ".body.entries[$i].caRef // empty" "${export_json}" 2>/dev/null)"
+            ca_prov="$(jq -r ".body.entries[$i].caProvisioned // false" "${export_json}" 2>/dev/null)"
+            appset="$(jq -r ".body.entries[$i].appsetRegistered // false" "${export_json}" 2>/dev/null)"
+            [ -n "${dom}" ] || continue
+            # A domain needs action when its CA is not provisioned OR its appset is not registered.
+            if [ "${ca_prov}" = "true" ] && [ "${appset}" = "true" ]; then continue; fi
+            [ -n "${brand}" ] || brand="${dom%%.*}"
+            # caRef -> CA columns. "generate"/empty -> self-signed (no columns). A non-generate
+            # ref is resolved to off-git PEM paths via the ESO mount; unresolved -> generate.
+            local cc="" ck=""
+            if [ -n "${caref}" ] && [ "${caref}" != "generate" ]; then
+                if resolve_ca_ref "${caref}" "${dom}"; then
+                    cc="${_DR_CA_CERT}"; ck="${_DR_CA_KEY}"
+                else
+                    warn "domain ${dom}: caRef='${caref}' did not resolve to readable off-git PEM — falling back to self-signed (generate)"
+                fi
+            fi
+            if [ -n "${cc}" ] && [ -n "${ck}" ]; then
+                printf '%s\t%s\t%s\t%s\n' "${dom}" "${brand}" "${cc}" "${ck}"
+            else
+                printf '%s\t%s\n' "${dom}" "${brand}"
+            fi
+        done
+    } > "${DOMAINS_CONF_OUT}.tmp" 2>/dev/null \
+        && mv -f "${DOMAINS_CONF_OUT}.tmp" "${DOMAINS_CONF_OUT}" 2>/dev/null \
+        || { warn "domains.conf synthesis failed"; rm -f "${DOMAINS_CONF_OUT}.tmp"; return 1; }
+    log "synthesised domains.conf rows: $(grep -cvE '^[[:space:]]*(#|$)' "${DOMAINS_CONF_OUT}" 2>/dev/null || echo 0)"
+    return 0
+}
+
+# Resolve a non-"generate" caRef (Vault PKI path / ESO secret name) to off-git PEM file paths.
+# Looks under an ESO-mounted secret dir keyed by domain; sets _DR_CA_CERT/_DR_CA_KEY and returns
+# 0 iff BOTH are present + readable. Returns non-zero otherwise (caller falls back to generate).
+# The bridge NEVER writes key bytes into the row — only the off-git PEM paths the mount exposes.
+resolve_ca_ref() {
+    local caref="$1" dom="$2"
+    local mnt="${DR_CA_SECRET_DIR:-/etc/snapdragon/domain-ca}"
+    _DR_CA_CERT=""; _DR_CA_KEY=""
+    local cert="${mnt}/${dom}/ca.crt" key="${mnt}/${dom}/ca.key"
+    if [ -r "${cert}" ] && [ -r "${key}" ]; then
+        _DR_CA_CERT="${cert}"; _DR_CA_KEY="${key}"
+        log "domain ${dom}: caRef='${caref}' resolved to ESO-mounted PEM (${cert})"
+        return 0
+    fi
+    return 1
+}
+
+# ── (5b) run the per-domain CA loop (gen-keystores.sh) against the synthesised rows ─
+# Points DOMAINS_CONF at our synthesised file + OUT at the node-local staging dir, so the run
+# consumes the verified-export-derived rows and never touches repo-tracked files. gen-keystores
+# is idempotent on already-generated CAs (reuse branch). On a test/dry run set DR_SKIP_CA=1 to
+# scope to row-synthesis only (CA gen is openssl/keytool-heavy).
+run_ca_loop() {
+    [ "${DR_SKIP_CA:-0}" = "1" ] && { log "DR_SKIP_CA=1 — skipping real CA generation (row synthesis only)"; return 0; }
+    [ -r "${GEN_KEYSTORES}" ] || { warn "gen-keystores.sh not baked at ${GEN_KEYSTORES} — skipping CA loop"; return 1; }
+    have openssl || { warn "openssl absent — skipping CA loop"; return 1; }
+    have keytool || { warn "keytool absent — skipping CA loop (no JKS)"; return 1; }
+    mkdir -p "${OUT_DIR}" 2>/dev/null || true
+    log "running per-domain CA loop (gen-keystores.sh, DOMAINS_CONF=${DOMAINS_CONF_OUT}, OUT=${OUT_DIR}/keys)"
+    DOMAINS_CONF="${DOMAINS_CONF_OUT}" bash "${GEN_KEYSTORES}" "${OUT_DIR}/keys" \
+        || warn "gen-keystores.sh reported a non-zero (some domains may be degraded)"
+}
+
+# ── (5c) render the per-brand GitOps repo (generate-brand-repos.sh) per entry ──────
+# generate-brand-repos.sh REQUIRES a brand profile shell file setting BRAND, BRAND_TITLE, ORG,
+# CLUSTER_DOMAIN, HEADSCALE_URL, MESH_TAG. We synthesise a transient profile per entry from the
+# verified export, DERIVING the two missing fields (BRAND_TITLE/HEADSCALE_URL — see header).
+render_brand_repos() {
+    local export_json="$1"
+    [ -r "${GEN_BRAND_REPOS}" ] || { warn "generate-brand-repos.sh not baked at ${GEN_BRAND_REPOS} — skipping brand repos"; return 1; }
+    have jq || { warn "jq absent — cannot render brand repos"; return 1; }
+    mkdir -p "${OUT_DIR}" 2>/dev/null || true
+    local n i dom brand org mesh ns casdoor ca_prov appset prof
+    n="$(jq -r '.body.entries | length' "${export_json}" 2>/dev/null || echo 0)"
+    for ((i = 0; i < n; i++)); do
+        dom="$(jq -r ".body.entries[$i].clusterDomain // empty" "${export_json}" 2>/dev/null)"
+        brand="$(jq -r ".body.entries[$i].brand // empty" "${export_json}" 2>/dev/null)"
+        org="$(jq -r ".body.entries[$i].org // empty" "${export_json}" 2>/dev/null)"
+        mesh="$(jq -r ".body.entries[$i].meshTag // empty" "${export_json}" 2>/dev/null)"
+        ns="$(jq -r ".body.entries[$i].nsPrefix // empty" "${export_json}" 2>/dev/null)"
+        casdoor="$(jq -r ".body.entries[$i].casdoorOrg // empty" "${export_json}" 2>/dev/null)"
+        ca_prov="$(jq -r ".body.entries[$i].caProvisioned // false" "${export_json}" 2>/dev/null)"
+        appset="$(jq -r ".body.entries[$i].appsetRegistered // false" "${export_json}" 2>/dev/null)"
+        [ -n "${dom}" ] || continue
+        if [ "${ca_prov}" = "true" ] && [ "${appset}" = "true" ]; then continue; fi
+        [ -n "${brand}" ] || brand="${dom%%.*}"
+        [ -n "${org}" ] || org="${brand}"
+        [ -n "${mesh}" ] || mesh="tag:${brand}"
+        # FIELD-GAP derivation (see header) — NOT authoritative; flagged for #118.
+        local title="${brand}"                          # BRAND_TITLE := brand (slug fallback)
+        local headscale="https://headscale.${dom}"      # HEADSCALE_URL := convention
+        prof="$(mktemp 2>/dev/null)" || continue
+        {
+            echo "# transient brand profile synthesised by snapdragon-domain-reconcile (#4)."
+            echo "# DERIVED fields (BRAND_TITLE/HEADSCALE_URL) are NOT authoritative — #118 field gap."
+            printf 'BRAND=%q\n' "${brand}"
+            printf 'BRAND_TITLE=%q\n' "${title}"
+            printf 'ORG=%q\n' "${org}"
+            printf 'CLUSTER_DOMAIN=%q\n' "${dom}"
+            printf 'HEADSCALE_URL=%q\n' "${headscale}"
+            printf 'MESH_TAG=%q\n' "${mesh}"
+            # nsPrefix/casdoorOrg are carried (signature-covered) but have NO template slot today.
+            printf '# NS_PREFIX=%q  (export-only; no template token yet)\n' "${ns}"
+            printf '# CASDOOR_ORG=%q (export-only; no template token yet)\n' "${casdoor}"
+        } > "${prof}"
+        log "rendering brand repo for ${brand} (${dom}) -> ${OUT_DIR}/${brand}-gitops/"
+        bash "${GEN_BRAND_REPOS}" "${prof}" --out-dir "${OUT_DIR}" \
+            || warn "generate-brand-repos.sh failed for ${brand} (${dom})"
+        rm -f "${prof}" 2>/dev/null || true
+    done
+    return 0
+}
+
+# ── WRITEBACK STUB — INERT (never called; guarded behind an unset DOMAIN_ACK_URL) ──
+# admin-bff #118 has NO status-setter for ca_provisioned/appset_registered/last_reconciled_
+# generation (band-190 ships dark). When the internal-mTLS setter lands, the follow-up PR sets
+# DOMAIN_ACK_URL and calls this once per applied generation. The likely shape (mirroring
+# ImageBuildIngestController's /bff/internal/** permitAll()+mTLS pattern):
+#   POST <ACK>/bff/internal/domains/<clusterDomain>/reconcile-ack
+#        { caProvisioned, appsetRegistered, generation }
+# It is present so enabling writeback is a one-line change; it is NEVER invoked from main().
+ack_generation() {
+    local dom="$1" ca_prov="$2" appset="$3" gen="$4"
+    [ -n "${DOMAIN_ACK_URL}" ] || return 0    # INERT: no setter endpoint exists yet
+    have curl || return 0
+    local url="${DOMAIN_ACK_URL%/}/bff/internal/domains/${dom}/reconcile-ack"
+    local body; body="$(jq -nc --argjson ca "${ca_prov}" --argjson as "${appset}" --argjson g "${gen}" \
+        '{caProvisioned:$ca, appsetRegistered:$as, generation:$g}' 2>/dev/null)" || return 0
+    local args=(-sS -m 10 --fail -X POST -H 'Content-Type: application/json' -d "${body}" -o /dev/null)
+    [ -f "${MTLS_CA}" ] && args+=(--cacert "${MTLS_CA}")
+    [ -n "${MTLS_CERT}" ] && [ -n "${MTLS_KEY}" ] && args+=(--cert "${MTLS_CERT}" --key "${MTLS_KEY}")
+    curl "${args[@]}" "${url}" 2>/dev/null && log "acked ${dom} gen=${gen}" \
+        || log "ack ${dom} best-effort failed (BFF reconciles forward regardless)"
+    return 0
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────────
+main() {
+    # ── Pre-flight: every miss => keep cache, exit 0 (gate 2 + gate 3 live here) ──
+    [ -r "${VERIFY_LIB}" ] || { warn "verify lib missing (${VERIFY_LIB}) — keeping cache"; exit 0; }
+    [ -r "${NODE_ENV}" ]   || { warn "node.env missing — not a registry node? keeping cache"; exit 0; }
+    [ -r "${PUB_KEY}" ]    || { warn "baked public key missing (${PUB_KEY}) — keeping cache (fail-closed)"; exit 0; }
+    # shellcheck source=/dev/null
+    . "${VERIFY_LIB}" 2>/dev/null || { warn "failed to source verify lib — keeping cache"; exit 0; }
+    have jq      || { warn "jq absent — keeping cache"; exit 0; }
+    have openssl || { warn "openssl absent — keeping cache"; exit 0; }
+    mkdir -p "${CACHE_DIR}" 2>/dev/null || true
+
+    MACHINE_KEY_FP="$(read_env MACHINE_KEY_FP)" || { warn "node.env missing MACHINE_KEY_FP — keeping cache"; exit 0; }
+    [ -n "${MACHINE_KEY_FP}" ] || { warn "empty MACHINE_KEY_FP — keeping cache"; exit 0; }
+    BFF_URL="$(read_env BFF_EXPORT_URL)"   || BFF_URL=""
+    MTLS_CERT="$(read_env BFF_CLIENT_CERT)" || MTLS_CERT=""
+    MTLS_KEY="$(read_env BFF_CLIENT_KEY)"   || MTLS_KEY=""
+    MTLS_CA="$(read_env BFF_CA)"            || MTLS_CA="/etc/snapdragon/pki/ca-chain.crt"
+
+    local fetched; fetched="$(mktemp 2>/dev/null)" || { warn "mktemp failed — keeping cache"; exit 0; }
+    trap 'rm -f "${fetched}" 2>/dev/null || true' EXIT
+
+    # (2) fetch — gate 3 (no transport) returns here, keeping cache + emitting nothing.
+    if ! fetch_export "${fetched}"; then report_state "inert"; exit 0; fi
+
+    # (3) verify (signed + Ed25519 over domain canonical bytes + strict monotonic) — gate 2.
+    if ! domain_verify_export "${fetched}" "${PUB_KEY}" "${LAST_GOOD}"; then
+        warn "fetched domain export FAILED verification/rollback (unsigned/tampered/foreign/gen<=last-good) — keeping cache, emitting nothing"
+        report_state "rejected"
+        exit 0
+    fi
+    local gen; gen="$(rv_gen "${fetched}")"
+
+    # (4) atomic swap.
+    commit_cache "${fetched}" "${gen}" || exit 0
+
+    # (5) EMIT: synthesise rows -> CA loop -> brand repos (per registered-not-provisioned domain).
+    if build_domains_conf "${EXPORT_JSON}"; then
+        run_ca_loop
+        render_brand_repos "${EXPORT_JSON}"
+    fi
+
+    # (6) WRITEBACK is DEFERRED — ack_generation() is INERT (DOMAIN_ACK_URL unset; never called).
+    # The applied generation is recorded LOCALLY (last-good-generation) by commit_cache above.
+    report_state "emitted"
+    log "domain-registry bridge: emitted artifacts under ${OUT_DIR} (writeback deferred — no admin-bff setter)"
+    exit 0
+}
+
+# Guard main so the logic test can source the functions without executing the flow.
+if [ "${BASH_SOURCE[0]:-$0}" = "${0}" ]; then
+    main "$@"
+fi

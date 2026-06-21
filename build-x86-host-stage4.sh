@@ -1066,6 +1066,23 @@ cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson"     "${SYSROOT}/etc/h
 cp "${SHARED_SPECS}/etc/headscale/policy.hujson.tmpl"          "${SYSROOT}/etc/headscale/policy.hujson.tmpl"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-policy-sync"         "${SYSROOT}/etc/snapdragon/registry/cron-policy-sync"
 
+# ── Domain-registry -> brand-repo bridge (#4) — DEFAULT-OFF optional service ─────
+# Bake the reconcile agent + its source-and-extend verify lib (domain-verify.sh) +
+# the OpenRC service into every host image. INERT until enabled (the gate below
+# links the service + cron ONLY when `domain-registry-bridge` is selected; a real
+# key is required to verify; absent transport it keeps cache + emits nothing).
+# REUSES the baked registry-pub.ed25519 (Layer-B's key — never re-bake). The agent
+# drives the EXISTING gen-keystores.sh + generate-brand-repos.sh, so those two
+# generators + the templates are baked under /usr/share/snapdragon/generator.
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-domain-reconcile"      "${SYSROOT}/usr/sbin/snapdragon-domain-reconcile";      chmod +x "${SYSROOT}/usr/sbin/snapdragon-domain-reconcile"
+cp "${SHARED_SPECS}/usr/lib/snapdragon/domain-verify.sh"       "${SYSROOT}/usr/lib/snapdragon/domain-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-domain-reconcile"    "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile";    chmod +x "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-domain-reconcile"    "${SYSROOT}/etc/snapdragon/registry/cron-domain-reconcile"
+mkdir -p "${SYSROOT}/usr/share/snapdragon/generator/scripts" "${SYSROOT}/usr/share/snapdragon/generator/templates"
+cp "${SCRIPT_DIR}/scripts/gen-keystores.sh"  "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh";  chmod +x "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh"
+cp "${SCRIPT_DIR}/generate-brand-repos.sh"   "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh";   chmod +x "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh"
+cp -r "${SCRIPT_DIR}/templates/."            "${SYSROOT}/usr/share/snapdragon/generator/templates/"
+
 render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
 
@@ -1170,6 +1187,20 @@ else
     ${ROLE_HEADSCALE} && SVCS+=(headscale)
 fi
 ${SKIP_MESH} || ${SKIP_TAILSCALE} || SVCS+=(tailscaled)
+# Domain-registry -> brand-repo bridge (#4, DEFAULT-OFF optional service): link the
+# reconcile agent ONLY when `domain-registry-bridge` is selected AND this is a k8s
+# node (a CLIENT desktop is not a cluster member). Unselected => never linked + no
+# cron => ZERO boot/cron execution (gate 1 of 3). The 60s cron (staged at
+# /etc/snapdragon/registry/cron-domain-reconcile) is installed alongside.
+if ! ${ROLE_CLIENT} && _opt_selected domain-registry-bridge; then
+    SVCS+=(snapdragon-domain-reconcile)
+    if [ -f "${SYSROOT}/etc/snapdragon/registry/cron-domain-reconcile" ]; then
+        mkdir -p "${SYSROOT}/etc/cron.d"
+        cp -f "${SYSROOT}/etc/snapdragon/registry/cron-domain-reconcile" \
+              "${SYSROOT}/etc/cron.d/snapdragon-domain-reconcile"
+        info "OPTIONAL_SERVICES: domain-registry-bridge selected — linked snapdragon-domain-reconcile + 60s cron"
+    fi
+fi
 for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/default/${s}" 2>/dev/null || true; done
 # Belt-and-suspenders for shared / --resume sysroots: `ln -sf` only ADDS, so a prior
 # role's run can leave a headscale runlevel symlink behind that a worker/client image

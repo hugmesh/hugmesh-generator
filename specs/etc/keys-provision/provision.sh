@@ -1729,6 +1729,99 @@ provision_vpn() {
     log "egress-vpn: staged ${installed} config(s) for domain ${dom} (service NOT started — default-off optional service)"
 }
 
+# ── Domain-registry -> brand-repo bridge (#4): enable the signed-export reconcile ──
+# The bridge ingests the signed #118 cross-domain domain-registry export and emits a
+# per-domain CA + per-brand GitOps repo into a node-local staging dir. It is a
+# DEFAULT-OFF optional service, gated THREE ways (all must hold to act):
+#   (1) it is only ENABLED here when .domain_registry.enabled == true in the manifest
+#       (the provision-time equivalent of the `domain-registry-bridge` optional-service
+#       selector); absent/false => the baked agent stays un-linked + un-cr-on'd (INERT);
+#   (2) it verifies the export against the BAKED registry-pub.ed25519 (Layer-B's key,
+#       REUSED — never re-baked here); a placeholder/absent key fail-closes (no emit);
+#   (3) absent BFF transport (URL/mTLS certs in node.env) it keeps cache + emits nothing.
+# This hook NEVER generates or copies a signing key — it asserts the existing
+# registry-pub.ed25519 (staged by provision_device_registry / the builders) is present
+# and wires the boot oneshot + 60s cron. It writes node.env's BFF transport if the
+# manifest carries it (mirroring provision_device_registry), reusing the SAME keys.
+provision_domain_registry() {
+    local reg_dir=/etc/snapdragon/registry
+    local cache_dir=/var/lib/snapdragon/domain-registry
+
+    # (1) Optional-service gate: only enable on an explicit manifest opt-in.
+    local enabled; enabled="$(jqm '.domain_registry.enabled // false')"
+    if [ "${enabled}" != "true" ]; then
+        log "domain-registry: .domain_registry.enabled != true — NOT enabling the bridge (baked agent stays inert; default-off optional service)"
+        return 0
+    fi
+
+    log "domain-registry: .domain_registry.enabled=true — enabling the signed-export bridge (fail-closed; emits NOTHING without a real key + transport)"
+    mkdir -p "${reg_dir}" "${cache_dir}" 2>/dev/null || true
+
+    # The agent + verify lib are BAKED by the builders (gated on the optional service).
+    # Sanity-check (additive: a stale image without them just stays inert, never bricks).
+    [ -x /usr/sbin/snapdragon-domain-reconcile ] \
+        || warn "domain-registry: /usr/sbin/snapdragon-domain-reconcile missing from image (no bridge; nothing emitted)"
+    [ -r /usr/lib/snapdragon/domain-verify.sh ] \
+        || warn "domain-registry: /usr/lib/snapdragon/domain-verify.sh missing from image (verify unavailable)"
+
+    # (2) Assert the BAKED registry public verifying key is present (REUSED from Layer-B
+    # — provision_device_registry / the builders stage it). NEVER generate or copy a new
+    # key here. Absent/placeholder => the bridge fail-closes (emits nothing) until the
+    # real public half is on the key-USB.
+    if [ ! -s "${reg_dir}/registry-pub.ed25519" ]; then
+        if [ -f "${BASE}/device-registry/registry-pub.ed25519" ] \
+                && [ -s "${BASE}/device-registry/registry-pub.ed25519" ]; then
+            cp -f "${BASE}/device-registry/registry-pub.ed25519" "${reg_dir}/registry-pub.ed25519"
+            chmod 0644 "${reg_dir}/registry-pub.ed25519"
+            log "domain-registry: staged the REUSED registry-pub.ed25519 (Layer-B key; export verified against THIS key)"
+        else
+            warn "domain-registry: registry-pub.ed25519 ABSENT/placeholder — bridge fail-closes (emits nothing) until the public half is baked onto the key-USB"
+        fi
+    fi
+
+    # (3) BFF /export transport (the SUPERADMIN-equivalent in-cluster mTLS identity).
+    # Reuse the SAME node.env the device-registry bridge uses; if it already exists
+    # (provision_device_registry ran), we leave its transport fields intact. Only seed
+    # node.env here if it is absent AND the manifest carries domain-registry transport.
+    if [ ! -f "${reg_dir}/node.env" ]; then
+        local mkey bff_url bff_cert bff_key bff_ca
+        mkey="$(jqm '.domain_registry.machine_key_fp // ""')"
+        { [ -z "${mkey}" ] || [ "${mkey}" = "null" ]; } && [ -f "${BASE}/device-registry/machine_key_fp" ] \
+            && mkey="$(tr -d '[:space:]' < "${BASE}/device-registry/machine_key_fp" 2>/dev/null)"
+        bff_url="$(jqm '.domain_registry.bff_export_url // ""')"
+        bff_cert="$(jqm '.domain_registry.bff_client_cert // ""')"
+        bff_key="$(jqm '.domain_registry.bff_client_key // ""')"
+        bff_ca="$(jqm '.domain_registry.bff_ca // "/etc/snapdragon/pki/ca-chain.crt"')"
+        {
+            echo "# domain-registry bridge node identity + BFF transport (#4). MACHINE_KEY_FP is"
+            echo "# the ?node= PROVENANCE param only; the export body is the full cross-domain set."
+            echo "MACHINE_KEY_FP=${mkey}"
+            echo "BFF_EXPORT_URL=${bff_url}"
+            echo "BFF_CLIENT_CERT=${bff_cert}"
+            echo "BFF_CLIENT_KEY=${bff_key}"
+            echo "BFF_CA=${bff_ca}"
+        } > "${reg_dir}/node.env"
+        chmod 0644 "${reg_dir}/node.env"
+        log "domain-registry: wrote node.env (machine_key_fp=${mkey:-<unset>})"
+    fi
+
+    # Enable the boot oneshot + 60s cron (convergence floor). The builders' optional-
+    # service gate already linked the runlevel symlink + cron when selected; this is
+    # belt-and-suspenders for a manifest-driven enable on a selected image.
+    if [ -f /etc/init.d/snapdragon-domain-reconcile ]; then
+        rc-update add snapdragon-domain-reconcile default 2>/dev/null \
+            && log "domain-registry: enabled snapdragon-domain-reconcile (boot reconcile)" \
+            || warn "domain-registry: rc-update add snapdragon-domain-reconcile failed"
+    else
+        warn "domain-registry: init.d/snapdragon-domain-reconcile not baked — no boot reconcile (was domain-registry-bridge selected at build?)"
+    fi
+    if [ -f "${reg_dir}/cron-domain-reconcile" ]; then
+        cp -f "${reg_dir}/cron-domain-reconcile" /etc/cron.d/snapdragon-domain-reconcile
+        chmod 0644 /etc/cron.d/snapdragon-domain-reconcile
+        log "domain-registry: installed 60s reconcile cron (convergence floor)"
+    fi
+}
+
 # ── Desktop app governance (client desktops: laptop / chromebook / desktop) ──
 # Renders the baked desktop-governance config TEMPLATES into their live system
 # locations at first boot, parameterized on the node's OWN domain. Three legs,
@@ -2425,6 +2518,7 @@ main() {
     provision_headscale
     provision_tailscale
     provision_device_registry   # Layer-B sshd enforcement (ADMIN nodes) — after mesh join, before k8s
+    provision_domain_registry   # #4 domain-registry -> brand-repo bridge (default-off; reuses Layer-B key) — after device-registry stages the pubkey
     provision_kubernetes
     provision_backup
     provision_snapdragon

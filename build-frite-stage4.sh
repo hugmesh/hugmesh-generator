@@ -683,6 +683,26 @@ cp "${SHARED_SPECS}/etc/init.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/init.d/
 chmod +x "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile"
 
+# ── Domain-registry -> brand-repo bridge (#4) — DEFAULT-OFF, baked-but-INERT ─────
+# Bake the reconcile agent + its verify lib (domain-verify.sh) + the OpenRC service
+# + the two generators for PARITY with the rpi5/x86 host images. Frite is a
+# single-board appliance, NOT a k8s cluster node (it bakes no cluster GitOps tree)
+# and has no _opt_selected gate, so — exactly like the egress-VPN reconcile above —
+# the agent is NEVER linked into a runlevel here (inert-by-omission). REUSES the
+# baked registry-pub.ed25519 (never re-bake). Even if hand-enabled it fail-closes
+# without a real key + transport, and with no cluster there is nothing to drive.
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-domain-reconcile" "${SYSROOT}/usr/sbin/snapdragon-domain-reconcile"
+chmod +x "${SYSROOT}/usr/sbin/snapdragon-domain-reconcile"
+cp "${SHARED_SPECS}/usr/lib/snapdragon/domain-verify.sh" "${SYSROOT}/usr/lib/snapdragon/domain-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-domain-reconcile" "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-domain-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-domain-reconcile"
+mkdir -p "${SYSROOT}/usr/share/snapdragon/generator/scripts" "${SYSROOT}/usr/share/snapdragon/generator/templates"
+cp "${SCRIPT_DIR}/scripts/gen-keystores.sh"  "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh"
+cp "${SCRIPT_DIR}/generate-brand-repos.sh"   "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh"
+cp -r "${SCRIPT_DIR}/templates/."            "${SYSROOT}/usr/share/snapdragon/generator/templates/"
+chmod +x "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh" "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh"
+
 # Node role + domain + env markers (read by keys-provision / first-boot).
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"

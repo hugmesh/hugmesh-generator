@@ -1,0 +1,15 @@
+# snapdragon-domain-reconcile — domain-registry -> brand-repo bridge convergence timer (60s).
+#
+# The TIMER half of the domain-registry bridge (#4) (the OpenRC service runs the agent once at
+# boot; this cron entry re-runs it every 60s). cronie reads /etc/cron.d (the same mechanism
+# provision.sh uses for snapdragon-device-registry-sync + snapdragon-vpn-reconcile). Installed
+# ONLY when the `domain-registry-bridge` optional service is selected (the stage4 gate stages
+# this file at /etc/snapdragon/registry/cron-domain-reconcile and copies it here on selection).
+#
+# The agent is FAIL-CLOSED + idempotent: a failed fetch/verify keeps the last-good cache + emits
+# nothing; a successful one synthesises the domains.conf rows, runs the per-domain CA loop, and
+# renders the per-brand GitOps repos into a node-local staging dir. The authoritative fast path
+# is the BFF; this pull is the convergence FLOOR for missed pushes / reboots.
+#
+# Field order: min hour dom month dow user command
+* * * * * root /usr/sbin/snapdragon-domain-reconcile >> /var/log/snapdragon-domain-reconcile.log 2>&1

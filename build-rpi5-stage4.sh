@@ -1655,6 +1655,29 @@ cp "${SHARED_SPECS}/etc/init.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/init.d/
 chmod +x "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile"
 
+# ── Domain-registry -> brand-repo bridge (#4) — DEFAULT-OFF optional service ─────
+# Bake the reconcile agent + its source-and-extend verify lib (domain-verify.sh) +
+# the OpenRC service into every node image. INERT until enabled: the gate below
+# links the service + cron ONLY when `domain-registry-bridge` is selected; absent a
+# real key the verify fail-closes; absent transport it keeps cache + emits nothing.
+# REUSES the baked registry-pub.ed25519 (Layer-B's key — never re-bake). The agent
+# drives the EXISTING gen-keystores.sh + generate-brand-repos.sh, so those two
+# generators are baked under /usr/share/snapdragon/generator for the agent to exec.
+# The cron drop-in is STAGED at /etc/snapdragon/registry (gate places it on select),
+# mirroring the device-registry-sync / vpn-reconcile staging.
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-domain-reconcile" "${SYSROOT}/usr/sbin/snapdragon-domain-reconcile"
+chmod +x "${SYSROOT}/usr/sbin/snapdragon-domain-reconcile"
+cp "${SHARED_SPECS}/usr/lib/snapdragon/domain-verify.sh" "${SYSROOT}/usr/lib/snapdragon/domain-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-domain-reconcile" "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-domain-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-domain-reconcile"
+# The two build-time generators the bridge drives at runtime (read-only payload).
+mkdir -p "${SYSROOT}/usr/share/snapdragon/generator/scripts" "${SYSROOT}/usr/share/snapdragon/generator/templates"
+cp "${SCRIPT_DIR}/scripts/gen-keystores.sh"     "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh"
+cp "${SCRIPT_DIR}/generate-brand-repos.sh"      "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh"
+cp -r "${SCRIPT_DIR}/templates/."               "${SYSROOT}/usr/share/snapdragon/generator/templates/"
+chmod +x "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh" "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh"
+
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
@@ -1730,6 +1753,21 @@ if _opt_selected egress-vpn; then
         cp -f "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile" \
               "${SYSROOT}/etc/cron.d/snapdragon-vpn-reconcile"
         info "OPTIONAL_SERVICES: egress-vpn selected — linked snapdragon-vpn-reconcile + 60s cron"
+    fi
+fi
+# Domain-registry -> brand-repo bridge (#4, DEFAULT-OFF optional service): link the
+# signed-export RECONCILE agent into the default runlevel ONLY when the
+# `domain-registry-bridge` service is selected. When unselected the OpenRC service
+# is never linked and no cron drop-in exists -> ZERO boot/cron execution (gate 1 of
+# 3; the placeholder-key + no-transport gates fail-close the rest). The 60s cron
+# (staged at /etc/snapdragon/registry/cron-domain-reconcile) is installed alongside.
+if _opt_selected domain-registry-bridge; then
+    DEFAULT_SVCS+=(snapdragon-domain-reconcile)
+    if [ -f "${SYSROOT}/etc/snapdragon/registry/cron-domain-reconcile" ]; then
+        mkdir -p "${SYSROOT}/etc/cron.d"
+        cp -f "${SYSROOT}/etc/snapdragon/registry/cron-domain-reconcile" \
+              "${SYSROOT}/etc/cron.d/snapdragon-domain-reconcile"
+        info "OPTIONAL_SERVICES: domain-registry-bridge selected — linked snapdragon-domain-reconcile + 60s cron"
     fi
 fi
 for svc in "${DEFAULT_SVCS[@]}"; do

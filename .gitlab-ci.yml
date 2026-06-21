@@ -160,6 +160,26 @@ casdoor-jwt-custom-gate:
     # it can ship (the live flip happens off main).
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
 
+# Domain-registry -> brand-repo bridge (#4) consumer test: the OFFLINE verify +
+# emit matrix for the signed #118 cross-domain export (byte-exact canonical bytes;
+# genuine ACCEPT; tampered/unsigned/foreign/rollback REJECT; defaults INERT). Needs
+# only bash + jq + openssl + base64 (no docker, no cluster) so it runs on any runner;
+# the test itself SKIPs (exit 0) if a tool is absent. Mirrors the device-registry /
+# node-storage / egress-vpn consumer tests (which are otherwise CI-unwired today).
+domain-registry-reconcile-verify:
+  stage: verify
+  tags: [snapdragon-x86]
+  script:
+    - bash tests/domain-registry/test-domain-reconcile-verify.sh
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - specs/usr/sbin/snapdragon-domain-reconcile
+        - specs/usr/lib/snapdragon/domain-verify.sh
+        - tests/domain-registry/test-domain-reconcile-verify.sh
+        - .gitlab-ci.yml
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
 # Build the three Pi role ISOs + the x86 host ISO. Needs root + crossdev + qemu
 # on the runner host (the x86_64 node). Tag-select that runner.
 build:isos:

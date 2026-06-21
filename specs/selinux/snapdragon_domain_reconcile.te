@@ -1,0 +1,102 @@
+################################################################
+# snapdragon_domain_reconcile.te
+# Confined domain for the domain-registry -> brand-repo bridge agent
+# (/usr/sbin/snapdragon-domain-reconcile), the boot-oneshot + 60s-cron
+# Layer-B sibling of the device-registry / egress-VPN / node-storage reconcile
+# agents. On a node with the `domain-registry-bridge` optional service selected
+# it:
+#   1. fetches the signed CROSS-DOMAIN domain-registry export (#118) over
+#      in-cluster mTLS,
+#   2. verifies it (shared Ed25519 verify via domain-verify.sh -> the SAME
+#      registry-verify.sh primitives + the baked registry-pub.ed25519),
+#   3. synthesises a brands/domains.conf row per registered-not-provisioned
+#      domain and runs the per-domain CA loop (gen-keystores.sh: openssl/keytool),
+#   4. renders the per-brand GitOps repo (generate-brand-repos.sh: sed/git) into a
+#      node-local staging dir under /var/lib/snapdragon/domain-registry.
+#
+# WHY a dedicated domain: today it would run as an UNCONFINED initrc domain. It
+# needs mTLS egress + the shared registry-cache reads + exec of the two generator
+# scripts (which run openssl/keytool/sed/git) + manage on its own staging cache.
+# It does NOT need block-device admin (no lsblk/cryptsetup/mount) — so, UNLIKE
+# snapdragon_node_storage, the storage_raw_*/mounton/sys_admin rules are
+# DELIBERATELY OMITTED (this agent emits files, it does not touch disks).
+#
+# Modeled on snapdragon_node_storage.te (the closest host-daemon analog — same
+# fetch+verify+reconcile shape); INFERRED-WIDE lines refined in the permissive AVC
+# pass.
+#
+# NOTE (load path): authored in refpolicy style; NOT yet compiled/installed by any
+# build step — see docs/selinux-module-loading.md + SECURITY.md §3 (same status as
+# the device-registry/vpn/node-storage modules).
+################################################################
+policy_module(snapdragon_domain_reconcile, 1.0.0)
+
+require {
+	type snapdragon_authkeys_cache_t;   # /etc/snapdragon/registry/* (node.env + pubkey) — shared registry cache
+}
+
+########################################
+# 1. The agent domain + entrypoint (OpenRC oneshot + cron).
+########################################
+type snapdragon_domain_reconcile_t;
+type snapdragon_domain_reconcile_exec_t;
+init_daemon_domain(snapdragon_domain_reconcile_t, snapdragon_domain_reconcile_exec_t)
+
+# Its private cache + emitted-artifact staging
+# (/var/lib/snapdragon/domain-registry: export.json, last-good-generation,
+# domains.conf, out/<brand>-gitops/, out/keys/) labelled by the .fc below.
+type snapdragon_domain_reconcile_cache_t;
+files_type(snapdragon_domain_reconcile_cache_t)
+
+########################################
+# 2. Read the shared registry cache (node.env + baked pubkey) — the SAME inputs
+#    Layer-B reads (snapdragon_authkeys_cache_t). CERTAIN.
+########################################
+read_files_pattern(snapdragon_domain_reconcile_t, snapdragon_authkeys_cache_t, snapdragon_authkeys_cache_t)
+read_lnk_files_pattern(snapdragon_domain_reconcile_t, snapdragon_authkeys_cache_t, snapdragon_authkeys_cache_t)
+list_dirs_pattern(snapdragon_domain_reconcile_t, snapdragon_authkeys_cache_t, snapdragon_authkeys_cache_t)
+
+########################################
+# 3. Manage its private cache + emitted artifacts. CERTAIN: it writes export.json/
+#    last-good/domains.conf and the per-brand GitOps repos + per-domain keystores
+#    under /var/lib/snapdragon/domain-registry.
+########################################
+manage_files_pattern(snapdragon_domain_reconcile_t, snapdragon_domain_reconcile_cache_t, snapdragon_domain_reconcile_cache_t)
+manage_dirs_pattern(snapdragon_domain_reconcile_t, snapdragon_domain_reconcile_cache_t, snapdragon_domain_reconcile_cache_t)
+manage_lnk_files_pattern(snapdragon_domain_reconcile_t, snapdragon_domain_reconcile_cache_t, snapdragon_domain_reconcile_cache_t)
+files_search_var_lib(snapdragon_domain_reconcile_t)
+
+########################################
+# 4. Fetch the export over in-cluster mTLS. INFERRED-WIDE port set; narrow to the
+#    declared BFF port post-AVC.
+########################################
+sysnet_dns_name_resolve(snapdragon_domain_reconcile_t)
+auth_use_nsswitch(snapdragon_domain_reconcile_t)
+allow snapdragon_domain_reconcile_t self:tcp_socket create_stream_socket_perms;
+corenet_tcp_sendrecv_generic_node(snapdragon_domain_reconcile_t)
+corenet_tcp_connect_all_ports(snapdragon_domain_reconcile_t)                        # INFERRED-WIDE: narrow to the BFF port after QEMU enforcing AVC pass
+
+########################################
+# 5. Exec helpers (jq/openssl/curl/base64/keytool/sed/git) + the two generator
+#    scripts (gen-keystores.sh + generate-brand-repos.sh are bash). Read its mTLS
+#    certs. INFERRED-WIDE — narrow the file reads to the cert types post-AVC.
+########################################
+files_read_etc_files(snapdragon_domain_reconcile_t)
+files_read_usr_files(snapdragon_domain_reconcile_t)
+auth_read_all_files_except_shadow(snapdragon_domain_reconcile_t)                     # INFERRED-WIDE: reads the mTLS client cert/key; narrow to those types post-AVC
+corecmd_exec_bin(snapdragon_domain_reconcile_t)                                      # INFERRED-WIDE: jq/openssl/curl/base64/keytool
+corecmd_exec_shell(snapdragon_domain_reconcile_t)                                    # the generator scripts are bash — INFERRED-WIDE
+logging_send_syslog_msg(snapdragon_domain_reconcile_t)
+
+########################################
+# domain-verify.sh (specs/usr/lib/snapdragon/domain-verify.sh) is SOURCED by the
+# agent (and itself sources registry-verify.sh) and runs IN-DOMAIN; like
+# registry-verify.sh it needs no separate entrypoint label, so no .te domain is
+# added for it here.
+#
+# NO Linux capabilities, NO storage_raw_*, NO mounton, NO sys_admin: this agent
+# emits files into its own var-lib staging — it never touches block devices. That
+# is the deliberate difference from snapdragon_node_storage_t. The two generator
+# scripts run IN-DOMAIN (corecmd_exec_shell); if the AVC pass shows they need a
+# distinct fsadm-style domain (CA-key handling), introduce one then.
+################################################################

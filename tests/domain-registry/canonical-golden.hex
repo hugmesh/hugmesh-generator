@@ -1,0 +1,33 @@
+# canonical-golden.hex — JVM-DERIVED golden canonical-bytes vector (lowercase hex) for the
+# domain-registry signed-export signature path. This is the EXTERNAL, INDEPENDENT anchor that
+# tests/domain-registry/test-domain-reconcile-verify.sh Case 0 compares the bash
+# domain_canonical_bytes (specs/usr/lib/snapdragon/domain-verify.sh) output against, so a FUTURE
+# self-consistent-but-wrong edit to the bash reconstruction is caught (the ACCEPT/REJECT cases
+# alone cannot catch that — they sign whatever domain_canonical_bytes emits and verify the same).
+#
+# DERIVATION ROUTE: JVM. Produced by tests/domain-registry/Golden.java, a single-file Java program
+# that copies the byte-layout of canonicalBytes VERBATIM from the authoritative admin-bff signer
+#   snapdragon-admin-bff-api:
+#   src/main/java/systems/snapdragon/adminbff/domainregistry/DomainRegistryExportService.java
+#   static byte[] canonicalBytes(DomainExportBody)   (the merged #118 version on origin/main)
+# Cross-checked byte-for-byte against an independent python3 byte-assembly of the documented layout.
+#
+# FIXTURE (must match Case 0 / canon_ref() in the test EXACTLY):
+#   node       = mkey:abc
+#   generation = 7
+#   one DomainEntry: clusterDomain=acme.test  brand=acme  org=Acme-Inc  caRef=generate
+#                    nsPrefix=acme  casdoorOrg=acme-org  meshTag=tag:acme
+#                    caProvisioned=false  appsetRegistered=false  generation=7
+#
+# DECODED canonical bytes (159 bytes, \t = TAB, \n = LF, no trailing byte after the final \n):
+#   v1-domain\n
+#   node=mkey:abc\n
+#   generation=7\n
+#   dom=acme.test\tbrand=acme\torg=Acme-Inc\tca=generate\tns=acme\tcasdoor=acme-org\tmesh=tag:acme\tca_prov=false\tappset=false\tgen=7\n
+#
+# REGENERATE (ONLY if DomainRegistryExportService.canonicalBytes changes):
+#   java tests/domain-registry/Golden.java   # prints the single hex line below
+# NOT wired into CI (generator CI is GitLab and ships no JDK) — this is a committed static vector;
+# Golden.java is a manual regen tool. If this contract changes, update domain-verify.sh + this
+# golden together and re-run the offline test.
+76312d646f6d61696e0a6e6f64653d6d6b65793a6162630a67656e65726174696f6e3d370a646f6d3d61636d652e74657374096272616e643d61636d65096f72673d41636d652d496e630963613d67656e6572617465096e733d61636d6509636173646f6f723d61636d652d6f7267096d6573683d7461673a61636d650963615f70726f763d66616c7365096170707365743d66616c73650967656e3d370a
