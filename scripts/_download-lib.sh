@@ -63,6 +63,9 @@
 #   DLV_KEYSERVER=<url>         override the keyserver used for fingerprint pulls
 #   DLV_OFFLINE_KEYRING=<file>  ASCII-armored key bundle to import instead of a
 #                               keyserver pull (air-gapped builds)
+#   DLV_LOCAL_KEYRING=<file>    extra local keyring to try (after the host-vendored
+#                               /usr/share/openpgp-keys/gentoo-release.*) before any
+#                               network keyserver
 
 # Guard against double-sourcing. `return` only works when sourced; fall back to
 # `exit` if someone runs the file directly.
@@ -190,26 +193,63 @@ dlv_verify_from_sumsfile() {
 # Build an ephemeral keyring so we never touch the caller's ~/.gnupg, and so the
 # trust set is EXACTLY the key(s) we import (nothing the host happens to trust).
 DLV_GNUPGHOME=""
+# Acquire the signing key into the ephemeral keyring, RESILIENTLY. Order of trust:
+#   1. an explicit DLV_OFFLINE_KEYRING bundle (air-gapped builds);
+#   2. a local keyfile passed as the key arg;
+#   3. for a fingerprint: the HOST-VENDORED Gentoo release keyring
+#      (/usr/share/openpgp-keys/gentoo-release.{asc,gpg}, or DLV_LOCAL_KEYRING) —
+#      tried BEFORE any network so a flaky keyserver cannot stall the build;
+#   4. the requested keyserver, then resilient fallbacks.
+# Every path is VERIFIED with `gpg --list-keys "${key}"` after import: keys.openpgp.org
+# serves keys with unverified UIDs STRIPPED and returns nonzero, which used to make
+# `--recv-keys` "fail" and abort the whole stage3 seed verification (every arm64 Pi +
+# Frite role). The post-import check makes "imported but unusable" fail-closed and lets
+# us fall through to the next source instead of dying.
 dlv_import_key() {
     local key="$1" keyserver="${2:-${DLV_KEYSERVER}}"
     dlv_require_tools gpg || return 1
     DLV_GNUPGHOME="$(mktemp -d)" || { dlv_die "mktemp -d failed"; return 1; }
     chmod 700 "${DLV_GNUPGHOME}"
     export GNUPGHOME="${DLV_GNUPGHOME}"
+
+    # 1) Explicit offline keyring bundle.
     if [ -n "${DLV_OFFLINE_KEYRING:-}" ] && [ -f "${DLV_OFFLINE_KEYRING}" ]; then
         dlv_info "importing signing key from offline bundle ${DLV_OFFLINE_KEYRING}"
-        gpg --batch --import "${DLV_OFFLINE_KEYRING}" >/dev/null 2>&1 \
-            || { dlv_die "failed to import offline key bundle"; return 1; }
-    elif [ -f "${key}" ]; then
-        dlv_info "importing signing key from ${key}"
-        gpg --batch --import "${key}" >/dev/null 2>&1 \
-            || { dlv_die "failed to import key file ${key}"; return 1; }
-    else
-        dlv_info "fetching signing key ${key} from ${keyserver}"
-        gpg --batch --keyserver "${keyserver}" --recv-keys "${key}" >/dev/null 2>&1 \
-            || { dlv_die "failed to fetch key ${key} from ${keyserver}"; return 1; }
+        gpg --batch --import "${DLV_OFFLINE_KEYRING}" >/dev/null 2>&1 && return 0
+        dlv_die "failed to import offline key bundle"; return 1
     fi
-    return 0
+    # 2) A local keyfile passed as the key arg.
+    if [ -f "${key}" ]; then
+        dlv_info "importing signing key from ${key}"
+        gpg --batch --import "${key}" >/dev/null 2>&1 && return 0
+        dlv_die "failed to import key file ${key}"; return 1
+    fi
+    # 3) Fingerprint: prefer a host-vendored keyring (offline, UID-complete).
+    local f
+    for f in /usr/share/openpgp-keys/gentoo-release.asc \
+             /usr/share/openpgp-keys/gentoo-release.gpg \
+             "${DLV_LOCAL_KEYRING:-}"; do
+        [ -n "${f}" ] && [ -f "${f}" ] || continue
+        if gpg --batch --import "${f}" >/dev/null 2>&1 \
+           && gpg --batch --list-keys "${key}" >/dev/null 2>&1; then
+            dlv_info "imported signing key ${key} from local keyring ${f}"
+            return 0
+        fi
+    done
+    # 4) Keyserver(s): the requested one, then resilient fallbacks. VERIFY presence
+    #    after each (a UID-stripped keys.openpgp.org reply must NOT count as success).
+    local ks
+    for ks in "${keyserver}" hkps://keyserver.ubuntu.com hkps://pgp.mit.edu; do
+        [ -n "${ks}" ] || continue
+        dlv_info "fetching signing key ${key} from ${ks}"
+        if gpg --batch --keyserver "${ks}" --recv-keys "${key}" >/dev/null 2>&1 \
+           && gpg --batch --list-keys "${key}" >/dev/null 2>&1; then
+            return 0
+        fi
+        dlv_warn "keyserver ${ks} did not yield a usable ${key}; trying next"
+    done
+    dlv_die "could not obtain signing key ${key} (offline keyring + keyservers all failed)"
+    return 1
 }
 
 dlv_gpg_cleanup() {
