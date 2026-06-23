@@ -757,7 +757,8 @@ provisioning engine, the backup engine, and the `cluster/` GitOps payload).
 | Path | Purpose |
 |---|---|
 | `specs-rpi5/portage/*` | RPi5 portage config (make.conf, packages, profile, keywords, USE) |
-| `specs-rpi5/kernel/hardened-k8s.config` | RPi kernel fragment (hardened + k8s + USB/VFAT + virtio) |
+| `specs-rpi5/kernel/hardened-k8s.config` | RPi kernel fragment (hardened + k8s + USB/VFAT + virtio); **reference** for the arch-neutral k8s netfilter/NAT/eBPF symbols both arches share |
+| `specs-x86/kernel/hardened-k8s.config` | amd64 kernel fragment (hardened + k8s). **Boot-critical:** carries the full netfilter/NAT/eBPF surface k8s Service networking needs — xtables match/target layer, `NF_NAT_MASQUERADE`, nft `NAT/MASQ/CT`, IPv6 nf tables, `IP_NF_MANGLE` (was a truncated copy that left ClusterIP/kube-proxy/MASQUERADE/dual-stack/NetworkPolicy dead). A **fail-closed build guard** in `build-x86-host-stage4.sh` (mirrored in `build-rpi5-stage4.sh`) asserts the load-bearing subset survives `make olddefconfig`; `tests/scripts/test-x86-kernel-net-symbols.sh` (CI `lint:x86-kernel-net-symbols`) keeps the fragment from re-truncating. eBPF CO-RE (BTF) is a separate pahole-gated follow-up — see the BTF note in the fragment. |
 | `specs-rpi5/boot/{config.txt.tmpl,cmdline.txt}` | RPi firmware boot config + kernel command line |
 | `specs-rpi5/etc/fstab` | RPi filesystem table (mounts the `/boot` firmware partition) |
 | `specs-rpi5/installer/install.sh` | SD/NVMe installer (ships in the RPi5 ISO) |

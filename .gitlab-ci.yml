@@ -39,6 +39,23 @@ lint:optional-services-exclude:
   script:
     - bash tests/stack/test-optional-services-exclude.sh
 
+# x86 kernel k8s-networking fragment lint. The x86 hardened-k8s.config used to be a
+# TRUNCATED copy of the Pi reference (no xtables match/target layer, no nft NAT/MASQ,
+# no NF_NAT_MASQUERADE, no IPv6 nf tables, no IP_NF_MANGLE) — which left ClusterIP/
+# kube-proxy/MASQUERADE/dual-stack/NetworkPolicy DEAD on x86 nodes. This offline lint
+# asserts (1) the x86 fragment carries every required arch-neutral net/cgroup/overlay/
+# bpf symbol as =y (the SAME load-bearing set the build guard greps post-olddefconfig),
+# (2) no ARM/Pi-only symbol leaked in, (3) BTF stays OUT of both fragments (a separate
+# pahole-gated follow-up), and (4) both builders' fail-closed guards reference the
+# load-bearing net subset. A re-truncation of the fragment, or a build guard that stops
+# asserting the net symbols, FAILS here. Cheap; no privileged runner needed.
+lint:x86-kernel-net-symbols:
+  stage: lint
+  image: bash:5
+  tags: [snapdragon-x86]
+  script:
+    - bash tests/scripts/test-x86-kernel-net-symbols.sh
+
 # Production-hygiene gate. Bakes a PROD copy of the GitOps tree (the same
 # transforms gate_env_apps applies: prune 09-lan-dns + the test wave, pin :dev
 # first-party tags) and asserts scripts/validate-prod-hygiene.sh PASSES on it, AND

@@ -90,6 +90,7 @@ JOBS="$(nproc)"
 SKIP_KERNEL=false
 SKIP_CLEAN=false
 RESUME=false
+IMAGE_ONLY=false          # skip Phase 1-3 entirely; go straight to Phase 4 image assembly
 
 # ── Image flavors (the LIVE / INSTALLER toggle) ────────────────────
 # both (DEFAULT) = produce the LIVE squashfs image AND the INSTALLER image.
@@ -129,6 +130,10 @@ DEFAULT_USER="frite"
 ENABLE_WIFI="${ENABLE_WIFI:-false}"
 ENABLE_BLUETOOTH="${ENABLE_BLUETOOTH:-false}"
 SEED_STAGE3_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/latest-stage3-arm64-openrc.txt"
+# Default to the shipped Gentoo release-eng key so builds work without network
+# access to a keyserver (keys.openpgp.org can be unreachable). Override with
+# DLV_OFFLINE_KEYRING=<file> or DLV_KEYSERVER=<url> to use a different source.
+DLV_OFFLINE_KEYRING="${DLV_OFFLINE_KEYRING:-${SCRIPT_DIR}/scripts/gentoo-release-key.asc}"
 
 # Mesh VPN (installed as upstream static arm64 binaries, not emerged) — IDENTICAL
 # to the Pi5 client image so the Frite joins the same headscale/tailscale mesh.
@@ -297,6 +302,7 @@ while [[ $# -gt 0 ]]; do
         --skip-mesh)          SKIP_MESH=true;             shift   ;;
         --skip-tailscale)     SKIP_TAILSCALE=true;        shift   ;;
         --skip-kernel)        SKIP_KERNEL=true;           shift   ;;
+        --image-only)         IMAGE_ONLY=true; SKIP_KERNEL=true; shift ;;
         --img-size)           ROOT_MiB="$2";              shift 2 ;;
         --grow)               GROW_POLICY="$2";           shift 2 ;;
         --no-grow)            GROW_POLICY="none";         shift   ;;
@@ -598,6 +604,10 @@ PROFILE_PATH="$(sed 's/^gentoo://' "${SPECS_DIR}/portage/profile/parent" | tr -d
 [ -d "${GENTOO_REPO}/profiles/${PROFILE_PATH}" ] || { err "profile not found: ${GENTOO_REPO}/profiles/${PROFILE_PATH}"; exit 1; }
 ln -sfn "${GENTOO_REPO}/profiles/${PROFILE_PATH}" "${SYSROOT}/etc/portage/make.profile"
 cp "${SPECS_DIR}/portage/profile/use.mask"          "${SYSROOT}/etc/portage/profile/use.mask"
+# package.provided: skip Rust-based packages that can't cross-compile to aarch64
+# without the aarch64-unknown-linux-gnu stdlib target (absent from system rust).
+[ -f "${SPECS_DIR}/portage/profile/package.provided" ] && \
+    cp "${SPECS_DIR}/portage/profile/package.provided" "${SYSROOT}/etc/portage/profile/package.provided"
 cp "${SPECS_DIR}/portage/package.accept_keywords/"* "${SYSROOT}/etc/portage/package.accept_keywords/"
 cp "${SPECS_DIR}/portage/package.use/"*             "${SYSROOT}/etc/portage/package.use/"
 cp "${SPECS_DIR}/portage/package.env/"*             "${SYSROOT}/etc/portage/package.env/"
@@ -774,9 +784,10 @@ done
 info "Profile: ${PROFILE_PATH}"
 
 cross_emerge() {
-    mkdir -p "${BUILD_ROOT}/log" "${BUILD_ROOT}/edb"
+    mkdir -p "${BUILD_ROOT}/log" "${BUILD_ROOT}/edb" "${BUILD_ROOT}/tmp"
     ROOT="${SYSROOT}" SYSROOT="${SYSROOT}" PORTAGE_CONFIGROOT="${SYSROOT}" \
     EMERGE_LOG_DIR="${BUILD_ROOT}/log" PORTAGE_DEPCACHEDIR="${BUILD_ROOT}/edb" \
+    PORTAGE_TMPDIR="${BUILD_ROOT}/tmp" \
     "${CROSS_TARGET}-emerge" --jobs="${JOBS}" --load-average="${JOBS}" --with-bdeps=n "$@"
 }
 
@@ -788,6 +799,18 @@ else
     CROSS_EXCLUDE=(--exclude sys-devel/gcc --exclude sys-devel/gcc-config
                    --exclude sys-libs/glibc --exclude sys-devel/binutils)
 fi
+
+mkdir -p "${SYSROOT}/dev"
+for _devspec in "null c 1 3" "zero c 1 5" "random c 1 8" "urandom c 1 9" "tty c 5 0"; do
+    _devname="${_devspec%% *}"; _devargs="${_devspec#* }"
+    [[ -e "${SYSROOT}/dev/${_devname}" ]] || mknod -m 666 "${SYSROOT}/dev/${_devname}" ${_devargs}
+done
+unset _devspec _devname _devargs
+
+if ${IMAGE_ONLY}; then
+    banner "Phase 1: SKIPPED (--image-only)"
+    banner "Phase 2: SKIPPED (--image-only)"
+else
 
 banner "Phase 1: Cross-building @system (hardened)"
 cross_emerge --oneshot --update sys-apps/baselayout
@@ -934,6 +957,8 @@ else
     fi
 fi
 
+fi  # IMAGE_ONLY skip of Phase 1+2
+
 # ── 8. Cross-compile the kernel (mainline; ship the Amlogic DTB) ──
 # FRITE_KVER is captured here (from `make kernelrelease`) so Phase 4 can point
 # dracut --kver at the EXACT module tree this build installs under
@@ -950,12 +975,12 @@ else
         info "Building kernel from ${KERNEL_SRC} (defconfig: ${FRITE_DEFCONFIG}, CPU: ${RPI_CPU})"
         pushd "${KERNEL_SRC}" >/dev/null
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" "${FRITE_DEFCONFIG}"
-        while IFS= read -r line; do
-            [[ "${line}" =~ ^[[:space:]]*# ]] && continue
-            [[ -z "${line// }" ]] && continue
-            read -r action rest <<< "${line}"
-            eval "scripts/config --${action} ${rest}"
-        done < "${SPECS_DIR}/kernel/hardened-desktop.config"
+        # merge_config.sh properly handles Kconfig dependency resolution when
+        # adding options absent from the base defconfig (unlike scripts/config +
+        # olddefconfig which silently drops symbols whose selections/selects
+        # haven't been evaluated yet in the defconfig ordering).
+        ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" \
+            bash scripts/kconfig/merge_config.sh -m .config "${SPECS_DIR}/kernel/hardened-desktop.config"
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" olddefconfig
         # Refuse to ship a kernel that silently lost SELinux (fleet posture guard).
         for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
@@ -1066,17 +1091,62 @@ build_live_initramfs() {
     local mods="dmsquash-live base udev-rules rootfs-block"
     info "Generating live initramfs (dracut dmsquash-live, kver=${kver}) ..."
 
-    # Prefer the sysroot's own dracut (matches the target's module/tool versions);
-    # fall back to a host dracut. Either is pointed at the target module tree.
     local sysroot_dracut="${SYSROOT}/usr/bin/dracut"
+
+    # ── Strategy 1: qemu-chroot (correct for cross-builds) ─────────────────────
+    # binfmt_misc + qemu-aarch64 lets us chroot into the aarch64 sysroot and run
+    # dracut natively — the result is a correct aarch64 initramfs without a real
+    # board. Requires qemu-user registered in binfmt_misc for aarch64.
+    local _qemu_interp
+    _qemu_interp="$(grep '^interpreter' /proc/sys/fs/binfmt_misc/qemu-aarch64 2>/dev/null | awk '{print $2}')"
+    if [ -n "${_qemu_interp}" ] && [ -x "${_qemu_interp}" ] && [ -x "${sysroot_dracut}" ]; then
+        local _mounts=() _qemu_staged=false
+        _frite_umount() {
+            local m
+            for m in "${_mounts[@]}"; do umount -l "${m}" 2>/dev/null || true; done
+            # Remove the host qemu binary we staged inside the sysroot (if any).
+            ${_qemu_staged} && rm -f "${SYSROOT}${_qemu_interp}" 2>/dev/null || true
+        }
+        trap '_frite_umount' RETURN
+        mkdir -p "${SYSROOT}/proc" "${SYSROOT}/sys" "${SYSROOT}/dev"
+        mount --bind /proc "${SYSROOT}/proc" && _mounts+=("${SYSROOT}/proc") || true
+        mount --bind /sys  "${SYSROOT}/sys"  && _mounts+=("${SYSROOT}/sys")  || true
+        mount --bind /dev  "${SYSROOT}/dev"  && _mounts+=("${SYSROOT}/dev")  || true
+        # The kernel resolves the binfmt_misc interpreter RELATIVE TO THE CHROOT ROOT.
+        # dracut is a bash script → kernel execs aarch64 /bin/bash → binfmt_misc
+        # intercepts → looks for /usr/bin/qemu-aarch64 INSIDE the sysroot, not on
+        # the host. Copy the host static binary in so the kernel can find it.
+        mkdir -p "${SYSROOT}$(dirname "${_qemu_interp}")"
+        if cp "${_qemu_interp}" "${SYSROOT}${_qemu_interp}" 2>/dev/null; then
+            _qemu_staged=true
+        else
+            warn "Could not stage qemu interpreter into sysroot; chroot may fail."
+        fi
+        info "Running dracut via qemu-chroot (kver=${kver}) ..."
+        chroot "${SYSROOT}" /usr/bin/dracut --force --no-hostonly \
+            --kver "${kver}" --modules "${mods}" /boot/initrd.img 2>&1 | head -60
+        if [ -s "${SYSROOT}/boot/initrd.img" ]; then
+            cp "${SYSROOT}/boot/initrd.img" "${out}"
+            FRITE_LIVE_INITRD="${out}"
+            _frite_umount; trap - RETURN
+            info "Live initramfs staged (qemu-chroot): ${out} ($(du -h "${out}" | cut -f1))"
+            return 0
+        fi
+        warn "qemu-chroot dracut did not produce an initramfs; falling back."
+        _frite_umount; trap - RETURN
+    fi
+
+    # ── Strategy 2: run the sysroot dracut script on the host sh ───────────────
+    # Dracut is a bash script; running it on the host works only if it doesn't
+    # need to exec aarch64 binaries from the sysroot. Usually fails silently.
     if [ -x "${sysroot_dracut}" ] && command -v sh >/dev/null; then
         sh "${sysroot_dracut}" --force --no-hostonly \
             --kver "${kver}" --kmoddir "${SYSROOT}/lib/modules/${kver}" \
             --modules "${mods}" "${out}" 2>/dev/null && [ -s "${out}" ] && {
                 FRITE_LIVE_INITRD="${out}"
-                info "Live initramfs staged: ${out} ($(du -h "${out}" | cut -f1))"
+                info "Live initramfs staged (host-sh dracut): ${out} ($(du -h "${out}" | cut -f1))"
                 return 0; }
-        warn "sysroot dracut did not produce an initramfs; trying a host dracut."
+        warn "sysroot dracut (host-sh) did not produce an initramfs; trying host dracut."
     fi
     if command -v dracut >/dev/null; then
         dracut --force --no-hostonly \
@@ -1093,7 +1163,7 @@ build_live_initramfs() {
 }
 # Both bootable flavors need the dmsquash-live initramfs (the INSTALLER medium is
 # itself a live boot — see build_installer_iso).
-if { ${BUILD_LIVE} || ${BUILD_INSTALLER}; } && ! ${SKIP_KERNEL}; then
+if { ${BUILD_LIVE} || ${BUILD_INSTALLER}; } && { ! ${SKIP_KERNEL} || ${IMAGE_ONLY}; }; then
     build_live_initramfs || warn "Live initramfs not built — see warnings above."
 fi
 

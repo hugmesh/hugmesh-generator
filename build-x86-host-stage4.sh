@@ -1483,6 +1483,44 @@ make olddefconfig
 for must in CONFIG_SECURITY_SELINUX CONFIG_STACKPROTECTOR_STRONG CONFIG_FORTIFY_SOURCE CONFIG_HARDENED_USERCOPY; do
     grep -q "^\${must}=y" .config || { echo "[build-x86] ERROR: hardened kernel option \${must} not enabled after olddefconfig"; exit 1; }
 done
+# BOOT-CRITICAL: refuse to ship a kernel whose k8s Service-networking surface
+# silently lost a netfilter/NAT/eBPF symbol. The x86 fragment used to be a
+# TRUNCATED copy of the Pi one (no xtables match/target layer, no nft NAT/MASQ,
+# no NF_NAT_MASQUERADE, no IPv6 nf tables, no IP_NF_MANGLE) which left ClusterIP/
+# kube-proxy/MASQUERADE/dual-stack/NetworkPolicy DEAD. Even with the fragment
+# fixed, \`make olddefconfig\` (above) will SILENTLY DROP any symbol whose parent
+# dep is unmet on the x86_64 defconfig base — no error, no diff. This loop is the
+# only thing that turns that silent prune into a BUILD FAILURE naming the symbol.
+# This list is the FULL load-bearing set the fragment adds — NOT a representative
+# subset. olddefconfig prunes per-LEAF: a parent (e.g. NETFILTER_XTABLES) can
+# survive while a leaf (e.g. NETFILTER_XT_TARGET_REDIRECT, IP6_NF_FILTER,
+# NETFILTER_XT_MATCH_MARK/MULTIPORT/STATISTIC, NETFILTER_XT_TARGET_MARK) gets
+# silently dropped — shipping a dead path. Asserting only a subset would let such
+# a leaf prune through, which is exactly the class of bug this guard exists to
+# stop. Keep this list IDENTICAL (modulo \${must}/${must} escaping) to the
+# build-rpi5-stage4.sh mirror and in sync with
+# tests/scripts/test-x86-kernel-net-symbols.sh (which asserts guard==fragment).
+for must in CONFIG_NETFILTER_XTABLES \
+            CONFIG_NETFILTER_XT_MATCH_ADDRTYPE CONFIG_NETFILTER_XT_MATCH_COMMENT \
+            CONFIG_NETFILTER_XT_MATCH_CONNTRACK CONFIG_NETFILTER_XT_MATCH_MARK \
+            CONFIG_NETFILTER_XT_MATCH_MULTIPORT CONFIG_NETFILTER_XT_MATCH_STATISTIC \
+            CONFIG_NETFILTER_XT_TARGET_MARK CONFIG_NETFILTER_XT_TARGET_MASQUERADE \
+            CONFIG_NETFILTER_XT_TARGET_REDIRECT \
+            CONFIG_IP_NF_MANGLE CONFIG_NF_NAT CONFIG_NF_NAT_MASQUERADE \
+            CONFIG_NF_TABLES CONFIG_NFT_NAT CONFIG_NFT_MASQ CONFIG_NFT_CT \
+            CONFIG_IP6_NF_IPTABLES CONFIG_IP6_NF_FILTER CONFIG_IP6_NF_NAT \
+            CONFIG_IP6_NF_MANGLE \
+            CONFIG_VLAN_8021Q CONFIG_NET_L3_MASTER_DEV CONFIG_NET_SCH_HTB \
+            CONFIG_NET_CLS_CGROUP \
+            CONFIG_IP_VS CONFIG_VXLAN CONFIG_VETH CONFIG_BRIDGE \
+            CONFIG_OVERLAY_FS CONFIG_OVERLAY_FS_REDIRECT_DIR CONFIG_OVERLAY_FS_INDEX \
+            CONFIG_CGROUP_NET_CLASSID CONFIG_CGROUP_NET_PRIO CONFIG_CGROUP_HUGETLB \
+            CONFIG_CGROUP_PERF CONFIG_CGROUP_WRITEBACK CONFIG_CGROUP_NS \
+            CONFIG_PROC_PID_CPUSET CONFIG_FAIR_GROUP_SCHED \
+            CONFIG_BPF_SYSCALL CONFIG_BPF_EVENTS \
+            CONFIG_POSIX_MQUEUE; do
+    grep -q "^\${must}=y" .config || { echo "[build-x86] ERROR: k8s node kernel option \${must} not enabled after olddefconfig (Service/kube-proxy/CNI/container-runtime would be impaired)"; exit 1; }
+done
 # SELinux only activates if CONFIG_LSM is a clean, well-formed string. lockdown is
 # listed FIRST so it engages before any other LSM; a stray quote or wrong order here
 # would silently ship SELinux or lockdown DISABLED. Assert the exact intended value.

@@ -39,6 +39,15 @@ USE="${USE} X dbus elogind udev -systemd"
 USE="${USE} gtk -qt5 -qt6 -kde -gnome -gnome-keyring"
 # Light audio: ALSA only (no pulseaudio/pipewire heavy stack on a 512MB board).
 USE="${USE} alsa -pulseaudio -pipewire"
+# Disable GObject introspection: glib-2.86+ bootstraps a native copy of
+# gobject-introspection during cross-compile src_configure, but the bootstrap
+# meson build fails in the cross-emerge env (cross-file / EPYTHON mis-targeting).
+# None of the LXDE desktop packages hard-require introspection — it is an
+# optional USE-conditional dep on harfbuzz/pango/gdk-pixbuf/gtk+.
+# Also disable vala: librsvg's REQUIRED_USE enforces vala? ( introspection ),
+# so disabling vala satisfies the constraint without re-enabling introspection.
+# Vala language bindings are development tooling; no LXDE desktop package needs them.
+USE="${USE} -introspection -vala"
 
 # Only the MCS SELinux policy store (same posture as the cluster images): smaller
 # build, and matches the per-process MCS labelling baseline. The Frite image is

@@ -2019,6 +2019,34 @@ else
                     CONFIG_HARDENED_USERCOPY; do
             grep -q "^${must}=y" .config || { err "hardened kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
+        # Mirror the x86 build's k8s node-kernel guard: refuse to ship a Pi kernel
+        # that silently lost a netfilter/NAT/eBPF/container-IPC symbol to an
+        # olddefconfig prune (unmet dep on a board-defconfig bump). This is the
+        # FULL load-bearing set the fragment adds, NOT a subset — olddefconfig
+        # prunes per-LEAF, so a surviving parent does not protect a dropped leaf.
+        # Kept IDENTICAL (modulo ${must}/\${must} escaping) to the
+        # build-x86-host-stage4.sh guard + tests/scripts/test-x86-kernel-net-symbols.sh.
+        for must in CONFIG_NETFILTER_XTABLES \
+                    CONFIG_NETFILTER_XT_MATCH_ADDRTYPE CONFIG_NETFILTER_XT_MATCH_COMMENT \
+                    CONFIG_NETFILTER_XT_MATCH_CONNTRACK CONFIG_NETFILTER_XT_MATCH_MARK \
+                    CONFIG_NETFILTER_XT_MATCH_MULTIPORT CONFIG_NETFILTER_XT_MATCH_STATISTIC \
+                    CONFIG_NETFILTER_XT_TARGET_MARK CONFIG_NETFILTER_XT_TARGET_MASQUERADE \
+                    CONFIG_NETFILTER_XT_TARGET_REDIRECT \
+                    CONFIG_IP_NF_MANGLE CONFIG_NF_NAT CONFIG_NF_NAT_MASQUERADE \
+                    CONFIG_NF_TABLES CONFIG_NFT_NAT CONFIG_NFT_MASQ CONFIG_NFT_CT \
+                    CONFIG_IP6_NF_IPTABLES CONFIG_IP6_NF_FILTER CONFIG_IP6_NF_NAT \
+                    CONFIG_IP6_NF_MANGLE \
+                    CONFIG_VLAN_8021Q CONFIG_NET_L3_MASTER_DEV CONFIG_NET_SCH_HTB \
+                    CONFIG_NET_CLS_CGROUP \
+                    CONFIG_IP_VS CONFIG_VXLAN CONFIG_VETH CONFIG_BRIDGE \
+                    CONFIG_OVERLAY_FS CONFIG_OVERLAY_FS_REDIRECT_DIR CONFIG_OVERLAY_FS_INDEX \
+                    CONFIG_CGROUP_NET_CLASSID CONFIG_CGROUP_NET_PRIO CONFIG_CGROUP_HUGETLB \
+                    CONFIG_CGROUP_PERF CONFIG_CGROUP_WRITEBACK CONFIG_CGROUP_NS \
+                    CONFIG_PROC_PID_CPUSET CONFIG_FAIR_GROUP_SCHED \
+                    CONFIG_BPF_SYSCALL CONFIG_BPF_EVENTS \
+                    CONFIG_POSIX_MQUEUE; do
+            grep -q "^${must}=y" .config || { err "k8s node kernel option ${must} not enabled after olddefconfig (Service/kube-proxy/CNI/container-runtime would be impaired)"; exit 1; }
+        done
         grep -q '^CONFIG_LSM="lockdown,yama,selinux,bpf"$' .config || { err "CONFIG_LSM malformed (expected lockdown,yama,selinux,bpf); lockdown/SELinux would not activate"; exit 1; }
 
         # Build

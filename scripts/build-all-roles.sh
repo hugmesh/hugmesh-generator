@@ -10,6 +10,7 @@
 #   X86_ALL=1     ./scripts/build-all-roles.sh  # pki be fe be+gpu omnibus on x86
 #   X86_ROLES="pki omnibus" ./scripts/build-all-roles.sh   # an explicit subset
 #   SKIP_X86=1    ./scripts/build-all-roles.sh  # Pi roles only (no x86 at all)
+#   SKIP_RPI=1    ./scripts/build-all-roles.sh  # x86 / frite only (no RPi5 builds)
 #
 # The Libre Computer Le/La Frite LIGHT-DESKTOP client image is OPT-IN (it is a
 # desktop appliance, not a cluster node, so it is NOT in the default fleet):
@@ -86,6 +87,8 @@ fi
 
 if [ "${PENTEST_ONLY:-0}" = "1" ]; then
     RPI_ROLES=()   # pentest-only: no image builds
+elif [ "${SKIP_RPI:-0}" = "1" ]; then
+    RPI_ROLES=()   # SKIP_RPI=1: x86-only or frite-only run
 else
     RPI_ROLES=(pki backend frontend)
 fi
