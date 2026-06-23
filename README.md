@@ -34,12 +34,21 @@ subdirs included.
 
 ## Current State
 
-_As of 2026-06-20. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
+_As of 2026-06-22. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
 
 - **✅ Hardened image fleet** — three RPi 5 role images (pki / backend / frontend)
   + the x86_64 GPU host, all SELinux **ENFORCING** with per-app MCS identities,
   built compact and grown on first boot; the opt-in Frite light desktop client
   rides the same arm64 cross path + mesh/KEYS provisioning.
+- **✅ Boot + kernel hardening (both arches)** — kernel lockdown (`lsm=lockdown,
+  yama,selinux,bpf` + `lockdown=integrity`), Secure Boot **UKI** signing on x86
+  (dracut `--uefi` → org-key `sbsign`), `firewalld` (test/prod zone profiles) and
+  sysctl/SSH hardening, plus the x86 build fixes that supersede the earlier
+  kernel-config changes. The **x86 k8s netfilter/NAT/eBPF kernel surface** the
+  Service/kube-proxy/CNI path needs is now carried in the amd64 fragment with a
+  **fail-closed build guard** + a CI lint (`lint:x86-kernel-net-symbols`) that
+  keeps it from re-truncating (the standalone fix PR is superseded; the symbols +
+  guard + test landed on `main` with the hardening pass).
 - **✅ Unified Spring baseline** — the baked GitOps payload now targets **Spring
   Boot 4.0.2 / Spring Cloud 2025.1** on Java, with the shared Maven artifacts
   **`snapdragon-parent`** (metapom, 2.0.0), **`snapdragon-commons`** (shared
@@ -73,7 +82,16 @@ _As of 2026-06-20. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
 - **✅ Multi-tenancy / multi-brand + superadmin** — per-domain CA loop
   (`brands/domains.conf`), per-domain namespace + mTLS isolation, and a real
   code-enforced **superadmin → admin → mod → user** role cascade enforced at the
-  gateway.
+  gateway. A **domain-registry → brand-repo bridge** (signed-export reconcile
+  agent: mTLS `GET /bff/admin/domains/export` → fail-closed **Ed25519** verify →
+  synth a `domains.conf` row + CA + brand repo per registered-not-provisioned
+  domain) is baked as the **4th** instance of the device-registry / egress-VPN /
+  node-storage reconcile triad, and **ships DARK/inert** (optional-service gate,
+  placeholder-pubkey crypto-fail-closed, `.domain_registry.enabled=false` default).
+  See `specs/usr/sbin/snapdragon-domain-reconcile`,
+  `specs/etc/init.d|cron.d/snapdragon-domain-reconcile`, the
+  `snapdragon_domain_reconcile` SELinux module, and `provision_domain_registry()`
+  in the KEYS engine.
 - **✅ Optional services (add/remove)** — akkoma / tuwunel / phpBB / games /
   owncast / LocalTube; the UI greys out when a service is absent, games defaults
   to `games.<domain>`. Build-time prune ships; the **🚧 live ApplicationSet
@@ -807,8 +825,14 @@ from their own repos in the GitLab org mirror — the `build:images` job here is
 currently an `echo` stub, and a general in-cluster image-build pipeline is not
 started (the service-catalog Kaniko builder, PR #110, is the one in-cluster
 image builder, and ships dark). The OWASP pen-test suite (ZAP + Dependency-Check
-+ nuclei + k6) runs as a GitLab pipeline stage, not a deployed CronJob. See
-[`docs/DEVOPS.md`](docs/DEVOPS.md).
++ nuclei + k6) runs as a GitLab pipeline stage, not a deployed CronJob. The
+pipeline also runs **fail-closed lint/verify gates** before any build:
+`lint:x86-kernel-net-symbols` (the k8s netfilter/NAT fragment can't re-truncate),
+the **`casdoor-jwt-custom-gate`** (mints a real RS256 token against
+`casbin/casdoor` and asserts the JWT-Custom token shape — the leaked secrets stay
+ABSENT and the authz/MFA claims present — before that config can flip live), and
+`domain-registry-reconcile-verify` (the signed-export domain bridge fails closed
+on a bad/placeholder key). See [`docs/DEVOPS.md`](docs/DEVOPS.md).
 
 > **GitHub Actions is intentionally absent** — Actions is billing-blocked
 > org-wide (jobs fail at setup). Do **not** add `.github/workflows`; CI lives in
@@ -824,6 +848,10 @@ image builder, and ships dark). The OWASP pen-test suite (ZAP + Dependency-Check
 - Nodes boot SELinux **ENFORCING** (hardened/selinux) with per-app MCS
   identities; API-to-API traffic is mTLS; per-app SCRAM Postgres roles; secrets
   via Vault/ESO. See [`docs/SECURITY.md`](docs/SECURITY.md).
+- The kernel boots with **lockdown** (`lsm=lockdown,yama,selinux,bpf`,
+  `lockdown=integrity`); x86 ships a **Secure Boot UKI** signed with the org key
+  (`sbsign`), and both arches run **firewalld** (test/prod zone profiles) plus
+  sysctl/SSH hardening.
 
 ## License
 
