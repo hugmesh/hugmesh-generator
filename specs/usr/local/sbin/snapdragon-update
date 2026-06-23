@@ -1,0 +1,225 @@
+#!/bin/bash
+# snapdragon-update — OPT-IN (default-off) host-binary auto-update poller.
+#
+# Pulls ONLY changed Gentoo binary packages (deltas) from the node's
+# PORTAGE_BINHOST subtree (the tailnet binhost populated by the ArgoCD
+# image-update pipeline) and, when a reboot-requiring package changed, requests a
+# kured-style SAFE reboot. Runs from a baked /etc/cron.d drop-in (cronie reads
+# /etc/cron.d — the SAME mechanism snapdragon-backup + the device-registry sync
+# use). The OpenRC half (snapdragon-update service) does one poll at boot.
+#
+# OPT-IN (DEFAULT-OFF), FAIL-SAFE-TO-OFF:
+#   The plumbing (poller binary + boot oneshot + cadence cron) is baked on EVERY
+#   generated host/node + client image, but is INERT until a superadmin OPTS IN by
+#   setting enabled:true in the live "snapdragon-update-policy" ConfigMap (devops
+#   namespace), which can also tune cadence/window/staging. The ABSENCE of the
+#   ConfigMap (or an unreachable cluster, or a node with no kubeconfig — e.g. a
+#   worker / client device) means DEFAULT-OFF: the poll is SKIPPED. Only an explicit,
+#   reachable `enabled: true` activates the pull (fail-safe-to-off).
+#
+# Config precedence (lowest -> highest):
+#   1. baked DEFAULTS below (default-off)
+#   2. /etc/snapdragon/update.json   (optional local file, written by keys-provision
+#      from the KEYS manifest's "update" block — "by file"; absence => defaults)
+#   3. live ConfigMap devops/snapdragon-update-policy (superadmin UI; control-plane
+#      reachable only — best-effort, never fatal). On reachable cluster it WINS;
+#      unreachable/absent => fall back to (2)/(1) => still OFF.
+#
+# ConfigMap / update.json schema (all keys optional; absence => the default):
+#   {
+#     "enabled":  false,           # master switch (default false => opt-in; true activates)
+#     "cadence":  "0 4 * * *",     # cron expr the drop-in runs on (informational
+#                                  #   here; the cron schedule itself is rendered by
+#                                  #   provision_update from this value)
+#     "window":   "02:00-06:00",   # ONLY pull inside this local-time window ("" => any)
+#     "reboot":   "if-needed",     # if-needed | never | always
+#     "staging":  { "<target>|<role>": "0 4 * * *" }  # per-target/per-role cadence
+#                                  #   overrides (e.g. "rpi5", "client", "pki",
+#                                  #   "be+gpu") — staged rollout / maintenance waves
+#   }
+set -uo pipefail
+
+LOG_TAG="snapdragon-update"
+LOCAL_CONF="${SNAPDRAGON_UPDATE_CONF:-/etc/snapdragon/update.json}"
+ROLE_FILE="${SNAPDRAGON_ROLE_FILE:-/etc/snapdragon/role}"
+BOARD_FILE="${SNAPDRAGON_BOARD_FILE:-/etc/snapdragon/board}"   # client/frite images write "frite:<board>"
+MAKE_CONF="${SNAPDRAGON_MAKE_CONF:-/etc/portage/make.conf}"
+KUBECONFIG_FILE="${SNAPDRAGON_KUBECONFIG:-/etc/kubernetes/admin.conf}"
+POLICY_NS="${SNAPDRAGON_POLICY_NS:-devops}"
+POLICY_CM="${SNAPDRAGON_POLICY_CM:-snapdragon-update-policy}"
+STATE_DIR="${SNAPDRAGON_UPDATE_STATE:-/var/lib/snapdragon/update}"
+REBOOT_SENTINEL="${SNAPDRAGON_REBOOT_SENTINEL:-/var/run/reboot-required}"   # kured watches this
+
+# Test seams (overridable; default to the real cmds so production behaviour is unchanged).
+: "${SU_EMERGE:=emerge}"
+: "${SU_KUBECTL:=kubectl}"
+: "${SU_DATE:=date}"
+# emerge's own verbose output is appended here. The cron drop-in ALSO redirects
+# stdout/stderr to the same file, so this is the inner detail log. Overridable so the
+# poll never aborts merely because /var/log is not writable (the emerge would
+# otherwise inherit a failed redirect and look like a pull failure).
+: "${SU_EMERGE_LOG:=/var/log/${LOG_TAG}.log}"
+
+# Diagnostics go to STDERR (the cron drop-in redirects 2>&1 to the log, so they are
+# captured identically in production). Critically, resolve_policy() emits the policy
+# JSON on STDOUT, so a log line must NEVER land on stdout or it would corrupt the
+# captured JSON (and silently lose an enabled:false).
+log()  { echo "[${LOG_TAG} $(${SU_DATE} -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >&2; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+warn() { log "WARNING: $*"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+mkdir -p "${STATE_DIR}" 2>/dev/null || true
+
+# ── Resolve the effective policy JSON (fail-safe to OFF) ───────────────────────
+# Returns a single JSON object on stdout. The order is: baked default object, then
+# merged-over by /etc/snapdragon/update.json if present, then merged-over by the
+# live ConfigMap if a control-plane kubeconfig is reachable. ANY failure at a
+# higher tier silently keeps the lower tier — never flips us to disabled.
+DEFAULT_POLICY='{"enabled":false,"cadence":"0 4 * * *","window":"","reboot":"if-needed","staging":{}}'
+
+merge_json() {  # merge_json <base> <override>  -> base with override's keys winning
+    if have jq; then
+        jq -cn --argjson a "$1" --argjson b "$2" '$a * $b' 2>/dev/null || printf '%s' "$1"
+    else
+        # No jq: cannot merge; prefer the override only if it is a usable object,
+        # else keep the base. Never fail to disabled.
+        case "$2" in '{'*'}') printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac
+    fi
+}
+
+resolve_policy() {
+    local pol="${DEFAULT_POLICY}"
+
+    # tier 2: local file (by-file config, written by keys-provision)
+    if [ -f "${LOCAL_CONF}" ]; then
+        local f; f="$(cat "${LOCAL_CONF}" 2>/dev/null)"
+        case "${f}" in '{'*'}') pol="$(merge_json "${pol}" "${f}")" ;; esac
+    fi
+
+    # tier 3: live ConfigMap (superadmin override) — control-plane reachable only.
+    # Best-effort: a missing kubeconfig (worker/client), unreachable cluster, or
+    # absent ConfigMap all leave the lower tier intact => still OFF (opt-in).
+    if [ -f "${KUBECONFIG_FILE}" ] && have "${SU_KUBECTL}"; then
+        local cm
+        cm="$(${SU_KUBECTL} --kubeconfig "${KUBECONFIG_FILE}" -n "${POLICY_NS}" \
+                get configmap "${POLICY_CM}" -o jsonpath='{.data.policy\.json}' 2>/dev/null)" || cm=""
+        case "${cm}" in '{'*'}') pol="$(merge_json "${pol}" "${cm}")"; log "applied live ${POLICY_NS}/${POLICY_CM} override" ;; esac
+    fi
+
+    printf '%s' "${pol}"
+}
+
+pol_get() {  # pol_get <json> <jq-filter> <default>
+    # NOTE: do NOT use `// empty` — jq's `//` treats a literal `false` as empty, so a
+    # `false` boolean (e.g. enabled:false) would collapse to the default and we could
+    # never observe a disable. Emit the value ONLY when it is non-null; a null/missing
+    # key falls back to the caller's default. A literal `false` survives.
+    local out=""
+    if have jq; then
+        out="$(printf '%s' "$1" | jq -r "($2) | if . == null then empty else . end" 2>/dev/null)"
+    fi
+    [ -n "${out}" ] && printf '%s' "${out}" || printf '%s' "$3"
+}
+
+# ── Window gate ────────────────────────────────────────────────────────────────
+# "HH:MM-HH:MM" local-time window. Empty => always allowed. A window that wraps
+# midnight (start > end, e.g. "22:00-04:00") is honoured.
+in_window() {  # in_window <window>
+    local w="$1"; [ -n "${w}" ] || return 0
+    case "${w}" in *-*) ;; *) return 0 ;; esac
+    local start="${w%-*}" end="${w#*-}" now
+    now="$(${SU_DATE} +%H:%M)"
+    # lexical HH:MM compares correctly (zero-padded).
+    if [ "${start}" \< "${end}" ] || [ "${start}" = "${end}" ]; then
+        [ "${now}" \> "${start}" -o "${now}" = "${start}" ] && [ "${now}" \< "${end}" ]
+    else
+        # wrap past midnight
+        [ "${now}" \> "${start}" -o "${now}" = "${start}" ] || [ "${now}" \< "${end}" ]
+    fi
+}
+
+# ── Read PORTAGE_BINHOST from make.conf (or its dir drop-ins) ──────────────────
+binhost_url() {
+    local mc="${MAKE_CONF}"
+    if [ -d "${mc}" ]; then
+        grep -rhoE 'PORTAGE_BINHOST="?[^"]+' "${mc}" 2>/dev/null | tail -1 | sed 's/^PORTAGE_BINHOST="\?//'
+    elif [ -f "${mc}" ]; then
+        grep -oE 'PORTAGE_BINHOST="?[^"]+' "${mc}" 2>/dev/null | tail -1 | sed 's/^PORTAGE_BINHOST="\?//'
+    fi
+}
+
+# ── Main poll ──────────────────────────────────────────────────────────────────
+main() {
+    local pol enabled window reboot
+    pol="$(resolve_policy)"
+    enabled="$(pol_get "${pol}" '.enabled' 'false')"
+    window="$(pol_get "${pol}" '.window' '')"
+    reboot="$(pol_get "${pol}" '.reboot' 'if-needed')"
+
+    # OPT-IN (default-off): the pull proceeds ONLY on an explicit enabled:true.
+    # Anything else — the baked default, a missing key, an unreachable ConfigMap, or a
+    # malformed value — fails safe to OFF (skip); it NEVER fails open to a pull.
+    if [ "${enabled}" != "true" ]; then
+        log "auto-update not enabled (opt-in: set enabled:true in ${POLICY_NS}/${POLICY_CM}) — skipping"
+        return 0
+    fi
+
+    if ! in_window "${window}"; then
+        log "outside maintenance window '${window}' — skipping this poll"
+        return 0
+    fi
+
+    local url; url="$(binhost_url)"
+    if [ -z "${url}" ]; then
+        warn "no PORTAGE_BINHOST configured (provision_binhost not run / no binhost) — nothing to pull"
+        return 0
+    fi
+    log "polling binhost ${url} for changed binpkgs (delta-only; --getbinpkgonly --usepkgonly)"
+
+    # Pull ONLY changed packages from the binhost subtree. --getbinpkgonly +
+    # --usepkgonly => binary-only (never compile on the node); --update --deep
+    # --newuse @world resolves the delta against the installed set; --keep-going
+    # so one bad pkg never strands the rest. NEVER fail the cron run on a transient
+    # binhost miss — keep last-good + retry next tick (the convergence FLOOR).
+    if ! have "${SU_EMERGE}"; then
+        warn "emerge missing — cannot pull (image without portage?)"
+        return 0
+    fi
+    local rc=0
+    "${SU_EMERGE}" --getbinpkgonly --usepkgonly --update --deep --newuse \
+        --keep-going --quiet @world >> "${SU_EMERGE_LOG}" 2>&1 || rc=$?
+    if [ "${rc}" -ne 0 ]; then
+        warn "emerge delta returned ${rc} (transient binhost/resolution issue) — keeping last-good, retry next tick"
+        return 0
+    fi
+    log "binpkg delta applied (or already up to date)"
+
+    # ── kured-style SAFE reboot ──────────────────────────────────────────────────
+    # We do NOT reboot inline. We drop the kured sentinel (/var/run/reboot-required)
+    # which the cluster's kured DaemonSet drains+cordons+reboots ONE node at a time
+    # within ITS configured maintenance window — so a fleet-wide binpkg roll never
+    # reboots everything at once. reboot:never => never request; reboot:always =>
+    # always request after a successful pull; reboot:if-needed (default) => only when
+    # a kernel/glibc/openrc-class package changed (a portage news/needs-reboot hint).
+    case "${reboot}" in
+        never)  log "reboot policy 'never' — leaving the running kernel in place" ;;
+        always) : > "${REBOOT_SENTINEL}" 2>/dev/null && log "reboot requested (policy 'always') — kured will drain+reboot in-window" ;;
+        *)      if needs_reboot; then
+                    : > "${REBOOT_SENTINEL}" 2>/dev/null && log "reboot-requiring package changed — requested kured safe reboot"
+                else
+                    log "no reboot-requiring package changed — no reboot"
+                fi ;;
+    esac
+}
+
+# Heuristic for if-needed: a kernel / glibc / openrc / systemd-class binpkg landing
+# in the pkg cache more recently than the running kernel build => reboot. Conservative:
+# on any uncertainty we do NOT force a reboot (kured + the next news item still catch it).
+needs_reboot() {
+    local newest_kernel; newest_kernel="$(ls -1t /lib/modules 2>/dev/null | head -1)"
+    [ -n "${newest_kernel}" ] || return 1
+    # Running kernel differs from the newest installed modules dir => new kernel staged.
+    [ "${newest_kernel}" != "$(uname -r 2>/dev/null)" ]
+}
+
+main "$@"

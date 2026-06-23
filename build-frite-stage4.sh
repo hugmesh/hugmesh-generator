@@ -693,6 +693,18 @@ cp "${SHARED_SPECS}/etc/init.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/init.d/
 chmod +x "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile"
 
+# ── Opt-in host-binary auto-update (binpkg deltas from the binhost) ─────────────
+# The SAME poller the Pi5/x86 images bake: keeps a client device's binaries fresh
+# from the tailnet binhost over the VPN. provision_update() bakes the /etc/cron.d
+# cadence timer + the boot oneshot is linked into the default runlevel below, but
+# the poller is DEFAULT-OFF / INERT: it does NOTHING until a superadmin opts in by
+# setting enabled:true in the snapdragon-update-policy ConfigMap (fail-safe-to-OFF —
+# an absent/unreachable policy means NO pull). cronie + OpenRC (not systemd).
+mkdir -p "${SYSROOT}/usr/local/sbin"
+cp "${SHARED_SPECS}/usr/local/sbin/snapdragon-update"     "${SYSROOT}/usr/local/sbin/snapdragon-update"
+chmod +x "${SYSROOT}/usr/local/sbin/snapdragon-update"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-update"         "${SYSROOT}/etc/init.d/snapdragon-update"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-update"
 # ── Domain-registry -> brand-repo bridge (#4) — DEFAULT-OFF, baked-but-INERT ─────
 # Bake the reconcile agent + its verify lib (domain-verify.sh) + the OpenRC service
 # + the two generators for PARITY with the rpi5/x86 host images. Frite is a
@@ -748,6 +760,11 @@ echo "en_US.UTF-8 UTF-8" > "${SYSROOT}/etc/locale.gen"
 # started by the display manager (lightdm) when --desktop light.
 mkdir -p "${SYSROOT}/etc/runlevels/default"
 DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision local)
+# Opt-in host-binary auto-update: link the boot oneshot into the default runlevel
+# UNCONDITIONALLY (every client image) as PLUMBING. The cadence cron is baked by
+# provision_update() at first boot, but the poller is DEFAULT-OFF — inert until a
+# superadmin sets enabled:true in the snapdragon-update-policy ConfigMap.
+DEFAULT_SVCS+=(snapdragon-update)
 # headscale on this node is a CLIENT of the fleet control server (it does NOT host
 # the control plane — that lives on the pki node), so we do NOT add headscale to
 # the default runlevel here; only the tailscale CLIENT runs.

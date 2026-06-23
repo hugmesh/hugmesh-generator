@@ -68,3 +68,38 @@ Each Gentoo node `emerge --getbinpkg`s from the binhost over the VPN
 (`PORTAGE_BINHOST=http://<x86-vpn-ip>:8086/<arch>`, set by keys-provision from
 the node inventory). The x86 build emits amd64 binpkgs; the RPi crossdev build
 emits arm64 binpkgs — both rsynced to the binhost PVC.
+
+### Opt-in host-binary auto-update (default-off)
+
+Every generated host/node **and** client image **bakes** the auto-update plumbing,
+but it is **off by default** — a superadmin must **opt in** to activate it. A baked
+`snapdragon-update` poller (`/usr/local/sbin/snapdragon-update`) runs from an
+`/etc/cron.d/snapdragon-update` drop-in (cronie, OpenRC — not systemd) on the
+configured cadence, plus once at boot via the `snapdragon-update` OpenRC oneshot, but
+each poll **skips** unless the effective policy is `enabled:true`. When enabled, a
+poll pulls **only changed packages**
+(`emerge --getbinpkgonly --usepkgonly --update --deep --newuse @world`) from the
+node's `PORTAGE_BINHOST` subtree, then — when a reboot-requiring package changed —
+drops the kured sentinel (`/var/run/reboot-required`) so kured drains+cordons+reboots
+**one node at a time** inside its own maintenance window.
+
+`provision_update()` (keys-provision) bakes the cron drop-in as **plumbing** on every
+target (so a later opt-in actually fires), and the **poller is the runtime gate**. The
+**absence** of any policy means auto-update is **OFF** (fail-safe to off, never to a
+pull).
+
+**Superadmin opt-in** — the live `devops/snapdragon-update-policy` ConfigMap (and the
+optional KEYS-manifest `.update` block) **enable** and tune it:
+
+| key       | meaning                                              | default        |
+|-----------|------------------------------------------------------|----------------|
+| `enabled` | master switch; **`true` opts in / enables the pull** | `false` (off)  |
+| `cadence` | cron the node runs                                   | `0 4 * * *`    |
+| `window`  | `HH:MM-HH:MM` local-time gate (live, no re-image)    | `02:00-06:00`  |
+| `reboot`  | `if-needed` \| `never` \| `always` (kured-safe)      | `if-needed`    |
+| `staging` | per board/role/`client` cadence (rollout waves)      | `{}`           |
+
+Control-plane nodes read the ConfigMap live each poll; worker/client nodes (no
+kubeconfig) fall back to the per-node `/etc/snapdragon/update.json` — still
+default-off. Deleting the ConfigMap reverts every node to the baked default (OFF); a
+superadmin sets `enabled:true` to opt a fleet in.

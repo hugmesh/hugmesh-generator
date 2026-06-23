@@ -1,0 +1,21 @@
+# snapdragon-update — DEFAULT-ON host-binary auto-update poller (cadence timer).
+#
+# The TIMER half of the binary OS auto-update (the OpenRC snapdragon-update service
+# runs one poll at boot; this cron entry re-runs it on the configured cadence).
+# cronie reads /etc/cron.d — the SAME mechanism provision.sh uses for
+# /etc/cron.d/snapdragon-backup + the device-registry / policy / vpn sync timers.
+#
+# DEFAULT-ON: installed ACTIVE by provision_update() on EVERY generated host/node +
+# client image. There is NO opt-in flag — absence of a superadmin override means
+# auto-update is ON. The live devops/snapdragon-update-policy ConfigMap can only
+# ADJUST (cadence/window/staging) or DISABLE (enabled:false). The poller itself is
+# fail-safe-to-update: an unreachable cluster / absent ConfigMap => it still pulls.
+#
+# The cadence below is the BAKED default (daily at 04:00). provision_update()
+# REWRITES this line's schedule from the manifest's .update.cadence (and per-target/
+# per-role .update.staging) so a build / superadmin can stage the rollout. The poller
+# additionally enforces .update.window at runtime (so a tightened window takes effect
+# live via the ConfigMap without re-imaging).
+#
+# Field order: min hour dom month dow user command
+0 4 * * * root /usr/local/sbin/snapdragon-update >> /var/log/snapdragon-update.log 2>&1

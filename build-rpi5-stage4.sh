@@ -1591,6 +1591,17 @@ mkdir -p "${SYSROOT}/usr/local/sbin"
 cp "${SHARED_SPECS}/usr/local/sbin/snapdragon-backup"     "${SYSROOT}/usr/local/sbin/snapdragon-backup"
 chmod +x "${SYSROOT}/usr/local/sbin/snapdragon-backup"
 
+# Opt-in host-binary auto-update poller + OpenRC boot oneshot (baked as PLUMBING).
+# The poller pulls changed binpkgs (deltas) from the node's PORTAGE_BINHOST and
+# kured-safe-reboots, but is DEFAULT-OFF: provision_update() bakes the /etc/cron.d
+# cadence timer + the boot oneshot is linked below, yet each poll SKIPS until a
+# superadmin sets enabled:true in the snapdragon-update-policy ConfigMap (fail-safe
+# to off). cronie + OpenRC (not systemd).
+cp "${SHARED_SPECS}/usr/local/sbin/snapdragon-update"     "${SYSROOT}/usr/local/sbin/snapdragon-update"
+chmod +x "${SYSROOT}/usr/local/sbin/snapdragon-update"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-update"         "${SYSROOT}/etc/init.d/snapdragon-update"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-update"
+
 mkdir -p "${SYSROOT}/etc/ssh/sshd_config.d"
 cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf"  "${SYSROOT}/etc/ssh/sshd_config.d/hardened.conf"
 
@@ -1731,6 +1742,11 @@ mkdir -p "${SYSROOT}/etc/runlevels/default"
 # growroot expands the root fs to fill the medium on first boot; it orders itself
 # before keys-provision so provisioning sees the full disk (no-op in containers).
 DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall containerd kubelet auditd local)
+# Opt-in host-binary auto-update: link the boot oneshot + cadence cron into the
+# default runlevel as PLUMBING (every node), but the poller is DEFAULT-OFF / INERT —
+# it pulls nothing until a superadmin sets enabled:true in the snapdragon-update-policy
+# ConfigMap (fail-safe-to-OFF: an absent/unreachable policy => NO pull).
+DEFAULT_SVCS+=(snapdragon-update)
 # headscale runs on the PKI/identity node (and on a generic all-in-one image)
 if [ "${ROLE}" = "pki" ] || [ "${ROLE}" = "generic" ]; then
     DEFAULT_SVCS+=(headscale)

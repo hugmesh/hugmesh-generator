@@ -69,6 +69,18 @@
     "url": "http://10.0.0.30:8086/arm64"
   },
 
+  "_comment_update": "OPT-IN (default-off) host-binary auto-update. This whole block is OPTIONAL: omit it and the node stays OFF (absence => OFF, fail-safe-to-off). Present only to pre-seed an opt-in / tune cadence at provision time; the live devops/snapdragon-update-policy ConfigMap (superadmin UI) overrides these at runtime. enabled:true opts in / enables (default false); cadence is the cron the node runs; window (HH:MM-HH:MM, local) gates the pull live; reboot=if-needed|never|always (kured-safe); staging maps a board/role/'client' key to a cadence for staged waves.",
+  "update": {
+    "enabled": false,
+    "cadence": "0 4 * * *",
+    "window": "02:00-06:00",
+    "reboot": "if-needed",
+    "staging": {
+      "pki": "30 3 * * *",
+      "client": "0 5 * * 6"
+    }
+  },
+
   "selinux": {
     "type": "mcs",
     "mode": "permissive"

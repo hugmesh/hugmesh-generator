@@ -2040,6 +2040,87 @@ provision_backup() {
     fi
 }
 
+# ── OPT-IN (default-off) host-binary auto-update (binpkg deltas from the binhost) ──
+# Bakes the snapdragon-update cron drop-in as ACTIVE PLUMBING on EVERY node + client
+# image, but the poller is DEFAULT-OFF: the ABSENCE of any policy means auto-update is
+# OFF (fail-safe to off, not to a pull). A superadmin OPTS IN by setting enabled:true
+# in the live snapdragon-update-policy ConfigMap (or the manifest's OPTIONAL ".update"
+# block, which can also ADJUST cadence/window/reboot/per-target+role staging). Cloned
+# from provision_backup()'s by-file + cron.d idiom; cronie reads /etc/cron.d (OpenRC,
+# not systemd).
+#
+# Self-sufficient: the poller is baked at /usr/local/sbin/snapdragon-update by the
+# image builders, but if a target's builder did NOT bake it (e.g. a protected
+# builder we may not edit), this STAGES the cron drop-in pointing at the SAME path so
+# the plumbing is defined for a follow-up bake — provisioning never silently drops it.
+# The poller (not provisioning) is the runtime gate, so a node opted in later via the
+# ConfigMap still needs this baked cron to fire.
+provision_update() {
+    local enabled cadence window reboot role board staged
+    mkdir -p /etc/snapdragon
+
+    # OPT-IN (default-off): the cron + poller are baked as PLUMBING on every node, but
+    # the poller pulls only when the effective policy says enabled:true. enabled
+    # defaults to FALSE; the local update.json (tier 2) and the live ConfigMap (tier 3)
+    # both default off, so a node does NOTHING until a superadmin opts in.
+    # NOTE: do NOT use `// false` here — jq's `//` treats a literal `false` as empty
+    # (false // false == false is fine, but true // false == true would mask a raw
+    # read); read it raw and default ONLY a null/missing value to false.
+    enabled="$(jqm '.update.enabled')"
+    [ "${enabled}" = "true" ] || enabled="false"
+    cadence="$(jqm '.update.cadence // "0 4 * * *"')"
+    window="$(jqm '.update.window // ""')"; [ "${window}" = "null" ] && window=""
+    reboot="$(jqm '.update.reboot // "if-needed"')"
+
+    # Per-target / per-role staging override: a maintenance-wave cadence keyed by the
+    # node's role (/etc/snapdragon/role) or board tag (frite:<board>) or "client".
+    # Mirrors the ConfigMap's .staging map; the most specific match wins.
+    role="$(cat /etc/snapdragon/role 2>/dev/null || echo '')"
+    board="$(cat /etc/snapdragon/board 2>/dev/null || echo '')"
+    if jqe '.update.staging' && [ "$(jqm '.update.staging | length')" != "0" ]; then
+        local k
+        for k in "${board}" "${role}" client; do
+            [ -n "${k}" ] || continue
+            staged="$(jqm ".update.staging.\"${k}\" // \"\"")"
+            if [ -n "${staged}" ] && [ "${staged}" != "null" ]; then
+                cadence="${staged}"; log "update: staging cadence for '${k}' => ${cadence}"; break
+            fi
+        done
+    fi
+
+    # Persist the effective policy as the by-file local config the poller reads
+    # (tier 2). The live ConfigMap (tier 3) still wins on a reachable control node.
+    if jqe '.update'; then
+        jq '.update' "${MANIFEST}" > /etc/snapdragon/update.json 2>/dev/null || true
+    else
+        # No .update block => write the explicit default-OFF policy so the posture is
+        # self-documenting on the node (absence of the block still means OFF / opt-in).
+        printf '{"enabled":false,"cadence":"%s","window":"%s","reboot":"%s","staging":{}}\n' \
+            "${cadence}" "${window}" "${reboot}" > /etc/snapdragon/update.json
+    fi
+
+    # OPT-IN: always bake the cron drop-in as PLUMBING (so a later ConfigMap/local
+    # enabled:true actually fires) — the POLLER is the runtime gate and skips unless the
+    # effective policy is enabled:true. There is NO provision-time "disable" branch:
+    # default-off is enforced by the poller, never by withholding the cron (withholding
+    # it would also make runtime opt-in via the ConfigMap impossible).
+    if [ -x /usr/local/sbin/snapdragon-update ]; then
+        mkdir -p /etc/cron.d
+        printf '%s root /usr/local/sbin/snapdragon-update >> /var/log/snapdragon-update.log 2>&1\n' \
+            "${cadence}" > /etc/cron.d/snapdragon-update
+        chmod 0644 /etc/cron.d/snapdragon-update
+        log "auto-update plumbing baked: cadence='${cadence}' window='${window:-any}' reboot=${reboot}; poller is DEFAULT-OFF (opt in via enabled:true). provisioned enabled=${enabled}"
+    else
+        # Poller not baked into this image (e.g. a builder we could not edit). Stage the
+        # cron plumbing so it is defined; the OpenRC oneshot + a follow-up bake install
+        # it. The poller still gates default-off at runtime regardless.
+        mkdir -p /etc/snapdragon
+        printf '%s root /usr/local/sbin/snapdragon-update >> /var/log/snapdragon-update.log 2>&1\n' \
+            "${cadence}" > /etc/snapdragon/cron-update.staged
+        warn "snapdragon-update poller not baked in this image — staged the cron plumbing at /etc/snapdragon/cron-update.staged (needs a builder bake of /usr/local/sbin/snapdragon-update); poller remains default-off until opted in"
+    fi
+}
+
 # ── Snapdragon GitOps (ArgoCD app-of-apps) — control-plane only ────
 provision_snapdragon() {
     local role label
@@ -2521,6 +2602,7 @@ main() {
     provision_domain_registry   # #4 domain-registry -> brand-repo bridge (default-off; reuses Layer-B key) — after device-registry stages the pubkey
     provision_kubernetes
     provision_backup
+    provision_update     # OPT-IN binpkg auto-update plumbing (default-off; superadmin enables via ConfigMap; absence => off)
     provision_snapdragon
     provision_calico
     provision_vault

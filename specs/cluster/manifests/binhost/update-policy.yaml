@@ -1,0 +1,50 @@
+# snapdragon-update-policy — the LIVE superadmin OPT-IN switch for host-binary
+# auto-update.
+#
+# Every generated host/node + client image bakes the snapdragon-update poller (which
+# pulls changed binpkgs (deltas) from this binhost over the VPN and kured-safe-reboots),
+# but it is DEFAULT-OFF and FAIL-SAFE-TO-OFF: the ABSENCE of this ConfigMap (or an
+# unreachable cluster, or a node with no kubeconfig — e.g. a worker / client) means
+# auto-update is OFF. A superadmin OPTS IN by setting enabled:true here; nothing pulls
+# until they do.
+#
+# The superadmin UI edits .data.policy\.json (a single JSON object). Control-plane
+# nodes read it live each poll (kubectl get configmap); the value WINS over the baked
+# default + the per-node /etc/snapdragon/update.json. Worker / client nodes (no
+# kubeconfig) fall back to /etc/snapdragon/update.json => still OFF.
+#
+# Schema (all keys OPTIONAL; an omitted key keeps the default):
+#   enabled  bool    master switch. DEFAULT false. Set `true` to opt in / enable.
+#   cadence  cron    informational mirror of the cron the node runs (the node's
+#                    /etc/cron.d/snapdragon-update schedule is rendered by
+#                    provision_update from the manifest; tighten the runtime gate
+#                    with `window` below, which the poller enforces live).
+#   window   "HH:MM-HH:MM"  only pull inside this local-time window ("" => any).
+#                    Wrapping past midnight ("22:00-04:00") is honoured.
+#   reboot   enum    if-needed (default) | never | always — kured-style safe reboot
+#                    via the /var/run/reboot-required sentinel (drains+cordons+reboots
+#                    ONE node at a time in kured's own window).
+#   staging  map     per-target / per-role cadence overrides for staged rollout /
+#                    maintenance waves, keyed by board tag (e.g. "frite:rpi5"),
+#                    node role ("pki","be+gpu","be","fe"), or "client".
+#
+# This baked manifest is the DEFAULT-OFF baseline (enabled:false, conservative window,
+# safe reboot). Deleting it does NOT turn auto-update on — every node reverts to the
+# baked default, which is OFF. A superadmin sets enabled:true to opt a fleet in.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: snapdragon-update-policy
+  namespace: devops
+  labels:
+    app.kubernetes.io/part-of: snapdragon-binhost
+    snapdragon.systems/superadmin-editable: "true"
+data:
+  policy.json: |
+    {
+      "enabled": false,
+      "cadence": "0 4 * * *",
+      "window": "02:00-06:00",
+      "reboot": "if-needed",
+      "staging": {}
+    }
