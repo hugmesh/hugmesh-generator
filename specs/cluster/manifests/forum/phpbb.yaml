@@ -5,7 +5,9 @@
 # isolated snapdragon-forum namespace.
 #
 # HEADLESS MECHANISM: phpBB has NO official REST API. The chosen mechanism is a
-# thin CUSTOM phpBB extension `snapdragon/json-api` (phpBB 3.1+ ships Symfony
+# thin CUSTOM phpBB extension `snapdragon/jsonapi` (the phpbbcli identifier ==
+# install DIRECTORY path == composer name; NO hyphen — the hyphenated form is
+# un-enableable by phpBB's name regex + dir match). phpBB 3.1+ ships Symfony
 # HttpKernel/Controller/Routing; the extension registers config/routing.yml +
 # controllers returning JsonResponse, DI-injecting phpBB's own services so reads
 # AND writes honor phpBB's consistency/permission logic) exposed at
@@ -13,19 +15,27 @@
 # request, re-derives groups/ROLE_ADMIN from the verified token (never caller-
 # supplied data), and binds the phpBB user by Casdoor `sub` (not localpart).
 #
-# ⚠️ GATED STUB-SEAM (this pass): the snapdragon/json-api extension shape is not
-# yet pinned. forum-bff-api boots with external.forum.enabled=false (stub +
-# always-audit), so the FULL stack deploys and is isolated/wired WITHOUT a
-# live extension. The custom phpBB IMAGE (official phpBB + the baked extension) is
-# referenced via the image placeholder below; flip external.forum.enabled=true in
-# forum-bff-api only after the extension is built + validated on-cluster.
+# GO-LIVE BOOTSTRAP (this pass): the extension is real and live-proven against
+# phpBB 3.3.11. The init->main filesystem split is resolved as:
+#   * initContainer (OWNER creds): DDL-once headless schema install (guarded by a
+#     <prefix>config table probe) + registration lockdown. The install YAML's
+#     `extensions:` node enables snapdragon/jsonapi.
+#   * MAIN container IMAGE entrypoint: regenerate config.php from env every boot
+#     (least-privilege phpbb_app role) so the main FS — which never sees the
+#     initContainer's config.php — always has a working config; ensure the ext is
+#     enabled (idempotent); remove install/; serve. config.php is derivable from
+#     env (the DB config table is the real source of truth), so this survives
+#     restarts with no re-DDL.
 #
 # BLOCKING THE DEFAULT phpBB UIs (our Angular forum-ui is the single source of
 # truth): there is NO route to phpBB AT ALL (the NetworkPolicy + no-ingress is the
-# control). In addition the bootstrap lockdown (initContainer) disables
-# registration, sets the board to maintenance/disabled for anonymous, and locks
-# the native login UCP path; forum-bff strips Set-Cookie + drops any text/html
-# phpBB body so a board/ACP/login page can never transit to a browser.
+# PRIMARY control). Defense in depth: the IMAGE denies every .php except app.php at
+# the Apache layer (snapdragon-lockdown.conf), so index/ucp/adm/posting/viewforum
+# return 403 while /api/v1/snapdragon/** still routes through app.php; registration
+# is disabled (require_activation=3); forum-bff strips Set-Cookie + drops any
+# text/html phpBB body. We do NOT use phpBB board_disable — it is enforced in
+# $user->setup() inside app.php BEFORE the extension dispatches, so it would also
+# break /api/v1/snapdragon/health (validated; that is why the Apache lockdown is used).
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -41,48 +51,123 @@ data:
   # passwords come from env (the phpbb-secrets / phpbb-db-app-auth Secrets), never
   # baked into this ConfigMap.
   phpbb.env: |
+    # config.php connection params, read by BOTH the initContainer (schema install)
+    # and the MAIN container's image entrypoint (which REGENERATES config.php from
+    # these on every boot — see the design note on the Deployment below). NO password
+    # here: the OWNER password (DB_PASSWORD) and the runtime app-role password
+    # (PHPBB_APP_PASSWORD) come from the ESO Secrets via the container env.
     PHPBB_DB_DRIVER=phpbb\db\driver\postgres
     PHPBB_DB_HOST=phpbb-db.snapdragon-forum.svc.cluster.local
     PHPBB_DB_PORT=5432
     PHPBB_DB_NAME=phpbb
+    PHPBB_TABLE_PREFIX=phpbb_
     # RUNTIME DB user = the least-privilege app role (password injected from
     # phpbb-db-app-auth as PHPBB_APP_PASSWORD by the container env).
     PHPBB_DB_USER=phpbb_app
-    # --- bootstrap lockdown: our Angular UI is the truth ---
+    # OWNER role used ONLY by the initContainer's DDL-once schema install.
+    PHPBB_OWNER_USER=phpbb
+    # Path (in the initContainer) to the rendered headless-install YAML.
+    PHPBB_INSTALL_CONFIG=/tmp/install-config.yml
+    # Headless extension (phpbbcli identifier == install DIRECTORY path; NO hyphen —
+    # the hyphenated form is un-enableable by phpBB's name regex + dir match).
+    PHPBB_EXTENSION=snapdragon/jsonapi
+    # Lockdown intent (the IMAGE enforces it deterministically, NOT phpBB config):
+    #   * registration disabled  -> initContainer sets require_activation=3 (admin approval)
+    #   * board/ACP/login locked  -> the IMAGE denies every .php except app.php at the
+    #     Apache layer (snapdragon-lockdown.conf), so index/ucp/adm/posting/viewforum
+    #     return 403 while /api/v1/snapdragon/** still routes through app.php. We do NOT
+    #     set phpBB board_disable: phpBB enforces it in $user->setup() inside app.php
+    #     BEFORE the extension dispatches, which would also kill /api/v1/snapdragon/**.
     PHPBB_REGISTRATION_DISABLED=1
-    PHPBB_BOARD_DISABLED=1
-    PHPBB_NATIVE_LOGIN_LOCKED=1
-    PHPBB_EXTENSION=snapdragon/json-api
-  # The bootstrap-lockdown script the install initContainer runs. It is a SCAFFOLD:
-  # the exact phpBB install CLI (install/phpbbcli.php install) + the lockdown SQL
-  # are version/image-specific; validate against the chosen phpBB image before the
-  # extension shape is flipped live. The intent (NOT the exact bytes) is load-bearing:
-  #   1. install/migrate phpBB into phpbb-db AS THE OWNER role (DDL once);
-  #   2. disable registration + set board maintenance/disabled for anonymous;
-  #   3. lock the native login UCP path (return non-200 for /ucp.php?mode=login
-  #      and /adm/index.php) so only the json-api extension surface answers;
-  #   4. enable the snapdragon/json-api extension.
+  # Headless-install YAML CONSUMED by the initContainer (rendered with the OWNER creds
+  # at runtime — no secret literals here). Schema = phpbb/install/installer_configuration.php
+  # (validated against phpBB 3.3.11). The ${PLACEHOLDER}s are substituted by bootstrap.sh
+  # from env (the OWNER password comes from the phpbb-secrets Secret as DB_PASSWORD).
+  # The `extensions:` node enables snapdragon/jsonapi as part of the install.
+  install-config.yml: |
+    installer:
+        admin:
+            name: '${ADMIN_NAME}'
+            password: '${ADMIN_PASSWORD}'
+            email: '${ADMIN_EMAIL}'
+        board:
+            lang: en
+            name: '${BOARD_NAME}'
+            description: 'Backend-only phpBB (headless via snapdragon/jsonapi)'
+        database:
+            dbms: postgres
+            dbhost: '${PHPBB_DB_HOST}'
+            dbport: '${PHPBB_DB_PORT}'
+            dbuser: '${PHPBB_OWNER_USER}'
+            dbpasswd: '${DB_PASSWORD}'
+            dbname: '${PHPBB_DB_NAME}'
+            table_prefix: '${PHPBB_TABLE_PREFIX}'
+        email:
+            enabled: false
+        server:
+            cookie_secure: false
+            server_protocol: 'http://'
+            force_server_vars: false
+            server_name: localhost
+            server_port: 80
+            script_path: /
+        extensions:
+            - snapdragon/jsonapi
+  # The initContainer bootstrap: render the install YAML with the OWNER creds, run the
+  # phpBB headless install (DDL-ONCE, guarded by a table-existence probe so it is safe on
+  # every pod restart), then set the registration lockdown. The MAIN container's IMAGE
+  # entrypoint owns the rest (regenerate config.php from env, enable the extension,
+  # remove install/, Apache lockdown). Validated against phpBB 3.3.11 in a two-container
+  # harness reproducing this init->main filesystem split.
   bootstrap.sh: |
     #!/bin/sh
-    # phpBB bootstrap lockdown (SCAFFOLD — validate per the chosen phpBB image).
+    # phpBB initContainer: DDL-once schema install (OWNER role) + registration lockdown.
     set -eu
-    echo "[phpbb-bootstrap] starting install + lockdown"
+    echo "[phpbb-bootstrap] starting (initContainer; OWNER-role DDL)"
+    # Source phpbb.env with auto-export (set -a) so EVERY key (PHPBB_DB_HOST,
+    # PHPBB_TABLE_PREFIX, PHPBB_OWNER_USER, …) is EXPORTED into the environment and thus
+    # visible to the php getenv() probe and the install-YAML render below. Without set -a
+    # a sourced `VAR=val` is a shell var only, and php's getenv() returns empty.
+    set -a
     # shellcheck disable=SC1091
     . /config/phpbb.env || true
-    # 1) install/migrate — runs as the DB OWNER (phpbb) the FIRST time only.
-    #    (idempotent: phpbbcli.php detects an already-installed board and migrates.)
-    #    The OWNER password is injected as DB_PASSWORD from phpbb-secrets.
-    echo "[phpbb-bootstrap] install/migrate as owner role 'phpbb' (DDL once)"
-    # php /var/www/html/install/phpbbcli.php install /config/install-config.yml || true
-    # php /var/www/html/bin/phpbbcli.php db:migrate || true
-    # 2) lockdown: registration off + anonymous board disabled + native login locked
-    echo "[phpbb-bootstrap] registration disabled=${PHPBB_REGISTRATION_DISABLED:-1} board disabled=${PHPBB_BOARD_DISABLED:-1} native-login locked=${PHPBB_NATIVE_LOGIN_LOCKED:-1}"
-    # php /var/www/html/bin/phpbbcli.php config:set require_activation 3   # admin approval
-    # php /var/www/html/bin/phpbbcli.php config:set board_disable 1        # board maintenance for anon
-    # 3) enable the headless extension
-    echo "[phpbb-bootstrap] enabling extension ${PHPBB_EXTENSION:-snapdragon/json-api}"
-    # php /var/www/html/bin/phpbbcli.php extension:enable snapdragon/json-api || true
-    echo "[phpbb-bootstrap] complete — only /api/v1/snapdragon/** answers; board/ACP/login locked"
+    set +a
+    cd /var/www/html
+    PREFIX="${PHPBB_TABLE_PREFIX:-phpbb_}"
+
+    # DDL-once guard: probe phpBB's bootstrap table <prefix>config via the OWNER creds.
+    # Values are passed as ENVIRONMENT (prefix assignments before `php`), NOT $argv —
+    # getenv() reads the process env, so trailing args would be silently ignored.
+    already=$(H="$PHPBB_DB_HOST" P="$PHPBB_DB_PORT" N="$PHPBB_DB_NAME" U="$PHPBB_OWNER_USER" W="${DB_PASSWORD:-}" PFX="$PREFIX" php -r '
+        $c=@pg_connect("host=".getenv("H")." port=".getenv("P")." dbname=".getenv("N")." user=".getenv("U")." password=".getenv("W")." connect_timeout=5");
+        if($c===false){echo "noconn";exit;}
+        $r=@pg_query_params($c,"SELECT to_regclass($1) IS NOT NULL",[getenv("PFX")."config"]);
+        if($r===false){echo "err";exit;}
+        $row=pg_fetch_row($r); echo $row[0]==="t"?"yes":"no";
+    ')
+
+    if [ "$already" = "yes" ]; then
+      echo "[phpbb-bootstrap] schema already present (<prefix>config exists) — NOT re-installing (DDL-once)"
+    else
+      echo "[phpbb-bootstrap] DB empty ($already) — rendering install YAML + headless install as OWNER"
+      # Render ${PLACEHOLDER}s from env (PHP is always present; no envsubst dependency).
+      ADMIN_NAME="${ADMIN_NAME:-sysadmin}" ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}" \
+      BOARD_NAME="${BOARD_NAME:-Snapdragon Forum}" \
+      php -r '
+          $t=file_get_contents("/config/install-config.yml");
+          $t=preg_replace_callback("/\\$\\{([A-Z0-9_]+)\\}/",function($m){return getenv($m[1]);},$t);
+          file_put_contents("/tmp/install-config.yml",$t);
+      '
+      php install/phpbbcli.php install /tmp/install-config.yml -n
+      echo "[phpbb-bootstrap] headless install complete (schema + extension enabled)"
+    fi
+
+    # Registration lockdown (config:set persists to the DB config table). We deliberately
+    # do NOT set board_disable (see the phpbb.env note) — the IMAGE's Apache lockdown
+    # blocks the native board/ACP/login pages instead.
+    echo "[phpbb-bootstrap] disabling registration (require_activation=3, admin approval)"
+    php bin/phpbbcli.php config:set require_activation 3 || true
+    echo "[phpbb-bootstrap] complete — exiting (main container's image entrypoint finishes go-live)"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -99,32 +184,51 @@ spec:
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
       securityContext:
+        # ROOTLESS: run as the phpBB runtime user (www-data == UID/GID 33, the image's
+        # default USER). The image binds apache on the NON-PRIVILEGED port 8080, so NO
+        # CAP_NET_BIND_SERVICE and NO root are needed. fsGroup 33 makes the data PVC group
+        # -owned by 33 so the non-root process can write store/. We KEEP the hardened
+        # posture: runAsNonRoot + the per-container capabilities.drop:["ALL"] +
+        # allowPrivilegeEscalation:false below. The SELinux MCS level (s0:c51) is unchanged
+        # — the port remap is an L4/UID concern and does not touch the MCS identity matrix
+        # (docs/SECURITY.md §3), so no SECURITY.md edit is needed.
         runAsNonRoot: true
+        runAsUser: 33
+        runAsGroup: 33
+        fsGroup: 33
         seccompProfile: { type: RuntimeDefault }
         seLinuxOptions:
           type: container_t
           level: "s0:c51"
       initContainers:
-        # One-time install + bootstrap lockdown (registration off, board maintenance,
-        # native login locked, extension enabled). Uses the OWNER DB role for the
-        # install DDL (DB_PASSWORD from phpbb-secrets). Idempotent on re-run.
+        # One-time schema install (DDL-once, OWNER role) + registration lockdown. The
+        # extension is enabled by the install YAML's `extensions:` node. Idempotent on
+        # re-run (the bootstrap probes <prefix>config and skips the DDL if present).
+        # NOTE: this writes config.php into ITS OWN root FS, which the main container
+        # does NOT share (only the `store` PVC is shared) — the main container's image
+        # entrypoint therefore regenerates config.php from env on every boot.
         - name: bootstrap
-          # ⚠️ Custom image = official phpBB + the snapdragon/json-api extension baked
+          # ⚠️ Custom image = official phpBB + the snapdragon/jsonapi extension baked
           # in (immutable, version-locked). Placeholder pinned to the in-cluster
           # registry; replace newTag when the extension image is built (kustomization).
           image: snapdragon-systems/phpbb:dev
           command: ["/bin/sh", "/config/bootstrap.sh"]
           env:
-            # OWNER role password for the install/migrate DDL (from phpbb-secrets).
+            # OWNER role password for the install DDL (from phpbb-secrets). Consumed by
+            # bootstrap.sh as ${DB_PASSWORD} when rendering the install YAML.
             - name: DB_PASSWORD
               valueFrom: { secretKeyRef: { name: phpbb-secrets, key: DB_PASSWORD } }
-            # Runtime app-role password (written into config.php for phpbb_app).
+            # Runtime app-role password (so config.php for phpbb_app can be derived).
             - name: PHPBB_APP_PASSWORD
               valueFrom: { secretKeyRef: { name: phpbb-db-app-auth, key: password } }
             # First-install admin password (from phpbb-secrets); the reconcile Job
             # then maintains ROLE_ADMIN->ADMINISTRATORS congruence.
             - name: ADMIN_PASSWORD
               valueFrom: { secretKeyRef: { name: phpbb-secrets, key: ADMIN_PASSWORD } }
+            # Non-secret first-install identity (the board name + admin localpart/email).
+            - { name: ADMIN_NAME,  value: "sysadmin" }
+            - { name: ADMIN_EMAIL, value: "admin@snapdragon.systems" }
+            - { name: BOARD_NAME,  value: "Snapdragon Forum" }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
@@ -135,20 +239,36 @@ spec:
         - name: phpbb
           image: snapdragon-systems/phpbb:dev
           ports:
-            - { name: http, containerPort: 80 }
+            # ROOTLESS: apache listens on 8080 (non-privileged; bindable by UID 33). The
+            # named port `http` is what the probes + Service targetPort resolve to.
+            - { name: http, containerPort: 8080 }
           env:
-            # RUNTIME DB login = the least-privilege app role phpbb_app.
+            # config.php connection params — the image entrypoint REGENERATES config.php
+            # from these on every boot (the main FS never sees the initContainer's
+            # config.php). Non-secret values mirror the phpbb.env ConfigMap.
+            - { name: PHPBB_DB_DRIVER,   value: "phpbb\\db\\driver\\postgres" }
+            - { name: PHPBB_DB_HOST,     value: "phpbb-db.snapdragon-forum.svc.cluster.local" }
+            - { name: PHPBB_DB_PORT,     value: "5432" }
+            - { name: PHPBB_DB_NAME,     value: "phpbb" }
+            - { name: PHPBB_DB_USER,     value: "phpbb_app" }
+            - { name: PHPBB_TABLE_PREFIX, value: "phpbb_" }
+            - { name: PHPBB_EXTENSION,   value: "snapdragon/jsonapi" }
+            # PHPBB_INSTALL_CONFIG intentionally UNSET in the main container — DDL is the
+            # initContainer's job; the entrypoint only regenerates config + enables the ext.
+            # RUNTIME DB login password = the least-privilege app role phpbb_app.
             - name: PHPBB_APP_PASSWORD
               valueFrom: { secretKeyRef: { name: phpbb-db-app-auth, key: password } }
-            # The extension's JWT validation config (Casdoor JWKS issuer ref). The
-            # extension validates X-Snapdragon-JWT/Authorization against this issuer.
-            - { name: CASDOOR_ISSUER_URI, value: "https://id.snapdragon.systems" }
+            # The extension's JWT validation config — the extension reads SNAPDRAGON_*
+            # (config_provider.php), NOT CASDOOR_ISSUER_URI. jwks_uri MUST be https://
+            # (the provider fails closed otherwise). Per-brand Casdoor -> distinct issuer.
+            - { name: SNAPDRAGON_JWKS_URI,   value: "https://id.snapdragon.systems/.well-known/jwks" }
+            - { name: SNAPDRAGON_JWT_ISSUER, value: "https://id.snapdragon.systems" }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
-          # Readiness on the EXTENSION health endpoint — NOT a board page (the board
-          # is disabled). Proves the json-api surface answers; the board/ACP/login
-          # are intentionally non-200.
+          # Readiness on the EXTENSION health endpoint — NOT a board page (the board UI
+          # is locked at the Apache layer). Proves the json-api surface answers; the
+          # board/ACP/login are intentionally 403.
           readinessProbe:
             httpGet: { path: /api/v1/snapdragon/health, port: http }
             initialDelaySeconds: 30
@@ -194,4 +314,7 @@ spec:
   type: ClusterIP
   selector: { app.kubernetes.io/name: phpbb }
   ports:
+    # The Service EXPOSES port 80 (unchanged ClusterIP contract: forum-bff
+    # PHPBB_API_BASE_URL + admin-sync PHPBB_API both call ...svc.cluster.local:80) and
+    # targets the named `http` port, which now resolves to the rootless containerPort 8080.
     - { name: http, port: 80, targetPort: http }

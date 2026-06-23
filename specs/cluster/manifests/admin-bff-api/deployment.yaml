@@ -207,6 +207,15 @@ spec:
             - { name: BACKUPS_VELERO_NAMESPACE,            value: "velero" }
             - { name: BACKUPS_BRAND_NAMESPACE_SUFFIXES,    value: "be,fe" }
             - { name: BACKUPS_INSTALLED_SERVICES_NAMESPACE, value: "snapdragon-backend" }
+            # ── Forum admin/moderation console (the phpBB leg, via forum-bff) ──
+            # GO-LIVE: the snapdragon/jsonapi extension is live + proven end-to-end
+            # (live smoke 2026-06-23), so turn on the admin forum-moderation proxy
+            # (external.forum.enabled). The leg is hasRole('ADMIN')-gated end-to-end
+            # and calls forum-bff (EXTERNAL_FORUM_BASE_URL default). By design it
+            # degrades gracefully when the forum optional-service is absent (the
+            # PhpbbAdminClient call is audited/stubbed, never hard-fails), so this is
+            # safe on the always-deployed admin-bff for non-forum brands too.
+            - { name: EXTERNAL_FORUM_ENABLED, value: "true" }
             # ── MFA TOTP-secret encryption key (app.mfa.factor-key) — SHIPS DARK ─
             # APP_MFA_FACTOR_KEY is the 256-bit AES-GCM data key MfaSecretCipher uses
             # to encrypt each enrolled TOTP secret at rest (and seed the recovery-code

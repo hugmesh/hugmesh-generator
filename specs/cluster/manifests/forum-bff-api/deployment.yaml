@@ -102,14 +102,19 @@ spec:
             # ── phpBB json-api extension (the headless upstream) ──────────────
             # The in-cluster phpbb Service DNS in the isolated snapdragon-forum ns.
             # forum-bff presents its client cert + forwards the caller JWT (Bearer +
-            # X-Snapdragon-JWT). The extension shape is not yet pinned, so the
-            # stub-seam is OFF by default (forum-bff boots clean + always-audits).
+            # X-Snapdragon-JWT). The snapdragon/jsonapi extension is now LIVE: built,
+            # 44 tests + adversarial review, and proven posting end-to-end on phpBB
+            # 3.3.11 (live smoke 2026-06-23: topic+reply create, force_visibility
+            # round-trip visible, acts-as-user). forum-bff deploys ONLY with the forum
+            # optional-service, so these are safe to enable here unconditionally.
             - name: PHPBB_API_BASE_URL
               value: "http://phpbb.snapdragon-forum.svc.cluster.local:80"
-            # GATED stub-seam (mirrors mod-bff's external.<platform>.enabled). When
-            # false: PhpbbAdminClient.doBlock/suspend etc. return STUBBED + audit to
-            # forum_action, never call phpBB. Flip true after the extension is live.
-            - { name: EXTERNAL_FORUM_ENABLED, value: "false" }
+            # POSTING client (PhpbbApiClient): create/read topics, replies, stats via
+            # /api/v1/snapdragon/**, acting as the mapped Casdoor user. GO-LIVE: ON.
+            - { name: PHPBB_ENABLED, value: "true" }
+            # Moderation client (PhpbbAdminClient.doBlock/suspend etc.) + admin sync.
+            # GO-LIVE: ON now the extension is live (was the dark stub-seam).
+            - { name: EXTERNAL_FORUM_ENABLED, value: "true" }
             # Present the client cert to the phpBB extension (the extension MAY front
             # a server cert; inside the snapdragon-forum default-deny boundary either
             # way). Gated like the other downstream mTLS legs.
