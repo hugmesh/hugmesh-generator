@@ -1,0 +1,82 @@
+# Cassandra auth + TLS Helm-values OVERLAY (DB-hardening, ADR-32 — DARK reference).
+# =============================================================================
+# THIS FILE IS A REFERENCE / FLIP-TIME PATCH, NOT A LIVE ArgoCD OBJECT.
+# =============================================================================
+# It is NOT an Application and is NOT rendered by kustomize. It documents the
+# EXACT `helm.values` diff an operator merges into specs/cluster/apps/00-cassandra.yaml
+# to enable Cassandra authentication (Stage 1) and TLS (Stage 2). We keep it OUT of
+# apps/00-cassandra.yaml so a routine ArgoCD sync NEVER turns auth on by itself
+# (that is a breaking cutover — every gateway's revocation-list / route-access
+# cache and the federation manifest cache reconnect WITH credentials at the same
+# instant). See docs/CLUSTER-HARDENING-PLAN.md §H for the full enable order.
+#
+# Why a values diff and not a kustomize patch: apps/00-cassandra.yaml is a Helm
+# Application (chart bitnami/cassandra 12.3.11, Cassandra 5.0.5); its config lives
+# in spec.source.helm.values, so the enablement is a values merge, applied by the
+# operator (or a brand-time generator flag) at flip time.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 1 — AUTHENTICATION (PasswordAuthenticator + CassandraAuthorizer)
+# ─────────────────────────────────────────────────────────────────────────────
+# Add to spec.source.helm.values (merged with the existing block):
+#
+#   # Rotate the superuser off the chart default (cassandra/cassandra) onto the
+#   # ESO-sourced cassandra-admin Secret (keys: user, password). The bitnami image
+#   # enables PasswordAuthenticator the moment a password is present; we ALSO pin
+#   # authenticator/authorizer explicitly below so it is not implicit.
+#   dbUser:
+#     user: cassandra
+#     existingSecret: cassandra-admin   # keys: cassandra-password (see note)
+#   # Explicit authenticator/authorizer via a cassandra.yaml fragment ConfigMap.
+#   # (existingConfiguration points the chart at a full cassandra.yaml; the
+#   #  cassandra-auth-config ConfigMap in this overlay carries ONLY the two lines
+#   #  plus the chart's required cluster settings — see cassandra-auth-config.yaml.)
+#   existingConfiguration: cassandra-auth-config
+#
+# NOTE on existingSecret key name: the bitnami chart reads the superuser password
+# from key `cassandra-password` by default. The cassandra-admin ESO Secret in this
+# overlay therefore ALSO exposes a `cassandra-password` alias (= password) so it
+# satisfies BOTH the chart (cassandra-password) and the bootstrap Job (password).
+#
+# THEN (Stage 1 flip, in order — docs/CLUSTER-HARDENING-PLAN.md §H):
+#   1. Populate Vault: secret/snapdragon/cassandra-admin + .../cassandra-app-creds.
+#   2. Apply this overlay's ExternalSecrets so cassandra-admin + cassandra-app-creds
+#      materialize.
+#   3. Merge the values above into apps/00-cassandra.yaml; let the StatefulSet roll
+#      (it now starts WITH auth; the default superuser password is rotated).
+#   4. Run the cassandra-bootstrap-roles Job (creates the 6 least-privilege roles
+#      + GRANTs). Authorizer is deny-by-default, so until GRANTs land an app role
+#      can log in but read/write nothing — fail CLOSED.
+#   5. Add CASSANDRA_USER / CASSANDRA_PASSWORD env to each consumer (the client
+#      wiring patch — see client-credentials-patch.md) and roll the consumers.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2 — TLS (node + client encryption)  [follows Stage 1; same live-gate]
+# ─────────────────────────────────────────────────────────────────────────────
+# Add to spec.source.helm.values:
+#
+#   tls:
+#     internodeEncryption: all     # node<->node (single replica today: still arms it)
+#     clientEncryption: true       # client<->node
+#     existingSecret: cassandra-tls-stores      # files: keystore, truststore (JKS)
+#     passwordsSecret: cassandra-tls-passwords  # keys: keystore-password, truststore-password
+#
+# The cassandra-tls-stores Secret (files `keystore`/`truststore`) is produced by
+# the cassandra-tls-keystore-builder Job in this overlay, which converts the
+# Vault-PKI `cassandra-mtls` PEM (tls.crt/tls.key/ca.crt) into JKS — mirroring the
+# gateway chart's build-keystore initContainer. The Vault-PKI role `cassandra` is
+# added by the vault-pki-init patch in this overlay (cassandra-pki-role.patch.txt).
+#
+# THEN (Stage 2 flip — docs/CLUSTER-HARDENING-PLAN.md §H):
+#   6. Apply the vault-pki-init role patch + re-run the vault-pki-init Job so the
+#      `cassandra` issuing role exists; apply cassandra-tls-externalsecret so the
+#      cassandra-mtls PEM Secret materializes; run cassandra-tls-keystore-builder.
+#   7. Merge the tls values above; let the StatefulSet roll (now serving TLS).
+#      clientEncryption with require_client_auth defaults to optional, so a
+#      non-TLS/missing-truststore client is not instantly severed — tighten to
+#      required after every client presents the truststore.
+#   8. Flip each consumer to TLS (CASSANDRA_TLS_ENABLED=true + truststore mount;
+#      cqlsh --ssl) and set CASSANDRA_TLS_ENABLED=true on the bootstrap Job.
+#
+# Everything above is INERT until merged. Default apps/00-cassandra.yaml stays
+# AllowAllAuthenticator + plaintext, byte-identical to today.

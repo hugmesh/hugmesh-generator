@@ -107,6 +107,20 @@ cannot read another's category-isolated volumes.
 > (`specs/cluster/apps/00-cassandra.yaml`) — only `seLinuxOptions.level` is set;
 > all other securityContext chart defaults are untouched. This is a clean values
 > override (no chart fork / template patch), so it is **not** an exemption.
+>
+> **Cassandra auth/TLS hardening (ADR-32, DARK — `manifests/cassandra-hardening/`):**
+> the per-app least-privilege roles `admin_bff_cass` / `pki_gw_cass` / `be_gw_cass`
+> / `fe_gw_cass` / `sa_gw_cass` / `federation_cass` are **Cassandra-internal DB
+> login roles** (CQL `CREATE ROLE`, deny-by-default under `CassandraAuthorizer`),
+> NOT separate pods/SAs — so they take **no new MCS category**. The two flip-time
+> helper Jobs (`cassandra-bootstrap-roles`, `cassandra-tls-keystore-builder`) are
+> Cassandra-tier admin clients and run **under the same `s0:c63`** (set explicitly
+> in their pod `seLinuxOptions.level`), so they introduce no new node service and
+> need **no new `specs/selinux/*.te`/`.fc` module**. **No new listening port** is
+> opened: auth/TLS reuse the existing Cassandra CQL `:9042` already covered by the
+> `db-ingress-cassandra` NetworkPolicy (PR #128). The credentials are ESO/Vault
+> only (`secret/snapdragon/cassandra-admin`, `…/cassandra-app-creds`) — never in
+> git. See `docs/CLUSTER-HARDENING-PLAN.md` §H for the enable order.
 
 > **`velero` cloud-backups MCS note:** the opt-in/inert cloud-backups leg
 > (`specs/cluster/apps/55-velero.yaml`, `specs/cluster/manifests/velero/`) runs

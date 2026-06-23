@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Intentionally EMPTY overlay for the MANUAL-sync cassandra-hardening Application
+# (apps/00a-cassandra-hardening.yaml). Renders ZERO objects, so even that
+# deliberately-synced app applies nothing until an operator repoints its source at
+# ../cassandra-hardening. This is the belt-and-braces dark idiom used by held
+# PR #132 (networkpolicy-egress): the Application exists and is wired, but its
+# source is empty, so nothing can auto-apply.
+resources: []

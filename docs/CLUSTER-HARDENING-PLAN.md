@@ -41,8 +41,8 @@ risks a crash-loop or a black-holed service:
 |------|-------|----------|
 | **Postgres `ssl=on` flip** | ⏳ held **PR #133** (do-not-merge-until-enabled) | per-DB certs already on disk (#124); flipping `ssl=on` + `sslMode=require` blind risks DB/consumer connect failure — validate per-DB live |
 | **Tier EGRESS default-deny per tier** | ⏳ held **PR #132** (do-not-merge-until-live) | egress default-deny without every allow rule silently severs a service / wedges ArgoCD's own reconcile — stage per-namespace live |
-| **Cassandra auth** | ⏳ remaining | `apps/00-cassandra.yaml` runs the bitnami chart with **no authenticator configured** (effectively AllowAll); enabling `PasswordAuthenticator` + per-app creds needs a live cluster to avoid wedging every gateway's revocation-list / route-access cache. Foundational segmentation merged in PR #32 (registry into GitOps) and PR #85 (hollow-image / pre-seed fixes) is in place; auth itself is not |
-| **Cassandra TLS** | ⏳ remaining | inter-node + client TLS for the gateway revocation/registry store; follows Cassandra auth, same live-gate |
+| **Cassandra auth** | ⏳ **authored DARK** (`manifests/cassandra-hardening/`, MANUAL-sync app `apps/00a-cassandra-hardening.yaml` → empty overlay); flip live per **§H** | `apps/00-cassandra.yaml` still runs the bitnami chart with **no authenticator configured** (effectively AllowAll). The DARK overlay carries `PasswordAuthenticator` + `CassandraAuthorizer`, the 6 per-app least-privilege roles + GRANTs (bootstrap Job), and the ESO creds — but it is INERT (not in the auto-synced tree). Enabling is a breaking cutover (every gateway revocation/registry + federation manifest cache reconnects WITH creds at once), so it stays live-gated per §H |
+| **Cassandra TLS** | ⏳ **authored DARK** (`manifests/cassandra-hardening/`, Stage 2); flip live per **§H** | inter-node + client TLS for the gateway revocation/registry store. The DARK overlay adds the `cassandra` Vault-PKI issuing role (patch), the `cassandra-mtls` cert ESO, and a PEM→JKS keystore builder feeding the chart's `tls.existingSecret`/`tls.passwordsSecret`. Follows Cassandra auth; same live-gate |
 
 ---
 
@@ -315,3 +315,60 @@ are the image's documented non-root user; **confirm against the running image**
   in the image ref).
 - **Blast radius:** federation (optional service). Pin all five refs to the
   identical digest atomically so the app and its Jobs run the same build.
+
+---
+
+## H. Cassandra auth + TLS — enable order (DARK overlay, flip live)
+
+The hardening lives in `specs/cluster/manifests/cassandra-hardening/` and ships
+**DARK**: nothing in the auto-synced ArgoCD tree references it, and the wired
+ArgoCD app `apps/00a-cassandra-hardening.yaml` is **MANUAL-sync** pointing at the
+**empty** sibling overlay (`manifests/cassandra-hardening-empty`, `resources: []`),
+so it can never auto-apply (belt-and-braces, the same idiom as held PR #132). The
+default Cassandra (`apps/00-cassandra.yaml`) stays `AllowAllAuthenticator` +
+plaintext, byte-identical to today, until an operator runs the steps below.
+**`cqlsh` allow/deny + GRANT enforcement was validated out-of-cluster** (a Cassandra
+5.0.5 container with `PasswordAuthenticator`+`CassandraAuthorizer`: a least-privilege
+role connects WITH its password and is denied WITHOUT, and a non-GRANTed keyspace
+read is refused) — the per-cluster roll itself is what remains live-gated.
+
+### Stage 1 — authentication
+
+1. **Vault**: populate `secret/snapdragon/cassandra-admin` (`user`,`password`) and
+   `secret/snapdragon/cassandra-app-creds` (`admin-bff`,`pki-gateway`,`be-gateway`,
+   `fe-gateway`,`superadmin-gateway`,`federation`) — e.g. `openssl rand -base64 24`
+   per key (wire into `gen-cluster-secrets`).
+2. Flip `apps/00a-cassandra-hardening.yaml` `source.path` →
+   `specs/cluster/manifests/cassandra-hardening` and **manually sync** it, OR apply
+   the overlay directly. ESO materializes `cassandra-admin` + `cassandra-app-creds`.
+3. Merge the **Stage 1** values diff from
+   `manifests/cassandra-hardening/cassandra-values-overlay.yaml` into
+   `apps/00-cassandra.yaml` (rotate `dbUser` onto `cassandra-admin`; set
+   `CASSANDRA_AUTHENTICATOR=PasswordAuthenticator` + `CASSANDRA_AUTHORIZER=
+   CassandraAuthorizer` via `extraEnvVars`). Let the StatefulSet roll — it now
+   starts WITH auth and the default superuser password is rotated.
+4. Run the `cassandra-bootstrap-roles` Job → 6 least-privilege roles + GRANTs.
+   `CassandraAuthorizer` is **deny-by-default**, so until GRANTs land a role can
+   authenticate but read/write **nothing** — fail CLOSED.
+5. Apply the **consumer env** from `client-credentials-patch.md` (each consumer gets
+   its OWN role's `CASSANDRA_USER`/`CASSANDRA_PASSWORD` from `cassandra-app-creds`)
+   and roll the 6 consumers (admin-bff, federation, 4 gateways).
+
+### Stage 2 — TLS (follows Stage 1)
+
+6. Apply the `cassandra` Vault-PKI role (`cassandra-pki-role.patch.txt` → add to the
+   `vault-pki-init` for-app loop) and re-run the idempotent `vault-pki-init` Job.
+7. Apply `cassandra-tls-externalsecret.yaml` (materializes `cassandra-mtls`) and run
+   `cassandra-tls-keystore-builder` (PEM→JKS → `cassandra-tls-stores` +
+   `cassandra-tls-passwords`).
+8. Merge the **Stage 2** `tls:` values (`internodeEncryption: all`,
+   `clientEncryption: true`, `existingSecret: cassandra-tls-stores`,
+   `passwordsSecret: cassandra-tls-passwords`) into `apps/00-cassandra.yaml`; roll.
+   `clientEncryption` leaves `require_client_auth` optional, so a not-yet-TLS client
+   is not instantly severed — flip consumers (`CASSANDRA_SSL=true` + truststore;
+   `CASSANDRA_TLS_ENABLED=true` on the bootstrap Job), confirm, then tighten to
+   required.
+
+**Rollback:** revert the values merge on `apps/00-cassandra.yaml` (back to no
+authenticator / plaintext) and re-point `apps/00a-cassandra-hardening.yaml` at the
+empty overlay; the overlay objects are passive (Secrets/Jobs) and harmless if left.

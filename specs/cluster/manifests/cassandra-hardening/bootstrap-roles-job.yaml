@@ -1,0 +1,98 @@
+# Cassandra role-bootstrap Job (DB-hardening, ADR-32 — DARK / flip-time only).
+#
+# Runs cassandra-bootstrap-roles/bootstrap-roles.sh against the Cassandra cluster
+# to create the per-app least-privilege roles + GRANTs. This Job is NOT in the
+# auto-synced ArgoCD tree (it lives in this overlay, which the base never
+# references); it is applied DELIBERATELY by the operator at the auth-flip step
+# (see docs/CLUSTER-HARDENING-PLAN.md §H "enable order"). It is idempotent and
+# safe to re-run.
+#
+# Image: the SAME pinned Cassandra image as apps/00-cassandra.yaml so `cqlsh` is
+# the exact client version of the server. Runs as the rotated bootstrap superuser
+# (cassandra-admin Secret) and reads each per-app password from its ESO Secret.
+#
+# SELinux: shares the cassandra MCS category s0:c63 (docs/SECURITY.md §3) — it is
+# a Cassandra-tier admin client, not a new node service, so no new .te module.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cassandra-bootstrap-roles
+  namespace: snapdragon-pki
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/tier: db-hardening
+    snapdragon.systems/ships: dark
+spec:
+  backoffLimit: 4
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: cassandra-bootstrap-roles
+        app.kubernetes.io/part-of: snapdragon.systems
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+        # Cassandra MCS category (docs/SECURITY.md §3 — shares cassandra s0:c63).
+        seLinuxOptions: { level: "s0:c63" }
+      containers:
+        - name: cqlsh
+          image: docker.io/bitnamilegacy/cassandra:5.0.5
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "/scripts/bootstrap-roles.sh"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            - { name: CASSANDRA_HOST, value: "cassandra.snapdragon-pki.svc.cluster.local" }
+            - { name: CASSANDRA_PORT, value: "9042" }
+            # TLS flip toggle — when the client_encryption leg is also enabled the
+            # operator sets this true and mounts the cluster-CA truststore below.
+            - { name: CASSANDRA_TLS_ENABLED, value: "false" }
+            # Bootstrap superuser (rotated `cassandra` admin) — ESO Secret.
+            - name: CASSANDRA_ADMIN_USER
+              valueFrom: { secretKeyRef: { name: cassandra-admin, key: user } }
+            - name: CASSANDRA_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: cassandra-admin, key: password } }
+            # Per-app role passwords — one ESO Secret, one key per role.
+            - name: ADMIN_BFF_CASS_PASSWORD
+              valueFrom: { secretKeyRef: { name: cassandra-app-creds, key: admin-bff } }
+            - name: PKI_GW_CASS_PASSWORD
+              valueFrom: { secretKeyRef: { name: cassandra-app-creds, key: pki-gateway } }
+            - name: BE_GW_CASS_PASSWORD
+              valueFrom: { secretKeyRef: { name: cassandra-app-creds, key: be-gateway } }
+            - name: FE_GW_CASS_PASSWORD
+              valueFrom: { secretKeyRef: { name: cassandra-app-creds, key: fe-gateway } }
+            - name: SA_GW_CASS_PASSWORD
+              valueFrom: { secretKeyRef: { name: cassandra-app-creds, key: superadmin-gateway } }
+            - name: FEDERATION_CASS_PASSWORD
+              valueFrom: { secretKeyRef: { name: cassandra-app-creds, key: federation } }
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+            # cluster-CA truststore for cqlsh --ssl (only used when TLS flip is on).
+            - { name: cassandra-tls, mountPath: /etc/cassandra-tls, readOnly: true }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits:   { cpu: 250m, memory: 256Mi }
+      volumes:
+        - name: scripts
+          configMap:
+            name: cassandra-bootstrap-roles
+            defaultMode: 0555
+        - name: tmp
+          emptyDir: {}
+        # The cluster-CA cert (ca.crt) for cqlsh's --ssl truststore. Reuses the
+        # per-namespace vault-ca Secret already seeded by keys-provision (key
+        # ca.crt). optional:true so the Job still schedules in the auth-only stage
+        # (TLS off) before the TLS leg is enabled.
+        - name: cassandra-tls
+          secret:
+            secretName: vault-ca
+            optional: true
+            items:
+              - { key: ca.crt, path: ca.crt }
