@@ -1,0 +1,107 @@
+# =============================================================================
+# DARK — latency/RPS KEDA ScaledObject for the fe-gateway (public ingress edge).
+# =============================================================================
+# This is the DEFERRED "2nd pass" that apps/01b-keda.yaml documented: KEDA is
+# installed (operator only); the v2 CPU+memory HPAs on the BFF/UI fleet do the
+# resource-metric scaling. This ScaledObject adds the EVENT-DRIVEN leg — scaling
+# on REQUEST LOAD (requests-per-second) which the resource-metrics API cannot see.
+#
+# WHY KEDA AND NOT A PLAIN v2 HPA: an autoscaling/v2 HPA can read CPU/memory
+# (metrics-server) and, with a Pods/Object metric, custom metrics — but only via a
+# custom-metrics adapter. KEDA IS that adapter: a ScaledObject with a `prometheus`
+# trigger compiles down to an autoscaling/v2 HPA whose `External` metric KEDA's
+# metrics-apiserver serves from a PromQL query. So this object does not REPLACE the
+# CPU/memory HPA — it COMPLEMENTS it (KEDA refuses to manage a Deployment that
+# already owns an HPA, so the existing v2 HPA must be retired on a service before
+# its ScaledObject is enabled — see README "enable switch", step 3).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# DARK / INERT — this file is NOT applied by any synced kustomization.
+#   * No base kustomization.yaml in any service dir references it.
+#   * The only thing that points at this directory is the MANUAL-sync ArgoCD
+#     Application apps/01c-autoscaling-latency.yaml (NO automated{} block) — so even
+#     under the recurse:true root it is created Out-Of-Sync and applies NOTHING
+#     until an operator deliberately `argocd app sync autoscaling-latency`.
+#   * This is the SAME dark pattern as apps/36-observability.yaml.
+#
+# FAIL-SAFE (a misconfigured trigger must NOT zero or thrash the service):
+#   * minReplicaCount: 2  — equals the existing HPA floor. KEDA NEVER scales a
+#     Deployment below minReplicaCount, and because idleReplicaCount is UNSET there
+#     is NO scale-to-zero path at all. A broken/absent Prometheus = KEDA can't read
+#     the metric = the HPA holds at the floor (2). It cannot drop the service.
+#   * advanced.horizontalPodAutoscalerConfig.behavior pins long stabilization
+#     windows (scaleDown 300s) + capped step rates so a metric spike can't thrash.
+#   * pollingInterval 30s + cooldownPeriod 300s: deliberate, slow reactions.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# METRIC SOURCE DEPENDENCY (LIVE-GATED — the platform has NO Prometheus yet):
+#   The cluster's observability is Uptrace + an OTel Collector (OTLP -> Uptrace,
+#   manifests/observability) — there is NO Prometheus server and NO Prometheus
+#   query endpoint today. This trigger's serverAddress points at where a Prometheus
+#   would live. BEFORE enabling, the operator must provide ONE of:
+#     (a) a Prometheus server scraping the Spring Boot Actuator/Micrometer endpoint
+#         (/actuator/prometheus) of these gateways/BFFs, reachable at the
+#         serverAddress below; OR
+#     (b) repoint serverAddress at the OTel Collector's prometheus EXPORTER if one
+#         is added to manifests/observability (the collector can expose a
+#         `prometheus` exporter that serves the OTLP metrics as a scrape target),
+#         and adjust the query to the exported metric names.
+#   The metric used — http_server_requests_seconds_count — is the standard
+#   Micrometer/Spring Boot Actuator server-request counter every first-party app
+#   already emits; rate() over it is requests-per-second. (For true p95 LATENCY use
+#   the *_bucket series with histogram_quantile — left commented below; RPS is the
+#   safer default trigger because it needs no histogram buckets enabled.)
+# =============================================================================
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: snapdragon-fe-gateway-latency
+  namespace: snapdragon-frontend
+  labels:
+    app.kubernetes.io/name: snapdragon-fe-gateway
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/autoscaler: latency-rps
+  annotations:
+    snapdragon.systems/dark: "true"
+    snapdragon.systems/metric-source: "prometheus (ABSENT — see README; requires (a) Prometheus scraping /actuator/prometheus or (b) OTel prometheus exporter)"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: snapdragon-fe-gateway      # = chart instance.name (apps/20-gateway-fe.yaml)
+  # Fail-safe floor: NEVER below 2 (HA pair). idleReplicaCount UNSET => no scale-to-zero.
+  minReplicaCount: 2
+  maxReplicaCount: 8
+  pollingInterval: 30                # query Prometheus every 30s (deliberate, slow)
+  cooldownPeriod: 300                # 5 min after the last trigger fires before scaling in
+  advanced:
+    restoreToOriginalReplicaCount: true   # on delete, hand the Deployment back at its own replicas
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300  # 5 min — damp scale-in, no thrash
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 120           # at most -1 pod / 2 min
+        scaleUp:
+          stabilizationWindowSeconds: 60
+          policies:
+            - type: Pods
+              value: 2
+              periodSeconds: 60            # at most +2 pods / min
+  triggers:
+    - type: prometheus
+      metadata:
+        # LIVE-GATED placeholder — see "METRIC SOURCE DEPENDENCY" above. No
+        # Prometheus exists yet; this is the address one would be installed at.
+        serverAddress: http://prometheus-server.observability.svc.cluster.local:80
+        # Requests-per-second across this gateway, summed over all instances.
+        # Threshold 50 rps/replica: KEDA targets desiredReplicas = ceil(value/threshold).
+        query: |
+          sum(rate(http_server_requests_seconds_count{app_kubernetes_io_name="snapdragon-fe-gateway"}[1m]))
+        threshold: "50"
+        # p95 LATENCY alternative (enable Actuator histogram buckets first), e.g.:
+        # query: |
+        #   histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{app_kubernetes_io_name="snapdragon-fe-gateway"}[1m])) by (le))
+        # threshold: "0.5"   # scale when p95 > 500ms

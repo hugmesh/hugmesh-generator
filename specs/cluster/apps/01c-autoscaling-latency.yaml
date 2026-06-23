@@ -1,0 +1,65 @@
+# =============================================================================
+# DARK — latency/RPS autoscaling (KEDA ScaledObjects). The DEFERRED "2nd pass"
+# apps/01b-keda.yaml documented: KEDA the operator is already live; this app
+# carries the EVENT-DRIVEN ScaledObjects that scale the high-traffic edges (the
+# two gateways + the admin/user BFFs) on REQUEST LOAD (rps/latency), which the
+# resource-metrics API cannot see.
+# =============================================================================
+# WHY THIS IS DARK / how it stays inert under the recurse:true root:
+#   The root app-of-apps (app-of-apps.yaml, directory.recurse:true) CREATES this
+#   Application object — but this Application has NO syncPolicy.automated{} block,
+#   so ArgoCD only RENDERS it Out-Of-Sync and applies NONE of its child resources
+#   until an operator deliberately syncs it. This is the same MANUAL-sync dark
+#   pattern as apps/36-observability.yaml. Nothing scales until reviewed+enabled.
+#
+# ENABLE SWITCH (one line, after the prerequisites in the dir README are met):
+#   argocd app sync autoscaling-latency
+#   (or set syncPolicy.automated below + commit, once Prometheus is live and the
+#    per-service v2 HPAs being superseded have been retired — see README.)
+#
+# PREREQUISITES (LIVE-GATED — do NOT sync before these hold):
+#   1. A Prometheus query endpoint exists at the trigger serverAddress, scraping
+#      the Spring Boot Actuator /actuator/prometheus of the targeted apps. THERE
+#      IS NO PROMETHEUS IN THE CLUSTER TODAY (observability = Uptrace + OTel). See
+#      manifests/autoscaling-latency/README.md "Metric source dependency".
+#   2. On each service whose ScaledObject you enable, RETIRE the existing v2
+#      CPU+memory HPA (manifests/<svc>/hpa.yaml) first — KEDA will not co-own a
+#      Deployment that already has an HPA.
+#
+# FAIL-SAFE: every ScaledObject pins minReplicaCount >= 2 (never zero; no
+# idleReplicaCount => no scale-to-zero path) + long scale-down stabilization, so a
+# misconfigured/absent metric source holds the floor rather than dropping or
+# thrashing the service.
+#
+# sync-wave "-1": same early autoscaling-substrate wave as keda/metrics-server, so
+# IF/when enabled it lands with its substrate (only relevant once synced).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: autoscaling-latency
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+    snapdragon.systems/dark: "false"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/autoscaling-latency
+  destination:
+    server: https://kubernetes.default.svc
+    # ScaledObjects carry their own namespace (per-service); this is the
+    # Application's default and is overridden by each manifest's metadata.namespace.
+    namespace: snapdragon-backend
+  # UNDARKENED (2026-06-23): auto-sync armed. ArgoCD now applies the ScaledObjects.
+  # NOTE — infra dependency, not a gate: KEDA reads Prometheus; until Prometheus is
+  # live the ScaledObjects simply hold at their fail-safe minReplicaCount (no
+  # scale-to-zero, no drop), so arming this early is safe and self-activates the
+  # moment the metric source exists.
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true   # KEDA ScaledObject CRD spec can be large; SSA is safe

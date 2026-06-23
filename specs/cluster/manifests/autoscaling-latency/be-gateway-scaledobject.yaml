@@ -1,0 +1,42 @@
+# DARK — latency/RPS KEDA ScaledObject for the be-gateway (API ingress edge).
+# See fe-gateway-scaledobject.yaml in this dir for the full rationale, the DARK
+# (manual-sync) mechanism, the fail-safe design, and the Prometheus METRIC SOURCE
+# DEPENDENCY (NO Prometheus exists yet — LIVE-GATED).
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: snapdragon-be-gateway-latency
+  namespace: snapdragon-backend
+  labels:
+    app.kubernetes.io/name: snapdragon-be-gateway
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/autoscaler: latency-rps
+  annotations:
+    snapdragon.systems/dark: "true"
+    snapdragon.systems/metric-source: "prometheus (ABSENT — see README)"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: snapdragon-be-gateway       # = chart instance.name (apps/20-gateway-be.yaml)
+  minReplicaCount: 2                   # NEVER below 2; idleReplicaCount unset => no scale-to-zero
+  maxReplicaCount: 8
+  pollingInterval: 30
+  cooldownPeriod: 300
+  advanced:
+    restoreToOriginalReplicaCount: true
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies: [{ type: Pods, value: 1, periodSeconds: 120 }]
+        scaleUp:
+          stabilizationWindowSeconds: 60
+          policies: [{ type: Pods, value: 2, periodSeconds: 60 }]
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-server.observability.svc.cluster.local:80
+        query: |
+          sum(rate(http_server_requests_seconds_count{app_kubernetes_io_name="snapdragon-be-gateway"}[1m]))
+        threshold: "50"
