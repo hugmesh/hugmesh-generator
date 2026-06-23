@@ -35,9 +35,17 @@
 #   ${CONTEXT}         the Kaniko build context: git://<repo>#<ref> (e.g.
 #                      git://github.com/Snapdragon-Systems/snapdragon-gateway.git#main)
 #   ${DOCKERFILE}      the Dockerfile path within the context (default Dockerfile)
-#   ${DEST_IMAGE}      the destination image ref WITH a tag/digest in the in-cluster registry,
-#                      matching the app kustomizations' newName convention, e.g.
-#                      registry.snapdragon.systems/snapdragon/snapdragon-gateway:<sha>
+#   ${DEST_IMAGE}      the IMMUTABLE destination image ref WITH a tag/digest in the in-cluster
+#                      registry, matching the app kustomizations' newName convention, e.g.
+#                      registry.snapdragon.systems/snapdragon/snapdragon-gateway:<sha> (or :<tag>
+#                      for a release). Kaniko pushes this in the same build.
+#   ${DEST_IMAGE_MOVING} the MOVING destination ref the deploy/kustomize tracks for dev, e.g.
+#                      registry.snapdragon.systems/snapdragon/snapdragon-gateway:<ref-slug>
+#                      (the default branch resolves to :main, matching the app kustomizations'
+#                      newTag: main). Kaniko pushes BOTH destinations from the ONE build, so the
+#                      moving + immutable tags always point at byte-identical layers. A driver
+#                      that wants only the immutable tag binds ${DEST_IMAGE_MOVING} to the SAME
+#                      value as ${DEST_IMAGE} (Kaniko de-dups identical destinations).
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -83,7 +91,12 @@ spec:
           args:
             - "--context=${CONTEXT}"
             - "--dockerfile=${DOCKERFILE}"
+            # Push BOTH the immutable (SHA/release-tag) and the moving (branch/dev)
+            # destinations from the ONE build, so they always reference byte-identical
+            # layers. Kaniko accepts multiple --destination flags and de-dups identical
+            # values (a driver that wants only the immutable tag binds both the same).
             - "--destination=${DEST_IMAGE}"
+            - "--destination=${DEST_IMAGE_MOVING}"
             # Reproducible + rootless build hygiene.
             - "--reproducible"
             - "--single-snapshot"
@@ -117,9 +130,11 @@ spec:
       volumes:
         - name: docker-config
           secret:
-            # ESO-materialized push secret for this builder's namespace. Mirrors the #110
-            # service-catalog-builder-registry contract (a dockerconfigjson with push scope
-            # for registry.snapdragon.systems). NEVER in git; seeded by external-secrets.
+            # ESO-materialized PUSH secret for this builder's namespace, created by the
+            # image-builder-registry ExternalSecret (manifests/external-secrets/
+            # image-builder-externalsecrets.yaml): a dockerconfigjson with write_registry scope
+            # for registry.snapdragon.systems, sourced from Vault secret/<brand>/image-builder-registry.
+            # NEVER in git. Mirrors the #110 service-catalog-builder-registry contract.
             secretName: image-builder-registry
             items:
               - key: .dockerconfigjson

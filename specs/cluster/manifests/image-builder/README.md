@@ -16,13 +16,24 @@ Dockerfile rather than only Service-Catalog DOCKERFILE/ZIP sources.
 
 - **`kaniko-build-job.template.yaml`** — a per-build **rootless** Kaniko `Job` TEMPLATE. A
   driver renders ONE copy per build (binding `${BUILD_NAME}` / `${BUILD_NAMESPACE}` /
-  `${CONTEXT}` / `${DOCKERFILE}` / `${DEST_IMAGE}`) and creates it in the build namespace.
-  Kaniko builds the Dockerfile in userspace (no Docker daemon, no privileged socket) and
-  pushes the digest-pinned image to `registry.snapdragon.systems`. Security posture matches the
-  platform build Jobs: `runAsNonRoot`, drop `ALL` caps, `seccompProfile: RuntimeDefault`,
+  `${CONTEXT}` / `${DOCKERFILE}` / `${DEST_IMAGE}` / `${DEST_IMAGE_MOVING}`) and creates it in
+  the build namespace. Kaniko builds the Dockerfile in userspace (no Docker daemon, no
+  privileged socket) and pushes the image to `registry.snapdragon.systems`. Security posture
+  matches the platform build Jobs: `runAsNonRoot`, drop `ALL` caps, `seccompProfile: RuntimeDefault`,
   `readOnlyRootFilesystem` (Kaniko workdir on `emptyDir`), `automountServiceAccountToken:false`,
   `ttlSecondsAfterFinished` + `activeDeadlineSeconds` reaping. A dedicated MCS level
   (`s0:c55`, distinct from #110's `s0:c54`) keeps build pods off the runtime-app bands.
+
+  **Tag scheme (immutable + moving), pushed from ONE build.** The template carries TWO
+  `--destination` flags so a single Kaniko build pushes both, guaranteeing byte-identical
+  layers behind each tag — mirroring the canonical sibling `build:image`
+  (snapdragon-gateway / snapdragon-forum-bff-api `docker push :$TAG` + `:$CI_COMMIT_REF_SLUG`):
+  - `${DEST_IMAGE}` — the **immutable** ref: a release tag on a tag pipeline, else the short
+    SHA (`…/<app>:<release-tag-or-sha>`). Never moves.
+  - `${DEST_IMAGE_MOVING}` — the **moving** dev ref the app kustomizations track via
+    `newTag: main` (`…/<app>:<ref-slug>`; the default branch resolves to `:main`). Re-pointed
+    each build. A driver wanting only the immutable tag binds both to the same value (Kaniko
+    de-dups identical destinations).
 
 - **`namespace-and-netpol.yaml`** — the `snapdragon-image-builds` namespace + a default-deny
   ingress NetworkPolicy (build pods serve nothing; egress to the registry + DNS + the source
@@ -54,9 +65,15 @@ Two layers of inertness:
   `specs/cluster/apps/`). So the Application is never synced until an operator copies it into
   `specs/cluster/apps/`. **Merging this PR therefore changes nothing live.**
 
-Registry push creds (`image-builder-registry`, a `dockerconfigjson` with push scope for
-`registry.snapdragon.systems`) are **ESO-materialized** into the build namespace —
-**never in git** — mirroring the #110 `service-catalog-builder-registry` contract.
+Registry push creds (`image-builder-registry`, a `dockerconfigjson` with **push**
+(`write_registry`) scope for `registry.snapdragon.systems`) are **ESO-materialized** into the
+build namespace — **never in git** — by the `image-builder-registry` ExternalSecret
+(`../external-secrets/image-builder-externalsecrets.yaml`, wired into the ESO kustomization).
+It sources Vault `secret/<brand>/image-builder-registry` (`username`/`token`), seeded with a
+placeholder by `scripts/gen-cluster-secrets.sh` that the operator replaces post-bootstrap with
+a real **`write_registry`** group deploy token. It is DELIBERATELY distinct from the runtime
+`gitlab-registry` **pull** (`read_registry`) imagePullSecret so the runtime pull credential can
+never push. Mirrors the #110 `service-catalog-builder-registry` contract.
 
 ## Live validation pending
 

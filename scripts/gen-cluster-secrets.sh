@@ -219,6 +219,15 @@ fi
 GITLAB_REGISTRY_USER="${GITLAB_REGISTRY_USER:-snapdragon-deploy}"
 GITLAB_REGISTRY_TOKEN="${GITLAB_REGISTRY_TOKEN:-REPLACE_WITH_GITLAB_DEPLOY_TOKEN}"
 
+# In-cluster image-builder PUSH credentials — a GROUP DEPLOY TOKEN with scope
+# WRITE_REGISTRY (distinct from the read_registry pull token above). The opt-in
+# Kaniko build pipeline (manifests/image-builder) mounts the image-builder-registry
+# dockerconfigjson built from these to PUSH the images it builds. Placeholders the
+# operator replaces post-bootstrap; ESO only materializes once the opt-in namespace
+# exists. (In-cluster registry, so no offline-bundle entry.)
+IMAGE_BUILDER_REGISTRY_USER="${IMAGE_BUILDER_REGISTRY_USER:-snapdragon-image-builder}"
+IMAGE_BUILDER_REGISTRY_TOKEN="${IMAGE_BUILDER_REGISTRY_TOKEN:-REPLACE_WITH_GITLAB_WRITE_REGISTRY_DEPLOY_TOKEN}"
+
 # Casdoor's own OIDC application client_id / client_secret (used by the BFF).
 CASDOOR_CLIENT_ID="$(openssl rand -hex 16)"
 CASDOOR_CLIENT_SECRET="$(openssl rand -hex 32)"
@@ -410,7 +419,13 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/gitlab-registry" \
             username="${GITLAB_REGISTRY_USER}" \
             token="${GITLAB_REGISTRY_TOKEN}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,mod-bff-db,user-bff-db,forum-bff-db,forum,forum-db,route-access-db,uptrace,mail,gitlab-registry}"
+        # In-cluster image-builder PUSH token (the Kaniko build pipeline's push
+        # credential). Replace the placeholder with a real WRITE_REGISTRY deploy
+        # token post-bootstrap. Materialized by ESO into the opt-in build namespace.
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/image-builder-registry" \
+            username="${IMAGE_BUILDER_REGISTRY_USER}" \
+            token="${IMAGE_BUILDER_REGISTRY_TOKEN}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,mod-bff-db,user-bff-db,forum-bff-db,forum,forum-db,route-access-db,uptrace,mail,gitlab-registry,image-builder-registry}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2

@@ -226,6 +226,7 @@ ClusterSecretStore **`snapdragon-vault`** (provider `vault`, token auth from the
 | `clickhouse` (`password`) | `clickhouse-auth` (`password`) | `snapdragon-backend`, `observability` |
 | `uptrace` (`pg_password`/`project_token`) | `uptrace-auth` (`pg-password`/`project-token`) | `observability` |
 | `gitlab-registry` (`username`/`token`) | `gitlab-registry` (`.dockerconfigjson`) | `snapdragon-backend`, `snapdragon-frontend`, `snapdragon-games` |
+| `image-builder-registry` (`username`/`token`) | `image-builder-registry` (`.dockerconfigjson`, **push**) | `snapdragon-image-builds` (opt-in) |
 | `casdoor-apps` (`fragment-sync`) | `fragment-sync-casdoor` (`clientId`=`app-fragment-sync`/`clientSecret`) | `snapdragon-frontend` |
 
 The same materialized Secrets are also written to the KEYS stick at
@@ -242,6 +243,13 @@ unchanged.
   PREREQUISITE: create a GitLab **group deploy token** (scope `read_registry`) and
   store it at Vault `snapdragon/gitlab-registry` (`username`/`token`). Any app
   without a source repo yet stays `:dev` until built.
+- The opt-in in-cluster Kaniko build pipeline (`manifests/image-builder`, enabled by
+  copying `apps-optional/60-image-builder.yaml` into `apps/`) PUSHES with a SEPARATE
+  credential: create a GitLab **group deploy token** (scope `write_registry`) and store
+  it at Vault `snapdragon/image-builder-registry` (`username`/`token`). ESO materializes
+  it as the `image-builder-registry` `.dockerconfigjson` the Kaniko Job mounts. It is
+  distinct from the `read_registry` pull token above so the runtime pull secret can
+  never push.
 - Casdoor uses an `emptyDir` and the all-in-one image — switch to a PVC + an
   external DB, and seed the Google provider (`casdoor-google` Secret) + the
   gateway OAuth2 client.

@@ -220,15 +220,26 @@ build:images:
   # in-cluster build ONLY when IMAGE_BUILDER_ENABLED is set (and KUBECONFIG points at the
   # cluster); otherwise it is a documented no-op so merging changes nothing live and the
   # pipeline stays green before the (kernel-blocked) cluster exists.
+  #
+  # GATED to the default branch + release tags (the canonical sibling `build:image` posture
+  # in snapdragon-gateway / snapdragon-forum-bff-api): never on a plain feature MR, so a build
+  # only ever runs for a mergeable ref. Combined with the IMAGE_BUILDER_ENABLED guard, NOTHING
+  # kicks off uncontrolled builds on merge — the default-branch run is still a no-op until an
+  # operator opts in.
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
   variables:
     # The in-cluster build namespace (must match manifests/image-builder/namespace-and-netpol.yaml).
     BUILD_NAMESPACE: "snapdragon-image-builds"
     # The per-app source repo + Dockerfile + destination image. Override per pipeline
     # (CI variables / matrix) to build each first-party app. Destination matches the app
     # kustomizations' newName convention (registry.snapdragon.systems/snapdragon/<app>:<tag>).
+    IMAGE_APP: "snapdragon-gateway"
     IMAGE_CONTEXT: "git://github.com/Snapdragon-Systems/snapdragon-gateway.git#${CI_COMMIT_SHA}"
     IMAGE_DOCKERFILE: "Dockerfile"
-    DEST_IMAGE: "registry.snapdragon.systems/snapdragon/snapdragon-gateway:${CI_COMMIT_SHORT_SHA}"
+    # Where the built image lands. <app> is IMAGE_APP; the tags are computed in `script`.
+    DEST_REPO: "registry.snapdragon.systems/snapdragon/snapdragon-gateway"
   script:
     - |
       if [ -z "${IMAGE_BUILDER_ENABLED:-}" ]; then
@@ -237,17 +248,29 @@ build:images:
         echo "point KUBECONFIG at the cluster, and set IMAGE_BUILDER_ENABLED=1."
         exit 0
       fi
+      # TAG SCHEME — mirrors the canonical sibling `build:image` (gateway / forum-bff-api):
+      #   IMMUTABLE = a release tag if this is a tag pipeline, else the short SHA. Never moves.
+      #   MOVING    = the branch ref slug (the default branch resolves to `main`), which the app
+      #               kustomizations track via `newTag: main` for dev. Re-pointed each build.
+      # Kaniko pushes BOTH from the ONE build (two --destination flags in the template), so the
+      # moving + immutable tags are always byte-identical layers.
+      IMMUTABLE_TAG="${CI_COMMIT_TAG:-$CI_COMMIT_SHORT_SHA}"
+      MOVING_TAG="${CI_COMMIT_REF_SLUG}"
+      DEST_IMAGE="${DEST_REPO}:${IMMUTABLE_TAG}"
+      DEST_IMAGE_MOVING="${DEST_REPO}:${MOVING_TAG}"
+      echo "building ${IMAGE_APP}: immutable=${DEST_IMAGE}  moving=${DEST_IMAGE_MOVING}"
       # Render the ships-dark Kaniko Job template with this build's parameters and apply it
       # into the in-cluster build namespace. The template lives in the GitOps repo; the build
       # pod (rootless Kaniko) pushes to registry.snapdragon.systems using the ESO-materialized
       # image-builder-registry dockerconfigjson. No secrets are passed from CI.
-      BUILD_NAME="$(echo "${DEST_IMAGE}" | sed -E 's#.*/##; s#[:@].*##')-${CI_COMMIT_SHORT_SHA}"
+      BUILD_NAME="${IMAGE_APP}-${CI_COMMIT_SHORT_SHA}"
       # Use | as the sed delimiter (the git-ref CONTEXT contains '#', so '#' must not delimit).
       sed \
         -e "s|\${BUILD_NAME}|${BUILD_NAME}|g" \
         -e "s|\${BUILD_NAMESPACE}|${BUILD_NAMESPACE}|g" \
         -e "s|\${CONTEXT}|${IMAGE_CONTEXT}|g" \
         -e "s|\${DOCKERFILE}|${IMAGE_DOCKERFILE}|g" \
+        -e "s|\${DEST_IMAGE_MOVING}|${DEST_IMAGE_MOVING}|g" \
         -e "s|\${DEST_IMAGE}|${DEST_IMAGE}|g" \
         specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml \
         | kubectl -n "${BUILD_NAMESPACE}" apply -f -

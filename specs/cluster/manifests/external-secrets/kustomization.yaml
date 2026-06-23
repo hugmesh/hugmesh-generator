@@ -33,3 +33,9 @@ resources:
   # never inline. Materializes only once the velero namespace exists + the Vault
   # path is populated (ships dark with the rest of the cloud-backups feature).
   - velero-externalsecrets.yaml    # velero-cloud-credentials
+  # image-builder PUSH credential (ns snapdragon-image-builds, dockerconfigjson) —
+  # the WRITE_REGISTRY deploy token the in-cluster Kaniko build pipeline uses to push
+  # the images it builds (distinct from the gitlab-registry READ_REGISTRY pull secret).
+  # ESO/Vault only (secret/<brand>/image-builder-registry); inert until the opt-in
+  # apps-optional/60-image-builder.yaml Application creates the namespace (ships dark).
+  - image-builder-externalsecrets.yaml   # image-builder-registry
