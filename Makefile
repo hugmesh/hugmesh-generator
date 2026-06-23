@@ -213,7 +213,7 @@ FRITE_FLAVOR ?= both
 FRITE_PASS   := FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)'
 
 .DEFAULT_GOAL := help
-.PHONY: help clean build-all pentest rebuild rpi x86 omnibus frite frite-live frite-installer \
+.PHONY: help menu clean build-all pentest rebuild rpi x86 omnibus frite frite-live frite-installer \
         flash qemu qemu-rpi qemu-x86 \
         playwright-deps e2e ci ci-quick docker-image ensure-image \
         docker docker-build local prod \
@@ -237,6 +237,9 @@ help: ## list targets
 	@echo "  Output:     products land in ./out (WORK_DIR=$(CURDIR)/out; local + gitignored)."
 	@echo "              Per-arch build trees: ./out/snap-build-pi5 + ./out/snap-build-x86"
 	@echo "              (sysroot/distfiles/pkgdir; the two arches never share a sysroot)."
+
+menu: ## interactive console menu to build images (progress + quit-without-stopping)
+	@bash scripts/build-menu.sh
 
 ## ── build ─────────────────────────────────────────────────────────────
 # Every build target dispatches: NATIVE unset -> re-invoke inside the builder

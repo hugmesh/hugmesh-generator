@@ -219,6 +219,30 @@ and prints a LOUD announced banner. You do not flip it at runtime. Full table:
 
 ## 3. Build the images
 
+### 3·menu. Interactive console menu (easiest)
+
+```bash
+make menu          # or:  ./scripts/build-menu.sh
+```
+
+A terminal (whiptail/ncurses) front door over every build target below. It drives
+the **same `make` targets**, so it works for **both** build paths — the Docker
+builder (default) and the local `NATIVE=1` Gentoo path (toggle it under *Options →
+Build path*). Pick a fleet/role, set ENV/brand/jobs, and it launches the build.
+
+- **Live progress** — a monitor screen shows overall + per-role + current-package
+  bars (parsed from the build log) plus a rolling log tail.
+- **Quit without stopping** — builds run *detached* (`setsid`), so pressing `q`
+  (or even closing the terminal) leaves the build running. Press `s` in the
+  monitor to actually stop it.
+- **Re-attach** — re-run `make menu` any time and it drops straight back into the
+  live progress of a build already running — including one you started by hand
+  (e.g. `sudo ./scripts/build-all-roles.sh …`).
+
+No whiptail (e.g. inside the minimal Docker builder image, or a dumb terminal)?
+It automatically falls back to a plain numbered-prompt menu (force it with
+`NO_TUI=1`). Your last choices are remembered between runs.
+
 ### 3a. The roles
 
 | Arch | Roles | Builder |
