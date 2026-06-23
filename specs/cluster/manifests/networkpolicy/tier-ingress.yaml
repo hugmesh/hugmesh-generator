@@ -9,6 +9,27 @@
 # only the gateways+admin-bff -> route-access-db:5432) is a follow-up that needs
 # the live pod labels + on-cluster connectivity validation — which is also why
 # this set ships behind a MANUAL-sync ArgoCD app (apps/08-networkpolicy.yaml).
+#
+# ── SSO BFF-JWT-custody internal back-channel (no new policy needed here) ──────
+# The relocated SSO login adds an in-cluster HTTP path: user-bff -> admin-bff
+# `/bff/internal/**` (account/session + custody/stamp), and gateway -> admin-bff
+# `/bff/internal/session/exchange` (the bff_ -> custody-JWT swap). admin-bff-api,
+# user-bff-api and be-gateway all live in snapdragon-backend, and admin-bff-api is
+# NOT a *-db pod, so it is already admitted by the `snapdragon-backend` self rule
+# below — no ingress change is required for this path. (fe-gateway -> admin-bff is
+# already covered by the snapdragon-frontend rule.) The app layer still gates the
+# surface in depth via admin-bff's InternalTokenWebFilter (mTLS + X-Internal-Token);
+# the admin-bff-db / user-bff-db mutual denial is unaffected (db-ingress.yaml pins
+# each BFF DB to its own api only — user-bff never reaches admin-bff-DB).
+#
+# ⚠ EGRESS FOLLOW-UP (for the tier-egress default-deny lane, generator #132 — HELD):
+# egress is OPEN today so this path works, but once tier-egress default-deny lands,
+# user-bff-api's egress allow-list MUST include admin-bff-api:8080 (and gateway's
+# must include admin-bff-api:8080) or the SSO internal call fails closed at that
+# flip. Do NOT add a standalone egress policy for it here: selecting a pod with
+# policyTypes:[Egress] flips it to default-deny-egress, which would also cut its
+# DNS / own-DB / Casdoor egress unless ALL of those are re-allowed — that belongs
+# in the #132 egress set, not a one-off file.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -79,7 +100,7 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }    # self (be-gateway -> mastodon/matrix/api; admin-bff -> clickhouse/kafka)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }    # self (be-gateway -> mastodon/matrix/api; admin-bff -> clickhouse/kafka; user-bff -> admin-bff /bff/internal SSO custody back-channel; gateway -> admin-bff /bff/internal/session/exchange)
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }   # fe-gateway -> be-gateway (/be) + admin-bff (/bff)
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }                # ArgoCD reconcile
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }         # public facade -> be-gateway
