@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# ─────────────────────────── GATED / SHIPS DARK ───────────────────────────────
+# Isolated overlay for the tier-wide default-deny EGRESS policy (tier-egress.yaml,
+# CLUSTER-HARDENING-PLAN §B). It lives in its OWN kustomization + its OWN MANUAL-sync
+# ArgoCD app (apps/08a-networkpolicy-egress.yaml) so it NEVER shares resource ownership
+# with the auto-sync ingress app (apps/08-networkpolicy.yaml) and NEVER auto-applies.
+#
+# resources: is INTENTIONALLY EMPTY by default. With nothing listed, this overlay
+# renders to ZERO objects — `kubectl apply -k` is a no-op and the 08a ArgoCD app stays
+# permanently Synced/empty. This is the inert-until-enabled state.
+#
+# TO ENABLE (only after LIVE on-cluster validation, ONE namespace at a time):
+#   1. Uncomment the resource line below to pull in tier-egress.yaml (which carries
+#      all five per-namespace blocks). To stage per-namespace, copy ONLY the block(s)
+#      for the namespace you are cutting over into a scoped file and reference that
+#      instead — NEVER enable all five namespaces in one sync.
+#   2. Manually sync apps/08a-networkpolicy-egress.yaml (it has NO `automated:` block).
+#   3. Smoke-test that namespace's egress (DNS, DB, Vault, ArgoCD reconcile) before
+#      proceeding to the next namespace. ROLLBACK = re-comment + manual sync (egress
+#      policies removed -> egress fully open again).
+resources: []
+  # - ../networkpolicy/tier-egress.yaml   # default-deny EGRESS per tier — ENABLE per-namespace, live-validate-only

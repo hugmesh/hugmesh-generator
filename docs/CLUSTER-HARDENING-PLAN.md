@@ -225,6 +225,34 @@ are the image's documented non-root user; **confirm against the running image**
 - **Blast radius:** **high** — a wrong/missing allow severs a service or wedges
   ArgoCD's own reconcile. Stage per-namespace; keep a break-glass `kubectl`
   path that bypasses the mesh.
+- **Status (ships dark):** the tier-wide default-deny EGRESS policy itself is now
+  authored at `specs/cluster/manifests/networkpolicy/tier-egress.yaml` (all five
+  per-namespace blocks with the complete allow-set: DNS, intra-tier, Postgres :5432,
+  Cassandra :9042, Vault :8200, headscale, ArgoCD reconcile + kube-apiserver + git
+  egress, with the per-pod-locked DB/homeserver pods excluded via the same `NotIn`
+  lists as `tier-ingress.yaml`/`db-ingress.yaml`/`homeserver-egress.yaml`). It is
+  **inert until an operator enables it**: it is left OUT of the auto-sync
+  `apps/08-networkpolicy.yaml` (which stays ingress-only) and fronted by a separate
+  **MANUAL-sync** app `apps/08a-networkpolicy-egress.yaml` over the isolated overlay
+  `specs/cluster/manifests/networkpolicy-egress/` (`resources: []` by default — renders
+  zero objects). **Gate: live cluster validated.** Enable per-namespace, one at a time
+  (devops/ArgoCD LAST), per the staging steps in the 08a app header.
+- **kube-apiserver carve-out (kind+Calico live-verify fix):** the apiserver allow is
+  **TCP/6443 to the NODE network CIDRs** (RFC1918 `10/8` + `172.16/12` + `192.168/16` +
+  tailnet `100.64.0.0/10`), **not** the `10.96.0.1/32` ClusterIP `:443`. kube-proxy
+  DNATs the apiserver ClusterIP to the control-plane node IP:6443 and Calico evaluates
+  egress **post-DNAT**, so the ClusterIP rule never matched and black-holed the API
+  (wedging ArgoCD in the devops block). The node IP is per-deployment (DHCP/LAN), so the
+  RFC1918+tailnet superset is the fail-safe default. **Residual (live-validate):**
+  tighten this to the actual control-plane node /24 once known on the live cluster.
+- **egress-proxy (Squid) dedicated policy:** the `app=egress-proxy` pods are EXCLUDED
+  from the `snapdragon-backend` tier-egress `NotIn` (its allow-set has no public rule)
+  and given their OWN least-privilege egress policy (`egress-proxy-egress`: DNS + public
+  80/443) so akkoma/tuwunel federation keeps working without opening the whole tier.
+- **Documented default-allow gap (follow-up, not in this PR):** the five `*-bff-db` /
+  `federation-db` pods are excluded from tier-egress and have NO egress policy anywhere
+  (db-ingress is Ingress-only), so their egress is default-allow. Low risk (DB pods are
+  servers), tracked as a follow-up DNS-only egress lock — see the in-file TODO.
 
 ---
 
