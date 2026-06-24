@@ -152,6 +152,19 @@ spec:
           - id: snapdragon-forum-bff-api
             uri: https://snapdragon-forum-bff-api.snapdragon-backend.svc.cluster.local:8080
             path: /bff/forum/**
+          # Wiki BFF (/bff/wiki/** -> snapdragon-wiki-bff-api), the SINGLE
+          # browser->wiki path. SIBLING of /bff/forum/** + /bff/mod/** above (non-
+          # overlapping prefix, gated to its own role floor). The admin subpath is
+          # declared FIRST (more specific) so it keeps its ROLE_ADMIN gate; the
+          # /bff/wiki/** floor (ROLE_WIKI) follows. Both BEFORE the /bff/** admin-bff
+          # catch-all. https:// — wiki-bff enforces mTLS (client-auth=need); the
+          # gateway presents its client cert on this leg.
+          - id: snapdragon-wiki-bff-api-admin
+            uri: https://snapdragon-wiki-bff-api.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/wiki/admin/**
+          - id: snapdragon-wiki-bff-api
+            uri: https://snapdragon-wiki-bff-api.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/wiki/**
           # SSO login/session/registration RELOCATED admin-bff -> user-bff-api: login
           # is a user concern, so the user BFF now owns /bff/login, /bff/register,
           # /bff/me, /bff/session, /bff/provision AND the new OIDC token-handler

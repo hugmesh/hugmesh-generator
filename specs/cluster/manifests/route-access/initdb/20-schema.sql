@@ -383,6 +383,17 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-fe-gateway',  '/bff/forum/admin/**',       'ROLE_ADMIN',     true),  -- forum admin-console seam (admin-only, end-to-end)
   ('snapdragon-fe-gateway',  '/bff/forum/moderation/**',  'ROLE_FORUM_MOD', true),  -- forum moderation (derived MOD ∩ FORUM)
   ('snapdragon-fe-gateway',  '/bff/forum/**',             'ROLE_FORUM',     true),  -- forum BFF (forum-access floor)
+  -- Wiki BFF (/bff/wiki/** -> snapdragon-wiki-bff-api), the SINGLE browser->wiki
+  -- path. SIBLING of /bff/forum/** + /bff/mod/** above. Most-specific match wins:
+  --   /bff/wiki/admin/**  = ROLE_ADMIN  (admin-only seam: wiki-config, content-admin
+  --                         ops; gated ROLE_ADMIN end-to-end — admins reach this
+  --                         WITHOUT ROLE_WIKI, so DO NOT pair ROLE_WIKI here)
+  --   /bff/wiki/**        = ROLE_WIKI   (wiki-access floor; granted by admin)
+  -- Do NOT pair ROLE_ADMIN on the ROLE_WIKI floor row: the gateway admin-bypass
+  -- already passes admins through; pairing ROLE_ADMIN would incorrectly expose
+  -- every wiki-floor endpoint to admins who have not been granted wiki access.
+  ('snapdragon-fe-gateway',  '/bff/wiki/admin/**',  'ROLE_ADMIN', true),  -- wiki admin-console seam (admin-only, end-to-end)
+  ('snapdragon-fe-gateway',  '/bff/wiki/**',        'ROLE_WIKI',  true),  -- wiki BFF (wiki-access floor)
   -- Owncast BFF (/bff/owncast/** -> snapdragon-owncast-bff-api). Admins reach
   -- /bff/owncast/admin/** for per-user broadcast grants; ROLE_OWNCAST holders
   -- (granted by admin) reach the user-facing console.
