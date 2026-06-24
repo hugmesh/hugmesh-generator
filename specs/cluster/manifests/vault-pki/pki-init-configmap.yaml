@@ -104,9 +104,10 @@ data:
                snapdragon-api snapdragon-admin-bff-api \
                snapdragon-mod-bff-api snapdragon-user-bff-api \
                snapdragon-forum-bff-api \
+               snapdragon-wiki-bff-api \
                snapdragon-federation-api \
                route-access-db admin-bff-db mod-bff-db user-bff-db \
-               federation-db forum-bff-db \
+               federation-db forum-bff-db wiki-bff-db \
                akkoma-proxy tuwunel-proxy; do
       echo "==> role ${PKI}/roles/${app}"
       vault write "${PKI}/roles/${app}" \

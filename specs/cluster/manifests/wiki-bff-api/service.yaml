@@ -1,0 +1,13 @@
+# ClusterIP only — reachable solely through the fe-gateway's /bff/wiki/** route, so
+# /bff is same-origin with snapdragon.systems and is role-checked at the gateway.
+apiVersion: v1
+kind: Service
+metadata:
+  name: snapdragon-wiki-bff-api
+  namespace: snapdragon-backend
+  labels: { app: snapdragon-wiki-bff-api }
+spec:
+  type: ClusterIP
+  selector: { app: snapdragon-wiki-bff-api }
+  ports:
+    - { name: http, port: 8080, targetPort: http }

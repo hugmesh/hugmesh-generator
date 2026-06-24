@@ -1,0 +1,31 @@
+# snapdragon-wiki-ui — the Angular wiki micro-frontend remote that serves the
+# platform wiki (wiki pages, attachments, audit log, access control). Its own nginx
+# (own repo + pod) in the snapdragon-frontend namespace, federated into the
+# snapdragon.systems host: it serves a remoteEntry.json the host's loadRemoteModule
+# consumes. Talks to wiki-bff-api via the same-origin /bff/wiki/** fe-gateway route.
+# Repo: github.com/Snapdragon-Systems/snapdragon-wiki-ui
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: snapdragon-wiki-ui, namespace: snapdragon-frontend, labels: { app: snapdragon-wiki-ui, app.kubernetes.io/part-of: snapdragon.systems } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: snapdragon-wiki-ui } }
+  template:
+    metadata: { labels: { app: snapdragon-wiki-ui } }
+    spec:
+      nodeSelector: { snapdragon.systems/frontend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c71"
+      containers:
+        - name: web
+          image: snapdragon-systems/wiki-ui:dev
+          ports: [{ name: http, containerPort: 80 }]
+          resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: snapdragon-wiki-ui, namespace: snapdragon-frontend }
+spec: { selector: { app: snapdragon-wiki-ui }, ports: [{ name: http, port: 80, targetPort: http }] }

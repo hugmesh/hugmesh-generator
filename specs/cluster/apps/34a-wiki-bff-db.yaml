@@ -1,0 +1,23 @@
+# wiki-bff-db — dedicated Postgres for snapdragon-wiki-bff-api's content datastore
+# (wiki_page / wiki_attachment / wiki_audit_log). In snapdragon-backend with the
+# other BFF dbs. Lands BEFORE wiki-bff-api (34b) so the DB + least-privilege roles
+# exist when the BFF boots its Liquibase migration.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: wiki-bff-db
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/wiki-bff-db
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

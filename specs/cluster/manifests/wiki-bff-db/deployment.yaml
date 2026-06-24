@@ -1,0 +1,122 @@
+# wiki-bff-db — dedicated Postgres for snapdragon-wiki-bff-api's content datastore
+# (the wiki_page / wiki_attachment / wiki_audit_log tables the wiki BFF owns). Lives
+# in snapdragon-backend next to the BFF it serves (congruent with forum-bff-db /
+# admin-bff-db / user-bff-db / mod-bff-db). ClusterIP only.
+#
+# NOTE: like user-bff/admin-bff/forum-bff, the wiki-bff app's application.yml
+# defaults its spring.r2dbc/spring.liquibase to a literal `snapdragon-pg` host that
+# does NOT exist; this dedicated `wiki-bff-db` Service is the real backing store and
+# the wiki-bff Deployment OVERRIDES the R2DBC/Liquibase URLs to point here.
+#
+# Schema bootstrap: NO initdb schema.sql — wiki-bff owns its schema via Liquibase,
+# applied by the app at boot. This DB only needs to exist EMPTY (POSTGRES_DB).
+#
+# Credentials: the OWNER POSTGRES_PASSWORD is sourced from Vault via ESO (Secret
+# wiki-bff-db-auth, key password); used by wiki-bff for DDL/Liquibase ONLY. At
+# RUNTIME the app logs in as the dedicated NON-OWNER least-privilege role
+# `wikibff_app` (its OWN password, ESO Secret wiki-bff-db-app-auth, created by
+# initdb/10-roles.sh). See the role/grant matrix in docs/POSTGRES-HARDENING.md.
+#
+# Sharding (opt-in, default OFF): set SHARDING_CITUS=on AND switch the image to a
+# Citus-enabled Postgres; the default path is unchanged.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiki-bff-db
+  namespace: snapdragon-backend
+  labels: { app: wiki-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # single writer over a RWO PVC
+  selector: { matchLabels: { app: wiki-bff-db } }
+  template:
+    metadata: { labels: { app: wiki-bff-db } }
+    spec:
+      nodeSelector: { snapdragon.systems/backend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c68"
+        # Live-verify fix: the <db>-mtls cert Secret mounts root-owned 0600, so
+        # postgres (uid 70) cannot read tls.key when PG_TLS_ENABLED=true → crash-loop.
+        # fsGroup:70 (postgres group) makes the mounted cert/key group-readable; it
+        # is harmless while ssl is off and makes the future ssl=on flip pure-config.
+        fsGroup: 70
+      containers:
+        - name: postgres
+          # DEFAULT (single-node): postgres:16-alpine. To shard, override to a
+          # Citus-enabled image (citusdata/citus:12-pg16) AND set SHARDING_CITUS=on.
+          image: postgres:16-alpine
+          ports: [{ name: postgres, containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_DB,   value: "wikibff" }
+            # OWNER role (DDL/Liquibase). Same ESO Secret the wiki-bff app's
+            # SPRING_LIQUIBASE_PASSWORD mounts.
+            - { name: POSTGRES_USER, value: "wikibff" }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wiki-bff-db-auth
+                  key: password
+            # Per-machine-user least-privilege role password (consumed by
+            # initdb/10-roles.sh to create wikibff_app). PRODUCTION sources this
+            # from its OWN ESO Secret wiki-bff-db-app-auth (key password); the
+            # wiki-bff app's RUNTIME SPRING_R2DBC_PASSWORD mounts the SAME Secret.
+            - name: WIKIBFF_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wiki-bff-db-app-auth
+                  key: password
+            # Opt-in Citus sharding (default off => 90-citus.sh is a no-op).
+            - { name: SHARDING_CITUS, value: "off" }
+            - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256 --auth-local=scram-sha-256" }
+            - { name: PGDATA, value: "/var/lib/postgresql/data/pgdata" }
+            # GATED in-cluster TLS — DEFAULT OFF (ships dark). When "false" the
+            # pg-tls-entrypoint.sh wrapper runs Postgres with the SAME static args
+            # as before (no `-c ssl=on`); the mounted cert stays unused and the wire
+            # path is byte-identical. Flip to "true" ONLY after the Vault-PKI server
+            # cert is provisioned (ESO Secret wiki-bff-db-mtls materialized) — then
+            # Postgres serves TLS. See docs/POSTGRES-HARDENING.md §B.
+            - { name: PG_TLS_ENABLED, value: "false" }
+          # Server-level hardening (every boot): scram, capped connections, logged
+          # connections + slow statements. Per-DB timeouts are in 00-hardening.sql.
+          # The static args now live in the pg-tls-entrypoint.sh wrapper, which
+          # appends `-c ssl=on …` ONLY when PG_TLS_ENABLED=true (gated; default off).
+          # The wrapper exec's the stock docker-entrypoint.sh so initdb is unchanged.
+          command: ["/bin/sh", "/usr/local/bin/pg-tls-entrypoint.sh"]
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "wikibff", "-d", "wikibff"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "wikibff", "-d", "wikibff"] }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+          volumeMounts:
+            - { name: data,   mountPath: /var/lib/postgresql/data }
+            - { name: initdb, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+            # GATED-TLS entrypoint wrapper (separate from initdb so it is NOT run as
+            # an init script). Selects ssl-off (default) vs ssl=on by PG_TLS_ENABLED.
+            - { name: entrypoint, mountPath: /usr/local/bin/pg-tls-entrypoint.sh, subPath: pg-tls-entrypoint.sh, readOnly: true }
+            # SHIPS DARK: Vault-PKI server cert mounted READ-ONLY but UNUSED while
+            # PG_TLS_ENABLED=false (default) — the wrapper does NOT add `-c ssl=on`,
+            # so the wire path is byte-identical. Flip PG_TLS_ENABLED to "true"
+            # (config-only) once the ESO Secret wiki-bff-db-mtls is provisioned.
+            - { name: pg-tls, mountPath: /etc/postgres-tls, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: wiki-bff-db }
+        - name: initdb
+          configMap: { name: wiki-bff-db-initdb }
+        - name: entrypoint
+          configMap: { name: wiki-bff-db-entrypoint, defaultMode: 0555 }
+        # Vault-PKI server cert (kubernetes.io/tls Secret wiki-bff-db-mtls, wired in
+        # external-secrets/pki-externalsecrets.yaml). Mounted but unused until PR-C2.
+        - name: pg-tls
+          secret:
+            secretName: wiki-bff-db-mtls
+            optional: true   # SHIPS DARK: pod still starts before ESO materializes it
+            defaultMode: 0600

@@ -283,12 +283,14 @@ ADMIN_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 MOD_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 USER_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 FORUM_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
+WIKI_BFF_DB_PASSWORD="$(openssl rand -base64 24)"
 # Non-owner least-privilege RUNTIME role passwords (one per single-consumer DB).
 FEDERATION_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 ADMIN_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 MOD_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 USER_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 FORUM_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
+WIKI_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 
 # admin-bff MFA TOTP-secret encryption key (app.mfa.factor-key / env
 # APP_MFA_FACTOR_KEY). The admin-bff's MfaSecretCipher AES-256-GCM-encrypts each
@@ -410,6 +412,9 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/forum-bff-db" \
             password="${FORUM_BFF_DB_PASSWORD}" \
             app_password="${FORUM_BFF_DB_APP_PASSWORD}"
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/wiki-bff-db" \
+            password="${WIKI_BFF_DB_PASSWORD}" \
+            app_password="${WIKI_BFF_DB_APP_PASSWORD}"
         # phpBB forum (backend-only, isolated snapdragon-forum ns). phpbb-secrets
         # multi-key (DB_PASSWORD owner + ADMIN_PASSWORD first-install admin) at
         # /forum; the phpbb_app runtime role password at /forum-db (app_password).
@@ -451,7 +456,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/image-builder-registry" \
             username="${IMAGE_BUILDER_REGISTRY_USER}" \
             token="${IMAGE_BUILDER_REGISTRY_TOKEN}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,forum,forum-db,route-access-db,uptrace,mail,gitlab-registry,image-builder-registry}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,forum,forum-db,route-access-db,uptrace,mail,gitlab-registry,image-builder-registry}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -509,6 +514,7 @@ ADMIN_BFF_DB_PASSWORD="${ADMIN_BFF_DB_PASSWORD}" \
 MOD_BFF_DB_PASSWORD="${MOD_BFF_DB_PASSWORD}" \
 USER_BFF_DB_PASSWORD="${USER_BFF_DB_PASSWORD}" \
 FORUM_BFF_DB_PASSWORD="${FORUM_BFF_DB_PASSWORD}" \
+WIKI_BFF_DB_PASSWORD="${WIKI_BFF_DB_PASSWORD}" \
 FEDERATION_DB_APP_PASSWORD="${FEDERATION_DB_APP_PASSWORD}" \
 ADMIN_BFF_DB_APP_PASSWORD="${ADMIN_BFF_DB_APP_PASSWORD}" \
 ADMIN_BFF_MFA_FACTOR_KEY="${ADMIN_BFF_MFA_FACTOR_KEY}" \
@@ -518,6 +524,7 @@ BFF_INTERNAL_TOKEN="${BFF_INTERNAL_TOKEN}" \
 MOD_BFF_DB_APP_PASSWORD="${MOD_BFF_DB_APP_PASSWORD}" \
 USER_BFF_DB_APP_PASSWORD="${USER_BFF_DB_APP_PASSWORD}" \
 FORUM_BFF_DB_APP_PASSWORD="${FORUM_BFF_DB_APP_PASSWORD}" \
+WIKI_BFF_DB_APP_PASSWORD="${WIKI_BFF_DB_APP_PASSWORD}" \
 PHPBB_DB_PASSWORD="${PHPBB_DB_PASSWORD}" \
 PHPBB_DB_APP_PASSWORD="${PHPBB_DB_APP_PASSWORD}" \
 PHPBB_ADMIN_PASSWORD="${PHPBB_ADMIN_PASSWORD}" \
@@ -604,6 +611,9 @@ data = {
         "forum-bff-db-auth": {
             "password": os.environ["FORUM_BFF_DB_PASSWORD"],
         },
+        "wiki-bff-db-auth": {
+            "password": os.environ["WIKI_BFF_DB_PASSWORD"],
+        },
         # Non-owner least-privilege RUNTIME role passwords (federation_app etc.).
         "federation-db-app-auth": {
             "password": os.environ["FEDERATION_DB_APP_PASSWORD"],
@@ -642,6 +652,9 @@ data = {
         },
         "forum-bff-db-app-auth": {
             "password": os.environ["FORUM_BFF_DB_APP_PASSWORD"],
+        },
+        "wiki-bff-db-app-auth": {
+            "password": os.environ["WIKI_BFF_DB_APP_PASSWORD"],
         },
         # route-access machine-user passwords reachable from the backend ns:
         # be-gateway (read-only) + admin-bff (writer). Each Deployment mounts ONLY

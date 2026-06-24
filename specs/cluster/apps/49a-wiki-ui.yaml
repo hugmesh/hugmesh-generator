@@ -1,0 +1,20 @@
+# snapdragon-wiki-ui — the platform wiki Angular micro-frontend, federated into the
+# snapdragon.systems host. Frontend Pis. Talks to wiki-bff-api via the same-origin
+# /bff/wiki/** fe-gateway route.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-wiki-ui
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/wiki-ui
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

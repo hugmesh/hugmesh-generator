@@ -1,0 +1,12 @@
+# Persistent storage for the snapdragon-wiki-bff-api Postgres data directory
+# (the wiki_page / wiki_attachment / wiki_audit_log tables).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wiki-bff-db
+  namespace: snapdragon-backend
+  labels: { app: wiki-bff-db }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: snapdragon-local
+  resources: { requests: { storage: 2Gi } }

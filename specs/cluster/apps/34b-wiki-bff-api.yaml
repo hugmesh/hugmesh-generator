@@ -1,0 +1,26 @@
+# wiki-bff — Backend-For-Frontend for the snapdragon-wiki-ui. ClusterIP in
+# snapdragon-backend; the ONLY way in is the fe-gateway /bff/wiki/** route (same
+# origin as snapdragon.systems). Owns the wiki_page / wiki_attachment /
+# wiki_audit_log tables in wiki-bff-db.
+#
+# DEPLOY ORDERING: lands AFTER wiki-bff-db (34a) + its mTLS/db ESO secrets.
+# Deploy with the gateway/BFF client-cert mTLS wave (SSL_CLIENT_AUTH=need).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: wiki-bff-api
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/wiki-bff-api
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
