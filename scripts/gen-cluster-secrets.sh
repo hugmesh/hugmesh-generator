@@ -301,6 +301,24 @@ FORUM_BFF_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 # value lives ONLY in Vault + the offline USB bundle, never committed to git.
 ADMIN_BFF_MFA_FACTOR_KEY="$(openssl rand -base64 32)"
 
+# user-bff OIDC session-custody AES-256-GCM key (APP_BFF_CUSTODY_KEY).
+# Encrypts the held Casdoor access + refresh tokens at rest, keyed to each
+# opaque bff_ session. The BffCustodyCipher is INERT when this key is blank,
+# and OidcCustodyBootGuard refuses to start if OIDC is enabled but key is empty.
+# Mirrors admin-bff MfaSecretCipher: prefers a base64-decoded 32-byte key.
+USER_BFF_CUSTODY_KEY="$(openssl rand -base64 32)"
+
+# user-bff HS token key (APP_HS_TOKEN_KEY) — the homeserver-native token
+# custody encryption key. The ESO ExternalSecret + deployment wiring already
+# existed (user-bff-hs-token); this closes the bootstrap gap by seeding Vault.
+USER_BFF_HS_TOKEN_KEY="$(openssl rand -base64 32)"
+
+# Shared back-channel token between user-bff and the fe-gateway / admin-bff
+# (INTERNAL_TOKEN / X-Internal-Token header). Authenticates the gateway→admin-bff
+# BffSessionAuthFilter introspection call and the user-bff→admin-bff call.
+# Blank = no-op in dev; set = fail-closed 401 on mismatch (both sides match).
+BFF_INTERNAL_TOKEN="$(openssl rand -hex 32)"
+
 # phpBB forum (backend-only). phpbb-db OWNER (install/migrate) + phpbb_app runtime
 # role + the phpBB first-install admin. Kept on their OWN Vault paths (forum,
 # forum-db) so the isolated snapdragon-forum namespace's phpbb-secrets /
@@ -375,6 +393,14 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         # it is independent of the admin-bff DB creds. SHIPS DARK (MFA off by default).
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/admin-bff-mfa" \
             factor_key="${ADMIN_BFF_MFA_FACTOR_KEY}"
+        # SSO back-channel secrets. Seeded alongside the DB creds so the ESO
+        # ExternalSecrets in sso-externalsecrets.yaml resolve on first ArgoCD sync.
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/user-bff-custody-key" \
+            key="${USER_BFF_CUSTODY_KEY}"
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/user-bff-hs-token" \
+            key="${USER_BFF_HS_TOKEN_KEY}"
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/bff-internal-token" \
+            token="${BFF_INTERNAL_TOKEN}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/mod-bff-db" \
             password="${MOD_BFF_DB_PASSWORD}" \
             app_password="${MOD_BFF_DB_APP_PASSWORD}"
@@ -425,7 +451,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/image-builder-registry" \
             username="${IMAGE_BUILDER_REGISTRY_USER}" \
             token="${IMAGE_BUILDER_REGISTRY_TOKEN}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,mod-bff-db,user-bff-db,forum-bff-db,forum,forum-db,route-access-db,uptrace,mail,gitlab-registry,image-builder-registry}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,forum,forum-db,route-access-db,uptrace,mail,gitlab-registry,image-builder-registry}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -486,6 +512,9 @@ FORUM_BFF_DB_PASSWORD="${FORUM_BFF_DB_PASSWORD}" \
 FEDERATION_DB_APP_PASSWORD="${FEDERATION_DB_APP_PASSWORD}" \
 ADMIN_BFF_DB_APP_PASSWORD="${ADMIN_BFF_DB_APP_PASSWORD}" \
 ADMIN_BFF_MFA_FACTOR_KEY="${ADMIN_BFF_MFA_FACTOR_KEY}" \
+USER_BFF_CUSTODY_KEY="${USER_BFF_CUSTODY_KEY}" \
+USER_BFF_HS_TOKEN_KEY="${USER_BFF_HS_TOKEN_KEY}" \
+BFF_INTERNAL_TOKEN="${BFF_INTERNAL_TOKEN}" \
 MOD_BFF_DB_APP_PASSWORD="${MOD_BFF_DB_APP_PASSWORD}" \
 USER_BFF_DB_APP_PASSWORD="${USER_BFF_DB_APP_PASSWORD}" \
 FORUM_BFF_DB_APP_PASSWORD="${FORUM_BFF_DB_APP_PASSWORD}" \
@@ -588,6 +617,23 @@ data = {
         "admin-bff-mfa": {
             "factor-key": os.environ["ADMIN_BFF_MFA_FACTOR_KEY"],
         },
+        # SSO back-channel secrets. Three independent Vault paths so each
+        # ExternalSecret materializes a focused single-key k8s Secret.
+        # user-bff-custody-key: AES-256-GCM key for BffCustodyCipher (APP_BFF_CUSTODY_KEY).
+        "user-bff-custody-key": {
+            "key": os.environ["USER_BFF_CUSTODY_KEY"],
+        },
+        # user-bff-hs-token: homeserver-native token custody key (APP_HS_TOKEN_KEY).
+        # Pre-existing ESO + deployment wiring; this closes the bootstrap gap.
+        "user-bff-hs-token": {
+            "key": os.environ["USER_BFF_HS_TOKEN_KEY"],
+        },
+        # bff-internal-token: shared back-channel auth token (INTERNAL_TOKEN).
+        # Mounted in BOTH snapdragon-backend (user-bff) and snapdragon-frontend
+        # (fe-gateway); the frontend entry is added below.
+        "bff-internal-token": {
+            "token": os.environ["BFF_INTERNAL_TOKEN"],
+        },
         "mod-bff-db-app-auth": {
             "password": os.environ["MOD_BFF_DB_APP_PASSWORD"],
         },
@@ -638,9 +684,14 @@ data = {
     },
     # fe-gateway runs in the frontend ns and needs its OWN read-only route-access
     # password (user fe_gateway); value matches the route-access-db-roles key.
+    # bff-internal-token is also mounted here — same value as the backend ns entry,
+    # same Vault path; the ESO fetches it independently per namespace.
     f"{brand}-frontend": {
         "route-access-fe-gateway": {
             "password": os.environ["ROUTE_ACCESS_FE_GATEWAY_PASSWORD"],
+        },
+        "bff-internal-token": {
+            "token": os.environ["BFF_INTERNAL_TOKEN"],
         },
     },
     # phpBB forum — the ISOLATED backend-only namespace (phpBB + phpbb-db). phpbb-db
