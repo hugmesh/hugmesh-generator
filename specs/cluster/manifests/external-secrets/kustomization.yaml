@@ -39,3 +39,10 @@ resources:
   # ESO/Vault only (secret/<brand>/image-builder-registry); inert until the opt-in
   # apps-optional/60-image-builder.yaml Application creates the namespace (ships dark).
   - image-builder-externalsecrets.yaml   # image-builder-registry
+  # SSO OIDC secrets — user-bff OIDC client credential (user-bff-oidc, ns
+  # snapdragon-backend) + token custody key (user-bff-custody-key, ns
+  # snapdragon-backend) + shared BFF back-channel token (bff-internal-token,
+  # in BOTH snapdragon-backend AND snapdragon-frontend for gateway→admin-bff
+  # BffSessionAuthFilter). Vault paths: secret/snapdragon/user-bff-oidc,
+  # secret/snapdragon/user-bff-custody-key, secret/snapdragon/bff-internal-token.
+  - sso-externalsecrets.yaml

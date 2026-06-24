@@ -212,6 +212,45 @@ spec:
             - { name: HS_TOKEN_PROXY_CLIENT_KEY_STORE_TYPE,   value: "PKCS12" }
             - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE,      value: "/stores/truststore.p12" }
             - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE_TYPE, value: "PKCS12" }
+            # ── SSO OIDC login (user-bff now owns login, PR-1/5 routing) ──────────
+            # Enabling OIDC (app.bff.oidc.enabled) also gates AdminBffInternalClient:
+            # when false the client is a fail-closed stub and EVERY account/session op
+            # errors. Custody key (AES-256-GCM) encrypts the exchanged access/refresh
+            # tokens BEFORE handing ciphertext to admin-bff — NEVER plaintext at rest.
+            # OidcCustodyBootGuard refuses to start if enabled=true + custody-key blank.
+            - { name: APP_BFF_OIDC_ENABLED,      value: "true" }
+            # Cookie mode: the opaque bff_ session is ALSO set as an httpOnly cookie
+            # (secure=true, SameSite=Lax) in addition to the body — the gateway's
+            # BffSessionAuthFilter and BffJwtExchangeWebFilter can then resolve it.
+            - { name: APP_SESSION_COOKIE_ENABLED, value: "true" }
+            # Casdoor OIDC client identity for the login leg (user-bff-oidc ESO Secret).
+            # OPTIONAL at startup: the cipher and client boot but the ESO Secret MUST
+            # be provisioned before real OIDC logins are attempted (Casdoor rejects an
+            # incorrect/blank secret). This mirrors admin-bff's APP_MFA_FACTOR_KEY pattern.
+            - name: APP_BFF_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-oidc
+                  key: client-secret
+                  optional: true
+            # 256-bit AES-GCM key for token custody (user-bff-custody-key ESO Secret).
+            # OidcCustodyBootGuard refuses to start if this is blank AND OIDC is enabled,
+            # so populate the ESO Secret BEFORE setting APP_BFF_OIDC_ENABLED=true.
+            - name: APP_BFF_CUSTODY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-custody-key
+                  key: key
+                  optional: true
+            # Shared internal token: user-bff OUTBOUND to admin-bff (X-Internal-Token).
+            # Matches admin-bff's INBOUND InternalTokenWebFilter — both BLANK in dev (no-op);
+            # both set to the SAME value in-cluster (fail-closed 401 on mismatch).
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: bff-internal-token
+                  key: token
+                  optional: true
           # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
           # so curl PRESENTS this pod's client cert and validates the server cert
           # against the cluster CA (--resolve maps the SAN to loopback). See

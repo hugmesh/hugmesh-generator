@@ -62,6 +62,24 @@ spec:
           # Default off in the image; the UI remotes (port 80) and be-gateway stay http.
           - name: SNAPDRAGON_GATEWAY_MTLS_ENABLED
             value: "true"
+          # ── BFF session bridge: opaque bff_ → Spring SecurityContext ──────────
+          # When enabled, the gateway's BffSessionAuthFilter calls admin-bff's
+          # GET /bff/internal/session/introspect with the bff_ session token
+          # (from the Cookie or Authorization Bearer) and builds a Spring
+          # SecurityContext from the response. Enables cookie-mode UIs (the
+          # browser holds ONLY the opaque bff_ cookie, never a JWT).
+          # BFF_BASE_URL points to admin-bff (which owns the bff_session DB);
+          # INTERNAL_TOKEN authenticates the back-channel (matches admin-bff's
+          # InternalTokenWebFilter — BLANK in dev → no-op on both sides).
+          - { name: APP_BFF_SESSION_ENABLED, value: "true" }
+          - name: BFF_BASE_URL
+            value: http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
+          - name: INTERNAL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: bff-internal-token
+                key: token
+                optional: true
         routes:
           # Each federated micro-frontend on its own nginx remote (specific
           # paths first)…
