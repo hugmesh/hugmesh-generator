@@ -20,8 +20,26 @@
 # Build:  make docker-image      (or: docker build -f Dockerfile.build -t snapdragon-builder .)
 # Run:    make build-all         (Docker is the default path — see the Makefile)
 
+# ── Stage 0: fetch a CURRENT Gentoo amd64 stage3 ──────────────────────────────
+# Docker Hub's docker.io/gentoo/stage3:amd64 is ABANDONED — stuck at 2021-06
+# (gcc-10.3.0 / python-3.9 / glibc-2.33). After a webrsync to today's tree the
+# very first `emerge` hits an unsatisfiable wall (gcc-10 is package.mask'd; the
+# whole @system would need an impossible in-place bootstrap). Instead pull the
+# autobuild stage3 tarball from the official mirror onto a scratch rootfs.
+# STAGE3_URL is overridable; bump the dated default when the snapshot rotates off
+# the mirror (latest pointer:
+#   https://distfiles.gentoo.org/releases/amd64/autobuilds/latest-stage3-amd64-openrc.txt).
+FROM alpine:3 AS stage3-fetch
+ARG STAGE3_URL=https://distfiles.gentoo.org/releases/amd64/autobuilds/20260621T164603Z/stage3-amd64-openrc-20260621T164603Z.tar.xz
+RUN apk add --no-cache curl tar xz \
+ && mkdir /rootfs \
+ && curl -fSL "$STAGE3_URL" -o /tmp/stage3.tar.xz \
+ && tar --numeric-owner -xpJf /tmp/stage3.tar.xz -C /rootfs \
+ && rm /tmp/stage3.tar.xz
+
 # ── Stage 1: a synced Gentoo base with an up-to-date portage tree ─────────────
-FROM docker.io/gentoo/stage3:amd64 AS base
+FROM scratch AS base
+COPY --from=stage3-fetch /rootfs/ /
 
 # Non-interactive emerge; keep going where a single optional dep fails the merge.
 ENV FEATURES="-news binpkg-multi-instance" \
