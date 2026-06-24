@@ -34,7 +34,7 @@ subdirs included.
 
 ## Current State
 
-_As of 2026-06-22. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
+_As of 2026-06-24. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
 
 - **✅ Hardened image fleet** — three RPi 5 role images (pki / backend / frontend)
   + the x86_64 GPU host, all SELinux **ENFORCING** with per-app MCS identities,
@@ -51,9 +51,9 @@ _As of 2026-06-22. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   guard + test landed on `main` with the hardening pass).
 - **✅ Unified Spring baseline** — the baked GitOps payload now targets **Spring
   Boot 4.0.2 / Spring Cloud 2025.1** on Java, with the shared Maven artifacts
-  **`snapdragon-parent`** (metapom, 2.0.0), **`snapdragon-commons`** (shared
+  **`snapdragon-parent`** (metapom, 2.4.0), **`snapdragon-commons`** (shared
   security/tenancy, `systems.snapdragon.commons.*`, 2.0.0) and the new
-  **`snapdragon-auth-core`** (2.0.0 — shared account/session/MFA/Casdoor-admin
+  **`snapdragon-auth-core`** (2.3.0 — shared account/session/MFA/Casdoor-admin
   infra; depends on commons; consumed by **user-bff + admin-bff only**).
   `federation-api` was migrated onto this baseline.
 - **✅ SSO auth model wired into the cluster payload (data plane)** — Casdoor is
@@ -72,7 +72,10 @@ _As of 2026-06-22. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   `/bff/internal` over mTLS + `X-Internal-Token`. The generator leg of this
   relocation (user-bff Casdoor OIDC client, relocated `/bff/login|register|me|
   session|provision` + `/bff/auth/callback` fe-gateway routes, PUBLIC callback
-  route-access seed) is **🚧 in-flight (PR-1/5, ships dark)**.
+  route-access seed) has progressed on `main` and **ships dark**: PR-1/5 (#156,
+  OIDC client + callback route seed), PR-2/5 (#171, user-bff OIDC enable +
+  gateway BFF-session filter) and PR-3/5 (#172, SSO custody-key + internal-token
+  bootstrap seeding) are merged; PR-4/5 and PR-5/5 remain **🚧 in-flight**.
 - **✅ SCG-5 route config** — Spring Cloud Gateway 5.0 moved route config from
   `spring.cloud.gateway.routes` to `spring.cloud.gateway.server.webflux.routes`
   (the legacy prefix silently binds nothing). The `snapdragon-gateway` chart
@@ -752,6 +755,7 @@ live list). Common overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`,
 | Target | What it does |
 |---|---|
 | `make docker-image` (alias `docker`) | build the self-contained Gentoo builder image (LONG first time). |
+| `make menu` | interactive console build menu (`scripts/build-menu.sh`) — pick images with live progress; quit without stopping the build. |
 | `make local` | ENV=test + `brands/local.conf` → the LAN `snapdragon.test` fleet. |
 | `make prod` | ENV=prod, real domain (announced; creds from the keys USB). |
 | `make build-all` / `make rebuild` | the default fleet (3 Pi + x86 pki/be/fe/be+gpu); `rebuild` wipes first. |

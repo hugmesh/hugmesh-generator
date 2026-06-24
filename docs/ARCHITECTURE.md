@@ -71,7 +71,7 @@ flowchart TD
         DESKGOV["Desktop app governance (queued)"]
         NOTIFY["Notifications: external channels (in-flight)"]
         subgraph SSO["SSO / BFF JWT custody (ships dark)"]
-            AUTHCORE["auth-core: account/session/MFA + custody seams (✅ 2.0.0 · 🚧 2.1.0)"]
+            AUTHCORE["auth-core: account/session/MFA + custody seams (✅ 2.3.0)"]
             GWEXCH["gateway bff_-exchange filter (🚧 PR-C)"]
             LOGINOIDC["login-ui Casdoor OIDC + PKCE (🚧 PR-4)"]
             UBRELOC["user-bff OIDC login relocation (🚧 PR-A3)"]
@@ -206,21 +206,25 @@ sequenceDiagram
 
 **✅ shipped (merged to `main`):**
 
-- **auth-core extracted + published `2.0.0`** — shared account/session/MFA/Casdoor
+- **auth-core extracted + published (now `2.3.0`)** — shared account/session/MFA/Casdoor
   stack + the custody seams (`OidcExchangeClient`, `BffCustodyCipher`,
-  `SessionCookieService`, `InternalTokenWebFilter`).
+  `SessionCookieService`, `InternalTokenWebFilter`). The `2.1.0` BFF-JWT-custody
+  columns, the `2.2.0` per-account session-listing seam and the `2.3.0`
+  `gen_random_uuid()` mint change have all since shipped; admin-bff + user-bff
+  both consume `2.3.0`.
 - **admin-bff adopted auth-core** (PR #111) — behavior-preserving, 1517 tests green.
 - **admin-bff `/bff/internal` account/session API** (PR #113) —
   ensure / get / complete / allowlist / sessions / namespaces, guarded by
   `InternalTokenWebFilter`; ships inert.
 - (prior) gateway live + raw-API security proven + the SCG-5 route-namespace bug fixed.
 
+> The `auth-core` `2.1.0` BFF-JWT-custody columns
+> (`access_token_enc` / `refresh_token_enc` / `access_token_expires_at` /
+> `custody_updated_at`) + `stampCustody` / `clearCustody` / `sessionRow` that this
+> snapshot tracked as in-flight have since **shipped** (current published `2.3.0`).
+
 **🚧 in-flight (open draft PRs, all dark):**
 
-- **auth-core `2.1.0`** — `BffSession` JWT-custody columns
-  (`access_token_enc` / `refresh_token_enc` / `access_token_expires_at` /
-  `custody_updated_at`) + `stampCustody` / `clearCustody` / `sessionRow` (additive
-  minor; `2.0.0` stays immutable).
 - **gateway PR-C** — `BffJwtExchangeWebFilter` (`bff_` → custody-JWT, pre-security,
   fail-closed, `snapdragon.gateway.bff-exchange.enabled`).
 - **login-ui PR-4** — Casdoor OIDC + PKCE + `/login/callback` (`__SNAP_OIDC_ENABLED__`).
@@ -231,9 +235,11 @@ sequenceDiagram
 
 - **admin-bff custody tail** — Liquibase band-180 (`bff_session` custody columns) +
   `/bff/internal/sessions/{token}/custody/stamp` + `/bff/internal/session/exchange`;
-  bumps the auth-core dep to `2.1.0` in lockstep (lands after `2.1.0` publishes).
-- **generator #156** — `app-user-bff` Casdoor OIDC client + PUBLIC
-  `/bff/auth/callback` route seed.
+  bumps the auth-core dep in lockstep (the auth-core custody seam has since shipped
+  in `2.3.0`).
+- **generator #156** (✅ now merged) — `app-user-bff` Casdoor OIDC client + PUBLIC
+  `/bff/auth/callback` route seed; the user-bff OIDC-enable + gateway BFF-session
+  filter (#171) and the SSO-secret bootstrap seeding (#172) followed on `main`.
 - a cross-repo **NetworkPolicy egress peer** user-bff → admin-bff internal `:8080`
   (manifests/generator).
 - **SSO end-to-end live e2e** — kind + Playwright, proving the browser holds only `bff_`.
