@@ -50,8 +50,8 @@ _As of 2026-06-24. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   keeps it from re-truncating (the standalone fix PR is superseded; the symbols +
   guard + test landed on `main` with the hardening pass).
 - **✅ Unified Spring baseline** — the baked GitOps payload now targets **Spring
-  Boot 4.0.2 / Spring Cloud 2025.1** on Java, with the shared Maven artifacts
-  **`snapdragon-parent`** (metapom, 2.4.0), **`snapdragon-commons`** (shared
+  Boot 4.0.7 / Spring Cloud 2025.1.2** on Java 25, with the shared Maven artifacts
+  **`snapdragon-parent`** (metapom, 2.7.0), **`snapdragon-commons`** (shared
   security/tenancy, `systems.snapdragon.commons.*`, 2.0.0) and the new
   **`snapdragon-auth-core`** (2.3.0 — shared account/session/MFA/Casdoor-admin
   infra; depends on commons; consumed by **user-bff + admin-bff only**).
@@ -806,8 +806,8 @@ see the full table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
 `snapdragon-{admin,mod,user,forum}-bff-api` Spring BFFs and
 `snapdragon-federation-api` (vanity-subdomain / public-profile resolver).
 
-The Spring services share a unified Maven baseline — **Spring Boot 4.0.2 /
-Spring Cloud 2025.1** — built on three shared artifacts: **`snapdragon-parent`**
+The Spring services share a unified Maven baseline — **Spring Boot 4.0.7 /
+Spring Cloud 2025.1.2** on Java 25 — built on three shared artifacts: **`snapdragon-parent`**
 (metapom), **`snapdragon-commons`** (shared security/tenancy,
 `systems.snapdragon.commons.*`) and **`snapdragon-auth-core`** (shared
 account/session/MFA/Casdoor-admin infra, consumed by **user-bff + admin-bff**).
