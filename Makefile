@@ -38,6 +38,9 @@ ROLE     ?= be+gpu
 ARCH     ?= x86
 DEV      ?=
 IMG_FLAGS ?=
+# Root SSH login: empty/no => DISABLED by default (hardened) on every image; set
+# PERMIT_ROOT_LOGIN=yes|prohibit-password to opt in. Threaded to the builders via BRAND_ENV.
+PERMIT_ROOT_LOGIN ?=
 
 # ── Pen-test build OPTION (DEV / CI-pipeline only) ─────────────────────────────
 # PENTEST=1 runs the OWASP pen-test harness as part of a build (NOT a deployed
@@ -134,11 +137,16 @@ BRAND_ENV :=
 ifneq ($(strip $(HEADSCALE_URL)),)
 BRAND_ENV += HEADSCALE_URL=$(HEADSCALE_URL)
 endif
+# Root SSH login toggle (empty => builder default 'no' = DISABLED). Only threaded when
+# explicitly set, so every image stays hardened-by-default unless opted in.
+ifneq ($(strip $(PERMIT_ROOT_LOGIN)),)
+BRAND_ENV += PERMIT_ROOT_LOGIN=$(PERMIT_ROOT_LOGIN)
+endif
 
 # BRAND_PASS — brand make-vars forwarded into the in-container `make` re-invoke
 # (the Docker dispatch path) so BRAND_FLAGS/BRAND_ENV are rebuilt identically
 # inside the builder image. brands/ is mounted at /src/brands via -v $(CURDIR):/src.
-BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' ENV='$(ENV)'
+BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL)' ENV='$(ENV)' PERMIT_ROOT_LOGIN='$(PERMIT_ROOT_LOGIN)'
 
 # ── Docker-vs-native dispatch ─────────────────────────────────────────────────
 # IMAGE        the builder image tag (build it with `make docker-image`).

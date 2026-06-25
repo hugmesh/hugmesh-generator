@@ -82,6 +82,7 @@ OPT_PENTEST="no"          # yes => run the OWASP pen-test after the build (PENTE
 OPT_IMGFLAGS=""           # e.g. --no-iso (img only) / --no-img (iso only)
 OPT_FRITE_BOARD="la-frite"
 OPT_FRITE_FLAVOR="both"
+OPT_ROOT_LOGIN="no"       # no (DEFAULT, hardened) | prohibit-password | yes  (PERMIT_ROOT_LOGIN)
 
 # Restore saved options from a previous session (best-effort; ignore a bad file).
 # shellcheck disable=SC1090
@@ -101,6 +102,7 @@ save_conf() {
         printf 'OPT_IMGFLAGS=%q\n'      "${OPT_IMGFLAGS}"
         printf 'OPT_FRITE_BOARD=%q\n'   "${OPT_FRITE_BOARD}"
         printf 'OPT_FRITE_FLAVOR=%q\n'  "${OPT_FRITE_FLAVOR}"
+        printf 'OPT_ROOT_LOGIN=%q\n'    "${OPT_ROOT_LOGIN}"
     } > "${CONF_FILE}" 2>/dev/null || true
 }
 
@@ -248,6 +250,9 @@ build_make_cmd() {
     [ -n "${OPT_BRAND}" ]  && RUN_MAKE+=("BRAND=${OPT_BRAND}")
     [ -n "${OPT_DOMAIN}" ] && RUN_MAKE+=("DOMAIN=${OPT_DOMAIN}")
     [ -n "${OPT_IMGFLAGS}" ] && RUN_MAKE+=("IMG_FLAGS=${OPT_IMGFLAGS}")
+    # Root SSH login: only forwarded when opted IN; empty => every image stays hardened
+    # (PermitRootLogin no) by the builders' own default. Applies to ALL targets/arches.
+    [ -n "${OPT_ROOT_LOGIN}" ] && [ "${OPT_ROOT_LOGIN}" != "no" ] && RUN_MAKE+=("PERMIT_ROOT_LOGIN=${OPT_ROOT_LOGIN}")
     [ "${OPT_PATH}" = native ] && RUN_MAKE+=("NATIVE=1")
     # RESUME, X86_OMNIBUS and PENTEST are read ONLY by scripts/build-all-roles.sh,
     # which the Makefile invokes solely from the full-fleet (build-all) target. The
@@ -506,6 +511,7 @@ options_screen() {
             omnibus  "x86 omnibus role .... ${omni_l}   (adds omnibus to full fleet)" \
             pentest  "OWASP pen-test ...... ${pen_l}   (full-fleet build only)" \
             imgflags "Image format flags .. ${OPT_IMGFLAGS:-<both .img + .iso>}" \
+            rootlogin "Root SSH login ...... ${OPT_ROOT_LOGIN}   (no=hardened | prohibit-password | yes)" \
             back     "‹ back to main menu")" || return 0
         case "${choice}" in
             path)    OPT_PATH="$([ "${OPT_PATH}" = docker ] && echo native || echo docker)" ;;
@@ -518,6 +524,11 @@ options_screen() {
             omnibus) OPT_OMNIBUS="$([ "${OPT_OMNIBUS}" = yes ] && echo no || echo yes)" ;;
             pentest) OPT_PENTEST="$([ "${OPT_PENTEST}" = yes ] && echo no || echo yes)" ;;
             imgflags) OPT_IMGFLAGS="$(ui_input "Image flags" "IMG_FLAGS (e.g. --no-iso, --no-img, empty = both)" "${OPT_IMGFLAGS}")" ;;
+            rootlogin) case "${OPT_ROOT_LOGIN}" in
+                           no) OPT_ROOT_LOGIN=prohibit-password ;;
+                           prohibit-password) OPT_ROOT_LOGIN=yes ;;
+                           *) OPT_ROOT_LOGIN=no ;;
+                       esac ;;
             back|"") save_conf; return 0 ;;
         esac
         save_conf

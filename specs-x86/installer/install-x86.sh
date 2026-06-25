@@ -5,7 +5,13 @@
 # it), installs GRUB-EFI --removable, and extracts the stage4 tarball. Mirrors
 # the .img builder's layout for parity: PARTUUID-based fstab (from the bundled
 # fstab.template), ESP mounted at /boot/efi, kernel/initramfs on the ext4 /boot.
+#
+# Root SSH login is DISABLED by default (the image bakes PermitRootLogin no + locked
+# root). To opt in AT INSTALL TIME, set PERMIT_ROOT_LOGIN=yes|prohibit-password (env)
+# and this installer rewrites the target's authoritative sshd drop-in. Admin access is
+# otherwise the non-root KEYS user, so disabling root never locks you out.
 set -euo pipefail
+PERMIT_ROOT_LOGIN="${PERMIT_ROOT_LOGIN:-no}"
 
 if [ "$(id -u)" -ne 0 ]; then echo "ERROR: run as root: sudo $0 $*" >&2; exit 1; fi
 if [ $# -lt 1 ]; then
@@ -55,6 +61,17 @@ elif [ -f "${HERE}/fstab.template" ]; then
 fi
 sed -i -e "s/__ROOT_PARTUUID__/${ROOT_PARTUUID}/g" -e "s/__ESP_PARTUUID__/${ESP_PARTUUID}/g" \
     /mnt/sdhost/etc/fstab
+
+# Root SSH login override (env PERMIT_ROOT_LOGIN). The image already ships hardened
+# (00-root-login.conf = no); only rewrite it if the installer was told to opt in.
+case "${PERMIT_ROOT_LOGIN}" in
+    yes|prohibit-password)
+        mkdir -p /mnt/sdhost/etc/ssh/sshd_config.d
+        printf '# Set by install-x86.sh (PERMIT_ROOT_LOGIN). 00- => authoritative.\nPermitRootLogin %s\n' \
+            "${PERMIT_ROOT_LOGIN}" > /mnt/sdhost/etc/ssh/sshd_config.d/00-root-login.conf
+        echo "==> Root SSH login set to '${PERMIT_ROOT_LOGIN}' (opted in at install)." ;;
+    *) echo "==> Root SSH login DISABLED (hardened default; non-root KEYS user is the admin)." ;;
+esac
 
 echo "==> Installing GRUB-EFI (--removable)"
 for d in dev proc sys run; do mount --rbind "/$d" "/mnt/sdhost/$d"; done
