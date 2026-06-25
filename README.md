@@ -171,7 +171,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 |---|---|---|
 | **pki** (RPi 5) | `./build-rpi5-stage4.sh --role pki` | k8s control plane, headscale, Casdoor, Cassandra, pki-gateway |
 | **backend** (RPi 5) | `./build-rpi5-stage4.sh --role backend` | tuwunel (Matrix) + Akkoma (fediverse), Spring APIs, DBs, be-gateway, LAN wildcard DNS (test) |
-| **frontend** (RPi 5) | `./build-rpi5-stage4.sh --role frontend` | snapdragon.systems Angular host + login/matrix/mastodon remotes, fe-gateway |
+| **frontend** (RPi 5) | `./build-rpi5-stage4.sh --role frontend` | snapdragon.systems Angular host + login/matrix/mastodon/wiki remotes, fe-gateway |
 | **host** (x86_64) | `sudo ./build-x86-host-stage4.sh` | GPU worker: ArgoCD, snapdragon.games, backend capacity |
 | **Frite light desktop** (Libre Computer, arm64) — *opt-in client* | `make frite` (or `./build-frite-stage4.sh`) | LEAN LXDE desktop on the Amlogic La Frite / Le Potato SBC; joins the tailnet + Casdoor login. LIVE + INSTALLER flavors |
 
@@ -572,7 +572,7 @@ and a root app-of-apps; ArgoCD syncs the `snapdragon-gateway` Helm chart (one
 release per namespace, fronted by an **ingress-nginx** facade on the backend node),
 Casdoor, Cassandra, **Akkoma** (fediverse) + **tuwunel** (Matrix), **Forgejo**
 (in-cluster git on pki), the Spring APIs, the Angular host + federated remotes
-(login/matrix/mastodon/admin) and snapdragon.games. In `ENV=test` it also syncs
+(login/matrix/mastodon/admin/wiki) and snapdragon.games. In `ENV=test` it also syncs
 the in-cluster wildcard-DNS resolver (`apps/09-lan-dns.yaml`); in `ENV=prod` the
 cloudflared go-live edge instead. See
 [`specs/cluster/README.md`](specs/cluster/README.md).
@@ -802,8 +802,8 @@ see the full table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
 `snapdragon.systems` host shell federates the per-feature remotes
 (`snapdragon-login-ui`, `snapdragon-matrix-ui`, `snapdragon-mastodon-ui`,
 `snapdragon-admin-ui`, `snapdragon-mod-ui`, `snapdragon-user-ui`,
-`snapdragon-forum-ui`) over module federation, backed by the
-`snapdragon-{admin,mod,user,forum}-bff-api` Spring BFFs and
+`snapdragon-forum-ui`, `snapdragon-wiki-ui`) over module federation, backed by the
+`snapdragon-{admin,mod,user,forum,wiki}-bff-api` Spring BFFs and
 `snapdragon-federation-api` (vanity-subdomain / public-profile resolver).
 
 The Spring services share a unified Maven baseline — **Spring Boot 4.0.7 /
