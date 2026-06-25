@@ -825,10 +825,7 @@ the x86 node builds the role ISOs and delivers them as generic-package release
 assets (latest-link path) for the admin UI's download links. ISOs carry **no
 keys** — KEYS material is supplied from the USB at first boot, never baked in or
 published. The **app** container images (gateway, frontends, BFFs, …) are built
-from their own repos in the GitLab org mirror — the `build:images` job here is
-currently an `echo` stub, and a general in-cluster image-build pipeline is not
-started (the service-catalog Kaniko builder, PR #110, is the one in-cluster
-image builder, and ships dark). The OWASP pen-test suite (ZAP + Dependency-Check
+from their own repos in the GitLab org mirror — the `build:images` job now dispatches into the in-cluster Kaniko image-build pipeline (`specs/cluster/manifests/image-builder/`) — **opt-in** (namespace ships only when an operator enables `apps-optional/60-image-builder.yaml`) and **gated** (runs the real build only when `IMAGE_BUILDER_ENABLED` is set; otherwise a documented no-op). The service-catalog Kaniko builder (PR #110) is the separate per-service-catalog build path. The OWASP pen-test suite (ZAP + Dependency-Check
 + nuclei + k6) runs as a GitLab pipeline stage, not a deployed CronJob. The
 pipeline also runs **fail-closed lint/verify gates** before any build:
 `lint:x86-kernel-net-symbols` (the k8s netfilter/NAT fragment can't re-truncate),

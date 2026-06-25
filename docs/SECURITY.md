@@ -48,6 +48,8 @@ Vault-managed mTLS keystore:
 | `user-bff-db` | `sa-user-bff-db` | `s0:c38` | (DB) | (non-Java: PEM, no JKS) |
 | `forum-bff-api` | `sa-forum-bff` | `s0:c53` | `svc-forum-bff` / `ROLE_FORUM_API` | `forum-bff.snapdragon-backend.svc` |
 | `forum-bff-db` | `sa-forum-bff-db` | `s0:c52` | (DB) | (non-Java: PEM, no JKS) |
+| `wiki-bff-api` | `sa-wiki-bff` | `s0:c69` | `svc-wiki-bff` / `ROLE_WIKI_API` | `wiki-bff.snapdragon-backend.svc` |
+| `wiki-bff-db` | `sa-wiki-bff-db` | *(reserve next free category)* | (DB) | (non-Java: PEM, no JKS) |
 | `service-catalog-ui` (no Deployment yet — see note) | `sa-service-catalog-ui` | `s0:c49` *(reserved)* | `svc-service-catalog-ui` / `ROLE_SUPERADMIN_UI` | `snapdragon-superadmin-service-catalog-ui.snapdragon-frontend.svc` |
 | `service-catalog-builder` (Kaniko build pods) | (per-build) | `s0:c54` | (build pod) | (non-Java: no JKS) |
 | `route-access` | `sa-route-access` | `s0:c15` | (DB) | — |
@@ -71,6 +73,7 @@ Vault-managed mTLS keystore:
 | `user-ui` | per-app SA | `s0:c47` | — | — |
 | `api-docs` | per-app SA | `s0:c48` | — | — |
 | `forum-ui` | per-app SA | `s0:c58` | — | — |
+| `wiki-ui` | per-app SA | `s0:c71` | — | — |
 | `observability` (postgres / uptrace) | per-app SA | `s0:c59` / `s0:c61` | — | — |
 | akkoma (mastodon) | per-app SA | `s0:c30` / `s0:c31` | per-app svc user | (non-Java: PEM, no JKS) |
 | tuwunel (matrix) | per-app SA | `s0:c32` | per-app svc user | (non-Java: PEM, no JKS) |

@@ -33,7 +33,7 @@ flowchart TD
         HOST --> MUI["snapdragon-matrix-ui"]
         HOST --> MASTUI["snapdragon-mastodon-ui"]
         HOST --> LOGINUI["snapdragon-login-ui"]
-        HOST --> ADMINUI["snapdragon-admin-ui / mod-ui / user-ui / forum-ui"]
+        HOST --> ADMINUI["snapdragon-admin-ui / mod-ui / user-ui / forum-ui / wiki-ui"]
     end
 
     subgraph BE["snapdragon-backend (backend Pis)"]
@@ -41,7 +41,7 @@ flowchart TD
         AKK["Akkoma (Mastodon-API fediverse)"]
         APIS["Spring APIs + DBs"]
         FEDAPI["federation-api"]
-        BFFS["admin / mod / user / forum BFFs"]
+        BFFS["admin / mod / user / forum / wiki BFFs"]
         PHPBB["phpBB (optional)"]
     end
 
@@ -384,6 +384,8 @@ backstops noted below may already be present but inert.
 | `Snapdragon-Systems/snapdragon-mod-ui` | Moderator console micro-frontend |
 | `Snapdragon-Systems/snapdragon-user-ui` | User console micro-frontend |
 | `Snapdragon-Systems/snapdragon-forum-ui` | Forum micro-frontend |
+| `Snapdragon-Systems/snapdragon-wiki-bff-api` | Spring wiki BFF (wiki pages, attachments, audit log; /bff/wiki/**) |
+| `Snapdragon-Systems/snapdragon-wiki-ui` | Wiki Angular micro-frontend (federated into snapdragon.systems host) |
 | `Snapdragon-Systems/snapdragon-remote-fragment` | Shared federated-remote fragment scaffolding |
 | `Snapdragon-Systems/snapdragon-superadmin-service-catalog-ui` | Superadmin Service Catalog console (genesis / 🚧 in-flight) |
 | `owncast` / LocalTube (`tube`) | GPU-dependent video services (per-domain enable, federated per-user remotes) |
