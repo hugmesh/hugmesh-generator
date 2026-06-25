@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# snapdragon-egress-vpn — manage the OUTBOUND egress VPN (WireGuard or OpenVPN) as a
+# NetworkManager connection on a desktop / tailnet node.
+#
+# Split-tunnel by design: the VPN supplies only the DEFAULT route (public-Internet
+# egress). The tailnet (100.64.0.0/10) and local LANs (RFC1918) are MORE SPECIFIC
+# routes already owned by tailscale0 / the LAN NIC, so mesh + tailscale + LAN traffic
+# stays DIRECT and never tunnels through the VPN.
+#
+# The admin bakes an egress conf into the image with `--egress-vpn FILE`; at first boot
+# this tool imports it into NetworkManager. The user can then add / remove / toggle it
+# (nmcli or the desktop network applet) — UNLESS the image was built --egress-vpn-locked
+# (a managed tailscale node), in which case it autoconnects and `down`/`remove` are
+# refused for non-root and an NM dispatcher re-asserts it if it is deleted.
+#
+# Usage: snapdragon-egress-vpn import|up|down|status|remove|ensure [name]
+set -euo pipefail
+
+EGRESS_DIR=/etc/snapdragon/egress
+LOCK="${EGRESS_DIR}/locked"
+NAME="${2:-snapdragon-egress}"
+
+log()  { printf '[egress-vpn] %s\n' "$*"; }
+warn() { printf '[egress-vpn] WARNING: %s\n' "$*" >&2; }
+die()  { printf '[egress-vpn] ERROR: %s\n' "$*" >&2; exit 1; }
+
+command -v nmcli >/dev/null 2>&1 || die "NetworkManager (nmcli) not found — egress VPN needs NetworkManager"
+locked() { [ -e "${LOCK}" ]; }
+am_root() { [ "$(id -u)" = 0 ]; }
+refuse_if_locked() {
+    if locked && ! am_root; then
+        die "egress VPN is LOCKED by the administrator of this image — cannot ${1}. (an admin can run: sudo snapdragon-egress-vpn ${1})"
+    fi
+}
+
+# Find the conf the admin dropped in (first .conf/.ovpn/.nmconnection in EGRESS_DIR).
+find_conf() {
+    local f
+    for f in "${EGRESS_DIR}"/*.nmconnection "${EGRESS_DIR}"/*.conf "${EGRESS_DIR}"/*.ovpn; do
+        [ -f "${f}" ] && { echo "${f}"; return 0; }
+    done
+    return 1
+}
+
+# Import (or re-import) the conf as an NM connection named ${NAME}.
+do_import() {
+    local conf type
+    conf="$(find_conf)" || die "no egress conf in ${EGRESS_DIR} (expected *.conf / *.ovpn / *.nmconnection)"
+    case "${conf}" in
+        *.ovpn)         type=openvpn ;;
+        *.nmconnection) type=keyfile ;;
+        *.conf)         type=wireguard ;;   # wg-quick style
+    esac
+    # already present? (idempotent)
+    if nmcli -g NAME connection show 2>/dev/null | grep -qx "${NAME}"; then
+        log "connection '${NAME}' already exists"
+    elif [ "${type}" = keyfile ]; then
+        local dst="/etc/NetworkManager/system-connections/${NAME}.nmconnection"
+        install -D -m 0600 "${conf}" "${dst}"
+        # Force the connection id to ${NAME} so the autoconnect/lock posture step below
+        # can find it (the dropped-in file may carry a different id).
+        if grep -q '^id=' "${dst}"; then
+            sed -i "s|^id=.*|id=${NAME}|" "${dst}"
+        elif grep -q '^\[connection\]' "${dst}"; then
+            sed -i "0,/^\[connection\]/s|^\[connection\]|[connection]\nid=${NAME}|" "${dst}"
+        else
+            printf '[connection]\nid=%s\n' "${NAME}" >> "${dst}"
+        fi
+        chmod 600 "${dst}"
+        nmcli connection reload
+        log "imported keyfile connection '${NAME}'"
+    else
+        # nmcli import names the connection after the file; rename to ${NAME}.
+        local before after newname
+        before="$(nmcli -g NAME connection show 2>/dev/null)"
+        nmcli connection import type "${type}" file "${conf}" >/dev/null \
+            || die "nmcli import failed for ${conf} (type ${type})"
+        after="$(nmcli -g NAME connection show 2>/dev/null)"
+        newname="$(comm -13 <(echo "${before}"|sort) <(echo "${after}"|sort) | head -1)"
+        [ -n "${newname}" ] && [ "${newname}" != "${NAME}" ] \
+            && nmcli connection modify "${newname}" connection.id "${NAME}" 2>/dev/null || true
+        log "imported ${type} connection '${NAME}'"
+    fi
+    # Split-tunnel + lock posture. autoconnect ON only when locked (admin wants it
+    # always up); otherwise the user decides. never-default stays off so the VPN IS
+    # the default route for egress; tailnet/LAN keep their more-specific routes.
+    if locked; then
+        nmcli connection modify "${NAME}" connection.autoconnect yes connection.autoconnect-priority 50 2>/dev/null || true
+    else
+        nmcli connection modify "${NAME}" connection.autoconnect no 2>/dev/null || true
+    fi
+    # Keep tailnet name resolution working: do not let the VPN become the sole DNS
+    # for the tailnet search domain (tailscale MagicDNS stays authoritative for it).
+    nmcli connection modify "${NAME}" ipv4.dns-priority 100 2>/dev/null || true
+}
+
+case "${1:-status}" in
+    import)  refuse_if_locked import; do_import ;;
+    up)      do_import; nmcli connection up "${NAME}" && log "egress VPN up" ;;
+    down)    refuse_if_locked down; nmcli connection down "${NAME}" && log "egress VPN down" ;;
+    remove)  refuse_if_locked remove
+             nmcli connection delete "${NAME}" 2>/dev/null || true
+             rm -f "/etc/NetworkManager/system-connections/${NAME}.nmconnection"
+             log "egress VPN '${NAME}' removed" ;;
+    ensure)  # re-assert when locked (called by the NM dispatcher): import if missing, bring up
+             if locked; then
+                 nmcli -g NAME connection show 2>/dev/null | grep -qx "${NAME}" || do_import
+                 nmcli -g GENERAL.STATE connection show "${NAME}" 2>/dev/null | grep -q activated \
+                     || nmcli connection up "${NAME}" >/dev/null 2>&1 || true
+             fi ;;
+    status)
+             echo "name:    ${NAME}"
+             echo "locked:  $(locked && echo 'yes (admin-managed; user cannot remove)' || echo 'no (user can add/remove)')"
+             echo "present: $(nmcli -g NAME connection show 2>/dev/null | grep -qx "${NAME}" && echo yes || echo no)"
+             echo "state:   $(nmcli -g GENERAL.STATE connection show "${NAME}" 2>/dev/null || echo inactive)"
+             echo "conf:    $(find_conf 2>/dev/null || echo '(none staged)')" ;;
+    *)       sed -n '2,16p' "$0"; exit 2 ;;
+esac

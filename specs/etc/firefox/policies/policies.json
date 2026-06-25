@@ -1,0 +1,13 @@
+{
+  "//": "Snapdragon: route Firefox through the local Privoxy(8118)->Squid(3128) chain by default. Mozilla enterprise policy, honored by both www-client/firefox and firefox-bin. Not locked, so the user can change it.",
+  "policies": {
+    "Proxy": {
+      "Mode": "manual",
+      "HTTPProxy": "127.0.0.1:8118",
+      "SSLProxy": "127.0.0.1:8118",
+      "UseHTTPProxyForAllProtocols": true,
+      "Passthrough": "localhost, 127.0.0.1, ::1",
+      "Locked": false
+    }
+  }
+}
