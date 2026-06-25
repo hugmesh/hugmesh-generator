@@ -1,0 +1,8 @@
+# amd64 PROPRIETARY NVIDIA driver stack.
+# Concatenated onto packages-gpu.list by the builder ONLY when
+# --nvidia-driver proprietary (NVIDIA_PROPRIETARY=true). The open Mesa/Vulkan
+# stack (packages-gpu.list) is still built so OpenGL/Vulkan works on non-NVIDIA
+# GPUs and as a fallback; nouveau is blacklisted at runtime (modprobe.d) so the
+# proprietary kmod owns any NVIDIA GPU. NVIDIA-r2 EULA is accepted via
+# package.license/nvidia. USE flags (kernel-open etc.) are in package.use/nvidia.
+x11-drivers/nvidia-drivers

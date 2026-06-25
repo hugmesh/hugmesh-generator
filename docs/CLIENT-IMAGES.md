@@ -6,6 +6,13 @@ five Kubernetes **node** roles (`pki / be / fe / be+gpu / omnibus`). A *client* 
 a **person's device** — a desktop that joins the Tailscale mesh and runs the
 platform UI — not a cluster node.
 
+> **See also: [STANDALONE-DESKTOP.md](STANDALONE-DESKTOP.md)** — the `standalone-thin`
+> / `standalone-thick` roles build a **self-contained hardened NVIDIA desktop** with
+> NO mesh and NO Casdoor SSO: a normal local user, LUKS2 full-disk encryption on
+> install, optional keyfile/YubiKey unlock, and an auto-detected `/media` data disk
+> (Steam + gocryptfs Vaults). Those are the *opposite* of the mesh-joined clients
+> below; the `--standalone` / `--skip-sso` flags also compose onto these roles.
+
 - **✅ shipped:** the x86 laptop / thin-Chromebook / superadmin-desktop client arms
   (FD-04, Increments 1 and 3), including the grub-mkimage / ESP fix (PR #93). The
   laptop client image has been QEMU-verified to the lightdm greeter + tailnet join

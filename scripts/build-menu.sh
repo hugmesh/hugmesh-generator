@@ -80,8 +80,31 @@ OPT_RESUME="no"           # yes => reuse existing sysroots (RESUME=true)
 OPT_OMNIBUS="no"          # yes => add the x86 omnibus role (X86_OMNIBUS=1)
 OPT_PENTEST="no"          # yes => run the OWASP pen-test after the build (PENTEST=1)
 OPT_IMGFLAGS=""           # e.g. --no-iso (img only) / --no-img (iso only)
+# ── Edge-AI inference service (GPU cluster roles: be+gpu / omnibus / edge_ai) ───
+OPT_X86_EDGE_AI="no"          # yes => add the edge-ai service to be+gpu/omnibus (edge_ai role always has it)
+OPT_EDGE_AI_RUNTIME="ollama"  # edge-ai inference runtime (ollama | vllm)
+OPT_EDGE_AI_MODELS=""         # comma list of models to PRELOAD (empty = builder default)
+OPT_EDGE_AI_MODEL_DEFAULT=""  # default model when an OpenAI request omits one (empty = builder default)
+OPT_X86_EDGE_AI_ANALYSIS="no" # yes => also bake the edge-ai-analysis task API (image/log verdicts; separate image)
 OPT_FRITE_BOARD="la-frite"
 OPT_FRITE_FLAVOR="both"
+# ── Standalone hardened NVIDIA desktop options (NON-secret; persisted) ──────────
+OPT_SA_GPU="all-free"         # all-free|nvidia-free|nvidia|amd-free|amd-pro|intel-free|intel-pro
+OPT_SA_STEAM="native"         # native | flatpak | none
+OPT_SA_MEDIA="yes"            # yes => media-data auto-detect (/media Vaults+Steam)
+OPT_SA_USER="snap"            # local login user name
+OPT_SA_KEYFILE="none"         # none | boot | login  (extra unlock factor: keyfile)
+OPT_SA_YUBIKEY="none"         # none | boot | login  (extra unlock factor: FIDO2)
+OPT_SA_THEME="boogiepop"      # branding theme preset (none | boogiepop | …)
+OPT_SA_PROXY="yes"            # Squid+Privoxy+Firefox proxy stack (desktops; default on)
+OPT_SA_SNORT="yes"            # Snort IDS (default on)
+OPT_SA_AIDE="no"              # AIDE file-integrity IDS (opt-in)
+OPT_SA_KBUILTIN="no"          # compile most of the kernel built-in (=y) vs modules
+OPT_SA_EGRESS=""              # egress VPN conf path (wg .conf / .ovpn); empty = none
+# SECRETS are deliberately NOT persisted (never written to ${CONF_FILE}); they are
+# prompted fresh each build and live only in these shell vars for the run.
+SA_LOCAL_PASS=""              # local user password (plaintext, hashed by the builder)
+SA_LUKS_PASS=""               # LUKS root-unlock passphrase (build-time only)
 OPT_ROOT_LOGIN="no"       # no (DEFAULT, hardened) | prohibit-password | yes  (PERMIT_ROOT_LOGIN)
 
 # Restore saved options from a previous session (best-effort; ignore a bad file).
@@ -100,8 +123,26 @@ save_conf() {
         printf 'OPT_OMNIBUS=%q\n'       "${OPT_OMNIBUS}"
         printf 'OPT_PENTEST=%q\n'       "${OPT_PENTEST}"
         printf 'OPT_IMGFLAGS=%q\n'      "${OPT_IMGFLAGS}"
+        printf 'OPT_X86_EDGE_AI=%q\n'   "${OPT_X86_EDGE_AI}"
+        printf 'OPT_EDGE_AI_RUNTIME=%q\n' "${OPT_EDGE_AI_RUNTIME}"
+        printf 'OPT_EDGE_AI_MODELS=%q\n'  "${OPT_EDGE_AI_MODELS}"
+        printf 'OPT_EDGE_AI_MODEL_DEFAULT=%q\n' "${OPT_EDGE_AI_MODEL_DEFAULT}"
+        printf 'OPT_X86_EDGE_AI_ANALYSIS=%q\n' "${OPT_X86_EDGE_AI_ANALYSIS}"
         printf 'OPT_FRITE_BOARD=%q\n'   "${OPT_FRITE_BOARD}"
         printf 'OPT_FRITE_FLAVOR=%q\n'  "${OPT_FRITE_FLAVOR}"
+        # Standalone-desktop NON-secret options (passwords are NEVER persisted).
+        printf 'OPT_SA_GPU=%q\n'        "${OPT_SA_GPU}"
+        printf 'OPT_SA_STEAM=%q\n'      "${OPT_SA_STEAM}"
+        printf 'OPT_SA_MEDIA=%q\n'      "${OPT_SA_MEDIA}"
+        printf 'OPT_SA_USER=%q\n'       "${OPT_SA_USER}"
+        printf 'OPT_SA_KEYFILE=%q\n'    "${OPT_SA_KEYFILE}"
+        printf 'OPT_SA_YUBIKEY=%q\n'    "${OPT_SA_YUBIKEY}"
+        printf 'OPT_SA_THEME=%q\n'      "${OPT_SA_THEME}"
+        printf 'OPT_SA_PROXY=%q\n'      "${OPT_SA_PROXY}"
+        printf 'OPT_SA_SNORT=%q\n'      "${OPT_SA_SNORT}"
+        printf 'OPT_SA_AIDE=%q\n'       "${OPT_SA_AIDE}"
+        printf 'OPT_SA_KBUILTIN=%q\n'   "${OPT_SA_KBUILTIN}"
+        printf 'OPT_SA_EGRESS=%q\n'     "${OPT_SA_EGRESS}"
         printf 'OPT_ROOT_LOGIN=%q\n'    "${OPT_ROOT_LOGIN}"
     } > "${CONF_FILE}" 2>/dev/null || true
 }
@@ -166,6 +207,20 @@ ui_input() {
     fi
     read -r -e -i "${def}" -p "${text}: " val </dev/tty || val="${def}"
     printf '%s' "${val:-${def}}"
+}
+
+# ui_password TITLE TEXT  -> echoes the entered secret (hidden input). Never logged,
+# never persisted by the caller. Empty result is a valid "skip".
+ui_password() {
+    local title="$1" text="$2" val
+    if [ "${HAVE_TUI}" = 1 ]; then
+        val="$(whiptail --title "${WT_TITLE} — ${title}" --passwordbox "${text}" 12 78 3>&1 1>&2 2>&3)" \
+            || { printf ''; return 0; }
+        printf '%s' "${val}"; return 0
+    fi
+    read -r -s -p "${text}: " val </dev/tty || val=""
+    printf '\n' >&2
+    printf '%s' "${val}"
 }
 
 # ui_msg TITLE TEXT  -> informational box / printout
@@ -269,6 +324,49 @@ build_make_cmd() {
     if [ "${target}" = frite ]; then
         RUN_MAKE+=("FRITE_BOARD=${OPT_FRITE_BOARD}" "FRITE_FLAVOR=${OPT_FRITE_FLAVOR}")
     fi
+    # Standalone hardened NVIDIA desktop: thread the collected options as builder
+    # flags via STANDALONE_FLAGS (consumed by the Makefile x86-standalone* targets).
+    # NOTE: --local-pass lands in the process argv (visible to `ps` on this box);
+    # acceptable on a single-user build host. The builder hashes it immediately and
+    # never bakes the plaintext. The LUKS root passphrase is NOT passed here unless
+    # the user opts into an unattended one — the installer prompts at install time.
+    if [[ "${target}" == x86-standalone* ]]; then
+        local sf=""
+        sf+=" --gpu-driver ${OPT_SA_GPU}"
+        sf+=" --steam ${OPT_SA_STEAM}"
+        [ "${OPT_SA_MEDIA}" = no ] && sf+=" --no-media-data"
+        [ -n "${OPT_SA_USER}" ] && sf+=" --local-user ${OPT_SA_USER}"
+        [ -n "${SA_LOCAL_PASS}" ] && sf+=" --local-pass ${SA_LOCAL_PASS}"
+        [ -n "${SA_LUKS_PASS}" ]  && sf+=" --luks-pass ${SA_LUKS_PASS}"
+        [ "${OPT_SA_KEYFILE}" != none ] && sf+=" --unlock-keyfile ${OPT_SA_KEYFILE}"
+        [ "${OPT_SA_YUBIKEY}" != none ] && sf+=" --unlock-yubikey ${OPT_SA_YUBIKEY}"
+        # branding + security stack + monolithic kernel + egress VPN
+        { [ -n "${OPT_SA_THEME}" ] && [ "${OPT_SA_THEME}" != none ]; } && sf+=" --theme ${OPT_SA_THEME}"
+        [ "${OPT_SA_PROXY}" = no ]    && sf+=" --no-proxy-stack"
+        [ "${OPT_SA_SNORT}" = no ]    && sf+=" --no-snort"
+        [ "${OPT_SA_AIDE}" = yes ]    && sf+=" --with-aide"
+        [ "${OPT_SA_KBUILTIN}" = yes ] && sf+=" --kernel-builtin"
+        [ -n "${OPT_SA_EGRESS}" ]     && sf+=" --egress-vpn ${OPT_SA_EGRESS}"
+        RUN_MAKE+=("STANDALONE_FLAGS=${sf# }")
+    fi
+    # Edge-AI inference service on a GPU cluster role. The edge_ai role ALWAYS bakes
+    # it (auto-selected by the builder); be+gpu/omnibus add it only when OPT_X86_EDGE_AI=yes.
+    # Threaded via STANDALONE_FLAGS, which the Makefile x86-% pattern appends to --role.
+    case "${target}" in
+        x86-be+gpu|x86-omnibus|x86-edge_ai)
+            local ef=""
+            [ "${target}" != x86-edge_ai ] && [ "${OPT_X86_EDGE_AI}" = yes ] && ef+=" --with-edge-ai"
+            if [ "${target}" = x86-edge_ai ] || [ "${OPT_X86_EDGE_AI}" = yes ]; then
+                [ -n "${OPT_EDGE_AI_RUNTIME}" ] && [ "${OPT_EDGE_AI_RUNTIME}" != ollama ] && ef+=" --edge-ai-runtime ${OPT_EDGE_AI_RUNTIME}"
+                [ -n "${OPT_EDGE_AI_MODELS}" ]  && ef+=" --edge-ai-models ${OPT_EDGE_AI_MODELS}"
+                [ -n "${OPT_EDGE_AI_MODEL_DEFAULT}" ] && ef+=" --edge-ai-model-default ${OPT_EDGE_AI_MODEL_DEFAULT}"
+            fi
+            # --with-edge-ai-analysis folds edge-ai too (its dependency), so it applies on
+            # any GPU target incl. the edge_ai role.
+            [ "${OPT_X86_EDGE_AI_ANALYSIS}" = yes ] && ef+=" --with-edge-ai-analysis"
+            [ -n "${ef}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${ef# }")
+            ;;
+    esac
 }
 
 # Launch the composed build DETACHED and record its PID + metadata, so we can
@@ -290,7 +388,11 @@ launch_build() {
         launch=(sudo)
         RUN_MAKE+=("HOST_UID=$(id -u)" "HOST_GID=$(id -g)")
     fi
-    say "launching: ${launch[*]:-} make ${RUN_MAKE[*]}"
+    # Log the command with any --local-pass/--luks-pass values REDACTED (the real
+    # values are still passed to make below — only the echoed/saved copy is masked).
+    local _shown="${RUN_MAKE[*]}"
+    _shown="$(printf '%s' "${_shown}" | sed -E 's/(--local-pass|--luks-pass)[[:space:]]+[^[:space:]]+/\1 ****/g')"
+    say "launching: ${launch[*]:-} make ${_shown}"
     (
         cd "${REPO_DIR}" || exit 1
         exec "${launch[@]}" setsid nohup make "${RUN_MAKE[@]}" \
@@ -493,6 +595,33 @@ monitor_build() {
 }
 
 # ── Menu screens ────────────────────────────────────────────────────────────────
+# Edge-AI inference service options (GPU cluster roles). The edge_ai ROLE always
+# bakes the service; this screen toggles adding it to be+gpu/omnibus and tunes the
+# model library (runtime + preload list + default model) — the same knobs the
+# Studio wizard + the --edge-ai-* CLI flags expose (all-menus parity).
+edge_ai_options_screen() {
+    while true; do
+        local on; on="$([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)"
+        local c
+        c="$(ui_menu "Edge-AI inference" "GPU inference service — OpenAI model API to the mesh:" \
+            toggle  "Add to be+gpu/omnibus . ${on}   (the edge_ai role always has it)" \
+            runtime "Runtime ............... ${OPT_EDGE_AI_RUNTIME}   (ollama | vllm)" \
+            models  "Preload models ........ ${OPT_EDGE_AI_MODELS:-<builder default>}" \
+            default "Default model ......... ${OPT_EDGE_AI_MODEL_DEFAULT:-<builder default>}" \
+            analysis "Analysis API .......... $([ "${OPT_X86_EDGE_AI_ANALYSIS}" = yes ] && echo on || echo off)   (image/log verdicts; separate image)" \
+            back    "‹ back")" || return 0
+        case "${c}" in
+            toggle)  OPT_X86_EDGE_AI="$([ "${OPT_X86_EDGE_AI}" = yes ] && echo no || echo yes)" ;;
+            analysis) OPT_X86_EDGE_AI_ANALYSIS="$([ "${OPT_X86_EDGE_AI_ANALYSIS}" = yes ] && echo no || echo yes)" ;;
+            runtime) OPT_EDGE_AI_RUNTIME="$([ "${OPT_EDGE_AI_RUNTIME}" = ollama ] && echo vllm || echo ollama)" ;;
+            models)  OPT_EDGE_AI_MODELS="$(ui_input "Preload models" "Comma list of model tags to preload (e.g. llama3.2:3b,nomic-embed-text; empty = builder default)" "${OPT_EDGE_AI_MODELS}")" ;;
+            default) OPT_EDGE_AI_MODEL_DEFAULT="$(ui_input "Default model" "Model returned when a request omits one (empty = builder default)" "${OPT_EDGE_AI_MODEL_DEFAULT}")" ;;
+            back|"") save_conf; return 0 ;;
+        esac
+        save_conf
+    done
+}
+
 options_screen() {
     while true; do
         local resume_l omni_l pen_l
@@ -510,6 +639,7 @@ options_screen() {
             resume   "Resume sysroots ..... ${resume_l}   (full-fleet build only)" \
             omnibus  "x86 omnibus role .... ${omni_l}   (adds omnibus to full fleet)" \
             pentest  "OWASP pen-test ...... ${pen_l}   (full-fleet build only)" \
+            edgeai   "Edge-AI service ..... $([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)   (be+gpu/omnibus; edge_ai role always on)" \
             imgflags "Image format flags .. ${OPT_IMGFLAGS:-<both .img + .iso>}" \
             rootlogin "Root SSH login ...... ${OPT_ROOT_LOGIN}   (no=hardened | prohibit-password | yes)" \
             back     "‹ back to main menu")" || return 0
@@ -523,6 +653,7 @@ options_screen() {
             resume)  OPT_RESUME="$([ "${OPT_RESUME}" = yes ] && echo no || echo yes)" ;;
             omnibus) OPT_OMNIBUS="$([ "${OPT_OMNIBUS}" = yes ] && echo no || echo yes)" ;;
             pentest) OPT_PENTEST="$([ "${OPT_PENTEST}" = yes ] && echo no || echo yes)" ;;
+            edgeai)  edge_ai_options_screen ;;
             imgflags) OPT_IMGFLAGS="$(ui_input "Image flags" "IMG_FLAGS (e.g. --no-iso, --no-img, empty = both)" "${OPT_IMGFLAGS}")" ;;
             rootlogin) case "${OPT_ROOT_LOGIN}" in
                            no) OPT_ROOT_LOGIN=prohibit-password ;;
@@ -559,15 +690,89 @@ single_role_screen() {
                 fe "fe      — frontend / gateway node" \
                 be+gpu "be+gpu  — backend + GPU host (the e2e GPU node)" \
                 omnibus "omnibus — all-in-one single node" \
+                edge_ai "edge_ai — GPU inference node (OpenAI model API to the mesh)" \
                 laptop "laptop  — amd64 client image" \
                 chromebook "chromebook — thin client image" \
                 desktop "desktop — full desktop client image" \
+                standalone-thin "★ standalone-thin — hardened NVIDIA desktop (LXDE; no mesh/SSO)" \
+                standalone-thick "★ standalone-thick — most-capable Plasma NVIDIA desktop (no mesh/SSO)" \
                 back "‹ back")" || return 0
             [ "${role}" = back ] && return 0
-            build_make_cmd "x86-${role}" "x86 ${role} (${OPT_PATH}, ENV=${OPT_ENV})" 1
-            launch_build ;;
+            case "${role}" in
+                standalone-thin|standalone-thick) standalone_screen "${role}" ;;
+                *) build_make_cmd "x86-${role}" "x86 ${role} (${OPT_PATH}, ENV=${OPT_ENV})" 1
+                   launch_build ;;
+            esac ;;
         *) return 0 ;;
     esac
+}
+
+# Standalone hardened NVIDIA desktop: collect the local user + password, NVIDIA
+# driver, Steam, media-data and optional unlock factor, then launch. Passwords are
+# prompted fresh (never persisted); the LUKS root passphrase is set at INSTALL time.
+standalone_screen() {
+    local role="$1" choice weight
+    weight="thin"; [ "${role}" = standalone-thick ] && weight="full (most-capable Plasma)"
+    while :; do
+        local media_l
+        media_l="$([ "${OPT_SA_MEDIA}" = yes ] && echo "ON (/media Vaults+Steam auto-detect)" || echo OFF)"
+        choice="$(ui_menu "Standalone ${weight}" \
+            "Hardened NVIDIA standalone desktop — no mesh, no SSO, local login. Installed system is LUKS2-encrypted (you set the root passphrase at install)." \
+            user    "Local user ......... ${OPT_SA_USER}" \
+            pass    "Local password ..... $([ -n "${SA_LOCAL_PASS}" ] && echo '(set)' || echo '(unset → random at first boot)')" \
+            gpu     "GPU driver ......... ${OPT_SA_GPU}" \
+            steam   "Steam delivery ..... ${OPT_SA_STEAM}  (library on /media/Steam)" \
+            media   "Media data ......... ${media_l}" \
+            keyfile "Keyfile unlock ..... ${OPT_SA_KEYFILE}   (boot=LUKS keyslot / login=PAM)" \
+            yubikey "YubiKey unlock ..... ${OPT_SA_YUBIKEY}   (boot=FIDO2 / login=pam_u2f)" \
+            theme   "Branding theme ..... ${OPT_SA_THEME}" \
+            security "Security stack .... proxy=${OPT_SA_PROXY} snort=${OPT_SA_SNORT} aide=${OPT_SA_AIDE}" \
+            kernel  "Kernel built-in .... ${OPT_SA_KBUILTIN}   (=y vs modules)" \
+            egress  "Egress VPN ......... ${OPT_SA_EGRESS:-<none>}" \
+            luks    "Unattended LUKS pass $([ -n "${SA_LUKS_PASS}" ] && echo '(set — advanced)' || echo '(installer prompts — recommended)')" \
+            build   "★ BUILD this image (live ISO + stage4 + .fs.tar.xz + installer ISO)" \
+            back    "‹ back")" || return 0
+        case "${choice}" in
+            user)    OPT_SA_USER="$(ui_input "User" "Local login user name" "${OPT_SA_USER}")" ;;
+            pass)    SA_LOCAL_PASS="$(ui_password "Password" "Password for ${OPT_SA_USER} (blank = random one-time at first boot)")" ;;
+            gpu)     OPT_SA_GPU="$(ui_menu "GPU driver" "Video card / driver (FREE = open, no EULA — the default):" \
+                         all-free "All free (any GPU; NVIDIA=nouveau) — default" \
+                         nvidia-free "NVIDIA free (nouveau)" \
+                         nvidia "NVIDIA proprietary (nvidia-drivers)" \
+                         amd-free "AMD/ATI free (amdgpu/radeonsi)" \
+                         amd-pro "AMD/ATI pro (+ AMDGPU-PRO Vulkan/OpenCL)" \
+                         intel-free "Intel free (i915/iris)" \
+                         intel-pro "Intel pro (+ compute/media stack)")" ;;
+            steam)   OPT_SA_STEAM="$(ui_menu "Steam" "Steam delivery:" native "Native (default; steam-overlay + multilib)" flatpak "Flatpak (no multilib)" none "Don't install Steam")" ;;
+            media)   OPT_SA_MEDIA="$([ "${OPT_SA_MEDIA}" = yes ] && echo no || echo yes)" ;;
+            keyfile) OPT_SA_KEYFILE="$(ui_menu "Keyfile factor" "Generate a keyfile unlock factor for:" none "none" boot "boot (extra LUKS keyslot)" login "login (PAM)")" ;;
+            yubikey) OPT_SA_YUBIKEY="$(ui_menu "YubiKey factor" "Enroll a FIDO2/YubiKey factor for:" none "none" boot "boot (LUKS FIDO2)" login "login (pam_u2f)")" ;;
+            theme)   OPT_SA_THEME="$(ui_menu "Branding theme" "Boot screen / login / wallpaper / accent:" \
+                         none "None (stock look)" $(for t in "${SCRIPT_DIR}"/../specs-x86/branding/themes/*/; do [ -d "$t" ] && b="$(basename "$t")" && echo "$b" "$b theme"; done))" ;;
+            security) while :; do
+                          local sc
+                          sc="$(ui_menu "Security stack" "Toggle each (Squid+Privoxy are desktop-only; Snort all images; AIDE opt-in):" \
+                              proxy "Squid+Privoxy+Firefox proxy: ${OPT_SA_PROXY}" \
+                              snort "Snort IDS: ${OPT_SA_SNORT}" \
+                              aide  "AIDE file-integrity IDS: ${OPT_SA_AIDE}" \
+                              done  "‹ done")" || break
+                          case "${sc}" in
+                              proxy) OPT_SA_PROXY="$([ "${OPT_SA_PROXY}" = yes ] && echo no || echo yes)" ;;
+                              snort) OPT_SA_SNORT="$([ "${OPT_SA_SNORT}" = yes ] && echo no || echo yes)" ;;
+                              aide)  OPT_SA_AIDE="$([ "${OPT_SA_AIDE}" = yes ] && echo no || echo yes)" ;;
+                              *)     break ;;
+                          esac
+                      done ;;
+            kernel)  OPT_SA_KBUILTIN="$([ "${OPT_SA_KBUILTIN}" = yes ] && echo no || echo yes)" ;;
+            egress)  OPT_SA_EGRESS="$(ui_input "Egress VPN" "Path to a WireGuard .conf / OpenVPN .ovpn (empty = none)" "${OPT_SA_EGRESS}")" ;;
+            luks)    SA_LUKS_PASS="$(ui_password "Unattended LUKS" "Bake an unattended LUKS passphrase into the installer ISO (ADVANCED; blank = installer prompts at install)")" ;;
+            build)   save_conf
+                     build_make_cmd "x86-${role}" "x86 ${role} hardened NVIDIA standalone (${OPT_PATH}, ENV=${OPT_ENV})" 1
+                     launch_build; return 0 ;;
+            back|"") save_conf; return 0 ;;
+        esac
+        save_conf
+    done
 }
 
 build_screen() {

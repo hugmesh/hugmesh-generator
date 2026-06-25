@@ -1,0 +1,16 @@
+# PROPRIETARY NVIDIA driver USE flags.
+# Copied into the sysroot by build-x86-host-stage4.sh ONLY when NVIDIA_PROPRIETARY
+# (--nvidia-driver proprietary). Headless / open-driver / Mesa-only images never
+# reference these.
+#
+# kernel-open: build the open-source nvidia.ko kernel-interface variant (default
+#   on modern Turing+/RTX hardware — the RTX 4060 on this fleet supports it). If
+#   you must support pre-Turing (Maxwell/Pascal) GPUs, drop kernel-open to get the
+#   legacy closed kernel module instead.
+# persistenced / static-libs off: lean runtime; the proprietary userspace + the
+#   X driver + the OpenGL/Vulkan libGLX_nvidia come with the package.
+x11-drivers/nvidia-drivers kernel-open persistenced -static-libs
+# NOTE: mesa has NO video_cards_nvidia flag (mesa is the open stack — nouveau).
+# VIDEO_CARDS="… nvidia" (set in make.conf by the builder) makes x11-base/xorg-drivers
+# pull x11-drivers/nvidia-drivers; the open Mesa stack stays co-installed for
+# llvmpipe / non-NVIDIA GPUs. NVIDIA owns GLX/EGL/Vulkan ICDs at runtime via eselect.

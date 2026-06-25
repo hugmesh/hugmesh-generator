@@ -1,0 +1,4 @@
+# ~amd64 unmasks for the Intel compute/media stack. Copied ONLY for --gpu-driver intel-pro.
+dev-libs/intel-compute-runtime ~amd64
+media-libs/libva-intel-media-driver ~amd64
+media-libs/vpl-gpu-rt ~amd64

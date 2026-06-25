@@ -96,7 +96,8 @@ _As of 2026-06-24. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   `snapdragon_domain_reconcile` SELinux module, and `provision_domain_registry()`
   in the KEYS engine.
 - **✅ Optional services (add/remove)** — akkoma / tuwunel / phpBB / games /
-  owncast / LocalTube; the UI greys out when a service is absent, games defaults
+  owncast / LocalTube / **edge-AI** (GPU inference, OpenAI model API to the mesh —
+  [docs/EDGE-AI.md](docs/EDGE-AI.md)); the UI greys out when a service is absent, games defaults
   to `games.<domain>`. Build-time prune ships; the **🚧 live ApplicationSet
   cut-over is pending**. A/V is currently **LAN-only** (no TURN/SFU yet).
 - **✅ Egress-VPN**, **✅ Node storage**, **✅ Games App-Store control plane**,
@@ -174,6 +175,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 | **backend** (RPi 5) | `./build-rpi5-stage4.sh --role backend` | tuwunel (Matrix) + Akkoma (fediverse), Spring APIs, DBs, be-gateway, LAN wildcard DNS (test) |
 | **frontend** (RPi 5) | `./build-rpi5-stage4.sh --role frontend` | snapdragon.systems Angular host + login/matrix/mastodon/wiki remotes, fe-gateway |
 | **host** (x86_64) | `sudo ./build-x86-host-stage4.sh` | GPU worker: ArgoCD, snapdragon.games, backend capacity |
+| **edge_ai** (x86_64 / Jetson) | `./build-x86-host-stage4.sh --role edge_ai` | GPU inference node: serves an OpenAI-compatible model API (Ollama) to the mesh over k8s + tailnet; NVIDIA + CUDA + nvidia-device-plugin. See [docs/EDGE-AI.md](docs/EDGE-AI.md) |
 | **Frite light desktop** (Libre Computer, arm64) — *opt-in client* | `make frite` (or `./build-frite-stage4.sh`) | LEAN LXDE desktop on the Amlogic La Frite / Le Potato SBC; joins the tailnet + Casdoor login. LIVE + INSTALLER flavors |
 
 > The friendlier path is the **Makefile** (`make local` / `make prod` /

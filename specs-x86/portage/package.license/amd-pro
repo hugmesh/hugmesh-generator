@@ -1,0 +1,5 @@
+# Accept the AMD GPU PRO EULA for the proprietary AMDGPU-PRO Vulkan/OpenCL/AMF
+# stack (--gpu-driver amd-pro). Copied into the sysroot ONLY for that build.
+media-libs/amdgpu-pro-vulkan AMD-GPU-PRO-EULA
+dev-libs/amdgpu-pro-opencl AMD-GPU-PRO-EULA
+media-video/amdgpu-pro-amf AMD-GPU-PRO-EULA

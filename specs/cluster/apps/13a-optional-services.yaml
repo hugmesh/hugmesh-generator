@@ -70,6 +70,13 @@ spec:
           # lever. lands in snapdragon-backend so it shares the TURN shared secret
           # with tuwunel.
           - { slug: coturn,  path: specs/cluster/manifests/coturn,        namespace: snapdragon-backend,  installed: "false" }
+          # edge-ai — GPU inference node (OpenAI-compatible model API). DEFAULT-OFF,
+          # GPU-gated; the edge_ai node role auto-selects it. installed flag mirrored
+          # from the installed-services ConfigMap by _opt_render_installed_services.
+          - { slug: edge-ai, path: specs/cluster/manifests/edge-ai,       namespace: snapdragon-inference, installed: "false" }
+          # edge-ai-analysis — task analysis API in front of edge-ai. DEFAULT-OFF,
+          # dependsOn edge-ai. Image is a separate build artifact (keep off until built).
+          - { slug: edge-ai-analysis, path: specs/cluster/manifests/edge-ai-analysis, namespace: snapdragon-inference, installed: "false" }
         # Keep ONLY installed elements — a slug flipped to "false" is dropped and
         # its Application pruned. This is the runtime add/remove lever.
       selector:

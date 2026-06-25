@@ -916,7 +916,17 @@ gate_optional_services() {
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     local slug
-    for slug in akkoma tuwunel phpbb games owncast tube egress-vpn workloadConsole; do
+    # edge-ai-analysis dependsOn edge-ai: drop it if the model server is not selected
+    # (its prune case then runs) — never ship the wrapper with no upstream.
+    case " ${OPTIONAL_SERVICES} " in
+        *" edge-ai-analysis "*)
+            case " ${OPTIONAL_SERVICES} " in
+                *" edge-ai "*) ;;
+                *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES//edge-ai-analysis/}"
+                   warn "edge-ai-analysis requires edge-ai — dropping it (no model server selected)" ;;
+            esac ;;
+    esac
+    for slug in akkoma tuwunel phpbb games owncast tube egress-vpn workloadConsole edge-ai edge-ai-analysis; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -1024,6 +1034,28 @@ gate_optional_services() {
                 rm -rf "${tree}/manifests/workload-console-rbac"
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
                     '/bff/superadmin/workloads/**' '/bff/admin/workloads/**'
+                ;;
+            edge-ai)
+                # Edge-AI GPU inference service (DEFAULT-OFF, GPU-gated). Owns its
+                # bootstrap Application + manifests dir + the ai.<domain> be-gateway
+                # host route + its /v1/** route-access row. When deselected the AI
+                # panels grey out (installed-services "false"). The nvidia-device-plugin
+                # (apps/01d) is NOT optional and is never pruned (harmless w/o GPU nodes).
+                rm -f "${apps}/54-edge-ai.yaml"
+                rm -rf "${tree}/manifests/edge-ai"
+                _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/v1/**'
+                ;;
+            edge-ai-analysis)
+                # Task analysis API in front of edge-ai (DEFAULT-OFF, dependsOn edge-ai).
+                # Owns app 55 + manifests/edge-ai-analysis + the /v1/analyze/** route +
+                # route-access row. Image is a separate build artifact.
+                rm -f "${apps}/55-edge-ai-analysis.yaml"
+                rm -rf "${tree}/manifests/edge-ai-analysis"
+                _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-analysis
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/v1/analyze/**'
                 ;;
         esac
     done
@@ -1155,7 +1187,7 @@ _opt_render_installed_services() {
     [ -f "${cm}" ] || return 0
     local slug val
     # The base optional services follow plain presence in OPTIONAL_SERVICES.
-    for slug in akkoma tuwunel phpbb games owncast tube workloadConsole; do
+    for slug in akkoma tuwunel phpbb games owncast tube workloadConsole edge-ai edge-ai-analysis; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
         # Mirror the same flag into the optional-services ApplicationSet element so the

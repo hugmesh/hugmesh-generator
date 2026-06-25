@@ -1,0 +1,26 @@
+#!/bin/bash
+# snapdragon-installer-autostart — runs in the live session; reads snapdragon.install=
+# from the kernel cmdline (set by the live-ISO GRUB "Install …" entries) and launches
+# the chosen installer front-end. With no such arg it does nothing (plain live desktop).
+set -uo pipefail
+
+mode=""
+for w in $(cat /proc/cmdline 2>/dev/null); do
+    case "${w}" in snapdragon.install=*) mode="${w#snapdragon.install=}";; esac
+done
+[ -n "${mode}" ] || exit 0
+
+# Locate install-x86.sh (on the mounted installer/live medium).
+INST="$(find /run/initramfs/live /media /run/media /mnt /cdrom -maxdepth 4 -name install-x86.sh 2>/dev/null | head -1 || true)"
+
+case "${mode}" in
+    calamares)
+        if command -v calamares >/dev/null 2>&1; then exec calamares
+        elif [ -n "${INST}" ]; then exec sudo bash "${INST}" --interactive
+        fi ;;
+    ncurses)
+        [ -n "${INST}" ] && exec sudo bash "${INST}" --interactive ;;
+    cli|unattended)
+        [ -n "${INST}" ] && exec sudo bash "${INST}" --unattended ;;
+esac
+exit 0

@@ -1,0 +1,2 @@
+# ~amd64 unmasks for the AMDGPU-PRO stack. Copied ONLY for --gpu-driver amd-pro.
+dev-libs/amdgpu-pro-opencl ~amd64

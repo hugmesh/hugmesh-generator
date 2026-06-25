@@ -270,6 +270,16 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- forum-bff's in-cluster upstream inside the snapdragon-forum default-deny ns).
   ('snapdragon-be-gateway',  '/api/forum/admin/**',   'ROLE_ADMIN',     true),  -- forum admin seam (admin-only; NO phpbb floor row)
   ('snapdragon-be-gateway',  '/api/**',               'ROLE_USER',      true),  -- snapdragon APIs
+  -- edge-ai inference API (ai.<domain> host route -> Ollama /v1 on the GPU/edge_ai
+  -- node). Authenticated floor: any mesh user may call the model API; finer
+  -- per-domain gating can add a ROLE_EDGE_AI row (cf. ROLE_OWNCAST). Distinct /v1
+  -- path space, so no overlap with /api/**. ⚠ OPTIONAL slug `edge-ai`:
+  -- gate_optional_services drops this row when edge-ai is deselected.
+  -- edge-ai-analysis task API (/v1/analyze/** -> the analysis wrapper). MORE SPECIFIC
+  -- than /v1/** below; same ROLE_USER floor. ⚠ OPTIONAL slug `edge-ai-analysis`:
+  -- gate_optional_services drops this row when edge-ai-analysis is deselected.
+  ('snapdragon-be-gateway',  '/v1/analyze/**',        'ROLE_USER',      true),  -- edge-ai-analysis verdict API
+  ('snapdragon-be-gateway',  '/v1/**',                'ROLE_USER',      true),  -- edge-ai OpenAI-compatible inference API
 
   -- fe-gateway (snapdragon.systems -> Angular host + MFEs + same-origin /bff)
   ('snapdragon-fe-gateway',  '/',                     'PUBLIC', true),  -- public front page

@@ -1,0 +1,73 @@
+# USE flags for the --capable Plasma workstation set. Copied ONLY when CAPABLE.
+# Keep these conservative — they only flip flags the capable apps need on top of
+# the make.conf desktop/GPU baseline.
+#
+# plasma-meta: the standalone desktop uses lightdm as the display manager, so do
+# NOT pull SDDM in via the meta package (-sddm). Keep GTK integration so GTK apps
+# theme correctly under Plasma.
+kde-plasma/plasma-meta -sddm
+www-client/firefox -hardened
+app-office/libreoffice -java
+media-video/vlc dvd
+# qtmultimedia/qtspeech need the QML bindings for the capable set's Qt apps
+# (neochat/krita preview/obs Qt UI). Without +qml the plan can't be satisfied
+# (caught on the first standalone build; qtspeech surfaced after qtmultimedia).
+dev-qt/qtmultimedia qml opengl
+dev-qt/qtspeech qml
+# qtquick3d (via qtmultimedia[qml]) USE-matches qtbase[opengl=,vulkan=]; qtbase has
+# both on, so qtquick3d needs both to match (and agree with qtwebengine[opengl]).
+dev-qt/qtquick3d opengl vulkan
+dev-qt/qtdeclarative opengl vulkan
+# neochat (Matrix client) needs QML bindings on these KDE-frameworks/Qt deps.
+# Drop neochat's offline KDE handbook (-handbook): it pulls kdoctools -> karchive
+# which forces a conflicting qtbase/qttools icu/opengl USE combo that autounmask
+# can't satisfy (oscillates). The handbook is just offline help docs — not needed
+# in a desktop image. Pre-seeded so the payload plan resolves deterministically.
+net-im/neochat -handbook
+dev-qt/qt5compat qml icu
+kde-frameworks/kconfig qml
+kde-frameworks/sonnet qml
+kde-frameworks/prison qml
+# qtbase/qttools USE that qt5compat + syntax-highlighting genuinely need (stable
+# once -handbook removed the competing constraint); xmlto[text] for the kf-env ->
+# xdg-utils docs-tooling chain.
+# qtbase: opengl (Plasma/qtmultimedia + qtwebengine opengl= match) + wayland
+# (qtquick3d via qtmultimedia[qml]); REQUIRED_USE="wayland? ( opengl )" so both on.
+dev-qt/qtbase libproxy icu opengl wayland cups
+dev-qt/qttools opengl
+dev-qt/qtwebchannel qml
+app-text/xmlto text
+# neochat -> qtwebview hard-requires qtwebengine[qml] (no opt-out USE). qtwebengine
+# is a Chromium fork (bounded to -j2 in package.env so it can't OOM the host) and
+# needs icu on libxml2 (and other system-lib USE flags pulled in below).
+dev-qt/qtwebengine qml opengl
+dev-libs/libxml2 icu
+# Further USE deps the large capable set pulls together (xfce file-mgmt, KDE
+# Discover appstream backend, qtwebengine's bundled minizip, libreoffice xmlsec):
+xfce-base/thunar udisks
+gnome-base/gvfs udisks
+dev-libs/appstream qt6
+sys-libs/zlib minizip
+dev-libs/xmlsec nss
+x11-base/xwayland libei
+kde-frameworks/kimageformats avif
+dev-libs/libdbusmenu gtk3
+media-libs/harfbuzz graphite icu
+# Plasma 6 (X + wayland sessions both pulled by plasma-meta) needs these:
+kde-plasma/kwin lock
+kde-plasma/kwin-x11 lock
+kde-frameworks/kguiaddons wayland
+kde-frameworks/kidletime wayland
+kde-frameworks/kwindowsystem wayland
+media-libs/libvpx postproc
+app-text/poppler cairo lcms qt6 nss
+# Creative apps (krita/inkscape/gimp/okular) + their imaging-lib USE deps:
+dev-python/pyqt6 qml
+dev-python/pillow tiff webp
+media-libs/tiff jpeg
+media-libs/babl lcms
+media-libs/gegl lcms cairo
+# Wayland desktop bits (plasma/gtk/libreoffice) + obs codecs:
+media-libs/mesa wayland
+x11-libs/gtk+ wayland
+media-video/ffmpeg opus x264

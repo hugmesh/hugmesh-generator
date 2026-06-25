@@ -13,6 +13,7 @@ those gateways (configured later, out of scope here).
 | `backend` | `build-rpi5-stage4.sh --role backend` | aarch64 (RPi 5) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs, databases, `snapdragon-be-gateway` |
 | `frontend` | `build-rpi5-stage4.sh --role frontend` | aarch64 (RPi 5) | `snapdragon.systems` Angular host federating `snapdragon-matrix-ui` + `snapdragon-mastodon-ui` + `snapdragon-wiki-ui` + login/admin/mod/user/forum remotes, `snapdragon-fe-gateway` |
 | `host` | `build-x86-host-stage4.sh` | x86_64 (desktop/server) | GPU worker: ArgoCD, GitLab/Runner/binhost (devops), `snapdragon.games`, owncast + tube (GPU-dependent video), heavy datastores (Kafka/ClickHouse/Uptrace), local-path/node-storage default (Mesa/Vulkan via `/dev/dri`) |
+| `edge_ai` | `build-x86-host-stage4.sh --role edge_ai` | x86_64 / Jetson Orin Nano (arm64) | GPU **inference** node: Ollama serving an OpenAI-compatible model API (`/v1`) to the mesh over k8s (ClusterIP) + tailnet (`ai.<domain>` gateway route); NVIDIA proprietary + CUDA + `nvidia-device-plugin` (which also makes the GPU schedulable for owncast/coturn/tube voice+video). Model library is the `edge-ai-models` ConfigMap. See [EDGE-AI.md](EDGE-AI.md) |
 
 All nodes are hardened Gentoo, join one Kubernetes cluster, sit on one headscale
 mesh, and are provisioned at first boot from a USB **KEYS** stick (see

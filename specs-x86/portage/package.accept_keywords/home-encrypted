@@ -1,0 +1,4 @@
+# ~amd64 keyword unmask for the per-user eCryptfs home layer. Copied ONLY when
+# --home-encrypted. Without it the payload plan aborts on a keyword mask (same class
+# of failure as the steam/creative-app atoms). Unversioned for tree-bump durability.
+sys-fs/ecryptfs-utils ~amd64

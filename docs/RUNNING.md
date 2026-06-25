@@ -284,6 +284,15 @@ Common `make` overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`, `HEADSCALE_URL=`,
 `WORK_DIR=`, `JOBS=`, `ROLE=`, `ARCH=x86|arm64`, `DEV=/dev/sdX`, `IMG_FLAGS=`,
 `NATIVE=1`, `CA_CERT=`/`CA_KEY=`/`CA_KEY_PASS=`. `make help` lists every target.
 
+> **Scratch space:** the heavy stage4 build wants tens of GB. Point `WORK_DIR=` at
+> a roomy disk — e.g. a namespaced subdir of the portage scratch volume,
+> `WORK_DIR=/var/tmp/portage/snapdragon-build` (its own subdir, so it never
+> collides with portage's own per-package build dirs).
+
+> **Hardened standalone NVIDIA desktops:** `make x86-standalone` (or `make menu` →
+> Single role → x86 → standalone-thin/thick) builds the self-contained desktops —
+> see [STANDALONE-DESKTOP.md](STANDALONE-DESKTOP.md).
+
 ### 3c. The scripts directly (native, root)
 
 ```bash

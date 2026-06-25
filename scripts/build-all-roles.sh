@@ -99,6 +99,10 @@ fi
 # disables the x86 build entirely.
 if [ "${SKIP_X86:-0}" = "1" ]; then
     X86_BUILD_ROLES=()
+elif [ "${X86_STANDALONE_ONLY:-0}" = "1" ]; then
+    # ONLY the hardened standalone NVIDIA desktops (skip the cluster node roles).
+    X86_BUILD_ROLES=(standalone-thin standalone-thick)
+    RPI_ROLES=()
 elif [ -n "${X86_ROLES:-}" ]; then
     read -r -a X86_BUILD_ROLES <<< "${X86_ROLES}"
 elif [ "${X86_ALL:-0}" = "1" ]; then
@@ -107,6 +111,12 @@ elif [ "${X86_OMNIBUS:-0}" = "1" ]; then
     X86_BUILD_ROLES=(pki be fe be+gpu omnibus)
 else
     X86_BUILD_ROLES=(pki be fe be+gpu)
+fi
+# X86_STANDALONE=1 appends the two hardened standalone NVIDIA desktop variants
+# (thin + thick) to whatever x86 set was selected. Each auto-enables LUKS FDE on
+# install + emits all four artifacts (live ISO, stage4, .fs.tar.xz, installer ISO).
+if [ "${X86_STANDALONE:-0}" = "1" ] && [ "${X86_STANDALONE_ONLY:-0}" != "1" ]; then
+    X86_BUILD_ROLES+=(standalone-thin standalone-thick)
 fi
 
 # Frite light-desktop is OPT-IN. FRITE_ONLY=1 builds ONLY the Frite (skip Pi/x86).

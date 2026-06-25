@@ -1,0 +1,8 @@
+# Intel "pro" GPU stack — appended ONLY for --gpu-driver intel-pro. Intel has NO
+# proprietary Xorg driver: the OPEN i915/iris driver (VIDEO_CARDS=intel iris) IS
+# the display driver. These add the full Intel compute + media userspace: the
+# OpenCL/Level-Zero compute runtime, the iHD VAAPI media driver, and the oneVPL
+# GPU runtime. (All MIT/redistributable — no EULA.)
+dev-libs/intel-compute-runtime
+media-libs/libva-intel-media-driver
+media-libs/vpl-gpu-rt

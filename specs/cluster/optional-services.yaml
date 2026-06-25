@@ -253,6 +253,63 @@ spec:
       federationModule: { slug: owncast, mountAt: /owncast, changeset: "031-register-owncast-module.xml" }
       casdoorSeed: null
 
+    # ── edge-ai — GPU inference node serving an OpenAI-compatible model API ─────
+    # Runs Ollama on an NVIDIA GPU worker (the edge_ai role, or be+gpu / omnibus)
+    # and serves /v1/chat|embeddings|models on :11434. Other mesh nodes consume it
+    # in-cluster (ClusterIP) AND over the tailnet via the be-gateway host route
+    # ai.${CLUSTER_DOMAIN}. The model LIBRARY (catalog/preload/runtime/serving knobs)
+    # is the edge-ai-models ConfigMap — admin/superadmin editable (Service-Catalog).
+    # DEFAULT-OFF: GPU-gated; auto-selected by the edge_ai node role. The
+    # nvidia-device-plugin (apps/01d, always-on infra) advertises nvidia.com/gpu so
+    # this — and the existing GPU services (owncast/coturn/tube voice+video) — schedule.
+    - slug: edge-ai
+      displayName: "Edge AI (inference)"
+      namespace: snapdragon-inference
+      default: off
+      apps:
+        - apps/54-edge-ai.yaml
+      sharedApps: []
+      manifestPath: manifests/edge-ai
+      esoFile: null
+      esoKeys: []
+      # Public host fronted by the be-gateway (Host predicate); the OpenAI-compatible
+      # /v1 surface is reachable on the tailnet through it, role-gated.
+      gatewayHost: ai.${CLUSTER_DOMAIN}
+      gatewayRouteIds: [edge-ai]
+      routeAccessRows:
+        - { gateway: snapdragon-be-gateway, urlPattern: /v1/** }
+      federationModule: null
+      casdoorSeed: null
+
+    # ── edge-ai-analysis — task analysis API in front of edge-ai (DEFAULT-OFF) ──
+    # Stateless wrapper exposing /v1/analyze/* verdicts (image NSFW/abuse classify +
+    # perceptual-hash, log/anomaly triage) to the mesh; calls the edge-ai Ollama model
+    # server in-cluster. The on-prem hinge Phase-A consumers reach: AIOps (infra logs →
+    # @system Matrix DM) and avatar vision moderation (→ mod queue). dependsOn edge-ai
+    # (declared in the installed-services services.json so the console greys it when
+    # edge-ai is off); it lives in the same snapdragon-inference namespace and is pruned
+    # WITH the edge-ai slug (or on its own deselection). The container image is a
+    # SEPARATE build artifact (manifests/edge-ai-analysis/image) — keep this slug
+    # DESELECTED until the image is built+pushed so no node tries to pull it.
+    - slug: edge-ai-analysis
+      displayName: "Edge AI — analysis API"
+      namespace: snapdragon-inference
+      default: off
+      apps:
+        - apps/55-edge-ai-analysis.yaml
+      sharedApps: []
+      manifestPath: manifests/edge-ai-analysis
+      esoFile: null
+      esoKeys: []
+      # Shares the edge-ai be-gateway host (ai.${CLUSTER_DOMAIN}); the /v1/analyze/**
+      # path route is MORE SPECIFIC than edge-ai's /v1 host-catchall, declared first.
+      gatewayHost: ai.${CLUSTER_DOMAIN}
+      gatewayRouteIds: [edge-ai-analysis]
+      routeAccessRows:
+        - { gateway: snapdragon-be-gateway, urlPattern: /v1/analyze/** }
+      federationModule: null
+      casdoorSeed: null
+
     # ── coturn — TURN/STUN relay for Matrix WebRTC audio/video (DEFAULT-OFF) ───
     # coturn relays peer-to-peer Matrix (tuwunel) voice/video when a direct ICE
     # path fails. It lands in snapdragon-backend ALONGSIDE tuwunel so the

@@ -1,0 +1,7 @@
+# ~amd64 keyword unmask for the dockerized stack / mesh-node runtime. Copied ONLY
+# when --home-seed-code stack|mesh (WANT_DOCKER). docker + its CLI + compose are all
+# ~amd64 in the tree. Unversioned for tree-bump durability. (A full in-chroot pretend
+# may surface a few transitive ~amd64 deps to add here — run it like the payload graph.)
+app-containers/docker ~amd64
+app-containers/docker-cli ~amd64
+app-containers/docker-compose ~amd64

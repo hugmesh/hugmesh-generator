@@ -1,0 +1,108 @@
+#!/bin/bash
+# snapdragon-home-setup — first-boot home provisioning for standalone desktops.
+#
+# Driven by /etc/snapdragon/home.conf (baked by build-x86-host-stage4.sh). It is
+# idempotent and self-removes its local.d hook when finished. It NEVER formats a
+# disk or touches anything outside the target user's home + the PAM stack.
+#
+# Responsibilities, by HOME_MODE / flags:
+#   HOME_ENCRYPTED=true  -> wire pam_ecryptfs so ~/.Private unwraps at login, and
+#                           (create/archive/restore) stage a first-login ecryptfs
+#                           migration of the user's home (needs the login password,
+#                           which only exists at login — so it runs then, not now).
+#   HOME_MODE=adopt      -> the installer already mounted the existing home device
+#                           at /home (no format); just fix ownership if needed.
+#   HOME_MODE=restore    -> the installer already decrypted+unpacked the backup.
+#   HOME_SEED_CODE!=none  -> drop the Snapdragon stack (code + docker-compose runner)
+#                           into ~/snapdragon-stack.
+set -uo pipefail
+
+CONF=/etc/snapdragon/home.conf
+[ -r "${CONF}" ] || { echo "snapdragon-home-setup: no ${CONF}; nothing to do"; exit 0; }
+# shellcheck source=/dev/null
+. "${CONF}"
+
+USER_NAME="${LOCAL_USER:-}"
+[ -n "${USER_NAME}" ] || { echo "snapdragon-home-setup: LOCAL_USER unset; skipping"; exit 0; }
+id "${USER_NAME}" >/dev/null 2>&1 || { echo "snapdragon-home-setup: user ${USER_NAME} not created yet; will retry next boot"; exit 0; }
+USER_HOME="$(getent passwd "${USER_NAME}" | cut -d: -f6)"
+USER_HOME="${USER_HOME:-/home/${USER_NAME}}"
+
+log(){ echo "  [home-setup] $*"; }
+
+# ── 1. Per-user ecryptfs: wire pam_ecryptfs (idempotent) ─────────────────────
+if [ "${HOME_ENCRYPTED:-false}" = "true" ] && command -v mount.ecryptfs_private >/dev/null 2>&1; then
+    for pf in /etc/pam.d/system-auth /etc/pam.d/system-login; do
+        [ -f "${pf}" ] || continue
+        if ! grep -q pam_ecryptfs.so "${pf}"; then
+            sed -i -e '/^auth.*pam_unix\.so/a auth\t\toptional\tpam_ecryptfs.so unwrap' \
+                   -e '/^password.*pam_unix\.so/a password\toptional\tpam_ecryptfs.so' \
+                   -e '/^session.*pam_unix\.so/a session\t\toptional\tpam_ecryptfs.so unwrap' "${pf}"
+            log "wired pam_ecryptfs into ${pf}"
+        fi
+    done
+    # create/archive/restore: the home content is currently PLAINTEXT-on-LUKS. The
+    # actual ecryptfs migration needs the user's login passphrase, which only exists
+    # when they log in — so arm a one-shot that runs at their first interactive login.
+    case "${HOME_MODE:-create}" in
+        create|archive|restore)
+            if [ ! -e "${USER_HOME}/.ecryptfs/Private.sig" ]; then
+                cat > "${USER_HOME}/.snapdragon-first-login-encrypt.sh" <<'FL'
+#!/bin/bash
+# One-shot: migrate this home to per-user eCryptfs on first interactive login.
+[ -e "${HOME}/.ecryptfs/Private.sig" ] && { rm -f "${HOME}/.snapdragon-first-login-encrypt.sh"; exit 0; }
+echo "Encrypting your home directory (eCryptfs). You'll be asked for your login password."
+ecryptfs-migrate-home -u "$(id -un)" 2>&1 | sed 's/^/  /' || true
+rm -f "${HOME}/.snapdragon-first-login-encrypt.sh"
+echo "Done — log out and back in to mount your encrypted home."
+FL
+                chmod +x "${USER_HOME}/.snapdragon-first-login-encrypt.sh"
+                # invoke it once from the login shell, then it deletes itself
+                grep -q snapdragon-first-login-encrypt "${USER_HOME}/.bash_profile" 2>/dev/null \
+                    || echo '[ -x "${HOME}/.snapdragon-first-login-encrypt.sh" ] && "${HOME}/.snapdragon-first-login-encrypt.sh"' >> "${USER_HOME}/.bash_profile"
+                log "armed first-login eCryptfs migration for ${USER_NAME}"
+            fi
+            ;;
+    esac
+fi
+
+# ── 2. adopt/restore: the installer already placed the home; just fix ownership ──
+case "${HOME_MODE:-create}" in
+    adopt|restore)
+        if [ -d "${USER_HOME}" ]; then
+            chown "${USER_NAME}:${USER_NAME}" "${USER_HOME}" 2>/dev/null || true
+            log "home ${HOME_MODE}: ${USER_HOME} present (installer-mounted/unpacked)"
+        fi
+        ;;
+esac
+
+# ── 3. Dockerized stack / mesh-node code into ~/snapdragon-stack ─────────────
+if [ "${HOME_SEED_CODE:-none}" != "none" ]; then
+    DST="${USER_HOME}/snapdragon-stack"
+    mkdir -p "${DST}"
+    # Code: prefer a bundle staged in the image; else write a runtime fetch helper.
+    if [ -d /usr/share/snapdragon/stack/repos ]; then
+        cp -r /usr/share/snapdragon/stack/repos/. "${DST}/" 2>/dev/null || true
+        log "seeded Snapdragon repos from the bundled snapshot"
+    fi
+    # Compose + runner templates (always shipped under /usr/share/snapdragon/stack).
+    for f in docker-compose.yml docker-compose.mesh.yml snapdragon-stack README.md; do
+        [ -f "/usr/share/snapdragon/stack/${f}" ] && cp "/usr/share/snapdragon/stack/${f}" "${DST}/${f}"
+    done
+    [ -f "${DST}/snapdragon-stack" ] && chmod +x "${DST}/snapdragon-stack"
+    # If no code was bundled, leave a fetch helper that clones at the user's request.
+    if [ ! -d "${DST}/snapdragon-generator" ] && [ -f "/usr/share/snapdragon/stack/fetch-repos.sh" ]; then
+        cp /usr/share/snapdragon/stack/fetch-repos.sh "${DST}/fetch-repos.sh"; chmod +x "${DST}/fetch-repos.sh"
+    fi
+    chown -R "${USER_NAME}:${USER_NAME}" "${DST}" 2>/dev/null || true
+    # A dockerized MESH node also wants the container runtime up.
+    if [ "${HOME_SEED_CODE}" = "mesh" ] && command -v rc-update >/dev/null 2>&1; then
+        rc-update add docker default 2>/dev/null || true
+    fi
+    log "stack code ready in ${DST} (mode=${HOME_SEED_CODE}) — run ./snapdragon-stack up"
+fi
+
+# ── 4. self-destruct the hook ────────────────────────────────────────────────
+rm -f /etc/local.d/03-home-setup.start
+log "home provisioning complete"
+exit 0

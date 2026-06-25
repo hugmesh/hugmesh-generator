@@ -1,0 +1,10 @@
+# Keyword unmasks for the --capable Plasma workstation set. Copied ONLY when
+# CAPABLE. neochat (Matrix) + the newest Plasma point release commonly need
+# ~amd64; accept them so the capable build doesn't stall on a keyword mask. Most
+# of the curated set is stable on amd64 and needs nothing here.
+net-im/neochat ~amd64
+# Creative apps in the capable set that upstream keeps ~amd64 (caught on the first
+# standalone build — emerge aborts the whole plan on these). Unversioned for
+# durability against tree bumps.
+media-gfx/krita ~amd64
+media-video/obs-studio ~amd64

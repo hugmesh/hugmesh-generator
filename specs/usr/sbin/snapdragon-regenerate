@@ -1,0 +1,26 @@
+#!/bin/bash
+# snapdragon-regenerate — build a fresh, customized Snapdragon live/installer ISO
+# from the generator source bundled into this image (shipped at
+# /usr/src/snapdragon-generator when the image was built with --bundle-source).
+#
+# Run as root from the installed desktop (or the live env). Any arguments are passed
+# straight through to the builder, so you can tweak the role / GPU / home / installer
+# options and save a new ISO that suits your needs:
+#
+#   sudo snapdragon-regenerate --role standalone-thick --gpu-driver amd-free \
+#        --home-encrypted --installer-ui all -w /media/out
+#
+set -euo pipefail
+SRC="${SNAPDRAGON_SRC:-/usr/src/snapdragon-generator}"
+[ -d "${SRC}" ] || { echo "No bundled source at ${SRC}. Rebuild the image with --bundle-source." >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || { echo "Run as root (it partitions loop images / chroots): sudo $0 $*" >&2; exit 1; }
+cd "${SRC}"
+[ -x ./build-x86-host-stage4.sh ] || { echo "builder not found in ${SRC}" >&2; exit 1; }
+if [ $# -eq 0 ]; then
+    echo "Regenerate a Snapdragon ISO from ${SRC}."
+    echo "Pass builder flags, e.g.:"
+    echo "  sudo $0 --role standalone-thick --gpu-driver nvidia --installer-ui all -w /media/out"
+    echo "Run './build-x86-host-stage4.sh --help' here for the full flag list."
+    exit 0
+fi
+exec ./build-x86-host-stage4.sh "$@"

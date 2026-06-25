@@ -84,6 +84,12 @@ HEADSCALE_VERSION="0.23.0"
 TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
+# --with-tailscale / --no-tailscale and --with-sso / --no-sso are EXPLICIT user
+# overrides that win over a role's default posture (e.g. a standalone desktop
+# defaults mesh+SSO OFF, but --with-tailscale/--with-sso force them back ON).
+# Empty = "use the role default"; 'on'/'off' = the user chose explicitly.
+MESH_FORCED=""
+SSO_FORCED=""
 SKIP_KERNEL=false
 SKIP_CLEAN=false
 RESUME=false
@@ -111,6 +117,186 @@ LIVE_ISO=true           # self-booting live squashfs ISO (DEFAULT; --no-live-iso
 INSTALLER_ISO=false     # stage4 + install-x86.sh data ISO (opt-in: --installer-iso)
 BUILD_TAR=true          # also emit the mounted-filesystem tarball (.fs.tar.xz)
 
+# ── STANDALONE hardened desktop (no mesh / no SSO / local login) ─────────────
+# A STANDALONE desktop is a self-contained personal workstation, NOT a mesh
+# client and NOT a k8s node: NO headscale/tailscale, NO Casdoor/OIDC SSO login,
+# NO cluster GitOps tree. It boots straight to a lightdm greeter where a NORMAL
+# LOCAL USER logs in with a password set at build time (--local-pass, hashed
+# here with `openssl passwd -6` and never baked in plaintext). The two named
+# role arms `standalone-thin` (LXDE) and `standalone-thick` (the most-capable
+# Plasma workstation) preset this posture; the flags below also compose onto the
+# laptop/chromebook/desktop client roles. See docs/STANDALONE-DESKTOP.md.
+STANDALONE=false        # --standalone : self-contained desktop (no mesh/SSO/k8s)
+SKIP_SSO=false          # --skip-sso   : drop the Casdoor/OIDC desktop SSO login
+                        #   (orthogonal — works on any client role; auto-on for standalone)
+CAPABLE=false           # --capable : pull the "most capable" Plasma desktop set
+                        #   (packages-desktop-capable.list); auto-on for standalone-thick
+LOCAL_USER=""           # --local-user NAME : the standalone local login account
+LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never baked raw
+# ── GPU driver matrix (--gpu-driver) — all common cards, FREE drivers default ──
+# FREE drivers (open, no EULA, hardened) are the default. Only NVIDIA has a
+# proprietary DISPLAY driver; AMD/Intel "pro" = the open display driver + the
+# vendor's proprietary/closed compute + Vulkan stack. Values:
+#   all-free    : open Mesa for ALL vendors (amdgpu radeonsi intel iris nouveau) —
+#                 works on any GPU. DEFAULT. (Includes the FREE NVIDIA driver, nouveau.)
+#   nvidia-free : open NVIDIA only (nouveau).
+#   nvidia      : NVIDIA proprietary (x11-drivers/nvidia-drivers, NVIDIA-r2 EULA;
+#                 nouveau blacklisted). CUDA optional (--nvidia-cuda).
+#   amd-free    : open AMD (amdgpu/radeonsi/radeon).            (alias: ati-free)
+#   amd-pro     : open AMD display + amdgpu-pro Vulkan + OpenCL. (alias: ati-pro; EULA)
+#   intel-free  : open Intel (i915/iris).
+#   intel-pro   : open Intel display + intel-compute-runtime + media stack.
+#   none        : no GPU stack (headless).
+GPU_DRIVER=""           # --gpu-driver VALUE (default resolves to all-free on a GPU role)
+NVIDIA_CUDA=false       # --nvidia-cuda : also bake dev-util/nvidia-cuda-toolkit (nvidia proprietary only)
+# ── Edge-AI inference node (GPU model API served to the mesh) ────────────────
+# The edge_ai role bakes a GPU inference node and AUTO-SELECTS the edge-ai cluster
+# service (Ollama, OpenAI-compatible /v1 API on :11434, scheduled via the nvidia
+# device plugin). --with-edge-ai folds the service onto any GPU k8s role (be+gpu /
+# omnibus); --no-edge-ai strips it. The model LIBRARY (catalog/preload/runtime/
+# serving knobs) is the edge-ai-models ConfigMap, retunable per-domain.
+EDGE_AI=false           # the edge_ai NODE role (GPU + CUDA + inference service auto-on)
+WANT_EDGE_AI=""         # tri-state: ""=role-default, true=--with-edge-ai, false=--no-edge-ai
+EDGE_AI_RUNTIME="ollama"   # --edge-ai-runtime : ollama | vllm
+EDGE_AI_MODELS=""          # --edge-ai-models  : comma list of models to PRELOAD (patches the ConfigMap)
+EDGE_AI_MODEL_DEFAULT=""   # --edge-ai-model-default : default model when an OpenAI request omits one
+WANT_EDGE_AI_ANALYSIS=""   # --with-edge-ai-analysis : also bake the analysis API (separate image; dependsOn edge-ai)
+# ── Root full-disk encryption (LUKS2) for the INSTALLED system ───────────────
+# The installer (install-x86.sh) LUKS2-encrypts the target root and PROMPTS for
+# a system root-unlock passphrase at install time (distinct from the user login
+# password). The passphrase is NEVER baked into any artifact. --luks-pass is an
+# OPTIONAL unattended-install convenience that writes a 0600 passphrase file into
+# the installer tree only (loudly warned). Live ISO / .img / .fs.tar.xz stay
+# plaintext (ephemeral / flashed); FDE is applied at INSTALL.
+ENCRYPT_ROOT=false      # --encrypt-root : installer LUKS2-encrypts the target root
+LUKS_PASS=""            # --luks-pass / --root-unlock-pass : optional unattended passphrase
+# ── Optional extra unlock factor (keyfile or FIDO2/YubiKey) ──────────────────
+# Either may unlock BOOT (an extra LUKS2 keyslot) or LOGIN (a PAM factor). The
+# heavy enrollment that needs the physical device happens at install/first boot;
+# the build just generates the keyfile artifact + wires the installer hooks.
+UNLOCK_KEYFILE=""       # --unlock-keyfile boot|login : generate a keyfile unlock factor
+UNLOCK_YUBIKEY=""       # --unlock-yubikey boot|login : enroll a FIDO2/YubiKey factor
+# ── Seed-from-running-system + home-directory archive (optional) ─────────────
+SEED_PACKAGES_FROM=""   # --seed-packages-from FILE : extra package list appended to PKG_LISTS
+INCLUDE_HOME_ARCHIVE="" # --include-home-archive FILE : bundle a $HOME tarball into the installer ISO
+# ── Home directory: provisioning mode + optional per-user ecryptfs + stack code ─
+# --home-mode create : firstboot makes a fresh home for the local user (default
+#                      when no archive is given).
+# --home-mode adopt  : the installed system USES an existing home that already
+#                      lives on a device (this host's separate /home partition,
+#                      or an attached USB) — the installer mounts it at /home and
+#                      does NOT format it, so an existing ecryptfs Private survives.
+#                      Requires --home-device LABEL=…|UUID=…|/dev/….
+# --home-mode archive: the installer unpacks a bundled $HOME tarball
+#                      (--include-home-archive) into the user's home (default when
+#                      an archive IS given). Good for a laptop with no data disk.
+# --home-mode restore: the installer/firstboot decrypts + unpacks an ENCRYPTED,
+#                      compressed FULL-home backup (config + documents + media —
+#                      everything but build/cache cruft) from a USB or path. Make
+#                      the backup with scripts/archive-home.sh --full --encrypt;
+#                      point at it with --home-backup FILE|auto (auto = detect the
+#                      marker file on any attached USB). Restores onto the same host
+#                      or a separate one.
+# --home-encrypted   : layer per-user ecryptfs (login-password-unwrapped) ON TOP of
+#                      the LUKS2 full-disk root — the same posture as this host.
+HOME_MODE=""
+HOME_DEVICE=""
+HOME_BACKUP=""          # --home-backup FILE|auto : for --home-mode restore, the
+                        # encrypted full-home backup (auto = detect on attached USB)
+HOME_ENCRYPTED=false
+# --home-seed-code none|repos|stack|mesh : drop the whole Snapdragon source tree +
+# a docker-compose runner into ~/snapdragon-stack so the box can run the entire
+# stack dockerized (stack) or join an existing tailnet as a dockerized mesh node
+# (mesh); 'repos' is just the code. --home-seed-code-from is where to source it
+# (a dir like this host's GitHub checkout, or a .tar.* — default: clone at runtime).
+HOME_SEED_CODE="none"
+HOME_SEED_CODE_FROM=""
+# --distdir DIR : reuse a Gentoo distfiles cache from a mounted drive instead of
+# re-downloading sources. Empty = auto-detect (top level of /media/*, common
+# portage dirs); set explicitly to force one. Speeds rebuilds / enables offline.
+DISTDIR_SRC=""
+# --live-toram / --no-live-toram : the live ISO gets a "Copy to RAM (removable)"
+# GRUB entry (rd.live.ram=1) so the whole live system caches into memory and the
+# USB/DVD can be pulled after boot. Default ON.
+LIVE_TORAM=true
+# --installer-ui cli|ncurses|calamares|all : which installer front-ends the live/
+# installer ISO offers as boot entries. 'calamares' = graphical Qt installer (like
+# Ubuntu); 'ncurses' = whiptail menu; 'cli' = unattended/manual install-x86.sh.
+# Empty = role default (standalone => all). Adds app-admin/calamares when graphical.
+INSTALLER_UI=""
+# --cached / --uncached : a CACHED ISO embeds the binpkg cache (+ distfiles) so the
+# installed system can rebuild/extend packages OFFLINE and reinstall fast; UNCACHED
+# is lean (no caches). Empty = uncached (default).
+ISO_CACHED=false
+# --bundle-source : ship the generator source in the image (/usr/src/snapdragon-
+# generator) + a regenerate helper, so you can build a fresh customized ISO from the
+# running desktop. Default ON for standalone (self-hosting appliance).
+BUNDLE_SOURCE=""
+# ── Desktop branding (boot screen / login / wallpaper / colours) ─────────────
+# Composable across ALL desktop generations (standalone or tailnet client; cli,
+# ncurses or graphical install). A --theme NAME pulls a bundled preset from
+# specs-x86/branding/themes/NAME/ (e.g. boogiepop); --branding-dir DIR supplies a
+# whole brand dir; the individual --wallpaper/--grub-background/--login-background/
+# --brand-logo/--accent-color/--color-scheme flags override single pieces on top.
+# Everything is baked by snapdragon-branding at build time and stays user-changeable
+# afterwards UNLESS --brand-locked is set (managed image). Empty => stock look.
+BRANDING_THEME=""        # --theme NAME (bundled preset dir name)
+BRANDING_DIR=""          # --branding-dir DIR (full brand dir)
+BRAND_WALLPAPER=""       # --wallpaper FILE
+BRAND_GRUB_BG=""         # --grub-background FILE
+BRAND_GRUB_THEME=""      # --grub-theme DIR (full GRUB theme.txt dir; else one is generated)
+BRAND_LOGIN_BG=""        # --login-background FILE
+BRAND_LOGO=""            # --brand-logo FILE
+BRAND_ACCENT=""          # --accent-color '#RRGGBB'
+BRAND_COLOR_SCHEME=""    # --color-scheme FILE.colors
+BRAND_LOCKED=false       # --brand-locked : user cannot re-theme (admin/managed image)
+# ── Egress VPN (outbound) wired into NetworkManager ──────────────────────────
+# --egress-vpn FILE drops a WireGuard (.conf) / OpenVPN (.ovpn) / NM keyfile
+# (.nmconnection) into the desktop; first boot imports it into NetworkManager so the
+# user can add/remove/toggle it. Split-tunnel keeps the tailnet + LAN direct.
+# --egress-vpn-locked = managed tailscale node: it autoconnects and the user cannot
+# remove it (an NM dispatcher re-asserts it). See snapdragon-egress-vpn.
+EGRESS_VPN_FILE=""       # --egress-vpn FILE
+EGRESS_VPN_LOCKED=false  # --egress-vpn-locked
+# --kernel-builtin : compile most in-tree config as built-in (=y) instead of modules,
+# EXCEPT symbols in specs-x86/kernel/keep-as-module.list (out-of-tree / firmware /
+# load-order cases). CONFIG_MODULES stays on so out-of-tree nvidia.ko still loads.
+# A smaller attack surface (no on-demand module loading) — fits the hardened posture.
+KERNEL_BUILTIN=false
+# ── Network/host security stack ──────────────────────────────────────────────
+# --proxy-stack / --no-proxy-stack : Squid (cache) + Privoxy (filter) chained, wired
+#   into Firefox. DEFAULT ON for desktops (ROLE_CLIENT), N/A on servers.
+# --snort / --no-snort : Snort IDS. DEFAULT ON for ALL images.
+# --with-aide : AIDE file-integrity IDS, OPT-IN (off by default); when on it is fully
+#   configured (DB initialized at first boot + daily check cron).
+PROXY_STACK=auto         # auto => on for ROLE_CLIENT desktops; or true/false
+SNORT_IDS=true           # --no-snort to disable
+WANT_AIDE=false          # --with-aide to enable
+# ── External media data device (Vaults + Steam) — DEFAULT ON, configurable ───
+# A SEPARATE data disk (kept across reinstalls) holds Steam/ and a gocryptfs
+# Vaults/ at /media. The installed system auto-detects it (by LABEL if set, else
+# by scanning attached non-root partitions for the marker dirs) and mounts it
+# nofail at /media, installs gocryptfs for the vault, and points Steam's library
+# at /media/Steam. All knobs are baked to /etc/snapdragon/media.conf.
+MEDIA_DATA=true         # --no-media-data disables the whole feature
+MEDIA_MOUNT="/media"    # where the data device mounts
+MEDIA_LABEL=""          # --media-label : match the data device by FS LABEL (else content-scan)
+MEDIA_MARKERS="Steam Vaults"   # marker dir names that identify the data device by content
+STEAM_DIR="/media/Steam"
+STEAM_DELIVERY="native"   # --steam : native (DEFAULT; steam-overlay + multilib) | flatpak | none
+VAULTS_DIR="/media/Vaults"
+VAULTS_ENABLED=true     # --no-vaults disables gocryptfs / the /media/Vaults wiring
+# ── Secure Boot + KEYS USB (mirror the model this host already uses) ──────────
+# Secure Boot is ON by default: the kernel ships as a signed UKI + Microsoft shim.
+# By default a throwaway org key is generated under WORK_DIR/secureboot. Point
+# --secureboot-key/--secureboot-cert (or --keys-usb DIR, which uses
+# DIR/Keys/kernel_key.{pem,der}) at the KEYS USB's existing signing key so the
+# installed host boots under the Secure Boot key already enrolled in its firmware.
+SECURE_BOOT=true        # --no-secure-boot to skip UKI signing/shim
+KEYS_USB=""             # --keys-usb DIR : a KEYS USB providing SB keys (Keys/kernel_key.*) + provisioning
+SECUREBOOT_KEY=""       # --secureboot-key FILE : SB signing private key (PEM); overrides the generated org key
+SECUREBOOT_CERT=""      # --secureboot-cert FILE : SB signing cert (PEM/DER)
+
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; CYAN=$'\033[0;36m'; YEL=$'\033[0;33m'; BOLD=$'\033[1m'; RST=$'\033[0m'
 banner(){ echo -e "\n${CYAN}${BOLD}==> $1${RST}"; }
 info(){ echo -e "${GREEN}    $1${RST}"; }
@@ -130,7 +316,9 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             build under a shared --work-dir (build-all-roles.sh).
   -j, --jobs N              Parallel jobs. Default: $(nproc)
   -v, --version STR         Version stamp. Default: ${REL_VERSION}
-  -r, --role ROLE           NODE: pki | be | fe | be+gpu | omnibus  (host = be+gpu alias).
+  -r, --role ROLE           NODE: pki | be | fe | be+gpu | edge_ai | omnibus  (host = be+gpu alias).
+                            edge_ai = GPU inference node serving an OpenAI-compatible
+                              model API to the mesh (NVIDIA + CUDA + edge-ai service).
                             CLIENT (person device, see docs/CLIENT-IMAGES.md):
                               laptop | chromebook | desktop  (desktop = full/thick).
                             Default: ${ROLE}. Gates GPU/desktop stack, services, k8s.
@@ -167,6 +355,17 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             games.<CLUSTER_DOMAIN> subdomain (OPT-IN; OFF by
                             default). Equivalent to adding 'games' to
                             --optional-services. (env/brand.conf: ENABLE_GAMES=true)
+      --with-edge-ai        Bake the edge-AI inference service (Ollama OpenAI /v1 API,
+                            GPU-scheduled) onto a GPU k8s role; auto-on for --role
+                            edge_ai. Other mesh nodes consume it over k8s + tailnet.
+      --no-edge-ai          Do NOT bake the edge-AI service (overrides the edge_ai default).
+      --edge-ai-runtime R   Inference runtime: ollama (default) | vllm.
+      --edge-ai-models LIST Comma list of models to PRELOAD (patches the edge-ai-models
+                            ConfigMap; e.g. 'llama3.2:3b,nomic-embed-text').
+      --edge-ai-model-default M  Default model when an OpenAI request omits one.
+      --with-edge-ai-analysis  Also bake the edge-ai-analysis task API (image NSFW/abuse
+                            classify + perceptual-hash, log triage verdicts to the mesh).
+                            Needs edge-ai + a SEPARATE container image (DEFAULT-OFF).
       --skip-mesh           Don't install headscale/tailscale.
       --skip-tailscale      headscale only.
       --skip-kernel         Don't build the kernel.
@@ -187,6 +386,90 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --installer-iso       Also build a stage4 + install-x86.sh data ISO.
       --no-tar              Don't emit the mounted-filesystem tarball (.fs.tar.xz).
       --resume              Reuse an existing sysroot.
+  STANDALONE hardened desktop (self-contained; no mesh / no SSO / local login):
+      --standalone          Self-contained desktop: NO headscale/tailscale, NO
+                            Casdoor/OIDC SSO, NO k8s/cluster tree. Boots to a
+                            lightdm greeter with a NORMAL LOCAL USER. Implies
+                            --skip-mesh + --skip-sso. (roles standalone-thin /
+                            standalone-thick preset this.)
+      --skip-sso            Drop the Casdoor/OIDC desktop SSO login from ANY
+                            client image (orthogonal; auto-on for --standalone).
+      --capable             Pull the "most capable" Plasma workstation package
+                            set (packages-desktop-capable.list). Auto-on for the
+                            standalone-thick role.
+      --local-user NAME     Standalone local login account (default: ${DEFAULT_USER}).
+      --local-pass PASS     Password for the local user. Hashed at build time
+                            (openssl passwd -6); the plaintext is NEVER baked.
+  GPU driver — all common cards; FREE (open) drivers are the default (GPU roles):
+      --gpu-driver VALUE    all-free (DEFAULT — open Mesa for every vendor; any GPU;
+                            NVIDIA=nouveau) | nvidia-free (nouveau) | nvidia
+                            (proprietary x11-drivers/nvidia-drivers, NVIDIA-r2 EULA,
+                            nouveau blacklisted) | amd-free (amdgpu/radeonsi; alias
+                            ati-free) | amd-pro (+ AMDGPU-PRO Vulkan/OpenCL, EULA) |
+                            intel-free (i915/iris) | intel-pro (+ Intel compute/media
+                            stack) | none. Only NVIDIA has a proprietary DISPLAY
+                            driver; AMD/Intel "pro" add closed compute/Vulkan on top
+                            of the OPEN display driver.
+      --nvidia              Alias for --gpu-driver nvidia.
+      --nvidia-cuda         Also bake dev-util/nvidia-cuda-toolkit (--gpu-driver nvidia).
+      (Client desktops also bake mainline e-ink/e-paper display drivers as modules.)
+  Root full-disk encryption (LUKS2) for the INSTALLED system (installer ISO):
+      --encrypt-root        The installer LUKS2-encrypts the target root and
+                            PROMPTS for a system root-unlock passphrase at install
+                            time (distinct from the login password; never baked).
+                            Auto-on for standalone roles. Implies --installer-iso.
+      --luks-pass PASS      OPTIONAL unattended passphrase (alias --root-unlock-pass).
+                            Written 0600 into the installer tree ONLY — loudly
+                            warned; prefer the interactive install-time prompt.
+      --unlock-keyfile WHERE  Generate a keyfile unlock factor: boot (extra LUKS2
+                            keyslot, keyfile on ESP) | login (PAM factor).
+      --unlock-yubikey WHERE  Enroll a FIDO2/YubiKey factor: boot (LUKS2 FIDO2) |
+                            login (pam_u2f). Device must be present at install.
+  External media data device (Vaults + Steam) — DEFAULT ON, optional:
+      --no-media-data       Disable the media-data auto-detect (default ON).
+      --media-label LABEL   Match the data device by filesystem LABEL (default:
+                            content-scan for the Steam/Vaults marker dirs).
+      --steam DELIVERY      native (DEFAULT; steam-overlay + multilib, gaming
+                            desktops only) | flatpak | none. Library → /media/Steam.
+      --no-vaults           Don't install gocryptfs / wire /media/Vaults.
+  Seed from a running system + bake a home directory:
+      --seed-packages-from FILE  Append a package list (e.g. produced by
+                            scripts/seed-packages-from-running-system.sh) to the
+                            emerge set — "copy all installed programs".
+      --include-home-archive FILE  Bundle a \$HOME archive (scripts/archive-home.sh)
+                            into the installer ISO; unpacked into the new user's
+                            home, leaving the rest of the system unchanged.
+      --home-mode MODE      How the installed user's home is provisioned:
+                              create  - fresh home (default w/o an archive)
+                              adopt   - USE an existing home already on a device
+                                        (this host's /home partition, or a USB) in
+                                        place; needs --home-device. Never formats it.
+                              archive - unpack --include-home-archive (default w/ one)
+                              restore - decrypt+unpack an encrypted full-home backup;
+                                        needs --home-backup FILE|auto
+      --home-device SPEC    adopt: LABEL=…|UUID=…|/dev/… of the existing home.
+      --home-backup F|auto  restore: the encrypted backup (auto = find on a USB).
+      --home-encrypted      Layer per-user eCryptfs on top of the LUKS2 root
+                            (encrypted home, login-password unwrapped).
+      --home-seed-code MODE  none|repos|stack|mesh — drop the whole Snapdragon
+                            source + a docker-compose runner into ~/snapdragon-stack
+                            so the box can run the stack dockerized (stack) or join
+                            a tailnet as a dockerized mesh node (mesh).
+      --home-seed-code-from PATH  Source the repos from a dir/tar (else clone at runtime).
+      --with-tailscale | --no-tailscale   Force the tailnet agent ON/OFF (any role).
+      --with-sso | --no-sso               Force the Casdoor/OIDC login ON/OFF (any role).
+      --distdir DIR         Reuse a Gentoo distfiles cache from a mounted drive
+                            (default: auto-detect /media/*; speeds rebuilds / offline).
+      --live-toram | --no-live-toram  Live ISO "Copy to RAM (removable)" boot entry
+                            so the stick can be pulled after boot (default ON).
+      --installer-ui UI     cli|ncurses|calamares|all — installer front-ends offered
+                            as live-ISO boot entries. calamares = graphical Qt
+                            installer (Ubuntu-style); standalone defaults to 'all'.
+      --cached | --uncached  CACHED embeds the binpkg cache (+distfiles) for offline
+                            rebuild / fast reinstall; UNCACHED is lean (default).
+      --bundle-source | --no-bundle-source  Ship the generator source +
+                            'snapdragon-regenerate' so the desktop can build a fresh
+                            customized ISO (default ON for standalone).
   -h, --help                This help.
 
 Run on an amd64 Gentoo host, as root. The default deliverables are a UEFI GPT
@@ -241,8 +524,18 @@ while [[ $# -gt 0 ]]; do
         --enable-bluetooth) ENABLE_BLUETOOTH=true; shift ;;
         --permit-root-login) PERMIT_ROOT_LOGIN="$2"; shift 2 ;;
         --enable-games) ENABLE_GAMES=true; shift ;;
-        --skip-mesh) SKIP_MESH=true; shift ;;
+        --with-edge-ai) WANT_EDGE_AI=true; shift ;;
+        --no-edge-ai) WANT_EDGE_AI=false; shift ;;
+        --edge-ai-runtime) EDGE_AI_RUNTIME="$2"; shift 2 ;;
+        --edge-ai-models) EDGE_AI_MODELS="$2"; shift 2 ;;
+        --edge-ai-model-default) EDGE_AI_MODEL_DEFAULT="$2"; shift 2 ;;
+        --with-edge-ai-analysis) WANT_EDGE_AI_ANALYSIS=true; shift ;;
+        --skip-mesh) SKIP_MESH=true; MESH_FORCED=off; shift ;;
         --skip-tailscale) SKIP_TAILSCALE=true; shift ;;
+        # Composable mesh toggle (wins over a role's default; e.g. force the tailnet
+        # agent onto a standalone desktop, or strip it off a client image).
+        --with-tailscale|--with-mesh) SKIP_MESH=false; SKIP_TAILSCALE=false; MESH_FORCED=on; shift ;;
+        --no-tailscale|--no-mesh) SKIP_MESH=true; MESH_FORCED=off; shift ;;
         --skip-kernel) SKIP_KERNEL=true; shift ;;
         --skip-clean) SKIP_CLEAN=true; shift ;;
         # ── Artifact selection ──
@@ -263,6 +556,85 @@ while [[ $# -gt 0 ]]; do
         # deliverable; this simply ensures no ISO is built (already the default).
         --skip-iso|--no-iso) LIVE_ISO=false; INSTALLER_ISO=false; shift ;;
         --resume) RESUME=true; shift ;;
+        # ── STANDALONE hardened desktop (no mesh / no SSO / local login) ──
+        --standalone) STANDALONE=true; shift ;;
+        --skip-sso) SKIP_SSO=true; SSO_FORCED=off; shift ;;
+        # Composable SSO toggle (wins over a role's default).
+        --with-sso) SKIP_SSO=false; SSO_FORCED=on; shift ;;
+        --no-sso) SKIP_SSO=true; SSO_FORCED=off; shift ;;
+        # ── Home directory: mode + per-user ecryptfs + dockerized stack code ──
+        --home-mode) HOME_MODE="$2"; shift 2 ;;
+        --home-device) HOME_DEVICE="$2"; shift 2 ;;
+        --home-backup) HOME_BACKUP="$2"; shift 2 ;;
+        --home-encrypted) HOME_ENCRYPTED=true; shift ;;
+        --home-seed-code) HOME_SEED_CODE="$2"; shift 2 ;;
+        --home-seed-code-from) HOME_SEED_CODE_FROM="$2"; shift 2 ;;
+        # Reuse a Gentoo distfiles cache from an attached/mounted drive (skip re-downloads).
+        --distdir) DISTDIR_SRC="$2"; shift 2 ;;
+        # Live ISO: add a "copy to RAM (removable)" boot path so the stick can be pulled.
+        --live-toram) LIVE_TORAM=true; shift ;;
+        --no-live-toram) LIVE_TORAM=false; shift ;;
+        # Installer front-ends + cached/uncached + source-bundle.
+        --installer-ui) INSTALLER_UI="$2"; shift 2 ;;
+        --cached)   ISO_CACHED=true; shift ;;
+        --uncached) ISO_CACHED=false; shift ;;
+        --bundle-source)    BUNDLE_SOURCE=true; shift ;;
+        --no-bundle-source) BUNDLE_SOURCE=false; shift ;;
+        # ── Desktop branding (any desktop image; composable) ──
+        --theme)            BRANDING_THEME="$2"; shift 2 ;;
+        --branding-dir)     BRANDING_DIR="$2"; shift 2 ;;
+        --wallpaper)        BRAND_WALLPAPER="$2"; shift 2 ;;
+        --grub-background)  BRAND_GRUB_BG="$2"; shift 2 ;;
+        --grub-theme)       BRAND_GRUB_THEME="$2"; shift 2 ;;
+        --login-background) BRAND_LOGIN_BG="$2"; shift 2 ;;
+        --brand-logo)       BRAND_LOGO="$2"; shift 2 ;;
+        --accent-color)     BRAND_ACCENT="$2"; shift 2 ;;
+        --color-scheme)     BRAND_COLOR_SCHEME="$2"; shift 2 ;;
+        --brand-locked)     BRAND_LOCKED=true; shift ;;
+        # ── Egress VPN (NetworkManager) ──
+        --egress-vpn)        EGRESS_VPN_FILE="$2"; shift 2 ;;
+        --egress-vpn-locked) EGRESS_VPN_LOCKED=true; shift ;;
+        # ── Monolithic kernel (built-in vs modules) ──
+        --kernel-builtin)    KERNEL_BUILTIN=true; shift ;;
+        # ── Network/host security stack ──
+        --proxy-stack)       PROXY_STACK=true; shift ;;
+        --no-proxy-stack)    PROXY_STACK=false; shift ;;
+        --snort)             SNORT_IDS=true; shift ;;
+        --no-snort)          SNORT_IDS=false; shift ;;
+        --with-aide)         WANT_AIDE=true; shift ;;
+        --no-aide)           WANT_AIDE=false; shift ;;
+        --capable) CAPABLE=true; shift ;;
+        --local-user) LOCAL_USER="$2"; shift 2 ;;
+        --local-pass|--local-user-password) LOCAL_USER_PASS="$2"; shift 2 ;;
+        # ── GPU driver matrix (all common cards; free default) ──
+        --gpu-driver) GPU_DRIVER="$2"; shift 2 ;;
+        --nvidia) GPU_DRIVER="nvidia"; shift ;;                           # alias: proprietary NVIDIA
+        --nvidia-driver) case "$2" in                                    # back-compat (open|proprietary)
+                             open) GPU_DRIVER="nvidia-free" ;;
+                             proprietary) GPU_DRIVER="nvidia" ;;
+                             *) GPU_DRIVER="$2" ;;
+                         esac; shift 2 ;;
+        --nvidia-cuda) NVIDIA_CUDA=true; shift ;;
+        # ── Root LUKS2 full-disk encryption (installed system) ──
+        --encrypt-root) ENCRYPT_ROOT=true; shift ;;
+        --luks-pass|--root-unlock-pass) LUKS_PASS="$2"; shift 2 ;;
+        --unlock-keyfile) UNLOCK_KEYFILE="$2"; shift 2 ;;   # boot|login
+        --unlock-yubikey) UNLOCK_YUBIKEY="$2"; shift 2 ;;   # boot|login
+        # ── External media data device (Vaults + Steam) ──
+        --media-data) MEDIA_DATA=true; shift ;;
+        --no-media-data) MEDIA_DATA=false; shift ;;
+        --media-label) MEDIA_LABEL="$2"; shift 2 ;;
+        --steam) STEAM_DELIVERY="$2"; shift 2 ;;            # flatpak|native|none
+        --no-vaults) VAULTS_ENABLED=false; shift ;;
+        # ── Seed-from-running-system + home archive ──
+        --seed-packages-from) SEED_PACKAGES_FROM="$2"; shift 2 ;;
+        --include-home-archive) INCLUDE_HOME_ARCHIVE="$2"; shift 2 ;;
+        # ── Secure Boot + KEYS USB ──
+        --secure-boot) SECURE_BOOT=true; shift ;;
+        --no-secure-boot) SECURE_BOOT=false; shift ;;
+        --keys-usb) KEYS_USB="$2"; shift 2 ;;
+        --secureboot-key) SECUREBOOT_KEY="$2"; shift 2 ;;
+        --secureboot-cert) SECUREBOOT_CERT="$2"; shift 2 ;;
         -h|--help) usage 0 ;;
         *) err "Unknown option: $1"; usage 1 ;;
     esac
@@ -278,6 +650,41 @@ if [ "${ENABLE_GAMES}" = "true" ]; then
         *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} games" ;;
     esac
 fi
+
+# Edge-AI service selection: the edge_ai ROLE auto-selects 'edge-ai' (unless
+# --no-edge-ai); --with-edge-ai folds it onto any GPU k8s role. Idempotent. When
+# unselected, gate_optional_services() prunes the edge-ai app/manifests/route/rows.
+EDGE_AI_WANT=false
+${EDGE_AI} && [ "${WANT_EDGE_AI}" != "false" ] && EDGE_AI_WANT=true
+[ "${WANT_EDGE_AI}" = "true" ] && EDGE_AI_WANT=true
+if ${EDGE_AI_WANT} && ${ROLE_CLIENT}; then
+    warn "--with-edge-ai on a CLIENT/standalone role has no effect (no cluster tree); the edge-ai service is a k8s NODE service."
+    EDGE_AI_WANT=false
+fi
+if ${EDGE_AI_WANT}; then
+    case " ${OPTIONAL_SERVICES} " in
+        *" edge-ai "*) ;;
+        *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} edge-ai" ;;
+    esac
+fi
+
+# --with-edge-ai-analysis folds the analysis API (task verdicts to the mesh) AND its
+# edge-ai dependency. The container image is a SEPARATE build artifact — opt-in only.
+if [ "${WANT_EDGE_AI_ANALYSIS}" = "true" ]; then
+    case " ${OPTIONAL_SERVICES} " in *" edge-ai "*) ;; *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} edge-ai" ;; esac
+    case " ${OPTIONAL_SERVICES} " in *" edge-ai-analysis "*) ;; *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} edge-ai-analysis" ;; esac
+fi
+# Dependency guard: edge-ai-analysis is useless without the edge-ai model server. If it
+# was selected without edge-ai, drop it (its gate prune then runs) — never ship a wrapper
+# with no upstream.
+case " ${OPTIONAL_SERVICES} " in
+    *" edge-ai-analysis "*)
+        case " ${OPTIONAL_SERVICES} " in
+            *" edge-ai "*) ;;
+            *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES//edge-ai-analysis/}"
+               warn "edge-ai-analysis requires edge-ai — dropping it (no model server selected)" ;;
+        esac ;;
+esac
 
 # ── Validate role; derive GPU, hostname, node labels and init/join intent ──
 # Node labels/taints are applied at RUNTIME by provision.sh from the KEYS stick;
@@ -313,6 +720,17 @@ case "${ROLE}" in
         GPU=true; ROLE_HEADSCALE=true; ROLE_K8S="single-node"
         ROLE_LABELS="snapdragon.systems/pki=true,snapdragon.systems/backend=true,snapdragon.systems/frontend=true,snapdragon.systems/compute=gpu"
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-omnibus" ;;
+    # ── EDGE-AI (GPU inference) NODE — a be+gpu worker whose PURPOSE is serving an
+    # AI model API to the mesh. Defaults the PROPRIETARY NVIDIA driver + CUDA, bakes
+    # the nvidia container runtime + nvidia-container-toolkit, and AUTO-SELECTS the
+    # edge-ai cluster service (Ollama, OpenAI-compatible /v1). Same machinery on x86
+    # (RTX host) and the Jetson Orin Nano (arm64 — see specs-jetson). Other mesh
+    # nodes consume the API over k8s (ClusterIP) AND the tailnet (be-gateway route).
+    edge_ai|edge-ai)
+        GPU=true; ROLE_K8S="worker"; EDGE_AI=true
+        [ -z "${GPU_DRIVER}" ] && GPU_DRIVER="nvidia"   # inference wants the proprietary blob (CUDA)
+        ROLE_LABELS="snapdragon.systems/backend=true,snapdragon.systems/compute=gpu,snapdragon.systems/edge-ai=true"
+        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-edge-ai" ;;
     # ── CLIENT (person-device) roles — see docs/CLIENT-IMAGES.md (ADR-16/FD-04..08).
     # These are DESKTOPS that join the tailnet + run the UI, NOT k8s nodes: no
     # headscale/containerd/kubelet, GPU on for DRI, ROLE_K8S=none, person-role+domain
@@ -325,10 +743,127 @@ case "${ROLE}" in
         GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
         [ "${DESKTOP}" = "thin" ] && DESKTOP="full"   # 'desktop' role defaults to the full/thick weight
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-desktop" ;;
+    # ── STANDALONE hardened desktop roles — self-contained personal workstations.
+    # Reuse the CLIENT desktop machinery (ROLE_CLIENT=true → Xorg/lightdm/desktop
+    # stack, kernel desktop fragment, sizing, GPU/DRI) but preset the STANDALONE
+    # posture: NO mesh (headscale/tailscale), NO Casdoor/OIDC SSO, NO k8s/cluster
+    # tree — a NORMAL LOCAL USER logs in with a build-set password. The GPU driver
+    # defaults to FREE (open) drivers (--gpu-driver all-free, which uses nouveau for
+    # NVIDIA); pick --gpu-driver nvidia for the proprietary blob, or amd-*/intel-*.
+    # thick = the most-capable Plasma set.
+    standalone-thin)
+        GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
+        STANDALONE=true; DESKTOP="thin"
+        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-standalone-thin" ;;
+    standalone-thick|standalone-full)
+        GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
+        STANDALONE=true; DESKTOP="full"; CAPABLE=true
+        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-standalone" ;;
     *)
-        err "--role must be one of: pki | be | fe | be+gpu | omnibus  (host = be+gpu alias)  |  laptop | chromebook | desktop  (client devices)"
+        err "--role must be one of: pki | be | fe | be+gpu | edge_ai | omnibus  (host = be+gpu alias)  |  laptop | chromebook | desktop  |  standalone-thin | standalone-thick  (client devices)"
         exit 1 ;;
 esac
+
+# ── STANDALONE posture (composable: --standalone onto any client role, or the
+# standalone-* role arms above). A standalone desktop is self-contained: it never
+# bakes the mesh agents (headscale/tailscale), the Casdoor/OIDC SSO desktop login,
+# or the k8s/ArgoCD cluster tree, and logs a normal local user in with a password
+# set at build time. It defaults the installed-system FDE + the media-data device
+# detection ON. ──────────────────────────────────────────────────────────────
+if ${STANDALONE}; then
+    ROLE_CLIENT=true            # reuse all the desktop-stack machinery
+    ROLE_HEADSCALE=false
+    ROLE_K8S="none"
+    # Default standalone posture is mesh-OFF / SSO-OFF, but an explicit
+    # --with-tailscale / --with-sso overrides it (composable: a standalone desktop
+    # that still joins the tailnet, or still uses the Casdoor SSO login).
+    if [ "${MESH_FORCED}" != on ]; then
+        SKIP_MESH=true          # no headscale/tailscale binaries or services
+        SKIP_TAILSCALE=true
+    fi
+    [ "${SSO_FORCED}" = on ] || SKIP_SSO=true   # no Casdoor/OIDC desktop login
+    ENCRYPT_ROOT=true           # the INSTALLED system is LUKS2 full-disk encrypted
+    INSTALLER_ISO=true          # guarantee the installer artifact (the FDE path)
+    [ -z "${LOCAL_USER}" ] && LOCAL_USER="${DEFAULT_USER}"
+    info "STANDALONE desktop: no mesh / no SSO / no k8s; local user '${LOCAL_USER}'; LUKS FDE on install; media-data auto-detect=${MEDIA_DATA}"
+fi
+
+# ── Validate + normalize the GPU driver selection (the full vendor matrix) ──
+# Default resolves to all-free (open drivers for every vendor — works on any GPU,
+# uses the FREE NVIDIA driver nouveau) on a GPU role; 'none' on a non-GPU role.
+[ -z "${GPU_DRIVER}" ] && { ${GPU} && GPU_DRIVER="all-free" || GPU_DRIVER="none"; }
+case "${GPU_DRIVER}" in
+    ati-free)  GPU_DRIVER="amd-free" ;;          # vendor aliases
+    ati-pro)   GPU_DRIVER="amd-pro" ;;
+    amd|ati)   GPU_DRIVER="amd-free" ;;
+    intel)     GPU_DRIVER="intel-free" ;;
+esac
+case "${GPU_DRIVER}" in
+    all-free|nvidia-free|nvidia|amd-free|amd-pro|intel-free|intel-pro|none) ;;
+    *) err "--gpu-driver must be: all-free | nvidia-free | nvidia | amd-free | amd-pro | intel-free | intel-pro | none (got '${GPU_DRIVER}')"; exit 1 ;;
+esac
+# A specific GPU driver is only meaningful on a GPU role (it ships the DRI stack).
+if [ "${GPU_DRIVER}" != "none" ] && [ "${GPU_DRIVER}" != "all-free" ] && ! ${GPU}; then
+    warn "--gpu-driver ${GPU_DRIVER} on a non-GPU role '${ROLE}' — forcing the GPU stack on."; GPU=true
+fi
+${NVIDIA_CUDA} && [ "${GPU_DRIVER}" != "nvidia" ] && { err "--nvidia-cuda requires --gpu-driver nvidia (the proprietary NVIDIA driver)"; exit 1; }
+# edge_ai inference node: default CUDA on when on the proprietary NVIDIA driver (the
+# inference runtime needs it). Skipped for an AMD/Intel edge node (future ROCm path).
+if ${EDGE_AI} && [ "${GPU_DRIVER}" = "nvidia" ]; then NVIDIA_CUDA=true; fi
+case "${STEAM_DELIVERY}" in flatpak|native|none) ;; *) err "--steam must be: flatpak | native | none (got '${STEAM_DELIVERY}')"; exit 1 ;; esac
+# NATIVE Steam (games-util/steam-launcher from the steam-overlay) is heavy: it
+# needs the multilib stage3 + the steam-overlay synced + 32-bit deps. Bake it only
+# for a gaming desktop — the standalone variants and the full 'desktop' role — NOT
+# the lean mesh laptop/chromebook clients (they still get the /media/Steam symlink
+# via media-detect, just no baked native package). Requires the media-data wiring.
+STEAM_NATIVE=false
+if [ "${STEAM_DELIVERY}" = "native" ] && ${ROLE_CLIENT} && ${MEDIA_DATA} \
+   && { ${STANDALONE} || [ "${DESKTOP}" = "full" ]; }; then
+    STEAM_NATIVE=true
+fi
+[ -n "${UNLOCK_KEYFILE}" ] && { case "${UNLOCK_KEYFILE}" in boot|login) ;; *) err "--unlock-keyfile must be: boot | login"; exit 1 ;; esac; }
+[ -n "${UNLOCK_YUBIKEY}" ] && { case "${UNLOCK_YUBIKEY}" in boot|login) ;; *) err "--unlock-yubikey must be: boot | login"; exit 1 ;; esac; }
+[ -n "${SEED_PACKAGES_FROM}" ] && [ ! -f "${SEED_PACKAGES_FROM}" ] && { err "--seed-packages-from: file not found: ${SEED_PACKAGES_FROM}"; exit 1; }
+[ -n "${INCLUDE_HOME_ARCHIVE}" ] && [ ! -f "${INCLUDE_HOME_ARCHIVE}" ] && { err "--include-home-archive: file not found: ${INCLUDE_HOME_ARCHIVE}"; exit 1; }
+# --encrypt-root produces the encrypted INSTALLED system → it needs the installer ISO.
+${ENCRYPT_ROOT} && INSTALLER_ISO=true
+# ── Home mode: default to 'archive' when a $HOME tarball was supplied, else 'create'.
+[ -z "${HOME_MODE}" ] && { [ -n "${INCLUDE_HOME_ARCHIVE}" ] && HOME_MODE=archive || HOME_MODE=create; }
+case "${HOME_MODE}" in create|adopt|archive|restore) ;; *) err "--home-mode must be: create | adopt | archive | restore (got '${HOME_MODE}')"; exit 1 ;; esac
+if [ "${HOME_MODE}" = adopt ] && [ -z "${HOME_DEVICE}" ]; then
+    err "--home-mode adopt needs --home-device LABEL=…|UUID=…|/dev/… (the existing home partition/USB to mount in place)"; exit 1
+fi
+if [ "${HOME_MODE}" = archive ] && [ -z "${INCLUDE_HOME_ARCHIVE}" ]; then
+    err "--home-mode archive needs --include-home-archive FILE (the $HOME tarball to unpack)"; exit 1
+fi
+if [ "${HOME_MODE}" = restore ] && [ -z "${HOME_BACKUP}" ]; then
+    err "--home-mode restore needs --home-backup FILE|auto (the encrypted full-home backup; auto = detect on an attached USB)"; exit 1
+fi
+case "${HOME_SEED_CODE}" in none|repos|stack|mesh) ;; *) err "--home-seed-code must be: none | repos | stack | mesh (got '${HOME_SEED_CODE}')"; exit 1 ;; esac
+[ -n "${HOME_SEED_CODE_FROM}" ] && [ ! -e "${HOME_SEED_CODE_FROM}" ] && { err "--home-seed-code-from: not found: ${HOME_SEED_CODE_FROM}"; exit 1; }
+# Seeding the dockerized stack/mesh implies a container runtime + compose in the image.
+WANT_DOCKER=false; [ "${HOME_SEED_CODE}" = stack ] || [ "${HOME_SEED_CODE}" = mesh ] && WANT_DOCKER=true
+# Installer front-ends: standalone ships all three (graphical Calamares + ncurses +
+# unattended CLI) as boot entries; other roles default to the CLI installer.
+[ -z "${INSTALLER_UI}" ] && { ${STANDALONE} && INSTALLER_UI=all || INSTALLER_UI=cli; }
+case "${INSTALLER_UI}" in cli|ncurses|calamares|all) ;; *) err "--installer-ui must be: cli | ncurses | calamares | all (got '${INSTALLER_UI}')"; exit 1 ;; esac
+WANT_CALAMARES=false; { [ "${INSTALLER_UI}" = calamares ] || [ "${INSTALLER_UI}" = all ]; } && WANT_CALAMARES=true
+# Self-hosting appliance: bundle the generator source by default on a standalone.
+[ -z "${BUNDLE_SOURCE}" ] && { ${STANDALONE} && BUNDLE_SOURCE=true || BUNDLE_SOURCE=false; }
+${WANT_CALAMARES} && info "Installer: graphical Calamares + ncurses + CLI boot entries (--installer-ui=${INSTALLER_UI})"
+${ISO_CACHED} && info "ISO: CACHED (embeds binpkg cache for offline rebuild/fast reinstall)"
+${BUNDLE_SOURCE} && info "Image: bundling generator source + regenerate helper (self-hosting)"
+${HOME_ENCRYPTED} && info "Home: per-user ecryptfs layered on the LUKS2 root (login-password unwrapped)"
+[ "${HOME_MODE}" = adopt ] && info "Home: ADOPT existing home on ${HOME_DEVICE} (installer mounts it at /home, never formats it)"
+[ "${HOME_SEED_CODE}" != none ] && info "Home: seeding the Snapdragon stack code (${HOME_SEED_CODE}) into ~/snapdragon-stack"
+# A KEYS USB (--keys-usb DIR) supplies the existing Secure Boot signing key so the
+# installed host boots under the key already enrolled in its firmware.
+if [ -n "${KEYS_USB}" ]; then
+    [ -d "${KEYS_USB}" ] || { err "--keys-usb: directory not found: ${KEYS_USB}"; exit 1; }
+    [ -z "${SECUREBOOT_KEY}"  ] && [ -f "${KEYS_USB}/Keys/kernel_key.pem" ] && SECUREBOOT_KEY="${KEYS_USB}/Keys/kernel_key.pem"
+    [ -z "${SECUREBOOT_CERT}" ] && [ -f "${KEYS_USB}/Keys/kernel_key.der" ] && SECUREBOOT_CERT="${KEYS_USB}/Keys/kernel_key.der"
+    info "KEYS USB: ${KEYS_USB} (Secure Boot key: ${SECUREBOOT_KEY:-<none found>})"
+fi
 
 # ── Client person-role + domain validation (FD-08) ──────────────────
 # Client images are tied at build time to a person-role and domain(s). Default the
@@ -341,20 +876,41 @@ if ${ROLE_CLIENT}; then
         *) err "--person-role must be one of: user | mod | admin | superadmin (got '${PERSON_ROLE}')"; exit 1 ;;
     esac
     case "${DESKTOP}" in thin|full) : ;; *) err "--desktop must be thin | full (got '${DESKTOP}')"; exit 1 ;; esac
-    [ -z "${DOMAINS}" ] && warn "client role '${ROLE}' built with no --domains; the device will be domain-tied at provision time from the KEYS USB."
+    # A standalone desktop has no SSO/domain tie, so the no-domains warning is moot.
+    ${STANDALONE} || { [ -z "${DOMAINS}" ] && warn "client role '${ROLE}' built with no --domains; the device will be domain-tied at provision time from the KEYS USB."; }
     # Desktop payloads (linux-firmware ~1.5G + Xorg/mesa/GTK/LXDE) overflow the 8 GiB
     # node-sized compact root → "No space left on device" mid-.img. Size the compact
     # root for the client payload (growroot still expands to the disk on first boot).
     # An explicit --img-size always wins.
     if ! ${IMG_SIZE_SET}; then
         # Measured thin payload ≈13.6 GiB after the binpkgs cleanup below (linux-firmware
-        # ~1.9G + Xorg/mesa/GTK/LXDE); full adds firefox/xfce/vlc/pipewire/cups. Size with
-        # headroom (ext4 overhead ~5%). growroot still expands to the disk on first boot.
-        [ "${DESKTOP}" = "full" ] && ROOT_MiB=24576 || ROOT_MiB=16384
-        info "Client desktop: compact root sized to ${ROOT_MiB} MiB for the ${DESKTOP} payload (override with --img-size)"
+        # ~1.9G + Xorg/mesa/GTK/LXDE); full adds firefox/xfce/vlc/pipewire/cups. The
+        # --capable Plasma workstation (KDE + libreoffice + media + dev + nvidia/cuda)
+        # is far bigger → size it generously. growroot still expands to the disk on boot.
+        if ${CAPABLE}; then ROOT_MiB=51200
+        elif [ "${DESKTOP}" = "full" ]; then ROOT_MiB=24576
+        else ROOT_MiB=16384; fi
+        info "Client desktop: compact root sized to ${ROOT_MiB} MiB for the ${DESKTOP}${CAPABLE:+/capable} payload (override with --img-size)"
     fi
 elif [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; then
     warn "--person-role/--domains are ignored for non-client role '${ROLE}'."
+fi
+
+# ── Standalone local-user password → build-time hash (never baked in plaintext) ──
+# --local-pass takes a PLAINTEXT password; we hash it here with `openssl passwd -6`
+# (SHA-512 crypt) and bake only the hash into the firstboot template. The local
+# user name doubles as the firstboot DEFAULT_USER so the two paths agree.
+LOCAL_PASSHASH=""
+if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]; then
+    [ -n "${LOCAL_USER}" ] && DEFAULT_USER="${LOCAL_USER}"
+    if [ -n "${LOCAL_USER_PASS}" ]; then
+        command -v openssl >/dev/null 2>&1 || { err "--local-pass needs openssl on the build host (app-crypt/... / dev-libs/openssl)"; exit 1; }
+        LOCAL_PASSHASH="$(openssl passwd -6 "${LOCAL_USER_PASS}")"
+        LOCAL_USER_PASS=""   # scrub the plaintext from the environment immediately
+        info "Standalone local user '${DEFAULT_USER}': password hashed at build time (SHA-512 crypt; plaintext not baked)."
+    else
+        ${STANDALONE} && warn "Standalone build with no --local-pass: a RANDOM one-time password is minted at first boot (printed once to console)."
+    fi
 fi
 
 # ── Cluster NODE compact-root sizing (pki/be/fe/be+gpu/omnibus) ──────────────────────
@@ -427,10 +983,25 @@ CHOST="x86_64-pc-linux-gnu"
 BUILD_TS="$(date -u +%Y%m%dT%H%M%SZ)"
 info "Build stamp: ${BUILD_TS} (UTC; brand=${BRAND}, env=${ENV})"
 
-# GPU-derived make.conf tokens (gate the open Mesa/Vulkan stack + DRI drivers).
+# GPU-derived make.conf tokens — the --gpu-driver matrix selects VIDEO_CARDS and
+# which vendor stack is layered on. FREE (open) drivers are the default; only the
+# 'nvidia' value pulls a proprietary DISPLAY driver (nvidia-drivers, nouveau
+# blacklisted). amd-pro / intel-pro keep the OPEN display driver and add the
+# vendor's proprietary/closed compute + Vulkan stack (see packages-gpu-*-pro.list).
+NVIDIA_PROPRIETARY=false; AMD_PRO=false; INTEL_PRO=false
 if ${GPU}; then
     GPU_USE="vulkan vaapi vdpau gbm egl gles2"
-    VIDEO_CARDS="amdgpu radeonsi intel iris nouveau"
+    case "${GPU_DRIVER}" in
+        all-free)    VIDEO_CARDS="amdgpu radeonsi intel iris nouveau" ;;
+        nvidia-free) VIDEO_CARDS="nouveau" ;;
+        nvidia)      VIDEO_CARDS="nouveau nvidia"; NVIDIA_PROPRIETARY=true ;;
+        amd-free)    VIDEO_CARDS="amdgpu radeonsi radeon" ;;
+        amd-pro)     VIDEO_CARDS="amdgpu radeonsi"; AMD_PRO=true ;;
+        intel-free)  VIDEO_CARDS="intel iris" ;;
+        intel-pro)   VIDEO_CARDS="intel iris"; INTEL_PRO=true ;;
+        none)        VIDEO_CARDS="" ;;
+    esac
+    info "GPU driver: ${GPU_DRIVER} (VIDEO_CARDS='${VIDEO_CARDS}')$(${NVIDIA_PROPRIETARY} && echo ' — NVIDIA proprietary, nouveau blacklisted'; ${AMD_PRO} && echo ' — + AMDGPU-PRO Vulkan/OpenCL'; ${INTEL_PRO} && echo ' — + Intel compute/media stack')${NVIDIA_CUDA:+ + CUDA toolkit}"
 else
     GPU_USE=""
     VIDEO_CARDS=""
@@ -465,6 +1036,11 @@ render_template() {
         -e "s|@@GPU_USE@@|${GPU_USE}|g" -e "s|@@VIDEO_CARDS@@|${VIDEO_CARDS}|g" \
         -e "s|@@CLIENT_USE@@|${CLIENT_USE}|g" -e "s|@@INPUT_DEVICES@@|${INPUT_DEVICES}|g" \
         -e "s|@@INSTALL_MASK@@|${INSTALL_MASK}|g" \
+        -e "s|@@STANDALONE@@|${STANDALONE}|g" -e "s|@@LOCAL_PASSHASH@@|${LOCAL_PASSHASH}|g" \
+        -e "s|@@MEDIA_DATA@@|${MEDIA_DATA}|g" -e "s|@@MEDIA_MOUNT@@|${MEDIA_MOUNT}|g" \
+        -e "s|@@MEDIA_LABEL@@|${MEDIA_LABEL}|g" -e "s|@@MEDIA_MARKERS@@|${MEDIA_MARKERS}|g" \
+        -e "s|@@STEAM_DIR@@|${STEAM_DIR}|g" -e "s|@@STEAM_DELIVERY@@|${STEAM_DELIVERY}|g" \
+        -e "s|@@VAULTS_DIR@@|${VAULTS_DIR}|g" -e "s|@@VAULTS_ENABLED@@|${VAULTS_ENABLED}|g" \
         "$1" > "$2"
 }
 
@@ -639,7 +1215,7 @@ gate_optional_services() {
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     local slug
-    for slug in akkoma tuwunel phpbb games; do
+    for slug in akkoma tuwunel phpbb games edge-ai edge-ai-analysis; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -681,8 +1257,34 @@ gate_optional_services() {
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
                     '/games/admin/**'
                 ;;
+            edge-ai)
+                rm -f "${apps}/54-edge-ai.yaml"
+                rm -rf "${tree}/manifests/edge-ai"
+                _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/v1/**'
+                ;;
+            edge-ai-analysis)
+                rm -f "${apps}/55-edge-ai-analysis.yaml"
+                rm -rf "${tree}/manifests/edge-ai-analysis"
+                _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-analysis
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/v1/analyze/**'
+                ;;
         esac
     done
+    # Edge-AI model library: when selected, patch the edge-ai-models ConfigMap from
+    # the --edge-ai-* flags (the model catalog/preload/runtime knobs exposed to the
+    # mesh). EDGE_AI_RUNTIME always set (defaults ollama); models/default only if given.
+    if _opt_selected edge-ai; then
+        local mc="${tree}/manifests/edge-ai/models-configmap.yaml"
+        if [ -f "${mc}" ]; then
+            [ -n "${EDGE_AI_RUNTIME}" ]       && sed -i -E "s#^(  runtime: ).*#\\1\"${EDGE_AI_RUNTIME}\"#"       "${mc}"
+            [ -n "${EDGE_AI_MODELS}" ]        && sed -i -E "s#^(  preload: ).*#\\1\"${EDGE_AI_MODELS}\"#"        "${mc}"
+            [ -n "${EDGE_AI_MODEL_DEFAULT}" ] && sed -i -E "s#^(  default-model: ).*#\\1\"${EDGE_AI_MODEL_DEFAULT}\"#" "${mc}"
+            info "Edge-AI model library: runtime=${EDGE_AI_RUNTIME} preload='${EDGE_AI_MODELS:-<default>}' default='${EDGE_AI_MODEL_DEFAULT:-<default>}'"
+        fi
+    fi
     # Shared social-ui (matrix + mastodon micro-frontends in ONE app) — remove only
     # when BOTH homeservers are deselected (otherwise the surviving platform keeps
     # its UI; the federation manifest greys out the absent one).
@@ -799,7 +1401,7 @@ _opt_render_installed_services() {
     local cm="${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy/installed-services-configmap.yaml"
     [ -f "${cm}" ] || return 0
     local slug val
-    for slug in akkoma tuwunel phpbb games; do
+    for slug in akkoma tuwunel phpbb games edge-ai edge-ai-analysis; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         # '#'-delimited so the (true|false) alternation does not collide with the delimiter.
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
@@ -969,24 +1571,71 @@ chmod 440 "${SYSROOT}/etc/sudoers.d/build-notty"
 
 # ── 4. Install spec files ──────────────────────────────────────────
 banner "Installing spec files"
-mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,profile,env}
+mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.license,profile,env}
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
+# Native Steam is a 32-bit app: enable the multilib ABI so its deps build with
+# ABI_X86_32 (the amd64-hardened stage3 seed is multilib-capable). Scoped to the
+# native-Steam gaming desktops; every other image stays pure 64-bit.
+if ${STEAM_NATIVE}; then
+    printf '\n# Native Steam (32-bit runtime) — see package.use/steam\nABI_X86="64 32"\n' >> "${SYSROOT}/etc/portage/make.conf"
+    info "Native Steam: ABI_X86=\"64 32\" (multilib) added to make.conf"
+fi
 cp "${SPECS_DIR}/portage/profile/parent"              "${SYSROOT}/etc/portage/profile/parent"
 # Copy every file in these portage config dirs (so added spec files always land).
 # The 'desktop' files (LXDE ~amd64 keywords / GTK+netsurf USE) are client-only — a
-# k8s NODE image stays stable-keyworded and never references desktop USE flags.
+# k8s NODE image stays stable-keyworded and never references desktop USE flags. The
+# 'nvidia' files are copied ONLY for the proprietary GPU stack; 'capable' ONLY for
+# the most-capable Plasma set (--capable / standalone-thick).
 for akf in "${SPECS_DIR}/portage/package.accept_keywords/"*; do
-    [ "$(basename "${akf}")" = "desktop" ] && ! ${ROLE_CLIENT} && continue
+    [ -e "${akf}" ] || continue
+    case "$(basename "${akf}")" in
+        desktop) ${ROLE_CLIENT} || continue ;;
+        capable) ${CAPABLE} || continue ;;
+        nvidia)  ${NVIDIA_PROPRIETARY} || continue ;;
+        amd-pro) ${AMD_PRO} || continue ;;
+        intel-pro) ${INTEL_PRO} || continue ;;
+        steam)   ${STEAM_NATIVE} || continue ;;
+        home-encrypted) ${HOME_ENCRYPTED} || continue ;;
+        seed-code)      ${WANT_DOCKER}    || continue ;;
+        calamares)      ${WANT_CALAMARES} || continue ;;
+    esac
     cp "${akf}" "${SYSROOT}/etc/portage/package.accept_keywords/"
 done
 # package.use: copy all role-independent files; the GPU-only 'gpu' file (Mesa
-# vulkan/vaapi video_cards_*) is copied ONLY for GPU roles, and 'desktop' ONLY for
-# client roles, so a headless image never references USE/cards it isn't building.
+# vulkan/vaapi video_cards_*) is copied ONLY for GPU roles, 'desktop' ONLY for
+# client roles, 'nvidia' ONLY for the proprietary stack, 'capable' ONLY for the
+# capable Plasma set — so a headless image never references USE/cards it isn't building.
 for puf in "${SPECS_DIR}/portage/package.use/"*; do
-    [ "$(basename "${puf}")" = "gpu" ] && ! ${GPU} && continue
-    [ "$(basename "${puf}")" = "desktop" ] && ! ${ROLE_CLIENT} && continue
+    [ -e "${puf}" ] || continue
+    case "$(basename "${puf}")" in
+        gpu)     ${GPU} || continue ;;
+        desktop) ${ROLE_CLIENT} || continue ;;
+        capable) ${CAPABLE} || continue ;;
+        nvidia)  ${NVIDIA_PROPRIETARY} || continue ;;
+        amd-pro) ${AMD_PRO} || continue ;;
+        intel-pro) ${INTEL_PRO} || continue ;;
+        steam)   ${STEAM_NATIVE} || continue ;;
+    esac
     cp "${puf}" "${SYSROOT}/etc/portage/package.use/"
 done
+# package.license: accept the per-vendor proprietary EULAs explicitly (hardened
+# images are explicit about proprietary licences) only for the chosen stack.
+if ${NVIDIA_PROPRIETARY} && [ -f "${SPECS_DIR}/portage/package.license/nvidia" ]; then
+    cp "${SPECS_DIR}/portage/package.license/nvidia" "${SYSROOT}/etc/portage/package.license/"
+fi
+if ${AMD_PRO} && [ -f "${SPECS_DIR}/portage/package.license/amd-pro" ]; then
+    cp "${SPECS_DIR}/portage/package.license/amd-pro" "${SYSROOT}/etc/portage/package.license/"
+fi
+# package.license: accept the Valve Steam licence only for the native-Steam build.
+if ${STEAM_NATIVE} && [ -f "${SPECS_DIR}/portage/package.license/steam" ]; then
+    cp "${SPECS_DIR}/portage/package.license/steam" "${SYSROOT}/etc/portage/package.license/"
+fi
+# Blacklist nouveau when the proprietary NVIDIA kmod is in play, so it owns the GPU.
+if ${NVIDIA_PROPRIETARY}; then
+    mkdir -p "${SYSROOT}/etc/modprobe.d"
+    printf '# Snapdragon: proprietary NVIDIA driver owns the GPU; keep nouveau out.\nblacklist nouveau\noptions nouveau modeset=0\n' \
+        > "${SYSROOT}/etc/modprobe.d/snapdragon-nvidia.conf"
+fi
 
 # Per-package build env (e.g. env/llvm-lowmem.conf caps MAKEOPTS for the
 # memory-hungry llvm-core/llvm+clang that mesa[llvm] pulls for the be+gpu role —
@@ -1010,6 +1659,13 @@ grep -q '^GRUB_DISABLE_OS_PROBER=' "${SYSROOT}/etc/default/grub" || \
 # The .img builder and install-x86.sh substitute __ROOT_PARTUUID__/__ESP_PARTUUID__.
 cp "${SPECS_DIR}/etc/fstab"                           "${SYSROOT}/etc/fstab"
 
+# dracut LUKS-root persistence drop-in (so an installer-created encrypted root
+# keeps unlocking across future in-image kernel rebuilds). Inert on plaintext-root.
+if [ -f "${SPECS_DIR}/etc/dracut.conf.d/60-snapdragon-crypt.conf" ]; then
+    mkdir -p "${SYSROOT}/etc/dracut.conf.d"
+    cp "${SPECS_DIR}/etc/dracut.conf.d/60-snapdragon-crypt.conf" "${SYSROOT}/etc/dracut.conf.d/"
+fi
+
 # Shared (arch-agnostic) etc/ specs
 mkdir -p "${SYSROOT}/etc/"{sysctl.d,modules-load.d,containerd,kubernetes,init.d,ssh/sshd_config.d,local.d,headscale,keys-provision,firewalld/zones} \
          "${SYSROOT}/var/lib/kubelet" "${SYSROOT}/usr/sbin"
@@ -1017,6 +1673,24 @@ cp "${SHARED_SPECS}/etc/sysctl.d/10-hardened.conf"    "${SYSROOT}/etc/sysctl.d/"
 cp "${SHARED_SPECS}/etc/sysctl.d/99-kubernetes.conf"  "${SYSROOT}/etc/sysctl.d/"
 cp "${SHARED_SPECS}/etc/modules-load.d/kubernetes.conf" "${SYSROOT}/etc/modules-load.d/"
 cp "${SHARED_SPECS}/etc/containerd/config.toml"       "${SYSROOT}/etc/containerd/"
+# GPU k8s nodes (be+gpu / omnibus / edge_ai with the proprietary NVIDIA driver): add
+# the containerd `nvidia` runtime so pods with runtimeClassName: nvidia get the GPU.
+# The nvidia-device-plugin DaemonSet, the edge-ai inference service, and the GPU
+# voice/video services (owncast/coturn/tube) all rely on it. The binary comes from
+# app-containers/nvidia-container-toolkit (added to PKGS below). runc stays default.
+if ${GPU} && [ "${GPU_DRIVER}" = "nvidia" ]; then
+    cat >> "${SYSROOT}/etc/containerd/config.toml" <<'NVRT'
+
+# ── NVIDIA GPU runtime (snapdragon edge-AI / GPU workloads) ──────────────────
+# Selected per-pod via RuntimeClass `nvidia`; runc remains the default runtime.
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia]
+  runtime_type = "io.containerd.runc.v2"
+  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.nvidia.options]
+    BinaryName = "/usr/bin/nvidia-container-runtime"
+    SystemdCgroup = false
+NVRT
+    info "containerd: added the nvidia GPU runtime (RuntimeClass nvidia) for GPU pods"
+fi
 cp "${SHARED_SPECS}/etc/kubernetes/kubeadm-config.yaml" "${SYSROOT}/etc/kubernetes/"
 cp "${SHARED_SPECS}/etc/kubernetes/kubelet-config.yaml" "${SYSROOT}/var/lib/kubelet/config.yaml"
 cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf" "${SYSROOT}/etc/ssh/sshd_config.d/"
@@ -1095,6 +1769,213 @@ cp -r "${SCRIPT_DIR}/templates/."            "${SYSROOT}/usr/share/snapdragon/ge
 render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
 
+# ── Home provisioning manifest + first-boot helper ───────────────────────────
+# Carries the home posture (mode / device / backup / ecryptfs / stack-code) baked
+# by this build. Consumed by snapdragon-home-setup (runs at first boot, after the
+# 01-firstboot user is created) and read by the installer for adopt/restore.
+mkdir -p "${SYSROOT}/etc/snapdragon"
+cat > "${SYSROOT}/etc/snapdragon/home.conf" <<EOF
+# Baked by build-x86-host-stage4.sh — DO NOT edit by hand on the image; rebuild.
+HOME_MODE="${HOME_MODE}"
+HOME_DEVICE="${HOME_DEVICE}"
+HOME_BACKUP="${HOME_BACKUP}"
+HOME_ENCRYPTED="${HOME_ENCRYPTED}"
+HOME_SEED_CODE="${HOME_SEED_CODE}"
+LOCAL_USER="${LOCAL_USER:-${DEFAULT_USER}}"
+EOF
+if [ -f "${SHARED_SPECS}/usr/sbin/snapdragon-home-setup" ]; then
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-home-setup" "${SYSROOT}/usr/sbin/snapdragon-home-setup"
+    chmod +x "${SYSROOT}/usr/sbin/snapdragon-home-setup"
+    cat > "${SYSROOT}/etc/local.d/03-home-setup.start" <<'HOOK'
+#!/bin/bash
+# First-boot home provisioning (ecryptfs wiring, stack-code seeding). Self-removes.
+[ -x /usr/sbin/snapdragon-home-setup ] && /usr/sbin/snapdragon-home-setup
+HOOK
+    chmod +x "${SYSROOT}/etc/local.d/03-home-setup.start"
+fi
+# Dockerized stack / mesh-node code templates (compose + runner) — staged for the
+# helper to drop into ~/snapdragon-stack at first boot.
+if [ "${HOME_SEED_CODE}" != none ] && [ -d "${SHARED_SPECS}/usr/share/snapdragon/stack" ]; then
+    mkdir -p "${SYSROOT}/usr/share/snapdragon/stack"
+    cp -r "${SHARED_SPECS}/usr/share/snapdragon/stack/." "${SYSROOT}/usr/share/snapdragon/stack/" 2>/dev/null || true
+fi
+# Self-hosting: bundle the generator source + a regenerate helper so the running
+# desktop can build a fresh, customized ISO (snapdragon-regenerate …).
+if ${BUNDLE_SOURCE:-false}; then
+    info "Bundling generator source -> /usr/src/snapdragon-generator (regenerate from the desktop)"
+    mkdir -p "${SYSROOT}/usr/src/snapdragon-generator"
+    tar -C "${SCRIPT_DIR}" --exclude=./.git --exclude=./out --exclude='./snap-*' --exclude='./*.bundle' \
+        -cf - . 2>/dev/null | tar -C "${SYSROOT}/usr/src/snapdragon-generator" -xf - 2>/dev/null || true
+    if [ -f "${SHARED_SPECS}/usr/sbin/snapdragon-regenerate" ]; then
+        cp "${SHARED_SPECS}/usr/sbin/snapdragon-regenerate" "${SYSROOT}/usr/sbin/snapdragon-regenerate"
+        chmod +x "${SYSROOT}/usr/sbin/snapdragon-regenerate"
+    fi
+fi
+# Graphical Calamares installer config + the bridge to install-x86.sh.
+if ${WANT_CALAMARES:-false}; then
+    mkdir -p "${SYSROOT}/etc/calamares/modules" "${SYSROOT}/usr/libexec"
+    cp "${SHARED_SPECS}/etc/calamares/settings.conf" "${SYSROOT}/etc/calamares/settings.conf" 2>/dev/null || true
+    cp "${SHARED_SPECS}/etc/calamares/modules/shellprocess-install.conf" "${SYSROOT}/etc/calamares/modules/" 2>/dev/null || true
+    if [ -f "${SHARED_SPECS}/usr/libexec/snapdragon-calamares-install" ]; then
+        cp "${SHARED_SPECS}/usr/libexec/snapdragon-calamares-install" "${SYSROOT}/usr/libexec/"
+        chmod +x "${SYSROOT}/usr/libexec/snapdragon-calamares-install"
+    fi
+fi
+# Live-session installer autostart (reads snapdragon.install= from the GRUB entry).
+if [ "${INSTALLER_UI:-cli}" != cli ] || ${WANT_CALAMARES:-false}; then
+    if [ -f "${SHARED_SPECS}/usr/bin/snapdragon-installer-autostart" ]; then
+        cp "${SHARED_SPECS}/usr/bin/snapdragon-installer-autostart" "${SYSROOT}/usr/bin/snapdragon-installer-autostart"
+        chmod +x "${SYSROOT}/usr/bin/snapdragon-installer-autostart"
+        mkdir -p "${SYSROOT}/etc/xdg/autostart"
+        cat > "${SYSROOT}/etc/xdg/autostart/snapdragon-installer.desktop" <<'DESK'
+[Desktop Entry]
+Type=Application
+Name=Snapdragon Installer
+Exec=snapdragon-installer-autostart
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
+DESK
+    fi
+fi
+
+# ── Desktop branding bake (boot screen / login / wallpaper / colours) ─────────
+# Resolve --theme preset + --branding-dir + individual file overrides into ONE
+# staging dir (later sources win), copy it into the image, and let snapdragon-
+# branding bake the static pieces from the host into the sysroot (GRUB background,
+# lightdm greeter background, /etc/skel + per-user colour scheme/accent, and the
+# in-session wallpaper autostart). The same tool re-themes the running desktop
+# later, UNLESS --brand-locked drops the lock. Applies to EVERY desktop image
+# (standalone OR tailnet client; any installer front-end).
+BRAND_GRUB_BG_STAGED=""
+BRAND_GRUB_THEME_STAGED=""
+# Branding flags only apply to desktop (ROLE_CLIENT) images; warn if set on a server role.
+if ! ${ROLE_CLIENT} && { [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] \
+        || [ -n "${BRAND_WALLPAPER}" ] || [ -n "${BRAND_GRUB_BG}" ] || [ -n "${BRAND_GRUB_THEME}" ] \
+        || [ -n "${BRAND_LOGIN_BG}" ] || [ -n "${BRAND_LOGO}" ] || [ -n "${BRAND_ACCENT}" ] \
+        || [ -n "${BRAND_COLOR_SCHEME}" ] || ${BRAND_LOCKED}; }; then
+    warn "branding flags given for a non-desktop role (${ROLE}); branding applies to desktop images only — ignoring."
+fi
+if ${ROLE_CLIENT} && { [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] \
+        || [ -n "${BRAND_WALLPAPER}" ] || [ -n "${BRAND_GRUB_BG}" ] \
+        || [ -n "${BRAND_GRUB_THEME}" ] || [ -n "${BRAND_LOGIN_BG}" ] || [ -n "${BRAND_LOGO}" ] \
+        || [ -n "${BRAND_ACCENT}" ] || [ -n "${BRAND_COLOR_SCHEME}" ] \
+        || ${BRAND_LOCKED}; }; then
+    banner "Branding desktop image (theme=${BRANDING_THEME:-none} locked=${BRAND_LOCKED})"
+    _bd="$(mktemp -d)"
+    # 1) named preset (lowest precedence) — specs-x86/branding/themes/<name>/
+    if [ -n "${BRANDING_THEME}" ]; then
+        _tdir="${SPECS_DIR}/branding/themes/${BRANDING_THEME}"
+        [ -d "${_tdir}" ] || { err "unknown --theme '${BRANDING_THEME}' (looked in ${_tdir})"; exit 1; }
+        cp -r "${_tdir}/." "${_bd}/"
+    fi
+    # 2) whole brand dir (overlays the preset)
+    if [ -n "${BRANDING_DIR}" ]; then
+        [ -d "${BRANDING_DIR}" ] || { err "--branding-dir not found: ${BRANDING_DIR}"; exit 1; }
+        cp -r "${BRANDING_DIR}/." "${_bd}/"
+    fi
+    # 3) individual file overrides (highest precedence). err() is non-fatal, so make
+    #    a bad path FATAL explicitly — otherwise a typo'd asset would ship unbranded.
+    [ -n "${BRAND_WALLPAPER}" ]    && { [ -f "${BRAND_WALLPAPER}" ]    || { err "--wallpaper not found: ${BRAND_WALLPAPER}"; exit 1; };       cp "${BRAND_WALLPAPER}"    "${_bd}/wallpaper.png"; }
+    [ -n "${BRAND_GRUB_BG}" ]      && { [ -f "${BRAND_GRUB_BG}" ]      || { err "--grub-background not found: ${BRAND_GRUB_BG}"; exit 1; };   cp "${BRAND_GRUB_BG}"      "${_bd}/grub-background.png"; }
+    [ -n "${BRAND_LOGIN_BG}" ]     && { [ -f "${BRAND_LOGIN_BG}" ]     || { err "--login-background not found: ${BRAND_LOGIN_BG}"; exit 1; }; cp "${BRAND_LOGIN_BG}"     "${_bd}/login-background.png"; }
+    [ -n "${BRAND_LOGO}" ]         && { [ -f "${BRAND_LOGO}" ]         || { err "--brand-logo not found: ${BRAND_LOGO}"; exit 1; };          cp "${BRAND_LOGO}"         "${_bd}/logo.png"; }
+    [ -n "${BRAND_COLOR_SCHEME}" ] && { [ -f "${BRAND_COLOR_SCHEME}" ] || { err "--color-scheme not found: ${BRAND_COLOR_SCHEME}"; exit 1; }; cp "${BRAND_COLOR_SCHEME}" "${_bd}/colors.colors"; }
+    [ -n "${BRAND_GRUB_THEME}" ]   && { [ -d "${BRAND_GRUB_THEME}" ]   || { err "--grub-theme dir not found: ${BRAND_GRUB_THEME}"; exit 1; }; rm -rf "${_bd}/grub-theme"; cp -r "${BRAND_GRUB_THEME}" "${_bd}/grub-theme"; }
+    # 4) brand.conf — preset's values first (already copied), then identity + accent
+    #    override (later assignments win when sourced).
+    {
+        echo "# appended by build-x86-host-stage4.sh"
+        echo "BRAND_NAME=\"${BRAND}\""
+        echo "BRAND_TITLE=\"${BRAND_TITLE}\""
+        [ -n "${BRAND_ACCENT}" ] && echo "ACCENT_COLOR=\"${BRAND_ACCENT}\""
+    } >> "${_bd}/brand.conf"
+    # stage assets + canonical brand.conf into the image
+    mkdir -p "${SYSROOT}/etc/snapdragon/branding"
+    cp -r "${_bd}/." "${SYSROOT}/etc/snapdragon/branding/" 2>/dev/null || true
+    cp "${_bd}/brand.conf" "${SYSROOT}/etc/snapdragon/brand.conf" 2>/dev/null || true
+    # copy the applier, then bake static pieces into the sysroot FROM THE HOST
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-branding" "${SYSROOT}/usr/sbin/snapdragon-branding"; chmod +x "${SYSROOT}/usr/sbin/snapdragon-branding"
+    SNAPDRAGON_BRANDING_ROOT="${SYSROOT}" SNAPDRAGON_BRANDING_BUILD=1 \
+        bash "${SHARED_SPECS}/usr/sbin/snapdragon-branding" apply "${SYSROOT}/etc/snapdragon/branding" \
+        || warn "branding bake reported a problem (continuing)"
+    if ${BRAND_LOCKED}; then : > "${SYSROOT}/etc/snapdragon/branding.lock"; info "Branding LOCKED (users cannot re-theme this image)"; fi
+    # first-boot hook: re-apply on the real system so the INSTALLED grub.cfg picks up
+    # the background (the build-time host run has no grub.cfg / block devices).
+    cat > "${SYSROOT}/etc/local.d/04-branding.start" <<'HOOK'
+#!/bin/bash
+# First-boot: finish branding on the real system (regenerate grub.cfg with the brand
+# background). Idempotent; self-removes after a clean run.
+[ -x /usr/sbin/snapdragon-branding ] && /usr/sbin/snapdragon-branding apply /etc/snapdragon/branding && rm -f "$0"
+HOOK
+    chmod +x "${SYSROOT}/etc/local.d/04-branding.start"
+    # hand the resolved GRUB background + theme to the live-ISO builder (boot-screen brand)
+    [ -f "${SYSROOT}/boot/grub/snapdragon-background.png" ] && BRAND_GRUB_BG_STAGED="${SYSROOT}/boot/grub/snapdragon-background.png"
+    [ -f "${SYSROOT}/boot/grub/themes/snapdragon/theme.txt" ] && BRAND_GRUB_THEME_STAGED="${SYSROOT}/boot/grub/themes/snapdragon"
+    rm -rf "${_bd}"
+    info "Branding baked: $(ls "${SYSROOT}/etc/snapdragon/branding" 2>/dev/null | tr '\n' ' ')"
+fi
+
+# ── Egress VPN (NetworkManager) staging ──────────────────────────────────────
+# Drop the admin's egress conf into the image + the snapdragon-egress-vpn tool; first
+# boot imports it into NetworkManager (NM must be running, so this is a boot hook, not
+# a build-time bake). Split-tunnel keeps the tailnet + LAN direct. --egress-vpn-locked
+# makes a managed node: autoconnect + user cannot remove (an NM dispatcher re-asserts).
+if ! ${ROLE_CLIENT} && [ -n "${EGRESS_VPN_FILE}" ]; then
+    warn "--egress-vpn given for a non-desktop role (${ROLE}); egress VPN is a desktop/tailnet-node feature — ignoring."
+fi
+if ${ROLE_CLIENT} && [ -n "${EGRESS_VPN_FILE}" ]; then
+    [ -f "${EGRESS_VPN_FILE}" ] || { err "--egress-vpn file not found: ${EGRESS_VPN_FILE}"; exit 1; }
+    banner "Staging egress VPN (locked=${EGRESS_VPN_LOCKED})"
+    mkdir -p "${SYSROOT}/etc/snapdragon/egress"
+    cp "${EGRESS_VPN_FILE}" "${SYSROOT}/etc/snapdragon/egress/$(basename "${EGRESS_VPN_FILE}")"
+    chmod 600 "${SYSROOT}/etc/snapdragon/egress/"* 2>/dev/null || true
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-egress-vpn" "${SYSROOT}/usr/sbin/snapdragon-egress-vpn"; chmod +x "${SYSROOT}/usr/sbin/snapdragon-egress-vpn"
+    if ${EGRESS_VPN_LOCKED}; then : > "${SYSROOT}/etc/snapdragon/egress/locked"; info "Egress VPN LOCKED (managed node: user cannot remove)"; fi
+    # first-boot import (NM is up by the time local.d runs); bring it up if locked.
+    cat > "${SYSROOT}/etc/local.d/05-egress-vpn.start" <<'HOOK'
+#!/bin/bash
+# First-boot: import the egress VPN into NetworkManager. Self-removes ONLY on a
+# successful import, so an NM-not-ready race on first boot retries next boot instead
+# of permanently losing the connection.
+if [ -x /usr/sbin/snapdragon-egress-vpn ]; then
+    if /usr/sbin/snapdragon-egress-vpn import; then
+        [ -e /etc/snapdragon/egress/locked ] && /usr/sbin/snapdragon-egress-vpn up || true
+        rm -f "$0"
+    fi
+fi
+HOOK
+    chmod +x "${SYSROOT}/etc/local.d/05-egress-vpn.start"
+    # When locked, re-assert on every NM connectivity change so a deleted connection
+    # comes back (defense-in-depth alongside the tool's refuse-when-locked).
+    if ${EGRESS_VPN_LOCKED}; then
+        mkdir -p "${SYSROOT}/etc/NetworkManager/dispatcher.d"
+        cat > "${SYSROOT}/etc/NetworkManager/dispatcher.d/90-snapdragon-egress" <<'DISP'
+#!/bin/bash
+# Re-assert the locked egress VPN whenever NetworkManager signals a change.
+[ -x /usr/sbin/snapdragon-egress-vpn ] && /usr/sbin/snapdragon-egress-vpn ensure || true
+DISP
+        chmod +x "${SYSROOT}/etc/NetworkManager/dispatcher.d/90-snapdragon-egress"
+        # polkit: on a managed node, only wheel (admins) may modify/delete SYSTEM NM
+        # connections — so a non-admin user cannot remove the locked egress via nmcli or
+        # the network applet (the tool's refuse-when-locked + the dispatcher re-assert
+        # are the other two layers). enable-disable/network-control stay open so the
+        # user can still use Wi-Fi etc.
+        mkdir -p "${SYSROOT}/etc/polkit-1/rules.d"
+        cat > "${SYSROOT}/etc/polkit-1/rules.d/49-snapdragon-egress-lock.rules" <<'POLKIT'
+// Snapdragon managed egress node: restrict modification/deletion of system-wide
+// NetworkManager connections to administrators (wheel). Baked only with --egress-vpn-locked.
+polkit.addRule(function(action, subject) {
+    if (subject.isInGroup("wheel")) { return polkit.Result.YES; }
+    switch (action.id) {
+        case "org.freedesktop.NetworkManager.settings.modify.system":
+            return polkit.Result.NO;
+    }
+});
+POLKIT
+    fi
+    info "Egress VPN staged: $(basename "${EGRESS_VPN_FILE}") (import at first boot)"
+fi
+
 # First-boot grow policy (read by the growroot service). Default "fill" => the
 # root expands to fill the whole USB/SSD/NVMe on first boot; --grow none keeps the
 # compact flashed layout; --grow <size> caps the root filesystem. A copy is also
@@ -1123,11 +2004,23 @@ if ${ROLE_CLIENT}; then
     echo "${PERSON_ROLE}" > "${SYSROOT}/etc/snapdragon/identity-role"
     { for d in ${DOMAINS//,/ }; do echo "${d}"; done; } > "${SYSROOT}/etc/snapdragon/domains"
     echo "${DESKTOP}"     > "${SYSROOT}/etc/snapdragon/desktop-weight"
+    if ${STANDALONE}; then
+        # STANDALONE desktop: a self-contained personal workstation. Bake the marker
+        # so keys-provision + firstboot SKIP all Casdoor/OIDC/mesh provisioning and a
+        # normal LOCAL USER logs in with the build-set password (no domain/SSO tie).
+        echo "true" > "${SYSROOT}/etc/snapdragon/standalone"
+        info "Standalone desktop: local user '${DEFAULT_USER}', no SSO/mesh/domain tie."
+    fi
+    # Login-side unlock factor markers (enrolled at first login; the device must be
+    # present). Boot-side factors are handled by the installer (LUKS keyslots).
+    [ "${UNLOCK_KEYFILE}" = "login" ] && { echo "keyfile" > "${SYSROOT}/etc/snapdragon/unlock-login"; info "Login factor: keyfile (enroll at first login)."; }
+    [ "${UNLOCK_YUBIKEY}" = "login" ] && { echo "yubikey" > "${SYSROOT}/etc/snapdragon/unlock-login"; info "Login factor: YubiKey/pam_u2f (run pamu2fcfg at first login)."; }
     # superadmin field device (FD-04/FD-06): require a SEPARATE device password set at
     # first boot from a salted+hashed value on the KEYS USB (NEVER baked into the image
     # — mirrors the Casdoor superadmin-seed custody). The marker tells keys-provision's
-    # provision_device_password() to enforce it. See docs/CLIENT-IMAGES.md.
-    if [ "${PERSON_ROLE}" = "superadmin" ]; then
+    # provision_device_password() to enforce it. Standalone has no superadmin/Casdoor
+    # concept, so it never sets this. See docs/CLIENT-IMAGES.md.
+    if [ "${PERSON_ROLE}" = "superadmin" ] && ! ${STANDALONE}; then
         : > "${SYSROOT}/etc/snapdragon/device-password-required"
         info "Client device: superadmin variant — device password REQUIRED at first boot (hash from KEYS, not baked)"
     fi
@@ -1183,7 +2076,10 @@ if ${ROLE_CLIENT}; then
     # thin = LXDE (lxsession: openbox WM + lxpanel + pcmanfm — the turnkey LXDE-lite
     # stack in packages-desktop.list), full = xfce. Both ship an /usr/share/xsessions
     # .desktop of that name.
+    # thin = LXDE, full = xfce, capable = KDE Plasma (X11 session 'plasmax11').
+    # The greeter still lists every installed session, so this is just the default.
     _user_session="LXDE"; [ "${DESKTOP}" = "full" ] && _user_session="xfce"
+    ${CAPABLE} && _user_session="plasmax11"
     mkdir -p "${SYSROOT}/etc/lightdm"
     cat > "${SYSROOT}/etc/lightdm/lightdm.conf" <<LIGHTDM
 [LightDM]
@@ -1191,11 +2087,71 @@ if ${ROLE_CLIENT}; then
 greeter-session=lightdm-gtk-greeter
 user-session=${_user_session}
 LIGHTDM
+    # External media-data device (Steam library + gocryptfs Vaults). Default ON,
+    # configurable + optional. Render the config + install the boot-time detector
+    # that finds the SEPARATE data disk by LABEL or by the marker dirs and mounts
+    # it at ${MEDIA_MOUNT}, then points Steam at ${STEAM_DIR}. See media.conf.
+    if ${MEDIA_DATA}; then
+        mkdir -p "${SYSROOT}/etc/snapdragon" "${SYSROOT}/usr/sbin"
+        render_template "${SHARED_SPECS}/etc/snapdragon/media.conf.tmpl" "${SYSROOT}/etc/snapdragon/media.conf"
+        cp "${SHARED_SPECS}/usr/sbin/snapdragon-media-detect" "${SYSROOT}/usr/sbin/snapdragon-media-detect"; chmod +x "${SYSROOT}/usr/sbin/snapdragon-media-detect"
+        cp "${SHARED_SPECS}/etc/init.d/snapdragon-media-detect" "${SYSROOT}/etc/init.d/snapdragon-media-detect"; chmod +x "${SYSROOT}/etc/init.d/snapdragon-media-detect"
+        SVCS+=(snapdragon-media-detect)
+        info "Media-data: /media auto-detect + Steam->${STEAM_DIR} + Vaults (gocryptfs) wired (steam=${STEAM_DELIVERY})"
+    fi
 else
     SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall containerd kubelet auditd local)
     ${ROLE_HEADSCALE} && SVCS+=(headscale)
 fi
 ${SKIP_MESH} || ${SKIP_TAILSCALE} || SVCS+=(tailscaled)
+
+# ── Network/host security stack (Squid+Privoxy desktops / Snort all / AIDE opt-in) ──
+# Resolve the proxy-stack default once (auto => desktops only) — used here for SVCS and
+# later for the PKGS additions.
+WANT_PROXY_STACK=false
+case "${PROXY_STACK}" in
+    true)  WANT_PROXY_STACK=true ;;
+    auto)  ${ROLE_CLIENT} && WANT_PROXY_STACK=true ;;
+esac
+if ${WANT_PROXY_STACK}; then
+    mkdir -p "${SYSROOT}/etc/squid" "${SYSROOT}/etc/privoxy" "${SYSROOT}/etc/firefox/policies" \
+             "${SYSROOT}/var/cache/squid" "${SYSROOT}/var/log/privoxy"
+    cp "${SHARED_SPECS}/etc/squid/squid.conf"               "${SYSROOT}/etc/squid/squid.conf"
+    cp "${SHARED_SPECS}/etc/privoxy/config"                 "${SYSROOT}/etc/privoxy/config"
+    cp "${SHARED_SPECS}/etc/firefox/policies/policies.json" "${SYSROOT}/etc/firefox/policies/policies.json"
+    SVCS+=(squid privoxy)
+    info "Proxy stack staged: Squid(127.0.0.1:3128) <- Privoxy(127.0.0.1:8118) <- Firefox policy"
+fi
+if ${SNORT_IDS}; then
+    mkdir -p "${SYSROOT}/etc/snort/rules" "${SYSROOT}/var/log/snort"
+    cp "${SHARED_SPECS}/etc/snort/snort.conf"        "${SYSROOT}/etc/snort/snort.conf"
+    cp "${SHARED_SPECS}/etc/snort/rules/local.rules" "${SYSROOT}/etc/snort/rules/local.rules"
+    SVCS+=(snort)
+    info "Snort IDS staged (default-on; alert mode on HOME_NET)"
+fi
+if ${WANT_AIDE}; then
+    mkdir -p "${SYSROOT}/etc/aide" "${SYSROOT}/var/lib/aide"
+    cp "${SHARED_SPECS}/etc/aide/aide.conf" "${SYSROOT}/etc/aide/aide.conf"
+    # First boot: baseline the REAL installed system, then a daily integrity-check cron.
+    cat > "${SYSROOT}/etc/local.d/06-aide-init.start" <<'HOOK'
+#!/bin/bash
+# First-boot: initialize the AIDE database against the installed system. Self-removes.
+if command -v aide >/dev/null 2>&1 && [ ! -s /var/lib/aide/aide.db ]; then
+    aide --init --config=/etc/aide/aide.conf && \
+        cp -f /var/lib/aide/aide.db.new /var/lib/aide/aide.db && rm -f "$0"
+fi
+HOOK
+    chmod +x "${SYSROOT}/etc/local.d/06-aide-init.start"
+    mkdir -p "${SYSROOT}/etc/cron.daily"
+    cat > "${SYSROOT}/etc/cron.daily/aide-check" <<'CRON'
+#!/bin/bash
+# Daily AIDE integrity check; output goes to root's mail / cron log.
+[ -s /var/lib/aide/aide.db ] && aide --check --config=/etc/aide/aide.conf
+CRON
+    chmod +x "${SYSROOT}/etc/cron.daily/aide-check"
+    info "AIDE staged (opt-in): DB init at first boot + daily aide --check cron"
+fi
+
 # Domain-registry -> brand-repo bridge (#4, DEFAULT-OFF optional service): link the
 # reconcile agent ONLY when `domain-registry-bridge` is selected AND this is a k8s
 # node (a CLIENT desktop is not a cluster member). Unselected => never linked + no
@@ -1321,6 +2277,29 @@ mount_chroot() {
         mount --bind "${scratch}" "${SYSROOT}/var/tmp/portage" && PORTAGE_SCRATCH_MOUNTED=true
         info "Build scratch -> non-eCryptfs xfs ${scratch} (eCryptfs 143-char filename-limit workaround)"
     fi
+    # Reuse a Gentoo distfiles cache from a mounted drive (skip re-downloads / build
+    # offline). Search --distdir, then the top level of any /media/* drive, then the
+    # mounted portage scratch. Exposed READ-ONLY via PORTAGE_RO_DISTDIRS so a cache on
+    # a read-only USB still works (new sources still download into the normal DISTDIR).
+    DISTFILES_MOUNTED=false
+    local dd=""
+    if [ -n "${DISTDIR_SRC}" ] && [ -d "${DISTDIR_SRC}" ]; then
+        dd="${DISTDIR_SRC}"
+    else
+        for cand in /media/distfiles /media/*/distfiles /media/*/portage/distfiles \
+                    /var/tmp/portage/distfiles; do
+            [ -d "${cand}" ] && { dd="${cand}"; break; }
+        done
+    fi
+    if [ -n "${dd}" ]; then
+        mkdir -p "${SYSROOT}/var/cache/distfiles-ro"
+        if mount --bind "${dd}" "${SYSROOT}/var/cache/distfiles-ro"; then
+            DISTFILES_MOUNTED=true
+            grep -q 'PORTAGE_RO_DISTDIRS' "${SYSROOT}/etc/portage/make.conf" 2>/dev/null \
+                || echo 'PORTAGE_RO_DISTDIRS="/var/cache/distfiles-ro"' >> "${SYSROOT}/etc/portage/make.conf"
+            info "Distfiles: reusing cache ${dd} via PORTAGE_RO_DISTDIRS (read-only; no re-downloads)"
+        fi
+    fi
 }
 umount_chroot() {
     ${PORTAGE_SCRATCH_MOUNTED:-false} && umount -l "${SYSROOT}/var/tmp/portage" 2>/dev/null || true
@@ -1334,6 +2313,20 @@ mount_chroot
 # ONLY for GPU roles (be+gpu / omnibus) so pki/be/fe images stay slim.
 PKG_LISTS=("${SPECS_DIR}/portage/packages.list")
 ${GPU} && PKG_LISTS+=("${SPECS_DIR}/portage/packages-gpu.list")
+# Proprietary NVIDIA driver atoms (x11-drivers/nvidia-drivers [+ CUDA] — see
+# packages-gpu-nvidia.list). The CUDA atom is in a separate list so --nvidia-cuda
+# is opt-in even within the proprietary stack.
+if ${NVIDIA_PROPRIETARY}; then
+    PKG_LISTS+=("${SPECS_DIR}/portage/packages-gpu-nvidia.list")
+    ${NVIDIA_CUDA} && [ -f "${SPECS_DIR}/portage/packages-gpu-nvidia-cuda.list" ] \
+        && PKG_LISTS+=("${SPECS_DIR}/portage/packages-gpu-nvidia-cuda.list")
+fi
+# AMD-PRO: open amdgpu display + the proprietary AMDGPU-PRO Vulkan/OpenCL stack.
+${AMD_PRO} && [ -f "${SPECS_DIR}/portage/packages-gpu-amd-pro.list" ] \
+    && PKG_LISTS+=("${SPECS_DIR}/portage/packages-gpu-amd-pro.list")
+# INTEL-PRO: open Intel display + the Intel compute/media stack.
+${INTEL_PRO} && [ -f "${SPECS_DIR}/portage/packages-gpu-intel-pro.list" ] \
+    && PKG_LISTS+=("${SPECS_DIR}/portage/packages-gpu-intel-pro.list")
 if ${ROLE_CLIENT}; then
     # Client desktop stack (Xorg/lightdm/openbox/NM-applet/browser/fonts/firewalld/
     # acpid). NOTE: the shared packages.list still carries the k8s atoms
@@ -1343,11 +2336,57 @@ if ${ROLE_CLIENT}; then
     PKG_LISTS+=("${SPECS_DIR}/portage/packages-desktop.list")
     [ "${DESKTOP}" = "full" ] && [ -f "${SPECS_DIR}/portage/packages-desktop-full.list" ] \
         && PKG_LISTS+=("${SPECS_DIR}/portage/packages-desktop-full.list")
+    # --capable / standalone-thick: the most-capable Plasma workstation set
+    # (KDE Plasma + apps + office + media + dev), curated from this build host's world.
+    ${CAPABLE} && [ -f "${SPECS_DIR}/portage/packages-desktop-capable.list" ] \
+        && PKG_LISTS+=("${SPECS_DIR}/portage/packages-desktop-capable.list")
+    # The media-data feature pulls gocryptfs (Vaults) + udisks2 + flatpak.
+    ${MEDIA_DATA} && [ -f "${SPECS_DIR}/portage/packages-media-data.list" ] \
+        && PKG_LISTS+=("${SPECS_DIR}/portage/packages-media-data.list")
+    # Native Steam (games-util/steam-launcher) for the gaming desktops only.
+    ${STEAM_NATIVE} && [ -f "${SPECS_DIR}/portage/packages-steam-native.list" ] \
+        && PKG_LISTS+=("${SPECS_DIR}/portage/packages-steam-native.list")
 fi
+# --seed-packages-from FILE: append a package list seeded from a running system
+# ("copy all installed programs"). Appended LAST so it augments the curated set.
+[ -n "${SEED_PACKAGES_FROM}" ] && PKG_LISTS+=("${SEED_PACKAGES_FROM}")
 PKGS=$(grep -hv '^\s*#' "${PKG_LISTS[@]}" | grep -v '^\s*$' | tr '\n' ' ')
-${ROLE_CLIENT} && info "Client desktop role: including desktop stack (packages-desktop.list, weight=${DESKTOP})"
-${GPU} && info "GPU role: including Mesa/Vulkan stack (packages-gpu.list)" \
+# YubiKey/FIDO2 as a LOGIN factor needs the PAM module on the image (enrollment —
+# `pamu2fcfg` — happens at first login since the key must be present).
+[ "${UNLOCK_YUBIKEY}" = "login" ] && PKGS="${PKGS} sys-auth/pam-u2f"
+# Per-user ecryptfs home (layered on the LUKS root) needs the userspace tools + the
+# kernel keyring helper; the PAM module ships with ecryptfs-utils.
+${HOME_ENCRYPTED} && PKGS="${PKGS} sys-fs/ecryptfs-utils sys-apps/keyutils"
+# Dockerized stack / mesh-node seeding needs a container runtime + compose in the image.
+${WANT_DOCKER} && PKGS="${PKGS} app-containers/docker app-containers/docker-compose"
+# Graphical Qt installer (Calamares) — pulls KPMcore for partitioning. Only on a GPU
+# desktop role that already ships Qt6 (thick); harmless atom add otherwise.
+${WANT_CALAMARES} && PKGS="${PKGS} app-admin/calamares"
+# Egress VPN userspace: WireGuard (.conf) is native to NetworkManager + the kernel
+# (wireguard-tools for `wg`); OpenVPN (.ovpn) needs the NM OpenVPN plugin + openvpn.
+if [ -n "${EGRESS_VPN_FILE}" ]; then
+    case "${EGRESS_VPN_FILE}" in
+        *.ovpn) PKGS="${PKGS} net-vpn/networkmanager-openvpn net-vpn/openvpn" ;;
+        *)      PKGS="${PKGS} net-vpn/wireguard-tools" ;;
+    esac
+fi
+# Network/host security stack: Squid+Privoxy (desktops), Snort (all), AIDE (opt-in).
+# WANT_PROXY_STACK was resolved at the SVCS step above.
+${WANT_PROXY_STACK} && PKGS="${PKGS} net-proxy/squid net-proxy/privoxy" && info "Proxy stack: Squid + Privoxy (Firefox wired to 127.0.0.1:8118 -> :3128)"
+${SNORT_IDS}        && PKGS="${PKGS} net-analyzer/snort" && info "Snort IDS: default-on (disable with --no-snort)"
+${WANT_AIDE}        && PKGS="${PKGS} app-forensics/aide" && info "AIDE file-integrity IDS: enabled (DB initialized at first boot)"
+# GPU k8s nodes with the proprietary NVIDIA driver: the container toolkit provides
+# /usr/bin/nvidia-container-runtime so containerd can pass the GPU to pods (the
+# edge-AI inference service + GPU voice/video). NOT for client desktops (no k8s).
+if ${GPU} && [ "${GPU_DRIVER}" = "nvidia" ] && ! ${ROLE_CLIENT}; then
+    PKGS="${PKGS} app-containers/nvidia-container-toolkit"
+    info "NVIDIA container toolkit: GPU pods schedule (nvidia.com/gpu + RuntimeClass nvidia)"
+fi
+${EDGE_AI} && info "Edge-AI inference NODE: serving an OpenAI-compatible model API to the mesh (runtime=${EDGE_AI_RUNTIME}; k8s + tailnet)"
+${ROLE_CLIENT} && info "Client desktop role: including desktop stack (packages-desktop.list, weight=${DESKTOP}${CAPABLE:+ +capable})"
+${GPU} && info "GPU role: including Mesa/Vulkan stack (packages-gpu.list)${NVIDIA_PROPRIETARY:+ + NVIDIA proprietary}" \
         || info "Headless role: skipping Mesa/Vulkan stack"
+[ -n "${SEED_PACKAGES_FROM}" ] && info "Seed packages appended from: ${SEED_PACKAGES_FROM}"
 
 # A stage4 keeps the (already-built, hardened) seed toolchain — we do NOT want
 # @world to drag in a brand-new gcc/glibc/binutils (e.g. a bleeding-edge
@@ -1386,6 +2425,19 @@ GO_PROCS=$(( JOBS / 7 )); [ "${GO_PROCS}" -lt 2 ] && GO_PROCS=2
 # into the chroot heredoc on the host): clients assert the desktop stack, nodes the
 # k8s stack. The base (grub-install dracut parted jq nmcli) is common to both.
 if ${ROLE_CLIENT}; then SNAP_ROLE_BINS="Xorg lightdm openbox"; else SNAP_ROLE_BINS="kubelet kubeadm containerd"; fi
+# Native Steam needs the steam-overlay enabled + synced inside the chroot BEFORE the
+# payload emerge resolves games-util/steam-launcher. Use eselect-repository so we
+# rely on Gentoo's canonical repositories.xml entry rather than hardcoding a URL.
+# Non-fatal: if the overlay can't sync (offline build), Steam just won't merge and
+# the operator can rebuild with --steam flatpak. Expanded into the heredoc below.
+STEAM_OVERLAY_SETUP=""
+if ${STEAM_NATIVE}; then
+    STEAM_OVERLAY_SETUP='
+echo "[build-x86] Native Steam: enabling + syncing the steam-overlay"
+emerge --noreplace --quiet-build app-eselect/eselect-repository 2>/dev/null || emerge --quiet-build app-eselect/eselect-repository || true
+eselect repository enable steam-overlay 2>/dev/null || true
+emaint sync -r steam-overlay 2>/dev/null || emerge --sync steam-overlay 2>/dev/null || echo "[build-x86] WARN: steam-overlay sync failed; native Steam may not resolve (rebuild with --steam flatpak)"'
+fi
 chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
 # NOTE: MAKEOPTS is NOT exported here on purpose. It comes from the chroot's
 # make.conf (rendered "-j${JOBS} -l${JOBS}"). An exported MAKEOPTS env var takes
@@ -1417,6 +2469,7 @@ if [ ! -d /var/db/repos/gentoo/metadata ] && ! mountpoint -q /var/db/repos/gento
     emerge-webrsync
 fi
 emerge --oneshot --update --newuse sys-apps/baselayout || true
+${STEAM_OVERLAY_SETUP}
 # Apply our profile/USE across @world without churning the toolchain.
 emerge --update --deep --newuse --keep-going ${EMERGE_EXCLUDE} @world \
     || echo "[build-x86] WARN: @world had package failures (--keep-going); continuing"
@@ -1499,6 +2552,12 @@ else
     if ${GPU}; then
         cat "${SPECS_DIR}/kernel/gpu.config" >> "${SYSROOT}/tmp/k.config"
         info "Kernel: appending GPU/DRM fragment (gpu.config)"
+        # Proprietary NVIDIA out-of-tree kmod: ensure CONFIG_MODULES + that nouveau
+        # stays modular (not builtin, so the blob owns the GPU) + DRM/KMS bits.
+        if ${NVIDIA_PROPRIETARY} && [ -f "${SPECS_DIR}/kernel/nvidia.config" ]; then
+            cat "${SPECS_DIR}/kernel/nvidia.config" >> "${SYSROOT}/tmp/k.config"
+            info "Kernel: appending NVIDIA proprietary fragment (nvidia.config)"
+        fi
     else
         info "Kernel: headless (no AMD/Intel/Nouveau DRM drivers)"
     fi
@@ -1508,6 +2567,26 @@ else
     if ${ROLE_CLIENT}; then
         cat "${SPECS_DIR}/kernel/desktop.config" >> "${SYSROOT}/tmp/k.config"
         info "Kernel: appending desktop fragment (desktop.config) for client role ${ROLE}"
+        # E-INK / e-paper display support (mainline DRM + FB controllers): RePaper
+        # (Pervasive Displays), Metronome, Broadsheet, AUO K190x — built as modules
+        # so they cost nothing until an e-ink panel is attached.
+        if ${HOME_ENCRYPTED} && [ -f "${SPECS_DIR}/kernel/ecryptfs.config" ]; then
+            cat "${SPECS_DIR}/kernel/ecryptfs.config" >> "${SYSROOT}/tmp/k.config"
+            info "Kernel: appending ecryptfs fragment (CONFIG_ECRYPT_FS) for the per-user home layer"
+        fi
+        # WireGuard egress VPN needs the in-kernel module (NM drives it natively).
+        case "${EGRESS_VPN_FILE}" in
+            *.ovpn) : ;;   # OpenVPN is userspace (tun), no kernel fragment needed
+            "")     : ;;
+            *) if [ -f "${SPECS_DIR}/kernel/wireguard.config" ]; then
+                   cat "${SPECS_DIR}/kernel/wireguard.config" >> "${SYSROOT}/tmp/k.config"
+                   info "Kernel: appending WireGuard fragment (CONFIG_WIREGUARD) for the egress VPN"
+               fi ;;
+        esac
+        if [ -f "${SPECS_DIR}/kernel/eink.config" ]; then
+            cat "${SPECS_DIR}/kernel/eink.config" >> "${SYSROOT}/tmp/k.config"
+            info "Kernel: appending e-ink display fragment (eink.config)"
+        fi
         # chromebook (coreboot-UEFI target, ADR-16): on top of the generic desktop
         # fragment, pull the chromebook-specific peripheral quirks (I2C-attached
         # touchpads, the I2S audio codecs + jack detect, EC backlight/charger).
@@ -1516,7 +2595,14 @@ else
             info "Kernel: appending chromebook quirks fragment (chromebook.config)"
         fi
     fi
+    # --kernel-builtin: stage the keep-as-module denylist so the in-chroot replay can
+    # turn `module` -> built-in (=y) for everything else + sweep base =m -> =y.
+    if ${KERNEL_BUILTIN} && [ -f "${SPECS_DIR}/kernel/keep-as-module.list" ]; then
+        cp "${SPECS_DIR}/kernel/keep-as-module.list" "${SYSROOT}/tmp/keep-module.list"
+        info "Kernel: --kernel-builtin set — compiling in-tree config built-in (=y) except keep-as-module.list"
+    fi
     chroot "${SYSROOT}" /bin/bash -eo pipefail <<CHROOT
+KBUILTIN=${KERNEL_BUILTIN}
 # (Re)ensure the hardened kernel sources are installed and /usr/src/linux is set
 # — independent of whether the main stage4 emerge completed.
 if [ ! -e /usr/src/linux/Makefile ]; then
@@ -1529,12 +2615,32 @@ if [ ! -e /usr/src/linux/Makefile ]; then
 fi
 cd /usr/src/linux
 make defconfig
+# Helper: is CONFIG_SYMBOL on the keep-as-module denylist? (only consulted for builtin)
+_keep_module() { [ -f /tmp/keep-module.list ] && grep -qxF "\$1" /tmp/keep-module.list; }
 while IFS= read -r line; do
     [[ "\${line}" =~ ^[[:space:]]*# ]] && continue
     [[ -z "\${line// }" ]] && continue
     read -r action rest <<< "\${line}"
+    # --kernel-builtin: turn fragment 'module CONFIG_X' into built-in (=y) unless X is
+    # on the keep-as-module denylist (out-of-tree / firmware / load-order cases).
+    if [ "\${KBUILTIN}" = true ] && [ "\${action}" = module ] && ! _keep_module "\${rest}"; then
+        action=enable
+    fi
     eval "scripts/config --\${action} \${rest}"
 done < /tmp/k.config
+# --kernel-builtin sweep: promote the base defconfig's remaining =m symbols to =y too,
+# except the denylist. CONFIG_MODULES stays =y (out-of-tree nvidia.ko depends on it).
+# olddefconfig then drops any =y that can't satisfy deps, so this is safe.
+if [ "\${KBUILTIN}" = true ]; then
+    nmod=0
+    for sym in \$(grep -E '^CONFIG_[A-Z0-9_]+=m\$' .config | cut -d= -f1); do
+        [ "\${sym}" = CONFIG_MODULES ] && continue
+        _keep_module "\${sym}" && continue
+        scripts/config --enable "\${sym}"; nmod=\$((nmod+1))
+    done
+    scripts/config --enable CONFIG_MODULES   # never lose module loading (nvidia.ko)
+    echo "[build-x86] --kernel-builtin: promoted \${nmod} modules to built-in (kept denylist + CONFIG_MODULES)"
+fi
 make olddefconfig
 # Refuse to ship a kernel that silently lost its hardening (e.g. a symbol that
 # olddefconfig pruned for an unmet dep). Stable, long-standing KSPP/LSM symbols.
@@ -1558,6 +2664,15 @@ done
 # stop. Keep this list IDENTICAL (modulo shell-var escaping) to the
 # build-rpi5-stage4.sh mirror and in sync with
 # tests/scripts/test-x86-kernel-net-symbols.sh (which asserts guard==fragment).
+# This guard asserts the FULL k8s Service-networking surface (kube-proxy xtables /
+# nft NAT / IPVS / CNI overlay / cgroup). It is REQUIRED for a cluster node, but a
+# standalone DESKTOP (ROLE_K8S=none) is not a k8s node — it doesn't run kube-proxy
+# and legitimately has no k8s fragment, so olddefconfig prunes the legacy xtables
+# leaves (e.g. IP_NF_MANGLE, whose legacy parent isn't enabled on the desktop). Skip
+# the k8s assertion for non-k8s roles; firewalld (nftables) + docker get the symbols
+# they need from hardened-k8s.config regardless, and the hardening/LSM guards below
+# still run for every role.
+if [ "${ROLE_K8S}" != none ]; then
 for must in CONFIG_NETFILTER_XTABLES \
             CONFIG_NETFILTER_XT_MATCH_ADDRTYPE CONFIG_NETFILTER_XT_MATCH_COMMENT \
             CONFIG_NETFILTER_XT_MATCH_CONNTRACK CONFIG_NETFILTER_XT_MATCH_MARK \
@@ -1582,6 +2697,9 @@ for must in CONFIG_NETFILTER_XTABLES \
             CONFIG_POSIX_MQUEUE; do
     grep -q "^\${must}=y" .config || { echo "[build-x86] ERROR: k8s node kernel option \${must} not enabled after olddefconfig (Service/kube-proxy/CNI/container-runtime would be impaired)"; exit 1; }
 done
+else
+    echo "[build-x86] Standalone/non-k8s role (ROLE_K8S=none): skipping the k8s Service-networking kernel guard"
+fi
 # SELinux only activates if CONFIG_LSM is a clean, well-formed string. lockdown is
 # listed FIRST so it engages before any other LSM; a stray quote or wrong order here
 # would silently ship SELinux or lockdown DISABLED. Assert the exact intended value.
@@ -1595,8 +2713,12 @@ make install
 # builder writes. The live ISO builds its own initramfs-live.img separately.
 KVER="\$(make -s kernelrelease 2>/dev/null || ls /lib/modules | sort -V | tail -1)"
 if command -v dracut >/dev/null; then
+    # --add crypt: the LUKS2 root the installer can lay down is unlocked
+    # from /etc/crypttab + the rd.luks cmdline in this initramfs. Harmless on a
+    # plaintext-root image (no crypttab → no unlock attempted). See dracut.conf.d.
     dracut --force --no-hostonly \
-        --add-drivers "ext4 vfat nvme ahci sd_mod usb_storage uas virtio_blk virtio_pci virtio_net" \
+        --add crypt \
+        --add-drivers "ext4 vfat nvme ahci sd_mod usb_storage uas virtio_blk virtio_pci virtio_net dm_crypt" \
         --kver "\${KVER}" "/boot/initramfs-\${KVER}.img" \
         || echo "[build-x86] WARN: dracut (disk initramfs) failed; the .img may not boot"
 else
@@ -1608,7 +2730,8 @@ fi
 CMDLINE="\$(. /etc/default/grub 2>/dev/null; printf '%s' "\${GRUB_CMDLINE_LINUX:-lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1}")"
 if command -v dracut >/dev/null && dracut --help 2>/dev/null | grep -q -- '--uefi'; then
     dracut --force --no-hostonly --uefi \
-        --add-drivers "ext4 vfat nvme ahci sd_mod usb_storage uas virtio_blk virtio_pci virtio_net" \
+        --add crypt \
+        --add-drivers "ext4 vfat nvme ahci sd_mod usb_storage uas virtio_blk virtio_pci virtio_net dm_crypt" \
         --kernel-cmdline "\${CMDLINE}" \
         --kver "\${KVER}" "/boot/snapdragon-unsigned.efi" \
         && echo "[build-x86] UKI built: /boot/snapdragon-unsigned.efi" \
@@ -1629,7 +2752,30 @@ SBDIR="${WORK_DIR}/secureboot"
 SBKEY="${SBDIR}/sb.key"; SBCRT="${SBDIR}/sb.crt"; SBCER="${SBDIR}/sb.cer"
 UKI_UNSIGNED="${SYSROOT}/boot/snapdragon-unsigned.efi"
 UKI_SIGNED="${SYSROOT}/boot/snapdragon.efi"
-if command -v sbsign >/dev/null 2>&1 && [ -f "${UKI_UNSIGNED}" ]; then
+# A KEYS-USB / explicit signing key (--keys-usb, --secureboot-key/-cert) lets the
+# UKI be signed with the key ALREADY ENROLLED in this host's firmware, so the
+# reinstalled system boots under Secure Boot without re-enrolling. We stage that
+# key/cert into SBDIR (converting a DER cert to PEM for sbsign) before signing.
+if [ -n "${SECUREBOOT_KEY}" ] && [ -f "${SECUREBOOT_KEY}" ]; then
+    mkdir -p "${SBDIR}"
+    cp "${SECUREBOOT_KEY}" "${SBKEY}"; chmod 600 "${SBKEY}"
+    if [ -n "${SECUREBOOT_CERT}" ] && [ -f "${SECUREBOOT_CERT}" ]; then
+        case "${SECUREBOOT_CERT}" in
+            *.der|*.cer) openssl x509 -inform DER -in "${SECUREBOOT_CERT}" -out "${SBCRT}" 2>/dev/null || cp "${SECUREBOOT_CERT}" "${SBCRT}" ;;
+            *)           cp "${SECUREBOOT_CERT}" "${SBCRT}" ;;
+        esac
+    elif openssl rsa -in "${SBKEY}" -pubout >/dev/null 2>&1; then
+        # No cert given: self-sign one from the provided key so sbsign has an x509.
+        openssl req -new -x509 -key "${SBKEY}" -sha256 -days 3650 \
+            -subj "/O=${ORG}/CN=Snapdragon Secure Boot ${BRAND} (keys-usb)/" -out "${SBCRT}" 2>/dev/null || true
+    fi
+    [ -f "${SBCRT}" ] && openssl x509 -inform PEM -outform DER -in "${SBCRT}" -out "${SBCER}" 2>/dev/null || true
+    info "Secure Boot: signing UKI with the provided KEYS key (${SECUREBOOT_KEY})"
+fi
+if ! ${SECURE_BOOT}; then
+    warn "Secure Boot DISABLED (--no-secure-boot): UKI left unsigned (chain won't verify)."
+    [ -f "${UKI_UNSIGNED}" ] && { cp "${UKI_UNSIGNED}" "${UKI_SIGNED}"; rm -f "${UKI_UNSIGNED}"; }
+elif command -v sbsign >/dev/null 2>&1 && [ -f "${UKI_UNSIGNED}" ]; then
     mkdir -p "${SBDIR}"
     if [ ! -f "${SBKEY}" ]; then
         info "Generating Snapdragon org Secure Boot signing key (RSA-4096, 10 yr)"
@@ -1676,10 +2822,16 @@ if ! ${SKIP_CLEAN}; then
         sed -i '/^#includedir \/etc\/sudoers.d # build-added$/d' "${SYSROOT}/etc/sudoers"
     fi
     # Build-artifact bloat: binpkgs (~2.4 GiB), distfiles, docs, tmp.
+    # CACHED ISO (--cached) KEEPS the binpkg cache (+ distfiles) so the installed
+    # system can rebuild/extend packages OFFLINE and reinstall fast; UNCACHED prunes
+    # them for a lean image (default). docs/man/tmp are always pruned.
     rm -rf "${SYSROOT}"/usr/share/{doc,man,info}/* \
-           "${SYSROOT}"/var/cache/distfiles/* \
-           "${SYSROOT}"/var/cache/binpkgs/* \
            "${SYSROOT}"/var/tmp/* "${SYSROOT}"/tmp/* 2>/dev/null || true
+    if ${ISO_CACHED:-false}; then
+        info "CACHED image: keeping the binpkg cache (+ distfiles) for offline rebuild/fast reinstall"
+    else
+        rm -rf "${SYSROOT}"/var/cache/distfiles/* "${SYSROOT}"/var/cache/binpkgs/* 2>/dev/null || true
+    fi
 
     # Locale data: keep en/en_US/POSIX, prune the rest (~50 MiB of LC archives).
     find "${SYSROOT}"/usr/share/locale -maxdepth 1 -mindepth 1 -type d \
@@ -1808,9 +2960,17 @@ build_img() {
     payload_mib="$(du -sxBM "${SYSROOT}" 2>/dev/null | cut -f1 | tr -dc '0-9')"
     cap_mib=$(( ROOT_MiB * 93 / 100 ))   # ext4 metadata + 5% reserved ≈ 7% overhead
     if [ -n "${payload_mib}" ] && [ "${payload_mib}" -gt "${cap_mib}" ]; then
-        err "Payload ${payload_mib} MiB exceeds the ${ROOT_MiB} MiB root partition (usable ~${cap_mib} MiB)."
-        err "Re-run with a bigger root, e.g.  --img-size $(( (payload_mib * 115 / 100 / 1024 + 1) * 1024 ))"
-        exit 1
+        # AUTO-GROW (was a fatal error): bump the compact root to fit the payload +
+        # ~15% headroom, aligned to a GiB. growroot still resizes to the real disk on
+        # first boot, so a larger compact .img is harmless — far better than failing
+        # the whole build on a payload-size surprise (a --capable-heavy or seed/
+        # pollution-bloated desktop). An explicit --img-size is grown too (fitting the
+        # payload beats erroring); pass a bigger one if you want extra slack.
+        local new_root=$(( (payload_mib * 115 / 100 / 1024 + 1) * 1024 ))
+        warn "Payload ${payload_mib} MiB exceeds the ${ROOT_MiB} MiB root (usable ~${cap_mib} MiB) — auto-growing the .img root to ${new_root} MiB (growroot still resizes on boot)."
+        ROOT_MiB="${new_root}"
+        cap_mib=$(( ROOT_MiB * 93 / 100 ))
+        img_size_mib=$(( 1 + 512 + ROOT_MiB + 1 ))
     fi
     info "Pre-flight: payload ${payload_mib:-?} MiB fits the ${ROOT_MiB} MiB root (usable ~${cap_mib} MiB)"
 
@@ -2118,36 +3278,120 @@ CHROOT
         mkdir -p "${ISO_DIR}/boot/grub" "${ISO_DIR}/LiveOS"
         cp "${VMLINUZ}" "${ISO_DIR}/boot/vmlinuz"
         cp "${SYSROOT}/boot/initramfs-live.img" "${ISO_DIR}/boot/initramfs.img"
+        # Brand the live/installer GRUB boot screen with the same background + full GRUB
+        # theme baked into the image, so the boot -> login -> desktop chain is consistent.
+        [ -n "${BRAND_GRUB_BG_STAGED:-}" ] && cp "${BRAND_GRUB_BG_STAGED}" "${ISO_DIR}/boot/grub/snapdragon-background.png" 2>/dev/null || true
+        if [ -n "${BRAND_GRUB_THEME_STAGED:-}" ] && [ -d "${BRAND_GRUB_THEME_STAGED}" ]; then
+            mkdir -p "${ISO_DIR}/boot/grub/themes/snapdragon"
+            cp -r "${BRAND_GRUB_THEME_STAGED}/." "${ISO_DIR}/boot/grub/themes/snapdragon/" 2>/dev/null || true
+        fi
         rm -f "${ISO_DIR}/LiveOS/squashfs.img"
-        info "Squashing rootfs (this can take a while)..."
         if command -v mksquashfs >/dev/null; then
+            # The build host's mksquashfs may lack zstd/xz (USE-gated). A hard-coded
+            # -comp zstd then FAILS and (previously) silently shipped a rootfs-less
+            # ISO. Probe for the best compressor it actually supports (zstd>xz>lz4>gzip).
+            sq_comp=gzip; _sqp="$(mktemp -d)"
+            for c in zstd xz lz4 lzo gzip; do
+                if mksquashfs "${_sqp}" /tmp/.sqprobe.sqfs -comp "$c" -noappend -quiet >/dev/null 2>&1; then sq_comp="$c"; break; fi
+            done
+            rm -rf "${_sqp}" /tmp/.sqprobe.sqfs
+            info "Squashing rootfs with -comp ${sq_comp} (this can take a while)..."
             mksquashfs "${SYSROOT}" "${ISO_DIR}/LiveOS/squashfs.img" \
-                -comp zstd -e proc sys dev run var/cache/distfiles home/magus >/dev/null
+                -comp "${sq_comp}" -e proc sys dev run var/cache/distfiles home/magus >/dev/null \
+                || { err "mksquashfs failed — cannot build a bootable live ISO"; exit 1; }
         else
             # squashfs-tools-ng fallback: same excludes, xz (kernel has SQUASHFS_XZ).
+            info "Squashing rootfs with tar2sqfs -c xz (this can take a while)..."
             tar -C "${SYSROOT}" --numeric-owner \
                 --exclude='./proc' --exclude='./sys' --exclude='./dev' \
                 --exclude='./run' --exclude='./var/cache/distfiles' --exclude='./home/magus' \
-                -cpf - . | tar2sqfs -q -c xz -j "${JOBS}" "${ISO_DIR}/LiveOS/squashfs.img"
+                -cpf - . | tar2sqfs -q -c xz -j "${JOBS}" "${ISO_DIR}/LiveOS/squashfs.img" \
+                || { err "tar2sqfs failed — cannot build a bootable live ISO"; exit 1; }
         fi
+        # Sanity: a real desktop rootfs squashes to GiBs; a tiny image means the squash
+        # silently failed (unsupported compressor, bad excludes) — refuse to ship a
+        # live ISO that boots to nothing (this is exactly the 111 MiB rootfs-less ISO).
+        sq_mib=$(( $(stat -c%s "${ISO_DIR}/LiveOS/squashfs.img" 2>/dev/null || echo 0) / 1048576 ))
+        if [ "${sq_mib}" -lt 200 ]; then
+            err "live squashfs is only ${sq_mib} MiB — the rootfs was not captured; not shipping a broken live ISO."; exit 1
+        fi
+        info "Live rootfs squashed: ${sq_mib} MiB (-comp ${sq_comp:-xz})"
         # Unify the cmdline with the .img: source GRUB_CMDLINE_LINUX from the same
         # grub defaults (full KSPP/LSM/audit/cgroup hardening), not a short literal.
         LIVE_CMDLINE="$(. "${SPECS_DIR}/etc/default/grub"; printf '%s' "${GRUB_CMDLINE_LINUX:-lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1}")"
-        cat > "${ISO_DIR}/boot/grub/grub.cfg" <<EOF
-set timeout=5
-set default=0
-menuentry "${BRAND_TITLE} ${ROLE} (live)" {
-    linux /boot/vmlinuz root=live:CDLABEL=SNAPDRAGON_LIVE rd.live.dir=/LiveOS rd.live.squashimg=squashfs.img console=tty0 ${LIVE_CMDLINE}
-    initrd /boot/initramfs.img
-}
-EOF
+        # Live-ISO boot menu: plain live, copy-to-RAM (removable), and the two
+        # installer entries (graphical Calamares / text ncurses) that boot the live
+        # env and autostart the installer via the snapdragon.install= cmdline. The
+        # toram + graphical-install entries set rd.live.ram=1 so the whole system
+        # caches into memory and the USB/DVD can be pulled (and the installer can
+        # even repartition the very disk it booted from).
+        # console=ttyS0 first (kernel log also goes to serial — lets QEMU/headless
+        # boot-tests capture it; harmless on PCs with no serial), tty0 last so the
+        # SCREEN stays the primary console for a real desktop.
+        _LBASE="root=live:CDLABEL=SNAPDRAGON_LIVE rd.live.dir=/LiveOS rd.live.squashimg=squashfs.img console=ttyS0,115200 console=tty0"
+        {
+            echo "set timeout=10"
+            echo "set default=0"
+            # Branded boot screen: graphics + PNG modules, then either the FULL GRUB
+            # theme (gfxmenu: title, accent-highlighted menu, countdown) or, failing
+            # that, the background image alone. Same brand baked into the installed
+            # system's /etc/default/grub (GRUB_THEME/GRUB_BACKGROUND/GRUB_COLOR_*).
+            if [ -f "${ISO_DIR}/boot/grub/snapdragon-background.png" ] \
+                    || [ -f "${ISO_DIR}/boot/grub/themes/snapdragon/theme.txt" ]; then
+                echo "insmod all_video"
+                echo "insmod png"
+                echo "insmod gfxterm"
+                echo "set gfxmode=1920x1080,1280x720,auto"
+                echo "terminal_output gfxterm"
+                if [ -f "${ISO_DIR}/boot/grub/themes/snapdragon/theme.txt" ]; then
+                    echo "insmod gfxmenu"
+                    [ -f "${ISO_DIR}/boot/grub/themes/snapdragon/font.pf2" ] \
+                        && echo "loadfont /boot/grub/themes/snapdragon/font.pf2"
+                    echo "set theme=/boot/grub/themes/snapdragon/theme.txt"
+                fi
+                [ -f "${ISO_DIR}/boot/grub/snapdragon-background.png" ] \
+                    && echo "background_image /boot/grub/snapdragon-background.png"
+            fi
+            echo "menuentry \"${BRAND_TITLE} ${ROLE} (live)\" {"
+            echo "    linux /boot/vmlinuz ${_LBASE} ${LIVE_CMDLINE}"
+            echo "    initrd /boot/initramfs.img"
+            echo "}"
+            if ${LIVE_TORAM}; then
+                echo "menuentry \"${BRAND_TITLE} ${ROLE} (live — Copy to RAM, removable)\" {"
+                echo "    linux /boot/vmlinuz ${_LBASE} rd.live.ram=1 ${LIVE_CMDLINE}"
+                echo "    initrd /boot/initramfs.img"
+                echo "}"
+            fi
+            echo "menuentry \"Install ${BRAND_TITLE} (graphical installer)\" {"
+            echo "    linux /boot/vmlinuz ${_LBASE} rd.live.ram=1 snapdragon.install=calamares ${LIVE_CMDLINE}"
+            echo "    initrd /boot/initramfs.img"
+            echo "}"
+            echo "menuentry \"Install ${BRAND_TITLE} (text / ncurses installer)\" {"
+            echo "    linux /boot/vmlinuz ${_LBASE} snapdragon.install=ncurses ${LIVE_CMDLINE}"
+            echo "    initrd /boot/initramfs.img"
+            echo "}"
+        } > "${ISO_DIR}/boot/grub/grub.cfg"
         # Build the ISO via grub-mkrescue (GRUB at EFI/BOOT/BOOTX64.EFI).
         # Then, if shim is on the build host, post-process: move GRUB to grubx64.efi,
         # sign it with the org key, and install shim as BOOTX64.EFI so the ISO boots
         # on Secure Boot hardware without requiring a Microsoft-trusted firmware cert.
-        grub-mkrescue -o "${ISO_PATH}" "${ISO_DIR}" -volid SNAPDRAGON_LIVE 2>/dev/null \
-            && info "Bootable live ISO: ${ISO_PATH}" \
-            || { warn "grub-mkrescue failed; live ISO not produced"; ISO_PATH="(not built — grub-mkrescue failed)"; }
+        # The live rootfs squashfs is >4 GiB. grub-mkrescue drives xorriso in
+        # mkisofs-emulation mode, whose default ISO level caps a SINGLE file at
+        # 4 GiB-1 and SILENTLY DROPS anything larger — yielding a bootable-looking
+        # but rootfs-less ~111 MiB ISO (kernel+initramfs only, no /LiveOS/squashfs.img).
+        # -iso-level 3 enables multi-extent files so the 5+ GiB squashfs is embedded.
+        if grub-mkrescue -o "${ISO_PATH}" "${ISO_DIR}" -volid SNAPDRAGON_LIVE -iso-level 3 2>/dev/null; then
+            # Verify the squashfs actually made it IN: the ISO must be at least as large
+            # as the squashfs we built (minus 10% slack). If it isn't, xorriso dropped the
+            # >4 GiB file again — fail loud rather than ship a live ISO that boots to nothing.
+            iso_mib=$(( $(stat -c%s "${ISO_PATH}" 2>/dev/null || echo 0) / 1048576 ))
+            if [ "${iso_mib}" -lt $(( sq_mib * 9 / 10 )) ]; then
+                err "live ISO is only ${iso_mib} MiB but the squashfs is ${sq_mib} MiB — the rootfs was dropped from the ISO (ISO-level/large-file issue); not shipping a broken live ISO."; exit 1
+            fi
+            info "Bootable live ISO: ${ISO_PATH} (${iso_mib} MiB)"
+        else
+            warn "grub-mkrescue failed; live ISO not produced"; ISO_PATH="(not built — grub-mkrescue failed)"
+        fi
         # ── Shim post-processing for Secure Boot live boot ──────────
         _shim_src="$(find /usr/share/shim /usr/lib/shim 2>/dev/null \
             \( -name 'BOOTX64.EFI' -o -name 'shimx64.efi' \) 2>/dev/null | head -1 || true)"
@@ -2207,6 +3451,31 @@ EOF
         cp "${STAGE4}" "${INST_DIR}/stage4/"
         cp "${SPECS_DIR}/installer/install-x86.sh" "${INST_DIR}/install-x86.sh"; chmod +x "${INST_DIR}/install-x86.sh"
         cp "${SPECS_DIR}/etc/fstab" "${INST_DIR}/fstab.template" 2>/dev/null || true
+        # ── LUKS2 FDE + unlock-factor + home-archive payloads for the installer ──
+        if ${ENCRYPT_ROOT}; then
+            : > "${INST_DIR}/encrypt-root"   # marker: installer LUKS2-encrypts the target root
+            info "Installer ISO: encrypt-root marker set (installer prompts for the root-unlock passphrase)."
+            if [ -n "${LUKS_PASS}" ]; then
+                # OPTIONAL unattended passphrase — loudly warned (it lands on the ISO).
+                printf '%s' "${LUKS_PASS}" > "${INST_DIR}/luks-passphrase"; chmod 600 "${INST_DIR}/luks-passphrase"
+                warn "Installer ISO carries an unattended LUKS passphrase (luks-passphrase, 0600) — anyone with the ISO can read it. Prefer the interactive install-time prompt."
+            fi
+        fi
+        # Boot keyfile factor: generate a random keyfile the installer adds as a 2nd
+        # LUKS keyslot (kept on the ESP). The matching copy is also saved to WORK_DIR
+        # so the operator can stash it on a KEYS USB.
+        if [ "${UNLOCK_KEYFILE}" = "boot" ]; then
+            head -c 4096 /dev/urandom > "${INST_DIR}/luks-keyfile"; chmod 600 "${INST_DIR}/luks-keyfile"
+            cp "${INST_DIR}/luks-keyfile" "${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.luks-keyfile"; chmod 600 "${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.luks-keyfile"
+            info "Installer ISO: boot keyfile generated (also saved to WORK_DIR; stash it on a KEYS USB)."
+        fi
+        # FIDO2/YubiKey boot factor: marker → installer runs systemd-cryptenroll.
+        [ "${UNLOCK_YUBIKEY}" = "boot" ] && { : > "${INST_DIR}/fido2-enroll"; info "Installer ISO: FIDO2/YubiKey LUKS enroll marker set (device must be present at install)."; }
+        # Bundle a $HOME archive to unpack into the new user's home at install.
+        if [ -n "${INCLUDE_HOME_ARCHIVE}" ] && [ -f "${INCLUDE_HOME_ARCHIVE}" ]; then
+            cp "${INCLUDE_HOME_ARCHIVE}" "${INST_DIR}/home-archive.tar.xz"
+            info "Installer ISO: bundling home archive ${INCLUDE_HOME_ARCHIVE} (unpacked into the new user's home)."
+        fi
         if command -v xorriso >/dev/null; then
             xorriso -as mkisofs -o "${INSTALLER_ISO_PATH}" -volid SNAPDRAGON_INSTALL -joliet -rock "${INST_DIR}"
             info "Installer ISO: ${INSTALLER_ISO_PATH}"

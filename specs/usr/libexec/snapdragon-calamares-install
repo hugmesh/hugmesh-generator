@@ -1,0 +1,17 @@
+#!/bin/bash
+# Bridge: invoked by the Calamares shellprocess module. Finds install-x86.sh on the
+# mounted installer/live medium and runs it. If Calamares exported a chosen target
+# disk (ROOT_DISK / partition global), use it unattended; otherwise fall back to
+# install-x86's own ncurses target picker so the install still completes.
+set -uo pipefail
+INST="$(find /run/initramfs/live /media /run/media /mnt /cdrom -maxdepth 4 -name install-x86.sh 2>/dev/null | head -1 || true)"
+[ -n "${INST}" ] || { echo "install-x86.sh not found on the live medium" >&2; exit 1; }
+
+# Calamares exposes its picked storage device to exec modules via env in many setups;
+# honour it when present, else let install-x86 prompt (ncurses) for the target.
+TARGET="${ROOT_DISK:-${CALAMARES_ROOT_DISK:-}}"
+if [ -n "${TARGET}" ] && [ -b "${TARGET}" ]; then
+    exec bash "${INST}" --unattended "${TARGET}"
+else
+    exec bash "${INST}" --interactive
+fi

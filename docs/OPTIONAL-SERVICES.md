@@ -11,8 +11,10 @@ The platform splits into two tiers:
   **tuwunel** (Matrix homeserver), **phpbb** (forum), **games** (the
   snapdragon.games portal + its own games-realm Casdoor), **owncast** (HLS
   live-streaming, GPU-gated x86), **tube** (LocalTube YouTube archive, GPU-gated
-  x86). (Plus the non-user-level optional slugs **egress-vpn** / **workloadConsole**
-  / **anubis** / **coturn**, gated by the same registry.)
+  x86), **edge-ai** (GPU inference node serving an OpenAI-compatible model API to
+  the mesh — DEFAULT-OFF, GPU-gated; auto-selected by the `edge_ai` node role; see
+  [EDGE-AI.md](EDGE-AI.md)). (Plus the non-user-level optional slugs **egress-vpn**
+  / **workloadConsole** / **anubis** / **coturn**, gated by the same registry.)
 
   **coturn** (TURN/STUN relay for Matrix WebRTC audio/video) is a DEFAULT-OFF,
   **runtime-only** slug (anubis pattern: `apps: []`, no baked Application) that

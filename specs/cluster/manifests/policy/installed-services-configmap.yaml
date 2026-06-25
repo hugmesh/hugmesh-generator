@@ -78,6 +78,16 @@ data:
   # Flip to "true" (+ the 13a element) for a per-domain LIVE add; tuwunel's dark/
   # gated turn_uris/turn_secret then take effect (no-op until coturn is up).
   coturn: "false"
+  # edge-ai — GPU inference node serving an OpenAI-compatible model API to the mesh
+  # (DEFAULT-OFF, GPU-gated). Rendered true/false by _opt_render_installed_services
+  # from OPTIONAL_SERVICES; the literal baseline is the SAFE DEFAULT (off). The
+  # edge_ai node role auto-selects it; admin/user consoles grey out the AI panels
+  # (model picker, chat) when "false".
+  edge-ai: "false"
+  # edge-ai-analysis — task analysis API (image classify/hash, log triage) in front of
+  # edge-ai. DEFAULT-OFF, dependsOn edge-ai (greyed when edge-ai is "false"). Image is a
+  # separate build artifact; keep "false" until built+pushed.
+  edge-ai-analysis: "false"
   # Per-slug metadata the admin console + greying-out predicate read (mountAt =
   # where the federation manifest mounts the remote; namespace = its k8s ns).
   # The games-services (app-store operator UI) capability RIDES the `games` install
@@ -96,5 +106,7 @@ data:
       { "slug": "tube",    "displayName": "LocalTube (YouTube archive)", "namespace": "snapdragon-tube", "mountAt": "/tube" },
       { "slug": "workloadConsole", "displayName": "Workload Console", "namespace": "snapdragon-backend", "mountAt": "/admin/workloads", "hidden": true },
       { "slug": "anubis",  "displayName": "Anubis (anti-scraper PoW gate)", "namespace": "snapdragon-frontend", "mountAt": null },
-      { "slug": "coturn",  "displayName": "coturn (TURN/STUN server)", "namespace": "snapdragon-backend", "mountAt": null, "dependsOn": "tuwunel" }
+      { "slug": "coturn",  "displayName": "coturn (TURN/STUN server)", "namespace": "snapdragon-backend", "mountAt": null, "dependsOn": "tuwunel" },
+      { "slug": "edge-ai", "displayName": "Edge AI (inference)", "namespace": "snapdragon-inference", "mountAt": "/admin/edge-ai" },
+      { "slug": "edge-ai-analysis", "displayName": "Edge AI — analysis API", "namespace": "snapdragon-inference", "mountAt": "/admin/edge-ai-analysis", "dependsOn": "edge-ai" }
     ]

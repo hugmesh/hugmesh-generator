@@ -1,0 +1,10 @@
+# Keyword unmasks for native Steam. Copied ONLY when --steam native. The
+# steam-overlay ebuilds + some of their multilib deps are ~amd64.
+games-util/steam-launcher ~amd64
+games-util/steam-meta ~amd64
+games-util/steam-client-meta ~amd64
+# Transitive deps of steam-launcher[udev,joystick] that are also ~amd64 — without
+# these the whole payload plan aborts on a keyword mask (caught on the first
+# standalone build). Unversioned so a tree bump doesn't re-mask them.
+games-util/game-device-udev-rules ~amd64
+sys-libs/libudev-compat ~amd64

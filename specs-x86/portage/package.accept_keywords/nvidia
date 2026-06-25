@@ -1,0 +1,7 @@
+# PROPRIETARY NVIDIA driver keyword unmasks — copied ONLY when NVIDIA_PROPRIETARY.
+# nvidia-drivers tracks fast-moving releases; the current stable amd64 keyword is
+# usually fine, but the kernel-open variant + the newest production branch are
+# frequently still ~amd64. Unmask the driver (and CUDA when --nvidia-cuda) so the
+# build doesn't stall on a keyword mask. Empty atoms (no version) accept ~amd64.
+x11-drivers/nvidia-drivers ~amd64
+dev-util/nvidia-cuda-toolkit ~amd64

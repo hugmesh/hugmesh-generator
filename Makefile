@@ -320,6 +320,19 @@ else
 	$(chown-artifacts)
 endif
 
+# Extra builder flags threaded to the standalone-desktop targets (the menu / CLI
+# passes e.g. STANDALONE_FLAGS='--local-user alice --local-pass s3cret --nvidia-driver proprietary').
+STANDALONE_FLAGS ?=
+
+x86-standalone: ## build BOTH hardened standalone NVIDIA desktops (thin+thick; LUKS FDE installer + all 4 artifacts)
+ifndef NATIVE
+	$(MAKE) ensure-image
+	$(DOCKER_RUN) make x86-standalone NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) STANDALONE_FLAGS='$(STANDALONE_FLAGS)' $(BRAND_PASS)
+else
+	@for r in standalone-thin standalone-thick; do echo "==> x86 $$r"; $(X86) --role $$r $(STANDALONE_FLAGS) || exit 1; done
+	$(chown-artifacts)
+endif
+
 rpi-%: ## build ONE Pi role: make rpi-frontend  (add IMG_FLAGS='--no-iso' etc.)
 ifndef NATIVE
 	$(MAKE) ensure-image
@@ -329,12 +342,12 @@ else
 	$(chown-artifacts)
 endif
 
-x86-%: ## build ONE x86 role: make x86-be+gpu | x86-pki | x86-omnibus
+x86-%: ## build ONE x86 role: make x86-be+gpu | x86-pki | x86-standalone-thin (STANDALONE_FLAGS='--local-user … --nvidia')
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make x86-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
+	$(DOCKER_RUN) make x86-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) STANDALONE_FLAGS='$(STANDALONE_FLAGS)' $(BRAND_PASS)
 else
-	$(X86) --role $*
+	$(X86) --role $* $(STANDALONE_FLAGS)
 	$(chown-artifacts)
 endif
 

@@ -2584,6 +2584,13 @@ main() {
     MANIFEST="${BASE}/provision.json"
     [ -f "${MANIFEST}" ] || MANIFEST="/dev/null"
 
+    # STANDALONE desktop: a self-contained personal workstation. Even WITH a KEYS
+    # USB present (for Secure Boot enrollment / a LUKS keyfile), it must NOT join
+    # the mesh, run k8s, or wire Casdoor/OIDC SSO desktop governance. We still honour
+    # ssh host keys, users, storage/LUKS, egress-VPN, secureboot, hooks and SELinux.
+    local STANDALONE_IMG=false
+    [ -f /etc/snapdragon/standalone ] && { STANDALONE_IMG=true; log "STANDALONE image — skipping mesh / k8s / SSO governance provisioning"; }
+
     provision_ssh_host_keys
     provision_identity
     provision_hosts      # peers reachable by IP before mesh/k8s join
@@ -2595,17 +2602,19 @@ main() {
     provision_truststore
     provision_storage
     provision_vpn        # egress-VPN provider configs (own-domain-only, 0600; service default-off)
-    provision_desktop_governance   # client desktops: Discover->BFF registry remote, SSO-claim sudo gate (default-deny, empty store)
-    provision_headscale
-    provision_tailscale
-    provision_device_registry   # Layer-B sshd enforcement (ADMIN nodes) — after mesh join, before k8s
-    provision_domain_registry   # #4 domain-registry -> brand-repo bridge (default-off; reuses Layer-B key) — after device-registry stages the pubkey
-    provision_kubernetes
-    provision_backup
-    provision_update     # OPT-IN binpkg auto-update plumbing (default-off; superadmin enables via ConfigMap; absence => off)
-    provision_snapdragon
-    provision_calico
-    provision_vault
+    if ! ${STANDALONE_IMG}; then
+        provision_desktop_governance   # client desktops: Discover->BFF registry remote, SSO-claim sudo gate (default-deny, empty store)
+        provision_headscale
+        provision_tailscale
+        provision_device_registry   # Layer-B sshd enforcement (ADMIN nodes) — after mesh join, before k8s
+        provision_domain_registry   # #4 domain-registry -> brand-repo bridge (default-off; reuses Layer-B key) — after device-registry stages the pubkey
+        provision_kubernetes
+        provision_backup
+        provision_update     # OPT-IN binpkg auto-update plumbing (default-off; superadmin enables via ConfigMap; absence => off)
+        provision_snapdragon
+        provision_calico
+        provision_vault
+    fi
     provision_secureboot   # schedule org SB cert MOK enrollment (EFI systems only)
     provision_run_hooks
     provision_selinux   # last: relabel the fully-provisioned filesystem
