@@ -19,14 +19,7 @@ web interface.**
 `.gitlab-ci.yml` (runs on the privileged x86 runner):
 
 1. **iso** — `scripts/build-all-roles.sh` (pki/backend/frontend, aarch64) + `build-x86-host-stage4.sh` (x86 host).
-2. **images** — ⏳ **stub.** The `build:images` job is currently an `echo`
-   placeholder; the **app** container images (gateway, frontends, BFFs, …) are
-   built from **their own repos in the GitLab org mirror**, not by this job. A
-   general Argo / in-cluster image-build pipeline is **NOT started**. The one
-   in-cluster image builder that IS done is the **service-catalog Kaniko builder**
-   (`apps/54-service-catalog-builder.yaml` + `manifests/service-catalog-builder/`,
-   merged **PR #110**, ships dark): a per-build Kaniko Job template the admin-bff
-   `AddService` task instantiates — it is not the general app-image pipeline.
+2. **images** — The `build:images` job dispatches into the **in-cluster Kaniko image-build pipeline** (`specs/cluster/manifests/image-builder/kaniko-build-job.template.yaml`). It is OPT-IN (guarded by `IMAGE_BUILDER_ENABLED`; no-ops until an operator enables `apps-optional/60-image-builder.yaml` and provides a cluster `KUBECONFIG`). The service-catalog Kaniko builder (PR #110) is a separate per-`AddService` template, not the general pipeline.
 3. **deliver** — uploads each ISO to the GitLab generic package registry under a
    stable `…/packages/generic/iso/latest/<name>.iso` path.
 

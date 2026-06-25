@@ -106,6 +106,7 @@ _As of 2026-06-24. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   nuclei + k6 as a **GitLab** pipeline stage, not a deployed CronJob).
 - **✅ Data-access standard** — the Spring services use **Spring Data R2DBC
   reactive repositories** (no raw SQL strings / inline `@Query`).
+- **✅ Wiki service (snapdragon-wiki-bff-api + snapdragon-wiki-ui)** — fully deployed; manifests in `specs/cluster/manifests/wiki-bff-api/` + `manifests/wiki-ui/`, ArgoCD apps `34a-wiki-bff-db`, `34b-wiki-bff-api`, `49a-wiki-ui`; fe-gateway routes `/bff/wiki/**` (#173, #176).
 
 > The auth model is documented in depth in [`docs/SECURITY.md`](docs/SECURITY.md)
 > and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the application-side login
@@ -132,8 +133,8 @@ _Designed / in-flight — see the Roadmap section of
 - **🔭 Per-node attached storage**, **🔭 desktop app governance** (SSO sudo +
   curated Plasma Discover), **🔭 Workload Console** (pod mgmt + live logs; RBAC
   backstop on `main`, ships dark).
-- **🔭 A/V via coturn/TURN**, **🔭 OWASP pen-test + nuclei in CI** (continuous),
-  **🔭 binhost auto-update fleet distribution**.
+- **🔭 A/V via coturn/TURN**.
+- **✅ Binhost auto-update** — opt-in (default-off), superadmin-enabled; see DEVOPS.md. Shipped via PR #117.
 
 ## Platform capabilities
 
@@ -154,7 +155,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 - **✅ Node storage** — attach + register extra storage to a node, node-pinned
   local PV / local-path (FDE), capacity-aware scheduling. [`docs/NODE-STORAGE.md`](docs/NODE-STORAGE.md).
 - **✅ Games App-Store control plane**, **✅ owncast** + **✅ tube** (GPU-dependent
-  video), **✅ notifications in-app MVP**, and the **✅ superadmin Service Catalog**
+  video), **✅ notifications in-app MVP + SSE real-time push** — notification bell (60 s polling) + `SseNotificationBus` per-user multicast stream (`GET /bff/user/notifications/events`, user-bff PR #72) + `NotificationToastService` bearer-fetch SSE toast (snapdragon.systems PR #104) are all shipped. And the **✅ superadmin Service Catalog**
   (data layer + tailnet superadmin-gateway + Kaniko builder, PR #110).
   [`docs/GAMES-APPSTORE.md`](docs/GAMES-APPSTORE.md).
 - **✅ Device-license registry** — physical-ownership / domain-residency / SSH

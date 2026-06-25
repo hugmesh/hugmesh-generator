@@ -11,7 +11,7 @@ those gateways (configured later, out of scope here).
 |---|---|---|---|
 | `pki` | `build-rpi5-stage4.sh --role pki` | aarch64 (RPi 5) | **Kubernetes control plane** + identity: headscale (mesh control), Casdoor, Cassandra, `snapdragon-pki-gateway` |
 | `backend` | `build-rpi5-stage4.sh --role backend` | aarch64 (RPi 5) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs, databases, `snapdragon-be-gateway` |
-| `frontend` | `build-rpi5-stage4.sh --role frontend` | aarch64 (RPi 5) | `snapdragon.systems` Angular host federating `snapdragon-matrix-ui` + `snapdragon-mastodon-ui` (the ArgoCD grouping is still named `social-ui`), `snapdragon-fe-gateway` |
+| `frontend` | `build-rpi5-stage4.sh --role frontend` | aarch64 (RPi 5) | `snapdragon.systems` Angular host federating `snapdragon-matrix-ui` + `snapdragon-mastodon-ui` + `snapdragon-wiki-ui` + login/admin/mod/user/forum remotes, `snapdragon-fe-gateway` |
 | `host` | `build-x86-host-stage4.sh` | x86_64 (desktop/server) | GPU worker: ArgoCD, GitLab/Runner/binhost (devops), `snapdragon.games`, owncast + tube (GPU-dependent video), heavy datastores (Kafka/ClickHouse/Uptrace), local-path/node-storage default (Mesa/Vulkan via `/dev/dri`) |
 
 All nodes are hardened Gentoo, join one Kubernetes cluster, sit on one headscale
@@ -72,14 +72,15 @@ flowchart TD
         NOTIFY["Notifications: external channels (in-flight)"]
         subgraph SSO["SSO / BFF JWT custody (ships dark)"]
             AUTHCORE["auth-core: account/session/MFA + custody seams (✅ 2.3.0)"]
-            GWEXCH["gateway bff_-exchange filter (🚧 PR-C)"]
+            GWEXCH["gateway bff_-exchange filter (✅ PR-2/5 #171)"]
             LOGINOIDC["login-ui Casdoor OIDC + PKCE (🚧 PR-4)"]
-            UBRELOC["user-bff OIDC login relocation (🚧 PR-A3)"]
+            UBRELOC["user-bff OIDC login relocation (✅ PR-2/5 #171)"]
+            CUSTKEY["SSO custody-key + internal-token bootstrap (✅ PR-3/5 #172)"]
         end
     end
 
     classDef planned stroke-dasharray:4,stroke:#888,color:#555;
-    class ROADMAP,WC,MFA,DESKGOV,NOTIFY,SSO,AUTHCORE,GWEXCH,LOGINOIDC,UBRELOC planned;
+    class ROADMAP,WC,MFA,DESKGOV,NOTIFY,SSO,AUTHCORE,GWEXCH,LOGINOIDC,UBRELOC,CUSTKEY planned;
 ```
 
 > The **superadmin Service Catalog** surface (tailnet-only `snapdragon-superadmin-gateway`
@@ -202,7 +203,7 @@ sequenceDiagram
 `snapdragon.gateway.bff-exchange.enabled` (gateway swap) · `__SNAP_OIDC_ENABLED__`
 (login-ui).
 
-### Progress (as of 2026-06-20)
+### Progress (as of 2026-06-25)
 
 **✅ shipped (merged to `main`):**
 
@@ -217,6 +218,12 @@ sequenceDiagram
   ensure / get / complete / allowlist / sessions / namespaces, guarded by
   `InternalTokenWebFilter`; ships inert.
 - (prior) gateway live + raw-API security proven + the SCG-5 route-namespace bug fixed.
+- **gateway BFF-session filter (PR-2/5 / #171 merged)** — `BffJwtExchangeWebFilter`
+  (`bff_` → custody-JWT, pre-security, fail-closed, `snapdragon.gateway.bff-exchange.enabled`).
+- **user-bff OIDC enable (PR-2/5 / #171 merged)** — user-bff OIDC login relocation +
+  admin-bff internal client (`app.bff.oidc.enabled`).
+- **SSO custody-key + internal-token bootstrap (PR-3/5 / #172 merged)** — custody-key
+  seeding + internal-token bootstrap for the BFF exchange path.
 
 > The `auth-core` `2.1.0` BFF-JWT-custody columns
 > (`access_token_enc` / `refresh_token_enc` / `access_token_expires_at` /
@@ -225,11 +232,7 @@ sequenceDiagram
 
 **🚧 in-flight (open draft PRs, all dark):**
 
-- **gateway PR-C** — `BffJwtExchangeWebFilter` (`bff_` → custody-JWT, pre-security,
-  fail-closed, `snapdragon.gateway.bff-exchange.enabled`).
 - **login-ui PR-4** — Casdoor OIDC + PKCE + `/login/callback` (`__SNAP_OIDC_ENABLED__`).
-- **user-bff PR-A3** — OIDC login relocation + admin-bff internal client
-  (`app.bff.oidc.enabled`).
 
 **🔭 planned / next:**
 
