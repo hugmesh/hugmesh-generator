@@ -1,0 +1,37 @@
+# nvidia-device-plugin — advertises nvidia.com/gpu as a schedulable Kubernetes
+# resource on every GPU worker, and installs the `nvidia` RuntimeClass. This is
+# the cluster-wide GPU-COMPUTE ENABLER: once it is up, ANY workload (the edge-ai
+# inference service AND the existing GPU-hungry optional services — owncast video
+# transcode, coturn/Matrix A/V media, LocalTube yt-dlp transcode, future STT/TTS)
+# can request `nvidia.com/gpu` + `runtimeClassName: nvidia` and be scheduled onto a
+# GPU node (be+gpu / omnibus / edge_ai). See docs/EDGE-AI.md "GPU for existing
+# services".
+#
+# ALWAYS-ON INFRA, harmless without GPU: the DaemonSet has a hard nodeSelector on
+# snapdragon.systems/compute=gpu, so on a GPU-less cluster it schedules ZERO pods
+# and the RuntimeClass is inert. It therefore does NOT need optional-service gating
+# (unlike edge-ai itself, which is opt-in) — it is deployed like calico/metrics.
+#
+# NODE PREREQ (baked by the stage4 builder on GPU nodes with the proprietary NVIDIA
+# driver): app-containers/nvidia-container-toolkit + the containerd `nvidia` runtime
+# block in /etc/containerd/config.toml. Built ONLY when --gpu-driver nvidia on a
+# k8s node role (be+gpu / omnibus / edge_ai); see build-x86-host-stage4.sh.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: nvidia-device-plugin
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/nvidia-device-plugin
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

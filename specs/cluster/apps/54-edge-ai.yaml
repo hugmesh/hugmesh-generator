@@ -1,0 +1,26 @@
+# edge-ai — GPU inference service serving an OpenAI-compatible model API to the mesh
+# (DEFAULT-OFF, GPU-gated). Scheduled onto an NVIDIA GPU worker (edge_ai role, or
+# be+gpu / omnibus). Opt-in: baked only when 'edge-ai' is selected
+# (--with-edge-ai / 'edge-ai' in --optional-services / OPTIONAL_SERVICES=all), and
+# auto-selected by the edge_ai node role. gate_optional_services prunes this
+# Application + its manifests + the ai.${CLUSTER_DOMAIN} gateway route + route-access
+# rows when it is deselected.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-edge-ai
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/edge-ai
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-inference
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

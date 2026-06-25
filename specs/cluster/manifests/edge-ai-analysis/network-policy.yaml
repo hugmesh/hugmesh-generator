@@ -1,0 +1,34 @@
+# Isolate the analysis API: it accepts traffic only from the gateways + in-cluster
+# Phase-A consumers, and may egress ONLY to the edge-ai Ollama upstream + DNS. It
+# holds no data and reaches nothing else (defense-in-depth; nodes are default-deny
+# where the CNI enforces it).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: snapdragon-edge-ai-analysis
+  namespace: snapdragon-inference
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+spec:
+  podSelector:
+    matchLabels: { app: snapdragon-edge-ai-analysis }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # be-gateway (tailnet/external callers via ai.<domain>/v1/analyze/**) and the
+    # in-cluster Phase-A consumers (admin/user BFFs) reach :8080.
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress:
+    # the edge-ai Ollama model server (same namespace) on :11434
+    - to:
+        - podSelector: { matchLabels: { app: snapdragon-edge-ai } }
+      ports:
+        - { protocol: TCP, port: 11434 }
+    # cluster DNS
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }

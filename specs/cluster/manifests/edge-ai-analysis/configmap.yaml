@@ -1,0 +1,43 @@
+# edge-ai-analysis — the analysis config surface (task->model map + policy thresholds).
+# Admin/superadmin editable per-domain (Service-Catalog model, like edge-ai-models).
+# The verdict schema returned by every /v1/analyze/* endpoint is documented below so
+# Phase-A consumers (AIOps, avatar moderation) can code against a stable contract.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edge-ai-analysis
+  namespace: snapdragon-inference
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/slug: edge-ai-analysis
+data:
+  # Which edge-ai model serves each task (must be in the edge-ai-models catalog/preload).
+  vision-model: "llava:7b"       # image classify/moderate
+  reason-model: "llama3.2:3b"    # log summarize/triage
+  # Policy thresholds in [0,1]: a category score >= threshold is a "policy hit".
+  nsfw-threshold: "0.7"
+  abuse-threshold: "0.7"
+  # moderate action on a policy hit: "reject" (fail-closed, block publish) or
+  # "flag" (allow but queue for human review). Default fail-closed.
+  moderate-action: "reject"
+  # The stable verdict contract (consumers code against this).
+  verdict-schema.json: |
+    {
+      "task": "image.classify | image.hash | content.moderate | log.summarize",
+      "tenant_id": "string (from X-Tenant-ID; gateway-validated)",
+      "user_id": "string (from X-User-ID)",
+      "model_used": "string",
+      "timestamp": "RFC3339",
+      "result": {
+        "classification": "safe | nsfw | abuse | unknown",
+        "confidence": "number [0,1]",
+        "tags": ["string"],
+        "policy_hit": "boolean",
+        "perceptual_hash": "string (pHash hex; image tasks only)",
+        "action": "allow | flag | reject (content.moderate only)",
+        "summary": "string (log.summarize only)",
+        "severity": "info | warning | critical (log.summarize only)",
+        "anomalies": ["string (log.summarize only)"],
+        "raw_output": "string (model raw text, for audit)"
+      }
+    }

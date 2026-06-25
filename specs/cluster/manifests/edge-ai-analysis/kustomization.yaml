@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Co-locates in snapdragon-inference (the edge-ai namespace; NOT created here — this
+# slug dependsOn edge-ai, which owns the namespace.yaml). No namespace resource of its
+# own avoids a double-create with apps/54-edge-ai.
+namespace: snapdragon-inference
+resources:
+  - configmap.yaml
+  - service.yaml
+  - network-policy.yaml
+  - deployment.yaml
+
+images:
+  - { name: snapdragon-systems/edge-ai-analysis, newName: registry.snapdragon.systems/snapdragon/edge-ai-analysis, newTag: main }

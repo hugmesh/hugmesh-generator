@@ -1,0 +1,18 @@
+# Model cache — persists pulled model weights across pod restarts so a node does
+# not re-download multi-GB models every boot. Uses the cluster's local-path
+# provisioner (node-pinned local PV; the inference pod is already pinned to the GPU
+# node by nodeSelector). Size for the catalog you intend to preload + a working set.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: edge-ai-models-cache
+  namespace: snapdragon-inference
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/slug: edge-ai
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 40Gi
