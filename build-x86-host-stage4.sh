@@ -1226,6 +1226,25 @@ ${ROLE_HEADSCALE} || rm -f "${SYSROOT}/etc/runlevels/default/headscale"
 # nothing extra is enabled when they stay off.
 harden_radios "${SYSROOT}"
 
+# ── 4b. Toolchain static restore (source-compiling roles) ──────────
+# §8 (clean) strips *.a + crt*.o from usr/lib{,64} to shrink the IMAGE, but the
+# sysroot is SHARED across roles (same BUILD_SUBDIR) and §3 skips re-extracting
+# stage3 on --resume. So once any prior role's clean has stripped the toolchain
+# statics, a source-compiling role (GPU: llvm/mesa) hits `ld: cannot find -lgcc`
+# (then missing crt*.o / libc_nonshared.a) during emerge. Idempotently restore
+# the compiler+glibc statics from the seed tarball before emerge — additive only,
+# a cheap no-op when they're already present. Only GPU roles compile from source;
+# binpkg-only roles (pki/be/fe) never link a toolchain and don't need these.
+if ${GPU} && [ -z "$(find "${SYSROOT}/usr/lib/gcc" -name libgcc.a -print -quit 2>/dev/null)" ]; then
+    banner "Restoring toolchain static libs from seed (GPU source-compile)"
+    _statics_list="$(mktemp)"
+    tar tJf "${STAGE3_LOCAL}" 2>/dev/null | grep -E '\.a$|/[^/]*crt[^/]*\.o$' > "${_statics_list}" || true
+    if [ -s "${_statics_list}" ]; then
+        tar xJf "${STAGE3_LOCAL}" -C "${SYSROOT}" -T "${_statics_list}" 2>/dev/null || true
+        info "Restored $(wc -l < "${_statics_list}") toolchain static archives/crt objects from $(basename "${STAGE3_LOCAL}")"
+    fi
+    rm -f "${_statics_list}"
+fi
 # ── configure_root_login <sysroot> ────────────────────────────────────────────
 # Root SSH login is DISABLED BY DEFAULT (hardened posture). Write an AUTHORITATIVE
 # sshd drop-in (00- prefix => read first => wins, since sshd takes the FIRST
@@ -1291,9 +1310,13 @@ mount_chroot() {
     # the eCryptfs sysroot fine. Only kicks in when the sysroot is actually eCryptfs.
     PORTAGE_SCRATCH_MOUNTED=false
     if df -T "${SYSROOT}" 2>/dev/null | awk 'NR==2{exit($2=="ecryptfs"?0:1)}'; then
-        local scratch="/var/tmp/snap-portage-${BUILD_SUBDIR}"
-        local availg; availg=$(df -BG --output=avail /var/tmp 2>/dev/null | tail -1 | tr -dc '0-9')
-        [ "${availg:-99}" -lt 15 ] && warn "only ${availg}G free on /var/tmp (xfs) for build scratch; a large parallel build may fill it (EMERGE_JOBS is held low to bound this)."
+        # Prefer the dedicated /var/tmp/portage partition (its own large xfs) when
+        # present — /var/tmp itself may be on a small root fs. Falls back to /var/tmp.
+        local scratchbase=/var/tmp
+        mountpoint -q /var/tmp/portage 2>/dev/null && scratchbase=/var/tmp/portage
+        local scratch="${scratchbase}/snap-portage-${BUILD_SUBDIR}"
+        local availg; availg=$(df -BG --output=avail "${scratchbase}" 2>/dev/null | tail -1 | tr -dc '0-9')
+        [ "${availg:-99}" -lt 15 ] && warn "only ${availg}G free on ${scratchbase} (xfs) for build scratch; a large parallel build may fill it (EMERGE_JOBS is held low to bound this)."
         mkdir -p "${scratch}" "${SYSROOT}/var/tmp/portage"
         mount --bind "${scratch}" "${SYSROOT}/var/tmp/portage" && PORTAGE_SCRATCH_MOUNTED=true
         info "Build scratch -> non-eCryptfs xfs ${scratch} (eCryptfs 143-char filename-limit workaround)"
@@ -1443,13 +1466,13 @@ if ${SKIP_MESH}; then
     banner "Mesh VPN SKIPPED"
 else
     banner "Installing mesh VPN (headscale + tailscale, amd64)"
-    if curl -fL --retry 5 --retry-delay 5 --retry-connrefused -o "${SYSROOT}/usr/bin/headscale" \
+    if curl -fL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o "${SYSROOT}/usr/bin/headscale" \
         "https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}/headscale_${HEADSCALE_VERSION}_linux_amd64"; then
         chmod +x "${SYSROOT}/usr/bin/headscale"; info "headscale installed"
     else err "headscale fetch failed — the image enables its service in the runlevel; aborting (use --skip-mesh to opt out)"; exit 1; fi
     if ! ${SKIP_TAILSCALE}; then
         TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_amd64.tgz"
-        if curl -fL --retry 5 --retry-delay 5 --retry-connrefused -o "${TGZ}" "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz"; then
+        if curl -fL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o "${TGZ}" "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz"; then
             TMP="$(mktemp -d)"; tar -C "${TMP}" -xzf "${TGZ}"
             SUB="$(find "${TMP}" -maxdepth 1 -type d -name 'tailscale_*' | head -1)"
             install -Dm0755 "${SUB}/tailscale" "${SYSROOT}/usr/bin/tailscale"
@@ -1532,7 +1555,7 @@ done
 # NETFILTER_XT_MATCH_MARK/MULTIPORT/STATISTIC, NETFILTER_XT_TARGET_MARK) gets
 # silently dropped — shipping a dead path. Asserting only a subset would let such
 # a leaf prune through, which is exactly the class of bug this guard exists to
-# stop. Keep this list IDENTICAL (modulo \${must}/${must} escaping) to the
+# stop. Keep this list IDENTICAL (modulo shell-var escaping) to the
 # build-rpi5-stage4.sh mirror and in sync with
 # tests/scripts/test-x86-kernel-net-symbols.sh (which asserts guard==fragment).
 for must in CONFIG_NETFILTER_XTABLES \
@@ -1541,8 +1564,11 @@ for must in CONFIG_NETFILTER_XTABLES \
             CONFIG_NETFILTER_XT_MATCH_MULTIPORT CONFIG_NETFILTER_XT_MATCH_STATISTIC \
             CONFIG_NETFILTER_XT_TARGET_MARK CONFIG_NETFILTER_XT_TARGET_MASQUERADE \
             CONFIG_NETFILTER_XT_TARGET_REDIRECT \
+            CONFIG_NETFILTER_XTABLES_LEGACY CONFIG_IP_NF_IPTABLES_LEGACY \
+            CONFIG_IP6_NF_IPTABLES_LEGACY \
             CONFIG_IP_NF_MANGLE CONFIG_NF_NAT CONFIG_NF_NAT_MASQUERADE \
-            CONFIG_NF_TABLES CONFIG_NFT_NAT CONFIG_NFT_MASQ CONFIG_NFT_CT \
+            CONFIG_NF_TABLES CONFIG_NF_TABLES_IPV4 CONFIG_NF_TABLES_IPV6 \
+            CONFIG_NFT_NAT CONFIG_NFT_MASQ CONFIG_NFT_CT \
             CONFIG_IP6_NF_IPTABLES CONFIG_IP6_NF_FILTER CONFIG_IP6_NF_NAT \
             CONFIG_IP6_NF_MANGLE \
             CONFIG_VLAN_8021Q CONFIG_NET_L3_MASTER_DEV CONFIG_NET_SCH_HTB \
@@ -1550,8 +1576,8 @@ for must in CONFIG_NETFILTER_XTABLES \
             CONFIG_IP_VS CONFIG_VXLAN CONFIG_VETH CONFIG_BRIDGE \
             CONFIG_OVERLAY_FS CONFIG_OVERLAY_FS_REDIRECT_DIR CONFIG_OVERLAY_FS_INDEX \
             CONFIG_CGROUP_NET_CLASSID CONFIG_CGROUP_NET_PRIO CONFIG_CGROUP_HUGETLB \
-            CONFIG_CGROUP_PERF CONFIG_CGROUP_WRITEBACK CONFIG_CGROUP_NS \
-            CONFIG_PROC_PID_CPUSET CONFIG_FAIR_GROUP_SCHED \
+            CONFIG_CGROUP_PERF CONFIG_CGROUP_WRITEBACK \
+            CONFIG_FAIR_GROUP_SCHED \
             CONFIG_BPF_SYSCALL CONFIG_BPF_EVENTS \
             CONFIG_POSIX_MQUEUE; do
     grep -q "^\${must}=y" .config || { echo "[build-x86] ERROR: k8s node kernel option \${must} not enabled after olddefconfig (Service/kube-proxy/CNI/container-runtime would be impaired)"; exit 1; }
@@ -1761,7 +1787,13 @@ INSTALLER_ISO_PATH="(not built)"
 FS_TAR_PATH="(not built)"
 build_img() {
     local img_size_mib loop esp_part root_part root_mnt esp_uuid root_uuid kver vmlinuz initrd
-    loop=""; root_mnt=""
+    # Init ALL vars the EXIT/ERR cleanup trap reads BEFORE the trap is armed: the trap
+    # (_img_cleanup) references esp_part/root_part/loop, but they are assigned much later
+    # (losetup, below). Under `set -euo pipefail` a failure in the window between arming the
+    # trap and those assignments (e.g. parted/sfdisk) would fire the trap, which would then
+    # die on `unbound variable: esp_part` and MASK the real error. Empty-init keeps cleanup
+    # a safe no-op for the not-yet-created loops.
+    loop=""; root_mnt=""; esp_part=""; root_part=""
 
     IMG_PATH="${WORK_DIR}/${BRAND}-x86-amd64-${ROLE_TAG}-${ENV}-${BUILD_TS}.img"
 
@@ -1783,11 +1815,15 @@ build_img() {
     info "Pre-flight: payload ${payload_mib:-?} MiB fits the ${ROOT_MiB} MiB root (usable ~${cap_mib} MiB)"
 
     _img_cleanup() {
-        local rc=$?
+        local rc=$? _lp
         set +e
         [ -n "${root_mnt}" ] && mountpoint -q "${root_mnt}/boot/efi" && umount "${root_mnt}/boot/efi"
         [ -n "${root_mnt}" ] && mountpoint -q "${root_mnt}" && umount "${root_mnt}"
-        [ -n "${loop}" ] && losetup "${loop}" &>/dev/null && losetup -d "${loop}"
+        # Detach the per-partition offset loops (esp_part/root_part) and any
+        # whole-disk loop. Each is a real /dev/loopN created by losetup --offset.
+        for _lp in "${esp_part}" "${root_part}" "${loop}"; do
+            [ -n "${_lp}" ] && losetup "${_lp}" &>/dev/null && losetup -d "${_lp}"
+        done
         [ -n "${root_mnt}" ] && rmdir "${root_mnt}" 2>/dev/null
         return "${rc}"
     }
@@ -1805,10 +1841,48 @@ build_img() {
     parted -s "${IMG_PATH}" set 1 esp on
     parted -s "${IMG_PATH}" mkpart root ext4 513MiB 100%
 
-    loop="$(losetup --show -fP "${IMG_PATH}")"
-    esp_part="${loop}p1"
-    root_part="${loop}p2"
-    udevadm settle &>/dev/null || sleep 1
+    # Map each partition with its OWN offset loop device. `losetup -fP` partition
+    # CHILD nodes (loopXp1/p2) are NOT materialised inside a `docker run --privileged`
+    # container — the kernel scans the table but with no udev nothing creates
+    # /dev/loopXpN, so mkfs/mount silently fail on the missing node and the image is
+    # shipped HOLLOW (GPT table only, empty partitions) while the script prints
+    # "Image created". Per-partition offset loops sidestep partition scanning: each
+    # is a plain block device over just that partition's byte range, so it always
+    # appears as /dev/loopN regardless of udev. (loop=whole-disk loop kept only for
+    # PARTUUID-free fallback/cleanup; not used for mkfs/mount.)
+    local geom esp_start esp_size root_start root_size
+    geom="$(sfdisk -d "${IMG_PATH}")"
+    # sfdisk -d emits one "... : start=N, size=M, type=..., uuid=U, name=..." line
+    # per partition, in order (p1=ESP, p2=root). Parse start/size (sectors) + uuid
+    # (the GPT partition GUID == PARTUUID; lower-cased to match blkid's old output).
+    local -a _pl; mapfile -t _pl < <(printf '%s\n' "${geom}" | grep -E 'start=')
+    # Guard the partition-line count BEFORE indexing _pl[1]: under `set -u` an out-of-range
+    # array subscript aborts (unbound variable) — which would fire here, before the friendly
+    # geometry guard below, and then re-trip the cleanup trap. sfdisk -d must list both the
+    # ESP and root partition lines; anything less means the GPT table write failed upstream.
+    [ "${#_pl[@]}" -ge 2 ] \
+        || { err "sfdisk reported ${#_pl[@]} partition line(s), expected 2 (ESP+root) — GPT table write failed; refusing to image"; exit 1; }
+    _fld() { printf '%s' "$1" | grep -oE "$2=[ ]*[^,]*" | sed "s/$2=//; s/[\" ]//g"; }
+    esp_start="$(_fld "${_pl[0]}" start)"; esp_size="$(_fld "${_pl[0]}" size)"
+    root_start="$(_fld "${_pl[1]}" start)"; root_size="$(_fld "${_pl[1]}" size)"
+    esp_uuid="$(_fld "${_pl[0]}" uuid | tr 'A-Z' 'a-z')"
+    root_uuid="$(_fld "${_pl[1]}" uuid | tr 'A-Z' 'a-z')"
+    [ -n "${esp_start}" ] && [ -n "${root_start}" ] && [ -n "${root_size}" ] \
+        || { err "could not parse GPT geometry from sfdisk -d — refusing to image"; exit 1; }
+
+    # The container ships only /dev/loop0 and has no udev to create more on demand,
+    # so `losetup --find` for the 2nd partition fails "device node /dev/loopN is
+    # lost. You may use mknod(1) to recover it." Pre-create a pool of loop nodes
+    # (block major 7) so --find always has a backing /dev node to claim.
+    local _ln
+    for _ln in $(seq 0 31); do
+        [ -e "/dev/loop${_ln}" ] || mknod "/dev/loop${_ln}" b 7 "${_ln}" 2>/dev/null || true
+    done
+
+    esp_part="$(losetup --show -f --offset $((esp_start*512))  --sizelimit $((esp_size*512))  "${IMG_PATH}")"
+    root_part="$(losetup --show -f --offset $((root_start*512)) --sizelimit $((root_size*512)) "${IMG_PATH}")"
+    [ -b "${esp_part}" ] && [ -b "${root_part}" ] \
+        || { err "offset loop devices not created (esp=${esp_part} root=${root_part}) — refusing to image"; exit 1; }
 
     info "Formatting ${esp_part} (FAT32 SNAP_ESP) and ${root_part} (ext4 SNAP_ROOT)"
     mkfs.vfat -F 32 -n SNAP_ESP "${esp_part}"
@@ -1821,14 +1895,22 @@ build_img() {
     tar -C "${root_mnt}" --xattrs-include='*.*' -xpf "${STAGE4}" 2>/dev/null || \
     tar -C "${root_mnt}" -xpf "${STAGE4}"
 
+    # HARD anti-hollow assert: the extraction must have produced a real rootfs.
+    # Without this a future mount/extract failure ships an empty image silently
+    # (the bug this whole block fixes). Require the kernel + modules + init tree.
+    { [ -d "${root_mnt}/usr/lib/modules" ] && [ -n "$(ls -A "${root_mnt}/usr/lib/modules" 2>/dev/null)" ] \
+        && ls "${root_mnt}/boot/vmlinuz"* &>/dev/null && [ -x "${root_mnt}/sbin/init" -o -L "${root_mnt}/sbin/init" ]; } \
+        || { err "rootfs is empty/incomplete after stage4 extraction (no modules/vmlinuz/init) — refusing to ship a HOLLOW .img"; exit 1; }
+
     # Mount the ESP at /boot/efi (the kernel/initramfs stay on the ext4 /boot per
     # the fstab; the ESP holds only /EFI/BOOT/BOOTX64.EFI + grub.cfg).
     mkdir -p "${root_mnt}/boot/efi"
     mount "${esp_part}" "${root_mnt}/boot/efi"
 
     # ── Root identity (PARTUUID for the kernel/fstab; fs-UUID for grub search) ──
-    esp_uuid="$(blkid -s PARTUUID -o value "${esp_part}")"
-    root_uuid="$(blkid -s PARTUUID -o value "${root_part}")"
+    # PARTUUIDs come from the GPT (parsed above) — an offset loop exposes only the
+    # filesystem, not the partition table, so blkid -s PARTUUID would be empty here.
+    info "Root identity: root PARTUUID=${root_uuid}  ESP PARTUUID=${esp_uuid}"
     local root_fsuuid; root_fsuuid="$(blkid -s UUID -o value "${root_part}")"
     info "Root identity: root PARTUUID=${root_uuid}  ESP PARTUUID=${esp_uuid}"
     # The stage4 already carries specs-x86/etc/fstab with the two tokens; rewrite

@@ -93,6 +93,7 @@ RUN emerge --verbose --noreplace \
         sys-apps/checkpolicy \
         sys-apps/semodule-utils \
         sys-devel/m4 \
+        sys-devel/bc \
         app-arch/tar \
         app-arch/xz-utils \
         app-arch/zstd \

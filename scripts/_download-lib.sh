@@ -114,7 +114,13 @@ dlv_fetch() {
     local url="$1" dest="$2"
     dlv_require_tools curl || return 1
     dlv_info "fetching ${url}"
-    if ! curl -fL --proto '=https' --tlsv1.2 -o "${dest}" "${url}"; then
+    # --retry hardens against the transient-blip class: a single hiccup fetching a
+    # small checksum/DIGESTS/sidecar (Phase 2.5 / stage3 verify) otherwise aborts a
+    # whole role build that had already passed @system + payload. Mirrors the
+    # retry flags the binary (headscale/tailscale) downloads already use.
+    if ! curl -fL --proto '=https' --tlsv1.2 \
+              --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors \
+              -o "${dest}" "${url}"; then
         rm -f "${dest}"
         dlv_die "download failed: ${url}"
         return 1

@@ -1413,7 +1413,7 @@ info "Logging to ${LOG_FILE}"
 banner "Fetching latest arm64 stage3 seed tarball"
 
 # The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
-STAGE3_FILE=$(curl -sL --retry 5 --retry-delay 5 --retry-connrefused "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
+STAGE3_FILE=$(curl -sL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
 STAGE3_BASE_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds"
 STAGE3_FULL_URL="${STAGE3_BASE_URL}/${STAGE3_FILE}"
@@ -1422,7 +1422,7 @@ STAGE3_LOCAL="${BUILD_ROOT}/${STAGE3_BASENAME}"
 
 if [ ! -f "${STAGE3_LOCAL}" ]; then
     info "Downloading ${STAGE3_BASENAME}..."
-    curl -fL --retry 5 --retry-delay 5 --retry-connrefused -o "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}"
+    curl -fL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}"
 else
     info "Using cached ${STAGE3_BASENAME}"
 fi
@@ -1484,7 +1484,7 @@ else
 fi
 
 # Portage directories
-mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.mask,profile,env,package.env,repos.conf}
+mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.mask,profile,env,package.env,patches,repos.conf}
 
 # Point the sysroot at the HOST's gentoo ebuild repo (absolute path) so the
 # cross-emerge — run with PORTAGE_CONFIGROOT=${SYSROOT} — can resolve the
@@ -1511,10 +1511,34 @@ cp "${SPECS_DIR}/portage/package.env/"*                   "${SYSROOT}/etc/portag
 # Plain (non-templated) per-package env files, e.g. python-cross.conf. The .tmpl
 # env files (cross-go.conf) are rendered separately just below.
 cp "${SPECS_DIR}/portage/env/"*.conf                      "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
+# Per-package user patches auto-applied by eapply_user (called from each ebuild's
+# default src_prepare). cross_emerge runs with PORTAGE_CONFIGROOT=${SYSROOT}, so
+# portage reads them from ${SYSROOT}/etc/portage/patches/<cat>/<pkg>/. Currently
+# holds net-misc/networkmanager's cross jansson-SONAME fix (see that .patch).
+if [ -d "${SPECS_DIR}/portage/patches" ]; then
+    cp -a "${SPECS_DIR}/portage/patches/."             "${SYSROOT}/etc/portage/patches/"
+fi
 
 # Templated portage specs
 render_template "${SPECS_DIR}/portage/make.conf.tmpl"     "${SYSROOT}/etc/portage/make.conf"
 render_template "${SPECS_DIR}/portage/env/cross-go.conf.tmpl" "${SYSROOT}/etc/portage/env/cross-go.conf"
+
+# The arm64 stage3's python FLOATS — the current seed ships ONLY python3.14, but
+# the template historically pinned python3_12. A target with no interpreter in the
+# seed leaves @system unsatisfiable (e.g. certifi/requests/pip dropped 3.12 ->
+# "All ebuilds masked" -> pam/openssh/@system fail -> payload incomplete). Pin
+# PYTHON_TARGETS/PYTHON_SINGLE_TARGET to whatever python the seed actually ships
+# so this survives future stage3 python bumps without another hardcode edit.
+_seed_py="$(ls -d "${SYSROOT}"/usr/lib/python3.* 2>/dev/null | sed 's#.*/##' | sort -V | tail -1)"   # e.g. python3.14
+if [[ "${_seed_py}" =~ ^python3\.[0-9]+$ ]]; then
+    _seed_pt="${_seed_py/./_}"                                                                        # python3_14
+    sed -i -E "s/^PYTHON_TARGETS=.*/PYTHON_TARGETS=\"${_seed_pt}\"/; \
+               s/^PYTHON_SINGLE_TARGET=.*/PYTHON_SINGLE_TARGET=\"${_seed_pt}\"/" \
+        "${SYSROOT}/etc/portage/make.conf"
+    info "PYTHON_TARGETS/PYTHON_SINGLE_TARGET pinned to seed python: ${_seed_pt}"
+else
+    warn "could not detect seed python under ${SYSROOT}/usr/lib — leaving templated PYTHON_TARGETS"
+fi
 
 # Boot files: config.txt + cmdline.txt are written AFTER Phase 2 (see below),
 # NOT here. sys-boot/raspberrypi-firmware's pkg_preinst hard-dies if it finds a
@@ -1851,6 +1875,7 @@ cross_emerge() {
         --jobs="${CROSS_EMERGE_JOBS:-1}" \
         --load-average="${JOBS}" \
         --with-bdeps=n \
+        --usepkg=y --binpkg-respect-use=y \
         "$@"
 }
 
@@ -1966,7 +1991,7 @@ else
     HS_URL="${HS_REL}/headscale_${HEADSCALE_VERSION}_linux_arm64"
     HS_BIN="${SYSROOT}/usr/bin/headscale"
     info "Fetching headscale ${HEADSCALE_VERSION}..."
-    if curl -fL --retry 5 --retry-delay 5 --retry-connrefused -o "${HS_BIN}" "${HS_URL}"; then
+    if curl -fL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o "${HS_BIN}" "${HS_URL}"; then
         # Verify sha256 against the release checksums.txt BEFORE trusting it.
         HS_SUMS="${BUILD_ROOT}/headscale_${HEADSCALE_VERSION}_checksums.txt"
         if ! dlv_fetch "${HS_REL}/checksums.txt" "${HS_SUMS}" \
@@ -1996,7 +2021,7 @@ else
         TS_URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
         TS_TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
         info "Fetching tailscale ${TAILSCALE_VERSION}..."
-        if curl -fL --retry 5 --retry-delay 5 --retry-connrefused -o "${TS_TGZ}" "${TS_URL}"; then
+        if curl -fL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o "${TS_TGZ}" "${TS_URL}"; then
             # Verify sha256 against the published <tgz>.sha256 sidecar BEFORE extracting.
             TS_SHA="${TS_TGZ}.sha256"
             if ! dlv_fetch "${TS_URL}.sha256" "${TS_SHA}" \
@@ -2074,8 +2099,11 @@ else
                     CONFIG_NETFILTER_XT_MATCH_MULTIPORT CONFIG_NETFILTER_XT_MATCH_STATISTIC \
                     CONFIG_NETFILTER_XT_TARGET_MARK CONFIG_NETFILTER_XT_TARGET_MASQUERADE \
                     CONFIG_NETFILTER_XT_TARGET_REDIRECT \
+                    CONFIG_NETFILTER_XTABLES_LEGACY CONFIG_IP_NF_IPTABLES_LEGACY \
+                    CONFIG_IP6_NF_IPTABLES_LEGACY \
                     CONFIG_IP_NF_MANGLE CONFIG_NF_NAT CONFIG_NF_NAT_MASQUERADE \
-                    CONFIG_NF_TABLES CONFIG_NFT_NAT CONFIG_NFT_MASQ CONFIG_NFT_CT \
+                    CONFIG_NF_TABLES CONFIG_NF_TABLES_IPV4 CONFIG_NF_TABLES_IPV6 \
+                    CONFIG_NFT_NAT CONFIG_NFT_MASQ CONFIG_NFT_CT \
                     CONFIG_IP6_NF_IPTABLES CONFIG_IP6_NF_FILTER CONFIG_IP6_NF_NAT \
                     CONFIG_IP6_NF_MANGLE \
                     CONFIG_VLAN_8021Q CONFIG_NET_L3_MASTER_DEV CONFIG_NET_SCH_HTB \
@@ -2083,8 +2111,8 @@ else
                     CONFIG_IP_VS CONFIG_VXLAN CONFIG_VETH CONFIG_BRIDGE \
                     CONFIG_OVERLAY_FS CONFIG_OVERLAY_FS_REDIRECT_DIR CONFIG_OVERLAY_FS_INDEX \
                     CONFIG_CGROUP_NET_CLASSID CONFIG_CGROUP_NET_PRIO CONFIG_CGROUP_HUGETLB \
-                    CONFIG_CGROUP_PERF CONFIG_CGROUP_WRITEBACK CONFIG_CGROUP_NS \
-                    CONFIG_PROC_PID_CPUSET CONFIG_FAIR_GROUP_SCHED \
+                    CONFIG_CGROUP_PERF CONFIG_CGROUP_WRITEBACK \
+                    CONFIG_FAIR_GROUP_SCHED \
                     CONFIG_BPF_SYSCALL CONFIG_BPF_EVENTS \
                     CONFIG_POSIX_MQUEUE; do
             grep -q "^${must}=y" .config || { err "k8s node kernel option ${must} not enabled after olddefconfig (Service/kube-proxy/CNI/container-runtime would be impaired)"; exit 1; }
@@ -2197,6 +2225,19 @@ build_img() {
     # 1MiB alignment gap + 512MiB FAT boot + ROOT_MiB ext4 root + 1MiB slack.
     img_size_mib=$(( 1 + 512 + ROOT_MiB + 1 ))
 
+    # Pre-flight (fail in seconds, not after a long extraction): does the finished
+    # payload fit the ROOT_MiB root partition? Converts the cryptic mid-tar "No space
+    # left on device" into an upfront, actionable error. Mirrors the x86 builder.
+    local payload_mib cap_mib
+    payload_mib="$(du -sxBM "${SYSROOT}" 2>/dev/null | cut -f1 | tr -dc '0-9')"
+    cap_mib=$(( ROOT_MiB * 93 / 100 ))   # ext4 metadata + 5% reserved ≈ 7% overhead
+    if [ -n "${payload_mib}" ] && [ "${payload_mib}" -gt "${cap_mib}" ]; then
+        err "Payload ${payload_mib} MiB exceeds the ${ROOT_MiB} MiB root partition (usable ~${cap_mib} MiB)."
+        err "Re-run with a bigger root, e.g.  --img-size $(( (payload_mib * 115 / 100 / 1024 + 1) * 1024 ))"
+        exit 1
+    fi
+    info "Pre-flight: payload ${payload_mib:-?} MiB fits the ${ROOT_MiB} MiB root (usable ~${cap_mib} MiB)"
+
     # Teardown helper — registered on ERR/EXIT so a failure mid-build never leaks
     # a mounted filesystem or an orphaned loop device.
     _img_cleanup() {
@@ -2204,7 +2245,7 @@ build_img() {
         set +e
         [ -n "${root_mnt}" ] && mountpoint -q "${root_mnt}/boot" && umount "${root_mnt}/boot"
         [ -n "${root_mnt}" ] && mountpoint -q "${root_mnt}" && umount "${root_mnt}"
-        [ -n "${loop}" ] && losetup "${loop}" &>/dev/null && losetup -d "${loop}"
+        [ -n "${loop}" ] && { losetup "${loop}" &>/dev/null && losetup -d "${loop}"; rm -f "${loop}p1" "${loop}p2" 2>/dev/null; }
         [ -n "${root_mnt}" ] && rmdir "${root_mnt}" 2>/dev/null
         return "${rc}"
     }
@@ -2221,11 +2262,32 @@ build_img() {
     parted -s "${IMG_PATH}" set 1 boot on
     parted -s "${IMG_PATH}" mkpart primary ext4 513MiB 100%
 
+    # Pre-create a pool of loop nodes — the container ships only /dev/loop0 and has
+    # no udev, so `losetup --find` for additional images fails "device node lost".
+    local _ln
+    for _ln in $(seq 0 31); do
+        [ -e "/dev/loop${_ln}" ] || mknod "/dev/loop${_ln}" b 7 "${_ln}" 2>/dev/null || true
+    done
+
     loop="$(losetup --show -fP "${IMG_PATH}")"
     boot_part="${loop}p1"
     root_part="${loop}p2"
-    # Settle the partition device nodes that losetup -P just created.
-    udevadm settle &>/dev/null || sleep 1
+    # losetup -P scans the partition table into /sys, but with no udev in the
+    # container it never creates the /dev/loopNp1/p2 CHILD nodes — mkfs/mount then
+    # fail on a missing node and a HOLLOW image is shipped with exit 0. Materialise
+    # the child nodes from /sys using the kernel-assigned major:minor.
+    local _lbn _pn _pdev _pmaj _pmin
+    _lbn="$(basename "${loop}")"
+    for _pn in 1 2; do
+        _pdev="$(cat "/sys/block/${_lbn}/${_lbn}p${_pn}/dev" 2>/dev/null)"   # "MAJ:MIN"
+        if [ -n "${_pdev}" ]; then
+            _pmaj="${_pdev%%:*}"; _pmin="${_pdev##*:}"
+            [ -e "${loop}p${_pn}" ] || mknod "${loop}p${_pn}" b "${_pmaj}" "${_pmin}"
+        fi
+    done
+    udevadm settle &>/dev/null || true
+    [ -b "${boot_part}" ] && [ -b "${root_part}" ] \
+        || { err "loop partition nodes not created (${boot_part}/${root_part}) — refusing to image"; exit 1; }
 
     info "Formatting ${boot_part} (FAT32 RPI_BOOT) and ${root_part} (ext4 RPI_ROOT)"
     mkfs.vfat -F 32 -n RPI_BOOT "${boot_part}"
@@ -2240,6 +2302,14 @@ build_img() {
     info "Extracting stage4 into ${root_mnt}"
     tar -C "${root_mnt}" --xattrs-include='*.*' -xpf "${STAGE4_TARBALL}" 2>/dev/null || \
     tar -C "${root_mnt}" -xpf "${STAGE4_TARBALL}"
+
+    # Anti-hollow assert: the extraction must have produced a real rootfs (the
+    # container-loop bug class silently shipped EMPTY images with exit 0). Require
+    # kernel modules + an init. (The Pi kernel itself lives on the FAT /boot, not
+    # in the rootfs, and is asserted separately by the DTB/firmware checks below.)
+    { [ -d "${root_mnt}/usr/lib/modules" ] && [ -n "$(ls -A "${root_mnt}/usr/lib/modules" 2>/dev/null)" ] \
+        && { [ -x "${root_mnt}/sbin/init" ] || [ -L "${root_mnt}/sbin/init" ]; }; } \
+        || { err "rootfs empty/incomplete after stage4 extraction (no modules/init) — refusing to ship a HOLLOW .img"; exit 1; }
 
     # The /boot firmware lives on the FAT partition. Mount the FAT over the root's
     # /boot mountpoint and move the firmware there, so the ext4 /boot is just a
@@ -2338,7 +2408,7 @@ build_img() {
     umount "${root_mnt}/boot"
     umount "${root_mnt}"
     rmdir  "${root_mnt}"; root_mnt=""
-    losetup -d "${loop}"; loop=""
+    rm -f "${loop}p1" "${loop}p2" 2>/dev/null; losetup -d "${loop}"; loop=""
 
     # Disarm the trap — the happy path tore everything down cleanly.
     trap - ERR EXIT
