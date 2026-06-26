@@ -329,6 +329,16 @@ PHPBB_DB_PASSWORD="$(openssl rand -base64 24)"
 PHPBB_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 PHPBB_ADMIN_PASSWORD="$(openssl rand -base64 24)"
 
+# Akkoma/Pleroma RUNTIME app secrets (was a raw kind:Secret with REPLACE_*
+# placeholders in manifests/akkoma/akkoma.yaml — now ESO-sourced from Vault).
+# SECRET_KEY_BASE + SIGNING_SALT = Phoenix endpoint signing; AKKOMA_DB_PASSWORD =
+# the akkoma-db Postgres owner. Materialized by the akkoma-secrets ExternalSecret
+# (manifests/external-secrets/akkoma-externalsecrets.yaml) at secret/<brand>/akkoma.
+# SECRET_KEY_BASE is a long Phoenix key (64 random bytes); the salt + DB pw shorter.
+AKKOMA_SECRET_KEY_BASE="$(openssl rand -base64 64 | tr -d '\n')"
+AKKOMA_SIGNING_SALT="$(openssl rand -base64 24)"
+AKKOMA_DB_PASSWORD="$(openssl rand -base64 24)"
+
 # route-access-db per-machine-user least-privilege passwords. The owner (DDL) plus
 # one password per consuming machine-user: admin-bff (the ONLY writer) and the
 # three gateways (read-only). Each gateway/admin-bff Deployment mounts ONLY its own
@@ -423,6 +433,13 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
             ADMIN_PASSWORD="${PHPBB_ADMIN_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/forum-db" \
             app_password="${PHPBB_DB_APP_PASSWORD}"
+        # Akkoma/Pleroma runtime app secrets (akkoma-secrets ESO <- secret/<brand>/
+        # akkoma). Replaces the former plaintext REPLACE_* kind:Secret. SECRET_KEY_BASE
+        # + SIGNING_SALT = Phoenix signing; DB_PASSWORD = akkoma-db owner pw.
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/akkoma" \
+            SECRET_KEY_BASE="${AKKOMA_SECRET_KEY_BASE}" \
+            SIGNING_SALT="${AKKOMA_SIGNING_SALT}" \
+            DB_PASSWORD="${AKKOMA_DB_PASSWORD}"
         # route-access-db per-machine-user least-privilege passwords (owner + the
         # four consumers). admin-bff = writer; pki/be/fe-gateway = read-only.
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/route-access-db" \
@@ -456,7 +473,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/image-builder-registry" \
             username="${IMAGE_BUILDER_REGISTRY_USER}" \
             token="${IMAGE_BUILDER_REGISTRY_TOKEN}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,forum,forum-db,route-access-db,uptrace,mail,gitlab-registry,image-builder-registry}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,forum,forum-db,akkoma,route-access-db,uptrace,mail,gitlab-registry,image-builder-registry}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -528,6 +545,9 @@ WIKI_BFF_DB_APP_PASSWORD="${WIKI_BFF_DB_APP_PASSWORD}" \
 PHPBB_DB_PASSWORD="${PHPBB_DB_PASSWORD}" \
 PHPBB_DB_APP_PASSWORD="${PHPBB_DB_APP_PASSWORD}" \
 PHPBB_ADMIN_PASSWORD="${PHPBB_ADMIN_PASSWORD}" \
+AKKOMA_SECRET_KEY_BASE="${AKKOMA_SECRET_KEY_BASE}" \
+AKKOMA_SIGNING_SALT="${AKKOMA_SIGNING_SALT}" \
+AKKOMA_DB_PASSWORD="${AKKOMA_DB_PASSWORD}" \
 ROUTE_ACCESS_OWNER_PASSWORD="${ROUTE_ACCESS_OWNER_PASSWORD}" \
 ROUTE_ACCESS_ADMIN_BFF_PASSWORD="${ROUTE_ACCESS_ADMIN_BFF_PASSWORD}" \
 ROUTE_ACCESS_PKI_GATEWAY_PASSWORD="${ROUTE_ACCESS_PKI_GATEWAY_PASSWORD}" \
@@ -674,6 +694,14 @@ data = {
         "casdoor-sync-games": {
             "clientId": "twclient001",
             "clientSecret": os.environ["CASDOOR_GAMES_CLIENT_SECRET"],
+        },
+        # Akkoma/Pleroma runtime app secrets (was a raw REPLACE_* kind:Secret in
+        # manifests/akkoma/akkoma.yaml; now ESO-sourced). akkoma envFrom secretRef +
+        # akkoma-db secretKeyRef DB_PASSWORD. Matches the akkoma-secrets ExternalSecret.
+        "akkoma-secrets": {
+            "SECRET_KEY_BASE": os.environ["AKKOMA_SECRET_KEY_BASE"],
+            "SIGNING_SALT": os.environ["AKKOMA_SIGNING_SALT"],
+            "DB_PASSWORD": os.environ["AKKOMA_DB_PASSWORD"],
         },
     },
     # GAMES-realm Casdoor (casdoor-games) — SEPARATE instance in the games namespace.

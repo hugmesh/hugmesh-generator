@@ -5,25 +5,16 @@
 #
 # ⚠️ VALIDATE ON CLUSTER + one-time SETUP (Akkoma is stateful/Elixir; a bare
 # Deployment won't self-configure):
-#   - secrets: generate SECRET_KEY_BASE + salts (`pleroma_ctl` / mix pleroma.instance
-#     gen) and put them in the akkoma-secrets Secret (placeholders below).
+#   - secrets: SECRET_KEY_BASE + SIGNING_SALT + the akkoma DB_PASSWORD are now
+#     materialized by ESO from Vault (secret/<brand>/akkoma) into the akkoma-secrets
+#     Secret — see manifests/external-secrets/akkoma-externalsecrets.yaml. They are
+#     minted by scripts/gen-cluster-secrets.sh (openssl rand); NOTHING is committed
+#     plaintext. (Was a raw kind:Secret with REPLACE_* placeholders.)
 #   - migrate: the initContainer runs `pleroma_ctl migrate` (verify the path/cmd
 #     for the chosen image tag).
 #   - admin + OIDC(Casdoor via ueberauth_oidcc) + Mastodon->Akkoma data import are
 #     follow-ups (documented in docs/architecture).
 #   - confirm the image ref (git.akkoma.dev/AkkomaGang/akkoma OR ghcr mirror).
-apiVersion: v1
-kind: Secret
-metadata:
-  name: akkoma-secrets
-  namespace: snapdragon-backend
-type: Opaque
-stringData:
-  # ⚠️ placeholders — replace via `pleroma_ctl` gen or ESO before first boot.
-  SECRET_KEY_BASE: "REPLACE_secret_key_base"
-  SIGNING_SALT: "REPLACE_signing_salt"
-  DB_PASSWORD: "REPLACE_akkoma_db_pw"
----
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -97,7 +97,7 @@ spec:
       # Per-service ExternalSecret file (post-split). Removing akkoma deletes ONLY
       # this; tuwunel's half lives in its own file.
       esoFile: manifests/external-secrets/akkoma-externalsecrets.yaml
-      esoKeys: [akkoma-proxy-mtls, akkoma-admin]
+      esoKeys: [akkoma-proxy-mtls, akkoma-admin, akkoma-secrets]
       # Public host fronted by the be-gateway (Host predicate routes).
       gatewayHost: mastodon.${CLUSTER_DOMAIN}
       # be-gateway route ids (in apps/20-gateway-be.yaml) to drop on removal.
