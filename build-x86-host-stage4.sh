@@ -1235,7 +1235,7 @@ gate_optional_services() {
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     local slug
-    for slug in akkoma tuwunel phpbb games edge-ai edge-ai-analysis tor; do
+    for slug in akkoma tuwunel phpbb games owncast tube egress-vpn workloadConsole edge-ai edge-ai-analysis tor; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -1290,6 +1290,54 @@ gate_optional_services() {
                 _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-analysis
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
                     '/v1/analyze/**'
+                ;;
+            owncast)
+                # Owncast live-streaming — GPU-gated x86 service (DEFAULT-OFF). Owns its
+                # bootstrap Application + manifests dir + its fe-gateway BFF route-access
+                # rows (no gateway HOST route + no per-service ESO today). When deselected
+                # the user/admin live-stream panels grey out (installed-services "false").
+                rm -f "${apps}/52-owncast.yaml"
+                rm -rf "${tree}/manifests/owncast"
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" snapdragon-owncast-bff-api
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                    '/bff/owncast/admin/**' '/bff/owncast/**'
+                ;;
+            tube)
+                # LocalTube (YouTube archive) — GPU-gated x86 service (DEFAULT-OFF). Owns
+                # its bootstrap Application + manifests dir + its per-service ESO file
+                # (tube-externalsecrets.yaml; standalone, not in the ESO kustomization) +
+                # its fe/be route-access rows. When deselected the tube panel greys out.
+                rm -f "${apps}/53-tube.yaml"
+                rm -rf "${tree}/manifests/tube"
+                rm -f "${tree}/manifests/external-secrets/tube-externalsecrets.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" tube-externalsecrets.yaml
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" snapdragon-tube-bff-api tube-content
+                _opt_drop_route "${apps}/20-gateway-be.yaml" tube-content
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                    '/bff/tube/**'
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/tube/content/**'
+                ;;
+            egress-vpn)
+                # NODE service (not a cluster Application). Prune the per-service NetworkPolicy
+                # interaction (file + kustomization line) so no vpn-egress label is ever
+                # honoured. On x86 egress-vpn is the DESKTOP --egress-vpn FILE path (never a
+                # registry _opt_selected), so this prune always runs — the registry interaction
+                # NetworkPolicy is moot on x86; the node-package/service handling is its own path.
+                rm -f "${tree}/manifests/networkpolicy/egress-vpn-interaction.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" egress-vpn-interaction.yaml
+                ;;
+            workloadConsole)
+                # The WORKLOAD CONSOLE is RBAC + route-access ONLY (the BFF endpoints live in
+                # the always-present admin-bff). Deselecting it prunes the two-SA RBAC
+                # Application + its manifests (so the SA tokens are never minted) AND the two
+                # route-access rows, so the gateway 404s the whole /bff/{admin,superadmin}/
+                # workloads/** prefix. The admin-bff ALSO ships dark independently
+                # (app.workload-console.enabled=false), so even an un-pruned tree is inert.
+                rm -f "${apps}/14-workload-console-rbac.yaml"
+                rm -rf "${tree}/manifests/workload-console-rbac"
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/bff/superadmin/workloads/**' '/bff/admin/workloads/**'
                 ;;
             tor)
                 # NODE service (DISTRO tor daemon + a reconcile agent), not a cluster
@@ -1431,7 +1479,7 @@ _opt_render_installed_services() {
     local cm="${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy/installed-services-configmap.yaml"
     [ -f "${cm}" ] || return 0
     local slug val
-    for slug in akkoma tuwunel phpbb games edge-ai edge-ai-analysis; do
+    for slug in akkoma tuwunel phpbb games owncast tube workloadConsole edge-ai edge-ai-analysis; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         # '#'-delimited so the (true|false) alternation does not collide with the delimiter.
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
