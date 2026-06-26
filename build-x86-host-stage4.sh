@@ -2760,6 +2760,13 @@ make olddefconfig
 for must in CONFIG_SECURITY_SELINUX CONFIG_STACKPROTECTOR_STRONG CONFIG_FORTIFY_SOURCE CONFIG_HARDENED_USERCOPY; do
     grep -q "^\${must}=y" .config || { echo "[build-x86] ERROR: hardened kernel option \${must} not enabled after olddefconfig"; exit 1; }
 done
+# BOOT-CRITICAL (live ISO + SELinux enforcing): SQUASHFS_XATTR must survive olddefconfig.
+# The live squashfs root carries the SELinux security.selinux labels as xattrs; without
+# this the kernel drops them ("squashfs: Xattrs in filesystem, these will be ignored"),
+# the live root is UNLABELED, and the enforcing boot DEADLOCKS at OpenRC init-early
+# (proven via QEMU: enforcing hangs, enforcing=0 reaches agetty). SQUASHFS_XATTR depends
+# on SQUASHFS, so a pruned dep would silently re-strip the labels — fail closed here.
+grep -q "^CONFIG_SQUASHFS_XATTR=y" .config || { echo "[build-x86] ERROR: CONFIG_SQUASHFS_XATTR not enabled after olddefconfig — live SELinux-enforcing boot would hang (unlabeled squashfs root)"; exit 1; }
 # BOOT-CRITICAL: refuse to ship a kernel whose k8s Service-networking surface
 # silently lost a netfilter/NAT/eBPF symbol. The x86 fragment used to be a
 # TRUNCATED copy of the Pi one (no xtables match/target layer, no nft NAT/MASQ,
