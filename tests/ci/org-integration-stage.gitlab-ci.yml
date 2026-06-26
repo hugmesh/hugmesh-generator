@@ -1,0 +1,62 @@
+# org-integration-stage.gitlab-ci.yml — include-able "build the intra-org dependency graph
+# FROM SOURCE" job. One source of truth org-wide (mirrors tests/pentest/ci/pentest-stage).
+#
+# WHY: per-repo CI resolves snapdragon-commons/auth-core from the registry, so a dependent
+# whose tests weren't updated for a shared-lib API change stays green against the stale
+# published jar while being red against current source (see tests/ci/README.md +
+# the memory snapdragon-silent-red-main-rootcause). This job catches that drift.
+#
+# This is a SCHEDULED, cross-repo net — NOT a per-MR gate. Wire it into a dedicated
+# scheduled pipeline (e.g. nightly), not into every repo's pipeline.
+#
+# Usage (in a scheduled pipeline's .gitlab-ci.yml):
+#   include:
+#     - project: 'snapdragon-systems/snapdragon-generator'
+#       file: '/tests/ci/org-integration-stage.gitlab-ci.yml'
+#   org-mainline:
+#     extends: .org-mainline-from-source
+
+# Hidden template; a concrete pipeline opts in via `extends: .org-mainline-from-source`.
+.org-mainline-from-source:
+  stage: test
+  # JDK matching snapdragon-parent (java.version=25) + Maven + git + python3 + a Docker
+  # daemon for the Testcontainers-Postgres boot tests. Use an image that has them, or
+  # install in before_script. DinD service required for Testcontainers.
+  image: maven:3.9-eclipse-temurin-25
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    TESTCONTAINERS_RYUK_DISABLED: "true"
+    GITHUB_ROOT: "$CI_PROJECT_DIR/.org-repos"
+    WORK: "$CI_PROJECT_DIR/.org-work"
+    # Space-separated; override in the scheduled pipeline to scope the run.
+    DEPENDENTS: >-
+      snapdragon-admin-bff-api snapdragon-mod-bff-api snapdragon-user-bff-api
+      snapdragon-federation-api snapdragon-gateway snapdragon-forum-bff-api
+      snapdragon-wiki-bff-api snapdragon-tube-bff-api snapdragon-owncast-bff-api
+      snapdragon-actions snapdragon-remote-fragment
+  rules:
+    # Schedule-only by default (cross-repo, heavy). Also runnable manually from the UI.
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: manual
+  before_script:
+    - apt-get update -qq && apt-get install -yqq git python3 >/dev/null
+    # Shallow-clone each lib + dependent at its default branch (CI_JOB_TOKEN has read
+    # access to the group's repos). The script then builds the libs from source.
+    - mkdir -p "$GITHUB_ROOT"
+    - BASE="https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/snapdragon-systems"
+    - for r in snapdragon-commons snapdragon-auth-core $DEPENDENTS; do
+        git clone --depth 1 "$BASE/$r.git" "$GITHUB_ROOT/$r" || exit 1;
+      done
+  script:
+    # The generator repo is THIS checkout; the script lives in it.
+    - chmod +x tests/ci/org-mainline-from-source.sh
+    - tests/ci/org-mainline-from-source.sh $DEPENDENTS
+  artifacts:
+    when: always
+    paths:
+      - .org-work/**/target/surefire-reports/
+    expire_in: 1 week
