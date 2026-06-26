@@ -72,6 +72,7 @@ class ImageConfig:
     proxy_stack: str = "auto"          # auto|on|off — Squid+Privoxy+Firefox (desktops)
     snort: bool = True                 # Snort IDS (default-on, all images)
     aide: bool = False                 # AIDE file-integrity IDS (opt-in)
+    root_login: str = "no"             # --permit-root-login: no (DEFAULT, hardened) | prohibit-password | yes
     # ── edge-AI inference (GPU cluster roles: be+gpu / omnibus / edge_ai) ──
     edge_ai_service: bool = False      # add the edge-ai model API to a GPU role (edge_ai role auto-has it)
     edge_ai_runtime: str = "ollama"    # ollama | vllm
@@ -189,6 +190,9 @@ class ImageConfig:
         a += ["--snort"] if self.snort else ["--no-snort"]
         if self.aide:
             a += ["--with-aide"]
+        # Root SSH login — hardened DEFAULT is "no" (locked); opt back in per build.
+        if self.root_login and self.root_login != "no":
+            a += ["--permit-root-login", self.root_login]
 
         # edge-AI inference service (GPU cluster roles). The edge_ai role auto-selects
         # the service; be+gpu/omnibus opt in with --with-edge-ai. Model-library knobs

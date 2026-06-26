@@ -284,6 +284,11 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.snort = QtWidgets.QCheckBox("Snort IDS (network intrusion detection)")
         self.aide = QtWidgets.QCheckBox("AIDE file-integrity IDS (DB baselined at first boot)")
         sl.addWidget(self.proxy_stack); sl.addWidget(self.snort); sl.addWidget(self.aide)
+        # Root SSH login — hardened DEFAULT is "no" (root locked; the non-root KEYS admin
+        # is the entry point). Tri-state, matching --permit-root-login / the build-menu.
+        self.root_login = QtWidgets.QComboBox()
+        self.root_login.addItems(["no", "prohibit-password", "yes"])
+        sl.addWidget(_row("Root SSH login", self.root_login))
         lay.addWidget(sec)
         # edge-AI inference (GPU cluster roles — cloud/mesh). Serves an OpenAI-compatible
         # model API to the mesh; the model library (runtime/preload/default) is tunable.
@@ -316,6 +321,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.proxy_stack.setChecked(c.proxy_stack in ("on", "auto"))
         self.snort.setChecked(c.snort)
         self.aide.setChecked(c.aide)
+        self.root_login.setCurrentText(c.root_login or "no")
         self.tailscale.setChecked(c.tailscale or c.mode in ("cloud", "mesh"))
         self.sso.setChecked(c.sso or c.mode in ("cloud", "mesh"))
         self.brand.setText(c.brand)
@@ -346,6 +352,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         c.proxy_stack = "on" if self.proxy_stack.isChecked() else "off"
         c.snort = self.snort.isChecked()
         c.aide = self.aide.isChecked()
+        c.root_login = self.root_login.currentText()
         c.edge_ai_service = self.edge_ai.isChecked()
         c.edge_ai_runtime = self.edge_ai_runtime.currentText()
         c.edge_ai_models = self.edge_ai_models.text().strip()
