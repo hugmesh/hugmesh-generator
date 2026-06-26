@@ -3,8 +3,8 @@
 # tier-ingress.yaml admits the WHOLE owning namespace (+ frontend / ingress) to
 # every pod it selects via podSelector:{}. Under tier-ingress ALONE, any pod in
 # snapdragon-backend could open a Postgres socket directly to admin-bff-db /
-# mod-bff-db / user-bff-db / federation-db / forum-bff-db, and any pod in
-# snapdragon-pki (plus the cross-namespace from-set) could reach route-access-db
+# mod-bff-db / user-bff-db / federation-db / forum-bff-db / wiki-bff-db, and any
+# pod in snapdragon-pki (plus the cross-namespace from-set) could reach route-access-db
 # and Cassandra — bypassing the BFF / route-access authz that those stores back.
 #
 # This file is the per-pod backstop that closes that lateral path: each DB pod
@@ -169,6 +169,25 @@ spec:
     - from:
         - podSelector:
             matchLabels: { app: snapdragon-forum-bff-api }
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+# ── wiki-bff-db (Postgres, snapdragon-backend) ─────────────────────────────────
+# Consumer: wiki-bff-api only (wikibff datasource).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-ingress-wiki-bff-db
+  namespace: snapdragon-backend
+  labels: { app: wiki-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  podSelector:
+    matchLabels: { app: wiki-bff-db }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: snapdragon-wiki-bff-api }
       ports:
         - { protocol: TCP, port: 5432 }
 ---

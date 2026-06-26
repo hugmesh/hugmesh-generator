@@ -83,7 +83,7 @@ spec:
   # so excluding app.kubernetes.io/name {akkoma,tuwunel,akkoma-db} covers the proxy
   # ports too. Keep this list in sync with homeserver-isolation.yaml.
   #
-  # ALSO EXCLUDES the five backend BFF/federation Postgres pods (ADR-32 DB-hardening)
+  # ALSO EXCLUDES the six backend BFF/federation Postgres pods (ADR-32 DB-hardening)
   # so the broad namespace+frontend from-set no longer re-admits them — they are
   # isolated per-pod by db-ingress.yaml (each reachable only from its real *-api
   # consumer). The DB pods carry the `app` label (e.g. app: admin-bff-db), distinct
@@ -96,7 +96,7 @@ spec:
         values: [akkoma, tuwunel, akkoma-db]
       - key: app
         operator: NotIn
-        values: [admin-bff-db, mod-bff-db, user-bff-db, federation-db, forum-bff-db]
+        values: [admin-bff-db, mod-bff-db, user-bff-db, federation-db, forum-bff-db, wiki-bff-db]
   policyTypes: [Ingress]
   ingress:
     - from:
