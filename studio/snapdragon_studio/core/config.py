@@ -78,6 +78,8 @@ class ImageConfig:
     edge_ai_models: str = ""           # comma list of models to PRELOAD (empty = builder default)
     edge_ai_model_default: str = ""    # default model when an OpenAI request omits one
     edge_ai_analysis: bool = False     # also bake the edge-ai-analysis task API (image/log verdicts; separate image)
+    # ── Tor v3 onion (hidden) service — node-scoped optional, default off ──
+    tor_onion_service: bool = False    # --with-tor: expose the in-cluster fe-gateway as a v3 .onion
     # ── home provisioning ──
     home_mode: str = "create"          # create|adopt|archive|restore
     home_device: str = ""
@@ -204,6 +206,11 @@ class ImageConfig:
         # the analysis API (folds edge-ai too, its dependency)
         if self.edge_ai_analysis:
             a += ["--with-edge-ai-analysis"]
+
+        # Tor v3 onion (hidden) service (node-scoped; any cloud/mesh cluster role).
+        # No-op on a CLIENT/standalone role (the builder guards on !ROLE_CLIENT).
+        if self.tor_onion_service:
+            a += ["--with-tor"]
 
         # home
         if self.home_mode and self.home_mode != "create":

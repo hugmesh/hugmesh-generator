@@ -14,7 +14,17 @@ The platform splits into two tiers:
   x86), **edge-ai** (GPU inference node serving an OpenAI-compatible model API to
   the mesh — DEFAULT-OFF, GPU-gated; auto-selected by the `edge_ai` node role; see
   [EDGE-AI.md](EDGE-AI.md)). (Plus the non-user-level optional slugs **egress-vpn**
-  / **workloadConsole** / **anubis** / **coturn**, gated by the same registry.)
+  / **tor** / **workloadConsole** / **anubis** / **coturn**, gated by the same registry.)
+
+  **tor** (Tor v3 onion hidden service, DEFAULT-OFF) follows the same node-scoped
+  model as egress-vpn (`scope: node`): add with `--with-tor` (x86/Studio/build-menu)
+  or by listing `tor` in `OPTIONAL_SERVICES` (rpi5/brand.conf); exclude with
+  `--exclude-services tor`. It owns **nodePackages: [net-vpn/tor]** + **nodeServices:
+  [tor, snapdragon-tor-reconcile]** (the distro Tor daemon + a reconcile agent) and
+  exposes the in-cluster fe-gateway as a v3 `.onion` — INBOUND reach with no public IP
+  / DDNS. The v3 onion keypair is minted + persisted OFF-GIT under
+  `/var/lib/tor/snapdragon-onion` on first boot; net-vpn/tor is omitted + the services
+  unlinked when not selected. See [TOR-HIDDEN-SERVICE.md](TOR-HIDDEN-SERVICE.md).
 
   **coturn** (TURN/STUN relay for Matrix WebRTC audio/video) is a DEFAULT-OFF,
   **runtime-only** slug (anubis pattern: `apps: []`, no baked Application) that
@@ -42,7 +52,7 @@ registry is that missing list). Each service entry carries:
 
 | field | meaning |
 |---|---|
-| `slug` | `akkoma` / `tuwunel` / `phpbb` / `games` / `owncast` / `tube` (+ `egress-vpn` / `workloadConsole` / `anubis`) |
+| `slug` | `akkoma` / `tuwunel` / `phpbb` / `games` / `owncast` / `tube` (+ `egress-vpn` / `tor` / `workloadConsole` / `anubis`) |
 | `namespace` | the k8s namespace it lands in |
 | `apps` | the ArgoCD Application YAMLs it **owns** (pruned on removal) |
 | `sharedApps` | apps shared with another slug (e.g. `45-social-ui.yaml`); pruned only when **all** owners are deselected |

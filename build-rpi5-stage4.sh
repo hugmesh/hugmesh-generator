@@ -68,8 +68,8 @@ GAMES_DOMAIN="games.snapdragon.systems"
 # ── DEFAULT-INCLUSION POLICY (user 2026-06-17) ───────────────────────
 # USER_LEVEL_SERVICES is the SINGLE source-of-truth set of user-level OPTIONAL
 # slugs (matches specs/cluster/optional-services.yaml; excludes the non-user-level
-# infra slugs egress-vpn / workloadConsole / anubis). It is what OPTIONAL_SERVICES=all
-# / --all-services expands to.
+# infra slugs egress-vpn / tor / workloadConsole / anubis). It is what
+# OPTIONAL_SERVICES=all / --all-services expands to.
 USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube"
 # OPTIONAL services selected on this image (subset of USER_LEVEL_SERVICES).
 #   DEFAULT-ON  (the built-in default when NO selection is given): akkoma tuwunel phpbb.
@@ -416,6 +416,15 @@ OPTIONS
         tube) — the FULL-SET shortcut, equivalent to --optional-services all.
         EXCLUDE_SERVICES still subtracts (e.g. --all-services with
         --exclude-services "games" bakes everything but games).
+        NOTE: the INFRA-level slugs (egress-vpn, tor, workloadConsole, anubis) are
+        NOT included by "all" — add them explicitly via OPTIONAL_SERVICES / brand.conf.
+
+    Tor v3 onion (hidden) service — add the slug "tor" to OPTIONAL_SERVICES (or
+        brand.conf) to bake the node-level Tor onion service: net-vpn/tor + a reconcile
+        agent that exposes the in-cluster fe-gateway as a v3 .onion (INBOUND reach with
+        no public IP / DDNS). The v3 onion keypair is minted + persisted OFF-GIT under
+        /var/lib/tor/snapdragon-onion on first boot. DEFAULT-OFF; node-scoped (no effect
+        on CLIENT roles). Exclude with --exclude-services tor.
 
     --exclude-services "<slugs>"
         The SUBTRACTIVE build-time exclusion list: force-OFF these user-level slugs
@@ -926,7 +935,7 @@ gate_optional_services() {
                    warn "edge-ai-analysis requires edge-ai — dropping it (no model server selected)" ;;
             esac ;;
     esac
-    for slug in akkoma tuwunel phpbb games owncast tube egress-vpn workloadConsole edge-ai edge-ai-analysis; do
+    for slug in akkoma tuwunel phpbb games owncast tube egress-vpn tor workloadConsole edge-ai edge-ai-analysis; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -1022,6 +1031,15 @@ gate_optional_services() {
                 # rootfs, not the GitOps tree.
                 rm -f "${tree}/manifests/networkpolicy/egress-vpn-interaction.yaml"
                 _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" egress-vpn-interaction.yaml
+                ;;
+            tor)
+                # NODE service (DISTRO tor daemon + a reconcile agent), not a cluster
+                # Application. Prune the per-service NetworkPolicy interaction (file +
+                # kustomization line) so no tor-onion label is ever honoured; the
+                # net-vpn/tor package omission + the service-link SKIP are handled OUTSIDE
+                # this loop (they touch the rootfs, not the GitOps tree).
+                rm -f "${tree}/manifests/networkpolicy/tor-onion-marked.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" tor-onion-marked.yaml
                 ;;
             workloadConsole)
                 # The WORKLOAD CONSOLE is RBAC + route-access ONLY (the BFF endpoints live in
@@ -1725,6 +1743,17 @@ cp "${SHARED_SPECS}/etc/init.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/init.d/
 chmod +x "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile"
 
+# ── Tor v3 onion (hidden) service (signed-export-free; keypair minted first-boot) — DEFAULT-OFF ─
+# Bake the onion-service reconcile agent + its OpenRC oneshot + the 24h cron into every
+# node image. INERT until enabled: the optional-services gate links the DISTRO `tor`
+# service + this reconcile agent ONLY when 'tor' is selected (net-vpn/tor is added then).
+# The agent (ordered `before tor`) writes the managed /etc/tor/torrc + mints/persists the
+# v3 onion keypair OFF-GIT under /var/lib/tor/snapdragon-onion. The cron drop-in is STAGED
+# at /etc/snapdragon/registry (the gate places it into /etc/cron.d on selection).
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-tor-reconcile"   "${SYSROOT}/usr/sbin/snapdragon-tor-reconcile";   chmod +x "${SYSROOT}/usr/sbin/snapdragon-tor-reconcile"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-tor-reconcile" "${SYSROOT}/etc/init.d/snapdragon-tor-reconcile"; chmod +x "${SYSROOT}/etc/init.d/snapdragon-tor-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-tor-reconcile"  "${SYSROOT}/etc/snapdragon/registry/cron-tor-reconcile"
+
 # ── Domain-registry -> brand-repo bridge (#4) — DEFAULT-OFF optional service ─────
 # Bake the reconcile agent + its source-and-extend verify lib (domain-verify.sh) +
 # the OpenRC service into every node image. INERT until enabled: the gate below
@@ -1828,6 +1857,24 @@ if _opt_selected egress-vpn; then
         cp -f "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile" \
               "${SYSROOT}/etc/cron.d/snapdragon-vpn-reconcile"
         info "OPTIONAL_SERVICES: egress-vpn selected — linked snapdragon-vpn-reconcile + 60s cron"
+    fi
+fi
+# Tor v3 onion (hidden) service (DEFAULT-OFF optional service): link ONLY the snapdragon
+# reconcile agent into the default runlevel when 'tor' is selected (net-vpn/tor is added
+# to the package set then, see below) — mirroring egress-vpn, which links only its
+# reconcile agent, not the daemon. The DISTRO `tor` service is NOT linked here: the
+# reconcile agent OWNS tor's lifecycle (writes the managed torrc, mints the v3 onion
+# keypair OFF-GIT under /var/lib/tor/snapdragon-onion, then `rc-service tor restart`),
+# avoiding any double-start. The 24h refresh cron (staged at
+# /etc/snapdragon/registry/cron-tor-reconcile) is installed alongside. Unselected =>
+# reconcile not linked + net-vpn/tor absent.
+if _opt_selected tor; then
+    DEFAULT_SVCS+=(snapdragon-tor-reconcile)
+    if [ -f "${SYSROOT}/etc/snapdragon/registry/cron-tor-reconcile" ]; then
+        mkdir -p "${SYSROOT}/etc/cron.d"
+        cp -f "${SYSROOT}/etc/snapdragon/registry/cron-tor-reconcile" \
+              "${SYSROOT}/etc/cron.d/snapdragon-tor-reconcile"
+        info "OPTIONAL_SERVICES: tor selected — linked snapdragon-tor-reconcile + 24h cron (reconcile agent owns the tor daemon)"
     fi
 fi
 # Domain-registry -> brand-repo bridge (#4, DEFAULT-OFF optional service): link the
@@ -1955,6 +2002,17 @@ if ! _opt_selected egress-vpn; then
     done
     STAGE4_PACKAGES=("${_kept[@]}")
     info "OPTIONAL_SERVICES: egress-vpn NOT selected — pruned net-vpn/wireguard-tools + net-vpn/openvpn from the node packages"
+fi
+
+# Tor v3 onion (hidden) service (DEFAULT-OFF optional service): net-vpn/tor (the v3
+# onion daemon, ships /etc/init.d/tor + /etc/tor/torrc + the tor:tor user) is NOT in
+# the base packages.list, so it is ADDED to the install set ONLY when 'tor' is selected
+# — an image without tor never carries it (parity with the egress-vpn package gate, just
+# inverted: ADD-when-selected vs prune-when-not). net-vpn/tor inherits USE=selinux from a
+# SELinux node profile, giving the upstream tor_t confinement snapdragon_tor.te references.
+if _opt_selected tor; then
+    STAGE4_PACKAGES+=(net-vpn/tor)
+    info "OPTIONAL_SERVICES: tor selected — added net-vpn/tor to the node packages (v3 onion daemon; keypair off-git, minted first-boot)"
 fi
 
 # Append user-specified extra packages

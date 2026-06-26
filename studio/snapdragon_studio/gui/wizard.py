@@ -305,6 +305,10 @@ class NetworkPage(QtWidgets.QWizardPage):
             "Analysis API — image NSFW/abuse classify + perceptual-hash, log triage (separate image)")
         el.addWidget(self.edge_ai_analysis)
         lay.addWidget(self.edge_ai_box)
+        # Tor v3 onion (hidden) service (node-scoped; cloud/mesh cluster node builds).
+        self.tor_onion = QtWidgets.QCheckBox(
+            "Tor v3 onion service — expose the cluster gateway as a .onion (default off)")
+        lay.addWidget(self.tor_onion)
         lay.addStretch(1)
 
     def initializePage(self):
@@ -326,6 +330,9 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.edge_ai_analysis.setChecked(c.edge_ai_analysis)
         # edge-AI is a GPU CLUSTER service — only meaningful for cloud/mesh node builds.
         self.edge_ai_box.setVisible(c.mode in ("cloud", "mesh"))
+        self.tor_onion.setChecked(c.tor_onion_service)
+        # Tor is a k8s-NODE service — only meaningful for cloud/mesh cluster builds.
+        self.tor_onion.setVisible(c.mode in ("cloud", "mesh"))
 
     def validatePage(self):
         c = self.wiz.cfg
@@ -344,6 +351,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         c.edge_ai_models = self.edge_ai_models.text().strip()
         c.edge_ai_model_default = self.edge_ai_default.text().strip()
         c.edge_ai_analysis = self.edge_ai_analysis.isChecked()
+        c.tor_onion_service = self.tor_onion.isChecked()
         return True
 
 

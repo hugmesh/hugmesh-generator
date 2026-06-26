@@ -1,0 +1,21 @@
+# snapdragon_tor.fc
+# Label the Tor onion-service reconcile binary as the entrypoint of its domain and
+# its private export dir as the type it manages. The binary is copied to /usr/sbin
+# by the (protected) build script; the OpenRC oneshot init script
+# (snapdragon-tor-reconcile) + the 24h reconcile cron are baked alongside.
+# provision_selinux()'s first-boot relabel (setfiles / restorecon -RF /) applies these.
+#
+# The Tor DAEMON's own files (/etc/tor/torrc, /var/lib/tor + the onion keypair under
+# /var/lib/tor/snapdragon-onion) are labelled by the UPSTREAM tor policy
+# (sec-policy/selinux-tor: tor_etc_t / tor_var_lib_t) — NOT relabelled here; the
+# reconcile domain is granted manage access to those upstream types in the .te.
+#
+# /var/lib/snapdragon/tor is created 0700 at runtime by the reconcile agent; labelling
+# it snapdragon_tor_var_lib_t lets the agent publish the exported .onion hostname there.
+# /etc/snapdragon/tor (the optional upstream-override file) is snapdragon_tor_etc_t.
+
+/usr/sbin/snapdragon-tor-reconcile    --    gen_context(system_u:object_r:snapdragon_tor_reconcile_exec_t,s0)
+
+/etc/snapdragon/tor(/.*)?                   gen_context(system_u:object_r:snapdragon_tor_etc_t,s0)
+
+/var/lib/snapdragon/tor(/.*)?               gen_context(system_u:object_r:snapdragon_tor_var_lib_t,s0)

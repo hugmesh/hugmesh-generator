@@ -387,6 +387,47 @@ spec:
       # The per-service opt-in label the NetworkPolicy interaction keys off.
       vpnEgressLabel: snapdragon.systems/vpn-egress
 
+    # ── tor — node-level v3 Tor onion (hidden) service (DEFAULT-OFF) ──────────
+    # LIKE egress-vpn, tor is a NODE service (the DISTRO Tor daemon — net-vpn/tor,
+    # /etc/init.d/tor — plus a snapdragon reconcile agent on the MESH NODES), NOT a
+    # cluster Application, so it owns NO apps[]/gatewayHost/routeAccessRows. Its gate
+    # is NODE-LEVEL: when NOT selected the build omits net-vpn/tor from the node
+    # packages AND does NOT link the tor + snapdragon-tor-reconcile services (so the
+    # daemon is simply absent). When selected, the reconcile agent (oneshot + 24h cron)
+    # writes a managed /etc/tor/torrc, mints + PERSISTS the v3 onion keypair OFF-GIT
+    # under /var/lib/tor/snapdragon-onion (tor:tor 0700; never a Secret, never git) on
+    # first boot, and exposes the in-cluster fe-gateway as a stable .onion — INBOUND
+    # reachability with no public IP / DDNS / Cloudflare. The per-service opt-in label
+    # (snapdragon.systems/tor-onion) keys the NetworkPolicy interaction
+    # (manifests/networkpolicy/tor-onion-marked.yaml) — a forward-hook for the OPT-IN
+    # pod-egress-via-tor capability (inert by default). nodeServices lists the DISTRO
+    # `tor` service (baked with the package, linked when selected) + our reconcile agent.
+    - slug: tor
+      displayName: "Tor (v3 hidden service)"
+      namespace: snapdragon-backend
+      default: off
+      scope: node            # NODE service, not a cluster Application
+      apps: []
+      sharedApps: []
+      manifestPath: manifests/networkpolicy   # only the interaction NetworkPolicy
+      esoFile: null
+      esoKeys: []
+      gatewayHost: null
+      gatewayRouteIds: []
+      routeAccessRows: []
+      federationModule: null
+      casdoorSeed: null
+      # NODE-level gate artefacts (added/linked by the SVCS/PKGS gates; the
+      # NetworkPolicy is pruned by gate_optional_services when NOT selected):
+      nodePackages: [net-vpn/tor]
+      nodeServices: [tor, snapdragon-tor-reconcile]
+      # The per-service opt-in label the NetworkPolicy interaction keys off.
+      torOnionLabel: snapdragon.systems/tor-onion
+      # The in-cluster upstream the v3 hidden service exposes (host:port). A HOST-level
+      # Tor daemon can't resolve cluster DNS, so the node-local fe-gateway ingress is the
+      # default; override per node via /etc/snapdragon/tor/upstream.
+      torHiddenServiceUpstream: 127.0.0.1:8443
+
     # ── workloadConsole — podman/OpenShift-equivalent pod console (DEFAULT-OFF) ──
     # UNLIKE the deployed services, the Workload Console is RBAC + route-access ONLY:
     # the BFF endpoints (/bff/{admin,superadmin}/workloads/**) live in the always-present

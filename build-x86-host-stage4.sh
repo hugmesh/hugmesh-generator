@@ -530,6 +530,10 @@ while [[ $# -gt 0 ]]; do
         --edge-ai-models) EDGE_AI_MODELS="$2"; shift 2 ;;
         --edge-ai-model-default) EDGE_AI_MODEL_DEFAULT="$2"; shift 2 ;;
         --with-edge-ai-analysis) WANT_EDGE_AI_ANALYSIS=true; shift ;;
+        # Tor v3 onion (hidden) service — a NODE service (DEFAULT-OFF) that exposes the
+        # in-cluster fe-gateway as a .onion. Opt-in only; no-op on CLIENT/standalone.
+        --with-tor) WANT_TOR=true; shift ;;
+        --no-tor) WANT_TOR=false; shift ;;
         --skip-mesh) SKIP_MESH=true; MESH_FORCED=off; shift ;;
         --skip-tailscale) SKIP_TAILSCALE=true; shift ;;
         # Composable mesh toggle (wins over a role's default; e.g. force the tailnet
@@ -665,6 +669,22 @@ if ${EDGE_AI_WANT}; then
     case " ${OPTIONAL_SERVICES} " in
         *" edge-ai "*) ;;
         *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} edge-ai" ;;
+    esac
+fi
+
+# Tor NODE service selection: --with-tor folds 'tor' onto any k8s role (idempotent).
+# Never auto-selected — purely opt-in via --with-tor / OPTIONAL_SERVICES. A
+# CLIENT/standalone desktop is not a cluster member, so it is a no-op there (and the
+# SVCS/PKGS gate below also guards on !ROLE_CLIENT).
+WANT_TOR="${WANT_TOR:-}"
+if [ "${WANT_TOR}" = "true" ] && ${ROLE_CLIENT}; then
+    warn "--with-tor on a CLIENT/standalone role has no effect (no cluster tree); the Tor onion service is a k8s NODE service."
+    WANT_TOR=false
+fi
+if [ "${WANT_TOR}" = "true" ]; then
+    case " ${OPTIONAL_SERVICES} " in
+        *" tor "*) ;;
+        *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} tor" ;;
     esac
 fi
 
@@ -1215,7 +1235,7 @@ gate_optional_services() {
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     local slug
-    for slug in akkoma tuwunel phpbb games edge-ai edge-ai-analysis; do
+    for slug in akkoma tuwunel phpbb games edge-ai edge-ai-analysis tor; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -1270,6 +1290,16 @@ gate_optional_services() {
                 _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-analysis
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
                     '/v1/analyze/**'
+                ;;
+            tor)
+                # NODE service (DISTRO tor daemon + a reconcile agent), not a cluster
+                # Application. Prune the per-service NetworkPolicy interaction (file +
+                # kustomization line) so an x86 image built WITHOUT tor does not ship the
+                # tor-onion egress hook (honours the "PRUNED when not selected" contract
+                # in tor-onion-marked.yaml + the kustomization comment). The net-vpn/tor
+                # omission + the service-link SKIP are handled in the SVCS/PKGS gates.
+                rm -f "${tree}/manifests/networkpolicy/tor-onion-marked.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/networkpolicy/kustomization.yaml" tor-onion-marked.yaml
                 ;;
         esac
     done
@@ -1761,6 +1791,16 @@ cp "${SHARED_SPECS}/usr/sbin/snapdragon-domain-reconcile"      "${SYSROOT}/usr/s
 cp "${SHARED_SPECS}/usr/lib/snapdragon/domain-verify.sh"       "${SYSROOT}/usr/lib/snapdragon/domain-verify.sh"
 cp "${SHARED_SPECS}/etc/init.d/snapdragon-domain-reconcile"    "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile";    chmod +x "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile"
 cp "${SHARED_SPECS}/etc/cron.d/snapdragon-domain-reconcile"    "${SYSROOT}/etc/snapdragon/registry/cron-domain-reconcile"
+
+# ── Tor v3 onion (hidden) service (#tor) — DEFAULT-OFF NODE service ──────────────
+# Bake the onion-service reconcile agent + its OpenRC oneshot + the 24h cron into every
+# host image (INERT until enabled). The DISTRO Tor daemon (net-vpn/tor → /etc/init.d/tor
+# + /etc/tor/torrc) is installed + linked ONLY when 'tor' is selected (the SVCS/PKGS
+# gates below); this agent (ordered `before tor`) writes the managed torrc and mints +
+# persists the v3 onion keypair OFF-GIT under /var/lib/tor/snapdragon-onion on first boot.
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-tor-reconcile"        "${SYSROOT}/usr/sbin/snapdragon-tor-reconcile";        chmod +x "${SYSROOT}/usr/sbin/snapdragon-tor-reconcile"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-tor-reconcile"      "${SYSROOT}/etc/init.d/snapdragon-tor-reconcile";      chmod +x "${SYSROOT}/etc/init.d/snapdragon-tor-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-tor-reconcile"      "${SYSROOT}/etc/snapdragon/registry/cron-tor-reconcile"
 mkdir -p "${SYSROOT}/usr/share/snapdragon/generator/scripts" "${SYSROOT}/usr/share/snapdragon/generator/templates"
 cp "${SCRIPT_DIR}/scripts/gen-keystores.sh"  "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh";  chmod +x "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh"
 cp "${SCRIPT_DIR}/generate-brand-repos.sh"   "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh";   chmod +x "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh"
@@ -2166,6 +2206,25 @@ if ! ${ROLE_CLIENT} && _opt_selected domain-registry-bridge; then
         info "OPTIONAL_SERVICES: domain-registry-bridge selected — linked snapdragon-domain-reconcile + 60s cron"
     fi
 fi
+
+# Tor v3 onion (hidden) service (DEFAULT-OFF optional service): link ONLY the snapdragon
+# reconcile agent into the default runlevel when 'tor' is selected AND this is a k8s node
+# (a CLIENT desktop is not a cluster member) — mirroring egress-vpn, which links only its
+# reconcile agent, not the daemon. The DISTRO `tor` service is NOT linked here: the
+# reconcile agent OWNS tor's lifecycle (writes the managed torrc, mints the v3 onion
+# keypair OFF-GIT under /var/lib/tor/snapdragon-onion, then `rc-service tor restart`),
+# avoiding any double-start. The 24h refresh cron (staged at
+# /etc/snapdragon/registry/cron-tor-reconcile) is installed alongside. Unselected =>
+# reconcile not linked + net-vpn/tor absent => ZERO execution.
+if ! ${ROLE_CLIENT} && _opt_selected tor; then
+    SVCS+=(snapdragon-tor-reconcile)
+    if [ -f "${SYSROOT}/etc/snapdragon/registry/cron-tor-reconcile" ]; then
+        mkdir -p "${SYSROOT}/etc/cron.d"
+        cp -f "${SYSROOT}/etc/snapdragon/registry/cron-tor-reconcile" \
+              "${SYSROOT}/etc/cron.d/snapdragon-tor-reconcile"
+        info "OPTIONAL_SERVICES: tor selected — linked snapdragon-tor-reconcile + 24h cron (reconcile agent owns the tor daemon; v3 onion keypair off-git, minted first-boot)"
+    fi
+fi
 for s in "${SVCS[@]}"; do ln -sf "/etc/init.d/${s}" "${SYSROOT}/etc/runlevels/default/${s}" 2>/dev/null || true; done
 # Belt-and-suspenders for shared / --resume sysroots: `ln -sf` only ADDS, so a prior
 # role's run can leave a headscale runlevel symlink behind that a worker/client image
@@ -2370,6 +2429,12 @@ if [ -n "${EGRESS_VPN_FILE}" ]; then
         *)      PKGS="${PKGS} net-vpn/wireguard-tools" ;;
     esac
 fi
+# Tor NODE service (DEFAULT-OFF optional service): the v3 onion daemon (net-vpn/tor,
+# which ships /etc/init.d/tor + /etc/tor/torrc + the tor:tor user). Only added when
+# 'tor' is selected (parity with the egress-vpn package gate); otherwise the image does
+# not carry it. net-vpn/tor inherits USE=selinux from a SELinux node profile, giving the
+# upstream tor_t confinement the reconcile agent's snapdragon_tor.te references.
+_opt_selected tor && PKGS="${PKGS} net-vpn/tor" && info "Tor NODE service: net-vpn/tor for the v3 hidden service (fe-gateway onion; keypair off-git, minted first-boot)"
 # Network/host security stack: Squid+Privoxy (desktops), Snort (all), AIDE (opt-in).
 # WANT_PROXY_STACK was resolved at the SVCS step above.
 ${WANT_PROXY_STACK} && PKGS="${PKGS} net-proxy/squid net-proxy/privoxy" && info "Proxy stack: Squid + Privoxy (Firefox wired to 127.0.0.1:8118 -> :3128)"

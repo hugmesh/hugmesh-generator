@@ -1,0 +1,107 @@
+#!/bin/bash
+# snapdragon-tor-reconcile — materialise the v3 Tor onion (hidden) service.
+#
+# A NODE-level optional service (DEFAULT-OFF), gated like egress-vpn: this agent is
+# BAKED into every node image but the OpenRC service that runs it is linked into a
+# runlevel ONLY when the 'tor' optional service is selected (PR gate). It reuses the
+# DISTRO Tor daemon (net-vpn/tor → /etc/init.d/tor, runs as the tor:tor user) — we do
+# NOT ship a bespoke tor runner; we only OWN the torrc + the onion-key custody.
+#
+# WHAT IT DOES (idempotent; safe to re-run at boot + on the 24h cron):
+#   1. ensure the onion state dir (/var/lib/tor/snapdragon-onion, 0700 tor:tor) and
+#      the DataDirectory (/var/lib/tor/data, 0700 tor:tor) exist;
+#   2. write a MANAGED /etc/tor/torrc that publishes a v3 hidden service for the
+#      in-cluster fe-gateway (HiddenServicePort 443 -> the node-local ingress);
+#   3. restart the distro `tor` service so it (re)reads the torrc — Tor MINTS the v3
+#      onion keypair into the HiddenServiceDir on first start (ed25519, off-git);
+#   4. export the stable .onion hostname to /var/lib/snapdragon/tor/hostname for
+#      admin/cluster consumption (the only thing that leaves the node).
+#
+# ONION-KEY CUSTODY (OFF-GIT, the whole point): the v3 keypair
+# (hs_ed25519_secret_key + hostname) lives under /var/lib/tor/snapdragon-onion —
+# node-local runtime state, owned by tor:tor (0700/0600). It is NEVER baked into the
+# image, NEVER committed to git, and NEVER materialised as a K8s Secret. The .onion
+# address is therefore STABLE across reboots (the key persists) but the private key
+# never leaves the node it was minted on.
+#
+# FAIL-SOFT: any error preserves the existing keypair + torrc and exits 0, so a
+# failed reconcile never faults the boot or tears down a working onion service.
+set -uo pipefail
+
+TOR_USER="tor"
+DATA_DIR="/var/lib/tor/data"
+HS_DIR="/var/lib/tor/snapdragon-onion"
+TORRC="/etc/tor/torrc"
+EXPORT_DIR="/var/lib/snapdragon/tor"
+UPSTREAM_FILE="/etc/snapdragon/tor/upstream"
+LOG="/var/log/snapdragon-tor-reconcile.log"
+
+log() { echo "[$(date -Is 2>/dev/null || date)] $*" >>"${LOG}" 2>/dev/null || true; }
+
+# The in-cluster service the onion exposes. A HOST-level Tor daemon cannot resolve a
+# cluster DNS name, so the default is the node-local fe-gateway ingress (a NodePort /
+# host-exposed HTTPS port). Override by writing one "host:port" line to
+# /etc/snapdragon/tor/upstream (staged by the operator / admin-bff).
+UPSTREAM="127.0.0.1:8443"
+if [ -r "${UPSTREAM_FILE}" ]; then
+    _u="$(grep -m1 -vE '^\s*(#|$)' "${UPSTREAM_FILE}" 2>/dev/null | tr -d '[:space:]')"
+    [ -n "${_u}" ] && UPSTREAM="${_u}"
+fi
+
+# 1) State dirs, owned by the distro tor user (Tor refuses a world-readable HS dir).
+if ! id "${TOR_USER}" >/dev/null 2>&1; then
+    log "tor user missing — net-vpn/tor not installed? leaving onion service inert"
+    exit 0
+fi
+mkdir -p "${DATA_DIR}" "${HS_DIR}" "${EXPORT_DIR}" "$(dirname "${UPSTREAM_FILE}")" 2>/dev/null || true
+chown "${TOR_USER}:${TOR_USER}" "${DATA_DIR}" "${HS_DIR}" 2>/dev/null || true
+chmod 0700 "${DATA_DIR}" "${HS_DIR}" 2>/dev/null || true
+chmod 0700 "${EXPORT_DIR}" 2>/dev/null || true
+
+# 2) Managed torrc (idempotent). Preserves the distro minimal directives + adds the
+#    v3 hidden service. Tor mints the keypair into HS_DIR on (re)start.
+cat > "${TORRC}" <<EOF
+# Managed by snapdragon-tor-reconcile — DO NOT EDIT BY HAND.
+# v3 Tor onion (hidden) service exposing the in-cluster fe-gateway.
+User ${TOR_USER}
+PIDFile /run/tor/tor.pid
+Log notice syslog
+DataDirectory ${DATA_DIR}
+# Node-local SOCKS proxy (pods reach it via the tor-onion-marked NetworkPolicy).
+SocksPort 127.0.0.1:9050
+# The v3 onion service. Keypair is minted into HiddenServiceDir on first start and
+# persisted there (OFF-GIT, tor:tor 0700). 443 -> the node-local fe-gateway ingress.
+HiddenServiceDir ${HS_DIR}
+HiddenServiceVersion 3
+HiddenServicePort 443 ${UPSTREAM}
+EOF
+log "wrote ${TORRC} (hidden service 443 -> ${UPSTREAM})"
+
+# 3) Validate the config, then (re)start the distro tor service to mint/refresh keys.
+if command -v tor >/dev/null 2>&1; then
+    if ! tor --verify-config --hush >/dev/null 2>&1; then
+        log "torrc verify FAILED — leaving service as-is (fail-soft)"
+        exit 0
+    fi
+fi
+if command -v rc-service >/dev/null 2>&1; then
+    rc-service tor restart >/dev/null 2>&1 || rc-service tor start >/dev/null 2>&1 || true
+fi
+
+# Give Tor a moment to mint the keypair on a cold first boot, then export hostname.
+for _i in 1 2 3 4 5 6 7 8 9 10; do
+    [ -s "${HS_DIR}/hostname" ] && break
+    sleep 2
+done
+
+# 4) Export the stable .onion hostname (the ONLY artefact that leaves the node).
+if [ -s "${HS_DIR}/hostname" ]; then
+    install -m 0644 "${HS_DIR}/hostname" "${EXPORT_DIR}/hostname" 2>/dev/null || \
+        cp -f "${HS_DIR}/hostname" "${EXPORT_DIR}/hostname" 2>/dev/null || true
+    log "onion hostname: $(cat "${EXPORT_DIR}/hostname" 2>/dev/null)"
+else
+    log "onion hostname not yet present (tor still bootstrapping); will export next run"
+fi
+
+log "reconcile complete (upstream=${UPSTREAM})"
+exit 0
