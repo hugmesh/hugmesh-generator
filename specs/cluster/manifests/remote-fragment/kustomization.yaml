@@ -4,6 +4,7 @@ namespace: snapdragon-frontend
 resources:
   - deployment.yaml
   - hpa.yaml
+  - pdb.yaml
 
 # nginx.conf is materialized into a ConfigMap and mounted at
 # /etc/nginx/conf.d/default.conf (route-access pattern) so the stock

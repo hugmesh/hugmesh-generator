@@ -4,6 +4,7 @@ namespace: snapdragon-frontend
 resources:
   - deployment.yaml
   - hpa.yaml
+  - pdb.yaml
 
 # First-party images pull from the in-cluster GitLab container registry
 # (registry.snapdragon.systems = the GitLab chart's hosts.domain default; project

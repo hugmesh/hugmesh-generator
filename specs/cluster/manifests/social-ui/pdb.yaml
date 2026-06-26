@@ -1,0 +1,63 @@
+# PodDisruptionBudgets for the social-ui federated remotes — ONE per remote
+# Deployment (matrix-ui, mastodon-ui, login-ui, admin-ui), mirroring the way
+# hpa.yaml carries one HPA per remote in a single file. Each remote runs an HPA
+# with minReplicas: 2 (an HA pair), so a voluntary disruption (node drain /
+# cluster upgrade) must never evict both pods of a remote at once. minAvailable: 1
+# lets a drain take at most one pod while the second keeps serving.
+#
+# Shape mirrors the only other PDB in the repo (node-storage-placement/pdb.yaml):
+# policy/v1, a single app-label selector, namespace inherited from this dir's
+# kustomization (snapdragon-frontend). Purely additive — a PDB constrains only
+# voluntary eviction, never scheduling or scale — so it cannot crash-loop or change
+# steady-state behaviour.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: snapdragon-matrix-ui
+  labels:
+    app: snapdragon-matrix-ui
+    app.kubernetes.io/part-of: snapdragon.systems
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: snapdragon-matrix-ui
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: snapdragon-mastodon-ui
+  labels:
+    app: snapdragon-mastodon-ui
+    app.kubernetes.io/part-of: snapdragon.systems
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: snapdragon-mastodon-ui
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: snapdragon-login-ui
+  labels:
+    app: snapdragon-login-ui
+    app.kubernetes.io/part-of: snapdragon.systems
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: snapdragon-login-ui
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: snapdragon-admin-ui
+  labels:
+    app: snapdragon-admin-ui
+    app.kubernetes.io/part-of: snapdragon.systems
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: snapdragon-admin-ui
