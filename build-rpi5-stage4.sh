@@ -70,7 +70,7 @@ GAMES_DOMAIN="games.snapdragon.systems"
 # slugs (matches specs/cluster/optional-services.yaml; excludes the non-user-level
 # infra slugs egress-vpn / tor / workloadConsole / anubis). It is what
 # OPTIONAL_SERVICES=all / --all-services expands to.
-USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube"
+USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio"
 # OPTIONAL services selected on this image (subset of USER_LEVEL_SERVICES).
 #   DEFAULT-ON  (the built-in default when NO selection is given): akkoma tuwunel phpbb.
 #   DEFAULT-OFF (must be specifically added): games owncast tube (and any future
@@ -623,6 +623,10 @@ while [[ $# -gt 0 ]]; do
         --enable-bluetooth)   ENABLE_BLUETOOTH=true;   shift   ;;
         --permit-root-login)  PERMIT_ROOT_LOGIN="$2";  shift 2 ;;
         --enable-games)       ENABLE_GAMES=true;       shift   ;;
+        # Character Studio (VN) frontend remote — OPTIONAL, DEFAULT-OFF (admin gate).
+        # Folds 'character-studio' into OPTIONAL_SERVICES (idempotent).
+        --with-character-studio) WANT_CHARACTER_STUDIO=true;  shift ;;
+        --no-character-studio)   WANT_CHARACTER_STUDIO=false; shift ;;
         --skip-mesh)          SKIP_MESH=true;          shift   ;;
         --skip-tailscale)     SKIP_TAILSCALE=true;     shift   ;;
         --skip-kernel)        SKIP_KERNEL=true;        shift   ;;
@@ -678,6 +682,16 @@ if [ "${ENABLE_GAMES}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" games "*) ;;
         *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} games" ;;
+    esac
+fi
+
+# Character Studio (VN) opt-in fold: --with-character-studio folds 'character-studio'
+# into OPTIONAL_SERVICES (idempotent). DEFAULT-OFF; never auto-selected. When it stays
+# unselected, gate_optional_services() prunes the slug's app/manifests/route/row.
+if [ "${WANT_CHARACTER_STUDIO:-}" = "true" ]; then
+    case " ${OPTIONAL_SERVICES} " in
+        *" character-studio "*) ;;
+        *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} character-studio" ;;
     esac
 fi
 
@@ -935,7 +949,7 @@ gate_optional_services() {
                    warn "edge-ai-analysis requires edge-ai — dropping it (no model server selected)" ;;
             esac ;;
     esac
-    for slug in akkoma tuwunel phpbb games owncast tube egress-vpn tor workloadConsole edge-ai edge-ai-analysis; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio egress-vpn tor workloadConsole edge-ai edge-ai-analysis; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -1005,6 +1019,18 @@ gate_optional_services() {
                 _opt_drop_route "${apps}/20-gateway-fe.yaml" snapdragon-owncast-bff-api
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
                     '/bff/owncast/admin/**' '/bff/owncast/**'
+                ;;
+            character-studio)
+                # Character Studio (VN) — FRONTEND micro-frontend remote (DEFAULT-OFF, admin
+                # gate). Owns its bootstrap Application + manifests dir + its ONE fe-gateway
+                # path route (character-studio-ui) + its ONE route-access row (no gateway
+                # HOST + no per-service ESO + no BFF in this slug). When deselected the host
+                # greys the /character-studio entry out (installed-services "false").
+                rm -f "${apps}/49b-character-studio-ui.yaml"
+                rm -rf "${tree}/manifests/character-studio"
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" character-studio-ui
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                    '/character-studio/**'
                 ;;
             tube)
                 # LocalTube (YouTube archive) — GPU-gated x86 service (DEFAULT-OFF). Owns
@@ -1205,7 +1231,7 @@ _opt_render_installed_services() {
     [ -f "${cm}" ] || return 0
     local slug val
     # The base optional services follow plain presence in OPTIONAL_SERVICES.
-    for slug in akkoma tuwunel phpbb games owncast tube workloadConsole edge-ai edge-ai-analysis; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio workloadConsole edge-ai edge-ai-analysis; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
         # Mirror the same flag into the optional-services ApplicationSet element so the

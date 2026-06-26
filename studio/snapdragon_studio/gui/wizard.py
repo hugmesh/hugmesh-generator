@@ -314,6 +314,11 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.tor_onion = QtWidgets.QCheckBox(
             "Tor v3 onion service — expose the cluster gateway as a .onion (default off)")
         lay.addWidget(self.tor_onion)
+        # Character Studio (VN) frontend remote — OPTIONAL, DEFAULT-OFF (admin gate).
+        # Cloud/mesh cluster builds only (it is a frontend cluster service).
+        self.character_studio = QtWidgets.QCheckBox(
+            "Character Studio (VN) — character creator + chat remote at /character-studio (default off)")
+        lay.addWidget(self.character_studio)
         lay.addStretch(1)
 
     def initializePage(self):
@@ -339,6 +344,9 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.tor_onion.setChecked(c.tor_onion_service)
         # Tor is a k8s-NODE service — only meaningful for cloud/mesh cluster builds.
         self.tor_onion.setVisible(c.mode in ("cloud", "mesh"))
+        self.character_studio.setChecked(c.character_studio)
+        # Character Studio is a frontend CLUSTER service — cloud/mesh builds only.
+        self.character_studio.setVisible(c.mode in ("cloud", "mesh"))
 
     def validatePage(self):
         c = self.wiz.cfg
@@ -359,6 +367,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         c.edge_ai_model_default = self.edge_ai_default.text().strip()
         c.edge_ai_analysis = self.edge_ai_analysis.isChecked()
         c.tor_onion_service = self.tor_onion.isChecked()
+        c.character_studio = self.character_studio.isChecked()
         return True
 
 

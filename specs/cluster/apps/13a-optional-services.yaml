@@ -54,6 +54,11 @@ spec:
           # "false" (DEFAULT-OFF baseline + the pre-cut-over no-collision rule).
           - { slug: owncast, path: specs/cluster/manifests/owncast,       namespace: snapdragon-owncast,  installed: "false" }
           - { slug: tube,    path: specs/cluster/manifests/tube,          namespace: snapdragon-tube,     installed: "false" }
+          # character-studio — VN character-studio FRONTEND remote (DEFAULT-OFF, admin
+          # gate). Same runtime add/remove model: the installed flag here is mirrored
+          # from the installed-services ConfigMap by _opt_render_installed_services.
+          # Scaffolded "false" (DEFAULT-OFF baseline + the pre-cut-over no-collision rule).
+          - { slug: character-studio, path: specs/cluster/manifests/character-studio, namespace: snapdragon-frontend, installed: "false" }
           # anubis — PUBLIC PoW shield. ENV-CONDITIONAL default: the generator's
           # _opt_render_installed_services() renders the installed-services
           # ConfigMap anubis flag ON for PROD builds ("all shields up") and OFF for

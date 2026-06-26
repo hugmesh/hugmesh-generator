@@ -88,6 +88,8 @@ OPT_EDGE_AI_MODEL_DEFAULT=""  # default model when an OpenAI request omits one (
 OPT_X86_EDGE_AI_ANALYSIS="no" # yes => also bake the edge-ai-analysis task API (image/log verdicts; separate image)
 # ── Tor v3 onion (hidden) service — node-scoped optional, DEFAULT-OFF ──────────
 OPT_TOR_ONION="no"            # yes => --with-tor: expose the in-cluster fe-gateway as a v3 .onion
+# ── Character Studio (VN) frontend remote — OPTIONAL, DEFAULT-OFF (admin gate) ──
+OPT_CHARACTER_STUDIO="no"     # yes => --with-character-studio: VN character-studio remote at /character-studio
 OPT_FRITE_BOARD="la-frite"
 OPT_FRITE_FLAVOR="both"
 # ── Standalone hardened NVIDIA desktop options (NON-secret; persisted) ──────────
@@ -131,6 +133,7 @@ save_conf() {
         printf 'OPT_EDGE_AI_MODEL_DEFAULT=%q\n' "${OPT_EDGE_AI_MODEL_DEFAULT}"
         printf 'OPT_X86_EDGE_AI_ANALYSIS=%q\n' "${OPT_X86_EDGE_AI_ANALYSIS}"
         printf 'OPT_TOR_ONION=%q\n'     "${OPT_TOR_ONION}"
+        printf 'OPT_CHARACTER_STUDIO=%q\n' "${OPT_CHARACTER_STUDIO}"
         printf 'OPT_FRITE_BOARD=%q\n'   "${OPT_FRITE_BOARD}"
         printf 'OPT_FRITE_FLAVOR=%q\n'  "${OPT_FRITE_FLAVOR}"
         # Standalone-desktop NON-secret options (passwords are NEVER persisted).
@@ -367,21 +370,27 @@ build_make_cmd() {
             # --with-edge-ai-analysis folds edge-ai too (its dependency), so it applies on
             # any GPU target incl. the edge_ai role.
             [ "${OPT_X86_EDGE_AI_ANALYSIS}" = yes ] && ef+=" --with-edge-ai-analysis"
-            # Tor v3 onion service folds into the SAME STANDALONE_FLAGS emit on GPU roles
-            # (never a second STANDALONE_FLAGS= for one make invocation).
+            # Tor v3 onion + Character Studio (VN) fold into the SAME STANDALONE_FLAGS emit
+            # on GPU roles (never a second STANDALONE_FLAGS= for one make invocation).
             [ "${OPT_TOR_ONION}" = yes ] && ef+=" --with-tor"
+            [ "${OPT_CHARACTER_STUDIO}" = yes ] && ef+=" --with-character-studio"
             [ -n "${ef}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${ef# }")
             ;;
     esac
-    # Tor v3 onion service applies to ANY x86 CLUSTER role (not standalone desktops,
-    # which are not cluster members). On the GPU targets it is folded into ef above; for
-    # the REMAINING x86 cluster roles emit it as their STANDALONE_FLAGS here so the
-    # Makefile x86-% pattern threads --with-tor onto --role. The cases are DISJOINT, so a
-    # single make invocation never gets a double STANDALONE_FLAGS= (the no-op desktop
-    # builder guard on !ROLE_CLIENT makes an accidental --with-tor harmless anyway).
+    # Tor v3 onion + Character Studio (VN) apply to ANY x86 CLUSTER role (not standalone
+    # desktops, which are not cluster members). On the GPU targets they are folded into ef
+    # above; for the REMAINING x86 cluster roles emit them as a SINGLE STANDALONE_FLAGS here
+    # so the Makefile x86-% pattern threads the flag(s) onto --role. The cases are DISJOINT,
+    # so a single make invocation never gets a double STANDALONE_FLAGS= (the no-op desktop
+    # builder guard on !ROLE_CLIENT makes an accidental --with-* harmless anyway).
     case "${target}" in
         x86-standalone*|x86-be+gpu|x86-omnibus|x86-edge_ai) ;;   # handled above (or N/A)
-        x86-*) [ "${OPT_TOR_ONION}" = yes ] && RUN_MAKE+=("STANDALONE_FLAGS=--with-tor") ;;
+        x86-*)
+            local nf=""
+            [ "${OPT_TOR_ONION}" = yes ] && nf+=" --with-tor"
+            [ "${OPT_CHARACTER_STUDIO}" = yes ] && nf+=" --with-character-studio"
+            [ -n "${nf}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${nf# }")
+            ;;
     esac
 }
 
@@ -657,6 +666,7 @@ options_screen() {
             pentest  "OWASP pen-test ...... ${pen_l}   (full-fleet build only)" \
             edgeai   "Edge-AI service ..... $([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)   (be+gpu/omnibus; edge_ai role always on)" \
             tor      "Tor v3 onion ........ $([ "${OPT_TOR_ONION}" = yes ] && echo on || echo off)   (node service; exposes fe-gateway as .onion; default off)" \
+            charstudio "Character Studio (VN) $([ "${OPT_CHARACTER_STUDIO}" = yes ] && echo on || echo off)   (frontend remote at /character-studio; default off)" \
             imgflags "Image format flags .. ${OPT_IMGFLAGS:-<both .img + .iso>}" \
             rootlogin "Root SSH login ...... ${OPT_ROOT_LOGIN}   (no=hardened | prohibit-password | yes)" \
             back     "‹ back to main menu")" || return 0
@@ -672,6 +682,7 @@ options_screen() {
             pentest) OPT_PENTEST="$([ "${OPT_PENTEST}" = yes ] && echo no || echo yes)" ;;
             edgeai)  edge_ai_options_screen ;;
             tor)     OPT_TOR_ONION="$([ "${OPT_TOR_ONION}" = yes ] && echo no || echo yes)" ;;
+            charstudio) OPT_CHARACTER_STUDIO="$([ "${OPT_CHARACTER_STUDIO}" = yes ] && echo no || echo yes)" ;;
             imgflags) OPT_IMGFLAGS="$(ui_input "Image flags" "IMG_FLAGS (e.g. --no-iso, --no-img, empty = both)" "${OPT_IMGFLAGS}")" ;;
             rootlogin) case "${OPT_ROOT_LOGIN}" in
                            no) OPT_ROOT_LOGIN=prohibit-password ;;

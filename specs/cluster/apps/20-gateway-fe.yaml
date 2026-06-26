@@ -115,6 +115,13 @@ spec:
           - id: user-ui
             uri: http://snapdragon-user-ui.snapdragon-frontend.svc.cluster.local:80
             path: /user/**
+          # Character Studio (VN) micro-frontend remote (/character-studio/** ->
+          # snapdragon-character-studio-ui on :8080, non-root nginx). Role floor
+          # ROLE_USER (route-DB). OPTIONAL slug `character-studio`:
+          # gate_optional_services REMOVES this route when the slug is deselected.
+          - id: character-studio-ui
+            uri: http://snapdragon-character-studio-ui.snapdragon-frontend.svc.cluster.local:8080
+            path: /character-studio/**
           # API documentation micro-frontend remote (/apidocs/** -> snapdragon-api-docs).
           # Role floor ROLE_ADMIN (route-DB) — the rendered OpenAPI/spec docs are
           # admin-only, matching federation's spec floor.

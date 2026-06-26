@@ -56,11 +56,11 @@ done
 ok "extracted the real gate + helper functions from build-rpi5-stage4.sh"
 
 # ── The user-level OPTIONAL services this requirement targets ─────────────────
-USER_SERVICES="akkoma tuwunel phpbb games owncast tube"
+USER_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio"
 # DEFAULT-INCLUSION POLICY (user 2026-06-17): the built-in default when NO
 # OPTIONAL_SERVICES is given, and the DEFAULT-OFF set that must be explicitly added.
 DEFAULT_ON="akkoma tuwunel phpbb"
-DEFAULT_OFF="games owncast tube"
+DEFAULT_OFF="games owncast tube character-studio"
 
 # resolve_selection — mirror the BUILDER's OPTIONAL_SERVICES resolution so the test
 # tracks it: (1) built-in default when unset, (2) the `all` sentinel expands to the
@@ -108,7 +108,8 @@ seed_tree() {
   cp "${SRC}/manifests/external-secrets/kustomization.yaml" "${tree}/manifests/external-secrets/"
   # owned apps
   for a in 30-akkoma 30-tuwunel 30-phpbb 38-forum-bff-db 39-forum-bff-api 49-forum-ui \
-           45-social-ui 06-casdoor-games 50-games 13c-games-instances 52-owncast 53-tube; do
+           45-social-ui 06-casdoor-games 50-games 13c-games-instances 52-owncast 53-tube \
+           49b-character-studio-ui; do
     [ -f "${SRC}/apps/${a}.yaml" ] && cp "${SRC}/apps/${a}.yaml" "${tree}/apps/"
   done
   cp "${SRC}/apps/20-gateway-be.yaml" "${tree}/apps/" 2>/dev/null || :
@@ -120,7 +121,7 @@ seed_tree() {
   done
   # owned manifest dirs
   for m in akkoma tuwunel forum forum-bff-db forum-bff-api forum-ui games casdoor-games \
-           games-instances owncast tube casdoor; do
+           games-instances owncast tube character-studio casdoor; do
     [ -d "${SRC}/manifests/${m}" ] && cp -r "${SRC}/manifests/${m}" "${tree}/manifests/"
   done
   export SYSROOT
@@ -132,10 +133,11 @@ seed_tree() {
 declare -A OWNED_APP=(
   [akkoma]="30-akkoma.yaml"   [tuwunel]="30-tuwunel.yaml" [phpbb]="30-phpbb.yaml"
   [games]="50-games.yaml"     [owncast]="52-owncast.yaml" [tube]="53-tube.yaml"
+  [character-studio]="49b-character-studio-ui.yaml"
 )
 declare -A OWNED_DIR=(
   [akkoma]="akkoma" [tuwunel]="tuwunel" [phpbb]="forum" [games]="games"
-  [owncast]="owncast" [tube]="tube"
+  [owncast]="owncast" [tube]="tube" [character-studio]="character-studio"
 )
 
 ENV="test"   # the gate's anubis ENV branch reads this
@@ -175,6 +177,9 @@ grep -q "'/bff/owncast/\*\*'" "${TREE}/manifests/route-access/initdb/20-schema.s
 grep -q "'/bff/tube/\*\*'"   "${TREE}/manifests/route-access/initdb/20-schema.sql" && bad "tube row survived"    || ok "tube: /bff/tube route-access row removed"
 grep -q "'/tube/content/\*\*'" "${TREE}/manifests/route-access/initdb/20-schema.sql" && bad "tube media row survived" || ok "tube: /tube/content route-access row removed"
 [ ! -f "${TREE}/manifests/external-secrets/tube-externalsecrets.yaml" ] && ok "tube: per-service ESO file pruned" || bad "tube ESO survived exclusion"
+# character-studio excluded (default-off): its ONE fe-gateway route + route-access row removed.
+grep -q 'id: character-studio-ui' "${TREE}/apps/20-gateway-fe.yaml" && bad "character-studio gateway route survived" || ok "character-studio: fe-gateway character-studio-ui route removed"
+grep -q "'/character-studio/\*\*'" "${TREE}/manifests/route-access/initdb/20-schema.sql" && bad "character-studio row survived" || ok "character-studio: /character-studio route-access row removed"
 
 # ── 3) INCLUDED: each user-level slug kept => present + ConfigMap/13a 'true' ──
 echo "-- INCLUDED (all user services): apps + manifests present, ConfigMap+13a 'true' --"

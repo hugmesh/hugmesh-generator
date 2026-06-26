@@ -52,6 +52,13 @@ data:
   # cluster. The user/admin consoles grey out the live-stream + tube panels when "false".
   owncast: "false"
   tube: "false"
+  # character-studio — VN character-studio frontend remote (creator + chat surface),
+  # mounted at /character-studio (ROLE_USER). DEFAULT-OFF (admin gate). Rendered
+  # true/false by _opt_render_installed_services from OPTIONAL_SERVICES; the literal
+  # baseline below is the SAFE DEFAULT (off) so an image built WITHOUT it ships
+  # installed:"false" and the optional-services ApplicationSet never creates it even
+  # on a repo-synced cluster. The host greys the /character-studio entry when "false".
+  character-studio: "false"
   # workloadConsole — the podman/OpenShift-equivalent pod console (RBAC + route-access).
   # DEFAULT "false" (ships dark); rendered to true/false by _opt_render_installed_services
   # from OPTIONAL_SERVICES. The admin console greys out the Workload Console remote when
@@ -104,6 +111,7 @@ data:
       { "slug": "games-services", "displayName": "Games App Store", "namespace": "snapdragon-games-instances", "mountAt": "/admin/games-services", "dependsOn": "games" },
       { "slug": "owncast", "displayName": "Owncast (live streaming)", "namespace": "snapdragon-owncast", "mountAt": "/owncast" },
       { "slug": "tube",    "displayName": "LocalTube (YouTube archive)", "namespace": "snapdragon-tube", "mountAt": "/tube" },
+      { "slug": "character-studio", "displayName": "Character Studio (VN)", "namespace": "snapdragon-frontend", "mountAt": "/character-studio" },
       { "slug": "workloadConsole", "displayName": "Workload Console", "namespace": "snapdragon-backend", "mountAt": "/admin/workloads", "hidden": true },
       { "slug": "anubis",  "displayName": "Anubis (anti-scraper PoW gate)", "namespace": "snapdragon-frontend", "mountAt": null },
       { "slug": "coturn",  "displayName": "coturn (TURN/STUN server)", "namespace": "snapdragon-backend", "mountAt": null, "dependsOn": "tuwunel" },

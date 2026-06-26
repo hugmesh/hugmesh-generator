@@ -1,0 +1,23 @@
+# snapdragon-character-studio-ui — the VN character-studio Angular micro-frontend,
+# federated into the snapdragon.systems host at /character-studio (ROLE_USER floor).
+# Frontend Pis. OPTIONAL service (DEFAULT-OFF, admin gate): pruned by
+# gate_optional_services() when the 'character-studio' slug is not selected, and
+# rendered installed:"false" in the optional-services ApplicationSet / ConfigMap.
+# See specs/cluster/optional-services.yaml (slug: character-studio).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-character-studio-ui
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/character-studio
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-frontend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

@@ -315,6 +315,11 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- Self-service user micro-frontend UI (snapdragon-user-ui at /user/**). The
   -- authenticated floor — any logged-in principal reaches their own profile/prefs.
   ('snapdragon-fe-gateway',  '/user/**',              'ROLE_USER',      true),  -- user self-service UI
+  -- Character Studio (VN) micro-frontend UI (snapdragon-character-studio-ui at
+  -- /character-studio/**). Authenticated floor — any logged-in principal reaches it.
+  -- ⚠ gate_optional_services REMOVES this row when the character-studio slug is
+  -- deselected (so a matched route to a pruned upstream cannot stale-grant / 502).
+  ('snapdragon-fe-gateway',  '/character-studio/**',  'ROLE_USER',      true),  -- character-studio VN UI
   -- API documentation micro-frontend UI (snapdragon-api-docs at /apidocs/**).
   -- ROLE_ADMIN only — the rendered OpenAPI/spec docs are admin-gated, matching
   -- federation's spec floor (its swagger-ui is ROLE_ADMIN).

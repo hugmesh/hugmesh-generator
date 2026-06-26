@@ -1,0 +1,79 @@
+# snapdragon-character-studio-ui — the VN character-studio Angular native-federation
+# REMOTE (creator + chat surface). Its own nginx (own repo + pod) in the
+# snapdragon-frontend namespace, federated into the snapdragon.systems host: it
+# serves a remoteEntry.json the host's loadRemoteModule consumes, mounted at
+# /character-studio (ROLE_USER floor). Talks to the always-present BFFs via the
+# same-origin /bff/** fe-gateway routes (no dedicated BFF in this slug yet).
+#
+# Repo (image source, to be built+pushed): github.com/Snapdragon-Systems/snapdragon-character-studio-ui
+#
+# OPTIONAL service (DEFAULT-OFF, admin gate): add/remove-by-command on a generated
+# USB. When the slug is deselected, gate_optional_services() prunes this Application
+# + this manifest dir + the fe-gateway /character-studio/** route + the route-access
+# row, and the installed-services ConfigMap renders character-studio:"false" so the
+# host greys the entry out instead of 404/502.
+#
+# CONTAINER: the first-party UI image is built FROM nginxinc/nginx-unprivileged:1.27-alpine
+# (runs as uid 101, listens on :8080 — no root, no NET_BIND privilege) and bakes the
+# Angular `dist/` remote (remoteEntry.json + chunks). The image placeholder below
+# (snapdragon-systems/character-studio-ui) is rewritten by the kustomization `images:`
+# transform to the in-cluster GitLab registry tag, matching the user-ui/wiki-ui shape.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snapdragon-character-studio-ui
+  namespace: snapdragon-frontend
+  labels:
+    app: snapdragon-character-studio-ui
+    app.kubernetes.io/part-of: snapdragon.systems
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: snapdragon-character-studio-ui }
+  template:
+    metadata:
+      labels: { app: snapdragon-character-studio-ui }
+    spec:
+      nodeSelector: { snapdragon.systems/frontend: "true" }
+      securityContext:
+        seLinuxOptions:
+          type: container_t
+          level: "s0:c47"
+      containers:
+        - name: web
+          # PLACEHOLDER image (rewritten by kustomization images: transform). The base
+          # is nginxinc/nginx-unprivileged:1.27-alpine — non-root (uid 101), :8080.
+          image: snapdragon-systems/character-studio-ui:dev
+          ports: [{ name: http, containerPort: 8080 }]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits:   { cpu: 300m, memory: 192Mi }
+          readinessProbe:
+            httpGet: { path: /remoteEntry.json, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /remoteEntry.json, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: snapdragon-character-studio-ui
+  namespace: snapdragon-frontend
+  labels:
+    app: snapdragon-character-studio-ui
+    app.kubernetes.io/part-of: snapdragon.systems
+spec:
+  selector: { app: snapdragon-character-studio-ui }
+  # The federation_modules remote_entry_url points at this Service on :8080
+  # (http://snapdragon-character-studio-ui:8080/remoteEntry.json).
+  ports: [{ name: http, port: 8080, targetPort: http }]

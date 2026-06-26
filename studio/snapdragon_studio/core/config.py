@@ -81,6 +81,8 @@ class ImageConfig:
     edge_ai_analysis: bool = False     # also bake the edge-ai-analysis task API (image/log verdicts; separate image)
     # ── Tor v3 onion (hidden) service — node-scoped optional, default off ──
     tor_onion_service: bool = False    # --with-tor: expose the in-cluster fe-gateway as a v3 .onion
+    # ── Character Studio (VN) frontend remote — OPTIONAL, default off (admin gate) ──
+    character_studio: bool = False     # --with-character-studio: VN character-studio remote at /character-studio
     # ── home provisioning ──
     home_mode: str = "create"          # create|adopt|archive|restore
     home_device: str = ""
@@ -215,6 +217,13 @@ class ImageConfig:
         # No-op on a CLIENT/standalone role (the builder guards on !ROLE_CLIENT).
         if self.tor_onion_service:
             a += ["--with-tor"]
+
+        # Character Studio (VN) frontend remote — OPTIONAL, DEFAULT-OFF (admin gate).
+        # Folds 'character-studio' into OPTIONAL_SERVICES. Meaningful only for a
+        # cloud/mesh cluster build (the builder guards on !ROLE_CLIENT / no-op on a
+        # standalone desktop with no cluster tree).
+        if self.character_studio:
+            a += ["--with-character-studio"]
 
         # home
         if self.home_mode and self.home_mode != "create":

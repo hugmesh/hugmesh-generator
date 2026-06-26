@@ -366,6 +366,10 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --with-edge-ai-analysis  Also bake the edge-ai-analysis task API (image NSFW/abuse
                             classify + perceptual-hash, log triage verdicts to the mesh).
                             Needs edge-ai + a SEPARATE container image (DEFAULT-OFF).
+      --with-character-studio  Bake the Character Studio (VN) frontend remote at
+                            /character-studio (ROLE_USER). OPTIONAL, DEFAULT-OFF (admin
+                            gate). Equivalent to adding 'character-studio' to
+                            --optional-services. --no-character-studio to keep it off.
       --skip-mesh           Don't install headscale/tailscale.
       --skip-tailscale      headscale only.
       --skip-kernel         Don't build the kernel.
@@ -530,6 +534,11 @@ while [[ $# -gt 0 ]]; do
         --edge-ai-models) EDGE_AI_MODELS="$2"; shift 2 ;;
         --edge-ai-model-default) EDGE_AI_MODEL_DEFAULT="$2"; shift 2 ;;
         --with-edge-ai-analysis) WANT_EDGE_AI_ANALYSIS=true; shift ;;
+        # Character Studio (VN) frontend remote — OPTIONAL service (DEFAULT-OFF, admin
+        # gate). --with-character-studio folds 'character-studio' into OPTIONAL_SERVICES;
+        # a CLIENT/standalone desktop is not a cluster member, so it is a no-op there.
+        --with-character-studio) WANT_CHARACTER_STUDIO=true; shift ;;
+        --no-character-studio) WANT_CHARACTER_STUDIO=false; shift ;;
         # Tor v3 onion (hidden) service — a NODE service (DEFAULT-OFF) that exposes the
         # in-cluster fe-gateway as a .onion. Opt-in only; no-op on CLIENT/standalone.
         --with-tor) WANT_TOR=true; shift ;;
@@ -685,6 +694,22 @@ if [ "${WANT_TOR}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" tor "*) ;;
         *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} tor" ;;
+    esac
+fi
+
+# Character Studio (VN) selection: --with-character-studio folds 'character-studio'
+# into OPTIONAL_SERVICES (idempotent). DEFAULT-OFF; never auto-selected. A
+# CLIENT/standalone desktop is not a cluster member, so it is a no-op there (the
+# gate prunes the slug anyway when the cluster tree is absent).
+WANT_CHARACTER_STUDIO="${WANT_CHARACTER_STUDIO:-}"
+if [ "${WANT_CHARACTER_STUDIO}" = "true" ] && ${ROLE_CLIENT}; then
+    warn "--with-character-studio on a CLIENT/standalone role has no effect (no cluster tree); Character Studio is a frontend cluster service."
+    WANT_CHARACTER_STUDIO=false
+fi
+if [ "${WANT_CHARACTER_STUDIO}" = "true" ]; then
+    case " ${OPTIONAL_SERVICES} " in
+        *" character-studio "*) ;;
+        *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} character-studio" ;;
     esac
 fi
 
@@ -1235,7 +1260,7 @@ gate_optional_services() {
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     local slug
-    for slug in akkoma tuwunel phpbb games owncast tube egress-vpn workloadConsole edge-ai edge-ai-analysis tor; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio egress-vpn workloadConsole edge-ai edge-ai-analysis tor; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -1301,6 +1326,18 @@ gate_optional_services() {
                 _opt_drop_route "${apps}/20-gateway-fe.yaml" snapdragon-owncast-bff-api
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
                     '/bff/owncast/admin/**' '/bff/owncast/**'
+                ;;
+            character-studio)
+                # Character Studio (VN) — FRONTEND micro-frontend remote (DEFAULT-OFF, admin
+                # gate). Owns its bootstrap Application + manifests dir + its ONE fe-gateway
+                # path route (character-studio-ui) + its ONE route-access row (no gateway
+                # HOST + no per-service ESO + no BFF in this slug). When deselected the host
+                # greys the /character-studio entry out (installed-services "false").
+                rm -f "${apps}/49b-character-studio-ui.yaml"
+                rm -rf "${tree}/manifests/character-studio"
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" character-studio-ui
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                    '/character-studio/**'
                 ;;
             tube)
                 # LocalTube (YouTube archive) — GPU-gated x86 service (DEFAULT-OFF). Owns
@@ -1479,7 +1516,7 @@ _opt_render_installed_services() {
     local cm="${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy/installed-services-configmap.yaml"
     [ -f "${cm}" ] || return 0
     local slug val
-    for slug in akkoma tuwunel phpbb games owncast tube workloadConsole edge-ai edge-ai-analysis; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio workloadConsole edge-ai edge-ai-analysis; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         # '#'-delimited so the (true|false) alternation does not collide with the delimiter.
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"

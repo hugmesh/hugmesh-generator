@@ -1,0 +1,35 @@
+# HTTPRoute (Gateway API) for the character-studio remote at the /character-studio
+# mountAt.
+#
+# ⚠ ROUTING-MODEL NOTE: the LIVE snapdragon mesh routes through Spring Cloud Gateway
+# (apps/20-gateway-{be,fe}.yaml helm values + the route-access DB), NOT the Gateway
+# API. The ACTIVE route for this remote is the `character-studio-ui` SCG route added
+# to apps/20-gateway-fe.yaml (path /character-studio/** -> this Service on :8080) +
+# its gateway_route_access row (/character-studio/** = ROLE_USER). This HTTPRoute is
+# provided per the optional-service manifest contract and lets a cluster that ADOPTS
+# the Gateway API (ingress-nginx Gateway / Envoy Gateway) attach the same path with
+# no manifest change. It is INERT until a gateway.networking.k8s.io controller +
+# parent Gateway exist; it is NOT in kustomization.yaml `resources` by default for
+# that reason (uncomment the resources line + set parentRefs to enable). Kept here so
+# the slug owns its route definition in one place and the build-time gate prunes it
+# WITH the manifest dir.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: snapdragon-character-studio-ui
+  namespace: snapdragon-frontend
+  labels:
+    app: snapdragon-character-studio-ui
+    app.kubernetes.io/part-of: snapdragon.systems
+spec:
+  # parentRefs MUST be set to the cluster's frontend Gateway when the Gateway API is
+  # adopted (placeholder name below; matches the ingress-nginx/Envoy Gateway naming).
+  parentRefs:
+    - name: snapdragon-fe-gateway
+      namespace: snapdragon-frontend
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: /character-studio }
+      backendRefs:
+        - name: snapdragon-character-studio-ui
+          port: 8080

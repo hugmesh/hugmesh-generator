@@ -1,4 +1,4 @@
-# Optional Services — add/remove by command (akkoma · tuwunel · phpBB · games · owncast · tube)
+# Optional Services — add/remove by command (akkoma · tuwunel · phpBB · games · owncast · tube · character-studio)
 
 ## 1. Purpose & scope
 
@@ -13,7 +13,9 @@ The platform splits into two tiers:
   live-streaming, GPU-gated x86), **tube** (LocalTube YouTube archive, GPU-gated
   x86), **edge-ai** (GPU inference node serving an OpenAI-compatible model API to
   the mesh — DEFAULT-OFF, GPU-gated; auto-selected by the `edge_ai` node role; see
-  [EDGE-AI.md](EDGE-AI.md)). (Plus the non-user-level optional slugs **egress-vpn**
+  [EDGE-AI.md](EDGE-AI.md)), **character-studio** (the VN character-studio frontend
+  remote — character creator + chat surface mounted at `/character-studio`, ROLE_USER;
+  DEFAULT-OFF, admin gate). (Plus the non-user-level optional slugs **egress-vpn**
   / **tor** / **workloadConsole** / **anubis** / **coturn**, gated by the same registry.)
 
   **tor** (Tor v3 onion hidden service, DEFAULT-OFF) follows the same node-scoped
@@ -52,7 +54,7 @@ registry is that missing list). Each service entry carries:
 
 | field | meaning |
 |---|---|
-| `slug` | `akkoma` / `tuwunel` / `phpbb` / `games` / `owncast` / `tube` (+ `egress-vpn` / `tor` / `workloadConsole` / `anubis`) |
+| `slug` | `akkoma` / `tuwunel` / `phpbb` / `games` / `owncast` / `tube` / `character-studio` (+ `egress-vpn` / `tor` / `workloadConsole` / `anubis`) |
 | `namespace` | the k8s namespace it lands in |
 | `apps` | the ArgoCD Application YAMLs it **owns** (pruned on removal) |
 | `sharedApps` | apps shared with another slug (e.g. `45-social-ui.yaml`); pruned only when **all** owners are deselected |
@@ -62,7 +64,7 @@ registry is that missing list). Each service entry carries:
 | `routeAccessRows` | the `gateway_route_access` rows it owns (dropped so a matched route to a deleted upstream cannot 502 / stale-grant) |
 | `federationModule` | the `federation_modules` registration (federation-api wave) |
 | `casdoorSeed` | a dedicated Casdoor it owns (games → `casdoor-games`) |
-| `default` | `akkoma`/`tuwunel`/`phpbb` → `on`; **`games`/`owncast`/`tube` → `off` (opt-in; owncast/tube are GPU-gated x86)** |
+| `default` | `akkoma`/`tuwunel`/`phpbb` → `on`; **`games`/`owncast`/`tube`/`character-studio` → `off` (opt-in; owncast/tube are GPU-gated x86; character-studio is an admin-gated frontend remote)** |
 
 There is also a `gamesDomain` block (the `GAMES_DOMAIN` knob + the
 parameterized files) — see §5.
@@ -78,12 +80,14 @@ the `federation_modules` seed.
 | Tier | Slugs | When baked |
 |---|---|---|
 | **DEFAULT-ON** (the built-in default when no selection is given) | `akkoma`, `tuwunel` (Matrix), `phpbb` | always, unless `EXCLUDE_SERVICES` removes them |
-| **DEFAULT-OFF** (must be specifically added) | `games`, `owncast`, `tube` — and any future user-level service | only when explicitly selected |
+| **DEFAULT-OFF** (must be specifically added) | `games`, `owncast`, `tube`, `character-studio` — and any future user-level service | only when explicitly selected |
 | **FULL-SET** | `OPTIONAL_SERVICES=all` / `--all-services` | every user-level slug — **rpi5 builder only today** (see caveat below) |
 
 > ⚠ **`games` is DEFAULT-OFF** (it was previously default-on). Add it with
 > `--enable-games` / `ENABLE_GAMES=true`, by naming `games` in `OPTIONAL_SERVICES`,
 > or via the full set. `owncast`/`tube` are GPU-gated x86 services, also off by default.
+> `character-studio` is an admin-gated frontend remote, off by default — add it with
+> `--with-character-studio`, by naming `character-studio` in `OPTIONAL_SERVICES`, or via the full set.
 
 Two inputs, in precedence order **built-in default (`akkoma tuwunel phpbb`;
 games/owncast/tube OFF) < `brand.conf` < `--optional-services` CLI flag**:
@@ -104,7 +108,7 @@ games/owncast/tube OFF) < `brand.conf` < `--optional-services` CLI flag**:
 
 **FULL-SET sentinel.** `OPTIONAL_SERVICES=all` (and the equivalent `--all-services`
 CLI flag) expands to **every user-level slug** (`akkoma tuwunel phpbb games owncast
-tube`) right after arg parsing — before `EXCLUDE_SERVICES`, so the subtractive knob
+tube character-studio`) right after arg parsing — before `EXCLUDE_SERVICES`, so the subtractive knob
 still removes from it (e.g. `--all-services --exclude-services "games"` bakes
 everything *except* games). A bare `all` anywhere in the list expands the whole token.
 

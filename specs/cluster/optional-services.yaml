@@ -16,10 +16,11 @@
 # DEFAULT-INCLUSION POLICY (user 2026-06-17):
 #   * DEFAULT-ON  (the built-in default when NO selection is given): akkoma, tuwunel
 #     (Matrix), phpbb.
-#   * DEFAULT-OFF (must be specifically added): games, owncast, tube — and any
-#     future user-level service. games moved from default-on to DEFAULT-OFF here.
+#   * DEFAULT-OFF (must be specifically added): games, owncast, tube,
+#     character-studio — and any future user-level service. games moved from
+#     default-on to DEFAULT-OFF here.
 #   * FULL-SET sentinel: OPTIONAL_SERVICES=all (and --all-services) selects EVERY
-#     user-level slug (akkoma tuwunel phpbb games owncast tube).
+#     user-level slug (akkoma tuwunel phpbb games owncast tube character-studio).
 # The per-slug `default: on|off` below records THIS policy (akkoma/tuwunel/phpbb on;
 # games/owncast/tube off).
 #
@@ -251,6 +252,53 @@ spec:
         - { gateway: snapdragon-fe-gateway, urlPattern: /bff/owncast/admin/** }
         - { gateway: snapdragon-fe-gateway, urlPattern: /bff/owncast/** }
       federationModule: { slug: owncast, mountAt: /owncast, changeset: "031-register-owncast-module.xml" }
+      casdoorSeed: null
+
+    # ── character-studio — VN character-studio remote (creator + chat surface) ──
+    # The VN (visual-novel) furry/anthro character-studio Angular native-federation
+    # REMOTE: layered-2D character creator + chat surface, federated into the
+    # snapdragon.systems host at /character-studio (ROLE_USER floor). It is a pure
+    # FRONTEND micro-frontend served by its own non-root nginx pod in the
+    # snapdragon-frontend namespace (no dedicated BFF in this slug yet — it talks to
+    # the always-present /bff/** routes), so — like user-ui/forum-ui — it carries NO
+    # gateway HOST, NO per-service ESO, and just the one fe-gateway path route +
+    # route-access row. DEFAULT-OFF (admin gate): add it explicitly
+    # (--with-character-studio / 'character-studio' in --optional-services /
+    # OPTIONAL_SERVICES=all). When deselected, gate_optional_services() prunes the
+    # Application + manifest dir + the fe-gateway route + the route-access row, and
+    # _opt_render_installed_services renders character-studio:"false" so the host
+    # greys the entry out instead of 404/502.
+    - slug: character-studio
+      displayName: "Character Studio (VN)"
+      namespace: snapdragon-frontend
+      default: off
+      apps:
+        - apps/49b-character-studio-ui.yaml
+      sharedApps: []
+      manifestPath: manifests/character-studio
+      esoFile: null
+      esoKeys: []
+      gatewayHost: null
+      gatewayRouteIds: [character-studio-ui]
+      routeAccessRows:
+        - { gateway: snapdragon-fe-gateway, urlPattern: /character-studio/** }
+      # federation_modules registration lives in the SEPARATE snapdragon-federation-api
+      # repo (Liquibase changelog), NOT in this generator repo. The changeset to add
+      # there is 036-register-character-studio-module.xml (next free number after 035),
+      # mirroring 025-register-games-module.xml field-for-field with
+      # slug=character-studio, kind=remote-shell, exposed_module=./routes,
+      # mountAt=/character-studio, requiresRole=ROLE_USER,
+      # remote_entry_url=http://snapdragon-character-studio-ui:8080/remoteEntry.json,
+      # plus a db.changelog-master.xml <include>. Documented in the generator manifest
+      # dir (manifests/character-studio/FEDERATION-REGISTRATION-TODO.md) until that
+      # repo's wave lands. mountAt/requiresRole/exposed are recorded inline here so the
+      # generator can derive the registration when the federation-api wave runs.
+      federationModule:
+        slug: character-studio
+        mountAt: /character-studio
+        requiresRole: ROLE_USER
+        exposed: ./routes
+        changeset: "036-register-character-studio-module.xml"   # in snapdragon-federation-api (separate repo)
       casdoorSeed: null
 
     # ── edge-ai — GPU inference node serving an OpenAI-compatible model API ─────
