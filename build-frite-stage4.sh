@@ -392,6 +392,48 @@ if [ -z "${HOSTNAME}" ]; then
     esac
 fi
 
+# ── Charset allowlists for brand/identity/kernel/toolchain fields (fail-closed) ──
+# (mirrors build-rpi5-stage4.sh) These values come from CLI flags or a sourced
+# brand.conf and flow into render_template's sed program (build of make.conf,
+# 01-firstboot.start, extlinux.conf) and into rebrand_sysroot's `sed -i` over the
+# baked /etc/snapdragon tree — and RPI_CPU/CROSS_TARGET land in make.conf, which
+# portage SOURCES as shell on the (root) build host. The rendered first-boot
+# script runs useradd/chpasswd with DEFAULT_USER as ROOT on the device. Reject
+# anything outside a strict charset at this earliest boundary so a value carrying
+# sed/shell metacharacters, a quote, or a newline can never reach a render sink or
+# a sourced KEY=VALUE file. Escaping at the render sink (_sed_rep_escape) is
+# defense-in-depth on top of this. Each regex below ACCEPTS every legitimate
+# default (brand=snapdragon, org=Snapdragon-Systems, domain=snapdragon.systems,
+# user=frite, cpu=cortex-a53, target=aarch64-unknown-linux-gnu, title
+# "Snapdragon Systems"); HOSTNAME is derived from the validated brand above.
+_require_match() {  # <human-name> <value> <regex>
+    [[ "$2" =~ $3 ]] || { err "invalid $1: '$2' (must match ${3})"; exit 1; }
+}
+# DNS label (slug): lowercase alnum, internal hyphens, 1..63 chars.
+_RE_SLUG='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+# Org slug: like a slug but allow upper-case (e.g. Snapdragon-Systems).
+_RE_ORG='^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
+# DNS name: dot-joined labels (case-insensitive), no trailing dot.
+_RE_DNS='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+# POSIX-ish username: leading [a-z_], then [a-z0-9_-], <=32 chars.
+_RE_USER='^[a-z_][a-z0-9_-]{0,31}$'
+# Brand title: printable, allow space + a small safe punctuation set; NO quote,
+# backslash, dollar, backtick, pipe, ampersand, semicolon, angle/paren/newline.
+_RE_TITLE='^[A-Za-z0-9 ._-]{1,64}$'
+# GCC -mcpu/-mtune value: alnum + . _ + - (e.g. cortex-a53, native).
+_RE_CPU='^[A-Za-z0-9._+-]+$'
+# GNU target triplet: alnum + _ . - (e.g. aarch64-unknown-linux-gnu).
+_RE_TRIPLET='^[A-Za-z0-9_.-]+$'
+
+_require_match "--brand"          "${BRAND}"          "${_RE_SLUG}"
+_require_match "--org"            "${ORG}"            "${_RE_ORG}"
+_require_match "--cluster-domain" "${CLUSTER_DOMAIN}" "${_RE_DNS}"
+_require_match "--hostname"       "${HOSTNAME}"       "${_RE_DNS}"
+_require_match "--user"           "${DEFAULT_USER}"   "${_RE_USER}"
+_require_match "--brand-title"    "${BRAND_TITLE}"    "${_RE_TITLE}"
+_require_match "--cpu"            "${RPI_CPU}"        "${_RE_CPU}"
+_require_match "--target"         "${CROSS_TARGET}"   "${_RE_TRIPLET}"
+
 BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"
 SYSROOT="${BUILD_ROOT}/sysroot"
 STAGE_DIR="${BUILD_ROOT}/staging"     # boot tree + ISO/installer staging
@@ -416,29 +458,50 @@ info "DTB:   ${FRITE_DTB}   u-boot: ${FRITE_UBOOT_DEFCONFIG}"
 info "Flavor: ${FRITE_FLAVOR}  (live=${BUILD_LIVE} installer=${BUILD_INSTALLER})  Desktop: ${DESKTOP}"
 info "Build stamp: ${BUILD_TS} (brand=${BRAND})"
 
+# Escape a value so it is safe to place on the REPLACEMENT (right-hand) side of a
+# sed `s|LHS|RHS|` command that uses `|` as the delimiter. Without this a value
+# containing the delimiter `|`, the match-reference metachar `&`, a backslash, or a
+# newline can terminate the s-command, append an extra sed command, or inject a new
+# line into the rendered artifact (make.conf/extlinux.conf/01-firstboot.start, which
+# are sourced/executed as root). Order matters: escape backslash FIRST, then `&`
+# and the `|` delimiter, then forbid embedded newlines (defense-in-depth at the sink
+# — the identity/brand vars are also allowlist-validated up front).
+_sed_rep_escape() {
+    local v="$1"
+    v="${v//\\/\\\\}"   # backslash -> \\
+    v="${v//&/\\&}"     # & (whole-match ref) -> \&
+    v="${v//|/\\|}"     # | (delimiter)       -> \|
+    case "${v}" in
+        *$'\n'*) err "sed replacement contains a newline (refusing to render): '${1}'"; exit 1 ;;
+    esac
+    printf '%s' "${v}"
+}
+
 # ── Template helper (mirrors the Pi5 render_template) ──────────────
+# All brand/domain/identity/kernel substitutions go through _sed_rep_escape so a
+# value carrying sed metacharacters cannot corrupt or inject into the s-program.
 render_template() {
     local src="$1" dst="$2"
     local cbuild
     cbuild="$(portageq envvar CHOST 2>/dev/null || gcc -dumpmachine)"
     sed \
-        -e "s|@@CBUILD@@|${cbuild}|g" \
-        -e "s|@@CROSS_TARGET@@|${CROSS_TARGET}|g" \
-        -e "s|@@RPI_CPU@@|${RPI_CPU}|g" \
-        -e "s|@@JOBS@@|${JOBS}|g" \
-        -e "s|@@WORK_DIR@@|${BUILD_ROOT}|g" \
-        -e "s|@@FRITE_KERNEL_IMG@@|${FRITE_KERNEL_IMG}|g" \
-        -e "s|@@FRITE_DTB@@|${FRITE_DTB}|g" \
-        -e "s|@@FRITE_INITRD_LINE@@|${FRITE_INITRD_LINE:-#}|g" \
-        -e "s|@@FRITE_APPEND@@|${FRITE_APPEND:-}|g" \
-        -e "s|@@HOSTNAME@@|${HOSTNAME}|g" \
-        -e "s|@@TIMEZONE@@|${TIMEZONE}|g" \
-        -e "s|@@DEFAULT_USER@@|${DEFAULT_USER}|g" \
-        -e "s|@@BRAND@@|${BRAND}|g" \
-        -e "s|@@BRAND_TITLE@@|${BRAND_TITLE}|g" \
-        -e "s|@@DOMAIN@@|${CLUSTER_DOMAIN}|g" \
-        -e "s|@@ORG@@|${ORG}|g" \
-        -e "s|@@ENV@@|${ENV}|g" \
+        -e "s|@@CBUILD@@|$(_sed_rep_escape "${cbuild}")|g" \
+        -e "s|@@CROSS_TARGET@@|$(_sed_rep_escape "${CROSS_TARGET}")|g" \
+        -e "s|@@RPI_CPU@@|$(_sed_rep_escape "${RPI_CPU}")|g" \
+        -e "s|@@JOBS@@|$(_sed_rep_escape "${JOBS}")|g" \
+        -e "s|@@WORK_DIR@@|$(_sed_rep_escape "${BUILD_ROOT}")|g" \
+        -e "s|@@FRITE_KERNEL_IMG@@|$(_sed_rep_escape "${FRITE_KERNEL_IMG}")|g" \
+        -e "s|@@FRITE_DTB@@|$(_sed_rep_escape "${FRITE_DTB}")|g" \
+        -e "s|@@FRITE_INITRD_LINE@@|$(_sed_rep_escape "${FRITE_INITRD_LINE:-#}")|g" \
+        -e "s|@@FRITE_APPEND@@|$(_sed_rep_escape "${FRITE_APPEND:-}")|g" \
+        -e "s|@@HOSTNAME@@|$(_sed_rep_escape "${HOSTNAME}")|g" \
+        -e "s|@@TIMEZONE@@|$(_sed_rep_escape "${TIMEZONE}")|g" \
+        -e "s|@@DEFAULT_USER@@|$(_sed_rep_escape "${DEFAULT_USER}")|g" \
+        -e "s|@@BRAND@@|$(_sed_rep_escape "${BRAND}")|g" \
+        -e "s|@@BRAND_TITLE@@|$(_sed_rep_escape "${BRAND_TITLE}")|g" \
+        -e "s|@@DOMAIN@@|$(_sed_rep_escape "${CLUSTER_DOMAIN}")|g" \
+        -e "s|@@ORG@@|$(_sed_rep_escape "${ORG}")|g" \
+        -e "s|@@ENV@@|$(_sed_rep_escape "${ENV}")|g" \
         "${src}" > "${dst}"
 }
 
@@ -506,13 +569,23 @@ ZRAM_EOF
 rebrand_sysroot() {
     [ "${BRAND}" = "snapdragon" ] && [ "${CLUSTER_DOMAIN}" = "snapdragon.systems" ] && return 0
     local org_lc; org_lc="$(echo "${ORG}" | tr '[:upper:]' '[:lower:]')"
+    # All of these land on the REPLACEMENT side of `sed s|..|VALUE|` across the baked
+    # /etc/snapdragon tree (config the device reads as root); escape sed metacharacters
+    # so a tainted brand/domain/org/title cannot inject a second sed command or corrupt
+    # the output. Up-front allowlists already forbid the worst chars; this is the
+    # sink-side second layer (matches build-x86-host-stage4.sh's rebrand_sysroot).
+    local _btitle _org _domain _brand
+    _btitle="$(_sed_rep_escape "${BRAND_TITLE}")"
+    _org="$(_sed_rep_escape "${ORG}")"
+    _domain="$(_sed_rep_escape "${CLUSTER_DOMAIN}")"
+    _brand="$(_sed_rep_escape "${BRAND}")"
     local f
     while IFS= read -r -d '' f; do
         sed -i \
-            -e "s|Snapdragon Systems|${BRAND_TITLE}|g" \
-            -e "s|Snapdragon-Systems|${ORG}|g" \
-            -e "s|snapdragon\.systems|${CLUSTER_DOMAIN}|g" \
-            -e "s|snapdragon-|${BRAND}-|g" \
+            -e "s|Snapdragon Systems|${_btitle}|g" \
+            -e "s|Snapdragon-Systems|${_org}|g" \
+            -e "s|snapdragon\.systems|${_domain}|g" \
+            -e "s|snapdragon-|${_brand}-|g" \
             "${f}"
     done < <(find "${SYSROOT}/etc/snapdragon" -type f -print0 2>/dev/null)
 }
