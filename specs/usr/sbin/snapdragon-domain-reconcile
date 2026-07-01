@@ -74,6 +74,33 @@ log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v log
 warn() { log "WARNING: $*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# ── Fail-closed CONTENT gate for export fields (#13) ───────────────────────────
+# The signed #118 export is verified for AUTHENTICITY (Ed25519 + rollback) but NOT
+# for CONTENT. brand/org/clusterDomain/meshTag flow from here into generate-brand-
+# repos.sh (BRAND_OUT path -> rm -rf/mkdir; raw sed replacements) and gen-keystores.sh
+# (_ks_dir="${KS}/${brand}" -> root mkdir/rm), so a value containing '/' '..'
+# whitespace or sed/shell metachars is a path-traversal / injection vector. We gate
+# every per-entry field set after jq extraction + defaulting and SKIP (warn+continue)
+# any entry that fails — mirroring the agent's fail-closed posture. The downstream
+# generators ALSO re-validate (defense-in-depth); this stops a bad entry earlier and
+# keeps the rest of the export processing.
+_DR_DNS_LABEL='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+_DR_DNS_NAME='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'
+# Returns 0 iff (brand,domain,org,mesh) are all safe. Empty optional fields (org/mesh)
+# are allowed here because callers default them from the (validated) brand first.
+entry_fields_ok() {
+    local brand="$1" dom="$2" org="${3:-}" mesh="${4:-}"
+    [[ "${brand}" =~ ${_DR_DNS_LABEL} ]] || { warn "rejecting entry: invalid brand '${brand}' (not a DNS label)"; return 1; }
+    [[ "${dom}"   =~ ${_DR_DNS_NAME}  ]] || { warn "rejecting entry: invalid clusterDomain '${dom}' (not a DNS name)"; return 1; }
+    if [ -n "${org}" ]; then
+        [[ "${org}" =~ ^[A-Za-z0-9._-]{1,63}$ ]] || { warn "rejecting entry: invalid org '${org}'"; return 1; }
+    fi
+    if [ -n "${mesh}" ]; then
+        [[ "${mesh}" =~ ^tag:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || { warn "rejecting entry: invalid meshTag '${mesh}'"; return 1; }
+    fi
+    return 0
+}
+
 # Read a bare KEY=VALUE from node.env WITHOUT sourcing it (copy of the proven read_env helper).
 read_env() {
     local k="$1" line
@@ -153,6 +180,9 @@ build_domains_conf() {
             # A domain needs action when its CA is not provisioned OR its appset is not registered.
             if [ "${ca_prov}" = "true" ] && [ "${appset}" = "true" ]; then continue; fi
             [ -n "${brand}" ] || brand="${dom%%.*}"
+            # Fail-closed CONTENT gate (#13): skip a row whose brand/domain could escape
+            # the keystore output tree or break the consumer parse.
+            entry_fields_ok "${brand}" "${dom}" || continue
             # caRef -> CA columns. "generate"/empty -> self-signed (no columns). A non-generate
             # ref is resolved to off-git PEM paths via the ESO mount; unresolved -> generate.
             local cc="" ck=""
@@ -184,6 +214,11 @@ resolve_ca_ref() {
     local caref="$1" dom="$2"
     local mnt="${DR_CA_SECRET_DIR:-/etc/snapdragon/domain-ca}"
     _DR_CA_CERT=""; _DR_CA_KEY=""
+    # Defense-in-depth: dom is the sole variable path component in the cert/key paths
+    # below. The single caller validates it (entry_fields_ok), but re-gate at the sink so
+    # a future/refactored caller cannot read a CA/key outside the ESO mount via a
+    # '../'-bearing or malformed dom.
+    [[ "${dom}" =~ ${_DR_DNS_NAME} ]] || { warn "resolve_ca_ref: refusing malformed domain '${dom}' (not a DNS name)"; return 1; }
     local cert="${mnt}/${dom}/ca.crt" key="${mnt}/${dom}/ca.key"
     if [ -r "${cert}" ] && [ -r "${key}" ]; then
         _DR_CA_CERT="${cert}"; _DR_CA_KEY="${key}"
@@ -234,6 +269,9 @@ render_brand_repos() {
         [ -n "${brand}" ] || brand="${dom%%.*}"
         [ -n "${org}" ] || org="${brand}"
         [ -n "${mesh}" ] || mesh="tag:${brand}"
+        # Fail-closed CONTENT gate (#13): reject brand/domain/org/mesh that could
+        # path-traverse or inject into generate-brand-repos.sh before we render.
+        entry_fields_ok "${brand}" "${dom}" "${org}" "${mesh}" || continue
         # FIELD-GAP derivation (see header) — NOT authoritative; flagged for #118.
         local title="${brand}"                          # BRAND_TITLE := brand (slug fallback)
         local headscale="https://headscale.${dom}"      # HEADSCALE_URL := convention

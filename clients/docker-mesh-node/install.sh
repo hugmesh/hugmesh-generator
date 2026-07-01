@@ -54,6 +54,32 @@ fi
 [ -d "${KEYS}" ] || { echo "ERROR: keys dir not found: ${KEYS}" >&2; exit 2; }
 KEYS_ABS="$(cd "${KEYS}" && pwd)"
 
+# ── Validate the values that get written into the SOURCED launch.env (#18) ─────
+# snapdragon-mesh-ctl dot-sources launch.env, so an unescaped value containing
+# $(...)/`...`/;/newline would execute as the user. Validate up front (fail closed)
+# AND single-quote-escape on write (defense-in-depth). ROLE is a tiny enum; NAME/
+# IMAGE get a conservative charset allowlist (container name + OCI ref chars).
+case "${ROLE}" in
+    ""|user|mod|admin|superadmin) : ;;
+    *) echo "ERROR: invalid --role '${ROLE}' (allowed: user|mod|admin|superadmin)" >&2; exit 2 ;;
+esac
+case "${HOST}" in
+    *[!A-Za-z0-9._-]*) echo "ERROR: invalid --name '${HOST}' (allowed: A-Za-z0-9._-)" >&2; exit 2 ;;
+esac
+case "${IMAGE}" in
+    *[!A-Za-z0-9._:/@-]*) echo "ERROR: invalid --image '${IMAGE}' (allowed: A-Za-z0-9._:/@-)" >&2; exit 2 ;;
+esac
+
+# Emit `KEY='value'` with embedded single-quotes safely escaped, so the file can
+# be dot-sourced without code execution even if validation above is ever relaxed.
+# (POSIX sh — no `printf %q`; this is the portable single-quote-escape idiom.)
+sq_emit() {
+    # $1=KEY  $2=VALUE
+    printf "%s='" "$1"
+    printf '%s' "$2" | sed "s/'/'\\\\''/g"
+    printf "'\n"
+}
+
 mkdir -p "${BIN_DIR}" "${APP_DIR}" "${ICON_SCALABLE}" "${ICON_256}" "${CFG_DIR}"
 
 # 1) launcher + a tiny config-sourcing control wrapper
@@ -75,12 +101,14 @@ CTL
 chmod 0755 "${BIN_DIR}/snapdragon-mesh-ctl"
 
 # 2) launch config (single source of truth for the menu/tray/autostart)
+# Values are single-quote-escaped so this dot-sourced file can never execute
+# injected code (#18); ROLE/NAME/IMAGE were also charset-validated above.
 {
     echo "# written by snapdragon mesh-node install.sh"
-    printf 'KEYS=%s\n'  "${KEYS_ABS}"
-    printf 'ROLE=%s\n'  "${ROLE}"
-    printf 'NAME=%s\n'  "${HOST}"
-    printf 'IMAGE=%s\n' "${IMAGE}"
+    sq_emit KEYS  "${KEYS_ABS}"
+    sq_emit ROLE  "${ROLE}"
+    sq_emit NAME  "${HOST}"
+    sq_emit IMAGE "${IMAGE}"
 } > "${CFG}"
 chmod 0600 "${CFG}"
 

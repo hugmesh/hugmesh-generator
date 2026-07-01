@@ -46,6 +46,14 @@ REPO="$(cd "${HERE}/.." && pwd)"
 # `make ... BRAND=acme` / the profile (incl. optional CA_CERT/CA_KEY) is picked
 # up. brand.conf (above) still wins over the profile for the same vars unless
 # the profile re-sets them; env/CLI (parsed below) win over both.
+# FAIL-CLOSED (defense before use): BRAND is a PATH COMPONENT of the brands/<BRAND>.conf
+# profile dot-sourced just below — a value like ../../evil (from env or the brand.conf
+# sourced above) would source arbitrary shell. validate_brand_domain() runs later, AFTER
+# this source, so gate BRAND as a DNS-label slug HERE, before it can select the file.
+if [ -n "${BRAND:-}" ] && [[ ! "${BRAND}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+  echo "ERROR: invalid BRAND '${BRAND}' (must be a DNS label [a-z0-9-]; no '/', '..', whitespace) — refusing to source brands/${BRAND}.conf" >&2
+  exit 1
+fi
 if [ -n "${BRAND:-}" ] && [ -f "${REPO}/brands/${BRAND}.conf" ]; then
   # shellcheck disable=SC1090
   . "${REPO}/brands/${BRAND}.conf"
@@ -244,6 +252,11 @@ validate_external_ca() {
 # collects them into the WIDE multi-anchor truststore for the architecture tier).
 provision_domain() {
   local d_brand="$1" d_domain="$2" d_ca_cert="$3" d_ca_key="$4" d_ca_pass="$5" d_ca_dir="$6" d_ks_dir="$7"
+  # Defense-in-depth: re-validate at the sink. d_brand/d_domain name the ${d_ca_dir}/
+  # ${d_ks_dir} paths (mkdir/rm below), keytool aliases and openssl -subj fields. Every
+  # current caller validates before building DOMAIN_ROWS, but re-gate here so a future
+  # caller cannot reach these root sinks with an unsafe brand/domain (fail-closed).
+  validate_brand_domain "${d_brand}" "${d_domain}"
   mkdir -p "${d_ca_dir}" "${d_ks_dir}"
 
   # Cluster CA: provided external CA  >  reuse on disk  >  self-signed.
@@ -346,6 +359,25 @@ EXT
 # Each row is "brand<TAB>domain<TAB>ca_cert<TAB>ca_key". With no brands/domains.conf
 # (or an empty one) the list is exactly the historical single {BRAND, DOMAIN,
 # CA_CERT, CA_KEY}, so the loop below is a no-op transformation (N=1).
+# ── Slug / DNS-name validation (#4) ────────────────────────────────────────────
+# domains.conf rows ultimately originate from the SIGNED #118 cross-domain export
+# (authenticity-verified, NOT content-validated) when this script is driven by
+# snapdragon-domain-reconcile. The brand slug (_b) and domain (_d) are later built
+# straight into ROOT filesystem paths in the multi-domain branch:
+#   _ca_dir="${CA}/${_b}"; _ks_dir="${KS}/${_b}"  -> mkdir -p / rm -f (as root)
+# so a value containing '/' or '..' would escape the output tree. Validate each
+# parsed row up front and FAIL CLOSED on a bad slug/domain; legit slugs
+# (e.g. snapdragon) and domains (e.g. snapdragon.systems) still pass.
+_KS_DNS_LABEL='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+_KS_DNS_NAME='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'
+validate_brand_domain() {
+  local b="$1" d="$2"
+  [[ "${b}" =~ ${_KS_DNS_LABEL} ]] \
+    || { echo "ERROR: invalid brand slug '${b}' (must be a DNS label; no '/', '..', whitespace)" >&2; exit 1; }
+  [[ "${d}" =~ ${_KS_DNS_NAME} ]] \
+    || { echo "ERROR: invalid domain '${d}' (must be a DNS name; no '/', '..', whitespace)" >&2; exit 1; }
+}
+
 DOMAIN_ROWS=()
 if [ -f "${DOMAINS_CONF}" ] && grep -qE '^[[:space:]]*[^#[:space:]]' "${DOMAINS_CONF}"; then
   echo "==> Multi-domain build from ${DOMAINS_CONF}"
@@ -358,11 +390,14 @@ if [ -f "${DOMAINS_CONF}" ] && grep -qE '^[[:space:]]*[^#[:space:]]' "${DOMAINS_
     _d="$1"; _b="${2:-}"; _cc="${3:-}"; _ck="${4:-}"
     # Default brand = the domain's first DNS label (e.g. acme.test -> acme).
     [ -n "${_b}" ] || _b="${_d%%.*}"
+    # Fail closed on a slug/domain that could escape the output tree (#4).
+    validate_brand_domain "${_b}" "${_d}"
     DOMAIN_ROWS+=("${_b}"$'\t'"${_d}"$'\t'"${_cc}"$'\t'"${_ck}")
   done < "${DOMAINS_CONF}"
 fi
 # Fallback / default: the single current domain. This is the BYTE-IDENTICAL path.
 if [ "${#DOMAIN_ROWS[@]}" -eq 0 ]; then
+  validate_brand_domain "${BRAND}" "${DOMAIN}"
   DOMAIN_ROWS+=("${BRAND}"$'\t'"${DOMAIN}"$'\t'"${CA_CERT}"$'\t'"${CA_KEY}")
 fi
 N_DOMAINS="${#DOMAIN_ROWS[@]}"

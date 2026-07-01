@@ -50,6 +50,49 @@ source "$BRAND_CONF"
 : "${HEADSCALE_URL:?brand config must set HEADSCALE_URL}"
 : "${MESH_TAG:?brand config must set MESH_TAG}"
 
+# ── Validate the sourced brand fields (#15/#8/#12) ─────────────────────────────
+# The brand profile is, on a mesh node, SYNTHESISED by snapdragon-domain-reconcile
+# from the SIGNED cross-domain #118 export — verified for AUTHENTICITY but NOT for
+# CONTENT. BRAND is then built into filesystem paths (BRAND_OUT below -> rm -rf /
+# mkdir / file writes, all as root from the reconcile cron) and every field lands
+# RAW on a `sed s|…|VALUE|` replacement in render_template. So a value containing
+# '/'/'..' (path traversal) or a sed metachar ('|' '&' '\\' / newline) is unsafe.
+# Fail closed BEFORE any filesystem or sed use; legit slugs/domains still pass.
+_DNS_LABEL='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+_DNS_NAME='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'
+_die() { echo "[generate-brand-repos] FATAL: $*" >&2; exit 1; }
+
+# Slug allowlist (single DNS label) — used for BRAND (becomes a path component).
+[[ "$BRAND" =~ $_DNS_LABEL ]] \
+  || _die "invalid BRAND '${BRAND}' (must be a DNS label: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\$)"
+# ORG is also lowercased->slugged below; require it to be safe to slug.
+[[ "$ORG" =~ ^[A-Za-z0-9._-]{1,63}$ ]] \
+  || _die "invalid ORG '${ORG}' (allowed: A-Za-z0-9._- , 1..63)"
+# CLUSTER_DOMAIN: full DNS name (e.g. snapdragon.systems).
+[[ "$CLUSTER_DOMAIN" =~ $_DNS_NAME ]] \
+  || _die "invalid CLUSTER_DOMAIN '${CLUSTER_DOMAIN}' (must be a DNS name)"
+# MESH_TAG: headscale ACL tag form 'tag:<slug>'.
+_RE_MESH='^tag:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+[[ "$MESH_TAG" =~ $_RE_MESH ]] \
+  || _die "invalid MESH_TAG '${MESH_TAG}' (must be 'tag:<dns-label>')"
+# HEADSCALE_URL: http(s) URL, no shell/sed metachars (|, &, backtick, quotes) or
+# whitespace. Pattern held in a var so the literal regex is not re-parsed by [[.
+_RE_URL='^https?://[A-Za-z0-9._~:/?#@!$()*,=%+-]+$'
+[[ "$HEADSCALE_URL" =~ $_RE_URL ]] \
+  || _die "invalid HEADSCALE_URL '${HEADSCALE_URL}'"
+# BRAND_TITLE is free-text but reaches a sourced/sed context: forbid the chars
+# that break a sed replacement or a shell assignment (quote/backslash/dollar/
+# backtick/newline/pipe/ampersand). Printable, length-bounded.
+[ -n "$BRAND_TITLE" ] || _die "BRAND_TITLE must not be empty"
+case "$BRAND_TITLE" in
+  *['"\$`|&']* ) _die "invalid BRAND_TITLE (forbidden chars: \" \\ \$ \` | &)" ;;
+esac
+# Reject any newline (or other control char) — must be a single printable line.
+if [[ "$BRAND_TITLE" == *$'\n'* || "$BRAND_TITLE" == *$'\r'* ]]; then
+  _die "invalid BRAND_TITLE (must be single-line)"
+fi
+[[ "${#BRAND_TITLE}" -le 128 ]] || _die "BRAND_TITLE too long (max 128)"
+
 # ── Derived variables ─────────────────────────────────────────────────────────
 # GITLAB_GROUP: lowercase slug of ORG for GitLab paths (e.g. "Example-Inc" → "example-inc")
 GITLAB_GROUP="${ORG,,}"
@@ -66,6 +109,19 @@ echo "[generate-brand-repos] Headscale:     ${HEADSCALE_URL}"
 echo "[generate-brand-repos] Mesh tag:      ${MESH_TAG}"
 echo ""
 
+# Escape a string for the REPLACEMENT side of `sed s|...|...|` (mirrors the
+# _sed_rep_escape helper in specs/usr/sbin/snapdragon-branding): backslash first,
+# then the ampersand (whole-match) and the `|` delimiter. Defense-in-depth on top
+# of the up-front allowlist above (the validated fields contain none of these, but
+# the escaping keeps the sink itself safe).
+_sed_rep_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"   # \  -> \\
+  s="${s//&/\\&}"     # &  -> \&
+  s="${s//|/\\|}"     # |  -> \|
+  printf '%s' "${s}"
+}
+
 # ── Template renderer ─────────────────────────────────────────────────────────
 render_template() {
   local src="$1" dst="$2"
@@ -73,18 +129,27 @@ render_template() {
   # Replace {{PLACEHOLDER}} tokens with brand values.
   # Ordering matters: longer/more-specific tokens first to avoid partial matches.
   sed \
-    -e "s|{{BRAND_TITLE}}|${BRAND_TITLE}|g" \
-    -e "s|{{CLUSTER_DOMAIN}}|${CLUSTER_DOMAIN}|g" \
-    -e "s|{{HEADSCALE_URL}}|${HEADSCALE_URL}|g" \
-    -e "s|{{GITLAB_GROUP}}|${GITLAB_GROUP}|g" \
-    -e "s|{{MESH_TAG}}|${MESH_TAG}|g" \
-    -e "s|{{BRAND}}|${BRAND}|g" \
-    -e "s|{{ORG}}|${ORG}|g" \
+    -e "s|{{BRAND_TITLE}}|$(_sed_rep_escape "${BRAND_TITLE}")|g" \
+    -e "s|{{CLUSTER_DOMAIN}}|$(_sed_rep_escape "${CLUSTER_DOMAIN}")|g" \
+    -e "s|{{HEADSCALE_URL}}|$(_sed_rep_escape "${HEADSCALE_URL}")|g" \
+    -e "s|{{GITLAB_GROUP}}|$(_sed_rep_escape "${GITLAB_GROUP}")|g" \
+    -e "s|{{MESH_TAG}}|$(_sed_rep_escape "${MESH_TAG}")|g" \
+    -e "s|{{BRAND}}|$(_sed_rep_escape "${BRAND}")|g" \
+    -e "s|{{ORG}}|$(_sed_rep_escape "${ORG}")|g" \
     "$src" > "$dst"
 }
 
 # ── Output directory ──────────────────────────────────────────────────────────
 BRAND_OUT="${OUT_DIR}/${BRAND}-gitops"
+# Defense-in-depth on top of the BRAND slug allowlist: assert BRAND_OUT resolves
+# STRICTLY under OUT_DIR before the destructive rm -rf / mkdir, so even a future
+# regression in the allowlist cannot escape the staging dir.
+_out_abs="$(mkdir -p "$OUT_DIR" 2>/dev/null; realpath -m -- "$OUT_DIR")"
+_brand_out_abs="$(realpath -m -- "$BRAND_OUT")"
+case "$_brand_out_abs/" in
+  "$_out_abs"/*) : ;;
+  *) _die "refusing to operate outside OUT_DIR: '${BRAND_OUT}' resolves to '${_brand_out_abs}' (not under '${_out_abs}')" ;;
+esac
 if [[ -d "$BRAND_OUT" ]]; then
   echo "[generate-brand-repos] Removing existing output: $BRAND_OUT"
   rm -rf "$BRAND_OUT"
