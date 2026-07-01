@@ -56,6 +56,39 @@ lint:x86-kernel-net-symbols:
   script:
     - bash tests/scripts/test-x86-kernel-net-symbols.sh
 
+# Shell-injection remediation regression suite. Runs the fail-closed identity /
+# path / manifest validators added by the shell-injection hardening (build-x86 /
+# rpi5 / frite, gen-keystores, generate-brand-repos, provision.sh) against
+# injection payloads, asserting each is REJECTED and legit values still pass. These
+# are the merged security fixes' regression tests — orphaned until now. Cheap; no
+# privileged runner needed. NOTE reviewer: confirm per-test runtime deps against the
+# runner (jq/openssl added below); split into separate jobs if any test needs more.
+lint:shellinj-regression:
+  stage: lint
+  image: bash:5
+  tags: [snapdragon-x86]
+  before_script:
+    - apk add --no-cache jq openssl
+  script:
+    - bash tests/scripts/test-x86-identity-injection.sh
+    - bash tests/scripts/test-rpi5-builder-input-validation.sh
+    - bash tests/scripts/test-frite-builder-input-validation.sh
+    - bash tests/scripts/test-brand-path-validation.sh
+    - bash tests/scripts/test-provision-manifest-injection.sh
+
+# Studio identity-allowlist unit tests: the fail-closed validators in
+# studio/snapdragon_studio/core/validate.py (DNS-label / hostname / username /
+# accent allowlists + the trailing-newline re.fullmatch regression). Cheap; no
+# privileged runner needed.
+lint:studio-identity-validation:
+  stage: lint
+  image: python:3-slim
+  tags: [snapdragon-x86]
+  before_script:
+    - pip install --quiet pytest
+  script:
+    - python -m pytest -q studio/tests/test_identity_validation.py
+
 # Production-hygiene gate. Bakes a PROD copy of the GitOps tree (the same
 # transforms gate_env_apps applies: prune 09-lan-dns + the test wave, pin :dev
 # first-party tags) and asserts scripts/validate-prod-hygiene.sh PASSES on it, AND
