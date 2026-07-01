@@ -57,12 +57,12 @@ def _require(ok: bool, field: str, value: str) -> None:
 
 
 def validate_brand(value: str) -> str:
-    _require(bool(_DNS_LABEL.match(value)), "brand", value)
+    _require(bool(_DNS_LABEL.fullmatch(value)), "brand", value)
     return value
 
 
 def validate_org(value: str) -> str:
-    _require(bool(_DNS_LABEL_CI.match(value)), "org", value)
+    _require(bool(_DNS_LABEL_CI.fullmatch(value)), "org", value)
     return value
 
 
@@ -80,26 +80,26 @@ def validate_accent_color(value: str) -> str:
     # a brand accent is an "#RRGGBB" hex colour (mirrors the build-script accent
     # gate); "" means no accent. It flows to --accent-color and into a root-sourced
     # brand.conf, so reject anything that is not exactly that.
-    ok = value == "" or bool(_ACCENT.match(value))
+    ok = value == "" or bool(_ACCENT.fullmatch(value))
     _require(ok, "accent_color", value)
     return value
 
 
 def validate_domain_name(value: str) -> str:
-    _require(bool(_DNS_NAME.match(value)), "domain", value)
+    _require(bool(_DNS_NAME.fullmatch(value)), "domain", value)
     return value
 
 
 def validate_username(value: str) -> str:
-    _require(bool(_USERNAME.match(value)), "local_user", value)
+    _require(bool(_USERNAME.fullmatch(value)), "local_user", value)
     return value
 
 
 def validate_home_device(value: str) -> str:
-    _require(bool(_HOME_DEVICE.match(value)), "home_device", value)
+    _require(bool(_HOME_DEVICE.fullmatch(value)), "home_device", value)
     return value
 
 
 def validate_home_backup(value: str) -> str:
-    _require(bool(_HOME_BACKUP.match(value)), "home_backup", value)
+    _require(bool(_HOME_BACKUP.fullmatch(value)), "home_backup", value)
     return value

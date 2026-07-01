@@ -13,7 +13,16 @@ import pytest
 
 from snapdragon_studio.core import keyzip
 from snapdragon_studio.core.config import Domain, ImageConfig
-from snapdragon_studio.core.validate import IdentityValidationError
+from snapdragon_studio.core.validate import (
+    IdentityValidationError,
+    validate_accent_color,
+    validate_brand,
+    validate_domain_name,
+    validate_home_backup,
+    validate_home_device,
+    validate_org,
+    validate_username,
+)
 
 
 # ---- ImageConfig.to_cli_args() validates identity fields -------------------
@@ -153,6 +162,41 @@ def test_injection_cluster_domain_rejected():
     cfg = ImageConfig(cluster_domain='x"; reboot; #')
     with pytest.raises(IdentityValidationError):
         cfg.to_cli_args()
+
+
+# ---- trailing-newline is rejected (re.match -> re.fullmatch) --------------
+# re.compile(r'^...$').match() accepts a single TRAILING NEWLINE because "$"
+# matches just before a final "\n"; that newline would break out of a
+# root-sourced KEY=VALUE line or a sed replacement. .fullmatch() rejects it.
+# Each of the seven positive-identity validators must reject a "<legit>\n"
+# variant while the plain legit value still passes.
+
+_NEWLINE_CASES = [
+    (validate_brand, "acme"),
+    (validate_org, "Acme-Corp"),
+    (validate_domain_name, "acme.test"),
+    (validate_username, "snap"),
+    (validate_home_device, "LABEL=HOME"),
+    (validate_home_backup, "/mnt/usb/home-backup.tar.gz.enc"),
+    (validate_accent_color, "#a1b2c3"),
+]
+
+
+@pytest.mark.parametrize("validator,legit", _NEWLINE_CASES,
+                         ids=[v.__name__ for v, _ in _NEWLINE_CASES])
+def test_trailing_newline_rejected(validator, legit):
+    # the plain legit value passes unchanged...
+    assert validator(legit) == legit
+    # ...but a single trailing newline is fail-closed rejected.
+    with pytest.raises(IdentityValidationError):
+        validator(legit + "\n")
+
+
+def test_accent_color_empty_still_passes():
+    # "" (no accent) is still accepted; only a trailing newline is rejected.
+    assert validate_accent_color("") == ""
+    with pytest.raises(IdentityValidationError):
+        validate_accent_color("\n")
 
 
 # ---- keyzip._apply_domain_conf rejects (does not set) bad values ----------
