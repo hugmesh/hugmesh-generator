@@ -455,11 +455,22 @@ provision_identity() {
     local hn tz
     hn="$(jqm '.hostname // ""')"
     if [ -n "${hn}" ] && [ "${hn}" != "null" ]; then
-        echo "${hn}" > /etc/hostname
-        mkdir -p /etc/conf.d
-        echo "hostname=\"${hn}\"" > /etc/conf.d/hostname
-        hostname "${hn}" 2>/dev/null || true
-        log "Hostname set to ${hn}"
+        # hn (.hostname) is written into the root-dot-sourced KEY="VALUE" file
+        # /etc/conf.d/hostname (an OpenRC conf.d file sourced as root), passed to
+        # `hostname`, and used as /etc/hostname. Validate fail-closed as an RFC-1123
+        # hostname/FQDN (labels of [A-Za-z0-9] + internal hyphens, dot-separated, each
+        # label <=63 and total <=253) — this rejects the '"' / '$' / '`' / ';' /
+        # newline that would break out of the dot-sourced conf.d line. Skip on invalid.
+        if [ "${#hn}" -le 253 ] && \
+           [[ "${hn}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]]; then
+            echo "${hn}" > /etc/hostname
+            mkdir -p /etc/conf.d
+            echo "hostname=\"${hn}\"" > /etc/conf.d/hostname
+            hostname "${hn}" 2>/dev/null || true
+            log "Hostname set to ${hn}"
+        else
+            warn "hostname '${hn}' is not a valid RFC-1123 hostname/FQDN — skipping (leaving default)"
+        fi
     fi
     tz="$(jqm '.timezone // ""')"
     if [ -n "${tz}" ] && [ "${tz}" != "null" ] && [ -f "/usr/share/zoneinfo/${tz}" ]; then
@@ -487,6 +498,17 @@ provision_network() {
     psk="$(jqm '.network.wifi.psk // ""')"
     country="$(jqm '.network.wifi.country // "US"')"
     if [ -n "${ssid}" ] && [ "${ssid}" != "null" ]; then
+        # ssid (.network.wifi.ssid) is used as a FILENAME ("${ssid}.nmconnection")
+        # and as NetworkManager keyfile INI keys (id=/ssid=). Reject path traversal
+        # ('/', '..'), newlines and control chars, and bound the length (IEEE-802.11
+        # SSIDs are <=32 octets) fail-closed so a manifest value cannot escape the
+        # connections dir or inject extra INI lines/sections. Skip the whole profile
+        # (and the wpa_supplicant country write below) on a malformed SSID.
+        if [ "${#ssid}" -gt 32 ] || [[ "${ssid}" == *".."* ]] \
+           || [[ ! "${ssid}" =~ ^[[:print:]]+$ ]] || [[ "${ssid}" == *"/"* ]]; then
+            warn "Wi-Fi SSID '${ssid}' contains a path separator/control char or is too long — skipping Wi-Fi profile"
+            return 0
+        fi
         cat > "${nm_dir}/${ssid}.nmconnection" <<EOF
 [connection]
 id=${ssid}
@@ -508,7 +530,16 @@ method=auto
 method=auto
 EOF
         chmod 0600 "${nm_dir}/${ssid}.nmconnection"
-        echo "country=${country}" > /etc/conf.d/wpa_supplicant 2>/dev/null || true
+        # country (.network.wifi.country) is written as an unquoted KEY=VALUE into the
+        # root-dot-sourced /etc/conf.d/wpa_supplicant (an OpenRC conf.d file sourced as
+        # root). Validate fail-closed as an ISO-3166-1 alpha-2 code (exactly two ASCII
+        # letters) — this rejects the whitespace / ';' / '$(...)' / '`...`' / newline
+        # that would break out of the sourced KEY=VALUE line. Skip on invalid.
+        if [[ "${country}" =~ ^[A-Za-z]{2}$ ]]; then
+            echo "country=${country}" > /etc/conf.d/wpa_supplicant 2>/dev/null || true
+        else
+            warn "Wi-Fi country '${country}' is not an ISO-3166 alpha-2 code — skipping wpa_supplicant country write"
+        fi
         log "Configured Wi-Fi for SSID ${ssid}"
     fi
 }
