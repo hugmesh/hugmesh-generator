@@ -80,12 +80,60 @@ _norm_accent() {
     esac
 }
 
+# ── brand.conf loader (STRICT KEY=VALUE — never dot-source) ──────────────────────
+# SECURITY: a brand.conf may come from an operator-supplied --branding-dir (the build
+# flag's DIR flows through to `apply DIR`), i.e. it can be attacker-authored and is NOT
+# guaranteed to be the root-authored, image-baked file. Dot-sourcing it would run any
+# shell it contains verbatim as root ($(...), backticks, `rm -rf`, function defs, ...).
+# Instead we parse it as strict `KEY=VALUE`, reading ONLY the four known identity keys
+# into their already-declared variables. Anything else — command substitution, extra
+# keys, executable statements — is ignored, so brand.conf can only ever set data, never
+# run code. Legit values are unchanged: `BRAND_TITLE="Acme Corp"` (spaces) and
+# `ACCENT_COLOR="#3366ff"` (a quoted #hex) parse exactly as they did when sourced.
+_load_brand_conf() {
+    local conf="$1" line key val
+    [ -r "${conf}" ] || return 0
+    while IFS= read -r line || [ -n "${line}" ]; do
+        # strip a trailing CR (CRLF files) and leading/trailing horizontal whitespace
+        line="${line%$'\r'}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        case "${line}" in
+            ''|'#'*) continue ;;                 # blank / comment
+        esac
+        case "${line}" in
+            *=*) key="${line%%=*}"; val="${line#*=}" ;;
+            *) continue ;;                        # not a KEY=VALUE line — ignore
+        esac
+        # trim whitespace around the key; keys are simple identifiers only.
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+        case "${key}" in
+            BRAND_NAME|BRAND_TITLE|ACCENT_COLOR|COLOR_SCHEME_NAME) : ;;
+            *) continue ;;                        # unknown key — ignore, do not set
+        esac
+        # strip ONE layer of matching surrounding quotes (double or single); the value is
+        # taken literally otherwise — no expansion, no command substitution.
+        case "${val}" in
+            \"*\") val="${val#\"}"; val="${val%\"}" ;;
+            \'*\') val="${val#\'}"; val="${val%\'}" ;;
+        esac
+        # Defensive: a control character (the line reader already splits on newline, but
+        # reject any stray C0 control — NUL/CR/tab/etc.) would corrupt a downstream sed
+        # replacement; drop such a value rather than let it through.
+        case "${val}" in
+            *[[:cntrl:]]*) warn "ignoring ${key} in ${conf}: contains a control character"; continue ;;
+        esac
+        printf -v "${key}" '%s' "${val}"
+    done < "${conf}"
+}
+
 # Brand identity (overridable by brand.conf). Defaults match the stock build.
 BRAND_NAME=snapdragon
 BRAND_TITLE="Snapdragon Systems"
 ACCENT_COLOR="#1f6feb"
 COLOR_SCHEME_NAME="Snapdragon"
-[ -r "${BRAND_CONF}" ] && . "${BRAND_CONF}" || true
+_load_brand_conf "${BRAND_CONF}"
 _norm_accent
 
 # ── lock enforcement ───────────────────────────────────────────────────────────
@@ -380,7 +428,8 @@ AUTOSTART
 apply_dir() {
     local dir="${1:-${BRAND_DIR_DEFAULT}}"
     [ -d "${dir}" ] || { warn "brand dir not found: ${dir}"; exit 1; }
-    [ -r "${dir}/brand.conf" ] && . "${dir}/brand.conf" || true
+    # STRICT parse (never dot-source): DIR may be operator-supplied / attacker-authored.
+    _load_brand_conf "${dir}/brand.conf"
     _norm_accent   # a brand.conf accent could be malformed; never let it abort the apply
     mkdir -p "${SHARE_DIR}"
     # wallpaper is the fallback source for the boot + login backgrounds.
