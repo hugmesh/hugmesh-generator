@@ -154,7 +154,7 @@ def _wrap_wav(pcm16_mono: bytes, sample_rate: int) -> bytes:
 
 # ── models ───────────────────────────────────────────────────────────────────
 class SynthReq(BaseModel):
-    text: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1, max_length=8000)  # hard ceiling: reject an oversized body at validation, BEFORE the configurable TTS_MAX_CHARS (default 800) soft-limit check in synthesize(); prevents a large-body memory-pressure DoS
     voice: str | None = None       # voice id installed under MODEL_DIR (default below)
     character: str | None = None   # VN character id — reserved for per-character voices
     format: str = "wav"            # 'wav' (RIFF base64) | 'pcm16' (raw little-endian)
