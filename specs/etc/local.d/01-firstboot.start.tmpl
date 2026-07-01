@@ -43,8 +43,8 @@ env-update && source /etc/profile
 # block below falls through to the keyless random-password path. wheel = the sudo
 # escalation path (no SSO desktop-sudo governance on a standalone box).
 if [ "@@STANDALONE@@" = "true" ] && [ ! -f /var/lib/keys-provision/users.created ]; then
-    if ! id @@DEFAULT_USER@@ &>/dev/null; then
-        useradd -m -G wheel,audio,video,usb,plugdev,games -s /bin/bash @@DEFAULT_USER@@
+    if ! id "@@DEFAULT_USER@@" &>/dev/null; then
+        useradd -m -G wheel,audio,video,usb,plugdev,games -s /bin/bash "@@DEFAULT_USER@@"
     fi
     grep -q '^%wheel ALL=(ALL) ALL' /etc/sudoers || echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
     if [ -n "@@LOCAL_PASSHASH@@" ]; then
@@ -54,7 +54,7 @@ if [ "@@STANDALONE@@" = "true" ] && [ ! -f /var/lib/keys-provision/users.created
     else
         if command -v openssl >/dev/null 2>&1; then FB_PW="$(openssl rand -base64 18)"; else FB_PW="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"; fi
         echo "@@DEFAULT_USER@@:${FB_PW}" | chpasswd
-        chage -d 0 @@DEFAULT_USER@@ 2>/dev/null || true
+        chage -d 0 "@@DEFAULT_USER@@" 2>/dev/null || true
         echo ""; echo "############################################################"
         echo "#  STANDALONE desktop — no --local-pass was set at build."
         echo "#    user: @@DEFAULT_USER@@   pass: ${FB_PW}   (CHANGE IT)"
@@ -68,8 +68,8 @@ fi
 # ── Fallback user (only when KEYS provisioning created none) ───────
 if [ ! -f /var/lib/keys-provision/users.created ]; then
     echo "No users provisioned from KEYS — creating fallback @@DEFAULT_USER@@ with a RANDOM one-time password"
-    if ! id @@DEFAULT_USER@@ &>/dev/null; then
-        useradd -m -G wheel,audio,video,usb -s /bin/bash @@DEFAULT_USER@@
+    if ! id "@@DEFAULT_USER@@" &>/dev/null; then
+        useradd -m -G wheel,audio,video,usb -s /bin/bash "@@DEFAULT_USER@@"
         # Mint a random one-time password at FIRST BOOT — never a baked default.
         # Prefer openssl; fall back to /dev/urandom so this works on a minimal
         # image. The plaintext is printed ONCE to the boot console below and is
@@ -84,7 +84,7 @@ if [ ! -f /var/lib/keys-provision/users.created ]; then
         # keys-provision default: root is `passwd -l`'d unless a hash is supplied).
         passwd -l root
         # Force the fallback user to change the random password at first login.
-        chage -d 0 @@DEFAULT_USER@@ 2>/dev/null || passwd -e @@DEFAULT_USER@@ 2>/dev/null || true
+        chage -d 0 "@@DEFAULT_USER@@" 2>/dev/null || passwd -e "@@DEFAULT_USER@@" 2>/dev/null || true
         echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
         echo ""
         echo "###############################################################"

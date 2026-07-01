@@ -485,6 +485,63 @@ EOF
 exit "${1:-0}"
 }
 
+# ── Identity-field input validation (defense-in-depth) ────────────────────────
+# DEFAULT_USER/LOCAL_USER and BRAND/ORG/CLUSTER_DOMAIN/GAMES_DOMAIN/HOSTNAME/
+# BRAND_TITLE end up (a) as unquoted shell words in root-run first-boot scripts,
+# (b) on the REPLACEMENT side of `sed s|..|VALUE|` in render_template/rebrand_sysroot,
+# and (c) inside sourced KEY=VALUE files (brand.conf/home.conf). A `;`/newline/`'`
+# in a username, a `|`/`&`/newline in a brand/domain, or shell-meta in a title are
+# all injection vectors. Reject anything outside a strict charset, fail-closed, at
+# the earliest boundary (arg/config parse). The escaping at each sink stays as a
+# second layer. Legit values (user 'snap', brand 'snapdragon', domain
+# 'snapdragon.systems', org 'Snapdragon-Systems', title 'Snapdragon Systems') pass.
+_validate_username() {   # $1=field-name $2=value ; POSIX-ish login name
+    case "$2" in
+        '') return 0 ;;  # empty = "use the default" downstream; not user-injected
+        *) [[ "$2" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
+             || { err "$1 '$2' is not a valid username (allowed: ^[a-z_][a-z0-9_-]{0,31}\$)"; exit 1; } ;;
+    esac
+}
+_validate_slug() {       # $1=field-name $2=value ; single DNS label / brand slug
+    [[ "$2" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
+        || { err "$1 '$2' is not a valid slug (allowed: lowercase DNS label ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\$)"; exit 1; }
+}
+_validate_org() {        # $1=field-name $2=value ; org name (mixed case, e.g. Snapdragon-Systems)
+    # No slash/space/quote/backslash/$/backtick/|/&/newline — it is lowercased into a
+    # path component (org_lc) and used as a sed replacement; keep it a safe identifier.
+    [[ "$2" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$ ]] \
+        || { err "$1 '$2' is not a valid org name (allowed: ^[A-Za-z0-9]([A-Za-z0-9._-]{0,62}[A-Za-z0-9])?\$)"; exit 1; }
+}
+_validate_dnsname() {    # $1=field-name $2=value ; dotted DNS name (domains)
+    [[ "$2" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$ ]] \
+        || { err "$1 '$2' is not a valid DNS name (allowed: lowercase RFC-1123 dotted name)"; exit 1; }
+}
+_validate_hostname() {   # $1=field-name $2=value ; single hostname label (may be empty -> derived)
+    case "$2" in
+        '') return 0 ;;
+        *) [[ "$2" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
+             || { err "$1 '$2' is not a valid hostname (allowed: lowercase DNS label)"; exit 1; } ;;
+    esac
+}
+_validate_title() {      # $1=field-name $2=value ; printable label, NO shell-meta/quote
+    # Forbid the characters that break out of "KEY=..." in a sourced file or corrupt a
+    # sed replacement: quote, backslash, dollar, backtick, pipe, ampersand, newline,
+    # and other control chars. Allow letters/digits/space and a small safe punctuation set.
+    [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._\ -]{0,63}$ ]] \
+        || { err "$1 '$2' contains disallowed characters (allowed: letters/digits/space/.-_ , no quote/backslash/\$/backtick/|/&/newline)"; exit 1; }
+}
+# Escape a string for the REPLACEMENT side of `sed s|...|...|`: backslash first,
+# then the ampersand (whole-match) and the `|` delimiter. Mirrors the helper in
+# specs/usr/sbin/snapdragon-branding. Newlines are forbidden by the validators above,
+# so a tainted-but-validated value cannot smuggle a second sed command.
+_sed_rep_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"   # \  -> \\
+    s="${s//&/\\&}"     # &  -> \&
+    s="${s//|/\\|}"     # |  -> \|
+    printf '%s' "${s}"
+}
+
 # Drop-in brand profile (sourced before CLI; CLI overrides). Auto-detect ./brand.conf.
 for ((_i = 1; _i <= $#; _i++)); do
     case "${!_i}" in -C|--config) _j=$((_i + 1)); CONFIG_FILE="${!_j}" ;; esac
@@ -958,6 +1015,39 @@ if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]; then
     fi
 fi
 
+# ── Fail-closed identity/branding validation (defense-in-depth) ───────────────
+# Run AFTER LOCAL_USER may have overridden DEFAULT_USER (above) so we validate the
+# value actually baked into the root-run first-boot useradd/chpasswd and media.conf.
+# These fields reach unquoted shell words, sed replacements, and sourced KEY=VALUE
+# files; reject injection here, before any of those sinks. (HOSTNAME is either the
+# operator's --hostname or the role-derived "${BRAND}-<role>" set above; an empty
+# value would no-op, but by here it is always set — either way it must be a DNS label.)
+_validate_username "DEFAULT_USER" "${DEFAULT_USER}"
+_validate_username "--local-user" "${LOCAL_USER}"
+_validate_slug     "--brand"      "${BRAND}"
+_validate_org      "--org"        "${ORG}"
+_validate_dnsname  "--cluster-domain" "${CLUSTER_DOMAIN}"
+_validate_dnsname  "--games-domain"   "${GAMES_DOMAIN}"
+_validate_hostname "--hostname"   "${HOSTNAME}"
+_validate_title    "--brand-title" "${BRAND_TITLE}"
+# --domains is a comma/space-separated list baked line-by-line into the root-sourced
+# /etc/snapdragon/domains (its first element also feeds a downstream sed replacement).
+# --cluster-domain/--games-domain are validated above, but the DOMAINS list was not:
+# validate EACH element as a DNS name, fail-closed, so a direct-CLI build (one that
+# does NOT go through Studio's per-name gate) with e.g. --domains 'a.test,evil|inject'
+# cannot bake a tainted / line-injected row into that root-sourced file.
+if [ -n "${DOMAINS}" ]; then
+    for _d in ${DOMAINS//,/ }; do _validate_dnsname "--domains element" "${_d}"; done
+    unset _d
+fi
+# Accent is written as ACCENT_COLOR="..." into the sourced brand.conf; gate it with
+# the same #RRGGBB shape the applier's _norm_accent enforces (empty = default later).
+case "${BRAND_ACCENT}" in
+    '') : ;;
+    '#'[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) : ;;
+    *) err "--accent-color '${BRAND_ACCENT}' must be #RRGGBB hex"; exit 1 ;;
+esac
+
 # ── Cluster NODE compact-root sizing (pki/be/fe/be+gpu/omnibus) ──────────────────────
 # The k8s node payload (kubeadm/kubelet/containerd + mesh binaries + base) is ~11.2 GiB
 # and overflows the historical 8 GiB ROOT_MiB default → the .img pre-flight (build_img)
@@ -1071,21 +1161,42 @@ fi
 if ${LIVE_ISO} || ${INSTALLER_ISO}; then SKIP_ISO=false; else SKIP_ISO=true; fi
 
 render_template() {
+    # Identity/branding/media/secret tokens are user/operator-influenced and land on the
+    # REPLACEMENT side of `sed s|..|VALUE|` — a `|`/`&`/`\` (or newline) would terminate
+    # the s-command, smuggle a second sed command, or backref the match into the rendered
+    # artifact (which becomes a root-run script: firstboot/local.d/make.conf). Escape each
+    # through _sed_rep_escape before substitution. (Up-front validators already forbid the
+    # worst chars; this is the sink-side second layer.)
+    local _user _userpass _rootpass _brand _btitle _domain _org _host
+    local _mmount _mlabel _mmarkers _sdir _vdir
+    _user="$(_sed_rep_escape "${DEFAULT_USER}")"
+    _userpass="$(_sed_rep_escape "${DEFAULT_USER_PASS}")"
+    _rootpass="$(_sed_rep_escape "${ROOT_PASS}")"
+    _brand="$(_sed_rep_escape "${BRAND}")"
+    _btitle="$(_sed_rep_escape "${BRAND_TITLE}")"
+    _domain="$(_sed_rep_escape "${CLUSTER_DOMAIN}")"
+    _org="$(_sed_rep_escape "${ORG}")"
+    _host="$(_sed_rep_escape "${HOSTNAME}")"
+    _mmount="$(_sed_rep_escape "${MEDIA_MOUNT}")"
+    _mlabel="$(_sed_rep_escape "${MEDIA_LABEL}")"
+    _mmarkers="$(_sed_rep_escape "${MEDIA_MARKERS}")"
+    _sdir="$(_sed_rep_escape "${STEAM_DIR}")"
+    _vdir="$(_sed_rep_escape "${VAULTS_DIR}")"
     sed -e "s|@@CHOST@@|${CHOST}|g" -e "s|@@JOBS@@|${JOBS}|g" \
-        -e "s|@@WORK_DIR@@|${BUILD_ROOT}|g" -e "s|@@HOSTNAME@@|${HOSTNAME}|g" \
-        -e "s|@@TIMEZONE@@|${TIMEZONE}|g" -e "s|@@DEFAULT_USER@@|${DEFAULT_USER}|g" \
-        -e "s|@@DEFAULT_USER_PASS@@|${DEFAULT_USER_PASS}|g" -e "s|@@ROOT_PASS@@|${ROOT_PASS}|g" \
-        -e "s|@@BRAND@@|${BRAND}|g" -e "s|@@BRAND_TITLE@@|${BRAND_TITLE}|g" \
-        -e "s|@@DOMAIN@@|${CLUSTER_DOMAIN}|g" -e "s|@@ORG@@|${ORG}|g" \
+        -e "s|@@WORK_DIR@@|${BUILD_ROOT}|g" -e "s|@@HOSTNAME@@|${_host}|g" \
+        -e "s|@@TIMEZONE@@|${TIMEZONE}|g" -e "s|@@DEFAULT_USER@@|${_user}|g" \
+        -e "s|@@DEFAULT_USER_PASS@@|${_userpass}|g" -e "s|@@ROOT_PASS@@|${_rootpass}|g" \
+        -e "s|@@BRAND@@|${_brand}|g" -e "s|@@BRAND_TITLE@@|${_btitle}|g" \
+        -e "s|@@DOMAIN@@|${_domain}|g" -e "s|@@ORG@@|${_org}|g" \
         -e "s|@@ENV@@|${ENV}|g" \
         -e "s|@@GPU_USE@@|${GPU_USE}|g" -e "s|@@VIDEO_CARDS@@|${VIDEO_CARDS}|g" \
         -e "s|@@CLIENT_USE@@|${CLIENT_USE}|g" -e "s|@@INPUT_DEVICES@@|${INPUT_DEVICES}|g" \
         -e "s|@@INSTALL_MASK@@|${INSTALL_MASK}|g" \
         -e "s|@@STANDALONE@@|${STANDALONE}|g" -e "s|@@LOCAL_PASSHASH@@|${LOCAL_PASSHASH}|g" \
-        -e "s|@@MEDIA_DATA@@|${MEDIA_DATA}|g" -e "s|@@MEDIA_MOUNT@@|${MEDIA_MOUNT}|g" \
-        -e "s|@@MEDIA_LABEL@@|${MEDIA_LABEL}|g" -e "s|@@MEDIA_MARKERS@@|${MEDIA_MARKERS}|g" \
-        -e "s|@@STEAM_DIR@@|${STEAM_DIR}|g" -e "s|@@STEAM_DELIVERY@@|${STEAM_DELIVERY}|g" \
-        -e "s|@@VAULTS_DIR@@|${VAULTS_DIR}|g" -e "s|@@VAULTS_ENABLED@@|${VAULTS_ENABLED}|g" \
+        -e "s|@@MEDIA_DATA@@|${MEDIA_DATA}|g" -e "s|@@MEDIA_MOUNT@@|${_mmount}|g" \
+        -e "s|@@MEDIA_LABEL@@|${_mlabel}|g" -e "s|@@MEDIA_MARKERS@@|${_mmarkers}|g" \
+        -e "s|@@STEAM_DIR@@|${_sdir}|g" -e "s|@@STEAM_DELIVERY@@|${STEAM_DELIVERY}|g" \
+        -e "s|@@VAULTS_DIR@@|${_vdir}|g" -e "s|@@VAULTS_ENABLED@@|${VAULTS_ENABLED}|g" \
         "$1" > "$2"
 }
 
@@ -1534,6 +1645,11 @@ parameterize_games_domain() {
     local tree="${SYSROOT}/var/lib/snapdragon/cluster"
     [ -d "${tree}" ] || return 0
     local f n=0
+    # GAMES_DOMAIN is allowlisted ([a-z0-9.-]) at parse; escape it against the sed
+    # replacement metacharacters (\ & |) for defense-in-depth — matching how every other
+    # rendered field is handled, so this stays injection-proof if the validator is ever
+    # loosened. (The '#'-delimited sink below is also safe: the allowlist excludes '#'.)
+    local gd_e; gd_e="$(_sed_rep_escape "${GAMES_DOMAIN}")"
     # URL-SCHEME-ANCHORED: only rewrite snapdragon.games when it is a HOST (right
     # after the // of https://...), so the games-realm origin/issuer/redirect/website
     # URLs flip to ${GAMES_DOMAIN} while the canonical IMAGE repo paths
@@ -1542,8 +1658,8 @@ parameterize_games_domain() {
     while IFS= read -r -d '' f; do
         if grep -q '//id\.snapdragon\.games\|//snapdragon\.games' "${f}" 2>/dev/null; then
             sed -i -E \
-                -e "s|//id\\.snapdragon\\.games|//id.${GAMES_DOMAIN}|g" \
-                -e "s|//snapdragon\\.games|//${GAMES_DOMAIN}|g" \
+                -e "s|//id\\.snapdragon\\.games|//id.${gd_e}|g" \
+                -e "s|//snapdragon\\.games|//${gd_e}|g" \
                 "${f}"
             n=$((n+1))
         fi
@@ -1557,7 +1673,7 @@ parameterize_games_domain() {
     # BEFORE rebrand (which would otherwise only map the snapdragon.systems suffix).
     if [ "${GAMES_DOMAIN}" != "games.snapdragon.systems" ]; then
         local be="${tree}/apps/20-gateway-be.yaml"
-        [ -f "${be}" ] && sed -i -E "s#games\\.snapdragon\\.systems#${GAMES_DOMAIN}#g" "${be}"
+        [ -f "${be}" ] && sed -i -E "s#games\\.snapdragon\\.systems#${gd_e}#g" "${be}"
         info "Games domain: custom GAMES_DOMAIN — games host rewritten to ${GAMES_DOMAIN}"
     fi
 }
@@ -1589,16 +1705,26 @@ rebrand_sysroot() {
     fi
     banner "Rebranding baked config -> brand=${BRAND} domain=${CLUSTER_DOMAIN} org=${ORG}"
     local org_lc; org_lc="$(echo "${ORG}" | tr '[:upper:]' '[:lower:]')"
+    # All of these land on the REPLACEMENT side of `sed s|..|VALUE|` across the baked
+    # cluster tree (configs that later execute on the device); escape sed metacharacters
+    # so a tainted brand/domain/org cannot inject a second sed command or corrupt output.
+    local _btitle _orglc _org _games _domain _brand
+    _btitle="$(_sed_rep_escape "${BRAND_TITLE}")"
+    _orglc="$(_sed_rep_escape "${org_lc}")"
+    _org="$(_sed_rep_escape "${ORG}")"
+    _games="$(_sed_rep_escape "${GAMES_DOMAIN}")"
+    _domain="$(_sed_rep_escape "${CLUSTER_DOMAIN}")"
+    _brand="$(_sed_rep_escape "${BRAND}")"
     local f
     while IFS= read -r -d '' f; do
         sed -i \
-            -e "s|Snapdragon Systems|${BRAND_TITLE}|g" \
-            -e "s|snapdragon-systems/|${org_lc}/|g" \
-            -e "s|Snapdragon-Systems|${ORG}|g" \
-            -e "s|//id\.snapdragon\.games|//id.${GAMES_DOMAIN}|g" \
-            -e "s|//snapdragon\.games|//${GAMES_DOMAIN}|g" \
-            -e "s|snapdragon\.systems|${CLUSTER_DOMAIN}|g" \
-            -e "s|snapdragon-|${BRAND}-|g" \
+            -e "s|Snapdragon Systems|${_btitle}|g" \
+            -e "s|snapdragon-systems/|${_orglc}/|g" \
+            -e "s|Snapdragon-Systems|${_org}|g" \
+            -e "s|//id\.snapdragon\.games|//id.${_games}|g" \
+            -e "s|//snapdragon\.games|//${_games}|g" \
+            -e "s|snapdragon\.systems|${_domain}|g" \
+            -e "s|snapdragon-|${_brand}-|g" \
             "${f}"
     done < <(find "${SYSROOT}/var/lib/snapdragon/cluster" "${SYSROOT}/etc/snapdragon" -type f -print0 2>/dev/null)
 }
@@ -1899,15 +2025,19 @@ chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
 # by this build. Consumed by snapdragon-home-setup (runs at first boot, after the
 # 01-firstboot user is created) and read by the installer for adopt/restore.
 mkdir -p "${SYSROOT}/etc/snapdragon"
-cat > "${SYSROOT}/etc/snapdragon/home.conf" <<EOF
-# Baked by build-x86-host-stage4.sh — DO NOT edit by hand on the image; rebuild.
-HOME_MODE="${HOME_MODE}"
-HOME_DEVICE="${HOME_DEVICE}"
-HOME_BACKUP="${HOME_BACKUP}"
-HOME_ENCRYPTED="${HOME_ENCRYPTED}"
-HOME_SEED_CODE="${HOME_SEED_CODE}"
-LOCAL_USER="${LOCAL_USER:-${DEFAULT_USER}}"
-EOF
+# home.conf is dot-sourced as ROOT at first boot (snapdragon-home-setup) AND by the
+# installer (install-x86.sh). HOME_DEVICE/HOME_BACKUP are free-text operator fields, so
+# emit every value with `printf %q` (shell-safe quoting): a sourced file can never run
+# injected code and the value survives intact for the installer's fstab line.
+{
+    echo "# Baked by build-x86-host-stage4.sh — DO NOT edit by hand on the image; rebuild."
+    printf 'HOME_MODE=%q\n'      "${HOME_MODE}"
+    printf 'HOME_DEVICE=%q\n'    "${HOME_DEVICE}"
+    printf 'HOME_BACKUP=%q\n'    "${HOME_BACKUP}"
+    printf 'HOME_ENCRYPTED=%q\n' "${HOME_ENCRYPTED}"
+    printf 'HOME_SEED_CODE=%q\n' "${HOME_SEED_CODE}"
+    printf 'LOCAL_USER=%q\n'     "${LOCAL_USER:-${DEFAULT_USER}}"
+} > "${SYSROOT}/etc/snapdragon/home.conf"
 if [ -f "${SHARED_SPECS}/usr/sbin/snapdragon-home-setup" ]; then
     cp "${SHARED_SPECS}/usr/sbin/snapdragon-home-setup" "${SYSROOT}/usr/sbin/snapdragon-home-setup"
     chmod +x "${SYSROOT}/usr/sbin/snapdragon-home-setup"
@@ -2007,12 +2137,15 @@ if ${ROLE_CLIENT} && { [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] \
     [ -n "${BRAND_COLOR_SCHEME}" ] && { [ -f "${BRAND_COLOR_SCHEME}" ] || { err "--color-scheme not found: ${BRAND_COLOR_SCHEME}"; exit 1; }; cp "${BRAND_COLOR_SCHEME}" "${_bd}/colors.colors"; }
     [ -n "${BRAND_GRUB_THEME}" ]   && { [ -d "${BRAND_GRUB_THEME}" ]   || { err "--grub-theme dir not found: ${BRAND_GRUB_THEME}"; exit 1; }; rm -rf "${_bd}/grub-theme"; cp -r "${BRAND_GRUB_THEME}" "${_bd}/grub-theme"; }
     # 4) brand.conf — preset's values first (already copied), then identity + accent
-    #    override (later assignments win when sourced).
+    #    override (later assignments win when sourced). brand.conf is dot-sourced as
+    #    root by snapdragon-branding at build AND first boot, so emit every value with
+    #    `printf %q` (shell-safe quoting): a dot-sourced file can never execute injected
+    #    code even if a value slipped past the up-front validators (defense-in-depth).
     {
         echo "# appended by build-x86-host-stage4.sh"
-        echo "BRAND_NAME=\"${BRAND}\""
-        echo "BRAND_TITLE=\"${BRAND_TITLE}\""
-        [ -n "${BRAND_ACCENT}" ] && echo "ACCENT_COLOR=\"${BRAND_ACCENT}\""
+        printf 'BRAND_NAME=%q\n' "${BRAND}"
+        printf 'BRAND_TITLE=%q\n' "${BRAND_TITLE}"
+        [ -n "${BRAND_ACCENT}" ] && printf 'ACCENT_COLOR=%q\n' "${BRAND_ACCENT}"
     } >> "${_bd}/brand.conf"
     # stage assets + canonical brand.conf into the image
     mkdir -p "${SYSROOT}/etc/snapdragon/branding"

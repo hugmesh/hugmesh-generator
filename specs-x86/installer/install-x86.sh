@@ -305,9 +305,22 @@ case "${HM_MODE}" in
         fi ;;
     adopt)
         if [ -n "${HM_DEVICE}" ]; then
-            echo "==> Home(adopt): mounting existing ${HM_DEVICE} at /home (NO format)"
-            # nofail so a missing/late USB never blocks boot; never wiped by this installer.
-            echo "${HM_DEVICE}  /home  auto  nofail,noatime,nosuid,nodev  0 2" >> /mnt/sdhost/etc/fstab
+            # FAIL-CLOSED fstab device-spec validation. HM_DEVICE is written as the
+            # FIRST FIELD of an /etc/fstab line; it arrives from the baked home.conf
+            # (%q-decoded, so it can still carry an embedded newline/whitespace), the
+            # --home-device CLI flag, or the whiptail inputbox (the latter two are
+            # UNVALIDATED). A value with whitespace would shift the mountpoint/options;
+            # a value with a NEWLINE would inject an ENTIRE extra fstab line (a rogue
+            # boot-time mount). printf '%s' does NOT neutralize a newline. A legitimate
+            # home spec is a tag (LABEL=/PARTLABEL=/UUID=/PARTUUID=) or a /dev/ path —
+            # no whitespace, comma or '#'. Reject anything else (skip; do NOT write).
+            if [[ ! "${HM_DEVICE}" =~ ^(LABEL=[A-Za-z0-9_.:+-]+|PARTLABEL=[A-Za-z0-9_.:+-]+|UUID=[A-Fa-f0-9-]+|PARTUUID=[A-Fa-f0-9-]+|/dev/[A-Za-z0-9/_.-]+)$ ]]; then
+                echo "    (adopt: home device-spec '${HM_DEVICE}' is not a valid fstab device (LABEL=/PARTLABEL=/UUID=/PARTUUID=/dev/…) — skipping, NOT writing fstab)" >&2
+            else
+                echo "==> Home(adopt): mounting existing ${HM_DEVICE} at /home (NO format)"
+                # nofail so a missing/late USB never blocks boot; never wiped by this installer.
+                printf '%s  /home  auto  nofail,noatime,nosuid,nodev  0 2\n' "${HM_DEVICE}" >> /mnt/sdhost/etc/fstab
+            fi
         else
             echo "    (adopt requested but no home device known — skipping)"
         fi ;;
