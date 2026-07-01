@@ -612,8 +612,17 @@ provision_headscale() {
         # Overridable MagicDNS base domain.
         dnsdom="$(resolve_magic_dns_domain)"
         if [ -n "${dnsdom}" ]; then
-            sed -i "s|^\(\s*\)base_domain:.*|\1base_domain: ${dnsdom}|" /etc/headscale/config.yaml
-            log "headscale MagicDNS base_domain set to ${dnsdom}"
+            # dnsdom (.mesh.magic_dns_domain) is interpolated into a '|'-delimited sed
+            # writing MagicDNS base_domain. Validate fail-closed as a hostname (rejects
+            # the sed metachars '| & \' and newlines) then escape, so a malformed manifest
+            # value cannot corrupt or inject config.yaml.
+            if [[ "${dnsdom}" =~ ^[a-z0-9.-]+$ ]]; then
+                local dnsdom_esc; dnsdom_esc="$(printf '%s' "${dnsdom}" | sed -e 's/[&|\\/]/\\&/g')"
+                sed -i "s|^\(\s*\)base_domain:.*|\1base_domain: ${dnsdom_esc}|" /etc/headscale/config.yaml
+                log "headscale MagicDNS base_domain set to ${dnsdom}"
+            else
+                warn "headscale MagicDNS base_domain '${dnsdom}' is not a valid hostname ([a-z0-9.-]) — leaving baked default"
+            fi
         fi
     fi
 
@@ -669,8 +678,17 @@ provision_headscale() {
         # denied an SSH session. Skipped cleanly if the file carries no SSH rule.
         if grep -q '@@TS_SSH_USER@@' "${policy_file}" 2>/dev/null; then
             local ssh_user; ssh_user="$(resolve_ssh_user)"
-            sed -i "s/@@TS_SSH_USER@@/${ssh_user}/g" "${policy_file}"
-            log "headscale SSH ACL scoped to privileged user '${ssh_user}' (root + others denied)"
+            # ssh_user is interpolated into a '/'-delimited sed rewriting the SSH ACL
+            # (hujson). Validate fail-closed as a POSIX username (rejects '/ & \' and
+            # newlines) then escape; on a malformed value leave the placeholder in place
+            # so headscale grants SSH to nobody (fail-safe) rather than inject the ACL.
+            if [[ "${ssh_user}" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+                local ssh_user_esc; ssh_user_esc="$(printf '%s' "${ssh_user}" | sed -e 's/[&/\\]/\\&/g')"
+                sed -i "s/@@TS_SSH_USER@@/${ssh_user_esc}/g" "${policy_file}"
+                log "headscale SSH ACL scoped to privileged user '${ssh_user}' (root + others denied)"
+            else
+                warn "SSH ACL user '${ssh_user}' is not a valid username ([a-z_][a-z0-9_-]*) — leaving placeholder (no SSH granted)"
+            fi
         fi
         if headscale policy set -f "${policy_file}" 2>/dev/null; then
             log "Loaded headscale ACL policy from ${policy_file}"
@@ -1549,6 +1567,21 @@ provision_storage() {
         mp="$(jqm ".storage.devices[$i].mountpoint")"
         opts="$(jqm ".storage.devices[$i].options // \"defaults,noatime\"")"
         label="$(jqm ".storage.devices[$i].label // \"\"")"
+        # FAIL-CLOSED validation of manifest-sourced fields that reach root sinks:
+        #  - fs selects the `mkfs.<fs>` binary and the `parted mkpart` fs-type -> restrict
+        #    to a filesystem-name charset so it cannot name an unexpected binary.
+        #  - mp (mountpoint) + opts (mount options) are written whitespace-delimited into
+        #    /etc/fstab and passed to `mount`; a space/newline would shift columns or
+        #    inject an extra fstab line. Skip (do not format/mount) a malformed device.
+        if [[ ! "${fs}" =~ ^[a-z0-9]+$ ]]; then
+            warn "storage[$i]: filesystem '${fs}' is not a valid fs name ([a-z0-9]) — skipping device"; continue
+        fi
+        if [ -n "${mp}" ] && [[ ! "${mp}" =~ ^/[A-Za-z0-9._/-]*$ ]]; then
+            warn "storage[$i]: mountpoint '${mp}' is not a safe absolute path — skipping device"; continue
+        fi
+        if [[ ! "${opts}" =~ ^[A-Za-z0-9=,.:_@/+-]+$ ]]; then
+            warn "storage[$i]: mount options '${opts}' contain unsafe characters — skipping device"; continue
+        fi
         usefor="$(jqm ".storage.devices[$i].use_for // [] | join(\" \")")"
         # NODE-STORAGE: a device with a `pool` object is an attached, registered
         # storage pool (node-pinned local-path space) — NOT a system/cluster disk.
@@ -2003,26 +2036,41 @@ provision_backup() {
     nfs_srv="$(jqm '.backup.nfs.server // ""')"; nfs_exp="$(jqm '.backup.nfs.export // ""')"
     nfs_mp="$(jqm '.backup.nfs.mountpoint // "/mnt/backup-nfs"')"
     if [ -n "${nfs_srv}" ] && [ "${nfs_srv}" != "null" ]; then
-        mkdir -p "${nfs_mp}"
-        if ! grep -q "${nfs_mp}" /etc/fstab; then
-            printf '%s:%s  %s  nfs  %s  0 0\n' "${nfs_srv}" "${nfs_exp}" "${nfs_mp}" \
-                "$(jqm '.backup.nfs.options // "rw,soft,_netdev,noatime"')" >> /etc/fstab
+        # FAIL-CLOSED: nfs_srv/nfs_exp/mountpoint/options are written whitespace-delimited
+        # into an /etc/fstab line; a space or newline would shift columns or inject a
+        # rogue mount. Validate each; skip the share (no fstab write) on anything invalid.
+        local nfs_opts; nfs_opts="$(jqm '.backup.nfs.options // "rw,soft,_netdev,noatime"')"
+        if [[ "${nfs_srv}" =~ ^[A-Za-z0-9._:-]+$ ]] && [[ "${nfs_exp}" =~ ^/[A-Za-z0-9._/-]*$ ]] \
+           && [[ "${nfs_mp}" =~ ^/[A-Za-z0-9._/-]+$ ]] && [[ "${nfs_opts}" =~ ^[A-Za-z0-9=,.:_@/+-]+$ ]]; then
+            mkdir -p "${nfs_mp}"
+            if ! grep -q "${nfs_mp}" /etc/fstab; then
+                printf '%s:%s  %s  nfs  %s  0 0\n' "${nfs_srv}" "${nfs_exp}" "${nfs_mp}" "${nfs_opts}" >> /etc/fstab
+            fi
+            mount "${nfs_mp}" 2>/dev/null || warn "NFS mount ${nfs_mp} deferred to boot"
+            log "Configured NFS backup share ${nfs_srv}:${nfs_exp} -> ${nfs_mp}"
+        else
+            warn "NFS backup share has an invalid server/export/mountpoint/options — skipping (not writing fstab)"
         fi
-        mount "${nfs_mp}" 2>/dev/null || warn "NFS mount ${nfs_mp} deferred to boot"
-        log "Configured NFS backup share ${nfs_srv}:${nfs_exp} -> ${nfs_mp}"
     fi
     cifs_unc="$(jqm '.backup.cifs.unc // ""')"; cifs_mp="$(jqm '.backup.cifs.mountpoint // "/mnt/backup-cifs"')"
     if [ -n "${cifs_unc}" ] && [ "${cifs_unc}" != "null" ]; then
         cifs_cred="$(jqm '.backup.cifs.credentials_file // ""')"
         [ -n "${cifs_cred}" ] && [ -f "${BASE}/${cifs_cred}" ] && \
             { install -Dm0600 "${BASE}/${cifs_cred}" /etc/snapdragon/cifs.cred; cifs_cred=/etc/snapdragon/cifs.cred; }
-        mkdir -p "${cifs_mp}"
-        if ! grep -q "${cifs_mp}" /etc/fstab; then
-            printf '%s  %s  cifs  credentials=%s,_netdev,uid=0,gid=0,file_mode=0600,dir_mode=0700  0 0\n' \
-                "${cifs_unc}" "${cifs_mp}" "${cifs_cred:-/etc/snapdragon/cifs.cred}" >> /etc/fstab
+        # FAIL-CLOSED: cifs_unc + mountpoint are written whitespace-delimited into an
+        # /etc/fstab line; a space or newline would inject a rogue mount. Validate both;
+        # skip the share (no fstab write) on anything invalid.
+        if [[ "${cifs_unc}" =~ ^//[A-Za-z0-9._$/-]+$ ]] && [[ "${cifs_mp}" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+            mkdir -p "${cifs_mp}"
+            if ! grep -q "${cifs_mp}" /etc/fstab; then
+                printf '%s  %s  cifs  credentials=%s,_netdev,uid=0,gid=0,file_mode=0600,dir_mode=0700  0 0\n' \
+                    "${cifs_unc}" "${cifs_mp}" "${cifs_cred:-/etc/snapdragon/cifs.cred}" >> /etc/fstab
+            fi
+            mount "${cifs_mp}" 2>/dev/null || warn "CIFS mount ${cifs_mp} deferred to boot"
+            log "Configured CIFS backup share ${cifs_unc} -> ${cifs_mp}"
+        else
+            warn "CIFS backup share UNC '${cifs_unc}' or mountpoint failed validation — skipping (not writing fstab)"
         fi
-        mount "${cifs_mp}" 2>/dev/null || warn "CIFS mount ${cifs_mp} deferred to boot"
-        log "Configured CIFS backup share ${cifs_unc} -> ${cifs_mp}"
     fi
 
     # Write the backup config the snapdragon-backup script reads, straight
