@@ -739,6 +739,49 @@ if [ -z "${HOSTNAME}" ]; then
     esac
 fi
 
+# ── Charset allowlists for brand/identity/kernel/toolchain fields (fail-closed) ──
+# These values come from CLI flags or a sourced brand.conf and flow into
+# render_template's sed program (build of make.conf, cross-go.conf, config.txt,
+# 01-firstboot.start) — and RPI_CPU/CROSS_TARGET land in make.conf, which portage
+# SOURCES as shell on the (root) build host. Reject anything outside a strict
+# charset at this earliest boundary so a value carrying sed/shell metacharacters,
+# a quote, or a newline can never reach a render sink or a sourced KEY=VALUE file.
+# Escaping at the render sink (_sed_rep_escape) is defense-in-depth on top of this.
+# Each regex below ACCEPTS every legitimate default (brand=snapdragon,
+# org=Snapdragon-Systems, domain=snapdragon.systems, user=pi, cpu=cortex-a76,
+# target=aarch64-unknown-linux-gnu, kernel_2712.img, title "Snapdragon Systems").
+_require_match() {  # <human-name> <value> <regex>
+    [[ "$2" =~ $3 ]] || { err "invalid $1: '$2' (must match ${3})"; exit 1; }
+}
+# DNS label (slug): lowercase alnum, internal hyphens, 1..63 chars.
+_RE_SLUG='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+# Org slug: like a slug but allow upper-case (e.g. Snapdragon-Systems).
+_RE_ORG='^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
+# DNS name: dot-joined labels (case-insensitive), no trailing dot.
+_RE_DNS='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+# POSIX-ish username: leading [a-z_], then [a-z0-9_-], <=32 chars.
+_RE_USER='^[a-z_][a-z0-9_-]{0,31}$'
+# Brand title: printable, allow space + a small safe punctuation set; NO quote,
+# backslash, dollar, backtick, pipe, ampersand, semicolon, angle/paren/newline.
+_RE_TITLE='^[A-Za-z0-9 ._-]{1,64}$'
+# GCC -mcpu/-mtune value (finding #11): alnum + . _ + - (e.g. cortex-a76, native).
+_RE_CPU='^[A-Za-z0-9._+-]+$'
+# GNU target triplet (finding #11): alnum + _ . - (e.g. aarch64-unknown-linux-gnu).
+_RE_TRIPLET='^[A-Za-z0-9_.-]+$'
+# Kernel image filename: a single path-free filename component.
+_RE_KIMG='^[A-Za-z0-9._-]+$'
+
+_require_match "--brand"         "${BRAND}"          "${_RE_SLUG}"
+_require_match "--org"           "${ORG}"            "${_RE_ORG}"
+_require_match "--cluster-domain" "${CLUSTER_DOMAIN}" "${_RE_DNS}"
+_require_match "--games-domain"  "${GAMES_DOMAIN}"   "${_RE_DNS}"
+_require_match "--hostname"      "${HOSTNAME}"       "${_RE_DNS}"
+_require_match "--user"          "${DEFAULT_USER}"   "${_RE_USER}"
+_require_match "--brand-title"   "${BRAND_TITLE}"    "${_RE_TITLE}"
+_require_match "--cpu"           "${RPI_CPU}"        "${_RE_CPU}"
+_require_match "--target"        "${CROSS_TARGET}"   "${_RE_TRIPLET}"
+_require_match "--kernel-img"    "${RPI_KERNEL_IMG}" "${_RE_KIMG}"
+
 # ── Validate/normalize the first-boot grow policy (baked into /etc/growfs.conf) ──
 # fill (DEFAULT, fill the whole medium) | none/off/0 (keep compact) | a concrete
 # size (16G, 12000M, 50% ...). Concrete sizes are passed through to resize2fs on
@@ -797,29 +840,50 @@ LOG_FILE="${WORK_DIR}/build.log"
 BUILD_TS="$(date -u +%Y%m%dT%H%M%SZ)"
 info "Build stamp: ${BUILD_TS} (UTC; brand=${BRAND}, env=${ENV})"
 
+# Escape a value so it is safe to place on the REPLACEMENT (right-hand) side of a
+# sed `s|LHS|RHS|` command that uses `|` as the delimiter. Without this a value
+# containing the delimiter `|`, the match-reference metachar `&`, a backslash, or a
+# newline can terminate the s-command, append an extra sed command, or inject a new
+# line into the rendered artifact (config.txt/make.conf/01-firstboot.start, which
+# are sourced/executed as root). Order matters: escape backslash FIRST, then `&`
+# and the `|` delimiter, then forbid embedded newlines (defense-in-depth at the sink
+# — the identity/brand vars are also allowlist-validated up front).
+_sed_rep_escape() {
+    local v="$1"
+    v="${v//\\/\\\\}"   # backslash -> \\
+    v="${v//&/\\&}"     # & (whole-match ref) -> \&
+    v="${v//|/\\|}"     # | (delimiter)       -> \|
+    case "${v}" in
+        *$'\n'*) err "sed replacement contains a newline (refusing to render): '${1}'"; exit 1 ;;
+    esac
+    printf '%s' "${v}"
+}
+
 # Copies a file, replacing @@VAR@@ markers with shell variable values.
 # Usage: render_template <src> <dst>
+# All brand/domain/identity/kernel substitutions go through _sed_rep_escape so a
+# value carrying sed metacharacters cannot corrupt or inject into the s-program.
 render_template() {
     local src="$1" dst="$2"
     local cbuild
     cbuild="$(portageq envvar CHOST 2>/dev/null || gcc -dumpmachine)"
 
     sed \
-        -e "s|@@CBUILD@@|${cbuild}|g" \
-        -e "s|@@CROSS_TARGET@@|${CROSS_TARGET}|g" \
-        -e "s|@@RPI_CPU@@|${RPI_CPU}|g" \
-        -e "s|@@JOBS@@|${JOBS}|g" \
-        -e "s|@@WORK_DIR@@|${BUILD_ROOT}|g" \
-        -e "s|@@RPI_KERNEL_IMG@@|${RPI_KERNEL_IMG}|g" \
-        -e "s|@@PCIE_LINE@@|${PCIE_LINE}|g" \
-        -e "s|@@HOSTNAME@@|${HOSTNAME}|g" \
-        -e "s|@@TIMEZONE@@|${TIMEZONE}|g" \
-        -e "s|@@DEFAULT_USER@@|${DEFAULT_USER}|g" \
-        -e "s|@@BRAND@@|${BRAND}|g" \
-        -e "s|@@BRAND_TITLE@@|${BRAND_TITLE}|g" \
-        -e "s|@@DOMAIN@@|${CLUSTER_DOMAIN}|g" \
-        -e "s|@@ORG@@|${ORG}|g" \
-        -e "s|@@ENV@@|${ENV}|g" \
+        -e "s|@@CBUILD@@|$(_sed_rep_escape "${cbuild}")|g" \
+        -e "s|@@CROSS_TARGET@@|$(_sed_rep_escape "${CROSS_TARGET}")|g" \
+        -e "s|@@RPI_CPU@@|$(_sed_rep_escape "${RPI_CPU}")|g" \
+        -e "s|@@JOBS@@|$(_sed_rep_escape "${JOBS}")|g" \
+        -e "s|@@WORK_DIR@@|$(_sed_rep_escape "${BUILD_ROOT}")|g" \
+        -e "s|@@RPI_KERNEL_IMG@@|$(_sed_rep_escape "${RPI_KERNEL_IMG}")|g" \
+        -e "s|@@PCIE_LINE@@|$(_sed_rep_escape "${PCIE_LINE}")|g" \
+        -e "s|@@HOSTNAME@@|$(_sed_rep_escape "${HOSTNAME}")|g" \
+        -e "s|@@TIMEZONE@@|$(_sed_rep_escape "${TIMEZONE}")|g" \
+        -e "s|@@DEFAULT_USER@@|$(_sed_rep_escape "${DEFAULT_USER}")|g" \
+        -e "s|@@BRAND@@|$(_sed_rep_escape "${BRAND}")|g" \
+        -e "s|@@BRAND_TITLE@@|$(_sed_rep_escape "${BRAND_TITLE}")|g" \
+        -e "s|@@DOMAIN@@|$(_sed_rep_escape "${CLUSTER_DOMAIN}")|g" \
+        -e "s|@@ORG@@|$(_sed_rep_escape "${ORG}")|g" \
+        -e "s|@@ENV@@|$(_sed_rep_escape "${ENV}")|g" \
         "${src}" > "${dst}"
 }
 
