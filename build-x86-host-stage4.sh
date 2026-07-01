@@ -539,6 +539,13 @@ _sed_rep_escape() {
     s="${s//\\/\\\\}"   # \  -> \\
     s="${s//&/\\&}"     # &  -> \&
     s="${s//|/\\|}"     # |  -> \|
+    # Belt-and-suspenders (parity with rpi5/frite): refuse an embedded newline at the
+    # sink itself. Identity fields are already allowlisted up front, but non-identity
+    # sed replacements (e.g. ROOT_PASS / MEDIA_MOUNT) bypass those gates — a newline
+    # here would terminate the `sed s|..|..|` command and inject a further sed command.
+    case "${s}" in
+        *$'\n'*) err "sed replacement contains a newline (refusing to render): '${1}'"; exit 1 ;;
+    esac
     printf '%s' "${s}"
 }
 
