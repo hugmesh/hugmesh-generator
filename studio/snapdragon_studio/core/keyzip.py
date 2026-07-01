@@ -14,6 +14,14 @@ import shutil
 import zipfile
 from dataclasses import dataclass, field
 
+from .validate import (
+    IdentityValidationError,
+    validate_brand,
+    validate_brand_title,
+    validate_domain_name,
+    validate_org,
+)
+
 MAX_TOTAL = 512 * 1024 * 1024   # 512 MiB extracted ceiling
 MAX_FILES = 5000
 
@@ -47,7 +55,7 @@ class KeyZipContents:
         if self.egress_conf:
             cfg.egress_vpn = self.egress_conf
         if self.domain_conf:
-            _apply_domain_conf(self.domain_conf, cfg)
+            _apply_domain_conf(self.domain_conf, cfg, self.warnings)
 
 
 def _safe_member(name: str) -> bool:
@@ -114,8 +122,16 @@ def extract(zip_path: str, staging_dir: str) -> KeyZipContents:
     return c
 
 
-def _apply_domain_conf(path: str, cfg) -> None:
-    """Read a simple KEY=VALUE (or JSON) domain config and set brand/domain fields."""
+def _apply_domain_conf(path: str, cfg, warnings: list | None = None) -> None:
+    """Read a simple KEY=VALUE (or JSON) domain config and set brand/domain fields.
+
+    The domain.conf comes from a (possibly compromised) domain admin's key-zip, so
+    each value is allowlisted BEFORE it is set on the ImageConfig — these fields are
+    later written into a root-sourced brand.conf and into sed replacements by the
+    generator, where an injection value (quote / ``$()`` / ``;`` / ``|`` / newline)
+    would run as root. Reject (skip + warn), never silently set, a bad value.
+    """
+    warn = warnings if warnings is not None else []
     try:
         if path.endswith(".json"):
             import json
@@ -133,8 +149,22 @@ def _apply_domain_conf(path: str, cfg) -> None:
                         d[k.strip()] = v.strip().strip('"')
     except (OSError, ValueError):
         return
-    mapping = {"BRAND": "brand", "BRAND_TITLE": "brand_title", "ORG": "org",
-               "CLUSTER_DOMAIN": "cluster_domain", "DOMAIN": "cluster_domain"}
-    for key, attr in mapping.items():
-        if d.get(key):
-            setattr(cfg, attr, d[key])
+    # (key, attr, validator) — validator rejects anything not known-safe.
+    mapping = (
+        ("BRAND", "brand", validate_brand),
+        ("BRAND_TITLE", "brand_title", validate_brand_title),
+        ("ORG", "org", validate_org),
+        ("CLUSTER_DOMAIN", "cluster_domain", validate_domain_name),
+        ("DOMAIN", "cluster_domain", validate_domain_name),
+    )
+    for key, attr, validator in mapping:
+        value = d.get(key)
+        if not value:
+            continue
+        value = str(value)
+        try:
+            validator(value)
+        except IdentityValidationError:
+            warn.append(f"rejected unsafe {key} in domain config: {value!r}")
+            continue
+        setattr(cfg, attr, value)

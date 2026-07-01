@@ -10,6 +10,17 @@ import json
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
+from .validate import (
+    validate_accent_color,
+    validate_brand,
+    validate_brand_title,
+    validate_domain_name,
+    validate_home_backup,
+    validate_home_device,
+    validate_org,
+    validate_username,
+)
+
 
 # Studio "mode" -> sensible default role. The wizard lets the user override role.
 MODE_DEFAULT_ROLE = {
@@ -130,10 +141,40 @@ class ImageConfig:
         with open(path, encoding="utf-8") as fh:
             return cls.from_dict(json.load(fh))
 
+    # ---- identity validation (fail-closed) ---------------------------------
+    def validate_identity(self) -> None:
+        """Allowlist every identity field that flows into a root-sourced KEY=VALUE
+        file (brand.conf / home.conf) or a sed replacement in the generator.
+
+        Fail-closed: raise IdentityValidationError on any value that is not a
+        known-safe shape, BEFORE it can reach --brand/--org/--local-user/--home-*.
+        Defense-in-depth that does not rely on the build script's own escaping.
+        """
+        # always emitted
+        validate_username(self.local_user)
+        # brand / org / brand_title flow into brand.conf (sourced as root)
+        validate_brand(self.brand)
+        validate_org(self.org)
+        validate_brand_title(self.brand_title)
+        validate_accent_color(self.accent_color)
+        # cluster_domain + per-domain names flow into --domains / the mesh manifest
+        validate_domain_name(self.cluster_domain)
+        for d in self.domains:
+            if getattr(d, "name", ""):
+                validate_domain_name(d.name)
+        # home provisioning fields flow into home.conf (sourced as root)
+        if self.home_device:
+            validate_home_device(self.home_device)
+        if self.home_backup:
+            validate_home_backup(self.home_backup)
+
     # ---- the canonical flag translation ------------------------------------
     def to_cli_args(self) -> list[str]:
         """Build the build-x86-host-stage4.sh argument list. Only emits flags that
         differ from the script's own defaults, so the command stays readable."""
+        # Reject injection-shaped identity values at the earliest boundary, before
+        # they can reach the root-sourced brand.conf/home.conf or a sed replacement.
+        self.validate_identity()
         a: list[str] = ["--role", self.role, "--env", self.env, "--local-user", self.local_user]
         if self.brand != "snapdragon":
             a += ["--brand", self.brand]
