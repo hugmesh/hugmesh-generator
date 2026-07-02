@@ -39,6 +39,38 @@ lint:optional-services-exclude:
   script:
     - bash tests/stack/test-optional-services-exclude.sh
 
+# Supply-chain download-verification gate. Unit-tests scripts/_download-lib.sh
+# (sha256/sha512 + publisher-manifest verification ABORTS on tamper, fails closed
+# on an absent manifest entry, stage3 DIGESTS extraction) AND grep-asserts that
+# EVERY stage4 builder (rpi5/frite/jetson/x86) sources the lib and verifies the
+# stage3 seed + headscale + tailscale downloads — a builder silently dropping a
+# verification call FAILS here. No network/GPG needed; cheap.
+lint:download-verify:
+  stage: lint
+  image: bash:5
+  tags: [snapdragon-x86]
+  script:
+    - bash tests/scripts/test-download-verify.sh
+
+# media-poisoner (m)TLS entrypoint gate. Runs the worker's unittest suite:
+# the config-resolution fail-closed contract (a PARTIAL POISON_TLS_* env must
+# ABORT startup, never silently serve plaintext) + a LIVE mutual-TLS handshake
+# proof (self-signed throwaway CA; a certless client is REJECTED, a cert-bearing
+# client gets /health with transport:"mtls"). openssl+fastapi+uvicorn make the
+# live layer run (it skips itself, visibly, when they are missing); the app's
+# Form/File params hard-require python-multipart at import time, so it must be
+# installed or the served process dies on boot. Cheap; no privileged runner
+# needed.
+lint:media-poisoner-tls:
+  stage: lint
+  image: python:3-slim
+  tags: [snapdragon-x86]
+  before_script:
+    - apt-get update -qq && apt-get install -qq -y --no-install-recommends openssl >/dev/null
+    - pip install --quiet fastapi uvicorn python-multipart
+  script:
+    - python -m unittest discover -s specs/cluster/manifests/media-poisoner/worker/tests -v
+
 # x86 kernel k8s-networking fragment lint. The x86 hardened-k8s.config used to be a
 # TRUNCATED copy of the Pi reference (no xtables match/target layer, no nft NAT/MASQ,
 # no NF_NAT_MASQUERADE, no IPv6 nf tables, no IP_NF_MANGLE) — which left ClusterIP/

@@ -37,7 +37,11 @@ USER 1000
 
 EXPOSE 8080
 
-# uvicorn on :8080 (the ClusterIP Service / probe port). Single worker: the
-# perturbation is the bottleneck and the Deployment caps concurrency=1 for the CPU
-# path so it cannot starve the control/data plane.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+# app.serve wraps uvicorn on :8080 (the ClusterIP Service / probe port) with the
+# SAME defaults as the previous direct-uvicorn CMD (0.0.0.0:8080, single worker —
+# the perturbation is the bottleneck and the Deployment caps concurrency=1 for the
+# CPU path so it cannot starve the control/data plane). Additionally it honours the
+# OPTIONAL POISON_TLS_CERT / POISON_TLS_KEY / POISON_TLS_CLIENT_CA env for
+# worker-terminated (m)TLS — unset (the default) it serves plain HTTP exactly as
+# before; a PARTIAL TLS config aborts startup (fail-closed, never silent plaintext).
+CMD ["python", "-m", "app.serve"]

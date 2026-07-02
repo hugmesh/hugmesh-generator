@@ -75,13 +75,27 @@ Re-tune the whole chain by overriding these — no logic edits required:
 - No algorithm was weakened. RSA only went **up** (2048 → 4096); digests only
   went **up** (SHA-256 → SHA-384 / SHA-3).
 
-## 🚧 Planned — supply-chain hardening (in-flight)
+## ✅ Supply-chain hardening (landed)
 
-Not yet landed; tracked here so the build's trust roots are visible:
+The build's remote trust roots are now verified fail-closed in **all four**
+builders (`build-rpi5-stage4.sh`, `build-frite-stage4.sh`, `build-jetson-stage4.sh`,
+`build-x86-host-stage4.sh` — the x86 builder was the last one wired). One shared,
+audited implementation: [`scripts/_download-lib.sh`](../scripts/_download-lib.sh)
+(unit-tested by `tests/scripts/test-download-verify.sh`).
 
-- **Verify the Gentoo stage3 tarball** by GPG signature + published SHA before
-  unpacking (today the builder trusts the downloaded tarball).
-- **Verify headscale / tailscale binary checksums** against the upstream
-  published digests on download.
-- **De-default any baked-in credentials** so no image ships a guessable default
-  secret — fail the build if a placeholder credential survives into the artifact.
+- **Gentoo stage3 tarball** — `dlv_verify_stage3`: the matching `.DIGESTS(.asc)`
+  is fetched and GPG-verified against the pinned Gentoo release-engineering key
+  (fingerprint knob `DLV_GENTOO_KEY`; air-gapped via `DLV_OFFLINE_KEYRING`), then
+  the tarball's SHA512/SHA256 is checked against the signed DIGESTS. Any
+  signature/checksum failure (or a missing signature/entry) **aborts the build**
+  and deletes the unverified file — never warn-and-continue.
+- **headscale / tailscale binaries** — verified against the publishers' digests
+  (headscale `checksums.txt` via `dlv_verify_from_sumsfile`, fail-closed when the
+  basename is absent; tailscale `<tgz>.sha256` sidecar via
+  `dlv_verify_sha256_sidecar`) before install/extract; mismatch aborts.
+- **De-defaulted baked-in credentials** — the first-boot finaliser
+  (`specs/etc/local.d/01-firstboot.start.tmpl`) no longer bakes any known default
+  password: real credentials come from the KEYS USB (`users.json` `$6$` hashes);
+  a keyless boot mints a **random one-time** password (forced change on first
+  login) and root is locked. Standalone desktops take a build-time `$6$` **hash**
+  (`--local-pass`), never plaintext.

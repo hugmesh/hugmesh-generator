@@ -362,8 +362,10 @@ backstops noted below may already be present but inert.
   [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md).
 - **🚧 Notifications external channels** — Matrix DM + Akkoma feed + phpBB + email
   adapters on top of the shipped in-app MVP; mod-bff `notify_channels` directive.
-- **🚧 Generator supply-chain hardening** — verify stage3 GPG/sha + headscale /
-  tailscale binary checksums + de-default baked creds.
+- **✅ Generator supply-chain hardening** — stage3 GPG/sha + headscale /
+  tailscale binary checksum verification, fail-closed in all four builders via
+  `scripts/_download-lib.sh`, + de-defaulted baked creds (random one-time
+  first-boot fallback). See [`CRYPTO-AUDIT.md`](CRYPTO-AUDIT.md).
 
 ## Related repositories
 

@@ -87,6 +87,17 @@ spec:
             - { name: POISON_MODEL_DIR, value: "/models" }
             # Leave POISON_BACKEND UNSET so the worker probes (cuda|rocm|cpu) and
             # reports the truth to the BFF. Set to "cpu" to force the lean path.
+            #
+            # OPTIONAL worker-terminated mTLS (default OFF = plain in-cluster HTTP,
+            # unchanged): set POISON_TLS_CERT / POISON_TLS_KEY / POISON_TLS_CLIENT_CA
+            # to PEM paths from an ESO-projected Secret volume (the BFF/gateway
+            # build-keystore pattern) and app/serve.py serves TLS with REQUIRED
+            # client-cert verification. A partial config CrashLoops (fail-closed,
+            # never silent plaintext); /health then reports transport:"mtls".
+            # NOTE: when enabling, also swap the readiness/liveness httpGet probes
+            # below for tcpSocket (or an exec curl with the client cert): the mTLS
+            # handshake REJECTS the kubelet's certless probe, so an unchanged
+            # httpGet would CrashLoop the pod. Pair both flips in the same commit.
           readinessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 10

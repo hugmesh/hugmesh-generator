@@ -81,7 +81,7 @@ the `federation_modules` seed.
 |---|---|---|
 | **DEFAULT-ON** (the built-in default when no selection is given) | `akkoma`, `tuwunel` (Matrix), `phpbb` | always, unless `EXCLUDE_SERVICES` removes them |
 | **DEFAULT-OFF** (must be specifically added) | `games`, `owncast`, `tube`, `character-studio` — and any future user-level service | only when explicitly selected |
-| **FULL-SET** | `OPTIONAL_SERVICES=all` / `--all-services` | every user-level slug — **rpi5 builder only today** (see caveat below) |
+| **FULL-SET** | `OPTIONAL_SERVICES=all` / `--all-services` | every user-level slug — rpi5 **and** x86 builders |
 
 > ⚠ **`games` is DEFAULT-OFF** (it was previously default-on). Add it with
 > `--enable-games` / `ENABLE_GAMES=true`, by naming `games` in `OPTIONAL_SERVICES`,
@@ -118,8 +118,8 @@ selection no matter how it became selected (default / `brand.conf` /
 `--optional-services` / `all` / the games opt-in). It is the one-liner that turns OFF
 an on-by-default service without re-enumerating the whole positive list; each excluded
 slug is then pruned + rendered `installed:"false"` exactly like an unselected one.
-**This knob (like the `all` sentinel) is wired in `build-rpi5-stage4.sh` only today;
-the x86 builder does not yet honor it — see the rpi5-only caveat below.**
+**This knob (and the `all` sentinel) is wired identically in `build-rpi5-stage4.sh`
+and `build-x86-host-stage4.sh`** (the x86 port mirrors the rpi5 resolution order).
 ```sh
 # brand.conf
 EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the rest
@@ -129,17 +129,17 @@ EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the res
 ```
 > Precedence summary: `OPTIONAL_SERVICES` (default `akkoma tuwunel phpbb`) is the
 > positive allow-list (built-in < brand.conf < `--optional-services`; `all` expands
-> to the full set), then the games opt-in folds `games` in, then **`EXCLUDE_SERVICES`
-> subtracts last**.
+> to the full set), then the opt-in folds (games; on x86 also edge-ai / tor /
+> character-studio) fold their slugs in, then **`EXCLUDE_SERVICES` subtracts last**.
 >
-> ⚠ **rpi5-only today.** The FULL-SET sentinel (`OPTIONAL_SERVICES=all` /
+> **Both builders.** The FULL-SET sentinel (`OPTIONAL_SERVICES=all` /
 > `--all-services`) **and** the subtractive `EXCLUDE_SERVICES` / `--exclude-services`
 > knob are wired in **`build-rpi5-stage4.sh`** (the canonical cluster-node builder)
-> only. The x86 builder (`build-x86-host-stage4.sh`, a protected client-image area)
-> currently supports just `--optional-services` + the `--enable-games` / `ENABLE_GAMES`
-> opt-in (its `OPTIONAL_SERVICES` default is the fixed `akkoma tuwunel phpbb` list with
-> no `all`-sentinel expansion and no exclude pass). Bringing the FULL-SET sentinel +
-> the subtractive knob to x86 is an **owed follow-up** in that protected file.
+> **and `build-x86-host-stage4.sh`** with the same resolution order (built-in
+> default respecting env/brand.conf < `all`-sentinel expansion < the opt-in folds <
+> the EXCLUDE subtraction LAST). On x86 the subtraction runs after **every** opt-in
+> fold (games / edge-ai / tor / character-studio / edge-ai-analysis), so an excluded
+> slug is force-OFF there too regardless of how it was selected.
 
 `gate_optional_services()` (in **both** `build-x86-host-stage4.sh` and
 `build-rpi5-stage4.sh`, authored per-script and anchored to the

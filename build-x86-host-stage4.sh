@@ -15,6 +15,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPECS_DIR="${SCRIPT_DIR}/specs-x86"      # amd64-specific specs
 SHARED_SPECS="${SCRIPT_DIR}/specs"       # arch-agnostic specs (etc/, cluster/)
 
+# SUPPLY-CHAIN: every remote artifact (Gentoo stage3 seed, headscale, tailscale)
+# is checksum/signature-verified through the SHARED, audited download-verification
+# implementation instead of trusting a bare `curl`. See scripts/_download-lib.sh.
+# (Same wiring as build-rpi5/frite/jetson-stage4.sh — the x86 builder was the last
+# one still trusting unverified downloads; CRYPTO-AUDIT.md supply-chain section.)
+# shellcheck source=scripts/_download-lib.sh
+source "${SCRIPT_DIR}/scripts/_download-lib.sh"
+
 # ── Defaults ───────────────────────────────────────────────────────
 WORK_DIR=""
 # Per-arch build subdirectory under WORK_DIR. The heavy, ARCH-SPECIFIC build
@@ -47,15 +55,35 @@ ORG="Snapdragon-Systems"
 # games host + OIDC issuer/redirects via parameterize_games_domain(). See
 # docs/OPTIONAL-SERVICES.md.
 GAMES_DOMAIN="games.snapdragon.systems"
-# OPTIONAL services selected on this image (space-separated subset of:
-# akkoma tuwunel phpbb games). Built-in default = "akkoma tuwunel phpbb".
-# GAMES IS OPT-IN / OFF BY DEFAULT — the games subdomain (games.<CLUSTER_DOMAIN>),
-# casdoor-games and the games app-store are baked ONLY when games is explicitly
-# selected (--enable-games / ENABLE_GAMES=true, or by listing 'games' in
-# --optional-services). brand.conf may narrow; --optional-services overrides both
-# (built-in < brand.conf < flag). Each unselected slug is pruned from the baked
-# GitOps tree by gate_optional_services(). See specs/cluster/optional-services.yaml.
-OPTIONAL_SERVICES="akkoma tuwunel phpbb"
+# ── DEFAULT-INCLUSION POLICY (user 2026-06-17) — mirrors build-rpi5-stage4.sh ──
+# USER_LEVEL_SERVICES is the SINGLE source-of-truth set of user-level OPTIONAL
+# slugs (matches specs/cluster/optional-services.yaml; excludes the non-user-level
+# infra slugs egress-vpn / tor / workloadConsole / anubis). It is what
+# OPTIONAL_SERVICES=all / --all-services expands to.
+USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio"
+# OPTIONAL services selected on this image (subset of USER_LEVEL_SERVICES).
+#   DEFAULT-ON  (the built-in default when NO selection is given): akkoma tuwunel phpbb.
+#   DEFAULT-OFF (must be specifically added): games owncast tube character-studio.
+# FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services) expands to EVERY
+# user-level slug (USER_LEVEL_SERVICES) just before EXCLUDE_SERVICES subtracts, so
+# `all` + EXCLUDE_SERVICES="games" still drops games. GAMES IS OPT-IN / OFF BY
+# DEFAULT — the games subdomain (games.<CLUSTER_DOMAIN>), casdoor-games and the
+# games app-store are baked ONLY when games is explicitly selected (--enable-games
+# / ENABLE_GAMES=true, by listing 'games' in --optional-services, or via 'all').
+# brand.conf narrows; --optional-services overrides both (built-in < brand.conf <
+# flag). Each unselected slug is pruned from the baked GitOps tree by
+# gate_optional_services(). See specs/cluster/optional-services.yaml.
+OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
+# EXCLUDE_SERVICES — the SUBTRACTIVE build-time exclusion knob (brand.conf /
+# --exclude-services). Any user-level slug listed here is REMOVED from the final
+# selection AFTER all positive sources (built-in default, brand.conf
+# OPTIONAL_SERVICES, --optional-services, the games/edge-ai/tor/character-studio
+# opt-ins) are resolved, so it is pruned from the baked tree by
+# gate_optional_services no matter how it got selected. This is the one knob that
+# can turn OFF an on-by-default service (akkoma/tuwunel/phpbb) without having to
+# re-enumerate the whole positive list. Whitespace/comma separated.
+# Example (brand.conf): EXCLUDE_SERVICES="phpbb tuwunel"  (forum-less + Matrix-less).
+EXCLUDE_SERVICES="${EXCLUDE_SERVICES:-}"
 # Games opt-in toggle. --enable-games or ENABLE_GAMES=true folds 'games' into
 # OPTIONAL_SERVICES (post-arg-parse, idempotent), baking the games subdomain.
 ENABLE_GAMES="${ENABLE_GAMES:-false}"
@@ -361,6 +389,31 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             games.<CLUSTER_DOMAIN> subdomain (OPT-IN; OFF by
                             default). Equivalent to adding 'games' to
                             --optional-services. (env/brand.conf: ENABLE_GAMES=true)
+      --optional-services "<slugs>"
+                            The SUBSET of user-level OPTIONAL services to bake
+                            (allow-list). Choose from akkoma tuwunel phpbb games
+                            owncast tube character-studio, or the literal "all"
+                            (every user-level slug). Unlisted slugs are pruned from
+                            the baked GitOps tree by gate_optional_services.
+                            Built-in DEFAULT (no selection) = "akkoma tuwunel phpbb";
+                            games/owncast/tube/character-studio are DEFAULT-OFF.
+                            (env/brand.conf: OPTIONAL_SERVICES; =all = the full set)
+      --all-services        Bake EVERY user-level OPTIONAL service — the FULL-SET
+                            shortcut, equivalent to --optional-services all.
+                            EXCLUDE_SERVICES still subtracts (e.g. --all-services
+                            --exclude-services "games" bakes everything but games).
+                            NOTE: the INFRA-level slugs (egress-vpn, tor,
+                            workloadConsole, anubis) are NOT included by "all".
+      --exclude-services "<slugs>"
+                            The SUBTRACTIVE build-time exclusion list: force-OFF
+                            these user-level slugs no matter how they were selected
+                            (default / brand.conf / --optional-services /
+                            --enable-games / 'all'). Applied LAST. Each excluded
+                            slug's Application + manifests + gateway routes +
+                            route-access rows are pruned and its installed-services
+                            ConfigMap + 13a ApplicationSet flag renders "false".
+                            Example: --exclude-services "phpbb tuwunel".
+                            (env/brand.conf: EXCLUDE_SERVICES)
       --with-edge-ai        Bake the edge-AI inference service (Ollama OpenAI /v1 API,
                             GPU-scheduled) onto a GPU k8s role; auto-on for --role
                             edge_ai. Other mesh nodes consume it over k8s + tailnet.
@@ -592,6 +645,8 @@ while [[ $# -gt 0 ]]; do
         --org) ORG="$2"; shift 2 ;;
         --games-domain) GAMES_DOMAIN="$2"; shift 2 ;;
         --optional-services) OPTIONAL_SERVICES="$2"; shift 2 ;;
+        --all-services)      OPTIONAL_SERVICES="all"; shift   ;;
+        --exclude-services)  EXCLUDE_SERVICES="$2";   shift 2 ;;
         -u|--user) DEFAULT_USER="$2"; shift 2 ;;
         --user-password) DEFAULT_USER_PASS="$2"; shift 2 ;;
         --root-password) ROOT_PASS="$2"; shift 2 ;;
@@ -734,6 +789,21 @@ done
 # `case " ${OPTIONAL_SERVICES} "` folds) sees clean slugs. Mirrors DOMAINS.
 OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
 
+# FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services, which sets the same
+# token) expands to EVERY user-level slug. Done HERE — after arg parse, before the
+# games/edge-ai/tor/character-studio opt-in folds and BEFORE EXCLUDE_SERVICES
+# subtracts — so `all` is just a positive allow-list of the whole set and
+# EXCLUDE_SERVICES still removes from it (e.g. OPTIONAL_SERVICES=all +
+# EXCLUDE_SERVICES="games owncast" => everything but games/owncast). A bare `all`
+# anywhere in the list expands the whole token to the full set (operators write
+# `all`, not `all akkoma`). Mirrors build-rpi5-stage4.sh.
+case " ${OPTIONAL_SERVICES} " in
+    *" all "*)
+        OPTIONAL_SERVICES="${USER_LEVEL_SERVICES}"
+        info "OPTIONAL_SERVICES: 'all' sentinel expanded to every user-level slug: ${OPTIONAL_SERVICES}"
+        ;;
+esac
+
 # Games is OPT-IN (off by default): fold it into the selection when --enable-games
 # / ENABLE_GAMES=true. Idempotent — a no-op when 'games' is already listed (e.g. via
 # --optional-services). When games stays unselected, gate_optional_services() prunes
@@ -811,6 +881,29 @@ case " ${OPTIONAL_SERVICES} " in
                warn "edge-ai-analysis requires edge-ai — dropping it (no model server selected)" ;;
         esac ;;
 esac
+
+# EXCLUDE_SERVICES — apply the SUBTRACTIVE build-time exclusion LAST, so a slug
+# listed here is force-OFF regardless of how it became selected (built-in default,
+# brand.conf, --optional-services, the 'all' sentinel, or any opt-in fold above).
+# gate_optional_services then prunes every excluded slug's Application/manifests/
+# routes/rows from the baked tree and _opt_render_installed_services renders it
+# installed:"false" in BOTH the ConfigMap and the 13a ApplicationSet, so the rest
+# of the stack degrades gracefully. A slug may legitimately appear in
+# EXCLUDE_SERVICES even if it was never selected (idempotent no-op).
+# Whitespace/comma separated. Mirrors build-rpi5-stage4.sh.
+if [ -n "${EXCLUDE_SERVICES//[[:space:],]/}" ]; then
+    _excl_x=""
+    for _x in ${EXCLUDE_SERVICES//,/ }; do
+        _kept=""
+        for _s in ${OPTIONAL_SERVICES}; do
+            [ "${_s}" = "${_x}" ] || _kept="${_kept} ${_s}"
+        done
+        OPTIONAL_SERVICES="${_kept# }"
+        _excl_x="${_excl_x} ${_x}"
+    done
+    info "OPTIONAL_SERVICES: EXCLUDE_SERVICES removed:${_excl_x} (final selection: ${OPTIONAL_SERVICES:-none})"
+    unset _excl_x _x _s _kept
+fi
 
 # ── Validate role; derive GPU, hostname, node labels and init/join intent ──
 # Node labels/taints are applied at RUNTIME by provision.sh from the KEYS stick;
@@ -1847,11 +1940,26 @@ info "Build root: ${BUILD_ROOT}  (per-arch sysroot/distfiles/pkgdir)"
 # ── 2. Seed stage3 ─────────────────────────────────────────────────
 banner "Fetching amd64 hardened stage3 seed"
 # The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
-STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
+STAGE3_FILE=$(curl -sL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 # Per-arch: the amd64 seed must not be reused by (or clobber) the aarch64 build.
 STAGE3_LOCAL="${BUILD_ROOT}/$(basename "${STAGE3_FILE}")"
 STAGE3_URL="https://distfiles.gentoo.org/releases/amd64/autobuilds/${STAGE3_FILE}"
-[ -f "${STAGE3_LOCAL}" ] || { info "Downloading $(basename "${STAGE3_FILE}")"; curl -L -o "${STAGE3_LOCAL}" "${STAGE3_URL}"; }
+[ -f "${STAGE3_LOCAL}" ] || { info "Downloading $(basename "${STAGE3_FILE}")"; curl -fL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o "${STAGE3_LOCAL}" "${STAGE3_URL}"; }
+
+# SUPPLY-CHAIN: verify the seed's integrity+authenticity before we trust a single
+# byte of it. dlv_verify_stage3 fetches the matching .DIGESTS(.asc), GPG-verifies
+# it against the pinned Gentoo release-engineering key, then checks the tarball's
+# SHA512/SHA256 against the signed DIGESTS — ABORTING on any signature/checksum
+# mismatch. A poisoned mirror or MITM can no longer slip a backdoored seed in.
+# (Mirrors the rpi5/frite/jetson builders; the amd64 seed was the last unverified one.)
+banner "Verifying stage3 seed signature + checksum"
+if ! dlv_verify_stage3 "${STAGE3_LOCAL}" "${STAGE3_URL}.DIGESTS"; then
+    rm -f "${STAGE3_LOCAL}"   # drop the unverified file so a re-run re-fetches
+    err "stage3 seed failed verification (bad signature or checksum) — aborting."
+    err "If Gentoo rotated its signing key, set DLV_GENTOO_KEY=<fingerprint>; for an"
+    err "air-gapped build set DLV_OFFLINE_KEYRING=<keyfile>. Refusing unverified seed."
+    exit 1
+fi
 
 # ── 3. Extract ─────────────────────────────────────────────────────
 banner "Extracting stage3"
@@ -2880,18 +2988,50 @@ if ${SKIP_MESH}; then
     banner "Mesh VPN SKIPPED"
 else
     banner "Installing mesh VPN (headscale + tailscale, amd64)"
-    if curl -fL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o "${SYSROOT}/usr/bin/headscale" \
-        "https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}/headscale_${HEADSCALE_VERSION}_linux_amd64"; then
-        chmod +x "${SYSROOT}/usr/bin/headscale"; info "headscale installed"
-    else err "headscale fetch failed — the image enables its service in the runlevel; aborting (use --skip-mesh to opt out)"; exit 1; fi
+    # Pinned versions (HEADSCALE_VERSION / TAILSCALE_VERSION) + publisher checksum
+    # verification: headscale releases ship checksums.txt; tailscale ships a
+    # <tgz>.sha256 sidecar. Fetch the manifest, verify sha256, ABORT on any
+    # mismatch — a tampered binary can no longer reach the mesh runlevel.
+    # (Mirrors the rpi5/frite/jetson builders' Phase 2.5 verification.)
+    HS_REL="https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}"
+    HS_BIN="${SYSROOT}/usr/bin/headscale"
+    if curl -fL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o "${HS_BIN}" \
+        "${HS_REL}/headscale_${HEADSCALE_VERSION}_linux_amd64"; then
+        # Verify sha256 against the release checksums.txt BEFORE trusting it.
+        HS_SUMS="${BUILD_ROOT}/headscale_${HEADSCALE_VERSION}_checksums.txt"
+        if ! dlv_fetch "${HS_REL}/checksums.txt" "${HS_SUMS}" \
+           || ! dlv_verify_from_sumsfile "${HS_BIN}" "headscale_${HEADSCALE_VERSION}_linux_amd64" "${HS_SUMS}" sha256; then
+            rm -f "${HS_BIN}"
+            err "headscale ${HEADSCALE_VERSION} checksum verification FAILED — refusing to ship an unverified control-plane binary."
+            exit 1
+        fi
+        chmod +x "${HS_BIN}"
+        file "${HS_BIN}" | grep -q 'ELF.*x86-64' || {
+            rm -f "${HS_BIN}"
+            err "headscale binary is not x86-64 — check --headscale-version"
+            exit 1
+        }
+        info "headscale installed + sha256-verified"
+    else
+        rm -f "${HS_BIN}"   # curl -o may leave a truncated file behind
+        err "headscale fetch failed — the image enables its service in the runlevel; aborting (use --skip-mesh to opt out)"; exit 1; fi
     if ! ${SKIP_TAILSCALE}; then
+        TS_URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz"
         TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_amd64.tgz"
-        if curl -fL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o "${TGZ}" "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz"; then
+        if curl -fL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o "${TGZ}" "${TS_URL}"; then
+            # Verify sha256 against the published <tgz>.sha256 sidecar BEFORE extracting.
+            TS_SHA="${TGZ}.sha256"
+            if ! dlv_fetch "${TS_URL}.sha256" "${TS_SHA}" \
+               || ! dlv_verify_sha256_sidecar "${TGZ}" "${TS_SHA}"; then
+                rm -f "${TGZ}"
+                err "tailscale ${TAILSCALE_VERSION} checksum verification FAILED — refusing to ship an unverified mesh client."
+                exit 1
+            fi
             TMP="$(mktemp -d)"; tar -C "${TMP}" -xzf "${TGZ}"
             SUB="$(find "${TMP}" -maxdepth 1 -type d -name 'tailscale_*' | head -1)"
             install -Dm0755 "${SUB}/tailscale" "${SYSROOT}/usr/bin/tailscale"
             install -Dm0755 "${SUB}/tailscaled" "${SYSROOT}/usr/sbin/tailscaled"
-            rm -rf "${TMP}"; info "tailscale installed"
+            rm -rf "${TMP}"; info "tailscale installed + sha256-verified"
         else err "tailscale fetch failed — tailscaled is enabled in the runlevel; aborting (use --skip-tailscale to opt out)"; exit 1; fi
     fi
 fi

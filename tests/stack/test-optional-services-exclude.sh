@@ -25,13 +25,16 @@
 #     explicitly added; EXCLUDE_SERVICES removes a default-ON slug. games is now
 #     DEFAULT-OFF (registry default: off + ConfigMap baseline "false").
 #
-# Arch-neutral: the gate operates on the shared specs/cluster tree (the rpi5
-# builder is the canonical cluster-node builder; build-x86-host-stage4.sh is a
-# protected client-image area and is intentionally NOT exercised here).
+# Arch-neutral: the gate operates on the shared specs/cluster tree. The rpi5
+# builder is the canonical cluster-node builder whose gate/helpers are sourced
+# and exercised below; build-x86-host-stage4.sh carries the SAME selection knobs
+# (all-sentinel + EXCLUDE_SERVICES, ported from rpi5) and its wiring is
+# grep-asserted in section 4c so the two builders cannot silently diverge.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BUILDER="${REPO}/build-rpi5-stage4.sh"
+BUILDER_X86="${REPO}/build-x86-host-stage4.sh"
 REG="${REPO}/specs/cluster/optional-services.yaml"
 SRC="${REPO}/specs/cluster"
 [ -f "${BUILDER}" ] || { echo "  FAIL builder missing"; exit 1; }
@@ -261,6 +264,31 @@ for slug in ${DEFAULT_OFF}; do
 done
 # games is the headline policy move: DEFAULT-OFF.
 case " ${DEFAULT_ON} " in *" games "*) bad "POLICY REGRESSION: games is in the default-on set" ;; *) ok "POLICY: games is DEFAULT-OFF (not in built-in default)" ;; esac
+
+# ── 4c) x86 builder parity: the SAME selection knobs are wired there too ──────
+# build-x86-host-stage4.sh ports the rpi5 resolution (env-respecting built-in
+# default -> `all` sentinel -> opt-in folds -> EXCLUDE_SERVICES LAST). Grep-anchor
+# each leg so a refactor of either builder cannot silently drop the parity.
+echo "-- x86 builder parity (build-x86-host-stage4.sh selection knobs) --"
+if [ -f "${BUILDER_X86}" ]; then
+  grep -q 'OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"' "${BUILDER_X86}" \
+    && ok "x86: built-in default is 'akkoma tuwunel phpbb' (env/brand.conf-respecting)" \
+    || bad "x86: built-in default is not the env-respecting 'akkoma tuwunel phpbb'"
+  grep -q 'USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio"' "${BUILDER_X86}" \
+    && ok "x86: USER_LEVEL_SERVICES matches the rpi5 user-level set" \
+    || bad "x86: USER_LEVEL_SERVICES missing or diverged from rpi5"
+  grep -q -- '--all-services' "${BUILDER_X86}" && ok "x86: accepts --all-services CLI flag" || bad "x86: missing --all-services flag"
+  grep -q -- '--exclude-services' "${BUILDER_X86}" && ok "x86: accepts --exclude-services CLI flag" || bad "x86: missing --exclude-services flag"
+  grep -qE 'OPTIONAL_SERVICES="\$\{USER_LEVEL_SERVICES\}"' "${BUILDER_X86}" \
+    && ok "x86: expands the 'all' sentinel to USER_LEVEL_SERVICES" || bad "x86: missing 'all' sentinel expansion"
+  grep -q 'EXCLUDE_SERVICES="${EXCLUDE_SERVICES:-}"' "${BUILDER_X86}" \
+    && ok "x86: EXCLUDE_SERVICES knob (env/brand.conf) defined" || bad "x86: EXCLUDE_SERVICES knob missing"
+  grep -q 'EXCLUDE_SERVICES removed' "${BUILDER_X86}" \
+    && ok "x86: applies the EXCLUDE_SERVICES subtraction pass" || bad "x86: EXCLUDE_SERVICES subtraction pass missing"
+  bash -n "${BUILDER_X86}" && ok "build-x86-host-stage4.sh: bash -n clean" || bad "x86 builder failed bash -n"
+else
+  bad "build-x86-host-stage4.sh missing"
+fi
 
 # (b) OPTIONAL_SERVICES=all — renders EVERYTHING.
 seed_tree "all-sentinel"

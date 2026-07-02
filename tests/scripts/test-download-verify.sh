@@ -152,5 +152,24 @@ else
   ok "a tampered stage3 ABORTS against the DIGESTS SHA512"
 fi
 
+# ── 11. builder wiring: EVERY stage4 builder sources the lib + verifies ──────
+# Regression guard for the x86 port: each builder must source _download-lib.sh,
+# verify the stage3 seed (dlv_verify_stage3), verify headscale against the
+# release checksums.txt (dlv_verify_from_sumsfile) and tailscale against its
+# .sha256 sidecar (dlv_verify_sha256_sidecar). A builder silently dropping any
+# of these re-opens the unverified-download supply-chain hole.
+for b in build-rpi5-stage4.sh build-frite-stage4.sh build-jetson-stage4.sh build-x86-host-stage4.sh; do
+  BF="${REPO}/${b}"
+  [ -f "${BF}" ] || { bad "${b}: builder missing"; continue; }
+  grep -qE 'source .*(_download-lib\.sh)' "${BF}" \
+    && ok "${b}: sources scripts/_download-lib.sh" || bad "${b}: does not source _download-lib.sh"
+  grep -q 'dlv_verify_stage3' "${BF}" \
+    && ok "${b}: verifies the stage3 seed (dlv_verify_stage3)" || bad "${b}: stage3 seed not verified"
+  grep -q 'dlv_verify_from_sumsfile' "${BF}" \
+    && ok "${b}: verifies headscale against checksums.txt" || bad "${b}: headscale not checksum-verified"
+  grep -q 'dlv_verify_sha256_sidecar' "${BF}" \
+    && ok "${b}: verifies tailscale against its .sha256 sidecar" || bad "${b}: tailscale not checksum-verified"
+done
+
 echo "== done: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

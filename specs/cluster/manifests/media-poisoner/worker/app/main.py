@@ -22,9 +22,14 @@ IS scheduled on a CPU-only test node it still runs the lean perturbation and hon
 reports backend=cpu.
 
 SECURITY: this is a ClusterIP-only service reached over in-cluster DNS. If the
-proxies/BFF require mTLS to it, terminate that at the manifest layer (sidecar / mesh)
-or extend this stub with uvicorn TLS + client-cert verification — see README. It mints
-no credentials and holds no durable copy of any image (in-memory, ephemeral).
+proxies/BFF require mTLS to it, either terminate that at the manifest layer
+(sidecar / mesh) or have THIS worker terminate it: app/serve.py (the container
+entrypoint) reads POISON_TLS_CERT / POISON_TLS_KEY / POISON_TLS_CLIENT_CA and runs
+uvicorn with TLS + REQUIRED client-cert verification (ssl.CERT_REQUIRED) when set —
+unset, it serves plain HTTP exactly as before (backward-compatible default). A
+partial TLS config FAILS startup (never a silent plaintext fallback), and /health
+discloses the active transport ("mtls" | "tls" | "plaintext"). It mints no
+credentials and holds no durable copy of any image (in-memory, ephemeral).
 """
 
 from __future__ import annotations
@@ -35,6 +40,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from .poison import KNOWN_MODES, MODE_NONE, detect_backend, perturb
+from .serve import transport_mode
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("media-poisoner")
@@ -42,6 +48,10 @@ log = logging.getLogger("media-poisoner")
 # Resolve the compute backend ONCE at startup (cuda|rocm|cpu|none) so /health is a
 # cheap, allocation-free probe the BFF can poll frequently.
 BACKEND = detect_backend()
+
+# Honest transport disclosure (mtls | tls | plaintext), resolved ONCE at startup
+# from the same env the entrypoint (app/serve.py) serves with.
+TRANSPORT = transport_mode()
 
 # Bounded request body so a hostile/huge upload cannot OOM the worker. The BFF also
 # enforces its own multipart limit; this is defense-in-depth. 25 MiB default.
@@ -63,6 +73,7 @@ def health() -> JSONResponse:
             "backend": BACKEND.kind,  # cuda | rocm | cpu | none
             "available": BACKEND.available,
             "modes": list(KNOWN_MODES),
+            "transport": TRANSPORT,  # mtls | tls | plaintext (honest disclosure)
         }
     )
 
