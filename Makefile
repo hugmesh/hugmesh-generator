@@ -468,7 +468,7 @@ playwright-deps: ## install the Playwright deps + chromium (needed once for e2e)
 	  && npx playwright install --with-deps chromium
 
 e2e: playwright-deps ## boot ROLE/ARCH in QEMU and run the Playwright e2e (default: x86 be+gpu)
-	$(SUDO) tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --arch $(ARCH) --role $(ROLE)
+	$(SUDO) tests/qemu/run-qemu-e2e.sh -w "$(WORK_DIR)" --target $(if $(filter arm64,$(ARCH)),pi,x86) --role $(ROLE)
 
 ci: ## FULL pipeline: wipe -> build the whole fleet (Docker) -> QEMU-emulate + e2e (long; hours)
 	$(MAKE) rebuild
