@@ -39,6 +39,10 @@ export async function registerOnly(page: Page, handle: string, provider: 'google
  *  fully-registered session with Matrix + Mastodon tokens. */
 export async function onboard(page: Page, handle: string, provider: 'google' | 'discord' = 'google'): Promise<Session> {
   await registerOnly(page, handle, provider);
+  // The login UI (snapdragon-login-ui eaadfce, 2026-06-12) requires a display
+  // name before "Complete registration" enables (completeBlocked()). An ASCII
+  // name also skips the conditional screen-reader-name prompt.
+  await page.getByTestId('register-display-name').fill(handle);
   await page.getByTestId('login-complete').click();
   await expect(page.getByTestId('nav-user')).toHaveText(handle);
   await expect(page.getByTestId('nav-matrix')).toBeVisible();

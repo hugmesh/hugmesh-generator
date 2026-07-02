@@ -42,16 +42,27 @@ const MASTODON_URL = process.env.MASTODON_URL || 'http://localhost:8402';
 const SVC_PW = process.env.SVC_PASSWORD || 'snapdragon-svc-pw';
 
 const idFor = (provider, handle) => `${provider}:${handle.toLowerCase()}`;
-const send = (res, code, obj) => {
+const send = (res, code, obj, extraHeaders = {}) => {
   res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*',
-    'access-control-allow-headers': 'authorization,content-type', 'access-control-allow-methods': '*' });
+    'access-control-allow-headers': 'authorization,content-type', 'access-control-allow-methods': '*',
+    ...extraHeaders });
   res.end(JSON.stringify(obj));
 };
+// Auth: bearer first (the login remote holds the token), else the HttpOnly
+// `bff_session` cookie. In production the admin remote NEVER holds a bearer —
+// it sends `credentials:'include'` and the gateway's BffCookieToBearerWebFilter
+// turns the HttpOnly `bff_` cookie into the bearer server-side. This mock
+// stands in for gateway+BFF, so that filter collapses into the cookie fallback.
 const sessionOf = (req) => {
   const h = req.headers['authorization'] || '';
-  const id = h.startsWith('Bearer ') ? sessions.get(h.slice(7)) : null;
+  let tok = h.startsWith('Bearer ') ? h.slice(7) : null;
+  if (!tok) { const m = /(?:^|;\s*)bff_session=([^;\s]+)/.exec(req.headers['cookie'] || ''); tok = m ? m[1] : null; }
+  const id = tok ? sessions.get(tok) : null;
   return id ? accounts.get(id) : null;
 };
+// The Set-Cookie leg of the production login contract (HttpOnly ⇒ invisible to
+// JS; the admin remote depends on it riding every same-origin request).
+const sessionCookie = (t) => ({ 'set-cookie': `bff_session=${t}; Path=/; HttpOnly; SameSite=Lax` });
 async function bodyOf(req) { let d=''; for await (const c of req) d+=c; return d ? JSON.parse(d) : {}; }
 
 // ── Usage analytics → ClickHouse ───────────────────────────────────
@@ -151,14 +162,14 @@ const server = http.createServer(async (req, res) => {
       if (!allowEmails.has(email)) return send(res, 403, { error: 'email not invited by an admin' });
       const a = ensureAccount('google', email); a.registrationComplete = false; // (re)start onboarding
       record(email, a.roles, 'register');
-      return send(res, 200, sessOut(newSession(a), a));
+      { const t = newSession(a); return send(res, 200, sessOut(t, a), sessionCookie(t)); }
     }
     if (req.method === 'POST' && p === '/bff/register/discord') {
       const b = await bodyOf(req); const handle = (b.username || '').toLowerCase();
       if (!allowDiscord.has(handle)) return send(res, 403, { error: 'discord username not invited by an admin' });
       const a = ensureAccount('discord', handle); a.registrationComplete = false;
       record(handle, a.roles, 'register');
-      return send(res, 200, sessOut(newSession(a), a));
+      { const t = newSession(a); return send(res, 200, sessOut(t, a), sessionCookie(t)); }
     }
 
     // ── Login: only for an existing (invited+created) Casdoor account ──
@@ -170,7 +181,7 @@ const server = http.createServer(async (req, res) => {
       const a = accounts.get(id);
       if (!a) return send(res, 401, { error: 'no account — register first' });
       record(handle, a.roles, 'login');
-      return send(res, 200, sessOut(newSession(a), a));
+      { const t = newSession(a); return send(res, 200, sessOut(t, a), sessionCookie(t)); }
     }
 
     const me = sessionOf(req);
