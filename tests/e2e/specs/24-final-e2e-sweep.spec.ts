@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { tags } from './report-tags';
 import {
   swarm, loadToken, premintReady, runConcurrently, swarmTargetsForMod,
-  assertControlAtLayers, expectSse, type LayerExpectation,
+  assertControlAtLayers, expectSse, expectObservedWithin, type LayerExpectation,
 } from './swarm-driver';
 
 // 24 — SCALED-CONCURRENT FINAL E2E SWEEP.
@@ -19,6 +19,13 @@ import {
 //   (D) the per-role action MESSAGE arrives over SSE (the live console feed).
 //   (E) DISABLED UI controls carry helptext (covered as a live-UI scenario; the
 //       gateway/bff scenarios here are headless API probes).
+//   (F) a mod's moderation is OBSERVED by a SECOND principal — the admin sees the
+//       audit row via the mod-bff audit read (read-after-write, bounded poll):
+//       the cross-observer proof of M1, not just the actor's own 2xx.
+//   (G) READ-AFTER-WRITE at concurrency — N author→observer pairs post
+//       simultaneously and each OBSERVER (a different principal) sees its
+//       author's marker within a bounded window (the concurrency-correctness
+//       proof the matrix doc deferred).
 //
 // This is the FRAMEWORK + REPRESENTATIVE SCENARIOS. The AUTHORITATIVE full matrix
 // (every action × role × layer) is docs/FINAL-E2E-SWEEP-MATRIX.md — the spec wires
@@ -104,6 +111,95 @@ test.describe('final sweep: scaled-concurrent population', () => {
     });
     const seen = await expectSse(req, SSE, token, marker, 15_000);
     expect(seen, `admin action ${marker} should appear on the per-principal SSE feed`).toBe(true);
+    await req.dispose();
+  });
+
+  // (F) M1 CROSS-OBSERVER — the mod's moderation is observed by a SECOND
+  //     principal: the mod ENACTS a ban (write), and an ADMIN (a different
+  //     token, admin ⊇ moderation per spec 16) reads the audit row back via the
+  //     mod-bff audit read within a bounded window. The write is then lifted
+  //     (cleanup) — the lift must be accepted too, so the sweep leaves no state.
+  test(`(F) a mod's moderation is OBSERVED by an admin via the audit read ${tags({ role: 'ROLE_MOD', layer: 'bff' })}`, async ({ playwright }) => {
+    test.skip(mods.length === 0 || admins.length === 0, 'needs at least one mod + one admin in this swarm sizing');
+    const req = await playwright.request.newContext({ ignoreHTTPSErrors: true });
+    const mod = mods[0];
+    const admin = admins[0];
+    const modToken = loadToken(mod);
+    const adminToken = loadToken(admin);
+    const victim = swarmTargetsForMod(mod.tierIndex, { users: users.length, mods: mods.length, admins: admins.length })[0];
+    const auditMarker = `sweep-modban-${mod.username}-${Date.now()}`;
+
+    // WRITE (as the mod): a TTL'd mastodon ban carrying our audit marker.
+    const ban = await req.post(`${BE}/bff/mod/ban`, {
+      headers: modToken ? { authorization: `Bearer ${modToken}` } : {},
+      data: { platform: 'mastodon', user: victim, reason: auditMarker, ttlSeconds: 300 },
+      failOnStatusCode: false,
+    });
+    expect(ban.ok(), `mod ban of ${victim} must be accepted (got ${ban.status()})`).toBeTruthy();
+
+    // READ-AFTER-WRITE (as the ADMIN — a different principal): the audit row
+    // appears in the mod-bff audit read within a bounded window.
+    await expectObservedWithin(req, {
+      url: `${BE}/bff/mod/actions?subject=${victim}`,
+      token: adminToken,
+      needle: auditMarker,
+      timeoutMs: 15_000,
+      label: `admin ${admin.username} observes ${mod.username}'s ban of ${victim}`,
+    });
+
+    // LIFT (cleanup) — must be accepted, so the sweep leaves no residual ban.
+    const lift = await req.delete(`${BE}/bff/mod/ban`, {
+      headers: modToken ? { authorization: `Bearer ${modToken}` } : {},
+      data: { platform: 'mastodon', user: victim, reason: auditMarker },
+      failOnStatusCode: false,
+    });
+    expect(lift.ok(), `ban lift for ${victim} must be accepted (got ${lift.status()})`).toBeTruthy();
+    await req.dispose();
+  });
+
+  // (G) READ-AFTER-WRITE AT CONCURRENCY — representative author→observer pairs
+  //     from the swarm post SIMULTANEOUSLY; each OBSERVER (a different swarm
+  //     user) must see its author's marker on the shared local timeline within
+  //     a bounded window. Green means concurrent writes are each durably
+  //     readable by OTHER principals — the correctness half of (A)'s raw
+  //     concurrency floor.
+  test(`(G) concurrent A-posts→B-sees pairs (read-after-write across principals) ${tags({ role: 'ROLE_USER', layer: 'homeserver' })}`, async ({ playwright }) => {
+    const pairCount = Math.min(Number(process.env['SWARM_RAW_PAIRS'] ?? 8), Math.floor(users.length / 2));
+    test.skip(pairCount < 2, 'needs at least 4 swarm users (2 author→observer pairs)');
+    const req = await playwright.request.newContext({ ignoreHTTPSErrors: true });
+
+    // Disjoint pairs: author = users[2i], observer = users[2i+1].
+    const pairs = Array.from({ length: pairCount }, (_, i) => ({
+      author: users[2 * i],
+      observer: users[2 * i + 1],
+      needle: `sweep-raw-${users[2 * i].username}-${Date.now()}`,
+    }));
+
+    const tasks = pairs.map((p) => async () => {
+      const authorToken = loadToken(p.author);
+      const observerToken = loadToken(p.observer);
+      // WRITE (author): a public local toot carrying the pair's marker.
+      const post = await req.post(`${BE}/api/v1/statuses`, {
+        headers: authorToken ? { authorization: `Bearer ${authorToken}` } : {},
+        data: { status: `raw pair post ${p.needle}`, visibility: 'public' },
+        failOnStatusCode: false,
+      });
+      expect(post.ok(), `${p.author.username}'s post must be accepted (got ${post.status()})`).toBeTruthy();
+      // READ (observer — a DIFFERENT principal): the marker appears on the
+      // observer's view of the local timeline within the bound.
+      await expectObservedWithin(req, {
+        url: `${BE}/api/v1/timelines/public?local=true&limit=40`,
+        token: observerToken,
+        needle: p.needle,
+        timeoutMs: 20_000,
+        label: `${p.observer.username} observes ${p.author.username}'s post`,
+      });
+    });
+
+    // All pairs act at once — the concurrency floor applies here too.
+    const { maxInFlight } = await runConcurrently(tasks);
+    const floor = Math.min(pairs.length, 4);
+    expect(maxInFlight, `expected >= ${floor} pairs in flight at once, saw ${maxInFlight} (serialized?)`).toBeGreaterThanOrEqual(floor);
     await req.dispose();
   });
 });

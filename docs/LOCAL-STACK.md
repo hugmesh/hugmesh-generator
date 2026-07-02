@@ -160,6 +160,63 @@ only the gateways are ingress-exposed.
 
 ---
 
+## Seeding the e2e fixtures — `tests/stack/seed-e2e.sh`
+
+The UI e2e suites assume a set of personas/rooms/relationships exists. Against a
+**running** stack (front door `http://localhost:8088`, Casdoor
+`http://localhost:8000`, social tier up — `make stack-up SOCIAL=1` or, for the
+full Synapse/Mastodon first-run setup, `tests/stack/up-real.sh`), run:
+
+```bash
+tests/stack/seed-e2e.sh
+```
+
+It provisions (reusing `tests/qemu/seed-accounts.sh --roles` + its Casdoor apply
+hook — the same machinery the cluster/pentest seeds use):
+
+1. **Personas** (Casdoor org `snapdragon`): the standard matrix
+   (`e2e-user`/`e2e-mod`/`e2e-admin`/…) **plus** `e2e-superadmin`, `e2e-banned`
+   (ban = the **absence** of the platform access roles — seeded as the post-ban
+   state) and the domain-locked pair (`e2e-*-domainlocked` — lock = the
+   **presence** of the marker role). Because the compose Casdoor boots **empty**,
+   the script first creates the org + the `ROLE_*` objects, then applies users +
+   role members and pre-mints per-persona JWTs into `tests/stack/.seed-e2e/jwt-cache`
+   (usable as `SNAP_PREMINT_DIR`). Default admin creds are the fresh-casdoor dev
+   default (`admin`/`123`) — override `CASDOOR_ADMIN_PASS` otherwise.
+2. **Matrix (Synapse)**: users `e2e-mod` + `e2e-user`; **public room X**
+   (`#e2e-public-x:localhost`) and **invite-only room Y** (`#e2e-invite-y:localhost`,
+   `e2e-user` invited; verified `join_rule=invite`).
+3. **Mastodon**: accounts `e2e-usera` + `e2e-userb`; follower relationship
+   **`e2e-userb` → `e2e-usera`**; **one pending moderation-queue item** (an
+   unresolved report of `e2e-usera` filed by `e2e-userb`).
+
+The script is **idempotent** (probe-before-create everywhere; safe to re-run)
+and **fail-honest**: every unmet dependency dies with a message naming it (which
+service, which bring-up command) — it never prints success for something it did
+not verify.
+
+### What remains UNVERIFIABLE on compose (honest limitations)
+
+- **Second tenant**: the standard compose stack runs a **single** Casdoor, so the
+  `e2e-tenant2-user` persona / cross-tenant brand-wall scenarios cannot be modeled
+  here. The script WARNs loudly (fatal with `SEED_STRICT=1`); set
+  `CASDOOR_BRAND_B_URL` (e.g. the pentest two-brand profile) to seed it for real.
+- **pleroma-admin-only verbs**: the compose social tier is **mainline Synapse +
+  Mastodon**, not prod tuwunel + Akkoma. mod-bff actions wired to the
+  pleroma-admin API (block/ban Akkoma leg: `PATCH /api/v1/pleroma/admin/users/
+  deactivate`, `DELETE /api/v1/pleroma/admin/instances/{host}`) will 404 upstream —
+  suites must assert the bff's **honest DEGRADED envelope** here, never a fake
+  success. The mod-bff **Matrix block leg is STUBBED BY DESIGN** everywhere
+  (tuwunel has no REST admin API) — it returns an honest 202/STUBBED envelope,
+  never "OK".
+- **Domain-lock enforcement**: the Akkoma `ForceLocalForUsers` MRF + the egress
+  backstop do not exist on mainline Mastodon/compose, so the non-federation specs
+  (`tests/e2e/specs/19-23`) stay honestly **skipped** here (`SNAP_FEDERATION_PEER`
+  / `SNAP_DOMAINLOCK_ENABLED` unset). The domain-locked **personas** are still
+  seeded so the UI surfaces (role badges, disabled+helptext controls) render.
+
+---
+
 ## How it maps to the cluster
 
 | compose service | image / build | k8s source |

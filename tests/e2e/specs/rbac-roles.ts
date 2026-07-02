@@ -311,7 +311,10 @@ export function generateSwarm(
 
 /** Which users a given mod moderates (deterministic, non-overlapping blocks) —
  *  shared by the seed + the sweep so "mod m moderates users below it" is exact. */
-export function swarmTargetsForMod(modIndex: number, counts = SWARM_DEFAULTS): string[] {
+export function swarmTargetsForMod(
+  modIndex: number,
+  counts: { users: number; mods: number; admins: number } = SWARM_DEFAULTS,
+): string[] {
   const perMod = Math.ceil(counts.users / counts.mods);
   const start = modIndex * perMod;
   const end = Math.min(start + perMod, counts.users);

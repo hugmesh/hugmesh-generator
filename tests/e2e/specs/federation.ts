@@ -59,6 +59,29 @@ export async function postLocalStatus(
   return (await r.json()).id;
 }
 
+/** private-visibility variant of postLocalStatus — a followers-only toot. Used
+ *  by the scoped-visibility non-federation rows: the MRF must keep even a
+ *  followers-only delivery local when the actor has REMOTE followers. */
+export async function postLocalPrivateStatus(
+  req: APIRequestContext,
+  token: string,
+  text: string,
+): Promise<string> {
+  return postLocalStatus(req, token, text, 'private');
+}
+
+/** direct-visibility variant of postLocalStatus — a DM. `recipientAcct` is
+ *  mentioned so the delivery has a concrete target (a direct toot with no
+ *  mention has no recipient and would prove nothing). */
+export async function postLocalDirectStatus(
+  req: APIRequestContext,
+  token: string,
+  text: string,
+  recipientAcct: string,
+): Promise<string> {
+  return postLocalStatus(req, token, `@${recipientAcct} ${text}`, 'direct');
+}
+
 /** Have a follower account ON THE PEER follow `localAcct` (e.g. user@mastodon.
  *  snapdragon.systems) so the local user's public posts have a remote delivery
  *  target. Uses the peer's Mastodon-compatible search+follow API. Returns true if
@@ -125,6 +148,52 @@ export async function peerSawStatus(
     await new Promise((res) => setTimeout(res, 2_000));
   }
   return false;
+}
+
+/** Assert an observer does NOT see `needle` — a BOUNDED negative probe. It
+ *  watches `url` (as `token`) for the FULL `windowMs` window and FAILS the
+ *  moment the marker appears; only after the whole window elapses without a
+ *  sighting does it pass. windowMs must be >= the positive-control delivery
+ *  time (spec 22's clock) or the negative proves nothing — pass the SAME bound
+ *  the positive control was observed under. */
+export async function assertObserverNeverSees(
+  req: APIRequestContext,
+  opts: { url: string; token: string; needle: string; windowMs: number; label: string },
+): Promise<void> {
+  const deadline = Date.now() + opts.windowMs;
+  while (Date.now() < deadline) {
+    const r = await req.get(opts.url, {
+      headers: opts.token ? { authorization: `Bearer ${opts.token}` } : {},
+      failOnStatusCode: false,
+    });
+    if (r.ok()) {
+      const body = await r.text();
+      expect(
+        body.includes(opts.needle),
+        `${opts.label}: marker ${opts.needle} MUST NOT appear at ${opts.url} — but it did`,
+      ).toBe(false);
+    }
+    await new Promise((res) => setTimeout(res, 2_000));
+  }
+}
+
+/** Assert the PEER never received `needle` from `fromAcct` — the peer-side
+ *  negative observation (same probes as peerSawStatus, full-window watch).
+ *  Only meaningful next to the spec-22 positive control: a green here plus a
+ *  green control means "federation works AND this delivery was withheld". */
+export async function expectPeerNeverSaw(
+  req: APIRequestContext,
+  peerToken: string,
+  fromAcct: string,
+  needle: string,
+  windowMs = 30_000,
+): Promise<void> {
+  const reached = await peerSawStatus(req, peerToken, fromAcct, needle, windowMs);
+  expect(
+    reached,
+    `marker ${needle} from ${fromAcct} MUST NOT reach the peer ${PEER_BASE} `
+    + `(watched the full ${windowMs}ms window; positive control = spec 22)`,
+  ).toBe(false);
 }
 
 /** A unique per-run marker so a post is unmistakably THIS run's (no false match

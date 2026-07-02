@@ -51,7 +51,7 @@ serializes (correct results, one at a time) **FAILS** — concurrency is contrac
 
 | # | action | casdoor | gateway | bff | homeserver | egress | ui | sse | status |
 |---|---|---|---|---|---|---|---|---|---|
-| M1 | moderate an assigned user (akkoma admin) | claim=ROLE_MOD | ALLOW | ALLOW | effect applied | — | panel shown | action msg | **WIRED** (B/C) |
+| M1 | moderate an assigned user (akkoma admin) | claim=ROLE_MOD | ALLOW | ALLOW | effect applied | — | panel shown | action msg | **WIRED** (B/C; F: cross-observer — an ADMIN reads the mod's audit row back via `/bff/mod/actions`, bounded read-after-write) |
 | M2 | reach `/api/admin/**` (snapdragon admin) | — | **DENY** | **DENY** | — | — | hidden | deny msg | **WIRED** (B/C negative) |
 | M3 | reach `/bff/admin/**` | — | **DENY** | **DENY** | — | — | hidden | deny msg | **WIRED** (B/C negative) |
 | M4 | moderate an ADMIN or a peer mod | — | DENY (out of block) | DENY | no effect | — | disabled + helptext | deny msg | **DOC** (sibling rule under load; block scoping is M1's inverse) |
@@ -76,6 +76,8 @@ serializes (correct results, one at a time) **FAILS** — concurrency is contrac
 | X3 | domain-locked user → toot/boost/announce does NOT federate; control DOES | homeserver+egress | **WIRED** (specs 19/20/21/22) |
 | X4 | pending (no roles, registration incomplete) → denied every user surface | gateway+ui | **DOC** (spec 17/18) |
 | X5 | every DISABLED UI control carries helptext (why-denied) | ui | **DOC** stub (E) — primitive `assertDisabledHasHelptext` ready; activates with the role-conditional host shell |
+| X6 | domain-lock × mod-ban interaction: a domain-locked user banned by its mod — ban applies LOCALLY (post attempt rejected), NOTHING about the ban federates to the peer, and after the lift local posting recovers while the lock persists (independent axes) | bff+homeserver+egress | **WIRED** (spec 23; peer-gated like specs 19–22, positive control = spec 22) |
+| X7 | read-after-write across principals AT CONCURRENCY: N author→observer pairs post simultaneously; each OBSERVER (a different principal) sees its author's marker within a bounded window | homeserver | **WIRED** (G — `expectObservedWithin`, concurrency floor asserted) |
 
 ## Cross-realm authz matrix — systems × games × forum (spec 26)
 

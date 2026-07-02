@@ -121,6 +121,38 @@ export async function assertControlAtLayers(
 }
 
 /**
+ * READ-AFTER-WRITE cross-principal observation: assert `needle` appears in the
+ * OBSERVER's view of `url` (polled as the observer's token) within `timeoutMs`.
+ * This is the expect.poll-style bounded wait for "A wrote X → B sees X" — the
+ * observer is a DIFFERENT principal than the writer, so a green proves the
+ * write propagated across principals, not that the writer read its own cache.
+ * Bounded retries only — never an unbounded wait, never a bare sleep-and-hope.
+ */
+export async function expectObservedWithin(
+  req: APIRequestContext,
+  opts: { url: string; token: string; needle: string; timeoutMs?: number; label: string },
+): Promise<void> {
+  const timeoutMs = opts.timeoutMs ?? 15_000;
+  await expect
+    .poll(
+      async () => {
+        const r = await req.get(opts.url, {
+          headers: opts.token ? { authorization: `Bearer ${opts.token}` } : {},
+          failOnStatusCode: false,
+        });
+        if (!r.ok()) return false;
+        return (await r.text()).includes(opts.needle);
+      },
+      {
+        message: `${opts.label}: marker ${opts.needle} should appear in the observer's view of ${opts.url} within ${timeoutMs}ms`,
+        timeout: timeoutMs,
+        intervals: [500, 1_000, 2_000],
+      },
+    )
+    .toBe(true);
+}
+
+/**
  * Assert the acting principal receives its per-role action message over SSE. The
  * console exposes a per-principal event stream; after an action we expect an event
  * whose payload mentions `actionMarker`. Best-effort connect with a timeout; the

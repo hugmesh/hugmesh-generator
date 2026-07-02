@@ -33,6 +33,9 @@ const GW_BASE: Record<Gateway, string> = {
   'snapdragon-fe-gateway': process.env.FE_GATEWAY_URL || process.env.SNAP_BASE_URL || 'https://localhost:8443',
   'snapdragon-be-gateway': process.env.BE_GATEWAY_URL || 'https://api.localhost:8443',
   'snapdragon-pki-gateway': process.env.PKI_GATEWAY_URL || 'https://id.localhost:8443',
+  // Tailnet-only; probed by spec 25 (its own LIVE describe), listed here only so
+  // the Gateway record is total — spec 14's LIVE_PROBES never target it.
+  'snapdragon-superadmin-gateway': process.env.SUPERADMIN_GATEWAY_URL || 'https://superadmin.localhost:8443',
 };
 
 /** Real Casdoor password-grant for a seed user; returns the access token whose
