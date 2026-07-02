@@ -18,14 +18,24 @@
 #   ROLE_FORUM (non-admin, non-mod)    -> REGISTERED
 #   (none, non-admin)                  -> removed from all forum-managed groups
 #
-# STUB-AWARE: honors FORUM_EXTERNAL_ENABLED (mirrors forum-bff external.forum.enabled,
-# default false). When disabled it logs the would-be assignments + exits 0 (never
+# STUB-AWARE: honors FORUM_EXTERNAL_ENABLED (default false = DARK). The forum-bff /
+# admin-bff phpBB legs were flipped ON (PR #164, extension live smoke 2026-06-23), but
+# THIS job stays dark until one thing this repo cannot verify offline is live-proven:
+# that a Casdoor CLIENT-CREDENTIALS token carries admin authority through the
+# extension's server-side re-derivation (roles[]/permissions[]/isAdmin claims on an app
+# token — the extension fails closed with 403 if the minted token maps to no
+# ROLE_ADMIN). When disabled it logs the would-be assignments + exits 0 (never
 # crash-loops); the ROLE_ADMIN provisioning invariant is still attempted so a
-# freshly-synced cluster has admins. Flip true once the extension is live.
+# freshly-synced cluster has admins. Flip true after that on-cluster validation.
 #
-# !!! The Casdoor membership API shape + the extension admin endpoint contract are
-# !!! deploy-specific. This is a working scaffold — validate the endpoints +
-# !!! payloads against the deployed snapdragon/json-api before production.
+# ENDPOINT CONTRACT (pinned to the SHIPPED snapdragon/json-api extension —
+# config/routing.yml + admin_controller.php):
+#   PUT /api/v1/snapdragon/users/{sub}/groups   (ROLE_ADMIN)
+#   body GroupAssignment { casdoorSubject, group, roles[], lastSynced } -> 204.
+# converge_groups_for_sub() lazily ENSURES the user, so no separate ensure call is
+# needed. Auth = Casdoor JWT sent as BOTH `Authorization: Bearer` AND
+# `X-Snapdragon-JWT` (the extension enforces dual-header agreement when both are
+# present, and apache only passes Authorization through via CGIPassAuth).
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -40,9 +50,20 @@ data:
     extension admin endpoints. Pure stdlib (urllib) — no extra packages.
 
     DECLARATIVE de-provisioning: computes the target group per subject, then has
-    the extension converge (setUserGroups removes any forum-managed group not in
-    the target). ROLE_ADMIN -> ADMINISTRATORS is enforced every tick."""
-    import json, os, base64, urllib.request, urllib.error
+    the extension converge — PUT /api/v1/snapdragon/users/{sub}/groups
+    (GroupAssignment{casdoorSubject,group,roles,lastSynced} -> 204; the SHIPPED
+    snapdragon/json-api contract, config/routing.yml + admin_controller.php).
+    converge_groups_for_sub() lazily ensures the user and REMOVES any
+    forum-managed group not in the target. ROLE_ADMIN -> ADMINISTRATORS is
+    enforced every tick.
+
+    AUTH: the extension is fail-closed JWT-only. This job mints a Casdoor
+    client-credentials token and sends it as BOTH `Authorization: Bearer` and
+    `X-Snapdragon-JWT` (dual-header agreement). Whether that app token carries
+    admin authority through the extension's server-side re-derivation is the
+    open on-cluster validation gating FORUM_EXTERNAL_ENABLED (see the manifest
+    header)."""
+    import datetime, json, os, base64, urllib.parse, urllib.request, urllib.error
 
     CASDOOR  = os.environ.get("CASDOOR_URL", "http://casdoor.snapdragon-pki.svc.cluster.local:8000")
     ORG      = os.environ.get("CASDOOR_ORG", "snapdragon")
@@ -63,13 +84,30 @@ data:
         with urllib.request.urlopen(req, timeout=15) as r:
             return json.loads(r.read() or "{}")
 
-    def _post(url, body, headers=None):
+    def _send(url, body, method="POST", headers=None):
         data = json.dumps(body).encode()
         h = {"Content-Type": "application/json"}
         h.update(headers or {})
-        req = urllib.request.Request(url, data=data, headers=h, method="POST")
+        req = urllib.request.Request(url, data=data, headers=h, method=method)
         with urllib.request.urlopen(req, timeout=20) as r:
             return r.status
+
+    def mint_token():
+        """Casdoor client-credentials grant -> a Casdoor-signed JWT for this app.
+        The extension validates it against the SAME issuer/JWKS as user tokens."""
+        form = urllib.parse.urlencode({
+            "grant_type":    "client_credentials",
+            "client_id":     CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+        }).encode()
+        req = urllib.request.Request(
+            f"{CASDOOR}/api/login/oauth/access_token", data=form,
+            headers={"Content-Type": "application/x-www-form-urlencoded"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            tok = json.loads(r.read() or "{}").get("access_token") or ""
+        if not tok:
+            raise RuntimeError("Casdoor returned no access_token (client_credentials)")
+        return tok
 
     def casdoor_members(role):
         token = CLIENT_ID + ":" + CLIENT_SECRET
@@ -82,27 +120,40 @@ data:
         # Casdoor returns org/sub; the extension keys phpBB users by Casdoor sub.
         return [u.split("/")[-1] for u in users]
 
-    # Build the target group per subject (strongest role wins).
+    # Build the target (group, source role) per subject (strongest role wins).
     target = {}
     for role, group in ROLE_GROUP:
         for sub in casdoor_members(role):
             if sub not in target:           # first (strongest) role wins
-                target[sub] = group
+                target[sub] = (group, role)
 
     if not ENABLED:
         print(f"forum-admin-sync: FORUM_EXTERNAL_ENABLED=false (stub) — would converge "
               f"{len(target)} subject(s); ROLE_ADMIN provisioning still attempted")
 
+    # The extension is fail-closed JWT-only: without a token every write is 401,
+    # so mint once up front. Fail-SOFT (exit 0, never crash-loop): a dead Casdoor
+    # must not wedge the PostSync hook.
+    try:
+        jwt = mint_token()
+        auth_headers = {"Authorization": "Bearer " + jwt, "X-Snapdragon-JWT": jwt}
+    except Exception as e:
+        print(f"forum-admin-sync: WARN cannot mint Casdoor client-credentials token ({e}) "
+              f"— skipping all phpBB writes this tick")
+        raise SystemExit(0)
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     applied = 0
-    for sub, group in target.items():
+    for sub, (group, role) in target.items():
         # ROLE_ADMIN invariant runs even when the stub is off; other writes only
-        # when enabled. The extension's setUserGroups is DECLARATIVE: it ensures the
-        # user, sets exactly {group}, and REMOVES any other forum-managed group.
+        # when enabled. PUT /users/{sub}/groups is DECLARATIVE: it lazily ensures
+        # the user, sets exactly {group}, and REMOVES any other forum-managed group.
         if not ENABLED and group != "ADMINISTRATORS":
             continue
         try:
-            _post(f"{PHPBB}/api/v1/snapdragon/admin/users/{sub}/groups",
-                  {"groups": [group], "declarative": True})
+            _send(f"{PHPBB}/api/v1/snapdragon/users/{urllib.parse.quote(sub, safe='')}/groups",
+                  {"casdoorSubject": sub, "group": group, "roles": [role], "lastSynced": now},
+                  method="PUT", headers=auth_headers)
             applied += 1
         except Exception as e:
             print(f"  WARN setUserGroups {sub} -> {group}: {e}")
@@ -140,8 +191,11 @@ spec:
             - { name: CASDOOR_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000" }
             - { name: CASDOOR_ORG, value: "snapdragon" }
             - { name: PHPBB_API,   value: "http://phpbb.snapdragon-forum.svc.cluster.local:80" }
-            # Mirrors forum-bff external.forum.enabled — default false (stub) until
-            # the snapdragon/json-api extension shape is pinned + validated.
+            # DARK (false) — the endpoint contract is pinned to the shipped
+            # extension, but flipping this needs the on-cluster proof that a
+            # Casdoor client-credentials token re-derives ROLE_ADMIN in the
+            # extension (see the manifest header). forum-bff/admin-bff's own
+            # phpBB legs are already ON (PR #164).
             - { name: FORUM_EXTERNAL_ENABLED, value: "false" }
           securityContext:
             allowPrivilegeEscalation: false
@@ -193,6 +247,8 @@ spec:
                 - { name: CASDOOR_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000" }
                 - { name: CASDOOR_ORG, value: "snapdragon" }
                 - { name: PHPBB_API,   value: "http://phpbb.snapdragon-forum.svc.cluster.local:80" }
+                # DARK — same gate as the PostSync Job above (client-credentials
+                # admin-authority proof pending; contract itself is pinned).
                 - { name: FORUM_EXTERNAL_ENABLED, value: "false" }
               securityContext:
                 allowPrivilegeEscalation: false

@@ -5,10 +5,11 @@
 # 30-tier as the akkoma/tuwunel homeservers.
 #
 # DEPLOY ORDERING: this app (phpBB + its DB + the netpol + ESO secrets) lands
-# BEFORE forum-bff-api is pointed at it (39-forum-bff-api). forum-bff boots clean
-# with EXTERNAL_FORUM_ENABLED=false against a stub, so there is no hard ordering
-# dependency at first boot; flip the stub true only after the json-api extension is
-# validated on-cluster. CreateNamespace=true provisions snapdragon-forum.
+# BEFORE forum-bff-api is pointed at it (39-forum-bff-api). forum-bff's phpBB legs
+# (PHPBB_ENABLED + EXTERNAL_FORUM_ENABLED) are ON since PR #164 (json-api extension
+# live-proven 2026-06-23); it still degrades gracefully (typed degraded envelopes)
+# while phpbb is coming up, so there is no hard ordering dependency at first boot.
+# CreateNamespace=true provisions snapdragon-forum.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

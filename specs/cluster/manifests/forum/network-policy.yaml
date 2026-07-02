@@ -19,9 +19,12 @@
 # policy in the namespace.
 #
 # DEPLOY ORDERING: this policy + the phpbb/phpbb-db Deployments ship together
-# (apps/30-phpbb). forum-bff-api boots with external.forum.enabled=false against a
-# stub, so forum-bff does not hard-depend on phpbb being reachable at first boot;
-# flip external.forum.enabled=true only after the extension is validated on-cluster.
+# (apps/30-phpbb). forum-bff-api's phpBB legs (PHPBB_ENABLED + EXTERNAL_FORUM_ENABLED)
+# are ON since PR #164 (extension live-proven 2026-06-23); forum-bff still degrades
+# gracefully (typed degraded envelopes, never 5xx storms) if phpbb is briefly
+# unreachable, so there is no hard boot-order dependency. Only the forum-admin-sync
+# Job keeps its FORUM_EXTERNAL_ENABLED=false stub (see admin-sync-job.yaml —
+# client-credentials admin-authority proof pending).
 ---
 # ── default-deny ALL ingress in snapdragon-forum ───────────────────────────────
 # Selects every pod (podSelector: {}). With no `ingress:` rules, all ingress is

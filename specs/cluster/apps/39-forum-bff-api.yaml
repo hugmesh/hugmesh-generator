@@ -5,9 +5,11 @@
 # forum_user_role / forum_action tables in forum-bff-db.
 #
 # DEPLOY ORDERING: lands AFTER forum-bff-db (38) + phpBB (30) + its mTLS/db ESO
-# secrets. It boots clean with EXTERNAL_FORUM_ENABLED=false (stub-seam) even if the
-# json-api extension is not yet live; flip the stub true once validated. Deploy
-# with the gateway/BFF client-cert mTLS wave (SSL_CLIENT_AUTH=need).
+# secrets. Its phpBB legs (PHPBB_ENABLED + EXTERNAL_FORUM_ENABLED) are ON since
+# PR #164 (json-api extension live-proven 2026-06-23); the stub-seam remains the
+# graceful-degradation path (typed degraded envelopes) if phpBB is unreachable, so
+# boot order stays soft. Deploy with the gateway/BFF client-cert mTLS wave
+# (SSL_CLIENT_AUTH=need).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
