@@ -88,6 +88,11 @@ for t in qemu-system-aarch64 mkfs.ext4 mkfs.vfat ssh ssh-keygen truncate; do
 done
 
 # ── Locate artifacts ───────────────────────────────────────────────
+# Absolutize user-supplied paths: helpers (make-test-keys.sh) and long-running
+# subshells must not depend on the invocation cwd for relative -w/--stage4.
+WORK_DIR="$(readlink -f "${WORK_DIR}")"
+[ -n "${STAGE4}" ] && STAGE4="$(readlink -f "${STAGE4}")"
+[ -n "${KERNEL}" ] && KERNEL="$(readlink -f "${KERNEL}")"
 [ -n "${TEST_DIR}" ] || TEST_DIR="${WORK_DIR}/qemu-test"
 if [ -z "${KERNEL}" ]; then
     # Per-arch build subdir first (snap-build-pi5); bare paths kept as a fallback
@@ -103,6 +108,12 @@ fi
 [ -n "${KERNEL}" ] && [ -f "${KERNEL}" ] || die "kernel Image not found (pass --kernel). Did you build without --skip-kernel?"
 if [ -z "${STAGE4}" ]; then
     STAGE4="$(ls -1t "${WORK_DIR}"/stage4-*-"${ROLE}"-k8s-*.tar.xz 2>/dev/null | head -1 || true)"
+    # Current builder naming: snapdragon-rpi5-arm64-<role>-<env>-<ts>.stage4.tar.xz
+    # (also look one level up: images land in the -w parent, sysroot in <work>).
+    for d in "${WORK_DIR}" "${WORK_DIR}/.."; do
+        [ -n "${STAGE4}" ] && break
+        STAGE4="$(ls -1t "${d}"/*-"${ROLE}"-*.stage4.tar.xz 2>/dev/null | head -1 || true)"
+    done
     [ -n "${STAGE4}" ] || STAGE4="$(ls -1t "${WORK_DIR}"/stage4-*.tar.xz 2>/dev/null | head -1 || true)"
 fi
 [ -n "${STAGE4}" ] && [ -f "${STAGE4}" ] || die "stage4 tarball not found (pass --stage4)."
@@ -198,7 +209,7 @@ systemd.unified_cgroup_hierarchy=1 slab_nomerge"
 
 qemu-system-aarch64 \
     -machine "${QEMU_MACHINE}" -cpu "${QEMU_CPU}" -smp "${SMP}" -m "${MEM}" \
-    -nographic -no-reboot \
+    -display none -no-reboot \
     -kernel "${KERNEL}" -append "${CMDLINE}" \
     -drive file="${ROOTFS}",format=raw,if=none,id=hd0 -device virtio-blk-pci,drive=hd0 \
     -drive file="${KEYSIMG}",format=raw,if=none,id=keys0 -device virtio-blk-pci,drive=keys0 \

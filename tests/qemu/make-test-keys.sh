@@ -17,6 +17,9 @@ command -v mkfs.vfat >/dev/null || { echo "ERROR: need mkfs.vfat (sys-fs/dosfsto
 
 rm -f "${OUT}"
 truncate -s "${SIZE_MB}M" "${OUT}"
+# Absolutize before the populate step below cd's into ${SRC} — a relative
+# <out-image> (e.g. from run-qemu-test.sh -w out/...) breaks mcopy otherwise.
+OUT="$(readlink -f "${OUT}")"
 mkfs.vfat -F 32 -n "${LABEL}" "${OUT}" >/dev/null
 
 if command -v mcopy >/dev/null 2>&1; then
