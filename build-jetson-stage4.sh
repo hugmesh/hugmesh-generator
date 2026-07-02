@@ -1,0 +1,1221 @@
+#!/usr/bin/env bash
+# Build a hardened Gentoo aarch64 image for the NVIDIA Jetson Orin family
+# (Tegra234 — Orin Nano / Orin NX developer kits) using the same crossdev
+# toolchain + shared mesh/provisioning plumbing as the Pi5/Frite/x86 images.
+#
+# ############################################################################
+# ##  STATUS: EXPERIMENTAL — HARDWARE VALIDATION PENDING                    ##
+# ##  The build flow mirrors the PROVEN RPi5/Frite cross path and passes    ##
+# ##  every static/dry-run check (--print-plan, bash -n, arg matrix), but   ##
+# ##  no physical Orin has booted an image from this builder yet. See       ##
+# ##  specs-jetson/README.md before treating any artifact as shippable.    ##
+# ############################################################################
+#
+# WHY a separate builder (not a flag on build-rpi5-stage4.sh): the Orin boots a
+# fundamentally different chain — NVIDIA UEFI (edk2-nvidia) in QSPI-NOR distro-
+# booting /boot/extlinux/extlinux.conf off the root filesystem. There is NO
+# raspberrypi-firmware, NO config.txt, and NO u-boot to vendor (the Frite's
+# problem); the QSPI firmware is updated out-of-band (recovery-mode tegraflash —
+# see specs-jetson/installer/TEGRAFLASH.md). It is also a different PURPOSE mix:
+# an arm64 EDGE-AI node family (plus a desktop variant), not a lean GXL desktop.
+#
+# ROLES (--role):
+#   edge_ai  (DEFAULT, the headline) — GPU inference k8s worker: joins the mesh
+#            + cluster and hosts the arch-portable `edge-ai` service (Ollama,
+#            OpenAI-compatible /v1) exactly like the x86 RTX host.
+#   gpu-host — GPU k8s worker WITHOUT the inference service (be+gpu analogue).
+#   full     — full-stack single node (pki+backend+frontend+gpu on one Orin;
+#            the omnibus analogue: headscale control plane + kubeadm init).
+#   desktop  — arm64 client desktop (lean LXDE; mesh client, no k8s).
+#
+# KERNEL DECISION (--kernel-flavor, see specs-jetson/kernel/README.md):
+#   mainline (DEFAULT, the buildable route): gentoo-sources arm64 + the Tegra234
+#            DT fragments. Boots headless-node hardware; NO CUDA (the GA10B iGPU
+#            needs NVIDIA's nvgpu) — the edge-ai service runs CPU-only until the
+#            node moves to the L4T stack.
+#   l4t      (STUBBED): NVIDIA's L4T/BSP kernel + CUDA userspace. EULA-gated
+#            downloads — documented, not automated; the builder exits with a
+#            hard error pointing at specs-jetson/installer/TEGRAFLASH.md.
+#
+# This image JOINS THE TAILSCALE MESH exactly like the other node images: same
+# shared specs/ provisioning engine (keys-provision), same headscale/tailscale
+# static arm64 binaries, same hardened key-only sshd, same device-license
+# registry posture. Cluster roles bake the SAME shared specs/cluster GitOps
+# tree the rpi5/x86 node builders bake (the edge-ai manifests are arch-portable).
+#
+# Run as root (sudo): the cross-emerge merges into the sysroot's vdb and writes
+# the host emerge log/cache (fakeroot is NOT enough). --print-plan needs NO root.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SPECS_DIR="${SCRIPT_DIR}/specs-jetson"   # aarch64/Tegra-specific specs
+SHARED_SPECS="${SCRIPT_DIR}/specs"       # arch-agnostic specs (mesh, provisioning, sshd, cluster)
+
+# Supply-chain download verification (OWASP) — same shared helper as the other
+# builders so the stage3/headscale/tailscale fetches are GPG/checksum-verified.
+# shellcheck source=scripts/_download-lib.sh
+source "${SCRIPT_DIR}/scripts/_download-lib.sh"
+
+WORK_DIR=""
+BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-jetson}"  # per-arch isolation (never shares the Pi/Frite/x86 sysroot)
+CROSS_TARGET="aarch64-unknown-linux-gnu"
+REL_VERSION="2026.0"
+
+# ── BOARD TABLE ────────────────────────────────────────────────────
+# Selected by --board. Fills the GCC CPU + the mainline board DTB. The Orin Nano
+# Super Developer Kit (the target hardware) is the default; the NX modules share
+# the same carrier + flow and are listed for completeness (untested).
+JETSON_BOARD="orin-nano"                 # orin-nano | orin-nano-4gb | orin-nx-8gb | orin-nx-16gb
+JETSON_DEFCONFIG="defconfig"             # generic arm64 mainline defconfig
+JETSON_KERNEL_IMG="Image"
+KERNEL_FLAVOR="mainline"                 # mainline (buildable) | l4t (stubbed; documented)
+# Board-derived values. Empty here; select_board() fills any the operator did
+# NOT override on the CLI (explicit --cpu/--dtb always wins regardless of order).
+RPI_CPU=""                               # Orin CPUs are Cortex-A78AE
+JETSON_DTB=""
+JETSON_BOARD_DESC=""
+
+JOBS="$(nproc)"
+SKIP_KERNEL=false
+SKIP_CLEAN=false
+RESUME=false
+IMAGE_ONLY=false          # skip Phase 1-3 entirely; go straight to image assembly
+
+ROLE="edge_ai"                           # edge_ai (DEFAULT) | gpu-host | full | desktop
+DESKTOP="none"                           # derived: 'light' for --role desktop, else none
+BUILD_IMG=true                           # produce the flashable raw .img (SD/NVMe); stage4 always emitted
+ROOT_MiB=0                               # 0 = role default (set below); --img-size overrides
+IMG_SIZE_SET=false
+GROW_POLICY="fill"
+COMPRESS_IMG=false
+EXTRA_PACKAGES=""
+TIMEZONE="UTC"
+HOSTNAME=""
+CLUSTER_DOMAIN="snapdragon.systems"
+BRAND="snapdragon"
+BRAND_TITLE="Snapdragon Systems"
+ORG="Snapdragon-Systems"
+# ENV (test|prod) selector — same semantics as the cluster builders: it shapes
+# branding/creds and gates the baked cluster tree's env apps posture.
+ENV="test"
+CONFIG_FILE=""
+DEFAULT_USER="jetson"
+# NO baked default password (fleet OWASP posture): real creds come from the KEYS
+# USB; a keyless first boot mints a random one-time password + locks root.
+
+# ── Radio attack surface (DISABLED BY DEFAULT — hardened posture) ──
+ENABLE_WIFI="${ENABLE_WIFI:-false}"
+ENABLE_BLUETOOTH="${ENABLE_BLUETOOTH:-false}"
+# Root SSH login DISABLED by default (hardened); opt back in with --permit-root-login.
+PERMIT_ROOT_LOGIN="${PERMIT_ROOT_LOGIN:-no}"
+# glibc arm64 stage3 seed ON PURPOSE (not musl): the CUDA-on-Tegra userspace —
+# the whole point of the L4T flavor this platform is headed for — links glibc.
+SEED_STAGE3_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/latest-stage3-arm64-openrc.txt"
+DLV_OFFLINE_KEYRING="${DLV_OFFLINE_KEYRING:-${SCRIPT_DIR}/scripts/gentoo-release-key.asc}"
+
+# Mesh VPN (installed as upstream static arm64 binaries, not emerged) — IDENTICAL
+# to the Pi5/Frite images so the Orin joins the same headscale/tailscale mesh.
+HEADSCALE_VERSION="0.23.0"
+TAILSCALE_VERSION="1.78.1"
+SKIP_MESH=false
+SKIP_TAILSCALE=false
+
+# --print-plan: resolve + validate everything, print the machine-greppable build
+# plan (one PLAN_KEY=VALUE per line) and exit 0 BEFORE any mutation (no root, no
+# disk writes, no network). The CLI/make/menu/Studio channels + the build-matrix
+# harness (tests/build-matrix/check.sh) verify every role/flag combo through it.
+PRINT_PLAN=false
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[0;33m'
+BOLD='\033[1m'; RESET='\033[0m'
+banner() { echo -e "\n${CYAN}${BOLD}==> $1${RESET}"; }
+info()   { echo -e "${GREEN}    $1${RESET}"; }
+warn()   { echo -e "${YELLOW}    WARNING: $1${RESET}"; }
+err()    { echo -e "${RED}    ERROR: $1${RESET}" >&2; }
+
+usage() {
+cat <<'MANEOF'
+NAME
+    build-jetson-stage4.sh - Build a hardened Gentoo aarch64 image for the
+    NVIDIA Jetson Orin family (Tegra234) — the arm64 edge-AI node platform —
+    joined to the Snapdragon Tailscale mesh. EXPERIMENTAL (hardware validation
+    pending; see specs-jetson/README.md).
+
+SYNOPSIS
+    build-jetson-stage4.sh [OPTIONS]
+
+DESCRIPTION
+    Cross-compiles a hardened Gentoo image for the Jetson Orin Nano/NX devkits,
+    reusing the aarch64 cross path, the SHARED mesh + KEYS-USB provisioning
+    engine, and (for cluster roles) the SHARED specs/cluster GitOps tree — the
+    edge-ai inference service manifests are arch-portable, so the same `edge_ai`
+    role that runs on the x86 RTX host runs here.
+
+OPTIONS
+  Role
+    -r, --role ROLE     edge_ai (DEFAULT, the headline: GPU inference k8s worker
+                        + the edge-ai service) | gpu-host (GPU k8s worker, no
+                        inference service) | full (full-stack single node:
+                        headscale control plane + kubeadm init + all namespaces)
+                        | desktop (arm64 client desktop; mesh, no k8s).
+
+  Board / kernel
+    --board NAME        orin-nano (DEFAULT: Orin Nano [Super] Developer Kit,
+                        8GB, module p3767-0005) | orin-nano-4gb | orin-nx-8gb |
+                        orin-nx-16gb (same carrier; UNTESTED).
+    --kernel-flavor F   mainline (DEFAULT, the buildable route: gentoo-sources
+                        arm64 + the Tegra234 fragments; NO CUDA — the edge-ai
+                        service runs CPU-only) | l4t (STUB: NVIDIA's L4T/BSP
+                        kernel + CUDA userspace — requires NVIDIA L4T downloads;
+                        documented in specs-jetson/, not automated: hard error).
+    -c, --cpu CPU       GCC -mcpu/-mtune (default cortex-a78ae — all Orins).
+    -d, --defconfig N   Kernel base defconfig (default: defconfig, mainline arm64).
+    --dtb PATH          Override the in-tree DTB (e.g.
+                        nvidia/tegra234-p3768-0000+p3767-0003.dtb).
+
+  Branding / env / system  (same knobs as the other builders)
+    --brand / --brand-title / --org / --cluster-domain / --env test|prod
+    -H hostname / -T timezone / -u user
+    -C, --config FILE   drop-in brand.conf profile (sourced; CLI overrides it).
+
+  Image
+    --img / --no-img    build / skip the flashable raw .img (default: build).
+    --img-size MiB      ext4 root size in the .img (default per role; growroot
+                        expands it to the medium on first boot).
+    --grow fill|none|<size>   first-boot grow policy (default fill).
+    --compress          xz -9 the finished image(s).
+    -p PKGS             extra packages appended to the stage4.
+
+  Mesh / radios  (same as the Pi5/Frite builders)
+    --headscale-version / --tailscale-version / --skip-mesh / --skip-tailscale
+    --permit-root-login no|yes|prohibit-password  (default no)
+    --enable-wifi / --enable-bluetooth   (off by default)
+
+  Phases
+    --skip-kernel / --skip-clean / --resume / --image-only
+
+  General
+    -w, --work-dir DIR  products land here (default ./out).
+    -j, --jobs N        parallel jobs (default nproc).
+    --print-plan        resolve + validate all flags, print the build plan
+                        (PLAN_KEY=VALUE lines) and exit 0 — no root, no writes,
+                        no network. Invalid combinations exit non-zero.
+    -h, --help
+
+EXAMPLES
+    # The headline: Orin Nano edge-AI inference node (mainline kernel, CPU-only
+    # inference until the L4T flavor lands)
+    ./build-jetson-stage4.sh --role edge_ai
+
+    # Full single-node stack on one Orin, prod domain
+    ./build-jetson-stage4.sh --role full --env prod
+
+    # Plan-only validation across the matrix (no root, no writes)
+    ./build-jetson-stage4.sh --role desktop --env prod --print-plan
+
+NOTES
+    FLASHING: write the .img to microSD/NVMe and boot — a current Orin devkit
+    UEFI distro-boots /boot/extlinux/extlinux.conf directly. The QSPI firmware
+    itself (and the future L4T/CUDA stack) is flashed OUT-OF-BAND in recovery
+    mode — see specs-jetson/installer/TEGRAFLASH.md.
+
+    CUDA: NOT available on the default mainline kernel flavor. The GA10B iGPU
+    needs NVIDIA's nvgpu driver + L4T userspace (--kernel-flavor l4t, stubbed).
+MANEOF
+exit 0
+}
+
+# ── Drop-in brand profile (sourced before CLI; CLI flags override it) ──
+for ((_i = 1; _i <= $#; _i++)); do
+    case "${!_i}" in -C|--config) _j=$((_i + 1)); CONFIG_FILE="${!_j}" ;; esac
+done
+if [ -z "${CONFIG_FILE}" ] && [ -f "$(pwd)/brand.conf" ]; then CONFIG_FILE="$(pwd)/brand.conf"; fi
+if [ -n "${CONFIG_FILE}" ]; then
+    [ -f "${CONFIG_FILE}" ] || { err "config file not found: ${CONFIG_FILE}"; exit 1; }
+    # shellcheck disable=SC1090
+    . "${CONFIG_FILE}"
+    echo "Loaded brand profile: ${CONFIG_FILE} (brand=${BRAND}, domain=${CLUSTER_DOMAIN})"
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -w|--work-dir)        WORK_DIR="$2";              shift 2 ;;
+        --build-subdir)       BUILD_SUBDIR="$2";          shift 2 ;;
+        -s|--specs-dir)       SPECS_DIR="$2";             shift 2 ;;
+        -t|--target)          CROSS_TARGET="$2";          shift 2 ;;
+        -j|--jobs)            JOBS="$2";                  shift 2 ;;
+        -r|--role)            ROLE="$2";                  shift 2 ;;
+        --board)              JETSON_BOARD="$2";          shift 2 ;;
+        --kernel-flavor)      KERNEL_FLAVOR="$2";         shift 2 ;;
+        -c|--cpu)             RPI_CPU="$2";               shift 2 ;;
+        -d|--defconfig)       JETSON_DEFCONFIG="$2";      shift 2 ;;
+        --dtb)                JETSON_DTB="$2";            shift 2 ;;
+        -v|--version)         REL_VERSION="$2";           shift 2 ;;
+        --seed-url)           SEED_STAGE3_URL="$2";       shift 2 ;;
+        -H|--hostname)        HOSTNAME="$2";              shift 2 ;;
+        -C|--config)          CONFIG_FILE="$2";           shift 2 ;;  # sourced above
+        --env)                ENV="$2";                   shift 2 ;;
+        --cluster-domain|--domain) CLUSTER_DOMAIN="$2";   shift 2 ;;
+        --brand)              BRAND="$2";                 shift 2 ;;
+        --brand-title)        BRAND_TITLE="$2";           shift 2 ;;
+        --org)                ORG="$2";                   shift 2 ;;
+        -T|--timezone)        TIMEZONE="$2";              shift 2 ;;
+        -u|--user)            DEFAULT_USER="$2";          shift 2 ;;
+        # DEPRECATED no-ops (fleet posture): no password is baked into images.
+        --user-password)      warn "--user-password is ignored: no password is baked into the image (random first-boot fallback + KEYS provisioning)"; shift 2 ;;
+        --root-password)      warn "--root-password is ignored: root is locked on keyless boot; set root via the KEYS USB users.json hash"; shift 2 ;;
+        -p|--extra-packages)  EXTRA_PACKAGES="$2";        shift 2 ;;
+        --headscale-version)  HEADSCALE_VERSION="$2";     shift 2 ;;
+        --tailscale-version)  TAILSCALE_VERSION="$2";     shift 2 ;;
+        --enable-wifi)        ENABLE_WIFI=true;           shift   ;;
+        --enable-bluetooth)   ENABLE_BLUETOOTH=true;      shift   ;;
+        --permit-root-login)  PERMIT_ROOT_LOGIN="$2";     shift 2 ;;
+        --skip-mesh)          SKIP_MESH=true;             shift   ;;
+        --skip-tailscale)     SKIP_TAILSCALE=true;        shift   ;;
+        --skip-kernel)        SKIP_KERNEL=true;           shift   ;;
+        --image-only)         IMAGE_ONLY=true; SKIP_KERNEL=true; shift ;;
+        --img)                BUILD_IMG=true;             shift   ;;
+        --no-img)             BUILD_IMG=false;            shift   ;;
+        --img-size)           ROOT_MiB="$2"; IMG_SIZE_SET=true; shift 2 ;;
+        --grow)               GROW_POLICY="$2";           shift 2 ;;
+        --no-grow)            GROW_POLICY="none";         shift   ;;
+        --compress)           COMPRESS_IMG=true;          shift   ;;
+        --skip-clean)         SKIP_CLEAN=true;            shift   ;;
+        --resume)             RESUME=true;                shift   ;;
+        --print-plan)         PRINT_PLAN=true;            shift   ;;
+        -h|--help)            usage                               ;;
+        --)                   shift; break                        ;;
+        -*) err "Unknown option: $1"; echo "    Run with --help for usage." >&2; exit 1 ;;
+        *)  err "Unexpected argument: $1"; echo "    Run with --help for usage." >&2; exit 1 ;;
+    esac
+done
+
+# Default work directory: ./out under CWD (local + gitignored)
+[ -z "${WORK_DIR}" ] && WORK_DIR="$(pwd)/out"
+
+# ── select_board: map --board to its CPU / mainline DTB ────────────
+# Only fills values the operator did NOT set on the CLI, so an explicit
+# --cpu/--dtb always wins. All Orin modules are Cortex-A78AE; the DTB names the
+# carrier (p3768) + module (p3767-000N) — see specs-jetson/boot/README.md.
+select_board() {
+    local cpu dtb desc
+    case "${JETSON_BOARD}" in
+        orin-nano)
+            cpu="cortex-a78ae"; dtb="nvidia/tegra234-p3768-0000+p3767-0005.dtb"
+            desc="NVIDIA Jetson Orin Nano [Super] Developer Kit (Tegra234, 8GB, p3767-0005)"
+            ;;
+        orin-nano-4gb)
+            cpu="cortex-a78ae"; dtb="nvidia/tegra234-p3768-0000+p3767-0004.dtb"
+            desc="NVIDIA Jetson Orin Nano 4GB on devkit carrier (Tegra234, p3767-0004) — UNTESTED"
+            ;;
+        orin-nx-8gb)
+            cpu="cortex-a78ae"; dtb="nvidia/tegra234-p3768-0000+p3767-0001.dtb"
+            desc="NVIDIA Jetson Orin NX 8GB on devkit carrier (Tegra234, p3767-0001) — UNTESTED"
+            ;;
+        orin-nx-16gb)
+            cpu="cortex-a78ae"; dtb="nvidia/tegra234-p3768-0000+p3767-0000.dtb"
+            desc="NVIDIA Jetson Orin NX 16GB on devkit carrier (Tegra234, p3767-0000) — UNTESTED"
+            ;;
+        *) err "--board must be one of: orin-nano | orin-nano-4gb | orin-nx-8gb | orin-nx-16gb (got '${JETSON_BOARD}')"; exit 1 ;;
+    esac
+    [ -z "${RPI_CPU}" ]    && RPI_CPU="${cpu}"
+    [ -z "${JETSON_DTB}" ] && JETSON_DTB="${dtb}"
+    JETSON_BOARD_DESC="${desc}"
+}
+select_board
+
+# ── Validate role; derive k8s intent, desktop weight, hostname, sizing ──
+ROLE_K8S="none"; ROLE_HEADSCALE=false; ROLE_CLIENT=false; EDGE_AI=false
+case "${ROLE}" in
+    edge-ai) ROLE="edge_ai" ;;             # slug alias (matches the x86 builder)
+    gpu_host) ROLE="gpu-host" ;;           # underscore alias
+esac
+case "${ROLE}" in
+    edge_ai)
+        # The headline: GPU inference k8s worker + the edge-ai service.
+        ROLE_K8S="worker"; EDGE_AI=true
+        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-jetson-edge-ai"
+        ${IMG_SIZE_SET} || ROOT_MiB=16384 ;;
+    gpu-host)
+        # GPU k8s worker without the inference service (be+gpu analogue).
+        ROLE_K8S="worker"
+        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-jetson-gpu"
+        ${IMG_SIZE_SET} || ROOT_MiB=14336 ;;
+    full)
+        # Full-stack single node (omnibus analogue): headscale control plane +
+        # kubeadm init + every namespace on one Orin.
+        ROLE_K8S="single-node"; ROLE_HEADSCALE=true; EDGE_AI=true
+        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-jetson-full"
+        ${IMG_SIZE_SET} || ROOT_MiB=20480 ;;
+    desktop)
+        # arm64 client desktop: mesh client + lean LXDE, no k8s/cluster tree.
+        ROLE_CLIENT=true; DESKTOP="light"
+        [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-jetson"
+        ${IMG_SIZE_SET} || ROOT_MiB=16384 ;;
+    *)
+        err "--role must be one of: edge_ai (default) | gpu-host | full | desktop (got '${ROLE}')"
+        exit 1 ;;
+esac
+
+# ── Validate kernel flavor / env / grow ────────────────────────────
+case "${KERNEL_FLAVOR}" in
+    mainline|l4t) ;;
+    *) err "--kernel-flavor must be: mainline | l4t (got '${KERNEL_FLAVOR}')"; exit 1 ;;
+esac
+case "${ENV}" in
+    test|prod) ;;
+    *) err "--env must be one of: test | prod (got '${ENV}')"; exit 1 ;;
+esac
+GROW_POLICY="$(printf '%s' "${GROW_POLICY}" | tr '[:upper:]' '[:lower:]')"
+case "${GROW_POLICY}" in
+    fill|none|off|no|false|0) ;;
+    *[0-9]g|*[0-9]m|*[0-9]k|*[0-9]t|*[0-9]gib|*[0-9]mib|*[0-9]kib|*[0-9]%|*[0-9]) ;;
+    *) err "--grow must be: fill | none | <size> (e.g. 16G, 12000M, 50%)  (got '${GROW_POLICY}')"; exit 1 ;;
+esac
+
+# ── Charset allowlists for brand/identity/kernel/toolchain fields (fail-closed) ──
+# (mirrors build-frite-stage4.sh / build-rpi5-stage4.sh — same sinks, same threat:
+# these values reach render_template's sed program and root-run first-boot code.)
+_require_match() {  # <human-name> <value> <regex>
+    [[ "$2" =~ $3 ]] || { err "invalid $1: '$2' (must match ${3})"; exit 1; }
+}
+_RE_SLUG='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+_RE_ORG='^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
+_RE_DNS='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+_RE_USER='^[a-z_][a-z0-9_-]{0,31}$'
+_RE_TITLE='^[A-Za-z0-9 ._-]{1,64}$'
+_RE_CPU='^[A-Za-z0-9._+-]+$'
+_RE_TRIPLET='^[A-Za-z0-9_.-]+$'
+
+_require_match "--brand"          "${BRAND}"          "${_RE_SLUG}"
+_require_match "--org"            "${ORG}"            "${_RE_ORG}"
+_require_match "--cluster-domain" "${CLUSTER_DOMAIN}" "${_RE_DNS}"
+_require_match "--hostname"       "${HOSTNAME}"       "${_RE_DNS}"
+_require_match "--user"           "${DEFAULT_USER}"   "${_RE_USER}"
+_require_match "--brand-title"    "${BRAND_TITLE}"    "${_RE_TITLE}"
+_require_match "--cpu"            "${RPI_CPU}"        "${_RE_CPU}"
+_require_match "--target"         "${CROSS_TARGET}"   "${_RE_TRIPLET}"
+
+BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"
+SYSROOT="${BUILD_ROOT}/sysroot"
+STAGE_DIR="${BUILD_ROOT}/staging"
+LOG_FILE="${WORK_DIR}/build.log"
+BUILD_TS="$(date -u +%Y%m%dT%H%M%SZ)"
+
+# Image / artifact name prefix (board in the name so flash-disk autodetect works).
+ART_PREFIX="${BRAND}-jetson-${JETSON_BOARD}-arm64-${ROLE}-${ENV}-${BUILD_TS}"
+
+# ── --print-plan: emit the resolved plan and exit BEFORE ANY mutation ──────────
+# Runs AFTER full arg parsing / board+role+env+kernel-flavor validation /
+# allowlist checks / artifact resolution, but BEFORE the EXPERIMENTAL banner,
+# the l4t stub gate, the prereq probes, mkdir, network fetches or any sysroot
+# write. No root required. One stable KEY=VALUE per line (grep '^PLAN_'); exit
+# 0. Invalid role/flag combos never reach this point — the validation above
+# already exited non-zero, which is exactly what the tests/build-matrix harness
+# relies on. NO secrets are echoed here. NOTE: --kernel-flavor l4t IS a valid
+# plan (it validates + resolves); only the BUILD is stubbed (hard error below).
+if ${PRINT_PLAN}; then
+    _plan() { printf 'PLAN_%s=%s\n' "$1" "$2"; }
+    _plan BUILDER            "build-jetson-stage4.sh"
+    _plan PLATFORM           "jetson"
+    _plan ARCH               "arm64"
+    _plan ROLE               "${ROLE}"
+    _plan ENV                "${ENV}"
+    _plan BOARD              "${JETSON_BOARD}"
+    _plan BOARD_DESC         "${JETSON_BOARD_DESC}"
+    _plan DTB                "${JETSON_DTB}"
+    _plan KERNEL_FLAVOR      "${KERNEL_FLAVOR}"
+    _plan KERNEL             "$([ "${KERNEL_FLAVOR}" = "l4t" ] && echo 'l4t-bsp (STUB: requires NVIDIA L4T downloads — build exits non-zero)' || echo "mainline-arm64 (defconfig=${JETSON_DEFCONFIG} + hardened-node.config + tegra234.config)")"
+    _plan DESKTOP            "${DESKTOP}"
+    _plan GPU_DRIVER         "$([ "${KERNEL_FLAVOR}" = "l4t" ] && echo nvgpu-l4t || echo tegra-mainline-nocuda)"
+    _plan CUDA               "$([ "${KERNEL_FLAVOR}" = "l4t" ] && echo l4t-userspace || echo none-mainline)"
+    _plan K8S                "${ROLE_K8S}"
+    _plan EDGE_AI_SERVICE    "${EDGE_AI}"
+    _ARTS="stage4.tar.xz"
+    ${BUILD_IMG} && _ARTS="${_ARTS},img"
+    _plan ARTIFACTS          "${_ARTS}"
+    _plan ARTIFACT_PREFIX    "${BRAND}-jetson-${JETSON_BOARD}-arm64-${ROLE}-${ENV}-<timestamp>"
+    _plan WORK_DIR           "${WORK_DIR}"
+    _plan JOBS               "${JOBS}"
+    _plan BRAND              "${BRAND}"
+    _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
+    _plan HOSTNAME           "${HOSTNAME}"
+    _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo none || { ${EDGE_AI} && echo edge-ai || echo none; })"
+    _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
+    _plan STATUS             "EXPERIMENTAL (hardware validation pending — specs-jetson/README.md)"
+    _plan FLAGS_EFFECTIVE    "env=${ENV} role=${ROLE} board=${JETSON_BOARD} kernel_flavor=${KERNEL_FLAVOR} desktop=${DESKTOP} img=${BUILD_IMG} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH}"
+    exit 0
+fi
+
+# ── LOUD EXPERIMENTAL banner (every real build; --print-plan exits above) ──────
+echo -e "${YELLOW}${BOLD}"
+echo "############################################################################"
+echo "##  EXPERIMENTAL: Jetson Orin platform — HARDWARE VALIDATION PENDING     ##"
+echo "##  This build mirrors the proven RPi5/Frite cross flow but has NOT been ##"
+echo "##  booted on a physical Orin from this repo. Mainline kernel flavor has ##"
+echo "##  NO CUDA (edge-ai runs CPU-only). See specs-jetson/README.md.         ##"
+echo "############################################################################"
+echo -e "${RESET}"
+
+# ── --kernel-flavor l4t: STUB (documented, not automated) ──────────────────────
+# The L4T/BSP kernel + CUDA userspace are EULA-gated NVIDIA developer downloads
+# and the flash flow is recovery-mode tegraflash — neither can be fetched or run
+# from this builder. Hard error HERE (after --print-plan, before any mutation).
+if [ "${KERNEL_FLAVOR}" = "l4t" ]; then
+    err "--kernel-flavor l4t is a documented STUB: the L4T/BSP kernel + CUDA-on-Tegra"
+    err "userspace require NVIDIA L4T downloads (EULA-gated) — documented, not automated."
+    err "Follow specs-jetson/kernel/README.md + specs-jetson/installer/TEGRAFLASH.md to"
+    err "flash the L4T stack out-of-band, then layer this builder's stage4 over it."
+    err "The buildable route today is the default: --kernel-flavor mainline (no CUDA)."
+    exit 1
+fi
+
+if [ "${ENV}" = "prod" ]; then
+    echo -e "${RED}${BOLD}"
+    echo "############################################################################"
+    echo "##   BUILDING PROD Jetson image for ${CLUSTER_DOMAIN}"
+    echo "##   - bakes the REAL public domain; mesh/Casdoor creds from the keys USB ##"
+    echo "############################################################################"
+    echo -e "${RESET}"
+else
+    info "Build ENV: test (LAN-first; mesh + Casdoor login provisioned from the KEYS USB)"
+fi
+info "Board:  ${JETSON_BOARD_DESC}"
+info "DTB:    ${JETSON_DTB}   kernel flavor: ${KERNEL_FLAVOR}"
+info "Role:   ${ROLE}  (k8s=${ROLE_K8S} edge-ai=${EDGE_AI} desktop=${DESKTOP})"
+info "Build stamp: ${BUILD_TS} (brand=${BRAND})"
+
+# ── _sed_rep_escape + render_template (same contract as the other builders) ──
+_sed_rep_escape() {
+    local v="$1"
+    v="${v//\\/\\\\}"   # backslash -> \\
+    v="${v//&/\\&}"     # & (whole-match ref) -> \&
+    v="${v//|/\\|}"     # | (delimiter)       -> \|
+    case "${v}" in
+        *$'\n'*) err "sed replacement contains a newline (refusing to render): '${1}'"; exit 1 ;;
+    esac
+    printf '%s' "${v}"
+}
+
+render_template() {
+    local src="$1" dst="$2"
+    local cbuild
+    cbuild="$(portageq envvar CHOST 2>/dev/null || gcc -dumpmachine)"
+    sed \
+        -e "s|@@CBUILD@@|$(_sed_rep_escape "${cbuild}")|g" \
+        -e "s|@@CROSS_TARGET@@|$(_sed_rep_escape "${CROSS_TARGET}")|g" \
+        -e "s|@@RPI_CPU@@|$(_sed_rep_escape "${RPI_CPU}")|g" \
+        -e "s|@@JOBS@@|$(_sed_rep_escape "${JOBS}")|g" \
+        -e "s|@@WORK_DIR@@|$(_sed_rep_escape "${BUILD_ROOT}")|g" \
+        -e "s|@@JETSON_KERNEL_IMG@@|$(_sed_rep_escape "${JETSON_KERNEL_IMG}")|g" \
+        -e "s|@@JETSON_DTB@@|$(_sed_rep_escape "${JETSON_DTB}")|g" \
+        -e "s|@@JETSON_INITRD_LINE@@|$(_sed_rep_escape "${JETSON_INITRD_LINE:-    # (initrd-less: boot-critical Tegra drivers are built in)}")|g" \
+        -e "s|@@JETSON_APPEND@@|$(_sed_rep_escape "${JETSON_APPEND:-}")|g" \
+        -e "s|@@HOSTNAME@@|$(_sed_rep_escape "${HOSTNAME}")|g" \
+        -e "s|@@TIMEZONE@@|$(_sed_rep_escape "${TIMEZONE}")|g" \
+        -e "s|@@DEFAULT_USER@@|$(_sed_rep_escape "${DEFAULT_USER}")|g" \
+        -e "s|@@BRAND@@|$(_sed_rep_escape "${BRAND}")|g" \
+        -e "s|@@BRAND_TITLE@@|$(_sed_rep_escape "${BRAND_TITLE}")|g" \
+        -e "s|@@DOMAIN@@|$(_sed_rep_escape "${CLUSTER_DOMAIN}")|g" \
+        -e "s|@@ORG@@|$(_sed_rep_escape "${ORG}")|g" \
+        -e "s|@@ENV@@|$(_sed_rep_escape "${ENV}")|g" \
+        "${src}" > "${dst}"
+}
+
+# ── harden_radios (identical posture to the Pi5/Frite builders) ────
+harden_radios() {
+    local sysroot="$1"
+    mkdir -p "${sysroot}/etc/modprobe.d" "${sysroot}/etc/local.d" \
+             "${sysroot}/etc/NetworkManager/conf.d"
+    local bl="${sysroot}/etc/modprobe.d/snapdragon-radio-blacklist.conf"; : > "${bl}"
+    local act="${sysroot}/etc/local.d/02-radio-hardening.start"
+    {
+        echo "#!/bin/sh"
+        echo "# Radio hardening (build-jetson-stage4.sh). WiFi/Bluetooth OFF by default."
+        echo "command -v rfkill >/dev/null 2>&1 || exit 0"
+    } > "${act}"
+    if [ "${ENABLE_WIFI}" != "true" ]; then
+        { echo "blacklist cfg80211"; echo "blacklist mac80211"; } >> "${bl}"
+        { echo "rfkill block wifi 2>/dev/null || true"
+          echo "command -v nmcli >/dev/null 2>&1 && nmcli radio wifi off 2>/dev/null || true"; } >> "${act}"
+        printf '[main]\n# WiFi off by default; managed=ethernet only.\n' \
+            > "${sysroot}/etc/NetworkManager/conf.d/10-no-wifi.conf"
+        info "WiFi DISABLED by default. Re-enable: --enable-wifi."
+    fi
+    if [ "${ENABLE_BLUETOOTH}" != "true" ]; then
+        { echo "blacklist bluetooth"; echo "blacklist btusb"; } >> "${bl}"
+        echo "rfkill block bluetooth 2>/dev/null || true" >> "${act}"
+    fi
+    echo "rm -f /etc/local.d/02-radio-hardening.start" >> "${act}"
+    chmod +x "${act}"
+    [ -s "${bl}" ] || echo "# (no radios blacklisted)" > "${bl}"
+}
+
+write_growfs_conf() {
+    local dest="$1"; mkdir -p "$(dirname "${dest}")"
+    cat > "${dest}" <<GROWFS_EOF
+# growfs.conf — first-boot root-grow policy (read by the growroot service).
+#   GROW=fill | none | <size>  (e.g. 16G, 12000M, 50%)
+GROW=${GROW_POLICY}
+GROWFS_EOF
+}
+
+# zram swap at first boot: sized to half of RAM, capped at 2G (an 8 GB Orin
+# running a 7B model CPU-only benefits; harmless otherwise). Idempotent.
+write_zram_firstboot() {
+    local sysroot="$1"
+    mkdir -p "${sysroot}/etc/local.d"
+    cat > "${sysroot}/etc/local.d/03-zram-swap.start" <<'ZRAM_EOF'
+#!/bin/sh
+# zram swap — half of RAM, capped at 2G. Best-effort (no zram = skip).
+[ -e /sys/class/zram-control ] || modprobe zram 2>/dev/null || exit 0
+grep -q '/dev/zram0' /proc/swaps 2>/dev/null && exit 0
+mem_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+half=$(( mem_kb / 2 )); cap=$(( 2048 * 1024 ))
+[ "${half}" -gt "${cap}" ] && half="${cap}"
+[ "${half}" -gt 0 ] || exit 0
+echo "${half}K" > /sys/block/zram0/disksize 2>/dev/null || exit 0
+mkswap /dev/zram0 >/dev/null 2>&1 && swapon -p 100 /dev/zram0 2>/dev/null || true
+ZRAM_EOF
+    chmod +x "${sysroot}/etc/local.d/03-zram-swap.start"
+}
+
+# ── rebrand_sysroot (covers the baked cluster tree too, like rpi5/x86) ──
+rebrand_sysroot() {
+    [ "${BRAND}" = "snapdragon" ] && [ "${CLUSTER_DOMAIN}" = "snapdragon.systems" ] && return 0
+    local _btitle _org _domain _brand
+    _btitle="$(_sed_rep_escape "${BRAND_TITLE}")"
+    _org="$(_sed_rep_escape "${ORG}")"
+    _domain="$(_sed_rep_escape "${CLUSTER_DOMAIN}")"
+    _brand="$(_sed_rep_escape "${BRAND}")"
+    local f
+    while IFS= read -r -d '' f; do
+        sed -i \
+            -e "s|Snapdragon Systems|${_btitle}|g" \
+            -e "s|Snapdragon-Systems|${_org}|g" \
+            -e "s|snapdragon\.systems|${_domain}|g" \
+            -e "s|snapdragon-|${_brand}-|g" \
+            "${f}"
+    done < <(find "${SYSROOT}/etc/snapdragon" "${SYSROOT}/var/lib/snapdragon/cluster" -type f -print0 2>/dev/null)
+}
+
+banner "Verifying prerequisites"
+[ -d "${SPECS_DIR}" ]    || { err "Jetson specs directory not found: ${SPECS_DIR}"; exit 1; }
+[ -d "${SHARED_SPECS}" ] || { err "Shared specs directory not found: ${SHARED_SPECS}"; exit 1; }
+info "Jetson specs: ${SPECS_DIR}"
+info "Shared specs: ${SHARED_SPECS}"
+for tool in "${CROSS_TARGET}-gcc" "${CROSS_TARGET}-strip" curl tar file; do
+    command -v "${tool}" &>/dev/null || { err "${tool} not found in PATH."; exit 1; }
+done
+# Host SELinux policy build tools (same rationale as the Pi5/Frite builders).
+HOST_POLICY_TOOLS=()
+command -v checkpolicy      &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/checkpolicy)
+command -v semodule_package &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/semodule-utils)
+command -v m4               &>/dev/null || HOST_POLICY_TOOLS+=(sys-devel/m4)
+if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
+    readarray -t HOST_POLICY_TOOLS < <(printf '%s\n' "${HOST_POLICY_TOOLS[@]}" | sort -u)
+    if [ "$(id -u)" -eq 0 ] && command -v emerge &>/dev/null; then
+        warn "Missing host SELinux build tools: ${HOST_POLICY_TOOLS[*]} — emerging natively"
+        emerge --noreplace --quiet "${HOST_POLICY_TOOLS[@]}" \
+            || { err "Failed to install host SELinux build tools (${HOST_POLICY_TOOLS[*]})."; exit 1; }
+    else
+        err "Missing host SELinux build tools: ${HOST_POLICY_TOOLS[*]}"
+        err "Install on the BUILD host: emerge sys-apps/checkpolicy sys-apps/semodule-utils sys-devel/m4"
+        exit 1
+    fi
+fi
+# containerd[selinux] host toolchain pre-seed (k8s roles; same as the rpi5 cross
+# build): the HOST selinux-python/policycoreutils chain needs python bindings or
+# the cross_emerge silently skips containerd and trips the payload assert.
+if [ "${ROLE_K8S}" != "none" ] && [ "$(id -u)" -eq 0 ]; then
+    mkdir -p /etc/portage/package.use
+    cat > /etc/portage/package.use/snapdragon-cross-host-selinux <<'HOSTSELINUX'
+# Auto-written by build-jetson-stage4.sh (Jetson CROSS build; same rationale as
+# the rpi5 builder). Safe to delete on a non-build host.
+sys-libs/libselinux python
+sys-process/audit    python
+HOSTSELINUX
+    info "Pre-seeded HOST /etc/portage/package.use: libselinux[python]+audit[python]"
+fi
+# .img assembly tools (best-effort: missing tools disable the .img, not the build).
+if ${BUILD_IMG}; then
+    for t in parted losetup mkfs.ext4 blkid; do
+        command -v "$t" >/dev/null || { warn "missing ${t}; disabling .img build"; BUILD_IMG=false; break; }
+    done
+fi
+info "Cross-compiler: $(${CROSS_TARGET}-gcc --version | head -1)"
+info "Jobs: ${JOBS}"
+
+banner "Preparing build directories"
+mkdir -p "${WORK_DIR}" "${BUILD_ROOT}"/{distfiles,pkgdir,log} "${SYSROOT}" "${STAGE_DIR}"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+info "Logging to ${LOG_FILE}"
+
+banner "Fetching latest arm64 stage3 seed tarball (glibc — CUDA needs glibc)"
+STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
+STAGE3_BASENAME=$(basename "${STAGE3_FILE}")
+STAGE3_FULL_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/${STAGE3_FILE}"
+STAGE3_LOCAL="${BUILD_ROOT}/${STAGE3_BASENAME}"
+if [ ! -f "${STAGE3_LOCAL}" ]; then
+    info "Downloading ${STAGE3_BASENAME}..."
+    curl -L -o "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}"
+else
+    info "Using cached ${STAGE3_BASENAME}"
+fi
+
+banner "Verifying stage3 seed signature + checksum"
+if ! dlv_verify_stage3 "${STAGE3_LOCAL}" "${STAGE3_FULL_URL}.DIGESTS"; then
+    rm -f "${STAGE3_LOCAL}"
+    err "stage3 seed failed verification (bad signature or checksum) — aborting."
+    err "If Gentoo rotated its signing key, set DLV_GENTOO_KEY=<fingerprint>; for an"
+    err "air-gapped build set DLV_OFFLINE_KEYRING=<keyfile>. Refusing unverified seed."
+    exit 1
+fi
+
+banner "Extracting seed stage3 into sysroot"
+if [ -f "${SYSROOT}/etc/gentoo-release" ] && ${RESUME}; then
+    info "Sysroot already populated and --resume set, skipping extraction"
+else
+    TAR_X=(--exclude='./dev/*')
+    [ "$(id -u)" -ne 0 ] && TAR_X+=(--no-same-owner)
+    tar -C "${SYSROOT}" --xattrs-include='*.*' "${TAR_X[@]}" -xpf "${STAGE3_LOCAL}" 2>/dev/null || \
+    tar -C "${SYSROOT}" "${TAR_X[@]}" -xpf "${STAGE3_LOCAL}"
+    mkdir -p "${SYSROOT}/dev"
+    info "Extracted into ${SYSROOT} (device nodes skipped; devtmpfs at boot)"
+fi
+
+banner "Installing spec files into sysroot (hardened profile)"
+mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.mask,profile,env,package.env,repos.conf}
+GENTOO_REPO="$(portageq get_repo_path / gentoo 2>/dev/null || echo /var/db/repos/gentoo)"
+cat > "${SYSROOT}/etc/portage/repos.conf/gentoo.conf" <<EOF
+[DEFAULT]
+main-repo = gentoo
+[gentoo]
+location = ${GENTOO_REPO}
+EOF
+PROFILE_PATH="$(sed 's/^gentoo://' "${SPECS_DIR}/portage/profile/parent" | tr -d '[:space:]')"
+[ -d "${GENTOO_REPO}/profiles/${PROFILE_PATH}" ] || { err "profile not found: ${GENTOO_REPO}/profiles/${PROFILE_PATH}"; exit 1; }
+ln -sfn "${GENTOO_REPO}/profiles/${PROFILE_PATH}" "${SYSROOT}/etc/portage/make.profile"
+cp "${SPECS_DIR}/portage/profile/use.mask"          "${SYSROOT}/etc/portage/profile/use.mask"
+[ -f "${SPECS_DIR}/portage/profile/package.provided" ] && \
+    cp "${SPECS_DIR}/portage/profile/package.provided" "${SYSROOT}/etc/portage/profile/package.provided"
+cp "${SPECS_DIR}/portage/package.accept_keywords/"* "${SYSROOT}/etc/portage/package.accept_keywords/"
+cp "${SPECS_DIR}/portage/package.use/"*             "${SYSROOT}/etc/portage/package.use/"
+cp "${SPECS_DIR}/portage/package.env/"*             "${SYSROOT}/etc/portage/package.env/"
+cp "${SPECS_DIR}/portage/env/"*.conf                "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
+render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
+
+cp "${SPECS_DIR}/etc/fstab" "${SYSROOT}/etc/fstab"
+mkdir -p "${SYSROOT}/etc/modules-load.d"
+cp "${SPECS_DIR}/etc/modules-load.d/jetson.conf" "${SYSROOT}/etc/modules-load.d/jetson.conf"
+
+# ── Shared (arch-agnostic) mesh + provisioning + sshd — the SAME plumbing every
+# other node/client image bakes, so the Orin joins the SAME mesh with the SAME
+# key-only SSH + device-license posture. ────────────────────────────
+mkdir -p "${SYSROOT}/etc/init.d"
+JETSON_SVCS=(growroot headscale tailscaled keys-provision)
+if [ "${ROLE_K8S}" != "none" ]; then
+    JETSON_SVCS+=(containerd kubelet)
+fi
+for svc in "${JETSON_SVCS[@]}"; do
+    cp "${SHARED_SPECS}/etc/init.d/${svc}" "${SYSROOT}/etc/init.d/${svc}"
+    chmod +x "${SYSROOT}/etc/init.d/${svc}"
+done
+write_growfs_conf "${SYSROOT}/etc/growfs.conf"
+
+mkdir -p "${SYSROOT}/etc/headscale"
+cp "${SHARED_SPECS}/etc/headscale/config.yaml"   "${SYSROOT}/etc/headscale/config.yaml"
+# Layer-A: bake the BOOTSTRAP policy AS the initial policy.hujson (same as
+# rpi5/x86/frite; the first verified Layer-A sync re-renders it).
+cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson" "${SYSROOT}/etc/headscale/policy.hujson"
+
+mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/var/lib/keys-provision"
+cp "${SHARED_SPECS}/etc/keys-provision/provision.sh" "${SYSROOT}/usr/sbin/keys-provision"
+chmod +x "${SYSROOT}/usr/sbin/keys-provision"
+
+# Hardened, key-only sshd (NO broad SSH access baked in).
+mkdir -p "${SYSROOT}/etc/ssh/sshd_config.d"
+cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf" "${SYSROOT}/etc/ssh/sshd_config.d/hardened.conf"
+
+# ── Layer-B device-license-registry sshd enforcement (INERT-on-core) ──
+mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/usr/lib/snapdragon" \
+         "${SYSROOT}/etc/snapdragon/registry" "${SYSROOT}/var/lib/snapdragon/device-registry"
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-authorized-keys-lookup" "${SYSROOT}/usr/sbin/snapdragon-authorized-keys-lookup"
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-device-registry-sync"   "${SYSROOT}/usr/sbin/snapdragon-device-registry-sync"
+chmod +x "${SYSROOT}/usr/sbin/snapdragon-authorized-keys-lookup" "${SYSROOT}/usr/sbin/snapdragon-device-registry-sync"
+cp "${SHARED_SPECS}/usr/lib/snapdragon/registry-verify.sh"      "${SYSROOT}/usr/lib/snapdragon/registry-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-device-registry-sync" "${SYSROOT}/etc/init.d/snapdragon-device-registry-sync"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-device-registry-sync"
+cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/device-registry.conf" "${SYSROOT}/etc/snapdragon/registry/device-registry.conf"
+cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/break-glass.conf"     "${SYSROOT}/etc/snapdragon/registry/break-glass.conf"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-device-registry-sync" "${SYSROOT}/etc/snapdragon/registry/cron-device-registry-sync"
+
+# ── Layer-A device-license-registry headscale policy (control node only) ──
+cp "${SHARED_SPECS}/usr/sbin/gen-headscale-policy.sh"          "${SYSROOT}/usr/sbin/gen-headscale-policy.sh"
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-headscale-forcetags"   "${SYSROOT}/usr/sbin/snapdragon-headscale-forcetags"
+chmod +x "${SYSROOT}/usr/sbin/gen-headscale-policy.sh" "${SYSROOT}/usr/sbin/snapdragon-headscale-forcetags"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-policy-sync"         "${SYSROOT}/etc/init.d/snapdragon-policy-sync"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-policy-sync"
+cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson"     "${SYSROOT}/etc/headscale/policy.bootstrap.hujson"
+cp "${SHARED_SPECS}/etc/headscale/policy.hujson.tmpl"          "${SYSROOT}/etc/headscale/policy.hujson.tmpl"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-policy-sync"         "${SYSROOT}/etc/snapdragon/registry/cron-policy-sync"
+
+# ── Egress VPN (split-tunnel, fail-closed) — baked-but-INERT (default-off) ──
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-egress-vpn" "${SYSROOT}/etc/init.d/snapdragon-egress-vpn"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-egress-vpn"
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-vpn-runner"   "${SYSROOT}/usr/sbin/snapdragon-vpn-runner"
+chmod +x "${SYSROOT}/usr/sbin/snapdragon-vpn-runner"
+mkdir -p "${SYSROOT}/etc/snapdragon/vpn"; chmod 0700 "${SYSROOT}/etc/snapdragon/vpn"
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-vpn-reconcile" "${SYSROOT}/usr/sbin/snapdragon-vpn-reconcile"
+chmod +x "${SYSROOT}/usr/sbin/snapdragon-vpn-reconcile"
+cp "${SHARED_SPECS}/usr/lib/snapdragon/vpn-verify.sh" "${SYSROOT}/usr/lib/snapdragon/vpn-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile"
+
+# ── Opt-in host-binary auto-update (baked plumbing; poller DEFAULT-OFF) ──
+mkdir -p "${SYSROOT}/usr/local/sbin"
+cp "${SHARED_SPECS}/usr/local/sbin/snapdragon-update"     "${SYSROOT}/usr/local/sbin/snapdragon-update"
+chmod +x "${SYSROOT}/usr/local/sbin/snapdragon-update"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-update"         "${SYSROOT}/etc/init.d/snapdragon-update"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-update"
+
+# ── Domain-registry -> brand-repo bridge — baked-but-INERT (default-off) ──
+cp "${SHARED_SPECS}/usr/sbin/snapdragon-domain-reconcile" "${SYSROOT}/usr/sbin/snapdragon-domain-reconcile"
+chmod +x "${SYSROOT}/usr/sbin/snapdragon-domain-reconcile"
+cp "${SHARED_SPECS}/usr/lib/snapdragon/domain-verify.sh" "${SYSROOT}/usr/lib/snapdragon/domain-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/snapdragon-domain-reconcile" "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile"
+chmod +x "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/snapdragon-domain-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-domain-reconcile"
+mkdir -p "${SYSROOT}/usr/share/snapdragon/generator/scripts" "${SYSROOT}/usr/share/snapdragon/generator/templates"
+cp "${SCRIPT_DIR}/scripts/gen-keystores.sh"  "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh"
+cp "${SCRIPT_DIR}/generate-brand-repos.sh"   "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh"
+cp -r "${SCRIPT_DIR}/templates/."            "${SYSROOT}/usr/share/snapdragon/generator/templates/"
+chmod +x "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh" "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh"
+
+# ── Cluster GitOps tree (k8s roles only) — the SAME shared specs/cluster tree
+# the rpi5/x86 node builders bake; the edge-ai manifests are arch-portable
+# (Ollama ships arm64 + Jetson images; nvidia-device-plugin/RuntimeClass apply
+# on arm64 GPU nodes). EXPERIMENTAL note: this bakes the WHOLE tree — the
+# per-slug optional-services pruning gate (gate_optional_services) is NOT
+# replicated here yet; ArgoCD's installed-services ConfigMap still gates
+# activation at runtime. Revisit with hardware validation. ──────────
+if [ "${ROLE_K8S}" != "none" ]; then
+    if [ -d "${SHARED_SPECS}/cluster" ]; then
+        mkdir -p "${SYSROOT}/var/lib/snapdragon"
+        rm -rf "${SYSROOT}/var/lib/snapdragon/cluster"
+        cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
+        info "Baked shared cluster GitOps tree -> /var/lib/snapdragon/cluster (role=${ROLE})"
+    else
+        warn "shared specs/cluster tree not found — k8s role '${ROLE}' will have no baked GitOps tree"
+    fi
+fi
+
+# Node role + domain + env + board + kernel-flavor markers (read by
+# keys-provision / first-boot / the fleet inventory).
+mkdir -p "${SYSROOT}/etc/snapdragon"
+echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
+echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
+echo "${ENV}"            > "${SYSROOT}/etc/snapdragon/env"
+echo "jetson:${JETSON_BOARD}" > "${SYSROOT}/etc/snapdragon/board"
+echo "${KERNEL_FLAVOR}"  > "${SYSROOT}/etc/snapdragon/kernel-flavor"
+if [ -n "${HEADSCALE_URL:-}" ]; then
+    echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/snapdragon/headscale-url"
+    info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/snapdragon/headscale-url"
+fi
+rebrand_sysroot
+
+# First-boot finaliser (shared template) + radio hardening + zram swap.
+mkdir -p "${SYSROOT}/etc/local.d"
+[ -f "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" ] || {
+    err "missing first-boot finaliser template: ${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl"; exit 1; }
+render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
+chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
+harden_radios "${SYSROOT}"
+
+# Root SSH login DISABLED by default (authoritative 00- drop-in; same contract
+# as the other builders).
+configure_root_login() {
+    local sysroot="$1"
+    local val="${PERMIT_ROOT_LOGIN:-no}"
+    case "${val}" in no|yes|prohibit-password) ;; *) val=no ;; esac
+    mkdir -p "${sysroot}/etc/ssh/sshd_config.d"
+    {
+        echo "# Generated by build-*-stage4.sh from PERMIT_ROOT_LOGIN. Root SSH login is"
+        echo "# DISABLED by default; re-enable with --permit-root-login yes. 00- => authoritative."
+        echo "PermitRootLogin ${val}"
+    } > "${sysroot}/etc/ssh/sshd_config.d/00-root-login.conf"
+    if [ "${val}" = "no" ]; then
+        info "Root SSH login DISABLED by default. Admin via the non-root KEYS user; re-enable with --permit-root-login yes."
+    else
+        info "Root SSH login set to '${val}' (--permit-root-login / PERMIT_ROOT_LOGIN=${val})."
+    fi
+}
+configure_root_login "${SYSROOT}"
+write_zram_firstboot "${SYSROOT}"
+
+echo "${HOSTNAME}" > "${SYSROOT}/etc/hostname"
+mkdir -p "${SYSROOT}/etc/conf.d"
+echo "hostname=\"${HOSTNAME}\"" > "${SYSROOT}/etc/conf.d/hostname"
+echo "${TIMEZONE}" > "${SYSROOT}/etc/timezone"
+ln -sf "/usr/share/zoneinfo/${TIMEZONE}" "${SYSROOT}/etc/localtime"
+echo "en_US.UTF-8 UTF-8" > "${SYSROOT}/etc/locale.gen"
+
+# ── OpenRC service links ───────────────────────────────────────────
+mkdir -p "${SYSROOT}/etc/runlevels/default"
+DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision local)
+# Auto-update boot oneshot: baked plumbing, poller DEFAULT-OFF (see the shared note).
+DEFAULT_SVCS+=(snapdragon-update)
+if [ "${ROLE_K8S}" != "none" ]; then
+    DEFAULT_SVCS+=(containerd kubelet)
+fi
+# headscale control plane runs ONLY on the 'full' single-node role; every other
+# role is a mesh CLIENT (tailscaled only).
+if ${ROLE_HEADSCALE}; then
+    DEFAULT_SVCS+=(headscale)
+fi
+if ! ${SKIP_MESH} && ! ${SKIP_TAILSCALE}; then
+    DEFAULT_SVCS+=(tailscaled)
+fi
+if [ "${DESKTOP}" = "light" ]; then
+    DEFAULT_SVCS+=(dbus elogind display-manager)
+    mkdir -p "${SYSROOT}/etc/conf.d"
+    echo 'DISPLAYMANAGER="lightdm"' > "${SYSROOT}/etc/conf.d/display-manager"
+    mkdir -p "${SYSROOT}/etc/lightdm"
+    cat > "${SYSROOT}/etc/lightdm/lightdm.conf" <<'LIGHTDM'
+[LightDM]
+[Seat:*]
+greeter-session=lightdm-gtk-greeter
+user-session=LXDE
+LIGHTDM
+fi
+for svc in "${DEFAULT_SVCS[@]}"; do
+    ln -sf "/etc/init.d/${svc}" "${SYSROOT}/etc/runlevels/default/${svc}" 2>/dev/null || true
+done
+# Belt-and-suspenders for --resume sysroots (rpi5 audit finding): remove a
+# stale headscale runlevel link on non-control roles.
+if ! ${ROLE_HEADSCALE}; then
+    rm -f "${SYSROOT}/etc/runlevels/default/headscale"
+fi
+
+info "Profile: ${PROFILE_PATH}"
+
+cross_emerge() {
+    mkdir -p "${BUILD_ROOT}/log" "${BUILD_ROOT}/edb" "${BUILD_ROOT}/tmp"
+    ROOT="${SYSROOT}" SYSROOT="${SYSROOT}" PORTAGE_CONFIGROOT="${SYSROOT}" \
+    EMERGE_LOG_DIR="${BUILD_ROOT}/log" PORTAGE_DEPCACHEDIR="${BUILD_ROOT}/edb" \
+    PORTAGE_TMPDIR="${BUILD_ROOT}/tmp" \
+    "${CROSS_TARGET}-emerge" --jobs="${JOBS}" --load-average="${JOBS}" --with-bdeps=n "$@"
+}
+
+# Don't cross-rebuild the toolchain (fails under crossdev). Same as Pi5/Frite.
+REBUILD_TOOLCHAIN="${REBUILD_TOOLCHAIN:-false}"
+if ${REBUILD_TOOLCHAIN}; then
+    CROSS_EXCLUDE=()
+else
+    CROSS_EXCLUDE=(--exclude sys-devel/gcc --exclude sys-devel/gcc-config
+                   --exclude sys-libs/glibc --exclude sys-devel/binutils)
+fi
+
+mkdir -p "${SYSROOT}/dev"
+for _devspec in "null c 1 3" "zero c 1 5" "random c 1 8" "urandom c 1 9" "tty c 5 0"; do
+    _devname="${_devspec%% *}"; _devargs="${_devspec#* }"
+    [[ -e "${SYSROOT}/dev/${_devname}" ]] || mknod -m 666 "${SYSROOT}/dev/${_devname}" ${_devargs}
+done
+unset _devspec _devname _devargs
+
+if ${IMAGE_ONLY}; then
+    banner "Phase 1: SKIPPED (--image-only)"
+    banner "Phase 2: SKIPPED (--image-only)"
+else
+
+banner "Phase 1: Cross-building @system (hardened)"
+cross_emerge --oneshot --update sys-apps/baselayout
+cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" @system \
+    || warn "@system had package failures (--keep-going); continuing"
+
+banner "Phase 2: Cross-building stage4 packages (role=${ROLE})"
+mapfile -t STAGE4_PACKAGES < <(grep -v '^\s*#' "${SPECS_DIR}/portage/packages.list" | grep -v '^\s*$')
+if [ "${ROLE_K8S}" != "none" ]; then
+    info "Cluster role — appending packages-k8s.list (containerd + kubeadm node set)"
+    mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
+        grep -v '^\s*#' "${SPECS_DIR}/portage/packages-k8s.list" | grep -v '^\s*$')
+fi
+if ${EDGE_AI}; then
+    info "Edge-AI role — appending packages-edge-ai.list (inference-node extras)"
+    mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
+        grep -v '^\s*#' "${SPECS_DIR}/portage/packages-edge-ai.list" | grep -v '^\s*$')
+fi
+if [ "${DESKTOP}" = "light" ]; then
+    info "Desktop role — appending packages-desktop.list (lean LXDE client set)"
+    mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
+        grep -v '^\s*#' "${SPECS_DIR}/portage/packages-desktop.list" | grep -v '^\s*$')
+fi
+if [ -n "${EXTRA_PACKAGES}" ]; then
+    read -ra _extras <<< "${EXTRA_PACKAGES}"
+    STAGE4_PACKAGES+=("${_extras[@]}")
+    info "Extra packages: ${EXTRA_PACKAGES}"
+fi
+[ -s "${SPECS_DIR}/portage/packages.list" ] || { err "packages.list is empty/missing: ${SPECS_DIR}/portage/packages.list"; exit 1; }
+[ "${#STAGE4_PACKAGES[@]}" -gt 0 ] || { err "no stage4 packages resolved from the package lists — refusing to build a payload-less image."; exit 1; }
+info "Package count: ${#STAGE4_PACKAGES[@]}"
+if ! cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "${STAGE4_PACKAGES[@]}"; then
+    warn "Batch emerge failed (unsatisfiable atom?); retrying per-package so the rest still install"
+    for _pkg in "${STAGE4_PACKAGES[@]}"; do
+        cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" "${_pkg}" \
+            || warn "  skipped ${_pkg}"
+    done
+fi
+
+# ── Post-emerge payload assert (mirrors the x86/Frite "hollow stage4" guard) ──
+have_in_sysroot() {
+    local b="$1" d
+    for d in usr/bin usr/sbin bin sbin usr/local/bin usr/local/sbin opt/bin; do
+        [ -e "${SYSROOT}/${d}/${b}" ] && return 0
+    done
+    return 1
+}
+REQUIRED_BINS=(NetworkManager nmcli sshd nano)
+if [ "${ROLE_K8S}" != "none" ]; then
+    REQUIRED_BINS+=(containerd runc crictl kubelet kubeadm kubectl)
+fi
+if [ "${DESKTOP}" = "light" ]; then
+    REQUIRED_BINS+=(Xorg openbox lxsession pcmanfm lightdm)
+fi
+payload_missing=""
+for _b in "${REQUIRED_BINS[@]}"; do
+    have_in_sysroot "${_b}" || payload_missing="${payload_missing} ${_b}"
+done
+if [ -n "${payload_missing}" ]; then
+    err "stage4 payload incomplete — missing role-defining binaries in ${SYSROOT}:${payload_missing}"
+    err "       the package-list emerge did not complete; review the emerge output above."
+    exit 1
+fi
+if [ "${DESKTOP}" = "light" ] && [ ! -e "${SYSROOT}/etc/init.d/display-manager" ]; then
+    err "DESKTOP=light enables the 'display-manager' service but ${SYSROOT}/etc/init.d/display-manager is missing"
+    err "       (gui-libs/display-manager-init did not emerge) — the desktop would boot to a console. Aborting."
+    exit 1
+fi
+info "stage4 payload assert OK (${#REQUIRED_BINS[@]} role binaries present)."
+
+# ── Phase 2.5: mesh VPN (headscale + tailscale) — same as Pi5/Frite ─
+if ${SKIP_MESH}; then
+    banner "Phase 2.5: SKIPPED mesh VPN (--skip-mesh)"
+else
+    banner "Phase 2.5: Installing mesh VPN (headscale + tailscale)"
+    HS_REL="https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}"
+    HS_URL="${HS_REL}/headscale_${HEADSCALE_VERSION}_linux_arm64"
+    HS_BIN="${SYSROOT}/usr/bin/headscale"
+    if ! curl -fL -o "${HS_BIN}" "${HS_URL}"; then
+        err "headscale ${HEADSCALE_VERSION} fetch failed (${HS_URL}) — the image bakes the mesh; aborting (use --skip-mesh to opt out)."; exit 1
+    fi
+    HS_SUMS="${BUILD_ROOT}/headscale_${HEADSCALE_VERSION}_checksums.txt"
+    if ! dlv_fetch "${HS_REL}/checksums.txt" "${HS_SUMS}" \
+       || ! dlv_verify_from_sumsfile "${HS_BIN}" "headscale_${HEADSCALE_VERSION}_linux_arm64" "${HS_SUMS}" sha256; then
+        rm -f "${HS_BIN}"
+        err "headscale ${HEADSCALE_VERSION} checksum verification FAILED — refusing to ship an unverified control-plane binary."; exit 1
+    fi
+    chmod +x "${HS_BIN}"
+    file "${HS_BIN}" | grep -q 'ELF.*aarch64' || { err "headscale binary is NOT aarch64 (wrong/corrupt download) — refusing to ship it."; exit 1; }
+    info "headscale installed + sha256-verified: /usr/bin/headscale"
+    if ${SKIP_TAILSCALE}; then
+        info "Skipping tailscale client (--skip-tailscale)"
+    else
+        TS_URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
+        TS_TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
+        if ! curl -fL -o "${TS_TGZ}" "${TS_URL}"; then
+            err "tailscale ${TAILSCALE_VERSION} fetch failed (${TS_URL}) — tailscaled is enabled in the runlevel; aborting (use --skip-tailscale to opt out)."; exit 1
+        fi
+        TS_SHA="${TS_TGZ}.sha256"
+        if ! dlv_fetch "${TS_URL}.sha256" "${TS_SHA}" \
+           || ! dlv_verify_sha256_sidecar "${TS_TGZ}" "${TS_SHA}"; then
+            rm -f "${TS_TGZ}"
+            err "tailscale ${TAILSCALE_VERSION} checksum verification FAILED — refusing to ship an unverified mesh client."; exit 1
+        fi
+        TS_TMP="$(mktemp -d)"
+        tar -C "${TS_TMP}" -xzf "${TS_TGZ}"
+        TS_SUB="$(find "${TS_TMP}" -maxdepth 1 -type d -name 'tailscale_*' | head -1)"
+        install -Dm0755 "${TS_SUB}/tailscale"  "${SYSROOT}/usr/bin/tailscale"
+        install -Dm0755 "${TS_SUB}/tailscaled" "${SYSROOT}/usr/sbin/tailscaled"
+        rm -rf "${TS_TMP}"
+        file "${SYSROOT}/usr/bin/tailscale"   | grep -q 'ELF.*aarch64' || { err "tailscale binary is NOT aarch64 (wrong/corrupt download) — refusing to ship it."; exit 1; }
+        file "${SYSROOT}/usr/sbin/tailscaled" | grep -q 'ELF.*aarch64' || { err "tailscaled binary is NOT aarch64 (wrong/corrupt download) — refusing to ship it."; exit 1; }
+        info "tailscale installed + sha256-verified: /usr/bin/tailscale, /usr/sbin/tailscaled"
+    fi
+fi
+
+fi  # IMAGE_ONLY skip of Phase 1+2
+
+# ── Phase 3: Cross-compile the kernel (MAINLINE arm64 + Tegra234 DT) ──
+# The l4t flavor exited above; this is the mainline route only. JETSON_KVER is
+# captured for potential future initramfs use (the boot is initrd-less today —
+# the boot-critical Tegra drivers are =y in the fragments).
+JETSON_KVER=""
+if ${SKIP_KERNEL}; then
+    banner "Phase 3: SKIPPED (--skip-kernel)"
+else
+    banner "Phase 3: Cross-compiling hardened mainline kernel (Tegra234)"
+    KERNEL_SRC=$(find "${SYSROOT}/usr/src/" -maxdepth 1 -name 'linux-*' -type d 2>/dev/null | sort -V | tail -1)
+    if [ -z "${KERNEL_SRC}" ]; then
+        warn "No kernel sources found in sysroot — ensure sys-kernel/gentoo-sources installed. Skipping kernel."
+    else
+        info "Building kernel from ${KERNEL_SRC} (defconfig: ${JETSON_DEFCONFIG}, CPU: ${RPI_CPU})"
+        pushd "${KERNEL_SRC}" >/dev/null
+        make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" "${JETSON_DEFCONFIG}"
+        # merge_config.sh handles Kconfig dependency resolution (same mechanism
+        # as the Frite builder). Two fragments: fleet posture, then Tegra SoC.
+        ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" \
+            bash scripts/kconfig/merge_config.sh -m .config \
+                "${SPECS_DIR}/kernel/hardened-node.config" \
+                "${SPECS_DIR}/kernel/tegra234.config"
+        make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" olddefconfig
+        # Refuse to ship a kernel that silently lost SELinux (fleet posture guard).
+        for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
+            grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
+        done
+        grep -q '^CONFIG_LSM="yama,selinux,bpf"$' .config || { err "CONFIG_LSM malformed (expected yama,selinux,bpf)"; exit 1; }
+        JETSON_KVER="$(make -s ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" kernelrelease 2>/dev/null | tail -1)"
+        make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" -j"${JOBS}" Image modules dtbs
+        make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" INSTALL_MOD_PATH="${SYSROOT}" modules_install
+        mkdir -p "${SYSROOT}/boot/dtb/nvidia"
+        cp arch/arm64/boot/Image "${SYSROOT}/boot/${JETSON_KERNEL_IMG}"
+        # Ship the FULL nvidia DTB dir (the board DTB is selected by extlinux's
+        # FDT line) — kernel-owns-the-DTB, same policy as the Frite.
+        cp -r arch/arm64/boot/dts/nvidia "${SYSROOT}/boot/dtb/" 2>/dev/null || \
+            cp arch/arm64/boot/dts/nvidia/*.dtb "${SYSROOT}/boot/dtb/nvidia/" 2>/dev/null || true
+        if [ ! -f "${SYSROOT}/boot/dtb/${JETSON_DTB}" ]; then
+            err "Selected DTB ${JETSON_DTB} not found under ${SYSROOT}/boot/dtb after the kernel build — the board would not boot. Verify the in-tree DTB name for this kernel."
+            exit 1
+        fi
+        popd >/dev/null
+        info "Kernel build complete (Image + nvidia/tegra234 DTBs staged under /boot)."
+    fi
+fi
+
+if ${SKIP_CLEAN}; then
+    banner "Cleaning: SKIPPED (--skip-clean)"
+else
+    banner "Cleaning sysroot"
+    rm -rf "${SYSROOT}"/usr/share/doc/* "${SYSROOT}"/usr/share/man/* \
+           "${SYSROOT}"/usr/share/info/* "${SYSROOT}"/usr/src/* \
+           "${SYSROOT}"/var/cache/distfiles/* "${SYSROOT}"/var/tmp/* "${SYSROOT}"/tmp/*
+    find "${SYSROOT}"/{usr/bin,usr/sbin,usr/lib64,lib64} -type f -executable 2>/dev/null | while read -r f; do
+        file "$f" | grep -q 'ELF.*aarch64' && "${CROSS_TARGET}-strip" --strip-unneeded "$f" 2>/dev/null || true
+    done
+    info "Sysroot cleaned and binaries stripped."
+fi
+
+banner "Phase 4: Rendering the extlinux boot config"
+# The Orin's UEFI distro-boots /boot/extlinux/extlinux.conf FROM THE ROOT
+# FILESYSTEM (no separate boot partition, no u-boot) — see specs-jetson/boot/.
+APPEND_BASE="$(cat "${SPECS_DIR}/boot/cmdline.base")"
+mkdir -p "${SYSROOT}/boot/extlinux"
+JETSON_INITRD_LINE="    # (initrd-less: boot-critical Tegra drivers are built in)"
+JETSON_APPEND="${APPEND_BASE} root=LABEL=JETSON_ROOT"
+render_template "${SPECS_DIR}/boot/extlinux.conf.tmpl" "${SYSROOT}/boot/extlinux/extlinux.conf"
+if [ ! -f "${SYSROOT}/boot/${JETSON_KERNEL_IMG}" ]; then
+    warn "Kernel ${JETSON_KERNEL_IMG} not in sysroot /boot — the image will not boot until one is added."
+fi
+
+banner "Phase 4: Packaging stage4 tarball"
+STAGE4_TARBALL="${WORK_DIR}/${ART_PREFIX}.stage4.tar.xz"
+tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner --owner=0 --group=0 \
+    --exclude='./usr/src' --exclude='./var/cache' --exclude='./tmp/*' \
+    -cJf "${STAGE4_TARBALL}" . 2>/dev/null || \
+tar -C "${SYSROOT}" --numeric-owner --owner=0 --group=0 \
+    --exclude='./usr/src' --exclude='./var/cache' --exclude='./tmp/*' \
+    -cJf "${STAGE4_TARBALL}" .
+info "Stage4 tarball: ${STAGE4_TARBALL} ($(du -sh "${STAGE4_TARBALL}" | cut -f1))"
+
+IMG_PATH="(not built)"
+
+build_img() {
+    # Raw flashable image: GPT with a single ext4 root labeled JETSON_ROOT
+    # containing /boot/extlinux/extlinux.conf — the Orin UEFI's L4TLauncher
+    # scans exactly this layout on microSD/NVMe/USB. growroot expands the root
+    # to the medium on first boot.
+    [ -f "${SYSROOT}/boot/${JETSON_KERNEL_IMG}" ] || {
+        warn "no kernel in sysroot /boot — skipping the .img (stage4 is still usable via TEGRAFLASH.md layering)."
+        IMG_PATH="(not built — kernel missing)"; return 0; }
+
+    IMG_PATH="${WORK_DIR}/${ART_PREFIX}.img"
+    local total_mib=$(( ROOT_MiB + 16 ))   # GPT headroom
+    info "Creating ${IMG_PATH} (${total_mib} MiB: ext4 root ${ROOT_MiB} MiB, label JETSON_ROOT)"
+    rm -f "${IMG_PATH}"
+    truncate -s "${total_mib}M" "${IMG_PATH}"
+    parted -s "${IMG_PATH}" mklabel gpt \
+        mkpart JETSON_ROOT ext4 4MiB "$(( ROOT_MiB + 4 ))MiB" \
+        set 1 boot off
+
+    local loopdev
+    loopdev="$(losetup -Pf --show "${IMG_PATH}")" || { warn "losetup failed — leaving the .img unpopulated"; IMG_PATH="(not built — losetup failed)"; return 0; }
+    # Ensure the loop device is detached on every exit path from here on.
+    _jetson_img_cleanup() {
+        mountpoint -q "${STAGE_DIR}/imgroot" 2>/dev/null && umount "${STAGE_DIR}/imgroot" 2>/dev/null || true
+        [ -n "${loopdev}" ] && losetup -d "${loopdev}" 2>/dev/null || true
+    }
+    trap '_jetson_img_cleanup' RETURN
+
+    local part="${loopdev}p1"
+    [ -b "${part}" ] || { sleep 1; partprobe "${loopdev}" 2>/dev/null || true; }
+    [ -b "${part}" ] || { warn "partition ${part} did not appear — leaving the .img unpopulated"; IMG_PATH="(not built — no loop partition)"; return 0; }
+    mkfs.ext4 -q -L JETSON_ROOT "${part}"
+    mkdir -p "${STAGE_DIR}/imgroot"
+    mount "${part}" "${STAGE_DIR}/imgroot"
+    info "Populating the root filesystem from the sysroot ..."
+    tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner -cpf - \
+        --exclude='./usr/src' --exclude='./var/cache/distfiles' --exclude='./tmp/*' . \
+        | tar -C "${STAGE_DIR}/imgroot" --xattrs-include='*.*' --numeric-owner -xpf - 2>/dev/null || \
+    tar -C "${SYSROOT}" --numeric-owner -cpf - \
+        --exclude='./usr/src' --exclude='./var/cache/distfiles' --exclude='./tmp/*' . \
+        | tar -C "${STAGE_DIR}/imgroot" --numeric-owner -xpf -
+    sync
+    umount "${STAGE_DIR}/imgroot"
+    losetup -d "${loopdev}"; loopdev=""
+    trap - RETURN
+    info "Raw image: ${IMG_PATH} ($(du -sh "${IMG_PATH}" | cut -f1))"
+    if ${COMPRESS_IMG}; then
+        xz -T0 -9 -f "${IMG_PATH}"; IMG_PATH="${IMG_PATH}.xz"
+    fi
+    return 0
+}
+
+if ${BUILD_IMG}; then
+    banner "Phase 5: Building the flashable raw .img (SD/NVMe)"
+    build_img
+else
+    banner "Phase 5: SKIPPED .img (--no-img)"
+fi
+
+echo ""
+echo -e "${CYAN}${BOLD}=============================================="
+echo "  Jetson Orin (Tegra234) build complete — EXPERIMENTAL"
+echo "==============================================${RESET}"
+echo ""
+echo "  Board:          ${JETSON_BOARD_DESC}"
+echo "  DTB:            ${JETSON_DTB}"
+echo "  Kernel flavor:  ${KERNEL_FLAVOR} (mainline = NO CUDA; see specs-jetson/kernel/README.md)"
+echo "  Role:           ${ROLE}   (k8s=${ROLE_K8S}, edge-ai service=${EDGE_AI}, desktop=${DESKTOP})"
+echo "  ENV:            ${ENV}"
+echo "  Brand:          ${BRAND} / \"${BRAND_TITLE}\" / ${ORG}"
+echo "  Hostname:       ${HOSTNAME}"
+echo ""
+echo "  Mesh + provisioning (SAME as the other node images):"
+echo "    - headscale ${HEADSCALE_VERSION} + tailscale ${TAILSCALE_VERSION} (joins the fleet tailnet)"
+echo "    - First-boot KEYS-USB provisioning (users, ssh keys, Casdoor login, certs)"
+echo "    - Hardened sshd: key-only, prohibit-password"
+echo ""
+echo "  Artifacts:"
+echo "    Work directory:  ${WORK_DIR}"
+echo "    Stage4 tarball:  ${STAGE4_TARBALL}"
+echo "    Raw image:       ${IMG_PATH}"
+echo ""
+echo "  === Post-build ==="
+echo "  FLASH: write the .img to microSD/NVMe (dd / scripts/flash-disk.sh) and boot —"
+echo "         a current Orin devkit UEFI distro-boots /boot/extlinux/extlinux.conf."
+echo "  QSPI / L4T+CUDA: out-of-band recovery-mode tegraflash — see"
+echo "         specs-jetson/installer/TEGRAFLASH.md."
+echo ""
+echo -e "  ${YELLOW}${BOLD}REMINDER: EXPERIMENTAL — no physical Orin has booted this image yet."
+echo -e "  Validate on hardware before shipping (specs-jetson/README.md).${RESET}"
+echo ""

@@ -132,6 +132,12 @@ TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
 
+# --print-plan: resolve + validate everything, print the machine-greppable build
+# plan (one PLAN_KEY=VALUE per line) and exit 0 BEFORE any mutation (no root, no
+# disk writes, no network). The CLI/make/menu/Studio channels + the build-matrix
+# harness (tests/build-matrix/check.sh) verify every role/flag combo through it.
+PRINT_PLAN=false
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
@@ -466,6 +472,11 @@ OPTIONS
                Prints a LOUD announced banner before building.
 
   General
+    --print-plan
+        Resolve + validate all flags, print the build plan (PLAN_KEY=VALUE
+        lines) and exit 0 — no root, no writes, no network. Invalid
+        role/flag combinations exit non-zero.
+
     -h, --help
         Show this help and exit.
 
@@ -645,6 +656,7 @@ while [[ $# -gt 0 ]]; do
         --skip-iso|--no-iso)  BUILD_ISO=false;         shift   ;;
         --skip-clean)         SKIP_CLEAN=true;         shift   ;;
         --resume)             RESUME=true;             shift   ;;
+        --print-plan)         PRINT_PLAN=true;         shift   ;;
         -h|--help)            usage                           ;;
         --)                   shift; break                    ;;
         -*)
@@ -659,6 +671,12 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Comma tolerance: accept "akkoma,tuwunel" (the CSV spelling GUIs/configs tend to
+# emit) as well as the native space-separated list — normalized HERE, right after
+# arg parse, so every downstream word-split (`for s in ${OPTIONAL_SERVICES}`,
+# `case " ${OPTIONAL_SERVICES} "`) sees clean slugs. Mirrors EXCLUDE_SERVICES.
+OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
 
 # FULL-SET sentinel: OPTIONAL_SERVICES=all (or --all-services, which sets the same
 # token) expands to EVERY user-level slug. Done HERE — after arg parse, before the
@@ -1435,6 +1453,42 @@ rebrand_sysroot() {
     done < <(find "${roots[@]}" -type f -print0 2>/dev/null)
     info "Rebrand complete (compound names like '${BRAND}-systems-web' may want review)."
 }
+
+# ── --print-plan: emit the resolved plan and exit BEFORE ANY mutation ──────────
+# Runs AFTER full arg parsing / role+env+grow validation / the optional-services
+# resolution (all/exclude/opt-in folds) / allowlist checks, but BEFORE the prereq
+# probes, the host package.use pre-seed, mkdir, the tee-redirect, network fetches
+# or any sysroot write. No root required. One stable KEY=VALUE per line (grep
+# '^PLAN_'); exit 0. Invalid role/flag combos never reach this point — the
+# validation above already exited non-zero, which is exactly what the
+# tests/build-matrix harness relies on. NO secrets are echoed here.
+if ${PRINT_PLAN}; then
+    _plan() { printf 'PLAN_%s=%s\n' "$1" "$2"; }
+    _plan BUILDER            "build-rpi5-stage4.sh"
+    _plan PLATFORM           "rpi5"
+    _plan ARCH               "arm64"
+    _plan ROLE               "${ROLE}"
+    _plan ENV                "${ENV}"
+    _plan DESKTOP            "none"   # cluster node images are headless
+    _plan GPU_DRIVER         "none"   # BCM2712 VideoCore; no discrete-GPU driver matrix on the Pi
+    _ARTS="stage4.tar.xz"
+    ${BUILD_IMG} && _ARTS="${_ARTS},img"
+    ${BUILD_ISO} && _ARTS="${_ARTS},iso"
+    ${BUILD_TAR} && _ARTS="${_ARTS},fs.tar.xz"
+    _plan ARTIFACTS          "${_ARTS}"
+    _plan ARTIFACT_PREFIX    "${BRAND}-rpi5-arm64-${ROLE}-${ENV}-<timestamp>"
+    _plan WORK_DIR           "${WORK_DIR}"
+    _plan JOBS               "${JOBS}"
+    _plan BRAND              "${BRAND}"
+    _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
+    _plan HOSTNAME           "${HOSTNAME}"
+    _plan K8S                "$([ "${ROLE}" = "pki" ] && echo control-plane || echo worker)"
+    _plan OPTIONAL_SERVICES  "${OPTIONAL_SERVICES:-none}"
+    _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
+    _plan KERNEL             "raspberrypi-arm64 (defconfig=${RPI_DEFCONFIG} + hardened-k8s.config)"
+    _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} iso=${BUILD_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} sd_only=${SD_ONLY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} pcie_gen3=${PCIE_GEN3} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} enable_games=${ENABLE_GAMES}"
+    exit 0
+fi
 
 banner "Verifying prerequisites"
 

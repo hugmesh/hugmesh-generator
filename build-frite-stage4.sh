@@ -144,6 +144,12 @@ TAILSCALE_VERSION="1.78.1"
 SKIP_MESH=false
 SKIP_TAILSCALE=false
 
+# --print-plan: resolve + validate everything, print the machine-greppable build
+# plan (one PLAN_KEY=VALUE per line) and exit 0 BEFORE any mutation (no root, no
+# disk writes, no network). The CLI/make/menu/Studio channels + the build-matrix
+# harness (tests/build-matrix/check.sh) verify every role/flag combo through it.
+PRINT_PLAN=false
+
 # u-boot: the Frite needs a flashable u-boot built from mainline + Amlogic's
 # proprietary FIP/BL31 blobs. We do NOT vendor those blobs here (licensing); the
 # builder DOWNLOADS the prebuilt, board-specific Tow-Boot/u-boot image when a URL
@@ -224,6 +230,9 @@ OPTIONS
   General
     -w, --work-dir DIR  products land here (default ./out).
     -j, --jobs N        parallel jobs (default nproc).
+    --print-plan        resolve + validate all flags, print the build plan
+                        (PLAN_KEY=VALUE lines) and exit 0 — no root, no writes,
+                        no network. Invalid combinations exit non-zero.
     -h, --help
 
 EXAMPLES
@@ -312,6 +321,7 @@ while [[ $# -gt 0 ]]; do
         --compress)           COMPRESS_IMG=true;          shift   ;;
         --skip-clean)         SKIP_CLEAN=true;            shift   ;;
         --resume)             RESUME=true;                shift   ;;
+        --print-plan)         PRINT_PLAN=true;            shift   ;;
         -h|--help)            usage                               ;;
         --)                   shift; break                        ;;
         -*) err "Unknown option: $1"; echo "    Run with --help for usage." >&2; exit 1 ;;
@@ -589,6 +599,44 @@ rebrand_sysroot() {
             "${f}"
     done < <(find "${SYSROOT}/etc/snapdragon" -type f -print0 2>/dev/null)
 }
+
+# ── --print-plan: emit the resolved plan and exit BEFORE ANY mutation ──────────
+# Runs AFTER full arg parsing / board+flavor+env validation / allowlist checks /
+# artifact resolution, but BEFORE the prereq probes, mkdir, tee-redirect, network
+# fetches or any sysroot write. No root required. One stable KEY=VALUE per line
+# (grep '^PLAN_'); exit 0. Invalid role/flag combos never reach this point — the
+# validation above already exited non-zero, which is exactly what the
+# tests/build-matrix harness relies on. NO secrets are echoed here.
+if ${PRINT_PLAN}; then
+    _plan() { printf 'PLAN_%s=%s\n' "$1" "$2"; }
+    _plan BUILDER            "build-frite-stage4.sh"
+    _plan PLATFORM           "frite"
+    _plan ARCH               "arm64"
+    _plan ROLE               "${ROLE}"
+    _plan ENV                "${ENV}"
+    _plan BOARD              "${FRITE_BOARD}"
+    _plan BOARD_DESC         "${FRITE_BOARD_DESC}"
+    _plan DTB                "${FRITE_DTB}"
+    _plan UBOOT_DEFCONFIG    "${FRITE_UBOOT_DEFCONFIG}"
+    _plan FLAVOR             "${FRITE_FLAVOR}"
+    _plan DESKTOP            "${DESKTOP}"
+    _plan GPU_DRIVER         "lima"   # Amlogic GXL Mali-450 → mainline lima (fixed for this platform)
+    _ARTS="stage4.tar.xz"
+    ${BUILD_LIVE}      && _ARTS="${_ARTS},live.iso"
+    ${BUILD_INSTALLER} && _ARTS="${_ARTS},installer.iso"
+    _plan ARTIFACTS          "${_ARTS}"
+    _plan ARTIFACT_PREFIX    "${BRAND}-frite-${FRITE_BOARD}-arm64-${ROLE}-${ENV}-<timestamp>"
+    _plan WORK_DIR           "${WORK_DIR}"
+    _plan JOBS               "${JOBS}"
+    _plan BRAND              "${BRAND}"
+    _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
+    _plan HOSTNAME           "${HOSTNAME}"
+    _plan OPTIONAL_SERVICES  "none"   # lean desktop client: no baked cluster tree
+    _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
+    _plan KERNEL             "mainline-arm64 (defconfig=${FRITE_DEFCONFIG} + hardened-desktop.config)"
+    _plan FLAGS_EFFECTIVE    "env=${ENV} board=${FRITE_BOARD} flavor=${FRITE_FLAVOR} desktop=${DESKTOP} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_uboot=${SKIP_UBOOT} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH}"
+    exit 0
+fi
 
 banner "Verifying prerequisites"
 [ -d "${SPECS_DIR}" ]    || { err "Frite specs directory not found: ${SPECS_DIR}"; exit 1; }

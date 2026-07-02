@@ -1,12 +1,16 @@
 """ImageConfig — the single source of truth for a Snapdragon image build.
 
-Every field maps to a build-x86-host-stage4.sh flag; ``to_cli_args()`` is the exact
-translation the GUI and the build driver share, so the Studio UI can surface the WHOLE
-flag surface without drifting from the script.
+Every field maps to a builder flag; ``to_cli_args()`` is the exact translation the
+GUI and the build driver share, so the Studio UI can surface the WHOLE flag surface
+without drifting from the scripts. The ``platform`` axis picks the builder:
+x86 -> build-x86-host-stage4.sh, rpi5 -> build-rpi5-stage4.sh,
+frite -> build-frite-stage4.sh, jetson -> build-jetson-stage4.sh (EXPERIMENTAL —
+hardware validation pending; frite flag conventions + --role).
 """
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
@@ -28,6 +32,69 @@ MODE_DEFAULT_ROLE = {
     "cloud": "desktop",                # branded tailnet client (mesh + SSO + admin keys)
     "mesh": "omnibus",                 # superadmin: a mesh node serving domains
 }
+
+# platform id -> builder script at the generator-repo root. All four are reachable
+# in the docker path too (the whole generator dir is mounted at /src).
+BUILDER_SCRIPTS = {
+    "x86": "build-x86-host-stage4.sh",
+    "rpi5": "build-rpi5-stage4.sh",
+    "frite": "build-frite-stage4.sh",
+    "jetson": "build-jetson-stage4.sh",
+}
+
+# GUI-facing platform labels (Jetson is scaffold-stage — see specs-jetson/README.md).
+PLATFORM_LABELS = {
+    "x86": "x86_64 host",
+    "rpi5": "Raspberry Pi 5 (arm64)",
+    "frite": "Libre AML-S805X La Frite family (arm64)",
+    "jetson": "NVIDIA Jetson Orin (arm64) — EXPERIMENTAL: hardware validation pending",
+}
+
+# The full role catalog, grouped by Studio mode: (role id, supported platforms, label).
+# THE all-options-in-all-menus source of truth for the Studio (specs-jetson/README.md).
+ROLE_CHOICES = {
+    "standalone": [
+        ("standalone-thin", ("x86",), "Standalone thin — hardened LXDE desktop, no mesh/SSO"),
+        ("standalone-thick", ("x86",), "Standalone thick — hardened full desktop, no mesh/SSO"),
+    ],
+    "cloud": [
+        ("laptop", ("x86",), "Laptop client — tailnet + SSO"),
+        ("chromebook", ("x86",), "Chromebook client — tailnet + SSO"),
+        ("desktop", ("x86",), "Desktop client — tailnet + SSO"),
+        ("frite", ("frite",), "La Frite family arm64 client (board + live/installer flavor)"),
+    ],
+    "mesh": [
+        ("pki", ("x86", "rpi5"), "PKI node — cluster certificate authority"),
+        ("be", ("x86", "rpi5"), "Backend node"),
+        ("fe", ("x86", "rpi5"), "Frontend node"),
+        ("be+gpu", ("x86",), "Backend + GPU node"),
+        ("omnibus", ("x86",), "Omnibus — every cluster role on one node"),
+        ("edge_ai", ("x86", "jetson"), "Edge-AI node — GPU + OpenAI-compatible model API"),
+        ("full", ("jetson",), "Jetson full-stack node — EXPERIMENTAL, hardware validation pending"),
+        ("gpu-host", ("jetson",), "Jetson GPU host — EXPERIMENTAL, hardware validation pending"),
+        ("jetson-desktop", ("jetson",), "Jetson desktop — EXPERIMENTAL, hardware validation pending"),
+    ],
+}
+
+# build-rpi5-stage4.sh spells the node roles out (pki | backend | frontend).
+RPI5_ROLE_MAP = {"be": "backend", "fe": "frontend"}
+# The Studio disambiguates the jetson desktop role id; the builder takes --role desktop.
+JETSON_ROLE_MAP = {"jetson-desktop": "desktop"}
+
+FRITE_BOARDS = ("la-frite", "le-potato", "sweet-potato")
+FRITE_FLAVORS = ("live", "installer", "both")
+FRITE_DESKTOPS = ("light", "none")
+
+# build-jetson-stage4.sh --board (Tegra234 Orin modules on the devkit carrier).
+JETSON_BOARDS = ("orin-nano", "orin-nano-4gb", "orin-nx-8gb", "orin-nx-16gb")
+
+# The full cluster optional-service set (--optional-services slugs).
+OPTIONAL_SERVICES_CHOICES = ("akkoma", "tuwunel", "phpbb", "games", "owncast", "tube",
+                             "character-studio")
+
+# Plaintext secrets that are NEVER persisted to a saved JSON config — they exist only
+# for the live command line (the builder hashes them at build time).
+SECRET_FIELDS = ("local_pass", "luks_pass")
 
 
 @dataclass
@@ -51,12 +118,16 @@ class ImageConfig:
     # ── identity / mode ──
     mode: str = "standalone"           # standalone | cloud | mesh
     role: str = "standalone-thick"
+    platform: str = "x86"              # x86 | rpi5 | frite | jetson -> BUILDER_SCRIPTS
+    board: str = ""                    # frite: FRITE_BOARDS | jetson: JETSON_BOARDS
+    flavor: str = ""                   # frite: live | installer | both
     env: str = "test"
     brand: str = "snapdragon"
     brand_title: str = "Snapdragon Systems"
     org: str = "Snapdragon-Systems"
     cluster_domain: str = "snapdragon.systems"
     local_user: str = "magus"
+    local_pass: str = ""               # --local-pass (SECRET — never saved; live cmd only)
     # ── network / identity plane ──
     tailscale: bool = False            # --with-tailscale / --no-tailscale
     sso: bool = False                  # --with-sso / --no-sso
@@ -94,6 +165,17 @@ class ImageConfig:
     tor_onion_service: bool = False    # --with-tor: expose the in-cluster fe-gateway as a v3 .onion
     # ── Character Studio (VN) frontend remote — OPTIONAL, default off (admin gate) ──
     character_studio: bool = False     # --with-character-studio: VN character-studio remote at /character-studio
+    # ── cluster optional services + games (node-scoped) ──
+    optional_services: list[str] = field(default_factory=list)  # --optional-services slugs
+    enable_games: bool = False         # --enable-games (Game Studio + games.<domain>)
+    # ── client desktop weight / gaming delivery (x86 client roles; frite: light|none) ──
+    desktop: str = ""                  # --desktop: x86 thin|full; frite light|none ("" = default)
+    steam: str = ""                    # --steam native|flatpak|none ("" = builder default)
+    # ── root-disk encryption (installer LUKS2 FDE) ──
+    encrypt_root: bool = False         # --encrypt-root
+    luks_pass: str = ""                # --luks-pass (SECRET — never saved; live cmd only)
+    unlock_keyfile: str = ""           # --unlock-keyfile boot|login ("" = off)
+    unlock_yubikey: str = ""           # --unlock-yubikey boot|login ("" = off)
     # ── home provisioning ──
     home_mode: str = "create"          # create|adopt|archive|restore
     home_device: str = ""
@@ -114,10 +196,19 @@ class ImageConfig:
     # ── build ──
     output_dir: str = ""
     jobs: int = 8
+    compress: bool = False             # --compress: xz -9 the finished image(s)
+    resume: bool = False               # --resume: reuse an existing sysroot
+    extra_flags: str = ""              # escape hatch — shlex-split, appended verbatim
 
     # ---- (de)serialization -------------------------------------------------
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+    def to_dict(self, include_secrets: bool = False) -> dict[str, Any]:
+        """Serialize; plaintext secrets (SECRET_FIELDS) are BLANKED unless the caller
+        explicitly opts in — a saved JSON config must never carry a password."""
+        d = asdict(self)
+        if not include_secrets:
+            for k in SECRET_FIELDS:
+                d[k] = ""
+        return d
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ImageConfig":
@@ -132,9 +223,13 @@ class ImageConfig:
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         return cls(**{k: v for k, v in d.items() if k in known})
 
-    def save(self, path: str) -> None:
+    def save(self, path: str) -> list[str]:
+        """Write the config JSON (secrets blanked). Returns human-readable warnings
+        for any secret that was set but NOT persisted, so the UI can surface it."""
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(self.to_dict(), fh, indent=2)
+        return [f"{k.replace('_', '-')} was NOT saved (plaintext secret) — re-enter it "
+                "before building from this config" for k in SECRET_FIELDS if getattr(self, k)]
 
     @classmethod
     def load(cls, path: str) -> "ImageConfig":
@@ -169,19 +264,113 @@ class ImageConfig:
             validate_home_backup(self.home_backup)
 
     # ---- the canonical flag translation ------------------------------------
+    @property
+    def builder_script(self) -> str:
+        try:
+            return BUILDER_SCRIPTS[self.platform or "x86"]
+        except KeyError:
+            raise ValueError(f"unknown platform: {self.platform!r} "
+                             f"(known: {', '.join(BUILDER_SCRIPTS)})") from None
+
     def to_cli_args(self) -> list[str]:
-        """Build the build-x86-host-stage4.sh argument list. Only emits flags that
-        differ from the script's own defaults, so the command stays readable."""
+        """Build the argument list for this platform's builder script. Only emits
+        flags that differ from the script's own defaults, so the command stays
+        readable — and only flags THAT builder parses (each script has its own
+        surface). The extra_flags escape hatch is appended verbatim (shlex-split)
+        so every CLI option stays expressible even if unfielded."""
         # Reject injection-shaped identity values at the earliest boundary, before
         # they can reach the root-sourced brand.conf/home.conf or a sed replacement.
         self.validate_identity()
-        a: list[str] = ["--role", self.role, "--env", self.env, "--local-user", self.local_user]
+        plat = self.platform or "x86"
+        if plat == "x86":
+            a = self._x86_args()
+        elif plat == "rpi5":
+            a = self._rpi5_args()
+        elif plat == "frite":
+            a = self._frite_args()
+        elif plat == "jetson":
+            a = self._jetson_args()
+        else:
+            raise ValueError(f"unknown platform: {self.platform!r} "
+                             f"(known: {', '.join(BUILDER_SCRIPTS)})")
+        if self.extra_flags:
+            a += shlex.split(self.extra_flags)
+        return a
+
+    def _brand_args(self) -> list[str]:
+        """The brand-identity flags every builder parses identically."""
+        a: list[str] = []
         if self.brand != "snapdragon":
             a += ["--brand", self.brand]
         if self.brand_title != "Snapdragon Systems":
             a += ["--brand-title", self.brand_title]
         if self.org != "Snapdragon-Systems":
             a += ["--org", self.org]
+        return a
+
+    def _arm_common_args(self) -> list[str]:
+        """Flags shared by the arm64 builders (rpi5/frite/jetson) beyond the brand
+        block: env baking, mesh opt-out, radios, root login, image sizing/finish."""
+        a: list[str] = ["--env", self.env]
+        a += self._brand_args()
+        if self.cluster_domain != "snapdragon.systems":
+            a += ["--cluster-domain", self.cluster_domain]
+        # The arm builders have no --with/--no-tailscale pair; mesh is on unless skipped.
+        if not self.tailscale:
+            a += ["--skip-mesh"]
+        if self.enable_wifi:
+            a += ["--enable-wifi"]
+        if self.enable_bluetooth:
+            a += ["--enable-bluetooth"]
+        if self.root_login and self.root_login != "no":
+            a += ["--permit-root-login", self.root_login]
+        if self.img_size:
+            a += ["--img-size", str(self.img_size)]
+        if self.compress:
+            a += ["--compress"]
+        if self.resume:
+            a += ["--resume"]
+        return a
+
+    def _rpi5_args(self) -> list[str]:
+        """build-rpi5-stage4.sh — arm64 SERVER node: pki | backend | frontend."""
+        a = ["--role", RPI5_ROLE_MAP.get(self.role, self.role)]
+        a += self._arm_common_args()
+        if self.optional_services:
+            # SPACE-separated: the builders word-split OPTIONAL_SERVICES on IFS
+            # whitespace (it stays ONE argv element — shlex.quote on print).
+            a += ["--optional-services", " ".join(self.optional_services)]
+        if self.enable_games:
+            a += ["--enable-games"]
+        if self.character_studio:
+            a += ["--with-character-studio"]
+        return a
+
+    def _frite_args(self) -> list[str]:
+        """build-frite-stage4.sh — arm64 CLIENT: board + flavor, no --role."""
+        a: list[str] = ["--board", self.board or "la-frite", "--flavor", self.flavor or "both"]
+        if self.desktop:               # light | none (frite's lean LXDE toggle)
+            a += ["--desktop", self.desktop]
+        a += self._arm_common_args()
+        return a
+
+    def _jetson_args(self) -> list[str]:
+        """build-jetson-stage4.sh — arm64 Tegra edge-AI node. EXPERIMENTAL (hardware
+        validation pending): frite flag conventions + --role edge_ai|full|gpu-host|
+        desktop and --board JETSON_BOARDS (specs-jetson/README.md). Anything beyond
+        that goes via extra_flags."""
+        a = ["--role", JETSON_ROLE_MAP.get(self.role, self.role)]
+        if self.board:                 # Orin module/carrier ("" = builder default)
+            a += ["--board", self.board]
+        a += self._arm_common_args()
+        return a
+
+    def _x86_args(self) -> list[str]:
+        a: list[str] = ["--role", self.role, "--env", self.env, "--local-user", self.local_user]
+        if self.local_pass:
+            # plaintext ONLY on the live command line — never persisted (SECRET_FIELDS)
+            a += ["--local-pass", self.local_pass]
+        a += self._brand_args()
 
         # network / identity — emit explicit with/no so intent is unambiguous
         a += ["--with-tailscale"] if self.tailscale else ["--no-tailscale"]
@@ -195,6 +384,13 @@ class ImageConfig:
                 a += ["--domains", ",".join(domnames)]
             role = "superadmin" if self.mode == "mesh" else (self.users[0].role if self.users else "user")
             a += ["--person-role", role]
+
+        # client desktop weight (thin|full) + Steam delivery (native|flatpak|none) —
+        # "" = builder default, so only explicit choices are emitted
+        if self.desktop:
+            a += ["--desktop", self.desktop]
+        if self.steam:
+            a += ["--steam", self.steam]
 
         # hardware
         if self.gpu_driver and self.gpu_driver != "auto":
@@ -266,6 +462,26 @@ class ImageConfig:
         if self.character_studio:
             a += ["--with-character-studio"]
 
+        # cluster optional services + the games stack (gate_optional_services() prunes
+        # what stays unselected; --enable-games folds 'games' in + the Game Studio).
+        # SPACE-separated: the builders word-split OPTIONAL_SERVICES on IFS
+        # whitespace (it stays ONE argv element — shlex.quote on print).
+        if self.optional_services:
+            a += ["--optional-services", " ".join(self.optional_services)]
+        if self.enable_games:
+            a += ["--enable-games"]
+
+        # root-disk encryption (installer LUKS2 FDE) + unlock factors
+        if self.encrypt_root:
+            a += ["--encrypt-root"]
+        if self.luks_pass:
+            # plaintext ONLY on the live command line — never persisted (SECRET_FIELDS)
+            a += ["--luks-pass", self.luks_pass]
+        if self.unlock_keyfile:
+            a += ["--unlock-keyfile", self.unlock_keyfile]
+        if self.unlock_yubikey:
+            a += ["--unlock-yubikey", self.unlock_yubikey]
+
         # home
         if self.home_mode and self.home_mode != "create":
             a += ["--home-mode", self.home_mode]
@@ -286,13 +502,16 @@ class ImageConfig:
         a += ["--bundle-source"] if self.bundle_source else ["--no-bundle-source"]
         if self.img_size:
             a += ["--img-size", str(self.img_size)]
+        if self.compress:
+            a += ["--compress"]
+        if self.resume:
+            a += ["--resume"]
 
         return a
 
     def to_command_string(self) -> str:
-        import shlex
-        return "./build-x86-host-stage4.sh -w OUT -j %d %s" % (
-            self.jobs, " ".join(shlex.quote(x) for x in self.to_cli_args()))
+        return "./%s -w OUT -j %d %s" % (
+            self.builder_script, self.jobs, " ".join(shlex.quote(x) for x in self.to_cli_args()))
 
     # ---- superadmin mesh manifest -----------------------------------------
     def mesh_manifest(self) -> dict[str, Any]:

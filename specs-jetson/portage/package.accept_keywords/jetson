@@ -1,0 +1,24 @@
+# Keyword acceptances — NVIDIA Jetson Orin (Tegra234, aarch64).
+#
+# Mirrors specs-rpi5/portage/package.accept_keywords/{kubernetes,selinux}: the
+# Jetson joins the SAME kubeadm cluster as the Pi nodes, so the k8s + container
+# runtime + SELinux keywording must match the fleet. Add further ~arm64 lines
+# only if a specific atom you pull in is testing-keyworded on arm64.
+
+# Kubernetes node components (fleet-wide kubeadm version).
+sys-cluster/kubelet ~arm64
+sys-cluster/kubeadm ~arm64
+sys-cluster/kubectl ~arm64
+app-containers/containerd ~arm64
+app-containers/cri-tools ~arm64
+app-containers/cni-plugins ~arm64
+app-containers/runc ~arm64
+# nerdctl has no arm64 keyword in ::gentoo (amd64-only) — omitted from the
+# package lists on purpose (crictl drives containerd on nodes).
+net-firewall/conntrack-tools ~arm64
+
+# SELinux core/policy packages still ~arch on arm64 — accept them.
+sys-libs/libselinux ~arm64
+sys-apps/semodule-utils ~arm64
+sec-policy/selinux-base ~arm64
+sec-policy/selinux-base-policy ~arm64

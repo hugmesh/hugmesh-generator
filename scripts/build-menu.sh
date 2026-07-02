@@ -90,8 +90,39 @@ OPT_X86_EDGE_AI_ANALYSIS="no" # yes => also bake the edge-ai-analysis task API (
 OPT_TOR_ONION="no"            # yes => --with-tor: expose the in-cluster fe-gateway as a v3 .onion
 # ── Character Studio (VN) frontend remote — OPTIONAL, DEFAULT-OFF (admin gate) ──
 OPT_CHARACTER_STUDIO="no"     # yes => --with-character-studio: VN character-studio remote at /character-studio
+# ── OPTIONAL services catalog (cluster roles; specs/cluster/optional-services.yaml) ─
+# Comma list of user-level slugs {akkoma,tuwunel,phpbb,games,owncast,tube,
+# character-studio}. Empty = builder default (akkoma tuwunel phpbb); the literal
+# 'none' = EXPLICITLY none (=> --optional-services ""). The checklist supersedes
+# the lone character-studio toggle above — the two are kept in sync both ways.
+OPT_SERVICES=""
+# ── Installer front-ends offered on the live ISO (--installer-ui) ───────────────
+OPT_INSTALLER_UI=""           # cli | ncurses | calamares | all (empty = builder default)
+# ── Extra builder flags — the verbatim escape hatch (all-options-in-all-menus) ──
+# Appended AS-IS after --role on x86-*/jetson-* targets (via STANDALONE_FLAGS) and
+# onto IMG_FLAGS for the other single-role targets, so ANY builder flag the menu
+# has no widget for stays reachable.
+OPT_EXTRA_FLAGS=""
+# ── Advanced branding OVERRIDES (on top of the brand profile / --theme preset) ──
+OPT_BR_WALLPAPER=""           # --wallpaper FILE
+OPT_BR_GRUB_BG=""             # --grub-background FILE
+OPT_BR_LOGIN_BG=""            # --login-background FILE
+OPT_BR_LOGO=""                # --brand-logo FILE
+OPT_BR_ACCENT=""              # --accent-color '#RRGGBB'
+OPT_BR_SCHEME=""              # --color-scheme FILE.colors
+# ── Home provisioning (standalone/client desktop roles) ─────────────────────────
+OPT_HOME_MODE=""              # --home-mode create|adopt|archive|restore (empty = builder default)
+OPT_HOME_DEVICE=""            # --home-device LABEL=…|UUID=…|/dev/… (adopt)
+OPT_HOME_BACKUP=""            # --home-backup FILE|auto (restore)
+OPT_HOME_ENCRYPTED="no"       # yes => --home-encrypted (per-user eCryptfs on top of LUKS2)
+OPT_HOME_SEED=""              # --home-seed-code repos|stack|mesh (empty/none = builder default: none)
+OPT_HOME_ARCHIVE=""           # --include-home-archive FILE (scripts/archive-home.sh tarball)
 OPT_FRITE_BOARD="la-frite"
 OPT_FRITE_FLAVOR="both"
+OPT_FRITE_DESKTOP="light"     # light (LEAN LXDE desktop) | none (headless base)
+# ── Jetson Orin (arm64 Tegra234; EXPERIMENTAL — hardware validation pending) ────
+OPT_JETSON_BOARD="orin-nano"  # orin-nano | orin-nano-4gb | orin-nx-8gb | orin-nx-16gb
+OPT_JETSON_KFLAVOR="mainline" # mainline (buildable; NO CUDA) | l4t (documented stub)
 # ── Standalone hardened NVIDIA desktop options (NON-secret; persisted) ──────────
 OPT_SA_GPU="all-free"         # all-free|nvidia-free|nvidia|amd-free|amd-pro|intel-free|intel-pro
 OPT_SA_STEAM="native"         # native | flatpak | none
@@ -105,6 +136,7 @@ OPT_SA_SNORT="yes"            # Snort IDS (default on)
 OPT_SA_AIDE="no"              # AIDE file-integrity IDS (opt-in)
 OPT_SA_KBUILTIN="no"          # compile most of the kernel built-in (=y) vs modules
 OPT_SA_EGRESS=""              # egress VPN conf path (wg .conf / .ovpn); empty = none
+OPT_SA_MEDIA_LABEL=""         # --media-label: match the data device by FS LABEL (empty = content-scan)
 # SECRETS are deliberately NOT persisted (never written to ${CONF_FILE}); they are
 # prompted fresh each build and live only in these shell vars for the run.
 SA_LOCAL_PASS=""              # local user password (plaintext, hashed by the builder)
@@ -134,8 +166,26 @@ save_conf() {
         printf 'OPT_X86_EDGE_AI_ANALYSIS=%q\n' "${OPT_X86_EDGE_AI_ANALYSIS}"
         printf 'OPT_TOR_ONION=%q\n'     "${OPT_TOR_ONION}"
         printf 'OPT_CHARACTER_STUDIO=%q\n' "${OPT_CHARACTER_STUDIO}"
+        printf 'OPT_SERVICES=%q\n'      "${OPT_SERVICES}"
+        printf 'OPT_INSTALLER_UI=%q\n'  "${OPT_INSTALLER_UI}"
+        printf 'OPT_EXTRA_FLAGS=%q\n'   "${OPT_EXTRA_FLAGS}"
+        printf 'OPT_BR_WALLPAPER=%q\n'  "${OPT_BR_WALLPAPER}"
+        printf 'OPT_BR_GRUB_BG=%q\n'    "${OPT_BR_GRUB_BG}"
+        printf 'OPT_BR_LOGIN_BG=%q\n'   "${OPT_BR_LOGIN_BG}"
+        printf 'OPT_BR_LOGO=%q\n'       "${OPT_BR_LOGO}"
+        printf 'OPT_BR_ACCENT=%q\n'     "${OPT_BR_ACCENT}"
+        printf 'OPT_BR_SCHEME=%q\n'     "${OPT_BR_SCHEME}"
+        printf 'OPT_HOME_MODE=%q\n'     "${OPT_HOME_MODE}"
+        printf 'OPT_HOME_DEVICE=%q\n'   "${OPT_HOME_DEVICE}"
+        printf 'OPT_HOME_BACKUP=%q\n'   "${OPT_HOME_BACKUP}"
+        printf 'OPT_HOME_ENCRYPTED=%q\n' "${OPT_HOME_ENCRYPTED}"
+        printf 'OPT_HOME_SEED=%q\n'     "${OPT_HOME_SEED}"
+        printf 'OPT_HOME_ARCHIVE=%q\n'  "${OPT_HOME_ARCHIVE}"
         printf 'OPT_FRITE_BOARD=%q\n'   "${OPT_FRITE_BOARD}"
         printf 'OPT_FRITE_FLAVOR=%q\n'  "${OPT_FRITE_FLAVOR}"
+        printf 'OPT_FRITE_DESKTOP=%q\n' "${OPT_FRITE_DESKTOP}"
+        printf 'OPT_JETSON_BOARD=%q\n'  "${OPT_JETSON_BOARD}"
+        printf 'OPT_JETSON_KFLAVOR=%q\n' "${OPT_JETSON_KFLAVOR}"
         # Standalone-desktop NON-secret options (passwords are NEVER persisted).
         printf 'OPT_SA_GPU=%q\n'        "${OPT_SA_GPU}"
         printf 'OPT_SA_STEAM=%q\n'      "${OPT_SA_STEAM}"
@@ -149,6 +199,7 @@ save_conf() {
         printf 'OPT_SA_AIDE=%q\n'       "${OPT_SA_AIDE}"
         printf 'OPT_SA_KBUILTIN=%q\n'   "${OPT_SA_KBUILTIN}"
         printf 'OPT_SA_EGRESS=%q\n'     "${OPT_SA_EGRESS}"
+        printf 'OPT_SA_MEDIA_LABEL=%q\n' "${OPT_SA_MEDIA_LABEL}"
         printf 'OPT_ROOT_LOGIN=%q\n'    "${OPT_ROOT_LOGIN}"
     } > "${CONF_FILE}" 2>/dev/null || true
 }
@@ -188,6 +239,46 @@ ui_menu() {
             printf '%s' "${tags[$((choice-1))]}"; return 0
         fi
         warn "invalid choice — enter 1-${#tags[@]} or q"
+    done
+}
+
+# ui_checklist TITLE PROMPT  tag1 item1 on|off  tag2 item2 on|off ...
+#   -> echoes the CHOSEN tags space-separated (may be empty), rc=1 on cancel.
+# The multi-select analogue of ui_menu (whiptail --checklist / a text toggle loop).
+ui_checklist() {
+    local title="$1" prompt="$2"; shift 2
+    if [ "${HAVE_TUI}" = 1 ]; then
+        local out
+        out="$(whiptail --title "${WT_TITLE} — ${title}" --notags --separate-output \
+            --checklist "${prompt}" 22 78 10 "$@" 3>&1 1>&2 2>&3)" || return 1
+        # --separate-output = one tag per line; join to one space-separated row.
+        printf '%s' "${out}" | tr '\n' ' ' | sed -E 's/ +$//'
+        return 0
+    fi
+    # Text fallback: [x]/[ ] rows; a number toggles, 'd'/empty = done, 'q' = cancel.
+    local -a tags=() items=() states=(); local i
+    while [ "$#" -ge 3 ]; do tags+=("$1"); items+=("$2"); states+=("$3"); shift 3; done
+    local choice
+    while true; do
+        printf '\n%s== %s ==%s\n' "${C_BLD}" "${title}" "${C_RST}" >&2
+        printf '%b\n' "${prompt}" >&2
+        for i in "${!items[@]}"; do
+            printf '  %2d) [%s] %s\n' "$((i+1))" "$([ "${states[$i]}" = on ] && echo x || echo ' ')" "${items[$i]}" >&2
+        done
+        printf '   d) done (keep this selection)   q) cancel\n' >&2
+        read -r -p "toggle: " choice </dev/tty || return 1
+        [ "${choice}" = q ] && return 1
+        if [ "${choice}" = d ] || [ -z "${choice}" ]; then
+            local out=""
+            for i in "${!tags[@]}"; do [ "${states[$i]}" = on ] && out+="${tags[$i]} "; done
+            printf '%s' "${out% }"; return 0
+        fi
+        if [[ "${choice}" =~ ^[0-9]+$ ]] && [ "${choice}" -ge 1 ] && [ "${choice}" -le "${#tags[@]}" ]; then
+            i=$((choice-1))
+            states[$i]="$([ "${states[$i]}" = on ] && echo off || echo on)"
+        else
+            warn "invalid choice — enter 1-${#tags[@]}, d or q"
+        fi
     done
 }
 
@@ -268,7 +359,7 @@ menu_build_alive() {
 # PID, or nothing.
 foreign_build_pid() {
     local p
-    p="$(pgrep -f 'build-all-roles\.sh|build-(rpi5|x86-host|frite)-stage4\.sh' 2>/dev/null | head -n1)"
+    p="$(pgrep -f 'build-all-roles\.sh|build-(rpi5|x86-host|frite|jetson)-stage4\.sh' 2>/dev/null | head -n1)"
     [ -z "${p}" ] && p="$(pgrep -f "docker run.*${BUILDER_IMAGE}" 2>/dev/null | head -n1)"
     printf '%s' "${p}"
 }
@@ -310,7 +401,19 @@ build_make_cmd() {
     RUN_MAKE+=("WORK_DIR=${OPT_WORK_DIR}" "JOBS=${OPT_JOBS}" "ENV=${OPT_ENV}")
     [ -n "${OPT_BRAND}" ]  && RUN_MAKE+=("BRAND=${OPT_BRAND}")
     [ -n "${OPT_DOMAIN}" ] && RUN_MAKE+=("DOMAIN=${OPT_DOMAIN}")
-    [ -n "${OPT_IMGFLAGS}" ] && RUN_MAKE+=("IMG_FLAGS=${OPT_IMGFLAGS}")
+    # IMG_FLAGS is expanded VERBATIM into the rpi/x86/frite/jetson builder
+    # invocations (every $(RPI)/$(X86)/$(FRITE_BUILD)/$(JETSON_BUILD) macro embeds
+    # $(IMG_FLAGS)), so it doubles as the extra-builder-flags channel for the
+    # targets that do NOT consume STANDALONE_FLAGS (rpi-% / rpi / x86 / omnibus).
+    # x86-*/jetson-*/frite get the extra flags via STANDALONE_FLAGS below instead
+    # — never both, which would pass them twice (the builder macros already
+    # contain $(IMG_FLAGS)).
+    local imgflags="${OPT_IMGFLAGS}"
+    case "${target}" in
+        x86-*|jetson-*|frite|build-all) ;;   # STANDALONE_FLAGS channel / no passthrough
+        *) [ -n "${OPT_EXTRA_FLAGS}" ] && imgflags="${imgflags:+${imgflags} }${OPT_EXTRA_FLAGS}" ;;
+    esac
+    [ -n "${imgflags}" ] && RUN_MAKE+=("IMG_FLAGS=${imgflags}")
     # Root SSH login: only forwarded when opted IN; empty => every image stays hardened
     # (PermitRootLogin no) by the builders' own default. Applies to ALL targets/arches.
     [ -n "${OPT_ROOT_LOGIN}" ] && [ "${OPT_ROOT_LOGIN}" != "no" ] && RUN_MAKE+=("PERMIT_ROOT_LOGIN=${OPT_ROOT_LOGIN}")
@@ -326,71 +429,126 @@ build_make_cmd() {
         [ "${OPT_OMNIBUS}" = yes ] && RUN_MAKE+=("X86_OMNIBUS=1")
         [ "${OPT_PENTEST}" = yes ] && RUN_MAKE+=("PENTEST=1")
     fi
-    # Frite board/flavor only matter for the frite target but are harmless else.
+    # Frite board/flavor/desktop only matter for the frite target but are harmless
+    # else. FRITE_BOARD/FRITE_FLAVOR/FRITE_DESKTOP map onto the builder's --board /
+    # --flavor / --desktop light|none knobs, which the Makefile frite target
+    # threads. Extra builder flags (--enable-wifi / --uboot-url / --img-size …)
+    # ride STANDALONE_FLAGS, appended verbatim by the frite recipe — same escape
+    # hatch as x86-*/jetson-*.
     if [ "${target}" = frite ]; then
-        RUN_MAKE+=("FRITE_BOARD=${OPT_FRITE_BOARD}" "FRITE_FLAVOR=${OPT_FRITE_FLAVOR}")
+        RUN_MAKE+=("FRITE_BOARD=${OPT_FRITE_BOARD}" "FRITE_FLAVOR=${OPT_FRITE_FLAVOR}" "FRITE_DESKTOP=${OPT_FRITE_DESKTOP}")
+        [ -n "${OPT_EXTRA_FLAGS}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${OPT_EXTRA_FLAGS}")
     fi
-    # Standalone hardened NVIDIA desktop: thread the collected options as builder
-    # flags via STANDALONE_FLAGS (consumed by the Makefile x86-standalone* targets).
-    # NOTE: --local-pass lands in the process argv (visible to `ps` on this box);
-    # acceptable on a single-user build host. The builder hashes it immediately and
-    # never bakes the plaintext. The LUKS root passphrase is NOT passed here unless
-    # the user opts into an unattended one — the installer prompts at install time.
-    if [[ "${target}" == x86-standalone* ]]; then
-        local sf=""
-        sf+=" --gpu-driver ${OPT_SA_GPU}"
-        sf+=" --steam ${OPT_SA_STEAM}"
-        [ "${OPT_SA_MEDIA}" = no ] && sf+=" --no-media-data"
-        [ -n "${OPT_SA_USER}" ] && sf+=" --local-user ${OPT_SA_USER}"
-        [ -n "${SA_LOCAL_PASS}" ] && sf+=" --local-pass ${SA_LOCAL_PASS}"
-        [ -n "${SA_LUKS_PASS}" ]  && sf+=" --luks-pass ${SA_LUKS_PASS}"
-        [ "${OPT_SA_KEYFILE}" != none ] && sf+=" --unlock-keyfile ${OPT_SA_KEYFILE}"
-        [ "${OPT_SA_YUBIKEY}" != none ] && sf+=" --unlock-yubikey ${OPT_SA_YUBIKEY}"
-        # branding + security stack + monolithic kernel + egress VPN
-        { [ -n "${OPT_SA_THEME}" ] && [ "${OPT_SA_THEME}" != none ]; } && sf+=" --theme ${OPT_SA_THEME}"
-        [ "${OPT_SA_PROXY}" = no ]    && sf+=" --no-proxy-stack"
-        [ "${OPT_SA_SNORT}" = no ]    && sf+=" --no-snort"
-        [ "${OPT_SA_AIDE}" = yes ]    && sf+=" --with-aide"
-        [ "${OPT_SA_KBUILTIN}" = yes ] && sf+=" --kernel-builtin"
-        [ -n "${OPT_SA_EGRESS}" ]     && sf+=" --egress-vpn ${OPT_SA_EGRESS}"
-        RUN_MAKE+=("STANDALONE_FLAGS=${sf# }")
+    # ── Jetson (jetson-% targets): its OWN axes as make-vars + the escape hatch ──
+    # JETSON_BOARD / JETSON_KERNEL_FLAVOR map onto the builder's --board /
+    # --kernel-flavor; extra builder flags thread via STANDALONE_FLAGS, which the
+    # Makefile jetson/jetson-% targets append verbatim after --kernel-flavor. The
+    # x86 knobs composed below (--optional-services / --with-tor / the edge-AI
+    # model-library / branding overrides / --installer-ui) are deliberately NOT
+    # emitted here: build-jetson-stage4.sh does not take them yet (its edge_ai/full
+    # roles always bake the edge-ai service; gate_optional_services is not
+    # replicated there — specs-jetson/README.md) and an unknown flag hard-fails the
+    # builder. Any flag the Jetson builder DOES grow is reachable immediately via
+    # the extra-flags hatch (the all-options-in-all-menus rule).
+    if [[ "${target}" == jetson-* ]]; then
+        RUN_MAKE+=("JETSON_BOARD=${OPT_JETSON_BOARD}" "JETSON_KERNEL_FLAVOR=${OPT_JETSON_KFLAVOR}")
+        [ -n "${OPT_EXTRA_FLAGS}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${OPT_EXTRA_FLAGS}")
     fi
-    # Edge-AI inference service on a GPU cluster role. The edge_ai role ALWAYS bakes
-    # it (auto-selected by the builder); be+gpu/omnibus add it only when OPT_X86_EDGE_AI=yes.
-    # Threaded via STANDALONE_FLAGS, which the Makefile x86-% pattern appends to --role.
-    case "${target}" in
-        x86-be+gpu|x86-omnibus|x86-edge_ai)
-            local ef=""
-            [ "${target}" != x86-edge_ai ] && [ "${OPT_X86_EDGE_AI}" = yes ] && ef+=" --with-edge-ai"
-            if [ "${target}" = x86-edge_ai ] || [ "${OPT_X86_EDGE_AI}" = yes ]; then
-                [ -n "${OPT_EDGE_AI_RUNTIME}" ] && [ "${OPT_EDGE_AI_RUNTIME}" != ollama ] && ef+=" --edge-ai-runtime ${OPT_EDGE_AI_RUNTIME}"
-                [ -n "${OPT_EDGE_AI_MODELS}" ]  && ef+=" --edge-ai-models ${OPT_EDGE_AI_MODELS}"
-                [ -n "${OPT_EDGE_AI_MODEL_DEFAULT}" ] && ef+=" --edge-ai-model-default ${OPT_EDGE_AI_MODEL_DEFAULT}"
+    # ── Builder flags threaded via STANDALONE_FLAGS (x86-* targets) ─────────────
+    # The Makefile x86-% / x86-standalone* targets append STANDALONE_FLAGS verbatim
+    # after --role, so EVERY x86 builder flag is reachable from this menu (the
+    # all-options-in-all-menus rule). ALL blocks below fold into ONE bf string — a
+    # single make invocation never gets a double STANDALONE_FLAGS= emit.
+    case "${target}" in x86-*)
+        local bf=""
+        # Standalone hardened NVIDIA desktop: the collected desktop options.
+        # NOTE: --local-pass lands in the process argv (visible to `ps` on this box);
+        # acceptable on a single-user build host. The builder hashes it immediately and
+        # never bakes the plaintext. The LUKS root passphrase is NOT passed here unless
+        # the user opts into an unattended one — the installer prompts at install time.
+        if [[ "${target}" == x86-standalone* ]]; then
+            bf+=" --gpu-driver ${OPT_SA_GPU}"
+            bf+=" --steam ${OPT_SA_STEAM}"
+            [ "${OPT_SA_MEDIA}" = no ] && bf+=" --no-media-data"
+            # match the media data device by FS LABEL (only meaningful with media ON)
+            [ "${OPT_SA_MEDIA}" = yes ] && [ -n "${OPT_SA_MEDIA_LABEL}" ] && bf+=" --media-label ${OPT_SA_MEDIA_LABEL}"
+            [ -n "${OPT_SA_USER}" ] && bf+=" --local-user ${OPT_SA_USER}"
+            [ -n "${SA_LOCAL_PASS}" ] && bf+=" --local-pass ${SA_LOCAL_PASS}"
+            [ -n "${SA_LUKS_PASS}" ]  && bf+=" --luks-pass ${SA_LUKS_PASS}"
+            [ "${OPT_SA_KEYFILE}" != none ] && bf+=" --unlock-keyfile ${OPT_SA_KEYFILE}"
+            [ "${OPT_SA_YUBIKEY}" != none ] && bf+=" --unlock-yubikey ${OPT_SA_YUBIKEY}"
+            # branding theme + security stack + monolithic kernel + egress VPN
+            { [ -n "${OPT_SA_THEME}" ] && [ "${OPT_SA_THEME}" != none ]; } && bf+=" --theme ${OPT_SA_THEME}"
+            [ "${OPT_SA_PROXY}" = no ]    && bf+=" --no-proxy-stack"
+            [ "${OPT_SA_SNORT}" = no ]    && bf+=" --no-snort"
+            [ "${OPT_SA_AIDE}" = yes ]    && bf+=" --with-aide"
+            [ "${OPT_SA_KBUILTIN}" = yes ] && bf+=" --kernel-builtin"
+            [ -n "${OPT_SA_EGRESS}" ]     && bf+=" --egress-vpn ${OPT_SA_EGRESS}"
+        else
+            # OPTIONAL services catalog + Tor + Character Studio — CLUSTER-role knobs
+            # (standalone desktops are not cluster members, so they are skipped there;
+            # on the tailnet CLIENT desktops the builder's !ROLE_CLIENT guard makes an
+            # accidental --with-*/--optional-services a loud, harmless no-op).
+            if [ "${OPT_SERVICES}" = none ]; then
+                bf+=' --optional-services ""'
+            elif [ -n "${OPT_SERVICES}" ]; then
+                # comma list -> the builder's space-separated list (kept as ONE shell
+                # word via embedded double quotes, which survive both make legs).
+                bf+=" --optional-services \"${OPT_SERVICES//,/ }\""
+                # games is opt-in — mirror the checklist with the explicit toggle too
+                case ",${OPT_SERVICES}," in *,games,*) bf+=" --enable-games" ;; esac
             fi
-            # --with-edge-ai-analysis folds edge-ai too (its dependency), so it applies on
-            # any GPU target incl. the edge_ai role.
-            [ "${OPT_X86_EDGE_AI_ANALYSIS}" = yes ] && ef+=" --with-edge-ai-analysis"
-            # Tor v3 onion + Character Studio (VN) fold into the SAME STANDALONE_FLAGS emit
-            # on GPU roles (never a second STANDALONE_FLAGS= for one make invocation).
-            [ "${OPT_TOR_ONION}" = yes ] && ef+=" --with-tor"
-            [ "${OPT_CHARACTER_STUDIO}" = yes ] && ef+=" --with-character-studio"
-            [ -n "${ef}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${ef# }")
-            ;;
-    esac
-    # Tor v3 onion + Character Studio (VN) apply to ANY x86 CLUSTER role (not standalone
-    # desktops, which are not cluster members). On the GPU targets they are folded into ef
-    # above; for the REMAINING x86 cluster roles emit them as a SINGLE STANDALONE_FLAGS here
-    # so the Makefile x86-% pattern threads the flag(s) onto --role. The cases are DISJOINT,
-    # so a single make invocation never gets a double STANDALONE_FLAGS= (the no-op desktop
-    # builder guard on !ROLE_CLIENT makes an accidental --with-* harmless anyway).
-    case "${target}" in
-        x86-standalone*|x86-be+gpu|x86-omnibus|x86-edge_ai) ;;   # handled above (or N/A)
-        x86-*)
-            local nf=""
-            [ "${OPT_TOR_ONION}" = yes ] && nf+=" --with-tor"
-            [ "${OPT_CHARACTER_STUDIO}" = yes ] && nf+=" --with-character-studio"
-            [ -n "${nf}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${nf# }")
-            ;;
+            [ "${OPT_TOR_ONION}" = yes ] && bf+=" --with-tor"
+            [ "${OPT_CHARACTER_STUDIO}" = yes ] && bf+=" --with-character-studio"
+        fi
+        # Edge-AI inference service on a GPU cluster role. The x86 edge_ai role
+        # ALWAYS bakes it (auto-selected by the builder); the other GPU-capable
+        # roles add it only when OPT_X86_EDGE_AI=yes. (The Jetson edge_ai/full
+        # roles bake it builder-side too, but the --with-edge-ai/--edge-ai-* knobs
+        # are x86-only flags — see the jetson-* block above.)
+        case "${target}" in
+            x86-be+gpu|x86-omnibus|x86-edge_ai)
+                local ai_always=no
+                case "${target}" in x86-edge_ai) ai_always=yes ;; esac
+                [ "${ai_always}" = no ] && [ "${OPT_X86_EDGE_AI}" = yes ] && bf+=" --with-edge-ai"
+                if [ "${ai_always}" = yes ] || [ "${OPT_X86_EDGE_AI}" = yes ]; then
+                    [ -n "${OPT_EDGE_AI_RUNTIME}" ] && [ "${OPT_EDGE_AI_RUNTIME}" != ollama ] && bf+=" --edge-ai-runtime ${OPT_EDGE_AI_RUNTIME}"
+                    [ -n "${OPT_EDGE_AI_MODELS}" ]  && bf+=" --edge-ai-models ${OPT_EDGE_AI_MODELS}"
+                    [ -n "${OPT_EDGE_AI_MODEL_DEFAULT}" ] && bf+=" --edge-ai-model-default ${OPT_EDGE_AI_MODEL_DEFAULT}"
+                fi
+                # --with-edge-ai-analysis folds edge-ai too (its dependency), so it applies
+                # on any GPU target incl. the edge_ai role.
+                [ "${OPT_X86_EDGE_AI_ANALYSIS}" = yes ] && bf+=" --with-edge-ai-analysis"
+                ;;
+        esac
+        # Advanced branding OVERRIDES — single artwork/palette pieces layered on top
+        # of the brand profile / theme preset. Apply to ANY x86 image (x86-only
+        # flags: the Jetson builder has no branding-override surface yet).
+        [ -n "${OPT_BR_WALLPAPER}" ] && bf+=" --wallpaper ${OPT_BR_WALLPAPER}"
+        [ -n "${OPT_BR_GRUB_BG}" ]   && bf+=" --grub-background ${OPT_BR_GRUB_BG}"
+        [ -n "${OPT_BR_LOGIN_BG}" ]  && bf+=" --login-background ${OPT_BR_LOGIN_BG}"
+        [ -n "${OPT_BR_LOGO}" ]      && bf+=" --brand-logo ${OPT_BR_LOGO}"
+        [ -n "${OPT_BR_ACCENT}" ]    && bf+=" --accent-color ${OPT_BR_ACCENT}"
+        [ -n "${OPT_BR_SCHEME}" ]    && bf+=" --color-scheme ${OPT_BR_SCHEME}"
+        # Home provisioning — standalone + tailnet CLIENT desktops only (a cluster
+        # node has no provisioned user home to adopt/restore).
+        case "${target}" in
+            x86-standalone*|x86-laptop|x86-chromebook|x86-desktop)
+                [ -n "${OPT_HOME_MODE}" ]    && bf+=" --home-mode ${OPT_HOME_MODE}"
+                [ -n "${OPT_HOME_DEVICE}" ]  && bf+=" --home-device ${OPT_HOME_DEVICE}"
+                [ -n "${OPT_HOME_BACKUP}" ]  && bf+=" --home-backup ${OPT_HOME_BACKUP}"
+                [ "${OPT_HOME_ENCRYPTED}" = yes ] && bf+=" --home-encrypted"
+                { [ -n "${OPT_HOME_SEED}" ] && [ "${OPT_HOME_SEED}" != none ]; } && bf+=" --home-seed-code ${OPT_HOME_SEED}"
+                [ -n "${OPT_HOME_ARCHIVE}" ] && bf+=" --include-home-archive ${OPT_HOME_ARCHIVE}"
+                ;;
+        esac
+        # Installer front-ends offered on the live ISO (empty = builder default:
+        # standalone='all', everything else 'cli').
+        [ -n "${OPT_INSTALLER_UI}" ] && bf+=" --installer-ui ${OPT_INSTALLER_UI}"
+        # Extra builder flags — the verbatim escape hatch, LAST so they can override.
+        [ -n "${OPT_EXTRA_FLAGS}" ] && bf+=" ${OPT_EXTRA_FLAGS}"
+        [ -n "${bf}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${bf# }")
+        ;;
     esac
 }
 
@@ -500,7 +658,7 @@ parse_progress() {
     # single-role build the "Building … role:" banner is printed once at the start
     # and scrolls far out of the recent-tail window.
     local rline
-    rline="$(grep -aE '(#  Building (RPi5|x86|Frite)|^==> (Pi|x86|Frite) |Building .* role:)' "${log}" 2>/dev/null | tail -n1)"
+    rline="$(grep -aE '(#  Building (RPi5|x86|Frite|Jetson)|^==> (Pi|x86|Frite|Jetson) |Building .* role:)' "${log}" 2>/dev/null | tail -n1)"
     [ -n "${rline}" ] && role="$(printf '%s' "${rline}" | sed -E 's/^[[:space:]#=>]*//; s/\x1b\[[0-9;]*m//g' | cut -c1-46)"
     printf '%s %s %s %s %s' "${cur}" "${total}" "${pct}" "${role}" "${pkg}"
 }
@@ -536,7 +694,7 @@ draw_monitor() {
     # would then append a second "0" line, and "$(( 0\n0 - 1 ))" is a fatal
     # arithmetic SYNTAX error. So take grep's output as-is and sanitize to one int.
     local roles_seen
-    roles_seen="$(grep -acE '(#  Building (RPi5|x86|Frite)|^==> (Pi|x86|Frite) )' "${log}" 2>/dev/null)"
+    roles_seen="$(grep -acE '(#  Building (RPi5|x86|Frite|Jetson)|^==> (Pi|x86|Frite|Jetson) )' "${log}" 2>/dev/null)"
     roles_seen="${roles_seen//[^0-9]/}"; roles_seen="${roles_seen:-0}"
     [ "${roles_seen}" -lt 1 ] && roles_seen=1
     local overall_pct=0 overall_label
@@ -647,6 +805,138 @@ edge_ai_options_screen() {
     done
 }
 
+# ── OPTIONAL services catalog (the user-level slugs from
+# specs/cluster/optional-services.yaml). One checklist -> --optional-services
+# "<list>" on cluster roles; checking 'games' also emits --enable-games (games is
+# opt-in). character-studio HERE supersedes the older lone toggle — the two are
+# kept in sync both ways (see services_sync_charstudio).
+SERVICE_SLUGS=(akkoma tuwunel phpbb games owncast tube character-studio)
+
+# Keep the services checklist and the lone Character Studio toggle consistent:
+# the checklist is authoritative once SET, so flipping the toggle edits the list
+# membership; an untouched checklist (OPT_SERVICES empty) leaves the toggle to
+# its original --with-character-studio behavior.
+services_sync_charstudio() {
+    [ -z "${OPT_SERVICES}" ] && return 0
+    local svc=",${OPT_SERVICES},"
+    svc="${svc/,none,/,}"
+    svc="${svc/,character-studio,/,}"
+    [ "${OPT_CHARACTER_STUDIO}" = yes ] && svc="${svc}character-studio,"
+    svc="${svc#,}"; svc="${svc%,}"
+    OPT_SERVICES="${svc:-none}"
+}
+
+services_screen() {
+    # Current selection: saved list, or (untouched) the builder default — with the
+    # legacy lone character-studio toggle migrated in as a pre-checked box.
+    local cur
+    if [ -z "${OPT_SERVICES}" ]; then
+        cur="akkoma,tuwunel,phpbb"
+        [ "${OPT_CHARACTER_STUDIO}" = yes ] && cur="${cur},character-studio"
+    elif [ "${OPT_SERVICES}" = none ]; then
+        cur=""
+    else
+        cur="${OPT_SERVICES}"
+    fi
+    local -a rows=(); local s state
+    local -A desc=(
+        [akkoma]="akkoma ............ Mastodon-compatible social (homeserver)"
+        [tuwunel]="tuwunel ........... Matrix homeserver"
+        [phpbb]="phpbb ............. forum"
+        [games]="games ............. Game Studio + games.<domain> (OPT-IN)"
+        [owncast]="owncast ........... live streaming"
+        [tube]="tube .............. LocalTube video"
+        [character-studio]="character-studio .. Character Studio (VN) frontend remote"
+    )
+    for s in "${SERVICE_SLUGS[@]}"; do
+        case ",${cur}," in *,"${s}",*) state=on ;; *) state=off ;; esac
+        rows+=("${s}" "${desc[${s}]}" "${state}")
+    done
+    local sel
+    sel="$(ui_checklist "Optional services" \
+        "OPTIONAL user-level services baked onto CLUSTER images (defaults: akkoma+tuwunel+phpbb ON; games/owncast/tube/character-studio OFF). Unchecked slugs are pruned from the baked GitOps tree:" \
+        "${rows[@]}")" || return 0
+    # space-separated tags -> the persisted comma list ('' selection = EXPLICIT none)
+    set -- ${sel}
+    if [ "$#" -eq 0 ]; then
+        OPT_SERVICES="none"
+    else
+        OPT_SERVICES="$(IFS=,; printf '%s' "$*")"
+    fi
+    # the checklist supersedes the lone Character Studio toggle — mirror it
+    case ",${OPT_SERVICES}," in
+        *,character-studio,*) OPT_CHARACTER_STUDIO=yes ;;
+        *)                    OPT_CHARACTER_STUDIO=no ;;
+    esac
+    save_conf
+}
+
+# Advanced branding: per-piece artwork/palette OVERRIDES layered on top of the
+# brand profile / --theme preset (which stay as-is; empty = keep the preset piece).
+branding_screen() {
+    while true; do
+        local c
+        c="$(ui_menu "Advanced branding" "Per-piece overrides on top of the brand profile / theme preset (empty = preset):" \
+            wallpaper "Wallpaper ........... ${OPT_BR_WALLPAPER:-<preset>}" \
+            grubbg    "GRUB background ..... ${OPT_BR_GRUB_BG:-<preset>}" \
+            loginbg   "Login background .... ${OPT_BR_LOGIN_BG:-<preset>}" \
+            logo      "Brand logo .......... ${OPT_BR_LOGO:-<preset>}" \
+            accent    "Accent color ........ ${OPT_BR_ACCENT:-<preset>}" \
+            scheme    "Color scheme ........ ${OPT_BR_SCHEME:-<preset>}" \
+            back      "‹ back")" || return 0
+        case "${c}" in
+            wallpaper) OPT_BR_WALLPAPER="$(ui_input "Wallpaper" "Wallpaper image FILE (--wallpaper; empty = preset)" "${OPT_BR_WALLPAPER}")" ;;
+            grubbg)    OPT_BR_GRUB_BG="$(ui_input "GRUB background" "GRUB background image FILE (--grub-background; empty = preset)" "${OPT_BR_GRUB_BG}")" ;;
+            loginbg)   OPT_BR_LOGIN_BG="$(ui_input "Login background" "Login/greeter background FILE (--login-background; empty = preset)" "${OPT_BR_LOGIN_BG}")" ;;
+            logo)      OPT_BR_LOGO="$(ui_input "Brand logo" "Brand logo image FILE (--brand-logo; empty = preset)" "${OPT_BR_LOGO}")" ;;
+            accent)    OPT_BR_ACCENT="$(ui_input "Accent color" "Accent color '#RRGGBB' (--accent-color; empty = preset)" "${OPT_BR_ACCENT}")" ;;
+            scheme)    OPT_BR_SCHEME="$(ui_input "Color scheme" "Color scheme FILE.colors (--color-scheme; empty = preset)" "${OPT_BR_SCHEME}")" ;;
+            back|"")   save_conf; return 0 ;;
+        esac
+        save_conf
+    done
+}
+
+# Home provisioning: how the installed user's $HOME comes to be on the standalone
+# and tailnet CLIENT desktops (create fresh / adopt in place / unpack a bundled
+# archive / restore an encrypted backup) + the optional source-code seed.
+home_screen() {
+    while true; do
+        local c
+        c="$(ui_menu "Home provisioning" "How the installed user's \$HOME is provisioned (standalone + client desktops only):" \
+            mode    "Home mode ........... ${OPT_HOME_MODE:-<builder default>}   (create|adopt|archive|restore)" \
+            device  "Home device ......... ${OPT_HOME_DEVICE:-<none>}   (adopt: LABEL=…|UUID=…|/dev/…)" \
+            backup  "Home backup ......... ${OPT_HOME_BACKUP:-<none>}   (restore: FILE | auto)" \
+            enc     "Encrypted home ...... ${OPT_HOME_ENCRYPTED}   (per-user eCryptfs on top of LUKS2)" \
+            seed    "Seed source code .... ${OPT_HOME_SEED:-none}   (none|repos|stack|mesh)" \
+            archive "Bundle home archive . ${OPT_HOME_ARCHIVE:-<none>}   (scripts/archive-home.sh tarball)" \
+            back    "‹ back")" || return 0
+        case "${c}" in
+            mode)   local m
+                    m="$(ui_menu "Home mode" "--home-mode — how the user's home is provisioned:" \
+                        default "builder default (create; archive when one is bundled)" \
+                        create  "create  — fresh home" \
+                        adopt   "adopt   — USE an existing home in place (needs Home device)" \
+                        archive "archive — unpack the bundled home archive" \
+                        restore "restore — decrypt+unpack an encrypted backup (needs Home backup)")" || m=""
+                    case "${m}" in default|"") OPT_HOME_MODE="" ;; *) OPT_HOME_MODE="${m}" ;; esac ;;
+            device) OPT_HOME_DEVICE="$(ui_input "Home device" "adopt: the existing home's LABEL=…|UUID=…|/dev/… (--home-device; empty = none)" "${OPT_HOME_DEVICE}")" ;;
+            backup) OPT_HOME_BACKUP="$(ui_input "Home backup" "restore: the encrypted backup FILE, or 'auto' to find it on a USB (--home-backup; empty = none)" "${OPT_HOME_BACKUP}")" ;;
+            enc)    OPT_HOME_ENCRYPTED="$([ "${OPT_HOME_ENCRYPTED}" = yes ] && echo no || echo yes)" ;;
+            seed)   local sd
+                    sd="$(ui_menu "Seed source code" "--home-seed-code — drop the Snapdragon source tree into ~/snapdragon-stack:" \
+                        none  "none  — no source seed (default)" \
+                        repos "repos — just the code" \
+                        stack "stack — code + docker-compose stack runner" \
+                        mesh  "mesh  — code + dockerized tailnet mesh node")" || sd=""
+                    case "${sd}" in none|"") OPT_HOME_SEED="" ;; *) OPT_HOME_SEED="${sd}" ;; esac ;;
+            archive) OPT_HOME_ARCHIVE="$(ui_input "Home archive" "Bundle a \$HOME tarball (scripts/archive-home.sh) into the installer ISO (--include-home-archive; empty = none)" "${OPT_HOME_ARCHIVE}")" ;;
+            back|"") save_conf; return 0 ;;
+        esac
+        save_conf
+    done
+}
+
 options_screen() {
     while true; do
         local resume_l omni_l pen_l
@@ -665,9 +955,14 @@ options_screen() {
             omnibus  "x86 omnibus role .... ${omni_l}   (adds omnibus to full fleet)" \
             pentest  "OWASP pen-test ...... ${pen_l}   (full-fleet build only)" \
             edgeai   "Edge-AI service ..... $([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)   (be+gpu/omnibus; edge_ai role always on)" \
+            services "Optional services ... ${OPT_SERVICES:-<default: akkoma,tuwunel,phpbb>}" \
             tor      "Tor v3 onion ........ $([ "${OPT_TOR_ONION}" = yes ] && echo on || echo off)   (node service; exposes fe-gateway as .onion; default off)" \
             charstudio "Character Studio (VN) $([ "${OPT_CHARACTER_STUDIO}" = yes ] && echo on || echo off)   (frontend remote at /character-studio; default off)" \
+            advbrand "Advanced branding ... $({ [ -n "${OPT_BR_WALLPAPER}${OPT_BR_GRUB_BG}${OPT_BR_LOGIN_BG}${OPT_BR_LOGO}${OPT_BR_ACCENT}${OPT_BR_SCHEME}" ] && echo overrides; } || echo '<preset>')   (wallpaper/GRUB/login/logo/accent/scheme)" \
+            home     "Home provisioning ... ${OPT_HOME_MODE:-<default>}   (standalone/client desktops)" \
+            instui   "Installer UI ........ ${OPT_INSTALLER_UI:-<builder default>}   (cli|ncurses|calamares|all)" \
             imgflags "Image format flags .. ${OPT_IMGFLAGS:-<both .img + .iso>}" \
+            extraflags "Extra builder flags . ${OPT_EXTRA_FLAGS:-<none>}   (passed VERBATIM — escape hatch)" \
             rootlogin "Root SSH login ...... ${OPT_ROOT_LOGIN}   (no=hardened | prohibit-password | yes)" \
             back     "‹ back to main menu")" || return 0
         case "${choice}" in
@@ -681,9 +976,22 @@ options_screen() {
             omnibus) OPT_OMNIBUS="$([ "${OPT_OMNIBUS}" = yes ] && echo no || echo yes)" ;;
             pentest) OPT_PENTEST="$([ "${OPT_PENTEST}" = yes ] && echo no || echo yes)" ;;
             edgeai)  edge_ai_options_screen ;;
+            services) services_screen ;;
             tor)     OPT_TOR_ONION="$([ "${OPT_TOR_ONION}" = yes ] && echo no || echo yes)" ;;
-            charstudio) OPT_CHARACTER_STUDIO="$([ "${OPT_CHARACTER_STUDIO}" = yes ] && echo no || echo yes)" ;;
+            charstudio) OPT_CHARACTER_STUDIO="$([ "${OPT_CHARACTER_STUDIO}" = yes ] && echo no || echo yes)"
+                        services_sync_charstudio ;;   # the checklist mirrors the toggle
+            advbrand) branding_screen ;;
+            home)    home_screen ;;
+            instui)  local iu
+                     iu="$(ui_menu "Installer UI" "Installer front-ends offered as live-ISO boot entries (--installer-ui):" \
+                         default   "builder default (standalone = all, others = cli)" \
+                         cli       "cli       — text installer" \
+                         ncurses   "ncurses   — dialog/ncurses installer" \
+                         calamares "calamares — graphical Qt installer (Ubuntu-style)" \
+                         all       "all       — every front-end")" || iu=""
+                     case "${iu}" in default|"") OPT_INSTALLER_UI="" ;; *) OPT_INSTALLER_UI="${iu}" ;; esac ;;
             imgflags) OPT_IMGFLAGS="$(ui_input "Image flags" "IMG_FLAGS (e.g. --no-iso, --no-img, empty = both)" "${OPT_IMGFLAGS}")" ;;
+            extraflags) OPT_EXTRA_FLAGS="$(ui_input "Extra builder flags" "Extra builder flags, threaded VERBATIM onto the single-role builder invocation (x86/jetson/frite via STANDALONE_FLAGS, rpi via IMG_FLAGS). The escape hatch guaranteeing all-options-in-all-menus. Empty = none" "${OPT_EXTRA_FLAGS}")" ;;
             rootlogin) case "${OPT_ROOT_LOGIN}" in
                            no) OPT_ROOT_LOGIN=prohibit-password ;;
                            prohibit-password) OPT_ROOT_LOGIN=yes ;;
@@ -697,10 +1005,11 @@ options_screen() {
 
 # Build a single role (pick arch then role).
 single_role_screen() {
-    local arch role
+    local arch role board
     arch="$(ui_menu "Single role" "Which architecture?" \
         rpi "Raspberry Pi 5 (arm64 cluster node)" \
         x86 "x86-64 (amd64 node / GPU host / client)" \
+        jetson "Jetson Orin Nano (arm64, EXPERIMENTAL — hardware validation pending)" \
         back "‹ back")" || return 0
     case "${arch}" in
         rpi)
@@ -732,6 +1041,32 @@ single_role_screen() {
                 *) build_make_cmd "x86-${role}" "x86 ${role} (${OPT_PATH}, ENV=${OPT_ENV})" 1
                    launch_build ;;
             esac ;;
+        jetson)
+            # NVIDIA Jetson Orin — arm64 Tegra edge-AI platform (specs-jetson/).
+            # EXPERIMENTAL: the platform bring-up is hardware-gated (validation
+            # pending); dispatches the Makefile jetson-<role> targets. NOTE: the
+            # Options screen's cluster services / edge-AI model / branding-override
+            # knobs are x86-only flags and do NOT apply here — any Jetson builder
+            # flag stays reachable via 'Extra builder flags' (the escape hatch).
+            role="$(ui_menu "Jetson role" "Jetson Orin role (arm64 Tegra, EXPERIMENTAL — hardware validation pending).
+x86-only options (cluster services, edge-AI models, branding overrides) do not apply; use Extra builder flags for Jetson flags:" \
+                edge_ai "edge_ai  — GPU inference node (the headline Jetson role)" \
+                full "full     — full-stack node (all namespaces on the board)" \
+                gpu-host "gpu-host — GPU host only" \
+                desktop "desktop  — arm64 desktop client image" \
+                back "‹ back")" || return 0
+            [ "${role}" = back ] && return 0
+            board="$(ui_menu "Jetson board" "Orin module/carrier (--board; current: ${OPT_JETSON_BOARD}):" \
+                orin-nano "orin-nano     — Orin Nano [Super] devkit, 8GB (DEFAULT)" \
+                orin-nano-4gb "orin-nano-4gb — Orin Nano 4GB, devkit carrier (UNTESTED)" \
+                orin-nx-8gb "orin-nx-8gb   — Orin NX 8GB, devkit carrier (UNTESTED)" \
+                orin-nx-16gb "orin-nx-16gb  — Orin NX 16GB, devkit carrier (UNTESTED)" \
+                back "‹ back")" || return 0
+            [ "${board}" = back ] && return 0
+            OPT_JETSON_BOARD="${board}"
+            save_conf
+            build_make_cmd "jetson-${role}" "Jetson ${role} (${OPT_JETSON_BOARD}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
+            launch_build ;;
         *) return 0 ;;
     esac
 }
@@ -752,6 +1087,8 @@ standalone_screen() {
             gpu     "GPU driver ......... ${OPT_SA_GPU}" \
             steam   "Steam delivery ..... ${OPT_SA_STEAM}  (library on /media/Steam)" \
             media   "Media data ......... ${media_l}" \
+            medialabel "Media label ........ ${OPT_SA_MEDIA_LABEL:-<content-scan>}   (match data device by FS LABEL)" \
+            home    "Home provisioning .. mode=${OPT_HOME_MODE:-default} seed=${OPT_HOME_SEED:-none} enc=${OPT_HOME_ENCRYPTED}" \
             keyfile "Keyfile unlock ..... ${OPT_SA_KEYFILE}   (boot=LUKS keyslot / login=PAM)" \
             yubikey "YubiKey unlock ..... ${OPT_SA_YUBIKEY}   (boot=FIDO2 / login=pam_u2f)" \
             theme   "Branding theme ..... ${OPT_SA_THEME}" \
@@ -774,6 +1111,8 @@ standalone_screen() {
                          intel-pro "Intel pro (+ compute/media stack)")" ;;
             steam)   OPT_SA_STEAM="$(ui_menu "Steam" "Steam delivery:" native "Native (default; steam-overlay + multilib)" flatpak "Flatpak (no multilib)" none "Don't install Steam")" ;;
             media)   OPT_SA_MEDIA="$([ "${OPT_SA_MEDIA}" = yes ] && echo no || echo yes)" ;;
+            medialabel) OPT_SA_MEDIA_LABEL="$(ui_input "Media label" "Filesystem LABEL of the media data device (--media-label; empty = content-scan for the Steam/Vaults marker dirs)" "${OPT_SA_MEDIA_LABEL}")" ;;
+            home)    home_screen ;;
             keyfile) OPT_SA_KEYFILE="$(ui_menu "Keyfile factor" "Generate a keyfile unlock factor for:" none "none" boot "boot (extra LUKS keyslot)" login "login (PAM)")" ;;
             yubikey) OPT_SA_YUBIKEY="$(ui_menu "YubiKey factor" "Enroll a FIDO2/YubiKey factor for:" none "none" boot "boot (LUKS FIDO2)" login "login (pam_u2f)")" ;;
             theme)   OPT_SA_THEME="$(ui_menu "Branding theme" "Boot screen / login / wallpaper / accent:" \
@@ -826,7 +1165,7 @@ build_screen() {
 }
 
 frite_screen() {
-    local board flavor
+    local board flavor desk
     board="$(ui_menu "Frite board" "Frite board variant (current: ${OPT_FRITE_BOARD}):" \
         la-frite "la-frite     — S805X (no microSD)" \
         le-potato "le-potato    — S905X (has SD)" \
@@ -841,8 +1180,14 @@ frite_screen() {
         back "‹ back")" || return 0
     [ "${flavor}" = back ] && return 0
     OPT_FRITE_FLAVOR="${flavor}"
+    desk="$(ui_menu "Frite desktop" "Desktop set (--desktop; current: ${OPT_FRITE_DESKTOP}):" \
+        light "light — the LEAN LXDE desktop set (DEFAULT)" \
+        none "none  — headless base (no desktop at all)" \
+        back "‹ back")" || return 0
+    [ "${desk}" = back ] && return 0
+    OPT_FRITE_DESKTOP="${desk}"
     save_conf
-    build_make_cmd frite "Frite ${board} (${flavor})" 1
+    build_make_cmd frite "Frite ${board} (${flavor}, desktop=${OPT_FRITE_DESKTOP})" 1
     launch_build
 }
 

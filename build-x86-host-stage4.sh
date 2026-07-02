@@ -116,6 +116,12 @@ COMPRESS_IMG=false      # xz -9 the finished .img
 LIVE_ISO=true           # self-booting live squashfs ISO (DEFAULT; --no-live-iso to skip)
 INSTALLER_ISO=false     # stage4 + install-x86.sh data ISO (opt-in: --installer-iso)
 BUILD_TAR=true          # also emit the mounted-filesystem tarball (.fs.tar.xz)
+# --print-plan: resolve + validate everything, print the machine-greppable build
+# plan (one PLAN_KEY=VALUE per line) and exit 0 BEFORE any mutation (no root, no
+# disk writes, no network — it runs BEFORE the run-as-root gate). The CLI/make/
+# menu/Studio channels + the build-matrix harness (tests/build-matrix/check.sh)
+# verify every role/flag combo through it. Secrets are printed as REDACTED.
+PRINT_PLAN=false
 
 # ── STANDALONE hardened desktop (no mesh / no SSO / local login) ─────────────
 # A STANDALONE desktop is a self-contained personal workstation, NOT a mesh
@@ -390,6 +396,10 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --installer-iso       Also build a stage4 + install-x86.sh data ISO.
       --no-tar              Don't emit the mounted-filesystem tarball (.fs.tar.xz).
       --resume              Reuse an existing sysroot.
+      --print-plan          Resolve + validate all flags, print the build plan
+                            (PLAN_KEY=VALUE lines) and exit 0 — no root, no
+                            writes, no network. Secrets print as REDACTED.
+                            Invalid role/flag combinations exit non-zero.
   STANDALONE hardened desktop (self-contained; no mesh / no SSO / local login):
       --standalone          Self-contained desktop: NO headscale/tailscale, NO
                             Casdoor/OIDC SSO, NO k8s/cluster tree. Boots to a
@@ -633,6 +643,7 @@ while [[ $# -gt 0 ]]; do
         # deliverable; this simply ensures no ISO is built (already the default).
         --skip-iso|--no-iso) LIVE_ISO=false; INSTALLER_ISO=false; shift ;;
         --resume) RESUME=true; shift ;;
+        --print-plan) PRINT_PLAN=true; shift ;;
         # ── STANDALONE hardened desktop (no mesh / no SSO / local login) ──
         --standalone) STANDALONE=true; shift ;;
         --skip-sso) SKIP_SSO=true; SSO_FORCED=off; shift ;;
@@ -716,6 +727,12 @@ while [[ $# -gt 0 ]]; do
         *) err "Unknown option: $1"; usage 1 ;;
     esac
 done
+
+# Comma tolerance: accept "akkoma,tuwunel" (the CSV spelling GUIs/configs tend to
+# emit) as well as the native space-separated list — normalized HERE, right after
+# arg parse, so every downstream word-split (`_opt_selected`, the games/edge-ai
+# `case " ${OPTIONAL_SERVICES} "` folds) sees clean slugs. Mirrors DOMAINS.
+OPTIONAL_SERVICES="${OPTIONAL_SERVICES//,/ }"
 
 # Games is OPT-IN (off by default): fold it into the selection when --enable-games
 # / ENABLE_GAMES=true. Idempotent — a no-op when 'games' is already listed (e.g. via
@@ -1101,6 +1118,60 @@ if [ "${ENV}" = "prod" ]; then
     echo -e "${RST}"
 else
     info "Build ENV: test (LAN-first; cluster wildcard DNS; cloudflared/ACME pruned)"
+fi
+
+# ── --print-plan: emit the resolved plan and exit BEFORE ANY mutation ──────────
+# Runs AFTER full arg parsing / role+GPU+desktop+env validation / the optional-
+# services resolution / the standalone posture fold, but BEFORE the run-as-root
+# gate directly below (deliberate: planning needs no root), before mkdir, network
+# fetches or any sysroot write. One stable KEY=VALUE per line (grep '^PLAN_');
+# exit 0. Invalid role/flag combos never reach this point — the validation above
+# already exited non-zero, which is exactly what the tests/build-matrix harness
+# relies on. SECRETS (--local-pass / --luks-pass / --user-password /
+# --root-password values) are NEVER echoed — only a REDACTED presence marker.
+if ${PRINT_PLAN}; then
+    _plan() { printf 'PLAN_%s=%s\n' "$1" "$2"; }
+    # Filename-safe role tag (mirrors the Phase-9 artifact naming): be+gpu keeps
+    # the legacy 'host' tag; client devices carry person-role + primary domain.
+    _PLAN_ROLE_TAG="${ROLE}"
+    [ "${ROLE}" = "be+gpu" ] && _PLAN_ROLE_TAG="host"
+    if ${ROLE_CLIENT}; then
+        _pd="${DOMAINS%%[ ,]*}"; _dt="${_pd//./_}"
+        _PLAN_ROLE_TAG="${ROLE}-${PERSON_ROLE}${_dt:+-${_dt}}"
+    fi
+    _plan BUILDER            "build-x86-host-stage4.sh"
+    _plan PLATFORM           "x86"
+    _plan ARCH               "amd64"
+    _plan ROLE               "${ROLE}"
+    _plan ROLE_TAG           "${_PLAN_ROLE_TAG}"
+    _plan ENV                "${ENV}"
+    _plan ROLE_CLASS         "$(${STANDALONE} && echo standalone || { ${ROLE_CLIENT} && echo client || echo node; })"
+    _plan DESKTOP            "$(${ROLE_CLIENT} && echo "${DESKTOP}$(${CAPABLE} && echo '+capable')" || echo none)"
+    _plan GPU_DRIVER         "${GPU_DRIVER}"
+    _plan CUDA               "${NVIDIA_CUDA}"
+    _plan K8S                "${ROLE_K8S}"
+    _plan PERSON_ROLE        "${PERSON_ROLE:-none}"
+    _plan STANDALONE         "${STANDALONE}"
+    _ARTS="stage4.tar.xz"
+    ${BUILD_IMG}      && _ARTS="${_ARTS},img"
+    ${LIVE_ISO}       && _ARTS="${_ARTS},live.iso"
+    ${INSTALLER_ISO}  && _ARTS="${_ARTS},installer.iso"
+    ${BUILD_TAR}      && _ARTS="${_ARTS},fs.tar.xz"
+    _plan ARTIFACTS          "${_ARTS}"
+    _plan ARTIFACT_PREFIX    "${BRAND}-x86-amd64-${_PLAN_ROLE_TAG}-${ENV}-<timestamp>"
+    _plan WORK_DIR           "${WORK_DIR:-$(pwd)/out}"
+    _plan JOBS               "${JOBS}"
+    _plan BRAND              "${BRAND}"
+    _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
+    _plan HOSTNAME           "${HOSTNAME:-${BRAND}-host}"
+    _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo none || echo "${OPTIONAL_SERVICES:-none}")"
+    _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
+    _plan SSO                "$(${SKIP_SSO} && echo off || echo casdoor-oidc)"
+    _plan ENCRYPT_ROOT       "${ENCRYPT_ROOT}"
+    _plan LUKS_PASS          "$([ -n "${LUKS_PASS}" ] && echo REDACTED || echo none)"
+    _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
+    _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} live_iso=${LIVE_ISO} installer_iso=${INSTALLER_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} skip_sso=${SKIP_SSO} standalone=${STANDALONE} desktop=${DESKTOP} capable=${CAPABLE} gpu_driver=${GPU_DRIVER} cuda=${NVIDIA_CUDA} encrypt_root=${ENCRYPT_ROOT} secure_boot=${SECURE_BOOT} media_data=${MEDIA_DATA} installer_ui=${INSTALLER_UI} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH}"
+    exit 0
 fi
 
 [ "$(id -u)" -eq 0 ] || { err "Run as root (chroot emerge + ISO build need it)."; exit 1; }

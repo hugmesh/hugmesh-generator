@@ -1,0 +1,12 @@
+# fstab — NVIDIA Jetson Orin (Tegra234, aarch64) node/desktop image.
+#
+# The image is a single ext4 root labeled JETSON_ROOT (microSD or NVMe; the
+# devkit's UEFI distro-boots /boot/extlinux/extlinux.conf from it — see
+# specs-jetson/boot/README.md; there is NO separate FAT boot partition and NO
+# raspberrypi-style firmware partition). growroot expands the root to the
+# medium on first boot per /etc/growfs.conf.
+#
+# <device>          <mount>  <type>   <options>                              <dump> <pass>
+LABEL=JETSON_ROOT   /        ext4     defaults,noatime                       0      1
+tmpfs               /tmp     tmpfs    defaults,nosuid,nodev,noexec,size=512m 0      0
+tmpfs               /run     tmpfs    defaults,nosuid,nodev,mode=0755        0      0

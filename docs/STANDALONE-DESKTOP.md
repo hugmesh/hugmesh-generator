@@ -32,6 +32,17 @@ make x86-standalone-thick NATIVE=1 \
 make menu      # → Single role → x86 → ★ standalone-thin / standalone-thick
 ```
 
+The ncurses menu and the Studio GUI expose the **full option set** of this page —
+not just the highlights (the all-options-in-all-menus rule,
+[BUILD-MATRIX.md](BUILD-MATRIX.md)): GPU/Steam/media (`--media-label` too),
+local user + never-persisted passwords, keyfile/YubiKey unlock factors, the
+branding theme **plus the per-piece overrides** (wallpaper / GRUB + login
+backgrounds / logo / accent / color scheme), home provisioning
+(create/adopt/archive/restore + eCryptfs + seed-code), the installer front-ends
+(`--installer-ui`), proxy/Snort/AIDE/`--kernel-builtin`/egress-VPN — and an
+**extra-builder-flags escape hatch** so any remaining CLI flag stays reachable
+without dropping to the shell.
+
 Use the big scratch disk for the heavy build (namespaced; never touches portage's
 own dirs):
 
@@ -283,6 +294,9 @@ auto-pick `--gpu-driver`, Wi-Fi/BT, and a profile.
 
 `studio/` is a desktop app (Linux **and Windows**) that builds images with a Calamares-style
 wizard instead of raw flags, and runs a **local mesh node** from the system tray. It drives
-the build natively on Gentoo or via Docker elsewhere, covers the whole flag surface, accepts
-an admin **key-zip**, and (superadmin) sets up domains + users before building. See
-[studio/README.md](../studio/README.md).
+the build natively on Gentoo or via Docker elsewhere, covers the whole flag surface —
+including a **role & platform picker** (both standalone variants, the client devices, every
+cluster role, and the arm64 Frite/Jetson platforms), LUKS `--encrypt-root` + unlock factors,
+Steam delivery and desktop weight — accepts an admin **key-zip**, and (superadmin) sets up
+domains + users before building. Plaintext secrets (`--local-pass`/`--luks-pass`) are never
+written to a saved config. See [studio/README.md](../studio/README.md).

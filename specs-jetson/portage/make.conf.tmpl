@@ -1,0 +1,62 @@
+# Cross-compilation — @@RPI_CPU@@ — NVIDIA Jetson Orin family (Tegra234) — HARDENED
+#
+# Portage config for the Jetson arm64 edge-AI node/desktop images. It mirrors
+# specs-rpi5/portage/make.conf.tmpl (same aarch64 cross toolchain, same hardened
+# CFLAGS/LDFLAGS, same FEATURES) tuned for the Orin's Cortex-A78AE cores. glibc
+# stage3 seed on purpose: the CUDA-on-Tegra userspace (the L4T kernel flavor's
+# whole point) links against glibc — musl would dead-end the platform.
+#
+# Variables substituted at build time (render_template in build-jetson-stage4.sh):
+#   @@CBUILD@@           Host compiler triplet
+#   @@CROSS_TARGET@@     Target triplet (e.g. aarch64-unknown-linux-gnu)
+#   @@RPI_CPU@@          GCC -mcpu / -mtune value (cortex-a78ae on Orin)
+#   @@JOBS@@             Parallel make jobs
+#   @@WORK_DIR@@         Base build directory (per-arch build root)
+
+CBUILD="@@CBUILD@@"
+CHOST="@@CROSS_TARGET@@"
+
+# Hardened CFLAGS — same posture as the rest of the fleet. Orin Nano/NX are
+# Cortex-A78AE; the builder passes -c cortex-a78ae by default (GCC >= 11).
+CFLAGS="-mcpu=@@RPI_CPU@@ -mtune=@@RPI_CPU@@ -O2 -pipe -fstack-protector-strong -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion -Wno-error=implicit-int"
+CXXFLAGS="${CFLAGS}"
+LDFLAGS="-Wl,-O1 -Wl,--as-needed -Wl,-z,relro -Wl,-z,now"
+
+MAKEOPTS="-j@@JOBS@@"
+# -userfetch/-userpriv: don't drop to the 'portage' user (it can't traverse a
+# mode-700 / encrypted $HOME work dir). All sandboxing off for the cross-build.
+FEATURES="buildpkg nostrip -userfetch -userpriv -usersandbox -sandbox -pid-sandbox -network-sandbox -ipc-sandbox"
+PKGDIR="@@WORK_DIR@@/pkgdir"
+DISTDIR="@@WORK_DIR@@/distfiles"
+
+# Hardened USE baseline. Node roles are headless (the desktop role's X/GTK USE is
+# appended by the builder via the desktop package set's own package.use — the
+# base stays lean like the RPi5 k8s image). containerd/k8s want seccomp+selinux.
+USE="bindist hardened pie ssp selinux seccomp"
+USE="${USE} -systemd -X -gtk -qt5 -qt6 -kde -gnome"
+# Disable GObject introspection + vala for cross-compile robustness (see the
+# frite make.conf rationale — the g-i bootstrap mis-targets under cross emerge).
+USE="${USE} -introspection -vala"
+
+# Only the MCS SELinux policy store (same posture as the cluster images).
+POLICY_TYPES="mcs"
+INPUT_DEVICES="libinput"
+# MAINLINE kernel flavor: the integrated GA10B Ampere GPU has no CUDA-capable
+# mainline driver — display is host1x/tegra-drm (+ simple-framebuffer via UEFI
+# GOP). "tegra" is the Mesa VIDEO_CARDS token for that stack. The L4T flavor
+# replaces this stack with NVIDIA's nvgpu + L4T userspace ON DEVICE (documented,
+# not emerged — see specs-jetson/kernel/README.md).
+VIDEO_CARDS="tegra"
+
+ACCEPT_LICENSE="*"
+ACCEPT_KEYWORDS="arm64 ~arm64"
+
+PYTHON_TARGETS="python3_12"
+PYTHON_SINGLE_TARGET="python3_12"
+
+# NOTE: the cross-compile chflags() configure fix for dev-lang/python lives in
+# package.env (env/python-cross.conf), NOT here — a GLOBAL EXTRA_ECONF leaks the
+# ac_cv_* cache args into packages with hand-written configure scripts that
+# reject unknown options and die. (Same rationale as the RPi5/Frite builds.)
+
+PAX_MARKINGS="none"

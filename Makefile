@@ -6,7 +6,10 @@
 #
 #   build-rpi5-stage4.sh      aarch64 (RPi5) cross-build  -> .img + .fs.tar.xz
 #   build-x86-host-stage4.sh  amd64 multi-role build      -> .img + live ISO + .fs.tar.xz
+#   build-frite-stage4.sh     aarch64 (Amlogic) light desktop -> live/installer ISO
+#   build-jetson-stage4.sh    aarch64 (Tegra234 Orin) edge-AI node -> .img (EXPERIMENTAL)
 #   scripts/build-all-roles.sh   the default fleet (3 Pi + x86 pki/be/fe/be+gpu)
+#                                (+ FRITE=1 / JETSON=1 / build-everything for the full matrix)
 #   scripts/flash-disk.sh        write a role image (.img preferred, else .iso) to a disk
 #   tests/qemu/launch-pi.sh      boot a Pi   image in QEMU (aarch64 -M virt)
 #   tests/qemu/launch-x86.sh     boot an x86 image in QEMU (q35 + OVMF + KVM)
@@ -72,12 +75,23 @@ PENTEST_ENVVARS := PENTEST='$(PENTEST)' PENTEST_ONLY='$(PENTEST_ONLY)' \
 # builds only the default fleet while echoing the requested roles past.
 FRITE       ?=
 FRITE_ONLY  ?=
+JETSON      ?=
+JETSON_ONLY ?=
+JETSON_ROLES ?=
 X86_OMNIBUS ?=
 X86_ALL     ?=
 X86_ROLES   ?=
 SKIP_X86    ?=
 SKIP_KEYS   ?=
+# NOTE: this is `:=` and expands here, BEFORE the FRITE_*/JETSON_* `?=` defaults
+# below — so a value reaches build-all-roles.sh only when the caller sets it
+# (CLI/env); an empty assignment is fine (the script's own `${VAR:-default}`
+# fallbacks catch empty exactly like unset).
 ROLESET_ENVVARS := FRITE='$(FRITE)' FRITE_ONLY='$(FRITE_ONLY)' \
+                   FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)' \
+                   FRITE_DESKTOP='$(FRITE_DESKTOP)' \
+                   JETSON='$(JETSON)' JETSON_ONLY='$(JETSON_ONLY)' JETSON_ROLES='$(JETSON_ROLES)' \
+                   JETSON_BOARD='$(JETSON_BOARD)' JETSON_KERNEL_FLAVOR='$(JETSON_KERNEL_FLAVOR)' \
                    X86_OMNIBUS='$(X86_OMNIBUS)' X86_ALL='$(X86_ALL)' X86_ROLES='$(X86_ROLES)' \
                    SKIP_X86='$(SKIP_X86)' SKIP_KEYS='$(SKIP_KEYS)'
 
@@ -204,7 +218,8 @@ endef
 # passes BRAND_FLAGS through to BOTH builders via its "$@" passthrough.
 RPI := $(BRAND_ENV) $(SUDO) ./build-rpi5-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 X86 := $(BRAND_ENV) $(SUDO) ./build-x86-host-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
-FRITE_BUILD := $(BRAND_ENV) $(SUDO) ./build-frite-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(ENV_FLAGS) $(BRAND_FLAGS)
+FRITE_BUILD := $(BRAND_ENV) $(SUDO) ./build-frite-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
+JETSON_BUILD := $(BRAND_ENV) $(SUDO) ./build-jetson-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 ALL := $(ROLESET_ENVVARS) $(PENTEST_ENVVARS) $(BRAND_ENV) $(SUDO) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(ENV_FLAGS) $(BRAND_FLAGS)
 
 RPI_ROLES := pki backend frontend
@@ -212,16 +227,34 @@ RPI_ROLES := pki backend frontend
 # named X86_ROLES: that is a build-all-roles.sh ENV KNOB (see ROLESET_ENVVARS) and
 # a same-named := make-var would shadow a user's `X86_ROLES=... make build-all`.
 X86_ROLE_LIST := pki be fe be+gpu
+# X86_EVERY_ROLE: the FULL documented x86 matrix (nodes + omnibus + edge_ai +
+# the client devices + both standalone desktops) — what `make build-everything`
+# threads through build-all-roles.sh's X86_ROLES knob.
+X86_EVERY_ROLE := pki be fe be+gpu omnibus edge_ai laptop chromebook desktop standalone-thin standalone-thick
 
 # Libre Computer Le/La Frite LIGHT-DESKTOP client image (Amlogic arm64).
-#   FRITE_BOARD  = la-frite (DEFAULT) | le-potato | sweet-potato
-#   FRITE_FLAVOR = both (DEFAULT) | live | installer
-FRITE_BOARD  ?= la-frite
-FRITE_FLAVOR ?= both
-FRITE_PASS   := FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)'
+#   FRITE_BOARD   = la-frite (DEFAULT) | le-potato | sweet-potato
+#   FRITE_FLAVOR  = both (DEFAULT) | live | installer
+#   FRITE_DESKTOP = light (DEFAULT, the lean LXDE set) | none (headless)
+FRITE_BOARD   ?= la-frite
+FRITE_FLAVOR  ?= both
+FRITE_DESKTOP ?= light
+FRITE_PASS    := FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)' FRITE_DESKTOP='$(FRITE_DESKTOP)'
+
+# NVIDIA Jetson Orin (Tegra234 arm64) edge-AI platform — EXPERIMENTAL (hardware
+# validation pending; see specs-jetson/README.md). FRITE-style vars:
+#   JETSON_ROLE          = edge_ai (DEFAULT, headline) | gpu-host | full | desktop
+#   JETSON_BOARD         = orin-nano (DEFAULT) | orin-nano-4gb | orin-nx-8gb | orin-nx-16gb
+#   JETSON_KERNEL_FLAVOR = mainline (DEFAULT, buildable — NO CUDA) | l4t (stub)
+JETSON_ROLE          ?= edge_ai
+JETSON_BOARD         ?= orin-nano
+JETSON_KERNEL_FLAVOR ?= mainline
+JETSON_PASS := JETSON_ROLE='$(JETSON_ROLE)' JETSON_BOARD='$(JETSON_BOARD)' \
+               JETSON_KERNEL_FLAVOR='$(JETSON_KERNEL_FLAVOR)'
 
 .DEFAULT_GOAL := help
-.PHONY: help menu clean build-all pentest rebuild rpi x86 omnibus frite frite-live frite-installer \
+.PHONY: help menu clean build-all build-everything matrix-check pentest rebuild \
+        rpi x86 omnibus frite frite-live frite-installer jetson \
         flash qemu qemu-rpi qemu-x86 \
         playwright-deps e2e ci ci-quick docker-image ensure-image \
         docker docker-build local prod \
@@ -244,7 +277,13 @@ help: ## list targets
 	@echo "                          make prod    (ENV=prod, real domain — creds from keys USB)"
 	@echo "  Output:     products land in ./out (WORK_DIR=$(CURDIR)/out; local + gitignored)."
 	@echo "              Per-arch build trees: ./out/snap-build-pi5 + ./out/snap-build-x86"
-	@echo "              (sysroot/distfiles/pkgdir; the two arches never share a sysroot)."
+	@echo "              + ./out/snap-build-frite + ./out/snap-build-jetson (never share a sysroot)."
+	@echo "  Platforms:  rpi (3 roles) | x86 (nodes+omnibus+edge_ai+clients+standalone) |"
+	@echo "              frite (arm64 light desktop) | jetson (arm64 Tegra edge-AI — EXPERIMENTAL,"
+	@echo "              JETSON_ROLE=edge_ai|gpu-host|full|desktop, hardware validation pending)."
+	@echo "  Matrix:     make build-everything = the FULL documented matrix (honors ENV);"
+	@echo "              make matrix-check = dry-run validate every role/flag combo via the"
+	@echo "              builders' --print-plan (no root, no writes; tests/build-matrix/check.sh)."
 
 menu: ## interactive console menu to build images (progress + quit-without-stopping)
 	@bash scripts/build-menu.sh
@@ -351,12 +390,12 @@ else
 	$(chown-artifacts)
 endif
 
-frite: ## build the Frite light desktop (FRITE_BOARD=la-frite|le-potato, FRITE_FLAVOR=both|live|installer)
+frite: ## build the Frite light desktop (FRITE_BOARD=la-frite|le-potato, FRITE_FLAVOR=both|live|installer, FRITE_DESKTOP=light|none; STANDALONE_FLAGS='--enable-wifi …' appended verbatim)
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make frite NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) $(BRAND_PASS) $(FRITE_PASS)
+	$(DOCKER_RUN) make frite NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' STANDALONE_FLAGS='$(STANDALONE_FLAGS)' $(BRAND_PASS) $(FRITE_PASS)
 else
-	$(FRITE_BUILD) --board $(FRITE_BOARD) --flavor $(FRITE_FLAVOR)
+	$(FRITE_BUILD) --board $(FRITE_BOARD) --flavor $(FRITE_FLAVOR) --desktop $(FRITE_DESKTOP) $(STANDALONE_FLAGS)
 	$(chown-artifacts)
 endif
 
@@ -365,6 +404,42 @@ frite-live: ## build the Frite light desktop LIVE image only (boots ephemerally 
 
 frite-installer: ## build the Frite light desktop INSTALLER image only (writes to eMMC/SD)
 	$(MAKE) frite FRITE_FLAVOR=installer
+
+jetson: ## build the Jetson Orin edge-AI image (JETSON_ROLE=edge_ai|gpu-host|full|desktop; EXPERIMENTAL; STANDALONE_FLAGS='--enable-wifi …')
+ifndef NATIVE
+	$(MAKE) ensure-image
+	$(DOCKER_RUN) make jetson NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' STANDALONE_FLAGS='$(STANDALONE_FLAGS)' $(BRAND_PASS) $(JETSON_PASS)
+else
+	$(JETSON_BUILD) --role $(JETSON_ROLE) --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS)
+	$(chown-artifacts)
+endif
+
+jetson-%: ## build ONE Jetson role: make jetson-edge_ai | jetson-gpu-host | jetson-full | jetson-desktop (STANDALONE_FLAGS appended verbatim)
+ifndef NATIVE
+	$(MAKE) ensure-image
+	$(DOCKER_RUN) make jetson-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' STANDALONE_FLAGS='$(STANDALONE_FLAGS)' $(BRAND_PASS) $(JETSON_PASS)
+else
+	$(JETSON_BUILD) --role $* --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS)
+	$(chown-artifacts)
+endif
+
+# build-everything delegates to build-all with the ROLE-SELECTOR knobs set on the
+# sub-make COMMAND LINE (not as env prefixes: $(ALL)'s own ROLESET_ENVVARS would
+# re-assign the empty defaults AFTER an env prefix and clobber it). Command-line
+# make vars override the `?=` defaults inside the sub-make, so ROLESET_ENVVARS is
+# rebuilt there with the full-matrix values; ENV/BRAND/IMG_FLAGS pass through.
+build-everything: ## build the FULL documented matrix: 3 Pi + all 11 x86 (nodes+omnibus+edge_ai+clients+standalone) + Frite + Jetson (honors ENV=test|prod)
+	$(MAKE) build-all \
+	  X86_ROLES='$(X86_EVERY_ROLE)' \
+	  FRITE=1 FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)' \
+	  FRITE_DESKTOP='$(FRITE_DESKTOP)' \
+	  JETSON=1 JETSON_ROLES='edge_ai gpu-host full desktop' \
+	  JETSON_BOARD='$(JETSON_BOARD)' JETSON_KERNEL_FLAVOR='$(JETSON_KERNEL_FLAVOR)'
+
+matrix-check: ## dry-run validate the whole build matrix via --print-plan (tests/build-matrix/check.sh)
+	@test -f tests/build-matrix/check.sh \
+	  || { echo "tests/build-matrix/check.sh not found — the build-matrix harness is not in this checkout yet."; exit 1; }
+	bash tests/build-matrix/check.sh
 
 ## ── docker (cross-platform builder; Phase 5) ──────────────────────────
 docker-image: ## build the self-contained Gentoo builder image (LONG first time: cross-toolchain)

@@ -9,7 +9,11 @@ import os
 from .qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from ..core import hw_scan, keyzip, profiles
 from ..core.build_driver import BuildDriver
-from ..core.config import Domain, ImageConfig, MODE_DEFAULT_ROLE, User
+from ..core.config import (
+    Domain, ImageConfig, MODE_DEFAULT_ROLE, User,
+    FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS,
+    OPTIONAL_SERVICES_CHOICES, PLATFORM_LABELS, ROLE_CHOICES,
+)
 from ..core.platform_info import detect
 
 
@@ -78,7 +82,9 @@ class WelcomePage(QtWidgets.QWizardPage):
         p, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save config", "snapdragon-image.json", "JSON (*.json)")
         if p:
             self.wiz.collect_all()
-            self.wiz.cfg.save(p)
+            warnings = self.wiz.cfg.save(p)
+            if warnings:  # plaintext secrets are blanked on save — tell the user
+                QtWidgets.QMessageBox.warning(self, "Passwords not saved", "\n".join(warnings))
 
 
 class ModePage(QtWidgets.QWizardPage):
@@ -111,11 +117,142 @@ class ModePage(QtWidgets.QWizardPage):
             return False
         mid = btn.property("mode")
         self.wiz.cfg.mode = mid
-        if self.wiz.cfg.role in ("", "standalone-thick", "desktop", "omnibus"):
+        # a role from another mode is meaningless here — reset to the mode default
+        # (RolePage preselects it and lets the user pick any role in the catalog)
+        if self.wiz.cfg.role not in {r for r, _, _ in ROLE_CHOICES[mid]}:
             self.wiz.cfg.role = MODE_DEFAULT_ROLE[mid]
         # bundle the generator source only for standalone (self-hosting appliance);
         # cloud/mesh client images keep it off, mirroring the build script's default.
         self.wiz.cfg.bundle_source = (mid == "standalone")
+        return True
+
+
+class RolePage(QtWidgets.QWizardPage):
+    """Explicit role + platform picker — EVERY documented image option, grouped by
+    mode (the all-options-in-all-menus rule). The platform axis picks the builder:
+    x86 / rpi5 / frite / jetson (jetson is EXPERIMENTAL — hardware validation pending).
+    """
+    def __init__(self, wiz):
+        super().__init__()
+        self.wiz = wiz
+        self.setTitle("Role & platform")
+        self.setSubTitle("Pick the image role, then the hardware platform that builds it.")
+        lay = QtWidgets.QVBoxLayout(self)
+        self.roles = QtWidgets.QListWidget()
+        lay.addWidget(self.roles, 1)
+        self.platform = QtWidgets.QComboBox()
+        lay.addWidget(_row("Platform", self.platform))
+
+        # frite board/flavor/desktop knobs (visible only when platform == frite)
+        self.frite_box = QtWidgets.QGroupBox("La Frite board options")
+        fl = QtWidgets.QVBoxLayout(self.frite_box)
+        self.board = QtWidgets.QComboBox(); self.board.addItems(list(FRITE_BOARDS))
+        self.flavor = QtWidgets.QComboBox(); self.flavor.addItems(list(FRITE_FLAVORS))
+        self.flavor.setCurrentText("both")
+        self.frite_desktop = QtWidgets.QComboBox(); self.frite_desktop.addItems(list(FRITE_DESKTOPS))
+        fl.addWidget(_row("Board", self.board))
+        fl.addWidget(_row("Flavor", self.flavor))
+        fl.addWidget(_row("Desktop", self.frite_desktop))
+        lay.addWidget(self.frite_box)
+
+        # jetson board knob (visible only when platform == jetson)
+        self.jetson_box = QtWidgets.QGroupBox("Jetson Orin board options")
+        jl = QtWidgets.QVBoxLayout(self.jetson_box)
+        self.jetson_board = QtWidgets.QComboBox()
+        self.jetson_board.addItems(list(JETSON_BOARDS))
+        jl.addWidget(_row("Board", self.jetson_board))
+        lay.addWidget(self.jetson_box)
+
+        # x86 client knobs: desktop weight + Steam delivery
+        self.client_box = QtWidgets.QGroupBox("Client desktop options")
+        cl = QtWidgets.QVBoxLayout(self.client_box)
+        self.desktop = QtWidgets.QComboBox()
+        self.desktop.addItems(["(default)", "thin", "full"])
+        self.steam = QtWidgets.QComboBox()
+        self.steam.addItems(["(default)", "native", "flatpak", "none"])
+        cl.addWidget(_row("Desktop weight", self.desktop))
+        cl.addWidget(_row("Steam delivery", self.steam))
+        lay.addWidget(self.client_box)
+
+        self.note = QtWidgets.QLabel("")
+        self.note.setWordWrap(True)
+        self.note.setStyleSheet("color: #a65d00;")
+        lay.addWidget(self.note)
+        lay.addStretch(1)
+        self.roles.currentRowChanged.connect(self._role_changed)
+        self.platform.currentIndexChanged.connect(self._platform_changed)
+
+    def initializePage(self):
+        c = self.wiz.cfg
+        self.roles.blockSignals(True)
+        self.roles.clear()
+        for role, platforms, label in ROLE_CHOICES[c.mode]:
+            it = QtWidgets.QListWidgetItem(f"{role} — {label}")
+            it.setData(Qt.ItemDataRole.UserRole, (role, platforms))
+            self.roles.addItem(it)
+            if role == c.role:
+                self.roles.setCurrentItem(it)
+        self.roles.blockSignals(False)
+        if self.roles.currentRow() < 0:
+            self.roles.setCurrentRow(0)
+        else:
+            self._role_changed(self.roles.currentRow())
+        if c.board:
+            if c.platform == "jetson":
+                self.jetson_board.setCurrentText(c.board)
+            else:
+                self.board.setCurrentText(c.board)
+        if c.flavor:
+            self.flavor.setCurrentText(c.flavor)
+        if c.platform == "frite" and c.desktop:
+            self.frite_desktop.setCurrentText(c.desktop)
+        elif c.desktop:
+            self.desktop.setCurrentText(c.desktop)
+        if c.steam:
+            self.steam.setCurrentText(c.steam)
+
+    def _current_role(self):
+        it = self.roles.currentItem()
+        return it.data(Qt.ItemDataRole.UserRole) if it else (self.wiz.cfg.role, ("x86",))
+
+    def _role_changed(self, _row):
+        role, platforms = self._current_role()
+        self.platform.blockSignals(True)
+        self.platform.clear()
+        for p in platforms:
+            self.platform.addItem(PLATFORM_LABELS[p], p)
+        want = self.wiz.cfg.platform if self.wiz.cfg.platform in platforms else platforms[0]
+        self.platform.setCurrentIndex(list(platforms).index(want))
+        self.platform.blockSignals(False)
+        self._platform_changed(self.platform.currentIndex())
+
+    def _platform_changed(self, _idx):
+        role, _platforms = self._current_role()
+        plat = self.platform.currentData() or "x86"
+        self.frite_box.setVisible(plat == "frite")
+        self.jetson_box.setVisible(plat == "jetson")
+        # desktop weight / Steam are x86 desktop-image knobs (client + standalone)
+        self.client_box.setVisible(plat == "x86" and self.wiz.cfg.mode in ("standalone", "cloud"))
+        self.note.setText("EXPERIMENTAL — hardware validation pending (specs-jetson/README.md); "
+                          "the Jetson builder is being brought up." if plat == "jetson" else "")
+
+    def validatePage(self):
+        c = self.wiz.cfg
+        role, _platforms = self._current_role()
+        c.role = role
+        c.platform = self.platform.currentData() or "x86"
+        if c.platform == "frite":
+            c.board = self.board.currentText()
+            c.flavor = self.flavor.currentText()
+            c.desktop = self.frite_desktop.currentText()
+        else:
+            # jetson carries a board axis of its own; every other platform has none
+            c.board = self.jetson_board.currentText() if c.platform == "jetson" else ""
+            c.flavor = ""
+            weight = self.desktop.currentText()
+            c.desktop = "" if (weight == "(default)" or not self.client_box.isVisible()) else weight
+        steam = self.steam.currentText()
+        c.steam = "" if (steam == "(default)" or not self.client_box.isVisible()) else steam
         return True
 
 
@@ -319,6 +456,21 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.character_studio = QtWidgets.QCheckBox(
             "Character Studio (VN) — character creator + chat remote at /character-studio (default off)")
         lay.addWidget(self.character_studio)
+        # cluster optional services (--optional-services multi-select) + the games stack
+        self.services_box = QtWidgets.QGroupBox("Optional cluster services (--optional-services)")
+        svl = QtWidgets.QVBoxLayout(self.services_box)
+        self.services = QtWidgets.QListWidget()
+        self.services.setMaximumHeight(140)
+        for slug in OPTIONAL_SERVICES_CHOICES:
+            it = QtWidgets.QListWidgetItem(slug)
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Unchecked)
+            self.services.addItem(it)
+        svl.addWidget(self.services)
+        self.games = QtWidgets.QCheckBox(
+            "Enable games — bake the Snapdragon Game Studio + the games.<domain> service")
+        svl.addWidget(self.games)
+        lay.addWidget(self.services_box)
         lay.addStretch(1)
 
     def initializePage(self):
@@ -347,6 +499,13 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.character_studio.setChecked(c.character_studio)
         # Character Studio is a frontend CLUSTER service — cloud/mesh builds only.
         self.character_studio.setVisible(c.mode in ("cloud", "mesh"))
+        for i in range(self.services.count()):
+            it = self.services.item(i)
+            it.setCheckState(Qt.CheckState.Checked if it.text() in c.optional_services
+                             else Qt.CheckState.Unchecked)
+        self.games.setChecked(c.enable_games)
+        # optional services live on CLUSTER nodes — cloud/mesh builds only.
+        self.services_box.setVisible(c.mode in ("cloud", "mesh"))
 
     def validatePage(self):
         c = self.wiz.cfg
@@ -368,6 +527,9 @@ class NetworkPage(QtWidgets.QWizardPage):
         c.edge_ai_analysis = self.edge_ai_analysis.isChecked()
         c.tor_onion_service = self.tor_onion.isChecked()
         c.character_studio = self.character_studio.isChecked()
+        c.optional_services = [self.services.item(i).text() for i in range(self.services.count())
+                               if self.services.item(i).checkState() == Qt.CheckState.Checked]
+        c.enable_games = self.games.isChecked()
         return True
 
 
@@ -534,6 +696,34 @@ class HomePage(QtWidgets.QWizardPage):
         self.seed = QtWidgets.QComboBox()
         self.seed.addItems(["none", "repos", "stack", "mesh"])
         lay.addWidget(_row("Seed stack code", self.seed))
+        # local login account (--local-user / --local-pass). The password is hashed by
+        # the builder at build time and is NEVER written to a saved config.
+        login = QtWidgets.QGroupBox("Local login")
+        ll = QtWidgets.QVBoxLayout(login)
+        self.local_user = QtWidgets.QLineEdit()
+        ll.addWidget(_row("Local user", self.local_user))
+        self.local_pass = QtWidgets.QLineEdit()
+        self.local_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self.local_pass.setPlaceholderText("hashed at build time; NOT saved to configs")
+        ll.addWidget(_row("Local password", self.local_pass))
+        lay.addWidget(login)
+        # root-disk encryption (installer LUKS2 FDE) + unlock factors
+        enc = QtWidgets.QGroupBox("Root-disk encryption (LUKS2)")
+        el = QtWidgets.QVBoxLayout(enc)
+        self.encrypt_root = QtWidgets.QCheckBox(
+            "Encrypt the target root (--encrypt-root; installer prompts for a passphrase)")
+        el.addWidget(self.encrypt_root)
+        self.luks_pass = QtWidgets.QLineEdit()
+        self.luks_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self.luks_pass.setPlaceholderText("optional unattended passphrase; NOT saved to configs")
+        el.addWidget(_row("LUKS passphrase", self.luks_pass))
+        self.unlock_keyfile = QtWidgets.QComboBox()
+        self.unlock_keyfile.addItems(["(off)", "boot", "login"])
+        el.addWidget(_row("Keyfile unlock", self.unlock_keyfile))
+        self.unlock_yubikey = QtWidgets.QComboBox()
+        self.unlock_yubikey.addItems(["(off)", "boot", "login"])
+        el.addWidget(_row("YubiKey unlock", self.unlock_yubikey))
+        lay.addWidget(enc)
         lay.addStretch(1)
 
     def initializePage(self):
@@ -543,6 +733,12 @@ class HomePage(QtWidgets.QWizardPage):
         self.backup.setText(c.home_backup)
         self.encrypted.setChecked(c.home_encrypted)
         self.seed.setCurrentText(c.home_seed_code)
+        self.local_user.setText(c.local_user)
+        self.local_pass.setText(c.local_pass)
+        self.encrypt_root.setChecked(c.encrypt_root)
+        self.luks_pass.setText(c.luks_pass)
+        self.unlock_keyfile.setCurrentText(c.unlock_keyfile or "(off)")
+        self.unlock_yubikey.setCurrentText(c.unlock_yubikey or "(off)")
 
     def validatePage(self):
         c = self.wiz.cfg
@@ -551,6 +747,14 @@ class HomePage(QtWidgets.QWizardPage):
         c.home_backup = self.backup.text().strip()
         c.home_encrypted = self.encrypted.isChecked()
         c.home_seed_code = self.seed.currentText()
+        c.local_user = self.local_user.text().strip() or c.local_user
+        c.local_pass = self.local_pass.text()
+        c.encrypt_root = self.encrypt_root.isChecked()
+        c.luks_pass = self.luks_pass.text()
+        kf = self.unlock_keyfile.currentText()
+        c.unlock_keyfile = "" if kf == "(off)" else kf
+        yk = self.unlock_yubikey.currentText()
+        c.unlock_yubikey = "" if yk == "(off)" else yk
         return True
 
 
@@ -584,6 +788,17 @@ class BuildPage(QtWidgets.QWizardPage):
         lay.addWidget(_row("Output dir", w))
         self.jobs = QtWidgets.QSpinBox(); self.jobs.setRange(1, 256); self.jobs.setValue(8)
         lay.addWidget(_row("Parallel jobs", self.jobs))
+        self.installer_ui = QtWidgets.QComboBox()
+        self.installer_ui.addItems(["all", "cli", "ncurses", "calamares"])
+        lay.addWidget(_row("Installer UI", self.installer_ui))
+        self.compress = QtWidgets.QCheckBox("Compress the finished image(s) (xz -9)")
+        self.resume = QtWidgets.QCheckBox("Resume — reuse an existing sysroot")
+        lay.addWidget(self.compress)
+        lay.addWidget(self.resume)
+        # escape hatch: EVERY builder CLI option stays expressible, fielded or not
+        self.extra_flags = QtWidgets.QLineEdit()
+        self.extra_flags.setPlaceholderText('appended verbatim, shell-quoted (e.g. --grow none --seed-url "https://…")')
+        lay.addWidget(_row("Extra builder flags", self.extra_flags))
         self.cmd = QtWidgets.QPlainTextEdit(); self.cmd.setReadOnly(True); self.cmd.setMaximumHeight(120)
         lay.addWidget(QtWidgets.QLabel("Command:")); lay.addWidget(self.cmd)
         self.preview_btn = QtWidgets.QPushButton("Refresh preview")
@@ -598,8 +813,15 @@ class BuildPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         self.wiz.collect_all()
+        c = self.wiz.cfg
         if not self.outdir.text():
-            self.outdir.setText(self.wiz.cfg.output_dir or os.path.join(self.wiz.generator_dir, "out"))
+            self.outdir.setText(c.output_dir or os.path.join(self.wiz.generator_dir, "out"))
+        self.installer_ui.setCurrentText(c.installer_ui or "all")
+        # the installer-UI choice is an x86 ISO knob; the arm builders have no flag
+        self.installer_ui.setEnabled(c.platform in ("", "x86"))
+        self.compress.setChecked(c.compress)
+        self.resume.setChecked(c.resume)
+        self.extra_flags.setText(c.extra_flags)
         self._preview()
 
     def _backend(self):
@@ -608,10 +830,21 @@ class BuildPage(QtWidgets.QWizardPage):
 
     def _preview(self):
         self.wiz.collect_all()
-        self.wiz.cfg.output_dir = self.outdir.text().strip()
-        self.wiz.cfg.jobs = self.jobs.value()
-        problems = self.wiz.driver.preflight(self.wiz.cfg, self._backend())
-        self.cmd.setPlainText(self.wiz.driver.command_string(self.wiz.cfg, self._backend()))
+        c = self.wiz.cfg
+        c.output_dir = self.outdir.text().strip()
+        c.jobs = self.jobs.value()
+        c.installer_ui = self.installer_ui.currentText()
+        c.compress = self.compress.isChecked()
+        c.resume = self.resume.isChecked()
+        c.extra_flags = self.extra_flags.text().strip()
+        try:
+            cmdline = self.wiz.driver.command_string(c, self._backend())
+        except ValueError as e:  # e.g. unbalanced quotes in the extra-flags escape hatch
+            self.cmd.setPlainText("")
+            self.log.setPlainText(f"Command error: {e}")
+            return
+        problems = self.wiz.driver.preflight(c, self._backend())
+        self.cmd.setPlainText(cmdline)
         if problems:
             self.log.setPlainText("Preflight:\n  - " + "\n  - ".join(problems))
         else:
@@ -652,9 +885,9 @@ class StudioWizard(QtWidgets.QWizard):
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
         self.resize(820, 640)
         self._pages = [
-            WelcomePage(self), ModePage(self), HardwarePage(self), BrandingPage(self),
-            NetworkPage(self), KeyZipPage(self), DomainsPage(self), UsersPage(self),
-            HomePage(self), BuildPage(self),
+            WelcomePage(self), ModePage(self), RolePage(self), HardwarePage(self),
+            BrandingPage(self), NetworkPage(self), KeyZipPage(self), DomainsPage(self),
+            UsersPage(self), HomePage(self), BuildPage(self),
         ]
         for p in self._pages:
             self.addPage(p)

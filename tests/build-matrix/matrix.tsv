@@ -1,0 +1,87 @@
+# tests/build-matrix/matrix.tsv — THE canonical build matrix.
+#
+# One row per buildable image cell: (platform, role, env, board, flavor, desktop).
+# "-" = axis not applicable to that platform. Every row must be buildable from
+# EVERY channel (CLI --print-plan, make target, ncurses menu, Studio GUI) — the
+# all-options-in-all-menus rule (specs-jetson/README.md). tests/build-matrix/check.sh
+# walks this file; `make matrix-check` runs it.
+#
+# platform	role	env	board	flavor	desktop
+rpi5	pki	test	-	-	-
+rpi5	backend	test	-	-	-
+rpi5	frontend	test	-	-	-
+rpi5	pki	prod	-	-	-
+rpi5	backend	prod	-	-	-
+rpi5	frontend	prod	-	-	-
+x86	pki	test	-	-	-
+x86	be	test	-	-	-
+x86	fe	test	-	-	-
+x86	be+gpu	test	-	-	-
+x86	omnibus	test	-	-	-
+x86	edge_ai	test	-	-	-
+x86	laptop	test	-	-	-
+x86	chromebook	test	-	-	-
+x86	desktop	test	-	-	-
+x86	standalone-thin	test	-	-	-
+x86	standalone-thick	test	-	-	-
+x86	pki	prod	-	-	-
+x86	be	prod	-	-	-
+x86	fe	prod	-	-	-
+x86	be+gpu	prod	-	-	-
+x86	omnibus	prod	-	-	-
+x86	edge_ai	prod	-	-	-
+x86	laptop	prod	-	-	-
+x86	chromebook	prod	-	-	-
+x86	desktop	prod	-	-	-
+x86	standalone-thin	prod	-	-	-
+x86	standalone-thick	prod	-	-	-
+frite	desktop	test	la-frite	live	light
+frite	desktop	test	la-frite	live	none
+frite	desktop	test	la-frite	installer	light
+frite	desktop	test	la-frite	installer	none
+frite	desktop	test	la-frite	both	light
+frite	desktop	test	la-frite	both	none
+frite	desktop	test	le-potato	live	light
+frite	desktop	test	le-potato	live	none
+frite	desktop	test	le-potato	installer	light
+frite	desktop	test	le-potato	installer	none
+frite	desktop	test	le-potato	both	light
+frite	desktop	test	le-potato	both	none
+frite	desktop	test	sweet-potato	live	light
+frite	desktop	test	sweet-potato	live	none
+frite	desktop	test	sweet-potato	installer	light
+frite	desktop	test	sweet-potato	installer	none
+frite	desktop	test	sweet-potato	both	light
+frite	desktop	test	sweet-potato	both	none
+frite	desktop	prod	la-frite	live	light
+frite	desktop	prod	la-frite	live	none
+frite	desktop	prod	la-frite	installer	light
+frite	desktop	prod	la-frite	installer	none
+frite	desktop	prod	la-frite	both	light
+frite	desktop	prod	la-frite	both	none
+frite	desktop	prod	le-potato	live	light
+frite	desktop	prod	le-potato	live	none
+frite	desktop	prod	le-potato	installer	light
+frite	desktop	prod	le-potato	installer	none
+frite	desktop	prod	le-potato	both	light
+frite	desktop	prod	le-potato	both	none
+frite	desktop	prod	sweet-potato	live	light
+frite	desktop	prod	sweet-potato	live	none
+frite	desktop	prod	sweet-potato	installer	light
+frite	desktop	prod	sweet-potato	installer	none
+frite	desktop	prod	sweet-potato	both	light
+frite	desktop	prod	sweet-potato	both	none
+jetson	edge_ai	test	orin-nano	-	-
+jetson	full	test	orin-nano	-	-
+jetson	gpu-host	test	orin-nano	-	-
+jetson	desktop	test	orin-nano	-	-
+jetson	edge_ai	prod	orin-nano	-	-
+jetson	full	prod	orin-nano	-	-
+jetson	gpu-host	prod	orin-nano	-	-
+jetson	desktop	prod	orin-nano	-	-
+jetson	edge_ai	test	orin-nano-4gb	-	-
+jetson	edge_ai	prod	orin-nano-4gb	-	-
+jetson	edge_ai	test	orin-nx-8gb	-	-
+jetson	edge_ai	prod	orin-nx-8gb	-	-
+jetson	edge_ai	test	orin-nx-16gb	-	-
+jetson	edge_ai	prod	orin-nx-16gb	-	-

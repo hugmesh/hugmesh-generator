@@ -27,7 +27,11 @@ class BuildDriver:
     def command(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:
         backend = backend or self.host.default_backend
         out = cfg.output_dir or os.path.join(self.generator_dir, "out")
-        inner = ["./build-x86-host-stage4.sh", "-w", "/out" if backend == "docker" else out,
+        # cfg.platform picks the builder (x86/rpi5/frite/jetson); all four scripts sit
+        # at the generator-repo root, so ./<script> works both natively (cwd =
+        # generator_dir) and in the container (the repo is mounted at /src).
+        script = f"./{cfg.builder_script}"
+        inner = [script, "-w", "/out" if backend == "docker" else out,
                  "-j", str(cfg.jobs), *cfg.to_cli_args()]
         if backend == "native":
             # run in the generator dir; needs root for the chroot/loop ops
@@ -36,7 +40,7 @@ class BuildDriver:
             # Asset paths outside the generator dir (wallpaper, branding dir, egress conf)
             # are not visible in the container — mount each and rewrite its flag value.
             asset_mounts, dcfg = self._remap_assets_for_docker(cfg)
-            dinner = ["./build-x86-host-stage4.sh", "-w", "/out", "-j", str(cfg.jobs), *dcfg.to_cli_args()]
+            dinner = [script, "-w", "/out", "-j", str(cfg.jobs), *dcfg.to_cli_args()]
             return [
                 "docker", "run", "--rm", "--privileged",
                 "-v", f"{self.generator_dir}:/src",
@@ -113,8 +117,10 @@ class BuildDriver:
         problems: list[str] = []
         if backend == "none":
             problems.append("No build backend: install Docker (any OS) or run on a Gentoo host.")
-        if not os.path.exists(os.path.join(self.generator_dir, "build-x86-host-stage4.sh")):
-            problems.append(f"generator script not found in {self.generator_dir}")
+        if not os.path.exists(os.path.join(self.generator_dir, cfg.builder_script)):
+            problems.append(f"builder script {cfg.builder_script} not found in {self.generator_dir}"
+                            + (" (Jetson support is EXPERIMENTAL — hardware validation pending)"
+                               if cfg.platform == "jetson" else ""))
         if backend == "docker" and not self.host.has_docker:
             problems.append("Docker selected but the Docker daemon is not reachable.")
         if backend == "native" and not self.host.is_root:

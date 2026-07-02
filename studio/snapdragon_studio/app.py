@@ -28,13 +28,20 @@ def main(argv=None) -> int:
     ap.add_argument("--print-command", action="store_true",
                     help="headless: print the build command for a saved config and exit")
     ap.add_argument("--config", help="config JSON (with --print-command)")
+    ap.add_argument("--backend", choices=["auto", "native", "docker"], default="auto",
+                    help="build backend for --print-command (auto = host default)")
     args = ap.parse_args(argv)
 
     if args.print_command:
+        # Qt-free path: core only — must work with no display and no Qt installed.
         from .core.build_driver import BuildDriver
         from .core.config import ImageConfig
         cfg = ImageConfig.load(args.config) if args.config else ImageConfig()
-        print(BuildDriver(args.generator_dir).command_string(cfg))
+        driver = BuildDriver(args.generator_dir)
+        backend = None if args.backend == "auto" else args.backend
+        if backend is None and driver.host.default_backend == "none":
+            backend = "native"  # still print a deterministic command on a host that can't build
+        print(driver.command_string(cfg, backend))
         return 0
 
     # GUI

@@ -1,0 +1,24 @@
+# Kubernetes NODE package set — NVIDIA Jetson Orin (aarch64).
+# One atom per line; lines starting with # are ignored.
+#
+# Appended by build-jetson-stage4.sh for the CLUSTER roles (edge_ai | gpu-host |
+# full). Mirrors the RPi5 k8s worker set (specs-rpi5/portage/packages.list):
+# the Jetson joins the SAME kubeadm cluster as the Pi/x86 nodes, over the same
+# tailnet, and runs the same arch-portable kustomize manifests.
+
+# ── Container runtime ─────────────────────────────────────────────
+app-containers/containerd
+app-containers/runc
+app-containers/cni-plugins
+app-containers/cri-tools
+# nerdctl is KEYWORDS="~amd64" only in ::gentoo (no arm64 keyword) — omitted on
+# purpose, exactly like the RPi5 image (crictl drives containerd on nodes).
+
+# ── Kubernetes ─────────────────────────────────────────────────────
+sys-cluster/kubelet
+sys-cluster/kubeadm
+sys-cluster/kubectl
+
+# ── Node firewalling (kube-proxy/CNI want the full nf stack) ──────
+net-firewall/nftables
+net-firewall/conntrack-tools

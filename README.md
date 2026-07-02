@@ -176,7 +176,8 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 | **frontend** (RPi 5) | `./build-rpi5-stage4.sh --role frontend` | snapdragon.systems Angular host + login/matrix/mastodon/wiki remotes, fe-gateway |
 | **host** (x86_64) | `sudo ./build-x86-host-stage4.sh` | GPU worker: ArgoCD, snapdragon.games, backend capacity |
 | **edge_ai** (x86_64 / Jetson) | `./build-x86-host-stage4.sh --role edge_ai` | GPU inference node: serves an OpenAI-compatible model API (Ollama) to the mesh over k8s + tailnet; NVIDIA + CUDA + nvidia-device-plugin. See [docs/EDGE-AI.md](docs/EDGE-AI.md) |
-| **Frite light desktop** (Libre Computer, arm64) — *opt-in client* | `make frite` (or `./build-frite-stage4.sh`) | LEAN LXDE desktop on the Amlogic La Frite / Le Potato SBC; joins the tailnet + Casdoor login. LIVE + INSTALLER flavors |
+| **Frite light desktop** (Libre Computer, arm64) — *opt-in client* | `make frite` (or `./build-frite-stage4.sh`) | LEAN LXDE desktop on the Amlogic La Frite / Le Potato SBC; joins the tailnet + Casdoor login. LIVE + INSTALLER flavors, `--desktop light\|none` |
+| **Jetson Orin edge-AI** (NVIDIA Tegra234, arm64) — **EXPERIMENTAL** | `make jetson` (or `./build-jetson-stage4.sh --role edge_ai\|gpu-host\|full\|desktop`) | arm64 edge-AI node family on the Jetson Orin Nano/NX: same mesh + KEYS provisioning + shared cluster tree; mainline kernel (NO CUDA yet — the L4T/CUDA flavor is a documented stub). **Hardware validation pending** — see [`specs-jetson/README.md`](specs-jetson/README.md) |
 
 > The friendlier path is the **Makefile** (`make local` / `make prod` /
 > `make build-all`), which dispatches the same builders inside a self-contained
@@ -747,6 +748,7 @@ for the full man-style reference. Highlights:
 | `--skip-mesh` / `--skip-tailscale` | off | Omit mesh VPN / tailscale client. |
 | `--skip-kernel` / `--skip-iso` / `--skip-clean` / `--resume` | off | Build phases. |
 | `--pcie-gen3` | off | Force PCIe Gen 3 for NVMe (RPi, test your drive). |
+| `--print-plan` | off | **Dry run** (all four builders): resolve + validate every flag, print the machine-greppable build plan (`PLAN_KEY=VALUE` lines) and exit 0 — no root, no writes, no network. Invalid role/flag combinations exit non-zero; secrets print as `REDACTED`. The build-matrix harness verifies every cell through it. |
 
 ### `make` targets
 
@@ -765,11 +767,30 @@ live list). Common overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`,
 | `make rpi` / `make rpi-<role>` | all 3 Pi roles / one Pi role (`rpi-frontend`). |
 | `make x86` / `make x86-<role>` | the 4 x86 roles / one (`x86-be+gpu`, `x86-pki`, `x86-omnibus`). |
 | `make omnibus` | the opt-in x86 all-namespaces-on-one-node image. |
+| `make frite` / `frite-live` / `frite-installer` | the opt-in Frite client (`FRITE_BOARD=`, `FRITE_FLAVOR=`, `FRITE_DESKTOP=light\|none`). |
+| `make jetson` / `make jetson-<role>` | the **EXPERIMENTAL** Jetson Orin edge-AI platform (`jetson-edge_ai`, `jetson-gpu-host`, `jetson-full`, `jetson-desktop`; `JETSON_BOARD=`, `JETSON_KERNEL_FLAVOR=`). Hardware validation pending. |
+| `make build-everything` | the **FULL documented matrix**: 3 Pi + all 11 x86 roles (nodes + omnibus + edge_ai + clients + standalone) + Frite + all 4 Jetson roles (honors `ENV=test\|prod`). |
+| `make matrix-check` | **dry-run validate the whole build matrix** across all four channels via the builders' `--print-plan` (no root, no writes; `tests/build-matrix/check.sh`). |
 | `make flash DEV=/dev/sdX ROLE=frontend ARCH=arm64` | write a role image to a disk (`.img` preferred). |
 | `make qemu` (`qemu-rpi` / `qemu-x86`) | boot a role image under QEMU (`ARCH=arm64`→Pi, `x86`→q35+OVMF). |
 | `make e2e` | boot a role VM under QEMU and run the Playwright e2e with seeded accounts. |
 | `make ci` / `make ci-quick` | full pipeline (rebuild fleet → e2e) / fast (build x86 be+gpu → e2e). |
 | `make clean` | wipe the work dir. |
+
+### Build channels — all options in all menus
+
+Every documented image option is reachable from **every build front-end
+("channel")**: the **CLI** builders (`build-{rpi5,x86-host,frite,jetson}-stage4.sh`),
+the **make** targets, the **ncurses menu** (`make menu`) and the **Studio GUI**
+(`studio/`), each crossed with the build ENV (`test`|`prod`). That is a standing
+rule ([`specs-jetson/README.md`](specs-jetson/README.md)), and it is **enforced,
+not aspirational**: [`tests/build-matrix/`](tests/build-matrix/) carries the
+canonical 78-cell matrix (platform × role × env × board/flavor/desktop) and
+`make matrix-check` proves all four channels agree on every cell — via the
+builders' `--print-plan` dry run, `make -n` recipe inspection, the menu's
+composed command and the Studio's headless `--print-command` — plus negative
+checks that invalid combinations fail loudly. See
+[`docs/BUILD-MATRIX.md`](docs/BUILD-MATRIX.md).
 
 ## Spec files
 

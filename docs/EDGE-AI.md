@@ -165,16 +165,39 @@ then select the slug. Keep it deselected until the image is pushed (so no node
 ImagePull-fails). Everything stays on-prem — the wrapper only calls the in-cluster
 Ollama upstream.
 
-## 5. Jetson Orin Nano (arm64 platform — follow-on)
+## 5. Jetson Orin Nano (arm64 platform — EXPERIMENTAL, buildable)
 
 The NVIDIA **Jetson Orin Nano** (aarch64 + Ampere, 67 TOPS) runs the same `edge_ai`
-role + `edge-ai` service; the difference is the **platform**: a `specs-jetson` tree
-(L4T / Tegra kernel + CUDA userspace) rather than `specs-x86`. The kustomize image
-tags and the GPU request are identical (Ollama has arm64 + Jetson CUDA images).
-Platform bring-up (L4T BSP kernel vs mainline+nouveau-tegra, the Tegra CUDA stack)
-is scaffolded separately under `specs-jetson/` — see
-[memory: snapdragon-edge-ai-jetson]. Until Jetson hardware is on hand, the edge-AI
-service is validated on the x86 GPU host.
+role + `edge-ai` service; the difference is the **platform**: the `specs-jetson`
+tree (Tegra234 kernel fragments + boot/portage specs) rather than `specs-x86`. The
+kustomize image tags and the GPU request are identical (Ollama has arm64 + Jetson
+CUDA images).
+
+The platform now has a **buildable EXPERIMENTAL path** — `build-jetson-stage4.sh`:
+
+```bash
+./build-jetson-stage4.sh --role edge_ai              # the headline (DEFAULT)
+./build-jetson-stage4.sh --role edge_ai --print-plan # dry-run plan (no root)
+make jetson JETSON_ROLE=edge_ai                      # the make front door
+```
+
+Roles: `edge_ai` (default) | `gpu-host` | `full` | `desktop`; boards
+`orin-nano` (default) / `orin-nano-4gb` / `orin-nx-8gb` / `orin-nx-16gb`. The
+default `--kernel-flavor mainline` is the buildable route (gentoo-sources arm64
++ the Tegra234 fragments) and carries **NO CUDA** — the GA10B iGPU needs
+NVIDIA's nvgpu, so the edge-ai service runs **CPU-only** until the node moves to
+the L4T stack; `--kernel-flavor l4t` (NVIDIA BSP kernel + CUDA userspace) is a
+**documented stub** (EULA-gated downloads, hard error pointing at
+`specs-jetson/installer/TEGRAFLASH.md`). All four channels expose the platform
+(CLI / `make jetson` / ncurses menu / Studio — all-menus parity), and the full
+role×env matrix is dry-run-verified by `make matrix-check`.
+
+**Status: EXPERIMENTAL — hardware validation pending.** No physical Orin has
+booted an image from this builder yet; every real build prints a LOUD
+EXPERIMENTAL banner until first boot is confirmed on hardware. See
+[`specs-jetson/README.md`](../specs-jetson/README.md) for the validation
+checklist. Until then, the edge-AI service itself stays validated on the x86
+GPU host.
 
 ---
 

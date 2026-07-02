@@ -18,7 +18,18 @@
 #   FRITE_BOARD=le-potato FRITE=1 ./scripts/build-all-roles.sh   # the pricier S905X sibling
 #   FRITE_ONLY=1  ./scripts/build-all-roles.sh  # ONLY the Frite (skip Pi + x86)
 #   FRITE_FLAVOR=live FRITE=1 ./scripts/build-all-roles.sh       # live image only
+#   FRITE_DESKTOP=none FRITE=1 ./scripts/build-all-roles.sh      # headless base (no LXDE)
 # (build-frite-stage4.sh — see docs/RUNNING.md §"Frite light-desktop image".)
+#
+# The NVIDIA Jetson Orin (Tegra234 arm64) edge-AI platform is OPT-IN too —
+# EXPERIMENTAL: hardware validation pending (specs-jetson/README.md). Knobs
+# mirror the FRITE family exactly:
+#   JETSON=1      ./scripts/build-all-roles.sh  # ALSO build the Jetson (edge_ai role)
+#   JETSON_ROLES="edge_ai desktop" JETSON=1 ./scripts/build-all-roles.sh   # role subset
+#   JETSON_ONLY=1 ./scripts/build-all-roles.sh  # ONLY the Jetson (skip Pi + x86 + Frite)
+#   JETSON_BOARD=orin-nx-16gb JETSON=1 ./scripts/build-all-roles.sh        # other module
+#   JETSON_KERNEL_FLAVOR=l4t JETSON=1 ./scripts/build-all-roles.sh  # (stubbed) L4T/CUDA path
+# (build-jetson-stage4.sh — roles: edge_ai (default) | gpu-host | full | desktop.)
 #
 # Pen-test build OPTION (DEV / CI-pipeline only) — run the OWASP pen-test harness
 # as part of the build (memory snapdragon-pentest-standard "an OPTION in the BUILD
@@ -55,6 +66,7 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_RPI="${REPO_DIR}/build-rpi5-stage4.sh"
 BUILD_X86="${REPO_DIR}/build-x86-host-stage4.sh"
 BUILD_FRITE="${REPO_DIR}/build-frite-stage4.sh"
+BUILD_JETSON="${REPO_DIR}/build-jetson-stage4.sh"
 GENKEYS="${SCRIPT_DIR}/gen-provision-keys.sh"
 WORK_DIR="${WORK_DIR:-${REPO_DIR}/out}"
 # Honor a -w/--work-dir passed through to the builders so the keys-<role> folders
@@ -129,10 +141,27 @@ elif [ "${FRITE:-0}" = "1" ]; then
 fi
 FRITE_BOARD_SEL="${FRITE_BOARD:-la-frite}"
 FRITE_FLAVOR_SEL="${FRITE_FLAVOR:-both}"
+FRITE_DESKTOP_SEL="${FRITE_DESKTOP:-light}"
+
+# Jetson Orin edge-AI platform is OPT-IN (EXPERIMENTAL — hardware validation
+# pending). Knobs mirror the FRITE family: JETSON=1 adds it, JETSON_ONLY=1
+# builds ONLY it, JETSON_ROLES picks the role subset (default: the edge_ai
+# headline), JETSON_BOARD / JETSON_KERNEL_FLAVOR thread to the builder.
+BUILD_JETSON_IMG=false
+if [ "${JETSON_ONLY:-0}" = "1" ]; then
+    BUILD_JETSON_IMG=true
+    RPI_ROLES=(); X86_BUILD_ROLES=(); BUILD_FRITE_IMG=false
+elif [ "${JETSON:-0}" = "1" ]; then
+    BUILD_JETSON_IMG=true
+fi
+read -r -a JETSON_BUILD_ROLES <<< "${JETSON_ROLES:-edge_ai}"
+JETSON_BOARD_SEL="${JETSON_BOARD:-orin-nano}"
+JETSON_KFLAVOR_SEL="${JETSON_KERNEL_FLAVOR:-mainline}"
 
 echo "==> RPi5 roles:  ${RPI_ROLES[*]:-(none)}"
 echo "==> x86 roles:   ${X86_BUILD_ROLES[*]:-(none)}"
-echo "==> Frite:       $([ "${BUILD_FRITE_IMG}" = true ] && echo "${FRITE_BOARD_SEL} (flavor=${FRITE_FLAVOR_SEL})" || echo '(off — set FRITE=1)')"
+echo "==> Frite:       $([ "${BUILD_FRITE_IMG}" = true ] && echo "${FRITE_BOARD_SEL} (flavor=${FRITE_FLAVOR_SEL}, desktop=${FRITE_DESKTOP_SEL})" || echo '(off — set FRITE=1)')"
+echo "==> Jetson:      $([ "${BUILD_JETSON_IMG}" = true ] && echo "${JETSON_BOARD_SEL} roles: ${JETSON_BUILD_ROLES[*]} (kernel=${JETSON_KFLAVOR_SEL}; EXPERIMENTAL)" || echo '(off — set JETSON=1)')"
 echo "==> Build ENV:   ${BUILD_ENV}  $([ "${BUILD_ENV}" = test ] && echo '(LAN-first; cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
 echo "==> Pen-test:    $([ "${PENTEST}" = 1 ] && echo "ON (env=${PENTEST_ENV:-compose} scan=${PENTEST_SCAN:-baseline} pipeline=${PENTEST_PIPELINE:-main})$([ "${PENTEST_ONLY:-0}" = 1 ] && echo ' [PENTEST_ONLY]')" || echo '(off — set PENTEST=1 / --pentest)')"
 echo "    Work/target dir: ${WORK_DIR}"
@@ -162,10 +191,22 @@ done
 
 if [ "${BUILD_FRITE_IMG}" = true ]; then
     echo "############################################################"
-    echo "#  Building Frite light desktop: ${FRITE_BOARD_SEL} (flavor=${FRITE_FLAVOR_SEL})"
+    echo "#  Building Frite light desktop: ${FRITE_BOARD_SEL} (flavor=${FRITE_FLAVOR_SEL}, desktop=${FRITE_DESKTOP_SEL})"
     echo "############################################################"
-    "${BUILD_FRITE}" --board "${FRITE_BOARD_SEL}" --flavor "${FRITE_FLAVOR_SEL}" "$@" \
+    "${BUILD_FRITE}" --board "${FRITE_BOARD_SEL}" --flavor "${FRITE_FLAVOR_SEL}" \
+            --desktop "${FRITE_DESKTOP_SEL}" "$@" \
         || { echo "!! Frite build FAILED — continuing" >&2; BUILDS_FAILED+=("frite:${FRITE_BOARD_SEL}"); }
+fi
+
+if [ "${BUILD_JETSON_IMG}" = true ]; then
+    for role in "${JETSON_BUILD_ROLES[@]}"; do
+        echo "############################################################"
+        echo "#  Building Jetson role: ${role} (${JETSON_BOARD_SEL}, kernel=${JETSON_KFLAVOR_SEL}) — EXPERIMENTAL"
+        echo "############################################################"
+        "${BUILD_JETSON}" --role "${role}" --board "${JETSON_BOARD_SEL}" \
+                --kernel-flavor "${JETSON_KFLAVOR_SEL}" "$@" \
+            || { echo "!! Jetson role '${role}' build FAILED — continuing with the remaining roles" >&2; BUILDS_FAILED+=("jetson:${role}"); }
+    done
 fi
 
 # ── Generate provisioning keys ───────────────────────────────────────
@@ -201,6 +242,23 @@ if [ "${SKIP_KEYS:-0}" != "1" ]; then
             rm -rf "${WORK_DIR}/keys-frite"
             KEYS_FAILED+=(frite)
         fi
+    fi
+    # Jetson roles provision from the SAME KEYS USB mechanism. gen-provision-keys
+    # only knows the rpi/host role names, so map: 'full' (single-node control
+    # plane, the omnibus analogue) -> pki profile; the worker roles (edge_ai /
+    # gpu-host) and the desktop client -> the 'host' worker-key profile (exactly
+    # like the Frite client).
+    if [ "${BUILD_JETSON_IMG}" = true ]; then
+        for role in "${JETSON_BUILD_ROLES[@]}"; do
+            _jk_profile=host
+            [ "${role}" = "full" ] && _jk_profile=pki
+            echo "==> Generating keys folder: ${WORK_DIR}/keys-jetson-${role} (${_jk_profile} profile)"
+            if ! "${GENKEYS}" --role "${_jk_profile}" --out "${WORK_DIR}/keys-jetson-${role}" --random; then
+                echo "!! keys generation FAILED for jetson-${role} — removing partial ${WORK_DIR}/keys-jetson-${role}" >&2
+                rm -rf "${WORK_DIR}/keys-jetson-${role}"
+                KEYS_FAILED+=("jetson-${role}")
+            fi
+        done
     fi
 fi
 
@@ -241,7 +299,7 @@ if [ "${#BUILDS_FAILED[@]}" -gt 0 ]; then
     echo >&2
     echo "!! IMAGE BUILD FAILED for: ${BUILDS_FAILED[*]}  (the other roles + keys were still produced)" >&2
     echo "!! Re-run a failed role with its per-arch builder:" >&2
-    echo "!!   ./build-rpi5-stage4.sh --role <r>  |  ./build-x86-host-stage4.sh --role <r>  |  ./build-frite-stage4.sh --board <b>" >&2
+    echo "!!   ./build-rpi5-stage4.sh --role <r>  |  ./build-x86-host-stage4.sh --role <r>  |  ./build-frite-stage4.sh --board <b>  |  ./build-jetson-stage4.sh --role <r>" >&2
 fi
 # A run whose keys folders failed has NO usable provisioning deliverable for those roles.
 if [ "${#KEYS_FAILED[@]}" -gt 0 ]; then
@@ -249,7 +307,15 @@ if [ "${#KEYS_FAILED[@]}" -gt 0 ]; then
     echo "!! KEYS generation FAILED for: ${KEYS_FAILED[*]}" >&2
     echo "!! The partial keys folders were removed. Re-run gen-provision-keys.sh per role:" >&2
     for _r in "${KEYS_FAILED[@]}"; do
-        echo "!!   ${GENKEYS} --role ${_r/frite/host} --out ${WORK_DIR}/keys-${_r} --random" >&2
+        # Map the appliance names back to the key profile gen-provision-keys knows:
+        # frite + jetson workers/desktop -> host; jetson 'full' (single-node CP) -> pki.
+        case "${_r}" in
+            frite)       _kp=host ;;
+            jetson-full) _kp=pki ;;
+            jetson-*)    _kp=host ;;
+            *)           _kp="${_r}" ;;
+        esac
+        echo "!!   ${GENKEYS} --role ${_kp} --out ${WORK_DIR}/keys-${_r} --random" >&2
     done
 fi
 if [ "${#BUILDS_FAILED[@]}" -gt 0 ] || [ "${#KEYS_FAILED[@]}" -gt 0 ]; then

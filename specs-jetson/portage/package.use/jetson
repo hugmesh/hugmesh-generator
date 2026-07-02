@@ -1,0 +1,47 @@
+# Per-package USE flags — NVIDIA Jetson Orin (Tegra234, aarch64).
+# Mirrors the RPi5/Frite cross-build fixups that are arch- (not board-) specific.
+
+# gentoo-sources: install the source symlink so the kernel build can find it.
+sys-kernel/gentoo-sources symlink
+
+# parted needs device-mapper for the installer's partitioning helpers.
+sys-block/parted device-mapper
+
+# NetworkManager: keep wifi USE (the devkit has an M.2 radio slot; a USB dongle
+# may be present) but the radio is rfkill-blocked + module-blacklisted by
+# default (harden_radios in the builder). Drop modemmanager: it drags the
+# gobject-introspection chain our global -introspection breaks, and cellular
+# modems are absent from this target (same rationale as the Frite).
+net-misc/networkmanager wifi -modemmanager
+
+# containerd on the hardened/selinux profile (k8s roles): the selinux USE is
+# profile-forced; the HOST-side toolchain pre-seed lives in the builder (see the
+# rpi5 builder's host package.use note) — this covers the TARGET side.
+sys-libs/libselinux python
+sys-process/audit python
+
+# freetype needs harfbuzz to satisfy pango for the desktop role's GTK stack
+# (transitively also dbus/elogind/dracut). Harmless on headless roles.
+media-libs/freetype harfbuzz
+
+# ngtcp2 needs gnutls to satisfy net-fs/samba pulled in by net-fs/cifs-utils[acl].
+net-libs/ngtcp2 gnutls
+
+# libdom needs xml to satisfy www-client/netsurf[svgtiny,svg] (desktop role).
+net-libs/libdom xml
+
+# gtk+ rsvg USE disabled (desktop role): librsvg is a Rust crate; cross-compiling
+# it needs the aarch64 Rust stdlib target absent from the host toolchain. SVG
+# icon rendering is non-essential; adwaita is satisfied via profile/package.provided.
+x11-libs/gtk+ -rsvg
+
+# libfm automount disabled (desktop role): +automount drags the whole gvfs →
+# gcr:4 → gtk-4 chain that fails to cross-compile (same as the Frite).
+x11-libs/libfm -automount
+
+# pinentry gtk USE disabled: +gtk requires app-crypt/gcr:4[gtk] → gui-libs/gtk-4
+# (fails cross-configure). The curses backend is sufficient on this node.
+app-crypt/pinentry -gtk
+
+# xterm: no toolbar bloat (desktop role).
+x11-terms/xterm -toolbar

@@ -23,6 +23,15 @@ platform UI — not a cluster node.
   admin-curated Plasma Discover store + user install-requests + admin
   remote-install over the device-SSH-license).
 
+> **✅ All channels expose the client roles + the full option set.** The
+> `laptop` / `chromebook` / `desktop` roles build identically from the CLI, the
+> `make x86-<role>` targets, the ncurses menu (`make menu`) and the Studio GUI —
+> and the menu/GUI now surface the **whole** client flag surface (desktop weight
+> + Steam delivery, home provisioning create/adopt/archive/restore + eCryptfs,
+> the per-piece branding overrides, `--installer-ui`, plus an extra-flags escape
+> hatch for anything unfielded). This parity is enforced by the build-matrix
+> harness (`make matrix-check`) — see [BUILD-MATRIX.md](BUILD-MATRIX.md).
+
 ## Two orthogonal axes (do not overload `--role`)
 
 - **node role** (existing): `pki|be|fe|be+gpu|omnibus` — k8s scheduling/compute. `ROLE`.
