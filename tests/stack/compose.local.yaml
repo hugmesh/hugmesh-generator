@@ -308,6 +308,10 @@ services:
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       SPRING_PROFILES_ACTIVE: casdoor
       FEDERATION_BASE_URL: "http://snapdragon-federation-api:8080"
+      # POST /bff/mod/findings/test-seed — e2e-fixture-only route. Ships dark upstream
+      # (app.test-seed.enabled=false / APP_TEST_SEED_ENABLED unset); turned ON for the
+      # test env so e2e seeding scripts can prime findings data (mod-bff-api#63).
+      APP_TEST_SEED_ENABLED: "true"
     depends_on:
       casdoor: { condition: service_started }
       snapdragon-federation-api: { condition: service_started }
@@ -344,6 +348,10 @@ services:
       # plain-HTTP local stack: the bff_ session cookie must not be Secure-only or the browser drops it
       APP_SESSION_COOKIE_SECURE: "false"
       SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
+      # POST /bff/user/notifications/test-seed — e2e-fixture-only route. Ships dark upstream
+      # (app.test-seed.enabled=false / APP_TEST_SEED_ENABLED unset); turned ON for the
+      # test env so e2e seeding scripts can prime notifications data (user-bff-api#97).
+      APP_TEST_SEED_ENABLED: "true"
     depends_on:
       casdoor: { condition: service_started }
       snapdragon-admin-bff-api: { condition: service_started }
