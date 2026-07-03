@@ -1,0 +1,6 @@
+# Snort IDS is default-on for every x86 image (build-x86-host-stage4.sh appends
+# net-analyzer/snort to PKGS unless --no-snort). The 2.9.x branch is still ~amd64
+# in the tree, so without this keyword the packages.list emerge aborts up front
+# ("All ebuilds that could satisfy net-analyzer/snort have been masked") and the
+# whole node payload — kubelet/kubeadm/containerd/grub/dracut/parted — never merges.
+net-analyzer/snort ~amd64

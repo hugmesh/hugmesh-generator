@@ -1323,7 +1323,12 @@ if ${ROLE_CLIENT}; then
 else
     CLIENT_USE=""
     INPUT_DEVICES=""           # headless nodes run no X server
-    INSTALL_MASK="/usr/share/doc /usr/share/man /usr/share/info"
+    # Also strip /usr/share/locale on headless nodes: they need no UI translations,
+    # AND it dodges a tree-wide file-collision bug where gettext-0.23.2 + util-linux/
+    # parted/grub/systemd-utils each install an empty-basename catalog
+    # (/usr/share/locale/<lang>/LC_MESSAGES/.mo) that collides between packages, so
+    # grub/parted/dracut fail to merge and the stage4 payload comes up incomplete.
+    INSTALL_MASK="/usr/share/doc /usr/share/man /usr/share/info /usr/share/locale"
 fi
 
 # Reconcile the legacy SKIP_ISO switch with the new opt-in ISO design: an ISO
