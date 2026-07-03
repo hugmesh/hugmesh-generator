@@ -105,3 +105,26 @@ data:
     #!/bin/sh
     set -eu
     rm -rf "$VOL_DIR"
+  # REQUIRED by rancher/local-path-provisioner:v0.0.30 — without this key the
+  # provisioner CrashLoops at startup with "invalid empty flag helper-pod-file
+  # ... helperPod.yaml is not exist in local-path-config ConfigMap" (found
+  # during the first real kind bring-up of this tree; this ConfigMap predates
+  # v0.0.30 requiring it). Verbatim upstream default helper-pod template
+  # (deploy/local-path-storage.yaml in the v0.0.30 tag) — the tiny pod the
+  # provisioner spins up on the target node to mkdir/rm the PV's hostPath
+  # directory; unrelated to the workload pods that mount the resulting PVCs.
+  helperPod.yaml: |-
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: helper-pod
+    spec:
+      priorityClassName: system-node-critical
+      tolerations:
+        - key: node.kubernetes.io/disk-pressure
+          operator: Exists
+          effect: NoSchedule
+      containers:
+      - name: helper-pod
+        image: busybox
+        imagePullPolicy: IfNotPresent
