@@ -59,7 +59,7 @@ test.describe('domain-lock × mod-ban: independent axes, no federation leak', ()
     // DENY half of the ban pair: a plain user's ban attempt is refused outright…
     const denied = await request.post(`${BE}/bff/mod/ban`, {
       headers: { authorization: `Bearer ${userJwt}` },
-      data: { platform: 'mastodon', user: SUBJECT.username, reason: 'rbac-deny-probe' },
+      data: { platform: 'mastodon', target: SUBJECT.username, reason: 'rbac-deny-probe' },
       failOnStatusCode: false,
     });
     expect(
@@ -107,7 +107,7 @@ test.describe('domain-lock × mod-ban: independent axes, no federation leak', ()
     const banReason = marker('modban');
     const ban = await request.post(`${BE}/bff/mod/ban`, {
       headers: { authorization: `Bearer ${modJwt}` },
-      data: { platform: 'mastodon', user: SUBJECT.username, reason: banReason },
+      data: { platform: 'mastodon', target: SUBJECT.username, reason: banReason },
       failOnStatusCode: false,
     });
     expect(ban.ok(), `mod ban must be ACCEPTED by the mod-bff (got ${ban.status()})`).toBeTruthy();
@@ -151,7 +151,7 @@ test.describe('domain-lock × mod-ban: independent axes, no federation leak', ()
     // ── Phase 5: the mod LIFTS the ban; local posting recovers. ──
     const lift = await request.delete(`${BE}/bff/mod/ban`, {
       headers: { authorization: `Bearer ${modJwt}` },
-      data: { platform: 'mastodon', user: SUBJECT.username, reason: banReason },
+      data: { platform: 'mastodon', target: SUBJECT.username, reason: banReason },
       failOnStatusCode: false,
     });
     expect(lift.ok(), `ban lift must be ACCEPTED by the mod-bff (got ${lift.status()})`).toBeTruthy();

@@ -51,7 +51,7 @@ serializes (correct results, one at a time) **FAILS** — concurrency is contrac
 
 | # | action | casdoor | gateway | bff | homeserver | egress | ui | sse | status |
 |---|---|---|---|---|---|---|---|---|---|
-| M1 | moderate an assigned user (akkoma admin) | claim=ROLE_MOD | ALLOW | ALLOW | effect applied | — | panel shown | action msg | **WIRED** (B/C; F: cross-observer — an ADMIN reads the mod's audit row back via `/bff/mod/actions`, bounded read-after-write) |
+| M1 | moderate an assigned user (akkoma admin) | claim=ROLE_MOD | ALLOW | ALLOW | effect applied | — | panel shown | action msg | **WIRED** (B/C; F: cross-observer — an ADMIN reads the mod's audit row back via `GET /bff/mod/audit`, bounded read-after-write) |
 | M2 | reach `/api/admin/**` (snapdragon admin) | — | **DENY** | **DENY** | — | — | hidden | deny msg | **WIRED** (B/C negative) |
 | M3 | reach `/bff/admin/**` | — | **DENY** | **DENY** | — | — | hidden | deny msg | **WIRED** (B/C negative) |
 | M4 | moderate an ADMIN or a peer mod | — | DENY (out of block) | DENY | no effect | — | disabled + helptext | deny msg | **DOC** (sibling rule under load; block scoping is M1's inverse) |
@@ -62,7 +62,7 @@ serializes (correct results, one at a time) **FAILS** — concurrency is contrac
 
 | # | action | casdoor | gateway | bff | homeserver | egress | ui | sse | status |
 |---|---|---|---|---|---|---|---|---|---|
-| A1 | global reconcile / announce | claim=ROLE_ADMIN | ALLOW | ALLOW | — | — | shown | **action msg over SSE** | **WIRED** (D) |
+| A1 | global reconcile / announce | claim=ROLE_ADMIN | ALLOW | ALLOW | — | — | shown | **action msg over SSE** | **GAP** (D honestly `test.skip`s: no generic per-principal admin-action SSE feed exists in admin-bff-api — real SSE routes there, e.g. `GET /bff/admin/test-reports/{id}/events`, are per-triggered-job, not a pollable principal-wide feed; there is no `POST /bff/admin/reconcile`) |
 | A2 | reach the admin API + admin UI | — | ALLOW | ALLOW | — | — | shown | ack | **DOC** (spec 14 LIVE_GATEWAY) |
 | A3 | reach the moderation surface (superset of mod) | — | ALLOW | ALLOW | effect | — | shown | ack | **DOC** (spec 16: admin ⊇ moderation) |
 | A4 | suspend/role-assign across the population | — | ALLOW | ALLOW | effect | — | shown | targets notified | **DOC** |
