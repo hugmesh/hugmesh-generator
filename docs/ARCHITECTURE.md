@@ -196,7 +196,7 @@ sequenceDiagram
     GW->>UB: forward
     Note over UB: generate PKCE verifier + S256 challenge + state SERVER-SIDE
     UB->>C: POST /api/login (OIDC/PKCE query + {username,password,type:code,signinMethod:Password}) [INTERNAL]
-    C-->>UB: status:ok + data=code  (or data=NextMfa -> 200 {mfaRequired:true}; status:error -> 401)
+    C-->>UB: status:ok + data=code  (or data=NextMfa -> 200 {mfaRequired:true}, or status:error -> 401)
     UB->>C: OidcExchangeClient.exchangeCode(code, verifier, redirectUri) [INTERNAL]
     C-->>UB: Casdoor JWTs [access + refresh]
     UB->>AB: /bff/internal ensureAccount, createSession - opaque bff_
