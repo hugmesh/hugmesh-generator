@@ -63,7 +63,7 @@ spring:
             - id: snapdragon-user-bff-api
               uri: http://snapdragon-user-bff-api:8080
               predicates:
-                - Path=/bff/auth/**,/bff/login,/bff/register,/bff/session,/bff/session/**,/bff/me,/bff/user/**
+                - Path=/bff/login,/bff/register,/bff/session,/bff/session/**,/bff/me,/bff/user/**
             # Moderator BFF surface -> mod-bff (also precedes the admin catch-all).
             - id: snapdragon-mod-bff-api
               uri: http://snapdragon-mod-bff-api:8080
