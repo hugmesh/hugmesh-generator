@@ -62,9 +62,17 @@ metadata:
   # forum/phpbb): real services whose only public surfaces today ride already-
   # reserved prefixes (`/bff/owncast/**`, `/bff/wiki/**`, `/social/wiki/**`), so a
   # vanity `owncast.`/`wiki.` handle is forbidden before any future subdomain ships.
-  revision: "3"
+  # revision 3 -> 4: route-consistency check (stage 3) caught two DEPLOYED
+  # publicly-routable prefixes the YAML was missing — `character-studio` (the
+  # `/character-studio/**` fe-gateway route to snapdragon-character-studio-ui,
+  # apps/20-gateway-fe.yaml route[character-studio-ui].path) and `v1` (the
+  # `/v1/analyze/**` be-gateway route to the edge-ai-analysis service,
+  # apps/20-gateway-be.yaml route[edge-ai-analysis].path, also seeded in
+  # route-access schema.sql as url_pattern '/v1/analyze/**'). The app-repo
+  # ReservedNames copies MUST add `character-studio` + `v1` too to stay in sync.
+  revision: "4"
 spec:
-  # The canonical reserved set (70 labels). KEEP SORTED BY CATEGORY (comments) but
+  # The canonical reserved set (72 labels). KEEP SORTED BY CATEGORY (comments) but
   # the validator treats it as an unordered SET. Do not duplicate; the validator
   # also asserts there are no duplicates.
   #
@@ -186,6 +194,18 @@ spec:
     # prior tube/games-instances-console fix; this brings the canonical YAML to match.
     - tube
     - games-instances-console
+    # --- DEPLOYED route prefixes added in revision 4 ----------------------------
+    # `character-studio`: the Character Studio (VN) micro-frontend remote is
+    # served at `/character-studio/**` on the fe-gateway
+    # (apps/20-gateway-fe.yaml route[character-studio-ui].path) — a DEDICATED
+    # first-segment route prefix, so a vanity `character-studio` handle would
+    # shadow it. Also seeded in route-access schema.sql as a url_pattern.
+    # `v1`: the edge-AI analysis API is served at `/v1/analyze/**` on the
+    # be-gateway (apps/20-gateway-be.yaml route[edge-ai-analysis].path), a
+    # DEDICATED first-segment route prefix seeded in route-access schema.sql as
+    # url_pattern '/v1/analyze/**' — so a vanity `v1` handle would shadow it.
+    - character-studio
+    - v1
     # --- planned / not-yet-deployed publicly-routable services -----------------
     # These have NO kind:Service / gateway route in the GitOps tree YET, so the
     # route-consistency drift check will NOT demand them — they are reserved here
