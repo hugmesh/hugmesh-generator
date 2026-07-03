@@ -15,7 +15,7 @@ spec:
       namespace: {{BRAND}}-frontend
       images:
         - name: snapdragon-systems/forum-ui
-          newName: registry.{{CLUSTER_DOMAIN}}/{{GITLAB_GROUP}}/{{BRAND}}-forum-ui
+          newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-forum-ui
           newTag: main
   destination:
     server: https://kubernetes.default.svc

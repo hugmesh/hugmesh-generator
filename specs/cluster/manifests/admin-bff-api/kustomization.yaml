@@ -12,10 +12,10 @@ resources:
   - backups-effector-sa.yaml
   - hpa.yaml
   - pdb.yaml
-# First-party images now pull from the in-cluster GitLab container registry
-# (registry.snapdragon.systems = the GitLab chart's hosts.domain default; project
+# First-party images now pull from the in-cluster Harbor container registry
+# (registry.snapdragon.systems = inherited from GitLab's chart hosts.domain default, kept as-is; now served by Harbor (apps/03a-harbor.yaml), project
 # path = <group>/<repo>). The CI in each repo pushes :<branch> + :<sha>; we track
-# the moving :main here for dev. Pulls need the gitlab-registry imagePullSecret
+# the moving :main here for dev. Pulls need the harbor-registry imagePullSecret
 # (ESO-materialized, see manifests/external-secrets).
 images:
   - { name: snapdragon-systems/admin-bff-api, newName: registry.snapdragon.systems/snapdragon/snapdragon-admin-bff-api, newTag: main }
@@ -25,4 +25,4 @@ patches:
       - op: add
         path: /spec/template/spec/imagePullSecrets
         value:
-          - name: gitlab-registry
+          - name: harbor-registry

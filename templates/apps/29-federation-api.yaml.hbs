@@ -15,7 +15,7 @@ spec:
       namespace: {{BRAND}}-backend
       images:
         - name: snapdragon-systems/federation-api
-          newName: registry.{{CLUSTER_DOMAIN}}/{{GITLAB_GROUP}}/{{BRAND}}-federation-api
+          newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-federation-api
           newTag: main
   destination:
     server: https://kubernetes.default.svc

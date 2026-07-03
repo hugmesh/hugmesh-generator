@@ -56,7 +56,7 @@ docker build -t media-poisoner:dev .
 ```
 
 CI = **GitLab only** (no GitHub Actions). The kustomization rewrites the image ref
-to the in-cluster GitLab registry like every other first-party app.
+to the in-cluster Harbor registry like every other first-party app.
 
 ## License (read before swapping a real backend in)
 

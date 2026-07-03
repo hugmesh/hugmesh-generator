@@ -94,17 +94,32 @@ fi
 [[ "${#BRAND_TITLE}" -le 128 ]] || _die "BRAND_TITLE too long (max 128)"
 
 # ── Derived variables ─────────────────────────────────────────────────────────
-# GITLAB_GROUP: lowercase slug of ORG for GitLab paths (e.g. "Example-Inc" → "example-inc")
+# GITLAB_GROUP: lowercase slug of ORG for the tenant's OWN GitOps repo's GitLab
+# hosting path (see the "git remote add origin https://gitlab.${CLUSTER_DOMAIN}/
+# ${GITLAB_GROUP}/..." line below) — this is genuinely a GitLab-group concept
+# (where the generated *-gitops repo itself lives), unrelated to container images.
 GITLAB_GROUP="${ORG,,}"
 GITLAB_GROUP="${GITLAB_GROUP//[^a-z0-9-]/-}"
 # Strip leading/trailing hyphens and collapse runs
 GITLAB_GROUP="$(echo "$GITLAB_GROUP" | sed 's/^-*//; s/-*$//')"
+
+# HARBOR_PROJECT: same slugging as GITLAB_GROUP above, but for the {{HARBOR_PROJECT}}
+# template token — the Harbor PROJECT namespace first-party container images are
+# pushed/pulled under (newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/...).
+# Deliberately a SEPARATE variable from GITLAB_GROUP even though they compute the
+# same value today: one names a GitLab hosting group, the other a Harbor registry
+# project — conflating them was the pre-migration naming (formerly {{GITLAB_GROUP}}
+# reused for both), renamed here so the two concerns can diverge independently.
+HARBOR_PROJECT="${ORG,,}"
+HARBOR_PROJECT="${HARBOR_PROJECT//[^a-z0-9-]/-}"
+HARBOR_PROJECT="$(echo "$HARBOR_PROJECT" | sed 's/^-*//; s/-*$//')"
 
 echo "[generate-brand-repos] Brand:         ${BRAND}"
 echo "[generate-brand-repos] Title:         ${BRAND_TITLE}"
 echo "[generate-brand-repos] Org:           ${ORG}"
 echo "[generate-brand-repos] Domain:        ${CLUSTER_DOMAIN}"
 echo "[generate-brand-repos] GitLab group:  ${GITLAB_GROUP}"
+echo "[generate-brand-repos] Harbor project: ${HARBOR_PROJECT}"
 echo "[generate-brand-repos] Headscale:     ${HEADSCALE_URL}"
 echo "[generate-brand-repos] Mesh tag:      ${MESH_TAG}"
 echo ""
@@ -132,7 +147,7 @@ render_template() {
     -e "s|{{BRAND_TITLE}}|$(_sed_rep_escape "${BRAND_TITLE}")|g" \
     -e "s|{{CLUSTER_DOMAIN}}|$(_sed_rep_escape "${CLUSTER_DOMAIN}")|g" \
     -e "s|{{HEADSCALE_URL}}|$(_sed_rep_escape "${HEADSCALE_URL}")|g" \
-    -e "s|{{GITLAB_GROUP}}|$(_sed_rep_escape "${GITLAB_GROUP}")|g" \
+    -e "s|{{HARBOR_PROJECT}}|$(_sed_rep_escape "${HARBOR_PROJECT}")|g" \
     -e "s|{{MESH_TAG}}|$(_sed_rep_escape "${MESH_TAG}")|g" \
     -e "s|{{BRAND}}|$(_sed_rep_escape "${BRAND}")|g" \
     -e "s|{{ORG}}|$(_sed_rep_escape "${ORG}")|g" \

@@ -19,7 +19,7 @@ builder existed, so the admin-bff `AddServiceEffector` **guards** DOCKERFILE/ZIP
   admin-bff `AddService` task renders ONE copy per build (binding `${BUILD_NAME}` /
   `${CONTEXT}` / `${DOCKERFILE}` / `${DEST_IMAGE}` / `${BUILD_NAMESPACE}`) and creates it in
   the build namespace. Kaniko builds the Dockerfile in userspace (no Docker daemon, no
-  privileged socket) and pushes to the in-cluster GitLab registry, then the effector points an
+  privileged socket) and pushes to the in-cluster Harbor registry, then the effector points an
   ArgoCD `Application` at the resulting digest-pinned image. Security posture matches the
   platform sync Jobs: `runAsNonRoot`, drop `ALL` caps, `seccompProfile: RuntimeDefault`,
   `readOnlyRootFilesystem` (Kaniko workdir on `emptyDir`), `automountServiceAccountToken:false`,

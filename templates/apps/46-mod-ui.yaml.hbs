@@ -15,7 +15,7 @@ spec:
       namespace: {{BRAND}}-frontend
       images:
         - name: snapdragon-systems/mod-ui
-          newName: registry.{{CLUSTER_DOMAIN}}/{{GITLAB_GROUP}}/{{BRAND}}-mod-ui
+          newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-mod-ui
           newTag: main
   destination:
     server: https://kubernetes.default.svc

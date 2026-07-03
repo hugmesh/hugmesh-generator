@@ -20,6 +20,14 @@ spec:
     helm:
       releaseName: {{BRAND}}-superadmin-gateway
       values: |
+        # PRE-EXISTING BUG fix (found migrating the core cluster to Harbor) —
+        # see templates/apps/20-gateway-be.yaml.hbs's identical comment: the
+        # chart's default image.repository now hardcodes the reference
+        # cluster's own Harbor project, so every brand must override it here.
+        image:
+          repository: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-gateway
+        imagePullSecrets:
+          - name: harbor-registry
         instance:
           name: {{BRAND}}-superadmin-gateway
         keystore:

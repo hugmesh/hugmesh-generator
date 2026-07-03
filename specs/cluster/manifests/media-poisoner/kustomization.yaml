@@ -6,9 +6,9 @@ resources:
   - deployment.yaml
   - service.yaml
 
-# First-party image from the in-cluster GitLab container registry (CI pushes
+# First-party image from the in-cluster Harbor container registry (CI pushes
 # :<branch> + :<sha>; we track the moving :main here for dev). Pulls need the
-# gitlab-registry imagePullSecret (ESO-materialized, see manifests/external-secrets),
+# harbor-registry imagePullSecret (ESO-materialized, see manifests/external-secrets),
 # patched in below — same pattern as manifests/games.
 images:
   - { name: snapdragon-systems/snapdragon-media-poisoner, newName: registry.snapdragon.systems/snapdragon/snapdragon-media-poisoner, newTag: main }
@@ -18,4 +18,4 @@ patches:
       - op: add
         path: /spec/template/spec/imagePullSecrets
         value:
-          - name: gitlab-registry
+          - name: harbor-registry

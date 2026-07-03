@@ -5,8 +5,8 @@
 # This is the IN-CLUSTER replacement for the `.gitlab-ci.yml` `build:images` ECHO STUB:
 # app images (gateway, frontends, BFFs, …) historically built only in the GitLab org
 # mirror; this namespace is where the generic Kaniko build Job (kaniko-build-job.template.yaml)
-# runs to build a first-party app image from its repo and push it to the in-cluster GitLab
-# registry (registry.snapdragon.systems).
+# runs to build a first-party app image from its repo and push it to the in-cluster Harbor
+# registry (registry.snapdragon.systems; see apps/03a-harbor.yaml).
 #
 # ArgoCD-managed (listed in kustomization.yaml) ONLY when the opt-in
 # apps-optional/60-image-builder.yaml Application is enabled. The per-build Job is a TEMPLATE

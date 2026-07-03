@@ -14,6 +14,20 @@ spec:
     helm:
       releaseName: {{BRAND}}-be-gateway
       values: |
+        # PRE-EXISTING BUG fix (found migrating the core cluster to Harbor):
+        # the chart's own default image.repository is now hardcoded to
+        # registry.snapdragon.systems/snapdragon/snapdragon-gateway — correct
+        # for the reference "snapdragon.systems" cluster, but WRONG for any
+        # other brand's gateway, which must pull from ITS OWN Harbor project
+        # instead. Override per-brand here (same {{BRAND}}-gateway image
+        # .gitlab-ci.yml pushes for all of this brand's gateway instances) so a
+        # brand-generated GitOps repo — which reuses this SAME shared Helm
+        # chart via repoURL/path above — never silently falls back to pulling
+        # the reference cluster's image.
+        image:
+          repository: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-gateway
+        imagePullSecrets:
+          - name: harbor-registry
         instance:
           name: {{BRAND}}-be-gateway
         keystore:

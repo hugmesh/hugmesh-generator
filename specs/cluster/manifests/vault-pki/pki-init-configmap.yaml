@@ -103,6 +103,9 @@ data:
     #    (manifests/media-poisoner; app/serve.py terminates TLS itself, no sidecar).
     #    server_flag+client_flag so the same cert can serve AND (future) present a
     #    client identity; the worker enforces ssl.CERT_REQUIRED against ca.crt.
+    #    harbor = the Harbor registry's expose.tls server cert (manifests/harbor
+    #    via apps/03a-harbor.yaml) — the chart's bundled nginx front-end
+    #    terminates TLS with it. Same server_flag+client_flag shape as the rest.
     for app in snapdragon-pki-gateway snapdragon-be-gateway snapdragon-fe-gateway \
                snapdragon-superadmin-gateway \
                snapdragon-api snapdragon-admin-bff-api \
@@ -112,7 +115,7 @@ data:
                snapdragon-federation-api \
                route-access-db admin-bff-db mod-bff-db user-bff-db \
                federation-db forum-bff-db wiki-bff-db \
-               akkoma-proxy tuwunel-proxy media-poisoner; do
+               akkoma-proxy tuwunel-proxy media-poisoner harbor; do
       echo "==> role ${PKI}/roles/${app}"
       vault write "${PKI}/roles/${app}" \
         allowed_domains="${app},${app}.svc.cluster.local,svc.cluster.local,${DOMAIN}" \

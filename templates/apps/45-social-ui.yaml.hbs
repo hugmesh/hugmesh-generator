@@ -15,16 +15,16 @@ spec:
       namespace: {{BRAND}}-frontend
       images:
         - name: snapdragon-systems/matrix-ui
-          newName: registry.{{CLUSTER_DOMAIN}}/{{GITLAB_GROUP}}/{{BRAND}}-matrix-ui
+          newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-matrix-ui
           newTag: main
         - name: snapdragon-systems/mastodon-ui
-          newName: registry.{{CLUSTER_DOMAIN}}/{{GITLAB_GROUP}}/{{BRAND}}-mastodon-ui
+          newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-mastodon-ui
           newTag: main
         - name: snapdragon-systems/login-ui
-          newName: registry.{{CLUSTER_DOMAIN}}/{{GITLAB_GROUP}}/{{BRAND}}-login-ui
+          newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-login-ui
           newTag: main
         - name: snapdragon-systems/admin-ui
-          newName: registry.{{CLUSTER_DOMAIN}}/{{GITLAB_GROUP}}/{{BRAND}}-admin-ui
+          newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-admin-ui
           newTag: main
   destination:
     server: https://kubernetes.default.svc

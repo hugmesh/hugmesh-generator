@@ -212,21 +212,36 @@ else
     echo "==> Mail: ENABLED via provider '${MAIL_PROVIDER}' (${MAIL_HOST}:${MAIL_PORT}, tls=${MAIL_TLS}, from=${MAIL_FROM})"
 fi
 
-# GitLab registry pull credentials — a GROUP DEPLOY TOKEN (scope: read_registry)
-# created by an admin in GitLab. Placeholders the operator replaces; ESO builds
-# the gitlab-registry dockerconfigjson imagePullSecret from these in each app
-# namespace. (In-cluster registry, so no offline-bundle entry.)
+# Registry pull/push credentials.
+#
+# HARBOR MIGRATION: these two are now automated. Project + robot-account
+# provisioning for the in-cluster Harbor registry happens live, in-cluster, via
+# the harbor-provision PostSync Job (specs/cluster/manifests/harbor/
+# harbor-provision-job.yaml): it creates the Harbor project and the two robot
+# accounts (pull-only, push-only) through Harbor's own REST API and writes
+# their one-time-revealed secrets straight to Vault (secret/<brand>/harbor-robots,
+# keys pull_name/pull_secret/push_name/push_secret) — NOT through this script.
+# manifests/external-secrets/secretstore.yaml's harbor-registry ExternalSecrets
+# (imagePullSecret, renamed from gitlab-registry) and
+# image-builder-externalsecrets.yaml's image-builder-registry both read that
+# SAME Vault path now. The GITLAB_REGISTRY_TOKEN / IMAGE_BUILDER_REGISTRY_TOKEN
+# vars below are KEPT as a manual-override escape hatch (useful for local/offline
+# testing without a live Harbor to call) — when set, this script writes them to
+# the identical secret/<brand>/harbor-robots path/keys so the override actually
+# feeds the same ExternalSecrets the live Job would; they are no longer the
+# primary path an operator is expected to fill in.
 GITLAB_REGISTRY_USER="${GITLAB_REGISTRY_USER:-snapdragon-deploy}"
 GITLAB_REGISTRY_TOKEN="${GITLAB_REGISTRY_TOKEN:-REPLACE_WITH_GITLAB_DEPLOY_TOKEN}"
 
-# In-cluster image-builder PUSH credentials — a GROUP DEPLOY TOKEN with scope
-# WRITE_REGISTRY (distinct from the read_registry pull token above). The opt-in
-# Kaniko build pipeline (manifests/image-builder) mounts the image-builder-registry
-# dockerconfigjson built from these to PUSH the images it builds. Placeholders the
-# operator replaces post-bootstrap; ESO only materializes once the opt-in namespace
-# exists. (In-cluster registry, so no offline-bundle entry.)
 IMAGE_BUILDER_REGISTRY_USER="${IMAGE_BUILDER_REGISTRY_USER:-snapdragon-image-builder}"
 IMAGE_BUILDER_REGISTRY_TOKEN="${IMAGE_BUILDER_REGISTRY_TOKEN:-REPLACE_WITH_GITLAB_WRITE_REGISTRY_DEPLOY_TOKEN}"
+
+# Harbor's own built-in superuser ("admin") password. Consumed by BOTH the
+# Harbor Helm chart itself (existingSecretAdminPassword, so the chart never
+# falls back to its insecure default) and the harbor-provision Job (to call
+# Harbor's REST API for project/robot-account provisioning) — see
+# manifests/external-secrets/secretstore.yaml's harbor-admin block.
+HARBOR_ADMIN_PASSWORD="$(openssl rand -base64 24)"
 
 # Casdoor's own OIDC application client_id / client_secret (used by the BFF).
 CASDOOR_CLIENT_ID="$(openssl rand -hex 16)"
@@ -252,7 +267,7 @@ CASDOOR_GAMES_GITHUB_CLIENT_SECRET="REPLACE_WITH_GITHUB_OAUTH_CLIENT_SECRET"
 # the apps/users/roles structure; these secrets are injected by casdoor-init).
 # The init Job needs the admin PLAINTEXT to call the Casdoor API, so we keep it
 # alongside the -6 hash. Secrets live only in Vault / the USB bundle, never git.
-CASDOOR_APPS="pki-gateway be-gateway fe-gateway api admin-bff user-bff matrix mastodon fragment-sync signup-gate"
+CASDOOR_APPS="pki-gateway be-gateway fe-gateway api admin-bff user-bff matrix mastodon fragment-sync signup-gate harbor"
 CASDOOR_APP_KV_ARGS=()
 CASDOOR_APP_JSON_ENV=()
 for _app in ${CASDOOR_APPS}; do
@@ -462,18 +477,30 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
             password="${MAIL_PASSWORD}" \
             from="${MAIL_FROM}" \
             dkim_key="${MAIL_DKIM}"
-        # GitLab registry pull token (imagePullSecret source). Replace the
-        # placeholder with a real read_registry deploy token post-bootstrap.
-        vault kv put "${VAULT_KV_MOUNT}/${BASE}/gitlab-registry" \
-            username="${GITLAB_REGISTRY_USER}" \
-            token="${GITLAB_REGISTRY_TOKEN}"
-        # In-cluster image-builder PUSH token (the Kaniko build pipeline's push
-        # credential). Replace the placeholder with a real WRITE_REGISTRY deploy
-        # token post-bootstrap. Materialized by ESO into the opt-in build namespace.
-        vault kv put "${VAULT_KV_MOUNT}/${BASE}/image-builder-registry" \
-            username="${IMAGE_BUILDER_REGISTRY_USER}" \
-            token="${IMAGE_BUILDER_REGISTRY_TOKEN}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,forum,forum-db,akkoma,route-access-db,uptrace,mail,gitlab-registry,image-builder-registry}"
+        # Harbor registry pull+push robot credentials (imagePullSecret +
+        # image-builder push source) — MANUAL-OVERRIDE ESCAPE HATCH ONLY.
+        # secret/<brand>/harbor-robots is normally OWNED by the live
+        # harbor-provision Job (manifests/harbor/harbor-provision-job.yaml),
+        # which mints Harbor's real pull-only/push-only robot accounts and
+        # read-merge-writes their one-time-revealed secrets to this exact path
+        # (pull_name/pull_secret/push_name/push_secret). This `vault kv put`
+        # writes the SAME path/keys so a manual override (GITLAB_REGISTRY_TOKEN /
+        # IMAGE_BUILDER_REGISTRY_TOKEN, kept for local/offline testing without a
+        # live Harbor to call) actually feeds the harbor-registry /
+        # image-builder-registry ExternalSecrets that read from here — but a
+        # subsequent live harbor-provision run will overwrite whichever of
+        # these keys correspond to a robot it just created (it skips only if
+        # that robot already exists in HARBOR, not based on what's in Vault).
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/harbor-robots" \
+            pull_name="${GITLAB_REGISTRY_USER}" \
+            pull_secret="${GITLAB_REGISTRY_TOKEN}" \
+            push_name="${IMAGE_BUILDER_REGISTRY_USER}" \
+            push_secret="${IMAGE_BUILDER_REGISTRY_TOKEN}"
+        # Harbor admin password — consumed by the Helm chart (existingSecretAdminPassword)
+        # AND the harbor-provision Job (project/robot-account REST calls).
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/harbor" \
+            admin_password_plain="${HARBOR_ADMIN_PASSWORD}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,forum,forum-db,akkoma,route-access-db,uptrace,mail,harbor-robots,harbor}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2

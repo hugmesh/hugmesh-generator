@@ -54,6 +54,16 @@ data:
         # See manifests/signup-gate/. Bound to ROLE_SERVICE in init_data.json so the
         # minted token satisfies the endpoint's INTERNAL/ROLE_SERVICE gate.
         "signup-gate": "ROLE_SERVICE",
+        # Harbor registry web UI/API login — reuses ROLE_ADMIN rather than a
+        # narrow ROLE_REGISTRY: Harbor is an internal devops tool (same posture
+        # as GitLab, which is also admin-only/no-public-signup), and once a
+        # user is IN Harbor its OWN project-level RBAC (not a Casdoor claim)
+        # governs what they can do there. The clientId/clientSecret this
+        # produces is consumed by manifests/harbor/harbor-provision-job.yaml
+        # (via the harbor-casdoor ExternalSecret) to configure Harbor's OIDC
+        # auth_mode directly through its REST API — Harbor's Helm chart has no
+        # secret-safe way to set this via values (see that Job's comments).
+        "harbor": "ROLE_ADMIN",
     }
 
     cj = http.cookiejar.CookieJar()

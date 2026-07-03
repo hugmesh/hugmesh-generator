@@ -74,7 +74,7 @@ spec:
             - { name: model-weights, mountPath: /models }
       containers:
         - name: media-poisoner
-          # First-party image, rewritten to the in-cluster GitLab registry by the
+          # First-party image, rewritten to the in-cluster Harbor registry by the
           # kustomization (like every other app). :dev tracked for dev.
           image: snapdragon-systems/snapdragon-media-poisoner:dev
           ports: [{ name: http, containerPort: 8080 }]

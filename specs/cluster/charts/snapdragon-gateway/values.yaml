@@ -9,12 +9,28 @@ instance:
 
 replicaCount: 1
 
+# PRE-EXISTING BUG, fixed during the Harbor migration: `repository` had NO
+# registry-host prefix at all (just "snapdragon-systems/gateway"), so a
+# deployment would have resolved this image against Docker Hub, not the
+# in-cluster registry — while .gitlab-ci.yml's build:images job has always
+# pushed to registry.snapdragon.systems/snapdragon/snapdragon-gateway. Fixed to
+# match that same push destination and every other kustomization's `newName`
+# convention (registry.snapdragon.systems/snapdragon/<repo>). The registry
+# behind this hostname is now Harbor (apps/03a-harbor.yaml), not GitLab's
+# bundled one — see that Application's header comment for why the hostname
+# itself is unchanged.
 image:
-  repository: snapdragon-systems/gateway
+  repository: registry.snapdragon.systems/snapdragon/snapdragon-gateway
   tag: dev
   pullPolicy: IfNotPresent
 
-imagePullSecrets: []
+# Harbor's pull-scoped robot-account imagePullSecret (see
+# manifests/external-secrets/secretstore.yaml's harbor-registry ExternalSecret,
+# renamed from gitlab-registry) — was empty here, which was consistent with the
+# Docker-Hub-resolving bug above (a public-image pull needs no secret) but wrong
+# once the repository actually points at Harbor.
+imagePullSecrets:
+  - name: harbor-registry
 serviceAccount:
   create: true
   name: ""

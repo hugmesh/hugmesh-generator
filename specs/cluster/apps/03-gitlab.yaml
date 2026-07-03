@@ -42,6 +42,11 @@ spec:
         gitlab-runner: { install: false }            # runner is a separate app (privileged)
         certmanager: { install: false }
         nginx-ingress: { enabled: false }
+        # Container Registry disabled — Harbor (apps/03a-harbor.yaml) now serves
+        # registry.snapdragon.systems as the platform's full-replacement
+        # container registry; leaving this on would race Harbor's own Ingress
+        # for the same hostname.
+        registry: { enabled: false }
         prometheus: { install: false }
         postgresql: { global: { storageClass: snapdragon-local } }
         redis: { global: { storageClass: snapdragon-local } }

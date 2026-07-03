@@ -15,7 +15,7 @@ spec:
       namespace: {{BRAND}}-backend
       images:
         - name: snapdragon-systems/admin-bff-api
-          newName: registry.{{CLUSTER_DOMAIN}}/{{GITLAB_GROUP}}/{{BRAND}}-admin-bff-api
+          newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/{{BRAND}}-admin-bff-api
           newTag: main
   destination:
     server: https://kubernetes.default.svc

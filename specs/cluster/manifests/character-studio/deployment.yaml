@@ -17,7 +17,7 @@
 # (runs as uid 101, listens on :8080 — no root, no NET_BIND privilege) and bakes the
 # Angular `dist/` remote (remoteEntry.json + chunks). The image placeholder below
 # (snapdragon-systems/character-studio-ui) is rewritten by the kustomization `images:`
-# transform to the in-cluster GitLab registry tag, matching the user-ui/wiki-ui shape.
+# transform to the in-cluster Harbor registry tag, matching the user-ui/wiki-ui shape.
 ---
 apiVersion: apps/v1
 kind: Deployment
