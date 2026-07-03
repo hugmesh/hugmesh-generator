@@ -78,6 +78,8 @@ OPT_BRAND=""              # brands/<name>.conf
 OPT_DOMAIN=""             # overrides the brand's cluster domain
 OPT_RESUME="no"           # yes => reuse existing sysroots (RESUME=true)
 OPT_OMNIBUS="no"          # yes => add the x86 omnibus role (X86_OMNIBUS=1)
+OPT_FRITE_FLEET="no"      # yes => fleet-build Frite too (full-fleet build only; FRITE=1)
+OPT_JETSON_FLEET="no"     # yes => fleet-build Jetson too (full-fleet build only; JETSON=1)
 OPT_PENTEST="no"          # yes => run the OWASP pen-test after the build (PENTEST=1)
 OPT_IMGFLAGS=""           # e.g. --no-iso (img only) / --no-img (iso only)
 # ── Edge-AI inference service (GPU cluster roles: be+gpu / omnibus / edge_ai) ───
@@ -157,6 +159,8 @@ save_conf() {
         printf 'OPT_DOMAIN=%q\n'        "${OPT_DOMAIN}"
         printf 'OPT_RESUME=%q\n'        "${OPT_RESUME}"
         printf 'OPT_OMNIBUS=%q\n'       "${OPT_OMNIBUS}"
+        printf 'OPT_FRITE_FLEET=%q\n'   "${OPT_FRITE_FLEET}"
+        printf 'OPT_JETSON_FLEET=%q\n'  "${OPT_JETSON_FLEET}"
         printf 'OPT_PENTEST=%q\n'       "${OPT_PENTEST}"
         printf 'OPT_IMGFLAGS=%q\n'      "${OPT_IMGFLAGS}"
         printf 'OPT_X86_EDGE_AI=%q\n'   "${OPT_X86_EDGE_AI}"
@@ -410,7 +414,7 @@ build_make_cmd() {
     # contain $(IMG_FLAGS)).
     local imgflags="${OPT_IMGFLAGS}"
     case "${target}" in
-        x86-*|jetson-*|frite|build-all) ;;   # STANDALONE_FLAGS channel / no passthrough
+        x86-*|jetson-*|frite|build-all|build-everything) ;;   # STANDALONE_FLAGS channel / no passthrough
         *) [ -n "${OPT_EXTRA_FLAGS}" ] && imgflags="${imgflags:+${imgflags} }${OPT_EXTRA_FLAGS}" ;;
     esac
     [ -n "${imgflags}" ] && RUN_MAKE+=("IMG_FLAGS=${imgflags}")
@@ -418,16 +422,21 @@ build_make_cmd() {
     # (PermitRootLogin no) by the builders' own default. Applies to ALL targets/arches.
     [ -n "${OPT_ROOT_LOGIN}" ] && [ "${OPT_ROOT_LOGIN}" != "no" ] && RUN_MAKE+=("PERMIT_ROOT_LOGIN=${OPT_ROOT_LOGIN}")
     [ "${OPT_PATH}" = native ] && RUN_MAKE+=("NATIVE=1")
-    # RESUME, X86_OMNIBUS and PENTEST are read ONLY by scripts/build-all-roles.sh,
-    # which the Makefile invokes solely from the full-fleet (build-all) target. The
-    # per-arch / single-role targets ignore them — and a single-role build WITHOUT
-    # --resume deliberately WIPES its sysroot. So emitting them for those targets is
-    # at best a silent no-op and at worst a destructive surprise. Gate them to the
-    # fleet build (the Options screen tells the user they apply there).
-    if [ "${target}" = build-all ]; then
-        [ "${OPT_RESUME}" = yes ]  && RUN_MAKE+=("RESUME=--resume")
-        [ "${OPT_OMNIBUS}" = yes ] && RUN_MAKE+=("X86_OMNIBUS=1")
-        [ "${OPT_PENTEST}" = yes ] && RUN_MAKE+=("PENTEST=1")
+    # RESUME, X86_OMNIBUS, FRITE_FLEET/JETSON_FLEET and PENTEST are read ONLY by
+    # scripts/build-all-roles.sh, which the Makefile invokes from BOTH full-fleet
+    # targets — build-all (default fleet) and build-everything (build-all plus
+    # X86_ROLES/FRITE/JETSON overrides; still ends up at build-all-roles.sh). The
+    # per-arch / single-role targets ignore them — and a single-role build
+    # WITHOUT --resume deliberately WIPES its sysroot. So emitting them for those
+    # targets is at best a silent no-op and at worst a destructive surprise. Gate
+    # them to the two fleet targets (the Options screen tells the user they apply
+    # there).
+    if [ "${target}" = build-all ] || [ "${target}" = build-everything ]; then
+        [ "${OPT_RESUME}" = yes ]      && RUN_MAKE+=("RESUME=--resume")
+        [ "${OPT_OMNIBUS}" = yes ]     && RUN_MAKE+=("X86_OMNIBUS=1")
+        [ "${OPT_FRITE_FLEET}" = yes ]  && RUN_MAKE+=("FRITE=1")
+        [ "${OPT_JETSON_FLEET}" = yes ] && RUN_MAKE+=("JETSON=1")
+        [ "${OPT_PENTEST}" = yes ]     && RUN_MAKE+=("PENTEST=1")
     fi
     # Frite board/flavor/desktop only matter for the frite target but are harmless
     # else. FRITE_BOARD/FRITE_FLAVOR/FRITE_DESKTOP map onto the builder's --board /
@@ -939,9 +948,11 @@ home_screen() {
 
 options_screen() {
     while true; do
-        local resume_l omni_l pen_l
+        local resume_l omni_l frite_fleet_l jetson_fleet_l pen_l
         resume_l="$([ "${OPT_RESUME}" = yes ] && echo on || echo off)"
         omni_l="$([ "${OPT_OMNIBUS}" = yes ] && echo on || echo off)"
+        frite_fleet_l="$([ "${OPT_FRITE_FLEET}" = yes ] && echo on || echo off)"
+        jetson_fleet_l="$([ "${OPT_JETSON_FLEET}" = yes ] && echo on || echo off)"
         pen_l="$([ "${OPT_PENTEST}" = yes ] && echo on || echo off)"
         local choice
         choice="$(ui_menu "Options" "Adjust build options (saved for next time):" \
@@ -953,6 +964,8 @@ options_screen() {
             domain   "Domain override ..... ${OPT_DOMAIN:-<from brand>}" \
             resume   "Resume sysroots ..... ${resume_l}   (full-fleet build only)" \
             omnibus  "x86 omnibus role .... ${omni_l}   (adds omnibus to full fleet)" \
+            fritefleet "Frite in full fleet . ${frite_fleet_l}   (adds Frite to full fleet; FRITE=1)" \
+            jetsonfleet "Jetson in full fleet  ${jetson_fleet_l}   (adds Jetson to full fleet; JETSON=1)" \
             pentest  "OWASP pen-test ...... ${pen_l}   (full-fleet build only)" \
             edgeai   "Edge-AI service ..... $([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)   (be+gpu/omnibus; edge_ai role always on)" \
             services "Optional services ... ${OPT_SERVICES:-<default: akkoma,tuwunel,phpbb>}" \
@@ -974,6 +987,8 @@ options_screen() {
             domain)  OPT_DOMAIN="$(ui_input "Domain" "Cluster domain override (empty = brand default)" "${OPT_DOMAIN}")" ;;
             resume)  OPT_RESUME="$([ "${OPT_RESUME}" = yes ] && echo no || echo yes)" ;;
             omnibus) OPT_OMNIBUS="$([ "${OPT_OMNIBUS}" = yes ] && echo no || echo yes)" ;;
+            fritefleet) OPT_FRITE_FLEET="$([ "${OPT_FRITE_FLEET}" = yes ] && echo no || echo yes)" ;;
+            jetsonfleet) OPT_JETSON_FLEET="$([ "${OPT_JETSON_FLEET}" = yes ] && echo no || echo yes)" ;;
             pentest) OPT_PENTEST="$([ "${OPT_PENTEST}" = yes ] && echo no || echo yes)" ;;
             edgeai)  edge_ai_options_screen ;;
             services) services_screen ;;
@@ -1147,6 +1162,7 @@ build_screen() {
     local choice
     choice="$(ui_menu "Build" "What do you want to build?  (path=${OPT_PATH}, ENV=${OPT_ENV}, -j${OPT_JOBS})" \
         all  "Default fleet — 3 Pi + 4 x86 roles" \
+        everything "★ FULL matrix — 3 Pi + 11 x86 + Frite + Jetson (build-everything)" \
         rpi  "All 3 Raspberry Pi roles" \
         x86  "All 4 default x86 roles" \
         one  "A single arch + role …" \
@@ -1155,6 +1171,7 @@ build_screen() {
         back "‹ back to main menu")" || return 0
     case "${choice}" in
         all)   build_make_cmd build-all "default fleet (3 Pi + 4 x86)" 7; launch_build ;;
+        everything) build_make_cmd build-everything "full documented matrix (3 Pi + 11 x86 + Frite + Jetson)" 19; launch_build ;;
         rpi)   build_make_cmd rpi "all 3 Pi roles" 3; launch_build ;;
         x86)   build_make_cmd x86 "all 4 x86 roles" 4; launch_build ;;
         one)   single_role_screen ;;

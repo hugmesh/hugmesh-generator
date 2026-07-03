@@ -155,6 +155,7 @@ source "${REPO_DIR}/scripts/build-menu.sh"
 reset_opts() {
     OPT_WORK_DIR=/tmp/matrix-menu-out OPT_JOBS=4 OPT_ENV=test OPT_PATH=docker
     OPT_BRAND="" OPT_DOMAIN="" OPT_RESUME=no OPT_OMNIBUS=no OPT_PENTEST=no
+    OPT_FRITE_FLEET=no OPT_JETSON_FLEET=no
     OPT_IMGFLAGS="" OPT_X86_EDGE_AI=no OPT_EDGE_AI_RUNTIME=ollama
     OPT_EDGE_AI_MODELS="" OPT_EDGE_AI_MODEL_DEFAULT="" OPT_X86_EDGE_AI_ANALYSIS=no
     OPT_TOR_ONION=no OPT_CHARACTER_STUDIO=no OPT_SERVICES="" OPT_INSTALLER_UI=""
@@ -229,6 +230,33 @@ for target in rpi-backend x86-pki frite jetson-edge_ai; do
         echo "MENUTHR PASS ${target}"
     fi
 done
+
+# ── fleet-option threading: RESUME/PENTEST/OMNIBUS/FRITE_FLEET/JETSON_FLEET ──
+# must gate to BOTH whole-fleet targets, build-all and build-everything — the
+# exact class of gap the '★ FULL matrix' menu entry introduced (a new fleet
+# target added without extending build_make_cmd's target==build-all gate, so
+# Resume-sysroots/pentest/fleet toggles silently vanished for build-everything
+# only). `make -n ... NATIVE=1` mirrors the MENUTHR probes above: forces the
+# native branch so the composed make-vars are visible verbatim in the printed
+# recipe rather than swallowed by the docker re-invocation branch.
+for target in build-all build-everything; do
+    reset_opts
+    OPT_RESUME=yes OPT_OMNIBUS=yes OPT_FRITE_FLEET=yes OPT_JETSON_FLEET=yes OPT_PENTEST=yes
+    build_make_cmd "${target}" "fleet-thread-probe ${target}" 1
+    recipe="$(make -n "${RUN_MAKE[@]}" NATIVE=1 2>&1)" || {
+        echo "FLEETTHR FAIL ${target} — make -n exited non-zero"; continue; }
+    miss=""
+    case "${recipe}" in *--resume*)       ;; *) miss+=" RESUME" ;; esac
+    case "${recipe}" in *"X86_OMNIBUS='1'"*) ;; *) miss+=" X86_OMNIBUS" ;; esac
+    case "${recipe}" in *"FRITE='1'"*)    ;; *) miss+=" FRITE" ;; esac
+    case "${recipe}" in *"JETSON='1'"*)   ;; *) miss+=" JETSON" ;; esac
+    case "${recipe}" in *"PENTEST='1'"*)  ;; *) miss+=" PENTEST" ;; esac
+    if [ -n "${miss}" ]; then
+        echo "FLEETTHR FAIL ${target} — dropped:${miss} (argv: ${RUN_MAKE[*]})"
+    else
+        echo "FLEETTHR PASS ${target}"
+    fi
+done
 MENU_EOF
     local rc=$?
     MENU_PASS=$(grep -c '^MENU PASS' "${out}" || true)
@@ -239,6 +267,12 @@ MENU_EOF
     mthr_pass=$(grep -c '^MENUTHR PASS' "${out}" || true)
     THR_PASS=$((THR_PASS + mthr_pass))
     THR_FAIL=$((THR_FAIL + 4 - mthr_pass))
+    # same fail-closed accounting for the fleet-option (build-all/build-everything)
+    # threading probes: 2 expected (one per fleet target).
+    local fthr_pass
+    fthr_pass=$(grep -c '^FLEETTHR PASS' "${out}" || true)
+    THR_PASS=$((THR_PASS + fthr_pass))
+    THR_FAIL=$((THR_FAIL + 2 - fthr_pass))
     # FAIL-CLOSED: a crashed/aborted menu child (source error, set -u trip, …)
     # must count as a channel failure, not as "0 rows = 0 failures" — otherwise
     # the 4-channels-per-cell guarantee silently degrades to 3 (the completeness
@@ -247,7 +281,7 @@ MENU_EOF
         _fail MENU "channel" "menu child exited ${rc}" "${TMP_DIR}/menu.err"
         MENU_FAIL=$((MENU_FAIL+1))
     fi
-    grep -E '^(MENU|MENUTHR) FAIL' "${out}" >&2 || true
+    grep -E '^(MENU|MENUTHR|FLEETTHR) FAIL' "${out}" >&2 || true
 }
 
 # ── channel 4: GUI — snapdragon_studio --print-command (headless, Qt-free) ──────

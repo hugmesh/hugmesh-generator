@@ -51,6 +51,7 @@ assert_eq() { [ "$2" = "$3" ] && _ok || { FAIL=$((FAIL+1)); printf 'FAIL %s: got
 reset_opts() {
     OPT_WORK_DIR=/tmp/menu-test-out OPT_JOBS=4 OPT_ENV=test OPT_PATH=docker
     OPT_BRAND="" OPT_DOMAIN="" OPT_RESUME=no OPT_OMNIBUS=no OPT_PENTEST=no
+    OPT_FRITE_FLEET=no OPT_JETSON_FLEET=no
     OPT_IMGFLAGS="" OPT_X86_EDGE_AI=no OPT_EDGE_AI_RUNTIME=ollama
     OPT_EDGE_AI_MODELS="" OPT_EDGE_AI_MODEL_DEFAULT="" OPT_X86_EDGE_AI_ANALYSIS=no
     OPT_TOR_ONION=no OPT_CHARACTER_STUDIO=no OPT_SERVICES="" OPT_INSTALLER_UI=""
@@ -67,17 +68,36 @@ reset_opts() {
     OPT_JETSON_BOARD=orin-nano OPT_JETSON_KFLAVOR=mainline
 }
 
-# ── fleet build: RESUME/X86_OMNIBUS/PENTEST gate to build-all only ──────────────
-reset_opts; OPT_RESUME=yes OPT_OMNIBUS=yes OPT_PENTEST=yes
+# ── fleet build: RESUME/X86_OMNIBUS/FRITE_FLEET/JETSON_FLEET/PENTEST gate to ────
+# BOTH fleet targets (build-all AND build-everything — a prior version of this
+# menu entry gated build-everything out entirely, silently dropping Resume/
+# pentest/fleet-toggle options the moment a user picked "★ FULL matrix").
+reset_opts; OPT_RESUME=yes OPT_OMNIBUS=yes OPT_FRITE_FLEET=yes OPT_JETSON_FLEET=yes OPT_PENTEST=yes
 build_make_cmd build-all "fleet" 7
 assert_eq  "fleet: target first"        "${RUN_MAKE[0]}" "build-all"
 assert_has "fleet: resume"              "RESUME=--resume"
 assert_has "fleet: omnibus"             "X86_OMNIBUS=1"
+assert_has "fleet: frite fleet"         "FRITE=1"
+assert_has "fleet: jetson fleet"        "JETSON=1"
 assert_has "fleet: pentest"             "PENTEST=1"
+build_make_cmd build-everything "everything" 19
+assert_eq  "everything: target first"   "${RUN_MAKE[0]}" "build-everything"
+assert_has "everything: resume"         "RESUME=--resume"
+assert_has "everything: omnibus"        "X86_OMNIBUS=1"
+assert_has "everything: frite fleet"    "FRITE=1"
+assert_has "everything: jetson fleet"   "JETSON=1"
+assert_has "everything: pentest"        "PENTEST=1"
 build_make_cmd x86-be "one role" 1
 assert_not "single role: no RESUME"     "RESUME="
 assert_not "single role: no X86_OMNIBUS" "X86_OMNIBUS="
+assert_not "single role: no FRITE"      "FRITE="
+assert_not "single role: no JETSON"     "JETSON="
 assert_not "single role: no PENTEST"    "PENTEST="
+# with the toggles off, build-everything must not gain a redundant emit either
+reset_opts
+build_make_cmd build-everything "everything default" 19
+assert_not "everything default: no RESUME" "RESUME="
+assert_not "everything default: no PENTEST" "PENTEST="
 
 # ── optional-services catalog on a cluster role ─────────────────────────────────
 reset_opts; OPT_SERVICES="akkoma,games,tube" OPT_TOR_ONION=yes
@@ -175,6 +195,12 @@ build_make_cmd x86-be "be" 1
 assert_has "x86: imgflags plain"        "IMG_FLAGS=--no-iso"
 assert_not "x86: extra NOT doubled"     "IMG_FLAGS=--no-iso --enable-wifi"
 assert_has "x86: extra via STANDALONE"  "STANDALONE_FLAGS=--enable-wifi"
+# fleet targets (heterogeneous roles/arches): extra-flags has no single safe
+# destination, so it's excluded from IMG_FLAGS the same way build-all is —
+# same class of gap as the RESUME/PENTEST fleet-gating bug above.
+build_make_cmd build-everything "everything" 19
+assert_has "everything: imgflags plain" "IMG_FLAGS=--no-iso"
+assert_not "everything: extra NOT doubled" "IMG_FLAGS=--no-iso --enable-wifi"
 
 # ── frite: board + flavor + desktop make-vars ───────────────────────────────────
 reset_opts; OPT_FRITE_BOARD=le-potato OPT_FRITE_FLAVOR=live OPT_FRITE_DESKTOP=none
