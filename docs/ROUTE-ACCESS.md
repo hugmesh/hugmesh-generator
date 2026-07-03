@@ -24,8 +24,10 @@ On every request the gateway:
 1. loads its access rules (Cassandra cache, backed by Postgres at boot),
 2. matches the request path against `url_pattern` for **its** gateway,
 3. **allows only if** the caller's Casdoor roles (or pinned user) match an
-   `allow` rule; otherwise 403. No external login is exposed; the public
-   `/api/auth`,`/login`,`/api/registration` paths are seeded as `ROLE_USER`.
+   `allow` rule; otherwise 403. Casdoor's own login UI is **never** exposed through
+   a gateway; the only unauthenticated login surface is the native `POST /bff/login`
+   (permitAll at the BFF, seeded open so an anonymous browser can sign in), alongside
+   the public `/api/auth`,`/login`,`/api/registration` paths seeded as `ROLE_USER`.
 
 Each gateway is pointed at the store via `ROUTE_ACCESS_R2DBC_URL`
 (set in `apps/20-gateway-*.yaml`).

@@ -75,13 +75,16 @@ CASDOOR_URL="${CASDOOR_URL:-http://localhost:8000}"
 CASDOOR_ADMIN_USER="${CASDOOR_ADMIN_USER:-admin}"
 CASDOOR_ADMIN_PASS="${CASDOOR_ADMIN_PASS:-123}"
 CASDOOR_ORG="${CASDOOR_ORG:-snapdragon}"
-# The OIDC application login-ui redirects to and user-bff exchanges the code against.
-# The compose Casdoor has NO app (only the cluster seeds one). clientId / secret /
-# redirectUri MUST byte-match login-ui's __SNAP_OIDC_CLIENT_ID__ / __SNAP_OIDC_REDIRECT_URI__
-# and user-bff's APP_BFF_OIDC_CLIENT_ID / _SECRET / _REDIRECT_URI in compose.local.yaml.
+# The confidential OAuth app user-bff drives NATIVE login through: user-bff POSTs the
+# username/password to the INTERNAL Casdoor /api/login with this app's OIDC/PKCE params,
+# gets an auth code, and exchanges it (authorization_code grant). The compose Casdoor has
+# NO app (only the cluster seeds one). clientId / secret / redirectUri MUST byte-match
+# user-bff's APP_BFF_OIDC_CLIENT_ID / _SECRET / _REDIRECT_URI in compose.local.yaml. The
+# redirectUri is an INTERNAL PKCE-match string only — Casdoor validates it against the
+# registered app; NO browser ever visits it (native login has no front-channel redirect).
 CASDOOR_APP_CLIENT_ID="${CASDOOR_APP_CLIENT_ID:-app-user-bff}"
 CASDOOR_APP_SECRET="${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}"
-CASDOOR_APP_REDIRECT_URI="${CASDOOR_APP_REDIRECT_URI:-http://localhost:8088/login/callback}"
+CASDOOR_APP_REDIRECT_URI="${CASDOOR_APP_REDIRECT_URI:-http://snapdragon-user-bff-api:8080/bff/auth/callback}"
 CASDOOR_BRAND_B_URL="${CASDOOR_BRAND_B_URL:-}"
 SYNAPSE_URL="${SYNAPSE_URL:-http://localhost:8008}"
 SYNAPSE_SERVER_NAME="${SYNAPSE_SERVER_NAME:-localhost}"
@@ -176,14 +179,16 @@ ensure_roles() { # <base-url> <org>
   done
 }
 
-# A fresh compose Casdoor has NO OAuth2 application, so login-ui's OIDC redirect has
-# nothing to authorize against and user-bff's code->token exchange has no client.
+# A fresh compose Casdoor has NO OAuth2 application, so user-bff's native-login
+# /api/login POST has no client to name and its code->token exchange has no client.
 # Create the app-user-bff confidential client, mirroring the cluster's reconcile_app
 # (specs/cluster/manifests/casdoor/init-job.yaml): authorization_code + refresh_token +
-# password grants, JWT-Custom / RS256 with the roles + permissions token attributes the
-# gateway RBAC reads from the minted JWT (an empty tokenFields set strips roles and
-# breaks authz platform-wide). No `cert` field — Casdoor signs with its built-in cert,
-# same as the cluster path. redirectUri / clientId / secret byte-match login-ui + user-bff.
+# password grants (native login uses the authorization_code grant — user-bff drives the
+# credentials through /api/login type=code, then exchanges the returned code), JWT-Custom /
+# RS256 with the roles + permissions token attributes the gateway RBAC reads from the minted
+# JWT (an empty tokenFields set strips roles and breaks authz platform-wide). No `cert` field
+# — Casdoor signs with its built-in cert, same as the cluster path. redirectUri / clientId /
+# secret byte-match user-bff's APP_BFF_OIDC_*.
 ensure_app() { # <base-url> <org>
   local base="$1" org="$2" app
   app="$(jq -n \

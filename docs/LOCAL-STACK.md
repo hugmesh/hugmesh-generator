@@ -49,8 +49,12 @@ What `make stack-up` does:
    service from `./.stack-src/<repo>`.
 3. **up** — `docker compose ... up -d`.
 
-Then open **http://localhost:8088** (the fe-gateway front door) and
-**http://localhost:8000** (Casdoor).
+Then open **http://localhost:8088** (the fe-gateway front door) and sign in at its
+**native login form** (`/login`) — the browser POSTs credentials to `/bff/login`
+and never touches Casdoor. Casdoor is still published at **http://localhost:8000**
+in this dev stack, but ONLY as an admin/seed convenience (the `seed-e2e.sh`
+provisioning transport); it is **not** part of the login path and has no
+browser-facing role. In the cluster Casdoor gets no public ingress at all.
 
 Useful overrides:
 
@@ -145,7 +149,7 @@ deliberately ships only dev placeholders so nothing secret is committed.
 | URL | Service |
 |---|---|
 | http://localhost:8088 | **Front door** — fe-gateway (Angular host + remotes, /bff, /_fragments, /be) |
-| http://localhost:8000 | Casdoor (OIDC identity) |
+| http://localhost:8000 | Casdoor (OIDC identity) — **admin/seed transport only**, not the login path; the browser never uses it (in-cluster it has no public ingress) |
 | http://localhost:8008 | Synapse / Matrix (only with `SOCIAL=1`) |
 | http://localhost:3000 | Mastodon web (only with `SOCIAL=1`) |
 | http://localhost:4000 | Mastodon streaming (only with `SOCIAL=1`) |

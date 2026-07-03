@@ -333,16 +333,25 @@ services:
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       SPRING_PROFILES_ACTIVE: casdoor
       FEDERATION_BASE_URL: "http://snapdragon-federation-api:8080"
-      # ── Real OIDC web login: login-ui redirects to Casdoor's hosted form, then POSTs the
-      #    code here (/bff/auth/callback), which exchanges it (PKCE) and provisions the account
-      #    + session via admin-bff's internal surface. clientId/secret/redirect BYTE-MATCH the
-      #    seeded app-user-bff (tests/stack/seed-e2e.sh ensure_app) and login-ui's __SNAP_OIDC_*
-      #    globals. Ships dark upstream (app.bff.oidc.enabled=false); turned ON for the test env. ──
+      # ── Native SSO login (POST /bff/login). login-ui renders a first-party
+      #    username/password form and POSTs it to user-bff at /bff/login (via the front
+      #    door). user-bff generates PKCE + state SERVER-SIDE, POSTs the credentials to
+      #    the INTERNAL Casdoor /api/login (APP_BFF_OIDC_ISSUER below — the in-DNS
+      #    http://casdoor:8000, NEVER a browser-reachable URL), gets an auth code back,
+      #    exchanges it (PKCE) and provisions the account + session via admin-bff's
+      #    internal surface. The browser NEVER receives a JWT, the code_verifier, the
+      #    state, or any Casdoor URL — only the opaque bff_ session cookie.
+      #    APP_BFF_OIDC_ISSUER is the internal Casdoor login base (the /api/login POST +
+      #    the token exchange both target it). clientId/secret/redirect BYTE-MATCH the
+      #    seeded app-user-bff (tests/stack/seed-e2e.sh ensure_app). The redirect-uri is
+      #    an INTERNAL PKCE-match string only (Casdoor validates it against the registered
+      #    app); no browser ever visits it. Ships dark upstream (app.bff.oidc.enabled=false);
+      #    turned ON for the test env. ──
       APP_BFF_OIDC_ENABLED: "true"
       APP_BFF_OIDC_ISSUER: ${APP_BFF_OIDC_ISSUER:-http://casdoor:8000}
       APP_BFF_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
       APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
-      APP_BFF_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://localhost:8088/login/callback}
+      APP_BFF_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://snapdragon-user-bff-api:8080/bff/auth/callback}
       APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
       ADMIN_BFF_INTERNAL_BASE_URL: ${ADMIN_BFF_INTERNAL_BASE_URL:-http://snapdragon-admin-bff-api:8080}
       # plain-HTTP local stack: the bff_ session cookie must not be Secure-only or the browser drops it
@@ -453,18 +462,17 @@ services:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-login-ui
-    # Runtime OIDC globals the login-ui nginx entrypoint writes into snap-config.js so its
-    # (already-built) Casdoor OIDC+PKCE flow turns ON. ISSUER is the BROWSER-reachable Casdoor
-    # (front-channel authorize); BFF_URL is the front door where login-ui POSTs /bff/auth/callback
-    # and hydrates /bff/session; CLIENT_ID + REDIRECT_URI BYTE-MATCH the seeded app-user-bff
-    # (seed-e2e.sh ensure_app) and user-bff's APP_BFF_OIDC_* — the SSO consistency invariant.
+    # Runtime globals the login-ui nginx entrypoint writes into snap-config.js so its
+    # (already-built) NATIVE login form turns ON. The browser NEVER learns a Casdoor URL:
+    # login-ui renders a first-party username/password form and POSTs it to SNAP_BFF_URL
+    # + /bff/login (the front door), then hydrates /bff/session — user-bff does all the
+    # PKCE + internal-Casdoor work server-side. No SNAP_OIDC_ISSUER / SNAP_CASDOOR_ISSUER /
+    # SNAP_OIDC_REDIRECT_URI here BY DESIGN: handing the browser a Casdoor origin or an
+    # authorize/redirect URL is exactly what this hardening removes. SNAP_BFF_URL is the
+    # only endpoint the browser talks to for auth.
     environment:
       SNAP_OIDC_ENABLED: "true"
-      SNAP_OIDC_ISSUER: ${SNAP_OIDC_ISSUER:-http://localhost:8000}
-      SNAP_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
-      SNAP_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://localhost:8088/login/callback}
       SNAP_BFF_URL: ${SNAP_BFF_URL:-http://localhost:8088}
-      SNAP_CASDOOR_ISSUER: ${SNAP_OIDC_ISSUER:-http://localhost:8000}
 
   snapdragon-mastodon-ui:
     <<: *amd64

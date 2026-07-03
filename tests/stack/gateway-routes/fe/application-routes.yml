@@ -42,9 +42,14 @@ spring:
               predicates:
                 - Path=/api-docs/**
             # SSO/login + user surface -> user-bff. MUST precede the /bff/** admin
-            # catch-all (SCG matches in list order): login-ui POSTs the OIDC code to
-            # /bff/auth/callback and hydrates /bff/session here, /bff/login|register are the
-            # provider login surface user-bff now owns, /bff/user/** is the user API.
+            # catch-all (SCG matches in list order). NATIVE login: the browser POSTs
+            # username/password to /bff/login (permitAll at the BFF); user-bff runs PKCE +
+            # the INTERNAL Casdoor /api/login + code exchange server-side and Set-Cookies the
+            # opaque bff_ session. /bff/session hydrates that cookie, /bff/register is the
+            # registration surface, /bff/user/** the user API. NOTE: there is deliberately NO
+            # front-door route to Casdoor — the browser NEVER reaches Casdoor's
+            # /login/oauth/authorize or its hosted UI (that origin is internal-only, in-DNS
+            # http://casdoor:8000, reachable solely by user-bff/be-gateway).
             - id: snapdragon-user-bff-api
               uri: http://snapdragon-user-bff-api:8080
               predicates:

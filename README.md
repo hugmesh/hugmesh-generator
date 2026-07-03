@@ -57,25 +57,30 @@ _As of 2026-06-24. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   infra; depends on commons; consumed by **user-bff + admin-bff only**).
   `federation-api` was migrated onto this baseline.
 - **✅ SSO auth model wired into the cluster payload (data plane)** — Casdoor is
-  the SSO IdP. `login-ui` does a Casdoor OIDC authorization-code (PKCE) redirect;
-  **user-bff** does the server-side code→token exchange and holds per-session JWT
-  custody/refresh. The browser only ever holds an **OPAQUE `bff_`-prefixed**
-  session (the user never sees their own Casdoor JWT). The gateway is a pure
+  the SSO IdP, reached **only from inside the cluster**. Login is a **native,
+  first-party form**: `login-ui` POSTs username/password (and any MFA passcode) to
+  **user-bff** `POST /bff/login`; user-bff generates PKCE + state server-side, POSTs
+  the credentials to the **internal** Casdoor `/api/login`, exchanges the returned
+  code, and holds per-session JWT custody/refresh. The browser only ever holds an
+  **OPAQUE `bff_`-prefixed** session — it never sees a Casdoor JWT, the
+  `code_verifier`, the `state`, or any Casdoor URL. The gateway is a pure
   Casdoor-JWT OAuth2 resource server: a pre-security exchange filter swaps
   `bff_` → the internal custody JWT so JWT validation + the role gate run
   unchanged. Authorization is **data-driven by the `gateway_route_access`
   Postgres table** (source of truth) via `GatewayRouteAccessFilter` —
-  ADMIN/GAME-MASTER bypass within own domain, SUPERADMIN cross-domain. Cloudflare
-  fronts prod. **Login/session/account logic is RELOCATING from admin-bff →
-  user-bff** (the shared core lives in `snapdragon-auth-core`); account/session
-  **data stays in admin-bff-db**, reached by user-bff via admin-bff
-  `/bff/internal` over mTLS + `X-Internal-Token`. The generator leg of this
-  relocation (user-bff Casdoor OIDC client, relocated `/bff/login|register|me|
-  session|provision` + `/bff/auth/callback` fe-gateway routes, PUBLIC callback
-  route-access seed) has progressed on `main` and **ships dark**: PR-1/5 (#156,
-  OIDC client + callback route seed), PR-2/5 (#171, user-bff OIDC enable +
-  gateway BFF-session filter) and PR-3/5 (#172, SSO custody-key + internal-token
-  bootstrap seeding) are merged; PR-4/5 and PR-5/5 remain **🚧 in-flight**.
+  ADMIN/GAME-MASTER bypass within own domain, SUPERADMIN cross-domain. Because there
+  is no front-channel redirect, **Casdoor needs no public ingress**; Cloudflare
+  fronts only the platform front door in prod. **Login/session/account logic is
+  RELOCATING from admin-bff → user-bff** (the shared core lives in
+  `snapdragon-auth-core`); account/session **data stays in admin-bff-db**, reached
+  by user-bff via admin-bff `/bff/internal` over mTLS + `X-Internal-Token`. The
+  generator leg of this relocation (user-bff Casdoor confidential client with the
+  internal redirect-uri, relocated `/bff/login|register|me|session|provision`
+  fe-gateway routes, permitAll `/bff/login` route-access seed) has progressed on
+  `main` and **ships dark**: PR-1/5 (#156, OIDC client + login route seed), PR-2/5
+  (#171, user-bff native-login enable + gateway BFF-session filter) and PR-3/5
+  (#172, SSO custody-key + internal-token bootstrap seeding) are merged; PR-4/5 and
+  PR-5/5 remain **🚧 in-flight**.
 - **✅ SCG-5 route config** — Spring Cloud Gateway 5.0 moved route config from
   `spring.cloud.gateway.routes` to `spring.cloud.gateway.server.webflux.routes`
   (the legacy prefix silently binds nothing). The `snapdragon-gateway` chart
@@ -349,17 +354,19 @@ to onboard storage.
 ## OAuth + mail (optional; native login by default)
 
 Both OAuth and mail are **optional and absent by default**. With neither, the
-platform falls back to **Casdoor's native user/pass login** and
+platform falls back to its **native username/password login** (the first-party
+`login-ui` form → `POST /bff/login` → user-bff → internal Casdoor credentials) and
 **admin-approval** registration (no email verification) — exactly what an
 `ENV=test` LAN fleet uses.
 
-> **Where login runs.** Casdoor is the SSO IdP; `login-ui` performs the OIDC
-> authorization-code (PKCE) redirect and **user-bff** (not admin-bff) does the
-> server-side code→token exchange and holds the per-session JWT, handing the
-> browser only an opaque `bff_` session. The gateway swaps `bff_` → the custody
-> JWT before its JWT/role checks. Login/session/account logic is relocating from
-> admin-bff → user-bff (shared in `snapdragon-auth-core`); see
-> [Current State](#current-state).
+> **Where login runs.** Casdoor is the SSO IdP, reached **only internally**.
+> `login-ui` renders a **native username/password form** and POSTs it to
+> **user-bff** (not admin-bff) `POST /bff/login`; user-bff does the PKCE + internal
+> Casdoor `/api/login` + code exchange server-side and holds the per-session JWT,
+> handing the browser only an opaque `bff_` session (never a Casdoor JWT or URL).
+> The gateway swaps `bff_` → the custody JWT before its JWT/role checks.
+> Login/session/account logic is relocating from admin-bff → user-bff (shared in
+> `snapdragon-auth-core`); see [Current State](#current-state).
 
 **OAuth federation providers (seeded into Casdoor when creds are present).**
 The provider seeding in the Casdoor init jobs is **read-if-present, else
@@ -842,8 +849,9 @@ Spring Cloud 2025.1.2** on Java 25 — built on three shared artifacts: **`snapd
 `systems.snapdragon.commons.*`) and **`snapdragon-auth-core`** (shared
 account/session/MFA/Casdoor-admin infra, consumed by **user-bff + admin-bff**).
 SSO login/session/account ownership is being **relocated from admin-bff →
-user-bff** (`login-ui` OIDC redirect → user-bff token-handler → opaque `bff_`
-session; the gateway swaps `bff_` → custody JWT). Account/session **data stays in
+user-bff** (`login-ui` native form → `POST /bff/login` → user-bff PKCE + internal
+Casdoor login/exchange → opaque `bff_` session; the gateway swaps `bff_` → custody
+JWT). Account/session **data stays in
 admin-bff-db**; user-bff reaches it via admin-bff `/bff/internal` over mTLS +
 `X-Internal-Token`. See [Current State](#current-state).
 

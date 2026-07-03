@@ -3,8 +3,10 @@
 The cluster is **fully testable on a LAN before any public address or
 Cloudflare**. This is the **default** posture: every build is `--env test` unless
 you explicitly ask for `--env prod`. A test image needs **no public internet, no
-Cloudflare, no OAuth, no SMTP** — just Casdoor's native login, the internal
-cluster CA, and an in-cluster wildcard DNS resolver.
+Cloudflare, no OAuth, no SMTP** — just the platform's native username/password
+login (the first-party form → `POST /bff/login` → user-bff → internal Casdoor;
+Casdoor itself is never browser-facing), the internal cluster CA, and an in-cluster
+wildcard DNS resolver.
 
 ## TL;DR
 

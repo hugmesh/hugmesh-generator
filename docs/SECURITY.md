@@ -228,10 +228,17 @@ charts), so all Java IO trusts the cluster CA.
 
 ## 6. Identity / login (recap)
 
-Casdoor (`id.<domain>`) is the single OIDC IdP. Human login/registration is
-Google/Discord-only and admin-allowlist-gated (two-stage). **Service users**
-(the per-app identities above) are separate Casdoor accounts with service roles;
-the gateways validate the Casdoor JWT and the `External-*` headers.
+Casdoor (`id.<domain>`) is the single OIDC IdP, reached **only from inside the
+cluster** — it has **no public ingress** and the browser never talks to it. Human
+login is a **native, first-party form**: `login-ui` POSTs username/password (+ any
+MFA passcode) to user-bff `POST /bff/login`, which runs PKCE + the internal Casdoor
+`/api/login` + code exchange server-side and returns only an opaque `bff_` session
+cookie (no JWT, `code_verifier`, `state`, or Casdoor URL ever reaches the client).
+Federated sign-up (Google/Discord) and registration stay admin-allowlist-gated
+(two-stage). **Service users** (the per-app identities above) are separate Casdoor
+accounts with service roles; the gateways validate the Casdoor JWT and the
+`External-*` headers. No gateway route proxies Casdoor's `/login/oauth/authorize`
+or its hosted UI to the browser.
 
 ## 7. Network — Calico via Vault, configured from KEYS
 
