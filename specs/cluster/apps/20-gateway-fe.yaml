@@ -98,9 +98,13 @@ spec:
           - id: forum-ui
             uri: http://snapdragon-forum-ui.snapdragon-frontend.svc.cluster.local:80
             path: /social/forum/**
+          # login-ui is a STANDALONE Angular app built with base-href=/login/, so
+          # StripPrefix=1 maps /login/<asset> back to the webroot nginx serves.
           - id: login-ui
             uri: http://snapdragon-login-ui.snapdragon-frontend.svc.cluster.local:80
             path: /login/**
+            filters:
+              - StripPrefix=1
           - id: admin-ui
             uri: http://snapdragon-admin-ui.snapdragon-frontend.svc.cluster.local:80
             path: /admin/**
