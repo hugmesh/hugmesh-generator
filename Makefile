@@ -253,7 +253,7 @@ JETSON_PASS := JETSON_ROLE='$(JETSON_ROLE)' JETSON_BOARD='$(JETSON_BOARD)' \
                JETSON_KERNEL_FLAVOR='$(JETSON_KERNEL_FLAVOR)'
 
 .DEFAULT_GOAL := help
-.PHONY: help menu clean build-all build-everything matrix-check pentest rebuild \
+.PHONY: help menu clean build-all build-everything matrix-check pentest pentest-seed rebuild \
         rpi x86 omnibus frite frite-live frite-installer jetson \
         flash qemu qemu-rpi qemu-x86 \
         playwright-deps e2e ci ci-quick docker-image ensure-image \
@@ -310,6 +310,21 @@ pentest: ## run the OWASP pen-test harness only (no image build); PENTEST_SCAN/E
 	PENTEST_ONLY=1 PENTEST=1 PENTEST_ENV='$(PENTEST_ENV)' PENTEST_SCAN='$(PENTEST_SCAN)' \
 	  PENTEST_PIPELINE='$(PENTEST_PIPELINE)' SKIP_KEYS=1 SKIP_X86=1 \
 	  $(SUDO) ./scripts/build-all-roles.sh -w $(WORK_DIR)
+
+# pentest-seed is the SEED_CMD target env/compose.env + env/local.env invoke
+# (`make -C '$(GEN_DIR)' pentest-seed ...`) from run-pentest.sh's step_seed(). It
+# is a thin delegate to the real seeder, tests/pentest/seed-personas.sh, which
+# wraps tests/qemu/seed-accounts.sh to mint the ATTACKER + LOAD personas and
+# write their bearer tokens to the seed-tokens file ZAP/k6 read. Casdoor admin
+# creds (CASDOOR_ADMIN_USER/_PASS) and the throwaway pool password
+# (PENTEST_SEED_PASSWORD) are inherited straight from the calling environment
+# (CI variables / key-USB) — never pass secrets as make command-line vars.
+pentest-seed: ## seed pen-test ATTACKER + LOAD personas (delegates to tests/pentest/seed-personas.sh)
+	@echo "==> Pen-test seed: CASDOOR_URL=$(CASDOOR_URL)$(if $(strip $(CASDOOR_BRAND_B_URL)), CASDOOR_BRAND_B_URL=$(CASDOOR_BRAND_B_URL),)"
+	$(if $(strip $(CASDOOR_URL)),CASDOOR_URL='$(CASDOOR_URL)') \
+	$(if $(strip $(CASDOOR_BRAND_B_URL)),CASDOOR_BRAND_B_URL='$(CASDOOR_BRAND_B_URL)') \
+	$(if $(strip $(PENTEST_TOKENS_ENV)),PENTEST_TOKENS_ENV='$(PENTEST_TOKENS_ENV)') \
+	  bash tests/pentest/seed-personas.sh
 
 local: ## build the LAN .test fleet (ENV=test, BRAND=local -> snapdragon.test; no internet)
 	@echo "==> LOCAL build: ENV=test, brand=local (snapdragon.test). LAN-only — no public"
