@@ -6,6 +6,7 @@ so every script stays reachable in-container the same way).
 """
 import os
 import shlex
+import subprocess
 
 import pytest
 
@@ -91,3 +92,79 @@ def test_preflight_ok_against_real_repo(tmp_path):
         cfg = cfg_for(platform, tmp_path)
         problems = BuildDriver(gen, host(is_root=True)).preflight(cfg, "native")
         assert not any(cfg.builder_script in p for p in problems)
+
+
+# ---- docker builder image preflight ----------------------------------------
+# The Docker backend targets a local image tag ("snapdragon-builder", per
+# HostInfo.builder_image) that is never built automatically — preflight() must catch a
+# missing image (not just an unreachable daemon) and name the exact fix command, and the
+# GUI needs a boolean to decide whether to offer a "build it now" button.
+
+def _mock_docker_inspect(monkeypatch, present: bool):
+    """Patch subprocess.run as used by BuildDriver._image_present so no real docker
+    binary/daemon is needed."""
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0 if present else 1)
+
+    monkeypatch.setattr("snapdragon_studio.core.build_driver.subprocess.run", fake_run)
+    return calls
+
+
+def test_preflight_no_warning_when_builder_image_present(monkeypatch, tmp_path):
+    calls = _mock_docker_inspect(monkeypatch, present=True)
+    d = BuildDriver(str(tmp_path), host(has_docker=True))
+    cfg = cfg_for("x86", tmp_path)
+    problems = d.preflight(cfg, "docker")
+    assert not any("snapdragon-builder" in p for p in problems)
+    assert not d.builder_image_missing("docker")
+    assert calls and calls[0][:3] == ["docker", "image", "inspect"]
+
+
+def test_preflight_warns_with_exact_command_when_builder_image_absent(monkeypatch, tmp_path):
+    _mock_docker_inspect(monkeypatch, present=False)
+    d = BuildDriver(str(tmp_path), host(has_docker=True))
+    cfg = cfg_for("x86", tmp_path)
+    problems = d.preflight(cfg, "docker")
+    expected_cmd = "docker build -f Dockerfile.build -t snapdragon-builder ."
+    assert any(expected_cmd in p and "snapdragon-builder" in p for p in problems)
+    assert d.builder_image_missing("docker")
+
+
+def test_builder_image_missing_false_when_daemon_unreachable(monkeypatch, tmp_path):
+    # No point offering to build the image if Docker itself isn't reachable — that
+    # problem is already surfaced separately.
+    _mock_docker_inspect(monkeypatch, present=False)
+    d = BuildDriver(str(tmp_path), host(has_docker=False))
+    assert not d.builder_image_missing("docker")
+    problems = d.preflight(cfg_for("x86", tmp_path), "docker")
+    assert any("daemon is not reachable" in p for p in problems)
+    assert not any("snapdragon-builder' not found" in p for p in problems)
+
+
+def test_build_builder_image_runs_expected_command(monkeypatch, tmp_path):
+    gen = str(tmp_path)
+    d = BuildDriver(gen, host(has_docker=True))
+    seen = {}
+
+    class FakeProc:
+        stdout = iter(["Step 1/5 : FROM gentoo/stage3", "Successfully tagged snapdragon-builder"])
+
+        def wait(self):
+            return 0
+
+    def fake_popen(cmd, **kwargs):
+        seen["cmd"] = cmd
+        seen["cwd"] = kwargs.get("cwd")
+        return FakeProc()
+
+    monkeypatch.setattr("snapdragon_studio.core.build_driver.subprocess.Popen", fake_popen)
+    lines = []
+    code = d.build_builder_image(on_line=lines.append)
+    assert code == 0
+    assert seen["cmd"] == ["docker", "build", "-f", "Dockerfile.build", "-t",
+                           "snapdragon-builder", "."]
+    assert seen["cwd"] == gen
+    assert lines == ["Step 1/5 : FROM gentoo/stage3", "Successfully tagged snapdragon-builder"]

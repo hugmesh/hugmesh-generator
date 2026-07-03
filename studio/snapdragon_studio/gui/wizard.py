@@ -771,6 +771,20 @@ class _BuildWorker(QtCore.QThread):
         self.done.emit(code)
 
 
+class _BuilderImageWorker(QtCore.QThread):
+    """Runs BuildDriver.build_builder_image() the same way _BuildWorker runs a build."""
+    line = Signal(str)
+    done = Signal(int)
+
+    def __init__(self, driver):
+        super().__init__()
+        self.driver = driver
+
+    def run(self):
+        code = self.driver.build_builder_image(on_line=lambda s: self.line.emit(s))
+        self.done.emit(code)
+
+
 class BuildPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
@@ -803,13 +817,18 @@ class BuildPage(QtWidgets.QWizardPage):
         lay.addWidget(QtWidgets.QLabel("Command:")); lay.addWidget(self.cmd)
         self.preview_btn = QtWidgets.QPushButton("Refresh preview")
         self.build_btn = QtWidgets.QPushButton("Build now")
+        self.build_image_btn = QtWidgets.QPushButton("Build builder image now")
+        self.build_image_btn.setVisible(False)
         self.preview_btn.clicked.connect(self._preview)
         self.build_btn.clicked.connect(self._build)
-        bl = QtWidgets.QHBoxLayout(); bl.addWidget(self.preview_btn); bl.addWidget(self.build_btn); bl.addStretch(1)
+        self.build_image_btn.clicked.connect(self._build_builder_image)
+        bl = QtWidgets.QHBoxLayout(); bl.addWidget(self.preview_btn); bl.addWidget(self.build_btn)
+        bl.addWidget(self.build_image_btn); bl.addStretch(1)
         lay.addLayout(bl)
         self.log = QtWidgets.QPlainTextEdit(); self.log.setReadOnly(True)
         lay.addWidget(self.log, 1)
         self.worker = None
+        self.image_worker = None
 
     def initializePage(self):
         self.wiz.collect_all()
@@ -849,6 +868,24 @@ class BuildPage(QtWidgets.QWizardPage):
             self.log.setPlainText("Preflight:\n  - " + "\n  - ".join(problems))
         else:
             self.log.setPlainText("Preflight OK.")
+        self.build_image_btn.setVisible(self.wiz.driver.builder_image_missing(self._backend()))
+
+    def _build_builder_image(self):
+        if self.image_worker and self.image_worker.isRunning():
+            return
+        self.build_image_btn.setEnabled(False)
+        self.build_btn.setEnabled(False)
+        self.log.appendPlainText("\n=== building the docker builder image ===")
+        self.image_worker = _BuilderImageWorker(self.wiz.driver)
+        self.image_worker.line.connect(lambda s: self.log.appendPlainText(s))
+        self.image_worker.done.connect(self._builder_image_finished)
+        self.image_worker.start()
+
+    def _builder_image_finished(self, code):
+        self.log.appendPlainText(f"=== builder image build exited {code} ===")
+        self.build_image_btn.setEnabled(True)
+        self.build_btn.setEnabled(True)
+        self._preview()
 
     def _build(self):
         self._preview()

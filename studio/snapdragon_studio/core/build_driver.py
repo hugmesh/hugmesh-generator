@@ -75,13 +75,10 @@ class BuildDriver:
         return " ".join(shlex.quote(x) for x in self.command(cfg, backend))
 
     # ---- execution ---------------------------------------------------------
-    def run(self, cfg: ImageConfig, backend: str | None = None,
-            on_line: Callable[[str], None] | None = None) -> int:
-        """Run the build, calling on_line for each output line. Returns the exit code.
-        Blocking — callers run it on a worker thread (the GUI uses a QThread)."""
-        out = cfg.output_dir or os.path.join(self.generator_dir, "out")
-        os.makedirs(out, exist_ok=True)
-        cmd = self.command(cfg, backend)
+    def _stream(self, cmd: list[str], on_line: Callable[[str], None] | None) -> int:
+        """Popen cmd (cwd=generator_dir), call on_line per output line, return the exit
+        code. Shared by run() and build_builder_image() so both stream identically and
+        both respect cancel()."""
         self._cancel.clear()
         self._proc = subprocess.Popen(
             cmd, cwd=self.generator_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -94,6 +91,21 @@ class BuildDriver:
                 self._proc.terminate()
                 break
         return self._proc.wait()
+
+    def run(self, cfg: ImageConfig, backend: str | None = None,
+            on_line: Callable[[str], None] | None = None) -> int:
+        """Run the build, calling on_line for each output line. Returns the exit code.
+        Blocking — callers run it on a worker thread (the GUI uses a QThread)."""
+        out = cfg.output_dir or os.path.join(self.generator_dir, "out")
+        os.makedirs(out, exist_ok=True)
+        return self._stream(self.command(cfg, backend), on_line)
+
+    def build_builder_image(self, on_line: Callable[[str], None] | None = None) -> int:
+        """Build the Docker builder image (see HostInfo.builder_image) from
+        Dockerfile.build at the generator repo root — the same command as `make
+        docker-image`. Streams output the same way run() does; blocking, so callers run
+        it on a worker thread (the GUI uses a QThread)."""
+        return self._stream(self.builder_image_build_command(), on_line)
 
     def iter_run(self, cfg: ImageConfig, backend: str | None = None) -> Iterator[str]:
         out = cfg.output_dir or os.path.join(self.generator_dir, "out")
@@ -111,6 +123,27 @@ class BuildDriver:
             self._proc.terminate()
 
     # ---- preflight ---------------------------------------------------------
+    def _image_present(self) -> bool:
+        """Is self.host.builder_image already built? (`docker image inspect` — same
+        daemon-reachability caveats as platform_info._docker_ok.)"""
+        try:
+            r = subprocess.run(["docker", "image", "inspect", self.host.builder_image],
+                               capture_output=True, timeout=8)
+            return r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def builder_image_build_command(self) -> list[str]:
+        """The exact command build_builder_image() runs — also shown in preflight
+        messages and by the GUI's "Build builder image now" button."""
+        return ["docker", "build", "-f", "Dockerfile.build", "-t", self.host.builder_image, "."]
+
+    def builder_image_missing(self, backend: str | None = None) -> bool:
+        """True iff backend is docker, the daemon is reachable, but the builder image has
+        not been built yet — exactly the condition the GUI should offer to fix."""
+        backend = backend or self.host.default_backend
+        return backend == "docker" and self.host.has_docker and not self._image_present()
+
     def preflight(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:
         """Return a list of human-readable problems that would stop a build (empty = OK)."""
         backend = backend or self.host.default_backend
@@ -123,6 +156,10 @@ class BuildDriver:
                                if cfg.platform == "jetson" else ""))
         if backend == "docker" and not self.host.has_docker:
             problems.append("Docker selected but the Docker daemon is not reachable.")
+        elif backend == "docker" and not self._image_present():
+            problems.append(
+                f"Docker builder image '{self.host.builder_image}' not found — build it "
+                f"first: {' '.join(self.builder_image_build_command())}")
         if backend == "native" and not self.host.is_root:
             problems.append("Native build needs root (the Studio will prepend sudo).")
         for label, path in (("wallpaper", cfg.wallpaper), ("branding-dir", cfg.branding_dir),
