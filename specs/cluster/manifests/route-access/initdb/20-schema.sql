@@ -332,7 +332,12 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- (the host itself loads them only after login). If anonymous profile cards are
   -- ever needed, add a sibling PUBLIC row for the public sub-path.
   ('snapdragon-fe-gateway',  '/_fragments/**',        'ROLE_USER',      true),
-  ('snapdragon-fe-gateway',  '/login/**',             'ROLE_USER',      true),
+  -- NATIVE-LOGIN: the login-ui SPA shell is ANONYMOUS (the only login surface now
+  -- that Casdoor's hosted page is never browser-exposed; a logged-out visitor holds
+  -- no role yet, so ROLE_USER was a chicken-and-egg lock-out). PUBLIC matches the
+  -- gateway SecurityConfig FE_SHELL_PUBLIC_GET_PATHS `/login/**`. Pairs with the
+  -- `/bff/login` PUBLIC row below.
+  ('snapdragon-fe-gateway',  '/login/**',             'PUBLIC',         true),
   ('snapdragon-fe-gateway',  '/admin/**',             'ROLE_ADMIN',     true),
   -- Moderation micro-frontend UI (snapdragon-mod-ui at /mod/**). ROLE_MOD floor;
   -- ROLE_ADMIN paired so admins (a superset that the converter does NOT
@@ -392,7 +397,12 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- path so most-specific-match keeps ONLY the callback anonymous; the swap filter +
   -- the ROLE_USER/ROLE_ADMIN rows still gate every post-login /bff/** call.
   ('snapdragon-fe-gateway',  '/bff/auth/callback',    'PUBLIC',         true),
-  ('snapdragon-fe-gateway',  '/bff/login',            'ROLE_USER',      true),
+  -- NATIVE-LOGIN credential submit (UNAUTHENTICATED): the anonymous browser POSTs
+  -- {username,password} from OUR login-ui form to /bff/login BEFORE it holds any
+  -- session/role; user-bff drives Casdoor /api/login server-side and mints the opaque
+  -- bff_ session (no token reaches the browser). PUBLIC matches the gateway
+  -- SecurityConfig PUBLIC_PATHS `/bff/login`; ROLE_USER was a chicken-and-egg lock-out.
+  ('snapdragon-fe-gateway',  '/bff/login',            'PUBLIC',         true),
   ('snapdragon-fe-gateway',  '/bff/register/**',      'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/provision/**',     'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/me/**',            'ROLE_USER',      true),

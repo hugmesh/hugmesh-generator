@@ -341,14 +341,24 @@ services:
       #    exchanges it (PKCE) and provisions the account + session via admin-bff's
       #    internal surface. The browser NEVER receives a JWT, the code_verifier, the
       #    state, or any Casdoor URL — only the opaque bff_ session cookie.
-      #    APP_BFF_OIDC_ISSUER is the internal Casdoor login base (the /api/login POST +
-      #    the token exchange both target it). clientId/secret/redirect BYTE-MATCH the
+      #    TWO internal-Casdoor legs, TWO distinct properties (both must target the in-DNS
+      #    http://casdoor:8000, NEVER a browser-reachable URL):
+      #      • the /api/login POST      -> APP_BFF_OIDC_LOGIN_BASE (CasdoorLoginConfig reads
+      #        app.bff.oidc.login-base; its DEFAULT is the CLUSTER-DNS
+      #        http://casdoor.snapdragon-pki.svc.cluster.local:8000, which is UNREACHABLE in
+      #        compose — so it MUST be set here or /bff/login times out. The browser-facing
+      #        issuer is deliberately NEVER used for the login leg.)
+      #      • the token exchange       -> APP_BFF_OIDC_ISSUER (auth-core OidcExchangeClient).
+      #    clientId/secret/redirect BYTE-MATCH the
       #    seeded app-user-bff (tests/stack/seed-e2e.sh ensure_app). The redirect-uri is
       #    an INTERNAL PKCE-match string only (Casdoor validates it against the registered
       #    app); no browser ever visits it. Ships dark upstream (app.bff.oidc.enabled=false);
       #    turned ON for the test env. ──
       APP_BFF_OIDC_ENABLED: "true"
       APP_BFF_OIDC_ISSUER: ${APP_BFF_OIDC_ISSUER:-http://casdoor:8000}
+      # The /api/login leg (separate from the exchange issuer above). Without this the
+      # login base falls to the unreachable cluster-DNS default and /bff/login fails.
+      APP_BFF_OIDC_LOGIN_BASE: ${APP_BFF_OIDC_LOGIN_BASE:-http://casdoor:8000}
       APP_BFF_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
       APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
       APP_BFF_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://snapdragon-user-bff-api:8080/bff/auth/callback}
