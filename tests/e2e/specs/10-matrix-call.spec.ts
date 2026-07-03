@@ -1,18 +1,20 @@
 import { test, expect } from '@playwright/test';
-import { onboard, createRoom, joinRoom, shot } from './helpers';
+import { onboard, matrixUserId, createRoom, joinRoom, shot } from './helpers';
 
 // Real WebRTC: two browser contexts (fake media) establish a peer connection,
 // signalled over a shared Matrix room via the snapdragon-matrix-ui call module.
-test('two users hold a Matrix video call (WebRTC, room-signalled)', async ({ browser, request }) => {
+test('two users hold a Matrix video call (WebRTC, room-signalled)', async ({ browser }) => {
   const a = await browser.newContext({ ignoreHTTPSErrors: true });
   const b = await browser.newContext({ ignoreHTTPSErrors: true });
   const alice = await a.newPage();
   const bob = await b.newPage();
 
-  const sa = await onboard(alice, 'alice@gmail.com');
-  const sb = await onboard(bob, 'bob@gmail.com');
-  const roomId = await createRoom(request, sa, sb.matrix!.userId, 'callroom');
-  await joinRoom(request, sb, roomId);
+  await onboard(alice, 'alice@gmail.com');
+  await onboard(bob, 'bob@gmail.com');
+  // Shared room via each page's hsproxy (cookie-authed; no browser Matrix token).
+  const bobUserId = await matrixUserId(bob);
+  const roomId = await createRoom(alice, bobUserId, 'callroom');
+  await joinRoom(bob, roomId);
 
   const q = `?room=${encodeURIComponent(roomId)}`;
   await alice.goto(`/social/matrix/call${q}`);

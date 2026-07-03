@@ -1,4 +1,5 @@
 import { test, expect, request } from '@playwright/test';
+import type { APIRequestContext } from '@playwright/test';
 import {
   SYSTEMS_SEED_USERS, GAMES_SEED_USERS, passwordFor, systemsUser,
 } from './rbac-roles';
@@ -11,9 +12,11 @@ import {
 //
 // What's testable TODAY vs what's pending:
 //   * SYSTEMS, mock stack: the mock-bff models exactly TWO role tiers it can
-//     distinguish by email (admin via ADMIN_EMAILS, else plain user). We assert
-//     BOTH log in and carry the right `roles` through the BFF session — the
-//     realistic floor of the systems login at a surface that runs right now.
+//     distinguish by username (admin via ADMIN_EMAILS, else plain user). We assert
+//     BOTH sign in through OUR native /bff/login and carry the right `roles` back
+//     from GET /bff/session (the httpOnly bff_session cookie — the only browser-
+//     readable identity in the native model) — the realistic floor of the systems
+//     login at a surface that runs right now.
 //   * SYSTEMS, real Casdoor: a full per-ROLE login (ROLE_MOD / ROLE_GAMES /
 //     ROLE_GAMES_ADMIN / pending) needs a real seeded Casdoor — provisioned by
 //     tests/qemu/seed-accounts.sh --roles. That login is exercised by spec 14
@@ -24,36 +27,45 @@ import {
 //     synced e2e-gamesadmin -> games admin expectation).
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@snapdragon.systems';
+// Deterministic native password every seeded/invited persona signs in with.
+const LOGIN_PASSWORD = process.env.E2E_PASSWORD || 'e2e-pass';
+
+// Native sign-in through OUR /bff/login: the opaque httpOnly bff_session cookie is
+// stored in THIS context's cookie jar and rides subsequent /bff/** calls (no bearer
+// token is ever exposed). An un-provisioned username 401s.
+async function loginAs(api: APIRequestContext, username: string, password = LOGIN_PASSWORD): Promise<void> {
+  const r = await api.post('/bff/login', { data: { username, password } });
+  expect(r.status(), `native login ${username} -> ${r.status()}`).toBe(200);
+}
 
 test.describe('RBAC: per-realm login', () => {
   test('SYSTEMS realm — admin logs in via the BFF and carries the admin role', async ({ baseURL }) => {
     const api = await request.newContext({ baseURL, ignoreHTTPSErrors: true });
-    const reg = await api.post('/bff/register/google', { data: { email: ADMIN_EMAIL } });
-    expect(reg.ok()).toBeTruthy();
-    const session = await reg.json();
-    expect(session.roles, 'admin email -> roles include admin').toContain('admin');
-    expect(session.token).toBeTruthy();
-
-    // /bff/me round-trips the same role-set from the issued session.
-    const me = await api.get('/bff/me', { headers: { authorization: `Bearer ${session.token}` } });
+    await loginAs(api, ADMIN_EMAIL);
+    // GET /bff/session round-trips the role-set from the httpOnly cookie session —
+    // the ONLY browser-readable identity in the native model (no token is exposed).
+    const me = await api.get('/bff/session', { headers: { accept: 'application/json' } });
     expect(me.status()).toBe(200);
-    expect((await me.json()).roles).toContain('admin');
+    expect((await me.json()).roles, 'admin username -> roles include admin').toContain('admin');
     await api.dispose();
   });
 
   test('SYSTEMS realm — a plain invited user logs in WITHOUT the admin role', async ({ baseURL }) => {
-    const api = await request.newContext({ baseURL, ignoreHTTPSErrors: true });
-    const adminReg = await api.post('/bff/register/google', { data: { email: ADMIN_EMAIL } });
-    const adminTok = (await adminReg.json()).token;
-    await api.post('/bff/admin/allowlist', {
-      headers: { authorization: `Bearer ${adminTok}` },
-      data: { email: 'rbac-login-user@gmail.com' },
-    });
-    const reg = await api.post('/bff/register/google', { data: { email: 'rbac-login-user@gmail.com' } });
-    const session = await reg.json();
+    // Admin (its own context/cookie) invites a plain user; the invite provisions a
+    // native account with roles ['user'] so it can sign in.
+    const adminApi = await request.newContext({ baseURL, ignoreHTTPSErrors: true });
+    await loginAs(adminApi, ADMIN_EMAIL);
+    await adminApi.post('/bff/admin/allowlist', { data: { email: 'rbac-login-user@gmail.com' } });
+
+    // The invited user signs in natively in its OWN context and carries ['user'].
+    const userApi = await request.newContext({ baseURL, ignoreHTTPSErrors: true });
+    await loginAs(userApi, 'rbac-login-user@gmail.com');
+    const me = await userApi.get('/bff/session', { headers: { accept: 'application/json' } });
+    const session = await me.json();
     expect(session.roles).toEqual(['user']);
     expect(session.roles).not.toContain('admin');
-    await api.dispose();
+    await userApi.dispose();
+    await adminApi.dispose();
   });
 
   test('SYSTEMS realm — seed catalogue is internally consistent (deterministic passwords + roles)', async () => {

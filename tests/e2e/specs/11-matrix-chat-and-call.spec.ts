@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { onboard, createRoom, joinRoom, shot } from './helpers';
+import { onboard, matrixUserId, createRoom, joinRoom, shot } from './helpers';
 
 // End-to-end social flow: two onboarded users hold a text chat in a shared
 // Matrix room, then escalate to a real-WebRTC VOICE call signalled over that
@@ -7,19 +7,21 @@ import { onboard, createRoom, joinRoom, shot } from './helpers';
 // carries video, but this test asserts the VOICE path specifically: a live
 // remote AUDIO track on both peers. Combines the 05 (chat) + 10 (call) flows
 // into the single "chat → call" journey a real user takes.
-test('two users chat, then escalate to a voice call', async ({ browser, request }) => {
+test('two users chat, then escalate to a voice call', async ({ browser }) => {
   const a = await browser.newContext({ ignoreHTTPSErrors: true });
   const b = await browser.newContext({ ignoreHTTPSErrors: true });
   const alice = await a.newPage();
   const bob = await b.newPage();
 
-  const sa = await onboard(alice, 'alice@gmail.com');
-  const sb = await onboard(bob, 'bob@gmail.com');
+  await onboard(alice, 'alice@gmail.com');
+  await onboard(bob, 'bob@gmail.com');
 
   // Shared room, created + joined BEFORE opening the views (the chat component
   // reads joined rooms on init, then polls; the call module signals through it).
-  const roomId = await createRoom(request, sa, sb.matrix!.userId, 'chat-then-call');
-  await joinRoom(request, sb, roomId);
+  // Created through each page's hsproxy (cookie-authed; no browser Matrix token).
+  const bobUserId = await matrixUserId(bob);
+  const roomId = await createRoom(alice, bobUserId, 'chat-then-call');
+  await joinRoom(bob, roomId);
   const q = `?room=${encodeURIComponent(roomId)}`;
 
   // ── 1. They chat ──────────────────────────────────────────────────

@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { onboard, shot } from './helpers';
 
-// By the time this runs, earlier specs have generated real register/login/
-// complete/invite events that the BFF wrote to ClickHouse. The admin Usage
-// view reads the aggregates back.
+// By the time this runs, earlier specs have generated real login/complete/
+// invite events that the BFF wrote to ClickHouse. The admin Usage view reads
+// the aggregates back. (Native login records a 'login' event — there is no
+// 'register' action; the removed google/discord self-registration is gone.)
 test('admin views live infra usage analytics (ClickHouse-backed)', async ({ page }) => {
   await onboard(page, 'admin@snapdragon.systems'); // admin role; also generates events
   await expect(page.getByTestId('nav-usage')).toBeVisible();
@@ -14,9 +15,9 @@ test('admin views live infra usage analytics (ClickHouse-backed)', async ({ page
   await expect(page.getByTestId('usage-total')).not.toHaveText('0');
   await expect(page.getByTestId('usage-active')).not.toHaveText('0');
 
-  // Module + action breakdowns are populated (registration flow at least).
+  // Module + action breakdowns are populated (native login flow at least).
   await expect(page.getByTestId('usage-by-module').locator('[data-module="login-ui"]')).toBeVisible();
-  await expect(page.getByTestId('usage-by-action').locator('[data-action="register"]')).toBeVisible();
+  await expect(page.getByTestId('usage-by-action').locator('[data-action="login"]')).toBeVisible();
 
   await shot(page, '08-usage');
 });

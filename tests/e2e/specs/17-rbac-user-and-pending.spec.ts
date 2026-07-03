@@ -1,5 +1,5 @@
 import { test, expect, request } from '@playwright/test';
-import { registerOnly, onboard, shot } from './helpers';
+import { registerOnly, onboard, LOGIN_PASSWORD, shot } from './helpers';
 import { systemsUser } from './rbac-roles';
 import { gatewayDecision, effectiveRoles } from './rbac-route-access';
 
@@ -72,26 +72,28 @@ test.describe('RBAC: platform-access member reaches their own homeserver (contra
 });
 
 test.describe('RBAC: pending principal denied until approved (live two-stage gate)', () => {
-  test('an un-invited identity is DENIED registration (no role granted)', async ({ page }) => {
-    await registerOnly(page, 'rbac-pending-uninvited@gmail.com'); // never allowlisted
-    await expect(page.getByTestId('login-error')).toContainText('denied');
+  test('an un-provisioned identity is DENIED native sign-in (no role granted)', async ({ page }) => {
+    await registerOnly(page, 'rbac-pending-uninvited@gmail.com'); // never provisioned
+    await expect(page.getByTestId('login-error')).toContainText('Sign-in failed');
     await shot(page, '17-pending-uninvited-denied');
   });
 
   test('an invited-but-incomplete (pending) user is gated out of Matrix/Mastodon', async ({ page, baseURL }) => {
     // Admin invites the pending identity (stage-0 approval), but the user does NOT
-    // complete registration — the awaiting-approval state.
+    // complete registration — the awaiting-approval state. The admin authenticates
+    // natively: POST /bff/login mints the httpOnly bff_session cookie into this API
+    // context (no browser token), which the allowlist POST then rides.
     const api = await request.newContext({ baseURL, ignoreHTTPSErrors: true });
-    const adminReg = await api.post('/bff/register/google', { data: { email: ADMIN_EMAIL } });
-    const adminTok = (await adminReg.json()).token;
+    await api.post('/bff/login', { data: { username: ADMIN_EMAIL, password: LOGIN_PASSWORD } });
+    const xsrf = (await api.storageState()).cookies.find((c) => c.name === 'XSRF-TOKEN')?.value;
     await api.post('/bff/admin/allowlist', {
-      headers: { authorization: `Bearer ${adminTok}` },
+      headers: xsrf ? { 'X-CSRF-TOKEN': xsrf } : {},
       data: { email: 'rbac-pending@gmail.com' },
     });
     await api.dispose();
 
     await registerOnly(page, 'rbac-pending@gmail.com');
-    await expect(page.getByTestId('nav-user')).toHaveText('rbac-pending@gmail.com');
+    await expect(page.getByTestId('nav-user')).toBeAttached();
     // Pending: complete-step offered, Matrix/Mastodon NOT yet available.
     await expect(page.getByTestId('nav-complete')).toBeVisible();
     await expect(page.getByTestId('nav-matrix')).toHaveCount(0);
@@ -105,10 +107,10 @@ test.describe('RBAC: pending principal denied until approved (live two-stage gat
 
   test('once registration completes, the (now plain-user) identity reaches Matrix + Mastodon', async ({ page, baseURL }) => {
     const api = await request.newContext({ baseURL, ignoreHTTPSErrors: true });
-    const adminReg = await api.post('/bff/register/google', { data: { email: ADMIN_EMAIL } });
-    const adminTok = (await adminReg.json()).token;
+    await api.post('/bff/login', { data: { username: ADMIN_EMAIL, password: LOGIN_PASSWORD } });
+    const xsrf = (await api.storageState()).cookies.find((c) => c.name === 'XSRF-TOKEN')?.value;
     await api.post('/bff/admin/allowlist', {
-      headers: { authorization: `Bearer ${adminTok}` },
+      headers: xsrf ? { 'X-CSRF-TOKEN': xsrf } : {},
       data: { email: 'rbac-approved@gmail.com' },
     });
     await api.dispose();
