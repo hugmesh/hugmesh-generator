@@ -75,6 +75,13 @@ CASDOOR_URL="${CASDOOR_URL:-http://localhost:8000}"
 CASDOOR_ADMIN_USER="${CASDOOR_ADMIN_USER:-admin}"
 CASDOOR_ADMIN_PASS="${CASDOOR_ADMIN_PASS:-123}"
 CASDOOR_ORG="${CASDOOR_ORG:-snapdragon}"
+# The OIDC application login-ui redirects to and user-bff exchanges the code against.
+# The compose Casdoor has NO app (only the cluster seeds one). clientId / secret /
+# redirectUri MUST byte-match login-ui's __SNAP_OIDC_CLIENT_ID__ / __SNAP_OIDC_REDIRECT_URI__
+# and user-bff's APP_BFF_OIDC_CLIENT_ID / _SECRET / _REDIRECT_URI in compose.local.yaml.
+CASDOOR_APP_CLIENT_ID="${CASDOOR_APP_CLIENT_ID:-app-user-bff}"
+CASDOOR_APP_SECRET="${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}"
+CASDOOR_APP_REDIRECT_URI="${CASDOOR_APP_REDIRECT_URI:-http://localhost:8088/login/callback}"
 CASDOOR_BRAND_B_URL="${CASDOOR_BRAND_B_URL:-}"
 SYNAPSE_URL="${SYNAPSE_URL:-http://localhost:8008}"
 SYNAPSE_SERVER_NAME="${SYNAPSE_SERVER_NAME:-localhost}"
@@ -82,6 +89,10 @@ MASTODON_URL="${MASTODON_URL:-http://localhost:3000}"
 E2E_PASSWORD="${E2E_PASSWORD:-e2e-pass}"
 SEED_WORKDIR="${SEED_WORKDIR:-${HERE}/.seed-e2e}"
 SEED_STRICT="${SEED_STRICT:-0}"
+# SEED_CASDOOR_ONLY=1 seeds ONLY the Casdoor identity leg (org + roles + app-user-bff
+# + personas) and stops before the Matrix/Mastodon social legs — enough for real SSO
+# web login on the CORE (non-SOCIAL) stack, which has no Synapse/Mastodon to seed.
+SEED_CASDOOR_ONLY="${SEED_CASDOOR_ONLY:-0}"
 
 log()  { echo "[seed-e2e] $*"; }
 warn() { echo "[seed-e2e] WARN: $*" >&2; }
@@ -98,21 +109,22 @@ curl -sf -o /dev/null --max-time 5 "${FRONT_DOOR}/actuator/health/readiness" \
   || die "front door ${FRONT_DOOR} is not answering — bring the stack up first: make stack-up"
 curl -sf -o /dev/null --max-time 5 "${CASDOOR_URL}/" \
   || die "Casdoor ${CASDOOR_URL} is not answering — bring the stack up first: make stack-up"
-curl -sf -o /dev/null --max-time 5 "${SYNAPSE_URL}/health" \
-  || die "Synapse ${SYNAPSE_URL} is not answering — bring the social tier up: make stack-up SOCIAL=1 (or tests/stack/up-real.sh for the full first-run setup)"
-curl -sf -o /dev/null --max-time 5 "${MASTODON_URL}/health" \
-  || die "Mastodon ${MASTODON_URL} is not answering — bring the social tier up: make stack-up SOCIAL=1 (or tests/stack/up-real.sh, which also runs rails db:prepare)"
-
 # The social-tier legs exec INSIDE the containers (register_new_matrix_user /
 # tootctl / rails runner). Find them by compose service name, whichever project
 # (snapdragon-local or snapdragon-real) is running them.
 find_ctr() { # <service-substring>
   docker ps --format '{{.Names}}' | grep -E "(^|[-_])$1([-_][0-9]+)?$" | head -1
 }
-SYNAPSE_CTR="$(find_ctr synapse || true)"
-MASTODON_CTR="$(find_ctr mastodon-web || true)"
-[ -n "${SYNAPSE_CTR}" ]  || die "no running synapse container found (docker ps) — is the social tier up?"
-[ -n "${MASTODON_CTR}" ] || die "no running mastodon-web container found (docker ps) — is the social tier up?"
+if [ "${SEED_CASDOOR_ONLY}" != "1" ]; then
+  curl -sf -o /dev/null --max-time 5 "${SYNAPSE_URL}/health" \
+    || die "Synapse ${SYNAPSE_URL} is not answering — bring the social tier up: make stack-up SOCIAL=1 (or tests/stack/up-real.sh for the full first-run setup). For SSO login only, use SEED_CASDOOR_ONLY=1 (make stack-seed)."
+  curl -sf -o /dev/null --max-time 5 "${MASTODON_URL}/health" \
+    || die "Mastodon ${MASTODON_URL} is not answering — bring the social tier up: make stack-up SOCIAL=1 (or tests/stack/up-real.sh, which also runs rails db:prepare). For SSO login only, use SEED_CASDOOR_ONLY=1 (make stack-seed)."
+  SYNAPSE_CTR="$(find_ctr synapse || true)"
+  MASTODON_CTR="$(find_ctr mastodon-web || true)"
+  [ -n "${SYNAPSE_CTR}" ]  || die "no running synapse container found (docker ps) — is the social tier up?"
+  [ -n "${MASTODON_CTR}" ] || die "no running mastodon-web container found (docker ps) — is the social tier up?"
+fi
 
 mkdir -p "${SEED_WORKDIR}"
 
@@ -164,11 +176,47 @@ ensure_roles() { # <base-url> <org>
   done
 }
 
+# A fresh compose Casdoor has NO OAuth2 application, so login-ui's OIDC redirect has
+# nothing to authorize against and user-bff's code->token exchange has no client.
+# Create the app-user-bff confidential client, mirroring the cluster's reconcile_app
+# (specs/cluster/manifests/casdoor/init-job.yaml): authorization_code + refresh_token +
+# password grants, JWT-Custom / RS256 with the roles + permissions token attributes the
+# gateway RBAC reads from the minted JWT (an empty tokenFields set strips roles and
+# breaks authz platform-wide). No `cert` field — Casdoor signs with its built-in cert,
+# same as the cluster path. redirectUri / clientId / secret byte-match login-ui + user-bff.
+ensure_app() { # <base-url> <org>
+  local base="$1" org="$2" app
+  app="$(jq -n \
+    --arg org "${org}" --arg cid "${CASDOOR_APP_CLIENT_ID}" \
+    --arg secret "${CASDOOR_APP_SECRET}" --arg redirect "${CASDOOR_APP_REDIRECT_URI}" \
+    '{owner:"admin", name:$cid, displayName:"snapdragon user-bff", organization:$org,
+      clientId:$cid, clientSecret:$secret, redirectUris:[$redirect],
+      grantTypes:["authorization_code","client_credentials","password","refresh_token"],
+      expireInHours:168, enablePassword:true, enableSignUp:false,
+      tokenFormat:"JWT-Custom", tokenSigningMethod:"RS256",
+      tokenFields:["Id","Name","Email","IsAdmin","Properties.mfa_satisfied","Properties.mfa_satisfied_at"],
+      tokenAttributes:[
+        {name:"roles",       category:"Existing Field", value:"Roles",       type:"Array"},
+        {name:"permissions", category:"Existing Field", value:"Permissions", type:"Array"}
+      ]}')"
+  if curl -s -b "${CJ}" "${base}/api/get-application?id=admin/${CASDOOR_APP_CLIENT_ID}" | jq -e '.data.name // empty | length > 0' >/dev/null; then
+    curl -s -b "${CJ}" "${base}/api/update-application?id=admin/${CASDOOR_APP_CLIENT_ID}" \
+      -H 'content-type: application/json' -d "${app}" >/dev/null
+    log "app ${CASDOOR_APP_CLIENT_ID} updated (redirect ${CASDOOR_APP_REDIRECT_URI})"
+  else
+    curl -s -b "${CJ}" "${base}/api/add-application" -H 'content-type: application/json' -d "${app}" >/dev/null
+    curl -s -b "${CJ}" "${base}/api/get-application?id=admin/${CASDOOR_APP_CLIENT_ID}" | jq -e '.data.name // empty | length > 0' >/dev/null \
+      || die "could not create Casdoor application ${CASDOOR_APP_CLIENT_ID} at ${base}"
+    log "app ${CASDOOR_APP_CLIENT_ID} created (clientId ${CASDOOR_APP_CLIENT_ID}, redirect ${CASDOOR_APP_REDIRECT_URI})"
+  fi
+}
+
 # ══ LEG 1: Casdoor personas (reuses seed-accounts.sh --roles + its apply hook) ══
 log "leg 1: Casdoor personas at ${CASDOOR_URL} (org ${CASDOOR_ORG})"
 casdoor_login "${CASDOOR_URL}"
 ensure_org    "${CASDOOR_URL}" "${CASDOOR_ORG}"
 ensure_roles  "${CASDOOR_URL}" "${CASDOOR_ORG}"
+ensure_app    "${CASDOOR_URL}" "${CASDOOR_ORG}"
 
 # The standard persona set = the base seed-accounts.sh matrix (user/mod/admin/
 # domain-locked/…) PLUS the three the UI suites additionally assume. Same
@@ -231,6 +279,7 @@ if [ -n "${CASDOOR_BRAND_B_URL}" ]; then
   casdoor_login "${CASDOOR_BRAND_B_URL}"
   ensure_org    "${CASDOOR_BRAND_B_URL}" "${CASDOOR_ORG}"
   ensure_roles  "${CASDOOR_BRAND_B_URL}" "${CASDOOR_ORG}"
+  ensure_app    "${CASDOOR_BRAND_B_URL}" "${CASDOOR_ORG}"
   SYSTEMS_ROLE_USERS="e2e-tenant2-user:ROLE_USER:E2E_TENANT2_PASSWORD" \
   SYSTEMS_CASDOOR_URL="${CASDOOR_BRAND_B_URL}" E2E_PASSWORD="${E2E_PASSWORD}" \
     bash "${SEED_ACCOUNTS}" --roles "${SEED_WORKDIR}/roles-render-brandb" >/dev/null
@@ -250,6 +299,11 @@ if [ -n "${CASDOOR_BRAND_B_URL}" ]; then
 else
   MSG="second-tenant persona NOT seeded — the standard compose stack runs a SINGLE Casdoor, so cross-tenant (brand-wall) scenarios are unverifiable here. Set CASDOOR_BRAND_B_URL (e.g. the tests/pentest two-brand profile) to seed e2e-tenant2-user."
   if [ "${SEED_STRICT}" = "1" ]; then die "${MSG}"; else warn "${MSG}"; fi
+fi
+
+if [ "${SEED_CASDOOR_ONLY}" = "1" ]; then
+  log "SEED_CASDOOR_ONLY=1 — Casdoor identity seeded (org + roles + app-user-bff + personas); skipping the Matrix/Mastodon social legs. Real SSO web login is ready."
+  exit 0
 fi
 
 # ══ LEG 2: Matrix — users + public room X + invite-only room Y ═══════════════

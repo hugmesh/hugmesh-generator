@@ -214,6 +214,9 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-federation-api
     environment:
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      # In-DNS JWKS: compose issuer-uri is the browser-facing localhost:8000 (unreachable in-container),
+      # so point key retrieval at the container Casdoor or the resource server 500s every authed call.
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       SPRING_R2DBC_URL: "r2dbc:postgresql://federation-db:5432/federation"
       SPRING_R2DBC_USERNAME: federation
       SPRING_R2DBC_PASSWORD: federation
@@ -250,7 +253,15 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-admin-bff-api
     environment:
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
-      SPRING_PROFILES_ACTIVE: casdoor
+      # In-DNS JWKS: compose issuer-uri is the browser-facing localhost:8000 (unreachable in-container),
+      # so point key retrieval at the container Casdoor or the resource server 500s every authed call.
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      # 'dev' disables auth-core's InternalSurfaceBootGuard (@Profile !dev&!test), which
+      # otherwise refuses to boot the /bff/internal/** surface over plain HTTP (it demands
+      # mTLS in prod). The internal surface is how user-bff's OIDC callback provisions the
+      # account + session + custody. INTERNAL_TOKEN unset -> InternalTokenWebFilter no-ops.
+      SPRING_PROFILES_ACTIVE: ${ADMIN_BFF_PROFILES:-casdoor,dev}
+      SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
       SPRING_R2DBC_URL: "r2dbc:postgresql://admin-bff-db:5432/adminbff"
       SPRING_R2DBC_USERNAME: adminbff
@@ -259,6 +270,16 @@ services:
       SPRING_LIQUIBASE_USER: adminbff
       SPRING_LIQUIBASE_PASSWORD: adminbff
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
+      # OIDC/custody for the gateway's cookie->JWT step (POST /bff/internal/session/exchange):
+      # admin-bff decrypts the custody-stamped Casdoor token and refreshes it, so per-role
+      # gateway RBAC gets the real roles claim. APP_BFF_CUSTODY_KEY MUST be IDENTICAL to
+      # user-bff's (user-bff encrypts, admin-bff decrypts). The four provisioning endpoints
+      # (ensure/sessions/custody-stamp/get-account) don't need these — only the exchange does.
+      APP_BFF_OIDC_ENABLED: "true"
+      APP_BFF_OIDC_ISSUER: ${APP_BFF_OIDC_ISSUER:-http://casdoor:8000}
+      APP_BFF_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
+      APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
+      APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
     depends_on:
       admin-bff-db: { condition: service_healthy }
       route-access-db: { condition: service_healthy }
@@ -282,6 +303,9 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-mod-bff-api
     environment:
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      # In-DNS JWKS: compose issuer-uri is the browser-facing localhost:8000 (unreachable in-container),
+      # so point key retrieval at the container Casdoor or the resource server 500s every authed call.
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       SPRING_PROFILES_ACTIVE: casdoor
       FEDERATION_BASE_URL: "http://snapdragon-federation-api:8080"
     depends_on:
@@ -300,10 +324,29 @@ services:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-user-bff-api
     environment:
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
+      # In-DNS JWKS: compose issuer-uri is the browser-facing localhost:8000 (unreachable in-container),
+      # so point key retrieval at the container Casdoor or the resource server 500s every authed call.
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       SPRING_PROFILES_ACTIVE: casdoor
       FEDERATION_BASE_URL: "http://snapdragon-federation-api:8080"
+      # ── Real OIDC web login: login-ui redirects to Casdoor's hosted form, then POSTs the
+      #    code here (/bff/auth/callback), which exchanges it (PKCE) and provisions the account
+      #    + session via admin-bff's internal surface. clientId/secret/redirect BYTE-MATCH the
+      #    seeded app-user-bff (tests/stack/seed-e2e.sh ensure_app) and login-ui's __SNAP_OIDC_*
+      #    globals. Ships dark upstream (app.bff.oidc.enabled=false); turned ON for the test env. ──
+      APP_BFF_OIDC_ENABLED: "true"
+      APP_BFF_OIDC_ISSUER: ${APP_BFF_OIDC_ISSUER:-http://casdoor:8000}
+      APP_BFF_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
+      APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
+      APP_BFF_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://localhost:8088/login/callback}
+      APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
+      ADMIN_BFF_INTERNAL_BASE_URL: ${ADMIN_BFF_INTERNAL_BASE_URL:-http://snapdragon-admin-bff-api:8080}
+      # plain-HTTP local stack: the bff_ session cookie must not be Secure-only or the browser drops it
+      APP_SESSION_COOKIE_SECURE: "false"
+      SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
     depends_on:
       casdoor: { condition: service_started }
+      snapdragon-admin-bff-api: { condition: service_started }
       snapdragon-federation-api: { condition: service_started }
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
@@ -402,6 +445,18 @@ services:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-login-ui
+    # Runtime OIDC globals the login-ui nginx entrypoint writes into snap-config.js so its
+    # (already-built) Casdoor OIDC+PKCE flow turns ON. ISSUER is the BROWSER-reachable Casdoor
+    # (front-channel authorize); BFF_URL is the front door where login-ui POSTs /bff/auth/callback
+    # and hydrates /bff/session; CLIENT_ID + REDIRECT_URI BYTE-MATCH the seeded app-user-bff
+    # (seed-e2e.sh ensure_app) and user-bff's APP_BFF_OIDC_* — the SSO consistency invariant.
+    environment:
+      SNAP_OIDC_ENABLED: "true"
+      SNAP_OIDC_ISSUER: ${SNAP_OIDC_ISSUER:-http://localhost:8000}
+      SNAP_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
+      SNAP_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://localhost:8088/login/callback}
+      SNAP_BFF_URL: ${SNAP_BFF_URL:-http://localhost:8088}
+      SNAP_CASDOOR_ISSUER: ${SNAP_OIDC_ISSUER:-http://localhost:8000}
 
   snapdragon-mastodon-ui:
     <<: *amd64

@@ -545,6 +545,11 @@ stack-up: stack-clone $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stac
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
 
+stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real SSO login; SOCIAL=1 also seeds Matrix/Mastodon
+	@echo "==> Seeding the running stack (Casdoor$(if $(strip $(SOCIAL)), + social,) tier)"
+	$(if $(strip $(SOCIAL)),,SEED_CASDOOR_ONLY=1 )bash tests/stack/seed-e2e.sh
+	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin / e2e-pass)."
+
 stack-down: ## stop the local stack and drop its volumes
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social down -v
 

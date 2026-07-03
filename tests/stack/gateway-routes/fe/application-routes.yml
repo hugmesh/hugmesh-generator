@@ -41,7 +41,21 @@ spring:
               uri: http://snapdragon-api-docs:80
               predicates:
                 - Path=/api-docs/**
-            # Same-origin BFF: /bff/** -> the admin BFF (route-DB role rules apply).
+            # SSO/login + user surface -> user-bff. MUST precede the /bff/** admin
+            # catch-all (SCG matches in list order): login-ui POSTs the OIDC code to
+            # /bff/auth/callback and hydrates /bff/session here, /bff/login|register are the
+            # provider login surface user-bff now owns, /bff/user/** is the user API.
+            - id: snapdragon-user-bff-api
+              uri: http://snapdragon-user-bff-api:8080
+              predicates:
+                - Path=/bff/auth/**,/bff/login,/bff/register,/bff/session,/bff/session/**,/bff/me,/bff/user/**
+            # Moderator BFF surface -> mod-bff (also precedes the admin catch-all).
+            - id: snapdragon-mod-bff-api
+              uri: http://snapdragon-mod-bff-api:8080
+              predicates:
+                - Path=/bff/mod/**
+            # Same-origin BFF: everything else under /bff/** -> the admin BFF (route-DB role
+            # rules apply). Includes /bff/internal/**, /bff/public/**, and the admin surfaces.
             - id: snapdragon-admin-bff-api
               uri: http://snapdragon-admin-bff-api:8080
               predicates:
