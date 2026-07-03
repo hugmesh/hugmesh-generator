@@ -287,6 +287,11 @@ services:
       APP_BFF_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
       APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
       APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
+      # A3+A5 Casdoor-MFA step-up leg (app.casdoor.mfa.enabled). Platform-wide rollout
+      # (see specs/cluster/manifests/admin-bff-api/deployment.yaml): a fresh bff_session
+      # MFA stamp becomes a co-equal, license-independent step-up satisfier alongside the
+      # existing token-based step-up leg (pure additive OR — the token leg is unchanged).
+      APP_CASDOOR_MFA_ENABLED: ${APP_CASDOOR_MFA_ENABLED:-true}
     depends_on:
       admin-bff-db: { condition: service_healthy }
       route-access-db: { condition: service_healthy }

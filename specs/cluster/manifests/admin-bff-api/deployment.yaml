@@ -216,16 +216,27 @@ spec:
             # PhpbbAdminClient call is audited/stubbed, never hard-fails), so this is
             # safe on the always-deployed admin-bff for non-forum brands too.
             - { name: EXTERNAL_FORUM_ENABLED, value: "true" }
-            # ── MFA TOTP-secret encryption key (app.mfa.factor-key) — SHIPS DARK ─
+            # ── A3+A5 Casdoor-MFA step-up leg (app.casdoor.mfa.enabled) — GO-LIVE ──
+            # Platform-wide rollout: a FRESH bff_session MFA stamp becomes a co-equal,
+            # license-independent step-up satisfier alongside the existing token-based
+            # step-up leg. This is a pure additive OR — every consumer ORs mfaFresh
+            # against the pre-existing token-step-up check, so the token-only leg is
+            # completely unaffected and ordinary (non-step-up) login never touches this
+            # code path. bff_session.mfa_satisfied still defaults false at the schema,
+            # so nothing is retroactively granted; a session only satisfies step-up via
+            # this leg after the user actually completes an MFA stamp. Prerequisite
+            # APP_MFA_FACTOR_KEY (below) is already provisioned by gen-cluster-secrets.
+            - { name: APP_CASDOOR_MFA_ENABLED, value: "true" }
+            # ── MFA TOTP-secret encryption key (app.mfa.factor-key) ────────────
             # APP_MFA_FACTOR_KEY is the 256-bit AES-GCM data key MfaSecretCipher uses
             # to encrypt each enrolled TOTP secret at rest (and seed the recovery-code
             # keyed hash). Sourced from the ESO Secret admin-bff-mfa (key factor-key),
             # which ESO materializes from Vault secret/<brand>/admin-bff-mfa.factor_key
-            # (gen-cluster-secrets mints `openssl rand -base64 32`). DARK: the whole MFA
-            # surface stays off behind app.casdoor.mfa.enabled (default false); with no
-            # key the cipher is INERT and TOTP enroll refuses (no plaintext fallback).
-            # Providing the key only PROVISIONS it — it does NOT turn MFA on. optional:
-            # true so the pod still starts if the Secret is absent (cipher stays inert).
+            # (gen-cluster-secrets mints `openssl rand -base64 32`). Now that
+            # app.casdoor.mfa.enabled is "true" above, this key is load-bearing: without
+            # it the cipher is INERT and TOTP enroll refuses (no plaintext fallback).
+            # optional: true so the pod still starts if the Secret is somehow absent
+            # (cipher stays inert and TOTP enroll refuses, but the pod itself boots).
             - name: APP_MFA_FACTOR_KEY
               valueFrom:
                 secretKeyRef:
