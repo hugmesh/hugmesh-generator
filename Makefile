@@ -539,6 +539,21 @@ stack-clone: ## clone/update all snapdragon repos into ./.stack-src (idempotent)
 # Guarantee tests/stack/.mastodon.env exists with non-empty dev secrets (only the
 # SOCIAL=1 path needs it). For a fully prepped social tier (Synapse config +
 # Mastodon db:prepare) use tests/stack/up-real.sh instead — see docs/LOCAL-STACK.md.
+#
+# ALTERNATE_DOMAINS=mastodon-web:3000 is REQUIRED, not cosmetic: Mastodon's
+# config/initializers/1_hosts.rb builds Rails' config.hosts from LOCAL_DOMAIN +
+# WEB_DOMAIN + ALTERNATE_DOMAINS, and ActionDispatch::HostAuthorization 403s any
+# request whose Host header isn't in that list. Spring Cloud Gateway's default
+# HTTP client REWRITES the Host header to the proxied target's authority
+# (mastodon-web:3000 — the be-gateway route to mastodon-web in
+# gateway-routes/be/application-routes.yml), not the original client Host. Without
+# this, LOCAL_DOMAIN=localhost alone never matches "mastodon-web:3000", so Rails
+# blocks every be-gateway-proxied request with "Blocked hosts: mastodon-web:3000"
+# — a 403 for EVERY role (mod/admin/user alike), independent of any Casdoor
+# role/route-access decision. Reproduced + fixed live against the running compose
+# stack (docker logs snapdragon-local-mastodon-web-1 showed the exact
+# HostAuthorization block on every /api/v1/**, /api/v2/**, /oauth/** call proxied
+# through the be-gateway).
 stack-mastodon-env:
 	@if [ ! -f tests/stack/.mastodon.env ]; then \
 	  echo "==> Generating dev tests/stack/.mastodon.env (SOCIAL tier)"; \
@@ -547,6 +562,7 @@ stack-mastodon-env:
 	    echo "OTP_SECRET=$$(openssl rand -hex 64)"; \
 	    echo "DB_HOST=mastodon-db"; echo "DB_USER=mastodon"; echo "DB_NAME=mastodon"; echo "DB_PASS=mastodon"; \
 	    echo "REDIS_HOST=mastodon-redis"; \
+	    echo "ALTERNATE_DOMAINS=mastodon-web:3000"; \
 	  } > tests/stack/.mastodon.env; \
 	fi
 

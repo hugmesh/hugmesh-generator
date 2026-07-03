@@ -405,8 +405,15 @@ services:
       GM_SYNC_GAMES_ROLE: admin
     depends_on:
       casdoor: { condition: service_started }
+    # snapdragon-actions' Dockerfile EXPOSEs 8090 (unlike every other Spring
+    # service here, which defaults to 8080) — a healthcheck against :8080 always
+    # fails (connection refused), which is why this container showed "unhealthy"
+    # forever even though the app boots clean (verified live: its own boot log
+    # says "Netty started on port 8090"). Keep in sync with the be-gateway's
+    # snapdragon-api route in gateway-routes/be/application-routes.yml, which had
+    # the identical :8080 mismatch.
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8090/actuator/health/readiness || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 30

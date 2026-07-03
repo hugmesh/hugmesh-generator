@@ -31,7 +31,18 @@ spring:
               predicates:
                 - Path=/api/federation/**
             # --- Snapdragon Spring APIs (snapdragon-actions) ---
+            # snapdragon-actions' Dockerfile EXPOSEs 8090 (it does not use the
+            # platform-standard 8080) — a route pointed at :8080 gets a bare TCP
+            # connection-refused (verified live: `docker logs
+            # snapdragon-local-snapdragon-api-1` shows "Netty started on port
+            # 8090", while the be-gateway logged "Connection refused:
+            # snapdragon-api/<ip>:8080" for every /api/** request that fell
+            # through to this catch-all, e.g. an otherwise-ALLOWED
+            # /api/admin/route-access for a ROLE_ADMIN principal 500'd here
+            # instead of reaching the backend). Keep in sync with the
+            # snapdragon-api healthcheck in compose.local.yaml, which has the
+            # same port mismatch.
             - id: snapdragon-api
-              uri: http://snapdragon-api:8080
+              uri: http://snapdragon-api:8090
               predicates:
                 - Path=/api/**
