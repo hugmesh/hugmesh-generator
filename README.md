@@ -96,7 +96,11 @@ _As of 2026-06-24. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   `snapdragon_domain_reconcile` SELinux module, and `provision_domain_registry()`
   in the KEYS engine.
 - **✅ Optional services (add/remove)** — akkoma / tuwunel / phpBB / games /
-  owncast / LocalTube / **edge-AI** (GPU inference, OpenAI model API to the mesh —
+  owncast / LocalTube / **character-studio** (VN character-creator + chat remote,
+  default-off; the federation-module DB registration is a documented cross-repo
+  TODO — see
+  [`specs/cluster/manifests/character-studio/FEDERATION-REGISTRATION-TODO.md`](specs/cluster/manifests/character-studio/FEDERATION-REGISTRATION-TODO.md))
+  / **edge-AI** (GPU inference, OpenAI model API to the mesh —
   [docs/EDGE-AI.md](docs/EDGE-AI.md)); the UI greys out when a service is absent, games defaults
   to `games.<domain>`. Build-time prune ships; the **🚧 live ApplicationSet
   cut-over is pending**. A/V is currently **LAN-only** (no TURN/SFU yet).
@@ -147,9 +151,11 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   (`brands/domains.conf`), per-domain namespace + mTLS isolation, and a real
   code-enforced **superadmin → admin → mod → user** role cascade enforced at the
   gateway. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/SECURITY.md`](docs/SECURITY.md).
-- **✅ Optional services (add/remove)** — akkoma / tuwunel / phpBB / games; the UI
-  greys out when a service is absent, games defaults to `games.<domain>`. Build-time
-  prune ships; the **🚧 live ApplicationSet cut-over is pending**. See
+- **✅ Optional services (add/remove)** — akkoma / tuwunel / phpBB / games /
+  owncast / tube / character-studio (+ egress-vpn / tor / workloadConsole /
+  anubis / coturn); the UI greys out when a service is absent, games defaults to
+  `games.<domain>`. Build-time prune ships; the **🚧 live ApplicationSet
+  cut-over is pending**. See
   [`docs/OPTIONAL-SERVICES.md`](docs/OPTIONAL-SERVICES.md).
 - **✅ Egress-VPN** — admins drop provider WireGuard/OpenVPN `.conf` for outgoing
   public egress, split-tunnel keeps the tailnet direct. [`docs/EGRESS-VPN.md`](docs/EGRESS-VPN.md).

@@ -34,19 +34,28 @@ The doc set for the image/infra layer. State key used throughout:
 
 ## Optional services & platform features
 
-- [`OPTIONAL-SERVICES.md`](OPTIONAL-SERVICES.md) — akkoma/tuwunel/phpBB/games add/remove framework (✅ build-time, 🚧 live cut-over).
+- [`OPTIONAL-SERVICES.md`](OPTIONAL-SERVICES.md) — akkoma/tuwunel/phpBB/games/owncast/tube/character-studio add/remove framework (✅ build-time, 🚧 live cut-over).
 - [`EGRESS-VPN.md`](EGRESS-VPN.md) — outgoing public egress via operator `.conf`.
 - [`NODE-STORAGE.md`](NODE-STORAGE.md) — attach + register node-pinned storage.
 - [`GAMES-APPSTORE.md`](GAMES-APPSTORE.md) — per-domain FOSS game-server catalog + instance lifecycle.
+- [`EDGE-AI.md`](EDGE-AI.md) — GPU inference node serving an OpenAI-compatible model API to the mesh (DEFAULT-OFF, GPU-gated).
+- [`COTURN.md`](COTURN.md) — TURN/STUN relay for Matrix (tuwunel) audio/video (DEFAULT-OFF, runtime-only slug).
+- [`TOR-HIDDEN-SERVICE.md`](TOR-HIDDEN-SERVICE.md) — Tor v3 hidden-service (onion) gateway exposure (DEFAULT-OFF).
+- [`CLOUD-BACKUPS.md`](CLOUD-BACKUPS.md) — generator-side leg of per-domain + total-cloud encrypted backups.
 
 ## Client images
 
 - [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) — per-user device images (FD-04 ✅ shipped; FD-06/07/08 + desktop-app governance 🔭 deferred).
+- [`STANDALONE-DESKTOP.md`](STANDALONE-DESKTOP.md) — hardened standalone NVIDIA desktop images (not a cluster node).
 
 ## Testing
 
 - [`TEST-ARCHITECTURE.md`](TEST-ARCHITECTURE.md) — test layering.
 - [`FINAL-E2E-SWEEP-MATRIX.md`](FINAL-E2E-SWEEP-MATRIX.md) — end-to-end sweep matrix.
+
+## Specifications
+
+- [`selinux-module-loading.md`](selinux-module-loading.md) — SELinux node-policy module loading fleet build-script wiring spec (specification only; changes nothing by itself).
 
 ## Historical
 

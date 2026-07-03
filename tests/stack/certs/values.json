@@ -1,0 +1,9 @@
+{
+  "clusterDomain": "snapdragon.systems",
+  "casdoorIssuer": "https://id.snapdragon.systems",
+  "matrixUrl": "https://matrix.snapdragon.systems",
+  "mastodonUrl": "https://mastodon.snapdragon.systems",
+  "uptraceUrl": "https://uptrace.snapdragon.systems",
+  "sessionSecret": "ab2030771225036fc85e50b53c72b76450daa1aec363b0af",
+  "generatedAt": "2026-07-02T05:43:34Z"
+}
