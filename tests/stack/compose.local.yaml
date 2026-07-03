@@ -185,6 +185,13 @@ services:
       CASSANDRA_KEYSPACE: snapdragon_gateway
       CASSANDRA_LOCAL_DC: dc1
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+      # BFF session introspection back-channel (BffSessionAuthFilter): the gateway swaps the
+      # opaque bff_ cookie for the caller's identity/roles against admin-bff. The property
+      # app.bff-session.bff-base-url defaults to the cluster-DNS 'http://admin-bff:8080', which
+      # does NOT resolve in compose -> every authenticated /bff/** returns 503
+      # session_backend_unavailable ("Failed to resolve 'admin-bff'"). Point it at the compose
+      # admin-bff service so logged-in sessions (GET /bff/session, /bff/me, role-gated routes) work.
+      APP_BFF_SESSION_BFF_BASE_URL: ${APP_BFF_SESSION_BFF_BASE_URL:-http://snapdragon-admin-bff-api:8080}
     volumes:
       - ./gateway-routes/fe:/config:ro
     ports:
@@ -364,6 +371,15 @@ services:
       APP_BFF_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://snapdragon-user-bff-api:8080/bff/auth/callback}
       APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
       ADMIN_BFF_INTERNAL_BASE_URL: ${ADMIN_BFF_INTERNAL_BASE_URL:-http://snapdragon-admin-bff-api:8080}
+      # Homeserver-token custody for the hsproxy (/bff/user/{matrix,mastodon}/**): app.hs-token.key
+      # encrypts the brokered Matrix/Mastodon access tokens AT REST. Without a key the HsTokenCipher
+      # is INERT and the hsproxy 503s. Dev key (compose dev posture; any passphrase is folded to a
+      # 256-bit AES key via SHA-256). The upstream matrix/mastodon proxy URLs default to cluster DNS
+      # (tuwunel-proxy / akkoma-proxy) which are absent in compose — point them at the compose
+      # Synapse + Mastodon so the proxied CS-API / Mastodon calls reach a live homeserver.
+      APP_HS_TOKEN_KEY: ${APP_HS_TOKEN_KEY:-dev-hs-token-key-do-not-use-in-prod}
+      APP_HS_TOKEN_MATRIX_URL: ${APP_HS_TOKEN_MATRIX_URL:-http://synapse:8008}
+      APP_HS_TOKEN_MASTODON_URL: ${APP_HS_TOKEN_MASTODON_URL:-http://mastodon-web:3000}
       # plain-HTTP local stack: the bff_ session cookie must not be Secure-only or the browser drops it
       APP_SESSION_COOKIE_SECURE: "false"
       SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
