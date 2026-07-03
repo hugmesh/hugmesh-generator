@@ -283,6 +283,34 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
 
   -- fe-gateway (snapdragon.systems -> Angular host + MFEs + same-origin /bff)
   ('snapdragon-fe-gateway',  '/',                     'PUBLIC', true),  -- public front page
+  -- The rest of the anonymous SPA shell the '/' row already implies: the
+  -- document, the root-level hashed bundles the Angular browser build serves
+  -- from the systems-web webroot (Ant '*' does not cross '/', so only webroot
+  -- files match), the module-federation manifests, favicon and static assets.
+  -- Mirrors the SecurityConfig FE_SHELL_PUBLIC_GET_PATHS floor (GET-only, fe
+  -- tier only) so the coarse layer and the route-access layer agree the
+  -- anonymous front page is servable. PARITY with the gateway CanonicalSeed
+  -- fe() (snapdragon-gateway PR #72) — these rows were added there and were
+  -- missing here (dual-write seed drift), this closes that gap.
+  ('snapdragon-fe-gateway',  '/index.html',           'PUBLIC', true),  -- public (anon SPA shell doc)
+  ('snapdragon-fe-gateway',  '/favicon.ico',          'PUBLIC', true),  -- public (anon SPA shell)
+  ('snapdragon-fe-gateway',  '/importmap.json',       'PUBLIC', true),  -- public (module-federation import map)
+  ('snapdragon-fe-gateway',  '/remoteEntry.json',     'PUBLIC', true),  -- public (module-federation remote entry)
+  ('snapdragon-fe-gateway',  '/*.js',                 'PUBLIC', true),  -- public (webroot hashed JS bundles)
+  ('snapdragon-fe-gateway',  '/*.css',                'PUBLIC', true),  -- public (webroot hashed CSS bundles)
+  ('snapdragon-fe-gateway',  '/assets/**',            'PUBLIC', true),  -- public (static assets)
+  -- Public federation reads (federation-api permitAll's both at the app layer;
+  -- the cluster fe spec's vanity-subdomain route documents the gateway-side
+  -- allowance as the deferred missing piece): the vanity profile resolve
+  -- (path + Host-derived collection resolve) and the install-state
+  -- capabilities projection a LOGGED-OUT host shell reads to grey-out
+  -- optional services. Scoped to the exact public reads (NOT
+  -- /api/federation/**) — the manifest / module-registry / username surfaces
+  -- stay gated by the ROLE_USER floor row below. PARITY with the gateway
+  -- CanonicalSeed fe() (snapdragon-gateway PR #72).
+  ('snapdragon-fe-gateway',  '/api/federation/vanity',       'PUBLIC', true),  -- public (vanity profile/collection resolve)
+  ('snapdragon-fe-gateway',  '/api/federation/vanity/**',    'PUBLIC', true),  -- public (vanity profile/collection resolve)
+  ('snapdragon-fe-gateway',  '/api/federation/capabilities', 'PUBLIC', true),  -- public (install-state capabilities projection)
   ('snapdragon-fe-gateway',  '/social/matrix/**',     'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/social/mastodon/**',   'ROLE_USER',      true),
   -- phpBB forum micro-frontend UI (snapdragon-forum-ui at /social/forum/**),

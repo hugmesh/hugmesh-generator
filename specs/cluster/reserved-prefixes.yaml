@@ -70,9 +70,22 @@ metadata:
   # apps/20-gateway-be.yaml route[edge-ai-analysis].path, also seeded in
   # route-access schema.sql as url_pattern '/v1/analyze/**'). The app-repo
   # ReservedNames copies MUST add `character-studio` + `v1` too to stay in sync.
-  revision: "4"
+  # revision 4 -> 5: parity fix for the gateway CanonicalSeed fe() anonymous-SPA-
+  # shell + public-federation-reads rows added by snapdragon-gateway PR #72 (the
+  # same rows were dual-write-added to route-access schema.sql, see
+  # manifests/route-access/initdb/20-schema.sql fe-gateway section). Most of
+  # those new url_patterns first-segment onto already-reserved labels (`assets`,
+  # `api`) or an empty segment (`/*.js`, `/*.css` start with the glob, so they
+  # contribute no literal first segment) — but FOUR are DEDICATED first-segment
+  # route prefixes the route-consistency check does not yet cover: `index.html`,
+  # `favicon.ico`, `importmap.json`, `remoteEntry.json` (the exact webroot
+  # filenames — distinct literal first-segments from the already-reserved bare
+  # `favicon` label, since the validator matches literal path segments, not
+  # prefixes of them). The app-repo ReservedNames copies should add these four
+  # too to stay in sync.
+  revision: "5"
 spec:
-  # The canonical reserved set (72 labels). KEEP SORTED BY CATEGORY (comments) but
+  # The canonical reserved set (76 labels). KEEP SORTED BY CATEGORY (comments) but
   # the validator treats it as an unordered SET. Do not duplicate; the validator
   # also asserts there are no duplicates.
   #
@@ -158,6 +171,16 @@ spec:
     - status
     - support
     - help
+    # --- DEPLOYED route prefixes added in revision 5 (gateway PR #72 parity) ---
+    # The exact webroot filenames the fe-gateway route-access seed's anonymous
+    # SPA-shell rows now reference as literal first-segment url_patterns
+    # (manifests/route-access/initdb/20-schema.sql) — DISTINCT literal segments
+    # from the already-reserved bare `favicon` label above, since the validator
+    # matches literal path first-segments, not prefixes.
+    - index.html
+    - favicon.ico
+    - importmap.json
+    - remoteEntry.json
     # --- infra / ops names (never a user) ---
     - pki
     - vault
