@@ -256,7 +256,7 @@ JETSON_PASS := JETSON_ROLE='$(JETSON_ROLE)' JETSON_BOARD='$(JETSON_BOARD)' \
 .PHONY: help menu clean build-all build-everything matrix-check pentest pentest-seed rebuild \
         rpi x86 omnibus frite frite-live frite-installer jetson \
         flash qemu qemu-rpi qemu-x86 \
-        playwright-deps e2e ci ci-quick docker-image ensure-image \
+        playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-build stack-up stack-down stack-logs stack-ps
 
@@ -459,6 +459,16 @@ matrix-check: ## dry-run validate the whole build matrix via --print-plan (tests
 ## ── docker (cross-platform builder; Phase 5) ──────────────────────────
 docker-image: ## build the self-contained Gentoo builder image (LONG first time: cross-toolchain)
 	docker build -f Dockerfile.build -t $(IMAGE) .
+
+# admin-bff-api's image-gen k8s Job worker (docker/Dockerfile.image-gen +
+# docker/build-image.sh). Layers on top of $(IMAGE) (run `make docker-image`
+# first) since the Job has no bind-mount of this repo — the checkout has to be
+# baked in. IMAGE_GEN_TAG defaults to the registry ref the Job manifest
+# expects; an operator still has to `docker push` it and flip
+# admin-bff-api's imagegen.launch.enabled for any of this to go live.
+IMAGE_GEN_TAG ?= registry.snapdragon.systems/snapdragon/image-gen:latest
+image-gen-docker-image: ## build the admin-bff-api image-gen Job worker (needs $(IMAGE) built first)
+	docker build -f docker/Dockerfile.image-gen -t $(IMAGE_GEN_TAG) .
 
 ## ── flash / emulate / test ────────────────────────────────────────────
 # These run HOST-side. flash writes /dev/sdX (inherently privileged -> SUDO).
