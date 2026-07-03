@@ -61,7 +61,7 @@ Vault-managed mTLS keystore:
 | `casdoor` | per-app SA | `s0:c21` | (IdP) | (non-Java: PEM, no JKS) |
 | `casdoor-pg` | per-app SA | `s0:c14` | (DB) | — |
 | `signup-gate` | per-app SA | `s0:c36` | per-app svc user | — |
-| `media-poisoner` | per-app SA | `s0:c18` | — | — |
+| `media-poisoner` | per-app SA | `s0:c18` | — | (non-Java: PEM, no JKS) |
 | `egress-proxy` | per-app SA | `s0:c37` | — | — |
 | `binhost` | per-app SA | `s0:c60` | — | — |
 | `vault` | per-app SA | `s0:c70` | — | — |

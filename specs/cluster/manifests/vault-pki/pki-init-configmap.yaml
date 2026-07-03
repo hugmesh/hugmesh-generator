@@ -99,6 +99,10 @@ data:
     #    is only mounted on disk today (Deployment volume) — Postgres is NOT started
     #    with ssl=on yet. Names mirror <db>.<ns>.svc.cluster.local; allowed_domains
     #    (svc.cluster.local) covers them. See docs/POSTGRES-HARDENING.md:138-145.
+    #    media-poisoner = the media-poisoner worker's OWN in-process mTLS identity
+    #    (manifests/media-poisoner; app/serve.py terminates TLS itself, no sidecar).
+    #    server_flag+client_flag so the same cert can serve AND (future) present a
+    #    client identity; the worker enforces ssl.CERT_REQUIRED against ca.crt.
     for app in snapdragon-pki-gateway snapdragon-be-gateway snapdragon-fe-gateway \
                snapdragon-superadmin-gateway \
                snapdragon-api snapdragon-admin-bff-api \
@@ -108,7 +112,7 @@ data:
                snapdragon-federation-api \
                route-access-db admin-bff-db mod-bff-db user-bff-db \
                federation-db forum-bff-db wiki-bff-db \
-               akkoma-proxy tuwunel-proxy; do
+               akkoma-proxy tuwunel-proxy media-poisoner; do
       echo "==> role ${PKI}/roles/${app}"
       vault write "${PKI}/roles/${app}" \
         allowed_domains="${app},${app}.svc.cluster.local,svc.cluster.local,${DOMAIN}" \

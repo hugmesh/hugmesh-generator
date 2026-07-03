@@ -22,6 +22,11 @@ resources:
   # slug is deselected the build prunes BOTH its app(s) AND its line here.
   - akkoma-externalsecrets.yaml    # akkoma-proxy-mtls + akkoma-admin
   - tuwunel-externalsecrets.yaml   # tuwunel-proxy-mtls + tuwunel-admin
+  # media-poisoner worker mTLS server+client-verify cert (media-poisoner-mtls).
+  # SAME Vault-PKI -> ESO -> kubernetes.io/tls shape as the homeserver proxy
+  # certs above, but mounted straight into the worker container itself (no
+  # sidecar) — see manifests/media-poisoner/deployment.yaml.
+  - media-poisoner-externalsecrets.yaml   # media-poisoner-mtls
   # coturn TURN/STUN long-term-credential SHARED SECRET (key `secret`), ESO/Vault
   # only (secret/snapdragon/coturn-shared-secret) — NEVER inline. Materializes only
   # once that Vault path is populated; coturn is DEFAULT-OFF so a default build never
