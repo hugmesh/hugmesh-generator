@@ -74,6 +74,6 @@ spring:
                 - StripPrefix=1
             # …then the Angular host catches everything else.
             - id: frontend-host
-              uri: http://snapdragon-systems-web:80
+              uri: http://snapdragon-systems-web:8080
               predicates:
                 - Path=/**
