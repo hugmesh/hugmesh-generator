@@ -206,9 +206,10 @@ Casdoor apply hook — the same machinery the cluster/pentest seeds use):
 3. **Matrix (Synapse)**: users `e2e-mod` + `e2e-user`; **public room X**
    (`#e2e-public-x:localhost`) and **invite-only room Y** (`#e2e-invite-y:localhost`,
    `e2e-user` invited; verified `join_rule=invite`).
-4. **Mastodon**: accounts `e2e-usera` + `e2e-userb`; follower relationship
-   **`e2e-userb` → `e2e-usera`**; **one pending moderation-queue item** (an
-   unresolved report of `e2e-usera` filed by `e2e-userb`).
+4. **Mastodon**: accounts `e2e_usera` + `e2e_userb` (underscore — Mastodon's
+   username validator rejects hyphens); follower relationship
+   **`e2e_userb` → `e2e_usera`**; **one pending moderation-queue item** (an
+   unresolved report of `e2e_usera` filed by `e2e_userb`).
 
 The script is **idempotent** (probe-before-create everywhere; safe to re-run)
 and **fail-honest**: every unmet dependency dies with a message naming it (which

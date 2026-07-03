@@ -23,9 +23,11 @@
 #   2. MATRIX (Synapse) — users e2e-user + e2e-mod; PUBLIC room X
 #      (#e2e-public-x:<server>) and INVITE-ONLY room Y (#e2e-invite-y:<server>,
 #      created by e2e-mod, e2e-user invited; e2e-user joined to X).
-#   3. MASTODON — accounts e2e-usera + e2e-userb; follower relationship
-#      e2e-userb -> e2e-usera; ONE pending moderation-queue item (an unresolved
-#      report of e2e-usera filed by e2e-userb).
+#   3. MASTODON — accounts e2e_usera + e2e_userb (underscore, not hyphen: Mastodon's
+#      username validator only accepts [a-z0-9_]+, so the hyphenated e2e- prefix used
+#      by every OTHER persona in this script cannot be reused here); follower
+#      relationship e2e_userb -> e2e_usera; ONE pending moderation-queue item (an
+#      unresolved report of e2e_usera filed by e2e_userb).
 #
 # IDEMPOTENT: every step probes before it creates (add-user skipped when
 # present, room aliases resolved before createRoom, tootctl "taken" tolerated,
@@ -383,28 +385,32 @@ log "leg 3: Mastodon accounts + follow + pending report at ${MASTODON_URL}"
 
 mastodon_account() { # <user>
   local out
+  # --email domain MUST be in this container's EMAIL_DOMAIN_ALLOWLIST
+  # (tests/stack/.mastodon.env: EMAIL_DOMAIN_ALLOWLIST=e2e.local) — any other
+  # domain (e.g. the snapdragon.test this used to hardcode) is rejected outright
+  # with a generic "email unreachable" failure, regardless of MX reachability.
   out="$(docker exec "${MASTODON_CTR}" bin/tootctl accounts create "$1" \
-          --email "$1@snapdragon.test" --confirmed --approve 2>&1)" \
+          --email "$1@e2e.local" --confirmed --approve 2>&1)" \
     || { echo "${out}" | grep -qi "taken\|exists" \
            || die "could not create Mastodon account $1: ${out}"; }
   log "mastodon account $1 present"
 }
-mastodon_account e2e-usera
-mastodon_account e2e-userb
+mastodon_account e2e_usera
+mastodon_account e2e_userb
 
 # Follow + report via rails runner INSIDE the container (tootctl has no follow/
 # report verb; the runner aborts non-zero on any missing precondition — honest).
 docker exec -i "${MASTODON_CTR}" bundle exec rails runner - <<'RUBY' || die "Mastodon follow/report seed failed (see runner output above)"
-a = Account.find_local("e2e-usera")
-b = Account.find_local("e2e-userb")
-abort("SEED-DEP: e2e-usera/e2e-userb missing (tootctl create failed earlier?)") unless a && b
+a = Account.find_local("e2e_usera")
+b = Account.find_local("e2e_userb")
+abort("SEED-DEP: e2e_usera/e2e_userb missing (tootctl create failed earlier?)") unless a && b
 
 if b.following?(a)
-  puts "[seed-e2e] follow e2e-userb -> e2e-usera exists"
+  puts "[seed-e2e] follow e2e_userb -> e2e_usera exists"
 else
   FollowService.new.call(b, a)
   abort("SEED-DEP: follow did not take") unless b.reload.following?(a)
-  puts "[seed-e2e] follow e2e-userb -> e2e-usera created"
+  puts "[seed-e2e] follow e2e_userb -> e2e_usera created"
 end
 
 if Report.unresolved.where(account: b, target_account: a).exists?
