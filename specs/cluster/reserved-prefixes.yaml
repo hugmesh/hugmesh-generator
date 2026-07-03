@@ -83,9 +83,15 @@ metadata:
   # `favicon` label, since the validator matches literal path segments, not
   # prefixes of them). The app-repo ReservedNames copies should add these four
   # too to stay in sync.
-  revision: "5"
+  # revision 5 -> 6: route-consistency check flags `ai` (host `ai.snapdragon.systems`,
+  # apps/20-gateway-be.yaml route[edge-ai].host + route[edge-ai-analysis].host — the
+  # edge-AI inference tier, model API + `/v1/analyze/**` analysis API) as a DEPLOYED
+  # publicly-routable host the YAML was missing, introduced by PR #189 (commit
+  # 25f6b473) and undetected until this pass. The app-repo ReservedNames copies
+  # should add `ai` too to stay in sync.
+  revision: "6"
 spec:
-  # The canonical reserved set (76 labels). KEEP SORTED BY CATEGORY (comments) but
+  # The canonical reserved set (77 labels). KEEP SORTED BY CATEGORY (comments) but
   # the validator treats it as an unordered SET. Do not duplicate; the validator
   # also asserts there are no duplicates.
   #
@@ -129,6 +135,14 @@ spec:
     - _matrix
     - matrix
     - mastodon
+    # `ai`: the edge-AI inference tier is served on its own host
+    # `ai.snapdragon.systems` (apps/20-gateway-be.yaml route[edge-ai].host +
+    # route[edge-ai-analysis].host — the raw model API catchall plus the more
+    # specific `/v1/analyze/**` analysis API) — a DEDICATED reserved host, so a
+    # vanity `ai` handle would shadow it. Added by the route-consistency check
+    # (stage 3); PR #189 (commit 25f6b473) introduced the host without reserving
+    # the label. The app-repo ReservedNames copies MUST add `ai` too.
+    - ai
     # `_synapse` + `media`: PUBLICLY-ROUTABLE homeserver client surfaces deployed by
     # the route-access seed (manifests/route-access/initdb/20-schema.sql) on the
     # be-gateway — `/_synapse/**` (Matrix Synapse-compat, host-scoped on the matrix
