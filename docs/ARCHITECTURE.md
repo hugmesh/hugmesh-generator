@@ -13,7 +13,7 @@ those gateways (configured later, out of scope here).
 | `backend` | `build-rpi5-stage4.sh --role backend` | aarch64 (RPi 5) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs, databases, `snapdragon-be-gateway` |
 | `frontend` | `build-rpi5-stage4.sh --role frontend` | aarch64 (RPi 5) | `snapdragon.systems` Angular host federating `snapdragon-matrix-ui` + `snapdragon-mastodon-ui` + `snapdragon-wiki-ui` + login/admin/mod/user/forum remotes, `snapdragon-fe-gateway` |
 | `host` | `build-x86-host-stage4.sh` | x86_64 (desktop/server) | GPU worker: ArgoCD, GitLab/Runner/binhost (devops), `snapdragon.games`, owncast + tube (GPU-dependent video), heavy datastores (Kafka/ClickHouse/Uptrace), local-path/node-storage default (Mesa/Vulkan via `/dev/dri`) |
-| `edge_ai` | `build-x86-host-stage4.sh --role edge_ai` | x86_64 / Jetson Orin Nano (arm64) | GPU **inference** node: Ollama serving an OpenAI-compatible model API (`/v1`) to the mesh over k8s (ClusterIP) + tailnet (`ai.<domain>` gateway route); NVIDIA proprietary + CUDA + `nvidia-device-plugin` (which also makes the GPU schedulable for owncast/coturn/tube voice+video). Model library is the `edge-ai-models` ConfigMap. See [EDGE-AI.md](EDGE-AI.md) |
+| `edge_ai` | `build-x86-host-stage4.sh --role edge_ai` (x86_64) **/** `build-jetson-stage4.sh --role edge_ai` (Jetson Orin Nano, arm64 crossdev — the x86 builder is amd64-only and cannot produce a Jetson image) | x86_64 / Jetson Orin Nano (arm64) | GPU **inference** node: Ollama serving an OpenAI-compatible model API (`/v1`) to the mesh over k8s (ClusterIP) + tailnet (`ai.<domain>` gateway route); NVIDIA proprietary + CUDA + `nvidia-device-plugin` (which also makes the GPU schedulable for owncast/coturn/tube voice+video). Model library is the `edge-ai-models` ConfigMap. See [EDGE-AI.md](EDGE-AI.md) |
 
 All nodes are hardened Gentoo, join one Kubernetes cluster, sit on one headscale
 mesh, and are provisioned at first boot from a USB **KEYS** stick (see
@@ -27,7 +27,6 @@ flowchart TD
     CF["Cloudflare edge<br/>snapdragon.systems / snapdragon.games"]
     CF --> FEGW["snapdragon-fe-gateway<br/>(snapdragon.systems)"]
     CF --> BEGW["snapdragon-be-gateway<br/>(api / matrix / mastodon .*)"]
-    CF --> PKIGW["snapdragon-pki-gateway<br/>(id.snapdragon.systems)"]
 
     subgraph FE["snapdragon-frontend (frontend Pis)"]
         HOST["snapdragon.systems Angular host shell"]
@@ -52,6 +51,11 @@ flowchart TD
         HS["headscale (mesh control)"]
     end
 
+    subgraph INFER["snapdragon-inference (edge_ai GPU node — x86_64 or Jetson)"]
+        EDGEAI["edge-ai (Ollama /v1)"]
+        EDGEAIAN["edge-ai-analysis"]
+    end
+
     subgraph X86["x86_64 GPU worker"]
         ARGO["ArgoCD"]
         DEVOPS["GitLab / Runner / binhost (devops)"]
@@ -63,8 +67,10 @@ flowchart TD
 
     FEGW --> FE
     BEGW --> BE
-    PKIGW --> PKI
     BE -. "games ns + argocd ns scheduled here" .-> X86
+    BEGW -. "ai.snapdragon.systems (tailnet-only, not on the public CF fan-out)" .-> INFER
+    BEGW -. "headscale-forward ONLY (scale.snapdragon.systems) — pki is NOT internet-facing" .-> PKIGW["snapdragon-pki-gateway<br/>(internal ingress on the pki node only)"]
+    PKIGW --> PKI
 
     subgraph ROADMAP["Roadmap / in-flight — NOT all shipped"]
         WC["Workload Console (admin-bff module, ships dark)"]

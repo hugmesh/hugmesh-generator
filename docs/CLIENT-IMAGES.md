@@ -1,6 +1,7 @@
 # Per-user client device images (FD-04 … FD-09)
 
-Status: **FD-04 shipped; later increments deferred.** This document is the staged
+Status: **FD-04 shipped; desktop app governance implemented (ships dark); other
+later increments deferred.** This document is the staged
 implementation plan for the per-user *client* device images, distinct from the
 five Kubernetes **node** roles (`pki / be / fe / be+gpu / omnibus`). A *client* is
 a **person's device** — a desktop that joins the Tailscale mesh and runs the
@@ -19,9 +20,10 @@ platform UI — not a cluster node.
   (`tests/qemu/verify-client.sh`).
 - **🔭 deferred / roadmap:** FD-07 (LUKS2-decrypt == Casdoor), FD-06 (VPN-lock /
   expiry), FD-08 (delegated ArgoCD pipeline), egress-VPN net atoms baking into the
-  x86 client, and **desktop app governance** (per-license SSO-enforced sudo +
-  admin-curated Plasma Discover store + user install-requests + admin
-  remote-install over the device-SSH-license).
+  x86 client.
+- **✅ implemented, ships dark:** **desktop app governance** (per-license
+  SSO-enforced sudo + admin-curated Plasma Discover store + user install-requests
+  + admin remote-install over the device-SSH-license) — see Increment 7 below.
 
 > **✅ All channels expose the client roles + the full option set.** The
 > `laptop` / `chromebook` / `desktop` roles build identically from the CLI, the
@@ -129,13 +131,21 @@ the native amd64 chroot build with grub-EFI.
   domain-scoped user-device request; the pipeline **executes** the privileged
   stage4 (admin never gets privileged build access or core secrets; ADR-12/ADR-24).
 
-### 7 — Desktop app governance — 🔭 PLANNED (design + queued)
+### 7 — Desktop app governance — ✅ IMPLEMENTED, ships dark
 - Extends the shipped FD-04 client images with **per-license SSO-enforced sudo**
   (revocable at the IdP), an **admin-curated Plasma Discover store**
   (default-NONE, domain-locked Flatpak / OCI registry, `discover`-role gated),
   **user install-requests**, and **admin remote-install** (one-click + an in-UI
   SSH terminal over the device-SSH-license). Rides the existing device-SSH-license
-  transport. Not yet implemented.
+  transport. The client-side provisioning lives here
+  ([`specs/etc/snapdragon/desktop-governance/`](../specs/etc/snapdragon/desktop-governance/):
+  polkit sudo rule, SSSD/OIDC config, Discover/Flatpak wiring, autostart SSO
+  deposit scripts) and the server-side data/API is a full set of controllers in
+  `snapdragon-admin-bff-api` (catalog, install-requests, remote-install, sudo
+  entitlement/step-up, SSH terminal). It **ships dark**: the registry + SSH
+  transport default to `Noop` client implementations gated by
+  `app.desktop.registry.enabled=false` / `app.desktop.remote-install.enabled=false`
+  (both default off), so a default deployment exposes none of this.
 
 ## Provisioning manifest additions (keys-provision)
 
