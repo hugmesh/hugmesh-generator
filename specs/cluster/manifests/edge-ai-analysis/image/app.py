@@ -13,11 +13,14 @@ from __future__ import annotations
 import base64
 import binascii
 import io
+import ipaddress
 import json
 import os
 import re
+import socket
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import imagehash
@@ -44,6 +47,29 @@ def _verdict(task: str, tenant: str, user: str, model: str, result: dict[str, An
             "timestamp": _now(), "result": result}
 
 
+def _assert_public_image_url(url: str) -> None:
+    """SSRF guard. image_url is user-supplied (behind the ROLE_USER be-gateway) and must
+    only reference a PUBLIC http(s) endpoint. Reject any non-http(s) scheme and any host
+    that resolves to a private / loopback / link-local / reserved address, so a user
+    cannot make the service fetch in-cluster endpoints or the cloud metadata service.
+    Residual: a DNS-rebinding TOCTOU between this check and the fetch — redirects are
+    disabled and the blast radius is a single GET whose body is only hashed, so this is
+    acceptable for the role-gated route."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise HTTPException(status_code=400, detail="image_url must be a public http(s) URL")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        addrinfos = socket.getaddrinfo(parsed.hostname, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        raise HTTPException(status_code=400, detail="image_url host does not resolve")
+    for info in addrinfos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            raise HTTPException(status_code=400, detail="image_url resolves to a non-public address")
+
+
 def _decode_image(image_b64: str | None, image_url: str | None) -> bytes:
     if image_b64:
         try:
@@ -51,8 +77,9 @@ def _decode_image(image_b64: str | None, image_url: str | None) -> bytes:
         except (binascii.Error, ValueError):
             raise HTTPException(status_code=400, detail="image_b64 is not valid base64")
     if image_url:
+        _assert_public_image_url(image_url)
         try:
-            r = httpx.get(image_url, timeout=10.0)
+            r = httpx.get(image_url, timeout=10.0, follow_redirects=False)
             r.raise_for_status()
             return r.content
         except httpx.HTTPError as e:
