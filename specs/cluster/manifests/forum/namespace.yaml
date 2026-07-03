@@ -1,5 +1,5 @@
 # snapdragon-forum — DEDICATED namespace for the phpBB forum homeserver + its DB
-# + the snapdragon/json-api extension. phpBB is BACKEND-ONLY: it has NO gateway
+# + the snapdragon/forum-api extension. phpBB is BACKEND-ONLY: it has NO gateway
 # route and NO ingress; it is reachable ONLY in-cluster as forum-bff-api's upstream
 # (+ admin-bff-api/the reconcile Job for the admin console).
 #

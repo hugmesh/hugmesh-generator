@@ -1,12 +1,12 @@
 # phpBB forum homeserver — BACKEND-ONLY, ISOLATED in the dedicated snapdragon-forum
-# namespace (phpBB + phpbb-db + the snapdragon/json-api extension). It has NO
+# namespace (phpBB + phpbb-db + the snapdragon/forum-api extension). It has NO
 # gateway route and NO ingress; the only ingress is forum-bff-api + admin-bff-api +
 # the reconcile Job, enforced by the namespace's default-deny NetworkPolicy. Same
 # 30-tier as the akkoma/tuwunel homeservers.
 #
 # DEPLOY ORDERING: this app (phpBB + its DB + the netpol + ESO secrets) lands
 # BEFORE forum-bff-api is pointed at it (39-forum-bff-api). forum-bff's phpBB legs
-# (PHPBB_ENABLED + EXTERNAL_FORUM_ENABLED) are ON since PR #164 (json-api extension
+# (PHPBB_ENABLED + EXTERNAL_FORUM_ENABLED) are ON since PR #164 (forum-api extension
 # live-proven 2026-06-23); it still degrades gracefully (typed degraded envelopes)
 # while phpbb is coming up, so there is no hard ordering dependency at first boot.
 # CreateNamespace=true provisions snapdragon-forum.

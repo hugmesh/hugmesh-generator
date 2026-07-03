@@ -1,7 +1,7 @@
 # forum-bff — the Backend-For-Frontend the snapdragon-forum-ui talks to for the
 # forum surfaces (/bff/forum/**): categories, topics, replies, moderation, and the
 # admin-console seam. It is the SINGLE browser->phpBB path:
-#   browser -> fe-gateway /bff/forum/** -> forum-bff -> phpBB json-api extension.
+#   browser -> fe-gateway /bff/forum/** -> forum-bff -> phpBB forum-api extension.
 # The browser NEVER talks to phpBB directly. forum-bff owns the forum_user_role /
 # forum_action tables in its OWN dedicated Postgres (forum-bff-db).
 #
@@ -20,7 +20,7 @@
 # namespace (network-policy.yaml admits this pod's app label to phpbb:80). The
 # extension shape is not yet pinned, so EXTERNAL_FORUM_ENABLED defaults false
 # (stub-seam: forum-bff boots clean + always-audits; no live phpBB call). Flip true
-# only after the snapdragon/json-api extension is validated on-cluster.
+# only after the snapdragon/forum-api extension is validated on-cluster.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -99,10 +99,10 @@ spec:
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - { name: CASDOOR_ISSUER_URI, value: "https://id.snapdragon.systems" }
-            # ── phpBB json-api extension (the headless upstream) ──────────────
+            # ── phpBB forum-api extension (the headless upstream) ──────────────
             # The in-cluster phpbb Service DNS in the isolated snapdragon-forum ns.
             # forum-bff presents its client cert + forwards the caller JWT (Bearer +
-            # X-Snapdragon-JWT). The snapdragon/jsonapi extension is now LIVE: built,
+            # X-Snapdragon-JWT). The snapdragon/forumapi extension is now LIVE: built,
             # 44 tests + adversarial review, and proven posting end-to-end on phpBB
             # 3.3.11 (live smoke 2026-06-23: topic+reply create, force_visibility
             # round-trip visible, acts-as-user). forum-bff deploys ONLY with the forum

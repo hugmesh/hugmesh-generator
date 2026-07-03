@@ -78,7 +78,7 @@ spec:
         # <1024); kube-proxy DNATs Service:80 -> pod:8080, so this rule must allow 8080.
         # The Service still EXPOSES port 80 (forum-bff/admin-bff/sync use ...svc:80), so
         # the ClusterIP contract is unchanged.
-        - { protocol: TCP, port: 8080 }   # phpBB http (rootless; the json-api surface)
+        - { protocol: TCP, port: 8080 }   # phpBB http (rootless; the forum-api surface)
         - { protocol: TCP, port: 9000 }   # php-fpm (if the image fronts via fastcgi)
 ---
 # ── phpbb-db — reachable ONLY from the phpbb pod + the sync Job ─────────────────

@@ -5,7 +5,7 @@ resources:
   - namespace.yaml
   - network-policy.yaml     # default-deny + ingress only forum-bff/admin-bff/sync
   - phpbb-db.yaml           # Postgres 16 (hardened, least-privilege app role)
-  - phpbb.yaml              # phpBB + snapdragon/json-api extension (backend-only)
+  - phpbb.yaml              # phpBB + snapdragon/forum-api extension (backend-only)
   - admin-sync-job.yaml     # Casdoor roles -> phpBB groups (declarative, stub-aware)
 
 # phpbb-db owns its hardening + the least-privilege app login role via initdb
@@ -24,7 +24,7 @@ configMapGenerator:
 generatorOptions:
   disableNameSuffixHash: true
 
-# The custom phpBB image (official phpBB + the baked snapdragon/json-api extension)
+# The custom phpBB image (official phpBB + the baked snapdragon/forum-api extension)
 # pulls from the in-cluster GitLab container registry, like the first-party BFFs.
 # The CI in the phpBB image repo pushes :<branch> + :<sha>; we track :main for dev.
 # Pulls need the gitlab-registry imagePullSecret (ESO-materialized).

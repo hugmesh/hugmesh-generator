@@ -1,5 +1,5 @@
 # forum-admin-sync — reconciles Casdoor ROLE_ADMIN / ROLE_FORUM_MOD / ROLE_FORUM
-# membership into phpBB groups via the snapdragon/json-api extension admin
+# membership into phpBB groups via the snapdragon/forum-api extension admin
 # endpoints over HTTP (ensureUser / setUserGroups / suspendUser). Runs IN the
 # isolated snapdragon-forum namespace (so it is admitted to phpbb by the
 # network-policy same-ns podSelector). Mirrors the akkoma/tuwunel admin-sync
@@ -28,7 +28,7 @@
 # crash-loops); the ROLE_ADMIN provisioning invariant is still attempted so a
 # freshly-synced cluster has admins. Flip true after that on-cluster validation.
 #
-# ENDPOINT CONTRACT (pinned to the SHIPPED snapdragon/json-api extension —
+# ENDPOINT CONTRACT (pinned to the SHIPPED snapdragon/forum-api extension —
 # config/routing.yml + admin_controller.php):
 #   PUT /api/v1/snapdragon/users/{sub}/groups   (ROLE_ADMIN)
 #   body GroupAssignment { casdoorSubject, group, roles[], lastSynced } -> 204.
@@ -46,13 +46,13 @@ metadata:
 data:
   sync.py: |
     #!/usr/bin/env python3
-    """Reconcile Casdoor forum roles -> phpBB groups via the snapdragon/json-api
+    """Reconcile Casdoor forum roles -> phpBB groups via the snapdragon/forum-api
     extension admin endpoints. Pure stdlib (urllib) — no extra packages.
 
     DECLARATIVE de-provisioning: computes the target group per subject, then has
     the extension converge — PUT /api/v1/snapdragon/users/{sub}/groups
     (GroupAssignment{casdoorSubject,group,roles,lastSynced} -> 204; the SHIPPED
-    snapdragon/json-api contract, config/routing.yml + admin_controller.php).
+    snapdragon/forum-api contract, config/routing.yml + admin_controller.php).
     converge_groups_for_sub() lazily ensures the user and REMOVES any
     forum-managed group not in the target. ROLE_ADMIN -> ADMINISTRATORS is
     enforced every tick.
