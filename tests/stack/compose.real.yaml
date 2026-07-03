@@ -1,7 +1,13 @@
 # Real-services integration stack (NOT mocks). Brings up the actual Matrix
-# (Synapse), Mastodon and Casdoor servers the snapdragon micro-frontends talk
-# to, so integration tests exercise real software. The Node mock-*.mjs servers
-# are retained ONLY for fast Angular UI unit testing — never for integration.
+# (Synapse), Mastodon and Casdoor servers, replacing the Node mock-*.mjs
+# doubles for THOSE pieces only. It does NOT include any first-party Spring
+# service (gateway/BFFs) — those only come up in compose.local.yaml
+# (`make stack-up`), which includes this file for its Synapse/Mastodon tier
+# and IS the fully-real path (real gateway + BFFs + Casdoor OAuth login; see
+# docs/LOCAL-STACK.md). The lightweight Playwright harness (tests/stack/up.sh)
+# can point its UI at the real Synapse here (REAL_MATRIX=1) but still runs
+# mock-bff.mjs as the BFF in that mode — see up-real.sh's closing note for
+# exactly what that pairing does and doesn't cover.
 #
 # Bring up with tests/stack/up-real.sh (it generates the Synapse config + the
 # Mastodon secrets first, then `docker compose -f compose.real.yaml up -d`).

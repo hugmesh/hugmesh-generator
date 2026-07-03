@@ -722,11 +722,16 @@ screenshots in `tests/e2e/screenshots/`:
 ./tests/e2e/run.sh
 ```
 
-> `tests/stack/mock-*.mjs` are fast in-memory test doubles. For full fidelity,
-> `tests/stack/up-real.sh` brings up real Synapse + Casdoor + Mastodon (+ the
-> platform Cassandra) from `compose.real.yaml` — it generates the Synapse config
-> and Mastodon DB first, then `docker compose up -d`. Point the suite at it with
-> `SNAP_BASE_URL=...` (and `REAL_MATRIX=1` for the UI), and tear it down with
+> `tests/stack/mock-*.mjs` are fast in-memory test doubles. `tests/stack/up-real.sh`
+> brings up real Synapse + Casdoor + Mastodon (+ the platform Cassandra) from
+> `compose.real.yaml` — it generates the Synapse config and Mastodon DB first,
+> then `docker compose up -d`. Point the suite at it with `SNAP_BASE_URL=...`
+> (and `REAL_MATRIX=1` for the UI). This is **not** full fidelity, though: the
+> UI is still served by `tests/stack/up.sh`'s `mock-bff.mjs`, a hand-written
+> stand-in for the Spring BFF that never calls Casdoor and has no "real
+> Mastodon" mode — only the Synapse leg becomes real. For the UI to talk to
+> the REAL gateway + Spring BFFs + Casdoor OAuth login, use `make stack-up`
+> instead (see `docs/LOCAL-STACK.md`). Tear the real-services stack down with
 > `tests/stack/down-real.sh`.
 
 ### B. First-boot provisioning emulation (one of each node kind)

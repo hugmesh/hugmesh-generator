@@ -3,6 +3,16 @@
 # Synapse, Casdoor, Mastodon + their Postgres/Redis, plus the platform Cassandra.
 # This is the heavyweight counterpart to up.sh (which runs the in-memory mocks).
 #
+# SCOPE: this swaps in real THIRD-PARTY backends only. It brings up no
+# first-party Spring service (no gateway, no BFF). Pairing it with
+# `tests/stack/up.sh` (this script's own closing message suggests
+# REAL_MATRIX=1 for the Playwright harness) still serves the UI through
+# mock-bff.mjs — a hand-written Node stand-in for the BFF that never calls
+# Casdoor and has no "real Mastodon" mode; only the Synapse leg becomes real
+# in that pairing. For the UI to talk to the REAL gateway + Spring BFFs +
+# Casdoor OAuth login, use `make stack-up` instead (see docs/LOCAL-STACK.md) —
+# it reuses this script's Synapse-config/Mastodon-db:prepare setup.
+#
 # It does the two pieces of first-run setup compose can't express, then ups:
 #   1. generates the Synapse homeserver config into the `synapse` volume
 #      (idempotent — synapse `generate` won't clobber an existing config), and
@@ -119,6 +129,13 @@ Real stack up. Endpoints:
   Mastodon stream:   http://127.0.0.1:4000
   Cassandra:         127.0.0.1:9042 (gateway revocation list + URL registry)
 
-Point the UI at real Synapse with: REAL_MATRIX=1 SYNAPSE_URL=http://127.0.0.1:8008 tests/stack/up.sh
+Point the Playwright UI harness at real Synapse with:
+  REAL_MATRIX=1 SYNAPSE_URL=http://127.0.0.1:8008 tests/stack/up.sh
+NOTE: that harness still serves the UI through mock-bff.mjs (a hand-written
+stand-in for the BFF) — Casdoor and Mastodon above stay UNUSED by it, and only
+the Synapse leg becomes real. For the UI to talk to the REAL gateway + Spring
+BFFs + Casdoor OAuth login, use instead:
+  make stack-up SOCIAL=1 && make stack-seed SOCIAL=1   (see docs/LOCAL-STACK.md)
+
 Tear down with: tests/stack/down-real.sh
 EOF
