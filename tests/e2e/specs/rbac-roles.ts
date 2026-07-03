@@ -140,7 +140,13 @@ export const SYSTEMS_SEED_USERS: SystemsSeedUser[] = [
     roles: ['ROLE_USER'],
     expectGamesAdmin: false,
     registrationComplete: true,
-    note: 'Plain member — reaches Matrix/Mastodon user surfaces; DENIED every admin/mod/games-admin route.',
+    // NOTE (commit 0100d3b, 2026-06-10): the broad ROLE_USER homeserver floor for
+    // /_matrix/**, /api/v1/**, /oauth/** (+ /.well-known/matrix/**, /_synapse/**,
+    // /api/v2/**, /media/**, /api/v1/streaming/**) was REMOVED from schema.sql and
+    // replaced by the per-platform ROLE_MATRIX/ROLE_MASTODON access roles. A plain
+    // ROLE_USER no longer reaches the Matrix/Mastodon homeserver BACKEND — see
+    // e2e-matrix / e2e-mastodon below for that.
+    note: 'Plain member — reaches the login/social-shell UI + its own profile; DENIED the Matrix/Mastodon homeserver backend (needs ROLE_MATRIX/ROLE_MASTODON) and every admin/mod/games-admin route.',
   },
 
   // ── per-platform ACCESS roles (use Matrix/Mastodon via OUR UI) ──────────

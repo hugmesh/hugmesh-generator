@@ -50,11 +50,21 @@ const CASES: Case[] = [
   { gw: 'snapdragon-be-gateway', path: '/api/v1/pleroma/admin/config', user: 'e2e-admin', expect: 'ALLOW', why: 'admin (superset) reaches akkoma moderation' },
   { gw: 'snapdragon-be-gateway', path: '/api/v1/pleroma/admin/config', user: 'e2e-user', expect: 'DENY', why: 'plain user DENIED akkoma moderation' },
 
-  // ── be-gateway Matrix/Mastodon user floor — mod is self-contained ───────
-  { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', user: 'e2e-mod', expect: 'ALLOW', why: 'mod has a Matrix user floor (not auto-granted ROLE_USER)' },
-  { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', user: 'e2e-user', expect: 'ALLOW', why: 'user reaches Matrix C-S API' },
-  { gw: 'snapdragon-be-gateway', path: '/api/v1/timelines/home', user: 'e2e-mod', expect: 'ALLOW', why: 'mod has a Mastodon user floor' },
-  { gw: 'snapdragon-be-gateway', path: '/api/v1/timelines/home', user: 'e2e-user', expect: 'ALLOW', why: 'user reaches Mastodon REST API' },
+  // ── be-gateway Matrix/Mastodon PLATFORM-ACCESS floor (commit 0100d3b) ────
+  // The broad ROLE_USER homeserver floor was REMOVED and replaced by the
+  // per-platform ROLE_MATRIX/ROLE_MASTODON access roles (ROLE_MOD/ROLE_ADMIN
+  // paired as supersets). Plain ROLE_USER (e2e-user) no longer reaches the
+  // homeserver client surfaces — only a principal holding the matching platform
+  // role (or MOD/ADMIN) does. e2e-matrix/e2e-mastodon are the dedicated
+  // platform-access personas (rbac-roles.ts) that model "a plain member who has
+  // been granted their own homeserver" — the real successor to the old bare-
+  // ROLE_USER expectation.
+  { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', user: 'e2e-mod', expect: 'ALLOW', why: 'mod is a paired superset on the ROLE_MATRIX-gated row (not auto-granted ROLE_USER)' },
+  { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', user: 'e2e-matrix', expect: 'ALLOW', why: 'ROLE_MATRIX holder reaches Matrix C-S API' },
+  { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', user: 'e2e-user', expect: 'DENY', why: 'plain ROLE_USER (no ROLE_MATRIX) no longer reaches the Matrix homeserver floor' },
+  { gw: 'snapdragon-be-gateway', path: '/api/v1/timelines/home', user: 'e2e-mod', expect: 'ALLOW', why: 'mod is a paired superset on the ROLE_MASTODON-gated row' },
+  { gw: 'snapdragon-be-gateway', path: '/api/v1/timelines/home', user: 'e2e-mastodon', expect: 'ALLOW', why: 'ROLE_MASTODON holder reaches Mastodon REST API' },
+  { gw: 'snapdragon-be-gateway', path: '/api/v1/timelines/home', user: 'e2e-user', expect: 'DENY', why: 'plain ROLE_USER (no ROLE_MASTODON) no longer reaches the Mastodon homeserver floor' },
 
   // ── GAMES-ADMIN GATE — the heart of the requirement ─────────────────────
   // /games/admin/** (fe) + /games/api/admin/** (be) = ROLE_GAMES_ADMIN ONLY.
