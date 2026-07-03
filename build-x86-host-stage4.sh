@@ -1588,6 +1588,24 @@ gate_optional_services() {
                     '/games/api/admin/**' '/games/**'
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
                     '/games/admin/**'
+                # ── GAMES APP-STORE (games-services control plane) — degrade with games ──
+                # The app-store rides the games slug (it needs the games namespace up), so
+                # deselecting games prunes the WHOLE control plane: the 13c instances
+                # ApplicationSet + the games-instances namespace/isolation manifests, the two
+                # intersection-sync Jobs (+ their casdoor/kustomization lines), the be-gateway
+                # HTTP-console route, and the games-services route-access rows (be + fe).
+                rm -f "${apps}/13c-games-instances.yaml"
+                rm -rf "${tree}/manifests/games-instances"
+                rm -f "${tree}/manifests/casdoor/games-services-admin-sync-job.yaml" \
+                      "${tree}/manifests/casdoor/games-services-runner-sync-job.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" games-services-admin-sync-job.yaml
+                _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" games-services-runner-sync-job.yaml
+                _opt_drop_route "${apps}/20-gateway-be.yaml" games-servers-console
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/bff/superadmin/games-services/**' '/bff/games-services/instances/**' \
+                    '/bff/games-services/catalog/**' '/games/servers/**'
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                    '/admin/games-services/**'
                 ;;
             edge-ai)
                 rm -f "${apps}/54-edge-ai.yaml"
