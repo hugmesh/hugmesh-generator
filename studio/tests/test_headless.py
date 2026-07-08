@@ -84,6 +84,34 @@ def test_print_command_config_round_trips_cli_args(tmp_path):
     assert "--role frontend" in r.stdout   # rpi5 spells be/fe out
 
 
+def test_print_command_new_iso_knobs_flow_through(tmp_path):
+    """The BuildPage's img-size / cached / live-toram knobs and the tri-state proxy
+    stack ride a saved config through the headless path: explicit values emit their
+    flags; proxy_stack=auto (the builder's own default) emits neither flag."""
+    explicit = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                           img_size=4096, cached=True, live_toram=False, proxy_stack="off")
+    p = tmp_path / "iso-knobs.json"
+    explicit.save(str(p))
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    assert "--img-size 4096" in r.stdout
+    assert "--cached" in r.stdout and "--no-live-toram" in r.stdout
+    assert "--no-proxy-stack" in r.stdout
+    auto = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    p2 = tmp_path / "iso-knobs-auto.json"
+    auto.save(str(p2))
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p2),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    assert "--proxy-stack" not in r.stdout and "--img-size" not in r.stdout
+
+
 def test_print_command_unaffiliated_bundle_default_normalized(tmp_path):
     """The wizard's standalone bundle_source default left on the unaffiliated role is
     NOT a conflict — the headless path normalizes it exactly like the wizard's role

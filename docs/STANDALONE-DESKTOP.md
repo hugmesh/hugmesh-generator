@@ -115,6 +115,14 @@ backgrounds / logo / accent / color scheme), home provisioning
 **extra-builder-flags escape hatch** so any remaining CLI flag stays reachable
 without dropping to the shell.
 
+One menu default to know about: **branded** standalone builds from the ncurses
+menu start with `--theme boogiepop` preselected (the persisted `OPT_SA_THEME`
+default in `scripts/build-menu.sh`; pick **None** under "Branding theme" for
+the stock look), while the `standalone-unaffiliated` entry suppresses all
+theming (`--theme` is a hard conflict there, so the menu hides the option and
+never emits its persisted default). Direct `make` / CLI builds apply no theme
+unless you pass one — see the Desktop branding section below.
+
 Use the big scratch disk for the heavy build (namespaced; never touches portage's
 own dirs):
 
@@ -297,8 +305,20 @@ Precedence (later wins): `--theme` → `--branding-dir` → individual file flag
 `grub-background.png`, `login-background.png`, `logo.png`, `colors.colors` (all
 optional; `wallpaper.png` is the fallback for the two backgrounds).
 
-The stock **this-host** rebuild (`run-standalone-after-fleet.sh`) ships `--theme
-boogiepop` — the dark Boogiepop example theme (`specs-x86/branding/themes/boogiepop/`).
+No build channel applies a theme by itself **except the ncurses menu**: `make
+menu` defaults branded standalone builds to `--theme boogiepop` — the dark
+Boogiepop example theme (`specs-x86/branding/themes/boogiepop/`) — via the
+persisted `OPT_SA_THEME` default in `scripts/build-menu.sh` (pick **None**
+under "Branding theme" for the stock look). The direct channels bake no theme
+unless you pass one explicitly: `make x86-standalone` / `make
+x86-standalone-thick STANDALONE_FLAGS='--theme boogiepop'`, or a fleet run
+(`scripts/build-all-roles.sh`; `X86_STANDALONE=1` appends the three standalone
+variants to the role set, `X86_STANDALONE_ONLY=1` builds only them) with
+`--theme boogiepop` in its pass-through builder args. The
+`standalone-unaffiliated` role suppresses theming entirely: any `--theme` is a
+hard conflict, the menu never emits its persisted theme default for it, and a
+branded fleet run skips the unaffiliated role loudly (build it separately with
+`make x86-standalone-unaffiliated`).
 
 ### Re-theming on the running desktop
 

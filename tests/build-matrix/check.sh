@@ -2,7 +2,7 @@
 # check.sh — full-matrix verification: EVERY image option buildable in EVERY channel.
 #
 # Walks tests/build-matrix/matrix.tsv (the canonical (platform, role, env, board,
-# flavor, desktop) cell list) and, for every row, proves all four build channels
+# flavor, desktop) cell list) and, for every row, proves all five build channels
 # agree on the cell:
 #
 #   CLI   invoke the builder with --print-plan + the row's flags; assert exit 0
@@ -17,12 +17,17 @@
 #   GUI   write a config JSON for the row; `python3 -m snapdragon_studio
 #         --print-command` (headless, Qt-free) must emit a command containing the
 #         right builder + role/axes + env.
+#   JOB   extract docker/build-image.sh's resolve_build_target() (the admin
+#         web-UI k8s-Job worker's HARDWARE_CLASS role whitelists) and assert the
+#         row's cell resolves to the right platform/role/axes — statically;
+#         docker/k8s are never invoked.
 #
-# Plus NEGATIVE checks: invalid roles / boards / envs and an x86-only flag on the
-# rpi5 builder must all FAIL (exit != 0).
+# Plus NEGATIVE checks: invalid roles / boards / envs, an x86-only flag on the
+# rpi5 builder and bogus job-worker HARDWARE_CLASS tokens must all FAIL
+# (exit != 0 / a rejected resolve).
 #
-# Everything is dry-run (--print-plan / make -n / command printing) — no root, no
-# writes outside mktemp, CI-friendly (< ~2 min).
+# Everything is dry-run (--print-plan / make -n / command printing / static
+# parsing) — no root, no writes outside mktemp, CI-friendly (< ~2 min).
 #
 #   bash tests/build-matrix/check.sh        # or: make matrix-check
 set -u
@@ -42,6 +47,7 @@ CLI_PASS=0;  CLI_FAIL=0
 MAKE_PASS=0; MAKE_FAIL=0
 MENU_PASS=0; MENU_FAIL=0
 GUI_PASS=0;  GUI_FAIL=0
+JOB_PASS=0;  JOB_FAIL=0
 THR_PASS=0;  THR_FAIL=0
 NEG_PASS=0;  NEG_FAIL=0
 
@@ -301,7 +307,7 @@ MENU_EOF
     THR_FAIL=$((THR_FAIL + 1 - uthr_pass))
     # FAIL-CLOSED: a crashed/aborted menu child (source error, set -u trip, …)
     # must count as a channel failure, not as "0 rows = 0 failures" — otherwise
-    # the 4-channels-per-cell guarantee silently degrades to 3 (the completeness
+    # the 5-channels-per-cell guarantee silently degrades to 4 (the completeness
     # gate below backstops this too).
     if [ ${rc} -ne 0 ]; then
         _fail MENU "channel" "menu child exited ${rc}" "${TMP_DIR}/menu.err"
@@ -368,6 +374,153 @@ check_gui() { # platform role env board flavor desktop
     else
         GUI_PASS=$((GUI_PASS+1))
     fi
+}
+
+# ── channel 5: JOB — docker/build-image.sh (the admin web-UI k8s-Job worker) ────
+# The image-gen Job maps IMAGE_TYPE + HARDWARE_CLASS onto a generator build
+# target through resolve_build_target()'s hand-maintained role whitelists (the
+# HARDWARE_CLASS convention in docker/build-image.sh's header) — the one build
+# channel matrix.tsv did not hold to account, so those case statements could
+# silently drift from the matrix. Extract the REAL function (sed — fully
+# static, docker/k8s are never invoked) and drive it in one isolated child,
+# one probe per matrix row plus bogus-token negatives, emitting
+# "JOB PASS|FAIL <row>" / "JOBNEG PASS|FAIL <name>" lines like the menu child.
+run_job_channel() {
+    local out="${TMP_DIR}/job.out" fn="${TMP_DIR}/job.fn"
+    sed -n '/^resolve_build_target() {$/,/^}$/p' docker/build-image.sh >"${fn}"
+    # DRIFT ASSERT (fail-loud): the extraction leans on the function's exact
+    # name and brace style, and the probes on its output variables. If
+    # docker/build-image.sh is refactored so any of that moves, this must
+    # ERROR — never skip silently ("0 rows probed" would otherwise read as
+    # "0 failures"; the completeness gate below backstops this too).
+    if [ "$(tail -n 1 "${fn}" 2>/dev/null)" != "}" ] \
+       || ! grep -q 'HARDWARE_CLASS' "${fn}" || ! grep -q 'PLATFORM=' "${fn}"; then
+        _fail JOB "channel" "cannot extract resolve_build_target() from docker/build-image.sh — the whitelist format drifted; update this probe" "${fn}"
+        JOB_FAIL=$((JOB_FAIL+1))
+        NEG_FAIL=$((NEG_FAIL+3))   # the 3 JOBNEG probes below never ran
+        return
+    fi
+    MATRIX="${MATRIX}" FN="${fn}" bash <<'JOB_EOF' >"${out}" 2>"${TMP_DIR}/job.err"
+set -u
+# the extracted-verbatim resolve_build_target() + every variable it reads or
+# writes (mirrors build-image.sh's own top-level initialisation)
+HARDWARE_CLASS="" IMAGE_TYPE=""
+PLATFORM="" BUILD_ROLE="" FRITE_BOARD_OUT="" FRITE_FLAVOR_OUT=""
+JETSON_BOARD_OUT="" KEYS_ROLE=""
+# shellcheck disable=SC1090
+source "${FN}"
+
+# resolve HW TYPE — reset the output vars, then run the REAL worker function
+resolve() {
+    HARDWARE_CLASS="$1" IMAGE_TYPE="$2"
+    PLATFORM="" BUILD_ROLE="" FRITE_BOARD_OUT="" FRITE_FLAVOR_OUT=""
+    JETSON_BOARD_OUT="" KEYS_ROLE=""
+    resolve_build_target
+}
+
+# DRIFT CANARY (fail-loud): a known-good cell must resolve to the expected
+# outputs BEFORE the walk is trusted. If build-image.sh renames the function's
+# output variables (PLATFORM/BUILD_ROLE/…), every row assertion below would
+# compare empty strings and pass vacuously — this canary trips first instead.
+if ! resolve x86.be-gpu primary \
+   || [ "${PLATFORM}" != x86 ] || [ "${BUILD_ROLE}" != "be+gpu" ]; then
+    echo "JOBDRIFT FAIL canary x86.be-gpu/primary — got PLATFORM='${PLATFORM}' BUILD_ROLE='${BUILD_ROLE}'; resolve_build_target's outputs drifted — update this probe"
+    exit 3
+fi
+
+while IFS=$'\t' read -r platform role env board flavor desktop; do
+    case "${platform}" in \#*|"") continue ;; esac
+    [ "${board}" = "-" ]   && board=""
+    [ "${flavor}" = "-" ]  && flavor=""
+    [ "${desktop}" = "-" ] && desktop=""
+    row="${platform}/${role}/${env}${board:+ board=${board}}${flavor:+ flavor=${flavor}}${desktop:+ desktop=${desktop}}"
+    # Map the row onto the worker's HARDWARE_CLASS convention (build-image.sh
+    # header): dot-delimited, "+" spelled "-" (the charset has no "+"), client
+    # roles ride IMAGE_TYPE=client, node roles IMAGE_TYPE=primary. This
+    # channel has NO env axis (the Job contract carries no hardening-tier
+    # field — every Job build gets the fail-secure prod posture) and no frite
+    # desktop axis (the worker builds the builder default), so test/prod (and
+    # light/none) rows deliberately probe the same whitelist cell.
+    case "${platform}" in
+        rpi5)   hw="rpi5.${role}"; type=primary ;;
+        x86)    hw="x86.${role/+/-}"
+                case "${role}" in
+                    laptop|chromebook|desktop|standalone-*) type=client ;;
+                    *)                                      type=primary ;;
+                esac ;;
+        frite)  hw="frite.${board}.${flavor}"; type=client ;;
+        jetson) hw="jetson.${role}.${board}"; type=primary ;;
+        *)      echo "JOB FAIL ${row} — unknown platform"; continue ;;
+    esac
+    if [ "${platform}" = frite ] && [ "${flavor}" = both ]; then
+        # flavor=both builds TWO artifacts; the worker's single-imageRef
+        # ingest contract deliberately REJECTS it (build-image.sh's frite
+        # convention note). The documented behavior for this cell is a clean
+        # refusal — assert exactly that, never acceptance.
+        if resolve "${hw}" "${type}"; then
+            echo "JOB FAIL ${row} — flavor=both must be rejected (single-imageRef ingest contract), got acceptance"
+        else
+            echo "JOB PASS ${row} (documented flavor=both rejection)"
+        fi
+        continue
+    fi
+    if ! resolve "${hw}" "${type}"; then
+        echo "JOB FAIL ${row} — HARDWARE_CLASS=${hw} IMAGE_TYPE=${type} rejected (whitelist drifted from matrix.tsv?)"
+        continue
+    fi
+    miss=""
+    [ "${PLATFORM}" = "${platform}" ] || miss+=" PLATFORM(got '${PLATFORM}')"
+    case "${platform}" in
+        frite)
+            [ "${FRITE_BOARD_OUT}" = "${board}" ]   || miss+=" FRITE_BOARD_OUT(got '${FRITE_BOARD_OUT}')"
+            [ "${FRITE_FLAVOR_OUT}" = "${flavor}" ] || miss+=" FRITE_FLAVOR_OUT(got '${FRITE_FLAVOR_OUT}')"
+            ;;
+        jetson)
+            [ "${BUILD_ROLE}" = "${role}" ]        || miss+=" BUILD_ROLE(got '${BUILD_ROLE}')"
+            [ "${JETSON_BOARD_OUT}" = "${board}" ] || miss+=" JETSON_BOARD_OUT(got '${JETSON_BOARD_OUT}')"
+            ;;
+        *)
+            [ "${BUILD_ROLE}" = "${role}" ]        || miss+=" BUILD_ROLE(got '${BUILD_ROLE}')"
+            ;;
+    esac
+    if [ -n "${miss}" ]; then
+        echo "JOB FAIL ${row} — resolved wrong target:${miss}"
+    else
+        echo "JOB PASS ${row}"
+    fi
+done < "${MATRIX}"
+
+# ── JOB negative probes: bogus HARDWARE_CLASS tokens must be REJECTED ────────
+# (never silently defaulted to a real build target — build-image.sh's own
+# "an unrecognized combination is a clean FAILED ingest" rule)
+expect_reject() { # NAME HW TYPE
+    if resolve "$2" "$3"; then
+        echo "JOBNEG FAIL $1 — expected rejection, resolved PLATFORM='${PLATFORM}' BUILD_ROLE='${BUILD_ROLE}'"
+    else
+        echo "JOBNEG PASS $1"
+    fi
+}
+expect_reject "x86: bogus role"           x86.bogus primary
+expect_reject "bare legacy: bogus role"   bogus     client
+expect_reject "rpi5: node role as client" rpi5.pki  client
+JOB_EOF
+    local rc=$?
+    JOB_PASS=$(grep -c '^JOB PASS' "${out}" || true)
+    JOB_FAIL=$(grep -c '^JOB FAIL' "${out}" || true)
+    # the child's negative probes count toward the NEG bucket; FAIL-CLOSED like
+    # the menu child's threading probes: 3 expected, shortfall = failures.
+    local jneg_pass
+    jneg_pass=$(grep -c '^JOBNEG PASS' "${out}" || true)
+    NEG_PASS=$((NEG_PASS + jneg_pass))
+    NEG_FAIL=$((NEG_FAIL + 3 - jneg_pass))
+    # FAIL-CLOSED: a crashed job child (drift canary, set -u trip, …) is a
+    # channel failure, never "0 rows = 0 failures" (the completeness gate
+    # below backstops this too).
+    if [ ${rc} -ne 0 ]; then
+        _fail JOB "channel" "job child exited ${rc}" "${TMP_DIR}/job.err"
+        JOB_FAIL=$((JOB_FAIL+1))
+    fi
+    grep -E '^(JOB|JOBNEG|JOBDRIFT) FAIL' "${out}" >&2 || true
 }
 
 # ── threading checks: STANDALONE_FLAGS + IMG_FLAGS must reach the builder argv ──
@@ -451,19 +604,20 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
 done < "${MATRIX}"
 
 run_menu_channel
+run_job_channel
 run_threading_checks
 run_negative_checks
 
-TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + THR_PASS + NEG_PASS))
-TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + THR_FAIL + NEG_FAIL))
+TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS))
+TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL))
 
 # COMPLETENESS gate (fail-closed): every channel must have PASSED every matrix
 # row — not merely "no failures". This catches the silent-skip class of hole
 # (a crashed channel child, a row one channel's parse never reached) where a
-# per-row counter simply does not tick and the "4 channels per cell" guarantee
+# per-row counter simply does not tick and the "5 channels per cell" guarantee
 # would otherwise degrade without a single FAIL line.
 CH_SHORT=0
-for _ch in CLI MAKE MENU GUI; do
+for _ch in CLI MAKE MENU GUI JOB; do
     _pv="${_ch}_PASS"
     if [ "${!_pv}" -ne "${ROWS}" ]; then
         printf 'FAIL [%s] channel INCOMPLETE: %d/%d matrix rows passed\n' \
@@ -478,6 +632,7 @@ printf  'CLI  (--print-plan):    %3d passed, %d failed\n' "${CLI_PASS}"  "${CLI_
 printf  'MAKE (make -n):         %3d passed, %d failed\n' "${MAKE_PASS}" "${MAKE_FAIL}"
 printf  'MENU (build_make_cmd):  %3d passed, %d failed\n' "${MENU_PASS}" "${MENU_FAIL}"
 printf  'GUI  (--print-command): %3d passed, %d failed\n' "${GUI_PASS}"  "${GUI_FAIL}"
+printf  'JOB  (build-image.sh):  %3d passed, %d failed\n' "${JOB_PASS}"  "${JOB_FAIL}"
 printf  'THRD (flag threading):  %3d passed, %d failed\n' "${THR_PASS}"  "${THR_FAIL}"
 printf  'NEG  (must-fail):       %3d passed, %d failed\n' "${NEG_PASS}"  "${NEG_FAIL}"
 printf  'TOTAL:                  %3d passed, %d failed\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"

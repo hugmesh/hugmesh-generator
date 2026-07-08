@@ -107,7 +107,8 @@ def test_preflight_flags_missing_builder_script(platform, script, tmp_path):
 
 def test_preflight_ok_against_real_repo(tmp_path):
     gen = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    for platform in ("x86", "rpi5", "frite"):   # jetson builder lands separately
+    # all four builder scripts (jetson included) sit at the generator-repo root
+    for platform in sorted(BUILDER_SCRIPTS):
         cfg = cfg_for(platform, tmp_path)
         problems = BuildDriver(gen, host(is_root=True)).preflight(cfg, "native")
         assert not any(cfg.builder_script in p for p in problems)

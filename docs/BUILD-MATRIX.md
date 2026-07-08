@@ -32,6 +32,16 @@ Every channel is crossed with the **build ENV** (`test` | `prod`), threaded as
 `--env` on the builders and `ENV=` through make — see the
 [Build ENV section of the README](../README.md#build-env-testprod-baked-at-image-creation).
 
+There is also a **fifth, admin-triggered channel**: the admin web-UI's
+image-gen **k8s Job** worker (`docker/build-image.sh`, launched by
+admin-bff-api), which maps the Job contract's `IMAGE_TYPE` + `HARDWARE_CLASS`
+strings onto the same generator build targets through its own role whitelists
+(the `HARDWARE_CLASS` convention in that script's header). It deliberately has
+no `env` axis (the Job contract carries no hardening-tier field, so every Job
+build gets the fail-secure `prod` posture), no frite `desktop` axis, and no
+frite `flavor=both` (its ingest contract reports exactly one `imageRef` per
+build, so the two-artifact flavor is a clean rejection).
+
 ## The canonical matrix — `tests/build-matrix/matrix.tsv`
 
 One row per buildable image cell `(platform, role, env, board, flavor,
@@ -49,9 +59,9 @@ holds every channel to it.
 
 ## The harness — `tests/build-matrix/check.sh` (`make matrix-check`)
 
-**✅ shipped.** For **every** matrix row the harness proves all four channels
+**✅ shipped.** For **every** matrix row the harness proves all five channels
 agree on the cell — entirely **dry-run**: no root, no writes outside `mktemp`,
-no network, ~15 s:
+no network, no docker/k8s, ~15 s:
 
 1. **CLI** — invokes the builder with `--print-plan` + the row's flags and
    asserts exit 0 plus exact `PLAN_BUILDER` / `PLAN_ROLE` / `PLAN_ENV` (and
@@ -66,12 +76,25 @@ no network, ~15 s:
 4. **GUI** — writes a per-row config JSON and asserts the Studio's headless,
    Qt-free `python -m snapdragon_studio --print-command` emits a command with
    the right builder / role / axes / env.
+5. **JOB** — extracts the *real* `resolve_build_target()` out of
+   `docker/build-image.sh` (statically — docker/k8s are never invoked; the
+   extraction and a known-good canary **fail loud** if the worker's whitelist
+   format drifts) and asserts every row's `HARDWARE_CLASS` spelling resolves
+   to the right platform / role / board / flavor, so the Job worker's
+   hand-maintained whitelists can never silently drift from `matrix.tsv`.
+   `test`/`prod` (and frite `light`/`none`) rows probe the same whitelist cell
+   — the channel has no such axes (see above) — and frite `flavor=both` rows
+   assert the worker's *documented rejection*. Three bogus-`HARDWARE_CLASS`
+   negatives keep the whitelists fail-closed.
 
-Plus **negative checks** (11): invalid roles on x86/rpi5/jetson, an invalid
+Plus **negative checks** (16): invalid roles on x86/rpi5/jetson, an invalid
 frite board and desktop, an invalid jetson board, invalid `--env` values,
-x86-only flags (`--steam`, `--local-pass`) rejected by the rpi5 builder, and an
-unknown platform refused by the GUI — all must exit non-zero, so a typo can
-never *silently* build the wrong image. The harness exits 1 on any failure —
+x86-only flags (`--steam`, `--local-pass`) rejected by the rpi5 builder, an
+unknown platform refused by the GUI, the two unaffiliated conflict probes
+(the unaffiliated role with a `--theme`, and `--unaffiliated` on a cluster
+role, must both hard-error), and the three bogus-`HARDWARE_CLASS` Job-channel
+rejections — all must exit non-zero, so a typo can never *silently* build the
+wrong image. The harness exits 1 on any failure —
 including a **completeness gate**: every channel's pass count must equal the
 row count (a crashed channel child or a silently skipped row fails the run,
 never degrades it). It also runs **17 flag-threading probes**: `STANDALONE_FLAGS`
@@ -86,7 +109,7 @@ fleet-target probes (`build-all`/`build-everything` thread the fleet make-vars)
 and an unaffiliated menu probe (the `x86-standalone-unaffiliated` recipe carries
 `--role standalone-unaffiliated` and never `--theme`, even with the menu's
 persisted theme default). Current totals:
-80 cells × 4 channels + 17 threading probes + 13 negatives = **350 checks**.
+80 cells × 5 channels + 17 threading probes + 16 negatives = **433 checks**.
 
 ```sh
 make matrix-check                 # or: bash tests/build-matrix/check.sh

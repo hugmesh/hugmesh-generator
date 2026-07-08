@@ -33,6 +33,22 @@ MODE_DEFAULT_ROLE = {
     "mesh": "omnibus",                 # superadmin: a mesh node serving domains
 }
 
+# The wizard's page order (StudioWizard registers exactly one page per slug, in this
+# order — a fail-loud assert keeps the two lists from drifting) and which pages do
+# NOT apply per Studio mode: the wizard's nextId() skips them, so a standalone build
+# never routes through the admin key-zip or the superadmin domains/users tables (the
+# shortest path to a plain/unaffiliated desktop). Kept Qt-free HERE so the flow
+# contract is testable without a GUI toolkit. Skipped pages are never VISITED, and
+# collect_all() only reads visited pages — so a skipped page's widgets can never
+# leak stale values into a saved config or the emitted argv.
+WIZARD_PAGE_SLUGS = ("welcome", "mode", "role", "hardware", "branding", "network",
+                     "keyzip", "domains", "users", "home", "build")
+MODE_SKIPPED_PAGES = {
+    "standalone": ("keyzip", "domains", "users"),  # no admin/mesh plane to configure
+    "cloud": (),   # the key-zip carries the admin plane; domains/users still apply
+    "mesh": (),    # the superadmin flow uses every page
+}
+
 # platform id -> builder script at the generator-repo root. All four are reachable
 # in the docker path too (the whole generator dir is mounted at /src).
 BUILDER_SCRIPTS = {

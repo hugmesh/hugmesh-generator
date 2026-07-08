@@ -67,7 +67,8 @@ PENTEST_ENVVARS := PENTEST='$(PENTEST)' PENTEST_ONLY='$(PENTEST_ONLY)' \
 # ── build-all-roles.sh ROLE-SELECTOR env knobs ─────────────────────────────────
 # build-all-roles.sh reads these from the ENVIRONMENT to pick the fleet
 # (FRITE/FRITE_ONLY add the Frite; X86_OMNIBUS/X86_ALL/X86_ROLES pick the x86 set;
-# SKIP_X86/SKIP_KEYS drop work). They default EMPTY so a plain build keeps the
+# X86_STANDALONE appends the 3 standalone desktops, X86_STANDALONE_ONLY builds
+# JUST them; SKIP_X86/SKIP_KEYS drop work). They default EMPTY so a plain build keeps the
 # script's own defaults; `?=` lets `X86_OMNIBUS=1 make build-all` (env) and
 # `make build-all X86_OMNIBUS=1` (CLI) both set them. Threaded onto the native
 # leg via $(ALL) and forwarded into the in-container `make` re-invoke (Docker leg)
@@ -81,6 +82,8 @@ JETSON_ROLES ?=
 X86_OMNIBUS ?=
 X86_ALL     ?=
 X86_ROLES   ?=
+X86_STANDALONE ?=
+X86_STANDALONE_ONLY ?=
 SKIP_X86    ?=
 SKIP_KEYS   ?=
 # NOTE: this is `:=` and expands here, BEFORE the FRITE_*/JETSON_* `?=` defaults
@@ -93,6 +96,7 @@ ROLESET_ENVVARS := FRITE='$(FRITE)' FRITE_ONLY='$(FRITE_ONLY)' \
                    JETSON='$(JETSON)' JETSON_ONLY='$(JETSON_ONLY)' JETSON_ROLES='$(JETSON_ROLES)' \
                    JETSON_BOARD='$(JETSON_BOARD)' JETSON_KERNEL_FLAVOR='$(JETSON_KERNEL_FLAVOR)' \
                    X86_OMNIBUS='$(X86_OMNIBUS)' X86_ALL='$(X86_ALL)' X86_ROLES='$(X86_ROLES)' \
+                   X86_STANDALONE='$(X86_STANDALONE)' X86_STANDALONE_ONLY='$(X86_STANDALONE_ONLY)' \
                    SKIP_X86='$(SKIP_X86)' SKIP_KEYS='$(SKIP_KEYS)'
 
 # ── Build ENV selector (BAKED at image creation) ───────────────────────────────

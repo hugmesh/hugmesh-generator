@@ -15,8 +15,10 @@ from snapdragon_studio.core.config import (
     GPU_DRIVER_CHOICES,
     ImageConfig,
     MODE_DEFAULT_ROLE,
+    MODE_SKIPPED_PAGES,
     ROLE_CHOICES,
     UNAFFILIATED_ROLE,
+    WIZARD_PAGE_SLUGS,
 )
 
 
@@ -55,6 +57,18 @@ def test_role_catalog_covers_every_documented_role():
 def test_mode_defaults_stay_in_catalog():
     for mode, role in MODE_DEFAULT_ROLE.items():
         assert role in {r for r, _, _ in ROLE_CHOICES[mode]}
+
+
+def test_mode_skipped_pages_match_the_page_catalog():
+    """The wizard's mode-gated page flow (Qt-free contract): one skip set per mode,
+    every slug real, standalone skipping the whole admin/mesh plane (the shortest
+    path to the plain/unaffiliated desktop) — and no mode may skip a structural page."""
+    assert set(MODE_SKIPPED_PAGES) == set(MODE_DEFAULT_ROLE)
+    for slugs in MODE_SKIPPED_PAGES.values():
+        assert set(slugs) <= set(WIZARD_PAGE_SLUGS)
+    assert MODE_SKIPPED_PAGES["standalone"] == ("keyzip", "domains", "users")
+    for structural in ("welcome", "mode", "role", "build"):
+        assert all(structural not in slugs for slugs in MODE_SKIPPED_PAGES.values())
 
 
 @pytest.mark.parametrize("platform,script", sorted(BUILDER_SCRIPTS.items()))
@@ -155,6 +169,19 @@ def test_x86_unaffiliated_bundle_source_default_is_normalized_not_a_conflict():
     assert "--no-bundle-source" not in args
 
 
+def test_x86_unaffiliated_generic_iso_knobs_flow_through():
+    """The BuildPage's generic knobs (img-size / cached / live-toram) and the proxy
+    stack are NOT affiliation — they flow through on the unaffiliated role while the
+    bundle-source pair stays suppressed."""
+    args = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
+                       bundle_source=False, img_size=6144, cached=True, live_toram=False,
+                       proxy_stack="off").to_cli_args()
+    assert ("--img-size", "6144") in pairs(args)
+    assert "--cached" in args and "--no-live-toram" in args
+    assert "--no-proxy-stack" in args
+    assert "--bundle-source" not in args and "--no-bundle-source" not in args
+
+
 def test_unaffiliated_role_constant_matches_catalog():
     assert UNAFFILIATED_ROLE == "standalone-unaffiliated"
     assert UNAFFILIATED_ROLE in {r for r, _, _ in ROLE_CHOICES["standalone"]}
@@ -212,6 +239,34 @@ def test_x86_installer_ui_compress_resume():
     args = ImageConfig(installer_ui="ncurses", compress=True, resume=True).to_cli_args()
     assert ("--installer-ui", "ncurses") in pairs(args)
     assert "--compress" in args and "--resume" in args
+
+
+def test_x86_proxy_stack_tristate():
+    """--proxy-stack is TRI-STATE like the builder (PROXY_STACK=auto is ITS default,
+    resolved to on for client desktops): auto emits NOTHING so the builder keeps its
+    per-role default; only an explicit on/off emits the flag pair."""
+    auto = ImageConfig(proxy_stack="auto").to_cli_args()
+    assert "--proxy-stack" not in auto and "--no-proxy-stack" not in auto
+    on = ImageConfig(proxy_stack="on").to_cli_args()
+    assert "--proxy-stack" in on and "--no-proxy-stack" not in on
+    off = ImageConfig(proxy_stack="off").to_cli_args()
+    assert "--no-proxy-stack" in off and "--proxy-stack" not in off
+
+
+def test_x86_img_size_emitted_only_when_set():
+    # 0 = "(role default)": the builder sizes the compact root per role/desktop itself
+    assert "--img-size" not in ImageConfig(img_size=0).to_cli_args()
+    assert ("--img-size", "4096") in pairs(ImageConfig(img_size=4096).to_cli_args())
+
+
+def test_x86_iso_finish_pairs_flip():
+    """The BuildPage checkboxes' non-default sides: --cached / --no-live-toram /
+    --no-bundle-source each replace (not join) their default counterpart."""
+    args = ImageConfig(mode="standalone", role="standalone-thick", cached=True,
+                       live_toram=False, bundle_source=False).to_cli_args()
+    assert "--cached" in args and "--uncached" not in args
+    assert "--no-live-toram" in args and "--live-toram" not in args
+    assert "--no-bundle-source" in args and "--bundle-source" not in args
 
 
 # ---- rpi5: server node roles (be/fe spelled out) -----------------------------

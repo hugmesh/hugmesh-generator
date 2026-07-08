@@ -10,10 +10,11 @@ from .qt import Qt, QtCore, QtGui, QtWidgets, Signal
 from ..core import hw_scan, keyzip, profiles
 from ..core.build_driver import BuildDriver
 from ..core.config import (
-    Domain, ImageConfig, MODE_DEFAULT_ROLE, User,
+    Domain, ImageConfig, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, User,
     ENV_CHOICES, FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS,
     GPU_DRIVER_ALIASES, GPU_DRIVER_CHOICES, JETSON_BOARDS,
     OPTIONAL_SERVICES_CHOICES, PLATFORM_LABELS, ROLE_CHOICES, UNAFFILIATED_ROLE,
+    WIZARD_PAGE_SLUGS,
 )
 from ..core.platform_info import detect
 
@@ -114,6 +115,14 @@ class ModePage(QtWidgets.QWizardPage):
         self.group.button(0).setChecked(True)
         lay.addStretch(1)
 
+    def initializePage(self):
+        # reflect the config's mode in the radios (a loaded config / back-navigation)
+        # — otherwise the constructor's standalone default would silently clobber it
+        # on the next validatePage.
+        for i, (mid, _label, _desc) in enumerate(self.modes):
+            if mid == self.wiz.cfg.mode:
+                self.group.button(i).setChecked(True)
+
     def validatePage(self):
         btn = self.group.checkedButton()
         if btn is None:
@@ -130,6 +139,14 @@ class ModePage(QtWidgets.QWizardPage):
         # builder hard-conflict there (RolePage clears it again when it's picked).
         self.wiz.cfg.bundle_source = (mid == "standalone"
                                       and self.wiz.cfg.role != UNAFFILIATED_ROLE)
+        if mid == "standalone":
+            # standalone SKIPS the key-zip/domains/users pages (MODE_SKIPPED_PAGES) —
+            # clear anything a previously visited cloud/mesh flow parked in the
+            # config, so pages the user can no longer reach can't strand stale state
+            # into save() or the emitted argv.
+            self.wiz.cfg.keyzip = ""
+            self.wiz.cfg.domains = []
+            self.wiz.cfg.users = []
         return True
 
 
@@ -459,10 +476,17 @@ class NetworkPage(QtWidgets.QWizardPage):
         # network/host security stack
         sec = QtWidgets.QGroupBox("Security stack")
         sl = QtWidgets.QVBoxLayout(sec)
-        self.proxy_stack = QtWidgets.QCheckBox("Proxy stack — Squid (cache) + Privoxy (filter), wired into Firefox (desktops)")
+        # Proxy stack is TRI-STATE like the builder's flag pair: auto (emit nothing —
+        # the builder enables it on client desktops itself) | on | off. A checkbox
+        # would collapse "auto" to an explicit on/off the first time the page is
+        # visited, so the builder's per-role default could never round-trip.
+        self.proxy_stack = QtWidgets.QComboBox()
+        self.proxy_stack.addItems(["auto", "on", "off"])
+        sl.addWidget(_row("Proxy stack — Squid (cache) + Privoxy (filter), "
+                          "wired into Firefox (desktops)", self.proxy_stack))
         self.snort = QtWidgets.QCheckBox("Snort IDS (network intrusion detection)")
         self.aide = QtWidgets.QCheckBox("AIDE file-integrity IDS (DB baselined at first boot)")
-        sl.addWidget(self.proxy_stack); sl.addWidget(self.snort); sl.addWidget(self.aide)
+        sl.addWidget(self.snort); sl.addWidget(self.aide)
         # Root SSH login — hardened DEFAULT is "no" (root locked; the non-root KEYS admin
         # is the entry point). Tri-state, matching --permit-root-login / the build-menu.
         self.root_login = QtWidgets.QComboBox()
@@ -517,7 +541,8 @@ class NetworkPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         c = self.wiz.cfg
-        self.proxy_stack.setChecked(c.proxy_stack in ("on", "auto"))
+        self.proxy_stack.setCurrentText(c.proxy_stack if c.proxy_stack in ("auto", "on", "off")
+                                        else "auto")
         self.snort.setChecked(c.snort)
         self.aide.setChecked(c.aide)
         self.root_login.setCurrentText(c.root_login or "no")
@@ -558,7 +583,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         c.cluster_domain = self.domain.text().strip() or "snapdragon.systems"
         c.egress_vpn = self.egress.text().strip()
         c.egress_vpn_locked = self.egress_locked.isChecked()
-        c.proxy_stack = "on" if self.proxy_stack.isChecked() else "off"
+        c.proxy_stack = self.proxy_stack.currentText()
         c.snort = self.snort.isChecked()
         c.aide = self.aide.isChecked()
         c.root_login = self.root_login.currentText()
@@ -851,8 +876,34 @@ class BuildPage(QtWidgets.QWizardPage):
         self.installer_ui = QtWidgets.QComboBox()
         self.installer_ui.addItems(["all", "cli", "ncurses", "calamares"])
         lay.addWidget(_row("Installer UI", self.installer_ui))
+        # --img-size MiB: every builder parses it; 0 = "(role default)" emits nothing
+        # (the builders size the compact root per role/desktop payload themselves).
+        self.img_size = QtWidgets.QSpinBox()
+        self.img_size.setRange(0, 1 << 20)
+        self.img_size.setSuffix(" MiB")
+        self.img_size.setSpecialValueText("(role default)")
+        lay.addWidget(_row("Root image size", self.img_size))
+        # x86 ISO finish knobs (like the installer-UI choice, the arm builders parse
+        # none of these — the widgets grey out off-x86, and config.py emits x86-only)
+        self.cached = QtWidgets.QCheckBox(
+            "Cached ISO — embed the binpkg cache (+distfiles) for offline rebuild / fast reinstall")
+        self.live_toram = QtWidgets.QCheckBox(
+            'Live ISO "Copy to RAM (removable)" boot entry')
+        self.bundle_source = QtWidgets.QCheckBox(
+            "Bundle the generator source — self-hosting image (standalone default)")
+        # shown INSTEAD of an enabled checkbox when the unaffiliated role is selected
+        self.bundle_note = QtWidgets.QLabel(
+            "Source bundling does not apply — unaffiliated build (bundling the Snapdragon "
+            "generator source is a builder hard-conflict; the role presets it off).")
+        self.bundle_note.setWordWrap(True)
+        self.bundle_note.setStyleSheet("color: #a65d00;")
+        self.bundle_note.setVisible(False)
         self.compress = QtWidgets.QCheckBox("Compress the finished image(s) (xz -9)")
         self.resume = QtWidgets.QCheckBox("Resume — reuse an existing sysroot")
+        lay.addWidget(self.cached)
+        lay.addWidget(self.live_toram)
+        lay.addWidget(self.bundle_source)
+        lay.addWidget(self.bundle_note)
         lay.addWidget(self.compress)
         lay.addWidget(self.resume)
         # escape hatch: EVERY builder CLI option stays expressible, fielded or not
@@ -885,6 +936,21 @@ class BuildPage(QtWidgets.QWizardPage):
         self.installer_ui.setCurrentText(c.installer_ui or "all")
         # the installer-UI choice is an x86 ISO knob; the arm builders have no flag
         self.installer_ui.setEnabled(c.platform in ("", "x86"))
+        self.img_size.setValue(c.img_size)
+        # cached / live-toram / bundle-source are x86 ISO knobs too (config.py only
+        # emits them through _x86_args)
+        self.cached.setEnabled(c.platform in ("", "x86"))
+        self.cached.setChecked(c.cached)
+        self.live_toram.setEnabled(c.platform in ("", "x86"))
+        self.live_toram.setChecked(c.live_toram)
+        # bundling the generator source is a builder HARD CONFLICT on the unaffiliated
+        # role — disable + clear the checkbox and show the note (mirroring the
+        # BrandingPage pattern), so the wizard can never re-set what RolePage cleared
+        # (config.py suppresses the flag pair for this role as the final guard).
+        unaffiliated = c.role == UNAFFILIATED_ROLE
+        self.bundle_source.setEnabled(c.platform in ("", "x86") and not unaffiliated)
+        self.bundle_source.setChecked(False if unaffiliated else c.bundle_source)
+        self.bundle_note.setVisible(unaffiliated)
         self.compress.setChecked(c.compress)
         self.resume.setChecked(c.resume)
         self.extra_flags.setText(c.extra_flags)
@@ -901,6 +967,13 @@ class BuildPage(QtWidgets.QWizardPage):
         c.jobs = self.jobs.value()
         c.env = self.env.currentText()
         c.installer_ui = self.installer_ui.currentText()
+        c.img_size = self.img_size.value()
+        c.cached = self.cached.isChecked()
+        c.live_toram = self.live_toram.isChecked()
+        # unaffiliated: the checkbox is disabled + cleared in initializePage — force
+        # the field too, so a stale standalone default can never linger in the config.
+        c.bundle_source = (False if c.role == UNAFFILIATED_ROLE
+                           else self.bundle_source.isChecked())
         c.compress = self.compress.isChecked()
         c.resume = self.resume.isChecked()
         c.extra_flags = self.extra_flags.text().strip()
@@ -974,8 +1047,30 @@ class StudioWizard(QtWidgets.QWizard):
             BrandingPage(self), NetworkPage(self), KeyZipPage(self), DomainsPage(self),
             UsersPage(self), HomePage(self), BuildPage(self),
         ]
+        # exactly one page per WIZARD_PAGE_SLUGS entry, same order — nextId() keys
+        # the mode-gated skip set (MODE_SKIPPED_PAGES) by slug, so drift here would
+        # silently skip the WRONG page
+        assert len(self._pages) == len(WIZARD_PAGE_SLUGS), (
+            f"wizard pages ({len(self._pages)}) drifted from "
+            f"WIZARD_PAGE_SLUGS ({len(WIZARD_PAGE_SLUGS)})")
         for p in self._pages:
             self.addPage(p)
+        self._page_ids = dict(zip(WIZARD_PAGE_SLUGS, self.pageIds()))
+
+    def nextId(self):
+        """Mode-gated page flow: pages that do not apply to the selected Studio mode
+        (MODE_SKIPPED_PAGES — e.g. the admin key-zip and the superadmin domains/users
+        tables on a standalone build) are skipped, so standalone → unaffiliated is
+        the shortest path. Qt calls this AFTER the current page's validatePage(), so
+        cfg.mode is already committed when the flow is decided; a skipped page is
+        never visited, and collect_all() only reads visited pages."""
+        nid = super().nextId()
+        skipped = {self._page_ids[s] for s in MODE_SKIPPED_PAGES[self.cfg.mode]}
+        ids = self.pageIds()
+        while nid in skipped:
+            i = ids.index(nid)
+            nid = ids[i + 1] if i + 1 < len(ids) else -1
+        return nid
 
     def collect_all(self):
         """Pull values out of every VISITED page into self.cfg. Only visited pages are
