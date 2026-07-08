@@ -59,7 +59,12 @@ casdoor:
 cassandra:
   contactPoints: cassandra.snapdragon-pki.svc.cluster.local:9042
   keyspace: snapdragon_gateway
-  localDc: dc1
+  # The official Cassandra image's SimpleSnitch default datacenter is
+  # "datacenter1" (nodetool status), not "dc1" — confirmed live against a bare
+  # `cassandra:5` container with this same env (see compose.local.yaml's
+  # identical fix, generator#261). A mismatched local-dc means the driver's
+  # NoNodeAvailableException on every boot.
+  localDc: datacenter1
 
 # Downstream routes rendered into an application-routes.yml ConfigMap and
 # loaded via SPRING_CONFIG_ADDITIONAL_LOCATION. id/uri/path per route.
@@ -68,7 +73,9 @@ routes:
     uri: http://snapdragon-api.snapdragon-backend.svc.cluster.local:8080
     path: /api/**
 
-# Extra raw environment variables, e.g. SPRING_PROFILES_ACTIVE.
+# Extra raw environment variables. SPRING_PROFILES_ACTIVE=routes is now set
+# unconditionally in deployment.yaml (the routes ConfigMap needs it to load at
+# all — see that file's comment); do not re-set it here.
 extraEnv: []
 
 # Per-app mTLS keystore, built at startup from the Vault-PKI-issued, ESO-synced
