@@ -103,9 +103,17 @@ data:
     #    (manifests/media-poisoner; app/serve.py terminates TLS itself, no sidecar).
     #    server_flag+client_flag so the same cert can serve AND (future) present a
     #    client identity; the worker enforces ssl.CERT_REQUIRED against ca.crt.
+    #    Handled separately below (not in the generic loop): the real Service is
+    #    named snapdragon-media-poisoner, not media-poisoner, so
+    #    media-poisoner-externalsecrets.yaml requests snapdragon-media-poisoner
+    #    SANs the generic "${app},${app}.svc.cluster.local" pattern doesn't cover.
     #    harbor = the Harbor registry's expose.tls server cert (manifests/harbor
     #    via apps/03a-harbor.yaml) — the chart's bundled nginx front-end
     #    terminates TLS with it. Same server_flag+client_flag shape as the rest.
+    #    Handled separately below (not in the generic loop): the Helm chart's
+    #    real Service name is harbor-core, not harbor, so harbor-externalsecrets.yaml
+    #    requests harbor-core SANs the generic "${app},${app}.svc.cluster.local"
+    #    pattern doesn't cover.
     for app in snapdragon-pki-gateway snapdragon-be-gateway snapdragon-fe-gateway \
                snapdragon-superadmin-gateway \
                snapdragon-api snapdragon-admin-bff-api \
@@ -115,7 +123,7 @@ data:
                snapdragon-federation-api \
                route-access-db admin-bff-db mod-bff-db user-bff-db \
                federation-db forum-bff-db wiki-bff-db \
-               akkoma-proxy tuwunel-proxy media-poisoner harbor; do
+               akkoma-proxy tuwunel-proxy; do
       echo "==> role ${PKI}/roles/${app}"
       vault write "${PKI}/roles/${app}" \
         allowed_domains="${app},${app}.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
@@ -124,4 +132,21 @@ data:
         key_type="${PKI_KEY_TYPE}" key_bits="${PKI_KEY_BITS}" signature_bits="${PKI_SIG_BITS}" \
         max_ttl=2160h ttl=720h
     done
+
+    echo "==> role ${PKI}/roles/media-poisoner"
+    vault write "${PKI}/roles/media-poisoner" \
+      allowed_domains="media-poisoner,snapdragon-media-poisoner,snapdragon-media-poisoner.snapdragon-backend,media-poisoner.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
+      allow_subdomains=true allow_glob_domains=true allow_bare_domains=true \
+      allow_localhost=false server_flag=true client_flag=true \
+      key_type="${PKI_KEY_TYPE}" key_bits="${PKI_KEY_BITS}" signature_bits="${PKI_SIG_BITS}" \
+      max_ttl=2160h ttl=720h
+
+    echo "==> role ${PKI}/roles/harbor"
+    vault write "${PKI}/roles/harbor" \
+      allowed_domains="harbor,harbor-core,harbor-core.snapdragon-pki,harbor.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
+      allow_subdomains=true allow_glob_domains=true allow_bare_domains=true \
+      allow_localhost=false server_flag=true client_flag=true \
+      key_type="${PKI_KEY_TYPE}" key_bits="${PKI_KEY_BITS}" signature_bits="${PKI_SIG_BITS}" \
+      max_ttl=2160h ttl=720h
+
     echo "==> Vault PKI bootstrap complete"
