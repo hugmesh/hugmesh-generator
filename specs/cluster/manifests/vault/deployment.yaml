@@ -251,7 +251,29 @@ spec:
           image: hashicorp/vault:1.21.4   # pinned to latest stable 1.x; evaluate the 2.x major separately
           # Real server (NOT -dev): in-memory storage + auto-unseal + the dev root
           # token are gone. Vault reads the Raft + TLS config from /vault/config.
-          args: ["server", "-config=/vault/config/config.hcl"]
+          #
+          # args is just ["server"] — NOT ["server", "-config=/vault/config/config.hcl"]
+          # (found live on the kind bring-up: the latter CrashLoopBackOff'd every
+          # single restart, including a freshly-recreated pod with a clean network
+          # namespace, with "Error initializing listener of type tcp: listen tcp4
+          # 0.0.0.0:8200: bind: address already in use" — deterministic, not a
+          # restart race). Root cause: the official image's docker-entrypoint.sh
+          # ALWAYS rewrites a bare `server` arg into
+          #   vault server -config="$VAULT_CONFIG_DIR" -dev-root-token-id=... \
+          #     -dev-listen-address=0.0.0.0:8200 "$@"
+          # where VAULT_CONFIG_DIR=/vault/config and "$@" is whatever args this
+          # manifest passed after `server`. Passing an explicit
+          # -config=/vault/config/config.hcl here made Vault receive TWO -config
+          # flags pointing at the same config.hcl (once via the auto-added
+          # directory scan, once via the explicit file path), so the single
+          # `listener "tcp"` stanza got registered twice in one process — the
+          # second bind() on :8200 collided with the first. The ConfigMap mount
+          # already puts config.hcl directly in /vault/config, so the
+          # entrypoint's own auto-appended `-config=/vault/config` is sufficient;
+          # passing it a second time is redundant and, per the above, actively
+          # broken. Live-verified: with args trimmed to ["server"] alone, vault-0
+          # starts clean with a single listener and reaches the readiness probe.
+          args: ["server"]
           env:
             - name: VAULT_ADDR
               value: "https://127.0.0.1:8200"
