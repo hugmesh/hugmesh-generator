@@ -35,6 +35,20 @@ app-text/xmlto text
 # phase (2026-07-08); the builder's AUTOUNMASK-PRETEND replay listed exactly
 # this one change.
 dev-libs/boost python
+# Rest of the calamares payload USE closure, computed by converging the SAME
+# resolution the builder runs (chroot pretend loop against the live sysroot,
+# 2026-07-08) until it succeeded — the failure surfaces only ONE package per
+# build cycle otherwise ("--autounmask-continue is NOT applying needed USE
+# changes in this chroot", see the payload-emerge diagnostic in
+# build-x86-host-stage4.sh):
+#   libpwquality[python] — direct calamares dep (password quality page)
+#   grub[mount]          — calamares → sys-boot/os-prober needs grub-mount
+#   libcanberra[alsa]    — calamares → KF6 knotifications → libcanberra, whose
+#                          REQUIRED_USE 'udev? ( alsa )' trips because udev is
+#                          on globally; alsa (not -udev) is right for a desktop
+dev-libs/libpwquality python
+sys-boot/grub mount
+media-libs/libcanberra alsa
 # Discover is a Qt6/QML Plasma app: it pulls purpose -> prison[qml] and the wider
 # KF6/Qt6 QML framework stack. These modules USE-match qtbase[opengl=,vulkan=] and
 # need qml, so enable opengl/vulkan/qml across the chain. qtbase also needs
