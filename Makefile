@@ -458,8 +458,12 @@ matrix-check: ## dry-run validate the whole build matrix via --print-plan (tests
 	bash tests/build-matrix/check.sh
 
 ## ── docker (cross-platform builder; Phase 5) ──────────────────────────
-docker-image: ## build the self-contained Gentoo builder image (LONG first time: cross-toolchain)
-	docker build -f Dockerfile.build -t $(IMAGE) .
+# CROSSDEV=0 builds the x86-only image variant (skips the slow, several-GB
+# aarch64 cross-toolchain stage; ARM targets then fail their prerequisite
+# check inside it — see Dockerfile.build). Default 1 = the full image.
+CROSSDEV ?= 1
+docker-image: ## build the self-contained Gentoo builder image (LONG first time: cross-toolchain; CROSSDEV=0 = x86-only)
+	docker build -f Dockerfile.build --build-arg CROSSDEV=$(CROSSDEV) -t $(IMAGE) .
 
 # admin-bff-api's image-gen k8s Job worker (docker/Dockerfile.image-gen +
 # docker/build-image.sh). Layers on top of $(IMAGE) (run `make docker-image`
