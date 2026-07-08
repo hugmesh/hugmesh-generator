@@ -80,7 +80,7 @@ flowchart TD
         subgraph SSO["SSO / BFF JWT custody (ships dark)"]
             AUTHCORE["auth-core: account/session/MFA + custody seams (✅ 2.3.0)"]
             GWEXCH["gateway bff_-exchange filter (✅ PR-2/5 #171)"]
-            LOGINOIDC["login-ui native login form -> POST /bff/login (🚧 PR-4)"]
+            LOGINOIDC["login-ui native login form -> POST /bff/login (✅ shipped)"]
             UBRELOC["user-bff native login + PKCE relocation (✅ PR-2/5 #171)"]
             CUSTKEY["SSO custody-key + internal-token bootstrap (✅ PR-3/5 #172)"]
         end
@@ -254,16 +254,21 @@ sequenceDiagram
   admin-bff internal client (`app.bff.oidc.enabled`).
 - **SSO custody-key + internal-token bootstrap (PR-3/5 / #172 merged)** — custody-key
   seeding + internal-token bootstrap for the BFF exchange path.
+- **login-ui native login form shipped (#255/#256 merged)** — the native
+  username/password form → `POST /bff/login` is now the platform's **only** login
+  surface: the dead `/bff/auth/callback` OAuth-redirect route + its route-access
+  seed were retired (#255 — "native `/bff/login` replaced it"), and e2e coverage
+  (#256, `tests/e2e/specs/27-native-login.spec.ts`) drives the real form and
+  asserts the old social-login testids are **absent** and no navigation to a
+  Casdoor origin occurs.
 
 > The `auth-core` `2.1.0` BFF-JWT-custody columns
 > (`access_token_enc` / `refresh_token_enc` / `access_token_expires_at` /
 > `custody_updated_at`) + `stampCustody` / `clearCustody` / `sessionRow` that this
 > snapshot tracked as in-flight have since **shipped** (current published `2.3.0`).
 
-**🚧 in-flight (open draft PRs, all dark):**
-
-- **login-ui PR-4** — the native username/password form → `POST /bff/login`
-  (`__SNAP_OIDC_ENABLED__`); no browser redirect to Casdoor, no `/login/callback`.
+**🚧 in-flight:** none currently open — login-ui PR-4 (native form, above) has
+since shipped.
 
 **🔭 planned / next:**
 
