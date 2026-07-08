@@ -121,11 +121,20 @@ services:
       SPRING_APPLICATION_NAME: snapdragon-pki-gateway
       PORT: "8080"
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
+      # additional-location DIRECTORY when a profile literally named {name} is
+      # active — so /config/application-routes.yml (the entire mounted route
+      # table for this gateway role) was silently never loading without this.
+      # Confirmed live: `/` 404'd (SCG's own no-route-matched response) until
+      # this was added; only the packaged application.yml's single placeholder
+      # route (Path=/api/**, uri=http://api:8080 — a nonexistent host) was ever
+      # active, which is also why unrelated /api/** paths 500'd.
+      SPRING_PROFILES_ACTIVE: routes
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
       CASSANDRA_KEYSPACE: snapdragon_gateway
-      CASSANDRA_LOCAL_DC: dc1
+      CASSANDRA_LOCAL_DC: datacenter1
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
     volumes:
       - ./gateway-routes/pki:/config:ro
@@ -148,11 +157,20 @@ services:
       SPRING_APPLICATION_NAME: snapdragon-be-gateway
       PORT: "8080"
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
+      # additional-location DIRECTORY when a profile literally named {name} is
+      # active — so /config/application-routes.yml (the entire mounted route
+      # table for this gateway role) was silently never loading without this.
+      # Confirmed live: `/` 404'd (SCG's own no-route-matched response) until
+      # this was added; only the packaged application.yml's single placeholder
+      # route (Path=/api/**, uri=http://api:8080 — a nonexistent host) was ever
+      # active, which is also why unrelated /api/** paths 500'd.
+      SPRING_PROFILES_ACTIVE: routes
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
       CASSANDRA_KEYSPACE: snapdragon_gateway
-      CASSANDRA_LOCAL_DC: dc1
+      CASSANDRA_LOCAL_DC: datacenter1
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
     volumes:
       - ./gateway-routes/be:/config:ro
@@ -179,11 +197,20 @@ services:
       SPRING_APPLICATION_NAME: snapdragon-fe-gateway
       PORT: "8080"
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
+      # additional-location DIRECTORY when a profile literally named {name} is
+      # active — so /config/application-routes.yml (the entire mounted route
+      # table for this gateway role) was silently never loading without this.
+      # Confirmed live: `/` 404'd (SCG's own no-route-matched response) until
+      # this was added; only the packaged application.yml's single placeholder
+      # route (Path=/api/**, uri=http://api:8080 — a nonexistent host) was ever
+      # active, which is also why unrelated /api/** paths 500'd.
+      SPRING_PROFILES_ACTIVE: routes
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
       CASSANDRA_KEYSPACE: snapdragon_gateway
-      CASSANDRA_LOCAL_DC: dc1
+      CASSANDRA_LOCAL_DC: datacenter1
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
       # BFF session introspection back-channel (BffSessionAuthFilter): the gateway swaps the
       # opaque bff_ cookie for the caller's identity/roles against admin-bff. The property
@@ -324,7 +351,19 @@ services:
       # (app.test-seed.enabled=false / APP_TEST_SEED_ENABLED unset); turned ON for the
       # test env so e2e seeding scripts can prime findings data (mod-bff-api#63).
       APP_TEST_SEED_ENABLED: "true"
+      # Placeholder config datastore (see the comment above snapdragon-mod-bff-api /
+      # snapdragon-user-bff-api higher up describing this): reuses admin-bff-db's
+      # adminbff database/credentials, no dedicated DB yet. Without this, Liquibase/
+      # R2DBC fall back to the app's own default (a cluster-DNS Postgres host), which
+      # doesn't resolve in compose and the container never boots.
+      SPRING_R2DBC_URL: "r2dbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_R2DBC_USERNAME: adminbff
+      SPRING_R2DBC_PASSWORD: adminbff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_LIQUIBASE_USER: adminbff
+      SPRING_LIQUIBASE_PASSWORD: adminbff
     depends_on:
+      admin-bff-db: { condition: service_healthy }
       casdoor: { condition: service_started }
       snapdragon-federation-api: { condition: service_started }
     healthcheck:
@@ -392,7 +431,16 @@ services:
       # (app.test-seed.enabled=false / APP_TEST_SEED_ENABLED unset); turned ON for the
       # test env so e2e seeding scripts can prime notifications data (user-bff-api#97).
       APP_TEST_SEED_ENABLED: "true"
+      # Placeholder config datastore, same as mod-bff-api above — see that service's
+      # comment for why this is needed.
+      SPRING_R2DBC_URL: "r2dbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_R2DBC_USERNAME: adminbff
+      SPRING_R2DBC_PASSWORD: adminbff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_LIQUIBASE_USER: adminbff
+      SPRING_LIQUIBASE_PASSWORD: adminbff
     depends_on:
+      admin-bff-db: { condition: service_healthy }
       casdoor: { condition: service_started }
       snapdragon-admin-bff-api: { condition: service_started }
       snapdragon-federation-api: { condition: service_started }
