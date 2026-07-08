@@ -15,6 +15,7 @@ BRAND="snapdragon"                  # short slug used in names (namespaces, gate
 BRAND_TITLE="Snapdragon Systems"    # human-readable title shown in UIs/messages
 ORG="Snapdragon-Systems"            # GitHub org / container-image namespace
 CLUSTER_DOMAIN="snapdragon.systems" # base domain (id./matrix./mastodon./api. derived)
+RELEASE_STATE="internal"            # internal (DEFAULT, LAN/tailnet-only) | public (internet-facing)
 
 # ── Optional services (build-time excludable, add/remove-by-command) ──────────
 # The OPTIONAL (non-architecture) user-level services: akkoma (Mastodon), tuwunel

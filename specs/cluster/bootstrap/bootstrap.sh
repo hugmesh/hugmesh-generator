@@ -77,31 +77,53 @@ else
     echo "   WARN: could not resolve pki node InternalIP; create the headscale Endpoints by hand"
 fi
 
-# ── LAN wildcard DNS — inject the backend ingress node IP (ENV=test only) ──────
-# The lan-dns CoreDNS resolver answers *.<domain> with the backend node's LAN IP
-# (the same node ingress-nginx is pinned to). The IP is per-deployment, so patch
-# the placeholder __LAN_INGRESS_IP__ in the lan-dns-corefile ConfigMap here —
-# mirroring the headscale PKI_IP injection above. No-op in ENV=prod images (the
+# ── LAN wildcard DNS — inject the ingress node IP (ENV=test only) ──────────────
+# The lan-dns CoreDNS resolver answers *.<domain> with an ingress node's LAN IP.
+# WHICH node depends on RELEASE_STATE (baked at /etc/snapdragon/release-state,
+# mirroring the /etc/snapdragon/cluster-domain bake):
+#   * public  -> the BACKEND node (the router's 80/443 target; the public
+#     ingress-nginx, apps/10-ingress-nginx.yaml, is pinned there).
+#   * internal (DEFAULT) -> the PKI node instead. gate_env_apps() prunes
+#     10-ingress-nginx.yaml entirely when RELEASE_STATE!=public, so EVERY
+#     surviving public-facing route is served ONLY by the internal
+#     ingress-nginx on the pki node (apps/11-ingress-nginx-internal.yaml) —
+#     answering with the backend IP would 404/timeout every LAN name.
+# The IP is per-deployment, so patch the placeholder __LAN_INGRESS_IP__ in the
+# lan-dns-corefile ConfigMap here — mirroring the headscale PKI_IP injection
+# above (REUSED here rather than re-queried). No-op in ENV=prod images (the
 # lan-dns app is pruned, so the ConfigMap never exists). Idempotent: re-derives
 # and re-patches the live IP every run.
-echo "==> lan-dns wildcard resolver (backend ingress node IP)"
+echo "==> lan-dns wildcard resolver (ingress node IP; gated on RELEASE_STATE)"
+RELEASE_STATE="internal"
+[ -r /etc/snapdragon/release-state ] && RELEASE_STATE="$(cat /etc/snapdragon/release-state 2>/dev/null || echo internal)"
 BACKEND_IP="$(kubectl get node -l snapdragon.systems/backend=true -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
 [ -n "${BACKEND_IP}" ] || BACKEND_IP="$(kubectl get node "$(hostname)" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
-if [ -n "${BACKEND_IP}" ] && kubectl -n kube-system get configmap lan-dns-corefile >/dev/null 2>&1; then
+if [ "${RELEASE_STATE}" = "public" ]; then
+    NODE_KIND="backend"
+    LAN_IP="${BACKEND_IP}"
+else
+    # internal-only: the PKI node (already resolved above for headscale) is
+    # the sole surviving public-facing ingress; fall back to BACKEND_IP only
+    # if the pki node's IP could not be resolved (best-effort, never worse
+    # than the pre-RELEASE_STATE behaviour).
+    NODE_KIND="pki"
+    LAN_IP="${PKI_IP:-${BACKEND_IP}}"
+fi
+if [ -n "${LAN_IP}" ] && kubectl -n kube-system get configmap lan-dns-corefile >/dev/null 2>&1; then
     # Swap the placeholder (or a previously-injected A-record IP) for the current
-    # backend IP, re-apply, and restart CoreDNS to reload. The two A-record forms
-    # are: the literal __LAN_INGRESS_IP__ token (first boot) and an already
+    # ingress node IP, re-apply, and restart CoreDNS to reload. The two A-record
+    # forms are: the literal __LAN_INGRESS_IP__ token (first boot) and an already
     # injected dotted-quad after "60 IN A " (re-run / IP changed).
     COREFILE="$(kubectl -n kube-system get configmap lan-dns-corefile -o jsonpath='{.data.Corefile}')"
     NEW_COREFILE="$(printf '%s' "${COREFILE}" \
-        | sed -E "s/(60 IN A )(__LAN_INGRESS_IP__|([0-9]{1,3}\.){3}[0-9]{1,3})/\1${BACKEND_IP}/g")"
+        | sed -E "s/(60 IN A )(__LAN_INGRESS_IP__|([0-9]{1,3}\.){3}[0-9]{1,3})/\1${LAN_IP}/g")"
     kubectl -n kube-system create configmap lan-dns-corefile \
         --from-literal=Corefile="${NEW_COREFILE}" \
         --dry-run=client -o yaml | kubectl apply -f - \
-        && echo "   lan-dns *.<domain> -> ${BACKEND_IP}" || true
+        && echo "   lan-dns *.<domain> -> ${LAN_IP} (RELEASE_STATE=${RELEASE_STATE}, ${NODE_KIND} node)" || true
     kubectl -n kube-system rollout restart deploy/lan-dns >/dev/null 2>&1 || true
 elif kubectl -n kube-system get configmap lan-dns-corefile >/dev/null 2>&1; then
-    echo "   WARN: lan-dns present but could not resolve backend InternalIP; patch __LAN_INGRESS_IP__ by hand"
+    echo "   WARN: lan-dns present but could not resolve the ${NODE_KIND} node InternalIP; patch __LAN_INGRESS_IP__ by hand"
 else
     echo "   (lan-dns not deployed — ENV=prod image, or app pruned; skipping)"
 fi

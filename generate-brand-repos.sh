@@ -71,6 +71,13 @@ _die() { echo "[generate-brand-repos] FATAL: $*" >&2; exit 1; }
 # CLUSTER_DOMAIN: full DNS name (e.g. snapdragon.systems).
 [[ "$CLUSTER_DOMAIN" =~ $_DNS_NAME ]] \
   || _die "invalid CLUSTER_DOMAIN '${CLUSTER_DOMAIN}' (must be a DNS name)"
+# RELEASE_STATE: "internal" (DEFAULT, LAN/tailnet-only) or "public" (internet-
+# facing) — gates the ingress-class/NetworkPolicy posture baked by gate_env_apps()
+# and the host nftables firewall in the build-*-stage4.sh scripts. public makes
+# no sense paired with a non-routable *.test/*.internal CLUSTER_DOMAIN.
+if [[ "${RELEASE_STATE:-internal}" == "public" && "$CLUSTER_DOMAIN" =~ \.(test|internal)$ ]]; then
+  _die "invalid RELEASE_STATE 'public' with CLUSTER_DOMAIN '${CLUSTER_DOMAIN}' (a *.test/*.internal domain is not public-routable; use RELEASE_STATE=internal or set a real CLUSTER_DOMAIN)"
+fi
 # MESH_TAG: headscale ACL tag form 'tag:<slug>'.
 _RE_MESH='^tag:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
 [[ "$MESH_TAG" =~ $_RE_MESH ]] \

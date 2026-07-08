@@ -98,6 +98,14 @@ ENABLE_GAMES="${ENABLE_GAMES:-false}"
 # The chosen ENV is written to /etc/snapdragon/env and gates which ArgoCD apps
 # survive in the baked /var/lib/snapdragon/cluster/apps tree (gate_env_apps).
 ENV="test"
+# ── Release-state selector (BAKED into the image, gates gate_env_apps()/
+# bake_host_firewall() ingress+firewall posture) ────────────────────
+# internal (DEFAULT, safe): public ingress-nginx pruned, gateways forced to
+#   the nginx-internal class, tier-ingress NetworkPolicy admits only
+#   ingress-nginx-internal, host nftables firewall drops inbound 80/443 from
+#   outside the tailnet unless /etc/snapdragon/go-live exists.
+# public: the above restrictions are lifted (rebuild-time go-live).
+RELEASE_STATE="internal"
 # Pinned first-party release tag for ENV=prod. The prod tag-rewrite in
 # gate_env_apps replaces every floating `:dev` first-party image tag with this so
 # the prod-hygiene gate (scripts/validate-prod-hygiene.sh) finds no floating tag.
@@ -663,6 +671,7 @@ while [[ $# -gt 0 ]]; do
         --env) ENV="$2"; shift 2 ;;
         --release-tag) RELEASE_TAG="$2"; shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
+        --release-state)      RELEASE_STATE="$2";      shift 2 ;;
         --brand) BRAND="$2"; shift 2 ;;
         --brand-title) BRAND_TITLE="$2"; shift 2 ;;
         --org) ORG="$2"; shift 2 ;;
@@ -1286,6 +1295,12 @@ esac
 case "${ENV}" in
     test|prod) ;;
     *) err "--env must be one of: test | prod  (got '${ENV}')"; exit 1 ;;
+esac
+
+# ── Validate the release-state posture (baked into the image) ─────────────
+case "${RELEASE_STATE}" in
+    internal|public) ;;
+    *) err "--release-state must be one of: internal | public  (got '${RELEASE_STATE}')"; exit 1 ;;
 esac
 if [ "${ENV}" = "prod" ]; then
     # LOUD announced banner — a prod image bakes the REAL public domain and
@@ -1977,16 +1992,89 @@ gate_env_apps() {
         rm -f "${apps}/09-lan-dns.yaml" && \
             info "ENV=prod: pruned LAN wildcard-DNS app 09-lan-dns.yaml from the baked tree"
         rewrite_prod_image_tags
-        return 0
+    else
+        # ENV=test
+        rm -f "${apps}/12-cloudflared.yaml" && \
+            info "ENV=test: pruned go-live app 12-cloudflared.yaml from the baked tree"
+        case "${CLUSTER_DOMAIN}" in
+            *.test) info "ENV=test: LAN wildcard DNS authoritative for ${CLUSTER_DOMAIN}" ;;
+            *) rm -f "${apps}/09-lan-dns.yaml" && \
+                   warn "ENV=test but domain '${CLUSTER_DOMAIN}' is not .test — pruned 09-lan-dns.yaml so it cannot hijack a real domain (use brands/local.conf / 'make local' for a .test LAN build)" ;;
+        esac
     fi
-    # ENV=test
-    rm -f "${apps}/12-cloudflared.yaml" && \
-        info "ENV=test: pruned go-live app 12-cloudflared.yaml from the baked tree"
-    case "${CLUSTER_DOMAIN}" in
-        *.test) info "ENV=test: LAN wildcard DNS authoritative for ${CLUSTER_DOMAIN}" ;;
-        *) rm -f "${apps}/09-lan-dns.yaml" && \
-               warn "ENV=test but domain '${CLUSTER_DOMAIN}' is not .test — pruned 09-lan-dns.yaml so it cannot hijack a real domain (use brands/local.conf / 'make local' for a .test LAN build)" ;;
-    esac
+
+    # ── RELEASE_STATE gate (K8s-manifest enforcement — Layer 2 / the PRIMARY
+    # mechanism; INDEPENDENT of the ENV=prod/test split above). RELEASE_STATE
+    # is threaded from brand.conf like CLUSTER_DOMAIN (default "internal";
+    # validated against CLUSTER_DOMAIN in generate-brand-repos.sh). A
+    # RELEASE_STATE=internal build stays LAN/tailnet-only regardless of ENV,
+    # so this block runs for BOTH branches above — which is why the prod
+    # branch no longer `return`s early.
+    #
+    # This GENERALIZES the existing tailnet-only superadmin-gateway pattern
+    # (apps/22-gateway-superadmin.yaml + tier-ingress.yaml's superadmin
+    # carve-out) to the WHOLE brand: when not public, the public ingress
+    # controller never ships at all, both public-facing gateways serve ONLY
+    # the internal ingress class, and the tier-ingress NetworkPolicy admits
+    # from the internal facade instead of the (now-absent) public one.
+    #
+    # Layer 3 (bake_host_firewall(), the host nftables backstop) is called
+    # right after gate_env_apps() in the main build flow and enforces the
+    # SAME posture independently, at the netfilter layer.
+    if [ "${RELEASE_STATE:-internal}" != "public" ]; then
+        local cluster="${SYSROOT}/var/lib/snapdragon/cluster"
+        local netpol="${cluster}/manifests/networkpolicy/tier-ingress.yaml"
+
+        # a) The public ingress controller Application never ships — nothing
+        #    for a public IngressClass to bind to.
+        rm -f "${apps}/10-ingress-nginx.yaml" && \
+            info "RELEASE_STATE=internal: pruned the public ingress controller 10-ingress-nginx.yaml from the baked tree"
+
+        # b) Both public-facing gateways (be/fe) are repointed to serve ONLY
+        #    the internal ingress class (11-ingress-nginx-internal.yaml,
+        #    pinned to the pki node) instead of the now-absent public class.
+        local gw
+        for gw in "${apps}/20-gateway-be.yaml" "${apps}/20-gateway-fe.yaml"; do
+            [ -f "${gw}" ] && sed -i -E 's/^([[:space:]]*className: )nginx$/\1nginx-internal/' "${gw}"
+        done
+        info "RELEASE_STATE=internal: be/fe gateways repointed className nginx -> nginx-internal"
+
+        # c) tier-ingress.yaml's backend/frontend admit-lists currently let
+        #    the PUBLIC ingress-nginx namespace in; with the public
+        #    controller gone, admit from ingress-nginx-internal instead (the
+        #    pki namespace already carries this exact carve-out — see (a)/(b)
+        #    above and 22-gateway-superadmin.yaml).
+        [ -f "${netpol}" ] && sed -i -E \
+            -e 's/(kubernetes\.io\/metadata\.name: )ingress-nginx( \} \})/\1ingress-nginx-internal\2/' \
+            -e 's/# public facade/# internal facade (RELEASE_STATE=internal)/' \
+            "${netpol}" && \
+            info "RELEASE_STATE=internal: tier-ingress.yaml admits ingress-nginx-internal instead of the public ingress-nginx"
+    fi
+}
+
+# Layer 3 (defense-in-depth): host-level nftables backstop for RELEASE_STATE,
+# INDEPENDENT of the K8s ingress-class/NetworkPolicy split in gate_env_apps()
+# above and of firewalld (/etc/firewalld) — even if either is ever
+# misconfigured, an internal-only device still refuses public 80/443 at the
+# netfilter layer. Ships the reconcile agent (owns render + `nft -f` load,
+# scoped to its OWN nftables table so firewalld's tables are untouched) + its
+# OpenRC oneshot (ordered before containerd/kubelet/tailscaled — see the
+# init.d depend()) + its 60s convergence cron UNCONDITIONALLY (core
+# hardening, not opt-in — unlike the STAGED vpn/tor/domain reconciles). Also
+# bakes /etc/snapdragon/release-state, parallel to the existing
+# /etc/snapdragon/cluster-domain bake below. The FIRST-EVER ruleset load
+# happens at first boot (the oneshot), rendered from this baked value + the
+# (absent-by-default) go-live marker, so there is no separate build-time
+# nftables.conf to keep in sync.
+bake_host_firewall() {
+    mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/etc/init.d" "${SYSROOT}/etc/cron.d" "${SYSROOT}/etc/snapdragon"
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-firewall-reconcile"   "${SYSROOT}/usr/sbin/snapdragon-firewall-reconcile"
+    chmod +x "${SYSROOT}/usr/sbin/snapdragon-firewall-reconcile"
+    cp "${SHARED_SPECS}/etc/init.d/snapdragon-firewall-reconcile" "${SYSROOT}/etc/init.d/snapdragon-firewall-reconcile"
+    chmod +x "${SYSROOT}/etc/init.d/snapdragon-firewall-reconcile"
+    cp "${SHARED_SPECS}/etc/cron.d/snapdragon-firewall-reconcile" "${SYSROOT}/etc/cron.d/snapdragon-firewall-reconcile"
+    echo "${RELEASE_STATE:-internal}" > "${SYSROOT}/etc/snapdragon/release-state"
+    info "RELEASE_STATE=${RELEASE_STATE:-internal}: baked the host nftables backstop (snapdragon-firewall-reconcile renders + loads the live ruleset at boot + every 60s)"
 }
 
 # Rebrand the baked cluster tree (no-op for default snapdragon naming).
@@ -2786,6 +2874,7 @@ else
         *" games "*) parameterize_games_domain ;;  # rewrite .games -> ${GAMES_DOMAIN} (BEFORE rebrand; fixes games OIDC iss on the subdomain default)
     esac
     gate_env_apps             # prune ENV-specific ArgoCD apps from the baked copy
+    bake_host_firewall        # Layer 3: host nftables backstop for RELEASE_STATE (independent of gate_env_apps' K8s-manifest layer)
     gate_optional_services    # prune OPTIONAL services (akkoma/tuwunel/phpbb/games) not in OPTIONAL_SERVICES
     rebrand_sysroot           # rewrites snapdragon.systems -> ${CLUSTER_DOMAIN} (incl. lan-dns/cloudflared/games)
 fi
@@ -2871,7 +2960,7 @@ LIGHTDM
         info "Media-data: /media auto-detect + Steam->${STEAM_DIR} + Vaults (gocryptfs) wired (steam=${STEAM_DELIVERY})"
     fi
 else
-    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall containerd kubelet auditd local)
+    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall snapdragon-firewall-reconcile containerd kubelet auditd local)
     ${ROLE_HEADSCALE} && SVCS+=(headscale)
 fi
 ${SKIP_MESH} || ${SKIP_TAILSCALE} || SVCS+=(tailscaled)
