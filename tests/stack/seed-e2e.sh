@@ -229,9 +229,30 @@ ensure_app    "${CASDOOR_URL}" "${CASDOOR_ORG}"
 # domain-locked/…) PLUS the three the UI suites additionally assume. Same
 # "username:ROLES:passwordEnv" spec shape; appended exactly like
 # tests/pentest/seed-personas.sh appends its attacker/load pools.
+#
+# The ad-hoc identities below (admin@snapdragon.systems, alice../frank@gmail.com,
+# dragoneer) are the sequential, stateful specs/02,04,05,06,07,08,09 personas —
+# per helpers.ts's onboard()/registerOnly() doc comment, native login has no
+# self-registration surface, so each must exist as a pre-seeded native Casdoor
+# account (username = the literal handle these specs hardcode) sharing the
+# common E2E_PASSWORD. admin@snapdragon.systems is the sole admin among them
+# (spec 02/08/09 exercise admin-only views); the rest are bare ROLE_USER (the
+# nav-matrix/nav-mastodon gate in menu.component.ts checks only
+# capabilities.installed() + session.fullyRegistered(), not a per-service
+# role, so plain ROLE_USER is sufficient to reach both). mallory@gmail.com and
+# "rando" are DELIBERATELY absent — specs 03/07 assert sign-in is denied for an
+# identity no admin ever provisioned.
 EXTRA_SPECS="\
 e2e-superadmin:ROLE_SUPERADMIN:E2E_SUPERADMIN_PASSWORD \
-e2e-banned:ROLE_USER:E2E_BANNED_PASSWORD"
+e2e-banned:ROLE_USER:E2E_BANNED_PASSWORD \
+admin@snapdragon.systems:ROLE_ADMIN,ROLE_USER:E2E_PASSWORD \
+alice@gmail.com:ROLE_USER:E2E_PASSWORD \
+bob@gmail.com:ROLE_USER:E2E_PASSWORD \
+carol@gmail.com:ROLE_USER:E2E_PASSWORD \
+dave@gmail.com:ROLE_USER:E2E_PASSWORD \
+eve@gmail.com:ROLE_USER:E2E_PASSWORD \
+frank@gmail.com:ROLE_USER:E2E_PASSWORD \
+dragoneer:ROLE_USER:E2E_PASSWORD"
 
 ROLES_DIR="${SEED_WORKDIR}/roles-render"
 BASE_RENDER="${SEED_WORKDIR}/roles-render-base"

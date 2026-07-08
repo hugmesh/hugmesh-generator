@@ -464,6 +464,32 @@ REMOTE
 #   apply-systems-roles.sh       idempotent Casdoor admin-API hook (add-user with
 #                                the e2e password, then update-role) so a REAL
 #                                Casdoor carries the right JWT `roles` claim.
+
+# Casdoor's add-user rejects any name that isn't alphanumeric/hyphen/underline
+# (no leading/trailing/consecutive -_ ), so an email-shaped SYSTEMS_ROLE_USERS
+# spec (admin@snapdragon.systems, alice@gmail.com, …) can never be the Casdoor
+# `name` verbatim. Pass the ORIGINAL handle through unchanged when it's already
+# legal (every existing e2e-* spec); otherwise fold every disallowed run of
+# characters to a single hyphen and trim the ends. The sanitized string is used
+# ONLY for Casdoor's internal name/role-membership id — displayName/email keep
+# the original handle, and Casdoor's native /api/login matches by email too, so
+# the specs' hardcoded login-username values keep working unchanged.
+casdoor_legal_name() {
+    local raw="$1"
+    if [[ "${raw}" =~ ^[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?$ && ! "${raw}" =~ (--|__|-_|_-) ]]; then
+        echo "${raw}"
+        return
+    fi
+    local s="${raw//[^A-Za-z0-9]/-}"
+    s="$(echo "${s}" | sed -E 's/-+/-/g')"
+    s="${s#-}"; s="${s%-}"
+    # Defensive: a raw handle with NO alphanumeric characters at all sanitizes to
+    # empty (no current SYSTEMS_ROLE_USERS/EXTRA_SPECS entry is like this, but an
+    # empty Casdoor `name` would be a confusing failure mode for whoever adds one).
+    [ -n "${s}" ] || s="e2e-persona"
+    echo "${s}"
+}
+
 emit_roles() {
     local dir="$1/roles"
     mkdir -p "${dir}"
@@ -487,21 +513,28 @@ ROLE_FORUM ROLE_GAMES ROLE_GAMES_ADMIN ROLE_USER"
     done
 
     for spec in ${SYSTEMS_ROLE_USERS}; do
-        local uname roles_csv penv pass
+        local uname roles_csv penv pass cname email_field
         uname="${spec%%:*}"; spec="${spec#*:}"
         roles_csv="${spec%%:*}"; penv="${spec##*:}"
         pass="$(role_password "${penv}")"
+        cname="$(casdoor_legal_name "${uname}")"
+        email_field=""
+        [[ "${uname}" == *"@"* ]] && email_field="${uname}"
         users_json="$(echo "${users_json}" | jq \
-            --arg u "${uname}" --arg p "${pass}" --arg org "${SYSTEMS_CASDOOR_ORG}" \
-            --arg penv "${penv}" \
-            '. + [{owner:$org, name:$u, displayName:$u, password:$p, passwordEnv:$penv,
+            --arg u "${cname}" --arg disp "${uname}" --arg p "${pass}" --arg org "${SYSTEMS_CASDOOR_ORG}" \
+            --arg penv "${penv}" --arg email "${email_field}" \
+            '. + [{owner:$org, name:$u, displayName:$disp,
+                   email: (if $email == "" then null else $email end),
+                   password:$p, passwordEnv:$penv,
                    type:"normal-user", isAdmin:false, isForbidden:false, isDeleted:false}]')"
-        # Add this user as a member of each of its (directly-granted) roles.
+        # Add this user as a member of each of its (directly-granted) roles. The
+        # member id MUST be the Casdoor (sanitized) name — Casdoor resolves role
+        # membership against real user ids, not the display handle.
         local IFS=','
         for r in ${roles_csv}; do
             [ -n "${r}" ] || continue
             role_members_json="$(echo "${role_members_json}" | jq \
-                --arg r "${r}" --arg m "${SYSTEMS_CASDOOR_ORG}/${uname}" \
+                --arg r "${r}" --arg m "${SYSTEMS_CASDOOR_ORG}/${cname}" \
                 '.[$r] = ((.[$r] // []) + [$m] | unique)')"
         done
         unset IFS
@@ -577,7 +610,7 @@ jq -c '.users[]' "${ROLES_JSON}" | while read -r u; do
   exists="$(curl -s -b "${CJ}" "${BASE}/api/get-user?id=${ORG}/${name}" | jq -r '.data.name // empty')"
   if [ -n "${exists}" ]; then log "user ${name} exists"; continue; fi
   curl -s -b "${CJ}" "${BASE}/api/add-user" -H 'content-type: application/json' \
-    -d "$(echo "$u" | jq -c '{owner, name, displayName, password, type, isAdmin, isForbidden, isDeleted, signupApplication:"app-built-in"}')" \
+    -d "$(echo "$u" | jq -c '{owner, name, displayName, email, password, type, isAdmin, isForbidden, isDeleted, signupApplication:"app-built-in"}')" \
     | jq -r '.status // "?"' | sed "s/^/[apply-roles] add-user ${name} -> /"
 done
 
