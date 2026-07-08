@@ -26,6 +26,15 @@ kde-plasma/discover flatpak
 # These apply to BOTH thin and thick (both ship Discover), hence desktop not capable.
 dev-libs/appstream qt6
 app-text/xmlto text
+# app-admin/calamares (graphical installer; any --installer-ui with a graphical
+# leg — the standalone default 'all' included) hard-depends on
+# >=dev-libs/boost-1.72.0:=[python,python_targets_pythonX_Y(-)]. boost builds
+# WITHOUT python by default, so the whole payload emerge fails resolution
+# ("no ebuilds built with USE flags to satisfy ...[python...]") and NOTHING in
+# packages.list merges. Caught by the first x86 desktop build ever run to this
+# phase (2026-07-08); the builder's AUTOUNMASK-PRETEND replay listed exactly
+# this one change.
+dev-libs/boost python
 # Discover is a Qt6/QML Plasma app: it pulls purpose -> prison[qml] and the wider
 # KF6/Qt6 QML framework stack. These modules USE-match qtbase[opengl=,vulkan=] and
 # need qml, so enable opengl/vulkan/qml across the chain. qtbase also needs
