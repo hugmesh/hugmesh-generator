@@ -1,7 +1,8 @@
 """Snapdragon Image Studio — entry point.
 
-  python -m snapdragon_studio            # wizard + tray
-  python -m snapdragon_studio --tray     # tray only (mesh-node controller)
+  python -m snapdragon_studio               # wizard + mesh-node tray + local-stack tray
+  python -m snapdragon_studio --tray        # tray only (mesh-node controller)
+  python -m snapdragon_studio --stack-tray  # tray only (local dev-stack controller)
   python -m snapdragon_studio --generator-dir /path/to/snapdragon-generator
 """
 from __future__ import annotations
@@ -25,6 +26,8 @@ def main(argv=None) -> int:
     ap.add_argument("--generator-dir", default=_default_generator_dir(),
                     help="path to the snapdragon-generator checkout")
     ap.add_argument("--tray", action="store_true", help="run only the mesh-node tray controller")
+    ap.add_argument("--stack-tray", action="store_true",
+                    help="run only the local dev-stack (make stack-up) tray controller")
     ap.add_argument("--print-command", action="store_true",
                     help="headless: print the build command for a saved config and exit")
     ap.add_argument("--config", help="config JSON (with --print-command)")
@@ -60,16 +63,26 @@ def main(argv=None) -> int:
         wizard.show()
         wizard.raise_()
 
-    tray = None
+    tray_only = args.tray or args.stack_tray
+    # --tray/--stack-tray each mean "only this one" in isolation, but "show
+    # everything relevant" if neither (default) or both are given.
+    show_mesh = args.tray or not tray_only
+    show_stack = args.stack_tray or not tray_only
+    trays = []
     if QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
-        from .gui.tray import MeshTray
-        tray = MeshTray(args.generator_dir, on_open_studio=open_studio)
-        tray.show()
-        app.setQuitOnLastWindowClosed(False)  # keep running in the tray
+        from .gui.tray import MeshTray, StackTray
+        if show_mesh:
+            trays.append(MeshTray(args.generator_dir, on_open_studio=open_studio))
+        if show_stack:
+            trays.append(StackTray(args.generator_dir, on_open_studio=open_studio))
+        for tray in trays:
+            tray.show()
+        if trays:
+            app.setQuitOnLastWindowClosed(False)  # keep running in the tray
 
-    if not args.tray:
+    if not tray_only:
         open_studio()
-    elif tray is None:
+    elif not trays:
         print("[studio] no system tray available; opening the wizard instead", file=sys.stderr)
         open_studio()
 
