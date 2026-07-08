@@ -1,13 +1,15 @@
-# Casdoor app.conf override that points Casdoor at the external Postgres
-# (casdoor-pg) instead of the all-in-one image's bundled DB. Mounted over the
-# image's conf/app.conf. NO secrets here — the DB user/password are interpolated
-# at startup from env (CASDOOR_DB_USER / CASDOOR_DB_PASSWORD), which the
-# Deployment sources from the ESO Secret "casdoor-db".
+# Casdoor app.conf TEMPLATE that points Casdoor at the external Postgres
+# (casdoor-pg) instead of the all-in-one image's bundled DB. Rendered into the
+# real conf/app.conf by the "render-app-conf" initContainer in deployment.yaml
+# (plain sed substitution of the __TOKEN__ placeholders below against env vars
+# sourced from the ESO Secrets casdoor-db / casdoor-smtp). NO secrets here.
 #
-# !!! Casdoor's app.conf keys and the beego "${ENV||default}" interpolation are
-# !!! version-specific. This is a working scaffold — validate the field set and
-# !!! the Postgres dataSourceName against the deployed casbin/casdoor image; if
-# !!! Casdoor refuses to start, diff against that image's bundled conf/app.conf.
+# NOTE: casbin/casdoor does NOT expand beego's documented "${ENV||default}"
+# syntax inside app.conf — confirmed live: with that syntax in place, Casdoor
+# used the literal string "${CASDOOR_DB_USER||casdoor}" as the Postgres
+# username and crashed with "password authentication failed for user
+# \"${CASDOOR_DB_USER||casdoor}\"". Hence the initContainer-render approach
+# instead of relying on in-app env interpolation.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,7 +17,7 @@ metadata:
   namespace: snapdragon-pki
   labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
 data:
-  app.conf: |
+  app.conf.template: |
     appname = casdoor
     httpport = 8000
     runmode = prod
@@ -23,9 +25,9 @@ data:
     SessionOn = true
     # External Postgres (casdoor-pg). For the postgres driver Casdoor uses the
     # dataSourceName verbatim (it only appends dbName for MySQL), so dbname= must
-    # be set inline here. Credentials come from env (ESO Secret casdoor-db).
+    # be set inline here. Credentials rendered in by the initContainer.
     driverName = postgres
-    dataSourceName = "user=${CASDOOR_DB_USER||casdoor} password=${CASDOOR_DB_PASSWORD||} host=casdoor-pg port=5432 sslmode=disable dbname=casdoor"
+    dataSourceName = "user=__CASDOOR_DB_USER__ password=__CASDOOR_DB_PASSWORD__ host=casdoor-pg port=5432 sslmode=disable dbname=casdoor"
     dbName = casdoor
     tableNamePrefix =
     showSql = false
@@ -42,13 +44,11 @@ data:
     # Outbound mail for email-verification / password-reset. Sourced from env
     # (CASDOOR_SMTP_*), which the Deployment loads from the OPTIONAL secret
     # casdoor-smtp (ESO <- Vault secret/<brand>/mail, seeded per the brand's
-    # MAIL_PROVIDER). When that secret is ABSENT every value defaults to empty
-    # here, so no SMTP is configured and Casdoor stays on native user/pass login
-    # + admin-approval registration — no email required. NOTE: Casdoor primarily
-    # stores SMTP in its provider table; these app.conf keys are the conf-level
-    # fallback. Validate the exact key names against the deployed casbin/casdoor.
-    smtpServer = "${CASDOOR_SMTP_HOST||}"
-    smtpPort = "${CASDOOR_SMTP_PORT||}"
-    smtpUsername = "${CASDOOR_SMTP_USER||}"
-    smtpPassword = "${CASDOOR_SMTP_PASSWORD||}"
-    smtpFrom = "${CASDOOR_SMTP_FROM||}"
+    # MAIL_PROVIDER). When that secret is ABSENT the env vars are unset, the
+    # initContainer renders these to empty strings, and Casdoor stays on
+    # native user/pass login + admin-approval registration — no email required.
+    smtpServer = "__CASDOOR_SMTP_HOST__"
+    smtpPort = "__CASDOOR_SMTP_PORT__"
+    smtpUsername = "__CASDOOR_SMTP_USER__"
+    smtpPassword = "__CASDOOR_SMTP_PASSWORD__"
+    smtpFrom = "__CASDOOR_SMTP_FROM__"
