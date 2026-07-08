@@ -80,7 +80,7 @@ assert_has "fleet: omnibus"             "X86_OMNIBUS=1"
 assert_has "fleet: frite fleet"         "FRITE=1"
 assert_has "fleet: jetson fleet"        "JETSON=1"
 assert_has "fleet: pentest"             "PENTEST=1"
-build_make_cmd build-everything "everything" 19
+build_make_cmd build-everything "everything" 20
 assert_eq  "everything: target first"   "${RUN_MAKE[0]}" "build-everything"
 assert_has "everything: resume"         "RESUME=--resume"
 assert_has "everything: omnibus"        "X86_OMNIBUS=1"
@@ -95,7 +95,7 @@ assert_not "single role: no JETSON"     "JETSON="
 assert_not "single role: no PENTEST"    "PENTEST="
 # with the toggles off, build-everything must not gain a redundant emit either
 reset_opts
-build_make_cmd build-everything "everything default" 19
+build_make_cmd build-everything "everything default" 20
 assert_not "everything default: no RESUME" "RESUME="
 assert_not "everything default: no PENTEST" "PENTEST="
 
@@ -186,6 +186,41 @@ assert_has "client: home backup"        "--home-backup auto"
 build_make_cmd x86-pki "pki" 1
 assert_not "cluster: no home flags"     "--home-mode"
 
+# ── UNAFFILIATED standalone desktop: plain Gentoo, ZERO Snapdragon affiliation ──
+# The role PRESETS the neutral identity builder-side and HARD-ERRORS on any
+# brand/branding/bundle-source/seed-code flag, so the menu channel must emit the
+# x86-standalone-unaffiliated target + the generic desktop options ONLY. The trap:
+# OPT_SA_THEME's persisted default is 'boogiepop' (reset_opts leaves it there) and
+# a branded run can leave OPT_BRAND/OPT_BR_*/OPT_HOME_SEED behind in menu.conf —
+# none of them may leak into this target's argv.
+reset_opts   # note: OPT_SA_THEME stays at its boogiepop default on purpose
+OPT_SA_USER=alice OPT_SA_GPU=nvidia OPT_SA_KEYFILE=boot OPT_SA_YUBIKEY=login
+OPT_HOME_MODE=create OPT_HOME_SEED=stack        # seed left over from a branded run
+OPT_BRAND=acme OPT_BR_WALLPAPER=/tmp/wall.png   # brand/branding leftovers too
+OPT_EXTRA_FLAGS="--compress"
+build_make_cmd x86-standalone-unaffiliated "unaff" 1
+assert_eq  "unaff: make target"         "${RUN_MAKE[0]}" "x86-standalone-unaffiliated"
+assert_not "unaff: no --theme (boogiepop default suppressed)" "--theme"
+assert_not "unaff: no BRAND= profile"   "BRAND="
+assert_not "unaff: no --brand"          "--brand"
+assert_not "unaff: no --bundle-source"  "--bundle-source"
+assert_not "unaff: no --home-seed-code" "--home-seed-code"
+assert_not "unaff: no --wallpaper"      "--wallpaper"
+assert_has "unaff: local user collected" "--local-user alice"
+assert_has "unaff: gpu driver"          "--gpu-driver nvidia"
+assert_has "unaff: unlock keyfile"      "--unlock-keyfile boot"
+assert_has "unaff: unlock yubikey"      "--unlock-yubikey login"
+assert_has "unaff: home mode (generic) survives" "--home-mode create"
+assert_has "unaff: extra flags verbatim" "--compress"
+assert_one_flags "unaff"
+# the branded thick sibling is UNCHANGED by the gating: the very same options
+# still emit --theme/--home-seed-code/BRAND= there
+build_make_cmd x86-standalone-thick "thick sibling" 1
+assert_has "thick sibling: theme intact" "--theme boogiepop"
+assert_has "thick sibling: seed intact" "--home-seed-code stack"
+assert_has "thick sibling: brand intact" "BRAND=acme"
+assert_has "thick sibling: wallpaper intact" "--wallpaper /tmp/wall.png"
+
 # ── extra flags ride IMG_FLAGS on the targets without STANDALONE_FLAGS ──────────
 reset_opts; OPT_IMGFLAGS="--no-iso" OPT_EXTRA_FLAGS="--enable-wifi"
 build_make_cmd rpi-frontend "pi fe" 1
@@ -198,7 +233,7 @@ assert_has "x86: extra via STANDALONE"  "STANDALONE_FLAGS=--enable-wifi"
 # fleet targets (heterogeneous roles/arches): extra-flags has no single safe
 # destination, so it's excluded from IMG_FLAGS the same way build-all is —
 # same class of gap as the RESUME/PENTEST fleet-gating bug above.
-build_make_cmd build-everything "everything" 19
+build_make_cmd build-everything "everything" 20
 assert_has "everything: imgflags plain" "IMG_FLAGS=--no-iso"
 assert_not "everything: extra NOT doubled" "IMG_FLAGS=--no-iso --enable-wifi"
 

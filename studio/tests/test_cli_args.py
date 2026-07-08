@@ -10,9 +10,13 @@ import pytest
 
 from snapdragon_studio.core.config import (
     BUILDER_SCRIPTS,
+    ENV_CHOICES,
+    GPU_DRIVER_ALIASES,
+    GPU_DRIVER_CHOICES,
     ImageConfig,
     MODE_DEFAULT_ROLE,
     ROLE_CHOICES,
+    UNAFFILIATED_ROLE,
 )
 
 
@@ -40,6 +44,9 @@ def test_role_catalog_covers_every_documented_role():
     assert ("frite", "frite") in flat
     # STANDALONE
     assert ("standalone-thin", "x86") in flat and ("standalone-thick", "x86") in flat
+    # PLAIN-GENTOO arms: the unaffiliated x86 desktop + the rpi5 generic arm64 server
+    assert ("standalone-unaffiliated", "x86") in flat
+    assert ("generic", "rpi5") in flat
     # JETSON (EXPERIMENTAL)
     for r in ("edge_ai", "full", "gpu-host", "jetson-desktop"):
         assert (r, "jetson") in flat
@@ -69,6 +76,88 @@ def test_x86_standalone_roles_golden(role):
     args = ImageConfig(mode="standalone", role=role, platform="x86").to_cli_args()
     assert args == ["--role", role, "--env", "test", "--local-user", "magus",
                     "--no-tailscale", "--no-sso", *X86_TAIL]
+
+
+# ---- x86: the UNAFFILIATED plain-Gentoo desktop -------------------------------
+# The builder's role arm PRESETS everything (neutral gentoo identity, no bundled
+# source, no mesh/SSO) and HARD-ERRORS on any affiliation flag — the Studio emits
+# the bare role + generic options only, and raises the same conflicts loudly.
+
+def test_x86_standalone_unaffiliated_golden():
+    args = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
+                       bundle_source=False).to_cli_args()
+    assert args == ["--role", "standalone-unaffiliated", "--env", "test",
+                    "--local-user", "magus",
+                    "--snort", "--installer-ui", "all", "--uncached", "--live-toram"]
+
+
+def test_x86_unaffiliated_never_emits_affiliation_flags():
+    """Mirror of test_rpi5_never_emits_x86_only_flags: generic options flow through,
+    every affiliation flag (a builder hard-conflict) is absent."""
+    args = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
+                       bundle_source=False, gpu_driver="nvidia", encrypt_root=True,
+                       luks_pass="sekrit", unlock_keyfile="boot", unlock_yubikey="login",
+                       compress=True, resume=True).to_cli_args()
+    for flag in ("--brand", "--brand-title", "--org",
+                 "--theme", "--branding-dir", "--wallpaper", "--grub-background",
+                 "--grub-theme", "--login-background", "--brand-logo", "--accent-color",
+                 "--color-scheme", "--brand-locked",
+                 "--bundle-source", "--no-bundle-source", "--home-seed-code",
+                 "--with-tailscale", "--no-tailscale", "--with-sso", "--no-sso",
+                 "--person-role", "--domains"):
+        assert flag not in args
+    p = pairs(args)
+    assert ("--role", "standalone-unaffiliated") in p
+    assert ("--gpu-driver", "nvidia") in p
+    assert "--encrypt-root" in args
+    assert ("--luks-pass", "sekrit") in p
+    assert ("--unlock-keyfile", "boot") in p and ("--unlock-yubikey", "login") in p
+    assert "--compress" in args and "--resume" in args
+
+
+@pytest.mark.parametrize("conflict", [
+    {"brand": "acme"},
+    {"brand_title": "Acme"},
+    {"org": "Acme-Org"},
+    {"brand": "gentoo"},              # even the neutral id: the builder forces it ITSELF
+    {"theme": "boogiepop"},
+    {"branding_dir": "/tmp/brand"},
+    {"wallpaper": "wp.png"},
+    {"grub_background": "g.png"},
+    {"login_background": "l.png"},
+    {"brand_logo": "logo.png"},
+    {"accent_color": "#123456"},
+    {"color_scheme": "dark"},
+    {"brand_locked": True},
+    {"home_seed_code": "repos"},
+    {"tailscale": True},
+    {"sso": True},
+    {"mode": "cloud"},                # would emit --person-role/--domains
+    {"mode": "mesh"},
+])
+def test_x86_unaffiliated_conflicting_fields_raise(conflict):
+    kw = dict(mode="standalone", role="standalone-unaffiliated", platform="x86",
+              bundle_source=False)
+    kw.update(conflict)
+    with pytest.raises(ValueError, match="unaffiliated"):
+        ImageConfig(**kw).to_cli_args()
+
+
+def test_x86_unaffiliated_bundle_source_default_is_normalized_not_a_conflict():
+    """bundle_source defaults True (the branded-standalone self-hosting default), so
+    an untouched config must NOT raise — it is normalized like the wizard does on
+    role selection: the argv carries NEITHER --bundle-source NOR --no-bundle-source
+    (the role presets no-bundled-source builder-side; only an EXPLICIT
+    --bundle-source flag errors there)."""
+    args = ImageConfig(mode="standalone", role="standalone-unaffiliated",
+                       platform="x86", bundle_source=True).to_cli_args()
+    assert "--bundle-source" not in args
+    assert "--no-bundle-source" not in args
+
+
+def test_unaffiliated_role_constant_matches_catalog():
+    assert UNAFFILIATED_ROLE == "standalone-unaffiliated"
+    assert UNAFFILIATED_ROLE in {r for r, _, _ in ROLE_CHOICES["standalone"]}
 
 
 @pytest.mark.parametrize("role", ["laptop", "chromebook", "desktop"])
@@ -152,6 +241,19 @@ def test_rpi5_full_surface():
                     "--with-character-studio"]
 
 
+def test_rpi5_generic_golden():
+    """The plain-Gentoo unbranded arm64 server (the rpi5 builder's default role) —
+    standalone mode (no tailnet) emits --skip-mesh; role passes through unmapped."""
+    args = ImageConfig(mode="standalone", role="generic", platform="rpi5").to_cli_args()
+    assert args == ["--role", "generic", "--env", "test", "--skip-mesh"]
+
+
+def test_rpi5_generic_with_mesh_golden():
+    args = ImageConfig(mode="standalone", role="generic", platform="rpi5",
+                       tailscale=True).to_cli_args()
+    assert args == ["--role", "generic", "--env", "test"]
+
+
 def test_rpi5_never_emits_x86_only_flags():
     args = ImageConfig(mode="mesh", role="pki", platform="rpi5",
                        installer_ui="all", cached=True, desktop="thin",
@@ -216,6 +318,43 @@ def test_env_threads_through_every_platform(platform, role, env):
     args = ImageConfig(mode="mesh" if platform != "frite" else "cloud",
                        role=role, platform=platform, env=env).to_cli_args()
     assert ("--env", env) in pairs(args)
+
+
+@pytest.mark.parametrize("env", ENV_CHOICES)
+def test_env_threads_through_the_plain_gentoo_roles(env):
+    """ENV_CHOICES backs the BuildPage env picker — both values must translate for
+    the new plain-Gentoo arms exactly like every other role."""
+    ua = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
+                     env=env, bundle_source=False).to_cli_args()
+    assert ("--env", env) in pairs(ua)
+    gen = ImageConfig(mode="standalone", role="generic", platform="rpi5",
+                      env=env).to_cli_args()
+    assert ("--env", env) in pairs(gen)
+
+
+# ---- GPU driver matrix (the HardwarePage combo mirrors the builder) ------------
+
+def test_gpu_driver_choices_cover_the_builder_matrix():
+    # build-x86-host-stage4.sh: --gpu-driver must be: all-free | nvidia-free |
+    # nvidia | amd-free | amd-pro | intel-free | intel-pro | none ("auto" = the
+    # Studio's don't-emit value, resolved by the builder per role).
+    assert GPU_DRIVER_CHOICES == ("auto", "all-free", "nvidia-free", "nvidia",
+                                  "amd-free", "amd-pro", "intel-free", "intel-pro", "none")
+    # vendor aliases normalize INTO the canonical set and never appear in the combo
+    for alias, canonical in GPU_DRIVER_ALIASES.items():
+        assert canonical in GPU_DRIVER_CHOICES
+        assert alias not in GPU_DRIVER_CHOICES
+
+
+@pytest.mark.parametrize("driver", [d for d in GPU_DRIVER_CHOICES if d != "auto"])
+def test_gpu_driver_matrix_emits_verbatim(driver):
+    args = ImageConfig(mode="standalone", role="standalone-thick",
+                       gpu_driver=driver).to_cli_args()
+    assert ("--gpu-driver", driver) in pairs(args)
+
+
+def test_gpu_driver_auto_emits_nothing():
+    assert "--gpu-driver" not in ImageConfig(gpu_driver="auto").to_cli_args()
 
 
 # ---- secrets: live command only, never persisted -------------------------------

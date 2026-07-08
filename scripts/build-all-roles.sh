@@ -112,8 +112,9 @@ fi
 if [ "${SKIP_X86:-0}" = "1" ]; then
     X86_BUILD_ROLES=()
 elif [ "${X86_STANDALONE_ONLY:-0}" = "1" ]; then
-    # ONLY the hardened standalone NVIDIA desktops (skip the cluster node roles).
-    X86_BUILD_ROLES=(standalone-thin standalone-thick)
+    # ONLY the standalone desktops (skip the cluster node roles): the two hardened
+    # NVIDIA variants + the UNAFFILIATED plain Gentoo one.
+    X86_BUILD_ROLES=(standalone-thin standalone-thick standalone-unaffiliated)
     RPI_ROLES=()
 elif [ -n "${X86_ROLES:-}" ]; then
     read -r -a X86_BUILD_ROLES <<< "${X86_ROLES}"
@@ -124,11 +125,12 @@ elif [ "${X86_OMNIBUS:-0}" = "1" ]; then
 else
     X86_BUILD_ROLES=(pki be fe be+gpu)
 fi
-# X86_STANDALONE=1 appends the two hardened standalone NVIDIA desktop variants
-# (thin + thick) to whatever x86 set was selected. Each auto-enables LUKS FDE on
-# install + emits all four artifacts (live ISO, stage4, .fs.tar.xz, installer ISO).
+# X86_STANDALONE=1 appends the standalone desktop variants (thin + thick hardened
+# NVIDIA + the UNAFFILIATED plain Gentoo one) to whatever x86 set was selected.
+# Each auto-enables LUKS FDE on install + emits all four artifacts (live ISO,
+# stage4, .fs.tar.xz, installer ISO).
 if [ "${X86_STANDALONE:-0}" = "1" ] && [ "${X86_STANDALONE_ONLY:-0}" != "1" ]; then
-    X86_BUILD_ROLES+=(standalone-thin standalone-thick)
+    X86_BUILD_ROLES+=(standalone-thin standalone-thick standalone-unaffiliated)
 fi
 
 # Frite light-desktop is OPT-IN. FRITE_ONLY=1 builds ONLY the Frite (skip Pi/x86).
@@ -182,6 +184,21 @@ for role in "${RPI_ROLES[@]}"; do
 done
 
 for role in "${X86_BUILD_ROLES[@]}"; do
+    # The UNAFFILIATED plain desktop is brandless BY DEFINITION — a fleet-wide
+    # brand profile (--config/--brand/--brand-title/--org) hard-conflicts with
+    # it in the builder. Skip it LOUDLY on branded fleet runs rather than
+    # producing a guaranteed-failed build (build it separately, unbranded:
+    # make x86-standalone-unaffiliated).
+    if [ "${role}" = "standalone-unaffiliated" ]; then
+        _branded=false
+        for _a in "$@"; do case "${_a}" in --config|--brand|--brand-title|--org) _branded=true ;; esac; done
+        if ${_branded}; then
+            echo "## SKIPPING x86 role 'standalone-unaffiliated': this fleet run carries a brand profile," >&2
+            echo "##   and the unaffiliated desktop is brandless by definition (the builder would hard-error)." >&2
+            echo "##   Build it separately: make x86-standalone-unaffiliated" >&2
+            continue
+        fi
+    fi
     echo "############################################################"
     echo "#  Building x86 role: ${role}"
     echo "############################################################"

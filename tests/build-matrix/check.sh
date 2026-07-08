@@ -257,6 +257,27 @@ for target in build-all build-everything; do
         echo "FLEETTHR PASS ${target}"
     fi
 done
+
+# ── UNAFFILIATED MENU→MAKE threading probe ───────────────────────────────────
+# The unaffiliated desktop must thread --role standalone-unaffiliated into the
+# recipe and must NOT emit --theme even with the menu's persisted 'boogiepop'
+# theme default in place (any branding flag is a builder HARD conflict there —
+# the role presets the neutral identity itself).
+reset_opts
+OPT_SA_THEME=boogiepop   # the default a branded standalone run leaves persisted
+build_make_cmd x86-standalone-unaffiliated "unaff-thread-probe" 1
+if recipe="$(make -n "${RUN_MAKE[@]}" NATIVE=1 2>&1)"; then
+    miss=""
+    case "${recipe}" in *"--role standalone-unaffiliated"*) ;; *) miss+=" '--role standalone-unaffiliated'" ;; esac
+    case "${recipe}" in *"--theme"*) miss+=" '--theme LEAKED'" ;; esac
+    if [ -n "${miss}" ]; then
+        echo "UNAFFTHR FAIL x86-standalone-unaffiliated —${miss} (argv: ${RUN_MAKE[*]})"
+    else
+        echo "UNAFFTHR PASS x86-standalone-unaffiliated"
+    fi
+else
+    echo "UNAFFTHR FAIL x86-standalone-unaffiliated — make -n exited non-zero"
+fi
 MENU_EOF
     local rc=$?
     MENU_PASS=$(grep -c '^MENU PASS' "${out}" || true)
@@ -273,6 +294,11 @@ MENU_EOF
     fthr_pass=$(grep -c '^FLEETTHR PASS' "${out}" || true)
     THR_PASS=$((THR_PASS + fthr_pass))
     THR_FAIL=$((THR_FAIL + 2 - fthr_pass))
+    # and for the unaffiliated-desktop threading probe: 1 expected.
+    local uthr_pass
+    uthr_pass=$(grep -c '^UNAFFTHR PASS' "${out}" || true)
+    THR_PASS=$((THR_PASS + uthr_pass))
+    THR_FAIL=$((THR_FAIL + 1 - uthr_pass))
     # FAIL-CLOSED: a crashed/aborted menu child (source error, set -u trip, …)
     # must count as a channel failure, not as "0 rows = 0 failures" — otherwise
     # the 4-channels-per-cell guarantee silently degrades to 3 (the completeness
@@ -281,7 +307,7 @@ MENU_EOF
         _fail MENU "channel" "menu child exited ${rc}" "${TMP_DIR}/menu.err"
         MENU_FAIL=$((MENU_FAIL+1))
     fi
-    grep -E '^(MENU|MENUTHR|FLEETTHR) FAIL' "${out}" >&2 || true
+    grep -E '^(MENU|MENUTHR|FLEETTHR|UNAFFTHR) FAIL' "${out}" >&2 || true
 }
 
 # ── channel 4: GUI — snapdragon_studio --print-command (headless, Qt-free) ──────
@@ -395,6 +421,13 @@ run_negative_checks() {
     expect_fail "jetson: invalid board"      ./build-jetson-stage4.sh --role edge_ai --board bogus --print-plan
     expect_fail "jetson: invalid env"        ./build-jetson-stage4.sh --role edge_ai --env staging --print-plan
     expect_fail "x86: invalid env"           ./build-x86-host-stage4.sh --role pki --env staging --print-plan
+    # UNAFFILIATED desktop: branding flags are a HARD conflict (no brand identity
+    # at all), and --unaffiliated composes onto desktop/client roles only — a
+    # cluster node is Snapdragon platform machinery by definition.
+    expect_fail "x86: unaffiliated role + --theme conflicts" \
+        ./build-x86-host-stage4.sh --role standalone-unaffiliated --theme boogiepop --print-plan
+    expect_fail "x86: --unaffiliated on a cluster role" \
+        ./build-x86-host-stage4.sh --role pki --unaffiliated --print-plan
     # GUI: an unknown platform must refuse to print a command
     printf '{"platform":"bogus","role":"pki","mode":"mesh","env":"test"}\n' >"${TMP_DIR}/neg.json"
     expect_fail "gui: unknown platform" \

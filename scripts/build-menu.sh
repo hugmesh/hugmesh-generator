@@ -401,9 +401,15 @@ build_make_cmd() {
     local target="$1" desc="$2" roles_total="$3"
     RUN_DESC="${desc}"; RUN_ROLES_TOTAL="${roles_total}"
     RUN_MAKE=("${target}")
+    # standalone-unaffiliated: the role PRESETS a neutral (brand-free) identity and
+    # the builder HARD-ERRORS on any brand/branding/seed-code flag — so this menu
+    # must never emit them for that one target (not even the BRAND= profile
+    # make-var, which expands to a `--config brands/<name>.conf` brand profile).
+    local unaff=no
+    [ "${target}" = x86-standalone-unaffiliated ] && unaff=yes
     # Make-vars are passed as args (they override ?= defaults cleanly).
     RUN_MAKE+=("WORK_DIR=${OPT_WORK_DIR}" "JOBS=${OPT_JOBS}" "ENV=${OPT_ENV}")
-    [ -n "${OPT_BRAND}" ]  && RUN_MAKE+=("BRAND=${OPT_BRAND}")
+    [ -n "${OPT_BRAND}" ] && [ "${unaff}" = no ] && RUN_MAKE+=("BRAND=${OPT_BRAND}")
     [ -n "${OPT_DOMAIN}" ] && RUN_MAKE+=("DOMAIN=${OPT_DOMAIN}")
     # IMG_FLAGS is expanded VERBATIM into the rpi/x86/frite/jetson builder
     # invocations (every $(RPI)/$(X86)/$(FRITE_BUILD)/$(JETSON_BUILD) macro embeds
@@ -486,8 +492,10 @@ build_make_cmd() {
             [ -n "${SA_LUKS_PASS}" ]  && bf+=" --luks-pass ${SA_LUKS_PASS}"
             [ "${OPT_SA_KEYFILE}" != none ] && bf+=" --unlock-keyfile ${OPT_SA_KEYFILE}"
             [ "${OPT_SA_YUBIKEY}" != none ] && bf+=" --unlock-yubikey ${OPT_SA_YUBIKEY}"
-            # branding theme + security stack + monolithic kernel + egress VPN
-            { [ -n "${OPT_SA_THEME}" ] && [ "${OPT_SA_THEME}" != none ]; } && bf+=" --theme ${OPT_SA_THEME}"
+            # branding theme + security stack + monolithic kernel + egress VPN.
+            # unaffiliated: NEVER --theme (a hard conflict), even though
+            # OPT_SA_THEME's persisted default is 'boogiepop'.
+            { [ "${unaff}" = no ] && [ -n "${OPT_SA_THEME}" ] && [ "${OPT_SA_THEME}" != none ]; } && bf+=" --theme ${OPT_SA_THEME}"
             [ "${OPT_SA_PROXY}" = no ]    && bf+=" --no-proxy-stack"
             [ "${OPT_SA_SNORT}" = no ]    && bf+=" --no-snort"
             [ "${OPT_SA_AIDE}" = yes ]    && bf+=" --with-aide"
@@ -532,13 +540,16 @@ build_make_cmd() {
         esac
         # Advanced branding OVERRIDES — single artwork/palette pieces layered on top
         # of the brand profile / theme preset. Apply to ANY x86 image (x86-only
-        # flags: the Jetson builder has no branding-override surface yet).
-        [ -n "${OPT_BR_WALLPAPER}" ] && bf+=" --wallpaper ${OPT_BR_WALLPAPER}"
-        [ -n "${OPT_BR_GRUB_BG}" ]   && bf+=" --grub-background ${OPT_BR_GRUB_BG}"
-        [ -n "${OPT_BR_LOGIN_BG}" ]  && bf+=" --login-background ${OPT_BR_LOGIN_BG}"
-        [ -n "${OPT_BR_LOGO}" ]      && bf+=" --brand-logo ${OPT_BR_LOGO}"
-        [ -n "${OPT_BR_ACCENT}" ]    && bf+=" --accent-color ${OPT_BR_ACCENT}"
-        [ -n "${OPT_BR_SCHEME}" ]    && bf+=" --color-scheme ${OPT_BR_SCHEME}"
+        # flags: the Jetson builder has no branding-override surface yet) EXCEPT
+        # the unaffiliated desktop, where every branding flag is a hard conflict.
+        if [ "${unaff}" = no ]; then
+            [ -n "${OPT_BR_WALLPAPER}" ] && bf+=" --wallpaper ${OPT_BR_WALLPAPER}"
+            [ -n "${OPT_BR_GRUB_BG}" ]   && bf+=" --grub-background ${OPT_BR_GRUB_BG}"
+            [ -n "${OPT_BR_LOGIN_BG}" ]  && bf+=" --login-background ${OPT_BR_LOGIN_BG}"
+            [ -n "${OPT_BR_LOGO}" ]      && bf+=" --brand-logo ${OPT_BR_LOGO}"
+            [ -n "${OPT_BR_ACCENT}" ]    && bf+=" --accent-color ${OPT_BR_ACCENT}"
+            [ -n "${OPT_BR_SCHEME}" ]    && bf+=" --color-scheme ${OPT_BR_SCHEME}"
+        fi
         # Home provisioning — standalone + tailnet CLIENT desktops only (a cluster
         # node has no provisioned user home to adopt/restore).
         case "${target}" in
@@ -547,7 +558,8 @@ build_make_cmd() {
                 [ -n "${OPT_HOME_DEVICE}" ]  && bf+=" --home-device ${OPT_HOME_DEVICE}"
                 [ -n "${OPT_HOME_BACKUP}" ]  && bf+=" --home-backup ${OPT_HOME_BACKUP}"
                 [ "${OPT_HOME_ENCRYPTED}" = yes ] && bf+=" --home-encrypted"
-                { [ -n "${OPT_HOME_SEED}" ] && [ "${OPT_HOME_SEED}" != none ]; } && bf+=" --home-seed-code ${OPT_HOME_SEED}"
+                # unaffiliated: --home-seed-code seeds the Snapdragon stack — hard conflict
+                { [ "${unaff}" = no ] && [ -n "${OPT_HOME_SEED}" ] && [ "${OPT_HOME_SEED}" != none ]; } && bf+=" --home-seed-code ${OPT_HOME_SEED}"
                 [ -n "${OPT_HOME_ARCHIVE}" ] && bf+=" --include-home-archive ${OPT_HOME_ARCHIVE}"
                 ;;
         esac
@@ -910,16 +922,23 @@ branding_screen() {
 # and tailnet CLIENT desktops (create fresh / adopt in place / unpack a bundled
 # archive / restore an encrypted backup) + the optional source-code seed.
 home_screen() {
+    # Optional arg 'noseed' (the unaffiliated desktop): hide the source-code seed
+    # row — --home-seed-code seeds the Snapdragon stack and is a hard conflict there.
+    local noseed="${1:-}"
     while true; do
         local c
-        c="$(ui_menu "Home provisioning" "How the installed user's \$HOME is provisioned (standalone + client desktops only):" \
-            mode    "Home mode ........... ${OPT_HOME_MODE:-<builder default>}   (create|adopt|archive|restore)" \
-            device  "Home device ......... ${OPT_HOME_DEVICE:-<none>}   (adopt: LABEL=…|UUID=…|/dev/…)" \
-            backup  "Home backup ......... ${OPT_HOME_BACKUP:-<none>}   (restore: FILE | auto)" \
-            enc     "Encrypted home ...... ${OPT_HOME_ENCRYPTED}   (per-user eCryptfs on top of LUKS2)" \
-            seed    "Seed source code .... ${OPT_HOME_SEED:-none}   (none|repos|stack|mesh)" \
-            archive "Bundle home archive . ${OPT_HOME_ARCHIVE:-<none>}   (scripts/archive-home.sh tarball)" \
-            back    "‹ back")" || return 0
+        local -a rows=(
+            mode    "Home mode ........... ${OPT_HOME_MODE:-<builder default>}   (create|adopt|archive|restore)"
+            device  "Home device ......... ${OPT_HOME_DEVICE:-<none>}   (adopt: LABEL=…|UUID=…|/dev/…)"
+            backup  "Home backup ......... ${OPT_HOME_BACKUP:-<none>}   (restore: FILE | auto)"
+            enc     "Encrypted home ...... ${OPT_HOME_ENCRYPTED}   (per-user eCryptfs on top of LUKS2)"
+        )
+        [ "${noseed}" != noseed ] && rows+=(seed "Seed source code .... ${OPT_HOME_SEED:-none}   (none|repos|stack|mesh)")
+        rows+=(
+            archive "Bundle home archive . ${OPT_HOME_ARCHIVE:-<none>}   (scripts/archive-home.sh tarball)"
+            back    "‹ back"
+        )
+        c="$(ui_menu "Home provisioning" "How the installed user's \$HOME is provisioned (standalone + client desktops only):" "${rows[@]}")" || return 0
         case "${c}" in
             mode)   local m
                     m="$(ui_menu "Home mode" "--home-mode — how the user's home is provisioned:" \
@@ -1049,10 +1068,11 @@ single_role_screen() {
                 desktop "desktop — full desktop client image" \
                 standalone-thin "★ standalone-thin — hardened NVIDIA desktop (LXDE; no mesh/SSO)" \
                 standalone-thick "★ standalone-thick — most-capable Plasma NVIDIA desktop (no mesh/SSO)" \
+                standalone-unaffiliated "★ standalone-unaffiliated — UNAFFILIATED desktop: plain hardened Gentoo (thick/Plasma weight), NO Snapdragon" \
                 back "‹ back")" || return 0
             [ "${role}" = back ] && return 0
             case "${role}" in
-                standalone-thin|standalone-thick) standalone_screen "${role}" ;;
+                standalone-thin|standalone-thick|standalone-unaffiliated) standalone_screen "${role}" ;;
                 *) build_make_cmd "x86-${role}" "x86 ${role} (${OPT_PATH}, ENV=${OPT_ENV})" 1
                    launch_build ;;
             esac ;;
@@ -1090,29 +1110,42 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
 # driver, Steam, media-data and optional unlock factor, then launch. Passwords are
 # prompted fresh (never persisted); the LUKS root passphrase is set at INSTALL time.
 standalone_screen() {
-    local role="$1" choice weight
+    local role="$1" choice weight unaff=no prompt
     weight="thin"; [ "${role}" = standalone-thick ] && weight="full (most-capable Plasma)"
+    if [ "${role}" = standalone-unaffiliated ]; then
+        unaff=yes; weight="UNAFFILIATED (plain Gentoo, thick weight)"
+    fi
+    prompt="Hardened NVIDIA standalone desktop — no mesh, no SSO, local login. Installed system is LUKS2-encrypted (you set the root passphrase at install)."
+    [ "${unaff}" = yes ] && prompt="UNAFFILIATED plain hardened Gentoo desktop — ZERO Snapdragon affiliation: no brand, no theme, no source seed, no mesh/SSO. The role presets the neutral identity; branding/seed options are hidden (they hard-conflict). Installed system is LUKS2-encrypted (you set the root passphrase at install)."
     while :; do
-        local media_l
+        local media_l home_l
         media_l="$([ "${OPT_SA_MEDIA}" = yes ] && echo "ON (/media Vaults+Steam auto-detect)" || echo OFF)"
-        choice="$(ui_menu "Standalone ${weight}" \
-            "Hardened NVIDIA standalone desktop — no mesh, no SSO, local login. Installed system is LUKS2-encrypted (you set the root passphrase at install)." \
-            user    "Local user ......... ${OPT_SA_USER}" \
-            pass    "Local password ..... $([ -n "${SA_LOCAL_PASS}" ] && echo '(set)' || echo '(unset → random at first boot)')" \
-            gpu     "GPU driver ......... ${OPT_SA_GPU}" \
-            steam   "Steam delivery ..... ${OPT_SA_STEAM}  (library on /media/Steam)" \
-            media   "Media data ......... ${media_l}" \
-            medialabel "Media label ........ ${OPT_SA_MEDIA_LABEL:-<content-scan>}   (match data device by FS LABEL)" \
-            home    "Home provisioning .. mode=${OPT_HOME_MODE:-default} seed=${OPT_HOME_SEED:-none} enc=${OPT_HOME_ENCRYPTED}" \
-            keyfile "Keyfile unlock ..... ${OPT_SA_KEYFILE}   (boot=LUKS keyslot / login=PAM)" \
-            yubikey "YubiKey unlock ..... ${OPT_SA_YUBIKEY}   (boot=FIDO2 / login=pam_u2f)" \
-            theme   "Branding theme ..... ${OPT_SA_THEME}" \
-            security "Security stack .... proxy=${OPT_SA_PROXY} snort=${OPT_SA_SNORT} aide=${OPT_SA_AIDE}" \
-            kernel  "Kernel built-in .... ${OPT_SA_KBUILTIN}   (=y vs modules)" \
-            egress  "Egress VPN ......... ${OPT_SA_EGRESS:-<none>}" \
-            luks    "Unattended LUKS pass $([ -n "${SA_LUKS_PASS}" ] && echo '(set — advanced)' || echo '(installer prompts — recommended)')" \
-            build   "★ BUILD this image (live ISO + stage4 + .fs.tar.xz + installer ISO)" \
-            back    "‹ back")" || return 0
+        # unaffiliated: --home-seed-code is a hard conflict — the seed knob is
+        # neither shown in the label nor offered in the home sub-screen.
+        home_l="mode=${OPT_HOME_MODE:-default} seed=${OPT_HOME_SEED:-none} enc=${OPT_HOME_ENCRYPTED}"
+        [ "${unaff}" = yes ] && home_l="mode=${OPT_HOME_MODE:-default} enc=${OPT_HOME_ENCRYPTED}   (no source seed)"
+        local -a items=(
+            user    "Local user ......... ${OPT_SA_USER}"
+            pass    "Local password ..... $([ -n "${SA_LOCAL_PASS}" ] && echo '(set)' || echo '(unset → random at first boot)')"
+            gpu     "GPU driver ......... ${OPT_SA_GPU}"
+            steam   "Steam delivery ..... ${OPT_SA_STEAM}  (library on /media/Steam)"
+            media   "Media data ......... ${media_l}"
+            medialabel "Media label ........ ${OPT_SA_MEDIA_LABEL:-<content-scan>}   (match data device by FS LABEL)"
+            home    "Home provisioning .. ${home_l}"
+            keyfile "Keyfile unlock ..... ${OPT_SA_KEYFILE}   (boot=LUKS keyslot / login=PAM)"
+            yubikey "YubiKey unlock ..... ${OPT_SA_YUBIKEY}   (boot=FIDO2 / login=pam_u2f)"
+        )
+        # branding theme: hidden for the unaffiliated role (hard conflict).
+        [ "${unaff}" = no ] && items+=(theme "Branding theme ..... ${OPT_SA_THEME}")
+        items+=(
+            security "Security stack .... proxy=${OPT_SA_PROXY} snort=${OPT_SA_SNORT} aide=${OPT_SA_AIDE}"
+            kernel  "Kernel built-in .... ${OPT_SA_KBUILTIN}   (=y vs modules)"
+            egress  "Egress VPN ......... ${OPT_SA_EGRESS:-<none>}"
+            luks    "Unattended LUKS pass $([ -n "${SA_LUKS_PASS}" ] && echo '(set — advanced)' || echo '(installer prompts — recommended)')"
+            build   "★ BUILD this image (live ISO + stage4 + .fs.tar.xz + installer ISO)"
+            back    "‹ back"
+        )
+        choice="$(ui_menu "Standalone ${weight}" "${prompt}" "${items[@]}")" || return 0
         case "${choice}" in
             user)    OPT_SA_USER="$(ui_input "User" "Local login user name" "${OPT_SA_USER}")" ;;
             pass)    SA_LOCAL_PASS="$(ui_password "Password" "Password for ${OPT_SA_USER} (blank = random one-time at first boot)")" ;;
@@ -1127,7 +1160,7 @@ standalone_screen() {
             steam)   OPT_SA_STEAM="$(ui_menu "Steam" "Steam delivery:" native "Native (default; steam-overlay + multilib)" flatpak "Flatpak (no multilib)" none "Don't install Steam")" ;;
             media)   OPT_SA_MEDIA="$([ "${OPT_SA_MEDIA}" = yes ] && echo no || echo yes)" ;;
             medialabel) OPT_SA_MEDIA_LABEL="$(ui_input "Media label" "Filesystem LABEL of the media data device (--media-label; empty = content-scan for the Steam/Vaults marker dirs)" "${OPT_SA_MEDIA_LABEL}")" ;;
-            home)    home_screen ;;
+            home)    if [ "${unaff}" = yes ]; then home_screen noseed; else home_screen; fi ;;
             keyfile) OPT_SA_KEYFILE="$(ui_menu "Keyfile factor" "Generate a keyfile unlock factor for:" none "none" boot "boot (extra LUKS keyslot)" login "login (PAM)")" ;;
             yubikey) OPT_SA_YUBIKEY="$(ui_menu "YubiKey factor" "Enroll a FIDO2/YubiKey factor for:" none "none" boot "boot (LUKS FIDO2)" login "login (pam_u2f)")" ;;
             theme)   OPT_SA_THEME="$(ui_menu "Branding theme" "Boot screen / login / wallpaper / accent:" \
@@ -1150,7 +1183,11 @@ standalone_screen() {
             egress)  OPT_SA_EGRESS="$(ui_input "Egress VPN" "Path to a WireGuard .conf / OpenVPN .ovpn (empty = none)" "${OPT_SA_EGRESS}")" ;;
             luks)    SA_LUKS_PASS="$(ui_password "Unattended LUKS" "Bake an unattended LUKS passphrase into the installer ISO (ADVANCED; blank = installer prompts at install)")" ;;
             build)   save_conf
-                     build_make_cmd "x86-${role}" "x86 ${role} hardened NVIDIA standalone (${OPT_PATH}, ENV=${OPT_ENV})" 1
+                     if [ "${unaff}" = yes ]; then
+                         build_make_cmd "x86-${role}" "x86 ${role} UNAFFILIATED plain Gentoo desktop (${OPT_PATH}, ENV=${OPT_ENV})" 1
+                     else
+                         build_make_cmd "x86-${role}" "x86 ${role} hardened NVIDIA standalone (${OPT_PATH}, ENV=${OPT_ENV})" 1
+                     fi
                      launch_build; return 0 ;;
             back|"") save_conf; return 0 ;;
         esac
@@ -1162,7 +1199,7 @@ build_screen() {
     local choice
     choice="$(ui_menu "Build" "What do you want to build?  (path=${OPT_PATH}, ENV=${OPT_ENV}, -j${OPT_JOBS})" \
         all  "Default fleet — 3 Pi + 4 x86 roles" \
-        everything "★ FULL matrix — 3 Pi + 11 x86 + Frite + Jetson (build-everything)" \
+        everything "★ FULL matrix — 3 Pi + 12 x86 + Frite + Jetson (build-everything)" \
         rpi  "All 3 Raspberry Pi roles" \
         x86  "All 4 default x86 roles" \
         one  "A single arch + role …" \
@@ -1171,7 +1208,7 @@ build_screen() {
         back "‹ back to main menu")" || return 0
     case "${choice}" in
         all)   build_make_cmd build-all "default fleet (3 Pi + 4 x86)" 7; launch_build ;;
-        everything) build_make_cmd build-everything "full documented matrix (3 Pi + 11 x86 + Frite + Jetson)" 19; launch_build ;;
+        everything) build_make_cmd build-everything "full documented matrix (3 Pi + 12 x86 + Frite + Jetson)" 20; launch_build ;;
         rpi)   build_make_cmd rpi "all 3 Pi roles" 3; launch_build ;;
         x86)   build_make_cmd x86 "all 4 x86 roles" 4; launch_build ;;
         one)   single_role_screen ;;

@@ -228,9 +228,10 @@ RPI_ROLES := pki backend frontend
 # a same-named := make-var would shadow a user's `X86_ROLES=... make build-all`.
 X86_ROLE_LIST := pki be fe be+gpu
 # X86_EVERY_ROLE: the FULL documented x86 matrix (nodes + omnibus + edge_ai +
-# the client devices + both standalone desktops) — what `make build-everything`
-# threads through build-all-roles.sh's X86_ROLES knob.
-X86_EVERY_ROLE := pki be fe be+gpu omnibus edge_ai laptop chromebook desktop standalone-thin standalone-thick
+# the client devices + the standalone desktops, incl. the UNAFFILIATED plain
+# Gentoo one) — what `make build-everything` threads through
+# build-all-roles.sh's X86_ROLES knob.
+X86_EVERY_ROLE := pki be fe be+gpu omnibus edge_ai laptop chromebook desktop standalone-thin standalone-thick standalone-unaffiliated
 
 # Libre Computer Le/La Frite LIGHT-DESKTOP client image (Amlogic arm64).
 #   FRITE_BOARD   = la-frite (DEFAULT) | le-potato | sweet-potato
@@ -443,7 +444,7 @@ endif
 # re-assign the empty defaults AFTER an env prefix and clobber it). Command-line
 # make vars override the `?=` defaults inside the sub-make, so ROLESET_ENVVARS is
 # rebuilt there with the full-matrix values; ENV/BRAND/IMG_FLAGS pass through.
-build-everything: ## build the FULL documented matrix: 3 Pi + all 11 x86 (nodes+omnibus+edge_ai+clients+standalone) + Frite + Jetson (honors ENV=test|prod)
+build-everything: ## build the FULL documented matrix: 3 Pi + all 12 x86 (nodes+omnibus+edge_ai+clients+standalone incl. unaffiliated) + Frite + Jetson (honors ENV=test|prod)
 	$(MAKE) build-all \
 	  X86_ROLES='$(X86_EVERY_ROLE)' \
 	  FRITE=1 FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)' \

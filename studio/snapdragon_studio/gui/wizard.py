@@ -11,8 +11,9 @@ from ..core import hw_scan, keyzip, profiles
 from ..core.build_driver import BuildDriver
 from ..core.config import (
     Domain, ImageConfig, MODE_DEFAULT_ROLE, User,
-    FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS,
-    OPTIONAL_SERVICES_CHOICES, PLATFORM_LABELS, ROLE_CHOICES,
+    ENV_CHOICES, FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS,
+    GPU_DRIVER_ALIASES, GPU_DRIVER_CHOICES, JETSON_BOARDS,
+    OPTIONAL_SERVICES_CHOICES, PLATFORM_LABELS, ROLE_CHOICES, UNAFFILIATED_ROLE,
 )
 from ..core.platform_info import detect
 
@@ -95,7 +96,9 @@ class ModePage(QtWidgets.QWizardPage):
         lay = QtWidgets.QVBoxLayout(self)
         self.group = QtWidgets.QButtonGroup(self)
         self.modes = [
-            ("standalone", "Standalone hardened desktop", "A personal LUKS-encrypted Gentoo+SELinux desktop. No mesh, no SSO."),
+            ("standalone", "Standalone hardened desktop",
+             "A personal LUKS-encrypted Gentoo+SELinux desktop. No mesh, no SSO — or an "
+             "UNAFFILIATED plain Gentoo desktop — zero Snapdragon branding/tooling."),
             ("cloud", "Branded cloud image", "A tailnet client tied to a domain (mesh + SSO). Drop in an admin-provided key-zip."),
             ("mesh", "Superadmin mesh", "Set up domains and attach users, then build mesh node image(s)."),
         ]
@@ -123,7 +126,10 @@ class ModePage(QtWidgets.QWizardPage):
             self.wiz.cfg.role = MODE_DEFAULT_ROLE[mid]
         # bundle the generator source only for standalone (self-hosting appliance);
         # cloud/mesh client images keep it off, mirroring the build script's default.
-        self.wiz.cfg.bundle_source = (mid == "standalone")
+        # The UNAFFILIATED role must stay clear: bundling the Snapdragon source is a
+        # builder hard-conflict there (RolePage clears it again when it's picked).
+        self.wiz.cfg.bundle_source = (mid == "standalone"
+                                      and self.wiz.cfg.role != UNAFFILIATED_ROLE)
         return True
 
 
@@ -241,6 +247,11 @@ class RolePage(QtWidgets.QWizardPage):
         role, _platforms = self._current_role()
         c.role = role
         c.platform = self.platform.currentData() or "x86"
+        # Unaffiliated build: ModePage defaults bundle_source ON for standalone mode,
+        # but bundling the Snapdragon generator source is a builder HARD CONFLICT on
+        # this role — clear it here so the wizard default cannot poison the argv.
+        if c.role == UNAFFILIATED_ROLE:
+            c.bundle_source = False
         if c.platform == "frite":
             c.board = self.board.currentText()
             c.flavor = self.flavor.currentText()
@@ -278,8 +289,10 @@ class HardwarePage(QtWidgets.QWizardPage):
         self.scan_out.setStyleSheet("color: #3f5b8c;")
         lay.addWidget(self.scan_out)
 
+        # the builder's FULL documented --gpu-driver matrix (canonical names; the
+        # builder's vendor aliases like "intel" are normalized via _set_gpu below)
         self.gpu = QtWidgets.QComboBox()
-        self.gpu.addItems(["auto", "nvidia", "amd-free", "amd-pro", "intel", "none"])
+        self.gpu.addItems(list(GPU_DRIVER_CHOICES))
         lay.addWidget(_row("GPU driver", self.gpu))
         self.wifi = QtWidgets.QCheckBox("Enable Wi-Fi (off by default — hardened)")
         self.bt = QtWidgets.QCheckBox("Enable Bluetooth (off by default — hardened)")
@@ -290,6 +303,11 @@ class HardwarePage(QtWidgets.QWizardPage):
         lay.addStretch(1)
         self.profile.currentIndexChanged.connect(self._profile_changed)
 
+    def _set_gpu(self, value):
+        """Select a combo entry; builder vendor aliases (hwprofiles say 'intel')
+        normalize to the canonical id so they can't silently fail to match."""
+        self.gpu.setCurrentText(GPU_DRIVER_ALIASES.get(value, value) or "auto")
+
     def _profile_changed(self):
         pid = self.profile.currentData()
         if pid == "this-machine-scan":
@@ -297,13 +315,13 @@ class HardwarePage(QtWidgets.QWizardPage):
             return
         p = next((x for x in self.profiles if x.id == pid), None)
         if p:
-            self.gpu.setCurrentText(p.gpu_driver)
+            self._set_gpu(p.gpu_driver)
             self.wifi.setChecked(p.enable_wifi)
             self.bt.setChecked(p.enable_bluetooth)
 
     def _scan(self):
         s = hw_scan.scan()
-        self.gpu.setCurrentText(s.recommended_gpu_driver)
+        self._set_gpu(s.recommended_gpu_driver)
         self.wifi.setChecked(s.recommend_wifi)
         self.bt.setChecked(s.recommend_bluetooth)
         gpus = ", ".join(g.name for g in s.gpus) or "none"
@@ -313,7 +331,7 @@ class HardwarePage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         c = self.wiz.cfg
-        self.gpu.setCurrentText(c.gpu_driver)
+        self._set_gpu(c.gpu_driver)
         self.wifi.setChecked(c.enable_wifi)
         self.bt.setChecked(c.enable_bluetooth)
         self.builtin.setChecked(c.kernel_builtin)
@@ -335,12 +353,24 @@ class BrandingPage(QtWidgets.QWizardPage):
         self.setTitle("Branding")
         self.setSubTitle("Boot screen, login, wallpaper, accent — consistent across the desktop.")
         lay = QtWidgets.QVBoxLayout(self)
+        # shown INSTEAD of the (disabled) form when the unaffiliated role is selected
+        self.unaffiliated_note = QtWidgets.QLabel(
+            "Branding does not apply — unaffiliated build (plain Gentoo, zero brand identity).")
+        self.unaffiliated_note.setWordWrap(True)
+        self.unaffiliated_note.setStyleSheet("color: #a65d00;")
+        self.unaffiliated_note.setVisible(False)
+        lay.addWidget(self.unaffiliated_note)
+        # every branding widget lives in one container so the unaffiliated role can
+        # disable the whole surface (line edits AND their Browse… buttons) at once
+        self.form = QtWidgets.QWidget()
+        form_lay = QtWidgets.QVBoxLayout(self.form)
+        form_lay.setContentsMargins(0, 0, 0, 0)
         self.theme = QtWidgets.QComboBox()
         self.theme.setEditable(True)
         self.theme.addItem("")
         for t in self._themes():
             self.theme.addItem(t)
-        lay.addWidget(_row("Theme preset", self.theme))
+        form_lay.addWidget(_row("Theme preset", self.theme))
         self.fields = {}
         for key, label, flt in (
             ("wallpaper", "Wallpaper", "Images (*.png *.jpg *.jpeg)"),
@@ -352,13 +382,14 @@ class BrandingPage(QtWidgets.QWizardPage):
             btn = _file_picker(self, le, label, flt)
             w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
             h.addWidget(le, 1); h.addWidget(btn)
-            lay.addWidget(_row(label, w))
+            form_lay.addWidget(_row(label, w))
             self.fields[key] = le
         self.accent = QtWidgets.QLineEdit()
         self.accent.setPlaceholderText("#3f5b8c")
-        lay.addWidget(_row("Accent colour", self.accent))
+        form_lay.addWidget(_row("Accent colour", self.accent))
         self.locked = QtWidgets.QCheckBox("Lock branding (user cannot re-theme — managed image)")
-        lay.addWidget(self.locked)
+        form_lay.addWidget(self.locked)
+        lay.addWidget(self.form)
         lay.addStretch(1)
 
     def _themes(self):
@@ -370,6 +401,9 @@ class BrandingPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         c = self.wiz.cfg
+        unaffiliated = c.role == UNAFFILIATED_ROLE
+        self.unaffiliated_note.setVisible(unaffiliated)
+        self.form.setEnabled(not unaffiliated)
         self.theme.setCurrentText(c.theme)
         self.fields["wallpaper"].setText(c.wallpaper)
         self.fields["grub_background"].setText(c.grub_background)
@@ -380,6 +414,14 @@ class BrandingPage(QtWidgets.QWizardPage):
 
     def validatePage(self):
         c = self.wiz.cfg
+        if c.role == UNAFFILIATED_ROLE:
+            # branding is a builder HARD CONFLICT on the unaffiliated role — clear
+            # anything left over from a previously selected role instead of collecting
+            # the (disabled) widgets, so a role switch cannot poison the argv.
+            c.theme = c.wallpaper = c.grub_background = ""
+            c.login_background = c.brand_logo = c.accent_color = ""
+            c.brand_locked = False
+            return True
         c.theme = self.theme.currentText().strip()
         c.wallpaper = self.fields["wallpaper"].text().strip()
         c.grub_background = self.fields["grub_background"].text().strip()
@@ -795,6 +837,10 @@ class BuildPage(QtWidgets.QWizardPage):
         self.backend = QtWidgets.QComboBox()
         self.backend.addItems(["auto", "native", "docker"])
         lay.addWidget(_row("Backend", self.backend))
+        # --env: which stack environment the image bakes (every builder parses it)
+        self.env = QtWidgets.QComboBox()
+        self.env.addItems(list(ENV_CHOICES))
+        lay.addWidget(_row("Environment (--env)", self.env))
         self.outdir = QtWidgets.QLineEdit()
         obtn = _file_picker(self, self.outdir, "Output dir", directory=True)
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
@@ -835,6 +881,7 @@ class BuildPage(QtWidgets.QWizardPage):
         c = self.wiz.cfg
         if not self.outdir.text():
             self.outdir.setText(c.output_dir or os.path.join(self.wiz.generator_dir, "out"))
+        self.env.setCurrentText(c.env or "test")
         self.installer_ui.setCurrentText(c.installer_ui or "all")
         # the installer-UI choice is an x86 ISO knob; the arm builders have no flag
         self.installer_ui.setEnabled(c.platform in ("", "x86"))
@@ -852,6 +899,7 @@ class BuildPage(QtWidgets.QWizardPage):
         c = self.wiz.cfg
         c.output_dir = self.outdir.text().strip()
         c.jobs = self.jobs.value()
+        c.env = self.env.currentText()
         c.installer_ui = self.installer_ui.currentText()
         c.compress = self.compress.isChecked()
         c.resume = self.resume.isChecked()

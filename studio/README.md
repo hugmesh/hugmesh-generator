@@ -11,12 +11,19 @@ a **local mesh node** from the system tray.
   (define domains + attach users, then build node images).
 - **Role & platform picker** — EVERY documented image role, grouped by mode (the
   all-options-in-all-menus rule, [docs/BUILD-MATRIX.md](../docs/BUILD-MATRIX.md)): both
-  standalone variants; the laptop/chromebook/desktop clients **and the arm64 La Frite
-  family** (board + live/installer flavor + light/headless desktop); every cluster role on
-  **x86 or Raspberry Pi 5**, plus the **NVIDIA Jetson Orin** roles (`edge_ai`, `gpu-host`,
-  `full`, `jetson-desktop`) — Jetson is **EXPERIMENTAL, hardware validation pending**. The
-  platform axis picks the builder script (`build-{x86-host,rpi5,frite,jetson}-stage4.sh`).
-- **Every generator flag** is on a wizard page: hardware/GPU, branding (boot screen / login /
+  standalone variants **plus the two plain-Gentoo arms** — `standalone-unaffiliated`
+  (an x86 desktop with ZERO Snapdragon branding/tooling baked; branding pages disable
+  themselves and any conflicting setting fails the command loudly, exactly like the
+  builder) and the rpi5 `generic` unbranded arm64 server; the laptop/chromebook/desktop
+  clients **and the arm64 La Frite family** (board + live/installer flavor +
+  light/headless desktop); every cluster role on **x86 or Raspberry Pi 5**, plus the
+  **NVIDIA Jetson Orin** roles (`edge_ai`, `gpu-host`, `full`, `jetson-desktop`) —
+  Jetson is **EXPERIMENTAL, hardware validation pending**. The platform axis picks the
+  builder script (`build-{x86-host,rpi5,frite,jetson}-stage4.sh`).
+- **Every generator flag** is on a wizard page: hardware/GPU (the builder's **full
+  `--gpu-driver` matrix**: all-free / nvidia-free / nvidia / amd-free / amd-pro /
+  intel-free / intel-pro / none, or auto), the **test|prod `--env` picker** on the Build
+  page, branding (boot screen / login /
   wallpaper / accent), Wi-Fi/BT, **kernel built-in vs modules**, egress VPN, home mode +
   eCryptfs, installer front-ends, cached/uncached — plus the **cluster optional-services
   catalog** (+ games), client **desktop weight + Steam delivery**, **LUKS root encryption**

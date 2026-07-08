@@ -55,7 +55,10 @@
 #   x86 node roles      (primary | mesh-extension): pki | be | fe | be-gpu
 #                        (-> --role be+gpu) | omnibus | edge_ai
 #   x86 client roles     (client):                   laptop | chromebook |
-#                        desktop | standalone-thin | standalone-thick
+#                        desktop | standalone-thin | standalone-thick |
+#                        standalone-unaffiliated (UNAFFILIATED plain Gentoo
+#                        desktop — no brand/theme/seed/mesh/SSO flags may
+#                        accompany it; the role presets the neutral identity)
 #   rpi5 node roles      (primary | mesh-extension): pki | backend | frontend
 #   frite (client only): "<board>.<flavor>"; board = la-frite (default) |
 #                        le-potato | sweet-potato; flavor = live | installer
@@ -413,7 +416,7 @@ resolve_build_target() {
             ;;
           client)
             case "$p2" in
-              laptop|chromebook|desktop|standalone-thin|standalone-thick) BUILD_ROLE="$p2" ;;
+              laptop|chromebook|desktop|standalone-thin|standalone-thick|standalone-unaffiliated) BUILD_ROLE="$p2" ;;
               *) return 1 ;;
             esac
             ;;
@@ -464,7 +467,7 @@ resolve_build_target() {
             ;;
           client)
             case "$p1" in
-              laptop|chromebook|desktop|standalone-thin|standalone-thick) BUILD_ROLE="$p1" ;;
+              laptop|chromebook|desktop|standalone-thin|standalone-thick|standalone-unaffiliated) BUILD_ROLE="$p1" ;;
               *) return 1 ;;
             esac
             ;;
@@ -504,7 +507,7 @@ run_x86_build() {
          --cluster-domain "$DOMAIN" -H "$HOSTNAME_OUT" --no-live-iso --no-tar
   [ -n "$BRAND_FLAGS_CFG" ] && set -- "$@" --config "$BRAND_FLAGS_CFG"
   case "$BUILD_ROLE" in
-    standalone-thin|standalone-thick)
+    standalone-thin|standalone-thick|standalone-unaffiliated)
       [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
       ;;
   esac

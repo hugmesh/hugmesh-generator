@@ -37,6 +37,25 @@ def test_native_command_per_platform(platform, script, tmp_path):
     assert cmd[6:] == cfg.to_cli_args()
 
 
+def test_native_command_plain_gentoo_roles(tmp_path):
+    """The unaffiliated x86 desktop and the rpi5 generic server drive their builders
+    with a bare role — no affiliation flags reach the command line."""
+    d = BuildDriver(str(tmp_path), host(is_root=True))
+    ua = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
+                     bundle_source=False, output_dir=str(tmp_path / "out"), jobs=4)
+    cmd = d.command(ua, "native")
+    assert cmd[:2] == ["bash", "./build-x86-host-stage4.sh"]
+    assert cmd[6:8] == ["--role", "standalone-unaffiliated"]
+    for flag in ("--brand", "--brand-title", "--org", "--theme", "--bundle-source",
+                 "--with-sso", "--with-tailscale", "--person-role", "--domains"):
+        assert flag not in cmd
+    gen = ImageConfig(mode="standalone", role="generic", platform="rpi5",
+                      output_dir=str(tmp_path / "out"), jobs=4)
+    cmd = d.command(gen, "native")
+    assert cmd[:2] == ["bash", "./build-rpi5-stage4.sh"]
+    assert cmd[6:8] == ["--role", "generic"]   # passes through the be/fe map unmapped
+
+
 def test_native_non_root_prepends_sudo(tmp_path):
     d = BuildDriver(str(tmp_path), host(is_root=False))
     cmd = d.command(cfg_for("rpi5", tmp_path), "native")

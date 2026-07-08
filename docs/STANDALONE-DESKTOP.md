@@ -7,16 +7,88 @@ a password set at build time, the **installed system is LUKS2 full-disk
 encrypted**, and an optional **separate data disk** (Steam library + a gocryptfs
 Vaults store) is auto-detected and mounted at `/media`.
 
-Two named variants, for each desktop weight:
+Three named variants:
 
 | Role | Weight | Desktop | Default GPU |
 |------|--------|---------|-------------|
 | `standalone-thin`  | thin | LXDE / openbox | NVIDIA proprietary |
 | `standalone-thick` | full | **most-capable KDE Plasma workstation** | NVIDIA proprietary |
+| `standalone-unaffiliated` | full (thick) | KDE Plasma — **ZERO Snapdragon affiliation** (see below) | free / open (`all-free`) |
 
 Each variant emits **all four artifacts**: a live ISO, the stage4 tarball, the
 `.fs.tar.xz` filesystem tarball, and an **installer ISO** (which writes a
 LUKS2-encrypted system to disk).
+
+## Unaffiliated plain desktop (`standalone-unaffiliated`)
+
+A **plain hardened Gentoo desktop with ZERO Snapdragon affiliation** — the
+thick/Plasma weight of the standalone posture, with every trace of the platform
+removed or neutralized. Nothing in the image names, brands, or phones home to
+Snapdragon:
+
+- **Neutral boot chain**: `GENTOO_LIVE` / `GENTOO_INSTALL` ISO volids,
+  `gentoo.efi` UKI (with a `gentoo.install=` cmdline key), `GENTOO_ESP` /
+  `GENTOO_ROOT` partition labels, neutral GRUB titles and Secure Boot cert
+  subject ("Gentoo Linux").
+- **Neutral installer / hostname / artifacts**: neutral installer UI text, a
+  "Gentoo Installer" desktop entry, default hostname `gentoo-desktop`, and
+  artifact filenames `gentoo-x86-amd64-standalone-unaffiliated-<env>-<ts>.*`.
+- **No `snapdragon-*` tools or markers** (no `/etc/snapdragon` tree at all),
+  **no bundled generator source**, **no k8s/mesh payload** (no
+  containerd/kubelet/headscale/tailscale, no cluster GitOps tree, no
+  keys-provision, no Casdoor SSO).
+
+### Quick start
+
+```sh
+make x86-standalone-unaffiliated STANDALONE_FLAGS='--local-user alice --local-pass s3cret'
+```
+
+The role **presets everything** — combine it only with generic options
+(`--local-user` / `--local-pass`, `--gpu-driver`, `--encrypt-root` + the
+keyfile/YubiKey unlock factors, `--compress`, `--resume`, …).
+
+### Composable: `--unaffiliated` on any client role
+
+The posture is also an orthogonal flag: `--unaffiliated` folds onto any
+desktop/client role (`laptop` / `chromebook` / `desktop` / `standalone-*`) and
+forces the standalone posture plus the neutral identity. It is refused on
+cluster-node roles (a cluster node is Snapdragon platform machinery by
+definition).
+
+### Hard conflicts (builder exits non-zero)
+
+Unaffiliated means *no affiliation at all* — every flag that would bake a brand
+identity, brand assets, Snapdragon source, or platform machinery into the image
+is a **hard error**, not a silent override:
+
+- **Brand identity**: `--brand` / `--brand-title` / `--org` — there is no brand,
+  not even an explicit `--brand gentoo`; the builder forces the neutral
+  identity itself.
+- **Branding assets**: `--theme`, `--branding-dir`, `--wallpaper`,
+  `--grub-background`, `--grub-theme`, `--login-background`, `--brand-logo`,
+  `--accent-color`, `--color-scheme`, `--brand-locked`.
+- **Platform machinery**: `--bundle-source`, `--home-seed-code`,
+  `--with-tailscale`, `--with-sso`, `--person-role` / `--domains`.
+
+### What survives, under neutral names
+
+The functional (non-affiliating) machinery is kept — renamed so nothing on the
+image says "snapdragon":
+
+| Snapdragon builds | Unaffiliated build |
+|---|---|
+| `snapdragon-home-setup` + `/etc/snapdragon/home.conf` | `home-setup` + `/etc/gentoo/home.conf` (same create/adopt/archive/restore + eCryptfs machinery) |
+| `snapdragon-media-detect` (default ON) | `media-detect` + `/etc/gentoo/media.conf` — **default OFF**; kept only with an explicit `--media-data` |
+| `snapdragon-installer-autostart` / `snapdragon-calamares-install` | `gentoo-installer-autostart` / `gentoo-calamares-install` (same live-session Calamares/ncurses/CLI installer bridge) |
+| LUKS2 FDE installer | unchanged — same installer, neutral UI text |
+| `SNAPDRAGON_LIVE` / `SNAPDRAGON_INSTALL` volids | `GENTOO_LIVE` / `GENTOO_INSTALL` |
+| `snapdragon.efi` UKI + `snapdragon.install=` cmdline key | `gentoo.efi` + `gentoo.install=` |
+
+Everything below this section (GPU drivers, local user, FDE + unlock factors,
+Secure Boot, home provisioning, `--kernel-builtin`, QEMU verification) applies
+to the unaffiliated variant too, except where a flag is listed as a hard
+conflict above.
 
 ## Quick start
 

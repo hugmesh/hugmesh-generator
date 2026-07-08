@@ -13,6 +13,11 @@ platform UI — not a cluster node.
 > install, optional keyfile/YubiKey unlock, and an auto-detected `/media` data disk
 > (Steam + gocryptfs Vaults). Those are the *opposite* of the mesh-joined clients
 > below; the `--standalone` / `--skip-sso` flags also compose onto these roles.
+> The standalone path now also includes an **unaffiliated** variant
+> (`standalone-unaffiliated`, or `--unaffiliated` composed onto any client role):
+> a plain hardened Gentoo desktop with **zero Snapdragon affiliation** — neutral
+> boot chain/installer/hostname/artifacts, no `snapdragon-*` tools or markers —
+> see [STANDALONE-DESKTOP.md](STANDALONE-DESKTOP.md#unaffiliated-plain-desktop-standalone-unaffiliated).
 
 - **✅ shipped:** the x86 laptop / thin-Chromebook / superadmin-desktop client arms
   (FD-04, Increments 1 and 3), including the grub-mkimage / ESP fix (PR #93). The

@@ -35,6 +35,7 @@ BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-x86}"
 JOBS="$(nproc)"
 REL_VERSION="2026.0"
 HOSTNAME=""
+HOSTNAME_SET=false      # true once -H/--hostname is given (role defaults defer to it)
 ROLE="be+gpu"          # default role (= the legacy 'host'); 'host' is accepted as an alias
 GPU=true               # derived from ROLE below; gates Mesa/Vulkan + DRM kernel + VIDEO_CARDS
 # ── CLIENT (person-device) image config — see docs/CLIENT-IMAGES.md (FD-04..09) ──
@@ -167,6 +168,19 @@ CAPABLE=false           # --capable : pull the "most capable" Plasma desktop set
                         #   (packages-desktop-capable.list); auto-on for standalone-thick
 LOCAL_USER=""           # --local-user NAME : the standalone local login account
 LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never baked raw
+# ── UNAFFILIATED plain desktop (a standalone with ZERO Snapdragon affiliation) ──
+# Everything --standalone drops, PLUS: neutral identity strings through the whole
+# boot/installer chain (GRUB titles, ISO volids, UKI name, installer text — all
+# derived from a forced neutral brand), NO snapdragon-* helper tools/services, NO
+# /etc/snapdragon marker tree (the functional home.conf moves to a neutral path),
+# NO bundled generator source or brand-repo templates, and NO k8s/mesh package
+# payload or config remnants. The result is a plain hardened Gentoo desktop.
+# Preset by the `standalone-unaffiliated` role arm; composable onto any client/
+# standalone role with --unaffiliated. Brand/branding/seed-code/mesh/SSO flags
+# CONFLICT with it (hard error) — unaffiliated means no brand identity at all.
+UNAFFILIATED=false      # --unaffiliated : plain Gentoo desktop, no Snapdragon affiliation
+MEDIA_DATA_FORCED=""    # ''|on|off — tracks an explicit --media-data/--no-media-data
+                        #   (unaffiliated defaults media-data OFF unless forced on)
 # ── GPU driver matrix (--gpu-driver) — all common cards, FREE drivers default ──
 # FREE drivers (open, no EULA, hardened) are the default. Only NVIDIA has a
 # proprietary DISPLAY driver; AMD/Intel "pro" = the open display driver + the
@@ -461,6 +475,15 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             standalone-thick preset this.)
       --skip-sso            Drop the Casdoor/OIDC desktop SSO login from ANY
                             client image (orthogonal; auto-on for --standalone).
+      --unaffiliated        UNAFFILIATED plain desktop: everything --standalone
+                            drops, PLUS no Snapdragon identity anywhere (neutral
+                            GRUB titles/ISO volids/UKI/installer text derived
+                            from a forced neutral brand), no snapdragon-* tools
+                            or /etc/snapdragon markers, no bundled generator
+                            source, no k8s/mesh payload. Brand/branding/
+                            seed-code/mesh/SSO flags HARD-CONFLICT with it.
+                            (role standalone-unaffiliated presets this at the
+                            thick/Plasma weight.)
       --capable             Pull the "most capable" Plasma workstation package
                             set (packages-desktop-capable.list). Auto-on for the
                             standalone-thick role.
@@ -634,7 +657,7 @@ while [[ $# -gt 0 ]]; do
         --person-role) PERSON_ROLE="$2"; shift 2 ;;   # user|mod|admin|superadmin
         --domains) DOMAINS="$2"; shift 2 ;;           # first = primary domain
         --desktop) DESKTOP="$2"; shift 2 ;;           # thin|full
-        -H|--hostname) HOSTNAME="$2"; shift 2 ;;
+        -H|--hostname) HOSTNAME="$2"; HOSTNAME_SET=true; shift 2 ;;
         -T|--timezone) TIMEZONE="$2"; shift 2 ;;
         -C|--config) CONFIG_FILE="$2"; shift 2 ;;
         --env) ENV="$2"; shift 2 ;;
@@ -701,6 +724,8 @@ while [[ $# -gt 0 ]]; do
         --print-plan) PRINT_PLAN=true; shift ;;
         # ── STANDALONE hardened desktop (no mesh / no SSO / local login) ──
         --standalone) STANDALONE=true; shift ;;
+        # ── UNAFFILIATED plain desktop (standalone + zero Snapdragon affiliation) ──
+        --unaffiliated) UNAFFILIATED=true; shift ;;
         --skip-sso) SKIP_SSO=true; SSO_FORCED=off; shift ;;
         # Composable SSO toggle (wins over a role's default).
         --with-sso) SKIP_SSO=false; SSO_FORCED=on; shift ;;
@@ -764,8 +789,8 @@ while [[ $# -gt 0 ]]; do
         --unlock-keyfile) UNLOCK_KEYFILE="$2"; shift 2 ;;   # boot|login
         --unlock-yubikey) UNLOCK_YUBIKEY="$2"; shift 2 ;;   # boot|login
         # ── External media data device (Vaults + Steam) ──
-        --media-data) MEDIA_DATA=true; shift ;;
-        --no-media-data) MEDIA_DATA=false; shift ;;
+        --media-data) MEDIA_DATA=true; MEDIA_DATA_FORCED=on; shift ;;
+        --no-media-data) MEDIA_DATA=false; MEDIA_DATA_FORCED=off; shift ;;
         --media-label) MEDIA_LABEL="$2"; shift 2 ;;
         --steam) STEAM_DELIVERY="$2"; shift 2 ;;            # flatpak|native|none
         --no-vaults) VAULTS_ENABLED=false; shift ;;
@@ -978,10 +1003,62 @@ case "${ROLE}" in
         GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
         STANDALONE=true; DESKTOP="full"; CAPABLE=true
         [ -z "${HOSTNAME}" ] && HOSTNAME="${BRAND}-standalone" ;;
+    # ── UNAFFILIATED plain desktop — standalone-thick weight with ZERO Snapdragon
+    # affiliation (see the UNAFFILIATED declaration + fold below). The hostname
+    # default is assigned in the fold, AFTER the brand identity is neutralized.
+    standalone-unaffiliated)
+        GPU=true; ROLE_CLIENT=true; ROLE_K8S="none"; ROLE_HEADSCALE=false
+        STANDALONE=true; DESKTOP="full"; CAPABLE=true
+        UNAFFILIATED=true ;;
     *)
-        err "--role must be one of: pki | be | fe | be+gpu | edge_ai | omnibus  (host = be+gpu alias)  |  laptop | chromebook | desktop  |  standalone-thin | standalone-thick  (client devices)"
+        err "--role must be one of: pki | be | fe | be+gpu | edge_ai | omnibus  (host = be+gpu alias)  |  laptop | chromebook | desktop  |  standalone-thin | standalone-thick | standalone-unaffiliated  (client devices)"
         exit 1 ;;
 esac
+
+# ── UNAFFILIATED plain desktop (composable: --unaffiliated onto any client/
+# standalone role, or the standalone-unaffiliated role arm above). Runs BEFORE
+# the STANDALONE fold so the STANDALONE=true it forces is folded normally.
+# Contract: the produced image carries NO Snapdragon (or any other brand)
+# affiliation — so every flag that would bake a brand identity, brand assets,
+# Snapdragon source, or platform machinery into the image is a HARD CONFLICT,
+# not a silent override. What remains: stock Gentoo + the hardened desktop
+# stack + the (neutral-named) installer/FDE/home machinery. ──────────────────
+if ${UNAFFILIATED}; then
+    ${ROLE_CLIENT} || { err "--unaffiliated composes onto desktop/client roles only (got --role ${ROLE} — a cluster node is Snapdragon platform machinery by definition)"; exit 1; }
+    STANDALONE=true
+    # Brand identity flags conflict (a brand IS an affiliation — including a custom one).
+    if [ "${BRAND}" != "snapdragon" ] || [ "${BRAND_TITLE}" != "Snapdragon Systems" ] || [ "${ORG}" != "Snapdragon-Systems" ]; then
+        err "--unaffiliated builds carry no brand identity: drop --brand/--brand-title/--org (and any --config brand profile)"; exit 1
+    fi
+    # Branding-asset flags conflict (nothing to theme against).
+    if [ -n "${BRANDING_THEME}" ] || [ -n "${BRANDING_DIR}" ] || [ -n "${BRAND_WALLPAPER}" ] \
+       || [ -n "${BRAND_GRUB_BG}" ] || [ -n "${BRAND_GRUB_THEME}" ] || [ -n "${BRAND_LOGIN_BG}" ] \
+       || [ -n "${BRAND_LOGO}" ] || [ -n "${BRAND_ACCENT}" ] || [ -n "${BRAND_COLOR_SCHEME}" ] || ${BRAND_LOCKED}; then
+        err "--unaffiliated conflicts with branding flags (--theme/--branding-dir/--wallpaper/--grub-background/--grub-theme/--login-background/--brand-logo/--accent-color/--color-scheme/--brand-locked)"; exit 1
+    fi
+    # Platform-machinery flags conflict: bundled generator source, the dockerized
+    # Snapdragon stack seed, the mesh/SSO agents, and person-device identity all
+    # tie the image back to the platform.
+    [ "${BUNDLE_SOURCE}" = true ] && { err "--unaffiliated conflicts with --bundle-source (bundles the Snapdragon generator source)"; exit 1; }
+    [ "${HOME_SEED_CODE}" != none ] && { err "--unaffiliated conflicts with --home-seed-code (seeds the Snapdragon stack into the home)"; exit 1; }
+    [ "${MESH_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-tailscale (the tailnet is Snapdragon platform machinery)"; exit 1; }
+    [ "${SSO_FORCED}" = on ] && { err "--unaffiliated conflicts with --with-sso (Casdoor SSO is Snapdragon platform machinery)"; exit 1; }
+    { [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; } && { err "--unaffiliated conflicts with --person-role/--domains (person-device identity is platform machinery)"; exit 1; }
+    BUNDLE_SOURCE=false
+    # Neutral identity: every downstream sink (GRUB titles, ISO volids, UKI name,
+    # installer text, artifact filenames, hostname) derives from BRAND/BRAND_TITLE,
+    # so forcing them neutral here neutralizes the whole chain.
+    BRAND="gentoo"
+    BRAND_TITLE="Gentoo Linux"
+    ORG="gentoo"
+    # Override any BRAND-derived role-default hostname (e.g. 'snapdragon-desktop'
+    # from the desktop role arm) — only an explicit -H/--hostname survives.
+    ${HOSTNAME_SET} || HOSTNAME="gentoo-desktop"
+    # Plain desktop: the Steam/Vaults media-data machinery is Snapdragon-named
+    # tooling — default it OFF (an explicit --media-data keeps it, neutral-named).
+    [ "${MEDIA_DATA_FORCED}" = on ] || MEDIA_DATA=false
+    info "UNAFFILIATED plain desktop: no brand identity, no snapdragon-* tooling, no bundled source, no k8s/mesh payload"
+fi
 
 # ── STANDALONE posture (composable: --standalone onto any client role, or the
 # standalone-* role arms above). A standalone desktop is self-contained: it never
@@ -1005,6 +1082,25 @@ if ${STANDALONE}; then
     INSTALLER_ISO=true          # guarantee the installer artifact (the FDE path)
     [ -z "${LOCAL_USER}" ] && LOCAL_USER="${DEFAULT_USER}"
     info "STANDALONE desktop: no mesh / no SSO / no k8s; local user '${LOCAL_USER}'; LUKS FDE on install; media-data auto-detect=${MEDIA_DATA}"
+fi
+
+# ── Boot-chain identifiers (volids / CDLABEL / UKI name / installer cmdline key /
+# partition labels). Historically hardcoded SNAPDRAGON_*/snapdragon.* literals;
+# UNAFFILIATED swaps the whole set for neutral equivalents in one place so the
+# live-boot CDLABEL always matches its volid and the autostart reads the same
+# cmdline key the GRUB entries emit. Non-unaffiliated builds are byte-identical
+# to the historical literals (volids are ISO9660-safe: A-Z0-9_, bounded; the FAT
+# label is ≤11 chars). ────────────────────────────────────────────────────────
+if ${UNAFFILIATED}; then
+    LIVE_VOLID="GENTOO_LIVE";       INSTALL_VOLID="GENTOO_INSTALL"
+    UKI_NAME="gentoo.efi";          INSTALL_CMDLINE_KEY="gentoo.install"
+    ESP_LABEL="GENTOO_ESP";         ROOT_LABEL="GENTOO_ROOT"
+    SB_CERT_O="Gentoo Linux";       SB_CERT_CN="Gentoo Secure Boot"
+else
+    LIVE_VOLID="SNAPDRAGON_LIVE";   INSTALL_VOLID="SNAPDRAGON_INSTALL"
+    UKI_NAME="snapdragon.efi";      INSTALL_CMDLINE_KEY="snapdragon.install"
+    ESP_LABEL="SNAP_ESP";           ROOT_LABEL="SNAP_ROOT"
+    SB_CERT_O="Snapdragon Systems"; SB_CERT_CN="Snapdragon Secure Boot"
 fi
 
 # ── Validate + normalize the GPU driver selection (the full vendor matrix) ──
@@ -1228,7 +1324,8 @@ if ${PRINT_PLAN}; then
     # the legacy 'host' tag; client devices carry person-role + primary domain.
     _PLAN_ROLE_TAG="${ROLE}"
     [ "${ROLE}" = "be+gpu" ] && _PLAN_ROLE_TAG="host"
-    if ${ROLE_CLIENT}; then
+    # UNAFFILIATED artifacts carry no person-role/domain tie — the bare role name.
+    if ${ROLE_CLIENT} && ! ${UNAFFILIATED}; then
         _pd="${DOMAINS%%[ ,]*}"; _dt="${_pd//./_}"
         _PLAN_ROLE_TAG="${ROLE}-${PERSON_ROLE}${_dt:+-${_dt}}"
     fi
@@ -1245,6 +1342,7 @@ if ${PRINT_PLAN}; then
     _plan K8S                "${ROLE_K8S}"
     _plan PERSON_ROLE        "${PERSON_ROLE:-none}"
     _plan STANDALONE         "${STANDALONE}"
+    _plan UNAFFILIATED       "${UNAFFILIATED}"
     _ARTS="stage4.tar.xz"
     ${BUILD_IMG}      && _ARTS="${_ARTS},img"
     ${LIVE_ISO}       && _ARTS="${_ARTS},live.iso"
@@ -1263,7 +1361,7 @@ if ${PRINT_PLAN}; then
     _plan ENCRYPT_ROOT       "${ENCRYPT_ROOT}"
     _plan LUKS_PASS          "$([ -n "${LUKS_PASS}" ] && echo REDACTED || echo none)"
     _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
-    _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} live_iso=${LIVE_ISO} installer_iso=${INSTALLER_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} skip_sso=${SKIP_SSO} standalone=${STANDALONE} desktop=${DESKTOP} capable=${CAPABLE} gpu_driver=${GPU_DRIVER} cuda=${NVIDIA_CUDA} encrypt_root=${ENCRYPT_ROOT} secure_boot=${SECURE_BOOT} media_data=${MEDIA_DATA} installer_ui=${INSTALLER_UI} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH}"
+    _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} live_iso=${LIVE_ISO} installer_iso=${INSTALLER_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} skip_sso=${SKIP_SSO} standalone=${STANDALONE} desktop=${DESKTOP} capable=${CAPABLE} gpu_driver=${GPU_DRIVER} cuda=${NVIDIA_CUDA} encrypt_root=${ENCRYPT_ROOT} secure_boot=${SECURE_BOOT} media_data=${MEDIA_DATA} installer_ui=${INSTALLER_UI} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} unaffiliated=${UNAFFILIATED}"
     exit 0
 fi
 
@@ -2111,15 +2209,27 @@ cp "${SPECS_DIR}/etc/fstab"                           "${SYSROOT}/etc/fstab"
 
 # dracut LUKS-root persistence drop-in (so an installer-created encrypted root
 # keeps unlocking across future in-image kernel rebuilds). Inert on plaintext-root.
+# UNAFFILIATED: same functional content under a neutral filename.
 if [ -f "${SPECS_DIR}/etc/dracut.conf.d/60-snapdragon-crypt.conf" ]; then
     mkdir -p "${SYSROOT}/etc/dracut.conf.d"
-    cp "${SPECS_DIR}/etc/dracut.conf.d/60-snapdragon-crypt.conf" "${SYSROOT}/etc/dracut.conf.d/"
+    if ${UNAFFILIATED}; then
+        cp "${SPECS_DIR}/etc/dracut.conf.d/60-snapdragon-crypt.conf" "${SYSROOT}/etc/dracut.conf.d/60-crypt.conf"
+    else
+        cp "${SPECS_DIR}/etc/dracut.conf.d/60-snapdragon-crypt.conf" "${SYSROOT}/etc/dracut.conf.d/"
+    fi
 fi
 
-# Shared (arch-agnostic) etc/ specs
-mkdir -p "${SYSROOT}/etc/"{sysctl.d,modules-load.d,containerd,kubernetes,init.d,ssh/sshd_config.d,local.d,headscale,keys-provision,firewalld/zones} \
-         "${SYSROOT}/var/lib/kubelet" "${SYSROOT}/usr/sbin"
+# Shared (arch-agnostic) etc/ specs. UNAFFILIATED: only the neutral hardening
+# dirs — no containerd/kubernetes/headscale/keys-provision platform trees.
+if ${UNAFFILIATED}; then
+    mkdir -p "${SYSROOT}/etc/"{sysctl.d,modules-load.d,init.d,ssh/sshd_config.d,local.d,firewalld/zones} \
+             "${SYSROOT}/usr/sbin"
+else
+    mkdir -p "${SYSROOT}/etc/"{sysctl.d,modules-load.d,containerd,kubernetes,init.d,ssh/sshd_config.d,local.d,headscale,keys-provision,firewalld/zones} \
+             "${SYSROOT}/var/lib/kubelet" "${SYSROOT}/usr/sbin"
+fi
 cp "${SHARED_SPECS}/etc/sysctl.d/10-hardened.conf"    "${SYSROOT}/etc/sysctl.d/"
+if ! ${UNAFFILIATED}; then
 cp "${SHARED_SPECS}/etc/sysctl.d/99-kubernetes.conf"  "${SYSROOT}/etc/sysctl.d/"
 cp "${SHARED_SPECS}/etc/modules-load.d/kubernetes.conf" "${SYSROOT}/etc/modules-load.d/"
 cp "${SHARED_SPECS}/etc/containerd/config.toml"       "${SYSROOT}/etc/containerd/"
@@ -2143,7 +2253,9 @@ NVRT
 fi
 cp "${SHARED_SPECS}/etc/kubernetes/kubeadm-config.yaml" "${SYSROOT}/etc/kubernetes/"
 cp "${SHARED_SPECS}/etc/kubernetes/kubelet-config.yaml" "${SYSROOT}/var/lib/kubelet/config.yaml"
+fi   # ! UNAFFILIATED (k8s/containerd config remnants)
 cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf" "${SYSROOT}/etc/ssh/sshd_config.d/"
+if ! ${UNAFFILIATED}; then
 cp "${SHARED_SPECS}/etc/headscale/config.yaml"        "${SYSROOT}/etc/headscale/"
 # Layer-A: bake the BOOTSTRAP policy AS the initial /etc/headscale/policy.hujson
 # (NO any-to-any tag:snapdragon->tag:snapdragon:* :22 hole; KEEPS the k8s CIDR
@@ -2156,9 +2268,13 @@ cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson" "${SYSROOT}/etc/heads
 cp "${SHARED_SPECS}/etc/keys-provision/provision.sh"  "${SYSROOT}/usr/sbin/keys-provision"; chmod +x "${SYSROOT}/usr/sbin/keys-provision"
 mkdir -p "${SYSROOT}/usr/local/sbin"
 cp "${SHARED_SPECS}/usr/local/sbin/snapdragon-backup"  "${SYSROOT}/usr/local/sbin/snapdragon-backup"; chmod +x "${SYSROOT}/usr/local/sbin/snapdragon-backup"
-for svc in containerd kubelet headscale tailscaled keys-provision growroot; do
+fi   # ! UNAFFILIATED (headscale/keys-provision/backup platform tools)
+# UNAFFILIATED keeps only growroot (first-boot .img root expansion — generic).
+if ${UNAFFILIATED}; then _base_svcs="growroot"; else _base_svcs="containerd kubelet headscale tailscaled keys-provision growroot"; fi
+for svc in ${_base_svcs}; do
     cp "${SHARED_SPECS}/etc/init.d/${svc}" "${SYSROOT}/etc/init.d/${svc}"; chmod +x "${SYSROOT}/etc/init.d/${svc}"
 done
+unset _base_svcs
 # firewalld installs /etc/init.d/firewalld; alias 'firewall' so the `after firewall`
 # deps in tailscaled/kubelet/headscale/containerd/egress-vpn still resolve.
 ln -sfn firewalld "${SYSROOT}/etc/init.d/firewall"
@@ -2177,6 +2293,10 @@ cp "${SHARED_SPECS}/etc/firewalld/zones/trusted.xml" "${SYSROOT}/etc/firewalld/z
 # when owner_type=ADMIN. Enforcement conf + break-glass + cron STAGED under
 # /etc/snapdragon/registry (installed on ADMIN nodes only; conf gate-flips on first
 # verified sync).
+# UNAFFILIATED skips this whole platform block (Layer-B/Layer-A registries, the
+# domain-registry bridge, tor reconcile, and the brand-repo generator bundle) —
+# all of it is Snapdragon mesh/fleet machinery with no place on a plain desktop.
+if ! ${UNAFFILIATED}; then
 mkdir -p "${SYSROOT}/usr/lib/snapdragon" "${SYSROOT}/etc/snapdragon/registry" "${SYSROOT}/var/lib/snapdragon/device-registry"
 cp "${SHARED_SPECS}/usr/sbin/snapdragon-authorized-keys-lookup" "${SYSROOT}/usr/sbin/snapdragon-authorized-keys-lookup"; chmod +x "${SYSROOT}/usr/sbin/snapdragon-authorized-keys-lookup"
 cp "${SHARED_SPECS}/usr/sbin/snapdragon-device-registry-sync"   "${SYSROOT}/usr/sbin/snapdragon-device-registry-sync";   chmod +x "${SYSROOT}/usr/sbin/snapdragon-device-registry-sync"
@@ -2225,15 +2345,42 @@ mkdir -p "${SYSROOT}/usr/share/snapdragon/generator/scripts" "${SYSROOT}/usr/sha
 cp "${SCRIPT_DIR}/scripts/gen-keystores.sh"  "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh";  chmod +x "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh"
 cp "${SCRIPT_DIR}/generate-brand-repos.sh"   "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh";   chmod +x "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh"
 cp -r "${SCRIPT_DIR}/templates/."            "${SYSROOT}/usr/share/snapdragon/generator/templates/"
+fi   # ! UNAFFILIATED (Layer-B/Layer-A/domain/tor/brand-repo-generator block)
 
 render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
+# UNAFFILIATED: the shared firstboot loads k8s modules and prints a k8s/headscale/
+# KEYS banner — none of which exists on a plain desktop. Strip those sections from
+# the RENDERED file (anchored ranges; `sysctl --system` and the NVMe note survive)
+# and print an honest neutral banner instead.
+if ${UNAFFILIATED}; then
+    sed -i \
+        -e '/^# ── Kubernetes kernel modules/,/^done$/d' \
+        -e '\|/usr/libexec/cni|,/^fi$/d' \
+        -e 's/=== Gentoo RPi 5 (Hardened + Headscale + Kubernetes) ===/=== Gentoo Linux — hardened desktop ===/' \
+        -e '/Kubernetes:  /d' -e '/containerd:  /d' -e '/Headscale:   /d' \
+        -e '/Provisioned from USB KEYS/d' -e '/Control plane:  kubeadm/d' -e '/Worker node:    kubeadm/d' \
+        -e '/keys come from the USB KEYS/d' -e '/If you booted WITHOUT a KEYS stick/d' \
+        "${SYSROOT}/etc/local.d/01-firstboot.start"
+    grep -q 'kubeadm\|headscale' "${SYSROOT}/etc/local.d/01-firstboot.start" \
+        && warn "unaffiliated firstboot still mentions kubeadm/headscale (template drift — review the sed anchors above)"
+fi
 
 # ── Home provisioning manifest + first-boot helper ───────────────────────────
 # Carries the home posture (mode / device / backup / ecryptfs / stack-code) baked
 # by this build. Consumed by snapdragon-home-setup (runs at first boot, after the
 # 01-firstboot user is created) and read by the installer for adopt/restore.
-mkdir -p "${SYSROOT}/etc/snapdragon"
+# UNAFFILIATED: same functional machinery under NEUTRAL names — the conf moves to
+# /etc/gentoo/home.conf, the helper installs as /usr/sbin/home-setup, and its
+# internal snapdragon-* literals (conf path, first-login-encrypt dotfile) are
+# rewritten on the staged copy. install-x86.sh's staged copy gets the matching
+# conf-path rewrite where the installer ISO is built (below).
+if ${UNAFFILIATED}; then
+    HOME_CONF_DIR="/etc/gentoo"; HOME_SETUP_NAME="home-setup"
+else
+    HOME_CONF_DIR="/etc/snapdragon"; HOME_SETUP_NAME="snapdragon-home-setup"
+fi
+mkdir -p "${SYSROOT}${HOME_CONF_DIR}"
 # home.conf is dot-sourced as ROOT at first boot (snapdragon-home-setup) AND by the
 # installer (install-x86.sh). HOME_DEVICE/HOME_BACKUP are free-text operator fields, so
 # emit every value with `printf %q` (shell-safe quoting): a sourced file can never run
@@ -2246,14 +2393,23 @@ mkdir -p "${SYSROOT}/etc/snapdragon"
     printf 'HOME_ENCRYPTED=%q\n' "${HOME_ENCRYPTED}"
     printf 'HOME_SEED_CODE=%q\n' "${HOME_SEED_CODE}"
     printf 'LOCAL_USER=%q\n'     "${LOCAL_USER:-${DEFAULT_USER}}"
-} > "${SYSROOT}/etc/snapdragon/home.conf"
+} > "${SYSROOT}${HOME_CONF_DIR}/home.conf"
 if [ -f "${SHARED_SPECS}/usr/sbin/snapdragon-home-setup" ]; then
-    cp "${SHARED_SPECS}/usr/sbin/snapdragon-home-setup" "${SYSROOT}/usr/sbin/snapdragon-home-setup"
-    chmod +x "${SYSROOT}/usr/sbin/snapdragon-home-setup"
-    cat > "${SYSROOT}/etc/local.d/03-home-setup.start" <<'HOOK'
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-home-setup" "${SYSROOT}/usr/sbin/${HOME_SETUP_NAME}"
+    chmod +x "${SYSROOT}/usr/sbin/${HOME_SETUP_NAME}"
+    if ${UNAFFILIATED}; then
+        # Neutralize the staged copy's internal literals (fail loudly on drift).
+        grep -q '^CONF=/etc/snapdragon/home.conf' "${SYSROOT}/usr/sbin/${HOME_SETUP_NAME}" \
+            || { err "snapdragon-home-setup drifted: CONF= line not found (unaffiliated rename would break silently)"; exit 1; }
+        sed -i -e "s|/etc/snapdragon/home.conf|${HOME_CONF_DIR}/home.conf|g" \
+               -e 's/snapdragon-home-setup/home-setup/g' \
+               -e 's/snapdragon-first-login-encrypt/first-login-encrypt/g' \
+               "${SYSROOT}/usr/sbin/${HOME_SETUP_NAME}"
+    fi
+    cat > "${SYSROOT}/etc/local.d/03-home-setup.start" <<HOOK
 #!/bin/bash
 # First-boot home provisioning (ecryptfs wiring, stack-code seeding). Self-removes.
-[ -x /usr/sbin/snapdragon-home-setup ] && /usr/sbin/snapdragon-home-setup
+[ -x /usr/sbin/${HOME_SETUP_NAME} ] && /usr/sbin/${HOME_SETUP_NAME}
 HOOK
     chmod +x "${SYSROOT}/etc/local.d/03-home-setup.start"
 fi
@@ -2276,26 +2432,48 @@ if ${BUNDLE_SOURCE:-false}; then
     fi
 fi
 # Graphical Calamares installer config + the bridge to install-x86.sh.
+# UNAFFILIATED: neutral names (gentoo-calamares-install / gentoo-installer-autostart,
+# a "Gentoo Installer" desktop entry, and the gentoo.install= cmdline key emitted by
+# the live GRUB entries below) — same functional machinery.
+if ${UNAFFILIATED}; then
+    CALAMARES_BRIDGE="gentoo-calamares-install"; AUTOSTART_NAME="gentoo-installer-autostart"
+    INSTALLER_DESKTOP_TITLE="Gentoo Installer"
+else
+    CALAMARES_BRIDGE="snapdragon-calamares-install"; AUTOSTART_NAME="snapdragon-installer-autostart"
+    INSTALLER_DESKTOP_TITLE="Snapdragon Installer"
+fi
 if ${WANT_CALAMARES:-false}; then
     mkdir -p "${SYSROOT}/etc/calamares/modules" "${SYSROOT}/usr/libexec"
     cp "${SHARED_SPECS}/etc/calamares/settings.conf" "${SYSROOT}/etc/calamares/settings.conf" 2>/dev/null || true
     cp "${SHARED_SPECS}/etc/calamares/modules/shellprocess-install.conf" "${SYSROOT}/etc/calamares/modules/" 2>/dev/null || true
     if [ -f "${SHARED_SPECS}/usr/libexec/snapdragon-calamares-install" ]; then
-        cp "${SHARED_SPECS}/usr/libexec/snapdragon-calamares-install" "${SYSROOT}/usr/libexec/"
-        chmod +x "${SYSROOT}/usr/libexec/snapdragon-calamares-install"
+        cp "${SHARED_SPECS}/usr/libexec/snapdragon-calamares-install" "${SYSROOT}/usr/libexec/${CALAMARES_BRIDGE}"
+        chmod +x "${SYSROOT}/usr/libexec/${CALAMARES_BRIDGE}"
+    fi
+    if ${UNAFFILIATED}; then
+        # Re-point the shellprocess module at the renamed bridge + drop the
+        # nonexistent-scaffold 'snapdragon' branding component reference.
+        sed -i "s|/usr/libexec/snapdragon-calamares-install|/usr/libexec/${CALAMARES_BRIDGE}|" \
+            "${SYSROOT}/etc/calamares/modules/shellprocess-install.conf" 2>/dev/null || true
+        sed -i 's/^branding: snapdragon$/branding: default/' "${SYSROOT}/etc/calamares/settings.conf" 2>/dev/null || true
     fi
 fi
-# Live-session installer autostart (reads snapdragon.install= from the GRUB entry).
+# Live-session installer autostart (reads ${INSTALL_CMDLINE_KEY}= from the GRUB entry).
 if [ "${INSTALLER_UI:-cli}" != cli ] || ${WANT_CALAMARES:-false}; then
     if [ -f "${SHARED_SPECS}/usr/bin/snapdragon-installer-autostart" ]; then
-        cp "${SHARED_SPECS}/usr/bin/snapdragon-installer-autostart" "${SYSROOT}/usr/bin/snapdragon-installer-autostart"
-        chmod +x "${SYSROOT}/usr/bin/snapdragon-installer-autostart"
+        cp "${SHARED_SPECS}/usr/bin/snapdragon-installer-autostart" "${SYSROOT}/usr/bin/${AUTOSTART_NAME}"
+        chmod +x "${SYSROOT}/usr/bin/${AUTOSTART_NAME}"
+        if ${UNAFFILIATED}; then
+            grep -q 'snapdragon\.install=' "${SYSROOT}/usr/bin/${AUTOSTART_NAME}" \
+                || { err "snapdragon-installer-autostart drifted: snapdragon.install= key not found (unaffiliated rename would break silently)"; exit 1; }
+            sed -i "s/snapdragon\.install=/${INSTALL_CMDLINE_KEY}=/g" "${SYSROOT}/usr/bin/${AUTOSTART_NAME}"
+        fi
         mkdir -p "${SYSROOT}/etc/xdg/autostart"
-        cat > "${SYSROOT}/etc/xdg/autostart/snapdragon-installer.desktop" <<'DESK'
+        cat > "${SYSROOT}/etc/xdg/autostart/${AUTOSTART_NAME%-autostart}.desktop" <<DESK
 [Desktop Entry]
 Type=Application
-Name=Snapdragon Installer
-Exec=snapdragon-installer-autostart
+Name=${INSTALLER_DESKTOP_TITLE}
+Exec=${AUTOSTART_NAME}
 X-GNOME-Autostart-enabled=true
 NoDisplay=true
 DESK
@@ -2449,7 +2627,12 @@ fi
 # dropped on the ESP in build_img so it can be edited per-device after a flash.
 write_growfs_conf "${SYSROOT}/etc/growfs.conf"
 
-# Cluster GitOps payload + role markers
+# Cluster GitOps payload + role markers.
+# UNAFFILIATED: no /etc/snapdragon marker tree at all — every consumer of these
+# markers (keys-provision, snapdragon-update, provision-time tooling) is platform
+# machinery this image does not carry. The one FUNCTIONAL conf (home.conf) is
+# written to the neutral /etc/gentoo/ above instead.
+if ! ${UNAFFILIATED}; then
 mkdir -p "${SYSROOT}/etc/snapdragon" "${SYSROOT}/var/lib/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
@@ -2463,7 +2646,10 @@ if [ -n "${HEADSCALE_URL:-}" ]; then
     echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/snapdragon/headscale-url"
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/snapdragon/headscale-url"
 fi
-if ${ROLE_CLIENT}; then
+fi   # ! UNAFFILIATED (marker tree)
+if ${UNAFFILIATED}; then
+    info "Unaffiliated desktop: no marker tree, no cluster payload, no identity tie."
+elif ${ROLE_CLIENT}; then
     # CLIENT (person device): bake the FD-08 person-role + domain tie and SKIP the
     # whole k8s/ArgoCD cluster GitOps tree — a client is a desktop, not a node. The
     # Casdoor binding + multi-domain tie are applied at first boot by keys-provision
@@ -2520,7 +2706,8 @@ if grep -qE '^#\s*s0:12345:respawn:/sbin/agetty -L [0-9]+ ttyS0 ' "${SYSROOT}/et
 fi
 echo "${TIMEZONE}" > "${SYSROOT}/etc/timezone"
 echo "en_US.UTF-8 UTF-8" > "${SYSROOT}/etc/locale.gen"
-mkdir -p "${SYSROOT}/opt/cni/bin" "${SYSROOT}/etc/cni/net.d" "${SYSROOT}/var/lib/keys-provision"
+# CNI + keys-provision state dirs are platform machinery — none on unaffiliated.
+${UNAFFILIATED} || mkdir -p "${SYSROOT}/opt/cni/bin" "${SYSROOT}/etc/cni/net.d" "${SYSROOT}/var/lib/keys-provision"
 
 # Runlevels. growroot expands the ext4 root to fill the medium on first boot and
 # orders itself before keys-provision (so provisioning sees the full disk).
@@ -2530,7 +2717,13 @@ mkdir -p "${SYSROOT}/etc/runlevels/default"
 if ${ROLE_CLIENT}; then
     # CLIENT desktop: NO containerd/kubelet/headscale (not a k8s node). Add the
     # desktop session stack: dbus + elogind (seat/login) + display-manager (lightdm).
-    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall auditd local dbus elogind display-manager)
+    # UNAFFILIATED additionally drops keys-provision (KEYS-USB fleet provisioning —
+    # platform machinery; the local user is created by the firstboot script instead).
+    if ${UNAFFILIATED}; then
+        SVCS=(sshd NetworkManager cronie haveged growroot firewall auditd local dbus elogind display-manager)
+    else
+        SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall auditd local dbus elogind display-manager)
+    fi
     # gui-libs/display-manager-init's /etc/init.d/display-manager reads this to decide
     # WHICH DM to launch; lightdm ships no OpenRC service. Without it the service falls
     # back to xdm and the image boots to a bare console (mirrors the frite fix).
@@ -2559,11 +2752,23 @@ LIGHTDM
     # that finds the SEPARATE data disk by LABEL or by the marker dirs and mounts
     # it at ${MEDIA_MOUNT}, then points Steam at ${STEAM_DIR}. See media.conf.
     if ${MEDIA_DATA}; then
-        mkdir -p "${SYSROOT}/etc/snapdragon" "${SYSROOT}/usr/sbin"
-        render_template "${SHARED_SPECS}/etc/snapdragon/media.conf.tmpl" "${SYSROOT}/etc/snapdragon/media.conf"
-        cp "${SHARED_SPECS}/usr/sbin/snapdragon-media-detect" "${SYSROOT}/usr/sbin/snapdragon-media-detect"; chmod +x "${SYSROOT}/usr/sbin/snapdragon-media-detect"
-        cp "${SHARED_SPECS}/etc/init.d/snapdragon-media-detect" "${SYSROOT}/etc/init.d/snapdragon-media-detect"; chmod +x "${SYSROOT}/etc/init.d/snapdragon-media-detect"
-        SVCS+=(snapdragon-media-detect)
+        # UNAFFILIATED (only reachable here with an explicit --media-data): same
+        # functional machinery under neutral names — media-detect + a conf under
+        # the neutral ${HOME_CONF_DIR}-style /etc/gentoo path.
+        if ${UNAFFILIATED}; then _md_name="media-detect"; _md_conf_dir="/etc/gentoo"; else _md_name="snapdragon-media-detect"; _md_conf_dir="/etc/snapdragon"; fi
+        mkdir -p "${SYSROOT}${_md_conf_dir}" "${SYSROOT}/usr/sbin"
+        render_template "${SHARED_SPECS}/etc/snapdragon/media.conf.tmpl" "${SYSROOT}${_md_conf_dir}/media.conf"
+        cp "${SHARED_SPECS}/usr/sbin/snapdragon-media-detect" "${SYSROOT}/usr/sbin/${_md_name}"; chmod +x "${SYSROOT}/usr/sbin/${_md_name}"
+        cp "${SHARED_SPECS}/etc/init.d/snapdragon-media-detect" "${SYSROOT}/etc/init.d/${_md_name}"; chmod +x "${SYSROOT}/etc/init.d/${_md_name}"
+        if ${UNAFFILIATED}; then
+            grep -q '^CONF=/etc/snapdragon/media.conf' "${SYSROOT}/usr/sbin/${_md_name}" \
+                || { err "snapdragon-media-detect drifted: CONF= line not found (unaffiliated rename would break silently)"; exit 1; }
+            sed -i -e "s|/etc/snapdragon/media.conf|${_md_conf_dir}/media.conf|g" \
+                   -e "s|/usr/sbin/snapdragon-media-detect|/usr/sbin/${_md_name}|g" \
+                "${SYSROOT}/usr/sbin/${_md_name}" "${SYSROOT}/etc/init.d/${_md_name}"
+        fi
+        SVCS+=("${_md_name}")
+        unset _md_name _md_conf_dir
         info "Media-data: /media auto-detect + Steam->${STEAM_DIR} + Vaults (gocryptfs) wired (steam=${STEAM_DELIVERY})"
     fi
 else
@@ -2837,6 +3042,14 @@ fi
 # ("copy all installed programs"). Appended LAST so it augments the curated set.
 [ -n "${SEED_PACKAGES_FROM}" ] && PKG_LISTS+=("${SEED_PACKAGES_FROM}")
 PKGS=$(grep -hv '^\s*#' "${PKG_LISTS[@]}" | grep -v '^\s*$' | tr '\n' ' ')
+# UNAFFILIATED: strip the k8s node payload from the shared base list (kubelet/
+# kubeadm/kubectl/containerd/cni-plugins/cri-tools — carried "built but never
+# enabled" on branded client images; a plain desktop ships none of it). ~11 GiB
+# of node payload and the most platform-shaped packages on the image.
+if ${UNAFFILIATED}; then
+    PKGS=$(printf '%s\n' ${PKGS} | grep -vE '^(sys-cluster/(kubelet|kubeadm|kubectl)|app-containers/(containerd|cni-plugins|cri-tools))$' | tr '\n' ' ')
+    info "Unaffiliated: k8s node payload stripped from the package set"
+fi
 # YubiKey/FIDO2 as a LOGIN factor needs the PAM module on the image (enrollment —
 # `pamu2fcfg` — happens at first login since the key must be present).
 [ "${UNLOCK_YUBIKEY}" = "login" ] && PKGS="${PKGS} sys-auth/pam-u2f"
@@ -3281,8 +3494,8 @@ fi
 # SBDIR persists across builds in WORK_DIR so the same org cert covers all roles.
 SBDIR="${WORK_DIR}/secureboot"
 SBKEY="${SBDIR}/sb.key"; SBCRT="${SBDIR}/sb.crt"; SBCER="${SBDIR}/sb.cer"
-UKI_UNSIGNED="${SYSROOT}/boot/snapdragon-unsigned.efi"
-UKI_SIGNED="${SYSROOT}/boot/snapdragon.efi"
+UKI_UNSIGNED="${SYSROOT}/boot/${UKI_NAME%.efi}-unsigned.efi"
+UKI_SIGNED="${SYSROOT}/boot/${UKI_NAME}"
 # A KEYS-USB / explicit signing key (--keys-usb, --secureboot-key/-cert) lets the
 # UKI be signed with the key ALREADY ENROLLED in this host's firmware, so the
 # reinstalled system boots under Secure Boot without re-enrolling. We stage that
@@ -3298,7 +3511,7 @@ if [ -n "${SECUREBOOT_KEY}" ] && [ -f "${SECUREBOOT_KEY}" ]; then
     elif openssl rsa -in "${SBKEY}" -pubout >/dev/null 2>&1; then
         # No cert given: self-sign one from the provided key so sbsign has an x509.
         openssl req -new -x509 -key "${SBKEY}" -sha256 -days 3650 \
-            -subj "/O=${ORG}/CN=Snapdragon Secure Boot ${BRAND} (keys-usb)/" -out "${SBCRT}" 2>/dev/null || true
+            -subj "/O=${ORG}/CN=${SB_CERT_CN} ${BRAND} (keys-usb)/" -out "${SBCRT}" 2>/dev/null || true
     fi
     [ -f "${SBCRT}" ] && openssl x509 -inform PEM -outform DER -in "${SBCRT}" -out "${SBCER}" 2>/dev/null || true
     info "Secure Boot: signing UKI with the provided KEYS key (${SECUREBOOT_KEY})"
@@ -3312,7 +3525,7 @@ elif command -v sbsign >/dev/null 2>&1 && [ -f "${UKI_UNSIGNED}" ]; then
         info "Generating Snapdragon org Secure Boot signing key (RSA-4096, 10 yr)"
         openssl req -newkey rsa:4096 -nodes -sha256 \
             -keyout "${SBKEY}" -x509 -days 3650 \
-            -subj "/O=Snapdragon Systems/CN=Snapdragon Secure Boot ${BRAND}/" \
+            -subj "/O=${SB_CERT_O}/CN=${SB_CERT_CN} ${BRAND}/" \
             -out "${SBCRT}" 2>/dev/null
         openssl x509 -inform PEM -outform DER -in "${SBCRT}" -out "${SBCER}"
         if command -v cert-to-efi-sig-list >/dev/null && command -v sign-efi-sig-list >/dev/null; then
@@ -3330,11 +3543,14 @@ elif command -v sbsign >/dev/null 2>&1 && [ -f "${UKI_UNSIGNED}" ]; then
         || { warn "sbsign failed; copying unsigned UKI (not verifiable under Secure Boot)"; cp "${UKI_UNSIGNED}" "${UKI_SIGNED}"; }
     rm -f "${UKI_UNSIGNED}"
     # Install org cert into the rootfs for keys-provision mokutil enrollment.
-    mkdir -p "${SYSROOT}/etc/snapdragon/secureboot"
-    cp "${SBCRT}" "${SYSROOT}/etc/snapdragon/secureboot/sb.crt"
-    cp "${SBCER}" "${SYSROOT}/etc/snapdragon/secureboot/sb.cer"
-    [ -f "${SBDIR}/db.auth" ] && cp "${SBDIR}/db.auth" "${SYSROOT}/etc/snapdragon/secureboot/db.auth"
-    info "Org Secure Boot cert installed to sysroot /etc/snapdragon/secureboot/"
+    # UNAFFILIATED keeps the functional enrollment certs under the neutral dir.
+    ${UNAFFILIATED} && _sb_etc="/etc/gentoo/secureboot" || _sb_etc="/etc/snapdragon/secureboot"
+    mkdir -p "${SYSROOT}${_sb_etc}"
+    cp "${SBCRT}" "${SYSROOT}${_sb_etc}/sb.crt"
+    cp "${SBCER}" "${SYSROOT}${_sb_etc}/sb.cer"
+    [ -f "${SBDIR}/db.auth" ] && cp "${SBDIR}/db.auth" "${SYSROOT}${_sb_etc}/db.auth"
+    info "Org Secure Boot cert installed to sysroot ${_sb_etc}/"
+    unset _sb_etc
 elif [ -f "${UKI_UNSIGNED}" ]; then
     warn "sbsign not found on build host (install app-crypt/sbsigntools); UKI unsigned — Secure Boot chain won't verify"
     cp "${UKI_UNSIGNED}" "${UKI_SIGNED}"; rm -f "${UKI_UNSIGNED}"
@@ -3434,7 +3650,8 @@ esac
 # FD-08: client device artifacts carry the person-role + primary-domain tag so the
 # filename identifies who/what the device is tied to (cosmetic per ADR-12 — the real
 # isolation is per-domain authz, not the name). e.g. laptop-user-acme_example.
-if ${ROLE_CLIENT}; then
+# UNAFFILIATED artifacts carry no person-role/domain tie — the bare role name.
+if ${ROLE_CLIENT} && ! ${UNAFFILIATED}; then
     _primary_domain="${DOMAINS%%[ ,]*}"                       # first domain (space/comma sep)
     _domtag="${_primary_domain//./_}"                         # filesystem-safe
     ROLE_TAG="${ROLE}-${PERSON_ROLE}${_domtag:+-${_domtag}}"
@@ -3575,9 +3792,9 @@ build_img() {
     [ -b "${esp_part}" ] && [ -b "${root_part}" ] \
         || { err "offset loop devices not created (esp=${esp_part} root=${root_part}) — refusing to image"; exit 1; }
 
-    info "Formatting ${esp_part} (FAT32 SNAP_ESP) and ${root_part} (ext4 SNAP_ROOT)"
-    mkfs.vfat -F 32 -n SNAP_ESP "${esp_part}"
-    mkfs.ext4 -q -L SNAP_ROOT -F "${root_part}"
+    info "Formatting ${esp_part} (FAT32 ${ESP_LABEL}) and ${root_part} (ext4 ${ROOT_LABEL})"
+    mkfs.vfat -F 32 -n "${ESP_LABEL}" "${esp_part}"
+    mkfs.ext4 -q -L "${ROOT_LABEL}" -F "${root_part}"
 
     root_mnt="$(mktemp -d "${BUILD_ROOT}/img-root.XXXXXX")"
     mount "${root_part}" "${root_mnt}"
@@ -3644,11 +3861,11 @@ build_img() {
     # ── UKI → ESP (Secure Boot direct-boot path) ──────────────────
     # The signed UKI (kernel+initramfs+cmdline as a PE binary) was built and signed
     # outside the chroot. Install it into the ESP so UEFI / shim / GRUB can load it.
-    local uki_src="${SYSROOT}/boot/snapdragon.efi"
+    local uki_src="${SYSROOT}/boot/${UKI_NAME}"
     if [ -f "${uki_src}" ]; then
         mkdir -p "${root_mnt}/boot/efi/EFI/Linux"
-        cp "${uki_src}" "${root_mnt}/boot/efi/EFI/Linux/snapdragon.efi"
-        info "UKI installed to ESP: EFI/Linux/snapdragon.efi"
+        cp "${uki_src}" "${root_mnt}/boot/efi/EFI/Linux/${UKI_NAME}"
+        info "UKI installed to ESP: EFI/Linux/${UKI_NAME}"
         # Org cert and db.auth: keys-provision enrolls via mokutil on first boot.
         if [ -d "${SYSROOT}/etc/snapdragon/secureboot" ]; then
             mkdir -p "${root_mnt}/boot/efi/EFI/snapdragon"
@@ -3707,9 +3924,9 @@ build_img() {
         echo "insmod search_fs_uuid"
         echo "insmod chainloader"
         # UKI entry: direct chainload from ESP — preferred when Secure Boot is active.
-        if [ -f "${root_mnt}/boot/efi/EFI/Linux/snapdragon.efi" ]; then
+        if [ -f "${root_mnt}/boot/efi/EFI/Linux/${UKI_NAME}" ]; then
             echo "menuentry \"${BRAND_TITLE} (${ROLE}) — Secure Boot UKI\" {"
-            echo "    chainloader /EFI/Linux/snapdragon.efi"
+            echo "    chainloader /EFI/Linux/${UKI_NAME}"
             echo "}"
         fi
         echo "menuentry \"${BRAND_TITLE} (${ROLE})\" {"
@@ -3859,7 +4076,7 @@ CHROOT
         # console=ttyS0 first (kernel log also goes to serial — lets QEMU/headless
         # boot-tests capture it; harmless on PCs with no serial), tty0 last so the
         # SCREEN stays the primary console for a real desktop.
-        _LBASE="root=live:CDLABEL=SNAPDRAGON_LIVE rd.live.dir=/LiveOS rd.live.squashimg=squashfs.img console=ttyS0,115200 console=tty0"
+        _LBASE="root=live:CDLABEL=${LIVE_VOLID} rd.live.dir=/LiveOS rd.live.squashimg=squashfs.img console=ttyS0,115200 console=tty0"
         {
             echo "set timeout=10"
             echo "set default=0"
@@ -3894,11 +4111,11 @@ CHROOT
                 echo "}"
             fi
             echo "menuentry \"Install ${BRAND_TITLE} (graphical installer)\" {"
-            echo "    linux /boot/vmlinuz ${_LBASE} rd.live.ram=1 snapdragon.install=calamares ${LIVE_CMDLINE}"
+            echo "    linux /boot/vmlinuz ${_LBASE} rd.live.ram=1 ${INSTALL_CMDLINE_KEY}=calamares ${LIVE_CMDLINE}"
             echo "    initrd /boot/initramfs.img"
             echo "}"
             echo "menuentry \"Install ${BRAND_TITLE} (text / ncurses installer)\" {"
-            echo "    linux /boot/vmlinuz ${_LBASE} snapdragon.install=ncurses ${LIVE_CMDLINE}"
+            echo "    linux /boot/vmlinuz ${_LBASE} ${INSTALL_CMDLINE_KEY}=ncurses ${LIVE_CMDLINE}"
             echo "    initrd /boot/initramfs.img"
             echo "}"
         } > "${ISO_DIR}/boot/grub/grub.cfg"
@@ -3911,7 +4128,7 @@ CHROOT
         # 4 GiB-1 and SILENTLY DROPS anything larger — yielding a bootable-looking
         # but rootfs-less ~111 MiB ISO (kernel+initramfs only, no /LiveOS/squashfs.img).
         # -iso-level 3 enables multi-extent files so the 5+ GiB squashfs is embedded.
-        if grub-mkrescue -o "${ISO_PATH}" "${ISO_DIR}" -volid SNAPDRAGON_LIVE -iso-level 3 2>/dev/null; then
+        if grub-mkrescue -o "${ISO_PATH}" "${ISO_DIR}" -volid "${LIVE_VOLID}" -iso-level 3 2>/dev/null; then
             # Verify the squashfs actually made it IN: the ISO must be at least as large
             # as the squashfs we built (minus 10% slack). If it isn't, xorriso dropped the
             # >4 GiB file again — fail loud rather than ship a live ISO that boots to nothing.
@@ -3981,6 +4198,24 @@ CHROOT
         rm -rf "${INST_DIR}"; mkdir -p "${INST_DIR}/stage4"
         cp "${STAGE4}" "${INST_DIR}/stage4/"
         cp "${SPECS_DIR}/installer/install-x86.sh" "${INST_DIR}/install-x86.sh"; chmod +x "${INST_DIR}/install-x86.sh"
+        # UNAFFILIATED: neutralize the STAGED installer copy — UI titles, the
+        # cmdline key it greps, the home.conf path it sources, and the partition
+        # labels it formats. Functional patterns are asserted first so upstream
+        # drift fails the build loudly instead of shipping a half-neutral ISO.
+        if ${UNAFFILIATED}; then
+            for _pat in 'snapdragon.install=ncurses' '/etc/snapdragon/home.conf' 'SNAP_ESP' 'SNAP_ROOT'; do
+                grep -qF "${_pat}" "${INST_DIR}/install-x86.sh" \
+                    || { err "install-x86.sh drifted: '${_pat}' not found (unaffiliated neutralization would break silently)"; exit 1; }
+            done; unset _pat
+            sed -i \
+                -e "s/snapdragon\.install=/${INSTALL_CMDLINE_KEY}=/g" \
+                -e "s|/etc/snapdragon/home.conf|${HOME_CONF_DIR}/home.conf|g" \
+                -e "s/\bSNAP_ESP\b/${ESP_LABEL}/g" -e "s/\bSNAP_ROOT\b/${ROOT_LABEL}/g" \
+                -e 's/Snapdragon Installer/Gentoo Installer/g' \
+                -e 's/Install Snapdragon onto/Install Gentoo onto/g' \
+                -e 's/# Snapdragon encrypted-root layout/# Encrypted-root layout/' \
+                "${INST_DIR}/install-x86.sh"
+        fi
         cp "${SPECS_DIR}/etc/fstab" "${INST_DIR}/fstab.template" 2>/dev/null || true
         # ── LUKS2 FDE + unlock-factor + home-archive payloads for the installer ──
         if ${ENCRYPT_ROOT}; then
@@ -4008,7 +4243,7 @@ CHROOT
             info "Installer ISO: bundling home archive ${INCLUDE_HOME_ARCHIVE} (unpacked into the new user's home)."
         fi
         if command -v xorriso >/dev/null; then
-            xorriso -as mkisofs -o "${INSTALLER_ISO_PATH}" -volid SNAPDRAGON_INSTALL -joliet -rock "${INST_DIR}"
+            xorriso -as mkisofs -o "${INSTALLER_ISO_PATH}" -volid "${INSTALL_VOLID}" -joliet -rock "${INST_DIR}"
             info "Installer ISO: ${INSTALLER_ISO_PATH}"
             [ "${ISO_PATH}" = "(not built)" ] && ISO_PATH="${INSTALLER_ISO_PATH}"
         else

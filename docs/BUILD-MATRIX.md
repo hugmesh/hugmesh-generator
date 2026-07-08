@@ -35,12 +35,12 @@ Every channel is crossed with the **build ENV** (`test` | `prod`), threaded as
 ## The canonical matrix — `tests/build-matrix/matrix.tsv`
 
 One row per buildable image cell `(platform, role, env, board, flavor,
-desktop)`; `-` marks an axis a platform does not have. **78 cells** today:
+desktop)`; `-` marks an axis a platform does not have. **80 cells** today:
 
 | Platform | Builder | Cells | Axes |
 |---|---|---|---|
 | **rpi5** | `build-rpi5-stage4.sh` | 3 roles (`pki`, `backend`, `frontend`) × 2 env = **6** | — |
-| **x86** | `build-x86-host-stage4.sh` | 11 roles × 2 env = **22** | nodes `pki be fe be+gpu`, `omnibus`, `edge_ai`, clients `laptop chromebook desktop`, `standalone-thin standalone-thick` |
+| **x86** | `build-x86-host-stage4.sh` | 12 roles × 2 env = **24** | nodes `pki be fe be+gpu`, `omnibus`, `edge_ai`, clients `laptop chromebook desktop`, `standalone-thin standalone-thick standalone-unaffiliated` |
 | **frite** | `build-frite-stage4.sh` | 3 boards × 3 flavors × 2 desktops × 2 env = **36** | board `la-frite\|le-potato\|sweet-potato`, flavor `live\|installer\|both`, desktop `light\|none` |
 | **jetson** *(EXPERIMENTAL)* | `build-jetson-stage4.sh` | 4 roles × 2 env on `orin-nano` + 3 boards × 2 env on `edge_ai` = **14** | roles `edge_ai gpu-host full desktop`; board `orin-nano\|orin-nano-4gb\|orin-nx-8gb\|orin-nx-16gb` (non-default boards carried on the headline `edge_ai` role) |
 
@@ -74,15 +74,19 @@ unknown platform refused by the GUI — all must exit non-zero, so a typo can
 never *silently* build the wrong image. The harness exits 1 on any failure —
 including a **completeness gate**: every channel's pass count must equal the
 row count (a crashed channel child or a silently skipped row fails the run,
-never degrades it). It also runs **14 flag-threading probes**: `STANDALONE_FLAGS`
+never degrades it). It also runs **17 flag-threading probes**: `STANDALONE_FLAGS`
 must reach the builder argv on the `x86-%` / `jetson` / `jetson-%` / `frite`
 recipes (the menu's and Studio's extra-flags escape hatch rides it), `IMG_FLAGS`
 must reach it on `rpi-%` / `x86-%` / `frite` / `jetson` / `jetson-%` (every
-platform offers the image-flags knob), and four end-to-end MENU→MAKE probes
+platform offers the image-flags knob), four end-to-end MENU→MAKE probes
 prove `build_make_cmd`'s composed invocation lands both `OPT_IMGFLAGS` and
 `OPT_EXTRA_FLAGS` in the builder argv on one target per platform — a recipe
-that ignores a make-var the menu emits can never go green. Current totals:
-78 cells × 4 channels + 14 threading probes + 11 negatives = **337 checks**.
+that ignores a make-var the menu emits can never go green — plus the two
+fleet-target probes (`build-all`/`build-everything` thread the fleet make-vars)
+and an unaffiliated menu probe (the `x86-standalone-unaffiliated` recipe carries
+`--role standalone-unaffiliated` and never `--theme`, even with the menu's
+persisted theme default). Current totals:
+80 cells × 4 channels + 17 threading probes + 13 negatives = **350 checks**.
 
 ```sh
 make matrix-check                 # or: bash tests/build-matrix/check.sh
@@ -105,7 +109,7 @@ This is the contract every channel is verified against.
 ## Building the whole matrix for real
 
 `make matrix-check` validates; **`make build-everything`** builds — the full
-documented matrix (3 Pi roles + all 11 x86 roles + the Frite + all 4 Jetson
+documented matrix (3 Pi roles + all 12 x86 roles + the Frite + all 4 Jetson
 roles), honoring `ENV=test|prod` and the usual `BRAND=` / `DOMAIN=` /
 `WORK_DIR=` overrides. It threads `scripts/build-all-roles.sh`'s role-selector
 knobs (`X86_ROLES`, `FRITE=1`, `JETSON=1 JETSON_ROLES=…`), so partial

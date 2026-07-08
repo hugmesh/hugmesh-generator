@@ -90,6 +90,14 @@ accepts _validate_dnsname  "--games-domain"   "games.snapdragon.systems" && ok "
 accepts _validate_hostname "--hostname"   ""                && ok "empty hostname (role-derived) accepted"  || bad "empty hostname rejected"
 accepts _validate_hostname "--hostname"   "snap-omnibus"    && ok "hostname 'snap-omnibus' accepted"        || bad "hostname rejected"
 accepts _validate_title    "--brand-title" "Snapdragon Systems" && ok "title 'Snapdragon Systems' accepted" || bad "title rejected"
+# Forced NEUTRAL identity (--unaffiliated / --role standalone-unaffiliated): the
+# unaffiliated fold sets BRAND=gentoo ORG=gentoo BRAND_TITLE='Gentoo Linux'
+# HOSTNAME=gentoo-desktop BEFORE the validators run — those forced values must
+# always pass, or every unaffiliated build dies at the validation gate.
+accepts _validate_slug     "--brand"       "gentoo"         && ok "unaffiliated brand 'gentoo' accepted"             || bad "unaffiliated brand 'gentoo' rejected"
+accepts _validate_org      "--org"         "gentoo"         && ok "unaffiliated org 'gentoo' accepted"               || bad "unaffiliated org 'gentoo' rejected"
+accepts _validate_title    "--brand-title" "Gentoo Linux"   && ok "unaffiliated title 'Gentoo Linux' accepted"       || bad "unaffiliated title 'Gentoo Linux' rejected"
+accepts _validate_hostname "--hostname"    "gentoo-desktop" && ok "unaffiliated hostname 'gentoo-desktop' accepted"  || bad "unaffiliated hostname 'gentoo-desktop' rejected"
 
 # ── (C) _sed_rep_escape neutralises sed metacharacters ───────────────────────────
 # Without escaping, a value with `|` would terminate `s|..|VALUE|` and inject a 2nd

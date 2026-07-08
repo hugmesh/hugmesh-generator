@@ -24,6 +24,7 @@ x86	chromebook	test	-	-	-
 x86	desktop	test	-	-	-
 x86	standalone-thin	test	-	-	-
 x86	standalone-thick	test	-	-	-
+x86	standalone-unaffiliated	test	-	-	-
 x86	pki	prod	-	-	-
 x86	be	prod	-	-	-
 x86	fe	prod	-	-	-
@@ -35,6 +36,7 @@ x86	chromebook	prod	-	-	-
 x86	desktop	prod	-	-	-
 x86	standalone-thin	prod	-	-	-
 x86	standalone-thick	prod	-	-	-
+x86	standalone-unaffiliated	prod	-	-	-
 frite	desktop	test	la-frite	live	light
 frite	desktop	test	la-frite	live	none
 frite	desktop	test	la-frite	installer	light

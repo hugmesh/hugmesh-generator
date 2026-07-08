@@ -69,7 +69,7 @@ def _gpu_driver_for(gpus: list[Gpu]) -> str:
     if "amd" in vendors:
         return "amd-free"         # free amdgpu/mesa default
     if "intel" in vendors:
-        return "intel"
+        return "intel-free"       # canonical id ("intel" is a builder alias for it)
     return "auto"
 
 

@@ -18,8 +18,10 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 MATRIX = [
     ("x86", "standalone", "standalone-thin", "test"),
     ("x86", "standalone", "standalone-thick", "prod"),
+    ("x86", "standalone", "standalone-unaffiliated", "prod"),
     ("x86", "cloud", "laptop", "test"),
     ("x86", "mesh", "omnibus", "prod"),
+    ("rpi5", "standalone", "generic", "test"),
     ("rpi5", "mesh", "be", "prod"),
     ("frite", "cloud", "frite", "test"),
     ("jetson", "mesh", "edge_ai", "prod"),
@@ -27,7 +29,12 @@ MATRIX = [
 
 
 def _write_cfg(tmp_path, platform, mode, role, env):
-    cfg = ImageConfig(mode=mode, role=role, platform=platform, env=env, tailscale=True)
+    # the unaffiliated role hard-conflicts with the tailnet AND with bundling the
+    # generator source (its role arm presets both off) — every other row keeps the
+    # historical tailscale=True shape
+    unaffiliated = role == "standalone-unaffiliated"
+    cfg = ImageConfig(mode=mode, role=role, platform=platform, env=env,
+                      tailscale=not unaffiliated, bundle_source=not unaffiliated)
     p = tmp_path / f"{platform}-{role}-{env}.json"
     cfg.save(str(p))
     return cfg, str(p)
@@ -75,6 +82,43 @@ def test_print_command_config_round_trips_cli_args(tmp_path):
     assert r.returncode == 0, r.stderr
     assert " ".join(reloaded.to_cli_args()) in r.stdout
     assert "--role frontend" in r.stdout   # rpi5 spells be/fe out
+
+
+def test_print_command_unaffiliated_bundle_default_normalized(tmp_path):
+    """The wizard's standalone bundle_source default left on the unaffiliated role is
+    NOT a conflict — the headless path normalizes it exactly like the wizard's role
+    hook: --print-command succeeds and the argv carries neither --bundle-source nor
+    --no-bundle-source (the builder only errors on an EXPLICIT --bundle-source)."""
+    cfg = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
+                      bundle_source=True)
+    p = tmp_path / "default-poisoned.json"
+    cfg.save(str(p))
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    assert "--bundle-source" not in r.stdout
+    assert "--no-bundle-source" not in r.stdout
+
+
+def test_print_command_unaffiliated_conflict_fails_loudly(tmp_path):
+    """A genuinely poisoned config (a branding theme on the unaffiliated role) must
+    make --print-command exit non-zero with the conflict named — mirroring the
+    builder's own hard error, never a silently wrong argv."""
+    cfg = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
+                      bundle_source=False, theme="boogiepop")
+    p = tmp_path / "poisoned.json"
+    cfg.save(str(p))
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode != 0
+    assert "unaffiliated" in r.stderr
+    assert "theme" in r.stderr
 
 
 def test_saved_matrix_configs_hold_no_secrets(tmp_path):

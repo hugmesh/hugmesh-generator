@@ -56,6 +56,10 @@ ROLE_CHOICES = {
     "standalone": [
         ("standalone-thin", ("x86",), "Standalone thin — hardened LXDE desktop, no mesh/SSO"),
         ("standalone-thick", ("x86",), "Standalone thick — hardened full desktop, no mesh/SSO"),
+        ("standalone-unaffiliated", ("x86",),
+         "Unaffiliated desktop — plain Gentoo, no Snapdragon (zero branding/tooling baked)"),
+        ("generic", ("rpi5",),
+         "Generic arm64 server — plain Gentoo Raspberry Pi 5, unbranded (builder default role)"),
     ],
     "cloud": [
         ("laptop", ("x86",), "Laptop client — tailnet + SSO"),
@@ -76,6 +80,13 @@ ROLE_CHOICES = {
     ],
 }
 
+# The x86 role that builds a PLAIN, unaffiliated Gentoo desktop. The builder's role
+# arm PRESETS everything (neutral gentoo identity, no bundled source, no mesh/SSO)
+# and HARD-ERRORS on any brand/branding/bundle/seed/mesh/SSO/person flag — so the
+# Studio raises the same conflicts instead of emitting them (fail loudly, like the
+# builder), and emits the bare role + generic options only.
+UNAFFILIATED_ROLE = "standalone-unaffiliated"
+
 # build-rpi5-stage4.sh spells the node roles out (pki | backend | frontend).
 RPI5_ROLE_MAP = {"be": "backend", "fe": "frontend"}
 # The Studio disambiguates the jetson desktop role id; the builder takes --role desktop.
@@ -87,6 +98,19 @@ FRITE_DESKTOPS = ("light", "none")
 
 # build-jetson-stage4.sh --board (Tegra234 Orin modules on the devkit carrier).
 JETSON_BOARDS = ("orin-nano", "orin-nano-4gb", "orin-nx-8gb", "orin-nx-16gb")
+
+# --env: what gets baked into the image's stack config (test | prod).
+ENV_CHOICES = ("test", "prod")
+
+# build-x86-host-stage4.sh's full documented --gpu-driver matrix (canonical names).
+# "auto" is a Studio value, not a builder flag: to_cli_args() omits --gpu-driver so
+# the builder resolves its own default (all-free on GPU roles, nvidia on edge_ai).
+GPU_DRIVER_CHOICES = ("auto", "all-free", "nvidia-free", "nvidia",
+                      "amd-free", "amd-pro", "intel-free", "intel-pro", "none")
+# Vendor aliases the builder folds into canonical ids — mirrored so hwprofile /
+# scanner values (e.g. "intel") select the right canonical GUI combo entry.
+GPU_DRIVER_ALIASES = {"amd": "amd-free", "ati": "amd-free", "ati-free": "amd-free",
+                      "ati-pro": "amd-pro", "intel": "intel-free"}
 
 # The full cluster optional-service set (--optional-services slugs).
 OPTIONAL_SERVICES_CHOICES = ("akkoma", "tuwunel", "phpbb", "games", "owncast", "tube",
@@ -365,16 +389,66 @@ class ImageConfig:
         a += self._arm_common_args()
         return a
 
+    def _check_unaffiliated_conflicts(self) -> None:
+        """Mirror build-x86-host-stage4.sh's standalone-unaffiliated HARD CONFLICTS.
+
+        The role presets a plain, brand-free Gentoo desktop; every field that would
+        bake a brand identity, branding assets, the bundled Snapdragon source, the
+        stack seed, or platform machinery (mesh/SSO/person-device identity) into the
+        image raises ValueError HERE — so --print-command and the GUI preview fail
+        loudly with the same contract the builder enforces (it exits non-zero on the
+        equivalent flags; an explicit --brand gentoo errors too — the builder forces
+        the neutral identity itself)."""
+        conflicts: list[str] = []
+        if (self.brand != "snapdragon" or self.brand_title != "Snapdragon Systems"
+                or self.org != "Snapdragon-Systems"):
+            conflicts.append("a brand identity (brand/brand_title/org — the builder "
+                             "forces the neutral gentoo identity itself)")
+        assets = [name for name, val in (
+            ("theme", self.theme), ("branding_dir", self.branding_dir),
+            ("wallpaper", self.wallpaper), ("grub_background", self.grub_background),
+            ("login_background", self.login_background), ("brand_logo", self.brand_logo),
+            ("accent_color", self.accent_color), ("color_scheme", self.color_scheme),
+        ) if val] + (["brand_locked"] if self.brand_locked else [])
+        if assets:
+            conflicts.append("branding assets (" + ", ".join(assets) + " — nothing to theme against)")
+        # bundle_source is NOT flagged here: its dataclass default is True (the
+        # branded-standalone self-hosting default), so an untouched config would
+        # false-conflict. The wizard clears it on role selection and _x86_args()
+        # normalizes it to False for this role (never emitting the flag pair) —
+        # mirroring the builder, which only errors on an EXPLICIT --bundle-source.
+        if self.home_seed_code and self.home_seed_code != "none":
+            conflicts.append("home_seed_code (seeds the Snapdragon stack into the home)")
+        if self.tailscale:
+            conflicts.append("tailscale (the tailnet is Snapdragon platform machinery)")
+        if self.sso:
+            conflicts.append("sso (Casdoor SSO is Snapdragon platform machinery)")
+        if self.mode in ("cloud", "mesh"):
+            conflicts.append(f"mode={self.mode!r} (emits --person-role/--domains — "
+                             "person-device identity is platform machinery)")
+        if conflicts:
+            raise ValueError(
+                "role standalone-unaffiliated builds a plain Gentoo desktop with ZERO "
+                "Snapdragon affiliation, but this config sets " + "; ".join(conflicts)
+                + ". Clear the conflicting field(s) — the builder hard-errors on the "
+                "same flags.")
+
     def _x86_args(self) -> list[str]:
+        unaffiliated = self.role == UNAFFILIATED_ROLE
+        if unaffiliated:
+            self._check_unaffiliated_conflicts()
         a: list[str] = ["--role", self.role, "--env", self.env, "--local-user", self.local_user]
         if self.local_pass:
             # plaintext ONLY on the live command line — never persisted (SECRET_FIELDS)
             a += ["--local-pass", self.local_pass]
-        a += self._brand_args()
+        if not unaffiliated:
+            a += self._brand_args()
 
-        # network / identity — emit explicit with/no so intent is unambiguous
-        a += ["--with-tailscale"] if self.tailscale else ["--no-tailscale"]
-        a += ["--with-sso"] if self.sso else ["--no-sso"]
+            # network / identity — emit explicit with/no so intent is unambiguous.
+            # (unaffiliated: the role PRESETS no-mesh/no-SSO/no-bundled-source; the
+            # conflict check above already rejected any opt-in, so emit nothing.)
+            a += ["--with-tailscale"] if self.tailscale else ["--no-tailscale"]
+            a += ["--with-sso"] if self.sso else ["--no-sso"]
 
         # cloud/mesh: tie the client image to its domain + identity role (FD-08). The
         # cluster domain is carried in --domains/KEYS-USB; there is no --cluster-domain flag.
@@ -499,7 +573,8 @@ class ImageConfig:
             a += ["--installer-ui", self.installer_ui]
         a += ["--cached"] if self.cached else ["--uncached"]
         a += ["--live-toram"] if self.live_toram else ["--no-live-toram"]
-        a += ["--bundle-source"] if self.bundle_source else ["--no-bundle-source"]
+        if not unaffiliated:  # the unaffiliated role presets no-bundled-source itself
+            a += ["--bundle-source"] if self.bundle_source else ["--no-bundle-source"]
         if self.img_size:
             a += ["--img-size", str(self.img_size)]
         if self.compress:
