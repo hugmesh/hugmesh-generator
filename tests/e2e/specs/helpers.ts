@@ -83,9 +83,19 @@ export async function onboard(page: Page, username: string, password = LOGIN_PAS
   // already completed lands straight on the host shell (nav-user) — the same account is
   // onboarded by several specs against the shared mock BFF, so a second onboard must not
   // wait for a complete-view that never appears. Branch on whichever surfaces first.
+  //
+  // The two branches need DIFFERENT wait semantics: displayName is a real, rendered
+  // form field (toBeVisible() is meaningful), but nav-user's own label is empty by
+  // design in the opaque-cookie model (see the toBeAttached() comment below) — its
+  // <span> has zero content and thus zero rendered size, so waiting for it to be
+  // "visible" would never resolve. Race each locator against its own correct
+  // condition rather than forcing one .toBeVisible() over the combined locator.
   const displayName = page.getByTestId('register-display-name');
   const navUser = page.getByTestId('nav-user');
-  await expect(displayName.or(navUser).first()).toBeVisible({ timeout: 15000 });
+  await Promise.race([
+    displayName.waitFor({ state: 'visible', timeout: 15000 }),
+    navUser.waitFor({ state: 'attached', timeout: 15000 }),
+  ]);
   if (await displayName.isVisible()) {
     // Stage 2: the login-ui requires a display name before "Complete registration"
     // enables (completeBlocked()); an ASCII handle also skips the conditional
