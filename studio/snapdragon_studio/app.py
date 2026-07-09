@@ -36,6 +36,11 @@ def main(argv=None) -> int:
                     help="path to the local-login roles manifest (default: "
                          "$SNAPDRAGON_LOCAL_LOGIN_MANIFEST or "
                          "~/.config/snapdragon-studio/local-login/roles.json)")
+    ap.add_argument("--dev", action="store_true",
+                    help="local-login agent: ALSO trust the localhost dev origins "
+                         "(http://localhost:4200, http://127.0.0.1:4200) — DEV ONLY, "
+                         "never in a shipped production build (also settable via "
+                         "$SNAPDRAGON_LOCAL_LOGIN_DEV or the manifest's devOrigins)")
     ap.add_argument("--print-command", action="store_true",
                     help="headless: print the build command for a saved config and exit")
     ap.add_argument("--config", help="config JSON (with --print-command)")
@@ -47,7 +52,7 @@ def main(argv=None) -> int:
         # Qt-free path: the loopback login agent is stdlib-only and blocks in
         # serve_forever(), so it must never touch a Qt binding or a display.
         from .core.local_login_agent import run as run_login_agent
-        return run_login_agent(manifest_path=args.login_manifest)
+        return run_login_agent(manifest_path=args.login_manifest, allow_dev_origins=args.dev)
 
     if args.print_command:
         # Qt-free path: core only — must work with no display and no Qt installed.

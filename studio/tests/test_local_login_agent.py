@@ -8,6 +8,8 @@ and the single-use / short-TTL credential handoff. No Qt, no network off-box.
 """
 import http.client
 import json
+import os
+import socket
 import threading
 from datetime import datetime, timezone
 
@@ -41,9 +43,30 @@ def _write_manifest(tmp_path):
 
 @pytest.fixture
 def server(tmp_path):
-    """A running agent on an ephemeral loopback port; yields the bound port."""
+    """A running agent on an ephemeral loopback port; yields the bound port.
+
+    Dev origins are opted in (allow_dev_origins=True) because the HTTP contract tests
+    drive the localhost dev origin (GOOD_ORIGIN); production gating is covered separately
+    by the prod_server fixture below."""
     manifest = _write_manifest(tmp_path)
-    agent = LocalLoginAgent(manifest)
+    agent = LocalLoginAgent(manifest, allow_dev_origins=True)
+    httpd = make_server(agent, host="127.0.0.1", port=0)
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        yield httpd.server_address[1]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+@pytest.fixture
+def prod_server(tmp_path, monkeypatch):
+    """A running agent with the PRODUCTION posture: no dev opt-in, so the localhost dev
+    origins are NOT trusted — only the brand origin from the manifest is."""
+    monkeypatch.delenv(agent_mod.DEV_ORIGINS_ENV, raising=False)
+    manifest = _write_manifest(tmp_path)
+    agent = LocalLoginAgent(manifest)          # no allow_dev_origins
     httpd = make_server(agent, host="127.0.0.1", port=0)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
@@ -249,9 +272,145 @@ def test_origin_allowlist_fixed_at_startup_not_widened_by_probe(tmp_path):
 
 
 def test_write_manifest_is_0600(tmp_path):
-    import os
     import stat
     path = tmp_path / "roles.json"
     RolesManifest(roles=[Role("r", "R", "b", "u@b", "s")]).write(str(path))
     mode = stat.S_IMODE(os.stat(path).st_mode)
     assert mode == 0o600
+
+
+# ── FINDING 1: OS-level peer-uid authentication (multi-user defense-in-depth) ──
+def test_peer_uid_mismatch_drops_connection(server, monkeypatch):
+    """A connection whose peer uid differs from the agent's uid (a DIFFERENT local user
+    on a multi-user host) must be dropped at the socket layer — before any route runs,
+    so the client gets NO HTTP response at all (not even a 403 body it could read)."""
+    monkeypatch.setattr(agent_mod, "_peer_uid", lambda conn: os.getuid() + 1)
+    with pytest.raises((http.client.RemoteDisconnected, http.client.BadStatusLine,
+                        ConnectionResetError, ConnectionError, OSError)):
+        _request(server, "GET", "/v1/roles")
+
+
+def test_peer_uid_match_is_allowed(server):
+    """The real loopback peer IS us (same uid), so the happy path still works with the
+    peer-uid check ACTIVE (this fixture is NOT monkeypatched)."""
+    resp, data = _request(server, "GET", "/v1/roles")
+    assert resp.status == 200
+    assert {r["id"] for r in data["roles"]} == {"brandowner", "moderator"}
+
+
+def test_peer_uid_unavailable_fails_open(server, monkeypatch):
+    """Where the platform exposes no reliable peer-uid (mechanism returns None) we FAIL
+    OPEN with a documented reduced guarantee — never drop every connection."""
+    monkeypatch.setattr(agent_mod, "_peer_uid", lambda conn: None)
+    resp, data = _request(server, "GET", "/v1/roles")
+    assert resp.status == 200
+    assert data["roles"]
+
+
+@pytest.mark.skipif(not agent_mod.PEER_UID_ENFORCED,
+                    reason="no reliable OS peer-uid for a TCP socket on this platform")
+def test_real_peer_uid_resolves_our_uid_for_a_live_loopback_pair():
+    """Prove the ENFORCED mechanism (SO_PEERCRED -> /proc/net/tcp) returns THIS user's
+    uid for a genuine loopback connection — guards against a regression that would
+    silently reject every request. SO_PEERCRED alone returns -1 for a TCP socket; the
+    /proc/net/tcp fallback is what makes the check real."""
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    result = {}
+
+    def _accept():
+        conn, _ = srv.accept()
+        result["uid"] = agent_mod._peer_uid(conn)
+        conn.close()
+
+    t = threading.Thread(target=_accept)
+    t.start()
+    client = socket.create_connection(("127.0.0.1", port))
+    t.join(timeout=5)
+    client.close()
+    srv.close()
+    assert result["uid"] == os.getuid()
+
+
+def test_peer_uid_enforced_on_linux():
+    """On this Linux host the peer-uid check must be ENFORCED (not silently degraded)."""
+    if os.name == "posix" and os.path.exists("/proc/net/tcp"):
+        assert agent_mod.PEER_UID_ENFORCED is True
+
+
+# ── FINDING 2: localhost dev origins gated behind an explicit opt-in ──────────
+def test_dev_origins_gated_off_by_default(tmp_path, monkeypatch):
+    """A shipped production agent (no opt-in) must NOT trust the localhost dev origins,
+    while the real brand origin from the manifest stays trusted."""
+    monkeypatch.delenv(agent_mod.DEV_ORIGINS_ENV, raising=False)
+    agent = LocalLoginAgent(_write_manifest(tmp_path))     # no allow_dev_origins
+    assert not agent.dev_origins_enabled
+    assert not agent.is_allowed_origin("http://localhost:4200")
+    assert not agent.is_allowed_origin("http://127.0.0.1:4200")
+    assert agent.is_allowed_origin(BRAND_ORIGIN)           # brand origin still trusted
+
+
+def test_dev_origins_enabled_by_flag(tmp_path, monkeypatch):
+    monkeypatch.delenv(agent_mod.DEV_ORIGINS_ENV, raising=False)
+    agent = LocalLoginAgent(_write_manifest(tmp_path), allow_dev_origins=True)
+    assert agent.dev_origins_enabled
+    assert agent.is_allowed_origin("http://localhost:4200")
+    assert agent.is_allowed_origin("http://127.0.0.1:4200")
+    assert agent.is_allowed_origin(BRAND_ORIGIN)
+
+
+def test_dev_origins_enabled_by_env(tmp_path, monkeypatch):
+    monkeypatch.setenv(agent_mod.DEV_ORIGINS_ENV, "1")
+    agent = LocalLoginAgent(_write_manifest(tmp_path))     # env is the opt-in
+    assert agent.dev_origins_enabled
+    assert agent.is_allowed_origin("http://localhost:4200")
+
+
+def test_dev_origins_enabled_by_manifest_field(tmp_path, monkeypatch):
+    monkeypatch.delenv(agent_mod.DEV_ORIGINS_ENV, raising=False)
+    path = tmp_path / "roles.json"
+    RolesManifest(roles=[Role("r", "R", "b", "u@b", "s")],
+                  origins=frozenset({BRAND_ORIGIN}), dev_origins=True).write(str(path))
+    agent = LocalLoginAgent(str(path))                     # manifest devOrigins is the opt-in
+    assert agent.dev_origins_enabled
+    assert agent.is_allowed_origin("http://localhost:4200")
+
+
+def test_manifest_dev_origins_round_trips(tmp_path):
+    """devOrigins survives write -> load, and only a JSON boolean true enables it."""
+    path = tmp_path / "roles.json"
+    RolesManifest(roles=[Role("r", "R", "b", "u@b", "s")], dev_origins=True).write(str(path))
+    assert agent_mod.load_manifest(str(path)).dev_origins is True
+    RolesManifest(roles=[Role("r", "R", "b", "u@b", "s")], dev_origins=False).write(str(path))
+    assert agent_mod.load_manifest(str(path)).dev_origins is False
+    # a truthy-but-not-true value must NOT enable it (no accidental widening)
+    path.write_text(json.dumps({"version": 1, "devOrigins": "yes",
+                                "roles": []}), encoding="utf-8")
+    assert agent_mod.load_manifest(str(path)).dev_origins is False
+
+
+def test_prod_agent_rejects_localhost_dev_origin_end_to_end(prod_server):
+    """End-to-end over a real socket: the production agent 403s a localhost dev origin
+    while serving the brand origin from the manifest."""
+    resp, data = _request(prod_server, "GET", "/v1/roles", origin="http://localhost:4200")
+    assert resp.status == 403
+    assert data is None or "roles" not in data
+    resp2, data2 = _request(prod_server, "GET", "/v1/roles", origin=BRAND_ORIGIN)
+    assert resp2.status == 200
+    assert data2["roles"]
+
+
+def test_dev_origin_fixed_at_startup_not_widened_by_probe(tmp_path, monkeypatch):
+    """Like the origins allow-list, the dev-origin decision is made ONCE at startup: a
+    manifest that turns devOrigins on AFTER startup must not widen a running agent."""
+    monkeypatch.delenv(agent_mod.DEV_ORIGINS_ENV, raising=False)
+    path = tmp_path / "roles.json"
+    RolesManifest(roles=[Role("r", "R", "b", "u@b", "s")], dev_origins=False).write(str(path))
+    agent = LocalLoginAgent(str(path))
+    assert not agent.is_allowed_origin("http://localhost:4200")
+    RolesManifest(roles=[Role("r", "R", "b", "u@b", "s")], dev_origins=True).write(str(path))
+    agent.probe()   # reloads roles, but must NOT reload the dev-origin decision
+    assert not agent.is_allowed_origin("http://localhost:4200")
