@@ -25,11 +25,19 @@ fi
 
 BRAND_CONF="$1"
 OUT_DIR="./out"
+# ENGINE: sed (DEFAULT, unchanged behavior — no external tools) | handlebars
+# (opt-in; delegates to the REAL Handlebars renderer under scripts/tooling/,
+# proven byte-identical to sed by scripts/parity-gate.sh). BUILD-HOST ONLY —
+# the handlebars path needs Node, which must NOT run as root on the mesh-node
+# cron path (see docs/MESH-TEMPLATING.md).
+ENGINE="sed"
 
 shift
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out-dir) OUT_DIR="$2"; shift 2 ;;
+    --engine) ENGINE="$2"; shift 2 ;;
+    --engine=*) ENGINE="${1#*=}"; shift ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -38,6 +46,15 @@ if [[ ! -f "$BRAND_CONF" ]]; then
   echo "Brand config not found: $BRAND_CONF" >&2
   exit 1
 fi
+
+# Opt-in Handlebars path: delegate to the wrapper and return. The DEFAULT sed
+# path below is untouched.
+case "$ENGINE" in
+  sed) : ;;
+  handlebars)
+    exec "${SCRIPT_DIR}/scripts/tooling/render-handlebars.sh" "$BRAND_CONF" --out-dir "$OUT_DIR" ;;
+  *) echo "Unknown --engine '$ENGINE' (want: sed | handlebars)" >&2; exit 1 ;;
+esac
 
 # ── Load brand config ─────────────────────────────────────────────────────────
 # shellcheck source=/dev/null
