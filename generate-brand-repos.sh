@@ -7,8 +7,9 @@
 #
 # The output directory will contain a directory named <BRAND>-gitops/ with all
 # rendered Application CRDs under apps/. Push that directory to GitLab and the
-# ArgoCD ApplicationSet (specs/cluster/apps/00-app-of-apps-waved.yaml) will pick
-# it up once registered.
+# ArgoCD app-of-apps root Application (specs/cluster/apps/00-app-of-apps-waved.yaml
+# — a plain directory.recurse Application named snapdragon-root-waved, NOT an
+# ApplicationSet) will pick it up once registered.
 #
 # No external tools required beyond bash + sed + git.
 
