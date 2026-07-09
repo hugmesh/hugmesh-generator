@@ -4,7 +4,9 @@ BuildPage ISO/finish widgets (img-size / cached / live-toram / bundle-source).
 Runs the REAL wizard on Qt's offscreen platform (no display needed) and is skipped
 whole when no Qt binding is installed — the rest of the suite stays pure-core.
 """
+import json
 import os
+import zipfile
 
 import pytest
 
@@ -17,6 +19,7 @@ pytest.importorskip("snapdragon_studio.gui.qt",
 from snapdragon_studio.core.config import (   # noqa: E402  (after the importorskip gate)
     MODE_SKIPPED_PAGES, UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS,
 )
+from snapdragon_studio.core.local_login_agent import load_manifest  # noqa: E402
 from snapdragon_studio.core.platform_info import HostInfo
 from snapdragon_studio.gui import wizard as wizard_mod
 from snapdragon_studio.gui.qt import Qt, QtWidgets
@@ -356,3 +359,102 @@ def test_buildpage_iso_knobs_grey_out_off_x86(wiz):
     for flag in ("--cached", "--uncached", "--live-toram", "--no-live-toram",
                  "--bundle-source", "--no-bundle-source"):
         assert flag not in args
+
+
+# ---- KeyZipPage: opt-in passwordless-login roles emission ---------------------
+# Wiring-level coverage complementing test_keyzip_roles_manifest.py's pure-core
+# tests: the checkbox is seeded from (and defaults OFF regardless of)
+# StudioWizard's remember_roles_for_passwordless_login constructor arg, and the
+# checkbox — not the constructor default — is the actual gate at import time.
+
+_KEYS_SECRETS_JSON = {
+    "snapdragon-pki": {
+        "casdoor-admin": {"username": "admin", "password": "ADMIN-PLAINTEXT-SECRET"},
+        "casdoor-superadmin": {"username": "superadmin", "password": "SUPERADMIN-SECRET-XYZ"},
+    },
+}
+
+
+def _make_keys_zip(path):
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("keys/ca.crt", "dummy-ca")
+        zf.writestr("vault/secrets.json", json.dumps(_KEYS_SECRETS_JSON))
+
+
+def test_keyzip_page_checkbox_defaults_off_regardless_of_wizard(qapp):
+    """Even when the Studio-level flag is on, a fresh checkbox instance still
+    starts from that same explicit value — never silently True by omission."""
+    w_off = wizard_mod.StudioWizard(GENERATOR_DIR)
+    try:
+        assert w_off.remember_roles_for_passwordless_login is False
+        page = w_off.page(w_off._page_ids["keyzip"])
+        assert page.remember_roles.isChecked() is False
+    finally:
+        w_off.deleteLater()
+
+    w_on = wizard_mod.StudioWizard(GENERATOR_DIR, remember_roles_for_passwordless_login=True)
+    try:
+        assert w_on.remember_roles_for_passwordless_login is True
+        page = w_on.page(w_on._page_ids["keyzip"])
+        assert page.remember_roles.isChecked() is True
+    finally:
+        w_on.deleteLater()
+
+
+def test_keyzip_page_import_opt_in_off_writes_no_manifest(qapp, tmp_path):
+    zip_path = tmp_path / "acme-keys.zip"
+    _make_keys_zip(str(zip_path))
+    manifest_path = tmp_path / "roles.json"
+
+    w = wizard_mod.StudioWizard(GENERATOR_DIR, login_manifest_path=str(manifest_path))
+    try:
+        page = w.page(w._page_ids["keyzip"])
+        assert not page.remember_roles.isChecked()   # default OFF
+        page.path.setText(str(zip_path))
+        page._import()
+        assert "Imported" in page.out.text()
+        assert "passwordless-login" not in page.out.text()
+        assert not manifest_path.exists()
+    finally:
+        w.deleteLater()
+
+
+def test_keyzip_page_import_opt_in_on_writes_only_superadmin(qapp, tmp_path):
+    zip_path = tmp_path / "acme-keys.zip"
+    _make_keys_zip(str(zip_path))
+    manifest_path = tmp_path / "roles.json"
+
+    w = wizard_mod.StudioWizard(
+        GENERATOR_DIR, remember_roles_for_passwordless_login=True,
+        login_manifest_path=str(manifest_path))
+    try:
+        page = w.page(w._page_ids["keyzip"])
+        assert page.remember_roles.isChecked()   # seeded ON from the constructor arg
+        page.path.setText(str(zip_path))
+        page._import()
+        assert "passwordless-login roles remembered: superadmin" in page.out.text()
+        m = load_manifest(str(manifest_path))
+        assert [r.id for r in m.roles] == ["superadmin"]
+        assert "ADMIN-PLAINTEXT-SECRET" not in manifest_path.read_text(encoding="utf-8")
+    finally:
+        w.deleteLater()
+
+
+def test_keyzip_page_unchecking_the_box_overrides_the_wizard_default(qapp, tmp_path):
+    """The checkbox is the real gate at import time — flipping it off must suppress
+    emission even though the wizard was constructed with the flag on."""
+    zip_path = tmp_path / "acme-keys.zip"
+    _make_keys_zip(str(zip_path))
+    manifest_path = tmp_path / "roles.json"
+
+    w = wizard_mod.StudioWizard(
+        GENERATOR_DIR, remember_roles_for_passwordless_login=True,
+        login_manifest_path=str(manifest_path))
+    try:
+        page = w.page(w._page_ids["keyzip"])
+        page.remember_roles.setChecked(False)
+        page.path.setText(str(zip_path))
+        page._import()
+        assert not manifest_path.exists()
+    finally:
+        w.deleteLater()

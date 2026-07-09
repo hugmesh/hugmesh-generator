@@ -8,12 +8,14 @@ and reports what it found so the wizard can wire it into the ImageConfig.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import zipfile
 from dataclasses import dataclass, field
 
+from . import local_login_agent
 from .validate import (
     IdentityValidationError,
     validate_brand,
@@ -168,3 +170,117 @@ def _apply_domain_conf(path: str, cfg, warnings: list | None = None) -> None:
             warn.append(f"rejected unsafe {key} in domain config: {value!r}")
             continue
         setattr(cfg, attr, value)
+
+
+# ── OPT-IN: mirror human-loginable KEYS credentials into the local-login manifest ──
+#
+# USER-APPROVED MECHANISM (verbatim, implemented exactly): "when a KEYS USB is
+# extracted in Studio, write human-loginable role credentials (superadmin, admin —
+# never DB passwords, mTLS keys, or other machine secrets) into the local roles.json
+# manifest, gated behind an explicit opt-in flag (default OFF) so it never happens
+# silently."
+#
+# The only KEYS payload this reads is the offline cluster-secrets bundle
+# (``vault/secrets.json``, produced by scripts/gen-cluster-secrets.sh — see
+# keys-template/vault/README.md for the full shape). Everything below is a
+# deliberate, conservative classification of that file's contents:
+#
+# INCLUDED (human-loginable — a person types this into Casdoor):
+#   * ``<brand>-pki`` -> ``casdoor-superadmin`` -> {username, password}
+#     The platform SUPERADMIN bootstrap login. Unambiguous: it exists for a human
+#     operator to log into Casdoor with.
+#
+# EXCLUDED, even though present in the very same file (when in doubt, exclude):
+#   * ``<brand>-pki`` -> ``casdoor-admin`` -> {username, password} — Casdoor's
+#     built-in "admin" superuser. Plaintext and technically loginable, BUT
+#     gen-cluster-secrets.sh's own comment ties its purpose to "the casdoor-init
+#     Job's API login" — a machine-driven bootstrap step, not a routine human
+#     login. Ambiguous == excluded.
+#   * ``<brand>-games`` -> ``casdoor-games-admin`` (CASDOOR_GAMES_ADMIN_PLAIN) —
+#     same pattern as casdoor-admin (games-realm twin); excluded for the same
+#     reason.
+#   * every other secrets.json entry: DB owner/app passwords (casdoor-db,
+#     clickhouse-auth, federation/admin-bff/mod-bff/user-bff/forum/wiki/phpbb/
+#     akkoma-db, route-access-db-roles, uptrace-auth), OAuth client secrets
+#     (casdoor-google/-github/-discord, casdoor-app-secrets), MFA/custody/HS-token
+#     encryption keys, the BFF internal token, mail creds — all machine/service
+#     credentials, never human-loginable, never included.
+#   * ``users.json`` (password_hash / ssh_authorized_keys) and ``provision.json``
+#     (wifi PSK, tailscale/headscale keys, LUKS keyfile, Vault token/unseal-key,
+#     etc.) are NOT read by this function at all: password_hash is a one-way hash
+#     (Studio never sees plaintext) authenticating a different login surface
+#     (local OS/SSH, not Casdoor), and provision.json is entirely machine/service
+#     secrets.
+#
+# (role-id, label, vault top-level-key suffix, secret name within that section)
+_HUMAN_LOGINABLE_VAULT_ROLES = (
+    ("superadmin", "Platform Superadmin", "pki", "casdoor-superadmin"),
+)
+
+
+def emit_passwordless_login_roles(contents: KeyZipContents, enabled: bool,
+                                   manifest_path: str | None = None) -> list[str]:
+    """ADDITIVE, OPT-IN step: after a KEYS bundle has been extracted, mirror ONLY
+    the human-loginable role credentials it carries (see the module-level comment
+    above for the exact include/exclude list) into the local-login roles manifest
+    (:mod:`core.local_login_agent`), so they appear in the passwordless-login
+    role picker.
+
+    A strict no-op unless ``enabled`` is True — the Studio-local opt-in flag,
+    default OFF (see ``--remember-roles-for-passwordless-login`` / the
+    ``SNAPDRAGON_REMEMBER_ROLES_FOR_PASSWORDLESS_LOGIN`` env var in app.py). Does
+    NOT change anything about ``extract()`` / ``KeyZipContents.apply_to()`` — this
+    is a separate, additional step the caller opts into after extraction.
+
+    Returns the list of role ids written (empty if disabled, the bundle carried no
+    ``vault/secrets.json``, or none of the recognized human-loginable secrets were
+    present in it).
+    """
+    if not enabled:
+        return []
+    secrets_path = os.path.join(contents.staging_dir, "vault", "secrets.json")
+    if not os.path.isfile(secrets_path):
+        return []
+    try:
+        with open(secrets_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    roles = []
+    for role_id, label, suffix, secret_name in _HUMAN_LOGINABLE_VAULT_ROLES:
+        needle = f"-{suffix}"
+        for top_key, section in data.items():
+            if not isinstance(top_key, str) or not top_key.endswith(needle):
+                continue
+            if not isinstance(section, dict):
+                continue
+            entry = section.get(secret_name)
+            if not isinstance(entry, dict):
+                continue
+            username, secret = entry.get("username"), entry.get("password")
+            if not (isinstance(username, str) and username
+                    and isinstance(secret, str) and secret):
+                continue
+            brand = top_key[: -len(needle)] or "snapdragon"
+            roles.append(local_login_agent.Role(
+                id=role_id, label=label, brand=brand,
+                username=username, secret=secret,
+            ))
+
+    if not roles:
+        return []
+    path = manifest_path or local_login_agent.default_manifest_path()
+    # Merge (by role id) with whatever is already on disk rather than clobbering
+    # it, so re-importing the same key-zip (or a second domain's key-zip) updates/
+    # adds roles without dropping roles an earlier opt-in import already wrote.
+    existing = local_login_agent.load_manifest(path)
+    merged = {r.id: r for r in existing.roles}
+    for r in roles:
+        merged[r.id] = r
+    local_login_agent.RolesManifest(
+        roles=list(merged.values()), origins=existing.origins,
+    ).write(path)
+    return [r.id for r in roles]

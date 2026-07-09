@@ -5,6 +5,9 @@
   python -m snapdragon_studio --stack-tray  # tray only (local dev-stack controller)
   python -m snapdragon_studio --login-agent # headless: run the passwordless local-login loopback agent
   python -m snapdragon_studio --generator-dir /path/to/snapdragon-generator
+  python -m snapdragon_studio --remember-roles-for-passwordless-login
+      # OPT-IN, default OFF: KeyZipPage imports also mirror human-loginable KEYS
+      # roles (e.g. platform superadmin) into the local-login manifest.
 """
 from __future__ import annotations
 
@@ -20,6 +23,14 @@ def _default_generator_dir() -> str:
     if os.path.exists(os.path.join(repo, "build-x86-host-stage4.sh")):
         return repo
     return os.getcwd()
+
+
+def _env_flag(name: str) -> bool:
+    """Truthy env-var check ("1"/"true"/"yes"/"on", case-insensitive)."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+REMEMBER_ROLES_ENV = "SNAPDRAGON_REMEMBER_ROLES_FOR_PASSWORDLESS_LOGIN"
 
 
 def main(argv=None) -> int:
@@ -41,6 +52,18 @@ def main(argv=None) -> int:
                          "(http://localhost:4200, http://127.0.0.1:4200) — DEV ONLY, "
                          "never in a shipped production build (also settable via "
                          "$SNAPDRAGON_LOCAL_LOGIN_DEV or the manifest's devOrigins)")
+    ap.add_argument("--remember-roles-for-passwordless-login", action="store_true",
+                    default=_env_flag(REMEMBER_ROLES_ENV),
+                    help="OPT-IN, default OFF: after an admin key-zip is imported on the "
+                         "KeyZipPage, also mirror ONLY its human-loginable role credentials "
+                         "(currently: the platform superadmin Casdoor login) into the "
+                         "local-login roles manifest (--login-manifest), so they appear in "
+                         "the passwordless-login role picker. NEVER writes DB passwords, "
+                         "mTLS/PKI material, or other machine/service secrets — see "
+                         "core.keyzip.emit_passwordless_login_roles() for the exact "
+                         f"include/exclude list. Can also be set via ${REMEMBER_ROLES_ENV}=1. "
+                         "The KeyZipPage also shows a per-import checkbox seeded from this "
+                         "value that is the actual gate at import time.")
     ap.add_argument("--print-command", action="store_true",
                     help="headless: print the build command for a saved config and exit")
     ap.add_argument("--config", help="config JSON (with --print-command)")
@@ -78,7 +101,11 @@ def main(argv=None) -> int:
         nonlocal wizard
         from .gui.wizard import StudioWizard
         if wizard is None:
-            wizard = StudioWizard(args.generator_dir)
+            wizard = StudioWizard(
+                args.generator_dir,
+                remember_roles_for_passwordless_login=args.remember_roles_for_passwordless_login,
+                login_manifest_path=args.login_manifest,
+            )
         wizard.show()
         wizard.raise_()
 

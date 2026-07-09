@@ -672,6 +672,18 @@ class KeyZipPage(QtWidgets.QWizardPage):
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.path, 1); h.addWidget(btn)
         lay.addWidget(_row("Key-zip", w))
+        # OPT-IN, default OFF (per --remember-roles-for-passwordless-login / the
+        # SNAPDRAGON_REMEMBER_ROLES_FOR_PASSWORDLESS_LOGIN env var): this is the
+        # actual gate checked at import time, seeded from that CLI/env default so
+        # the box still starts unchecked unless the operator asked for it.
+        self.remember_roles = QtWidgets.QCheckBox(
+            "Remember human-loginable roles (e.g. platform superadmin) from this "
+            "key-zip for passwordless login — writes real login credentials to "
+            "local disk (~/.config/snapdragon-studio/local-login/roles.json, "
+            "mode 0600). Never DB passwords or other machine secrets.")
+        self.remember_roles.setChecked(
+            bool(getattr(wiz, "remember_roles_for_passwordless_login", False)))
+        lay.addWidget(self.remember_roles)
         imp = QtWidgets.QPushButton("Import & apply")
         imp.clicked.connect(self._import)
         lay.addWidget(imp)
@@ -690,8 +702,15 @@ class KeyZipPage(QtWidgets.QWizardPage):
             c = keyzip.extract(p, staging)
             c.apply_to(self.wiz.cfg)
             self.wiz.cfg.keyzip = p
-            self.out.setText(f"Imported: {c.summary()}"
-                             + (f"  ·  warnings: {'; '.join(c.warnings)}" if c.warnings else ""))
+            role_ids = keyzip.emit_passwordless_login_roles(
+                c, enabled=self.remember_roles.isChecked(),
+                manifest_path=getattr(self.wiz, "login_manifest_path", None))
+            msg = f"Imported: {c.summary()}"
+            if c.warnings:
+                msg += f"  ·  warnings: {'; '.join(c.warnings)}"
+            if role_ids:
+                msg += f"  ·  passwordless-login roles remembered: {', '.join(role_ids)}"
+            self.out.setText(msg)
         except (OSError, ValueError) as e:
             self.out.setText(f"Failed: {e}")
 
@@ -1115,11 +1134,17 @@ class BuildPage(QtWidgets.QWizardPage):
 
 
 class StudioWizard(QtWidgets.QWizard):
-    def __init__(self, generator_dir, parent=None):
+    def __init__(self, generator_dir, parent=None,
+                 remember_roles_for_passwordless_login=False, login_manifest_path=None):
         super().__init__(parent)
         self.generator_dir = os.path.abspath(generator_dir)
         self.host = detect()
         self.cfg = ImageConfig()
+        # Studio-local preference (NOT part of ImageConfig — it describes a
+        # side-effect of running Studio itself, not the built image's runtime).
+        # See KeyZipPage / core.keyzip.emit_passwordless_login_roles().
+        self.remember_roles_for_passwordless_login = remember_roles_for_passwordless_login
+        self.login_manifest_path = login_manifest_path
         self.driver = BuildDriver(self.generator_dir, self.host)
         self.setWindowTitle("Snapdragon Image Studio")
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
