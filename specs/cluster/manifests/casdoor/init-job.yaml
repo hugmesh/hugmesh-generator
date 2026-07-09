@@ -467,6 +467,73 @@ data:
         except Exception as e:
             print(f"  WARN superadmin: role assignment failed: {e}")
 
+        # --- Mesh-join: grant /headscale Casdoor group membership -----------------
+        # headscale OIDC node-join GATES enrolment on allowed_groups: [/headscale]
+        # (keys-template/headscale/config.yaml). ROLE_SUPERADMIN alone does NOT put
+        # the user in that group, so without this a superadmin CANNOT join the mesh
+        # via OIDC. Nothing else seeds the group (the headscale config only asserts it
+        # "must exist"), so ENSURE it first, then mirror the ROLE_SUPERADMIN block
+        # above: GET the group, append the user, POST update-group. We ALSO stamp the
+        # membership onto the USER object (user.groups) because Casdoor emits the OIDC
+        # `groups` claim headscale matches on from User.Groups — belt-and-suspenders so
+        # the claim is carried regardless of which representation the deployed Casdoor
+        # treats as canonical. This grants MESH DATA-PLANE reach only; SSH reach
+        # (tag:superadmin) is a separate, deliberately-manual control — see
+        # docs/SUPERADMIN-MESH-CLIENT.md.
+        # !!! The Casdoor group object shape, which field persists membership
+        # !!! (group.users vs user.groups), and the token group-claim FORMAT (the
+        # !!! `/headscale` path) are all version-specific — validate against the
+        # !!! deployed casbin/casdoor before relying on OIDC node-join.
+        group_name = "headscale"
+        group_id = f"{ORG}/{group_name}"
+        member = f"{ORG}/{username}"
+        try:
+            grp_resp = call(f"/api/get-group?id={group_id}")
+            group = (grp_resp.get("data") or {}) if grp_resp else {}
+        except Exception:
+            group = {}
+        if not group:
+            # Seed the group — nothing else creates it. Virtual so it never collides
+            # with a user's single physical group; top-level org group so Casdoor
+            # renders it as the `/headscale` path headscale's allowed_groups expects.
+            group = {
+                "owner": ORG, "name": group_name,
+                "displayName": "Headscale mesh operators",
+                "type": "Virtual", "parentId": ORG,
+                "isTopGroup": True, "isEnabled": True, "users": [],
+            }
+            try:
+                call("/api/add-group", group, "POST")
+                print(f"  superadmin: created Casdoor group /{group_name}")
+            except Exception as e:
+                print(f"  WARN superadmin: add-group /{group_name} failed: {e}")
+        members = group.get("users") or []
+        if member not in members:
+            members.append(member)
+        group["owner"] = ORG
+        group["name"] = group_name
+        group["users"] = members
+        try:
+            call(f"/api/update-group?id={group_id}", group, "POST")
+            print(f"  superadmin: added {username} to Casdoor group /{group_name}")
+        except Exception as e:
+            print(f"  WARN superadmin: group membership (update-group) failed: {e}")
+        # Reflect membership on the user record too — this is what Casdoor emits as
+        # the OIDC `groups` claim headscale gates on. GET the user, merge the group
+        # id, PUT it back (never clobber any groups already present).
+        try:
+            u_resp = call(f"/api/get-user?id={user_id}")
+            u = (u_resp.get("data") or {}) if u_resp else {}
+            if u:
+                u_groups = u.get("groups") or []
+                if group_id not in u_groups:
+                    u_groups.append(group_id)
+                    u["groups"] = u_groups
+                    call(f"/api/update-user?id={user_id}", u, "POST")
+                    print(f"  superadmin: set user.groups={u_groups} on {username}")
+        except Exception as e:
+            print(f"  WARN superadmin: user.groups update failed: {e}")
+
     wait_ready()
     login()
     # D8: enable the org MFA capability (dark — available, not required) BEFORE the
