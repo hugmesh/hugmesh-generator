@@ -1,9 +1,10 @@
-# Mesh repo-templating — current state (Phase 1 pilot)
+# Mesh repo-templating — current state (Phase 1 + Phase 2 pilot)
 
 This documents the additive Handlebars render engine + guardrails landed for the
 mesh repo-templating pilot. **Nothing about the existing single-brand behavior
 changes:** `sed` remains the default renderer and the default cluster-manifest
-path is untouched.
+path is untouched. Phase 1 = the engine + guardrails + parity gate (below).
+Phase 2 = the **login-ui overlay pilot** (see "Phase 2" at the end).
 
 ## ⚠️ CRITICAL CONSTRAINT — Node must never run as root on the mesh-node cron path
 
@@ -121,3 +122,79 @@ eval "$(node scripts/tooling/load-brand-schema.js brands/example.yaml)"
 ```
 
 The `.conf` path is **not** removed; the two shapes stay compatible.
+
+---
+
+# Phase 2 — the login-ui overlay pilot
+
+Phase 1 templated only ArgoCD `Application` CRDs (thin pointer repos). Phase 2
+proves the **overlay-primary, skeleton-fallback** model on a real app repo:
+`snapdragon-login-ui`. It is **additive and opt-in** — no default path changes.
+
+## Two-tier maintenance model (fork-and-tokenize is BANNED)
+
+* **Tier-2 base** = the fuller RUNNING code, pulled **READ-ONLY**
+  (`scripts/pull-repo-base.sh`, `GIT_BASE` knob defaulting to GitHub). It is
+  **never copied/vendored/committed** into the generator. The base clone lives in
+  a gitignored cache (`/.repo-base/`) or an out-of-tree path.
+* **Tier-1 overlay** = the thin brand delta shipped in the generator at
+  `templates/repos/login-ui/`. It contains **ONLY the 4 brand-coupled files**,
+  never the whole repo:
+
+  | Overlay template | Token | Rebrands |
+  |---|---|---|
+  | `src/index.html.hbs` | `{{BRAND_TITLE}}` | the `<title>` tag |
+  | `package.json.hbs` | `{{NPM_SCOPE}}` (ORG-derived, lowercased slug) | the `@snapdragon/*` npm scope |
+  | `federation-base.js.hbs` | `{{HOST_NAME}}` (`<brand>-host`) | the federation host name |
+  | `.gitlab-ci.yml.hbs` | `{{GENERATOR_ORG_GROUP}}` (`<org-slug>/snapdragon-generator`) | the CI `include:` project org/group |
+
+  Deliberately **left untemplated** (grounding): `nginx.conf` (brand-neutral),
+  `docker-entrypoint.d/*` (runtime env-injected), the `X-Snapdragon-Local` wire
+  header (frozen protocol constant), the `snap-login-root` element, and every
+  `snapdragon` in `src/**` / comments / groupId — that is **upstream code
+  identity**, not tenant brand. Tier-1 is deliberately narrow.
+
+`NPM_SCOPE` / `HOST_NAME` / `GENERATOR_ORG_GROUP` are registered in the token
+classifier allowlist (`scripts/tooling/tokens.json`, `reserved_pilot`) — all
+ORG/BRAND-derived, none secret-bearing.
+
+## `render_repo_tree()` — `scripts/render-repo-tree.sh` (opt-in)
+
+Behind the **required** `--enable-repo-tree` flag:
+
+1. pulls the Tier-2 base READ-ONLY;
+2. copies it into a gitignored OUT dir (`out/<BRAND>-login-ui/`) — base untouched;
+3. overlays the 4 brand-coupled files via the **Phase-1 real-Handlebars path**
+   (`render-handlebars.js --extra-tokens NPM_SCOPE,HOST_NAME,GENERATOR_ORG_GROUP`)
+   — rendering is **not** reimplemented;
+4. gates the emitted tree with the **Phase-1 fail-closed secret scanner**
+   (`scripts/secret-scan.sh`) — a planted secret **refuses the emit**;
+5. **falls back** to `templates/repos/login-ui/_skeleton/` when the base is absent
+   (a minimal, zero-dep, bootable login-ui that `npm ci && npm run build`s fully
+   OFFLINE) — **never refuses**.
+
+```
+LOGIN_UI_BASE_DIR=/path/to/read-only/base \
+  scripts/render-repo-tree.sh brands/example.conf --enable-repo-tree --repo login-ui
+```
+
+> The app-CRD sweep (`generate-brand-repos.sh` + `render-handlebars.js`) now skips
+> the `templates/repos/**` overlay subtree, so the parity gate stays byte-identical.
+
+## Drift validator — `scripts/validate-repo-templates.sh`
+
+Sibling to `validate-reserved-prefixes.sh`. Re-applies the overlay against a
+**freshly-pulled base** using the **upstream-identity** token values
+(`templates/repos/login-ui/_identity.env` — the base's OWN original literals) and
+asserts byte-equality. Any divergence fails loudly with a **patch-reject** (unified
+diff) **and** an **overlayed-region checksum** mismatch. GREEN on an in-sync base,
+RED on any injected drift. Wire it into CI beside the reserved-prefix guard.
+
+## ⚠️ Node-not-root still applies (harder for Phase 2)
+
+`render-repo-tree.sh` and `validate-repo-templates.sh` invoke `node`. **BUILD-HOST
+ONLY.** On the mesh-node fail-closed root-cron path (Phase 6) the reconcile MUST
+run this as a constrained, network-less, NON-ROOT helper **or** consume
+pre-rendered output — it must **not** `node`-as-root. The base-puller's network
+fetch is likewise off the root path (use a pre-populated `/.repo-base/` cache or a
+`*_BASE_DIR` override on the node). Deferred reconciliation, not solved here.

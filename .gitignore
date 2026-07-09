@@ -28,6 +28,11 @@ console.log
 # ── Local docker-compose stack (clone+build+run) ──────────────────
 # Cloned source repos the local stack builds from (scripts/clone-all-repos.sh).
 /.stack-src/
+# ── Mesh repo-templating (Phase 2) ────────────────────────────────
+# READ-ONLY Tier-2 base clones pulled by scripts/pull-repo-base.sh — never
+# committed/vendored (the overlay references the base, it is not vendored in).
+# Rendered per-tenant trees land under the already-ignored /out/.
+/.repo-base/
 # Generated Mastodon dev env (SOCIAL=1 tier) — holds generated secrets.
 tests/stack/.mastodon.env
 # seed-e2e.sh workdir — rendered role JSON (deterministic test passwords) +

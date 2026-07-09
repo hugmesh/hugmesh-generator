@@ -1,0 +1,49 @@
+{
+  "name": "@{{NPM_SCOPE}}/login",
+  "version": "0.1.0",
+  "description": "Login / register (Casdoor + Google + Discord, two-stage) — Angular native-federation remote for the snapdragon.systems host.",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "ng": "ng",
+    "start": "ng serve login",
+    "build": "ng build login",
+    "build:login": "ng build login",
+    "test": "ng test login --watch=false --browsers=ChromeHeadlessCI",
+    "test:watch": "ng test login",
+    "gen": "ng-openapi-gen",
+    "gen:spec": "cp \"${ADMIN_BFF_SPEC:-../snapdragon-admin-bff-api/src/main/resources/openapi/openapi.json}\" openapi.json && npm run gen"
+  },
+  "dependencies": {
+    "@angular-architects/native-federation": "^22.0.0",
+    "@angular/animations": "^22.0.2",
+    "@angular/common": "^22.0.2",
+    "@angular/compiler": "^22.0.2",
+    "@angular/core": "^22.0.2",
+    "@angular/forms": "^22.0.2",
+    "@angular/platform-browser": "^22.0.2",
+    "@angular/platform-browser-dynamic": "^22.0.2",
+    "@angular/router": "^22.0.2",
+    "@softarc/native-federation-node": "^3.5.5",
+    "es-module-shims": "^2.8.1",
+    "rxjs": "^7.8.2",
+    "tslib": "^2.6.0",
+    "zone.js": "^0.16.1"
+  },
+  "devDependencies": {
+    "@angular-devkit/build-angular": "^22.0.4",
+    "@angular/cli": "^22.0.4",
+    "@angular/compiler-cli": "^22.0.2",
+    "@types/jasmine": "^6.0.0",
+    "jasmine-core": "^6.3.0",
+    "karma": "^6.4.4",
+    "karma-chrome-launcher": "^3.2.0",
+    "karma-coverage": "^2.2.1",
+    "karma-jasmine": "^5.1.0",
+    "karma-jasmine-html-reporter": "^2.2.0",
+    "karma-junit-reporter": "^2.0.1",
+    "ng-openapi-gen": "^0.51.0",
+    "ng-packagr": "^22.0.0",
+    "typescript": "~6.0.3"
+  }
+}

@@ -47,12 +47,21 @@ function die(msg) {
 }
 
 function parseArgs(argv) {
-  const out = { templates: null, out: null };
+  const out = { templates: null, out: null, extraTokens: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--templates') out.templates = argv[++i];
     else if (a === '--out') out.out = argv[++i];
-    else die(`unknown argument: ${a}`);
+    // --extra-tokens CSV: ADDITIONAL allowlisted token names to place in the
+    // render context, on top of the fixed 7. Used by the Phase-2 repo-tree
+    // overlay (templates/repos/login-ui) which references brand-delta tokens
+    // beyond the app-CRD set (NPM_SCOPE, HOST_NAME, GENERATOR_ORG_GROUP). When
+    // this flag is ABSENT the context is byte-identical to the parity-proven
+    // apps path — so scripts/parity-gate.sh is unaffected.
+    else if (a === '--extra-tokens') {
+      out.extraTokens = (argv[++i] || '')
+        .split(',').map((s) => s.trim()).filter(Boolean);
+    } else die(`unknown argument: ${a}`);
   }
   if (!out.templates) die('missing --templates DIR');
   if (!out.out) die('missing --out DIR');
@@ -60,9 +69,10 @@ function parseArgs(argv) {
 }
 
 // Build the render context from the environment, allowlist-only.
-function buildContext() {
+function buildContext(extraTokens) {
+  const keys = [...TOKEN_KEYS, ...(extraTokens || [])];
   const ctx = {};
-  for (const k of TOKEN_KEYS) {
+  for (const k of keys) {
     if (classifier.isDenied(k)) {
       die(`refusing to build context: token '${k}' is on the secret denylist`);
     }
@@ -88,6 +98,14 @@ function listHbs(dir) {
   const acc = [];
   (function walk(d) {
     for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
+      // The Phase-2 repo-overlay tree (templates/repos/**) is NOT part of the
+      // app-CRD sweep — it has its own dedicated renderer (render-repo-tree.sh,
+      // which stages the overlay into a temp dir before calling this). So when
+      // sweeping the templates root for the cluster-manifest path, never descend
+      // into a `repos` subtree. (Harmless for the overlay/skeleton renders: their
+      // --templates root is already inside/below the overlay, with no `repos`
+      // child.) This keeps the parity-proven apps render byte-identical.
+      if (ent.isDirectory() && ent.name === 'repos') continue;
       const full = path.join(d, ent.name);
       if (ent.isDirectory()) walk(full);
       else if (ent.isFile() && ent.name.endsWith('.hbs')) acc.push(full);
@@ -102,7 +120,7 @@ function main() {
   const outDir = path.resolve(args.out);
   if (!fs.existsSync(templatesDir)) die(`templates dir not found: ${templatesDir}`);
 
-  const ctx = buildContext();
+  const ctx = buildContext(args.extraTokens);
   fs.mkdirSync(outDir, { recursive: true });
 
   const files = listHbs(templatesDir);

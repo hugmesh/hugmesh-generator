@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# ============================================================================
+# render-repo-tree.sh — render_repo_tree() for the mesh repo-templating pilot.
+# ============================================================================
+#
+#  >>> BUILD-HOST ONLY. This invokes `node` (the Phase-1 Handlebars renderer), <<<
+#  >>> which MUST NOT run as root on the mesh-node fail-closed root-cron       <<<
+#  >>> reconcile path (Phase 6). See docs/MESH-TEMPLATING.md,                  <<<
+#  >>> "Node-not-root-on-the-mesh-cron-path".                                  <<<
+#
+# OPT-IN, ADDITIVE. This is NOT wired into any default path: the DEFAULT sed
+# cluster-manifest renderer (generate-brand-repos.sh) is untouched. This produces
+# a FULL per-tenant repo tree for a Tier-1-overlaid app repo (pilot: login-ui):
+#
+#   1. pull the Tier-2 base READ-ONLY (scripts/pull-repo-base.sh) — never copied
+#      into the generator tree/commit;
+#   2. overlay the thin Tier-1 delta (templates/repos/<repo>/*.hbs) ONTO a private
+#      copy of the base in an OUT dir, rendered via the Phase-1 REAL-Handlebars
+#      path (scripts/tooling/render-handlebars.js, --extra-tokens) — rendering is
+#      NOT reimplemented here;
+#   3. gate the emitted tree with the Phase-1 fail-closed secret scanner
+#      (scripts/secret-scan.sh) — MUST pass or we refuse to emit;
+#   4. FALL BACK to templates/repos/<repo>/_skeleton/ when the base is absent
+#      (never refuses).
+#
+# Usage:
+#   scripts/render-repo-tree.sh brands/example.conf --enable-repo-tree \
+#       [--repo login-ui] [--out-dir ./out] [--base DIR]
+#
+# --enable-repo-tree is REQUIRED (the opt-in gate). --base DIR forces a specific
+# read-only base (else pull-repo-base.sh resolves it; set <NAME>_BASE_DIR to point
+# at a present clone). Exit 0 on a scanned-clean tree; non-zero on any failure.
+set -euo pipefail
+
+_die() { echo "[render-repo-tree] FATAL: $*" >&2; exit 1; }
+_log() { echo "[render-repo-tree] $*" >&2; }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+TOOLING="${SCRIPT_DIR}/tooling"
+
+[[ $# -ge 1 ]] || _die "usage: $0 <brands/BRAND.conf> --enable-repo-tree [--repo NAME] [--out-dir DIR] [--base DIR]"
+BRAND_CONF="$1"; shift
+
+REPO="login-ui"
+OUT_DIR="./out"
+BASE_OVERRIDE=""
+ENABLED=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --enable-repo-tree) ENABLED=1; shift ;;
+    --repo)     REPO="$2"; shift 2 ;;
+    --out-dir)  OUT_DIR="$2"; shift 2 ;;
+    --base)     BASE_OVERRIDE="$2"; shift 2 ;;
+    *) _die "unknown argument: $1" ;;
+  esac
+done
+
+if [[ "$ENABLED" -ne 1 ]]; then
+  echo "[render-repo-tree] OPT-IN GATE: pass --enable-repo-tree to run (build-host only)." >&2
+  echo "                   This path is additive and NOT part of any default render." >&2
+  exit 2
+fi
+
+[[ -f "$BRAND_CONF" ]] || _die "brand config not found: $BRAND_CONF"
+[[ "$REPO" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || _die "invalid --repo '$REPO'"
+
+OVERLAY_DIR="${REPO_ROOT}/templates/repos/${REPO}"
+[[ -d "$OVERLAY_DIR" ]] || _die "no overlay for repo '${REPO}' at ${OVERLAY_DIR}"
+
+command -v node >/dev/null 2>&1 || _die "node not found (build-host tool)"
+[[ -d "${TOOLING}/node_modules/handlebars" ]] \
+  || _die "handlebars not installed — run: (cd ${TOOLING} && npm install)"
+
+# ── Load + validate the brand profile (mirrors generate-brand-repos.sh) ──────
+# shellcheck source=/dev/null
+source "$BRAND_CONF"
+: "${BRAND:?brand config must set BRAND}"
+: "${BRAND_TITLE:?brand config must set BRAND_TITLE}"
+: "${ORG:?brand config must set ORG}"
+
+_DNS_LABEL='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+[[ "$BRAND" =~ $_DNS_LABEL ]] \
+  || _die "invalid BRAND '${BRAND}' (must be a DNS label)"
+[[ "$ORG" =~ ^[A-Za-z0-9._-]{1,63}$ ]] \
+  || _die "invalid ORG '${ORG}' (allowed: A-Za-z0-9._- , 1..63)"
+[ -n "$BRAND_TITLE" ] || _die "BRAND_TITLE must not be empty"
+case "$BRAND_TITLE" in
+  *['"\$`|&']* ) _die "invalid BRAND_TITLE (forbidden chars: \" \\ \$ \` | &)" ;;
+esac
+[[ "${#BRAND_TITLE}" -le 128 ]] || _die "BRAND_TITLE too long (max 128)"
+
+# ── Derive the tenant token values ───────────────────────────────────────────
+# NPM_SCOPE: lowercase slug of ORG — SAME slug rule generate-brand-repos.sh uses
+# for HARBOR_PROJECT/GITLAB_GROUP (single source of the rule). npm scopes must be
+# lowercase; this guarantees a valid @scope.
+NPM_SCOPE="${ORG,,}"; NPM_SCOPE="${NPM_SCOPE//[^a-z0-9-]/-}"
+NPM_SCOPE="$(echo "$NPM_SCOPE" | sed 's/^-*//; s/-*$//')"
+[[ -n "$NPM_SCOPE" ]] || _die "ORG '${ORG}' slugged to an empty npm scope"
+# HOST_NAME: the federation host name for this tenant.
+HOST_NAME="${BRAND}-host"
+# GENERATOR_ORG_GROUP: the CI include project — the tenant's own GitLab group
+# hosting the (upstream-named) generator. 'snapdragon-generator' is upstream code
+# identity and stays literal; only the org/group is rebranded.
+GENERATOR_ORG_GROUP="${NPM_SCOPE}/snapdragon-generator"
+
+# ── OUT dir + realpath containment (mirrors generate-brand-repos.sh) ─────────
+BRAND_OUT="${OUT_DIR}/${BRAND}-${REPO}"
+_out_abs="$(mkdir -p "$OUT_DIR" 2>/dev/null; realpath -m -- "$OUT_DIR")"
+_brand_out_abs="$(realpath -m -- "$BRAND_OUT")"
+case "$_brand_out_abs/" in
+  "$_out_abs"/*) : ;;
+  *) _die "refusing to operate outside OUT_DIR: '${BRAND_OUT}' -> '${_brand_out_abs}'" ;;
+esac
+[[ -d "$BRAND_OUT" ]] && { _log "removing existing output: $BRAND_OUT"; rm -rf "$BRAND_OUT"; }
+mkdir -p "$BRAND_OUT"
+
+export BRAND BRAND_TITLE ORG NPM_SCOPE HOST_NAME GENERATOR_ORG_GROUP
+export CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-}" HEADSCALE_URL="${HEADSCALE_URL:-}" MESH_TAG="${MESH_TAG:-}"
+EXTRA_TOKENS="NPM_SCOPE,HOST_NAME,GENERATOR_ORG_GROUP"
+
+_log "brand=${BRAND} title='${BRAND_TITLE}' npm-scope=@${NPM_SCOPE} host=${HOST_NAME} gen-group=${GENERATOR_ORG_GROUP}"
+
+# ── Resolve the READ-ONLY base ───────────────────────────────────────────────
+BASE=""
+if [[ -n "$BASE_OVERRIDE" ]]; then
+  [[ -d "$BASE_OVERRIDE" ]] || _die "--base '${BASE_OVERRIDE}' is not a directory"
+  BASE="$(cd "$BASE_OVERRIDE" && pwd)"
+  _log "using --base ${BASE} (read-only)"
+else
+  # pull-repo-base.sh prints ONLY the resolved path on stdout (logs -> stderr).
+  if BASE="$("${SCRIPT_DIR}/pull-repo-base.sh" "$REPO")"; then
+    _log "resolved read-only base: ${BASE}"
+  else
+    BASE=""
+    _log "base not pullable — will use skeleton fallback"
+  fi
+fi
+
+MODE="skeleton"
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+
+if [[ -n "$BASE" && -d "$BASE" ]]; then
+  MODE="overlay"
+  # 1) Private copy of the READ-ONLY base into OUT (exclude VCS metadata + any
+  #    stray build dirs). The base itself is never modified; nothing is copied
+  #    INTO the generator tree — OUT is a gitignored staging dir.
+  _log "copying read-only base into ${BRAND_OUT} (excluding .git/node_modules/dist)"
+  tar -C "$BASE" \
+      --exclude='./.git' --exclude='./node_modules' --exclude='./dist' \
+      --exclude='./.angular' -cf - . | tar -C "$BRAND_OUT" -xf -
+
+  # 2) Stage ONLY the 4 overlay .hbs (never _skeleton, never _identity.env/README)
+  #    into a temp templates dir preserving repo-relative paths.
+  STAGE="${TMP}/overlay"; mkdir -p "$STAGE"
+  while IFS= read -r -d '' t; do
+    rel="${t#"${OVERLAY_DIR}/"}"
+    mkdir -p "${STAGE}/$(dirname "$rel")"
+    cp "$t" "${STAGE}/${rel}"
+  done < <(find "$OVERLAY_DIR" -name '*.hbs' -not -path '*/_skeleton/*' -print0)
+
+  # 3) Render the overlay via the Phase-1 Handlebars path, then lay it onto OUT.
+  RENDERED="${TMP}/rendered"; mkdir -p "$RENDERED"
+  node "${TOOLING}/render-handlebars.js" \
+      --templates "$STAGE" --out "$RENDERED" --extra-tokens "$EXTRA_TOKENS"
+  ( cd "$RENDERED" && tar -cf - . ) | ( cd "$BRAND_OUT" && tar -xf - )
+  _log "overlaid $(find "$RENDERED" -type f | wc -l | tr -d ' ') brand-coupled file(s) onto the base"
+else
+  # Skeleton fallback: render the whole minimal tree from _skeleton/*.hbs.
+  SKEL="${OVERLAY_DIR}/_skeleton"
+  [[ -d "$SKEL" ]] || _die "base absent AND no skeleton at ${SKEL}"
+  _log "rendering skeleton fallback from ${SKEL}"
+  node "${TOOLING}/render-handlebars.js" \
+      --templates "$SKEL" --out "$BRAND_OUT" --extra-tokens "$EXTRA_TOKENS"
+fi
+
+# ── Phase-1 emit-time secret scanner (fail-closed) ──────────────────────────
+_log "running emit-time secret scanner over ${BRAND_OUT} (fail-closed gate)"
+if ! "${SCRIPT_DIR}/secret-scan.sh" "$BRAND_OUT" >&2; then
+  _die "secret scanner flagged the emitted tree — refusing to emit ${BRAND_OUT}"
+fi
+
+n_files="$(find "$BRAND_OUT" -type f | wc -l | tr -d ' ')"
+echo "[render-repo-tree] OK mode=${MODE} files=${n_files} tree=${BRAND_OUT}" >&2
+# Machine-readable result on stdout: MODE<TAB>OUT
+printf '%s\t%s\n' "$MODE" "$BRAND_OUT"
