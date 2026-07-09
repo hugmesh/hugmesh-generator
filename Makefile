@@ -310,7 +310,7 @@ ORANGEPIZERO2_FLAVOR ?= both
 ORANGEPIZERO2_PASS    := ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
 
 .DEFAULT_GOAL := help
-.PHONY: help menu clean build-all build-everything matrix-check pentest pentest-seed rebuild \
+.PHONY: help menu go-live go-live-menu clean build-all build-everything matrix-check pentest pentest-seed rebuild \
         rpi x86 omnibus frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
         orangepizero2 orangepizero2-live orangepizero2-installer \
         flash qemu qemu-rpi qemu-x86 \
@@ -351,6 +351,21 @@ help: ## list targets
 
 menu: ## interactive console menu to build images (progress + quit-without-stopping)
 	@bash scripts/build-menu.sh
+
+# ── go-live wizard — internal-only -> public effector (docs/GO-LIVE.md) ─
+# The flags are the engine (scripts/go-live.sh); `make` is the friendly
+# interface, exactly like the build targets above. Providers live in
+# scripts/golive-providers.conf. Secrets go via GOLIVE_TOKEN_FILE (a file
+# path), NEVER as a make variable value.
+go-live: ## superadmin go-live wizard engine: make go-live [PROVIDER=…] [DOMAIN=…] [GOLIVE_FLAGS='--emit'] (no args = status; flip needs a typed confirm on a TTY)
+	@bash scripts/go-live.sh \
+	  $(if $(strip $(PROVIDER)),--provider '$(PROVIDER)') \
+	  $(if $(strip $(DOMAIN)),--domain '$(DOMAIN)') \
+	  $(if $(strip $(GOLIVE_TOKEN_FILE)),--token-file '$(GOLIVE_TOKEN_FILE)') \
+	  $(GOLIVE_FLAGS)
+
+go-live-menu: ## interactive console menu for the go-live wizard (same engine, discoverable knobs)
+	@bash scripts/go-live-menu.sh
 
 ## ── build ─────────────────────────────────────────────────────────────
 # Every build target dispatches: NATIVE unset -> re-invoke inside the builder

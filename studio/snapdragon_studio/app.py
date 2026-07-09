@@ -3,6 +3,7 @@
   python -m snapdragon_studio               # wizard + mesh-node tray + local-stack tray
   python -m snapdragon_studio --tray        # tray only (mesh-node controller)
   python -m snapdragon_studio --stack-tray  # tray only (local dev-stack controller)
+  python -m snapdragon_studio --go-live     # superadmin go-live wizard (scripts/go-live.sh front-end)
   python -m snapdragon_studio --login-agent # headless: run the passwordless local-login loopback agent
   python -m snapdragon_studio --generator-dir /path/to/snapdragon-generator
   python -m snapdragon_studio --remember-roles-for-passwordless-login
@@ -40,6 +41,10 @@ def main(argv=None) -> int:
     ap.add_argument("--tray", action="store_true", help="run only the mesh-node tray controller")
     ap.add_argument("--stack-tray", action="store_true",
                     help="run only the local dev-stack (make stack-up) tray controller")
+    ap.add_argument("--go-live", action="store_true",
+                    help="open the superadmin go-live wizard (take a provisioned brand "
+                         "device from internal-only to publicly live — the GUI front-end "
+                         "to scripts/go-live.sh)")
     ap.add_argument("--login-agent", action="store_true",
                     help="headless: run the passwordless local-login loopback agent "
                          "(binds 127.0.0.1:27621; serves the role-picker handoff to login-ui)")
@@ -96,6 +101,7 @@ def main(argv=None) -> int:
     print(f"[studio] Qt binding: {BINDING}")
 
     wizard = None
+    golive = None
 
     def open_studio():
         nonlocal wizard
@@ -108,6 +114,17 @@ def main(argv=None) -> int:
             )
         wizard.show()
         wizard.raise_()
+
+    def open_golive():
+        nonlocal golive
+        from .gui.pages.golive import GoLiveWizard
+        if golive is None:
+            golive = GoLiveWizard(args.generator_dir)
+        golive.show()
+        golive.raise_()
+
+    # --go-live picks WHICH wizard the non-tray launch opens; the trays are unaffected
+    open_main = open_golive if args.go_live else open_studio
 
     tray_only = args.tray or args.stack_tray
     # --tray/--stack-tray each mean "only this one" in isolation, but "show
@@ -127,10 +144,10 @@ def main(argv=None) -> int:
             app.setQuitOnLastWindowClosed(False)  # keep running in the tray
 
     if not tray_only:
-        open_studio()
+        open_main()
     elif not trays:
         print("[studio] no system tray available; opening the wizard instead", file=sys.stderr)
-        open_studio()
+        open_main()
 
     return app.exec()
 
