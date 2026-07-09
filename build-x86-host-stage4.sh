@@ -1432,7 +1432,14 @@ if ${ROLE_CLIENT}; then
     [ "${DESKTOP}" = "full" ] && CLIENT_USE="${CLIENT_USE} pulseaudio pipewire"
     INPUT_DEVICES="libinput"   # Xorg keyboard/mouse/touchpad (via x11-base/xorg-drivers)
     # Client roles keep man pages; doc/info still skipped (not needed at runtime).
-    INSTALL_MASK="/usr/share/doc /usr/share/info"
+    # The .mo pattern masks ONLY the empty-basename catalogs from the gettext-0.23.2
+    # empty-$(DOMAIN) bug (see the headless branch below): autotools-NLS packages
+    # (grub/parted/cpio/openbox/speech-dispatcher/...) each install a file literally
+    # named /usr/share/locale/<lang>/LC_MESSAGES/.mo that gettext already owns, and
+    # collision-protect then refuses the WHOLE merge — the 2026-07-08 proof build
+    # lost 143 packages to this. Real catalogs (openbox.mo etc.) are kept: desktops
+    # deliberately retain translations.
+    INSTALL_MASK="/usr/share/doc /usr/share/info /usr/share/locale/*/LC_MESSAGES/.mo"
 else
     CLIENT_USE=""
     INPUT_DEVICES=""           # headless nodes run no X server
@@ -2277,9 +2284,13 @@ fi
 # memory-hungry llvm-core/llvm+clang that mesa[llvm] pulls for the be+gpu role —
 # at the global -j28 they OOM-crashed the host). Copy the env/ snippets + the
 # package.env mapping when present (the headless roles carry them harmlessly).
+# -r: env/ also carries path-based env/<category>/<pkg> BASH files (portage
+# sources those in the ebuild env — the only legal home for phase hooks; the
+# package.env-referenced *.conf files are key=value only), and the old flat cp
+# silently skipped subdirectories.
 if [ -d "${SPECS_DIR}/portage/env" ]; then
     mkdir -p "${SYSROOT}/etc/portage/env"
-    cp "${SPECS_DIR}/portage/env/"* "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
+    cp -r "${SPECS_DIR}/portage/env/"* "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 fi
 [ -f "${SPECS_DIR}/portage/package.env" ] && \
     cp "${SPECS_DIR}/portage/package.env" "${SYSROOT}/etc/portage/package.env"
@@ -3348,6 +3359,13 @@ export GOFLAGS="-p=${GO_PROCS}"
 # "locale.Error: unsupported locale setting". C.UTF-8 is built into glibc (no
 # locale-gen needed) and is always valid.
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
+# ...but C.UTF-8 ALONE is not enough for everything: gimp-3.x pkg_setup (Gentoo
+# bug #969468) requires a REAL en_US.UTF-8 in the locale -a list and explicitly
+# dies when LANG is C/POSIX/C.* as the fallback. /etc/locale.gen already carries
+# en_US.UTF-8 (written at spec-install) — compile it into the locale archive.
+# NB: this text sits in the UNQUOTED CHROOT heredoc — never use backticks or
+# dollar-parens here, even in comments (the host shell expands them).
+locale-gen || true
 # Build chroot: /boot/efi exists in the baked fstab but is never mounted here.
 # Without this, mount-boot.eclass (linux-firmware, grub-themes) dies in
 # pkg_pretend ("/boot/efi not mounted") and ABORTS the ENTIRE package-set
