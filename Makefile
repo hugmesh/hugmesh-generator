@@ -401,6 +401,30 @@ prod: ## build the PROD fleet (ENV=prod, REAL domain) — announced; creds from 
 	@echo -e "    Cloudflare/OAuth/SMTP creds from the keys USB. For a LAN test use 'make local'.\033[0m"
 	$(MAKE) build-all ENV=prod
 
+# go-live wizard — DEV PREVIEW of the on-device superadmin go-live wizard. This
+# is the repo-side CLI op (the thin front-end pattern in Makefile form) over the
+# SHARED driver at specs/usr/sbin/snapdragon-go-live. It runs the driver's
+# `plan` (a DRY-RUN — it NEVER flips posture) against the repo copies, sandboxed
+# with GL_ETC_SNAPDRAGON pointing at a scratch dir so it can NEVER read/write the
+# host's /etc/snapdragon. On a real node you run `snapdragon-go-live` directly;
+# the marker/posture switch is on-device only (see docs/GO-LIVE-WIZARD.md).
+#   make go-live                                  # preview byo-domain for DOMAIN
+#   make go-live PROVIDER=byo-domain DOMAIN=acme.example INGRESS_IP=203.0.113.10
+GOLIVE_PROVIDER ?= $(if $(strip $(PROVIDER)),$(PROVIDER),byo-domain)
+GOLIVE_DOMAIN   ?= $(if $(strip $(DOMAIN)),$(DOMAIN),snapdragon.systems)
+GOLIVE_OUT      ?= $(WORK_DIR)/go-live
+go-live: ## preview the on-device go-live wizard (DRY-RUN plan; PROVIDER=/DOMAIN=/INGRESS_IP= knobs)
+	@echo "==> go-live wizard PREVIEW (dry-run; posture is NEVER touched here)"
+	@mkdir -p '$(GOLIVE_OUT)/etc' '$(GOLIVE_OUT)/out'
+	GL_ETC_SNAPDRAGON='$(GOLIVE_OUT)/etc' \
+	GL_PROVIDERS_LIB='$(CURDIR)/specs/usr/lib/snapdragon/go-live-providers.sh' \
+	  bash specs/usr/sbin/snapdragon-go-live plan \
+	    --provider '$(GOLIVE_PROVIDER)' --domain '$(GOLIVE_DOMAIN)' \
+	    --out-dir '$(GOLIVE_OUT)/out' \
+	    $(if $(strip $(INGRESS_IP)),--ingress-ip '$(INGRESS_IP)') \
+	    $(if $(strip $(TUNNEL_CNAME)),--tunnel-cname '$(TUNNEL_CNAME)')
+	@echo "==> emitted under $(GOLIVE_OUT)/out (preview only). Real go-live is on-device."
+
 rebuild: ## from-scratch: wipe the work dir, then build the whole default fleet
 ifndef NATIVE
 	$(MAKE) ensure-image
