@@ -3,6 +3,7 @@
   python -m snapdragon_studio               # wizard + mesh-node tray + local-stack tray
   python -m snapdragon_studio --tray        # tray only (mesh-node controller)
   python -m snapdragon_studio --stack-tray  # tray only (local dev-stack controller)
+  python -m snapdragon_studio --login-agent # headless: run the passwordless local-login loopback agent
   python -m snapdragon_studio --generator-dir /path/to/snapdragon-generator
 """
 from __future__ import annotations
@@ -28,12 +29,25 @@ def main(argv=None) -> int:
     ap.add_argument("--tray", action="store_true", help="run only the mesh-node tray controller")
     ap.add_argument("--stack-tray", action="store_true",
                     help="run only the local dev-stack (make stack-up) tray controller")
+    ap.add_argument("--login-agent", action="store_true",
+                    help="headless: run the passwordless local-login loopback agent "
+                         "(binds 127.0.0.1:27621; serves the role-picker handoff to login-ui)")
+    ap.add_argument("--login-manifest",
+                    help="path to the local-login roles manifest (default: "
+                         "$SNAPDRAGON_LOCAL_LOGIN_MANIFEST or "
+                         "~/.config/snapdragon-studio/local-login/roles.json)")
     ap.add_argument("--print-command", action="store_true",
                     help="headless: print the build command for a saved config and exit")
     ap.add_argument("--config", help="config JSON (with --print-command)")
     ap.add_argument("--backend", choices=["auto", "native", "docker"], default="auto",
                     help="build backend for --print-command (auto = host default)")
     args = ap.parse_args(argv)
+
+    if args.login_agent:
+        # Qt-free path: the loopback login agent is stdlib-only and blocks in
+        # serve_forever(), so it must never touch a Qt binding or a display.
+        from .core.local_login_agent import run as run_login_agent
+        return run_login_agent(manifest_path=args.login_manifest)
 
     if args.print_command:
         # Qt-free path: core only — must work with no display and no Qt installed.
