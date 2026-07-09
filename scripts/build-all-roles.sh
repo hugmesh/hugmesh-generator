@@ -12,6 +12,21 @@
 #   SKIP_X86=1    ./scripts/build-all-roles.sh  # Pi roles only (no x86 at all)
 #   SKIP_RPI=1    ./scripts/build-all-roles.sh  # x86 / frite only (no RPi5 builds)
 #
+# The RPi5 default set (pki backend frontend) is overridable too — e.g. to fold
+# in the rpi5 client-desktop role built by the SAME builder:
+#   RPI_ROLES="pki backend frontend desktop" ./scripts/build-all-roles.sh
+#   RPI_ROLES="desktop" ./scripts/build-all-roles.sh   # ONLY the rpi5 desktop
+# (build-rpi5-stage4.sh — roles: pki | backend | frontend | desktop.)
+#
+# --board rpi5|rpi4|rpi3 (SAME builder, a board table — not a separate script):
+#   RPI_BOARD=rpi4 ./scripts/build-all-roles.sh   # build every selected RPI_ROLES for Pi 4 instead
+# (default: rpi5, so an unset RPI_BOARD is 100% unaffected by this axis.)
+# RPI_BOARD=rpi3 is DESKTOP-ONLY (1GB RAM) — the builder hard-errors on any
+# RPI_ROLES entry but desktop, so pair it with RPI_ROLES=desktop:
+#   RPI_ROLES=desktop RPI_BOARD=rpi3 ./scripts/build-all-roles.sh
+# (the default RPI_ROLES="pki backend frontend" would hard-error on its very
+# first role with RPI_BOARD=rpi3 — this is the intended safety net, not a bug.)
+#
 # The Libre Computer Le/La Frite LIGHT-DESKTOP client image is OPT-IN (it is a
 # desktop appliance, not a cluster node, so it is NOT in the default fleet):
 #   FRITE=1       ./scripts/build-all-roles.sh  # ALSO build the Frite (la-frite, both flavors)
@@ -30,6 +45,26 @@
 #   JETSON_BOARD=orin-nx-16gb JETSON=1 ./scripts/build-all-roles.sh        # other module
 #   JETSON_KERNEL_FLAVOR=l4t JETSON=1 ./scripts/build-all-roles.sh  # (stubbed) L4T/CUDA path
 # (build-jetson-stage4.sh — roles: edge_ai (default) | gpu-host | full | desktop.)
+#
+# The Orange Pi 5 / Orange Pi 5 Plus (Rockchip RK3588/RK3588S) light-desktop
+# client image is OPT-IN too — EXPERIMENTAL: hardware validation pending
+# (specs-orangepi5/README.md). Knobs mirror the FRITE family exactly (board +
+# flavor, no role axis — this is a ONE-role client device, like Frite):
+#   ORANGEPI5=1      ./scripts/build-all-roles.sh  # ALSO build it (orange-pi-5-plus, both flavors)
+#   ORANGEPI5_BOARD=orange-pi-5 ORANGEPI5=1 ./scripts/build-all-roles.sh   # the smaller-I/O sibling
+#   ORANGEPI5_ONLY=1 ./scripts/build-all-roles.sh  # ONLY it (skip Pi + x86 + Frite + Jetson)
+#   ORANGEPI5_FLAVOR=live ORANGEPI5=1 ./scripts/build-all-roles.sh          # live image only
+# (build-orangepi5-stage4.sh — see specs-orangepi5/README.md.)
+#
+# The Orange Pi Zero 2 (Allwinner H616) HEADLESS appliance image is OPT-IN too —
+# EXPERIMENTAL: hardware validation pending (specs-orangepi-zero2/README.md).
+# One board, one role (appliance) — no board/role axis, just flavor:
+#   ORANGEPIZERO2=1      ./scripts/build-all-roles.sh  # ALSO build it (both flavors)
+#   ORANGEPIZERO2_ONLY=1 ./scripts/build-all-roles.sh  # ONLY it (skip everything else)
+#   ORANGEPIZERO2_FLAVOR=live ORANGEPIZERO2=1 ./scripts/build-all-roles.sh    # live image only
+# (build-orangepi-zero2-stage4.sh — see specs-orangepi-zero2/README.md. No desktop
+# role: the H616's display engine has no mainline driver, so this platform is
+# headless-only by design, not an oversight.)
 #
 # Pen-test build OPTION (DEV / CI-pipeline only) — run the OWASP pen-test harness
 # as part of the build (memory snapdragon-pentest-standard "an OPTION in the BUILD
@@ -67,6 +102,8 @@ BUILD_RPI="${REPO_DIR}/build-rpi5-stage4.sh"
 BUILD_X86="${REPO_DIR}/build-x86-host-stage4.sh"
 BUILD_FRITE="${REPO_DIR}/build-frite-stage4.sh"
 BUILD_JETSON="${REPO_DIR}/build-jetson-stage4.sh"
+BUILD_ORANGEPI5="${REPO_DIR}/build-orangepi5-stage4.sh"
+BUILD_ORANGEPIZERO2="${REPO_DIR}/build-orangepi-zero2-stage4.sh"
 GENKEYS="${SCRIPT_DIR}/gen-provision-keys.sh"
 WORK_DIR="${WORK_DIR:-${REPO_DIR}/out}"
 # Honor a -w/--work-dir passed through to the builders so the keys-<role> folders
@@ -97,13 +134,26 @@ if [ "${PENTEST_ONLY:-0}" = "1" ]; then
     SKIP_X86=1; SKIP_KEYS=1
 fi
 
+# RPi5 role set. Default = the 3 cluster-node roles (pki backend frontend); the
+# rpi5-desktop client role is opt-in (RPI_ROLES override) since it needs
+# --standalone/--local-user/--local-pass to be a self-contained appliance,
+# same reasoning as x86's standalone-thin/thick staying out of the default set.
 if [ "${PENTEST_ONLY:-0}" = "1" ]; then
     RPI_ROLES=()   # pentest-only: no image builds
 elif [ "${SKIP_RPI:-0}" = "1" ]; then
     RPI_ROLES=()   # SKIP_RPI=1: x86-only or frite-only run
+elif [ -n "${RPI_ROLES:-}" ]; then
+    read -r -a RPI_BUILD_ROLES <<< "${RPI_ROLES}"
+    RPI_ROLES=("${RPI_BUILD_ROLES[@]}")
 else
     RPI_ROLES=(pki backend frontend)
 fi
+# --board rpi5 (DEFAULT) | rpi4 | rpi3 — the SAME build-rpi5-stage4.sh builder,
+# a board table rather than a separate script (see its Phase 6/8 header
+# notes). Threaded through EVERY selected RPI_ROLES entry below. Default rpi5
+# keeps an unset RPI_BOARD 100% unaffected by this axis. rpi3 is DESKTOP-ONLY
+# (see the header note above) — pair it with RPI_ROLES=desktop.
+RPI_BOARD_SEL="${RPI_BOARD:-rpi5}"
 
 # x86 role set. Default = every role EXCEPT omnibus (pki be fe be+gpu). Only the
 # omnibus all-in-one role is opt-in: X86_OMNIBUS=1 appends it; X86_ALL=1 expands
@@ -160,10 +210,38 @@ read -r -a JETSON_BUILD_ROLES <<< "${JETSON_ROLES:-edge_ai}"
 JETSON_BOARD_SEL="${JETSON_BOARD:-orin-nano}"
 JETSON_KFLAVOR_SEL="${JETSON_KERNEL_FLAVOR:-mainline}"
 
-echo "==> RPi5 roles:  ${RPI_ROLES[*]:-(none)}"
+# Orange Pi 5 / Orange Pi 5 Plus is OPT-IN (EXPERIMENTAL — hardware validation
+# pending). ORANGEPI5_ONLY=1 builds ONLY it (skip Pi/x86/Frite/Jetson) — same
+# shape as FRITE_ONLY/JETSON_ONLY above.
+BUILD_ORANGEPI5_IMG=false
+if [ "${ORANGEPI5_ONLY:-0}" = "1" ]; then
+    BUILD_ORANGEPI5_IMG=true
+    RPI_ROLES=(); X86_BUILD_ROLES=(); BUILD_FRITE_IMG=false; BUILD_JETSON_IMG=false
+elif [ "${ORANGEPI5:-0}" = "1" ]; then
+    BUILD_ORANGEPI5_IMG=true
+fi
+ORANGEPI5_BOARD_SEL="${ORANGEPI5_BOARD:-orange-pi-5-plus}"
+ORANGEPI5_FLAVOR_SEL="${ORANGEPI5_FLAVOR:-both}"
+
+# Orange Pi Zero 2 (Allwinner H616) headless appliance is OPT-IN (EXPERIMENTAL
+# — hardware validation pending). ORANGEPIZERO2_ONLY=1 builds ONLY it (skip
+# everything else) — same shape as ORANGEPI5_ONLY above. No board axis (one
+# board) and no role axis (appliance only — headless, no desktop role).
+BUILD_ORANGEPIZERO2_IMG=false
+if [ "${ORANGEPIZERO2_ONLY:-0}" = "1" ]; then
+    BUILD_ORANGEPIZERO2_IMG=true
+    RPI_ROLES=(); X86_BUILD_ROLES=(); BUILD_FRITE_IMG=false; BUILD_JETSON_IMG=false; BUILD_ORANGEPI5_IMG=false
+elif [ "${ORANGEPIZERO2:-0}" = "1" ]; then
+    BUILD_ORANGEPIZERO2_IMG=true
+fi
+ORANGEPIZERO2_FLAVOR_SEL="${ORANGEPIZERO2_FLAVOR:-both}"
+
+echo "==> RPi5 roles:  ${RPI_ROLES[*]:-(none)}  (board=${RPI_BOARD_SEL})"
 echo "==> x86 roles:   ${X86_BUILD_ROLES[*]:-(none)}"
 echo "==> Frite:       $([ "${BUILD_FRITE_IMG}" = true ] && echo "${FRITE_BOARD_SEL} (flavor=${FRITE_FLAVOR_SEL}, desktop=${FRITE_DESKTOP_SEL})" || echo '(off — set FRITE=1)')"
 echo "==> Jetson:      $([ "${BUILD_JETSON_IMG}" = true ] && echo "${JETSON_BOARD_SEL} roles: ${JETSON_BUILD_ROLES[*]} (kernel=${JETSON_KFLAVOR_SEL}; EXPERIMENTAL)" || echo '(off — set JETSON=1)')"
+echo "==> Orange Pi 5: $([ "${BUILD_ORANGEPI5_IMG}" = true ] && echo "${ORANGEPI5_BOARD_SEL} (flavor=${ORANGEPI5_FLAVOR_SEL}; EXPERIMENTAL)" || echo '(off — set ORANGEPI5=1)')"
+echo "==> OPi Zero 2:  $([ "${BUILD_ORANGEPIZERO2_IMG}" = true ] && echo "(flavor=${ORANGEPIZERO2_FLAVOR_SEL}; EXPERIMENTAL, headless)" || echo '(off — set ORANGEPIZERO2=1)')"
 echo "==> Build ENV:   ${BUILD_ENV}  $([ "${BUILD_ENV}" = test ] && echo '(LAN-first; cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
 echo "==> Pen-test:    $([ "${PENTEST}" = 1 ] && echo "ON (env=${PENTEST_ENV:-compose} scan=${PENTEST_SCAN:-baseline} pipeline=${PENTEST_PIPELINE:-main})$([ "${PENTEST_ONLY:-0}" = 1 ] && echo ' [PENTEST_ONLY]')" || echo '(off — set PENTEST=1 / --pentest)')"
 echo "    Work/target dir: ${WORK_DIR}"
@@ -177,10 +255,10 @@ echo
 BUILDS_FAILED=()
 for role in "${RPI_ROLES[@]}"; do
     echo "############################################################"
-    echo "#  Building RPi5 role: ${role}"
+    echo "#  Building RPi role: ${role} (board=${RPI_BOARD_SEL})"
     echo "############################################################"
-    "${BUILD_RPI}" --role "${role}" "$@" \
-        || { echo "!! RPi5 role '${role}' build FAILED — continuing with the remaining roles" >&2; BUILDS_FAILED+=("rpi5:${role}"); }
+    "${BUILD_RPI}" --role "${role}" --board "${RPI_BOARD_SEL}" "$@" \
+        || { echo "!! RPi role '${role}' (board=${RPI_BOARD_SEL}) build FAILED — continuing with the remaining roles" >&2; BUILDS_FAILED+=("rpi-${RPI_BOARD_SEL}:${role}"); }
 done
 
 for role in "${X86_BUILD_ROLES[@]}"; do
@@ -224,6 +302,22 @@ if [ "${BUILD_JETSON_IMG}" = true ]; then
                 --kernel-flavor "${JETSON_KFLAVOR_SEL}" "$@" \
             || { echo "!! Jetson role '${role}' build FAILED — continuing with the remaining roles" >&2; BUILDS_FAILED+=("jetson:${role}"); }
     done
+fi
+
+if [ "${BUILD_ORANGEPI5_IMG}" = true ]; then
+    echo "############################################################"
+    echo "#  Building Orange Pi 5 light desktop: ${ORANGEPI5_BOARD_SEL} (flavor=${ORANGEPI5_FLAVOR_SEL}) — EXPERIMENTAL"
+    echo "############################################################"
+    "${BUILD_ORANGEPI5}" --board "${ORANGEPI5_BOARD_SEL}" --flavor "${ORANGEPI5_FLAVOR_SEL}" "$@" \
+        || { echo "!! Orange Pi 5 build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepi5:${ORANGEPI5_BOARD_SEL}"); }
+fi
+
+if [ "${BUILD_ORANGEPIZERO2_IMG}" = true ]; then
+    echo "############################################################"
+    echo "#  Building Orange Pi Zero 2 headless appliance (flavor=${ORANGEPIZERO2_FLAVOR_SEL}) — EXPERIMENTAL"
+    echo "############################################################"
+    "${BUILD_ORANGEPIZERO2}" --flavor "${ORANGEPIZERO2_FLAVOR_SEL}" "$@" \
+        || { echo "!! Orange Pi Zero 2 build FAILED — continuing" >&2; BUILDS_FAILED+=("orangepizero2"); }
 fi
 
 # ── Generate provisioning keys ───────────────────────────────────────
@@ -277,6 +371,28 @@ if [ "${SKIP_KEYS:-0}" != "1" ]; then
             fi
         done
     fi
+    # Orange Pi 5 provisions from the SAME KEYS USB mechanism, as a client
+    # appliance (no users.json / no cluster join) — the 'host' worker-key
+    # profile, exactly like the Frite client.
+    if [ "${BUILD_ORANGEPI5_IMG}" = true ]; then
+        echo "==> Generating keys folder: ${WORK_DIR}/keys-orangepi5 (host profile)"
+        if ! "${GENKEYS}" --role host --out "${WORK_DIR}/keys-orangepi5" --random; then
+            echo "!! keys generation FAILED for orangepi5 — removing partial ${WORK_DIR}/keys-orangepi5" >&2
+            rm -rf "${WORK_DIR}/keys-orangepi5"
+            KEYS_FAILED+=(orangepi5)
+        fi
+    fi
+    # Orange Pi Zero 2 provisions from the SAME KEYS USB mechanism, as a headless
+    # appliance (no users.json / no cluster join) — the 'host' worker-key
+    # profile, exactly like the Frite/Orange Pi 5 clients.
+    if [ "${BUILD_ORANGEPIZERO2_IMG}" = true ]; then
+        echo "==> Generating keys folder: ${WORK_DIR}/keys-orangepizero2 (host profile)"
+        if ! "${GENKEYS}" --role host --out "${WORK_DIR}/keys-orangepizero2" --random; then
+            echo "!! keys generation FAILED for orangepizero2 — removing partial ${WORK_DIR}/keys-orangepizero2" >&2
+            rm -rf "${WORK_DIR}/keys-orangepizero2"
+            KEYS_FAILED+=(orangepizero2)
+        fi
+    fi
 fi
 
 echo
@@ -316,7 +432,7 @@ if [ "${#BUILDS_FAILED[@]}" -gt 0 ]; then
     echo >&2
     echo "!! IMAGE BUILD FAILED for: ${BUILDS_FAILED[*]}  (the other roles + keys were still produced)" >&2
     echo "!! Re-run a failed role with its per-arch builder:" >&2
-    echo "!!   ./build-rpi5-stage4.sh --role <r>  |  ./build-x86-host-stage4.sh --role <r>  |  ./build-frite-stage4.sh --board <b>  |  ./build-jetson-stage4.sh --role <r>" >&2
+    echo "!!   ./build-rpi5-stage4.sh --role <r>  |  ./build-x86-host-stage4.sh --role <r>  |  ./build-frite-stage4.sh --board <b>  |  ./build-jetson-stage4.sh --role <r>  |  ./build-orangepi5-stage4.sh --board <b>  |  ./build-orangepi-zero2-stage4.sh --flavor <f>" >&2
 fi
 # A run whose keys folders failed has NO usable provisioning deliverable for those roles.
 if [ "${#KEYS_FAILED[@]}" -gt 0 ]; then
@@ -325,12 +441,15 @@ if [ "${#KEYS_FAILED[@]}" -gt 0 ]; then
     echo "!! The partial keys folders were removed. Re-run gen-provision-keys.sh per role:" >&2
     for _r in "${KEYS_FAILED[@]}"; do
         # Map the appliance names back to the key profile gen-provision-keys knows:
-        # frite + jetson workers/desktop -> host; jetson 'full' (single-node CP) -> pki.
+        # frite + jetson workers/desktop + orangepi5 + orangepizero2 -> host;
+        # jetson 'full' (single-node CP) -> pki.
         case "${_r}" in
-            frite)       _kp=host ;;
-            jetson-full) _kp=pki ;;
-            jetson-*)    _kp=host ;;
-            *)           _kp="${_r}" ;;
+            frite)          _kp=host ;;
+            orangepi5)      _kp=host ;;
+            orangepizero2)  _kp=host ;;
+            jetson-full)    _kp=pki ;;
+            jetson-*)       _kp=host ;;
+            *)              _kp="${_r}" ;;
         esac
         echo "!!   ${GENKEYS} --role ${_kp} --out ${WORK_DIR}/keys-${_r} --random" >&2
     done

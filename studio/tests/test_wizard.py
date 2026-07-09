@@ -105,6 +105,79 @@ def test_page_slugs_map_to_the_right_pages(wiz):
         assert type(wiz.page(wiz._page_ids[slug])) is cls
 
 
+# ---- RolePage: board/flavor axes round-trip (rpi5 / orangepi5 / orangepizero2) --
+# Regression coverage for a real bug: RolePage used to have NO widgets for these
+# three platforms' board/flavor axes at all, so initializePage() never restored a
+# loaded config's board/flavor into anything visible, and validatePage()'s
+# else-branch unconditionally reset cfg.board/cfg.flavor to "" for them — a
+# config with platform="rpi5" board="rpi4" (or orangepi5/orangepizero2) silently
+# lost that axis the moment the wizard revisited/revalidated RolePage (e.g. via
+# "Load config…" -> wiz.restart(), then Next/Back or any BuildPage preview that
+# calls collect_all()). check.sh's Qt-free GUI channel never exercises this
+# (it drives config.py directly), so this was the ONLY channel with the gap —
+# and the only channel with no coverage of it before this test existed.
+
+def test_rpi5_board_survives_a_loaded_config_round_trip(wiz):
+    wiz.cfg.mode = "standalone"
+    wiz.cfg.role = "generic"
+    wiz.cfg.platform = "rpi5"
+    wiz.cfg.board = "rpi4"
+    wiz.restart()
+    page = advance_to(wiz, wizard_mod.RolePage)
+    assert page.rpi5_box.isVisible()
+    assert page.rpi5_board.currentText() == "rpi4"
+    wiz.next()
+    assert wiz.cfg.platform == "rpi5"
+    assert wiz.cfg.board == "rpi4"
+
+
+def test_orangepi5_board_and_flavor_survive_a_loaded_config_round_trip(wiz):
+    wiz.cfg.mode = "cloud"
+    wiz.cfg.role = "orangepi5"
+    wiz.cfg.platform = "orangepi5"
+    wiz.cfg.board = "orange-pi-5"
+    wiz.cfg.flavor = "live"
+    wiz.restart()
+    page = advance_to(wiz, wizard_mod.RolePage)
+    assert page.orangepi5_box.isVisible()
+    assert page.orangepi5_board.currentText() == "orange-pi-5"
+    assert page.orangepi5_flavor.currentText() == "live"
+    wiz.next()
+    assert wiz.cfg.platform == "orangepi5"
+    assert wiz.cfg.board == "orange-pi-5"
+    assert wiz.cfg.flavor == "live"
+
+
+def test_orangepizero2_flavor_survives_a_loaded_config_round_trip(wiz):
+    wiz.cfg.mode = "cloud"
+    wiz.cfg.role = "orangepizero2"
+    wiz.cfg.platform = "orangepizero2"
+    wiz.cfg.flavor = "installer"
+    wiz.restart()
+    page = advance_to(wiz, wizard_mod.RolePage)
+    assert page.orangepizero2_box.isVisible()
+    assert page.orangepizero2_flavor.currentText() == "installer"
+    wiz.next()
+    assert wiz.cfg.platform == "orangepizero2"
+    assert wiz.cfg.flavor == "installer"
+    assert wiz.cfg.board == ""
+
+
+def test_rpi5_orangepi5_orangepizero2_boxes_mutually_exclusive(wiz):
+    """Only the active platform's board/flavor box is visible — no stale box
+    left showing (and no stale value silently applying) after switching."""
+    pick_mode(wiz, "cloud")
+    page = pick_role(wiz, "orangepi5")
+    assert page.orangepi5_box.isVisible()
+    assert not page.orangepizero2_box.isVisible()
+    assert not page.rpi5_box.isVisible()
+    assert not page.frite_box.isVisible()
+    assert not page.jetson_box.isVisible()
+    page = pick_role(wiz, "orangepizero2")
+    assert page.orangepizero2_box.isVisible()
+    assert not page.orangepi5_box.isVisible()
+
+
 # ---- mode-gated page flow ------------------------------------------------------
 
 def test_standalone_flow_skips_admin_pages(wiz):

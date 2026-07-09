@@ -13,8 +13,9 @@ from ..core.config import (
     Domain, ImageConfig, MODE_DEFAULT_ROLE, MODE_SKIPPED_PAGES, User,
     ENV_CHOICES, FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS,
     GPU_DRIVER_ALIASES, GPU_DRIVER_CHOICES, JETSON_BOARDS,
-    OPTIONAL_SERVICES_CHOICES, PLATFORM_LABELS, ROLE_CHOICES, UNAFFILIATED_ROLE,
-    WIZARD_PAGE_SLUGS,
+    OPTIONAL_SERVICES_CHOICES, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
+    ORANGEPIZERO2_FLAVORS, PLATFORM_LABELS, ROLE_CHOICES, RPI_BOARDS,
+    UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS,
 )
 from ..core.platform_info import detect
 
@@ -186,6 +187,38 @@ class RolePage(QtWidgets.QWizardPage):
         jl.addWidget(_row("Board", self.jetson_board))
         lay.addWidget(self.jetson_box)
 
+        # rpi5-family board knob (visible only when platform == rpi5; applies
+        # to every rpi5 role, not just desktop — rpi3 is desktop-only, enforced
+        # by the builder itself, not pre-validated here)
+        self.rpi5_box = QtWidgets.QGroupBox("Raspberry Pi 5 family board options")
+        r5l = QtWidgets.QVBoxLayout(self.rpi5_box)
+        self.rpi5_board = QtWidgets.QComboBox()
+        self.rpi5_board.addItems(list(RPI_BOARDS))
+        r5l.addWidget(_row("Board", self.rpi5_board))
+        lay.addWidget(self.rpi5_box)
+
+        # orange pi 5 board+flavor knobs (visible only when platform == orangepi5)
+        self.orangepi5_box = QtWidgets.QGroupBox("Orange Pi 5 board options")
+        o5l = QtWidgets.QVBoxLayout(self.orangepi5_box)
+        self.orangepi5_board = QtWidgets.QComboBox()
+        self.orangepi5_board.addItems(list(ORANGEPI5_BOARDS))
+        self.orangepi5_flavor = QtWidgets.QComboBox()
+        self.orangepi5_flavor.addItems(list(ORANGEPI5_FLAVORS))
+        self.orangepi5_flavor.setCurrentText("both")
+        o5l.addWidget(_row("Board", self.orangepi5_board))
+        o5l.addWidget(_row("Flavor", self.orangepi5_flavor))
+        lay.addWidget(self.orangepi5_box)
+
+        # orange pi zero 2 flavor-only knob (visible only when platform ==
+        # orangepizero2 — headless appliance, no board/role axis at all)
+        self.orangepizero2_box = QtWidgets.QGroupBox("Orange Pi Zero 2 options")
+        oz2l = QtWidgets.QVBoxLayout(self.orangepizero2_box)
+        self.orangepizero2_flavor = QtWidgets.QComboBox()
+        self.orangepizero2_flavor.addItems(list(ORANGEPIZERO2_FLAVORS))
+        self.orangepizero2_flavor.setCurrentText("both")
+        oz2l.addWidget(_row("Flavor", self.orangepizero2_flavor))
+        lay.addWidget(self.orangepizero2_box)
+
         # x86 client knobs: desktop weight + Steam delivery
         self.client_box = QtWidgets.QGroupBox("Client desktop options")
         cl = QtWidgets.QVBoxLayout(self.client_box)
@@ -223,10 +256,19 @@ class RolePage(QtWidgets.QWizardPage):
         if c.board:
             if c.platform == "jetson":
                 self.jetson_board.setCurrentText(c.board)
+            elif c.platform == "rpi5":
+                self.rpi5_board.setCurrentText(c.board)
+            elif c.platform == "orangepi5":
+                self.orangepi5_board.setCurrentText(c.board)
             else:
                 self.board.setCurrentText(c.board)
         if c.flavor:
-            self.flavor.setCurrentText(c.flavor)
+            if c.platform == "orangepi5":
+                self.orangepi5_flavor.setCurrentText(c.flavor)
+            elif c.platform == "orangepizero2":
+                self.orangepizero2_flavor.setCurrentText(c.flavor)
+            else:
+                self.flavor.setCurrentText(c.flavor)
         if c.platform == "frite" and c.desktop:
             self.frite_desktop.setCurrentText(c.desktop)
         elif c.desktop:
@@ -254,6 +296,9 @@ class RolePage(QtWidgets.QWizardPage):
         plat = self.platform.currentData() or "x86"
         self.frite_box.setVisible(plat == "frite")
         self.jetson_box.setVisible(plat == "jetson")
+        self.rpi5_box.setVisible(plat == "rpi5")
+        self.orangepi5_box.setVisible(plat == "orangepi5")
+        self.orangepizero2_box.setVisible(plat == "orangepizero2")
         # desktop weight / Steam are x86 desktop-image knobs (client + standalone)
         self.client_box.setVisible(plat == "x86" and self.wiz.cfg.mode in ("standalone", "cloud"))
         self.note.setText("EXPERIMENTAL — hardware validation pending (specs-jetson/README.md); "
@@ -273,9 +318,24 @@ class RolePage(QtWidgets.QWizardPage):
             c.board = self.board.currentText()
             c.flavor = self.flavor.currentText()
             c.desktop = self.frite_desktop.currentText()
+        elif c.platform == "jetson":
+            c.board = self.jetson_board.currentText()
+            c.flavor = ""
+            c.desktop = ""
+        elif c.platform == "rpi5":
+            c.board = self.rpi5_board.currentText()
+            c.flavor = ""
+            c.desktop = ""
+        elif c.platform == "orangepi5":
+            c.board = self.orangepi5_board.currentText()
+            c.flavor = self.orangepi5_flavor.currentText()
+            c.desktop = ""
+        elif c.platform == "orangepizero2":
+            c.board = ""
+            c.flavor = self.orangepizero2_flavor.currentText()
+            c.desktop = ""
         else:
-            # jetson carries a board axis of its own; every other platform has none
-            c.board = self.jetson_board.currentText() if c.platform == "jetson" else ""
+            c.board = ""
             c.flavor = ""
             weight = self.desktop.currentText()
             c.desktop = "" if (weight == "(default)" or not self.client_box.isVisible()) else weight
@@ -767,6 +827,12 @@ class HomePage(QtWidgets.QWizardPage):
         # the builder at build time and is NEVER written to a saved config.
         login = QtWidgets.QGroupBox("Local login")
         ll = QtWidgets.QVBoxLayout(login)
+        self.standalone = QtWidgets.QCheckBox(
+            "Standalone: no mesh/SSO, local user below logs in with a build-time password "
+            "(--standalone; client roles only — laptop/chromebook/desktop, rpi5-desktop/"
+            "frite/orangepi5/orangepizero2. NOT jetson — --encrypt-root is hard-blocked "
+            "on that platform, see docs/STANDALONE-DESKTOP.md)")
+        ll.addWidget(self.standalone)
         self.local_user = QtWidgets.QLineEdit()
         ll.addWidget(_row("Local user", self.local_user))
         self.local_pass = QtWidgets.QLineEdit()
@@ -800,12 +866,20 @@ class HomePage(QtWidgets.QWizardPage):
         self.backup.setText(c.home_backup)
         self.encrypted.setChecked(c.home_encrypted)
         self.seed.setCurrentText(c.home_seed_code)
+        self.standalone.setChecked(c.standalone)
         self.local_user.setText(c.local_user)
         self.local_pass.setText(c.local_pass)
         self.encrypt_root.setChecked(c.encrypt_root)
         self.luks_pass.setText(c.luks_pass)
         self.unlock_keyfile.setCurrentText(c.unlock_keyfile or "(off)")
         self.unlock_yubikey.setCurrentText(c.unlock_yubikey or "(off)")
+        # --unlock-keyfile/--unlock-yubikey are x86-only (config.py only emits them
+        # from _x86_args(); no ARM builder parses either flag) — unlike
+        # --encrypt-root/--luks-pass just above, which land on every platform.
+        # Mirrors BuildPage's installer_ui/cached/live_toram gating pattern.
+        x86_only = c.platform in ("", "x86")
+        self.unlock_keyfile.setEnabled(x86_only)
+        self.unlock_yubikey.setEnabled(x86_only)
 
     def validatePage(self):
         c = self.wiz.cfg
@@ -814,14 +888,22 @@ class HomePage(QtWidgets.QWizardPage):
         c.home_backup = self.backup.text().strip()
         c.home_encrypted = self.encrypted.isChecked()
         c.home_seed_code = self.seed.currentText()
+        c.standalone = self.standalone.isChecked()
         c.local_user = self.local_user.text().strip() or c.local_user
         c.local_pass = self.local_pass.text()
         c.encrypt_root = self.encrypt_root.isChecked()
         c.luks_pass = self.luks_pass.text()
-        kf = self.unlock_keyfile.currentText()
-        c.unlock_keyfile = "" if kf == "(off)" else kf
-        yk = self.unlock_yubikey.currentText()
-        c.unlock_yubikey = "" if yk == "(off)" else yk
+        # x86-only (see initializePage) — force-clear on every other platform so a
+        # stale choice picked while platform was x86 (or "") can never linger into
+        # a saved config or a generated command for an ARM build.
+        if c.platform in ("", "x86"):
+            kf = self.unlock_keyfile.currentText()
+            c.unlock_keyfile = "" if kf == "(off)" else kf
+            yk = self.unlock_yubikey.currentText()
+            c.unlock_yubikey = "" if yk == "(off)" else yk
+        else:
+            c.unlock_keyfile = ""
+            c.unlock_yubikey = ""
         return True
 
 

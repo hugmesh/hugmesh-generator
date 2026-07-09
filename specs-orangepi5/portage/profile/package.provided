@@ -1,0 +1,31 @@
+# package.provided — packages portage treats as pre-installed without building.
+#
+# Cross-compile exclusions: these packages require the aarch64-unknown-linux-gnu
+# Rust stdlib target on the host (not present in the system dev-lang/rust build).
+# They provide SVG rendering / icon themes — irrelevant on a minimal LXDE SBC
+# (hicolor PNG fallback icons are sufficient). Listing them here satisfies any
+# DEPEND/RDEPEND without portage attempting to emerge them into the sysroot.
+# Mirrors specs-frite/portage/profile/package.provided (identical cross-compile
+# gaps — same arm64 cross toolchain, same missing native Rust/Perl-XS targets).
+#
+# gtk+'s own librsvg dep is removed via package.use (-rsvg); the entries below
+# satisfy gtk+'s adwaita RDEPEND and any other packages that pull adwaita/librsvg.
+#
+# IMPORTANT: update these version numbers if the portage tree upgrades the atoms —
+# the versions must be ≥ whatever version satisfies the dependency constraint.
+gnome-base/librsvg-2.62.2-r1
+x11-themes/adwaita-icon-theme-49.0
+x11-themes/adwaita-icon-theme-legacy-46.2
+
+# www-client/netsurf cross-compile fails: netsurf's duktape JS binding generator
+# requires net-libs/nsgenbind as a native BUILD tool, but nsgenbind is not installed
+# on the cross-compile host (only x86_64 and i686 Rust/toolchain targets are present).
+# Listing netsurf as provided satisfies any dep that references it; the browser can be
+# installed post-first-boot via native aarch64 emerge on the target hardware.
+www-client/netsurf-3.11-r1
+
+# dev-perl/JSON-XS cross-compile fails: Perl XS modules compile native C using the
+# host's Perl ExtUtils::MakeMaker config, but the resulting object targets aarch64
+# (CHOST) — the linker step fails because the host Perl ABI != target. JSON-XS is
+# an optional fast-path for dev-perl/JSON; the pure-Perl fallback is sufficient.
+dev-perl/JSON-XS-4.40.0

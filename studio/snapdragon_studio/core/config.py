@@ -5,7 +5,13 @@ GUI and the build driver share, so the Studio UI can surface the WHOLE flag surf
 without drifting from the scripts. The ``platform`` axis picks the builder:
 x86 -> build-x86-host-stage4.sh, rpi5 -> build-rpi5-stage4.sh,
 frite -> build-frite-stage4.sh, jetson -> build-jetson-stage4.sh (EXPERIMENTAL —
-hardware validation pending; frite flag conventions + --role).
+hardware validation pending; frite flag conventions + --role),
+orangepi5 -> build-orangepi5-stage4.sh (EXPERIMENTAL — hardware validation
+pending; frite flag conventions: --board + --flavor, no --role),
+orangepizero2 -> build-orangepi-zero2-stage4.sh (EXPERIMENTAL — hardware
+validation pending; a HEADLESS APPLIANCE, not a desktop client — no --board,
+no --desktop, just --flavor; see specs-orangepi-zero2/README.md for why this
+platform never has a desktop mode).
 """
 from __future__ import annotations
 
@@ -56,14 +62,20 @@ BUILDER_SCRIPTS = {
     "rpi5": "build-rpi5-stage4.sh",
     "frite": "build-frite-stage4.sh",
     "jetson": "build-jetson-stage4.sh",
+    "orangepi5": "build-orangepi5-stage4.sh",
+    "orangepizero2": "build-orangepi-zero2-stage4.sh",
 }
 
-# GUI-facing platform labels (Jetson is scaffold-stage — see specs-jetson/README.md).
+# GUI-facing platform labels (Jetson/Orange Pi 5/Orange Pi Zero 2 are
+# scaffold-stage — see specs-jetson/README.md / specs-orangepi5/README.md /
+# specs-orangepi-zero2/README.md).
 PLATFORM_LABELS = {
     "x86": "x86_64 host",
-    "rpi5": "Raspberry Pi 5 (arm64)",
+    "rpi5": "Raspberry Pi 5 / Pi 4 / Pi 3 (arm64; --board rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only])",
     "frite": "Libre AML-S805X La Frite family (arm64)",
     "jetson": "NVIDIA Jetson Orin (arm64) — EXPERIMENTAL: hardware validation pending",
+    "orangepi5": "Orange Pi 5 / 5 Plus (Rockchip RK3588/RK3588S, arm64) — EXPERIMENTAL: hardware validation pending",
+    "orangepizero2": "Orange Pi Zero 2 (Allwinner H616, arm64) — HEADLESS APPLIANCE, no desktop mode ever — EXPERIMENTAL: hardware validation pending",
 }
 
 # The full role catalog, grouped by Studio mode: (role id, supported platforms, label).
@@ -82,6 +94,8 @@ ROLE_CHOICES = {
         ("chromebook", ("x86",), "Chromebook client — tailnet + SSO"),
         ("desktop", ("x86",), "Desktop client — tailnet + SSO"),
         ("frite", ("frite",), "La Frite family arm64 client (board + live/installer flavor)"),
+        ("orangepi5", ("orangepi5",), "Orange Pi 5 / 5 Plus arm64 client — EXPERIMENTAL (board + live/installer flavor)"),
+        ("orangepizero2", ("orangepizero2",), "Orange Pi Zero 2 arm64 HEADLESS APPLIANCE — EXPERIMENTAL (live/installer flavor only; no board/desktop axis)"),
     ],
     "mesh": [
         ("pki", ("x86", "rpi5"), "PKI node — cluster certificate authority"),
@@ -89,6 +103,7 @@ ROLE_CHOICES = {
         ("fe", ("x86", "rpi5"), "Frontend node"),
         ("be+gpu", ("x86",), "Backend + GPU node"),
         ("omnibus", ("x86",), "Omnibus — every cluster role on one node"),
+        ("rpi5-desktop", ("rpi5",), "RPi5 desktop — arm64 client (compose with --standalone for FDE, no mesh)"),
         ("edge_ai", ("x86", "jetson"), "Edge-AI node — GPU + OpenAI-compatible model API"),
         ("full", ("jetson",), "Jetson full-stack node — EXPERIMENTAL, hardware validation pending"),
         ("gpu-host", ("jetson",), "Jetson GPU host — EXPERIMENTAL, hardware validation pending"),
@@ -104,7 +119,8 @@ ROLE_CHOICES = {
 UNAFFILIATED_ROLE = "standalone-unaffiliated"
 
 # build-rpi5-stage4.sh spells the node roles out (pki | backend | frontend).
-RPI5_ROLE_MAP = {"be": "backend", "fe": "frontend"}
+# The Studio disambiguates the rpi5 desktop role id; the builder takes --role desktop.
+RPI5_ROLE_MAP = {"be": "backend", "fe": "frontend", "rpi5-desktop": "desktop"}
 # The Studio disambiguates the jetson desktop role id; the builder takes --role desktop.
 JETSON_ROLE_MAP = {"jetson-desktop": "desktop"}
 
@@ -114,6 +130,26 @@ FRITE_DESKTOPS = ("light", "none")
 
 # build-jetson-stage4.sh --board (Tegra234 Orin modules on the devkit carrier).
 JETSON_BOARDS = ("orin-nano", "orin-nano-4gb", "orin-nx-8gb", "orin-nx-16gb")
+
+# build-rpi5-stage4.sh --board (ONE builder extended with a board table, Phase 6
+# — Pi 4/Pi 5 share the Raspberry Pi Foundation boot model closely enough that a
+# separate builder script isn't warranted). "" (unset) = the builder's own
+# default (rpi5). rpi3 (Phase 8) is DESKTOP-ONLY (1GB RAM) — the builder
+# hard-errors if role != desktop; this dataclass does NOT pre-validate that
+# combo (the builder's hard-error is the authoritative safety net).
+RPI_BOARDS = ("rpi5", "rpi4", "rpi3")
+
+# build-orangepi5-stage4.sh --board (Rockchip RK3588/RK3588S) / --flavor.
+# EXPERIMENTAL — hardware validation pending; see specs-orangepi5/README.md.
+# ONE role (a client desktop, no --role axis), like Frite — just board + flavor.
+ORANGEPI5_BOARDS = ("orange-pi-5-plus", "orange-pi-5")
+ORANGEPI5_FLAVORS = ("live", "installer", "both")
+
+# build-orangepi-zero2-stage4.sh --flavor (Allwinner H616). EXPERIMENTAL —
+# hardware validation pending; see specs-orangepi-zero2/README.md. ONE role (a
+# HEADLESS APPLIANCE, not a desktop client, no --role axis) AND no --board axis
+# (a single board, unlike Frite/Orange-Pi-5's board tables) — just --flavor.
+ORANGEPIZERO2_FLAVORS = ("live", "installer", "both")
 
 # --env: what gets baked into the image's stack config (test | prod).
 ENV_CHOICES = ("test", "prod")
@@ -159,7 +195,7 @@ class ImageConfig:
     mode: str = "standalone"           # standalone | cloud | mesh
     role: str = "standalone-thick"
     platform: str = "x86"              # x86 | rpi5 | frite | jetson -> BUILDER_SCRIPTS
-    board: str = ""                    # frite: FRITE_BOARDS | jetson: JETSON_BOARDS
+    board: str = ""                    # frite: FRITE_BOARDS | jetson: JETSON_BOARDS | rpi5: RPI_BOARDS
     flavor: str = ""                   # frite: live | installer | both
     env: str = "test"
     brand: str = "snapdragon"
@@ -168,6 +204,7 @@ class ImageConfig:
     cluster_domain: str = "snapdragon.systems"
     local_user: str = "magus"
     local_pass: str = ""               # --local-pass (SECRET — never saved; live cmd only)
+    standalone: bool = False           # --standalone (arm64 only; x86 gets it via role name)
     # ── network / identity plane ──
     tailscale: bool = False            # --with-tailscale / --no-tailscale
     sso: bool = False                  # --with-sso / --no-sso
@@ -330,6 +367,10 @@ class ImageConfig:
             a = self._frite_args()
         elif plat == "jetson":
             a = self._jetson_args()
+        elif plat == "orangepi5":
+            a = self._orangepi5_args()
+        elif plat == "orangepizero2":
+            a = self._orangepizero2_args()
         else:
             raise ValueError(f"unknown platform: {self.platform!r} "
                              f"(known: {', '.join(BUILDER_SCRIPTS)})")
@@ -358,6 +399,13 @@ class ImageConfig:
         # The arm builders have no --with/--no-tailscale pair; mesh is on unless skipped.
         if not self.tailscale:
             a += ["--skip-mesh"]
+        # --standalone: local user, no mesh, LUKS2-encrypted root (landed on all
+        # three arm64 builders — rpi5, frite, jetson). Only meaningful on a
+        # client-desktop role; each builder hard-errors on a cluster-node role.
+        if self.standalone:
+            a += ["--standalone", "--local-user", self.local_user]
+            if self.local_pass:
+                a += ["--local-pass", self.local_pass]
         if self.enable_wifi:
             a += ["--enable-wifi"]
         if self.enable_bluetooth:
@@ -372,10 +420,32 @@ class ImageConfig:
             a += ["--resume"]
         return a
 
+    def _encrypt_root_args(self) -> list[str]:
+        """--encrypt-root / --luks-pass — landed on x86/Frite/RPi5/Jetson (all
+        four platforms as of Phase 2c); kept as its own opt-in helper (called
+        from each builder method) rather than folded into _arm_common_args()."""
+        a: list[str] = []
+        if self.encrypt_root:
+            a += ["--encrypt-root"]
+        if self.luks_pass:
+            # plaintext ONLY on the live command line — never persisted (SECRET_FIELDS)
+            a += ["--luks-pass", self.luks_pass]
+        return a
+
     def _rpi5_args(self) -> list[str]:
-        """build-rpi5-stage4.sh — arm64 SERVER node: pki | backend | frontend."""
+        """build-rpi5-stage4.sh — arm64: pki | backend | frontend (cluster nodes)
+        or desktop (client; compose with --standalone for FDE, no mesh). --board
+        (RPI_BOARDS: rpi5 [DEFAULT] | rpi4 | rpi3) picks the board table
+        (Phase 6 Pi 4 support, Phase 8 Pi 3 support) — ONE builder, mirrors
+        _jetson_args()'s board handling. rpi3 is DESKTOP-ONLY (1GB RAM): the
+        builder hard-errors if role != desktop; this method does not
+        pre-validate that combo, same as it doesn't for any other builder
+        constraint (the shell script is the single source of truth there)."""
         a = ["--role", RPI5_ROLE_MAP.get(self.role, self.role)]
+        if self.board:                 # rpi5 | rpi4 | rpi3 ("" = builder default: rpi5)
+            a += ["--board", self.board]
         a += self._arm_common_args()
+        a += self._encrypt_root_args()
         if self.optional_services:
             # SPACE-separated: the builders word-split OPTIONAL_SERVICES on IFS
             # whitespace (it stays ONE argv element — shlex.quote on print).
@@ -392,17 +462,63 @@ class ImageConfig:
         if self.desktop:               # light | none (frite's lean LXDE toggle)
             a += ["--desktop", self.desktop]
         a += self._arm_common_args()
+        a += self._encrypt_root_args()
         return a
+
+    def _orangepi5_args(self) -> list[str]:
+        """build-orangepi5-stage4.sh — arm64 CLIENT: board + flavor, no --role.
+        EXPERIMENTAL (hardware validation pending): mirrors _frite_args()'s
+        shape exactly (this platform has ONE role — a client desktop — like
+        Frite), minus Frite's --desktop light|none toggle (this platform has
+        no headless variant to gate — see specs-orangepi5/README.md)."""
+        a: list[str] = ["--board", self.board or "orange-pi-5-plus", "--flavor", self.flavor or "both"]
+        a += self._arm_common_args()
+        a += self._encrypt_root_args()
+        return a
+
+    def _orangepizero2_args(self) -> list[str]:
+        """build-orangepi-zero2-stage4.sh — arm64 HEADLESS APPLIANCE: flavor
+        only, no --role AND no --board (a single board, unlike Frite/Orange-Pi-5's
+        board tables). EXPERIMENTAL (hardware validation pending): mirrors
+        _orangepi5_args()'s shape minus --board — this platform is not a
+        desktop client at all (see specs-orangepi-zero2/README.md for why),
+        so there is also no --desktop toggle to emit, same as _orangepi5_args()."""
+        a: list[str] = ["--flavor", self.flavor or "both"]
+        a += self._arm_common_args()
+        a += self._encrypt_root_args()
+        return a
+
+    def _check_jetson_conflicts(self) -> None:
+        """Mirror build-jetson-stage4.sh's hard block on --encrypt-root (and, by
+        extension, --standalone, which forces it on): the Orin's single boot+root
+        partition means the UEFI L4TLauncher cannot find a kernel once that
+        partition is LUKS2-encrypted, so the builder exits 1 unconditionally for
+        ANY --encrypt-root request, standalone-forced or explicit. Raise HERE too
+        (mirrors _check_unaffiliated_conflicts()) so --print-command/the GUI
+        preview fail loudly with the same contract instead of showing a
+        seemingly-valid command / a "Preflight OK." that always fails at build
+        time — see docs/STANDALONE-DESKTOP.md's Jetson section for the full
+        rationale. Not a deferred gap: a real fix needs a separate unencrypted
+        boot partition, which this platform does not have."""
+        if self.standalone or self.encrypt_root:
+            raise ValueError(
+                "jetson: --encrypt-root (and --standalone, which forces it on) is "
+                "not supported on this platform yet — the Orin's single boot+root "
+                "partition means LUKS2-encrypting it leaves the UEFI firmware "
+                "unable to find a kernel to boot. See docs/STANDALONE-DESKTOP.md's "
+                "Jetson section. Clear standalone/encrypt_root to build this role.")
 
     def _jetson_args(self) -> list[str]:
         """build-jetson-stage4.sh — arm64 Tegra edge-AI node. EXPERIMENTAL (hardware
         validation pending): frite flag conventions + --role edge_ai|full|gpu-host|
         desktop and --board JETSON_BOARDS (specs-jetson/README.md). Anything beyond
         that goes via extra_flags."""
+        self._check_jetson_conflicts()
         a = ["--role", JETSON_ROLE_MAP.get(self.role, self.role)]
         if self.board:                 # Orin module/carrier ("" = builder default)
             a += ["--board", self.board]
         a += self._arm_common_args()
+        a += self._encrypt_root_args()
         return a
 
     def _check_unaffiliated_conflicts(self) -> None:
@@ -465,6 +581,14 @@ class ImageConfig:
             # conflict check above already rejected any opt-in, so emit nothing.)
             a += ["--with-tailscale"] if self.tailscale else ["--no-tailscale"]
             a += ["--with-sso"] if self.sso else ["--no-sso"]
+
+        # --standalone composes onto ANY client role (laptop/chromebook/desktop),
+        # not just the standalone-thin/standalone-thick role ids (those role names
+        # set STANDALONE=true internally in the builder's own role-switch, so they
+        # never needed this flag from here) — forces --encrypt-root + no mesh/SSO
+        # in the builder regardless of the with/no-tailscale|sso flags just above.
+        if self.standalone:
+            a += ["--standalone"]
 
         # cloud/mesh: tie the client image to its domain + identity role (FD-08). The
         # cluster domain is carried in --domains/KEYS-USB; there is no --cluster-domain flag.
@@ -562,11 +686,7 @@ class ImageConfig:
             a += ["--enable-games"]
 
         # root-disk encryption (installer LUKS2 FDE) + unlock factors
-        if self.encrypt_root:
-            a += ["--encrypt-root"]
-        if self.luks_pass:
-            # plaintext ONLY on the live command line — never persisted (SECRET_FIELDS)
-            a += ["--luks-pass", self.luks_pass]
+        a += self._encrypt_root_args()
         if self.unlock_keyfile:
             a += ["--unlock-keyfile", self.unlock_keyfile]
         if self.unlock_yubikey:

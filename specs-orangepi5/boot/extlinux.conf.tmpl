@@ -1,0 +1,30 @@
+# extlinux.conf — U-Boot distro-boot config for Orange Pi 5 / Orange Pi 5 Plus
+# (Rockchip RK3588/RK3588S). U-Boot's distro-boot scans the first partition of
+# whatever block device it finds (microSD/eMMC/USB/NVMe) for /extlinux/extlinux.conf
+# and boots the entry below — the SAME mechanism build-frite-stage4.sh uses (NOT
+# the RPi5 config.txt/cmdline.txt model, and NOT UEFI/GRUB — see the builder's
+# header for the full boot-chain research/rationale).
+#
+# Variables substituted at build time (render_template in build-orangepi5-stage4.sh):
+#   @@OPI5_KERNEL_IMG@@   Kernel image filename in /boot (e.g. Image)
+#   @@OPI5_DTB@@          Board DTB path under /dtb (e.g.
+#                         rockchip/rk3588-orangepi-5-plus.dtb)
+#   @@OPI5_INITRD_LINE@@  INITRD line (live/installer/encrypted-disk boot) or a
+#                         comment (plaintext installed system)
+#   @@BRAND_TITLE@@       Menu label brand
+#
+# IMPORTANT: boot the DTB that ships WITH THE KERNEL (copied to /boot/dtb by the
+# builder), NOT any DTB baked into U-Boot itself — mainline RK3588 device-tree
+# support is still evolving fast (see specs-orangepi5/README.md); a stale
+# in-u-boot DTB is a common source of "boots to nothing" on these boards.
+
+DEFAULT orangepi5
+TIMEOUT 20
+MENU TITLE @@BRAND_TITLE@@ — Orange Pi 5
+
+LABEL orangepi5
+    MENU LABEL @@BRAND_TITLE@@ light desktop
+    LINUX /@@OPI5_KERNEL_IMG@@
+    FDT /dtb/@@OPI5_DTB@@
+@@OPI5_INITRD_LINE@@
+    APPEND @@OPI5_APPEND@@

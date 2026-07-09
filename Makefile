@@ -4,10 +4,12 @@
 # underlying script with the right flags, so the flags remain the engine and
 # `make` is the friendly interface.
 #
-#   build-rpi5-stage4.sh      aarch64 (RPi5) cross-build  -> .img + .fs.tar.xz
+#   build-rpi5-stage4.sh      aarch64 (RPi5/RPi4/RPi3, RPI_BOARD=rpi5|rpi4|rpi3 — rpi3 desktop-only) cross-build -> .img + .fs.tar.xz
 #   build-x86-host-stage4.sh  amd64 multi-role build      -> .img + live ISO + .fs.tar.xz
 #   build-frite-stage4.sh     aarch64 (Amlogic) light desktop -> live/installer ISO
 #   build-jetson-stage4.sh    aarch64 (Tegra234 Orin) edge-AI node -> .img (EXPERIMENTAL)
+#   build-orangepi5-stage4.sh aarch64 (Rockchip RK3588/RK3588S) light desktop -> live/installer ISO (EXPERIMENTAL)
+#   build-orangepi-zero2-stage4.sh aarch64 (Allwinner H616) HEADLESS APPLIANCE -> live/installer ISO (EXPERIMENTAL)
 #   scripts/build-all-roles.sh   the default fleet (3 Pi + x86 pki/be/fe/be+gpu)
 #                                (+ FRITE=1 / JETSON=1 / build-everything for the full matrix)
 #   scripts/flash-disk.sh        write a role image (.img preferred, else .iso) to a disk
@@ -79,22 +81,39 @@ FRITE_ONLY  ?=
 JETSON      ?=
 JETSON_ONLY ?=
 JETSON_ROLES ?=
+ORANGEPI5      ?=
+ORANGEPI5_ONLY ?=
+ORANGEPIZERO2      ?=
+ORANGEPIZERO2_ONLY ?=
 X86_OMNIBUS ?=
 X86_ALL     ?=
 X86_ROLES   ?=
 X86_STANDALONE ?=
 X86_STANDALONE_ONLY ?=
 SKIP_X86    ?=
+SKIP_RPI    ?=
 SKIP_KEYS   ?=
-# NOTE: this is `:=` and expands here, BEFORE the FRITE_*/JETSON_* `?=` defaults
-# below — so a value reaches build-all-roles.sh only when the caller sets it
-# (CLI/env); an empty assignment is fine (the script's own `${VAR:-default}`
-# fallbacks catch empty exactly like unset).
+# NOTE: this is `:=` and expands here, BEFORE the FRITE_*/JETSON_*/ORANGEPI5_*
+# `?=` defaults below — so a value reaches build-all-roles.sh only when the
+# caller sets it (CLI/env); an empty assignment is fine (the script's own
+# `${VAR:-default}` fallbacks catch empty exactly like unset). RPI_BOARD/
+# RPI_ROLES/SKIP_RPI and ORANGEPIZERO2* MUST be here too — a prior version of
+# this list omitted them, so `make build-everything RPI_BOARD=rpi4 ...` (or
+# ORANGEPIZERO2=1) silently built only the default rpi5/pki+backend+frontend
+# Pi set and dropped Orange Pi Zero 2 entirely, on BOTH the native leg ($(ALL)
+# invoking build-all-roles.sh directly) and the Docker leg (the value never
+# survives the docker-run process boundary since only what's listed here is
+# baked as literal args into the in-container `make` re-invoke).
 ROLESET_ENVVARS := FRITE='$(FRITE)' FRITE_ONLY='$(FRITE_ONLY)' \
                    FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)' \
                    FRITE_DESKTOP='$(FRITE_DESKTOP)' \
                    JETSON='$(JETSON)' JETSON_ONLY='$(JETSON_ONLY)' JETSON_ROLES='$(JETSON_ROLES)' \
                    JETSON_BOARD='$(JETSON_BOARD)' JETSON_KERNEL_FLAVOR='$(JETSON_KERNEL_FLAVOR)' \
+                   ORANGEPI5='$(ORANGEPI5)' ORANGEPI5_ONLY='$(ORANGEPI5_ONLY)' \
+                   ORANGEPI5_BOARD='$(ORANGEPI5_BOARD)' ORANGEPI5_FLAVOR='$(ORANGEPI5_FLAVOR)' \
+                   ORANGEPIZERO2='$(ORANGEPIZERO2)' ORANGEPIZERO2_ONLY='$(ORANGEPIZERO2_ONLY)' \
+                   ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)' \
+                   RPI_BOARD='$(RPI_BOARD)' RPI_ROLES='$(RPI_ROLES)' SKIP_RPI='$(SKIP_RPI)' \
                    X86_OMNIBUS='$(X86_OMNIBUS)' X86_ALL='$(X86_ALL)' X86_ROLES='$(X86_ROLES)' \
                    X86_STANDALONE='$(X86_STANDALONE)' X86_STANDALONE_ONLY='$(X86_STANDALONE_ONLY)' \
                    SKIP_X86='$(SKIP_X86)' SKIP_KEYS='$(SKIP_KEYS)'
@@ -201,6 +220,7 @@ endif
 DOCKER_RUN := docker run --rm --privileged \
   -v $(CURDIR):/src -v $(WORK_DIR):/out -w /src \
   -e HOST_UID=$(HOST_UID) -e HOST_GID=$(HOST_GID) \
+  -e STANDALONE_FLAGS \
   $(CA_DOCKER_MOUNTS) $(CA_DOCKER_ENV) $(IMAGE)
 
 # ensure-image — auto-build the builder image if it is missing.
@@ -216,14 +236,27 @@ define chown-artifacts
 	@[ -n "$(HOST_UID)" ] && $(SUDO) chown -R $(HOST_UID):$(HOST_GID) "$(WORK_DIR)" 2>/dev/null || true
 endef
 
+# RPi5/RPi4/RPi3 board axis (--board rpi5|rpi4|rpi3 on build-rpi5-stage4.sh; ONE
+# builder, extended with a board table rather than a separate script — all
+# three share the Raspberry Pi Foundation boot model closely enough). Default
+# rpi5 keeps every existing `make rpi` / `make rpi-<role>` invocation 100%
+# unaffected. RPI_BOARD=rpi3 is DESKTOP-ONLY (1GB RAM) — the builder
+# hard-errors if combined with any role but desktop, so `make rpi-desktop
+# RPI_BOARD=rpi3` is the only valid rpi3 single-role invocation (the bare
+# `rpi` 3-role fleet target, which never includes desktop, would hard-error on
+# its very first role with RPI_BOARD=rpi3 — use rpi-desktop instead).
+RPI_BOARD ?= rpi5
+
 # Native build commands (run as-is inside the container or on local Gentoo).
 # BRAND_ENV prefixes the brand's own-mesh env (HEADSCALE_URL); BRAND_FLAGS adds
 # --config brands/<BRAND>.conf (+ --cluster-domain DOMAIN). build-all-roles.sh
 # passes BRAND_FLAGS through to BOTH builders via its "$@" passthrough.
-RPI := $(BRAND_ENV) $(SUDO) ./build-rpi5-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
+RPI := $(BRAND_ENV) $(SUDO) ./build-rpi5-stage4.sh -w $(WORK_DIR) -j $(JOBS) --board $(RPI_BOARD) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 X86 := $(BRAND_ENV) $(SUDO) ./build-x86-host-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 FRITE_BUILD := $(BRAND_ENV) $(SUDO) ./build-frite-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 JETSON_BUILD := $(BRAND_ENV) $(SUDO) ./build-jetson-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
+ORANGEPI5_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi5-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
+ORANGEPIZERO2_BUILD := $(BRAND_ENV) $(SUDO) ./build-orangepi-zero2-stage4.sh -w $(WORK_DIR) -j $(JOBS) $(IMG_FLAGS) $(ENV_FLAGS) $(BRAND_FLAGS)
 ALL := $(ROLESET_ENVVARS) $(PENTEST_ENVVARS) $(BRAND_ENV) $(SUDO) ./scripts/build-all-roles.sh -j $(JOBS) -w $(WORK_DIR) $(ENV_FLAGS) $(BRAND_FLAGS)
 
 RPI_ROLES := pki backend frontend
@@ -257,9 +290,29 @@ JETSON_KERNEL_FLAVOR ?= mainline
 JETSON_PASS := JETSON_ROLE='$(JETSON_ROLE)' JETSON_BOARD='$(JETSON_BOARD)' \
                JETSON_KERNEL_FLAVOR='$(JETSON_KERNEL_FLAVOR)'
 
+# Orange Pi 5 / Orange Pi 5 Plus (Rockchip RK3588/RK3588S arm64) — EXPERIMENTAL
+# (hardware validation pending; see specs-orangepi5/README.md). FRITE-style
+# vars: a single dedicated platform, ONE role (a client desktop — no cluster-
+# node concept), so just --board and --flavor, no --role/--desktop knob.
+#   ORANGEPI5_BOARD  = orange-pi-5-plus (DEFAULT) | orange-pi-5
+#   ORANGEPI5_FLAVOR = both (DEFAULT) | live | installer
+ORANGEPI5_BOARD  ?= orange-pi-5-plus
+ORANGEPI5_FLAVOR ?= both
+ORANGEPI5_PASS   := ORANGEPI5_BOARD='$(ORANGEPI5_BOARD)' ORANGEPI5_FLAVOR='$(ORANGEPI5_FLAVOR)'
+
+# Orange Pi Zero 2 (Allwinner H616 arm64) — EXPERIMENTAL (hardware validation
+# pending; see specs-orangepi-zero2/README.md). A HEADLESS APPLIANCE, not a
+# desktop client — no --board axis (one board), no --role/--desktop knob (one
+# role: "appliance"), just --flavor. Mirrors the frite/orangepi5 single-
+# dedicated-platform pattern.
+#   ORANGEPIZERO2_FLAVOR = both (DEFAULT) | live | installer
+ORANGEPIZERO2_FLAVOR ?= both
+ORANGEPIZERO2_PASS    := ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
+
 .DEFAULT_GOAL := help
 .PHONY: help menu clean build-all build-everything matrix-check pentest pentest-seed rebuild \
-        rpi x86 omnibus frite frite-live frite-installer jetson \
+        rpi x86 omnibus frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
+        orangepizero2 orangepizero2-live orangepizero2-installer \
         flash qemu qemu-rpi qemu-x86 \
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
@@ -282,10 +335,16 @@ help: ## list targets
 	@echo "                          make prod    (ENV=prod, real domain — creds from keys USB)"
 	@echo "  Output:     products land in ./out (WORK_DIR=$(CURDIR)/out; local + gitignored)."
 	@echo "              Per-arch build trees: ./out/snap-build-pi5 + ./out/snap-build-x86"
-	@echo "              + ./out/snap-build-frite + ./out/snap-build-jetson (never share a sysroot)."
-	@echo "  Platforms:  rpi (3 roles) | x86 (nodes+omnibus+edge_ai+clients+standalone) |"
+	@echo "              + ./out/snap-build-frite + ./out/snap-build-jetson + ./out/snap-build-orangepi5"
+	@echo "              + ./out/snap-build-orangepizero2 (never share a sysroot)."
+	@echo "  Platforms:  rpi (3 cluster roles + rpi-desktop client; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]) |"
+	@echo "              x86 (nodes+omnibus+edge_ai+clients+standalone) |"
 	@echo "              frite (arm64 light desktop) | jetson (arm64 Tegra edge-AI — EXPERIMENTAL,"
-	@echo "              JETSON_ROLE=edge_ai|gpu-host|full|desktop, hardware validation pending)."
+	@echo "              JETSON_ROLE=edge_ai|gpu-host|full|desktop, hardware validation pending) |"
+	@echo "              orangepi5 (arm64 Rockchip RK3588/RK3588S light desktop — EXPERIMENTAL,"
+	@echo "              ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5, hardware validation pending) |"
+	@echo "              orangepizero2 (arm64 Allwinner H616 HEADLESS APPLIANCE — EXPERIMENTAL,"
+	@echo "              no desktop mode ever — see specs-orangepi-zero2/README.md, hardware validation pending)."
 	@echo "  Matrix:     make build-everything = the FULL documented matrix (honors ENV);"
 	@echo "              make matrix-check = dry-run validate every role/flag combo via the"
 	@echo "              builders' --print-plan (no root, no writes; tests/build-matrix/check.sh)."
@@ -352,12 +411,12 @@ else
 	$(chown-artifacts)
 endif
 
-rpi: ## build all 3 Pi roles (.img + .fs.tar.xz each)
+rpi: ## build all 3 Pi cluster roles (.img + .fs.tar.xz each; RPI_BOARD=rpi5 [DEFAULT] | rpi4 — rpi3 is desktop-only, use rpi-desktop instead)
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make rpi NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
+	$(DOCKER_RUN) make rpi NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) RPI_BOARD='$(RPI_BOARD)' $(BRAND_PASS)
 else
-	@for r in $(RPI_ROLES); do echo "==> Pi $$r"; $(RPI) --role $$r || exit 1; done
+	@for r in $(RPI_ROLES); do echo "==> Pi $$r ($(RPI_BOARD))"; $(RPI) --role $$r || exit 1; done
 	$(chown-artifacts)
 endif
 
@@ -381,41 +440,55 @@ endif
 
 # Extra builder flags threaded to the standalone-desktop targets (the menu / CLI
 # passes e.g. STANDALONE_FLAGS='--local-user alice --local-pass s3cret --nvidia-driver proprietary').
+# Exported (mirrors CA_KEY_PASS above) so the Docker-dispatch recipes below can
+# forward it via DOCKER_RUN's `-e STANDALONE_FLAGS` instead of re-splicing
+# '$(STANDALONE_FLAGS)' as literal recipe text: a value containing an embedded
+# single quote (a realistic diceware/strong password character) would close
+# that quote early and let the remainder of the string execute as separate
+# shell commands on the HOST, before docker even starts. `export` here makes
+# this safe regardless of whether STANDALONE_FLAGS arrived as a command-line
+# var (`make ... STANDALONE_FLAGS=...`) or from the environment — either way
+# each recipe's OWN unquoted `$(STANDALONE_FLAGS)` splice (native execution,
+# e.g. `$(RPI) --role $* $(STANDALONE_FLAGS)`) still requires any secret VALUE
+# folded into it to be shell-quoted by whoever composed it (see
+# scripts/build-menu.sh's _shell_quote()) — this export only closes the
+# Docker-dispatch hop's OWN additional, buggier re-quoting.
 STANDALONE_FLAGS ?=
+export STANDALONE_FLAGS
 
 x86-standalone: ## build BOTH hardened standalone NVIDIA desktops (thin+thick; LUKS FDE installer + all 4 artifacts)
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make x86-standalone NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) STANDALONE_FLAGS='$(STANDALONE_FLAGS)' $(BRAND_PASS)
+	$(DOCKER_RUN) make x86-standalone NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
 else
 	@for r in standalone-thin standalone-thick; do echo "==> x86 $$r"; $(X86) --role $$r $(STANDALONE_FLAGS) || exit 1; done
 	$(chown-artifacts)
 endif
 
-rpi-%: ## build ONE Pi role: make rpi-frontend  (add IMG_FLAGS='--no-iso' etc.)
+rpi-%: ## build ONE Pi role: make rpi-frontend | rpi-desktop  (add IMG_FLAGS='--no-iso' etc.; RPI_BOARD=rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]; STANDALONE_FLAGS='--standalone --local-user … --local-pass …' for rpi-desktop)
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make rpi-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
+	$(DOCKER_RUN) make rpi-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) RPI_BOARD='$(RPI_BOARD)' $(BRAND_PASS)
 else
-	$(RPI) --role $*
+	@$(RPI) --role $* $(STANDALONE_FLAGS)
 	$(chown-artifacts)
 endif
 
 x86-%: ## build ONE x86 role: make x86-be+gpu | x86-pki | x86-standalone-thin (STANDALONE_FLAGS='--local-user … --nvidia')
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make x86-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) STANDALONE_FLAGS='$(STANDALONE_FLAGS)' $(BRAND_PASS)
+	$(DOCKER_RUN) make x86-$* NATIVE=1 WORK_DIR=/out IMG_FLAGS='$(IMG_FLAGS)' JOBS=$(JOBS) $(BRAND_PASS)
 else
-	$(X86) --role $* $(STANDALONE_FLAGS)
+	@$(X86) --role $* $(STANDALONE_FLAGS)
 	$(chown-artifacts)
 endif
 
 frite: ## build the Frite light desktop (FRITE_BOARD=la-frite|le-potato, FRITE_FLAVOR=both|live|installer, FRITE_DESKTOP=light|none; STANDALONE_FLAGS='--enable-wifi …' appended verbatim)
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make frite NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' STANDALONE_FLAGS='$(STANDALONE_FLAGS)' $(BRAND_PASS) $(FRITE_PASS)
+	$(DOCKER_RUN) make frite NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(FRITE_PASS)
 else
-	$(FRITE_BUILD) --board $(FRITE_BOARD) --flavor $(FRITE_FLAVOR) --desktop $(FRITE_DESKTOP) $(STANDALONE_FLAGS)
+	@$(FRITE_BUILD) --board $(FRITE_BOARD) --flavor $(FRITE_FLAVOR) --desktop $(FRITE_DESKTOP) $(STANDALONE_FLAGS)
 	$(chown-artifacts)
 endif
 
@@ -428,33 +501,65 @@ frite-installer: ## build the Frite light desktop INSTALLER image only (writes t
 jetson: ## build the Jetson Orin edge-AI image (JETSON_ROLE=edge_ai|gpu-host|full|desktop; EXPERIMENTAL; STANDALONE_FLAGS='--enable-wifi …')
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make jetson NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' STANDALONE_FLAGS='$(STANDALONE_FLAGS)' $(BRAND_PASS) $(JETSON_PASS)
+	$(DOCKER_RUN) make jetson NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(JETSON_PASS)
 else
-	$(JETSON_BUILD) --role $(JETSON_ROLE) --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS)
+	@$(JETSON_BUILD) --role $(JETSON_ROLE) --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS)
 	$(chown-artifacts)
 endif
 
 jetson-%: ## build ONE Jetson role: make jetson-edge_ai | jetson-gpu-host | jetson-full | jetson-desktop (STANDALONE_FLAGS appended verbatim)
 ifndef NATIVE
 	$(MAKE) ensure-image
-	$(DOCKER_RUN) make jetson-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' STANDALONE_FLAGS='$(STANDALONE_FLAGS)' $(BRAND_PASS) $(JETSON_PASS)
+	$(DOCKER_RUN) make jetson-$* NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(JETSON_PASS)
 else
-	$(JETSON_BUILD) --role $* --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS)
+	@$(JETSON_BUILD) --role $* --board $(JETSON_BOARD) --kernel-flavor $(JETSON_KERNEL_FLAVOR) $(STANDALONE_FLAGS)
 	$(chown-artifacts)
 endif
+
+orangepi5: ## build the Orange Pi 5 light desktop (EXPERIMENTAL; ORANGEPI5_BOARD=orange-pi-5-plus|orange-pi-5, ORANGEPI5_FLAVOR=both|live|installer; STANDALONE_FLAGS='--standalone …' appended verbatim)
+ifndef NATIVE
+	$(MAKE) ensure-image
+	$(DOCKER_RUN) make orangepi5 NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPI5_PASS)
+else
+	@$(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --flavor $(ORANGEPI5_FLAVOR) $(STANDALONE_FLAGS)
+	$(chown-artifacts)
+endif
+
+orangepi5-live: ## build the Orange Pi 5 light desktop LIVE image only (boots ephemerally off USB/microSD)
+	$(MAKE) orangepi5 ORANGEPI5_FLAVOR=live
+
+orangepi5-installer: ## build the Orange Pi 5 light desktop INSTALLER image only (writes to eMMC/microSD/NVMe)
+	$(MAKE) orangepi5 ORANGEPI5_FLAVOR=installer
+
+orangepizero2: ## build the Orange Pi Zero 2 HEADLESS APPLIANCE (EXPERIMENTAL; no desktop mode ever; ORANGEPIZERO2_FLAVOR=both|live|installer; STANDALONE_FLAGS='--standalone …' appended verbatim)
+ifndef NATIVE
+	$(MAKE) ensure-image
+	$(DOCKER_RUN) make orangepizero2 NATIVE=1 WORK_DIR=/out JOBS=$(JOBS) IMG_FLAGS='$(IMG_FLAGS)' $(BRAND_PASS) $(ORANGEPIZERO2_PASS)
+else
+	@$(ORANGEPIZERO2_BUILD) --flavor $(ORANGEPIZERO2_FLAVOR) $(STANDALONE_FLAGS)
+	$(chown-artifacts)
+endif
+
+orangepizero2-live: ## build the Orange Pi Zero 2 headless appliance LIVE image only (boots ephemerally off microSD/USB)
+	$(MAKE) orangepizero2 ORANGEPIZERO2_FLAVOR=live
+
+orangepizero2-installer: ## build the Orange Pi Zero 2 headless appliance INSTALLER image only (writes to microSD/USB)
+	$(MAKE) orangepizero2 ORANGEPIZERO2_FLAVOR=installer
 
 # build-everything delegates to build-all with the ROLE-SELECTOR knobs set on the
 # sub-make COMMAND LINE (not as env prefixes: $(ALL)'s own ROLESET_ENVVARS would
 # re-assign the empty defaults AFTER an env prefix and clobber it). Command-line
 # make vars override the `?=` defaults inside the sub-make, so ROLESET_ENVVARS is
 # rebuilt there with the full-matrix values; ENV/BRAND/IMG_FLAGS pass through.
-build-everything: ## build the FULL documented matrix: 3 Pi + all 12 x86 (nodes+omnibus+edge_ai+clients+standalone incl. unaffiliated) + Frite + Jetson (honors ENV=test|prod)
+build-everything: ## build the FULL documented matrix: 3 Pi + all 12 x86 (nodes+omnibus+edge_ai+clients+standalone incl. unaffiliated) + Frite + Jetson + Orange Pi 5 + Orange Pi Zero 2 (honors ENV=test|prod)
 	$(MAKE) build-all \
 	  X86_ROLES='$(X86_EVERY_ROLE)' \
 	  FRITE=1 FRITE_BOARD='$(FRITE_BOARD)' FRITE_FLAVOR='$(FRITE_FLAVOR)' \
 	  FRITE_DESKTOP='$(FRITE_DESKTOP)' \
 	  JETSON=1 JETSON_ROLES='edge_ai gpu-host full desktop' \
-	  JETSON_BOARD='$(JETSON_BOARD)' JETSON_KERNEL_FLAVOR='$(JETSON_KERNEL_FLAVOR)'
+	  JETSON_BOARD='$(JETSON_BOARD)' JETSON_KERNEL_FLAVOR='$(JETSON_KERNEL_FLAVOR)' \
+	  ORANGEPI5=1 ORANGEPI5_BOARD='$(ORANGEPI5_BOARD)' ORANGEPI5_FLAVOR='$(ORANGEPI5_FLAVOR)' \
+	  ORANGEPIZERO2=1 ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
 
 matrix-check: ## dry-run validate the whole build matrix via --print-plan (tests/build-matrix/check.sh)
 	@test -f tests/build-matrix/check.sh \

@@ -235,6 +235,103 @@ The posture is also available as orthogonal flags on the `laptop`/`chromebook`/
 
 See `build-x86-host-stage4.sh --help` for the full flag list.
 
+## ARM platforms (Frite, Raspberry Pi 5/4/3, Jetson, Orange Pi 5, Orange Pi Zero 2)
+
+`--standalone`/`--local-user`/`--local-pass`/`--encrypt-root` are **not x86-only**
+— every ARM builder **except Jetson** (see below) composes them onto its own
+desktop-shaped role the same way x86 does, via `--role desktop --standalone`:
+
+```sh
+./build-frite-stage4.sh    --board la-frite --standalone --encrypt-root \
+  --local-user alice --local-pass s3cret --flavor both
+./build-rpi5-stage4.sh     --role desktop --standalone --encrypt-root \
+  --local-user alice --local-pass s3cret                # add --board rpi4 | rpi3
+./build-orangepi5-stage4.sh --board orange-pi-5-plus --standalone --encrypt-root \
+  --local-user alice --local-pass s3cret --flavor both
+```
+
+`--standalone` cascades `SKIP_MESH=true SKIP_TAILSCALE=true` on every platform,
+exactly like x86 — no mesh/tailnet/Casdoor SSO dependency either way.
+
+### LUKS2 install model: cross-host vs. on-device
+
+Two genuinely different install stories, both real, both correct for their
+hardware:
+
+| Platform | Format happens on | Unlock happens on | PBKDF cost pinned? |
+|---|---|---|---|
+| x86 | the target itself (installer boots on it) | same | no |
+| Frite | the target itself (live→installer flow) | same | **no** |
+| Orange Pi 5 / 5 Plus | the target itself (live→installer flow) | same | **no** |
+| Orange Pi Zero 2 | the target itself (live→installer flow) | same | **no** |
+| RPi5 (rpi5/rpi4/rpi3 boards) | a **build/dev host**, writing the SD card/eMMC | **the Pi**, a different machine | **yes** — `--pbkdf-memory 262144 --iter-time 2000 --pbkdf-parallel 4` |
+| Jetson Orin | n/a — **`--encrypt-root` is blocked outright**, see below | n/a | n/a |
+
+The rule: `cryptsetup luksFormat`'s `argon2id` cost auto-benchmark measures
+*the machine running the format*. When that's also the machine that will
+later unlock the disk (Frite/Orange Pi 5/Orange Pi Zero 2's on-device
+live-then-install flow), the benchmark is trustworthy and pinning it would
+only make first-unlock slower for no security benefit. When format and unlock
+happen on **different** hardware (RPi5's installer runs on a dev host writing
+media the Pi itself will later boot), an unpinned benchmark tunes the KDF cost
+to the *wrong* machine — so RPi5 pins fixed, cross-platform-safe cost
+parameters instead.
+
+### Jetson: `--encrypt-root` is BLOCKED — a confirmed boot-chain break, not a deferred gap
+
+Unlike every other platform, Jetson has **no live/installer split at all**
+AND **no separate boot partition** — `build_img()` writes a single ext4
+partition (`JETSON_ROOT`) that holds the *entire* filesystem, including
+`/boot/extlinux/extlinux.conf`. The Orin's NVIDIA UEFI (`L4TLauncher`)
+distro-boots that file by reading it directly off the raw partition, before
+Linux or dracut ever run (`specs-jetson/boot/README.md`). LUKS2-encrypting
+that single partition would make the firmware unable to parse a filesystem
+there at all — it could never even locate a kernel to boot, regardless of
+how correct the rest of the LUKS/dracut plumbing is. Every other platform in
+this repo (RPi5/Frite/Orange Pi 5/Orange Pi Zero 2) avoids exactly this by
+keeping an **unencrypted** boot partition split from the LUKS2 root.
+
+This is a confirmed architectural fact (verified against this platform's own
+boot documentation), not a hardware-unverified risk — so `build-jetson-stage4.sh`
+hard-blocks `--encrypt-root` (and, by extension, `--standalone`, which forces
+`--encrypt-root` on) with a clear error rather than silently producing an
+image that cannot boot. Fixing this for real needs a separate unencrypted
+boot partition (mirroring RPi5's split) — a distinct, larger undertaking of
+its own, deliberately **not** attempted here. Until that lands, Jetson has
+**no standalone/LUKS story at all** (on top of its pre-existing, separately
+deferred no-live/installer-split gap).
+
+### Orange Pi Zero 2: headless, so no lightdm/desktop session
+
+Orange Pi Zero 2's `--standalone` composes onto its **`appliance`** role, not a
+`desktop` role — this platform has no GPU-driven display path at all (the
+Allwinner H616's display engine has no mainline kernel driver), so "local
+user, no mesh" here means an SSH/console login on a headless box, not a
+graphical greeter. Every other guarantee (LUKS2 FDE, local user + hashed
+password, no mesh/SSO) still applies identically.
+
+Because this is the only standalone-capable platform with **no GUI console at
+all**, `--standalone` also writes a `00-standalone-password-auth.conf` sshd
+drop-in that re-enables `PasswordAuthentication` for the local (non-root)
+user — standalone mode has no mesh, so there is no KEYS-USB
+`authorized_keys` distribution to provision an SSH key instead, and without
+this override the local user's password would be unusable for login by any
+means short of a physical serial-console cable. Root SSH login is
+unaffected — it stays governed by `--permit-root-login`/`00-root-login.conf`
+exactly as on every other platform.
+
+### RPi 3: desktop-only board
+
+`--board rpi3` on `build-rpi5-stage4.sh` **only** accepts `--role desktop` (1 GB
+RAM has no headroom for the k8s cluster-node stack) — the builder hard-errors
+on every other role for that board. This makes `--standalone` on Pi 3 a very
+natural fit: the desktop role is the *only* role it builds, and standalone is
+the desktop role's most complete configuration.
+
+See each platform's own `--help` (or `specs-<platform>/README.md` for the
+EXPERIMENTAL ones — Jetson, Orange Pi 5, Orange Pi Zero 2) for its full flag
+list; the composability contract above is identical to x86's.
+
 ## Home directory provisioning
 
 | `--home-mode` | What happens at install |
@@ -388,7 +485,8 @@ auto-pick `--gpu-driver`, Wi-Fi/BT, and a profile.
 wizard instead of raw flags, and runs a **local mesh node** from the system tray. It drives
 the build natively on Gentoo or via Docker elsewhere, covers the whole flag surface —
 including a **role & platform picker** (both standalone variants, the client devices, every
-cluster role, and the arm64 Frite/Jetson platforms), LUKS `--encrypt-root` + unlock factors,
+cluster role, and the arm64 Frite / RPi5 family (rpi5/rpi4/rpi3 boards) / Jetson / Orange Pi 5 /
+Orange Pi Zero 2 platforms), LUKS `--encrypt-root` + unlock factors,
 Steam delivery and desktop weight — accepts an admin **key-zip**, and (superadmin) sets up
 domains + users before building. Plaintext secrets (`--local-pass`/`--luks-pass`) are never
 written to a saved config. See [studio/README.md](../studio/README.md).

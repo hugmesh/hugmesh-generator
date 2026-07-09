@@ -60,10 +60,12 @@ _fail() { # _fail CHANNEL ROW REASON [OUTPUT-FILE]
 # builder script per platform
 builder_for() {
     case "$1" in
-        rpi5)   echo build-rpi5-stage4.sh ;;
-        x86)    echo build-x86-host-stage4.sh ;;
-        frite)  echo build-frite-stage4.sh ;;
-        jetson) echo build-jetson-stage4.sh ;;
+        rpi5)      echo build-rpi5-stage4.sh ;;
+        x86)       echo build-x86-host-stage4.sh ;;
+        frite)     echo build-frite-stage4.sh ;;
+        jetson)    echo build-jetson-stage4.sh ;;
+        orangepi5) echo build-orangepi5-stage4.sh ;;
+        orangepizero2) echo build-orangepi-zero2-stage4.sh ;;
         *)      return 1 ;;
     esac
 }
@@ -74,27 +76,68 @@ check_cli() { # platform role env board flavor desktop
     local row="cli ${platform}/${role}/${env}${board:+ board=${board}}${flavor:+ flavor=${flavor}}${desktop:+ desktop=${desktop}}"
     local builder out="${TMP_DIR}/cli.out" args=()
     builder="$(builder_for "${platform}")"
+    # standalone-shaped matrix rows encode the ARM standalone-posture JOB-channel
+    # HARDWARE_CLASS grammar (docker/build-image.sh's header comment): rpi5's
+    # "standalone-desktop" role and frite/orangepi5/orangepizero2's "standalone"
+    # flavor are JOB-channel-ONLY tokens, not real builder vocabulary (the
+    # builders only ever take --role desktop / --flavor installer plus a
+    # SEPARATE --standalone flag) — translate them into the REAL invocation
+    # here and assert against the REAL resolved plan values, never the raw
+    # HARDWARE_CLASS-shaped token (which the real builder would reject).
+    local want_role="${role}" want_flavor="${flavor}" standalone_probe=false
+    if [ "${platform}" = rpi5 ] && [ "${role}" = standalone-desktop ]; then
+        want_role="desktop"
+        standalone_probe=true
+    fi
+    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ]; } \
+       && [ "${flavor}" = standalone ]; then
+        want_flavor="installer"
+        standalone_probe=true
+    fi
     case "${platform}" in
-        frite)  args=(--board "${board}" --flavor "${flavor}" --desktop "${desktop}") ;;
-        jetson) args=(--role "${role}" --board "${board}") ;;
+        frite)     args=(--board "${board}" --flavor "${want_flavor}" --desktop "${desktop}") ;;
+        jetson)    args=(--role "${role}" --board "${board}") ;;
+        rpi5)      args=(--role "${want_role}"); [ -n "${board}" ] && args+=(--board "${board}") ;;
+        orangepi5) args=(--board "${board}" --flavor "${want_flavor}") ;;
+        orangepizero2) args=(--flavor "${want_flavor}") ;;
         *)      args=(--role "${role}") ;;
     esac
+    if ${standalone_probe}; then
+        args+=(--standalone --local-user matrixprobe)
+    fi
     args+=(--env "${env}" --print-plan)
     if ! "./${builder}" "${args[@]}" >"${out}" 2>&1; then
         _fail CLI "${row}" "builder exited non-zero" "${out}"; CLI_FAIL=$((CLI_FAIL+1)); return
     fi
-    local want_role="${role}"
     local miss=""
     grep -qx "PLAN_BUILDER=${builder}"  "${out}" || miss+=" PLAN_BUILDER=${builder}"
     grep -qx "PLAN_ROLE=${want_role}"   "${out}" || miss+=" PLAN_ROLE=${want_role}"
     grep -qx "PLAN_ENV=${env}"          "${out}" || miss+=" PLAN_ENV=${env}"
+    if ${standalone_probe}; then
+        grep -qx "PLAN_STANDALONE=true" "${out}" || miss+=" PLAN_STANDALONE=true"
+    fi
     if [ "${platform}" = frite ]; then
         grep -qx "PLAN_BOARD=${board}"     "${out}" || miss+=" PLAN_BOARD=${board}"
-        grep -qx "PLAN_FLAVOR=${flavor}"   "${out}" || miss+=" PLAN_FLAVOR=${flavor}"
+        grep -qx "PLAN_FLAVOR=${want_flavor}"   "${out}" || miss+=" PLAN_FLAVOR=${want_flavor}"
         grep -qx "PLAN_DESKTOP=${desktop}" "${out}" || miss+=" PLAN_DESKTOP=${desktop}"
     fi
     if [ "${platform}" = jetson ]; then
         grep -qx "PLAN_BOARD=${board}" "${out}" || miss+=" PLAN_BOARD=${board}"
+    fi
+    if [ "${platform}" = rpi5 ] && [ -n "${board}" ]; then
+        # rpi5 has NO dedicated PLAN_BOARD key (reuses PLAN_PLATFORM so the
+        # DEFAULT board's --print-plan output stays byte-identical to before
+        # this axis existed — see build-rpi5-stage4.sh's Phase 6 commit message).
+        grep -qx "PLAN_PLATFORM=${board}" "${out}" || miss+=" PLAN_PLATFORM=${board}"
+    fi
+    if [ "${platform}" = orangepi5 ]; then
+        grep -qx "PLAN_BOARD=${board}"   "${out}" || miss+=" PLAN_BOARD=${board}"
+        grep -qx "PLAN_FLAVOR=${want_flavor}" "${out}" || miss+=" PLAN_FLAVOR=${want_flavor}"
+    fi
+    if [ "${platform}" = orangepizero2 ]; then
+        # No PLAN_BOARD key at all — this platform has NO --board axis (a
+        # single board, unlike Frite/Orange-Pi-5's board tables).
+        grep -qx "PLAN_FLAVOR=${want_flavor}" "${out}" || miss+=" PLAN_FLAVOR=${want_flavor}"
     fi
     if [ -n "${miss}" ]; then
         _fail CLI "${row}" "plan keys missing/mismatched:${miss}" "${out}"; CLI_FAIL=$((CLI_FAIL+1))
@@ -109,11 +152,15 @@ check_make() { # platform role env board flavor desktop
     local target builder out="${TMP_DIR}/make.out" vars=()
     builder="$(builder_for "${platform}")"
     case "${platform}" in
-        rpi5)   target="rpi-${role}" ;;
-        x86)    target="x86-${role}" ;;
-        jetson) target="jetson-${role}"; vars=("JETSON_BOARD=${board}") ;;
-        frite)  target="frite"
-                vars=("FRITE_BOARD=${board}" "FRITE_FLAVOR=${flavor}" "FRITE_DESKTOP=${desktop}") ;;
+        rpi5)      target="rpi-${role}"; [ -n "${board}" ] && vars=("RPI_BOARD=${board}") ;;
+        x86)       target="x86-${role}" ;;
+        jetson)    target="jetson-${role}"; vars=("JETSON_BOARD=${board}") ;;
+        frite)     target="frite"
+                   vars=("FRITE_BOARD=${board}" "FRITE_FLAVOR=${flavor}" "FRITE_DESKTOP=${desktop}") ;;
+        orangepi5) target="orangepi5"
+                   vars=("ORANGEPI5_BOARD=${board}" "ORANGEPI5_FLAVOR=${flavor}") ;;
+        orangepizero2) target="orangepizero2"
+                   vars=("ORANGEPIZERO2_FLAVOR=${flavor}") ;;
     esac
     local row="make ${target} ENV=${env}${vars[0]:+ ${vars[*]}}"
     if ! make -n "${target}" NATIVE=1 "ENV=${env}" "${vars[@]}" >"${out}" 2>&1; then
@@ -131,6 +178,22 @@ check_make() { # platform role env board flavor desktop
         jetson)
             grep -q -- "--role ${role}"   "${out}" || miss+=" '--role ${role}'"
             grep -q -- "--board ${board}" "${out}" || miss+=" '--board ${board}'"
+            ;;
+        orangepi5)
+            grep -q -- "--board ${board}"   "${out}" || miss+=" '--board ${board}'"
+            grep -q -- "--flavor ${flavor}" "${out}" || miss+=" '--flavor ${flavor}'"
+            ;;
+        rpi5)
+            grep -q -- "--role ${role}" "${out}" || miss+=" '--role ${role}'"
+            # rpi5's board rows don't all set a board (rpi5-default rows have
+            # board="" -> "-" in the TSV), so only assert --board when the row
+            # actually specifies one (mirrors check_cli's identical guard).
+            if [ -n "${board}" ]; then
+                grep -q -- "--board ${board}" "${out}" || miss+=" '--board ${board}'"
+            fi
+            ;;
+        orangepizero2)
+            grep -q -- "--flavor ${flavor}" "${out}" || miss+=" '--flavor ${flavor}'"
             ;;
         *)
             grep -q -- "--role ${role}" "${out}" || miss+=" '--role ${role}'"
@@ -172,6 +235,8 @@ reset_opts() {
     OPT_HOME_SEED="" OPT_HOME_ARCHIVE=""
     OPT_FRITE_BOARD=la-frite OPT_FRITE_FLAVOR=both OPT_FRITE_DESKTOP=light
     OPT_JETSON_BOARD=orin-nano OPT_JETSON_KFLAVOR=mainline
+    OPT_ORANGEPI5_BOARD=orange-pi-5-plus OPT_ORANGEPI5_FLAVOR=both OPT_ORANGEPI5_FLEET=no
+    OPT_ORANGEPIZERO2_FLAVOR=both
     OPT_SA_GPU=all-free OPT_SA_STEAM=native OPT_SA_MEDIA=yes OPT_SA_USER=snap
     OPT_SA_KEYFILE=none OPT_SA_YUBIKEY=none OPT_SA_THEME="" OPT_SA_PROXY=yes
     OPT_SA_SNORT=yes OPT_SA_AIDE=no OPT_SA_KBUILTIN=no OPT_SA_EGRESS=""
@@ -185,12 +250,21 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
     reset_opts
     OPT_ENV="${env}"
     case "${platform}" in
-        rpi5)   target="rpi-${role}" ;;
+        rpi5)   target="rpi-${role}"
+                # board="" (the rpi5-default rows) must resolve to the menu's
+                # own default ("rpi5"), same as an operator who never opened
+                # the Pi-board picker at all — mirrors OPT_RPI_BOARD's own
+                # top-level default in build-menu.sh.
+                OPT_RPI_BOARD="${board:-rpi5}" ;;
         x86)    target="x86-${role}" ;;
         jetson) target="jetson-${role}"
                 OPT_JETSON_BOARD="${board}" ;;
         frite)  target="frite"
                 OPT_FRITE_BOARD="${board}" OPT_FRITE_FLAVOR="${flavor}" OPT_FRITE_DESKTOP="${desktop}" ;;
+        orangepi5) target="orangepi5"
+                OPT_ORANGEPI5_BOARD="${board}" OPT_ORANGEPI5_FLAVOR="${flavor}" ;;
+        orangepizero2) target="orangepizero2"
+                OPT_ORANGEPIZERO2_FLAVOR="${flavor}" ;;
         *)      echo "MENU FAIL ${platform}/${role}/${env} unknown platform"; continue ;;
     esac
     row="${target} ENV=${env}"
@@ -198,6 +272,12 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
     miss=""
     [ "${RUN_MAKE[0]}" = "${target}" ] || miss+=" target(got ${RUN_MAKE[0]})"
     has_elem "ENV=${env}" || miss+=" ENV=${env}"
+    if [ "${platform}" = rpi5 ]; then
+        # RPI_BOARD is ALWAYS emitted for rpi/rpi-% targets (unlike the CLI
+        # channel's --board flag, which is only emitted for a non-default
+        # board) — see build-menu.sh's build_make_cmd.
+        has_elem "RPI_BOARD=${OPT_RPI_BOARD}" || miss+=" RPI_BOARD=${OPT_RPI_BOARD}"
+    fi
     if [ "${platform}" = frite ]; then
         has_elem "FRITE_BOARD=${board}"     || miss+=" FRITE_BOARD=${board}"
         has_elem "FRITE_FLAVOR=${flavor}"   || miss+=" FRITE_FLAVOR=${flavor}"
@@ -205,6 +285,13 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
     fi
     if [ "${platform}" = jetson ]; then
         has_elem "JETSON_BOARD=${board}" || miss+=" JETSON_BOARD=${board}"
+    fi
+    if [ "${platform}" = orangepi5 ]; then
+        has_elem "ORANGEPI5_BOARD=${board}"   || miss+=" ORANGEPI5_BOARD=${board}"
+        has_elem "ORANGEPI5_FLAVOR=${flavor}" || miss+=" ORANGEPI5_FLAVOR=${flavor}"
+    fi
+    if [ "${platform}" = orangepizero2 ]; then
+        has_elem "ORANGEPIZERO2_FLAVOR=${flavor}" || miss+=" ORANGEPIZERO2_FLAVOR=${flavor}"
     fi
     if [ -n "${miss}" ]; then
         echo "MENU FAIL ${row} — missing:${miss} (argv: ${RUN_MAKE[*]})"
@@ -220,7 +307,7 @@ done < "${MATRIX}"
 # land in the builder argv on every platform. Catches the silent-drop class
 # where the menu emits a make-var (IMG_FLAGS= / STANDALONE_FLAGS=) that the
 # target's recipe never consumes (the jetson/frite re-verify findings).
-for target in rpi-backend x86-pki frite jetson-edge_ai; do
+for target in rpi-backend x86-pki frite jetson-edge_ai orangepi5 orangepizero2; do
     reset_opts
     OPT_IMGFLAGS='--menu-imgflags-probe'
     OPT_EXTRA_FLAGS='--menu-extraflags-probe'
@@ -264,6 +351,37 @@ for target in build-all build-everything; do
     fi
 done
 
+# ── ROLESET_ENVVARS docker-boundary threading: RPI_BOARD/RPI_ROLES/SKIP_RPI/ ──
+# ORANGEPIZERO2* — a real bug: these are set on the Makefile command line
+# directly (RPI_BOARD/RPI_ROLES/SKIP_RPI have no menu widget for the fleet
+# targets at all, unlike the single-role rpi-%/rpi targets — so the FLEETTHR
+# probe above, which drives build_make_cmd(), can never exercise them), NOT
+# routed through build_make_cmd()/the menu, so this probes `make -n` directly
+# instead. A prior version of ROLESET_ENVVARS omitted all four (plus
+# ORANGEPIZERO2/ORANGEPIZERO2_FLAVOR, which build-everything's OWN recipe DOES
+# set unconditionally but which then still vanished at this exact boundary),
+# so `make build-everything RPI_BOARD=rpi4 RPI_ROLES="..."` silently built the
+# default rpi5/pki+backend+frontend set and dropped Orange Pi Zero 2 no matter
+# what was requested — on BOTH the native leg ($(ALL) invoking
+# build-all-roles.sh directly) and the Docker leg (the in-container `make`
+# re-invoke), since only tokens literally baked into ROLESET_ENVVARS survive
+# either boundary.
+rolesetthr_recipe="$(make -n build-everything RPI_BOARD=rpi4 RPI_ROLES="pki backend frontend desktop" SKIP_RPI=0 2>&1)" || {
+    echo "ROLESETTHR FAIL build-everything — make -n exited non-zero"
+}
+if [ -n "${rolesetthr_recipe:-}" ]; then
+    miss=""
+    case "${rolesetthr_recipe}" in *"RPI_BOARD='rpi4'"*) ;; *) miss+=" RPI_BOARD" ;; esac
+    case "${rolesetthr_recipe}" in *"RPI_ROLES='pki backend frontend desktop'"*) ;; *) miss+=" RPI_ROLES" ;; esac
+    case "${rolesetthr_recipe}" in *"ORANGEPIZERO2='1'"*) ;; *) miss+=" ORANGEPIZERO2" ;; esac
+    case "${rolesetthr_recipe}" in *"ORANGEPIZERO2_FLAVOR="*) ;; *) miss+=" ORANGEPIZERO2_FLAVOR" ;; esac
+    if [ -n "${miss}" ]; then
+        echo "ROLESETTHR FAIL build-everything — dropped at the docker-run boundary:${miss}"
+    else
+        echo "ROLESETTHR PASS build-everything"
+    fi
+fi
+
 # ── UNAFFILIATED MENU→MAKE threading probe ───────────────────────────────────
 # The unaffiliated desktop must thread --role standalone-unaffiliated into the
 # recipe and must NOT emit --theme even with the menu's persisted 'boogiepop'
@@ -289,11 +407,13 @@ MENU_EOF
     MENU_PASS=$(grep -c '^MENU PASS' "${out}" || true)
     MENU_FAIL=$(grep -c '^MENU FAIL' "${out}" || true)
     # the child's MENU→MAKE threading probes count toward the THRD bucket;
-    # FAIL-CLOSED like everything else: 4 probes expected, shortfall = failures.
+    # FAIL-CLOSED like everything else: 6 probes expected (rpi-backend, x86-pki,
+    # frite, jetson-edge_ai, orangepi5, orangepizero2 — see the probe list
+    # above; keep this count in sync with that list's length), shortfall = failures.
     local mthr_pass
     mthr_pass=$(grep -c '^MENUTHR PASS' "${out}" || true)
     THR_PASS=$((THR_PASS + mthr_pass))
-    THR_FAIL=$((THR_FAIL + 4 - mthr_pass))
+    THR_FAIL=$((THR_FAIL + 6 - mthr_pass))
     # same fail-closed accounting for the fleet-option (build-all/build-everything)
     # threading probes: 2 expected (one per fleet target).
     local fthr_pass
@@ -305,6 +425,12 @@ MENU_EOF
     uthr_pass=$(grep -c '^UNAFFTHR PASS' "${out}" || true)
     THR_PASS=$((THR_PASS + uthr_pass))
     THR_FAIL=$((THR_FAIL + 1 - uthr_pass))
+    # and for the ROLESET_ENVVARS docker-boundary probe (RPI_BOARD/RPI_ROLES/
+    # ORANGEPIZERO2*): 1 expected.
+    local rthr_pass
+    rthr_pass=$(grep -c '^ROLESETTHR PASS' "${out}" || true)
+    THR_PASS=$((THR_PASS + rthr_pass))
+    THR_FAIL=$((THR_FAIL + 1 - rthr_pass))
     # FAIL-CLOSED: a crashed/aborted menu child (source error, set -u trip, …)
     # must count as a channel failure, not as "0 rows = 0 failures" — otherwise
     # the 5-channels-per-cell guarantee silently degrades to 4 (the completeness
@@ -313,7 +439,7 @@ MENU_EOF
         _fail MENU "channel" "menu child exited ${rc}" "${TMP_DIR}/menu.err"
         MENU_FAIL=$((MENU_FAIL+1))
     fi
-    grep -E '^(MENU|MENUTHR|FLEETTHR|UNAFFTHR) FAIL' "${out}" >&2 || true
+    grep -E '^(MENU|MENUTHR|FLEETTHR|UNAFFTHR|ROLESETTHR) FAIL' "${out}" >&2 || true
 }
 
 # ── channel 4: GUI — snapdragon_studio --print-command (headless, Qt-free) ──────
@@ -329,6 +455,8 @@ gui_config_json() { # platform role env board flavor desktop -> stdout JSON
         frite)  mode=cloud; gui_role=frite ;;
         jetson) mode=mesh
                 [ "${role}" = desktop ] && gui_role=jetson-desktop ;;
+        orangepi5) mode=cloud; gui_role=orangepi5 ;;
+        orangepizero2) mode=cloud; gui_role=orangepizero2 ;;
         x86)    case "${role}" in
                     standalone-*)             mode=standalone ;;
                     laptop|chromebook|desktop) mode=cloud ;;
@@ -342,6 +470,16 @@ gui_config_json() { # platform role env board flavor desktop -> stdout JSON
     elif [ "${platform}" = jetson ]; then
         # the jetson board axis (the GUI's Jetson board combo writes the same key)
         printf ',"board":"%s"' "${board}"
+    elif [ "${platform}" = orangepi5 ]; then
+        printf ',"board":"%s","flavor":"%s"' "${board}" "${flavor}"
+    elif [ "${platform}" = rpi5 ] && [ -n "${board}" ]; then
+        # the rpi5 board axis (--board rpi4/rpi3; the rpi5-default rows have
+        # board="" and correctly emit NO "board" key at all, same as an
+        # operator who never touched the board field — ImageConfig.board
+        # defaults to "" -> no --board flag, the builder's own rpi5 default).
+        printf ',"board":"%s"' "${board}"
+    elif [ "${platform}" = orangepizero2 ]; then
+        printf ',"flavor":"%s"' "${flavor}"
     fi
     printf '}\n'
 }
@@ -363,9 +501,17 @@ check_gui() { # platform role env board flavor desktop
         grep -q -- "--board ${board}"     "${out}" || miss+=" '--board ${board}'"
         grep -q -- "--flavor ${flavor}"   "${out}" || miss+=" '--flavor ${flavor}'"
         grep -q -- "--desktop ${desktop}" "${out}" || miss+=" '--desktop ${desktop}'"
+    elif [ "${platform}" = orangepi5 ]; then
+        grep -q -- "--board ${board}"   "${out}" || miss+=" '--board ${board}'"
+        grep -q -- "--flavor ${flavor}" "${out}" || miss+=" '--flavor ${flavor}'"
+    elif [ "${platform}" = orangepizero2 ]; then
+        grep -q -- "--flavor ${flavor}" "${out}" || miss+=" '--flavor ${flavor}'"
     else
         grep -q -- "--role ${role}" "${out}" || miss+=" '--role ${role}'"
         if [ "${platform}" = jetson ]; then
+            grep -q -- "--board ${board}" "${out}" || miss+=" '--board ${board}'"
+        fi
+        if [ "${platform}" = rpi5 ] && [ -n "${board}" ]; then
             grep -q -- "--board ${board}" "${out}" || miss+=" '--board ${board}'"
         fi
     fi
@@ -397,7 +543,7 @@ run_job_channel() {
        || ! grep -q 'HARDWARE_CLASS' "${fn}" || ! grep -q 'PLATFORM=' "${fn}"; then
         _fail JOB "channel" "cannot extract resolve_build_target() from docker/build-image.sh — the whitelist format drifted; update this probe" "${fn}"
         JOB_FAIL=$((JOB_FAIL+1))
-        NEG_FAIL=$((NEG_FAIL+3))   # the 3 JOBNEG probes below never ran
+        NEG_FAIL=$((NEG_FAIL+5))   # the 5 JOBNEG probes below never ran
         return
     fi
     MATRIX="${MATRIX}" FN="${fn}" bash <<'JOB_EOF' >"${out}" 2>"${TMP_DIR}/job.err"
@@ -405,16 +551,20 @@ set -u
 # the extracted-verbatim resolve_build_target() + every variable it reads or
 # writes (mirrors build-image.sh's own top-level initialisation)
 HARDWARE_CLASS="" IMAGE_TYPE=""
-PLATFORM="" BUILD_ROLE="" FRITE_BOARD_OUT="" FRITE_FLAVOR_OUT=""
-JETSON_BOARD_OUT="" KEYS_ROLE=""
+PLATFORM="" BUILD_ROLE="" RPI5_BOARD_OUT="" RPI5_STANDALONE=false \
+    FRITE_BOARD_OUT="" FRITE_FLAVOR_OUT="" FRITE_STANDALONE=false \
+JETSON_BOARD_OUT="" ORANGEPI5_BOARD_OUT="" ORANGEPI5_FLAVOR_OUT="" ORANGEPI5_STANDALONE=false \
+    ORANGEPIZERO2_FLAVOR_OUT="" ORANGEPIZERO2_STANDALONE=false KEYS_ROLE=""
 # shellcheck disable=SC1090
 source "${FN}"
 
 # resolve HW TYPE — reset the output vars, then run the REAL worker function
 resolve() {
     HARDWARE_CLASS="$1" IMAGE_TYPE="$2"
-    PLATFORM="" BUILD_ROLE="" FRITE_BOARD_OUT="" FRITE_FLAVOR_OUT=""
-    JETSON_BOARD_OUT="" KEYS_ROLE=""
+    PLATFORM="" BUILD_ROLE="" RPI5_BOARD_OUT="" RPI5_STANDALONE=false \
+        FRITE_BOARD_OUT="" FRITE_FLAVOR_OUT="" FRITE_STANDALONE=false \
+    JETSON_BOARD_OUT="" ORANGEPI5_BOARD_OUT="" ORANGEPI5_FLAVOR_OUT="" ORANGEPI5_STANDALONE=false \
+        ORANGEPIZERO2_FLAVOR_OUT="" ORANGEPIZERO2_STANDALONE=false KEYS_ROLE=""
     resolve_build_target
 }
 
@@ -442,7 +592,7 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
     # desktop axis (the worker builds the builder default), so test/prod (and
     # light/none) rows deliberately probe the same whitelist cell.
     case "${platform}" in
-        rpi5)   hw="rpi5.${role}"; type=primary ;;
+        rpi5)   hw="rpi5.${role}${board:+.${board}}"; type=primary ;;
         x86)    hw="x86.${role/+/-}"
                 case "${role}" in
                     laptop|chromebook|desktop|standalone-*) type=client ;;
@@ -450,13 +600,17 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
                 esac ;;
         frite)  hw="frite.${board}.${flavor}"; type=client ;;
         jetson) hw="jetson.${role}.${board}"; type=primary ;;
+        orangepi5)     hw="orangepi5.${board}.${flavor}"; type=client ;;
+        orangepizero2) hw="orangepizero2.${flavor}"; type=client ;;
         *)      echo "JOB FAIL ${row} — unknown platform"; continue ;;
     esac
-    if [ "${platform}" = frite ] && [ "${flavor}" = both ]; then
+    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ]; } \
+       && [ "${flavor}" = both ]; then
         # flavor=both builds TWO artifacts; the worker's single-imageRef
         # ingest contract deliberately REJECTS it (build-image.sh's frite
-        # convention note). The documented behavior for this cell is a clean
-        # refusal — assert exactly that, never acceptance.
+        # convention note, mirrored by orangepi5/orangepizero2). The
+        # documented behavior for this cell is a clean refusal — assert
+        # exactly that, never acceptance.
         if resolve "${hw}" "${type}"; then
             echo "JOB FAIL ${row} — flavor=both must be rejected (single-imageRef ingest contract), got acceptance"
         else
@@ -468,19 +622,60 @@ while IFS=$'\t' read -r platform role env board flavor desktop; do
         echo "JOB FAIL ${row} — HARDWARE_CLASS=${hw} IMAGE_TYPE=${type} rejected (whitelist drifted from matrix.tsv?)"
         continue
     fi
+    # standalone-shaped rows (rpi5's "standalone-desktop" role / frite|
+    # orangepi5|orangepizero2's "standalone" flavor) resolve to a DIFFERENT
+    # real value than the row's raw token (role -> "desktop", flavor ->
+    # "installer") plus a *_STANDALONE flag going true — compute the expected
+    # values here instead of asserting the raw token verbatim.
+    expect_role="${role}"
+    expect_flavor="${flavor}"
+    expect_standalone=false
+    if [ "${platform}" = rpi5 ] && [ "${role}" = standalone-desktop ]; then
+        expect_role="desktop"
+        expect_standalone=true
+    fi
+    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ]; } \
+       && [ "${flavor}" = standalone ]; then
+        expect_flavor="installer"
+        expect_standalone=true
+    fi
     miss=""
     [ "${PLATFORM}" = "${platform}" ] || miss+=" PLATFORM(got '${PLATFORM}')"
     case "${platform}" in
+        rpi5)
+            expect_board="${board:-rpi5}"
+            [ "${BUILD_ROLE}" = "${expect_role}" ]          || miss+=" BUILD_ROLE(got '${BUILD_ROLE}')"
+            [ "${RPI5_BOARD_OUT}" = "${expect_board}" ] || miss+=" RPI5_BOARD_OUT(got '${RPI5_BOARD_OUT}')"
+            if ${expect_standalone}; then
+                [ "${RPI5_STANDALONE}" = true ] || miss+=" RPI5_STANDALONE(got '${RPI5_STANDALONE}')"
+            fi
+            ;;
         frite)
             [ "${FRITE_BOARD_OUT}" = "${board}" ]   || miss+=" FRITE_BOARD_OUT(got '${FRITE_BOARD_OUT}')"
-            [ "${FRITE_FLAVOR_OUT}" = "${flavor}" ] || miss+=" FRITE_FLAVOR_OUT(got '${FRITE_FLAVOR_OUT}')"
+            [ "${FRITE_FLAVOR_OUT}" = "${expect_flavor}" ] || miss+=" FRITE_FLAVOR_OUT(got '${FRITE_FLAVOR_OUT}')"
+            if ${expect_standalone}; then
+                [ "${FRITE_STANDALONE}" = true ] || miss+=" FRITE_STANDALONE(got '${FRITE_STANDALONE}')"
+            fi
             ;;
         jetson)
-            [ "${BUILD_ROLE}" = "${role}" ]        || miss+=" BUILD_ROLE(got '${BUILD_ROLE}')"
+            [ "${BUILD_ROLE}" = "${expect_role}" ]        || miss+=" BUILD_ROLE(got '${BUILD_ROLE}')"
             [ "${JETSON_BOARD_OUT}" = "${board}" ] || miss+=" JETSON_BOARD_OUT(got '${JETSON_BOARD_OUT}')"
             ;;
+        orangepi5)
+            [ "${ORANGEPI5_BOARD_OUT}" = "${board}" ]   || miss+=" ORANGEPI5_BOARD_OUT(got '${ORANGEPI5_BOARD_OUT}')"
+            [ "${ORANGEPI5_FLAVOR_OUT}" = "${expect_flavor}" ] || miss+=" ORANGEPI5_FLAVOR_OUT(got '${ORANGEPI5_FLAVOR_OUT}')"
+            if ${expect_standalone}; then
+                [ "${ORANGEPI5_STANDALONE}" = true ] || miss+=" ORANGEPI5_STANDALONE(got '${ORANGEPI5_STANDALONE}')"
+            fi
+            ;;
+        orangepizero2)
+            [ "${ORANGEPIZERO2_FLAVOR_OUT}" = "${expect_flavor}" ] || miss+=" ORANGEPIZERO2_FLAVOR_OUT(got '${ORANGEPIZERO2_FLAVOR_OUT}')"
+            if ${expect_standalone}; then
+                [ "${ORANGEPIZERO2_STANDALONE}" = true ] || miss+=" ORANGEPIZERO2_STANDALONE(got '${ORANGEPIZERO2_STANDALONE}')"
+            fi
+            ;;
         *)
-            [ "${BUILD_ROLE}" = "${role}" ]        || miss+=" BUILD_ROLE(got '${BUILD_ROLE}')"
+            [ "${BUILD_ROLE}" = "${expect_role}" ]        || miss+=" BUILD_ROLE(got '${BUILD_ROLE}')"
             ;;
     esac
     if [ -n "${miss}" ]; then
@@ -503,16 +698,28 @@ expect_reject() { # NAME HW TYPE
 expect_reject "x86: bogus role"           x86.bogus primary
 expect_reject "bare legacy: bogus role"   bogus     client
 expect_reject "rpi5: node role as client" rpi5.pki  client
+# ARM standalone-posture grammar negatives (see docker/build-image.sh's
+# "ARM STANDALONE GAP"/"JETSON STANDALONE EXCEPTION" header notes):
+#  - jetson deliberately has NO standalone token at all — a jetson
+#    HARDWARE_CLASS shaped like one must fall through to the same generic
+#    "unsupported combination" rejection as any other bogus role, never a
+#    silent accept.
+#  - rpi5 is never a client-image-type platform, INCLUDING with the new
+#    standalone-desktop role token (the IMAGE_TYPE=client guard at the top of
+#    the rpi5 case arm runs before the role is even parsed, so this must
+#    reject exactly like the existing bare rpi5.pki/client probe above).
+expect_reject "jetson: standalone-shaped role rejected" jetson.standalone-desktop.orin-nano primary
+expect_reject "rpi5: standalone-desktop role as client" rpi5.standalone-desktop.rpi4 client
 JOB_EOF
     local rc=$?
     JOB_PASS=$(grep -c '^JOB PASS' "${out}" || true)
     JOB_FAIL=$(grep -c '^JOB FAIL' "${out}" || true)
     # the child's negative probes count toward the NEG bucket; FAIL-CLOSED like
-    # the menu child's threading probes: 3 expected, shortfall = failures.
+    # the menu child's threading probes: 5 expected, shortfall = failures.
     local jneg_pass
     jneg_pass=$(grep -c '^JOBNEG PASS' "${out}" || true)
     NEG_PASS=$((NEG_PASS + jneg_pass))
-    NEG_FAIL=$((NEG_FAIL + 3 - jneg_pass))
+    NEG_FAIL=$((NEG_FAIL + 5 - jneg_pass))
     # FAIL-CLOSED: a crashed job child (drift canary, set -u trip, …) is a
     # channel failure, never "0 rows = 0 failures" (the completeness gate
     # below backstops this too).
@@ -532,7 +739,7 @@ JOB_EOF
 # the same guarantee is probed end-to-end inside run_menu_channel's child.)
 run_threading_checks() {
     local t out="${TMP_DIR}/thr.out"
-    for t in x86-pki x86-standalone-thin jetson jetson-edge_ai frite; do
+    for t in x86-pki x86-standalone-thin jetson jetson-edge_ai frite orangepi5 orangepizero2; do
         if make -n "${t}" NATIVE=1 STANDALONE_FLAGS='--matrix-sf-probe' >"${out}" 2>&1 \
            && grep -q -- '--matrix-sf-probe' "${out}"; then
             THR_PASS=$((THR_PASS+1))
@@ -541,7 +748,7 @@ run_threading_checks() {
             THR_FAIL=$((THR_FAIL+1))
         fi
     done
-    for t in rpi-backend x86-pki frite jetson jetson-edge_ai; do
+    for t in rpi-backend x86-pki frite jetson jetson-edge_ai orangepi5 orangepizero2; do
         if make -n "${t}" NATIVE=1 IMG_FLAGS='--matrix-if-probe' >"${out}" 2>&1 \
            && grep -q -- '--matrix-if-probe' "${out}"; then
             THR_PASS=$((THR_PASS+1))
@@ -567,13 +774,44 @@ run_negative_checks() {
     expect_fail "x86: invalid role"          ./build-x86-host-stage4.sh --role bogus --print-plan
     expect_fail "rpi5: invalid role"         ./build-rpi5-stage4.sh --role laptop --print-plan
     expect_fail "rpi5: x86-only flag --steam" ./build-rpi5-stage4.sh --role backend --steam native --print-plan
-    expect_fail "rpi5: x86-only flag --local-pass" ./build-rpi5-stage4.sh --role backend --local-pass hunter2 --print-plan
+    # NOTE: --local-pass/--local-user/--standalone are NOT x86-only anymore (the
+    # standalone-ARM track ported them onto rpi5/frite/jetson) — --gpu-driver
+    # stays a genuinely x86-only concept (vendor GPU driver matrix; RPi5's
+    # Broadcom VideoCore has no such axis) so it replaces --local-pass here.
+    expect_fail "rpi5: x86-only flag --gpu-driver" ./build-rpi5-stage4.sh --role backend --gpu-driver nvidia --print-plan
+    expect_fail "rpi5: --standalone with no compatible role" ./build-rpi5-stage4.sh --role backend --standalone --print-plan
+    # --board rpi3 (Phase 8) is DESKTOP-ONLY — hard-errors on every OTHER role.
+    # Exercise more than one non-desktop role (the most important behavioral
+    # guarantee of Phase 8), not just one.
+    expect_fail "rpi5: --board rpi3 + role backend"  ./build-rpi5-stage4.sh --board rpi3 --role backend --print-plan
+    expect_fail "rpi5: --board rpi3 + role pki"       ./build-rpi5-stage4.sh --board rpi3 --role pki --print-plan
+    expect_fail "rpi5: --board rpi3 + role frontend"  ./build-rpi5-stage4.sh --board rpi3 --role frontend --print-plan
+    expect_fail "rpi5: --board rpi3 + role generic"   ./build-rpi5-stage4.sh --board rpi3 --role generic --print-plan
     expect_fail "frite: invalid board"       ./build-frite-stage4.sh --board bogus --print-plan
     expect_fail "frite: invalid desktop"     ./build-frite-stage4.sh --board la-frite --desktop kde --print-plan
     expect_fail "jetson: invalid role"       ./build-jetson-stage4.sh --role bogus --print-plan
     expect_fail "jetson: invalid board"      ./build-jetson-stage4.sh --role edge_ai --board bogus --print-plan
     expect_fail "jetson: invalid env"        ./build-jetson-stage4.sh --role edge_ai --env staging --print-plan
     expect_fail "x86: invalid env"           ./build-x86-host-stage4.sh --role pki --env staging --print-plan
+    expect_fail "orangepi5: invalid board"   ./build-orangepi5-stage4.sh --board bogus --print-plan
+    expect_fail "orangepi5: invalid flavor"  ./build-orangepi5-stage4.sh --flavor bogus --print-plan
+    expect_fail "orangepi5: invalid env"     ./build-orangepi5-stage4.sh --env staging --print-plan
+    expect_fail "orangepizero2: invalid flavor" ./build-orangepi-zero2-stage4.sh --flavor bogus --print-plan
+    expect_fail "orangepizero2: invalid env"    ./build-orangepi-zero2-stage4.sh --env staging --print-plan
+    # NOTE: no "invalid board" negative test — this platform has NO --board
+    # flag at all (a single board, unlike Frite/Orange-Pi-5's board tables);
+    # --board bogus hits the generic "Unknown option" branch instead.
+    expect_fail "orangepizero2: --board is not a flag on this builder" \
+        ./build-orangepi-zero2-stage4.sh --board bogus --print-plan
+    # -r/--role on orangepi5/orangepizero2 is an undocumented marker-only
+    # escape hatch (neither builder has a real --role axis) that used to flow
+    # unescaped into ART_PREFIX/STAGE4_TARBALL/LIVE_PATH/INSTALLER_PATH with NO
+    # allow-list check at all — a path-traversal-shaped value must now be
+    # rejected the same way every other identity input (BRAND/ORG/HOSTNAME/…) is.
+    expect_fail "orangepi5: --role path-traversal rejected" \
+        ./build-orangepi5-stage4.sh --role '../../tmp/evil' -H myhost --print-plan
+    expect_fail "orangepizero2: --role path-traversal rejected" \
+        ./build-orangepi-zero2-stage4.sh --role '../../tmp/evil' -H myhost --print-plan
     # UNAFFILIATED desktop: branding flags are a HARD conflict (no brand identity
     # at all), and --unaffiliated composes onto desktop/client roles only — a
     # cluster node is Snapdragon platform machinery by definition.

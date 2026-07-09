@@ -40,6 +40,7 @@ def test_role_catalog_covers_every_documented_role():
         assert (r, "x86") in flat
     for r in ("pki", "be", "fe"):
         assert (r, "rpi5") in flat
+    assert ("rpi5-desktop", "rpi5") in flat
     # CLIENT
     for r in ("laptop", "chromebook", "desktop"):
         assert (r, "x86") in flat
@@ -210,6 +211,21 @@ def test_x86_client_desktop_weight_and_steam():
     assert ("--steam", "flatpak") in pairs(args)
 
 
+@pytest.mark.parametrize("role", ["laptop", "chromebook", "desktop"])
+def test_x86_client_role_standalone_compose(role):
+    # --standalone composes onto ANY x86 client role (not just the dedicated
+    # standalone-thin/standalone-thick role ids, whose ROLE NAME itself sets
+    # STANDALONE=true inside the builder's own role-switch) — the builder
+    # already supports this (verified live); Studio must actually emit the
+    # flag for it to reach the builder.
+    args = ImageConfig(mode="cloud", role=role, platform="x86", standalone=True,
+                       local_user="alice", local_pass="s3cret",
+                       encrypt_root=True, luks_pass="hunter2").to_cli_args()
+    assert "--standalone" in args
+    assert "--encrypt-root" in args
+    assert ("--luks-pass", "hunter2") in pairs(args)
+
+
 def test_x86_optional_services_and_games():
     cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86",
                       optional_services=["akkoma", "tuwunel", "phpbb", "games",
@@ -272,10 +288,22 @@ def test_x86_iso_finish_pairs_flip():
 # ---- rpi5: server node roles (be/fe spelled out) -----------------------------
 
 @pytest.mark.parametrize("role,builder_role",
-                         [("pki", "pki"), ("be", "backend"), ("fe", "frontend")])
+                         [("pki", "pki"), ("be", "backend"), ("fe", "frontend"),
+                          ("rpi5-desktop", "desktop")])
 def test_rpi5_roles_golden(role, builder_role):
     args = ImageConfig(mode="mesh", role=role, platform="rpi5", tailscale=True).to_cli_args()
     assert args == ["--role", builder_role, "--env", "test"]
+
+
+def test_rpi5_standalone_desktop():
+    # --standalone only composes onto rpi5-desktop (builder --role desktop);
+    # the builder itself hard-errors on the cluster-node roles.
+    args = ImageConfig(mode="mesh", role="rpi5-desktop", platform="rpi5", tailscale=True,
+                       standalone=True, local_user="alice", local_pass="s3cret",
+                       encrypt_root=True, luks_pass="hunter2").to_cli_args()
+    assert args == ["--role", "desktop", "--env", "test",
+                    "--standalone", "--local-user", "alice", "--local-pass", "s3cret",
+                    "--encrypt-root", "--luks-pass", "hunter2"]
 
 
 def test_rpi5_full_surface():
@@ -296,6 +324,50 @@ def test_rpi5_full_surface():
                     "--with-character-studio"]
 
 
+def test_rpi5_board_unset_emits_nothing():
+    """board="" (the dataclass default) must NOT emit --board at all — the
+    builder's own default (rpi5) applies, exactly like every existing rpi5
+    golden test above (none of them pass board=...)."""
+    args = ImageConfig(mode="mesh", role="pki", platform="rpi5", tailscale=True).to_cli_args()
+    assert args == ["--role", "pki", "--env", "test"]
+    assert "--board" not in args
+
+
+@pytest.mark.parametrize("board", ["rpi5", "rpi4", "rpi3"])
+def test_rpi5_board_axis(board):
+    """build-rpi5-stage4.sh --board (Phase 6 Pi 4 support, Phase 8 Pi 3 support)
+    — mirrors test_jetson_board_axis: --board rides right after --role, before
+    the shared --env/_arm_common_args() surface. (This is a pure CLI-arg
+    composition test — ImageConfig does not pre-validate rpi3's desktop-only
+    constraint; role="be" here would hard-error at the builder, which is by
+    design — see test_rpi5_board_rpi3_composes_with_desktop_standalone below
+    for the actually-valid rpi3 shape.)"""
+    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                       board=board).to_cli_args()
+    assert args == ["--role", "backend", "--board", board, "--env", "test"]
+
+
+def test_rpi5_board_composes_with_desktop_standalone():
+    """--board rpi4 must compose cleanly with the desktop role's --standalone/
+    LUKS2 surface (Phase 6 reuses ALL of the Phase 2b/Phase 3 machinery)."""
+    args = ImageConfig(mode="mesh", role="rpi5-desktop", platform="rpi5", tailscale=True,
+                       board="rpi4", standalone=True, local_user="alice",
+                       encrypt_root=True).to_cli_args()
+    assert args == ["--role", "desktop", "--board", "rpi4", "--env", "test",
+                    "--standalone", "--local-user", "alice", "--encrypt-root"]
+
+
+def test_rpi5_board_rpi3_composes_with_desktop_standalone():
+    """--board rpi3 (Phase 8, DESKTOP-ONLY — the builder hard-errors on any
+    other --role) must compose cleanly with the desktop role's --standalone/
+    LUKS2 surface too, same as --board rpi4 above."""
+    args = ImageConfig(mode="mesh", role="rpi5-desktop", platform="rpi5", tailscale=True,
+                       board="rpi3", standalone=True, local_user="alice",
+                       encrypt_root=True).to_cli_args()
+    assert args == ["--role", "desktop", "--board", "rpi3", "--env", "test",
+                    "--standalone", "--local-user", "alice", "--encrypt-root"]
+
+
 def test_rpi5_generic_golden():
     """The plain-Gentoo unbranded arm64 server (the rpi5 builder's default role) —
     standalone mode (no tailnet) emits --skip-mesh; role passes through unmapped."""
@@ -310,13 +382,45 @@ def test_rpi5_generic_with_mesh_golden():
 
 
 def test_rpi5_never_emits_x86_only_flags():
+    # --encrypt-root is genuinely NOT x86-only (rpi5/frite both support it) —
+    # excluded from this list; see test_rpi5_frite_encryption_flags below.
     args = ImageConfig(mode="mesh", role="pki", platform="rpi5",
                        installer_ui="all", cached=True, desktop="thin",
-                       steam="native", encrypt_root=True).to_cli_args()
+                       steam="native").to_cli_args()
     for flag in ("--local-user", "--installer-ui", "--cached", "--uncached", "--desktop",
-                 "--steam", "--encrypt-root", "--with-tailscale", "--no-tailscale",
+                 "--steam", "--with-tailscale", "--no-tailscale",
                  "--with-sso", "--no-sso", "--person-role", "--live-toram", "--bundle-source"):
         assert flag not in args
+
+
+def test_rpi5_frite_encryption_flags():
+    # --encrypt-root/--luks-pass landed on rpi5 (Phase 2b) and frite (Phase 2a).
+    # jetson is EXCLUDED here — see test_jetson_encrypt_root_and_standalone_blocked
+    # below: build-jetson-stage4.sh hard-blocks --encrypt-root unconditionally
+    # (commit 92a847b), so this platform never reaches this flag combination.
+    for platform, extra in (("rpi5", {"role": "pki"}), ("frite", {})):
+        args = ImageConfig(mode="mesh", platform=platform,
+                           encrypt_root=True, luks_pass="sekrit", **extra).to_cli_args()
+        assert "--encrypt-root" in args
+        assert ("--luks-pass", "sekrit") in pairs(args)
+
+
+def test_jetson_encrypt_root_and_standalone_blocked():
+    # build-jetson-stage4.sh hard-blocks --encrypt-root (and --standalone, which
+    # forces it on) unconditionally: the Orin's single boot+root partition means
+    # LUKS2-encrypting it leaves the UEFI firmware unable to find a kernel — see
+    # docs/STANDALONE-DESKTOP.md's Jetson section. config.py must refuse to emit
+    # this combination too (a real, permanent boot-chain limitation, not a
+    # deferred gap this test should silently outlive).
+    with pytest.raises(ValueError, match="jetson"):
+        ImageConfig(mode="mesh", platform="jetson", encrypt_root=True, luks_pass="sekrit").to_cli_args()
+    with pytest.raises(ValueError, match="jetson"):
+        ImageConfig(mode="mesh", platform="jetson", role="desktop",
+                    standalone=True, local_user="alice").to_cli_args()
+    # bare jetson (no encrypt_root/standalone at all) is unaffected
+    args = ImageConfig(mode="mesh", platform="jetson", role="edge_ai").to_cli_args()
+    assert "--encrypt-root" not in args
+    assert "--standalone" not in args
 
 
 # ---- frite: arm64 client (board x flavor x desktop, no --role) ----------------

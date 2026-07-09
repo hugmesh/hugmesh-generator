@@ -13,7 +13,20 @@ platform UI — not a cluster node.
 > install, optional keyfile/YubiKey unlock, and an auto-detected `/media` data disk
 > (Steam + gocryptfs Vaults). Those are the *opposite* of the mesh-joined clients
 > below; the `--standalone` / `--skip-sso` flags also compose onto these roles.
-> The standalone path now also includes an **unaffiliated** variant
+> **This standalone posture is not x86-only** — `build-frite-stage4.sh`,
+> `build-rpi5-stage4.sh` (rpi5/rpi4/rpi3 boards), and `build-orangepi5-stage4.sh`
+> all have their own `desktop` role composable with `--standalone --encrypt-root`,
+> and `build-orangepi-zero2-stage4.sh` has the same posture on its headless
+> `appliance` role — see STANDALONE-DESKTOP.md's "ARM platforms" section.
+> **`build-jetson-stage4.sh` is the one exception**: `--encrypt-root` (and
+> `--standalone`, which forces it on) is hard-blocked outright on this platform —
+> its single boot+root partition means the UEFI firmware can't find a kernel once
+> that partition is LUKS2-encrypted — see STANDALONE-DESKTOP.md's Jetson section.
+> These ARM `desktop` roles are a **separate, simpler**
+> role namespace from this document's FD-04 client-device architecture below
+> (no `PERSON_ROLE`/`DOMAINS`/Casdoor desktop governance) — they exist purely as
+> the mount point for the standalone/LUKS posture on non-x86 hardware.
+> The standalone path also includes an **unaffiliated** variant
 > (`standalone-unaffiliated`, or `--unaffiliated` composed onto any client role):
 > a plain hardened Gentoo desktop with **zero Snapdragon affiliation** — neutral
 > boot chain/installer/hostname/artifacts, no `snapdragon-*` tools or markers —

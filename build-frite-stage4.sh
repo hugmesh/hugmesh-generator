@@ -123,6 +123,19 @@ DEFAULT_USER="frite"
 # users.json via keys-provision). On a keyless boot the first-boot finaliser
 # (specs/etc/local.d/01-firstboot.start.tmpl) mints a RANDOM one-time password
 # and locks root — see the OWASP "default creds baked into image" fix.
+#
+# ── Standalone posture (mirrors build-x86-host-stage4.sh) ──────────
+# --standalone composes onto this image: no mesh, a normal local user logs in
+# with a password set at build time instead of the KEYS-USB-provisioned
+# account, and (via --encrypt-root, auto-on for --standalone) the INSTALLED
+# root is LUKS2 full-disk encrypted — install-frite.sh does the actual
+# partition/format/unlock at install time, never baked into the build
+# artifact. See docs/STANDALONE-DESKTOP.md.
+STANDALONE=false        # --standalone : local user, no mesh, LUKS2 FDE on install
+LOCAL_USER=""           # --local-user NAME : the standalone local login account
+LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never baked raw
+ENCRYPT_ROOT=false      # --encrypt-root : installer LUKS2-encrypts the target root; auto-on for --standalone
+LUKS_PASS=""            # --luks-pass : OPTIONAL unattended passphrase (lands on the installer ISO — warned)
 
 # ── Radio attack surface (DISABLED BY DEFAULT — hardened posture) ──
 # The Frite boards have NO onboard WiFi/Bluetooth, so these default OFF and only
@@ -224,6 +237,23 @@ OPTIONS
     --headscale-version / --tailscale-version / --skip-mesh / --skip-tailscale
     --enable-wifi / --enable-bluetooth   (off by default; the boards have no radio)
 
+  Standalone (local user, no mesh, LUKS2 FDE on install)
+    --standalone         No mesh; a local user logs in with a build-time
+                          password instead of the KEYS-USB-provisioned account.
+                          Auto-enables --encrypt-root and forces the INSTALLER
+                          flavor on (--flavor live alone has no install step).
+    --local-user NAME    The standalone local login account (default: --user).
+    --local-pass PASS    Plaintext; hashed at build (openssl passwd -6), never
+                          baked raw. Omit it and a random one-time password is
+                          minted + printed once at first boot instead.
+    --encrypt-root        install-frite.sh LUKS2-encrypts the target root and
+                          prompts for a passphrase at install time; auto-on
+                          for --standalone. Composable onto a plain (non
+                          --standalone) build too.
+    --luks-pass PASS      OPTIONAL unattended install-time passphrase — lands
+                          on the installer ISO in plaintext (0600); prefer the
+                          interactive install-time prompt.
+
   Phases
     --skip-kernel / --skip-clean / --resume
 
@@ -301,6 +331,11 @@ while [[ $# -gt 0 ]]; do
         --org)                ORG="$2";                   shift 2 ;;
         -T|--timezone)        TIMEZONE="$2";              shift 2 ;;
         -u|--user)            DEFAULT_USER="$2";          shift 2 ;;
+        --standalone)         STANDALONE=true;            shift   ;;
+        --local-user)         LOCAL_USER="$2";             shift 2 ;;
+        --local-pass|--local-user-password) LOCAL_USER_PASS="$2"; shift 2 ;;
+        --encrypt-root)       ENCRYPT_ROOT=true;          shift   ;;
+        --luks-pass|--root-unlock-pass) LUKS_PASS="$2";   shift 2 ;;
         # DEPRECATED no-ops: images no longer bake a fallback password (random
         # one-time password is minted at first boot; real creds come from KEYS).
         --user-password)      warn "--user-password is ignored: no password is baked into the image (random first-boot fallback + KEYS provisioning)"; shift 2 ;;
@@ -400,6 +435,37 @@ if [ -z "${HOSTNAME}" ]; then
         desktop|generic) HOSTNAME="${BRAND}-frite" ;;
         *)               HOSTNAME="${BRAND}-${ROLE}" ;;
     esac
+fi
+
+# ── STANDALONE posture (composable — this image already never bakes a k8s/
+# cluster tree, so --standalone only needs to turn mesh off, set up a local
+# user, and force disk encryption + the installer flavor — mirrors
+# build-x86-host-stage4.sh's STANDALONE posture block exactly) ─────────────
+if ${STANDALONE}; then
+    SKIP_MESH=true
+    SKIP_TAILSCALE=true
+    [ -z "${LOCAL_USER}" ] && LOCAL_USER="${DEFAULT_USER}"
+    ENCRYPT_ROOT=true           # the INSTALLED system is LUKS2 full-disk encrypted
+    BUILD_INSTALLER=true        # guarantee the installer artifact (the FDE path)
+    info "STANDALONE desktop: no mesh; local user '${LOCAL_USER}'; LUKS2 FDE on install"
+fi
+# --encrypt-root composed onto a plain (non-standalone) build also needs the
+# installer flavor — LUKS is laid down by install-frite.sh, not the live medium.
+${ENCRYPT_ROOT} && BUILD_INSTALLER=true
+
+# ── Standalone local-user password → build-time hash (never baked in plaintext,
+# mirrors build-x86-host-stage4.sh) ─────────────────────────────────────────
+LOCAL_PASSHASH=""
+if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]; then
+    [ -n "${LOCAL_USER}" ] && DEFAULT_USER="${LOCAL_USER}"
+    if [ -n "${LOCAL_USER_PASS}" ]; then
+        command -v openssl >/dev/null 2>&1 || { err "--local-pass needs openssl on the build host (app-crypt/... / dev-libs/openssl)"; exit 1; }
+        LOCAL_PASSHASH="$(openssl passwd -6 "${LOCAL_USER_PASS}")"
+        LOCAL_USER_PASS=""   # scrub the plaintext from the environment immediately
+        info "Standalone local user '${DEFAULT_USER}': password hashed at build time (SHA-512 crypt; plaintext not baked)."
+    else
+        ${STANDALONE} && warn "Standalone build with no --local-pass: a RANDOM one-time password is minted at first boot (printed once to console)."
+    fi
 fi
 
 # ── Charset allowlists for brand/identity/kernel/toolchain fields (fail-closed) ──
@@ -507,6 +573,8 @@ render_template() {
         -e "s|@@HOSTNAME@@|$(_sed_rep_escape "${HOSTNAME}")|g" \
         -e "s|@@TIMEZONE@@|$(_sed_rep_escape "${TIMEZONE}")|g" \
         -e "s|@@DEFAULT_USER@@|$(_sed_rep_escape "${DEFAULT_USER}")|g" \
+        -e "s|@@STANDALONE@@|$(_sed_rep_escape "${STANDALONE}")|g" \
+        -e "s|@@LOCAL_PASSHASH@@|$(_sed_rep_escape "${LOCAL_PASSHASH}")|g" \
         -e "s|@@BRAND@@|$(_sed_rep_escape "${BRAND}")|g" \
         -e "s|@@BRAND_TITLE@@|$(_sed_rep_escape "${BRAND_TITLE}")|g" \
         -e "s|@@DOMAIN@@|$(_sed_rep_escape "${CLUSTER_DOMAIN}")|g" \
@@ -618,7 +686,16 @@ if ${PRINT_PLAN}; then
     _plan BOARD_DESC         "${FRITE_BOARD_DESC}"
     _plan DTB                "${FRITE_DTB}"
     _plan UBOOT_DEFCONFIG    "${FRITE_UBOOT_DEFCONFIG}"
-    _plan FLAVOR             "${FRITE_FLAVOR}"
+    # Effective flavor derived from the post-cascade BUILD_LIVE/BUILD_INSTALLER
+    # booleans, NOT the raw --flavor enum: --standalone/--encrypt-root force
+    # BUILD_INSTALLER=true regardless of what --flavor was passed, so echoing the
+    # raw FRITE_FLAVOR here would misreport (e.g. --flavor live --encrypt-root
+    # actually builds live+installer, not live-only).
+    if ${BUILD_LIVE} && ${BUILD_INSTALLER}; then _EFF_FLAVOR="both"
+    elif ${BUILD_INSTALLER}; then _EFF_FLAVOR="installer"
+    else _EFF_FLAVOR="live"
+    fi
+    _plan FLAVOR             "${_EFF_FLAVOR}"
     _plan DESKTOP            "${DESKTOP}"
     _plan GPU_DRIVER         "lima"   # Amlogic GXL Mali-450 → mainline lima (fixed for this platform)
     _ARTS="stage4.tar.xz"
@@ -633,8 +710,13 @@ if ${PRINT_PLAN}; then
     _plan HOSTNAME           "${HOSTNAME}"
     _plan OPTIONAL_SERVICES  "none"   # lean desktop client: no baked cluster tree
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
+    _plan STANDALONE         "${STANDALONE}"
+    _plan ENCRYPT_ROOT       "${ENCRYPT_ROOT}"
+    _plan LUKS_PASS          "$([ -n "${LUKS_PASS}" ] && echo REDACTED || echo none)"
+    _plan LOCAL_USER         "${LOCAL_USER:-$DEFAULT_USER}"
+    _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
     _plan KERNEL             "mainline-arm64 (defconfig=${FRITE_DEFCONFIG} + hardened-desktop.config)"
-    _plan FLAGS_EFFECTIVE    "env=${ENV} board=${FRITE_BOARD} flavor=${FRITE_FLAVOR} desktop=${DESKTOP} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_uboot=${SKIP_UBOOT} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH}"
+    _plan FLAGS_EFFECTIVE    "env=${ENV} board=${FRITE_BOARD} flavor=${_EFF_FLAVOR} desktop=${DESKTOP} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_uboot=${SKIP_UBOOT} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT}"
     exit 0
 fi
 
@@ -739,6 +821,14 @@ cp "${SPECS_DIR}/portage/env/"*.conf               "${SYSROOT}/etc/portage/env/"
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
 
 cp "${SPECS_DIR}/etc/fstab" "${SYSROOT}/etc/fstab"
+
+# LUKS2 root (--encrypt-root): persist crypt-module support into any FUTURE
+# dracut regeneration on the installed system (e.g. a post-install kernel
+# rebuild), not just the disk-boot initramfs this build generates directly.
+if ${ENCRYPT_ROOT}; then
+    mkdir -p "${SYSROOT}/etc/dracut.conf.d"
+    cp "${SPECS_DIR}/etc/dracut.conf.d/60-snapdragon-crypt.conf" "${SYSROOT}/etc/dracut.conf.d/"
+fi
 
 # ── Shared (arch-agnostic) mesh + provisioning + sshd — the SAME plumbing the
 # Pi5/x86 client images use, so the Frite joins the SAME mesh with the SAME
@@ -858,6 +948,13 @@ echo "frite:${FRITE_BOARD}" > "${SYSROOT}/etc/snapdragon/board"
 if [ -n "${HEADSCALE_URL:-}" ]; then
     echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/snapdragon/headscale-url"
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/snapdragon/headscale-url"
+fi
+if ${STANDALONE}; then
+    # STANDALONE desktop: bake the marker so keys-provision skips all
+    # mesh-seeking no-ops and a normal LOCAL USER logs in with the build-set
+    # password (mirrors build-x86-host-stage4.sh).
+    echo "true" > "${SYSROOT}/etc/snapdragon/standalone"
+    info "Standalone desktop: local user '${DEFAULT_USER}', no mesh."
 fi
 rebrand_sysroot
 
@@ -998,6 +1095,16 @@ if ${BUILD_LIVE} || ${BUILD_INSTALLER}; then
     mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
         grep -v '^\s*#' "${SPECS_DIR}/portage/packages-live.list" | grep -v '^\s*$')
 fi
+if ${ENCRYPT_ROOT}; then
+    # --encrypt-root: cryptsetup is what install-frite.sh runs (luksFormat/open/
+    # close) on the TARGET hardware at install time — needed in the installed
+    # stage4 payload itself, not just the build host. dracut (for the disk-boot
+    # initramfs that unlocks the LUKS root) is already pulled in above via
+    # packages-live.list whenever BUILD_INSTALLER is true, which --encrypt-root
+    # forces on below.
+    info "--encrypt-root selected — appending sys-fs/cryptsetup"
+    STAGE4_PACKAGES+=("sys-fs/cryptsetup")
+fi
 if [ -n "${EXTRA_PACKAGES}" ]; then
     read -ra _extras <<< "${EXTRA_PACKAGES}"
     STAGE4_PACKAGES+=("${_extras[@]}")
@@ -1043,6 +1150,11 @@ fi
 # dmsquash-live initramfs that both media boot from.
 if ${BUILD_LIVE} || ${BUILD_INSTALLER}; then
     REQUIRED_BINS+=(dracut)
+fi
+# LUKS2 root (--encrypt-root): cryptsetup must be present in the LIVE environment
+# for install-frite.sh's ENCRYPT branch to format/open the encrypted root.
+if ${ENCRYPT_ROOT}; then
+    REQUIRED_BINS+=(cryptsetup)
 fi
 payload_missing=""
 for _b in "${REQUIRED_BINS[@]}"; do
@@ -1150,6 +1262,16 @@ else
             grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
         grep -q '^CONFIG_LSM="yama,selinux,bpf"$' .config || { err "CONFIG_LSM malformed (expected yama,selinux,bpf)"; exit 1; }
+        # Refuse to ship a kernel that silently lost LUKS2/dm-crypt support for
+        # --encrypt-root builds (CONFIG_MD/BLK_DEV_DM/DM_CRYPT depend on each other
+        # transitively — a --defconfig override lacking CONFIG_MD would otherwise
+        # drop them with no build-time signal, producing an unbootable/non-
+        # unlocking encrypted root only discoverable on real hardware).
+        if ${ENCRYPT_ROOT}; then
+            for must in CONFIG_MD CONFIG_BLK_DEV_DM CONFIG_DM_CRYPT; do
+                grep -q "^${must}=y" .config || { err "--encrypt-root requires ${must}=y but it did not survive olddefconfig (check --defconfig)"; exit 1; }
+            done
+        fi
         # The kernelrelease string is the module-tree dir name (lib/modules/<kver>),
         # which dracut needs as --kver for the live initramfs.
         FRITE_KVER="$(make -s ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" kernelrelease 2>/dev/null | tail -1)"
@@ -1286,8 +1408,13 @@ build_live_initramfs() {
             warn "Could not stage qemu interpreter into sysroot; chroot may fail."
         fi
         info "Running dracut via qemu-chroot (kver=${kver}) ..."
-        chroot "${SYSROOT}" /usr/bin/dracut --force --no-hostonly \
-            --kver "${kver}" --modules "${mods}" /boot/initrd.img 2>&1 | head -60
+        # Capture into a var first, THEN head — piping the chroot directly into
+        # `head -60` under pipefail risks SIGPIPE-killing dracut mid-generation
+        # if it logs more than 60 lines (routine in a minimal cross-arch
+        # sysroot), truncating a run that would otherwise have succeeded.
+        _dracut_out="$(chroot "${SYSROOT}" /usr/bin/dracut --force --no-hostonly \
+            --kver "${kver}" --modules "${mods}" /boot/initrd.img 2>&1)"
+        printf '%s\n' "${_dracut_out}" | head -60
         if [ -s "${SYSROOT}/boot/initrd.img" ]; then
             cp "${SYSROOT}/boot/initrd.img" "${out}"
             FRITE_LIVE_INITRD="${out}"
@@ -1328,6 +1455,106 @@ build_live_initramfs() {
 # itself a live boot — see build_installer_iso).
 if { ${BUILD_LIVE} || ${BUILD_INSTALLER}; } && { ! ${SKIP_KERNEL} || ${IMAGE_ONLY}; }; then
     build_live_initramfs || warn "Live initramfs not built — see warnings above."
+fi
+
+# ── DISK-BOOT initramfs (--encrypt-root only) — unlocks the LUKS2 root ────────
+# The installed system boots WITHOUT any initramfs today (bare kernel mounts
+# root= directly) — fine for a plaintext root, but a LUKS2 root must be
+# unlocked BEFORE mount, which needs an initramfs stage. Reuses the exact same
+# cross-build strategies as build_live_initramfs() (same script, same proven
+# qemu-chroot/host-sh/host-dracut fallback chain) but non-hostonly with the
+# dracut "crypt" module (device-mapper + cryptsetup's crypt hook) instead of
+# dmsquash-live — this initramfs is generic (--no-hostonly), NOT the live
+# medium's ephemeral squashfs-boot initramfs, and is staged separately so the
+# two are never confused. install-frite.sh copies it into place; the ACTUAL
+# root=/rd.luks.uuid= cmdline is filled in there too (the LUKS UUID does not
+# exist until install-frite.sh formats the target partition).
+FRITE_DISK_INITRD=""        # set non-empty once the disk-boot initramfs is staged
+build_disk_initramfs() {
+    [ -f "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" ] || {
+        warn "no kernel in boot stage — cannot build the disk-boot initramfs; an --encrypt-root install would NOT boot."
+        return 1; }
+    local kver="${FRITE_KVER}"
+    if [ -z "${kver}" ] || [ ! -d "${SYSROOT}/lib/modules/${kver}" ]; then
+        kver="$(find "${SYSROOT}/lib/modules" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
+    fi
+    [ -n "${kver}" ] && [ -d "${SYSROOT}/lib/modules/${kver}" ] || {
+        warn "no module tree under ${SYSROOT}/lib/modules — cannot build the disk-boot initramfs; an --encrypt-root install would NOT boot."
+        return 1; }
+
+    local out="${BOOT_STAGE}/disk-initrd.img"
+    info "Generating disk-boot initramfs (dracut --add crypt, kver=${kver}) ..."
+
+    local sysroot_dracut="${SYSROOT}/usr/bin/dracut"
+
+    # ── Strategy 1: qemu-chroot (correct for cross-builds) ─────────────────────
+    local _qemu_interp
+    _qemu_interp="$(grep '^interpreter' /proc/sys/fs/binfmt_misc/qemu-aarch64 2>/dev/null | awk '{print $2}')"
+    if [ -n "${_qemu_interp}" ] && [ -x "${_qemu_interp}" ] && [ -x "${sysroot_dracut}" ]; then
+        local _mounts=() _qemu_staged=false
+        _frite_disk_umount() {
+            local m
+            for m in "${_mounts[@]}"; do umount -l "${m}" 2>/dev/null || true; done
+            ${_qemu_staged} && rm -f "${SYSROOT}${_qemu_interp}" 2>/dev/null || true
+        }
+        trap '_frite_disk_umount' RETURN
+        mkdir -p "${SYSROOT}/proc" "${SYSROOT}/sys" "${SYSROOT}/dev"
+        mount --bind /proc "${SYSROOT}/proc" && _mounts+=("${SYSROOT}/proc") || true
+        mount --bind /sys  "${SYSROOT}/sys"  && _mounts+=("${SYSROOT}/sys")  || true
+        mount --bind /dev  "${SYSROOT}/dev"  && _mounts+=("${SYSROOT}/dev")  || true
+        mkdir -p "${SYSROOT}$(dirname "${_qemu_interp}")"
+        if cp "${_qemu_interp}" "${SYSROOT}${_qemu_interp}" 2>/dev/null; then
+            _qemu_staged=true
+        else
+            warn "Could not stage qemu interpreter into sysroot; chroot may fail."
+        fi
+        info "Running dracut via qemu-chroot (kver=${kver}) ..."
+        # Capture into a var first, THEN head — piping the chroot directly into
+        # `head -60` under pipefail risks SIGPIPE-killing dracut mid-generation
+        # if it logs more than 60 lines (routine in a minimal cross-arch
+        # sysroot), truncating a run that would otherwise have succeeded.
+        _dracut_out="$(chroot "${SYSROOT}" /usr/bin/dracut --force --no-hostonly \
+            --add crypt --kver "${kver}" /boot/disk-initrd.img 2>&1)"
+        printf '%s\n' "${_dracut_out}" | head -60
+        if [ -s "${SYSROOT}/boot/disk-initrd.img" ]; then
+            cp "${SYSROOT}/boot/disk-initrd.img" "${out}"
+            FRITE_DISK_INITRD="${out}"
+            _frite_disk_umount; trap - RETURN
+            info "Disk-boot initramfs staged (qemu-chroot): ${out} ($(du -h "${out}" | cut -f1))"
+            return 0
+        fi
+        warn "qemu-chroot dracut did not produce a disk-boot initramfs; falling back."
+        _frite_disk_umount; trap - RETURN
+    fi
+
+    # ── Strategy 2: run the sysroot dracut script on the host sh ───────────────
+    if [ -x "${sysroot_dracut}" ] && command -v sh >/dev/null; then
+        sh "${sysroot_dracut}" --force --no-hostonly \
+            --add crypt --kver "${kver}" --kmoddir "${SYSROOT}/lib/modules/${kver}" \
+            "${out}" 2>/dev/null && [ -s "${out}" ] && {
+                FRITE_DISK_INITRD="${out}"
+                info "Disk-boot initramfs staged (host-sh dracut): ${out} ($(du -h "${out}" | cut -f1))"
+                return 0; }
+        warn "sysroot dracut (host-sh) did not produce a disk-boot initramfs; trying host dracut."
+    fi
+    if command -v dracut >/dev/null; then
+        dracut --force --no-hostonly \
+            --add crypt --kver "${kver}" --kmoddir "${SYSROOT}/lib/modules/${kver}" \
+            "${out}" 2>/dev/null && [ -s "${out}" ] && {
+                FRITE_DISK_INITRD="${out}"
+                info "Disk-boot initramfs staged (host dracut): ${out} ($(du -h "${out}" | cut -f1))"
+                return 0; }
+    fi
+    warn "Could not generate the disk-boot initramfs (no usable dracut). An"
+    warn "--encrypt-root install would be UNBOOTABLE without it."
+    return 1
+}
+if ${ENCRYPT_ROOT} && ${BUILD_INSTALLER} && { ! ${SKIP_KERNEL} || ${IMAGE_ONLY}; }; then
+    build_disk_initramfs || true
+    if [ -z "${FRITE_DISK_INITRD}" ] || [ ! -s "${FRITE_DISK_INITRD}" ]; then
+        err "--encrypt-root requires the disk-boot initramfs (see warnings above) — refusing to build a payload that cannot boot an encrypted root."
+        exit 1
+    fi
 fi
 
 banner "Phase 4: Packaging stage4 tarball"
@@ -1477,12 +1704,36 @@ build_installer_iso() {
     cp "${BOOT_STAGE}/${FRITE_KERNEL_IMG}" "${inst_root}/boot/"
     cp -r "${BOOT_STAGE}/dtb/." "${inst_root}/boot/dtb/" 2>/dev/null || true
     [ -f "${inst_root}/boot/dtb/${FRITE_DTB}" ] || { err "INSTALLER payload: disk-boot DTB ${FRITE_DTB} missing from ${inst_root}/boot/dtb — the installed system would not boot. Aborting."; exit 1; }
-    FRITE_INITRD_LINE="    # (installed system boots a real partitioned rootfs)"
+    # --encrypt-root: ship the crypt-capable disk-boot initramfs so
+    # install-frite.sh's LUKS branch has something to unlock a LUKS root with.
+    # root=LABEL=FRITE_ROOT stays the baked default either way — install-frite.sh
+    # rewrites it to root=/dev/mapper/cryptroot rd.luks.uuid=<uuid> ONLY when it
+    # actually formats an encrypted root (the same script also serves plaintext
+    # installs off a build that happened to pass --encrypt-root without
+    # --standalone forcing it every time).
+    if ${ENCRYPT_ROOT}; then
+        [ -n "${FRITE_DISK_INITRD}" ] && [ -s "${FRITE_DISK_INITRD}" ] || {
+            err "--encrypt-root: no disk-boot initramfs was generated (Phase 3.5) — refusing to package an installer that cannot boot an encrypted root."; exit 1; }
+        cp "${FRITE_DISK_INITRD}" "${inst_root}/boot/initrd.img"
+        FRITE_INITRD_LINE="    INITRD /initrd.img"
+    else
+        FRITE_INITRD_LINE="    # (installed system boots a real partitioned rootfs)"
+    fi
     FRITE_APPEND="${APPEND_BASE} root=LABEL=FRITE_ROOT"
     render_template "${SPECS_DIR}/boot/extlinux.conf.tmpl" "${inst_root}/boot/extlinux/extlinux.conf"
     cp "${SPECS_DIR}/installer/install-frite.sh" "${inst_root}/install-frite.sh"
     chmod +x "${inst_root}/install-frite.sh"
     [ -f "${STAGE_DIR}/uboot/u-boot.bin" ] && cp "${STAGE_DIR}/uboot/u-boot.bin" "${inst_root}/uboot/" 2>/dev/null || true
+    # ── LUKS2 FDE marker + OPTIONAL seeded passphrase for install-frite.sh ──────
+    # Mirrors build-x86-host-stage4.sh's installer-marker convention exactly.
+    if ${ENCRYPT_ROOT}; then
+        : > "${inst_root}/encrypt-root"   # marker: installer LUKS2-encrypts the target root
+        info "INSTALLER image: encrypt-root marker set (install-frite.sh prompts for the root-unlock passphrase)."
+        if [ -n "${LUKS_PASS}" ]; then
+            printf '%s' "${LUKS_PASS}" > "${inst_root}/luks-passphrase"; chmod 600 "${inst_root}/luks-passphrase"
+            warn "INSTALLER image carries an unattended LUKS passphrase (luks-passphrase, 0600) — anyone with the ISO can read it. Prefer the interactive install-time prompt."
+        fi
+    fi
 
     INSTALLER_PATH="${WORK_DIR}/${ART_PREFIX}.installer.iso"
     xorriso -as mkisofs -o "${INSTALLER_PATH}" -volid FRITE_INSTALL -joliet -rock "${inst_root}" \

@@ -1,0 +1,24 @@
+# fstab — Orange Pi Zero 2 (Allwinner H616, arm64) headless appliance.
+#
+# This board is microSD-only for the installed root (no eMMC, no NVMe/PCIe at
+# all on this SoC tier — see specs-orangepi-zero2/README.md's storage confidence
+# notes). Like the Frite/Orange-Pi-5 builders, this image produces LIVE/
+# INSTALLER ISO media + a stage4 tarball — there is NO build_img/.img assembly
+# step here. The LIVE flavor boots a squashfs root ephemerally (this fstab is
+# largely inert there; / is the live overlay). The INSTALLER flavor
+# (install-orangepi-zero2.sh) partitions the target medium AT INSTALL TIME and
+# rewrites the LABEL=/PARTUUID device columns below for the medium it actually
+# wrote, so the installed system mounts the right partitions. The placeholder
+# device paths below are replaced at install time; do not rely on them literally.
+#
+# <device>              <mount>  <type>   <options>                              <dump> <pass>
+LABEL=OPIZ2_BOOT     /boot    vfat     defaults,noatime,nosuid,nodev,noexec   0      2
+LABEL=OPIZ2_ROOT     /        ext4     defaults,noatime                       0      1
+tmpfs                /tmp     tmpfs    defaults,nosuid,nodev,noexec,size=128m 0      0
+tmpfs                /run     tmpfs    defaults,nosuid,nodev,mode=0755        0      0
+
+# zram swap: this is a small, cheap appliance board (512MB/1GB/1.5GB/2GB DDR3
+# RAM SKUs, RAM auto-detected — see the README); a zram helper is configured at
+# first boot by the builder (mirrors La Frite's 512MB SKU handling) rather than
+# baked as a fixed swap partition here, since the SAME image runs across every
+# RAM SKU.

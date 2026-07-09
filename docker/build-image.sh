@@ -50,7 +50,8 @@
 # one, dot-delimited so it fits the allowed HARDWARE_CLASS charset
 # (^[A-Za-z0-9._-]{1,64}$ — no "+", no ":"):
 #
-#   "<platform>.<role>[.<extra>]"   platform ∈ {x86, rpi5, frite, jetson}
+#   "<platform>.<role>[.<extra>]"   platform ∈ {x86, rpi5, frite, jetson,
+#                        orangepi5, orangepizero2}
 #
 #   x86 node roles      (primary | mesh-extension): pki | be | fe | be-gpu
 #                        (-> --role be+gpu) | omnibus | edge_ai
@@ -59,10 +60,22 @@
 #                        standalone-unaffiliated (UNAFFILIATED plain Gentoo
 #                        desktop — no brand/theme/seed/mesh/SSO flags may
 #                        accompany it; the role presets the neutral identity)
-#   rpi5 node roles      (primary | mesh-extension): pki | backend | frontend
+#   rpi5 node roles      (primary | mesh-extension): "<role>[.<board>]"; role =
+#                        pki | backend | frontend | desktop | standalone-desktop
+#                        (default: backend); board = rpi5 (default) | rpi4 |
+#                        rpi3. board=rpi3 is DESKTOP-ONLY (1 GB RAM has no
+#                        headroom for the k8s cluster-node stack) — role !=
+#                        desktop/standalone-desktop with board=rpi3 is a clean
+#                        FAILED ingest, mirroring build-rpi5-stage4.sh's own
+#                        hard-error. standalone-desktop resolves the SAME
+#                        --role desktop the plain "desktop" token does, but
+#                        also has run_rpi5_build() append --standalone (and
+#                        --local-user TARGET_NAME when TARGET_USER carries a
+#                        name) — the hardened LUKS2 local-login posture, no
+#                        mesh/SSO (see docs/STANDALONE-DESKTOP.md).
 #   frite (client only): "<board>.<flavor>"; board = la-frite (default) |
 #                        le-potato | sweet-potato; flavor = live | installer
-#                        (default). Bare "frite" = la-frite.installer.
+#                        (default) | standalone. Bare "frite" = la-frite.installer.
 #                        NOTE: build-frite-stage4.sh's own "both" flavor
 #                        (building live AND installer in one invocation) is
 #                        intentionally NOT exposed through HARDWARE_CLASS here
@@ -71,11 +84,36 @@
 #                        halves. Requesting flavor=both is a clean, immediate
 #                        FAILED ingest (see resolve_build_target below) rather
 #                        than silently keeping one artifact and discarding the
-#                        other.
+#                        other. flavor=standalone requests the hardened
+#                        no-mesh/LUKS2/local-login posture: resolve_build_target
+#                        normalizes it to the real flavor=installer (--standalone
+#                        forces the installer path internally anyway) and
+#                        run_frite_build() appends --standalone (and
+#                        --local-user TARGET_NAME when set).
 #   jetson (EXPERIMENTAL; primary | mesh-extension): "<role>.<board>"; role =
 #                        edge_ai (default) | gpu-host | full | desktop; board =
 #                        orin-nano (default) | orin-nano-4gb | orin-nx-8gb |
-#                        orin-nx-16gb.
+#                        orin-nx-16gb. NO standalone token here, deliberately
+#                        — see the JETSON STANDALONE EXCEPTION note below.
+#   orangepi5 (EXPERIMENTAL; client only, no --role axis — a light-desktop
+#                        client device like frite): "<board>.<flavor>"; board =
+#                        orange-pi-5-plus (default) | orange-pi-5; flavor =
+#                        live | installer (default) | standalone. Bare
+#                        "orangepi5" = orange-pi-5-plus.installer. "both" is
+#                        rejected for the same single-imageRef reason as frite
+#                        above; flavor=standalone behaves exactly as frite's
+#                        does (normalized to installer + --standalone/
+#                        --local-user appended by run_orangepi5_build()).
+#   orangepizero2 (EXPERIMENTAL; client only — "client" here means "a single
+#                        physical appliance provisioned via the host KEYS
+#                        profile," not "has a desktop GUI": this platform is
+#                        HEADLESS, no --role/--board axis at all): "<flavor>";
+#                        flavor = live | installer (default) | standalone. Bare
+#                        "orangepizero2" = installer. "both" is rejected for
+#                        the same single-imageRef reason as frite above;
+#                        flavor=standalone behaves exactly as frite's does
+#                        (normalized to installer + --standalone/--local-user
+#                        appended by run_orangepizero2_build()).
 #
 #   A bare token with no platform prefix (e.g. HARDWARE_CLASS="pki") is
 #   accepted as a legacy/convenience alias for the matching x86 role.
@@ -86,6 +124,39 @@
 #   silent default and never a crash.
 #
 # ── Scope / known gaps (deliberately NOT solved by this script) ──────────────
+#  * ARM STANDALONE GAP — CLOSED for rpi5/frite/orangepi5/orangepizero2: the
+#    standalone-ARM track added --standalone/--local-user/--local-pass/
+#    --encrypt-root support to build-rpi5-stage4.sh, build-frite-stage4.sh,
+#    build-jetson-stage4.sh, build-orangepi5-stage4.sh and
+#    build-orangepi-zero2-stage4.sh (docs/STANDALONE-DESKTOP.md's "ARM
+#    platforms" section); this Job worker now has a HARDWARE_CLASS token that
+#    requests it on four of those five platforms, mirroring x86's
+#    standalone-thin/standalone-thick/standalone-unaffiliated shape:
+#      - rpi5:          the role token "standalone-desktop" (e.g.
+#                        "rpi5.standalone-desktop.rpi4") — resolves --role
+#                        desktop (the only role --standalone composes onto)
+#                        plus RPI5_STANDALONE, which run_rpi5_build() turns
+#                        into --standalone (+ --local-user when TARGET_USER
+#                        carries a name).
+#      - frite/orangepi5/orangepizero2: the flavor value "standalone" (e.g.
+#                        "frite.la-frite.standalone") on platforms with no
+#                        --role axis at all — normalized to the real
+#                        flavor=installer (--standalone forces the installer
+#                        path internally regardless) plus a per-platform
+#                        *_STANDALONE flag that the matching run_*_build()
+#                        turns into --standalone (+ --local-user).
+#    Jetson remains the one deliberate exception — see the JETSON STANDALONE
+#    EXCEPTION note right below — and is NOT given a HARDWARE_CLASS token for
+#    this; any jetson request shaped like one falls through to the same
+#    generic "unsupported combination" FAILED ingest as any other bad token.
+#  * JETSON STANDALONE EXCEPTION: build-jetson-stage4.sh itself hard-errors on
+#    --standalone/--encrypt-root ("not supported on this platform yet") because
+#    the Orin's single boot+root partition means encrypting root would leave
+#    UEFI firmware unable to find a kernel — see docs/STANDALONE-DESKTOP.md's
+#    Jetson section. Since the underlying builder cannot honor the posture at
+#    all, this script deliberately does NOT add a jetson HARDWARE_CLASS token
+#    for it either; that would just be a friendlier way to reach the same
+#    hard-error, not a real capability.
 #  * CONTRACT GAP — prod vs. test hardening: TriggerImageBuildRequest and
 #    image-gen-job.yaml have NO field at all for selecting production-tier
 #    hardening (locked-down firewalld, Cloudflare/ACME) vs. the weaker
@@ -187,9 +258,17 @@ SCRATCH_DIR=""
 # resolve_build_target() output
 PLATFORM=""
 BUILD_ROLE=""
+RPI5_BOARD_OUT=""
+RPI5_STANDALONE=false
 FRITE_BOARD_OUT=""
 FRITE_FLAVOR_OUT=""
+FRITE_STANDALONE=false
 JETSON_BOARD_OUT=""
+ORANGEPI5_BOARD_OUT=""
+ORANGEPI5_FLAVOR_OUT=""
+ORANGEPI5_STANDALONE=false
+ORANGEPIZERO2_FLAVOR_OUT=""
+ORANGEPIZERO2_STANDALONE=false
 KEYS_ROLE=""
 
 cleanup_scratch() {
@@ -359,7 +438,8 @@ for tool in curl python3 ssh-keygen tar find; do
 done
 
 [ -d "$GENERATOR_DIR" ] || die ERROR "GENERATOR_DIR '${GENERATOR_DIR}' not found (broken image build?)"
-for f in build-x86-host-stage4.sh build-rpi5-stage4.sh build-frite-stage4.sh build-jetson-stage4.sh; do
+for f in build-x86-host-stage4.sh build-rpi5-stage4.sh build-frite-stage4.sh build-jetson-stage4.sh \
+         build-orangepi5-stage4.sh build-orangepi-zero2-stage4.sh; do
   [ -x "${GENERATOR_DIR}/${f}" ] || die ERROR "generator build script missing/not executable: ${GENERATOR_DIR}/${f}"
 done
 
@@ -389,6 +469,16 @@ fi
 # ── 4. map IMAGE_TYPE + HARDWARE_CLASS -> a generator build target ──────────
 # See the header comment for the full HARDWARE_CLASS convention.
 resolve_build_target() {
+  # ARM standalone-posture flags — always defaulted false here (before any
+  # platform-specific case arm runs) so every call starts from a clean slate,
+  # regardless of which platform ends up matching. Only the rpi5 arm's
+  # "standalone-desktop" role token and the frite/orangepi5/orangepizero2 arms'
+  # "standalone" flavor token ever flip one of these to true.
+  RPI5_STANDALONE=false
+  FRITE_STANDALONE=false
+  ORANGEPI5_STANDALONE=false
+  ORANGEPIZERO2_STANDALONE=false
+
   if [ -z "$HARDWARE_CLASS" ]; then
     case "$IMAGE_TYPE" in
       primary|mesh-extension) PLATFORM="x86"; BUILD_ROLE="be+gpu" ;;
@@ -426,10 +516,25 @@ resolve_build_target() {
       rpi5)
         [ "$IMAGE_TYPE" = "client" ] && return 1
         case "$p2" in
-          pki|backend|frontend) BUILD_ROLE="$p2" ;;
-          "")                   BUILD_ROLE="backend" ;;
+          pki|backend|frontend|desktop) BUILD_ROLE="$p2" ;;
+          standalone-desktop)
+            # Composes onto the same --role desktop the plain "desktop" token
+            # resolves to (build-rpi5-stage4.sh's own --standalone hard-errors
+            # on every OTHER role) — this token just also flips RPI5_STANDALONE
+            # so run_rpi5_build appends --standalone/--local-user below.
+            BUILD_ROLE="desktop"
+            RPI5_STANDALONE=true
+            ;;
+          "")                           BUILD_ROLE="backend" ;;
           *) return 1 ;;
         esac
+        RPI5_BOARD_OUT="${p3:-rpi5}"
+        case "$RPI5_BOARD_OUT" in rpi5|rpi4|rpi3) ;; *) return 1 ;; esac
+        # board=rpi3 is DESKTOP-ONLY (1 GB RAM has no headroom for the k8s
+        # cluster-node stack) — mirrors build-rpi5-stage4.sh's own hard-error.
+        if [ "$RPI5_BOARD_OUT" = "rpi3" ] && [ "$BUILD_ROLE" != "desktop" ]; then
+          return 1
+        fi
         PLATFORM="rpi5"
         ;;
       frite)
@@ -444,7 +549,18 @@ resolve_build_target() {
         # resolve_build_target caller below) is strictly better than
         # nondeterministically keeping one artifact and silently discarding
         # the other — see the header comment's frite convention note.
-        case "$FRITE_FLAVOR_OUT" in live|installer) ;; *) return 1 ;; esac
+        case "$FRITE_FLAVOR_OUT" in
+          standalone)
+            # build-frite-stage4.sh's --standalone already forces the
+            # installer flavor on internally (LUKS2 FDE only happens via the
+            # installer path) — normalize here so FRITE_FLAVOR_OUT always
+            # carries a real --flavor value, never the job-only sentinel.
+            FRITE_STANDALONE=true
+            FRITE_FLAVOR_OUT="installer"
+            ;;
+          live|installer) ;;
+          *) return 1 ;;
+        esac
         PLATFORM="frite"
         ;;
       jetson)
@@ -454,6 +570,41 @@ resolve_build_target() {
         case "$BUILD_ROLE" in edge_ai|gpu-host|full|desktop) ;; *) return 1 ;; esac
         case "$JETSON_BOARD_OUT" in orin-nano|orin-nano-4gb|orin-nx-8gb|orin-nx-16gb) ;; *) return 1 ;; esac
         PLATFORM="jetson"
+        ;;
+      orangepi5)
+        [ "$IMAGE_TYPE" != "client" ] && return 1
+        ORANGEPI5_BOARD_OUT="${p2:-orange-pi-5-plus}"
+        ORANGEPI5_FLAVOR_OUT="${p3:-installer}"
+        case "$ORANGEPI5_BOARD_OUT" in orange-pi-5-plus|orange-pi-5) ;; *) return 1 ;; esac
+        # "both" rejected for the same single-imageRef reason as frite above.
+        case "$ORANGEPI5_FLAVOR_OUT" in
+          standalone)
+            # --standalone forces the installer flavor internally, same as
+            # frite above — normalize so ORANGEPI5_FLAVOR_OUT always carries a
+            # real --flavor value.
+            ORANGEPI5_STANDALONE=true
+            ORANGEPI5_FLAVOR_OUT="installer"
+            ;;
+          live|installer) ;;
+          *) return 1 ;;
+        esac
+        PLATFORM="orangepi5"
+        ;;
+      orangepizero2)
+        [ "$IMAGE_TYPE" != "client" ] && return 1
+        ORANGEPIZERO2_FLAVOR_OUT="${p2:-installer}"
+        # "both" rejected for the same single-imageRef reason as frite above.
+        case "$ORANGEPIZERO2_FLAVOR_OUT" in
+          standalone)
+            # --standalone forces the installer flavor internally, same as
+            # frite/orangepi5 above.
+            ORANGEPIZERO2_STANDALONE=true
+            ORANGEPIZERO2_FLAVOR_OUT="installer"
+            ;;
+          live|installer) ;;
+          *) return 1 ;;
+        esac
+        PLATFORM="orangepizero2"
         ;;
       *)
         # Bare legacy token, no platform prefix -> x86 alias.
@@ -496,7 +647,11 @@ resolve_build_target || die FAILED "unsupported IMAGE_TYPE='${IMAGE_TYPE}' / HAR
 
 HOSTNAME_OUT="sdimg-$(printf '%s' "$BUILD_ID" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9' | cut -c1-8)"
 log "resolved: platform=${PLATFORM} role=${BUILD_ROLE:-<n/a>} keys_role=${KEYS_ROLE} imageType=${IMAGE_TYPE} hardwareClass=${HARDWARE_CLASS:-<default>} hostname=${HOSTNAME_OUT}"
-[ "$PLATFORM" = "jetson" ] && warn "jetson is EXPERIMENTAL in the generator (hardware validation pending) — proceeding anyway since it was explicitly requested"
+case "$PLATFORM" in
+  jetson|orangepi5|orangepizero2)
+    warn "${PLATFORM} is EXPERIMENTAL in the generator (hardware validation pending) — proceeding anyway since it was explicitly requested"
+    ;;
+esac
 
 # ── 5. run the real build (delegates to the SAME generator scripts the local
 #    `make` targets use — no image-building logic is duplicated here) ───────
@@ -515,9 +670,13 @@ run_x86_build() {
 }
 
 run_rpi5_build() {
-  set -- -w "${SCRATCH_DIR}/work" -j "$JOBS" --role "$BUILD_ROLE" --env "$IMG_BUILD_ENV" \
-         --cluster-domain "$DOMAIN" -H "$HOSTNAME_OUT" --no-iso --no-tar
+  set -- -w "${SCRATCH_DIR}/work" -j "$JOBS" --role "$BUILD_ROLE" --board "$RPI5_BOARD_OUT" \
+         --env "$IMG_BUILD_ENV" --cluster-domain "$DOMAIN" -H "$HOSTNAME_OUT" --no-iso --no-tar
   [ -n "$BRAND_FLAGS_CFG" ] && set -- "$@" --config "$BRAND_FLAGS_CFG"
+  if [ "$RPI5_STANDALONE" = "true" ]; then
+    set -- "$@" --standalone
+    [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
+  fi
   ./build-rpi5-stage4.sh "$@"
 }
 
@@ -526,6 +685,10 @@ run_frite_build() {
          --cluster-domain "$DOMAIN" -H "$HOSTNAME_OUT" \
          --board "$FRITE_BOARD_OUT" --flavor "$FRITE_FLAVOR_OUT"
   [ -n "$BRAND_FLAGS_CFG" ] && set -- "$@" --config "$BRAND_FLAGS_CFG"
+  if [ "$FRITE_STANDALONE" = "true" ]; then
+    set -- "$@" --standalone
+    [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
+  fi
   ./build-frite-stage4.sh "$@"
 }
 
@@ -535,6 +698,30 @@ run_jetson_build() {
          --role "$BUILD_ROLE" --board "$JETSON_BOARD_OUT" --kernel-flavor mainline
   [ -n "$BRAND_FLAGS_CFG" ] && set -- "$@" --config "$BRAND_FLAGS_CFG"
   ./build-jetson-stage4.sh "$@"
+}
+
+run_orangepi5_build() {
+  set -- -w "${SCRATCH_DIR}/work" -j "$JOBS" --env "$IMG_BUILD_ENV" \
+         --cluster-domain "$DOMAIN" -H "$HOSTNAME_OUT" \
+         --board "$ORANGEPI5_BOARD_OUT" --flavor "$ORANGEPI5_FLAVOR_OUT"
+  [ -n "$BRAND_FLAGS_CFG" ] && set -- "$@" --config "$BRAND_FLAGS_CFG"
+  if [ "$ORANGEPI5_STANDALONE" = "true" ]; then
+    set -- "$@" --standalone
+    [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
+  fi
+  ./build-orangepi5-stage4.sh "$@"
+}
+
+run_orangepizero2_build() {
+  set -- -w "${SCRATCH_DIR}/work" -j "$JOBS" --env "$IMG_BUILD_ENV" \
+         --cluster-domain "$DOMAIN" -H "$HOSTNAME_OUT" \
+         --flavor "$ORANGEPIZERO2_FLAVOR_OUT"
+  [ -n "$BRAND_FLAGS_CFG" ] && set -- "$@" --config "$BRAND_FLAGS_CFG"
+  if [ "$ORANGEPIZERO2_STANDALONE" = "true" ]; then
+    set -- "$@" --standalone
+    [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
+  fi
+  ./build-orangepi-zero2-stage4.sh "$@"
 }
 
 # forward_and_wait CMD... — run the (potentially hours-long) real build in the
@@ -559,21 +746,30 @@ forward_and_wait() {
   return "$child_rc"
 }
 
+case "$PLATFORM" in
+  frite)         build_desc="${FRITE_BOARD_OUT}.${FRITE_FLAVOR_OUT}" ;;
+  orangepi5)     build_desc="${ORANGEPI5_BOARD_OUT}.${ORANGEPI5_FLAVOR_OUT}" ;;
+  orangepizero2) build_desc="${ORANGEPIZERO2_FLAVOR_OUT}" ;;
+  *)             build_desc="${BUILD_ROLE}" ;;
+esac
+
 build_ok=true
 case "$PLATFORM" in
-  x86)    forward_and_wait run_x86_build    || build_ok=false ;;
-  rpi5)   forward_and_wait run_rpi5_build   || build_ok=false ;;
-  frite)  forward_and_wait run_frite_build  || build_ok=false ;;
-  jetson) forward_and_wait run_jetson_build || build_ok=false ;;
+  x86)           forward_and_wait run_x86_build           || build_ok=false ;;
+  rpi5)          forward_and_wait run_rpi5_build           || build_ok=false ;;
+  frite)         forward_and_wait run_frite_build          || build_ok=false ;;
+  jetson)        forward_and_wait run_jetson_build         || build_ok=false ;;
+  orangepi5)     forward_and_wait run_orangepi5_build      || build_ok=false ;;
+  orangepizero2) forward_and_wait run_orangepizero2_build  || build_ok=false ;;
 esac
 if [ "$build_ok" = "false" ]; then
-  die FAILED "the ${PLATFORM} build (role=${BUILD_ROLE:-${FRITE_BOARD_OUT}.${FRITE_FLAVOR_OUT}}) exited non-zero — see this Job pod's logs for the full build output"
+  die FAILED "the ${PLATFORM} build (role=${build_desc}) exited non-zero — see this Job pod's logs for the full build output"
 fi
 
 # ── 6. locate the produced artifact + copy it into ARTIFACT_DIR ─────────────
 case "$PLATFORM" in
-  x86|rpi5|jetson) artifact_glob='*.img' ;;
-  frite)           artifact_glob='*.iso' ;;
+  x86|rpi5|jetson)             artifact_glob='*.img' ;;
+  frite|orangepi5|orangepizero2) artifact_glob='*.iso' ;;
 esac
 # Fail loud (never nondeterministically pick-and-silently-discard) if the
 # build tree holds anything other than EXACTLY one matching artifact. The
@@ -700,7 +896,7 @@ build_keys_bundle
 log "keys bundle: ${ARTIFACT_DIR}/keys.tar (keysRef=${KEYS_REF})"
 
 # ── 9. terminal report ───────────────────────────────────────────────────────
-MESSAGE_OUT="image build completed: platform=${PLATFORM} role=${BUILD_ROLE:-${FRITE_BOARD_OUT}.${FRITE_FLAVOR_OUT}} imageType=${IMAGE_TYPE} hardwareClass=${HARDWARE_CLASS:-<default>}"
+MESSAGE_OUT="image build completed: platform=${PLATFORM} role=${build_desc} imageType=${IMAGE_TYPE} hardwareClass=${HARDWARE_CLASS:-<default>}"
 if send_ingest COMPLETED; then
   log "done: imageRef=${IMAGE_REF} keysRef=${KEYS_REF}"
   exit 0

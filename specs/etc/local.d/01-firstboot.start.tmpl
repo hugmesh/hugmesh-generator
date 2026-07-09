@@ -115,7 +115,7 @@ if [ -b /dev/nvme0n1 ]; then
 fi
 
 echo ""
-echo "=== Gentoo RPi 5 (Hardened + Headscale + Kubernetes) ==="
+echo "=== @@BRAND_TITLE@@ first boot (@@HOSTNAME@@) ==="
 echo "  Hostname:    $(cat /etc/hostname 2>/dev/null || echo @@HOSTNAME@@)"
 echo "  Kubernetes:  $(kubelet --version 2>/dev/null || echo 'installed')"
 echo "  containerd:  $(containerd --version 2>/dev/null || echo 'installed')"

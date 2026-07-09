@@ -61,11 +61,15 @@ reset_opts() {
     OPT_HOME_MODE="" OPT_HOME_DEVICE="" OPT_HOME_BACKUP="" OPT_HOME_ENCRYPTED=no
     OPT_HOME_SEED="" OPT_HOME_ARCHIVE=""
     OPT_FRITE_BOARD=la-frite OPT_FRITE_FLAVOR=both OPT_FRITE_DESKTOP=light
+    OPT_RPI_BOARD=rpi5
     OPT_SA_GPU=all-free OPT_SA_STEAM=native OPT_SA_MEDIA=yes OPT_SA_USER=snap
     OPT_SA_KEYFILE=none OPT_SA_YUBIKEY=none OPT_SA_THEME=boogiepop OPT_SA_PROXY=yes
     OPT_SA_SNORT=yes OPT_SA_AIDE=no OPT_SA_KBUILTIN=no OPT_SA_EGRESS=""
     OPT_SA_MEDIA_LABEL="" OPT_ROOT_LOGIN=no SA_LOCAL_PASS="" SA_LUKS_PASS=""
+    ARM_LOCAL_PASS="" ARM_LUKS_PASS=""
     OPT_JETSON_BOARD=orin-nano OPT_JETSON_KFLAVOR=mainline
+    OPT_ORANGEPI5_BOARD=orange-pi-5-plus OPT_ORANGEPI5_FLAVOR=both OPT_ORANGEPI5_FLEET=no
+    OPT_ORANGEPIZERO2_FLAVOR=both
 }
 
 # ── fleet build: RESUME/X86_OMNIBUS/FRITE_FLEET/JETSON_FLEET/PENTEST gate to ────
@@ -206,7 +210,7 @@ assert_not "unaff: no --brand"          "--brand"
 assert_not "unaff: no --bundle-source"  "--bundle-source"
 assert_not "unaff: no --home-seed-code" "--home-seed-code"
 assert_not "unaff: no --wallpaper"      "--wallpaper"
-assert_has "unaff: local user collected" "--local-user alice"
+assert_has "unaff: local user collected" "--local-user 'alice'"
 assert_has "unaff: gpu driver"          "--gpu-driver nvidia"
 assert_has "unaff: unlock keyfile"      "--unlock-keyfile boot"
 assert_has "unaff: unlock yubikey"      "--unlock-yubikey login"
@@ -222,10 +226,18 @@ assert_has "thick sibling: brand intact" "BRAND=acme"
 assert_has "thick sibling: wallpaper intact" "--wallpaper /tmp/wall.png"
 
 # ── extra flags ride IMG_FLAGS on the targets without STANDALONE_FLAGS ──────────
+# rpi-<role> (single-role) moved to the STANDALONE_FLAGS channel alongside
+# x86-*/jetson-*/frite (Phase 1 of the standalone-ARM track: --standalone/
+# --local-user/--local-pass need somewhere to ride); the rpi FLEET target
+# (multiple roles per build) stays on IMG_FLAGS, same reasoning as build-all.
 reset_opts; OPT_IMGFLAGS="--no-iso" OPT_EXTRA_FLAGS="--enable-wifi"
 build_make_cmd rpi-frontend "pi fe" 1
-assert_has "rpi: extra via IMG_FLAGS"   "IMG_FLAGS=--no-iso --enable-wifi"
-assert_not "rpi: no STANDALONE_FLAGS"   "STANDALONE_FLAGS="
+assert_has "rpi-role: imgflags plain"      "IMG_FLAGS=--no-iso"
+assert_not "rpi-role: extra NOT doubled"   "IMG_FLAGS=--no-iso --enable-wifi"
+assert_has "rpi-role: extra via STANDALONE" "STANDALONE_FLAGS=--enable-wifi"
+build_make_cmd rpi "fleet" 3
+assert_has "rpi fleet: extra via IMG_FLAGS" "IMG_FLAGS=--no-iso --enable-wifi"
+assert_not "rpi fleet: no STANDALONE_FLAGS" "STANDALONE_FLAGS="
 build_make_cmd x86-be "be" 1
 assert_has "x86: imgflags plain"        "IMG_FLAGS=--no-iso"
 assert_not "x86: extra NOT doubled"     "IMG_FLAGS=--no-iso --enable-wifi"
@@ -237,12 +249,180 @@ build_make_cmd build-everything "everything" 20
 assert_has "everything: imgflags plain" "IMG_FLAGS=--no-iso"
 assert_not "everything: extra NOT doubled" "IMG_FLAGS=--no-iso --enable-wifi"
 
+# ── ARM_LOCAL_PASS/ARM_LUKS_PASS: masked secrets fold into STANDALONE_FLAGS ──────
+# Regression coverage for a real bug: rpi5/frite/jetson/orangepi5/orangepizero2
+# had NO masked entry point for --local-pass/--luks-pass at all (unlike x86's
+# standalone_screen()) — the only reachable path was typing them into the
+# unmasked, PERSISTED "Extra builder flags" field (OPT_EXTRA_FLAGS, written to
+# ${CONF_FILE} in plaintext by save_conf on every save). arm_secrets_prompt()
+# now collects them into ARM_LOCAL_PASS/ARM_LUKS_PASS (never persisted — reset_opts
+# above and save_conf both exclude them, exactly like SA_LOCAL_PASS/SA_LUKS_PASS),
+# and _arm_standalone_flags() folds them into STANDALONE_FLAGS ahead of the
+# freeform escape hatch (which can still override, same ordering as x86's own
+# `bf` string). Every value is wrapped by _shell_quote() (single-quoted, plain
+# alnum values just get a harmless quote pair) — see the metachar-injection
+# block further below for why.
+reset_opts; ARM_LOCAL_PASS="Sup3rSecret!" ARM_LUKS_PASS="Unlock123"
+build_make_cmd rpi-desktop "pi desktop, arm secrets" 1
+assert_has "rpi-role: ARM_LOCAL_PASS threads"   "--local-pass 'Sup3rSecret!'"
+assert_has "rpi-role: ARM_LUKS_PASS threads"    "--luks-pass 'Unlock123'"
+assert_one_flags "rpi-role: arm secrets"
+build_make_cmd frite "frite, arm secrets" 1
+assert_has "frite: ARM_LOCAL_PASS threads"      "--local-pass 'Sup3rSecret!'"
+build_make_cmd jetson-desktop "jetson desktop, arm secrets" 1
+assert_has "jetson-role: ARM_LOCAL_PASS threads" "--local-pass 'Sup3rSecret!'"
+build_make_cmd orangepi5 "orangepi5, arm secrets" 1
+assert_has "orangepi5: ARM_LOCAL_PASS threads"  "--local-pass 'Sup3rSecret!'"
+build_make_cmd orangepizero2 "orangepizero2, arm secrets" 1
+assert_has "orangepizero2: ARM_LOCAL_PASS threads" "--local-pass 'Sup3rSecret!'"
+
+# ordering: ARM_LOCAL_PASS/ARM_LUKS_PASS come BEFORE the freeform extra-flags
+# field, so an operator can still override via Extra builder flags if needed —
+# same convention as x86's `bf` string (extra flags always LAST).
+reset_opts; ARM_LOCAL_PASS="Sup3rSecret!" OPT_EXTRA_FLAGS="--enable-wifi"
+build_make_cmd rpi-desktop "pi desktop, arm secrets + extra" 1
+assert_has "rpi-role: combined secrets+extra" "STANDALONE_FLAGS=--local-pass 'Sup3rSecret!' --enable-wifi"
+
+# a plain build with no secrets set must NOT emit an empty/bogus --local-pass —
+# STANDALONE_FLAGS should only appear when there's something to say.
+reset_opts
+build_make_cmd rpi-desktop "pi desktop, no secrets" 1
+assert_not "rpi-role: no secrets -> no local-pass" "--local-pass"
+assert_not "rpi-role: no secrets -> no luks-pass"  "--luks-pass"
+
+# ── metacharacter-laden secrets: real command-injection-shaped regression ───────
+# Confirmed defect: a password/passphrase containing shell metacharacters
+# (space, single quote, `;`, `$()`, backticks) previously flowed UNQUOTED into
+# STANDALONE_FLAGS, which the Makefile then re-expands into a real shell
+# command line (native execution AND, before the Docker-dispatch fix, a second
+# hazard there too) — an ordinary strong/diceware password could execute
+# arbitrary shell text. _shell_quote() now wraps every secret in single quotes
+# (escaping any embedded quote as '\''), so the composed STANDALONE_FLAGS text
+# must contain the value byte-for-byte, self-quoted, never bare.
+reset_opts; ARM_LOCAL_PASS="pw; touch /tmp/pwned; echo done" ARM_LUKS_PASS='it'"'"'s a $(secret) `here`'
+build_make_cmd rpi-desktop "pi desktop, metachar secrets" 1
+assert_has "rpi-role: semicolon/cmdsub password self-quoted" \
+    "--local-pass 'pw; touch /tmp/pwned; echo done'"
+assert_has "rpi-role: embedded-quote passphrase escaped"     \
+    "--luks-pass 'it'\\''s a \$(secret) \`here\`'"
+
+reset_opts; SA_LOCAL_PASS="pw; touch /tmp/pwned; echo done" OPT_SA_USER="it's-alice"
+build_make_cmd x86-standalone-thin "x86 standalone, metachar secrets" 1
+assert_has "x86: semicolon/cmdsub password self-quoted" \
+    "--local-pass 'pw; touch /tmp/pwned; echo done'"
+assert_has "x86: embedded-quote username escaped" \
+    "--local-user 'it'\\''s-alice'"
+
+# ── _redacted_run_make: console/log preview fully masks multi-word secrets ──────
+# Regression coverage for a real bug: the OLD redaction was a token-based regex
+# that only masked the FIRST whitespace-delimited word after --local-pass/
+# --luks-pass, leaving the rest of a multi-word (diceware-style) passphrase —
+# and a dangling stray quote — printed in the clear in both the console
+# "launching: ..." line and the persistent per-run log file (which the menu's
+# own "Log tail" feature re-displays). launch_build() was also previously the
+# ONLY caller of this logic and was never exercised by this test file at all;
+# _redacted_run_make() is now a standalone, directly testable function.
+redacted="$(_redacted_run_make "rpi-desktop" "WORK_DIR=/out" \
+    "STANDALONE_FLAGS=--standalone --local-pass correct horse battery staple --luks-pass 'unlock me too' --enable-wifi")"
+case "${redacted}" in
+    *"correct horse battery staple"*|*"unlock me too"*) _bad "redact: multi-word secret leaked in ${redacted}" ;;
+    *"STANDALONE_FLAGS=<redacted>"*) _ok ;;
+    *) _bad "redact: placeholder missing from ${redacted}" ;;
+esac
+case "${redacted}" in
+    *"rpi-desktop"*"WORK_DIR=/out"*) _ok ;;
+    *) _bad "redact: non-secret elements must survive untouched: ${redacted}" ;;
+esac
+# no secret flags present -> element passes through completely untouched
+redacted="$(_redacted_run_make "rpi-desktop" "STANDALONE_FLAGS=--enable-wifi --no-iso")"
+assert_eq "redact: no-secret element untouched" "${redacted}" "rpi-desktop STANDALONE_FLAGS=--enable-wifi --no-iso"
+
+# ── rpi: --board axis (Phase 6, Pi 4 support) — RPI_BOARD make-var threaded to ──
+# BOTH rpi-% (single-role) and the bare 'rpi' 3-role fleet target, so a board
+# picked in single_role_screen()'s Pi-board picker survives a switch to the
+# fleet menu entry instead of silently reverting to the rpi5 default.
+reset_opts
+build_make_cmd rpi-desktop "pi desktop default board" 1
+assert_has "rpi-role: default board"    "RPI_BOARD=rpi5"
+build_make_cmd rpi "fleet default board" 3
+assert_has "rpi fleet: default board"   "RPI_BOARD=rpi5"
+
+reset_opts; OPT_RPI_BOARD=rpi4
+build_make_cmd rpi-backend "pi be, rpi4" 1
+assert_has "rpi-role: rpi4 board"       "RPI_BOARD=rpi4"
+assert_has "rpi-role: role intact"      "rpi-backend"
+build_make_cmd rpi "fleet, rpi4" 3
+assert_has "rpi fleet: rpi4 board"      "RPI_BOARD=rpi4"
+
+# --board rpi3 (Phase 8, Pi 3 support) — DESKTOP-ONLY (the builder hard-errors
+# on any other role), so the realistic single-role invocation is rpi-desktop,
+# not rpi-backend. Threading itself (RPI_BOARD make-var composition) is
+# role-agnostic here — this menu layer doesn't pre-validate the role/board
+# combo (the builder's hard-error is the authoritative safety net) — mirrored
+# for both the single-role AND fleet targets, same as rpi4 above.
+reset_opts; OPT_RPI_BOARD=rpi3
+build_make_cmd rpi-desktop "pi desktop, rpi3" 1
+assert_has "rpi-role: rpi3 board"       "RPI_BOARD=rpi3"
+assert_has "rpi-role: role intact"      "rpi-desktop"
+build_make_cmd rpi "fleet, rpi3" 3
+assert_has "rpi fleet: rpi3 board"      "RPI_BOARD=rpi3"
+
+# x86-*/frite/jetson-* targets must NEVER pick up RPI_BOARD (it is meaningless
+# there) — guards against a careless glob widening the rpi-* match above.
+reset_opts; OPT_RPI_BOARD=rpi4
+build_make_cmd x86-be "be" 1
+assert_not "x86: no RPI_BOARD leak"     "RPI_BOARD="
+build_make_cmd frite "frite" 1
+assert_not "frite: no RPI_BOARD leak"   "RPI_BOARD="
+build_make_cmd jetson-edge_ai "jetson" 1
+assert_not "jetson: no RPI_BOARD leak"  "RPI_BOARD="
+
 # ── frite: board + flavor + desktop make-vars ───────────────────────────────────
 reset_opts; OPT_FRITE_BOARD=le-potato OPT_FRITE_FLAVOR=live OPT_FRITE_DESKTOP=none
 build_make_cmd frite "frite" 1
 assert_has "frite: board"               "FRITE_BOARD=le-potato"
 assert_has "frite: flavor"              "FRITE_FLAVOR=live"
 assert_has "frite: desktop"             "FRITE_DESKTOP=none"
+
+# ── orangepi5 (EXPERIMENTAL): board + flavor make-vars, no --role/--desktop axis ─
+reset_opts; OPT_ORANGEPI5_BOARD=orange-pi-5 OPT_ORANGEPI5_FLAVOR=live
+build_make_cmd orangepi5 "orangepi5" 1
+assert_eq  "orangepi5: target"           "${RUN_MAKE[0]}" "orangepi5"
+assert_has "orangepi5: board"            "ORANGEPI5_BOARD=orange-pi-5"
+assert_has "orangepi5: flavor"           "ORANGEPI5_FLAVOR=live"
+reset_opts; OPT_ORANGEPI5_BOARD=orange-pi-5-plus OPT_ORANGEPI5_FLAVOR=both
+build_make_cmd orangepi5 "orangepi5 default" 1
+assert_has "orangepi5: default board"    "ORANGEPI5_BOARD=orange-pi-5-plus"
+assert_has "orangepi5: default flavor"   "ORANGEPI5_FLAVOR=both"
+# x86-*/frite/jetson-*/rpi-* targets must NEVER pick up ORANGEPI5_BOARD/FLAVOR —
+# guards against a careless glob widening the orangepi5-only threading above.
+reset_opts; OPT_ORANGEPI5_BOARD=orange-pi-5
+build_make_cmd x86-be "be" 1
+assert_not "x86: no ORANGEPI5_BOARD leak" "ORANGEPI5_BOARD="
+build_make_cmd frite "frite" 1
+assert_not "frite: no ORANGEPI5_BOARD leak" "ORANGEPI5_BOARD="
+build_make_cmd jetson-edge_ai "jetson" 1
+assert_not "jetson: no ORANGEPI5_BOARD leak" "ORANGEPI5_BOARD="
+
+# ── orangepizero2 (EXPERIMENTAL): flavor make-var only — no --role/--desktop AND
+# no --board axis at all (a single board, unlike Frite/Orange-Pi-5's board
+# tables — see specs-orangepi-zero2/README.md) ──────────────────────────────
+reset_opts; OPT_ORANGEPIZERO2_FLAVOR=live
+build_make_cmd orangepizero2 "orangepizero2" 1
+assert_eq  "orangepizero2: target"          "${RUN_MAKE[0]}" "orangepizero2"
+assert_has "orangepizero2: flavor"          "ORANGEPIZERO2_FLAVOR=live"
+reset_opts; OPT_ORANGEPIZERO2_FLAVOR=both
+build_make_cmd orangepizero2 "orangepizero2 default" 1
+assert_has "orangepizero2: default flavor"  "ORANGEPIZERO2_FLAVOR=both"
+# x86-*/frite/jetson-* targets must NEVER pick up ORANGEPIZERO2_FLAVOR — guards
+# against a careless glob widening the orangepizero2-only threading above.
+reset_opts; OPT_ORANGEPIZERO2_FLAVOR=live
+build_make_cmd x86-be "be" 1
+assert_not "x86: no ORANGEPIZERO2_FLAVOR leak" "ORANGEPIZERO2_FLAVOR="
+build_make_cmd frite "frite" 1
+assert_not "frite: no ORANGEPIZERO2_FLAVOR leak" "ORANGEPIZERO2_FLAVOR="
+build_make_cmd jetson-edge_ai "jetson" 1
+assert_not "jetson: no ORANGEPIZERO2_FLAVOR leak" "ORANGEPIZERO2_FLAVOR="
 
 # ── jetson (EXPERIMENTAL): jetson-% targets — OWN axes as make-vars; the x86 ────
 # knobs (--optional-services/--with-tor/edge-AI model-library/branding/installer

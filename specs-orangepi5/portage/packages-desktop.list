@@ -1,0 +1,60 @@
+# LIGHT desktop package set — Orange Pi 5 / Orange Pi 5 Plus (Rockchip RK3588/
+# RK3588S, arm64)
+#
+# A LEAN desktop, NOT the full Plasma+gaming stage4. Appended to packages.list
+# by build-orangepi5-stage4.sh UNCONDITIONALLY (this platform has ONE role — no
+# --desktop light|none toggle the way Frite has one; every image built here is
+# the light desktop). Sized for the Mali-G610 (Panthor kernel driver / Mesa
+# "panfrost" gallium driver — see make.conf.tmpl): X11 + a lightweight WM + a
+# panel + a file manager + a terminal + a minimal browser. No KDE/GNOME/Plasma,
+# no compositor-heavy Wayland session, no gaming stack. Mirrors
+# specs-frite/portage/packages-light-desktop.list and
+# specs-rpi5/portage/packages-desktop.list content 1:1 (same lean-LXDE recipe).
+
+# ── Display server (X11; lean) ─────────────────────────────────────
+x11-base/xorg-server
+# Materializes the X drivers from INPUT_DEVICES=libinput + VIDEO_CARDS=panfrost
+# (already unconditional in specs-orangepi5/portage/make.conf.tmpl); without it
+# Xorg has no input/video driver and the greeter is unusable.
+x11-base/xorg-drivers
+x11-apps/xrandr
+x11-apps/xset
+x11-apps/setxkbmap
+x11-terms/xterm
+
+# ── Desktop session: LXDE-lite (PCManFM + Openbox + LXpanel) ───────
+# LXDE is the canonical "lean desktop": GTK-based, no compositor required, runs
+# comfortably on any of the RAM SKUs these boards ship (4/8/16/32GB). Openbox is
+# the WM; lxpanel the panel; pcmanfm the file manager; lxsession ties the
+# session together.
+x11-wm/openbox
+lxde-base/lxpanel
+lxde-base/lxsession
+x11-misc/pcmanfm
+lxde-base/lxappearance
+
+# ── Login / session bring-up ───────────────────────────────────────
+# LightDM is the lean display manager; on a single-user appliance you can also
+# autostart Openbox from .xinitrc and drop lightdm — see RUNNING.md.
+x11-misc/lightdm
+x11-misc/lightdm-gtk-greeter
+# The OpenRC `display-manager` init script does NOT ship with lightdm itself —
+# it is provided by gui-libs/display-manager-init (configured via
+# /etc/conf.d/display-manager DISPLAYMANAGER="lightdm", written by the
+# builder). Without this the builder would enable a service the image never
+# provides and the light-desktop image would boot to a bare console — this is
+# the EXACT bug RPi5's Phase 3 review caught (missing lightdm.conf -> blank
+# greeter); get it right from the start here (see build-orangepi5-stage4.sh).
+gui-libs/display-manager-init
+
+# ── Minimal apps ───────────────────────────────────────────────────
+media-gfx/feh
+app-editors/nano
+# A minimal, modern browser. NetSurf is dramatically lighter than Chromium/
+# Firefox and cross-compiles cleanly for arm64 — appropriate across the whole
+# RAM SKU range these boards ship.
+www-client/netsurf
+
+# ── Fonts (so the lean desktop is legible out of the box) ──────────
+media-fonts/dejavu
+media-fonts/noto

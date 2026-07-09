@@ -80,6 +80,7 @@ OPT_RESUME="no"           # yes => reuse existing sysroots (RESUME=true)
 OPT_OMNIBUS="no"          # yes => add the x86 omnibus role (X86_OMNIBUS=1)
 OPT_FRITE_FLEET="no"      # yes => fleet-build Frite too (full-fleet build only; FRITE=1)
 OPT_JETSON_FLEET="no"     # yes => fleet-build Jetson too (full-fleet build only; JETSON=1)
+OPT_ORANGEPI5_FLEET="no"  # yes => fleet-build Orange Pi 5 too (full-fleet build only; ORANGEPI5=1)
 OPT_PENTEST="no"          # yes => run the OWASP pen-test after the build (PENTEST=1)
 OPT_IMGFLAGS=""           # e.g. --no-iso (img only) / --no-img (iso only)
 # ── Edge-AI inference service (GPU cluster roles: be+gpu / omnibus / edge_ai) ───
@@ -122,9 +123,20 @@ OPT_HOME_ARCHIVE=""           # --include-home-archive FILE (scripts/archive-hom
 OPT_FRITE_BOARD="la-frite"
 OPT_FRITE_FLAVOR="both"
 OPT_FRITE_DESKTOP="light"     # light (LEAN LXDE desktop) | none (headless base)
+# ── RPi board axis (build-rpi5-stage4.sh --board; ONE builder, all 3 boards) ──
+OPT_RPI_BOARD="rpi5"          # rpi5 (DEFAULT, BCM2712/Cortex-A76) | rpi4 (BCM2711/Cortex-A72) | rpi3 (BCM2837/Cortex-A53, desktop-only)
 # ── Jetson Orin (arm64 Tegra234; EXPERIMENTAL — hardware validation pending) ────
 OPT_JETSON_BOARD="orin-nano"  # orin-nano | orin-nano-4gb | orin-nx-8gb | orin-nx-16gb
 OPT_JETSON_KFLAVOR="mainline" # mainline (buildable; NO CUDA) | l4t (documented stub)
+# ── Orange Pi 5 (arm64 Rockchip RK3588/RK3588S; EXPERIMENTAL — hardware
+# validation pending) ────────────────────────────────────────────────────────
+OPT_ORANGEPI5_BOARD="orange-pi-5-plus"   # orange-pi-5-plus (DEFAULT) | orange-pi-5
+OPT_ORANGEPI5_FLAVOR="both"              # both (DEFAULT) | live | installer
+# ── Orange Pi Zero 2 (arm64 Allwinner H616 HEADLESS APPLIANCE; EXPERIMENTAL —
+# hardware validation pending). No board axis (one board) and no --desktop
+# toggle (no desktop mode, ever — see specs-orangepi-zero2/README.md) — just
+# --flavor. ───────────────────────────────────────────────────────────────
+OPT_ORANGEPIZERO2_FLAVOR="both"          # both (DEFAULT) | live | installer
 # ── Standalone hardened NVIDIA desktop options (NON-secret; persisted) ──────────
 OPT_SA_GPU="all-free"         # all-free|nvidia-free|nvidia|amd-free|amd-pro|intel-free|intel-pro
 OPT_SA_STEAM="native"         # native | flatpak | none
@@ -143,6 +155,14 @@ OPT_SA_MEDIA_LABEL=""         # --media-label: match the data device by FS LABEL
 # prompted fresh each build and live only in these shell vars for the run.
 SA_LOCAL_PASS=""              # local user password (plaintext, hashed by the builder)
 SA_LUKS_PASS=""               # LUKS root-unlock passphrase (build-time only)
+# Same masked/non-persisted contract as SA_LOCAL_PASS/SA_LUKS_PASS above, for the
+# 5 platforms that gained --standalone in the standalone-ARM track (rpi5 desktop,
+# frite, jetson desktop, orangepi5, orangepizero2) — none of them has a dedicated
+# standalone_screen() of its own, so without this the ONLY reachable path for
+# these secrets would be the unmasked, persisted "Extra builder flags" field
+# (see arm_secrets_prompt() / _arm_standalone_flags() below).
+ARM_LOCAL_PASS=""
+ARM_LUKS_PASS=""
 OPT_ROOT_LOGIN="no"       # no (DEFAULT, hardened) | prohibit-password | yes  (PERMIT_ROOT_LOGIN)
 
 # Restore saved options from a previous session (best-effort; ignore a bad file).
@@ -161,6 +181,7 @@ save_conf() {
         printf 'OPT_OMNIBUS=%q\n'       "${OPT_OMNIBUS}"
         printf 'OPT_FRITE_FLEET=%q\n'   "${OPT_FRITE_FLEET}"
         printf 'OPT_JETSON_FLEET=%q\n'  "${OPT_JETSON_FLEET}"
+        printf 'OPT_ORANGEPI5_FLEET=%q\n' "${OPT_ORANGEPI5_FLEET}"
         printf 'OPT_PENTEST=%q\n'       "${OPT_PENTEST}"
         printf 'OPT_IMGFLAGS=%q\n'      "${OPT_IMGFLAGS}"
         printf 'OPT_X86_EDGE_AI=%q\n'   "${OPT_X86_EDGE_AI}"
@@ -188,8 +209,12 @@ save_conf() {
         printf 'OPT_FRITE_BOARD=%q\n'   "${OPT_FRITE_BOARD}"
         printf 'OPT_FRITE_FLAVOR=%q\n'  "${OPT_FRITE_FLAVOR}"
         printf 'OPT_FRITE_DESKTOP=%q\n' "${OPT_FRITE_DESKTOP}"
+        printf 'OPT_RPI_BOARD=%q\n'     "${OPT_RPI_BOARD}"
         printf 'OPT_JETSON_BOARD=%q\n'  "${OPT_JETSON_BOARD}"
         printf 'OPT_JETSON_KFLAVOR=%q\n' "${OPT_JETSON_KFLAVOR}"
+        printf 'OPT_ORANGEPI5_BOARD=%q\n'  "${OPT_ORANGEPI5_BOARD}"
+        printf 'OPT_ORANGEPI5_FLAVOR=%q\n' "${OPT_ORANGEPI5_FLAVOR}"
+        printf 'OPT_ORANGEPIZERO2_FLAVOR=%q\n' "${OPT_ORANGEPIZERO2_FLAVOR}"
         # Standalone-desktop NON-secret options (passwords are NEVER persisted).
         printf 'OPT_SA_GPU=%q\n'        "${OPT_SA_GPU}"
         printf 'OPT_SA_STEAM=%q\n'      "${OPT_SA_STEAM}"
@@ -324,6 +349,28 @@ ui_password() {
     printf '%s' "${val}"
 }
 
+# arm_secrets_prompt LABEL — masked, non-persisted --local-pass/--luks-pass
+# entry point for the 5 platforms whose --standalone posture has no dedicated
+# screen of its own (rpi5 desktop / frite / jetson desktop / orangepi5 /
+# orangepizero2 — unlike x86, which has standalone_screen()). Without this,
+# the only way to set these secrets on those platforms is typing them into
+# the unmasked, persisted "Extra builder flags" field — see
+# _arm_standalone_flags() for how these fold into STANDALONE_FLAGS instead.
+arm_secrets_prompt() {
+    local label="$1" choice
+    while :; do
+        choice="$(ui_menu "${label}: standalone secrets" "Only takes effect together with --standalone (via a role that forces it, or typed into Extra builder flags). Masked input; never saved to ${CONF_FILE}." \
+            pass "Local password ..... $([ -n "${ARM_LOCAL_PASS}" ] && echo '(set)' || echo '(unset -> random at first boot)')" \
+            luks "Unattended LUKS pass $([ -n "${ARM_LUKS_PASS}" ] && echo '(set — advanced)' || echo '(prompts at build/install — recommended)')" \
+            done "‹ done")" || return 0
+        case "${choice}" in
+            pass) ARM_LOCAL_PASS="$(ui_password "Password" "Local login password (blank = random one-time at first boot)")" ;;
+            luks) ARM_LUKS_PASS="$(ui_password "Unattended LUKS" "Bake an unattended LUKS passphrase (ADVANCED; blank = prompt at build/install)")" ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
 # ui_msg TITLE TEXT  -> informational box / printout
 ui_msg() {
     local title="$1" text="$2"
@@ -363,7 +410,7 @@ menu_build_alive() {
 # PID, or nothing.
 foreign_build_pid() {
     local p
-    p="$(pgrep -f 'build-all-roles\.sh|build-(rpi5|x86-host|frite|jetson)-stage4\.sh' 2>/dev/null | head -n1)"
+    p="$(pgrep -f 'build-all-roles\.sh|build-(rpi5|x86-host|frite|jetson|orangepi5|orangepi-zero2)-stage4\.sh' 2>/dev/null | head -n1)"
     [ -z "${p}" ] && p="$(pgrep -f "docker run.*${BUILDER_IMAGE}" 2>/dev/null | head -n1)"
     printf '%s' "${p}"
 }
@@ -393,6 +440,54 @@ active_log() {
     printf '%s' "${best}"
 }
 
+# _shell_quote VALUE — wrap VALUE in single quotes (escaping any embedded
+# single quote as '\'') so it survives being textually re-expanded, UNQUOTED,
+# into a Makefile recipe line (which GNU Make hands to a real shell) as ONE
+# safe literal argument — regardless of embedded whitespace, $, backticks, or
+# ;. Every secret value folded into STANDALONE_FLAGS below MUST go through
+# this: without it, a password containing a shell metacharacter is executed as
+# shell syntax rather than passed as a literal value (real command injection,
+# not just word-splitting — see the Makefile's STANDALONE_FLAGS export comment
+# for the OTHER half of this fix, the Docker-dispatch hop's own re-quoting).
+_shell_quote() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# _redacted_run_make ARGS... — echoes a `make`-argv array joined for safe
+# display/logging: any element shaped like STANDALONE_FLAGS=...--local-pass...
+# or ...--luks-pass... is replaced WHOLESALE with a fixed placeholder. Used by
+# launch_build()'s console/log preview; the REAL (unredacted) RUN_MAKE array is
+# always what actually gets passed to `make`. Redacts the whole element rather
+# than regex-matching a value inside a flattened string: since _shell_quote()
+# wraps secrets in single quotes, a multi-word secret contains spaces of its
+# own — a token-based regex would only mask the first word and leave the rest
+# (plus a dangling quote) printed in the clear.
+_redacted_run_make() {
+    local -a arr=("$@")
+    local i
+    for i in "${!arr[@]}"; do
+        case "${arr[${i}]}" in
+            STANDALONE_FLAGS=*--local-pass*|STANDALONE_FLAGS=*--luks-pass*)
+                arr[${i}]="STANDALONE_FLAGS=<redacted>" ;;
+        esac
+    done
+    printf '%s' "${arr[*]}"
+}
+
+# _arm_standalone_flags — compose STANDALONE_FLAGS for the 5 ARM single-role
+# targets (rpi-%/frite/jetson-%/orangepi5/orangepizero2): folds the masked
+# ARM_LOCAL_PASS/ARM_LUKS_PASS secrets in FIRST (each shell-quoted via
+# _shell_quote — see there for why), then the freeform "Extra builder flags"
+# field LAST so it can still override — mirrors the x86 `bf` string's own
+# ordering (STANDALONE_FLAGS block above).
+_arm_standalone_flags() {
+    local bf=""
+    [ -n "${ARM_LOCAL_PASS}" ] && bf+=" --local-pass $(_shell_quote "${ARM_LOCAL_PASS}")"
+    [ -n "${ARM_LUKS_PASS}" ]  && bf+=" --luks-pass $(_shell_quote "${ARM_LUKS_PASS}")"
+    [ -n "${OPT_EXTRA_FLAGS}" ] && bf+=" ${OPT_EXTRA_FLAGS}"
+    printf '%s' "${bf# }"
+}
+
 # ── Compose the make command for a given selection ──────────────────────────────
 # Returns (via globals) the env-var prefix + the make argument list. Everything
 # the menu can tweak is mapped onto the existing Makefile knobs — no new engine.
@@ -411,16 +506,19 @@ build_make_cmd() {
     RUN_MAKE+=("WORK_DIR=${OPT_WORK_DIR}" "JOBS=${OPT_JOBS}" "ENV=${OPT_ENV}")
     [ -n "${OPT_BRAND}" ] && [ "${unaff}" = no ] && RUN_MAKE+=("BRAND=${OPT_BRAND}")
     [ -n "${OPT_DOMAIN}" ] && RUN_MAKE+=("DOMAIN=${OPT_DOMAIN}")
-    # IMG_FLAGS is expanded VERBATIM into the rpi/x86/frite/jetson builder
-    # invocations (every $(RPI)/$(X86)/$(FRITE_BUILD)/$(JETSON_BUILD) macro embeds
+    # IMG_FLAGS is expanded VERBATIM into the rpi/x86/frite/jetson/orangepi5/
+    # orangepizero2 builder invocations (every $(RPI)/$(X86)/$(FRITE_BUILD)/
+    # $(JETSON_BUILD)/$(ORANGEPI5_BUILD)/$(ORANGEPIZERO2_BUILD) macro embeds
     # $(IMG_FLAGS)), so it doubles as the extra-builder-flags channel for the
-    # targets that do NOT consume STANDALONE_FLAGS (rpi-% / rpi / x86 / omnibus).
-    # x86-*/jetson-*/frite get the extra flags via STANDALONE_FLAGS below instead
-    # — never both, which would pass them twice (the builder macros already
-    # contain $(IMG_FLAGS)).
+    # targets that do NOT consume STANDALONE_FLAGS (rpi / x86 / omnibus fleet
+    # targets — a heterogeneous multi-role build has no single role to apply a
+    # standalone-shaped flag to). rpi-%/x86-*/jetson-*/frite/orangepi5/
+    # orangepizero2 (single-role) get the extra flags via STANDALONE_FLAGS
+    # below instead — never both, which would pass them twice (the builder
+    # macros already contain $(IMG_FLAGS)).
     local imgflags="${OPT_IMGFLAGS}"
     case "${target}" in
-        x86-*|jetson-*|frite|build-all|build-everything) ;;   # STANDALONE_FLAGS channel / no passthrough
+        x86-*|jetson-*|frite|orangepi5|orangepizero2|rpi-*|build-all|build-everything) ;;   # STANDALONE_FLAGS channel / no passthrough
         *) [ -n "${OPT_EXTRA_FLAGS}" ] && imgflags="${imgflags:+${imgflags} }${OPT_EXTRA_FLAGS}" ;;
     esac
     [ -n "${imgflags}" ] && RUN_MAKE+=("IMG_FLAGS=${imgflags}")
@@ -442,7 +540,26 @@ build_make_cmd() {
         [ "${OPT_OMNIBUS}" = yes ]     && RUN_MAKE+=("X86_OMNIBUS=1")
         [ "${OPT_FRITE_FLEET}" = yes ]  && RUN_MAKE+=("FRITE=1")
         [ "${OPT_JETSON_FLEET}" = yes ] && RUN_MAKE+=("JETSON=1")
+        [ "${OPT_ORANGEPI5_FLEET}" = yes ] && RUN_MAKE+=("ORANGEPI5=1")
         [ "${OPT_PENTEST}" = yes ]     && RUN_MAKE+=("PENTEST=1")
+    fi
+    # ── RPi (bare 'rpi' 3-role fleet target AND rpi-% single-role targets): the
+    # board axis. OPT_RPI_BOARD maps onto the builder's --board rpi5|rpi4|rpi3
+    # via the Makefile's RPI_BOARD var (baked into the $(RPI) command that BOTH the
+    # 'rpi' and 'rpi-%' targets use), same pattern as FRITE_BOARD/JETSON_BOARD
+    # below — threaded to BOTH so a board picked in the single-role screen does
+    # not silently revert to rpi5 if the operator instead launches the 3-role
+    # fleet build from the main menu.
+    if [ "${target}" = rpi ] || [[ "${target}" == rpi-* ]]; then
+        RUN_MAKE+=("RPI_BOARD=${OPT_RPI_BOARD}")
+    fi
+    # rpi-% (single-role) ALSO gets the escape hatch, incl. --standalone/
+    # --local-user/--local-pass (only meaningful on rpi-desktop — the builder
+    # hard-errors on --standalone for the cluster-node roles). The bare 'rpi'
+    # fleet target does NOT (it has no single role to apply a standalone-shaped
+    # flag to — same reasoning as x86's plain fleet target).
+    if [[ "${target}" == rpi-* ]]; then
+        { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); }
     fi
     # Frite board/flavor/desktop only matter for the frite target but are harmless
     # else. FRITE_BOARD/FRITE_FLAVOR/FRITE_DESKTOP map onto the builder's --board /
@@ -452,7 +569,7 @@ build_make_cmd() {
     # hatch as x86-*/jetson-*.
     if [ "${target}" = frite ]; then
         RUN_MAKE+=("FRITE_BOARD=${OPT_FRITE_BOARD}" "FRITE_FLAVOR=${OPT_FRITE_FLAVOR}" "FRITE_DESKTOP=${OPT_FRITE_DESKTOP}")
-        [ -n "${OPT_EXTRA_FLAGS}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${OPT_EXTRA_FLAGS}")
+        { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); }
     fi
     # ── Jetson (jetson-% targets): its OWN axes as make-vars + the escape hatch ──
     # JETSON_BOARD / JETSON_KERNEL_FLAVOR map onto the builder's --board /
@@ -467,7 +584,32 @@ build_make_cmd() {
     # the extra-flags hatch (the all-options-in-all-menus rule).
     if [[ "${target}" == jetson-* ]]; then
         RUN_MAKE+=("JETSON_BOARD=${OPT_JETSON_BOARD}" "JETSON_KERNEL_FLAVOR=${OPT_JETSON_KFLAVOR}")
-        [ -n "${OPT_EXTRA_FLAGS}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${OPT_EXTRA_FLAGS}")
+        { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); }
+    fi
+    # ── Orange Pi 5 (EXPERIMENTAL): its OWN axes as make-vars + the escape hatch ──
+    # ORANGEPI5_BOARD / ORANGEPI5_FLAVOR map onto the builder's --board /
+    # --flavor; extra builder flags (incl. --standalone/--encrypt-root) thread
+    # via STANDALONE_FLAGS, which the Makefile orangepi5 target appends
+    # verbatim after --flavor — same escape hatch as frite/jetson-*/x86-*. The
+    # x86-only cluster-service/edge-AI/branding/installer-UI knobs are
+    # deliberately NOT emitted here (this platform's builder does not take
+    # them; an unknown flag hard-fails it) — mirrors the jetson-* block above.
+    if [ "${target}" = orangepi5 ]; then
+        RUN_MAKE+=("ORANGEPI5_BOARD=${OPT_ORANGEPI5_BOARD}" "ORANGEPI5_FLAVOR=${OPT_ORANGEPI5_FLAVOR}")
+        { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); }
+    fi
+    # ── Orange Pi Zero 2 (EXPERIMENTAL): its OWN axis (flavor only — no board,
+    # no --desktop, see specs-orangepi-zero2/README.md) as a make-var + the
+    # escape hatch. ORANGEPIZERO2_FLAVOR maps onto the builder's --flavor;
+    # extra builder flags (incl. --standalone/--encrypt-root) thread via
+    # STANDALONE_FLAGS, which the Makefile orangepizero2 target appends
+    # verbatim after --flavor — same escape hatch as frite/jetson-*/orangepi5/
+    # x86-*. The x86-only cluster-service/edge-AI/branding/installer-UI knobs
+    # are deliberately NOT emitted here (this platform's builder does not take
+    # them; an unknown flag hard-fails it) — mirrors the orangepi5 block above.
+    if [ "${target}" = orangepizero2 ]; then
+        RUN_MAKE+=("ORANGEPIZERO2_FLAVOR=${OPT_ORANGEPIZERO2_FLAVOR}")
+        { local _armflags; _armflags="$(_arm_standalone_flags)"; [ -n "${_armflags}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${_armflags}"); }
     fi
     # ── Builder flags threaded via STANDALONE_FLAGS (x86-* targets) ─────────────
     # The Makefile x86-% / x86-standalone* targets append STANDALONE_FLAGS verbatim
@@ -487,9 +629,9 @@ build_make_cmd() {
             [ "${OPT_SA_MEDIA}" = no ] && bf+=" --no-media-data"
             # match the media data device by FS LABEL (only meaningful with media ON)
             [ "${OPT_SA_MEDIA}" = yes ] && [ -n "${OPT_SA_MEDIA_LABEL}" ] && bf+=" --media-label ${OPT_SA_MEDIA_LABEL}"
-            [ -n "${OPT_SA_USER}" ] && bf+=" --local-user ${OPT_SA_USER}"
-            [ -n "${SA_LOCAL_PASS}" ] && bf+=" --local-pass ${SA_LOCAL_PASS}"
-            [ -n "${SA_LUKS_PASS}" ]  && bf+=" --luks-pass ${SA_LUKS_PASS}"
+            [ -n "${OPT_SA_USER}" ] && bf+=" --local-user $(_shell_quote "${OPT_SA_USER}")"
+            [ -n "${SA_LOCAL_PASS}" ] && bf+=" --local-pass $(_shell_quote "${SA_LOCAL_PASS}")"
+            [ -n "${SA_LUKS_PASS}" ]  && bf+=" --luks-pass $(_shell_quote "${SA_LUKS_PASS}")"
             [ "${OPT_SA_KEYFILE}" != none ] && bf+=" --unlock-keyfile ${OPT_SA_KEYFILE}"
             [ "${OPT_SA_YUBIKEY}" != none ] && bf+=" --unlock-yubikey ${OPT_SA_YUBIKEY}"
             # branding theme + security stack + monolithic kernel + egress VPN.
@@ -594,9 +736,7 @@ launch_build() {
     fi
     # Log the command with any --local-pass/--luks-pass values REDACTED (the real
     # values are still passed to make below — only the echoed/saved copy is masked).
-    local _shown="${RUN_MAKE[*]}"
-    _shown="$(printf '%s' "${_shown}" | sed -E 's/(--local-pass|--luks-pass)[[:space:]]+[^[:space:]]+/\1 ****/g')"
-    say "launching: ${launch[*]:-} make ${_shown}"
+    say "launching: ${launch[*]:-} make $(_redacted_run_make "${RUN_MAKE[@]}")"
     (
         cd "${REPO_DIR}" || exit 1
         exec "${launch[@]}" setsid nohup make "${RUN_MAKE[@]}" \
@@ -967,11 +1107,12 @@ home_screen() {
 
 options_screen() {
     while true; do
-        local resume_l omni_l frite_fleet_l jetson_fleet_l pen_l
+        local resume_l omni_l frite_fleet_l jetson_fleet_l orangepi5_fleet_l pen_l
         resume_l="$([ "${OPT_RESUME}" = yes ] && echo on || echo off)"
         omni_l="$([ "${OPT_OMNIBUS}" = yes ] && echo on || echo off)"
         frite_fleet_l="$([ "${OPT_FRITE_FLEET}" = yes ] && echo on || echo off)"
         jetson_fleet_l="$([ "${OPT_JETSON_FLEET}" = yes ] && echo on || echo off)"
+        orangepi5_fleet_l="$([ "${OPT_ORANGEPI5_FLEET}" = yes ] && echo on || echo off)"
         pen_l="$([ "${OPT_PENTEST}" = yes ] && echo on || echo off)"
         local choice
         choice="$(ui_menu "Options" "Adjust build options (saved for next time):" \
@@ -985,6 +1126,7 @@ options_screen() {
             omnibus  "x86 omnibus role .... ${omni_l}   (adds omnibus to full fleet)" \
             fritefleet "Frite in full fleet . ${frite_fleet_l}   (adds Frite to full fleet; FRITE=1)" \
             jetsonfleet "Jetson in full fleet  ${jetson_fleet_l}   (adds Jetson to full fleet; JETSON=1)" \
+            orangepi5fleet "Orange Pi 5 in fleet  ${orangepi5_fleet_l}   (adds Orange Pi 5 to full fleet; ORANGEPI5=1; EXPERIMENTAL)" \
             pentest  "OWASP pen-test ...... ${pen_l}   (full-fleet build only)" \
             edgeai   "Edge-AI service ..... $([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)   (be+gpu/omnibus; edge_ai role always on)" \
             services "Optional services ... ${OPT_SERVICES:-<default: akkoma,tuwunel,phpbb>}" \
@@ -1008,6 +1150,7 @@ options_screen() {
             omnibus) OPT_OMNIBUS="$([ "${OPT_OMNIBUS}" = yes ] && echo no || echo yes)" ;;
             fritefleet) OPT_FRITE_FLEET="$([ "${OPT_FRITE_FLEET}" = yes ] && echo no || echo yes)" ;;
             jetsonfleet) OPT_JETSON_FLEET="$([ "${OPT_JETSON_FLEET}" = yes ] && echo no || echo yes)" ;;
+            orangepi5fleet) OPT_ORANGEPI5_FLEET="$([ "${OPT_ORANGEPI5_FLEET}" = yes ] && echo no || echo yes)" ;;
             pentest) OPT_PENTEST="$([ "${OPT_PENTEST}" = yes ] && echo no || echo yes)" ;;
             edgeai)  edge_ai_options_screen ;;
             services) services_screen ;;
@@ -1025,7 +1168,7 @@ options_screen() {
                          all       "all       — every front-end")" || iu=""
                      case "${iu}" in default|"") OPT_INSTALLER_UI="" ;; *) OPT_INSTALLER_UI="${iu}" ;; esac ;;
             imgflags) OPT_IMGFLAGS="$(ui_input "Image flags" "IMG_FLAGS (e.g. --no-iso, --no-img, empty = both)" "${OPT_IMGFLAGS}")" ;;
-            extraflags) OPT_EXTRA_FLAGS="$(ui_input "Extra builder flags" "Extra builder flags, threaded VERBATIM onto the single-role builder invocation (x86/jetson/frite via STANDALONE_FLAGS, rpi via IMG_FLAGS). The escape hatch guaranteeing all-options-in-all-menus. Empty = none" "${OPT_EXTRA_FLAGS}")" ;;
+            extraflags) OPT_EXTRA_FLAGS="$(ui_input "Extra builder flags" "Extra builder flags, threaded VERBATIM onto the single-role builder invocation (x86/jetson/frite/orangepi5/orangepizero2/rpi-<role> via STANDALONE_FLAGS; the rpi/x86/omnibus FLEET targets — multiple roles per build — via IMG_FLAGS instead, since a standalone-shaped flag has no single role to apply to there). The escape hatch guaranteeing all-options-in-all-menus. Empty = none" "${OPT_EXTRA_FLAGS}")" ;;
             rootlogin) case "${OPT_ROOT_LOGIN}" in
                            no) OPT_ROOT_LOGIN=prohibit-password ;;
                            prohibit-password) OPT_ROOT_LOGIN=yes ;;
@@ -1041,9 +1184,11 @@ options_screen() {
 single_role_screen() {
     local arch role board
     arch="$(ui_menu "Single role" "Which architecture?" \
-        rpi "Raspberry Pi 5 (arm64 cluster node)" \
+        rpi "Raspberry Pi 5 (arm64 cluster node / client desktop)" \
         x86 "x86-64 (amd64 node / GPU host / client)" \
         jetson "Jetson Orin Nano (arm64, EXPERIMENTAL — hardware validation pending)" \
+        orangepi5 "Orange Pi 5 / 5 Plus (arm64, EXPERIMENTAL — hardware validation pending)" \
+        orangepizero2 "Orange Pi Zero 2 — HEADLESS APPLIANCE (arm64, EXPERIMENTAL — no desktop mode ever)" \
         back "‹ back")" || return 0
     case "${arch}" in
         rpi)
@@ -1051,9 +1196,29 @@ single_role_screen() {
                 pki "pki      — cluster PKI / control" \
                 backend "backend  — backend services node" \
                 frontend "frontend — gateway / UI node" \
+                desktop "desktop  — arm64 client image (compose with --standalone for FDE)" \
                 back "‹ back")" || return 0
             [ "${role}" = back ] && return 0
-            build_make_cmd "rpi-${role}" "Pi ${role} (${OPT_PATH}, ENV=${OPT_ENV})" 1
+            board="$(ui_menu "Pi board" "Raspberry Pi board (--board; current: ${OPT_RPI_BOARD}):" \
+                rpi5 "rpi5 — Raspberry Pi 5 (BCM2712, Cortex-A76) — DEFAULT" \
+                rpi4 "rpi4 — Raspberry Pi 4 (BCM2711, Cortex-A72)" \
+                rpi3 "rpi3 — Raspberry Pi 3 (BCM2837, Cortex-A53, 1GB RAM) — DESKTOP ROLE ONLY" \
+                back "‹ back")" || return 0
+            [ "${board}" = back ] && return 0
+            # rpi3 is desktop-only — the board picker is offered for every role
+            # (simpler/safer than gating it to the desktop sub-path only), so
+            # nudge here with a non-blocking warning; the builder itself is the
+            # AUTHORITATIVE safety net either way (hard-errors on any other role).
+            if [ "${board}" = rpi3 ] && [ "${role}" != desktop ]; then
+                warn "--board rpi3 only composes onto --role desktop (1GB RAM is not enough headroom for the k8s cluster-node stack) — the build will hard-error for role '${role}'. Pick 'desktop', or choose rpi4/rpi5 for ${role}."
+            fi
+            OPT_RPI_BOARD="${board}"
+            # --standalone only composes onto --role desktop — the masked secrets
+            # prompt is only meaningful there (a cluster-node role would just
+            # ignore/reject --local-pass/--luks-pass).
+            [ "${role}" = desktop ] && arm_secrets_prompt "Pi ${role} (${OPT_RPI_BOARD})"
+            save_conf
+            build_make_cmd "rpi-${role}" "Pi ${role} (${OPT_RPI_BOARD}, ${OPT_PATH}, ENV=${OPT_ENV})" 1
             launch_build ;;
         x86)
             role="$(ui_menu "x86 role" "Pick an x86 role:" \
@@ -1099,8 +1264,62 @@ x86-only options (cluster services, edge-AI models, branding overrides) do not a
                 back "‹ back")" || return 0
             [ "${board}" = back ] && return 0
             OPT_JETSON_BOARD="${board}"
+            # --standalone only composes onto --role desktop, same reasoning as rpi5.
+            [ "${role}" = desktop ] && arm_secrets_prompt "Jetson ${role} (${OPT_JETSON_BOARD})"
             save_conf
             build_make_cmd "jetson-${role}" "Jetson ${role} (${OPT_JETSON_BOARD}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
+            launch_build ;;
+        orangepi5)
+            # Orange Pi 5 / Orange Pi 5 Plus — arm64 Rockchip RK3588/RK3588S
+            # light desktop (specs-orangepi5/). EXPERIMENTAL: hardware
+            # validation pending; dispatches the Makefile orangepi5 target.
+            # ONE role (a client desktop, like Frite) — no --role picker, just
+            # board + flavor. NOTE: the Options screen's cluster services /
+            # edge-AI model / branding-override knobs are x86-only flags and do
+            # NOT apply here; any Orange Pi 5 builder flag (incl.
+            # --standalone/--encrypt-root) stays reachable via 'Extra builder
+            # flags' (the escape hatch).
+            local flavor
+            board="$(ui_menu "Orange Pi 5 board" "Board variant (--board; current: ${OPT_ORANGEPI5_BOARD}). EXPERIMENTAL — hardware validation pending, see specs-orangepi5/README.md:" \
+                orange-pi-5-plus "orange-pi-5-plus — RK3588: dual 2.5GbE, PCIe3.0x4 NVMe, dual HDMI+HDMI-in (DEFAULT)" \
+                orange-pi-5 "orange-pi-5      — RK3588S: fewer PCIe lanes, single NIC, single HDMI" \
+                back "‹ back")" || return 0
+            [ "${board}" = back ] && return 0
+            OPT_ORANGEPI5_BOARD="${board}"
+            flavor="$(ui_menu "Orange Pi 5 flavor" "Image flavor (--flavor; current: ${OPT_ORANGEPI5_FLAVOR}):" \
+                both "both       — live + installer (DEFAULT)" \
+                live "live       — ephemeral USB/microSD boot" \
+                installer "installer  — writes to eMMC/microSD/NVMe" \
+                back "‹ back")" || return 0
+            [ "${flavor}" = back ] && return 0
+            OPT_ORANGEPI5_FLAVOR="${flavor}"
+            arm_secrets_prompt "Orange Pi 5 ${board}"
+            save_conf
+            build_make_cmd orangepi5 "Orange Pi 5 ${board} (${flavor}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
+            launch_build ;;
+        orangepizero2)
+            # Orange Pi Zero 2 — arm64 Allwinner H616 HEADLESS APPLIANCE
+            # (specs-orangepi-zero2/). EXPERIMENTAL: hardware validation
+            # pending; dispatches the Makefile orangepizero2 target. ONE role
+            # (a headless appliance, NEVER a desktop — see
+            # specs-orangepi-zero2/README.md for why) — no --role picker, no
+            # board picker (a single board, unlike Frite/Orange-Pi-5), just a
+            # flavor picker. NOTE: the Options screen's cluster services /
+            # edge-AI model / branding-override knobs are x86-only flags and do
+            # NOT apply here; any Orange Pi Zero 2 builder flag (incl.
+            # --standalone/--encrypt-root) stays reachable via 'Extra builder
+            # flags' (the escape hatch).
+            local flavor
+            flavor="$(ui_menu "Orange Pi Zero 2 flavor" "Image flavor (--flavor; current: ${OPT_ORANGEPIZERO2_FLAVOR}). EXPERIMENTAL — hardware validation pending, see specs-orangepi-zero2/README.md:" \
+                both "both       — live + installer (DEFAULT)" \
+                live "live       — ephemeral microSD/USB boot" \
+                installer "installer  — writes to microSD/USB" \
+                back "‹ back")" || return 0
+            [ "${flavor}" = back ] && return 0
+            OPT_ORANGEPIZERO2_FLAVOR="${flavor}"
+            arm_secrets_prompt "Orange Pi Zero 2 headless appliance"
+            save_conf
+            build_make_cmd orangepizero2 "Orange Pi Zero 2 headless appliance (${flavor}, ${OPT_PATH}, ENV=${OPT_ENV}) [EXPERIMENTAL]" 1
             launch_build ;;
         *) return 0 ;;
     esac
@@ -1199,7 +1418,7 @@ build_screen() {
     local choice
     choice="$(ui_menu "Build" "What do you want to build?  (path=${OPT_PATH}, ENV=${OPT_ENV}, -j${OPT_JOBS})" \
         all  "Default fleet — 3 Pi + 4 x86 roles" \
-        everything "★ FULL matrix — 3 Pi + 12 x86 + Frite + Jetson (build-everything)" \
+        everything "★ FULL matrix — 3 Pi + 12 x86 + Frite + Jetson + Orange Pi 5 + Orange Pi Zero 2 (build-everything)" \
         rpi  "All 3 Raspberry Pi roles" \
         x86  "All 4 default x86 roles" \
         one  "A single arch + role …" \
@@ -1208,8 +1427,8 @@ build_screen() {
         back "‹ back to main menu")" || return 0
     case "${choice}" in
         all)   build_make_cmd build-all "default fleet (3 Pi + 4 x86)" 7; launch_build ;;
-        everything) build_make_cmd build-everything "full documented matrix (3 Pi + 12 x86 + Frite + Jetson)" 20; launch_build ;;
-        rpi)   build_make_cmd rpi "all 3 Pi roles" 3; launch_build ;;
+        everything) build_make_cmd build-everything "full documented matrix (3 Pi + 12 x86 + Frite + Jetson + Orange Pi 5 + Orange Pi Zero 2)" 20; launch_build ;;
+        rpi)   build_make_cmd rpi "all 3 Pi roles (${OPT_RPI_BOARD})" 3; launch_build ;;
         x86)   build_make_cmd x86 "all 4 x86 roles" 4; launch_build ;;
         one)   single_role_screen ;;
         omni)  build_make_cmd omnibus "x86 omnibus" 1; launch_build ;;
@@ -1240,6 +1459,7 @@ frite_screen() {
         back "‹ back")" || return 0
     [ "${desk}" = back ] && return 0
     OPT_FRITE_DESKTOP="${desk}"
+    arm_secrets_prompt "Frite ${board}"
     save_conf
     build_make_cmd frite "Frite ${board} (${flavor}, desktop=${OPT_FRITE_DESKTOP})" 1
     launch_build
