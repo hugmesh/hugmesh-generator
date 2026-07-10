@@ -27,8 +27,15 @@ function die(msg) {
   process.exit(1);
 }
 
+// --repos-json: emit the repos[] MANIFEST as a machine-readable JSON sidecar on
+// stdout (consumed by the Node driver render-tenant-set.js), instead of the 7
+// shell scalars. This is the security boundary from the Phase-4 spec: repos[]
+// (list data) is NEVER degraded to shell KEY=VALUE / eval'd on the signed-export
+// path — only the 7 scalars are. A crafted repo entry therefore cannot inject
+// into the shell-sourced .conf path.
+const wantReposJson = process.argv.includes('--repos-json');
 const file = process.argv[2];
-if (!file) die('usage: load-brand-schema.js <brands/NAME.yaml>');
+if (!file) die('usage: load-brand-schema.js <brands/NAME.yaml> [--repos-json]');
 if (!fs.existsSync(file)) die(`no such file: ${file}`);
 
 let doc;
@@ -47,6 +54,13 @@ function req(v, name) {
 const brand = req(doc.brand, 'brand');
 const title = req(doc.title, 'title');
 const org = req(doc.org, 'org');
+
+// repos[] sidecar path — structured JSON only, never shell.
+if (wantReposJson) {
+  const repos = Array.isArray(doc.repos) ? doc.repos : [];
+  process.stdout.write(JSON.stringify(repos, null, 2) + '\n');
+  process.exit(0);
+}
 const domains = doc.domains;
 if (!Array.isArray(domains) || domains.length === 0) die('domains[] must be a non-empty list');
 const clusterDomain = req(domains[0], 'domains[0]');

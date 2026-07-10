@@ -206,7 +206,7 @@ while IFS= read -r -d '' tmpl; do
   render_template "$tmpl" "$out"
   echo "  rendered: ${out_rel}"
   rendered=$((rendered + 1))
-done < <(find "$TEMPLATES_DIR" -path "$TEMPLATES_DIR/repos" -prune -o -name "*.hbs" -print0 | sort -z)
+done < <(find "$TEMPLATES_DIR" \( -path "$TEMPLATES_DIR/repos" -o -path "$TEMPLATES_DIR/archetypes" \) -prune -o -name "*.hbs" -print0 | sort -z)
 
 # ── Copy non-template static files ───────────────────────────────────────────
 while IFS= read -r -d '' f; do
@@ -214,7 +214,7 @@ while IFS= read -r -d '' f; do
   dst="${BRAND_OUT}/${rel}"
   mkdir -p "$(dirname "$dst")"
   cp "$f" "$dst"
-done < <(find "$TEMPLATES_DIR" -path "$TEMPLATES_DIR/repos" -prune -o \( -not -name "*.hbs" -not -type d -print0 \))
+done < <(find "$TEMPLATES_DIR" \( -path "$TEMPLATES_DIR/repos" -o -path "$TEMPLATES_DIR/archetypes" \) -prune -o \( -not -name "*.hbs" -not -type d -print0 \))
 
 echo ""
 echo "[generate-brand-repos] Rendered ${rendered} templates → ${BRAND_OUT}"

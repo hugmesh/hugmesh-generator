@@ -131,7 +131,7 @@ function listHbs(dir) {
       // into a `repos` subtree. (Harmless for the overlay/skeleton renders: their
       // --templates root is already inside/below the overlay, with no `repos`
       // child.) This keeps the parity-proven apps render byte-identical.
-      if (ent.isDirectory() && ent.name === 'repos') continue;
+      if (ent.isDirectory() && (ent.name === 'repos' || ent.name === 'archetypes')) continue;
       const full = path.join(d, ent.name);
       if (ent.isDirectory()) walk(full);
       else if (ent.isFile() && ent.name.endsWith('.hbs')) acc.push(full);
@@ -154,37 +154,18 @@ function main() {
   for (const tmpl of files) {
     const src = fs.readFileSync(tmpl, 'utf8');
 
-    // Fail-closed guardrail: no secret-bearing token may appear in a template,
-    // AND every referenced token must be explicitly allowlisted. Handlebars is
-    // compiled with strict:false, so an UNKNOWN {{token}} (neither allow- nor
-    // deny-listed) would otherwise render to an empty string — silently DROPPING
-    // content, whereas the legacy sed path leaves the literal `{{token}}`. Failing
-    // closed here keeps the two renderers from diverging on a future token and
-    // forces every new token through the classifier.
-    for (const tok of referencedTokens(src)) {
-      if (classifier.isDenied(tok)) {
-        die(`template ${path.relative(templatesDir, tmpl)} references denylisted secret token '{{${tok}}}' — refusing to render`);
-      }
-      if (classifier.isFrozen(tok)) {
-        die(`template ${path.relative(templatesDir, tmpl)} references token '{{${tok}}}' that targets a FROZEN protocol constant (label-key namespace / wire header / subprotocol prefix) — refusing to render (it must stay literal)`);
-      }
-      if (!classifier.isAllowed(tok)) {
-        die(`template ${path.relative(templatesDir, tmpl)} references token '{{${tok}}}' that is neither allowlisted nor denylisted — refusing to render (fail-closed: strict:false would silently emit empty string). Add it to scripts/tooling/tokens.json (allowlist) or remove the reference.`);
-      }
-    }
-
-    // Reachable red-team gate: the identifier loop above cannot see a frozen
-    // protocol constant / secret key written as a raw mustache body (they contain
-    // ./ / - and are not valid identifiers). Scan the RAW bodies too so a template
-    // that references e.g. {{snapdragon.systems/domain}} or {{CASDOOR_ADMIN_CLIENT_SECRET}}
-    // is REFUSED (exit 1) rather than silently rendering to an empty string.
-    for (const body of referencedRawBodies(src)) {
-      if (classifier.isFrozen(body)) {
-        die(`template ${path.relative(templatesDir, tmpl)} references '{{${body}}}' that targets a FROZEN protocol constant (label-key namespace / wire header / subprotocol prefix) — refusing to render (it must stay literal)`);
-      }
-      if (classifier.isDenied(body)) {
-        die(`template ${path.relative(templatesDir, tmpl)} references denylisted secret token '{{${body}}}' — refusing to render`);
-      }
+    // Fail-closed guardrail (shared with the Phase-4 recipe engine via
+    // assertTemplateSafe): no secret-bearing / frozen token may appear in a
+    // template, AND every referenced {{identifier}} must be allowlisted.
+    // Handlebars is compiled with strict:false, so an UNKNOWN {{token}} would
+    // otherwise render to an empty string (silently dropping content) while the
+    // legacy sed path leaves the literal `{{token}}`. The raw-body scan inside
+    // assertTemplateSafe also catches a frozen constant / secret written as a
+    // non-identifier mustache body (e.g. {{snapdragon.systems/domain}}).
+    try {
+      assertTemplateSafe(src, `template ${path.relative(templatesDir, tmpl)}`);
+    } catch (e) {
+      die(e.message);
     }
 
     // noEscape:true => bare {{TOKEN}} is a raw substitution == sed parity.
@@ -200,4 +181,40 @@ function main() {
   process.stderr.write(`[render-handlebars] rendered ${rendered} template(s) -> ${outDir}\n`);
 }
 
-main();
+// ── Shared, fail-closed template-safety gate ────────────────────────────────
+// Exported so the Phase-4 recipe engine (render-recipe.js) runs the EXACT same
+// classifier gate over its anchor find/replace strings — single source of truth,
+// no forked gate. `label` is a human name for the error (a template path or a
+// recipe anchor id). Throws (not process.exit) so callers can decide; the CLI
+// wrapper below converts a throw into die()/exit 1.
+function assertTemplateSafe(src, label) {
+  for (const tok of referencedTokens(src)) {
+    if (classifier.isDenied(tok)) {
+      throw new Error(`${label} references denylisted secret token '{{${tok}}}' — refusing to render`);
+    }
+    if (classifier.isFrozen(tok)) {
+      throw new Error(`${label} references token '{{${tok}}}' that targets a FROZEN protocol constant (label-key namespace / wire header / subprotocol prefix) — refusing to render (it must stay literal)`);
+    }
+    if (!classifier.isAllowed(tok)) {
+      throw new Error(`${label} references token '{{${tok}}}' that is neither allowlisted nor denylisted — refusing to render (fail-closed). Add it to scripts/tooling/tokens.json (allowlist) or remove the reference.`);
+    }
+  }
+  for (const body of referencedRawBodies(src)) {
+    if (classifier.isFrozen(body)) {
+      throw new Error(`${label} references '{{${body}}}' that targets a FROZEN protocol constant (label-key namespace / wire header / subprotocol prefix) — refusing to render (it must stay literal)`);
+    }
+    if (classifier.isDenied(body)) {
+      throw new Error(`${label} references denylisted secret token '{{${body}}}' — refusing to render`);
+    }
+  }
+}
+
+module.exports = {
+  TOKEN_KEYS,
+  buildContext,
+  assertTemplateSafe,
+  referencedTokens,
+  referencedRawBodies,
+};
+
+if (require.main === module) main();
