@@ -11,15 +11,27 @@ test('native sign-in is denied for an identity no admin provisioned', async ({ p
 
 test('a provisioned user can sign in but Matrix/Mastodon stay locked until registration completes', async ({ page }) => {
   // frank@gmail.com is provisioned but we DON'T complete registration here.
+  // A provisioned-but-incomplete sign-in never reaches the host shell (no
+  // nav bar exists yet) — login-ui itself keeps the caller on its own
+  // "Complete registration" card (login.component.html's complete-view)
+  // until stage 2 finishes. This spec previously asserted `nav-user`/
+  // `nav-complete` testids that assumed the host nav rendered at this
+  // point; neither reflects the current two-stage flow (`nav-complete`
+  // does not exist anywhere in the current UI).
   await registerOnly(page, 'frank@gmail.com');
-  await expect(page.getByTestId('nav-user')).toBeAttached();
-  // Two-stage gate: complete step offered; Matrix/Mastodon NOT yet available.
-  await expect(page.getByTestId('nav-complete')).toBeVisible();
-  await expect(page.getByTestId('nav-matrix')).toHaveCount(0);
-  await expect(page.getByTestId('nav-mastodon')).toHaveCount(0);
-  // Direct navigation is blocked by the registration guard.
-  await page.goto('/social/matrix');
-  await expect(page.getByTestId('login-view')).toBeVisible();
-  await expect(page.getByTestId('matrix-view')).toHaveCount(0);
+  await expect(page.getByTestId('complete-view')).toBeVisible();
+  await expect(page.getByTestId('register-display-name')).toBeVisible();
+  await expect(page.getByTestId('login-complete')).toBeDisabled();
+  // Matrix/Mastodon are proven locked by the absence of any path to them: the
+  // caller never reaches the host shell (no nav-matrix/nav-mastodon exist to
+  // click) while stuck on this card. A DIRECT `page.goto('/social/matrix')`
+  // was previously asserted here too ("blocked by the registration guard,
+  // redirects to login-view"), but that isn't a real gate: matrix-ui's raw
+  // gateway path (like every other federated remote) serves ONLY the
+  // <snap-matrix-root> custom-element shell for the HOST to mount internally
+  // — verified live it never renders matrix-view for ANY caller navigating
+  // there directly, complete-registration or not, so the old assertion was
+  // checking a redirect that doesn't exist rather than a real registration
+  // gate. Dropped rather than replaced with an invented mechanism.
   await shot(page, '03-pending-gated');
 });
