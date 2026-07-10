@@ -42,12 +42,15 @@
 # map baked at provision time. nsPrefix/casdoorOrg have NO {{TOKEN}} slot in the 12 templates
 # today, so they are carried (and signature-covered) but currently unused by generation.
 #
-# WRITEBACK (deferred): admin-bff #118 has NO status-setter for ca_provisioned/appset_registered/
-# last_reconciled_generation (band-190 ships dark; the columns are written only by THIS future
-# effector over internal-mTLS, and no endpoint exists yet). This agent therefore records the
-# applied generation LOCALLY only (last-good-generation), exactly like egress-VPN's report_state.
-# The ack_generation() stub below is present-but-INERT (guarded behind an unset DOMAIN_ACK_URL,
-# never called) so the follow-up is a one-line enablement once the internal-mTLS setter lands.
+# WRITEBACK (Phase 5 — WIRED, enablement-gated): ack_generation() is now CALLED from main()
+# via writeback_acks() per acted-on domain, but stays a NO-OP unless DOMAIN_ACK_URL is set
+# (sourced from node.env BFF_ACK_URL). admin-bff #118 still has NO status-setter endpoint today
+# (band-190 ships dark) — so on a real node the acks 404 silently until the internal-mTLS setter
+# lands; ack_generation() swallows that ("BFF reconciles forward regardless"). The applied
+# generation is ALSO recorded LOCALLY (last-good-generation), exactly like egress-VPN's
+# report_state. EXECUTION-CONTEXT SPLIT: this ROOT cron acks the CRD generation IT drives; the
+# AUTHORITATIVE appsetRegistered comes from the build-host publish tail (publish-tenant-set.sh),
+# which is what actually pushes to Forgejo. The ack loop only reports booleans — no git/node here.
 
 set -uo pipefail
 
@@ -297,14 +300,14 @@ render_brand_repos() {
     return 0
 }
 
-# ── WRITEBACK STUB — INERT (never called; guarded behind an unset DOMAIN_ACK_URL) ──
-# admin-bff #118 has NO status-setter for ca_provisioned/appset_registered/last_reconciled_
-# generation (band-190 ships dark). When the internal-mTLS setter lands, the follow-up PR sets
-# DOMAIN_ACK_URL and calls this once per applied generation. The likely shape (mirroring
+# ── WRITEBACK — WIRED (Phase 5); enablement-gated behind DOMAIN_ACK_URL ────────────
+# Called from main() via writeback_acks() per acted-on domain. Stays a NO-OP when
+# DOMAIN_ACK_URL is empty (default: node.env has no BFF_ACK_URL). admin-bff #118 has NO
+# status-setter endpoint today (band-190 ships dark); when the internal-mTLS setter lands,
+# node.env gains BFF_ACK_URL and these acks start landing. Shape (mirrors
 # ImageBuildIngestController's /bff/internal/** permitAll()+mTLS pattern):
 #   POST <ACK>/bff/internal/domains/<clusterDomain>/reconcile-ack
 #        { caProvisioned, appsetRegistered, generation }
-# It is present so enabling writeback is a one-line change; it is NEVER invoked from main().
 ack_generation() {
     local dom="$1" ca_prov="$2" appset="$3" gen="$4"
     [ -n "${DOMAIN_ACK_URL}" ] || return 0    # INERT: no setter endpoint exists yet
@@ -317,6 +320,51 @@ ack_generation() {
     [ -n "${MTLS_CERT}" ] && [ -n "${MTLS_KEY}" ] && args+=(--cert "${MTLS_CERT}" --key "${MTLS_KEY}")
     curl "${args[@]}" "${url}" 2>/dev/null && log "acked ${dom} gen=${gen}" \
         || log "ack ${dom} best-effort failed (BFF reconciles forward regardless)"
+    return 0
+}
+
+# ── (6) WRITEBACK loop — ack per registered-not-provisioned domain ─────────────────
+# Wires the (formerly INERT) ack_generation() into main(). For each entry that this
+# reconcile acted on, derive two booleans FROM THE EMITTED STAGING ARTIFACTS and ack:
+#   caProvisioned    := this domain's keystore tree exists under ${OUT_DIR}/keys/<brand>
+#                       (gen-keystores.sh writes ${KS}/${brand}); the CA loop succeeded.
+#   appsetRegistered := this domain's brand-repo GitOps tree was emitted under
+#                       ${OUT_DIR}/<brand>-gitops/apps (generate-brand-repos.sh output).
+#
+# EXECUTION-CONTEXT SPLIT (flagged honestly): this ROOT cron drives the sed-path
+# 12/13-CRD generate-brand-repos.sh ONLY — it does NOT render the Phase-4/5 FULL
+# trees and does NOT git-push (node/git must never run as root here). So the
+# appsetRegistered this cron acks reflects the CRD generation IT drives; the
+# AUTHORITATIVE appsetRegistered comes from the BUILD-HOST publish tail
+# (scripts/publish-tenant-set.sh), which actually pushes to Forgejo and whose
+# 13d ApplicationSet is the discovery source. The ack loop only REPORTS booleans —
+# it renders/pushes nothing. When DOMAIN_ACK_URL is unset, ack_generation() no-ops.
+#
+# DEFERRED RISK (recorded): the admin-bff #118 setter endpoint does not exist yet
+# (band-190 dark). ack_generation() swallows failure ("BFF reconciles forward
+# regardless"), so until the endpoint lands acks 404 silently — enabling writeback
+# early cannot corrupt state, but a false status could go undetected. See header.
+writeback_acks() {
+    local export_json="$1" gen="$2"
+    [ -n "${DOMAIN_ACK_URL}" ] || { log "writeback: DOMAIN_ACK_URL unset — acks INERT (deferred; no admin-bff setter)"; return 0; }
+    have jq || { warn "writeback: jq absent — cannot iterate entries"; return 1; }
+    local n i dom brand ca_prov_flag appset_flag ca_done appset_done
+    n="$(jq -r '.body.entries | length' "${export_json}" 2>/dev/null || echo 0)"
+    for ((i = 0; i < n; i++)); do
+        dom="$(jq -r ".body.entries[$i].clusterDomain // empty" "${export_json}" 2>/dev/null)"
+        brand="$(jq -r ".body.entries[$i].brand // empty" "${export_json}" 2>/dev/null)"
+        ca_prov_flag="$(jq -r ".body.entries[$i].caProvisioned // false" "${export_json}" 2>/dev/null)"
+        appset_flag="$(jq -r ".body.entries[$i].appsetRegistered // false" "${export_json}" 2>/dev/null)"
+        [ -n "${dom}" ] || continue
+        # Only acked the domains this run acted on (registered-not-provisioned).
+        if [ "${ca_prov_flag}" = "true" ] && [ "${appset_flag}" = "true" ]; then continue; fi
+        [ -n "${brand}" ] || brand="${dom%%.*}"
+        entry_fields_ok "${brand}" "${dom}" || continue
+        # Derive outcomes from emitted staging artifacts.
+        ca_done=false;     [ -d "${OUT_DIR}/keys/${brand}" ] && ca_done=true
+        appset_done=false; [ -d "${OUT_DIR}/${brand}-gitops/apps" ] && appset_done=true
+        ack_generation "${dom}" "${ca_done}" "${appset_done}" "${gen}"
+    done
     return 0
 }
 
@@ -338,6 +386,14 @@ main() {
     MTLS_CERT="$(read_env BFF_CLIENT_CERT)" || MTLS_CERT=""
     MTLS_KEY="$(read_env BFF_CLIENT_KEY)"   || MTLS_KEY=""
     MTLS_CA="$(read_env BFF_CA)"            || MTLS_CA="/etc/snapdragon/pki/ca-chain.crt"
+    # WRITEBACK enablement (Phase 5): source DOMAIN_ACK_URL from node.env BFF_ACK_URL
+    # if present. When node.env omits it (today's default), DOMAIN_ACK_URL stays the
+    # empty value set at the top and ack_generation() remains INERT — no behaviour
+    # change on a node whose node.env has not opted in. A pre-set DOMAIN_ACK_URL env
+    # (test harness) is NOT overwritten by an absent node.env key.
+    if [ -z "${DOMAIN_ACK_URL}" ]; then
+        DOMAIN_ACK_URL="$(read_env BFF_ACK_URL)" || DOMAIN_ACK_URL=""
+    fi
 
     local fetched; fetched="$(mktemp 2>/dev/null)" || { warn "mktemp failed — keeping cache"; exit 0; }
     trap 'rm -f "${fetched}" 2>/dev/null || true' EXIT
@@ -362,10 +418,13 @@ main() {
         render_brand_repos "${EXPORT_JSON}"
     fi
 
-    # (6) WRITEBACK is DEFERRED — ack_generation() is INERT (DOMAIN_ACK_URL unset; never called).
-    # The applied generation is recorded LOCALLY (last-good-generation) by commit_cache above.
+    # (6) WRITEBACK — now WIRED (Phase 5). ack_generation() is called per acted-on
+    # domain via writeback_acks(). It stays a no-op UNLESS DOMAIN_ACK_URL is set
+    # (from node.env BFF_ACK_URL); the applied generation is still recorded LOCALLY
+    # (last-good-generation) by commit_cache above regardless.
+    writeback_acks "${EXPORT_JSON}" "${gen}"
     report_state "emitted"
-    log "domain-registry bridge: emitted artifacts under ${OUT_DIR} (writeback deferred — no admin-bff setter)"
+    log "domain-registry bridge: emitted artifacts under ${OUT_DIR} (writeback ${DOMAIN_ACK_URL:+enabled}${DOMAIN_ACK_URL:-inert — no admin-bff setter})"
     exit 0
 }
 

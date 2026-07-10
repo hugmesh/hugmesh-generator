@@ -1,0 +1,74 @@
+# 13d-brand-repos — PER-TENANT brand-repo ApplicationSet (the missing "PR7").
+#
+# Cloned from specs/cluster/apps/13-service-catalog.yaml (the only WORKING
+# scmProvider ApplicationSet — it reads FORGEJO, not GitLab) and PARAMETERIZED
+# for multi-tenant scoping. Rendered per brand into <BRAND>-gitops/apps/ by
+# generate-brand-repos.sh (sed token path). ArgoCD's ApplicationSet controller
+# scans the tenant's Forgejo org and generates one Application per pushed brand
+# repo that carries `snapdragon-deploy.yaml` + a `deploy/` dir (the discovery
+# contract publish-tenant-set.sh guarantees on every pushed tree).
+#
+# SCOPING DECISION (Phase-5 spec, decision #1 — recorded here + in
+# docs/PHASE5-DECISIONS.md): PER-TENANT FORGEJO ORG as the scmProvider `owner`.
+# owner={{ORG}} is the tenant's own org, so a tenant's discovery can NEVER sweep
+# in another tenant's or the upstream Snapdragon-Systems repos. The publish tail
+# MUST push to the SAME org (FORGEJO_ORG={{ORG}}). A `^{{BRAND}}-` repositoryMatch
+# is kept as belt-and-suspenders even inside the per-tenant org (rendered trees are
+# named <brand>-<repo>).  Alternative (shared Snapdragon-Systems org + name-prefix
+# filter) is documented+rejected in docs/PHASE5-DECISIONS.md.
+#
+# ⚠️ PREREQUISITES (scaffold until met — same as 13-service-catalog): the tenant's
+# Forgejo org seeded with the pushed brand repos (publish-tenant-set.sh); a READ
+# token in Secret forgejo-scm-token (ns devops, key `token`) provisioned OUT-OF-BAND
+# (mirrors 09-forgejo.yaml's one-time snapadmin activation — there is intentionally
+# NO in-repo manifest that mints it). The ApplicationSet controller ships with ArgoCD.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: {{BRAND}}-brand-repos
+  namespace: devops
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    snapdragon.systems/brand: "{{BRAND}}"
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - scmProvider:
+        gitea:
+          # PER-TENANT org (decision #1). Publish tail pushes here (FORGEJO_ORG={{ORG}}).
+          owner: {{ORG}}
+          api: http://forgejo.snapdragon-pki.svc.cluster.local:3000
+          allBranches: false
+          tokenRef:
+            secretName: forgejo-scm-token
+            key: token
+        filters:
+          # Defense-in-depth even within the per-tenant org: only this brand's
+          # <brand>-<repo> trees, and only those honouring the discovery contract.
+          - repositoryMatch: "^{{BRAND}}-"
+            pathsExist: ["snapdragon-deploy.yaml", "deploy"]
+  template:
+    metadata:
+      name: "{{ .repository }}"
+      labels:
+        app.kubernetes.io/part-of: snapdragon.systems
+        snapdragon.systems/brand: "{{BRAND}}"
+        snapdragon.systems/catalog: "true"
+    spec:
+      # PER-TENANT ArgoCD project (decision #2) instead of `default`, for isolation.
+      # The project must exist (provisioned alongside the tenant); ArgoCD refuses an
+      # Application in an absent project — a deliberate fail-closed.
+      project: {{BRAND}}
+      source:
+        repoURL: "{{ .url }}"
+        targetRevision: "{{ .branch }}"
+        path: deploy
+      destination:
+        server: https://kubernetes.default.svc
+        # PER-TENANT namespace (decision #2): the nsPrefix export field finally gets
+        # a template slot here. CreateNamespace=true provisions it on first sync.
+        namespace: {{NS_PREFIX}}
+      syncPolicy:
+        automated: { prune: true, selfHeal: true }
+        syncOptions: [CreateNamespace=true]
