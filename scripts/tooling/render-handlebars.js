@@ -76,6 +76,9 @@ function buildContext(extraTokens) {
     if (classifier.isDenied(k)) {
       die(`refusing to build context: token '${k}' is on the secret denylist`);
     }
+    if (classifier.isFrozen(k)) {
+      die(`refusing to build context: token '${k}' targets a FROZEN protocol constant (k8s label-key namespace / wire header / subprotocol prefix) — it must stay literal and can never be templated (red-team gate)`);
+    }
     if (!classifier.isAllowed(k)) {
       die(`refusing to build context: token '${k}' is not on the git-safe allowlist`);
     }
@@ -138,6 +141,9 @@ function main() {
     for (const tok of referencedTokens(src)) {
       if (classifier.isDenied(tok)) {
         die(`template ${path.relative(templatesDir, tmpl)} references denylisted secret token '{{${tok}}}' — refusing to render`);
+      }
+      if (classifier.isFrozen(tok)) {
+        die(`template ${path.relative(templatesDir, tmpl)} references token '{{${tok}}}' that targets a FROZEN protocol constant (label-key namespace / wire header / subprotocol prefix) — refusing to render (it must stay literal)`);
       }
       if (!classifier.isAllowed(tok)) {
         die(`template ${path.relative(templatesDir, tmpl)} references token '{{${tok}}}' that is neither allowlisted nor denylisted — refusing to render (fail-closed: strict:false would silently emit empty string). Add it to scripts/tooling/tokens.json (allowlist) or remove the reference.`);

@@ -34,5 +34,27 @@ function isAllowed(token) {
 }
 
 const FROZEN = spec.frozen_protocol_constants;
+const FROZEN_LABEL_NS = FROZEN.label_key_namespaces || [];
+const FROZEN_HEADERS = (FROZEN.wire_headers || []).map((h) => h.toLowerCase());
+const FROZEN_SUBPROTO = FROZEN.subprotocol_prefixes || [];
 
-module.exports = { isDenied, isAllowed, ALLOW, DENY_KEYS, DENY_NAME_RE, FROZEN, spec };
+/** A token whose render TARGET is a frozen protocol constant — a k8s label-KEY
+ *  namespace (snapdragon.systems/…), a wire header name, or a Sec-WebSocket
+ *  subprotocol prefix. These are compiled-in wire/label identity, NOT tenant
+ *  brand; templating one would corrupt the protocol (and, for label keys, need a
+ *  per-tenant recompile). Fail-closed: any token string that lands on one of
+ *  these is refused at emit. This is the Phase-3 red-team gate — a brand profile
+ *  that tries to override e.g. `snapdragon.systems/domain` is BLOCKED.
+ *  Match is on the token STRING (a frozen-namespace substring, or an exact
+ *  header/subprotocol identity), so it fires even though these are not valid
+ *  {{identifier}} names. */
+function isFrozen(token) {
+  const t = String(token);
+  const tl = t.toLowerCase();
+  if (FROZEN_LABEL_NS.some((ns) => t.includes(ns))) return true;
+  if (FROZEN_HEADERS.includes(tl)) return true;
+  if (FROZEN_SUBPROTO.some((p) => t.startsWith(p) || t.includes(p))) return true;
+  return false;
+}
+
+module.exports = { isDenied, isAllowed, isFrozen, ALLOW, DENY_KEYS, DENY_NAME_RE, FROZEN, spec };

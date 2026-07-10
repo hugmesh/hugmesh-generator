@@ -93,9 +93,36 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
           env:
+            # ── EFFECTIVE in-cluster BRAND env (mesh repo-templating, Phase 3) ──
+            # These override the application.yml env-defaults (deploy env wins).
+            # Kept LITERAL snapdragon.systems (NOT {{tokens}}): this manifest is the
+            # canonical, RAW ArgoCD-synced deploy source, and its per-tenant brand
+            # substitution is the existing build-x86-host-stage4.sh rebrand_sysroot
+            # sed pass (snapdragon.systems -> CLUSTER_DOMAIN), which rewrites all of
+            # these to the tenant domain at ISO build. All must derive from that SAME
+            # domain as the app.yml overlay or a tenant gets a self-inconsistent
+            # issuer. Frozen (untouched): label keys, nodeSelector, mTLS/ESO secret
+            # NAMES, the image alias — none templated.
+            #
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - name: CASDOOR_ISSUER_URI
               value: "https://id.snapdragon.systems"
+            # Default-admin Gmail/allowlist seed (local-part 'admin' stays literal).
+            - name: ADMIN_EMAILS
+              value: "admin@snapdragon.systems"
+            # WebAuthn brand value lives HERE, NOT app.yml (whose rp-id/origins
+            # defaults are the dev-safe localhost/https://localhost — WRONG for an
+            # in-cluster deploy). RP-ID = the admin host; origins = its https origin.
+            # Previously ABSENT (a latent bug: in-cluster WebAuthn RP-ID fell back to
+            # 'localhost'); adding the brand admin subdomain fixes it. rebrand_sysroot
+            # carries admin.snapdragon.systems -> admin.<domain> per tenant.
+            - name: APP_MFA_WEBAUTHN_RP_ID
+              value: "admin.snapdragon.systems"
+            - name: APP_MFA_WEBAUTHN_ORIGINS
+              value: "https://admin.snapdragon.systems"
+            # In-cluster app-store Kaniko push registry host (brand).
+            - name: APPSTORE_BUILDER_REGISTRY
+              value: "registry.snapdragon.systems"
             # ── API-to-API mTLS (server side) ─────────────────────────────────
             # Enforce a client cert chaining to the cluster CA. The store passwords
             # come from /stores/application-tls.properties (in-pod generated, loaded

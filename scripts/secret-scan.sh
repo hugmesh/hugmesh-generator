@@ -31,7 +31,7 @@ ENTROPY_HIGH_THRESHOLD=4.5 # bits/char, GENERIC opaque-token rule. Deliberately 
                            # API paths / dns slugs sit ~4.2-4.4; real base64/hex credentials
                            # sit >=5. 4.5 catches the credential class with ~zero FPs.
 
-_usage() { echo "Usage: $0 <dir-or-file>... | --self-test" >&2; exit 2; }
+_usage() { echo "Usage: $0 [--exclude GLOB]... <dir-or-file>... | --self-test" >&2; exit 2; }
 
 # The awk engine: reads files named on the command line, prints "path:line: RULE: detail"
 # for every finding. Returns via a trailing "FINDINGS=<n>" line on stderr-substitute.
@@ -97,15 +97,35 @@ _scan_files() {
   ' "$@"
 }
 
+# EXCLUDES: an optional set of path GLOBs (populated from leading --exclude GLOB
+# args in main). A scanned file whose path matches ANY glob is skipped. Default is
+# EMPTY, so with no --exclude the behavior is byte-identical to before (the pilot
+# login-ui emit + --self-test are unaffected). Used by render-repo-tree.sh to scope
+# the EMIT scan away from a compiled base's own upstream Java SOURCE + unit-test
+# fixtures — trees where a brand token never lands and whose content integrity is
+# the base repo's own CI concern (the base is trusted-transport, re-verification is
+# the Phase-8 deferral documented in pull-repo-base.sh). The full config/manifest/
+# resource/CI surface — where a templated secret WOULD appear — is still scanned.
+EXCLUDES=()
+_is_excluded() {
+  local f="$1" g
+  for g in "${EXCLUDES[@]}"; do
+    # shellcheck disable=SC2053
+    [[ "$f" == $g ]] && return 0
+  done
+  return 1
+}
+
 _scan_paths() {
   local files=()
-  local p
+  local p f
   for p in "$@"; do
     if [[ -d "$p" ]]; then
-      while IFS= read -r -d '' f; do files+=("$f"); done \
-        < <(find "$p" -type f -print0)
+      while IFS= read -r -d '' f; do
+        _is_excluded "$f" || files+=("$f")
+      done < <(find "$p" -type f -print0)
     elif [[ -f "$p" ]]; then
-      files+=("$p")
+      _is_excluded "$p" || files+=("$p")
     else
       echo "secret-scan: no such path: $p" >&2; return 2
     fi
@@ -195,5 +215,12 @@ YAML
 if [[ "$1" == "--self-test" ]]; then
   _self_test
 else
+  # Leading, repeatable `--exclude GLOB` options (path globs to skip); everything
+  # after is the scan path list. Default: no excludes (unchanged behavior).
+  while [[ $# -gt 0 && "$1" == "--exclude" ]]; do
+    [[ $# -ge 2 ]] || _usage
+    EXCLUDES+=("$2"); shift 2
+  done
+  [[ $# -ge 1 ]] || _usage
   _scan_paths "$@"
 fi

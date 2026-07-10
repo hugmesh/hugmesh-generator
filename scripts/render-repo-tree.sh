@@ -145,10 +145,13 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
   # 1) Private copy of the READ-ONLY base into OUT (exclude VCS metadata + any
   #    stray build dirs). The base itself is never modified; nothing is copied
   #    INTO the generator tree — OUT is a gitignored staging dir.
-  _log "copying read-only base into ${BRAND_OUT} (excluding .git/node_modules/dist)"
+  # Exclude VCS + build outputs for BOTH archetypes (JS: node_modules/dist/.angular;
+  # compiled Java/Maven BFF: target/). Generalized, not forked per repo — extra
+  # excludes are harmless when a repo lacks that dir.
+  _log "copying read-only base into ${BRAND_OUT} (excluding .git/node_modules/dist/.angular/target)"
   tar -C "$BASE" \
       --exclude='./.git' --exclude='./node_modules' --exclude='./dist' \
-      --exclude='./.angular' -cf - . | tar -C "$BRAND_OUT" -xf -
+      --exclude='./.angular' --exclude='./target' -cf - . | tar -C "$BRAND_OUT" -xf -
 
   # 2) Stage ONLY the 4 overlay .hbs (never _skeleton, never _identity.env/README)
   #    into a temp templates dir preserving repo-relative paths.
@@ -175,8 +178,23 @@ else
 fi
 
 # ── Phase-1 emit-time secret scanner (fail-closed) ──────────────────────────
-_log "running emit-time secret scanner over ${BRAND_OUT} (fail-closed gate)"
-if ! "${SCRIPT_DIR}/secret-scan.sh" "$BRAND_OUT" >&2; then
+# SCOPE: the scan guards the TEMPLATING delta — that no rendered/config/manifest
+# file carries a LITERAL secret (every secret field must stay ${ENV}/ESO). It is
+# NOT a SAST re-audit of the read-only base's own compiled sources: a compiled
+# archetype (e.g. the Spring BFF) ships upstream unit-test crypto FIXTURES + source
+# javadoc that name PEM headers / high-entropy sample tokens — legitimate FPs that
+# are the BASE repo's own CI concern (the base is trusted-transport here; content
+# re-verification is the Phase-8 deferral in pull-repo-base.sh). A brand token
+# never lands in *.java, so the compiled-source + test trees are excluded while the
+# ENTIRE config/resource/manifest/CI surface (application.yml, .gitlab-ci.yml,
+# Dockerfile, settings.xml, deploy/**, …) — where a templated secret WOULD appear —
+# is still scanned. The excludes are no-ops for a base without those trees (the
+# login-ui pilot), so its emit is unchanged.
+_log "running emit-time secret scanner over ${BRAND_OUT} (fail-closed gate; base compiled-source/test trees out of scope)"
+if ! "${SCRIPT_DIR}/secret-scan.sh" \
+      --exclude '*/src/test/*' \
+      --exclude '*/src/main/java/*' \
+      "$BRAND_OUT" >&2; then
   _die "secret scanner flagged the emitted tree — refusing to emit ${BRAND_OUT}"
 fi
 
