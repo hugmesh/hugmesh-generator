@@ -3,7 +3,7 @@
   python -m snapdragon_studio               # wizard + mesh-node tray + local-stack tray
   python -m snapdragon_studio --tray        # tray only (mesh-node controller)
   python -m snapdragon_studio --stack-tray  # tray only (local dev-stack controller)
-  python -m snapdragon_studio --go-live     # superadmin go-live wizard (scripts/go-live.sh front-end)
+  python -m snapdragon_studio --go-live     # superadmin go-live wizard (snapdragon-go-live front-end)
   python -m snapdragon_studio --login-agent # headless: run the passwordless local-login loopback agent
   python -m snapdragon_studio --generator-dir /path/to/snapdragon-generator
   python -m snapdragon_studio --remember-roles-for-passwordless-login
@@ -44,7 +44,7 @@ def main(argv=None) -> int:
     ap.add_argument("--go-live", action="store_true",
                     help="open the superadmin go-live wizard (take a provisioned brand "
                          "device from internal-only to publicly live — the GUI front-end "
-                         "to scripts/go-live.sh)")
+                         "to the shared driver specs/usr/sbin/snapdragon-go-live)")
     ap.add_argument("--login-agent", action="store_true",
                     help="headless: run the passwordless local-login loopback agent "
                          "(binds 127.0.0.1:27621; serves the role-picker handoff to login-ui)")

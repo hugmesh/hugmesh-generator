@@ -1,110 +1,120 @@
-"""GoLiveDriver command assembly, catalog display parse, streaming and secret
-staging — no Qt, no engine runs (subprocess is faked wherever it would execute).
+"""GoLiveDriver command assembly, provider load (via the driver's `list`),
+streaming, secret staging and the commit/rollback terminal path — no Qt.
 
-The driver must stay a pure flag-speller for scripts/go-live.sh (the engine) —
-these tests pin the argv it assembles, that secrets never enter that argv, and
-that the display-only catalog parse agrees with the REAL repo catalog.
+After the go-live consolidation the Studio front-end is a THIN caller of the
+CANONICAL driver specs/usr/sbin/snapdragon-go-live (subcommands
+status|list|plan|commit|rollback), NOT the removed #286 engine scripts/go-live.sh.
+These tests pin the argv it assembles (subcommand + flags), that secrets never
+enter that argv, that the commit/rollback path adds NO -y/--yes bypass, and that
+the provider load agrees with the REAL in-repo driver + registry.
+
+Some tests shell out to the real driver via bash (no Qt, no posture mutation —
+`list`/`status` are read-only); they are skipped if bash is unavailable.
 """
 import os
 import shlex
+import shutil
 import stat
 import subprocess
 
 import pytest
 
 from snapdragon_studio.core.golive_driver import (
-    GoLiveDriver, GoLiveOptions, CATALOG_REL, ENGINE_REL,
+    GoLiveDriver, GoLiveOptions, DRIVER_REL, REGISTRY_REL,
 )
 
-# studio/tests/ -> studio/ -> the generator repo root (the real engine + catalog)
+# studio/tests/ -> studio/ -> the generator repo root (the real driver + registry)
 GENERATOR_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+requires_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
 
 
 def full_opts(tmp_path):
     tok = tmp_path / "tok"
     tok.write_text("secret\n")
-    return GoLiveOptions(provider="ddns", domain="example.org", record_ip="203.0.113.7",
-                         tunnel_id="uuid-1", ddns_service="duckdns", ddns_subdomain="home",
-                         out_dir=str(tmp_path / "out"), keys_dir=str(tmp_path / "keys"),
-                         token_file=str(tok))
+    return GoLiveOptions(provider="duckdns", domain="example.org", ingress_ip="203.0.113.7",
+                         tunnel_cname="uuid-1.cfargotunnel.com", ddns_service="duckdns",
+                         ddns_subdomain="home", out_dir=str(tmp_path / "out"),
+                         keys_dir=str(tmp_path / "keys"), token_file=str(tok))
 
 
 # ---- command assembly ---------------------------------------------------------
 
-def test_command_assembly_and_flag_order(tmp_path):
+def test_command_is_subcommand_first_then_flags(tmp_path):
     d = GoLiveDriver(str(tmp_path), is_root=False)
     opts = full_opts(tmp_path)
-    cmd = d.command(opts, ["--emit"])
-    assert cmd[:2] == ["bash", f"./{ENGINE_REL}"]
-    # same flag order as the console menu's base_flags() — previews read identically
-    assert cmd[2:] == ["--provider", "ddns", "--domain", "example.org",
-                       "--record-ip", "203.0.113.7", "--tunnel-id", "uuid-1",
+    cmd = d.command("plan", opts)
+    # subcommand comes FIRST (driver contract), after `bash ./<driver>`
+    assert cmd[:3] == ["bash", f"./{DRIVER_REL}", "plan"]
+    assert cmd[3:] == ["--provider", "duckdns", "--domain", "example.org",
+                       "--ingress-ip", "203.0.113.7",
+                       "--tunnel-cname", "uuid-1.cfargotunnel.com",
                        "--ddns-service", "duckdns", "--ddns-subdomain", "home",
-                       "--out", str(tmp_path / "out"), "--keys-dir", str(tmp_path / "keys"),
-                       "--token-file", str(tmp_path / "tok"), "--emit"]
+                       "--out-dir", str(tmp_path / "out"),
+                       "--keys-dir", str(tmp_path / "keys"),
+                       "--token-file", str(tmp_path / "tok")]
 
 
 def test_command_carries_token_paths_never_values(tmp_path):
-    """Secrets reach the engine as FILE PATHS only (--token-file) — the secret
+    """Secrets reach the driver as FILE PATHS only (--token-file) — the secret
     value has no field on GoLiveOptions at all, so no argv can ever contain it."""
     d = GoLiveDriver(str(tmp_path), is_root=False)
     opts = full_opts(tmp_path)
-    assert "secret" not in " ".join(d.command(opts, ["--emit"]))
+    assert "secret" not in " ".join(d.command("plan", opts))
     assert not hasattr(opts, "token")
-    # token files are droppable for actions that never need them (verify/flip)
-    cmd = d.command(opts, ["--verify"], include_token_files=False)
-    assert "--token-file" not in cmd and "--cf-api-token-file" not in cmd
+    # token files are droppable for actions that never need them
+    cmd = d.command("plan", opts, include_token_file=False)
+    assert "--token-file" not in cmd
 
 
 def test_empty_options_emit_only_the_ddns_service_default(tmp_path):
-    # mirrors the menu: ddns-service always has a value (duckdns default), all
-    # other unset options stay off the argv so the engine's own defaults apply
-    cmd = GoLiveDriver(str(tmp_path)).command(GoLiveOptions(), ["--status"])
-    assert cmd == ["bash", f"./{ENGINE_REL}", "--ddns-service", "duckdns", "--status"]
+    # ddns-service always has a value (duckdns default); every other unset option
+    # stays off the argv so the driver's own defaults apply
+    cmd = GoLiveDriver(str(tmp_path)).command("plan", GoLiveOptions())
+    assert cmd == ["bash", f"./{DRIVER_REL}", "plan", "--ddns-service", "duckdns"]
 
 
 def test_command_string_is_shell_quoted(tmp_path):
     d = GoLiveDriver(str(tmp_path), is_root=False)
-    opts = GoLiveOptions(provider="ddns", domain="example.org",
+    opts = GoLiveOptions(provider="byo-domain", domain="example.org",
                          out_dir=str(tmp_path / "my out"))
-    s = d.command_string(opts, ["--emit"])
-    assert f"./{ENGINE_REL}" in s
+    s = d.command_string("plan", opts)
+    assert f"./{DRIVER_REL}" in s and " plan " in s
     assert f"'{tmp_path}/my out'" in s
 
 
-# ---- catalog display parse (against the REAL repo catalog) ---------------------
+# ---- provider load (against the REAL in-repo driver + registry) -----------------
 
-def test_catalog_parse_matches_the_real_repo_catalog():
+@requires_bash
+def test_providers_come_from_the_real_driver_list():
     d = GoLiveDriver(GENERATOR_DIR)
-    assert os.path.exists(os.path.join(GENERATOR_DIR, *CATALOG_REL.split("/")))
+    assert os.path.exists(os.path.join(GENERATOR_DIR, *DRIVER_REL.split("/")))
+    assert os.path.exists(os.path.join(GENERATOR_DIR, *REGISTRY_REL.split("/")))
     ids = [p.id for p in d.providers()]
-    assert ids == ["cloudflare-tunnel", "registrar-manual", "ddns",
-                   "tailscale-funnel", "router-manual"]
+    assert ids == ["cloudflare-tunnel", "byo-domain", "duckdns",
+                   "tailscale-funnel", "router-portforward"]
     cf = d.provider("cloudflare-tunnel")
-    assert cf.model == "tunnel"
-    assert cf.inputs == ["token"]
-    assert cf.optional == ["cf-api-token", "tunnel-id"]
-    assert cf.token_dest == "cloudflared/tunnel-token"
-    assert cf.emits == ["checklist", "records-csv"]
-    assert cf.verify == ["dns", "http", "tunnel"]
-    assert len(cf.links) == 3 and all(u.startswith("http") for u, _ in cf.links)
-    assert any("ENV=prod" in n for n in cf.notes)
-    # empty token_dest rows (registrar-manual) parse to "" — not a stray "="
-    assert d.provider("registrar-manual").token_dest == ""
+    assert cf.mechanism == "deeplink" and cf.model == "tunnel" and cf.status == "full"
+    assert cf.needs("token") and cf.offers("tunnel-cname") and not cf.offers("ingress-ip")
+    byo = d.provider("byo-domain")
+    assert byo.mechanism == "files" and byo.model == "public-dns"
+    assert byo.offers("ingress-ip") and byo.offers("tunnel-cname") and not byo.needs("token")
     assert d.provider("tailscale-funnel").inputs == []
+    assert d.provider("nope") is None
 
 
-def test_models_are_unique_and_in_catalog_order():
+@requires_bash
+def test_models_are_unique_and_in_registry_order():
     d = GoLiveDriver(GENERATOR_DIR)
     assert d.models() == ["tunnel", "public-dns", "ddns", "funnel", "router"]
 
 
-def test_provider_needs_and_offers():
-    d = GoLiveDriver(GENERATOR_DIR)
-    ddns = d.provider("ddns")
+@requires_bash
+def test_ddns_provider_needs_token_and_subdomain():
+    ddns = GoLiveDriver(GENERATOR_DIR).provider("duckdns")
+    assert ddns.mechanism == "ddns"
     assert ddns.needs("token") and ddns.needs("subdomain")
-    assert not ddns.needs("record-ip") and ddns.offers("record-ip")
-    assert d.provider("nope") is None
+    assert ddns.offers("ddns-service") and not ddns.needs("ingress-ip")
 
 
 # ---- CLUSTER_DOMAIN autofill -----------------------------------------------------
@@ -123,12 +133,12 @@ def test_autofill_domain_empty_when_no_bake(monkeypatch, tmp_path):
 
 # ---- streaming (Popen faked — mirrors test_build_driver's pattern) ---------------
 
-def test_run_streams_lines_from_the_engine(monkeypatch, tmp_path):
+def test_run_streams_lines_from_the_driver(monkeypatch, tmp_path):
     d = GoLiveDriver(str(tmp_path), is_root=False)
     seen = {}
 
     class FakeProc:
-        stdout = iter(["[go-live] record set -> out/records.csv", "[go-live] emit done"])
+        stdout = iter(["[go-live] record set -> out/records.csv", "[go-live] plan done"])
 
         def wait(self):
             return 0
@@ -143,18 +153,17 @@ def test_run_streams_lines_from_the_engine(monkeypatch, tmp_path):
 
     monkeypatch.setattr("snapdragon_studio.core.golive_driver.subprocess.Popen", fake_popen)
     lines = []
-    code = d.run(GoLiveOptions(provider="registrar-manual", domain="example.org",
-                               record_ip="203.0.113.7"), ["--emit"], on_line=lines.append)
+    code = d.run("plan", GoLiveOptions(provider="byo-domain", domain="example.org",
+                                       ingress_ip="203.0.113.7"), on_line=lines.append)
     assert code == 0
-    assert seen["cmd"][:2] == ["bash", f"./{ENGINE_REL}"]
-    assert "--emit" in seen["cmd"]
+    assert seen["cmd"][:3] == ["bash", f"./{DRIVER_REL}", "plan"]
     assert seen["cwd"] == d.generator_dir
-    assert lines == ["[go-live] record set -> out/records.csv", "[go-live] emit done"]
+    assert lines == ["[go-live] record set -> out/records.csv", "[go-live] plan done"]
 
 
 def test_status_text_strips_ansi(monkeypatch, tmp_path):
     def fake_run(cmd, **kwargs):
-        assert cmd[:2] == ["bash", f"./{ENGINE_REL}"] and "--status" in cmd
+        assert cmd == ["bash", f"./{DRIVER_REL}", "status"]
         return subprocess.CompletedProcess(cmd, 0, stdout="\x1b[1mGo-live status\x1b[0m\n  posture: INTERNAL\n")
 
     monkeypatch.setattr("snapdragon_studio.core.golive_driver.subprocess.run", fake_run)
@@ -173,89 +182,106 @@ def test_stage_token_writes_0600_and_the_exact_value(tmp_path, monkeypatch):
         os.unlink(path)
 
 
-# ---- flip / rollback (terminal path) ----------------------------------------------
+# ---- commit / rollback (terminal path — NO -y/--yes bypass) ------------------------
 
-def test_flip_command_sudo_flags_and_no_secrets(tmp_path):
+def test_commit_command_sudo_no_yes_no_secrets(tmp_path):
     opts = full_opts(tmp_path)
-    cmd = GoLiveDriver(str(tmp_path), is_root=False).flip_command(opts, persist=True)
-    assert cmd[:3] == ["sudo", "bash", f"./{ENGINE_REL}"]
-    assert cmd[-2:] == ["--flip", "--persist"]
-    assert "--token-file" not in cmd            # the flip never needs a secret
+    cmd = GoLiveDriver(str(tmp_path), is_root=False).commit_command(opts, persist=True)
+    assert cmd[:4] == ["sudo", "bash", f"./{DRIVER_REL}", "commit"]
+    assert cmd[-1:] == ["--persist-public"]
+    assert ("--provider", "duckdns") in zip(cmd, cmd[1:])
     assert ("--domain", "example.org") in zip(cmd, cmd[1:])
-    root_cmd = GoLiveDriver(str(tmp_path), is_root=True).flip_command(opts)
-    assert root_cmd[0] == "bash" and root_cmd[-1] == "--flip"
+    # the commit gate must run on the TTY — the front-end adds NO bypass
+    assert "-y" not in cmd and "--yes" not in cmd
+    assert "--token-file" not in cmd            # commit never needs a secret
+    root_cmd = GoLiveDriver(str(tmp_path), is_root=True).commit_command(opts)
+    assert root_cmd[:3] == ["bash", f"./{DRIVER_REL}", "commit"]
+    assert "--provider" in root_cmd
+    assert "--persist-public" not in root_cmd   # persist defaults off
 
 
-def test_rollback_command_is_minimal(tmp_path):
-    cmd = GoLiveDriver(str(tmp_path), is_root=False).rollback_command(persist=True)
-    assert cmd == ["sudo", "bash", f"./{ENGINE_REL}", "--rollback", "--persist"]
+def test_rollback_command_is_minimal_and_no_yes(tmp_path):
+    cmd = GoLiveDriver(str(tmp_path), is_root=False).rollback_command(revert_release_state=True)
+    assert cmd == ["sudo", "bash", f"./{DRIVER_REL}", "rollback", "--revert-release-state"]
+    plain = GoLiveDriver(str(tmp_path), is_root=True).rollback_command()
+    assert plain == ["bash", f"./{DRIVER_REL}", "rollback"]
+    assert "-y" not in cmd and "--yes" not in cmd
 
 
 def test_terminal_command_picks_the_first_available(monkeypatch, tmp_path):
     d = GoLiveDriver(str(tmp_path), is_root=True)
     monkeypatch.setattr("snapdragon_studio.core.golive_driver.shutil.which",
                         lambda b: "/usr/bin/konsole" if b == "konsole" else None)
-    cmd = d.terminal_command(["bash", "./scripts/go-live.sh", "--flip"])
+    inner = ["bash", f"./{DRIVER_REL}", "commit", "--provider", "byo-domain"]
+    cmd = d.terminal_command(inner)
     assert cmd[:2] == ["konsole", "-e"]
     assert cmd[2:4] == ["bash", "-c"]
-    assert shlex.join(["bash", "./scripts/go-live.sh", "--flip"]) in cmd[4]
+    assert shlex.join(inner) in cmd[4]
 
 
-def test_run_flip_without_a_terminal_reports_the_manual_command(monkeypatch, tmp_path):
+def test_run_commit_without_a_terminal_reports_the_manual_command(monkeypatch, tmp_path):
     d = GoLiveDriver(str(tmp_path), is_root=True)
     monkeypatch.setattr("snapdragon_studio.core.golive_driver.shutil.which", lambda b: None)
-    ok, msg = d.run_flip_in_terminal(GoLiveOptions(domain="example.org"))
+    ok, msg = d.run_commit_in_terminal(GoLiveOptions(provider="byo-domain", domain="example.org"))
     assert not ok
-    assert "yourself: " in msg and "--flip" in msg and "example.org" in msg
+    assert "yourself: " in msg and "commit" in msg and "example.org" in msg
 
 
 # ---- preflight ---------------------------------------------------------------------
 
-def test_preflight_flags_a_missing_engine(monkeypatch, tmp_path):
+def test_preflight_flags_a_missing_driver(monkeypatch, tmp_path):
     monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", str(tmp_path / "missing"))
-    problems = GoLiveDriver(str(tmp_path)).preflight(
-        GoLiveOptions(provider="ddns"), ["--emit"])
-    assert any("engine not found" in p for p in problems)
-    assert any("catalog not found" in p for p in problems)
+    problems = GoLiveDriver(str(tmp_path)).preflight(GoLiveOptions(provider="duckdns"))
+    assert any("driver not found" in p for p in problems)
+    assert any("registry not found" in p for p in problems)
     assert any("Domain is required" in p for p in problems)
 
 
-def test_preflight_reads_requirements_from_the_catalog(monkeypatch):
+@requires_bash
+def test_preflight_reads_requirements_from_the_registry(monkeypatch):
     monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", "/nonexistent")
     d = GoLiveDriver(GENERATOR_DIR)
-    opts = GoLiveOptions(provider="ddns", domain="example.org")
-    problems = d.preflight(opts, ["--emit"])
+    opts = GoLiveOptions(provider="duckdns", domain="example.org")
+    problems = d.preflight(opts)
     assert any("needs a token" in p for p in problems)
     assert any("DDNS subdomain" in p for p in problems)
-    # a masked-field secret (staged at run time) satisfies the token requirement
+    # a masked-field secret (staged at run time) + a valid label satisfy the reqs
     opts.ddns_subdomain = "home"
-    assert d.preflight(opts, ["--emit"], has_secret=True) == []
+    assert d.preflight(opts, has_secret=True) == []
 
 
-def test_preflight_registrar_needs_ip_or_tunnel(monkeypatch):
+@requires_bash
+def test_preflight_rejects_a_bad_ddns_label(monkeypatch):
     monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", "/nonexistent")
     d = GoLiveDriver(GENERATOR_DIR)
-    opts = GoLiveOptions(provider="registrar-manual", domain="example.org")
-    assert any("record IP" in p for p in d.preflight(opts, ["--emit"]))
-    opts.tunnel_id = "uuid-1"
-    assert d.preflight(opts, ["--emit"]) == []
+    opts = GoLiveOptions(provider="duckdns", domain="example.org",
+                         ddns_subdomain="bad.label")   # dot -> driver rejects
+    assert any("single lowercase DNS label" in p for p in d.preflight(opts, has_secret=True))
 
 
-def test_preflight_create_dns_requirements(monkeypatch):
+@requires_bash
+def test_preflight_files_warns_without_a_target(monkeypatch):
     monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", "/nonexistent")
     d = GoLiveDriver(GENERATOR_DIR)
-    opts = GoLiveOptions(provider="cloudflare-tunnel", domain="example.org")
-    problems = d.preflight(opts, ["--emit", "--create-dns"], has_secret=True)
-    assert any("tunnel UUID" in p for p in problems)
-    assert any("Cloudflare API token" in p for p in problems)
-    opts.tunnel_id = "uuid-1"
-    assert d.preflight(opts, ["--emit", "--create-dns"],
-                       has_secret=True, has_cf_secret=True) == []
+    opts = GoLiveOptions(provider="byo-domain", domain="example.org")
+    assert any("PLACEHOLDERS" in p for p in d.preflight(opts))
+    opts.ingress_ip = "203.0.113.7"
+    assert d.preflight(opts) == []
+
+
+@requires_bash
+def test_preflight_rejects_a_bad_ingress_ip(monkeypatch):
+    monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", "/nonexistent")
+    d = GoLiveDriver(GENERATOR_DIR)
+    opts = GoLiveOptions(provider="byo-domain", domain="example.org", ingress_ip="not-an-ip")
+    assert any("valid IPv4" in p for p in d.preflight(opts))
 
 
 def test_preflight_flags_dangling_token_files(monkeypatch, tmp_path):
     monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", "/nonexistent")
+    # driver/registry existence is checked against the real repo so only the token
+    # file problem is asserted here
     d = GoLiveDriver(GENERATOR_DIR)
-    opts = GoLiveOptions(provider="ddns", domain="example.org", ddns_subdomain="home",
+    opts = GoLiveOptions(provider="duckdns", domain="example.org", ddns_subdomain="home",
                          token_file=str(tmp_path / "gone"))
-    assert any("does not exist" in p for p in d.preflight(opts, ["--emit"]))
+    assert any("does not exist" in p for p in d.preflight(opts))

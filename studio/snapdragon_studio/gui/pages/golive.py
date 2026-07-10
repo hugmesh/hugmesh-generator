@@ -1,19 +1,23 @@
-"""The Snapdragon go-live wizard — the Studio GUI front door to scripts/go-live.sh.
+"""The Snapdragon go-live wizard — the Studio GUI front-end to the CANONICAL
+driver (specs/usr/sbin/snapdragon-go-live).
 
-Step flow (design v1): preflight status → exposure model → provider pick (deep
-links, open-in-browser) → inputs (CLUSTER_DOMAIN autofill) → generate/download →
-verify → explicit human-confirm flip. Every action dispatches the ENGINE's flags
-via core.golive_driver.GoLiveDriver; this page set adds NOTHING to the engine —
-the same contract scripts/go-live-menu.sh keeps for the console.
+Step flow (design v1): preflight status → exposure model → provider pick → inputs
+(CLUSTER_DOMAIN autofill) → generate (driver `plan`) → verify (edge checklist +
+posture recheck) → explicit human-confirm commit. Every action is a driver
+subcommand dispatched via core.golive_driver.GoLiveDriver; this page set is a THIN
+front-end — exactly like snapdragon-go-live-cli and the ncurses
+snapdragon-go-live-menu, it only ever calls `snapdragon-go-live <verb>` and adds
+NO logic of its own.
 
-The flip stays double-confirmed by design: the GUI arms its button only after the
-domain is typed here, and the engine then runs its OWN typed-domain confirm on a
-real TTY (the GUI opens it in a terminal emulator — there is no bypass flag, and
-this wizard does not add one; unattended go-live is a v1 non-goal).
+The commit stays double-confirmed by design: the GUI arms its button only after the
+domain is typed here, and the driver then runs its OWN confirmation prompt on a
+real TTY (the GUI opens it in a terminal emulator). There is deliberately no bypass
+flag, and this wizard does not add one (no -y/--yes) — unattended go-live is a v1
+non-goal.
 
-Secrets: tokens are taken in masked fields, staged into 0600 temp files handed to
-the engine as --token-file/--cf-api-token-file, deleted right after the run, and
-never persisted or placed in argv — mirroring the console menu exactly.
+Secrets: tokens are taken in masked fields, staged into a 0600 temp file handed to
+the driver as --token-file, deleted right after the run, and never persisted or
+placed in argv — GoLiveOptions has no field for a secret value at all.
 """
 from __future__ import annotations
 
@@ -29,7 +33,8 @@ GOLIVE_PAGE_SLUGS = ("preflight", "exposure", "provider", "inputs",
                      "generate", "verify", "flip")
 
 # labels/blurbs for the exposure-model radios; the model LIST itself comes from
-# the provider catalog, so a catalog-only provider addition still shows up here.
+# the driver's provider registry (mechanism -> model), so a registry-only provider
+# addition still shows up here.
 MODEL_LABELS = {
     "tunnel": ("Outbound tunnel (no open inbound ports)",
                "cloudflared dials OUT to the edge and serves your hostnames — nothing "
@@ -48,18 +53,30 @@ MODEL_LABELS = {
                "the exact checklist and never touches the router."),
 }
 
+# one-line description of what each mechanism's `plan` emits (the registry does not
+# expose per-provider prose via `list`, so the front-end names it by mechanism).
+MECH_EMITS = {
+    "deeplink": "a Zero-Trust deep-link, a token-drop guide, and the autofilled public "
+                "hostnames / CNAME record set.",
+    "files": "a copy-paste record set, a BIND zone + CSV (A/AAAA/CNAME), and registrar "
+             "DNS deep-links.",
+    "ddns": "a real single-token DDNS updater + a cron drop-in (no dashboard).",
+    "funnel": "the tailnet-native funnel enable commands (no public DNS records at all).",
+    "instructions": "printed port-forward instructions + router deep-links (no mutation).",
+}
 
-class _EngineWorker(QtCore.QThread):
-    """Runs one GoLiveDriver action the same way _BuildWorker runs a build."""
+
+class _DriverWorker(QtCore.QThread):
+    """Runs one GoLiveDriver subcommand the same way _BuildWorker runs a build."""
     line = Signal(str)
     done = Signal(int)
 
-    def __init__(self, driver, opts, action_flags):
+    def __init__(self, driver, subcommand, opts):
         super().__init__()
-        self.driver, self.opts, self.action_flags = driver, opts, action_flags
+        self.driver, self.subcommand, self.opts = driver, subcommand, opts
 
     def run(self):
-        code = self.driver.run(self.opts, self.action_flags,
+        code = self.driver.run(self.subcommand, self.opts,
                                on_line=lambda s: self.line.emit(s))
         self.done.emit(code)
 
@@ -81,7 +98,7 @@ class GoLivePreflightPage(QtWidgets.QWizardPage):
             "snapdragon-firewall-reconcile watches /etc/snapdragon/release-state and "
             "the /etc/snapdragon/go-live marker (60s convergence, fail-closed). This "
             "wizard only provisions the public edge, verifies it, and then writes that "
-            "marker — rollback is deleting it.")
+            "marker (driver `commit`) — rollback is deleting it.")
         info.setWordWrap(True)
         lay.addWidget(info)
         self.status = QtWidgets.QPlainTextEdit()
@@ -145,7 +162,8 @@ class GoLiveProviderPage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("Pick the provider")
-        self.setSubTitle("Deep links open the EXACT pages you need in your browser.")
+        self.setSubTitle("The driver's registry is the source of truth — deep-links and the "
+                         "record set / checklist are written into the artifacts at Generate.")
         lay = QtWidgets.QVBoxLayout(self)
         self.list = QtWidgets.QListWidget()
         self.list.setMaximumHeight(110)
@@ -153,16 +171,6 @@ class GoLiveProviderPage(QtWidgets.QWizardPage):
         self.summary = QtWidgets.QLabel("")
         self.summary.setWordWrap(True)
         lay.addWidget(self.summary)
-        self.links_box = QtWidgets.QGroupBox("Provider pages (deep links)")
-        self.links_lay = QtWidgets.QVBoxLayout(self.links_box)
-        lay.addWidget(self.links_box)
-        self.open_all = QtWidgets.QPushButton("Open all in browser")
-        self.open_all.clicked.connect(self._open_all)
-        lay.addWidget(self.open_all)
-        self.notes = QtWidgets.QLabel("")
-        self.notes.setWordWrap(True)
-        self.notes.setStyleSheet("color: #a65d00;")
-        lay.addWidget(self.notes)
         lay.addStretch(1)
         self.list.currentRowChanged.connect(self._changed)
 
@@ -191,34 +199,15 @@ class GoLiveProviderPage(QtWidgets.QWizardPage):
 
     def _changed(self, _row_idx):
         p = self._current()
-        while self.links_lay.count():
-            w = self.links_lay.takeAt(0).widget()
-            if w:
-                w.deleteLater()
         if p is None:
             self.summary.setText("")
-            self.notes.setText("")
             return
         req = ", ".join(p.inputs) or "none"
         opt = ", ".join(p.optional) or "none"
-        self.summary.setText(f"{p.summary}\n\nRequired inputs: {req}  ·  Optional: {opt}")
-        for url, label in p.links:
-            row = QtWidgets.QWidget()
-            h = QtWidgets.QHBoxLayout(row)
-            h.setContentsMargins(0, 0, 0, 0)
-            lab = QtWidgets.QLabel(f"{label}\n{url}")
-            lab.setWordWrap(True)
-            btn = QtWidgets.QPushButton("Open")
-            btn.clicked.connect(lambda _=False, u=url: _open_url(u))
-            h.addWidget(lab, 1)
-            h.addWidget(btn)
-            self.links_lay.addWidget(row)
-        self.notes.setText("\n".join(f"• {n}" for n in p.notes))
-
-    def _open_all(self):
-        p = self._current()
-        for url, _label in (p.links if p else []):
-            _open_url(url)
+        emits = MECH_EMITS.get(p.mechanism, "")
+        self.summary.setText(
+            f"{p.title}\n\nMechanism: {p.mechanism}  ·  Required inputs: {req}  ·  "
+            f"Optional: {opt}\n\nPlan emits: {emits}")
 
     def validatePage(self):
         p = self._current()
@@ -242,13 +231,17 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
         self.domain_hint = QtWidgets.QLabel("")
         self.domain_hint.setStyleSheet("color: gray;")
         lay.addWidget(self.domain_hint)
-        self.record_ip = QtWidgets.QLineEdit()
-        self.record_ip.setPlaceholderText("public A/AAAA record value (e.g. 203.0.113.7)")
-        self.record_row = _row("Record IP", self.record_ip)
-        lay.addWidget(self.record_row)
-        self.tunnel_id = QtWidgets.QLineEdit()
-        self.tunnel_id.setPlaceholderText("Cloudflare tunnel UUID — CNAME target <uuid>.cfargotunnel.com")
-        self.tunnel_row = _row("Tunnel UUID", self.tunnel_id)
+        self.ingress_ip = QtWidgets.QLineEdit()
+        self.ingress_ip.setPlaceholderText("public A record value (e.g. 203.0.113.7)")
+        self.ingress_row = _row("Ingress IP", self.ingress_ip)
+        lay.addWidget(self.ingress_row)
+        self.ingress_ipv6 = QtWidgets.QLineEdit()
+        self.ingress_ipv6.setPlaceholderText("optional public AAAA record value (e.g. 2001:db8::7)")
+        self.ipv6_row = _row("Ingress IPv6", self.ingress_ipv6)
+        lay.addWidget(self.ipv6_row)
+        self.tunnel_cname = QtWidgets.QLineEdit()
+        self.tunnel_cname.setPlaceholderText("CNAME target, e.g. <tunnel-id>.cfargotunnel.com")
+        self.tunnel_row = _row("Tunnel CNAME", self.tunnel_cname)
         lay.addWidget(self.tunnel_row)
         self.ddns_service = QtWidgets.QComboBox()
         self.ddns_service.addItems(["duckdns", "cloudflare"])
@@ -258,7 +251,7 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
         self.ddns_subdomain.setPlaceholderText("hostname label, e.g. 'home' → home.duckdns.org / home.<domain>")
         self.ddns_sub_row = _row("DDNS subdomain", self.ddns_subdomain)
         lay.addWidget(self.ddns_sub_row)
-        # secrets: masked value OR a token file; the file wins (engine semantics).
+        # secrets: masked value OR a token file; the file wins (driver semantics).
         # The masked value is staged to a 0600 temp file at generate time, deleted
         # after the run, and never persisted — it deliberately has no place in opts.
         self.token_box = QtWidgets.QGroupBox("Provider token (never persisted, never in argv)")
@@ -273,17 +266,6 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
         h.addWidget(self.token_file, 1); h.addWidget(tfb)
         tl.addWidget(_row("…or token file", w))
         lay.addWidget(self.token_box)
-        # optional Cloudflare thin driver (--create-dns) — cloudflare-tunnel only
-        self.cf_box = QtWidgets.QGroupBox("Optional: create the tunnel CNAMEs (--create-dns, thin Cloudflare driver)")
-        cfl = QtWidgets.QVBoxLayout(self.cf_box)
-        self.create_dns = QtWidgets.QCheckBox(
-            "Create/refresh the CNAMEs via the Cloudflare API (needs the tunnel UUID above)")
-        cfl.addWidget(self.create_dns)
-        self.cf_secret = QtWidgets.QLineEdit()
-        self.cf_secret.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
-        self.cf_secret.setPlaceholderText("Cloudflare API token, scope Zone.DNS Edit (staged via 0600 temp file)")
-        cfl.addWidget(_row("CF API token", self.cf_secret))
-        lay.addWidget(self.cf_box)
         self.out_dir = QtWidgets.QLineEdit()
         odb = _file_picker(self, self.out_dir, "Artifact dir", directory=True)
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
@@ -306,20 +288,20 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
                 "autofilled from the device's baked cluster domain" if baked and not o.domain
                 else "")
         offers = p.offers if p else (lambda _name: True)
-        self.record_row.setVisible(offers("record-ip"))
-        self.tunnel_row.setVisible(offers("tunnel-id") or (p is not None and p.id == "cloudflare-tunnel"))
+        self.ingress_row.setVisible(offers("ingress-ip"))
+        self.ipv6_row.setVisible(offers("ingress-ipv6"))
+        self.tunnel_row.setVisible(offers("tunnel-cname"))
         self.ddns_service_row.setVisible(offers("subdomain"))
         self.ddns_sub_row.setVisible(offers("subdomain"))
         self.token_box.setVisible(offers("token"))
-        self.cf_box.setVisible(offers("cf-api-token"))
-        self.record_ip.setText(o.record_ip)
-        self.tunnel_id.setText(o.tunnel_id)
+        self.ingress_ip.setText(o.ingress_ip)
+        self.ingress_ipv6.setText(o.ingress_ipv6)
+        self.tunnel_cname.setText(o.tunnel_cname)
         self.ddns_service.setCurrentText(o.ddns_service or "duckdns")
         self.ddns_subdomain.setText(o.ddns_subdomain)
         self.token_file.setText(o.token_file)
         self.out_dir.setText(o.out_dir)
         self.keys_dir.setText(o.keys_dir)
-        self.create_dns.setChecked(self.wiz.create_dns)
 
     def validatePage(self):
         o = self.wiz.opts
@@ -330,17 +312,16 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
                 "Every downstream step needs the public domain — no baked cluster "
                 "domain was found to autofill it, so enter it here.")
             return False
-        o.record_ip = self.record_ip.text().strip()
-        o.tunnel_id = self.tunnel_id.text().strip()
+        o.ingress_ip = self.ingress_ip.text().strip()
+        o.ingress_ipv6 = self.ingress_ipv6.text().strip()
+        o.tunnel_cname = self.tunnel_cname.text().strip()
         o.ddns_service = self.ddns_service.currentText()
         o.ddns_subdomain = self.ddns_subdomain.text().strip()
         o.token_file = self.token_file.text().strip()
         o.out_dir = self.out_dir.text().strip()
         o.keys_dir = self.keys_dir.text().strip()
-        # masked secrets live on the wizard (never on opts/argv), staged at run time
+        # masked secret lives on the wizard (never on opts/argv), staged at run time
         self.wiz.token_secret = self.token_secret.text()
-        self.wiz.cf_token_secret = self.cf_secret.text()
-        self.wiz.create_dns = (self.create_dns.isChecked() and self.cf_box.isVisible())
         return True
 
 
@@ -349,8 +330,9 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("Generate & download")
-        self.setSubTitle("Renders the autofilled record set / zone file / checklist / DDNS "
-                         "updater into the artifact dir, and stores the token in the keys layout.")
+        self.setSubTitle("Runs the driver's `plan` (dry-run — posture is NOT touched): renders "
+                         "the autofilled record set / zone / checklist / DDNS updater into the "
+                         "artifact dir, and stores the token in the keys layout.")
         lay = QtWidgets.QVBoxLayout(self)
         self.cmd = QtWidgets.QPlainTextEdit()
         self.cmd.setReadOnly(True)
@@ -373,23 +355,15 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
         self.worker = None
         self._staged = []
 
-    def _action_flags(self):
-        flags = ["--emit"]
-        if self.wiz.create_dns and self.wiz.opts.provider == "cloudflare-tunnel":
-            flags.append("--create-dns")
-        return flags
-
     def initializePage(self):
         self._preview()
 
     def _preview(self):
         d, o = self.wiz.driver, self.wiz.opts
-        self.cmd.setPlainText(d.command_string(o, self._action_flags())
+        self.cmd.setPlainText(d.command_string("plan", o)
                               + ("" if o.token_file or not self.wiz.token_secret
                                  else "  # --token-file <staged 0600 temp file> added at run time"))
-        problems = d.preflight(o, self._action_flags(),
-                               has_secret=bool(self.wiz.token_secret),
-                               has_cf_secret=bool(self.wiz.cf_token_secret))
+        problems = d.preflight(o, has_secret=bool(self.wiz.token_secret))
         self.log.setPlainText("Preflight:\n  - " + "\n  - ".join(problems)
                               if problems else "Preflight OK.")
 
@@ -400,18 +374,15 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
         d, o = self.wiz.driver, self.wiz.opts
         import copy
         run_opts = copy.deepcopy(o)
-        # stage masked secrets → 0600 temp files (deleted in _finished); an explicit
-        # token FILE from the inputs page wins, mirroring the engine's own precedence
+        # stage the masked secret → a 0600 temp file (deleted in _finished); an
+        # explicit token FILE from the inputs page wins, mirroring the driver's
+        # own precedence (GL_TOKEN_FILE is read from a file, never argv)
         if not run_opts.token_file and self.wiz.token_secret:
             run_opts.token_file = d.stage_token(self.wiz.token_secret)
             self._staged.append(run_opts.token_file)
-        if "--create-dns" in self._action_flags() and not run_opts.cf_api_token_file \
-                and self.wiz.cf_token_secret:
-            run_opts.cf_api_token_file = d.stage_token(self.wiz.cf_token_secret)
-            self._staged.append(run_opts.cf_api_token_file)
         self.generate_btn.setEnabled(False)
-        self.log.appendPlainText("\n=== generating go-live artifacts ===")
-        self.worker = _EngineWorker(d, run_opts, self._action_flags())
+        self.log.appendPlainText("\n=== generating go-live artifacts (plan) ===")
+        self.worker = _DriverWorker(d, "plan", run_opts)
         self.worker.line.connect(lambda s: self.log.appendPlainText(s))
         self.worker.done.connect(self._finished)
         self.worker.start()
@@ -423,7 +394,7 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
             except OSError:
                 pass
         self._staged = []
-        self.log.appendPlainText(f"=== emit exited {code} ===")
+        self.log.appendPlainText(f"=== plan exited {code} ===")
         if code == 0:
             out = self.wiz.opts.out_dir or self.wiz.driver.default_out_dir
             self.log.appendPlainText(f"artifacts in {out} — 'Open artifacts folder' shows them")
@@ -439,44 +410,39 @@ class GoLiveVerifyPage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("Verify the edge")
-        self.setSubTitle("Probes DNS/HTTP/tunnel per the provider's catalog row — BEFORE anything flips.")
+        self.setSubTitle("Confirm the public edge answers BEFORE flipping — the driver has no "
+                         "verify subcommand, so this is an off-device checklist + a posture recheck.")
         lay = QtWidgets.QVBoxLayout(self)
-        self.run_btn = QtWidgets.QPushButton("Run verify now")
-        self.run_btn.clicked.connect(self._verify)
-        lay.addWidget(self.run_btn)
-        self.result = QtWidgets.QLabel("")
-        self.result.setWordWrap(True)
-        lay.addWidget(self.result)
-        self.log = QtWidgets.QPlainTextEdit()
-        self.log.setReadOnly(True)
-        lay.addWidget(self.log, 1)
-        self.worker = None
+        self.checklist = QtWidgets.QPlainTextEdit()
+        self.checklist.setReadOnly(True)
+        lay.addWidget(QtWidgets.QLabel("Verify from OFF this network (the wizard cannot see your WAN):"))
+        lay.addWidget(self.checklist, 1)
+        self.refresh_btn = QtWidgets.QPushButton("Recheck posture (driver status)")
+        self.refresh_btn.clicked.connect(self._recheck)
+        lay.addWidget(self.refresh_btn)
+        self.status = QtWidgets.QPlainTextEdit()
+        self.status.setReadOnly(True)
+        self.status.setMaximumHeight(120)
+        lay.addWidget(self.status)
 
     def initializePage(self):
-        self.result.setText("Not verified yet — the engine re-runs this gate before any flip anyway.")
-        self.result.setStyleSheet("color: gray;")
+        o = self.wiz.opts
+        d = o.domain or "<domain>"
+        self.checklist.setPlainText(
+            "  1. dig +short {d}         # resolves to your ingress IP / tunnel target\n"
+            "  2. dig +short api.{d}\n"
+            "  3. curl -I https://{d}/   # answers over TLS from the public edge\n"
+            "  4. (tunnel) confirm cloudflared shows the tunnel HEALTHY;\n"
+            "     (funnel)  tailscale funnel status shows it live.\n\n"
+            "When all of the above pass, continue to the flip step. The driver's `commit`\n"
+            "only writes the marker — it does not probe the edge, so this gate is yours."
+            .replace("{d}", d))
+        self.wiz.verify_ok = False
+        self._recheck()
 
-    def _verify(self):
-        if self.worker and self.worker.isRunning():
-            return
-        self.run_btn.setEnabled(False)
-        self.log.appendPlainText("=== verify ===")
-        self.worker = _EngineWorker(self.wiz.driver, self.wiz.opts, ["--verify"])
-        self.worker.line.connect(lambda s: self.log.appendPlainText(s))
-        self.worker.done.connect(self._finished)
-        self.worker.start()
-
-    def _finished(self, code):
-        self.wiz.verify_ok = (code == 0)
-        self.log.appendPlainText(f"=== verify exited {code} ===")
-        if code == 0:
-            self.result.setText("Verify passed — the edge answers.")
-            self.result.setStyleSheet("color: #2e7d32;")
-        else:
-            self.result.setText("Verify FAILED — fix the failing probes before flipping "
-                                "(the engine will refuse the flip on the same failures).")
-            self.result.setStyleSheet("color: #c62828;")
-        self.run_btn.setEnabled(True)
+    def _recheck(self):
+        self.status.setPlainText(self.wiz.driver.status_text())
+        self.wiz.verify_ok = True   # advisory only; the flip arms on the typed domain
 
 
 class GoLiveFlipPage(QtWidgets.QWizardPage):
@@ -491,10 +457,11 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
         self.warning.setStyleSheet("color: #c62828; font-weight: bold;")
         lay.addWidget(self.warning)
         info = QtWidgets.QLabel(
-            "The flip writes /etc/snapdragon/go-live (root); snapdragon-firewall-reconcile "
-            "converges within 60s — no reboot. It opens in a TERMINAL because the engine "
-            "requires its own typed-domain confirmation on a real TTY, with no bypass flag "
-            "— this wizard does not add one. Rollback: delete the marker (button below).")
+            "The flip runs the driver's `commit`, which writes /etc/snapdragon/go-live "
+            "(root); snapdragon-firewall-reconcile converges within 60s — no reboot. It "
+            "opens in a TERMINAL because the driver runs its own confirmation prompt on a "
+            "real TTY, with no bypass flag — this wizard passes no -y/--yes and adds no "
+            "bypass. Rollback: `rollback` deletes the marker (button below).")
         info.setWordWrap(True)
         lay.addWidget(info)
         self.status = QtWidgets.QPlainTextEdit()
@@ -507,9 +474,9 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
         lay.addWidget(_row("Confirm domain", self.confirm))
         self.persist = QtWidgets.QCheckBox(
             "Also persist release-state=public (survives marker deletion; rollback "
-            "then needs the persist step too)")
+            "then needs the revert step too)")
         lay.addWidget(self.persist)
-        self.flip_btn = QtWidgets.QPushButton("GO LIVE — open the flip in a terminal")
+        self.flip_btn = QtWidgets.QPushButton("GO LIVE — open commit in a terminal")
         self.flip_btn.setEnabled(False)
         self.flip_btn.clicked.connect(self._flip)
         self.rollback_btn = QtWidgets.QPushButton("Rollback — delete the marker (back to internal)")
@@ -556,8 +523,8 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
             self.manual.setText(msg.split("yourself: ", 1)[1])
 
     def _flip(self):
-        ok, msg = self.wiz.driver.run_flip_in_terminal(self.wiz.opts,
-                                                       persist=self.persist.isChecked())
+        ok, msg = self.wiz.driver.run_commit_in_terminal(self.wiz.opts,
+                                                         persist=self.persist.isChecked())
         self._report(ok, msg)
 
     def _rollback(self):
@@ -566,28 +533,27 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
                 "Delete the go-live marker (device reverts to INTERNAL within 60s)?"
         ) != QtWidgets.QMessageBox.StandardButton.Yes:
             return
-        persist = QtWidgets.QMessageBox.question(
+        revert = QtWidgets.QMessageBox.question(
             self, "Rollback",
             "ALSO reset release-state=internal?\n(Needed if you flipped with "
             "'persist' — otherwise the device stays public.)"
         ) == QtWidgets.QMessageBox.StandardButton.Yes
-        ok, msg = self.wiz.driver.run_rollback_in_terminal(persist=persist)
+        ok, msg = self.wiz.driver.run_rollback_in_terminal(revert_release_state=revert)
         self._report(ok, msg)
 
 
 class GoLiveWizard(QtWidgets.QWizard):
     """Internal-only → publicly live, in seven guided steps — the Studio face of
-    the one shared engine (make go-live / go-live-menu.sh drive the same flags)."""
+    the one shared driver (snapdragon-go-live-cli / -menu drive the same
+    subcommands)."""
 
     def __init__(self, generator_dir, parent=None):
         super().__init__(parent)
         self.generator_dir = os.path.abspath(generator_dir)
         self.driver = GoLiveDriver(self.generator_dir)
         self.opts = GoLiveOptions()
-        self.model = ""             # chosen exposure model (catalog `model` value)
+        self.model = ""             # chosen exposure model (mechanism -> model)
         self.token_secret = ""      # masked provider token — staged per run, never saved
-        self.cf_token_secret = ""   # masked CF API token — same lifecycle
-        self.create_dns = False
         self.verify_ok = False
         self.setWindowTitle("Snapdragon Go-Live Wizard")
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
