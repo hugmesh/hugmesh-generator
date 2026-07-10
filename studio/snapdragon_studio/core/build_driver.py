@@ -24,6 +24,23 @@ class BuildDriver:
         self._cancel = threading.Event()
 
     # ---- command assembly --------------------------------------------------
+    def _passthrough_env(self, cfg: ImageConfig) -> dict[str, str]:
+        """Config values the build environment consumes from ENV VARS, not argv:
+        HEADSCALE_URL (G2) is baked to /etc/snapdragon/headscale-url by the x86/
+        rpi5/frite builders when set (build-x86:2843, rpi5:2421, frite:948) — there
+        is deliberately NO builder flag for it (the Makefile's BRAND_ENV rides the
+        same env channel). PENTEST=1 (G40) is the OWASP pen-test knob consumed by
+        the fleet/make layer (scripts/build-all-roles.sh / the Makefile), forwarded
+        here so the BuildPage checkbox is never a widget-level no-op and the same
+        config drives every channel identically. Empty/false values are omitted so
+        an untouched config adds nothing."""
+        env: dict[str, str] = {}
+        if cfg.headscale_url:
+            env["HEADSCALE_URL"] = cfg.headscale_url
+        if cfg.pentest:
+            env["PENTEST"] = "1"
+        return env
+
     def command(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:
         backend = backend or self.host.default_backend
         out = cfg.output_dir or os.path.join(self.generator_dir, "out")
@@ -33,19 +50,29 @@ class BuildDriver:
         script = f"./{cfg.builder_script}"
         inner = [script, "-w", "/out" if backend == "docker" else out,
                  "-j", str(cfg.jobs), *cfg.to_cli_args()]
+        penv = self._passthrough_env(cfg)
         if backend == "native":
-            # run in the generator dir; needs root for the chroot/loop ops
-            return (["sudo"] if not self.host.is_root else []) + ["bash", *inner]
+            # run in the generator dir; needs root for the chroot/loop ops.
+            # Env passthrough rides an `env K=V` wrapper INSIDE the sudo boundary
+            # (sudo's env_reset would strip a caller-side export), so the printed
+            # command is copy-pasteable and run() needs no Popen env plumbing.
+            env_wrap = ["env", *(f"{k}={v}" for k, v in penv.items())] if penv else []
+            return ((["sudo"] if not self.host.is_root else [])
+                    + env_wrap + ["bash", *inner])
         if backend == "docker":
             # Asset paths outside the generator dir (wallpaper, branding dir, egress conf)
             # are not visible in the container — mount each and rewrite its flag value.
             asset_mounts, dcfg = self._remap_assets_for_docker(cfg)
             dinner = [script, "-w", "/out", "-j", str(cfg.jobs), *dcfg.to_cli_args()]
+            env_args: list[str] = []
+            for k, v in penv.items():
+                env_args += ["-e", f"{k}={v}"]
             return [
                 "docker", "run", "--rm", "--privileged",
                 "-v", f"{self.generator_dir}:/src",
                 "-v", f"{out}:/out",
                 *asset_mounts,
+                *env_args,
                 "-w", "/src", self.host.builder_image,
                 "bash", "-c", shlex.join(dinner),
             ]

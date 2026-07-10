@@ -35,6 +35,13 @@ class KeyZipContents:
     has_branding: bool = False
     egress_conf: str = ""
     domain_conf: str = ""
+    # Secure-Boot signing chain (G5). keys_usb_dir is a directory laid out like the
+    # KEYS USB the builder expects (--keys-usb DIR reads DIR/Keys/kernel_key.{pem,der},
+    # build-x86-host-stage4.sh:1183-1189); secureboot_key/_cert are LOOSE key files
+    # found outside that layout, threaded via --secureboot-key/--secureboot-cert.
+    keys_usb_dir: str = ""
+    secureboot_key: str = ""
+    secureboot_cert: str = ""
     files: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -42,6 +49,8 @@ class KeyZipContents:
         bits = []
         if self.has_keys:
             bits.append("keys/certs")
+        if self.keys_usb_dir or self.secureboot_key or self.secureboot_cert:
+            bits.append("Secure-Boot signing key")
         if self.has_branding:
             bits.append("branding")
         if self.egress_conf:
@@ -58,6 +67,18 @@ class KeyZipContents:
             cfg.egress_vpn = self.egress_conf
         if self.domain_conf:
             _apply_domain_conf(self.domain_conf, cfg, self.warnings)
+        # Secure-Boot signing chain (G5): the admin zip already ships the fleet SB
+        # key/cert — thread them into the build so the image signs with the key
+        # ALREADY ENROLLED in the fleet's firmware instead of a per-build throwaway
+        # org key. Prefer the whole KEYS-USB layout (one --keys-usb flag covers key +
+        # cert + the provisioning payload); fall back to explicit loose-file paths.
+        if self.keys_usb_dir:
+            cfg.keys_usb = self.keys_usb_dir
+        else:
+            if self.secureboot_key:
+                cfg.secureboot_key = self.secureboot_key
+            if self.secureboot_cert:
+                cfg.secureboot_cert = self.secureboot_cert
 
 
 def _safe_member(name: str) -> bool:
@@ -108,9 +129,24 @@ def extract(zip_path: str, staging_dir: str) -> KeyZipContents:
             c.has_keys = c.has_keys or bool(files)
         if low.startswith("branding"):
             c.has_branding = True
+        # Secure-Boot signing material (G5). A dir named exactly "Keys" holding
+        # kernel_key.{pem,der} means the zip carries the builder's KEYS-USB layout —
+        # its PARENT is what --keys-usb DIR expects (the builder resolves
+        # DIR/Keys/kernel_key.* itself, and tolerates either file alone).
+        if (os.path.basename(root) == "Keys" and not c.keys_usb_dir
+                and ("kernel_key.pem" in files or "kernel_key.der" in files)):
+            c.keys_usb_dir = os.path.dirname(root)
         for f in files:
             fl = f.lower()
             full = os.path.join(root, f)
+            # loose kernel_key.{pem,der} outside a Keys/ layout: thread the explicit
+            # --secureboot-key/--secureboot-cert paths instead (apply_to prefers the
+            # KEYS-USB layout when both shapes are present).
+            if os.path.basename(root) != "Keys":
+                if not c.secureboot_key and fl == "kernel_key.pem":
+                    c.secureboot_key = full
+                if not c.secureboot_cert and fl == "kernel_key.der":
+                    c.secureboot_cert = full
             if not c.egress_conf:
                 is_egress = fl.endswith((".ovpn", ".nmconnection"))
                 if not is_egress and fl.endswith(".conf"):

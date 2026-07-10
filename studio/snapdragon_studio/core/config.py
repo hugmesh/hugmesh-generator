@@ -16,11 +16,13 @@ platform never has a desktop mode).
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from dataclasses import dataclass, field, asdict
 from typing import Any
 
 from .validate import (
+    IdentityValidationError,
     validate_accent_color,
     validate_brand,
     validate_brand_title,
@@ -30,6 +32,13 @@ from .validate import (
     validate_org,
     validate_username,
 )
+
+# A timezone (Area/Location, "UTC", …): letters/digits + the handful of separators
+# a tz database name uses. It flows to -T/--timezone and into a root-sourced config,
+# so reject anything shell/sed-meaningful. A media/vault filesystem label is even
+# stricter (it becomes a `mkfs -L` / by-label mount target).
+_TIMEZONE_RE = re.compile(r"^[A-Za-z0-9_+./-]+$")
+_MEDIA_LABEL_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 # Studio "mode" -> sensible default role. The wizard lets the user override role.
@@ -48,7 +57,7 @@ MODE_DEFAULT_ROLE = {
 # collect_all() only reads visited pages — so a skipped page's widgets can never
 # leak stale values into a saved config or the emitted argv.
 WIZARD_PAGE_SLUGS = ("welcome", "mode", "role", "hardware", "branding", "network",
-                     "keyzip", "domains", "users", "home", "build")
+                     "keyzip", "domains", "users", "system", "home", "build")
 MODE_SKIPPED_PAGES = {
     "standalone": ("keyzip", "domains", "users"),  # no admin/mesh plane to configure
     "cloud": (),   # the key-zip carries the admin plane; domains/users still apply
@@ -88,11 +97,19 @@ ROLE_CHOICES = {
          "Unaffiliated desktop — plain Gentoo, no Snapdragon (zero branding/tooling baked)"),
         ("generic", ("rpi5",),
          "Generic arm64 server — plain Gentoo Raspberry Pi 5, unbranded (builder default role)"),
+        # frite/orangepi5/orangepizero2 all support --standalone (FDE + local user, no
+        # mesh/SSO); reachable in standalone mode too, not only as a cloud client (G17).
+        ("frite", ("frite",), "La Frite family arm64 standalone (FDE local desktop; board + flavor)"),
+        ("orangepi5", ("orangepi5",), "Orange Pi 5 / 5 Plus arm64 standalone — EXPERIMENTAL (FDE local desktop; board + flavor)"),
+        ("orangepizero2", ("orangepizero2",), "Orange Pi Zero 2 arm64 standalone HEADLESS APPLIANCE — EXPERIMENTAL (FDE; flavor only)"),
     ],
     "cloud": [
         ("laptop", ("x86",), "Laptop client — tailnet + SSO"),
         ("chromebook", ("x86",), "Chromebook client — tailnet + SSO"),
         ("desktop", ("x86",), "Desktop client — tailnet + SSO"),
+        # rpi5 arm64 tailnet client desktop (builder --role desktop) — reachable in
+        # cloud mode, not only as a mesh role (G17).
+        ("rpi5-desktop", ("rpi5",), "Raspberry Pi 5 / 4 arm64 client — tailnet + SSO (board axis)"),
         ("frite", ("frite",), "La Frite family arm64 client (board + live/installer flavor)"),
         ("orangepi5", ("orangepi5",), "Orange Pi 5 / 5 Plus arm64 client — EXPERIMENTAL (board + live/installer flavor)"),
         ("orangepizero2", ("orangepizero2",), "Orange Pi Zero 2 arm64 HEADLESS APPLIANCE — EXPERIMENTAL (live/installer flavor only; no board/desktop axis)"),
@@ -164,13 +181,157 @@ GPU_DRIVER_CHOICES = ("auto", "all-free", "nvidia-free", "nvidia",
 GPU_DRIVER_ALIASES = {"amd": "amd-free", "ati": "amd-free", "ati-free": "amd-free",
                       "ati-pro": "amd-pro", "intel": "intel-free"}
 
-# The full cluster optional-service set (--optional-services slugs).
+# The full cluster user-level optional-service set (--optional-services slugs).
 OPTIONAL_SERVICES_CHOICES = ("akkoma", "tuwunel", "phpbb", "games", "owncast", "tube",
                              "character-studio")
 
+# INFRA-level slugs the builders honour in --optional-services but which --all-services
+# does NOT include (build-rpi5-stage4.sh usage 573-581). x86 has dedicated flags for
+# tor/egress (--with-tor / --egress-vpn), but rpi5 has none — the ONLY way to bake a
+# Tor-onion / egress-VPN rpi5 node is to list the slug here, so the rpi5 catalog offers
+# them explicitly (G15). frite/jetson/opi5/opz2 do not parse --optional-services at all.
+INFRA_SERVICES_CHOICES = ("tor", "egress-vpn", "workloadConsole", "anubis")
+
+# Which optional-service slugs each builder's --optional-services accepts. Only x86 and
+# rpi5 parse --optional-services/--exclude-services/--enable-games at all — the other
+# four builders bake no cluster tree, so the widgets must be greyed there (G12/G15).
+OPTIONAL_SERVICES_BY_PLATFORM = {
+    "x86": OPTIONAL_SERVICES_CHOICES,
+    "rpi5": OPTIONAL_SERVICES_CHOICES + INFRA_SERVICES_CHOICES,
+}
+
+# --optional-services sentinels (mirror build-menu.sh's OPT_SERVICES + the builders):
+#   optional_services == []            -> emit nothing (builder default akkoma tuwunel phpbb)
+#   optional_services == [SERVICES_NONE] -> emit --optional-services "" (EXPLICIT none, G13)
+#   optional_services == [SERVICES_ALL]  -> emit --all-services (full user-level set, G14)
+#   optional_services == [slug, ...]     -> emit --optional-services "slug ..." (allow-list)
+SERVICES_NONE = "none"
+SERVICES_ALL = "all"
+
+# --person-role client-identity picker (FD-08). The x86 builder honours --person-role/
+# --domains only for ROLE_CLIENT roles (the person-device desktops laptop/chromebook/
+# desktop AND the standalone desktops); on a cluster NODE role it warns + IGNORES them
+# (build-x86:1219-1221), so the Studio must NOT emit them for a node role (G18).
+PERSON_ROLE_CHOICES = ("user", "mod", "admin", "superadmin")
+X86_CLIENT_ROLES = ("laptop", "chromebook", "desktop")
+# The cluster NODE roles (ROLE_CLIENT=false) — the roles for which the builder drops
+# --person-role/--domains. Gating on "not a node role" (rather than "is a client role")
+# also lets a standalone-desktop role carry them, exactly like the builder does.
+X86_NODE_ROLES = ("pki", "be", "fe", "be+gpu", "omnibus", "edge_ai")
+
+# --release-state: cluster ingress + Layer-3 nftables posture baked into the image
+# (build-x86:674 / bake_host_firewall:2888; rpi5:1089-1091). Only x86 + rpi5 parse it.
+RELEASE_STATE_CHOICES = ("internal", "public")
+
+# --kernel-flavor (jetson only): mainline (default) | l4t. The l4t BUILD is a stub that
+# hard-errors today, but the plan/matrix/--print-plan accept the axis (G36).
+KERNEL_FLAVOR_CHOICES = ("mainline", "l4t")
+
+# --secure-boot tri-state (x86 only; builder default is ON with a throwaway org key):
+#   "" -> leave the builder default   "on" -> --secure-boot   "off" -> --no-secure-boot (G5)
+SECURE_BOOT_CHOICES = ("", "on", "off")
+
 # Plaintext secrets that are NEVER persisted to a saved JSON config — they exist only
-# for the live command line (the builder hashes them at build time).
-SECRET_FIELDS = ("local_pass", "luks_pass")
+# for the live command line (the builder hashes them at build time). user_password /
+# root_password are the x86 node FALLBACK credentials (G27); local_pass / luks_pass the
+# standalone/FDE ones.
+SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password")
+
+
+# ── capability table: which platforms' arg builders EMIT each option field ──────────
+# THE contract WS2 (per-platform widget greying) and WS6 (parity/coverage differ)
+# consume: an ImageConfig field is "supported" on a platform iff that platform's
+# _<platform>_args() emits something for it (a builder that does not parse the flag would
+# exit "Unknown option", so the wizard must grey the widget there). Hand-declared for
+# readability + stable import, but ASSERTED against real emission by a diff-probe in
+# tests/test_cli_args.py (test_platform_field_support_matches_emission), so it CANNOT
+# drift from the code above. Structural axes (mode/role/platform/board/flavor/env) and
+# the extra_flags escape hatch are RolePage/BuildPage concerns, not gateable option
+# widgets, so they are intentionally absent. See NON_ARGV_FIELDS for fields delivered
+# out-of-band (never argv) which must stay shown regardless of platform.
+_ALL_PLATFORMS = ("x86", "rpi5", "frite", "jetson", "orangepi5", "orangepizero2")
+_ARM_PLATFORMS = ("rpi5", "frite", "jetson", "orangepi5", "orangepizero2")
+_ENC_PLATFORMS = ("x86", "rpi5", "frite", "orangepi5", "orangepizero2")   # --encrypt-root: all but jetson
+_UBOOT_PLATFORMS = ("frite", "orangepi5", "orangepizero2")
+_DTB_PLATFORMS = ("frite", "jetson", "orangepi5", "orangepizero2")        # rpi5 uses --dtb-prefix
+_IMAGE_ONLY_PLATFORMS = ("frite", "jetson", "orangepi5", "orangepizero2")
+_X86 = ("x86",)
+_X86_RPI5 = ("x86", "rpi5")
+
+PLATFORM_FIELD_SUPPORT: dict[str, tuple[str, ...]] = {
+    # brand plane — every builder parses these identically (x86 unaffiliated suppresses).
+    "brand": _ALL_PLATFORMS, "brand_title": _ALL_PLATFORMS, "org": _ALL_PLATFORMS,
+    "brand_profile": _ALL_PLATFORMS,
+    # host identity (-H/-T/-u) — all builders.
+    "hostname": _ALL_PLATFORMS, "timezone": _ALL_PLATFORMS, "user": _ALL_PLATFORMS,
+    # cluster / mesh identity.
+    "cluster_domain": _ALL_PLATFORMS, "games_domain": _X86_RPI5, "release_state": _X86_RPI5,
+    "person_role": _X86, "domains": _X86,
+    # local account (compose without --standalone on ARM too, G28).
+    "local_user": _ALL_PLATFORMS, "local_pass": _ALL_PLATFORMS,
+    # node fallback creds (x86 only; rpi5's are deprecated no-ops).
+    "user_password": _X86, "root_password": _X86,
+    # standalone / capable / unaffiliated.
+    "standalone": _ENC_PLATFORMS, "capable": _X86, "unaffiliated": _X86,
+    # mesh agents.
+    "tailscale": _ALL_PLATFORMS, "sso": _X86,
+    "headscale_version": _ALL_PLATFORMS, "tailscale_version": _ALL_PLATFORMS,
+    "skip_tailscale": _ALL_PLATFORMS,
+    # hardware.
+    "gpu_driver": _X86, "nvidia_cuda": _X86, "kernel_builtin": _X86,
+    "enable_wifi": _ALL_PLATFORMS, "enable_bluetooth": _ALL_PLATFORMS,
+    # branding assets (x86 only).
+    "theme": _X86, "branding_dir": _X86, "wallpaper": _X86, "grub_background": _X86,
+    "grub_theme": _X86, "login_background": _X86, "brand_logo": _X86, "accent_color": _X86,
+    "color_scheme": _X86, "brand_locked": _X86,
+    # egress VPN (x86 only).
+    "egress_vpn": _X86, "egress_vpn_locked": _X86,
+    # host security stack.
+    "proxy_stack": _X86, "snort": _X86, "aide": _X86, "root_login": _ALL_PLATFORMS,
+    # edge-AI (x86 only).
+    "edge_ai_service": _X86, "edge_ai_runtime": _X86, "edge_ai_models": _X86,
+    "edge_ai_model_default": _X86, "edge_ai_analysis": _X86,
+    # tor / character-studio / services.
+    "tor_onion_service": _X86, "character_studio": _X86_RPI5,
+    "optional_services": _X86_RPI5, "exclude_services": _X86_RPI5, "enable_games": _X86_RPI5,
+    # client desktop weight / steam / media.
+    "desktop": ("x86", "frite"), "steam": _X86,
+    "media_data": _X86, "media_label": _X86, "no_vaults": _X86,
+    # encryption (jetson hard-blocks encrypt-root; luks_pass alone still emits everywhere).
+    "encrypt_root": _ENC_PLATFORMS, "luks_pass": _ALL_PLATFORMS,
+    "unlock_keyfile": _X86, "unlock_yubikey": _X86,
+    # Secure Boot (x86 only).
+    "secure_boot": _X86, "keys_usb": _X86, "secureboot_key": _X86, "secureboot_cert": _X86,
+    # home (x86 only).
+    "home_mode": _X86, "home_device": _X86, "home_backup": _X86, "home_encrypted": _X86,
+    "home_seed_code": _X86, "home_seed_code_from": _X86, "include_home_archive": _X86,
+    "seed_packages_from": _X86,
+    # installer / ISO / artifact.
+    "installer_ui": _X86, "cached": _X86, "live_toram": _X86, "bundle_source": _X86,
+    "build_img": ("x86", "rpi5", "jetson"), "live_iso": _X86, "installer_iso": _X86,
+    "build_tar": _X86_RPI5, "skip_iso": _X86_RPI5, "build_iso": ("rpi5",),
+    "sd_only": ("rpi5",), "image_only": _IMAGE_ONLY_PLATFORMS,
+    # sizing / finish.
+    "grow": _ALL_PLATFORMS, "img_size": _ALL_PLATFORMS, "compress": _ALL_PLATFORMS,
+    "resume": _ALL_PLATFORMS,
+    # kernel / board overrides.
+    "cpu": _ARM_PLATFORMS, "defconfig": _ARM_PLATFORMS, "dtb": _DTB_PLATFORMS,
+    "dtb_prefix": ("rpi5",), "kernel_img": ("rpi5",), "pcie_gen3": ("rpi5",),
+    "kernel_flavor": ("jetson",),
+    "uboot_url": _UBOOT_PLATFORMS, "uboot_defconfig": _UBOOT_PLATFORMS, "skip_uboot": _UBOOT_PLATFORMS,
+    # build plumbing.
+    "skip_kernel": _ALL_PLATFORMS, "skip_clean": _ALL_PLATFORMS, "build_subdir": _ALL_PLATFORMS,
+    "seed_url": _ALL_PLATFORMS, "version": _ALL_PLATFORMS, "release_tag": _X86,
+    "distdir": _X86, "extra_packages": _ARM_PLATFORMS,
+}
+
+# Fields delivered OUT-OF-BAND — never a builder CLI flag on any platform, so absent
+# from PLATFORM_FIELD_SUPPORT above, but the wizard must STILL show them everywhere
+# (they are not "silently dropped"): headscale_url rides as a docker `-e` / native env
+# var forwarded by build_driver (G2); pentest is the fleet-level PENTEST=1 env knob
+# consumed by build-all-roles.sh / the Makefile (G40); hw_profile is a GUI-only preset
+# that pre-fills gpu/wifi/bt and never emits (decided document-as-preset, G41).
+NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile")
 
 
 @dataclass
@@ -201,24 +362,54 @@ class ImageConfig:
     brand: str = "snapdragon"
     brand_title: str = "Snapdragon Systems"
     org: str = "Snapdragon-Systems"
+    brand_profile: str = ""            # -C/--config brands/*.conf (carries HEADSCALE_URL/RELEASE_STATE/… presets)
     cluster_domain: str = "snapdragon.systems"
+    games_domain: str = ""             # --games-domain (games.<domain> host + OIDC issuer; x86+rpi5)
+    release_state: str = ""            # --release-state internal|public (x86+rpi5; "" = builder default)
+    release_tag: str = ""              # --release-tag image stamp (x86)
+    version: str = ""                  # -v/--version image stamp (all)
+    person_role: str = ""              # --person-role user|mod|admin|superadmin (x86 CLIENT roles; "" = derive)
+    hostname: str = ""                 # -H/--hostname baked host identity (all)
+    timezone: str = ""                 # -T/--timezone baked host identity (all)
+    user: str = ""                     # -u/--user baked default account name (all; distinct from --local-user)
     local_user: str = "magus"
     local_pass: str = ""               # --local-pass (SECRET — never saved; live cmd only)
+    user_password: str = ""            # --user-password node FALLBACK cred (SECRET; x86)
+    root_password: str = ""            # --root-password node FALLBACK cred (SECRET; x86)
     standalone: bool = False           # --standalone (arm64 only; x86 gets it via role name)
+    capable: bool = False              # --capable (most-capable Plasma payload, 50GiB root; x86, composable)
+    unaffiliated: bool = False         # --unaffiliated as a COMPOSABLE flag (x86; role standalone-unaffiliated presets it)
     # ── network / identity plane ──
     tailscale: bool = False            # --with-tailscale / --no-tailscale
     sso: bool = False                  # --with-sso / --no-sso
+    headscale_url: str = ""            # brand mesh control-server URL — NOT a builder flag; env passthrough in build_driver (G2)
+    headscale_version: str = ""        # --headscale-version pin (all)
+    tailscale_version: str = ""        # --tailscale-version pin (all)
+    skip_tailscale: bool = False       # --skip-tailscale: headscale-only posture, distinct from --skip-mesh (all)
     # ── hardware ──
     gpu_driver: str = "auto"           # auto|nvidia|amd-free|amd-pro|intel|none
-    hw_profile: str = ""               # a hwprofiles/<id> preset (sets gpu/kernel/firmware)
+    nvidia_cuda: bool = False          # --nvidia-cuda (CUDA bake for GPU/edge-AI images; x86)
+    hw_profile: str = ""               # a hwprofiles/<id> preset — GUI-ONLY (sets gpu/wifi/bt presets; NEVER emits; G41)
     kernel_builtin: bool = False       # --kernel-builtin
     enable_wifi: bool = False          # --enable-wifi
     enable_bluetooth: bool = False     # --enable-bluetooth
+    # ── ARM kernel / board overrides (per-platform; "" = builder default) ──
+    cpu: str = ""                      # -c/--cpu (all ARM)
+    defconfig: str = ""                # -d/--defconfig (all ARM)
+    dtb: str = ""                      # --dtb (frite/jetson/opi5/opz2)
+    dtb_prefix: str = ""               # --dtb-prefix (rpi5)
+    kernel_img: str = ""               # --kernel-img (rpi5)
+    pcie_gen3: bool = False            # --pcie-gen3 (rpi5 NVMe)
+    kernel_flavor: str = ""            # --kernel-flavor mainline|l4t (jetson)
+    uboot_url: str = ""                # --uboot-url (frite/opi5/opz2 — flashability-critical prebuilt)
+    uboot_defconfig: str = ""          # --uboot-defconfig (frite/opi5/opz2)
+    skip_uboot: bool = False           # --skip-uboot (frite/opi5/opz2)
     # ── branding ──
     theme: str = ""                    # --theme NAME
     branding_dir: str = ""             # --branding-dir DIR
     wallpaper: str = ""
     grub_background: str = ""
+    grub_theme: str = ""               # --grub-theme DIR (a full GRUB theme dir, distinct from grub_background)
     login_background: str = ""
     brand_logo: str = ""
     accent_color: str = ""
@@ -230,24 +421,37 @@ class ImageConfig:
     # ── network/host security stack ──
     proxy_stack: str = "auto"          # auto|on|off — Squid+Privoxy+Firefox (desktops)
     snort: bool = True                 # Snort IDS (default-on, all images)
-    aide: bool = False                 # AIDE file-integrity IDS (opt-in)
+    # Tri-state (accepts bool for back-compat via _tri): False/""/None = leave the
+    # builder/brand.conf default; True/"on" = --with-*; "off" = force --no-* so a
+    # brand-profile default can be overridden OFF from the GUI (G34).
+    aide: bool | str = False           # --with-aide / --no-aide (x86)
     root_login: str = "no"             # --permit-root-login: no (DEFAULT, hardened) | prohibit-password | yes
     # ── edge-AI inference (GPU cluster roles: be+gpu / omnibus / edge_ai) ──
-    edge_ai_service: bool = False      # add the edge-ai model API to a GPU role (edge_ai role auto-has it)
+    edge_ai_service: bool | str = False  # tri-state: --with-edge-ai / --no-edge-ai (edge_ai role auto-has it)
     edge_ai_runtime: str = "ollama"    # ollama | vllm
     edge_ai_models: str = ""           # comma list of models to PRELOAD (empty = builder default)
     edge_ai_model_default: str = ""    # default model when an OpenAI request omits one
     edge_ai_analysis: bool = False     # also bake the edge-ai-analysis task API (image/log verdicts; separate image)
     # ── Tor v3 onion (hidden) service — node-scoped optional, default off ──
-    tor_onion_service: bool = False    # --with-tor: expose the in-cluster fe-gateway as a v3 .onion
+    tor_onion_service: bool | str = False  # tri-state: --with-tor / --no-tor (expose fe-gateway as a v3 .onion)
     # ── Character Studio (VN) frontend remote — OPTIONAL, default off (admin gate) ──
-    character_studio: bool = False     # --with-character-studio: VN character-studio remote at /character-studio
+    character_studio: bool | str = False  # tri-state: --with-character-studio / --no-character-studio
     # ── cluster optional services + games (node-scoped) ──
-    optional_services: list[str] = field(default_factory=list)  # --optional-services slugs
+    optional_services: list[str] = field(default_factory=list)  # --optional-services slugs (+ none/all sentinels)
+    exclude_services: list[str] = field(default_factory=list)   # --exclude-services subtractive list (applied last)
     enable_games: bool = False         # --enable-games (Game Studio + games.<domain>)
     # ── client desktop weight / gaming delivery (x86 client roles; frite: light|none) ──
     desktop: str = ""                  # --desktop: x86 thin|full; frite light|none ("" = default)
     steam: str = ""                    # --steam native|flatpak|none ("" = builder default)
+    # ── external media data device (Steam library + gocryptfs Vaults; x86 standalone) ──
+    media_data: bool | str = ""        # tri-state: --media-data / --no-media-data (builder default ON)
+    media_label: str = ""              # --media-label
+    no_vaults: bool = False            # --no-vaults (drop the gocryptfs Vaults set)
+    # ── Secure Boot + KEYS-USB signing chain (x86 only; builder default SECURE_BOOT=on) ──
+    secure_boot: str = ""              # tri-state "" | "on" (--secure-boot) | "off" (--no-secure-boot)
+    keys_usb: str = ""                 # --keys-usb DIR (existing fleet SB signing key Keys/kernel_key.{pem,der})
+    secureboot_key: str = ""           # --secureboot-key PATH
+    secureboot_cert: str = ""          # --secureboot-cert PATH
     # ── root-disk encryption (installer LUKS2 FDE) ──
     encrypt_root: bool = False         # --encrypt-root
     luks_pass: str = ""                # --luks-pass (SECRET — never saved; live cmd only)
@@ -259,11 +463,23 @@ class ImageConfig:
     home_backup: str = ""
     home_encrypted: bool = False
     home_seed_code: str = "none"       # none|repos|stack|mesh
-    # ── installer / ISO ──
+    home_seed_code_from: str = ""      # --home-seed-code-from PATH (x86)
+    include_home_archive: str = ""     # --include-home-archive FILE (x86)
+    seed_packages_from: str = ""       # --seed-packages-from FILE (x86)
+    # ── installer / ISO / artifact selection ──
     installer_ui: str = "all"          # cli|ncurses|calamares|all
     cached: bool = False               # --cached / --uncached
     live_toram: bool = True            # --live-toram / --no-live-toram
     bundle_source: bool = True         # --bundle-source / --no-bundle-source
+    build_img: bool | str = ""         # tri-state --img / --no-img (x86/rpi5/jetson)
+    live_iso: bool | str = ""          # tri-state --live-iso / --no-live-iso (x86)
+    installer_iso: bool = False        # --installer-iso (x86; direct, not only an encrypt-root side effect)
+    build_tar: bool | str = ""         # tri-state --tar / --no-tar (x86/rpi5)
+    skip_iso: bool = False             # --skip-iso (x86/rpi5)
+    build_iso: bool = False            # --iso (rpi5: build installer ISO for an UNencrypted image)
+    sd_only: bool = False              # --sd-only (rpi5)
+    image_only: bool = False           # --image-only (frite/jetson/opi5/opz2)
+    grow: str = ""                     # --grow fill|none|<size> first-boot root-growth policy (all; "" = default)
     img_size: int = 0                  # --img-size MiB (0 = role default)
     # ── admin-supplied secrets (cloud/mesh) ──
     keyzip: str = ""                   # an admin key-zip (keys/certs/egress) for this user's domain
@@ -275,6 +491,16 @@ class ImageConfig:
     jobs: int = 8
     compress: bool = False             # --compress: xz -9 the finished image(s)
     resume: bool = False               # --resume: reuse an existing sysroot
+    # build plumbing / phases (change baked content or phases, not artifacts)
+    skip_kernel: bool = False          # --skip-kernel (all)
+    skip_clean: bool = False           # --skip-clean (all)
+    distdir: str = ""                  # --distdir (x86: reuse a distfiles cache)
+    build_subdir: str = ""             # --build-subdir (all)
+    seed_url: str = ""                 # --seed-url stage3 seed (all)
+    extra_packages: str = ""           # -p/--extra-packages (ARM only; x86 has no -p)
+    # PENTEST=1 OWASP pen-test toggle — NOT a per-builder flag; a FLEET/env knob the
+    # build_driver/fleet channel forwards (build-all-roles.sh / Makefile), never argv (G40).
+    pentest: bool = False
     extra_flags: str = ""              # escape hatch — shlex-split, appended verbatim
 
     # ---- (de)serialization -------------------------------------------------
@@ -331,9 +557,22 @@ class ImageConfig:
         validate_accent_color(self.accent_color)
         # cluster_domain + per-domain names flow into --domains / the mesh manifest
         validate_domain_name(self.cluster_domain)
+        if self.games_domain:
+            validate_domain_name(self.games_domain)
         for d in self.domains:
             if getattr(d, "name", ""):
                 validate_domain_name(d.name)
+        # baked host identity (-H/-T/-u) flows into root-sourced config; fail closed.
+        if self.hostname:
+            validate_domain_name(self.hostname)   # a hostname is a DNS label/name
+        if self.user:
+            validate_username(self.user)
+        if self.timezone and not _TIMEZONE_RE.fullmatch(self.timezone):
+            raise IdentityValidationError(
+                f"invalid timezone: {self.timezone!r} — rejected by the identity allowlist")
+        if self.media_label and not _MEDIA_LABEL_RE.fullmatch(self.media_label):
+            raise IdentityValidationError(
+                f"invalid media_label: {self.media_label!r} — rejected by the identity allowlist")
         # home provisioning fields flow into home.conf (sourced as root)
         if self.home_device:
             validate_home_device(self.home_device)
@@ -378,9 +617,24 @@ class ImageConfig:
             a += shlex.split(self.extra_flags)
         return a
 
+    @staticmethod
+    def _tri(value: bool | str) -> str:
+        """Normalize a tri-state field to '', 'on' or 'off'. Accepts bools for
+        backward-compat (True->'on', False->'') so a plain checkbox and a 3-way
+        force-off combo drive the same emission (G34)."""
+        if value is True:
+            return "on"
+        if value in (False, None, ""):
+            return ""
+        return str(value)
+
     def _brand_args(self) -> list[str]:
-        """The brand-identity flags every builder parses identically."""
+        """The brand-identity flags every builder parses identically (+ the -C/--config
+        brand-profile picker, which is sourced before the CLI). Suppressed for the x86
+        unaffiliated role (which bakes zero brand)."""
         a: list[str] = []
+        if self.brand_profile:
+            a += ["--config", self.brand_profile]
         if self.brand != "snapdragon":
             a += ["--brand", self.brand]
         if self.brand_title != "Snapdragon Systems":
@@ -389,21 +643,128 @@ class ImageConfig:
             a += ["--org", self.org]
         return a
 
+    def _identity_args(self) -> list[str]:
+        """Baked host identity every builder parses (-H/-T/-u). '' = the builder's own
+        role-derived hostname / UTC / default account."""
+        a: list[str] = []
+        if self.hostname:
+            a += ["--hostname", self.hostname]
+        if self.timezone:
+            a += ["--timezone", self.timezone]
+        if self.user:
+            a += ["--user", self.user]
+        return a
+
+    def _mesh_version_args(self) -> list[str]:
+        """--headscale-version / --tailscale-version pins + --skip-tailscale (a
+        headscale-only posture, distinct from --skip-mesh) — every builder parses all
+        three."""
+        a: list[str] = []
+        if self.headscale_version:
+            a += ["--headscale-version", self.headscale_version]
+        if self.tailscale_version:
+            a += ["--tailscale-version", self.tailscale_version]
+        if self.skip_tailscale:
+            a += ["--skip-tailscale"]
+        return a
+
+    def _plumbing_args(self) -> list[str]:
+        """Build phases / plumbing every builder parses (-v/--version, --build-subdir,
+        --seed-url, --skip-kernel, --skip-clean). x86-only --distdir and ARM-only
+        -p/--extra-packages are emitted by their own methods."""
+        a: list[str] = []
+        if self.version:
+            a += ["--version", self.version]
+        if self.build_subdir:
+            a += ["--build-subdir", self.build_subdir]
+        if self.seed_url:
+            a += ["--seed-url", self.seed_url]
+        if self.skip_kernel:
+            a += ["--skip-kernel"]
+        if self.skip_clean:
+            a += ["--skip-clean"]
+        return a
+
+    def _grow_args(self) -> list[str]:
+        """--grow fill|none|<size> first-boot root-growth policy (/etc/growfs.conf).
+        Every builder parses --grow/--no-grow; '' = leave the builder default (G25)."""
+        return ["--grow", self.grow] if self.grow else []
+
+    def _services_args(self) -> list[str]:
+        """--optional-services allow-list (with the explicit-none / --all-services
+        sentinels, G13/G14) + the subtractive --exclude-services list. Shared by x86 +
+        rpi5, the only builders that parse them."""
+        a: list[str] = []
+        svcs = list(self.optional_services or [])
+        if svcs == [SERVICES_NONE]:
+            a += ["--optional-services", ""]           # EXPLICIT none (suppress the builder default)
+        elif svcs == [SERVICES_ALL] or SERVICES_ALL in svcs:
+            a += ["--all-services"]                    # full user-level set
+        elif svcs:
+            # SPACE-separated: the builders word-split OPTIONAL_SERVICES on IFS
+            # whitespace (it stays ONE argv element — shlex.quote on print).
+            a += ["--optional-services", " ".join(svcs)]
+        if self.exclude_services:
+            a += ["--exclude-services", " ".join(self.exclude_services)]
+        return a
+
+    def _character_studio_args(self) -> list[str]:
+        """--with-character-studio / --no-character-studio tri-state (x86 + rpi5)."""
+        cs = self._tri(self.character_studio)
+        if cs == "on":
+            return ["--with-character-studio"]
+        if cs == "off":
+            return ["--no-character-studio"]
+        return []
+
+    def _arm_kernel_args(self) -> list[str]:
+        """-c/--cpu, -d/--defconfig kernel/toolchain overrides (every ARM builder)."""
+        a: list[str] = []
+        if self.cpu:
+            a += ["--cpu", self.cpu]
+        if self.defconfig:
+            a += ["--defconfig", self.defconfig]
+        return a
+
+    def _uboot_args(self) -> list[str]:
+        """U-Boot chain overrides (frite / orangepi5 / orangepizero2). --uboot-url is
+        flashability-critical (frite FIP/BL31-signed prebuilt; opi5 rkbin DDR-init +
+        TF-A BL31) — a GUI image may not be flashable at all without it (G35)."""
+        a: list[str] = []
+        if self.uboot_url:
+            a += ["--uboot-url", self.uboot_url]
+        if self.uboot_defconfig:
+            a += ["--uboot-defconfig", self.uboot_defconfig]
+        if self.skip_uboot:
+            a += ["--skip-uboot"]
+        return a
+
     def _arm_common_args(self) -> list[str]:
-        """Flags shared by the arm64 builders (rpi5/frite/jetson) beyond the brand
-        block: env baking, mesh opt-out, radios, root login, image sizing/finish."""
+        """Flags shared by ALL FIVE arm64 builders beyond the brand block: env baking,
+        host identity, cluster domain, mesh opt-out + version pins, standalone/local
+        account, radios, root login, kernel overrides, grow/sizing, plumbing, finish.
+        (Per-platform-only flags — games-domain/release-state/services on rpi5,
+        u-boot/dtb/artifact axes — live in each platform method, since emitting a flag
+        a given builder does not parse would make it exit 'Unknown option'.)"""
         a: list[str] = ["--env", self.env]
         a += self._brand_args()
+        a += self._identity_args()
         if self.cluster_domain != "snapdragon.systems":
             a += ["--cluster-domain", self.cluster_domain]
         # The arm builders have no --with/--no-tailscale pair; mesh is on unless skipped.
         if not self.tailscale:
             a += ["--skip-mesh"]
-        # --standalone: local user, no mesh, LUKS2-encrypted root (landed on all
-        # three arm64 builders — rpi5, frite, jetson). Only meaningful on a
+        a += self._mesh_version_args()
+        # --standalone: local user, no mesh, LUKS2-encrypted root. Only meaningful on a
         # client-desktop role; each builder hard-errors on a cluster-node role.
         if self.standalone:
-            a += ["--standalone", "--local-user", self.local_user]
+            a += ["--standalone"]
+        # --local-user/--local-pass compose WITHOUT --standalone too (G28): the ARM
+        # builders accept them independently to rename/hash the default account. Emit
+        # when standalone, OR when the account name was customized off the Studio
+        # default, OR when a password was supplied.
+        if self.standalone or self.local_user != "magus" or self.local_pass:
+            a += ["--local-user", self.local_user]
             if self.local_pass:
                 a += ["--local-pass", self.local_pass]
         if self.enable_wifi:
@@ -412,8 +773,13 @@ class ImageConfig:
             a += ["--enable-bluetooth"]
         if self.root_login and self.root_login != "no":
             a += ["--permit-root-login", self.root_login]
+        a += self._arm_kernel_args()
+        if self.extra_packages:
+            a += ["--extra-packages", self.extra_packages]
+        a += self._grow_args()
         if self.img_size:
             a += ["--img-size", str(self.img_size)]
+        a += self._plumbing_args()
         if self.compress:
             a += ["--compress"]
         if self.resume:
@@ -444,16 +810,48 @@ class ImageConfig:
         a = ["--role", RPI5_ROLE_MAP.get(self.role, self.role)]
         if self.board:                 # rpi5 | rpi4 | rpi3 ("" = builder default: rpi5)
             a += ["--board", self.board]
+        # rpi5-only kernel/board overrides (x86 & the other ARM builders lack these).
+        if self.dtb_prefix:
+            a += ["--dtb-prefix", self.dtb_prefix]
+        if self.kernel_img:
+            a += ["--kernel-img", self.kernel_img]
+        if self.pcie_gen3:
+            a += ["--pcie-gen3"]
         a += self._arm_common_args()
         a += self._encrypt_root_args()
-        if self.optional_services:
-            # SPACE-separated: the builders word-split OPTIONAL_SERVICES on IFS
-            # whitespace (it stays ONE argv element — shlex.quote on print).
-            a += ["--optional-services", " ".join(self.optional_services)]
+        # rpi5 shares x86's cluster identity surface (release-state / games-domain /
+        # the optional-services checklist) — the other ARM builders bake no cluster tree.
+        if self.release_state:
+            a += ["--release-state", self.release_state]
+        if self.games_domain:
+            a += ["--games-domain", self.games_domain]
+        a += self._services_args()
         if self.enable_games:
             a += ["--enable-games"]
-        if self.character_studio:
-            a += ["--with-character-studio"]
+        a += self._character_studio_args()
+        a += self._rpi5_artifact_args()
+        return a
+
+    def _rpi5_artifact_args(self) -> list[str]:
+        """rpi5 artifact selection (G24): --img/--no-img, --iso (a bootable installer
+        ISO for an UNencrypted image), --skip-iso, --sd-only, --tar/--no-tar."""
+        a: list[str] = []
+        bi = self._tri(self.build_img)
+        if bi == "on":
+            a += ["--img"]
+        elif bi == "off":
+            a += ["--no-img"]
+        if self.build_iso:
+            a += ["--iso"]
+        if self.skip_iso:
+            a += ["--skip-iso"]
+        if self.sd_only:
+            a += ["--sd-only"]
+        bt = self._tri(self.build_tar)
+        if bt == "on":
+            a += ["--tar"]
+        elif bt == "off":
+            a += ["--no-tar"]
         return a
 
     def _frite_args(self) -> list[str]:
@@ -461,8 +859,13 @@ class ImageConfig:
         a: list[str] = ["--board", self.board or "la-frite", "--flavor", self.flavor or "both"]
         if self.desktop:               # light | none (frite's lean LXDE toggle)
             a += ["--desktop", self.desktop]
+        if self.dtb:
+            a += ["--dtb", self.dtb]
+        a += self._uboot_args()
         a += self._arm_common_args()
         a += self._encrypt_root_args()
+        if self.image_only:
+            a += ["--image-only"]
         return a
 
     def _orangepi5_args(self) -> list[str]:
@@ -472,8 +875,13 @@ class ImageConfig:
         Frite), minus Frite's --desktop light|none toggle (this platform has
         no headless variant to gate — see specs-orangepi5/README.md)."""
         a: list[str] = ["--board", self.board or "orange-pi-5-plus", "--flavor", self.flavor or "both"]
+        if self.dtb:
+            a += ["--dtb", self.dtb]
+        a += self._uboot_args()
         a += self._arm_common_args()
         a += self._encrypt_root_args()
+        if self.image_only:
+            a += ["--image-only"]
         return a
 
     def _orangepizero2_args(self) -> list[str]:
@@ -484,8 +892,13 @@ class ImageConfig:
         desktop client at all (see specs-orangepi-zero2/README.md for why),
         so there is also no --desktop toggle to emit, same as _orangepi5_args()."""
         a: list[str] = ["--flavor", self.flavor or "both"]
+        if self.dtb:
+            a += ["--dtb", self.dtb]
+        a += self._uboot_args()
         a += self._arm_common_args()
         a += self._encrypt_root_args()
+        if self.image_only:
+            a += ["--image-only"]
         return a
 
     def _check_jetson_conflicts(self) -> None:
@@ -517,8 +930,19 @@ class ImageConfig:
         a = ["--role", JETSON_ROLE_MAP.get(self.role, self.role)]
         if self.board:                 # Orin module/carrier ("" = builder default)
             a += ["--board", self.board]
+        if self.kernel_flavor:         # mainline (default) | l4t (G36)
+            a += ["--kernel-flavor", self.kernel_flavor]
+        if self.dtb:
+            a += ["--dtb", self.dtb]
         a += self._arm_common_args()
         a += self._encrypt_root_args()
+        bi = self._tri(self.build_img)   # jetson artifact: --img/--no-img (G24)
+        if bi == "on":
+            a += ["--img"]
+        elif bi == "off":
+            a += ["--no-img"]
+        if self.image_only:
+            a += ["--image-only"]
         return a
 
     def _check_unaffiliated_conflicts(self) -> None:
@@ -539,6 +963,7 @@ class ImageConfig:
         assets = [name for name, val in (
             ("theme", self.theme), ("branding_dir", self.branding_dir),
             ("wallpaper", self.wallpaper), ("grub_background", self.grub_background),
+            ("grub_theme", self.grub_theme),
             ("login_background", self.login_background), ("brand_logo", self.brand_logo),
             ("accent_color", self.accent_color), ("color_scheme", self.color_scheme),
         ) if val] + (["brand_locked"] if self.brand_locked else [])
@@ -566,13 +991,17 @@ class ImageConfig:
                 "same flags.")
 
     def _x86_args(self) -> list[str]:
-        unaffiliated = self.role == UNAFFILIATED_ROLE
+        # unaffiliated is reachable two ways: the dedicated role id (presets it inside
+        # the builder's own role-switch) OR the composable --unaffiliated flag on any
+        # role (G22). Both suppress the brand plane and hard-conflict on affiliation.
+        unaffiliated = self.role == UNAFFILIATED_ROLE or self.unaffiliated
         if unaffiliated:
             self._check_unaffiliated_conflicts()
         a: list[str] = ["--role", self.role, "--env", self.env, "--local-user", self.local_user]
         if self.local_pass:
             # plaintext ONLY on the live command line — never persisted (SECRET_FIELDS)
             a += ["--local-pass", self.local_pass]
+        a += self._identity_args()
         if not unaffiliated:
             a += self._brand_args()
 
@@ -581,6 +1010,7 @@ class ImageConfig:
             # conflict check above already rejected any opt-in, so emit nothing.)
             a += ["--with-tailscale"] if self.tailscale else ["--no-tailscale"]
             a += ["--with-sso"] if self.sso else ["--no-sso"]
+        a += self._mesh_version_args()
 
         # --standalone composes onto ANY client role (laptop/chromebook/desktop),
         # not just the standalone-thin/standalone-thick role ids (those role names
@@ -589,15 +1019,44 @@ class ImageConfig:
         # in the builder regardless of the with/no-tailscale|sso flags just above.
         if self.standalone:
             a += ["--standalone"]
+        # --capable (most-capable Plasma payload, 50GiB root) + composable --unaffiliated
+        # (the dedicated role id already presets it via the role name — emit the flag
+        # only for the compose-onto-another-role path).
+        if self.capable:
+            a += ["--capable"]
+        if self.unaffiliated and self.role != UNAFFILIATED_ROLE:
+            a += ["--unaffiliated"]
 
-        # cloud/mesh: tie the client image to its domain + identity role (FD-08). The
-        # cluster domain is carried in --domains/KEYS-USB; there is no --cluster-domain flag.
+        # cloud/mesh: bake the cluster plane. --cluster-domain applies to every mesh
+        # node AND client (build-x86-host-stage4.sh parses --cluster-domain|--domain;
+        # G1). --person-role/--domains are ROLE_CLIENT-only (FD-08): on a cluster NODE
+        # role the builder warns + ignores them, so emit them for any NON-node role (G18).
         if self.mode in ("cloud", "mesh"):
-            domnames = [d.name for d in self.domains if getattr(d, "name", "")]
-            if domnames:
-                a += ["--domains", ",".join(domnames)]
-            role = "superadmin" if self.mode == "mesh" else (self.users[0].role if self.users else "user")
-            a += ["--person-role", role]
+            if self.cluster_domain != "snapdragon.systems":
+                a += ["--cluster-domain", self.cluster_domain]
+            if self.games_domain:
+                a += ["--games-domain", self.games_domain]
+            if self.release_state:
+                a += ["--release-state", self.release_state]
+            if self.role not in X86_NODE_ROLES:
+                domnames = [d.name for d in self.domains if getattr(d, "name", "")]
+                if domnames:
+                    a += ["--domains", ",".join(domnames)]
+                if self.person_role:
+                    person = self.person_role
+                elif self.mode == "mesh":
+                    person = "superadmin"
+                else:
+                    person = self.users[0].role if self.users else "user"
+                a += ["--person-role", person]
+
+        # node FALLBACK credentials (a GUI-built mesh fleet otherwise ships defaults).
+        if self.user_password:
+            a += ["--user-password", self.user_password]
+        if self.root_password:
+            a += ["--root-password", self.root_password]
+        if self.release_tag:
+            a += ["--release-tag", self.release_tag]
 
         # client desktop weight (thin|full) + Steam delivery (native|flatpak|none) —
         # "" = builder default, so only explicit choices are emitted
@@ -605,10 +1064,22 @@ class ImageConfig:
             a += ["--desktop", self.desktop]
         if self.steam:
             a += ["--steam", self.steam]
+        # external media-data device (Steam library + gocryptfs Vaults); default ON.
+        md = self._tri(self.media_data)
+        if md == "on":
+            a += ["--media-data"]
+        elif md == "off":
+            a += ["--no-media-data"]
+        if self.media_label:
+            a += ["--media-label", self.media_label]
+        if self.no_vaults:
+            a += ["--no-vaults"]
 
         # hardware
         if self.gpu_driver and self.gpu_driver != "auto":
             a += ["--gpu-driver", self.gpu_driver]
+        if self.nvidia_cuda:
+            a += ["--nvidia-cuda"]
         if self.kernel_builtin:
             a += ["--kernel-builtin"]
         if self.enable_wifi:
@@ -622,6 +1093,7 @@ class ImageConfig:
         if self.branding_dir:
             a += ["--branding-dir", self.branding_dir]
         for flag, val in (("--wallpaper", self.wallpaper), ("--grub-background", self.grub_background),
+                          ("--grub-theme", self.grub_theme),
                           ("--login-background", self.login_background), ("--brand-logo", self.brand_logo),
                           ("--accent-color", self.accent_color), ("--color-scheme", self.color_scheme)):
             if val:
@@ -641,19 +1113,27 @@ class ImageConfig:
         elif self.proxy_stack == "off":
             a += ["--no-proxy-stack"]
         a += ["--snort"] if self.snort else ["--no-snort"]
-        if self.aide:
+        aide = self._tri(self.aide)         # tri-state so a brand.conf default can be forced OFF
+        if aide == "on":
             a += ["--with-aide"]
+        elif aide == "off":
+            a += ["--no-aide"]
         # Root SSH login — hardened DEFAULT is "no" (locked); opt back in per build.
         if self.root_login and self.root_login != "no":
             a += ["--permit-root-login", self.root_login]
 
         # edge-AI inference service (GPU cluster roles). The edge_ai role auto-selects
-        # the service; be+gpu/omnibus opt in with --with-edge-ai. Model-library knobs
-        # (runtime/preload/default) are emitted whenever the service is in play, so the
-        # mesh model catalog is image-configurable from the Studio wizard.
-        if self.edge_ai_service and self.role != "edge_ai":
-            a += ["--with-edge-ai"]
-        if self.role == "edge_ai" or self.edge_ai_service:
+        # the service; be+gpu/omnibus opt in with --with-edge-ai / force off with
+        # --no-edge-ai (tri-state, G34). Model-library knobs (runtime/preload/default)
+        # are emitted whenever the service is in play, so the mesh model catalog is
+        # image-configurable from the Studio wizard.
+        edge = self._tri(self.edge_ai_service)
+        if self.role != "edge_ai":
+            if edge == "on":
+                a += ["--with-edge-ai"]
+            elif edge == "off":
+                a += ["--no-edge-ai"]
+        if self.role == "edge_ai" or edge == "on":
             if self.edge_ai_runtime and self.edge_ai_runtime != "ollama":
                 a += ["--edge-ai-runtime", self.edge_ai_runtime]
             if self.edge_ai_models:
@@ -666,24 +1146,39 @@ class ImageConfig:
 
         # Tor v3 onion (hidden) service (node-scoped; any cloud/mesh cluster role).
         # No-op on a CLIENT/standalone role (the builder guards on !ROLE_CLIENT).
-        if self.tor_onion_service:
+        # Tri-state: force off with --no-tor to override a brand.conf default (G34).
+        tor = self._tri(self.tor_onion_service)
+        if tor == "on":
             a += ["--with-tor"]
+        elif tor == "off":
+            a += ["--no-tor"]
 
         # Character Studio (VN) frontend remote — OPTIONAL, DEFAULT-OFF (admin gate).
         # Folds 'character-studio' into OPTIONAL_SERVICES. Meaningful only for a
         # cloud/mesh cluster build (the builder guards on !ROLE_CLIENT / no-op on a
-        # standalone desktop with no cluster tree).
-        if self.character_studio:
-            a += ["--with-character-studio"]
+        # standalone desktop with no cluster tree). Tri-state (--no-character-studio).
+        a += self._character_studio_args()
 
-        # cluster optional services + the games stack (gate_optional_services() prunes
-        # what stays unselected; --enable-games folds 'games' in + the Game Studio).
-        # SPACE-separated: the builders word-split OPTIONAL_SERVICES on IFS
-        # whitespace (it stays ONE argv element — shlex.quote on print).
-        if self.optional_services:
-            a += ["--optional-services", " ".join(self.optional_services)]
+        # cluster optional services (+ explicit-none / all sentinels + the subtractive
+        # exclude list) and the games stack (--enable-games folds 'games' in).
+        a += self._services_args()
         if self.enable_games:
             a += ["--enable-games"]
+
+        # Secure Boot + KEYS-USB signing chain (x86 only). SECURE_BOOT defaults ON in
+        # the builder with a throwaway org key; --keys-usb / --secureboot-key/-cert
+        # thread the EXISTING fleet SB key so images match the fleet chain (G5).
+        sb = self._tri(self.secure_boot)
+        if sb == "on":
+            a += ["--secure-boot"]
+        elif sb == "off":
+            a += ["--no-secure-boot"]
+        if self.keys_usb:
+            a += ["--keys-usb", self.keys_usb]
+        if self.secureboot_key:
+            a += ["--secureboot-key", self.secureboot_key]
+        if self.secureboot_cert:
+            a += ["--secureboot-cert", self.secureboot_cert]
 
         # root-disk encryption (installer LUKS2 FDE) + unlock factors
         a += self._encrypt_root_args()
@@ -703,6 +1198,34 @@ class ImageConfig:
             a += ["--home-encrypted"]
         if self.home_seed_code and self.home_seed_code != "none":
             a += ["--home-seed-code", self.home_seed_code]
+        if self.home_seed_code_from:
+            a += ["--home-seed-code-from", self.home_seed_code_from]
+        if self.include_home_archive:
+            a += ["--include-home-archive", self.include_home_archive]
+        if self.seed_packages_from:
+            a += ["--seed-packages-from", self.seed_packages_from]
+
+        # artifact selection (G23): --img/--no-img, live/installer ISO, --tar/--no-tar,
+        # --skip-iso. "" tri-states leave the builder default.
+        bi = self._tri(self.build_img)
+        if bi == "on":
+            a += ["--img"]
+        elif bi == "off":
+            a += ["--no-img"]
+        li = self._tri(self.live_iso)
+        if li == "on":
+            a += ["--live-iso"]
+        elif li == "off":
+            a += ["--no-live-iso"]
+        if self.installer_iso:
+            a += ["--installer-iso"]
+        bt = self._tri(self.build_tar)
+        if bt == "on":
+            a += ["--tar"]
+        elif bt == "off":
+            a += ["--no-tar"]
+        if self.skip_iso:
+            a += ["--skip-iso"]
 
         # installer / ISO
         if self.installer_ui:
@@ -711,8 +1234,13 @@ class ImageConfig:
         a += ["--live-toram"] if self.live_toram else ["--no-live-toram"]
         if not unaffiliated:  # the unaffiliated role presets no-bundled-source itself
             a += ["--bundle-source"] if self.bundle_source else ["--no-bundle-source"]
+        a += self._grow_args()
         if self.img_size:
             a += ["--img-size", str(self.img_size)]
+        # build plumbing (phases / seed / distfiles) — x86 has no -p/--extra-packages.
+        a += self._plumbing_args()
+        if self.distdir:
+            a += ["--distdir", self.distdir]
         if self.compress:
             a += ["--compress"]
         if self.resume:

@@ -60,15 +60,24 @@ python -m snapdragon_studio --print-command --config my-image.json --backend doc
 # backend still prints a deterministic native command)
 ```
 
-The config's `platform` field (`x86` | `rpi5` | `frite` | `jetson`) selects the
-builder script the command targets. This headless path is what the build-matrix
-harness (`make matrix-check` at the repo root) drives to prove the GUI channel
-agrees with the CLI/make/menu channels on every matrix cell.
+The config's `platform` field (`x86` | `rpi5` | `frite` | `jetson` |
+`orangepi5` | `orangepizero2`) selects the builder script the command targets.
+This headless path is what the build-matrix harness (`make matrix-check` at
+the repo root) drives to prove the GUI channel agrees with the
+CLI/make/menu/job channels on every matrix cell.
 
 Tray-only (mesh-node controller):
 
 ```sh
 python -m snapdragon_studio --tray
+```
+
+Fleet builds (every role for the selected platforms in one run — the GUI
+front-end to `scripts/build-all-roles.sh`; also reachable from the wizard's
+welcome page):
+
+```sh
+python -m snapdragon_studio --fleet
 ```
 
 ## Package a Windows .exe

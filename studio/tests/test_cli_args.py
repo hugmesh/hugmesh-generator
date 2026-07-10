@@ -13,11 +13,20 @@ from snapdragon_studio.core.config import (
     ENV_CHOICES,
     GPU_DRIVER_ALIASES,
     GPU_DRIVER_CHOICES,
+    Domain,
     ImageConfig,
+    INFRA_SERVICES_CHOICES,
     MODE_DEFAULT_ROLE,
     MODE_SKIPPED_PAGES,
+    NON_ARGV_FIELDS,
+    OPTIONAL_SERVICES_BY_PLATFORM,
+    PLATFORM_FIELD_SUPPORT,
     ROLE_CHOICES,
+    SECRET_FIELDS,
+    SERVICES_ALL,
+    SERVICES_NONE,
     UNAFFILIATED_ROLE,
+    User,
     WIZARD_PAGE_SLUGS,
 )
 
@@ -198,10 +207,24 @@ def test_x86_client_roles_golden(role):
 
 @pytest.mark.parametrize("role", ["pki", "be", "fe", "be+gpu", "omnibus", "edge_ai"])
 def test_x86_mesh_roles_golden(role):
+    # G18: a mesh NODE role does NOT carry --person-role/--domains — the builder warns
+    # + ignores them there (build-x86:1220-1222), so the Studio must not emit them.
     args = ImageConfig(mode="mesh", role=role, platform="x86",
                        tailscale=True, sso=True).to_cli_args()
     assert args == ["--role", role, "--env", "test", "--local-user", "magus",
-                    "--with-tailscale", "--with-sso", "--person-role", "superadmin", *X86_TAIL]
+                    "--with-tailscale", "--with-sso", *X86_TAIL]
+    assert "--person-role" not in args
+    assert "--domains" not in args
+
+
+def test_x86_mesh_node_never_emits_person_role_even_with_domains_and_users():
+    # Even when the superadmin fills in domains/users (they go to the mesh manifest),
+    # a NODE-role x86 image carries NO --person-role/--domains at build time (FD-08).
+    from snapdragon_studio.core.config import Domain, User
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True, sso=True,
+                       domains=[Domain(name="acme.example")],
+                       users=[User(username="root", role="superadmin")]).to_cli_args()
+    assert "--person-role" not in args and "--domains" not in args
 
 
 def test_x86_client_desktop_weight_and_steam():
@@ -583,3 +606,599 @@ def test_old_configs_without_platform_default_to_x86(tmp_path):
     cfg = ImageConfig.load(str(p))
     assert cfg.platform == "x86"
     assert cfg.builder_script == "build-x86-host-stage4.sh"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WS1 gap coverage: new fields, per-platform emission, secret masking, and the
+# machine-checked PLATFORM_FIELD_SUPPORT capability table (WS2/WS6 consume it).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ---- G17: role-catalog reachability holes closed --------------------------------
+
+def test_g17_rpi5_reachable_in_cloud_mode():
+    flat = {(r, p) for r, plats, _ in ROLE_CHOICES["cloud"] for p in plats}
+    assert ("rpi5-desktop", "rpi5") in flat
+
+
+@pytest.mark.parametrize("role,plat", [("frite", "frite"), ("orangepi5", "orangepi5"),
+                                       ("orangepizero2", "orangepizero2")])
+def test_g17_arm_clients_reachable_in_standalone_mode(role, plat):
+    flat = {(r, p) for r, plats, _ in ROLE_CHOICES["standalone"] for p in plats}
+    assert (role, plat) in flat
+    # and a standalone ARM build actually threads --standalone + FDE
+    args = ImageConfig(mode="standalone", role=role, platform=plat, standalone=True,
+                       local_user="alice", encrypt_root=True).to_cli_args()
+    assert "--standalone" in args and "--encrypt-root" in args
+    assert ("--local-user", "alice") in pairs(args)
+
+
+# ---- G1: --cluster-domain is emitted (was a dead field on x86) -------------------
+
+def test_g1_cluster_domain_emitted_for_x86_cloud_client():
+    args = ImageConfig(mode="cloud", role="desktop", platform="x86", tailscale=True, sso=True,
+                       cluster_domain="acme.example").to_cli_args()
+    assert ("--cluster-domain", "acme.example") in pairs(args)
+
+
+def test_g1_cluster_domain_emitted_for_x86_mesh_node():
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True, sso=True,
+                       cluster_domain="acme.example").to_cli_args()
+    assert ("--cluster-domain", "acme.example") in pairs(args)
+
+
+def test_g1_cluster_domain_default_and_standalone_suppress():
+    # default value is never emitted, and standalone (no cluster plane) never emits it
+    assert "--cluster-domain" not in ImageConfig(mode="cloud", role="desktop",
+                                                 platform="x86").to_cli_args()
+    assert "--cluster-domain" not in ImageConfig(mode="standalone", role="standalone-thick",
+                                                 platform="x86",
+                                                 cluster_domain="acme.example").to_cli_args()
+
+
+# ---- G18: explicit --person-role picker; node roles carry none ------------------
+
+def test_g18_explicit_person_role_overrides_derivation():
+    args = ImageConfig(mode="cloud", role="laptop", platform="x86", tailscale=True, sso=True,
+                       person_role="admin").to_cli_args()
+    assert ("--person-role", "admin") in pairs(args)
+
+
+def test_g18_person_role_derives_from_users_in_cloud():
+    args = ImageConfig(mode="cloud", role="desktop", platform="x86", tailscale=True, sso=True,
+                       users=[User(username="jo", role="mod")]).to_cli_args()
+    assert ("--person-role", "mod") in pairs(args)
+
+
+def test_g18_client_role_still_emits_domains():
+    args = ImageConfig(mode="cloud", role="desktop", platform="x86", tailscale=True, sso=True,
+                       domains=[Domain(name="a.example"), Domain(name="b.example")]).to_cli_args()
+    assert ("--domains", "a.example,b.example") in pairs(args)
+    assert ("--person-role", "user") in pairs(args)
+
+
+# ---- G3/G4/G6: brand profile / release-state / games-domain ---------------------
+
+def test_g3_brand_profile_emits_config_on_every_platform():
+    for plat, extra in (("x86", dict(role="desktop", mode="cloud")),
+                        ("rpi5", dict(role="be", mode="mesh")),
+                        ("frite", dict(role="frite", mode="cloud"))):
+        args = ImageConfig(platform=plat, brand_profile="/tmp/brand.conf", **extra).to_cli_args()
+        assert ("--config", "/tmp/brand.conf") in pairs(args)
+
+
+def test_g4_release_state_x86_and_rpi5_only():
+    x = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                    release_state="public").to_cli_args()
+    assert ("--release-state", "public") in pairs(x)
+    r = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                    release_state="internal").to_cli_args()
+    assert ("--release-state", "internal") in pairs(r)
+    # frite does not parse it -> never emitted
+    f = ImageConfig(mode="cloud", role="frite", platform="frite",
+                    release_state="public").to_cli_args()
+    assert "--release-state" not in f
+
+
+def test_g6_games_domain_x86_and_rpi5():
+    x = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                    games_domain="games.acme.example").to_cli_args()
+    assert ("--games-domain", "games.acme.example") in pairs(x)
+    r = ImageConfig(mode="mesh", role="fe", platform="rpi5", tailscale=True,
+                    games_domain="games.acme.example").to_cli_args()
+    assert ("--games-domain", "games.acme.example") in pairs(r)
+
+
+# ---- G5: Secure Boot family (x86) -----------------------------------------------
+
+def test_g5_secure_boot_tristate_and_keys():
+    off = ImageConfig(mode="standalone", role="standalone-thick", secure_boot="off").to_cli_args()
+    assert "--no-secure-boot" in off and "--secure-boot" not in off
+    on = ImageConfig(mode="standalone", role="standalone-thick", secure_boot="on").to_cli_args()
+    assert "--secure-boot" in on and "--no-secure-boot" not in on
+    blank = ImageConfig(mode="standalone", role="standalone-thick").to_cli_args()
+    assert "--secure-boot" not in blank and "--no-secure-boot" not in blank
+    keys = ImageConfig(mode="standalone", role="standalone-thick", keys_usb="/mnt/keys",
+                       secureboot_key="/k.pem", secureboot_cert="/c.pem").to_cli_args()
+    p = pairs(keys)
+    assert ("--keys-usb", "/mnt/keys") in p
+    assert ("--secureboot-key", "/k.pem") in p and ("--secureboot-cert", "/c.pem") in p
+
+
+def test_g5_secure_boot_never_on_arm():
+    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                       secure_boot="on", keys_usb="/mnt/keys").to_cli_args()
+    for flag in ("--secure-boot", "--no-secure-boot", "--keys-usb"):
+        assert flag not in args
+
+
+# ---- G13/G14: none / all / exclude services semantics ---------------------------
+
+def test_g13_explicit_none_services():
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                       optional_services=[SERVICES_NONE]).to_cli_args()
+    # EXPLICIT none: --optional-services "" (an empty argv element), not "no flag"
+    i = args.index("--optional-services")
+    assert args[i + 1] == ""
+
+
+def test_g14_all_services_sentinel():
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                       optional_services=[SERVICES_ALL]).to_cli_args()
+    assert "--all-services" in args
+    assert "--optional-services" not in args
+
+
+def test_g14_exclude_services_subtractive():
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                       optional_services=["akkoma", "tuwunel"],
+                       exclude_services=["tuwunel"]).to_cli_args()
+    assert ("--optional-services", "akkoma tuwunel") in pairs(args)
+    assert ("--exclude-services", "tuwunel") in pairs(args)
+
+
+def test_g13_empty_list_leaves_builder_default():
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True).to_cli_args()
+    assert "--optional-services" not in args and "--all-services" not in args
+
+
+# ---- G15: infra service slugs reachable on rpi5 (no dedicated flag there) --------
+
+def test_g15_rpi5_infra_slugs_in_catalog():
+    assert set(INFRA_SERVICES_CHOICES) <= set(OPTIONAL_SERVICES_BY_PLATFORM["rpi5"])
+    # x86 keeps the dedicated flags; its catalog is the user-level set only
+    assert "tor" not in OPTIONAL_SERVICES_BY_PLATFORM["x86"]
+
+
+def test_g15_rpi5_tor_via_optional_services():
+    args = ImageConfig(mode="mesh", role="fe", platform="rpi5", tailscale=True,
+                       optional_services=["akkoma", "tor"]).to_cli_args()
+    assert ("--optional-services", "akkoma tor") in pairs(args)
+
+
+# ---- G21/G22: composable --capable and --unaffiliated ---------------------------
+
+def test_g21_capable_composes_onto_any_client_role():
+    args = ImageConfig(mode="cloud", role="laptop", platform="x86", tailscale=True, sso=True,
+                       capable=True).to_cli_args()
+    assert "--capable" in args
+
+
+def test_g22_unaffiliated_composable_flag():
+    args = ImageConfig(mode="standalone", role="standalone-thin", platform="x86",
+                       unaffiliated=True).to_cli_args()
+    assert "--unaffiliated" in args
+    # composing unaffiliated suppresses the brand plane + bundle pair like the role does
+    for flag in ("--brand", "--with-tailscale", "--no-tailscale", "--with-sso", "--no-sso",
+                 "--bundle-source", "--no-bundle-source"):
+        assert flag not in args
+
+
+def test_g22_dedicated_role_does_not_double_emit_unaffiliated():
+    # the role id presets it in the builder's own switch; no flag needed
+    args = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
+                       bundle_source=False).to_cli_args()
+    assert "--unaffiliated" not in args
+
+
+def test_g22_composable_unaffiliated_conflicts_with_cloud_mode():
+    with pytest.raises(ValueError, match="unaffiliated"):
+        ImageConfig(mode="cloud", role="laptop", platform="x86", tailscale=True,
+                    unaffiliated=True).to_cli_args()
+
+
+# ---- G23/G24: artifact selection ------------------------------------------------
+
+def test_g23_x86_artifact_selection():
+    args = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                       build_img="off", live_iso="on", installer_iso=True,
+                       build_tar="off", skip_iso=True).to_cli_args()
+    assert "--no-img" in args and "--live-iso" in args and "--installer-iso" in args
+    assert "--no-tar" in args and "--skip-iso" in args
+
+
+def test_g24_rpi5_artifact_selection():
+    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                       build_iso=True, sd_only=True, build_tar="off").to_cli_args()
+    assert "--iso" in args and "--sd-only" in args and "--no-tar" in args
+
+
+def test_g24_jetson_and_frite_artifacts():
+    j = ImageConfig(mode="mesh", role="edge_ai", platform="jetson", tailscale=True,
+                    build_img="off", image_only=True).to_cli_args()
+    assert "--no-img" in j and "--image-only" in j
+    f = ImageConfig(mode="cloud", role="frite", platform="frite", image_only=True).to_cli_args()
+    assert "--image-only" in f
+    # frite has no --img/--no-img/--iso
+    for flag in ("--img", "--no-img", "--iso", "--sd-only"):
+        assert flag not in f
+
+
+# ---- G25/G26: grow + host identity ----------------------------------------------
+
+@pytest.mark.parametrize("platform,role,mode", [("x86", "standalone-thick", "standalone"),
+                                                ("rpi5", "be", "mesh"),
+                                                ("frite", "frite", "cloud"),
+                                                ("jetson", "edge_ai", "mesh")])
+def test_g25_grow_on_every_platform(platform, role, mode):
+    args = ImageConfig(mode=mode, role=role, platform=platform, grow="fill").to_cli_args()
+    assert ("--grow", "fill") in pairs(args)
+
+
+@pytest.mark.parametrize("platform,role,mode", [("x86", "standalone-thick", "standalone"),
+                                                ("rpi5", "be", "mesh"),
+                                                ("frite", "frite", "cloud")])
+def test_g26_hostname_timezone_user(platform, role, mode):
+    args = ImageConfig(mode=mode, role=role, platform=platform,
+                       hostname="node01", timezone="America/New_York",
+                       user="operator").to_cli_args()
+    p = pairs(args)
+    assert ("--hostname", "node01") in p
+    assert ("--timezone", "America/New_York") in p
+    assert ("--user", "operator") in p
+
+
+def test_g26_bad_hostname_and_timezone_rejected():
+    with pytest.raises(ValueError):
+        ImageConfig(hostname="bad;host").to_cli_args()
+    with pytest.raises(ValueError):
+        ImageConfig(timezone="Region/$(evil)").to_cli_args()
+
+
+# ---- G27/G28: node fallback creds (SECRET) + ARM local-user un-gating ------------
+
+def test_g27_node_fallback_creds_secret_and_x86_only():
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                       user_password="up", root_password="rp").to_cli_args()
+    assert ("--user-password", "up") in pairs(args)
+    assert ("--root-password", "rp") in pairs(args)
+    # rpi5 does NOT get them (deprecated no-ops there)
+    r = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                    user_password="up", root_password="rp").to_cli_args()
+    assert "--user-password" not in r and "--root-password" not in r
+
+
+def test_g27_node_creds_never_persisted(tmp_path):
+    cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                      user_password="uPw7xQ", root_password="rPw9kL")
+    path = tmp_path / "c.json"
+    warnings = cfg.save(str(path))
+    assert len(warnings) == 2
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["user_password"] == "" and raw["root_password"] == ""
+    blob = path.read_text(encoding="utf-8")
+    assert "uPw7xQ" not in blob and "rPw9kL" not in blob
+
+
+def test_secret_fields_include_node_creds():
+    assert set(SECRET_FIELDS) == {"local_pass", "luks_pass", "user_password", "root_password"}
+
+
+def test_g28_arm_local_user_without_standalone():
+    # renamed account, no --standalone
+    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                       local_user="alice", local_pass="pw").to_cli_args()
+    assert ("--local-user", "alice") in pairs(args)
+    assert ("--local-pass", "pw") in pairs(args)
+    assert "--standalone" not in args
+    # default account name with no password + no standalone stays quiet (existing goldens)
+    quiet = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True).to_cli_args()
+    assert "--local-user" not in quiet
+
+
+# ---- G29/G30: version pins + image stamps ---------------------------------------
+
+@pytest.mark.parametrize("platform,role,mode", [("x86", "omnibus", "mesh"),
+                                                ("rpi5", "be", "mesh"),
+                                                ("frite", "frite", "cloud")])
+def test_g29_version_pins_and_skip_tailscale(platform, role, mode):
+    args = ImageConfig(mode=mode, role=role, platform=platform, tailscale=True,
+                       headscale_version="0.23.0", tailscale_version="1.62.0",
+                       skip_tailscale=True).to_cli_args()
+    p = pairs(args)
+    assert ("--headscale-version", "0.23.0") in p
+    assert ("--tailscale-version", "1.62.0") in p
+    assert "--skip-tailscale" in args
+
+
+def test_g30_version_all_release_tag_x86_only():
+    x = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                    version="2026.07", release_tag="rc1").to_cli_args()
+    assert ("--version", "2026.07") in pairs(x)
+    assert ("--release-tag", "rc1") in pairs(x)
+    r = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                    version="2026.07", release_tag="rc1").to_cli_args()
+    assert ("--version", "2026.07") in pairs(r)
+    assert "--release-tag" not in r
+
+
+# ---- G31/G32/G33: home extras / media / cuda+grub-theme (x86) --------------------
+
+def test_g31_home_extras():
+    args = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                       home_seed_code_from="/seed", include_home_archive="/home.tar",
+                       seed_packages_from="/pkgs.txt").to_cli_args()
+    p = pairs(args)
+    assert ("--home-seed-code-from", "/seed") in p
+    assert ("--include-home-archive", "/home.tar") in p
+    assert ("--seed-packages-from", "/pkgs.txt") in p
+
+
+def test_g32_media_data_set():
+    off = ImageConfig(mode="standalone", role="standalone-thick",
+                      media_data="off", no_vaults=True, media_label="DATA").to_cli_args()
+    assert "--no-media-data" in off and "--no-vaults" in off
+    assert ("--media-label", "DATA") in pairs(off)
+    on = ImageConfig(mode="standalone", role="standalone-thick", media_data="on").to_cli_args()
+    assert "--media-data" in on
+
+
+def test_g33_nvidia_cuda_and_grub_theme():
+    args = ImageConfig(mode="standalone", role="standalone-thick",
+                       nvidia_cuda=True, grub_theme="/themes/snap").to_cli_args()
+    assert "--nvidia-cuda" in args
+    assert ("--grub-theme", "/themes/snap") in pairs(args)
+
+
+# ---- G34: force-off tri-states --------------------------------------------------
+
+def test_g34_force_off_tristates():
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                       aide="off", tor_onion_service="off",
+                       character_studio="off", edge_ai_service="off").to_cli_args()
+    assert "--no-aide" in args
+    assert "--no-tor" in args
+    assert "--no-character-studio" in args
+    assert "--no-edge-ai" in args
+
+
+def test_g34_tristate_bool_backcompat():
+    # a plain True still means the positive path (checkbox back-compat)
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                       aide=True, tor_onion_service=True, character_studio=True).to_cli_args()
+    assert "--with-aide" in args and "--with-tor" in args and "--with-character-studio" in args
+
+
+def test_g34_rpi5_force_off_character_studio():
+    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                       character_studio="off").to_cli_args()
+    assert "--no-character-studio" in args
+
+
+# ---- G35/G36/G37: u-boot / jetson kernel-flavor / ARM kernel-board overrides -----
+
+@pytest.mark.parametrize("platform,role", [("frite", "frite"), ("orangepi5", "orangepi5"),
+                                           ("orangepizero2", "orangepizero2")])
+def test_g35_uboot_chain(platform, role):
+    args = ImageConfig(mode="cloud", role=role, platform=platform,
+                       uboot_url="http://x/u.bin", uboot_defconfig="foo_defconfig",
+                       skip_uboot=False).to_cli_args()
+    assert ("--uboot-url", "http://x/u.bin") in pairs(args)
+    assert ("--uboot-defconfig", "foo_defconfig") in pairs(args)
+    skip = ImageConfig(mode="cloud", role=role, platform=platform, skip_uboot=True).to_cli_args()
+    assert "--skip-uboot" in skip
+
+
+def test_g35_uboot_never_on_rpi5_or_jetson():
+    for platform, role, mode in (("rpi5", "be", "mesh"), ("jetson", "edge_ai", "mesh")):
+        args = ImageConfig(mode=mode, role=role, platform=platform, tailscale=True,
+                           uboot_url="http://x").to_cli_args()
+        assert "--uboot-url" not in args
+
+
+def test_g36_jetson_kernel_flavor():
+    args = ImageConfig(mode="mesh", role="edge_ai", platform="jetson", tailscale=True,
+                       kernel_flavor="l4t").to_cli_args()
+    assert ("--kernel-flavor", "l4t") in pairs(args)
+    # not a jetson-only leak: rpi5 never emits it
+    r = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                    kernel_flavor="l4t").to_cli_args()
+    assert "--kernel-flavor" not in r
+
+
+def test_g37_arm_kernel_board_overrides():
+    # shared -c/-d on every ARM builder
+    for platform, role, mode in (("rpi5", "be", "mesh"), ("frite", "frite", "cloud"),
+                                 ("jetson", "edge_ai", "mesh")):
+        a = ImageConfig(mode=mode, role=role, platform=platform, tailscale=True,
+                        cpu="cortex-a53", defconfig="foo_defconfig").to_cli_args()
+        assert ("--cpu", "cortex-a53") in pairs(a)
+        assert ("--defconfig", "foo_defconfig") in pairs(a)
+    # rpi5-only --dtb-prefix / --kernel-img / --pcie-gen3
+    r = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                    dtb_prefix="bcm2712", kernel_img="Image", pcie_gen3=True).to_cli_args()
+    assert ("--dtb-prefix", "bcm2712") in pairs(r) and ("--kernel-img", "Image") in pairs(r)
+    assert "--pcie-gen3" in r
+    # --dtb on frite/jetson/opi5/opz2 (rpi5 uses --dtb-prefix instead)
+    f = ImageConfig(mode="cloud", role="frite", platform="frite", dtb="foo.dtb").to_cli_args()
+    assert ("--dtb", "foo.dtb") in pairs(f)
+    assert "--dtb" not in r
+
+
+# ---- G38: build plumbing --------------------------------------------------------
+
+def test_g38_shared_plumbing_on_x86_and_arm():
+    x = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                    skip_kernel=True, skip_clean=True, build_subdir="sub",
+                    seed_url="http://s", distdir="/dist").to_cli_args()
+    assert "--skip-kernel" in x and "--skip-clean" in x
+    assert ("--build-subdir", "sub") in pairs(x) and ("--seed-url", "http://s") in pairs(x)
+    assert ("--distdir", "/dist") in pairs(x)
+    a = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                    skip_kernel=True, extra_packages="app-editors/vim").to_cli_args()
+    assert "--skip-kernel" in a
+    assert ("--extra-packages", "app-editors/vim") in pairs(a)
+    # -p/--extra-packages is ARM-only; --distdir is x86-only
+    assert "--extra-packages" not in x and "--distdir" not in a
+
+
+# ---- G2/G40/G41: out-of-band fields never reach argv ----------------------------
+
+def test_g2_g40_g41_never_argv():
+    cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                      headscale_url="https://hs.acme", pentest=True, hw_profile="framework-13")
+    args = cfg.to_cli_args()
+    for token in ("https://hs.acme", "framework-13", "--pentest", "--headscale-url",
+                  "--hw-profile", "--pentest=1"):
+        assert token not in args
+
+
+def test_non_argv_fields_set():
+    assert set(NON_ARGV_FIELDS) == {"headscale_url", "pentest", "hw_profile"}
+    # and none of them appear in the capability table (they are not "silently dropped")
+    for f in NON_ARGV_FIELDS:
+        assert f not in PLATFORM_FIELD_SUPPORT
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PLATFORM_FIELD_SUPPORT — asserted against REAL emission so it cannot drift.
+# A field is "supported" on a platform iff setting it changes that platform's argv.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_PROBE_PLATFORMS = ("x86", "rpi5", "frite", "jetson", "orangepi5", "orangepizero2")
+
+# baseline valid config per platform, chosen so every field that CAN emit does emit
+# (x86 uses a cloud CLIENT role so the cluster/person plane is live).
+_BASELINES = {
+    "x86": dict(mode="cloud", role="desktop", platform="x86"),
+    "rpi5": dict(mode="mesh", role="be", platform="rpi5"),
+    "frite": dict(mode="cloud", role="frite", platform="frite"),
+    "jetson": dict(mode="mesh", role="edge_ai", platform="jetson"),
+    "orangepi5": dict(mode="cloud", role="orangepi5", platform="orangepi5"),
+    "orangepizero2": dict(mode="cloud", role="orangepizero2", platform="orangepizero2"),
+}
+
+# field -> overrides that make a supporting builder's argv change. Multi-key entries
+# supply a prerequisite (e.g. egress_vpn_locked needs egress_vpn). "unaffiliated" is
+# probed separately (it needs a standalone baseline). Everything else in the table is
+# here — a coverage assertion below guarantees that.
+_FIELD_PROBE = {
+    "brand": {"brand": "acme"}, "brand_title": {"brand_title": "Acme Co"},
+    "org": {"org": "Acme-Org"}, "brand_profile": {"brand_profile": "/tmp/brand.conf"},
+    "hostname": {"hostname": "myhost"}, "timezone": {"timezone": "America/New_York"},
+    "user": {"user": "bob"},
+    "cluster_domain": {"cluster_domain": "acme.example"},
+    "games_domain": {"games_domain": "games.acme.example"},
+    "release_state": {"release_state": "public"}, "person_role": {"person_role": "admin"},
+    "domains": {"domains": [Domain(name="probe.example")]},
+    "local_user": {"local_user": "alice"}, "local_pass": {"local_pass": "pw"},
+    "user_password": {"user_password": "pw"}, "root_password": {"root_password": "pw"},
+    "standalone": {"standalone": True}, "capable": {"capable": True},
+    "tailscale": {"tailscale": True}, "sso": {"sso": True},
+    "headscale_version": {"headscale_version": "0.23"},
+    "tailscale_version": {"tailscale_version": "1.60"},
+    "skip_tailscale": {"skip_tailscale": True},
+    "gpu_driver": {"gpu_driver": "nvidia"}, "nvidia_cuda": {"nvidia_cuda": True},
+    "kernel_builtin": {"kernel_builtin": True},
+    "enable_wifi": {"enable_wifi": True}, "enable_bluetooth": {"enable_bluetooth": True},
+    "theme": {"theme": "boogiepop"}, "branding_dir": {"branding_dir": "/tmp/b"},
+    "wallpaper": {"wallpaper": "/tmp/w.png"}, "grub_background": {"grub_background": "/tmp/g.png"},
+    "grub_theme": {"grub_theme": "/tmp/gt"}, "login_background": {"login_background": "/tmp/l.png"},
+    "brand_logo": {"brand_logo": "/tmp/logo.png"}, "accent_color": {"accent_color": "#123456"},
+    "color_scheme": {"color_scheme": "dark"}, "brand_locked": {"brand_locked": True},
+    "egress_vpn": {"egress_vpn": "/tmp/e.ovpn"},
+    "egress_vpn_locked": {"egress_vpn": "/tmp/e.ovpn", "egress_vpn_locked": True},
+    "proxy_stack": {"proxy_stack": "on"}, "snort": {"snort": False}, "aide": {"aide": True},
+    "root_login": {"root_login": "yes"},
+    "edge_ai_service": {"edge_ai_service": True},
+    "edge_ai_runtime": {"edge_ai_service": True, "edge_ai_runtime": "vllm"},
+    "edge_ai_models": {"edge_ai_service": True, "edge_ai_models": "llama3"},
+    "edge_ai_model_default": {"edge_ai_service": True, "edge_ai_model_default": "llama3"},
+    "edge_ai_analysis": {"edge_ai_analysis": True},
+    "tor_onion_service": {"tor_onion_service": True},
+    "character_studio": {"character_studio": True},
+    "optional_services": {"optional_services": ["akkoma"]},
+    "exclude_services": {"exclude_services": ["games"]},
+    "enable_games": {"enable_games": True},
+    "desktop": {"desktop": "thin"}, "steam": {"steam": "native"},
+    "media_data": {"media_data": "off"}, "media_label": {"media_label": "DATA"},
+    "no_vaults": {"no_vaults": True},
+    "encrypt_root": {"encrypt_root": True}, "luks_pass": {"luks_pass": "pw"},
+    "unlock_keyfile": {"unlock_keyfile": "boot"}, "unlock_yubikey": {"unlock_yubikey": "login"},
+    "secure_boot": {"secure_boot": "off"}, "keys_usb": {"keys_usb": "/tmp/keys"},
+    "secureboot_key": {"secureboot_key": "/tmp/k.pem"},
+    "secureboot_cert": {"secureboot_cert": "/tmp/c.pem"},
+    "home_mode": {"home_mode": "adopt"}, "home_device": {"home_device": "LABEL=HOME"},
+    "home_backup": {"home_backup": "auto"}, "home_encrypted": {"home_encrypted": True},
+    "home_seed_code": {"home_seed_code": "repos"},
+    "home_seed_code_from": {"home_seed_code_from": "/tmp/seed"},
+    "include_home_archive": {"include_home_archive": "/tmp/home.tar"},
+    "seed_packages_from": {"seed_packages_from": "/tmp/pkgs"},
+    "installer_ui": {"installer_ui": "cli"}, "cached": {"cached": True},
+    "live_toram": {"live_toram": False}, "bundle_source": {"bundle_source": False},
+    "build_img": {"build_img": "off"}, "live_iso": {"live_iso": "on"},
+    "installer_iso": {"installer_iso": True}, "build_tar": {"build_tar": "off"},
+    "skip_iso": {"skip_iso": True}, "build_iso": {"build_iso": True},
+    "sd_only": {"sd_only": True}, "image_only": {"image_only": True},
+    "grow": {"grow": "fill"}, "img_size": {"img_size": 4096},
+    "compress": {"compress": True}, "resume": {"resume": True},
+    "cpu": {"cpu": "cortex-a53"}, "defconfig": {"defconfig": "foo_defconfig"},
+    "dtb": {"dtb": "foo.dtb"}, "dtb_prefix": {"dtb_prefix": "bcm2712"},
+    "kernel_img": {"kernel_img": "Image"}, "pcie_gen3": {"pcie_gen3": True},
+    "kernel_flavor": {"kernel_flavor": "l4t"},
+    "uboot_url": {"uboot_url": "http://x/u.bin"},
+    "uboot_defconfig": {"uboot_defconfig": "foo_defconfig"}, "skip_uboot": {"skip_uboot": True},
+    "skip_kernel": {"skip_kernel": True}, "skip_clean": {"skip_clean": True},
+    "distdir": {"distdir": "/tmp/dist"}, "build_subdir": {"build_subdir": "sub"},
+    "seed_url": {"seed_url": "http://s/x"}, "version": {"version": "1.2.3"},
+    "release_tag": {"release_tag": "rc1"}, "extra_packages": {"extra_packages": "app-editors/vim"},
+}
+
+
+def _emits(platform, overrides):
+    """True iff applying ``overrides`` changes this platform's emitted argv. A raised
+    ValueError (a rejected combination, e.g. encrypt-root on jetson) counts as 'the
+    flag never reaches the builder' -> not supported."""
+    base = _BASELINES[platform]
+    before = ImageConfig(**base).to_cli_args()
+    try:
+        after = ImageConfig(**{**base, **overrides}).to_cli_args()
+    except ValueError:
+        return False
+    return before != after
+
+
+def test_field_probe_covers_the_whole_capability_table():
+    assert set(_FIELD_PROBE) | {"unaffiliated"} == set(PLATFORM_FIELD_SUPPORT)
+
+
+@pytest.mark.parametrize("field", sorted(_FIELD_PROBE))
+def test_platform_field_support_matches_emission(field):
+    derived = {p for p in _PROBE_PLATFORMS if _emits(p, _FIELD_PROBE[field])}
+    assert derived == set(PLATFORM_FIELD_SUPPORT[field]), (
+        f"{field}: table says {sorted(PLATFORM_FIELD_SUPPORT[field])} "
+        f"but emission says {sorted(derived)}")
+
+
+def test_platform_field_support_unaffiliated_is_x86_only():
+    assert set(PLATFORM_FIELD_SUPPORT["unaffiliated"]) == {"x86"}
+    # composable on a standalone x86 role; ignored on ARM
+    assert "--unaffiliated" in ImageConfig(mode="standalone", role="standalone-thin",
+                                           platform="x86", unaffiliated=True).to_cli_args()
+    assert "--unaffiliated" not in ImageConfig(mode="mesh", role="be", platform="rpi5",
+                                               tailscale=True, unaffiliated=True).to_cli_args()
+
+
+def test_capability_table_platforms_are_all_known():
+    for field, plats in PLATFORM_FIELD_SUPPORT.items():
+        for p in plats:
+            assert p in BUILDER_SCRIPTS, f"{field} references unknown platform {p}"

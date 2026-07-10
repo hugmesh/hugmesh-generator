@@ -40,7 +40,9 @@ rpi5	desktop	prod	rpi3	-	-
 # MAKE/GUI/MENU channels have no such token (the builder itself only ever takes
 # --role desktop plus a separate --standalone flag), so tests/build-matrix/check.sh's
 # CLI leg translates this role value into the real --role desktop --standalone
-# invocation before executing it.
+# invocation before executing it, and its GUI leg translates it to the real
+# Studio posture (role=desktop + standalone=true, the HomePage checkbox) and
+# proves the printed command against the builder's own --print-plan.
 rpi5	standalone-desktop	test	rpi4	-	-
 rpi5	standalone-desktop	prod	rpi4	-	-
 x86	pki	test	-	-	-
@@ -107,7 +109,9 @@ frite	desktop	prod	sweet-potato	both	none
 # role axis, so the JOB channel signals standalone-posture through the flavor
 # slot instead ("frite.<board>.standalone") — normalized to the real
 # flavor=installer (--standalone forces the installer path internally anyway)
-# plus --standalone/--local-user. See docker/build-image.sh's header comment.
+# plus --standalone/--local-user by the CLI leg, and to flavor=installer +
+# standalone=true (ImageConfig semantics, --print-plan-proven) by the GUI leg.
+# See docker/build-image.sh's header comment.
 frite	desktop	test	la-frite	standalone	light
 frite	desktop	prod	la-frite	standalone	light
 jetson	edge_ai	test	orin-nano	-	-

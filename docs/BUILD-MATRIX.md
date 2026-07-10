@@ -115,7 +115,12 @@ no network, no docker/k8s, ~15 s:
    `JETSON_BOARD` make-vars).
 4. **GUI** — writes a per-row config JSON and asserts the Studio's headless,
    Qt-free `python -m snapdragon_studio --print-command` emits a command with
-   the right builder / role / axes / env.
+   the right builder / role / axes / env. The 8 standalone-posture rows
+   translate the JOB-grammar tokens to the real Studio semantics
+   (`role=desktop` / `flavor=installer` + `standalone: true`, exactly like the
+   CLI leg) and are additionally proven end-to-end: the printed argv is re-run
+   against the real builder with `--print-plan` and must be accepted with
+   `PLAN_STANDALONE=true` — builder acceptance, not token echo.
 5. **JOB** — extracts the *real* `resolve_build_target()` out of
    `docker/build-image.sh` (statically — docker/k8s are never invoked; the
    extraction and a known-good canary **fail loud** if the worker's whitelist
@@ -182,9 +187,35 @@ asserts RPI_BOARD/RPI_ROLES/ORANGEPIZERO2/ORANGEPIZERO2_FLAVOR all survive
 into the composed docker-run recipe — a prior version of `ROLESET_ENVVARS`
 silently dropped all four at that exact boundary, on both the native and
 Docker legs. A recipe that ignores a make-var the menu emits, or a new fleet
-target/knob added without wiring the same gate, can never go green. Current
+target/knob added without wiring the same gate, can never go green.
+
+The Studio channel gets the same treatment with **51 GUI flag-threading
+probes** (`GUITHR`): for every config-field family the Studio threads to the
+builders (cluster domain, person-role, host identity, secure-boot family,
+artifact selection, u-boot chain, kernel/DTB plumbing, standalone/local-user,
+CUDA, optional/exclude services, mesh version pins, home/media sets, …) a
+probe feeds a config JSON through `--print-command`, asserts the exact flag
+tokens (including must-NOT-appear grammar), then re-runs the printed argv
+against the real builder with `--print-plan` and asserts acceptance plus the
+matching `PLAN_*` echo (`PLAN_CLUSTER_DOMAIN`, `PLAN_PERSON_ROLE`,
+`PLAN_HOSTNAME`, `PLAN_MESH`, `PLAN_UNAFFILIATED`, …) — every probe is
+builder-accepted, never token-echoed. **12 GUI gating negatives** ride along:
+10 prove a wrong-platform field set in a config JSON emits *no* flag at all on
+ARM configs (steam, gpu-driver, the edge-AI set, the u-boot chain, the
+secure-boot family, node fallback creds, services/games, cluster plane,
+branding assets), and 2 prove the jetson encrypt-root and jetson standalone
+hard-blocks still refuse `--print-command` outright. Finally the
+**flag-coverage differ** (`tests/build-matrix/flag-coverage.sh`, the `COVG`
+bucket, 12 checks) parses each builder's live arg-parser case arms and diffs
+them against the Studio's *real* emission vocabulary (computed by exercising
+`ImageConfig.to_cli_args()` over a capability-table-driven sample battery) in
+both directions: a builder flag with no Studio field and no documented
+allowlist reason, or a Studio-emitted flag no builder parses, fails the run.
+Every probe family is fail-closed behind an expected-count gate. Current
 totals:
-118 cells × 5 channels + 24 threading probes + 31 negatives = **645 checks**.
+118 cells × 5 channels + 75 threading probes (24 menu + 51 GUI) + 43
+negatives (31 CLI/channel + 12 GUI gating) + 12 flag-coverage checks =
+**720 checks**.
 
 ```sh
 make matrix-check                 # or: bash tests/build-matrix/check.sh

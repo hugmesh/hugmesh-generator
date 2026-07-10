@@ -19,6 +19,11 @@ class Profile:
     notes: str = ""
 
     def apply_to(self, cfg) -> None:
+        # A profile is a PRESET, not a build axis: it pre-fills the gpu/wifi/bt fields
+        # (which DO emit) and records its id in cfg.hw_profile for round-tripping the
+        # chosen machine. hw_profile ITSELF is never emitted — no builder has a profile
+        # flag — so it is deliberately absent from config.PLATFORM_FIELD_SUPPORT and
+        # listed in config.NON_ARGV_FIELDS (decided document-as-preset, G41).
         if self.gpu_driver and self.gpu_driver != "auto":
             cfg.gpu_driver = self.gpu_driver
         cfg.enable_wifi = self.enable_wifi

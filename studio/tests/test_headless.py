@@ -150,8 +150,69 @@ def test_print_command_unaffiliated_conflict_fails_loudly(tmp_path):
 
 
 def test_saved_matrix_configs_hold_no_secrets(tmp_path):
-    cfg = ImageConfig(local_pass="pw", luks_pass="pw2")
+    # includes the NEW node-fallback credentials (G27) — SECRET_FIELDS, never saved
+    cfg = ImageConfig(local_pass="pw", luks_pass="pw2",
+                      user_password="pw3", root_password="pw4")
     p = tmp_path / "s.json"
     cfg.save(str(p))
     data = json.loads(p.read_text(encoding="utf-8"))
-    assert data["local_pass"] == "" and data["luks_pass"] == ""
+    for k in ("local_pass", "luks_pass", "user_password", "root_password"):
+        assert data[k] == ""
+
+
+def test_print_command_headscale_url_env_passthrough(tmp_path):
+    """headscale_url is env-only by design (G2): the printed native command must
+    carry `env HEADSCALE_URL=…` (inside the sudo boundary when present) and NO
+    --headscale-url flag may exist — no builder parses one."""
+    cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86",
+                      headscale_url="https://hs.acme.example")
+    p = tmp_path / "hs.json"
+    cfg.save(str(p))
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    assert "env HEADSCALE_URL=https://hs.acme.example bash" in r.stdout
+    assert "--headscale-url" not in r.stdout
+
+
+def test_print_command_new_option_fields_flow_through(tmp_path):
+    """A representative slice of the newly fielded options (G1/G4/G5/G23/G25/G26)
+    rides a saved config through the headless path onto the printed command."""
+    cfg = ImageConfig(mode="mesh", role="be", platform="x86",
+                      cluster_domain="acme.example", release_state="public",
+                      secure_boot="off", grow="16G", hostname="myhost",
+                      build_img="off", installer_iso=True)
+    p = tmp_path / "new-fields.json"
+    cfg.save(str(p))
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    for token in ("--cluster-domain acme.example", "--release-state public",
+                  "--no-secure-boot", "--grow 16G", "--hostname myhost",
+                  "--no-img", "--installer-iso"):
+        assert token in r.stdout
+
+
+def test_print_command_arm_standalone_real_semantics(tmp_path):
+    """The parity harness's standalone-posture configs (rpi5 role=desktop +
+    standalone=true — NOT the JOB-grammar 'standalone-desktop' token) must print
+    the real builder vocabulary: --role desktop --standalone --local-user."""
+    cfg = ImageConfig(mode="standalone", role="desktop", platform="rpi5",
+                      board="rpi4", standalone=True)
+    p = tmp_path / "rpi5-standalone.json"
+    cfg.save(str(p))
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    assert "--role desktop" in r.stdout and "--standalone" in r.stdout
+    assert "--board rpi4" in r.stdout and "--local-user" in r.stdout
+    assert "standalone-desktop" not in r.stdout   # the JOB token is not builder vocabulary

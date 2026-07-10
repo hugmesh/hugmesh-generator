@@ -12,7 +12,9 @@ import pytest
 
 from snapdragon_studio.core.build_driver import BuildDriver
 from snapdragon_studio.core.config import BUILDER_SCRIPTS, ImageConfig
+from snapdragon_studio.core.fleet import FLEET_SCRIPT, FleetConfig, FleetDriver
 from snapdragon_studio.core.platform_info import HostInfo
+from snapdragon_studio.core.validate import IdentityValidationError
 
 
 def host(is_root=True, has_docker=True):
@@ -89,6 +91,62 @@ def test_extra_flags_flow_through_driver(tmp_path):
     assert inner[-2:] == ["--uboot-url", "https://example/u boot.bin"]
 
 
+# ---- HEADSCALE_URL env passthrough (G2) -------------------------------------
+# HEADSCALE_URL is env-var-only by design (baked to /etc/snapdragon/headscale-url
+# by the x86/rpi5/frite builders; NO builder flag exists) — the driver must carry
+# it on BOTH backends: docker via `-e`, native via an `env` wrapper INSIDE the
+# sudo boundary (sudo env_reset would strip a plain export).
+
+def test_headscale_url_native_env_wrapper_root_and_sudo(tmp_path):
+    cfg = cfg_for("x86", tmp_path)
+    cfg.headscale_url = "https://hs.acme.example"
+    root_cmd = BuildDriver(str(tmp_path), host(is_root=True)).command(cfg, "native")
+    assert root_cmd[:3] == ["env", "HEADSCALE_URL=https://hs.acme.example", "bash"]
+    sudo_cmd = BuildDriver(str(tmp_path), host(is_root=False)).command(cfg, "native")
+    # env wrapper AFTER sudo so the var survives sudo's env_reset
+    assert sudo_cmd[:4] == ["sudo", "env", "HEADSCALE_URL=https://hs.acme.example", "bash"]
+    # the flag never leaks into the builder argv (env-only contract)
+    assert not any("--headscale-url" in x for x in root_cmd)
+
+
+def test_headscale_url_docker_e_flag(tmp_path):
+    cfg = cfg_for("rpi5", tmp_path)
+    cfg.headscale_url = "https://hs.acme.example"
+    cmd = BuildDriver(str(tmp_path), host()).command(cfg, "docker")
+    i = cmd.index("-e")
+    assert cmd[i + 1] == "HEADSCALE_URL=https://hs.acme.example"
+    assert i < cmd.index("snapdragon-builder")          # docker-run arg, not inner argv
+    assert "HEADSCALE_URL" not in cmd[-1]               # not in the in-container argv
+
+
+@pytest.mark.parametrize("backend", ["native", "docker"])
+def test_no_headscale_url_means_no_env_plumbing(backend, tmp_path):
+    cmd = BuildDriver(str(tmp_path), host(is_root=True)).command(
+        cfg_for("frite", tmp_path), backend)
+    assert "-e" not in cmd and "env" not in cmd
+    assert not any("HEADSCALE_URL" in x for x in cmd)
+
+
+def test_headscale_url_survives_command_string_quoting(tmp_path):
+    cfg = cfg_for("x86", tmp_path)
+    cfg.headscale_url = "https://hs.acme.example"
+    s = BuildDriver(str(tmp_path), host(is_root=True)).command_string(cfg, "native")
+    assert s.startswith("env HEADSCALE_URL=https://hs.acme.example bash ")
+
+
+def test_pentest_env_knob_forwarded_both_backends(tmp_path):
+    """PENTEST=1 (G40) is a fleet/env knob, never argv — the driver forwards it on
+    both backends so the BuildPage checkbox is not a widget-level no-op."""
+    cfg = cfg_for("x86", tmp_path)
+    cfg.pentest = True
+    native = BuildDriver(str(tmp_path), host(is_root=True)).command(cfg, "native")
+    assert native[:3] == ["env", "PENTEST=1", "bash"]
+    docker = BuildDriver(str(tmp_path), host()).command(cfg, "docker")
+    i = docker.index("-e")
+    assert docker[i + 1] == "PENTEST=1"
+    assert not any("--pentest" in x for x in native + docker[:-1])
+
+
 def test_command_string_is_shell_quoted(tmp_path):
     d = BuildDriver(str(tmp_path), host(is_root=True))
     cfg = cfg_for("x86", tmp_path)
@@ -163,6 +221,70 @@ def test_builder_image_missing_false_when_daemon_unreachable(monkeypatch, tmp_pa
     problems = d.preflight(cfg_for("x86", tmp_path), "docker")
     assert any("daemon is not reachable" in p for p in problems)
     assert not any("snapdragon-builder' not found" in p for p in problems)
+
+
+# ---- fleet channel (G39): FleetDriver fronting scripts/build-all-roles.sh ----
+# The fleet surface is ENV KNOBS + a small pass-through argv tail; both legs must
+# carry the knobs exactly like BuildDriver carries HEADSCALE_URL/PENTEST (G2/G40).
+
+def test_fleet_default_config_is_the_default_fleet(tmp_path):
+    d = FleetDriver(str(tmp_path), host(is_root=True))
+    cmd = d.command(FleetConfig(output_dir=str(tmp_path / "out")), "native")
+    # no knobs -> no env wrapper: the script's own default role sets apply
+    assert cmd == ["bash", f"./{FLEET_SCRIPT}", "-w", str(tmp_path / "out"), "-j", "8"]
+
+
+def test_fleet_native_env_knobs_inside_sudo_boundary(tmp_path):
+    cfg = FleetConfig(x86_omnibus=True, frite=True, rpi_roles="pki backend frontend desktop",
+                      rpi_board="rpi4", pentest=True, skip_keys=True,
+                      headscale_url="https://hs.acme.example",
+                      env="prod", cluster_domain="acme.example",
+                      output_dir=str(tmp_path / "out"), jobs=4)
+    cmd = FleetDriver(str(tmp_path), host(is_root=False)).command(cfg, "native")
+    assert cmd[0] == "sudo" and cmd[1] == "env"      # env wrapper AFTER sudo (env_reset)
+    knobs = cmd[2:cmd.index("bash")]
+    assert set(knobs) == {"X86_OMNIBUS=1", "FRITE=1", "PENTEST=1", "SKIP_KEYS=1",
+                          "RPI_ROLES=pki backend frontend desktop", "RPI_BOARD=rpi4",
+                          "HEADSCALE_URL=https://hs.acme.example"}
+    tail = cmd[cmd.index("bash") + 1:]
+    assert tail[:5] == [f"./{FLEET_SCRIPT}", "-w", str(tmp_path / "out"), "-j", "4"]
+    assert tail[5:] == ["--env", "prod", "--cluster-domain", "acme.example"]
+
+
+def test_fleet_docker_env_knobs_ride_dash_e(tmp_path):
+    cfg = FleetConfig(jetson=True, jetson_board="orin-nx-16gb", pentest_scan="full",
+                      output_dir=str(tmp_path / "out"))
+    cmd = FleetDriver(str(tmp_path), host()).command(cfg, "docker")
+    assert cmd[:4] == ["docker", "run", "--rm", "--privileged"]
+    pairs = {cmd[i + 1] for i, x in enumerate(cmd) if x == "-e"}
+    assert pairs == {"JETSON=1", "JETSON_BOARD=orin-nx-16gb", "PENTEST_SCAN=full"}
+    assert cmd[-3:-1] == ["bash", "-c"]
+    assert cmd[-1].startswith(f"./{FLEET_SCRIPT} -w /out")
+
+
+def test_fleet_role_tokens_fail_closed(tmp_path):
+    d = FleetDriver(str(tmp_path), host(is_root=True))
+    bad = FleetConfig(rpi_roles="pki; rm -rf /")
+    with pytest.raises(IdentityValidationError):
+        d.command(bad, "native")
+    with pytest.raises(IdentityValidationError):
+        FleetConfig(cluster_domain="evil|inject").to_env()
+
+
+def test_fleet_config_round_trips(tmp_path):
+    cfg = FleetConfig(x86_standalone=True, orangepizero2=True, orangepizero2_flavor="live",
+                      pentest_env="local", brand_profile="brands/acme.conf")
+    again = FleetConfig.from_dict(cfg.to_dict())
+    assert again == cfg
+    assert FleetConfig.from_dict({**cfg.to_dict(), "unknown_future_key": 1}) == cfg
+
+
+def test_fleet_preflight_names_missing_script_and_real_repo_is_clean(tmp_path):
+    missing = FleetDriver(str(tmp_path), host(is_root=True)).preflight(FleetConfig(), "native")
+    assert any(FLEET_SCRIPT in p for p in missing)
+    gen = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    clean = FleetDriver(gen, host(is_root=True)).preflight(FleetConfig(), "native")
+    assert not any(FLEET_SCRIPT in p for p in clean)
 
 
 def test_build_builder_image_runs_expected_command(monkeypatch, tmp_path):

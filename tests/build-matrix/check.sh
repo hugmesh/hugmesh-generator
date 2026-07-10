@@ -26,6 +26,13 @@
 # rpi5 builder and bogus job-worker HARDWARE_CLASS tokens must all FAIL
 # (exit != 0 / a rejected resolve).
 #
+# Plus GUI FLAG-THREADING probes (GUITHR — the GUI channel's MENUTHR): every
+# option field threads config-JSON -> --print-command -> the REAL builder's
+# --print-plan acceptance (+ PLAN_* facts), GUI GATING probes (x86-only fields
+# on ARM configs must emit NOTHING; jetson encrypt/standalone must hard-fail),
+# and the builder-flag COVERAGE differ (tests/build-matrix/flag-coverage.sh):
+# every parsed builder flag fielded or documented, every emitted flag parsed.
+#
 # Everything is dry-run (--print-plan / make -n / command printing / static
 # parsing) — no root, no writes outside mktemp, CI-friendly (< ~2 min).
 #
@@ -448,7 +455,22 @@ MENU_EOF
 # disambiguated (jetson-desktop -> --role desktop). Exercise the Studio ids.
 gui_config_json() { # platform role env board flavor desktop -> stdout JSON
     local platform="$1" role="$2" env="$3" board="$4" flavor="$5" desktop="$6"
-    local mode gui_role="${role}"
+    local mode gui_role="${role}" gui_flavor="${flavor}" standalone=false
+    # JOB-grammar standalone tokens -> REAL ImageConfig standalone semantics
+    # (mirrors check_cli's translation): rpi5's "standalone-desktop" role and
+    # frite/orangepi5/orangepizero2's "standalone" flavor are HARDWARE_CLASS
+    # spellings the builders reject outright, so a config JSON carrying them raw
+    # would only prove token-echoing. The real Studio posture is role=desktop /
+    # flavor=installer plus the standalone field (the HomePage checkbox ->
+    # --standalone); check_gui additionally proves the resulting command against
+    # the builder's own --print-plan for these rows.
+    if [ "${platform}" = rpi5 ] && [ "${role}" = standalone-desktop ]; then
+        gui_role=desktop; standalone=true
+    fi
+    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ]; } \
+       && [ "${flavor}" = standalone ]; then
+        gui_flavor=installer; standalone=true
+    fi
     case "${platform}" in
         rpi5)   mode=mesh
                 case "${role}" in backend) gui_role=be ;; frontend) gui_role=fe ;; esac ;;
@@ -463,15 +485,19 @@ gui_config_json() { # platform role env board flavor desktop -> stdout JSON
                     *)                         mode=mesh ;;
                 esac ;;
     esac
+    # a standalone-posture row is standalone MODE in the Studio (the wizard skips
+    # the keyzip/domains/users pages for it), whatever the platform
+    ${standalone} && mode=standalone
     printf '{"platform":"%s","role":"%s","mode":"%s","env":"%s"' \
         "${platform}" "${gui_role}" "${mode}" "${env}"
+    ${standalone} && printf ',"standalone":true'
     if [ "${platform}" = frite ]; then
-        printf ',"board":"%s","flavor":"%s","desktop":"%s"' "${board}" "${flavor}" "${desktop}"
+        printf ',"board":"%s","flavor":"%s","desktop":"%s"' "${board}" "${gui_flavor}" "${desktop}"
     elif [ "${platform}" = jetson ]; then
         # the jetson board axis (the GUI's Jetson board combo writes the same key)
         printf ',"board":"%s"' "${board}"
     elif [ "${platform}" = orangepi5 ]; then
-        printf ',"board":"%s","flavor":"%s"' "${board}" "${flavor}"
+        printf ',"board":"%s","flavor":"%s"' "${board}" "${gui_flavor}"
     elif [ "${platform}" = rpi5 ] && [ -n "${board}" ]; then
         # the rpi5 board axis (--board rpi4/rpi3; the rpi5-default rows have
         # board="" and correctly emit NO "board" key at all, same as an
@@ -479,16 +505,38 @@ gui_config_json() { # platform role env board flavor desktop -> stdout JSON
         # defaults to "" -> no --board flag, the builder's own rpi5 default).
         printf ',"board":"%s"' "${board}"
     elif [ "${platform}" = orangepizero2 ]; then
-        printf ',"flavor":"%s"' "${flavor}"
+        printf ',"flavor":"%s"' "${gui_flavor}"
     fi
     printf '}\n'
+}
+
+# Re-run a printed `--print-command` native command against the REAL builder with
+# --print-plan appended (drop the sudo prefix — planning needs no root). Proves
+# the whole emitted argv is builder-ACCEPTED, not merely token-present.
+gui_plan_from_command() { # printed-command-file plan-out-file
+    local cmdline
+    cmdline="$(head -n 1 "$1")"
+    cmdline="${cmdline#sudo }"
+    bash -c "cd '${REPO_DIR}' && ${cmdline} --print-plan" >"$2" 2>&1
 }
 
 check_gui() { # platform role env board flavor desktop
     local platform="$1" role="$2" env="$3" board="$4" flavor="$5" desktop="$6"
     local row="gui ${platform}/${role}/${env}${board:+ board=${board}}${flavor:+ flavor=${flavor}}${desktop:+ desktop=${desktop}}"
-    local builder out="${TMP_DIR}/gui.out" cfg="${TMP_DIR}/gui.json"
+    local builder out="${TMP_DIR}/gui.out" cfg="${TMP_DIR}/gui.json" plan="${TMP_DIR}/gui.plan"
     builder="$(builder_for "${platform}")"
+    # standalone-shaped rows assert the TRANSLATED (real-builder) vocabulary,
+    # exactly like check_cli's want_role/want_flavor — never the raw JOB token.
+    local want_role="${role}" want_flavor="${flavor}" standalone_probe=false
+    if [ "${platform}" = rpi5 ] && [ "${role}" = standalone-desktop ]; then
+        want_role="desktop"
+        standalone_probe=true
+    fi
+    if { [ "${platform}" = frite ] || [ "${platform}" = orangepi5 ] || [ "${platform}" = orangepizero2 ]; } \
+       && [ "${flavor}" = standalone ]; then
+        want_flavor="installer"
+        standalone_probe=true
+    fi
     gui_config_json "${platform}" "${role}" "${env}" "${board}" "${flavor}" "${desktop}" >"${cfg}"
     if ! (cd studio && "${PYTHON}" -m snapdragon_studio --print-command \
             --config "${cfg}" --backend native --generator-dir "${REPO_DIR}") >"${out}" 2>&1; then
@@ -499,20 +547,33 @@ check_gui() { # platform role env board flavor desktop
     grep -q -- "--env ${env}" "${out}" || miss+=" '--env ${env}'"
     if [ "${platform}" = frite ]; then
         grep -q -- "--board ${board}"     "${out}" || miss+=" '--board ${board}'"
-        grep -q -- "--flavor ${flavor}"   "${out}" || miss+=" '--flavor ${flavor}'"
+        grep -q -- "--flavor ${want_flavor}" "${out}" || miss+=" '--flavor ${want_flavor}'"
         grep -q -- "--desktop ${desktop}" "${out}" || miss+=" '--desktop ${desktop}'"
     elif [ "${platform}" = orangepi5 ]; then
         grep -q -- "--board ${board}"   "${out}" || miss+=" '--board ${board}'"
-        grep -q -- "--flavor ${flavor}" "${out}" || miss+=" '--flavor ${flavor}'"
+        grep -q -- "--flavor ${want_flavor}" "${out}" || miss+=" '--flavor ${want_flavor}'"
     elif [ "${platform}" = orangepizero2 ]; then
-        grep -q -- "--flavor ${flavor}" "${out}" || miss+=" '--flavor ${flavor}'"
+        grep -q -- "--flavor ${want_flavor}" "${out}" || miss+=" '--flavor ${want_flavor}'"
     else
-        grep -q -- "--role ${role}" "${out}" || miss+=" '--role ${role}'"
+        grep -q -- "--role ${want_role}" "${out}" || miss+=" '--role ${want_role}'"
         if [ "${platform}" = jetson ]; then
             grep -q -- "--board ${board}" "${out}" || miss+=" '--board ${board}'"
         fi
         if [ "${platform}" = rpi5 ] && [ -n "${board}" ]; then
             grep -q -- "--board ${board}" "${out}" || miss+=" '--board ${board}'"
+        fi
+    fi
+    if ${standalone_probe}; then
+        # the 8 JOB-grammar standalone rows used to pass VACUOUSLY here (raw
+        # tokens echoed, builder-rejected argv — live-proven): now require the
+        # real --standalone flag AND full builder --print-plan acceptance.
+        grep -q -- "--standalone" "${out}" || miss+=" '--standalone'"
+        if [ -z "${miss}" ]; then
+            if ! gui_plan_from_command "${out}" "${plan}"; then
+                miss+=" builder-rejected-argv(--print-plan rc!=0)"
+            else
+                grep -qx "PLAN_STANDALONE=true" "${plan}" || miss+=" PLAN_STANDALONE=true"
+            fi
         fi
     fi
     if [ -n "${miss}" ]; then
@@ -759,6 +820,243 @@ run_threading_checks() {
     done
 }
 
+# ── GUI→BUILDER flag-threading probes (GUITHR — the GUI channel's MENUTHR) ─────
+# One probe = config JSON -> `--print-command --backend native` -> assert every
+# expected token in the printed argv -> re-run that EXACT command against the
+# REAL builder with --print-plan appended and assert acceptance (plus PLAN_*
+# facts where the builder exposes one). Catches BOTH silent-drop (field never
+# reaches argv) and vacuous threading (emitted flag the builder would reject) —
+# the same live-proven failure class the standalone matrix rows had.
+# Expectation grammar: 'token'  must appear in the printed command
+#                      '!token' must NOT appear in the printed command
+#                      'PLAN:pat' / 'PLAN:!pat'  must (not) match the plan output
+GUITHR_EXPECTED=51   # fail-closed: keep in sync with the guithr call list below
+GUITHR_RUN=0
+
+guithr() { # NAME CFG-JSON EXPECT...
+    local name="$1" json="$2"; shift 2
+    local cfg="${TMP_DIR}/guithr.json" out="${TMP_DIR}/guithr.out" plan="${TMP_DIR}/guithr.plan"
+    GUITHR_RUN=$((GUITHR_RUN+1))
+    printf '%s\n' "${json}" >"${cfg}"
+    if ! (cd studio && "${PYTHON}" -m snapdragon_studio --print-command \
+            --config "${cfg}" --backend native --generator-dir "${REPO_DIR}") >"${out}" 2>&1; then
+        _fail GUITHR "${name}" "--print-command exited non-zero" "${out}"
+        THR_FAIL=$((THR_FAIL+1)); return
+    fi
+    local miss="" e
+    for e in "$@"; do
+        case "${e}" in
+            PLAN:*) ;;   # plan-side, checked after the plan run below
+            !*)     grep -q -- "${e#!}" "${out}" && miss+=" LEAKED:'${e#!}'" ;;
+            *)      grep -q -- "${e}" "${out}" || miss+=" '${e}'" ;;
+        esac
+    done
+    # ALWAYS prove builder acceptance — flag-present is not flag-accepted.
+    if [ -z "${miss}" ]; then
+        if ! gui_plan_from_command "${out}" "${plan}"; then
+            miss+=" builder-rejected-argv(--print-plan rc!=0)"
+            cat "${plan}" >>"${out}"   # surface the builder's error in the FAIL tail
+        else
+            for e in "$@"; do
+                case "${e}" in
+                    PLAN:!*) grep -q -- "${e#PLAN:!}" "${plan}" && miss+=" PLAN-LEAKED:'${e#PLAN:!}'" ;;
+                    PLAN:*)  grep -q -- "${e#PLAN:}" "${plan}" || miss+=" PLAN:'${e#PLAN:}'" ;;
+                esac
+            done
+        fi
+    fi
+    if [ -n "${miss}" ]; then
+        _fail GUITHR "${name}" "missing/mismatched:${miss}" "${out}"; THR_FAIL=$((THR_FAIL+1))
+    else
+        THR_PASS=$((THR_PASS+1))
+    fi
+}
+
+run_gui_threading_checks() {
+    # fixtures for flags whose values the builder existence-checks BEFORE the plan
+    local FIX="${TMP_DIR}/guithr-fix"
+    mkdir -p "${FIX}/keysusb/Keys"
+    printf '# matrix-probe brand profile (comment-only; CLI still wins)\n' >"${FIX}/brand.conf"
+    touch "${FIX}/keysusb/Keys/kernel_key.pem" "${FIX}/keysusb/Keys/kernel_key.der" \
+          "${FIX}/seedpkgs.list" "${FIX}/home.tar" "${FIX}/seedcode"
+
+    # ── x86 ──
+    guithr g1-cluster-domain-mesh-node \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","cluster_domain":"acme.example"}' \
+        '--cluster-domain acme.example' 'PLAN:^PLAN_CLUSTER_DOMAIN=acme.example$'
+    guithr g1-cluster-domain-cloud-client \
+        '{"platform":"x86","role":"desktop","mode":"cloud","env":"test","cluster_domain":"acme.example"}' \
+        '--cluster-domain acme.example' 'PLAN:^PLAN_CLUSTER_DOMAIN=acme.example$'
+    guithr g3-brand-profile-x86 \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","brand_profile":"'"${FIX}"'/brand.conf"}' \
+        "--config ${FIX}/brand.conf"
+    guithr g4-release-state-x86 \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","release_state":"public"}' \
+        '--release-state public'
+    guithr g6-games-domain-x86 \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","games_domain":"games.acme.example"}' \
+        '--games-domain games.acme.example'
+    guithr g18-person-role-and-domains \
+        '{"platform":"x86","role":"desktop","mode":"cloud","env":"test","person_role":"admin","domains":[{"name":"d.acme.example"}]}' \
+        '--person-role admin' '--domains d.acme.example' 'PLAN:^PLAN_PERSON_ROLE=admin$'
+    guithr g26-identity-x86 \
+        '{"platform":"x86","role":"standalone-thick","mode":"standalone","env":"test","hostname":"myhost","timezone":"America/New_York","user":"bob"}' \
+        '--hostname myhost' '--timezone America/New_York' '--user bob' 'PLAN:^PLAN_HOSTNAME=myhost$'
+    guithr g27-node-fallback-creds \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","user_password":"pw","root_password":"pw2"}' \
+        '--user-password pw' '--root-password pw2'
+    guithr g21-capable-composable \
+        '{"platform":"x86","role":"laptop","mode":"cloud","env":"test","capable":true}' \
+        '--capable' 'PLAN:capable=true'
+    guithr g22-unaffiliated-composable \
+        '{"platform":"x86","role":"standalone-thin","mode":"standalone","env":"test","unaffiliated":true}' \
+        '--unaffiliated' 'PLAN:^PLAN_UNAFFILIATED=true$'
+    guithr g29-mesh-pins-x86 \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","tailscale":true,"headscale_version":"0.23.0","tailscale_version":"1.60.0","skip_tailscale":true}' \
+        '--headscale-version 0.23.0' '--tailscale-version 1.60.0' '--skip-tailscale' \
+        'PLAN:^PLAN_MESH=headscale=0.23.0,tailscale=skip$'
+    guithr g33-nvidia-cuda \
+        '{"platform":"x86","role":"be+gpu","mode":"mesh","env":"test","gpu_driver":"nvidia","nvidia_cuda":true}' \
+        '--gpu-driver nvidia' '--nvidia-cuda' 'PLAN:^PLAN_CUDA=true$'
+    guithr g33-grub-theme \
+        '{"platform":"x86","role":"desktop","mode":"cloud","env":"test","grub_theme":"/tmp/gt"}' \
+        '--grub-theme /tmp/gt'
+    guithr g5-secure-boot-on \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","secure_boot":"on"}' \
+        '--secure-boot' 'PLAN:secure_boot=true'
+    guithr g5-secure-boot-off \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","secure_boot":"off"}' \
+        '--no-secure-boot' 'PLAN:secure_boot=false'
+    guithr g5-keys-usb-chain \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","keys_usb":"'"${FIX}"'/keysusb","secureboot_key":"'"${FIX}"'/keysusb/Keys/kernel_key.pem","secureboot_cert":"'"${FIX}"'/keysusb/Keys/kernel_key.der"}' \
+        "--keys-usb ${FIX}/keysusb" '--secureboot-key' '--secureboot-cert'
+    guithr g13-explicit-none-services \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","optional_services":["none"]}' \
+        "--optional-services ''" 'PLAN:^PLAN_OPTIONAL_SERVICES=none$'
+    guithr g14-all-services \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","optional_services":["all"]}' \
+        '--all-services' 'PLAN:^PLAN_OPTIONAL_SERVICES=.*akkoma'
+    guithr g14-exclude-services \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","optional_services":["all"],"exclude_services":["games","owncast"]}' \
+        "--exclude-services 'games owncast'" 'PLAN:!^PLAN_OPTIONAL_SERVICES=.*games'
+    guithr g23-x86-artifacts \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","build_img":"off","live_iso":"on","installer_iso":true,"build_tar":"on"}' \
+        '--no-img' '--live-iso' '--installer-iso' '--tar' \
+        'PLAN:^PLAN_ARTIFACTS=stage4.tar.xz,live.iso,installer.iso,fs.tar.xz$'
+    guithr g25-grow-x86 \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","grow":"16G"}' \
+        '--grow 16G' 'PLAN:grow=16g'
+    guithr g31-home-extras \
+        '{"platform":"x86","role":"standalone-thick","mode":"standalone","env":"test","home_seed_code_from":"'"${FIX}"'/seedcode","include_home_archive":"'"${FIX}"'/home.tar","seed_packages_from":"'"${FIX}"'/seedpkgs.list"}' \
+        '--home-seed-code-from' '--include-home-archive' '--seed-packages-from'
+    guithr g32-media-data-set \
+        '{"platform":"x86","role":"standalone-thick","mode":"standalone","env":"test","media_data":"off","media_label":"DATA","no_vaults":true}' \
+        '--no-media-data' '--media-label DATA' '--no-vaults' 'PLAN:media_data=false'
+    guithr g34-force-off-tristates \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","aide":"off","tor_onion_service":"off","character_studio":"off","edge_ai_service":"off"}' \
+        '--no-aide' '--no-tor' '--no-character-studio' '--no-edge-ai'
+    guithr g30-image-stamps \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","release_tag":"rc1","version":"1.2.3"}' \
+        '--release-tag rc1' '--version 1.2.3'
+    guithr g38-plumbing-x86 \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","skip_kernel":true,"skip_clean":true,"distdir":"/tmp","build_subdir":"sub","seed_url":"http://s/x"}' \
+        '--skip-kernel' '--skip-clean' '--distdir /tmp' '--build-subdir sub' '--seed-url http://s/x'
+    guithr g2-headscale-url-env-passthrough \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","headscale_url":"https://hs.acme.example"}' \
+        'env HEADSCALE_URL=https://hs.acme.example' '!--headscale-url'
+
+    # ── rpi5 ──
+    guithr g4-release-state-rpi5 \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","release_state":"public"}' \
+        '--role backend' '--release-state public'
+    guithr g6-games-domain-rpi5 \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","games_domain":"games.acme.example"}' \
+        '--games-domain games.acme.example'
+    guithr g15-infra-slugs-rpi5 \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","optional_services":["tor","egress-vpn"]}' \
+        "--optional-services 'tor egress-vpn'" 'PLAN:^PLAN_OPTIONAL_SERVICES=.*tor'
+    guithr g13-explicit-none-rpi5 \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","optional_services":["none"]}' \
+        "--optional-services ''" 'PLAN:^PLAN_OPTIONAL_SERVICES=none$'
+    guithr g24-rpi5-iso-tar \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","build_iso":true,"build_tar":"on"}' \
+        '--iso' '--tar' 'PLAN:^PLAN_ARTIFACTS=stage4.tar.xz,img,iso,fs.tar.xz$'
+    guithr g24-rpi5-sd-only \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","sd_only":true,"skip_iso":true,"build_img":"off"}' \
+        '--sd-only' '--skip-iso' '--no-img' 'PLAN:sd_only=true'
+    guithr g37-rpi5-kernel-board-overrides \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","dtb_prefix":"bcm2712","kernel_img":"Image","pcie_gen3":true,"cpu":"cortex-a76","defconfig":"foo_defconfig"}' \
+        '--dtb-prefix bcm2712' '--kernel-img Image' '--pcie-gen3' '--cpu cortex-a76' '--defconfig foo_defconfig' \
+        'PLAN:pcie_gen3=true'
+    guithr g28-local-user-without-standalone \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","local_user":"alice"}' \
+        '--local-user alice' '!--standalone' 'PLAN:^PLAN_LOCAL_USER=alice$' 'PLAN:^PLAN_STANDALONE=false$'
+    guithr g26-identity-rpi5 \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","hostname":"myhost","timezone":"America/New_York","user":"bob"}' \
+        '--hostname myhost' '--timezone America/New_York' '--user bob' 'PLAN:^PLAN_HOSTNAME=myhost$'
+    guithr g29-mesh-pins-rpi5 \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","tailscale":true,"headscale_version":"0.23.0","tailscale_version":"1.60.0","skip_tailscale":true}' \
+        '--headscale-version 0.23.0' '--tailscale-version 1.60.0' '--skip-tailscale' \
+        'PLAN:^PLAN_MESH=headscale=0.23.0,tailscale=skip$'
+    guithr g38-plumbing-rpi5 \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","extra_packages":"app-editors/vim","build_subdir":"sub","seed_url":"http://s/x","version":"1.2.3","skip_kernel":true,"skip_clean":true}' \
+        '--extra-packages app-editors/vim' '--build-subdir sub' '--seed-url http://s/x' '--version 1.2.3' '--skip-kernel' '--skip-clean'
+    guithr g25-grow-rpi5 \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","grow":"none"}' \
+        '--grow none' 'PLAN:grow=none'
+
+    # ── frite ──
+    guithr g35-uboot-chain-frite \
+        '{"platform":"frite","role":"frite","mode":"cloud","env":"test","uboot_url":"https://x/u.bin","uboot_defconfig":"foo_defconfig"}' \
+        '--uboot-url https://x/u.bin' '--uboot-defconfig foo_defconfig'
+    guithr g35-skip-uboot-frite \
+        '{"platform":"frite","role":"frite","mode":"cloud","env":"test","skip_uboot":true}' \
+        '--skip-uboot'
+    guithr g37-frite-dtb-cpu \
+        '{"platform":"frite","role":"frite","mode":"cloud","env":"test","dtb":"meson.dtb","cpu":"cortex-a53"}' \
+        '--dtb meson.dtb' '--cpu cortex-a53'
+    guithr g24-image-only-frite \
+        '{"platform":"frite","role":"frite","mode":"cloud","env":"test","image_only":true}' \
+        '--image-only'
+    guithr g3-brand-profile-frite \
+        '{"platform":"frite","role":"frite","mode":"cloud","env":"test","brand_profile":"'"${FIX}"'/brand.conf"}' \
+        "--config ${FIX}/brand.conf"
+
+    # ── jetson ──
+    guithr g36-jetson-kernel-flavor \
+        '{"platform":"jetson","role":"edge_ai","mode":"mesh","env":"test","kernel_flavor":"l4t"}' \
+        '--kernel-flavor l4t' 'PLAN:^PLAN_KERNEL_FLAVOR=l4t$'
+    guithr g24-jetson-no-img \
+        '{"platform":"jetson","role":"edge_ai","mode":"mesh","env":"test","build_img":"off"}' \
+        '--no-img' 'PLAN:^PLAN_ARTIFACTS=stage4.tar.xz$'
+    guithr g37-jetson-overrides \
+        '{"platform":"jetson","role":"edge_ai","mode":"mesh","env":"test","dtb":"tegra234.dtb","cpu":"cortex-a78","defconfig":"foo_defconfig"}' \
+        '--dtb tegra234.dtb' '--cpu cortex-a78' '--defconfig foo_defconfig' 'PLAN:^PLAN_DTB=tegra234.dtb$'
+
+    # ── orangepi5 ──
+    guithr g35-uboot-opi5 \
+        '{"platform":"orangepi5","role":"orangepi5","mode":"cloud","env":"test","uboot_url":"https://x/u.bin","dtb":"rk3588.dtb"}' \
+        '--uboot-url https://x/u.bin' '--dtb rk3588.dtb'
+    guithr g24-g25-opi5-artifacts-grow \
+        '{"platform":"orangepi5","role":"orangepi5","mode":"cloud","env":"test","image_only":true,"grow":"fill"}' \
+        '--image-only' '--grow fill'
+
+    # ── orangepizero2 ──
+    guithr g35-uboot-opz2 \
+        '{"platform":"orangepizero2","role":"orangepizero2","mode":"cloud","env":"test","uboot_defconfig":"foo_defconfig","skip_uboot":true,"dtb":"sun50i.dtb"}' \
+        '--uboot-defconfig foo_defconfig' '--skip-uboot' '--dtb sun50i.dtb'
+    guithr g26-identity-opz2 \
+        '{"platform":"orangepizero2","role":"orangepizero2","mode":"cloud","env":"test","hostname":"myhost","timezone":"America/New_York","user":"bob"}' \
+        '--hostname myhost' '--timezone America/New_York' '--user bob'
+
+    # fail-closed completeness: a skipped/miscounted probe list is a failure,
+    # never silently fewer checks (mirrors the MENUTHR shortfall accounting).
+    if [ "${GUITHR_RUN}" -ne "${GUITHR_EXPECTED}" ]; then
+        _fail GUITHR "completeness" "ran ${GUITHR_RUN}/${GUITHR_EXPECTED} probes — update GUITHR_EXPECTED alongside the probe list"
+        THR_FAIL=$((THR_FAIL+1))
+    fi
+}
+
 # ── negative checks: bad cells must FAIL loudly ─────────────────────────────────
 expect_fail() { # NAME cmd...
     local name="$1"; shift
@@ -826,6 +1124,96 @@ run_negative_checks() {
             --config "${TMP_DIR}/neg.json" --backend native --generator-dir "${REPO_DIR}"
 }
 
+# ── GUI per-platform gating probes (the G10/G12 silent-drop class) ──────────────
+# An x86-only field set on an ARM config must emit NO flag at all (the builder
+# would exit "Unknown option" on it — the exact silent-drop class the capability
+# table exists to prevent), and the jetson encrypt-root/standalone hard-blocks
+# must fail --print-command loudly, mirroring the builder's own contract.
+gui_gate() { # NAME CFG-JSON FLAG-THAT-MUST-BE-ABSENT...
+    local name="$1" json="$2"; shift 2
+    local cfg="${TMP_DIR}/guigate.json" out="${TMP_DIR}/guigate.out"
+    printf '%s\n' "${json}" >"${cfg}"
+    if ! (cd studio && "${PYTHON}" -m snapdragon_studio --print-command \
+            --config "${cfg}" --backend native --generator-dir "${REPO_DIR}") >"${out}" 2>&1; then
+        _fail GUIGATE "${name}" "--print-command exited non-zero (gating must DROP, not crash)" "${out}"
+        NEG_FAIL=$((NEG_FAIL+1)); return
+    fi
+    local miss="" f
+    for f in "$@"; do
+        grep -q -- "${f}" "${out}" && miss+=" LEAKED:'${f}'"
+    done
+    if [ -n "${miss}" ]; then
+        _fail GUIGATE "${name}" "x86-only flag leaked onto an ARM command:${miss}" "${out}"
+        NEG_FAIL=$((NEG_FAIL+1))
+    else
+        NEG_PASS=$((NEG_PASS+1))
+    fi
+}
+
+run_gui_gating_checks() {
+    gui_gate "rpi5: steam is x86-only" \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","steam":"native"}' \
+        '--steam'
+    gui_gate "rpi5: gpu-driver is x86-only" \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","gpu_driver":"nvidia"}' \
+        '--gpu-driver'
+    gui_gate "rpi5: edge-AI set is x86-only" \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","edge_ai_service":"on","edge_ai_runtime":"vllm"}' \
+        '--with-edge-ai' '--edge-ai-runtime'
+    gui_gate "rpi5: u-boot chain is frite/opi5/opz2-only" \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","uboot_url":"https://x/u.bin","skip_uboot":true}' \
+        '--uboot-url' '--skip-uboot'
+    gui_gate "frite: secure-boot family is x86-only" \
+        '{"platform":"frite","role":"frite","mode":"cloud","env":"test","secure_boot":"on","keys_usb":"/tmp/keys"}' \
+        '--secure-boot' '--keys-usb'
+    gui_gate "frite: node fallback creds are x86-only" \
+        '{"platform":"frite","role":"frite","mode":"cloud","env":"test","user_password":"pw","root_password":"pw2"}' \
+        '--user-password' '--root-password'
+    gui_gate "frite: release-tag/distdir are x86-only" \
+        '{"platform":"frite","role":"frite","mode":"cloud","env":"test","release_tag":"rc1","distdir":"/tmp"}' \
+        '--release-tag' '--distdir'
+    gui_gate "jetson: services/games are x86+rpi5-only" \
+        '{"platform":"jetson","role":"edge_ai","mode":"mesh","env":"test","optional_services":["akkoma"],"enable_games":true}' \
+        '--optional-services' '--enable-games'
+    gui_gate "orangepi5: cluster plane is x86+rpi5-only" \
+        '{"platform":"orangepi5","role":"orangepi5","mode":"cloud","env":"test","release_state":"public","games_domain":"games.acme.example"}' \
+        '--release-state' '--games-domain'
+    gui_gate "orangepizero2: branding assets are x86-only" \
+        '{"platform":"orangepizero2","role":"orangepizero2","mode":"cloud","env":"test","theme":"boogiepop","wallpaper":"/tmp/w.png","brand_locked":true}' \
+        '--theme' '--wallpaper' '--brand-locked'
+    # jetson encrypt-root/standalone: HARD-FAIL, not silent drop — the Orin's
+    # single boot+root partition cannot boot LUKS2-encrypted (by design).
+    printf '{"platform":"jetson","role":"edge_ai","mode":"mesh","env":"test","encrypt_root":true}\n' >"${TMP_DIR}/jet-enc.json"
+    expect_fail "gui: jetson encrypt-root hard-blocked" \
+        env -C "${REPO_DIR}/studio" "${PYTHON}" -m snapdragon_studio --print-command \
+            --config "${TMP_DIR}/jet-enc.json" --backend native --generator-dir "${REPO_DIR}"
+    printf '{"platform":"jetson","role":"jetson-desktop","mode":"standalone","env":"test","standalone":true}\n' >"${TMP_DIR}/jet-sa.json"
+    expect_fail "gui: jetson standalone hard-blocked" \
+        env -C "${REPO_DIR}/studio" "${PYTHON}" -m snapdragon_studio --print-command \
+            --config "${TMP_DIR}/jet-sa.json" --backend native --generator-dir "${REPO_DIR}"
+}
+
+# ── builder-flag coverage differ (tests/build-matrix/flag-coverage.sh) ──────────
+# Diffs every builder's parsed arg surface against the Studio's real per-platform
+# emission (PLATFORM_FIELD_SUPPORT-driven): 6 forward checks (every parsed flag
+# fielded or documented-out-of-scope) + 6 reverse checks (every emitted flag
+# parsed). FAIL-CLOSED: 12 expected, shortfall = failures.
+COV_PASS=0; COV_FAIL=0
+run_flag_coverage() {
+    local out="${TMP_DIR}/flagcov.out"
+    bash "${TEST_DIR}/flag-coverage.sh" >"${out}" 2>&1
+    local rc=$? cpass
+    cpass=$(grep -c '^FLAGCOV PASS' "${out}" || true)
+    COV_PASS=$((COV_PASS + cpass))
+    COV_FAIL=$((COV_FAIL + 12 - cpass))
+    if [ ${rc} -ne 0 ] && [ "${cpass}" -eq 12 ]; then
+        # rc!=0 with all 12 sections passing = the script itself broke — fail loudly
+        _fail FLAGCOV "script" "flag-coverage.sh exited ${rc}" "${out}"
+        COV_FAIL=$((COV_FAIL+1))
+    fi
+    grep '^FLAGCOV FAIL' "${out}" >&2 || true
+}
+
 # ── walk the matrix ─────────────────────────────────────────────────────────────
 [ -f "${MATRIX}" ] || { echo "matrix.tsv not found at ${MATRIX}" >&2; exit 1; }
 
@@ -844,10 +1232,13 @@ done < "${MATRIX}"
 run_menu_channel
 run_job_channel
 run_threading_checks
+run_gui_threading_checks
 run_negative_checks
+run_gui_gating_checks
+run_flag_coverage
 
-TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS))
-TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL))
+TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS))
+TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL))
 
 # COMPLETENESS gate (fail-closed): every channel must have PASSED every matrix
 # row — not merely "no failures". This catches the silent-skip class of hole
@@ -873,5 +1264,6 @@ printf  'GUI  (--print-command): %3d passed, %d failed\n' "${GUI_PASS}"  "${GUI_
 printf  'JOB  (build-image.sh):  %3d passed, %d failed\n' "${JOB_PASS}"  "${JOB_FAIL}"
 printf  'THRD (flag threading):  %3d passed, %d failed\n' "${THR_PASS}"  "${THR_FAIL}"
 printf  'NEG  (must-fail):       %3d passed, %d failed\n' "${NEG_PASS}"  "${NEG_FAIL}"
+printf  'COVG (flag coverage):   %3d passed, %d failed\n' "${COV_PASS}"  "${COV_FAIL}"
 printf  'TOTAL:                  %3d passed, %d failed\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"
 [ "${TOTAL_FAIL}" -eq 0 ] && [ "${ROWS}" -gt 0 ] && [ "${CH_SHORT}" -eq 0 ]

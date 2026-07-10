@@ -1,5 +1,7 @@
-"""Wizard GUI behavior — mode-gated page flow, the tri-state proxy stack, and the
-BuildPage ISO/finish widgets (img-size / cached / live-toram / bundle-source).
+"""Wizard GUI behavior — mode-gated page flow, the tri-state proxy stack, the
+BuildPage ISO/finish widgets (img-size / cached / live-toram / bundle-source),
+and the per-platform capability greying (gui/pages/_gating.py: x86-only widgets
+disabled + cleared on ARM platforms instead of silently dropping their values).
 
 Runs the REAL wizard on Qt's offscreen platform (no display needed) and is skipped
 whole when no Qt binding is installed — the rest of the suite stays pure-core.
@@ -17,7 +19,8 @@ pytest.importorskip("snapdragon_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
 from snapdragon_studio.core.config import (   # noqa: E402  (after the importorskip gate)
-    MODE_SKIPPED_PAGES, UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS,
+    MODE_SKIPPED_PAGES, OPTIONAL_SERVICES_CHOICES, ROLE_CHOICES, UNAFFILIATED_ROLE,
+    WIZARD_PAGE_SLUGS,
 )
 from snapdragon_studio.core.local_login_agent import load_manifest  # noqa: E402
 from snapdragon_studio.core.platform_info import HostInfo
@@ -92,6 +95,14 @@ def pick_role(wiz, role):
     raise AssertionError(f"role {role} not offered on RolePage")
 
 
+def pick_platform(role_page, plat):
+    for i in range(role_page.platform.count()):
+        if role_page.platform.itemData(i) == plat:
+            role_page.platform.setCurrentIndex(i)
+            return
+    raise AssertionError(f"platform {plat} not offered for this role")
+
+
 # ---- page catalog / slug map --------------------------------------------------
 
 def test_page_slugs_map_to_the_right_pages(wiz):
@@ -101,8 +112,8 @@ def test_page_slugs_map_to_the_right_pages(wiz):
               "role": wizard_mod.RolePage, "hardware": wizard_mod.HardwarePage,
               "branding": wizard_mod.BrandingPage, "network": wizard_mod.NetworkPage,
               "keyzip": wizard_mod.KeyZipPage, "domains": wizard_mod.DomainsPage,
-              "users": wizard_mod.UsersPage, "home": wizard_mod.HomePage,
-              "build": wizard_mod.BuildPage}
+              "users": wizard_mod.UsersPage, "system": wizard_mod.SystemPage,
+              "home": wizard_mod.HomePage, "build": wizard_mod.BuildPage}
     assert set(expect) == set(WIZARD_PAGE_SLUGS)
     for slug, cls in expect.items():
         assert type(wiz.page(wiz._page_ids[slug])) is cls
@@ -184,8 +195,9 @@ def test_rpi5_orangepi5_orangepizero2_boxes_mutually_exclusive(wiz):
 # ---- mode-gated page flow ------------------------------------------------------
 
 def test_standalone_flow_skips_admin_pages(wiz):
-    """standalone: Welcome→Mode→Role→Hardware→Branding→Network→Home→Build — the
-    key-zip and superadmin domains/users pages are never routed through."""
+    """standalone: Welcome→Mode→Role→Hardware→Branding→Network→System→Home→Build —
+    the key-zip and superadmin domains/users pages are never routed through (the
+    system-identity page is visited in EVERY mode)."""
     seen = []
     for _ in range(len(WIZARD_PAGE_SLUGS)):
         seen.append(type(wiz.currentPage()).__name__)
@@ -193,7 +205,8 @@ def test_standalone_flow_skips_admin_pages(wiz):
             break
         wiz.next()
     assert seen == ["WelcomePage", "ModePage", "RolePage", "HardwarePage",
-                    "BrandingPage", "NetworkPage", "HomePage", "BuildPage"]
+                    "BrandingPage", "NetworkPage", "SystemPage", "HomePage",
+                    "BuildPage"]
     for skipped_slug in MODE_SKIPPED_PAGES["standalone"]:
         assert not wiz.hasVisitedPage(wiz._page_ids[skipped_slug])
 
@@ -359,6 +372,191 @@ def test_buildpage_iso_knobs_grey_out_off_x86(wiz):
     for flag in ("--cached", "--uncached", "--live-toram", "--no-live-toram",
                  "--bundle-source", "--no-bundle-source"):
         assert flag not in args
+
+
+# ---- per-platform capability gating (G10/G11/G12/G16) --------------------------
+# The wizard used to gate widgets by MODE while config.py emits flags by PLATFORM,
+# so ~24 x86-only widgets sat un-greyed on ARM and silently dropped their values.
+# gui/pages/_gating.py now greys them per the capability table and clears the
+# config field on Next; these tests pin both halves plus the G16 inversion
+# (services gate on capability, not mode).
+
+def test_network_x86_only_widgets_grey_and_clear_on_arm_cloud(wiz):
+    """G10/G12: a frite cloud build shows every x86-only network widget greyed
+    (SSO not force-checked into a silently-dropped flag) and clears loaded/stale
+    values on Next instead of stranding them into save() or the argv."""
+    c = wiz.cfg
+    c.mode = "cloud"; c.role = "frite"; c.platform = "frite"
+    c.sso = True; c.egress_vpn = "/tmp/egress.conf"; c.aide = True
+    c.proxy_stack = "on"; c.tor_onion_service = True; c.edge_ai_service = True
+    c.optional_services = ["akkoma"]; c.enable_games = True; c.character_studio = True
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    for w in (net.sso, net.egress_row, net.egress_locked, net.proxy_stack,
+              net.snort, net.aide, net.edge_ai_box, net.tor_onion,
+              net.character_studio, net.services_box, net.games):
+        assert not w.isEnabled(), w
+    assert not net.sso.isChecked()      # cloud force-check suppressed off-x86
+    assert net.tailscale.isEnabled()    # all-platform knobs stay live
+    assert net.root_login.isEnabled()
+    advance_to(wiz, wizard_mod.KeyZipPage)   # Next past Network collects + clears
+    assert c.sso is False and c.egress_vpn == "" and c.aide is False
+    assert c.proxy_stack == "auto" and c.tor_onion_service is False
+    assert c.edge_ai_service is False and c.character_studio is False
+    assert c.optional_services == [] and c.enable_games is False
+    args = c.to_cli_args()
+    for flag in ("--with-sso", "--egress-vpn", "--with-aide", "--proxy-stack",
+                 "--with-tor", "--with-edge-ai", "--with-character-studio",
+                 "--optional-services", "--enable-games"):
+        assert flag not in args
+
+
+def test_network_widgets_reenable_on_switch_back_to_x86(wiz):
+    """The grey-out must not be sticky: frite → back → an x86 cloud role restores
+    the widgets (including the cloud SSO force-check)."""
+    pick_mode(wiz, "cloud")
+    pick_role(wiz, "frite")
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.sso.isEnabled()
+    back_to(wiz, wizard_mod.RolePage)
+    pick_role(wiz, "desktop")
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.sso.isEnabled() and net.sso.isChecked()
+    for w in (net.egress_row, net.egress_locked, net.proxy_stack, net.snort,
+              net.aide, net.edge_ai_box, net.tor_onion, net.character_studio,
+              net.services_box, net.games):
+        assert w.isEnabled(), w
+
+
+def test_standalone_rpi5_generic_reaches_services_and_games(wiz):
+    """G16: the services/games/character-studio boxes gate on platform CAPABILITY,
+    not mode — rpi5 emits --optional-services/--enable-games/--with-character-studio
+    on every role, and 'generic' (the only standalone rpi5 role) must reach them."""
+    pick_role(wiz, "generic")            # standalone mode (default), platform rpi5
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.services_box.isVisible() and net.services_box.isEnabled()
+    assert net.games.isEnabled() and net.character_studio.isEnabled()
+    assert not net.edge_ai_box.isVisible()   # node-only boxes stay mode-gated
+    assert not net.tor_onion.isVisible()
+    net.services.item(0).setCheckState(Qt.CheckState.Checked)
+    net.games.setChecked(True)
+    net.character_studio.setChecked(True)
+    advance_to(wiz, wizard_mod.HomePage)
+    args = wiz.cfg.to_cli_args()
+    assert ("--optional-services", OPTIONAL_SERVICES_CHOICES[0]) in zip(args, args[1:])
+    assert "--enable-games" in args and "--with-character-studio" in args
+
+
+@pytest.mark.parametrize("role", ["frite", "orangepi5", "orangepizero2"])
+def test_services_box_greyed_on_non_rpi5_arm_clients(wiz, role):
+    """G12: the cluster services/games/character-studio controls stay visible but
+    grey on the ARM platforms whose builders don't parse the flags."""
+    pick_mode(wiz, "cloud")
+    pick_role(wiz, role)
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.services_box.isVisible() and not net.services_box.isEnabled()
+    assert not net.games.isEnabled() and not net.character_studio.isEnabled()
+
+
+def test_jetson_mesh_edge_ai_box_greys_out(wiz):
+    """G11 (adopted decision: grey out, do not extend the jetson builder): the
+    edge_ai role on jetson shows the mesh edge-AI box disabled — NOT force-checked
+    — and emits no edge-AI flags (build-jetson-stage4.sh parses none of them)."""
+    pick_mode(wiz, "mesh")
+    page = pick_role(wiz, "edge_ai")
+    pick_platform(page, "jetson")
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.edge_ai_box.isVisible()        # mesh mode still shows the box
+    assert not net.edge_ai_box.isEnabled()    # …but jetson can't take the flags
+    assert not net.edge_ai.isChecked()        # role auto-check suppressed
+    assert not net.services_box.isEnabled()   # G12 covers jetson too
+    net.edge_ai_models.setText("llama3.2:3b")  # a stale/loaded value…
+    advance_to(wiz, wizard_mod.KeyZipPage)
+    assert wiz.cfg.edge_ai_service is False and wiz.cfg.edge_ai_models == ""
+    args = wiz.cfg.to_cli_args()
+    assert not any(a.startswith("--with-edge-ai") or a.startswith("--edge-ai")
+                   for a in args)
+
+
+def test_branding_form_greys_and_clears_on_arm(wiz):
+    """G10: branding assets are x86-only emission — the whole form greys on an ARM
+    platform (without the unaffiliated note, which is a ROLE message) and the
+    fields clear on Next; switching back to an x86 role re-enables the form."""
+    c = wiz.cfg
+    c.mode = "mesh"; c.role = "rpi5-desktop"; c.platform = "rpi5"
+    c.theme = "boogiepop"; c.wallpaper = "/tmp/w.png"; c.brand_locked = True
+    wiz.restart()
+    page = advance_to(wiz, wizard_mod.BrandingPage)
+    assert not page.form.isEnabled()
+    assert not page.unaffiliated_note.isVisible()
+    advance_to(wiz, wizard_mod.NetworkPage)
+    assert c.theme == "" and c.wallpaper == "" and c.brand_locked is False
+    args = c.to_cli_args()
+    assert "--theme" not in args and "--wallpaper" not in args and "--brand-locked" not in args
+    back_to(wiz, wizard_mod.RolePage)
+    pick_role(wiz, "omnibus")
+    page = advance_to(wiz, wizard_mod.BrandingPage)
+    assert page.form.isEnabled()
+
+
+def test_hardware_gpu_and_kernel_builtin_grey_on_arm(wiz):
+    """G10: --gpu-driver/--kernel-builtin are x86-only; Wi-Fi/Bluetooth are
+    all-platform and must keep flowing to the argv."""
+    c = wiz.cfg
+    c.gpu_driver = "nvidia"; c.kernel_builtin = True
+    pick_role(wiz, "generic")            # standalone rpi5
+    hw = advance_to(wiz, wizard_mod.HardwarePage)
+    assert not hw.gpu.isEnabled() and not hw.builtin.isEnabled()
+    assert hw.wifi.isEnabled() and hw.bt.isEnabled()
+    hw.wifi.setChecked(True)
+    advance_to(wiz, wizard_mod.BrandingPage)
+    assert c.gpu_driver == "auto" and c.kernel_builtin is False
+    assert c.enable_wifi is True
+    args = c.to_cli_args()
+    assert "--gpu-driver" not in args and "--kernel-builtin" not in args
+    assert "--enable-wifi" in args
+
+
+@pytest.mark.skipif(
+    "frite" not in {r for r, _, _ in ROLE_CHOICES["standalone"]},
+    reason="standalone ARM catalog entries (G17) not landed in ROLE_CHOICES yet")
+def test_standalone_frite_role_flows_with_capability_gating(wiz):
+    """G17 page-flow side: the new standalone frite catalog entry rides the normal
+    standalone flow (admin pages skipped), shows the frite board box, and gets the
+    same capability greying a cloud frite build does (services/SSO/branding off)."""
+    page = pick_role(wiz, "frite")           # standalone mode (default)
+    assert page.frite_box.isVisible() and not page.client_box.isVisible()
+    branding = advance_to(wiz, wizard_mod.BrandingPage)
+    assert not branding.form.isEnabled()     # x86-only branding assets greyed
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.sso.isEnabled()
+    assert net.services_box.isVisible() and not net.services_box.isEnabled()
+    advance_to(wiz, wizard_mod.HomePage)     # standalone: keyzip/domains/users skipped
+    for skipped_slug in MODE_SKIPPED_PAGES["standalone"]:
+        assert not wiz.hasVisitedPage(wiz._page_ids[skipped_slug])
+    assert wiz.cfg.platform == "frite" and wiz.cfg.mode == "standalone"
+    assert "./build-frite-stage4.sh" in wiz.cfg.to_command_string()
+
+
+def test_home_provisioning_greys_and_clears_on_arm(wiz):
+    """G10: home_* provisioning is x86-only (like the unlock combos, which keep
+    their original gating through the shared helper); the local-login group and
+    encrypt-root stay live — they land on every platform."""
+    c = wiz.cfg
+    c.mode = "mesh"; c.role = "be"; c.platform = "rpi5"
+    c.home_mode = "adopt"; c.home_device = "LABEL=home"
+    c.home_encrypted = True; c.home_seed_code = "stack"
+    wiz.restart()
+    home = advance_to(wiz, wizard_mod.HomePage)
+    for w in (home.mode, home.device, home.backup_row, home.encrypted, home.seed,
+              home.unlock_keyfile, home.unlock_yubikey):
+        assert not w.isEnabled(), w
+    assert home.standalone.isEnabled() and home.local_user.isEnabled()
+    assert home.encrypt_root.isEnabled() and home.luks_pass.isEnabled()
+    advance_to(wiz, wizard_mod.BuildPage)
+    assert c.home_mode == "create" and c.home_device == ""
+    assert c.home_encrypted is False and c.home_seed_code == "none"
+    assert not any(a.startswith("--home-") for a in c.to_cli_args())
 
 
 # ---- KeyZipPage: opt-in passwordless-login roles emission ---------------------
