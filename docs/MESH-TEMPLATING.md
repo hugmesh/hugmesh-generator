@@ -289,3 +289,91 @@ from the exemplar outside the anchored regions. GREEN on a fresh base, RED on dr
 ### Node-not-root
 Unchanged, now applied per-repo across the full set: `render-recipe.js`,
 `render-tenant-set.js`, `validate-archetype.js` are BUILD-HOST ONLY.
+
+# Phase 6 — hardening the ROOT mesh-node reconcile RENDER path
+
+The root cron `specs/usr/sbin/snapdragon-domain-reconcile` fetches a SIGNED
+(#118, Ed25519 + strict-monotonic) cross-domain export, synthesises a transient
+brand profile per entry, and drives the generator **as root**. The signature
+proves AUTHENTICITY, **not CONTENT** — a malicious-but-authentic export is the
+primary threat. Phase 6 makes the render path fail closed.
+
+## Fail-closed emit gate (quarantine → scan → promote)
+`render_brand_repos()` no longer writes into the published `OUT_DIR`. Each entry:
+1. renders into a per-run **QUARANTINE** `OUT_DIR/.staging/<brand>-gitops`
+   (still inside the root-owned `CACHE_DIR` containment; nothing durable yet);
+2. is gated by the node-free **emit-time secret scanner**
+   (`scripts/secret-scan.sh`, seam `DR_SECRET_SCAN`) — a **HARD** gate: a finding
+   OR a missing scanner OR a generator non-zero **purges** the staging tree and
+   sets the run-level `_DR_EMIT_FAILED`;
+3. only a scanned-**clean** tree is atomically **promoted** (`mv`) to
+   `OUT_DIR/<brand>-gitops`.
+
+`main()` then reads `_DR_EMIT_FAILED` **before** the ack writeback and **before**
+the durable marker: on any content failure it skips `writeback_acks` entirely,
+`report_state quarantined`, and exits non-zero — so **no ack POST fires** and
+`ack_generation()` is unreachable on the failure branch.
+
+## Marker ordering
+`commit_cache()` now swaps ONLY `export.json` (the keep-last-good bytes). The
+`last-good-generation` **FLOOR bump** (the durable monotonic rollback MARKER) is
+split into `commit_generation_floor()` and **deferred** to AFTER a clean emit+scan
+of all entries. A malicious-but-authentic export that fails the content gate
+therefore raises **no** durable marker; the admin-bff can re-issue a corrected
+export at the same or a higher generation.
+
+## Every export field is hostile
+`entry_fields_ok()` (reconcile) + the generator's own DNS-label/DNS-name/URL/
+single-line/length guards + the token classifier (denylist + frozen
+`snapdragon.systems/*` / `X-Snapdragon-Local` constants) validate every field.
+`BRAND_TITLE` now also **rejects braces** (`{` `}`) to kill second-order
+`{{TOKEN}}` template re-expansion. A DoS cap (`DR_MAX_ENTRIES`, default 256)
+refuses a huge `entries[]` before the render loop can fork.
+
+## Containment
+`generate-brand-repos.sh` anchors `<brand>-gitops` under `OUT_DIR` via
+`realpath -m` prefix-match before any `rm -rf`/`mkdir`; the Phase 6 quarantine dir
+and the promote `mv` reuse the same idiom (`_dr_realpath_under`). `gen-keystores.sh`
+gains the **matching** realpath containment for `OUT/certs/<brand>` and
+`OUT/keystores/<brand>` (previously DNS-label validation only). **Invariant:**
+`OUT_DIR` is root-owned and must not be group/other-writable — `realpath -m`
+follows existing symlinks, so the containment depends on the attacker not being
+able to plant a symlink under the root-owned base. Real filesystem-perms /
+UID-0-cron enforcement is a **deferred-to-real-root** check.
+
+## HARD RULE — no network during render
+The root-cron render must **never** pull/clone. The only network op is
+`fetch_export()` (curl over mTLS), strictly BEFORE any render. **Tier-2 bases are
+pre-staged offline at provision time.** Enforcement:
+* the render is pinned to **ENGINE=sed** — `render_brand_repos` invokes
+  `generate-brand-repos.sh` **without** `--engine` (the `handlebars` path execs
+  Node, which must never run as root here); the synthesised profile never sets
+  `ENGINE`;
+* `OFFLINE=1` is exported for the render subshell so any future/refactored base
+  resolution (`pull-repo-base.sh` honours `OFFLINE=1`) **fails closed** instead of
+  fetching;
+* **belt-and-suspenders / deferred:** a real network jail on the render subprocess
+  (`unshare -rn`, or systemd `PrivateNetwork=yes` / `IPAddressDeny=any` on the cron
+  unit) is a **deferred-to-real-root** hardening — the offline pins above are the
+  build-host-verifiable half.
+
+## Adversarial-export fuzz suite (the exit gate)
+`tests/domain-registry/test-domain-reconcile-fuzz.sh` — build-host runnable (no
+root, no network, scratch containment dir). Feeds malicious-but-well-formed
+profiles/exports (metachar/injection, traversal, secret-in-field, protocol
+override, oversized/loop, YAML-splice) and asserts EACH: exit!=0 / fail-closed, no
+file outside the scratch dir, and **zero** ack POSTs (a `curl` recorder stub in
+PATH). A LEGIT export is the positive control — it renders/scans/promotes clean
+and the writeback DOES fire (no false-positive lockout).
+
+## Deferred to real-root / real-cluster (never faked)
+1. execution as UID 0 under the actual root cron;
+2. a genuine Ed25519-signed #118 export from a live admin-bff over in-cluster mTLS;
+3. real `gen-keystores.sh` CA/keystore generation (`DR_SKIP_CA=1` scopes it out on
+   the build host);
+4. the real writeback POST — the admin-bff reconcile-ack **setter endpoint does not
+   exist yet** (band-190 dark), so "no ack on failure" is provable today only via
+   the local curl-stub recorder;
+5. real network-namespace / `PrivateNetwork` isolation of the render subprocess;
+6. OPTIONAL-SERVICE selection + non-placeholder registry-pub key gating (the three
+   ship-dark gates).

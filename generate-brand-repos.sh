@@ -112,6 +112,15 @@ _RE_URL='^https?://[A-Za-z0-9._~:/?#@!$()*,=%+-]+$'
 case "$BRAND_TITLE" in
   *['"\$`|&']* ) _die "invalid BRAND_TITLE (forbidden chars: \" \\ \$ \` | &)" ;;
 esac
+# SECOND-ORDER TEMPLATE-INJECTION guard (Phase 6, fuzz case a): the old char denylist
+# above bans sed/shell metachars but NOT braces, so a BRAND_TITLE like '{{HARBOR_PROJECT}}'
+# PASSES it and then gets RE-EXPANDED by a later -e in render_template (the {{BRAND_TITLE}}
+# substitution runs first, emitting the literal {{HARBOR_PROJECT}}, which the subsequent
+# {{HARBOR_PROJECT}} -e then rewrites) — a confused-token / injection primitive. Reject any
+# brace so no brand value can smuggle a template token into a second render pass.
+case "$BRAND_TITLE" in
+  *['{}']* ) _die "invalid BRAND_TITLE (braces '{' '}' are forbidden — no template-token injection)" ;;
+esac
 # Reject any newline (or other control char) — must be a single printable line.
 if [[ "$BRAND_TITLE" == *$'\n'* || "$BRAND_TITLE" == *$'\r'* ]]; then
   _die "invalid BRAND_TITLE (must be single-line)"
