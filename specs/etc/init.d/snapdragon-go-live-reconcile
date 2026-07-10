@@ -1,0 +1,39 @@
+#!/sbin/openrc-run
+
+description="Sync + verify the signed go-live-intent export (admin-bff GoLiveController), then trip/rollback this node's own go-live marker via the canonical driver"
+
+# The web-UI go-live effector (item 6, 4-interface parity): runs the fetch/verify/
+# apply agent ONCE at boot (a oneshot). The 60s timer half is a cron.d drop-in
+# (OpenRC has no native timer; cronie is already in the node image) — identical
+# idiom to snapdragon-domain-reconcile/snapdragon-device-registry-sync.
+#
+# Enabled (rc-update add) on every fleet node UNCONDITIONALLY — the SAME
+# core-hardening gate as snapdragon-firewall-reconcile (NOT domain-reconcile's
+# or device-registry-sync's gates, which are opt-in/role-activated: the
+# go-live wizard itself is core, not an optional service). The agent is
+# FAIL-CLOSED: on any fetch/verify failure it keeps the last-good cache +
+# applies NOTHING and exits 0, so a failed sync never faults boot and NEVER
+# flips posture on unverified input. It only ever drives the EXISTING
+# snapdragon-go-live driver's commit/rollback subcommands — it never writes
+# the marker file itself.
+
+depend() {
+    need net
+    use dns logger
+    # After first-boot provisioning (node.env + the public key) and after the
+    # mesh join (the in-cluster mTLS transport the /export call uses).
+    after keys-provision tailscaled
+}
+
+command="/usr/sbin/snapdragon-go-live-reconcile"
+command_background=false
+
+start() {
+    ebegin "Reconciling this node's go-live posture against the signed web-UI intent export (fail-closed; keeps last-good on error)"
+    "${command}"
+    eend $? "go-live reconcile reported an unexpected error (cache preserved; posture unchanged)"
+}
+
+stop() {
+    return 0
+}

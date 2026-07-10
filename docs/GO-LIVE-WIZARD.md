@@ -256,9 +256,13 @@ Still genuinely **deferred**, by design:
 - **A pre-flip `verify` subcommand** (probe DNS/HTTP/tunnel/DDNS/funnel before
   `commit`). The gate today is preview-then-confirm; automated propagation
   probes are a follow-up driver subcommand every front-end would then surface.
-- **A web / admin-UI front-end.** Only CLI, console, and Studio ship. Any web UI
-  is a thin caller of the same driver subcommands — no wizard logic moves into a
-  front-end.
+- ✅ **The web front-end — DONE differently than the other three.** admin-bff's
+  web console (already merged, admin-bff-api PR #200) doesn't call the driver
+  directly like CLI/console/Studio do (it structurally can't — it runs in a
+  pod, not on the host); it records a signed intent, and
+  `snapdragon-go-live-reconcile` (see [Web-UI effector](#web-ui-effector-item-6-4-interface-parity)
+  below) is the thin host-side piece that turns that intent into the same
+  driver `commit`/`rollback` call the other three front-ends make directly.
 - **On-image bake for the 4 desktop/appliance builders is intentionally
   omitted** — they bake neither firewall-reconcile nor release-state (they are
   clients/appliances, not go-live server nodes), so they legitimately ship
@@ -272,3 +276,66 @@ Still genuinely **deferred**, by design:
   five artifacts, the emitted zone is well-formed (and `named-checkzone`-clean
   when available), `commit` writes the marker only with an explicit `--yes`, and
   `rollback` removes it.
+
+## Web-UI effector (item 6, 4-interface parity)
+
+The admin-bff-api web console (`GoLiveController`/`GoLiveService`) lets a
+superadmin **record** a go-live/rollback intent, signed and exported the same
+way the domain-registry bridge is (`GoLiveExportService`, the same
+`RegistrySigner` bean, the same Ed25519 + strict-monotonic-generation
+contract). But admin-bff runs inside a Kubernetes pod — it structurally cannot
+write `/etc/snapdragon/go-live` on the physical/VM host the way the
+CLI/ncurses/Studio front-ends do directly. That gap is closed by
+**`snapdragon-go-live-reconcile`** (`specs/usr/sbin/`, verify lib
+`specs/usr/lib/snapdragon/golive-verify.sh`): a boot-oneshot + 60s-cron agent,
+the same fetch/verify/apply idiom as `snapdragon-domain-reconcile`, that fetches
+the signed export over the SAME core-provisioned in-cluster mTLS transport
+(`node.env`'s `BFF_EXPORT_URL`/`BFF_CLIENT_CERT`/`BFF_CLIENT_KEY`), verifies it
+fail-closed, and — for THIS node's own cluster domain only — drives the
+canonical `snapdragon-go-live commit`/`rollback` subcommands. It never
+reimplements posture-flipping; it only ever calls the same driver a human
+operator would run. Idempotent (only invokes the driver on an actual state
+transition) and honors the export's absence-means-no-op contract (a domain with
+no recorded intent is a converged steady state, not an implicit rollback).
+
+**A real, PRE-EXISTING gap this agent exposes rather than causes (flagged, not
+fixed here — see the platform TODO queue):** admin-bff-api's
+`GoLiveProviderCatalog` (Java) uses provider keys `generic-registrar` and
+`cloudflare-ddns`; the shell provider registry
+(`specs/usr/lib/snapdragon/go-live-providers.sh` `GO_LIVE_PROVIDER_IDS`) has
+`byo-domain` (a DIFFERENT key for the conceptually-same provider) and **no
+`cloudflare-ddns` entry at all**. A web-UI-recorded intent for either BFF-side
+key makes this agent drive `snapdragon-go-live commit --provider <key>`, which
+permanently fails `glp_known` — retried every 60s, never succeeding, with no
+signal to the superadmin (the ack loop is inert, see below). Not fixed in this
+PR: `go-live-providers.sh` is under active, more-authoritative revision in a
+separate in-flight PR (the go-live provider-driver consolidation), and
+reconciling the two catalogs needs a real decision (rename one side, or map
+between them) rather than a guess made without visibility into that other
+work's final shape.
+
+**Deliberately out of scope, matching this codebase's precedent for the
+identical shape of gap (`snapdragon-domain-reconcile`'s own deferred
+writeback):**
+- **The applied-ack loop.** No admin-bff endpoint exists yet to record
+  `applied_at`/`applied_by` back onto the `GoLiveIntent` row — `ack_intent()`
+  is present-but-INERT (guarded behind an unset `GOLIVE_ACK_URL`), a one-line
+  enablement once that setter lands.
+- **On-image baking.** This PR ships the agent + verify lib + init.d/cron
+  files but does not add the `cp`/`chmod` lines to the stage4 builders — those
+  lines land immediately after wherever the driver itself
+  (`snapdragon-go-live`/`-cli`/`-menu`) gets baked, to avoid a redundant edit
+  to the same builder-script region as that in-flight work.
+- **The physical secret path from `plan`'s provider emission to this agent.**
+  This agent never runs `plan` — provider artifact emission (DNS records,
+  tunnel tokens) is the web wizard's own client-side guidance, completed by
+  the superadmin BEFORE recording the intent; this agent's sole job is
+  tripping the marker a recorded intent already authorizes.
+
+Test: `tests/go-live/test-go-live-reconcile-verify.sh` — offline (no root, no
+network), mirrors `test-domain-reconcile-verify.sh`'s verify-side rigor
+(genuine/tampered/unsigned/foreign-key/rollback cases, an inline canonical-bytes
+reference AND an independent python re-derivation) plus go-live-specific
+apply-side cases against the REAL driver in a sandboxed `GL_ETC_SNAPDRAGON`
+(commit, rollback, the absence no-op contract, idempotency, and the two
+fail-closed defaults gates).

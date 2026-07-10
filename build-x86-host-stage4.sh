@@ -2092,7 +2092,19 @@ bake_host_firewall() {
     chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live-menu"
     cp "${SHARED_SPECS}/usr/lib/snapdragon/go-live-providers.sh"  "${SYSROOT}/usr/lib/snapdragon/go-live-providers.sh"
     echo "${RELEASE_STATE:-internal}" > "${SYSROOT}/etc/snapdragon/release-state"
-    info "RELEASE_STATE=${RELEASE_STATE:-internal}: baked the host nftables backstop (snapdragon-firewall-reconcile renders + loads the live ruleset at boot + every 60s) + the go-live wizard (driver/registry/CLI/ncurses front-ends)"
+    # ── Go-Live web-UI effector: the 4th front-end (admin-bff's web console) can only
+    #    RECORD a signed intent (it runs in a pod, can't touch this host's filesystem);
+    #    this agent is what actually drives the SAME driver's commit/rollback for a
+    #    web-originated intent. Baked alongside the driver it depends on (harmlessly
+    #    inert without it — same fail-closed gate as every reconcile agent: missing
+    #    verify lib / node.env / baked pubkey -> keep cache, exit 0, apply nothing).
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-go-live-reconcile"     "${SYSROOT}/usr/sbin/snapdragon-go-live-reconcile"
+    chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live-reconcile"
+    cp "${SHARED_SPECS}/usr/lib/snapdragon/golive-verify.sh"       "${SYSROOT}/usr/lib/snapdragon/golive-verify.sh"
+    cp "${SHARED_SPECS}/etc/init.d/snapdragon-go-live-reconcile"   "${SYSROOT}/etc/init.d/snapdragon-go-live-reconcile"
+    chmod +x "${SYSROOT}/etc/init.d/snapdragon-go-live-reconcile"
+    cp "${SHARED_SPECS}/etc/cron.d/snapdragon-go-live-reconcile"   "${SYSROOT}/etc/cron.d/snapdragon-go-live-reconcile"
+    info "RELEASE_STATE=${RELEASE_STATE:-internal}: baked the host nftables backstop (snapdragon-firewall-reconcile renders + loads the live ruleset at boot + every 60s) + the go-live wizard (driver/registry/CLI/ncurses front-ends) + the web-UI go-live effector (snapdragon-go-live-reconcile)"
 }
 
 # Rebrand the baked cluster tree (no-op for default snapdragon naming).
@@ -2996,7 +3008,7 @@ LIGHTDM
         info "Media-data: /media auto-detect + Steam->${STEAM_DIR} + Vaults (gocryptfs) wired (steam=${STEAM_DELIVERY})"
     fi
 else
-    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall snapdragon-firewall-reconcile containerd kubelet auditd local)
+    SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall snapdragon-firewall-reconcile snapdragon-go-live-reconcile containerd kubelet auditd local)
     ${ROLE_HEADSCALE} && SVCS+=(headscale)
 fi
 ${SKIP_MESH} || ${SKIP_TAILSCALE} || SVCS+=(tailscaled)
