@@ -1,0 +1,23 @@
+# {{BRAND_TITLE}} — admin-bff-api (NON-BUILDABLE placeholder skeleton)
+
+> **This is NOT a runnable service.** Base-absent fallback for the mesh
+> repo-templating overlay. `snapdragon-admin-bff-api` is a **compiled Spring
+> Boot 4 / Java BFF** — unlike the login-ui static bundle it has **no faithful
+> minimal boot**, so there is deliberately no vendored source here.
+
+`render_repo_tree()` renders this placeholder only so it never *refuses* when the
+Tier-2 base cannot be pulled. **admin-bff-api is effectively overlay-only: the
+read-only Tier-2 base (`snapdragon-admin-bff-api` @ the org's GitLab/GitHub) is
+REQUIRED to produce a real, buildable tenant tree.**
+
+To emit a real tree, make the base resolvable and re-run:
+
+```
+# point ADMIN_BFF_API_BASE_DIR at a present read-only clone
+# (never modified, never committed), then re-run:
+export ADMIN_BFF_API_BASE_DIR="<path to your snapdragon-admin-bff-api clone>"
+scripts/render-repo-tree.sh brands/<brand>.conf --enable-repo-tree --repo admin-bff-api
+```
+
+The overlay then applies the brand-coupled `application.yml` env-defaults +
+`.gitlab-ci.yml` include onto the pulled base. See `../README.md`.

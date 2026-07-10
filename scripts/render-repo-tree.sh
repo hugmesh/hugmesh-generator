@@ -90,6 +90,23 @@ case "$BRAND_TITLE" in
 esac
 [[ "${#BRAND_TITLE}" -le 128 ]] || _die "BRAND_TITLE too long (max 128)"
 
+# CLUSTER_DOMAIN feeds AUTH-relevant env-DEFAULTs in the admin-bff-api overlay
+# (application.yml issuer-uri / jwk-set-uri / admin-emails / builder registry).
+# Because the renderer uses noEscape:true, an un-validated CLUSTER_DOMAIN carrying
+# a newline/whitespace/YAML metacharacter could splice attacker-shaped lines into
+# the emitted YAML (e.g. a bogus `leaked-default:` key next to the JWT issuer).
+# Validate it as a DNS hostname BEFORE export — parity with the BRAND/ORG/
+# BRAND_TITLE guards above. Empty is allowed (the login-ui pilot does not consume
+# it); HEADSCALE_URL/MESH_TAG are NOT hostname-shaped and are not overlay tokens
+# here, so they are intentionally not hostname-checked.
+_HOSTNAME='^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+if [[ -n "${CLUSTER_DOMAIN:-}" ]]; then
+  [[ "${#CLUSTER_DOMAIN}" -le 253 ]] \
+    || _die "CLUSTER_DOMAIN too long (max 253)"
+  [[ "$CLUSTER_DOMAIN" =~ $_HOSTNAME ]] \
+    || _die "invalid CLUSTER_DOMAIN '${CLUSTER_DOMAIN}' (must be a DNS hostname; no whitespace/newlines/YAML metacharacters)"
+fi
+
 # ── Derive the tenant token values ───────────────────────────────────────────
 # NPM_SCOPE: lowercase slug of ORG — SAME slug rule generate-brand-repos.sh uses
 # for HARBOR_PROJECT/GITLAB_GROUP (single source of the rule). npm scopes must be
@@ -145,10 +162,13 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
   # 1) Private copy of the READ-ONLY base into OUT (exclude VCS metadata + any
   #    stray build dirs). The base itself is never modified; nothing is copied
   #    INTO the generator tree — OUT is a gitignored staging dir.
-  _log "copying read-only base into ${BRAND_OUT} (excluding .git/node_modules/dist)"
+  # Exclude VCS + build outputs for BOTH archetypes (JS: node_modules/dist/.angular;
+  # compiled Java/Maven BFF: target/). Generalized, not forked per repo — extra
+  # excludes are harmless when a repo lacks that dir.
+  _log "copying read-only base into ${BRAND_OUT} (excluding .git/node_modules/dist/.angular/target)"
   tar -C "$BASE" \
       --exclude='./.git' --exclude='./node_modules' --exclude='./dist' \
-      --exclude='./.angular' -cf - . | tar -C "$BRAND_OUT" -xf -
+      --exclude='./.angular' --exclude='./target' -cf - . | tar -C "$BRAND_OUT" -xf -
 
   # 2) Stage ONLY the 4 overlay .hbs (never _skeleton, never _identity.env/README)
   #    into a temp templates dir preserving repo-relative paths.
@@ -165,6 +185,21 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
       --templates "$STAGE" --out "$RENDERED" --extra-tokens "$EXTRA_TOKENS"
   ( cd "$RENDERED" && tar -cf - . ) | ( cd "$BRAND_OUT" && tar -xf - )
   _log "overlaid $(find "$RENDERED" -type f | wc -l | tr -d ' ') brand-coupled file(s) onto the base"
+
+  # BACKSTOP (keyed to "is-an-overlay-rendered-file", not to a path glob): the
+  # broad emit scan below is scoped with path excludes (src/main/java, src/test)
+  # that are sound for TODAY's overlay (it only renders into src/main/resources +
+  # .gitlab-ci.yml). But those excludes are keyed to file PATH — a FUTURE overlay
+  # that ever renders a template whose destination lands under an excluded path
+  # (e.g. a generated @Value default under src/main/java/**) would fall outside the
+  # broad backstop. So ALSO scan the set of files THIS overlay actually rendered,
+  # with NO excludes — every overlay-emitted file is guaranteed-scanned regardless
+  # of where it lands. Redundant with the broad scan for today's paths (zero new
+  # failures possible), fail-closed for tomorrow's.
+  _log "scanning the ${RENDERED##*/} overlay-rendered file(s) (no excludes — overlay-output backstop)"
+  if ! "${SCRIPT_DIR}/secret-scan.sh" "$RENDERED" >&2; then
+    _die "secret scanner flagged an overlay-RENDERED file — refusing to emit ${BRAND_OUT}"
+  fi
 else
   # Skeleton fallback: render the whole minimal tree from _skeleton/*.hbs.
   SKEL="${OVERLAY_DIR}/_skeleton"
@@ -175,8 +210,23 @@ else
 fi
 
 # ── Phase-1 emit-time secret scanner (fail-closed) ──────────────────────────
-_log "running emit-time secret scanner over ${BRAND_OUT} (fail-closed gate)"
-if ! "${SCRIPT_DIR}/secret-scan.sh" "$BRAND_OUT" >&2; then
+# SCOPE: the scan guards the TEMPLATING delta — that no rendered/config/manifest
+# file carries a LITERAL secret (every secret field must stay ${ENV}/ESO). It is
+# NOT a SAST re-audit of the read-only base's own compiled sources: a compiled
+# archetype (e.g. the Spring BFF) ships upstream unit-test crypto FIXTURES + source
+# javadoc that name PEM headers / high-entropy sample tokens — legitimate FPs that
+# are the BASE repo's own CI concern (the base is trusted-transport here; content
+# re-verification is the Phase-8 deferral in pull-repo-base.sh). A brand token
+# never lands in *.java, so the compiled-source + test trees are excluded while the
+# ENTIRE config/resource/manifest/CI surface (application.yml, .gitlab-ci.yml,
+# Dockerfile, settings.xml, deploy/**, …) — where a templated secret WOULD appear —
+# is still scanned. The excludes are no-ops for a base without those trees (the
+# login-ui pilot), so its emit is unchanged.
+_log "running emit-time secret scanner over ${BRAND_OUT} (fail-closed gate; base compiled-source/test trees out of scope)"
+if ! "${SCRIPT_DIR}/secret-scan.sh" \
+      --exclude '*/src/test/*' \
+      --exclude '*/src/main/java/*' \
+      "$BRAND_OUT" >&2; then
   _die "secret scanner flagged the emitted tree — refusing to emit ${BRAND_OUT}"
 fi
 

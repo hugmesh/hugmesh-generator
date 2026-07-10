@@ -66,13 +66,26 @@ fi
 _log "validating overlay '${REPO}' against freshly-pulled base: ${BASE}"
 
 # ── Load the upstream-identity token values (the drift oracle) ──────────────
+# GENERALIZED (not forked per repo): the overlay's token set is whatever KEY=VALUE
+# names its _identity.env declares — login-ui carries BRAND_TITLE/NPM_SCOPE/
+# HOST_NAME/GENERATOR_ORG_GROUP; admin-bff-api carries CLUSTER_DOMAIN/BRAND_TITLE/
+# GENERATOR_ORG_GROUP. We parse the declared KEYs, source + export each, and build
+# --extra-tokens from that SAME set, so a new repo needs only its _identity.env
+# (no code change here). render-handlebars still fail-closes each name through the
+# classifier (allow/deny/frozen), so a stray or secret key in _identity.env aborts.
+IDENTITY_KEYS=$(grep -oE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' "$IDENTITY" \
+  | sed 's/[[:space:]]//g; s/=$//' | sort -u)
+[[ -n "$IDENTITY_KEYS" ]] || _die "no KEY=VALUE token declarations in ${IDENTITY}"
 # shellcheck source=/dev/null
 source "$IDENTITY"
-: "${BRAND_TITLE:?_identity.env must set BRAND_TITLE}"
-: "${NPM_SCOPE:?_identity.env must set NPM_SCOPE}"
-: "${HOST_NAME:?_identity.env must set HOST_NAME}"
-: "${GENERATOR_ORG_GROUP:?_identity.env must set GENERATOR_ORG_GROUP}"
-export BRAND_TITLE NPM_SCOPE HOST_NAME GENERATOR_ORG_GROUP
+EXTRA_TOKENS=""
+for _k in $IDENTITY_KEYS; do
+  # Every declared token must have a non-empty value in the oracle.
+  [[ -n "${!_k:-}" ]] || _die "_identity.env declares '${_k}' but it is empty"
+  export "${_k?}"
+  EXTRA_TOKENS="${EXTRA_TOKENS:+${EXTRA_TOKENS},}${_k}"
+done
+_log "drift oracle tokens: ${EXTRA_TOKENS}"
 
 # ── Stage + render the overlay with UPSTREAM-IDENTITY values ────────────────
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -85,10 +98,10 @@ done < <(find "$OVERLAY_DIR" -name '*.hbs' -not -path '*/_skeleton/*' -print0)
 
 node "${TOOLING}/render-handlebars.js" \
     --templates "$STAGE" --out "$RENDERED" \
-    --extra-tokens "NPM_SCOPE,HOST_NAME,GENERATOR_ORG_GROUP" >&2
+    --extra-tokens "$EXTRA_TOKENS" >&2
 
 # ── Byte-compare each re-applied overlay file to the base (patch-reject + sum) ─
-echo "== login-ui overlay drift check =="
+echo "== ${REPO} overlay drift check =="
 echo "repo              : ${REPO}"
 echo "base              : ${BASE}"
 echo "overlaid files    : $(find "$RENDERED" -type f | wc -l | tr -d ' ')"
