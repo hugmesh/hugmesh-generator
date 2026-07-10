@@ -1,0 +1,321 @@
+#!/bin/bash
+# snapdragon-go-live-menu — the THIN ncurses/whiptail front-end for the go-live wizard.
+#
+# It is the on-device CONSOLE face of the SAME shared driver (snapdragon-go-live)
+# that snapdragon-go-live-cli drives from the command line. Like the CLI, it
+# carries NO wizard logic of its own: every real action — reading posture,
+# listing providers, emitting artifacts (plan), tripping the marker (commit),
+# rolling back — is a driver SUBCOMMAND. The driver owns ALL logic AND the
+# confirmation gate; this front-end only makes the subcommands discoverable
+# behind a terminal menu, in the exact spirit of scripts/build-menu.sh over the
+# `make` build targets. It is the ported successor of the #286 whiptail UX
+# (scripts/go-live-menu.sh), re-pointed off the removed engine and onto the
+# canonical driver's status|list|plan|commit|rollback verbs.
+#
+# RENDERER
+#   Uses whiptail (newt/ncurses) when a real TTY + whiptail are present; else a
+#   plain numbered-prompt fallback (force it with NO_TUI=1) — the same UI
+#   abstraction as scripts/build-menu.sh. No flip ever happens without the
+#   driver's own confirmation gate running in the clear terminal.
+#
+# SECRETS
+#   Provider tokens are prompted MASKED and handed to the driver ONLY via a 0600
+#   temp file (--token-file), removed right after the run — they never appear in
+#   argv, on screen, or in any persisted state.
+#
+# ENV SEAM: GL_DRIVER overrides the driver path (default: sibling script, else PATH).
+#           The driver's own seams (GL_ETC_SNAPDRAGON / GL_PROVIDERS_LIB / GL_OUT_DIR)
+#           pass straight through this process's environment untouched.
+#
+# It is interactive, so it deliberately does NOT use `set -e`: a TUI runs many
+# commands that return non-zero benignly (whiptail Cancel = 1, read EOF = 1). We
+# keep -u/pipefail and handle every error explicitly.
+set -uo pipefail
+
+# ── Locate the shared driver: explicit seam -> sibling of this script -> PATH ─────
+_self_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+DRIVER="${GL_DRIVER:-}"
+if [ -z "${DRIVER}" ]; then
+    if [ -x "${_self_dir}/snapdragon-go-live" ]; then
+        DRIVER="${_self_dir}/snapdragon-go-live"
+    elif command -v snapdragon-go-live >/dev/null 2>&1; then
+        DRIVER="$(command -v snapdragon-go-live)"
+    else
+        echo "error: shared driver 'snapdragon-go-live' not found (set GL_DRIVER)" >&2
+        exit 1
+    fi
+fi
+drv() { bash "${DRIVER}" "$@"; }
+
+# ── Pass-through: any recognised verb goes straight to the driver (CLI parity) ───
+case "${1:-}" in
+    status|list|providers|ls|plan|preview|emit|commit|go-live|rollback|-h|--help|help)
+        exec bash "${DRIVER}" "$@"
+        ;;
+esac
+
+# ── Colours (only when stderr is a TTY, matching scripts/build-menu.sh) ──────────
+if [ -t 2 ]; then
+    C_RED=$'\033[31m'; C_GRN=$'\033[32m'; C_YEL=$'\033[33m'
+    C_BLD=$'\033[1m';  C_RST=$'\033[0m'
+else
+    C_RED=''; C_GRN=''; C_YEL=''; C_BLD=''; C_RST=''
+fi
+say()  { printf '%s[go-live-menu]%s %s\n' "${C_GRN}" "${C_RST}" "$*" >&2; }
+warn() { printf '%s[go-live-menu] WARN:%s %s\n' "${C_YEL}" "${C_RST}" "$*" >&2; }
+
+# ── Session inputs (in-memory only; NON-SECRET; feed the driver's plan flags) ────
+# A token is NEVER held here — it is prompted fresh and lives only in a 0600 temp
+# file for the single run that consumes it.
+OPT_PROVIDER=""          # a provider id from `snapdragon-go-live list`
+OPT_DOMAIN=""            # --domain override (empty = driver reads the baked apex)
+OPT_INGRESS_IP=""        # --ingress-ip (public A value)
+OPT_INGRESS_IPV6=""      # --ingress-ipv6 (public AAAA value)
+OPT_TUNNEL_CNAME=""      # --tunnel-cname (CNAME/ALIAS target)
+OPT_DDNS_SUBDOMAIN=""    # --ddns-subdomain (single DNS label; driver validates)
+OPT_DDNS_SERVICE=""      # --ddns-service (duckdns|cloudflare; empty = driver default)
+OPT_OUT_DIR=""           # --out-dir (empty = driver default)
+OPT_KEYS_DIR=""          # --keys-dir (empty = driver default)
+
+# ── UI abstraction: whiptail when we can, a plain stdin prompt when we cannot ────
+HAVE_TUI=0
+if [ -z "${NO_TUI:-}" ] && [ -t 0 ] && [ -t 1 ] \
+   && [ "${TERM:-dumb}" != dumb ] && command -v whiptail >/dev/null 2>&1; then
+    HAVE_TUI=1
+fi
+WT_TITLE="Snapdragon Go-Live"
+
+# ui_menu TITLE PROMPT  tag1 item1 tag2 item2 ...  -> echoes chosen tag, rc=1 on cancel
+ui_menu() {
+    local title="$1" prompt="$2"; shift 2
+    if [ "${HAVE_TUI}" = 1 ]; then
+        whiptail --title "${WT_TITLE} — ${title}" --notags --menu "${prompt}" \
+            22 78 12 "$@" 3>&1 1>&2 2>&3
+        return $?
+    fi
+    local -a tags=() items=(); local i
+    while [ "$#" -ge 2 ]; do tags+=("$1"); items+=("$2"); shift 2; done
+    printf '\n%s== %s ==%s\n' "${C_BLD}" "${title}" "${C_RST}" >&2
+    printf '%b\n' "${prompt}" >&2
+    for i in "${!items[@]}"; do printf '  %2d) %s\n' "$((i+1))" "${items[$i]}" >&2; done
+    printf '   q) back / cancel\n' >&2
+    local choice
+    while true; do
+        read -r -p "choice: " choice || return 1
+        { [ "${choice}" = q ] || [ -z "${choice}" ]; } && return 1
+        if [[ "${choice}" =~ ^[0-9]+$ ]] && [ "${choice}" -ge 1 ] && [ "${choice}" -le "${#tags[@]}" ]; then
+            printf '%s' "${tags[$((choice-1))]}"; return 0
+        fi
+        warn "invalid choice — enter 1-${#tags[@]} or q"
+    done
+}
+
+# ui_yesno TITLE TEXT  -> rc 0 = yes, 1 = no
+ui_yesno() {
+    local title="$1" text="$2"
+    if [ "${HAVE_TUI}" = 1 ]; then
+        whiptail --title "${WT_TITLE} — ${title}" --yesno "${text}" 14 78
+        return $?
+    fi
+    printf '\n%b\n' "${text}" >&2
+    local a; read -r -p "[y/N]: " a || return 1
+    [[ "${a}" =~ ^[Yy] ]]
+}
+
+# ui_input TITLE TEXT DEFAULT  -> echoes the entered value (default on empty/cancel)
+ui_input() {
+    local title="$1" text="$2" def="$3" val
+    if [ "${HAVE_TUI}" = 1 ]; then
+        val="$(whiptail --title "${WT_TITLE} — ${title}" --inputbox "${text}" 12 78 "${def}" 3>&1 1>&2 2>&3)" \
+            || { printf '%s' "${def}"; return 0; }
+        printf '%s' "${val}"; return 0
+    fi
+    read -r -e -i "${def}" -p "${text}: " val || val="${def}"
+    printf '%s' "${val:-${def}}"
+}
+
+# ui_password TITLE TEXT  -> echoes the entered secret (hidden). Empty = a valid skip.
+ui_password() {
+    local title="$1" text="$2" val
+    if [ "${HAVE_TUI}" = 1 ]; then
+        val="$(whiptail --title "${WT_TITLE} — ${title}" --passwordbox "${text}" 12 78 3>&1 1>&2 2>&3)" \
+            || { printf ''; return 0; }
+        printf '%s' "${val}"; return 0
+    fi
+    read -r -s -p "${text}: " val || val=""
+    printf '\n' >&2
+    printf '%s' "${val}"
+}
+
+# ui_msg TITLE TEXT  -> informational box / printout
+ui_msg() {
+    local title="$1" text="$2"
+    if [ "${HAVE_TUI}" = 1 ]; then
+        whiptail --title "${WT_TITLE} — ${title}" --scrolltext --msgbox "${text}" 22 78
+    else
+        printf '\n%s== %s ==%s\n' "${C_BLD}" "${title}" "${C_RST}" >&2
+        printf '%b\n' "${text}" >&2
+        read -r -p "press Enter…" _ || true
+    fi
+}
+
+# ── Driver data source: the provider list IS the catalogue (no local parsing) ────
+# Emits "id<TAB>description" for each catalogue row, stopping at the blank line
+# that separates the table from the driver's trailing note.
+provider_rows() {
+    drv list 2>/dev/null | awk '
+        NR==1 { next }                      # header
+        /^[[:space:]]*$/ { exit }           # blank line ends the table
+        { id=$1; $1=$2=$3=""; sub(/^ +/,""); print id "\t" $0 }'
+}
+
+# plan_flags -> the driver flags derived from the session inputs (NEVER a secret).
+plan_flags() {
+    local -a f=()
+    [ -n "${OPT_PROVIDER}" ]       && f+=(--provider "${OPT_PROVIDER}")
+    [ -n "${OPT_DOMAIN}" ]         && f+=(--domain "${OPT_DOMAIN}")
+    [ -n "${OPT_INGRESS_IP}" ]     && f+=(--ingress-ip "${OPT_INGRESS_IP}")
+    [ -n "${OPT_INGRESS_IPV6}" ]   && f+=(--ingress-ipv6 "${OPT_INGRESS_IPV6}")
+    [ -n "${OPT_TUNNEL_CNAME}" ]   && f+=(--tunnel-cname "${OPT_TUNNEL_CNAME}")
+    [ -n "${OPT_DDNS_SUBDOMAIN}" ] && f+=(--ddns-subdomain "${OPT_DDNS_SUBDOMAIN}")
+    [ -n "${OPT_DDNS_SERVICE}" ]   && f+=(--ddns-service "${OPT_DDNS_SERVICE}")
+    [ -n "${OPT_OUT_DIR}" ]        && f+=(--out-dir "${OPT_OUT_DIR}")
+    [ -n "${OPT_KEYS_DIR}" ]       && f+=(--keys-dir "${OPT_KEYS_DIR}")
+    printf '%s\n' "${f[@]+"${f[@]}"}"
+}
+
+# run_driver SUBCMD ARGS... — run the driver in the CLEAR terminal so its own
+# output, prompts and (for commit/rollback) its typed confirmation gate work
+# exactly as on the command line. We NEVER pass --yes: the driver owns the gate.
+run_driver() {
+    clear 2>/dev/null || true
+    say "running: snapdragon-go-live $*"
+    bash "${DRIVER}" "$@"
+    local rc=$?
+    printf '\n' >&2
+    read -r -p "press Enter to return to the menu…" _ || true
+    return "${rc}"
+}
+
+# ── Screens ──────────────────────────────────────────────────────────────────────
+provider_screen() {
+    local -a items=(); local id desc
+    while IFS=$'\t' read -r id desc; do
+        [ -n "${id}" ] || continue
+        items+=("${id}" "$(printf '%-20s %s' "${id}" "${desc}")")
+    done < <(provider_rows)
+    [ "${#items[@]}" -gt 0 ] || { ui_msg "Provider" "The driver returned no providers (is the registry present?)."; return 0; }
+    items+=(back "‹ back")
+    local choice
+    choice="$(ui_menu "Provider" "Pick the exposure provider (current: ${OPT_PROVIDER:-none})." "${items[@]}")" || return 0
+    [ "${choice}" = back ] && return 0
+    OPT_PROVIDER="${choice}"
+}
+
+inputs_screen() {
+    while true; do
+        local choice
+        choice="$(ui_menu "Inputs" "Optional record-target inputs (empty = the driver's own defaults / autofill from the device bake)." \
+            domain   "Domain override ... ${OPT_DOMAIN:-(driver autofill)}" \
+            ip       "Ingress IPv4 ...... ${OPT_INGRESS_IP:-(unset)}" \
+            ipv6     "Ingress IPv6 ...... ${OPT_INGRESS_IPV6:-(unset)}" \
+            tunnel   "Tunnel CNAME ...... ${OPT_TUNNEL_CNAME:-(unset)}" \
+            ddnssub  "DDNS subdomain .... ${OPT_DDNS_SUBDOMAIN:-(unset)}" \
+            ddnssvc  "DDNS service ...... ${OPT_DDNS_SERVICE:-(driver default: duckdns)}" \
+            out      "Artifact out-dir .. ${OPT_OUT_DIR:-(driver default)}" \
+            keys     "Keys layout dir ... ${OPT_KEYS_DIR:-(driver default)}" \
+            back     "‹ back")" || return 0
+        case "${choice}" in
+            domain)  OPT_DOMAIN="$(ui_input "Domain" "Public domain override (empty = driver reads the baked cluster domain)" "${OPT_DOMAIN}")" ;;
+            ip)      OPT_INGRESS_IP="$(ui_input "Ingress IPv4" "Public A record value (driver shape-checks it)" "${OPT_INGRESS_IP}")" ;;
+            ipv6)    OPT_INGRESS_IPV6="$(ui_input "Ingress IPv6" "Public AAAA record value (driver shape-checks it)" "${OPT_INGRESS_IPV6}")" ;;
+            tunnel)  OPT_TUNNEL_CNAME="$(ui_input "Tunnel CNAME" "CNAME/ALIAS target for CNAME-style records (e.g. <uuid>.cfargotunnel.com)" "${OPT_TUNNEL_CNAME}")" ;;
+            ddnssub) OPT_DDNS_SUBDOMAIN="$(ui_input "DDNS subdomain" "DDNS hostname LABEL (single DNS label; the driver rejects dots/metachars)" "${OPT_DDNS_SUBDOMAIN}")" ;;
+            ddnssvc) OPT_DDNS_SERVICE="$(ui_menu "DDNS service" "Which thin DDNS updater does the driver render?" \
+                         duckdns    "DuckDNS (single account token)" \
+                         cloudflare "Cloudflare DNS-record update (zone-scoped API token)" \
+                         keep       "‹ keep ${OPT_DDNS_SERVICE:-driver default}")" || true
+                     [ "${OPT_DDNS_SERVICE}" = keep ] && OPT_DDNS_SERVICE="" ;;
+            out)     OPT_OUT_DIR="$(ui_input "Out dir" "Where 'plan' writes records/zone/updater/checklist (empty = driver default)" "${OPT_OUT_DIR}")" ;;
+            keys)    OPT_KEYS_DIR="$(ui_input "Keys dir" "Keys-layout root token drops land under, 0600 (empty = driver default)" "${OPT_KEYS_DIR}")" ;;
+            back|"") return 0 ;;
+        esac
+    done
+}
+
+# plan_screen -> `snapdragon-go-live plan` (DRY-RUN; the driver never flips here).
+# Offers an OPTIONAL masked token that is handed over ONLY via a 0600 temp file.
+plan_screen() {
+    [ -n "${OPT_PROVIDER}" ] || { ui_msg "Plan" "Pick a provider first (menu → Provider)."; return 0; }
+    local -a flags=(); local line
+    while IFS= read -r line; do [ -n "${line}" ] && flags+=("${line}"); done < <(plan_flags)
+
+    local tok tf=""
+    tok="$(ui_password "Token (optional)" "Provider secret/token for this provider, if any (e.g. DuckDNS / Cloudflare token).\nHanded to the driver via a 0600 temp file (--token-file), then deleted — never in argv, never saved.\nLeave blank to skip.")"
+    if [ -n "${tok}" ]; then
+        tf="$(umask 077 && mktemp "${TMPDIR:-/tmp}/.sgl-tok.XXXXXX")" || { warn "mktemp failed — running plan without a token"; tf=""; }
+        if [ -n "${tf}" ]; then printf '%s\n' "${tok}" > "${tf}"; flags+=(--token-file "${tf}"); fi
+    fi
+    tok=""
+
+    run_driver plan "${flags[@]+"${flags[@]}"}"
+    [ -n "${tf}" ] && rm -f "${tf}" 2>/dev/null
+}
+
+# commit_screen -> `snapdragon-go-live commit`. NO --yes: the driver's OWN
+# confirmation gate runs in the clear terminal (this front-end never weakens it).
+commit_screen() {
+    [ -n "${OPT_PROVIDER}" ] || { ui_msg "Go Live" "Pick a provider first (menu → Provider)."; return 0; }
+    local -a args=(commit --provider "${OPT_PROVIDER}")
+    ui_yesno "Persist" "ALSO persist release-state=public?\n\nNo  = marker only (rollback just deletes the marker)  ← recommended\nYes = survives a marker delete; rollback then needs --revert-release-state" \
+        && args+=(--persist-public)
+    run_driver "${args[@]}"
+}
+
+# rollback_screen -> `snapdragon-go-live rollback`. Again NO --yes: the driver gates.
+rollback_screen() {
+    local -a args=(rollback)
+    ui_yesno "Rollback" "ALSO reset release-state=internal?\n(Needed only if you flipped with persist — otherwise the device stays public.)" \
+        && args+=(--revert-release-state)
+    run_driver "${args[@]}"
+}
+
+main_menu() {
+    while true; do
+        local choice
+        choice="$(ui_menu "Main" "provider=${OPT_PROVIDER:-none}\nFlow: provider → inputs → plan (preview) → GO LIVE. The driver owns every action + the confirm gate." \
+            provider "1. Pick provider (exposure model) …" \
+            inputs   "2. Inputs (domain / IPs / DDNS / dirs) …" \
+            plan     "3. Plan — preview & emit artifacts (dry-run) …" \
+            commit   "4. GO LIVE — commit (driver's typed confirm) …" \
+            rollback "Rollback — back to internal …" \
+            status   "Show go-live status" \
+            list     "List providers" \
+            quit     "Quit")" || return 0
+        case "${choice}" in
+            provider) provider_screen ;;
+            inputs)   inputs_screen ;;
+            plan)     plan_screen ;;
+            commit)   commit_screen ;;
+            rollback) rollback_screen ;;
+            status)   ui_msg "Status" "$(drv status 2>&1)" ;;
+            list)     ui_msg "Providers" "$(drv list 2>&1)" ;;
+            quit|"")  return 0 ;;
+        esac
+    done
+}
+
+# ── Entry point ─────────────────────────────────────────────────────────────────
+main() {
+    if [ "${HAVE_TUI}" != 1 ]; then
+        warn "whiptail/TTY not available — using the plain text menu (unset NO_TUI and install dev-libs/newt for the rich UI)."
+    fi
+    main_menu
+    clear 2>/dev/null || true
+}
+
+# Run only when executed directly; `source`-ing the file (e.g. for tests) just
+# loads the functions without starting the interactive menu.
+if [ "${BASH_SOURCE[0]:-$0}" = "${0}" ]; then
+    main "$@"
+fi
