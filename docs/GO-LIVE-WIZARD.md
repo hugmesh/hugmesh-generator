@@ -121,7 +121,7 @@ and the gateway already promise.
 
 | # | id | Mechanism | v1 | What it emits / does |
 | --- | --- | --- | --- | --- |
-| 1 | `cloudflare-tunnel` | deeplink | **FULL** | Flagship (no inbound ports). Deep-link to the CF Zero-Trust Tunnels page; guides the tunnel-token drop into `keys-template/cloudflared/`; renders the CNAME record set (`<host> → <tunnel-cname>`). An **optional** thin API path can create the CNAMEs via a zone-scoped token read from a 0600 header file (never argv). Plumbing already exists (`apps/12-cloudflared.yaml`, `manifests/cloudflared/`, `keys-template/cloudflared/`). |
+| 1 | `cloudflare-tunnel` | deeplink | **FULL** | Flagship (no inbound ports). Deep-link to the CF Zero-Trust Tunnels page; guides the tunnel-token drop into `keys-template/cloudflared/`; renders the CNAME record set (`<host> → <tunnel-cname>`) as `records.csv` for manual entry (or for cloudflared to create). No CF API driver by design — DNS mutation stays manual/cloudflared-side. Plumbing already exists (`apps/12-cloudflared.yaml`, `manifests/cloudflared/`, `keys-template/cloudflared/`). |
 | 2 | `byo-domain` | files | **FULL** | The no-API baseline that covers everyone — works with **every** registrar. Emits a copy-paste record set, a downloadable BIND zone + CSV (A/AAAA/CNAME to the ingress IP or tunnel CNAME), and registrar DNS deep-links (Cloudflare / Namecheap / GoDaddy / Porkbun / Gandi / Route 53 / Squarespace). Behind CGNAT there is no usable ingress IP — use `cloudflare-tunnel` or `tailscale-funnel` instead. |
 | 3 | `duckdns` | ddns | **FULL** | DuckDNS / Cloudflare-DDNS — a **real** thin single-token updater + `cron.d` drop-in (dynamic-IP homes). `plan` stores the token at `keys-template/ddns/token` (0600) and renders `ddns-update.sh` + a cron snippet (5-minute floor, mirroring the `snapdragon-*-reconcile` cron convention); the updater reads the token from the keys file at RUNTIME, never argv/cron mail. |
 | 4 | `tailscale-funnel` | funnel | **FULL** | Tailnet-native public HTTPS on the node's `<node>.<tailnet>.ts.net` name — **no public DNS** to mutate. **Caveat:** Funnel is a tailscale.com-hosted control-plane feature; the default Snapdragon mesh is self-hosted **headscale, which does not implement Funnel** — this provider applies only to nodes joined to Tailscale proper. Emits the enable-Funnel checklist. |
@@ -196,8 +196,8 @@ You can also preview the on-device **console menu** the same sandboxed way:
   temp file, and deletes it right after the run; it never persists a token in
   any saved state.
 - Tokens are written ONLY to the keys-layout destinations, mode 0600, all
-  gitignored — `keys-template/ddns/token` (DDNS),
-  `keys-template/cloudflared/tunnel-token` and `…/api-token` (cloudflare-tunnel).
+  gitignored — `keys-template/ddns/token` (DDNS) and
+  `keys-template/cloudflared/tunnel-token` (cloudflare-tunnel).
   Never committed, never echoed, never logged.
 - **DDNS input is validated before it is ever rendered into the emitted
   root-cron updater** (ported verbatim from the #286 security fix): the DDNS
@@ -221,8 +221,10 @@ root path.
 ## v1 non-goals (deliberate)
 
 - No full registrar API drivers (GoDaddy / Namecheap / Route 53) — deep-link +
-  downloadable files only. The only API code is the thin DDNS updaters and the
-  optional Cloudflare CNAME creator.
+  downloadable files only. The only API code is the thin DDNS updaters
+  (DuckDNS / Cloudflare-DDNS A-record refresh); there is **no** Cloudflare
+  tunnel CNAME creator — `cloudflare-tunnel` renders the CNAME `records.csv`
+  for manual entry (or for cloudflared to create) and drops the tunnel token.
 - No automatic router port-forward / UPnP mutation — instructions only.
 - No new public-cert lifecycle beyond what cloudflared/ingress already do; we
   never become a nameserver.

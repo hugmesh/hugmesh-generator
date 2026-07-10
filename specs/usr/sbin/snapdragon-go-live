@@ -66,9 +66,21 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # --ddns-subdomain is interpolated into the EMITTED root-cron ddns-update.sh, and
 # --ingress-ip/--ingress-ipv6 land verbatim in the byo-domain zone/CSV, so a
 # dot/newline/metachar there would forge extra DNS rows or inject a command as
-# root. Shape-check them BEFORE any provider emit runs. The duckdns registry emit
-# re-validates the subdomain as a second line of defence.
+# root. --domain lands verbatim in the byo-domain zone/CSV AND in the output
+# PATH ("${out}/${GL_DOMAIN}.zone"), so a value containing '/' or '..' would
+# escape the plan output sandbox and write a root-owned .zone file to an
+# arbitrary directory. Shape-check them ALL BEFORE any provider emit runs. The
+# duckdns registry emit re-validates the subdomain as a second line of defence.
 validate_inputs() {
+    # --domain (GL_DOMAIN_OVERRIDE) becomes GL_DOMAIN in load_context() and is
+    # used both as a path segment and verbatim in emitted zone/CSV rows. Require a
+    # strict DNS domain name (dot-separated [A-Za-z0-9-] labels, 1-63 chars each,
+    # no leading/trailing hyphen) — this rejects '/', '..', empty labels, and any
+    # other non-DNS character, closing the arbitrary-.zone-file-write sandbox escape.
+    if [ -n "${GL_DOMAIN_OVERRIDE:-}" ]; then
+        [[ "${GL_DOMAIN_OVERRIDE}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]] \
+            || die "--domain is not a valid DNS domain name (dot-separated [A-Za-z0-9-] labels; no '/', '..', or other characters)"
+    fi
     if [ -n "${GL_INGRESS_IP:-}" ]; then
         [[ "${GL_INGRESS_IP}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
             || die "--ingress-ip is not a valid IPv4 address"
