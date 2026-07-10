@@ -231,17 +231,27 @@ ensure_app    "${CASDOOR_URL}" "${CASDOOR_ORG}"
 # tests/pentest/seed-personas.sh appends its attacker/load pools.
 #
 # The ad-hoc identities below (admin@snapdragon.systems, alice../frank@gmail.com,
-# dragoneer) are the sequential, stateful specs/02,04,05,06,07,08,09 personas —
-# per helpers.ts's onboard()/registerOnly() doc comment, native login has no
-# self-registration surface, so each must exist as a pre-seeded native Casdoor
-# account (username = the literal handle these specs hardcode) sharing the
-# common E2E_PASSWORD. admin@snapdragon.systems is the sole admin among them
-# (spec 02/08/09 exercise admin-only views); the rest are bare ROLE_USER (the
+# dragoneer, rbac-pending@/rbac-approved@gmail.com) are the sequential, stateful
+# specs/02,04,05,06,07,08,09,17 personas — per helpers.ts's
+# onboard()/registerOnly() doc comment, native login has no self-registration
+# surface, so each must exist as a pre-seeded native Casdoor account (username
+# = the literal handle these specs hardcode) sharing the common E2E_PASSWORD.
+# admin@snapdragon.systems is the sole admin among them (spec 02/08/09
+# exercise admin-only views); the rest are bare ROLE_USER (the
 # nav-matrix/nav-mastodon gate in menu.component.ts checks only
 # capabilities.installed() + session.fullyRegistered(), not a per-service
 # role, so plain ROLE_USER is sufficient to reach both). mallory@gmail.com and
 # "rando" are DELIBERATELY absent — specs 03/07 assert sign-in is denied for an
 # identity no admin ever provisioned.
+#
+# rbac-pending@/rbac-approved@gmail.com (spec 17): POST /bff/admin/allowlist
+# does NOT gate native sign-in — that's a vestige of the removed Google/Discord
+# self-registration flow (SsoAuthController's separate, dark /bff/register
+# endpoint); /bff/login always validates against a REAL, pre-existing Casdoor
+# account, exactly like every other ad-hoc persona here. Seeded here so spec
+# 17's "pending vs completed registration" gate can exercise the SAME real
+# registerOnly()/onboard() mechanism as specs 02/03/04, not a self-provisioning
+# path that doesn't exist in the current architecture.
 EXTRA_SPECS="\
 e2e-superadmin:ROLE_SUPERADMIN:E2E_SUPERADMIN_PASSWORD \
 e2e-banned:ROLE_USER:E2E_BANNED_PASSWORD \
@@ -252,7 +262,9 @@ carol@gmail.com:ROLE_USER:E2E_PASSWORD \
 dave@gmail.com:ROLE_USER:E2E_PASSWORD \
 eve@gmail.com:ROLE_USER:E2E_PASSWORD \
 frank@gmail.com:ROLE_USER:E2E_PASSWORD \
-dragoneer:ROLE_USER:E2E_PASSWORD"
+dragoneer:ROLE_USER:E2E_PASSWORD \
+rbac-pending@gmail.com:ROLE_USER:E2E_PASSWORD \
+rbac-approved@gmail.com:ROLE_USER:E2E_PASSWORD"
 
 ROLES_DIR="${SEED_WORKDIR}/roles-render"
 BASE_RENDER="${SEED_WORKDIR}/roles-render-base"
