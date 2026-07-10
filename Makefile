@@ -352,21 +352,6 @@ help: ## list targets
 menu: ## interactive console menu to build images (progress + quit-without-stopping)
 	@bash scripts/build-menu.sh
 
-# ── go-live wizard — internal-only -> public effector (docs/GO-LIVE.md) ─
-# The flags are the engine (scripts/go-live.sh); `make` is the friendly
-# interface, exactly like the build targets above. Providers live in
-# scripts/golive-providers.conf. Secrets go via GOLIVE_TOKEN_FILE (a file
-# path), NEVER as a make variable value.
-go-live: ## superadmin go-live wizard engine: make go-live [PROVIDER=…] [DOMAIN=…] [GOLIVE_FLAGS='--emit'] (no args = status; flip needs a typed confirm on a TTY)
-	@bash scripts/go-live.sh \
-	  $(if $(strip $(PROVIDER)),--provider '$(PROVIDER)') \
-	  $(if $(strip $(DOMAIN)),--domain '$(DOMAIN)') \
-	  $(if $(strip $(GOLIVE_TOKEN_FILE)),--token-file '$(GOLIVE_TOKEN_FILE)') \
-	  $(GOLIVE_FLAGS)
-
-go-live-menu: ## interactive console menu for the go-live wizard (same engine, discoverable knobs)
-	@bash scripts/go-live-menu.sh
-
 ## ── build ─────────────────────────────────────────────────────────────
 # Every build target dispatches: NATIVE unset -> re-invoke inside the builder
 # container (which sets NATIVE=1, WORK_DIR=/out); NATIVE set -> run the scripts
@@ -439,6 +424,21 @@ go-live: ## preview the on-device go-live wizard (DRY-RUN plan; PROVIDER=/DOMAIN
 	    $(if $(strip $(INGRESS_IP)),--ingress-ip '$(INGRESS_IP)') \
 	    $(if $(strip $(TUNNEL_CNAME)),--tunnel-cname '$(TUNNEL_CNAME)')
 	@echo "==> emitted under $(GOLIVE_OUT)/out (preview only). Real go-live is on-device."
+
+# go-live-menu — DEV PREVIEW of the on-device ncurses/whiptail CONSOLE front-end
+# (specs/usr/sbin/snapdragon-go-live-menu), the thin successor of the removed
+# #286 whiptail UX. It carries NO wizard logic: every action is a subcommand of
+# the SAME shared driver `make go-live` previews. It runs under the identical
+# GL_ETC_SNAPDRAGON sandbox so it can NEVER read/write the host's
+# /etc/snapdragon. On a real node you run `snapdragon-go-live-menu` directly.
+go-live-menu: ## preview the on-device go-live CONSOLE menu (ncurses front-end; sandboxed)
+	@echo "==> go-live console menu PREVIEW (dry-run sandbox; host posture is NEVER touched)"
+	@mkdir -p '$(GOLIVE_OUT)/etc' '$(GOLIVE_OUT)/out'
+	GL_ETC_SNAPDRAGON='$(GOLIVE_OUT)/etc' \
+	GL_DRIVER='$(CURDIR)/specs/usr/sbin/snapdragon-go-live' \
+	GL_PROVIDERS_LIB='$(CURDIR)/specs/usr/lib/snapdragon/go-live-providers.sh' \
+	GL_OUT_DIR='$(GOLIVE_OUT)/out' \
+	  bash specs/usr/sbin/snapdragon-go-live-menu
 
 rebuild: ## from-scratch: wipe the work dir, then build the whole default fleet
 ifndef NATIVE

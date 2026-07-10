@@ -1,10 +1,18 @@
 # Superadmin go-live wizard
 
-> **Status: v1 FOUNDATION.** This PR ships the shared driver, the provider
-> registry, a CLI front-end, and the fully-implemented **bring-your-own-domain**
-> provider. The other providers are selectable **stubs**, and the
-> **ncurses / Studio / web** front-ends are **deferred** to later passes (see
-> [Deferred](#deferred)).
+> **Status: v1 CONSOLIDATED.** One architecture. This ships the shared driver,
+> the provider registry, **three front-ends** (CLI, ncurses console menu, and the
+> Studio GUI wizard), and **all five providers implemented end-to-end** —
+> bring-your-own-domain, cloudflare-tunnel, DuckDNS/Cloudflare-DDNS,
+> tailscale-funnel, and router-portforward. The mechanism is **baked on-image**
+> by the two server builders and surfaced from a **console** and a **Studio**
+> menu entry. What remains genuinely deferred is listed in
+> [Deferred](#deferred).
+>
+> *(This doc is the single canonical go-live reference. It absorbed the former
+> `docs/GO-LIVE.md` — the superseded #286 engine (`scripts/go-live.sh`,
+> `scripts/golive-providers.conf`, `scripts/go-live-menu.sh`) and its doc were
+> removed once their wins were ported onto this driver.)*
 
 The go-live wizard is the **human-facing effector of the existing
 `RELEASE_STATE` mechanism**. It does *not* reimplement the internal-vs-public
@@ -50,9 +58,9 @@ Mirroring how **image-gen** exposes one shared driver behind thin per-interface
 UIs:
 
 ```
-        CLI front-end          ncurses (DEFERRED)   Studio (DEFERRED)   web (DEFERRED)
-   snapdragon-go-live-cli              │                   │                 │
-              └──────────────┬─────────┴─────────┬─────────┴────────┬────────┘
+       CLI front-end        ncurses console menu     Studio GUI wizard     web (DEFERRED)
+  snapdragon-go-live-cli   snapdragon-go-live-menu    gui/pages/golive.py        │
+              └──────────────┬─────────┴─────────┬─────────┴────────┬───────────┘
                              ▼                                       ▼
                    shared DRIVER: specs/usr/sbin/snapdragon-go-live
                    (context • provider dispatch • the commit/confirm gate)
@@ -67,7 +75,9 @@ UIs:
 | Shared driver | `specs/usr/sbin/snapdragon-go-live` | All logic: reads context, dispatches to a provider's emit, owns the confirmation gate + the marker write. Flag-driven; every front-end calls **only** its subcommands. |
 | Provider registry | `specs/usr/lib/snapdragon/go-live-providers.sh` | Sourceable data + per-provider emit functions. The driver never hard-codes a provider — it iterates the registry. |
 | CLI front-end | `specs/usr/sbin/snapdragon-go-live-cli` | Thin guided wizard; carries no logic, only calls the driver. Pass-through mode for scripting. |
-| Dev preview | `make go-live` | Repo-side dry-run of the driver's `plan`, sandboxed away from the host `/etc`. |
+| Console menu | `specs/usr/sbin/snapdragon-go-live-menu` | Thin ncurses/whiptail console face (plain-numbered fallback when there is no TTY/whiptail). Prompts secrets masked and hands them to the driver only via a 0600 `--token-file`. Pure subcommand dispatch — no wizard logic. |
+| Studio GUI | `studio/snapdragon_studio/gui/pages/golive.py` | The 7-page desktop wizard, reachable from the tray's **"Go Live…"** entry or `python -m snapdragon_studio --go-live`. Its `core/golive_driver.py` shells out to the same driver subcommands. |
+| Dev preview | `make go-live` / `make go-live-menu` | Repo-side dry-run of the driver's `plan` (and the console menu), sandboxed away from the host `/etc` via `GL_ETC_SNAPDRAGON`. |
 
 ---
 
@@ -111,16 +121,16 @@ and the gateway already promise.
 
 | # | id | Mechanism | v1 | What it emits / does |
 | --- | --- | --- | --- | --- |
-| 1 | `cloudflare-tunnel` | deeplink | **stub** | Flagship. Deep-link to the CF Zero-Trust Tunnels page; guide the tunnel-token drop into `keys-template/cloudflared/`; autofill apex + `api./matrix./mastodon.`. Plumbing already exists (`apps/12-cloudflared.yaml`, `manifests/cloudflared/`, `keys-template/cloudflared/`). |
-| 2 | `byo-domain` | files | **FULL** | The no-API baseline that covers everyone. Emits a copy-paste record set, a downloadable BIND zone + CSV (A/AAAA/CNAME to the ingress IP or tunnel CNAME), and registrar DNS deep-links. |
-| 3 | `duckdns` | ddns | **stub** | DuckDNS / Cloudflare-DDNS — a real thin single-token updater + cron drop-in (dynamic-IP homes). |
-| 4 | `tailscale-funnel` | funnel | **stub** | Tailnet-native public exposure; **no public DNS** to mutate. |
-| 5 | `router-portforward` | instructions | **stub** | Pure instructions + deep-links to the gateway/portforward.io; **no mutation**. |
+| 1 | `cloudflare-tunnel` | deeplink | **FULL** | Flagship (no inbound ports). Deep-link to the CF Zero-Trust Tunnels page; guides the tunnel-token drop into `keys-template/cloudflared/`; renders the CNAME record set (`<host> → <tunnel-cname>`). An **optional** thin API path can create the CNAMEs via a zone-scoped token read from a 0600 header file (never argv). Plumbing already exists (`apps/12-cloudflared.yaml`, `manifests/cloudflared/`, `keys-template/cloudflared/`). |
+| 2 | `byo-domain` | files | **FULL** | The no-API baseline that covers everyone — works with **every** registrar. Emits a copy-paste record set, a downloadable BIND zone + CSV (A/AAAA/CNAME to the ingress IP or tunnel CNAME), and registrar DNS deep-links (Cloudflare / Namecheap / GoDaddy / Porkbun / Gandi / Route 53 / Squarespace). Behind CGNAT there is no usable ingress IP — use `cloudflare-tunnel` or `tailscale-funnel` instead. |
+| 3 | `duckdns` | ddns | **FULL** | DuckDNS / Cloudflare-DDNS — a **real** thin single-token updater + `cron.d` drop-in (dynamic-IP homes). `plan` stores the token at `keys-template/ddns/token` (0600) and renders `ddns-update.sh` + a cron snippet (5-minute floor, mirroring the `snapdragon-*-reconcile` cron convention); the updater reads the token from the keys file at RUNTIME, never argv/cron mail. |
+| 4 | `tailscale-funnel` | funnel | **FULL** | Tailnet-native public HTTPS on the node's `<node>.<tailnet>.ts.net` name — **no public DNS** to mutate. **Caveat:** Funnel is a tailscale.com-hosted control-plane feature; the default Snapdragon mesh is self-hosted **headscale, which does not implement Funnel** — this provider applies only to nodes joined to Tailscale proper. Emits the enable-Funnel checklist. |
+| 5 | `router-portforward` | instructions | **FULL** | Pure port-forward instructions (forward WAN 80/443 to the ingress node) + deep-links to your gateway / portforward.io. **v1 never mutates the router** — no UPnP, no vendor APIs. Pair with `byo-domain` (static IP) or `duckdns` (dynamic). |
 
-Only `byo-domain` is implemented end-to-end in v1. The stubs are **real registry
-rows** (label, mechanism, deep-link) whose emit writes a clearly-marked
-`STUB-<id>.txt` with a TODO pointing back here — so the framework is exercised
-uniformly and every provider is visible and selectable.
+All five providers are implemented end-to-end. Each is a **real registry row**
+(label, mechanism, deep-link, emit fn `glp_emit_<id>`); the driver never
+hard-codes one — it iterates the registry, so a new provider is a single new row
+plus its emit function, not a change in any front-end.
 
 ### `byo-domain` artifacts
 
@@ -172,23 +182,85 @@ Repo-side dry-run (never touches the host `/etc`):
 $ make go-live PROVIDER=byo-domain DOMAIN=acme.example INGRESS_IP=203.0.113.10
 ```
 
+You can also preview the on-device **console menu** the same sandboxed way:
+`make go-live-menu` (runs `snapdragon-go-live-menu` against a scratch
+`GL_ETC_SNAPDRAGON`, so it can never touch the host `/etc/snapdragon`).
+
+---
+
+## Secret hygiene
+
+- Provider tokens enter via `--token-file` (a path) or a **masked TTY prompt** —
+  there is deliberately **no** `--token VALUE` flag (argv leaks via `/proc`).
+- The console menu prompts masked, hands the value to the driver via a 0600
+  temp file, and deletes it right after the run; it never persists a token in
+  any saved state.
+- Tokens are written ONLY to the keys-layout destinations, mode 0600, all
+  gitignored — `keys-template/ddns/token` (DDNS),
+  `keys-template/cloudflared/tunnel-token` and `…/api-token` (cloudflare-tunnel).
+  Never committed, never echoed, never logged.
+- **DDNS input is validated before it is ever rendered into the emitted
+  root-cron updater** (ported verbatim from the #286 security fix): the DDNS
+  subdomain must be a single lowercase DNS label
+  (`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$` — dots and shell metacharacters are
+  rejected) and any ingress IP is IPv4/IPv6 shape-checked. This closes the
+  command-injection-as-root class before interpolation.
+
+## Superadmin access note (mesh SSH)
+
+Go-live runs **on the device** (root, `/etc/snapdragon`). If you drive it over
+the mesh via SSH, your client machine needs `tag:superadmin` — which is
+**force-assigned only via the manual allowlist**
+`/etc/snapdragon/registry/superadmin-machines.txt` on the control (pki) node,
+then `snapdragon-headscale-forcetags`. That step is deliberately manual
+(hardening ref FIX-SERVERTAG) — see
+[`docs/SUPERADMIN-MESH-CLIENT.md`](SUPERADMIN-MESH-CLIENT.md). Without it you can
+still run the wizard from the device's local console or any other authorized
+root path.
+
+## v1 non-goals (deliberate)
+
+- No full registrar API drivers (GoDaddy / Namecheap / Route 53) — deep-link +
+  downloadable files only. The only API code is the thin DDNS updaters and the
+  optional Cloudflare CNAME creator.
+- No automatic router port-forward / UPnP mutation — instructions only.
+- No new public-cert lifecycle beyond what cloudflared/ingress already do; we
+  never become a nameserver.
+- No unattended / headless auto-go-live — the human confirmation on a TTY is the
+  security boundary.
+- No changes to reconcile posture logic — the wizard is purely an effector on
+  the existing marker.
+
 ---
 
 ## Deferred
 
-Explicitly **not** in this foundation, by design:
+Now consolidated onto one architecture; the following are **DONE** and no longer
+deferred:
 
-- **ncurses / Studio / web front-ends.** Only the CLI front-end ships now. Each
-  future UI is a thin caller of the same driver subcommands — no wizard logic
-  moves into a front-end.
-- **Real provider drivers for #1, #3, #4, #5.** Only `byo-domain` is
-  implemented. Each stub's emit records the exact follow-up: implement
-  `glp_emit_<id>` in the registry lib. Per the design, only **DuckDNS /
-  Cloudflare-DDNS** (#3) warrant a real thin API driver; the rest stay
-  deep-link + downloadable-files + autofill.
-- **On-image baking + a Studio/console menu entry.** The scripts live under
-  `specs/usr/{sbin,lib}/…` in the house style, ready to be copied into the
-  sysroot by the builders, but wiring the bake + a menu item is a follow-up.
+- ✅ **ncurses console front-end** — `specs/usr/sbin/snapdragon-go-live-menu`.
+- ✅ **Studio GUI wizard** — `gui/pages/golive.py`, repointed onto this driver.
+- ✅ **All five provider emits** — `byo-domain`, `cloudflare-tunnel`,
+  DuckDNS/Cloudflare-DDNS, `tailscale-funnel`, `router-portforward`.
+- ✅ **On-image baking** — the two go-live server builders
+  (`build-rpi5-stage4.sh`, `build-x86-host-stage4.sh`) bake the driver, the
+  registry, and the CLI/menu front-ends into the sysroot inside
+  `bake_host_firewall()`, right beside firewall-reconcile.
+- ✅ **Console + Studio menu entries** — a "Go Live…" tray action in Studio and
+  the on-device `snapdragon-go-live-menu` console face.
+
+Still genuinely **deferred**, by design:
+
+- **A pre-flip `verify` subcommand** (probe DNS/HTTP/tunnel/DDNS/funnel before
+  `commit`). The gate today is preview-then-confirm; automated propagation
+  probes are a follow-up driver subcommand every front-end would then surface.
+- **A web / admin-UI front-end.** Only CLI, console, and Studio ship. Any web UI
+  is a thin caller of the same driver subcommands — no wizard logic moves into a
+  front-end.
+- **On-image bake for the 4 desktop/appliance builders is intentionally
+  omitted** — they bake neither firewall-reconcile nor release-state (they are
+  clients/appliances, not go-live server nodes), so they legitimately ship
+  without the wizard.
 
 ## Validation
 
