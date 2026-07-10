@@ -57,9 +57,11 @@ echo "${out}" | grep -q "effective posture:   internal" && ok "effective posture
 
 out="$(gl list)"
 echo "${out}" | grep -qE '^byo-domain .* full ' && ok "list marks byo-domain full" || { bad "byo-domain not full in list"; echo "${out}"; }
-echo "${out}" | grep -qE '^cloudflare-tunnel .* stub ' && ok "list marks cloudflare-tunnel stub" || bad "cloudflare-tunnel not stub"
+# After the consolidation every provider is fully implemented — none list as stub.
+echo "${out}" | grep -qE '^cloudflare-tunnel .* full ' && ok "list marks cloudflare-tunnel full" || { bad "cloudflare-tunnel not full"; echo "${out}"; }
+echo "${out}" | grep -q ' stub ' && bad "a provider still lists as stub after consolidation" || ok "no provider lists as stub"
 for want in duckdns tailscale-funnel router-portforward; do
-    echo "${out}" | grep -q "^${want} " && ok "list includes ${want}" || bad "list missing ${want}"
+    echo "${out}" | grep -qE "^${want} .* full " && ok "list includes ${want} (full)" || bad "list missing/!full ${want}"
 done
 
 # (b) plan is a DRY-RUN: emits artifacts, NEVER writes the marker ---------------
@@ -113,11 +115,42 @@ gl rollback --yes --revert-release-state >/dev/null
 grep -qx 'internal' "${ETC}/release-state" && ok "--revert-release-state restored internal" || bad "--revert-release-state did NOT restore internal"
 gl status | grep -q "effective posture:   internal" && ok "fully rolled back to internal" || bad "not internal after full rollback"
 
-# (h) a stub provider still emits its marked placeholder ------------------------
-STUBOUT="${WORK}/stubout"; mkdir -p "${STUBOUT}"
-gl plan --provider cloudflare-tunnel --out-dir "${STUBOUT}" >/dev/null
-[ -s "${STUBOUT}/STUB-cloudflare-tunnel.txt" ] && grep -q 'STUB' "${STUBOUT}/STUB-cloudflare-tunnel.txt" \
-    && ok "stub provider emits a marked STUB placeholder" || bad "stub provider emit missing/unmarked"
+# (h) cloudflare-tunnel emits a real CNAME record set + token-drop guide --------
+CFOUT="${WORK}/cfout"; mkdir -p "${CFOUT}"
+gl plan --provider cloudflare-tunnel --tunnel-cname abc123.cfargotunnel.com --out-dir "${CFOUT}" >/dev/null
+[ ! -e "${CFOUT}/STUB-cloudflare-tunnel.txt" ] && ok "cloudflare-tunnel no longer emits a STUB placeholder" || bad "cloudflare-tunnel still emits STUB"
+grep -qx 'type,name,content,ttl,proxied' "${CFOUT}/records.csv" 2>/dev/null && ok "cloudflare-tunnel emits records.csv" || bad "cloudflare-tunnel records.csv missing/wrong"
+grep -q "^CNAME,${DOMAIN},abc123\.cfargotunnel\.com,300,true" "${CFOUT}/records.csv" && ok "cloudflare-tunnel apex CNAME autofilled to the tunnel" || { bad "cloudflare-tunnel apex CNAME missing"; cat "${CFOUT}/records.csv"; }
+grep -q "^CNAME,api\.${DOMAIN},abc123\.cfargotunnel\.com" "${CFOUT}/records.csv" && ok "cloudflare-tunnel api CNAME autofilled" || bad "cloudflare-tunnel api CNAME missing"
+grep -q 'cloudflared/tunnel-token' "${CFOUT}/token-drop.txt" 2>/dev/null && ok "cloudflare-tunnel names the keys-layout token dest" || bad "cloudflare-tunnel token-drop guide missing"
+
+# (h2) duckdns emits a REAL updater + cron; no token in argv; safe interpolation -
+DDOUT="${WORK}/ddout"; mkdir -p "${DDOUT}"
+gl plan --provider duckdns --ddns-subdomain myhome --out-dir "${DDOUT}" >/dev/null
+[ -x "${DDOUT}/ddns-update.sh" ] && ok "duckdns emits an executable ddns-update.sh" || bad "duckdns updater missing/not executable"
+[ -s "${DDOUT}/ddns.cron" ] && grep -q '\*/5 .* root /usr/local/sbin/snapdragon-ddns-update' "${DDOUT}/ddns.cron" && ok "duckdns emits the root cron drop-in" || bad "duckdns cron drop-in missing/wrong"
+bash -n "${DDOUT}/ddns-update.sh" && ok "emitted ddns-update.sh parses (bash -n)" || bad "emitted ddns-update.sh has a syntax error"
+grep -q "SUBDOMAIN=myhome" "${DDOUT}/ddns-update.sh" && ok "duckdns updater carries the validated subdomain" || bad "duckdns updater missing subdomain"
+# The token is read from a keys-layout FILE at runtime, never embedded / in argv.
+grep -q 'TOKEN_FILE=' "${DDOUT}/ddns-update.sh" && ! grep -qi 'token=[A-Za-z0-9]' "${DDOUT}/ddns-update.sh" \
+    && ok "duckdns updater reads the token from a file (never embedded)" || bad "duckdns updater may embed a token"
+
+# (h3) SECURITY regression guard: a non-label --ddns-subdomain is REJECTED and NO
+# root cron updater is written (ported #286 command-injection fix).
+EVILOUT="${WORK}/evilout"; mkdir -p "${EVILOUT}"
+out="$(gl plan --provider duckdns --ddns-subdomain 'a$(touch pwned).b' --out-dir "${EVILOUT}")"; rc=$?
+[ "${rc}" -ne 0 ] && [ ! -e "${EVILOUT}/ddns-update.sh" ] && [ ! -e "${WORK}/pwned" ] && [ ! -e "pwned" ] \
+    && ok "malicious --ddns-subdomain rejected; no updater written, no injection" \
+    || { bad "malicious --ddns-subdomain NOT rejected safely (rc=${rc})"; echo "${out}"; }
+rm -f pwned "${WORK}/pwned" 2>/dev/null
+
+# (h4) tailscale-funnel / router-portforward emit guidance, NO DNS record set ----
+for prov in tailscale-funnel router-portforward; do
+    POUT="${WORK}/pout-${prov}"; mkdir -p "${POUT}"
+    gl plan --provider "${prov}" --out-dir "${POUT}" >/dev/null
+    [ -s "${POUT}/instructions.txt" ] && [ -s "${POUT}/deeplinks.txt" ] && [ ! -e "${POUT}/records.csv" ] \
+        && ok "${prov} emits guidance + deep-links, no DNS record set" || bad "${prov} emit wrong"
+done
 
 # (i) tunnel-cname mode: sub-labels get CNAME, apex annotated ALIAS ------------
 CNOUT="${WORK}/cnout"; mkdir -p "${CNOUT}"
