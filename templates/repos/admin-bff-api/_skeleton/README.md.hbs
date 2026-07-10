@@ -13,9 +13,10 @@ REQUIRED to produce a real, buildable tenant tree.**
 To emit a real tree, make the base resolvable and re-run:
 
 ```
-# point at a present read-only clone (never modified, never committed):
-ADMIN_BFF_API_BASE_DIR=/path/to/snapdragon-admin-bff-api \
-  scripts/render-repo-tree.sh brands/<brand>.conf --enable-repo-tree --repo admin-bff-api
+# point ADMIN_BFF_API_BASE_DIR at a present read-only clone
+# (never modified, never committed), then re-run:
+export ADMIN_BFF_API_BASE_DIR="<path to your snapdragon-admin-bff-api clone>"
+scripts/render-repo-tree.sh brands/<brand>.conf --enable-repo-tree --repo admin-bff-api
 ```
 
 The overlay then applies the brand-coupled `application.yml` env-defaults +

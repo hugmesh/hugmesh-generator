@@ -97,6 +97,29 @@ function referencedTokens(src) {
   return [...seen];
 }
 
+// Extract the RAW body of every mustache — i.e. whatever sits between {{ and }},
+// NOT just valid {{identifier}} names. This is the reachability fix for the
+// Phase-3 red-team gate: the frozen protocol constants (snapdragon.systems/…,
+// X-Snapdragon-Local, snapdragon.device-terminal.stepup.) and some denylisted
+// keys are NOT valid Handlebars identifiers (they carry ./ / -), so TOKEN_RE
+// above never captures them. A template that literally wrote
+// `{{snapdragon.systems/domain}}` would therefore slip past the identifier-only
+// check and render to an EMPTY string (exit 0) instead of being refused. Scanning
+// the raw body lets isFrozen()/isDenied() actually fire on the constants they
+// name, so the reference-side gate is reachable — not theater. We do NOT run the
+// isAllowed() check here (raw bodies legitimately include {{!}} comments, dotted
+// helper paths, etc.); the identifier loop above owns the allowlist gate.
+const RAW_MUSTACHE_RE = /\{\{\{?\s*([^{}]*?)\s*\}?\}\}/g;
+function referencedRawBodies(src) {
+  const seen = new Set();
+  let m;
+  while ((m = RAW_MUSTACHE_RE.exec(src)) !== null) {
+    const body = m[1].trim();
+    if (body) seen.add(body);
+  }
+  return [...seen];
+}
+
 function listHbs(dir) {
   const acc = [];
   (function walk(d) {
@@ -147,6 +170,20 @@ function main() {
       }
       if (!classifier.isAllowed(tok)) {
         die(`template ${path.relative(templatesDir, tmpl)} references token '{{${tok}}}' that is neither allowlisted nor denylisted — refusing to render (fail-closed: strict:false would silently emit empty string). Add it to scripts/tooling/tokens.json (allowlist) or remove the reference.`);
+      }
+    }
+
+    // Reachable red-team gate: the identifier loop above cannot see a frozen
+    // protocol constant / secret key written as a raw mustache body (they contain
+    // ./ / - and are not valid identifiers). Scan the RAW bodies too so a template
+    // that references e.g. {{snapdragon.systems/domain}} or {{CASDOOR_ADMIN_CLIENT_SECRET}}
+    // is REFUSED (exit 1) rather than silently rendering to an empty string.
+    for (const body of referencedRawBodies(src)) {
+      if (classifier.isFrozen(body)) {
+        die(`template ${path.relative(templatesDir, tmpl)} references '{{${body}}}' that targets a FROZEN protocol constant (label-key namespace / wire header / subprotocol prefix) — refusing to render (it must stay literal)`);
+      }
+      if (classifier.isDenied(body)) {
+        die(`template ${path.relative(templatesDir, tmpl)} references denylisted secret token '{{${body}}}' — refusing to render`);
       }
     }
 

@@ -90,6 +90,23 @@ case "$BRAND_TITLE" in
 esac
 [[ "${#BRAND_TITLE}" -le 128 ]] || _die "BRAND_TITLE too long (max 128)"
 
+# CLUSTER_DOMAIN feeds AUTH-relevant env-DEFAULTs in the admin-bff-api overlay
+# (application.yml issuer-uri / jwk-set-uri / admin-emails / builder registry).
+# Because the renderer uses noEscape:true, an un-validated CLUSTER_DOMAIN carrying
+# a newline/whitespace/YAML metacharacter could splice attacker-shaped lines into
+# the emitted YAML (e.g. a bogus `leaked-default:` key next to the JWT issuer).
+# Validate it as a DNS hostname BEFORE export — parity with the BRAND/ORG/
+# BRAND_TITLE guards above. Empty is allowed (the login-ui pilot does not consume
+# it); HEADSCALE_URL/MESH_TAG are NOT hostname-shaped and are not overlay tokens
+# here, so they are intentionally not hostname-checked.
+_HOSTNAME='^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$'
+if [[ -n "${CLUSTER_DOMAIN:-}" ]]; then
+  [[ "${#CLUSTER_DOMAIN}" -le 253 ]] \
+    || _die "CLUSTER_DOMAIN too long (max 253)"
+  [[ "$CLUSTER_DOMAIN" =~ $_HOSTNAME ]] \
+    || _die "invalid CLUSTER_DOMAIN '${CLUSTER_DOMAIN}' (must be a DNS hostname; no whitespace/newlines/YAML metacharacters)"
+fi
+
 # ── Derive the tenant token values ───────────────────────────────────────────
 # NPM_SCOPE: lowercase slug of ORG — SAME slug rule generate-brand-repos.sh uses
 # for HARBOR_PROJECT/GITLAB_GROUP (single source of the rule). npm scopes must be
@@ -168,6 +185,21 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
       --templates "$STAGE" --out "$RENDERED" --extra-tokens "$EXTRA_TOKENS"
   ( cd "$RENDERED" && tar -cf - . ) | ( cd "$BRAND_OUT" && tar -xf - )
   _log "overlaid $(find "$RENDERED" -type f | wc -l | tr -d ' ') brand-coupled file(s) onto the base"
+
+  # BACKSTOP (keyed to "is-an-overlay-rendered-file", not to a path glob): the
+  # broad emit scan below is scoped with path excludes (src/main/java, src/test)
+  # that are sound for TODAY's overlay (it only renders into src/main/resources +
+  # .gitlab-ci.yml). But those excludes are keyed to file PATH — a FUTURE overlay
+  # that ever renders a template whose destination lands under an excluded path
+  # (e.g. a generated @Value default under src/main/java/**) would fall outside the
+  # broad backstop. So ALSO scan the set of files THIS overlay actually rendered,
+  # with NO excludes — every overlay-emitted file is guaranteed-scanned regardless
+  # of where it lands. Redundant with the broad scan for today's paths (zero new
+  # failures possible), fail-closed for tomorrow's.
+  _log "scanning the ${RENDERED##*/} overlay-rendered file(s) (no excludes — overlay-output backstop)"
+  if ! "${SCRIPT_DIR}/secret-scan.sh" "$RENDERED" >&2; then
+    _die "secret scanner flagged an overlay-RENDERED file — refusing to emit ${BRAND_OUT}"
+  fi
 else
   # Skeleton fallback: render the whole minimal tree from _skeleton/*.hbs.
   SKEL="${OVERLAY_DIR}/_skeleton"
