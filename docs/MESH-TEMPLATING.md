@@ -233,3 +233,59 @@ run this as a constrained, network-less, NON-ROOT helper **or** consume
 pre-rendered output — it must **not** `node`-as-root. The base-puller's network
 fetch is likewise off the root path (use a pre-populated `/.repo-base/` cache or a
 `*_BASE_DIR` override on the node). Deferred reconciliation, not solved here.
+
+---
+
+## Phase 4 — archetype-based rendering + full tenant-set instantiation
+
+Phase 4 generalizes the two proven EXEMPLAR overlays into archetype **classes** and
+instantiates the whole N-repo tenant set from a manifest. The anti-goal was 21 hand
+overlays; the win is: any BFF renders from the spring-bff archetype, any UI from the
+angular-mfe archetype, parameterized only by a `repos[]` identity row.
+
+### Structure — `templates/archetypes/<archetype>/`
+`templates/repos/<name>/` is **gone** (folded in). The repo→archetype map lives in
+the brand YAML's `repos[]`, not a second overlay dir. Each archetype ships:
+- `recipe.yaml` — **class-B** anchored, presence-tolerant edits (find = upstream
+  literal, replace = brand-token form) applied to each repo's **OWN** base file.
+  This is the change that generalizes: a whole-file overlay carries the exemplar's
+  identity (emit user-bff as admin, break `ng build user`); an anchor edits only the
+  brand-coupled substring, and an anchor absent in a given repo no-ops.
+- optional **class-A** whole-file `.hbs` — byte-identical across the class bar one
+  brand token (angular-mfe `federation-base.js`; gateway `deploy/*` env overlay).
+- `_identity.env` — the drift **oracle** for the exemplar member.
+- `_skeleton/` — base-absent fallback.
+
+### Per-archetype skeleton (two-tier fallback)
+- **angular-mfe**: BOOTABLE — a zero-dep static holding page; `npm ci && npm run
+  build` works fully OFFLINE and emits a titled bundle.
+- **spring-bff / gateway**: NON-buildable placeholder README. A compiled Spring
+  service has no faithful minimal boot, so **"never refuses"** holds but
+  **"bootable"** does not. Documented, not a bug.
+
+### Manifest + security boundary
+`repos[]` in `brands/<name>.yaml` = `{name, archetype, installed, identity}`. It is
+read as **structured data** by the Node driver (`render-tenant-set.js`) ONLY and is
+**never** degraded to shell / eval'd on the signed-export path (only the 7 scalars
+are, via `load-brand-schema.js`; `--repos-json` emits the manifest as a JSON
+sidecar). Every identity token NAME is fail-closed through the classifier and every
+VALUE is screened for a secret/frozen constant before it can reach a render.
+`installed:false` drops exactly that repo from the render (optional-service toggle).
+
+### One command
+```
+scripts/render-tenant-set.sh brands/<brand>.yaml --enable-repo-tree --out-dir out
+```
+Renders every installed repo (repo→archetype→overlay+identity), two-tier skeleton
+fallback for unpullable bases, then a residual-`{{TOKEN}}` sweep. Zero residual or
+it refuses.
+
+### Drift validator (generalized)
+`validate-repo-templates.sh --archetype <name>` now does an **anchored-region**
+compare (recipe find@upstream still present + replace@upstream==find round-trip;
+class-A whole-file byte-identical), because a 2nd class member legitimately differs
+from the exemplar outside the anchored regions. GREEN on a fresh base, RED on drift.
+
+### Node-not-root
+Unchanged, now applied per-repo across the full set: `render-recipe.js`,
+`render-tenant-set.js`, `validate-archetype.js` are BUILD-HOST ONLY.

@@ -14,14 +14,17 @@
 #
 #   1. pull the Tier-2 base READ-ONLY (scripts/pull-repo-base.sh) — never copied
 #      into the generator tree/commit;
-#   2. overlay the thin Tier-1 delta (templates/repos/<repo>/*.hbs) ONTO a private
-#      copy of the base in an OUT dir, rendered via the Phase-1 REAL-Handlebars
-#      path (scripts/tooling/render-handlebars.js, --extra-tokens) — rendering is
-#      NOT reimplemented here;
+#   2. overlay the ARCHETYPE delta (templates/archetypes/<archetype>) ONTO a private
+#      copy of the base in an OUT dir: CLASS-A whole-file .hbs via the Phase-1
+#      REAL-Handlebars path (render-handlebars.js) + CLASS-B anchored, presence-
+#      tolerant recipe edits (render-recipe.js) on the base's OWN files. The repo's
+#      archetype comes from the repos[] manifest (--archetype); per-repo identity
+#      is --set tokens. Rendering is NOT reimplemented here;
 #   3. gate the emitted tree with the Phase-1 fail-closed secret scanner
 #      (scripts/secret-scan.sh) — MUST pass or we refuse to emit;
-#   4. FALL BACK to templates/repos/<repo>/_skeleton/ when the base is absent
-#      (never refuses).
+#   4. FALL BACK to templates/archetypes/<archetype>/_skeleton/ when the base is
+#      absent (never refuses; MFE skeleton is bootable, BFF/gateway is a
+#      non-buildable placeholder).
 #
 # Usage:
 #   scripts/render-repo-tree.sh brands/example.conf --enable-repo-tree \
@@ -39,19 +42,33 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TOOLING="${SCRIPT_DIR}/tooling"
 
-[[ $# -ge 1 ]] || _die "usage: $0 <brands/BRAND.conf> --enable-repo-tree [--repo NAME] [--out-dir DIR] [--base DIR]"
+[[ $# -ge 1 ]] || _die "usage: $0 <brands/BRAND.conf> --enable-repo-tree --archetype NAME [--repo NAME] [--set K=V]... [--out-dir DIR] [--base DIR]"
 BRAND_CONF="$1"; shift
 
 REPO="login-ui"
+ARCHETYPE=""
 OUT_DIR="./out"
 BASE_OVERRIDE=""
 ENABLED=0
+# Per-repo IDENTITY tokens (Phase 4): repeatable --set NAME=VALUE from the repos[]
+# manifest identity row (e.g. APP_SLUG=user, TITLE_WORD=User, PROFILE=be). These
+# are added to the render context on top of the brand-derived tokens. Every NAME
+# is fail-closed through the classifier (buildContext); a non-allowlisted or
+# secret/frozen NAME aborts the render.
+declare -a SET_NAMES=()
+declare -a SET_VALUES=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --enable-repo-tree) ENABLED=1; shift ;;
-    --repo)     REPO="$2"; shift 2 ;;
-    --out-dir)  OUT_DIR="$2"; shift 2 ;;
-    --base)     BASE_OVERRIDE="$2"; shift 2 ;;
+    --repo)      REPO="$2"; shift 2 ;;
+    --archetype) ARCHETYPE="$2"; shift 2 ;;
+    --out-dir)   OUT_DIR="$2"; shift 2 ;;
+    --base)      BASE_OVERRIDE="$2"; shift 2 ;;
+    --set)
+      [[ "$2" == *=* ]] || _die "--set expects NAME=VALUE, got '$2'"
+      _sn="${2%%=*}"; _sv="${2#*=}"
+      [[ "$_sn" =~ ^[A-Z][A-Z0-9_]*$ ]] || _die "--set NAME '$_sn' must be UPPER_SNAKE"
+      SET_NAMES+=("$_sn"); SET_VALUES+=("$_sv"); shift 2 ;;
     *) _die "unknown argument: $1" ;;
   esac
 done
@@ -65,8 +82,16 @@ fi
 [[ -f "$BRAND_CONF" ]] || _die "brand config not found: $BRAND_CONF"
 [[ "$REPO" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || _die "invalid --repo '$REPO'"
 
-OVERLAY_DIR="${REPO_ROOT}/templates/repos/${REPO}"
-[[ -d "$OVERLAY_DIR" ]] || _die "no overlay for repo '${REPO}' at ${OVERLAY_DIR}"
+# ── Resolve the ARCHETYPE overlay dir (Phase 4 generalization) ───────────────
+# Phase 2/3 hardcoded OVERLAY_DIR=templates/repos/<repo> (one hand overlay per
+# repo). Phase 4: the overlay dir is templates/archetypes/<archetype>, and the
+# repo->archetype map lives in the repos[] manifest (passed here via --archetype).
+# One archetype overlay serves the whole class; per-repo variance is --set identity.
+[[ -n "$ARCHETYPE" ]] || _die "missing --archetype (spring-bff|angular-mfe|gateway) — the repo's class from the repos[] manifest"
+[[ "$ARCHETYPE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || _die "invalid --archetype '$ARCHETYPE'"
+OVERLAY_DIR="${REPO_ROOT}/templates/archetypes/${ARCHETYPE}"
+[[ -d "$OVERLAY_DIR" ]] || _die "no archetype overlay '${ARCHETYPE}' at ${OVERLAY_DIR}"
+RECIPE="${OVERLAY_DIR}/recipe.yaml"
 
 command -v node >/dev/null 2>&1 || _die "node not found (build-host tool)"
 [[ -d "${TOOLING}/node_modules/handlebars" ]] \
@@ -132,11 +157,25 @@ esac
 [[ -d "$BRAND_OUT" ]] && { _log "removing existing output: $BRAND_OUT"; rm -rf "$BRAND_OUT"; }
 mkdir -p "$BRAND_OUT"
 
-export BRAND BRAND_TITLE ORG NPM_SCOPE HOST_NAME GENERATOR_ORG_GROUP
+# REPO_NAME: the repo short name as a render token (skeleton READMEs reference it).
+REPO_NAME="$REPO"
+export BRAND BRAND_TITLE ORG NPM_SCOPE HOST_NAME GENERATOR_ORG_GROUP REPO_NAME
 export CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-}" HEADSCALE_URL="${HEADSCALE_URL:-}" MESH_TAG="${MESH_TAG:-}"
-EXTRA_TOKENS="NPM_SCOPE,HOST_NAME,GENERATOR_ORG_GROUP"
+EXTRA_TOKENS="NPM_SCOPE,HOST_NAME,GENERATOR_ORG_GROUP,REPO_NAME"
 
-_log "brand=${BRAND} title='${BRAND_TITLE}' npm-scope=@${NPM_SCOPE} host=${HOST_NAME} gen-group=${GENERATOR_ORG_GROUP}"
+# Fold in the per-repo IDENTITY --set tokens. Each is exported and appended to
+# EXTRA_TOKENS; the classifier (in render-handlebars/render-recipe buildContext)
+# fail-closes a non-allowlisted or secret/frozen NAME. Value-side secret/frozen
+# screening is the driver's job (render-tenant-set); the emit secret-scan is the
+# backstop for a secret VALUE landing in a file.
+for _i in "${!SET_NAMES[@]}"; do
+  _n="${SET_NAMES[$_i]}"; _v="${SET_VALUES[$_i]}"
+  export "${_n}=${_v}"
+  EXTRA_TOKENS="${EXTRA_TOKENS},${_n}"
+  _log "identity: ${_n}=${_v}"
+done
+
+_log "repo=${REPO} archetype=${ARCHETYPE} brand=${BRAND} title='${BRAND_TITLE}' npm-scope=@${NPM_SCOPE} host=${HOST_NAME} gen-group=${GENERATOR_ORG_GROUP}"
 
 # ── Resolve the READ-ONLY base ───────────────────────────────────────────────
 BASE=""
@@ -170,8 +209,12 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
       --exclude='./.git' --exclude='./node_modules' --exclude='./dist' \
       --exclude='./.angular' --exclude='./target' -cf - . | tar -C "$BRAND_OUT" -xf -
 
-  # 2) Stage ONLY the 4 overlay .hbs (never _skeleton, never _identity.env/README)
-  #    into a temp templates dir preserving repo-relative paths.
+  # 2) CLASS-A overlay: stage the archetype's whole-file .hbs (angular-mfe:
+  #    federation-base.js — byte-identical across the class bar HOST_NAME;
+  #    gateway: the deploy/*.hbs env overlay). NEVER _skeleton/_identity.env/
+  #    README/recipe.yaml. spring-bff has zero class-A files (recipe-only) — the
+  #    stage is simply empty and nothing is overlaid. Class-B (repo-owned files
+  #    that embed identity) is handled by the recipe engine in step 4.
   STAGE="${TMP}/overlay"; mkdir -p "$STAGE"
   while IFS= read -r -d '' t; do
     rel="${t#"${OVERLAY_DIR}/"}"
@@ -199,6 +242,31 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
   _log "scanning the ${RENDERED##*/} overlay-rendered file(s) (no excludes — overlay-output backstop)"
   if ! "${SCRIPT_DIR}/secret-scan.sh" "$RENDERED" >&2; then
     _die "secret scanner flagged an overlay-RENDERED file — refusing to emit ${BRAND_OUT}"
+  fi
+
+  # 4) CLASS-B: apply the archetype RECIPE (anchored, presence-tolerant edits) onto
+  #    each repo's OWN base file in OUT. This is what generalizes 2 exemplars to N
+  #    repos: no whole-file swap of application.yml / package.json / index.html /
+  #    .gitlab-ci.yml (those embed the repo's OWN identity), only the brand-coupled
+  #    substrings are rewritten. An anchor absent in this repo's base no-ops.
+  if [[ -f "$RECIPE" ]]; then
+    _log "applying archetype recipe ${RECIPE##*/} (anchored edits) onto ${BRAND_OUT}"
+    node "${TOOLING}/render-recipe.js" \
+        --recipe "$RECIPE" --target "$BRAND_OUT" \
+        --extra-tokens "$EXTRA_TOKENS" \
+        --report "${TMP}/recipe-report.json"
+    # Backstop: scan exactly the recipe-touched files (no excludes) so a branded
+    # substring can never smuggle a secret past the path-scoped emit scan below.
+    _touched=()
+    while IFS= read -r rel; do
+      [[ -n "$rel" && -f "${BRAND_OUT}/${rel}" ]] && _touched+=("${BRAND_OUT}/${rel}")
+    done < <(node -e 'const r=require(process.argv[1]);for(const f of r.files){if(f.present&&(f.anchors||[]).some(a=>a.hits>0))console.log(f.file)}' "${TMP}/recipe-report.json")
+    if [[ ${#_touched[@]} -gt 0 ]]; then
+      _log "scanning ${#_touched[@]} recipe-touched file(s) (no excludes — recipe-output backstop)"
+      if ! "${SCRIPT_DIR}/secret-scan.sh" "${_touched[@]}" >&2; then
+        _die "secret scanner flagged a recipe-TOUCHED file — refusing to emit ${BRAND_OUT}"
+      fi
+    fi
   fi
 else
   # Skeleton fallback: render the whole minimal tree from _skeleton/*.hbs.

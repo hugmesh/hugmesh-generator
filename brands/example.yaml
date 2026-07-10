@@ -47,9 +47,13 @@ services:
   - name: forum-ui
     installed: false
 
-# repos[] manifest — the brand-delta overlay sources for repo emission (Phase 2+).
-# `base` is pulled READ-ONLY; `overlay` is the thin tokenized delta in this repo.
+# repos[] TENANT-SET manifest (Phase 4): {name, archetype, installed, identity}.
+# `overlay` is now archetype-derived (templates/archetypes/<archetype>), NOT a
+# per-repo hand overlay; `base` defaults to snapdragon-<name>. Read as STRUCTURED
+# data by the Node driver (render-tenant-set.js) ONLY — never degraded to shell.
+# See brands/acme.yaml for a full N-repo example.
 repos:
-  - name: login-ui
-    base: snapdragon-login-ui
-    overlay: templates/repos/login-ui
+  - { name: login-ui,     archetype: angular-mfe, installed: true, identity: { app_slug: login, title_word: Login } }
+  - { name: admin-bff-api, archetype: spring-bff, installed: true }
+  - { name: gateway,      archetype: gateway,     installed: true, identity: { profile: be } }
+  - { name: forum-ui,     archetype: angular-mfe, installed: false, identity: { app_slug: forum, title_word: Forum } }

@@ -24,6 +24,13 @@
 set -euo pipefail
 
 ENTROPY_MIN_LEN=20        # only entropy-test opaque tokens at least this long
+ENTROPY_MAX_LEN=1024      # …and at most this long. A real credential (API key,
+                          # bearer, base64 32-64B key) sits in ~20-200 chars; a
+                          # multi-KB opaque run is an embedded ASSET (minified
+                          # CSS/JS, base64 font/image — e.g. an Angular MFE base's
+                          # inlined katex-css.ts), never a secret. Keyed rules
+                          # (secret-assign) + PEM/AWS/… regexes ignore this bound,
+                          # so a NAMED secret inside a blob is still caught.
 ENTROPY_THRESHOLD=4.0     # bits/char, KEYED (secret-assign) rule; random base64/hex ~5-6, prose ~3-4
 ENTROPY_HIGH_THRESHOLD=4.5 # bits/char, GENERIC opaque-token rule. Deliberately stricter
                            # than the keyed rule: the keyless detector runs over WHOLE
@@ -36,7 +43,7 @@ _usage() { echo "Usage: $0 [--exclude GLOB]... <dir-or-file>... | --self-test" >
 # The awk engine: reads files named on the command line, prints "path:line: RULE: detail"
 # for every finding. Returns via a trailing "FINDINGS=<n>" line on stderr-substitute.
 _scan_files() {
-  awk -v elen="$ENTROPY_MIN_LEN" -v ethr="$ENTROPY_THRESHOLD" -v hthr="$ENTROPY_HIGH_THRESHOLD" '
+  awk -v elen="$ENTROPY_MIN_LEN" -v emax="$ENTROPY_MAX_LEN" -v ethr="$ENTROPY_THRESHOLD" -v hthr="$ENTROPY_HIGH_THRESHOLD" '
     function shannon(s,   i, c, n, freq, p, h) {
       n = length(s); if (n == 0) return 0
       for (i = 1; i <= n; i++) { c = substr(s,i,1); freq[c]++ }
@@ -67,7 +74,22 @@ _scan_files() {
         #  - k8s "existingSecret*" style NAME references (dns-labels, low entropy)
         #  - ALL-CAPS_SNAKE env-var key NAMES being referenced (not a value)
         #  - short values
-        if (length(val) >= 12 && val !~ /^[A-Z][A-Z0-9_]+$/ && shannon(val) >= ethr) {
+        #  - LOCATOR-suffixed keys (…_URL/_URI/_ENDPOINT/_HOST): a URL/host is a
+        #    locator, not a credential. These collide with the deny substring TOKEN
+        #    via feature names like APP_HS_TOKEN_MATRIX_URL (a Spring
+        #    `${VAR:https://…svc.cluster.local:port}` env-DEFAULT whose dotted host
+        #    sits ~4.5 bits) or an OAuth `token_url` endpoint. A real credential key
+        #    (…PASSWORD/SECRET/TOKEN/SIGNING_KEY/…) never ends in a locator suffix,
+        #    and userinfo creds embedded in a URL are still caught by the generic
+        #    high-entropy rule. Narrow, principled suppression (like the SRI skip).
+        # ...and skip when the VALUE is itself an env REFERENCE ($VAR / ${VAR} /
+        # ${VAR:default} / ${VAR:-default}). The whole templating invariant is
+        # that every secret stays ${ENV}/ESO, never a literal in git -- so a value
+        # that IS an env reference is the COMPLIANT pattern, not a leak (e.g. a base
+        # PKI helper PASSWORD=${KEYSTORE_PASSWORD:-snapdragon}, or a Spring
+        # ${CASDOOR_ISSUER_URI:https://host} default). A genuine hardcoded literal
+        # has no leading dollar.
+        if (length(val) >= 12 && val !~ /^[A-Z][A-Z0-9_]+$/ && shannon(val) >= ethr && key !~ /(URL|URI|ENDPOINT|HOST)$/ && val !~ /^[$]/) {
           report("secret-assign", key "=<" length(val) " chars, H=" sprintf("%.2f", shannon(val)) ">")
         }
       }
@@ -88,7 +110,7 @@ _scan_files() {
         if (tok ~ /^(sha1|sha256|sha384|sha512|md5)-/) continue
         # Pure lowercase-hyphen dns slugs and pure numbers fall under the threshold.
         h = shannon(tok)
-        if (h >= hthr && length(tok) >= elen && tok ~ /[A-Za-z]/ && tok ~ /[0-9+\/=_]/) {
+        if (h >= hthr && length(tok) >= elen && length(tok) <= emax && tok ~ /[A-Za-z]/ && tok ~ /[0-9+\/=_]/) {
           report("high-entropy", "opaque token len=" length(tok) " H=" sprintf("%.2f", h))
         }
       }
