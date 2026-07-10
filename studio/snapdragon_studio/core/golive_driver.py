@@ -1,22 +1,28 @@
-"""GoLiveDriver — preview + stream the go-live ENGINE (scripts/go-live.sh) from Studio.
+"""GoLiveDriver — preview + stream the CANONICAL go-live driver from Studio.
+
+The Studio GUI is a THIN front-end: exactly like snapdragon-go-live-cli and the
+ncurses snapdragon-go-live-menu, it only ever calls the shared driver
+``specs/usr/sbin/snapdragon-go-live`` and its subcommands
+(status | list | plan | commit | rollback). It carries NO wizard logic and NEVER
+reimplements posture — the driver owns the provider registry, the emit, and the
+commit gate. (It used to shell out to the #286 engine scripts/go-live.sh; that
+engine was superseded by this driver during the go-live consolidation and is being
+removed, so this front-end was repointed onto the driver subcommands.)
 
 Mirrors BuildDriver's command()/run() contract: the GUI calls ``command(...)`` /
-``command_string(...)`` to preview the exact engine invocation and ``run(...)`` to
-stream it line-by-line into a page. It NEVER reimplements the engine — every action
-is a flag spelling of scripts/go-live.sh (exactly as scripts/go-live-menu.sh
-dispatches the same flags), and the provider catalog
-(scripts/golive-providers.conf) is parsed for DISPLAY only (titles, deep links,
-notes — the same read-only use the console menu makes of it).
+``command_string(...)`` to preview the exact driver invocation and ``run(...)`` to
+stream ``plan`` line-by-line into a page.
 
-The flip is deliberately different from every other action: the engine requires a
-real TTY for its typed-domain confirmation (no bypass flag exists — unattended
-go-live is a v1 non-goal), so the GUI cannot stream --flip through a pipe. Instead
-``run_flip_in_terminal()`` launches the flip inside a real terminal emulator, where
-the engine's own confirm (and sudo, when needed) run untouched.
+The commit is deliberately different from every other action: the driver requires
+a real TTY for its confirmation prompt (there is NO bypass flag — passing
+-y/--yes would be a bypass and the GUI must not add one; unattended go-live is a
+v1 non-goal), so the GUI cannot stream ``commit`` through a pipe. Instead
+``run_commit_in_terminal()`` launches it inside a real terminal emulator, where the
+driver's own confirm (and sudo, when writing under /etc/snapdragon) run untouched.
 
-Secret hygiene mirrors the engine + menu: token VALUES never enter argv — a masked
-GUI field is staged into a 0600 temp file (``stage_token``) handed over via
---token-file / --cf-api-token-file and deleted right after the run.
+Secret hygiene: token VALUES never enter argv — a masked GUI field is staged into
+a 0600 temp file (``stage_token``) handed over via --token-file and deleted right
+after the run. GoLiveOptions has no field for a secret value at all.
 """
 from __future__ import annotations
 
@@ -30,11 +36,40 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-ENGINE_REL = "scripts/go-live.sh"
-CATALOG_REL = "scripts/golive-providers.conf"
+# The CANONICAL shared driver + its provider registry (repo-relative). The driver
+# is invoked as `bash ./<DRIVER_REL> <subcommand> [flags]`, run with
+# cwd=generator_dir (mirrors BuildDriver). The registry lib is sourced by the
+# driver; we point GL_PROVIDERS_LIB at the in-repo copy so the dev Studio finds it
+# without the on-image /usr/lib bake.
+DRIVER_REL = "specs/usr/sbin/snapdragon-go-live"
+REGISTRY_REL = "specs/usr/lib/snapdragon/go-live-providers.sh"
 
-# Terminal emulators the flip can run in, most-specific first; each entry is
-# (binary, exec-style args that precede the command argv).
+# The driver's subcommands the front-end may call.
+SUBCOMMANDS = ("status", "list", "plan", "commit", "rollback")
+
+# mechanism (from the registry / `list`) -> exposure model (the wizard's step-1
+# radios). The driver never hard-codes a provider; the front-end only maps the
+# registry's mechanism taxonomy onto UI groupings.
+_MECH_MODEL = {
+    "deeplink": "tunnel",
+    "files": "public-dns",
+    "ddns": "ddns",
+    "funnel": "funnel",
+    "instructions": "router",
+}
+# Which inputs each mechanism (required, optional) drives on the inputs page. This
+# is derived purely from the mechanism taxonomy the registry publishes — the
+# driver re-validates everything, so this is a UI courtesy only.
+_MECH_INPUTS = {
+    "ddns":         (["subdomain", "token"], ["ddns-service"]),
+    "deeplink":     (["token"],              ["tunnel-cname"]),
+    "files":        ([],                     ["ingress-ip", "ingress-ipv6", "tunnel-cname"]),
+    "funnel":       ([],                     []),
+    "instructions": ([],                     []),
+}
+
+# Terminal emulators the commit/rollback can run in, most-specific first; each
+# entry is (binary, exec-style args that precede the command argv).
 _TERMINALS = (
     ("x-terminal-emulator", ("-e",)),
     ("konsole", ("-e",)),
@@ -47,66 +82,71 @@ _TERMINALS = (
 )
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+# Same shapes the driver's validate_inputs() enforces (mirrored here as a courtesy
+# preflight — the driver is the sole authority and re-checks these).
+_DNS_LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+_IPV4_RE = re.compile(r"^([0-9]{1,3}\.){3}[0-9]{1,3}$")
 
 
 @dataclass
 class GoLiveOptions:
-    """The non-secret engine inputs — one field per go-live.sh option flag.
-    Token VALUES are deliberately not representable here (files only), so an
-    options object can never leak a secret into argv/preview text."""
+    """The non-secret driver inputs — one field per driver flag. Token VALUES are
+    deliberately not representable here (files only), so an options object can
+    never leak a secret into argv/preview text."""
     provider: str = ""
-    domain: str = ""
-    record_ip: str = ""
-    tunnel_id: str = ""
-    ddns_service: str = "duckdns"   # duckdns | cloudflare (engine default: duckdns)
-    ddns_subdomain: str = ""
-    out_dir: str = ""
-    keys_dir: str = ""
-    token_file: str = ""            # path handed to --token-file (0600; value never argv)
-    cf_api_token_file: str = ""     # path handed to --cf-api-token-file
+    domain: str = ""                # --domain
+    ingress_ip: str = ""            # --ingress-ip
+    ingress_ipv6: str = ""          # --ingress-ipv6
+    tunnel_cname: str = ""          # --tunnel-cname
+    ddns_service: str = "duckdns"   # --ddns-service (driver default: duckdns)
+    ddns_subdomain: str = ""        # --ddns-subdomain
+    ttl: str = ""                   # --ttl (driver default 300 when omitted)
+    out_dir: str = ""               # --out-dir
+    keys_dir: str = ""              # --keys-dir
+    token_file: str = ""            # --token-file (0600; value never argv)
 
-    def to_cli_args(self, include_token_files: bool = True) -> list[str]:
-        """Engine flags in the same order the console menu's base_flags() emits them,
-        so preview text reads identically across the two front-ends."""
+    def to_cli_args(self, include_token_file: bool = True) -> list[str]:
+        """Driver flags (no subcommand) in a stable order — so the plan preview
+        reads identically across the CLI/ncurses/Studio front-ends."""
         args: list[str] = []
         if self.provider:
             args += ["--provider", self.provider]
         if self.domain:
             args += ["--domain", self.domain]
-        if self.record_ip:
-            args += ["--record-ip", self.record_ip]
-        if self.tunnel_id:
-            args += ["--tunnel-id", self.tunnel_id]
+        if self.ingress_ip:
+            args += ["--ingress-ip", self.ingress_ip]
+        if self.ingress_ipv6:
+            args += ["--ingress-ipv6", self.ingress_ipv6]
+        if self.tunnel_cname:
+            args += ["--tunnel-cname", self.tunnel_cname]
         if self.ddns_service:
             args += ["--ddns-service", self.ddns_service]
         if self.ddns_subdomain:
             args += ["--ddns-subdomain", self.ddns_subdomain]
+        if self.ttl:
+            args += ["--ttl", self.ttl]
         if self.out_dir:
-            args += ["--out", self.out_dir]
+            args += ["--out-dir", self.out_dir]
         if self.keys_dir:
             args += ["--keys-dir", self.keys_dir]
-        if include_token_files:
-            if self.token_file:
-                args += ["--token-file", self.token_file]
-            if self.cf_api_token_file:
-                args += ["--cf-api-token-file", self.cf_api_token_file]
+        if include_token_file and self.token_file:
+            args += ["--token-file", self.token_file]
         return args
 
 
 @dataclass
 class GoLiveProvider:
-    """One [section] of scripts/golive-providers.conf, parsed for display only."""
+    """One provider row, as reported by `snapdragon-go-live list`. Its input needs
+    are derived from the registry's mechanism taxonomy (not a per-provider catalog
+    — the canonical registry does not expose one), so the driver stays the single
+    source of provider truth."""
     id: str
-    title: str = ""
-    model: str = ""
-    summary: str = ""
-    inputs: list[str] = field(default_factory=list)      # required engine inputs
-    optional: list[str] = field(default_factory=list)    # optional engine inputs
-    token_dest: str = ""
-    emits: list[str] = field(default_factory=list)
-    verify: list[str] = field(default_factory=list)
-    links: list[tuple[str, str]] = field(default_factory=list)   # (url, label)
-    notes: list[str] = field(default_factory=list)
+    title: str = ""            # the driver's DESCRIPTION column (registry label)
+    mechanism: str = ""        # deeplink | files | ddns | funnel | instructions
+    status: str = "full"       # full | stub
+    model: str = ""            # exposure model (mechanism -> model)
+    inputs: list[str] = field(default_factory=list)      # hard-required inputs
+    optional: list[str] = field(default_factory=list)    # optional inputs
 
     def needs(self, input_name: str) -> bool:
         return input_name in self.inputs
@@ -125,25 +165,35 @@ class GoLiveDriver:
         self._cancel = threading.Event()
         self._providers: list[GoLiveProvider] | None = None
 
-    # ---- engine/catalog locations (env overrides mirror the engine's own) ----
+    # ---- driver/registry locations -------------------------------------------
     @property
-    def engine_path(self) -> str:
-        return os.path.join(self.generator_dir, *ENGINE_REL.split("/"))
+    def driver_path(self) -> str:
+        return os.path.join(self.generator_dir, *DRIVER_REL.split("/"))
 
     @property
-    def catalog_path(self) -> str:
-        return (os.environ.get("GOLIVE_CATALOG")
-                or os.path.join(self.generator_dir, *CATALOG_REL.split("/")))
+    def registry_path(self) -> str:
+        return os.path.join(self.generator_dir, *REGISTRY_REL.split("/"))
 
     @property
     def default_out_dir(self) -> str:
-        # the engine's own default: GOLIVE_OUT or <repo>/out/go-live
-        return os.environ.get("GOLIVE_OUT") or os.path.join(self.generator_dir, "out", "go-live")
+        # the driver's own default is /var/lib/snapdragon/go-live/out (GL_OUT_DIR);
+        # for the dev Studio we prefer a repo-local dir unless GL_OUT_DIR is set.
+        return os.environ.get("GL_OUT_DIR") or os.path.join(self.generator_dir, "out", "go-live")
+
+    def _driver_env(self) -> dict[str, str]:
+        """Environment for every driver invocation: point GL_PROVIDERS_LIB at the
+        in-repo registry (so the dev Studio finds it without the /usr/lib bake),
+        unless the caller already set it (test seam). Deliberately never sets
+        GL_ASSUME_YES — that would bypass the commit gate."""
+        env = dict(os.environ)
+        if "GL_PROVIDERS_LIB" not in env and os.path.exists(self.registry_path):
+            env["GL_PROVIDERS_LIB"] = self.registry_path
+        return env
 
     def autofill_domain(self) -> str:
-        """The baked cluster domain the engine autofills --domain from
+        """The baked cluster domain the driver reads --domain from
         (GOLIVE_CLUSTER_DOMAIN_FILE / /etc/snapdragon/cluster-domain) — read here
-        only so the GUI can prefill the same value the engine would use."""
+        only so the GUI can prefill the same value the driver would use."""
         path = os.environ.get("GOLIVE_CLUSTER_DOMAIN_FILE", "/etc/snapdragon/cluster-domain")
         try:
             with open(path, encoding="utf-8") as f:
@@ -151,80 +201,74 @@ class GoLiveDriver:
         except OSError:
             return ""
 
-    # ---- catalog access (DISPLAY ONLY — the engine is the sole executor) -----
+    # ---- provider registry (via the driver's `list` — the source of truth) ----
     def providers(self) -> list[GoLiveProvider]:
         if self._providers is None:
-            self._providers = self._parse_catalog()
+            self._providers = self._load_providers()
         return self._providers
 
     def provider(self, provider_id: str) -> GoLiveProvider | None:
         return next((p for p in self.providers() if p.id == provider_id), None)
 
     def models(self) -> list[str]:
-        """Distinct exposure models in catalog order (the wizard's step-1 radios)."""
+        """Distinct exposure models in registry order (the wizard's step-1 radios)."""
         seen: list[str] = []
         for p in self.providers():
             if p.model and p.model not in seen:
                 seen.append(p.model)
         return seen
 
-    def _parse_catalog(self) -> list[GoLiveProvider]:
-        """Same grammar the engine's awk readers use: `[section]` at line start,
-        `key = value` rows (link/note repeat), `#` comments ignored."""
+    def _load_providers(self) -> list[GoLiveProvider]:
+        """Parse `snapdragon-go-live list`. Its table is
+        ``ID  MECHANISM  STATE  DESCRIPTION`` — the id/mechanism/state columns are
+        single tokens, so split(maxsplit=3) recovers the description verbatim. Rows
+        whose mechanism is not a known taxonomy value (the header + trailing prose)
+        are ignored."""
         out: list[GoLiveProvider] = []
-        cur: GoLiveProvider | None = None
         try:
-            with open(self.catalog_path, encoding="utf-8") as f:
-                lines = f.read().splitlines()
-        except OSError:
+            r = subprocess.run(
+                ["bash", f"./{DRIVER_REL}", "list"], cwd=self.generator_dir,
+                env=self._driver_env(), stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True, timeout=30)
+            lines = (r.stdout or "").splitlines()
+        except (OSError, subprocess.SubprocessError):
             return out
-        row = re.compile(r"^([A-Za-z0-9_-]+)\s+=(?: (.*))?$")
         for line in lines:
-            if line.startswith("["):
-                cur = GoLiveProvider(id=line.strip().strip("[]"))
-                out.append(cur)
+            parts = line.split(None, 3)
+            if len(parts) < 4:
                 continue
-            if cur is None or line.lstrip().startswith("#"):
+            pid, mech, state, desc = parts
+            if mech not in _MECH_MODEL or state not in ("full", "stub"):
                 continue
-            m = row.match(line)
-            if not m:
-                continue
-            key, value = m.group(1), (m.group(2) or "").strip()
-            if key == "link":
-                url, _, label = value.partition(" ")
-                if url:
-                    cur.links.append((url, label.strip() or url))
-            elif key == "note":
-                if value:
-                    cur.notes.append(value)
-            elif key in ("inputs", "optional", "emits", "verify"):
-                setattr(cur, key, value.split())
-            elif key in ("title", "model", "summary", "token_dest"):
-                setattr(cur, key, value)
+            req, opt = _MECH_INPUTS.get(mech, ([], []))
+            out.append(GoLiveProvider(
+                id=pid, title=desc, mechanism=mech, status=state,
+                model=_MECH_MODEL[mech], inputs=list(req), optional=list(opt)))
         return out
 
     # ---- command assembly ----------------------------------------------------
-    def command(self, opts: GoLiveOptions, action_flags: list[str],
-                include_token_files: bool = True) -> list[str]:
-        """The exact engine invocation (run with cwd=generator_dir, like
-        BuildDriver): ``bash ./scripts/go-live.sh <options> <action flags>``."""
-        return ["bash", f"./{ENGINE_REL}",
-                *opts.to_cli_args(include_token_files=include_token_files),
-                *list(action_flags)]
+    def command(self, subcommand: str, opts: GoLiveOptions,
+                include_token_file: bool = True) -> list[str]:
+        """The exact driver invocation (run with cwd=generator_dir, like
+        BuildDriver): ``bash ./<driver> <subcommand> <flags>``."""
+        return ["bash", f"./{DRIVER_REL}", subcommand,
+                *opts.to_cli_args(include_token_file=include_token_file)]
 
-    def command_string(self, opts: GoLiveOptions, action_flags: list[str]) -> str:
-        return " ".join(shlex.quote(x) for x in self.command(opts, action_flags))
+    def command_string(self, subcommand: str, opts: GoLiveOptions) -> str:
+        return " ".join(shlex.quote(x) for x in self.command(subcommand, opts))
 
     # ---- execution (mirrors BuildDriver._stream) -------------------------------
-    def run(self, opts: GoLiveOptions, action_flags: list[str],
+    def run(self, subcommand: str, opts: GoLiveOptions,
             on_line: Callable[[str], None] | None = None) -> int:
-        """Run one engine action, calling on_line per output line (stdout+stderr
-        merged). Returns the exit code. Blocking — callers run it on a worker
-        thread (the GUI uses a QThread)."""
+        """Run one driver subcommand (the GUI uses this only for ``plan`` — the
+        read-only, posture-safe emit), calling on_line per output line
+        (stdout+stderr merged). Returns the exit code. Blocking — callers run it on
+        a worker thread (the GUI uses a QThread)."""
         self._cancel.clear()
         self._proc = subprocess.Popen(
-            self.command(opts, action_flags), cwd=self.generator_dir,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            self.command(subcommand, opts), cwd=self.generator_dir,
+            env=self._driver_env(), stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, bufsize=1)
         assert self._proc.stdout is not None
         for line in self._proc.stdout:
             if on_line:
@@ -240,11 +284,12 @@ class GoLiveDriver:
             self._proc.terminate()
 
     def status_text(self) -> str:
-        """The engine's own --status report (read-only, cheap), for display."""
+        """The driver's own `status` report (read-only, cheap), for display."""
         try:
-            r = subprocess.run(self.command(GoLiveOptions(), ["--status"]),
-                               cwd=self.generator_dir, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, text=True, timeout=30)
+            r = subprocess.run(["bash", f"./{DRIVER_REL}", "status"],
+                               cwd=self.generator_dir, env=self._driver_env(),
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, timeout=30)
             return _ANSI_RE.sub("", r.stdout or "").strip()
         except (OSError, subprocess.SubprocessError) as e:
             return f"status unavailable: {e}"
@@ -253,8 +298,8 @@ class GoLiveDriver:
     @staticmethod
     def stage_token(secret: str) -> str:
         """Write a masked-field secret to a fresh 0600 temp file and return its
-        path (for --token-file / --cf-api-token-file). The caller deletes it right
-        after the run — mirroring the console menu's run_engine_with_token()."""
+        path (for --token-file). The caller deletes it right after the run —
+        mirroring the console front-ends' token handling."""
         fd, path = tempfile.mkstemp(prefix=".golive-tok-")
         try:
             if hasattr(os, "fchmod"):        # mkstemp is already 0600; belt-and-braces
@@ -264,24 +309,40 @@ class GoLiveDriver:
             os.close(fd)
         return path
 
-    # ---- flip / rollback (terminal path — the engine's TTY confirm is the law) --
-    def flip_command(self, opts: GoLiveOptions, persist: bool = False) -> list[str]:
-        """The flip invocation: sudo (writing under /etc/snapdragon needs root)
-        + the full option set (the engine's pre-flip verify gate uses them) —
-        token files excluded, the flip never needs a secret."""
-        inner = self.command(opts, ["--flip"] + (["--persist"] if persist else []),
-                             include_token_files=False)
+    # ---- commit / rollback (terminal path — the driver's TTY confirm is the law) -
+    def commit_command(self, opts: GoLiveOptions, persist: bool = False) -> list[str]:
+        """The commit invocation: sudo (writing /etc/snapdragon/go-live needs root)
+        + only the flags `commit` consumes. NO -y/--yes: the driver's confirmation
+        gate MUST run on the real TTY (adding -y here would be the bypass this
+        front-end refuses to add). NO token files: commit never needs a secret."""
+        inner = ["bash", f"./{DRIVER_REL}", "commit"]
+        if opts.provider:
+            inner += ["--provider", opts.provider]
+        if opts.domain:
+            inner += ["--domain", opts.domain]
+        if persist:
+            inner += ["--persist-public"]
         return inner if self.is_root else ["sudo", *inner]
 
-    def rollback_command(self, persist: bool = False) -> list[str]:
-        inner = self.command(GoLiveOptions(ddns_service=""),
-                             ["--rollback"] + (["--persist"] if persist else []))
+    def rollback_command(self, revert_release_state: bool = False) -> list[str]:
+        """rollback deletes the marker (root). Like commit, NO -y/--yes — the
+        driver's confirm runs on the TTY."""
+        inner = ["bash", f"./{DRIVER_REL}", "rollback"]
+        if revert_release_state:
+            inner += ["--revert-release-state"]
         return inner if self.is_root else ["sudo", *inner]
 
     def terminal_command(self, inner: list[str]) -> list[str] | None:
         """Wrap inner in the first available terminal emulator (kept open at the
-        end so the engine's result stays readable). None when no emulator exists."""
-        script = shlex.join(inner) + '; rc=$?; echo; read -r -p "press Enter to close..." _; exit "$rc"'
+        end so the driver's result stays readable). The in-repo registry path is
+        exported into the shell so the driver finds it even if the emulator scrubs
+        the environment. None when no emulator exists."""
+        prefix = ""
+        env = self._driver_env()
+        if "GL_PROVIDERS_LIB" in env:
+            prefix = f"export GL_PROVIDERS_LIB={shlex.quote(env['GL_PROVIDERS_LIB'])}; "
+        script = (prefix + shlex.join(inner)
+                  + '; rc=$?; echo; read -r -p "press Enter to close..." _; exit "$rc"')
         for binary, exec_args in _TERMINALS:
             if shutil.which(binary):
                 return [binary, *exec_args, "bash", "-c", script]
@@ -293,57 +354,57 @@ class GoLiveDriver:
             return False, ("No terminal emulator found — run this on the device "
                            f"yourself: {shlex.join(inner)}")
         try:
-            subprocess.Popen(cmd, cwd=self.generator_dir, start_new_session=True)
+            subprocess.Popen(cmd, cwd=self.generator_dir, env=self._driver_env(),
+                             start_new_session=True)
         except OSError as e:
             return False, f"could not launch {cmd[0]}: {e}"
-        return True, (f"Launched in {cmd[0]} — finish there (the engine runs its "
-                      "pre-flip verify, then asks you to TYPE THE DOMAIN; "
-                      "there is deliberately no way around that confirm).")
+        return True, (f"Launched in {cmd[0]} — finish there (the driver prints the "
+                      "posture change, then asks you to CONFIRM on the TTY; there is "
+                      "deliberately no way around that confirm).")
 
-    def run_flip_in_terminal(self, opts: GoLiveOptions, persist: bool = False) -> tuple[bool, str]:
-        return self._run_in_terminal(self.flip_command(opts, persist=persist))
+    def run_commit_in_terminal(self, opts: GoLiveOptions, persist: bool = False) -> tuple[bool, str]:
+        return self._run_in_terminal(self.commit_command(opts, persist=persist))
 
-    def run_rollback_in_terminal(self, persist: bool = False) -> tuple[bool, str]:
-        return self._run_in_terminal(self.rollback_command(persist=persist))
+    def run_rollback_in_terminal(self, revert_release_state: bool = False) -> tuple[bool, str]:
+        return self._run_in_terminal(self.rollback_command(revert_release_state=revert_release_state))
 
-    # ---- preflight (GUI hints only — the engine re-validates everything) --------
-    def preflight(self, opts: GoLiveOptions, action_flags: list[str] = ("--emit",),
-                  has_secret: bool = False, has_cf_secret: bool = False) -> list[str]:
-        """Human-readable problems that would stop the action (empty = OK). Purely
-        a courtesy preview: requirements are read from the provider catalog, and
-        the engine independently enforces all of them."""
+    # ---- preflight (GUI hints only — the driver re-validates everything) --------
+    def preflight(self, opts: GoLiveOptions, has_secret: bool = False) -> list[str]:
+        """Human-readable problems that would stop `plan`/commit (empty = OK).
+        Purely a courtesy preview: input needs come from the mechanism taxonomy,
+        and the driver independently enforces (and shape-checks) all of them."""
         problems: list[str] = []
-        if not os.path.exists(self.engine_path):
-            problems.append(f"go-live engine not found: {self.engine_path}")
-        if not os.path.exists(self.catalog_path):
-            problems.append(f"provider catalog not found: {self.catalog_path}")
+        if not os.path.exists(self.driver_path):
+            problems.append(f"go-live driver not found: {self.driver_path}")
+        if not os.path.exists(self.registry_path):
+            problems.append(f"provider registry not found: {self.registry_path}")
         if not shutil.which("bash"):
-            problems.append("bash is required to run the go-live engine.")
-        acting = any(f in action_flags for f in ("--emit", "--verify", "--flip", "--create-dns"))
-        if acting and not (opts.domain or self.autofill_domain()):
+            problems.append("bash is required to run the go-live driver.")
+        if not (opts.domain or self.autofill_domain()):
             problems.append("Domain is required (no /etc/snapdragon/cluster-domain bake "
                             "found to autofill from).")
         p = self.provider(opts.provider) if opts.provider else None
-        if "--emit" in action_flags:
-            if not opts.provider:
-                problems.append("Pick a provider first (--emit needs one).")
-            elif p is not None:
-                if p.needs("token") and not (opts.token_file or has_secret):
-                    problems.append(f"Provider '{p.id}' needs a token — paste it in the "
-                                    "masked field or point at a token file.")
-                if p.needs("subdomain") and not opts.ddns_subdomain:
+        if not opts.provider:
+            problems.append("Pick a provider first (plan needs one).")
+        elif p is None:
+            problems.append(f"Unknown provider '{opts.provider}' (see the provider list).")
+        else:
+            if p.needs("token") and not (opts.token_file or has_secret):
+                problems.append(f"Provider '{p.id}' needs a token — paste it in the "
+                                "masked field or point at a token file.")
+            if p.needs("subdomain"):
+                if not opts.ddns_subdomain:
                     problems.append(f"Provider '{p.id}' needs a DDNS subdomain label.")
-                if p.needs("record-ip") and not (opts.record_ip or opts.tunnel_id):
-                    problems.append(f"Provider '{p.id}' needs a public record IP "
-                                    "(or a tunnel UUID for a CNAME set).")
-        if "--create-dns" in action_flags:
-            if not opts.tunnel_id:
-                problems.append("--create-dns needs the Cloudflare tunnel UUID.")
-            if not (opts.cf_api_token_file or has_cf_secret):
-                problems.append("--create-dns needs a Cloudflare API token "
-                                "(masked field or token file).")
-        for label, path in (("token file", opts.token_file),
-                            ("Cloudflare API token file", opts.cf_api_token_file)):
-            if path and not os.path.exists(path):
-                problems.append(f"{label} does not exist: {path}")
+                elif not _DNS_LABEL_RE.match(opts.ddns_subdomain):
+                    problems.append("DDNS subdomain must be a single lowercase DNS label "
+                                    "([a-z0-9-], 1-63 chars, no dots) — the driver rejects "
+                                    "anything else (root-cron injection guard).")
+            if p.mechanism == "files" and not (opts.ingress_ip or opts.tunnel_cname):
+                problems.append(f"Provider '{p.id}': no ingress IP / tunnel CNAME — emitted "
+                                "records will be PLACEHOLDERS (re-run with --ingress-ip or "
+                                "--tunnel-cname to autofill the real targets).")
+        if opts.ingress_ip and not _IPV4_RE.match(opts.ingress_ip):
+            problems.append("Record IP is not a valid IPv4 address (the driver rejects it).")
+        if opts.token_file and not os.path.exists(opts.token_file):
+            problems.append(f"token file does not exist: {opts.token_file}")
         return problems

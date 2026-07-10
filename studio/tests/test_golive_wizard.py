@@ -1,10 +1,12 @@
 """Go-live wizard GUI behavior — step flow, model→provider filtering, the
 CLUSTER_DOMAIN autofill, secret-free previews, and the typed-domain flip arming.
 
+The wizard is a THIN front-end onto the CANONICAL driver
+specs/usr/sbin/snapdragon-go-live (subcommands status|list|plan|commit|rollback).
 Runs the REAL wizard on Qt's offscreen platform (no display needed) and is skipped
 whole when no Qt binding is installed — the rest of the suite stays pure-core.
-No test here ever executes the engine: status_text is pinned and every action
-button is asserted BEFORE it is clicked.
+No test here ever flips posture: status_text is pinned, providers() is served from
+the real driver `list`, and every action button is asserted BEFORE it is clicked.
 """
 import os
 
@@ -18,7 +20,6 @@ pytest.importorskip("snapdragon_studio.gui.qt",
 
 from snapdragon_studio.gui.pages import golive as golive_mod   # noqa: E402
 from snapdragon_studio.gui.pages.golive import GOLIVE_PAGE_SLUGS  # noqa: E402
-from snapdragon_studio.gui.qt import QtWidgets  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -29,14 +30,16 @@ CANNED_STATUS = ("Go-live status\n  release-state: internal (default — no file
 
 @pytest.fixture(autouse=True)
 def _pinned_status(monkeypatch):
-    # the preflight/flip pages show engine --status output; pin it so no test
-    # ever shells out to bash (and the text is deterministic)
+    # the preflight/verify/flip pages show driver `status` output; pin it so no
+    # test ever mutates posture (and the text is deterministic). providers() still
+    # shells out to the real driver `list` (read-only).
     monkeypatch.setattr(golive_mod.GoLiveDriver, "status_text",
                         lambda self: CANNED_STATUS)
 
 
 @pytest.fixture(scope="session")
 def qapp():
+    from snapdragon_studio.gui.qt import QtWidgets
     return (QtWidgets.QApplication.instance()
             or QtWidgets.QApplication(["snapdragon-studio-tests"]))
 
@@ -102,14 +105,14 @@ def test_page_slugs_map_to_the_right_pages(wiz):
         assert type(wiz.page(wiz._page_ids[slug])) is cls
 
 
-def test_preflight_page_shows_the_engine_status(wiz):
+def test_preflight_page_shows_the_driver_status(wiz):
     page = advance_to(wiz, golive_mod.GoLivePreflightPage)
     assert "posture: INTERNAL" in page.status.toPlainText()
 
 
 # ---- exposure model → provider filtering ----------------------------------------
 
-def test_exposure_models_come_from_the_catalog(wiz):
+def test_exposure_models_come_from_the_registry(wiz):
     page = advance_to(wiz, golive_mod.GoLiveExposurePage)
     assert page.models == ["tunnel", "public-dns", "ddns", "funnel", "router"]
     assert page.group.checkedButton() is not None
@@ -124,22 +127,19 @@ def test_provider_list_is_filtered_by_the_chosen_model(wiz):
     pick_model(wiz, "public-dns")
     prov = advance_to(wiz, golive_mod.GoLiveProviderPage)
     ids = [prov.list.item(i).text().split(" — ")[0] for i in range(prov.list.count())]
-    assert ids == ["registrar-manual"]
+    assert ids == ["byo-domain"]
     # switching the model invalidated the previously picked provider
     wiz.next()
-    assert wiz.opts.provider == "registrar-manual"
+    assert wiz.opts.provider == "byo-domain"
 
 
-def test_provider_page_surfaces_deep_links_and_notes(wiz):
+def test_provider_page_surfaces_the_mechanism_and_emits(wiz):
     pick_model(wiz, "tunnel")
     prov = advance_to(wiz, golive_mod.GoLiveProviderPage)
-    assert prov.links_lay.count() == 3          # cloudflare-tunnel's catalog link rows
-    texts = []
-    for i in range(prov.links_lay.count()):
-        row = prov.links_lay.itemAt(i).widget()
-        texts.extend(lab.text() for lab in row.findChildren(QtWidgets.QLabel))
-    assert any("one.dash.cloudflare.com" in t for t in texts)
-    assert "ENV=prod" in prov.notes.text()
+    text = prov.summary.text()
+    assert "Mechanism: deeplink" in text
+    assert "Required inputs: token" in text
+    assert "Plan emits:" in text
 
 
 # ---- inputs: CLUSTER_DOMAIN autofill + provider-driven field visibility -----------
@@ -149,14 +149,15 @@ def test_inputs_autofill_domain_from_the_bake(wiz, baked_domain):
     inputs = advance_to(wiz, golive_mod.GoLiveInputsPage)
     assert inputs.domain.text() == baked_domain
     assert "autofilled" in inputs.domain_hint.text()
-    # cloudflare-tunnel: token + tunnel-id + optional CF driver, no DDNS fields
+    # cloudflare-tunnel: token + tunnel CNAME, no DDNS fields, no ingress IP
     assert inputs.token_box.isVisible()
     assert inputs.tunnel_row.isVisible()
-    assert inputs.cf_box.isVisible()
+    assert not inputs.ingress_row.isVisible()
     assert not inputs.ddns_sub_row.isVisible()
 
 
 def test_inputs_page_blocks_next_without_a_domain(wiz, monkeypatch, tmp_path):
+    from snapdragon_studio.gui.qt import QtWidgets
     monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", str(tmp_path / "missing"))
     warned = []
     monkeypatch.setattr(QtWidgets.QMessageBox, "warning",
@@ -173,21 +174,30 @@ def test_ddns_provider_shows_its_fields(wiz, baked_domain):
     inputs = advance_to(wiz, golive_mod.GoLiveInputsPage)
     assert inputs.ddns_sub_row.isVisible() and inputs.ddns_service_row.isVisible()
     assert inputs.token_box.isVisible()
-    assert not inputs.cf_box.isVisible()
+    assert not inputs.ingress_row.isVisible()
 
 
-# ---- generate: preview mirrors the engine argv, secrets stay out of it -------------
+def test_public_dns_provider_shows_ingress_fields(wiz, baked_domain):
+    pick_model(wiz, "public-dns")
+    inputs = advance_to(wiz, golive_mod.GoLiveInputsPage)
+    assert inputs.ingress_row.isVisible() and inputs.ipv6_row.isVisible()
+    assert inputs.tunnel_row.isVisible()
+    assert not inputs.token_box.isVisible()
+    assert not inputs.ddns_sub_row.isVisible()
 
-def test_generate_preview_shows_the_exact_engine_command(wiz, baked_domain):
+
+# ---- generate: preview mirrors the driver argv, secrets stay out of it -------------
+
+def test_generate_preview_shows_the_exact_driver_command(wiz, baked_domain):
     pick_model(wiz, "tunnel")
     inputs = advance_to(wiz, golive_mod.GoLiveInputsPage)
     inputs.token_secret.setText("super-secret-token")
     gen = advance_to(wiz, golive_mod.GoLiveGeneratePage)
     cmd = gen.cmd.toPlainText()
-    assert "./scripts/go-live.sh" in cmd
+    assert "specs/usr/sbin/snapdragon-go-live" in cmd
+    assert " plan " in cmd
     assert "--provider cloudflare-tunnel" in cmd
     assert f"--domain {baked_domain}" in cmd
-    assert "--emit" in cmd
     assert "staged 0600 temp file" in cmd       # the token arrives as a file, later
     assert "super-secret-token" not in cmd      # NEVER the value
     assert "Preflight OK." in gen.log.toPlainText()
@@ -200,12 +210,23 @@ def test_generate_preflight_names_a_missing_token(wiz, baked_domain):
     assert "needs a token" in gen.log.toPlainText()
 
 
+# ---- verify: off-device checklist + posture recheck (no driver verify subcommand) --
+
+def test_verify_page_shows_a_checklist_and_pinned_status(wiz, baked_domain):
+    pick_model(wiz, "public-dns")
+    inputs = advance_to(wiz, golive_mod.GoLiveInputsPage)
+    inputs.ingress_ip.setText("203.0.113.7")
+    verify = advance_to(wiz, golive_mod.GoLiveVerifyPage)
+    assert f"dig +short {baked_domain}" in verify.checklist.toPlainText()
+    assert "posture: INTERNAL" in verify.status.toPlainText()
+
+
 # ---- flip: typed-domain arming (the GUI half of the double human confirm) ----------
 
 def test_flip_button_arms_only_on_the_typed_domain(wiz, baked_domain):
     pick_model(wiz, "public-dns")
     inputs = advance_to(wiz, golive_mod.GoLiveInputsPage)
-    inputs.record_ip.setText("203.0.113.7")
+    inputs.ingress_ip.setText("203.0.113.7")
     flip = advance_to(wiz, golive_mod.GoLiveFlipPage)
     assert not flip.flip_btn.isEnabled()
     flip.confirm.setText("wrong.example")

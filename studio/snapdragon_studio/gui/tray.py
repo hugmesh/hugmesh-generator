@@ -32,12 +32,13 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
     "Open web UI" action that opens it in the default browser."""
 
     def __init__(self, node, *, label: str, tooltip: str, web_url: str | None = None,
-                 on_open_studio=None, parent=None):
+                 on_open_studio=None, on_open_golive=None, parent=None):
         super().__init__(_brand_icon(), parent)
         self.node = node
         self.label = label
         self.web_url = web_url
         self.on_open_studio = on_open_studio
+        self.on_open_golive = on_open_golive
         self.setToolTip(tooltip)
         menu = QtWidgets.QMenu()
         self.status_act = menu.addAction("Status: (checking…)")
@@ -52,6 +53,8 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
         menu.addSeparator()
         if on_open_studio:
             menu.addAction("Open Image Studio…").triggered.connect(lambda: on_open_studio())
+        if on_open_golive:
+            menu.addAction("Go Live…").triggered.connect(lambda: on_open_golive())
         menu.addAction("Quit").triggered.connect(QtWidgets.QApplication.quit)
         self.start_act.triggered.connect(self._start)
         self.stop_act.triggered.connect(self._stop)
@@ -95,14 +98,15 @@ class _ControlTray(QtWidgets.QSystemTrayIcon):
 
 
 class MeshTray(_ControlTray):
-    def __init__(self, generator_dir: str, on_open_studio=None, parent=None):
+    def __init__(self, generator_dir: str, on_open_studio=None, on_open_golive=None, parent=None):
         super().__init__(MeshNode(generator_dir), label="mesh node",
                           tooltip="Snapdragon mesh node", on_open_studio=on_open_studio,
-                          parent=parent)
+                          on_open_golive=on_open_golive, parent=parent)
 
 
 class StackTray(_ControlTray):
-    def __init__(self, generator_dir: str, on_open_studio=None, parent=None):
+    def __init__(self, generator_dir: str, on_open_studio=None, on_open_golive=None, parent=None):
         node = LocalStackNode(generator_dir)
         super().__init__(node, label="local stack", tooltip="Snapdragon local dev stack",
-                          web_url=node.web_url, on_open_studio=on_open_studio, parent=parent)
+                          web_url=node.web_url, on_open_studio=on_open_studio,
+                          on_open_golive=on_open_golive, parent=parent)

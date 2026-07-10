@@ -15,14 +15,17 @@
 # output dir. The driver NEVER hard-codes a provider; it iterates
 # GO_LIVE_PROVIDER_IDS and dispatches to glp_emit "<id>".
 #
-# v1 SCOPE (deliberate — see docs/GO-LIVE-WIZARD.md):
-#   * byo-domain (#2, the no-API baseline that covers EVERYONE) is FULLY
-#     implemented: record-set + BIND zone + CSV + registrar deep-links.
-#   * cloudflare-tunnel / duckdns / tailscale-funnel / router-portforward are
-#     STUBS: real registry rows (label/mechanism/deep-link) + an emit that
-#     writes a clearly-marked TODO placeholder, so the framework is exercised
-#     end-to-end by at least one real provider while the others are visible,
-#     selectable, and honestly labelled "(stub)".
+# SCOPE (all v1 providers now FULLY implemented — the #286 engine wins were
+# ported onto this registry during the go-live consolidation):
+#   * byo-domain (#2, the no-API baseline that covers EVERYONE): record-set +
+#     BIND zone + CSV + registrar deep-links.
+#   * cloudflare-tunnel: CNAME record set autofilled at the tunnel + a tunnel-token
+#     drop into the keys layout + Zero-Trust deep-links (NO full API driver, by design).
+#   * duckdns: a REAL thin DuckDNS / Cloudflare-DDNS single-token updater + a
+#     cron.d drop-in, with strict single-label subdomain validation so the emitted
+#     ROOT cron script can never be a command-injection sink (ported #286 fix).
+#   * tailscale-funnel: tailnet-native funnel exposure guidance (no public DNS).
+#   * router-portforward: port-forward instructions + router deep-links (no mutation).
 #
 # MECHANISM taxonomy (GO_LIVE_MECH):
 #   deeplink     — the operator provisions the edge in a vendor dashboard we
@@ -41,6 +44,11 @@
 #   GL_TUNNEL_CNAME  a tunnel/ALIAS CNAME target for CNAME-style records (may be empty)
 #   GL_TTL           record TTL seconds (default 300)
 #   GL_SUBDOMAINS    space-separated service sub-labels to publish (default from the driver)
+#   GL_DDNS_SUBDOMAIN the DDNS hostname LABEL (duckdns); a strict single DNS label
+#   GL_DDNS_SERVICE  duckdns|cloudflare (duckdns default) — which DDNS updater to render
+#   GL_KEYS_DIR      keys-layout root the token drops land under (0600 dests)
+#   GL_TOKEN_FILE    optional path to a secret token to store into the keys layout
+#                    (read from a FILE only — never passed on argv)
 #
 # The driver derives GL_SUBDOMAINS as the apex plus api./matrix./mastodon. — the
 # SAME hostnames apps/12-cloudflared.yaml + the gateway comments already promise.
@@ -64,13 +72,14 @@ declare -gA GO_LIVE_MECH=(
     [tailscale-funnel]="funnel"
     [router-portforward]="instructions"
 )
-# full  = implemented end-to-end in v1.  stub = registry row + TODO placeholder emit.
+# full = implemented end-to-end. (stub is retained in the taxonomy for any future
+# provider added ahead of its emit; all v1 providers are full.)
 declare -gA GO_LIVE_STATUS=(
-    [cloudflare-tunnel]="stub"
+    [cloudflare-tunnel]="full"
     [byo-domain]="full"
-    [duckdns]="stub"
-    [tailscale-funnel]="stub"
-    [router-portforward]="stub"
+    [duckdns]="full"
+    [tailscale-funnel]="full"
+    [router-portforward]="full"
 )
 # Deep-link URL TEMPLATE. {domain} is substituted with GL_DOMAIN by glp_deeplink().
 declare -gA GO_LIVE_DEEPLINK=(
@@ -266,30 +275,263 @@ glp_emit_byo-domain() {
     return 0
 }
 
-# ── EMIT: STUBS (registry rows are real; emit is a marked TODO placeholder) ──────
-# Each stub still produces a file so the framework is exercised uniformly and the
-# operator gets the deep-link + a precise description of the follow-up PR's job.
-_glp_emit_stub() {
-    local id="$1" out="$2"
-    {
-        printf 'PROVIDER: %s  (%s)\n' "$(glp_label "${id}")" "${id}"
-        printf 'STATUS:   STUB — not implemented in the go-live wizard v1 foundation.\n'
-        printf 'MECHANISM: %s\n' "$(glp_mechanism "${id}")"
-        printf 'WOULD EMIT: %s\n' "$(glp_emits "${id}")"
-        local dl; dl="$(glp_deeplink "${id}")"
-        [ -n "${dl}" ] && printf 'DEEP-LINK: %s\n' "${dl}"
-        printf 'DOMAIN:    %s\n' "${GL_DOMAIN}"
-        printf '\nTODO(go-live v2): implement glp_emit_%s in\n' "${id}"
-        printf '  specs/usr/lib/snapdragon/go-live-providers.sh. See docs/GO-LIVE-WIZARD.md\n'
-        printf '  for the per-provider spec. The shared driver + commit gate already work;\n'
-        printf '  only this provider\x27s artifact emit is outstanding.\n'
-    } > "${out}/STUB-${id}.txt"
+# ── Shared secret + deep-link helpers (used by the ddns/tunnel emits) ────────────
+# Store a token FILE into a 0600 keys-layout destination. The token is read from a
+# FILE (never argv); the destination dir is created with a tight umask. Returns
+# non-zero on failure so the caller can warn without aborting the whole plan.
+_glp_store_token() {
+    local src="$1" dest="$2"
+    [ -r "${src}" ] || return 1
+    ( umask 077 && mkdir -p "$(dirname "${dest}")" ) || return 1
+    ( umask 077 && tr -d '\n' < "${src}" > "${dest}" ) || return 1
+    chmod 0600 "${dest}" 2>/dev/null || true
     return 0
 }
-glp_emit_cloudflare-tunnel()  { _glp_emit_stub cloudflare-tunnel  "$1"; }
-glp_emit_duckdns()            { _glp_emit_stub duckdns            "$1"; }
-glp_emit_tailscale-funnel()   { _glp_emit_stub tailscale-funnel   "$1"; }
-glp_emit_router-portforward() { _glp_emit_stub router-portforward "$1"; }
+
+# ── EMIT: cloudflare-tunnel (#1) — CNAME autofill + tunnel-token drop, NO API ────
+# Deliberately NOT a full Cloudflare API driver (see docs/GO-LIVE-WIZARD.md): the
+# operator creates the tunnel in the Zero-Trust dashboard, we render the exact
+# CNAME record set (apex + api./matrix./mastodon. — the SAME hostnames
+# apps/12-cloudflared.yaml serves; no *.<domain> wildcard) pointed at the tunnel,
+# drop the tunnel token into the keys layout (0600), and deep-link the dashboard.
+glp_emit_cloudflare-tunnel() {
+    local out="$1"
+    local ttl="${GL_TTL:-300}"
+    local target="${GL_TUNNEL_CNAME:-<TUNNEL-ID>.cfargotunnel.com}"
+    local tokdest="${GL_KEYS_DIR:-/etc/snapdragon/keys}/cloudflared/tunnel-token"
+    local now; now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+    # records.csv — Cloudflare bulk-import shape. Cloudflare CNAME-flattens the apex,
+    # so a proxied CNAME at "@" is legal here (unlike a generic registrar).
+    {
+        printf '# %s go-live record set for Cloudflare Tunnel (generated %s).\n' "${GL_DOMAIN}" "${now}"
+        printf '# Add at Cloudflare -> DNS -> Records (or let cloudflared create them).\n'
+        [ "${target}" = "<TUNNEL-ID>.cfargotunnel.com" ] && \
+            printf '# NOTE: no --tunnel-cname given — content is a PLACEHOLDER; re-run with --tunnel-cname <id>.cfargotunnel.com\n'
+        printf 'type,name,content,ttl,proxied\n'
+        local host
+        while IFS= read -r host; do
+            printf 'CNAME,%s,%s,%s,true\n' "${host}" "${target}" "${ttl}"
+        done < <(glp_hostnames)
+    } > "${out}/records.csv"
+
+    # hostnames.txt — the autofilled public host set (preview).
+    glp_hostnames > "${out}/hostnames.txt"
+
+    # deeplinks.txt — the exact Zero-Trust pages.
+    {
+        printf '# Cloudflare Tunnel deep-links:\n'
+        printf 'Zero Trust: Networks -> Tunnels   https://one.dash.cloudflare.com/?to=/:account/networks/tunnels\n'
+        printf 'DNS -> Records (add the CNAMEs)   https://dash.cloudflare.com/?to=/:account/%s/dns\n' "${GL_DOMAIN}"
+        printf 'Cloudflare Tunnel docs            https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/\n'
+    } > "${out}/deeplinks.txt"
+
+    # token-drop guide (+ optional store if --token-file was supplied).
+    {
+        printf 'CLOUDFLARE TUNNEL TOKEN\n'
+        printf '=======================\n'
+        printf 'Create the tunnel in the Zero-Trust dashboard, copy its token, and drop it at:\n'
+        printf '  %s   (mode 0600, gitignored keys layout)\n' "${tokdest}"
+        printf 'The cloudflared app consumes it via ExternalSecrets -> Vault\n'
+        printf '(keys-template/cloudflared/README.md). It is NEVER placed in argv or logs.\n'
+    } > "${out}/token-drop.txt"
+    if [ -n "${GL_TOKEN_FILE:-}" ]; then
+        if _glp_store_token "${GL_TOKEN_FILE}" "${tokdest}"; then
+            printf 'go-live[cloudflare-tunnel]: token stored -> %s (0600)\n' "${tokdest}" >&2
+        else
+            printf 'go-live[cloudflare-tunnel]: WARNING could not store token from %s -> %s\n' "${GL_TOKEN_FILE}" "${tokdest}" >&2
+        fi
+    fi
+
+    # instructions.txt — the flow + the RELEASE_STATE tie-in.
+    {
+        printf 'GO-LIVE — Cloudflare Tunnel (%s)\n\n' "${GL_DOMAIN}"
+        printf '1. Zero Trust dashboard -> Networks -> Tunnels: create a tunnel, copy the token.\n'
+        printf '2. Drop the token at %s (see token-drop.txt).\n' "${tokdest}"
+        printf '3. Add the CNAMEs from records.csv (apex + api./matrix./mastodon.) pointing at\n'
+        printf '   <tunnel-id>.cfargotunnel.com; cloudflared can also create them for you.\n'
+        printf '4. THEN trip go-live:  snapdragon-go-live commit --provider cloudflare-tunnel\n'
+        printf '     -> writes /etc/snapdragon/go-live; firewall-reconcile flips PUBLIC within 60s.\n'
+        printf '5. Rollback:  snapdragon-go-live rollback\n'
+        printf '\nNOTE: cloudflared is pruned from ENV=test images — needs an ENV=prod image.\n'
+    } > "${out}/instructions.txt"
+    return 0
+}
+
+# ── EMIT: duckdns (#3) — REAL thin DuckDNS / Cloudflare-DDNS updater + cron ───────
+# The single genuine API driver kept in v1. Renders a runtime updater that reads
+# its token from the keys-layout file (never argv/cron mail) + a cron.d drop-in.
+#
+# SECURITY (ported verbatim from #286 scripts/go-live.sh:131-142): GL_DDNS_SUBDOMAIN
+# is interpolated into the EMITTED root-cron updater, so it MUST be a strict single
+# lowercase DNS label BEFORE it is used — a dot/metachar/newline would be a
+# command-injection sink as root. We reject it here (registry-side last line of
+# defence, in addition to the driver arg-parse), AND the updater body is a QUOTED
+# heredoc so no build-time value is expanded into its logic at all; the only
+# build-time values are shell-quoted with %q into a short config header.
+glp_emit_duckdns() {
+    local out="$1"
+    local svc="${GL_DDNS_SERVICE:-duckdns}"
+    local sub="${GL_DDNS_SUBDOMAIN:-}"
+    local domain="${GL_DOMAIN:-}"
+    local tokdest="${GL_KEYS_DIR:-/etc/snapdragon/keys}/ddns/token"
+
+    case "${svc}" in
+        duckdns|cloudflare) ;;
+        *) printf 'go-live[duckdns]: --ddns-service must be duckdns or cloudflare\n' >&2; return 1 ;;
+    esac
+    if [ -n "${sub}" ] && ! [[ "${sub}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+        printf 'go-live[duckdns]: --ddns-subdomain must be a single lowercase DNS label ([a-z0-9-], 1-63 chars, no dots)\n' >&2
+        return 1
+    fi
+
+    local fqdn
+    case "${svc}" in
+        duckdns)    fqdn="${sub:-<subdomain>}.duckdns.org" ;;
+        cloudflare) fqdn="${sub:-<subdomain>}.${domain:-<domain>}" ;;
+    esac
+
+    local updater="${out}/ddns-update.sh" cron="${out}/ddns.cron"
+
+    # Updater: validated config header (shell-quoted with %q) + a fully-QUOTED
+    # heredoc body (nothing build-time interpolates into the script logic).
+    {
+        printf '#!/usr/bin/env bash\n'
+        printf '# ddns-update.sh — emitted by snapdragon-go-live (provider duckdns, service %s).\n' "${svc}"
+        printf '# Re-points %s at the current public IP. The token is read from the keys-layout\n' "${fqdn}"
+        printf '# file at RUNTIME — never baked into this script, argv, or cron mail.\n'
+        printf 'set -uo pipefail\n'
+        printf 'SERVICE=%q\n' "${svc}"
+        printf 'SUBDOMAIN=%q\n' "${sub}"
+        printf 'DOMAIN=%q\n' "${domain}"
+        printf 'TOKEN_FILE="${DDNS_TOKEN_FILE:-%s}"\n' "${tokdest}"
+        cat <<'UPDATER'
+[ -r "${TOKEN_FILE}" ] || { echo "ddns-update: token file not readable: ${TOKEN_FILE}" >&2; exit 1; }
+[ -n "${SUBDOMAIN}" ]  || { echo "ddns-update: SUBDOMAIN empty — re-emit with --ddns-subdomain" >&2; exit 1; }
+TOK="$(tr -d '\n' < "${TOKEN_FILE}")"
+case "${SERVICE}" in
+    duckdns)
+        # Empty ip= => DuckDNS uses the request's source address. -K - keeps the
+        # token OUT of argv (visible in /proc/<pid>/cmdline).
+        printf 'url = "https://www.duckdns.org/update?domains=%s&token=%s&ip="\n' "${SUBDOMAIN}" "${TOK}" \
+            | curl -sS -m 20 -K - ;;
+    cloudflare)
+        command -v jq >/dev/null 2>&1 || { echo "ddns-update: jq required for cloudflare" >&2; exit 1; }
+        HDR="$(umask 077 && mktemp)"; trap 'rm -f "${HDR}"' EXIT
+        printf 'Authorization: Bearer %s\n' "${TOK}" > "${HDR}"
+        IP="$(curl -sS -m 20 https://api.ipify.org)" || exit 1
+        ZID="$(curl -sS -m 20 -H @"${HDR}" "https://api.cloudflare.com/client/v4/zones?name=${DOMAIN}" | jq -r '.result[0].id // empty')"
+        [ -n "${ZID}" ] || { echo "ddns-update: no Cloudflare zone for ${DOMAIN}" >&2; exit 1; }
+        FQDN="${SUBDOMAIN}.${DOMAIN}"
+        RID="$(curl -sS -m 20 -H @"${HDR}" "https://api.cloudflare.com/client/v4/zones/${ZID}/dns_records?type=A&name=${FQDN}" | jq -r '.result[0].id // empty')"
+        BODY="$(jq -nc --arg n "${FQDN}" --arg ip "${IP}" '{type:"A",name:$n,content:$ip,ttl:300,proxied:false}')"
+        if [ -n "${RID}" ]; then
+            curl -sS -m 20 -X PUT  -H @"${HDR}" -H 'Content-Type: application/json' -d "${BODY}" \
+                "https://api.cloudflare.com/client/v4/zones/${ZID}/dns_records/${RID}" >/dev/null
+        else
+            curl -sS -m 20 -X POST -H @"${HDR}" -H 'Content-Type: application/json' -d "${BODY}" \
+                "https://api.cloudflare.com/client/v4/zones/${ZID}/dns_records" >/dev/null
+        fi ;;
+esac
+UPDATER
+    } > "${updater}" || return 1
+    chmod 0755 "${updater}" 2>/dev/null || true
+
+    {
+        printf '# %s DDNS refresh — install as /etc/cron.d/snapdragon-ddns (with the emitted\n' "${fqdn}"
+        printf '# ddns-update.sh at /usr/local/sbin/snapdragon-ddns-update). 5-minute floor,\n'
+        printf '# mirroring the snapdragon-*-reconcile cron convention.\n'
+        printf '*/5 * * * * root /usr/local/sbin/snapdragon-ddns-update >/dev/null 2>&1\n'
+    } > "${cron}" || return 1
+
+    {
+        printf '# Dynamic-DNS deep-links:\n'
+        printf 'DuckDNS (subdomain + token)   https://www.duckdns.org/\n'
+        printf 'Cloudflare API Tokens         https://dash.cloudflare.com/profile/api-tokens\n'
+        printf 'DuckDNS update-endpoint spec  https://www.duckdns.org/spec.jsp\n'
+    } > "${out}/deeplinks.txt"
+
+    # Optional token store (only when a --token-file was supplied).
+    if [ -n "${GL_TOKEN_FILE:-}" ]; then
+        if _glp_store_token "${GL_TOKEN_FILE}" "${tokdest}"; then
+            printf 'go-live[duckdns]: token stored -> %s (0600)\n' "${tokdest}" >&2
+        else
+            printf 'go-live[duckdns]: WARNING could not store token from %s -> %s\n' "${GL_TOKEN_FILE}" "${tokdest}" >&2
+        fi
+    fi
+
+    {
+        printf 'GO-LIVE — Dynamic DNS (%s, service %s)\n\n' "${fqdn}" "${svc}"
+        printf '1. %s: create the hostname + copy the token (see deeplinks.txt).\n' \
+            "$([ "${svc}" = duckdns ] && echo 'DuckDNS' || echo 'Cloudflare (zone-scoped API token, Zone.DNS Edit)')"
+        printf '2. Drop the token at %s (0600).\n' "${tokdest}"
+        printf '3. Install the updater:  cp ddns-update.sh /usr/local/sbin/snapdragon-ddns-update\n'
+        printf '   and the cron.d snippet:  cp ddns.cron /etc/cron.d/snapdragon-ddns\n'
+        printf '4. THEN trip go-live:  snapdragon-go-live commit --provider duckdns\n'
+        printf '     -> writes /etc/snapdragon/go-live; firewall-reconcile flips PUBLIC within 60s.\n'
+        printf '5. Rollback:  snapdragon-go-live rollback\n'
+        [ -z "${sub}" ] && printf '\nNOTE: no --ddns-subdomain given — the updater will refuse until re-emitted with one.\n'
+    } > "${out}/instructions.txt"
+    return 0
+}
+
+# ── EMIT: tailscale-funnel (#4) — tailnet-native exposure, NO public DNS ──────────
+glp_emit_tailscale-funnel() {
+    local out="$1"
+    {
+        printf '# Tailscale Funnel deep-links:\n'
+        printf 'Enable HTTPS + Funnel (features)  https://login.tailscale.com/admin/settings/features\n'
+        printf 'ACLs (grant the funnel attribute) https://login.tailscale.com/admin/acls\n'
+        printf 'Tailscale Funnel docs             https://tailscale.com/kb/1223/funnel\n'
+    } > "${out}/deeplinks.txt"
+    {
+        printf 'GO-LIVE — Tailscale Funnel (%s)\n\n' "${GL_DOMAIN}"
+        printf 'Tailnet-native public HTTPS with NO public DNS records, NO public IP, and NO\n'
+        printf 'open inbound ports — the node is published on its <node>.<tailnet>.ts.net name.\n\n'
+        printf '1. Admin -> Settings -> Features: enable HTTPS certificates + Funnel for the tailnet.\n'
+        printf '2. Admin -> ACLs: grant this node the funnel node-attribute.\n'
+        printf '3. On the node, expose the ingress:\n'
+        printf '     tailscale funnel 443 on          # publish the local HTTPS ingress\n'
+        printf '     tailscale funnel status          # confirm it is live\n'
+        printf '4. THEN trip go-live:  snapdragon-go-live commit --provider tailscale-funnel\n'
+        printf '     -> writes /etc/snapdragon/go-live; firewall-reconcile flips PUBLIC within 60s.\n'
+        printf '5. Rollback:  snapdragon-go-live rollback   (and: tailscale funnel 443 off)\n\n'
+        printf 'CAVEAT: Funnel is a TAILSCALE-HOSTED control-plane feature. The default Snapdragon\n'
+        printf 'mesh is self-hosted headscale, which does NOT implement Funnel — this applies only\n'
+        printf 'to nodes joined to tailscale.com. Behind CGNAT this is often the ONLY option.\n'
+        printf 'The public name is <node>.<tailnet>.ts.net, not %s — pair with byo-domain for a\n' "${GL_DOMAIN:-your-domain}"
+        printf 'vanity CNAME if you want your brand name in front of it.\n'
+    } > "${out}/instructions.txt"
+    return 0
+}
+
+# ── EMIT: router-portforward (#5) — instructions + deep-links, NO mutation ────────
+glp_emit_router-portforward() {
+    local out="$1"
+    {
+        printf '# Router / gateway deep-links:\n'
+        printf 'Common router admin (192.168.1.1)  http://192.168.1.1/\n'
+        printf 'Common router admin (192.168.0.1)  http://192.168.0.1/\n'
+        printf 'Per-vendor port-forward guides     https://portforward.com/router.htm\n'
+    } > "${out}/deeplinks.txt"
+    {
+        printf 'GO-LIVE — Router port-forward (%s)\n\n' "${GL_DOMAIN}"
+        printf 'Direct exposure by forwarding WAN 80/443 to the ingress node. This wizard NEVER\n'
+        printf 'touches the router (no UPnP, no admin-API drivers) — instructions only.\n\n'
+        printf '1. Give the ingress node a STATIC LAN IP (DHCP reservation on the router).\n'
+        printf '2. Router admin (see deeplinks.txt) -> Port Forwarding: forward\n'
+        printf '     WAN TCP 80  -> <ingress-node-LAN-IP>:80\n'
+        printf '     WAN TCP 443 -> <ingress-node-LAN-IP>:443\n'
+        printf '3. Point a public name at your WAN IP: use the byo-domain provider (static IP)\n'
+        printf '   or duckdns (dynamic IP) so a hostname actually resolves to the forwarded IP.\n'
+        printf '4. THEN trip go-live:  snapdragon-go-live commit --provider router-portforward\n'
+        printf '     -> writes /etc/snapdragon/go-live; firewall-reconcile flips PUBLIC within 60s.\n'
+        printf '5. Rollback:  snapdragon-go-live rollback   (and remove the port-forward rules)\n\n'
+        printf 'CAVEAT: behind CGNAT (no reachable public WAN IP) port-forwarding cannot work —\n'
+        printf 'use cloudflare-tunnel or tailscale-funnel instead.\n'
+    } > "${out}/instructions.txt"
+    return 0
+}
 
 # ── Dispatch: driver calls this ONLY ─────────────────────────────────────────────
 # Renders provider $1's artifacts into dir $2. Returns non-zero on an unknown id.

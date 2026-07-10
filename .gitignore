@@ -62,12 +62,11 @@ ssh_host_*_key.pub
 keys-template/cloudflared/tunnel-token
 keys-template/cloudflared/credentials.json
 **/cloudflared/credentials.json
-# go-live wizard secrets (scripts/go-live.sh token_dest paths) — the DDNS
-# token and the optional Cloudflare API token. Only *.example is committed.
+# go-live wizard secrets (keys-layout token_dest paths emitted by the go-live
+# provider registry, specs/usr/lib/snapdragon/go-live-providers.sh) — the DDNS
+# token. Only *.example is committed.
 keys-template/ddns/token
 **/ddns/token
-keys-template/cloudflared/api-token
-**/cloudflared/api-token
 # Encryption-at-rest key material — LUKS data-disk keyfile + etcd Secret
 # encryption key. Custody is the offline USB-KEYS stick / Vault, NEVER git.
 keys-template/secrets/luks.key
