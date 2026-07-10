@@ -2216,6 +2216,32 @@ provision_snapdragon() {
     [ -f /etc/kubernetes/admin.conf ] || { warn "No kubeconfig yet — run cluster bootstrap after kubeadm init"; return 0; }
     local bs=/var/lib/snapdragon/cluster/bootstrap/bootstrap.sh
     [ -f "${bs}" ] || { warn "GitOps payload not baked into image"; return 0; }
+
+    # ── ArgoCD repository credential token (out-of-band, offline KEYS USB) ──
+    # bootstrap.sh registers a k8s Secret (labeled argocd.argoproj.io/
+    # secret-type=repository) so ArgoCD can clone the PRIVATE snapdragon-generator
+    # GitOps repo; without it every git-path Application fails to sync with
+    # "authentication required: Repository not found". The token comes ONLY from
+    # the offline KEYS USB (gitops/repo-token, override via
+    # .snapdragon.gitops.repo_token_file) — SAME custody as vault/token +
+    # certs/cluster-ca.key + luks.key, NEVER git. Read it here and hand it to
+    # bootstrap.sh via $ARGOCD_REPO_TOKEN; the material is never printed. Absent
+    # => bootstrap.sh fails closed for the private repo (it exits non-zero, which
+    # here only warns via the `|| warn` below — it does not abort provisioning).
+    local repo_token_file rt
+    repo_token_file="$(jqm '.snapdragon.gitops.repo_token_file // "gitops/repo-token"')"
+    rt="${BASE}/${repo_token_file}"
+    if [ -f "${rt}" ]; then
+        export ARGOCD_REPO_TOKEN="$(tr -d '[:space:]' < "${rt}" 2>/dev/null)"
+        if [ -n "${ARGOCD_REPO_TOKEN}" ]; then
+            log "Loaded ArgoCD repo token from KEYS (${rt}), never printed"
+        else
+            warn "ArgoCD repo token file ${rt} is empty — bootstrap.sh will fail closed for the private GitOps repo"
+        fi
+    else
+        warn "No ArgoCD repo token on KEYS (${repo_token_file}) — bootstrap.sh will fail closed for the private GitOps repo (write a read-only PAT there, same custody as vault/token)"
+    fi
+
     log "Bootstrapping ArgoCD + Snapdragon app-of-apps"
     KUBECONFIG=/etc/kubernetes/admin.conf bash "${bs}" || warn "GitOps bootstrap returned non-zero"
 }
