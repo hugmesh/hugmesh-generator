@@ -86,7 +86,15 @@ if [[ "$OFFLINE" == "1" ]]; then
 fi
 command -v git >/dev/null 2>&1 || die "git not found"
 mkdir -p "$REPO_BASE_CACHE"
-log "cloning read-only base ${GIT_BASE}/${REPO}.git @ ${GIT_REF} -> ${CLONE_DIR}"
+# DEFERRED (documented, not a bug): the base is git-cloned over TLS with NO commit
+# signature / content-digest / provenance / SBOM / vuln verification. That is an
+# ACCEPTABLE deferral for THIS pilot ONLY because the base is FIRST-PARTY
+# (Snapdragon-Systems, same mesh) pulled over TLS — treat it as trusted-transport,
+# not trusted-and-verified. Signature/provenance/SBOM/vuln gating of FOREIGN
+# mesh-code bases is scoped to Phase 8; a compromised upstream could inject
+# non-secret code (Dockerfile/src) that neither the secret scanner nor the drift
+# validator (checks only the overlaid files) would catch. See docs/MESH-TEMPLATING.md.
+log "cloning read-only base ${GIT_BASE}/${REPO}.git @ ${GIT_REF} -> ${CLONE_DIR} (TLS only; integrity UNVERIFIED — Phase 8)"
 git clone --depth 1 --branch "$GIT_REF" "${GIT_BASE}/${REPO}.git" "$CLONE_DIR" >&2 2>&1 \
   || die "clone failed for ${GIT_BASE}/${REPO}.git (base absent — caller may fall back to skeleton)"
 printf '%s\n' "$CLONE_DIR"

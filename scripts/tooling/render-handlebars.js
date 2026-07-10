@@ -128,10 +128,19 @@ function main() {
   for (const tmpl of files) {
     const src = fs.readFileSync(tmpl, 'utf8');
 
-    // Fail-closed guardrail: no secret-bearing token may appear in a template.
+    // Fail-closed guardrail: no secret-bearing token may appear in a template,
+    // AND every referenced token must be explicitly allowlisted. Handlebars is
+    // compiled with strict:false, so an UNKNOWN {{token}} (neither allow- nor
+    // deny-listed) would otherwise render to an empty string — silently DROPPING
+    // content, whereas the legacy sed path leaves the literal `{{token}}`. Failing
+    // closed here keeps the two renderers from diverging on a future token and
+    // forces every new token through the classifier.
     for (const tok of referencedTokens(src)) {
       if (classifier.isDenied(tok)) {
         die(`template ${path.relative(templatesDir, tmpl)} references denylisted secret token '{{${tok}}}' — refusing to render`);
+      }
+      if (!classifier.isAllowed(tok)) {
+        die(`template ${path.relative(templatesDir, tmpl)} references token '{{${tok}}}' that is neither allowlisted nor denylisted — refusing to render (fail-closed: strict:false would silently emit empty string). Add it to scripts/tooling/tokens.json (allowlist) or remove the reference.`);
       }
     }
 

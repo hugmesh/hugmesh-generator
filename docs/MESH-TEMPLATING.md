@@ -68,7 +68,10 @@ rule) in both the sed script and the Handlebars wrapper.
 
 * **allowlist** — git-safe brand-delta tokens that may be substituted/emitted
   (the 7 live/dead tokens + the reserved pilot tokens `HOST_NAME`,
-  `GENERATOR_ORG_GROUP`).
+  `GENERATOR_ORG_GROUP`, `NPM_SCOPE`). The Handlebars renderer **fails closed on
+  unknown tokens too**: a `{{token}}` that is neither allow- nor deny-listed
+  aborts the render (with `strict:false` it would otherwise silently emit an empty
+  string, diverging from the literal sed leaves — see the render path below).
 * **denylist** — secret-bearing keys derived from `brands/example.conf` /
   `brand.conf.example` (`ROOT_PASS`, `DEFAULT_USER_PASS`,
   `CASDOOR_ADMIN_CLIENT_SECRET`, `ROUTE_ACCESS_DB_PASSWORD`,
@@ -86,13 +89,30 @@ rule) in both the sed script and the Handlebars wrapper.
 ### Emit-time secret scanner — `scripts/secret-scan.sh` (fail-closed)
 
 Gitleaks-style scan (regex + Shannon entropy) over a candidate output tree; exits
-non-zero if any secret-looking value is present. It will gate Phase 2 repo
-emission. **Node-free** by design (see the constraint above).
+non-zero if any secret-looking value is present. It gates Phase 2 repo emission
+(`render-repo-tree.sh` refuses to emit a flagged tree). **Node-free** by design
+(see the constraint above). **Both pillars are live and self-tested:**
+
+* **High-signal regex** — PEM/OpenSSH keys, AWS AKIDs, GitHub PATs, Slack tokens,
+  and a **secret-key assignment** rule mirroring the `tokens.json` denylist.
+* **Shannon-entropy** — a keyless opaque-token detector for bare base64/token
+  credentials that carry no denylisted key name (e.g. a `Bearer <blob>`). It runs
+  over WHOLE emitted repos, so it uses a stricter threshold (4.5 bits/char vs 4.0
+  for the keyed rule) and suppresses subresource-integrity / content hashes
+  (`sha512-…` npm lockfile entries) — **zero false positives** on the 477-file
+  login-ui overlay tree, while still catching a planted keyless credential.
+  (Self-test case [3] exercises this pillar directly.)
 
 ```
 scripts/secret-scan.sh out/example-gitops     # scan a tree
-scripts/secret-scan.sh --self-test            # clean=>0, planted-secret=>1
+scripts/secret-scan.sh --self-test            # clean=>0, planted-secret=>1, keyless-entropy=>1
 ```
+
+> Backstop scope (known): a **weak/default** credential (short or low-entropy)
+> assigned to a denylisted key still passes the entropy floor. The **primary**
+> guarantee is upstream — the renderer only substitutes allowlisted tokens and
+> refuses denylisted ones — so a secret is never *emittable* via the render path;
+> this scanner is a defense-in-depth backstop over the final tree.
 
 ## Parity gate — the Phase 1 exit criterion
 
@@ -137,6 +157,14 @@ proves the **overlay-primary, skeleton-fallback** model on a real app repo:
   (`scripts/pull-repo-base.sh`, `GIT_BASE` knob defaulting to GitHub). It is
   **never copied/vendored/committed** into the generator. The base clone lives in
   a gitignored cache (`/.repo-base/`) or an out-of-tree path.
+  > **Base integrity is intentionally UNVERIFIED in this pilot** — the base is
+  > cloned over TLS with no commit-signature / content-digest / provenance / SBOM
+  > check. Acceptable ONLY because the pilot base is **first-party** (same mesh,
+  > over TLS): trusted-transport, **not** trusted-and-verified. A compromised
+  > upstream could inject non-secret code (`Dockerfile`, `src/**`) that neither the
+  > secret scanner (secrets only) nor the drift validator (overlaid files only)
+  > would catch. Signature/provenance/SBOM/vuln gating of **foreign** mesh-code
+  > bases is scoped to **Phase 8**. (Noted at the pull site in `pull-repo-base.sh`.)
 * **Tier-1 overlay** = the thin brand delta shipped in the generator at
   `templates/repos/login-ui/`. It contains **ONLY the 4 brand-coupled files**,
   never the whole repo:
@@ -172,6 +200,13 @@ Behind the **required** `--enable-repo-tree` flag:
 5. **falls back** to `templates/repos/login-ui/_skeleton/` when the base is absent
    (a minimal, zero-dep, bootable login-ui that `npm ci && npm run build`s fully
    OFFLINE) — **never refuses**.
+
+> **Offline-build proof scope:** the `npm ci && npm run build` **offline** guarantee
+> covers the **skeleton** path only (pure Node stdlib, zero deps). The **overlay**
+> tree is the full Angular base + 4 rebranded files; building it needs the Angular
+> toolchain and the npm registry and is **not** offline-buildable. The overlay's
+> rendered `package.json` / `*.hbs` are byte-faithful to the working base, so the
+> overlay build is proven by the base's own CI, not re-proven here.
 
 ```
 LOGIN_UI_BASE_DIR=/path/to/read-only/base \

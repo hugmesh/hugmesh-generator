@@ -6,7 +6,9 @@
 # Gitleaks-style guard that scans a candidate output tree (a rendered repo about
 # to be emitted in Phase 2) and exits NON-ZERO if any secret-looking value is
 # present. Combines high-signal REGEX patterns with a SHANNON-ENTROPY heuristic
-# over long opaque tokens.
+# over long opaque tokens (both pillars are live and self-tested — the generic
+# high-entropy detector catches keyless base64/token credentials that no key-name
+# rule would see; SRI/content hashes are suppressed to keep it FP-free on real repos).
 #
 # Deliberately node-free (pure bash + awk): unlike the Handlebars renderer this
 # guard may also run on the constrained mesh path, so it must not depend on Node.
@@ -22,14 +24,19 @@
 set -euo pipefail
 
 ENTROPY_MIN_LEN=20        # only entropy-test opaque tokens at least this long
-ENTROPY_THRESHOLD=4.0     # bits/char; random base64/hex ~5-6, prose ~3-4
+ENTROPY_THRESHOLD=4.0     # bits/char, KEYED (secret-assign) rule; random base64/hex ~5-6, prose ~3-4
+ENTROPY_HIGH_THRESHOLD=4.5 # bits/char, GENERIC opaque-token rule. Deliberately stricter
+                           # than the keyed rule: the keyless detector runs over WHOLE
+                           # real repos (Angular src, openapi.json, lockfiles) where dotted
+                           # API paths / dns slugs sit ~4.2-4.4; real base64/hex credentials
+                           # sit >=5. 4.5 catches the credential class with ~zero FPs.
 
 _usage() { echo "Usage: $0 <dir-or-file>... | --self-test" >&2; exit 2; }
 
 # The awk engine: reads files named on the command line, prints "path:line: RULE: detail"
 # for every finding. Returns via a trailing "FINDINGS=<n>" line on stderr-substitute.
 _scan_files() {
-  awk -v elen="$ENTROPY_MIN_LEN" -v ethr="$ENTROPY_THRESHOLD" '
+  awk -v elen="$ENTROPY_MIN_LEN" -v ethr="$ENTROPY_THRESHOLD" -v hthr="$ENTROPY_HIGH_THRESHOLD" '
     function shannon(s,   i, c, n, freq, p, h) {
       n = length(s); if (n == 0) return 0
       for (i = 1; i <= n; i++) { c = substr(s,i,1); freq[c]++ }
@@ -66,14 +73,22 @@ _scan_files() {
       }
 
       # ---- Generic high-entropy opaque token ----
+      # NOTE (regression fixed): the length quantifier MUST be built as a STRING.
+      # A single-quoted awk program cannot interpolate a shell/awk value inside a
+      # /literal/ regex, so the old `/...{'elen',}/` reached awk as the literal
+      # text {elen,}, which gawk treats as ordinary characters (not an interval) —
+      # silently disabling this entire rule. Compose the regex dynamically instead.
       s = line
-      while (match(s, /[A-Za-z0-9+\/=_-]{'elen',}/)) {
+      re = "[A-Za-z0-9+/=_-]{" elen ",}"
+      while (match(s, re)) {
         tok = substr(s, RSTART, RLENGTH)
         s = substr(s, RSTART + RLENGTH)
-        # Skip tokens that are clearly not secrets: pure lowercase-hyphen dns-ish
-        # slugs and pure numbers have low entropy and will fall under threshold.
+        # Skip subresource-integrity / content-hash values (npm lockfiles, SRI):
+        # high-entropy but NOT secrets, and they carry a recognizable algo prefix.
+        if (tok ~ /^(sha1|sha256|sha384|sha512|md5)-/) continue
+        # Pure lowercase-hyphen dns slugs and pure numbers fall under the threshold.
         h = shannon(tok)
-        if (h >= 4.2 && length(tok) >= elen && tok ~ /[A-Za-z]/ && tok ~ /[0-9+\/=_]/) {
+        if (h >= hthr && length(tok) >= elen && tok ~ /[A-Za-z]/ && tok ~ /[0-9+\/=_]/) {
           report("high-entropy", "opaque token len=" length(tok) " H=" sprintf("%.2f", h))
         }
       }
@@ -147,11 +162,31 @@ YAML
   if _scan_paths "$td/dirty"; then r2=0; else r2=$?; fi
   echo "    exit=$r2"
 
+  # 3) KEYLESS high-entropy credential — a bare token on a NON-denylisted field
+  #    name and NO PEM header, so ONLY the generic high-entropy rule can catch it.
+  #    This exercises the entropy pillar directly (the dirty case above is caught
+  #    by the key-name/PEM rules and would pass even if entropy were broken).
+  mkdir -p "$td/entropy"
+  cat > "$td/entropy/creds.yaml" <<'YAML'
+apiVersion: v1
+kind: ConfigMap
+data:
+  note: "no denylisted key name on the next line — only entropy can catch it"
+  auth: "authorization: Bearer BqYq2wYQ0Km7v8Nx3Rd1Yh0Jc5UgKx9fQp2Lm7Vb8Nz4Wt6Rd1Yh0Jc5Ug"
+YAML
+  echo "--- [3] keyless high-entropy blob (expect: FAIL via high-entropy rule) ---"
+  local e_out e3
+  if e_out="$(_scan_paths "$td/entropy" 2>&1)"; then e3=0; else e3=$?; fi
+  printf '%s\n' "$e_out" | sed 's/^/    /'
+  echo "    exit=$e3"
+  local e_rule=1
+  printf '%s\n' "$e_out" | grep -q ' high-entropy: ' || e_rule=0
+
   echo ""
-  if [[ "$r1" -eq 0 && "$r2" -eq 1 ]]; then
-    echo "SELF-TEST: PASS (clean=>0, dirty=>1)"; return 0
+  if [[ "$r1" -eq 0 && "$r2" -eq 1 && "$e3" -eq 1 && "$e_rule" -eq 1 ]]; then
+    echo "SELF-TEST: PASS (clean=>0, dirty=>1, keyless-entropy=>1 via high-entropy rule)"; return 0
   else
-    echo "SELF-TEST: FAIL (clean=>$r1 expected 0, dirty=>$r2 expected 1)"; return 1
+    echo "SELF-TEST: FAIL (clean=>$r1 want 0, dirty=>$r2 want 1, entropy=>$e3 want 1, entropy-rule-fired=>$e_rule want 1)"; return 1
   fi
 }
 
