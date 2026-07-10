@@ -15,10 +15,14 @@ spring:
               uri: http://snapdragon-matrix-ui:80
               predicates:
                 - Path=/social/matrix/**
+              filters:
+                - StripPrefix=2
             - id: mastodon-ui
               uri: http://snapdragon-mastodon-ui:80
               predicates:
                 - Path=/social/mastodon/**
+              filters:
+                - StripPrefix=2
             # login-ui is a STANDALONE Angular app (its own index.html; no
             # module-federation remoteEntry in this stack) built with
             # base-href=/login/ (snapdragon-login-ui companion change), so the
@@ -37,20 +41,28 @@ spring:
               uri: http://snapdragon-admin-ui:80
               predicates:
                 - Path=/admin/**
+              filters:
+                - StripPrefix=1
             # Federated remotes added for the full local repo set (mod/user UIs +
             # api-docs); they have no cluster route yet but are reachable here.
             - id: mod-ui
               uri: http://snapdragon-mod-ui:80
               predicates:
                 - Path=/mod/**
+              filters:
+                - StripPrefix=1
             - id: user-ui
               uri: http://snapdragon-user-ui:80
               predicates:
                 - Path=/user/**
+              filters:
+                - StripPrefix=1
             - id: api-docs
               uri: http://snapdragon-api-docs:80
               predicates:
                 - Path=/api-docs/**
+              filters:
+                - StripPrefix=1
             # SSO/login + user surface -> user-bff. MUST precede the /bff/** admin
             # catch-all (SCG matches in list order). NATIVE login: the browser POSTs
             # username/password to /bff/login (permitAll at the BFF); user-bff runs PKCE +
