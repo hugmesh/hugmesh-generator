@@ -8,3 +8,10 @@ net-firewall/nftables python json xtables
 net-firewall/firewalld nftables
 # dracut uefi USE enables dracut --uefi mode to produce Unified Kernel Images (UKIs).
 sys-kernel/dracut uefi
+# boot USE installs the sd-stub PE stubs (/usr/lib/systemd/boot/efi/linuxx64.efi.stub)
+# that dracut --uefi wraps the UKI in; without it UKI assembly fails ("Can't find
+# a uefi stub") even with dracut[uefi] set. udev stays the profile default.
+# kernel-install is mandatory alongside boot on >=systemd-utils-260
+# (REQUIRED_USE 'boot? ( kernel-install )'); with boot alone the emerge
+# hard-fails on unmet requirements (live-proven on the real desktop sysroot).
+sys-apps/systemd-utils boot kernel-install

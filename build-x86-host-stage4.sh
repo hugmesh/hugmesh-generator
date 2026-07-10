@@ -1094,22 +1094,29 @@ if ${STANDALONE}; then
 fi
 
 # ── Boot-chain identifiers (volids / CDLABEL / UKI name / installer cmdline key /
-# partition labels). Historically hardcoded SNAPDRAGON_*/snapdragon.* literals;
+# partition labels / Secure-Boot cert identity + enrollment-cert dirs).
+# Historically hardcoded SNAPDRAGON_*/snapdragon.* literals;
 # UNAFFILIATED swaps the whole set for neutral equivalents in one place so the
 # live-boot CDLABEL always matches its volid and the autostart reads the same
 # cmdline key the GRUB entries emit. Non-unaffiliated builds are byte-identical
 # to the historical literals (volids are ISO9660-safe: A-Z0-9_, bounded; the FAT
-# label is ≤11 chars). ────────────────────────────────────────────────────────
+# label is ≤11 chars). SB_ETC_DIR is where the org enrollment cert is staged in
+# the sysroot; SB_EFI_VENDOR names the EFI/<vendor>/ dir the same cert is copied
+# to on the ESP (.img) and the live ISO — the stager and BOTH boot-media
+# consumers resolve these two variables, never their own branching, so the
+# enrollment cert always ships on the boot media the user enrolls from. ───────
 if ${UNAFFILIATED}; then
     LIVE_VOLID="GENTOO_LIVE";       INSTALL_VOLID="GENTOO_INSTALL"
     UKI_NAME="gentoo.efi";          INSTALL_CMDLINE_KEY="gentoo.install"
     ESP_LABEL="GENTOO_ESP";         ROOT_LABEL="GENTOO_ROOT"
     SB_CERT_O="Gentoo Linux";       SB_CERT_CN="Gentoo Secure Boot"
+    SB_ETC_DIR="/etc/gentoo/secureboot";     SB_EFI_VENDOR="gentoo"
 else
     LIVE_VOLID="SNAPDRAGON_LIVE";   INSTALL_VOLID="SNAPDRAGON_INSTALL"
     UKI_NAME="snapdragon.efi";      INSTALL_CMDLINE_KEY="snapdragon.install"
     ESP_LABEL="SNAP_ESP";           ROOT_LABEL="SNAP_ROOT"
     SB_CERT_O="Snapdragon Systems"; SB_CERT_CN="Snapdragon Secure Boot"
+    SB_ETC_DIR="/etc/snapdragon/secureboot"; SB_EFI_VENDOR="snapdragon"
 fi
 
 # ── Validate + normalize the GPU driver selection (the full vendor matrix) ──
@@ -1302,7 +1309,12 @@ case "${RELEASE_STATE}" in
     internal|public) ;;
     *) err "--release-state must be one of: internal | public  (got '${RELEASE_STATE}')"; exit 1 ;;
 esac
-if [ "${ENV}" = "prod" ]; then
+if [ "${ENV}" = "prod" ] && ${UNAFFILIATED}; then
+    # An unaffiliated desktop bakes no cluster domain / Cloudflare / ACME / keys-USB
+    # machinery, so the loud cluster-prod banner below (and its domain) would be a
+    # false affiliation claim in the build log.
+    info "Build ENV: prod (unaffiliated plain desktop: no cluster domain or ACME machinery is baked)"
+elif [ "${ENV}" = "prod" ]; then
     # LOUD announced banner — a prod image bakes the REAL public domain and
     # expects Cloudflare/OAuth/SMTP creds from the keys USB. Make it impossible
     # to miss that this is NOT a throwaway LAN image.
@@ -2183,6 +2195,17 @@ fi
 if ${INSTALLER_ISO}; then
     command -v xorriso >/dev/null || warn "no xorriso; installer ISO will be left as a plain tree"
 fi
+# Secure Boot chain tools live on the BUILD HOST (UKI/GRUB signing happens outside
+# the chroot; shim is copied off the host). Warn EARLY and non-fatally — the build
+# still completes but the artifacts degrade to bare GRUB / an unsigned UKI — so the
+# operator learns NOW instead of after the multi-hour emerge (the late inline warns
+# at the sign/ESP/ISO steps still fire).
+if ${SECURE_BOOT}; then
+    command -v sbsign >/dev/null 2>&1 \
+        || warn "sbsign not found (install app-crypt/sbsigntools in the builder): UKI/GRUB will NOT be signed — Secure Boot chain won't verify"
+    find /usr/share/shim /usr/lib/shim \( -name 'BOOTX64.EFI' -o -name 'shimx64.efi' \) 2>/dev/null | grep -q . \
+        || warn "no shim under /usr/share/shim or /usr/lib/shim (install sys-boot/shim in the builder): artifacts boot via bare GRUB (no shim Secure Boot chain)"
+fi
 
 # ── 1. Directories ─────────────────────────────────────────────────
 banner "Preparing build directories"
@@ -2251,7 +2274,7 @@ chmod 440 "${SYSROOT}/etc/sudoers.d/build-notty"
 
 # ── 4. Install spec files ──────────────────────────────────────────
 banner "Installing spec files"
-mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.license,profile,env}
+mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.license,package.mask,profile,env}
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
 # Native Steam is a 32-bit app: enable the multilib ABI so its deps build with
 # ABI_X86_32 (the amd64-hardened stage3 seed is multilib-capable). Scoped to the
@@ -2297,6 +2320,15 @@ for puf in "${SPECS_DIR}/portage/package.use/"*; do
         steam)   ${STEAM_NATIVE} || continue ;;
     esac
     cp "${puf}" "${SYSROOT}/etc/portage/package.use/"
+done
+# package.mask: role-independent version quarantines (e.g. the gettext-0.23.x
+# empty-$(DOMAIN) .mo-collision pin — see package.mask/gettext). Copied for every
+# role like package.accept_keywords; the mask alone only prevents an UPGRADE back
+# to a quarantined version, so a matching early downgrade emerge runs in the
+# payload chroot below for anything the stage3 seed already ships too new.
+for pmf in "${SPECS_DIR}/portage/package.mask/"*; do
+    [ -e "${pmf}" ] || continue
+    cp "${pmf}" "${SYSROOT}/etc/portage/package.mask/"
 done
 # package.license: accept the per-vendor proprietary EULAs explicitly (hardened
 # images are explicit about proprietary licences) only for the chosen stack.
@@ -3417,6 +3449,14 @@ if [ ! -d /var/db/repos/gentoo/metadata ] && ! mountpoint -q /var/db/repos/gento
     emerge-webrsync
 fi
 emerge --oneshot --update --newuse sys-apps/baselayout || true
+# gettext-0.23.x empty-\$(DOMAIN) .mo-collision pin (see package.mask/gettext):
+# the stage3 seed ships gettext-0.23.2, so the mask (which only blocks upgrades)
+# cannot help until gettext is first actively downgraded to the stable 0.22.5-r2
+# BEFORE the first eautoreconf+autopoint consumer in @world regenerates its po
+# infra. Non-fatal: if the tree lacks a <0.23 candidate on a given sync, the mask
+# + the INSTALL_MASK dodge still prevent the literal '.mo' from shipping.
+emerge --oneshot --update "<sys-devel/gettext-0.23" \
+    || echo "[build-x86] WARN: gettext downgrade to <0.23 unavailable; relying on INSTALL_MASK"
 ${STEAM_OVERLAY_SETUP}
 # Apply our profile/USE across @world without churning the toolchain.
 emerge --update --deep --newuse --keep-going ${EMERGE_EXCLUDE} @world \
@@ -3693,7 +3733,13 @@ fi
 grep -q '^CONFIG_LSM="lockdown,yama,selinux,bpf"\$' .config || { echo "[build-x86] ERROR: CONFIG_LSM malformed (expected lockdown,yama,selinux,bpf); lockdown/SELinux would not activate"; exit 1; }
 make -j${JOBS} bzImage modules
 make modules_install
-make install
+# 'make install' copies bzImage/System.map/config to /boot FIRST, then falls
+# through arch/x86/boot/install.sh's bootloader probe (no installkernel(8) in
+# the image, no lilo) and prints a harmless "Cannot find LILO." as its last
+# gasp. Filter that one cosmetic line: the shell is bash -eo pipefail, so a
+# REAL make-install failure still aborts via the pipeline status; the '|| true'
+# only absorbs grep's status-1 when every line was filtered.
+make install 2>&1 | { grep -vF 'Cannot find LILO.' || true; }
 # Disk-boot initramfs (NOT the live dmsquash-live one): a normal, generic
 # (--no-hostonly) dracut image so the persistent ext4 GPT root mounts on real
 # hardware AND in VMs. Named initramfs-<kver>.img to match the grub.cfg the .img
@@ -3712,16 +3758,29 @@ else
     echo "[build-x86] WARN: dracut not installed; no disk initramfs (sys-kernel/dracut should be in packages.list)"
 fi
 # Unified Kernel Image (UKI) for Secure Boot: bundles kernel+initramfs+cmdline
-# as a single signed PE/EFI binary. Requires dracut uefi USE flag + CONFIG_EFI_STUB.
-# build_img() will sign the unsigned UKI with the org key and install it to the ESP.
+# as a single signed PE/EFI binary. Requires dracut[uefi] + systemd-utils[boot]
+# (owns the sd-stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub) + CONFIG_EFI_STUB.
+# The host-side signing step below signs it with the org key; build_img() installs
+# it to the ESP. NOTE: the output path expands HOST-side (unquoted heredoc) from
+# UKI_NAME so it matches the sign step's UKI_UNSIGNED for BOTH the branded
+# (snapdragon-unsigned.efi) and UNAFFILIATED (gentoo-unsigned.efi) names.
+# --kernel-image /boot/vmlinuz is REQUIRED: 'make install' above ran with no
+# installkernel(8) (see the LILO note), so arch/x86/boot/install.sh wrote an
+# UNVERSIONED /boot/vmlinuz — dracut's determine_kernel_image() probes only
+# versioned paths (/lib/modules/<kver>/vmlinuz, /boot/vmlinuz-<kver>, ...) and
+# dies "Can't find a kernel image" without the flag; the WARN below would then
+# swallow that and the SB chain would silently degrade to GRUB+vmlinuz
+# (live-proven on the real desktop sysroot: exact invocation failed without
+# the flag, produced a valid PE32+ UKI with it).
 CMDLINE="\$(. /etc/default/grub 2>/dev/null; printf '%s' "\${GRUB_CMDLINE_LINUX:-lsm=lockdown,yama,selinux,bpf lockdown=integrity selinux=1 audit=1}")"
 if command -v dracut >/dev/null && dracut --help 2>/dev/null | grep -q -- '--uefi'; then
     dracut --force --no-hostonly --uefi \
         --add crypt \
         --add-drivers "ext4 vfat nvme ahci sd_mod usb_storage uas virtio_blk virtio_pci virtio_net dm_crypt" \
         --kernel-cmdline "\${CMDLINE}" \
-        --kver "\${KVER}" "/boot/snapdragon-unsigned.efi" \
-        && echo "[build-x86] UKI built: /boot/snapdragon-unsigned.efi" \
+        --kernel-image /boot/vmlinuz \
+        --kver "\${KVER}" "/boot/${UKI_NAME%.efi}-unsigned.efi" \
+        && echo "[build-x86] UKI built: /boot/${UKI_NAME%.efi}-unsigned.efi" \
         || echo "[build-x86] WARN: dracut --uefi failed; UKI not built (secure boot chain needs manual rebuild)"
 else
     echo "[build-x86] INFO: dracut --uefi not available; UKI skipped (add 'uefi' USE to sys-kernel/dracut)"
@@ -3786,14 +3845,15 @@ elif command -v sbsign >/dev/null 2>&1 && [ -f "${UKI_UNSIGNED}" ]; then
         || { warn "sbsign failed; copying unsigned UKI (not verifiable under Secure Boot)"; cp "${UKI_UNSIGNED}" "${UKI_SIGNED}"; }
     rm -f "${UKI_UNSIGNED}"
     # Install org cert into the rootfs for keys-provision mokutil enrollment.
-    # UNAFFILIATED keeps the functional enrollment certs under the neutral dir.
-    ${UNAFFILIATED} && _sb_etc="/etc/gentoo/secureboot" || _sb_etc="/etc/snapdragon/secureboot"
-    mkdir -p "${SYSROOT}${_sb_etc}"
-    cp "${SBCRT}" "${SYSROOT}${_sb_etc}/sb.crt"
-    cp "${SBCER}" "${SYSROOT}${_sb_etc}/sb.cer"
-    [ -f "${SBDIR}/db.auth" ] && cp "${SBDIR}/db.auth" "${SYSROOT}${_sb_etc}/db.auth"
-    info "Org Secure Boot cert installed to sysroot ${_sb_etc}/"
-    unset _sb_etc
+    # SB_ETC_DIR comes from the boot-chain identity fold (UNAFFILIATED keeps the
+    # functional enrollment certs under the neutral /etc/gentoo dir); the ESP and
+    # live-ISO copies below resolve the SAME variable, so wherever this stages
+    # the cert, the boot media carries it too.
+    mkdir -p "${SYSROOT}${SB_ETC_DIR}"
+    cp "${SBCRT}" "${SYSROOT}${SB_ETC_DIR}/sb.crt"
+    cp "${SBCER}" "${SYSROOT}${SB_ETC_DIR}/sb.cer"
+    [ -f "${SBDIR}/db.auth" ] && cp "${SBDIR}/db.auth" "${SYSROOT}${SB_ETC_DIR}/db.auth"
+    info "Org Secure Boot cert installed to sysroot ${SB_ETC_DIR}/"
 elif [ -f "${UKI_UNSIGNED}" ]; then
     warn "sbsign not found on build host (install app-crypt/sbsigntools); UKI unsigned — Secure Boot chain won't verify"
     cp "${UKI_UNSIGNED}" "${UKI_SIGNED}"; rm -f "${UKI_UNSIGNED}"
@@ -4110,11 +4170,15 @@ build_img() {
         cp "${uki_src}" "${root_mnt}/boot/efi/EFI/Linux/${UKI_NAME}"
         info "UKI installed to ESP: EFI/Linux/${UKI_NAME}"
         # Org cert and db.auth: keys-provision enrolls via mokutil on first boot.
-        if [ -d "${SYSROOT}/etc/snapdragon/secureboot" ]; then
-            mkdir -p "${root_mnt}/boot/efi/EFI/snapdragon"
-            cp "${SYSROOT}"/etc/snapdragon/secureboot/*.{crt,cer,auth} \
-               "${root_mnt}/boot/efi/EFI/snapdragon/" 2>/dev/null || true
-            info "Org Secure Boot cert installed to ESP: EFI/snapdragon/"
+        # SB_ETC_DIR/SB_EFI_VENDOR come from the boot-chain identity fold — the
+        # same fold the stager used — so UNAFFILIATED certs (staged under the
+        # neutral /etc/gentoo dir) land on the ESP as EFI/gentoo/ instead of
+        # silently never shipping.
+        if [ -d "${SYSROOT}${SB_ETC_DIR}" ]; then
+            mkdir -p "${root_mnt}/boot/efi/EFI/${SB_EFI_VENDOR}"
+            cp "${SYSROOT}${SB_ETC_DIR}"/*.{crt,cer,auth} \
+               "${root_mnt}/boot/efi/EFI/${SB_EFI_VENDOR}/" 2>/dev/null || true
+            info "Org Secure Boot cert installed to ESP: EFI/${SB_EFI_VENDOR}/"
         fi
     else
         info "No signed UKI at ${uki_src} — .img boots via GRUB+vmlinuz only (no Secure Boot UKI)"
@@ -4407,11 +4471,14 @@ CHROOT
             _mmgr="$(find /usr/share/shim /usr/lib/shim 2>/dev/null \
                 \( -name 'mmx64.efi' -o -name 'MokManager.efi' \) | head -1 || true)"
             [ -n "${_mmgr}" ] && cp "${_mmgr}" "${_iso_tmp}/EFI/BOOT/mmx64.efi" 2>/dev/null || true
-            # Add org cert for enrollment inside live env.
-            if [ -d "${SYSROOT}/etc/snapdragon/secureboot" ]; then
-                mkdir -p "${_iso_tmp}/EFI/snapdragon"
-                cp "${SYSROOT}"/etc/snapdragon/secureboot/*.{crt,cer,auth} \
-                   "${_iso_tmp}/EFI/snapdragon/" 2>/dev/null || true
+            # Add org cert for enrollment inside live env. SB_ETC_DIR/SB_EFI_VENDOR
+            # come from the boot-chain identity fold (same resolution as the
+            # stager), so UNAFFILIATED media carries the cert under the neutral
+            # EFI/gentoo/ dir.
+            if [ -d "${SYSROOT}${SB_ETC_DIR}" ]; then
+                mkdir -p "${_iso_tmp}/EFI/${SB_EFI_VENDOR}"
+                cp "${SYSROOT}${SB_ETC_DIR}"/*.{crt,cer,auth} \
+                   "${_iso_tmp}/EFI/${SB_EFI_VENDOR}/" 2>/dev/null || true
             fi
             # Patch the ISO: replace EFI directory with shim-based structure.
             _iso_new="${ISO_PATH%.iso}-sb.iso"
@@ -4420,8 +4487,8 @@ CHROOT
                 -map "${_iso_tmp}/EFI/BOOT/grubx64.efi"  "/EFI/BOOT/grubx64.efi" \
                 $([ -f "${_iso_tmp}/EFI/BOOT/mmx64.efi" ] && \
                   echo "-map ${_iso_tmp}/EFI/BOOT/mmx64.efi /EFI/BOOT/mmx64.efi") \
-                $([ -d "${_iso_tmp}/EFI/snapdragon" ] && \
-                  echo "-map ${_iso_tmp}/EFI/snapdragon /EFI/snapdragon") \
+                $([ -d "${_iso_tmp}/EFI/${SB_EFI_VENDOR}" ] && \
+                  echo "-map ${_iso_tmp}/EFI/${SB_EFI_VENDOR} /EFI/${SB_EFI_VENDOR}") \
                 -- 2>/dev/null \
                 && { mv "${_iso_new}" "${ISO_PATH}"; info "Shim added to live ISO (Secure Boot ready)"; } \
                 || { warn "xorriso shim post-processing failed; live ISO uses bare GRUB (no shim)"; rm -f "${_iso_new}"; }
@@ -4498,16 +4565,30 @@ CHROOT
 fi
 
 # ── 12. Summary ────────────────────────────────────────────────────
-echo -e "\n${CYAN}${BOLD}=== ${BRAND_TITLE} x86_64 (hardened k8s, role=${ROLE}) ===${RST}"
+# UNAFFILIATED prints a neutral summary: no k8s/cluster-domain/KEYS-stick lines
+# (none of that machinery exists on a plain desktop) — same neutralization the
+# firstboot banner gets above ('hardened desktop' wording precedent).
+if ${UNAFFILIATED}; then
+    echo -e "\n${CYAN}${BOLD}=== ${BRAND_TITLE} x86_64 (hardened desktop, role=${ROLE}) ===${RST}"
+else
+    echo -e "\n${CYAN}${BOLD}=== ${BRAND_TITLE} x86_64 (hardened k8s, role=${ROLE}) ===${RST}"
+fi
 echo "  Profile:    $(cat "${SYSROOT}/etc/portage/profile/parent")"
 echo "  Kernel:     $(${SKIP_KERNEL} && echo 'skipped' || echo 'Gentoo hardened (gentoo-sources + hardened profile + KSPP/SELinux config)')"
-echo "  Role:       ${ROLE}   (cluster domain: ${CLUSTER_DOMAIN})"
-echo "  ENV:        ${ENV}   $([ "${ENV}" = test ] && echo '(LAN-first: cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
+if ${UNAFFILIATED}; then
+    echo "  Role:       ${ROLE}   (no cluster affiliation)"
+    echo "  ENV:        ${ENV}   (plain desktop: no cluster DNS/ACME machinery baked)"
+else
+    echo "  Role:       ${ROLE}   (cluster domain: ${CLUSTER_DOMAIN})"
+    echo "  ENV:        ${ENV}   $([ "${ENV}" = test ] && echo '(LAN-first: cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
+fi
 echo "  Brand:      ${BRAND} / \"${BRAND_TITLE}\" / ${ORG}${CONFIG_FILE:+   (profile: ${CONFIG_FILE})}"
 echo "  GPU:        $(${GPU} && echo 'vendor-agnostic Mesa/Vulkan (amdgpu/i915/nouveau) + DRM kernel' || echo 'headless (no Mesa/Vulkan, virtio-gpu console only)')"
-echo "  k8s:        ${ROLE_K8S}  (init/join/single-node is applied at runtime by the KEYS stick)"
-echo "  Labels:     ${ROLE_LABELS}  (set on the KEYS stick: .snapdragon.node_labels)"
-echo "  headscale:  $(${ROLE_HEADSCALE} && echo 'in runlevel (identity/mesh control server)' || echo 'no (tailscale client only)')"
+if ! ${UNAFFILIATED}; then
+    echo "  k8s:        ${ROLE_K8S}  (init/join/single-node is applied at runtime by the KEYS stick)"
+    echo "  Labels:     ${ROLE_LABELS}  (set on the KEYS stick: .snapdragon.node_labels)"
+    echo "  headscale:  $(${ROLE_HEADSCALE} && echo 'in runlevel (identity/mesh control server)' || echo 'no (tailscale client only)')"
+fi
 echo "  Work dir:   ${WORK_DIR}  (products below); build root: ${BUILD_ROOT}"
 echo "  Stage4:     ${STAGE4}"
 echo "  Image:      ${IMG_PATH}"
@@ -4517,13 +4598,17 @@ echo "  Installer:  ${INSTALLER_ISO_PATH}"
 echo ""
 echo "  growroot expands the ext4 root to fill the medium on first boot."
 echo "  Default artifact = the .img (dd it to a disk/USB; UEFI GPT, GRUB-EFI removable)."
-echo ""
-echo "  Provision a KEYS stick for this node with:"
-case "${ROLE}" in
-    pki)     echo "    ./scripts/gen-provision-keys.sh -r pki -o keys-${ROLE_TAG}        # control-plane (kubeadm init)" ;;
-    be)      echo "    ./scripts/gen-provision-keys.sh -r backend -o keys-${ROLE_TAG}    # worker; label snapdragon.systems/backend=true" ;;
-    fe)      echo "    ./scripts/gen-provision-keys.sh -r frontend -o keys-${ROLE_TAG}   # worker; label snapdragon.systems/frontend=true" ;;
-    be+gpu)  echo "    ./scripts/gen-provision-keys.sh -r backend -o keys-${ROLE_TAG}    # worker; edit:";
-             echo "    snapdragon.role=games, node_labels { snapdragon.systems/compute: gpu }" ;;
-    omnibus) echo "    ./scripts/gen-provision-keys.sh -r pki -o keys-${ROLE_TAG}        # single-node CP; all labels (pki/backend/frontend/compute=gpu)" ;;
-esac
+# KEYS-stick provisioning is cluster machinery — an unaffiliated desktop has no
+# stick to provision (the case below already has no arm for standalone roles).
+if ! ${UNAFFILIATED}; then
+    echo ""
+    echo "  Provision a KEYS stick for this node with:"
+    case "${ROLE}" in
+        pki)     echo "    ./scripts/gen-provision-keys.sh -r pki -o keys-${ROLE_TAG}        # control-plane (kubeadm init)" ;;
+        be)      echo "    ./scripts/gen-provision-keys.sh -r backend -o keys-${ROLE_TAG}    # worker; label snapdragon.systems/backend=true" ;;
+        fe)      echo "    ./scripts/gen-provision-keys.sh -r frontend -o keys-${ROLE_TAG}   # worker; label snapdragon.systems/frontend=true" ;;
+        be+gpu)  echo "    ./scripts/gen-provision-keys.sh -r backend -o keys-${ROLE_TAG}    # worker; edit:";
+                 echo "    snapdragon.role=games, node_labels { snapdragon.systems/compute: gpu }" ;;
+        omnibus) echo "    ./scripts/gen-provision-keys.sh -r pki -o keys-${ROLE_TAG}        # single-node CP; all labels (pki/backend/frontend/compute=gpu)" ;;
+    esac
+fi

@@ -1,0 +1,53 @@
+# gettext-0.23.x empty-$(DOMAIN) catalog defect — pin to 0.22.5-r2 (2026-07-09/10 x86 build)
+#
+# THE DEFECT: every package carrying (or autopoint-refreshing) gettext-0.23-era
+# po/ build infrastructure installed its message catalogs as a literal
+#   /usr/share/locale/<lang>/LC_MESSAGES/.mo
+# because $(DOMAIN) expanded EMPTY in po/Makefile's install-data-yes rule
+# (po/Makefile.in.in:291 '$(INSTALL_DATA) $$realcat $(DESTDIR)$$dir/$(DOMAIN).mo').
+# DOMAIN's only source is po/Makevars ('DOMAIN = $(PACKAGE)') sed-inserted by
+# po.m4 serial 33 during config.status; when that insertion yields nothing, every
+# other step still succeeds and the filename is literally '.mo'. Host-side repros
+# with byte-identical 0.23.2 infra always produce CORRECT names, so the trigger
+# is 0.23-infra x an unidentified chroot-execution factor — the pin removes the
+# 0.23-infra precondition for gettext itself and every eautoreconf+autopoint
+# consumer.
+#
+# THE DAMAGE: since all victims install the SAME path, collision-protect refuses
+# whole merges — the 2026-07-08 proof build LOST 143 PACKAGE MERGES to these
+# collisions; the 2026-07-09 build.log shows 4582 literal-.mo install lines
+# across 34 distinct victim packages (gettext ITSELF, util-linux, grub, cpio,
+# parted, procps, all 14 xfce-base-4.20.x packages, vlc, cryptsetup, ...).
+#
+# BELT-AND-BRACES — DO NOT DROP THE INSTALL_MASK DODGE: the '.mo' patterns in
+# build-x86-host-stage4.sh's INSTALL_MASK (client role masks
+# /usr/share/locale/*/LC_MESSAGES/.mo; headless masks all of /usr/share/locale)
+# stay in place alongside this pin. The pin cannot help packages whose TARBALLS
+# ship 0.23-era po infra (xfce-base 4.20.x, util-linux 2.41, grub 2.14, cpio
+# 2.15, parted 3.7, ...) — they never touch the installed gettext and would
+# still emit '.mo' and collide without the INSTALL_MASK.
+#
+# WHY THIS PIN IS SAFE: sys-devel/gettext-0.22.5-r2 is stable amd64, same
+# SLOT=0, and nothing in ::gentoo hard-depends on >=sys-devel/gettext-0.23
+# (md5-cache verified). ::gentoo itself already masks >=0.24 "for testing"
+# (profiles/package.mask, bug #957583) — this entry extends that quarantine
+# down to 0.23 and must stay self-sufficient (do NOT narrow it to rely on the
+# tree's mask, which can be lifted at any host tree sync). libintl is paired
+# for symmetry with the tree's quarantine; it is not installed on our glibc
+# systems (glibc provides libintl), so that line is precaution only.
+#
+# NOTE: the stage3 seed already ships gettext-0.23.2, so the mask alone only
+# guarantees the downgrade once emerge first touches gettext; the builder must
+# also run an early explicit 'emerge --oneshot --update "<sys-devel/gettext-0.23"'
+# before the first eautoreconf+autopoint consumer builds (see
+# build-x86-host-stage4.sh chroot heredoc).
+#
+# UN-PIN CONDITION (both required):
+#   1. the upstream defect is actually fixed in a released gettext proven in
+#      THIS pipeline (bug #957583 resolved / a >=0.25 version validated), AND
+#   2. a full rebuild on the candidate version shows ZERO literal '.mo' files
+#      in the image: find "${SYSROOT}/usr/share/locale" -name .mo | wc -l == 0.
+# Only after both hold may this mask be lifted and the INSTALL_MASK dodge be
+# narrowed.
+>=sys-devel/gettext-0.23
+>=dev-libs/libintl-0.23

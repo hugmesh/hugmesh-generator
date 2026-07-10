@@ -126,7 +126,11 @@ SAMPLES = {
     "user_password": [{"user_password": "pw"}], "root_password": [{"root_password": "pw"}],
     "standalone": [{"standalone": True}], "capable": [{"capable": True}],
     "unaffiliated": [{"mode": "standalone", "role": "standalone-thin", "unaffiliated": True}],
-    "tailscale": [{"tailscale": True}], "sso": [{"sso": True}],
+    # MODE-AWARE tri-states: the cloud/mesh baselines resolve never-set "" to ON,
+    # so the explicit-False (GUI unchecked-box) variant is what fields the
+    # --no-tailscale/--no-sso (x86) and --skip-mesh (ARM) case arms.
+    "tailscale": [{"tailscale": True}, {"tailscale": False}],
+    "sso": [{"sso": True}, {"sso": False}],
     "headscale_version": [{"headscale_version": "0.23"}],
     "tailscale_version": [{"tailscale_version": "1.60"}],
     "skip_tailscale": [{"skip_tailscale": True}],

@@ -93,6 +93,9 @@ RUN mkdir -p /etc/portage/package.use && \
 #   net-misc/curl               — fetch stage3 / firmware / sources
 #   sys-apps/file               — file(1) artifact/type detection
 #   dev-vcs/git                 — clone sources where the scripts need it
+# (The host-side Secure Boot chain — sbsigntools / efitools / shim — is merged
+#  in the FINAL stage below so adding it never invalidates the cached crossdev
+#  stage that follows this layer.)
 RUN emerge --verbose --noreplace \
         sys-devel/crossdev \
         sys-block/parted \
@@ -141,6 +144,20 @@ RUN echo 'x86-only (built with CROSSDEV=0): no aarch64 cross-toolchain' \
 
 # ── Runtime defaults ──────────────────────────────────────────────────────────
 FROM cross-${CROSSDEV} AS final
+# Host-side Secure Boot chain: build-x86-host-stage4.sh signs OUTSIDE the chroot
+# (so the org key never enters the image) and copies shim off the build host —
+# i.e. off THIS container under the default Docker path:
+#   app-crypt/sbsigntools — sbsign: sign the UKI + grubx64.efi with the org key
+#   app-crypt/efitools    — cert-to-efi-sig-list + sign-efi-sig-list (the db.auth
+#                           firmware-enrollment payload next to the org cert)
+#   sys-boot/shim         — shim + MokManager under /usr/share/shim, picked up by
+#                           the .img ESP install and the live-ISO post-processing
+# Deliberately merged HERE (not in the toolchain stage) so the hours-long cached
+# crossdev stage above is not invalidated by this addition.
+RUN emerge --verbose --noreplace \
+        sys-boot/shim \
+        app-crypt/sbsigntools \
+        app-crypt/efitools
 # The repo is bind-mounted here at runtime; output at /out. No ENTRYPOINT — we
 # do NOT want to hide `make`, so the container is a thin `make` wrapper. The
 # default CMD runs the whole fleet on the NATIVE (in-container, no-sudo) path

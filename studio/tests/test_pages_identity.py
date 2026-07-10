@@ -279,6 +279,73 @@ def test_rpi5_services_catalog_offers_infra_slugs(wiz):
     assert "tor" not in slugs
 
 
+# ---- NetworkPage: client-role services honesty note (PR #304 verify follow-up) ------
+
+def test_services_client_note_visible_and_nonblocking_on_a_client_role(wiz):
+    """A CLIENT-class role (builder ROLE_CLIENT) never bakes the cluster GitOps
+    tree — the builders accept --optional-services but ignore it (build-rpi5's
+    plan echoes 'n/a (role=desktop; no cluster GitOps tree baked)'). The services
+    box must say so on a cloud rpi5-desktop, WITHOUT gating: the checklist stays
+    enabled and the argv emission is unchanged."""
+    pick_mode(wiz, "cloud")
+    pick_role(wiz, "rpi5-desktop")            # rpi5 ROLE_CLIENT: builder --role desktop
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.services_role_note.isVisible()
+    assert "IGNORED" in net.services_role_note.text()
+    assert "rpi5-desktop" in net.services_role_note.text()
+    assert net.services_box.isEnabled() and net.services.isEnabled()   # hint, not a gate
+    for i in range(net.services.count()):
+        if net.services.item(i).text() == "akkoma":
+            net.services.item(i).setCheckState(Qt.CheckState.Checked)
+    advance_to(wiz, wizard_mod.KeyZipPage)
+    # emission untouched: the builder accepts (and itself ignores) the flag
+    assert ("--optional-services", "akkoma") in pairs(wiz.cfg.to_cli_args())
+
+
+def test_services_client_note_visible_on_x86_standalone_desktops(wiz):
+    """x86 classifies EVERY non-node role ROLE_CLIENT (config.py G18 /
+    X86_NODE_ROLES) — the standalone desktops skip the GitOps tree too, so the
+    note shows for them as well."""
+    pick_role(wiz, "standalone-thick")        # standalone mode (default), platform x86
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.services_role_note.isVisible()
+    assert net.services.isEnabled()
+
+
+def test_services_client_note_hidden_on_node_roles(wiz):
+    """Cluster NODE roles bake the GitOps tree — no note. Covers the x86 node
+    class (omnibus) and the rpi5 nuance: standalone 'generic' is NODE-class
+    (build-rpi5 leaves ROLE_CLIENT=false for generic/pki/backend/frontend; G16
+    exists precisely because generic DOES reach the services)."""
+    pick_mode(wiz, "mesh")
+    pick_role(wiz, "omnibus")                 # x86 node role
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.services_role_note.isVisible()
+    # rpi5 node role: restart with a loaded-config style rpi5 'be' mesh build
+    c = wiz.cfg
+    c.mode = "mesh"; c.role = "be"; c.platform = "rpi5"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.services_role_note.isVisible()
+    # rpi5 standalone 'generic': node-class despite living in standalone mode
+    c.mode = "standalone"; c.role = "generic"; c.platform = "rpi5"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.services_role_note.isVisible()
+    assert net.services_box.isEnabled()       # G16: generic still reaches the services
+
+
+def test_services_client_note_hidden_where_the_platform_has_no_flag(wiz):
+    """On a platform whose builder never parses --optional-services (frite) the
+    box is greyed by the capability gate with its own tooltip — the client-role
+    note must NOT stack a second, contradictory explanation on top."""
+    pick_mode(wiz, "cloud")
+    pick_role(wiz, "frite")
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.services_box.isEnabled()   # the G12 grey, unchanged
+    assert not net.services_role_note.isVisible()
+
+
 # ---- NetworkPage: force-off tri-states (G34) -----------------------------------------
 
 def test_tri_state_force_off_reaches_the_argv(wiz):

@@ -199,6 +199,35 @@ def test_print_command_new_option_fields_flow_through(tmp_path):
         assert token in r.stdout
 
 
+def test_print_command_mesh_config_omitting_tailscale_sso_keeps_its_mesh(tmp_path):
+    """The PR #304 verify-pass defect, end-to-end: a hand-written mesh config that
+    simply OMITS tailscale/sso used to print --no-tailscale --no-sso — a headless
+    caller got a non-mesh mesh image. It must now resolve the MODE default ON
+    (exactly what NetworkPage seeds), and the printed argv must be accepted by
+    the REAL builder's --print-plan with the mesh and SSO planes live."""
+    p = tmp_path / "mesh-omnibus.json"
+    p.write_text('{"platform": "x86", "mode": "mesh", "role": "omnibus", "env": "test"}\n',
+                 encoding="utf-8")
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    assert "--with-tailscale" in r.stdout and "--with-sso" in r.stdout
+    assert "--no-tailscale" not in r.stdout and "--no-sso" not in r.stdout
+    # prove the argv against the real builder (its --print-plan runs before the
+    # run-as-root gate: no root, no writes — the build-matrix GUITHR pattern)
+    cmdline = r.stdout.strip().splitlines()[0]
+    cmdline = cmdline.removeprefix("sudo ")
+    plan = subprocess.run(["bash", "-c", f"{cmdline} --print-plan"],
+                          capture_output=True, text=True, timeout=120, cwd=GENERATOR_DIR)
+    assert plan.returncode == 0, plan.stdout + plan.stderr
+    assert "PLAN_MESH=headscale=" in plan.stdout      # mesh plane ON, not "skip"
+    assert "PLAN_MESH=skip" not in plan.stdout
+    assert "PLAN_SSO=casdoor-oidc" in plan.stdout     # SSO plane ON, not "off"
+
+
 def test_print_command_arm_standalone_real_semantics(tmp_path):
     """The parity harness's standalone-posture configs (rpi5 role=desktop +
     standalone=true — NOT the JOB-grammar 'standalone-desktop' token) must print

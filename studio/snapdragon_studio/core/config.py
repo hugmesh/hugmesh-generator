@@ -380,8 +380,17 @@ class ImageConfig:
     capable: bool = False              # --capable (most-capable Plasma payload, 50GiB root; x86, composable)
     unaffiliated: bool = False         # --unaffiliated as a COMPOSABLE flag (x86; role standalone-unaffiliated presets it)
     # ── network / identity plane ──
-    tailscale: bool = False            # --with-tailscale / --no-tailscale
-    sso: bool = False                  # --with-sso / --no-sso
+    # MODE-AWARE tri-states (see tailscale_enabled()/sso_enabled()): "" (never
+    # set) = the MODE default — cloud/mesh ON, standalone OFF, the same rule
+    # NetworkPage.initializePage seeds into the checkboxes — while a BOOL is
+    # ALWAYS an explicit choice (the GUI checkboxes collect bools; False from a
+    # mesh build is a user who UNCHECKED the box and still gets --no-*). This
+    # deliberately differs from the G34 _tri() convention (False = leave
+    # default) — with a former plain-bool default of False, a mesh/cloud config
+    # JSON that simply OMITTED these keys printed --no-tailscale/--no-sso (x86)
+    # / --skip-mesh (ARM): headless callers got a non-mesh mesh image.
+    tailscale: bool | str = ""         # --with-tailscale / --no-tailscale ('' | True/'on' | False/'off')
+    sso: bool | str = ""               # --with-sso / --no-sso ('' | True/'on' | False/'off')
     headscale_url: str = ""            # brand mesh control-server URL — NOT a builder flag; env passthrough in build_driver (G2)
     headscale_version: str = ""        # --headscale-version pin (all)
     tailscale_version: str = ""        # --tailscale-version pin (all)
@@ -523,6 +532,15 @@ class ImageConfig:
                         for x in (d.get("domains") or [])]
         d["users"] = [User(**{k: v for k, v in x.items() if k in usr_f}) if isinstance(x, dict) else x
                       for x in (d.get("users") or [])]
+        # The mode-aware tri-states: normalize the 'on'/'off' hand-written
+        # spellings to bools AT LOAD (fail-closed on junk), so the in-memory value
+        # is always bool-or-'' — NetworkPage.initializePage seeds its checkboxes
+        # with a truthy test (`c.tailscale or c.mode in ...`) that a truthy 'off'
+        # string would silently invert.
+        for k in ("tailscale", "sso"):
+            if k in d:
+                v = cls._tri_explicit(d[k], k)
+                d[k] = "" if v is None else v
         known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
         return cls(**{k: v for k, v in d.items() if k in known})
 
@@ -627,6 +645,52 @@ class ImageConfig:
         if value in (False, None, ""):
             return ""
         return str(value)
+
+    @staticmethod
+    def _tri_explicit(value: bool | str, field_name: str) -> bool | None:
+        """Resolve a MODE-AWARE tri-state (tailscale/sso) to an explicit bool, or
+        None when never set. UNLIKE _tri()/G34 (where False = 'leave the builder
+        default'), a bool here is ALWAYS an explicit user choice: the NetworkPage
+        boxes are plain 2-state checkboxes that initializePage seeds from the mode
+        and validatePage collects back as bools — so False from the GUI is a user
+        who UNCHECKED the box on a mesh build and must still get the explicit
+        --no-* flag. Only the never-set sentinel '' (the dataclass default, which
+        the GUI never writes) defers to the mode default. 'on'/'off' are accepted
+        for hand-written configs; anything else is rejected fail-closed (a typo
+        like "yes" must never silently strip the mesh off a mesh image)."""
+        if value is True or value == "on":
+            return True
+        if value is False or value == "off":
+            return False
+        if value in (None, ""):
+            return None
+        raise ValueError(f"{field_name} must be true / false / 'on' / 'off' / '' "
+                         f"(got {value!r})")
+
+    def _mesh_mode_default(self) -> bool:
+        """cloud/mesh default the mesh/SSO plane ON, standalone OFF — the same rule
+        NetworkPage.initializePage uses to seed the checkboxes (gui/pages/network.py),
+        applied at emission time so a headless config that never set the fields
+        builds the SAME image the GUI flow would produce."""
+        return self.mode in ("cloud", "mesh")
+
+    def tailscale_enabled(self) -> bool:
+        """The RESOLVED mesh plane: the explicit user choice, else the mode default.
+        Passed through verbatim even on an x86 cluster NODE role — the builder does
+        NOT force mesh back on there (build-x86-host-stage4.sh: SKIP_MESH=false
+        default at 122; only the flag arms 707-712 and the standalone posture
+        1083-1089 touch SKIP_MESH — no role arm at 950-1019 does), so an explicit
+        off genuinely ships a mesh-less node, mirroring the builder."""
+        v = self._tri_explicit(self.tailscale, "tailscale")
+        return self._mesh_mode_default() if v is None else v
+
+    def sso_enabled(self) -> bool:
+        """The RESOLVED Casdoor/OIDC SSO plane (x86-only flag; see
+        tailscale_enabled() — build-x86-host-stage4.sh's SKIP_SSO mirrors
+        SKIP_MESH: default false at 173, flag arms 738-741, standalone posture
+        1089, no role-based forcing)."""
+        v = self._tri_explicit(self.sso, "sso")
+        return self._mesh_mode_default() if v is None else v
 
     def _brand_args(self) -> list[str]:
         """The brand-identity flags every builder parses identically (+ the -C/--config
@@ -751,8 +815,10 @@ class ImageConfig:
         a += self._identity_args()
         if self.cluster_domain != "snapdragon.systems":
             a += ["--cluster-domain", self.cluster_domain]
-        # The arm builders have no --with/--no-tailscale pair; mesh is on unless skipped.
-        if not self.tailscale:
+        # The arm builders have no --with/--no-tailscale pair; mesh is on unless
+        # skipped. A never-set field resolves to the MODE default (cloud/mesh ON,
+        # standalone OFF) so a mesh config that omits the key keeps its mesh.
+        if not self.tailscale_enabled():
             a += ["--skip-mesh"]
         a += self._mesh_version_args()
         # --standalone: local user, no mesh, LUKS2-encrypted root. Only meaningful on a
@@ -976,9 +1042,12 @@ class ImageConfig:
         # mirroring the builder, which only errors on an EXPLICIT --bundle-source.
         if self.home_seed_code and self.home_seed_code != "none":
             conflicts.append("home_seed_code (seeds the Snapdragon stack into the home)")
-        if self.tailscale:
+        # RESOLVED values: on the (required) standalone mode a never-set field is
+        # OFF, so only an explicit opt-in conflicts — and on a (conflicting)
+        # cloud/mesh mode the mode line below names the real problem anyway.
+        if self.tailscale_enabled():
             conflicts.append("tailscale (the tailnet is Snapdragon platform machinery)")
-        if self.sso:
+        if self.sso_enabled():
             conflicts.append("sso (Casdoor SSO is Snapdragon platform machinery)")
         if self.mode in ("cloud", "mesh"):
             conflicts.append(f"mode={self.mode!r} (emits --person-role/--domains — "
@@ -1005,11 +1074,13 @@ class ImageConfig:
         if not unaffiliated:
             a += self._brand_args()
 
-            # network / identity — emit explicit with/no so intent is unambiguous.
+            # network / identity — emit explicit with/no so intent is unambiguous;
+            # a never-set field resolves to the MODE default (cloud/mesh ON), so a
+            # config JSON that omits the keys builds the same image the GUI would.
             # (unaffiliated: the role PRESETS no-mesh/no-SSO/no-bundled-source; the
             # conflict check above already rejected any opt-in, so emit nothing.)
-            a += ["--with-tailscale"] if self.tailscale else ["--no-tailscale"]
-            a += ["--with-sso"] if self.sso else ["--no-sso"]
+            a += ["--with-tailscale"] if self.tailscale_enabled() else ["--no-tailscale"]
+            a += ["--with-sso"] if self.sso_enabled() else ["--no-sso"]
         a += self._mesh_version_args()
 
         # --standalone composes onto ANY client role (laptop/chromebook/desktop),

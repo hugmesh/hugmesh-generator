@@ -227,6 +227,82 @@ def test_x86_mesh_node_never_emits_person_role_even_with_domains_and_users():
     assert "--person-role" not in args and "--domains" not in args
 
 
+# ---- mode-aware tailscale/sso tri-state (the PR #304 verify-pass defect) -------
+# ImageConfig used to default tailscale/sso to a plain False while the mode-aware
+# defaulting lived ONLY in NetworkPage.initializePage — so a mesh/cloud config JSON
+# that simply OMITTED the keys printed --no-tailscale --no-sso (x86) / --skip-mesh
+# (ARM): headless callers got a non-mesh mesh image. Now "" (never set) resolves to
+# the MODE default at emission time; bools stay EXPLICIT (the GUI's checkboxes).
+
+def test_mesh_and_cloud_configs_omitting_tailscale_sso_resolve_on():
+    for mode, role in (("mesh", "omnibus"), ("cloud", "desktop")):
+        args = ImageConfig(mode=mode, role=role, platform="x86").to_cli_args()
+        assert "--with-tailscale" in args and "--with-sso" in args, (mode, role)
+        assert "--no-tailscale" not in args and "--no-sso" not in args, (mode, role)
+
+
+def test_standalone_config_omitting_tailscale_sso_resolves_off():
+    args = ImageConfig(mode="standalone", role="standalone-thick", platform="x86").to_cli_args()
+    assert "--no-tailscale" in args and "--no-sso" in args
+
+
+def test_explicit_false_still_forces_no_flags_on_a_mesh_build():
+    """The GUI contract: a user who UNCHECKS the box on a mesh build collects
+    tailscale=False/sso=False (a plain bool, NetworkPage.validatePage) and must
+    STILL get the explicit --no-* pair — False is NEVER 'leave the mode default'."""
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86",
+                       tailscale=False, sso=False).to_cli_args()
+    assert "--no-tailscale" in args and "--no-sso" in args
+    assert "--with-tailscale" not in args and "--with-sso" not in args
+
+
+def test_arm_mesh_config_omitting_tailscale_keeps_its_mesh():
+    on = ImageConfig(mode="mesh", role="be", platform="rpi5").to_cli_args()
+    assert "--skip-mesh" not in on
+    off = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=False).to_cli_args()
+    assert "--skip-mesh" in off
+
+
+def test_tailscale_sso_onoff_spellings_accepted():
+    on = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                     tailscale="on", sso="on").to_cli_args()
+    assert "--with-tailscale" in on and "--with-sso" in on
+    off = ImageConfig(mode="mesh", role="omnibus", platform="x86",
+                      tailscale="off", sso="off").to_cli_args()
+    assert "--no-tailscale" in off and "--no-sso" in off
+
+
+@pytest.mark.parametrize("junk", ["yes", "1", "true", 1])
+def test_tailscale_sso_junk_values_fail_closed(junk):
+    """A typo like "yes" must never silently strip the mesh off (or bake it into)
+    an image — both the emission path and the JSON-load path reject it."""
+    with pytest.raises(ValueError, match="tailscale"):
+        ImageConfig(mode="mesh", role="omnibus", platform="x86",
+                    tailscale=junk).to_cli_args()
+    with pytest.raises(ValueError, match="sso"):
+        ImageConfig.from_dict({"mode": "mesh", "role": "omnibus", "platform": "x86",
+                               "sso": junk})
+
+
+def test_tailscale_sso_round_trip_preserves_never_set(tmp_path):
+    """save()/load() must keep the '' sentinel (so the mode default keeps applying,
+    even if the mode later changes) AND keep explicit bools explicit; the
+    'on'/'off' spellings normalize to bools at load so the GUI's truthy checkbox
+    seeding (NetworkPage.initializePage) can never misread a truthy 'off' string."""
+    p = tmp_path / "roundtrip.json"
+    never_set = ImageConfig(mode="mesh", role="omnibus", platform="x86")
+    never_set.save(str(p))
+    assert ImageConfig.load(str(p)).tailscale == ""
+    explicit = ImageConfig(mode="mesh", role="omnibus", platform="x86",
+                           tailscale=False, sso=True)
+    explicit.save(str(p))
+    reloaded = ImageConfig.load(str(p))
+    assert reloaded.tailscale is False and reloaded.sso is True
+    assert reloaded.to_cli_args() == explicit.to_cli_args()
+    assert ImageConfig.from_dict({"tailscale": "off", "sso": "on"}).tailscale is False
+    assert ImageConfig.from_dict({"tailscale": "off", "sso": "on"}).sso is True
+
+
 def test_x86_client_desktop_weight_and_steam():
     args = ImageConfig(mode="cloud", role="laptop", platform="x86",
                        desktop="thin", steam="flatpak").to_cli_args()
@@ -449,8 +525,11 @@ def test_jetson_encrypt_root_and_standalone_blocked():
 # ---- frite: arm64 client (board x flavor x desktop, no --role) ----------------
 
 def test_frite_defaults_golden():
+    # cloud mode + never-set tailscale ("" tri-state) resolves the mesh ON — the
+    # mode default the GUI seeds — so NO --skip-mesh (a defaults-only cloud config
+    # used to print a mesh-less client: the PR #304 verify-pass defect).
     args = ImageConfig(mode="cloud", role="frite", platform="frite").to_cli_args()
-    assert args == ["--board", "la-frite", "--flavor", "both", "--env", "test", "--skip-mesh"]
+    assert args == ["--board", "la-frite", "--flavor", "both", "--env", "test"]
 
 
 @pytest.mark.parametrize("board", ["la-frite", "le-potato", "sweet-potato"])
@@ -1103,7 +1182,11 @@ _FIELD_PROBE = {
     "local_user": {"local_user": "alice"}, "local_pass": {"local_pass": "pw"},
     "user_password": {"user_password": "pw"}, "root_password": {"root_password": "pw"},
     "standalone": {"standalone": True}, "capable": {"capable": True},
-    "tailscale": {"tailscale": True}, "sso": {"sso": True},
+    # tailscale/sso are MODE-AWARE tri-states: the cloud/mesh baselines resolve
+    # the never-set "" to ON, so probing True would be a no-op — probe the
+    # EXPLICIT False (the GUI's unchecked box), which flips every supporting
+    # platform's emission (--no-tailscale/--no-sso on x86; --skip-mesh on ARM).
+    "tailscale": {"tailscale": False}, "sso": {"sso": False},
     "headscale_version": {"headscale_version": "0.23"},
     "tailscale_version": {"tailscale_version": "1.60"},
     "skip_tailscale": {"skip_tailscale": True},

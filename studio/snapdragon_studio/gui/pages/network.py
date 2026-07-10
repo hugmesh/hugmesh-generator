@@ -9,8 +9,10 @@ from ...core.config import (
     OPTIONAL_SERVICES_BY_PLATFORM,
     OPTIONAL_SERVICES_CHOICES,
     RELEASE_STATE_CHOICES,
+    RPI5_ROLE_MAP,
     SERVICES_ALL,
     SERVICES_NONE,
+    X86_NODE_ROLES,
 )
 from ._gating import clear_unsupported, gate_widgets, platform_supports
 from ._widgets import _file_picker, _row
@@ -21,6 +23,36 @@ from ._widgets import _file_picker, _row
 # (the square) = emit neither and leave the brand.conf/builder default.
 _TRI_TIP = ("3-state: checked = force ON (--with-…), unchecked = force OFF (--no-…), "
             "part-checked square = leave the brand-profile/builder default.")
+
+
+def _client_class_role(role: str, platform: str) -> bool:
+    """True when the selected role builds a CLIENT-class (desktop) image — the
+    class for which the builders accept --optional-services but never bake it
+    (no cluster GitOps tree on a desktop: build-x86 skips the specs/cluster copy
+    for ROLE_CLIENT and its plan echoes OPTIONAL_SERVICES 'none'; build-rpi5's
+    plan echoes 'n/a (role=desktop; no cluster GitOps tree baked)').
+
+    Mirrors the builders' own ROLE_CLIENT derivation, the same way config.py
+    gates --person-role/--domains on the role class (G18 / X86_NODE_ROLES):
+
+    * x86 — ROLE_CLIENT is every role NOT in X86_NODE_ROLES (build-x86's role
+      switch sets ROLE_CLIENT=true for laptop/chromebook/desktop AND all the
+      standalone-* desktops);
+    * rpi5 — ONLY builder --role desktop (Studio id rpi5-desktop, RPI5_ROLE_MAP)
+      is ROLE_CLIENT; generic/pki/backend/frontend are cluster-node class —
+      notably standalone 'generic' DOES bake the tree (G16), so it must NOT
+      count as client here.
+
+    Only x86 + rpi5 parse --optional-services at all (PLATFORM_FIELD_SUPPORT);
+    on every other platform the services box is greyed by gate_widgets with its
+    own explanation, so this note never applies there.
+    """
+    p = platform or "x86"
+    if p == "rpi5":
+        return RPI5_ROLE_MAP.get(role, role) == "desktop"
+    if p == "x86":
+        return role not in X86_NODE_ROLES
+    return False
 
 
 def _tri_state(value):
@@ -169,6 +201,18 @@ class NetworkPage(QtWidgets.QWizardPage):
         # explicit none (G13) and the full user-level set (G14).
         self.services_box = QtWidgets.QGroupBox("Optional cluster services (--optional-services)")
         svl = QtWidgets.QVBoxLayout(self.services_box)
+        # UX-honesty note (PR #304 verify pass): on a CLIENT-class role the builders
+        # ACCEPT these selections but never bake them — a desktop image carries no
+        # cluster GitOps tree, so the build plan echoes OPTIONAL_SERVICES as
+        # none / "n/a (role=desktop; no cluster GitOps tree baked)". Same styled-
+        # QLabel pattern as BrandingPage.unaffiliated_note / BuildPage.bundle_note.
+        # Deliberately a HINT, not a gate: nothing greys, nothing clears, and the
+        # emission is untouched (the builders take the flags fine on any role).
+        self.services_role_note = QtWidgets.QLabel("")
+        self.services_role_note.setWordWrap(True)
+        self.services_role_note.setStyleSheet("color: #a65d00;")
+        self.services_role_note.setVisible(False)
+        svl.addWidget(self.services_role_note)
         self.services_none = QtWidgets.QCheckBox(
             'NO optional services — emits --optional-services "" (suppresses the '
             "builder's akkoma tuwunel phpbb default)")
@@ -287,6 +331,21 @@ class NetworkPage(QtWidgets.QWizardPage):
         # builder has no flag (G12: frite/orangepi5/orangepizero2/jetson).
         self.character_studio.setVisible(True)
         self.services_box.setVisible(True)
+        # CLIENT-class role (builder ROLE_CLIENT — see _client_class_role): the
+        # services are accepted but IGNORED (no cluster GitOps tree in a desktop
+        # image; the plan echoes OPTIONAL_SERVICES as n/a). Show the honesty note;
+        # keep everything enabled and the emission unchanged. Hidden wherever the
+        # platform has no --optional-services flag at all — there gate_widgets'
+        # greyed-box tooltip is the (different) explanation.
+        client = (platform_supports("optional_services", c.platform)
+                  and _client_class_role(c.role, c.platform))
+        if client:
+            self.services_role_note.setText(
+                f"Heads-up: role '{c.role}' builds a client/desktop image — no "
+                "cluster GitOps tree is baked, so services picked here are accepted "
+                "but IGNORED by the builder (the build plan shows OPTIONAL_SERVICES "
+                "as n/a). They only take effect on cluster NODE roles.")
+        self.services_role_note.setVisible(client)
         # per-platform capability greying (G10/G11/G12): x86-only emission fields
         # used to sit un-greyed on ARM and silently drop their values from the argv.
         # validatePage() clears whatever is greyed here (clear_unsupported).

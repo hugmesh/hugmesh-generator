@@ -400,7 +400,9 @@ def test_network_x86_only_widgets_grey_and_clear_on_arm_cloud(wiz):
     assert net.tailscale.isEnabled()    # all-platform knobs stay live
     assert net.root_login.isEnabled()
     advance_to(wiz, wizard_mod.KeyZipPage)   # Next past Network collects + clears
-    assert c.sso is False and c.egress_vpn == "" and c.aide is False
+    # sso clears to its dataclass default — the never-set "" tri-state sentinel
+    # (mode-default; emits nothing on ARM regardless), not an explicit False
+    assert c.sso == "" and c.egress_vpn == "" and c.aide is False
     assert c.proxy_stack == "auto" and c.tor_onion_service is False
     assert c.edge_ai_service is False and c.character_studio is False
     assert c.optional_services == [] and c.enable_games is False
