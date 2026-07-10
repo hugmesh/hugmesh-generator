@@ -38,6 +38,21 @@
 #   (g) defaults INERT: with no BFF_EXPORT_URL / no key, the agent keeps cache,
 #       exits 0, applies nothing.
 #   (g') placeholder/missing key -> fail-closed, no apply (crypto gate).
+#   (n) applied-ack writeback (ack_intent(), wired into apply_entry()): a
+#       successful ack POSTs the correct URL/body right after a real commit.
+#   (n') a FAILING ack (non-2xx) does not fail apply_entry() nor undo the
+#       already-successful posture change (best-effort writeback).
+#   (n'') the ack body carries THIS ROW's own generation, not the export
+#       envelope's top-level generation (a fixture where the two deliberately
+#       differ would catch either one leaking into the other).
+#   (n''') an already-converged (idempotent no-op) re-apply of the same entry
+#       STILL re-acks (self-healing until the BFF prunes an applied intent
+#       from its next export — see (o) for why this can't be suppressed).
+#   (o) a brand-new intentId whose target already matches the currently-
+#       converged posture IS acked on its very first cycle (regression test:
+#       an earlier version of this agent skipped ack_intent() on the
+#       converged-no-op path entirely, which stranded exactly this case at
+#       applied=false on the BFF forever).
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -323,6 +338,203 @@ else
         bad "(m) an unrecognized BFF provider key still invoked the driver (log grew)"
     fi
 fi
+
+# ────────────────────────────────────────────────────────────────────────────────────
+# APPLIED-ACK TESTS — ack_intent(), wired into apply_entry() right after a REAL
+# commit/rollback it drove. A stub `curl` is installed on PATH ONLY for the
+# duration of each apply_entry() call below (`PATH=... VAR=... apply_entry`,
+# bash's per-command environment-override idiom — verified to revert after the
+# call returns, so it can never leak into a later case), so it intercepts ONLY
+# the ack POST (apply_entry()'s only other subprocess is the REAL driver via
+# `bash "${DRIVER}" ...`, which never calls curl). It logs every request's URL
+# + -d body to ACK_STUB_DIR/requests.log and exits 0 or 22 (mirroring curl
+# --fail's own exit code on an HTTP error response) per ACK_STUB_DIR/mode.
+# ────────────────────────────────────────────────────────────────────────────────────
+ACK_STUB_DIR="${WORK}/ack-stub"; mkdir -p "${ACK_STUB_DIR}/bin"
+cat > "${ACK_STUB_DIR}/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+dir="${ACK_STUB_DIR:?ACK_STUB_DIR unset}"
+mode="success"
+[ -r "${dir}/mode" ] && mode="$(cat "${dir}/mode")"
+url="${@: -1}"
+body=""
+prev=""
+for a in "$@"; do
+    [ "${prev}" = "-d" ] && body="${a}"
+    prev="${a}"
+done
+{
+    printf 'URL=%s\n' "${url}"
+    printf 'BODY=%s\n' "${body}"
+    printf -- '---\n'
+} >> "${dir}/requests.log"
+[ "${mode}" = "fail" ] && exit 22
+exit 0
+EOF
+chmod +x "${ACK_STUB_DIR}/bin/curl"
+export ACK_STUB_DIR
+printf 'success\n' > "${ACK_STUB_DIR}/mode"
+ACK_NODE_FP="mkey:ack-node-test"
+ACK_BFF="https://bff.ack-test.invalid"
+CERT_FILE="${WORK}/mtls-cert.pem"; KEY_FILE="${WORK}/mtls-key.pem"
+printf 'dummy-cert\n' > "${CERT_FILE}"; printf 'dummy-key\n' > "${KEY_FILE}"
+
+# ── Case (n): successful ack fires with the correct URL/body right after a REAL commit ──
+rm -f "${MARKER}" "${SANDBOX_ETC}/release-state" "${ACK_STUB_DIR}/requests.log"
+entry_ack_ok="$(jq -nc --arg dom "${DOM}" '{
+    clusterDomain:$dom, targetState:"public", exposureModel:"tunnel",
+    provider:"generic-registrar", requestedBy:"superadmin@acme.snapdragon.systems",
+    intentId:"intent-ack-ok", generation:321
+}')"
+PATH="${ACK_STUB_DIR}/bin:${PATH}" MACHINE_KEY_FP="${ACK_NODE_FP}" BFF_URL="${ACK_BFF}" \
+    MTLS_CERT="${CERT_FILE}" MTLS_KEY="${KEY_FILE}" MTLS_CA="/nonexistent-ca" \
+    apply_entry "${entry_ack_ok}"
+REQ_COUNT="$(grep -c '^URL=' "${ACK_STUB_DIR}/requests.log" 2>/dev/null || echo 0)"
+REQ_LINE="$(grep '^URL=' "${ACK_STUB_DIR}/requests.log" | tail -1)"
+BODY_LINE="$(grep '^BODY=' "${ACK_STUB_DIR}/requests.log" | tail -1)"
+if [ "${REQ_COUNT}" = "1" ] && [ "${REQ_LINE}" = "URL=${ACK_BFF}/bff/internal/go-live/intent-ack-ok/applied-ack" ]; then
+    ok "(n) ack POSTed to the correct URL (derived from BFF_URL) right after a real commit"
+else
+    bad "(n) ack URL wrong or missing (count=${REQ_COUNT}): '${REQ_LINE}'"
+fi
+EXPECT_BODY="BODY={\"generation\":321,\"appliedBy\":\"${ACK_NODE_FP}\"}"
+if [ "${BODY_LINE}" = "${EXPECT_BODY}" ]; then
+    ok "(n) ack body carries this entry's own generation + this node's appliedBy fingerprint"
+else
+    bad "(n) ack body wrong: got '${BODY_LINE}', want '${EXPECT_BODY}'"
+fi
+
+# ── Case (n'): a FAILING ack (non-2xx) does not fail apply_entry() nor the posture change ─
+rm -f "${MARKER}" "${SANDBOX_ETC}/release-state" "${ACK_STUB_DIR}/requests.log"
+printf 'fail\n' > "${ACK_STUB_DIR}/mode"
+entry_ack_fail="$(jq -nc --arg dom "${DOM}" '{
+    clusterDomain:$dom, targetState:"public", exposureModel:"tunnel",
+    provider:"generic-registrar", requestedBy:"superadmin@acme.snapdragon.systems",
+    intentId:"intent-ack-fail", generation:322
+}')"
+RC=0
+PATH="${ACK_STUB_DIR}/bin:${PATH}" MACHINE_KEY_FP="${ACK_NODE_FP}" BFF_URL="${ACK_BFF}" \
+    MTLS_CERT="${CERT_FILE}" MTLS_KEY="${KEY_FILE}" MTLS_CA="/nonexistent-ca" \
+    apply_entry "${entry_ack_fail}" || RC=$?
+if [ "${RC}" -eq 0 ]; then
+    ok "(n') apply_entry() still returns success when the ack POST fails (non-2xx)"
+else
+    bad "(n') apply_entry() returned failure (rc=${RC}) just because the ack POST failed"
+fi
+if [ -e "${MARKER}" ] && grep -qE '^provider=byo-domain$' "${MARKER}"; then
+    ok "(n') the posture change (marker write) landed regardless of the ack failure"
+else
+    bad "(n') marker missing/wrong after a commit whose ack POST failed"
+fi
+REQ_COUNT2="$(grep -c '^URL=' "${ACK_STUB_DIR}/requests.log" 2>/dev/null || echo 0)"
+if [ "${REQ_COUNT2}" = "1" ]; then
+    ok "(n') the failing ack was still attempted exactly once (best-effort, not silently skipped)"
+else
+    bad "(n') expected exactly one ack attempt, saw ${REQ_COUNT2}"
+fi
+printf 'success\n' > "${ACK_STUB_DIR}/mode"
+
+# ── Case (n''): the ROW's own generation is acked, NOT the export envelope's ────────
+# top-level generation. Build a FULL signed export where body.generation (the
+# envelope, a max-over-all-rows value per golive-verify.sh's own doc) and
+# body.entries[0].generation (THIS row's own stamp) are deliberately DIFFERENT
+# numbers, so a bug that threaded the envelope's rv_gen (or any other outer
+# generation) into the ack body instead of this entry's own .generation field
+# would be caught here, not silently pass because the two usually coincide.
+ENVELOPE_GEN=8000
+ROW_GEN=42
+ACK_SPLIT_INTENT="intent-split-gen"
+split_body="$(jq -n --argjson envgen "${ENVELOPE_GEN}" --argjson rowgen "${ROW_GEN}" \
+    --arg node "${NODE}" --arg dom "${DOM}" --arg intent "${ACK_SPLIT_INTENT}" '{
+    node:$node, generation:$envgen,
+    entries: [ { clusterDomain:$dom, targetState:"public", exposureModel:"tunnel",
+                 provider:"generic-registrar", requestedBy:"superadmin@acme.snapdragon.systems",
+                 intentId:$intent, generation:$rowgen } ]
+}')"
+jq -n --argjson b "${split_body}" '{ body:$b, contentHash:"x", signature:null, publicKey:"advertised-ignored", signed:false }' > "${WORK}/split-gen.json"
+split_canon="$(mktemp)"; golive_canonical_bytes "${WORK}/split-gen.json" > "${split_canon}"
+split_sig="$(openssl pkeyutl -sign -inkey "${PRIV}" -rawin -in "${split_canon}" 2>/dev/null | base64 -w0)"
+rm -f "${split_canon}"
+jq --arg sig "${split_sig}" '.signature=$sig | .signed=true' "${WORK}/split-gen.json" > "${WORK}/split-gen.json.s" && mv "${WORK}/split-gen.json.s" "${WORK}/split-gen.json"
+if golive_verify_export "${WORK}/split-gen.json" "${PUB_B64}"; then
+    ok "(n'') split-generation fixture (envelope=${ENVELOPE_GEN} != row=${ROW_GEN}) verifies fine (envelope-vs-row is a semantic distinction, not a crypto one)"
+else
+    bad "(n'') split-generation fixture unexpectedly FAILED verification"
+fi
+entry_split="$(gv_entry_for_domain "${WORK}/split-gen.json" "${DOM}")"
+rm -f "${MARKER}" "${SANDBOX_ETC}/release-state" "${ACK_STUB_DIR}/requests.log"
+PATH="${ACK_STUB_DIR}/bin:${PATH}" MACHINE_KEY_FP="${ACK_NODE_FP}" BFF_URL="${ACK_BFF}" \
+    MTLS_CERT="${CERT_FILE}" MTLS_KEY="${KEY_FILE}" MTLS_CA="/nonexistent-ca" \
+    apply_entry "${entry_split}"
+BODY_SPLIT="$(grep '^BODY=' "${ACK_STUB_DIR}/requests.log" | tail -1)"
+EXPECT_SPLIT="BODY={\"generation\":${ROW_GEN},\"appliedBy\":\"${ACK_NODE_FP}\"}"
+WRONG_SPLIT="BODY={\"generation\":${ENVELOPE_GEN},\"appliedBy\":\"${ACK_NODE_FP}\"}"
+if [ "${BODY_SPLIT}" = "${EXPECT_SPLIT}" ]; then
+    ok "(n'') ack body's generation is the ROW's own gen=${ROW_GEN}, not the envelope's gen=${ENVELOPE_GEN}"
+elif [ "${BODY_SPLIT}" = "${WRONG_SPLIT}" ]; then
+    bad "(n'') ack body carried the ENVELOPE's top-level generation (${ENVELOPE_GEN}) instead of this row's own (${ROW_GEN}) — would CAS-mismatch on the BFF side"
+else
+    bad "(n'') ack body unexpected: '${BODY_SPLIT}'"
+fi
+
+# ── Case (n'''): an already-converged (idempotent no-op) cycle DOES still re-ack ────
+# apply_entry() calls ack_intent() from the converged-no-op branches too, not
+# just the branches that actually drove the driver. This is a DELIBERATE
+# correctness-over-cheapness trade-off: an earlier version suppressed the ack
+# on the converged path, on the theory that "already converged" implies
+# "already acked" — but that's false for a *freshly recorded* intent whose
+# target happens to already match the currently-converged host posture (a
+# re-affirmation, a UI double-submit, or re-recording after a withdraw): that
+# intent's driver call is correctly skipped as a no-op, but it had NEVER been
+# acked before, so skipping the ack too left its BFF row stuck at
+# status=recorded/applied=false forever, with no automatic recovery (see case
+# (o) below, which reproduces exactly that scenario).
+#
+# The safety argument against "unbounded ack load every 60s forever" is NOT
+# client-side suppression — it's the BFF's own absence contract
+# (GoLiveExportModels.java): a successful ack flips the row to status=applied
+# server-side, which removes that entry from the NEXT signed export. Once
+# acked, this node's next reconcile cycle never sees the entry at all, so
+# apply_entry() is never even called for it again. The only case where this
+# script re-acks an already-applied intent is if the ack itself keeps failing
+# (see (n') — best-effort, retried every cycle until it lands, which is the
+# desired self-healing behavior, not a bug) or if the BFF is slow to prune.
+REQ_COUNT_BEFORE="$(grep -c '^URL=' "${ACK_STUB_DIR}/requests.log" 2>/dev/null || echo 0)"
+PATH="${ACK_STUB_DIR}/bin:${PATH}" MACHINE_KEY_FP="${ACK_NODE_FP}" BFF_URL="${ACK_BFF}" \
+    MTLS_CERT="${CERT_FILE}" MTLS_KEY="${KEY_FILE}" MTLS_CA="/nonexistent-ca" \
+    apply_entry "${entry_split}"
+REQ_COUNT_AFTER="$(grep -c '^URL=' "${ACK_STUB_DIR}/requests.log" 2>/dev/null || echo 0)"
+if [ "${REQ_COUNT_AFTER}" = "$(( REQ_COUNT_BEFORE + 1 ))" ]; then
+    ok "(n''') a converged no-op re-apply of the SAME entry still re-acks (count ${REQ_COUNT_BEFORE} -> ${REQ_COUNT_AFTER}) — self-healing until the BFF prunes it from the export"
+else
+    bad "(n''') expected exactly one new ack POST on a converged no-op re-apply (count ${REQ_COUNT_BEFORE} -> ${REQ_COUNT_AFTER})"
+fi
+
+# ── Case (o): a BRAND-NEW intentId whose target ALREADY matches the currently- ──────
+# converged posture IS acked on its very first cycle (regression test for the
+# bug this fix closes: the converged-path early-return used to skip
+# ack_intent() entirely, so a fresh intent recorded for a state that happened
+# to already be live would sit at applied=false on the BFF forever — and
+# re-recording it did NOT help, since the replacement intent lands in exactly
+# the same already-converged state).
+entry_new_but_converged="$(jq -nc --arg dom "${DOM}" '{
+    clusterDomain:$dom, targetState:"public", exposureModel:"tunnel",
+    provider:"generic-registrar", requestedBy:"superadmin@acme.snapdragon.systems",
+    intentId:"intent-new-never-seen-before", generation:999
+}')"
+REQ_COUNT_BEFORE_O="$(grep -c '^URL=' "${ACK_STUB_DIR}/requests.log" 2>/dev/null || echo 0)"
+PATH="${ACK_STUB_DIR}/bin:${PATH}" MACHINE_KEY_FP="${ACK_NODE_FP}" BFF_URL="${ACK_BFF}" \
+    MTLS_CERT="${CERT_FILE}" MTLS_KEY="${KEY_FILE}" MTLS_CA="/nonexistent-ca" \
+    apply_entry "${entry_new_but_converged}"
+REQ_COUNT_AFTER_O="$(grep -c '^URL=' "${ACK_STUB_DIR}/requests.log" 2>/dev/null || echo 0)"
+REQ_LINE_O="$(grep '^URL=' "${ACK_STUB_DIR}/requests.log" | tail -1)"
+if [ "${REQ_COUNT_AFTER_O}" = "$(( REQ_COUNT_BEFORE_O + 1 ))" ] \
+    && [ "${REQ_LINE_O}" = "URL=${ACK_BFF}/bff/internal/go-live/intent-new-never-seen-before/applied-ack" ]; then
+    ok "(o) a brand-new intentId whose target already matches converged posture IS acked on its first cycle"
+else
+    bad "(o) a brand-new already-converged intentId was NOT acked (count ${REQ_COUNT_BEFORE_O} -> ${REQ_COUNT_AFTER_O}) — would strand this intent's BFF row at applied=false forever"
+fi
+rm -f "${MARKER}"; printf 'internal\n' > "${SANDBOX_ETC}/release-state" 2>/dev/null || true
 
 # ── Case (g): defaults INERT — no transport, no key -> keep cache, exit 0, apply nothing ─
 G_MARKER_ETC="${WORK}/inert-etc"; mkdir -p "${G_MARKER_ETC}"

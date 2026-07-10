@@ -51,12 +51,21 @@
 # the marker's written_at) every single 60s cron cycle — only a REAL state
 # transition invokes the driver.
 #
-# WRITEBACK (deferred, exactly like domain-reconcile's ack_generation()): no
-# admin-bff endpoint exists yet to ack applied_at/applied_by back onto the
-# GoLiveIntent row (band-190-shaped gap — the BFF itself never sets STATUS_APPLIED
-# per GoLiveIntent.java's own doc). ack_intent() below is present-but-INERT
-# (guarded behind an unset GOLIVE_ACK_URL) so wiring it is a one-line enablement
-# once that setter lands, mirroring domain-reconcile's own deferred writeback.
+# WRITEBACK (WIRED): admin-bff-api now exposes POST <ACK>/bff/internal/go-live/
+# <intentId>/applied-ack {generation, appliedBy} over the SAME in-cluster mTLS
+# channel /export uses (permitAll()+mTLS on /bff/internal/**, same idiom as
+# ImageBuildIngestController). ack_intent() is called from apply_entry() right
+# after a commit/rollback it drove actually succeeds — never on a no-op
+# (already-converged) cycle, since that branch returns before ever reaching the
+# driver invocation. It is BEST-EFFORT: any curl failure (timeout, non-2xx) is
+# logged and swallowed — the posture change already happened; only the BFF
+# row's applied_at/applied_by write-back is at risk, and the endpoint is CAS-
+# idempotent server-side, so a retried/duplicate ack is harmless. GOLIVE_ACK_URL
+# has NO separate default of its own: unless explicitly overridden (tests), it
+# resolves to the SAME base URL as the /export fetch (BFF_URL, i.e. node.env's
+# BFF_EXPORT_URL) — operators never configure a second URL by hand, mirroring
+# snapdragon-node-storage-reconcile's ack_generation(), which reuses BFF_URL
+# directly rather than inventing its own ack-target variable.
 #
 # ── ENV SEAMS (for the offline logic test; mirrors the DR_*/GL_* idiom) ──────────
 #   GLR_NODE_ENV        node.env path (def /etc/snapdragon/registry/node.env)
@@ -67,6 +76,10 @@
 #   GL_ETC_SNAPDRAGON   passed straight through to the driver AND used for this
 #                       agent's own marker/cluster-domain reads, so a test sandbox
 #                       and the driver subprocess always agree on the same root.
+#   GOLIVE_ACK_URL      applied-ack POST target override (def empty -> falls back
+#                       to BFF_URL/node.env's BFF_EXPORT_URL at call time; see
+#                       WRITEBACK above). Only needed when the ack endpoint is
+#                       ever served from a DIFFERENT base than /export (tests).
 
 set -uo pipefail
 
@@ -81,8 +94,10 @@ DRIVER="${GLR_DRIVER:-/usr/sbin/snapdragon-go-live}"
 ETC="${GL_ETC_SNAPDRAGON:-/etc/snapdragon}"
 CLUSTER_DOMAIN_FILE="${ETC}/cluster-domain"
 GO_LIVE_MARKER="${ETC}/go-live"
-# WRITEBACK target — DELIBERATELY UNSET, exactly like domain-reconcile's
-# DOMAIN_ACK_URL. No admin-bff status-setter endpoint exists today.
+# WRITEBACK target override — empty by default. ack_intent() falls back to
+# BFF_URL (the SAME base the /export fetch uses) at call time when this is
+# unset, so operators do not configure a second URL; set this only to point
+# the ack POST at a base DIFFERENT from /export (tests).
 GOLIVE_ACK_URL="${GOLIVE_ACK_URL:-}"
 LOG_TAG="snapdragon-go-live-reconcile"
 
@@ -195,11 +210,22 @@ map_bff_provider() {
 # ── apply_entry <entry-json> -> rc ───────────────────────────────────────────────
 # Drive the canonical driver's commit/rollback for this node's OWN domain entry.
 # IDEMPOTENT: only invokes the driver on an actual state transition.
+#
+# intent_id/gen are extracted here (same per-entry jq parse as dom/state/
+# provider) and threaded straight into ack_intent() as args — NOT re-fetched or
+# re-parsed inside ack_intent() itself. "gen" is THIS ROW's own generation
+# field (entry.generation, the per-entry stamp golive_canonical_bytes signs as
+# its trailing gen= column) — it is deliberately NOT the export envelope's
+# top-level body.generation (a separate max-over-all-rows value gv_entry_for_domain
+# never even exposes here); acking the wrong one would let the BFF's CAS guard
+# match against a generation this row never actually carried.
 apply_entry() {
-    local entry="$1" state provider bff_provider dom
+    local entry="$1" state provider bff_provider dom intent_id gen
     state="$(printf '%s' "${entry}" | jq -r '.targetState // empty' 2>/dev/null)"
     bff_provider="$(printf '%s' "${entry}" | jq -r '.provider // empty' 2>/dev/null)"
     dom="$(printf '%s' "${entry}" | jq -r '.clusterDomain // empty' 2>/dev/null)"
+    intent_id="$(printf '%s' "${entry}" | jq -r '.intentId // empty' 2>/dev/null)"
+    gen="$(printf '%s' "${entry}" | jq -r '.generation // empty' 2>/dev/null)"
     [ -n "${state}" ] && [ -n "${dom}" ] || { warn "malformed entry (missing targetState/clusterDomain) — skipping"; return 1; }
     [ -r "${DRIVER}" ] || { warn "driver not baked at ${DRIVER} — cannot apply (recorded, keeping for next cycle)"; return 1; }
 
@@ -209,7 +235,14 @@ apply_entry() {
         provider="$(map_bff_provider "${bff_provider}")" \
             || { warn "targetState=public entry for ${dom} has provider '${bff_provider}', unrecognized by map_bff_provider() — skipping (catalog drift? see the platform TODO queue)"; return 1; }
         if [ "$(current_marker_provider)" = "${provider}" ]; then
-            report_state "converged-public"; return 0
+            report_state "converged-public"
+            # (writeback) still ack even though no drive was needed this cycle —
+            # a freshly-recorded intent whose target already matches the
+            # currently-converged posture (re-affirmation, UI double-submit, or
+            # re-recording after a withdraw) must not be suppressed from ever
+            # being acked just because the driver call itself was a no-op.
+            ack_intent "${intent_id}" "${gen}"
+            return 0
         fi
         log "applying: domain=${dom} target=public provider=${provider} (driving driver commit)"
         # --domain is passed as an EXPLICIT CLI flag, not just the GL_DOMAIN_OVERRIDE
@@ -223,6 +256,9 @@ apply_entry() {
         then
             log "applied: go-live tripped for ${dom} via ${provider}"
             report_state "applied-public"
+            # (writeback) best-effort ack — the posture change above already
+            # succeeded regardless of whether this POST lands.
+            ack_intent "${intent_id}" "${gen}"
         else
             warn "driver commit FAILED for ${dom}/${provider} (see ${CACHE_DIR}/driver.log) — recorded intent stays pending, retried next cycle"
             report_state "apply-failed"
@@ -231,7 +267,10 @@ apply_entry() {
         ;;
     internal)
         if ! currently_public; then
-            report_state "converged-internal"; return 0
+            report_state "converged-internal"
+            # (writeback) same reasoning as the converged-public branch above.
+            ack_intent "${intent_id}" "${gen}"
+            return 0
         fi
         log "applying: domain=${dom} target=internal (driving driver rollback)"
         if GL_ASSUME_YES=1 GL_ETC_SNAPDRAGON="${ETC}" \
@@ -239,6 +278,8 @@ apply_entry() {
         then
             log "applied: rolled back ${dom} to internal"
             report_state "applied-internal"
+            # (writeback) best-effort ack — same idiom as the commit branch above.
+            ack_intent "${intent_id}" "${gen}"
         else
             warn "driver rollback FAILED for ${dom} (see ${CACHE_DIR}/driver.log) — recorded intent stays pending, retried next cycle"
             report_state "apply-failed"
@@ -253,21 +294,52 @@ apply_entry() {
     return 0
 }
 
-# ── WRITEBACK STUB — INERT (never called; guarded behind an unset GOLIVE_ACK_URL) ─
-# Mirrors domain-reconcile's ack_generation(). Likely shape once a setter lands
-# (mirroring ImageBuildIngestController's /bff/internal/** permitAll()+mTLS
-# pattern): POST <ACK>/bff/internal/go-live/<intentId>/applied-ack {generation}.
+# ── ack_intent <intent-id> <row-gen> -> rc (always 0; best-effort) ──────────────
+# WRITEBACK — WIRED. Called ONLY from apply_entry(), only right after a
+# commit/rollback THIS run actually drove (never on an already-converged
+# no-op cycle — see apply_entry()'s idempotency checks, which return before
+# ever reaching the call sites below). POSTs
+# <ack-base>/bff/internal/go-live/<intentId>/applied-ack {generation, appliedBy}
+# over the SAME in-cluster mTLS transport /export uses (permitAll()+mTLS on
+# /bff/internal/**, mirroring ImageBuildIngestController). <ack-base> is
+# GOLIVE_ACK_URL if explicitly set, else BFF_URL — the SAME base the /export
+# fetch already resolved, so a bare BFF_EXPORT_URL in node.env is enough; no
+# second URL to configure. appliedBy is this node's own fingerprint
+# (MACHINE_KEY_FP, the SAME identity ?node= provenance-tags the /export GET).
+# rc is ALWAYS 0: a failed ack must never fail apply_entry() or abort the
+# reconcile cycle — the posture change already succeeded; only the BFF row's
+# applied_at/applied_by write-back is at risk, and the endpoint is CAS-
+# idempotent server-side (a duplicate/retried ack just no-ops), so swallowing
+# failure here costs nothing but a delayed status update.
 ack_intent() {
     local intent_id="$1" gen="$2"
-    [ -n "${GOLIVE_ACK_URL}" ] || return 0    # INERT: no setter endpoint exists yet
+    [ -n "${intent_id}" ] || { warn "ack skipped: entry had no intentId — cannot POST applied-ack"; return 0; }
+    [ -n "${gen}" ] || { warn "ack skipped for intent ${intent_id}: entry had no row-level generation"; return 0; }
     have curl || return 0
-    local url="${GOLIVE_ACK_URL%/}/bff/internal/go-live/${intent_id}/applied-ack"
-    local body; body="$(jq -nc --argjson g "${gen}" '{generation:$g}' 2>/dev/null)" || return 0
+    # BFF_URL/MTLS_* are set unconditionally at the top of main() before
+    # apply_entry() is ever reached on the real run path — but apply_entry()
+    # (and thus ack_intent()) is also called DIRECTLY, without main(), by the
+    # offline test harness, so every reference below is ":-"-guarded to stay
+    # safe under this script's `set -u`.
+    local ack_base="${GOLIVE_ACK_URL:-${BFF_URL:-}}"
+    [ -n "${ack_base}" ] || { warn "ack skipped for intent ${intent_id}: no GOLIVE_ACK_URL/BFF_URL transport configured"; return 0; }
+    local url="${ack_base%/}/bff/internal/go-live/${intent_id}/applied-ack"
+    local body
+    body="$(jq -nc --argjson g "${gen}" --arg by "${MACHINE_KEY_FP:-}" '{generation:$g, appliedBy:$by}' 2>/dev/null)" \
+        || { warn "ack skipped for intent ${intent_id}: failed to build JSON body (gen=${gen})"; return 0; }
     local args=(-sS -m 10 --fail -X POST -H 'Content-Type: application/json' -d "${body}" -o /dev/null)
-    [ -f "${MTLS_CA}" ] && args+=(--cacert "${MTLS_CA}")
-    [ -n "${MTLS_CERT}" ] && [ -n "${MTLS_KEY}" ] && args+=(--cert "${MTLS_CERT}" --key "${MTLS_KEY}")
-    curl "${args[@]}" "${url}" 2>/dev/null && log "acked intent ${intent_id} gen=${gen}" \
-        || log "ack ${intent_id} best-effort failed (BFF's next export naturally re-converges regardless)"
+    [ -f "${MTLS_CA:-}" ] && args+=(--cacert "${MTLS_CA}")
+    if [ -n "${MTLS_CERT:-}" ] && [ -n "${MTLS_KEY:-}" ] && [ -f "${MTLS_CERT:-}" ] && [ -f "${MTLS_KEY:-}" ]; then
+        args+=(--cert "${MTLS_CERT}" --key "${MTLS_KEY}")
+    else
+        warn "ack for intent ${intent_id} skipped: mTLS client cert/key absent (best-effort; BFF's row stays pending until acked)"
+        return 0
+    fi
+    if curl "${args[@]}" "${url}" 2>/dev/null; then
+        log "acked intent ${intent_id} gen=${gen} appliedBy=${MACHINE_KEY_FP:-}"
+    else
+        warn "ack for intent ${intent_id} best-effort FAILED (non-2xx/timeout, url=${url}) — posture already applied locally; BFF row write-back not confirmed"
+    fi
     return 0
 }
 
@@ -318,7 +390,8 @@ main() {
     fi
 
     apply_entry "${entry}"
-    # (writeback deferred — ack_intent() is INERT, GOLIVE_ACK_URL unset; never called)
+    # (writeback: apply_entry() acks internally, right after a real commit/
+    # rollback it drove — see ack_intent(). Nothing further to do here.)
     exit 0
 }
 

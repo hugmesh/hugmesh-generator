@@ -306,21 +306,40 @@ fixed here — see the platform TODO queue):** admin-bff-api's
 `byo-domain` (a DIFFERENT key for the conceptually-same provider) and **no
 `cloudflare-ddns` entry at all**. A web-UI-recorded intent for either BFF-side
 key makes this agent drive `snapdragon-go-live commit --provider <key>`, which
-permanently fails `glp_known` — retried every 60s, never succeeding, with no
-signal to the superadmin (the ack loop is inert, see below). Not fixed in this
+permanently fails `glp_known` — retried every 60s, never succeeding. (The
+applied-ack loop below only fires after a driver call actually SUCCEEDS, so a
+permanently-failing catalog-drift entry never reaches it either — there is
+still no positive signal to the superadmin for this specific gap.) Not fixed in this
 PR: `go-live-providers.sh` is under active, more-authoritative revision in a
 separate in-flight PR (the go-live provider-driver consolidation), and
 reconciling the two catalogs needs a real decision (rename one side, or map
 between them) rather than a guess made without visibility into that other
 work's final shape.
 
-**Deliberately out of scope, matching this codebase's precedent for the
+**The applied-ack loop is now WIRED** (companion admin-bff-api change: `POST
+/bff/internal/go-live/{intentId}/applied-ack {generation, appliedBy}`, over
+the same in-cluster mTLS transport `/export` uses). `ack_intent()` is called
+from `apply_entry()` both right after a commit/rollback it actually drove
+succeeds AND on an already-converged no-op cycle (the latter is what actually
+acks a freshly-recorded intent whose target already matches the host's
+current posture — the driver call is skipped as a no-op, but the ack still
+needs to fire since this may be the row's first-ever cycle). It defaults to
+POSTing at the same base URL as `/export` (`BFF_URL`/node.env's
+`BFF_EXPORT_URL`); `GOLIVE_ACK_URL` only needs setting to point the ack at a
+*different* base. It is best-effort: any failure (timeout, non-2xx) is logged
+and swallowed — the posture change already succeeded regardless, and the
+endpoint's CAS guard is idempotent server-side. This DOES mean a converged
+entry keeps getting re-acked every 60s cycle for as long as it remains in the
+export (no client-side tracking file suppresses this) — the thing that
+actually bounds the load is the BFF's own absence contract: a successful ack
+flips the row to `status=applied` server-side, which removes it from the
+*next* signed export, so this node simply stops seeing the entry and the
+re-ack traffic self-terminates. A failing ack is retried every cycle until it
+lands, which is the desired self-healing behavior, not a bug.
+
+**Still deliberately out of scope, matching this codebase's precedent for the
 identical shape of gap (`snapdragon-domain-reconcile`'s own deferred
 writeback):**
-- **The applied-ack loop.** No admin-bff endpoint exists yet to record
-  `applied_at`/`applied_by` back onto the `GoLiveIntent` row — `ack_intent()`
-  is present-but-INERT (guarded behind an unset `GOLIVE_ACK_URL`), a one-line
-  enablement once that setter lands.
 - **On-image baking.** This PR ships the agent + verify lib + init.d/cron
   files but does not add the `cp`/`chmod` lines to the stage4 builders — those
   lines land immediately after wherever the driver itself
