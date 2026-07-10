@@ -39,6 +39,19 @@ const TOOLING = __dirname;
 const REPO_ROOT = path.resolve(TOOLING, '..', '..');
 const SCRIPTS = path.join(REPO_ROOT, 'scripts');
 const ARCHETYPES = new Set(['spring-bff', 'angular-mfe', 'gateway']);
+// RESERVED brand scalars: validated/derived tenant-brand identity that render-
+// repo-tree.sh exports (behind DNS/forbidden-char guards) from the signed brand
+// .conf. A repos[].identity key is PER-REPO identity, never brand — so an identity
+// key that collides with one of these is refused here too (defense in depth; the
+// shell script is the hard enforcement point). Mirrors _RESERVED_SCALARS there.
+const RESERVED_SCALARS = new Set([
+  'BRAND', 'BRAND_TITLE', 'ORG', 'CLUSTER_DOMAIN', 'NPM_SCOPE',
+  'HOST_NAME', 'GENERATOR_ORG_GROUP', 'REPO_NAME', 'HEADSCALE_URL', 'MESH_TAG',
+]);
+// C0 control chars + DEL: a raw newline in an identity value would splice an
+// attacker-shaped line into the noEscape-rendered YAML/config. Screened at both
+// tiers; the shell --set parser is the backstop.
+const CONTROL_RE = /[\x00-\x1f\x7f]/;
 // Our token style is {{UPPER_SNAKE}} with no inner spaces — distinct from an
 // Angular template's {{ expr() }} interpolation, so this residual scan never
 // false-positives on a rendered MFE's own component HTML.
@@ -108,10 +121,12 @@ function main() {
     for (const [k, v] of Object.entries(identity)) {
       const NAME = String(k).toUpperCase();
       if (!/^[A-Z][A-Z0-9_]*$/.test(NAME)) die(`repos[].name '${r.name}': identity key '${k}' is not a valid token name`);
+      if (RESERVED_SCALARS.has(NAME)) die(`repos[].name '${r.name}': identity key '${k}' collides with reserved brand scalar '${NAME}' — per-repo identity may not override a brand scalar`);
       if (classifier.isDenied(NAME)) die(`repos[].name '${r.name}': identity key '${k}' is on the secret denylist`);
       if (classifier.isFrozen(NAME)) die(`repos[].name '${r.name}': identity key '${k}' targets a FROZEN protocol constant`);
       if (!classifier.isAllowed(NAME)) die(`repos[].name '${r.name}': identity key '${k}' -> token '${NAME}' is not on the git-safe allowlist (add to tokens.json or remove)`);
       const val = String(v);
+      if (CONTROL_RE.test(val)) die(`repos[].name '${r.name}': identity value for '${k}' contains a newline/control character — refusing (YAML/config line-injection guard)`);
       if (classifier.isDenied(val)) die(`repos[].name '${r.name}': identity value for '${k}' looks like a denylisted secret — refusing`);
       if (classifier.isFrozen(val)) die(`repos[].name '${r.name}': identity value for '${k}' ('${val}') targets a FROZEN protocol constant — refusing`);
       setArgs.push('--set', `${NAME}=${val}`);

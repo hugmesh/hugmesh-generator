@@ -57,6 +57,15 @@ ENABLED=0
 # secret/frozen NAME aborts the render.
 declare -a SET_NAMES=()
 declare -a SET_VALUES=()
+# RESERVED brand scalars: validated/derived tenant-brand identity exported below
+# (lines ~162-163) from the signed brand .conf, each behind a shape guard (BRAND/
+# ORG/CLUSTER_DOMAIN DNS checks, BRAND_TITLE forbidden-char guard). A --set token
+# is PER-REPO identity (APP_SLUG/TITLE_WORD/PROFILE), NOT brand — so a --set whose
+# NAME collides with one of these is REFUSED. Otherwise a crafted repos[].identity
+# row (e.g. cluster_domain:) would re-export the scalar AFTER its validator ran,
+# shadowing the DNS/forbidden-char guard and enabling YAML line-injection into the
+# rendered application.yml. The legitimate identity keys never collide with these.
+_RESERVED_SCALARS=" BRAND BRAND_TITLE ORG CLUSTER_DOMAIN NPM_SCOPE HOST_NAME GENERATOR_ORG_GROUP REPO_NAME HEADSCALE_URL MESH_TAG "
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --enable-repo-tree) ENABLED=1; shift ;;
@@ -68,6 +77,16 @@ while [[ $# -gt 0 ]]; do
       [[ "$2" == *=* ]] || _die "--set expects NAME=VALUE, got '$2'"
       _sn="${2%%=*}"; _sv="${2#*=}"
       [[ "$_sn" =~ ^[A-Z][A-Z0-9_]*$ ]] || _die "--set NAME '$_sn' must be UPPER_SNAKE"
+      # Reserved-scalar collision guard: a --set may NOT shadow a validated brand scalar.
+      [[ "$_RESERVED_SCALARS" == *" $_sn "* ]] \
+        && _die "--set NAME '$_sn' collides with a reserved brand scalar (per-repo identity may not override brand scalars)"
+      # Shape guard: no newline/CR/control char may ride in on an identity VALUE.
+      # The renderer emits token values with noEscape:true, so a raw newline would
+      # splice an attacker-shaped line into the emitted YAML/config regardless of
+      # which allowlisted token carries it. Reject C0 controls + DEL.
+      case "$_sv" in
+        *[$'\001'-$'\037\177']*) _die "--set VALUE for '$_sn' contains a newline/control character (forbidden: YAML/config line-injection guard)" ;;
+      esac
       SET_NAMES+=("$_sn"); SET_VALUES+=("$_sv"); shift 2 ;;
     *) _die "unknown argument: $1" ;;
   esac
