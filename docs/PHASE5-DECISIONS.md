@@ -65,9 +65,27 @@ REPOSITORY PREFIX inside it — brands are then NOT registry-isolated until per-
   `push_token`.
 - Deliver to the publish tail via `FORGEJO_PUSH_TOKEN` (env) or `FORGEJO_PUSH_TOKEN_FILE`
   (a file path, read first-line-only, never sourced/echoed). Fail-closed if unset.
-- On the wire: `git -c http.extraHeader="Authorization: token <PAT>"` — never in the
-  remote URL, so it never lands in `.git/config` or the reflog. Base URL configurable
-  (`FORGEJO_BASE_URL`); default in-cluster svc DNS, set to the tailnet host off-cluster.
+- On the wire: an `Authorization: token <PAT>` HTTP header delivered so it never
+  touches any process command line (argv) — **git** via `GIT_CONFIG_COUNT=1 /
+  GIT_CONFIG_KEY_0=http.extraHeader / GIT_CONFIG_VALUE_0=…` (child environ, not
+  argv; the equivalent of `-c http.extraHeader` without exposing the value to a
+  co-located `ps auxww` / `/proc/<pid>/cmdline`), **curl** via `-H @<0600 tmpfile>`
+  (the house pattern from `scripts/go-live.sh`). The PAT is therefore never in the
+  remote URL, `.git/config`, the reflog, or any argv (review finding #1 fix — the
+  original `-c http.extraHeader=…` form leaked it into git's argv). Base URL
+  configurable (`FORGEJO_BASE_URL`); default in-cluster svc DNS, set to the tailnet
+  host off-cluster.
+
+## Publish target repo name — FULL `<brand>-<repo>` (review finding #3 fix)
+The publish tail creates/pushes each tree under its FULL directory name
+`<brand>-<repo>` (`$base`), NOT the brand-stripped `<repo>`. The 13d brand-repo
+ApplicationSet filters `repositoryMatch: "^<BRAND>-"` (and the default shared
+`13-service-catalog` filters `"^snapdragon-"`); a repo named `admin-bff-api` would
+match neither `^acme-` nor `^snapdragon-`, so ArgoCD would discover ZERO
+Applications and deliverable #2 (auto-discover + sync) would be dead end-to-end.
+Pushing as `acme-admin-bff-api` matches `^acme-`. Provenance still records the
+logical `tenant.repo=admin-bff-api` / `tenant.brand=acme` (the Forgejo repo name
+is a scoping/discovery concern, the provenance repo identity is the code identity).
 
 ## Provenance signing key custody — DEFERRED to a live release
 Build-host verification signs with a locally-generated TEST Ed25519 keypair and proves

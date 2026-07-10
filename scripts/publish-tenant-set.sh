@@ -29,11 +29,15 @@
 #   * FORGEJO_PUSH_TOKEN_FILE    — a file path the token is READ from (preferred;
 #                                  never sourced, never echoed). Fail-closed if
 #                                  neither is set.
-#   * On the wire the token rides as an HTTP header via
-#       git -c http.extraHeader="Authorization: token <PAT>"
-#     (Forgejo accepts `Authorization: token <PAT>`) — command-line `-c`, so it is
-#     NEVER persisted to .git/config and NEVER lands in the reflog. The remote URL
-#     carries NO credentials.
+#   * On the wire the token rides as an HTTP `Authorization: token <PAT>` header
+#     (Forgejo accepts this form) delivered so it is NEVER on the command line (argv):
+#       - git : GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader
+#               GIT_CONFIG_VALUE_0="Authorization: token <PAT>" (child ENVIRON, not
+#               argv; equivalent to `-c http.extraHeader` but keeps the PAT off
+#               /proc/<pid>/cmdline that any co-located `ps auxww` can read).
+#       - curl: -H @<0600 tmpfile> (header read from a private temp file).
+#     So the PAT is NEVER persisted to .git/config, NEVER in the reflog, NEVER in
+#     the remote URL, and NEVER in any process argv.
 #
 # CONFIG:
 #   FORGEJO_BASE_URL  default http://forgejo.snapdragon-pki.svc.cluster.local:3000
@@ -113,8 +117,25 @@ fi
 # Never allow the token to leak via xtrace / env dump.
 export -n FORGEJO_PUSH_TOKEN 2>/dev/null || true
 
-# The extraheader carries the token off the URL/reflog. Built once, passed via -c.
+# The token rides as an HTTP `Authorization: token …` header, kept OUT of the
+# process command line (argv) so a co-located `ps auxww` / /proc/<pid>/cmdline
+# cannot harvest it (the .git/config-and-reflog claim was true; the argv claim
+# was not — see review finding #1). Delivery:
+#   * git  → GIT_CONFIG_COUNT/KEY_0/VALUE_0 env (git reads these exactly like -c
+#            http.extraHeader, but the value stays in the child ENVIRON — only
+#            owner/root-readable — never in argv).
+#   * curl → -H @<0600 tmpfile> (the house pattern from scripts/go-live.sh); the
+#            header text is read from the file, never placed on the argv.
+# The header VALUE lives only in this shell's memory + a 0600 tmpfile removed on EXIT.
 _AUTH_HEADER="Authorization: token ${PUSH_TOKEN}"
+AUTH_HDR_FILE="$(umask 077 && mktemp)" || _die "mktemp failed for auth header file"
+printf '%s\n' "${_AUTH_HEADER}" > "${AUTH_HDR_FILE}"
+chmod 600 "${AUTH_HDR_FILE}" 2>/dev/null || true
+_cleanup() { [[ -n "${AUTH_HDR_FILE:-}" ]] && rm -f "${AUTH_HDR_FILE}" 2>/dev/null; return 0; }
+trap _cleanup EXIT
+# Drop the plaintext token variable now the header is captured (defence-in-depth;
+# nothing below needs the bare token — only _AUTH_HEADER / AUTH_HDR_FILE).
+unset PUSH_TOKEN
 
 # ── generator identity for provenance (deterministic per generator checkout) ──
 GEN_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -128,8 +149,10 @@ forgejo_ensure_repo() {
   command -v curl >/dev/null 2>&1 || _die "curl required for FORGEJO_API_MODE=rest"
   local api="${FORGEJO_BASE_URL%/}/api/v1/orgs/${FORGEJO_ORG}/repos"
   local code
+  # Auth header via -H @file (0600 tmpfile) so the token never appears in curl's
+  # argv. Body is not sensitive and may stay on the command line.
   code="$(curl -sS -o /dev/null -w '%{http_code}' -m 15 \
-      -H "${_AUTH_HEADER}" -H 'Content-Type: application/json' \
+      -H @"${AUTH_HDR_FILE}" -H 'Content-Type: application/json' \
       -X POST "$api" \
       -d "{\"name\":\"${repo}\",\"private\":true,\"default_branch\":\"main\"}" 2>/dev/null || echo 000)"
   case "$code" in
@@ -265,18 +288,25 @@ publish_one() {
     return 0
   fi
 
-  forgejo_ensure_repo "$repo"
+  # Create/push under the FULL <brand>-<repo> dir name ($base), NOT the brand-
+  # stripped $repo: the 13d brand-repo ApplicationSet filters repositoryMatch
+  # "^<BRAND>-" (and the default 13-service-catalog filters "^snapdragon-"), so a
+  # repo named "admin-bff-api" would never match "^acme-"/"^snapdragon-" and ArgoCD
+  # would discover ZERO Applications. $base == "acme-admin-bff-api" matches. (#3)
+  forgejo_ensure_repo "$base"
 
-  local remote; printf -v remote "$FORGEJO_REMOTE_TEMPLATE" "$repo"
+  local remote; printf -v remote "$FORGEJO_REMOTE_TEMPLATE" "$base"
   git -C "$dir" remote remove origin >/dev/null 2>&1 || true
   git -C "$dir" remote add origin "$remote"
 
   # FAST-FORWARD-ONLY push. No --force, ever. The token rides as an http header via
-  # -c (never persisted). A non-ff (someone edited tenant-side) fails the push, which
-  # we surface fail-closed rather than clobbering.
+  # the GIT_CONFIG_* env (never in argv, never persisted to .git/config or reflog).
+  # A non-ff (someone edited tenant-side) fails the push, which we surface fail-
+  # closed rather than clobbering.
   _log "  pushing to ${remote} (fast-forward-only)"
-  if git -C "$dir" -c http.extraHeader="${_AUTH_HEADER}" push origin main 2>&1 | sed 's/^/[publish]   git: /' >&2; then
-    _log "  pushed ${base} -> ${FORGEJO_ORG}/${repo}@main"
+  if GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="${_AUTH_HEADER}" \
+       git -C "$dir" push origin main 2>&1 | sed 's/^/[publish]   git: /' >&2; then
+    _log "  pushed ${base} -> ${FORGEJO_ORG}/${base}@main"
   else
     _die "push refused for ${base} (non-fast-forward or transport error) — NOT force-pushing; reconcile tenant-side edits first"
   fi
