@@ -701,18 +701,32 @@ ZRAM_EOF
 # ── rebrand_sysroot (covers the baked cluster tree too, like rpi5/x86) ──
 rebrand_sysroot() {
     [ "${BRAND}" = "snapdragon" ] && [ "${CLUSTER_DOMAIN}" = "snapdragon.systems" ] && return 0
-    local _btitle _org _domain _brand
+    local _btitle _org _domain _brand _hproj
     _btitle="$(_sed_rep_escape "${BRAND_TITLE}")"
     _org="$(_sed_rep_escape "${ORG}")"
     _domain="$(_sed_rep_escape "${CLUSTER_DOMAIN}")"
     _brand="$(_sed_rep_escape "${BRAND}")"
+    # Harbor image-project segment (registry.<host>/<project>/<svc>). Defaults to the
+    # brand; the HARBOR_PROJECT env is a first-class seam for a differently-named project.
+    _hproj="$(_sed_rep_escape "${HARBOR_PROJECT:-${BRAND}}")"
     local f
     while IFS= read -r -d '' f; do
+        # FROZEN k8s label-KEY / API-group namespace `snapdragon.systems/<suffix>` must NOT
+        # rebrand (it is compiled into operators/JVM and used as node/pod selectors). Every
+        # KEY form is preceded by a YAML-structural boundary (line-start, space, {, (, comma,
+        # quote, backtick); every HOST/URL form is preceded by a dot or slash. Protect the KEY
+        # namespace behind a sentinel (first two -e), rebrand hosts/URLs/emails/CORS in the
+        # middle, then restore the KEY namespace verbatim (last -e). The sentinel contains
+        # neither `snapdragon.systems` nor `snapdragon-`, so the middle rules skip it.
         sed -i \
+            -e "s|^snapdragon\.systems/|@@SDSYSKEY@@/|g" \
+            -e "s|\([ {(,\"'\`]\)snapdragon\.systems/|\1@@SDSYSKEY@@/|g" \
             -e "s|Snapdragon Systems|${_btitle}|g" \
             -e "s|Snapdragon-Systems|${_org}|g" \
             -e "s|snapdragon\.systems|${_domain}|g" \
+            -e "s|\(registry\.[A-Za-z0-9.-]*\)/snapdragon/|\1/${_hproj}/|g" \
             -e "s|snapdragon-|${_brand}-|g" \
+            -e "s|@@SDSYSKEY@@/|snapdragon.systems/|g" \
             "${f}"
     done < <(find "${SYSROOT}/etc/snapdragon" "${SYSROOT}/var/lib/snapdragon/cluster" -type f -print0 2>/dev/null)
 }

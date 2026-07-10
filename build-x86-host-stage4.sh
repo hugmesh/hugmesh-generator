@@ -2095,23 +2095,37 @@ rebrand_sysroot() {
     # All of these land on the REPLACEMENT side of `sed s|..|VALUE|` across the baked
     # cluster tree (configs that later execute on the device); escape sed metacharacters
     # so a tainted brand/domain/org cannot inject a second sed command or corrupt output.
-    local _btitle _orglc _org _games _domain _brand
+    local _btitle _orglc _org _games _domain _brand _hproj
     _btitle="$(_sed_rep_escape "${BRAND_TITLE}")"
     _orglc="$(_sed_rep_escape "${org_lc}")"
     _org="$(_sed_rep_escape "${ORG}")"
     _games="$(_sed_rep_escape "${GAMES_DOMAIN}")"
     _domain="$(_sed_rep_escape "${CLUSTER_DOMAIN}")"
     _brand="$(_sed_rep_escape "${BRAND}")"
+    # Harbor image-project segment (registry.<host>/<project>/<svc>). Defaults to the
+    # brand; the HARBOR_PROJECT env is a first-class seam for a differently-named project.
+    _hproj="$(_sed_rep_escape "${HARBOR_PROJECT:-${BRAND}}")"
     local f
     while IFS= read -r -d '' f; do
+        # FROZEN k8s label-KEY / API-group namespace `snapdragon.systems/<suffix>` must NOT
+        # rebrand (it is compiled into operators/JVM and used as node/pod selectors). Every
+        # KEY form is preceded by a YAML-structural boundary (line-start, space, {, (, comma,
+        # quote, backtick); every HOST/URL form is preceded by a dot or slash. Protect the KEY
+        # namespace behind a sentinel (first two -e), rebrand hosts/URLs/emails/CORS in the
+        # middle, then restore the KEY namespace verbatim (last -e). The sentinel contains
+        # neither `snapdragon.systems` nor `snapdragon-`, so the middle rules skip it.
         sed -i \
+            -e "s|^snapdragon\.systems/|@@SDSYSKEY@@/|g" \
+            -e "s|\([ {(,\"'\`]\)snapdragon\.systems/|\1@@SDSYSKEY@@/|g" \
             -e "s|Snapdragon Systems|${_btitle}|g" \
             -e "s|snapdragon-systems/|${_orglc}/|g" \
             -e "s|Snapdragon-Systems|${_org}|g" \
             -e "s|//id\.snapdragon\.games|//id.${_games}|g" \
             -e "s|//snapdragon\.games|//${_games}|g" \
             -e "s|snapdragon\.systems|${_domain}|g" \
+            -e "s|\(registry\.[A-Za-z0-9.-]*\)/snapdragon/|\1/${_hproj}/|g" \
             -e "s|snapdragon-|${_brand}-|g" \
+            -e "s|@@SDSYSKEY@@/|snapdragon.systems/|g" \
             "${f}"
     done < <(find "${SYSROOT}/var/lib/snapdragon/cluster" "${SYSROOT}/etc/snapdragon" -type f -print0 2>/dev/null)
 }
