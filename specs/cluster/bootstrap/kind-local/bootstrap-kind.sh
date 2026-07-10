@@ -153,8 +153,12 @@ kubectl -n "${ARGOCD_NS}" rollout status deploy/argocd-applicationset-controller
 #     git-path Application below (Vault, vault-pki, ESO config, Casdoor,
 #     harbor-provision) fails to sync with "authentication required:
 #     Repository not found" unless ArgoCD's repo-server has a credential for
-#     it. The real cluster provisions this out-of-band (keys-provision); for
-#     local dev there's no such side-channel, so this is STRICTLY OPT-IN:
+#     it. The real cluster registers this same credential on its OWN bootstrap
+#     path (../bootstrap.sh), with the token sourced out-of-band from the
+#     offline KEYS USB (KEYS/gitops/repo-token) by keys-provision, which exports
+#     it as ARGOCD_REPO_TOKEN — keys-provision does NOT materialize the Secret
+#     itself. For local dev there's no such side-channel, so this is STRICTLY
+#     OPT-IN:
 #     this script never invokes `gh` (or anything else) to obtain a token on
 #     its own — it only acts if the caller explicitly exports
 #     ARGOCD_REPO_TOKEN. That keeps "run this script" from silently

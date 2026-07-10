@@ -47,6 +47,41 @@ done < <(kubectl -n "${ARGOCD_NS}" get deploy,statefulset -o jsonpath='{range .i
 echo "==> Waiting for ArgoCD to be ready"
 kubectl -n "${ARGOCD_NS}" rollout status deploy/argocd-repo-server --timeout=300s || true
 
+# ── ArgoCD repository credential (PRIVATE GitOps repo) ─────────────
+# snapdragon-generator is a PRIVATE GitHub repo, so ArgoCD's repo-server needs a
+# credential or EVERY git-path Application (vault, casdoor, harbor-provision,
+# forgejo, the app-of-apps itself) fails to sync with "authentication required:
+# Repository not found". Register it HERE — BEFORE the app-of-apps apply below —
+# so the very first reconcile can already clone (placing it after would leave
+# the initial reconcile 401ing until a later retry). Promoted verbatim from the
+# kind-local dev pattern (bootstrap/kind-local/bootstrap-kind.sh, section "5b").
+#
+# The token is sourced OUT-OF-BAND, the same house way every other real-path
+# secret arrives: keys-provision (specs/etc/keys-provision/provision.sh) reads a
+# fine-grained read-only PAT from the offline KEYS USB (KEYS/gitops/repo-token,
+# SAME custody as vault/token + certs/cluster-ca.key + luks.key — NEVER git) and
+# exports it as ARGOCD_REPO_TOKEN before invoking this script. It is NEVER
+# hardcoded, NEVER defaulted, and NEVER printed. Absent => fail closed (below),
+# so the gap is surfaced loudly instead of silently producing non-syncing apps.
+# A PUBLIC fork that needs no credential opts out with ARGOCD_REPO_PUBLIC=1.
+if [ -n "${ARGOCD_REPO_TOKEN:-}" ]; then
+    echo "==> Registering ArgoCD repo credential for ${REPO} (from \$ARGOCD_REPO_TOKEN, never printed)"
+    kubectl -n "${ARGOCD_NS}" create secret generic snapdragon-generator-repo \
+        --from-literal=type=git \
+        --from-literal=url="${REPO}" \
+        --from-literal=username=x-access-token \
+        --from-literal=password="${ARGOCD_REPO_TOKEN}" \
+        --dry-run=client -o yaml \
+        | kubectl label --local -f - "argocd.argoproj.io/secret-type=repository" --dry-run=client -o yaml \
+        | kubectl apply -f -
+elif [ "${ARGOCD_REPO_PUBLIC:-0}" = "1" ]; then
+    echo "==> ARGOCD_REPO_PUBLIC=1 — treating ${REPO} as PUBLIC; registering NO ArgoCD repository credential"
+else
+    echo "FATAL: ARGOCD_REPO_TOKEN not set; the private repo ${REPO} needs an ArgoCD repository credential or every git-path Application (vault, casdoor, harbor-provision, forgejo, app-of-apps) will fail to sync with 'authentication required: Repository not found'." >&2
+    echo "       Provision it the house way: write a fine-grained read-only GitHub PAT (repo:read on snapdragon-generator only) to the offline KEYS USB at KEYS/gitops/repo-token (same custody as vault/token); keys-provision exports it as ARGOCD_REPO_TOKEN before running this script. For a PUBLIC fork that needs no credential, re-run with ARGOCD_REPO_PUBLIC=1." >&2
+    exit 1
+fi
+
 echo "==> Applying root app-of-apps (ns=${ARGOCD_NS} repo=${REPO} rev=${REV})"
 sed -e "s#repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git#repoURL: ${REPO}#" \
     -e "s#targetRevision: main#targetRevision: ${REV}#" \

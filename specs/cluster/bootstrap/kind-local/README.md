@@ -69,14 +69,17 @@ real hardware) — none of these were exercised before:
    repo.** Every git-path `Application` in the curated set (Vault, vault-pki,
    external-secrets-config, Casdoor, harbor-provision) fails with
    `authentication required: Repository not found` without one. Fixed by the
-   opt-in `ARGOCD_REPO_TOKEN` mechanism documented below — **this is also a
-   real gap in the production `bootstrap.sh`**, which never provisions this
-   credential either; the real cluster currently only works because
-   `keys-provision` does it out-of-band. A proper fix (e.g. an
-   ExternalSecret-sourced ArgoCD repo credential, provisioned the same way as
-   every other Vault-backed secret) is a follow-up, not done in this pass —
-   treat the manual `ARGOCD_REPO_TOKEN` export as a documented local/manual
-   prerequisite for now, on both kind and real hardware.
+   opt-in `ARGOCD_REPO_TOKEN` mechanism documented below. **The production
+   `bootstrap.sh` now registers the identical credential** — it previously did
+   NOT (this was a real gap; the claim that `keys-provision` already did it
+   out-of-band was vapor). The real path now works like this: `keys-provision`
+   reads a fine-grained read-only PAT from the offline KEYS USB
+   (`KEYS/gitops/repo-token`, same custody as `vault/token`), exports it as
+   `ARGOCD_REPO_TOKEN`, and `bootstrap.sh` creates the
+   `snapdragon-generator-repo` repository Secret **before** applying the
+   app-of-apps (failing closed with a clear error if no token is available).
+   For a local kind cluster there is no KEYS USB, so the same manual
+   `ARGOCD_REPO_TOKEN` export remains a prerequisite here.
 2. **`vault-tls-init`'s image has no `openssl` binary.** The init container
    that generates Vault's listener TLS material ran `hashicorp/vault:1.21.4`
    and called `openssl` in both of `gen-tls.sh`'s branches (cluster-CA-signed
@@ -159,8 +162,10 @@ Env overrides (all optional):
 `snapdragon-generator` is a **private** GitHub repo. ArgoCD's repo-server has
 no credential for it out of the box, so every git-path `Application` in the
 curated set fails to sync with `authentication required: Repository not
-found` until one is registered. The real cluster gets this out-of-band
-(`keys-provision`); there's no such side-channel for a local kind cluster, so
+found` until one is registered. The real cluster registers this on its own
+bootstrap path (`../bootstrap.sh`), with the token sourced out-of-band from the
+offline KEYS USB (`KEYS/gitops/repo-token`) by `keys-provision` (exported as
+`ARGOCD_REPO_TOKEN`); there's no such side-channel for a local kind cluster, so
 this script is **strictly opt-in** here — it never runs `gh` or anything else
 to fetch a token on its own, because silently materializing a live personal
 credential into cluster storage as a side effect of "just run the script"

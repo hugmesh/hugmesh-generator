@@ -137,6 +137,7 @@ KEYS/                                 (FAT32, volume label "KEYS")
 | `snapdragon.role` | `pki` \| `backend` \| `frontend` — selects the cluster app set / namespace this node serves. |
 | `snapdragon.cluster_domain` | Base domain for gateways/ingress/Casdoor. |
 | `snapdragon.gitops.{enabled,argocd}` | On the PKI node, bootstrap ArgoCD + the app-of-apps. |
+| `snapdragon.gitops.repo_token_file` | Path on KEYS to a **fine-grained read-only GitHub PAT** (default `gitops/repo-token`) that lets ArgoCD clone the **private** GitOps repo. `provision_snapdragon()` reads it and exports it as `ARGOCD_REPO_TOKEN`; `bootstrap.sh` then creates the `snapdragon-generator-repo` repository Secret **before** the app-of-apps. **NEVER in git**, same offline custody as `vault/token` + `luks.key`. Absent ⇒ `bootstrap.sh` fails closed for the private repo (rotate = rewrite this file + re-run provisioning). |
 | `egress_vpn.domain` | OPTIONAL override for the node's own brand domain used to pick `KEYS/vpn/<domain>/` (defaults to `snapdragon.cluster_domain`). `provision_vpn()` installs ONLY this domain's configs, 0600. |
 | `vault.*` | Seed HashiCorp Vault / External Secrets Operator state; Vault is primary, USB is the offline fallback (see below). |
 | `storage.devices[]` | Set up attached M.2/NVMe or USB storage (see below). |

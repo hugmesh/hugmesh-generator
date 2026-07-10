@@ -54,7 +54,8 @@
     "facade_host": "scale.snapdragon.systems",
     "gitops": {
       "enabled": true,
-      "argocd": true
+      "argocd": true,
+      "repo_token_file": "gitops/repo-token"
     }
   },
 
