@@ -71,9 +71,14 @@ HARBOR_PROJECT="${ORG,,}"
 HARBOR_PROJECT="${HARBOR_PROJECT//[^a-z0-9-]/-}"
 HARBOR_PROJECT="$(echo "$HARBOR_PROJECT" | sed 's/^-*//; s/-*$//')"
 
+# Derive NS_PREFIX identically to generate-brand-repos.sh (defaults to the BRAND
+# slug; a brand profile may override by setting NS_PREFIX). Referenced by the
+# brand-repo ApplicationSet templates/apps/13d-brand-repos.yaml.hbs. Keep in sync.
+NS_PREFIX="${NS_PREFIX:-$BRAND}"
+
 BRAND_OUT="${OUT_DIR}/${BRAND}-gitops"
 
-export BRAND BRAND_TITLE ORG CLUSTER_DOMAIN HEADSCALE_URL HARBOR_PROJECT MESH_TAG
+export BRAND BRAND_TITLE ORG CLUSTER_DOMAIN HEADSCALE_URL HARBOR_PROJECT MESH_TAG NS_PREFIX
 
 exec node "${TOOLING_DIR}/render-handlebars.js" \
   --templates "$TEMPLATES_DIR" \

@@ -38,7 +38,7 @@ const classifier = require('./token-classifier');
 
 const TOKEN_KEYS = [
   'BRAND', 'BRAND_TITLE', 'ORG', 'CLUSTER_DOMAIN',
-  'HEADSCALE_URL', 'HARBOR_PROJECT', 'MESH_TAG',
+  'HEADSCALE_URL', 'HARBOR_PROJECT', 'MESH_TAG', 'NS_PREFIX',
 ];
 
 function die(msg) {
@@ -168,9 +168,32 @@ function main() {
       die(e.message);
     }
 
+    // ArgoCD ApplicationSet Go-template expressions ({{ .repository }}, {{ .url }},
+    // {{ .branch }} — any mustache whose body starts with '.') must survive INTO the
+    // rendered YAML verbatim for ArgoCD's ApplicationSet controller to evaluate at
+    // apply-time. They collide with Handlebars' own {{ }} delimiters: Handlebars would
+    // parse/evaluate '.repository' as a context path and (strict:false) drop it to an
+    // empty string, DIVERGING from the sed renderer (generate-brand-repos.sh), which
+    // leaves them literal because they are not brand {{TOKEN}}s. Protect them behind a
+    // sentinel across the Handlebars pass, then restore the EXACT original text so the
+    // output is byte-identical to sed (this is what keeps the parity gate green).
+    // SAFETY: assertTemplateSafe()'s fail-closed frozen/denied RAW-BODY scan has
+    // ALREADY run over these bodies above, so a dot-body naming a frozen constant
+    // (e.g. {{ .snapdragon.systems/x }}) was refused before we reach here — this
+    // passthrough only ever carries inert ArgoCD context refs, never a brand token or
+    // a secret value.
+    const goTmpl = [];
+    const protectedSrc = src.replace(/\{\{\s*\.[^{}]*?\s*\}\}/g, (match) => {
+      const sentinel = `@@ARGOCD_GOTMPL_${goTmpl.length}@@`;
+      goTmpl.push(match);
+      return sentinel;
+    });
+
     // noEscape:true => bare {{TOKEN}} is a raw substitution == sed parity.
-    const tpl = Handlebars.compile(src, { noEscape: true, strict: false });
-    const result = tpl(ctx);
+    const tpl = Handlebars.compile(protectedSrc, { noEscape: true, strict: false });
+    let result = tpl(ctx);
+    // Restore the protected ArgoCD Go-template expressions verbatim.
+    result = result.replace(/@@ARGOCD_GOTMPL_(\d+)@@/g, (_, i) => goTmpl[Number(i)]);
 
     const rel = path.relative(templatesDir, tmpl).replace(/\.hbs$/, '');
     const dst = path.join(outDir, rel);
