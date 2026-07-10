@@ -82,6 +82,10 @@ keys-template/vault/unseal-key
 keys-template/vault/token
 **/vault/unseal-key
 **/vault/token
+# Phase 7 foreign-mesh trust store — staged OUT-OF-BAND, pubkeys-only, never
+# committed (only README.md + the *.example placeholder are tracked; the
+# `*.example` name falls outside this glob).
+keys-template/mesh-trust/*/foreign-provenance-pub.ed25519
 
 # Brand profile may hold default passwords — never commit the real one
 # (brand.conf.example is the committed template).

@@ -28,11 +28,22 @@
 #
 # Usage:
 #   scripts/render-repo-tree.sh brands/example.conf --enable-repo-tree \
-#       [--repo login-ui] [--out-dir ./out] [--base DIR]
+#       [--repo login-ui] [--out-dir ./out] [--base DIR] \
+#       [--foreign-mesh ID --pinned-digest SHA [--trust-store DIR] [--min-generation N]]
 #
 # --enable-repo-tree is REQUIRED (the opt-in gate). --base DIR forces a specific
 # read-only base (else pull-repo-base.sh resolves it; set <NAME>_BASE_DIR to point
 # at a present clone). Exit 0 on a scanned-clean tree; non-zero on any failure.
+#
+# FOREIGN-MESH MODE (Phase 7): --foreign-mesh ID declares the base comes from a
+# FOREIGN mesh (fully hostile until proven). The base is then REQUIRED to pass the
+# fail-closed inbound gate (scripts/ingest-foreign-base.sh: digest-pin, pinned-key
+# signature, SBOM/vuln floor, secret scan, frozen-constant screen, containment)
+# BEFORE any copy — the overlay reads the gate's ADMITTED quarantine snapshot (the
+# same frozen bytes that were verified, never the mutable source). A gate REJECT is
+# FATAL: no skeleton fallback, BRAND_OUT is never created, nothing reaches the
+# publish tail. The foreign attestation envelope + gate markers never ride into
+# the emitted tree.
 set -euo pipefail
 
 _die() { echo "[render-repo-tree] FATAL: $*" >&2; exit 1; }
@@ -50,6 +61,12 @@ ARCHETYPE=""
 OUT_DIR="./out"
 BASE_OVERRIDE=""
 ENABLED=0
+# Phase 7 foreign-mesh mode knobs (FOREIGN_MESH env is the no-flag equivalent of
+# --foreign-mesh; the trust store defaults to the out-of-band staging root).
+FOREIGN_MESH="${FOREIGN_MESH:-}"
+PINNED_DIGEST=""
+TRUST_STORE="${MESH_TRUST_STORE:-${REPO_ROOT}/keys-template/mesh-trust}"
+MIN_GENERATION="0"
 # Per-repo IDENTITY tokens (Phase 4): repeatable --set NAME=VALUE from the repos[]
 # manifest identity row (e.g. APP_SLUG=user, TITLE_WORD=User, PROFILE=be). These
 # are added to the render context on top of the brand-derived tokens. Every NAME
@@ -73,6 +90,10 @@ while [[ $# -gt 0 ]]; do
     --archetype) ARCHETYPE="$2"; shift 2 ;;
     --out-dir)   OUT_DIR="$2"; shift 2 ;;
     --base)      BASE_OVERRIDE="$2"; shift 2 ;;
+    --foreign-mesh)   FOREIGN_MESH="$2"; shift 2 ;;
+    --pinned-digest)  PINNED_DIGEST="$2"; shift 2 ;;
+    --trust-store)    TRUST_STORE="$2"; shift 2 ;;
+    --min-generation) MIN_GENERATION="$2"; shift 2 ;;
     --set)
       [[ "$2" == *=* ]] || _die "--set expects NAME=VALUE, got '$2'"
       _sn="${2%%=*}"; _sv="${2#*=}"
@@ -100,6 +121,22 @@ fi
 
 [[ -f "$BRAND_CONF" ]] || _die "brand config not found: $BRAND_CONF"
 [[ "$REPO" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || _die "invalid --repo '$REPO'"
+
+# ── Foreign-mesh mode arg validation (Phase 7, fail-closed) ──────────────────
+# Shape checks only — the REAL enforcement (digest pin, pinned-key signature,
+# SBOM/vuln/secret/frozen/containment) is ingest-foreign-base.sh below, which
+# re-validates everything itself. A declared-foreign render with a missing pin or
+# trust store dies HERE, before any base bytes are touched.
+if [[ -n "$FOREIGN_MESH" ]]; then
+  [[ "$FOREIGN_MESH" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
+    || _die "invalid --foreign-mesh '${FOREIGN_MESH}' (must be a DNS label)"
+  [[ -n "$PINNED_DIGEST" ]] \
+    || _die "--foreign-mesh requires --pinned-digest (an IMMUTABLE commit SHA; a foreign base is never taken from a moving ref)"
+  [[ -d "$TRUST_STORE" ]] \
+    || _die "foreign-mesh trust store '${TRUST_STORE}' is not a directory (no trust store => no admission; stage pubkeys out-of-band)"
+  [[ "$MIN_GENERATION" =~ ^[0-9]+$ ]] \
+    || _die "--min-generation must be a non-negative integer"
+fi
 
 # ── Resolve the ARCHETYPE overlay dir (Phase 4 generalization) ───────────────
 # Phase 2/3 hardcoded OVERLAY_DIR=templates/repos/<repo> (one hand overlay per
@@ -165,17 +202,6 @@ HOST_NAME="${BRAND}-host"
 # identity and stays literal; only the org/group is rebranded.
 GENERATOR_ORG_GROUP="${NPM_SCOPE}/snapdragon-generator"
 
-# ── OUT dir + realpath containment (mirrors generate-brand-repos.sh) ─────────
-BRAND_OUT="${OUT_DIR}/${BRAND}-${REPO}"
-_out_abs="$(mkdir -p "$OUT_DIR" 2>/dev/null; realpath -m -- "$OUT_DIR")"
-_brand_out_abs="$(realpath -m -- "$BRAND_OUT")"
-case "$_brand_out_abs/" in
-  "$_out_abs"/*) : ;;
-  *) _die "refusing to operate outside OUT_DIR: '${BRAND_OUT}' -> '${_brand_out_abs}'" ;;
-esac
-[[ -d "$BRAND_OUT" ]] && { _log "removing existing output: $BRAND_OUT"; rm -rf "$BRAND_OUT"; }
-mkdir -p "$BRAND_OUT"
-
 # REPO_NAME: the repo short name as a render token (skeleton READMEs reference it).
 REPO_NAME="$REPO"
 export BRAND BRAND_TITLE ORG NPM_SCOPE HOST_NAME GENERATOR_ORG_GROUP REPO_NAME
@@ -215,6 +241,45 @@ fi
 MODE="skeleton"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 
+# ── Phase 7 FOREIGN-MESH inbound gate (fail-closed, BEFORE any copy) ─────────
+# A base declared foreign is REQUIRED to pass scripts/ingest-foreign-base.sh:
+# quarantine-snapshot (TOCTOU close) -> containment -> digest-pin -> pinned-key
+# signature (no TOFU) -> SBOM -> offline vuln floor -> whole-tree secret scan ->
+# frozen-constant screen -> atomic promote. On ADMIT, the overlay reads the gate's
+# quarantine SNAPSHOT (the exact verified bytes), never the mutable source dir.
+# On REJECT this _die's: NO skeleton fallback (that would mask the rejection and
+# still emit a tree), BRAND_OUT is never created (nothing for the publish tail to
+# sign/push onward). The quarantine lives under TMP, purged by the EXIT trap.
+if [[ -n "$FOREIGN_MESH" ]]; then
+  [[ -n "$BASE" && -d "$BASE" ]] \
+    || _die "foreign-mesh mode requires a resolvable base (no skeleton fallback for a declared-foreign ingest)"
+  _log "FOREIGN base declared (mesh=${FOREIGN_MESH}, pin=${PINNED_DIGEST}) — running inbound ingestion gate"
+  ADMITTED=""
+  if ! ADMITTED="$(bash "${SCRIPT_DIR}/ingest-foreign-base.sh" \
+        --base "$BASE" --mesh-id "$FOREIGN_MESH" --pinned-digest "$PINNED_DIGEST" \
+        --trust-store "$TRUST_STORE" --quarantine "${TMP}/foreign-quarantine" \
+        --min-generation "$MIN_GENERATION")"; then
+    _die "foreign base REJECTED by ingest-foreign-base.sh (mesh=${FOREIGN_MESH}) — refusing to render, nothing emitted"
+  fi
+  [[ -n "$ADMITTED" && -d "$ADMITTED" && -f "${ADMITTED}/.snapdragon-mesh-admitted" ]] \
+    || _die "ingestion gate returned no admitted snapshot — fail-closed"
+  BASE="$ADMITTED"
+  _log "foreign base ADMITTED: overlaying the verified quarantine snapshot ${BASE}"
+fi
+
+# ── OUT dir + realpath containment (mirrors generate-brand-repos.sh) ─────────
+# Deliberately AFTER the foreign gate: a rejected foreign base must leave no
+# BRAND_OUT behind (the publish tail keys off that tree existing).
+BRAND_OUT="${OUT_DIR}/${BRAND}-${REPO}"
+_out_abs="$(mkdir -p "$OUT_DIR" 2>/dev/null; realpath -m -- "$OUT_DIR")"
+_brand_out_abs="$(realpath -m -- "$BRAND_OUT")"
+case "$_brand_out_abs/" in
+  "$_out_abs"/*) : ;;
+  *) _die "refusing to operate outside OUT_DIR: '${BRAND_OUT}' -> '${_brand_out_abs}'" ;;
+esac
+[[ -d "$BRAND_OUT" ]] && { _log "removing existing output: $BRAND_OUT"; rm -rf "$BRAND_OUT"; }
+mkdir -p "$BRAND_OUT"
+
 if [[ -n "$BASE" && -d "$BASE" ]]; then
   MODE="overlay"
   # 1) Private copy of the READ-ONLY base into OUT (exclude VCS metadata + any
@@ -223,10 +288,20 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
   # Exclude VCS + build outputs for BOTH archetypes (JS: node_modules/dist/.angular;
   # compiled Java/Maven BFF: target/). Generalized, not forked per repo — extra
   # excludes are harmless when a repo lacks that dir.
-  _log "copying read-only base into ${BRAND_OUT} (excluding .git/node_modules/dist/.angular/target)"
+  #    Phase 7: the FOREIGN attestation envelope + gate markers (root-level) are
+  #    stripped — they attest the INBOUND base, not OUR outbound tree (the publish
+  #    tail writes/signs a FRESH provenance for what WE emit), and the markers are
+  #    quarantine bookkeeping. Root-anchored: a same-named file in a SUBDIR is not
+  #    an envelope and stays digest-covered/screened by the gate instead.
+  _log "copying read-only base into ${BRAND_OUT} (excluding .git/node_modules/dist/.angular/target + attestation envelope/markers)"
   tar -C "$BASE" \
       --exclude='./.git' --exclude='./node_modules' --exclude='./dist' \
-      --exclude='./.angular' --exclude='./target' -cf - . | tar -C "$BRAND_OUT" -xf -
+      --exclude='./.angular' --exclude='./target' \
+      --exclude='./.snapdragon-provenance.json' \
+      --exclude='./.snapdragon-provenance.json.sig' \
+      --exclude='./.snapdragon-sbom.json' \
+      --exclude='./.snapdragon-mesh-admitted' \
+      --exclude='./.foreign-mesh-id' -cf - . | tar -C "$BRAND_OUT" -xf -
 
   # 2) CLASS-A overlay: stage the archetype's whole-file .hbs (angular-mfe:
   #    federation-base.js — byte-identical across the class bar HOST_NAME;

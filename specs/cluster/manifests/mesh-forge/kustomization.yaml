@@ -1,0 +1,11 @@
+# mesh-forge — Phase 7 OUTBOUND forge exposure (SHIP-DARK, opt-in, tailnet+mTLS).
+# The live tailnet bind + cross-mesh mTLS client-cert verification are cluster-only
+# (DEFERRED — see mesh-forge-expose.yaml). This kustomization ships the fail-closed
+# default-deny + the opt-in ConfigMap so the safe state is the shipped state.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - mesh-forge-expose.yaml
+commonLabels:
+  app.kubernetes.io/part-of: snapdragon.systems
+  app.kubernetes.io/name: mesh-forge

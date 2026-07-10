@@ -1,0 +1,16 @@
+{
+  "_comment": "Phase 7 FOREIGN-MESH ADMISSION ALLOWLIST (explicit trust, NO trust-on-first-use). DATA, not code — parallel to scripts/tooling/tokens.json. scripts/pull-repo-base.sh reads this in --foreign mode to resolve, per foreign mesh id: the IMMUTABLE pinned base commit digest (never a moving ref), the replay/rollback minGeneration floor, and the trust-store pubkey path (base64 SPKI DER, pubkeys-only, staged out-of-band under keys-template/mesh-trust/<meshId>/). A foreign mesh with NO entry here has NO pinned digest and NO pinned key => the gate fails closed (an unknown mesh is never admitted). Admitting a NEW foreign mesh is a DELIBERATE act: add its entry here AND stage its pubkey out-of-band. NEVER commit a private key.",
+
+  "schemaVersion": 1,
+
+  "meshes": {
+    "example-mesh": {
+      "_comment": "Illustrative placeholder entry. pinnedDigest is a 40/64-hex commit SHA of the exact foreign base tree that mesh vouches for; the gate rejects a mutable ref and rejects any tree whose recomputed content digest != the SIGNED manifest's base.treeSha256. minGeneration is the rollback floor (raise it after a CVE to lock out an old-but-signed base). pubkey is staged out-of-band at keys-template/mesh-trust/example-mesh/foreign-provenance-pub.ed25519 — NOT committed.",
+      "enabled": false,
+      "gitBase": "https://forge.example-mesh.test/example-mesh",
+      "pinnedDigest": "0000000000000000000000000000000000000000",
+      "minGeneration": 0,
+      "pubkeyRef": "keys-template/mesh-trust/example-mesh/foreign-provenance-pub.ed25519"
+    }
+  }
+}

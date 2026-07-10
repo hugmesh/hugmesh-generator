@@ -377,3 +377,136 @@ and the writeback DOES fire (no false-positive lockout).
 5. real network-namespace / `PrivateNetwork` isolation of the render subprocess;
 6. OPTIONAL-SERVICE selection + non-placeholder registry-pub key gating (the three
    ship-dark gates).
+
+# Phase 7 — cross-mesh decentralization (foreign-base ingestion + outbound exposure)
+
+Phase 7 opens the templating pipeline across MESH boundaries in both directions,
+under one rule: **a foreign mesh's code is fully hostile even when validly
+signed**. A valid signature proves WHO produced the attestation, never that the
+on-disk tree is safe — so every inbound foreign base goes through a fail-closed
+supply-chain gate, and a rejected base is **admitted nowhere and pushed onward
+never**.
+
+## The INBOUND gate — `scripts/ingest-foreign-base.sh`
+
+Build-host only. Everything runs inside a per-run **quarantine snapshot**; only a
+tree that passes EVERY gate is atomically promoted (its verified path printed on
+stdout). ANY failure purges the snapshot, prints nothing, exits non-zero. Gate
+order (each fail-closed; a missing tool is a REJECT, never a skip):
+
+1. **[DoS] pre-flight caps** on the SOURCE (file count / total bytes / path
+   depth) BEFORE any copy — a zip-bomb or deep-nest tree never exhausts the host;
+2. **[SNAP] quarantine snapshot** — closes TOCTOU: every later gate AND the
+   eventual overlay copy read the SAME frozen bytes, never the mutable source;
+3. **[g] containment (hoisted)** — escaping/absolute/`..`-traversal symlinks and
+   hardlinks rejected BEFORE the content gates, so a planted link can never
+   subvert a later gate into reading a trusted file outside the tree;
+4. **[a] digest pin** — the base MUST be requested by an IMMUTABLE 40/64-hex
+   digest (mutable refs like `main`/`HEAD` are refused); the SIGNED manifest's
+   `base.commitSha` must equal the pin, `base.meshId` the declared mesh, and a
+   recomputed canonical **tree digest** must equal `base.treeSha256` — binding
+   the signature to the actual bytes (root-anchored: a file merely NAMED like the
+   envelope in a subdir is ordinary content, digest-covered);
+5. **[b] provenance / Ed25519 signature** — verified with `provenance.sh` against
+   the PINNED pubkey from the trust store (base64 SPKI DER, validated to be an
+   Ed25519 PUBLIC key) — never against any key the envelope advertises. Plus the
+   **replay floor**: `base.generation >= minGeneration` rejects an
+   old-but-genuinely-signed (known-vuln / rolled-back) base;
+6. **[c] SBOM** — present, parseable, non-empty (CycloneDX components / SPDX
+   packages);
+7. **[d] vuln** — SBOM components screened against the PINNED OFFLINE advisory
+   floor (`templates/mesh-trust/advisory-floor.txt`); any CRITICAL match rejects;
+8. **[e] secret scan** — `secret-scan.sh` over the ENTIRE tree with NO excludes
+   (the render emit-scan's first-party carve-outs do NOT apply to foreign code);
+9. **[f] frozen/denylist** — foreign code must not carry OUR frozen protocol
+   identity (`snapdragon.systems/*` label keys, the `X-Snapdragon-Local` &
+   friends wire headers, the step-up subprotocol prefix); declared origin fields
+   are screened through the same token classifier the render path uses. Only the
+   ROOT-level attestation envelope is exempt from the tree grep — a same-named
+   subdir file IS screened (laundering vector otherwise);
+10. **atomic promote** — the fully-passed snapshot is `mv`'d into place with an
+    admit stamp; a half-verified tree is never observable at the returned path.
+
+## Explicit trust — NO trust-on-first-use
+
+Admission policy is two deliberate, independent additions per foreign mesh:
+
+* a row in `templates/mesh-trust/registry.json` — `enabled`, the foreign forge
+  `gitBase`, the `pinnedDigest` of the exact vouched base tree, and the
+  `minGeneration` rollback floor (raise it after a CVE to lock out an
+  old-but-signed base);
+* the mesh's provenance-signing PUBLIC key staged **out-of-band** at
+  `keys-template/mesh-trust/<mesh-id>/foreign-provenance-pub.ed25519`
+  (pubkeys-only; git-ignored; same custody model as `registry-pub.ed25519`).
+
+An unknown mesh (no row / no key), a disabled row, or a rotated-but-not-restaged
+key all fail CLOSED. `<mesh-id>` is a strict DNS label so the trust path can
+never traverse.
+
+## Enforcement wire-ins (a rejected base can never be used or pushed)
+
+* **`scripts/pull-repo-base.sh --foreign --mesh <id>`** (or `FOREIGN_MESH` env,
+  with `--pinned-digest/--trust-store/--min-generation` overriding the registry
+  row): resolves the RAW foreign tree (a `<NAME>_BASE_DIR` override, the foreign
+  cache, or a pinned-digest fetch from the mesh's forge — never a moving ref),
+  then REQUIRES the ingestion gate to pass and prints ONLY the gate's **admitted
+  quarantine snapshot** — never the raw tree. `OFFLINE=1` is honored (no fetch;
+  the gate still runs). The trusted-own-mesh default path is byte-for-byte
+  unchanged.
+* **`scripts/render-repo-tree.sh --foreign-mesh <id> --pinned-digest SHA`**: the
+  gate runs BEFORE any copy and the overlay reads the admitted snapshot (the
+  exact verified bytes — TOCTOU-closed). A REJECT is fatal: **no skeleton
+  fallback** (that would mask the rejection), `BRAND_OUT` is never created, so
+  the publish tail has nothing to sign with our key or push to Forgejo. The
+  foreign attestation envelope + gate markers are stripped from the emitted tree
+  (we attest what WE emit with a fresh Phase-5 provenance; the inbound envelope
+  never rides through).
+
+## The exit gate — `tests/domain-registry/test-foreign-ingest-fuzz.sh`
+
+Build-host runnable (no root, no network). Drives the REAL gate + BOTH wire-ins
+with a hostile corpus — unsigned / unknown-mesh (no-TOFU) / wrong-key /
+tampered-after-sign / digest-swap / mutable-ref / pin-mismatch / post-sign
+subdir-envelope plant / signed-in subdir-envelope frozen carrier / smuggled
+secret / keyless high-entropy credential / frozen-namespace + wire-header
+injection / SBOM absent-malformed-empty / CRITICAL-vuln dep / symlink escape-
+absolute-traversal / file-count-bytes-depth DoS / replay / pull-wiring refusals —
+asserting for EACH: (1) exit != 0, (2) NOT admitted (no snapshot, no stdout
+path), (3) NOTHING pushed onward (BRAND_OUT never written). A clean, signed,
+digest-pinned base from a trusted mesh is the positive control: admitted AND
+rendered (0 residual tokens, markers stripped) — the gate is not a blanket
+lockout.
+
+## OUTBOUND — letting a foreign mesh pull from US
+
+* **`specs/cluster/manifests/mesh-forge/`** — exposes our tailnet-internal
+  Forgejo for foreign pulls. SHIP-DARK: inert until the operator flips
+  `MESH_FORGE_EXPOSED` to `"true"`. Even then: **tailnet-only** (NetworkPolicy
+  admits only the tailnet CIDR; ClusterIP stays, no public Ingress) and **mTLS
+  client-cert required** (issuer must be in the cross-mesh CA trust bundle;
+  anonymous/bearer pulls refused).
+* **`specs/cluster/manifests/mesh-harbor/`** — the cross-mesh domain-creation
+  publish Action: per-tenant Harbor project (`snapdragon-<brand>`), a pull-only
+  project-scoped robot for the foreign mesh (secret written once into Vault),
+  a push-only robot for the tenant build. Extends the Phase-5 provision job's
+  idempotent reconcile; the foreign mesh never receives admin or cross-project
+  scope.
+
+## Deferred to real-cluster (never faked)
+
+1. the LIVE tailnet bind + LIVE mTLS client-cert verification of the forge
+   exposure, including the CROSS-CA trust bundle (a foreign mesh chains to a
+   different CA than our pki_int — the bundle mount + gateway TLS termination
+   are cluster-only);
+2. a LIVE vulnerability database — Trivy ships `enabled:false` in
+   `apps/03a-harbor.yaml`; flipping it on gives foreign pulls a cluster-side
+   vuln gate. The build-host half is the PINNED offline advisory floor (honest:
+   a floor, not a feed);
+3. a LIVE run of the Harbor mesh Action (needs booted Harbor + Vault + the
+   cluster-CA copy the Phase-5 job documents);
+4. a REAL cross-mesh git pull over the tailnet (build-host proof drives the gate
+   via a local RAW-source override; the pinned-digest fetch path needs a
+   reachable foreign forge);
+5. cross-mesh IMAGE provenance (cosign/notation over the per-tenant Harbor
+   project) — source-tree provenance is Phase 5 + this gate; image signing is a
+   cluster concern.
