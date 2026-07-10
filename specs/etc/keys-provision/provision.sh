@@ -601,6 +601,18 @@ provision_headscale() {
         cp -f "${BASE}/headscale/"acl*        /etc/headscale/     2>/dev/null || true
         cp -f "${BASE}/headscale/"*.hujson    /etc/headscale/     2>/dev/null || true
         cp -f "${BASE}/headscale/"derp*.yaml  /etc/headscale/     2>/dev/null || true
+        # OIDC app client-secret — EXPLICIT copy, not folded into the *.key glob
+        # above: config.yaml's client_secret_path is literally
+        # /var/lib/headscale/oidc_client_secret (no .key suffix), staged by
+        # gen-provision-keys.sh's provision_headscale_oidc_secret(). Flagged
+        # 2026-07-09 (PR #292), fixed 2026-07-10: the *.key glob would only ever
+        # have matched a file already named to include ".key", which still
+        # wouldn't byte-match this path — an explicit copy sidesteps the
+        # glob/path mismatch entirely rather than relying on a naming trick.
+        [ -f "${BASE}/headscale/oidc_client_secret" ] && \
+            cp -f "${BASE}/headscale/oidc_client_secret" /var/lib/headscale/oidc_client_secret \
+            && chmod 600 /var/lib/headscale/oidc_client_secret \
+            && log "Installed headscale OIDC client-secret"
     fi
     # ── Layer-A BOOTSTRAP policy (device-license registry) ────────────────────
     # During the bootstrap window — BEFORE the BFF /export exists / is reachable —

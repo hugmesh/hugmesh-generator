@@ -97,16 +97,15 @@ oidc:
   # convention every other seeded app uses (app-harbor, app-fragment-sync, ...).
   client_id: "app-headscale"
   # Secret delivered out-of-band (Vault / ESO) to /var/lib/headscale — never in
-  # git. On a KEYS USB it can ship as headscale/*.key (copied to /var/lib/headscale).
-  # !!! provision_headscale() currently only copies "${BASE}/headscale/*.key" ->
-  # !!! /var/lib/headscale/ (specs/etc/keys-provision/provision.sh) — a file
-  # !!! literally named "oidc_client_secret" (no .key suffix) is NOT matched by
-  # !!! that glob. The KEYS-bundle assembly step that stages this secret (mirrors
-  # !!! how apps/headscale lands in Vault's snapdragon/casdoor-apps path — see
-  # !!! scripts/gen-cluster-secrets.sh CASDOOR_APPS) must name the staged file
-  # !!! headscale/oidc_client_secret.key so this copy step picks it up, OR
-  # !!! provision_headscale() needs an explicit copy for this one file. NOT YET
-  # !!! WIRED — flagged 2026-07-09, tracked in the platform TODO queue.
+  # git. WIRED end-to-end (fixed 2026-07-10, flagged 2026-07-09 in PR #292):
+  # gen-cluster-secrets.sh's CASDOOR_APPS loop deterministically mints this
+  # value (the SAME one casdoor-init registers as the Casdoor Application's
+  # clientSecret) into keys-out/vault/secrets.json; gen-provision-keys.sh's
+  # provision_headscale_oidc_secret() carries it forward into the pki role's
+  # KEYS bundle at headscale/oidc_client_secret; provision_headscale()
+  # (specs/etc/keys-provision/provision.sh) explicit-copies that exact file to
+  # this path (deliberately NOT folded into the generic *.key glob, since no
+  # naming trick makes "*.key" byte-match a path with no .key suffix).
   client_secret_path: /var/lib/headscale/oidc_client_secret
   # Re-auth cadence once a node is authenticated ("0" = never expire).
   expiry: 180d

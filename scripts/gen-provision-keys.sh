@@ -608,6 +608,66 @@ PY
     fi
 }
 
+# Stage headscale's Casdoor OIDC application client-secret onto the pki node's
+# KEYS bundle, at the exact path keys-template/headscale/config.yaml's
+# client_secret_path expects (/var/lib/headscale/oidc_client_secret once copied
+# by provision_headscale() in specs/etc/keys-provision/provision.sh).
+#
+# WHY THIS IS SEPARATE FROM provision_mail_oauth's pattern: mail/OAuth creds are
+# OPERATOR-SUPPLIED (prompted interactively, no canonical source elsewhere).
+# headscale's OIDC secret is NOT operator-supplied — it is DETERMINISTICALLY
+# MINTED by gen-cluster-secrets.sh's CASDOOR_APPS loop (the SAME value the
+# casdoor-init Job registers as the Casdoor Application's clientSecret, so this
+# script and that Job MUST agree byte-for-byte or the OIDC handshake fails).
+# gen-cluster-secrets.sh ALWAYS writes it to keys-out/vault/secrets.json (its own
+# header comment: "OFFLINE — ALWAYS write a USB bundle under <out>/vault") — this
+# function's ONLY job is carrying that ALREADY-MINTED value forward into the
+# per-role KEYS bundle gen-provision-keys.sh is building, matching the
+# documented run order (docs/RUNNING.md: "gen-cluster-secrets - gen-provision-
+# keys - make-keys-usb"). It never mints or prompts for a value itself.
+#
+# Soft-fails (warn, do not exit 1) when the vault bundle is absent: an operator
+# may legitimately run gen-provision-keys.sh before gen-cluster-secrets.sh while
+# iterating on non-headscale parts of a role's bundle. A pki bundle assembled
+# without this file simply ships with headscale's OIDC app un-provisioned,
+# exactly the pre-existing (now-explicit-instead-of-silent) failure mode.
+provision_headscale_oidc_secret() {
+    local vault_json="${REPO_DIR}/keys-out/vault/secrets.json"
+    if [ ! -f "${vault_json}" ]; then
+        echo "==> Headscale OIDC secret: SKIPPED — ${vault_json} not found (run gen-cluster-secrets.sh first; headscale's Casdoor app will be un-provisioned without this)" >&2
+        return 0
+    fi
+    # gen-cluster-secrets.sh writes an IDENTICAL casdoor-app-secrets object into
+    # TWO namespaces ("<brand>-pki" AND "<brand>-forum", both from the same
+    # app_secrets dict) — this is not unique to pki. secrets.json is written
+    # with sort_keys=True, so "<brand>-forum" actually sorts (and matches)
+    # BEFORE "<brand>-pki" — "first match by shape" only works because both
+    # namespaces are guaranteed identical today. Find it by shape (rather than
+    # requiring this script to independently resolve BRAND) so it works
+    # regardless of brand.conf; if pki/forum secrets ever diverge, this needs
+    # to target "<brand>-pki" explicitly instead of "first match".
+    local secret
+    secret="$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+for ns in d.values():
+    apps = ns.get("casdoor-app-secrets")
+    if isinstance(apps, dict) and "headscale" in apps:
+        sys.stdout.write(apps["headscale"])
+        break
+' "${vault_json}" 2>/dev/null)"
+    if [ -z "${secret}" ]; then
+        echo "==> Headscale OIDC secret: SKIPPED — ${vault_json} has no casdoor-app-secrets.headscale entry (stale bundle? re-run gen-cluster-secrets.sh)" >&2
+        return 0
+    fi
+    local dest_dir="${OUT_DIR}/headscale"
+    mkdir -p "${dest_dir}"
+    local dest="${dest_dir}/oidc_client_secret"
+    printf '%s' "${secret}" > "${dest}"
+    chmod 600 "${dest}"
+    echo "==> Headscale OIDC secret: staged -> ${dest} (from ${vault_json})"
+}
+
 if [ "${ROLE}" = "pki" ]; then
     # ── pki node: FULL config — default user accounts + hashed passwords ──
     cp "${KEYFILE}.pub" "${OUT_DIR}/ssh/${ADMIN}.authorized_keys"
@@ -691,6 +751,9 @@ PY
     # Optional outbound-mail + GitHub/Discord OAuth creds for the cluster (pki
     # node carries the cluster config + secrets). Absent by default.
     provision_mail_oauth
+    # headscale's OIDC app client-secret (deterministically minted by
+    # gen-cluster-secrets.sh, carried forward here — never re-generated).
+    provision_headscale_oidc_secret
     echo; echo "Done (pki — config node). Generated:"
     if [ "${GEN_ROOT_PASSWORD}" = true ]; then
         echo "  ${OUT_DIR}/users.json            (default accounts: admin '${ADMIN}' hashed + root login ENABLED, hashed)"
