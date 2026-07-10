@@ -2224,16 +2224,21 @@ provision_snapdragon() {
     # "authentication required: Repository not found". The token comes ONLY from
     # the offline KEYS USB (gitops/repo-token, override via
     # .snapdragon.gitops.repo_token_file) — SAME custody as vault/token +
-    # certs/cluster-ca.key + luks.key, NEVER git. Read it here and hand it to
-    # bootstrap.sh via $ARGOCD_REPO_TOKEN; the material is never printed. Absent
-    # => bootstrap.sh fails closed for the private repo (it exits non-zero, which
+    # certs/cluster-ca.key + luks.key, NEVER git. Read it into a LOCAL (NOT
+    # exported into the provisioning environment) and hand it to bootstrap.sh
+    # scoped to that ONE invocation as $ARGOCD_REPO_TOKEN — exactly how the far
+    # more sensitive Vault root token is kept in a `local` and passed only as a
+    # single kubectl arg, so the PAT never leaks into the env of the later
+    # provisioning steps (provision_vault/secureboot/run_hooks) or the operator
+    # hook scripts they exec. The material is never printed. Absent =>
+    # bootstrap.sh fails closed for the private repo (it exits non-zero, which
     # here only warns via the `|| warn` below — it does not abort provisioning).
-    local repo_token_file rt
+    local repo_token_file rt argocd_repo_token=""
     repo_token_file="$(jqm '.snapdragon.gitops.repo_token_file // "gitops/repo-token"')"
     rt="${BASE}/${repo_token_file}"
     if [ -f "${rt}" ]; then
-        export ARGOCD_REPO_TOKEN="$(tr -d '[:space:]' < "${rt}" 2>/dev/null)"
-        if [ -n "${ARGOCD_REPO_TOKEN}" ]; then
+        argocd_repo_token="$(tr -d '[:space:]' < "${rt}" 2>/dev/null)"
+        if [ -n "${argocd_repo_token}" ]; then
             log "Loaded ArgoCD repo token from KEYS (${rt}), never printed"
         else
             warn "ArgoCD repo token file ${rt} is empty — bootstrap.sh will fail closed for the private GitOps repo"
@@ -2243,7 +2248,7 @@ provision_snapdragon() {
     fi
 
     log "Bootstrapping ArgoCD + Snapdragon app-of-apps"
-    KUBECONFIG=/etc/kubernetes/admin.conf bash "${bs}" || warn "GitOps bootstrap returned non-zero"
+    ARGOCD_REPO_TOKEN="${argocd_repo_token}" KUBECONFIG=/etc/kubernetes/admin.conf bash "${bs}" || warn "GitOps bootstrap returned non-zero"
 }
 
 # ── Vault / External Secrets (k8s Secrets, online + USB fallback) ──
