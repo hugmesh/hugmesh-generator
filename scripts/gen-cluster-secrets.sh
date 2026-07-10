@@ -267,7 +267,7 @@ CASDOOR_GAMES_GITHUB_CLIENT_SECRET="REPLACE_WITH_GITHUB_OAUTH_CLIENT_SECRET"
 # the apps/users/roles structure; these secrets are injected by casdoor-init).
 # The init Job needs the admin PLAINTEXT to call the Casdoor API, so we keep it
 # alongside the -6 hash. Secrets live only in Vault / the USB bundle, never git.
-CASDOOR_APPS="pki-gateway be-gateway fe-gateway api admin-bff user-bff matrix mastodon fragment-sync signup-gate harbor"
+CASDOOR_APPS="pki-gateway be-gateway fe-gateway api admin-bff user-bff matrix mastodon fragment-sync signup-gate harbor headscale"
 CASDOOR_APP_KV_ARGS=()
 CASDOOR_APP_JSON_ENV=()
 for _app in ${CASDOOR_APPS}; do

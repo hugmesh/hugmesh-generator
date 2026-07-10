@@ -259,8 +259,10 @@ node). The mesh is governed by a **default-deny, tag-based ACL** shipped as
   `tag:pki`/`tag:be`/`tag:fe`/`tag:host`) at join via
   `tailscale up --advertise-tags=...`. `tagOwners` restricts those tags to the
   `snapdragon` headscale user (the preauth-key owner), so only enrolled nodes
-  can claim them. With OIDC join, the Casdoor `/headscale` group gates enrolment
-  — two independent membership layers.
+  can claim them. With OIDC join, the Casdoor `snapdragon/headscale` group
+  gates enrolment (`allowed_groups`, matching the group's real `<owner>/<name>`
+  claim shape — see `keys-template/headscale/config.yaml`) — two independent
+  membership layers.
 - **Full intra-fleet mesh.** The only `accept` rules are
   `tag:snapdragon → tag:snapdragon:*` (every node reaches every node, all ports)
   and `tag:snapdragon → {10.244.0.0/16, 10.96.0.0/12}:*` (pods + ClusterIP

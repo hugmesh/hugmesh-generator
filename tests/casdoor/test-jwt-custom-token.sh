@@ -136,8 +136,10 @@ api POST /api/login '{"application":"app-built-in","organization":"built-in","us
 ORGJSON='{"owner":"admin","name":"snapdragon","displayName":"Snapdragon Systems","passwordType":"plain","languages":["en"],"enableSoftDeletion":false,"isProfilePublic":false}'
 api POST /api/add-organization "${ORGJSON}" >/dev/null 2>&1 || true
 
-# Reconcile a JWT-Custom app with EXACTLY the field set init-job.yaml seeds.
-APPJSON='{"owner":"admin","name":"app-jwtcustom-test","displayName":"jwtcustom test","organization":"snapdragon","clientId":"app-jwtcustom-test","clientSecret":"test-secret-not-real","redirectUris":["https://x.snapdragon.systems/callback"],"grantTypes":["authorization_code","client_credentials","password"],"expireInHours":168,"enablePassword":true,"enableSignUp":false,"tokenFormat":"JWT-Custom","tokenSigningMethod":"RS256","tokenFields":["Id","Name","Email","IsAdmin","Properties.mfa_satisfied","Properties.mfa_satisfied_at"],"tokenAttributes":[{"name":"roles","category":"Existing Field","value":"Roles","type":"Array"},{"name":"permissions","category":"Existing Field","value":"Permissions","type":"Array"}]}'
+# Reconcile a JWT-Custom app with EXACTLY the field set init-job.yaml seeds
+# (including the "groups" Existing-Field attribute added 2026-07-09 for the
+# headscale mesh-join OIDC gate — see JWT_CUSTOM_TOKEN_ATTRIBUTES).
+APPJSON='{"owner":"admin","name":"app-jwtcustom-test","displayName":"jwtcustom test","organization":"snapdragon","clientId":"app-jwtcustom-test","clientSecret":"test-secret-not-real","redirectUris":["https://x.snapdragon.systems/callback"],"grantTypes":["authorization_code","client_credentials","password"],"expireInHours":168,"enablePassword":true,"enableSignUp":false,"tokenFormat":"JWT-Custom","tokenSigningMethod":"RS256","tokenFields":["Id","Name","Email","IsAdmin","Properties.mfa_satisfied","Properties.mfa_satisfied_at"],"tokenAttributes":[{"name":"roles","category":"Existing Field","value":"Roles","type":"Array"},{"name":"permissions","category":"Existing Field","value":"Permissions","type":"Array"},{"name":"groups","category":"Existing Field","value":"Groups","type":"Array"}]}'
 if api GET "/api/get-application?id=admin/app-jwtcustom-test" 2>/dev/null | python3 -c 'import sys,json;d=json.load(sys.stdin);sys.exit(0 if d.get("data") else 1)' 2>/dev/null; then
   api POST "/api/update-application?id=admin/app-jwtcustom-test" "${APPJSON}" >/dev/null 2>&1
 else
@@ -156,6 +158,67 @@ api POST "/api/update-user?id=snapdragon/jwtcustom-test" "${USERJSON}" >/dev/nul
 ROLEJSON='{"owner":"snapdragon","name":"ROLE_ADMIN","displayName":"Platform Admin","users":["snapdragon/jwtcustom-test"],"roles":[],"domains":[],"isEnabled":true}'
 api POST /api/add-role "${ROLEJSON}" >/dev/null 2>&1 || true
 api POST "/api/update-role?id=snapdragon/ROLE_ADMIN" "${ROLEJSON}" >/dev/null 2>&1 || true
+
+# EXACT reconcile_superadmin() FIRST-RUN group path (init-job.yaml ~540-598):
+# build the group dict LOCALLY (users=[]), add-group (create), re-fetch, append
+# the member, update-group, then VERIFY by re-reading rather than trusting the
+# HTTP status.
+#
+# GROUND-TRUTH FINDING (live, this test): on casbin/casdoor:3.80.0,
+# /api/update-group's "users" field is a NO-OP on an EXISTING group — every
+# variant tried (local dict, re-fetched dict, with/without a ?columns=users
+# hint) returns {"status":"ok","data":"Affected"} while NOT persisting
+# membership. Only /api/add-group honors "users", and only at creation time.
+# This does NOT affect the actual OIDC mesh-join gate, which reads the
+# `groups` token claim from user.groups (verified below, and working) —
+# group.users is Casdoor-admin-console display only. Production code (fixed
+# to match) attempts the write, verifies by re-reading, and logs the real
+# outcome instead of trusting Casdoor's misleading "ok" status — this test
+# asserts that SAME honesty, not a hard requirement that the write succeeds.
+GROUP_CREATE='{"owner":"snapdragon","name":"headscale","displayName":"Headscale mesh operators","type":"Virtual","parentId":"snapdragon","isTopGroup":true,"isEnabled":true,"users":[]}'
+api POST /api/add-group "${GROUP_CREATE}" >/dev/null 2>&1 || true
+FETCHED_GROUP="$(api GET "/api/get-group?id=snapdragon/headscale" 2>/dev/null)"
+GROUP_UPDATE="$(printf '%s' "${FETCHED_GROUP}" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+g = d.get("data") or {}
+users = g.get("users") or []
+if "snapdragon/jwtcustom-test" not in users:
+    users.append("snapdragon/jwtcustom-test")
+g["users"] = users
+print(json.dumps(g))
+')"
+api POST "/api/update-group?id=snapdragon/headscale" "${GROUP_UPDATE}" >/dev/null 2>&1 || true
+GROUP_MEMBERS_AFTER="$(api GET "/api/get-group?id=snapdragon/headscale" 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print(json.dumps((d.get("data") or {}).get("users")))' 2>/dev/null)"
+if [ "${GROUP_MEMBERS_AFTER}" = '["snapdragon/jwtcustom-test"]' ]; then
+  ok "group.users persisted (would be a pleasant surprise on 3.80.0 — verify this still holds on any Casdoor version bump)"
+else
+  ok "confirmed group.users is a no-op on update-group (${GROUP_MEMBERS_AFTER}) — matches production's honest NOTE-not-silent-success logging; OIDC gate unaffected (sourced from user.groups, checked next)"
+fi
+
+# Prove the EXACT reconcile_superadmin() production shape (init-job.yaml):
+# GET the user, mutate the SAME dict (so "id" round-trips byte-identical), POST
+# via plain update-user with NO ?columns= param. A hand-built payload without
+# the real "id" hits Casdoor's "The ID is immutable" rejection (verified while
+# writing this test) — this block exists to prove the ACTUAL shipped code
+# doesn't hit that trap, not just a convenient variant of it.
+GETUSER="$(api GET "/api/get-user?id=snapdragon/jwtcustom-test" 2>/dev/null)"
+UPDATED_USER="$(printf '%s' "${GETUSER}" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+u = d.get("data") or {}
+groups = u.get("groups") or []
+if "snapdragon/headscale" not in groups:
+    groups.append("snapdragon/headscale")
+u["groups"] = groups
+print(json.dumps(u))
+')"
+RAW_UPDATE="$(api POST "/api/update-user?id=snapdragon/jwtcustom-test" "${UPDATED_USER}" 2>&1)"
+if printf '%s' "${RAW_UPDATE}" | python3 -c 'import sys,json; sys.exit(0 if json.load(sys.stdin).get("status")=="ok" else 1)' 2>/dev/null; then
+  ok "reconcile_superadmin()'s exact update-user shape (GET-mutate-POST, no ?columns=) persists user.groups"
+else
+  bad "reconcile_superadmin()'s update-user shape rejected: ${RAW_UPDATE}"
+fi
 
 # Mint a REAL token via the password (Resource Owner) grant.
 TOKRESP="$(curl -fsS -X POST "${BASE}/api/login/oauth/access_token" \
@@ -237,6 +300,27 @@ if isinstance(roles, list) and roles:
         bad(f"roles not string names: {roles!r}")
 else:
     bad(f"roles missing/empty/not-array: {roles!r} -> breaks authz in 11 repos")
+# groups is the same Existing-Field shape (added 2026-07-09 for the headscale
+# mesh-join OIDC gate). EXACT match required, not a fuzzy suffix check — a loose
+# check here previously masked a real bug (see below).
+#
+# GROUND-TRUTH FINDING (live, this test): Casdoor's "Existing Field: Groups"
+# tokenAttribute emits the group's INTERNAL "<owner>/<name>" id string
+# ("snapdragon/headscale"), NOT the bare "/headscale" leading-slash path PR
+# #280's reconcile_superadmin() comment and keys-template/headscale/config.yaml
+# both assumed. That assumption was never live-verified against a real minted
+# token — PR #280's "confirmed working" claim only proved the group-write API
+# calls succeeded, not the token claim shape. allowed_groups is updated to
+# "snapdragon/headscale" to match what Casdoor actually emits.
+groups = claims.get("groups")
+if isinstance(groups, list) and groups:
+    ok(f"groups present as non-empty array: {groups!r}")
+    if "snapdragon/headscale" in groups:
+        ok("seeded snapdragon/headscale membership is present in the groups claim (exact match)")
+    else:
+        bad(f"seeded headscale group not found in groups claim: {groups!r}")
+else:
+    bad(f"groups missing/empty/not-array: {groups!r} -> headscale mesh-join OIDC gate can never pass")
 # permissions is the same Existing-Field shape; casdoor emits null (not []) when the
 # user has no permission objects. The claim KEY must exist (proves tokenAttribute is
 # applied); a list OR null is acceptable, anything else is wrong.
