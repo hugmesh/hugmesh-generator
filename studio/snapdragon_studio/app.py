@@ -135,9 +135,11 @@ def main(argv=None) -> int:
     if QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
         from .gui.tray import MeshTray, StackTray
         if show_mesh:
-            trays.append(MeshTray(args.generator_dir, on_open_studio=open_studio))
+            trays.append(MeshTray(args.generator_dir, on_open_studio=open_studio,
+                                  on_open_golive=open_golive))
         if show_stack:
-            trays.append(StackTray(args.generator_dir, on_open_studio=open_studio))
+            trays.append(StackTray(args.generator_dir, on_open_studio=open_studio,
+                                   on_open_golive=open_golive))
         for tray in trays:
             tray.show()
         if trays:

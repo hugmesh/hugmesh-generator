@@ -2074,14 +2074,25 @@ gate_env_apps() {
 # (absent-by-default) go-live marker, so there is no separate build-time
 # nftables.conf to keep in sync.
 bake_host_firewall() {
-    mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/etc/init.d" "${SYSROOT}/etc/cron.d" "${SYSROOT}/etc/snapdragon"
+    mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/usr/lib/snapdragon" "${SYSROOT}/etc/init.d" "${SYSROOT}/etc/cron.d" "${SYSROOT}/etc/snapdragon"
     cp "${SHARED_SPECS}/usr/sbin/snapdragon-firewall-reconcile"   "${SYSROOT}/usr/sbin/snapdragon-firewall-reconcile"
     chmod +x "${SYSROOT}/usr/sbin/snapdragon-firewall-reconcile"
     cp "${SHARED_SPECS}/etc/init.d/snapdragon-firewall-reconcile" "${SYSROOT}/etc/init.d/snapdragon-firewall-reconcile"
     chmod +x "${SYSROOT}/etc/init.d/snapdragon-firewall-reconcile"
     cp "${SHARED_SPECS}/etc/cron.d/snapdragon-firewall-reconcile" "${SYSROOT}/etc/cron.d/snapdragon-firewall-reconcile"
+    # ── Go-Live wizard: the human-facing effector of this same firewall-reconcile /
+    #    release-state mechanism (driver writes /etc/snapdragon/go-live; reconcile
+    #    converges <=60s). Baked unconditionally alongside reconcile — inert until the
+    #    marker is written. Front-ends: -cli (thin CLI) and -menu (thin ncurses console).
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-go-live"              "${SYSROOT}/usr/sbin/snapdragon-go-live"
+    chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live"
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-go-live-cli"          "${SYSROOT}/usr/sbin/snapdragon-go-live-cli"
+    chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live-cli"
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-go-live-menu"         "${SYSROOT}/usr/sbin/snapdragon-go-live-menu"
+    chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live-menu"
+    cp "${SHARED_SPECS}/usr/lib/snapdragon/go-live-providers.sh"  "${SYSROOT}/usr/lib/snapdragon/go-live-providers.sh"
     echo "${RELEASE_STATE:-internal}" > "${SYSROOT}/etc/snapdragon/release-state"
-    info "RELEASE_STATE=${RELEASE_STATE:-internal}: baked the host nftables backstop (snapdragon-firewall-reconcile renders + loads the live ruleset at boot + every 60s)"
+    info "RELEASE_STATE=${RELEASE_STATE:-internal}: baked the host nftables backstop (snapdragon-firewall-reconcile renders + loads the live ruleset at boot + every 60s) + the go-live wizard (driver/registry/CLI/ncurses front-ends)"
 }
 
 # Rebrand the baked cluster tree (no-op for default snapdragon naming).
