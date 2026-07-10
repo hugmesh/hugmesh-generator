@@ -1,0 +1,34 @@
+'use strict';
+// build.js — trivial, dependency-free builder for the base-absent login-ui
+// skeleton. Emits a static, titled bundle under dist/. Runs fully OFFLINE (pure
+// Node stdlib) so `npm ci && npm run build` needs no network and no registry.
+//
+// This is the fallback path only. When the Tier-2 base is pullable, the real
+// Angular native-federation build produces the remote; this exists so a tenant
+// with no reachable base still gets a bootable, branded holding page.
+
+const fs = require('fs');
+const path = require('path');
+
+const SRC = path.join(__dirname, 'src', 'index.html');
+const DIST = path.join(__dirname, 'dist');
+
+const html = fs.readFileSync(SRC, 'utf8');
+
+const m = html.match(/<title>([^<]*)<\/title>/);
+if (!m || !m[1].trim()) {
+  process.stderr.write('[skeleton-build] FATAL: no non-empty <title> in src/index.html\n');
+  process.exit(1);
+}
+const title = m[1].trim();
+
+fs.mkdirSync(DIST, { recursive: true });
+fs.writeFileSync(path.join(DIST, 'index.html'), html);
+// A tiny runtime stub so the served bundle is self-contained.
+fs.writeFileSync(
+  path.join(DIST, 'snap-config.js'),
+  '// runtime SPA config is injected by docker-entrypoint.d at container start.\n'
+    + 'window.__SNAP_TITLE__ = ' + JSON.stringify(title) + ';\n'
+);
+
+process.stdout.write('[skeleton-build] OK: emitted dist/index.html titled "' + title + '"\n');

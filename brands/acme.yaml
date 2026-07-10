@@ -1,0 +1,68 @@
+# brands/acme.yaml — STRUCTURED brand schema + repos[] tenant-set MANIFEST (Phase 4).
+#
+# One command instantiates the whole N-repo tenant set from this file:
+#   scripts/render-tenant-set.sh brands/acme.yaml --enable-repo-tree --out-dir out
+#
+# The 7 scalar tokens degrade to shell via load-brand-schema.js (unchanged path).
+# repos[] is read as STRUCTURED data by the Node driver ONLY — never eval'd as
+# shell — so list data cannot inject on the signed-export path.
+
+brand: acme
+title: Acme Arcade
+org: acme
+
+domains:
+  - acme.games
+
+release_state: internal
+
+mesh:
+  headscale_url: https://headscale.acme.games
+  tag: tag:acme
+
+# Optional-service toggles (structured; the driver instantiates exactly the
+# installed set). These name-level flags mirror the per-repo repos[].installed.
+services:
+  - name: gateway
+    installed: true
+  - name: forum
+    installed: true
+
+# ── repos[] TENANT-SET MANIFEST ─────────────────────────────────────────────
+# {name, archetype, installed, identity}. `base` defaults to snapdragon-<name>;
+# the overlay is archetype-derived (templates/archetypes/<archetype>), NOT a
+# per-repo hand overlay. `identity` carries per-repo, NON-brand code identity as
+# render tokens (angular-mfe: app_slug/title_word; gateway: profile). Spring-BFF
+# code identity (app name / artifactId / packages-to-scan / OIDC app) stays
+# LITERAL in the base and is intentionally NOT a render token, so BFF rows carry
+# no identity. installed:false drops exactly that repo from the render.
+repos:
+  # ── Spring-BFF class (8) ──────────────────────────────────────────────────
+  - { name: admin-bff-api,    archetype: spring-bff,  installed: true }
+  - { name: user-bff-api,     archetype: spring-bff,  installed: true }
+  - { name: mod-bff-api,      archetype: spring-bff,  installed: true }
+  - { name: forum-bff-api,    archetype: spring-bff,  installed: true }
+  - { name: owncast-bff-api,  archetype: spring-bff,  installed: true }
+  - { name: tube-bff-api,     archetype: spring-bff,  installed: true }
+  - { name: wiki-bff-api,     archetype: spring-bff,  installed: true }
+  - { name: federation-api,   archetype: spring-bff,  installed: true }
+
+  # ── Angular-MFE class (13) ────────────────────────────────────────────────
+  - { name: login-ui,   archetype: angular-mfe, installed: true, identity: { app_slug: login,   title_word: Login } }
+  - { name: admin-ui,   archetype: angular-mfe, installed: true, identity: { app_slug: admin,   title_word: Admin } }
+  - { name: user-ui,    archetype: angular-mfe, installed: true, identity: { app_slug: user,    title_word: User } }
+  - { name: mod-ui,     archetype: angular-mfe, installed: true, identity: { app_slug: mod,     title_word: Mod } }
+  - { name: matrix-ui,  archetype: angular-mfe, installed: true, identity: { app_slug: matrix,  title_word: Matrix } }
+  - { name: mastodon-ui,archetype: angular-mfe, installed: true, identity: { app_slug: mastodon,title_word: Mastodon } }
+  - { name: owncast-ui, archetype: angular-mfe, installed: true, identity: { app_slug: owncast, title_word: Owncast } }
+  - { name: tube-ui,    archetype: angular-mfe, installed: true, identity: { app_slug: tube,    title_word: Tube } }
+  - { name: wiki-ui,    archetype: angular-mfe, installed: true, identity: { app_slug: wiki,    title_word: Wiki } }
+  - { name: forum-ui,   archetype: angular-mfe, installed: true, identity: { app_slug: forum,   title_word: Forum } }
+  - { name: api-docs,   archetype: angular-mfe, installed: true, identity: { app_slug: docs,    title_word: Docs } }
+  - { name: character-studio-ui,          archetype: angular-mfe, installed: true, identity: { app_slug: character-studio, title_word: Studio } }
+  - { name: superadmin-service-catalog-ui, archetype: angular-mfe, installed: true, identity: { app_slug: service-catalog,  title_word: Catalog } }
+
+  # ── Gateway / infra class (3) ─────────────────────────────────────────────
+  - { name: gateway,         archetype: gateway, installed: true, identity: { profile: be } }
+  - { name: actions,         archetype: gateway, installed: true }
+  - { name: remote-fragment, archetype: gateway, installed: true }
