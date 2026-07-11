@@ -329,6 +329,16 @@ services:
       # account + session + custody. INTERNAL_TOKEN unset -> InternalTokenWebFilter no-ops.
       SPRING_PROFILES_ACTIVE: ${ADMIN_BFF_PROFILES:-casdoor,dev}
       SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
+      # Provision broker (AuthController POST /provision/{matrix,mastodon}): the app
+      # defaults for broker.synapse-url / broker.mastodon-url are cluster-DNS hosts,
+      # unresolvable in compose — point them at the compose social tier (profile
+      # `social`; when it's down the provision legs fail with a named 502, same as
+      # any other absent upstream). Email domain: same contract + value as user-bff's
+      # APP_HS_TOKEN_MASTODON_EMAIL_DOMAIN above (admin-bff-api reads
+      # broker.mastodon-email-domain <- MASTODON_EMAIL_DOMAIN).
+      SYNAPSE_URL: ${SYNAPSE_URL:-http://synapse:8008}
+      MASTODON_URL: ${ADMIN_BFF_MASTODON_URL:-http://mastodon-web:3000}
+      MASTODON_EMAIL_DOMAIN: ${MASTODON_EMAIL_DOMAIN:-e2e.local}
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
       SPRING_R2DBC_URL: "r2dbc:postgresql://admin-bff-db:5432/adminbff"
       SPRING_R2DBC_USERNAME: adminbff
@@ -507,6 +517,13 @@ services:
       # mint (any login mode) refused with "svc-password is unset" on the local stack.
       # Same env-name-misnomer class as the FEDERATION_BASE_URL fix in #314.
       APP_HS_TOKEN_SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
+      # Email domain for broker-owned Mastodon accounts (user-bff-api's mastodon mint
+      # authenticates the password grant by EMAIL and the register leg must supply one:
+      # <localpart>@<this-domain>). MUST be a domain mastodon-web accepts —
+      # tests/stack/.mastodon.env allowlists e2e.local (EMAIL_DOMAIN_ALLOWLIST), the
+      # same domain seed-e2e.sh's tootctl accounts already use. Unset → mastodon mints
+      # fail closed 503 (matrix leg unaffected).
+      APP_HS_TOKEN_MASTODON_EMAIL_DOMAIN: ${APP_HS_TOKEN_MASTODON_EMAIL_DOMAIN:-e2e.local}
       # POST /bff/user/notifications/test-seed — e2e-fixture-only route. Ships dark upstream
       # (app.test-seed.enabled=false / APP_TEST_SEED_ENABLED unset); turned ON for the
       # test env so e2e seeding scripts can prime notifications data (user-bff-api#97).
