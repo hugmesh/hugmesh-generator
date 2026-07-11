@@ -1962,6 +1962,10 @@ gate_optional_services() {
     # Re-render the installed-services ConfigMap from the surviving selection so the
     # runtime ApplicationSet + admin console see the build-time install-state.
     _opt_render_installed_services
+    # Seed each per-slug OptionalService CR's `enabled` from the SAME selection so the
+    # (dark-by-default) admin-bff OptionalServiceReconciler's desired-state baseline
+    # matches this build (a USB built WITHOUT a slug ships its CR enabled:false).
+    _opt_render_optionalservice_cr
 }
 # Fix the dangling trailing comma left when the LAST VALUES row of an INSERT was
 # pruned: rewrite the trailing '),' of the final data row before 'ON CONFLICT' to
@@ -2070,6 +2074,40 @@ _opt_render_installed_services() {
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
     done
     info "OPTIONAL_SERVICES: rendered installed-services ConfigMap (selected: ${OPTIONAL_SERVICES:-none})"
+}
+# Flip the `enabled:` value of ONE OptionalService CR (the block whose `slug: <slug>`)
+# in the baked seed file. awk anchors on the slug line then rewrites the FIRST enabled
+# line after it, preserving indentation (sub only touches the matched substring). The
+# end-anchored slug compare keeps edge-ai distinct from edge-ai-analysis/edge-ai-tts.
+_opt_set_cr_enabled() {
+    local f="$1" slug="$2" val="$3"
+    [ -f "${f}" ] || return 0
+    awk -v slug="${slug}" -v val="${val}" '
+        /^[[:space:]]*slug:[[:space:]]/ {
+            s=$0; sub(/^[[:space:]]*slug:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s)
+            arm=(s==slug)
+        }
+        arm && /^[[:space:]]*enabled:[[:space:]]*(true|false)[[:space:]]*$/ {
+            sub(/enabled:[[:space:]]*(true|false)/, "enabled: " val); arm=0
+        }
+        { print }
+    ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
+}
+# Seed the per-slug OptionalService CRs (manifests/optional-services-operator/
+# seed-optionalservices.yaml) from the resolved OPTIONAL_SERVICES selection, mirroring
+# _opt_render_installed_services above (the CR is the runtime desired-state twin of the
+# installed-services ConfigMap boolean). coturn stays at its false baseline (not in the
+# selection loop, matching the ConfigMap); anubis is ENV-conditional and is NOT rewritten
+# on x86 (as with the ConfigMap here) — its CR keeps the safe test baseline.
+_opt_render_optionalservice_cr() {
+    local seed="${SYSROOT}/var/lib/snapdragon/cluster/manifests/optional-services-operator/seed-optionalservices.yaml"
+    [ -f "${seed}" ] || return 0
+    local slug val
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio edge-ai edge-ai-analysis edge-ai-tts; do
+        if _opt_selected "${slug}"; then val="true"; else val="false"; fi
+        _opt_set_cr_enabled "${seed}" "${slug}" "${val}"
+    done
+    info "OPTIONAL_SERVICES: seeded OptionalService CR enabled flags (selected: ${OPTIONAL_SERVICES:-none})"
 }
 # Parameterize the games-realm OIDC identity on GAMES_DOMAIN. rebrand_sysroot does
 # NOT touch the .games literals (its rules match snapdragon.systems / snapdragon-),

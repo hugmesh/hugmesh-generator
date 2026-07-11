@@ -1,0 +1,52 @@
+# optional-services-operator — deploys the OptionalService CRD (the platform's FIRST
+# CRD), the least-privilege operator/BFF RBAC, and the inert per-slug seed CRs. This
+# is the desired-state API surface for the LIVE add/remove of an optional cluster
+# service; the reconciling controller lives in admin-bff (systems.snapdragon.adminbff.
+# optionalservices) and SHIPS DARK (app.optional-services.reconcile.enabled=false).
+# See docs/OPTIONAL-SERVICES.md §7/§10 + manifests/optional-services-operator/.
+#
+# sync-wave "-1": the CRD lands BEFORE the default-wave (0) apps — including
+# apps/13a-optional-services.yaml (the ApplicationSet the controller writes) — so the
+# API is present early. SkipDryRunOnMissingResource=true covers the first-sync race
+# where the seed CRs are dry-run before the CRD is Established.
+#
+# ⚠ ignoreDifferences KEYSTONE (the CR half): the seed CRs carry a DEFAULT `enabled`
+# baseline, but the whole point is that an admin/superadmin (or the BFF endpoint)
+# TOGGLES enabled at runtime. Without ignoreDifferences, this Application's selfHeal
+# would REVERT every admin toggle back to the git seed on the next sync. So the
+# admin-mutable fields (/spec/enabled, /spec/reason, /spec/requestedBy) are ignored
+# (+ RespectIgnoreDifferences=true), while the CRD, RBAC, and /spec/slug stay
+# selfHeal-enforced. The controller-owned write targets (13a elements + the
+# installed-services ConfigMap) have their OWN ignoreDifferences on the roots +
+# apps/16 — see those files.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: optional-services-operator
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/optional-services-operator
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: devops
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions:
+      - CreateNamespace=false
+      - SkipDryRunOnMissingResource=true
+      - RespectIgnoreDifferences=true
+  # The admin-mutable desired-state fields diverge from the git seed at runtime; let
+  # them (selfHeal keeps the CRD/RBAC/slug converged, not the toggle).
+  ignoreDifferences:
+    - group: platform.snapdragon.systems
+      kind: OptionalService
+      jsonPointers:
+        - /spec/enabled
+        - /spec/reason
+        - /spec/requestedBy

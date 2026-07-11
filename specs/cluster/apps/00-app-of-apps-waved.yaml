@@ -53,3 +53,18 @@ spec:
     syncOptions:
       - CreateNamespace=true
       - ApplyOutOfSyncOnly=true
+      # KEYSTONE (mirrors ../app-of-apps.yaml): RESPECT the ignoreDifferences below
+      # so a deliberate sync of THIS root does not revert the admin-bff
+      # OptionalServiceReconciler's runtime write of the optional-services
+      # ApplicationSet element list. See docs/OPTIONAL-SERVICES.md §7/§10.
+      - RespectIgnoreDifferences=true
+  # Single-writer field owned by the admin-bff OptionalServiceReconciler (the
+  # optional-services ApplicationSet element `installed` flags). Kept identical to
+  # the default recurse root so BOTH topologies honour the runtime toggle.
+  ignoreDifferences:
+    - group: argoproj.io
+      kind: ApplicationSet
+      name: optional-services
+      namespace: devops
+      jsonPointers:
+        - /spec/generators/0/list/elements

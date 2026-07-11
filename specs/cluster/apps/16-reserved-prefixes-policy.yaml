@@ -26,7 +26,35 @@ spec:
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     # Replace=false; ClusterPolicy is cluster-scoped but kustomize emits it fine.
-    syncOptions: [CreateNamespace=true]
+    # RespectIgnoreDifferences=true: the KEYSTONE half for the installed-services
+    # ConfigMap mirror — selfHeal must NOT revert the admin-bff
+    # OptionalServiceReconciler's runtime write of the per-slug greying booleans
+    # (docs/OPTIONAL-SERVICES.md §7). services.json + workloadConsole + the
+    # reserved-prefixes ConfigMap stay fully selfHeal-enforced (not ignored).
+    syncOptions: [CreateNamespace=true, RespectIgnoreDifferences=true]
+  # The 12 cluster-service boolean keys of the installed-services ConfigMap are the
+  # runtime greying mirror the OptionalServiceReconciler owns (a targeted merge-patch
+  # of exactly these keys). Let ONLY these diverge from git; every other key
+  # (services.json, workloadConsole) stays git-enforced. Keep this list in sync with
+  # the OptionalService CRD slug enum + the reconciler's OptionalServiceRegistry.
+  ignoreDifferences:
+    - group: ""
+      kind: ConfigMap
+      name: installed-services
+      namespace: snapdragon-policy
+      jsonPointers:
+        - /data/akkoma
+        - /data/tuwunel
+        - /data/phpbb
+        - /data/games
+        - /data/owncast
+        - /data/tube
+        - /data/character-studio
+        - /data/anubis
+        - /data/coturn
+        - /data/edge-ai
+        - /data/edge-ai-analysis
+        - /data/edge-ai-tts
   # Health: ArgoCD treats Kyverno ClusterPolicy ready-state via its status; no
   # extra config needed. If Kyverno is not yet installed the ClusterPolicy apply
   # waits for its CRD (wave ordering above guarantees it).
