@@ -254,19 +254,48 @@ publish_one() {
 
   # ── Phase 7 LAUNDER-REFUSAL: never push a FOREIGN base that A's inbound gate
   #    did not admit ────────────────────────────────────────────────────────────
-  # A foreign cache entry (pull-repo-base.sh --foreign fetches into
-  # ${REPO_BASE_CACHE}/foreign/<mesh>/snapdragon-<repo>) is the DURABLE signal that
-  # this repo's render MAY have consumed FOREIGN bytes. Publishing then REQUIRES the
-  # base's inbound admission STAMP — the '.snapdragon-mesh-admitted' receipt
-  # scripts/ingest-foreign-base.sh promotes into its quarantine snapshot — to be
-  # present for this mesh AND to re-verify RIGHT NOW: verified=1, the stamp's mesh-id
-  # equals the foreign cache mesh, its pinned-digest is a well-formed immutable digest,
-  # and a recomputed canonical tree digest of the admitted snapshot equals the stamped
-  # tree-sha256 (so a snapshot mutated after admission is caught). A missing / stale /
-  # forged / mutated stamp is _die — unverified foreign code is NEVER re-pushed to
-  # tenant Forgejo wearing OUR fresh provenance. This is a fail-closed belt on top of
-  # the render-time gate (render-repo-tree.sh --foreign-mesh runs the SAME gate before
-  # it emits BRAND_OUT); the publish tail refuses independently.
+  # Foreign origin is detected by TWO signals, in priority order:
+  #   (1) DURABLE, PRIMARY — the in-tree base-origin marker (.snapdragon-base-origin.json)
+  #       render-repo-tree.sh --foreign-mesh writes into a foreign-overlay BRAND_OUT.
+  #       It TRAVELS WITH THE TREE, so it SURVIVES a REPO_BASE_CACHE purge — closing
+  #       the residual medium where deleting the foreign cache dir after render but
+  #       before publish made this tail treat foreign-DERIVED bytes as own-mesh and
+  #       re-sign+push them with NO stamp re-verify.
+  #   (2) CORROBORATING, SECONDARY — a foreign cache clone at
+  #       ${REPO_BASE_CACHE}/foreign/<mesh>/snapdragon-<repo> (pull-repo-base.sh
+  #       --foreign). It can be removed; the marker cannot (it is inside the tree we
+  #       are about to publish).
+  # If EITHER fires, publishing REQUIRES the base's inbound admission STAMP — the
+  # '.snapdragon-mesh-admitted' receipt scripts/ingest-foreign-base.sh promotes into
+  # its quarantine snapshot — present for this mesh AND re-verified RIGHT NOW:
+  # verified=1, mesh-id match, well-formed immutable pin, and a recomputed canonical
+  # tree digest of the admitted snapshot == the stamped tree-sha256 (so a snapshot
+  # mutated after admission is caught). A missing / stale / forged / mutated stamp is
+  # _die — unverified foreign code is NEVER re-pushed to tenant Forgejo wearing OUR
+  # fresh provenance. A tree carrying the marker can NEVER be published without a valid
+  # re-verified stamp, even if the cache is gone. A planted marker only makes publish
+  # MORE strict (it forces the stamp requirement), never less. This is a fail-closed
+  # belt on top of the render-time gate (render-repo-tree.sh --foreign-mesh runs the
+  # SAME gate before it emits BRAND_OUT); the publish tail refuses independently.
+  #
+  # DURABLE marker (primary): parse + shape-validate our own outbound base-origin
+  # provenance. Present ONLY on a foreign-overlay tree; absent for own-mesh/skeleton.
+  local marker="${dir}/.snapdragon-base-origin.json"
+  local marker_mesh="" marker_pin="" marker_tree=""
+  if [[ -f "$marker" ]]; then
+    command -v jq >/dev/null 2>&1 || _die "jq required to parse foreign base-origin marker ${marker} — fail-closed"
+    jq -e . "$marker" >/dev/null 2>&1 || _die "base-origin marker ${marker} is not valid JSON — refusing (launder-refusal)"
+    marker_mesh="$(jq -r '.originMesh   // empty' "$marker" 2>/dev/null)"
+    marker_pin="$( jq -r '.pinnedDigest // empty' "$marker" 2>/dev/null)"
+    marker_tree="$(jq -r '.treeSha256   // empty' "$marker" 2>/dev/null)"
+    [[ "$marker_mesh" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
+      || _die "base-origin marker originMesh '${marker_mesh}' is not a DNS label — refusing (launder-refusal)"
+    [[ "$marker_pin" =~ ^[0-9a-f]{40}$ || "$marker_pin" =~ ^[0-9a-f]{64}$ ]] \
+      || _die "base-origin marker pinnedDigest '${marker_pin}' is not a 40/64-hex immutable digest — refusing (launder-refusal)"
+    [[ "$marker_tree" =~ ^[0-9a-f]{64}$ ]] \
+      || _die "base-origin marker treeSha256 '${marker_tree}' is not a 64-hex tree digest — refusing (launder-refusal)"
+  fi
+  # CORROBORATING foreign cache clone (secondary) — same ambiguity guards as before.
   local fd foreign_dir=""
   for fd in "${REPO_BASE_CACHE}"/foreign/*/"snapdragon-${repo}"; do
     [[ -d "$fd" ]] || continue
@@ -275,19 +304,37 @@ publish_one() {
     foreign_dir="$fd"
   done
   local cache_clone="${REPO_BASE_CACHE}/snapdragon-${repo}"
-  if [[ -n "$foreign_dir" ]]; then
+  local foreign_cache_mesh=""
+  [[ -n "$foreign_dir" ]] && foreign_cache_mesh="$(basename "$(dirname "$foreign_dir")")"
+
+  # Resolve the foreign origin mesh from the DURABLE marker FIRST, corroborated by the
+  # cache; else fall back to the cache alone (pre-marker trees). Any own-mesh cache
+  # clone co-existing with a foreign signal is ambiguous -> refuse.
+  if [[ -n "$marker_mesh" ]]; then
+    origin_mesh="$marker_mesh"
+    [[ -d "${cache_clone}/.git" ]] \
+      && _die "foreign base-origin marker present AND an own-mesh cache clone exists for snapdragon-${repo} — ambiguous base origin (provenance would lie); purge one before publishing"
+    if [[ -n "$foreign_cache_mesh" && "$foreign_cache_mesh" != "$origin_mesh" ]]; then
+      _die "base-origin marker mesh '${origin_mesh}' != foreign cache mesh '${foreign_cache_mesh}' for snapdragon-${repo} — ambiguous base origin; refusing (launder-refusal)"
+    fi
+  elif [[ -n "$foreign_dir" ]]; then
     [[ -d "${cache_clone}/.git" ]] \
       && _die "BOTH an own-mesh and a foreign base cache entry exist for snapdragon-${repo} — ambiguous base origin (provenance would lie); purge one before publishing"
-    origin_mesh="$(basename "$(dirname "$foreign_dir")")"
+    origin_mesh="$foreign_cache_mesh"
     [[ "$origin_mesh" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
       || _die "foreign cache mesh dir '${origin_mesh}' is not a DNS label"
+  fi
+
+  if [[ -n "$origin_mesh" ]]; then
     # Locate THIS mesh's inbound admission stamp — the '.snapdragon-mesh-admitted'
     # receipt scripts/ingest-foreign-base.sh promotes into its per-run quarantine
     # snapshot (pull-repo-base.sh --foreign leaves it under
-    # ${REPO_BASE_CACHE}/.mesh-quarantine/<repo>/<mesh>-<digest16>/). The foreign
-    # clone above is the DURABLE origin signal; THIS stamp is the receipt that must
-    # accompany it. Read the pin FROM the stamp (git-independent — the practical
-    # foreign path pins a synthetic immutable digest via *_BASE_DIR, not a git HEAD).
+    # ${REPO_BASE_CACHE}/.mesh-quarantine/<repo>/<mesh>-<digest16>/). The marker (in
+    # the tree) and/or the foreign clone is the DURABLE origin signal; THIS stamp is
+    # the receipt that must accompany it. Read the pin FROM the stamp (git-independent
+    # — the practical foreign path pins a synthetic immutable digest via *_BASE_DIR,
+    # not a git HEAD). If the cache (incl. this quarantine) was purged, no stamp is
+    # found and we _die below — a marker-bearing tree is NEVER laundered stamp-less.
     local stamp="" s
     for s in "${REPO_BASE_CACHE}/.mesh-quarantine/${repo}/${origin_mesh}"-*/.snapdragon-mesh-admitted; do
       [[ -f "$s" ]] || continue
@@ -309,6 +356,15 @@ publish_one() {
       || _die "admission stamp mesh-id '${s_mesh}' != foreign cache mesh '${origin_mesh}' — refusing (launder-refusal)"
     [[ "$s_pin" =~ ^[0-9a-f]{40}$ || "$s_pin" =~ ^[0-9a-f]{64}$ ]] \
       || _die "admission stamp pinned-digest '${s_pin}' is not a 40/64-hex immutable digest — refusing (launder-refusal)"
+    # DURABLE-MARKER CROSS-BIND: when the in-tree marker is present it MUST AGREE with
+    # the re-verified stamp (same pin + same admitted tree digest), so a planted marker
+    # can never point publish at an unrelated mesh's stamp — it only ever tightens.
+    if [[ -n "$marker_mesh" ]]; then
+      [[ "$marker_pin" == "$s_pin" ]] \
+        || _die "base-origin marker pinnedDigest '${marker_pin}' != admission stamp pinned-digest '${s_pin}' — refusing (launder-refusal)"
+      [[ "$marker_tree" == "$s_tree" ]] \
+        || _die "base-origin marker treeSha256 '${marker_tree}' != admission stamp tree-sha256 '${s_tree}' — refusing (launder-refusal)"
+    fi
     # Recompute the admitted snapshot's canonical tree digest with the gate's OWN
     # helper (sourced in a subshell so the gate's 'set -uo pipefail' can NEVER leak
     # in and disable our errexit). Must equal the stamped tree-sha256 or the snapshot
@@ -319,7 +375,7 @@ publish_one() {
       || _die "admitted snapshot ${admit_snap} tree digest (${recomputed:-<none>}) != stamped tree-sha256 (${s_tree}) — snapshot mutated after admission, refusing (launder-refusal)"
     base_sha="$s_pin"
     base_mode="foreign-overlay"
-    _log "  foreign base admission re-verified (mesh=${origin_mesh} sha=${base_sha}, stamp tree-digest OK) — provenance records base.originMesh"
+    _log "  foreign base admission re-verified (mesh=${origin_mesh} sha=${base_sha}, stamp tree-digest OK, in-tree marker=${marker_mesh:+present}) — provenance records base.originMesh"
   elif [[ -d "${cache_clone}/.git" ]]; then
     base_sha="$(git -C "$cache_clone" rev-parse HEAD 2>/dev/null || echo "")"
     base_mode="overlay"

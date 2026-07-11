@@ -885,6 +885,82 @@ EOF
     || { bad "(launder) PUSH/CURL fired"; sed 's/^/        /' "$PLOG" "$CLOG" 2>/dev/null; }
   [ "$("${REAL_GIT}" -C "${LBARE}/acme-login-ui.git" rev-parse main 2>/dev/null)" = "$LMAIN" ] \
     && ok "(launder) bare remote unchanged (nothing pushed after refusal)" || bad "(launder) remote MOVED after refusal"
+
+  echo
+  echo "  -- CACHE-PURGE sub-case: the DURABLE in-tree base-origin marker survives a foreign-cache purge --"
+  # THE RESIDUAL MEDIUM: publish's foreign-origin detection keyed SOLELY off the
+  # REMOVABLE foreign cache dir. Purged after render but before publish, the pre-fix
+  # publish saw NO foreign signal, treated the foreign-DERIVED tree as own-mesh, and
+  # re-signed+PUSHED it with no stamp re-verify. THE FIX: render writes a durable,
+  # OUR-authored .snapdragon-base-origin.json INTO BRAND_OUT that TRAVELS with the tree;
+  # publish keys off THAT fail-closed. This case renders a foreign-overlay tree, then
+  # `rm -rf`s the ENTIRE foreign cache (clone + quarantine stamp), then publishes: the
+  # marker still forces the foreign path so publish REFUSES the now-stamp-less tree and
+  # pushes NOTHING. OLD-vs-NEW: with the marker ALSO removed (pre-fix state — no marker,
+  # no cache, no stamp) the SAME purged tree publishes as own-mesh (the exact laundering
+  # the marker closes), pushing to a separate bare remote.
+  CPCACHE="${WORK}/cpcache"; mkdir -p "$CPCACHE"
+  CPBASE="${WORK}/cpbase"; mkclean_base "$CPBASE"
+  CPPIN="$(digest_of cachepurge)"; sign_base "$CPBASE" "$PRIV" "$MESH" "$CPPIN" 5
+  CPANCHOR="$(_fib_tree_digest "$CPBASE")"
+  # durable admitted snapshot + stamp (pull --foreign) + the foreign clone signal.
+  REPO_BASE_CACHE="$CPCACHE" MESH_REGISTRY="$LREG" MESH_TRUST_STORE="$TRUST" \
+     LOGIN_UI_BASE_DIR="$CPBASE" OFFLINE=1 FIB_ADVISORY_FLOOR_DEFAULT="$ADVISORY" \
+     FOREIGN_PINNED_TREE_SHA256="$CPANCHOR" \
+     bash "$PRB" --foreign --mesh "$MESH" --pinned-digest "$CPPIN" login-ui >/dev/null 2>"${WORK}/cpprb.err"
+  mkdir -p "${CPCACHE}/foreign/${MESH}"; cp -r "$CPBASE" "${CPCACHE}/foreign/${MESH}/snapdragon-login-ui"
+  # render the foreign-overlay tree (writes the durable base-origin marker into BRAND_OUT).
+  CPOUT="${WORK}/cpout"; rm -rf "$CPOUT"
+  if (cd "$REPO" && MESH_REGISTRY="$LREG" bash "$RRT" "${BRANDCONF}" --enable-repo-tree --repo login-ui --archetype angular-mfe \
+        --out-dir "$CPOUT" --base "$CPBASE" --foreign-mesh "$MESH" --pinned-digest "$CPPIN" \
+        --pinned-tree-sha256 "$CPANCHOR" \
+        --trust-store "$TRUST" --min-generation 0 --set APP_SLUG=login --set TITLE_WORD=Login >/dev/null 2>"${WORK}/cprender.err") \
+     && [ -d "${CPOUT}/acme-login-ui" ]; then ok "(cache-purge) foreign-overlay tree rendered"
+  else bad "(cache-purge) render failed: $(tail -3 "${WORK}/cprender.err")"; fi
+  CPMARK="${CPOUT}/acme-login-ui/.snapdragon-base-origin.json"
+  if [ -f "$CPMARK" ] \
+     && [ "$(jq -r '.originMesh'   "$CPMARK" 2>/dev/null)" = "$MESH" ] \
+     && [ "$(jq -r '.pinnedDigest' "$CPMARK" 2>/dev/null)" = "$CPPIN" ] \
+     && [ "$(jq -r '.treeSha256'   "$CPMARK" 2>/dev/null)" = "$CPANCHOR" ]; then
+    ok "(cache-purge) render wrote a durable OUR-authored base-origin marker (originMesh+pinnedDigest+treeSha256)"
+  else bad "(cache-purge) render did not write a well-formed base-origin marker at ${CPMARK}"; fi
+  # PURGE the entire foreign cache (clone + quarantine stamp) — the pre-fix signal is gone.
+  CPSTAMP="${CPCACHE}/.mesh-quarantine/login-ui/${MESH}-${CPPIN:0:16}/.snapdragon-mesh-admitted"
+  [ -f "$CPSTAMP" ] && ok "(cache-purge) durable admission stamp present pre-purge" || bad "(cache-purge) no stamp pre-purge: $(tail -2 "${WORK}/cpprb.err")"
+  rm -rf "${CPCACHE}/foreign" "${CPCACHE}/.mesh-quarantine"
+  { [ ! -e "${CPCACHE}/foreign/${MESH}/snapdragon-login-ui" ] && [ ! -f "$CPSTAMP" ]; } \
+    && ok "(cache-purge) foreign cache clone + quarantine stamp purged (pre-fix cache-scan is now blind)" \
+    || bad "(cache-purge) cache not fully purged"
+  # (NEW) publish WITH the durable marker present + cache/stamp gone -> MUST refuse, push nothing.
+  CPBARE="${WORK}/cpbare"; mkdir -p "$CPBARE"; "${REAL_GIT}" init -q --bare "${CPBARE}/acme-login-ui.git"
+  : > "$PLOG"; : > "$CLOG"
+  if (cd "$REPO" && PATH="${LSTUB}:${PATH}" REPO_BASE_CACHE="$CPCACHE" FORGEJO_PUSH_TOKEN=dummy \
+        FORGEJO_API_MODE=none FORGEJO_REMOTE_TEMPLATE="file://${CPBARE}/%s.git" \
+        bash "$PUB" "$CPOUT" >/dev/null 2>"${WORK}/cppub.err"); then
+    bad "(cache-purge) publish SUCCEEDED via marker-present + cache-purged (foreign code LAUNDERED past the belt!)"
+  else
+    grep -q "NO .snapdragon-mesh-admitted stamp" "${WORK}/cppub.err" \
+      && ok "(cache-purge) publish detected foreign via the in-tree marker + REFUSED the stamp-less tree (fail-closed)" \
+      || ok "(cache-purge) publish refused (rc!=0): $(grep FATAL "${WORK}/cppub.err" | head -1)"
+  fi
+  { [ ! -s "$PLOG" ] && [ ! -s "$CLOG" ]; } && ok "(cache-purge) nothing pushed onward (0 git-push, 0 curl)" \
+    || { bad "(cache-purge) PUSH/CURL fired despite refusal"; sed 's/^/        /' "$PLOG" "$CLOG" 2>/dev/null; }
+  [ -z "$("${REAL_GIT}" -C "${CPBARE}/acme-login-ui.git" rev-parse --verify main 2>/dev/null)" ] \
+    && ok "(cache-purge) bare remote has no commits (nothing pushed after refusal)" || bad "(cache-purge) remote received a push after refusal"
+  # (OLD-vs-NEW) remove the marker too -> reproduce the PRE-FIX state (no marker, no
+  # cache, no stamp). The pre-fix publish saw NO foreign signal, treated the foreign-
+  # DERIVED tree as own-mesh, and PUSHED it. Assert that here to prove the bypass was
+  # real and the durable marker is precisely what closes it.
+  rm -f "$CPMARK"; rm -rf "${CPOUT}/acme-login-ui/.git"
+  CPBARE2="${WORK}/cpbare-old"; mkdir -p "$CPBARE2"; "${REAL_GIT}" init -q --bare "${CPBARE2}/acme-login-ui.git"
+  : > "$PLOG"; : > "$CLOG"
+  if (cd "$REPO" && PATH="${LSTUB}:${PATH}" REPO_BASE_CACHE="$CPCACHE" FORGEJO_PUSH_TOKEN=dummy \
+        FORGEJO_API_MODE=none FORGEJO_REMOTE_TEMPLATE="file://${CPBARE2}/%s.git" \
+        bash "$PUB" "$CPOUT" >/dev/null 2>"${WORK}/cppub-old.err") && grep -q PUSH "$PLOG"; then
+    ok "(cache-purge OLD-vs-NEW) with the marker ALSO removed the SAME purged tree publishes as own-mesh + PUSHES (pre-fix laundering reproduced -> the marker is what closes it)"
+  else
+    bad "(cache-purge OLD-vs-NEW) marker-less purged tree did NOT publish+push (rc=$?, push=$(grep -c PUSH "$PLOG")) — pre-fix laundering not reproduced: $(grep FATAL "${WORK}/cppub-old.err" | head -1)"
+  fi
 else
   echo "  SKIP publish launder-refusal (node/handlebars unavailable — key-staging + manifest-origin halves still assert above)"
 fi

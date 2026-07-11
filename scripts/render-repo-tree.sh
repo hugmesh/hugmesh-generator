@@ -314,8 +314,11 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
   #    stripped — they attest the INBOUND base, not OUR outbound tree (the publish
   #    tail writes/signs a FRESH provenance for what WE emit), and the markers are
   #    quarantine bookkeeping. Root-anchored: a same-named file in a SUBDIR is not
-  #    an envelope and stays digest-covered/screened by the gate instead.
-  _log "copying read-only base into ${BRAND_OUT} (excluding .git/node_modules/dist/.angular/target + attestation envelope/markers)"
+  #    an envelope and stays digest-covered/screened by the gate instead. ANY
+  #    pre-existing '.snapdragon-base-origin*' is ALSO stripped here (like the
+  #    envelope) so an attacker-planted base-origin marker in the foreign base can
+  #    never survive — OURS is written authoritatively AFTER the copy (below).
+  _log "copying read-only base into ${BRAND_OUT} (excluding .git/node_modules/dist/.angular/target + attestation envelope/markers + any planted base-origin marker)"
   tar -C "$BASE" \
       --exclude='./.git' --exclude='./node_modules' --exclude='./dist' \
       --exclude='./.angular' --exclude='./target' \
@@ -323,7 +326,47 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
       --exclude='./.snapdragon-provenance.json.sig' \
       --exclude='./.snapdragon-sbom.json' \
       --exclude='./.snapdragon-mesh-admitted' \
-      --exclude='./.foreign-mesh-id' -cf - . | tar -C "$BRAND_OUT" -xf -
+      --exclude='./.foreign-mesh-id' \
+      --exclude='./.snapdragon-base-origin*' -cf - . | tar -C "$BRAND_OUT" -xf -
+
+  # ── Phase 7 DURABLE BASE-ORIGIN MARKER (foreign-mesh mode ONLY) ───────────────
+  # The publish launder-belt's foreign-origin detection keyed SOLELY off the
+  # REMOVABLE foreign cache dir (${REPO_BASE_CACHE}/foreign/<mesh>/snapdragon-<repo>).
+  # A purge of that dir after render but before publish left publish blind: it
+  # treated this foreign-DERIVED tree as own-mesh/skeleton and re-signed+pushed it
+  # with NO admission-stamp re-verify. So for a foreign base we write OUR OWN
+  # authoritative, minimal base-origin provenance INTO the emitted tree — it TRAVELS
+  # WITH BRAND_OUT and survives a cache purge, giving publish a fail-closed key
+  # (marker present => a re-verified '.snapdragon-mesh-admitted' stamp is REQUIRED).
+  # This is OUR OUTBOUND lineage (consistent with base.originMesh the publish tail
+  # records in the signed provenance), NOT the foreign mesh's INBOUND attestation
+  # envelope (which stays STRIPPED above). It is written AFTER the strip on OUR
+  # authority, so a planted marker only ever makes publish MORE strict, never less.
+  # Own-mesh (non-foreign) render writes NO such marker — BRAND_OUT stays byte-
+  # identical to pre-Phase-7 for the skeleton/own-mesh paths.
+  if [[ -n "$FOREIGN_MESH" ]]; then
+    # The admitted snapshot's canonical tree digest — read from the gate's OWN stamp
+    # (BASE is the admitted quarantine snapshot; the stamp is excluded from the copy
+    # above but still present in BASE). This is the same digest publish re-verifies
+    # against the durable admission stamp. The marker is deliberately MINIMAL and
+    # entropy-safe: originMesh (DNS label) + pinnedDigest + treeSha256 (bare 40/64-hex
+    # runs sit ~4.0 bits/char, under the secret-scan high-entropy floor). We do NOT
+    # embed a stamp path (a mesh-<digest16> path token mixes letters+hex and can, for
+    # some digests, cross the 4.5-bit high-entropy floor -> emit-scan false positive);
+    # publish reconstructs the stamp location from originMesh itself.
+    _admit_tree="$(sed -n 's/^tree-sha256=//p' "${BASE}/.snapdragon-mesh-admitted" 2>/dev/null | head -n1)"
+    [[ "$_admit_tree" =~ ^[0-9a-f]{64}$ ]] \
+      || _die "admitted snapshot stamp carries no valid tree-sha256 — cannot write base-origin marker (fail-closed)"
+    cat > "${BRAND_OUT}/.snapdragon-base-origin.json" <<JSON
+{
+  "schema": "snapdragon.systems/base-origin/v1",
+  "originMesh": "${FOREIGN_MESH}",
+  "pinnedDigest": "${PINNED_DIGEST}",
+  "treeSha256": "${_admit_tree}"
+}
+JSON
+    _log "wrote durable base-origin marker .snapdragon-base-origin.json (mesh=${FOREIGN_MESH} pin=${PINNED_DIGEST} tree=${_admit_tree})"
+  fi
 
   # 2) CLASS-A overlay: stage the archetype's whole-file .hbs (angular-mfe:
   #    federation-base.js — byte-identical across the class bar HOST_NAME;
