@@ -153,6 +153,12 @@ class RolePage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         c = self.wiz.cfg
+        # mesh builds its image set on the WorklistPage (a role x platform multi-select),
+        # NOT this single-select — the page is skipped in mesh (MODE_SKIPPED_PAGES). Guard
+        # defensively so the mesh catalog is never presented here even if the page is
+        # somehow reached (the WorklistPage owns mesh role x platform).
+        if c.mode == "mesh":
+            return
         self.roles.blockSignals(True)
         self.roles.clear()
         for role, platforms, label in ROLE_CHOICES[c.mode]:

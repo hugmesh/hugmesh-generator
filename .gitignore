@@ -100,3 +100,4 @@ brand.conf
 
 # Claude Code agent worktrees / scratch — never commit
 .claude/
+scripts/__pycache__/

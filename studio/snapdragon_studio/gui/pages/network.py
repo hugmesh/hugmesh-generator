@@ -1,7 +1,13 @@
-"""NetworkPage — tailnet/SSO (incl. the headscale URL/version knobs), brand identity
-(profile/org/domains/release state), egress VPN, security stack, edge-AI, Tor,
-Character Studio and the optional cluster services checklist (with the explicit-none /
-all-services sentinels and the subtractive exclude list)."""
+"""NetworkPage — three role-class groupboxes up top (brand identity & domain, the
+tailnet/SSO toggles, the mesh control plane incl. the orchestration superdomain),
+then egress VPN, the security stack, edge-AI, Tor, Character Studio and the optional
+cluster-services checklist (with the explicit-none / all-services sentinels and the
+subtractive exclude list).
+
+The tailnet/SSO group is user-editable ONLY for cloud branded desktops
+(``tailnet_sso_visible``, spec 3): standalone and mesh hide it (mesh forces
+tailscale=sso on off-UI in enter_mesh_defaults/materialize — never here). The mesh
+control plane (incl. the superdomain, spec 5) shows for cloud AND mesh."""
 from __future__ import annotations
 
 from ..qt import Qt, QtWidgets
@@ -13,6 +19,7 @@ from ...core.config import (
     SERVICES_ALL,
     SERVICES_NONE,
     X86_NODE_ROLES,
+    tailnet_sso_visible,
 )
 from ._gating import clear_unsupported, gate_widgets, platform_supports
 from ._widgets import _file_picker, _row
@@ -80,10 +87,57 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self.setTitle("Network, identity & egress")
         lay = QtWidgets.QVBoxLayout(self)
+
+        # ---- Group 1: brand identity & domain (visited in ALL modes) -------------
+        self.identity_box = QtWidgets.QGroupBox("Identity & domain")
+        il = QtWidgets.QVBoxLayout(self.identity_box)
+        # brand profile (G3): -C/--config brands/*.conf — the sole carrier of the
+        # HEADSCALE_URL / RELEASE_STATE / ADMIN_EMAILS / MAIL_* / EXCLUDE_SERVICES
+        # presets; sourced by every builder before its CLI flags (CLI wins).
+        self.brand_profile = QtWidgets.QLineEdit()
+        self.brand_profile.setPlaceholderText("brands/<brand>.conf  (empty = no preset profile)")
+        bbtn = _file_picker(self, self.brand_profile, "Brand profile", "Brand profile (*.conf)")
+        bw = QtWidgets.QWidget(); bh = QtWidgets.QHBoxLayout(bw); bh.setContentsMargins(0, 0, 0, 0)
+        bh.addWidget(self.brand_profile, 1); bh.addWidget(bbtn)
+        il.addWidget(_row("Brand profile (-C)", bw))
+        self.brand = QtWidgets.QLineEdit()
+        self.brand_title = QtWidgets.QLineEdit()
+        self.org = QtWidgets.QLineEdit()          # --org (G7): emitted on every platform
+        self.domain = QtWidgets.QLineEdit()
+        il.addWidget(_row("Brand id", self.brand))
+        il.addWidget(_row("Brand title", self.brand_title))
+        il.addWidget(_row("Org", self.org))
+        # --cluster-domain is the PUBLIC apex (the go-live target), distinct from the
+        # permanently-internal orchestration superdomain in the mesh control plane below.
+        il.addWidget(_row("Public apex domain", self.domain))
+        # games domain (G6, x86+rpi5): the games.<domain> host + games OIDC issuer.
+        self.games_domain = QtWidgets.QLineEdit()
+        self.games_domain.setPlaceholderText("games.<cluster domain>  (empty = builder default)")
+        il.addWidget(_row("Games domain", self.games_domain))
+        # release state (G4, x86+rpi5): the baked Layer-3 nftables / go-live posture.
+        self.release_state = QtWidgets.QComboBox()
+        self.release_state.addItems(("default", *RELEASE_STATE_CHOICES))
+        il.addWidget(_row("Release state (--release-state)", self.release_state))
+        lay.addWidget(self.identity_box)
+
+        # ---- Group 2: tailnet + SSO (cloud branded desktops only, spec 3) --------
+        self.tailnet_box = QtWidgets.QGroupBox("Tailnet + SSO")
+        tl = QtWidgets.QVBoxLayout(self.tailnet_box)
         self.tailscale = QtWidgets.QCheckBox("Join the tailnet (tailscale/headscale)")
         self.sso = QtWidgets.QCheckBox("Enable SSO login (Casdoor)")
-        lay.addWidget(self.tailscale)
-        lay.addWidget(self.sso)
+        tl.addWidget(self.tailscale)
+        tl.addWidget(self.sso)
+        lay.addWidget(self.tailnet_box)
+        # shown INSTEAD of the group when it is hidden (standalone/mesh), explaining why.
+        self.tailnet_reason = QtWidgets.QLabel()
+        self.tailnet_reason.setWordWrap(True)
+        self.tailnet_reason.setStyleSheet("color: gray;")
+        self.tailnet_reason.setVisible(False)
+        lay.addWidget(self.tailnet_reason)
+
+        # ---- Group 3: mesh control plane (cloud AND mesh) ------------------------
+        self.mesh_box = QtWidgets.QGroupBox("Mesh control plane")
+        cp = QtWidgets.QVBoxLayout(self.mesh_box)
         # Headscale URL (G2) — the brand mesh control-server URL baked to
         # /etc/snapdragon/headscale-url. NOT a builder flag on any platform
         # (NON_ARGV_FIELDS): build_driver delivers it as the HEADSCALE_URL env var
@@ -94,44 +148,32 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.headscale_url.setToolTip(
             "Baked to /etc/snapdragon/headscale-url. Delivered to the builder as the "
             "HEADSCALE_URL environment variable — not a CLI flag.")
-        lay.addWidget(_row("Headscale URL", self.headscale_url))
+        cp.addWidget(_row("Headscale URL", self.headscale_url))
         # mesh agent version pins + the headscale-only posture (G29; all builders)
         self.headscale_version = QtWidgets.QLineEdit()
         self.headscale_version.setPlaceholderText("--headscale-version pin  (empty = builder default)")
         self.tailscale_version = QtWidgets.QLineEdit()
         self.tailscale_version.setPlaceholderText("--tailscale-version pin  (empty = builder default)")
-        lay.addWidget(_row("Headscale version", self.headscale_version))
-        lay.addWidget(_row("Tailscale version", self.tailscale_version))
+        cp.addWidget(_row("Headscale version", self.headscale_version))
+        cp.addWidget(_row("Tailscale version", self.tailscale_version))
         self.skip_tailscale = QtWidgets.QCheckBox(
             "Skip the tailscale agent (--skip-tailscale: headscale-only posture — "
             "distinct from not joining the mesh)")
-        lay.addWidget(self.skip_tailscale)
-        # brand profile (G3): -C/--config brands/*.conf — the sole carrier of the
-        # HEADSCALE_URL / RELEASE_STATE / ADMIN_EMAILS / MAIL_* / EXCLUDE_SERVICES
-        # presets; sourced by every builder before its CLI flags (CLI wins).
-        self.brand_profile = QtWidgets.QLineEdit()
-        self.brand_profile.setPlaceholderText("brands/<brand>.conf  (empty = no preset profile)")
-        bbtn = _file_picker(self, self.brand_profile, "Brand profile", "Brand profile (*.conf)")
-        bw = QtWidgets.QWidget(); bh = QtWidgets.QHBoxLayout(bw); bh.setContentsMargins(0, 0, 0, 0)
-        bh.addWidget(self.brand_profile, 1); bh.addWidget(bbtn)
-        lay.addWidget(_row("Brand profile (-C)", bw))
-        self.brand = QtWidgets.QLineEdit()
-        self.brand_title = QtWidgets.QLineEdit()
-        self.org = QtWidgets.QLineEdit()          # --org (G7): emitted on every platform
-        self.domain = QtWidgets.QLineEdit()
-        lay.addWidget(_row("Brand id", self.brand))
-        lay.addWidget(_row("Brand title", self.brand_title))
-        lay.addWidget(_row("Org", self.org))
-        lay.addWidget(_row("Cluster domain", self.domain))
-        # games domain (G6, x86+rpi5): the games.<domain> host + games OIDC issuer.
-        self.games_domain = QtWidgets.QLineEdit()
-        self.games_domain.setPlaceholderText("games.<cluster domain>  (empty = builder default)")
-        lay.addWidget(_row("Games domain", self.games_domain))
-        # release state (G4, x86+rpi5): the baked Layer-3 nftables / go-live posture.
-        self.release_state = QtWidgets.QComboBox()
-        self.release_state.addItems(("default", *RELEASE_STATE_CHOICES))
-        lay.addWidget(_row("Release state (--release-state)", self.release_state))
-        # egress VPN
+        cp.addWidget(self.skip_tailscale)
+        # orchestration superdomain (spec 5): the permanently-internal <brand>.internal
+        # every mesh node joins (NON_ARGV: manifest + KEYS channel, never a builder
+        # flag; distinct from the public apex above, I7). Editable in mesh; a read-only
+        # derived display in cloud (so the Users-page superadmin lock is explicable).
+        self.superdomain = QtWidgets.QLineEdit()
+        self.superdomain.setToolTip(
+            "The internal orchestration domain all mesh nodes join (empty = derived "
+            "<brand>.internal). Delivered via the mesh manifest + the KEYS channel — "
+            "never a builder flag, never the go-live apex.")
+        self.superdomain_row = _row("Orchestration superdomain", self.superdomain)
+        cp.addWidget(self.superdomain_row)
+        lay.addWidget(self.mesh_box)
+
+        # ---- egress VPN ----------------------------------------------------------
         self.egress = QtWidgets.QLineEdit()
         ebtn = _file_picker(self, self.egress, "Egress VPN conf", "VPN (*.conf *.ovpn *.nmconnection)")
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
@@ -263,15 +305,40 @@ class NetworkPage(QtWidgets.QWizardPage):
                                 if platform_supports("aide", c.platform)
                                 else Qt.CheckState.Unchecked)
         self.root_login.setCurrentText(c.root_login or "no")
-        self.tailscale.setChecked(c.tailscale or c.mode in ("cloud", "mesh"))
-        # only force-check SSO where the platform's builder actually takes the flag —
-        # an ARM cloud/mesh build used to show it force-checked, then silently drop it
-        self.sso.setChecked((c.sso or c.mode in ("cloud", "mesh"))
-                            and platform_supports("sso", c.platform))
+        # Tailnet + SSO is a cloud-branded-DESKTOP surface (spec 3). The group is shown
+        # + user-editable only there; standalone/mesh HIDE it (mesh forces tailscale=sso
+        # on off-UI in enter_mesh_defaults/materialize — this page never force-checks).
+        # When shown, default the toggles CHECKED (a fresh cloud client joins the mesh);
+        # sso keeps its x86-only platform gate below.
+        ss_visible = tailnet_sso_visible(c)
+        self.tailnet_box.setVisible(ss_visible)
+        self.tailnet_reason.setVisible(not ss_visible)
+        if not ss_visible:
+            self.tailnet_reason.setText(
+                "Standalone images have no tailnet — no mesh, no SSO."
+                if c.mode == "standalone" else
+                "Mesh nodes join the superdomain tailnet implicitly (tailscale + SSO on)."
+                if c.mode == "mesh" else
+                "This image class has no user-facing tailnet / SSO toggle.")
+        self.tailscale.setChecked(c.tailscale or ss_visible)
+        self.sso.setChecked((c.sso or ss_visible) and platform_supports("sso", c.platform))
+        # mesh control plane (incl. the superdomain) — cloud AND mesh, hidden standalone.
+        show_cp = c.mode in ("cloud", "mesh")
+        self.mesh_box.setVisible(show_cp)
         self.headscale_url.setText(c.headscale_url)
         self.headscale_version.setText(c.headscale_version)
         self.tailscale_version.setText(c.tailscale_version)
         self.skip_tailscale.setChecked(c.skip_tailscale)
+        # superdomain: editable in mesh (explicit text, empty = derived); a read-only
+        # derived display in cloud (never write the derived value back to the config).
+        mesh = c.mode == "mesh"
+        self.superdomain.setReadOnly(not mesh)
+        if mesh:
+            self.superdomain.setText(c.superdomain)
+            self.superdomain.setPlaceholderText(
+                f"{c.brand or 'snapdragon'}.internal  (empty = derived)")
+        else:
+            self.superdomain.setText(c.effective_superdomain())
         self.brand_profile.setText(c.brand_profile)
         self.brand.setText(c.brand)
         self.brand_title.setText(c.brand_title)
@@ -379,6 +446,10 @@ class NetworkPage(QtWidgets.QWizardPage):
         c.headscale_version = self.headscale_version.text().strip()
         c.tailscale_version = self.tailscale_version.text().strip()
         c.skip_tailscale = self.skip_tailscale.isChecked()
+        # superdomain is user-set ONLY in mesh (editable); in cloud the field shows the
+        # DERIVED value read-only — never write it back (would pin the derived string).
+        if c.mode == "mesh":
+            c.superdomain = self.superdomain.text().strip()
         c.brand_profile = self.brand_profile.text().strip()
         c.brand = self.brand.text().strip() or "snapdragon"
         c.brand_title = self.brand_title.text().strip() or "Snapdragon Systems"

@@ -830,7 +830,8 @@ run_threading_checks() {
 # Expectation grammar: 'token'  must appear in the printed command
 #                      '!token' must NOT appear in the printed command
 #                      'PLAN:pat' / 'PLAN:!pat'  must (not) match the plan output
-GUITHR_EXPECTED=51   # fail-closed: keep in sync with the guithr call list below
+GUITHR_EXPECTED=53   # fail-closed: keep in sync with the guithr call list below
+                     # (51 + packages_add/packages_drop, WS-BUILDER emission flip)
 GUITHR_RUN=0
 
 guithr() { # NAME CFG-JSON EXPECT...
@@ -964,6 +965,14 @@ run_gui_threading_checks() {
     guithr g2-headscale-url-env-passthrough \
         '{"platform":"x86","role":"be","mode":"mesh","env":"test","headscale_url":"https://hs.acme.example"}' \
         'env HEADSCALE_URL=https://hs.acme.example' '!--headscale-url'
+    # ── package deltas (WS-BUILDER emission flip): --packages-add appends explicit
+    # atoms to the resolved set; --packages-drop of a NON-mandatory atom is honored.
+    guithr g9-packages-add \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","packages_add":"app-editors/vim app-misc/tmux"}' \
+        '--packages-add' 'app-editors/vim' 'PLAN:^PLAN_PACKAGES_ADD=app-editors/vim app-misc/tmux$'
+    guithr g9-packages-drop \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","packages_drop":"app-editors/nano"}' \
+        '--packages-drop' 'app-editors/nano' 'PLAN:^PLAN_PACKAGES_DROP=app-editors/nano$'
 
     # ── rpi5 ──
     guithr g4-release-state-rpi5 \
@@ -1117,6 +1126,14 @@ run_negative_checks() {
         ./build-x86-host-stage4.sh --role standalone-unaffiliated --theme boogiepop --print-plan
     expect_fail "x86: --unaffiliated on a cluster role" \
         ./build-x86-host-stage4.sh --role pki --unaffiliated --print-plan
+    # package deltas (WS-BUILDER): a malformed atom must be rejected at the builder
+    # boundary (charset allowlist, mirroring core/validate.py), and a --packages-drop
+    # of a tier-1 mandatory-payload atom must hard-fail (the image would fail its
+    # post-emerge payload assert) — NEVER silently emit a payload-less stage4.
+    expect_fail "x86: malformed --packages-add atom rejected" \
+        ./build-x86-host-stage4.sh --role be --packages-add 'app-editors/vim; reboot' --print-plan
+    expect_fail "x86: --packages-drop of a mandatory-payload atom rejected" \
+        ./build-x86-host-stage4.sh --role be --packages-drop sys-cluster/kubelet --print-plan
     # GUI: an unknown platform must refuse to print a command
     printf '{"platform":"bogus","role":"pki","mode":"mesh","env":"test"}\n' >"${TMP_DIR}/neg.json"
     expect_fail "gui: unknown platform" \
@@ -1197,7 +1214,10 @@ run_gui_gating_checks() {
 # Diffs every builder's parsed arg surface against the Studio's real per-platform
 # emission (PLATFORM_FIELD_SUPPORT-driven): 6 forward checks (every parsed flag
 # fielded or documented-out-of-scope) + 6 reverse checks (every emitted flag
-# parsed). FAIL-CLOSED: 12 expected, shortfall = failures.
+# parsed) + 12 packages-delta checks (--packages-add/--packages-drop, both
+# parsed AND fielded, on all six builders — WS-BUILDER's atomic flip). FAIL-CLOSED:
+# 24 expected, shortfall = failures.
+COV_EXPECTED=24
 COV_PASS=0; COV_FAIL=0
 run_flag_coverage() {
     local out="${TMP_DIR}/flagcov.out"
@@ -1205,13 +1225,40 @@ run_flag_coverage() {
     local rc=$? cpass
     cpass=$(grep -c '^FLAGCOV PASS' "${out}" || true)
     COV_PASS=$((COV_PASS + cpass))
-    COV_FAIL=$((COV_FAIL + 12 - cpass))
-    if [ ${rc} -ne 0 ] && [ "${cpass}" -eq 12 ]; then
-        # rc!=0 with all 12 sections passing = the script itself broke — fail loudly
+    COV_FAIL=$((COV_FAIL + COV_EXPECTED - cpass))
+    if [ ${rc} -ne 0 ] && [ "${cpass}" -eq "${COV_EXPECTED}" ]; then
+        # rc!=0 with all sections passing = the script itself broke — fail loudly
         _fail FLAGCOV "script" "flag-coverage.sh exited ${rc}" "${out}"
         COV_FAIL=$((COV_FAIL+1))
     fi
     grep '^FLAGCOV FAIL' "${out}" >&2 || true
+}
+
+# ── NON-GATING developer smokes ─────────────────────────────────────────────────
+# The worklist-envelope parity smoke (WS-MODEL) and the JOB-channel image-spec
+# parity fixture (WS-JOB) exercise the redesign's end-to-end command-translation
+# invariants. They are run here for VISIBILITY but deliberately do NOT gate the
+# matrix (design 6/7.1: promoted into the gate only once stable) — their result
+# never enters TOTAL_FAIL or the exit status below.
+SMOKE_REPORT=""
+run_nongating_smokes() {
+    local spec name path out rc
+    for spec in "worklist-smoke:${TEST_DIR}/worklist-smoke.sh" \
+                "image-spec-parity:${REPO_DIR}/tests/build-image-spec-parity.sh"; do
+        name="${spec%%:*}"; path="${spec#*:}"
+        if [ ! -f "${path}" ]; then
+            SMOKE_REPORT+="  ${name}: SKIP (not present)"$'\n'; continue
+        fi
+        out="${TMP_DIR}/smoke-${name}.out"
+        if PYTHON="${PYTHON}" bash "${path}" >"${out}" 2>&1; then
+            SMOKE_REPORT+="  ${name}: PASS"$'\n'
+        else
+            rc=$?
+            SMOKE_REPORT+="  ${name}: FAIL rc=${rc} (non-gating — does NOT fail the matrix)"$'\n'
+            printf 'NON-GATING smoke FAIL [%s] (informational):\n' "${name}" >&2
+            sed 's/^/    | /' "${out}" | tail -n 8 >&2
+        fi
+    done
 }
 
 # ── walk the matrix ─────────────────────────────────────────────────────────────
@@ -1236,6 +1283,7 @@ run_gui_threading_checks
 run_negative_checks
 run_gui_gating_checks
 run_flag_coverage
+run_nongating_smokes
 
 TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS))
 TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL))
@@ -1266,4 +1314,8 @@ printf  'THRD (flag threading):  %3d passed, %d failed\n' "${THR_PASS}"  "${THR_
 printf  'NEG  (must-fail):       %3d passed, %d failed\n' "${NEG_PASS}"  "${NEG_FAIL}"
 printf  'COVG (flag coverage):   %3d passed, %d failed\n' "${COV_PASS}"  "${COV_FAIL}"
 printf  'TOTAL:                  %3d passed, %d failed\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"
+if [ -n "${SMOKE_REPORT}" ]; then
+    echo "── non-gating smokes (informational; NOT in TOTAL) ─────────"
+    printf '%s' "${SMOKE_REPORT}"
+fi
 [ "${TOTAL_FAIL}" -eq 0 ] && [ "${ROWS}" -gt 0 ] && [ "${CH_SHORT}" -eq 0 ]

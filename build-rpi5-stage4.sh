@@ -92,6 +92,8 @@ GROW_POLICY="fill"      # first-boot grow policy baked into /etc/growfs.conf: fi
 SD_ONLY=false           # use literal /dev/mmcblk0p2 instead of PARTUUID/LABEL identity
 COMPRESS_IMG=false      # xz -9 the finished .img
 EXTRA_PACKAGES=""
+PACKAGES_ADD=""          # --packages-add : atoms to add on top of the derived set
+PACKAGES_DROP=""         # --packages-drop: default-set atoms to remove (mandatory floor honored)
 TIMEZONE="UTC"
 HOSTNAME=""
 ROLE="generic"          # generic | pki | backend | frontend | desktop
@@ -791,6 +793,10 @@ while [[ $# -gt 0 ]]; do
         --user-password)      warn "--user-password is ignored: no password is baked into the image (random first-boot fallback + KEYS provisioning)"; shift 2 ;;
         --root-password)      warn "--root-password is ignored: root is locked on keyless boot; set root via the KEYS USB users.json hash"; shift 2 ;;
         -p|--extra-packages)  EXTRA_PACKAGES="$2";     shift 2 ;;
+        # User package deltas (validated + mandatory-floor-checked below); -p stays
+        # the frozen legacy extra-packages spelling, --packages-add is the new one.
+        --packages-add)       PACKAGES_ADD="$2";       shift 2 ;;
+        --packages-drop)      PACKAGES_DROP="$2";      shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";  shift 2 ;;
         --tailscale-version)  TAILSCALE_VERSION="$2";  shift 2 ;;
         --enable-wifi)        ENABLE_WIFI=true;        shift   ;;
@@ -1858,6 +1864,37 @@ rebrand_sysroot() {
 # '^PLAN_'); exit 0. Invalid role/flag combos never reach this point — the
 # validation above already exited non-zero, which is exactly what the
 # tests/build-matrix harness relies on. NO secrets are echoed here.
+
+# ── user package deltas: validate + enforce the tier-1 mandatory floor ─────────
+# Before --print-plan and any mutation, so a malformed atom or an illegal drop
+# fails LOUDLY at the boundary. Atom charset mirrors core/validate.py exactly.
+_PKG_ATOM_RE='^[a-z0-9][a-z0-9+._-]*/[A-Za-z0-9+._-]+$'
+_validate_pkg_atoms() { # LABEL VALUE
+    local _lbl="$1" _a; local -a _arr
+    read -ra _arr <<< "$2"
+    for _a in "${_arr[@]}"; do
+        [[ "${_a}" =~ ${_PKG_ATOM_RE} ]] || { err "invalid ${_lbl} atom: '${_a}' — want a category/name atom (e.g. app-editors/vim)"; exit 1; }
+    done
+}
+_validate_pkg_atoms --packages-add  "${PACKAGES_ADD}"
+_validate_pkg_atoms --packages-drop "${PACKAGES_DROP}"
+# Tier-1 mandatory atoms (base + role class). Dropping one is rejected (Decision #5:
+# tier-2 defaults are droppable; tier-1 essentials are hard-locked).
+SNAP_MANDATORY_ATOMS="sys-block/parted app-misc/jq net-misc/networkmanager"
+if ${ROLE_CLIENT}; then
+    SNAP_MANDATORY_ATOMS="${SNAP_MANDATORY_ATOMS} x11-base/xorg-server x11-wm/openbox x11-misc/lightdm"
+else
+    SNAP_MANDATORY_ATOMS="${SNAP_MANDATORY_ATOMS} sys-cluster/kubelet sys-cluster/kubeadm app-containers/containerd"
+fi
+if [ -n "${PACKAGES_DROP}" ]; then
+    read -ra _drop_check <<< "${PACKAGES_DROP}"
+    for _d in "${_drop_check[@]}"; do
+        for _m in ${SNAP_MANDATORY_ATOMS}; do
+            [ "${_d}" = "${_m}" ] && { err "refusing to --packages-drop mandatory-payload atom '${_d}' — tier-1 essential"; exit 1; }
+        done
+    done
+fi
+
 if ${PRINT_PLAN}; then
     _plan() { printf 'PLAN_%s=%s\n' "$1" "$2"; }
     _plan BUILDER            "build-rpi5-stage4.sh"
@@ -2804,6 +2841,25 @@ if [ -n "${EXTRA_PACKAGES}" ]; then
     read -ra _extras <<< "${EXTRA_PACKAGES}"
     STAGE4_PACKAGES+=("${_extras[@]}")
     info "Extra packages: ${EXTRA_PACKAGES}"
+fi
+
+# User package deltas (--packages-add / --packages-drop): adds appended, drops
+# filtered from the resolved set (validated + mandatory-floor-checked up front).
+if [ -n "${PACKAGES_ADD}" ]; then
+    read -ra _padd <<< "${PACKAGES_ADD}"
+    STAGE4_PACKAGES+=("${_padd[@]}")
+    info "Added packages (--packages-add): ${PACKAGES_ADD}"
+fi
+if [ -n "${PACKAGES_DROP}" ]; then
+    read -ra _pdrop <<< "${PACKAGES_DROP}"
+    _kept=()
+    for _p in "${STAGE4_PACKAGES[@]}"; do
+        _skip=false
+        for _d in "${_pdrop[@]}"; do [ "${_p}" = "${_d}" ] && { _skip=true; break; }; done
+        ${_skip} || _kept+=("${_p}")
+    done
+    STAGE4_PACKAGES=("${_kept[@]}")
+    info "Dropped packages (--packages-drop): ${PACKAGES_DROP}"
 fi
 
 info "Package count: ${#STAGE4_PACKAGES[@]}"

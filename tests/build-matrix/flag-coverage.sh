@@ -202,6 +202,8 @@ SAMPLES = {
     "seed_url": [{"seed_url": "http://s/x"}], "version": [{"version": "1.2.3"}],
     "release_tag": [{"release_tag": "rc1"}],
     "extra_packages": [{"extra_packages": "app-editors/vim"}],
+    "packages_add": [{"packages_add": "app-editors/vim"}],
+    "packages_drop": [{"packages_drop": "app-editors/vim"}],
 }
 
 # structural axes (role/env/board/flavor/desktop) are deliberately absent from
@@ -324,5 +326,36 @@ check_builder frite         build-frite-stage4.sh
 check_builder jetson        build-jetson-stage4.sh
 check_builder orangepi5     build-orangepi5-stage4.sh
 check_builder orangepizero2 build-orangepi-zero2-stage4.sh
+
+# ── packages-delta coverage (WS-BUILDER atomic flip) ────────────────────────────
+# --packages-add / --packages-drop are the two flags that landed on ALL SIX
+# builders in one train. Assert, per builder per flag (2 x 6 = 12 explicit
+# checks), that the flag is BOTH parsed by that builder (its arg-parser case arms,
+# extracted above into arms-flat-<platform>.txt) AND fielded by the Studio for
+# that platform (its emission vocab, gui-vocab.txt / vocab-<platform>.txt). This
+# is the round-trip guarantee for the ONE flag-pair that moves the gate numbers,
+# reported as its own countable bucket so a regression names the exact cell.
+check_packages_delta() { # platform builder
+    local platform="$1" builder="$2" flag
+    local flat="${TMP_DIR}/arms-flat-${platform}.txt" vocab="${TMP_DIR}/vocab-${platform}.txt"
+    for flag in --packages-add --packages-drop; do
+        local parsed=false fielded=false
+        grep -qxF -- "${flag}" "${flat}"  && parsed=true
+        grep -qxF -- "${flag}" "${vocab}" && fielded=true
+        if ${parsed} && ${fielded}; then
+            echo "FLAGCOV PASS ${builder} ${flag} (parsed + fielded)"
+        else
+            echo "FLAGCOV FAIL ${builder} ${flag} — parsed=${parsed} fielded=${fielded} (WS-BUILDER flip incomplete on this builder)"
+            FAILS=$((FAILS+1))
+        fi
+    done
+}
+
+check_packages_delta x86           build-x86-host-stage4.sh
+check_packages_delta rpi5          build-rpi5-stage4.sh
+check_packages_delta frite         build-frite-stage4.sh
+check_packages_delta jetson        build-jetson-stage4.sh
+check_packages_delta orangepi5     build-orangepi5-stage4.sh
+check_packages_delta orangepizero2 build-orangepi-zero2-stage4.sh
 
 [ "${FAILS}" -eq 0 ]

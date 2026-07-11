@@ -220,29 +220,13 @@ def test_role_uboot_clears_on_platform_switch(wiz):
     assert not any(a.startswith("--uboot") for a in wiz.cfg.to_cli_args())
 
 
-def test_role_jetson_kernel_flavor(wiz):
-    """G36: the plan-valid --kernel-flavor axis, with the l4t stub caveat spelled
-    out on the combo (the plan/matrix accept l4t; the BUILD stub hard-errors)."""
-    pick_mode(wiz, "mesh")
-    page = pick_role(wiz, "full")        # jetson-only role
-    assert page.jetson_box.isVisible()
-    assert "l4t" in page.kernel_flavor.toolTip() and "stub" in page.kernel_flavor.toolTip()
-    page.kernel_flavor.setCurrentIndex(page.kernel_flavor.findData("l4t"))
-    advance_to(wiz, wizard_mod.HardwarePage)
-    assert wiz.cfg.kernel_flavor == "l4t"
-    assert ("--kernel-flavor", "l4t") in pairs(wiz.cfg.to_cli_args())
-
-
-def test_role_kernel_flavor_clears_off_jetson(wiz):
-    pick_mode(wiz, "mesh")
-    page = pick_role(wiz, "full")
-    page.kernel_flavor.setCurrentIndex(page.kernel_flavor.findData("l4t"))
-    advance_to(wiz, wizard_mod.HardwarePage)
-    back_to(wiz, wizard_mod.RolePage)
-    pick_role(wiz, "omnibus")            # x86 mesh node
-    advance_to(wiz, wizard_mod.HardwarePage)
-    assert wiz.cfg.kernel_flavor == ""
-    assert "--kernel-flavor" not in wiz.cfg.to_cli_args()
+# NOTE: the jetson --kernel-flavor RolePage tests were REMOVED with the redesign. The
+# jetson roles (full/gpu-host/jetson-desktop/edge_ai) are mesh-only, and mesh now SKIPS
+# RolePage (MODE_SKIPPED_PAGES) in favour of the WorklistPage role x platform multi-select
+# — so the old pick_mode("mesh") -> RolePage -> jetson path no longer exists in the GUI.
+# The jetson-mesh materialize behaviour (encrypt_root exemption, per-image axes) is covered
+# by WS-MODEL's test_worklist.py materialize() unit tests (design 6). The kernel_flavor combo
+# stays on RolePage for any non-mesh jetson support and is exercised via test_wizard.py.
 
 
 # ---- HardwarePage: --nvidia-cuda (G33), ARM overrides (G37), preset label (G41) --
@@ -502,7 +486,9 @@ def test_build_release_tag_greys_on_arm_version_flows(wiz):
 
 def test_build_plumbing_x86(wiz):
     build = advance_to(wiz, wizard_mod.BuildPage)
-    assert not build.extra_packages.isEnabled()    # x86 has no -p/--extra-packages
+    # the free-text extra-packages field is retired (packages move to the PackagesDialog);
+    # the rest of the plumbing box still flows.
+    assert not hasattr(build, "extra_packages")
     build.skip_kernel.setChecked(True)
     build.skip_clean.setChecked(True)
     build.distdir.setText("/mnt/distfiles")
@@ -518,18 +504,15 @@ def test_build_plumbing_x86(wiz):
     assert "--extra-packages" not in args
 
 
-def test_build_plumbing_arm_extra_packages(wiz):
+def test_build_plumbing_arm(wiz):
     pick_role(wiz, "generic")
     build = advance_to(wiz, wizard_mod.BuildPage)
-    assert build.extra_packages.isEnabled()
     assert not build.distdir.isEnabled()           # --distdir is x86-only
-    build.extra_packages.setText("htop tmux")
     build.distdir.setText("/stale")                # greyed — cleared, not emitted
     build.skip_kernel.setChecked(True)
     build._preview()
     assert wiz.cfg.distdir == ""
     args = wiz.cfg.to_cli_args()
-    assert ("--extra-packages", "htop tmux") in pairs(args)
     assert "--skip-kernel" in args and "--distdir" not in args
 
 
@@ -550,3 +533,51 @@ def test_build_pentest_env_toggle_never_argv(wiz):
     build._preview()
     assert wiz.cfg.pentest is True
     assert not any("pentest" in a.lower() for a in wiz.cfg.to_cli_args())
+
+
+# ---- Review & Build page (spec 8) -------------------------------------------------
+
+def test_review_page_replaces_build_now_with_packages(wiz):
+    """The in-form 'Build now' button is gone (the build runs on the terminal
+    ProgressPage); a single image shows the per-image Packages… button, hides the mesh
+    summary, and the page is a commit page (Back disabled once committed)."""
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert build.title() == "Review & Build"
+    assert not hasattr(build, "build_btn")     # 'Build now' removed
+    assert build.isCommitPage()
+    assert build.packages_btn.isVisible()
+    assert not build.worklist_group.isVisible()
+
+
+def test_review_commits_single_entry_worklist_for_standalone(wiz):
+    """Leaving Review commits a 1-entry worklist synthesized from the config (so the
+    driver/progress/manifest have exactly one shape) and stashes the run parameters
+    ProgressPage reads."""
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert build.validatePage() is True
+    wl = wiz.worklist
+    assert wl is not None and len(wl.entries) == 1
+    assert wl.entries[0].role == wiz.cfg.role
+    assert wl.entries[0].platform == "x86"
+    assert hasattr(wiz, "build_backend")
+    assert wiz.generate_node_keys is True      # not mesh -> node key-zips not applicable
+
+
+def test_review_mesh_shows_per_image_summary_and_keeps_worklist(wiz):
+    """Mesh Review shows one summary row per worklist image + the node key-zip opt-out,
+    hides the single-image Packages button, and commits the WorklistPage selection (not a
+    synthesized 1-entry worklist)."""
+    pick_mode(wiz, "mesh")
+    wl_page = advance_to(wiz, wizard_mod.WorklistPage)
+    for rid in ("omnibus.x86", "be.rpi5"):
+        wl_page.row_for_id(rid).setCheckState(0, Qt.CheckState.Checked)
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert build.worklist_group.isVisible()
+    assert not build.packages_btn.isVisible()
+    assert build.gen_keys.isChecked()
+    ids = {build.worklist_table.item(r, 0).text()
+           for r in range(build.worklist_table.rowCount())}
+    assert {"omnibus.x86", "be.rpi5"} <= ids
+    assert build.validatePage() is True
+    assert {e.id for e in wiz.worklist.entries} >= {"omnibus.x86", "be.rpi5"}
+    assert wiz.build_backend == build._backend()

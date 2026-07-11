@@ -92,7 +92,9 @@ the native amd64 chroot build with grub-EFI.
 - Desktop USE: a `@@CLIENT_USE@@` token in `make.conf.tmpl` (`X gtk dbus elogind`)
   set for client roles.
 - `PERSON_ROLE` + `DOMAINS` build flags → `/etc/snapdragon/{identity-role,domains}`
-  markers; `provision_client_identity()` applies them; person-role+domain in the
+  markers (baked directly by the build); `provision_desktop_governance()` (in
+  `specs/etc/keys-provision/provision.sh`) reads the `domains` marker at first boot
+  to render the Casdoor/OIDC desktop-governance tie; person-role+domain in the
   artifact tag.
 - **✅ DONE** — laptop image **QEMU-verified to the lightdm greeter + tailnet
   join** (`build-x86-host-stage4.sh --role laptop --person-role user --domains

@@ -199,6 +199,23 @@ def test_print_command_new_option_fields_flow_through(tmp_path):
         assert token in r.stdout
 
 
+def test_print_command_rejects_worklist_envelope(tmp_path):
+    """The load guard: a worklist envelope (explicit `schema` key) must make
+    --print-command fail LOUDLY — never silently degrade to a default config. Callers
+    route envelopes through worklist.load_any / --print-commands instead."""
+    p = tmp_path / "envelope.json"
+    p.write_text(json.dumps({"schema": "snapdragon-worklist/v1",
+                             "base": ImageConfig().to_dict(), "entries": []}),
+                 encoding="utf-8")
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode != 0
+    assert "worklist envelope" in r.stderr
+
+
 def test_print_command_mesh_config_omitting_tailscale_sso_keeps_its_mesh(tmp_path):
     """The PR #304 verify-pass defect, end-to-end: a hand-written mesh config that
     simply OMITS tailscale/sso used to print --no-tailscale --no-sso — a headless
@@ -228,6 +245,36 @@ def test_print_command_mesh_config_omitting_tailscale_sso_keeps_its_mesh(tmp_pat
     assert "PLAN_SSO=casdoor-oidc" in plan.stdout     # SSO plane ON, not "off"
 
 
+def test_print_command_new_non_argv_fields_ride_config_but_never_argv(tmp_path):
+    """superdomain stays NON_ARGV (v1 = manifest + KEYS channel): it round-trips
+    through a saved config but the printed command never carries it. packages_add/
+    packages_drop, by contrast, were flipped to emitted --packages-add/--packages-drop
+    by WS-BUILDER, so the printed command DOES carry them (all six builders parse them)."""
+    cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
+                      superdomain="core.acme.internal",
+                      packages_add="app-editors/vim app-misc/tmux",
+                      packages_drop="games-util/steam")
+    p = tmp_path / "nonargv.json"
+    cfg.save(str(p))
+    reloaded = ImageConfig.load(str(p))
+    assert reloaded.superdomain == "core.acme.internal"
+    assert reloaded.packages_add == "app-editors/vim app-misc/tmux"
+    assert reloaded.packages_drop == "games-util/steam"
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    # superdomain is NEVER a builder flag on any platform
+    for token in ("--superdomain", "core.acme.internal"):
+        assert token not in r.stdout
+    # packages_add/packages_drop DO reach argv now (WS-BUILDER emission flip)
+    for token in ("--packages-add", "--packages-drop",
+                  "app-editors/vim app-misc/tmux", "games-util/steam"):
+        assert token in r.stdout
+
+
 def test_print_command_arm_standalone_real_semantics(tmp_path):
     """The parity harness's standalone-posture configs (rpi5 role=desktop +
     standalone=true — NOT the JOB-grammar 'standalone-desktop' token) must print
@@ -245,3 +292,47 @@ def test_print_command_arm_standalone_real_semantics(tmp_path):
     assert "--role desktop" in r.stdout and "--standalone" in r.stdout
     assert "--board rpi4" in r.stdout and "--local-user" in r.stdout
     assert "standalone-desktop" not in r.stdout   # the JOB token is not builder vocabulary
+
+
+def test_print_specs_emits_materialized_flat_specs(tmp_path):
+    """The materialization BRIDGE: --print-specs expands a worklist envelope into one flat,
+    fully-resolved ImageConfig JSON per materialized image (the spec the web IMAGE_SPEC_JSON /
+    build-image.sh channel consumes). SECRET fields are blanked; --image selects one."""
+    from snapdragon_studio.core.worklist import WorklistConfig, WorklistEntry
+    wl = WorklistConfig(
+        base=ImageConfig(mode="mesh", brand="acme", local_pass="s3cret"),
+        entries=[WorklistEntry(id="omnibus.x86", role="omnibus", platform="x86"),
+                 WorklistEntry(id="be.rpi5", role="be", platform="rpi5")])
+    p = tmp_path / "wl.json"
+    p.write_text(json.dumps(wl.to_dict()), encoding="utf-8")
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-specs", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    specs = [json.loads(line) for line in r.stdout.splitlines() if line.strip()]
+    assert len(specs) == 2
+    assert [(s["role"], s["platform"]) for s in specs] == [("omnibus", "x86"), ("be", "rpi5")]
+    # each spec is a real flat ImageConfig that --print-command accepts, with secrets blanked
+    for s in specs:
+        assert s.get("local_pass", "") == ""
+        cfg = ImageConfig.from_dict(s)   # round-trips as a flat config (no envelope)
+        assert cfg.role == s["role"]
+
+    # --image selects exactly one
+    r1 = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-specs", "--config", str(p),
+         "--image", "1", "--generator-dir", GENERATOR_DIR],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r1.returncode == 0, r1.stderr
+    one = [json.loads(line) for line in r1.stdout.splitlines() if line.strip()]
+    assert len(one) == 1 and one[0]["platform"] == "rpi5"
+
+    # out-of-range fails loudly
+    r2 = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-specs", "--config", str(p),
+         "--image", "9", "--generator-dir", GENERATOR_DIR],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r2.returncode == 2 and "out of range" in r2.stderr

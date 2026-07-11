@@ -189,6 +189,14 @@ LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never 
 UNAFFILIATED=false      # --unaffiliated : plain Gentoo desktop, no Snapdragon affiliation
 MEDIA_DATA_FORCED=""    # ''|on|off — tracks an explicit --media-data/--no-media-data
                         #   (unaffiliated defaults media-data OFF unless forced on)
+# ── user package deltas (--packages-add / --packages-drop) ─────────────────────
+# Space-separated Portage atoms threaded from the Studio/worklist on top of the
+# role's derived default set. Adds are appended to the resolved set; drops are a
+# final grep -vE over it (NEVER emerge --exclude / INSTALL_MASK, which also strip
+# transitive deps). Atom charset is validated up front and a tier-1 mandatory atom
+# may never be dropped (Decision #5).
+PACKAGES_ADD=""
+PACKAGES_DROP=""
 # ── GPU driver matrix (--gpu-driver) — all common cards, FREE drivers default ──
 # FREE drivers (open, no EULA, hardened) are the default. Only NVIDIA has a
 # proprietary DISPLAY driver; AMD/Intel "pro" = the open display driver + the
@@ -730,6 +738,10 @@ while [[ $# -gt 0 ]]; do
         # deliverable; this simply ensures no ISO is built (already the default).
         --skip-iso|--no-iso) LIVE_ISO=false; INSTALLER_ISO=false; shift ;;
         --resume) RESUME=true; shift ;;
+        # User package deltas (validated + mandatory-floor-checked below). x86 has
+        # no -p/--extra-packages; --packages-add is the add spelling here.
+        --packages-add) PACKAGES_ADD="$2"; shift 2 ;;
+        --packages-drop) PACKAGES_DROP="$2"; shift 2 ;;
         --print-plan) PRINT_PLAN=true; shift ;;
         # ── STANDALONE hardened desktop (no mesh / no SSO / local login) ──
         --standalone) STANDALONE=true; shift ;;
@@ -1336,6 +1348,39 @@ else
     info "Build ENV: test (LAN-first; cluster wildcard DNS; cloudflared/ACME pruned)"
 fi
 
+# ── user package deltas: validate + enforce the tier-1 mandatory floor ─────────
+# Done HERE (after role resolution, before --print-plan and any mutation) so a
+# malformed atom or an illegal drop fails LOUDLY at the boundary — never reaching
+# emerge or the grep -vE filter. Atom charset mirrors core/validate.py exactly.
+_PKG_ATOM_RE='^[a-z0-9][a-z0-9+._-]*/[A-Za-z0-9+._-]+$'
+_validate_pkg_atoms() { # LABEL VALUE
+    local _lbl="$1" _a; local -a _arr
+    read -ra _arr <<< "$2"
+    for _a in "${_arr[@]}"; do
+        [[ "${_a}" =~ ${_PKG_ATOM_RE} ]] || {
+            err "invalid ${_lbl} atom: '${_a}' — want a category/name atom (e.g. app-editors/vim)"; exit 1; }
+    done
+}
+_validate_pkg_atoms --packages-add  "${PACKAGES_ADD}"
+_validate_pkg_atoms --packages-drop "${PACKAGES_DROP}"
+# Tier-1 mandatory atoms: the payload whose binaries the post-emerge assert
+# requires (base + role class). Dropping one would ship a broken image (Decision
+# #5: tier-2 defaults are droppable; tier-1 essentials are hard-locked).
+SNAP_MANDATORY_ATOMS="sys-boot/grub sys-kernel/dracut sys-block/parted app-misc/jq net-misc/networkmanager"
+if ${ROLE_CLIENT}; then
+    SNAP_MANDATORY_ATOMS="${SNAP_MANDATORY_ATOMS} x11-base/xorg-server x11-wm/openbox x11-misc/lightdm"
+else
+    SNAP_MANDATORY_ATOMS="${SNAP_MANDATORY_ATOMS} sys-cluster/kubelet sys-cluster/kubeadm app-containers/containerd"
+fi
+if [ -n "${PACKAGES_DROP}" ]; then
+    read -ra _drop_check <<< "${PACKAGES_DROP}"
+    for _d in "${_drop_check[@]}"; do
+        for _m in ${SNAP_MANDATORY_ATOMS}; do
+            [ "${_d}" = "${_m}" ] && { err "refusing to --packages-drop mandatory-payload atom '${_d}' — tier-1 essential (the image would fail its payload assert)"; exit 1; }
+        done
+    done
+fi
+
 # ── --print-plan: emit the resolved plan and exit BEFORE ANY mutation ──────────
 # Runs AFTER full arg parsing / role+GPU+desktop+env validation / the optional-
 # services resolution / the standalone posture fold, but BEFORE the run-as-root
@@ -1389,6 +1434,8 @@ if ${PRINT_PLAN}; then
     _plan LUKS_PASS          "$([ -n "${LUKS_PASS}" ] && echo REDACTED || echo none)"
     _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
     _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} live_iso=${LIVE_ISO} installer_iso=${INSTALLER_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} skip_sso=${SKIP_SSO} standalone=${STANDALONE} desktop=${DESKTOP} capable=${CAPABLE} gpu_driver=${GPU_DRIVER} cuda=${NVIDIA_CUDA} encrypt_root=${ENCRYPT_ROOT} secure_boot=${SECURE_BOOT} media_data=${MEDIA_DATA} installer_ui=${INSTALLER_UI} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} unaffiliated=${UNAFFILIATED}"
+    _plan PACKAGES_ADD       "${PACKAGES_ADD}"
+    _plan PACKAGES_DROP      "${PACKAGES_DROP}"
     exit 0
 fi
 
@@ -2920,7 +2967,7 @@ elif ${ROLE_CLIENT}; then
     # CLIENT (person device): bake the FD-08 person-role + domain tie and SKIP the
     # whole k8s/ArgoCD cluster GitOps tree — a client is a desktop, not a node. The
     # Casdoor binding + multi-domain tie are applied at first boot by keys-provision
-    # (provision_client_identity) from the KEYS USB. See docs/CLIENT-IMAGES.md.
+    # (provision_desktop_governance) from the KEYS USB. See docs/CLIENT-IMAGES.md.
     echo "${PERSON_ROLE}" > "${SYSROOT}/etc/snapdragon/identity-role"
     { for d in ${DOMAINS//,/ }; do echo "${d}"; done; } > "${SYSROOT}/etc/snapdragon/domains"
     echo "${DESKTOP}"     > "${SYSROOT}/etc/snapdragon/desktop-weight"
@@ -3360,6 +3407,19 @@ ${ROLE_CLIENT} && info "Client desktop role: including desktop stack (packages-d
 ${GPU} && info "GPU role: including Mesa/Vulkan stack (packages-gpu.list)${NVIDIA_PROPRIETARY:+ + NVIDIA proprietary}" \
         || info "Headless role: skipping Mesa/Vulkan stack"
 [ -n "${SEED_PACKAGES_FROM}" ] && info "Seed packages appended from: ${SEED_PACKAGES_FROM}"
+
+# ── user package deltas (--packages-add / --packages-drop) ─────────────────────
+# Applied LAST, after every built-in add + the UNAFFILIATED strip, so the operator's
+# explicit set is authoritative. Adds are appended; drops are a final grep -vE over
+# the fully-resolved set — NEVER `emerge --exclude`/INSTALL_MASK (those also strip
+# transitive deps a kept package still needs). Atoms were charset-validated and the
+# tier-1 mandatory floor enforced up front (before --print-plan).
+[ -n "${PACKAGES_ADD}" ] && { PKGS="${PKGS} ${PACKAGES_ADD}"; info "Extra packages (--packages-add): ${PACKAGES_ADD}"; }
+if [ -n "${PACKAGES_DROP}" ]; then
+    _drop_re="$(printf '%s' "${PACKAGES_DROP}" | tr ' ' '\n' | grep -v '^$' | paste -sd'|' -)"
+    PKGS=$(printf '%s\n' ${PKGS} | grep -vxE "${_drop_re}" | tr '\n' ' ')
+    info "Dropped packages (--packages-drop): ${PACKAGES_DROP}"
+fi
 
 # A stage4 keeps the (already-built, hardened) seed toolchain — we do NOT want
 # @world to drag in a brand-new gcc/glibc/binutils (e.g. a bleeding-edge

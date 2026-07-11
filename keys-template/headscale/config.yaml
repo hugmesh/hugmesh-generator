@@ -52,7 +52,15 @@ log:
 
 dns:
   magic_dns: true
-  base_domain: headnet.internal
+  # ORCHESTRATION SUPERDOMAIN — the internal MagicDNS zone every mesh node joins.
+  # PERMANENTLY INTERNAL: it is <brand>.internal (default snapdragon.internal),
+  # distinct from the PUBLIC cluster_domain (the go-live apex), and is NEVER
+  # go-live-flipped. keys-provision rewrites this line in place from
+  # provision.json .mesh.magic_dns_domain (resolve_magic_dns_domain) at first boot,
+  # which scripts/gen-provision-keys.sh stamps per-brand — so this value is the
+  # fallback default (kept in sync with provision.json .mesh.magic_dns_domain and
+  # kubernetes/kubeadm-config.yaml's controlPlaneEndpoint/certSANs).
+  base_domain: snapdragon.internal
   nameservers:
     global:
       - 1.1.1.1

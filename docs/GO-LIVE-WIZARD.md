@@ -115,6 +115,25 @@ The public hostnames it autofills are the apex plus `api.`, `matrix.`,
 `mastodon.` — the same set [`specs/cluster/apps/12-cloudflared.yaml`](../specs/cluster/apps/12-cloudflared.yaml)
 and the gateway already promise.
 
+> **The go-live wizard flips only the public apex — never the orchestration
+> superdomain.** Two domains coexist on a mesh and must not be conflated:
+>
+> - **Public apex** — `cluster_domain` (`/etc/snapdragon/cluster-domain`, e.g.
+>   `snapdragon.systems`). This is the go-live *target*: the wizard provisions the
+>   public edge for it and trips `release-state` `internal → public`.
+> - **Orchestration superdomain** — `<brand>.internal` (default
+>   `snapdragon.internal`), the headscale MagicDNS `base_domain` every mesh node
+>   joins. It is **permanently internal**: it carries the tailnet + `kube-api.<superdomain>`
+>   control-plane endpoint, is never routable, and is **never** go-live-flipped.
+>   It is delivered through the KEYS channel — `scripts/gen-provision-keys.sh`
+>   stamps it into `provision.json` `.mesh.magic_dns_domain` (from `SUPERDOMAIN` /
+>   `--superdomain`, default `<BRAND>.internal`), which headscale consumes — so no
+>   go-live provider, DNS record set, or `RELEASE_STATE` transition ever touches it.
+>
+> Consequently `generate-brand-repos.sh`'s public + `*.internal` domain rejection
+> never sees the superdomain (invariant I7): only the public apex flows into the
+> go-live/RELEASE_STATE path.
+
 ---
 
 ## Providers (prioritised v1 list)

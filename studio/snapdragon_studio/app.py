@@ -76,8 +76,19 @@ def main(argv=None) -> int:
                          "The KeyZipPage also shows a per-import checkbox seeded from this "
                          "value that is the actual gate at import time.")
     ap.add_argument("--print-command", action="store_true",
-                    help="headless: print the build command for a saved config and exit")
-    ap.add_argument("--config", help="config JSON (with --print-command)")
+                    help="headless: print the build command for a saved FLAT config and "
+                         "exit (fails loudly on a worklist envelope — use --print-commands)")
+    ap.add_argument("--print-commands", action="store_true",
+                    help="headless: print one build command per materialized image for a "
+                         "worklist ENVELOPE (or a flat config = one command) and exit")
+    ap.add_argument("--print-specs", action="store_true",
+                    help="headless: print each materialized image's flat ImageConfig JSON "
+                         "(one per line, SECRET fields blanked) — the materialization bridge "
+                         "the web IMAGE_SPEC_JSON / build-image.sh channel consumes")
+    ap.add_argument("--image", type=int, default=None,
+                    help="with --print-commands/--print-specs: print ONLY the image at this "
+                         "0-based materialized index (default: every image)")
+    ap.add_argument("--config", help="config JSON (with --print-command/--print-commands/--print-specs)")
     ap.add_argument("--backend", choices=["auto", "native", "docker"], default="auto",
                     help="build backend for --print-command (auto = host default)")
     args = ap.parse_args(argv)
@@ -92,12 +103,83 @@ def main(argv=None) -> int:
         # Qt-free path: core only — must work with no display and no Qt installed.
         from .core.build_driver import BuildDriver
         from .core.config import ImageConfig
-        cfg = ImageConfig.load(args.config) if args.config else ImageConfig()
         driver = BuildDriver(args.generator_dir)
         backend = None if args.backend == "auto" else args.backend
         if backend is None and driver.host.default_backend == "none":
             backend = "native"  # still print a deterministic command on a host that can't build
-        print(driver.command_string(cfg, backend))
+        try:
+            # ImageConfig.load raises on a worklist envelope (explicit `schema` key) so
+            # it can never silently degrade to a default config; the unaffiliated
+            # conflicts / identity allowlist raise ValueError inside command_string. Both
+            # surface as a clean non-zero exit with the reason on stderr (never argv).
+            cfg = ImageConfig.load(args.config) if args.config else ImageConfig()
+            print(driver.command_string(cfg, backend))
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        return 0
+
+    if args.print_commands:
+        # Qt-free path: the worklist model is model-only (no Qt). Accepts BOTH shapes via
+        # load_any — an envelope prints one command per materialized image; a flat config
+        # prints its single command. --image selects one 0-based materialized index.
+        from .core.build_driver import BuildDriver
+        from .core.config import ImageConfig
+        from .core.worklist import load_any, synthesize
+        driver = BuildDriver(args.generator_dir)
+        backend = None if args.backend == "auto" else args.backend
+        if backend is None and driver.host.default_backend == "none":
+            backend = "native"
+        try:
+            if args.config:
+                base, wl = load_any(args.config)
+            else:
+                base, wl = ImageConfig(), None
+            if wl is None:
+                wl = synthesize(base)
+            materialized = [cfg for _entry, cfg in wl.materialize()]
+            if args.image is not None:
+                if not -len(materialized) <= args.image < len(materialized):
+                    print(f"error: --image {args.image} out of range "
+                          f"(worklist has {len(materialized)} image(s))", file=sys.stderr)
+                    return 2
+                materialized = [materialized[args.image]]
+            for cfg in materialized:
+                print(driver.command_string(cfg, backend))
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        return 0
+
+    if args.print_specs:
+        # The materialization BRIDGE (Qt-free, model only): expand a worklist envelope (or a
+        # flat config) into the N flat, fully-resolved ImageConfig specs that
+        # WorklistConfig.materialize() produces — the exact per-image spec the web
+        # IMAGE_SPEC_JSON channel puts in a ConfigMap and build-image.sh feeds back through
+        # --print-command. One JSON object per line (JSONL); SECRET fields are blanked
+        # (to_dict(include_secrets=False)) because they ride a separate channel.
+        import json
+        from .core.config import ImageConfig
+        from .core.worklist import load_any, synthesize
+        try:
+            if args.config:
+                base, wl = load_any(args.config)
+            else:
+                base, wl = ImageConfig(), None
+            if wl is None:
+                wl = synthesize(base)
+            materialized = [cfg for _entry, cfg in wl.materialize()]
+            if args.image is not None:
+                if not -len(materialized) <= args.image < len(materialized):
+                    print(f"error: --image {args.image} out of range "
+                          f"(worklist has {len(materialized)} image(s))", file=sys.stderr)
+                    return 2
+                materialized = [materialized[args.image]]
+            for cfg in materialized:
+                print(json.dumps(cfg.to_dict(), sort_keys=True))
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
         return 0
 
     # GUI

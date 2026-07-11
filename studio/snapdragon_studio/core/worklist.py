@@ -1,0 +1,226 @@
+"""Worklist envelope — the mesh (and, always, the single-image) build model.
+
+A worklist is an ENVELOPE around one base :class:`~.config.ImageConfig` plus a list
+of :class:`WorklistEntry` rows, one per role x platform combination the mesh needs.
+The shared identity plane (domains / users / network / system / disk-encryption
+default) lives IN the base config, exactly as today; each entry only carries the
+axes that make it a distinct image (role, platform, board/flavor/desktop, its
+encrypt-root override, and its per-image package deltas).
+
+``materialize()`` projects the envelope back down into a list of plain, fully-valid
+single-image :class:`ImageConfig` objects — so every downstream mechanism
+(``to_cli_args()``, preflight, the build driver, ``--print-command``, the web job
+channel) is reused untouched. This is what keeps both UIs thin projections and the
+whole redesign headless-testable.
+
+Discriminator: the on-disk envelope carries an explicit top-level ``"schema"`` key
+(``snapdragon-worklist/v1``). :meth:`ImageConfig.load` fails LOUDLY on that key so an
+envelope can never silently degrade to a default config; :func:`load_any` is the
+single loader that accepts BOTH shapes (envelope -> WorklistConfig, anything else ->
+flat ImageConfig), so the 118 matrix flat configs and all user saves keep loading
+byte-identically.
+
+Qt-free by construction (model only) — imported by the headless ``--print-commands``
+path and the pure-core test suite with no GUI toolkit installed.
+"""
+from __future__ import annotations
+
+import copy
+import json
+from dataclasses import dataclass, field
+from typing import Any
+
+from .config import (
+    ImageConfig,
+    SECRET_FIELDS,
+    clear_role_class_fields,
+    strip_platform_unsupported,
+)
+
+WORKLIST_SCHEMA = "snapdragon-worklist/v1"
+
+# encrypt_root override sentinels on a worklist entry.
+ENCRYPT_ROOT_CHOICES = ("default", "on", "off")
+
+
+def entry_id(role: str, platform: str) -> str:
+    """The STABLE worklist entry id — ``f"{role}.{platform}"``. One id per role x
+    platform combo; board/flavor are row ATTRIBUTES, so an id never dangles when a
+    board is edited (that was the D1 weakness the synthesis fixed)."""
+    return f"{role}.{platform}"
+
+
+@dataclass
+class WorklistEntry:
+    """One image the worklist builds: a role x platform pair plus its per-image axes.
+
+    ``id`` is derived from ``role``/``platform`` when omitted (the stable identity used
+    for domain attachment and the per-entry build_subdir); an explicit id is honored on
+    load so a round-trip is exact. ``build_subdir`` is DERIVED (``wl-<id>``), never
+    stored — it is the same-arch build-tree collision guard applied in materialize()."""
+    role: str = ""
+    platform: str = "x86"
+    id: str = ""                     # STABLE f"{role}.{platform}"; derived if blank
+    board: str = ""                  # rpi5 / jetson / frite / orangepi5 board axis
+    flavor: str = ""                 # frite / orangepi5 / orangepizero2 live|installer axis
+    desktop: str = ""                # frite / orangepi5 (and x86 thin|full) desktop axis
+    encrypt_root: str = "default"    # "default" | "on" | "off"; jetson rows forced "off"
+    packages_add: str = ""           # per-image Portage atoms to add (space-separated)
+    packages_drop: str = ""          # per-image Portage atoms to drop (space-separated)
+
+    def __post_init__(self) -> None:
+        if not self.id:
+            self.id = entry_id(self.role, self.platform)
+
+    @property
+    def build_subdir(self) -> str:
+        """Same-arch build trees must not collide — each entry builds under wl-<id>."""
+        return f"wl-{self.id}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id, "role": self.role, "platform": self.platform,
+            "board": self.board, "flavor": self.flavor, "desktop": self.desktop,
+            "encrypt_root": self.encrypt_root,
+            "packages_add": self.packages_add, "packages_drop": self.packages_drop,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "WorklistEntry":
+        known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+
+@dataclass
+class WorklistConfig:
+    """The worklist envelope: a base ImageConfig + the per-image entries.
+
+    (``base`` is declared first so the dataclass has no default-before-required field;
+    the on-disk order is ``schema`` / ``base`` / ``entries`` — see :meth:`to_dict`.)"""
+    base: ImageConfig
+    schema: str = WORKLIST_SCHEMA
+    entries: list[WorklistEntry] = field(default_factory=list)
+
+    # ---- (de)serialization -------------------------------------------------
+    def to_dict(self, include_secrets: bool = False) -> dict[str, Any]:
+        """Serialize to the wire envelope. The base's plaintext secrets are BLANKED
+        unless the caller opts in (delegates to ImageConfig.to_dict)."""
+        return {
+            "schema": self.schema,
+            "base": self.base.to_dict(include_secrets=include_secrets),
+            "entries": [e.to_dict() for e in self.entries],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "WorklistConfig":
+        base = ImageConfig.from_dict(d.get("base") or {})
+        entries = [WorklistEntry.from_dict(x) for x in (d.get("entries") or [])
+                   if isinstance(x, dict)]
+        return cls(base=base, schema=d.get("schema", WORKLIST_SCHEMA), entries=entries)
+
+    def save(self, path: str) -> list[str]:
+        """Write the envelope JSON (base secrets blanked, matching ImageConfig.save).
+        Returns the aggregated per-secret warning list so the UI can surface any secret
+        that was set on the base but NOT persisted — the same message shape as
+        ImageConfig.save, extended (not changed) to the envelope."""
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(self.to_dict(), fh, indent=2)
+        return [f"{k.replace('_', '-')} was NOT saved (plaintext secret) — re-enter it "
+                "before building from this config"
+                for k in SECRET_FIELDS if getattr(self.base, k)]
+
+    # ---- projection back to single-image configs ---------------------------
+    def materialize(self) -> list[tuple[WorklistEntry, ImageConfig]]:
+        """Project the envelope into a list of (entry, plain ImageConfig) — the
+        deterministic, unit-pinned pipeline (design 2.4). Each output config is a fully
+        valid single-image config that every existing single-image mechanism reuses
+        untouched. Order mirrors ``self.entries``."""
+        out: list[tuple[WorklistEntry, ImageConfig]] = []
+        for entry in self.entries:
+            out.append((entry, self._materialize_one(entry)))
+        return out
+
+    def _materialize_one(self, entry: WorklistEntry) -> ImageConfig:
+        # 1. deepcopy the base and stamp the entry's structural axes onto it. Role-id
+        #    normalization (RPI5_ROLE_MAP / JETSON_ROLE_MAP) stays downstream in
+        #    to_cli_args, exactly as for a hand-built single-image config.
+        cfg = copy.deepcopy(self.base)
+        cfg.role = entry.role
+        cfg.platform = entry.platform
+        cfg.board = entry.board
+        cfg.flavor = entry.flavor
+        cfg.desktop = entry.desktop
+
+        # 2. Filter the shared domains to those this image is attached to (Domain.images
+        #    empty == attach to every eligible image), IN TABLE ORDER so the first
+        #    attached row stays the PRIMARY --domains element (ROLE_TAG/filename
+        #    determinism). MUST run before step 5: strip_platform_unsupported blanks
+        #    cfg.domains on ARM (WS-CORE ordering concern).
+        cfg.domains = [copy.deepcopy(d) for d in self.base.domains
+                       if not d.images or entry.id in d.images]
+
+        # 3. Users are manifest-only and never per-image filtered — carry them whole.
+        cfg.users = [copy.deepcopy(u) for u in self.base.users]
+
+        # 4. Per-image package deltas (kept SEPARATE from the frozen extra_packages —
+        #    no merging) + the encrypt_root resolution + the collision-guard subdir.
+        cfg.packages_add = entry.packages_add
+        cfg.packages_drop = entry.packages_drop
+        cfg.encrypt_root = self._resolve_encrypt_root(entry)
+        cfg.build_subdir = entry.build_subdir
+
+        # 5. Defensive re-application of the two gating axes (belt & braces I4), then the
+        #    mesh tailnet forcing (matching builder reality: x86 mesh emits
+        #    --with-tailscale/--with-sso; ARM joins mesh unless --skip-mesh).
+        strip_platform_unsupported(cfg)
+        clear_role_class_fields(cfg)
+        if cfg.mode == "mesh":
+            cfg.tailscale = True
+            cfg.sso = True
+
+        # 6. Fail closed — includes superdomain + the package-atom regex.
+        cfg.validate_identity()
+        return cfg
+
+    def _resolve_encrypt_root(self, entry: WorklistEntry) -> bool:
+        """Resolve the entry's tri-state override to a concrete bool. Jetson is forced
+        OFF (the jetson builder hard-blocks --encrypt-root); "default" inherits the
+        worklist-wide default captured on the Home page (base.encrypt_root)."""
+        if entry.platform == "jetson":
+            return False
+        if entry.encrypt_root == "on":
+            return True
+        if entry.encrypt_root == "off":
+            return False
+        return bool(self.base.encrypt_root)
+
+
+def load_any(path: str) -> tuple[ImageConfig, "WorklistConfig | None"]:
+    """Load either shape from ``path``:
+
+    * a worklist ENVELOPE (explicit top-level ``"schema"``) -> ``(base, WorklistConfig)``
+    * anything else (a flat single-image config) -> ``(ImageConfig.from_dict(...), None)``
+
+    The single loader both UIs and the headless ``--print-commands`` path share, so the
+    118 matrix flat configs and all user saves keep loading unchanged while an envelope
+    is never silently degraded (ImageConfig.load raises on the same discriminator)."""
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    if isinstance(data, dict) and "schema" in data:
+        wl = WorklistConfig.from_dict(data)
+        return wl.base, wl
+    return ImageConfig.from_dict(data), None
+
+
+def synthesize(cfg: ImageConfig) -> WorklistConfig:
+    """Wrap a single-image config as a 1-entry worklist (the standalone/cloud shape the
+    wizard ALWAYS commits at Build time, so driver/progress/manifest have exactly one
+    code path). The lone entry captures the config's structural axes and package deltas;
+    the base carries everything else. materialize() reproduces the config faithfully."""
+    entry = WorklistEntry(
+        role=cfg.role, platform=cfg.platform or "x86",
+        board=cfg.board, flavor=cfg.flavor, desktop=cfg.desktop,
+        encrypt_root="on" if cfg.encrypt_root else "off",
+        packages_add=cfg.packages_add, packages_drop=cfg.packages_drop,
+    )
+    return WorklistConfig(base=copy.deepcopy(cfg), entries=[entry])

@@ -107,15 +107,21 @@ def pick_platform(role_page, plat):
 
 def test_page_slugs_map_to_the_right_pages(wiz):
     """WIZARD_PAGE_SLUGS is zip'd against the registration order — this pins each
-    slug to its page CLASS so a reorder can't silently skip the wrong page."""
+    slug to its page CLASS so a reorder can't silently skip the wrong page. The new
+    "worklist" (mesh multi-select) and "progress" (terminal) slugs are included;
+    ProgressPage lands in WS-REVIEWUI, so it is None-tolerant until registered."""
     expect = {"welcome": wizard_mod.WelcomePage, "mode": wizard_mod.ModePage,
-              "role": wizard_mod.RolePage, "hardware": wizard_mod.HardwarePage,
-              "branding": wizard_mod.BrandingPage, "network": wizard_mod.NetworkPage,
-              "keyzip": wizard_mod.KeyZipPage, "domains": wizard_mod.DomainsPage,
-              "users": wizard_mod.UsersPage, "system": wizard_mod.SystemPage,
-              "home": wizard_mod.HomePage, "build": wizard_mod.BuildPage}
+              "role": wizard_mod.RolePage, "worklist": wizard_mod.WorklistPage,
+              "hardware": wizard_mod.HardwarePage, "branding": wizard_mod.BrandingPage,
+              "network": wizard_mod.NetworkPage, "keyzip": wizard_mod.KeyZipPage,
+              "domains": wizard_mod.DomainsPage, "users": wizard_mod.UsersPage,
+              "system": wizard_mod.SystemPage, "home": wizard_mod.HomePage,
+              "build": wizard_mod.BuildPage, "progress": wizard_mod.ProgressPage}
     assert set(expect) == set(WIZARD_PAGE_SLUGS)
     for slug, cls in expect.items():
+        if cls is None:      # ProgressPage not landed yet (WS-REVIEWUI creates it)
+            assert slug not in wiz._page_ids
+            continue
         assert type(wiz.page(wiz._page_ids[slug])) is cls
 
 
@@ -217,6 +223,45 @@ def test_cloud_and_mesh_flows_keep_their_admin_pages(wiz, mode):
     advance_to(wiz, wizard_mod.BuildPage)
     for slug in ("keyzip", "domains", "users"):
         assert wiz.hasVisitedPage(wiz._page_ids[slug])
+    # mesh drives its image set off the WorklistPage (a role x platform multi-select)
+    # instead of the single-image role/hardware/branding pages; cloud keeps those and
+    # skips the worklist (MODE_SKIPPED_PAGES).
+    if mode == "mesh":
+        assert wiz.hasVisitedPage(wiz._page_ids["worklist"])
+        for slug in ("role", "hardware", "branding"):
+            assert not wiz.hasVisitedPage(wiz._page_ids[slug])
+    else:
+        assert not wiz.hasVisitedPage(wiz._page_ids["worklist"])
+        assert wiz.hasVisitedPage(wiz._page_ids["role"])
+
+
+def test_mesh_worklist_multiselect_builds_entries_and_prunes_domain_refs(wiz):
+    """The WorklistPage is the mesh role x platform multi-select: it exposes the checkable
+    rows by stable id (``{role}.{platform}``), defaults navigable (the mode-default row
+    pre-checked), builds one WorklistEntry per checked row, pins the shared-page gating to
+    the x86 option-superset, and prunes an unchecked row's id from every Domain.images."""
+    from snapdragon_studio.core.config import Domain
+
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+    assert {"omnibus.x86", "be.x86", "be.rpi5", "edge_ai.jetson"} <= set(page.rows)
+    assert page.row_for_id("be.rpi5") is page.rows["be.rpi5"]
+    assert page.isComplete()                       # a default row pre-checked -> navigable
+
+    # a domain attached to two images; one of them (be.rpi5) will be left unchecked
+    wiz.cfg.domains = [Domain(name="acme.example", title="Acme",
+                              images=["omnibus.x86", "be.rpi5"])]
+    for rid in ("omnibus.x86", "be.x86", "be.rpi5", "edge_ai.jetson"):
+        page.row_for_id(rid).setCheckState(
+            0, Qt.CheckState.Checked if rid in {"omnibus.x86", "be.x86"}
+            else Qt.CheckState.Unchecked)
+    assert page.validatePage()
+
+    assert {e.id for e in wiz.worklist.entries} == {"omnibus.x86", "be.x86"}
+    assert wiz.cfg.role == wiz.worklist.entries[0].role   # first checked row (table order)
+    assert wiz.cfg.platform == "x86"                      # option-superset gating
+    # be.rpi5 is no longer a checked row, so its attachment is pruned; omnibus.x86 stays
+    assert wiz.cfg.domains[0].images == ["omnibus.x86"]
 
 
 def test_switching_back_to_standalone_clears_stranded_admin_state(wiz):
@@ -460,45 +505,29 @@ def test_services_box_greyed_on_non_rpi5_arm_clients(wiz, role):
     assert not net.games.isEnabled() and not net.character_studio.isEnabled()
 
 
-def test_jetson_mesh_edge_ai_box_greys_out(wiz):
-    """G11 (adopted decision: grey out, do not extend the jetson builder): the
-    edge_ai role on jetson shows the mesh edge-AI box disabled — NOT force-checked
-    — and emits no edge-AI flags (build-jetson-stage4.sh parses none of them)."""
-    pick_mode(wiz, "mesh")
-    page = pick_role(wiz, "edge_ai")
-    pick_platform(page, "jetson")
-    net = advance_to(wiz, wizard_mod.NetworkPage)
-    assert net.edge_ai_box.isVisible()        # mesh mode still shows the box
-    assert not net.edge_ai_box.isEnabled()    # …but jetson can't take the flags
-    assert not net.edge_ai.isChecked()        # role auto-check suppressed
-    assert not net.services_box.isEnabled()   # G12 covers jetson too
-    net.edge_ai_models.setText("llama3.2:3b")  # a stale/loaded value…
-    advance_to(wiz, wizard_mod.KeyZipPage)
-    assert wiz.cfg.edge_ai_service is False and wiz.cfg.edge_ai_models == ""
-    args = wiz.cfg.to_cli_args()
-    assert not any(a.startswith("--with-edge-ai") or a.startswith("--edge-ai")
-                   for a in args)
+def test_branding_form_greyed_for_mesh_node(qapp):
+    """spec 2 (INVERSION of the old platform-only gate): theming is a DESKTOP-class
+    surface — a MESH node can never carry a theme, even on x86. branding_allowed is
+    False in mesh regardless of platform, so the whole form greys (by ROLE-CLASS, not
+    the platform axis) and every branding field clears on Next.
 
+    The old test asserted an x86 mesh *omnibus* RE-ENABLED the branding form (the
+    platform-only gate saw x86 and re-enabled it) — a direct spec-2 contradiction,
+    reversed here. Instantiated directly so the assertion survives the flow skipping
+    the branding page in mesh (MODE_SKIPPED_PAGES)."""
+    from types import SimpleNamespace
 
-def test_branding_form_greys_and_clears_on_arm(wiz):
-    """G10: branding assets are x86-only emission — the whole form greys on an ARM
-    platform (without the unaffiliated note, which is a ROLE message) and the
-    fields clear on Next; switching back to an x86 role re-enables the form."""
-    c = wiz.cfg
-    c.mode = "mesh"; c.role = "rpi5-desktop"; c.platform = "rpi5"
-    c.theme = "boogiepop"; c.wallpaper = "/tmp/w.png"; c.brand_locked = True
-    wiz.restart()
-    page = advance_to(wiz, wizard_mod.BrandingPage)
-    assert not page.form.isEnabled()
-    assert not page.unaffiliated_note.isVisible()
-    advance_to(wiz, wizard_mod.NetworkPage)
-    assert c.theme == "" and c.wallpaper == "" and c.brand_locked is False
-    args = c.to_cli_args()
+    from snapdragon_studio.core.config import ImageConfig
+    cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86",
+                      theme="boogiepop", wallpaper="/tmp/w.png", brand_locked=True)
+    page = wizard_mod.BrandingPage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert not page.form.isEnabled()          # x86 mesh NODE: greyed by role-class
+    assert page.unaffiliated_note.isHidden()  # not the unaffiliated ROLE message
+    assert page.validatePage()                # clears on Next (belt & braces)
+    assert cfg.theme == "" and cfg.wallpaper == "" and cfg.brand_locked is False
+    args = cfg.to_cli_args()
     assert "--theme" not in args and "--wallpaper" not in args and "--brand-locked" not in args
-    back_to(wiz, wizard_mod.RolePage)
-    pick_role(wiz, "omnibus")
-    page = advance_to(wiz, wizard_mod.BrandingPage)
-    assert page.form.isEnabled()
 
 
 def test_hardware_gpu_and_kernel_builtin_grey_on_arm(wiz):
@@ -543,9 +572,11 @@ def test_standalone_frite_role_flows_with_capability_gating(wiz):
 def test_home_provisioning_greys_and_clears_on_arm(wiz):
     """G10: home_* provisioning is x86-only (like the unlock combos, which keep
     their original gating through the shared helper); the local-login group and
-    encrypt-root stay live — they land on every platform."""
+    encrypt-root stay live — they land on every platform. This is the ARM-platform-gate
+    case (a rpi5 client greys the x86-only home widgets); the x86 node-role role-class
+    case is test_home_provisioning_greyed_for_x86_mesh_node."""
     c = wiz.cfg
-    c.mode = "mesh"; c.role = "be"; c.platform = "rpi5"
+    c.mode = "cloud"; c.role = "rpi5-desktop"; c.platform = "rpi5"
     c.home_mode = "adopt"; c.home_device = "LABEL=home"
     c.home_encrypted = True; c.home_seed_code = "stack"
     wiz.restart()
@@ -559,6 +590,72 @@ def test_home_provisioning_greys_and_clears_on_arm(wiz):
     assert c.home_mode == "create" and c.home_device == ""
     assert c.home_encrypted is False and c.home_seed_code == "none"
     assert not any(a.startswith("--home-") for a in c.to_cli_args())
+
+
+def test_home_provisioning_greyed_for_x86_mesh_node(wiz):
+    """spec 7 (role-class axis, isolated from the platform gate): home provisioning is
+    a DESKTOP-class surface — greyed+cleared on a NODE image even on x86, where the
+    platform gate alone would leave every home widget live. Disk-encryption and the
+    local-login group stay live (nodes ARE root-encrypted)."""
+    c = wiz.cfg
+    c.mode = "mesh"; c.role = "omnibus"; c.platform = "x86"
+    c.home_mode = "adopt"; c.home_device = "LABEL=home"
+    c.home_encrypted = True; c.home_seed_code = "stack"
+    wiz.restart()
+    home = advance_to(wiz, wizard_mod.HomePage)
+    for w in (home.mode, home.device, home.backup_row, home.encrypted, home.seed,
+              home.include_archive_row, home.seed_code_from_row, home.seed_packages_row):
+        assert not w.isEnabled(), w          # role-class grey, NOT platform (x86 supports these)
+    assert home.encrypt_root.isEnabled() and home.luks_pass.isEnabled()
+    assert home.standalone.isEnabled() and home.local_user.isEnabled()
+    advance_to(wiz, wizard_mod.BuildPage)
+    assert c.home_mode == "create" and c.home_device == ""
+    assert c.home_encrypted is False and c.home_seed_code == "none"
+    assert not any(a.startswith("--home-") for a in c.to_cli_args())
+
+
+# ---- NetworkPage: tailnet/SSO + mesh-control-plane role-class reflow (specs 3, 5) ----
+
+def test_tailnet_sso_group_shown_and_superdomain_readonly_in_cloud(wiz):
+    """spec 3/5: the Tailnet+SSO group is user-editable (and default-checked) for a
+    cloud branded desktop; the mesh control plane shows with the superdomain as a
+    read-only DERIVED display (so the Users-page superadmin lock is explicable)."""
+    c = wiz.cfg
+    c.mode = "cloud"; c.role = "desktop"; c.platform = "x86"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert net.tailnet_box.isVisible() and not net.tailnet_reason.isVisible()
+    assert net.tailscale.isChecked() and net.sso.isChecked()   # default-checked cloud desktop
+    assert net.mesh_box.isVisible()
+    assert net.superdomain.isReadOnly()
+    assert net.superdomain.text() == c.effective_superdomain()
+
+
+def test_tailnet_and_mesh_groups_hidden_in_standalone(wiz):
+    """spec 3: standalone images have no tailnet — the Tailnet+SSO group AND the whole
+    mesh control plane are hidden, with a reason label in the tailnet group's place."""
+    c = wiz.cfg
+    c.mode = "standalone"; c.role = "standalone-thick"; c.platform = "x86"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.tailnet_box.isVisible()
+    assert net.tailnet_reason.isVisible()
+    assert not net.mesh_box.isVisible()
+
+
+def test_superdomain_editable_and_committed_in_mesh(wiz):
+    """spec 3/5: mesh HIDES the tailnet/SSO toggles (forced on off-UI in
+    enter_mesh_defaults/materialize — this page no longer force-checks them) and makes
+    the orchestration superdomain EDITABLE; an explicit value commits to the config."""
+    c = wiz.cfg
+    c.mode = "mesh"; c.role = "omnibus"; c.platform = "x86"
+    wiz.restart()
+    net = advance_to(wiz, wizard_mod.NetworkPage)
+    assert not net.tailnet_box.isVisible()          # forced off-UI, not user-shown
+    assert net.mesh_box.isVisible() and not net.superdomain.isReadOnly()
+    net.superdomain.setText("core.acme.internal")
+    advance_to(wiz, wizard_mod.KeyZipPage)
+    assert c.superdomain == "core.acme.internal"
 
 
 # ---- KeyZipPage: opt-in passwordless-login roles emission ---------------------

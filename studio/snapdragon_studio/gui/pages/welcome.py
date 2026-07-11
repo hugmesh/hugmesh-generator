@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from ..qt import Qt, QtWidgets
-from ...core.config import ImageConfig
 
 
 class WelcomePage(QtWidgets.QWizardPage):
@@ -42,17 +41,17 @@ class WelcomePage(QtWidgets.QWizardPage):
     def _load(self):
         p, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load config", "", "JSON (*.json)")
         if p:
-            self.wiz.cfg = ImageConfig.load(p)
+            # Load EITHER a flat config OR a worklist envelope through the one loader both
+            # UIs share (StudioWizard.load_config -> worklist.load_any); restart() so each
+            # page's initializePage() re-reads the freshly loaded config.
+            self.wiz.load_config(p)
             QtWidgets.QMessageBox.information(self, "Loaded", f"Loaded {p}")
-            # already-constructed pages won't repopulate on their own — restart the wizard
-            # so each page's initializePage() re-reads from the freshly loaded config.
-            self.wiz.restart()
 
     def _save(self):
         p, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save config", "snapdragon-image.json", "JSON (*.json)")
         if p:
-            self.wiz.collect_all()
-            warnings = self.wiz.cfg.save(p)
+            # writes the worklist envelope when a worklist exists, else flat JSON (I1)
+            warnings = self.wiz.save_config(p)
             if warnings:  # plaintext secrets are blanked on save — tell the user
                 QtWidgets.QMessageBox.warning(self, "Passwords not saved", "\n".join(warnings))
 

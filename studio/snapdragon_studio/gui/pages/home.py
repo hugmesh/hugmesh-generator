@@ -1,15 +1,26 @@
-"""HomePage — home provisioning (+ archive/seed extras), the external media-data
-device, local login and root-disk (LUKS2) encryption."""
+"""HomePage — split into its two natural groups: HOME PROVISIONING (home mode/
+device/backup + archive/seed extras + the per-user eCryptfs home) which is a
+DESKTOP-class surface gated by ``home_options_allowed`` (spec 7 — nodes are root-
+encrypted, they have no separately-provisioned home), and DISK ENCRYPTION (LUKS2
+root + unlock factors) plus the local-login group, which stay in ALL modes. The
+external media-data device keeps its own x86-only platform gate."""
 from __future__ import annotations
 
+from dataclasses import MISSING
+
 from ..qt import QtWidgets
-from ...core.config import ImageConfig
-from ._gating import clear_unsupported, gate_widgets
+from ...core.config import HOME_DESKTOP_FIELDS, ImageConfig, home_options_allowed
+from ._gating import clear_unsupported, gate_widgets, gate_widgets_role_class
 from ._widgets import _file_picker, _row
 
 # the media-data combo's leave-the-builder-default sentinel (the builder default is
 # ON — an explicit "on" still emits --media-data so a brand.conf override loses)
 _MEDIA_DEFAULT = "(builder default: on)"
+
+# HOME_DESKTOP_FIELDS is desktop-class (spec 7): greyed+cleared on node/mesh images.
+_HOME_ROLE_CLASS_REASON = (
+    "Home provisioning applies to desktops only — nodes are root-encrypted; homes "
+    "are not separately provisioned or encrypted. Cleared when you leave the page.")
 
 
 class HomePage(QtWidgets.QWizardPage):
@@ -18,23 +29,26 @@ class HomePage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self.setTitle("Home & encryption")
         lay = QtWidgets.QVBoxLayout(self)
+        # ---- Home provisioning (desktop-class; role-class gated) -----------------
+        self.home_box = QtWidgets.QGroupBox("Home provisioning")
+        hl = QtWidgets.QVBoxLayout(self.home_box)
         self.mode = QtWidgets.QComboBox()
         self.mode.addItems(["create", "adopt", "archive", "restore"])
-        lay.addWidget(_row("Home mode", self.mode))
+        hl.addWidget(_row("Home mode", self.mode))
         self.device = QtWidgets.QLineEdit()
         self.device.setPlaceholderText("LABEL=… | UUID=… | /dev/… (adopt)")
-        lay.addWidget(_row("Home device", self.device))
+        hl.addWidget(_row("Home device", self.device))
         self.backup = QtWidgets.QLineEdit()
         bbtn = _file_picker(self, self.backup, "Home backup", "Backup (*.tar* *.gpg *.enc)")
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.backup, 1); h.addWidget(bbtn)
         self.backup_row = w   # greyed as one unit (line edit + Browse…) per platform
-        lay.addWidget(_row("Home backup (restore)", w))
+        hl.addWidget(_row("Home backup (restore)", w))
         self.encrypted = QtWidgets.QCheckBox("Per-user eCryptfs home (on top of LUKS root)")
-        lay.addWidget(self.encrypted)
+        hl.addWidget(self.encrypted)
         self.seed = QtWidgets.QComboBox()
         self.seed.addItems(["none", "repos", "stack", "mesh"])
-        lay.addWidget(_row("Seed stack code", self.seed))
+        hl.addWidget(_row("Seed stack code", self.seed))
         # home extras (G31): bake a home archive into the image (what makes
         # home_mode=archive actually work), seed code from a local checkout instead
         # of cloning, and seed the binpkg set from a package list — x86-only, greyed
@@ -45,21 +59,27 @@ class HomePage(QtWidgets.QWizardPage):
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.include_archive, 1); h.addWidget(abtn)
         self.include_archive_row = w
-        lay.addWidget(_row("Home archive (bake in)", w))
+        hl.addWidget(_row("Home archive (bake in)", w))
         self.seed_code_from = QtWidgets.QLineEdit()
         sbtn = _file_picker(self, self.seed_code_from, "Seed home code from a local checkout",
                             directory=True)
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.seed_code_from, 1); h.addWidget(sbtn)
         self.seed_code_from_row = w
-        lay.addWidget(_row("Seed code from (dir)", w))
+        hl.addWidget(_row("Seed code from (dir)", w))
         self.seed_packages = QtWidgets.QLineEdit()
         pbtn = _file_picker(self, self.seed_packages, "Seed packages list",
                             "Package list (*.txt *.list);;All files (*)")
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.seed_packages, 1); h.addWidget(pbtn)
         self.seed_packages_row = w
-        lay.addWidget(_row("Seed packages from", w))
+        hl.addWidget(_row("Seed packages from", w))
+        lay.addWidget(self.home_box)
+        # the home-provisioning widgets role-class gating targets (individually, so
+        # each widget's own enabled flag is set — never ancestor-shadowed).
+        self._home_widgets = (self.mode, self.device, self.backup_row, self.encrypted,
+                              self.seed, self.include_archive_row, self.seed_code_from_row,
+                              self.seed_packages_row)
         # external media-data device (G32): Steam library + gocryptfs Vaults set —
         # x86 standalone surface; only --steam was fielded before.
         media = QtWidgets.QGroupBox("External media-data device (Steam library + gocryptfs Vaults)")
@@ -101,7 +121,9 @@ class HomePage(QtWidgets.QWizardPage):
         self.local_pass.setPlaceholderText("hashed at build time; NOT saved to configs")
         ll.addWidget(_row("Local password", self.local_pass))
         lay.addWidget(login)
-        # root-disk encryption (installer LUKS2 FDE) + unlock factors
+        # root-disk encryption (installer LUKS2 FDE) + unlock factors — the node-relevant
+        # remainder: stays live in ALL modes (in mesh it becomes the worklist
+        # encrypt_root default; jetson entries are auto-exempted in materialize()).
         enc = QtWidgets.QGroupBox("Root-disk encryption (LUKS2)")
         el = QtWidgets.QVBoxLayout(enc)
         self.encrypt_root = QtWidgets.QCheckBox(
@@ -162,6 +184,11 @@ class HomePage(QtWidgets.QWizardPage):
             "unlock_keyfile": self.unlock_keyfile,
             "unlock_yubikey": self.unlock_yubikey,
         })
+        # role-class gate (spec 7): home provisioning is desktop-only — on a node/mesh
+        # image grey the WHOLE group (overriding any platform-enable), with the reason.
+        # On desktop images leave the per-platform greying above untouched.
+        if not home_options_allowed(c):
+            gate_widgets_role_class(list(self._home_widgets), False, _HOME_ROLE_CLASS_REASON)
 
     def validatePage(self):
         c = self.wiz.cfg
@@ -195,4 +222,11 @@ class HomePage(QtWidgets.QWizardPage):
                               "seed_packages_from",
                               "media_data", "media_label", "no_vaults",
                               "unlock_keyfile", "unlock_yubikey"))
+        # role-class clear (spec 7, belt & braces mirroring materialize's
+        # clear_role_class_fields I4): a node/mesh image carries no home provisioning,
+        # so reset HOME_DESKTOP_FIELDS to defaults regardless of platform.
+        if not home_options_allowed(c):
+            for fld in HOME_DESKTOP_FIELDS:
+                f = ImageConfig.__dataclass_fields__[fld]
+                setattr(c, fld, f.default_factory() if f.default is MISSING else f.default)
         return True

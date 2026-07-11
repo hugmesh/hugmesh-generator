@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, MISSING
 from typing import Any
 
 from .validate import (
@@ -30,6 +30,7 @@ from .validate import (
     validate_home_backup,
     validate_home_device,
     validate_org,
+    validate_package_atoms,
     validate_username,
 )
 
@@ -56,12 +57,18 @@ MODE_DEFAULT_ROLE = {
 # contract is testable without a GUI toolkit. Skipped pages are never VISITED, and
 # collect_all() only reads visited pages — so a skipped page's widgets can never
 # leak stale values into a saved config or the emitted argv.
-WIZARD_PAGE_SLUGS = ("welcome", "mode", "role", "hardware", "branding", "network",
-                     "keyzip", "domains", "users", "system", "home", "build")
+WIZARD_PAGE_SLUGS = ("welcome", "mode", "role", "worklist", "hardware", "branding",
+                     "network", "keyzip", "domains", "users", "system", "home",
+                     "build", "progress")
 MODE_SKIPPED_PAGES = {
-    "standalone": ("keyzip", "domains", "users"),  # no admin/mesh plane to configure
-    "cloud": (),   # the key-zip carries the admin plane; domains/users still apply
-    "mesh": (),    # the superadmin flow uses every page
+    # standalone/cloud build ONE image the old way (role/hardware/branding per image);
+    # the mesh worklist is skipped there. mesh builds N images from a role x platform
+    # multi-select on the WorklistPage instead of the single-image role/hardware/branding
+    # pages (per-image hardware/GPU/board facts derive from the worklist row; theming is
+    # a desktop-class surface a mesh node never carries).
+    "standalone": ("worklist", "keyzip", "domains", "users"),  # single image, no admin/mesh plane
+    "cloud": ("worklist",),                                     # single image, admin plane via key-zip
+    "mesh": ("role", "hardware", "branding"),                  # the WorklistPage owns role x platform
 }
 
 # platform id -> builder script at the generator-repo root. All four are reachable
@@ -323,6 +330,8 @@ PLATFORM_FIELD_SUPPORT: dict[str, tuple[str, ...]] = {
     "skip_kernel": _ALL_PLATFORMS, "skip_clean": _ALL_PLATFORMS, "build_subdir": _ALL_PLATFORMS,
     "seed_url": _ALL_PLATFORMS, "version": _ALL_PLATFORMS, "release_tag": _X86,
     "distdir": _X86, "extra_packages": _ARM_PLATFORMS,
+    # user package deltas — parsed identically by all six builders (WS-BUILDER flip).
+    "packages_add": _ALL_PLATFORMS, "packages_drop": _ALL_PLATFORMS,
 }
 
 # Fields delivered OUT-OF-BAND — never a builder CLI flag on any platform, so absent
@@ -331,14 +340,132 @@ PLATFORM_FIELD_SUPPORT: dict[str, tuple[str, ...]] = {
 # var forwarded by build_driver (G2); pentest is the fleet-level PENTEST=1 env knob
 # consumed by build-all-roles.sh / the Makefile (G40); hw_profile is a GUI-only preset
 # that pre-fills gpu/wifi/bt and never emits (decided document-as-preset, G41).
-NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile")
+#
+# superdomain is documented-not-emitted (v1 flows through the mesh manifest + the KEYS
+# channel that sets .mesh.magic_dns_domain, never a builder flag — a real --superdomain
+# is the separately-gated WS-SUPER-B). packages_add/packages_drop STARTED here (Phase 1,
+# WS-CORE: fields + save/load + validation, zero emission) and were flipped by WS-BUILDER
+# to emitted --packages-add/--packages-drop (all six builders parse them) — they now live
+# in PLATFORM_FIELD_SUPPORT above, not here.
+NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile", "superdomain")
+
+
+# ── role-class capability layer (Qt-free; BESIDE PLATFORM_FIELD_SUPPORT, NEVER inside
+# to_cli_args — invariant I3) ─────────────────────────────────────────────────────────
+# A SECOND gating axis on top of the platform axis: whether an image is a person DESKTOP
+# (themeable, home-provisionable, tailnet/SSO-optional) or a cluster NODE / headless
+# appliance (root-encrypted infrastructure — no theming, no home provisioning, mesh join
+# implicit). Keyed on the role id (a shared id like pki/edge_ai is a node on EVERY
+# platform it appears on). These predicates run at ModePage.validatePage and inside
+# materialize() step 5 — never in to_cli_args, so emission stays a faithful field->argv
+# translation (the 51 GUITHR probes thread hand-set fields with no role-class logic).
+
+# Person-desktop / standalone-desktop family (themeable + home-provisionable). Cites
+# X86_CLIENT_ROLES + UNAFFILIATED_ROLE above; the ARM desktop role ids mirror ROLE_CHOICES.
+_STANDALONE_DESKTOP_ROLES = ("standalone-thin", "standalone-thick", UNAFFILIATED_ROLE)
+_ARM_DESKTOP_ROLES = ("rpi5-desktop", "jetson-desktop", "frite", "orangepi5")
+DESKTOP_ROLES = X86_CLIENT_ROLES + _STANDALONE_DESKTOP_ROLES + _ARM_DESKTOP_ROLES
+# Cluster-node / headless-appliance family (root-encrypted infra). X86_NODE_ROLES already
+# covers pki/be/fe/be+gpu/omnibus/edge_ai (x86 AND rpi5 share pki/be/fe; edge_ai is shared
+# x86/jetson); jetson adds full/gpu-host; the orangepizero2 appliance and the plain-Gentoo
+# rpi5 "generic" server are headless nodes too. Everything not an explicit desktop role
+# is treated as a node (fail-safe: infra never accidentally exposes theming/home surfaces).
+_JETSON_NODE_ROLES = ("full", "gpu-host")
+_APPLIANCE_ROLES = ("orangepizero2", "generic")
+NODE_ROLES = X86_NODE_ROLES + _JETSON_NODE_ROLES + _APPLIANCE_ROLES
+
+# The theming + home-provisioning field families gated by role-class. Both families are
+# x86-only in emission today, so clearing them never perturbs ARM argv (belt & braces I1).
+THEME_FIELDS = ("theme", "branding_dir", "wallpaper", "grub_background", "grub_theme",
+                "login_background", "brand_logo", "accent_color", "color_scheme", "brand_locked")
+HOME_DESKTOP_FIELDS = ("home_mode", "home_device", "home_backup", "home_encrypted",
+                       "home_seed_code", "home_seed_code_from", "include_home_archive",
+                       "seed_packages_from")
+
+
+def image_class(mode: str, role: str) -> str:
+    """"desktop" (person device / standalone desktop) or "node" (cluster infra / headless
+    appliance). Role id is authoritative; mode is accepted for signature stability."""
+    return "desktop" if role in DESKTOP_ROLES else "node"
+
+
+def branding_allowed(cfg: "ImageConfig") -> bool:
+    """Theming is offered only on desktop-class images and never in mesh mode (spec 2)."""
+    return image_class(cfg.mode, cfg.role) == "desktop" and cfg.mode != "mesh"
+
+
+def tailnet_sso_visible(cfg: "ImageConfig") -> bool:
+    """Tailnet/SSO checkboxes are user-editable only for cloud branded desktops (spec 3).
+    Unaffiliated hard-conflicts with the tailnet; sso additionally keeps its x86-only
+    platform gate (applied by strip_platform_unsupported / _gating.gate_widgets)."""
+    return (cfg.mode == "cloud" and image_class(cfg.mode, cfg.role) == "desktop"
+            and cfg.role != UNAFFILIATED_ROLE)
+
+
+def home_options_allowed(cfg: "ImageConfig") -> bool:
+    """Home provisioning applies to desktop-class images in any mode (spec 7); nodes are
+    root-encrypted and have no separately-provisioned home."""
+    return image_class(cfg.mode, cfg.role) == "desktop"
+
+
+def _reset_field(cfg: "ImageConfig", name: str) -> bool:
+    """Reset one ImageConfig field to its dataclass default. True iff it changed."""
+    f = ImageConfig.__dataclass_fields__[name]  # type: ignore[attr-defined]
+    default = f.default_factory() if f.default is MISSING else f.default
+    if getattr(cfg, name) != default:
+        setattr(cfg, name, default)
+        return True
+    return False
+
+
+def clear_role_class_fields(cfg: "ImageConfig") -> list[str]:
+    """Zero the theming/home field families (and tailscale/sso) the current role-class
+    does NOT permit, so a stale desktop value picked before a mode/role switch can never
+    leak into a node's save or (belt & braces) its argv. Returns the fields cleared. The
+    caller re-forces mesh tailscale/sso afterwards (enter_mesh_defaults / materialize)."""
+    cleared: list[str] = []
+    if not branding_allowed(cfg):
+        cleared += [f for f in THEME_FIELDS if _reset_field(cfg, f)]
+    if not home_options_allowed(cfg):
+        cleared += [f for f in HOME_DESKTOP_FIELDS if _reset_field(cfg, f)]
+    if not tailnet_sso_visible(cfg):
+        cleared += [f for f in ("tailscale", "sso") if _reset_field(cfg, f)]
+    return cleared
+
+
+def enter_mesh_defaults(cfg: "ImageConfig") -> None:
+    """Mesh entry: clear every role-class desktop surface, then force tailscale=sso=True
+    so mesh x86 nodes keep emitting today's --with-tailscale/--with-sso byte-identically
+    (ARM joins mesh unless --skip-mesh; sso is x86-only in emission)."""
+    clear_role_class_fields(cfg)
+    cfg.tailscale = True
+    cfg.sso = True
+
+
+def strip_platform_unsupported(cfg: "ImageConfig") -> list[str]:
+    """Qt-free twin of gui/pages/_gating.clear_unsupported keyed on PLATFORM_FIELD_SUPPORT:
+    reset every field the selected platform's builder has no flag for, so a value set on
+    another platform can never linger into a save or the emitted argv. Returns the fields
+    cleared. Fields absent from the table are all-platform (fail-open) and untouched."""
+    cleared: list[str] = []
+    plat = cfg.platform or "x86"
+    for fld, plats in PLATFORM_FIELD_SUPPORT.items():
+        if plat in plats:
+            continue
+        if _reset_field(cfg, fld):
+            cleared.append(fld)
+    return cleared
 
 
 @dataclass
 class Domain:
     name: str = ""
     title: str = ""
-    games: bool = False                # games.<domain> optional service
+    # Worklist entry-id refs this domain attaches to (f"{role}.{platform}"); empty =
+    # attach to every eligible image. Legacy `games: bool` was DROPPED — from_dict
+    # migrates a truthy games into optional_services += ["games"] (games never reached
+    # argv, so zero emission change; intent preserved, never silently dropped).
+    images: list[str] = field(default_factory=list)
     optional_services: list[str] = field(default_factory=list)  # akkoma/tuwunel/phpbb/owncast/tor...
 
 
@@ -364,6 +491,7 @@ class ImageConfig:
     org: str = "Snapdragon-Systems"
     brand_profile: str = ""            # -C/--config brands/*.conf (carries HEADSCALE_URL/RELEASE_STATE/… presets)
     cluster_domain: str = "snapdragon.systems"
+    superdomain: str = ""              # orchestration superdomain all mesh nodes join; "" = derived <brand>.internal (NON_ARGV: manifest + KEYS channel, never a builder flag; permanently internal, never go-live-flipped, I7)
     games_domain: str = ""             # --games-domain (games.<domain> host + OIDC issuer; x86+rpi5)
     release_state: str = ""            # --release-state internal|public (x86+rpi5; "" = builder default)
     release_tag: str = ""              # --release-tag image stamp (x86)
@@ -506,7 +634,13 @@ class ImageConfig:
     distdir: str = ""                  # --distdir (x86: reuse a distfiles cache)
     build_subdir: str = ""             # --build-subdir (all)
     seed_url: str = ""                 # --seed-url stage3 seed (all)
-    extra_packages: str = ""           # -p/--extra-packages (ARM only; x86 has no -p)
+    extra_packages: str = ""           # -p/--extra-packages (ARM only; x86 has no -p) — KEPT FROZEN (verbatim load/save/emission; no migration)
+    # Portage atom deltas (space-separated) relative to the builder-derived default set.
+    # Phase 1 (WS-CORE): NON_ARGV_FIELDS — stored/saved/validated, ZERO emission (WS-BUILDER
+    # atomically flips them to --packages-add/--packages-drop later). Kept SEPARATE from
+    # extra_packages (no merging).
+    packages_add: str = ""             # atoms to add on top of the default set
+    packages_drop: str = ""            # default-set atoms to remove (honoring the mandatory floor)
     # PENTEST=1 OWASP pen-test toggle — NOT a per-builder flag; a FLEET/env knob the
     # build_driver/fleet channel forwards (build-all-roles.sh / Makefile), never argv (G40).
     pentest: bool = False
@@ -522,13 +656,26 @@ class ImageConfig:
                 d[k] = ""
         return d
 
+    @staticmethod
+    def _domain_from_dict(x: dict[str, Any]) -> "Domain":
+        """Build a Domain from a raw dict, filtering unknown nested keys (forward-compat)
+        and MIGRATING the dropped legacy `games: true` into optional_services += ["games"]
+        (intent preserved, never silently dropped; games never reached argv)."""
+        dom_f = set(Domain.__dataclass_fields__)
+        kw = {k: v for k, v in x.items() if k in dom_f}
+        if x.get("games"):
+            svcs = list(kw.get("optional_services") or [])
+            if "games" not in svcs:
+                svcs.append("games")
+            kw["optional_services"] = svcs
+        return Domain(**kw)
+
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ImageConfig":
         d = dict(d)
-        dom_f = set(Domain.__dataclass_fields__)   # filter unknown nested keys (forward-compat)
         usr_f = set(User.__dataclass_fields__)
         # tolerate "domains": null / "users": null and unknown nested keys
-        d["domains"] = [Domain(**{k: v for k, v in x.items() if k in dom_f}) if isinstance(x, dict) else x
+        d["domains"] = [cls._domain_from_dict(x) if isinstance(x, dict) else x
                         for x in (d.get("domains") or [])]
         d["users"] = [User(**{k: v for k, v in x.items() if k in usr_f}) if isinstance(x, dict) else x
                       for x in (d.get("users") or [])]
@@ -555,7 +702,20 @@ class ImageConfig:
     @classmethod
     def load(cls, path: str) -> "ImageConfig":
         with open(path, encoding="utf-8") as fh:
-            return cls.from_dict(json.load(fh))
+            data = json.load(fh)
+        # A worklist envelope carries an explicit `schema` discriminator; from_dict would
+        # silently DEGRADE it to a default config (it drops unknown top-level keys). Fail
+        # loudly so callers route it through the envelope loader instead.
+        if isinstance(data, dict) and "schema" in data:
+            raise ValueError(
+                "worklist envelope — open via worklist.load_any / --print-commands")
+        return cls.from_dict(data)
+
+    def effective_superdomain(self) -> str:
+        """The orchestration superdomain every mesh node joins. An explicit superdomain
+        wins; "" derives f"{brand}.internal" (permanently internal — never the go-live
+        apex, which stays cluster_domain, I7)."""
+        return self.superdomain or f"{self.brand}.internal"
 
     # ---- identity validation (fail-closed) ---------------------------------
     def validate_identity(self) -> None:
@@ -577,6 +737,11 @@ class ImageConfig:
         validate_domain_name(self.cluster_domain)
         if self.games_domain:
             validate_domain_name(self.games_domain)
+        # orchestration superdomain: "" = derived <brand>.internal (always valid once
+        # brand is validated). Validate an explicit value like any other domain name
+        # (core.validate accepts .internal). Feeds the manifest + the KEYS channel.
+        if self.superdomain:
+            validate_domain_name(self.superdomain)
         for d in self.domains:
             if getattr(d, "name", ""):
                 validate_domain_name(d.name)
@@ -596,6 +761,11 @@ class ImageConfig:
             validate_home_device(self.home_device)
         if self.home_backup:
             validate_home_backup(self.home_backup)
+        # Portage atom deltas — space-separated category/name atoms. Must stay shell-word-
+        # safe wherever they are eventually emitted (NON_ARGV in Phase 1; --packages-add /
+        # --packages-drop later). Fail closed on any shell/sed-meaningful character.
+        validate_package_atoms(self.packages_add)
+        validate_package_atoms(self.packages_drop)
 
     # ---- the canonical flag translation ------------------------------------
     @property
@@ -803,6 +973,21 @@ class ImageConfig:
             a += ["--skip-uboot"]
         return a
 
+    def _packages_delta_args(self) -> list[str]:
+        """--packages-add / --packages-drop — space-separated Portage-atom deltas
+        on top of the builder's derived default set. Emitted on ALL six platforms
+        (each builder parses them identically; drop is a final grep -vE honoring the
+        mandatory-payload floor, never emerge --exclude). Empty = builder default, so
+        every legacy flat config stays byte-identical (invariant I1). Atom-charset
+        validation lives in validate_identity (validate_package_atoms), not here —
+        emission stays a faithful field->argv translation."""
+        a: list[str] = []
+        if self.packages_add:
+            a += ["--packages-add", self.packages_add]
+        if self.packages_drop:
+            a += ["--packages-drop", self.packages_drop]
+        return a
+
     def _arm_common_args(self) -> list[str]:
         """Flags shared by ALL FIVE arm64 builders beyond the brand block: env baking,
         host identity, cluster domain, mesh opt-out + version pins, standalone/local
@@ -842,6 +1027,7 @@ class ImageConfig:
         a += self._arm_kernel_args()
         if self.extra_packages:
             a += ["--extra-packages", self.extra_packages]
+        a += self._packages_delta_args()
         a += self._grow_args()
         if self.img_size:
             a += ["--img-size", str(self.img_size)]
@@ -1312,6 +1498,7 @@ class ImageConfig:
         a += self._plumbing_args()
         if self.distdir:
             a += ["--distdir", self.distdir]
+        a += self._packages_delta_args()
         if self.compress:
             a += ["--compress"]
         if self.resume:
@@ -1325,12 +1512,16 @@ class ImageConfig:
 
     # ---- superadmin mesh manifest -----------------------------------------
     def mesh_manifest(self) -> dict[str, Any]:
-        """The domains + users a superadmin defined, as a portable manifest. Consumed by
-        cluster provisioning (Casdoor seed + per-domain config) — separate from the image
+        """The domains + users a superadmin defined, as a portable manifest, now carrying
+        the effective orchestration superdomain (§2.6). This is the v1+superdomain shim for
+        the SINGLE-image path; the full manifest v2 envelope ({"format":2,...,"images":[…]})
+        is written once-per-worklist by the driver (WS-ENGINE). Consumed by cluster
+        provisioning (Casdoor seed + per-domain config) — separate from the image
         build, which is why it is emitted as its own artifact rather than CLI flags."""
         return {
             "brand": self.brand, "brand_title": self.brand_title, "org": self.org,
             "cluster_domain": self.cluster_domain,
+            "superdomain": self.effective_superdomain(),
             "domains": [asdict(d) for d in self.domains],
             "users": [asdict(u) for u in self.users],
         }

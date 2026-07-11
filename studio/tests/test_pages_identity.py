@@ -27,12 +27,19 @@ pytest.importorskip("snapdragon_studio.gui.qt",
 
 from snapdragon_studio.core.config import (   # noqa: E402  (after the importorskip gate)
     Domain, OPTIONAL_SERVICES_BY_PLATFORM, OPTIONAL_SERVICES_CHOICES,
-    PERSON_ROLE_CHOICES, SERVICES_ALL, SERVICES_NONE, WIZARD_PAGE_SLUGS,
+    PERSON_ROLE_CHOICES, SERVICES_ALL, SERVICES_NONE, User, WIZARD_PAGE_SLUGS,
 )
 from snapdragon_studio.core.platform_info import HostInfo
 from snapdragon_studio.gui import wizard as wizard_mod
 from snapdragon_studio.gui.pages.users import USER_ROLE_CHOICES
 from snapdragon_studio.gui.qt import Qt, QtWidgets
+
+# shared wizard-navigation helpers (studio/tests is on sys.path via conftest/pytest);
+# consolidated in _helpers so a flow change is edited in ONE place (design 6). mesh now
+# skips RolePage, so the mesh identity tests drive their image off the WorklistPage.
+from _helpers import (   # noqa: E402
+    advance_to, back_to, check_worklist_rows, pairs, pick_mode, pick_role,
+)
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -63,54 +70,21 @@ def wiz(qapp):
     w.deleteLater()
 
 
-def advance_to(wiz, page_cls):
-    """Click Next until page_cls is current — failing loudly if the flow stalls."""
-    for _ in range(len(WIZARD_PAGE_SLUGS) + 1):
-        page = wiz.currentPage()
-        if isinstance(page, page_cls):
-            return page
-        before = wiz.currentId()
-        wiz.next()
-        assert wiz.currentId() != before, \
-            f"flow stuck on {type(page).__name__} (validatePage rejected?)"
-    raise AssertionError(f"never reached {page_cls.__name__}")
-
-
-def back_to(wiz, page_cls):
-    for _ in range(len(WIZARD_PAGE_SLUGS) + 1):
-        page = wiz.currentPage()
-        if isinstance(page, page_cls):
-            return page
-        wiz.back()
-    raise AssertionError(f"never reached {page_cls.__name__} going back")
-
-
-def pick_mode(wiz, mode):
-    page = advance_to(wiz, wizard_mod.ModePage)
-    idx = [m for m, _, _ in page.modes].index(mode)
-    page.group.button(idx).setChecked(True)
-    return page
-
-
-def pick_role(wiz, role):
-    page = advance_to(wiz, wizard_mod.RolePage)
-    for i in range(page.roles.count()):
-        it = page.roles.item(i)
-        if it.data(Qt.ItemDataRole.UserRole)[0] == role:
-            page.roles.setCurrentItem(it)
-            return page
-    raise AssertionError(f"role {role} not offered on RolePage")
-
-
-def pairs(args):
-    return list(zip(args, args[1:]))
+def mesh_worklist(wiz, *ids):
+    """Enter mesh and select the given worklist entry ids on the WorklistPage. Mesh
+    skips RolePage — the role x platform multi-select replaces it — so the mesh identity
+    tests pin their image here instead of pick_role(). Default: omnibus.x86, an x86 mesh
+    node that surfaces every NetworkPage widget the old pick_role(mesh,'omnibus') did."""
+    pick_mode(wiz, "mesh")
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(wl, *(ids or ("omnibus.x86",)))
+    return wl
 
 
 # ---- NetworkPage: brand profile / org / games domain / release state (G3/G4/G6/G7) --
 
 def test_identity_widgets_flow_to_the_argv(wiz):
-    pick_mode(wiz, "mesh")
-    pick_role(wiz, "omnibus")
+    mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
     net.brand_profile.setText("/tmp/brands/acme.conf")
     net.org.setText("Acme-Org")
@@ -130,8 +104,7 @@ def test_identity_widgets_flow_to_the_argv(wiz):
 
 
 def test_org_and_release_state_defaults_emit_nothing(wiz):
-    pick_mode(wiz, "mesh")
-    pick_role(wiz, "omnibus")
+    mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
     assert net.release_state.currentText() == "default"
     assert net.org.text() == "Snapdragon-Systems"
@@ -164,8 +137,7 @@ def test_headscale_url_reaches_the_config_but_never_the_argv(wiz):
     """G2: HEADSCALE_URL is delivered OUT-OF-BAND (build_driver env passthrough) —
     the widget must fill the field on every platform and no argv element may ever
     carry the URL (there is no builder flag for it)."""
-    pick_mode(wiz, "mesh")
-    pick_role(wiz, "omnibus")
+    mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
     assert net.headscale_url.isEnabled()      # NON_ARGV field: never platform-greyed
     net.headscale_url.setText("https://hs.acme.example")
@@ -185,8 +157,7 @@ def test_headscale_url_stays_enabled_on_arm(wiz):
 
 
 def test_mesh_agent_version_pins_and_skip_tailscale(wiz):
-    pick_mode(wiz, "mesh")
-    pick_role(wiz, "omnibus")
+    mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
     net.headscale_version.setText("0.23.0")
     net.tailscale_version.setText("1.66.0")
@@ -203,8 +174,7 @@ def test_mesh_agent_version_pins_and_skip_tailscale(wiz):
 def test_services_explicit_none_sentinel(wiz):
     """G13: 'no optional services' is a REAL choice — emits --optional-services ""
     so the builder's akkoma tuwunel phpbb default is suppressed."""
-    pick_mode(wiz, "mesh")
-    pick_role(wiz, "omnibus")
+    mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
     net.services_none.setChecked(True)
     assert not net.services.isEnabled()       # the sentinel replaces the checklist
@@ -217,8 +187,7 @@ def test_services_explicit_none_sentinel(wiz):
 
 
 def test_services_all_sentinel_and_mutual_exclusion(wiz):
-    pick_mode(wiz, "mesh")
-    pick_role(wiz, "omnibus")
+    mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
     net.services_none.setChecked(True)
     net.services_all.setChecked(True)         # checking ALL must uncheck NONE
@@ -232,8 +201,7 @@ def test_services_all_sentinel_and_mutual_exclusion(wiz):
 def test_exclude_services_subtractive_list(wiz):
     """G14: the subtractive --exclude-services list (applied last — the only way to
     subtract a brand.conf-injected slug) accepts space or comma separation."""
-    pick_mode(wiz, "mesh")
-    pick_role(wiz, "omnibus")
+    mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
     net.exclude.setText("akkoma, phpbb")
     advance_to(wiz, wizard_mod.KeyZipPage)
@@ -248,8 +216,7 @@ def test_exclude_services_subtractive_list(wiz):
 def test_untouched_services_still_leave_the_builder_default(wiz):
     """Neither sentinel + an empty checklist emits NOTHING (the builder default
     applies) — the pre-G13 behavior must not regress."""
-    pick_mode(wiz, "mesh")
-    pick_role(wiz, "omnibus")
+    mesh_worklist(wiz)
     advance_to(wiz, wizard_mod.KeyZipPage)
     assert wiz.cfg.optional_services == []
     args = wiz.cfg.to_cli_args()
@@ -317,8 +284,9 @@ def test_services_client_note_hidden_on_node_roles(wiz):
     class (omnibus) and the rpi5 nuance: standalone 'generic' is NODE-class
     (build-rpi5 leaves ROLE_CLIENT=false for generic/pki/backend/frontend; G16
     exists precisely because generic DOES reach the services)."""
-    pick_mode(wiz, "mesh")
-    pick_role(wiz, "omnibus")                 # x86 node role
+    c = wiz.cfg
+    c.mode = "mesh"; c.role = "omnibus"; c.platform = "x86"   # x86 node role (mesh has no RolePage)
+    wiz.restart()
     net = advance_to(wiz, wizard_mod.NetworkPage)
     assert not net.services_role_note.isVisible()
     # rpi5 node role: restart with a loaded-config style rpi5 'be' mesh build
@@ -351,8 +319,7 @@ def test_services_client_note_hidden_where_the_platform_has_no_flag(wiz):
 def test_tri_state_force_off_reaches_the_argv(wiz):
     """G34: unchecking a tri-state box FORCES the feature off (--no-*) so a
     brand-profile (-C) default can be overridden from the GUI."""
-    pick_mode(wiz, "mesh")
-    pick_role(wiz, "omnibus")
+    mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
     for box in (net.aide, net.edge_ai, net.tor_onion, net.character_studio):
         box.setCheckState(Qt.CheckState.Unchecked)
@@ -379,8 +346,7 @@ def test_tri_state_part_checked_leaves_the_builder_default(wiz):
     """An untouched tri-state box sits PART-checked and emits NEITHER flag — the
     brand.conf/builder default must round-trip unclobbered (the proxy-stack
     combo's auto rule, extended to the G34 checkboxes)."""
-    pick_mode(wiz, "mesh")
-    pick_role(wiz, "omnibus")
+    mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
     for box in (net.aide, net.tor_onion, net.character_studio):
         assert box.checkState() == Qt.CheckState.PartiallyChecked, box.text()
@@ -457,22 +423,106 @@ def test_user_role_combo_offers_the_grantable_games_roles(wiz):
     assert wiz.cfg.mesh_manifest()["users"][0]["role"] == "games"
 
 
+# ---- UsersPage: the domain dropdown + superadmin lock (spec 5/6) ---------------------
+
+def test_users_domain_cell_is_a_dropdown_of_defined_domains(wiz):
+    """Spec 6: the per-user Domain cell is a dropdown of the superdomain + every domain
+    defined on the Domains page (+ session-added rows), not free text."""
+    mesh_worklist(wiz)
+    dom = advance_to(wiz, wizard_mod.DomainsPage)
+    dom._add("acme.example", "Acme")
+    users = advance_to(wiz, wizard_mod.UsersPage)   # Next past Domains defines acme
+    users._add("bob", role="user")
+    combo = users.table.cellWidget(0, 1)            # the Domain cell is a combo now
+    items = [combo.itemText(i) for i in range(combo.count())]
+    assert wiz.cfg.effective_superdomain() in items
+    assert "acme.example" in items
+
+
+def test_users_superadmin_locks_domain_to_superdomain(wiz):
+    """Spec 5: choosing the superadmin role forces + locks the row's domain to the
+    orchestration superdomain; any other role unlocks the dropdown."""
+    pick_mode(wiz, "cloud")
+    users = advance_to(wiz, wizard_mod.UsersPage)
+    users._add("alice", "acme.example", "user")
+    dom_combo = users.table.cellWidget(0, 1)
+    role_combo = users.table.cellWidget(0, 2)
+    assert dom_combo.isEnabled()
+    role_combo.setCurrentText("superadmin")
+    assert not dom_combo.isEnabled()
+    assert dom_combo.currentText() == wiz.cfg.effective_superdomain()
+    role_combo.setCurrentText("user")
+    assert dom_combo.isEnabled()
+
+
+def test_users_loaded_undefined_domain_is_flagged(wiz):
+    """A loaded user whose domain is not among the defined domains keeps its value,
+    suffixed '(not defined)' with an orange warning — never silently rewritten."""
+    c = wiz.cfg
+    c.mode = "cloud"
+    c.domains = [Domain(name="acme.example", title="Acme")]
+    c.users = [User(username="bob", domain="ghost.example", role="user")]
+    wiz.restart()
+    users = advance_to(wiz, wizard_mod.UsersPage)
+    combo = users.table.cellWidget(0, 1)
+    assert combo.currentText() == "ghost.example (not defined)"
+    assert users.warn.isVisible()
+    advance_to(wiz, wizard_mod.HomePage)            # Next past Users collects the table
+    assert [u.domain for u in c.users] == ["ghost.example"]   # stored raw, not rewritten
+
+
 # ---- DomainsPage: the Domain.optional_services column (G19) --------------------------
 
 def test_domains_table_round_trips_per_domain_services(wiz):
     c = wiz.cfg
     c.mode = "mesh"; c.role = "omnibus"
-    c.domains = [Domain(name="acme.example", title="Acme", games=True,
+    # a loaded row arrives pre-migrated (from_dict maps a truthy legacy games ->
+    # optional_services += ["games"]); the Domain dataclass no longer has a games field.
+    c.domains = [Domain(name="acme.example", title="Acme",
                         optional_services=["akkoma", "tube"])]
     wiz.restart()
     dom = advance_to(wiz, wizard_mod.DomainsPage)
-    assert dom.table.item(0, 3).text() == "akkoma tube"   # loaded config restored
-    dom._add("beta.example", "Beta", False, "phpbb, owncast")
+    assert dom.table.item(0, 2).text() == "akkoma tube"   # services now column 2
+    dom._add("beta.example", "Beta", "phpbb, owncast")
     advance_to(wiz, wizard_mod.UsersPage)     # Next past Domains collects the table
     assert [d.optional_services for d in c.domains] == [["akkoma", "tube"],
                                                         ["phpbb", "owncast"]]
     manifest = c.mesh_manifest()
     assert manifest["domains"][1]["optional_services"] == ["phpbb", "owncast"]
+
+
+def test_domains_default_prefill_seeds_the_cluster_domain(wiz):
+    """Spec 4: a fresh cloud Domains page prefills row 0 with the cluster domain (the
+    PRIMARY domain — table position defines the first --domains element)."""
+    pick_mode(wiz, "cloud")
+    dom = advance_to(wiz, wizard_mod.DomainsPage)
+    assert dom.table.rowCount() == 1
+    assert dom.table.item(0, 0).text() == wiz.cfg.cluster_domain
+    assert dom.table.item(0, 1).text() == wiz.cfg.brand_title
+
+
+def test_domains_applies_to_hidden_in_cloud(wiz):
+    """The 'Applies to' picker is a worklist-of-images concept — hidden in cloud where
+    the single image attaches implicitly (it is shown in mesh)."""
+    pick_mode(wiz, "cloud")
+    dom = advance_to(wiz, wizard_mod.DomainsPage)
+    assert dom.table.isColumnHidden(3)
+
+
+def test_domains_applies_to_writes_domain_images(wiz):
+    """Spec 4: the mesh 'Applies to' menu writes Domain.images — the worklist entry ids
+    a domain attaches to (empty = all eligible); node-role images are offered but
+    flagged '(manifest only)' since a node build takes no --domains."""
+    mesh_worklist(wiz, "omnibus.x86", "be.rpi5")
+    dom = advance_to(wiz, wizard_mod.DomainsPage)
+    dom._add("acme.example", "Acme", "", ["omnibus.x86"])
+    r = dom.table.rowCount() - 1
+    btn = dom.table.cellWidget(r, 3)                # the 'Applies to' cell widget
+    assert btn.selected_ids() == ["omnibus.x86"]
+    assert "manifest only" in btn._actions["be.rpi5"].text()   # node row flagged
+    advance_to(wiz, wizard_mod.UsersPage)           # Next past Domains collects the table
+    acme = [d for d in wiz.cfg.domains if d.name == "acme.example"][0]
+    assert acme.images == ["omnibus.x86"]
 
 
 # ---- KeyZipPage/core.keyzip: Secure-Boot key wiring (G5) -----------------------------

@@ -1,13 +1,32 @@
-"""BuildPage — backend/env/output knobs, command preview/preflight, and the build
-worker threads (native or docker via BuildDriver)."""
+"""BuildPage → "Review & Build" (slug "build"; design 3.12).
+
+The page keeps every build knob (backend / env / output / artifact matrix / Secure Boot /
+plumbing / the command + preflight panes) but no longer runs the build itself: the in-form
+"Build now" button is gone. Instead the wizard's Finish becomes a Build action — leaving this
+(commit) page commits a WorklistConfig and lands on the terminal ProgressPage, which drives
+the WorklistDriver. Standalone/cloud commit a 1-entry worklist synthesized from the config so
+the driver / progress / manifest code path has exactly one shape; mesh commits the
+WorklistPage's selection.
+
+The retired free-text extra-packages field is replaced by a "Packages…" button opening the
+per-image :class:`~.packages_dialog.PackagesDialog` (mesh gets one per worklist row, in a
+summary table). "Build builder image now" stays — it builds the Docker builder image, not an
+OS image.
+"""
 from __future__ import annotations
 
 import os
 
 from ..qt import QtCore, QtWidgets, Signal
-from ...core.config import ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE
+from ...core import worklist as worklist_mod
+from ...core.config import ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE, image_class
+from ...core.worklist_driver import WorklistDriver
 from ._gating import clear_unsupported, gate_widgets
 from ._widgets import _file_picker, _row
+from .packages_dialog import PackagesDialog
+
+# mesh roles whose image carries a GPU stack (the summary "GPU" chip).
+_GPU_MESH_ROLES = ("be+gpu", "edge_ai", "gpu-host")
 
 
 def _tri_combo(default_label="(builder default)"):
@@ -40,21 +59,9 @@ def _picker_row(parent, line_edit, caption, file_filter="All files (*)", directo
     return w
 
 
-class _BuildWorker(QtCore.QThread):
-    line = Signal(str)
-    done = Signal(int)
-
-    def __init__(self, driver, cfg, backend):
-        super().__init__()
-        self.driver, self.cfg, self.backend = driver, cfg, backend
-
-    def run(self):
-        code = self.driver.run(self.cfg, self.backend, on_line=lambda s: self.line.emit(s))
-        self.done.emit(code)
-
-
 class _BuilderImageWorker(QtCore.QThread):
-    """Runs BuildDriver.build_builder_image() the same way _BuildWorker runs a build."""
+    """Runs BuildDriver.build_builder_image() off the GUI thread (mirrors the old
+    _BuildWorker — the OS-image build itself now runs on ProgressPage's WorklistDriver)."""
     line = Signal(str)
     done = Signal(int)
 
@@ -71,8 +78,21 @@ class BuildPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
-        self.setTitle("Build")
-        self.setSubTitle("Review the command, then build natively or via Docker.")
+        self.setTitle("Review & Build")
+        self.setSubTitle("Review the command and preflight, then Build — the build runs on "
+                         "the next screen.")
+        # commit page: leaving it commits the worklist and lands on ProgressPage; Back is
+        # then disabled for the duration of the run (design 3.12/3.13).
+        self.setCommitPage(True)
+        try:
+            self.wiz.setButtonText(QtWidgets.QWizard.WizardButton.CommitButton, "Build")
+        except Exception:
+            pass
+        self._problems: list[str] = []
+        # mesh run state (populated in initializePage when mode == mesh)
+        self._wl_driver: WorklistDriver | None = None
+        self._materialized: list = []
+
         lay = QtWidgets.QVBoxLayout(self)
         self.backend = QtWidgets.QComboBox()
         self.backend.addItems(["auto", "native", "docker"])
@@ -98,6 +118,29 @@ class BuildPage(QtWidgets.QWizardPage):
         self.img_size.setSuffix(" MiB")
         self.img_size.setSpecialValueText("(role default)")
         lay.addWidget(_row("Root image size", self.img_size))
+
+        # ── mesh worklist summary (design 3.12) — one row per image with per-entry
+        # Packages…/Preview and the node key-zip opt-out. Shown only in mesh.
+        self.worklist_group = QtWidgets.QGroupBox("Mesh worklist — one image per row")
+        wg = QtWidgets.QVBoxLayout(self.worklist_group)
+        self.worklist_table = QtWidgets.QTableWidget(0, 4)
+        self.worklist_table.setHorizontalHeaderLabels(["Image", "Facts", "", ""])
+        self.worklist_table.horizontalHeader().setStretchLastSection(False)
+        self.worklist_table.verticalHeader().setVisible(False)
+        self.worklist_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        wg.addWidget(self.worklist_table)
+        self.gen_keys = QtWidgets.QCheckBox(
+            "Generate node key-zips after each successful node build (mesh)")
+        self.gen_keys.setChecked(True)
+        wg.addWidget(self.gen_keys)
+        lay.addWidget(self.worklist_group)
+
+        # ── single-image Packages… (standalone/cloud) — replaces the retired free-text
+        # extra-packages field with the per-image tri-tier dialog.
+        self.packages_btn = QtWidgets.QPushButton("Packages…")
+        self.packages_btn.clicked.connect(self._open_packages_single)
+        lay.addWidget(_row("Packages", self.packages_btn))
+
         # x86 ISO finish knobs (like the installer-UI choice, the arm builders parse
         # none of these — the widgets grey out off-x86, and config.py emits x86-only)
         self.cached = QtWidgets.QCheckBox(
@@ -203,9 +246,6 @@ class BuildPage(QtWidgets.QWizardPage):
         self.seed_url = QtWidgets.QLineEdit()
         self.seed_url.setPlaceholderText("stage3 seed index URL (--seed-url)")
         pl.addWidget(_row("Seed URL", self.seed_url))
-        self.extra_packages = QtWidgets.QLineEdit()
-        self.extra_packages.setPlaceholderText("extra packages to bake (-p/--extra-packages; ARM only)")
-        pl.addWidget(_row("Extra packages", self.extra_packages))
         lay.addWidget(plumb)
 
         # OWASP pen-test bake (G40) — PENTEST=1 is a FLEET/ENV knob the build driver
@@ -221,23 +261,21 @@ class BuildPage(QtWidgets.QWizardPage):
         self.cmd = QtWidgets.QPlainTextEdit(); self.cmd.setReadOnly(True); self.cmd.setMaximumHeight(120)
         lay.addWidget(QtWidgets.QLabel("Command:")); lay.addWidget(self.cmd)
         self.preview_btn = QtWidgets.QPushButton("Refresh preview")
-        self.build_btn = QtWidgets.QPushButton("Build now")
         self.build_image_btn = QtWidgets.QPushButton("Build builder image now")
         self.build_image_btn.setVisible(False)
         self.preview_btn.clicked.connect(self._preview)
-        self.build_btn.clicked.connect(self._build)
         self.build_image_btn.clicked.connect(self._build_builder_image)
-        bl = QtWidgets.QHBoxLayout(); bl.addWidget(self.preview_btn); bl.addWidget(self.build_btn)
+        bl = QtWidgets.QHBoxLayout(); bl.addWidget(self.preview_btn)
         bl.addWidget(self.build_image_btn); bl.addStretch(1)
         lay.addLayout(bl)
         self.log = QtWidgets.QPlainTextEdit(); self.log.setReadOnly(True)
         lay.addWidget(self.log, 1)
-        self.worker = None
         self.image_worker = None
 
     def initializePage(self):
         self.wiz.collect_all()
         c = self.wiz.cfg
+        mesh = c.mode == "mesh"
         if not self.outdir.text():
             self.outdir.setText(c.output_dir or os.path.join(self.wiz.generator_dir, "out"))
         self.env.setCurrentText(c.env or "test")
@@ -282,9 +320,14 @@ class BuildPage(QtWidgets.QWizardPage):
         self.distdir.setText(c.distdir)
         self.build_subdir.setText(c.build_subdir)
         self.seed_url.setText(c.seed_url)
-        self.extra_packages.setText(c.extra_packages)
         self.pentest.setChecked(c.pentest)
         self.extra_flags.setText(c.extra_flags)
+        # mesh shows the per-image worklist summary + node-key opt-out; standalone/cloud
+        # show the single-image Packages… button (each image's tri-tier package dialog).
+        self.worklist_group.setVisible(mesh)
+        self.packages_btn.setVisible(not mesh)
+        if mesh:
+            self._refresh_worklist_table()
         # per-platform capability greying for the new fields (grow / version /
         # skip-kernel / skip-clean / build-subdir / seed-url / pentest are
         # all-platform or out-of-band, so they never grey)
@@ -300,13 +343,23 @@ class BuildPage(QtWidgets.QWizardPage):
             "image_only": self.image_only,
             "secure_boot": self.sb_box,
             "distdir": self.distdir_row,
-            "extra_packages": self.extra_packages,
         })
         self._preview()
 
     def _backend(self):
         b = self.backend.currentText()
         return None if b == "auto" else b
+
+    # ---- worklist assembly (the commit shape) ----------------------------------
+    def _current_worklist(self):
+        """The WorklistConfig this Review page would commit RIGHT NOW: the mesh selection
+        from the WorklistPage, or a 1-entry worklist synthesized from the single-image
+        config (design 2.3) so the driver/progress/manifest have exactly one shape."""
+        wl = getattr(self.wiz, "worklist", None)
+        if self.wiz.cfg.mode == "mesh" and wl is not None and wl.entries:
+            wl.base = self.wiz.cfg          # keep the shared identity plane current
+            return wl
+        return worklist_mod.synthesize(self.wiz.cfg)
 
     def _preview(self):
         self.wiz.collect_all()
@@ -345,37 +398,121 @@ class BuildPage(QtWidgets.QWizardPage):
         c.distdir = self.distdir.text().strip()
         c.build_subdir = self.build_subdir.text().strip()
         c.seed_url = self.seed_url.text().strip()
-        c.extra_packages = self.extra_packages.text().strip()
         c.pentest = self.pentest.isChecked()
         c.extra_flags = self.extra_flags.text().strip()
         # the greyed (platform-unsupported) widgets were still collected above —
         # reset those fields to their defaults so a value picked while another
         # platform was selected can't linger into save() or the emitted argv.
+        # extra_packages is deliberately NOT listed: its free-text UI is retired and the
+        # frozen field must round-trip byte-identically (I1) — only its emission gate lives
+        # in config.py.
         clear_unsupported(c, (
             "release_tag", "build_img", "live_iso", "installer_iso", "build_iso",
             "sd_only", "build_tar", "skip_iso", "image_only", "secure_boot",
             "keys_usb", "secureboot_key", "secureboot_cert", "distdir",
-            "extra_packages",
         ))
         try:
             cmdline = self.wiz.driver.command_string(c, self._backend())
         except ValueError as e:  # e.g. unbalanced quotes in the extra-flags escape hatch
             self.cmd.setPlainText("")
             self.log.setPlainText(f"Command error: {e}")
+            self._set_problems([str(e)])
             return
-        problems = self.wiz.driver.preflight(c, self._backend())
         self.cmd.setPlainText(cmdline)
-        if problems:
-            self.log.setPlainText("Preflight:\n  - " + "\n  - ".join(problems))
+        # isComplete() gates the Build/Finish button on the AGGREGATE worklist preflight
+        # (one entry for standalone/cloud) — the FleetPage refuse-on-problem precedent.
+        self._set_problems(self._aggregate_preflight())
+        if self._problems:
+            self.log.setPlainText("Preflight:\n  - " + "\n  - ".join(self._problems))
         else:
             self.log.setPlainText("Preflight OK.")
         self.build_image_btn.setVisible(self.wiz.driver.builder_image_missing(self._backend()))
 
+    def _aggregate_preflight(self) -> list[str]:
+        """WorklistDriver.preflight over the would-be-committed worklist. Materialize can
+        raise on an invalid identity — surface that as the single blocking problem."""
+        try:
+            drv = WorklistDriver(self.wiz.generator_dir, self._current_worklist(),
+                                 host=self.wiz.host, backend=self._backend())
+            return drv.preflight()
+        except Exception as e:
+            return [f"cannot assemble the build: {e}"]
+
+    def _set_problems(self, problems: list[str]) -> None:
+        self._problems = problems
+        self.completeChanged.emit()
+
+    # ---- mesh worklist summary --------------------------------------------------
+    def _refresh_worklist_table(self):
+        try:
+            self._wl_driver = WorklistDriver(self.wiz.generator_dir, self._current_worklist(),
+                                             host=self.wiz.host, backend=self._backend())
+            self._materialized = self._wl_driver.materialize()
+        except Exception as e:
+            self._materialized = []
+            self.worklist_table.setRowCount(0)
+            self.log.setPlainText(f"Cannot assemble the worklist: {e}")
+            return
+        self.worklist_table.setRowCount(len(self._materialized))
+        for i, (entry, mcfg) in enumerate(self._materialized):
+            self.worklist_table.setItem(i, 0, QtWidgets.QTableWidgetItem(entry.id))
+            self.worklist_table.setItem(i, 1, QtWidgets.QTableWidgetItem(self._facts(entry, mcfg)))
+            pkg_btn = QtWidgets.QPushButton("Packages…")
+            pkg_btn.clicked.connect(lambda _=False, idx=i: self._open_packages_entry(idx))
+            self.worklist_table.setCellWidget(i, 2, pkg_btn)
+            prev_btn = QtWidgets.QPushButton("Preview")
+            prev_btn.clicked.connect(lambda _=False, idx=i: self._preview_entry(idx))
+            self.worklist_table.setCellWidget(i, 3, prev_btn)
+        self.worklist_table.resizeColumnsToContents()
+
+    def _facts(self, entry, mcfg) -> str:
+        chips = ["encrypt-root ON" if mcfg.encrypt_root else "encrypt-root off"]
+        if entry.role in _GPU_MESH_ROLES:
+            chips.append("GPU")
+        chips.append(f"{len(mcfg.domains)} domain(s)")
+        addn, dropn = len(entry.packages_add.split()), len(entry.packages_drop.split())
+        if addn or dropn:
+            chips.append(f"+{addn}/−{dropn} pkgs")
+        return " · ".join(chips)
+
+    def _preview_entry(self, idx: int):
+        if self._wl_driver is None or idx >= len(self._materialized):
+            return
+        _entry, mcfg = self._materialized[idx]
+        try:
+            self.cmd.setPlainText(self._wl_driver.command_string(mcfg))
+        except ValueError as e:
+            self.cmd.setPlainText(f"Command error: {e}")
+
+    def _open_packages_entry(self, idx: int):
+        if idx >= len(self._materialized):
+            return
+        entry, mcfg = self._materialized[idx]
+        dlg = PackagesDialog(self.wiz.generator_dir, mcfg,
+                             packages_add=entry.packages_add, packages_drop=entry.packages_drop,
+                             parent=self)
+        if dlg.exec():
+            entry.packages_add = dlg.packages_add
+            entry.packages_drop = dlg.packages_drop
+            self._refresh_worklist_table()      # re-materialize with the new deltas
+            self._preview()
+
+    def _open_packages_single(self):
+        self._preview()
+        c = self.wiz.cfg
+        dlg = PackagesDialog(self.wiz.generator_dir, c,
+                             packages_add=c.packages_add, packages_drop=c.packages_drop,
+                             extra_packages=c.extra_packages, parent=self)
+        if dlg.exec():
+            c.packages_add = dlg.packages_add
+            c.packages_drop = dlg.packages_drop
+            self._preview()
+
+    # ---- builder image ----------------------------------------------------------
     def _build_builder_image(self):
         if self.image_worker and self.image_worker.isRunning():
             return
         self.build_image_btn.setEnabled(False)
-        self.build_btn.setEnabled(False)
         self.log.appendPlainText("\n=== building the docker builder image ===")
         self.image_worker = _BuilderImageWorker(self.wiz.driver)
         self.image_worker.line.connect(lambda s: self.log.appendPlainText(s))
@@ -385,28 +522,19 @@ class BuildPage(QtWidgets.QWizardPage):
     def _builder_image_finished(self, code):
         self.log.appendPlainText(f"=== builder image build exited {code} ===")
         self.build_image_btn.setEnabled(True)
-        self.build_btn.setEnabled(True)
         self._preview()
 
-    def _build(self):
-        self._preview()
-        if self.worker and self.worker.isRunning():
-            return
-        # superadmin mesh: emit the domains+users manifest as a build artifact
-        if self.wiz.cfg.mode == "mesh" and (self.wiz.cfg.domains or self.wiz.cfg.users):
-            try:
-                mpath = self.wiz.cfg.write_mesh_manifest(self.wiz.cfg.output_dir or
-                                                         os.path.join(self.wiz.generator_dir, "out"))
-                self.log.appendPlainText(f"wrote mesh manifest: {mpath}")
-            except OSError as e:
-                self.log.appendPlainText(f"mesh manifest write failed: {e}")
-        self.build_btn.setEnabled(False)
-        self.log.appendPlainText("\n=== starting build ===")
-        self.worker = _BuildWorker(self.wiz.driver, self.wiz.cfg, self._backend())
-        self.worker.line.connect(lambda s: self.log.appendPlainText(s))
-        self.worker.done.connect(self._finished)
-        self.worker.start()
+    # ---- commit -----------------------------------------------------------------
+    def isComplete(self) -> bool:
+        """Build/Finish is enabled only when the aggregate preflight is clean (design 3.12)."""
+        return not self._problems
 
-    def _finished(self, code):
-        self.log.appendPlainText(f"=== build exited {code} ===")
-        self.build_btn.setEnabled(True)
+    def validatePage(self) -> bool:
+        """Commit the WorklistConfig and stash the run parameters ProgressPage reads, then
+        advance (commit) to the terminal ProgressPage."""
+        self._preview()
+        self.wiz.worklist = self._current_worklist()
+        self.wiz.build_backend = self._backend()
+        self.wiz.generate_node_keys = (self.gen_keys.isChecked()
+                                       if self.wiz.cfg.mode == "mesh" else True)
+        return True

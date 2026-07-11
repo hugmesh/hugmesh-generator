@@ -7,6 +7,7 @@ golive.py is NOT part of this set: it is the separate go-live wizard's page modu
 from .welcome import WelcomePage
 from .mode import ModePage
 from .role import RolePage
+from .worklist import WorklistPage
 from .hardware import HardwarePage
 from .branding import BrandingPage
 from .network import NetworkPage
@@ -17,8 +18,17 @@ from .system import SystemPage
 from .home import HomePage
 from .build import BuildPage
 
+# ProgressPage lands in a later workstream (WS-REVIEWUI: gui/pages/progress.py). It is
+# registered here defensively so the wizard's page registry slots it in the moment it
+# exists and stays importable (as None) before then — the flow terminates on BuildPage
+# until it lands.
+try:
+    from .progress import ProgressPage
+except ImportError:                    # pragma: no cover — until WS-REVIEWUI lands it
+    ProgressPage = None
+
 __all__ = [
-    "WelcomePage", "ModePage", "RolePage", "HardwarePage", "BrandingPage",
-    "NetworkPage", "KeyZipPage", "DomainsPage", "UsersPage", "SystemPage",
-    "HomePage", "BuildPage",
+    "WelcomePage", "ModePage", "RolePage", "WorklistPage", "HardwarePage",
+    "BrandingPage", "NetworkPage", "KeyZipPage", "DomainsPage", "UsersPage",
+    "SystemPage", "HomePage", "BuildPage", "ProgressPage",
 ]

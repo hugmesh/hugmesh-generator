@@ -55,6 +55,22 @@ def gate_widgets(platform: str, field_widgets: dict) -> None:
             w.setToolTip("" if supported else unsupported_note(platform))
 
 
+def gate_widgets_role_class(widgets, allowed: bool, reason: str) -> None:
+    """Role-class gating twin of ``gate_widgets`` (G/spec 2/3/7).
+
+    Where ``gate_widgets`` keys each widget on the per-field PLATFORM_FIELD_SUPPORT
+    table, this greys a WHOLE surface on a single capability boolean from core.config
+    (``branding_allowed`` / ``home_options_allowed`` / ``tailnet_sso_visible``) — the
+    new role-class axis (desktop vs node, cloud-branded-desktop, non-mesh). Disabling a
+    QGroupBox greys all its children at once, matching the platform-keyed idiom.
+
+    ``widgets`` is one widget or an iterable of them; ``reason`` is the explanatory
+    tooltip shown while the surface is greyed (blank when allowed)."""
+    for w in (widgets if isinstance(widgets, (list, tuple)) else (widgets,)):
+        w.setEnabled(allowed)
+        w.setToolTip("" if allowed else reason)
+
+
 def clear_unsupported(cfg: ImageConfig, fields: tuple[str, ...]) -> list[str]:
     """validatePage() half: reset each unsupported field to its ImageConfig
     dataclass default so the greyed widget's stale value can't reach save()

@@ -24,6 +24,16 @@
 #   INGEST_URL        the fully-substituted terminal-report POST URL.
 #   INTERNAL_TOKEN    OPTIONAL (secretKeyRef optional:true) — may be absent.
 #   ARTIFACT_DIR      /artifacts/build-${BUILD_ID} — where products are written.
+#   IMAGE_SPEC_JSON   OPTIONAL, additive. Path to ONE materialized flat
+#                     ImageConfig JSON (the Studio worklist's per-image entry),
+#                     mounted from the per-build ConfigMap image-spec-${BUILD_ID}
+#                     at /etc/snapdragon/image-spec.json. When set (and the file
+#                     exists) this worker derives the ENTIRE builder invocation
+#                     from that spec via the Studio's own `--print-command`
+#                     translator, instead of from the 6 IMAGE_TYPE/HARDWARE_CLASS
+#                     env scalars. Absent/empty -> the legacy env path runs
+#                     byte-identically. See the image-spec.json channel section
+#                     below.
 #
 # Volumes:
 #   /artifacts             the snapdragon-image-artifacts PVC, read-write.
@@ -43,6 +53,59 @@
 #   null when not applicable). imageRef/keysRef MUST be paths relative to the
 #   artifacts root, of the exact shape "build-${BUILD_ID}/<name>" — never
 #   absolute, never containing "..".
+#
+# ── image-spec.json channel (OPTIONAL, additive, legacy byte-identical) ──────
+# The 6 IMAGE_TYPE/HARDWARE_CLASS env scalars can only express a tiny slice of a
+# real image (a platform + a role + a board/flavor). They cannot carry a domain
+# list, per-image branding, package add/drop deltas, users, home posture, etc.
+# The Studio (studio/snapdragon_studio) already owns the ONE authoritative
+# ImageConfig->builder-flags translation, and this worker image bakes the whole
+# generator tree — studio/ and python3 included (docker/Dockerfile.image-gen
+# `COPY . .`; python3 is already a hard requirement below). So when a richer,
+# fully-materialized spec is available, we reuse that single translator rather
+# than re-deriving flags a second, drifting way here.
+#
+#   * The admin-bff-api ImageBuildOrchestrator writes ONE materialized flat
+#     ImageConfig JSON to a per-build ConfigMap (image-spec-${BUILD_ID}), mounts
+#     it read-only at /etc/snapdragon/image-spec.json, and sets the Job env
+#     IMAGE_SPEC_JSON to that path. Rich values ride the FILE, never yamlSafe env
+#     scalars (the [A-Za-z0-9._-] env charset cannot carry a theme name or a
+#     domain list).
+#   * When IMAGE_SPEC_JSON names an existing file, this worker derives the exact
+#     builder invocation with the Studio's own headless translator:
+#         python3 -m snapdragon_studio --print-command \
+#             --config "$IMAGE_SPEC_JSON" --backend native \
+#             --generator-dir "$GENERATOR_DIR"
+#     (--print-command is Qt-free by a pinned Studio test; it fails LOUDLY on a
+#     worklist ENVELOPE — the BFF must hand us ONE already-materialized image,
+#     never the whole worklist, mirroring I5 "one image = one Job".)
+#   * This worker then OVERLAYS its own operational/tenancy flags AFTER the
+#     spec-derived ones. The six ARM/x86 builders parse repeated scalar flags
+#     LAST-WINS (verified: build-x86-host-stage4.sh:659-673 `case ... "$2"`), so
+#     appended overlays authoritatively override whatever the spec carried:
+#       --cluster-domain "$DOMAIN"  — server-derived tenancy domain; NEVER the
+#                                     spec's (keeps I6: DOMAIN stays issuer-
+#                                     derived, never client image content).
+#       -H "$HOSTNAME_OUT"          — the BUILD_ID-derived worker hostname.
+#       -w "$SCRATCH_DIR/work" -j "$JOBS" --env "$IMG_BUILD_ENV" — worker infra +
+#                                     the fail-secure hardening tier (see below).
+#       --no-live-iso/--no-iso --no-tar (x86/rpi5) — the single-artifact ingest
+#                                     policy (one imageRef per build, I5), exactly
+#                                     as the legacy run_*_build() functions force.
+#     Everything else (role, board, flavor, --standalone, --local-user, brand/
+#     theme, domains, users, package deltas) is SPEC CONTENT and rides through
+#     untouched — the spec is authoritative for it. HEADSCALE_URL/PENTEST that
+#     the Studio emits as an `env K=V` passthrough prefix are preserved verbatim.
+#   * Absent/empty IMAGE_SPEC_JSON -> the legacy IMAGE_TYPE/HARDWARE_CLASS path
+#     below runs byte-identically (resolve_build_target + run_*_build untouched).
+#     The spec path adds a build target; it never alters the legacy one.
+#   * Parity gate: tests/build-image-spec-parity.sh proves the spec-derived
+#     builder command equals the GUI-channel --print-command for the same config,
+#     modulo the worker overlay above. It drives this script's
+#     BUILD_IMAGE_SH_PRINT_ONLY dev/CI escape hatch (spec channel only): assemble
+#     and PRINT the builder argv (one token per line) then exit, running no build.
+#     Like BUILD_IMAGE_SH_DEV_ENV_OVERRIDE, that var is NOT part of the
+#     admin-bff-api Job contract and must never be wired into image-gen-job.yaml.
 #
 # ── HARDWARE_CLASS → generator build-target convention (this script's own) ──
 # admin-bff-api passes IMAGE_TYPE/HARDWARE_CLASS through as opaque strings with
@@ -219,6 +282,15 @@ DIAL_USER_DEFAULT="${DIAL_USER:-bff-dial}"
 # admin-console-triggered build gets the fail-secure "prod" default below —
 # see the CONTRACT GAP note in the header comment for why.
 IMG_BUILD_ENV="${BUILD_IMAGE_SH_DEV_ENV_OVERRIDE:-prod}"
+# BUILD_IMAGE_SH_PRINT_ONLY is likewise NOT part of the admin-bff-api Job
+# contract and must never be set by image-gen-job.yaml. It is the dev/CI escape
+# hatch used ONLY by the image-spec parity fixture: with the IMAGE_SPEC_JSON
+# channel active, assemble the builder argv (spec-derived flags + worker overlay)
+# and print it one token per line, then exit 0 without running any build. It is
+# a no-op for the legacy env path (rejected up front — nothing to preview there
+# that resolve_build_target/run_*_build don't already assemble byte-identically).
+PRINT_ONLY=0
+case "${BUILD_IMAGE_SH_PRINT_ONLY:-}" in 1|true|yes|on) PRINT_ONLY=1 ;; esac
 
 log()  { printf '[build-image] %s\n' "$*"; }
 warn() { printf '[build-image] WARNING: %s\n' "$*" >&2; }
@@ -235,6 +307,12 @@ SSH_KEYS_ALLOWED="${SSH_KEYS_ALLOWED:-false}"
 INGEST_URL="${INGEST_URL:-}"
 INTERNAL_TOKEN="${INTERNAL_TOKEN:-}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-}"
+# OPTIONAL, additive spec channel (see the image-spec.json channel header note).
+# Empty -> the legacy IMAGE_TYPE/HARDWARE_CLASS path runs byte-identically.
+IMAGE_SPEC_JSON="${IMAGE_SPEC_JSON:-}"
+# OPTIONAL generator revision, reported (not consumed) in the spec-channel
+# terminal message. Empty unless the image build/Job supplies it.
+GENERATOR_REV="${GENERATOR_REV:-}"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 2)}"
 
 # ── ingest report state (single terminal call — see send_ingest) ────────────
@@ -255,7 +333,9 @@ ERROR_OUT=""
 INGEST_SENT=0
 SCRATCH_DIR=""
 
-# resolve_build_target() output
+# resolve_build_target() / resolve_spec_target() output
+BUILD_MODE="legacy"     # "legacy" (env scalars) | "spec" (IMAGE_SPEC_JSON)
+SPEC_CMD=""             # spec mode: the Studio's shlex-quoted native build command
 PLATFORM=""
 BUILD_ROLE=""
 RPI5_BOARD_OUT=""
@@ -361,6 +441,11 @@ die() {
   die_status="$1"
   die_msg="$2"
   fail_msg "$die_msg"
+  # PRINT_ONLY is a command-preview: there is no BFF to report to, so fail fast
+  # with the reason on stderr rather than attempting a terminal ingest POST.
+  if [ "$PRINT_ONLY" = "1" ]; then
+    exit 1
+  fi
   if [ "$die_status" = "FAILED" ]; then
     MESSAGE_OUT="$die_msg"
   else
@@ -376,6 +461,12 @@ die() {
 # than leaving the BFF's image_build row stuck forever with no signal.
 on_exit() {
   ec=$?
+  # PRINT_ONLY is a dev/CI command-preview: there is no build and no BFF to
+  # report to, so never attempt a terminal ingest — just tidy up and exit.
+  if [ "$PRINT_ONLY" = "1" ]; then
+    cleanup_scratch
+    exit "$ec"
+  fi
   if [ "$INGEST_SENT" != "1" ]; then
     if [ -z "$ERROR_OUT" ]; then
       ERROR_OUT="build-image.sh exited unexpectedly (code ${ec}) before it could report a terminal status"
@@ -429,13 +520,20 @@ if [ "$ARTIFACT_DIR" != "$expected_artifact_dir" ]; then
   die ERROR "ARTIFACT_DIR ('${ARTIFACT_DIR}') does not match the expected '${expected_artifact_dir}' for BUILD_ID='${BUILD_ID}'"
 fi
 
-if [ "$(id -u)" != "0" ]; then
-  die ERROR "must run as root (uid 0) — the generator's build scripts require root for chroot/loop/mount work. NOTE: the current image-gen-job.yaml sets securityContext.runAsNonRoot=true/runAsUser=65532, which is incompatible with this; an operator must adjust the Job's security context before real builds can run (tracked as a follow-up, out of scope for this worker-image change)."
+# root + the runtime tool set are EXECUTION prerequisites (chroot/loop/mount,
+# the ingest POST, key derivation, the tarball). PRINT_ONLY only assembles and
+# prints the builder argv, so it skips them — but the spec channel still needs
+# python3 to run the Studio's --print-command translator, so require that always.
+if [ "$PRINT_ONLY" != "1" ]; then
+  if [ "$(id -u)" != "0" ]; then
+    die ERROR "must run as root (uid 0) — the generator's build scripts require root for chroot/loop/mount work. NOTE: the current image-gen-job.yaml sets securityContext.runAsNonRoot=true/runAsUser=65532, which is incompatible with this; an operator must adjust the Job's security context before real builds can run (tracked as a follow-up, out of scope for this worker-image change)."
+  fi
+  for tool in curl python3 ssh-keygen tar find; do
+    command -v "$tool" >/dev/null 2>&1 || die ERROR "required tool '${tool}' not found in the image"
+  done
+else
+  command -v python3 >/dev/null 2>&1 || die ERROR "required tool 'python3' not found (the IMAGE_SPEC_JSON channel needs it for --print-command)"
 fi
-
-for tool in curl python3 ssh-keygen tar find; do
-  command -v "$tool" >/dev/null 2>&1 || die ERROR "required tool '${tool}' not found in the image"
-done
 
 [ -d "$GENERATOR_DIR" ] || die ERROR "GENERATOR_DIR '${GENERATOR_DIR}' not found (broken image build?)"
 for f in build-x86-host-stage4.sh build-rpi5-stage4.sh build-frite-stage4.sh build-jetson-stage4.sh \
@@ -444,17 +542,22 @@ for f in build-x86-host-stage4.sh build-rpi5-stage4.sh build-frite-stage4.sh bui
 done
 
 # ── 2. artifacts + scratch dirs ──────────────────────────────────────────────
-mkdir -p "$ARTIFACT_DIR" 2>/dev/null || die ERROR "cannot create ARTIFACT_DIR ${ARTIFACT_DIR} (artifacts PVC not mounted?)"
-[ -w "$ARTIFACT_DIR" ] || die ERROR "ARTIFACT_DIR ${ARTIFACT_DIR} is not writable"
-
-# The heavy sysroot/distfiles/pkgdir build tree is intentionally kept OUTSIDE
-# ARTIFACT_DIR (a sibling scratch dir on the same PVC, since it is the only
-# volume with enough space) and removed at the end (on_exit -> cleanup_scratch)
-# so the shared artifacts PVC never permanently accumulates multi-GB build
-# trees per build.
+# SCRATCH_DIR is always computed (its -w value appears in the assembled builder
+# command) but only materialized when a real build follows — PRINT_ONLY previews
+# the command without touching the PVC.
 SCRATCH_DIR="${SCRATCH_PARENT}/${BUILD_ID}"
-rm -rf "$SCRATCH_DIR" 2>/dev/null || true
-mkdir -p "$SCRATCH_DIR/work" "$SCRATCH_DIR/keys-bundle" || die ERROR "cannot create scratch dir ${SCRATCH_DIR} (artifacts PVC full/unwritable?)"
+if [ "$PRINT_ONLY" != "1" ]; then
+  mkdir -p "$ARTIFACT_DIR" 2>/dev/null || die ERROR "cannot create ARTIFACT_DIR ${ARTIFACT_DIR} (artifacts PVC not mounted?)"
+  [ -w "$ARTIFACT_DIR" ] || die ERROR "ARTIFACT_DIR ${ARTIFACT_DIR} is not writable"
+
+  # The heavy sysroot/distfiles/pkgdir build tree is intentionally kept OUTSIDE
+  # ARTIFACT_DIR (a sibling scratch dir on the same PVC, since it is the only
+  # volume with enough space) and removed at the end (on_exit -> cleanup_scratch)
+  # so the shared artifacts PVC never permanently accumulates multi-GB build
+  # trees per build.
+  rm -rf "$SCRATCH_DIR" 2>/dev/null || true
+  mkdir -p "$SCRATCH_DIR/work" "$SCRATCH_DIR/keys-bundle" || die ERROR "cannot create scratch dir ${SCRATCH_DIR} (artifacts PVC full/unwritable?)"
+fi
 
 # ── 3. resolve TARGET_USER -> optional brand org + local name ───────────────
 case "$TARGET_USER" in
@@ -643,10 +746,106 @@ resolve_build_target() {
   return 0
 }
 
-resolve_build_target || die FAILED "unsupported IMAGE_TYPE='${IMAGE_TYPE}' / HARDWARE_CLASS='${HARDWARE_CLASS}' combination — see build-image.sh's header comment for the supported HARDWARE_CLASS convention"
+# resolve_spec_target — the IMAGE_SPEC_JSON channel's twin of resolve_build_target.
+# Instead of mapping the 6 env scalars, it asks the Studio to translate the full
+# materialized ImageConfig into a native build command and reads the platform +
+# role back off that command. It NEVER re-derives builder flags itself — the
+# Studio is the single translation source; run_spec_build() runs that exact
+# command with only the worker overlay appended.
+resolve_spec_target() {
+  spec_err="$(mktemp)"
+  # Studio lives at ${GENERATOR_DIR}/studio (docker/Dockerfile.image-gen `COPY .
+  # .`). --print-command is Qt-free and fails loudly (exit 2, reason on stderr)
+  # on a worklist envelope or an invalid identity — surface that as a FAILED
+  # ingest, never a silent default.
+  if SPEC_CMD="$(PYTHONPATH="${GENERATOR_DIR}/studio${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -m snapdragon_studio --print-command \
+        --config "$IMAGE_SPEC_JSON" --backend native \
+        --generator-dir "$GENERATOR_DIR" 2>"$spec_err")"; then
+    rm -f "$spec_err"
+  else
+    spec_reason="$(head -c 2000 "$spec_err" 2>/dev/null | tr '\n' ' ')"
+    rm -f "$spec_err"
+    die FAILED "could not derive a build command from IMAGE_SPEC_JSON=${IMAGE_SPEC_JSON} via the Studio --print-command translator: ${spec_reason}"
+  fi
+
+  # Re-parse the Studio's shlex-quoted command back into argv. --print-command
+  # emits shell-safe quoting (Python shlex.quote) over values that already passed
+  # the Studio's own validation (atom/domain/username allowlists), so `eval` here
+  # only reconstructs that exact argv — single-quoted metacharacters stay literal
+  # and cannot inject shell behaviour. This is the standard POSIX idiom for
+  # re-tokenising a trusted shell-quoted string.
+  eval "set -- $SPEC_CMD"
+  # command() prefixes native output with `sudo` only when it is NOT already root
+  # (i.e. in dev/CI). The worker runs the build as root, so drop any leading sudo.
+  [ "${1:-}" = "sudo" ] && shift
+
+  # Identify the builder script token -> PLATFORM (the `env K=V`/`bash` prefix and
+  # every flag are skipped; only the ./build-*-stage4.sh token matches).
+  PLATFORM=""
+  for _tok in "$@"; do
+    case "$_tok" in
+      */build-x86-host-stage4.sh|build-x86-host-stage4.sh)         PLATFORM="x86" ;;
+      */build-rpi5-stage4.sh|build-rpi5-stage4.sh)                 PLATFORM="rpi5" ;;
+      */build-frite-stage4.sh|build-frite-stage4.sh)               PLATFORM="frite" ;;
+      */build-jetson-stage4.sh|build-jetson-stage4.sh)             PLATFORM="jetson" ;;
+      */build-orangepi5-stage4.sh|build-orangepi5-stage4.sh)       PLATFORM="orangepi5" ;;
+      */build-orangepi-zero2-stage4.sh|build-orangepi-zero2-stage4.sh) PLATFORM="orangepizero2" ;;
+    esac
+    [ -n "$PLATFORM" ] && break
+  done
+  [ -n "$PLATFORM" ] || die FAILED "the Studio --print-command output did not name a known generator build script, so the image-spec could not be mapped to a platform: ${SPEC_CMD}"
+
+  # Best-effort role/board/flavor purely for logging + the non-secret metadata
+  # bundle + build_desc. These NEVER affect the executed argv (that is SPEC_CMD
+  # verbatim + the worker overlay) — they are just a human-readable summary.
+  BUILD_ROLE=""; _sb=""; _sf=""; _prev=""
+  for _tok in "$@"; do
+    case "$_prev" in
+      -r|--role)   BUILD_ROLE="$_tok" ;;
+      -b|--board)  _sb="$_tok" ;;
+      --flavor)    _sf="$_tok" ;;
+    esac
+    _prev="$_tok"
+  done
+  case "$PLATFORM" in
+    frite|orangepi5) build_desc="${_sb:-?}.${_sf:-?}" ;;
+    orangepizero2)   build_desc="${_sf:-?}" ;;
+    *)               build_desc="${BUILD_ROLE:-spec}" ;;
+  esac
+
+  # KEYS_ROLE mirrors resolve_build_target's mapping (IMAGE_TYPE still comes from
+  # the Job env and is authoritative for the keys profile).
+  if [ "$IMAGE_TYPE" = "mesh-extension" ]; then
+    KEYS_ROLE="mesh-extension"
+  else
+    case "$BUILD_ROLE" in
+      pki)          KEYS_ROLE="pki" ;;
+      be|backend)   KEYS_ROLE="backend" ;;
+      fe|frontend)  KEYS_ROLE="frontend" ;;
+      *)            KEYS_ROLE="host" ;;
+    esac
+  fi
+}
+
+if [ -n "$IMAGE_SPEC_JSON" ]; then
+  [ -f "$IMAGE_SPEC_JSON" ] || die ERROR "IMAGE_SPEC_JSON is set to '${IMAGE_SPEC_JSON}' but no such file exists (the BFF must mount the per-build image-spec ConfigMap there)"
+  BUILD_MODE="spec"
+  resolve_spec_target
+else
+  BUILD_MODE="legacy"
+  # PRINT_ONLY is a spec-channel preview only; the legacy path has nothing extra
+  # to preview (resolve_build_target + run_*_build already assemble the command
+  # byte-identically, and printing it would still run no build here).
+  if [ "$PRINT_ONLY" = "1" ]; then
+    die ERROR "BUILD_IMAGE_SH_PRINT_ONLY requires the IMAGE_SPEC_JSON channel (there is no legacy command to preview)"
+  fi
+  resolve_build_target || die FAILED "unsupported IMAGE_TYPE='${IMAGE_TYPE}' / HARDWARE_CLASS='${HARDWARE_CLASS}' combination — see build-image.sh's header comment for the supported HARDWARE_CLASS convention"
+fi
 
 HOSTNAME_OUT="sdimg-$(printf '%s' "$BUILD_ID" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9' | cut -c1-8)"
 log "resolved: platform=${PLATFORM} role=${BUILD_ROLE:-<n/a>} keys_role=${KEYS_ROLE} imageType=${IMAGE_TYPE} hardwareClass=${HARDWARE_CLASS:-<default>} hostname=${HOSTNAME_OUT}"
+[ "$BUILD_MODE" = "spec" ] && log "image-spec channel active: builder flags derived from ${IMAGE_SPEC_JSON} via the Studio; worker overlays --cluster-domain/-H/-w/-j/--env (+ the single-artifact --no-*iso/--no-tar policy)"
 case "$PLATFORM" in
   jetson|orangepi5|orangepizero2)
     warn "${PLATFORM} is EXPERIMENTAL in the generator (hardware validation pending) — proceeding anyway since it was explicitly requested"
@@ -724,6 +923,48 @@ run_orangepizero2_build() {
   ./build-orangepi-zero2-stage4.sh "$@"
 }
 
+# dispatch_builder ARGV... — execute the fully-assembled builder command, OR
+# (BUILD_IMAGE_SH_PRINT_ONLY) print it, one token per line, framed by markers,
+# and return WITHOUT executing. One-token-per-line survives values with spaces
+# (e.g. a brand title) with no shell re-quoting, so the image-spec parity fixture
+# can slice the argv between the markers and diff it against the Studio's
+# --print-command tokens. Only the spec path (run_spec_build) routes through this;
+# the legacy run_*_build() functions exec their script directly and are unchanged.
+dispatch_builder() {
+  if [ "$PRINT_ONLY" = "1" ]; then
+    printf '__BUILDER_ARGV_BEGIN__\n'
+    printf '%s\n' "$@"
+    printf '__BUILDER_ARGV_END__\n'
+    return 0
+  fi
+  "$@"
+}
+
+# run_spec_build — the IMAGE_SPEC_JSON channel's runner. It re-parses the Studio's
+# native build command (SPEC_CMD) and appends the worker overlay. The six builders
+# parse repeated scalar flags LAST-WINS, so the appended values authoritatively
+# override anything the same-named flag carried in the spec — that is how
+# --cluster-domain stays server-derived (I6) while everything else (role, board,
+# flavor, branding, package deltas, users, domains) rides through as spec content.
+run_spec_build() {
+  # Trusted re-tokenisation of the Studio's shlex-quoted command — see the safety
+  # note in resolve_spec_target (values are already validated + single-quoted).
+  eval "set -- $SPEC_CMD"
+  [ "${1:-}" = "sudo" ] && shift   # worker builds as root; drop any dev/CI sudo
+  set -- "$@" -w "${SCRATCH_DIR}/work" -j "$JOBS" --env "$IMG_BUILD_ENV" \
+             --cluster-domain "$DOMAIN" -H "$HOSTNAME_OUT"
+  # Single-artifact ingest policy, matching the legacy run_*_build() functions:
+  # x86 defaults to a live ISO and rpi5 to an installer ISO on top of the .img, so
+  # both are disabled to leave exactly one .img for the contract's single imageRef.
+  # frite/orangepi5/orangepizero2 emit the ISO AS the artifact (legacy passes no
+  # --no-iso for them either), and jetson emits only a .img — so no overlay there.
+  case "$PLATFORM" in
+    x86)  set -- "$@" --no-live-iso --no-tar ;;
+    rpi5) set -- "$@" --no-iso --no-tar ;;
+  esac
+  dispatch_builder "$@"
+}
+
 # forward_and_wait CMD... — run the (potentially hours-long) real build in the
 # background and `wait` for it explicitly, forwarding INT/TERM to it while we
 # wait. A trap only runs between commands: if we ran the build as an ordinary
@@ -734,6 +975,13 @@ run_orangepizero2_build() {
 # SIGKILLed outright. Waiting on an explicit background pid is interruptible,
 # so the forwarded signal (and then our own trap) actually run promptly.
 forward_and_wait() {
+  if [ "$PRINT_ONLY" = "1" ]; then
+    # command preview (spec channel only): the runner just prints the argv, so
+    # run it synchronously — there is no long-lived child to background, wait on,
+    # or forward signals to.
+    "$@"
+    return $?
+  fi
   "$@" &
   child_pid=$!
   trap "kill -TERM ${child_pid} 2>/dev/null" TERM INT
@@ -746,24 +994,43 @@ forward_and_wait() {
   return "$child_rc"
 }
 
-case "$PLATFORM" in
-  frite)         build_desc="${FRITE_BOARD_OUT}.${FRITE_FLAVOR_OUT}" ;;
-  orangepi5)     build_desc="${ORANGEPI5_BOARD_OUT}.${ORANGEPI5_FLAVOR_OUT}" ;;
-  orangepizero2) build_desc="${ORANGEPIZERO2_FLAVOR_OUT}" ;;
-  *)             build_desc="${BUILD_ROLE}" ;;
-esac
+# build_desc is a human-readable summary for logs/messages. Spec mode already set
+# it in resolve_spec_target (from the Studio-derived role/board/flavor); only the
+# legacy path derives it from the resolve_build_target output vars here.
+if [ "$BUILD_MODE" != "spec" ]; then
+  case "$PLATFORM" in
+    frite)         build_desc="${FRITE_BOARD_OUT}.${FRITE_FLAVOR_OUT}" ;;
+    orangepi5)     build_desc="${ORANGEPI5_BOARD_OUT}.${ORANGEPI5_FLAVOR_OUT}" ;;
+    orangepizero2) build_desc="${ORANGEPIZERO2_FLAVOR_OUT}" ;;
+    *)             build_desc="${BUILD_ROLE}" ;;
+  esac
+fi
 
 build_ok=true
-case "$PLATFORM" in
-  x86)           forward_and_wait run_x86_build           || build_ok=false ;;
-  rpi5)          forward_and_wait run_rpi5_build           || build_ok=false ;;
-  frite)         forward_and_wait run_frite_build          || build_ok=false ;;
-  jetson)        forward_and_wait run_jetson_build         || build_ok=false ;;
-  orangepi5)     forward_and_wait run_orangepi5_build      || build_ok=false ;;
-  orangepizero2) forward_and_wait run_orangepizero2_build  || build_ok=false ;;
-esac
+if [ "$BUILD_MODE" = "spec" ]; then
+  # ONE runner for every platform: the Studio already picked the builder script
+  # and its content flags; run_spec_build just appends the worker overlay.
+  forward_and_wait run_spec_build || build_ok=false
+else
+  case "$PLATFORM" in
+    x86)           forward_and_wait run_x86_build           || build_ok=false ;;
+    rpi5)          forward_and_wait run_rpi5_build           || build_ok=false ;;
+    frite)         forward_and_wait run_frite_build          || build_ok=false ;;
+    jetson)        forward_and_wait run_jetson_build         || build_ok=false ;;
+    orangepi5)     forward_and_wait run_orangepi5_build      || build_ok=false ;;
+    orangepizero2) forward_and_wait run_orangepizero2_build  || build_ok=false ;;
+  esac
+fi
 if [ "$build_ok" = "false" ]; then
   die FAILED "the ${PLATFORM} build (role=${build_desc}) exited non-zero — see this Job pod's logs for the full build output"
+fi
+
+# PRINT_ONLY (spec channel dev/CI preview): the assembled builder argv has been
+# printed above between the __BUILDER_ARGV_*__ markers; there is no artifact to
+# copy and no ingest to send. on_exit skips the terminal report for PRINT_ONLY.
+if [ "$PRINT_ONLY" = "1" ]; then
+  log "print-only: assembled builder command emitted above; no build was run"
+  exit 0
 fi
 
 # ── 6. locate the produced artifact + copy it into ARTIFACT_DIR ─────────────
@@ -897,6 +1164,14 @@ log "keys bundle: ${ARTIFACT_DIR}/keys.tar (keysRef=${KEYS_REF})"
 
 # ── 9. terminal report ───────────────────────────────────────────────────────
 MESSAGE_OUT="image build completed: platform=${PLATFORM} role=${build_desc} imageType=${IMAGE_TYPE} hardwareClass=${HARDWARE_CLASS:-<default>}"
+if [ "$BUILD_MODE" = "spec" ]; then
+  # Report the richer channel (and, when the BFF supplies it, the generator
+  # revision baked into this image) so an operator can tell a spec-derived build
+  # from a legacy env-scalar one. GENERATOR_REV is optional/best-effort — the
+  # baked tree carries no VCS metadata (.dockerignore strips it), so this stays
+  # empty unless the image build passed it in.
+  MESSAGE_OUT="${MESSAGE_OUT} (image-spec channel${GENERATOR_REV:+; generator ${GENERATOR_REV}})"
+fi
 if send_ingest COMPLETED; then
   log "done: imageRef=${IMAGE_REF} keysRef=${KEYS_REF}"
   exit 0

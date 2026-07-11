@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from ..qt import QtWidgets
-from ...core.config import MODE_DEFAULT_ROLE, ROLE_CHOICES, UNAFFILIATED_ROLE
+from ...core.config import (
+    MODE_DEFAULT_ROLE, ROLE_CHOICES, UNAFFILIATED_ROLE, enter_mesh_defaults,
+)
 
 
 class ModePage(QtWidgets.QWizardPage):
@@ -44,9 +46,11 @@ class ModePage(QtWidgets.QWizardPage):
         if btn is None:
             return False
         mid = btn.property("mode")
+        prev = self.wiz.cfg.mode
         self.wiz.cfg.mode = mid
         # a role from another mode is meaningless here — reset to the mode default
-        # (RolePage preselects it and lets the user pick any role in the catalog)
+        # (RolePage preselects it and lets the user pick any role in the catalog; mesh
+        # uses the WorklistPage, whose default row derives from this reset role)
         if self.wiz.cfg.role not in {r for r, _, _ in ROLE_CHOICES[mid]}:
             self.wiz.cfg.role = MODE_DEFAULT_ROLE[mid]
         # bundle the generator source only for standalone (self-hosting appliance);
@@ -55,12 +59,28 @@ class ModePage(QtWidgets.QWizardPage):
         # builder hard-conflict there (RolePage clears it again when it's picked).
         self.wiz.cfg.bundle_source = (mid == "standalone"
                                       and self.wiz.cfg.role != UNAFFILIATED_ROLE)
-        if mid == "standalone":
-            # standalone SKIPS the key-zip/domains/users pages (MODE_SKIPPED_PAGES) —
-            # clear anything a previously visited cloud/mesh flow parked in the
-            # config, so pages the user can no longer reach can't strand stale state
-            # into save() or the emitted argv.
-            self.wiz.cfg.keyzip = ""
-            self.wiz.cfg.domains = []
-            self.wiz.cfg.users = []
+        if mid == "mesh":
+            # entering mesh: clear the desktop-class surfaces (theming/home/tailnet-SSO)
+            # and force tailscale=sso on off-UI (materialize re-forces them per image),
+            # so a mesh node can never carry a theme or a stale desktop option (I4).
+            enter_mesh_defaults(self.wiz.cfg)
+            if prev != "mesh":
+                self.wiz.worklist = None      # fresh worklist on transition into mesh
+        else:
+            if prev == "mesh":
+                # leaving mesh (any direction): stranded worklist rows must not survive a
+                # mode switch (same rationale as the standalone admin-plane clear below).
+                self.wiz.worklist = None
+            if mid == "standalone":
+                # standalone SKIPS the worklist/key-zip/domains/users pages
+                # (MODE_SKIPPED_PAGES) — clear anything a previously visited cloud/mesh
+                # flow parked in the config, so pages the user can no longer reach can't
+                # strand stale state into save() or the emitted argv. Spec 3: standalone
+                # images have no tailnet, so tailscale/sso are forced off (always emitted
+                # as --no-tailscale/--no-sso).
+                self.wiz.cfg.keyzip = ""
+                self.wiz.cfg.domains = []
+                self.wiz.cfg.users = []
+                self.wiz.cfg.tailscale = False
+                self.wiz.cfg.sso = False
         return True

@@ -91,9 +91,12 @@ def flag_pairs(args):
 
 def test_branding_dir_scheme_grub_theme_collect_on_x86(wiz):
     """G8/G9/G33: the three previously widget-less branding fields collect from
-    their pickers and reach the x86 argv."""
+    their pickers and reach the x86 argv (via the CUSTOM branding channel — spec 2's
+    preset/custom either/or; selecting custom enables the eight fields)."""
     page = advance_to(wiz, wizard_mod.BrandingPage)
     assert page.form.isEnabled()
+    page.rb_custom.setChecked(True)          # custom-branding channel (spec 2)
+    assert page.custom_group.isEnabled() and not page.theme.isEnabled()
     page.fields["branding_dir"].setText("/tmp/brand-tree")
     page.fields["grub_theme"].setText("/tmp/grub-theme")
     page.fields["color_scheme"].setText("/tmp/Boogiepop.colors")
@@ -110,9 +113,11 @@ def test_branding_dir_scheme_grub_theme_collect_on_x86(wiz):
 
 def test_branding_dir_scheme_grub_theme_grey_and_clear_on_arm(wiz):
     """G10 pattern: the new branding fields are x86-only emission — they ride the
-    form-wide grey on an ARM platform and clear on Next."""
+    form-wide grey on an ARM platform and clear on Next. Driven in CLOUD (a cloud
+    rpi5-desktop is a desktop-class image so branding_allowed is True — the grey here
+    is purely the PLATFORM axis, and cloud never skips the branding page)."""
     c = wiz.cfg
-    c.mode = "mesh"; c.role = "rpi5-desktop"; c.platform = "rpi5"
+    c.mode = "cloud"; c.role = "rpi5-desktop"; c.platform = "rpi5"
     c.branding_dir = "/tmp/brand-tree"; c.grub_theme = "/tmp/grub-theme"
     c.color_scheme = "/tmp/Boogiepop.colors"
     wiz.restart()
@@ -140,6 +145,35 @@ def test_branding_dir_scheme_grub_theme_clear_for_unaffiliated(wiz):
     args = c.to_cli_args()   # would raise on any leftover branding asset
     for flag in ("--branding-dir", "--grub-theme", "--color-scheme"):
         assert flag not in args
+
+
+# ---- BrandingPage: premade-theme XOR custom-branding either/or (spec 2) ---------
+# Instantiated directly (the page only needs a wiz-like object exposing .cfg /
+# .generator_dir) so these are robust to mesh skipping the branding page in the flow.
+
+def test_branding_preset_channel_blanks_custom_fields(qapp):
+    """spec 2: the premade-theme channel commits the theme and BLANKS the eight custom
+    fields — a stray value on the disabled custom side can never ride along."""
+    cfg = ImageConfig(theme="boogiepop")
+    page = wizard_mod.BrandingPage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert page.rb_preset.isChecked()          # theme-only load selects the preset channel
+    assert page.theme.isEnabled() and not page.custom_group.isEnabled()
+    page.fields["branding_dir"].setText("/tmp/leak")   # stray value on the disabled side
+    assert page.validatePage()
+    assert cfg.theme == "boogiepop" and cfg.branding_dir == ""
+
+
+def test_branding_both_set_resolves_custom_wins(qapp):
+    """spec 2: a saved config with BOTH a premade theme AND custom assets → custom
+    wins, the theme is cleared, and the reconciliation warning is shown."""
+    cfg = ImageConfig(theme="boogiepop", wallpaper="/tmp/w.png")
+    page = wizard_mod.BrandingPage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert page.rb_custom.isChecked()          # custom wins the either/or
+    assert not page.both_set_note.isHidden()   # reconciliation warning shown
+    assert page.validatePage()
+    assert cfg.theme == "" and cfg.wallpaper == "/tmp/w.png"
 
 
 # ---- HomePage: archive/seed extras (G31) + media-data set (G32) ----------------
@@ -187,7 +221,7 @@ def test_home_extras_and_media_grey_and_clear_on_arm(wiz):
     """G10 pattern: the G31/G32 fields are x86-only — greyed on ARM (rows as one
     unit, line edit + Browse…) and force-cleared on Next."""
     c = wiz.cfg
-    c.mode = "mesh"; c.role = "be"; c.platform = "rpi5"
+    c.mode = "cloud"; c.role = "rpi5-desktop"; c.platform = "rpi5"
     c.include_home_archive = "/tmp/home.tar.gz"; c.home_seed_code_from = "/tmp/checkout"
     c.seed_packages_from = "/tmp/pkgs.list"
     c.media_data = "off"; c.media_label = "media-data"; c.no_vaults = True

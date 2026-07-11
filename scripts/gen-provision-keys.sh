@@ -88,6 +88,20 @@ MAIL_PROVIDER="${MAIL_PROVIDER:-protonmail}"
 VPN_SRC="${VPN_SRC:-}"              # dir of provider .conf/.ovpn to stage (own domain)
 VPN_DOMAIN="${VPN_DOMAIN:-${CLUSTER_DOMAIN:-}}"
 
+# ── Orchestration superdomain (permanently INTERNAL; distinct from CLUSTER_DOMAIN) ──
+# The MagicDNS base_domain every mesh node joins. Written into the GENERATED
+# provision.json's .mesh.magic_dns_domain (+ derived .mesh.cp_dns_name); provision.sh
+# (specs/etc/keys-provision/provision.sh) consumes it as headscale dns.base_domain and
+# the kubeadm controlPlaneEndpoint — so ALL mesh nodes really join it, with ZERO
+# image-side / builder-flag changes (the KEYS channel, design §2.7).
+# PERMANENTLY INTERNAL (invariant I7): unlike CLUSTER_DOMAIN (the PUBLIC apex the
+# go-live wizard flips to a real domain), the superdomain is NEVER go-live-flipped and
+# never public. Default: <BRAND>.internal (matches the Studio's effective_superdomain()
+# = superdomain or f"{brand}.internal"; brand default 'snapdragon' => snapdragon.internal).
+# Override with SUPERDOMAIN (env/brand.conf) or --superdomain to pin an explicit
+# internal zone. Precedence: built-in (<brand>.internal) < env/brand.conf < CLI flag.
+SUPERDOMAIN="${SUPERDOMAIN:-}"
+
 # ── In-UI SSH-terminal key model: per-device sshd HOST + BFF DIAL keypairs ──────
 # The in-UI SSH terminal lets the BFF dial a device over the tailnet to drive an
 # operator console. That needs TWO per-device keypairs minted here, off-image-build:
@@ -161,6 +175,11 @@ Options:
                       subdir. (env: VPN_SRC)
       --vpn-domain D  Egress-VPN: the node's OWN brand domain for --vpn-src
                       (else CLUSTER_DOMAIN). (env: VPN_DOMAIN)
+      --superdomain D Orchestration superdomain: the mesh MagicDNS base_domain every
+                      node joins, written into provision.json .mesh.magic_dns_domain
+                      (+ derived .mesh.cp_dns_name). PERMANENTLY INTERNAL — never
+                      go-live-flipped, distinct from CLUSTER_DOMAIN (the public apex).
+                      Default: <BRAND>.internal. (env/brand.conf: SUPERDOMAIN)
       --device-id ID  In-UI SSH terminal: stable per-device id used as the Vault
                       path / ingest-metadata segment for this device's host + dial
                       key material. Default: a random short id. (env: DEVICE_ID)
@@ -200,6 +219,7 @@ while [[ $# -gt 0 ]]; do
         --registry-pub) REGISTRY_PUB_FILE="$2"; shift 2 ;;   # Layer-B: baked verifying key (mesh-extension role)
         --vpn-src)     VPN_SRC="$2"; shift 2 ;;               # egress-VPN: provider .conf/.ovpn to stage (own domain)
         --vpn-domain)  VPN_DOMAIN="$2"; shift 2 ;;            # egress-VPN: the node's own brand domain
+        --superdomain) SUPERDOMAIN="$2"; shift 2 ;;          # mesh MagicDNS base_domain (permanently internal); default <BRAND>.internal
         --device-id)   DEVICE_ID="$2"; shift 2 ;;            # in-UI SSH terminal: per-device Vault-seed path segment
         --dial-user)   DIAL_USER="$2"; shift 2 ;;            # in-UI SSH terminal: unprivileged login the BFF dials as
         --no-device-ssh) GEN_DEVICE_SSH=false; shift ;;      # in-UI SSH terminal: skip host+dial keypair generation
@@ -242,6 +262,59 @@ rm -rf "${OUT_DIR}/examples"
 # mesh-extension role (which repopulates it below) so SUPERADMIN/primary keys-out
 # carry NO device-registry material at all.
 [ "${ROLE}" = "mesh-extension" ] || rm -rf "${OUT_DIR}/device-registry"
+
+# ── Orchestration superdomain -> generated KEYS bundle (KEYS channel, design §2.7) ──
+# EVERY role's node joins the SAME orchestration superdomain, so stamp the effective
+# value into the GENERATED bundle here (the template's fixed default is replaced):
+#   * provision.json .mesh.magic_dns_domain  — authoritative; provision.sh's
+#     resolve_magic_dns_domain() sed-rewrites headscale dns.base_domain from it.
+#   * provision.json .mesh.cp_dns_name        — re-derived kube-api.<superdomain> only
+#     when it still tracked the old domain, so an operator override is preserved;
+#     provision.sh's resolve_cp_dns_name() feeds it to workers/additional CPs as the
+#     kubeadm join target.
+#   * kubernetes/kubeadm-config.yaml controlPlaneEndpoint + certSANs — the FIRST
+#     control-plane runs `kubeadm init --config` on this file VERBATIM (it is NOT
+#     re-derived at boot), so its base_domain MUST track the superdomain or the CP's
+#     apiserver cert SANs won't match kube-api.<superdomain> and TLS joins fail. This
+#     file's own header demands "keep in sync with .mesh.cp_dns_name/.magic_dns_domain";
+#     we honour that on the generated copy. (The static keys-template default + the
+#     image-baked specs/etc/{kubernetes/kubeadm-config,headscale/config}.yaml fallbacks
+#     are only used when KEYS lacks these files — flagged for follow-up alignment.)
+# PERMANENTLY INTERNAL (invariant I7): distinct from .snapdragon.cluster_domain (the
+# PUBLIC apex the go-live wizard flips), NEVER go-live-flipped. ZERO builder flags.
+EFFECTIVE_SUPERDOMAIN="${SUPERDOMAIN:-${BRAND:-snapdragon}.internal}"
+PROV="${OUT_DIR}/provision.json"
+if [ -f "${PROV}" ]; then
+    SD="${EFFECTIVE_SUPERDOMAIN}" python3 - "${PROV}" "${OUT_DIR}/kubernetes/kubeadm-config.yaml" <<'PY'
+import json, os, re, sys
+prov, kubeadm = sys.argv[1], sys.argv[2]
+sd = os.environ["SD"]
+
+# provision.json .mesh — authoritative magic_dns_domain + derived cp_dns_name.
+d = json.load(open(prov))
+mesh = d.setdefault("mesh", {})
+old = mesh.get("magic_dns_domain") or "headnet.internal"
+mesh["magic_dns_domain"] = sd
+cp = mesh.get("cp_dns_name") or ""
+if not cp or cp == "kube-api.%s" % old:      # preserve an explicit operator override
+    mesh["cp_dns_name"] = "kube-api.%s" % sd
+json.dump(d, open(prov, "w"), indent=2)
+open(prov, "a").write("\n")
+
+# kubeadm-config.yaml — rewrite its OWN base_domain (read from controlPlaneEndpoint,
+# NOT assumed equal to provision.json's) to the superdomain, everywhere it appears
+# (controlPlaneEndpoint + every certSAN suffix). No-op when absent / already custom.
+if os.path.isfile(kubeadm):
+    txt = open(kubeadm).read()
+    m = re.search(r'controlPlaneEndpoint:\s*"?kube-api\.([A-Za-z0-9.-]+?):6443"?', txt)
+    if m and m.group(1) != sd:
+        open(kubeadm, "w").write(txt.replace(m.group(1), sd))
+PY
+    echo "==> Orchestration superdomain: ${EFFECTIVE_SUPERDOMAIN}"
+    echo "    -> ${PROV} (.mesh.magic_dns_domain + .mesh.cp_dns_name)"
+    echo "    -> ${OUT_DIR}/kubernetes/kubeadm-config.yaml (controlPlaneEndpoint + certSANs)"
+    echo "    permanently internal — never go-live-flipped (distinct from cluster_domain)"
+fi
 
 # ── Layer-B device-license registry: per-node identity + verifying key ─────────
 # ONLY the ADMIN-owned `mesh-extension` role emits this. SUPERADMIN/primary roles
