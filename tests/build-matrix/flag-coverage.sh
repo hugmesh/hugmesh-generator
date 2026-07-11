@@ -160,6 +160,9 @@ SAMPLES = {
     "edge_ai_models": [{"edge_ai_service": "on", "edge_ai_models": "llama3"}],
     "edge_ai_model_default": [{"edge_ai_service": "on", "edge_ai_model_default": "llama3"}],
     "edge_ai_analysis": [{"edge_ai_analysis": True}],
+    # edge_ai_tts is CPU-only + self-contained (NO edge_ai_service dependency, unlike the
+    # edge_ai_runtime/models fields above) — a plain on/off tri-state like character_studio.
+    "edge_ai_tts": [{"edge_ai_tts": "on"}, {"edge_ai_tts": "off"}],
     "tor_onion_service": [{"tor_onion_service": "on"}, {"tor_onion_service": "off"}],
     "character_studio": [{"character_studio": "on"}, {"character_studio": "off"}],
     "optional_services": [{"optional_services": ["akkoma"]},
