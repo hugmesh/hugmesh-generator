@@ -67,6 +67,23 @@ spec:
           # image so dev/local/tests with plain-http backends are unaffected.
           - name: SNAPDRAGON_GATEWAY_MTLS_ENABLED
             value: "true"
+          # ── BFF session bridge: opaque bff_ → Spring SecurityContext ──────────
+          # Same stanza as 20-gateway-fe.yaml: BffSessionAuthFilter introspects a
+          # bff_ session against admin-bff so cookie-mode browser requests that
+          # reach THIS gateway (fe forwards /be/** here with cookies intact)
+          # authenticate instead of 503ing on the unresolvable image default.
+          # BFF_BASE_URL points to admin-bff (which owns the bff_session DB);
+          # INTERNAL_TOKEN authenticates the back-channel (matches admin-bff's
+          # InternalTokenWebFilter — BLANK in dev → no-op on both sides).
+          - { name: APP_BFF_SESSION_ENABLED, value: "true" }
+          - name: BFF_BASE_URL
+            value: http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
+          - name: INTERNAL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: bff-internal-token
+                key: token
+                optional: true
         routes:
           # headscale forwarding: external tailscale clients hit scale.<domain> on
           # this backend gateway and are forwarded to the pki gateway -> headscale,

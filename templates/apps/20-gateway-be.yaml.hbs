@@ -53,6 +53,20 @@ spec:
             value: r2dbc:postgresql://be_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.{{BRAND}}-pki.svc.cluster.local:5432/gateway
           - name: SNAPDRAGON_GATEWAY_MTLS_ENABLED
             value: "true"
+          # ── BFF session bridge: opaque bff_ → Spring SecurityContext ──────────
+          # Mirrors specs/cluster/apps/20-gateway-be.yaml (kept in sync by hand):
+          # BffSessionAuthFilter introspects a bff_ session against admin-bff so
+          # cookie-mode browser requests authenticate at this gateway. BLANK/absent
+          # INTERNAL_TOKEN → no-op on both sides (secret optional).
+          - { name: APP_BFF_SESSION_ENABLED, value: "true" }
+          - name: BFF_BASE_URL
+            value: http://{{BRAND}}-admin-bff-api.{{BRAND}}-backend.svc.cluster.local:8080
+          - name: INTERNAL_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: bff-internal-token
+                key: token
+                optional: true
         routes:
           - id: headscale-forward
             host: scale.{{CLUSTER_DOMAIN}}

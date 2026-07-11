@@ -131,6 +131,18 @@ spec:
                 secretKeyRef:
                   name: mod-bff-db-auth
                   key: password
+            # Shared internal token: mod-bff OUTBOUND to admin-bff (X-Internal-Token)
+            # on GET /bff/internal/session/introspect (the native-login session
+            # bridge, mod-bff-api#68). Matches admin-bff's INBOUND
+            # InternalTokenWebFilter — both BLANK in dev (no-op); both set to the
+            # SAME value in-cluster (fail-closed 401 on mismatch). Same ESO Secret
+            # the fe-gateway and user-bff-api already mount for their own legs.
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: bff-internal-token
+                  key: token
+                  optional: true
           # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
           # so curl PRESENTS this pod's client cert and validates the server cert
           # against the cluster CA (--resolve maps the SAN to loopback). See

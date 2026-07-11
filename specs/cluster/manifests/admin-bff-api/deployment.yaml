@@ -270,6 +270,22 @@ spec:
                   name: admin-bff-mfa
                   key: factor-key
                   optional: true
+            # ── Shared internal token — the INBOUND half (app.internal.token) ──
+            # Every /bff/internal/** caller (fe-gateway BffSessionAuthFilter,
+            # user-bff AdminBffInternalClient, mod-bff's session-introspect leg)
+            # already mounts this same ESO Secret and SENDS X-Internal-Token — but
+            # this manifest never mounted it, so auth-core's InternalTokenWebFilter
+            # had no expected value configured and the app-layer check silently
+            # no-op'd in-cluster (defence rested on mTLS + NetworkPolicy alone).
+            # Mounting it closes the loop: when the Secret exists, a missing or
+            # mismatched header fails CLOSED 401. optional: true keeps rollout
+            # order-independent (absent Secret → filter no-ops, exactly as today).
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: bff-internal-token
+                  key: token
+                  optional: true
           # Probes are HTTPS now that server.ssl is enabled. Because client-auth=need
           # rejects the TLS handshake of any caller WITHOUT a client cert, a plain
           # kubelet httpGet (which presents none) would fail — so the probe is an
