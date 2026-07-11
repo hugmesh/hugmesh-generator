@@ -65,7 +65,12 @@ ENABLED=0
 # --foreign-mesh; the trust store defaults to the out-of-band staging root).
 FOREIGN_MESH="${FOREIGN_MESH:-}"
 PINNED_DIGEST=""
+# R3: operator content anchor (canonical tree digest) — flag/env, bound by the gate.
+PINNED_TREE_SHA256="${FOREIGN_PINNED_TREE_SHA256:-}"
 TRUST_STORE="${MESH_TRUST_STORE:-${REPO_ROOT}/keys-template/mesh-trust}"
+# R2/R4: per-mesh admission registry re-consulted on THIS consume path (render), so a
+# mesh disabled/revoked after admission cannot be re-rendered from a cached base.
+MESH_REGISTRY="${MESH_REGISTRY:-${REPO_ROOT}/templates/mesh-trust/registry.json}"
 MIN_GENERATION="0"
 # Per-repo IDENTITY tokens (Phase 4): repeatable --set NAME=VALUE from the repos[]
 # manifest identity row (e.g. APP_SLUG=user, TITLE_WORD=User, PROFILE=be). These
@@ -92,7 +97,9 @@ while [[ $# -gt 0 ]]; do
     --base)      BASE_OVERRIDE="$2"; shift 2 ;;
     --foreign-mesh)   FOREIGN_MESH="$2"; shift 2 ;;
     --pinned-digest)  PINNED_DIGEST="$2"; shift 2 ;;
+    --pinned-tree-sha256) PINNED_TREE_SHA256="$2"; shift 2 ;;
     --trust-store)    TRUST_STORE="$2"; shift 2 ;;
+    --registry)       MESH_REGISTRY="$2"; shift 2 ;;
     --min-generation) MIN_GENERATION="$2"; shift 2 ;;
     --set)
       [[ "$2" == *=* ]] || _die "--set expects NAME=VALUE, got '$2'"
@@ -136,6 +143,20 @@ if [[ -n "$FOREIGN_MESH" ]]; then
     || _die "foreign-mesh trust store '${TRUST_STORE}' is not a directory (no trust store => no admission; stage pubkeys out-of-band)"
   [[ "$MIN_GENERATION" =~ ^[0-9]+$ ]] \
     || _die "--min-generation must be a non-negative integer"
+  # R2/R4: the render base is supplied as a LOCAL dir (--base / resolved), which has
+  # no git commit->tree binding — so it is a content-anchored consume path exactly
+  # like a *_BASE_DIR override. Resolve the operator anchor (flag/env, else the
+  # registry's pinnedTreeSha256) and REQUIRE it; the gate binds it to the bytes (R3).
+  command -v jq >/dev/null 2>&1 || _die "jq not found (mesh registry parse) — fail-closed"
+  [[ -f "$MESH_REGISTRY" ]] \
+    || _die "mesh registry '${MESH_REGISTRY}' absent — no admission policy, fail-closed"
+  if [[ -z "$PINNED_TREE_SHA256" ]]; then
+    PINNED_TREE_SHA256="$(jq -r --arg m "$FOREIGN_MESH" '.meshes[$m].pinnedTreeSha256 // empty' "$MESH_REGISTRY" 2>/dev/null)"
+  fi
+  [[ -n "$PINNED_TREE_SHA256" ]] \
+    || _die "--foreign-mesh requires an operator content anchor: --pinned-tree-sha256 / FOREIGN_PINNED_TREE_SHA256 or registry pinnedTreeSha256 (R3 — binds the pin to the ACTUAL base bytes, not the signer's self-declared treeSha256)"
+  [[ "$PINNED_TREE_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+    || _die "--pinned-tree-sha256 '${PINNED_TREE_SHA256}' is not a 64-hex canonical tree digest"
 fi
 
 # ── Resolve the ARCHETYPE overlay dir (Phase 4 generalization) ───────────────
@@ -258,7 +279,8 @@ if [[ -n "$FOREIGN_MESH" ]]; then
   if ! ADMITTED="$(bash "${SCRIPT_DIR}/ingest-foreign-base.sh" \
         --base "$BASE" --mesh-id "$FOREIGN_MESH" --pinned-digest "$PINNED_DIGEST" \
         --trust-store "$TRUST_STORE" --quarantine "${TMP}/foreign-quarantine" \
-        --min-generation "$MIN_GENERATION")"; then
+        --registry "$MESH_REGISTRY" --min-generation "$MIN_GENERATION" \
+        --require-content-anchor --expect-tree-sha256 "$PINNED_TREE_SHA256")"; then
     _die "foreign base REJECTED by ingest-foreign-base.sh (mesh=${FOREIGN_MESH}) — refusing to render, nothing emitted"
   fi
   [[ -n "$ADMITTED" && -d "$ADMITTED" && -f "${ADMITTED}/.snapdragon-mesh-admitted" ]] \

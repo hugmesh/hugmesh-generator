@@ -84,6 +84,11 @@ FIB_SECRET_SCAN="${FIB_SECRET_SCAN:-${FIB_DIR}/secret-scan.sh}"
 FIB_TOKENS_JSON="${FIB_TOKENS_JSON:-${FIB_DIR}/tooling/tokens.json}"
 FIB_TOKEN_CLASSIFIER="${FIB_TOKEN_CLASSIFIER:-${FIB_DIR}/tooling/token-classifier.js}"
 FIB_ADVISORY_FLOOR_DEFAULT="${FIB_ROOT}/templates/mesh-trust/advisory-floor.txt"
+# Per-mesh admission registry — re-consulted at THE GATE (R2/R4), not only at pull,
+# so a mesh disabled/revoked AFTER its base was cached is refused on the ingest +
+# render consume paths too. A caller passes --registry; this default is the
+# fail-closed fallback (the file must exist; absent => no admission policy => reject).
+FIB_MESH_REGISTRY_DEFAULT="${FIB_MESH_REGISTRY:-${FIB_ROOT}/templates/mesh-trust/registry.json}"
 # DoS caps — a foreign tree over ANY of these is refused BEFORE it is copied.
 FIB_MAX_FILES="${FIB_MAX_FILES:-20000}"
 FIB_MAX_BYTES="${FIB_MAX_BYTES:-268435456}"   # 256 MiB
@@ -102,26 +107,69 @@ _FIB_DNS_LABEL='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
 
 _fib_have() { command -v "$1" >/dev/null 2>&1; }
 
-# ── _fib_tree_digest DIR -> stdout (canonical sha256 of the tree CONTENT) ───────
-# A pure function of the on-disk BYTES: sha256 of each regular file, keyed by its
-# LC_ALL=C-sorted relative path, then sha256 of the record stream. Excludes ONLY
-# the ROOT-LEVEL provenance manifest + its detached sig (a manifest cannot contain
-# its own hash) and .git metadata; the SBOM and everything else IS covered, so
-# swapping any byte — including the SBOM — changes the digest and (because the
-# digest is carried in the signed manifest as base.treeSha256) breaks the
-# signature. ROOT-ANCHORED (-path './x', NOT -name): the envelope lives only at
-# the tree root, so a file merely NAMED .snapdragon-provenance.json planted in a
-# SUBDIR is ordinary tree content — digest-covered, meaning it cannot be added or
-# altered after signing without breaking the binding. Deterministic and
-# independent of the manifest, so it is the anti-circular binding between the signed
-# manifest and the real files. Prints nothing + non-zero on error (fail-closed).
+# ── _fib_registry_admits MESH REGISTRY -> 0 admit / 1 refuse (reason on stderr) ──
+# R2/R4a: re-consult the per-mesh admission row AT INGEST (the gate is a consume
+# path too, not only pull). Fail-closed on EVERY negative: jq missing, registry
+# absent/unreadable, no row for the mesh, revoked:true, or enabled!=true. So a mesh
+# DISABLED or REVOKED after its base was cached is refused here, on the render path,
+# and (transitively) anywhere the gate runs — not silently reused from cache.
+_fib_registry_admits() {
+  local mesh="$1" reg="$2"
+  _fib_have jq || { _fib_log "jq missing — cannot consult mesh registry (fail-closed)"; return 1; }
+  [ -n "$reg" ] && [ -f "$reg" ] \
+    || { _fib_log "mesh registry '${reg}' absent/unreadable — no admission policy, fail-closed"; return 1; }
+  local row
+  row="$(jq -e --arg m "$mesh" '.meshes[$m]' "$reg" 2>/dev/null)" \
+    || { _fib_log "mesh '${mesh}' has NO row in ${reg} — unknown mesh, fail-closed (no trust-on-first-use)"; return 1; }
+  [ "$(jq -r '.revoked // false' <<<"$row" 2>/dev/null)" != "true" ] \
+    || { _fib_log "mesh '${mesh}' is REVOKED in ${reg} — refusing cached-base reuse (R4 revocation)"; return 1; }
+  [ "$(jq -r '.enabled // false' <<<"$row" 2>/dev/null)" = "true" ] \
+    || { _fib_log "mesh '${mesh}' is not enabled in ${reg} — refusing"; return 1; }
+  return 0
+}
+
+# ── _fib_key_fingerprint TRUSTKEYFILE -> sha256 hex of the raw SPKI DER (stdout) ─
+# R4a: a stable fingerprint of a staged foreign pubkey (base64 SPKI DER -> raw DER
+# -> sha256). An operator lists a COMPROMISED key's fingerprint under the registry's
+# revokedKeys[] (global or per-mesh) to stop EVERY cached base signed by it — a
+# build-host-scoped revocation signal that does NOT need a live CRL/OCSP endpoint.
+# Prints nothing on any error (the caller treats an un-fingerprintable key as a
+# hard reject, fail-closed).
+_fib_key_fingerprint() {
+  local f="$1"
+  _fib_have base64 || return 1
+  _fib_have sha256sum || return 1
+  base64 -d "$f" 2>/dev/null | sha256sum 2>/dev/null | awk 'NF{print $1}'
+}
+
+# ── _fib_tree_digest DIR -> stdout (canonical sha256 of the tree) ───────────────
+# A pure function of the on-disk BYTES **and structure**, keyed by LC_ALL=C-sorted
+# relative path, then sha256 of the record stream. Per path a TYPE-tagged record:
+#   • regular file:  'f <exec> <sha256(content)>  <path>'  where <exec> is 'x' when
+#                    any of the 0111 exec bits are set else '-'  (R5: the exec bit
+#                    is now INSIDE the digest, so a re-signed-then-mutated base that
+#                    flips a mode is no longer invisible to the binding);
+#   • symlink:       'l - <sha256(target)>  <path>'  (R5: a symlink's TARGET is now
+#                    bound — the old '-type f' walk excluded links entirely, so a
+#                    link could be repointed post-sign without changing the digest).
+# The type tag prevents a symlink and a same-named regular file with colliding bytes
+# from producing the same record. Excludes ONLY the ROOT-LEVEL provenance manifest +
+# its detached sig (a manifest cannot contain its own hash), the admit/foreign
+# markers, and .git metadata; the SBOM and everything else IS covered, so swapping
+# any byte — including the SBOM, a mode, or a link target — changes the digest and
+# (because it is carried in the signed manifest as base.treeSha256) breaks the
+# signature. ROOT-ANCHORED (-path './x', NOT -name): a file merely NAMED like the
+# envelope in a SUBDIR is ordinary tree content — digest-covered. Deterministic and
+# byte-stable: a re-run on the same tree yields the same digest. Prints nothing +
+# non-zero on error (fail-closed).
 _fib_tree_digest() {
   local dir="$1"
   _fib_have sha256sum || return 1
+  _fib_have stat || return 1
   [ -d "$dir" ] || return 1
   (
     cd "$dir" || exit 1
-    find . -type f \
+    find . \( -type f -o -type l \) \
         ! -path './.git/*' \
         ! -path "./${FIB_MANIFEST}" \
         ! -path "./${FIB_SIG}" \
@@ -130,7 +178,19 @@ _fib_tree_digest() {
         -print0 \
       | LC_ALL=C sort -z \
       | while IFS= read -r -d '' f; do
-          printf '%s  %s\n' "$(sha256sum "$f" 2>/dev/null | awk '{print $1}')" "$f"
+          if [ -L "$f" ]; then
+            tgt="$(readlink "$f" 2>/dev/null)"
+            th="$(printf '%s' "$tgt" | sha256sum | awk '{print $1}')"
+            printf 'l - %s  %s\n' "$th" "$f"
+          else
+            ch="$(sha256sum "$f" 2>/dev/null | awk '{print $1}')"
+            mode="$(stat -c '%a' "$f" 2>/dev/null)"
+            case "$mode" in
+              ''|*[!0-7]*) ex='?' ;;
+              *) if [ $(( 8#$mode & 8#111 )) -ne 0 ]; then ex='x'; else ex='-'; fi ;;
+            esac
+            printf 'f %s %s  %s\n' "$ex" "$ch" "$f"
+          fi
         done \
       | sha256sum | awk '{print $1}'
   )
@@ -214,6 +274,7 @@ _fib_tree_components() {
 # Args parsed from "$@". Emits the admitted snapshot path on stdout on full pass.
 ingest_foreign_base() {
   local BASE="" MESH_ID="" PINNED="" TRUST="" QUAR="" MIN_GEN="0" ADVISORY=""
+  local REGISTRY="" EXPECT_TREE="" REQUIRE_ANCHOR=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --base)           BASE="$2"; shift 2 ;;
@@ -223,10 +284,14 @@ ingest_foreign_base() {
       --quarantine)     QUAR="$2"; shift 2 ;;
       --min-generation) MIN_GEN="$2"; shift 2 ;;
       --advisory-floor) ADVISORY="$2"; shift 2 ;;
+      --registry)       REGISTRY="$2"; shift 2 ;;
+      --expect-tree-sha256) EXPECT_TREE="$2"; shift 2 ;;
+      --require-content-anchor) REQUIRE_ANCHOR=1; shift ;;
       *) _fib_die "unknown argument: $1"; return 1 ;;
     esac
   done
   ADVISORY="${ADVISORY:-${FIB_ADVISORY_FLOOR_DEFAULT}}"
+  REGISTRY="${REGISTRY:-${FIB_MESH_REGISTRY_DEFAULT}}"
 
   # ── arg validation (fail-closed) ─────────────────────────────────────────────
   [ -n "$BASE" ] && [ -d "$BASE" ]     || { _fib_die "--base must be an existing directory"; return 1; }
@@ -249,6 +314,28 @@ ingest_foreign_base() {
 
   _fib_have find || { _fib_die "find not found"; return 1; }
   _fib_have jq   || { _fib_die "jq not found (SBOM/manifest parse) — fail-closed"; return 1; }
+
+  # ── [reg] REGISTRY ADMISSION re-checked AT THE GATE (R2/R4) — hoisted before any
+  #    copy so a DISABLED or REVOKED mesh is refused on the ingest/render consume
+  #    paths too, not only at pull, and a mesh disabled/revoked AFTER its base was
+  #    cached can never be silently reused. Fail-closed: absent registry / no row /
+  #    revoked:true / enabled!=true all reject here, before the snapshot exists.
+  _fib_registry_admits "$MESH_ID" "$REGISTRY" \
+    || { _fib_die "mesh '${MESH_ID}' not admissible per registry ${REGISTRY} (unknown/disabled/revoked) — fail-closed"; return 1; }
+
+  # ── [a-pre2] CONTENT ANCHOR (R3) — an operator-supplied, signer-INDEPENDENT tree
+  #    digest that binds the operator's pin to the ACTUAL bytes. On the *_BASE_DIR
+  #    override path (no git commit->tree binding), the caller sets
+  #    --require-content-anchor so the signer's self-declared base.treeSha256 can
+  #    NEVER be the sole content anchor: the recomputed tree digest must equal BOTH
+  #    this expected digest AND the signed manifest's treeSha256 (enforced in [a]).
+  if [ -n "$EXPECT_TREE" ]; then
+    [[ "$EXPECT_TREE" =~ ^[0-9a-f]{64}$ ]] \
+      || { _fib_die "--expect-tree-sha256 '${EXPECT_TREE}' is not a 64-hex canonical tree digest"; return 1; }
+  fi
+  if [ "$REQUIRE_ANCHOR" -eq 1 ] && [ -z "$EXPECT_TREE" ]; then
+    _fib_die "content-anchor REQUIRED (override/local base) but no --expect-tree-sha256 given — refusing to trust the signer's self-declared treeSha256 alone (R3)"; return 1
+  fi
 
   # ── [DoS] pre-flight caps on the SOURCE, BEFORE any copy ─────────────────────
   local nfiles
@@ -330,6 +417,18 @@ ingest_foreign_base() {
   recomputed="$(_fib_tree_digest "$build")" || { _fib_reject "tree digest computation failed"; return 1; }
   [ -n "$recomputed" ] || { _fib_reject "empty tree digest"; return 1; }
   [ "$recomputed" = "$m_tree" ] || { _fib_reject "recomputed tree digest (${recomputed}) != manifest base.treeSha256 (${m_tree}) — tampered-after-sign"; return 1; }
+  # R3: when an operator content anchor is supplied (always, on the *_BASE_DIR
+  # override path where git does NOT bind the pin to the bytes), enforce the full
+  # three-way equality recomputed == expected == manifest.treeSha256. This defeats a
+  # hostile-but-signed override that mutates the bytes and re-declares/re-signs its
+  # OWN treeSha256 to match: the operator's independent digest no longer matches, so
+  # the pin is bound to the ACTUAL bytes — not just the signer's self-declaration.
+  if [ -n "$EXPECT_TREE" ]; then
+    [ "$recomputed" = "$EXPECT_TREE" ] \
+      || { _fib_reject "recomputed tree digest (${recomputed}) != operator expected digest (${EXPECT_TREE}) — override bytes do not match the pinned content anchor (R3)"; return 1; }
+    [ "$m_tree" = "$EXPECT_TREE" ] \
+      || { _fib_reject "manifest base.treeSha256 (${m_tree}) != operator expected digest (${EXPECT_TREE}) — signer self-declared a different tree than the operator pinned (R3)"; return 1; }
+  fi
 
   # ── [b] PROVENANCE / SIGNATURE against the PINNED trust-store pubkey (no TOFU) ─
   local trustkey="${TRUST}/${MESH_ID}/foreign-provenance-pub.ed25519"
@@ -354,6 +453,24 @@ ingest_foreign_base() {
     _fib_reject "provenance signature does NOT verify against the pinned '${MESH_ID}' key — unsigned/tampered/foreign-key"; return 1
   fi
   rm -f "$pub_pem" 2>/dev/null
+  # ── [b'] KEY REVOCATION (R4a) — the signature verified, but the SIGNING KEY may
+  #    have been compromised and revoked AFTER this base was cached. Fingerprint the
+  #    pinned key and refuse if it is listed in the registry's revokedKeys (global or
+  #    per-mesh). This is the build-host-scoped revocation signal: an operator adds a
+  #    fingerprint (or deletes the staged key / sets the mesh revoked:true) to stop
+  #    EVERY cached base signed by it, WITHOUT a live CRL/OCSP endpoint (deferred).
+  local kfp
+  kfp="$(_fib_key_fingerprint "$trustkey")"
+  [ -n "$kfp" ] || { _fib_reject "cannot fingerprint the pinned '${MESH_ID}' key — fail-closed (R4)"; return 1; }
+  if [ -f "$REGISTRY" ] && _fib_have jq; then
+    local revoked_hit
+    revoked_hit="$(jq -r --arg m "$MESH_ID" --arg fp "$kfp" '
+        (((.revokedKeys // []) + (.meshes[$m].revokedKeys // [])) | index($fp)) // empty' \
+        "$REGISTRY" 2>/dev/null)"
+    if [ -n "$revoked_hit" ]; then
+      _fib_reject "pinned '${MESH_ID}' signing key (fp ${kfp}) is in registry revokedKeys — REVOKED, fail-closed (R4)"; return 1
+    fi
+  fi
   # REPLAY floor: a genuinely-signed but rolled-back/known-vuln base is rejected.
   case "$m_gen" in ''|*[!0-9]*) _fib_reject "manifest base.generation missing/non-numeric — replay floor cannot be enforced"; return 1 ;; esac
   if [ "$m_gen" -lt "$MIN_GEN" ]; then

@@ -427,14 +427,54 @@ order (each fail-closed; a missing tool is a REJECT, never a skip):
 10. **atomic promote** — the fully-passed snapshot is `mv`'d into place with an
     admit stamp; a half-verified tree is never observable at the returned path.
 
+The canonical **tree digest** binds more than file content: per path it also binds
+the **symlink target** (links were previously outside the digest entirely) and the
+**exec bit** (0111), so a base re-signed and then mutated to repoint a link or flip
+a mode no longer slips past the binding (R5).
+
+## Re-checked on EVERY consume — not just at pull
+
+The gate is a consume path in its own right, so it (and `render-repo-tree.sh`) now
+independently re-consult the registry via `--registry`, closing the window where a
+mesh **disabled or revoked after its base was cached** could still be ingested or
+rendered from that cache (R2). Because the whole gate re-runs on every consume, the
+current **advisory floor** and **registry state** are re-evaluated each time: a base
+that became known-vulnerable (raise the floor / bump `minGeneration`) or whose mesh
+was revoked after admission is refused, not silently reused (R4 freshness).
+
+**Revocation (R4), build-host scoped.** To stop cached bases from a compromised
+foreign mesh WITHOUT a live CRL/OCSP feed: set the mesh row `"revoked": true`, and/or
+list the compromised signing key's fingerprint (`base64 -d <pubkey> | sha256sum`)
+under `revokedKeys` (per-mesh or top-level) — the gate fingerprints the pinned key
+after the signature verifies and refuses a revoked key despite a valid signature.
+Deleting the staged pubkey also fails closed. **Honest deferral:** an ONLINE CRL /
+OCSP-style revocation service is out of build-host scope and deferred to the cluster;
+the registry `revoked` / `revokedKeys` flags + advisory-floor re-check are the
+build-host half.
+
+**Override content anchor (R3).** On the `*_BASE_DIR` override and render `--base`
+paths there is no git commit→tree binding, so the operator's pin would otherwise
+collapse to the signer's self-declared `treeSha256`. Those paths therefore REQUIRE an
+operator `pinnedTreeSha256` (registry field or `--pinned-tree-sha256` /
+`FOREIGN_PINNED_TREE_SHA256`); the gate enforces `recomputed == pinnedTreeSha256 ==
+manifest.base.treeSha256`, binding the pin to the ACTUAL bytes — a mismatch fails
+closed.
+
+**Fetch-time DoS bound (R6).** The clone/fetch in `pull-repo-base.sh` is `--depth 1`
+AND wrapped in a byte watchdog that aborts an unbounded hostile clone mid-transfer,
+plus a post-fetch / pre-gate inode+byte cap that fires ahead of the ingestion gate —
+so a hostile `--url` clone is capped before it can exhaust build-host disk, mirroring
+the gate's hoisted DoS-cap pattern.
+
 ## Explicit trust — NO trust-on-first-use
 
 Admission policy is two deliberate, independent additions per foreign mesh:
 
 * a row in `templates/mesh-trust/registry.json` — `enabled`, the foreign forge
-  `gitBase`, the `pinnedDigest` of the exact vouched base tree, and the
-  `minGeneration` rollback floor (raise it after a CVE to lock out an
-  old-but-signed base);
+  `gitBase`, the `pinnedDigest` of the exact vouched base tree, the operator's
+  `pinnedTreeSha256` content anchor (R3), the `minGeneration` rollback floor (raise
+  it after a CVE to lock out an old-but-signed base), and the `revoked` /
+  `revokedKeys` revocation signals (R4);
 * the mesh's provenance-signing PUBLIC key staged **out-of-band** at
   `keys-template/mesh-trust/<mesh-id>/foreign-provenance-pub.ed25519`
   (pubkeys-only; git-ignored; same custody model as `registry-pub.ed25519`).
@@ -471,10 +511,15 @@ subdir-envelope plant / signed-in subdir-envelope frozen carrier / smuggled
 secret / keyless high-entropy credential / frozen-namespace + wire-header
 injection / SBOM absent-malformed-empty / CRITICAL-vuln dep / symlink escape-
 absolute-traversal / file-count-bytes-depth DoS / replay / pull-wiring refusals —
-asserting for EACH: (1) exit != 0, (2) NOT admitted (no snapshot, no stdout
-path), (3) NOTHING pushed onward (BRAND_OUT never written). A clean, signed,
-digest-pinned base from a trusted mesh is the positive control: admitted AND
-rendered (0 residual tokens, markers stripped) — the gate is not a blanket
+plus the residual-medium hardenings: disabled/revoked mesh at the gate AND render
+(R2), override content-drift caught by the operator anchor with an explicit
+OLD-vs-NEW admit-without-anchor proof (R3), revoked-key / revoke-by-deletion /
+raised-floor freshness (R4), post-sign mode-flip + symlink-repoint with OLD-vs-NEW
+content-only-digest proofs (R5), and the pre-gate inode cap + fetch-time byte
+watchdog (R6) — asserting for EACH: (1) exit != 0, (2) NOT admitted (no snapshot,
+no stdout path), (3) NOTHING pushed onward (BRAND_OUT never written). A clean,
+signed, digest-pinned base from a trusted mesh is the positive control: admitted
+AND rendered (0 residual tokens, markers stripped) — the gate is not a blanket
 lockout.
 
 ## OUTBOUND — letting a foreign mesh pull from US
@@ -509,4 +554,8 @@ lockout.
    reachable foreign forge);
 5. cross-mesh IMAGE provenance (cosign/notation over the per-tenant Harbor
    project) — source-tree provenance is Phase 5 + this gate; image signing is a
-   cluster concern.
+   cluster concern;
+6. an ONLINE key-revocation service (CRL / OCSP-style) — the build-host half is the
+   registry `revoked` / `revokedKeys` flags + the advisory-floor re-check at every
+   consume (R4); a live revocation feed that reflects a compromise WITHOUT an
+   operator registry edit is a cluster/PKI concern.

@@ -64,6 +64,15 @@ PRIV="${WORK}/priv.pem";   openssl genpkey -algorithm ed25519 -out "${PRIV}"  2>
 WPRIV="${WORK}/wrong.pem"; openssl genpkey -algorithm ed25519 -out "${WPRIV}" 2>/dev/null
 openssl pkey -in "${PRIV}" -pubout -outform DER 2>/dev/null | base64 -w0 > "${TRUST}/${MESH}/foreign-provenance-pub.ed25519"
 
+# ── Gate-side per-mesh registry (R2/R4): acme-mesh ENABLED so the positive controls
+#    admit; dedicated disabled/revoked/revoked-key registries drive the R2/R4
+#    refusals below. Every run_gate/run RRT consume now re-consults a registry — the
+#    gate + render are consume paths too, not only pull.
+REG_GATE="${WORK}/registry-gate.json"
+jq -n --arg m "$MESH" '{schemaVersion:1, meshes:{($m):{enabled:true, gitBase:"https://forge.acme.test/acme", minGeneration:0}}}' > "$REG_GATE"
+# The pinned key's fingerprint (raw SPKI DER -> sha256) for the R4 revoked-keys case.
+KEYFP="$(base64 -d "${TRUST}/${MESH}/foreign-provenance-pub.ed25519" 2>/dev/null | sha256sum | awk '{print $1}')"
+
 # ── Fixture builders ────────────────────────────────────────────────────────────
 # A CLEAN foreign angular-mfe base carrying the archetype recipe's required upstream
 # anchors (so the positive control also renders). Not secrets; not our frozen
@@ -101,15 +110,38 @@ JSON
 # A 64-hex immutable "digest" for a fixture (deterministic from a label).
 digest_of() { printf '%s' "$1" | sha256sum | awk '{print $1}'; }
 
+# content_only_digest DIR — the PRE-R5 tree digest (regular-file CONTENT only, no
+# symlink target, no mode). Used by the R5 cases to prove OLD-vs-NEW: a mode-flip /
+# symlink-repoint leaves this OLD digest UNCHANGED (so the pre-fix gate would have
+# ADMITTED), while the current gate — which binds mode + symlink target — REJECTS.
+content_only_digest() {
+  ( cd "$1" || exit 1
+    find . -type f \
+        ! -path './.git/*' \
+        ! -path './.snapdragon-provenance.json' \
+        ! -path './.snapdragon-provenance.json.sig' \
+        ! -path './.snapdragon-mesh-admitted' \
+        ! -path './.foreign-mesh-id' \
+        -print0 \
+      | LC_ALL=C sort -z \
+      | while IFS= read -r -d '' f; do
+          printf '%s  %s\n' "$(sha256sum "$f" 2>/dev/null | awk '{print $1}')" "$f"
+        done \
+      | sha256sum | awk '{print $1}' )
+}
+
 # ── run_gate + assertions ───────────────────────────────────────────────────────
 GATE_RC=0; GATE_OUT=""; GATE_Q=""
 run_gate() { # run_gate CASEID BASE MESH PIN [extra gate args...]
   local cid="$1" base="$2" mesh="$3" pin="$4"; shift 4
   local q="${WORK}/q/${cid}"; mkdir -p "$q"
   GATE_Q="$q"
+  # Default --registry is REG_GATE (acme-mesh enabled); a case may pass its OWN
+  # --registry in "$@" (later flag wins) to drive the R2/R4 disabled/revoked paths.
   GATE_OUT="$(FIB_ADVISORY_FLOOR_DEFAULT="${ADVISORY}" bash "${GATE}" \
       --base "$base" --mesh-id "$mesh" --pinned-digest "$pin" \
-      --trust-store "$TRUST" --quarantine "$q" --advisory-floor "$ADVISORY" "$@" 2>>"${WORK}/gate.err")"
+      --trust-store "$TRUST" --quarantine "$q" --advisory-floor "$ADVISORY" \
+      --registry "$REG_GATE" "$@" 2>>"${WORK}/gate.err")"
   GATE_RC=$?
 }
 # assert_reject: rc!=0, empty stdout, and NO admitted snapshot dir in the quarantine.
@@ -341,8 +373,13 @@ jq -n --arg m "$MESH" '{schemaVersion:1, meshes:{($m):{enabled:false, gitBase:"h
 run_prb() { # run_prb CASEID REGISTRY BASE MESH PIN
   local cid="$1" reg="$2" base="$3" mesh="$4" pin="$5"
   GATE_Q="${WORK}/prb/${cid}/.mesh-quarantine/login-ui"
+  # R3: the override path now REQUIRES an operator content anchor — supply the base's
+  # canonical tree digest so a LEGIT override still admits and a hostile one is bound
+  # to its ACTUAL bytes (a dedicated R3 case below proves the missing-anchor refusal).
+  local anchor; anchor="$(_fib_tree_digest "$base" 2>/dev/null)"
   GATE_OUT="$(REPO_BASE_CACHE="${WORK}/prb/${cid}" MESH_REGISTRY="$reg" \
       MESH_TRUST_STORE="$TRUST" LOGIN_UI_BASE_DIR="$base" OFFLINE=1 \
+      FOREIGN_PINNED_TREE_SHA256="$anchor" \
       FIB_ADVISORY_FLOOR_DEFAULT="$ADVISORY" \
       bash "$PRB" --foreign --mesh "$mesh" --pinned-digest "$pin" login-ui 2>>"${WORK}/gate.err")"
   GATE_RC=$?
@@ -384,11 +421,15 @@ CLUSTER_DOMAIN=acme.test
 C
 HAVE_RENDER=0
 if command -v node >/dev/null 2>&1 && [ -d "${REPO}/scripts/tooling/node_modules/handlebars" ]; then HAVE_RENDER=1; fi
-assert_no_render() { # assert_no_render CASE BASE MESH PIN [mingen]
-  local case="$1" base="$2" mesh="$3" pin="$4" mg="${5:-0}"
+assert_no_render() { # assert_no_render CASE BASE MESH PIN [mingen] [registry]
+  local case="$1" base="$2" mesh="$3" pin="$4" mg="${5:-0}" reg="${6:-$REG_GATE}"
   local out="${WORK}/rout/${case}"; rm -rf "$out"
-  if bash "${RRT}" "${BRANDCONF}" --enable-repo-tree --repo login-ui --archetype angular-mfe \
+  # Pass a VALID operator anchor (R3) + registry (R2) so render reaches the GATE and
+  # fails closed for the case's INTENDED reason, not merely a missing-anchor refusal.
+  local anchor; anchor="$(_fib_tree_digest "$base" 2>/dev/null)"
+  if MESH_REGISTRY="$reg" bash "${RRT}" "${BRANDCONF}" --enable-repo-tree --repo login-ui --archetype angular-mfe \
         --out-dir "$out" --base "$base" --foreign-mesh "$mesh" --pinned-digest "$pin" \
+        --pinned-tree-sha256 "$anchor" --registry "$reg" \
         --trust-store "$TRUST" --min-generation "$mg" \
         --set APP_SLUG=login --set TITLE_WORD=Login >/dev/null 2>&1; then
     bad "${case}: render EMITTED from a rejected foreign base (LEAK)"
@@ -413,6 +454,231 @@ else
 fi
 
 echo
+echo "== RESIDUAL-MEDIUM HARDENINGS (R2-R6): each fails closed, admits nothing, pushes nothing =="
+
+# ── R2: ENABLED/REVOKED enforced on the GATE + RENDER consume paths (not only pull) ─
+REG_DIS="${WORK}/registry-disabled-gate.json"
+jq -n --arg m "$MESH" '{schemaVersion:1, meshes:{($m):{enabled:false, gitBase:"https://forge.acme.test/acme"}}}' > "$REG_DIS"
+REG_REV="${WORK}/registry-revoked-gate.json"
+jq -n --arg m "$MESH" '{schemaVersion:1, meshes:{($m):{enabled:true, revoked:true, gitBase:"https://forge.acme.test/acme"}}}' > "$REG_REV"
+# (R2a) gate refuses a DISABLED mesh even for an otherwise-valid signed base.
+B="${WORK}/r2disabled"; mkclean_base "$B"; PIN="$(digest_of r2disabled)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
+run_gate r2disabled "$B" "$MESH" "$PIN" --registry "$REG_DIS"
+assert_reject "(R2 gate: disabled mesh refused at ingest — a base cached while enabled cannot be re-consumed after disable)"
+# (R2b) gate refuses a REVOKED mesh row even for a valid signed base.
+B="${WORK}/r2revoked"; mkclean_base "$B"; PIN="$(digest_of r2revoked)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
+run_gate r2revoked "$B" "$MESH" "$PIN" --registry "$REG_REV"
+assert_reject "(R2/R4 gate: revoked:true mesh refused at ingest)"
+# (R2c) RENDER refuses a disabled mesh -> BRAND_OUT never written (nothing to push).
+if [ "${HAVE_RENDER}" -eq 1 ]; then
+  B="${WORK}/r2render"; mkclean_base "$B"; PIN="$(digest_of r2render)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
+  assert_no_render "R2-render-disabled" "$B" "$MESH" "$PIN" 0 "$REG_DIS"
+else
+  echo "  SKIP (R2c) render-disabled (node/handlebars unavailable)"
+fi
+
+# ── R3: *_BASE_DIR OVERRIDE must bind the pin to the ACTUAL bytes (content anchor) ─
+# (R3a) OLD-vs-NEW: a hostile-but-signed override mutates its bytes AND re-signs so
+# the signature verifies and recomputed==manifest.treeSha256 (the signer controls
+# both). Without the operator anchor the signature-only chain ADMITS (the hole);
+# WITH the operator's original digest the gate REJECTS (bound to the real bytes).
+B="${WORK}/r3anchor"; mkclean_base "$B"; PIN="$(digest_of r3anchor)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
+ORIG_ANCHOR="$(_fib_tree_digest "$B")"
+printf '// backdoor\n' >> "${B}/federation-base.js"     # signer swaps in a backdoor…
+sign_base "$B" "$PRIV" "$MESH" "$PIN" 5                  # …and RE-SIGNS the mutated tree
+run_gate r3anchor_old "$B" "$MESH" "$PIN"                # (old) no operator anchor
+if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.snapdragon-mesh-admitted" ]; then
+  ok "(R3 old-vs-new) WITHOUT the operator anchor the re-signed mutated override ADMITS — the exact hole R3 closes"
+else
+  bad "(R3 old-vs-new) expected admit without anchor (rc=${GATE_RC}) — case not exercising the hole"
+fi
+run_gate r3anchor "$B" "$MESH" "$PIN" --require-content-anchor --expect-tree-sha256 "$ORIG_ANCHOR"
+assert_reject "(R3 gate: override content drift caught by the operator anchor — recomputed != pinned tree digest)"
+# (R3b) pull-wiring: an override with NO operator content anchor fails closed BEFORE
+# the gate (won't fall back to trusting the signer's self-declared treeSha256).
+B="${WORK}/r3noanchor"; mkclean_base "$B"; PIN="$(digest_of r3noanchor)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
+GATE_Q="${WORK}/prb/r3noanchor/.mesh-quarantine/login-ui"
+GATE_OUT="$(REPO_BASE_CACHE="${WORK}/prb/r3noanchor" MESH_REGISTRY="$REG" MESH_TRUST_STORE="$TRUST" \
+    LOGIN_UI_BASE_DIR="$B" OFFLINE=1 FIB_ADVISORY_FLOOR_DEFAULT="$ADVISORY" \
+    bash "$PRB" --foreign --mesh "$MESH" --pinned-digest "$PIN" login-ui 2>>"${WORK}/gate.err")"; GATE_RC=$?
+assert_reject "(R3 pull-wiring: override without an operator content anchor refused)"
+
+# ── R4: key revocation + cached-base freshness re-checked at consume ──────────────
+# (R4a) the signing KEY is revoked via registry revokedKeys[] -> refused DESPITE a
+# valid signature (revoke a compromised foreign key without a live CRL/OCSP).
+REG_REVKEY="${WORK}/registry-revkey.json"
+jq -n --arg m "$MESH" --arg fp "$KEYFP" \
+  '{schemaVersion:1, meshes:{($m):{enabled:true, revokedKeys:[$fp], gitBase:"https://forge.acme.test/acme"}}}' > "$REG_REVKEY"
+B="${WORK}/r4revkey"; mkclean_base "$B"; PIN="$(digest_of r4revkey)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
+run_gate r4revkey "$B" "$MESH" "$PIN" --registry "$REG_REVKEY"
+assert_reject "(R4 gate: signing key in registry revokedKeys refused despite a valid signature)"
+# (R4b) FRESHNESS: a base admitted under the shipped floor is re-gated against a
+# RAISED floor (a component that became CRITICAL after admission) and is refused.
+B="${WORK}/r4fresh"; mkclean_base "$B"; PIN="$(digest_of r4fresh)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
+run_gate r4fresh_ok "$B" "$MESH" "$PIN"                 # shipped floor: left-pad@1.3.0 benign
+if [ "${GATE_RC}" -eq 0 ] && [ -n "${GATE_OUT}" ] && [ -f "${GATE_OUT}/.snapdragon-mesh-admitted" ]; then
+  ok "(R4 freshness) base admits under the shipped floor (pre-disclosure)"
+else
+  bad "(R4 freshness) base unexpectedly rejected under the shipped floor (rc=${GATE_RC})"
+fi
+FLOOR2="${WORK}/floor-raised.txt"; printf 'left-pad 1.3.0 CRITICAL CVE-TEST-0001\n' > "$FLOOR2"
+GATE_Q="${WORK}/q/r4fresh_re"; mkdir -p "$GATE_Q"
+GATE_OUT="$(FIB_ADVISORY_FLOOR_DEFAULT="$FLOOR2" bash "${GATE}" --base "$B" --mesh-id "$MESH" --pinned-digest "$PIN" \
+    --trust-store "$TRUST" --quarantine "$GATE_Q" --advisory-floor "$FLOOR2" --registry "$REG_GATE" 2>>"${WORK}/gate.err")"; GATE_RC=$?
+assert_reject "(R4 freshness: re-gated cached base refused under the RAISED advisory floor)"
+# (R4c) revoke-by-DELETION: removing the staged pinned key stops the cached base.
+B="${WORK}/r4del"; mkclean_base "$B"; PIN="$(digest_of r4del)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
+TRUST_DEL="${WORK}/trust-del"; mkdir -p "${TRUST_DEL}/${MESH}"   # mesh dir present, key REMOVED
+GATE_Q="${WORK}/q/r4del"; mkdir -p "$GATE_Q"
+GATE_OUT="$(FIB_ADVISORY_FLOOR_DEFAULT="$ADVISORY" bash "${GATE}" --base "$B" --mesh-id "$MESH" --pinned-digest "$PIN" \
+    --trust-store "$TRUST_DEL" --quarantine "$GATE_Q" --advisory-floor "$ADVISORY" --registry "$REG_GATE" 2>>"${WORK}/gate.err")"; GATE_RC=$?
+assert_reject "(R4 revoke-by-deletion: removed pinned key -> cached base refused, no admission)"
+
+# ── R5: the digest binds symlink TARGETS + exec/mode bits (old-vs-new proofs) ─────
+# (R5a) a mode flip (exec bit) AFTER signing, NOT re-signed. The OLD content-only
+# digest is blind to it (would ADMIT); the current digest binds it -> REJECT.
+B="${WORK}/r5mode"; mkclean_base "$B"; chmod 0644 "${B}/federation-base.js"
+PIN="$(digest_of r5mode)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
+R5_OLD_BEFORE="$(content_only_digest "$B")"
+chmod 0755 "${B}/federation-base.js"          # flip exec bit; do NOT re-sign
+R5_OLD_AFTER="$(content_only_digest "$B")"
+run_gate r5mode "$B" "$MESH" "$PIN"
+assert_reject "(R5 mode-flip: post-sign exec-bit change caught by the mode-bound digest)"
+if [ "$R5_OLD_BEFORE" = "$R5_OLD_AFTER" ]; then
+  ok "(R5 mode-flip OLD-vs-NEW) content-only digest UNCHANGED by the flip -> the pre-fix gate would have ADMITTED"
+else
+  bad "(R5 mode-flip OLD-vs-NEW) content-only digest changed — not proving old-vs-new"
+fi
+# (R5b) an in-tree symlink REPOINTED (both targets contained, no '..') AFTER signing,
+# NOT re-signed. The OLD walk excluded symlinks entirely (blind -> ADMIT); the
+# current digest binds the target -> REJECT.
+B="${WORK}/r5link"; mkclean_base "$B"; printf 'other\n' > "${B}/src/other.txt"; ln -s index.html "${B}/src/link"
+PIN="$(digest_of r5link)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
+R5L_OLD_BEFORE="$(content_only_digest "$B")"
+rm "${B}/src/link"; ln -s other.txt "${B}/src/link"     # repoint within src (contained); do NOT re-sign
+R5L_OLD_AFTER="$(content_only_digest "$B")"
+run_gate r5link "$B" "$MESH" "$PIN"
+assert_reject "(R5 symlink-repoint: post-sign link-target change caught by the target-bound digest)"
+if [ "$R5L_OLD_BEFORE" = "$R5L_OLD_AFTER" ]; then
+  ok "(R5 symlink-repoint OLD-vs-NEW) content-only digest UNCHANGED by the repoint -> the pre-fix gate would have ADMITTED"
+else
+  bad "(R5 symlink-repoint OLD-vs-NEW) content-only digest changed — not proving old-vs-new"
+fi
+
+# ── R6: DoS caps HOISTED ahead of the clone/pipeline (bound before disk exhaustion) ─
+# (R6a) pull's post-fetch, pre-gate inode cap fires on an oversized override BEFORE
+# the ingestion gate runs (offline; mirrors the gate's hoisted DoS-cap pattern).
+B="${WORK}/r6files"; mkclean_base "$B"; mkdir -p "${B}/many"
+i=0; while [ $i -lt 40 ]; do : > "${B}/many/f${i}"; i=$((i+1)); done
+PIN="$(digest_of r6files)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
+R6_ANCHOR="$(_fib_tree_digest "$B")"
+GATE_Q="${WORK}/prb/r6files/.mesh-quarantine/login-ui"
+GATE_OUT="$(REPO_BASE_CACHE="${WORK}/prb/r6files" MESH_REGISTRY="$REG" MESH_TRUST_STORE="$TRUST" \
+    LOGIN_UI_BASE_DIR="$B" OFFLINE=1 FOREIGN_PINNED_TREE_SHA256="$R6_ANCHOR" FOREIGN_MAX_FILES=20 \
+    FIB_ADVISORY_FLOOR_DEFAULT="$ADVISORY" \
+    bash "$PRB" --foreign --mesh "$MESH" --pinned-digest "$PIN" login-ui 2>>"${WORK}/gate.err")"; GATE_RC=$?
+assert_reject "(R6 pull pre-gate inode cap: oversized override refused ahead of the gate)"
+# (R6b) fetch-time byte watchdog: a fake git that streams an UNBOUNDED clone is
+# ABORTED mid-fetch before it can exhaust disk (the clone stays bounded near the cap).
+if command -v setsid >/dev/null 2>&1; then
+  FAKEBIN="${WORK}/fakebin"; mkdir -p "$FAKEBIN"
+  cat > "${FAKEBIN}/git" <<'FG'
+#!/usr/bin/env bash
+# Fake git for the R6 fetch-time watchdog test: init/remote/checkout no-op; fetch
+# simulates a hostile unbounded clone (1 MiB chunks, slowly, "forever").
+dir="."
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -C) dir="$2"; shift 2 ;;
+    init|remote) exit 0 ;;
+    checkout) exit 0 ;;
+    fetch)
+      mkdir -p "$dir"; i=0
+      while [ $i -lt 400 ]; do head -c 1048576 /dev/zero > "${dir}/blob.${i}" 2>/dev/null; i=$((i+1)); sleep 0.03; done
+      exit 0 ;;
+    *) shift ;;
+  esac
+done
+exit 0
+FG
+  chmod +x "${FAKEBIN}/git"
+  REG_CLONE="${WORK}/registry-clone.json"
+  jq -n --arg m "$MESH" '{schemaVersion:1, meshes:{($m):{enabled:true, gitBase:"https://forge.acme.test/acme", minGeneration:0}}}' > "$REG_CLONE"
+  CLONE_CACHE="${WORK}/prb/r6clone"; rm -rf "$CLONE_CACHE"
+  PIN64="$(digest_of r6clone)"
+  PATH="${FAKEBIN}:${PATH}" REPO_BASE_CACHE="$CLONE_CACHE" MESH_REGISTRY="$REG_CLONE" \
+    MESH_TRUST_STORE="$TRUST" FOREIGN_FETCH_MAX_BYTES=4194304 FOREIGN_PINNED_TREE_SHA256="$(digest_of r6clone_anchor)" \
+    bash "$PRB" --foreign --mesh "$MESH" --pinned-digest "$PIN64" login-ui >/dev/null 2>>"${WORK}/gate.err"
+  R6_RC=$?
+  R6_CLONE_DIR="${CLONE_CACHE}/foreign/${MESH}/snapdragon-login-ui"
+  R6_SZ="$(du -sb "$R6_CLONE_DIR" 2>/dev/null | awk '{print $1+0}')"
+  if [ "$R6_RC" -ne 0 ] && [ "${R6_SZ:-0}" -lt 16777216 ]; then
+    ok "(R6 fetch-time watchdog) unbounded hostile clone ABORTED mid-fetch (rc=${R6_RC}, clone bounded at ${R6_SZ}B < 16MiB)"
+  else
+    bad "(R6 fetch-time watchdog) clone not bounded (rc=${R6_RC}, size=${R6_SZ}B) — watchdog did not fire"
+  fi
+  rm -rf "$CLONE_CACHE"
+else
+  echo "  SKIP (R6b) fetch-time watchdog (setsid unavailable)"
+fi
+# (R6c) CHECKOUT-time byte watchdog (mustFix): git stores blobs COMPRESSED in the pack,
+# and `git checkout` is the step that INFLATES them onto disk. A decompression-bomb
+# pinned tree ships a SMALL pack (under the fetch cap, so the FETCH watchdog never
+# fires) that expands to a runaway working tree on checkout. Before the fix the checkout
+# was UNCAPPED — it wrote the full inflated tree to disk and only _prb_enforce_source_caps
+# (a du AFTER checkout) noticed, too late to stop disk exhaustion. The checkout is now
+# wrapped in the SAME watchdog: it is ABORTED MID-CHECKOUT and the clone stays bounded
+# near the cap, fail-closed. The fake git's fetch stays UNDER the fetch cap so this
+# proves the CHECKOUT guard specifically (not the fetch guard).
+if command -v setsid >/dev/null 2>&1; then
+  FAKEBIN2="${WORK}/fakebin-co"; mkdir -p "$FAKEBIN2"
+  cat > "${FAKEBIN2}/git" <<'FG'
+#!/usr/bin/env bash
+# Fake git for the R6 CHECKOUT-time watchdog test: init/remote no-op; fetch writes a
+# SMALL 2 MiB "pack" (under the fetch cap) then exits 0; checkout simulates inflating a
+# decompression bomb — 1 MiB chunks, slowly, "forever" — into the clone dir.
+dir="."
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -C) dir="$2"; shift 2 ;;
+    init|remote) exit 0 ;;
+    fetch)
+      mkdir -p "${dir}/.git/objects"; head -c 2097152 /dev/zero > "${dir}/.git/objects/pack.bin" 2>/dev/null
+      exit 0 ;;
+    checkout)
+      mkdir -p "$dir"; i=0
+      while [ $i -lt 400 ]; do head -c 1048576 /dev/zero > "${dir}/inflated.${i}" 2>/dev/null; i=$((i+1)); sleep 0.03; done
+      exit 0 ;;
+    *) shift ;;
+  esac
+done
+exit 0
+FG
+  chmod +x "${FAKEBIN2}/git"
+  REG_CO="${WORK}/registry-checkout.json"
+  jq -n --arg m "$MESH" '{schemaVersion:1, meshes:{($m):{enabled:true, gitBase:"https://forge.acme.test/acme", minGeneration:0}}}' > "$REG_CO"
+  CO_CACHE="${WORK}/prb/r6checkout"; rm -rf "$CO_CACHE"
+  PINCO="$(digest_of r6checkout)"
+  # fetch cap 16 MiB (fetch writes 2 MiB -> passes); checkout cap (FOREIGN_MAX_BYTES) 8 MiB.
+  PATH="${FAKEBIN2}:${PATH}" REPO_BASE_CACHE="$CO_CACHE" MESH_REGISTRY="$REG_CO" \
+    MESH_TRUST_STORE="$TRUST" FOREIGN_FETCH_MAX_BYTES=16777216 FOREIGN_MAX_BYTES=8388608 \
+    FOREIGN_PINNED_TREE_SHA256="$(digest_of r6checkout_anchor)" \
+    bash "$PRB" --foreign --mesh "$MESH" --pinned-digest "$PINCO" login-ui >/dev/null 2>>"${WORK}/gate.err"
+  CO_RC=$?
+  CO_DIR="${CO_CACHE}/foreign/${MESH}/snapdragon-login-ui"
+  CO_SZ="$(du -sb "$CO_DIR" 2>/dev/null | awk '{print $1+0}')"
+  # bounded well under the 400 MiB runaway (8 MiB cap + watchdog grace), and fail-closed.
+  if [ "$CO_RC" -ne 0 ] && [ "${CO_SZ:-0}" -lt 67108864 ]; then
+    ok "(R6 checkout-time watchdog) decompression-bomb checkout ABORTED mid-inflate (rc=${CO_RC}, clone bounded at ${CO_SZ}B < 64MiB, not the 400MiB runaway)"
+  else
+    bad "(R6 checkout-time watchdog) checkout not bounded (rc=${CO_RC}, size=${CO_SZ}B) — the fetch cap left checkout unguarded"
+  fi
+  rm -rf "$CO_CACHE"
+else
+  echo "  SKIP (R6c) checkout-time watchdog (setsid unavailable)"
+fi
+
+echo
 echo "-- POSITIVE CONTROL: a clean, signed, digest-pinned base from a TRUSTED mesh IS admitted + renders --"
 B="${WORK}/legit"; mkclean_base "$B"; PIN="$(digest_of legit)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 7
 run_gate legit "$B" "$MESH" "$PIN" --min-generation 5
@@ -423,8 +689,10 @@ else
 fi
 if [ "${HAVE_RENDER}" -eq 1 ]; then
   OUT="${WORK}/rout/legit"; rm -rf "$OUT"
-  if bash "${RRT}" "${BRANDCONF}" --enable-repo-tree --repo login-ui --archetype angular-mfe \
+  LEGIT_ANCHOR="$(_fib_tree_digest "$B")"
+  if MESH_REGISTRY="$REG_GATE" bash "${RRT}" "${BRANDCONF}" --enable-repo-tree --repo login-ui --archetype angular-mfe \
         --out-dir "$OUT" --base "$B" --foreign-mesh "$MESH" --pinned-digest "$PIN" \
+        --pinned-tree-sha256 "$LEGIT_ANCHOR" --registry "$REG_GATE" \
         --trust-store "$TRUST" --min-generation 5 \
         --set APP_SLUG=login --set TITLE_WORD=Login >"${WORK}/legit-render.log" 2>&1; then
     BO="${OUT}/acme-login-ui"
