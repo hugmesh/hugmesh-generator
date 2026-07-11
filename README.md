@@ -724,8 +724,10 @@ screenshots in `tests/e2e/screenshots/`:
 
 > `tests/stack/mock-*.mjs` are fast in-memory test doubles. `tests/stack/up-real.sh`
 > brings up real Synapse + Casdoor + Mastodon (+ the platform Cassandra) from
-> `compose.real.yaml` — it generates the Synapse config and Mastodon DB first,
-> then `docker compose up -d`. Point the suite at it with `SNAP_BASE_URL=...`
+> `compose.real.yaml` — it preps Mastodon's DB, then `docker compose up -d`
+> (Synapse's config/registration self-heals via its own service entrypoint,
+> so no separate Synapse first-run step is needed here). Point the suite at
+> it with `SNAP_BASE_URL=...`
 > (and `REAL_MATRIX=1` for the UI). This is **not** full fidelity, though: the
 > UI is still served by `tests/stack/up.sh`'s `mock-bff.mjs`, a hand-written
 > stand-in for the Spring BFF that never calls Casdoor and has no "real

@@ -352,12 +352,14 @@ log "leg 2: Matrix users + rooms at ${SYNAPSE_URL} (server_name=${SYNAPSE_SERVER
 matrix_register() { # <user>
   local out
   # register_new_matrix_user reads registration_shared_secret from the config
-  # up-real.sh ensured; "User ID already taken" is the idempotent no-op.
+  # the synapse service's own entrypoint ensures (compose.real.yaml — self-
+  # heals on every container start); "User ID already taken" is the
+  # idempotent no-op.
   out="$(docker exec "${SYNAPSE_CTR}" register_new_matrix_user \
           -u "$1" -p "${E2E_PASSWORD}" --no-admin -c /data/homeserver.yaml \
           "http://localhost:8008" 2>&1)" \
     || { echo "${out}" | grep -qi "already taken\|already exists\|M_USER_IN_USE" \
-           || die "could not register Matrix user $1: ${out} (did up-real.sh set registration_shared_secret?)"; }
+           || die "could not register Matrix user $1: ${out} (is the synapse container's config missing registration_shared_secret? see compose.real.yaml's synapse entrypoint)"; }
   log "matrix user $1 present"
 }
 

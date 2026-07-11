@@ -286,10 +286,15 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
   single local Casdoor with placeholder client creds, so the games sync job does
   nothing locally (no separate games Casdoor in this stack).
 - **Social tier is heavy + opt-in.** `SOCIAL=1` pulls Synapse + Mastodon
-  (web/sidekiq/streaming + Postgres/Redis). It does NOT run the
-  Synapse-config / Mastodon `db:prepare` first-run setup that `up-real.sh` does;
-  for a fully working social tier use `tests/stack/up-real.sh` (the dedicated
-  real-services bring-up) which handles those steps.
+  (web/sidekiq/streaming + Postgres/Redis). Synapse needs no separate
+  first-run step any more — its `synapse` service entrypoint
+  (`tests/stack/compose.real.yaml`) generates its config and self-heals
+  registration on every container start, the same way whether you bring it
+  up via `SOCIAL=1` or `tests/stack/up-real.sh`. Mastodon's `db:prepare`
+  first-run migration is NOT run by `SOCIAL=1`, though; for a fully working
+  Mastodon (and to skip a manual `rails db:prepare`), use
+  `tests/stack/up-real.sh` (the dedicated real-services bring-up), which
+  still handles that step.
 - **No TLS / no ingress / no SELinux-MCS.** The cluster's mTLS, nginx ingress,
   and per-pod SELinux levels are k8s concerns and are not reproduced here; the
   front door is plain HTTP on localhost.

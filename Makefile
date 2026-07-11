@@ -700,8 +700,10 @@ stack-clone: ## clone/update all snapdragon repos into ./.stack-src (idempotent)
 	  bash scripts/clone-all-repos.sh
 
 # Guarantee tests/stack/.mastodon.env exists with non-empty dev secrets (only the
-# SOCIAL=1 path needs it). For a fully prepped social tier (Synapse config +
-# Mastodon db:prepare) use tests/stack/up-real.sh instead — see docs/LOCAL-STACK.md.
+# SOCIAL=1 path needs it). Synapse's config/registration self-heals via its own
+# service entrypoint (compose.real.yaml), same as tests/stack/up-real.sh; for
+# Mastodon's db:prepare too, use tests/stack/up-real.sh instead — see
+# docs/LOCAL-STACK.md.
 #
 # ALTERNATE_DOMAINS=mastodon-web:3000 is REQUIRED, not cosmetic: Mastodon's
 # config/initializers/1_hosts.rb builds Rails' config.hosts from LOCAL_DOMAIN +
