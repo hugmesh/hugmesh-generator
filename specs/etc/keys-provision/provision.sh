@@ -156,6 +156,19 @@ resolve_magic_dns_domain() {
 resolve_cp_dns_name() {
     local n; n="$(jqm '.mesh.cp_dns_name // ""')"
     { [ -z "${n}" ] || [ "${n}" = "null" ]; } && n="kube-api.$(resolve_magic_dns_domain)"
+    # Fail-closed: cp_dns_name is interpolated UNQUOTED-in-effect into headscale config.yaml
+    # (dns.extra_records), /etc/hosts, and the kubeadm join API endpoint. Reject anything that
+    # is not a plain dotted DNS name — this blocks embedded newlines / quotes / YAML-and-hosts
+    # breakers that would inject an attacker A-record or host entry (mesh DNS poisoning /
+    # control-plane MITM). Mirrors the magic_dns_domain (^[a-z0-9.-]+$) and ssh_user fail-closed
+    # gates; on a malformed value fall back to the derived kube-api.<magic_dns_domain> default
+    # (and the ultimate baked default if that too is malformed). warn -> stderr so it never
+    # pollutes this resolver's command-substituted stdout.
+    if [[ ! "${n}" =~ ^[a-z0-9.-]+$ ]]; then
+        warn "cp_dns_name is not a valid dotted DNS name ([a-z0-9.-]) — using the derived default" >&2
+        n="kube-api.$(resolve_magic_dns_domain)"
+        [[ "${n}" =~ ^[a-z0-9.-]+$ ]] || n="kube-api.headnet.internal"
+    fi
     echo "${n}"
 }
 

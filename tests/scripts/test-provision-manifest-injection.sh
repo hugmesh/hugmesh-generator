@@ -127,5 +127,46 @@ if hostname_ok "${hn}"; then echo "hostname=\"${hn}\"" > "${WORK}/hostname"; els
 esc_ssid='../../../etc/cron.d/pwn'
 if ssid_ok "${esc_ssid}"; then bad "ssid traversal accepted as filename"; else ok "ssid traversal never used as .nmconnection filename"; fi
 
+# ── (cp_dns_name) headscale extra_records / /etc/hosts / kube-api endpoint injection ──
+# resolve_cp_dns_name() interpolates .mesh.cp_dns_name into headscale config.yaml
+# dns.extra_records, /etc/hosts, AND the kubeadm join API endpoint. Gate: reject anything that
+# is not a plain dotted DNS name (^[a-z0-9.-]+$ — blocks newlines/quotes/YAML-breakers) and fall
+# back to the derived default, matching the magic_dns_domain + ssh_user fail-closed gates.
+if ! grep -qF 'cp_dns_name is not a valid dotted DNS name' "${PROV}"; then
+  echo "  FAIL cp_dns_name fail-closed gate not found in provision.sh"; exit 1
+fi
+cp_dns_ok(){ local n="$1"; [[ "${n}" =~ ^[a-z0-9.-]+$ ]]; }
+ok "extracted + mirrored the real cp_dns_name gate predicate"
+# (A) injection payloads REJECTED
+for n in 'a b' 'a;reboot' 'a$(id)' 'a`id`' 'a|b' 'a"b' 'UP.PER' '' $'x\ny' 'a/b'; do
+  if rej cp_dns_ok "${n}"; then ok "cp_dns_name rejected: $(printf %q "${n}")"
+  else bad "cp_dns_name NOT rejected: $(printf %q "${n}")"; fi
+done
+# (B) legitimate values ACCEPTED
+for n in kube-api.snapdragon.internal cp.acme.internal kube-api.headnet.internal a.b.c; do
+  if cp_dns_ok "${n}"; then ok "cp_dns_name accepted: ${n}"; else bad "cp_dns_name rejected: ${n}"; fi
+done
+# End-to-end (needs jq — provision.sh needs it too): a malicious cp_dns_name must RESOLVE to a
+# single clean line with no injected A-record, driving the REAL resolvers extracted from the file.
+if command -v jq >/dev/null 2>&1; then
+  CPW="$(mktemp -d)"
+  { echo 'MANIFEST="$1"'; echo 'jqm(){ jq -r "$1" "${MANIFEST}" 2>/dev/null; }'
+    echo 'log(){ :; }'; echo 'warn(){ :; }'
+    awk '/^resolve_magic_dns_domain\(\) \{/,/^\}/' "${PROV}"
+    awk '/^resolve_cp_dns_name\(\) \{/,/^\}/' "${PROV}"
+    echo 'resolve_cp_dns_name 2>/dev/null'; } > "${CPW}/h.sh"
+  # JSON with escaped \n + \" — jq -r un-escapes them into the real newlines/quotes the exploit uses.
+  printf '%s' '{"mesh":{"cp_dns_name":"kube-api.evil\"\n      type: \"A\"\n      value: \"6.6.6.6\"\n    - name: \"x","magic_dns_domain":"snapdragon.internal"}}' > "${CPW}/evil.json"
+  cpout="$(bash "${CPW}/h.sh" "${CPW}/evil.json")"
+  if [ "$(printf '%s' "${cpout}" | wc -l)" -eq 0 ] && ! printf '%s' "${cpout}" | grep -q '6.6.6.6'; then
+    ok "malicious cp_dns_name resolved to a single clean line (no injected A-record): ${cpout}"
+  else
+    bad "malicious cp_dns_name leaked injection: $(printf %q "${cpout}")"
+  fi
+  rm -rf "${CPW}"
+else
+  ok "cp_dns_name resolver e2e skipped (jq absent)"
+fi
+
 echo "== done: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]
