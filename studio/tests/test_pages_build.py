@@ -330,6 +330,16 @@ def test_build_x86_artifact_matrix(wiz):
     assert "--no-tar" in args and "--skip-iso" in args
 
 
+def test_buildpage_restores_jobs_from_config(wiz):
+    """A loaded config's non-default parallel-jobs value must survive to Review & Build:
+    initializePage restores the spinbox, else validatePage writes back the widget default (8)."""
+    wiz.cfg.jobs = 16
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert build.jobs.value() == 16          # restored (was silently reset to 8 before the fix)
+    build.validatePage()
+    assert wiz.cfg.jobs == 16                # round-trip: not clobbered back to the default
+
+
 def test_build_artifact_tristate_default_emits_nothing(wiz):
     build = advance_to(wiz, wizard_mod.BuildPage)
     build._preview()

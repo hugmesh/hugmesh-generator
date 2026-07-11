@@ -283,6 +283,10 @@ class BuildPage(QtWidgets.QWizardPage):
         # the installer-UI choice is an x86 ISO knob; the arm builders have no flag
         self.installer_ui.setEnabled(c.platform in ("", "x86"))
         self.img_size.setValue(c.img_size)
+        # Restore the parallel-jobs spinbox from the loaded config — validatePage writes
+        # c.jobs = self.jobs.value() back, so without this a saved non-default jobs value is
+        # silently overwritten with the widget's construction default (8) on Review & Build.
+        self.jobs.setValue(c.jobs)
         # cached / live-toram / bundle-source are x86 ISO knobs too (config.py only
         # emits them through _x86_args)
         self.cached.setEnabled(c.platform in ("", "x86"))
