@@ -4573,7 +4573,8 @@ CHROOT
         # labels it formats. Functional patterns are asserted first so upstream
         # drift fails the build loudly instead of shipping a half-neutral ISO.
         if ${UNAFFILIATED}; then
-            for _pat in 'snapdragon.install=ncurses' '/etc/snapdragon/home.conf' 'SNAP_ESP' 'SNAP_ROOT'; do
+            for _pat in 'snapdragon.install=ncurses' '/etc/snapdragon/home.conf' 'SNAP_ESP' 'SNAP_ROOT' \
+                        '# Snapdragon x86_64 installer'; do
                 grep -qF "${_pat}" "${INST_DIR}/install-x86.sh" \
                     || { err "install-x86.sh drifted: '${_pat}' not found (unaffiliated neutralization would break silently)"; exit 1; }
             done; unset _pat
@@ -4584,6 +4585,7 @@ CHROOT
                 -e 's/Snapdragon Installer/Gentoo Installer/g' \
                 -e 's/Install Snapdragon onto/Install Gentoo onto/g' \
                 -e 's/# Snapdragon encrypted-root layout/# Encrypted-root layout/' \
+                -e 's/# Snapdragon x86_64 installer.*/# Gentoo x86_64 installer (hardened desktop, optional GPU)./' \
                 "${INST_DIR}/install-x86.sh"
         fi
         cp "${SPECS_DIR}/etc/fstab" "${INST_DIR}/fstab.template" 2>/dev/null || true

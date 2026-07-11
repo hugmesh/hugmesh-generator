@@ -327,7 +327,7 @@ case "${HM_MODE}" in
     restore)
         bk="${HM_BACKUP}"
         if [ "${bk}" = auto ] || [ -z "${bk}" ]; then
-            bk="$(find /media /run/media /mnt -maxdepth 4 -name 'snapdragon-home-backup-*' 2>/dev/null | head -1 || true)"
+            bk="$(find /media /run/media /mnt -maxdepth 4 -name '*home-backup-*' 2>/dev/null | head -1 || true)"
         fi
         if [ -n "${bk}" ] && [ -f "${bk}" ]; then
             echo "==> Home(restore): decrypting + unpacking ${bk} into /home"
