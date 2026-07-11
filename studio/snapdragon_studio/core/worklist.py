@@ -116,7 +116,32 @@ class WorklistConfig:
         base = ImageConfig.from_dict(d.get("base") or {})
         entries = [WorklistEntry.from_dict(x) for x in (d.get("entries") or [])
                    if isinstance(x, dict)]
-        return cls(base=base, schema=d.get("schema", WORKLIST_SCHEMA), entries=entries)
+        wl = cls(base=base, schema=d.get("schema", WORKLIST_SCHEMA), entries=entries)
+        # Fail loudly on a foreign/hand-authored envelope with colliding ids BEFORE any
+        # consumer (the GUI's by-id view, the driver, --print-specs) silently drops or
+        # clobbers one image — see _assert_unique_entry_ids.
+        wl._assert_unique_entry_ids()
+        return wl
+
+    def _assert_unique_entry_ids(self) -> None:
+        """Each entry id (``role.platform``) must appear once. board/flavor/desktop are
+        per-entry ATTRIBUTES, not separate rows (see :func:`entry_id`), so two entries
+        that differ only in those axes share an id — and therefore the DERIVED
+        ``build_subdir`` (``wl-<id>``) and the WorklistDriver ``keys-<id>`` dir. The
+        second image would then build into the first's tree and clobber its node keys,
+        and the GUI's by-id reload view would silently drop one. The entry model asserts
+        this 'same-arch build trees must not collide' invariant (build_subdir docstring);
+        enforce it here rather than leaving it aspirational."""
+        seen: dict[str, int] = {}
+        for i, entry in enumerate(self.entries):
+            if entry.id in seen:
+                raise ValueError(
+                    f"worklist entries #{seen[entry.id]} and #{i} share id "
+                    f"{entry.id!r}: each role×platform must appear once (board/flavor/"
+                    f"desktop are per-entry attributes, not separate rows). Distinct "
+                    f"images would collide on build tree wl-{entry.id} and its node-keys "
+                    f"dir.")
+            seen[entry.id] = i
 
     def save(self, path: str) -> list[str]:
         """Write the envelope JSON (base secrets blanked, matching ImageConfig.save).
@@ -135,6 +160,10 @@ class WorklistConfig:
         deterministic, unit-pinned pipeline (design 2.4). Each output config is a fully
         valid single-image config that every existing single-image mechanism reuses
         untouched. Order mirrors ``self.entries``."""
+        # Universal chokepoint: guard even a programmatically-built worklist (the GUI
+        # never routes through from_dict) so a duplicate id can never reach the driver
+        # and clobber a build tree / node-keys dir.
+        self._assert_unique_entry_ids()
         out: list[tuple[WorklistEntry, ImageConfig]] = []
         for entry in self.entries:
             out.append((entry, self._materialize_one(entry)))

@@ -114,7 +114,11 @@ def main(argv=None) -> int:
             # surface as a clean non-zero exit with the reason on stderr (never argv).
             cfg = ImageConfig.load(args.config) if args.config else ImageConfig()
             print(driver.command_string(cfg, backend))
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
+            # ValueError: bad JSON / non-dict config / envelope-vs-flat mismatch /
+            # unaffiliated-identity conflict. OSError: a missing or unreadable --config
+            # path. Both are bad INPUT — exit 2 with a clean message rather than letting
+            # a FileNotFoundError/TypeError escape as a traceback + exit 1.
             print(f"error: {exc}", file=sys.stderr)
             return 2
         return 0
@@ -146,7 +150,11 @@ def main(argv=None) -> int:
                 materialized = [materialized[args.image]]
             for cfg in materialized:
                 print(driver.command_string(cfg, backend))
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
+            # ValueError: bad JSON / non-dict config / envelope-vs-flat mismatch /
+            # unaffiliated-identity conflict. OSError: a missing or unreadable --config
+            # path. Both are bad INPUT — exit 2 with a clean message rather than letting
+            # a FileNotFoundError/TypeError escape as a traceback + exit 1.
             print(f"error: {exc}", file=sys.stderr)
             return 2
         return 0
@@ -177,7 +185,11 @@ def main(argv=None) -> int:
                 materialized = [materialized[args.image]]
             for cfg in materialized:
                 print(json.dumps(cfg.to_dict(), sort_keys=True))
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
+            # ValueError: bad JSON / non-dict config / envelope-vs-flat mismatch /
+            # unaffiliated-identity conflict. OSError: a missing or unreadable --config
+            # path. Both are bad INPUT — exit 2 with a clean message rather than letting
+            # a FileNotFoundError/TypeError escape as a traceback + exit 1.
             print(f"error: {exc}", file=sys.stderr)
             return 2
         return 0

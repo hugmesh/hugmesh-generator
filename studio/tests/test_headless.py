@@ -149,6 +149,27 @@ def test_print_command_unaffiliated_conflict_fails_loudly(tmp_path):
     assert "theme" in r.stderr
 
 
+@pytest.mark.parametrize("flag", ["--print-command", "--print-commands", "--print-specs"])
+def test_headless_bad_input_exits_2_not_traceback(tmp_path, flag, capsys):
+    """Bad INPUT to any --print-* handler must exit 2 with a clean 'error: ...' line,
+    never let a TypeError (non-dict JSON) or FileNotFoundError (missing --config) escape
+    as a traceback + exit 1 — so a caller/bridge can distinguish bad-input (2) from an
+    unexpected crash. (json.JSONDecodeError already exits 2; these two paths did not.)"""
+    from snapdragon_studio import app
+    # (a) top-level JSON array -> from_dict TypeError normalized to ValueError -> exit 2
+    arr = tmp_path / "arr.json"
+    arr.write_text("[1, 2, 3]", encoding="utf-8")
+    rc = app.main([flag, "--config", str(arr), "--generator-dir", GENERATOR_DIR,
+                   "--backend", "native"])
+    assert rc == 2
+    assert "error:" in capsys.readouterr().err
+    # (b) missing --config path -> OSError -> exit 2
+    rc = app.main([flag, "--config", str(tmp_path / "does-not-exist.json"),
+                   "--generator-dir", GENERATOR_DIR, "--backend", "native"])
+    assert rc == 2
+    assert "error:" in capsys.readouterr().err
+
+
 def test_saved_matrix_configs_hold_no_secrets(tmp_path):
     # includes the NEW node-fallback credentials (G27) — SECRET_FIELDS, never saved
     cfg = ImageConfig(local_pass="pw", luks_pass="pw2",

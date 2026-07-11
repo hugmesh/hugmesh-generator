@@ -680,6 +680,14 @@ class ImageConfig:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "ImageConfig":
+        if not isinstance(d, dict):
+            # A top-level JSON array/scalar reaches `dict(d)` below as a non-mapping and
+            # raises TypeError; normalize to ValueError so the headless --print-* handlers
+            # (and every other loader) surface a clean "error: ..." + exit 2 instead of a
+            # traceback + exit 1, matching the json.JSONDecodeError (also a ValueError) path.
+            raise ValueError(
+                f"config must be a JSON object, got {type(d).__name__} "
+                "(a top-level array or scalar is not a valid image config)")
         d = dict(d)
         usr_f = set(User.__dataclass_fields__)
         # tolerate "domains": null / "users": null and unknown nested keys

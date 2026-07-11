@@ -105,6 +105,43 @@ def test_imageconfig_load_rejects_envelope_loudly(tmp_path):
         ImageConfig.load(str(p))
 
 
+def test_from_dict_rejects_duplicate_entry_ids():
+    """A foreign/hand-authored envelope with two entries that differ only in
+    board/flavor collides on id (role.platform) — from_dict must reject it LOUDLY,
+    not let a later consumer silently drop or clobber one image."""
+    d = {
+        "schema": WORKLIST_SCHEMA,
+        "base": {"mode": "mesh", "brand": "acme"},
+        "entries": [
+            {"role": "frite", "platform": "frite", "board": "la-frite", "flavor": "live"},
+            {"role": "frite", "platform": "frite", "board": "le-potato", "flavor": "installer"},
+        ],
+    }
+    with pytest.raises(ValueError, match=r"share id 'frite\.frite'"):
+        WorklistConfig.from_dict(d)
+
+
+def test_materialize_rejects_duplicate_entry_ids():
+    """The universal build chokepoint guards even a programmatically-built worklist
+    (the GUI never routes through from_dict), so a duplicate id can never reach the
+    driver and clobber a build tree / node-keys dir."""
+    base = ImageConfig(mode="mesh", brand="acme")
+    wl = WorklistConfig(base=base, entries=[
+        WorklistEntry(role="edge_ai", platform="jetson", board="agx"),
+        WorklistEntry(role="edge_ai", platform="jetson", board="orin"),
+    ])
+    with pytest.raises(ValueError, match=r"share id 'edge_ai\.jetson'"):
+        wl.materialize()
+
+
+def test_unique_entry_ids_load_and_materialize_ok():
+    """The guard must NOT reject a valid worklist whose entries are all distinct
+    role×platform pairs (the shape every real GUI/synthesize flow produces)."""
+    wl = _envelope()  # omnibus.x86 / be.rpi5 / edge_ai.jetson — all distinct
+    WorklistConfig.from_dict(wl.to_dict())  # no raise
+    assert len(wl.materialize()) == 3
+
+
 def test_save_blanks_base_secrets_and_aggregates_warnings(tmp_path):
     base = ImageConfig(mode="mesh", role="omnibus", platform="x86",
                        local_pass="pw", luks_pass="pw2",
