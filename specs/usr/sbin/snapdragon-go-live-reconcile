@@ -177,16 +177,27 @@ currently_public() {
 # ── map_bff_provider <bff-key> -> stdout (shell provider id, or empty if unknown) ─
 # admin-bff-api's GoLiveProviderCatalog (Java) and the shell provider registry
 # (specs/usr/lib/snapdragon/go-live-providers.sh GO_LIVE_PROVIDER_IDS) grew
-# independently the same day (2026-07-08, two parallel PRs) and were never
-# reconciled: the Java catalog has 6 keys, the shell registry has 5, and the
-# BFF's `cloudflare-ddns` is what the shell models as `duckdns --ddns-service
-# cloudflare` (a driver-level sub-option, not a separate provider id — see
-# go-live-providers.sh's glp_emit_duckdns / GL_DDNS_SERVICE). This mapping is a
-# TRANSLATION SHIM at the one point that actually needs both vocabularies to
-# agree (driving `commit --provider`), not a fix to either catalog's canonical
-# definition — reconciling the catalogs themselves (whether the shell registry
-# should grow a 6th id, whether Java's two DDNS rows should collapse) is a
-# real design decision queued separately, not made here.
+# independently the same day (2026-07-08, two parallel PRs) with a DRIFTED
+# vocabulary. That drift is now RECONCILED BY IDENTITY: the Java catalog's
+# `generic-registrar` row was RENAMED to `byo-domain` to match the shell
+# registry, so the two catalogs now share the same key for that provider and
+# this shim's `byo-domain) echo byo-domain` case is a straight IDENTITY map —
+# the norm going forward.
+#
+# `generic-registrar) echo byo-domain` is RETAINED as a LEGACY ALIAS, NOT dead
+# code: it still resolves (a) pre-rename node images that already emitted the
+# old key, (b) any signed export cached before the BFF rename shipped, and
+# (c) any go_live_intent DB row persisted with the old provider string (the
+# BFF renamed the catalog key but did NOT re-key existing rows — deliberately,
+# see that PR — so the old value still arrives verbatim in the export and MUST
+# still map). Do NOT delete this case: dropping it would strand exactly those
+# pre-rename artifacts (the "fleet skew" the rollout order is designed around).
+#
+# The BFF's `cloudflare-ddns` is a SEPARATE case and is NOT part of the rename:
+# it is what the shell models as `duckdns --ddns-service cloudflare` (a
+# driver-level sub-option, not a separate provider id — see go-live-providers.sh's
+# glp_emit_duckdns / GL_DDNS_SERVICE). Its collapse to `duckdns` here is a
+# DELIBERATE driver-suboption mapping, not catalog drift, and stays as-is.
 #
 # Safe to collapse cloudflare-ddns -> duckdns for THIS purpose specifically
 # because `cmd_commit()` (specs/usr/sbin/snapdragon-go-live) only ever checks
@@ -198,9 +209,10 @@ currently_public() {
 map_bff_provider() {
     case "$1" in
     cloudflare-tunnel)  echo cloudflare-tunnel ;;
-    generic-registrar)  echo byo-domain ;;
+    byo-domain)         echo byo-domain ;;         # identity (post-rename norm)
+    generic-registrar)  echo byo-domain ;;         # LEGACY ALIAS (pre-rename images/exports/rows)
     duckdns)            echo duckdns ;;
-    cloudflare-ddns)    echo duckdns ;;
+    cloudflare-ddns)    echo duckdns ;;             # deliberate driver-suboption (NOT the rename)
     tailscale-funnel)   echo tailscale-funnel ;;
     router-portforward) echo router-portforward ;;
     *)                  return 1 ;;

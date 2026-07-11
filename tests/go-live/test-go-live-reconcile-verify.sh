@@ -88,7 +88,7 @@ NODE="mkey:abc"; GEN=7; DOM="acme.snapdragon.systems"
 # (priv pem) at generation $2. Sign the FILE (not a captured string — command substitution
 # strips trailing newlines and would diverge from what verify_sig reads).
 make_signed_export() {
-    local priv="$1" gen="$2" out="$3" state="${4:-public}" provider="${5:-generic-registrar}" dom="${6:-${DOM}}"
+    local priv="$1" gen="$2" out="$3" state="${4:-public}" provider="${5:-byo-domain}" dom="${6:-${DOM}}"
     local body
     body="$(jq -n --argjson gen "${gen}" --arg node "${NODE}" --arg state "${state}" \
                   --arg provider "${provider}" --arg dom "${dom}" '{
@@ -206,10 +206,13 @@ mkdir -p "${GLR_CACHE_DIR}"
 . "${AGENT}"   # main is guarded; this just loads the functions with the GLR_* config
 
 # ── Case (b): targetState=public, no marker yet -> agent drives REAL commit ──────────
-# The export carries the BFF-side key "generic-registrar" (GoLiveProviderCatalog's
-# vocabulary); the marker must show the MAPPED shell-side id "byo-domain"
-# (GO_LIVE_PROVIDER_IDS's vocabulary, what glp_known() actually validates) — this
-# IS the map_bff_provider() translation under test, not a bug if they differ.
+# The export deliberately carries the LEGACY BFF key "generic-registrar" — the
+# value pre-rename node images / cached exports / un-re-keyed go_live_intent rows
+# still emit after the BFF renamed its catalog key to "byo-domain". It must still
+# map to the shell-side id "byo-domain" (GO_LIVE_PROVIDER_IDS's vocabulary, what
+# glp_known() validates) via the RETAINED legacy alias — this is the fleet-skew
+# backward-compat path under test (the post-rename identity path is exercised by
+# the "byo-domain" end-to-end case under (m) below).
 entry_public="$(jq -c '.body.entries[0]' "${WORK}/good.json")"
 apply_entry "${entry_public}"
 MARKER="${SANDBOX_ETC}/go-live"
@@ -277,15 +280,22 @@ fi
 [ -e "${MARKER}" ] || ok "(b'') marker correctly stays absent (no entry means no-op, not a rollback)"
 
 # ── Case (m): BFF-to-shell provider-catalog mapping (map_bff_provider) ───────────────
-# admin-bff-api's GoLiveProviderCatalog (6 keys) and the shell registry's
-# GO_LIVE_PROVIDER_IDS (5 keys) diverged the same day they were both written and
-# were never reconciled (see docs/GO-LIVE-WIZARD.md + the platform TODO queue).
-# Assert every real BFF key maps to a shell id glp_known() actually accepts, AND
-# that commit --provider <mapped-id> succeeds against the REAL provider registry
-# for every single one — not just byo-domain/generic-registrar (case (b) above).
+# admin-bff-api's GoLiveProviderCatalog and the shell registry's
+# GO_LIVE_PROVIDER_IDS diverged the same day they were both written; the drift
+# is now RECONCILED BY IDENTITY — the BFF renamed its `generic-registrar` row to
+# `byo-domain` to match the shell registry (see docs/GO-LIVE-WIZARD.md). This
+# table therefore asserts BOTH: (1) every CURRENT BFF catalog key (with the
+# renamed `byo-domain`) maps to a shell id glp_known() accepts, AND (2) the
+# retained LEGACY ALIAS `generic-registrar` still resolves to `byo-domain` so
+# pre-rename node images / cached exports / un-re-keyed DB rows keep applying.
+# `cloudflare-ddns` is NOT part of the rename — it is the deliberate
+# duckdns --ddns-service=cloudflare driver-suboption collapse (case (b) above
+# drives the legacy alias end-to-end; the byo-domain identity case below drives
+# the post-rename value end-to-end).
 declare -A BFF_TO_SHELL=(
     [cloudflare-tunnel]=cloudflare-tunnel
-    [generic-registrar]=byo-domain
+    [byo-domain]=byo-domain          # post-rename identity (the norm going forward)
+    [generic-registrar]=byo-domain   # retained LEGACY ALIAS (pre-rename images/exports/rows)
     [duckdns]=duckdns
     [cloudflare-ddns]=duckdns
     [tailscale-funnel]=tailscale-funnel
@@ -307,7 +317,21 @@ for bff_key in "${!BFF_TO_SHELL[@]}"; do
         MAP_ALL_OK=0
     fi
 done
-[ "${MAP_ALL_OK}" = "1" ] && ok "(m) all 6 BFF provider keys map to a shell id known to the REAL provider registry"
+[ "${MAP_ALL_OK}" = "1" ] && ok "(m) all 7 provider keys (6 current BFF keys incl. renamed byo-domain + the retained generic-registrar legacy alias) map to a shell id known to the REAL provider registry"
+
+# End-to-end: an export carrying the POST-RENAME identity key "byo-domain" (what
+# the BFF now emits after generic-registrar -> byo-domain) applies and stamps the
+# marker with provider=byo-domain — the identity path, complementing case (b)'s
+# legacy-alias path.
+make_signed_export "${PRIV}" 10 "${WORK}/byo.json" "public" "byo-domain" "${DOM}"
+entry_byo="$(jq -c '.body.entries[0]' "${WORK}/byo.json")"
+rm -f "${MARKER}" "${SANDBOX_ETC}/release-state"
+apply_entry "${entry_byo}"
+if [ -e "${MARKER}" ] && grep -qE '^provider=byo-domain$' "${MARKER}"; then
+    ok "(m) a POST-RENAME export for the identity key 'byo-domain' applies end-to-end — marker provider=byo-domain"
+else
+    bad "(m) 'byo-domain' identity entry failed to apply end-to-end"; [ -e "${MARKER}" ] && cat "${MARKER}"
+fi
 
 # End-to-end: an export recorded with the BFF key "cloudflare-ddns" (which does
 # NOT exist in the shell registry at all) must still successfully trip commit,

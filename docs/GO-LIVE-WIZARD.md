@@ -317,23 +317,37 @@ operator would run. Idempotent (only invokes the driver on an actual state
 transition) and honors the export's absence-means-no-op contract (a domain with
 no recorded intent is a converged steady state, not an implicit rollback).
 
-**A real, PRE-EXISTING gap this agent exposes rather than causes (flagged, not
-fixed here — see the platform TODO queue):** admin-bff-api's
-`GoLiveProviderCatalog` (Java) uses provider keys `generic-registrar` and
-`cloudflare-ddns`; the shell provider registry
-(`specs/usr/lib/snapdragon/go-live-providers.sh` `GO_LIVE_PROVIDER_IDS`) has
-`byo-domain` (a DIFFERENT key for the conceptually-same provider) and **no
-`cloudflare-ddns` entry at all**. A web-UI-recorded intent for either BFF-side
-key makes this agent drive `snapdragon-go-live commit --provider <key>`, which
-permanently fails `glp_known` — retried every 60s, never succeeding. (The
-applied-ack loop below only fires after a driver call actually SUCCEEDS, so a
-permanently-failing catalog-drift entry never reaches it either — there is
-still no positive signal to the superadmin for this specific gap.) Not fixed in this
-PR: `go-live-providers.sh` is under active, more-authoritative revision in a
-separate in-flight PR (the go-live provider-driver consolidation), and
-reconciling the two catalogs needs a real decision (rename one side, or map
-between them) rather than a guess made without visibility into that other
-work's final shape.
+**Provider-catalog vocabulary — RECONCILED BY IDENTITY (was a drift):**
+admin-bff-api's `GoLiveProviderCatalog` (Java) and the shell provider registry
+(`specs/usr/lib/snapdragon/go-live-providers.sh` `GO_LIVE_PROVIDER_IDS`) were
+originally written with a drifted key for the same provider — Java's
+`generic-registrar` vs the shell's `byo-domain`. That drift is now closed by
+**renaming Java's `generic-registrar` row to `byo-domain`** so the two catalogs
+share the identity, and `map_bff_provider()` in `snapdragon-go-live-reconcile`
+is now an IDENTITY map for it. `generic-registrar` is RETAINED there only as a
+**legacy alias** (`generic-registrar -> byo-domain`) so pre-rename node images,
+cached signed exports, and any un-re-keyed `go_live_intent` rows still resolve;
+it is not deleted (dropping it would strand exactly those pre-rename artifacts —
+the fleet-skew case the rollout order guards against). The BFF rename ships
+merge-ordered: the generator/host-agent side (this repo) merges and BAKES into
+node images FIRST, so every fielded agent already understands `byo-domain`
+before the BFF starts emitting it.
+
+`cloudflare-ddns` is **NOT** part of this rename and is **NOT** drift: it is a
+deliberate separate wizard row backed by the shell `duckdns` driver's
+`GL_DDNS_SERVICE=cloudflare` leg, which `map_bff_provider()` collapses to
+`duckdns` as a driver-SUBOPTION (see the tripwire comment near that function —
+if `cmd_commit` ever starts reading `GL_DDNS_SERVICE`, that collapse assumption
+breaks). Leave it as-is.
+
+**Residual (flagged, not closeable here — see the platform TODO queue):** there
+is no cross-repo CI spanning admin-bff-api and this generator, so nothing
+automatically asserts that *every* live `GET /bff/admin/go-live/providers`
+catalog key maps in the host agent. The in-repo case-(m) guard in
+`tests/go-live/test-go-live-reconcile-verify.sh` covers this today but HARD-CODES
+the BFF key list rather than reading the live catalog, so it can silently drift
+from `GoLiveProviderCatalog` if a future BFF adds a key. The durable guard would
+be a stack-level e2e over both repos.
 
 **The applied-ack loop is now WIRED** (companion admin-bff-api change: `POST
 /bff/internal/go-live/{intentId}/applied-ack {generation, appliedBy}`, over
