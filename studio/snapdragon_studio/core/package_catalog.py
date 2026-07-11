@@ -31,7 +31,10 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .config import ImageConfig, image_class
+from .config import (
+    ImageConfig, ROLE_CHOICES, clear_role_class_fields, image_class,
+    strip_platform_unsupported,
+)
 
 # platform id -> specs subdir (note orangepizero2 -> specs-orangepi-zero2).
 SPECS_SUBDIR = {
@@ -313,6 +316,118 @@ def tiers(generator_dir: str, cfg: ImageConfig) -> dict[str, list[str]]:
     }
 
 
+# ── per-cell role tiers (the web catalog's default-options baseline) ─────────────────
+ROLES_DOC = (
+    "Per-platform role->tier baseline: tiers() on a DEFAULT-OPTIONS ImageConfig for every "
+    "valid ROLE_CHOICES role x platform cell — NO adhoc options enabled; board/flavor/"
+    "desktop-weight/GPU-driver left at builder defaults. essential is locked (base list + "
+    "node k8s payload + installed SNAP_ROLE_BINS); essential+removable = the builder's "
+    "default install set; available = the rest of the platform catalog. The UI layers "
+    "option atoms client-side from adhoc_adds: an enabled option's atoms render LOCKED "
+    "(as essential_floor treats them) but MUST still be emitted in packages_add unless "
+    "the role tier already installs them — a worklist entry has no per-option wire "
+    "channel, so packages_add is the only channel that installs an option's atoms."
+)
+
+
+def default_cell_config(mode: str, role: str, platform: str) -> ImageConfig:
+    """The DEFAULT-OPTIONS config for one role x platform cell — the same stamping +
+    gating order as WorklistConfig._materialize_one (structural axes onto a default base,
+    then the platform / role-class strips), with every ADHOC_ADDS trigger forced OFF
+    (snort and installer_ui are default-ON in the dataclass) so the baseline default set
+    carries no option atoms: the web UI layers those client-side from adhoc_adds. Fails
+    loud if a future default-ON option would leak atoms into the baseline.
+
+    KNOWN SEAM: WorklistConfig._materialize_one additionally forces tailscale=True and
+    sso=True for MESH mode after the strips; that forcing is deliberately NOT mirrored
+    here because no PLATFORM_LISTS gate and no ADHOC_ADDS predicate reads cfg.tailscale
+    or cfg.sso today, so tiers() output is identical either way. If a future gate or
+    adhoc predicate ever keys on either field, mirror the forcing here (or the emitted
+    mesh baselines will silently diverge from what the Studio really materializes)."""
+    cfg = ImageConfig(mode=mode, role=role, platform=platform)
+    strip_platform_unsupported(cfg)
+    clear_role_class_fields(cfg)
+    cfg.snort = False        # dataclass default True — an adhoc option, not baseline
+    cfg.installer_ui = ""    # dataclass default "all" enables the calamares adhoc add
+    leaked = adhoc_atoms(cfg)
+    if leaked:
+        raise ValueError(f"default cell {role} x {platform}: adhoc atoms leaked into the "
+                         f"baseline ({leaked}) — force the new default-ON option off in "
+                         "default_cell_config")
+    return cfg
+
+
+def role_cells() -> dict[tuple[str, str], list[str]]:
+    """Every valid ``(platform, role)`` cell -> the Studio modes offering it, straight
+    from ROLE_CHOICES (the same grammar emit-image-catalog.py serves the admin-ui) —
+    cells are enumerated, never invented. A cell shared across modes (frite standalone+
+    cloud, rpi5-desktop cloud+mesh) keeps every mode so roles_tiers can assert mode
+    never changes the tiering."""
+    cells: dict[tuple[str, str], list[str]] = {}
+    for mode, choices in ROLE_CHOICES.items():
+        for role, platforms, _label in choices:
+            for platform in platforms:
+                cells.setdefault((platform, role), []).append(mode)
+    return cells
+
+
+def roles_tiers(generator_dir: str) -> dict[str, dict[str, dict[str, list[str]]]]:
+    """``{platform: {role: {essential, removable, available}}}`` for every valid cell.
+    List gating is role/flag-keyed, never mode-keyed, so a role offered in several modes
+    must tier identically — asserted (fail loud), which is what makes the plain role
+    token a sound key."""
+    out: dict[str, dict[str, dict[str, list[str]]]] = {}
+    for (platform, role), modes in role_cells().items():
+        per_mode = [tiers(generator_dir, default_cell_config(m, role, platform))
+                    for m in modes]
+        if any(t != per_mode[0] for t in per_mode[1:]):
+            raise ValueError(f"{role} x {platform}: tiers differ across modes {modes} — "
+                             "the role-token key is no longer mode-free")
+        out.setdefault(platform, {})[role] = per_mode[0]
+    return out
+
+
+def validate_roles_tiers(generator_dir: str, roles: dict) -> None:
+    """Fail-loud invariant check of an EMITTED roles map (run by the exporter before it
+    writes, and by the CI drift test on the committed copy): exact cell coverage, tiers
+    sorted + duplicate-free + pairwise disjoint, essential EQUAL to the freshly derived
+    essential_floor (not merely a subset of the default set — a boundary shift between
+    essential and removable in either direction fails loud, so an out-of-band consumer
+    revalidating a served copy cannot be handed a weakened or widened lock floor),
+    essential+removable == the default set, and the three tiers together == the full
+    platform universe."""
+    want = role_cells()
+    got = {(p, r) for p, rs in roles.items() for r in rs}
+    if got != set(want):
+        raise ValueError(f"roles map cells drifted: missing={sorted(set(want) - got)} "
+                         f"extra={sorted(got - set(want))}")
+    for (platform, role), modes in want.items():
+        t = roles[platform][role]
+        if set(t) != {"essential", "removable", "available"}:
+            raise ValueError(f"{role} x {platform}: bad tier keys {sorted(t)}")
+        for name, lst in t.items():
+            if lst != sorted(set(lst)):
+                raise ValueError(f"{role} x {platform}.{name}: not sorted/duplicate-free")
+        e, r, a = set(t["essential"]), set(t["removable"]), set(t["available"])
+        if e & r or e & a or r & a:
+            raise ValueError(f"{role} x {platform}: tiers overlap")
+        cfg = default_cell_config(modes[0], role, platform)
+        default = default_set(generator_dir, cfg)
+        if not e <= default:
+            raise ValueError(f"{role} x {platform}: essential not a subset of the "
+                             f"default set: {sorted(e - default)}")
+        floor = essential_floor(generator_dir, cfg)
+        if e != floor:
+            raise ValueError(f"{role} x {platform}: essential != essential_floor — the "
+                             f"locked/removable boundary drifted from the derivation "
+                             f"(demoted={sorted(floor - e)} promoted={sorted(e - floor)})")
+        if e | r != default:
+            raise ValueError(f"{role} x {platform}: essential+removable != default set")
+        if e | r | a != all_platform_atoms(generator_dir, platform) | default:
+            raise ValueError(f"{role} x {platform}: tiers do not cover the platform "
+                             "universe")
+
+
 # ── checked-in catalog (for the web; drift-checked) ──────────────────────────────────
 def catalog_for_platform(generator_dir: str, platform: str) -> dict:
     """``{list_id: {gate, sections: [{title, atoms}]}}`` — the raw parsed tree the web
@@ -328,10 +443,14 @@ def catalog_for_platform(generator_dir: str, platform: str) -> dict:
 
 def build_catalog(generator_dir: str) -> dict:
     """The full checked-in ``packages-catalog.json`` payload: every platform's list tree +
-    the adhoc-adds map. Emitted by scripts/emit-package-catalog.py; the Studio parses lists
+    the adhoc-adds map + the per-cell role->tier baseline (``roles``/``roles_doc``, an
+    ADDITIVE extension — the platforms/adhoc_adds subtrees are byte-compatible with the
+    pre-roles schema). Emitted by scripts/emit-package-catalog.py; the Studio parses lists
     live instead, so only the web copy can drift (a CI test regenerates and diffs)."""
     return {
         "platforms": {p: catalog_for_platform(generator_dir, p) for p in PLATFORMS},
         "adhoc_adds": {a.option: {"label": a.label, "atoms": list(a.atoms)}
                        for a in ADHOC_ADDS},
+        "roles": roles_tiers(generator_dir),
+        "roles_doc": ROLES_DOC,
     }

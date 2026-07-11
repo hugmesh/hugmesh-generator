@@ -8,7 +8,7 @@ import os
 import pytest
 
 from snapdragon_studio.core import package_catalog as pc
-from snapdragon_studio.core.config import ImageConfig, image_class
+from snapdragon_studio.core.config import ImageConfig, ROLE_CHOICES, image_class
 
 _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -116,10 +116,119 @@ def test_option_gated_adhoc_is_essential():
     assert "sys-fs/ecryptfs-utils" in floor and "sys-apps/keyutils" in floor
 
 
-# ── drift: checked-in JSON vs fresh emit ─────────────────────────────────────────────
+# ── per-cell role tiers (the emitted default-options baseline; "roles" in the JSON) ──
 def _load_json(rel):
     with open(os.path.join(_GEN, rel), encoding="utf-8") as fh:
         return json.load(fh)
+
+
+def _committed_roles():
+    return _load_json(os.path.join("docs", "catalog", "packages-catalog.json"))["roles"]
+
+
+def test_roles_map_covers_every_valid_cell_exactly():
+    # cells come from ROLE_CHOICES (the grammar image-catalog.json serves) — the emitted
+    # map must carry EVERY valid role x platform cell and nothing invented.
+    want = {(p, r) for choices in ROLE_CHOICES.values()
+            for r, plats, _label in choices for p in plats}
+    got = {(p, r) for p, rs in _committed_roles().items() for r in rs}
+    assert got == want, f"missing={want - got} extra={got - want}"
+
+
+def test_roles_tiers_sorted_unique_disjoint():
+    for p, rs in _committed_roles().items():
+        for r, t in rs.items():
+            assert set(t) == {"essential", "removable", "available"}, f"{p}/{r}"
+            for name, lst in t.items():
+                assert lst == sorted(set(lst)), f"{p}/{r}.{name}: not sorted/unique"
+            e, rm, av = set(t["essential"]), set(t["removable"]), set(t["available"])
+            assert e.isdisjoint(rm) and e.isdisjoint(av) and rm.isdisjoint(av), \
+                f"{p}/{r}: tiers overlap"
+            assert e, f"{p}/{r}: empty essential (the base list must always lock)"
+
+
+def test_roles_invariants_hold_against_fresh_derivation():
+    # the exporter's fail-loud gate (essential == essential_floor, essential∪removable ==
+    # default set, universe coverage, exact cells) must hold on the COMMITTED data too.
+    pc.validate_roles_tiers(_GEN, _committed_roles())
+
+
+def test_validator_rejects_essential_removable_boundary_shift():
+    # A hand-edited (or out-of-band) roles map that shifts an atom across the essential/
+    # removable BOUNDARY keeps every set-algebra invariant green (disjoint, e∪rm == default,
+    # e ⊆ default) — the validator must reject the boundary itself (e == essential_floor),
+    # or a consumer revalidating a served copy could render a mandatory node binary as
+    # droppable. Injected in BOTH directions.
+    import copy
+
+    # demote: weaken the exact lock the floor exists for (rpi5/pki k8s payload).
+    roles = copy.deepcopy(_committed_roles())
+    t = roles["rpi5"]["pki"]
+    atom = "sys-cluster/kubelet"
+    assert atom in t["essential"]
+    t["essential"].remove(atom)
+    t["removable"] = sorted(set(t["removable"]) | {atom})
+    with pytest.raises(ValueError, match="essential != essential_floor"):
+        pc.validate_roles_tiers(_GEN, roles)
+
+    # promote: wrongly widen the lock floor with a removable atom.
+    roles = copy.deepcopy(_committed_roles())
+    cell = next((p, r, t) for p, rs in sorted(roles.items())
+                for r, t in sorted(rs.items()) if t["removable"])
+    p, r, t = cell
+    atom = t["removable"][0]
+    t["removable"].remove(atom)
+    t["essential"] = sorted(set(t["essential"]) | {atom})
+    with pytest.raises(ValueError, match="essential != essential_floor"):
+        pc.validate_roles_tiers(_GEN, roles)
+
+
+def test_node_cell_locks_k8s_payload_desktop_cell_does_not():
+    roles = _committed_roles()
+    for platform, node_role, desk_role in (("rpi5", "pki", "rpi5-desktop"),
+                                           ("jetson", "edge_ai", "jetson-desktop")):
+        k8s = set(pc.list_atoms(_GEN, platform, "packages-k8s"))
+        assert k8s, f"{platform}: packages-k8s parsed empty"
+        assert k8s <= set(roles[platform][node_role]["essential"]), \
+            f"{platform}/{node_role}: k8s payload not locked"
+        desk = roles[platform][desk_role]
+        assert not k8s & set(desk["essential"]) and not k8s & set(desk["removable"]), \
+            f"{platform}/{desk_role}: k8s payload leaked into the default set"
+        assert k8s <= set(desk["available"])
+    # x86 bakes the k8s payload into its BASE list (every x86 image emerges it), so the
+    # node/desktop distinction is an ARM reality — pin the x86 base-bake so nobody
+    # "fixes" it into the ARM shape without noticing the builder difference.
+    assert "sys-cluster/kubelet" in roles["x86"]["laptop"]["essential"]
+    assert "sys-cluster/kubelet" in roles["x86"]["pki"]["essential"]
+
+
+def test_roles_baseline_carries_no_adhoc_option_atoms():
+    # default-options semantics: NO adhoc option enabled in the baseline — the web UI
+    # layers option atoms client-side from adhoc_adds. default_cell_config also raises
+    # on leak; this pins the contract (snort/installer_ui are default-ON dataclass
+    # fields the cell config must force off).
+    for (platform, role), modes in pc.role_cells().items():
+        for mode in modes:
+            cfg = pc.default_cell_config(mode, role, platform)
+            assert pc.adhoc_atoms(cfg) == [], f"{platform}/{role} ({mode})"
+    t = _committed_roles()["x86"]["laptop"]
+    default = set(t["essential"]) | set(t["removable"])
+    assert "app-admin/calamares" not in default      # installer_ui default "all"
+    assert "net-analyzer/snort" not in default       # snort default True
+
+
+def test_shared_role_tokens_tier_identically_across_modes():
+    # what makes the plain role token a sound key: a cell offered in several Studio
+    # modes (frite standalone+cloud, rpi5-desktop cloud+mesh, ...) tiers identically.
+    multi = {cell: modes for cell, modes in pc.role_cells().items() if len(modes) > 1}
+    assert multi, "expected mode-shared cells (frite / rpi5-desktop ...)"
+    for (platform, role), modes in multi.items():
+        results = [pc.tiers(_GEN, pc.default_cell_config(m, role, platform))
+                   for m in modes]
+        assert all(x == results[0] for x in results[1:]), f"{platform}/{role}"
+
+
+# ── drift: checked-in JSON vs fresh emit ─────────────────────────────────────────────
 
 
 def test_packages_catalog_json_is_current():
