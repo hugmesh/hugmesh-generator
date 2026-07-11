@@ -54,6 +54,7 @@ reset_opts() {
     OPT_FRITE_FLEET=no OPT_JETSON_FLEET=no
     OPT_IMGFLAGS="" OPT_X86_EDGE_AI=no OPT_EDGE_AI_RUNTIME=ollama
     OPT_EDGE_AI_MODELS="" OPT_EDGE_AI_MODEL_DEFAULT="" OPT_X86_EDGE_AI_ANALYSIS=no
+    OPT_EDGE_AI_TTS=no
     OPT_TOR_ONION=no OPT_CHARACTER_STUDIO=no OPT_SERVICES="" OPT_INSTALLER_UI=""
     OPT_EXTRA_FLAGS=""
     OPT_BR_WALLPAPER="" OPT_BR_GRUB_BG="" OPT_BR_LOGIN_BG="" OPT_BR_LOGO=""
@@ -152,6 +153,17 @@ reset_opts; OPT_EDGE_AI_MODEL_DEFAULT="llama3.2:3b"
 build_make_cmd x86-edge_ai "edge" 1
 assert_has "edge-ai role: default model" "--edge-ai-model-default llama3.2:3b"
 assert_not "edge-ai role: no --with"    "--with-edge-ai"
+
+# edge-ai-tts: CPU-only, NO edge-ai dependency — must reach argv on a NON-GPU
+# cluster role (unlike edge-ai-analysis, which is scoped to the GPU-target case).
+reset_opts; OPT_EDGE_AI_TTS=yes
+build_make_cmd x86-fe "fe" 1
+assert_has "edge-ai-tts: flag on non-GPU role" "--with-edge-ai-tts"
+assert_not "edge-ai-tts: no edge-ai fold" "--with-edge-ai "
+assert_one_flags "edge-ai-tts"
+reset_opts
+build_make_cmd x86-fe "fe" 1
+assert_not "edge-ai-tts: off by default"  "--with-edge-ai-tts"
 
 # ── standalone desktop: media label, home, branding, installer UI, extra flags ──
 reset_opts

@@ -1,8 +1,8 @@
 """NetworkPage — three role-class groupboxes up top (brand identity & domain, the
 tailnet/SSO toggles, the mesh control plane incl. the orchestration superdomain),
-then egress VPN, the security stack, edge-AI, Tor, Character Studio and the optional
-cluster-services checklist (with the explicit-none / all-services sentinels and the
-subtractive exclude list).
+then egress VPN, the security stack, edge-AI, Tor, Character Studio, edge-ai-tts
+(voice synthesis) and the optional cluster-services checklist (with the
+explicit-none / all-services sentinels and the subtractive exclude list).
 
 The tailnet/SSO group is user-editable ONLY for cloud branded desktops
 (``tailnet_sso_visible``, spec 3): standalone and mesh hide it (mesh forces
@@ -238,6 +238,16 @@ class NetworkPage(QtWidgets.QWizardPage):
             "Character Studio (VN) — character creator + chat remote at /character-studio (default off)")
         self.character_studio.setTristate(True)   # G34: --with-/--no-character-studio / default
         lay.addWidget(self.character_studio)
+        # edge-ai-tts (VN voice synthesis) — OPTIONAL, DEFAULT-OFF. CPU-only,
+        # self-contained (NO edge-ai/GPU dependency, unlike the Analysis API inside
+        # edge_ai_box above) — deliberately placed OUTSIDE edge_ai_box (which hides
+        # outside cloud/mesh mode) and gated like character_studio: PLATFORM
+        # capability only, not mode (G16) — reachable on any build that bakes a
+        # cluster tree, incl. standalone rpi5 'generic'.
+        self.edge_ai_tts = QtWidgets.QCheckBox(
+            "Edge AI — voice synthesis (TTS) — Piper TTS + viseme timeline for VN voice (default off)")
+        self.edge_ai_tts.setTristate(True)   # G34: --with-/--no-edge-ai-tts / default
+        lay.addWidget(self.edge_ai_tts)
         # cluster optional services (--optional-services multi-select) + the games stack.
         # An empty checklist emits NOTHING (the builder default akkoma tuwunel phpbb
         # applies), so the two sentinels get their own mutually-exclusive checkboxes:
@@ -370,6 +380,9 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.character_studio.setCheckState(_tri_state(c.character_studio)
                                             if platform_supports("character_studio", c.platform)
                                             else Qt.CheckState.Unchecked)
+        self.edge_ai_tts.setCheckState(_tri_state(c.edge_ai_tts)
+                                       if platform_supports("edge_ai_tts", c.platform)
+                                       else Qt.CheckState.Unchecked)
         # rebuild the slug checklist for THIS platform's catalog (G15: rpi5 adds the
         # infra slugs tor/egress-vpn/workloadConsole/anubis, which --all-services does
         # NOT include and x86 covers via dedicated flags instead)
@@ -398,6 +411,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # these boxes were mode-gated. gate_widgets() below greys them wherever the
         # builder has no flag (G12: frite/orangepi5/orangepizero2/jetson).
         self.character_studio.setVisible(True)
+        self.edge_ai_tts.setVisible(True)
         self.services_box.setVisible(True)
         # CLIENT-class role (builder ROLE_CLIENT — see _client_class_role): the
         # services are accepted but IGNORED (no cluster GitOps tree in a desktop
@@ -429,13 +443,14 @@ class NetworkPage(QtWidgets.QWizardPage):
             "edge_ai_service": self.edge_ai_box,
             "tor_onion_service": self.tor_onion,
             "character_studio": self.character_studio,
+            "edge_ai_tts": self.edge_ai_tts,
             "optional_services": self.services_box,
             "enable_games": self.games,
         })
         # gate_widgets blanks the tooltip on every ENABLED widget — restore the
         # 3-state legend on the live tri-state boxes (disabled ones keep the
         # unsupported-platform note it set).
-        for w in (self.aide, self.edge_ai, self.tor_onion, self.character_studio):
+        for w in (self.aide, self.edge_ai, self.tor_onion, self.character_studio, self.edge_ai_tts):
             if w.isEnabled():
                 w.setToolTip(_TRI_TIP)
 
@@ -472,6 +487,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         c.edge_ai_analysis = self.edge_ai_analysis.isChecked()
         c.tor_onion_service = _tri_value(self.tor_onion)
         c.character_studio = _tri_value(self.character_studio)
+        c.edge_ai_tts = _tri_value(self.edge_ai_tts)
         # the sentinels replace the checklist (see _services_args: [none] emits
         # --optional-services "" and [all] emits --all-services); an empty custom
         # list emits nothing, leaving the builder default (G13/G14)
@@ -492,7 +508,7 @@ class NetworkPage(QtWidgets.QWizardPage):
             "sso", "games_domain", "release_state", "egress_vpn", "egress_vpn_locked",
             "proxy_stack", "snort", "aide",
             "edge_ai_service", "edge_ai_runtime", "edge_ai_models",
-            "edge_ai_model_default", "edge_ai_analysis", "tor_onion_service",
+            "edge_ai_model_default", "edge_ai_analysis", "edge_ai_tts", "tor_onion_service",
             "character_studio", "optional_services", "exclude_services", "enable_games",
         ))
         return True

@@ -586,6 +586,14 @@ OPTIONS
         /var/lib/tor/snapdragon-onion on first boot. DEFAULT-OFF; node-scoped (no effect
         on CLIENT roles). Exclude with --exclude-services tor.
 
+    --with-edge-ai-tts / --no-edge-ai-tts
+        Bake the edge-ai-tts voice-synthesis API (Piper TTS + an even-split viseme
+        timeline for the VN voice feature, consumed by matrix-ui). CPU-only,
+        self-contained — NO edge-ai dependency (unlike edge-ai-analysis), so it
+        schedules with or without the GPU model server. Equivalent to adding
+        'edge-ai-tts' to --optional-services. A SEPARATE container image
+        (DEFAULT-OFF; keep off until it is built+pushed).
+
     --exclude-services "<slugs>"
         The SUBTRACTIVE build-time exclusion list: force-OFF these user-level slugs
         no matter how they were selected (default / brand.conf / --optional-services
@@ -812,6 +820,11 @@ while [[ $# -gt 0 ]]; do
         # Folds 'character-studio' into OPTIONAL_SERVICES (idempotent).
         --with-character-studio) WANT_CHARACTER_STUDIO=true;  shift ;;
         --no-character-studio)   WANT_CHARACTER_STUDIO=false; shift ;;
+        # edge-ai-tts (VN voice synthesis, B3) — OPTIONAL, DEFAULT-OFF. CPU-only,
+        # self-contained (NO edge-ai dependency, unlike edge-ai-analysis). Folds
+        # 'edge-ai-tts' into OPTIONAL_SERVICES (idempotent).
+        --with-edge-ai-tts)   WANT_EDGE_AI_TTS=true;  shift ;;
+        --no-edge-ai-tts)     WANT_EDGE_AI_TTS=false; shift ;;
         --skip-mesh)          SKIP_MESH=true;          shift   ;;
         --skip-tailscale)     SKIP_TAILSCALE=true;     shift   ;;
         --skip-kernel)        SKIP_KERNEL=true;        shift   ;;
@@ -884,6 +897,18 @@ if [ "${WANT_CHARACTER_STUDIO:-}" = "true" ]; then
     case " ${OPTIONAL_SERVICES} " in
         *" character-studio "*) ;;
         *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} character-studio" ;;
+    esac
+fi
+
+# edge-ai-tts (VN voice synthesis) opt-in fold: --with-edge-ai-tts folds
+# 'edge-ai-tts' into OPTIONAL_SERVICES (idempotent). DEFAULT-OFF; never
+# auto-selected. UNLIKE edge-ai-analysis it has NO edge-ai dependency (CPU-only,
+# self-contained) — no dependency-drop guard needed. When it stays unselected,
+# gate_optional_services() prunes the slug's app/manifests/route/row.
+if [ "${WANT_EDGE_AI_TTS:-}" = "true" ]; then
+    case " ${OPTIONAL_SERVICES} " in
+        *" edge-ai-tts "*) ;;
+        *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} edge-ai-tts" ;;
     esac
 fi
 
@@ -1330,7 +1355,7 @@ gate_optional_services() {
                    warn "edge-ai-analysis requires edge-ai — dropping it (no model server selected)" ;;
             esac ;;
     esac
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio egress-vpn tor workloadConsole edge-ai edge-ai-analysis; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio egress-vpn tor workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -1482,6 +1507,18 @@ gate_optional_services() {
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
                     '/v1/analyze/**'
                 ;;
+            edge-ai-tts)
+                # Piper TTS + viseme timeline (VN voice, B3) — DEFAULT-OFF, NO
+                # dependsOn (CPU-only, self-contained; unlike edge-ai-analysis it
+                # schedules with or without edge-ai). Owns app 55b +
+                # manifests/edge-ai-tts + the /v1/synthesize/** route + route-access
+                # row. Image is a separate build artifact.
+                rm -f "${apps}/55b-edge-ai-tts.yaml"
+                rm -rf "${tree}/manifests/edge-ai-tts"
+                _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-tts
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/v1/synthesize/**'
+                ;;
         esac
     done
     if ! _opt_selected akkoma && ! _opt_selected tuwunel; then
@@ -1612,7 +1649,7 @@ _opt_render_installed_services() {
     [ -f "${cm}" ] || return 0
     local slug val
     # The base optional services follow plain presence in OPTIONAL_SERVICES.
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio workloadConsole edge-ai edge-ai-analysis; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
         # Mirror the same flag into the optional-services ApplicationSet element so the

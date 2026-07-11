@@ -82,6 +82,10 @@ spec:
           # edge-ai-analysis — task analysis API in front of edge-ai. DEFAULT-OFF,
           # dependsOn edge-ai. Image is a separate build artifact (keep off until built).
           - { slug: edge-ai-analysis, path: specs/cluster/manifests/edge-ai-analysis, namespace: snapdragon-inference, installed: "false" }
+          # edge-ai-tts — Piper TTS + viseme timeline (VN voice, B3). DEFAULT-OFF, NO
+          # dependsOn (CPU-only, self-contained). Image is a separate build artifact
+          # (keep off until built).
+          - { slug: edge-ai-tts, path: specs/cluster/manifests/edge-ai-tts, namespace: snapdragon-inference, installed: "false" }
         # Keep ONLY installed elements — a slug flipped to "false" is dropped and
         # its Application pruned. This is the runtime add/remove lever.
       selector:

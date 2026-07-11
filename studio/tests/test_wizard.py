@@ -435,11 +435,12 @@ def test_network_x86_only_widgets_grey_and_clear_on_arm_cloud(wiz):
     c.sso = True; c.egress_vpn = "/tmp/egress.conf"; c.aide = True
     c.proxy_stack = "on"; c.tor_onion_service = True; c.edge_ai_service = True
     c.optional_services = ["akkoma"]; c.enable_games = True; c.character_studio = True
+    c.edge_ai_tts = True
     wiz.restart()
     net = advance_to(wiz, wizard_mod.NetworkPage)
     for w in (net.sso, net.egress_row, net.egress_locked, net.proxy_stack,
               net.snort, net.aide, net.edge_ai_box, net.tor_onion,
-              net.character_studio, net.services_box, net.games):
+              net.character_studio, net.edge_ai_tts, net.services_box, net.games):
         assert not w.isEnabled(), w
     assert not net.sso.isChecked()      # cloud force-check suppressed off-x86
     assert net.tailscale.isEnabled()    # all-platform knobs stay live
@@ -450,10 +451,12 @@ def test_network_x86_only_widgets_grey_and_clear_on_arm_cloud(wiz):
     assert c.sso == "" and c.egress_vpn == "" and c.aide is False
     assert c.proxy_stack == "auto" and c.tor_onion_service is False
     assert c.edge_ai_service is False and c.character_studio is False
+    assert c.edge_ai_tts is False
     assert c.optional_services == [] and c.enable_games is False
     args = c.to_cli_args()
     for flag in ("--with-sso", "--egress-vpn", "--with-aide", "--proxy-stack",
                  "--with-tor", "--with-edge-ai", "--with-character-studio",
+                 "--with-edge-ai-tts",
                  "--optional-services", "--enable-games"):
         assert flag not in args
 
@@ -471,38 +474,43 @@ def test_network_widgets_reenable_on_switch_back_to_x86(wiz):
     assert net.sso.isEnabled() and net.sso.isChecked()
     for w in (net.egress_row, net.egress_locked, net.proxy_stack, net.snort,
               net.aide, net.edge_ai_box, net.tor_onion, net.character_studio,
-              net.services_box, net.games):
+              net.edge_ai_tts, net.services_box, net.games):
         assert w.isEnabled(), w
 
 
 def test_standalone_rpi5_generic_reaches_services_and_games(wiz):
-    """G16: the services/games/character-studio boxes gate on platform CAPABILITY,
-    not mode — rpi5 emits --optional-services/--enable-games/--with-character-studio
-    on every role, and 'generic' (the only standalone rpi5 role) must reach them."""
+    """G16: the services/games/character-studio/edge-ai-tts boxes gate on platform
+    CAPABILITY, not mode — rpi5 emits --optional-services/--enable-games/
+    --with-character-studio/--with-edge-ai-tts on every role, and 'generic' (the
+    only standalone rpi5 role) must reach them."""
     pick_role(wiz, "generic")            # standalone mode (default), platform rpi5
     net = advance_to(wiz, wizard_mod.NetworkPage)
     assert net.services_box.isVisible() and net.services_box.isEnabled()
     assert net.games.isEnabled() and net.character_studio.isEnabled()
+    assert net.edge_ai_tts.isEnabled()
     assert not net.edge_ai_box.isVisible()   # node-only boxes stay mode-gated
     assert not net.tor_onion.isVisible()
     net.services.item(0).setCheckState(Qt.CheckState.Checked)
     net.games.setChecked(True)
     net.character_studio.setChecked(True)
+    net.edge_ai_tts.setChecked(True)
     advance_to(wiz, wizard_mod.HomePage)
     args = wiz.cfg.to_cli_args()
     assert ("--optional-services", OPTIONAL_SERVICES_CHOICES[0]) in zip(args, args[1:])
     assert "--enable-games" in args and "--with-character-studio" in args
+    assert "--with-edge-ai-tts" in args
 
 
 @pytest.mark.parametrize("role", ["frite", "orangepi5", "orangepizero2"])
 def test_services_box_greyed_on_non_rpi5_arm_clients(wiz, role):
-    """G12: the cluster services/games/character-studio controls stay visible but
-    grey on the ARM platforms whose builders don't parse the flags."""
+    """G12: the cluster services/games/character-studio/edge-ai-tts controls stay
+    visible but grey on the ARM platforms whose builders don't parse the flags."""
     pick_mode(wiz, "cloud")
     pick_role(wiz, role)
     net = advance_to(wiz, wizard_mod.NetworkPage)
     assert net.services_box.isVisible() and not net.services_box.isEnabled()
     assert not net.games.isEnabled() and not net.character_studio.isEnabled()
+    assert not net.edge_ai_tts.isEnabled()
 
 
 def test_branding_form_greyed_for_mesh_node(qapp):

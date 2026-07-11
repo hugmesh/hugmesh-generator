@@ -138,8 +138,11 @@ EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the res
 > **and `build-x86-host-stage4.sh`** with the same resolution order (built-in
 > default respecting env/brand.conf < `all`-sentinel expansion < the opt-in folds <
 > the EXCLUDE subtraction LAST). On x86 the subtraction runs after **every** opt-in
-> fold (games / edge-ai / tor / character-studio / edge-ai-analysis), so an excluded
-> slug is force-OFF there too regardless of how it was selected.
+> fold (games / edge-ai / tor / character-studio / edge-ai-analysis / edge-ai-tts),
+> so an excluded slug is force-OFF there too regardless of how it was selected.
+> `edge-ai-tts` (Piper TTS + viseme timeline, VN voice) is CPU-only and carries NO
+> `edge-ai` dependency — unlike `edge-ai-analysis` its opt-in fold is wired in
+> **both** builders, not just x86; see [EDGE-AI.md](EDGE-AI.md#4c-voice-synthesis--tts-api-for-the-mesh-edge-ai-tts).
 
 `gate_optional_services()` (in **both** `build-x86-host-stage4.sh` and
 `build-rpi5-stage4.sh`, authored per-script and anchored to the

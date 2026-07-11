@@ -1,0 +1,16 @@
+# ClusterIP — the in-cluster consumption endpoint for the TTS API. Reached by
+# the be-gateway (ai.<domain> /v1/synthesize/** route) for tailnet/external callers
+# (the matrix-ui VN voice client), and directly in-cluster by any future Phase-A
+# consumer at http://snapdragon-edge-ai-tts.snapdragon-inference.svc:8080.
+apiVersion: v1
+kind: Service
+metadata:
+  name: snapdragon-edge-ai-tts
+  namespace: snapdragon-inference
+  labels:
+    app: snapdragon-edge-ai-tts
+    app.kubernetes.io/part-of: snapdragon.systems
+spec:
+  selector: { app: snapdragon-edge-ai-tts }
+  ports:
+    - { name: http, port: 8080, targetPort: http }

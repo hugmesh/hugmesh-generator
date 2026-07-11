@@ -358,6 +358,37 @@ spec:
       federationModule: null
       casdoorSeed: null
 
+    # ── edge-ai-tts — Piper text-to-speech + viseme timeline (DEFAULT-OFF) ──────
+    # Stateless wrapper exposing POST /v1/synthesize (short-line TTS + an even-split
+    # viseme timeline) to the mesh, consumed by matrix-ui's VN voice client (B3).
+    # UNLIKE edge-ai-analysis, this slug has NO dependsOn: it is CPU-only and
+    # self-contained (the default voice is baked into the image; no upstream call at
+    # request time), so it schedules ANYWHERE in the mesh and is wired on BOTH x86
+    # AND rpi5 (edge-ai/edge-ai-analysis are x86/GPU-only). It lands in the same
+    # snapdragon-inference namespace as edge-ai for organizational locality only —
+    # pruned on its OWN deselection, never folded with edge-ai's. The container
+    # image is a SEPARATE build artifact (manifests/edge-ai-tts/image) — keep this
+    # slug DESELECTED until the image is built+pushed so no node tries to pull it.
+    - slug: edge-ai-tts
+      displayName: "Edge AI — voice synthesis (TTS)"
+      namespace: snapdragon-inference
+      default: off
+      apps:
+        - apps/55b-edge-ai-tts.yaml
+      sharedApps: []
+      manifestPath: manifests/edge-ai-tts
+      esoFile: null
+      esoKeys: []
+      # Shares the edge-ai be-gateway host (ai.${CLUSTER_DOMAIN}); the
+      # /v1/synthesize/** path route is MORE SPECIFIC than edge-ai's /v1
+      # host-catchall, declared before it (same pattern as edge-ai-analysis).
+      gatewayHost: ai.${CLUSTER_DOMAIN}
+      gatewayRouteIds: [edge-ai-tts]
+      routeAccessRows:
+        - { gateway: snapdragon-be-gateway, urlPattern: /v1/synthesize/** }
+      federationModule: null
+      casdoorSeed: null
+
     # ── coturn — TURN/STUN relay for Matrix WebRTC audio/video (DEFAULT-OFF) ───
     # coturn relays peer-to-peer Matrix (tuwunel) voice/video when a direct ICE
     # path fails. It lands in snapdragon-backend ALONGSIDE tuwunel so the

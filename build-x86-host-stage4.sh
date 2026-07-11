@@ -38,6 +38,14 @@ HOSTNAME=""
 HOSTNAME_SET=false      # true once -H/--hostname is given (role defaults defer to it)
 ROLE="be+gpu"          # default role (= the legacy 'host'); 'host' is accepted as an alias
 GPU=true               # derived from ROLE below; gates Mesa/Vulkan + DRM kernel + VIDEO_CARDS
+# EARLY default (bug fix): the real value is derived from ROLE much further down
+# (the "Validate role" section), but the opt-in guards for --with-tor /
+# --with-character-studio / --with-edge-ai-tts run BEFORE that derivation and test
+# ${ROLE_CLIENT} under `set -u` — leaving it undeclared here made any of those three
+# flags hard-crash with "ROLE_CLIENT: unbound variable" on every role. The
+# derivation below still runs and is still authoritative; this is just the bound
+# default so the early guards can read it.
+ROLE_CLIENT=false
 # ── CLIENT (person-device) image config — see docs/CLIENT-IMAGES.md (FD-04..09) ──
 # A client is a person's DESKTOP that joins the mesh + runs the platform UI, NOT a
 # k8s node. The device-class role arms (laptop|chromebook|desktop) set ROLE_CLIENT.
@@ -232,6 +240,10 @@ EDGE_AI_RUNTIME="ollama"   # --edge-ai-runtime : ollama | vllm
 EDGE_AI_MODELS=""          # --edge-ai-models  : comma list of models to PRELOAD (patches the ConfigMap)
 EDGE_AI_MODEL_DEFAULT=""   # --edge-ai-model-default : default model when an OpenAI request omits one
 WANT_EDGE_AI_ANALYSIS=""   # --with-edge-ai-analysis : also bake the analysis API (separate image; dependsOn edge-ai)
+# edge-ai-tts is CPU-only + self-contained (baked-in voice model, no upstream call),
+# so — UNLIKE edge-ai-analysis — it has NO dependsOn edge-ai and is NOT folded by
+# --with-edge-ai; it is its own independent tri-state (--with-edge-ai-tts / --no-edge-ai-tts).
+WANT_EDGE_AI_TTS=""        # tri-state: ""=off (DEFAULT-OFF), true=--with-edge-ai-tts, false=--no-edge-ai-tts
 # ── Root full-disk encryption (LUKS2) for the INSTALLED system ───────────────
 # The installer (install-x86.sh) LUKS2-encrypts the target root and PROMPTS for
 # a system root-unlock passphrase at install time (distinct from the user login
@@ -465,6 +477,10 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
       --with-edge-ai-analysis  Also bake the edge-ai-analysis task API (image NSFW/abuse
                             classify + perceptual-hash, log triage verdicts to the mesh).
                             Needs edge-ai + a SEPARATE container image (DEFAULT-OFF).
+      --with-edge-ai-tts     Bake the edge-ai-tts voice-synthesis API (Piper TTS +
+                            viseme timeline for the VN voice feature). CPU-only,
+                            self-contained — NO edge-ai dependency. A SEPARATE
+                            container image (DEFAULT-OFF). --no-edge-ai-tts to keep off.
       --with-character-studio  Bake the Character Studio (VN) frontend remote at
                             /character-studio (ROLE_USER). OPTIONAL, DEFAULT-OFF (admin
                             gate). Equivalent to adding 'character-studio' to
@@ -714,6 +730,10 @@ while [[ $# -gt 0 ]]; do
         --edge-ai-models) EDGE_AI_MODELS="$2"; shift 2 ;;
         --edge-ai-model-default) EDGE_AI_MODEL_DEFAULT="$2"; shift 2 ;;
         --with-edge-ai-analysis) WANT_EDGE_AI_ANALYSIS=true; shift ;;
+        # edge-ai-tts (VN voice synthesis) — CPU-only, self-contained (NO edge-ai
+        # dependency). Independent tri-state, unlike --with-edge-ai-analysis's fold.
+        --with-edge-ai-tts) WANT_EDGE_AI_TTS=true; shift ;;
+        --no-edge-ai-tts) WANT_EDGE_AI_TTS=false; shift ;;
         # Character Studio (VN) frontend remote — OPTIONAL service (DEFAULT-OFF, admin
         # gate). --with-character-studio folds 'character-studio' into OPTIONAL_SERVICES;
         # a CLIENT/standalone desktop is not a cluster member, so it is a no-op there.
@@ -938,6 +958,24 @@ case " ${OPTIONAL_SERVICES} " in
                warn "edge-ai-analysis requires edge-ai — dropping it (no model server selected)" ;;
         esac ;;
 esac
+
+# edge-ai-tts (VN voice synthesis) selection: --with-edge-ai-tts folds 'edge-ai-tts'
+# into OPTIONAL_SERVICES (idempotent). DEFAULT-OFF; never auto-selected. UNLIKE
+# edge-ai-analysis, it has NO edge-ai dependency (CPU-only, self-contained) — no
+# fold-in of 'edge-ai' and no dependency-drop guard. A CLIENT/standalone desktop is
+# not a cluster member, so it is a no-op there (the gate prunes the slug anyway when
+# the cluster tree is absent).
+WANT_EDGE_AI_TTS="${WANT_EDGE_AI_TTS:-}"
+if [ "${WANT_EDGE_AI_TTS}" = "true" ] && ${ROLE_CLIENT}; then
+    warn "--with-edge-ai-tts on a CLIENT/standalone role has no effect (no cluster tree); edge-ai-tts is a cluster inference service."
+    WANT_EDGE_AI_TTS=false
+fi
+if [ "${WANT_EDGE_AI_TTS}" = "true" ]; then
+    case " ${OPTIONAL_SERVICES} " in
+        *" edge-ai-tts "*) ;;
+        *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} edge-ai-tts" ;;
+    esac
+fi
 
 # EXCLUDE_SERVICES — apply the SUBTRACTIVE build-time exclusion LAST, so a slug
 # listed here is force-OFF regardless of how it became selected (built-in default,
@@ -1741,7 +1779,7 @@ gate_optional_services() {
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     local slug
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio egress-vpn workloadConsole edge-ai edge-ai-analysis tor; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio egress-vpn workloadConsole edge-ai edge-ai-analysis edge-ai-tts tor; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -1814,6 +1852,17 @@ gate_optional_services() {
                 _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-analysis
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
                     '/v1/analyze/**'
+                ;;
+            edge-ai-tts)
+                # Piper TTS + viseme timeline (VN voice, B3) — DEFAULT-OFF, NO
+                # dependsOn (CPU-only, self-contained). Owns app 55b +
+                # manifests/edge-ai-tts + the /v1/synthesize/** route + route-access
+                # row. Image is a separate build artifact.
+                rm -f "${apps}/55b-edge-ai-tts.yaml"
+                rm -rf "${tree}/manifests/edge-ai-tts"
+                _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-tts
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/v1/synthesize/**'
                 ;;
             owncast)
                 # Owncast live-streaming — GPU-gated x86 service (DEFAULT-OFF). Owns its
@@ -2015,7 +2064,7 @@ _opt_render_installed_services() {
     local cm="${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy/installed-services-configmap.yaml"
     [ -f "${cm}" ] || return 0
     local slug val
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio workloadConsole edge-ai edge-ai-analysis; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         # '#'-delimited so the (true|false) alternation does not collide with the delimiter.
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"

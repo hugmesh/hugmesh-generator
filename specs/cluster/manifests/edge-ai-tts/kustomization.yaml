@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Co-locates in snapdragon-inference (the edge-ai-tier namespace) alongside edge-ai /
+# edge-ai-analysis, though this slug has NO dependsOn — it is CPU-only and
+# self-contained, so it schedules with or without edge-ai present. No namespace
+# resource of its own: the owning Application's syncOptions CreateNamespace=true
+# creates snapdragon-inference if absent (idempotent no-op if edge-ai already did).
+namespace: snapdragon-inference
+resources:
+  - configmap.yaml
+  - service.yaml
+  - network-policy.yaml
+  - deployment.yaml
+
+images:
+  - { name: snapdragon-systems/edge-ai-tts, newName: registry.snapdragon.systems/snapdragon/edge-ai-tts, newTag: main }

@@ -1092,6 +1092,30 @@ def test_g34_rpi5_force_off_character_studio():
     assert "--no-character-studio" in args
 
 
+# ---- edge-ai-tts: independent tri-state, NO edge-ai dependency ------------------
+
+def test_edge_ai_tts_x86_no_edge_ai_coupling():
+    """edge_ai_tts is CPU-only + self-contained — UNLIKE edge_ai_analysis it must
+    NOT fold 'edge-ai' in, even though it lives in the same Edge-AI GUI grouping."""
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                       edge_ai_tts=True).to_cli_args()
+    assert "--with-edge-ai-tts" in args
+    assert "--with-edge-ai" not in args
+    assert "--with-edge-ai-analysis" not in args
+
+
+def test_edge_ai_tts_rpi5_emits():
+    args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
+                       edge_ai_tts=True).to_cli_args()
+    assert "--with-edge-ai-tts" in args
+
+
+def test_edge_ai_tts_force_off():
+    args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
+                       edge_ai_tts="off").to_cli_args()
+    assert "--no-edge-ai-tts" in args
+
+
 # ---- G35/G36/G37: u-boot / jetson kernel-flavor / ARM kernel-board overrides -----
 
 @pytest.mark.parametrize("platform,role", [("frite", "frite"), ("orangepi5", "orangepi5"),
@@ -1244,6 +1268,7 @@ _FIELD_PROBE = {
     "edge_ai_models": {"edge_ai_service": True, "edge_ai_models": "llama3"},
     "edge_ai_model_default": {"edge_ai_service": True, "edge_ai_model_default": "llama3"},
     "edge_ai_analysis": {"edge_ai_analysis": True},
+    "edge_ai_tts": {"edge_ai_tts": True},
     "tor_onion_service": {"tor_onion_service": True},
     "character_studio": {"character_studio": True},
     "optional_services": {"optional_services": ["akkoma"]},

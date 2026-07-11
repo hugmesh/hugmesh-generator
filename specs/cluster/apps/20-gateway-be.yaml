@@ -178,18 +178,25 @@ spec:
           - id: snapdragon-api
             uri: https://snapdragon-api.snapdragon-backend.svc.cluster.local:8080
             path: /api/**
-          # --- edge-AI on ai.<domain> (OpenAI model API + analysis API) -----------
-          # /v1/analyze/** -> the analysis API (edge-ai-analysis slug, MORE SPECIFIC),
-          # declared FIRST so it wins over the edge-ai host catchall below; everything
+          # --- edge-AI on ai.<domain> (OpenAI model API + analysis API + TTS API) --
+          # /v1/analyze/** -> the analysis API (edge-ai-analysis slug) and
+          # /v1/synthesize/** -> the TTS API (edge-ai-tts slug), BOTH MORE SPECIFIC,
+          # declared FIRST so they win over the edge-ai host catchall below; everything
           # else on ai.<domain> -> the raw Ollama model server (edge-ai slug). route-access
-          # gates /v1/** + /v1/analyze/** to the ROLE_USER floor (distinct from /api/**).
+          # gates /v1/** + /v1/analyze/** + /v1/synthesize/** to the ROLE_USER floor
+          # (distinct from /api/**).
           # ⚠ gate_optional_services prunes each by id: edge-ai-analysis with its slug,
-          # edge-ai (the catchall) with the edge-ai slug; the catchall stops the last
-          # prune cleanly at `destination:` touching no other route's comments.
+          # edge-ai-tts with its slug, edge-ai (the catchall) with the edge-ai slug;
+          # the catchall stops the last prune cleanly at `destination:` touching no
+          # other route's comments.
           - id: edge-ai-analysis
             host: ai.snapdragon.systems
             uri: http://snapdragon-edge-ai-analysis.snapdragon-inference.svc.cluster.local:8080
             path: /v1/analyze/**
+          - id: edge-ai-tts
+            host: ai.snapdragon.systems
+            uri: http://snapdragon-edge-ai-tts.snapdragon-inference.svc.cluster.local:8080
+            path: /v1/synthesize/**
           - id: edge-ai
             host: ai.snapdragon.systems
             uri: http://snapdragon-edge-ai.snapdragon-inference.svc.cluster.local:11434

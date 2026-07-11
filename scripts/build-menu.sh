@@ -89,6 +89,10 @@ OPT_EDGE_AI_RUNTIME="ollama"  # edge-ai inference runtime (ollama | vllm)
 OPT_EDGE_AI_MODELS=""         # comma list of models to PRELOAD (empty = builder default)
 OPT_EDGE_AI_MODEL_DEFAULT=""  # default model when an OpenAI request omits one (empty = builder default)
 OPT_X86_EDGE_AI_ANALYSIS="no" # yes => also bake the edge-ai-analysis task API (image/log verdicts; separate image)
+# edge-ai-tts is CPU-only + self-contained (NO edge-ai dependency, unlike
+# edge-ai-analysis) — it is its own independent toggle, wired alongside Tor /
+# Character Studio below (not gated to the GPU-target case).
+OPT_EDGE_AI_TTS="no"          # yes => --with-edge-ai-tts: Piper TTS + viseme timeline (VN voice, separate image)
 # ── Tor v3 onion (hidden) service — node-scoped optional, DEFAULT-OFF ──────────
 OPT_TOR_ONION="no"            # yes => --with-tor: expose the in-cluster fe-gateway as a v3 .onion
 # ── Character Studio (VN) frontend remote — OPTIONAL, DEFAULT-OFF (admin gate) ──
@@ -189,6 +193,7 @@ save_conf() {
         printf 'OPT_EDGE_AI_MODELS=%q\n'  "${OPT_EDGE_AI_MODELS}"
         printf 'OPT_EDGE_AI_MODEL_DEFAULT=%q\n' "${OPT_EDGE_AI_MODEL_DEFAULT}"
         printf 'OPT_X86_EDGE_AI_ANALYSIS=%q\n' "${OPT_X86_EDGE_AI_ANALYSIS}"
+        printf 'OPT_EDGE_AI_TTS=%q\n'   "${OPT_EDGE_AI_TTS}"
         printf 'OPT_TOR_ONION=%q\n'     "${OPT_TOR_ONION}"
         printf 'OPT_CHARACTER_STUDIO=%q\n' "${OPT_CHARACTER_STUDIO}"
         printf 'OPT_SERVICES=%q\n'      "${OPT_SERVICES}"
@@ -659,6 +664,10 @@ build_make_cmd() {
             fi
             [ "${OPT_TOR_ONION}" = yes ] && bf+=" --with-tor"
             [ "${OPT_CHARACTER_STUDIO}" = yes ] && bf+=" --with-character-studio"
+            # edge-ai-tts rides HERE (not the GPU-target case below with
+            # edge-ai-analysis) — it is CPU-only + self-contained, NO edge-ai
+            # dependency, so it applies to any cluster role, GPU or not.
+            [ "${OPT_EDGE_AI_TTS}" = yes ] && bf+=" --with-edge-ai-tts"
         fi
         # Edge-AI inference service on a GPU cluster role. The x86 edge_ai role
         # ALWAYS bakes it (auto-selected by the builder); the other GPU-capable
@@ -942,7 +951,10 @@ monitor_build() {
 # Edge-AI inference service options (GPU cluster roles). The edge_ai ROLE always
 # bakes the service; this screen toggles adding it to be+gpu/omnibus and tunes the
 # model library (runtime + preload list + default model) — the same knobs the
-# Studio wizard + the --edge-ai-* CLI flags expose (all-menus parity).
+# Studio wizard + the --edge-ai-* CLI flags expose (all-menus parity). The Voice
+# synthesis (TTS) row rides here for UX grouping only — unlike Analysis API it has
+# NO edge-ai dependency (CPU-only, self-contained) and its flag is emitted
+# unconditionally below (not gated to the GPU-target case).
 edge_ai_options_screen() {
     while true; do
         local on; on="$([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)"
@@ -953,10 +965,12 @@ edge_ai_options_screen() {
             models  "Preload models ........ ${OPT_EDGE_AI_MODELS:-<builder default>}" \
             default "Default model ......... ${OPT_EDGE_AI_MODEL_DEFAULT:-<builder default>}" \
             analysis "Analysis API .......... $([ "${OPT_X86_EDGE_AI_ANALYSIS}" = yes ] && echo on || echo off)   (image/log verdicts; separate image)" \
+            tts     "Voice synthesis (TTS) . $([ "${OPT_EDGE_AI_TTS}" = yes ] && echo on || echo off)   (Piper TTS + visemes; CPU-only, no edge-ai needed; separate image)" \
             back    "‹ back")" || return 0
         case "${c}" in
             toggle)  OPT_X86_EDGE_AI="$([ "${OPT_X86_EDGE_AI}" = yes ] && echo no || echo yes)" ;;
             analysis) OPT_X86_EDGE_AI_ANALYSIS="$([ "${OPT_X86_EDGE_AI_ANALYSIS}" = yes ] && echo no || echo yes)" ;;
+            tts)     OPT_EDGE_AI_TTS="$([ "${OPT_EDGE_AI_TTS}" = yes ] && echo no || echo yes)" ;;
             runtime) OPT_EDGE_AI_RUNTIME="$([ "${OPT_EDGE_AI_RUNTIME}" = ollama ] && echo vllm || echo ollama)" ;;
             models)  OPT_EDGE_AI_MODELS="$(ui_input "Preload models" "Comma list of model tags to preload (e.g. llama3.2:3b,nomic-embed-text; empty = builder default)" "${OPT_EDGE_AI_MODELS}")" ;;
             default) OPT_EDGE_AI_MODEL_DEFAULT="$(ui_input "Default model" "Model returned when a request omits one (empty = builder default)" "${OPT_EDGE_AI_MODEL_DEFAULT}")" ;;

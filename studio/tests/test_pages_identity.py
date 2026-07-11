@@ -321,22 +321,22 @@ def test_tri_state_force_off_reaches_the_argv(wiz):
     brand-profile (-C) default can be overridden from the GUI."""
     mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
-    for box in (net.aide, net.edge_ai, net.tor_onion, net.character_studio):
+    for box in (net.aide, net.edge_ai, net.tor_onion, net.character_studio, net.edge_ai_tts):
         box.setCheckState(Qt.CheckState.Unchecked)
     advance_to(wiz, wizard_mod.KeyZipPage)
     c = wiz.cfg
-    assert (c.aide, c.edge_ai_service, c.tor_onion_service, c.character_studio) \
-        == ("off", "off", "off", "off")
+    assert (c.aide, c.edge_ai_service, c.tor_onion_service, c.character_studio, c.edge_ai_tts) \
+        == ("off", "off", "off", "off", "off")
     args = c.to_cli_args()
-    for flag in ("--no-aide", "--no-edge-ai", "--no-tor", "--no-character-studio"):
+    for flag in ("--no-aide", "--no-edge-ai", "--no-tor", "--no-character-studio", "--no-edge-ai-tts"):
         assert flag in args, flag
     # …and fully checked forces them ON
     back_to(wiz, wizard_mod.NetworkPage)
-    for box in (net.aide, net.edge_ai, net.tor_onion, net.character_studio):
+    for box in (net.aide, net.edge_ai, net.tor_onion, net.character_studio, net.edge_ai_tts):
         box.setCheckState(Qt.CheckState.Checked)
     advance_to(wiz, wizard_mod.KeyZipPage)
     args = c.to_cli_args()
-    for flag in ("--with-aide", "--with-tor", "--with-character-studio"):
+    for flag in ("--with-aide", "--with-tor", "--with-character-studio", "--with-edge-ai-tts"):
         assert flag in args, flag
     # omnibus ≠ edge_ai role, so the explicit opt-in emits the flag
     assert "--with-edge-ai" in args
@@ -348,15 +348,17 @@ def test_tri_state_part_checked_leaves_the_builder_default(wiz):
     combo's auto rule, extended to the G34 checkboxes)."""
     mesh_worklist(wiz)
     net = advance_to(wiz, wizard_mod.NetworkPage)
-    for box in (net.aide, net.tor_onion, net.character_studio):
+    for box in (net.aide, net.tor_onion, net.character_studio, net.edge_ai_tts):
         assert box.checkState() == Qt.CheckState.PartiallyChecked, box.text()
     advance_to(wiz, wizard_mod.KeyZipPage)
     c = wiz.cfg
-    assert c.aide is False and c.tor_onion_service is False and c.character_studio is False
+    assert c.aide is False and c.tor_onion_service is False and c.character_studio is False \
+        and c.edge_ai_tts is False
     args = c.to_cli_args()
     for flag in ("--with-aide", "--no-aide", "--with-tor", "--no-tor",
                  "--with-character-studio", "--no-character-studio",
-                 "--with-edge-ai", "--no-edge-ai"):
+                 "--with-edge-ai", "--no-edge-ai",
+                 "--with-edge-ai-tts", "--no-edge-ai-tts"):
         assert flag not in args, flag
     back_to(wiz, wizard_mod.NetworkPage)
     assert net.aide.checkState() == Qt.CheckState.PartiallyChecked

@@ -279,6 +279,11 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- than /v1/** below; same ROLE_USER floor. ⚠ OPTIONAL slug `edge-ai-analysis`:
   -- gate_optional_services drops this row when edge-ai-analysis is deselected.
   ('snapdragon-be-gateway',  '/v1/analyze/**',        'ROLE_USER',      true),  -- edge-ai-analysis verdict API
+  -- edge-ai-tts voice synthesis API (/v1/synthesize/** -> the Piper TTS wrapper;
+  -- VN voice feature, B3). MORE SPECIFIC than /v1/** below; same ROLE_USER floor.
+  -- ⚠ OPTIONAL slug `edge-ai-tts`: gate_optional_services drops this row when
+  -- edge-ai-tts is deselected.
+  ('snapdragon-be-gateway',  '/v1/synthesize/**',     'ROLE_USER',      true),  -- edge-ai-tts voice synthesis API
   ('snapdragon-be-gateway',  '/v1/**',                'ROLE_USER',      true),  -- edge-ai OpenAI-compatible inference API
 
   -- fe-gateway (snapdragon.systems -> Angular host + MFEs + same-origin /bff)

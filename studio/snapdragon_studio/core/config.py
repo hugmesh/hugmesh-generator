@@ -303,6 +303,9 @@ PLATFORM_FIELD_SUPPORT: dict[str, tuple[str, ...]] = {
     # edge-AI (x86 only).
     "edge_ai_service": _X86, "edge_ai_runtime": _X86, "edge_ai_models": _X86,
     "edge_ai_model_default": _X86, "edge_ai_analysis": _X86,
+    # edge_ai_tts is CPU-only + self-contained (NO edge-ai dependency) — wired on
+    # BOTH x86 AND rpi5 (unlike edge_ai_analysis, which is x86/GPU-only).
+    "edge_ai_tts": _X86_RPI5,
     # tor / character-studio / services.
     "tor_onion_service": _X86, "character_studio": _X86_RPI5,
     "optional_services": _X86_RPI5, "exclude_services": _X86_RPI5, "enable_games": _X86_RPI5,
@@ -577,6 +580,11 @@ class ImageConfig:
     edge_ai_models: str = ""           # comma list of models to PRELOAD (empty = builder default)
     edge_ai_model_default: str = ""    # default model when an OpenAI request omits one
     edge_ai_analysis: bool = False     # also bake the edge-ai-analysis task API (image/log verdicts; separate image)
+    # edge-ai-tts is CPU-only + self-contained (baked-in voice model, no upstream
+    # call) — UNLIKE edge_ai_analysis it has NO edge-ai dependency, so it is its own
+    # independent tri-state (mirrors character_studio's shape, not edge_ai_analysis's
+    # plain-bool fold-with-dependency shape) and is wired on BOTH x86 AND rpi5.
+    edge_ai_tts: bool | str = False    # tri-state: --with-edge-ai-tts / --no-edge-ai-tts (Piper TTS + visemes; separate image)
     # ── Tor v3 onion (hidden) service — node-scoped optional, default off ──
     tor_onion_service: bool | str = False  # tri-state: --with-tor / --no-tor (expose fe-gateway as a v3 .onion)
     # ── Character Studio (VN) frontend remote — OPTIONAL, default off (admin gate) ──
@@ -967,6 +975,17 @@ class ImageConfig:
             return ["--no-character-studio"]
         return []
 
+    def _edge_ai_tts_args(self) -> list[str]:
+        """--with-edge-ai-tts / --no-edge-ai-tts tri-state (x86 + rpi5). CPU-only,
+        self-contained — NO edge-ai dependency (unlike edge_ai_analysis's plain-bool
+        fold), so it is its own independent flag pair, mirroring character_studio."""
+        tts = self._tri(self.edge_ai_tts)
+        if tts == "on":
+            return ["--with-edge-ai-tts"]
+        if tts == "off":
+            return ["--no-edge-ai-tts"]
+        return []
+
     def _arm_kernel_args(self) -> list[str]:
         """-c/--cpu, -d/--defconfig kernel/toolchain overrides (every ARM builder)."""
         a: list[str] = []
@@ -1120,6 +1139,7 @@ class ImageConfig:
         if self.enable_games:
             a += ["--enable-games"]
         a += self._character_studio_args()
+        a += self._edge_ai_tts_args()
         a += self._rpi5_artifact_args()
         return a
 
@@ -1443,6 +1463,10 @@ class ImageConfig:
         # the analysis API (folds edge-ai too, its dependency)
         if self.edge_ai_analysis:
             a += ["--with-edge-ai-analysis"]
+
+        # edge-ai-tts (VN voice synthesis) — CPU-only, self-contained, NO edge-ai
+        # dependency (unlike the analysis API above). Independent tri-state.
+        a += self._edge_ai_tts_args()
 
         # Tor v3 onion (hidden) service (node-scoped; any cloud/mesh cluster role).
         # No-op on a CLIENT/standalone role (the builder guards on !ROLE_CLIENT).
