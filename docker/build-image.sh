@@ -808,6 +808,43 @@ resolve_spec_target() {
     esac
     _prev="$_tok"
   done
+
+  # ── fail-closed spec validation (the legacy guards resolve_build_target has,
+  #    which the spec channel was missing) ──────────────────────────────────────
+  # The Studio validates identity (atoms/domains/usernames) but NOT role×platform
+  # or the frite/orangepi5/orangepizero2 single-artifact flavor invariant. So a
+  # flat/minimal ImageConfig can materialize an off-platform role (the x86 base
+  # default `standalone-thick` on a jetson, since ImageConfig.role defaults to an
+  # x86 client role) or the two-artifact `--flavor both` (the Studio's unset-flavor
+  # default). Relaying either is strictly worse than the legacy channel: jetson
+  # with a bad role wastes the whole multi-hour build then the builder exits
+  # non-zero, and flavor=both builds BOTH live+installer ISOs and then the artifact
+  # collector die-ERRORs (>1 imageRef). resolve_build_target rejects both cases up
+  # front (jetson role allowlist; `both` rejected, unset flavor defaults to
+  # installer); mirror that here as a clean FAILED ingest before any builder runs.
+  case "$PLATFORM" in
+    jetson)
+      # build-jetson-stage4.sh accepts exactly these (the Studio already maps its
+      # jetson-desktop role id down to the builder's `desktop`).
+      case "$BUILD_ROLE" in
+        edge_ai|gpu-host|full|desktop) ;;
+        *) die FAILED "the image-spec resolved to platform=jetson with role='${BUILD_ROLE:-<none>}', which build-jetson-stage4.sh rejects (it accepts only: edge_ai | gpu-host | full | desktop). The Studio does not validate role×platform, so a jetson ImageConfig that leaves role at the base default materializes the x86 client role 'standalone-thick' — set a jetson role explicitly." ;;
+      esac
+      ;;
+    frite|orangepi5|orangepizero2)
+      # --flavor both emits TWO artifacts (live + installer); the ingest contract
+      # carries a single imageRef, so the collector would die at artifact
+      # collection AFTER the full build. Reject it here like resolve_build_target
+      # does (which also defaults an unset flavor to installer — the Studio instead
+      # defaults it to the unbuildable-on-this-channel `both`).
+      case "$_sf" in
+        live|installer) ;;
+        both) die FAILED "the image-spec resolved to platform=${PLATFORM} with --flavor both, which produces two artifacts (a live ISO and an installer ISO). The worker's ingest contract supports exactly one imageRef per build, so request --flavor live or --flavor installer instead (the Studio's unset-flavor default of 'both' is not buildable on this channel)." ;;
+        *)    die FAILED "the image-spec resolved to platform=${PLATFORM} with --flavor='${_sf:-<none>}', which the arm64 builder does not accept (it accepts only: live | installer)." ;;
+      esac
+      ;;
+  esac
+
   case "$PLATFORM" in
     frite|orangepi5) build_desc="${_sb:-?}.${_sf:-?}" ;;
     orangepizero2)   build_desc="${_sf:-?}" ;;
@@ -1035,8 +1072,8 @@ fi
 
 # ── 6. locate the produced artifact + copy it into ARTIFACT_DIR ─────────────
 case "$PLATFORM" in
-  x86|rpi5|jetson)             artifact_glob='*.img' ;;
-  frite|orangepi5|orangepizero2) artifact_glob='*.iso' ;;
+  x86|rpi5|jetson)             artifact_glob='*.img'; artifact_glob_xz='*.img.xz' ;;
+  frite|orangepi5|orangepizero2) artifact_glob='*.iso'; artifact_glob_xz='*.iso.xz' ;;
 esac
 # Fail loud (never nondeterministically pick-and-silently-discard) if the
 # build tree holds anything other than EXACTLY one matching artifact. The
@@ -1046,12 +1083,19 @@ esac
 # reused scratch dir, a generator-script change, etc.) — see BUG 3 in the
 # header's frite convention note.
 matches_file="$(mktemp)"
-find "${SCRATCH_DIR}/work" -maxdepth 1 -type f -name "$artifact_glob" 2>/dev/null >"$matches_file" || true
+# Match both the raw artifact and its `xz -9` compressed form (image.img.xz /
+# image.iso.xz): when the spec carries compress=true, the Studio emits --compress
+# and the builder renames the product to <name>.img.xz (removing the raw .img), so
+# a *.img-only glob would find 0 matches and die ERROR on a fully-successful build,
+# discarding the deliverable. `-name '*.img'` never matches a `*.img.xz` basename,
+# and the .stage4.tar.xz / .fs.tar.xz siblings match neither pattern, so exactly
+# one file still matches either way.
+find "${SCRATCH_DIR}/work" -maxdepth 1 -type f \( -name "$artifact_glob" -o -name "$artifact_glob_xz" \) 2>/dev/null >"$matches_file" || true
 match_count="$(wc -l <"$matches_file" | tr -d ' ')"
 case "$match_count" in
   0)
     rm -f "$matches_file"
-    die ERROR "the build reported success but no ${artifact_glob} artifact was found under ${SCRATCH_DIR}/work"
+    die ERROR "the build reported success but no ${artifact_glob} (or ${artifact_glob_xz}) artifact was found under ${SCRATCH_DIR}/work"
     ;;
   1)
     produced_file="$(cat "$matches_file")"
@@ -1060,14 +1104,22 @@ case "$match_count" in
   *)
     found_list="$(tr '\n' ' ' <"$matches_file")"
     rm -f "$matches_file"
-    die ERROR "the build reported success but produced ${match_count} ${artifact_glob} artifacts under ${SCRATCH_DIR}/work (ambiguous — this worker's ingest contract supports exactly one imageRef per build): ${found_list}"
+    die ERROR "the build reported success but produced ${match_count} ${artifact_glob}/${artifact_glob_xz} artifacts under ${SCRATCH_DIR}/work (ambiguous — this worker's ingest contract supports exactly one imageRef per build): ${found_list}"
     ;;
 esac
 if [ ! -f "$produced_file" ]; then
   die ERROR "the build reported success but the located artifact '${produced_file}' is not a regular file"
 fi
-image_ext="${produced_file##*.}"
-image_basename="image.${image_ext}"
+# Preserve the FULL suffix, including the compound `.img.xz` / `.iso.xz` of a
+# compressed build — a single-extension `${produced_file##*.}` split would yield
+# just `xz` and mislabel the deliverable `image.xz`, losing the .img/.iso type.
+case "$produced_file" in
+  *.img.xz) image_basename="image.img.xz" ;;
+  *.iso.xz) image_basename="image.iso.xz" ;;
+  *.img)    image_basename="image.img" ;;
+  *.iso)    image_basename="image.iso" ;;
+  *)        image_basename="image.${produced_file##*.}" ;;
+esac
 cp "$produced_file" "${ARTIFACT_DIR}/${image_basename}" || die ERROR "failed to copy the produced artifact into ${ARTIFACT_DIR}"
 IMAGE_REF="build-${BUILD_ID}/${image_basename}"
 log "artifact: ${produced_file} -> ${ARTIFACT_DIR}/${image_basename} (imageRef=${IMAGE_REF})"
@@ -1084,7 +1136,14 @@ seed_dial_key() {
     if [ -f "${DIAL_SECRET_DIR}/dial_private_key" ]; then
       dial_priv_file="${DIAL_SECRET_DIR}/dial_private_key"
     else
-      dial_priv_file="$(find "$DIAL_SECRET_DIR" -maxdepth 1 -type f ! -name '*.pub' 2>/dev/null | head -n1)"
+      # A k8s Secret volume projects each key as a SYMLINK
+      # (<key> -> ..data/<key> -> ..<ts>_data/<key>), so a plain `find -type f`
+      # tests the link node itself (type l) and matches NOTHING — silently
+      # yielding no key and shipping an image with no dial pubkey while still
+      # reporting COMPLETED. Follow the links (-L, matching the primary
+      # `[ -f dial_private_key ]` branch, which also follows symlinks) and skip
+      # the k8s bookkeeping entries (..data and ..<ts>_data).
+      dial_priv_file="$(find -L "$DIAL_SECRET_DIR" -maxdepth 1 -type f ! -name '*.pub' ! -name '..*' 2>/dev/null | head -n1)"
     fi
   fi
   if [ -z "$dial_priv_file" ]; then
