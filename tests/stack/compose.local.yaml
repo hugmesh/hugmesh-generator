@@ -403,6 +403,17 @@ services:
       # request carrying a native-login bff_ cookie fails CLOSED (503), and mod
       # ban/domain-lock writes can never reach admin-bff.
       ADMIN_BFF_BASE_URL: "http://snapdragon-admin-bff-api:8080"
+      # Turn ON mod-bff's native-login bearer forwarding (mod-bff-api#72's
+      # BearerForwardingFilter custody exchange — SHIPS DARK, enabled=false default).
+      # Without it a native-login MOD/ADMIN passes mod-bff's own role gate but the
+      # downstream hop to federation-api / admin-bff's public surface / owncast-bff
+      # carries NO Authorization header and 401s (mod queue/findings/modules, ban,
+      # domain-lock). The exchange reuses the adminBffInternalWebClient above
+      # (ADMIN_BFF_BASE_URL) against admin-bff's /bff/internal/session/exchange;
+      # admin-bff's serving side is already keyed below (APP_BFF_OIDC_* +
+      # APP_BFF_CUSTODY_KEY). Fail-open by design: an exchange failure degrades to
+      # the pre-fix no-header behaviour (every downstream has its own fail-closed gate).
+      APP_BFF_EXCHANGE_ENABLED: ${APP_BFF_EXCHANGE_ENABLED:-true}
       # POST /bff/mod/findings/test-seed — e2e-fixture-only route. Ships dark upstream
       # (app.test-seed.enabled=false / APP_TEST_SEED_ENABLED unset); turned ON for the
       # test env so e2e seeding scripts can prime findings data (mod-bff-api#63).
@@ -489,7 +500,13 @@ services:
       APP_HS_TOKEN_MASTODON_URL: ${APP_HS_TOKEN_MASTODON_URL:-http://mastodon-web:3000}
       # plain-HTTP local stack: the bff_ session cookie must not be Secure-only or the browser drops it
       APP_SESSION_COOKIE_SECURE: "false"
-      SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
+      # Homeserver service-account password the hsproxy broker mints with. The property is
+      # app.hs-token.svc-password <- env APP_HS_TOKEN_SVC_PASSWORD (EMPTY default,
+      # fail-closed 503) — user-bff never reads bare SVC_PASSWORD (that's admin-bff's
+      # ServiceTokenBroker name), so the old line below bound NOTHING and every hsproxy
+      # mint (any login mode) refused with "svc-password is unset" on the local stack.
+      # Same env-name-misnomer class as the FEDERATION_BASE_URL fix in #314.
+      APP_HS_TOKEN_SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
       # POST /bff/user/notifications/test-seed — e2e-fixture-only route. Ships dark upstream
       # (app.test-seed.enabled=false / APP_TEST_SEED_ENABLED unset); turned ON for the
       # test env so e2e seeding scripts can prime notifications data (user-bff-api#97).

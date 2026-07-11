@@ -286,6 +286,49 @@ spec:
                   name: bff-internal-token
                   key: token
                   optional: true
+            # ── Native-login session→JWT exchange, SERVING side (auth-core) ────
+            # admin-bff is the exchange SERVER for the whole native-login fleet:
+            # POST /bff/internal/session/exchange swaps a caller's bff_ session for
+            # the custody-held Casdoor JWT. Its clients are user-bff's outbound
+            # federation/media forwarding (user-bff-api#111, ALWAYS ON), mod-bff's
+            # BearerForwardingFilter (mod-bff-api#72, lit in its manifest), the
+            # gateway's dark exchange leg, and admin-bff's OWN appeals-decide
+            # loopback (admin-bff-api#205, APP_BFF_EXCHANGE_ENABLED below). Serving
+            # a real Bearer needs BOTH app.bff.oidc.enabled (the refresh leg's
+            # OidcExchangeConfig beans; issuer + client-id come from auth-core's
+            # in-cluster defaults, exactly as user-bff-api relies on them) AND the
+            # custody key. Without these — the pre-fix state of this manifest —
+            # every exchange 503s "custody disabled" and each caller silently
+            # degrades to forwarding no Authorization header, so every
+            # federation-backed surface 401s for native-login users in-cluster.
+            - { name: APP_BFF_OIDC_ENABLED, value: "true" }
+            # Casdoor OIDC client secret for the exchange's refresh leg — the SAME
+            # user-bff-oidc ESO Secret user-bff-api mounts (one OIDC client, two
+            # consumers). optional: the pod boots without it; exchange refuses.
+            - name: APP_BFF_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-oidc
+                  key: client-secret
+                  optional: true
+            # AES-256-GCM custody key — MUST be byte-identical to user-bff-api's
+            # (user-bff ENCRYPTS the exchanged tokens, admin-bff DECRYPTS them), so
+            # mount the SAME user-bff-custody-key ESO Secret rather than minting a
+            # second key. optional: absent Secret → BffCustodyCipher unavailable →
+            # exchange 503s (fail-closed), pod still boots.
+            - name: APP_BFF_CUSTODY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-custody-key
+                  key: key
+                  optional: true
+            # Lights admin-bff's OWN decide custody-exchange (admin-bff-api#205): a
+            # native-login admin's POST /bff/admin/moderation/{id}/decide exchanges
+            # the caller's bff_ session (loopback to the endpoint above — the
+            # self-base-url default auto-computes this Service's DNS + tracks TLS)
+            # and forwards the real JWT to federation-api. Fail-open like mod-bff's
+            # leg: exchange failure degrades to the pre-fix no-header behaviour.
+            - { name: APP_BFF_EXCHANGE_ENABLED, value: "true" }
           # Probes are HTTPS now that server.ssl is enabled. Because client-auth=need
           # rejects the TLS handshake of any caller WITHOUT a client cert, a plain
           # kubelet httpGet (which presents none) would fail — so the probe is an

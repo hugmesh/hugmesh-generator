@@ -143,6 +143,20 @@ spec:
                   name: bff-internal-token
                   key: token
                   optional: true
+            # Native-login bearer forwarding (mod-bff-api#72's BearerForwardingFilter
+            # custody exchange) — SHIPS DARK (enabled=false default). Without it a
+            # native-login MOD/ADMIN passes this BFF's own role gate but the downstream
+            # hop to federation-api / admin-bff's public surface / owncast-bff carries
+            # NO Authorization header and 401s (mod queue/findings/modules, ban,
+            # domain-lock). Swaps the caller's bff_ session for the custody-held
+            # Casdoor JWT via admin-bff's POST /bff/internal/session/exchange, over the
+            # SAME adminBffInternalWebClient (base URL default + INTERNAL_TOKEN above)
+            # already wired for session introspection. The SERVING side needs
+            # admin-bff's APP_BFF_OIDC_* + APP_BFF_CUSTODY_KEY (see
+            # admin-bff-api/deployment.yaml) or every attempt 503s and the filter
+            # degrades to the pre-fix no-header behaviour (fail-open by design — every
+            # downstream has its own fail-closed gate).
+            - { name: APP_BFF_EXCHANGE_ENABLED, value: "true" }
           # HTTPS exec probe: client-auth=need rejects a cert-less kubelet httpGet,
           # so curl PRESENTS this pod's client cert and validates the server cert
           # against the cluster CA (--resolve maps the SAN to loopback). See
