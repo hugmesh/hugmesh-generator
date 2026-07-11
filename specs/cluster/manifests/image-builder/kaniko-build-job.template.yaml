@@ -79,9 +79,11 @@ spec:
         # Service-Catalog builder (s0:c54) and away from the runtime-app bands, so a build
         # pod cannot share a category with any deployed service. Keep in sync with the MCS
         # identity matrix in docs/SECURITY.md §3.
+        # Was c55, a PRE-EXISTING collision with the tube deployment (s0:c55); moved to
+        # the next free category c75 above the current max.
         seLinuxOptions:
           type: container_t
-          level: "s0:c55"
+          level: "s0:c75"
       containers:
         - name: kaniko
           # Rootless Kaniko executor. Pin a digest in production (the prod-hygiene gate

@@ -23,7 +23,7 @@ Dockerfile rather than only Service-Catalog DOCKERFILE/ZIP sources.
   matches the platform build Jobs: `runAsNonRoot`, drop `ALL` caps, `seccompProfile: RuntimeDefault`,
   `readOnlyRootFilesystem` (Kaniko workdir on `emptyDir`), `automountServiceAccountToken:false`,
   `ttlSecondsAfterFinished` + `activeDeadlineSeconds` reaping. A dedicated MCS level
-  (`s0:c55`, distinct from #110's `s0:c54`) keeps build pods off the runtime-app bands.
+  (`s0:c75`, distinct from #110's `s0:c54`) keeps build pods off the runtime-app bands.
 
   **Tag scheme (immutable + moving), pushed from ONE build.** The template carries TWO
   `--destination` flags so a single Kaniko build pushes both, guaranteeing byte-identical

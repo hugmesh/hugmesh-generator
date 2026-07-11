@@ -89,6 +89,9 @@ Vault-managed mTLS keystore:
 | `velero-node-agent` (Kopia filesystem/PV backups) | `velero` | `s0:c65` | — | (non-Java: no JKS) |
 | `backups-status-sweep` (cloud-backup CR-status sweep CronJob) | `backups-sweep` | `s0:c66` | — | (non-Java: no JKS) |
 | coturn (TURN/STUN — optional, default-off) | `sa-coturn` | `s0:c67` | per-app svc user | (non-Java: no JKS) |
+| `edge-ai` (ollama inference — GPU) | per-app SA | `s0:c73` | — | (non-Java: no JKS) |
+| `character-studio` (ui) | per-app SA | `s0:c74` | — | — |
+| `image-builder` (app-image Kaniko build pods) | (per-build) | `s0:c75` | (build pod) | (non-Java: no JKS) |
 
 The matrix is the contract: `seLinuxOptions.level` per Deployment (added to each
 chart/manifest), a `ServiceAccount` per app, a Casdoor service user+role created

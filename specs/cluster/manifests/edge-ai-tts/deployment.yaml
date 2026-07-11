@@ -36,7 +36,7 @@ spec:
           # the docs/SECURITY.md table). So c50 is NOT free — forum/phpbb-db.yaml
           # already uses s0:c50 (sharing it would weaken inter-pod isolation).
           # edge-ai-tts takes the next free category above the current max c71 -> c72
-          # (siblings: edge-ai=c41, edge-ai-analysis=c49).
+          # (siblings: edge-ai=c73, edge-ai-analysis=c49).
           type: container_t
           level: "s0:c72"
         runAsNonRoot: true
