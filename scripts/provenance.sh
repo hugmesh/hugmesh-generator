@@ -23,7 +23,11 @@
 #   provenance.sh write  --repo-dir DIR --brand B --org O --cluster-domain D \
 #                        --repo R --archetype A --base-sha SHA --base-mode MODE \
 #                        --recipe-sha RSHA --generator-repo GR --generator-commit GC \
-#                        [--engine handlebars] [--produced-at ISO8601]
+#                        [--engine handlebars] [--produced-at ISO8601] \
+#                        [--origin-mesh MESH_ID]   # Phase 7: cross-mesh base lineage
+#                        (--origin-mesh empty/absent = own mesh = base.originMesh is
+#                         OMITTED — every pre-Phase-7 manifest re-renders byte-identical,
+#                         preserving the determinism/idempotency contract.)
 #   provenance.sh sign   --repo-dir DIR --key ED25519_PRIV.pem
 #   provenance.sh verify --repo-dir DIR --pub ED25519_PUB.pem
 #   provenance.sh keygen --key PRIV.pem --pub PUB.pem     # TEST keypair (build-host verify)
@@ -44,7 +48,7 @@ cmd="${1:-}"; shift || true
 # ── shared arg parse ────────────────────────────────────────────────────────
 REPO_DIR="" BRAND="" ORG="" CLUSTER_DOMAIN="" REPO="" ARCHETYPE=""
 BASE_SHA="" BASE_MODE="" RECIPE_SHA="" GEN_REPO="snapdragon-generator" GEN_COMMIT=""
-ENGINE="handlebars" PRODUCED_AT="" KEY="" PUB=""
+ENGINE="handlebars" PRODUCED_AT="" KEY="" PUB="" ORIGIN_MESH=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo-dir) REPO_DIR="$2"; shift 2 ;;
@@ -60,6 +64,10 @@ while [[ $# -gt 0 ]]; do
     --generator-commit) GEN_COMMIT="$2"; shift 2 ;;
     --engine) ENGINE="$2"; shift 2 ;;
     --produced-at) PRODUCED_AT="$2"; shift 2 ;;
+    # Phase 7: the base's ORIGIN mesh id (cross-mesh lineage). OPTIONAL and
+    # backwards-compatible — empty = own mesh = base.originMesh is OMITTED, so
+    # every pre-Phase-7 manifest re-renders byte-identical (determinism contract).
+    --origin-mesh) ORIGIN_MESH="$2"; shift 2 ;;
     --key) KEY="$2"; shift 2 ;;
     --pub) PUB="$2"; shift 2 ;;
     *) _die "unknown argument: $1" ;;
@@ -89,6 +97,10 @@ case "$cmd" in
     [[ -d "$REPO_DIR" ]] || _die "write needs an existing --repo-dir"
     [[ -n "$BRAND" && -n "$ORG" && -n "$REPO" && -n "$ARCHETYPE" ]] \
       || _die "write needs --brand --org --repo --archetype"
+    # Phase 7 origin-mesh (optional): shape-guard as a DNS label when present, so a
+    # crafted value can never splice into base{} (it is _jesc'd too — defence in depth).
+    [[ -z "$ORIGIN_MESH" || "$ORIGIN_MESH" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
+      || _die "--origin-mesh '${ORIGIN_MESH}' is not a DNS label"
     # producedAt: deterministic. Prefer explicit --produced-at, else SOURCE_DATE_EPOCH,
     # else the empty string (NEVER `date` now — that would break idempotency).
     if [[ -z "$PRODUCED_AT" && -n "${SOURCE_DATE_EPOCH:-}" ]]; then
@@ -102,7 +114,15 @@ case "$cmd" in
       printf '  "base": {\n'
       printf '    "repo": "snapdragon-%s",\n' "$(_jesc "$REPO")"
       printf '    "commitSha": "%s",\n' "$(_jesc "$BASE_SHA")"
-      printf '    "mode": "%s"\n' "$(_jesc "$BASE_MODE")"
+      # Phase 7: base.originMesh records the FOREIGN mesh a cross-mesh base came
+      # from. OMITTED when empty (own mesh) so pre-Phase-7 manifests stay
+      # byte-identical — determinism/idempotency contract preserved.
+      if [[ -n "$ORIGIN_MESH" ]]; then
+        printf '    "mode": "%s",\n' "$(_jesc "$BASE_MODE")"
+        printf '    "originMesh": "%s"\n' "$(_jesc "$ORIGIN_MESH")"
+      else
+        printf '    "mode": "%s"\n' "$(_jesc "$BASE_MODE")"
+      fi
       printf '  },\n'
       printf '  "template": {\n'
       printf '    "archetype": "%s",\n' "$(_jesc "$ARCHETYPE")"

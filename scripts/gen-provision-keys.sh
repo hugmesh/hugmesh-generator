@@ -88,6 +88,11 @@ MAIL_PROVIDER="${MAIL_PROVIDER:-protonmail}"
 VPN_SRC="${VPN_SRC:-}"              # dir of provider .conf/.ovpn to stage (own domain)
 VPN_DOMAIN="${VPN_DOMAIN:-${CLUSTER_DOMAIN:-}}"
 
+# ── Phase 7: foreign-mesh trust store (cross-mesh base admission, PUBKEYS ONLY) ─
+# Dir of <mesh-id>.ed25519.pub PUBLIC verifying halves to stage onto the KEYS
+# bundle so scripts/ingest-foreign-base.sh can admit those meshes' bases (no TOFU).
+FOREIGN_MESH_TRUST_SRC="${FOREIGN_MESH_TRUST_SRC:-}"
+
 # ── Orchestration superdomain (permanently INTERNAL; distinct from CLUSTER_DOMAIN) ──
 # The MagicDNS base_domain every mesh node joins. Written into the GENERATED
 # provision.json's .mesh.magic_dns_domain (+ derived .mesh.cp_dns_name); provision.sh
@@ -175,6 +180,18 @@ Options:
                       subdir. (env: VPN_SRC)
       --vpn-domain D  Egress-VPN: the node's OWN brand domain for --vpn-src
                       (else CLUSTER_DOMAIN). (env: VPN_DOMAIN)
+      --foreign-mesh-trust DIR  Phase 7 cross-mesh: stage the foreign-mesh trust
+                      store from DIR/<mesh-id>.ed25519.pub (PUBLIC verifying halves
+                      ONLY) onto KEYS/mesh-trust/<mesh-id>/foreign-provenance-pub.ed25519
+                      — the EXACT path + base64-SPKI-DER form scripts/ingest-foreign-
+                      base.sh resolves a pinned pubkey from (MESH_TRUST_STORE /
+                      --trust-store, default keys-template/mesh-trust). Every file is
+                      validated as an Ed25519 PUBLIC key and NORMALISED to base64 SPKI
+                      DER; a private key or garbage ABORTS. Admitting a new foreign
+                      mesh is exactly this deliberate out-of-band pubkey add (explicit
+                      trust, never TOFU). Absent => nothing staged and foreign-base
+                      ingestion stays impossible (fail-closed).
+                      (env: FOREIGN_MESH_TRUST_SRC)
       --superdomain D Orchestration superdomain: the mesh MagicDNS base_domain every
                       node joins, written into provision.json .mesh.magic_dns_domain
                       (+ derived .mesh.cp_dns_name). PERMANENTLY INTERNAL — never
@@ -219,6 +236,7 @@ while [[ $# -gt 0 ]]; do
         --registry-pub) REGISTRY_PUB_FILE="$2"; shift 2 ;;   # Layer-B: baked verifying key (mesh-extension role)
         --vpn-src)     VPN_SRC="$2"; shift 2 ;;               # egress-VPN: provider .conf/.ovpn to stage (own domain)
         --vpn-domain)  VPN_DOMAIN="$2"; shift 2 ;;            # egress-VPN: the node's own brand domain
+        --foreign-mesh-trust) FOREIGN_MESH_TRUST_SRC="$2"; shift 2 ;;  # Phase 7: foreign-mesh PUBLIC verifying keys to stage
         --superdomain) SUPERDOMAIN="$2"; shift 2 ;;          # mesh MagicDNS base_domain (permanently internal); default <BRAND>.internal
         --device-id)   DEVICE_ID="$2"; shift 2 ;;            # in-UI SSH terminal: per-device Vault-seed path segment
         --dial-user)   DIAL_USER="$2"; shift 2 ;;            # in-UI SSH terminal: unprivileged login the BFF dials as
@@ -416,6 +434,72 @@ PLACEHOLDER
     fi
     chmod 0644 "${DR_DIR}/"* 2>/dev/null || true
     echo "  ${DR_DIR}/  (Layer-B ADMIN mesh-extension node identity + verifying key)"
+fi
+
+# ── Phase 7: foreign-mesh trust store (PUBKEYS ONLY, staged out-of-band) ───────
+# Cross-mesh base admission (scripts/ingest-foreign-base.sh) is NO-TOFU: it admits
+# a foreign base ONLY when the base's PROVENANCE signature verifies against a PINNED
+# pubkey resolved from the trust store at <mesh-id>/foreign-provenance-pub.ed25519
+# (base64 X.509 SPKI DER — the EXACT bytes the gate feeds to
+# `base64 -d | openssl pkey -pubin -inform DER`). This mode stages those pubkeys onto
+# the KEYS bundle at keys-out/mesh-trust/<mesh-id>/foreign-provenance-pub.ed25519 so
+# an operator can carry them to the build host's trust store (MESH_TRUST_STORE /
+# --trust-store, default keys-template/mesh-trust). Admitting a new foreign mesh IS
+# this deliberate out-of-band pubkey add — never TOFU. Each source file
+# <mesh-id>.ed25519.pub is validated as an Ed25519 PUBLIC key (PEM or base64 SPKI DER)
+# and NORMALISED to the base64-SPKI-DER one-liner the gate reads — the SAME
+# validate_registry_pub posture: openssl `-pubin` also REJECTS a mistakenly-supplied
+# PRIVATE key, and unverifiable bytes ABORT the whole run rather than staging a broken
+# verifier. No --foreign-mesh-trust => nothing staged => foreign-base ingestion on this
+# identity stays impossible (fail-closed default).
+if [ -n "${FOREIGN_MESH_TRUST_SRC}" ]; then
+    if [ ! -d "${FOREIGN_MESH_TRUST_SRC}" ]; then
+        echo "ERROR: --foreign-mesh-trust given (${FOREIGN_MESH_TRUST_SRC}) but it is not a directory" >&2
+        exit 1
+    fi
+    FMT_DIR="${OUT_DIR}/mesh-trust"
+    mkdir -p "${FMT_DIR}"
+    fmt_count=0
+    for fmt_key in "${FOREIGN_MESH_TRUST_SRC}"/*.ed25519.pub; do
+        [ -f "${fmt_key}" ] || continue
+        fmt_name="$(basename "${fmt_key}")"
+        fmt_mesh="${fmt_name%.ed25519.pub}"
+        if ! printf '%s' "${fmt_mesh}" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'; then
+            echo "ERROR: foreign-mesh trust key '${fmt_name}': mesh id '${fmt_mesh}' is not a DNS label" >&2
+            rm -rf "${FMT_DIR}"
+            exit 1
+        fi
+        fmt_dest_dir="${FMT_DIR}/${fmt_mesh}"
+        mkdir -p "${fmt_dest_dir}"
+        fmt_dest="${fmt_dest_dir}/foreign-provenance-pub.ed25519"
+        # NORMALISE to the base64-SPKI-DER one-liner the gate reads: a PEM PUBLIC KEY
+        # is re-encoded (DER | base64 -w0); anything else is assumed base64 SPKI DER
+        # and only whitespace-stripped. The round-trip validation below is the real
+        # gate — a private key / garbage never survives it.
+        if grep -q 'BEGIN PUBLIC KEY' "${fmt_key}" 2>/dev/null; then
+            openssl pkey -pubin -in "${fmt_key}" -outform DER 2>/dev/null | base64 -w0 > "${fmt_dest}"
+        else
+            tr -d '[:space:]' < "${fmt_key}" > "${fmt_dest}"
+        fi
+        # Validate the STAGED one-liner round-trips as an Ed25519 PUBLIC key (base64
+        # SPKI DER). openssl -pubin REJECTS a private key; a non-Ed25519 / truncated /
+        # garbage key fails here too — ABORT rather than stage a broken verifier.
+        if ! base64 -d "${fmt_dest}" 2>/dev/null \
+                | openssl pkey -pubin -inform DER -noout -text 2>/dev/null \
+                | grep -qi 'ED25519'; then
+            echo "ERROR: foreign-mesh trust key '${fmt_name}' does not parse as an Ed25519 PUBLIC key" >&2
+            echo "       (expected PEM 'BEGIN PUBLIC KEY' or base64 X.509 SPKI DER; NEVER a private key)" >&2
+            rm -rf "${FMT_DIR}"
+            exit 1
+        fi
+        chmod 0644 "${fmt_dest}"
+        fmt_count=$((fmt_count + 1))
+        echo "  ${fmt_dest}  (foreign-mesh '${fmt_mesh}' PROVENANCE verifying key — deliberate trust add, base64 SPKI DER)"
+    done
+    if [ "${fmt_count}" -eq 0 ]; then
+        echo "WARNING: --foreign-mesh-trust ${FOREIGN_MESH_TRUST_SRC} carried no *.ed25519.pub — trust store staged EMPTY (foreign ingestion stays impossible)" >&2
+    fi
+    echo "  ${FMT_DIR}/  (Phase 7 foreign-mesh trust store: ${fmt_count} pubkey(s), pubkeys ONLY, <mesh-id>/foreign-provenance-pub.ed25519)"
 fi
 
 # ── Egress VPN: stage provider configs onto KEYS/vpn/<domain>/ (secrets) ───────

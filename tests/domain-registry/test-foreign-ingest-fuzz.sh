@@ -714,5 +714,181 @@ else
 fi
 
 echo
+echo "-- Phase 7 GRAFT: gen-provision-keys.sh --foreign-mesh-trust KEY-STAGING (capability #1) --"
+# Without this, A's no-TOFU foreign-mesh trust store has no way to get pubkeys onto a
+# node. Assert: a REAL Ed25519 PUBLIC half stages gate-readable at
+# <mesh>/foreign-provenance-pub.ed25519; a PRIVATE key ABORTS + stages nothing.
+GPK="${REPO}/scripts/gen-provision-keys.sh"
+if command -v ssh-keygen >/dev/null && command -v python3 >/dev/null; then
+  KSRC="${WORK}/fmt-src"; mkdir -p "${KSRC}"
+  openssl pkey -in "${PRIV}" -pubout -out "${KSRC}/beta-mesh.ed25519.pub" 2>/dev/null     # PEM pubkey
+  mkdir -p "${WORK}/priv-as-pub"; cp "${PRIV}" "${WORK}/priv-as-pub/evil-mesh.ed25519.pub" # a PRIVATE key
+  KOUT="${WORK}/keys-out-accept"
+  if NONINTERACTIVE=1 bash "${GPK}" --role host --no-device-ssh --random -o "${KOUT}" \
+        --foreign-mesh-trust "${KSRC}" >/dev/null 2>"${WORK}/gpk.err"; then
+    STAGED="${KOUT}/mesh-trust/beta-mesh/foreign-provenance-pub.ed25519"
+    if [ -f "${STAGED}" ] && base64 -d "${STAGED}" 2>/dev/null \
+         | openssl pkey -pubin -inform DER -noout -text 2>/dev/null | grep -qi ED25519; then
+      ok "(key-staging) real Ed25519 pubkey STAGED gate-readable at <mesh>/foreign-provenance-pub.ed25519"
+    else bad "(key-staging) staged key missing / not gate-readable at ${STAGED}"; fi
+  else bad "(key-staging) accept run failed: $(tail -2 "${WORK}/gpk.err")"; fi
+  KOUT2="${WORK}/keys-out-reject"
+  if NONINTERACTIVE=1 bash "${GPK}" --role host --no-device-ssh --random -o "${KOUT2}" \
+        --foreign-mesh-trust "${WORK}/priv-as-pub" >/dev/null 2>"${WORK}/gpk2.err"; then
+    bad "(key-staging) a PRIVATE key was ACCEPTED as a trust pubkey (must ABORT)"
+  else
+    grep -q "does not parse as an Ed25519 PUBLIC key" "${WORK}/gpk2.err" \
+      && ok "(key-staging) PRIVATE key REJECTED (fail-closed, pubkeys-only)" \
+      || ok "(key-staging) rejected (rc!=0): $(grep -i ERROR "${WORK}/gpk2.err" | head -1)"
+    [ ! -f "${KOUT2}/mesh-trust/evil-mesh/foreign-provenance-pub.ed25519" ] \
+      && ok "(key-staging) private key NOT staged (nothing left behind)" || bad "(key-staging) private key was staged (LEAK)"
+  fi
+else
+  echo "  SKIP key-staging (need ssh-keygen + python3 for gen-provision-keys.sh)"
+fi
+
+echo
+echo "-- Phase 7 GRAFT: render-tenant-set.js repos[].origin {mesh,digest} FORWARDING (capability #3) --"
+RTS="${REPO}/scripts/tooling/render-tenant-set.js"
+mkbrand() { # mkbrand FILE ORIGIN_INLINE_YAML — minimal valid brand YAML, one login-ui repo
+  cat > "$1" <<Y
+brand: acme
+title: Acme Arcade
+org: acme
+domains:
+  - acme.games
+repos:
+  - name: login-ui
+    archetype: angular-mfe
+    installed: true
+    identity: { app_slug: login, title_word: Login }
+    origin: $2
+Y
+}
+if command -v node >/dev/null && [ -d "${REPO}/scripts/tooling/node_modules/js-yaml" ]; then
+  # (o1) origin.mesh not a DNS label -> fail-closed in the driver (before any spawn).
+  mkbrand "${WORK}/o_badmesh.yaml" '{ mesh: "Bad_Mesh", digest: "0000000000000000000000000000000000000000" }'
+  if node "${RTS}" "${WORK}/o_badmesh.yaml" --out-dir "${WORK}/oout1" --only login-ui >/dev/null 2>"${WORK}/o1.err"; then
+    bad "(manifest-origin) non-DNS origin.mesh ACCEPTED"
+  else grep -q "origin.mesh" "${WORK}/o1.err" && ok "(manifest-origin) non-DNS origin.mesh rejected" \
+        || ok "(manifest-origin) rejected: $(grep FATAL "${WORK}/o1.err" | head -1)"; fi
+  # (o2) origin.digest not 40-hex (a mutable ref) -> fail-closed.
+  mkbrand "${WORK}/o_baddig.yaml" '{ mesh: "acme-mesh", digest: "main" }'
+  if node "${RTS}" "${WORK}/o_baddig.yaml" --out-dir "${WORK}/oout2" --only login-ui >/dev/null 2>"${WORK}/o2.err"; then
+    bad "(manifest-origin) mutable-ref origin.digest ACCEPTED"
+  else grep -q "origin.digest" "${WORK}/o2.err" && ok "(manifest-origin) mutable-ref origin.digest rejected" \
+        || ok "(manifest-origin) rejected: $(grep FATAL "${WORK}/o2.err" | head -1)"; fi
+  # (o3) POSITIVE FORWARDING: a valid origin forwards --foreign-mesh so an UNSIGNED base
+  #      is REJECTED by the ingest gate. If the flag were NOT forwarded, render-repo-tree
+  #      would take the own-mesh path and SUCCEED — so rc!=0 PROVES the forwarding.
+  #      R3: render-repo-tree.sh --foreign-mesh now REQUIRES an operator content anchor
+  #      before it will even reach the gate; render-tenant-set.js does not forward one
+  #      (render-repo-tree.sh falls back to the registry's pinnedTreeSha256). Supply a
+  #      test-local registry row with the correct anchor so this case still dies for its
+  #      INTENDED reason (the gate's signature check), not merely the earlier R3 pre-check.
+  if [ "${HAVE_RENDER}" -eq 1 ]; then
+    UB="${WORK}/o_unsigned"; mkclean_base "$UB"; OPIN="$(digest_of o_unsigned | cut -c1-40)"
+    sign_base "$UB" "$PRIV" "$MESH" "$OPIN" 5; rm -f "${UB}/.snapdragon-provenance.json.sig"
+    OANCHOR="$(_fib_tree_digest "$UB")"
+    OREG="${WORK}/o_registry.json"
+    jq -n --arg m "$MESH" --arg t "$OANCHOR" \
+      '{schemaVersion:1, meshes:{($m):{enabled:true, gitBase:"https://forge.acme.test/acme", minGeneration:0, pinnedTreeSha256:$t}}}' > "$OREG"
+    mkbrand "${WORK}/o_fwd.yaml" "{ mesh: \"${MESH}\", digest: \"${OPIN}\" }"
+    if (cd "$REPO" && LOGIN_UI_BASE_DIR="$UB" MESH_TRUST_STORE="$TRUST" MESH_REGISTRY="$OREG" OFFLINE=1 \
+          node "${RTS}" "${WORK}/o_fwd.yaml" --out-dir "${WORK}/oout3" --only login-ui >/dev/null 2>"${WORK}/o3.err"); then
+      bad "(manifest-origin) FORWARDING BROKEN: unsigned foreign base rendered (own-mesh path, gate skipped)"
+    else
+      grep -qi "signature\|does not verify\|unsigned" "${WORK}/o3.err" \
+        && ok "(manifest-origin) valid origin forwards --foreign-mesh -> unsigned base REJECTED by the gate's signature check (forwarding proven)" \
+        || ok "(manifest-origin) valid origin forwards --foreign-mesh -> rejected (rc!=0): $(grep -i 'FATAL\|reject' "${WORK}/o3.err" | head -1)"
+    fi
+  else echo "  SKIP (manifest-origin forwarding) node/handlebars unavailable"; fi
+else
+  echo "  SKIP manifest-origin (need node + js-yaml)"
+fi
+
+echo
+echo "-- Phase 7 GRAFT: publish-tenant-set.sh LAUNDER-REFUSAL (capability #2) --"
+# A foreign-origin tree may be published ONLY with a valid '.snapdragon-mesh-admitted'
+# receipt from A's gate. Positive: a signed clean foreign base admits (persistent
+# stamp), renders foreign-overlay, and publishes (push fires + provenance records
+# base.originMesh). Then the stamp is DELETED and the SAME publish must die BEFORE any
+# push (launder-refusal), pushing nothing.
+PUB="${REPO}/scripts/publish-tenant-set.sh"
+PRB="${REPO}/scripts/pull-repo-base.sh"
+if [ "${HAVE_RENDER}" -eq 1 ]; then
+  REAL_GIT="$(command -v git)"; LSTUB="${WORK}/launder-bin"; mkdir -p "$LSTUB"
+  PLOG="${WORK}/push.log"; CLOG="${WORK}/curl.log"; : > "$PLOG"; : > "$CLOG"
+  cat > "${LSTUB}/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in *" push "*) printf 'PUSH %s\n' "\$*" >> "${PLOG}";; esac
+exec "${REAL_GIT}" "\$@"
+EOF
+  cat > "${LSTUB}/curl" <<EOF
+#!/usr/bin/env bash
+printf 'CURL %s\n' "\$*" >> "${CLOG}"; exit 0
+EOF
+  chmod +x "${LSTUB}/git" "${LSTUB}/curl"
+  LCACHE="${WORK}/lcache"; mkdir -p "$LCACHE"
+  LREG="${WORK}/lregistry.json"
+  jq -n --arg m "$MESH" '{schemaVersion:1, meshes:{($m):{enabled:true, gitBase:"https://forge.acme.test/acme", minGeneration:0}}}' > "$LREG"
+  LBASE="${WORK}/lbase"; mkclean_base "$LBASE"
+  LPIN="$(digest_of launder-legit)"; sign_base "$LBASE" "$PRIV" "$MESH" "$LPIN" 5
+  # R3: both the *_BASE_DIR override path (pull-repo-base.sh) and the local-base
+  # render path (render-repo-tree.sh --foreign-mesh) now REQUIRE an operator content
+  # anchor binding the pin to the ACTUAL bytes (no git commit->tree binding on either
+  # path). Compute it once via the gate's own helper (sourced at file scope above).
+  LANCHOR="$(_fib_tree_digest "$LBASE")"
+  # 1) pull-repo-base --foreign (override) -> persistent admitted snapshot + stamp.
+  LADM="$(REPO_BASE_CACHE="$LCACHE" MESH_REGISTRY="$LREG" MESH_TRUST_STORE="$TRUST" \
+     LOGIN_UI_BASE_DIR="$LBASE" OFFLINE=1 FIB_ADVISORY_FLOOR_DEFAULT="$ADVISORY" \
+     FOREIGN_PINNED_TREE_SHA256="$LANCHOR" \
+     bash "$PRB" --foreign --mesh "$MESH" --pinned-digest "$LPIN" login-ui 2>"${WORK}/lprb.err")"
+  LSTAMP="${LCACHE}/.mesh-quarantine/login-ui/${MESH}-${LPIN:0:16}/.snapdragon-mesh-admitted"
+  [ -f "$LSTAMP" ] && ok "(launder) inbound gate left a persistent .snapdragon-mesh-admitted stamp" \
+    || bad "(launder) no admission stamp: $(tail -2 "${WORK}/lprb.err")"
+  # 2) durable foreign-clone origin signal (as fetch-mode would create).
+  mkdir -p "${LCACHE}/foreign/${MESH}"; cp -r "$LBASE" "${LCACHE}/foreign/${MESH}/snapdragon-login-ui"
+  # 3) render the foreign-overlay tree through the gate.
+  LOUT="${WORK}/lout"
+  if (cd "$REPO" && MESH_REGISTRY="$LREG" bash "$RRT" "${BRANDCONF}" --enable-repo-tree --repo login-ui --archetype angular-mfe \
+        --out-dir "$LOUT" --base "$LBASE" --foreign-mesh "$MESH" --pinned-digest "$LPIN" \
+        --pinned-tree-sha256 "$LANCHOR" \
+        --trust-store "$TRUST" --min-generation 0 --set APP_SLUG=login --set TITLE_WORD=Login >/dev/null 2>"${WORK}/lrender.err") \
+     && [ -d "${LOUT}/acme-login-ui" ]; then ok "(launder) foreign-overlay tree rendered"
+  else bad "(launder) render failed: $(tail -3 "${WORK}/lrender.err")"; fi
+  # 4) publish WITH the stamp present -> push fires + provenance records origin.
+  LBARE="${WORK}/lbare"; mkdir -p "$LBARE"; "${REAL_GIT}" init -q --bare "${LBARE}/acme-login-ui.git"
+  : > "$PLOG"
+  if (cd "$REPO" && PATH="${LSTUB}:${PATH}" REPO_BASE_CACHE="$LCACHE" FORGEJO_PUSH_TOKEN=dummy \
+        FORGEJO_API_MODE=none FORGEJO_REMOTE_TEMPLATE="file://${LBARE}/%s.git" \
+        bash "$PUB" "$LOUT" >/dev/null 2>"${WORK}/lpub.err"); then ok "(launder) publish pushed the foreign-overlay tree (stamp verified at publish)"
+  else bad "(launder) publish FAILED with the stamp present: $(tail -3 "${WORK}/lpub.err")"; fi
+  grep -q PUSH "$PLOG" && ok "(launder) push recorder saw the POSITIVE push (recorder is live, not vacuous)" \
+    || bad "(launder) no push recorded on the positive control"
+  grep -q '"originMesh": "'"${MESH}"'"' "${LOUT}/acme-login-ui/.snapdragon-provenance.json" 2>/dev/null \
+    && ok "(launder) provenance records base.originMesh=${MESH} + mode foreign-overlay" || bad "(launder) provenance lacks the foreign lineage"
+  LMAIN="$("${REAL_GIT}" -C "${LBARE}/acme-login-ui.git" rev-parse main 2>/dev/null)"
+  # 5) DELETE the stamp -> the SAME publish must die BEFORE any push.
+  rm -f "$LSTAMP"; printf 'drift\n' >> "${LOUT}/acme-login-ui/README.md"
+  : > "$PLOG"; : > "$CLOG"
+  if (cd "$REPO" && PATH="${LSTUB}:${PATH}" REPO_BASE_CACHE="$LCACHE" FORGEJO_PUSH_TOKEN=dummy \
+        FORGEJO_API_MODE=none FORGEJO_REMOTE_TEMPLATE="file://${LBARE}/%s.git" \
+        bash "$PUB" "$LOUT" >/dev/null 2>"${WORK}/lpub2.err"); then
+    bad "(launder) publish SUCCEEDED with the stamp GONE (foreign code LAUNDERED!)"
+  else
+    grep -q "NO .snapdragon-mesh-admitted stamp" "${WORK}/lpub2.err" \
+      && ok "(launder) publish REFUSED the stamp-less foreign base (fail-closed reason)" \
+      || ok "(launder) publish refused (rc!=0): $(grep FATAL "${WORK}/lpub2.err" | head -1)"
+  fi
+  { [ ! -s "$PLOG" ] && [ ! -s "$CLOG" ]; } && ok "(launder) nothing pushed onward (0 git-push, 0 curl)" \
+    || { bad "(launder) PUSH/CURL fired"; sed 's/^/        /' "$PLOG" "$CLOG" 2>/dev/null; }
+  [ "$("${REAL_GIT}" -C "${LBARE}/acme-login-ui.git" rev-parse main 2>/dev/null)" = "$LMAIN" ] \
+    && ok "(launder) bare remote unchanged (nothing pushed after refusal)" || bad "(launder) remote MOVED after refusal"
+else
+  echo "  SKIP publish launder-refusal (node/handlebars unavailable — key-staging + manifest-origin halves still assert above)"
+fi
+
+echo
 echo "== FOREIGN-INGEST FUZZ SUITE: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

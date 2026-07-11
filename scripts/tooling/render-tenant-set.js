@@ -132,10 +132,29 @@ function main() {
       setArgs.push('--set', `${NAME}=${val}`);
     }
 
+    // Phase 7: optional per-repo FOREIGN origin. repos[].origin = { mesh, digest }
+    // marks THIS repo's base as ANOTHER mesh's code, so render-repo-tree.sh resolves
+    // it ONLY through the fail-closed inbound ingestion gate (digest-pinned,
+    // signature-verified against a pinned pubkey, SBOM/vuln/secret/frozen screened)
+    // rather than any unverified own-mesh path. Both fields are attacker-adjacent
+    // data: shape-validate HARD, and forward them as A's render-repo-tree.sh flags —
+    // --foreign-mesh <mesh> + --pinned-digest <digest> (the pin is MANDATORY there;
+    // a foreign base is never taken from a moving ref).
+    const foreignArgs = [];
+    if (r.origin !== undefined && r.origin !== null) {
+      if (typeof r.origin !== 'object' || Array.isArray(r.origin)) die(`repos[].name '${r.name}': origin must be a mapping { mesh, digest }`);
+      const mesh = String(r.origin.mesh || '');
+      if (!DNS_LABEL.test(mesh)) die(`repos[].name '${r.name}': origin.mesh '${mesh}' is not a DNS label`);
+      const digest = String(r.origin.digest || '');
+      if (!/^[0-9a-f]{40}$/.test(digest)) die(`repos[].name '${r.name}': origin.digest must be an IMMUTABLE 40-hex commit sha (a foreign base is never taken from a moving ref)`);
+      foreignArgs.push('--foreign-mesh', mesh, '--pinned-digest', digest);
+    }
+
     const cmd = [
       confPath, '--enable-repo-tree',
       '--repo', r.name, '--archetype', arch,
       '--out-dir', args.outDir,
+      ...foreignArgs,
       ...setArgs,
     ];
     log(`render ${r.name} (archetype=${arch}${setArgs.length ? ', identity ' + setArgs.filter((_, i) => i % 2 === 1).join(' ') : ''})`);

@@ -103,6 +103,13 @@ FORGEJO_REMOTE_TEMPLATE="${FORGEJO_REMOTE_TEMPLATE:-${FORGEJO_BASE_URL%/}/${FORG
 # Org name shape guard (used in the REST URL + remote path).
 [[ "$FORGEJO_ORG" =~ ^[A-Za-z0-9._-]{1,63}$ ]] || _die "invalid FORGEJO_ORG '$FORGEJO_ORG'"
 
+# Base-clone cache root for the Phase-7 foreign-base launder gate + provenance
+# base-sha derivation. Honors the SAME knob the resolver (pull-repo-base.sh) uses,
+# so publish keys off the exact cache the render consumed — the old hardcoded
+# ${REPO_ROOT}/.repo-base peek silently attested a stale/unrelated sha whenever
+# REPO_BASE_CACHE (or a *_BASE_DIR override) pointed elsewhere.
+REPO_BASE_CACHE="${REPO_BASE_CACHE:-${REPO_ROOT}/.repo-base}"
+
 # ── FAIL-CLOSED token resolution (env or file; NEVER argv/committed) ─────────
 # Resolve BEFORE any repo/network op so a missing token aborts up front.
 PUSH_TOKEN=""
@@ -241,18 +248,92 @@ publish_one() {
 
   # provenance: capture the base commit sha + mode from the rendered tree's own
   # git base if a cache clone is present; else skeleton (no base).
-  local arch base_sha="" base_mode="skeleton" rsha=""
+  local arch base_sha="" base_mode="skeleton" rsha="" origin_mesh=""
   arch="$(infer_archetype "$dir")"
   rsha="$(recipe_sha "$arch")"
-  local cache_clone="${REPO_ROOT}/.repo-base/snapdragon-${repo}"
-  if [[ -d "${cache_clone}/.git" ]]; then
+
+  # ── Phase 7 LAUNDER-REFUSAL: never push a FOREIGN base that A's inbound gate
+  #    did not admit ────────────────────────────────────────────────────────────
+  # A foreign cache entry (pull-repo-base.sh --foreign fetches into
+  # ${REPO_BASE_CACHE}/foreign/<mesh>/snapdragon-<repo>) is the DURABLE signal that
+  # this repo's render MAY have consumed FOREIGN bytes. Publishing then REQUIRES the
+  # base's inbound admission STAMP — the '.snapdragon-mesh-admitted' receipt
+  # scripts/ingest-foreign-base.sh promotes into its quarantine snapshot — to be
+  # present for this mesh AND to re-verify RIGHT NOW: verified=1, the stamp's mesh-id
+  # equals the foreign cache mesh, its pinned-digest is a well-formed immutable digest,
+  # and a recomputed canonical tree digest of the admitted snapshot equals the stamped
+  # tree-sha256 (so a snapshot mutated after admission is caught). A missing / stale /
+  # forged / mutated stamp is _die — unverified foreign code is NEVER re-pushed to
+  # tenant Forgejo wearing OUR fresh provenance. This is a fail-closed belt on top of
+  # the render-time gate (render-repo-tree.sh --foreign-mesh runs the SAME gate before
+  # it emits BRAND_OUT); the publish tail refuses independently.
+  local fd foreign_dir=""
+  for fd in "${REPO_BASE_CACHE}"/foreign/*/"snapdragon-${repo}"; do
+    [[ -d "$fd" ]] || continue
+    [[ -z "$foreign_dir" ]] \
+      || _die "multiple foreign cache entries for snapdragon-${repo} (${foreign_dir}, ${fd}) — ambiguous base origin; purge the stale one before publishing"
+    foreign_dir="$fd"
+  done
+  local cache_clone="${REPO_BASE_CACHE}/snapdragon-${repo}"
+  if [[ -n "$foreign_dir" ]]; then
+    [[ -d "${cache_clone}/.git" ]] \
+      && _die "BOTH an own-mesh and a foreign base cache entry exist for snapdragon-${repo} — ambiguous base origin (provenance would lie); purge one before publishing"
+    origin_mesh="$(basename "$(dirname "$foreign_dir")")"
+    [[ "$origin_mesh" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
+      || _die "foreign cache mesh dir '${origin_mesh}' is not a DNS label"
+    # Locate THIS mesh's inbound admission stamp — the '.snapdragon-mesh-admitted'
+    # receipt scripts/ingest-foreign-base.sh promotes into its per-run quarantine
+    # snapshot (pull-repo-base.sh --foreign leaves it under
+    # ${REPO_BASE_CACHE}/.mesh-quarantine/<repo>/<mesh>-<digest16>/). The foreign
+    # clone above is the DURABLE origin signal; THIS stamp is the receipt that must
+    # accompany it. Read the pin FROM the stamp (git-independent — the practical
+    # foreign path pins a synthetic immutable digest via *_BASE_DIR, not a git HEAD).
+    local stamp="" s
+    for s in "${REPO_BASE_CACHE}/.mesh-quarantine/${repo}/${origin_mesh}"-*/.snapdragon-mesh-admitted; do
+      [[ -f "$s" ]] || continue
+      [[ -z "$stamp" ]] \
+        || _die "multiple admission stamps for mesh '${origin_mesh}' repo '${repo}' — ambiguous; purge the stale quarantine snapshot before publishing"
+      stamp="$s"
+    done
+    [[ -n "$stamp" ]] \
+      || _die "foreign base for mesh '${origin_mesh}' repo '${repo}' has NO .snapdragon-mesh-admitted stamp from ingest-foreign-base.sh under ${REPO_BASE_CACHE}/.mesh-quarantine/${repo}/ — REFUSING to publish ${base} (unverified foreign code is never pushed onward)"
+    local admit_snap; admit_snap="$(dirname "$stamp")"
+    local s_mesh s_pin s_tree s_ver
+    s_mesh="$(sed -n 's/^mesh-id=//p'       "$stamp" | head -n1)"
+    s_pin="$( sed -n 's/^pinned-digest=//p' "$stamp" | head -n1)"
+    s_tree="$(sed -n 's/^tree-sha256=//p'   "$stamp" | head -n1)"
+    s_ver="$( sed -n 's/^verified=//p'      "$stamp" | head -n1)"
+    [[ "$s_ver" == "1" ]] \
+      || _die "admission stamp for ${origin_mesh} is not verified=1 — refusing to publish (launder-refusal)"
+    [[ "$s_mesh" == "$origin_mesh" ]] \
+      || _die "admission stamp mesh-id '${s_mesh}' != foreign cache mesh '${origin_mesh}' — refusing (launder-refusal)"
+    [[ "$s_pin" =~ ^[0-9a-f]{40}$ || "$s_pin" =~ ^[0-9a-f]{64}$ ]] \
+      || _die "admission stamp pinned-digest '${s_pin}' is not a 40/64-hex immutable digest — refusing (launder-refusal)"
+    # Recompute the admitted snapshot's canonical tree digest with the gate's OWN
+    # helper (sourced in a subshell so the gate's 'set -uo pipefail' can NEVER leak
+    # in and disable our errexit). Must equal the stamped tree-sha256 or the snapshot
+    # was mutated after admission -> refuse.
+    local recomputed
+    recomputed="$( ( . "${SCRIPT_DIR}/ingest-foreign-base.sh" >/dev/null 2>&1; _fib_tree_digest "$admit_snap" ) 2>/dev/null || echo "")"
+    [[ -n "$recomputed" && "$recomputed" == "$s_tree" ]] \
+      || _die "admitted snapshot ${admit_snap} tree digest (${recomputed:-<none>}) != stamped tree-sha256 (${s_tree}) — snapshot mutated after admission, refusing (launder-refusal)"
+    base_sha="$s_pin"
+    base_mode="foreign-overlay"
+    _log "  foreign base admission re-verified (mesh=${origin_mesh} sha=${base_sha}, stamp tree-digest OK) — provenance records base.originMesh"
+  elif [[ -d "${cache_clone}/.git" ]]; then
     base_sha="$(git -C "$cache_clone" rev-parse HEAD 2>/dev/null || echo "")"
     base_mode="overlay"
   fi
+
+  # base.originMesh is emitted ONLY for a foreign-overlay base (empty otherwise, so
+  # own-mesh/skeleton manifests stay byte-identical to pre-Phase-7).
+  local -a origin_args=()
+  [[ -n "$origin_mesh" ]] && origin_args=(--origin-mesh "$origin_mesh")
   "${SCRIPT_DIR}/provenance.sh" write --repo-dir "$dir" \
       --brand "$brand" --org "$FORGEJO_ORG" --cluster-domain "${CLUSTER_DOMAIN:-}" \
       --repo "$repo" --archetype "$arch" \
       --base-sha "$base_sha" --base-mode "$base_mode" \
+      "${origin_args[@]}" \
       --recipe-sha "$rsha" --generator-commit "$GEN_COMMIT" --engine handlebars
 
   if [[ -n "${PROVENANCE_SIGNING_KEY:-}" ]]; then
