@@ -168,5 +168,48 @@ else
   ok "cp_dns_name resolver e2e skipped (jq absent)"
 fi
 
+# ── (node /etc/hosts) .nodes[].ip / .name (+ dom/facade/pki_ip) injection ────────
+# provision_hosts() writes ip/name/dom/facade/pki_ip VERBATIM into /etc/hosts; a newline
+# injects standalone host lines (map the control-plane MagicDNS name -> attacker IP = a
+# first-boot `kubeadm join` MITM). Gate: ip/pki_ip = bare IP literal ([0-9A-Fa-f:.]);
+# name/dom/facade = bare DNS/hostname ([A-Za-z0-9._-]); a malformed node is skipped.
+if ! grep -qF 'ip/name malformed' "${PROV}"; then
+  echo "  FAIL node /etc/hosts ip/name gate not found in provision.sh"; exit 1
+fi
+node_ip_ok(){   [[ "$1" =~ ^[0-9A-Fa-f:.]+$ ]]; }
+node_name_ok(){ [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]; }
+ok "extracted + mirrored the real node ip/name gate predicates"
+for x in 'a b' 'a;b' 'a/b' 'evil' '' $'1.2\n3.4' '1.2.3.4 x' '10.0.0.1;reboot'; do
+  if rej node_ip_ok "${x}"; then ok "node ip rejected: $(printf %q "${x}")"
+  else bad "node ip NOT rejected: $(printf %q "${x}")"; fi
+done
+for x in $'w\n6.6.6.6 kube-api.snapdragon.internal' 'a b' 'a/b' 'a;b' '' $'x\ny' 'a"b'; do
+  if rej node_name_ok "${x}"; then ok "node name rejected: $(printf %q "${x}")"
+  else bad "node name NOT rejected: $(printf %q "${x}")"; fi
+done
+for x in 10.0.0.1 192.168.1.254 fe80::1 ::1; do
+  if node_ip_ok "${x}"; then ok "node ip accepted: ${x}"; else bad "node ip rejected: ${x}"; fi
+done
+for x in pki0 node-1 kube-api.snapdragon.internal w0; do
+  if node_name_ok "${x}"; then ok "node name accepted: ${x}"; else bad "node name rejected: ${x}"; fi
+done
+
+# ── (wifi psk) .network.wifi.psk INI injection ───────────────────────────────────
+# psk is written `psk=${psk}` in the 0600 .nmconnection here-doc; a newline injects INI
+# directives/sections (the SSID is already fenced for this class). Gate: 8-63 printable
+# (WPA passphrase) OR 64 hex (raw PSK); else the whole profile is skipped.
+if ! grep -qF 'not a valid WPA passphrase' "${PROV}"; then
+  echo "  FAIL wifi psk gate not found in provision.sh"; exit 1
+fi
+psk_ok(){ local p="$1"; { [ "${#p}" -ge 8 ] && [ "${#p}" -le 63 ] && [[ "${p}" =~ ^[[:print:]]+$ ]]; } || [[ "${p}" =~ ^[0-9A-Fa-f]{64}$ ]]; }
+ok "extracted + mirrored the real wifi psk gate predicate"
+for x in $'goodpass\n[wifi-security]\nkey-mgmt=none' 'short' $'12345678\nx' "$(printf 'g%.0s' {1..65})"; do
+  if rej psk_ok "${x}"; then ok "psk rejected: $(printf %q "${x}" | cut -c1-28)"
+  else bad "psk NOT rejected: $(printf %q "${x}" | cut -c1-28)"; fi
+done
+for x in goodpass1 MyWiFiPassword "$(printf 'a%.0s' {1..63})" "$(printf 'a%.0s' {1..8})" "$(printf '0%.0s' {1..64})"; do
+  if psk_ok "${x}"; then ok "psk accepted (len ${#x})"; else bad "psk rejected (len ${#x})"; fi
+done
+
 echo "== done: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

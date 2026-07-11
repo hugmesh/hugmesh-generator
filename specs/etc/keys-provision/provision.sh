@@ -522,6 +522,17 @@ provision_network() {
             warn "Wi-Fi SSID '${ssid}' contains a path separator/control char or is too long — skipping Wi-Fi profile"
             return 0
         fi
+        # psk (.network.wifi.psk) is written verbatim as `psk=${psk}` in the keyfile INI below.
+        # A newline/control char would inject arbitrary INI directives/sections into the root
+        # 0600 profile (the SSID above is already fenced for exactly this INI-injection class).
+        # Require a valid WPA secret — 8-63 printable chars (passphrase) OR 64 hex (raw PSK) —
+        # fail-closed; skip the whole profile on a malformed psk, mirroring the SSID guard.
+        if [ -n "${psk}" ] && [ "${psk}" != "null" ] \
+           && ! { [ "${#psk}" -ge 8 ] && [ "${#psk}" -le 63 ] && [[ "${psk}" =~ ^[[:print:]]+$ ]]; } \
+           && [[ ! "${psk}" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+            warn "Wi-Fi psk is not a valid WPA passphrase (8-63 printable chars) or 64-hex PSK — skipping Wi-Fi profile"
+            return 0
+        fi
         cat > "${nm_dir}/${ssid}.nmconnection" <<EOF
 [connection]
 id=${ssid}
@@ -2572,6 +2583,16 @@ provision_hosts() {
     local n i ip name dom facade pki_ip
     n="$(jqm '.nodes | length')"
     dom="$(jqm '.snapdragon.cluster_domain // ""')"
+    # Fail-closed: dom/facade/pki_ip and every node ip/name below are written VERBATIM into
+    # /etc/hosts; a newline or whitespace in any of them injects arbitrary host lines (e.g.
+    # mapping the control-plane name to an attacker IP = first-boot join MITM), the same class
+    # the resolve_cp_dns_name() + magic_dns_domain gates fence off. Reject anything that is not a
+    # bare DNS name / IP literal — blank a malformed OPTIONAL value here, skip a malformed node
+    # in the loop. (These gates run BEFORE the `{ … } >> /etc/hosts` block, so warn is unredirected.)
+    if [ -n "${dom}" ] && [ "${dom}" != "null" ] && [[ ! "${dom}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        warn "cluster_domain is not a bare DNS name ([A-Za-z0-9._-]) — dropping the .<domain> host suffix"
+        dom=""
+    fi
     # Facade alias: internal nodes/laptops must resolve the public facade name to
     # the pki node's INTERNAL ip (the pki node DNATs :443 -> pki gateway), so
     # VPN/LAN traffic — especially reaching headscale via the pki gateway — never
@@ -2582,10 +2603,18 @@ provision_hosts() {
     if [ -z "${facade}" ] || [ "${facade}" = "null" ]; then
         { [ -n "${dom}" ] && [ "${dom}" != "null" ]; } && facade="scale.${dom}" || facade=""
     fi
+    if [ -n "${facade}" ] && [ "${facade}" != "null" ] && [[ ! "${facade}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        warn "facade_host is not a bare DNS name ([A-Za-z0-9._-]) — dropping the facade host entry"
+        facade=""
+    fi
     pki_ip=""
     for ((i = 0; i < n; i++)); do
         [ "$(jqm ".nodes[$i].role")" = "pki" ] && { pki_ip="$(jqm ".nodes[$i].ip")"; break; }
     done
+    if [ -n "${pki_ip}" ] && [ "${pki_ip}" != "null" ] && [[ ! "${pki_ip}" =~ ^[0-9A-Fa-f:.]+$ ]]; then
+        warn "pki node ip is not an IP literal ([0-9A-Fa-f:.]) — dropping the facade/cp host entries"
+        pki_ip=""
+    fi
     # Stable control-plane MagicDNS name for the first-boot window: until the
     # joining node's MagicDNS converges, resolve the CP endpoint to the pki
     # node's IP so `kubeadm join <cp_dns_name>:6443` works immediately. MagicDNS
@@ -2598,6 +2627,13 @@ provision_hosts() {
         for ((i = 0; i < n; i++)); do
             ip="$(jqm ".nodes[$i].ip")"; name="$(jqm ".nodes[$i].name")"
             [ -n "${ip}" ] && [ "${ip}" != "null" ] && [ -n "${name}" ] || continue
+            # >&2: this loop runs INSIDE the `{ … } >> /etc/hosts` block, so warn must NOT
+            # land on stdout (which is the hosts file). Skip a node whose ip/name is not a
+            # bare IP literal / hostname — a newline would inject standalone host lines.
+            if [[ ! "${ip}" =~ ^[0-9A-Fa-f:.]+$ ]] || [[ ! "${name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+                warn "node[$i] ip/name malformed (IP literal + [A-Za-z0-9._-] hostname only) — skipping" >&2
+                continue
+            fi
             if [ -n "${dom}" ] && [ "${dom}" != "null" ]; then
                 echo "${ip} ${name} ${name}.${dom}"
             else
