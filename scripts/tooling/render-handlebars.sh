@@ -65,6 +65,41 @@ source "$BRAND_CONF"
 : "${HEADSCALE_URL:=}"
 : "${MESH_TAG:=}"
 
+# ── Fail-closed scalar validation ──────────────────────────────────────────────
+# This opt-in `--engine handlebars` path feeds BRAND/ORG/CLUSTER_DOMAIN/BRAND_TITLE/NS_PREFIX,
+# UNESCAPED (render-handlebars.js sets noEscape:true), into generated gateway route/host YAML.
+# The DEFAULT sed engine (generate-brand-repos.sh) already validates these fail-closed; without
+# the same guards here a newline/metachar-bearing CLUSTER_DOMAIN (etc.) injects or corrupts the
+# ingress host + route config. Mirrors generate-brand-repos.sh — keep IN SYNC (each brand script
+# in this tree carries its own copy of these guards).
+_DNS_LABEL='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+_DNS_NAME='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'
+_hbdie() { echo "[render-handlebars] FATAL: $*" >&2; exit 1; }
+[[ "$BRAND" =~ $_DNS_LABEL ]] \
+  || _hbdie "invalid BRAND '${BRAND}' (must be a DNS label)"
+[[ "$ORG" =~ ^[A-Za-z0-9._-]{1,63}$ ]] \
+  || _hbdie "invalid ORG '${ORG}' (allowed: A-Za-z0-9._- , 1..63)"
+[[ "$CLUSTER_DOMAIN" =~ $_DNS_NAME ]] \
+  || _hbdie "invalid CLUSTER_DOMAIN '${CLUSTER_DOMAIN}' (must be a DNS name)"
+if [ -n "$MESH_TAG" ]; then
+  [[ "$MESH_TAG" =~ ^tag:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
+    || _hbdie "invalid MESH_TAG '${MESH_TAG}' (must be 'tag:<dns-label>')"
+fi
+if [ -n "$HEADSCALE_URL" ]; then
+  [[ "$HEADSCALE_URL" =~ ^https?://[A-Za-z0-9._~:/?#@!$()*,=%+-]+$ ]] \
+    || _hbdie "invalid HEADSCALE_URL '${HEADSCALE_URL}'"
+fi
+[ -n "$BRAND_TITLE" ] || _hbdie "BRAND_TITLE must not be empty"
+case "$BRAND_TITLE" in
+  *['"\$`|&']* ) _hbdie "invalid BRAND_TITLE (forbidden chars: \" \\ \$ \` | &)" ;;
+esac
+case "$BRAND_TITLE" in
+  *['{}']* ) _hbdie "invalid BRAND_TITLE (braces forbidden — no template-token injection)" ;;
+esac
+if [[ "$BRAND_TITLE" == *$'\n'* || "$BRAND_TITLE" == *$'\r'* ]]; then
+  _hbdie "invalid BRAND_TITLE (must be single-line)"
+fi
+
 # Derive HARBOR_PROJECT identically to generate-brand-repos.sh (single source of
 # the slug rule; keep in sync if that derivation ever changes).
 HARBOR_PROJECT="${ORG,,}"
@@ -75,6 +110,8 @@ HARBOR_PROJECT="$(echo "$HARBOR_PROJECT" | sed 's/^-*//; s/-*$//')"
 # slug; a brand profile may override by setting NS_PREFIX). Referenced by the
 # brand-repo ApplicationSet templates/apps/13d-brand-repos.yaml.hbs. Keep in sync.
 NS_PREFIX="${NS_PREFIX:-$BRAND}"
+[[ "$NS_PREFIX" =~ $_DNS_LABEL ]] \
+  || _hbdie "invalid NS_PREFIX '${NS_PREFIX}' (must be a DNS label)"
 
 BRAND_OUT="${OUT_DIR}/${BRAND}-gitops"
 
