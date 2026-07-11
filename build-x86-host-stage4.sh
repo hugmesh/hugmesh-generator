@@ -45,6 +45,13 @@ PERSON_ROLE=""         # FD-08 identity role for client images: user|mod|admin|s
 DOMAINS=""             # FD-08 domain tie (comma/space separated; first = primary domain)
 DESKTOP="thin"         # client desktop weight: thin (LXDE/openbox) | full (heavier DE)
 CLUSTER_DOMAIN="snapdragon.systems"
+# Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix that
+# every node joins. "" = builder default (legacy byte-identical: no marker, headscale keeps
+# its checked-in headnet.internal base_domain). The Studio emits --superdomain <effective>
+# only for MESH builds. PERMANENTLY INTERNAL — never the go-live public apex (that stays
+# CLUSTER_DOMAIN); this flag is the authoritative on-image bake, the KEYS/provision channel
+# handles the secret side.
+SUPERDOMAIN=""
 BRAND="snapdragon"
 BRAND_TITLE="Snapdragon Systems"
 ORG="Snapdragon-Systems"
@@ -399,6 +406,9 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             (Cloudflare/ACME allowed; creds from keys USB) — prints
                             a LOUD announced banner before building.
       --cluster-domain D    Default: ${CLUSTER_DOMAIN}
+      --superdomain D       Orchestration superdomain (mesh MagicDNS suffix) baked to
+                            /etc/<brand>/superdomain + headscale base_domain. Mesh only;
+                            permanently internal (never the go-live apex). Default: derived
   -u, --user NAME           Fallback user. Default: ${DEFAULT_USER}
       --user-password PASS  Default: ${DEFAULT_USER_PASS}
       --root-password PASS  Default: ${ROOT_PASS}
@@ -679,6 +689,7 @@ while [[ $# -gt 0 ]]; do
         --env) ENV="$2"; shift 2 ;;
         --release-tag) RELEASE_TAG="$2"; shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
+        --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
         --release-state)      RELEASE_STATE="$2";      shift 2 ;;
         --brand) BRAND="$2"; shift 2 ;;
         --brand-title) BRAND_TITLE="$2"; shift 2 ;;
@@ -1268,6 +1279,9 @@ _validate_username "--local-user" "${LOCAL_USER}"
 _validate_slug     "--brand"      "${BRAND}"
 _validate_org      "--org"        "${ORG}"
 _validate_dnsname  "--cluster-domain" "${CLUSTER_DOMAIN}"
+# Orchestration superdomain: validate as a DNS name (like --cluster-domain) only when
+# set; "" = builder default (no bake). Same RFC-1123 allowlist as every other domain arg.
+[ -n "${SUPERDOMAIN}" ] && _validate_dnsname "--superdomain" "${SUPERDOMAIN}"
 _validate_dnsname  "--games-domain"   "${GAMES_DOMAIN}"
 _validate_hostname "--hostname"   "${HOSTNAME}"
 _validate_title    "--brand-title" "${BRAND_TITLE}"
@@ -1426,6 +1440,7 @@ if ${PRINT_PLAN}; then
     _plan JOBS               "${JOBS}"
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
+    _plan SUPERDOMAIN        "${SUPERDOMAIN}"
     _plan HOSTNAME           "${HOSTNAME:-${BRAND}-host}"
     _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo none || echo "${OPTIONAL_SERVICES:-none}")"
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
@@ -2472,6 +2487,14 @@ fi   # ! UNAFFILIATED (k8s/containerd config remnants)
 cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf" "${SYSROOT}/etc/ssh/sshd_config.d/"
 if ! ${UNAFFILIATED}; then
 cp "${SHARED_SPECS}/etc/headscale/config.yaml"        "${SYSROOT}/etc/headscale/"
+# WS-SUPER-B: template the control plane's MagicDNS suffix to the orchestration
+# superdomain so the baked headscale config agrees with the KEYS/provision channel
+# (provision.sh resolve_magic_dns_domain). "" = the checked-in default (headnet.internal);
+# the provision.json value stays authoritative and re-templates this at first boot.
+if [ -n "${SUPERDOMAIN}" ] && [ -f "${SYSROOT}/etc/headscale/config.yaml" ]; then
+    sed -i "s|^  base_domain: .*|  base_domain: ${SUPERDOMAIN}|" "${SYSROOT}/etc/headscale/config.yaml"
+    info "Templated headscale base_domain -> ${SUPERDOMAIN} (orchestration superdomain)"
+fi
 # Layer-A: bake the BOOTSTRAP policy AS the initial /etc/headscale/policy.hujson
 # (NO any-to-any tag:snapdragon->tag:snapdragon:* :22 hole; KEEPS the k8s CIDR
 # data-plane rule + a single conservative @@TS_SSH_USER@@ ssh rule). The #66
@@ -2961,6 +2984,18 @@ if [ -n "${HEADSCALE_URL:-}" ]; then
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/snapdragon/headscale-url"
 fi
 fi   # ! UNAFFILIATED (marker tree)
+# Orchestration superdomain (WS-SUPER-B): bake the mesh plane's MagicDNS suffix so the
+# image RECORDS the plane it belongs to. Self-contained brand-etc fold like secureboot
+# (SB_ETC_DIR): affiliated -> /etc/snapdragon, unaffiliated -> /etc/gentoo. Only ever set
+# on a MESH build (the Studio's gate), and an unaffiliated desktop is standalone and never
+# mesh, so the /etc/gentoo branch is belt-and-braces. This is the AUTHORITATIVE on-image
+# bake; the KEYS/provision channel remains the secret side.
+if [ -n "${SUPERDOMAIN}" ]; then
+    if ${UNAFFILIATED}; then _sd_etc="/etc/gentoo"; else _sd_etc="/etc/snapdragon"; fi
+    mkdir -p "${SYSROOT}${_sd_etc}"
+    echo "${SUPERDOMAIN}" > "${SYSROOT}${_sd_etc}/superdomain"
+    info "Baked orchestration superdomain -> ${_sd_etc}/superdomain (${SUPERDOMAIN})"
+fi
 if ${UNAFFILIATED}; then
     info "Unaffiliated desktop: no marker tree, no cluster payload, no identity tie."
 elif ${ROLE_CLIENT}; then

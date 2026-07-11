@@ -161,14 +161,15 @@ class NetworkPage(QtWidgets.QWizardPage):
             "distinct from not joining the mesh)")
         cp.addWidget(self.skip_tailscale)
         # orchestration superdomain (spec 5): the permanently-internal <brand>.internal
-        # every mesh node joins (NON_ARGV: manifest + KEYS channel, never a builder
-        # flag; distinct from the public apex above, I7). Editable in mesh; a read-only
-        # derived display in cloud (so the Users-page superadmin lock is explicable).
+        # every mesh node joins (manifest + KEYS channel, plus the WS-SUPER-B builder
+        # bake: --superdomain on a mesh build writes <etc>/superdomain + the headscale
+        # MagicDNS suffix; distinct from the public apex above, I7). Editable in mesh; a
+        # read-only derived display in cloud (so the Users-page superadmin lock is explicable).
         self.superdomain = QtWidgets.QLineEdit()
         self.superdomain.setToolTip(
             "The internal orchestration domain all mesh nodes join (empty = derived "
-            "<brand>.internal). Delivered via the mesh manifest + the KEYS channel — "
-            "never a builder flag, never the go-live apex.")
+            "<brand>.internal). Baked into mesh images via --superdomain + the mesh "
+            "manifest + the KEYS channel — never the go-live apex.")
         self.superdomain_row = _row("Orchestration superdomain", self.superdomain)
         cp.addWidget(self.superdomain_row)
         lay.addWidget(self.mesh_box)

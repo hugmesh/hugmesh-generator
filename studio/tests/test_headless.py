@@ -245,16 +245,16 @@ def test_print_command_mesh_config_omitting_tailscale_sso_keeps_its_mesh(tmp_pat
     assert "PLAN_SSO=casdoor-oidc" in plan.stdout     # SSO plane ON, not "off"
 
 
-def test_print_command_new_non_argv_fields_ride_config_but_never_argv(tmp_path):
-    """superdomain stays NON_ARGV (v1 = manifest + KEYS channel): it round-trips
-    through a saved config but the printed command never carries it. packages_add/
-    packages_drop, by contrast, were flipped to emitted --packages-add/--packages-drop
-    by WS-BUILDER, so the printed command DOES carry them (all six builders parse them)."""
+def test_print_command_new_emitted_fields_ride_config_and_reach_argv(tmp_path):
+    """superdomain, packages_add and packages_drop all round-trip through a saved config
+    AND reach the printed command: superdomain -> --superdomain on a MESH build
+    (WS-SUPER-B), packages_add/drop -> --packages-add/--packages-drop (WS-BUILDER). All
+    six builders parse each of them."""
     cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
                       superdomain="core.acme.internal",
                       packages_add="app-editors/vim app-misc/tmux",
                       packages_drop="games-util/steam")
-    p = tmp_path / "nonargv.json"
+    p = tmp_path / "emitted.json"
     cfg.save(str(p))
     reloaded = ImageConfig.load(str(p))
     assert reloaded.superdomain == "core.acme.internal"
@@ -266,9 +266,9 @@ def test_print_command_new_non_argv_fields_ride_config_but_never_argv(tmp_path):
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
-    # superdomain is NEVER a builder flag on any platform
+    # superdomain reaches argv on a mesh build (WS-SUPER-B emission flip)
     for token in ("--superdomain", "core.acme.internal"):
-        assert token not in r.stdout
+        assert token in r.stdout
     # packages_add/packages_drop DO reach argv now (WS-BUILDER emission flip)
     for token in ("--packages-add", "--packages-drop",
                   "app-editors/vim app-misc/tmux", "games-util/steam"):

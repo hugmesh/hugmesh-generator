@@ -99,6 +99,10 @@ HOSTNAME=""
 ROLE="generic"          # generic | pki | backend | frontend | desktop
 DESKTOP="none"          # derived: 'light' for --role desktop, else none (--print-plan/banner display only)
 CLUSTER_DOMAIN="snapdragon.systems"
+# Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix every
+# node joins. "" = builder default (legacy byte-identical). The Studio emits --superdomain
+# <effective> only for MESH builds; permanently internal, never the go-live apex.
+SUPERDOMAIN=""
 BRAND="snapdragon"                  # name slug (namespaces, gateways, hostnames)
 BRAND_TITLE="Snapdragon Systems"    # human-readable title
 ORG="Snapdragon-Systems"            # GitHub org / image namespace
@@ -772,6 +776,7 @@ while [[ $# -gt 0 ]]; do
         -C|--config)          CONFIG_FILE="$2";        shift 2 ;;  # sourced above
         --env)                ENV="$2";                shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
+        --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
         --release-state)      RELEASE_STATE="$2";      shift 2 ;;
         --brand)              BRAND="$2";              shift 2 ;;
         --brand-title)        BRAND_TITLE="$2";        shift 2 ;;
@@ -1066,6 +1071,8 @@ _RE_KIMG='^[A-Za-z0-9._-]+$'
 _require_match "--brand"         "${BRAND}"          "${_RE_SLUG}"
 _require_match "--org"           "${ORG}"            "${_RE_ORG}"
 _require_match "--cluster-domain" "${CLUSTER_DOMAIN}" "${_RE_DNS}"
+# Orchestration superdomain: DNS-validated like --cluster-domain, only when set.
+[ -n "${SUPERDOMAIN}" ] && _require_match "--superdomain" "${SUPERDOMAIN}" "${_RE_DNS}"
 _require_match "--games-domain"  "${GAMES_DOMAIN}"   "${_RE_DNS}"
 _require_match "--hostname"      "${HOSTNAME}"       "${_RE_DNS}"
 _require_match "--user"          "${DEFAULT_USER}"   "${_RE_USER}"
@@ -1920,6 +1927,7 @@ if ${PRINT_PLAN}; then
     _plan JOBS               "${JOBS}"
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
+    _plan SUPERDOMAIN        "${SUPERDOMAIN}"
     _plan HOSTNAME           "${HOSTNAME}"
     _plan K8S                "$(${ROLE_CLIENT} && echo none || { [ "${ROLE}" = "pki" ] && echo control-plane || echo worker; })"
     _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo "n/a (role=desktop; no cluster GitOps tree baked)" || echo "${OPTIONAL_SERVICES:-none}")"
@@ -2359,6 +2367,13 @@ write_growfs_conf "${SYSROOT}/etc/growfs.conf"
 # keys-provision via `headscale policy set`.
 mkdir -p "${SYSROOT}/etc/headscale"
 cp "${SHARED_SPECS}/etc/headscale/config.yaml"            "${SYSROOT}/etc/headscale/config.yaml"
+# WS-SUPER-B: template the node's headscale MagicDNS suffix to the orchestration
+# superdomain so the baked config agrees with the KEYS/provision channel. "" = the
+# checked-in default (headnet.internal); provision.json stays authoritative at first boot.
+if [ -n "${SUPERDOMAIN}" ] && [ -f "${SYSROOT}/etc/headscale/config.yaml" ]; then
+    sed -i "s|^  base_domain: .*|  base_domain: ${SUPERDOMAIN}|" "${SYSROOT}/etc/headscale/config.yaml"
+    info "Templated headscale base_domain -> ${SUPERDOMAIN} (orchestration superdomain)"
+fi
 # Layer-A: bake the BOOTSTRAP policy AS the initial policy.hujson (NO any-to-any
 # :22 hole; KEEPS the k8s CIDR data-plane rule). First verified Layer-A sync
 # re-renders it from policy.hujson.tmpl. (See build-x86-host-stage4.sh rationale.)
@@ -2486,6 +2501,11 @@ chmod +x "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh" "$
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
+# Orchestration superdomain (WS-SUPER-B): record the mesh plane the image joins.
+if [ -n "${SUPERDOMAIN}" ]; then
+    echo "${SUPERDOMAIN}" > "${SYSROOT}/etc/snapdragon/superdomain"
+    info "Baked orchestration superdomain -> /etc/snapdragon/superdomain (${SUPERDOMAIN})"
+fi
 # Runtime ENV marker (test|prod). Read by bootstrap/provision; also documents
 # the image's posture. test => LAN wildcard DNS authoritative; prod => public.
 echo "${ENV}"            > "${SYSROOT}/etc/snapdragon/env"

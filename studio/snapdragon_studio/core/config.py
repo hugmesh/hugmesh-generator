@@ -274,6 +274,11 @@ PLATFORM_FIELD_SUPPORT: dict[str, tuple[str, ...]] = {
     # cluster / mesh identity.
     "cluster_domain": _ALL_PLATFORMS, "games_domain": _X86_RPI5, "release_state": _X86_RPI5,
     "person_role": _X86, "domains": _X86,
+    # orchestration superdomain — every builder parses --superdomain (WS-SUPER-B bake);
+    # emitted ONLY in mesh mode (see _superdomain_args), so it is EXCLUDED from the
+    # generic _FIELD_PROBE diff-probe (mixed cloud/mesh baselines) and pinned by a
+    # dedicated mesh-mode test, exactly like `unaffiliated`.
+    "superdomain": _ALL_PLATFORMS,
     # local account (compose without --standalone on ARM too, G28).
     "local_user": _ALL_PLATFORMS, "local_pass": _ALL_PLATFORMS,
     # node fallback creds (x86 only; rpi5's are deprecated no-ops).
@@ -341,13 +346,16 @@ PLATFORM_FIELD_SUPPORT: dict[str, tuple[str, ...]] = {
 # consumed by build-all-roles.sh / the Makefile (G40); hw_profile is a GUI-only preset
 # that pre-fills gpu/wifi/bt and never emits (decided document-as-preset, G41).
 #
-# superdomain is documented-not-emitted (v1 flows through the mesh manifest + the KEYS
-# channel that sets .mesh.magic_dns_domain, never a builder flag — a real --superdomain
-# is the separately-gated WS-SUPER-B). packages_add/packages_drop STARTED here (Phase 1,
-# WS-CORE: fields + save/load + validation, zero emission) and were flipped by WS-BUILDER
-# to emitted --packages-add/--packages-drop (all six builders parse them) — they now live
-# in PLATFORM_FIELD_SUPPORT above, not here.
-NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile", "superdomain")
+# superdomain STARTED here (v1: manifest + the KEYS channel that sets .mesh.magic_dns_domain)
+# and was flipped by WS-SUPER-B to an emitted --superdomain (all six builders parse it, bake it
+# to <etc>/superdomain, and template it into the node's headscale config). It is now in
+# PLATFORM_FIELD_SUPPORT above, not here — but emitted ONLY for mesh builds (the orchestration
+# plane; standalone joins none), the EFFECTIVE value (derived <brand>.internal when ""), so every
+# mesh image RECORDS its plane. It stays permanently internal / never go-live-flipped (I7); the
+# v1 KEYS channel remains authoritative for the secret side. packages_add/packages_drop likewise
+# STARTED here (WS-CORE Phase 1) and were flipped by WS-BUILDER to emitted
+# --packages-add/--packages-drop — they too now live in PLATFORM_FIELD_SUPPORT above, not here.
+NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile")
 
 
 # ── role-class capability layer (Qt-free; BESIDE PLATFORM_FIELD_SUPPORT, NEVER inside
@@ -491,7 +499,7 @@ class ImageConfig:
     org: str = "Snapdragon-Systems"
     brand_profile: str = ""            # -C/--config brands/*.conf (carries HEADSCALE_URL/RELEASE_STATE/… presets)
     cluster_domain: str = "snapdragon.systems"
-    superdomain: str = ""              # orchestration superdomain all mesh nodes join; "" = derived <brand>.internal (NON_ARGV: manifest + KEYS channel, never a builder flag; permanently internal, never go-live-flipped, I7)
+    superdomain: str = ""              # orchestration superdomain all mesh nodes join; "" = derived <brand>.internal. Emitted as --superdomain for MESH builds (WS-SUPER-B: baked to <etc>/superdomain + headscale MagicDNS); permanently internal, never go-live-flipped (I7)
     games_domain: str = ""             # --games-domain (games.<domain> host + OIDC issuer; x86+rpi5)
     release_state: str = ""            # --release-state internal|public (x86+rpi5; "" = builder default)
     release_tag: str = ""              # --release-tag image stamp (x86)
@@ -988,6 +996,25 @@ class ImageConfig:
             a += ["--packages-drop", self.packages_drop]
         return a
 
+    def _superdomain_args(self) -> list[str]:
+        """--superdomain <effective_superdomain()> — the mesh orchestration plane every
+        node joins (baked to <etc>/superdomain + templated into the node's headscale
+        MagicDNS suffix by the builder). GATE: mesh mode ONLY. The superdomain IS the
+        orchestration plane, so a standalone image (no plane at all) emits nothing, and
+        a cloud CLIENT desktop — a consumer of a tailnet, never the definer of the
+        orchestration plane — is likewise NOT baked with one. This mirrors the mesh-only
+        v1 KEYS channel (gen-provision-keys sets .mesh.magic_dns_domain only on NODE
+        builds); baking cloud too would double-configure against that channel.
+        The EFFECTIVE value is always emitted (derived <brand>.internal when the field is
+        ""), so every mesh image RECORDS its plane on disk — an intentional
+        emission-behaviour change (like --cluster-domain), goldens updated. The value is
+        permanently internal and never go-live-flipped (invariant I7); the flag is the
+        authoritative on-image BAKE while the KEYS channel stays authoritative for the
+        secret side (provision_headscale re-templates at first boot to the same value)."""
+        if self.mode == "mesh":
+            return ["--superdomain", self.effective_superdomain()]
+        return []
+
     def _arm_common_args(self) -> list[str]:
         """Flags shared by ALL FIVE arm64 builders beyond the brand block: env baking,
         host identity, cluster domain, mesh opt-out + version pins, standalone/local
@@ -1000,6 +1027,10 @@ class ImageConfig:
         a += self._identity_args()
         if self.cluster_domain != "snapdragon.systems":
             a += ["--cluster-domain", self.cluster_domain]
+        # Orchestration superdomain — mesh-only, grouped with the cluster/mesh identity
+        # plane (see _superdomain_args). Empty for cloud/standalone, so every existing
+        # ARM cloud/standalone golden stays byte-identical.
+        a += self._superdomain_args()
         # The arm builders have no --with/--no-tailscale pair; mesh is on unless
         # skipped. A never-set field resolves to the MODE default (cloud/mesh ON,
         # standalone OFF) so a mesh config that omits the key keeps its mesh.
@@ -1291,6 +1322,10 @@ class ImageConfig:
         if self.mode in ("cloud", "mesh"):
             if self.cluster_domain != "snapdragon.systems":
                 a += ["--cluster-domain", self.cluster_domain]
+            # Orchestration superdomain — mesh-only (see _superdomain_args), emitted for
+            # every mesh role (nodes AND clients), so it sits OUTSIDE the node-role gate
+            # below. No-op for cloud, keeping every cloud golden byte-identical.
+            a += self._superdomain_args()
             if self.games_domain:
                 a += ["--games-domain", self.games_domain]
             if self.release_state:

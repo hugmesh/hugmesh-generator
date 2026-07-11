@@ -830,8 +830,9 @@ run_threading_checks() {
 # Expectation grammar: 'token'  must appear in the printed command
 #                      '!token' must NOT appear in the printed command
 #                      'PLAN:pat' / 'PLAN:!pat'  must (not) match the plan output
-GUITHR_EXPECTED=53   # fail-closed: keep in sync with the guithr call list below
-                     # (51 + packages_add/packages_drop, WS-BUILDER emission flip)
+GUITHR_EXPECTED=56   # fail-closed: keep in sync with the guithr call list below
+                     # (51 + packages_add/packages_drop, WS-BUILDER emission flip;
+                     # + superdomain mesh-x86/mesh-rpi5/standalone-absent, WS-SUPER-B)
 GUITHR_RUN=0
 
 guithr() { # NAME CFG-JSON EXPECT...
@@ -973,6 +974,15 @@ run_gui_threading_checks() {
     guithr g9-packages-drop \
         '{"platform":"x86","role":"be","mode":"mesh","env":"test","packages_drop":"app-editors/nano"}' \
         '--packages-drop' 'app-editors/nano' 'PLAN:^PLAN_PACKAGES_DROP=app-editors/nano$'
+    # ── orchestration superdomain (WS-SUPER-B): emitted (effective <brand>.internal) for
+    # a MESH build, threaded to the builder's PLAN_SUPERDOMAIN; ABSENT for standalone
+    # (no orchestration plane). Default brand -> snapdragon.internal.
+    guithr g-superdomain-mesh-x86 \
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test"}' \
+        '--superdomain snapdragon.internal' 'PLAN:^PLAN_SUPERDOMAIN=snapdragon.internal$'
+    guithr g-superdomain-standalone-absent-x86 \
+        '{"platform":"x86","role":"standalone-thick","mode":"standalone","env":"test"}' \
+        '!--superdomain' 'PLAN:^PLAN_SUPERDOMAIN=$'
 
     # ── rpi5 ──
     guithr g4-release-state-rpi5 \
@@ -1013,6 +1023,10 @@ run_gui_threading_checks() {
     guithr g25-grow-rpi5 \
         '{"platform":"rpi5","role":"be","mode":"mesh","env":"test","grow":"none"}' \
         '--grow none' 'PLAN:grow=none'
+    # WS-SUPER-B on ARM: the derived superdomain threads to the rpi5 builder's PLAN too.
+    guithr g-superdomain-mesh-rpi5 \
+        '{"platform":"rpi5","role":"be","mode":"mesh","env":"test"}' \
+        '--superdomain snapdragon.internal' 'PLAN:^PLAN_SUPERDOMAIN=snapdragon.internal$'
 
     # ── frite ──
     guithr g35-uboot-chain-frite \
@@ -1134,6 +1148,10 @@ run_negative_checks() {
         ./build-x86-host-stage4.sh --role be --packages-add 'app-editors/vim; reboot' --print-plan
     expect_fail "x86: --packages-drop of a mandatory-payload atom rejected" \
         ./build-x86-host-stage4.sh --role be --packages-drop sys-cluster/kubelet --print-plan
+    # orchestration superdomain (WS-SUPER-B): a malformed superdomain must be rejected at
+    # the builder boundary (same RFC-1123 DNS allowlist as --cluster-domain).
+    expect_fail "x86: malformed --superdomain rejected" \
+        ./build-x86-host-stage4.sh --role be --superdomain 'x;reboot.internal' --print-plan
     # GUI: an unknown platform must refuse to print a command
     printf '{"platform":"bogus","role":"pki","mode":"mesh","env":"test"}\n' >"${TMP_DIR}/neg.json"
     expect_fail "gui: unknown platform" \
@@ -1215,9 +1233,10 @@ run_gui_gating_checks() {
 # emission (PLATFORM_FIELD_SUPPORT-driven): 6 forward checks (every parsed flag
 # fielded or documented-out-of-scope) + 6 reverse checks (every emitted flag
 # parsed) + 12 packages-delta checks (--packages-add/--packages-drop, both
-# parsed AND fielded, on all six builders — WS-BUILDER's atomic flip). FAIL-CLOSED:
-# 24 expected, shortfall = failures.
-COV_EXPECTED=24
+# parsed AND fielded, on all six builders — WS-BUILDER's atomic flip) + 6
+# superdomain checks (--superdomain parsed AND fielded on all six — WS-SUPER-B's
+# flip). FAIL-CLOSED: 30 expected, shortfall = failures.
+COV_EXPECTED=30
 COV_PASS=0; COV_FAIL=0
 run_flag_coverage() {
     local out="${TMP_DIR}/flagcov.out"

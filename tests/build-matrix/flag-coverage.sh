@@ -118,6 +118,10 @@ SAMPLES = {
     "hostname": [{"hostname": "myhost"}], "timezone": [{"timezone": "America/New_York"}],
     "user": [{"user": "bob"}],
     "cluster_domain": [{"cluster_domain": "acme.example"}],
+    # superdomain emits ONLY in mesh mode (WS-SUPER-B), and the x86/frite/opi5/opz2
+    # baselines are cloud — so force mesh here to field the flag on every builder, the
+    # same baseline-override trick `unaffiliated` uses.
+    "superdomain": [{"mode": "mesh", "superdomain": "acme.internal"}],
     "games_domain": [{"games_domain": "games.acme.example"}],
     "release_state": [{"release_state": "public"}],
     "person_role": [{"person_role": "admin"}],
@@ -357,5 +361,32 @@ check_packages_delta frite         build-frite-stage4.sh
 check_packages_delta jetson        build-jetson-stage4.sh
 check_packages_delta orangepi5     build-orangepi5-stage4.sh
 check_packages_delta orangepizero2 build-orangepi-zero2-stage4.sh
+
+# ── superdomain coverage (WS-SUPER-B) ───────────────────────────────────────────
+# --superdomain is the ONE flag that landed on ALL SIX builders in the WS-SUPER-B
+# train. Assert per builder (1 x 6 = 6 explicit checks) that it is BOTH parsed by
+# that builder AND fielded by the Studio for that platform (its mesh emission vocab).
+# Its own countable bucket so a regression names the exact cell — mirrors
+# check_packages_delta.
+check_superdomain() { # platform builder
+    local platform="$1" builder="$2"
+    local flat="${TMP_DIR}/arms-flat-${platform}.txt" vocab="${TMP_DIR}/vocab-${platform}.txt"
+    local parsed=false fielded=false
+    grep -qxF -- --superdomain "${flat}"  && parsed=true
+    grep -qxF -- --superdomain "${vocab}" && fielded=true
+    if ${parsed} && ${fielded}; then
+        echo "FLAGCOV PASS ${builder} --superdomain (parsed + fielded)"
+    else
+        echo "FLAGCOV FAIL ${builder} --superdomain — parsed=${parsed} fielded=${fielded} (WS-SUPER-B flip incomplete on this builder)"
+        FAILS=$((FAILS+1))
+    fi
+}
+
+check_superdomain x86           build-x86-host-stage4.sh
+check_superdomain rpi5          build-rpi5-stage4.sh
+check_superdomain frite         build-frite-stage4.sh
+check_superdomain jetson        build-jetson-stage4.sh
+check_superdomain orangepi5     build-orangepi5-stage4.sh
+check_superdomain orangepizero2 build-orangepi-zero2-stage4.sh
 
 [ "${FAILS}" -eq 0 ]

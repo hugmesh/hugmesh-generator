@@ -106,6 +106,10 @@ TIMEZONE="UTC"
 HOSTNAME=""
 ROLE="desktop"                                  # this image's role marker (client desktop)
 CLUSTER_DOMAIN="snapdragon.systems"
+# Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix every
+# node joins. "" = builder default (legacy byte-identical). The Studio emits --superdomain
+# <effective> only for MESH builds; permanently internal, never the go-live apex.
+SUPERDOMAIN=""
 BRAND="snapdragon"
 BRAND_TITLE="Snapdragon Systems"
 ORG="Snapdragon-Systems"
@@ -328,6 +332,7 @@ while [[ $# -gt 0 ]]; do
         -C|--config)          CONFIG_FILE="$2";           shift 2 ;;  # sourced above
         --env)                ENV="$2";                   shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2";   shift 2 ;;
+        --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
         --brand)              BRAND="$2";                 shift 2 ;;
         --brand-title)        BRAND_TITLE="$2";           shift 2 ;;
         --org)                ORG="$2";                   shift 2 ;;
@@ -510,6 +515,7 @@ _RE_TRIPLET='^[A-Za-z0-9_.-]+$'
 _require_match "--brand"          "${BRAND}"          "${_RE_SLUG}"
 _require_match "--org"            "${ORG}"            "${_RE_ORG}"
 _require_match "--cluster-domain" "${CLUSTER_DOMAIN}" "${_RE_DNS}"
+[ -n "${SUPERDOMAIN}" ] && _require_match "--superdomain" "${SUPERDOMAIN}" "${_RE_DNS}"
 _require_match "--hostname"       "${HOSTNAME}"       "${_RE_DNS}"
 _require_match "--user"           "${DEFAULT_USER}"   "${_RE_USER}"
 _require_match "--brand-title"    "${BRAND_TITLE}"    "${_RE_TITLE}"
@@ -754,6 +760,7 @@ if ${PRINT_PLAN}; then
     _plan JOBS               "${JOBS}"
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
+    _plan SUPERDOMAIN        "${SUPERDOMAIN}"
     _plan HOSTNAME           "${HOSTNAME}"
     _plan OPTIONAL_SERVICES  "none"   # lean desktop client: no baked cluster tree
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
@@ -889,6 +896,13 @@ write_growfs_conf "${SYSROOT}/etc/growfs.conf"
 
 mkdir -p "${SYSROOT}/etc/headscale"
 cp "${SHARED_SPECS}/etc/headscale/config.yaml"   "${SYSROOT}/etc/headscale/config.yaml"
+# WS-SUPER-B: template the node's headscale MagicDNS suffix to the orchestration
+# superdomain so the baked config agrees with the KEYS/provision channel. "" = the
+# checked-in default (headnet.internal); provision.json stays authoritative at first boot.
+if [ -n "${SUPERDOMAIN}" ] && [ -f "${SYSROOT}/etc/headscale/config.yaml" ]; then
+    sed -i "s|^  base_domain: .*|  base_domain: ${SUPERDOMAIN}|" "${SYSROOT}/etc/headscale/config.yaml"
+    info "Templated headscale base_domain -> ${SUPERDOMAIN} (orchestration superdomain)"
+fi
 # Layer-A: bake the BOOTSTRAP policy AS the initial policy.hujson (NO any-to-any
 # :22 hole; KEEPS the k8s CIDR data-plane rule). First verified Layer-A sync
 # re-renders it from policy.hujson.tmpl. (See build-x86-host-stage4.sh rationale.)
@@ -990,6 +1004,11 @@ chmod +x "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh" "$
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
+# Orchestration superdomain (WS-SUPER-B): record the mesh plane the image joins.
+if [ -n "${SUPERDOMAIN}" ]; then
+    echo "${SUPERDOMAIN}" > "${SYSROOT}/etc/snapdragon/superdomain"
+    info "Baked orchestration superdomain -> /etc/snapdragon/superdomain (${SUPERDOMAIN})"
+fi
 echo "${ENV}"            > "${SYSROOT}/etc/snapdragon/env"
 echo "frite:${FRITE_BOARD}" > "${SYSROOT}/etc/snapdragon/board"
 if [ -n "${HEADSCALE_URL:-}" ]; then

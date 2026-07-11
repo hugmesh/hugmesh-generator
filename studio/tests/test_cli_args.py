@@ -226,8 +226,11 @@ def test_x86_mesh_roles_golden(role):
     # + ignores them there (build-x86:1220-1222), so the Studio must not emit them.
     args = ImageConfig(mode="mesh", role=role, platform="x86",
                        tailscale=True, sso=True).to_cli_args()
+    # WS-SUPER-B: every mesh image records its orchestration plane (derived
+    # <brand>.internal). --superdomain rides the cluster/mesh identity block.
     assert args == ["--role", role, "--env", "test", "--local-user", "magus",
-                    "--with-tailscale", "--with-sso", *X86_TAIL]
+                    "--with-tailscale", "--with-sso",
+                    "--superdomain", "snapdragon.internal", *X86_TAIL]
     assert "--person-role" not in args
     assert "--domains" not in args
 
@@ -406,7 +409,9 @@ def test_x86_iso_finish_pairs_flip():
                           ("rpi5-desktop", "desktop")])
 def test_rpi5_roles_golden(role, builder_role):
     args = ImageConfig(mode="mesh", role=role, platform="rpi5", tailscale=True).to_cli_args()
-    assert args == ["--role", builder_role, "--env", "test"]
+    # WS-SUPER-B: mesh images record the derived orchestration superdomain.
+    assert args == ["--role", builder_role, "--env", "test",
+                    "--superdomain", "snapdragon.internal"]
 
 
 def test_rpi5_standalone_desktop():
@@ -416,6 +421,7 @@ def test_rpi5_standalone_desktop():
                        standalone=True, local_user="alice", local_pass="s3cret",
                        encrypt_root=True, luks_pass="hunter2").to_cli_args()
     assert args == ["--role", "desktop", "--env", "test",
+                    "--superdomain", "snapdragon.internal",
                     "--standalone", "--local-user", "alice", "--local-pass", "s3cret",
                     "--encrypt-root", "--luks-pass", "hunter2"]
 
@@ -430,7 +436,8 @@ def test_rpi5_full_surface():
     args = cfg.to_cli_args()
     assert args == ["--role", "frontend", "--env", "test",
                     "--brand", "acme", "--brand-title", "Acme", "--org", "Acme-Org",
-                    "--cluster-domain", "acme.example", "--skip-mesh",
+                    "--cluster-domain", "acme.example",
+                    "--superdomain", "acme.internal", "--skip-mesh",
                     "--enable-wifi", "--enable-bluetooth",
                     "--permit-root-login", "prohibit-password",
                     "--img-size", "4096", "--compress", "--resume",
@@ -443,7 +450,8 @@ def test_rpi5_board_unset_emits_nothing():
     builder's own default (rpi5) applies, exactly like every existing rpi5
     golden test above (none of them pass board=...)."""
     args = ImageConfig(mode="mesh", role="pki", platform="rpi5", tailscale=True).to_cli_args()
-    assert args == ["--role", "pki", "--env", "test"]
+    assert args == ["--role", "pki", "--env", "test",
+                    "--superdomain", "snapdragon.internal"]
     assert "--board" not in args
 
 
@@ -458,7 +466,8 @@ def test_rpi5_board_axis(board):
     for the actually-valid rpi3 shape.)"""
     args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
                        board=board).to_cli_args()
-    assert args == ["--role", "backend", "--board", board, "--env", "test"]
+    assert args == ["--role", "backend", "--board", board, "--env", "test",
+                    "--superdomain", "snapdragon.internal"]
 
 
 def test_rpi5_board_composes_with_desktop_standalone():
@@ -468,6 +477,7 @@ def test_rpi5_board_composes_with_desktop_standalone():
                        board="rpi4", standalone=True, local_user="alice",
                        encrypt_root=True).to_cli_args()
     assert args == ["--role", "desktop", "--board", "rpi4", "--env", "test",
+                    "--superdomain", "snapdragon.internal",
                     "--standalone", "--local-user", "alice", "--encrypt-root"]
 
 
@@ -479,6 +489,7 @@ def test_rpi5_board_rpi3_composes_with_desktop_standalone():
                        board="rpi3", standalone=True, local_user="alice",
                        encrypt_root=True).to_cli_args()
     assert args == ["--role", "desktop", "--board", "rpi3", "--env", "test",
+                    "--superdomain", "snapdragon.internal",
                     "--standalone", "--local-user", "alice", "--encrypt-root"]
 
 
@@ -565,7 +576,8 @@ def test_frite_board_flavor_desktop_matrix(board, flavor, desktop):
                           ("gpu-host", "gpu-host"), ("jetson-desktop", "desktop")])
 def test_jetson_roles_golden(role, builder_role):
     args = ImageConfig(mode="mesh", role=role, platform="jetson", tailscale=True).to_cli_args()
-    assert args == ["--role", builder_role, "--env", "test"]
+    assert args == ["--role", builder_role, "--env", "test",
+                    "--superdomain", "snapdragon.internal"]
 
 
 def test_jetson_shared_arm_surface():
@@ -573,6 +585,7 @@ def test_jetson_shared_arm_surface():
                        brand="acme", enable_wifi=True, img_size=8192,
                        compress=True, resume=True).to_cli_args()
     assert args == ["--role", "edge_ai", "--env", "test", "--brand", "acme",
+                    "--superdomain", "acme.internal",
                     "--skip-mesh", "--enable-wifi", "--img-size", "8192",
                     "--compress", "--resume"]
 
@@ -582,7 +595,8 @@ def test_jetson_shared_arm_surface():
 def test_jetson_board_axis(board):
     args = ImageConfig(mode="mesh", role="edge_ai", platform="jetson", tailscale=True,
                        board=board).to_cli_args()
-    assert args == ["--role", "edge_ai", "--board", board, "--env", "test"]
+    assert args == ["--role", "edge_ai", "--board", board, "--env", "test",
+                    "--superdomain", "snapdragon.internal"]
 
 
 # ---- env threading (test|prod baked per channel) ------------------------------
@@ -1157,17 +1171,17 @@ def test_g2_g40_g41_never_argv():
 
 
 def test_non_argv_fields_set():
-    # superdomain stays out-of-band (v1 = manifest + KEYS channel, zero emission).
-    # packages_add/packages_drop STARTED here (WS-CORE Phase 1) but WS-BUILDER flipped
-    # them to emitted --packages-add/--packages-drop, so they are NO LONGER here — they
-    # now live in PLATFORM_FIELD_SUPPORT (all six platforms).
-    assert set(NON_ARGV_FIELDS) == {"headscale_url", "pentest", "hw_profile", "superdomain"}
+    # headscale_url/pentest/hw_profile stay out-of-band (env passthrough / fleet knob /
+    # GUI preset). superdomain STARTED here (v1 = manifest + KEYS channel) but WS-SUPER-B
+    # flipped it to an emitted --superdomain (mesh-only), so it is NO LONGER here — like
+    # packages_add/packages_drop (WS-BUILDER), it now lives in PLATFORM_FIELD_SUPPORT.
+    assert set(NON_ARGV_FIELDS) == {"headscale_url", "pentest", "hw_profile"}
     # and none of them appear in the capability table (they are not "silently dropped")
     for f in NON_ARGV_FIELDS:
         assert f not in PLATFORM_FIELD_SUPPORT
-    # extra_packages + the now-emitted packages_add/packages_drop are DIFFERENT,
-    # emitted fields — all three must be in the table, none in the out-of-band set.
-    for f in ("extra_packages", "packages_add", "packages_drop"):
+    # superdomain + extra_packages + the now-emitted packages_add/packages_drop are
+    # DIFFERENT, emitted fields — all must be in the table, none in the out-of-band set.
+    for f in ("superdomain", "extra_packages", "packages_add", "packages_drop"):
         assert f in PLATFORM_FIELD_SUPPORT and f not in NON_ARGV_FIELDS
 
 
@@ -1286,7 +1300,10 @@ def _emits(platform, overrides):
 
 
 def test_field_probe_covers_the_whole_capability_table():
-    assert set(_FIELD_PROBE) | {"unaffiliated"} == set(PLATFORM_FIELD_SUPPORT)
+    # `unaffiliated` (needs a standalone baseline) and `superdomain` (mesh-only gate,
+    # so the mixed cloud/mesh baselines can't isolate it) are each probed by a dedicated
+    # test below instead of the shared before/after differ.
+    assert set(_FIELD_PROBE) | {"unaffiliated", "superdomain"} == set(PLATFORM_FIELD_SUPPORT)
 
 
 @pytest.mark.parametrize("field", sorted(_FIELD_PROBE))
@@ -1306,6 +1323,31 @@ def test_platform_field_support_unaffiliated_is_x86_only():
                                                tailscale=True, unaffiliated=True).to_cli_args()
 
 
+# a valid mesh (role, platform) per builder — the shared cloud/mesh baselines can't be
+# reused because superdomain emits ONLY in mesh mode (WS-SUPER-B).
+_MESH_ROLE = {"x86": "omnibus", "rpi5": "be", "frite": "frite", "jetson": "edge_ai",
+              "orangepi5": "orangepi5", "orangepizero2": "orangepizero2"}
+
+
+def test_platform_field_support_superdomain_is_all_platforms_mesh_gated():
+    """superdomain sits in PLATFORM_FIELD_SUPPORT as _ALL_PLATFORMS, but its emission is
+    mesh-gated (the orchestration plane; not a standalone/cloud concept), so it can't be
+    verified by the shared cloud/mesh differ. Prove directly: every builder threads the
+    EFFECTIVE value in mesh mode, and it is absent for a standalone build on that same
+    platform."""
+    assert set(PLATFORM_FIELD_SUPPORT["superdomain"]) == set(_PROBE_PLATFORMS)
+    for platform in _PROBE_PLATFORMS:
+        mesh = ImageConfig(mode="mesh", role=_MESH_ROLE[platform], platform=platform,
+                           tailscale=True, brand="acme").to_cli_args()
+        assert ("--superdomain", "acme.internal") in pairs(mesh), platform
+    # standalone (any supporting platform) carries NO orchestration plane
+    for platform in ("x86", "rpi5", "frite"):
+        role = {"x86": "standalone-thick", "rpi5": "rpi5-desktop", "frite": "frite"}[platform]
+        sa = ImageConfig(mode="standalone", role=role, platform=platform,
+                         standalone=True, brand="acme").to_cli_args()
+        assert "--superdomain" not in sa, platform
+
+
 def test_capability_table_platforms_are_all_known():
     for field, plats in PLATFORM_FIELD_SUPPORT.items():
         for p in plats:
@@ -1315,7 +1357,6 @@ def test_capability_table_platforms_are_all_known():
 # ═══════════════════════════════════════════════════════════════════════════════
 # WS-CORE redesign: superdomain, packages_add/drop, Domain.images + games migration,
 # the load() envelope guard, and the role-class capability layer (§2.1/§2.2/§2.6).
-# All Qt-free, all NON_ARGV — the argv byte-identity is proven by the goldens above.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ---- superdomain: field + derivation + round-trip + manifest --------------------
@@ -1328,13 +1369,23 @@ def test_superdomain_derivation_and_explicit():
                        ).effective_superdomain() == "mesh.acme.internal"
 
 
-def test_superdomain_never_reaches_argv():
-    # superdomain is NON_ARGV (v1 = manifest + KEYS channel) — no builder flag on any platform
+def test_superdomain_emitted_for_mesh_absent_for_standalone():
+    # WS-SUPER-B: --superdomain <effective> is baked into every MESH image (the
+    # orchestration plane); an explicit value wins over the derived <brand>.internal.
+    # A standalone image joins no plane, so it carries nothing.
     for kw in (dict(mode="mesh", role="omnibus", platform="x86", tailscale=True, sso=True),
                dict(mode="mesh", role="be", platform="rpi5", tailscale=True)):
         args = ImageConfig(superdomain="acme.internal", **kw).to_cli_args()
-        for tok in ("--superdomain", "acme.internal", "--super-domain"):
-            assert tok not in args
+        assert ("--superdomain", "acme.internal") in pairs(args)
+        assert "--super-domain" not in args     # never the misspelled alias
+    # derived value when the field is "" (brand=acme -> acme.internal)
+    derived = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
+                          tailscale=True, sso=True).to_cli_args()
+    assert ("--superdomain", "acme.internal") in pairs(derived)
+    # standalone (no orchestration plane) never emits it, even if a value is set
+    sa = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                     superdomain="acme.internal").to_cli_args()
+    assert "--superdomain" not in sa
 
 
 def test_superdomain_round_trip_and_manifest(tmp_path):
@@ -1596,7 +1647,8 @@ def test_enter_mesh_defaults_preserves_mesh_x86_golden():
     cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86")
     enter_mesh_defaults(cfg)
     assert cfg.to_cli_args() == ["--role", "omnibus", "--env", "test", "--local-user", "magus",
-                                 "--with-tailscale", "--with-sso", *X86_TAIL]
+                                 "--with-tailscale", "--with-sso",
+                                 "--superdomain", "snapdragon.internal", *X86_TAIL]
 
 
 def test_strip_platform_unsupported_clears_x86_only_fields_on_arm():
