@@ -296,6 +296,61 @@ log()  { printf '[build-image] %s\n' "$*"; }
 warn() { printf '[build-image] WARNING: %s\n' "$*" >&2; }
 fail_msg() { printf '[build-image] ERROR: %s\n' "$*" >&2; }
 
+# ── guided --help: the four-choice intents (Studio ModePage parity) ─────────────
+# Discoverability only — the parity gap for the CLI/JOB channel is that the operator
+# can't SEE the four intents the Studio wizard frames, not that any image path is
+# missing (every path is already reachable via env / the make faces). The labels
+# mirror the Studio GUI reference (studio/snapdragon_studio/gui/pages/mode.py) so the
+# build-matrix TAXO parity check has ONE golden set. This branch fires ONLY on an
+# explicit -h/--help/help positional; the real Job invokes with NO positional args
+# (env-driven), so resolve_build_target()/run_*_build() below are byte-identical.
+print_intents_guide() {
+  cat <<'GUIDE'
+snapdragon build-image.sh — what do you want to build? (four intents)
+
+This worker is env-driven (IMAGE_TYPE + HARDWARE_CLASS; see the header comment for
+the full HARDWARE_CLASS grammar). The four intents the Studio wizard frames map onto
+its flags/tokens like this — the same four choices, one clarity layer:
+
+  1. Mesh node — build server node image(s) for a mesh on dedicated hardware
+       IMAGE_TYPE=primary|mesh-extension, HARDWARE_CLASS =
+         x86.pki | x86.be | x86.fe | x86.be-gpu | x86.omnibus | x86.edge_ai
+         | rpi5.<role>[.<board>] | jetson.<role>.<board>
+       make face: `make x86-<role>` / `make rpi-<role>` / `make jetson-<role>` /
+         `make build-all` / `make build-everything` (the fleet + worklist).
+
+  2. Local Docker mesh — run a mesh on THIS machine in Docker (no image built)
+       This builder builds IMAGES ONLY; it never runs a node. For the fourth choice
+       run the non-build face instead:
+         python3 -m snapdragon_studio.core.local_mesh up --authkey-file <file>
+         (or `make mesh-node-up AUTHKEY_FILE=<file>`)
+       It reuses the shipped docker-compose.mesh.yml overlay — no image emission.
+
+  3. Mesh desktop client — a branded desktop that JOINS an existing mesh (tailnet+SSO)
+       IMAGE_TYPE=client, HARDWARE_CLASS =
+         x86.laptop | x86.chromebook | x86.desktop
+         | frite.<board>.<flavor> | orangepi5.<...> | orangepizero2.<...>
+       (the SSO / key-zip client roles). make face: `make x86-<role>` / `make frite`
+         / `make orangepi5` / `make orangepizero2`.
+
+  4. Standalone Gentoo desktop — hardened personal / UNAFFILIATED desktop (no mesh/SSO)
+       HARDWARE_CLASS =
+         x86.standalone-thin | x86.standalone-thick | x86.standalone-unaffiliated
+         | rpi5.standalone-desktop | frite.<board>.standalone
+         | orangepi5.<board>.standalone | orangepizero2.standalone
+       (the --standalone / --local-user LUKS2 local-login posture). make face:
+         `make x86-standalone-thin` … (see the standalone screen in `make menu`).
+
+The three IMAGE intents all resolve through resolve_build_target(); the Local Docker
+mesh intent is the ONE non-build face (core/local_mesh.py). To PERMANENTLY enroll a
+desktop with an admin keys folder + tray, use the installed end-user appliance
+`snapdragon-mesh-node` (clients/docker-mesh-node/install.sh) — a different surface.
+GUIDE
+}
+case "${1:-}" in
+  -h|--help|help) print_intents_guide; exit 0 ;;
+esac
+
 # ── job env (defaulted to empty so `set -u` never aborts on a merely-absent
 #    var; presence/shape is validated explicitly right below) ───────────────
 BUILD_ID="${BUILD_ID:-}"

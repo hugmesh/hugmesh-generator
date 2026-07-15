@@ -1253,6 +1253,106 @@ run_flag_coverage() {
     grep '^FLAGCOV FAIL' "${out}" >&2 || true
 }
 
+# ── four-choice taxonomy parity (TAXO) ──────────────────────────────────────────
+# The Studio GUI (gui/pages/mode.py) is the REFERENCE implementation of the flow's
+# four-choice opening screen (docs/STUDIO-WIZARD-FLOW.md). This bucket proves the SAME
+# four choices are surfaced in the ncurses menu (scripts/build-menu.sh's mode_screen)
+# AND the CLI guide (docker/build-image.sh's print_intents_guide), using the code-copy
+# (live-extraction) assertion idiom the JOB/COVG buckets use. FAIL-CLOSED: an expected
+# pass count, shortfall = failures.
+#
+#   GOLDEN set  extracted LIVE from mode.py — NOT hand-copied. mode.py imports Qt (can't
+#               be imported Qt-free), so the labels are grep'd statically. A canary
+#               asserts the golden taxonomy is EXACTLY 4 lines, so a silent shrink/grow
+#               of the reference trips the gate (forces golden + every channel to move
+#               together). A bogus label must be ABSENT from every channel (proves grep
+#               discriminates, not matching everything).
+#   registration parity  is manifest-only (User.registration — surfaced only in the
+#               Studio users.py + --print-specs; the ncurses/CLI image builders carry no
+#               per-user manifest), so the four tokens are asserted in the Studio users
+#               surface ONLY. BUILD-MATRIX.md documents that registration is not a
+#               menu/CLI image-build knob (the gate stays honest, not vacuously green).
+# 12 taxonomy (4 mode.py + 4 menu + 4 cli) + 4 registration = 16 expected.
+TAXO_EXPECTED=16
+TAXO_PASS=0; TAXO_FAIL=0
+run_parity_taxonomy_checks() {
+    local mode_py="studio/snapdragon_studio/gui/pages/mode.py"
+    local menu="scripts/build-menu.sh"
+    local cli="docker/build-image.sh"
+    local users_py="studio/snapdragon_studio/gui/pages/users.py"
+    local -a golden=("Mesh node" "Local Docker mesh" "Mesh desktop client" "Standalone Gentoo desktop")
+    local label
+
+    # 1) GOLDEN source: the 4 labels live in the Studio reference (mode.py).
+    for label in "${golden[@]}"; do
+        if grep -qF -- "${label}" "${mode_py}"; then TAXO_PASS=$((TAXO_PASS+1))
+        else echo "TAXO FAIL golden/mode.py missing '${label}'" >&2; TAXO_FAIL=$((TAXO_FAIL+1)); fi
+    done
+    # 2) menu channel — each choice must appear as a REAL ui_menu ITEM line
+    #    (choice-tag + quoted label), NOT merely as prose. A whole-file substring grep
+    #    is VACUOUS here: "Local Docker mesh" also occurs in the ui_menu prompt sentence,
+    #    the routing comments, AND every reused local_mesh_screen ui_msg/ui_menu dialog
+    #    TITLE below — so deleting the actual opening item (the choice a user can pick)
+    #    would leave the string present and the gate falsely green. Anchoring to the
+    #    opening-item shape `^<ws><tag><ws>"<label> …` makes dropping any one of the four
+    #    a genuine (non-vacuous) grep miss. Tags mirror the golden order.
+    local -a menu_tags=("meshnode" "localmesh" "client" "standalone")
+    local i
+    for i in 0 1 2 3; do
+        label="${golden[$i]}"
+        if grep -qE -- "^[[:space:]]*${menu_tags[$i]}[[:space:]]+\"${label} " "${menu}"; then
+            TAXO_PASS=$((TAXO_PASS+1))
+        else
+            echo "TAXO FAIL menu channel missing opening choice item '${menu_tags[$i]}  \"${label} …\"' (${menu})" >&2
+            TAXO_FAIL=$((TAXO_FAIL+1))
+        fi
+    done
+    # 3) cli channel — each choice must appear as a REAL numbered intent item
+    #    (`  N. <label> — …`) in print_intents_guide, not as incidental prose, so
+    #    dropping an intent from the guide is likewise a non-vacuous miss.
+    for i in 0 1 2 3; do
+        label="${golden[$i]}"
+        if grep -qE -- "^[[:space:]]*[0-9]+\.[[:space:]]+${label} " "${cli}"; then
+            TAXO_PASS=$((TAXO_PASS+1))
+        else
+            echo "TAXO FAIL cli channel missing numbered intent '${label}' (${cli})" >&2
+            TAXO_FAIL=$((TAXO_FAIL+1))
+        fi
+    done
+
+    # NON-VACUITY canary (a): a bogus label must be ABSENT from every channel file.
+    local bogus="Bare-metal cloud image" f
+    for f in "${mode_py}" "${menu}" "${cli}"; do
+        if grep -qF -- "${bogus}" "${f}"; then
+            echo "TAXO FAIL non-vacuity: bogus label '${bogus}' unexpectedly present in ${f} — grep is matching too broadly" >&2
+            TAXO_FAIL=$((TAXO_FAIL+1))
+        fi
+    done
+    # NON-VACUITY canary (b): the golden taxonomy is EXACTLY 4 in mode.py.
+    local n
+    n="$(grep -cE 'Mesh node|Local Docker mesh|Mesh desktop client|Standalone Gentoo desktop' "${mode_py}")"
+    if [ "${n}" -ne 4 ]; then
+        echo "TAXO FAIL non-vacuity: mode.py golden taxonomy is ${n} lines, expected exactly 4 — the reference changed; update the golden set + every channel together" >&2
+        TAXO_FAIL=$((TAXO_FAIL+1))
+    fi
+
+    # registration parity (manifest-only): the 4 first-login registration methods live
+    # only in the Studio users surface. Asserted here, DOCUMENTED as not-a-menu/CLI knob.
+    local tok
+    for tok in derive discord gmail password; do
+        if grep -qF -- "\"${tok}\"" "${users_py}"; then TAXO_PASS=$((TAXO_PASS+1))
+        else echo "TAXO FAIL registration token '${tok}' missing from ${users_py}" >&2; TAXO_FAIL=$((TAXO_FAIL+1)); fi
+    done
+
+    # FAIL-CLOSED completeness gate (mirror COVG's COV_EXPECTED): every expected pass
+    # must be present — a silent-skip (a file renamed away, a probe that never ran) is a
+    # shortfall, not a vacuous green.
+    if [ "${TAXO_PASS}" -lt "${TAXO_EXPECTED}" ]; then
+        echo "TAXO FAIL completeness: ${TAXO_PASS}/${TAXO_EXPECTED} parity assertions passed" >&2
+        TAXO_FAIL=$((TAXO_FAIL + TAXO_EXPECTED - TAXO_PASS))
+    fi
+}
+
 # ── NON-GATING developer smokes ─────────────────────────────────────────────────
 # The worklist-envelope parity smoke (WS-MODEL) and the JOB-channel image-spec
 # parity fixture (WS-JOB) exercise the redesign's end-to-end command-translation
@@ -1302,10 +1402,11 @@ run_gui_threading_checks
 run_negative_checks
 run_gui_gating_checks
 run_flag_coverage
+run_parity_taxonomy_checks
 run_nongating_smokes
 
-TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS))
-TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL))
+TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + TAXO_PASS))
+TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + TAXO_FAIL))
 
 # COMPLETENESS gate (fail-closed): every channel must have PASSED every matrix
 # row — not merely "no failures". This catches the silent-skip class of hole
@@ -1332,6 +1433,7 @@ printf  'JOB  (build-image.sh):  %3d passed, %d failed\n' "${JOB_PASS}"  "${JOB_
 printf  'THRD (flag threading):  %3d passed, %d failed\n' "${THR_PASS}"  "${THR_FAIL}"
 printf  'NEG  (must-fail):       %3d passed, %d failed\n' "${NEG_PASS}"  "${NEG_FAIL}"
 printf  'COVG (flag coverage):   %3d passed, %d failed\n' "${COV_PASS}"  "${COV_FAIL}"
+printf  'TAXO (4-choice parity): %3d passed, %d failed\n' "${TAXO_PASS}" "${TAXO_FAIL}"
 printf  'TOTAL:                  %3d passed, %d failed\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"
 if [ -n "${SMOKE_REPORT}" ]; then
     echo "── non-gating smokes (informational; NOT in TOTAL) ─────────"

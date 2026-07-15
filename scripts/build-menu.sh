@@ -1428,6 +1428,116 @@ standalone_screen() {
     done
 }
 
+# ── STEP 1 — the four-choice opening screen (Studio ModePage parity) ────────────
+# A THIN clarity/router layer on TOP of the existing screens: the labels mirror the
+# Studio GUI reference (studio/snapdragon_studio/gui/pages/mode.py) verbatim so the
+# build-matrix TAXO parity check has ONE golden set. It reorganises NAVIGATION only —
+# the three IMAGE choices funnel into the EXISTING screens (build_screen /
+# single_role_screen / standalone_screen), each of which already calls build_make_cmd
+# verbatim, so emission stays byte-identical. The fourth choice (Local Docker mesh)
+# builds NO image and never touches build_make_cmd.
+mode_screen() {
+    local choice
+    while :; do
+        choice="$(ui_menu "What do you want to build?" \
+            "Pick one. Three of these build an image; Local Docker mesh instead runs a mesh on THIS machine right now." \
+            meshnode   "Mesh node — build server node image(s) for a mesh on dedicated hardware" \
+            localmesh  "Local Docker mesh — run a mesh on THIS machine in Docker (no image built)" \
+            client     "Mesh desktop client — a branded desktop that JOINS an existing mesh (tailnet + SSO)" \
+            standalone "Standalone Gentoo desktop — hardened personal / UNAFFILIATED desktop (no mesh/SSO)" \
+            advanced   "Advanced — all build targets & fleet options (the full menu)" \
+            back "‹ back to main menu")" || return 0
+        # NOTE: the four choice LABELS above are the single golden source of the
+        # taxonomy (mirrored from mode.py). The build-matrix TAXO bucket anchors to THIS
+        # ui_menu item shape (choice-tag + quoted label, e.g. `localmesh  "Local Docker
+        # mesh …`), NOT to a whole-file substring — the "Local Docker mesh" string also
+        # appears in the prompt sentence and the local_mesh_screen dialog titles below,
+        # so only the anchored item match makes dropping an opening choice from this list
+        # a non-vacuous parity FAIL.
+        case "${choice}" in
+            # → the fleet + cluster single-role image builds (the existing build_screen
+            # offers all/everything/rpi/x86/one/omni/frite verbatim).
+            meshnode)   build_screen ;;
+            # → the ONE non-build choice; runs a dockerized node via the shared Qt-free
+            # entrypoint. Builds no image.
+            localmesh)  local_mesh_screen ;;
+            # → the client-desktop single-role paths (x86 laptop/chromebook/desktop, rpi
+            # desktop, frite, orangepi5/zero2) — all of which call build_make_cmd verbatim.
+            client)     single_role_screen ;;
+            # → the x86 standalone screen; the ARM standalone posture stays reachable via
+            # single_role_screen's desktop roles + arm_secrets_prompt (Advanced too).
+            standalone) single_role_screen ;;
+            # → the full build menu verbatim, the escape hatch that keeps EVERY existing
+            # option/path reachable (all-options-in-all-menus).
+            advanced)   build_screen ;;
+            back|"")    return 0 ;;
+        esac
+    done
+}
+
+# ── Local Docker mesh (fourth choice) — builds NO image ─────────────────────────
+# Shells the SAME Qt-free entrypoint the Studio wizard/tray drive
+# (python3 -m snapdragon_studio.core.local_mesh), so the menu never reimplements
+# docker compose. The auth key is entered masked (ui_password — same non-persisted
+# contract as the SA_*/ARM_* secrets), written to a chmod-600 mktemp file under
+# STATE_DIR for the child, then shredded. Never persisted to menu.conf.
+local_mesh_screen() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        ui_msg "Local Docker mesh" "python3 is required to run a local mesh node (it drives the shared snapdragon_studio.core.local_mesh entrypoint). Install python3 and retry."
+        return 0
+    fi
+    local authkey="" node_name="" login_server="" choice
+    while :; do
+        local keyl
+        keyl="$([ -n "${authkey}" ] && echo '(set)' || echo '(unset — required to start)')"
+        choice="$(ui_menu "Local Docker mesh" \
+            "Run a mesh on THIS machine in Docker — no image build, no server hardware. Provide a tailnet/headscale auth key; the dockerized node joins and serves locally. Masked input; never saved to ${CONF_FILE}." \
+            authkey "Auth key (TS_AUTHKEY) . ${keyl}" \
+            name    "Node name ............ ${node_name:-<default: snapdragon-node>}" \
+            server  "Login server ......... ${login_server:-<Tailscale default coordinator>}" \
+            up      "★ Start the local mesh node (docker compose up -d)" \
+            stop    "Stop the local mesh node (docker compose down)" \
+            status  "Status (is it running?)" \
+            logs    "View recent node logs" \
+            back    "‹ back")" || return 0
+        case "${choice}" in
+            authkey) authkey="$(ui_password "Auth key" "Tailnet/headscale auth key (tskey-… ; required to start)")" ;;
+            name)    node_name="$(ui_input "Node name" "Optional hostname on the tailnet (blank = snapdragon-node)" "${node_name}")" ;;
+            server)  login_server="$(ui_input "Login server" "Optional self-hosted headscale URL (blank = Tailscale default)" "${login_server}")" ;;
+            up|stop|status|logs)
+                # menu verb -> entrypoint subcommand (only "stop" differs: -> "down")
+                local sub="${choice}"; [ "${choice}" = stop ] && sub=down
+                _local_mesh_run "${sub}" "${authkey}" "${node_name}" "${login_server}" ;;
+            back|"") return 0 ;;
+        esac
+    done
+}
+
+# _local_mesh_run SUB AUTHKEY NODE_NAME LOGIN_SERVER — one child invocation of the
+# shared entrypoint. The auth key (when set) goes into a chmod-600 mktemp file so it
+# never appears on the child's argv / process table, and is shredded afterwards.
+_local_mesh_run() {
+    local sub="$1" authkey="$2" node_name="$3" login_server="$4"
+    local -a args=("${sub}")
+    local keyfile=""
+    if [ -n "${authkey}" ]; then
+        keyfile="$(mktemp "${STATE_DIR}/authkey.XXXXXX")" || { ui_msg "Local Docker mesh" "could not create a temp file for the auth key"; return 0; }
+        chmod 600 "${keyfile}" 2>/dev/null || true
+        printf '%s' "${authkey}" >"${keyfile}"
+        args+=(--authkey-file "${keyfile}")
+    fi
+    [ -n "${node_name}" ]    && args+=(--node-name "${node_name}")
+    [ -n "${login_server}" ] && args+=(--login-server "${login_server}")
+    args+=(--generator-dir "${REPO_DIR}")
+    local out
+    out="$(PYTHONPATH="${REPO_DIR}/studio" python3 -m snapdragon_studio.core.local_mesh "${args[@]}" 2>&1)"
+    local rc=$?
+    if [ -n "${keyfile}" ]; then
+        command -v shred >/dev/null 2>&1 && shred -u "${keyfile}" 2>/dev/null || rm -f "${keyfile}"
+    fi
+    ui_msg "Local Docker mesh — ${sub} (rc=${rc})" "${out:-(no output)}"
+}
+
 build_screen() {
     local choice
     choice="$(ui_menu "Build" "What do you want to build?  (path=${OPT_PATH}, ENV=${OPT_ENV}, -j${OPT_JOBS})" \
@@ -1538,7 +1648,7 @@ main_menu() {
         choice="$(ui_menu "Main" "${status_line}" "${items[@]}")" || { confirm_quit && return 0 || continue; }
         case "${choice}" in
             monitor)   monitor_build ;;
-            build)     build_screen ;;
+            build)     mode_screen ;;
             options)   options_screen ;;
             artifacts) artifacts_screen ;;
             logs)      logs_screen ;;
