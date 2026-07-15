@@ -1363,7 +1363,8 @@ SMOKE_REPORT=""
 run_nongating_smokes() {
     local spec name path out rc
     for spec in "worklist-smoke:${TEST_DIR}/worklist-smoke.sh" \
-                "image-spec-parity:${REPO_DIR}/tests/build-image-spec-parity.sh"; do
+                "image-spec-parity:${REPO_DIR}/tests/build-image-spec-parity.sh" \
+                "image-spec-guards:${REPO_DIR}/tests/build-image-spec-guards.sh"; do
         name="${spec%%:*}"; path="${spec#*:}"
         if [ ! -f "${path}" ]; then
             SMOKE_REPORT+="  ${name}: SKIP (not present)"$'\n'; continue
