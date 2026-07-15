@@ -30,12 +30,18 @@ import { tags } from './report-tags';
 //   test. They must NOT be read as failing bugs — they are the executable spec of
 //   a MISSING feature.
 //
-// Ground truth: /var/tmp/portage/snapdragon-work/session-scratch/sticker-vn-test-facts.md
+// Ground truth: a read-only investigation of the sticker/character/VN/moderation
+// surface, captured 2026-07-11 in session scratch (not committed — the facts are
+// reproduced inline in this file's comments and test bodies).
 // Live-probe corrections applied while writing (differ from the facts draft):
-//   * MOD/ADMIN INHERIT USER via the role hierarchy, so POST /bff/user/character/
-//     stickers -> 200 for a mod/admin (NOT 403). SUPERADMIN (no USER, not
-//     provisioned in the user-bff) -> 401. So there is no clean authenticated
-//     "non-USER -> 403" case; the only save-surface DENY is anonymous (401).
+//   * EVERY authenticated role reaches POST /bff/user/character/stickers -> 200,
+//     including MOD, ADMIN, and SUPERADMIN (NOT 403, and NOT 401 for SUPERADMIN
+//     as an earlier draft of this comment incorrectly claimed — see the A1 test
+//     body below for the corrected mechanism: CasdoorAuthorities unconditionally
+//     floors every authenticated principal to ROLE_USER, independent of the
+//     Spring RoleHierarchy bean, which only defines SUPERADMIN>{ADMIN,MOD,USER}
+//     edges). So there is no clean authenticated "non-USER -> 403" case; the
+//     only save-surface DENY is anonymous (401).
 //   * GET /bff/mod/findings currently 500s (the federation findings backend is
 //     dark on the stock compose stack) — so A4 asserts only the AUTHZ gate
 //     (MOD authorized, USER 403) and marks the finding round-trip pending.
@@ -162,20 +168,24 @@ test.describe('28 GROUP A — sticker/character/VN surfaces that EXIST today', (
       await anon.dispose();
 
       // HONEST CORRECTION to the facts draft: there is NO authenticated "non-USER
-      // -> 403" on this surface. EVERY authenticated role reaches it via the role
-      // hierarchy (SUPERADMIN > ADMIN > MOD > USER), so a MOD and even a SUPERADMIN
-      // are admitted (GET -> 200, non-destructive probes). The ONLY DENY is
-      // anonymous (401, asserted above). We assert the hierarchy directly rather
-      // than a non-existent non-USER 403.
+      // -> 403" on this surface. EVERY authenticated role reaches it (MOD, ADMIN,
+      // and SUPERADMIN are all admitted; GET -> 200, non-destructive probes). This
+      // is NOT the Spring RoleHierarchy bean at work (user-bff-api's hierarchy only
+      // defines SUPERADMIN>{ADMIN,MOD,USER} edges — there is no MOD>USER or
+      // ADMIN>USER edge that would explain a MOD reaching a USER-gated endpoint).
+      // The real mechanism: CasdoorAuthorities unconditionally grants ROLE_USER to
+      // every authenticated principal regardless of their Casdoor role claims, so
+      // hasRole('USER') is really an "any authenticated user" floor here. The ONLY
+      // DENY is anonymous (401, asserted above).
       for (const role of ['e2e-mod', 'e2e-superadmin']) {
         const api = await loggedIn(baseURL, role);
         const g = await api.get('/bff/user/character/stickers');
-        expect(g.status(), `${role} inherits USER via the hierarchy -> reaches the sticker surface`).toBe(200);
+        expect(g.status(), `${role} is unconditionally floored to ROLE_USER -> reaches the sticker surface`).toBe(200);
         await api.dispose();
       }
       test.info().annotations.push({
         type: 'observed',
-        description: 'Every authenticated role (USER/MOD/ADMIN/SUPERADMIN) reaches the sticker surface via the role hierarchy (200); the only DENY is anonymous (401). The facts draft "non-USER -> 403" is NOT the live reality.',
+        description: 'Every authenticated role (USER/MOD/ADMIN/SUPERADMIN) reaches the sticker surface (200) because CasdoorAuthorities floors every authenticated principal to ROLE_USER, not via the Spring RoleHierarchy bean; the only DENY is anonymous (401). The facts draft "non-USER -> 403" is NOT the live reality.',
       });
       await user.dispose();
     });
