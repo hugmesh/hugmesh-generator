@@ -41,21 +41,32 @@ def unsupported_note(platform: str) -> str:
             "build. Cleared when you leave the page.")
 
 
-def gate_widgets(platform: str, field_widgets: dict) -> None:
-    """initializePage() half: enable/disable widgets per the capability table.
+def gate_widgets(platform: str, field_widgets: dict, *, hide: bool = False) -> None:
+    """initializePage() half: gate widgets per the capability table.
 
     field_widgets maps a config field name to the widget (or tuple of widgets —
     e.g. a line edit's container row holding its Browse… button) carrying it.
-    Disabling a QGroupBox greys all its children at once, matching the
-    BrandingPage form-container pattern."""
+    Disabling/hiding a QGroupBox greys/hides all its children at once, matching the
+    BrandingPage form-container pattern.
+
+    ``hide=True`` HIDES (setVisible) the inapplicable widget instead of greying it
+    (setEnabled) — the spec's "hide inapplicable options" mode. Emission stays
+    preserved by the SAME two guards as the grey mode: (1) clear_unsupported() in
+    validatePage still resets a hidden field to its dataclass default, and (2)
+    initializePage re-runs this gate on every visit, so setVisible(True) restores the
+    widget (and its collectable value) the moment the platform supports the field
+    again — a hidden option that becomes applicable later is reachable + emitted."""
     for fld, widgets in field_widgets.items():
         supported = platform_supports(fld, platform)
         for w in (widgets if isinstance(widgets, (list, tuple)) else (widgets,)):
-            w.setEnabled(supported)
+            if hide:
+                w.setVisible(supported)
+            else:
+                w.setEnabled(supported)
             w.setToolTip("" if supported else unsupported_note(platform))
 
 
-def gate_widgets_role_class(widgets, allowed: bool, reason: str) -> None:
+def gate_widgets_role_class(widgets, allowed: bool, reason: str, *, hide: bool = False) -> None:
     """Role-class gating twin of ``gate_widgets`` (G/spec 2/3/7).
 
     Where ``gate_widgets`` keys each widget on the per-field PLATFORM_FIELD_SUPPORT
@@ -65,9 +76,15 @@ def gate_widgets_role_class(widgets, allowed: bool, reason: str) -> None:
     QGroupBox greys all its children at once, matching the platform-keyed idiom.
 
     ``widgets`` is one widget or an iterable of them; ``reason`` is the explanatory
-    tooltip shown while the surface is greyed (blank when allowed)."""
+    tooltip shown while the surface is greyed (blank when allowed). ``hide=True`` hides
+    (setVisible) the surface instead of greying it — emission is still preserved by the
+    caller's role-class clear (HOME_DESKTOP_FIELDS reset in validatePage) plus the
+    every-visit re-gate that restores the surface when the role class allows it again."""
     for w in (widgets if isinstance(widgets, (list, tuple)) else (widgets,)):
-        w.setEnabled(allowed)
+        if hide:
+            w.setVisible(allowed)
+        else:
+            w.setEnabled(allowed)
         w.setToolTip("" if allowed else reason)
 
 

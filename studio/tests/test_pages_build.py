@@ -316,9 +316,10 @@ def test_build_x86_artifact_matrix(wiz):
     # the rpi5/ARM-only axes grey out
     for w in (build.build_img, build.live_iso, build.installer_iso,
               build.build_tar, build.skip_iso):
-        assert w.isEnabled(), w
+        assert w.isVisible(), w
+    # inapplicable artifact axes are now HIDDEN (setVisible False), not greyed
     for w in (build.build_iso, build.sd_only, build.image_only):
-        assert not w.isEnabled(), w
+        assert not w.isVisible(), w
     build.build_img.setCurrentIndex(build.build_img.findData("off"))
     build.live_iso.setCurrentIndex(build.live_iso.findData("on"))
     build.installer_iso.setChecked(True)
@@ -354,9 +355,9 @@ def test_build_rpi5_artifacts(wiz):
     build = advance_to(wiz, wizard_mod.BuildPage)
     for w in (build.build_img, build.build_iso, build.sd_only, build.build_tar,
               build.skip_iso):
-        assert w.isEnabled(), w
+        assert w.isVisible(), w
     for w in (build.live_iso, build.installer_iso, build.image_only):
-        assert not w.isEnabled(), w
+        assert not w.isVisible(), w
     build.build_iso.setChecked(True)     # bootable installer ISO for an UNencrypted image
     build.sd_only.setChecked(True)
     build.build_tar.setCurrentIndex(build.build_tar.findData("on"))
@@ -368,8 +369,8 @@ def test_build_rpi5_artifacts(wiz):
 def test_build_frite_image_only(wiz):
     pick_role(wiz, "frite")
     build = advance_to(wiz, wizard_mod.BuildPage)
-    assert build.image_only.isEnabled()
-    assert not build.build_img.isEnabled()   # frite has no --img/--no-img
+    assert build.image_only.isVisible()
+    assert not build.build_img.isVisible()   # frite has no --img/--no-img (hidden, not greyed)
     build.image_only.setChecked(True)
     build._preview()
     assert "--image-only" in wiz.cfg.to_cli_args()
@@ -445,7 +446,7 @@ def test_build_x86_artifact_picks_clear_on_arm(wiz):
 
 def test_build_secure_boot_off(wiz):
     build = advance_to(wiz, wizard_mod.BuildPage)
-    assert build.sb_box.isEnabled()
+    assert build.sb_box.isVisible()
     build.secure_boot.setCurrentIndex(build.secure_boot.findData("off"))
     build._preview()
     args = wiz.cfg.to_cli_args()
@@ -487,7 +488,7 @@ def test_build_secure_boot_greys_and_clears_on_arm(wiz):
     c.secure_boot = "on"; c.keys_usb = "/media/KEYS"   # e.g. loaded from an x86 config
     pick_role(wiz, "generic")
     build = advance_to(wiz, wizard_mod.BuildPage)
-    assert not build.sb_box.isEnabled()
+    assert not build.sb_box.isVisible()
     build._preview()
     assert c.secure_boot == "" and c.keys_usb == ""
     args = c.to_cli_args()
@@ -533,7 +534,7 @@ def test_build_stamps_x86(wiz):
 def test_build_release_tag_greys_on_arm_version_flows(wiz):
     pick_role(wiz, "generic")
     build = advance_to(wiz, wizard_mod.BuildPage)
-    assert build.version.isEnabled() and not build.release_tag.isEnabled()
+    assert build.version.isEnabled() and not build.release_tag.isVisible()
     build.version.setText("1.2.3")
     build.release_tag.setText("stale")   # greyed — must be cleared, not emitted
     build._preview()
@@ -568,7 +569,7 @@ def test_build_plumbing_x86(wiz):
 def test_build_plumbing_arm(wiz):
     pick_role(wiz, "generic")
     build = advance_to(wiz, wizard_mod.BuildPage)
-    assert not build.distdir.isEnabled()           # --distdir is x86-only
+    assert not build.distdir.isVisible()           # --distdir is x86-only (hidden, not greyed)
     build.distdir.setText("/stale")                # greyed — cleared, not emitted
     build.skip_kernel.setChecked(True)
     build._preview()

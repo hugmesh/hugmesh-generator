@@ -1198,7 +1198,7 @@ options_screen() {
 single_role_screen() {
     local arch role board
     arch="$(ui_menu "Single role" "Which architecture?" \
-        rpi "Raspberry Pi 5 (arm64 cluster node / client desktop)" \
+        rpi "Raspberry Pi 5 / 4 / 3 (arm64 mesh node OR desktop; --board rpi5|rpi4|rpi3)" \
         x86 "x86-64 (amd64 node / GPU host / client)" \
         jetson "Jetson Orin Nano (arm64, EXPERIMENTAL — hardware validation pending)" \
         orangepi5 "Orange Pi 5 / 5 Plus (arm64, EXPERIMENTAL — hardware validation pending)" \
@@ -1242,8 +1242,8 @@ single_role_screen() {
                 be+gpu "be+gpu  — backend + GPU host (the e2e GPU node)" \
                 omnibus "omnibus — all-in-one single node" \
                 edge_ai "edge_ai — GPU inference node (OpenAI model API to the mesh)" \
-                laptop "laptop  — amd64 client image" \
-                chromebook "chromebook — thin client image" \
+                laptop "laptop  — amd64 laptop desktop image" \
+                chromebook "chromebook — coreboot/UEFI Chromebook DESKTOP image (ADR-16)" \
                 desktop "desktop — full desktop client image" \
                 standalone-thin "★ standalone-thin — hardened NVIDIA desktop (LXDE; no mesh/SSO)" \
                 standalone-thick "★ standalone-thick — most-capable Plasma NVIDIA desktop (no mesh/SSO)" \

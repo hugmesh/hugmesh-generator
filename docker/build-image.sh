@@ -365,6 +365,18 @@ ARTIFACT_DIR="${ARTIFACT_DIR:-}"
 # OPTIONAL, additive spec channel (see the image-spec.json channel header note).
 # Empty -> the legacy IMAGE_TYPE/HARDWARE_CLASS path runs byte-identically.
 IMAGE_SPEC_JSON="${IMAGE_SPEC_JSON:-}"
+# OPTIONAL, additive progress side channel (see forward_and_wait). When set (the
+# Job templates it to admin-bff-api #206's non-terminal /progress endpoint, the
+# same way it renders INGEST_URL), the builder's stdout is teed through a
+# phase->percent parser and throttled progress frames are POSTed best-effort.
+# Empty (today's Job) -> forward_and_wait runs the current `"$@" &; wait` verbatim
+# and behavior is byte-identical. It is OPTIONAL, so it is deliberately NOT added
+# to the required-env loop below, and it never touches send_ingest / the terminal
+# COMPLETED contract. PROGRESS_MIN_INTERVAL (sec) throttles the on-percent frames;
+# PROGRESS_CURL_TIMEOUT (sec) bounds each fire-and-forget progress POST.
+PROGRESS_URL="${PROGRESS_URL:-}"
+PROGRESS_MIN_INTERVAL="${PROGRESS_MIN_INTERVAL:-1}"
+PROGRESS_CURL_TIMEOUT="${PROGRESS_CURL_TIMEOUT:-2}"
 # OPTIONAL generator revision, reported (not consumed) in the spec-channel
 # terminal message. Empty unless the image build/Job supplies it.
 GENERATOR_REV="${GENERATOR_REV:-}"
@@ -1066,6 +1078,29 @@ run_spec_build() {
 # ERROR report no chance to run before the pod's grace period ends and it is
 # SIGKILLed outright. Waiting on an explicit background pid is interruptible,
 # so the forwarded signal (and then our own trap) actually run promptly.
+# progress_tap_run — the stdout tap, entered ONLY when PROGRESS_URL is set (see
+# forward_and_wait). Its stdin is the builder's stdout (fd8, via `<&8` on the call
+# site); it re-emits every line to THIS process's stdout (the pod/Job log, byte-for-
+# byte and in order) and POSTs throttled phase->percent frames to PROGRESS_URL as a
+# best-effort, NON-TERMINAL side channel. It execs the baked docker/progress-tap.py
+# (which REUSES the Studio ProgressParser + progress-tables.json via PYTHONPATH — no
+# regex or table is copied worker-side). The trailing `|| cat` is the last-ditch
+# safety net: if python3 cannot even start, `cat` still drains+echoes stdin so the
+# build never blocks and the Job log stays complete. PROGRESS_PLATFORM=$PLATFORM
+# (already resolved before the build runs, both channels) picks the phase table;
+# unknown/spec platforms fall back to the x86 table inside the parser. Only public
+# pointers ride the wire: buildId + phase integers/label, never a key or path.
+progress_tap_run() {
+  PROGRESS_URL="$PROGRESS_URL" \
+  BUILD_ID="$BUILD_ID" \
+  INTERNAL_TOKEN="$INTERNAL_TOKEN" \
+  PROGRESS_PLATFORM="$PLATFORM" \
+  PROGRESS_MIN_INTERVAL="$PROGRESS_MIN_INTERVAL" \
+  PROGRESS_CURL_TIMEOUT="$PROGRESS_CURL_TIMEOUT" \
+  PYTHONPATH="${GENERATOR_DIR}/studio" \
+    python3 "${GENERATOR_DIR}/docker/progress-tap.py" || cat
+}
+
 forward_and_wait() {
   if [ "$PRINT_ONLY" = "1" ]; then
     # command preview (spec channel only): the runner just prints the argv, so
@@ -1074,6 +1109,64 @@ forward_and_wait() {
     "$@"
     return $?
   fi
+
+  # ── OPTIONAL progress side channel ────────────────────────────────────────
+  # When PROGRESS_URL is set, route the builder's STDOUT through a tap that both
+  # re-emits every line to the Job log unchanged AND POSTs throttled progress
+  # frames. The builder stays the single tracked $child_pid (so its real rc and
+  # SIGTERM forwarding are preserved byte-for-byte); only its stdout is teed via a
+  # FIFO the parent pins open at both ends — the pinned writer (fd9, opened
+  # READ-WRITE so the open never blocks) makes the builder's `>fifo` open succeed
+  # instantly and a tap crash can never SIGPIPE the builder, and (closed only
+  # AFTER the builder is reaped) is what finally hands the tap its EOF; the reader
+  # (fd8) feeds the tap. stderr never enters the FIFO, so it streams direct and
+  # unaltered. NOTE (design correction): the tap and builder must NOT inherit the
+  # pinned writer (fd9) or the FIFO would never reach EOF and `wait $tap_pid`
+  # would hang — verified empirically — so both are launched with `9>&-` (and the
+  # builder additionally drops the reader with `8<&-`). Likewise fd9 is opened
+  # `<>` (rw) rather than write-only, since a bare `8<fifo`/`9>fifo` pair blocks
+  # on the first open with no peer yet. This whole branch is gated on PROGRESS_URL:
+  # unset (today's Job) skips it and runs the current `"$@" &; wait` path verbatim,
+  # and a failed mkfifo falls through to that same path too.
+  progress_fifo=""
+  if [ -n "$PROGRESS_URL" ]; then
+    progress_fifo="${SCRATCH_DIR}/progress.fifo"
+    rm -f "$progress_fifo" 2>/dev/null || true
+    if ! mkfifo "$progress_fifo" 2>/dev/null; then
+      progress_fifo=""   # FIFO unavailable -> fall through to the direct path
+    fi
+  fi
+
+  # Pin the FIFO fds under an `if` so a (near-impossible) open failure can't trip set -e
+  # into a spurious terminal ERROR: mkfifo already succeeded and the rw open of fd9 makes
+  # the fd8 read-open succeed instantly, so this always passes in practice — but on an
+  # exotic filesystem where the open fails, drop both fds and fall through to the direct
+  # path rather than aborting the build.
+  if [ -n "$progress_fifo" ] && ! exec 9<>"$progress_fifo" 8<"$progress_fifo"; then
+    exec 9>&- 8<&- 2>/dev/null || true
+    rm -f "$progress_fifo" 2>/dev/null || true
+    progress_fifo=""
+  fi
+
+  if [ -n "$progress_fifo" ]; then
+    progress_tap_run <&8 9>&- &                  # tap reads fd8; must not hold the writer
+    tap_pid=$!
+    "$@" >"$progress_fifo" 8<&- 9>&- &           # builder stdout->fifo; stderr direct
+    child_pid=$!
+    trap "kill -TERM ${child_pid} 2>/dev/null" TERM INT
+    if wait "$child_pid"; then                   # builder's REAL rc, unchanged
+      child_rc=0
+    else
+      child_rc=$?
+    fi
+    trap on_exit EXIT INT TERM
+    exec 9>&-                                     # drop the pinned writer -> tap EOFs
+    wait "$tap_pid" 2>/dev/null || true
+    exec 8<&-
+    rm -f "$progress_fifo" 2>/dev/null || true
+    return "$child_rc"
+  fi
+
   "$@" &
   child_pid=$!
   trap "kill -TERM ${child_pid} 2>/dev/null" TERM INT

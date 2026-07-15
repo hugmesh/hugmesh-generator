@@ -2,18 +2,24 @@
 # ── JOB-channel image-spec GUARD regression smoke (NON-GATING) ───────────────────
 # Companion to tests/build-image-spec-parity.sh. That fixture proves the spec
 # channel translates a VALID ImageConfig identically to the GUI channel; this one
-# proves the spec channel FAILS CLOSED on the four integration gaps where it used
+# proves the two flavors of defense against the four integration gaps where it used
 # to diverge from the legacy IMAGE_TYPE/HARDWARE_CLASS channel (resolve_build_target):
 #
-#   G2  frite/orangepi5/orangepizero2 with an unset flavor: the Studio materializes
-#       `--flavor both`, which builds TWO artifacts (live + installer). The ingest
-#       contract carries a single imageRef, so the OLD spec channel wasted the whole
-#       build then die-ERRORed at artifact collection. Now rejected up front.
-#   G3  jetson with an unset role: ImageConfig.role defaults to the x86 client role
-#       `standalone-thick`; the Studio does NOT validate role×platform, so the OLD
-#       spec channel relayed `--role standalone-thick` and the jetson builder
-#       hard-rejected it after dispatch. Now rejected up front (matching the legacy
-#       jetson role allowlist).
+#   G2  frite/orangepi5/orangepizero2 with an UNSET flavor. Two layers now cover it:
+#       (a) the Studio's resolve_platform_defaults fills an unset ARM flavor ->
+#           `installer` at materialize time, so a MINIMAL ImageConfig no longer emits
+#           the two-artifact `--flavor both` — the worker ACCEPTS it (positive control).
+#       (b) the worker still FAILS CLOSED (defense-in-depth) if a spec explicitly
+#           carries `--flavor both` (a hand-crafted / non-Studio spec): the ingest
+#           contract carries a single imageRef, so `both` is rejected up front rather
+#           than wasting the whole build and die-ERRORing at artifact collection.
+#   G3  jetson with an off-platform/unset role. Same two layers:
+#       (a) resolve_platform_defaults canonicalizes the x86 base-default role
+#           (`standalone-thick`) and an unset role to a valid jetson role (`edge_ai`),
+#           so a minimal jetson ImageConfig now ACCEPTS (positive control) instead of
+#           relaying a role the jetson builder would hard-reject after dispatch.
+#       (b) the worker still rejects a spec that explicitly carries a role outside the
+#           jetson allowlist (edge_ai | gpu-host | full | desktop) — defense-in-depth.
 #   G4  compress=true: the Studio emits --compress and the builder renames the
 #       product to <name>.img.xz (removing the raw .img). The OLD detector globbed
 #       only *.img -> 0 matches -> die ERROR on a fully-successful build, discarding
@@ -111,15 +117,31 @@ accept_case() {  # NAME SPEC IMAGE_TYPE
   fi
 }
 
-echo "── G2/G3: spec channel fails closed on the legacy guards it was missing ──"
-materialize frite_unset  '{"platform":"frite","role":"frite"}'
+echo "── G2/G3 (a): the Studio pre-resolves the legacy gaps, so a minimal config now ACCEPTS ──"
+# resolve_platform_defaults fills an unset ARM flavor -> installer and canonicalizes
+# an unset/off-platform role, so these minimal ImageConfigs — which the OLD spec
+# channel rejected (--flavor both / role=standalone-thick) — now assemble cleanly.
+materialize frite_unset  '{"platform":"frite"}'
 materialize op5_unset    '{"platform":"orangepi5"}'
 materialize opz2_unset   '{"platform":"orangepizero2"}'
 materialize jetson_unset '{"platform":"jetson"}'
-reject_case frite-flavor-both  "$work/frite_unset.json" client  "--flavor both"
-reject_case op5-flavor-both    "$work/op5_unset.json"   client  "--flavor both"
-reject_case opz2-flavor-both   "$work/opz2_unset.json"  client  "--flavor both"
-reject_case jetson-bad-role    "$work/jetson_unset.json" primary "role='standalone-thick'"
+accept_case frite-unset-resolved  "$work/frite_unset.json"  client
+accept_case op5-unset-resolved    "$work/op5_unset.json"    client
+accept_case opz2-unset-resolved   "$work/opz2_unset.json"   client
+accept_case jetson-unset-resolved "$work/jetson_unset.json" primary
+
+echo "── G2/G3 (b): the worker still FAILS CLOSED on a spec that explicitly carries the bad value ──"
+# Defense-in-depth against a hand-crafted / non-Studio spec: resolve_platform_defaults
+# only fills an UNSET flavor and canonicalizes the roles it recognizes, so an explicit
+# `both` and an unrecognized jetson role pass through to the worker's guard unchanged.
+materialize frite_both     '{"platform":"frite","flavor":"both"}'
+materialize op5_both       '{"platform":"orangepi5","flavor":"both"}'
+materialize opz2_both      '{"platform":"orangepizero2","flavor":"both"}'
+materialize jetson_badrole '{"platform":"jetson","role":"not-a-jetson-role"}'
+reject_case frite-flavor-both  "$work/frite_both.json"     client  "--flavor both"
+reject_case op5-flavor-both    "$work/op5_both.json"       client  "--flavor both"
+reject_case opz2-flavor-both   "$work/opz2_both.json"      client  "--flavor both"
+reject_case jetson-bad-role    "$work/jetson_badrole.json" primary "edge_ai | gpu-host | full | desktop"
 
 echo "── positive controls: valid specs still assemble (no false reject) ──"
 materialize frite_ok  '{"platform":"frite","role":"frite","flavor":"installer"}'

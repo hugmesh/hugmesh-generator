@@ -136,7 +136,9 @@ def _install_capturing_builddriver(monkeypatch):
     captured: list[tuple] = []
 
     class CapturingBuildDriver:
-        def __init__(self, gen, host):
+        # graphical=... is threaded by WorklistDriver since the GUI-safe-sudo change
+        # (a GUI-launched native build elevates via a password dialog, not a terminal).
+        def __init__(self, gen, host, graphical=False):
             self.cancelled = False
 
         def run(self, cfg, backend, on_line=None):

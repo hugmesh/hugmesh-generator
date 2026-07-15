@@ -228,13 +228,26 @@ class HomePage(QtWidgets.QWizardPage):
             "unlock_yubikey": self.unlock_yubikey,
         })
         # role-class gate (spec 7): home provisioning is desktop-only — on a node/mesh
-        # image grey the WHOLE group (overriding any platform-enable), with the reason.
-        # On desktop images leave the per-platform greying above untouched.
-        if not home_options_allowed(c):
-            gate_widgets_role_class(list(self._home_widgets), False, _HOME_ROLE_CLASS_REASON)
+        # image HIDE the whole group (overriding any platform-enable) rather than
+        # greying it, with the reason as the group tooltip. Emission stays preserved by
+        # the role-class clear in validatePage (HOME_DESKTOP_FIELDS reset to defaults)
+        # plus the every-visit re-gate that restores + collects the group again when a
+        # desktop role is later selected. On desktop images the per-platform greying
+        # above is left untouched.
+        home_allowed = home_options_allowed(c)
+        if not home_allowed:
+            gate_widgets_role_class(list(self._home_widgets), False,
+                                    _HOME_ROLE_CLASS_REASON, hide=True)
+        else:
+            # desktop role: the group is live — make sure a prior node-visit's hide is
+            # undone (leave the per-platform greying + its tooltips above untouched).
+            for w in self._home_widgets:
+                w.setVisible(True)
+        self.mode_help.setVisible(home_allowed)
+        self.copy_home_btn.setVisible(home_allowed)
         # the copy-home preset only makes sense where home provisioning is live — track
         # the (now fully gated) home-mode combo so it greys with it on ARM and on nodes.
-        self.copy_home_btn.setEnabled(self.mode.isEnabled())
+        self.copy_home_btn.setEnabled(home_allowed and self.mode.isEnabled())
 
     def validatePage(self):
         c = self.wiz.cfg

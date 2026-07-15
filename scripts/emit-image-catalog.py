@@ -23,20 +23,27 @@ sys.path.insert(0, os.path.join(_GEN_ROOT, "studio"))
 
 from snapdragon_studio.core.config import (  # noqa: E402
     DESKTOP_ROLES, FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS, NODE_ROLES,
-    ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, PLATFORM_LABELS, RPI_BOARDS,
-    ROLE_CHOICES, image_class,
+    ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, PLATFORM_LABELS,
+    ROLE_CHOICES, image_class, rpi_boards_for_role,
 )
 
 DEFAULT_OUT = os.path.join("docs", "catalog", "image-catalog.json")
 
 
-def platform_axes(platform: str) -> dict:
-    """The board / flavor / desktop axes a platform exposes (empty where it has none)."""
+def platform_axes(platform: str, role: str) -> dict:
+    """The board / flavor / desktop axes a platform exposes (empty where it has none).
+
+    The rpi5 board axis is ROLE-DEPENDENT: rpi3 (1GB RAM) is desktop-only and
+    build-rpi5-stage4.sh hard-errors a non-desktop role on --board rpi3, so a node role
+    must expose only rpi5/rpi4. We defer to rpi_boards_for_role(role) — the SAME predicate
+    the Studio GUI RolePage/WorklistPage use — so the machine-readable catalog the admin-ui
+    worklist multi-select consumes never offers a board/role combo that dead-ends in that
+    hard-error (honesty rule; mirrors the GUI gating in the web modal)."""
     axes: dict[str, list[str]] = {}
     if platform == "x86":
         axes["desktop"] = ["thin", "full"]
     elif platform == "rpi5":
-        axes["board"] = list(RPI_BOARDS)
+        axes["board"] = list(rpi_boards_for_role(role))
     elif platform == "jetson":
         axes["board"] = list(JETSON_BOARDS)
     elif platform == "frite":
@@ -59,7 +66,7 @@ def build_image_catalog() -> dict:
                 "role": role,
                 "label": label,
                 "image_class": image_class(mode, role),
-                "platforms": [{"platform": p, "axes": platform_axes(p)} for p in platforms],
+                "platforms": [{"platform": p, "axes": platform_axes(p, role)} for p in platforms],
             }
             for (role, platforms, label) in choices
         ]

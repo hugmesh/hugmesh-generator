@@ -20,6 +20,7 @@ import os
 
 from ..qt import QtCore, QtWidgets, Signal
 from ._scroll import scrollable
+from ...core import flash_targets
 from ...core import worklist as worklist_mod
 from ...core.config import (ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE, image_class,
                             resolve_platform_defaults)
@@ -77,6 +78,37 @@ class _BuilderImageWorker(QtCore.QThread):
         self.done.emit(code)
 
 
+class _PreflightWorker(QtCore.QThread):
+    """Runs the two BLOCKING docker probes off the GUI thread (the freeze fix): the
+    aggregate WorklistDriver.preflight() (per-entry `docker image inspect`) and
+    BuildDriver.builder_image_missing() (another `docker image inspect`). Both used to
+    run on the Qt main event loop from BuildPage._preview(), stalling the wizard AND the
+    shared-process tray for up to ~16s on a slow docker daemon. Carries a monotonically
+    increasing req_id so the GUI slot can drop stale results from rapid config changes."""
+    done = Signal(object, bool, int)     # (problems: list[str], image_missing: bool, req_id)
+
+    def __init__(self, generator_dir, worklist, host, backend, driver, req_id):
+        super().__init__()
+        self._generator_dir = generator_dir
+        self._worklist = worklist
+        self._host = host
+        self._backend = backend
+        self._driver = driver
+        self._req_id = req_id
+
+    def run(self):
+        try:
+            problems = WorklistDriver(self._generator_dir, self._worklist,
+                                      host=self._host, backend=self._backend).preflight()
+        except Exception as e:
+            problems = [f"cannot assemble the build: {e}"]
+        try:
+            image_missing = self._driver.builder_image_missing(self._backend)
+        except Exception:
+            image_missing = False
+        self.done.emit(problems, image_missing, self._req_id)
+
+
 class BuildPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
@@ -95,6 +127,7 @@ class BuildPage(QtWidgets.QWizardPage):
         # mesh run state (populated in initializePage when mode == mesh)
         self._wl_driver: WorklistDriver | None = None
         self._materialized: list = []
+        self._flash_after_targets: list = []
 
         lay = scrollable(self)
         self.backend = QtWidgets.QComboBox()
@@ -206,6 +239,20 @@ class BuildPage(QtWidgets.QWizardPage):
         self.image_only = QtWidgets.QCheckBox(
             "Image only — skip the live/installer media (--image-only; frite/jetson/orangepi*)")
         arl.addWidget(self.image_only)
+        # flash-with-build opt-in (never on by default): when a removable/SD/eMMC target
+        # is attached, offer to flash the just-built artifact to it after a successful
+        # build. The actual write still goes through scripts/flash-disk.sh (typed-path
+        # confirm re-validated by the GUI, unmount, whole-disk refusal, the real dd) on
+        # the ProgressPage — this only records the intent + the chosen device.
+        self.flash_after = QtWidgets.QCheckBox(
+            "After a successful build, flash to an attached device…  (off by default)")
+        self.flash_after.setChecked(False)
+        arl.addWidget(self.flash_after)
+        self.flash_after_combo = QtWidgets.QComboBox()
+        self.flash_after_row = _row("Flash target", self.flash_after_combo)
+        arl.addWidget(self.flash_after_row)
+        self.flash_after.toggled.connect(
+            lambda on: self.flash_after_combo.setEnabled(on and self.flash_after_combo.count() > 0))
         lay.addWidget(art)
 
         # Secure Boot + KEYS-USB signing chain (G5; x86 only). The builder default is
@@ -274,6 +321,22 @@ class BuildPage(QtWidgets.QWizardPage):
         self.log = QtWidgets.QPlainTextEdit(); self.log.setReadOnly(True)
         lay.addWidget(self.log, 1)
         self.image_worker = None
+        # ── off-thread docker-probe plumbing (freeze fix) ──────────────────────────
+        # _preview() splits into an INSTANT part (widgets -> cfg + command pane, no
+        # daemon touch) and an OFF-THREAD part (the two docker probes) run by a
+        # _PreflightWorker. A debounced single-shot timer collapses rapid config
+        # changes; a monotonically-rising req_id drops stale worker results.
+        self._recompute_gen = 0
+        self._recompute_busy = False
+        self._preflight_worker: _PreflightWorker | None = None
+        self._recompute_timer = QtCore.QTimer(self)
+        self._recompute_timer.setSingleShot(True)
+        self._recompute_timer.setInterval(250)
+        self._recompute_timer.timeout.connect(self._run_recompute)
+        # a docker-backend change is the classic freeze trigger — debounce it off-thread
+        self.backend.currentIndexChanged.connect(lambda _=0: self._schedule_recompute())
+        # never leave a probe thread running past the wizard
+        self.wiz.finished.connect(self._join_preflight_worker)
 
     def initializePage(self):
         self.wiz.collect_all()
@@ -335,9 +398,13 @@ class BuildPage(QtWidgets.QWizardPage):
         self.packages_btn.setVisible(not mesh)
         if mesh:
             self._refresh_worklist_table()
-        # per-platform capability greying for the new fields (grow / version /
+        # per-platform capability gating for the new fields (grow / version /
         # skip-kernel / skip-clean / build-subdir / seed-url / pentest are
-        # all-platform or out-of-band, so they never grey)
+        # all-platform or out-of-band, so they never gate). hide=True HIDES the
+        # inapplicable options rather than greying them; clear_unsupported() (below,
+        # in _preview/validatePage) still resets a hidden field to its default and the
+        # every-visit re-gate restores it when the platform supports it again, so
+        # emission is preserved (build-matrix stays 746/0).
         gate_widgets(c.platform, {
             "release_tag": self.release_tag,
             "build_img": self.build_img,
@@ -350,7 +417,8 @@ class BuildPage(QtWidgets.QWizardPage):
             "image_only": self.image_only,
             "secure_boot": self.sb_box,
             "distdir": self.distdir_row,
-        })
+        }, hide=True)
+        self._refresh_flash_after_targets()
         self._preview()
 
     def _backend(self):
@@ -433,24 +501,113 @@ class BuildPage(QtWidgets.QWizardPage):
             self._set_problems([str(e)])
             return
         self.cmd.setPlainText(cmdline)
-        # isComplete() gates the Build/Finish button on the AGGREGATE worklist preflight
-        # (one entry for standalone/cloud) — the FleetPage refuse-on-problem precedent.
-        self._set_problems(self._aggregate_preflight())
+        # The command pane above updated INSTANTLY (pure argv assembly, no daemon).
+        # The AGGREGATE preflight + builder-image probe are the two docker subprocess
+        # calls that used to freeze the wizard + tray here — kick them off-thread.
+        self._schedule_recompute()
+
+    # ---- off-thread preflight (freeze fix) -------------------------------------
+    def _schedule_recompute(self) -> None:
+        """(Re)start the debounce so a burst of config changes collapses into ONE
+        off-thread probe. Bumps the req_id (stale results are dropped) and shows the
+        Build button's busy state until the worker returns."""
+        self._recompute_gen += 1
+        self._set_busy(True)
+        self.log.setPlainText("Checking Docker availability…")
+        self._recompute_timer.start()
+
+    def _run_recompute(self) -> None:
+        """Debounce fired: launch the probe worker unless one is already in flight (it
+        will be re-fired from _on_preflight_done when it finishes, against the newest
+        req_id)."""
+        if self._preflight_worker is not None and self._preflight_worker.isRunning():
+            # a probe is still finishing (e.g. the just-superseded one whose done signal
+            # re-fired this timer): re-arm rather than return, so we can never end with a
+            # pending recompute and no trigger left = a permanently-stuck busy Build button.
+            self._recompute_timer.start()
+            return
+        try:
+            worklist = self._current_worklist()      # pure assembly, no daemon touch
+        except Exception as e:
+            self._on_preflight_done([f"cannot assemble the build: {e}"], False,
+                                    self._recompute_gen)
+            return
+        self._preflight_worker = _PreflightWorker(
+            self.wiz.generator_dir, worklist, self.wiz.host, self._backend(),
+            self.wiz.driver, self._recompute_gen)
+        self._preflight_worker.done.connect(self._on_preflight_done)
+        self._preflight_worker.start()
+
+    def _on_preflight_done(self, problems, image_missing: bool, req_id: int) -> None:
+        """GUI-thread slot: apply the probe result, or drop it (and re-fire) if a newer
+        config change has superseded this req_id."""
+        if req_id != self._recompute_gen:
+            self._recompute_timer.start()            # a newer request is pending — run it
+            return
+        self._set_problems(list(problems))
+        self.build_image_btn.setVisible(bool(image_missing))
         if self._problems:
             self.log.setPlainText("Preflight:\n  - " + "\n  - ".join(self._problems))
         else:
             self.log.setPlainText("Preflight OK.")
-        self.build_image_btn.setVisible(self.wiz.driver.builder_image_missing(self._backend()))
+        self._set_busy(False)
+
+    def _set_busy(self, busy: bool) -> None:
+        """Disable + spinner-text the wizard's Commit/Build button while a docker probe
+        is in flight (isComplete() reads _recompute_busy)."""
+        self._recompute_busy = busy
+        try:
+            self.wiz.setButtonText(QtWidgets.QWizard.WizardButton.CommitButton,
+                                   "Checking Docker…" if busy else "Build")
+        except Exception:
+            pass
+        self.completeChanged.emit()
+
+    def _join_preflight_worker(self, *_a) -> None:
+        if self._preflight_worker is not None and self._preflight_worker.isRunning():
+            self._preflight_worker.wait(3000)
 
     def _aggregate_preflight(self) -> list[str]:
         """WorklistDriver.preflight over the would-be-committed worklist. Materialize can
-        raise on an invalid identity — surface that as the single blocking problem."""
+        raise on an invalid identity — surface that as the single blocking problem.
+        Kept for direct/synchronous callers; the live page path runs it off-thread via
+        _PreflightWorker so the docker subprocess never stalls the event loop."""
         try:
             drv = WorklistDriver(self.wiz.generator_dir, self._current_worklist(),
                                  host=self.wiz.host, backend=self._backend())
             return drv.preflight()
         except Exception as e:
             return [f"cannot assemble the build: {e}"]
+
+    def _refresh_flash_after_targets(self) -> None:
+        """Populate the flash-with-build target combo from a READ-ONLY device scan
+        (flash_targets.list_targets); hide/grey the opt-in when nothing is attached so
+        the default stays non-destructive."""
+        try:
+            targets = flash_targets.list_targets()
+        except Exception:
+            targets = []
+        # keep the FlashTarget objects (not just paths) so validatePage can stash a
+        # stable device IDENTITY for ProgressPage's auto-flash TOCTOU guard.
+        self._flash_after_targets = targets
+        prev = self.flash_after_combo.currentData()
+        self.flash_after_combo.clear()
+        for t in targets:
+            self.flash_after_combo.addItem(t.label(), t.path)
+        if prev is not None:
+            i = self.flash_after_combo.findData(prev)
+            if i >= 0:
+                self.flash_after_combo.setCurrentIndex(i)
+        has = bool(targets)
+        self.flash_after.setEnabled(has)
+        self.flash_after_row.setVisible(has)
+        if not has:
+            self.flash_after.setChecked(False)
+            self.flash_after.setToolTip(
+                "No attached removable / SD / eMMC target detected.")
+        else:
+            self.flash_after.setToolTip("")
+        self.flash_after_combo.setEnabled(has and self.flash_after.isChecked())
 
     def _set_problems(self, problems: list[str]) -> None:
         self._problems = problems
@@ -540,8 +697,10 @@ class BuildPage(QtWidgets.QWizardPage):
 
     # ---- commit -----------------------------------------------------------------
     def isComplete(self) -> bool:
-        """Build/Finish is enabled only when the aggregate preflight is clean (design 3.12)."""
-        return not self._problems
+        """Build/Finish is enabled only when the aggregate preflight is clean (design 3.12)
+        AND no docker probe is in flight (the freeze-fix busy state — the button reads
+        'Checking Docker…' and is disabled until the off-thread recompute returns)."""
+        return not self._problems and not self._recompute_busy
 
     def validatePage(self) -> bool:
         """Commit the WorklistConfig and stash the run parameters ProgressPage reads, then
@@ -551,4 +710,11 @@ class BuildPage(QtWidgets.QWizardPage):
         self.wiz.build_backend = self._backend()
         self.wiz.generate_node_keys = (self.gen_keys.isChecked()
                                        if self.wiz.cfg.mode == "mesh" else True)
+        # flash-with-build opt-in (default OFF): stash the full FlashTarget (path + size +
+        # model) so ProgressPage can re-validate device IDENTITY, not just the /dev path,
+        # before it auto-launches the flasher (the only auto path) — a TOCTOU guard for a
+        # device swapped onto the same node during a long build.
+        path = self.flash_after_combo.currentData() if self.flash_after.isChecked() else None
+        target = next((t for t in self._flash_after_targets if t.path == path), None)
+        self.wiz.flash_after = (self.flash_after.isChecked() and target is not None, target)
         return True

@@ -19,8 +19,8 @@ pytest.importorskip("snapdragon_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
 from snapdragon_studio.core.config import (   # noqa: E402  (after the importorskip gate)
-    MODE_SKIPPED_PAGES, OPTIONAL_SERVICES_CHOICES, ROLE_CHOICES, UNAFFILIATED_ROLE,
-    WIZARD_PAGE_SLUGS,
+    ImageConfig, MODE_SKIPPED_PAGES, OPTIONAL_SERVICES_CHOICES, ROLE_CHOICES,
+    UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS, superadmin_plane_applies,
 )
 from snapdragon_studio.core.local_login_agent import load_manifest  # noqa: E402
 from snapdragon_studio.core.platform_info import HostInfo
@@ -181,6 +181,61 @@ def test_orangepizero2_flavor_survives_a_loaded_config_round_trip(wiz):
     assert wiz.cfg.platform == "orangepizero2"
     assert wiz.cfg.flavor == "installer"
     assert wiz.cfg.board == ""
+
+
+def _rpi5_board_items(page):
+    return [page.rpi5_board.itemText(i) for i in range(page.rpi5_board.count())]
+
+
+def test_rpi5_node_role_board_picker_excludes_rpi3(wiz):
+    """A node/appliance rpi5 role (standalone 'generic') must NOT offer rpi3 — it is
+    desktop-only (1GB RAM), and the builder hard-errors that combo. The picker mirrors
+    the builder so the selection can't dead-end (honesty rule)."""
+    pick_mode(wiz, "standalone")
+    page = pick_role(wiz, "generic")
+    pick_platform(page, "rpi5")
+    assert page.rpi5_box.isVisible()
+    assert _rpi5_board_items(page) == ["rpi5", "rpi4"]
+    assert "rpi3" not in _rpi5_board_items(page)
+
+
+def test_rpi5_desktop_role_board_picker_includes_rpi3(wiz):
+    """The desktop rpi5 role (rpi5-desktop) is the ONE rpi5 role that may target rpi3 —
+    the picker offers all three boards there."""
+    pick_mode(wiz, "cloud")
+    page = pick_role(wiz, "rpi5-desktop")
+    pick_platform(page, "rpi5")
+    assert page.rpi5_box.isVisible()
+    assert _rpi5_board_items(page) == ["rpi5", "rpi4", "rpi3"]
+
+
+def test_chromebook_selectable_as_standalone_desktop(wiz):
+    """Discoverability: the Chromebook desktop is pickable in standalone mode (no
+    mesh/SSO), not only as a cloud client — and emits a builder-valid command."""
+    pick_mode(wiz, "standalone")
+    page = pick_role(wiz, "chromebook")   # raises if not offered
+    pick_platform(page, "x86")
+    wiz.next()
+    assert wiz.cfg.role == "chromebook" and wiz.cfg.platform == "x86"
+    args = wiz.cfg.to_cli_args()
+    assert args[:2] == ["--role", "chromebook"]
+    assert "--no-tailscale" in args and "--no-sso" in args
+
+
+def test_worklist_rpi5_node_rows_exclude_rpi3(wiz):
+    """The mesh WorklistPage's per-row board picker gates rpi3 the same way: node rows
+    (pki/be/fe on rpi5) offer rpi5/rpi4 only; the rpi5-desktop row offers all three."""
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+
+    def items(rid):
+        combo, _flavor = page._combos[rid]
+        return [combo.itemText(i) for i in range(combo.count())]
+
+    for rid in ("pki.rpi5", "be.rpi5", "fe.rpi5"):
+        assert items(rid) == ["rpi5", "rpi4"], rid
+        assert "rpi3" not in items(rid)
+    assert items("rpi5-desktop.rpi5") == ["rpi5", "rpi4", "rpi3"]
 
 
 def test_rpi5_orangepi5_orangepizero2_boxes_mutually_exclusive(wiz):
@@ -602,7 +657,7 @@ def test_home_provisioning_greys_and_clears_on_arm(wiz):
 
 def test_home_provisioning_greyed_for_x86_mesh_node(wiz):
     """spec 7 (role-class axis, isolated from the platform gate): home provisioning is
-    a DESKTOP-class surface — greyed+cleared on a NODE image even on x86, where the
+    a DESKTOP-class surface — HIDDEN+cleared on a NODE image even on x86, where the
     platform gate alone would leave every home widget live. Disk-encryption and the
     local-login group stay live (nodes ARE root-encrypted)."""
     c = wiz.cfg
@@ -613,13 +668,60 @@ def test_home_provisioning_greyed_for_x86_mesh_node(wiz):
     home = advance_to(wiz, wizard_mod.HomePage)
     for w in (home.mode, home.device, home.backup_row, home.encrypted, home.seed,
               home.include_archive_row, home.seed_code_from_row, home.seed_packages_row):
-        assert not w.isEnabled(), w          # role-class grey, NOT platform (x86 supports these)
+        assert not w.isVisible(), w          # role-class HIDE, NOT platform (x86 supports these)
     assert home.encrypt_root.isEnabled() and home.luks_pass.isEnabled()
     assert home.standalone.isEnabled() and home.local_user.isEnabled()
     advance_to(wiz, wizard_mod.BuildPage)
     assert c.home_mode == "create" and c.home_device == ""
     assert c.home_encrypted is False and c.home_seed_code == "none"
     assert not any(a.startswith("--home-") for a in c.to_cli_args())
+
+
+# ---- dynamic page-skip (nextId applies_to) — emission-neutral -----------------------
+
+def test_superadmin_plane_predicate():
+    """The dynamic-skip predicate: mesh always applies; a cloud CLIENT role applies
+    (emits --domains/--person-role); a cloud NODE role does not (nothing emitted, no
+    manifest); standalone is statically skipped anyway."""
+    assert superadmin_plane_applies(ImageConfig(mode="mesh", role="omnibus"))
+    assert superadmin_plane_applies(ImageConfig(mode="cloud", role="laptop"))
+    assert not superadmin_plane_applies(ImageConfig(mode="cloud", role="be"))
+    assert not superadmin_plane_applies(ImageConfig(mode="standalone", role="standalone-thick"))
+
+
+def test_cloud_node_role_dynamically_skips_domains_and_users(wiz):
+    """nextId() skips the superadmin Domains/Users tables for a (loaded) cloud NODE
+    build — they contribute no argv there — while a cloud CLIENT keeps them."""
+    dom_id = wiz._page_ids["domains"]
+    usr_id = wiz._page_ids["users"]
+    terminal = {wiz._page_ids["build"], wiz._page_ids["progress"]}
+    wiz.cfg = ImageConfig(mode="cloud", role="be", platform="x86", brand="acme",
+                          cluster_domain="acme.example")
+    assert wiz._dynamically_skipped(dom_id, terminal)
+    assert wiz._dynamically_skipped(usr_id, terminal)
+    wiz.cfg.role = "laptop"                         # a cloud client emits --domains/--person-role
+    assert not wiz._dynamically_skipped(dom_id, terminal)
+    assert not wiz._dynamically_skipped(usr_id, terminal)
+
+
+def test_terminal_pages_never_dynamically_skipped(wiz):
+    terminal = {wiz._page_ids["build"], wiz._page_ids["progress"]}
+    for slug in ("build", "progress"):
+        assert not wiz._dynamically_skipped(wiz._page_ids[slug], terminal)
+
+
+def test_skipping_domains_users_is_emission_neutral_for_cloud_node(wiz):
+    """The ALL-OPTIONS guard: skipping Domains/Users (never visiting them) leaves the
+    argv byte-identical to force-visiting them, because a cloud NODE role suppresses
+    --domains/--person-role and cloud writes no manifest."""
+    base = dict(mode="cloud", role="be", platform="x86", brand="acme",
+                cluster_domain="acme.example")
+    baseline = ImageConfig(**base).to_cli_args()   # domains/users skipped -> defaults
+    visited = ImageConfig(**base)
+    wiz.cfg = visited                              # force-visit both superadmin pages
+    dom = wiz.page(wiz._page_ids["domains"]); dom.initializePage(); dom.validatePage()
+    usr = wiz.page(wiz._page_ids["users"]); usr.initializePage(); usr.validatePage()
+    assert visited.to_cli_args() == baseline       # visiting them changed no argv
 
 
 # ---- NetworkPage: tailnet/SSO + mesh-control-plane role-class reflow (specs 3, 5) ----

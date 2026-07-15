@@ -87,7 +87,7 @@ BUILDER_SCRIPTS = {
 # specs-orangepi-zero2/README.md).
 PLATFORM_LABELS = {
     "x86": "x86_64 host",
-    "rpi5": "Raspberry Pi 5 / Pi 4 / Pi 3 (arm64; --board rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only])",
+    "rpi5": "Raspberry Pi 5 / 4 / 3 (arm64) — desktop OR mesh node; --board rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only, no node]",
     "frite": "Libre AML-S805X La Frite family (arm64)",
     "jetson": "NVIDIA Jetson Orin (arm64) — EXPERIMENTAL: hardware validation pending",
     "orangepi5": "Orange Pi 5 / 5 Plus (Rockchip RK3588/RK3588S, arm64) — EXPERIMENTAL: hardware validation pending",
@@ -109,25 +109,39 @@ ROLE_CHOICES = {
         ("frite", ("frite",), "La Frite family arm64 standalone (FDE local desktop; board + flavor)"),
         ("orangepi5", ("orangepi5",), "Orange Pi 5 / 5 Plus arm64 standalone — EXPERIMENTAL (FDE local desktop; board + flavor)"),
         ("orangepizero2", ("orangepizero2",), "Orange Pi Zero 2 arm64 standalone HEADLESS APPLIANCE — EXPERIMENTAL (FDE; flavor only)"),
+        # A coreboot/UEFI Chromebook is a laptop-class DESKTOP image (build-x86: the
+        # chromebook role == a laptop image targeting coreboot-UEFI, ADR-16). It is
+        # reachable standalone (no mesh/SSO) as well as as a cloud client — mirroring
+        # laptop/desktop being desktop-class in either posture (G17). Role stays the
+        # x86 `chromebook` device-class id; standalone posture drops the mesh plane.
+        ("chromebook", ("x86",),
+         "Chromebook desktop — coreboot/UEFI laptop image (ADR-16), standalone (no mesh/SSO)"),
     ],
     "cloud": [
-        ("laptop", ("x86",), "Laptop client — tailnet + SSO"),
-        ("chromebook", ("x86",), "Chromebook client — tailnet + SSO"),
+        ("laptop", ("x86",), "Laptop desktop — tailnet + SSO"),
+        # A Chromebook is a laptop-class DESKTOP image (coreboot/UEFI, ADR-16), not a
+        # node — surfaced here as a first-class desktop selection alongside laptop/desktop.
+        ("chromebook", ("x86",), "Chromebook desktop — coreboot/UEFI laptop image (ADR-16); tailnet + SSO"),
         ("desktop", ("x86",), "Desktop client — tailnet + SSO"),
         # rpi5 arm64 tailnet client desktop (builder --role desktop) — reachable in
-        # cloud mode, not only as a mesh role (G17).
-        ("rpi5-desktop", ("rpi5",), "Raspberry Pi 5 / 4 arm64 client — tailnet + SSO (board axis)"),
+        # cloud mode, not only as a mesh role (G17). All three boards are desktop-capable.
+        ("rpi5-desktop", ("rpi5",),
+         "Raspberry Pi 5 / 4 / 3 arm64 desktop client — tailnet + SSO (choose board below)"),
         ("frite", ("frite",), "La Frite family arm64 client (board + live/installer flavor)"),
         ("orangepi5", ("orangepi5",), "Orange Pi 5 / 5 Plus arm64 client — EXPERIMENTAL (board + live/installer flavor)"),
         ("orangepizero2", ("orangepizero2",), "Orange Pi Zero 2 arm64 HEADLESS APPLIANCE — EXPERIMENTAL (live/installer flavor only; no board/desktop axis)"),
     ],
     "mesh": [
-        ("pki", ("x86", "rpi5"), "PKI node — cluster certificate authority"),
-        ("be", ("x86", "rpi5"), "Backend node"),
-        ("fe", ("x86", "rpi5"), "Frontend node"),
+        # pki/be/fe are node images buildable on x86 OR a Raspberry Pi 4/5 board (Pi 3
+        # is desktop-only — 1GB RAM can't host the node stack, so the rpi5 board picker
+        # offers only rpi5/rpi4 for these; see rpi_boards_for_role()).
+        ("pki", ("x86", "rpi5"), "PKI node — cluster certificate authority (x86 or Raspberry Pi 4/5)"),
+        ("be", ("x86", "rpi5"), "Backend node (x86 or Raspberry Pi 4/5)"),
+        ("fe", ("x86", "rpi5"), "Frontend node (x86 or Raspberry Pi 4/5)"),
         ("be+gpu", ("x86",), "Backend + GPU node"),
         ("omnibus", ("x86",), "Omnibus — every cluster role on one node"),
-        ("rpi5-desktop", ("rpi5",), "RPi5 desktop — arm64 client (compose with --standalone for FDE, no mesh)"),
+        ("rpi5-desktop", ("rpi5",),
+         "Raspberry Pi 5 / 4 / 3 desktop — arm64 client (compose with --standalone for FDE, no mesh)"),
         ("edge_ai", ("x86", "jetson"), "Edge-AI node — GPU + OpenAI-compatible model API"),
         ("full", ("jetson",), "Jetson full-stack node — EXPERIMENTAL, hardware validation pending"),
         ("gpu-host", ("jetson",), "Jetson GPU host — EXPERIMENTAL, hardware validation pending"),
@@ -162,6 +176,11 @@ JETSON_BOARDS = ("orin-nano", "orin-nano-4gb", "orin-nx-8gb", "orin-nx-16gb")
 # hard-errors if role != desktop; this dataclass does NOT pre-validate that
 # combo (the builder's hard-error is the authoritative safety net).
 RPI_BOARDS = ("rpi5", "rpi4", "rpi3")
+# The board subset a CLUSTER-NODE role may target: rpi3 (1GB RAM) is desktop-only —
+# build-rpi5-stage4.sh hard-errors a non-desktop role on --board rpi3, so a node
+# selection must never offer it (the menu would otherwise dead-end in that hard-error,
+# violating the honesty rule). rpi_boards_for_role() picks the right list per role.
+RPI_NODE_BOARDS = ("rpi5", "rpi4")
 
 # build-orangepi5-stage4.sh --board (Rockchip RK3588/RK3588S) / --flavor.
 # EXPERIMENTAL — hardware validation pending; see specs-orangepi5/README.md.
@@ -174,6 +193,50 @@ ORANGEPI5_FLAVORS = ("live", "installer", "both")
 # HEADLESS APPLIANCE, not a desktop client, no --role axis) AND no --board axis
 # (a single board, unlike Frite/Orange-Pi-5's board tables) — just --flavor.
 ORANGEPIZERO2_FLAVORS = ("live", "installer", "both")
+
+# ── BOARD-EXPANSION MATRIX — logged decisions (Orange Pi 2/3/4/4pro/5/6 +
+# Raspberry Pi 2/3/4/5/6 + Chromebook). The honesty rule (no selectable board whose
+# build is guaranteed to fail): a board only becomes a plain selection when it has a
+# REAL recipe (real upstream u-boot+kernel+DTB or a reusable sibling) that is at least
+# --print-plan-clean; otherwise it is EXPERIMENTAL (labelled + fail-loud preflight) or
+# NOT ADDED. NOTHING in this sandbox is hardware-validated (no silicon, no network to
+# cross-emerge) — mirrors why jetson/orangepi5/orangepizero2 are EXPERIMENTAL.
+#
+# ADDED / SURFACED (REAL — already build; this change is verification + node-exposure
+# + relabelling only, no new builder or specs-*/):
+#   RPi 5   REAL — build-rpi5-stage4.sh default board; desktop (rpi5-desktop) + node
+#                  (pki/be/fe). Already in matrix.tsv.
+#   RPi 4   REAL — build-rpi5-stage4.sh --board rpi4; desktop + node. Now explicitly
+#                  pickable as a node board (rpi_boards_for_role) + relabelled.
+#   RPi 3   REAL, DESKTOP-ONLY — --board rpi3; 1GB RAM cannot host the node stack, so
+#                  the builder hard-errors non-desktop roles. Offered desktop-only;
+#                  rpi3 is kept OUT of every node board picker (RPI_NODE_BOARDS).
+#   OPi 5   EXPERIMENTAL (pre-existing) — build-orangepi5-stage4.sh, desktop only (this
+#                  builder has no cluster-node axis; a node OPi 5 = net-new capability,
+#                  NOT a selection). Unchanged here.
+#   Chromebook  REAL — build-x86-host-stage4.sh --role chromebook == a coreboot/UEFI
+#                  laptop DESKTOP image (ADR-16). Was buried under one cloud label;
+#                  now a clearly-labelled desktop choice in cloud AND standalone.
+#
+# NOT ADDED — EXPERIMENTAL-at-best (real upstream, but net-new unvalidatable builder +
+# specs-*/ work; would need the jetson/opi5 EXPERIMENTAL-label + fail-loud-preflight
+# convention; the orchestrator deliberately did NOT author new builders it cannot
+# validate on silicon, per the honesty rule):
+#   OPi 4 (RK3399)        — mature mainline u-boot/kernel/DTB/TF-A/panfrost, but the
+#                           only Rockchip recipe here (RK3588) is NOT directly reusable
+#                           (different rkbin DDR blob, TF-A platform, Mali). Would be a
+#                           new platform `orangepi4` + build-orangepi4-stage4.sh.
+#   OPi 3 (Allwinner H6)  — mainline u-boot/kernel/DTB incl. display; closest sibling
+#                           is the H616 zero2 flow but needs new specs-orangepi3/.
+#   OPi 4 Pro             — UNCONFIRMED SKU; folds into OPi 4 only IF proven RK3399.
+#
+# NOT ADDED — INFEASIBLE (no internally-consistent, --print-plan-clean recipe to even
+# gate; fails at recipe-authoring, so a preflight-gated EXPERIMENTAL would be dishonest):
+#   RPi 2 (BCM2836)          — 32-bit ARMv7; the whole rpi5 toolchain is aarch64-only.
+#   OPi 2 (Allwinner H3)     — 32-bit ARMv7; same aarch64-only blocker.
+#   RPi 6                    — does not exist (latest shipping Pi is the Pi 5, Jan-2026).
+#   OPi 6 / 6 Plus (CIX Sky1)— 2025 SoC, vendor-BSP/out-of-tree; no trustworthy mainline
+#                              u-boot/kernel/DTB to build a recipe against.
 
 # --env: what gets baked into the image's stack config (test | prod).
 ENV_CHOICES = ("test", "prod")
@@ -400,6 +463,16 @@ def image_class(mode: str, role: str) -> str:
     return "desktop" if role in DESKTOP_ROLES else "node"
 
 
+def rpi_boards_for_role(role: str) -> tuple[str, ...]:
+    """The --board choices to OFFER for an rpi5-platform ``role``. A desktop-class role
+    (rpi5-desktop) may target any Raspberry Pi board (rpi5/rpi4/rpi3); a node/appliance
+    role (pki/be/fe, generic) may target rpi5/rpi4 ONLY — rpi3's 1GB RAM cannot host the
+    hardened SELinux/containerd/kubelet stack, and build-rpi5-stage4.sh hard-errors that
+    combo. Keeping rpi3 out of the node picker mirrors the builder's own contract so a
+    Studio/menu selection can never dead-end in that hard-error (honesty rule)."""
+    return RPI_BOARDS if image_class("", role) == "desktop" else RPI_NODE_BOARDS
+
+
 def branding_allowed(cfg: "ImageConfig") -> bool:
     """Theming is offered only on desktop-class images and never in mesh mode (spec 2)."""
     return image_class(cfg.mode, cfg.role) == "desktop" and cfg.mode != "mesh"
@@ -417,6 +490,28 @@ def home_options_allowed(cfg: "ImageConfig") -> bool:
     """Home provisioning applies to desktop-class images in any mode (spec 7); nodes are
     root-encrypted and have no separately-provisioned home."""
     return image_class(cfg.mode, cfg.role) == "desktop"
+
+
+def superadmin_plane_applies(cfg: "ImageConfig") -> bool:
+    """Whether the superadmin Domains/Users tables contribute anything for this config
+    (the wizard's dynamic page-skip predicate, ALL-OPTIONS-safe).
+
+    * mesh  → always (domains/users flow into the mesh manifest).
+    * cloud → only for a NON-node role: to_cli_args emits --domains/--person-role solely
+      when ``role not in X86_NODE_ROLES`` (build-x86 warns+ignores them on a node role),
+      and cloud writes no manifest — so a cloud NODE image's Domains/Users pages emit
+      NOTHING and can be skipped without changing the argv.
+    * standalone → already statically skipped (MODE_SKIPPED_PAGES); returns False for
+      completeness.
+
+    Because a cloud node build emits none of these flags and produces no manifest,
+    skipping the pages leaves the argv byte-identical — the emission guard the wizard's
+    collect_all (visited-pages-only) requires."""
+    if cfg.mode == "mesh":
+        return True
+    if cfg.mode == "cloud":
+        return cfg.role not in X86_NODE_ROLES
+    return False
 
 
 # ── platform-aware default resolution (materialize/spec channel; NEVER to_cli_args) ──
