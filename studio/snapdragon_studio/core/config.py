@@ -419,6 +419,76 @@ def home_options_allowed(cfg: "ImageConfig") -> bool:
     return image_class(cfg.mode, cfg.role) == "desktop"
 
 
+# ── platform-aware default resolution (materialize/spec channel; NEVER to_cli_args) ──
+# The dataclass defaults role="standalone-thick" (an x86 CLIENT role) and flavor=""
+# — correct for an x86 image, but a worklist entry / synthesized flat config for a
+# NON-x86 platform that leaves the role UNSET materializes that x86 role (or a bare
+# "" stamped from an unset entry.role) onto a builder that rejects it (gap G3), and
+# an UNSET flavor on the ARM ISO platforms (frite/orangepi5/orangepizero2) rides
+# to_cli_args's `self.flavor or "both"` default -> the builder emits TWO ISOs, which
+# the worker's single-artifact ingest contract rejects after a full build (gap G2).
+#
+# PLATFORM_DEFAULT_ROLE names the canonical default role per platform, grounded in
+# each builder's OWN default: build-rpi5-stage4.sh:99 ROLE="generic",
+# build-jetson-stage4.sh:84 ROLE="edge_ai"; frite/orangepi5/orangepizero2 have ONE
+# role (the ROLE_CHOICES role-id == platform name) and emit no --role at all. x86
+# keeps its dataclass default. A unit test pins every value ∈ roles_for_platform().
+PLATFORM_DEFAULT_ROLE = {
+    "x86": "standalone-thick",
+    "rpi5": "generic",
+    "frite": "frite",
+    "jetson": "edge_ai",
+    "orangepi5": "orangepi5",
+    "orangepizero2": "orangepizero2",
+}
+
+# The two "unset / at-the-x86-default" role shapes that trigger role resolution: a
+# blank role (an unset worklist entry.role) and the x86 dataclass default that a
+# synthesized non-x86 flat config carries. An EXPLICITLY-set wrong role (e.g. laptop
+# on jetson) is NOT in this set — it is left for the builder's own hard-error so the
+# mistake fails LOUD rather than being silently corrected.
+_DEFAULT_LEAK_ROLES = ("", PLATFORM_DEFAULT_ROLE["x86"])
+
+# The ARM ISO platforms whose builders take a live|installer|both --flavor. An unset
+# flavor resolves to the single-artifact "installer" here (the legacy worker-channel
+# default) rather than to_cli_args's "both", so the worker's one-artifact ingest holds.
+_ISO_FLAVOR_PLATFORMS = ("frite", "orangepi5", "orangepizero2")
+
+
+def roles_for_platform(platform: str) -> frozenset:
+    """The set of role ids ROLE_CHOICES declares for ``platform`` — inverted from the
+    single authoritative role catalog (the same source emit-image-catalog.py consumes),
+    never a hand-maintained second list. Used to decide whether a materialized role is
+    even valid for the target platform before falling back to PLATFORM_DEFAULT_ROLE."""
+    plat = platform or "x86"
+    return frozenset(role for choices in ROLE_CHOICES.values()
+                     for (role, platforms, _label) in choices if plat in platforms)
+
+
+def resolve_platform_defaults(cfg: "ImageConfig") -> None:
+    """Fill in a platform-correct default role/flavor when a config left them at the
+    x86 dataclass default (or blank) and that value is wrong for the target platform.
+
+    Mutates ``cfg`` in place. Called at MATERIALIZE time only
+    (WorklistConfig._materialize_one), NEVER in to_cli_args — so every already-valid
+    input and the flat to_cli_args `--flavor both` default stay byte-identical, and
+    the corrected role/flavor is baked into the materialized spec the worker channel
+    (--print-specs -> to_dict) carries. x86 is untouched: standalone-thick ∈
+    roles_for_platform("x86"), so the role branch never fires for an x86 image, and
+    the flavor branch is frite/orangepi5/orangepizero2 only.
+    """
+    plat = cfg.platform or "x86"
+    # ROLE: only the unset / x86-default leak shapes, and only when that role is not
+    # already valid for this platform. An explicit valid role is a no-op; an explicit
+    # wrong role is left for the builder's hard-error.
+    if cfg.role in _DEFAULT_LEAK_ROLES and cfg.role not in roles_for_platform(plat):
+        cfg.role = PLATFORM_DEFAULT_ROLE.get(plat, cfg.role)
+    # FLAVOR: the ARM ISO platforms default an unset flavor to a SINGLE artifact so the
+    # worker's one-artifact ingest contract holds (to_cli_args's default is "both").
+    if plat in _ISO_FLAVOR_PLATFORMS and not cfg.flavor:
+        cfg.flavor = "installer"
+
+
 def _reset_field(cfg: "ImageConfig", name: str) -> bool:
     """Reset one ImageConfig field to its dataclass default. True iff it changed."""
     f = ImageConfig.__dataclass_fields__[name]  # type: ignore[attr-defined]

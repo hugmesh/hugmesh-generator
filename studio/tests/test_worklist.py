@@ -11,7 +11,14 @@ import os
 
 import pytest
 
-from snapdragon_studio.core.config import Domain, ImageConfig, User
+from snapdragon_studio.core.config import (
+    PLATFORM_DEFAULT_ROLE,
+    Domain,
+    ImageConfig,
+    User,
+    resolve_platform_defaults,
+    roles_for_platform,
+)
 from snapdragon_studio.core.worklist import (
     WORKLIST_SCHEMA,
     WorklistConfig,
@@ -336,3 +343,137 @@ def test_envelope_conforms_to_frozen_schema():
     bad_platform["entries"][0]["platform"] = "sparc"
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(bad_platform, schema)
+
+
+# ---- platform-aware default resolution (gaps G2/G3; source-side of worker PR #334) ----
+# An entry that leaves role UNSET (or a synthesized flat config carrying the x86
+# dataclass default role) materialized an off-platform role -> `--role ''` /
+# `--role standalone-thick`, and an unset flavor on the ARM ISO platforms materialized
+# to `--flavor both` (two artifacts). resolve_platform_defaults() (run in
+# _materialize_one) fixes both at the SOURCE so the worker's spec channel gets a
+# builder-valid command; already-valid inputs stay byte-identical.
+
+@pytest.mark.parametrize("platform,expect_role", [
+    ("jetson", "edge_ai"),   # build-jetson-stage4.sh:84 ROLE="edge_ai" (DEFAULT)
+    ("rpi5", "generic"),     # build-rpi5-stage4.sh:99 ROLE="generic"
+    ("frite", "frite"),      # ROLE_CHOICES role-id == platform name (no --role emitted)
+    ("orangepi5", "orangepi5"),
+    ("orangepizero2", "orangepizero2"),
+])
+def test_materialize_unset_role_resolves_to_platform_default(platform, expect_role):
+    """An UNSET entry.role on a non-x86 platform resolves to that platform's canonical
+    default role instead of materializing the empty string / x86 client default."""
+    wl = WorklistConfig(base=ImageConfig(mode="mesh", role="omnibus", platform="x86"),
+                        entries=[WorklistEntry(role="", platform=platform)])
+    _e, cfg = wl.materialize()[0]
+    assert cfg.role == expect_role
+
+
+@pytest.mark.parametrize("platform,expect_role", [
+    ("jetson", "edge_ai"),
+    ("rpi5", "generic"),
+])
+def test_materialize_x86_default_role_leak_resolved_for_role_platforms(platform, expect_role):
+    """A flat config that leaves role at the x86 dataclass default ('standalone-thick')
+    and is then targeted at a --role platform (jetson/rpi5) resolves to that platform's
+    default rather than emitting the invalid x86 client role."""
+    # synthesize() copies cfg.role onto the entry, reproducing the flat-config leak.
+    cfg = ImageConfig(platform=platform)          # role defaults to standalone-thick
+    assert cfg.role == "standalone-thick"
+    wl = synthesize(cfg)
+    _e, materialized = wl.materialize()[0]
+    assert materialized.role == expect_role
+    assert "--role" in materialized.to_cli_args()
+    assert materialized.to_cli_args()[materialized.to_cli_args().index("--role") + 1] == expect_role
+
+
+@pytest.mark.parametrize("platform", ["frite", "orangepi5", "orangepizero2"])
+def test_materialize_unset_flavor_defaults_to_installer(platform):
+    """An unset flavor on the ARM ISO platforms materializes to the single-artifact
+    'installer' (not to_cli_args's two-artifact 'both'), so the worker's one-imageRef
+    ingest contract holds."""
+    wl = WorklistConfig(base=ImageConfig(mode="standalone"),
+                        entries=[WorklistEntry(role="", platform=platform, flavor="")])
+    _e, cfg = wl.materialize()[0]
+    assert cfg.flavor == "installer"
+    assert "--flavor" in cfg.to_cli_args()
+    assert cfg.to_cli_args()[cfg.to_cli_args().index("--flavor") + 1] == "installer"
+
+
+@pytest.mark.parametrize("platform", ["frite", "orangepi5", "orangepizero2"])
+def test_materialize_explicit_flavor_is_honored(platform):
+    """An explicitly-set flavor is never overridden by the installer default."""
+    wl = WorklistConfig(base=ImageConfig(mode="standalone"),
+                        entries=[WorklistEntry(role="", platform=platform, flavor="live")])
+    _e, cfg = wl.materialize()[0]
+    assert cfg.flavor == "live"
+
+
+def test_materialize_explicit_wrong_role_left_for_builder_hard_error():
+    """An EXPLICIT (non-default) wrong role is NOT silently corrected — it is left as-is
+    so the builder's own hard-error fails loud rather than the Studio guessing intent."""
+    wl = WorklistConfig(base=ImageConfig(mode="cloud"),
+                        entries=[WorklistEntry(role="laptop", platform="jetson")])
+    _e, cfg = wl.materialize()[0]
+    assert cfg.role == "laptop"          # untouched (not in the unset/x86-default set)
+
+
+def test_materialize_x86_role_flavor_byte_identical():
+    """x86 is untouched: a valid x86 role stays byte-identical (standalone-thick is a
+    valid x86 role, so the resolver is a no-op) and no flavor is injected."""
+    wl = WorklistConfig(base=ImageConfig(mode="standalone", role="standalone-thick",
+                                         platform="x86"),
+                        entries=[WorklistEntry(role="standalone-thick", platform="x86")])
+    _e, cfg = wl.materialize()[0]
+    ref = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      build_subdir="wl-standalone-thick.x86")
+    assert cfg.role == "standalone-thick" and cfg.flavor == ""
+    assert cfg.to_cli_args() == ref.to_cli_args()
+
+
+def test_materialize_valid_explicit_role_flavor_byte_identical():
+    """A valid explicit role+flavor (frite installer) materializes byte-identically to a
+    hand-built flat config — the resolver never perturbs an already-valid input."""
+    wl = WorklistConfig(base=ImageConfig(mode="standalone", role="frite", platform="frite"),
+                        entries=[WorklistEntry(role="frite", platform="frite",
+                                               board="la-frite", flavor="installer")])
+    _e, cfg = wl.materialize()[0]
+    ref = ImageConfig(mode="standalone", role="frite", platform="frite",
+                      board="la-frite", flavor="installer",
+                      build_subdir="wl-frite.frite")
+    assert cfg.to_cli_args() == ref.to_cli_args()
+
+
+def test_resolve_platform_defaults_is_noop_for_valid_inputs():
+    """The resolver mutates nothing for a config that already carries a valid role and
+    (for ISO platforms) a flavor."""
+    for cfg in (ImageConfig(role="edge_ai", platform="jetson"),
+                ImageConfig(role="be", platform="rpi5"),
+                ImageConfig(role="frite", platform="frite", flavor="live"),
+                ImageConfig(role="standalone-thick", platform="x86")):
+        before = (cfg.role, cfg.flavor)
+        resolve_platform_defaults(cfg)
+        assert (cfg.role, cfg.flavor) == before
+
+
+def test_platform_default_role_map_grounded_in_catalog():
+    """DRIFT GUARD: every PLATFORM_DEFAULT_ROLE value must be a role the ROLE_CHOICES
+    catalog actually declares for that platform (so the map can never name a role the
+    builder would reject). Pins the two builder-default-backed values explicitly."""
+    for platform, role in PLATFORM_DEFAULT_ROLE.items():
+        assert role in roles_for_platform(platform), \
+            f"{platform} default role {role!r} not in roles_for_platform({platform})"
+    assert PLATFORM_DEFAULT_ROLE["rpi5"] == "generic"     # build-rpi5-stage4.sh:99
+    assert PLATFORM_DEFAULT_ROLE["jetson"] == "edge_ai"   # build-jetson-stage4.sh:84
+
+
+def test_roles_for_platform_inversion():
+    """roles_for_platform inverts ROLE_CHOICES exactly (guards a catalog edit that would
+    silently drop a role from a platform's accepted set)."""
+    assert roles_for_platform("frite") == frozenset({"frite"})
+    assert roles_for_platform("orangepi5") == frozenset({"orangepi5"})
+    assert roles_for_platform("orangepizero2") == frozenset({"orangepizero2"})
+    assert roles_for_platform("rpi5") == frozenset({"generic", "rpi5-desktop", "pki", "be", "fe"})
+    assert roles_for_platform("jetson") == frozenset({"edge_ai", "full", "gpu-host", "jetson-desktop"})
+    assert "standalone-thick" in roles_for_platform("x86")
+    assert roles_for_platform("") == roles_for_platform("x86")   # "" defaults to x86

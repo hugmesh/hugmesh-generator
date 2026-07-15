@@ -34,6 +34,7 @@ from .config import (
     ImageConfig,
     SECRET_FIELDS,
     clear_role_class_fields,
+    resolve_platform_defaults,
     strip_platform_unsupported,
 )
 
@@ -179,6 +180,16 @@ class WorklistConfig:
         cfg.board = entry.board
         cfg.flavor = entry.flavor
         cfg.desktop = entry.desktop
+
+        # 1b. Platform-aware default resolution — BEFORE the role-class gating in step 5
+        #    (clear_role_class_fields keys image_class() on cfg.role, so a leaked x86
+        #    role on an ARM node entry must be corrected first) and before step 6's
+        #    validate_identity. Only fires for an UNSET/x86-default role that is invalid
+        #    for this platform (gap G3) and an unset flavor on the ARM ISO platforms
+        #    (gap G2); an explicit valid role/flavor is left byte-identical, and the
+        #    entry.id / build_subdir keep tracking the ORIGINAL entry.role (a leaked
+        #    entry was malformed — its id is not expected to follow the resolved role).
+        resolve_platform_defaults(cfg)
 
         # 2. Filter the shared domains to those this image is attached to (Domain.images
         #    empty == attach to every eligible image), IN TABLE ORDER so the first
