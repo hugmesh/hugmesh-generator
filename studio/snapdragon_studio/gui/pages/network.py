@@ -11,6 +11,7 @@ control plane (incl. the superdomain, spec 5) shows for cloud AND mesh."""
 from __future__ import annotations
 
 from ..qt import Qt, QtWidgets
+from ._scroll import scrollable
 from ...core.config import (
     OPTIONAL_SERVICES_BY_PLATFORM,
     OPTIONAL_SERVICES_CHOICES,
@@ -98,7 +99,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # no mesh/tailnet, so this page IS its network-identity + egress + security step,
         # while cloud/mesh use it for the domain, superdomain and cluster services).
         self.setTitle("Network, identity & egress")
-        lay = QtWidgets.QVBoxLayout(self)
+        lay = scrollable(self)
 
         # ---- Group 1: brand identity & domain (visited in ALL modes) -------------
         self.identity_box = QtWidgets.QGroupBox("Identity & domain")

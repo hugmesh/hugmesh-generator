@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from ..qt import Qt, QtWidgets
+from ._scroll import scrollable
 from ...core.config import (
     FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS, KERNEL_FLAVOR_CHOICES,
     ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, PLATFORM_LABELS,
@@ -22,8 +23,11 @@ class RolePage(QtWidgets.QWizardPage):
         # initializePage() sets a path-aware subtitle (standalone vs. mesh client);
         # this is the fallback before the mode is known.
         self.setSubTitle("Pick the image role, then the hardware platform that builds it.")
-        lay = QtWidgets.QVBoxLayout(self)
+        lay = scrollable(self)
         self.roles = QtWidgets.QListWidget()
+        # Keep a healthy visible height for the role list inside the scroll area
+        # (a stretch factor collapses to sizeHint once the page itself scrolls).
+        self.roles.setMinimumHeight(320)
         lay.addWidget(self.roles, 1)
         self.platform = QtWidgets.QComboBox()
         lay.addWidget(_row("Platform", self.platform))
