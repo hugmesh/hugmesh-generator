@@ -34,11 +34,14 @@ from snapdragon_studio.core.config import (
     WIZARD_PAGE_SLUGS,
     X86_CLIENT_ROLES,
     X86_NODE_ROLES,
+    RPI_BOARDS,
+    RPI_NODE_BOARDS,
     branding_allowed,
     clear_role_class_fields,
     enter_mesh_defaults,
     home_options_allowed,
     image_class,
+    rpi_boards_for_role,
     strip_platform_unsupported,
     tailnet_sso_visible,
 )
@@ -218,6 +221,120 @@ def test_x86_client_roles_golden(role):
                        tailscale=True, sso=True).to_cli_args()
     assert args == ["--role", role, "--env", "test", "--local-user", "magus",
                     "--with-tailscale", "--with-sso", "--person-role", "user", *X86_TAIL]
+
+
+# ---- Chromebook: a coreboot/UEFI laptop-class DESKTOP image (ADR-16) ----------
+# The chromebook role is a person-device DESKTOP (X86_CLIENT_ROLES/DESKTOP_ROLES),
+# surfaced as a first-class desktop selection in BOTH cloud (tailnet + SSO) and
+# standalone (no mesh/SSO) modes. It must never be misclassified as a node.
+
+def test_chromebook_is_desktop_class_not_a_node():
+    assert "chromebook" in X86_CLIENT_ROLES
+    assert "chromebook" in DESKTOP_ROLES and "chromebook" not in NODE_ROLES
+    assert image_class("cloud", "chromebook") == "desktop"
+    assert image_class("standalone", "chromebook") == "desktop"
+
+
+def test_chromebook_selectable_in_cloud_and_standalone_catalog():
+    """Discoverability: chromebook is a labelled desktop choice in BOTH modes."""
+    for mode in ("cloud", "standalone"):
+        entry = [(r, plats, label) for r, plats, label in ROLE_CHOICES[mode] if r == "chromebook"]
+        assert entry, f"chromebook missing from ROLE_CHOICES[{mode!r}]"
+        (_r, plats, label) = entry[0]
+        assert plats == ("x86",)
+        # the label must say WHAT it is (coreboot/UEFI Chromebook desktop), not the old
+        # opaque "Chromebook client" — the discoverability + labelling ask.
+        assert "Chromebook desktop" in label and "coreboot" in label
+
+
+def test_x86_chromebook_standalone_golden():
+    """Standalone posture: no mesh/SSO plane, plain coreboot/UEFI laptop image. The
+    builder accepts --role chromebook with --no-tailscale/--no-sso (verified against
+    build-x86-host-stage4.sh --print-plan in the build-matrix GUI channel)."""
+    args = ImageConfig(mode="standalone", role="chromebook", platform="x86").to_cli_args()
+    assert args == ["--role", "chromebook", "--env", "test", "--local-user", "magus",
+                    "--no-tailscale", "--no-sso", *X86_TAIL]
+
+
+# ---- Raspberry Pi board-per-role-class: rpi3 is desktop-only (1GB RAM) ---------
+# build-rpi5-stage4.sh hard-errors a non-desktop role on --board rpi3, so the GUI /
+# menu / catalog must never OFFER rpi3 for a node role — the selection layer mirrors
+# the builder's contract so a pick can't dead-end (honesty rule).
+
+def test_rpi_boards_for_role_gates_rpi3_to_desktop():
+    # desktop-class rpi5 role -> every board incl. rpi3
+    assert rpi_boards_for_role("rpi5-desktop") == RPI_BOARDS
+    assert "rpi3" in rpi_boards_for_role("rpi5-desktop")
+    # node/appliance rpi5 roles -> rpi5/rpi4 ONLY (rpi3 excluded)
+    for node_role in ("pki", "be", "fe", "generic"):
+        boards = rpi_boards_for_role(node_role)
+        assert boards == RPI_NODE_BOARDS
+        assert "rpi3" not in boards
+
+
+def _load_emit_image_catalog():
+    """Import scripts/emit-image-catalog.py (dashed filename) and return its module."""
+    import importlib.util
+    import os
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    gen_root = os.path.dirname(os.path.dirname(here))       # studio/tests -> repo root
+    path = os.path.join(gen_root, "scripts", "emit-image-catalog.py")
+    spec = importlib.util.spec_from_file_location("_emit_image_catalog", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod, gen_root
+
+
+def _node_roles_offering_rpi3(catalog: dict) -> list[tuple]:
+    """(mode, role, board_axis) for every NON-desktop catalog entry that offers rpi3."""
+    offenders = []
+    for mode, roles in catalog["roles"].items():
+        for entry in roles:
+            if entry["image_class"] == "desktop":
+                continue
+            for plat in entry["platforms"]:
+                board = plat["axes"].get("board", [])
+                if "rpi3" in board:
+                    offenders.append((mode, entry["role"], board))
+    return offenders
+
+
+def test_image_catalog_never_offers_rpi3_for_a_node_role():
+    """The machine-readable web/JOB catalog (docs/catalog/image-catalog.json) the admin-ui
+    worklist multi-select consumes MUST mirror the GUI gating: rpi3 (1GB RAM, builder
+    hard-errors a non-desktop role on --board rpi3) is desktop-only. A node role offering
+    rpi3 in any menu is exactly the dead-end the honesty rule forbids."""
+    emit, _ = _load_emit_image_catalog()
+    catalog = emit.build_image_catalog()
+    assert _node_roles_offering_rpi3(catalog) == []
+    # the desktop rpi5 role still keeps rpi3 (the one role that may target it)
+    desk = [e for e in catalog["roles"]["cloud"] if e["role"] == "rpi5-desktop"][0]
+    rpi5_axis = [p for p in desk["platforms"] if p["platform"] == "rpi5"][0]
+    assert "rpi3" in rpi5_axis["axes"]["board"]
+
+
+def test_committed_image_catalog_matches_emitter_and_gates_rpi3():
+    """The committed image-catalog.json is in sync with the emitter (drift guard) AND, as a
+    belt-and-suspenders check on the artifact the web modal actually serves, carries no
+    node-role rpi3 offer."""
+    import os
+
+    emit, gen_root = _load_emit_image_catalog()
+    committed_path = os.path.join(gen_root, "docs", "catalog", "image-catalog.json")
+    with open(committed_path, encoding="utf-8") as fh:
+        committed = json.load(fh)
+    assert committed == emit.build_image_catalog(), (
+        "docs/catalog/image-catalog.json is stale — re-run scripts/emit-image-catalog.py")
+    assert _node_roles_offering_rpi3(committed) == []
+
+
+def test_rpi5_node_on_rpi4_is_a_real_buildable_cell():
+    """A Raspberry Pi 4 backend NODE is an explicit, valid selection (board rpi4 +
+    node role) — the surfacing the request asks for. Emits --role backend --board rpi4."""
+    args = ImageConfig(mode="mesh", role="be", platform="rpi5", board="rpi4",
+                       tailscale=True).to_cli_args()
+    assert args[:5] == ["--role", "backend", "--board", "rpi4", "--env"]
 
 
 @pytest.mark.parametrize("role", ["pki", "be", "fe", "be+gpu", "omnibus", "edge_ai"])

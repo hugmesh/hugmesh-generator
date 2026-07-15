@@ -57,6 +57,7 @@ GUI_PASS=0;  GUI_FAIL=0
 JOB_PASS=0;  JOB_FAIL=0
 THR_PASS=0;  THR_FAIL=0
 NEG_PASS=0;  NEG_FAIL=0
+CAT_PASS=0;  CAT_FAIL=0
 
 _fail() { # _fail CHANNEL ROW REASON [OUTPUT-FILE]
     printf 'FAIL [%s] %s — %s\n' "$1" "$2" "$3" >&2
@@ -830,9 +831,10 @@ run_threading_checks() {
 # Expectation grammar: 'token'  must appear in the printed command
 #                      '!token' must NOT appear in the printed command
 #                      'PLAN:pat' / 'PLAN:!pat'  must (not) match the plan output
-GUITHR_EXPECTED=56   # fail-closed: keep in sync with the guithr call list below
+GUITHR_EXPECTED=57   # fail-closed: keep in sync with the guithr call list below
                      # (51 + packages_add/packages_drop, WS-BUILDER emission flip;
-                     # + superdomain mesh-x86/mesh-rpi5/standalone-absent, WS-SUPER-B)
+                     # + superdomain mesh-x86/mesh-rpi5/standalone-absent, WS-SUPER-B;
+                     # + chromebook standalone-desktop discoverability)
 GUITHR_RUN=0
 
 guithr() { # NAME CFG-JSON EXPECT...
@@ -913,6 +915,13 @@ run_gui_threading_checks() {
     guithr g22-unaffiliated-composable \
         '{"platform":"x86","role":"standalone-thin","mode":"standalone","env":"test","unaffiliated":true}' \
         '--unaffiliated' 'PLAN:^PLAN_UNAFFILIATED=true$'
+    # Chromebook DESKTOP discoverability (coreboot/UEFI laptop image, ADR-16): a
+    # first-class desktop selection in standalone mode too (no mesh/SSO), not only as a
+    # cloud client — the request's Chromebook ask. Builder-accepted, role-class client.
+    guithr g-chromebook-standalone-desktop \
+        '{"platform":"x86","role":"chromebook","mode":"standalone","env":"test"}' \
+        '--role chromebook' '--no-tailscale' '--no-sso' \
+        'PLAN:^PLAN_ROLE=chromebook$' 'PLAN:^PLAN_ROLE_CLASS=client$'
     guithr g29-mesh-pins-x86 \
         '{"platform":"x86","role":"be","mode":"mesh","env":"test","tailscale":true,"headscale_version":"0.23.0","tailscale_version":"1.60.0","skip_tailscale":true}' \
         '--headscale-version 0.23.0' '--tailscale-version 1.60.0' '--skip-tailscale' \
@@ -1353,6 +1362,70 @@ run_parity_taxonomy_checks() {
     fi
 }
 
+# ── web/JOB catalog honesty gate (CAT) ──────────────────────────────────────────
+# docs/catalog/image-catalog.json is the machine-readable grammar the admin-ui worklist
+# multi-select (the "web modal") consumes. The honesty rule + all-menus-mirror require it
+# to gate rpi3 EXACTLY like the Studio GUI: rpi3 (1GB RAM) is desktop-only and
+# build-rpi5-stage4.sh hard-errors a non-desktop role on --board rpi3, so NO node role may
+# offer rpi3 in ANY menu — including this one. This bucket (a) re-emits the catalog and
+# fails on drift from the committed copy, and (b) asserts no non-desktop role exposes rpi3.
+# NON-VACUITY: the desktop rpi5 role MUST still carry rpi3 (proves the check discriminates,
+# not just "rpi3 absent everywhere"). FAIL-CLOSED: 3 expected assertions.
+CAT_EXPECTED=3
+run_catalog_checks() {
+    local out="${TMP_DIR}/catalog.out"
+    if ! "${PYTHON}" - "${REPO_DIR}" >"${out}" 2>&1 <<'PY'
+import importlib.util, json, os, sys
+repo = sys.argv[1]
+# load the (dashed) emitter and the committed artifact
+spec = importlib.util.spec_from_file_location(
+    "_emit", os.path.join(repo, "scripts", "emit-image-catalog.py"))
+emit = importlib.util.module_from_spec(spec)
+sys.path.insert(0, os.path.join(repo, "studio"))
+spec.loader.exec_module(emit)
+fresh = emit.build_image_catalog()
+with open(os.path.join(repo, "docs", "catalog", "image-catalog.json"), encoding="utf-8") as fh:
+    committed = json.load(fh)
+
+def node_rpi3(cat):
+    hits = []
+    for mode, roles in cat["roles"].items():
+        for e in roles:
+            if e["image_class"] == "desktop":
+                continue
+            for p in e["platforms"]:
+                if "rpi3" in p["axes"].get("board", []):
+                    hits.append((mode, e["role"]))
+    return hits
+
+fails = []
+# (1) committed catalog is in sync with the emitter (drift guard)
+if committed != fresh:
+    fails.append("DRIFT: docs/catalog/image-catalog.json != emit-image-catalog.py output "
+                 "(re-run scripts/emit-image-catalog.py)")
+# (2) no node role offers rpi3 in the committed (web-served) catalog
+bad = node_rpi3(committed)
+if bad:
+    fails.append(f"NODE-RPI3: node roles offer rpi3 in the web catalog: {bad}")
+# (3) NON-VACUITY: the desktop rpi5 role still carries rpi3
+desk = [e for e in committed["roles"]["cloud"] if e["role"] == "rpi5-desktop"]
+axis = desk and [p for p in desk[0]["platforms"] if p["platform"] == "rpi5"]
+if not (axis and "rpi3" in axis[0]["axes"].get("board", [])):
+    fails.append("NON-VACUITY: desktop rpi5 role lost rpi3 — the gate would be vacuously green")
+
+for f in fails:
+    print("CAT FAIL", f)
+print("CAT_OK" if not fails else "CAT_BAD")
+PY
+    then :; fi
+    local passed
+    passed=$(( CAT_EXPECTED - $(grep -c '^CAT FAIL' "${out}" || true) ))
+    grep '^CAT FAIL' "${out}" >&2 || true
+    if [ "${passed}" -lt 0 ]; then passed=0; fi
+    CAT_PASS=$((CAT_PASS + passed))
+    CAT_FAIL=$((CAT_FAIL + CAT_EXPECTED - passed))
+}
+
 # ── NON-GATING developer smokes ─────────────────────────────────────────────────
 # The worklist-envelope parity smoke (WS-MODEL) and the JOB-channel image-spec
 # parity fixture (WS-JOB) exercise the redesign's end-to-end command-translation
@@ -1404,10 +1477,11 @@ run_negative_checks
 run_gui_gating_checks
 run_flag_coverage
 run_parity_taxonomy_checks
+run_catalog_checks
 run_nongating_smokes
 
-TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + TAXO_PASS))
-TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + TAXO_FAIL))
+TOTAL_PASS=$((CLI_PASS + MAKE_PASS + MENU_PASS + GUI_PASS + JOB_PASS + THR_PASS + NEG_PASS + COV_PASS + TAXO_PASS + CAT_PASS))
+TOTAL_FAIL=$((CLI_FAIL + MAKE_FAIL + MENU_FAIL + GUI_FAIL + JOB_FAIL + THR_FAIL + NEG_FAIL + COV_FAIL + TAXO_FAIL + CAT_FAIL))
 
 # COMPLETENESS gate (fail-closed): every channel must have PASSED every matrix
 # row — not merely "no failures". This catches the silent-skip class of hole
@@ -1435,6 +1509,7 @@ printf  'THRD (flag threading):  %3d passed, %d failed\n' "${THR_PASS}"  "${THR_
 printf  'NEG  (must-fail):       %3d passed, %d failed\n' "${NEG_PASS}"  "${NEG_FAIL}"
 printf  'COVG (flag coverage):   %3d passed, %d failed\n' "${COV_PASS}"  "${COV_FAIL}"
 printf  'TAXO (4-choice parity): %3d passed, %d failed\n' "${TAXO_PASS}" "${TAXO_FAIL}"
+printf  'CAT  (web-catalog honesty): %3d passed, %d failed\n' "${CAT_PASS}" "${CAT_FAIL}"
 printf  'TOTAL:                  %3d passed, %d failed\n' "${TOTAL_PASS}" "${TOTAL_FAIL}"
 if [ -n "${SMOKE_REPORT}" ]; then
     echo "── non-gating smokes (informational; NOT in TOTAL) ─────────"

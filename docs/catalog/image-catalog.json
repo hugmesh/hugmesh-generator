@@ -4,7 +4,7 @@
     "jetson": "NVIDIA Jetson Orin (arm64) \u2014 EXPERIMENTAL: hardware validation pending",
     "orangepi5": "Orange Pi 5 / 5 Plus (Rockchip RK3588/RK3588S, arm64) \u2014 EXPERIMENTAL: hardware validation pending",
     "orangepizero2": "Orange Pi Zero 2 (Allwinner H616, arm64) \u2014 HEADLESS APPLIANCE, no desktop mode ever \u2014 EXPERIMENTAL: hardware validation pending",
-    "rpi5": "Raspberry Pi 5 / Pi 4 / Pi 3 (arm64; --board rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only])",
+    "rpi5": "Raspberry Pi 5 / 4 / 3 (arm64) \u2014 desktop OR mesh node; --board rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only, no node]",
     "x86": "x86_64 host"
   },
   "role_class": {
@@ -37,7 +37,7 @@
     "cloud": [
       {
         "image_class": "desktop",
-        "label": "Laptop client \u2014 tailnet + SSO",
+        "label": "Laptop desktop \u2014 tailnet + SSO",
         "platforms": [
           {
             "axes": {
@@ -53,7 +53,7 @@
       },
       {
         "image_class": "desktop",
-        "label": "Chromebook client \u2014 tailnet + SSO",
+        "label": "Chromebook desktop \u2014 coreboot/UEFI laptop image (ADR-16); tailnet + SSO",
         "platforms": [
           {
             "axes": {
@@ -85,7 +85,7 @@
       },
       {
         "image_class": "desktop",
-        "label": "Raspberry Pi 5 / 4 arm64 client \u2014 tailnet + SSO (board axis)",
+        "label": "Raspberry Pi 5 / 4 / 3 arm64 desktop client \u2014 tailnet + SSO (choose board below)",
         "platforms": [
           {
             "axes": {
@@ -168,7 +168,7 @@
     "mesh": [
       {
         "image_class": "node",
-        "label": "PKI node \u2014 cluster certificate authority",
+        "label": "PKI node \u2014 cluster certificate authority (x86 or Raspberry Pi 4/5)",
         "platforms": [
           {
             "axes": {
@@ -183,8 +183,7 @@
             "axes": {
               "board": [
                 "rpi5",
-                "rpi4",
-                "rpi3"
+                "rpi4"
               ]
             },
             "platform": "rpi5"
@@ -194,7 +193,7 @@
       },
       {
         "image_class": "node",
-        "label": "Backend node",
+        "label": "Backend node (x86 or Raspberry Pi 4/5)",
         "platforms": [
           {
             "axes": {
@@ -209,8 +208,7 @@
             "axes": {
               "board": [
                 "rpi5",
-                "rpi4",
-                "rpi3"
+                "rpi4"
               ]
             },
             "platform": "rpi5"
@@ -220,7 +218,7 @@
       },
       {
         "image_class": "node",
-        "label": "Frontend node",
+        "label": "Frontend node (x86 or Raspberry Pi 4/5)",
         "platforms": [
           {
             "axes": {
@@ -235,8 +233,7 @@
             "axes": {
               "board": [
                 "rpi5",
-                "rpi4",
-                "rpi3"
+                "rpi4"
               ]
             },
             "platform": "rpi5"
@@ -278,7 +275,7 @@
       },
       {
         "image_class": "desktop",
-        "label": "RPi5 desktop \u2014 arm64 client (compose with --standalone for FDE, no mesh)",
+        "label": "Raspberry Pi 5 / 4 / 3 desktop \u2014 arm64 client (compose with --standalone for FDE, no mesh)",
         "platforms": [
           {
             "axes": {
@@ -432,8 +429,7 @@
             "axes": {
               "board": [
                 "rpi5",
-                "rpi4",
-                "rpi3"
+                "rpi4"
               ]
             },
             "platform": "rpi5"
@@ -504,6 +500,22 @@
           }
         ],
         "role": "orangepizero2"
+      },
+      {
+        "image_class": "desktop",
+        "label": "Chromebook desktop \u2014 coreboot/UEFI laptop image (ADR-16), standalone (no mesh/SSO)",
+        "platforms": [
+          {
+            "axes": {
+              "desktop": [
+                "thin",
+                "full"
+              ]
+            },
+            "platform": "x86"
+          }
+        ],
+        "role": "chromebook"
       }
     ]
   }

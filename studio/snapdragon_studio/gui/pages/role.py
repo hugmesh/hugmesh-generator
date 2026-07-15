@@ -6,7 +6,7 @@ from ._scroll import scrollable
 from ...core.config import (
     FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS, KERNEL_FLAVOR_CHOICES,
     ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, PLATFORM_LABELS,
-    ROLE_CHOICES, RPI_BOARDS, UNAFFILIATED_ROLE,
+    ROLE_CHOICES, RPI_BOARDS, UNAFFILIATED_ROLE, rpi_boards_for_role,
 )
 from ._widgets import _row
 
@@ -253,6 +253,20 @@ class RolePage(QtWidgets.QWizardPage):
         self.frite_box.setVisible(plat == "frite")
         self.jetson_box.setVisible(plat == "jetson")
         self.rpi5_box.setVisible(plat == "rpi5")
+        # rpi3 is DESKTOP-ONLY (1GB RAM): a node/appliance rpi5 role (generic) must not
+        # offer it — mirror the builder's hard-error at the SELECTION layer so the pick
+        # can't dead-end. Repopulate the board list per role-class, preserving a still-
+        # valid selection (rpi5/rpi4) across a role switch.
+        if plat == "rpi5":
+            boards = rpi_boards_for_role(role)
+            if [self.rpi5_board.itemText(i) for i in range(self.rpi5_board.count())] != list(boards):
+                keep = self.rpi5_board.currentText()
+                self.rpi5_board.blockSignals(True)
+                self.rpi5_board.clear()
+                self.rpi5_board.addItems(list(boards))
+                if keep in boards:
+                    self.rpi5_board.setCurrentText(keep)
+                self.rpi5_board.blockSignals(False)
         self.orangepi5_box.setVisible(plat == "orangepi5")
         self.orangepizero2_box.setVisible(plat == "orangepizero2")
         # desktop weight / Steam are x86 desktop-image knobs (client + standalone)

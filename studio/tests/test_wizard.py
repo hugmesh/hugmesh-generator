@@ -183,6 +183,61 @@ def test_orangepizero2_flavor_survives_a_loaded_config_round_trip(wiz):
     assert wiz.cfg.board == ""
 
 
+def _rpi5_board_items(page):
+    return [page.rpi5_board.itemText(i) for i in range(page.rpi5_board.count())]
+
+
+def test_rpi5_node_role_board_picker_excludes_rpi3(wiz):
+    """A node/appliance rpi5 role (standalone 'generic') must NOT offer rpi3 — it is
+    desktop-only (1GB RAM), and the builder hard-errors that combo. The picker mirrors
+    the builder so the selection can't dead-end (honesty rule)."""
+    pick_mode(wiz, "standalone")
+    page = pick_role(wiz, "generic")
+    pick_platform(page, "rpi5")
+    assert page.rpi5_box.isVisible()
+    assert _rpi5_board_items(page) == ["rpi5", "rpi4"]
+    assert "rpi3" not in _rpi5_board_items(page)
+
+
+def test_rpi5_desktop_role_board_picker_includes_rpi3(wiz):
+    """The desktop rpi5 role (rpi5-desktop) is the ONE rpi5 role that may target rpi3 —
+    the picker offers all three boards there."""
+    pick_mode(wiz, "cloud")
+    page = pick_role(wiz, "rpi5-desktop")
+    pick_platform(page, "rpi5")
+    assert page.rpi5_box.isVisible()
+    assert _rpi5_board_items(page) == ["rpi5", "rpi4", "rpi3"]
+
+
+def test_chromebook_selectable_as_standalone_desktop(wiz):
+    """Discoverability: the Chromebook desktop is pickable in standalone mode (no
+    mesh/SSO), not only as a cloud client — and emits a builder-valid command."""
+    pick_mode(wiz, "standalone")
+    page = pick_role(wiz, "chromebook")   # raises if not offered
+    pick_platform(page, "x86")
+    wiz.next()
+    assert wiz.cfg.role == "chromebook" and wiz.cfg.platform == "x86"
+    args = wiz.cfg.to_cli_args()
+    assert args[:2] == ["--role", "chromebook"]
+    assert "--no-tailscale" in args and "--no-sso" in args
+
+
+def test_worklist_rpi5_node_rows_exclude_rpi3(wiz):
+    """The mesh WorklistPage's per-row board picker gates rpi3 the same way: node rows
+    (pki/be/fe on rpi5) offer rpi5/rpi4 only; the rpi5-desktop row offers all three."""
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+
+    def items(rid):
+        combo, _flavor = page._combos[rid]
+        return [combo.itemText(i) for i in range(combo.count())]
+
+    for rid in ("pki.rpi5", "be.rpi5", "fe.rpi5"):
+        assert items(rid) == ["rpi5", "rpi4"], rid
+        assert "rpi3" not in items(rid)
+    assert items("rpi5-desktop.rpi5") == ["rpi5", "rpi4", "rpi3"]
+
+
 def test_rpi5_orangepi5_orangepizero2_boxes_mutually_exclusive(wiz):
     """Only the active platform's board/flavor box is visible — no stale box
     left showing (and no stale value silently applying) after switching."""

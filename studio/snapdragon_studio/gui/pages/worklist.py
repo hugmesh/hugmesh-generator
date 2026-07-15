@@ -18,6 +18,7 @@ from ..qt import Qt, QtWidgets
 from ...core.config import (
     FRITE_BOARDS, FRITE_FLAVORS, JETSON_BOARDS, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
     ORANGEPIZERO2_FLAVORS, PLATFORM_LABELS, ROLE_CHOICES, RPI_BOARDS, image_class,
+    rpi_boards_for_role,
 )
 from ...core.worklist import WorklistConfig, WorklistEntry, entry_id
 
@@ -152,9 +153,14 @@ class WorklistPage(QtWidgets.QWizardPage):
         item.setData(_COL_CHECK, Qt.ItemDataRole.UserRole, rid)
 
         board_combo = flavor_combo = None
-        if _BOARD_CHOICES.get(platform):
+        # rpi5's board choices are ROLE-dependent: a node role (pki/be/fe) may target
+        # rpi5/rpi4 only — rpi3 is desktop-only (1GB RAM can't host the node stack), so
+        # offering it here would let a superadmin queue a build that hard-errors. Every
+        # other platform's board list is role-independent (_BOARD_CHOICES).
+        boards = rpi_boards_for_role(role) if platform == "rpi5" else _BOARD_CHOICES.get(platform)
+        if boards:
             board_combo = QtWidgets.QComboBox()
-            board_combo.addItems(list(_BOARD_CHOICES[platform]))
+            board_combo.addItems(list(boards))
             self.tree.setItemWidget(item, _COL_BOARD, board_combo)
         if _FLAVOR_CHOICES.get(platform):
             flavor_combo = QtWidgets.QComboBox()
