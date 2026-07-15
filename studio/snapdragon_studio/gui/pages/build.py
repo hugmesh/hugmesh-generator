@@ -15,12 +15,14 @@ OS image.
 """
 from __future__ import annotations
 
+import copy
 import os
 
 from ..qt import QtCore, QtWidgets, Signal
 from ._scroll import scrollable
 from ...core import worklist as worklist_mod
-from ...core.config import ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE, image_class
+from ...core.config import (ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE, image_class,
+                            resolve_platform_defaults)
 from ...core.worklist_driver import WorklistDriver
 from ._gating import clear_unsupported, gate_widgets
 from ._widgets import _file_picker, _row
@@ -417,7 +419,14 @@ class BuildPage(QtWidgets.QWizardPage):
             "keys_usb", "secureboot_key", "secureboot_cert", "distdir",
         ))
         try:
-            cmdline = self.wiz.driver.command_string(c, self._backend())
+            # DISPLAY the same command the real build will run: the actual build path
+            # (WorklistDriver over synthesize->materialize) applies resolve_platform_defaults,
+            # so a standalone frite/orangepi5/orangepizero2 with an unset flavor builds a
+            # single ISO (--flavor installer), not `both`. Resolve on a DEEPCOPY — self.wiz.cfg
+            # is shared and re-edited/saved, so it must never be mutated by a preview render.
+            pc = copy.deepcopy(c)
+            resolve_platform_defaults(pc)
+            cmdline = self.wiz.driver.command_string(pc, self._backend())
         except ValueError as e:  # e.g. unbalanced quotes in the extra-flags escape hatch
             self.cmd.setPlainText("")
             self.log.setPlainText(f"Command error: {e}")

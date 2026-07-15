@@ -134,7 +134,8 @@ class ProgressPage(QtWidgets.QWizardPage):
         generate_keys = getattr(self.wiz, "generate_node_keys", True)
         try:
             self.driver = WorklistDriver(self.wiz.generator_dir, wl, host=self.wiz.host,
-                                         backend=backend, generate_keys=generate_keys)
+                                         backend=backend, generate_keys=generate_keys,
+                                         graphical=True)
             materialized = self.driver.materialize()
             problems = self.driver.preflight()
         except Exception as e:                      # invalid identity / materialize failure

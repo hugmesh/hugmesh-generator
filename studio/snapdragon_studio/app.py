@@ -88,6 +88,12 @@ def main(argv=None) -> int:
     ap.add_argument("--image", type=int, default=None,
                     help="with --print-commands/--print-specs: print ONLY the image at this "
                          "0-based materialized index (default: every image)")
+    ap.add_argument("--askpass", action="store_true",
+                    help="internal: the GUI SUDO_ASKPASS helper for a GUI-launched native "
+                         "build — pop a password dialog and print the entered password to "
+                         "stdout (exit non-zero on cancel so sudo aborts). Set as "
+                         "SUDO_ASKPASS for `sudo -A` by core.build_driver so the prompt is "
+                         "a dialog, never an invisible terminal.")
     ap.add_argument("--config", help="config JSON (with --print-command/--print-commands/--print-specs)")
     ap.add_argument("--backend", choices=["auto", "native", "docker"], default="auto",
                     help="build backend for --print-command (auto = host default)")
@@ -102,7 +108,10 @@ def main(argv=None) -> int:
     if args.print_command:
         # Qt-free path: core only — must work with no display and no Qt installed.
         from .core.build_driver import BuildDriver
-        from .core.config import ImageConfig
+        from .core.config import ImageConfig, resolve_platform_defaults
+        # graphical stays False (default): this is the headless single-build command
+        # channel — its sudo prefix is a literal `sudo ` the callers strip (test_headless
+        # removeprefix, build-matrix check.sh ${cmdline#sudo }), never `sudo -A`/pkexec.
         driver = BuildDriver(args.generator_dir)
         backend = None if args.backend == "auto" else args.backend
         if backend is None and driver.host.default_backend == "none":
@@ -113,6 +122,12 @@ def main(argv=None) -> int:
             # conflicts / identity allowlist raise ValueError inside command_string. Both
             # surface as a clean non-zero exit with the reason on stderr (never argv).
             cfg = ImageConfig.load(args.config) if args.config else ImageConfig()
+            # Resolve platform defaults on this fresh throwaway cfg BEFORE dispatch — the
+            # single-build flat path bypasses worklist._materialize_one, so without this a
+            # standalone frite/orangepi5/orangepizero2 with an unset flavor would print
+            # `--flavor both` and build TWO ISOs the worker can't disambiguate (G2). Same
+            # #337 resolver the materialize path uses; in-place mutation is safe here.
+            resolve_platform_defaults(cfg)
             print(driver.command_string(cfg, backend))
         except (ValueError, OSError) as exc:
             # ValueError: bad JSON / non-dict config / envelope-vs-flat mismatch /
@@ -192,6 +207,24 @@ def main(argv=None) -> int:
             # a FileNotFoundError/TypeError escape as a traceback + exit 1.
             print(f"error: {exc}", file=sys.stderr)
             return 2
+        return 0
+
+    if args.askpass:
+        # The GUI SUDO_ASKPASS helper: sudo -A execs this to obtain the password. Pop a
+        # modal Qt password dialog and print the entry to stdout; a cancel returns non-zero
+        # so sudo aborts elevation cleanly instead of hanging. Because it always renders a
+        # DIALOG, a GUI-launched native build never prompts into an invisible terminal even
+        # when sudo's credential cache misses. Minimal QApplication; no wizard/tray.
+        from .gui.qt import QtWidgets
+        _app = QtWidgets.QApplication(sys.argv if argv is None else [sys.argv[0], *argv])
+        prompt = (os.environ.get("SUDO_PROMPT")
+                  or "Administrator password required to build the image:")
+        pw, ok = QtWidgets.QInputDialog.getText(
+            None, "Snapdragon Image Studio — Administrator access", prompt,
+            QtWidgets.QLineEdit.EchoMode.Password)
+        if not ok:
+            return 1
+        sys.stdout.write(pw + "\n")
         return 0
 
     # GUI

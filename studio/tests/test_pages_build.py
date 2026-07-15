@@ -17,7 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("snapdragon_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core.config import UNAFFILIATED_ROLE  # noqa: E402
+from snapdragon_studio.core.config import ImageConfig, UNAFFILIATED_ROLE  # noqa: E402
 from snapdragon_studio.core.platform_info import HostInfo    # noqa: E402
 from snapdragon_studio.gui import wizard as wizard_mod       # noqa: E402
 from snapdragon_studio.gui.qt import Qt, QtWidgets           # noqa: E402
@@ -373,6 +373,57 @@ def test_build_frite_image_only(wiz):
     build.image_only.setChecked(True)
     build._preview()
     assert "--image-only" in wiz.cfg.to_cli_args()
+
+
+def test_askpass_mode_prints_password_and_exits_zero(monkeypatch, qapp):
+    """The GUI SUDO_ASKPASS helper (`--askpass`) pops a password dialog and prints the
+    entry to stdout so `sudo -A` gets the password from a DIALOG, never an invisible
+    terminal — the core of bug B's fix."""
+    import contextlib
+    import io
+
+    from snapdragon_studio import app
+    from snapdragon_studio.gui.qt import QtWidgets
+    monkeypatch.setattr(QtWidgets, "QApplication", lambda *a, **k: qapp)
+    monkeypatch.setattr(QtWidgets.QInputDialog, "getText",
+                        staticmethod(lambda *a, **k: ("s3cr3t-pw", True)))
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = app.main(["--askpass"])
+    assert rc == 0
+    assert buf.getvalue().strip() == "s3cr3t-pw"
+
+
+def test_askpass_mode_cancel_returns_nonzero(monkeypatch, qapp):
+    """A cancelled dialog exits non-zero so sudo aborts the elevation cleanly instead of
+    treating an empty string as the password."""
+    from snapdragon_studio import app
+    from snapdragon_studio.gui.qt import QtWidgets
+    monkeypatch.setattr(QtWidgets, "QApplication", lambda *a, **k: qapp)
+    monkeypatch.setattr(QtWidgets.QInputDialog, "getText",
+                        staticmethod(lambda *a, **k: ("", False)))
+    assert app.main(["--askpass"]) == 1
+
+
+def test_build_preview_resolves_unset_flavor_on_deepcopy(monkeypatch, wiz):
+    """The Review-page preview resolves an UNSET frite/opi5/opz2 flavor to the single
+    artifact (--flavor installer) the materialize path would build, and does so on a
+    DEEPCOPY so the shared, re-editable/savable wiz.cfg is never mutated by a render.
+    (In the normal wizard flow RolePage sets an explicit flavor, so this exercises the
+    defensive unset case directly: an unset-flavor cfg reaching the BuildPage.)"""
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    # a frite config with a genuinely UNSET flavor lands on the Review page; suppress the
+    # per-page re-collect so the isolated unset value survives into _preview.
+    wiz.cfg = ImageConfig(mode="standalone", role="frite", platform="frite",
+                          board="la-frite", flavor="")
+    monkeypatch.setattr(wiz, "collect_all", lambda: None)
+    build._preview()
+    shown = build.cmd.toPlainText()
+    assert "--flavor installer" in shown          # resolved to a single artifact
+    assert "--flavor both" not in shown
+    # the shared cfg is untouched — resolve ran on the deepcopy, never on wiz.cfg
+    assert wiz.cfg.flavor == ""
+    assert "--flavor both" in " ".join(wiz.cfg.to_cli_args())  # to_cli_args default unchanged
 
 
 def test_build_x86_artifact_picks_clear_on_arm(wiz):
