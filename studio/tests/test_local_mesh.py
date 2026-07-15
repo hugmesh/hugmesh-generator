@@ -23,6 +23,7 @@ pytest.importorskip("snapdragon_studio.gui.qt",
 from snapdragon_studio.core.local_mesh import (  # noqa: E402  (after the importorskip gate)
     LocalMeshConfig, LocalMeshNode,
 )
+from snapdragon_studio.core.local_mesh_bootstrap import LocalMeshBootstrap  # noqa: E402
 from snapdragon_studio.core.mesh_node import MeshNode  # noqa: E402
 from snapdragon_studio.core.platform_info import HostInfo  # noqa: E402
 from snapdragon_studio.gui import wizard as wizard_mod  # noqa: E402
@@ -134,6 +135,75 @@ def test_dialog_start_is_gated_when_auth_key_missing(qapp, monkeypatch):
     dlg._start()
     assert started["called"] is False
     assert "auth key" in dlg.status.text().lower()
+
+
+# ---- the BOOTSTRAP tab (generate & start from scratch) ----
+
+def test_dialog_has_both_mode_tabs(qapp):
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    titles = [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())]
+    assert any("Join" in t for t in titles)
+    assert any("scratch" in t for t in titles)
+
+
+def test_bootstrap_plan_preview_populates_and_hides_prod_group(qapp):
+    from snapdragon_studio.core import local_mesh_bootstrap as bmod
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    # default test env: the plan preview is rendered and the prod-only group is hidden
+    assert bmod.GEN_CLUSTER_SECRETS in dlg.plan_view.toPlainText()
+    assert dlg.prod_group.isHidden() is True     # prod-only group hidden in test env
+    # switching to prod reveals the overlay group + re-renders the plan for prod
+    dlg.env_prod.setChecked(True)
+    assert dlg.prod_group.isHidden() is False
+    assert "https://id." in dlg.plan_view.toPlainText()
+
+
+def test_bootstrap_start_is_gated_behind_acknowledgement(qapp, monkeypatch):
+    up_ran = {"called": False}
+    monkeypatch.setattr(LocalMeshBootstrap, "up",
+                        lambda self: up_ran.__setitem__("called", True) or (True, ["ok"]),
+                        raising=True)
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    # nothing runs on mere selection: the button is disabled until acknowledged
+    assert dlg.boot_start_btn.isEnabled() is False
+    dlg._bootstrap_up()                       # clicking anyway is a no-op
+    assert up_ran["called"] is False
+    dlg.ack.setChecked(True)
+    assert dlg.boot_start_btn.isEnabled() is True
+
+
+def test_bootstrap_up_collects_config_and_runs(qapp, monkeypatch):
+    seen = {}
+
+    def _fake_up(self):
+        seen["env"] = self.cfg.env
+        seen["superadmin"] = self.cfg.superadmin_username
+        seen["social"] = self.cfg.social
+        return True, ["[done] platform up"]
+
+    monkeypatch.setattr(LocalMeshBootstrap, "up", _fake_up, raising=True)
+    monkeypatch.setattr(LocalMeshNode, "status", lambda self: _stopped(), raising=True)
+
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    dlg.superadmin.setText("root-boss")
+    dlg.social.setChecked(True)
+    dlg.ack.setChecked(True)
+    dlg._bootstrap_up()
+    assert seen == {"env": "test", "superadmin": "root-boss", "social": True}
+    assert "[done] platform up" in dlg.log.toPlainText()
+
+
+def test_bootstrap_up_blocked_by_validation(qapp, monkeypatch):
+    up_ran = {"called": False}
+    monkeypatch.setattr(LocalMeshBootstrap, "up",
+                        lambda self: up_ran.__setitem__("called", True) or (True, []),
+                        raising=True)
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    dlg.env_prod.setChecked(True)     # prod without domain/key -> validate() blocks
+    dlg.ack.setChecked(True)
+    dlg._bootstrap_up()
+    assert up_ran["called"] is False
+    assert "cannot start" in dlg.status.text().lower()
 
 
 # ---- the pure-core runner (no Qt, no docker needed) ----

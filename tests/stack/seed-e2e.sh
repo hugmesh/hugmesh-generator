@@ -252,8 +252,15 @@ ensure_app    "${CASDOOR_URL}" "${CASDOOR_ORG}"
 # 17's "pending vs completed registration" gate can exercise the SAME real
 # registerOnly()/onboard() mechanism as specs 02/03/04, not a self-provisioning
 # path that doesn't exist in the current architecture.
+# ROLE_SUPERADMIN persona login. Defaults to e2e-superadmin so ordinary e2e runs
+# (and every UI spec that logs in as e2e-superadmin) are UNCHANGED. The from-scratch
+# local-mesh bootstrapper (studio core/local_mesh_bootstrap) bridges the minted
+# CASDOOR_SUPERADMIN_USERNAME in via env so the seeded login matches the username it
+# minted into secrets.json and advertised to the operator. Expected to be a simple
+# slug (no '@'/spaces) so the Casdoor legal name equals the login.
+SUPERADMIN_PERSONA="${CASDOOR_SUPERADMIN_USERNAME:-e2e-superadmin}"
 EXTRA_SPECS="\
-e2e-superadmin:ROLE_SUPERADMIN:E2E_SUPERADMIN_PASSWORD \
+${SUPERADMIN_PERSONA}:ROLE_SUPERADMIN:E2E_SUPERADMIN_PASSWORD \
 e2e-banned:ROLE_USER:E2E_BANNED_PASSWORD \
 admin@snapdragon.systems:ROLE_ADMIN,ROLE_USER:E2E_PASSWORD \
 alice@gmail.com:ROLE_USER:E2E_PASSWORD \
@@ -303,7 +310,7 @@ PREMINT_DIR="${SEED_WORKDIR}/jwt-cache" \
   || die "apply-systems-roles.sh failed against ${CASDOOR_URL}"
 
 # VERIFY (fail-honest): every persona the UI suites assume must now resolve.
-for persona in e2e-user e2e-mod e2e-admin e2e-superadmin e2e-banned \
+for persona in e2e-user e2e-mod e2e-admin "${SUPERADMIN_PERSONA}" e2e-banned \
                e2e-mastodon-domainlocked e2e-matrix-domainlocked; do
   curl -s -b "${CJ}" "${CASDOOR_URL}/api/get-user?id=${CASDOOR_ORG}/${persona}" \
     | jq -e '.data.name // empty | length > 0' >/dev/null \
