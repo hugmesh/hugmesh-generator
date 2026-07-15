@@ -144,6 +144,32 @@ out="$(gl plan --provider duckdns --ddns-subdomain 'a$(touch pwned).b' --out-dir
     || { bad "malicious --ddns-subdomain NOT rejected safely (rc=${rc})"; echo "${out}"; }
 rm -f pwned "${WORK}/pwned" 2>/dev/null
 
+# (h3b) SECURITY regression guard: --keys-dir feeds the DDNS TOKEN_FILE path baked
+# into the emitted ROOT-cron updater. A command-substitution payload must be (1)
+# rejected at the driver door AND (2) even if the emit fn is reached directly,
+# %q-quoted so the updater treats it as a literal path and never executes it.
+KDIR_PWN="${WORK}/keysdir-pwned"; rm -f "${KDIR_PWN}"
+# (1) driver door: hostile --keys-dir rejected, no updater, no injection.
+KEVIL="${WORK}/kevil"; mkdir -p "${KEVIL}"
+out="$(gl plan --provider duckdns --ddns-subdomain myhome --keys-dir "\$(touch ${KDIR_PWN})" --out-dir "${KEVIL}")"; rc=$?
+[ "${rc}" -ne 0 ] && [ ! -e "${KEVIL}/ddns-update.sh" ] && [ ! -e "${KDIR_PWN}" ] \
+    && ok "malicious --keys-dir rejected at the driver door; no updater, no injection" \
+    || { bad "malicious --keys-dir NOT rejected safely (rc=${rc})"; echo "${out}"; }
+# (2) emit-level %q defense: bypass the door, drive glp_emit_duckdns directly with a
+# hostile GL_KEYS_DIR, run the emitted updater as the root cron would — it must NOT fire.
+KEMIT="${WORK}/kemit"; mkdir -p "${KEMIT}"
+( set +e
+  # shellcheck source=/dev/null
+  . "${LIB}"
+  GL_DDNS_SERVICE=duckdns GL_DDNS_SUBDOMAIN=myhome GL_DOMAIN="${DOMAIN}" \
+    GL_KEYS_DIR="\$(touch ${KDIR_PWN})" glp_emit_duckdns "${KEMIT}" >/dev/null 2>&1
+  DDNS_TOKEN_FILE= bash "${KEMIT}/ddns-update.sh" >/dev/null 2>&1
+)
+[ ! -e "${KDIR_PWN}" ] \
+    && ok "emitted updater treats a hostile --keys-dir as a literal path (%q defense, no injection)" \
+    || bad "emit-level %q defense FAILED: hostile --keys-dir executed as root-cron would"
+rm -f "${KDIR_PWN}" 2>/dev/null
+
 # (h4) tailscale-funnel / router-portforward emit guidance, NO DNS record set ----
 for prov in tailscale-funnel router-portforward; do
     POUT="${WORK}/pout-${prov}"; mkdir -p "${POUT}"

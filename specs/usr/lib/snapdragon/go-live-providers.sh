@@ -404,7 +404,14 @@ glp_emit_duckdns() {
         printf 'SERVICE=%q\n' "${svc}"
         printf 'SUBDOMAIN=%q\n' "${sub}"
         printf 'DOMAIN=%q\n' "${domain}"
-        printf 'TOKEN_FILE="${DDNS_TOKEN_FILE:-%s}"\n' "${tokdest}"
+        # tokdest carries GL_KEYS_DIR (operator --keys-dir). It MUST be shell-quoted
+        # with %q like the siblings above — but %q-escaping is NOT re-parsed inside a
+        # double-quoted ${DDNS_TOKEN_FILE:-...} default, so a %s there let a hostile
+        # --keys-dir='$(cmd)' inject a command substitution that fires as root the
+        # first time the cron updater dereferences ${TOKEN_FILE}. Emit the default as
+        # its own %q assignment (unquoted RHS, where %q IS honoured), then reference it.
+        printf 'DDNS_TOKEN_FILE_DEFAULT=%q\n' "${tokdest}"
+        printf 'TOKEN_FILE="${DDNS_TOKEN_FILE:-${DDNS_TOKEN_FILE_DEFAULT}}"\n'
         cat <<'UPDATER'
 [ -r "${TOKEN_FILE}" ] || { echo "ddns-update: token file not readable: ${TOKEN_FILE}" >&2; exit 1; }
 [ -n "${SUBDOMAIN}" ]  || { echo "ddns-update: SUBDOMAIN empty — re-emit with --ddns-subdomain" >&2; exit 1; }

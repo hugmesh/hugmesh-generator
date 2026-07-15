@@ -97,6 +97,15 @@ validate_inputs() {
         duckdns|cloudflare) ;;
         *) die "--ddns-service must be duckdns or cloudflare" ;;
     esac
+    # --keys-dir (GL_KEYS_DIR) becomes the DDNS token-file PATH baked into the
+    # emitted root-cron updater. The emit shell-quotes it (%q), but validate at the
+    # door too: require a plain filesystem path ([A-Za-z0-9._/-], no '..' traversal,
+    # no $/backtick/quote/;|&<>()/whitespace metachars) so a value like
+    # '$(cmd)' or 'a b;cmd' can never reach the updater as a command-injection sink.
+    if [ -n "${GL_KEYS_DIR:-}" ]; then
+        { [[ "${GL_KEYS_DIR}" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "${GL_KEYS_DIR}" != *".."* ]]; } \
+            || die "--keys-dir must be a plain filesystem path ([A-Za-z0-9._/-], no '..' or shell metacharacters)"
+    fi
 }
 
 # ── Brand/posture context (READ-ONLY here; only `commit`/`rollback` mutate) ──────
