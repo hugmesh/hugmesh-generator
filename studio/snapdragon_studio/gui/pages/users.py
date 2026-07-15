@@ -10,7 +10,7 @@ tenant domain. A loaded user whose domain is not (yet) defined is shown suffixed
 from __future__ import annotations
 
 from ..qt import QtWidgets
-from ...core.config import PERSON_ROLE_CHOICES, User
+from ...core.config import PERSON_ROLE_CHOICES, User, superadmin_plane_applies
 from ._gating import clear_unsupported, gate_widgets
 from ._widgets import _row
 
@@ -172,6 +172,12 @@ class UsersPage(QtWidgets.QWizardPage):
             self.warn.setVisible(True)
         else:
             self.warn.setVisible(False)
+
+    def applies_to(self, cfg) -> bool:
+        """Dynamic-skip predicate (wizard.nextId): a cloud NODE image emits no
+        --person-role/--domains and writes no manifest, so the users table contributes
+        nothing and is skipped (emission-neutral). Mesh and cloud client images apply."""
+        return superadmin_plane_applies(cfg)
 
     def initializePage(self):
         c = self.wiz.cfg

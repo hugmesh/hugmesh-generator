@@ -359,3 +359,141 @@ def test_build_status_file_reports_error_on_failure(monkeypatch, qapp, wiz, tmp_
     status = read_build_status()
     assert status is not None
     assert status["state"] == "error"
+
+
+# ── OVERALL/TOTAL bar (a pure reader of _aggregate_percent) ───────────────────────────
+def test_total_bar_exists_and_tracks_aggregate_percent(wiz):
+    """The overall bar is IN ADDITION to the per-image PART bars and reads the SAME
+    _aggregate_percent() the #339 tray badge uses — so it can never invent a second
+    number or drift from the tray status file."""
+    page = _progress_page(wiz)
+    assert page.total_bar is not None and page.total_label is not None
+    page._reset()
+    page._build_row(0, "acme-x86", "x86")
+    for ln in CAPTURED_X86_STREAM:
+        page._on_line(0, ln)
+        if page.total_bar.maximum() == 100:      # determinate: must equal the aggregate
+            assert page.total_bar.value() == page._aggregate_percent()
+    page._on_entry_done(0, 0)                     # all ok -> overall 100, per-row 100
+    assert page.total_bar.value() == 100
+    assert page._rows[0].bar.value() == 100       # per-image PART bar preserved
+
+
+def test_total_bar_advances_across_multiple_images(monkeypatch, qapp, wiz, tmp_path):
+    """K-of-N overall progress: with 3 images the overall bar + label track the whole
+    worklist, not a single image."""
+    _install_fake_builddriver(monkeypatch)
+    _install_fake_genkeys(monkeypatch)
+    _prime(wiz, _mesh_worklist(tmp_path))
+    page = _progress_page(wiz)
+    page.initializePage()
+    assert "of 3" in page.total_label.text()      # N reflected before completion
+    _run_to_completion(qapp, page)
+    assert page.total_bar.value() == 100
+    assert "done" in page.total_label.text().lower()
+
+
+def test_flash_group_hidden_until_all_ok_and_window_grows(monkeypatch, qapp, wiz, tmp_path):
+    """The post-build 'Flash to a device' group stays hidden until an all-ok run, and the
+    terminal page grows the window for readability."""
+    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets", lambda: [])
+    _install_replay_builddriver(monkeypatch, CAPTURED_X86_STREAM, code=0)
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      brand="acme", output_dir=str(tmp_path / "out"))
+    _prime(wiz, synthesize(cfg))
+    page = _progress_page(wiz)
+    page.initializePage()
+    # (the progress fixture doesn't show() the wizard, so assert the explicit hidden flag)
+    assert page.flash_group.isHidden()            # never before completion
+    assert wiz.width() >= 1040 and wiz.height() >= 780
+    _run_to_completion(qapp, page)
+    assert page.flash_group.isHidden()             # no targets attached -> stays hidden
+
+
+def test_flash_group_reveals_on_ok_with_a_fake_target(monkeypatch, qapp, wiz, tmp_path):
+    """With a (stubbed) attached target, an all-ok build reveals the flash dropdown and
+    the Flash argv targets flash-disk.sh with SAFE args — no real dd is invoked."""
+    from snapdragon_studio.core.flash_targets import FlashTarget
+    fake = FlashTarget(path="/dev/sdz", size=16 * (1 << 30), model="Test SD",
+                       transport="usb", removable=True, kind="usb")
+    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets", lambda: [fake])
+    _install_replay_builddriver(monkeypatch, CAPTURED_X86_STREAM, code=0)
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      brand="acme", output_dir=str(tmp_path / "out"))
+    _prime(wiz, synthesize(cfg))
+    page = _progress_page(wiz)
+    page.initializePage()
+    _run_to_completion(qapp, page)
+    assert not page.flash_group.isHidden()         # revealed on an all-ok run
+    assert page.flash_combo.count() == 1
+    argv = page._flash_argv_for(fake)
+    assert argv[-1] == "/dev/sdz" and "--no-confirm" in argv
+    assert any(a.endswith("scripts/flash-disk.sh") for a in argv)
+    assert "dd" not in argv                        # never re-implemented here
+
+
+def test_failed_build_never_reveals_flash_group(monkeypatch, qapp, wiz, tmp_path):
+    from snapdragon_studio.core.flash_targets import FlashTarget
+    fake = FlashTarget(path="/dev/sdz", size=16 * (1 << 30), model="Test SD",
+                       transport="usb", removable=True, kind="usb")
+    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets", lambda: [fake])
+    _install_replay_builddriver(monkeypatch, ["docker: no such image"], code=1)
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      brand="acme", output_dir=str(tmp_path / "out"))
+    _prime(wiz, synthesize(cfg))
+    page = _progress_page(wiz)
+    page.initializePage()
+    _run_to_completion(qapp, page)
+    assert page.flash_group.isHidden()             # a failed build never offers to flash
+
+
+def test_total_bar_chunk_resets_to_blue_on_a_second_run(monkeypatch, qapp, wiz, tmp_path):
+    """A first all-ok run turns the overall chunk GREEN; a second build on the SAME page
+    instance (initializePage -> _reset) must put it back to BLUE, so the new run never
+    renders green (or stays green under an 'Overall FAILED' label)."""
+    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets", lambda: [])
+    _install_replay_builddriver(monkeypatch, CAPTURED_X86_STREAM, code=0)
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      brand="acme", output_dir=str(tmp_path / "out"))
+    _prime(wiz, synthesize(cfg))
+    page = _progress_page(wiz)
+    page.initializePage()
+    _run_to_completion(qapp, page)
+    assert "#188038" in page.total_bar.styleSheet()   # green after an all-ok run
+    page._reset()                                   # second run on the same instance
+    assert "#1a73e8" in page.total_bar.styleSheet()   # back to blue
+    assert "#188038" not in page.total_bar.styleSheet()
+
+
+# ── auto-flash TOCTOU identity guard ─────────────────────────────────────────────────
+def test_auto_flash_skips_when_device_identity_changed(monkeypatch, wiz):
+    """The device combo is captured at build start, but a build can run for hours and
+    /dev/sdX is enumeration-order dependent. If a DIFFERENT removable disk takes the same
+    node before completion, auto-flash must NOT write it (no human at the write): the
+    re-scanned target's size/model must match the stashed identity."""
+    from snapdragon_studio.core.flash_targets import FlashTarget
+    selected = FlashTarget("/dev/sdb", 16 * (1 << 30), "SanDisk Ultra", "usb", True, "usb")
+    swapped = FlashTarget("/dev/sdb", 32 * (1 << 30), "Some Other Stick", "usb", True, "usb")
+    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets",
+                        lambda: [swapped])          # same /dev path, different device
+    page = _progress_page(wiz)
+    wiz.flash_after = (True, selected)
+    started = []
+    page._start_flash = lambda t: started.append(t)  # type: ignore[assignment]
+    page._maybe_auto_flash()
+    assert started == []                            # refused: identity changed
+    assert "identity changed" in page.log.toPlainText()
+
+
+def test_auto_flash_fires_when_identity_matches(monkeypatch, wiz):
+    from snapdragon_studio.core.flash_targets import FlashTarget
+    selected = FlashTarget("/dev/sdb", 16 * (1 << 30), "SanDisk Ultra", "usb", True, "usb")
+    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets",
+                        lambda: [FlashTarget("/dev/sdb", 16 * (1 << 30), "SanDisk Ultra",
+                                             "usb", True, "usb")])
+    page = _progress_page(wiz)
+    wiz.flash_after = (True, selected)
+    started = []
+    page._start_flash = lambda t: started.append(t)  # type: ignore[assignment]
+    page._maybe_auto_flash()
+    assert len(started) == 1 and started[0].path == "/dev/sdb"

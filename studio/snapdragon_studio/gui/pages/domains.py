@@ -16,7 +16,7 @@ the header — every mesh node joins it, it is never a table row and never attac
 from __future__ import annotations
 
 from ..qt import Qt, QtWidgets
-from ...core.config import Domain, image_class
+from ...core.config import Domain, image_class, superadmin_plane_applies
 
 _COL_NAME, _COL_TITLE, _COL_SERVICES, _COL_APPLIES = range(4)
 # node-role images take no --domains — the attachment is manifest/provisioning data
@@ -143,6 +143,12 @@ class DomainsPage(QtWidgets.QWizardPage):
                 self.table.setCellWidget(
                     r, _COL_APPLIES,
                     _AppliesToButton(self._entries(), btn.selected_ids()))
+
+    def applies_to(self, cfg) -> bool:
+        """Dynamic-skip predicate (wizard.nextId): a cloud NODE image emits no
+        --domains and writes no manifest, so this table contributes nothing and is
+        skipped (emission-neutral). Mesh and cloud client images still apply."""
+        return superadmin_plane_applies(cfg)
 
     def initializePage(self):
         c = self.wiz.cfg

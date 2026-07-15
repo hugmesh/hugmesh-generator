@@ -419,6 +419,28 @@ def home_options_allowed(cfg: "ImageConfig") -> bool:
     return image_class(cfg.mode, cfg.role) == "desktop"
 
 
+def superadmin_plane_applies(cfg: "ImageConfig") -> bool:
+    """Whether the superadmin Domains/Users tables contribute anything for this config
+    (the wizard's dynamic page-skip predicate, ALL-OPTIONS-safe).
+
+    * mesh  → always (domains/users flow into the mesh manifest).
+    * cloud → only for a NON-node role: to_cli_args emits --domains/--person-role solely
+      when ``role not in X86_NODE_ROLES`` (build-x86 warns+ignores them on a node role),
+      and cloud writes no manifest — so a cloud NODE image's Domains/Users pages emit
+      NOTHING and can be skipped without changing the argv.
+    * standalone → already statically skipped (MODE_SKIPPED_PAGES); returns False for
+      completeness.
+
+    Because a cloud node build emits none of these flags and produces no manifest,
+    skipping the pages leaves the argv byte-identical — the emission guard the wizard's
+    collect_all (visited-pages-only) requires."""
+    if cfg.mode == "mesh":
+        return True
+    if cfg.mode == "cloud":
+        return cfg.role not in X86_NODE_ROLES
+    return False
+
+
 # ── platform-aware default resolution (materialize/spec channel; NEVER to_cli_args) ──
 # The dataclass defaults role="standalone-thick" (an x86 CLIENT role) and flavor=""
 # — correct for an x86 image, but a worklist entry / synthesized flat config for a

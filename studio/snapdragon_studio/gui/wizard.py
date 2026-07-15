@@ -80,14 +80,37 @@ class StudioWizard(QtWidgets.QWizard):
         tables on a standalone build) are skipped, so standalone → unaffiliated is
         the shortest path. Qt calls this AFTER the current page's validatePage(), so
         cfg.mode is already committed when the flow is decided; a skipped page is
-        never visited, and collect_all() only reads visited pages."""
+        never visited, and collect_all() only reads visited pages.
+
+        Beyond the static MODE_SKIPPED_PAGES set, a page may opt into DYNAMIC skipping
+        by implementing ``applies_to(cfg) -> bool`` (default True): a page that renders
+        all-inapplicable for the committed config is skipped too. The ALL-OPTIONS guard
+        is the page's own responsibility — applies_to() may return False ONLY when every
+        config field the page emits is already at the mode-correct default (so skipping
+        it changes no argv; collect_all reads only visited pages). The terminal
+        build/progress pages are never dynamically skipped."""
         nid = super().nextId()
         skipped = {self._page_ids[s] for s in MODE_SKIPPED_PAGES[self.cfg.mode]}
+        terminal = {self._page_ids[s] for s in ("build", "progress") if s in self._page_ids}
         ids = self.pageIds()
-        while nid in skipped:
+        while nid in skipped or self._dynamically_skipped(nid, terminal):
             i = ids.index(nid)
             nid = ids[i + 1] if i + 1 < len(ids) else -1
         return nid
+
+    def _dynamically_skipped(self, nid, terminal) -> bool:
+        """True when page ``nid`` is a non-terminal page whose ``applies_to(cfg)`` reports
+        it contributes nothing for the committed config (emission-neutral skip)."""
+        if nid < 0 or nid in terminal:
+            return False
+        page = self.page(nid)
+        applies = getattr(page, "applies_to", None)
+        if applies is None:
+            return False
+        try:
+            return not applies(self.cfg)
+        except Exception:
+            return False        # never let a predicate bug strand the flow
 
     def collect_all(self):
         """Pull values out of every VISITED page into self.cfg. Only visited pages are

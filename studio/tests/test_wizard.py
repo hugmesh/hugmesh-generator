@@ -19,8 +19,8 @@ pytest.importorskip("snapdragon_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
 from snapdragon_studio.core.config import (   # noqa: E402  (after the importorskip gate)
-    MODE_SKIPPED_PAGES, OPTIONAL_SERVICES_CHOICES, ROLE_CHOICES, UNAFFILIATED_ROLE,
-    WIZARD_PAGE_SLUGS,
+    ImageConfig, MODE_SKIPPED_PAGES, OPTIONAL_SERVICES_CHOICES, ROLE_CHOICES,
+    UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS, superadmin_plane_applies,
 )
 from snapdragon_studio.core.local_login_agent import load_manifest  # noqa: E402
 from snapdragon_studio.core.platform_info import HostInfo
@@ -602,7 +602,7 @@ def test_home_provisioning_greys_and_clears_on_arm(wiz):
 
 def test_home_provisioning_greyed_for_x86_mesh_node(wiz):
     """spec 7 (role-class axis, isolated from the platform gate): home provisioning is
-    a DESKTOP-class surface — greyed+cleared on a NODE image even on x86, where the
+    a DESKTOP-class surface — HIDDEN+cleared on a NODE image even on x86, where the
     platform gate alone would leave every home widget live. Disk-encryption and the
     local-login group stay live (nodes ARE root-encrypted)."""
     c = wiz.cfg
@@ -613,13 +613,60 @@ def test_home_provisioning_greyed_for_x86_mesh_node(wiz):
     home = advance_to(wiz, wizard_mod.HomePage)
     for w in (home.mode, home.device, home.backup_row, home.encrypted, home.seed,
               home.include_archive_row, home.seed_code_from_row, home.seed_packages_row):
-        assert not w.isEnabled(), w          # role-class grey, NOT platform (x86 supports these)
+        assert not w.isVisible(), w          # role-class HIDE, NOT platform (x86 supports these)
     assert home.encrypt_root.isEnabled() and home.luks_pass.isEnabled()
     assert home.standalone.isEnabled() and home.local_user.isEnabled()
     advance_to(wiz, wizard_mod.BuildPage)
     assert c.home_mode == "create" and c.home_device == ""
     assert c.home_encrypted is False and c.home_seed_code == "none"
     assert not any(a.startswith("--home-") for a in c.to_cli_args())
+
+
+# ---- dynamic page-skip (nextId applies_to) — emission-neutral -----------------------
+
+def test_superadmin_plane_predicate():
+    """The dynamic-skip predicate: mesh always applies; a cloud CLIENT role applies
+    (emits --domains/--person-role); a cloud NODE role does not (nothing emitted, no
+    manifest); standalone is statically skipped anyway."""
+    assert superadmin_plane_applies(ImageConfig(mode="mesh", role="omnibus"))
+    assert superadmin_plane_applies(ImageConfig(mode="cloud", role="laptop"))
+    assert not superadmin_plane_applies(ImageConfig(mode="cloud", role="be"))
+    assert not superadmin_plane_applies(ImageConfig(mode="standalone", role="standalone-thick"))
+
+
+def test_cloud_node_role_dynamically_skips_domains_and_users(wiz):
+    """nextId() skips the superadmin Domains/Users tables for a (loaded) cloud NODE
+    build — they contribute no argv there — while a cloud CLIENT keeps them."""
+    dom_id = wiz._page_ids["domains"]
+    usr_id = wiz._page_ids["users"]
+    terminal = {wiz._page_ids["build"], wiz._page_ids["progress"]}
+    wiz.cfg = ImageConfig(mode="cloud", role="be", platform="x86", brand="acme",
+                          cluster_domain="acme.example")
+    assert wiz._dynamically_skipped(dom_id, terminal)
+    assert wiz._dynamically_skipped(usr_id, terminal)
+    wiz.cfg.role = "laptop"                         # a cloud client emits --domains/--person-role
+    assert not wiz._dynamically_skipped(dom_id, terminal)
+    assert not wiz._dynamically_skipped(usr_id, terminal)
+
+
+def test_terminal_pages_never_dynamically_skipped(wiz):
+    terminal = {wiz._page_ids["build"], wiz._page_ids["progress"]}
+    for slug in ("build", "progress"):
+        assert not wiz._dynamically_skipped(wiz._page_ids[slug], terminal)
+
+
+def test_skipping_domains_users_is_emission_neutral_for_cloud_node(wiz):
+    """The ALL-OPTIONS guard: skipping Domains/Users (never visiting them) leaves the
+    argv byte-identical to force-visiting them, because a cloud NODE role suppresses
+    --domains/--person-role and cloud writes no manifest."""
+    base = dict(mode="cloud", role="be", platform="x86", brand="acme",
+                cluster_domain="acme.example")
+    baseline = ImageConfig(**base).to_cli_args()   # domains/users skipped -> defaults
+    visited = ImageConfig(**base)
+    wiz.cfg = visited                              # force-visit both superadmin pages
+    dom = wiz.page(wiz._page_ids["domains"]); dom.initializePage(); dom.validatePage()
+    usr = wiz.page(wiz._page_ids["users"]); usr.initializePage(); usr.validatePage()
+    assert visited.to_cli_args() == baseline       # visiting them changed no argv
 
 
 # ---- NetworkPage: tailnet/SSO + mesh-control-plane role-class reflow (specs 3, 5) ----
