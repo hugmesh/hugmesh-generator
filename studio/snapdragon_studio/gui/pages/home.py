@@ -22,12 +22,27 @@ _HOME_ROLE_CLASS_REASON = (
     "Home provisioning applies to desktops only — nodes are root-encrypted; homes "
     "are not separately provisioned or encrypted. Cleared when you leave the page.")
 
+# Plain-language description of each home mode (the four values were opaque; each is a
+# different way the local user's home is provisioned into the built image). Keyed by the
+# combo's stored value strings — DO NOT change the keys (they are the emitted --home-mode).
+_HOME_MODE_HELP = {
+    "create": "create — provision a FRESH empty home for the local user (the default).",
+    "adopt": "adopt — reuse an EXISTING home partition/device already on the target "
+             "(set 'Home device' below to a LABEL= / UUID= / /dev path).",
+    "archive": "archive — bake a home TARBALL straight into the image (set 'Home archive "
+               "(bake in)' below). Use this to copy THIS machine's home into the build.",
+    "restore": "restore — restore the home from a backup archive at install time "
+               "(set 'Home backup (restore)' below).",
+}
+
 
 class HomePage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
-        self.setTitle("Home & encryption")
+        self.setTitle("Home folder, encryption & login")
+        self.setSubTitle("Provision the user's home folder, encrypt the target root disk "
+                         "(LUKS2), and set the local login for this desktop.")
         lay = QtWidgets.QVBoxLayout(self)
         # ---- Home provisioning (desktop-class; role-class gated) -----------------
         self.home_box = QtWidgets.QGroupBox("Home provisioning")
@@ -35,6 +50,23 @@ class HomePage(QtWidgets.QWizardPage):
         self.mode = QtWidgets.QComboBox()
         self.mode.addItems(["create", "adopt", "archive", "restore"])
         hl.addWidget(_row("Home mode", self.mode))
+        # per-mode plain-language help (updates on selection) — the four modes were opaque
+        self.mode_help = QtWidgets.QLabel("")
+        self.mode_help.setWordWrap(True)
+        self.mode_help.setStyleSheet("color: gray;")
+        hl.addWidget(self.mode_help)
+        self.mode.currentTextChanged.connect(self._mode_changed)
+        # one-click preset for the reported "copy this machine's home folder" flow: it
+        # selects archive mode (bake a home tarball INTO the image) and points at the
+        # include-home-archive / seed-packages-from fields below. It only nudges the
+        # controls — the user still picks the tarball, so nothing runs or copies here.
+        self.copy_home_btn = QtWidgets.QPushButton("Copy this machine's home folder…")
+        self.copy_home_btn.setToolTip(
+            "Preset: sets Home mode = archive and points you at 'Home archive (bake in)' "
+            "(a tarball of an existing home, e.g. tar czf home.tgz -C /home you) and, "
+            "optionally, 'Seed packages from' (a package list to reinstall your apps).")
+        self.copy_home_btn.clicked.connect(self._preset_copy_home)
+        hl.addWidget(self.copy_home_btn)
         self.device = QtWidgets.QLineEdit()
         self.device.setPlaceholderText("LABEL=… | UUID=… | /dev/… (adopt)")
         hl.addWidget(_row("Home device", self.device))
@@ -142,9 +174,19 @@ class HomePage(QtWidgets.QWizardPage):
         lay.addWidget(enc)
         lay.addStretch(1)
 
+    def _mode_changed(self, _text: str = "") -> None:
+        self.mode_help.setText(_HOME_MODE_HELP.get(self.mode.currentText(), ""))
+
+    def _preset_copy_home(self) -> None:
+        # Nudge into the copy-an-existing-home flow (archive bakes a home tarball in);
+        # the archive/seed fields below are the ones the user then fills. No I/O here.
+        self.mode.setCurrentText("archive")
+        self._mode_changed()
+
     def initializePage(self):
         c = self.wiz.cfg
         self.mode.setCurrentText(c.home_mode)
+        self._mode_changed()   # seed the help even when the mode == the default (no signal)
         self.device.setText(c.home_device)
         self.backup.setText(c.home_backup)
         self.encrypted.setChecked(c.home_encrypted)
@@ -189,6 +231,9 @@ class HomePage(QtWidgets.QWizardPage):
         # On desktop images leave the per-platform greying above untouched.
         if not home_options_allowed(c):
             gate_widgets_role_class(list(self._home_widgets), False, _HOME_ROLE_CLASS_REASON)
+        # the copy-home preset only makes sense where home provisioning is live — track
+        # the (now fully gated) home-mode combo so it greys with it on ARM and on nodes.
+        self.copy_home_btn.setEnabled(self.mode.isEnabled())
 
     def validatePage(self):
         c = self.wiz.cfg

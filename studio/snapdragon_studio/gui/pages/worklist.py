@@ -24,6 +24,12 @@ from ...core.worklist import WorklistConfig, WorklistEntry, entry_id
 # The GPU-bearing mesh roles (Notes-column callout); mirrors the builder's GPU roles.
 _GPU_ROLES = ("be+gpu", "edge_ai", "gpu-host")
 
+# spec 2c: PKI + Backend + Frontend are the minimum a mesh needs and are meant to be
+# built TOGETHER (the "Select the required trio" convenience checks their standard x86
+# rows). GPU / Edge-AI nodes are deferrable — buildable here or later from a provided
+# config — so they are deliberately NOT part of this trio.
+_REQUIRED_TRIO = ("pki", "be", "fe")
+
 # Per-platform structural axes surfaced as inline combos (only where the platform HAS
 # the axis — the same tables RolePage drives the single-image board/flavor knobs from).
 _BOARD_CHOICES = {
@@ -64,8 +70,14 @@ class WorklistPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
-        self.setTitle("Mesh worklist")
-        self.setSubTitle("Select every image this mesh needs — one image per role × platform.")
+        # spec 2c: this IS the "mesh node" path's multi-image step. Say plainly that each
+        # row is one server node image, that pki+be+fe are required together, and that
+        # GPU / Edge-AI nodes can wait — the core "make each step clear" ask.
+        self.setTitle("Choose the node images to build")
+        self.setSubTitle(
+            "Select every server node this mesh needs. PKI + Backend + Frontend are "
+            "required together; GPU / Edge-AI nodes can be built later from a provided "
+            "config.")
         lay = QtWidgets.QVBoxLayout(self)
 
         self.header = QtWidgets.QLabel("")
@@ -73,11 +85,47 @@ class WorklistPage(QtWidgets.QWizardPage):
         self.header.setTextFormat(Qt.TextFormat.RichText)
         lay.addWidget(self.header)
 
+        # spec 2c convenience: one click checks the standard x86 pki+be+fe trio (the
+        # minimum buildable-together set) without disturbing any GPU/edge rows already
+        # picked — additive, never a reset.
+        trio_row = QtWidgets.QWidget()
+        trio_lay = QtWidgets.QHBoxLayout(trio_row)
+        trio_lay.setContentsMargins(0, 0, 0, 0)
+        self.trio_btn = QtWidgets.QPushButton("Select the required trio (pki + be + fe)")
+        self.trio_btn.setToolTip(
+            "PKI + Backend + Frontend are the minimum a mesh needs and are built "
+            "together. GPU / Edge-AI nodes can be added here or built later from a "
+            "provided config.")
+        self.trio_btn.clicked.connect(self._select_trio)
+        trio_lay.addWidget(self.trio_btn)
+        trio_lay.addStretch(1)
+        lay.addWidget(trio_row)
+
         self.tree = QtWidgets.QTreeWidget()
         self.tree.setRootIsDecorated(False)
         self.tree.setHeaderLabels(["", "Role", "Platform", "Board", "Flavor/Desktop", "Notes"])
         self.tree.setColumnWidth(_COL_CHECK, 28)
+        # Name what the per-row columns MEAN: Board + Flavor/Desktop are each node's
+        # hardware target (spec 2c "pick the hardware per node"); Notes is auto-derived.
+        hdr = self.tree.headerItem()
+        hdr.setToolTip(_COL_BOARD, "Per-node hardware: the target board for ARM nodes.")
+        hdr.setToolTip(_COL_FLAVOR,
+                       "Per-node hardware: image flavor (live / installer) or desktop variant.")
+        hdr.setToolTip(_COL_NOTES,
+                       "Auto: this node's encryption reality, GPU, and client-brand caveats.")
         lay.addWidget(self.tree, 1)
+
+        # gray helper: reinforce that each row = one node, the columns = per-node
+        # hardware, and point forward to the SERVICES / domains / users steps that
+        # follow (STEP 3-6) so the mesh-node path reads as an obvious sequence.
+        self.hint = QtWidgets.QLabel(
+            "Each row is one server node image. The Board and Flavor/Desktop columns "
+            "set that node's hardware; the Notes column is filled in automatically. "
+            "Next you'll choose the cluster services each node runs, then the domains "
+            "and users.")
+        self.hint.setWordWrap(True)
+        self.hint.setStyleSheet("color: gray;")
+        lay.addWidget(self.hint)
 
         # id -> top-level QTreeWidgetItem (the _helpers.check_worklist_rows contract:
         # `.rows` is a mapping id -> item, and each item carries the check state on
@@ -136,6 +184,20 @@ class WorklistPage(QtWidgets.QWizardPage):
     def _on_item_changed(self, item: QtWidgets.QTreeWidgetItem, _col: int) -> None:
         rid = item.data(_COL_CHECK, Qt.ItemDataRole.UserRole)
         if rid in self._combos:
+            self._sync_combo_enabled(rid)
+        self.completeChanged.emit()
+
+    def _select_trio(self) -> None:
+        """spec 2c: check the standard x86 pki+be+fe rows in one click. Additive — it
+        never unchecks a GPU/edge row the superadmin already picked (the trio is the
+        REQUIRED-together minimum, not the whole worklist)."""
+        self.tree.blockSignals(True)
+        for role in _REQUIRED_TRIO:
+            item = self.rows.get(entry_id(role, "x86"))
+            if item is not None:
+                item.setCheckState(_COL_CHECK, Qt.CheckState.Checked)
+        self.tree.blockSignals(False)
+        for rid in self.rows:
             self._sync_combo_enabled(rid)
         self.completeChanged.emit()
 

@@ -9,7 +9,9 @@ class WelcomePage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("Snapdragon Image Studio")
-        self.setSubTitle("Build a hardened Gentoo desktop, a branded cloud image, or a mesh node.")
+        self.setSubTitle(
+            "Build a mesh server node, run a local Docker mesh, build a mesh desktop "
+            "client, or build a standalone Gentoo desktop — you'll pick which on the next screen.")
         lay = QtWidgets.QVBoxLayout(self)
         info = QtWidgets.QLabel(
             "This studio assembles and runs a Snapdragon image build.\n\n"
