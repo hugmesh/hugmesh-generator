@@ -92,3 +92,45 @@ sudo ./build-x86-host-stage4.sh --role laptop --person-role user \
 The greeter renders under QEMU because the client kernel now carries a generic
 framebuffer fallback (`simpledrm`/sysfb + bochs/qxl; virtio-gpu is in the base
 fragment) and `launch-x86.sh --gpu` attaches a virtio-GPU.
+
+## Windows Studio `.bat` e2e (`windows-studio-e2e.sh`)
+
+Proves the SHIPPED Windows launcher works on real Windows: `snapdragon-studio.bat`
+runs `python -m snapdragon_studio %*`, and `--print-command` is a **headless-safe**
+mode (app.py returns before importing Qt), so it exercises the whole launcher →
+module → builder-command path with no display. The harness packs the entire `studio/`
+tree onto a FAT **payload** disk (a stock Windows guest has no virtio-9p driver, so a
+shared FAT is the transport), boots the guest, runs the `.bat`, writes a `MARKER.txt`
+back to the FAT, and reads it back with `mtools` after power-off — asserting the run
+exited `0` **and** emitted a `build-*-stage4.sh` command.
+
+Because we cannot ship a Windows image, the guest is **operator-provided** (like the
+Gentoo build prerequisites above):
+
+- a minimal **Windows desktop qcow2** (`WINDOWS_QEMU_IMAGE`) with **Python 3.10+ on
+  `PATH`** (so `python -m snapdragon_studio` runs) and `pip install -r requirements.txt`
+  is **not** needed for `--print-command` (it is Qt-free);
+- **autologon** to the desktop, and a **Startup / SetupComplete hook** that runs
+  `D:\run-selftest.bat` — the tiny runner the harness places at the payload-disk root.
+  It `cd`s into `D:\studio`, runs `snapdragon-studio.bat --print-command --backend
+  native`, appends `EXITCODE=%ERRORLEVEL%`, and `shutdown /s /t 0`.
+
+The base image is never mutated (a throwaway qcow2 overlay is booted on top); the
+payload FAT the guest sees as **`D:`** is rebuilt per run.
+
+```bash
+# real boot (operator supplies the Windows qcow2):
+WINDOWS_QEMU_IMAGE=/srv/vm/win-min.qcow2 ./tests/qemu/windows-studio-e2e.sh
+WINDOWS_QEMU_IMAGE=/srv/vm/win-min.qcow2 ./tests/qemu/windows-studio-e2e.sh --timeout 900 --keep
+
+# no Windows image needed — pack + validate the payload FAT (and the guest runner)
+# round-trip, without booting (needs only sys-fs/dosfstools + sys-fs/mtools):
+./tests/qemu/windows-studio-e2e.sh --dry-run
+```
+
+Without `WINDOWS_QEMU_IMAGE` (or qemu/OVMF/mtools) the real-boot path **SKIPS cleanly**
+(`SKIP: …`, exit 0), so CI stays green. The always-run **offline** half of this proof —
+that the `.bat` targets the right entrypoint and that
+`python -m snapdragon_studio --print-command` really emits a builder command on Linux —
+lives in the studio pytest suite (`studio/tests/test_bat_launcher.py`) and runs every
+pass.

@@ -59,14 +59,23 @@ class MeshNode:
         return [*_compose_base(), "--profile", "mesh", "-p", self.project, "-f",
                 os.path.join(self.workdir, "docker-compose.mesh.yml"), *args]
 
+    def _authkey(self) -> str:
+        """The EFFECTIVE tailnet/headscale auth key — the one thing start() must have and
+        the value staged into the subprocess env. The base tray path reads it from the
+        environment (`TS_AUTHKEY`); :class:`~.local_mesh.LocalMeshNode` overrides this to
+        also consult the operator-provided ``cfg.auth_key`` typed into the launcher dialog,
+        so the documented "type the key into the field" UX actually reaches `compose up`
+        instead of dead-ending on an env-only gate."""
+        return os.environ.get("TS_AUTHKEY", "")
+
     def _env(self) -> dict:
         """Subprocess env with TS_AUTHKEY guaranteed present. The compose template requires
         `${TS_AUTHKEY:?...}` even to PARSE, so stop()/status()/logs() would die on the
         required-var when no real key is set — inject a harmless placeholder for those
-        read/teardown paths (start() only runs with a real key; see start())."""
+        read/teardown paths. When an effective key exists (env, or a subclass's cfg key) it
+        wins, so `up` joins with the REAL key rather than the shadowing placeholder."""
         env = os.environ.copy()
-        if not env.get("TS_AUTHKEY"):
-            env["TS_AUTHKEY"] = "unused-teardown-placeholder"
+        env["TS_AUTHKEY"] = self._authkey() or "unused-teardown-placeholder"
         return env
 
     def _stage(self) -> None:
@@ -85,8 +94,10 @@ class MeshNode:
             return False, why
         # The template requires a real tailnet/headscale auth key (`${TS_AUTHKEY:?...}`).
         # Surface that as a CLEAR actionable message instead of a raw compose interpolation
-        # error, and don't stage/launch anything without it.
-        if not os.environ.get("TS_AUTHKEY"):
+        # error, and don't stage/launch anything without it. Consult the EFFECTIVE key
+        # (env for the tray; cfg.auth_key for the local-mesh launcher) via the _authkey()
+        # hook — a subclass with a field-provided key must reach `up` here, not dead-end.
+        if not self._authkey():
             return False, ("Set TS_AUTHKEY (a tailnet/headscale auth key) in the "
                            "environment before starting a mesh node.")
         self._stage()

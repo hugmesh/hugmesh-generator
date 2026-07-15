@@ -108,6 +108,15 @@ class LocalMeshNode(MeshNode):
                            "local mesh node.")
         return super().available()
 
+    def _authkey(self) -> str:
+        # The EFFECTIVE key start()/_env() consult: the operator's field value wins, with
+        # the environment as a fallback. This is what makes the launcher's "type the key
+        # into the dialog" UX actually dispatch `docker compose up` — MeshNode.start() used
+        # to gate solely on os.environ TS_AUTHKEY, so a field-provided key dead-ended, and
+        # the inherited _env() injected only a teardown placeholder that shadowed the staged
+        # real key in the subprocess environment.
+        return self.cfg.auth_key.strip() or super()._authkey()
+
     def _stage(self) -> None:
         # Stage the compose template + any bundled assets exactly as MeshNode does,
         # THEN merge our env on top (our keys win over any copied stack .env) so the
