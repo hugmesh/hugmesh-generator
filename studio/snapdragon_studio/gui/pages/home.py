@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import MISSING
 
 from ..qt import QtWidgets
+from ._scroll import scrollable
 from ...core.config import HOME_DESKTOP_FIELDS, ImageConfig, home_options_allowed
 from ._gating import clear_unsupported, gate_widgets, gate_widgets_role_class
 from ._widgets import _file_picker, _row
@@ -43,7 +44,7 @@ class HomePage(QtWidgets.QWizardPage):
         self.setTitle("Home folder, encryption & login")
         self.setSubTitle("Provision the user's home folder, encrypt the target root disk "
                          "(LUKS2), and set the local login for this desktop.")
-        lay = QtWidgets.QVBoxLayout(self)
+        lay = scrollable(self)
         # ---- Home provisioning (desktop-class; role-class gated) -----------------
         self.home_box = QtWidgets.QGroupBox("Home provisioning")
         hl = QtWidgets.QVBoxLayout(self.home_box)

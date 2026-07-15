@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 
 from ..qt import QtCore, QtWidgets, Signal
+from ._scroll import scrollable
 from ...core import worklist as worklist_mod
 from ...core.config import ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE, image_class
 from ...core.worklist_driver import WorklistDriver
@@ -93,7 +94,7 @@ class BuildPage(QtWidgets.QWizardPage):
         self._wl_driver: WorklistDriver | None = None
         self._materialized: list = []
 
-        lay = QtWidgets.QVBoxLayout(self)
+        lay = scrollable(self)
         self.backend = QtWidgets.QComboBox()
         self.backend.addItems(["auto", "native", "docker"])
         lay.addWidget(_row("Backend", self.backend))
