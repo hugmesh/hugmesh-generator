@@ -81,7 +81,7 @@ def _install_replay_builddriver(monkeypatch, lines, code=0):
     """A fake BuildDriver whose run() replays a captured stdout stream through on_line —
     drives the REAL ProgressPage end-to-end (parse -> _apply_state -> QProgressBar)."""
     class ReplayBuildDriver:
-        def __init__(self, gen, host):
+        def __init__(self, gen, host, graphical=False):
             self.cancelled = False
 
         def run(self, cfg, backend, on_line=None):
@@ -121,7 +121,7 @@ def _install_fake_builddriver(monkeypatch, codes=None, on_run=None):
     codes = codes or {}
 
     class FakeBuildDriver:
-        def __init__(self, gen, host):
+        def __init__(self, gen, host, graphical=False):
             self.cancelled = False
 
         def run(self, cfg, backend, on_line=None):

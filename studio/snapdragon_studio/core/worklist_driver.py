@@ -82,12 +82,16 @@ class EntryResult:
 class WorklistDriver:
     def __init__(self, generator_dir: str, worklist: WorklistConfig,
                  host: HostInfo | None = None, backend: str | None = None,
-                 generate_keys: bool = True):
+                 generate_keys: bool = True, graphical: bool = False):
         self.generator_dir = os.path.abspath(generator_dir)
         self.worklist = worklist
         self.host = host or detect()
         self.backend = backend or self.host.default_backend
         self.generate_keys = generate_keys
+        # Threaded to every per-image BuildDriver this driver constructs so a GUI-launched
+        # native build (the ProgressPage's run driver, graphical=True) elevates through a
+        # graphical auth path instead of prompting into an invisible terminal.
+        self.graphical = graphical
         self._materialized: list[tuple[WorklistEntry, ImageConfig]] | None = None
         self.results: list[EntryResult] = [
             EntryResult(entry=e, index=i) for i, e in enumerate(worklist.entries)]
@@ -117,15 +121,15 @@ class WorklistDriver:
     def command_string(self, cfg: ImageConfig, backend: str | None = None) -> str:
         """The exact per-image builder invocation (for the Review page's Preview button).
         Delegates to a throwaway BuildDriver so flag translation stays single-sourced."""
-        return BuildDriver(self.generator_dir, self.host).command_string(
+        return BuildDriver(self.generator_dir, self.host, graphical=self.graphical).command_string(
             cfg, backend or self.backend)
 
     def preflight(self) -> list[str]:
         """Aggregate preflight: a problem common to EVERY image is reported once
         (unlabelled); an image-specific problem is prefixed ``[<entry.id>]``. Empty = OK.
         This is what the Review page's problems pane renders and isComplete() keys on."""
-        per_entry = [(entry.id, BuildDriver(self.generator_dir, self.host).preflight(
-                        cfg, self.backend))
+        per_entry = [(entry.id, BuildDriver(self.generator_dir, self.host,
+                        graphical=self.graphical).preflight(cfg, self.backend))
                      for entry, cfg in self.materialize()]
         if len(per_entry) <= 1:
             return per_entry[0][1] if per_entry else []
@@ -203,7 +207,7 @@ class WorklistDriver:
             if on_entry_start:
                 on_entry_start(i)
 
-            driver = BuildDriver(self.generator_dir, self.host)
+            driver = BuildDriver(self.generator_dir, self.host, graphical=self.graphical)
             with self._lock:
                 self._drivers[i] = driver
             code = driver.run(cfg, self.backend,

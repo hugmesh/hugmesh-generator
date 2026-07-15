@@ -369,6 +369,36 @@ mesh-node-status: ## show whether the Local Docker mesh node is running
 mesh-node-logs: ## tail the Local Docker mesh node's container logs
 	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh logs --generator-dir .
 
+# ── Local Docker mesh FROM SCRATCH (generate creds + start a superadmin mesh) ────
+# The "generate & start a NEW local mesh from scratch" path: mint ALL credentials
+# (gen-cluster-secrets.sh + gen-provision-keys.sh) then bring up the FULL platform
+# stack (make stack-up) seeded with a fresh superadmin, plus the mesh overlay in prod.
+# Drives the SAME Qt-free object graph the Studio dialog + ncurses menu use
+# (core/local_mesh_bootstrap.py) — it composes the gen scripts + LocalStackNode +
+# LocalMeshNode and adds NO new compose invocation. Builds NO image. NON-destructive:
+# `plan` only previews; `up` is the explicit action (prod TTY-confirms, no bypass).
+# Knobs: ENV=test|prod, SOCIAL=1, SUPERADMIN=…, CLUSTER_DOMAIN=…, AUTHKEY_FILE=… .
+_MESH_BOOTSTRAP_ARGS = --env "$(ENV)" $(if $(strip $(SOCIAL)),--social) \
+  $(if $(SUPERADMIN),--superadmin-username "$(SUPERADMIN)") \
+  $(if $(CLUSTER_DOMAIN),--cluster-domain "$(CLUSTER_DOMAIN)") \
+  $(if $(OUT_DIR),--out "$(OUT_DIR)") \
+  $(if $(AUTHKEY_FILE),--authkey-file "$(AUTHKEY_FILE)") \
+  $(if $(NODE_NAME),--node-name "$(NODE_NAME)") \
+  $(if $(LOGIN_SERVER),--login-server "$(LOGIN_SERVER)") \
+  --generator-dir .
+
+mesh-bootstrap-plan: ## preview a from-scratch local mesh (creds + stack it WOULD start; no side effects)
+	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh_bootstrap plan $(_MESH_BOOTSTRAP_ARGS)
+
+mesh-bootstrap-up: ## GENERATE creds + START a NEW superadmin local mesh from scratch (explicit; prod TTY-confirms)
+	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh_bootstrap up $(_MESH_BOOTSTRAP_ARGS)
+
+mesh-bootstrap-down: ## stop the from-scratch local mesh (stack + overlay)
+	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh_bootstrap down $(_MESH_BOOTSTRAP_ARGS)
+
+mesh-bootstrap-status: ## show whether the from-scratch local mesh (stack + overlay) is running
+	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh_bootstrap status $(_MESH_BOOTSTRAP_ARGS)
+
 ## ── build ─────────────────────────────────────────────────────────────
 # Every build target dispatches: NATIVE unset -> re-invoke inside the builder
 # container (which sets NATIVE=1, WORK_DIR=/out); NATIVE set -> run the scripts

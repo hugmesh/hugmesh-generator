@@ -296,6 +296,37 @@ def test_print_command_new_emitted_fields_ride_config_and_reach_argv(tmp_path):
         assert token in r.stdout
 
 
+@pytest.mark.parametrize("platform,builder", [
+    ("frite", "build-frite-stage4.sh"),
+    ("orangepi5", "build-orangepi5-stage4.sh"),
+    ("orangepizero2", "build-orangepi-zero2-stage4.sh"),
+])
+def test_print_command_iso_unset_flavor_resolves_to_single(tmp_path, platform, builder):
+    """G2 source fix on the FLAT single-build channel: an unset flavor on the ARM ISO
+    platforms must print `--flavor installer` (one artifact), never to_cli_args's
+    `--flavor both` — a two-ISO build the worker dies on after a multi-hour build. The
+    flat --print-command path applies the SAME #337 resolver the materialize path does
+    (config.resolve_platform_defaults), so the headless single-image command matches the
+    real GUI build's single-artifact result."""
+    cfg = ImageConfig(mode="cloud", role=platform, platform=platform)  # flavor left unset
+    assert cfg.flavor == ""
+    p = tmp_path / f"{platform}-unset-flavor.json"
+    cfg.save(str(p))
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    assert builder in r.stdout
+    assert "--flavor installer" in r.stdout
+    assert "--flavor both" not in r.stdout
+    # a plain `sudo ` prefix (graphical stays False on the headless channel) so the
+    # build-matrix / test_headless sudo-strippers keep matching — never `sudo -A`/pkexec.
+    assert r.stdout.lstrip().startswith("sudo bash ") or r.stdout.lstrip().startswith("bash ")
+    assert " -A " not in r.stdout and "pkexec" not in r.stdout
+
+
 def test_print_command_arm_standalone_real_semantics(tmp_path):
     """The parity harness's standalone-posture configs (rpi5 role=desktop +
     standalone=true — NOT the JOB-grammar 'standalone-desktop' token) must print

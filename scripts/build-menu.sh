@@ -1499,6 +1499,7 @@ local_mesh_screen() {
             stop    "Stop the local mesh node (docker compose down)" \
             status  "Status (is it running?)" \
             logs    "View recent node logs" \
+            scratch "⚙ Generate & start a NEW local mesh FROM SCRATCH …" \
             back    "‹ back")" || return 0
         case "${choice}" in
             authkey) authkey="$(ui_password "Auth key" "Tailnet/headscale auth key (tskey-… ; required to start)")" ;;
@@ -1508,9 +1509,74 @@ local_mesh_screen() {
                 # menu verb -> entrypoint subcommand (only "stop" differs: -> "down")
                 local sub="${choice}"; [ "${choice}" = stop ] && sub=down
                 _local_mesh_run "${sub}" "${authkey}" "${node_name}" "${login_server}" ;;
+            scratch) local_mesh_bootstrap_screen ;;
             back|"") return 0 ;;
         esac
     done
+}
+
+# ── Local Docker mesh FROM SCRATCH (generate creds + start a superadmin mesh) ────
+# The "generate & start a NEW local mesh from scratch" path. Shells the SAME Qt-free
+# entrypoint the Studio dialog drives (python3 -m
+# snapdragon_studio.core.local_mesh_bootstrap), so the menu never reimplements the gen
+# scripts or docker compose. NON-destructive: `plan` only previews; `up` mints creds +
+# starts containers (prod additionally TTY-confirms, no bypass). The prod auth key is
+# entered masked and handed over via a chmod-600 mktemp file, then shredded.
+local_mesh_bootstrap_screen() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        ui_msg "Local mesh (from scratch)" "python3 is required (it drives the shared snapdragon_studio.core.local_mesh_bootstrap entrypoint)."
+        return 0
+    fi
+    local env="test" superadmin="superadmin" social="" domain="" authkey="" choice
+    while :; do
+        choice="$(ui_menu "Local mesh — from scratch" \
+            "Generate ALL credentials + start a NEW superadmin-controlled mesh on THIS machine (full platform stack, seeded superadmin). Nothing runs until you pick 'up'. Creds land in the gitignored keys-out/ at runtime only." \
+            env       "Environment .......... ${env}" \
+            superadmin "Superadmin username .. ${superadmin}" \
+            social    "Social profile ....... ${social:+on}${social:-off}" \
+            domain    "Public domain (prod) . ${domain:-<brand default in test>}" \
+            authkey   "Auth key (prod) ...... $([ -n "${authkey}" ] && echo '(set)' || echo '(unset)')" \
+            plan      "★ Preview the plan (no side effects)" \
+            up        "GENERATE creds + START from scratch" \
+            down      "Stop (stack + overlay)" \
+            status    "Status (is it running?)" \
+            back      "‹ back")" || return 0
+        case "${choice}" in
+            env)       env="$(ui_menu "Environment" "test = LAN-only/offline (safe default); prod = real public domain" test "test — LAN-only / offline" prod "prod — real public domain")" || env="test"; [ -n "${env}" ] || env="test" ;;
+            superadmin) superadmin="$(ui_input "Superadmin username" "The platform superadmin login to mint" "${superadmin}")"; [ -n "${superadmin}" ] || superadmin="superadmin" ;;
+            social)    if [ -n "${social}" ]; then social=""; else social=1; fi ;;
+            domain)    domain="$(ui_input "Public domain" "Public apex domain (required in prod; blank = brand default in test)" "${domain}")" ;;
+            authkey)   authkey="$(ui_password "Auth key" "Tailnet/headscale auth key (required in prod)")" ;;
+            plan|up|down|status)
+                _local_mesh_bootstrap_run "${choice}" "${env}" "${superadmin}" "${social}" "${domain}" "${authkey}" ;;
+            back|"") return 0 ;;
+        esac
+    done
+}
+
+# _local_mesh_bootstrap_run SUB ENV SUPERADMIN SOCIAL DOMAIN AUTHKEY — one child
+# invocation. The auth key (when set) goes into a chmod-600 mktemp file (off the argv)
+# and is shredded afterwards.
+_local_mesh_bootstrap_run() {
+    local sub="$1" env="$2" superadmin="$3" social="$4" domain="$5" authkey="$6"
+    local -a args=("${sub}" --env "${env}" --superadmin-username "${superadmin}")
+    [ -n "${social}" ] && args+=(--social)
+    [ -n "${domain}" ] && args+=(--cluster-domain "${domain}")
+    local keyfile=""
+    if [ -n "${authkey}" ]; then
+        keyfile="$(mktemp "${STATE_DIR}/bootkey.XXXXXX")" || { ui_msg "Local mesh (from scratch)" "could not create a temp file for the auth key"; return 0; }
+        chmod 600 "${keyfile}" 2>/dev/null || true
+        printf '%s' "${authkey}" >"${keyfile}"
+        args+=(--authkey-file "${keyfile}")
+    fi
+    args+=(--generator-dir "${REPO_DIR}")
+    local out
+    out="$(PYTHONPATH="${REPO_DIR}/studio" python3 -m snapdragon_studio.core.local_mesh_bootstrap "${args[@]}" 2>&1)"
+    local rc=$?
+    if [ -n "${keyfile}" ]; then
+        command -v shred >/dev/null 2>&1 && shred -u "${keyfile}" 2>/dev/null || rm -f "${keyfile}"
+    fi
+    ui_msg "Local mesh (from scratch) — ${sub} (rc=${rc})" "${out:-(no output)}"
 }
 
 # _local_mesh_run SUB AUTHKEY NODE_NAME LOGIN_SERVER — one child invocation of the

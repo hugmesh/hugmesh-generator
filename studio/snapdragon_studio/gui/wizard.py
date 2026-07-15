@@ -48,7 +48,9 @@ class StudioWizard(QtWidgets.QWizard):
         # The active worklist envelope (mesh: the WorklistPage builds it; standalone/cloud:
         # BuildPage synthesizes a 1-entry worklist at Build time). None until a page sets it.
         self.worklist = None
-        self.driver = BuildDriver(self.generator_dir, self.host)
+        # graphical=True: a build reached from the GUI must elevate through a password
+        # DIALOG (sudo -A askpass / pkexec), never a sudo prompt on an invisible terminal.
+        self.driver = BuildDriver(self.generator_dir, self.host, graphical=True)
         self.setWindowTitle("Snapdragon Image Studio")
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
         self.resize(820, 640)

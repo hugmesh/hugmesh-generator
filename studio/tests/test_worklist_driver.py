@@ -42,8 +42,9 @@ def _install_fake_builddriver(monkeypatch, codes=None, on_run=None):
     made = []
 
     class FakeBuildDriver:
-        def __init__(self, gen, host):
+        def __init__(self, gen, host, graphical=False):
             self.cancelled = False
+            self.graphical = graphical
             made.append(self)
 
         def run(self, cfg, backend, on_line=None):
