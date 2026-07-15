@@ -242,27 +242,24 @@ def main(argv=None) -> int:
         open_main = open_studio
 
     tray_only = args.tray or args.stack_tray
-    # --tray/--stack-tray each mean "only this one" in isolation, but "show
-    # everything relevant" if neither (default) or both are given.
+    # --tray/--stack-tray each mean "only this one" in isolation; neither (default) or
+    # both means "show everything relevant" — but ALWAYS as exactly ONE tray icon.
+    # (The old code appended a MeshTray AND a StackTray on the default path, so the user
+    # saw two indistinguishable navy-'S' icons; build_tray now yields a single icon whose
+    # menu carries both sections.)
     show_mesh = args.tray or not tray_only
     show_stack = args.stack_tray or not tray_only
-    trays = []
+    tray = None
     if QtWidgets.QSystemTrayIcon.isSystemTrayAvailable():
-        from .gui.tray import MeshTray, StackTray
-        if show_mesh:
-            trays.append(MeshTray(args.generator_dir, on_open_studio=open_studio,
-                                  on_open_golive=open_golive))
-        if show_stack:
-            trays.append(StackTray(args.generator_dir, on_open_studio=open_studio,
-                                   on_open_golive=open_golive))
-        for tray in trays:
-            tray.show()
-        if trays:
-            app.setQuitOnLastWindowClosed(False)  # keep running in the tray
+        from .gui.tray import build_tray
+        tray = build_tray(args.generator_dir, show_mesh=show_mesh, show_stack=show_stack,
+                          on_open_studio=open_studio, on_open_golive=open_golive)
+        tray.show()
+        app.setQuitOnLastWindowClosed(False)  # keep running in the tray
 
     if not tray_only:
         open_main()
-    elif not trays:
+    elif tray is None:
         print("[studio] no system tray available; opening the wizard instead", file=sys.stderr)
         open_main()
 

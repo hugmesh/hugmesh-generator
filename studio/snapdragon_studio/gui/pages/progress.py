@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections import deque
 
 from ..qt import QtCore, QtWidgets, Signal
+from ..tray import write_build_status
 from ...core.progress_parse import ProgressParser
 from ...core.worklist_driver import WorklistDriver
 
@@ -113,6 +114,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._all_terminal = False
         self._manifest_path = ""
         self._keys_done: list[str] = []
+        self._last_status: tuple | None = None    # de-dupes build-status file writes
         # never orphan a running build when the wizard closes — cancel and join the
         # worker on the wizard's finished signal (QWizard is a QDialog).
         self.wiz.finished.connect(self._abort_run)
@@ -166,6 +168,8 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._keys_done = []
         self.footer.setText("")
         self.log.setPlainText("")
+        self._last_status = None
+        write_build_status("idle")                # clear any prior badge on the tray
 
     def _build_row(self, index: int, label: str, platform: str) -> None:
         row = _Row(index, label, platform)
@@ -207,6 +211,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.worker.manifest.connect(self._on_manifest)
         self.worker.keys.connect(self._on_keys)
         self.worker.finished_all.connect(self._on_finished_all)
+        self._write_status()                  # building 0% -> the tray shows a badge
         self.completeChanged.emit()
         self.worker.start()
 
@@ -220,6 +225,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         row.buffer.append(line)
         state = row.parser.feed(line)
         self._apply_state(row, state)
+        self._write_status()
         if i == self._selected:
             self.log.appendPlainText(line)
 
@@ -235,10 +241,17 @@ class ProgressPage(QtWidgets.QWizardPage):
             row.bar.setRange(0, 100)
             row.bar.setValue(100)
             row.phase.setText("done")
-        elif status == "stopped":
-            row.phase.setText("stopped")
         else:
-            row.phase.setText("FAILED")
+            # failed/stopped: take the bar OUT of indeterminate (busy) mode and hold the
+            # last known percent, so the row reads as a stalled determinate bar instead of
+            # a perpetual spinner. (A broken-docker build never emits a phase banner, so
+            # the parser stays honestly indeterminate — this is what left every failed row
+            # showing an empty busy bar and nothing ever "at 100" = the user's symptom.)
+            last = row.parser.state().percent
+            row.bar.setRange(0, 100)
+            row.bar.setValue(last if last is not None else 0)
+            row.phase.setText("stopped" if status == "stopped" else "FAILED")
+        self._write_status()
         self.completeChanged.emit()
 
     def _on_manifest(self, path: str) -> None:
@@ -256,7 +269,40 @@ class ProgressPage(QtWidgets.QWizardPage):
             if row.stop_btn is not None:
                 row.stop_btn.setEnabled(False)
         self.log.appendPlainText(f"\n=== worklist finished (summary exit {code}) ===")
+        self._write_status()                  # final complete/error badge for the tray
         self.completeChanged.emit()
+
+    # ---- build-status channel (tray badge) --------------------------------------
+    def _aggregate_percent(self) -> int:
+        """A single 0..100 across every row for the tray badge: an ok/done row is 100, an
+        indeterminate row (no phase banner yet) counts as 0, everything else its coarse
+        parser estimate — the mean of those."""
+        if not self._rows:
+            return 0
+        total = 0
+        for row in self._rows:
+            pct = row.parser.state().percent
+            total += pct if pct is not None else 0
+        return int(total / len(self._rows))
+
+    def _write_status(self) -> None:
+        """Publish the current build state to the tray's status file (de-duped)."""
+        if not self._rows:
+            return
+        total = len(self._rows)
+        running = sum(1 for r in self._rows if not r.terminal)
+        percent = self._aggregate_percent()
+        if self._all_terminal:
+            ok = bool(self.driver) and all(
+                self.driver.results[i].status == "ok" for i in range(total))
+            state = "complete" if ok else "error"
+        else:
+            state = "building"
+        key = (state, percent, running, total)
+        if key == self._last_status:
+            return
+        self._last_status = key
+        write_build_status(state, percent=percent, running=running, total=total)
 
     # ---- rendering helpers ------------------------------------------------------
     def _apply_state(self, row: _Row, state) -> None:
