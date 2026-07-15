@@ -19,7 +19,9 @@ builds no image, so it emits nothing into the builder argv the build-matrix guar
 """
 from __future__ import annotations
 
+import argparse
 import os
+import sys
 from dataclasses import dataclass
 
 from .mesh_node import MeshNode
@@ -115,3 +117,114 @@ class LocalMeshNode(MeshNode):
         merged = _parse_env(env_path)
         merged.update(self.cfg.env())
         _write_env(env_path, merged)
+
+
+# ── Qt-free CLI face (the SHARED entrypoint) ────────────────────────────────────
+# The ncurses menu (scripts/build-menu.sh) and the Makefile `mesh-node-up` target
+# both shell `python3 -m snapdragon_studio.core.local_mesh <sub> …`, so GUI + ncurses
+# + CLI drive the SAME LocalMeshConfig -> LocalMeshNode object graph the GUI dialog
+# (gui/pages/localmesh.py) builds — not merely "the same lifecycle". This module
+# imports only .mesh_node (os/subprocess/shutil/dataclasses — NO Qt), so it runs in
+# the Qt-free/system-python environment CI uses.
+#
+# This is the DIFFERENT product surface from clients/docker-mesh-node/mesh-node.sh:
+# that is the shipped END-USER joiner appliance (FD-09) — a KEYS folder mounted into
+# a baked snapdragon/mesh-node:latest image, installed to a desktop as the
+# `snapdragon-mesh-node` binary. This fourth-choice face instead consumes ONE
+# TS_AUTHKEY + the generator's shipped docker-compose.mesh.yml overlay on the build
+# host. They are intentionally not unified (see --help) and never share a PATH name:
+# this face is invoked by module path (`python3 -m …`) / `make mesh-node-up` only.
+
+_REPO_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir))
+
+
+def _read_authkey(args: argparse.Namespace) -> str:
+    """Resolve the auth key from --authkey-file (preferred: keeps the secret off the
+    argv / process table) or the inline --authkey. Trailing whitespace/newlines are
+    stripped so a `printf '%s' key >file` and an `echo key >file` behave the same."""
+    if args.authkey_file:
+        with open(args.authkey_file, encoding="utf-8") as fh:
+            return fh.read().strip()
+    return (args.authkey or "").strip()
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Qt-free entrypoint shared by the ncurses menu + the Makefile mesh-node targets.
+
+    Builds the SAME LocalMeshConfig/LocalMeshNode the GUI's LocalMeshDialog builds and
+    runs one lifecycle verb (up|down|status|logs) against it."""
+    p = argparse.ArgumentParser(
+        prog="snapdragon-mesh-node",
+        description=(
+            "Run a Snapdragon mesh node on THIS machine in Docker (the wizard's fourth "
+            "choice: 'Local Docker mesh'). Builds NO image — it runs the shipped "
+            "docker-compose.mesh.yml overlay locally. Shares one lifecycle with the "
+            "Studio tray + wizard launcher (core/mesh_node.py)."),
+        epilog=(
+            "To PERMANENTLY enroll THIS desktop with an admin-issued keys folder + a "
+            "tray/desktop launcher, use the installed end-user appliance "
+            "`snapdragon-mesh-node` from clients/docker-mesh-node/install.sh instead — "
+            "that is a different product surface (a baked joiner image + KEYS profile), "
+            "not this generator-host build-time face."))
+    p.add_argument("subcommand", choices=("up", "down", "status", "logs"),
+                   help="up = start the local node; down = stop it; status = running? ; "
+                        "logs = tail its container logs")
+    key = p.add_mutually_exclusive_group()
+    key.add_argument("--authkey-file", default="",
+                     help="path to a file holding the tailnet/headscale auth key "
+                          "(TS_AUTHKEY). Preferred over --authkey (keeps the secret off "
+                          "the process table). Required for `up`.")
+    key.add_argument("--authkey", default="",
+                     help="the tailnet/headscale auth key inline (use --authkey-file to "
+                          "keep it off the argv).")
+    p.add_argument("--node-name", default="",
+                   help="optional hostname on the tailnet (default: snapdragon-node).")
+    p.add_argument("--login-server", default="",
+                   help="optional self-hosted headscale control-plane URL.")
+    p.add_argument("--workdir", default="",
+                   help="override where the compose project is staged "
+                        "(default: ~/.snapdragon/mesh-node).")
+    p.add_argument("--generator-dir", default=_REPO_ROOT,
+                   help="the snapdragon-generator checkout that ships "
+                        "specs/…/docker-compose.mesh.yml (default: this module's repo).")
+    args = p.parse_args(argv)
+
+    auth_key = _read_authkey(args)
+    cfg = LocalMeshConfig(auth_key=auth_key, node_name=args.node_name,
+                          login_server=args.login_server, workdir=args.workdir)
+    node = LocalMeshNode(args.generator_dir, cfg)
+
+    # REQUIRED: MeshNode.start()/._env() interpolate the compose template's required
+    # `${TS_AUTHKEY:?…}` from os.environ — LocalMeshNode stages the key into the
+    # workdir .env but does NOT export it. Export it here (when supplied) BEFORE any
+    # verb so start()'s inherited guard passes and down/status/logs interpolate with
+    # the real key. (The GUI path has the same latent gap: LocalMeshDialog._start
+    # never exports TS_AUTHKEY either — start() only works there because the tray/GUI
+    # process may already carry it; flagged for a follow-up.)
+    if auth_key:
+        os.environ[ENV_AUTHKEY] = auth_key
+
+    if args.subcommand == "up":
+        ok, why = node.available()
+        if not ok:
+            print(f"[local-mesh] cannot start: {why}", file=sys.stderr)
+            return 2
+        ok, why = node.start()
+        print(why or ("started" if ok else "failed"))
+        return 0 if ok else 1
+    if args.subcommand == "down":
+        ok, why = node.stop()
+        print(why or ("stopped" if ok else "failed"))
+        return 0 if ok else 1
+    if args.subcommand == "status":
+        st = node.status()
+        print(f"{'running' if st.running else 'stopped'} ({st.detail})")
+        return 0
+    # logs
+    print(node.logs() or "(no logs — node not started?)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -310,7 +310,7 @@ ORANGEPIZERO2_FLAVOR ?= both
 ORANGEPIZERO2_PASS    := ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
 
 .DEFAULT_GOAL := help
-.PHONY: help menu go-live go-live-menu clean build-all build-everything matrix-check pentest pentest-seed rebuild \
+.PHONY: help menu mesh-node-up mesh-node-down mesh-node-status mesh-node-logs go-live go-live-menu clean build-all build-everything matrix-check pentest pentest-seed rebuild \
         rpi x86 omnibus frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
         orangepizero2 orangepizero2-live orangepizero2-installer \
         flash qemu qemu-rpi qemu-x86 \
@@ -351,6 +351,23 @@ help: ## list targets
 
 menu: ## interactive console menu to build images (progress + quit-without-stopping)
 	@bash scripts/build-menu.sh
+
+# ── Local Docker mesh (the wizard's fourth choice — builds NO image) ────────────
+# A first-class NON-BUILD face for the fourth choice: run a mesh node on THIS machine
+# in Docker via the SAME Qt-free entrypoint the Studio wizard/tray drive
+# (core/local_mesh.py), reusing the shipped docker-compose.mesh.yml overlay. No image
+# is emitted. AUTHKEY_FILE holds the tailnet/headscale auth key (keeps it off the argv).
+mesh-node-up: ## run a Local Docker mesh node on THIS machine (AUTHKEY_FILE=… [NODE_NAME=…] [LOGIN_SERVER=…])
+	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh up --authkey-file "$(AUTHKEY_FILE)" $(if $(NODE_NAME),--node-name "$(NODE_NAME)") $(if $(LOGIN_SERVER),--login-server "$(LOGIN_SERVER)") --generator-dir .
+
+mesh-node-down: ## stop the Local Docker mesh node on THIS machine
+	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh down --generator-dir .
+
+mesh-node-status: ## show whether the Local Docker mesh node is running
+	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh status --generator-dir .
+
+mesh-node-logs: ## tail the Local Docker mesh node's container logs
+	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh logs --generator-dir .
 
 ## ── build ─────────────────────────────────────────────────────────────
 # Every build target dispatches: NATIVE unset -> re-invoke inside the builder

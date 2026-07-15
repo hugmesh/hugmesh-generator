@@ -20,6 +20,41 @@ must still be *expressible* (the menu's and Studio's **extra-flags escape
 hatch** exists for exactly that). New options land in **all four channels in
 the same change**, plus a row (or axis) in the canonical matrix below.
 
+### Four-choice taxonomy parity
+
+The Studio GUI's four-choice opening screen
+([`gui/pages/mode.py`](../studio/snapdragon_studio/gui/pages/mode.py); the flow is
+specced in [`docs/STUDIO-WIZARD-FLOW.md`](STUDIO-WIZARD-FLOW.md)) is the **reference**
+taxonomy — **Mesh node** / **Local Docker mesh** / **Mesh desktop client** /
+**Standalone Gentoo desktop**. Every channel that presents an opening choice mirrors
+those four labels verbatim: the ncurses menu's `mode_screen()`
+([`scripts/build-menu.sh`](../scripts/build-menu.sh)) and the CLI's guided `--help`
+(`print_intents_guide` in [`docker/build-image.sh`](../docker/build-image.sh)). The
+three *image* choices are a clarity layer on top of the existing screens/flags — they
+change navigation only, so the emission the matrix guards is byte-identical.
+
+The **`TAXO` bucket** in [`tests/build-matrix/check.sh`](../tests/build-matrix/check.sh)
+enforces this the same code-copy way the `JOB`/`COVG` buckets work: the golden set is
+extracted **live** from `mode.py` (grep'd — it imports Qt, so it can't be imported
+Qt-free), a canary asserts the reference taxonomy is **exactly four** (a silent
+shrink/grow trips the gate), a bogus label must be absent from every channel
+(non-vacuity), and each of the four labels must be present in both the menu and the CLI
+guide. Fail-closed: an expected pass count, shortfall = failure.
+
+**Local Docker mesh (choice ii) is the one non-build channel.** It builds no image and
+has **no matrix row and no emission** — it runs a dockerized node on the operator's own
+machine through [`core/local_mesh.py`](../studio/snapdragon_studio/core/local_mesh.py)'s
+Qt-free entrypoint (`python3 -m snapdragon_studio.core.local_mesh`, wrapped by
+`make mesh-node-up`), shared verbatim by the GUI launcher, the ncurses `local_mesh_screen`,
+and the Makefile targets. It never enters `resolve_build_target`/`build_make_cmd`.
+
+**Per-user first-login `registration` (discord / gmail / password / derive) is
+manifest-only.** It is an additive `User.registration` field surfaced in the Studio
+`users.py` + `--print-specs`; the ncurses/CLI image builders carry no per-user mesh
+manifest, so it is **not** a menu/CLI image-build knob and the `TAXO` bucket asserts its
+four tokens in the Studio users surface only (keeping the gate honest, not vacuously
+green on channels that do not offer it).
+
 ## The four scriptable channels
 
 | Channel | Entry point | How a build is described |
