@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{{BRAND_TITLE}} {{TITLE_WORD}}</title>
+  <base href="/" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="snap-config.js"></script>
+</head>
+<body>
+  <!-- Base-absent skeleton: a minimal, bootable {{APP_SLUG}} shell. The real
+       remote (Angular native-federation) replaces snap-{{APP_SLUG}}-root when the
+       Tier-2 base is pullable; this fallback renders a static, branded holding
+       page so the tenant is never left with nothing. -->
+  <snap-{{APP_SLUG}}-root>
+    <main style="font-family: system-ui, sans-serif; max-width: 24rem; margin: 4rem auto; text-align: center;">
+      <h1>{{BRAND_TITLE}} {{TITLE_WORD}}</h1>
+      <p>Loading…</p>
+    </main>
+  </snap-{{APP_SLUG}}-root>
+</body>
+</html>

@@ -52,8 +52,22 @@ class MeshNode:
         return True, ""
 
     def _compose(self, *args: str) -> list[str]:
-        return [*_compose_base(), "-p", self.project, "-f",
+        # `--profile mesh` is REQUIRED: the template's only service (tailscale) is gated
+        # behind profiles:["mesh"] (matching the shipped `snapdragon-stack mesh-up`, which
+        # runs `--profile infra --profile mesh`). Without it `up`/`ps` select ZERO services,
+        # so start() would report "Started." while launching nothing.
+        return [*_compose_base(), "--profile", "mesh", "-p", self.project, "-f",
                 os.path.join(self.workdir, "docker-compose.mesh.yml"), *args]
+
+    def _env(self) -> dict:
+        """Subprocess env with TS_AUTHKEY guaranteed present. The compose template requires
+        `${TS_AUTHKEY:?...}` even to PARSE, so stop()/status()/logs() would die on the
+        required-var when no real key is set — inject a harmless placeholder for those
+        read/teardown paths (start() only runs with a real key; see start())."""
+        env = os.environ.copy()
+        if not env.get("TS_AUTHKEY"):
+            env["TS_AUTHKEY"] = "unused-teardown-placeholder"
+        return env
 
     def _stage(self) -> None:
         os.makedirs(self.workdir, exist_ok=True)
@@ -69,9 +83,15 @@ class MeshNode:
         ok, why = self.available()
         if not ok:
             return False, why
+        # The template requires a real tailnet/headscale auth key (`${TS_AUTHKEY:?...}`).
+        # Surface that as a CLEAR actionable message instead of a raw compose interpolation
+        # error, and don't stage/launch anything without it.
+        if not os.environ.get("TS_AUTHKEY"):
+            return False, ("Set TS_AUTHKEY (a tailnet/headscale auth key) in the "
+                           "environment before starting a mesh node.")
         self._stage()
         try:
-            r = subprocess.run(self._compose("up", "-d"), cwd=self.workdir,
+            r = subprocess.run(self._compose("up", "-d"), cwd=self.workdir, env=self._env(),
                                capture_output=True, text=True, timeout=600)
             return (r.returncode == 0), (r.stderr or r.stdout).strip()
         except (OSError, subprocess.SubprocessError) as e:
@@ -79,7 +99,7 @@ class MeshNode:
 
     def stop(self) -> tuple[bool, str]:
         try:
-            r = subprocess.run(self._compose("down"), cwd=self.workdir,
+            r = subprocess.run(self._compose("down"), cwd=self.workdir, env=self._env(),
                                capture_output=True, text=True, timeout=300)
             return (r.returncode == 0), (r.stderr or r.stdout).strip()
         except (OSError, subprocess.SubprocessError) as e:
@@ -90,7 +110,7 @@ class MeshNode:
         if not base or not os.path.exists(os.path.join(self.workdir, "docker-compose.mesh.yml")):
             return MeshStatus(running=False, detail="not started")
         try:
-            r = subprocess.run(self._compose("ps", "-q"), cwd=self.workdir,
+            r = subprocess.run(self._compose("ps", "-q"), cwd=self.workdir, env=self._env(),
                                capture_output=True, text=True, timeout=30)
             ids = [x for x in r.stdout.splitlines() if x.strip()]
             return MeshStatus(running=bool(ids), detail=f"{len(ids)} container(s)")
@@ -100,7 +120,8 @@ class MeshNode:
     def logs(self, tail: int = 200) -> str:
         try:
             r = subprocess.run(self._compose("logs", "--tail", str(tail)),
-                               cwd=self.workdir, capture_output=True, text=True, timeout=30)
+                               cwd=self.workdir, env=self._env(),
+                               capture_output=True, text=True, timeout=30)
             return r.stdout
         except (OSError, subprocess.SubprocessError) as e:
             return str(e)

@@ -1,0 +1,17 @@
+# Per-package BASH environment for dev-qt/qtwebengine — unlike the
+# package.env-referenced *.conf files (make.conf-style key=value only), portage
+# sources /etc/portage/env/${CATEGORY}/${PN} as bash in the ebuild environment,
+# so phase hooks are legal here. (The MAKEOPTS memory cap stays in
+# qtwebengine-lowmem.conf via package.env.)
+#
+# Upstream cmake/QtGnGen.cmake hard-kills `gn gen` after 600 s wall-clock
+# (execute_process TIMEOUT 600 -> "-- GN FAILED / Process terminated due to
+# timeout"). gn normally finishes in 1-2 min, but under host memory pressure it
+# can thrash past that budget (2026-07-08 proof build: a host-wide global_oom
+# event — kind cluster + desktop apps sharing the box — killed both the QtPdf
+# and QtWebEngineCore gn runs at exactly 600 s). Give gn a 6000 s budget.
+# The pattern appears exactly once, on its own line, in that file.
+post_src_prepare() {
+	sed -i 's/TIMEOUT 600$/TIMEOUT 6000/' "${S}/cmake/QtGnGen.cmake" \
+		|| die "failed to raise QtGnGen.cmake gn timeout"
+}

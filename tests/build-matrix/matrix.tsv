@@ -10,9 +10,41 @@
 rpi5	pki	test	-	-	-
 rpi5	backend	test	-	-	-
 rpi5	frontend	test	-	-	-
+rpi5	desktop	test	-	-	-
 rpi5	pki	prod	-	-	-
 rpi5	backend	prod	-	-	-
 rpi5	frontend	prod	-	-	-
+rpi5	desktop	prod	-	-	-
+# --board rpi4 (Phase 6, Pi 4 support): SAME "rpi5" platform id / builder script
+# (build-rpi5-stage4.sh --board rpi4) — the board column is the axis, not a
+# separate platform. Mirrors the rpi5-default rows above 1:1 (role x env).
+rpi5	pki	test	rpi4	-	-
+rpi5	backend	test	rpi4	-	-
+rpi5	frontend	test	rpi4	-	-
+rpi5	desktop	test	rpi4	-	-
+rpi5	pki	prod	rpi4	-	-
+rpi5	backend	prod	rpi4	-	-
+rpi5	frontend	prod	rpi4	-	-
+rpi5	desktop	prod	rpi4	-	-
+# --board rpi3 (Phase 8, Pi 3 support): SAME "rpi5" platform id / builder
+# script (build-rpi5-stage4.sh --board rpi3) — DESKTOP-ONLY (1GB RAM is not
+# enough headroom for the k8s cluster-node stack), so only the desktop role is
+# rowed here (unlike rpi4/rpi5, which mirror all 4 cluster-node+desktop roles).
+rpi5	desktop	test	rpi3	-	-
+rpi5	desktop	prod	rpi3	-	-
+# standalone-desktop (ARM standalone-posture JOB-channel grammar): the SAME
+# --role desktop the plain "desktop" rows above resolve, but the JOB channel's
+# HARDWARE_CLASS grammar spells it as its own role token ("rpi5.standalone-desktop.<board>")
+# since rpi5 has a role axis to extend the way x86's standalone-thin/thick/
+# unaffiliated roles do — see docker/build-image.sh's header comment. The CLI/
+# MAKE/GUI/MENU channels have no such token (the builder itself only ever takes
+# --role desktop plus a separate --standalone flag), so tests/build-matrix/check.sh's
+# CLI leg translates this role value into the real --role desktop --standalone
+# invocation before executing it, and its GUI leg translates it to the real
+# Studio posture (role=desktop + standalone=true, the HomePage checkbox) and
+# proves the printed command against the builder's own --print-plan.
+rpi5	standalone-desktop	test	rpi4	-	-
+rpi5	standalone-desktop	prod	rpi4	-	-
 x86	pki	test	-	-	-
 x86	be	test	-	-	-
 x86	fe	test	-	-	-
@@ -24,6 +56,7 @@ x86	chromebook	test	-	-	-
 x86	desktop	test	-	-	-
 x86	standalone-thin	test	-	-	-
 x86	standalone-thick	test	-	-	-
+x86	standalone-unaffiliated	test	-	-	-
 x86	pki	prod	-	-	-
 x86	be	prod	-	-	-
 x86	fe	prod	-	-	-
@@ -35,6 +68,7 @@ x86	chromebook	prod	-	-	-
 x86	desktop	prod	-	-	-
 x86	standalone-thin	prod	-	-	-
 x86	standalone-thick	prod	-	-	-
+x86	standalone-unaffiliated	prod	-	-	-
 frite	desktop	test	la-frite	live	light
 frite	desktop	test	la-frite	live	none
 frite	desktop	test	la-frite	installer	light
@@ -71,6 +105,15 @@ frite	desktop	prod	sweet-potato	installer	light
 frite	desktop	prod	sweet-potato	installer	none
 frite	desktop	prod	sweet-potato	both	light
 frite	desktop	prod	sweet-potato	both	none
+# flavor=standalone (ARM standalone-posture JOB-channel grammar): frite has NO
+# role axis, so the JOB channel signals standalone-posture through the flavor
+# slot instead ("frite.<board>.standalone") — normalized to the real
+# flavor=installer (--standalone forces the installer path internally anyway)
+# plus --standalone/--local-user by the CLI leg, and to flavor=installer +
+# standalone=true (ImageConfig semantics, --print-plan-proven) by the GUI leg.
+# See docker/build-image.sh's header comment.
+frite	desktop	test	la-frite	standalone	light
+frite	desktop	prod	la-frite	standalone	light
 jetson	edge_ai	test	orin-nano	-	-
 jetson	full	test	orin-nano	-	-
 jetson	gpu-host	test	orin-nano	-	-
@@ -85,3 +128,33 @@ jetson	edge_ai	test	orin-nx-8gb	-	-
 jetson	edge_ai	prod	orin-nx-8gb	-	-
 jetson	edge_ai	test	orin-nx-16gb	-	-
 jetson	edge_ai	prod	orin-nx-16gb	-	-
+orangepi5	desktop	test	orange-pi-5-plus	live	-
+orangepi5	desktop	test	orange-pi-5-plus	installer	-
+orangepi5	desktop	test	orange-pi-5-plus	both	-
+orangepi5	desktop	test	orange-pi-5	live	-
+orangepi5	desktop	test	orange-pi-5	installer	-
+orangepi5	desktop	test	orange-pi-5	both	-
+orangepi5	desktop	prod	orange-pi-5-plus	live	-
+orangepi5	desktop	prod	orange-pi-5-plus	installer	-
+orangepi5	desktop	prod	orange-pi-5-plus	both	-
+orangepi5	desktop	prod	orange-pi-5	live	-
+orangepi5	desktop	prod	orange-pi-5	installer	-
+orangepi5	desktop	prod	orange-pi-5	both	-
+# flavor=standalone (ARM standalone-posture JOB-channel grammar): same shape as
+# frite's — no role axis, so standalone rides the flavor slot, normalized to
+# flavor=installer + --standalone/--local-user. See docker/build-image.sh's
+# header comment.
+orangepi5	desktop	test	orange-pi-5-plus	standalone	-
+orangepi5	desktop	prod	orange-pi-5-plus	standalone	-
+orangepizero2	appliance	test	-	live	-
+orangepizero2	appliance	test	-	installer	-
+orangepizero2	appliance	test	-	both	-
+orangepizero2	appliance	prod	-	live	-
+orangepizero2	appliance	prod	-	installer	-
+orangepizero2	appliance	prod	-	both	-
+# flavor=standalone (ARM standalone-posture JOB-channel grammar): same shape as
+# frite/orangepi5's — no role/board axis at all, so standalone rides the
+# flavor slot, normalized to flavor=installer + --standalone/--local-user.
+# See docker/build-image.sh's header comment.
+orangepizero2	appliance	test	-	standalone	-
+orangepizero2	appliance	prod	-	standalone	-

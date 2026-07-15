@@ -6,6 +6,6 @@ resources:
 
 # Anubis is an UPSTREAM (third-party) image, pinned to an explicit tag for
 # supply-chain reasons. Unlike the first-party apps it is NOT rewritten to the
-# in-cluster GitLab registry; it is pulled from ghcr.io. Pin bumps happen here.
+# in-cluster Harbor registry; it is pulled from ghcr.io. Pin bumps happen here.
 images:
   - { name: ghcr.io/techarohq/anubis, newName: ghcr.io/techarohq/anubis, newTag: v1.25.0 }

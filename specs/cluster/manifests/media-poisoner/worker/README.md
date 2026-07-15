@@ -56,7 +56,7 @@ docker build -t media-poisoner:dev .
 ```
 
 CI = **GitLab only** (no GitHub Actions). The kustomization rewrites the image ref
-to the in-cluster GitLab registry like every other first-party app.
+to the in-cluster Harbor registry like every other first-party app.
 
 ## License (read before swapping a real backend in)
 
@@ -91,10 +91,8 @@ any image (read → perturb → return, in-memory). Server-side poisoning necess
 exposes plaintext to this one extra component — acceptable because posted media is
 public-by-design, but it is disclosed in ToS.
 
-**mTLS (worker-terminated, optional).** If the BFF/proxies require **mTLS** to the
-worker, either terminate it at the manifest layer (sidecar/mesh) or let the worker
-terminate it itself: the container entrypoint (`app/serve.py`, `python -m app.serve`)
-reads
+**mTLS (worker-terminated) — LIVE.** The worker terminates mTLS itself: the
+container entrypoint (`app/serve.py`, `python -m app.serve`) reads
 
 | env | meaning |
 |---|---|
@@ -102,13 +100,18 @@ reads
 | `POISON_TLS_KEY`  | server private key PEM path |
 | `POISON_TLS_CLIENT_CA` | CA bundle used to **verify client certs** — setting it enforces `ssl.CERT_REQUIRED` (true mTLS) |
 
-and runs uvicorn accordingly. All three unset (the default) serves plain HTTP on
-`:8080` exactly as before — fully backward compatible. A **partial** config (cert
-without key, client CA without server cert, missing PEM file) **aborts startup**
-(fail-closed; never a silent plaintext fallback), and `/health` discloses the live
-transport as `"transport": "mtls" | "tls" | "plaintext"`. The PEMs arrive via an
-ESO-projected Secret volume (mirrors the BFF/gateway `build-keystore` + ESO pattern
-used elsewhere in this repo); when enabling, swap the Deployment's `httpGet` probes
-for `tcpSocket` (the kubelet has no client cert). Unit + live-handshake tests:
-`tests/test_serve_tls.py` (the live test self-signs a throwaway CA and proves a
-certless client is REJECTED and a cert-bearing one accepted).
+and runs uvicorn accordingly. All three unset serves plain HTTP on `:8080` exactly
+as before — fully backward compatible (useful for local/dev runs outside the
+cluster). A **partial** config (cert without key, client CA without server cert,
+missing PEM file) **aborts startup** (fail-closed; never a silent plaintext
+fallback), and `/health` discloses the live transport as `"transport": "mtls" |
+"tls" | "plaintext"`. In the cluster, `POISON_TLS_CERT`/`POISON_TLS_KEY`/
+`POISON_TLS_CLIENT_CA` point at the PEM files projected from the ESO Secret
+`media-poisoner-mtls` (`manifests/external-secrets/media-poisoner-externalsecrets.yaml`
+— the same Vault-PKI -> ESO -> `kubernetes.io/tls` pattern as the akkoma-proxy /
+tuwunel-proxy homeserver mTLS certs, mounted straight into this container instead
+of a sidecar), and the Deployment's readiness/liveness probes are `tcpSocket` (not
+`httpGet`), since the mTLS handshake rejects the kubelet's certless probe. Unit +
+live-handshake tests: `tests/test_serve_tls.py` (the live test self-signs a
+throwaway CA and proves a certless client is REJECTED and a cert-bearing one
+accepted).

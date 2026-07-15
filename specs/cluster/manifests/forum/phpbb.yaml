@@ -5,7 +5,7 @@
 # isolated snapdragon-forum namespace.
 #
 # HEADLESS MECHANISM: phpBB has NO official REST API. The chosen mechanism is a
-# thin CUSTOM phpBB extension `snapdragon/jsonapi` (the phpbbcli identifier ==
+# thin CUSTOM phpBB extension `snapdragon/forumapi` (the phpbbcli identifier ==
 # install DIRECTORY path == composer name; NO hyphen — the hyphenated form is
 # un-enableable by phpBB's name regex + dir match). phpBB 3.1+ ships Symfony
 # HttpKernel/Controller/Routing; the extension registers config/routing.yml +
@@ -19,7 +19,7 @@
 # phpBB 3.3.11. The init->main filesystem split is resolved as:
 #   * initContainer (OWNER creds): DDL-once headless schema install (guarded by a
 #     <prefix>config table probe) + registration lockdown. The install YAML's
-#     `extensions:` node enables snapdragon/jsonapi.
+#     `extensions:` node enables snapdragon/forumapi.
 #   * MAIN container IMAGE entrypoint: regenerate config.php from env every boot
 #     (least-privilege phpbb_app role) so the main FS — which never sees the
 #     initContainer's config.php — always has a working config; ensure the ext is
@@ -70,7 +70,7 @@ data:
     PHPBB_INSTALL_CONFIG=/tmp/install-config.yml
     # Headless extension (phpbbcli identifier == install DIRECTORY path; NO hyphen —
     # the hyphenated form is un-enableable by phpBB's name regex + dir match).
-    PHPBB_EXTENSION=snapdragon/jsonapi
+    PHPBB_EXTENSION=snapdragon/forumapi
     # Lockdown intent (the IMAGE enforces it deterministically, NOT phpBB config):
     #   * registration disabled  -> initContainer sets require_activation=3 (admin approval)
     #   * board/ACP/login locked  -> the IMAGE denies every .php except app.php at the
@@ -83,7 +83,7 @@ data:
   # at runtime — no secret literals here). Schema = phpbb/install/installer_configuration.php
   # (validated against phpBB 3.3.11). The ${PLACEHOLDER}s are substituted by bootstrap.sh
   # from env (the OWNER password comes from the phpbb-secrets Secret as DB_PASSWORD).
-  # The `extensions:` node enables snapdragon/jsonapi as part of the install.
+  # The `extensions:` node enables snapdragon/forumapi as part of the install.
   install-config.yml: |
     installer:
         admin:
@@ -93,7 +93,7 @@ data:
         board:
             lang: en
             name: '${BOARD_NAME}'
-            description: 'Backend-only phpBB (headless via snapdragon/jsonapi)'
+            description: 'Backend-only phpBB (headless via snapdragon/forumapi)'
         database:
             dbms: postgres
             dbhost: '${PHPBB_DB_HOST}'
@@ -112,7 +112,7 @@ data:
             server_port: 80
             script_path: /
         extensions:
-            - snapdragon/jsonapi
+            - snapdragon/forumapi
   # The initContainer bootstrap: render the install YAML with the OWNER creds, run the
   # phpBB headless install (DDL-ONCE, guarded by a table-existence probe so it is safe on
   # every pod restart), then set the registration lockdown. The MAIN container's IMAGE
@@ -208,7 +208,7 @@ spec:
         # does NOT share (only the `store` PVC is shared) — the main container's image
         # entrypoint therefore regenerates config.php from env on every boot.
         - name: bootstrap
-          # ⚠️ Custom image = official phpBB + the snapdragon/jsonapi extension baked
+          # ⚠️ Custom image = official phpBB + the snapdragon/forumapi extension baked
           # in (immutable, version-locked). Placeholder pinned to the in-cluster
           # registry; replace newTag when the extension image is built (kustomization).
           image: snapdragon-systems/phpbb:dev
@@ -252,7 +252,7 @@ spec:
             - { name: PHPBB_DB_NAME,     value: "phpbb" }
             - { name: PHPBB_DB_USER,     value: "phpbb_app" }
             - { name: PHPBB_TABLE_PREFIX, value: "phpbb_" }
-            - { name: PHPBB_EXTENSION,   value: "snapdragon/jsonapi" }
+            - { name: PHPBB_EXTENSION,   value: "snapdragon/forumapi" }
             # PHPBB_INSTALL_CONFIG intentionally UNSET in the main container — DDL is the
             # initContainer's job; the entrypoint only regenerates config + enables the ext.
             # RUNTIME DB login password = the least-privilege app role phpbb_app.
@@ -267,7 +267,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
           # Readiness on the EXTENSION health endpoint — NOT a board page (the board UI
-          # is locked at the Apache layer). Proves the json-api surface answers; the
+          # is locked at the Apache layer). Proves the forum-api surface answers; the
           # board/ACP/login are intentionally 403.
           readinessProbe:
             httpGet: { path: /api/v1/snapdragon/health, port: http }

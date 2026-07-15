@@ -74,6 +74,15 @@ spec:
         - name: web
           image: snapdragon-systems/login-ui:dev
           ports: [{ name: http, containerPort: 80 }]
+          # Without this, the login-ui nginx entrypoint (40-snap-config.sh)
+          # defaults window.__SNAP_OIDC_ENABLED__ to false, so session.service.ts's
+          # post-login hydrate() (the GET /bff/session re-read that syncs real
+          # Casdoor roles into the visible session) never fires — the exact
+          # "nav bar broken for every role" bug found+fixed on the compose stack
+          # (auth-core#29/admin-bff-api#197/login-ui#51; compose.local.yaml sets
+          # this same var). Never independently verified against a real cluster.
+          env:
+            - { name: SNAP_OIDC_ENABLED, value: "true" }
           resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
 ---
 apiVersion: v1

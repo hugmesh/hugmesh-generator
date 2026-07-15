@@ -1,0 +1,2 @@
+# BUILD-HOST tooling deps — installed by `npm install` in this dir, never committed.
+node_modules/

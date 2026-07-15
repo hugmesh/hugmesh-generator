@@ -5,7 +5,8 @@ Before this directory, the `.gitlab-ci.yml` `build:images` job was an **echo stu
 path existed** — first-party app images (gateway, frontends, BFFs, games, …) built only in
 the GitLab org mirror. This directory is that missing in-cluster path: a **reusable, generic**
 rootless-Kaniko build pipeline that builds an app image from its repo and pushes it to the
-in-cluster GitLab registry (`registry.snapdragon.systems`).
+in-cluster Harbor registry (`registry.snapdragon.systems`; see `../../apps/03a-harbor.yaml` —
+GitLab's own bundled registry no longer serves this hostname).
 
 It is **modeled 1:1 on the proven [#110](../service-catalog-builder/) Service-Catalog Kaniko
 builder** — same rootless `gcr.io/kaniko-project/executor` floor, same security posture, same
@@ -22,7 +23,7 @@ Dockerfile rather than only Service-Catalog DOCKERFILE/ZIP sources.
   matches the platform build Jobs: `runAsNonRoot`, drop `ALL` caps, `seccompProfile: RuntimeDefault`,
   `readOnlyRootFilesystem` (Kaniko workdir on `emptyDir`), `automountServiceAccountToken:false`,
   `ttlSecondsAfterFinished` + `activeDeadlineSeconds` reaping. A dedicated MCS level
-  (`s0:c55`, distinct from #110's `s0:c54`) keeps build pods off the runtime-app bands.
+  (`s0:c75`, distinct from #110's `s0:c54`) keeps build pods off the runtime-app bands.
 
   **Tag scheme (immutable + moving), pushed from ONE build.** The template carries TWO
   `--destination` flags so a single Kaniko build pushes both, guaranteeing byte-identical
@@ -65,15 +66,18 @@ Two layers of inertness:
   `specs/cluster/apps/`). So the Application is never synced until an operator copies it into
   `specs/cluster/apps/`. **Merging this PR therefore changes nothing live.**
 
-Registry push creds (`image-builder-registry`, a `dockerconfigjson` with **push**
-(`write_registry`) scope for `registry.snapdragon.systems`) are **ESO-materialized** into the
-build namespace — **never in git** — by the `image-builder-registry` ExternalSecret
+Registry push creds (`image-builder-registry`, a `dockerconfigjson` with **push** scope for
+`registry.snapdragon.systems`) are **ESO-materialized** into the build namespace — **never in
+git** — by the `image-builder-registry` ExternalSecret
 (`../external-secrets/image-builder-externalsecrets.yaml`, wired into the ESO kustomization).
-It sources Vault `secret/<brand>/image-builder-registry` (`username`/`token`), seeded with a
-placeholder by `scripts/gen-cluster-secrets.sh` that the operator replaces post-bootstrap with
-a real **`write_registry`** group deploy token. It is DELIBERATELY distinct from the runtime
-`gitlab-registry` **pull** (`read_registry`) imagePullSecret so the runtime pull credential can
-never push. Mirrors the #110 `service-catalog-builder-registry` contract.
+It sources Vault `secret/<brand>/harbor-robots` (`push_name`/`push_secret`) — Harbor's
+project-scoped PUSH robot account, minted automatically by the `harbor-provision` PostSync Job
+(`../harbor/harbor-provision-job.yaml`; Harbor reveals a robot's secret exactly once, so that
+Job captures and writes it to Vault the moment it's created). `scripts/gen-cluster-secrets.sh`'s
+`IMAGE_BUILDER_REGISTRY_TOKEN` remains only as a manual-override escape hatch for local/offline
+testing. It is DELIBERATELY distinct from the runtime `harbor-registry` **pull**-scoped robot
+imagePullSecret (formerly `gitlab-registry`) so the runtime pull credential can never push.
+Mirrors the #110 `service-catalog-builder-registry` contract.
 
 ## Live validation pending
 

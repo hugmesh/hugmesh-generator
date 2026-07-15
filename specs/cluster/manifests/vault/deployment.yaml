@@ -69,7 +69,28 @@ data:
     api_addr     = "https://vault.vault.svc.cluster.local:8200"
     cluster_addr = "https://vault.vault.svc.cluster.local:8201"
 
-    disable_mlock = false
+    # disable_mlock: found during the first real bring-up of this tree that
+    # `false` here never actually worked — CAP_IPC_LOCK, added via this
+    # container's `capabilities.add`, does NOT reliably survive Kubernetes'
+    # non-root + exec chain (Kubernetes only sets the Bounding/Effective/
+    # Permitted/Inheritable capability sets, not Ambient — a documented K8s
+    # limitation — so the capability is lost the moment docker-entrypoint.sh
+    # execve()s the actual `vault` binary; a UID transition, e.g. the su-exec
+    # step this manifest works around above, clears it even earlier). Vault
+    # then hard-failed at startup with "Error initializing core: Failed to
+    # lock memory: cannot allocate memory" — mlock() hitting the container's
+    # default (tiny) RLIMIT_MEMLOCK with no capability to bypass it. Disabling
+    # mlock here is HashiCorp's own documented/endorsed practice for exactly
+    # this class of containerized, non-privileged deployment (see Vault's
+    # docker-compose reference config and the official Helm chart, both of
+    # which also plumb the same disable_mlock knob). Trade-off: Vault's
+    # secret-holding memory pages are no longer guaranteed non-swappable.
+    # Documented, not silently accepted — see the PR that introduced this
+    # comment for the follow-up (grant the capability for real, e.g. via a
+    # runtime/CRI configuration that sets Ambient capabilities, or accept the
+    # swap-page exposure given this pki node already has no swap enabled by
+    # keys-provision's own defaults).
+    disable_mlock = true
 ---
 # Bootstrap TLS material generator. Prefers the cluster CA (the `cluster-ca`
 # Secret keys-provision seeds from the USB stick) so the Vault server cert chains
@@ -190,13 +211,36 @@ spec:
       initContainers:
         # Generate the listener TLS material (cluster-CA-signed, else self-signed)
         # into the shared /vault/tls tmpfs BEFORE Vault starts.
+        #
+        # Image: NOT hashicorp/vault (found during the first real kind bring-up
+        # of this tree) — that image ships only the `vault` binary, no shell
+        # utilities beyond a minimal busybox `sh`, and critically NO `openssl`
+        # binary at all. gen-tls.sh calls `openssl` in BOTH branches (the
+        # cluster-CA-signed path and the DEV self-signed fallback), so every
+        # run of this init container failed identically with "openssl: not
+        # found" regardless of whether /ca was mounted. alpine/openssl is a
+        # small (~14MB), actively published image whose only job is bundling a
+        # real openssl(1) CLI on Alpine — verified present (`openssl version`
+        # succeeds) before pinning here. Pinned by digest: the repo publishes
+        # no versioned tags, only a rolling `latest`.
         - name: vault-tls-init
-          image: hashicorp/vault:1.21.4
+          image: alpine/openssl@sha256:a31e47e338dac84c48788c23bb003be27ed325b7a2185d359f22e3ba4e78bcab
           command: ["/bin/sh", "/scripts/gen-tls.sh"]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
+            # Match the `vault` container's uid/gid (below) so the tls.key
+            # gen-tls.sh writes with `chmod 0600` (owner-only, deliberately —
+            # least privilege beats loosening it to group-readable) is
+            # actually READABLE by the process that needs it. Found during
+            # the first real bring-up of this tree: once the vault container
+            # stopped running as root (see its runAsUser comment), it got
+            # "error loading TLS cert: open /vault/tls/tls.key: permission
+            # denied" against a key this init container had left owned by
+            # its own (different) default uid.
+            runAsUser: 100
+            runAsGroup: 1000
           volumeMounts:
             - { name: tls-init, mountPath: /scripts, readOnly: true }
             - { name: ca,       mountPath: /ca,      readOnly: true }
@@ -207,7 +251,29 @@ spec:
           image: hashicorp/vault:1.21.4   # pinned to latest stable 1.x; evaluate the 2.x major separately
           # Real server (NOT -dev): in-memory storage + auto-unseal + the dev root
           # token are gone. Vault reads the Raft + TLS config from /vault/config.
-          args: ["server", "-config=/vault/config/config.hcl"]
+          #
+          # args is just ["server"] — NOT ["server", "-config=/vault/config/config.hcl"]
+          # (found live on the kind bring-up: the latter CrashLoopBackOff'd every
+          # single restart, including a freshly-recreated pod with a clean network
+          # namespace, with "Error initializing listener of type tcp: listen tcp4
+          # 0.0.0.0:8200: bind: address already in use" — deterministic, not a
+          # restart race). Root cause: the official image's docker-entrypoint.sh
+          # ALWAYS rewrites a bare `server` arg into
+          #   vault server -config="$VAULT_CONFIG_DIR" -dev-root-token-id=... \
+          #     -dev-listen-address=0.0.0.0:8200 "$@"
+          # where VAULT_CONFIG_DIR=/vault/config and "$@" is whatever args this
+          # manifest passed after `server`. Passing an explicit
+          # -config=/vault/config/config.hcl here made Vault receive TWO -config
+          # flags pointing at the same config.hcl (once via the auto-added
+          # directory scan, once via the explicit file path), so the single
+          # `listener "tcp"` stanza got registered twice in one process — the
+          # second bind() on :8200 collided with the first. The ConfigMap mount
+          # already puts config.hcl directly in /vault/config, so the
+          # entrypoint's own auto-appended `-config=/vault/config` is sufficient;
+          # passing it a second time is redundant and, per the above, actively
+          # broken. Live-verified: with args trimmed to ["server"] alone, vault-0
+          # starts clean with a single listener and reaches the readiness probe.
+          args: ["server"]
           env:
             - name: VAULT_ADDR
               value: "https://127.0.0.1:8200"
@@ -216,12 +282,42 @@ spec:
             # Raft cluster address (advertised to itself; single node).
             - name: VAULT_API_ADDR
               value: "https://vault.vault.svc.cluster.local:8200"
+            # The image's docker-entrypoint.sh setcap's the vault binary with
+            # cap_ipc_lock=+ep on every start. That setcap SYSCALL itself
+            # needs CAP_SETFCAP, which `capabilities: drop: [ALL]` below
+            # deliberately doesn't grant — so, unfixed, every start hard-
+            # failed with "unable to set CAP_SETFCAP effective capability:
+            # Operation not permitted" and the pod CrashLoopBackOff'd before
+            # Vault ever ran (found during the first real bring-up of this
+            # tree). SKIP_SETCAP disables that step (moot anyway now that
+            # config.hcl's disable_mlock=true no longer needs CAP_IPC_LOCK at
+            # all — see that comment). SKIP_CHOWN silences the companion
+            # (non-fatal) "Could not chown /vault/config" warning — that
+            # ConfigMap-backed mount can never usefully be chowned anyway.
+            - name: SKIP_SETCAP
+              value: "true"
+            - name: SKIP_CHOWN
+              value: "true"
           securityContext:
-            # mlock secret memory so keys never swap to disk.
             allowPrivilegeEscalation: false
             capabilities:
               add: ["IPC_LOCK"]
               drop: ["ALL"]
+            # Run AS the image's own `vault` user (uid 100/gid 1000 — gid
+            # matches this pod's fsGroup above) directly, rather than as root.
+            # docker-entrypoint.sh's LAST step (after the SKIP_CHOWN/
+            # SKIP_SETCAP-gated ones above) is `if [ "$(id -u)" = '0' ]; then
+            # set -- su-exec vault "$@"; fi` — with `capabilities: drop: [ALL]`
+            # that su-exec's own setgroups()/setuid() calls need (CAP_SETGID/
+            # CAP_SETUID) aren't available, so it failed with "su-exec:
+            # setgroups: Operation not permitted" and the container exited
+            # (found during the first real bring-up of this tree, immediately
+            # after fixing the SKIP_SETCAP/SKIP_CHOWN issue above). Running as
+            # uid 100 from the start makes that `id -u = 0` check false, so
+            # entrypoint.sh skips su-exec entirely and just execs vault
+            # directly — no privilege-drop capability needed at all.
+            runAsUser: 100
+            runAsGroup: 1000
           ports:
             - { name: https,   containerPort: 8200 }
             - { name: cluster, containerPort: 8201 }

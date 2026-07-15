@@ -9,12 +9,28 @@ instance:
 
 replicaCount: 1
 
+# PRE-EXISTING BUG, fixed during the Harbor migration: `repository` had NO
+# registry-host prefix at all (just "snapdragon-systems/gateway"), so a
+# deployment would have resolved this image against Docker Hub, not the
+# in-cluster registry — while .gitlab-ci.yml's build:images job has always
+# pushed to registry.snapdragon.systems/snapdragon/snapdragon-gateway. Fixed to
+# match that same push destination and every other kustomization's `newName`
+# convention (registry.snapdragon.systems/snapdragon/<repo>). The registry
+# behind this hostname is now Harbor (apps/03a-harbor.yaml), not GitLab's
+# bundled one — see that Application's header comment for why the hostname
+# itself is unchanged.
 image:
-  repository: snapdragon-systems/gateway
+  repository: registry.snapdragon.systems/snapdragon/snapdragon-gateway
   tag: dev
   pullPolicy: IfNotPresent
 
-imagePullSecrets: []
+# Harbor's pull-scoped robot-account imagePullSecret (see
+# manifests/external-secrets/secretstore.yaml's harbor-registry ExternalSecret,
+# renamed from gitlab-registry) — was empty here, which was consistent with the
+# Docker-Hub-resolving bug above (a public-image pull needs no secret) but wrong
+# once the repository actually points at Harbor.
+imagePullSecrets:
+  - name: harbor-registry
 serviceAccount:
   create: true
   name: ""
@@ -43,7 +59,12 @@ casdoor:
 cassandra:
   contactPoints: cassandra.snapdragon-pki.svc.cluster.local:9042
   keyspace: snapdragon_gateway
-  localDc: dc1
+  # The official Cassandra image's SimpleSnitch default datacenter is
+  # "datacenter1" (nodetool status), not "dc1" — confirmed live against a bare
+  # `cassandra:5` container with this same env (see compose.local.yaml's
+  # identical fix, generator#261). A mismatched local-dc means the driver's
+  # NoNodeAvailableException on every boot.
+  localDc: datacenter1
 
 # Downstream routes rendered into an application-routes.yml ConfigMap and
 # loaded via SPRING_CONFIG_ADDITIONAL_LOCATION. id/uri/path per route.
@@ -52,7 +73,9 @@ routes:
     uri: http://snapdragon-api.snapdragon-backend.svc.cluster.local:8080
     path: /api/**
 
-# Extra raw environment variables, e.g. SPRING_PROFILES_ACTIVE.
+# Extra raw environment variables. SPRING_PROFILES_ACTIVE=routes is now set
+# unconditionally in deployment.yaml (the routes ConfigMap needs it to load at
+# all — see that file's comment); do not re-set it here.
 extraEnv: []
 
 # Per-app mTLS keystore, built at startup from the Vault-PKI-issued, ESO-synced

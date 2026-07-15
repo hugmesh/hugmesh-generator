@@ -9,6 +9,6 @@
     "test:rbac:contract": "playwright test -c playwright.config.ts --reporter=list 12-rbac-gateway-route-access 16-rbac-mod-sibling-scope 18-rbac-phase8-10-pending"
   },
   "devDependencies": {
-    "@playwright/test": "^1.49.0"
+    "@playwright/test": "~1.61.1"
   }
 }

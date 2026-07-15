@@ -61,7 +61,7 @@ Vault-managed mTLS keystore:
 | `casdoor` | per-app SA | `s0:c21` | (IdP) | (non-Java: PEM, no JKS) |
 | `casdoor-pg` | per-app SA | `s0:c14` | (DB) | — |
 | `signup-gate` | per-app SA | `s0:c36` | per-app svc user | — |
-| `media-poisoner` | per-app SA | `s0:c18` | — | — |
+| `media-poisoner` | per-app SA | `s0:c18` | — | (non-Java: PEM, no JKS) |
 | `egress-proxy` | per-app SA | `s0:c37` | — | — |
 | `binhost` | per-app SA | `s0:c60` | — | — |
 | `vault` | per-app SA | `s0:c70` | — | — |
@@ -89,6 +89,9 @@ Vault-managed mTLS keystore:
 | `velero-node-agent` (Kopia filesystem/PV backups) | `velero` | `s0:c65` | — | (non-Java: no JKS) |
 | `backups-status-sweep` (cloud-backup CR-status sweep CronJob) | `backups-sweep` | `s0:c66` | — | (non-Java: no JKS) |
 | coturn (TURN/STUN — optional, default-off) | `sa-coturn` | `s0:c67` | per-app svc user | (non-Java: no JKS) |
+| `edge-ai` (ollama inference — GPU) | per-app SA | `s0:c73` | — | (non-Java: no JKS) |
+| `character-studio` (ui) | per-app SA | `s0:c74` | — | — |
+| `image-builder` (app-image Kaniko build pods) | (per-build) | `s0:c75` | (build pod) | (non-Java: no JKS) |
 
 The matrix is the contract: `seLinuxOptions.level` per Deployment (added to each
 chart/manifest), a `ServiceAccount` per app, a Casdoor service user+role created
@@ -228,10 +231,17 @@ charts), so all Java IO trusts the cluster CA.
 
 ## 6. Identity / login (recap)
 
-Casdoor (`id.<domain>`) is the single OIDC IdP. Human login/registration is
-Google/Discord-only and admin-allowlist-gated (two-stage). **Service users**
-(the per-app identities above) are separate Casdoor accounts with service roles;
-the gateways validate the Casdoor JWT and the `External-*` headers.
+Casdoor (`id.<domain>`) is the single OIDC IdP, reached **only from inside the
+cluster** — it has **no public ingress** and the browser never talks to it. Human
+login is a **native, first-party form**: `login-ui` POSTs username/password (+ any
+MFA passcode) to user-bff `POST /bff/login`, which runs PKCE + the internal Casdoor
+`/api/login` + code exchange server-side and returns only an opaque `bff_` session
+cookie (no JWT, `code_verifier`, `state`, or Casdoor URL ever reaches the client).
+Federated sign-up (Google/Discord) and registration stay admin-allowlist-gated
+(two-stage). **Service users** (the per-app identities above) are separate Casdoor
+accounts with service roles; the gateways validate the Casdoor JWT and the
+`External-*` headers. No gateway route proxies Casdoor's `/login/oauth/authorize`
+or its hosted UI to the browser.
 
 ## 7. Network — Calico via Vault, configured from KEYS
 
@@ -252,8 +262,10 @@ node). The mesh is governed by a **default-deny, tag-based ACL** shipped as
   `tag:pki`/`tag:be`/`tag:fe`/`tag:host`) at join via
   `tailscale up --advertise-tags=...`. `tagOwners` restricts those tags to the
   `snapdragon` headscale user (the preauth-key owner), so only enrolled nodes
-  can claim them. With OIDC join, the Casdoor `/headscale` group gates enrolment
-  — two independent membership layers.
+  can claim them. With OIDC join, the Casdoor `snapdragon/headscale` group
+  gates enrolment (`allowed_groups`, matching the group's real `<owner>/<name>`
+  claim shape — see `keys-template/headscale/config.yaml`) — two independent
+  membership layers.
 - **Full intra-fleet mesh.** The only `accept` rules are
   `tag:snapdragon → tag:snapdragon:*` (every node reaches every node, all ports)
   and `tag:snapdragon → {10.244.0.0/16, 10.96.0.0/12}:*` (pods + ClusterIP

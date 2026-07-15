@@ -42,12 +42,15 @@
 # map baked at provision time. nsPrefix/casdoorOrg have NO {{TOKEN}} slot in the 12 templates
 # today, so they are carried (and signature-covered) but currently unused by generation.
 #
-# WRITEBACK (deferred): admin-bff #118 has NO status-setter for ca_provisioned/appset_registered/
-# last_reconciled_generation (band-190 ships dark; the columns are written only by THIS future
-# effector over internal-mTLS, and no endpoint exists yet). This agent therefore records the
-# applied generation LOCALLY only (last-good-generation), exactly like egress-VPN's report_state.
-# The ack_generation() stub below is present-but-INERT (guarded behind an unset DOMAIN_ACK_URL,
-# never called) so the follow-up is a one-line enablement once the internal-mTLS setter lands.
+# WRITEBACK (Phase 5 — WIRED, enablement-gated): ack_generation() is now CALLED from main()
+# via writeback_acks() per acted-on domain, but stays a NO-OP unless DOMAIN_ACK_URL is set
+# (sourced from node.env BFF_ACK_URL). admin-bff #118 still has NO status-setter endpoint today
+# (band-190 ships dark) — so on a real node the acks 404 silently until the internal-mTLS setter
+# lands; ack_generation() swallows that ("BFF reconciles forward regardless"). The applied
+# generation is ALSO recorded LOCALLY (last-good-generation), exactly like egress-VPN's
+# report_state. EXECUTION-CONTEXT SPLIT: this ROOT cron acks the CRD generation IT drives; the
+# AUTHORITATIVE appsetRegistered comes from the build-host publish tail (publish-tenant-set.sh),
+# which is what actually pushes to Forgejo. The ack loop only reports booleans — no git/node here.
 
 set -uo pipefail
 
@@ -64,6 +67,22 @@ VERIFY_LIB="${DR_VERIFY_LIB:-/usr/lib/snapdragon/domain-verify.sh}"
 # are baked under /usr/share/snapdragon/generator/ by the builders — overridable for the test).
 GEN_KEYSTORES="${DR_GEN_KEYSTORES:-/usr/share/snapdragon/generator/scripts/gen-keystores.sh}"
 GEN_BRAND_REPOS="${DR_GEN_BRAND_REPOS:-/usr/share/snapdragon/generator/generate-brand-repos.sh}"
+# Phase 6 HARDENING SEAMS.
+# SECRET_SCAN: the node-free (pure bash+awk) emit-time secret scanner. It is run as a
+# HARD FAIL-CLOSED content gate on every rendered brand tree BEFORE that tree is promoted
+# into OUT_DIR and BEFORE any ack writeback — mirroring the DR_GEN_* override idiom so the
+# build-host fuzz suite can point it at the repo copy. If it is missing OR reports a finding
+# the tree is PURGED and the run is marked failed (fail-closed).
+SECRET_SCAN="${DR_SECRET_SCAN:-/usr/share/snapdragon/generator/scripts/secret-scan.sh}"
+# MAX_ENTRIES: DoS cap on the render loop. A signed-but-hostile export with a huge entries[]
+# must not fork an unbounded number of generate-brand-repos.sh runs. Exceeding the cap fails
+# the whole run closed (no partial emit, no writeback). Overridable for the test.
+DR_MAX_ENTRIES="${DR_MAX_ENTRIES:-256}"
+# Run-level fail flag (Phase 6): set by render_brand_repos()/run_ca_loop() when ANY entry's
+# emit or content scan fails. main() checks it BEFORE writeback + BEFORE bumping the monotonic
+# generation FLOOR, so a malicious-but-authentic export that fails the content gate raises NO
+# durable marker and fires NO ack. Reset per process.
+_DR_EMIT_FAILED=""
 # WRITEBACK target — DELIBERATELY UNSET. There is NO admin-bff status-setter endpoint today
 # (band-190 ships dark); leaving this empty keeps ack_generation() inert. A follow-up PR sets
 # DOMAIN_ACK_URL (or reads it from node.env) once the internal-mTLS setter lands.
@@ -138,16 +157,60 @@ fetch_export() {
     warn "fetch failed (${url}) — keeping cache"; return 1
 }
 
-# ── (4) atomic cache swap + last-good bump (tmp + fsync + rename) ──────────────────
+# ── (4) atomic cache swap (tmp + fsync + rename) ───────────────────────────────────
+# Phase 6 SPLIT: this now swaps ONLY export.json (the keep-last-good bytes). The
+# last-good-generation FLOOR bump (the durable monotonic rollback MARKER) is split out
+# into commit_generation_floor() and DEFERRED to AFTER a clean emit+scan of all entries.
+# RATIONALE: a malicious-but-AUTHENTIC export passes verify (it is genuinely signed) and
+# used to raise the monotonic floor here, at L413, BEFORE render/scan — a durable marker
+# in violation of "no marker before the content gate". By deferring the floor bump, an
+# export that fails the content gate leaves the floor untouched, so the admin-bff can
+# re-issue a corrected export at the same or a higher generation. The export.json cache
+# swap stays here because keep-last-good rollback needs the last VERIFIED bytes regardless
+# of whether THIS run's content gate passed.
 commit_cache() {
-    local newjson="$1" newgen="$2"
+    local newjson="$1"
     local tmp="${EXPORT_JSON}.tmp.$$"
     cp -f "${newjson}" "${tmp}" 2>/dev/null || { warn "cache stage failed"; return 1; }
     have sync && sync 2>/dev/null || true
     mv -f "${tmp}" "${EXPORT_JSON}" 2>/dev/null || { warn "cache rename failed"; rm -f "${tmp}"; return 1; }
+    log "accepted domain export (cross-domain set; cache swapped — floor bump deferred to post-scan)"
+    return 0
+}
+
+# ── (4b) monotonic generation FLOOR bump — DEFERRED past the content gate ───────────
+# Called from main() ONLY after build+render+scan of ALL acted-on entries came back clean
+# (_DR_EMIT_FAILED unset). Raising this floor is a DURABLE rollback marker; doing it only
+# after a clean emit guarantees a content-failing (but authentic) export cannot advance it.
+commit_generation_floor() {
+    local newgen="$1"
     local lgt="${LAST_GOOD}.tmp.$$"
     printf '%s\n' "${newgen}" > "${lgt}" 2>/dev/null && mv -f "${lgt}" "${LAST_GOOD}" 2>/dev/null || rm -f "${lgt}"
-    log "accepted domain export gen=${newgen} (cross-domain set; cache swapped)"
+    log "bumped last-good-generation FLOOR to gen=${newgen} (clean emit+scan; durable marker)"
+    return 0
+}
+
+# ── (4c) DoS entry-count cap — enforced BEFORE any per-entry work in main() ─────────
+# THE cap must fire before build_domains_conf() AND run_ca_loop(), because main() runs
+# BOTH of those FIRST (they each iterate ALL n entries — ~5 jq forks per row in
+# build_domains_conf, one openssl root-CA/keystore per row in run_ca_loop) and only THEN
+# calls render_brand_repos(). A cap that lived only inside render_brand_repos() (as it did
+# through the first Phase-6 cut) let a signed-but-hostile export with a huge entries[]
+# exhaust the root cron in build_domains_conf/run_ca_loop before the cap was ever reached.
+# So the count gate is hoisted to the TOP of the emit block. On breach it sets
+# _DR_EMIT_FAILED and returns 1 so main() aborts to the fail-closed decision point with
+# NO per-entry fork, NO durable marker, and NO ack writeback.
+export_entries_within_cap() {
+    local export_json="$1"
+    have jq || { warn "jq absent — cannot count entries, failing closed"; _DR_EMIT_FAILED=1; return 1; }
+    local n
+    n="$(jq -r '.body.entries | length' "${export_json}" 2>/dev/null || echo 0)"
+    [[ "${n}" =~ ^[0-9]+$ ]] || n=0
+    if [ "${n}" -gt "${DR_MAX_ENTRIES}" ]; then
+        warn "export has ${n} entries > DR_MAX_ENTRIES=${DR_MAX_ENTRIES} — refusing (DoS guard) BEFORE build_domains_conf/run_ca_loop, failing closed"
+        _DR_EMIT_FAILED=1
+        return 1
+    fi
     return 0
 }
 
@@ -248,6 +311,76 @@ run_ca_loop() {
 # generate-brand-repos.sh REQUIRES a brand profile shell file setting BRAND, BRAND_TITLE, ORG,
 # CLUSTER_DOMAIN, HEADSCALE_URL, MESH_TAG. We synthesise a transient profile per entry from the
 # verified export, DERIVING the two missing fields (BRAND_TITLE/HEADSCALE_URL — see header).
+#
+# PHASE 6 FAIL-CLOSED GATE. The render no longer writes straight into the published OUT_DIR.
+# Each entry is rendered into a per-run QUARANTINE (OUT_DIR/.staging/<brand>-gitops), then the
+# emit-time secret scanner (SECRET_SCAN, node-free) gates that tree. Only a scanned-CLEAN tree
+# is atomically PROMOTED (mv) into OUT_DIR/<brand>-gitops; a scan finding OR a generate failure
+# PURGES the staging tree and sets the run-level _DR_EMIT_FAILED flag, which main() reads to
+# skip the ack writeback and the generation-floor bump. This guarantees no scan-failing tree is
+# ever durable in the published OUT_DIR and no ack fires on any content failure.
+#
+# NO-NETWORK invariant (see docs/MESH-TEMPLATING.md): generate-brand-repos.sh is invoked with
+# the DEFAULT sed engine (NO --engine passed — the handlebars path execs node and must never run
+# on this root path) and with OFFLINE=1 exported, so any future/refactored base resolution fails
+# closed instead of pulling. The transient profile is synthesised with printf %q and carries only
+# brand-delta fields; it never sets ENGINE.
+_dr_realpath_under() {   # 0 iff realpath($2) is strictly under realpath($1)
+    local base_abs child_abs
+    base_abs="$(realpath -m -- "$1" 2>/dev/null)" || return 1
+    child_abs="$(realpath -m -- "$2" 2>/dev/null)" || return 1
+    case "${child_abs}/" in "${base_abs}"/*) return 0 ;; *) return 1 ;; esac
+}
+
+# render_and_scan_profile PROFILE BRAND OUT_DIR
+# Render ONE synthesised/crafted profile through the hardened quarantine gate. Exposed as a
+# function so the fuzz suite can drive the EXACT gate wiring with attacker-controlled profile
+# fields (the reconcile path currently derives BRAND_TITLE from the slug, but a future #118
+# brandTitle field would flow through here verbatim). Returns 0 on a clean promote, non-zero on
+# any generate/scan failure (and sets _DR_EMIT_FAILED so the run fails closed).
+render_and_scan_profile() {
+    local prof="$1" brand="$2" out_dir="$3"
+    local staging="${out_dir}/.staging"
+    # Anchor the quarantine + promote target strictly under OUT_DIR (root-owned base).
+    _dr_realpath_under "${out_dir}" "${staging}" \
+        || { warn "staging dir escapes OUT_DIR — refusing"; _DR_EMIT_FAILED=1; return 1; }
+    _dr_realpath_under "${out_dir}" "${out_dir}/${brand}-gitops" \
+        || { warn "promote target escapes OUT_DIR — refusing brand '${brand}'"; _DR_EMIT_FAILED=1; return 1; }
+    rm -rf "${staging}/${brand}-gitops" 2>/dev/null || true
+    mkdir -p "${staging}" 2>/dev/null || true
+    # Render into QUARANTINE (never straight into OUT_DIR). sed engine pinned (no --engine),
+    # OFFLINE=1 forbids any network base resolution on this root path.
+    if ! OFFLINE=1 bash "${GEN_BRAND_REPOS}" "${prof}" --out-dir "${staging}" >/dev/null 2>&1; then
+        warn "generate-brand-repos.sh FAILED for '${brand}' — purging staging, failing closed"
+        rm -rf "${staging}/${brand}-gitops" 2>/dev/null || true
+        _DR_EMIT_FAILED=1
+        return 1
+    fi
+    # HARD content gate: the node-free secret scanner MUST be present and clean.
+    if [ ! -r "${SECRET_SCAN}" ]; then
+        warn "secret-scan.sh missing at ${SECRET_SCAN} — failing closed (no unscanned promote)"
+        rm -rf "${staging}/${brand}-gitops" 2>/dev/null || true
+        _DR_EMIT_FAILED=1
+        return 1
+    fi
+    if ! bash "${SECRET_SCAN}" "${staging}/${brand}-gitops" >/dev/null 2>&1; then
+        warn "secret-scan FLAGGED the rendered tree for '${brand}' — purging staging, NOT promoting"
+        rm -rf "${staging}/${brand}-gitops" 2>/dev/null || true
+        _DR_EMIT_FAILED=1
+        return 1
+    fi
+    # Clean: atomically PROMOTE the scanned tree into the published OUT_DIR.
+    rm -rf "${out_dir}/${brand}-gitops" 2>/dev/null || true
+    if ! mv -f "${staging}/${brand}-gitops" "${out_dir}/${brand}-gitops" 2>/dev/null; then
+        warn "promote failed for '${brand}' — failing closed"
+        rm -rf "${staging}/${brand}-gitops" 2>/dev/null || true
+        _DR_EMIT_FAILED=1
+        return 1
+    fi
+    log "promoted scanned-clean brand repo -> ${out_dir}/${brand}-gitops/"
+    return 0
+}
+
 render_brand_repos() {
     local export_json="$1"
     [ -r "${GEN_BRAND_REPOS}" ] || { warn "generate-brand-repos.sh not baked at ${GEN_BRAND_REPOS} — skipping brand repos"; return 1; }
@@ -255,6 +388,16 @@ render_brand_repos() {
     mkdir -p "${OUT_DIR}" 2>/dev/null || true
     local n i dom brand org mesh ns casdoor ca_prov appset prof
     n="$(jq -r '.body.entries | length' "${export_json}" 2>/dev/null || echo 0)"
+    [[ "${n}" =~ ^[0-9]+$ ]] || n=0
+    # DoS cap (DEFENSE-IN-DEPTH): main() now enforces export_entries_within_cap() BEFORE
+    # build_domains_conf/run_ca_loop, so on the real path this branch is redundant. It is kept
+    # so a DIRECT caller of render_brand_repos() (e.g. the fuzz suite, or a future refactor that
+    # calls this without the main() preamble) still fails the WHOLE run closed before the loop.
+    if [ "${n}" -gt "${DR_MAX_ENTRIES}" ]; then
+        warn "export has ${n} entries > DR_MAX_ENTRIES=${DR_MAX_ENTRIES} — refusing (DoS guard), failing closed"
+        _DR_EMIT_FAILED=1
+        return 1
+    fi
     for ((i = 0; i < n; i++)); do
         dom="$(jq -r ".body.entries[$i].clusterDomain // empty" "${export_json}" 2>/dev/null)"
         brand="$(jq -r ".body.entries[$i].brand // empty" "${export_json}" 2>/dev/null)"
@@ -289,22 +432,25 @@ render_brand_repos() {
             printf '# NS_PREFIX=%q  (export-only; no template token yet)\n' "${ns}"
             printf '# CASDOOR_ORG=%q (export-only; no template token yet)\n' "${casdoor}"
         } > "${prof}"
-        log "rendering brand repo for ${brand} (${dom}) -> ${OUT_DIR}/${brand}-gitops/"
-        bash "${GEN_BRAND_REPOS}" "${prof}" --out-dir "${OUT_DIR}" \
-            || warn "generate-brand-repos.sh failed for ${brand} (${dom})"
+        log "rendering brand repo for ${brand} (${dom}) -> quarantine -> scan -> promote"
+        render_and_scan_profile "${prof}" "${brand}" "${OUT_DIR}" \
+            || warn "brand repo for ${brand} (${dom}) failed the fail-closed gate (quarantined, not promoted)"
         rm -f "${prof}" 2>/dev/null || true
     done
+    # Best-effort purge of any residual quarantine tree.
+    rm -rf "${OUT_DIR}/.staging" 2>/dev/null || true
+    [ -z "${_DR_EMIT_FAILED}" ] || return 1
     return 0
 }
 
-# ── WRITEBACK STUB — INERT (never called; guarded behind an unset DOMAIN_ACK_URL) ──
-# admin-bff #118 has NO status-setter for ca_provisioned/appset_registered/last_reconciled_
-# generation (band-190 ships dark). When the internal-mTLS setter lands, the follow-up PR sets
-# DOMAIN_ACK_URL and calls this once per applied generation. The likely shape (mirroring
+# ── WRITEBACK — WIRED (Phase 5); enablement-gated behind DOMAIN_ACK_URL ────────────
+# Called from main() via writeback_acks() per acted-on domain. Stays a NO-OP when
+# DOMAIN_ACK_URL is empty (default: node.env has no BFF_ACK_URL). admin-bff #118 has NO
+# status-setter endpoint today (band-190 ships dark); when the internal-mTLS setter lands,
+# node.env gains BFF_ACK_URL and these acks start landing. Shape (mirrors
 # ImageBuildIngestController's /bff/internal/** permitAll()+mTLS pattern):
 #   POST <ACK>/bff/internal/domains/<clusterDomain>/reconcile-ack
 #        { caProvisioned, appsetRegistered, generation }
-# It is present so enabling writeback is a one-line change; it is NEVER invoked from main().
 ack_generation() {
     local dom="$1" ca_prov="$2" appset="$3" gen="$4"
     [ -n "${DOMAIN_ACK_URL}" ] || return 0    # INERT: no setter endpoint exists yet
@@ -317,6 +463,51 @@ ack_generation() {
     [ -n "${MTLS_CERT}" ] && [ -n "${MTLS_KEY}" ] && args+=(--cert "${MTLS_CERT}" --key "${MTLS_KEY}")
     curl "${args[@]}" "${url}" 2>/dev/null && log "acked ${dom} gen=${gen}" \
         || log "ack ${dom} best-effort failed (BFF reconciles forward regardless)"
+    return 0
+}
+
+# ── (6) WRITEBACK loop — ack per registered-not-provisioned domain ─────────────────
+# Wires the (formerly INERT) ack_generation() into main(). For each entry that this
+# reconcile acted on, derive two booleans FROM THE EMITTED STAGING ARTIFACTS and ack:
+#   caProvisioned    := this domain's keystore tree exists under ${OUT_DIR}/keys/<brand>
+#                       (gen-keystores.sh writes ${KS}/${brand}); the CA loop succeeded.
+#   appsetRegistered := this domain's brand-repo GitOps tree was emitted under
+#                       ${OUT_DIR}/<brand>-gitops/apps (generate-brand-repos.sh output).
+#
+# EXECUTION-CONTEXT SPLIT (flagged honestly): this ROOT cron drives the sed-path
+# 12/13-CRD generate-brand-repos.sh ONLY — it does NOT render the Phase-4/5 FULL
+# trees and does NOT git-push (node/git must never run as root here). So the
+# appsetRegistered this cron acks reflects the CRD generation IT drives; the
+# AUTHORITATIVE appsetRegistered comes from the BUILD-HOST publish tail
+# (scripts/publish-tenant-set.sh), which actually pushes to Forgejo and whose
+# 13d ApplicationSet is the discovery source. The ack loop only REPORTS booleans —
+# it renders/pushes nothing. When DOMAIN_ACK_URL is unset, ack_generation() no-ops.
+#
+# DEFERRED RISK (recorded): the admin-bff #118 setter endpoint does not exist yet
+# (band-190 dark). ack_generation() swallows failure ("BFF reconciles forward
+# regardless"), so until the endpoint lands acks 404 silently — enabling writeback
+# early cannot corrupt state, but a false status could go undetected. See header.
+writeback_acks() {
+    local export_json="$1" gen="$2"
+    [ -n "${DOMAIN_ACK_URL}" ] || { log "writeback: DOMAIN_ACK_URL unset — acks INERT (deferred; no admin-bff setter)"; return 0; }
+    have jq || { warn "writeback: jq absent — cannot iterate entries"; return 1; }
+    local n i dom brand ca_prov_flag appset_flag ca_done appset_done
+    n="$(jq -r '.body.entries | length' "${export_json}" 2>/dev/null || echo 0)"
+    for ((i = 0; i < n; i++)); do
+        dom="$(jq -r ".body.entries[$i].clusterDomain // empty" "${export_json}" 2>/dev/null)"
+        brand="$(jq -r ".body.entries[$i].brand // empty" "${export_json}" 2>/dev/null)"
+        ca_prov_flag="$(jq -r ".body.entries[$i].caProvisioned // false" "${export_json}" 2>/dev/null)"
+        appset_flag="$(jq -r ".body.entries[$i].appsetRegistered // false" "${export_json}" 2>/dev/null)"
+        [ -n "${dom}" ] || continue
+        # Only acked the domains this run acted on (registered-not-provisioned).
+        if [ "${ca_prov_flag}" = "true" ] && [ "${appset_flag}" = "true" ]; then continue; fi
+        [ -n "${brand}" ] || brand="${dom%%.*}"
+        entry_fields_ok "${brand}" "${dom}" || continue
+        # Derive outcomes from emitted staging artifacts.
+        ca_done=false;     [ -d "${OUT_DIR}/keys/${brand}" ] && ca_done=true
+        appset_done=false; [ -d "${OUT_DIR}/${brand}-gitops/apps" ] && appset_done=true
+        ack_generation "${dom}" "${ca_done}" "${appset_done}" "${gen}"
+    done
     return 0
 }
 
@@ -338,6 +529,14 @@ main() {
     MTLS_CERT="$(read_env BFF_CLIENT_CERT)" || MTLS_CERT=""
     MTLS_KEY="$(read_env BFF_CLIENT_KEY)"   || MTLS_KEY=""
     MTLS_CA="$(read_env BFF_CA)"            || MTLS_CA="/etc/snapdragon/pki/ca-chain.crt"
+    # WRITEBACK enablement (Phase 5): source DOMAIN_ACK_URL from node.env BFF_ACK_URL
+    # if present. When node.env omits it (today's default), DOMAIN_ACK_URL stays the
+    # empty value set at the top and ack_generation() remains INERT — no behaviour
+    # change on a node whose node.env has not opted in. A pre-set DOMAIN_ACK_URL env
+    # (test harness) is NOT overwritten by an absent node.env key.
+    if [ -z "${DOMAIN_ACK_URL}" ]; then
+        DOMAIN_ACK_URL="$(read_env BFF_ACK_URL)" || DOMAIN_ACK_URL=""
+    fi
 
     local fetched; fetched="$(mktemp 2>/dev/null)" || { warn "mktemp failed — keeping cache"; exit 0; }
     trap 'rm -f "${fetched}" 2>/dev/null || true' EXIT
@@ -353,19 +552,45 @@ main() {
     fi
     local gen; gen="$(rv_gen "${fetched}")"
 
-    # (4) atomic swap.
-    commit_cache "${fetched}" "${gen}" || exit 0
+    # (4) atomic export.json swap (keep-last-good bytes). The generation FLOOR bump is
+    # DEFERRED (commit_generation_floor) to AFTER a clean emit+scan — see the function header.
+    commit_cache "${fetched}" || exit 0
 
-    # (5) EMIT: synthesise rows -> CA loop -> brand repos (per registered-not-provisioned domain).
-    if build_domains_conf "${EXPORT_JSON}"; then
-        run_ca_loop
-        render_brand_repos "${EXPORT_JSON}"
+    # (5) EMIT: synthesise rows -> CA loop -> brand repos (per registered-not-provisioned
+    # domain). render_brand_repos() renders each entry into a QUARANTINE, runs the emit-time
+    # secret scanner as a HARD gate, and promotes ONLY scanned-clean trees; on ANY generate/
+    # scan failure it purges the tree and sets _DR_EMIT_FAILED.
+    _DR_EMIT_FAILED=""
+    # (5.0) DoS entry-count cap FIRST — build_domains_conf() and run_ca_loop() below each
+    # iterate ALL entries, so the cap MUST gate them, not just render_brand_repos(). A breach
+    # sets _DR_EMIT_FAILED and skips the whole emit block, dropping through to the fail-closed
+    # decision point with no per-entry fork, no floor bump, no ack.
+    if export_entries_within_cap "${EXPORT_JSON}"; then
+        if build_domains_conf "${EXPORT_JSON}"; then
+            run_ca_loop
+            render_brand_repos "${EXPORT_JSON}"
+        fi
     fi
 
-    # (6) WRITEBACK is DEFERRED — ack_generation() is INERT (DOMAIN_ACK_URL unset; never called).
-    # The applied generation is recorded LOCALLY (last-good-generation) by commit_cache above.
+    # (6) FAIL-CLOSED DECISION POINT. If any entry failed the content gate, abort BEFORE the
+    # ack writeback AND before bumping the durable generation FLOOR: no ack POST fires, no
+    # rollback marker advances. ack_generation() is unreachable on this branch.
+    if [ -n "${_DR_EMIT_FAILED}" ]; then
+        warn "one or more entries FAILED the fail-closed content gate — skipping writeback + floor bump (quarantined)"
+        report_state "quarantined"
+        log "domain-registry bridge: QUARANTINED — no durable marker, no ack (fail-closed)"
+        exit 1
+    fi
+
+    # Clean emit+scan of all acted-on entries: NOW it is safe to raise the monotonic floor.
+    commit_generation_floor "${gen}"
+
+    # (7) WRITEBACK — WIRED (Phase 5). ack_generation() is called per acted-on domain via
+    # writeback_acks(); it stays a no-op UNLESS DOMAIN_ACK_URL is set (from node.env
+    # BFF_ACK_URL). Only reached on a fully clean run.
+    writeback_acks "${EXPORT_JSON}" "${gen}"
     report_state "emitted"
-    log "domain-registry bridge: emitted artifacts under ${OUT_DIR} (writeback deferred — no admin-bff setter)"
+    log "domain-registry bridge: emitted artifacts under ${OUT_DIR} (writeback ${DOMAIN_ACK_URL:+enabled}${DOMAIN_ACK_URL:-inert — no admin-bff setter})"
     exit 0
 }
 

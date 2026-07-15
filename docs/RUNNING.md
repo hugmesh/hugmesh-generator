@@ -197,9 +197,10 @@ boot `growfs.conf` > baked `/etc/growfs.conf` > built-in `fill`).
 
 ### 2d. Mail + OAuth (optional, absent by default)
 
-With no SMTP creds and no OAuth creds the platform falls back to **Casdoor native
-user/pass login + admin-approval registration** — exactly what a LAN/test fleet
-uses. `MAIL_PROVIDER` (`protonmail`|`gmail`|`outlook`|`smtp`|`none`) only selects
+With no SMTP creds and no OAuth creds the platform falls back to its **native
+username/password login** (the first-party `login-ui` form → `POST /bff/login` →
+user-bff → internal Casdoor credentials; the browser never touches Casdoor) **+
+admin-approval registration** — exactly what a LAN/test fleet uses. `MAIL_PROVIDER` (`protonmail`|`gmail`|`outlook`|`smtp`|`none`) only selects
 the host/port/TLS preset; nothing is wired until `gen-cluster-secrets.sh` has a
 real `MAIL_USER`+`MAIL_PASSWORD`. The OAuth client ids/secrets (GitHub, Discord)
 are secrets supplied via env or the KEYS USB, never a committed file. See the

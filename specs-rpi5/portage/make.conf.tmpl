@@ -41,12 +41,23 @@ DISTDIR="@@WORK_DIR@@/distfiles"
 # NATIVE build is unaffected: it runs g-ir-scanner inside a chroot whose python matches.)
 USE="bindist hardened pie ssp -X -gtk -qt5 -qt6 -systemd -pulseaudio -bluetooth -introspection"
 USE="${USE} cgroup cgroup2 seccomp selinux containers netlink"
+# @@CLIENT_USE@@ expands to "X gtk dbus elogind udev" for --role desktop
+# (ROLE_CLIENT) and to nothing for the k8s cluster-node roles. Appended LAST so
+# it OVERRIDES the hardened headless -X/-gtk posture above on the desktop role
+# only — mirrors build-x86-host-stage4.sh's CLIENT_USE mechanism. Without this,
+# packages-desktop.list's GTK/X11 stack (xorg-server, lxpanel, pcmanfm,
+# lightdm-gtk-greeter, ...) would build against the global -X -gtk and the
+# desktop session could not open a window under Xorg.
+USE="${USE} @@CLIENT_USE@@"
 
 # Build only the MCS SELinux policy: provision_selinux() and containerd's per-pod
 # MCS labelling both target type=mcs. Pinning this avoids relying on the profile
 # default and skips compiling the unused strict/targeted/mls stores (faster build).
 POLICY_TYPES="mcs"
-INPUT_DEVICES=""
+# Xorg input drivers: "libinput" for --role desktop (keyboard/mouse/touchpad),
+# empty for the headless k8s node roles. Materialized by x11-base/xorg-drivers
+# (packages-desktop.list).
+INPUT_DEVICES="@@INPUT_DEVICES@@"
 VIDEO_CARDS="v3d vc4"
 
 ACCEPT_LICENSE="*"

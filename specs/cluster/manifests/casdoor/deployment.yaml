@@ -22,6 +22,44 @@ spec:
         seLinuxOptions:
           type: container_t
           level: "s0:c21"
+      initContainers:
+        # Casdoor doesn't expand beego's "${ENV||default}" syntax inside
+        # app.conf (confirmed live — see app-conf-configmap.yaml). Render the
+        # real conf/app.conf here via plain sed substitution instead, into an
+        # emptyDir the main container mounts read-only. Reuses the casdoor
+        # image itself (already has sh/sed) so no extra image needs pulling.
+        - name: render-app-conf
+          image: casbin/casdoor:3.80.0
+          command: ["sh", "-c"]
+          args:
+            - |
+              sed \
+                -e "s|__CASDOOR_DB_USER__|${CASDOOR_DB_USER}|g" \
+                -e "s|__CASDOOR_DB_PASSWORD__|${CASDOOR_DB_PASSWORD}|g" \
+                -e "s|__CASDOOR_SMTP_HOST__|${CASDOOR_SMTP_HOST}|g" \
+                -e "s|__CASDOOR_SMTP_PORT__|${CASDOOR_SMTP_PORT}|g" \
+                -e "s|__CASDOOR_SMTP_USER__|${CASDOOR_SMTP_USER}|g" \
+                -e "s|__CASDOOR_SMTP_PASSWORD__|${CASDOOR_SMTP_PASSWORD}|g" \
+                -e "s|__CASDOOR_SMTP_FROM__|${CASDOOR_SMTP_FROM}|g" \
+                /template/app.conf.template > /rendered/app.conf
+          env:
+            - name: CASDOOR_DB_USER
+              valueFrom: { secretKeyRef: { name: casdoor-db, key: username } }
+            - name: CASDOOR_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: casdoor-db, key: password } }
+            - name: CASDOOR_SMTP_HOST
+              valueFrom: { secretKeyRef: { name: casdoor-smtp, key: CASDOOR_SMTP_HOST, optional: true } }
+            - name: CASDOOR_SMTP_PORT
+              valueFrom: { secretKeyRef: { name: casdoor-smtp, key: CASDOOR_SMTP_PORT, optional: true } }
+            - name: CASDOOR_SMTP_USER
+              valueFrom: { secretKeyRef: { name: casdoor-smtp, key: CASDOOR_SMTP_USER, optional: true } }
+            - name: CASDOOR_SMTP_PASSWORD
+              valueFrom: { secretKeyRef: { name: casdoor-smtp, key: CASDOOR_SMTP_PASSWORD, optional: true } }
+            - name: CASDOOR_SMTP_FROM
+              valueFrom: { secretKeyRef: { name: casdoor-smtp, key: CASDOOR_SMTP_FROM, optional: true } }
+          volumeMounts:
+            - { name: app-conf-template, mountPath: /template, readOnly: true }
+            - { name: rendered-conf, mountPath: /rendered }
       containers:
         - name: casdoor
           image: casbin/casdoor:3.80.0
@@ -30,8 +68,8 @@ spec:
           env:
             - name: RUNNING_IN_DOCKER
               value: "true"
-            # External Postgres credentials — interpolated into conf/app.conf
-            # (casdoor-app-conf). Materialized by ESO from Vault.
+            # External Postgres credentials — rendered into conf/app.conf by
+            # the render-app-conf initContainer above.
             - name: CASDOOR_DB_USER
               valueFrom: { secretKeyRef: { name: casdoor-db, key: username } }
             - name: CASDOOR_DB_PASSWORD
@@ -62,10 +100,10 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 10
           volumeMounts:
-            # app.conf override that points Casdoor at the external Postgres.
+            # app.conf rendered by the render-app-conf initContainer above.
             # NOTE: the conf path is image-version-specific (casbin/casdoor reads
             # conf/app.conf from its workdir) — validate against the deployed image.
-            - { name: app-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }
+            - { name: rendered-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }
             # Declarative seed (org / roles / service users). Casdoor imports
             # init_data.json from its working dir on boot. NOTE: the exact mount
             # path depends on the casbin/casdoor workdir — validate/adjust if
@@ -77,10 +115,12 @@ spec:
             limits:   { cpu: "1",  memory: 768Mi }
       volumes:
         # DB state now lives in casdoor-pg (external Postgres); this configMap
-        # just points Casdoor at it.
-        - name: app-conf
+        # template (rendered by the initContainer above) just points Casdoor at it.
+        - name: app-conf-template
           configMap:
             name: casdoor-app-conf
+        - name: rendered-conf
+          emptyDir: {}
         - name: init-data
           configMap:
             name: casdoor-init-data

@@ -54,6 +54,27 @@ data:
         # See manifests/signup-gate/. Bound to ROLE_SERVICE in init_data.json so the
         # minted token satisfies the endpoint's INTERNAL/ROLE_SERVICE gate.
         "signup-gate": "ROLE_SERVICE",
+        # Harbor registry web UI/API login — reuses ROLE_ADMIN rather than a
+        # narrow ROLE_REGISTRY: Harbor is an internal devops tool (same posture
+        # as GitLab, which is also admin-only/no-public-signup), and once a
+        # user is IN Harbor its OWN project-level RBAC (not a Casdoor claim)
+        # governs what they can do there. The clientId/clientSecret this
+        # produces is consumed by manifests/harbor/harbor-provision-job.yaml
+        # (via the harbor-casdoor ExternalSecret) to configure Harbor's OIDC
+        # auth_mode directly through its REST API — Harbor's Helm chart has no
+        # secret-safe way to set this via values (see that Job's comments).
+        "harbor": "ROLE_ADMIN",
+        # headscale mesh-node OIDC login (keys-template/headscale/config.yaml
+        # oidc.client_id="app-headscale", oidc.client_secret_path on the pki
+        # node). GAP FOUND 2026-07-09 auditing PR #280 (superadmin mesh-join):
+        # nothing previously created this Application at all, so headscale's
+        # OIDC login had NO registered client to authenticate against —
+        # independent of and prior to the /headscale group-membership question
+        # PR #280 fixed. reconcile_app() gives it the headscale-specific
+        # redirectUris override below (its OIDC callback path is FIXED by the
+        # headscale binary at "<server_url>/oidc/callback", not the generic
+        # "https://<name>.snapdragon.systems/callback" other apps use).
+        "headscale": "ROLE_USER",
     }
 
     cj = http.cookiejar.CookieJar()
@@ -99,9 +120,26 @@ data:
         "Id", "Name", "Email", "IsAdmin",
         "Properties.mfa_satisfied", "Properties.mfa_satisfied_at",
     ]
+    # "groups" added 2026-07-09 (same Existing-Field mechanism as roles/permissions
+    # above — mirrors, not guesses: this is the one other relation-shaped User field
+    # in this list). headscale's OIDC config (keys-template/headscale/config.yaml
+    # allowed_groups: [snapdragon/headscale]) gates node-join on a literal "groups"
+    # ID-token claim (confirmed against the headscale binary's own compiled string
+    # table — "groups" appears alongside its oidc.allowed_groups config key).
+    # Casdoor's User.Groups is what reconcile_superadmin() below writes
+    # snapdragon/headscale into (PR #280); without this attribute that membership
+    # was written but NEVER reached any token, so the mesh-join gate could never
+    # pass for anyone. LIVE-VERIFIED (tests/casdoor/test-jwt-custom-token.sh) that
+    # this tokenAttribute emits the group's "<owner>/<name>" id string exactly —
+    # PR #280's original comments assumed a bare "/headscale" path, which this
+    # test proved was never actually minted; allowed_groups is corrected to match
+    # the real claim shape. Additive to every app's token (shared allow-list) — no
+    # app relied on groups' ABSENCE, so nothing downstream should notice besides
+    # gaining the claim.
     JWT_CUSTOM_TOKEN_ATTRIBUTES = [
         {"name": "roles",       "category": "Existing Field", "value": "Roles",       "type": "Array"},
         {"name": "permissions", "category": "Existing Field", "value": "Permissions", "type": "Array"},
+        {"name": "groups",      "category": "Existing Field", "value": "Groups",      "type": "Array"},
     ]
     # NOTE: EXCLUDED by omission (allow-list) — totpSecret, recoveryCodes, password,
     # passwordSalt, passwordType, preferredMfaType, mfaEmailEnabled, mfaPhoneEnabled,
@@ -138,6 +176,22 @@ data:
             app["grantTypes"] = app["grantTypes"] + ["refresh_token"]
             app["redirectUris"] = ["https://snapdragon.systems/login/callback"]
             app["expireInHours"] = 4
+        # headscale's OIDC callback path is FIXED by the headscale binary itself
+        # at "<server_url>/oidc/callback" (confirmed in its compiled string
+        # table) — not the generic "https://<name>.snapdragon.systems/callback"
+        # every other app gets. server_url defaults to the baked
+        # https://scale.snapdragon.systems (keys-template/headscale/config.yaml),
+        # so that is what we register here.
+        # !!! CAVEAT: like user-bff's callback, this is a single-domain bootstrap
+        # !!! seed. keys-provision CAN rewrite server_url at first boot (LAN-IP
+        # !!! fallback, or an operator-supplied endpoint via provision.json/brand
+        # !!! var — see that file's header comment) — if it does, THIS redirectUri
+        # !!! no longer matches what headscale sends and Casdoor will reject the
+        # !!! callback (invalid_redirect_uri). Re-running this reconcile after any
+        # !!! server_url change (with the new value substituted here) is a
+        # !!! follow-up, not yet automated.
+        if name == "headscale":
+            app["redirectUris"] = ["https://scale.snapdragon.systems/oidc/callback"]
         try:
             existing = call(f"/api/get-application?id=admin/{appname}")
         except urllib.error.HTTPError:
@@ -456,6 +510,117 @@ data:
             print(f"  superadmin: assigned ROLE_SUPERADMIN to {username}")
         except Exception as e:
             print(f"  WARN superadmin: role assignment failed: {e}")
+
+        # --- Mesh-join: grant /headscale Casdoor group membership -----------------
+        # headscale OIDC node-join GATES enrolment on allowed_groups:
+        # [snapdragon/headscale] (keys-template/headscale/config.yaml — this is the
+        # group's real "<owner>/<name>" claim shape, LIVE-VERIFIED below, not a bare
+        # "/headscale" path). ROLE_SUPERADMIN alone does NOT put
+        # the user in that group, so without this a superadmin CANNOT join the mesh
+        # via OIDC. Nothing else seeds the group (the headscale config only asserts it
+        # "must exist"), so ENSURE it first, then mirror the ROLE_SUPERADMIN block
+        # above: GET the group, append the user, POST update-group. We ALSO stamp the
+        # membership onto the USER object (user.groups) because Casdoor emits the OIDC
+        # `groups` claim headscale matches on from User.Groups — belt-and-suspenders so
+        # the claim is carried regardless of which representation the deployed Casdoor
+        # treats as canonical. This grants MESH DATA-PLANE reach only; SSH reach
+        # (tag:superadmin) is a separate, deliberately-manual control — see
+        # docs/SUPERADMIN-MESH-CLIENT.md.
+        # LIVE-VERIFIED 2026-07-09 (tests/casdoor/test-jwt-custom-token.sh) against
+        # casbin/casdoor:3.80.0: user.groups persists via the GET-then-mutate-
+        # same-object-then-POST pattern used below (a hand-built update-user
+        # payload that doesn't round-trip the real "id" field is REJECTED with
+        # "The ID is immutable" — this code avoids that by never constructing the
+        # payload from scratch). group.users needs the SAME re-fetch-before-update
+        # discipline: the first version of this code built the group dict LOCALLY
+        # after add-group (no re-fetch) and update-group returned {"status":"ok"}
+        # while SILENTLY not persisting membership — caught live by the same test.
+        # The token's `groups` claim (via the JWT-Custom "Existing Field: Groups"
+        # tokenAttribute) emits the group's internal "<owner>/<name>" id string —
+        # "snapdragon/headscale" — NOT a bare "/headscale" path
+        # (keys-template/headscale/config.yaml allowed_groups is set to match this
+        # exactly). Re-validate this claim shape against any future Casdoor
+        # version bump. NOTE: the claim itself is sourced from user.groups, not
+        # group.users — group.users is Casdoor-console-visibility only, but it
+        # must still be correct (an admin reading the group membership page
+        # should see the truth), hence still fixing it below rather than treating
+        # it as cosmetic.
+        group_name = "headscale"
+        group_id = f"{ORG}/{group_name}"
+        member = f"{ORG}/{username}"
+        try:
+            grp_resp = call(f"/api/get-group?id={group_id}")
+            group = (grp_resp.get("data") or {}) if grp_resp else {}
+        except Exception:
+            group = {}
+        if not group:
+            # Seed the group — nothing else creates it. Virtual so it never collides
+            # with a user's single physical group; top-level org group. The token
+            # claim value this produces is "snapdragon/headscale" (owner/name), not
+            # a bare "/headscale" path — see the LIVE-VERIFIED note above.
+            new_group = {
+                "owner": ORG, "name": group_name,
+                "displayName": "Headscale mesh operators",
+                "type": "Virtual", "parentId": ORG,
+                "isTopGroup": True, "isEnabled": True, "users": [],
+            }
+            try:
+                call("/api/add-group", new_group, "POST")
+                print(f"  superadmin: created Casdoor group /{group_name}")
+                # RE-FETCH rather than reusing new_group for the update below —
+                # Casdoor may populate server-side fields (createdTime, an
+                # internal id, ...) that a blind local-dict POST won't round-trip,
+                # which is exactly what silently dropped the membership before
+                # this fix (update-group reported "Affected" but users stayed []).
+                grp_resp = call(f"/api/get-group?id={group_id}")
+                group = (grp_resp.get("data") or {}) if grp_resp else new_group
+            except Exception as e:
+                print(f"  WARN superadmin: add-group /{group_name} failed: {e}")
+                group = new_group
+        members = group.get("users") or []
+        if member not in members:
+            members.append(member)
+        group["owner"] = ORG
+        group["name"] = group_name
+        group["users"] = members
+        # BEST-EFFORT, KNOWN-UNRELIABLE on casbin/casdoor:3.80.0: LIVE-VERIFIED
+        # (tests/casdoor/test-jwt-custom-token.sh) that /api/update-group's
+        # "users" field is a no-op on an EXISTING group — it returns
+        # {"status":"ok","data":"Affected"} while NOT persisting membership,
+        # with or without a re-fetched payload or a ?columns=users hint. Only
+        # /api/add-group honors "users", and only at creation. This call is kept
+        # (harmless, and may start working on a future Casdoor version) but we
+        # VERIFY by re-reading rather than trusting the HTTP status, because that
+        # status is misleading here. This does NOT affect the actual OIDC gate —
+        # the `groups` token claim is sourced from user.groups (verified working
+        # below), not group.users; this is Casdoor-admin-console visibility only.
+        try:
+            call(f"/api/update-group?id={group_id}", group, "POST")
+            verify_resp = call(f"/api/get-group?id={group_id}")
+            verify_members = ((verify_resp.get("data") or {}).get("users") or []) if verify_resp else []
+            if member in verify_members:
+                print(f"  superadmin: added {username} to Casdoor group /{group_name}")
+            else:
+                print(f"  NOTE superadmin: update-group reported success but did not persist "
+                      f"group.users on /{group_name} (known casdoor:3.80.0 limitation — the "
+                      f"OIDC gate is unaffected, it reads user.groups, set below)")
+        except Exception as e:
+            print(f"  WARN superadmin: group membership (update-group) failed: {e}")
+        # Reflect membership on the user record too — this is what Casdoor emits as
+        # the OIDC `groups` claim headscale gates on. GET the user, merge the group
+        # id, PUT it back (never clobber any groups already present).
+        try:
+            u_resp = call(f"/api/get-user?id={user_id}")
+            u = (u_resp.get("data") or {}) if u_resp else {}
+            if u:
+                u_groups = u.get("groups") or []
+                if group_id not in u_groups:
+                    u_groups.append(group_id)
+                    u["groups"] = u_groups
+                    call(f"/api/update-user?id={user_id}", u, "POST")
+                    print(f"  superadmin: set user.groups={u_groups} on {username}")
+        except Exception as e:
+            print(f"  WARN superadmin: user.groups update failed: {e}")
 
     wait_ready()
     login()

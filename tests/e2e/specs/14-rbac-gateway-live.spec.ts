@@ -59,11 +59,18 @@ async function casdoorToken(api: APIRequestContext, username: string): Promise<s
 
 // The same contractual URLs as spec 12, re-expressed for a live probe. Each one's
 // expected decision is derived from the oracle so the two stay in lockstep.
+//
+// Matrix/Mastodon homeserver floors (commit 0100d3b): e2e-user (plain ROLE_USER)
+// now derives DENY here — the broad ROLE_USER homeserver floor was removed in
+// favor of the per-platform ROLE_MATRIX/ROLE_MASTODON access roles. e2e-matrix /
+// e2e-mastodon are included so the "a granted member reaches their own
+// homeserver" ALLOW case is still live-probed with a real persona.
 const LIVE_PROBES: { gw: Gateway; path: string; users: string[] }[] = [
   { gw: 'snapdragon-fe-gateway', path: '/admin/usage', users: ['e2e-admin', 'e2e-adminonly', 'e2e-mod', 'e2e-user'] },
   { gw: 'snapdragon-be-gateway', path: '/api/admin/route-access', users: ['e2e-admin', 'e2e-mod', 'e2e-user'] },
   { gw: 'snapdragon-be-gateway', path: '/api/v1/pleroma/admin/config', users: ['e2e-mod', 'e2e-admin', 'e2e-user'] },
-  { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', users: ['e2e-mod', 'e2e-user'] },
+  { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', users: ['e2e-mod', 'e2e-matrix', 'e2e-user'] },
+  { gw: 'snapdragon-be-gateway', path: '/api/v1/timelines/home', users: ['e2e-mod', 'e2e-mastodon', 'e2e-user'] },
   { gw: 'snapdragon-fe-gateway', path: '/games/admin/sessions', users: ['e2e-gamesadmin', 'e2e-gamesonly', 'e2e-adminonly', 'e2e-mod'] },
   { gw: 'snapdragon-be-gateway', path: '/games/api/admin/role-grants', users: ['e2e-gamesadmin', 'e2e-gamesonly', 'e2e-adminonly'] },
   { gw: 'snapdragon-be-gateway', path: '/infra/logs', users: ['e2e-admin', 'e2e-mod'] }, // default-deny for all

@@ -1,0 +1,29 @@
+#!/sbin/openrc-run
+
+description="Render + load the RELEASE_STATE host nftables backstop (Layer 3, independent of K8s NetworkPolicy + firewalld)"
+
+# Runs ONCE at boot (a oneshot) via start(), ordered BEFORE containerd/
+# kubelet/tailscaled so the backstop is live before any pod network / ingress
+# controller comes up. AFTER firewalld (cosmetic layering only — the two own
+# entirely separate nftables tables and never conflict). The 60s cron half
+# (cron.d/snapdragon-firewall-reconcile) is the convergence floor for a LIVE
+# RELEASE_STATE flip / go-live marker (no reboot/reflash required).
+
+depend() {
+    need net
+    after firewall
+    before containerd kubelet tailscaled
+}
+
+command="/usr/sbin/snapdragon-firewall-reconcile"
+command_background=false
+
+start() {
+    ebegin "Reconciling the RELEASE_STATE host nftables backstop (fail-closed to the existing ruleset on error)"
+    "${command}"
+    eend $? "firewall reconcile reported an unexpected error (existing ruleset preserved)"
+}
+
+stop() {
+    return 0
+}

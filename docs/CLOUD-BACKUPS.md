@@ -50,11 +50,16 @@ provision the per-brand BSL in the same change that sets `destination_ref`.
 ## Credentials never touch git
 
 `velero-cloud-credentials` (key `cloud`, an AWS/S3 INI file) is **templated by ESO
-from Vault** `secret/<brand>/velero` (`access_key_id` + `secret_access_key`). The
-Velero server (`credentials.existingSecret`) and every BSL (`spec.credential`)
-reference it by name. No object-store key/secret bytes appear anywhere in the git
-tree. The bucket/endpoint coordinates in the BSL are non-secret and
-generator-templated.
+from Vault** at the **fixed path** `secret/snapdragon/velero`
+(`access_key_id` + `secret_access_key`) — the
+[`ExternalSecret`](../specs/cluster/manifests/external-secrets/velero-externalsecrets.yaml)
+hardcodes this single Vault path; there is **no per-brand substitution** (a
+non-default brand's credentials must also live under `secret/snapdragon/velero`
+today — writing to `secret/<brand>/velero` for a non-default brand goes
+nowhere ESO reads). The Velero server (`credentials.existingSecret`) and every
+BSL (`spec.credential`) reference the resulting Secret by name. No object-store
+key/secret bytes appear anywhere in the git tree. The bucket/endpoint
+coordinates in the BSL are non-secret and generator-templated.
 
 ## RBAC scope (not cluster-admin)
 
@@ -99,8 +104,9 @@ terminal" note without shipping a half-version that bypasses the BFF's DB model.
 Installing Velero does not enable backups. To go live:
 
 1. **Provision the object store** (bucket `snapdragon-backups`, an S3/MinIO
-   endpoint) and write `access_key_id` + `secret_access_key` to Vault
-   `secret/<brand>/velero`.
+   endpoint) and write `access_key_id` + `secret_access_key` to Vault at the
+   fixed path `secret/snapdragon/velero` (the ExternalSecret reads this exact
+   path for every brand — there is no per-brand path today).
 2. **Sync `apps/55-velero.yaml`** (manual) — Velero server + node-agent + CRDs.
 3. **Sync `apps/56-velero-config.yaml`** (manual) — the `default` BSL (+ any
    per-brand BSLs), RBAC, and the sweep CronJob.

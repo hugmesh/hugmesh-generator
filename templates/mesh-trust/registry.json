@@ -1,0 +1,23 @@
+{
+  "_comment": "Phase 7 FOREIGN-MESH ADMISSION ALLOWLIST (explicit trust, NO trust-on-first-use). DATA, not code — parallel to scripts/tooling/tokens.json. It is re-consulted on EVERY consume path — pull-repo-base.sh --foreign, the ingest-foreign-base.sh gate (--registry), and render-repo-tree.sh --foreign-mesh — so a mesh disabled/revoked AFTER its base was cached can never be silently reused. Per foreign mesh id it resolves: the IMMUTABLE pinned base commit digest (never a moving ref), the operator's canonical pinnedTreeSha256 content anchor, the replay/rollback minGeneration floor, revocation flags, and the trust-store pubkey path (base64 SPKI DER, pubkeys-only, staged out-of-band under keys-template/mesh-trust/<meshId>/). A foreign mesh with NO entry has NO pinned digest and NO pinned key => the gate fails closed. Admitting a NEW foreign mesh is a DELIBERATE act: add its entry AND stage its pubkey out-of-band. NEVER commit a private key.",
+
+  "schemaVersion": 1,
+
+  "_revocation": "R4 REVOCATION (build-host scoped; a live CRL/OCSP endpoint is DEFERRED to the cluster — honest). To stop cached bases from a compromised foreign mesh WITHOUT a network revocation feed: set the mesh's 'revoked': true (refuses that mesh on every consume), and/or add the compromised signing key's fingerprint to 'revokedKeys' (a fingerprint is sha256 of the raw SPKI DER: `base64 -d <pubkey> | sha256sum`). A top-level 'revokedKeys' array applies to all meshes. Deleting the staged pubkey ALSO fails closed (no pinned key => no admission).",
+
+  "revokedKeys": [],
+
+  "meshes": {
+    "example-mesh": {
+      "_comment": "Illustrative placeholder entry. pinnedDigest is a 40/64-hex commit SHA of the exact foreign base tree that mesh vouches for; the gate rejects a mutable ref and rejects any tree whose recomputed content digest != the SIGNED manifest's base.treeSha256. pinnedTreeSha256 is the operator's OWN 64-hex canonical tree digest (scripts/ingest-foreign-base.sh:_fib_tree_digest) — REQUIRED on the *_BASE_DIR override / render consume paths (no git commit->tree binding there), where the gate enforces recomputed == pinnedTreeSha256 == manifest.base.treeSha256 so the signer's self-declared digest is never the sole content anchor (R3). minGeneration is the rollback floor (raise it after a CVE). revoked:true and revokedKeys[] are the R4 revocation signals. pubkey is staged out-of-band at keys-template/mesh-trust/example-mesh/foreign-provenance-pub.ed25519 — NOT committed.",
+      "enabled": false,
+      "revoked": false,
+      "gitBase": "https://forge.example-mesh.test/example-mesh",
+      "pinnedDigest": "0000000000000000000000000000000000000000",
+      "pinnedTreeSha256": "",
+      "minGeneration": 0,
+      "revokedKeys": [],
+      "pubkeyRef": "keys-template/mesh-trust/example-mesh/foreign-provenance-pub.ed25519"
+    }
+  }
+}

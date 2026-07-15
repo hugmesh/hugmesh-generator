@@ -300,6 +300,11 @@ build:images:
     # The per-app source repo + Dockerfile + destination image. Override per pipeline
     # (CI variables / matrix) to build each first-party app. Destination matches the app
     # kustomizations' newName convention (registry.snapdragon.systems/snapdragon/<app>:<tag>).
+    # HARBOR MIGRATION: this hostname is now served by Harbor, not GitLab's bundled
+    # registry (see specs/cluster/apps/03a-harbor.yaml) — the push credential the
+    # build pod mounts (image-builder-registry, see the `script:` comment below) is
+    # Harbor's push-scoped robot account, minted by manifests/harbor/
+    # harbor-provision-job.yaml. The hostname itself is UNCHANGED on purpose.
     IMAGE_APP: "snapdragon-gateway"
     IMAGE_CONTEXT: "git://github.com/Snapdragon-Systems/snapdragon-gateway.git#${CI_COMMIT_SHA}"
     IMAGE_DOCKERFILE: "Dockerfile"

@@ -1,0 +1,70 @@
+# ============================================================================
+# mesh-forge-expose.yaml — Phase 7 OUTBOUND forge exposure (SHIP-DARK, opt-in).
+# ============================================================================
+#
+# Exposes OUR tailnet-internal Forgejo (manifests/forgejo/, ClusterIP :3000 in
+# snapdragon-pki) so a FOREIGN mesh can PULL our source over the tailnet — the
+# outbound half of cross-mesh decentralization (the inbound half is the fail-closed
+# ingest gate, scripts/ingest-foreign-base.sh).
+#
+# SHIP-DARK BY DEFAULT. Nothing here opens anything until an operator DELIBERATELY
+# opts in by setting `snapdragon.systems/mesh-forge-exposed: "true"` (the default is
+# "false"). Even then the exposure is:
+#   * TAILNET-ONLY — never the public internet. The NetworkPolicy below only admits
+#     the tailnet CIDR; forgejo stays ClusterIP (no LoadBalancer / public Ingress).
+#   * mTLS CLIENT-CERT REQUIRED — a foreign puller MUST present a client cert whose
+#     issuer is in the cross-mesh trust bundle. Anonymous / bearer-only pulls are
+#     refused. The default-deny NetworkPolicy is belt; the mTLS gate is suspenders.
+#
+# >>> DEFERRED-TO-CLUSTER (never faked build-host-side): the LIVE tailnet bind and
+# >>> the LIVE mTLS client-cert VERIFICATION are cluster-only. A foreign mesh has a
+# >>> DIFFERENT CA than ours (our pki_int chains to OUR cluster CA), so cross-mesh
+# >>> mTLS needs a CROSS-CA TRUST BUNDLE mounted into the gateway — that bundle, the
+# >>> tailnet reachability (headscale is a host service, ClusterIP off-cluster-
+# >>> unresolvable), and the gateway TLS termination are all cluster-only. This
+# >>> manifest is the reviewable scaffold + the fail-closed default; do NOT treat a
+# >>> build-host apply as proof the exposure works.
+---
+# Default-deny gate: the exposure is DARK unless explicitly toggled on.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mesh-forge-exposure
+  namespace: snapdragon-pki
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/name: mesh-forge
+data:
+  # THE OPT-IN. "false" => fully dark (this whole exposure is inert). Flip to "true"
+  # ONLY together with a populated cross-mesh trust bundle (below) — a deliberate act.
+  MESH_FORGE_EXPOSED: "false"
+  # Tailnet CIDR the exposure admits when enabled (headscale default range). NEVER
+  # 0.0.0.0/0 — this is a tailnet-only exposure, not a public one.
+  MESH_FORGE_TAILNET_CIDR: "100.64.0.0/10"
+  # The name of the Secret holding the CROSS-MESH CA TRUST BUNDLE (PEM bundle of the
+  # foreign meshes' CAs we accept client certs from). Absent/empty => mTLS fails
+  # closed (no foreign puller is trusted) even if MESH_FORGE_EXPOSED were "true".
+  MESH_FORGE_TRUST_BUNDLE_SECRET: "mesh-forge-cross-ca"
+---
+# NetworkPolicy: while DARK (default) this admits NOTHING to forgejo from outside the
+# namespace. An operator enabling the exposure adds the tailnet CIDR (from the
+# ConfigMap above) to a second ingress rule via the gateway; shipped here as the
+# fail-closed default-deny so the safe state is the shipped state.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mesh-forge-default-deny
+  namespace: snapdragon-pki
+  labels:
+    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/name: mesh-forge
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: forgejo
+  policyTypes: [Ingress]
+  # Empty ingress list == deny all ingress to forgejo from outside its own existing
+  # allowances. Cross-mesh pull ingress is added by the operator ONLY when opting in,
+  # scoped to MESH_FORGE_TAILNET_CIDR AND gated behind the gateway's mTLS client-cert
+  # verification against MESH_FORGE_TRUST_BUNDLE_SECRET (cluster-only — see banner).
+  ingress: []

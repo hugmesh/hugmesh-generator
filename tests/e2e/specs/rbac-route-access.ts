@@ -30,11 +30,18 @@ export type Gateway =
 export interface RouteRule {
   gateway: Gateway;
   urlPattern: string;   // Spring path pattern, e.g. /api/admin/**
-  role: string;         // ROLE_ANONYMOUS | ROLE_USER | ROLE_ADMIN | ROLE_MOD | ROLE_GAMES_ADMIN
+  role: string;         // ROLE_ANONYMOUS | ROLE_USER | ROLE_ADMIN | ROLE_MOD | ROLE_MATRIX |
+                         // ROLE_MASTODON | ROLE_GAMES_ADMIN
 }
 
 // Canonical seed — one allow row per (gateway, url_pattern, role), copied 1:1 from
 // manifests/route-access/schema.sql. Keep in lockstep with that file.
+//
+// PLATFORM ACCESS roles (ROLE_MATRIX / ROLE_MASTODON) gate the Matrix/Mastodon
+// homeserver CLIENT surfaces on the be-gateway (commit 0100d3b, 2026-06-10) — the
+// broad ROLE_USER homeserver floor was REMOVED and replaced with these per-platform
+// rows (ROLE_MOD/ROLE_ADMIN paired on each as supersets). Holding plain ROLE_USER
+// no longer reaches Matrix or Mastodon; a platform ban is the ABSENCE of the role.
 export const ROUTE_ACCESS: RouteRule[] = [
   // pki-gateway
   { gateway: 'snapdragon-pki-gateway', urlPattern: '/api/auth/**',    role: 'ROLE_USER' },
@@ -48,13 +55,34 @@ export const ROUTE_ACCESS: RouteRule[] = [
   { gateway: 'snapdragon-be-gateway', urlPattern: '/api/pleroma/admin/**',    role: 'ROLE_ADMIN' },
   { gateway: 'snapdragon-be-gateway', urlPattern: '/pleroma/admin/**',        role: 'ROLE_MOD' },
   { gateway: 'snapdragon-be-gateway', urlPattern: '/pleroma/admin/**',        role: 'ROLE_ADMIN' },
-  // mod user-floor mirror
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/_matrix/**', role: 'ROLE_MOD' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/**',  role: 'ROLE_MOD' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/oauth/**',   role: 'ROLE_MOD' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/_matrix/**', role: 'ROLE_USER' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/**',  role: 'ROLE_USER' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/oauth/**',   role: 'ROLE_USER' },
+  // ── PER-PLATFORM ACCESS roles (ban/congruence foundation, commit 0100d3b) ──
+  // Matrix client surface: /_matrix/** + the spec-required /.well-known/matrix/**
+  // delegation + /_synapse/** (host-scoped Synapse-compat catch-all).
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/_matrix/**',               role: 'ROLE_MATRIX' },
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/_matrix/**',               role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/_matrix/**',               role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/.well-known/matrix/**',    role: 'ROLE_MATRIX' },
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/.well-known/matrix/**',    role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/.well-known/matrix/**',    role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/_synapse/**',              role: 'ROLE_MATRIX' },
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/_synapse/**',              role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/_synapse/**',              role: 'ROLE_ADMIN' },   // (admin superset)
+  // Mastodon client surface: /api/v1/** + /api/v2/** + /oauth/** + media/streaming.
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/**',                role: 'ROLE_MASTODON' },
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/**',                role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/**',                role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v2/**',                role: 'ROLE_MASTODON' },
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v2/**',                role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v2/**',                role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/oauth/**',                 role: 'ROLE_MASTODON' },
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/oauth/**',                 role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/oauth/**',                 role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/media/**',                 role: 'ROLE_MASTODON' },
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/media/**',                 role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/media/**',                 role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/streaming/**',      role: 'ROLE_MASTODON' },
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/streaming/**',      role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/streaming/**',      role: 'ROLE_ADMIN' },   // (admin superset)
   { gateway: 'snapdragon-be-gateway', urlPattern: '/api/admin/**',       role: 'ROLE_ADMIN' },
   { gateway: 'snapdragon-be-gateway', urlPattern: '/games/api/admin/**', role: 'ROLE_GAMES_ADMIN' },
   { gateway: 'snapdragon-be-gateway', urlPattern: '/api/**',             role: 'ROLE_USER' },
@@ -63,10 +91,10 @@ export const ROUTE_ACCESS: RouteRule[] = [
   { gateway: 'snapdragon-fe-gateway', urlPattern: '/',                   role: 'ROLE_ANONYMOUS' },
   { gateway: 'snapdragon-fe-gateway', urlPattern: '/social/matrix/**',   role: 'ROLE_USER' },
   { gateway: 'snapdragon-fe-gateway', urlPattern: '/social/mastodon/**', role: 'ROLE_USER' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/login/**',           role: 'ROLE_USER' },
+  { gateway: 'snapdragon-fe-gateway', urlPattern: '/login/**',           role: 'ROLE_ANONYMOUS' },
   { gateway: 'snapdragon-fe-gateway', urlPattern: '/admin/**',           role: 'ROLE_ADMIN' },
   { gateway: 'snapdragon-fe-gateway', urlPattern: '/games/admin/**',     role: 'ROLE_GAMES_ADMIN' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/login',          role: 'ROLE_USER' },
+  { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/login',          role: 'ROLE_ANONYMOUS' },
   { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/register/**',    role: 'ROLE_USER' },
   { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/provision/**',   role: 'ROLE_USER' },
   { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/me/**',          role: 'ROLE_USER' },

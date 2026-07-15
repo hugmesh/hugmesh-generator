@@ -52,7 +52,15 @@ log:
 
 dns:
   magic_dns: true
-  base_domain: headnet.internal
+  # ORCHESTRATION SUPERDOMAIN — the internal MagicDNS zone every mesh node joins.
+  # PERMANENTLY INTERNAL: it is <brand>.internal (default snapdragon.internal),
+  # distinct from the PUBLIC cluster_domain (the go-live apex), and is NEVER
+  # go-live-flipped. keys-provision rewrites this line in place from
+  # provision.json .mesh.magic_dns_domain (resolve_magic_dns_domain) at first boot,
+  # which scripts/gen-provision-keys.sh stamps per-brand — so this value is the
+  # fallback default (kept in sync with provision.json .mesh.magic_dns_domain and
+  # kubernetes/kubeadm-config.yaml's controlPlaneEndpoint/certSANs).
+  base_domain: snapdragon.internal
   nameservers:
     global:
       - 1.1.1.1
@@ -92,9 +100,20 @@ oidc:
   # resolve + reach this in-cluster address, and the value MUST equal the `iss`
   # claim Casdoor mints. Override if Casdoor is fronted on a different origin.
   issuer: "http://casdoor.snapdragon-pki.svc.cluster.local:8000"
-  client_id: "headscale-service-snapdragon-systems"
+  # Casdoor clientId — MUST byte-match reconcile_app()'s "app-{name}" naming
+  # (specs/cluster/manifests/casdoor/init-job.yaml APPS["headscale"]), the same
+  # convention every other seeded app uses (app-harbor, app-fragment-sync, ...).
+  client_id: "app-headscale"
   # Secret delivered out-of-band (Vault / ESO) to /var/lib/headscale — never in
-  # git. On a KEYS USB it can ship as headscale/*.key (copied to /var/lib/headscale).
+  # git. WIRED end-to-end (fixed 2026-07-10, flagged 2026-07-09 in PR #292):
+  # gen-cluster-secrets.sh's CASDOOR_APPS loop deterministically mints this
+  # value (the SAME one casdoor-init registers as the Casdoor Application's
+  # clientSecret) into keys-out/vault/secrets.json; gen-provision-keys.sh's
+  # provision_headscale_oidc_secret() carries it forward into the pki role's
+  # KEYS bundle at headscale/oidc_client_secret; provision_headscale()
+  # (specs/etc/keys-provision/provision.sh) explicit-copies that exact file to
+  # this path (deliberately NOT folded into the generic *.key glob, since no
+  # naming trick makes "*.key" byte-match a path with no .key suffix).
   client_secret_path: /var/lib/headscale/oidc_client_secret
   # Re-auth cadence once a node is authenticated ("0" = never expire).
   expiry: 180d
@@ -104,10 +123,19 @@ oidc:
   # Hint Casdoor toward the right org/domain on the authorization request.
   extra_params:
     domain_hint: snapdragon.systems
-  # The /headscale group must exist in Casdoor and be granted to the operators
-  # allowed to enrol nodes.
+  # The "headscale" group in the "snapdragon" Casdoor org must exist and be
+  # granted to the operators allowed to enrol nodes (reconcile_superadmin() in
+  # specs/cluster/manifests/casdoor/init-job.yaml seeds/grants it for the
+  # bootstrap superadmin). MUST byte-match the value Casdoor's JWT-Custom
+  # "Existing Field: Groups" tokenAttribute actually emits in the ID token's
+  # `groups` claim — LIVE-VERIFIED (tests/casdoor/test-jwt-custom-token.sh,
+  # 2026-07-09) to be the group's internal "<owner>/<name>" id string, NOT a
+  # bare leading-slash path. A prior "/headscale" value here (matching neither
+  # this nor any real claim shape) would have silently failed every OIDC
+  # mesh-join attempt — this exact string was never minted and checked against
+  # a real token until this test existed.
   allowed_groups:
-    - /headscale
+    - snapdragon/headscale
   # PKCE hardens the OAuth 2.0 auth-code flow against interception (S256).
   pkce:
     enabled: true

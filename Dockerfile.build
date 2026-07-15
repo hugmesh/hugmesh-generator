@@ -17,8 +17,21 @@
 # is LONG (tens of minutes to hours, depending on the host). It is fully cached
 # in this image layer, so subsequent runs reuse it instantly.
 #
+# CROSSDEV=0 skips that cross-toolchain stage entirely (several GB smaller and
+# the slowest step gone) for hosts that only build x86 targets — e.g. a
+# space-constrained box proofing `make x86-*`. ARM builds (`rpi-*`, `frite`,
+# `jetson*`) fail in such an image at their aarch64-gcc prerequisite check;
+# rebuild with the default CROSSDEV=1 to restore them (the shared x86 layers
+# stay cached, so only the crossdev stage is paid).
+#
 # Build:  make docker-image      (or: docker build -f Dockerfile.build -t snapdragon-builder .)
+#         make docker-image CROSSDEV=0   — x86-only variant (no aarch64 toolchain)
 # Run:    make build-all         (Docker is the default path — see the Makefile)
+
+# Selects the final stage below: cross-1 (full, WITH the aarch64 cross-toolchain
+# — the default) or cross-0 (x86-only). Declared before the first FROM so it is
+# usable in FROM interpolation (global ARG scope).
+ARG CROSSDEV=1
 
 # ── Stage 0: fetch a CURRENT Gentoo amd64 stage3 ──────────────────────────────
 # Docker Hub's docker.io/gentoo/stage3:amd64 is ABANDONED — stuck at 2021-06
@@ -80,6 +93,9 @@ RUN mkdir -p /etc/portage/package.use && \
 #   net-misc/curl               — fetch stage3 / firmware / sources
 #   sys-apps/file               — file(1) artifact/type detection
 #   dev-vcs/git                 — clone sources where the scripts need it
+# (The host-side Secure Boot chain — sbsigntools / efitools / shim — is merged
+#  in the FINAL stage below so adding it never invalidates the cached crossdev
+#  stage that follows this layer.)
 RUN emerge --verbose --noreplace \
         sys-devel/crossdev \
         sys-block/parted \
@@ -102,6 +118,9 @@ RUN emerge --verbose --noreplace \
         dev-vcs/git
 
 # ── Stage 3: the cross-toolchain (slow; cached in this layer) ─────────────────
+# Split into its own stage so CROSSDEV=0 can skip it: BuildKit only builds the
+# stages the selected final stage actually depends on.
+FROM toolchain AS cross-1
 # crossdev needs its own overlay to drop the generated cross ebuilds into.
 RUN mkdir -p /var/db/repos/crossdev/{metadata,profiles} && \
     echo 'crossdev' > /var/db/repos/crossdev/profiles/repo_name && \
@@ -115,7 +134,30 @@ RUN mkdir -p /var/db/repos/crossdev/{metadata,profiles} && \
 # STEP — it compiles a full cross-toolchain from source and is cached here.
 RUN crossdev --stable -t aarch64-unknown-linux-gnu
 
+# ── Stage 3b: the x86-only variant (CROSSDEV=0) ───────────────────────────────
+# No aarch64 cross-toolchain: ARM targets fail their aarch64-gcc prerequisite
+# check in this image. The marker file lets tooling (and humans in a shell)
+# tell the variants apart, since both are tagged snapdragon-builder.
+FROM toolchain AS cross-0
+RUN echo 'x86-only (built with CROSSDEV=0): no aarch64 cross-toolchain' \
+      > /etc/snapdragon-builder-variant
+
 # ── Runtime defaults ──────────────────────────────────────────────────────────
+FROM cross-${CROSSDEV} AS final
+# Host-side Secure Boot chain: build-x86-host-stage4.sh signs OUTSIDE the chroot
+# (so the org key never enters the image) and copies shim off the build host —
+# i.e. off THIS container under the default Docker path:
+#   app-crypt/sbsigntools — sbsign: sign the UKI + grubx64.efi with the org key
+#   app-crypt/efitools    — cert-to-efi-sig-list + sign-efi-sig-list (the db.auth
+#                           firmware-enrollment payload next to the org cert)
+#   sys-boot/shim         — shim + MokManager under /usr/share/shim, picked up by
+#                           the .img ESP install and the live-ISO post-processing
+# Deliberately merged HERE (not in the toolchain stage) so the hours-long cached
+# crossdev stage above is not invalidated by this addition.
+RUN emerge --verbose --noreplace \
+        sys-boot/shim \
+        app-crypt/sbsigntools \
+        app-crypt/efitools
 # The repo is bind-mounted here at runtime; output at /out. No ENTRYPOINT — we
 # do NOT want to hide `make`, so the container is a thin `make` wrapper. The
 # default CMD runs the whole fleet on the NATIVE (in-container, no-sudo) path

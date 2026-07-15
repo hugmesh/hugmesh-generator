@@ -8,6 +8,6 @@ resources:
 
 # coturn is an UPSTREAM (third-party) image pinned to an explicit tag for
 # supply-chain reasons (like anubis); it is pulled from Docker Hub, NOT rewritten
-# to the in-cluster GitLab registry. Pin bumps happen here.
+# to the in-cluster Harbor registry. Pin bumps happen here.
 images:
   - { name: coturn/coturn, newName: coturn/coturn, newTag: 4.6.2 }

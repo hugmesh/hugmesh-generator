@@ -279,10 +279,43 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- than /v1/** below; same ROLE_USER floor. ⚠ OPTIONAL slug `edge-ai-analysis`:
   -- gate_optional_services drops this row when edge-ai-analysis is deselected.
   ('snapdragon-be-gateway',  '/v1/analyze/**',        'ROLE_USER',      true),  -- edge-ai-analysis verdict API
+  -- edge-ai-tts voice synthesis API (/v1/synthesize/** -> the Piper TTS wrapper;
+  -- VN voice feature, B3). MORE SPECIFIC than /v1/** below; same ROLE_USER floor.
+  -- ⚠ OPTIONAL slug `edge-ai-tts`: gate_optional_services drops this row when
+  -- edge-ai-tts is deselected.
+  ('snapdragon-be-gateway',  '/v1/synthesize/**',     'ROLE_USER',      true),  -- edge-ai-tts voice synthesis API
   ('snapdragon-be-gateway',  '/v1/**',                'ROLE_USER',      true),  -- edge-ai OpenAI-compatible inference API
 
   -- fe-gateway (snapdragon.systems -> Angular host + MFEs + same-origin /bff)
   ('snapdragon-fe-gateway',  '/',                     'PUBLIC', true),  -- public front page
+  -- The rest of the anonymous SPA shell the '/' row already implies: the
+  -- document, the root-level hashed bundles the Angular browser build serves
+  -- from the systems-web webroot (Ant '*' does not cross '/', so only webroot
+  -- files match), the module-federation manifests, favicon and static assets.
+  -- Mirrors the SecurityConfig FE_SHELL_PUBLIC_GET_PATHS floor (GET-only, fe
+  -- tier only) so the coarse layer and the route-access layer agree the
+  -- anonymous front page is servable. PARITY with the gateway CanonicalSeed
+  -- fe() (snapdragon-gateway PR #72) — these rows were added there and were
+  -- missing here (dual-write seed drift), this closes that gap.
+  ('snapdragon-fe-gateway',  '/index.html',           'PUBLIC', true),  -- public (anon SPA shell doc)
+  ('snapdragon-fe-gateway',  '/favicon.ico',          'PUBLIC', true),  -- public (anon SPA shell)
+  ('snapdragon-fe-gateway',  '/importmap.json',       'PUBLIC', true),  -- public (module-federation import map)
+  ('snapdragon-fe-gateway',  '/remoteEntry.json',     'PUBLIC', true),  -- public (module-federation remote entry)
+  ('snapdragon-fe-gateway',  '/*.js',                 'PUBLIC', true),  -- public (webroot hashed JS bundles)
+  ('snapdragon-fe-gateway',  '/*.css',                'PUBLIC', true),  -- public (webroot hashed CSS bundles)
+  ('snapdragon-fe-gateway',  '/assets/**',            'PUBLIC', true),  -- public (static assets)
+  -- Public federation reads (federation-api permitAll's both at the app layer;
+  -- the cluster fe spec's vanity-subdomain route documents the gateway-side
+  -- allowance as the deferred missing piece): the vanity profile resolve
+  -- (path + Host-derived collection resolve) and the install-state
+  -- capabilities projection a LOGGED-OUT host shell reads to grey-out
+  -- optional services. Scoped to the exact public reads (NOT
+  -- /api/federation/**) — the manifest / module-registry / username surfaces
+  -- stay gated by the ROLE_USER floor row below. PARITY with the gateway
+  -- CanonicalSeed fe() (snapdragon-gateway PR #72).
+  ('snapdragon-fe-gateway',  '/api/federation/vanity',       'PUBLIC', true),  -- public (vanity profile/collection resolve)
+  ('snapdragon-fe-gateway',  '/api/federation/vanity/**',    'PUBLIC', true),  -- public (vanity profile/collection resolve)
+  ('snapdragon-fe-gateway',  '/api/federation/capabilities', 'PUBLIC', true),  -- public (install-state capabilities projection)
   ('snapdragon-fe-gateway',  '/social/matrix/**',     'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/social/mastodon/**',   'ROLE_USER',      true),
   -- phpBB forum micro-frontend UI (snapdragon-forum-ui at /social/forum/**),
@@ -304,7 +337,12 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- (the host itself loads them only after login). If anonymous profile cards are
   -- ever needed, add a sibling PUBLIC row for the public sub-path.
   ('snapdragon-fe-gateway',  '/_fragments/**',        'ROLE_USER',      true),
-  ('snapdragon-fe-gateway',  '/login/**',             'ROLE_USER',      true),
+  -- NATIVE-LOGIN: the login-ui SPA shell is ANONYMOUS (the only login surface now
+  -- that Casdoor's hosted page is never browser-exposed; a logged-out visitor holds
+  -- no role yet, so ROLE_USER was a chicken-and-egg lock-out). PUBLIC matches the
+  -- gateway SecurityConfig FE_SHELL_PUBLIC_GET_PATHS `/login/**`. Pairs with the
+  -- `/bff/login` PUBLIC row below.
+  ('snapdragon-fe-gateway',  '/login/**',             'PUBLIC',         true),
   ('snapdragon-fe-gateway',  '/admin/**',             'ROLE_ADMIN',     true),
   -- Moderation micro-frontend UI (snapdragon-mod-ui at /mod/**). ROLE_MOD floor;
   -- ROLE_ADMIN paired so admins (a superset that the converter does NOT
@@ -357,14 +395,12 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- fe() row + SecurityConfig PUBLIC_PATHS (snapdragon-gateway PR #22). EXACT path
   -- (not /bff/public/**) so most-specific-match keeps ONLY this resolver anonymous.
   ('snapdragon-fe-gateway',  '/bff/public/appeal-contact', 'PUBLIC', true),  -- public appeal-contact resolver (UNAUTHENTICATED)
-  -- SSO OIDC callback (UNAUTHENTICATED): Casdoor redirects the browser back here with
-  -- the auth code BEFORE any session exists, so login-ui POSTs the code to user-bff
-  -- /bff/auth/callback with no bff_/JWT. Must be PUBLIC at the gateway (the matching
-  -- gateway SecurityConfig PUBLIC_PATHS entry lets the anonymous POST reach it). Exact
-  -- path so most-specific-match keeps ONLY the callback anonymous; the swap filter +
-  -- the ROLE_USER/ROLE_ADMIN rows still gate every post-login /bff/** call.
-  ('snapdragon-fe-gateway',  '/bff/auth/callback',    'PUBLIC',         true),
-  ('snapdragon-fe-gateway',  '/bff/login',            'ROLE_USER',      true),
+  -- NATIVE-LOGIN credential submit (UNAUTHENTICATED): the anonymous browser POSTs
+  -- {username,password} from OUR login-ui form to /bff/login BEFORE it holds any
+  -- session/role; user-bff drives Casdoor /api/login server-side and mints the opaque
+  -- bff_ session (no token reaches the browser). PUBLIC matches the gateway
+  -- SecurityConfig PUBLIC_PATHS `/bff/login`; ROLE_USER was a chicken-and-egg lock-out.
+  ('snapdragon-fe-gateway',  '/bff/login',            'PUBLIC',         true),
   ('snapdragon-fe-gateway',  '/bff/register/**',      'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/provision/**',     'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/me/**',            'ROLE_USER',      true),

@@ -24,9 +24,16 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
   '.woff2': 'font/woff2', '.map': 'application/json', '.txt': 'text/plain' };
 
 // Runtime config the UI reads (same-origin '' base => calls get proxied below).
+// NATIVE-LOGIN: the login-ui runs in opaque-cookie session mode — it holds only the
+// httpOnly bff_session cookie and hydrates roles/registrationComplete from
+// GET /bff/session (session.service.ts cookieModeEnabled()). Without this flag the
+// remote falls back to legacy localStorage mode, hydrate() is a no-op, and the UI
+// never learns roles beyond the login response's hardcoded ['user'] — so nav-admin
+// (and any role-gated shell) would never appear on the mock stack.
 const CONFIG_SCRIPT = `<script>
   window.__SNAP_MATRIX_URL__='';
   window.__SNAP_MASTODON_URL__='';
+  window.__SNAP_SESSION_COOKIE_MODE__=true;
   window.__SNAP_CASDOOR_ISSUER__=${JSON.stringify(values.casdoorIssuer)};
   window.__SNAP_UPTRACE_URL__=${JSON.stringify(values.uptraceUrl || 'https://uptrace.snapdragon.systems')};
   window.__SNAP_VALUES__=${JSON.stringify(values)};

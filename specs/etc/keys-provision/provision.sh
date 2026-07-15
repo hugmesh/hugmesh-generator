@@ -156,6 +156,19 @@ resolve_magic_dns_domain() {
 resolve_cp_dns_name() {
     local n; n="$(jqm '.mesh.cp_dns_name // ""')"
     { [ -z "${n}" ] || [ "${n}" = "null" ]; } && n="kube-api.$(resolve_magic_dns_domain)"
+    # Fail-closed: cp_dns_name is interpolated UNQUOTED-in-effect into headscale config.yaml
+    # (dns.extra_records), /etc/hosts, and the kubeadm join API endpoint. Reject anything that
+    # is not a plain dotted DNS name — this blocks embedded newlines / quotes / YAML-and-hosts
+    # breakers that would inject an attacker A-record or host entry (mesh DNS poisoning /
+    # control-plane MITM). Mirrors the magic_dns_domain (^[a-z0-9.-]+$) and ssh_user fail-closed
+    # gates; on a malformed value fall back to the derived kube-api.<magic_dns_domain> default
+    # (and the ultimate baked default if that too is malformed). warn -> stderr so it never
+    # pollutes this resolver's command-substituted stdout.
+    if [[ ! "${n}" =~ ^[a-z0-9.-]+$ ]]; then
+        warn "cp_dns_name is not a valid dotted DNS name ([a-z0-9.-]) — using the derived default" >&2
+        n="kube-api.$(resolve_magic_dns_domain)"
+        [[ "${n}" =~ ^[a-z0-9.-]+$ ]] || n="kube-api.headnet.internal"
+    fi
     echo "${n}"
 }
 
@@ -509,6 +522,17 @@ provision_network() {
             warn "Wi-Fi SSID '${ssid}' contains a path separator/control char or is too long — skipping Wi-Fi profile"
             return 0
         fi
+        # psk (.network.wifi.psk) is written verbatim as `psk=${psk}` in the keyfile INI below.
+        # A newline/control char would inject arbitrary INI directives/sections into the root
+        # 0600 profile (the SSID above is already fenced for exactly this INI-injection class).
+        # Require a valid WPA secret — 8-63 printable chars (passphrase) OR 64 hex (raw PSK) —
+        # fail-closed; skip the whole profile on a malformed psk, mirroring the SSID guard.
+        if [ -n "${psk}" ] && [ "${psk}" != "null" ] \
+           && ! { [ "${#psk}" -ge 8 ] && [ "${#psk}" -le 63 ] && [[ "${psk}" =~ ^[[:print:]]+$ ]]; } \
+           && [[ ! "${psk}" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+            warn "Wi-Fi psk is not a valid WPA passphrase (8-63 printable chars) or 64-hex PSK — skipping Wi-Fi profile"
+            return 0
+        fi
         cat > "${nm_dir}/${ssid}.nmconnection" <<EOF
 [connection]
 id=${ssid}
@@ -601,6 +625,18 @@ provision_headscale() {
         cp -f "${BASE}/headscale/"acl*        /etc/headscale/     2>/dev/null || true
         cp -f "${BASE}/headscale/"*.hujson    /etc/headscale/     2>/dev/null || true
         cp -f "${BASE}/headscale/"derp*.yaml  /etc/headscale/     2>/dev/null || true
+        # OIDC app client-secret — EXPLICIT copy, not folded into the *.key glob
+        # above: config.yaml's client_secret_path is literally
+        # /var/lib/headscale/oidc_client_secret (no .key suffix), staged by
+        # gen-provision-keys.sh's provision_headscale_oidc_secret(). Flagged
+        # 2026-07-09 (PR #292), fixed 2026-07-10: the *.key glob would only ever
+        # have matched a file already named to include ".key", which still
+        # wouldn't byte-match this path — an explicit copy sidesteps the
+        # glob/path mismatch entirely rather than relying on a naming trick.
+        [ -f "${BASE}/headscale/oidc_client_secret" ] && \
+            cp -f "${BASE}/headscale/oidc_client_secret" /var/lib/headscale/oidc_client_secret \
+            && chmod 600 /var/lib/headscale/oidc_client_secret \
+            && log "Installed headscale OIDC client-secret"
     fi
     # ── Layer-A BOOTSTRAP policy (device-license registry) ────────────────────
     # During the bootstrap window — BEFORE the BFF /export exists / is reachable —
@@ -2216,8 +2252,39 @@ provision_snapdragon() {
     [ -f /etc/kubernetes/admin.conf ] || { warn "No kubeconfig yet — run cluster bootstrap after kubeadm init"; return 0; }
     local bs=/var/lib/snapdragon/cluster/bootstrap/bootstrap.sh
     [ -f "${bs}" ] || { warn "GitOps payload not baked into image"; return 0; }
+
+    # ── ArgoCD repository credential token (out-of-band, offline KEYS USB) ──
+    # bootstrap.sh registers a k8s Secret (labeled argocd.argoproj.io/
+    # secret-type=repository) so ArgoCD can clone the PRIVATE snapdragon-generator
+    # GitOps repo; without it every git-path Application fails to sync with
+    # "authentication required: Repository not found". The token comes ONLY from
+    # the offline KEYS USB (gitops/repo-token, override via
+    # .snapdragon.gitops.repo_token_file) — SAME custody as vault/token +
+    # certs/cluster-ca.key + luks.key, NEVER git. Read it into a LOCAL (NOT
+    # exported into the provisioning environment) and hand it to bootstrap.sh
+    # scoped to that ONE invocation as $ARGOCD_REPO_TOKEN — exactly how the far
+    # more sensitive Vault root token is kept in a `local` and passed only as a
+    # single kubectl arg, so the PAT never leaks into the env of the later
+    # provisioning steps (provision_vault/secureboot/run_hooks) or the operator
+    # hook scripts they exec. The material is never printed. Absent =>
+    # bootstrap.sh fails closed for the private repo (it exits non-zero, which
+    # here only warns via the `|| warn` below — it does not abort provisioning).
+    local repo_token_file rt argocd_repo_token=""
+    repo_token_file="$(jqm '.snapdragon.gitops.repo_token_file // "gitops/repo-token"')"
+    rt="${BASE}/${repo_token_file}"
+    if [ -f "${rt}" ]; then
+        argocd_repo_token="$(tr -d '[:space:]' < "${rt}" 2>/dev/null)"
+        if [ -n "${argocd_repo_token}" ]; then
+            log "Loaded ArgoCD repo token from KEYS (${rt}), never printed"
+        else
+            warn "ArgoCD repo token file ${rt} is empty — bootstrap.sh will fail closed for the private GitOps repo"
+        fi
+    else
+        warn "No ArgoCD repo token on KEYS (${repo_token_file}) — bootstrap.sh will fail closed for the private GitOps repo (write a read-only PAT there, same custody as vault/token)"
+    fi
+
     log "Bootstrapping ArgoCD + Snapdragon app-of-apps"
-    KUBECONFIG=/etc/kubernetes/admin.conf bash "${bs}" || warn "GitOps bootstrap returned non-zero"
+    ARGOCD_REPO_TOKEN="${argocd_repo_token}" KUBECONFIG=/etc/kubernetes/admin.conf bash "${bs}" || warn "GitOps bootstrap returned non-zero"
 }
 
 # ── Vault / External Secrets (k8s Secrets, online + USB fallback) ──
@@ -2516,6 +2583,16 @@ provision_hosts() {
     local n i ip name dom facade pki_ip
     n="$(jqm '.nodes | length')"
     dom="$(jqm '.snapdragon.cluster_domain // ""')"
+    # Fail-closed: dom/facade/pki_ip and every node ip/name below are written VERBATIM into
+    # /etc/hosts; a newline or whitespace in any of them injects arbitrary host lines (e.g.
+    # mapping the control-plane name to an attacker IP = first-boot join MITM), the same class
+    # the resolve_cp_dns_name() + magic_dns_domain gates fence off. Reject anything that is not a
+    # bare DNS name / IP literal — blank a malformed OPTIONAL value here, skip a malformed node
+    # in the loop. (These gates run BEFORE the `{ … } >> /etc/hosts` block, so warn is unredirected.)
+    if [ -n "${dom}" ] && [ "${dom}" != "null" ] && [[ ! "${dom}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        warn "cluster_domain is not a bare DNS name ([A-Za-z0-9._-]) — dropping the .<domain> host suffix"
+        dom=""
+    fi
     # Facade alias: internal nodes/laptops must resolve the public facade name to
     # the pki node's INTERNAL ip (the pki node DNATs :443 -> pki gateway), so
     # VPN/LAN traffic — especially reaching headscale via the pki gateway — never
@@ -2526,10 +2603,18 @@ provision_hosts() {
     if [ -z "${facade}" ] || [ "${facade}" = "null" ]; then
         { [ -n "${dom}" ] && [ "${dom}" != "null" ]; } && facade="scale.${dom}" || facade=""
     fi
+    if [ -n "${facade}" ] && [ "${facade}" != "null" ] && [[ ! "${facade}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        warn "facade_host is not a bare DNS name ([A-Za-z0-9._-]) — dropping the facade host entry"
+        facade=""
+    fi
     pki_ip=""
     for ((i = 0; i < n; i++)); do
         [ "$(jqm ".nodes[$i].role")" = "pki" ] && { pki_ip="$(jqm ".nodes[$i].ip")"; break; }
     done
+    if [ -n "${pki_ip}" ] && [ "${pki_ip}" != "null" ] && [[ ! "${pki_ip}" =~ ^[0-9A-Fa-f:.]+$ ]]; then
+        warn "pki node ip is not an IP literal ([0-9A-Fa-f:.]) — dropping the facade/cp host entries"
+        pki_ip=""
+    fi
     # Stable control-plane MagicDNS name for the first-boot window: until the
     # joining node's MagicDNS converges, resolve the CP endpoint to the pki
     # node's IP so `kubeadm join <cp_dns_name>:6443` works immediately. MagicDNS
@@ -2542,6 +2627,13 @@ provision_hosts() {
         for ((i = 0; i < n; i++)); do
             ip="$(jqm ".nodes[$i].ip")"; name="$(jqm ".nodes[$i].name")"
             [ -n "${ip}" ] && [ "${ip}" != "null" ] && [ -n "${name}" ] || continue
+            # >&2: this loop runs INSIDE the `{ … } >> /etc/hosts` block, so warn must NOT
+            # land on stdout (which is the hosts file). Skip a node whose ip/name is not a
+            # bare IP literal / hostname — a newline would inject standalone host lines.
+            if [[ ! "${ip}" =~ ^[0-9A-Fa-f:.]+$ ]] || [[ ! "${name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+                warn "node[$i] ip/name malformed (IP literal + [A-Za-z0-9._-] hostname only) — skipping" >&2
+                continue
+            fi
             if [ -n "${dom}" ] && [ "${dom}" != "null" ]; then
                 echo "${ip} ${name} ${name}.${dom}"
             else

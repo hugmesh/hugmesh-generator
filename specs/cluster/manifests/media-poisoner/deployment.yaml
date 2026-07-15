@@ -74,7 +74,7 @@ spec:
             - { name: model-weights, mountPath: /models }
       containers:
         - name: media-poisoner
-          # First-party image, rewritten to the in-cluster GitLab registry by the
+          # First-party image, rewritten to the in-cluster Harbor registry by the
           # kustomization (like every other app). :dev tracked for dev.
           image: snapdragon-systems/snapdragon-media-poisoner:dev
           ports: [{ name: http, containerPort: 8080 }]
@@ -88,22 +88,25 @@ spec:
             # Leave POISON_BACKEND UNSET so the worker probes (cuda|rocm|cpu) and
             # reports the truth to the BFF. Set to "cpu" to force the lean path.
             #
-            # OPTIONAL worker-terminated mTLS (default OFF = plain in-cluster HTTP,
-            # unchanged): set POISON_TLS_CERT / POISON_TLS_KEY / POISON_TLS_CLIENT_CA
-            # to PEM paths from an ESO-projected Secret volume (the BFF/gateway
-            # build-keystore pattern) and app/serve.py serves TLS with REQUIRED
-            # client-cert verification. A partial config CrashLoops (fail-closed,
-            # never silent plaintext); /health then reports transport:"mtls".
-            # NOTE: when enabling, also swap the readiness/liveness httpGet probes
-            # below for tcpSocket (or an exec curl with the client cert): the mTLS
-            # handshake REJECTS the kubelet's certless probe, so an unchanged
-            # httpGet would CrashLoop the pod. Pair both flips in the same commit.
+            # LIVE worker-terminated mTLS: POISON_TLS_CERT / POISON_TLS_KEY /
+            # POISON_TLS_CLIENT_CA point at the PEM files projected from the ESO
+            # Secret media-poisoner-mtls (media-poisoner-externalsecrets.yaml, SAME
+            # Vault-PKI -> ESO -> kubernetes.io/tls pattern as the akkoma-proxy /
+            # tuwunel-proxy homeserver mTLS certs) — see the pki volumeMount below.
+            # app/serve.py then serves TLS with REQUIRED client-cert verification.
+            # A partial config CrashLoops (fail-closed, never silent plaintext);
+            # /health reports transport:"mtls". The readiness/liveness probes below
+            # are tcpSocket (not httpGet): the mTLS handshake REJECTS the kubelet's
+            # certless probe, so an httpGet probe would CrashLoop the pod.
+            - { name: POISON_TLS_CERT,      value: "/pki/tls.crt" }
+            - { name: POISON_TLS_KEY,       value: "/pki/tls.key" }
+            - { name: POISON_TLS_CLIENT_CA, value: "/pki/ca.crt" }
           readinessProbe:
-            httpGet: { path: /health, port: http }
+            tcpSocket: { port: http }
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
-            httpGet: { path: /health, port: http }
+            tcpSocket: { port: http }
             initialDelaySeconds: 20
             periodSeconds: 15
           resources:
@@ -118,6 +121,9 @@ spec:
             - { name: model-weights, mountPath: /models, readOnly: true }
             # readOnlyRootFilesystem: true => give uvicorn/python a writable /tmp.
             - { name: tmp, mountPath: /tmp }
+            # Vault-PKI-issued server cert + client-verify CA (ESO Secret
+            # media-poisoner-mtls), read by app/serve.py via POISON_TLS_* above.
+            - { name: pki, mountPath: /pki, readOnly: true }
       volumes:
         - name: dri
           hostPath: { path: /dev/dri, type: Directory }
@@ -125,3 +131,10 @@ spec:
           persistentVolumeClaim: { claimName: media-poisoner-models }
         - name: tmp
           emptyDir: {}
+        # Vault-PKI-issued server cert + cluster CA, synced by ESO (kubernetes.io/tls
+        # tls.crt/tls.key/ca.crt) — same shape as the akkoma-proxy/tuwunel-proxy
+        # proxy-pki volumes (manifests/akkoma, manifests/tuwunel), mounted straight
+        # into this container instead of an nginx sidecar.
+        - name: pki
+          secret:
+            secretName: media-poisoner-mtls

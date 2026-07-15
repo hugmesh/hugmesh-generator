@@ -62,9 +62,36 @@ metadata:
   # forum/phpbb): real services whose only public surfaces today ride already-
   # reserved prefixes (`/bff/owncast/**`, `/bff/wiki/**`, `/social/wiki/**`), so a
   # vanity `owncast.`/`wiki.` handle is forbidden before any future subdomain ships.
-  revision: "3"
+  # revision 3 -> 4: route-consistency check (stage 3) caught two DEPLOYED
+  # publicly-routable prefixes the YAML was missing — `character-studio` (the
+  # `/character-studio/**` fe-gateway route to snapdragon-character-studio-ui,
+  # apps/20-gateway-fe.yaml route[character-studio-ui].path) and `v1` (the
+  # `/v1/analyze/**` be-gateway route to the edge-ai-analysis service,
+  # apps/20-gateway-be.yaml route[edge-ai-analysis].path, also seeded in
+  # route-access schema.sql as url_pattern '/v1/analyze/**'). The app-repo
+  # ReservedNames copies MUST add `character-studio` + `v1` too to stay in sync.
+  # revision 4 -> 5: parity fix for the gateway CanonicalSeed fe() anonymous-SPA-
+  # shell + public-federation-reads rows added by snapdragon-gateway PR #72 (the
+  # same rows were dual-write-added to route-access schema.sql, see
+  # manifests/route-access/initdb/20-schema.sql fe-gateway section). Most of
+  # those new url_patterns first-segment onto already-reserved labels (`assets`,
+  # `api`) or an empty segment (`/*.js`, `/*.css` start with the glob, so they
+  # contribute no literal first segment) — but FOUR are DEDICATED first-segment
+  # route prefixes the route-consistency check does not yet cover: `index.html`,
+  # `favicon.ico`, `importmap.json`, `remoteEntry.json` (the exact webroot
+  # filenames — distinct literal first-segments from the already-reserved bare
+  # `favicon` label, since the validator matches literal path segments, not
+  # prefixes of them). The app-repo ReservedNames copies should add these four
+  # too to stay in sync.
+  # revision 5 -> 6: route-consistency check flags `ai` (host `ai.snapdragon.systems`,
+  # apps/20-gateway-be.yaml route[edge-ai].host + route[edge-ai-analysis].host — the
+  # edge-AI inference tier, model API + `/v1/analyze/**` analysis API) as a DEPLOYED
+  # publicly-routable host the YAML was missing, introduced by PR #189 (commit
+  # 25f6b473) and undetected until this pass. The app-repo ReservedNames copies
+  # should add `ai` too to stay in sync.
+  revision: "6"
 spec:
-  # The canonical reserved set (70 labels). KEEP SORTED BY CATEGORY (comments) but
+  # The canonical reserved set (77 labels). KEEP SORTED BY CATEGORY (comments) but
   # the validator treats it as an unordered SET. Do not duplicate; the validator
   # also asserts there are no duplicates.
   #
@@ -108,6 +135,14 @@ spec:
     - _matrix
     - matrix
     - mastodon
+    # `ai`: the edge-AI inference tier is served on its own host
+    # `ai.snapdragon.systems` (apps/20-gateway-be.yaml route[edge-ai].host +
+    # route[edge-ai-analysis].host — the raw model API catchall plus the more
+    # specific `/v1/analyze/**` analysis API) — a DEDICATED reserved host, so a
+    # vanity `ai` handle would shadow it. Added by the route-consistency check
+    # (stage 3); PR #189 (commit 25f6b473) introduced the host without reserving
+    # the label. The app-repo ReservedNames copies MUST add `ai` too.
+    - ai
     # `_synapse` + `media`: PUBLICLY-ROUTABLE homeserver client surfaces deployed by
     # the route-access seed (manifests/route-access/initdb/20-schema.sql) on the
     # be-gateway — `/_synapse/**` (Matrix Synapse-compat, host-scoped on the matrix
@@ -150,6 +185,16 @@ spec:
     - status
     - support
     - help
+    # --- DEPLOYED route prefixes added in revision 5 (gateway PR #72 parity) ---
+    # The exact webroot filenames the fe-gateway route-access seed's anonymous
+    # SPA-shell rows now reference as literal first-segment url_patterns
+    # (manifests/route-access/initdb/20-schema.sql) — DISTINCT literal segments
+    # from the already-reserved bare `favicon` label above, since the validator
+    # matches literal path first-segments, not prefixes.
+    - index.html
+    - favicon.ico
+    - importmap.json
+    - remoteEntry.json
     # --- infra / ops names (never a user) ---
     - pki
     - vault
@@ -186,6 +231,18 @@ spec:
     # prior tube/games-instances-console fix; this brings the canonical YAML to match.
     - tube
     - games-instances-console
+    # --- DEPLOYED route prefixes added in revision 4 ----------------------------
+    # `character-studio`: the Character Studio (VN) micro-frontend remote is
+    # served at `/character-studio/**` on the fe-gateway
+    # (apps/20-gateway-fe.yaml route[character-studio-ui].path) — a DEDICATED
+    # first-segment route prefix, so a vanity `character-studio` handle would
+    # shadow it. Also seeded in route-access schema.sql as a url_pattern.
+    # `v1`: the edge-AI analysis API is served at `/v1/analyze/**` on the
+    # be-gateway (apps/20-gateway-be.yaml route[edge-ai-analysis].path), a
+    # DEDICATED first-segment route prefix seeded in route-access schema.sql as
+    # url_pattern '/v1/analyze/**' — so a vanity `v1` handle would shadow it.
+    - character-studio
+    - v1
     # --- planned / not-yet-deployed publicly-routable services -----------------
     # These have NO kind:Service / gateway route in the GitOps tree YET, so the
     # route-consistency drift check will NOT demand them — they are reserved here

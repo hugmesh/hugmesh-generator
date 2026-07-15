@@ -9,7 +9,16 @@ sys-block/parted device-mapper
 # ModemManager stack. Safe: NM REQUIRED_USE only forces modemmanager via bluetooth, which
 # is off (-bluetooth in make.conf). This is the SOLE gobject-introspection puller.
 net-misc/networkmanager wifi -modemmanager
-# rpi-eeprom requires exactly-one-of ( pi4 pi5 ) — this is the Pi 5 image.
+# rpi-eeprom requires exactly-one-of ( pi4 pi5 ) — no "pi3" value exists (it is
+# a Pi 4/5-only bootloader/VL805 updater; verified against the live ebuild).
+# This file's baked-in default is pi5 (the historical, pre-Phase-6 default);
+# build-rpi5-stage4.sh flips this line to "pi4" in-sysroot (sed, after this
+# directory is bulk-copied) whenever --board rpi4 is selected — see its
+# BOARD-gated package.use fix-up. Do not rely on this static "pi5" surviving a
+# --board rpi4 build; it is rewritten. --board rpi3 does NOT flip this line —
+# it EXCLUDES dev-embedded/rpi-eeprom from STAGE4_PACKAGES entirely instead
+# (Pi 3 has no flashable EEPROM at all), so this line is simply inert/unused
+# on that board rather than rewritten.
 dev-embedded/rpi-eeprom pi5
 
 # networkmanager[wifi] (forced above) hard-requires wpa_supplicant[dbus] (NM drives

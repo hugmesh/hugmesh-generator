@@ -128,6 +128,17 @@ spec:
               value: {{ .Values.service.port | quote }}
             - name: SPRING_CONFIG_ADDITIONAL_LOCATION
               value: {{ if .Values.keystore.enabled }}"file:/config/,file:/stores/"{{ else }}"file:/config/"{{ end }}
+            # Spring only auto-loads a profile-named doc (application-{name}.yml)
+            # from an additional-location DIRECTORY when a profile literally named
+            # {name} is active — so the mounted application-routes.yml ConfigMap
+            # (this gateway's entire downstream route table) would otherwise
+            # silently never load, leaving only the packaged application.yml's
+            # placeholder fallback route active. Same root cause + fix as
+            # compose.local.yaml (generator#261); this is the cluster-deployment
+            # counterpart of that bug, never independently verified against a
+            # real cluster.
+            - name: SPRING_PROFILES_ACTIVE
+              value: "routes"
             - name: CASDOOR_ISSUER_URI
               value: {{ .Values.casdoor.issuerUri | quote }}
             - name: CASDOOR_JWKS_URI

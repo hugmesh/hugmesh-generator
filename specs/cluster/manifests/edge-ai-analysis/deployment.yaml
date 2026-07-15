@@ -28,7 +28,7 @@ spec:
     spec:
       securityContext:
         seLinuxOptions:
-          # Unique MCS level (edge-ai=c41); edge-ai-analysis -> c49 (next free).
+          # Unique MCS level (edge-ai=c73); edge-ai-analysis -> c49 (next free).
           type: container_t
           level: "s0:c49"
         runAsNonRoot: true

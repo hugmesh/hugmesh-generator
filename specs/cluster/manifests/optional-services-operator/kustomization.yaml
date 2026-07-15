@@ -1,0 +1,16 @@
+# optional-services-operator bundle — the CRD + operator/BFF RBAC + the inert per-
+# slug seed CRs. Deployed by the optional-services-operator ArgoCD Application
+# (apps/13d-optional-services-operator.yaml). ArgoCD applies the CRD before the CRs
+# in a sync (Application-level SkipDryRunOnMissingResource=true on 13d covers the
+# first-sync race before the CRD is Established).
+#
+# The controller itself lives in admin-bff (systems.snapdragon.adminbff.optional
+# services) and SHIPS DARK (app.optional-services.reconcile.enabled=false); this
+# bundle only lands the API surface (CRD), the least-privilege grants, and the seed
+# desired-state so an admin has an editable `kubectl get optionalservices` table.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - crd-optionalservice.yaml
+  - rbac.yaml
+  - seed-optionalservices.yaml

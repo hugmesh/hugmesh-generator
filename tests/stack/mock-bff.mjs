@@ -1,22 +1,33 @@
-// mock-bff.mjs — stands in for the Spring admin BFF (backend namespace, behind
-// the gateway). It owns the Casdoor-admin-managed allowlist and the rule that
-// registration is **Google- or Discord-only** AND only for identities an admin
-// invited. It also models the TWO-STAGE registration:
-//   1. register/{google,discord}  -> creates a real internal Casdoor account
-//      (here: an `accounts` entry) but registrationComplete=false.
-//   2. register/complete          -> finishes registration; ONLY THEN are the
-//      Matrix/Mastodon service tokens released (the UI/host enforces this).
-// In a real deployment the admin API reaches Casdoor through the snapdragon-pki
-// gateway (JWT) — direct Casdoor calls are only for OAuth2 grants. In-memory.
+// mock-bff.mjs — stands in for the Spring user/admin BFF (behind the gateway) for
+// the NATIVE-LOGIN model. The browser's ONLY login surface is our own login-ui
+// username/password form, which POSTs { username, password } to POST /bff/login;
+// this mock verifies the credential, mints an opaque httpOnly `bff_session` cookie
+// (Set-Cookie) and returns ONLY non-secret routing hints (registrationComplete,
+// status) — never a token. Casdoor is never browser-exposed. Auth for every other
+// /bff/** call is that cookie (credentials: 'include'); the browser holds no bearer.
+//
+// TWO-STAGE registration is preserved:
+//   1. an admin INVITES an identity via POST /bff/admin/allowlist { email } — that
+//      provisions a native account (registrationComplete=false, password=E2E) so
+//      the identity becomes sign-in-able. An UN-invited identity has no account, so
+//      POST /bff/login 401s { error:'invalid_credentials' } and the form shows
+//      "Sign-in failed" (native login has NO self-registration surface).
+//   2. POST /bff/register/complete { displayName, screenReaderName } finishes
+//      registration; the Matrix/Mastodon service tokens are brokered server-side on
+//      POST /bff/provision/{matrix,mastodon} and injected by the /bff/user/**
+//      hsproxy — the browser never holds a homeserver token. In-memory.
 import http from 'node:http';
 
 const PORT = Number(process.env.PORT || 8403);
 const ADMINS = new Set((process.env.ADMIN_EMAILS || 'admin@snapdragon.systems').split(','));
-const allowEmails = new Set([...ADMINS]);     // Gmail addresses an admin invited
-const allowDiscord = new Set();               // Discord usernames an admin invited
-const accounts = new Map();                   // id -> {id, provider, registrationComplete, roles}
-const sessions = new Map();                   // token -> id
-const grants = new Map();                     // actorId -> Set(namespace)  (admin-granted namespace access)
+// The deterministic native password every seeded/invited persona signs in with —
+// matches the e2e helper's LOGIN_PASSWORD (E2E_PASSWORD ?? 'e2e-pass').
+const LOGIN_PASSWORD = process.env.E2E_PASSWORD || 'e2e-pass';
+const allowEmails = new Set([...ADMINS]);     // emails an admin invited (provisioned)
+const allowDiscord = new Set();               // discord handles an admin invited
+const accounts = new Map();                   // username -> {username,label,roles,registrationComplete,password,matrix?,mastodon?}
+const sessions = new Map();                   // bff_ token -> username
+const grants = new Map();                     // username -> Set(namespace) (admin-granted namespace access)
 const usageMem = [];                          // in-memory usage events (fallback when ClickHouse is absent)
 const NAMESPACES = ['snapdragon-pki', 'snapdragon-backend', 'snapdragon-frontend', 'snapdragon-games', 'observability'];
 // Per-gateway role->URL external access rules (stands in for the Postgres
@@ -36,39 +47,43 @@ const ISOS = [
 ];
 // Real-service brokering: the BFF mints Matrix (Synapse) + Mastodon tokens
 // server-side so the UI never holds homeserver admin creds. Point at the real
-// Synapse/Casdoor; default to the integration stack ports.
+// Synapse/Mastodon; default to the integration stack ports.
 const SYNAPSE_URL = process.env.SYNAPSE_URL || 'http://localhost:8008';
 const MASTODON_URL = process.env.MASTODON_URL || 'http://localhost:8402';
 const SVC_PW = process.env.SVC_PASSWORD || 'snapdragon-svc-pw';
 
-const idFor = (provider, handle) => `${provider}:${handle.toLowerCase()}`;
 const send = (res, code, obj, extraHeaders = {}) => {
   res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*',
-    'access-control-allow-headers': 'authorization,content-type', 'access-control-allow-methods': '*',
-    ...extraHeaders });
+    'access-control-allow-credentials': 'true',
+    'access-control-allow-headers': 'authorization,content-type,x-csrf-token',
+    'access-control-allow-methods': '*', ...extraHeaders });
   res.end(JSON.stringify(obj));
 };
-// Auth: bearer first (the login remote holds the token), else the HttpOnly
-// `bff_session` cookie. In production the admin remote NEVER holds a bearer —
-// it sends `credentials:'include'` and the gateway's BffCookieToBearerWebFilter
-// turns the HttpOnly `bff_` cookie into the bearer server-side. This mock
-// stands in for gateway+BFF, so that filter collapses into the cookie fallback.
-const sessionOf = (req) => {
-  const h = req.headers['authorization'] || '';
-  let tok = h.startsWith('Bearer ') ? h.slice(7) : null;
-  if (!tok) { const m = /(?:^|;\s*)bff_session=([^;\s]+)/.exec(req.headers['cookie'] || ''); tok = m ? m[1] : null; }
-  const id = tok ? sessions.get(tok) : null;
-  return id ? accounts.get(id) : null;
-};
-// The Set-Cookie leg of the production login contract (HttpOnly ⇒ invisible to
-// JS; the admin remote depends on it riding every same-origin request).
-const sessionCookie = (t) => ({ 'set-cookie': `bff_session=${t}; Path=/; HttpOnly; SameSite=Lax` });
 async function bodyOf(req) { let d=''; for await (const c of req) d+=c; return d ? JSON.parse(d) : {}; }
 
+// ── Opaque bff_ session cookie (httpOnly) — the ONLY auth the browser holds ──
+function newSession(acct) {
+  const t = `bff_${Math.random().toString(36).slice(2, 12)}`;
+  sessions.set(t, acct.username);
+  return t;
+}
+const setCookieHeader = (token) =>
+  ({ 'set-cookie': `bff_session=${token}; HttpOnly; Path=/; SameSite=Lax` });
+/** Resolve the caller from the httpOnly bff_session cookie (native model); fall
+ *  back to a legacy Authorization: Bearer for any pre-cookie caller. */
+function sessionOf(req) {
+  const cookie = req.headers['cookie'] || '';
+  const m = cookie.match(/(?:^|;\s*)bff_session=([^;]+)/);
+  let token = m ? m[1] : null;
+  if (!token) {
+    const h = req.headers['authorization'] || '';
+    if (h.startsWith('Bearer ')) token = h.slice(7);
+  }
+  const username = token ? sessions.get(token) : null;
+  return username ? accounts.get(username) : null;
+}
+
 // ── Usage analytics → ClickHouse ───────────────────────────────────
-// In production the BFF produces usage events to Kafka and a consumer writes
-// them to ClickHouse; here (test double) we write directly to the real
-// ClickHouse so the admin "Usage" view shows live infra usage by users.
 const CH_URL = process.env.CLICKHOUSE_URL || 'http://localhost:8123';
 const CH_USER = process.env.CLICKHOUSE_USER || 'snap';
 const CH_PASS = process.env.CLICKHOUSE_PASSWORD || 'snap';
@@ -98,8 +113,6 @@ function record(actor, roles, action) {
   const esc = (s) => String(s).replace(/'/g, "\\'");
   ch(`INSERT INTO snapdragon.usage_events (actor, role, action, module) VALUES ('${esc(actor)}','${role}','${action}','${mod}')`).catch((e) => chErr('insert: ' + e.message));
 }
-// Aggregate usage from the in-memory log — the fallback the admin Usage view
-// reads when ClickHouse isn't running (e.g. the rootless mock stack).
 function usageFromMemory() {
   const hourAgo = Date.now() - 3600_000;
   const mods = new Map(), acts = new Map(), recent = new Set();
@@ -140,48 +153,85 @@ async function mastodonToken(username) {
   return r.json();
 }
 
-function ensureAccount(provider, handle) {
-  const id = idFor(provider, handle);
-  if (!accounts.has(id)) {
-    const roles = (provider === 'google' && ADMINS.has(handle.toLowerCase())) ? ['user', 'admin'] : ['user'];
-    accounts.set(id, { id, provider, handle, registrationComplete: false, roles });
+// ── Native accounts (a Casdoor stand-in) ───────────────────────────
+/** Provision a native account (the mock's "Casdoor account"). An admin invite +
+ *  the seed set both land here. registrationComplete starts false unless seeded
+ *  complete; the deterministic native password lets the login-ui form sign in. */
+function provisionAccount(username, { roles, complete = false } = {}) {
+  const key = username.toLowerCase();
+  if (!accounts.has(key)) {
+    const r = roles || (ADMINS.has(key) ? ['user', 'admin'] : ['user']);
+    accounts.set(key, { username: key, label: username, roles: r,
+      registrationComplete: complete, password: LOGIN_PASSWORD, matrix: null, mastodon: null });
   }
-  return accounts.get(id);
+  return accounts.get(key);
 }
-function newSession(acct) { const t = `bff_${Math.random().toString(36).slice(2, 12)}`; sessions.set(t, acct.id); return t; }
-const sessOut = (t, a) => ({ token: t, id: a.id, provider: a.provider, roles: a.roles, registrationComplete: a.registrationComplete });
+const sessionView = (a) => ({ id: a.username, label: a.label, provider: 'password',
+  roles: a.roles, registrationComplete: a.registrationComplete });
+
+// Seed the personas the specs expect to sign in WITHOUT a prior in-suite invite:
+// the bootstrap admin (fully registered), plus the direct-onboard personas. The
+// gating specs' un-invited identities (mallory@, rando, rbac-*-uninvited) are
+// DELIBERATELY absent so their POST /bff/login 401s. Invited/onboarded emails
+// (alice@…eve@, frank@) are also seeded so file-order independence holds; a later
+// admin invite is idempotent.
+function seedPersonas() {
+  // Admins seed registrationComplete=FALSE so the journey specs' onboard(admin) drives the
+  // real two-stage flow (login -> complete-view -> display name -> complete); an already-complete
+  // seed would skip the complete-view and time out at register-display-name. The admin ROLE is
+  // still granted, so nav-admin appears once onboarding completes.
+  for (const a of ADMINS) provisionAccount(a, { roles: ['user', 'admin'], complete: false });
+  for (const u of ['alice@gmail.com', 'bob@gmail.com', 'carol@gmail.com', 'dave@gmail.com',
+                   'eve@gmail.com', 'frank@gmail.com', 'dragoneer', 'e2e-user']) {
+    provisionAccount(u, { complete: false });
+  }
+}
+
+// ── CSRF: native mutating /bff/** (non-mint) use an XSRF double-submit. The mock
+//    accepts any request whose X-CSRF-TOKEN echoes the XSRF-TOKEN cookie, and is
+//    lenient when neither is present (the e2e API context may omit it). ──
+function csrfOk(req) {
+  const cookie = req.headers['cookie'] || '';
+  const m = cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]+)/);
+  const header = req.headers['x-csrf-token'];
+  if (!m) return true;                 // no cookie issued → nothing to double-submit
+  return header === m[1];
+}
 
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'OPTIONS') return send(res, 204, {});
     const url = new URL(req.url, 'http://x'); const p = url.pathname;
 
-    // ── Registration (stage 1): create a real Casdoor account if invited ──
-    if (req.method === 'POST' && p === '/bff/register/google') {
-      const b = await bodyOf(req); const email = (b.email || '').toLowerCase();
-      if (!allowEmails.has(email)) return send(res, 403, { error: 'email not invited by an admin' });
-      const a = ensureAccount('google', email); a.registrationComplete = false; // (re)start onboarding
-      record(email, a.roles, 'register');
-      { const t = newSession(a); return send(res, 200, sessOut(t, a), sessionCookie(t)); }
-    }
-    if (req.method === 'POST' && p === '/bff/register/discord') {
-      const b = await bodyOf(req); const handle = (b.username || '').toLowerCase();
-      if (!allowDiscord.has(handle)) return send(res, 403, { error: 'discord username not invited by an admin' });
-      const a = ensureAccount('discord', handle); a.registrationComplete = false;
-      record(handle, a.roles, 'register');
-      { const t = newSession(a); return send(res, 200, sessOut(t, a), sessionCookie(t)); }
-    }
-
-    // ── Login: only for an existing (invited+created) Casdoor account ──
+    // ── NATIVE LOGIN: our own username/password form → opaque bff_ cookie ──
     if (req.method === 'POST' && p === '/bff/login') {
       const b = await bodyOf(req);
-      const provider = b.provider || (b.username ? 'discord' : 'google');
-      const handle = (b.email || b.username || '').toLowerCase();
-      const id = idFor(provider, handle);
-      const a = accounts.get(id);
-      if (!a) return send(res, 401, { error: 'no account — register first' });
-      record(handle, a.roles, 'login');
-      { const t = newSession(a); return send(res, 200, sessOut(t, a), sessionCookie(t)); }
+      const username = (b.username || '').toLowerCase();
+      const a = accounts.get(username);
+      if (!a || a.password !== b.password) {
+        // No account (un-invited) or bad password → the form shows "Sign-in failed".
+        return send(res, 401, { error: 'invalid_credentials', message: 'invalid username or password' });
+      }
+      record(username, a.roles, 'login');
+      // Non-secret routing hints ONLY; the session token is the httpOnly cookie.
+      return send(res, 200, { registrationComplete: a.registrationComplete, status: 'active', mfaRequired: false },
+        setCookieHeader(newSession(a)));
+    }
+
+    // ── Session hydrate (cookie-read): the ONLY browser-readable identity ──
+    if (req.method === 'GET' && p === '/bff/session') {
+      const me = sessionOf(req);
+      if (!me) return send(res, 401, { error: 'no session' });
+      return send(res, 200, sessionView(me));
+    }
+    // Native logout — clears the session (login-ui posts /bff/sessionOut; DELETE too).
+    if ((req.method === 'POST' && p === '/bff/sessionOut') ||
+        (req.method === 'DELETE' && p === '/bff/session')) {
+      const cookie = req.headers['cookie'] || '';
+      const m = cookie.match(/(?:^|;\s*)bff_session=([^;]+)/);
+      if (m) sessions.delete(m[1]);
+      return send(res, 200, { ok: true },
+        { 'set-cookie': 'bff_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0' });
     }
 
     const me = sessionOf(req);
@@ -189,26 +239,66 @@ const server = http.createServer(async (req, res) => {
     // ── Registration (stage 2): complete; releases service entitlement ──
     if (req.method === 'POST' && p === '/bff/register/complete') {
       if (!me) return send(res, 401, { error: 'login required' });
+      if (!csrfOk(req)) return send(res, 403, { error: 'csrf' });
+      const b = await bodyOf(req);
+      if (b && b.displayName) me.label = String(b.displayName);
       me.registrationComplete = true;
-      record(me.id, me.roles, 'complete');
-      record(me.id, me.roles, 'matrix.entitled');
-      record(me.id, me.roles, 'mastodon.entitled');
-      return send(res, 200, { id: me.id, registrationComplete: true });
+      record(me.username, me.roles, 'complete');
+      record(me.username, me.roles, 'matrix.entitled');
+      record(me.username, me.roles, 'mastodon.entitled');
+      return send(res, 200, { id: me.username, registrationComplete: true });
     }
     if (req.method === 'GET' && p === '/bff/me') {
       if (!me) return send(res, 401, { error: 'login required' });
-      return send(res, 200, { id: me.id, provider: me.provider, roles: me.roles, registrationComplete: me.registrationComplete });
+      return send(res, 200, sessionView(me));
     }
 
-    // ── Admin allowlist (Gmail + Discord), admin role only ──
+    // ── Broker + inject real Matrix/Mastodon service tokens (post full reg) ──
+    if (req.method === 'POST' && (p === '/bff/provision/matrix' || p === '/bff/provision/mastodon')) {
+      if (!me) return send(res, 401, { error: 'login required' });
+      if (!me.registrationComplete) return send(res, 403, { error: 'complete registration first' });
+      const u = matrixUser(me.username);
+      try {
+        if (p.endsWith('matrix')) { me.matrix = await synapseToken(u); return send(res, 200, { ok: true }); }
+        me.mastodon = await mastodonToken(u); return send(res, 200, { ok: true });
+      } catch (e) { return send(res, 502, { error: String(e) }); }
+    }
+    // ── hsproxy: same-origin Matrix/Mastodon CS-API. Auth is SOLELY the bff_
+    //    cookie; the mock injects the server-held token so the browser holds none. ──
+    if (p.startsWith('/bff/user/matrix/') || p.startsWith('/bff/user/mastodon/')) {
+      if (!me) return send(res, 401, { error: 'login required' });
+      const isMatrix = p.startsWith('/bff/user/matrix/');
+      const tok = isMatrix ? me.matrix : me.mastodon;
+      if (!tok || !tok.access_token) return send(res, 403, { error: 'service not provisioned' });
+      const upstream = (isMatrix ? SYNAPSE_URL : MASTODON_URL) +
+        p.replace(isMatrix ? '/bff/user/matrix' : '/bff/user/mastodon', '') + (url.search || '');
+      const init = { method: req.method, headers: { authorization: `Bearer ${tok.access_token}` } };
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        const raw = await bodyOf(req).catch(() => ({}));
+        init.headers['content-type'] = 'application/json';
+        init.body = JSON.stringify(raw);
+      }
+      try {
+        const r = await fetch(upstream, init);
+        const text = await r.text();
+        res.writeHead(r.status, { 'content-type': r.headers.get('content-type') || 'application/json',
+          'access-control-allow-origin': '*', 'access-control-allow-credentials': 'true' });
+        return res.end(text);
+      } catch (e) { return send(res, 502, { error: String(e) }); }
+    }
+
+    // ── Admin allowlist (the INVITE = provision a native account) ──
     if (p === '/bff/admin/allowlist') {
       if (!me || !me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' });
       if (req.method === 'GET') return send(res, 200, { emails: [...allowEmails], discord: [...allowDiscord] });
       if (req.method === 'POST') {
+        if (!csrfOk(req)) return send(res, 403, { error: 'csrf' });
         const b = await bodyOf(req);
-        if (b.email) allowEmails.add(b.email.toLowerCase());
-        if (b.discord) allowDiscord.add(b.discord.toLowerCase());
-        record(me.id, me.roles, 'admin.invite');
+        // Inviting an identity PROVISIONS its native account so it can sign in
+        // (registrationComplete=false — it still has to complete the 2nd stage).
+        if (b.email) { allowEmails.add(b.email.toLowerCase()); provisionAccount(b.email.toLowerCase(), { complete: false }); }
+        if (b.discord) { allowDiscord.add(b.discord.toLowerCase()); provisionAccount(b.discord.toLowerCase(), { complete: false }); }
+        record(me.username, me.roles, 'admin.invite');
         return send(res, 200, { emails: [...allowEmails], discord: [...allowDiscord] });
       }
       if (req.method === 'DELETE') {
@@ -228,29 +318,16 @@ const server = http.createServer(async (req, res) => {
         const active = (await J("SELECT uniqExact(actor) AS n FROM snapdragon.usage_events WHERE ts > now() - INTERVAL 1 HOUR"))[0] || { n: 0 };
         const total = (await J('SELECT count() AS n FROM snapdragon.usage_events'))[0] || { n: 0 };
         const out = { byModule, byAction, activeUsers: Number(active.n), totalEvents: Number(total.n) };
-        // If ClickHouse is reachable but empty (no consumer wrote events), fall
-        // back to the in-memory log so the view still reflects this run.
         return send(res, 200, out.totalEvents > 0 ? out : usageFromMemory());
       } catch (e) {
-        // ClickHouse unavailable (rootless mock stack) — serve the in-memory log.
         return send(res, 200, usageFromMemory());
       }
-    }
-    // ── Broker real Matrix/Mastodon service tokens (post full registration) ──
-    if (req.method === 'POST' && (p === '/bff/provision/matrix' || p === '/bff/provision/mastodon')) {
-      if (!me) return send(res, 401, { error: 'login required' });
-      if (!me.registrationComplete) return send(res, 403, { error: 'complete registration first' });
-      const u = matrixUser(me.handle);
-      try {
-        const t = p.endsWith('matrix') ? await synapseToken(u) : await mastodonToken(u);
-        return send(res, 200, t);
-      } catch (e) { return send(res, 502, { error: String(e) }); }
     }
 
     // ── A caller's own granted namespaces (gates Uptrace/observability views) ──
     if (req.method === 'GET' && p === '/bff/me/namespaces') {
       if (!me) return send(res, 401, { error: 'login required' });
-      const own = me.roles.includes('admin') ? NAMESPACES : [...(grants.get(me.id) || [])];
+      const own = me.roles.includes('admin') ? NAMESPACES : [...(grants.get(me.username) || [])];
       return send(res, 200, { namespaces: own });
     }
 
@@ -265,7 +342,7 @@ const server = http.createServer(async (req, res) => {
       const user = (b.user || '').toLowerCase();
       if (!user || !NAMESPACES.includes(b.namespace)) return send(res, 400, { error: 'user + valid namespace required' });
       if (!grants.has(user)) grants.set(user, new Set());
-      if (req.method === 'POST') { grants.get(user).add(b.namespace); record(me.id, me.roles, 'admin.grant'); }
+      if (req.method === 'POST') { grants.get(user).add(b.namespace); record(me.username, me.roles, 'admin.grant'); }
       if (req.method === 'DELETE') grants.get(user).delete(b.namespace);
       const out = [...grants.entries()].map(([u, ns]) => ({ user: u, namespaces: [...ns] }));
       return send(res, 200, { namespaces: NAMESPACES, grants: out });
@@ -280,7 +357,7 @@ const server = http.createServer(async (req, res) => {
         if (!b.gateway || !b.url_pattern || !b.role) return send(res, 400, { error: 'gateway+url_pattern+role required' });
         const rule = { id: String(nextRule++), gateway: b.gateway, url_pattern: b.url_pattern,
                        role: b.role, casdoor_user: b.casdoor_user || null, allow: b.allow !== false };
-        routeAccess.push(rule); record(me.id, me.roles, 'admin.route');
+        routeAccess.push(rule); record(me.username, me.roles, 'admin.route');
         return send(res, 200, { rules: routeAccess, added: rule });
       }
       if (req.method === 'DELETE') {
@@ -300,7 +377,9 @@ const server = http.createServer(async (req, res) => {
     return send(res, 404, { error: 'not found', path: p });
   } catch (e) { return send(res, 500, { error: String(e) }); }
 });
+seedPersonas();
 server.listen(PORT, () => {
-  console.log(`[mock-bff] :${PORT} admins=${[...ADMINS]} (two-stage reg; google+discord; clickhouse usage)`);
+  console.log(`[mock-bff] :${PORT} NATIVE login (username/password → httpOnly bff_ cookie); `
+    + `admins=${[...ADMINS]}; seeded=${[...accounts.keys()].length} accounts; two-stage reg + hsproxy`);
   ensureUsageTable();
 });

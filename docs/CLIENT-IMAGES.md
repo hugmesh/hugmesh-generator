@@ -1,6 +1,7 @@
 # Per-user client device images (FD-04 … FD-09)
 
-Status: **FD-04 shipped; later increments deferred.** This document is the staged
+Status: **FD-04 shipped; desktop app governance implemented (ships dark); other
+later increments deferred.** This document is the staged
 implementation plan for the per-user *client* device images, distinct from the
 five Kubernetes **node** roles (`pki / be / fe / be+gpu / omnibus`). A *client* is
 a **person's device** — a desktop that joins the Tailscale mesh and runs the
@@ -12,6 +13,24 @@ platform UI — not a cluster node.
 > install, optional keyfile/YubiKey unlock, and an auto-detected `/media` data disk
 > (Steam + gocryptfs Vaults). Those are the *opposite* of the mesh-joined clients
 > below; the `--standalone` / `--skip-sso` flags also compose onto these roles.
+> **This standalone posture is not x86-only** — `build-frite-stage4.sh`,
+> `build-rpi5-stage4.sh` (rpi5/rpi4/rpi3 boards), and `build-orangepi5-stage4.sh`
+> all have their own `desktop` role composable with `--standalone --encrypt-root`,
+> and `build-orangepi-zero2-stage4.sh` has the same posture on its headless
+> `appliance` role — see STANDALONE-DESKTOP.md's "ARM platforms" section.
+> **`build-jetson-stage4.sh` is the one exception**: `--encrypt-root` (and
+> `--standalone`, which forces it on) is hard-blocked outright on this platform —
+> its single boot+root partition means the UEFI firmware can't find a kernel once
+> that partition is LUKS2-encrypted — see STANDALONE-DESKTOP.md's Jetson section.
+> These ARM `desktop` roles are a **separate, simpler**
+> role namespace from this document's FD-04 client-device architecture below
+> (no `PERSON_ROLE`/`DOMAINS`/Casdoor desktop governance) — they exist purely as
+> the mount point for the standalone/LUKS posture on non-x86 hardware.
+> The standalone path also includes an **unaffiliated** variant
+> (`standalone-unaffiliated`, or `--unaffiliated` composed onto any client role):
+> a plain hardened Gentoo desktop with **zero Snapdragon affiliation** — neutral
+> boot chain/installer/hostname/artifacts, no `snapdragon-*` tools or markers —
+> see [STANDALONE-DESKTOP.md](STANDALONE-DESKTOP.md#unaffiliated-plain-desktop-standalone-unaffiliated).
 
 - **✅ shipped:** the x86 laptop / thin-Chromebook / superadmin-desktop client arms
   (FD-04, Increments 1 and 3), including the grub-mkimage / ESP fix (PR #93). The
@@ -19,9 +38,10 @@ platform UI — not a cluster node.
   (`tests/qemu/verify-client.sh`).
 - **🔭 deferred / roadmap:** FD-07 (LUKS2-decrypt == Casdoor), FD-06 (VPN-lock /
   expiry), FD-08 (delegated ArgoCD pipeline), egress-VPN net atoms baking into the
-  x86 client, and **desktop app governance** (per-license SSO-enforced sudo +
-  admin-curated Plasma Discover store + user install-requests + admin
-  remote-install over the device-SSH-license).
+  x86 client.
+- **✅ implemented, ships dark:** **desktop app governance** (per-license
+  SSO-enforced sudo + admin-curated Plasma Discover store + user install-requests
+  + admin remote-install over the device-SSH-license) — see Increment 7 below.
 
 > **✅ All channels expose the client roles + the full option set.** The
 > `laptop` / `chromebook` / `desktop` roles build identically from the CLI, the
@@ -72,7 +92,9 @@ the native amd64 chroot build with grub-EFI.
 - Desktop USE: a `@@CLIENT_USE@@` token in `make.conf.tmpl` (`X gtk dbus elogind`)
   set for client roles.
 - `PERSON_ROLE` + `DOMAINS` build flags → `/etc/snapdragon/{identity-role,domains}`
-  markers; `provision_client_identity()` applies them; person-role+domain in the
+  markers (baked directly by the build); `provision_desktop_governance()` (in
+  `specs/etc/keys-provision/provision.sh`) reads the `domains` marker at first boot
+  to render the Casdoor/OIDC desktop-governance tie; person-role+domain in the
   artifact tag.
 - **✅ DONE** — laptop image **QEMU-verified to the lightdm greeter + tailnet
   join** (`build-x86-host-stage4.sh --role laptop --person-role user --domains
@@ -129,13 +151,21 @@ the native amd64 chroot build with grub-EFI.
   domain-scoped user-device request; the pipeline **executes** the privileged
   stage4 (admin never gets privileged build access or core secrets; ADR-12/ADR-24).
 
-### 7 — Desktop app governance — 🔭 PLANNED (design + queued)
+### 7 — Desktop app governance — ✅ IMPLEMENTED, ships dark
 - Extends the shipped FD-04 client images with **per-license SSO-enforced sudo**
   (revocable at the IdP), an **admin-curated Plasma Discover store**
   (default-NONE, domain-locked Flatpak / OCI registry, `discover`-role gated),
   **user install-requests**, and **admin remote-install** (one-click + an in-UI
   SSH terminal over the device-SSH-license). Rides the existing device-SSH-license
-  transport. Not yet implemented.
+  transport. The client-side provisioning lives here
+  ([`specs/etc/snapdragon/desktop-governance/`](../specs/etc/snapdragon/desktop-governance/):
+  polkit sudo rule, SSSD/OIDC config, Discover/Flatpak wiring, autostart SSO
+  deposit scripts) and the server-side data/API is a full set of controllers in
+  `snapdragon-admin-bff-api` (catalog, install-requests, remote-install, sudo
+  entitlement/step-up, SSH terminal). It **ships dark**: the registry + SSH
+  transport default to `Noop` client implementations gated by
+  `app.desktop.registry.enabled=false` / `app.desktop.remote-install.enabled=false`
+  (both default off), so a default deployment exposes none of this.
 
 ## Provisioning manifest additions (keys-provision)
 

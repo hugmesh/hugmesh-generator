@@ -29,7 +29,11 @@
 # builder is the canonical cluster-node builder whose gate/helpers are sourced
 # and exercised below; build-x86-host-stage4.sh carries the SAME selection knobs
 # (all-sentinel + EXCLUDE_SERVICES, ported from rpi5) and its wiring is
-# grep-asserted in section 4c so the two builders cannot silently diverge.
+# grep-asserted in section 4c so the two builders cannot silently diverge. 4c
+# also extracts BOTH builders' real `games)` case bodies and diffs them for the
+# games-instances/games-services control-plane pruning markers, so a games)
+# case edited in only one builder (the divergence class that shipped once
+# already) fails the test instead of silently drifting.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -286,6 +290,37 @@ if [ -f "${BUILDER_X86}" ]; then
   grep -q 'EXCLUDE_SERVICES removed' "${BUILDER_X86}" \
     && ok "x86: applies the EXCLUDE_SERVICES subtraction pass" || bad "x86: EXCLUDE_SERVICES subtraction pass missing"
   bash -n "${BUILDER_X86}" && ok "build-x86-host-stage4.sh: bash -n clean" || bad "x86 builder failed bash -n"
+
+  # ── games-instances (app-store control-plane) prune parity ─────────────────
+  # The games) case in EACH builder must ALSO prune the games-instances/
+  # games-services control plane (13c ApplicationSet, manifests/games-instances,
+  # the two casdoor sync Jobs, the games-servers-console route, and the
+  # games-services route-access rows) when games itself is deselected — that
+  # control plane rides the games slug and cannot be left orphaned. Extract the
+  # REAL `games)` case body from each builder (not a hand-copied excerpt) so a
+  # future refactor of either file is caught here, not just at audit time.
+  extract_case_block() {  # $1 = builder file -> the games) ... ;; block, verbatim
+    awk '/^            games\)$/{p=1} p{print; if(/^                ;;$/){exit}}' "$1"
+  }
+  RPI5_GAMES_CASE="$(extract_case_block "${BUILDER}")"
+  X86_GAMES_CASE="$(extract_case_block "${BUILDER_X86}")"
+  [ -n "${RPI5_GAMES_CASE}" ] && ok "extracted rpi5 games) case body" || bad "could not extract rpi5 games) case body"
+  [ -n "${X86_GAMES_CASE}" ] && ok "extracted x86 games) case body" || bad "could not extract x86 games) case body"
+  for marker in '13c-games-instances.yaml' 'manifests/games-instances' \
+                'games-services-admin-sync-job.yaml' 'games-services-runner-sync-job.yaml' \
+                'games-servers-console' 'games-services/instances' 'admin/games-services'; do
+    rpi5_has=1; echo "${RPI5_GAMES_CASE}" | grep -qF -- "${marker}" && rpi5_has=0
+    x86_has=1;  echo "${X86_GAMES_CASE}"  | grep -qF -- "${marker}" && x86_has=0
+    if [ "${rpi5_has}" -eq 0 ] && [ "${x86_has}" -eq 0 ]; then
+      ok "games-instances parity: both builders prune '${marker}' in the games) case"
+    elif [ "${rpi5_has}" -eq 0 ] && [ "${x86_has}" -ne 0 ]; then
+      bad "games-instances DIVERGENCE: rpi5 games) prunes '${marker}' but x86 games) does NOT"
+    elif [ "${x86_has}" -eq 0 ] && [ "${rpi5_has}" -ne 0 ]; then
+      bad "games-instances DIVERGENCE: x86 games) prunes '${marker}' but rpi5 games) does NOT"
+    else
+      bad "games-instances marker '${marker}' missing from BOTH builders' games) case (control plane no longer pruned anywhere)"
+    fi
+  done
 else
   bad "build-x86-host-stage4.sh missing"
 fi

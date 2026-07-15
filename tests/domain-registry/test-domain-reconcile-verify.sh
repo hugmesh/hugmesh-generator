@@ -157,9 +157,13 @@ DR_DOMAINS_CONF="${WORK}/domains.conf"
 DR_VERIFY_LIB="${LIB}"
 DR_GEN_KEYSTORES="${GEN_KEYSTORES}"
 DR_GEN_BRAND_REPOS="${GEN_BRAND_REPOS}"
+# Phase 6: the reconcile render path now runs the emit-time secret scanner as a HARD
+# fail-closed gate before promoting/acking. Point the seam at the repo copy (mirrors
+# the DR_GEN_* overrides) so the build-host test drives the real gate.
+DR_SECRET_SCAN="${REPO}/scripts/secret-scan.sh"
 DR_SKIP_CA=1
 export DR_NODE_ENV DR_PUB_KEY DR_CACHE_DIR DR_OUT_DIR DR_DOMAINS_CONF DR_VERIFY_LIB \
-       DR_GEN_KEYSTORES DR_GEN_BRAND_REPOS DR_SKIP_CA
+       DR_GEN_KEYSTORES DR_GEN_BRAND_REPOS DR_SECRET_SCAN DR_SKIP_CA
 mkdir -p "${DR_CACHE_DIR}"
 # shellcheck source=/dev/null
 . "${AGENT}"   # main is guarded; this just loads the functions with the DR_* config

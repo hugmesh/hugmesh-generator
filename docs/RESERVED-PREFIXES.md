@@ -45,10 +45,19 @@ against it. It currently holds **65** labels (`metadata.revision: "2"`):
   surfaces the route-access seed deploys on the be-gateway (`/_synapse/**`
   Matrix Synapse-compat, `/media/**` Mastodon media); real first-segment route
   prefixes a vanity username could shadow, surfaced by the consistency check,
-- **plus `forum` + `phpbb`** — a **planned / not-yet-deployed** publicly-routable
-  service (the phpBB community forum referenced in
-  `snapdragon.systems/.../announcements/announcement.model.ts`), forward-reserved
-  so the handle can't be squatted before the service ships.
+- **plus `forum` + `phpbb`** — the phpBB community forum is a **real, deployed,
+  DEFAULT-ON, live-routed** optional service since PR #164 (2026-06-23):
+  `apps/30-phpbb.yaml`, `38-forum-bff-db.yaml`, `39-forum-bff-api.yaml`,
+  `49-forum-ui.yaml` are all synced ArgoCD Applications, and `ROLE_FORUM` /
+  `ROLE_FORUM_MOD` rows are seeded in
+  [`20-schema.sql`](../specs/cluster/manifests/route-access/initdb/20-schema.sql).
+  Its only public surfaces ride already-reserved prefixes (`/social/forum/**`,
+  `/bff/forum/**`) rather than a dedicated `forum`-first-segment route, so —
+  same shape as the `owncast`/`wiki` forward-reserves in
+  [`reserved-prefixes.yaml`](../specs/cluster/reserved-prefixes.yaml) — the
+  route-consistency check doesn't demand the label; it is reserved defensively
+  so a vanity `forum`/`phpbb` handle (or a future `forum.<domain>` subdomain)
+  can never collide.
 
 The four app-repo `ReservedNames` copies must add the same labels to stay in
 sync (the validate script's **code-copy assertion** flags them mechanically when
@@ -163,8 +172,10 @@ The script runs **five stages** (each fails the build on a violation):
    (mechanical, replaces hand-counting). **Skip-if-absent**: a copy not present
    is reported `SKIP`, not failed, so this repo's own GitLab CI (which does not
    check out the app repos) stays green — the app repos run their own
-   `ReservedNamesTest`. **Planned** reserves (`forum`/`phpbb`) are expected in the
-   canonical set **without** a deployed route, so stages 3/4 never flag them.
+   `ReservedNamesTest`. The **deployed-but-defensive** reserves (`forum`/`phpbb`,
+   `owncast`/`wiki`) are expected in the canonical set **without a dedicated
+   first-segment route of their own** (their public surfaces ride already-reserved
+   prefixes), so stages 3/4 never flag them.
 
 ## Adding a new dedicated route prefix (the workflow)
 

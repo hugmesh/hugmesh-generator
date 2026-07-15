@@ -1,7 +1,34 @@
 #!/usr/bin/env bash
 # build-rpi5-stage4.sh
-# Build a hardened Gentoo aarch64 (RPi 5) stage4 ISO with Kubernetes
-# using crossdev toolchain on x86_64
+# Build a hardened Gentoo aarch64 stage4 ISO with Kubernetes for a Raspberry
+# Pi Foundation board (--board rpi5 [DEFAULT, BCM2712/Cortex-A76] | rpi4
+# [BCM2711/Cortex-A72] | rpi3 [BCM2837/Cortex-A53, DESKTOP-ONLY]) using
+# crossdev toolchain on x86_64.
+#
+# WHY one script, not a separate builder (Phase 6): Pi 4 and Pi 5 share the
+# Raspberry Pi Foundation's EEPROM/config.txt/device-tree-overlay boot model
+# closely enough (same firmware family, same raspberrypi-sources kernel tree,
+# same installer/LUKS2/desktop-role machinery) that a --board axis is the right
+# call, mirroring how build-jetson-stage4.sh's --board picks an Orin SKU. Only
+# genuinely board-DIFFERENT values (defconfig, DTB prefix, CPU tuning, a few
+# RP1-vs-BCM2711 hardware Kconfig lines, the serial console device, the
+# rpi-eeprom USE flag) are gated on --board; everything else — the desktop
+# role (Phase 3), --encrypt-root LUKS2 (Phase 2b), the mesh/provisioning
+# plumbing — is shared, board-agnostic machinery reused as-is.
+#
+# --board rpi3 (Phase 8) is MORE architecturally different than Pi 4 was from
+# Pi 5: no flashable EEPROM at all (boots via bootcode.bin+start.elf read
+# straight off the FAT boot partition by the GPU boot ROM — see the
+# dev-embedded/rpi-eeprom exclusion below), no PCIe/xHCI/NVMe at all (USB +
+# USB-attached Ethernet ride the SoC's Synopsys DWC2 controller instead — see
+# specs-rpi5/kernel/bcm2837-pi3.config), and VideoCore IV instead of VI/VII
+# (same vc4/v3d DRM driver pair as Pi 4/5, but needs an explicit
+# dtoverlay=vc4-kms-v3d — see config.txt.tmpl's VC4_OVERLAY_LINE). Only 1GB of
+# RAM is not enough headroom for this repo's hardened SELinux/containerd/
+# kubelet k8s stack, so --board rpi3 is DESKTOP-ONLY: it hard-errors on every
+# --role except desktop (see the BOARD-gate check right after role validation
+# below) instead of silently building a Pi 3 k8s node that fails mysteriously
+# at runtime from OOM.
 #
 # Run as root (sudo): the cross-emerge merges into the sysroot's vdb and writes
 # the host emerge log/cache, so real root is required (fakeroot is NOT enough).
@@ -31,12 +58,24 @@ WORK_DIR=""
 BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-pi5}"
 CROSS_TARGET="aarch64-unknown-linux-gnu"
 REL_VERSION="2026.0"
-RPI_CPU="cortex-a76"
-RPI_DEFCONFIG="bcm2712_defconfig"
-RPI_DTB_PREFIX="bcm2712"
-RPI_KERNEL_IMG="kernel_2712.img"
+# ── BOARD TABLE (--board rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]) ──────
+# Selected by --board. Fills the GCC CPU + kernel defconfig + DTB prefix + boot
+# kernel-image filename. Mirrors build-jetson-stage4.sh's JETSON_BOARD/
+# select_board() pattern: RPI_CPU/RPI_DEFCONFIG/RPI_DTB_PREFIX/RPI_KERNEL_IMG
+# start EMPTY here and are filled by select_board() (called right after arg
+# parsing) ONLY when the operator did NOT already set them explicitly via
+# -c/-d/--dtb-prefix/--kernel-img — an explicit override always wins, board or
+# no board. rpi5 stays the DEFAULT so every existing invocation (no --board
+# flag at all) resolves to EXACTLY the same values as before this axis existed.
+BOARD="rpi5"                              # rpi5 (DEFAULT, BCM2712/Cortex-A76) | rpi4 (BCM2711/Cortex-A72) | rpi3 (BCM2837/Cortex-A53, desktop-only)
+BOARD_DESC=""                             # derived by select_board() (--print-plan/banner display only)
+RPI_CPU=""
+RPI_DEFCONFIG=""
+RPI_DTB_PREFIX=""
+RPI_KERNEL_IMG=""
 JOBS="$(nproc)"
 SKIP_KERNEL=false
+RPI_KVER=""              # captured from `make kernelrelease` in the kernel phase
 SKIP_ISO=false
 SKIP_CLEAN=false
 RESUME=false
@@ -53,10 +92,17 @@ GROW_POLICY="fill"      # first-boot grow policy baked into /etc/growfs.conf: fi
 SD_ONLY=false           # use literal /dev/mmcblk0p2 instead of PARTUUID/LABEL identity
 COMPRESS_IMG=false      # xz -9 the finished .img
 EXTRA_PACKAGES=""
+PACKAGES_ADD=""          # --packages-add : atoms to add on top of the derived set
+PACKAGES_DROP=""         # --packages-drop: default-set atoms to remove (mandatory floor honored)
 TIMEZONE="UTC"
 HOSTNAME=""
-ROLE="generic"          # generic | pki | backend | frontend
+ROLE="generic"          # generic | pki | backend | frontend | desktop
+DESKTOP="none"          # derived: 'light' for --role desktop, else none (--print-plan/banner display only)
 CLUSTER_DOMAIN="snapdragon.systems"
+# Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix every
+# node joins. "" = builder default (legacy byte-identical). The Studio emits --superdomain
+# <effective> only for MESH builds; permanently internal, never the go-live apex.
+SUPERDOMAIN=""
 BRAND="snapdragon"                  # name slug (namespaces, gateways, hostnames)
 BRAND_TITLE="Snapdragon Systems"    # human-readable title
 ORG="Snapdragon-Systems"            # GitHub org / image namespace
@@ -106,12 +152,39 @@ ENABLE_GAMES="${ENABLE_GAMES:-false}"
 #   top of the internal CA, OAuth/SMTP/Cloudflare from the keys USB. A LOUD
 #   announced banner prints before the build because it bakes the real domain.
 ENV="test"
+# ── Release-state selector (BAKED into the image, gates gate_env_apps()/
+# bake_host_firewall() ingress+firewall posture) ────────────────────
+# internal (DEFAULT, safe): public ingress-nginx pruned, gateways forced to
+#   the nginx-internal class, tier-ingress NetworkPolicy admits only
+#   ingress-nginx-internal, host nftables firewall drops inbound 80/443 from
+#   outside the tailnet unless /etc/snapdragon/go-live exists.
+# public: the above restrictions are lifted (rebuild-time go-live).
+RELEASE_STATE="internal"
 CONFIG_FILE=""                      # optional drop-in brand profile (sourced)
 DEFAULT_USER="pi"
 # NO baked default password. Real creds come from the KEYS USB ($6$ hashes in
 # users.json via keys-provision). On a keyless boot the first-boot finaliser
 # (specs/etc/local.d/01-firstboot.start.tmpl) mints a RANDOM one-time password
 # and locks root — see the OWASP "default creds baked into image" fix.
+#
+# ── Standalone posture (mirrors build-x86-host-stage4.sh) ──────────
+# --standalone composes onto --role desktop (the only client role): no mesh, a
+# normal local user logs in with a password set at build time instead of the
+# KEYS-USB-provisioned account. Every OTHER --role (generic/pki/backend/
+# frontend) is a k8s cluster node, so --standalone hard-errors on those.
+STANDALONE=false        # --standalone : local user, no mesh, LUKS2-encrypted root
+LOCAL_USER=""           # --local-user NAME : the standalone local login account
+LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never baked raw
+ROLE_CLIENT=false       # true for --role desktop; false for the k8s cluster-node roles
+# ── LUKS2 root encryption — independently triggerable from --standalone,
+# same as build-x86-host-stage4.sh/build-frite-stage4.sh: encrypts the ROOT of
+# whatever --role is being built today (generic/pki/backend/frontend/desktop).
+# Install-time only (parted+luksFormat+ mkfs+extract, see
+# specs-rpi5/installer/install.sh) — the DEFAULT .img stays
+# plaintext (it is written directly by build_img(), no install step), so
+# --encrypt-root forces the installer ISO (--iso) which DOES encrypt.
+ENCRYPT_ROOT=false      # --encrypt-root : LUKS2-encrypt the root partition (installer path only)
+LUKS_PASS=""            # --luks-pass PASS : plaintext; never baked, seeded into the ISO 0600 if given
 PCIE_GEN3=false
 # ── Radio attack surface (DISABLED BY DEFAULT — hardened posture) ───
 # WiFi + Bluetooth are OFF by default to shrink the attack surface: at first boot
@@ -154,17 +227,26 @@ usage() {
 cat <<'MANEOF'
 NAME
     build-rpi5-stage4.sh - Build a hardened Gentoo aarch64 stage4 ISO
-    with Kubernetes for Raspberry Pi 5, using a crossdev toolchain on
-    an x86_64 host.
+    with Kubernetes for a Raspberry Pi Foundation board (--board rpi5
+    [DEFAULT] | rpi4 | rpi3 [desktop-only]), using a crossdev toolchain
+    on an x86_64 host.
 
 SYNOPSIS
     build-rpi5-stage4.sh [OPTIONS]
 
 DESCRIPTION
-    Cross-compiles a complete Gentoo Linux stage4 image targeting the
-    Raspberry Pi 5 (BCM2712 / Cortex-A76).  The resulting image ships
-    with a hardened kernel, SELinux, auditing, and a full Kubernetes
-    stack (containerd, kubelet, kubeadm, kubectl, CNI plugins).
+    Cross-compiles a complete Gentoo Linux stage4 image targeting
+    Raspberry Pi 5 (BCM2712 / Cortex-A76, the DEFAULT), Raspberry Pi 4
+    (BCM2711 / Cortex-A72, --board rpi4), or Raspberry Pi 3 (BCM2837 /
+    Cortex-A53, --board rpi3).  The resulting image ships with a
+    hardened kernel, SELinux, auditing, and — on Pi 5/Pi 4 cluster-node
+    roles — a full Kubernetes stack (containerd, kubelet, kubeadm,
+    kubectl, CNI plugins).
+
+    --board rpi3 is DESKTOP-ONLY (1GB RAM is not enough headroom for
+    this repo's hardened SELinux/containerd/kubelet k8s stack on top of
+    it): it must be combined with --role desktop, and hard-errors on
+    every other --role (generic/pki/backend/frontend).
 
     Run as root (sudo).  The cross-emerge merges into the sysroot's
     package database and writes the host emerge log/cache, so real root
@@ -189,7 +271,8 @@ DESCRIPTION
     │   │   ├── rpi                     RPi firmware keywords
     │   │   └── kubernetes              K8s stack keywords
     │   ├── package.use/
-    │   │   ├── rpi5                    RPi 5 USE flags
+    │   │   ├── rpi5                    RPi USE flags (rpi-eeprom pi4|pi5 board-flipped;
+    │   │   │                           EXCLUDED entirely for --board rpi3, no EEPROM at all)
     │   │   └── kubernetes              K8s USE flags
     │   ├── env/
     │   │   └── cross-go.conf.tmpl      Go cross-compile env (templated)
@@ -197,11 +280,16 @@ DESCRIPTION
     │       └── kubernetes              Package-to-env mapping
     ├── boot/
     │   ├── config.txt.tmpl             RPi boot config (templated)
-    │   └── cmdline.txt                 Kernel command line
+    │   └── cmdline.txt.tmpl            Kernel command line (templated: console UART)
     ├── etc/
     │   └── fstab                       Filesystem table (RPi /boot firmware)
     ├── kernel/
-    │   └── hardened-k8s.config         Kernel config fragment
+    │   ├── hardened-k8s.config         Universal base fragment (all 3 boards)
+    │   ├── rp1-pi5.config              Additive: RP1-only hw (--board rpi5)
+    │   ├── bcm2711-pi4.config          Additive: BCM2711-native hw (--board rpi4)
+    │   ├── bcm2837-pi3.config          Additive: DWC2 USB/USB-Ethernet/BCM2835
+    │   │                               GPIO-header hw (--board rpi3)
+    │   └── desktop.config              Additive: --role desktop (all 3 boards)
     └── installer/
         └── install.sh                  SD/NVMe installer (ships in ISO)
 
@@ -266,29 +354,63 @@ OPTIONS
         Default: $(nproc)  (all available cores)
 
   Board / CPU
+    --board rpi5|rpi4|rpi3
+        Selects the board table that derives --cpu/--defconfig/--dtb-prefix/
+        --kernel-img (and the board-appropriate kernel Kconfig fragment +
+        serial console) all at once. An explicit -c/-d/--dtb-prefix/
+        --kernel-img still overrides whatever --board would have picked.
+        Default: rpi5  (every invocation with no --board flag is 100%
+        unaffected by this axis)
+          rpi5  Raspberry Pi 5 (BCM2712, Cortex-A76) — the historical default.
+          rpi4  Raspberry Pi 4 (BCM2711, Cortex-A72). No RP1 southbridge (its
+                GPIO/I2C/SPI are native BCM2711 silicon instead — see
+                specs-rpi5/kernel/bcm2711-pi4.config), no user-facing PCIe/NVMe
+                on the standard Model B, VideoCore VI (shares the DRM_V3D/
+                DRM_VC4 driver pair with Pi 5's VideoCore VII).
+          rpi3  Raspberry Pi 3 (BCM2837, Cortex-A53, 1GB RAM). DESKTOP-ONLY —
+                must be combined with --role desktop; hard-errors on every
+                other role (1GB RAM is not enough headroom for this repo's
+                hardened SELinux/containerd/kubelet k8s stack). No flashable
+                EEPROM at all (boots via bootcode.bin+start.elf; dev-embedded/
+                rpi-eeprom is excluded entirely, not just left unflashed — see
+                specs-rpi5/kernel/bcm2837-pi3.config), no PCIe/xHCI/NVMe (USB +
+                USB-attached Ethernet ride the SoC's Synopsys DWC2 controller
+                instead), VideoCore IV (same DRM_V3D/DRM_VC4 driver pair as
+                Pi 4/5, but needs an explicit dtoverlay=vc4-kms-v3d — HIGH
+                UNCERTAINTY, not verified against real Pi 3 hardware in this
+                sandbox; see bcm2837-pi3.config's header).
+
     -c, --cpu CPU
         GCC -mcpu / -mtune value.
-        Default: cortex-a76  (RPi 5)
-        Common values: cortex-a53 (RPi 3), cortex-a72 (RPi 4)
+        Default: derived from --board (cortex-a76 for rpi5, cortex-a72 for
+                 rpi4, cortex-a53 for rpi3)
+        Common values: cortex-a53 (RPi 3), cortex-a72 (RPi 4), cortex-a76 (RPi 5)
 
     -d, --defconfig NAME
         Kernel defconfig to use.
-        Default: bcm2712_defconfig  (RPi 5)
+        Default: derived from --board (bcm2712_defconfig for rpi5,
+                 bcm2711_defconfig for rpi4, bcmrpi3_defconfig for rpi3)
         Common values: bcmrpi3_defconfig (RPi 3),
                        bcm2711_defconfig (RPi 4)
 
     --dtb-prefix PREFIX
         Device-tree blob filename prefix.
-        Default: bcm2712
+        Default: derived from --board (bcm2712 for rpi5, bcm2711 for rpi4,
+                 bcm2837 for rpi3)
 
     --kernel-img NAME
         Output kernel image filename for /boot.
-        Default: kernel_2712.img
+        Default: derived from --board (kernel_2712.img for rpi5, kernel8.img
+                 for rpi4/rpi3 — the standard 64-bit RPi kernel image name
+                 shared by every 64-bit-capable board before Pi 5)
 
     --pcie-gen3
         Uncomment dtparam=pciex1_gen=3 in config.txt to force
         PCIe Gen 3 for NVMe.  Not all drives are stable at Gen 3;
-        test yours first.
+        test yours first. Meaningful on --board rpi5 ONLY — the standard Pi 4
+        Model B has no user-facing PCIe slot (a --board rpi4 build warns and
+        ignores this flag) and Pi 3 (BCM2837) has no PCIe controller at all
+        (a --board rpi3 build likewise warns and ignores this flag).
 
   Image
     -v, --version STRING
@@ -352,7 +474,13 @@ OPTIONS
   System
     -H, --hostname NAME
         Target system hostname.
-        Default: gentoo-rpi5
+        Default: gentoo-<board>  (gentoo-rpi5 for --board rpi5 [DEFAULT],
+                 gentoo-rpi4 for --board rpi4) — --role generic only; every
+                 other --role defaults to <brand>-<role>. (--board rpi3 is
+                 desktop-only, so its hostname always follows the
+                 <brand>-<role> default; "gentoo-rpi3" is unreachable since
+                 --role generic + --board rpi3 hard-errors before this default
+                 is ever computed.)
 
     -T, --timezone ZONE
         Target system timezone (e.g. America/New_York).
@@ -395,6 +523,32 @@ OPTIONS
     --skip-mesh
         Do not install headscale or tailscale at all.
 
+    --standalone
+        Standalone posture: no mesh; a local user logs in with a build-time
+        password instead of the KEYS-USB-provisioned account. Forces
+        --encrypt-root (LUKS2-encrypted root via the installer ISO). Composes
+        onto --role desktop (the only client role) — every OTHER --role
+        (generic/pki/backend/frontend) is a k8s cluster node, so
+        --standalone hard-errors on those.
+
+    --local-user NAME
+        The standalone local login account (default: --user).
+
+    --local-pass PASS
+        Plaintext; hashed at build (openssl passwd -6), never baked raw. Omit
+        it and a random one-time password is minted + printed once at first
+        boot instead.
+
+    --encrypt-root
+        LUKS2-encrypt the root partition (installer ISO path only; the
+        default .img stays plaintext). Automatically forced on by
+        --standalone.
+
+    --luks-pass PASS
+        Plaintext passphrase for the encrypted root; seeded 0600 into the ISO
+        if given. Omit it and install.sh prompts interactively on the target
+        (or the install host — see specs-rpi5/installer/install.sh's header).
+
     --enable-wifi
         Re-enable WiFi. DISABLED by default (rfkill block + blacklisted modules
         + no service); Ethernet + the tailnet are unaffected.
@@ -431,6 +585,14 @@ OPTIONS
         no public IP / DDNS). The v3 onion keypair is minted + persisted OFF-GIT under
         /var/lib/tor/snapdragon-onion on first boot. DEFAULT-OFF; node-scoped (no effect
         on CLIENT roles). Exclude with --exclude-services tor.
+
+    --with-edge-ai-tts / --no-edge-ai-tts
+        Bake the edge-ai-tts voice-synthesis API (Piper TTS + an even-split viseme
+        timeline for the VN voice feature, consumed by matrix-ui). CPU-only,
+        self-contained — NO edge-ai dependency (unlike edge-ai-analysis), so it
+        schedules with or without the GPU model server. Equivalent to adding
+        'edge-ai-tts' to --optional-services. A SEPARATE container image
+        (DEFAULT-OFF; keep off until it is built+pushed).
 
     --exclude-services "<slugs>"
         The SUBTRACTIVE build-time exclusion list: force-OFF these user-level slugs
@@ -498,12 +660,16 @@ EXAMPLES
         --pcie-gen3 \
         -p "app-misc/tmux sys-fs/btrfs-progs net-misc/chrony"
 
-    # Build for RPi 4 instead of RPi 5
-    ./build-rpi5-stage4.sh \
-        -c cortex-a72 \
-        -d bcm2711_defconfig \
-        --dtb-prefix bcm2711 \
-        --kernel-img kernel8.img
+    # Build for RPi 4 instead of RPi 5 (--board derives cpu/defconfig/dtb-prefix/
+    # kernel-img all at once; any of -c/-d/--dtb-prefix/--kernel-img still overrides)
+    ./build-rpi5-stage4.sh --board rpi4
+
+    # RPi 4 desktop client, --standalone (LUKS2 FDE, no mesh) — reuses the SAME
+    # Phase 3 desktop role + Phase 2b LUKS2 machinery Pi 5 already has
+    ./build-rpi5-stage4.sh --board rpi4 --role desktop --standalone --local-user alice
+
+    # RPi 3 desktop client (1GB RAM; DESKTOP-ONLY — --role anything else hard-errors)
+    ./build-rpi5-stage4.sh --board rpi3 --role desktop --standalone --local-user alice
 
     # Resume a failed build, skip ISO, keep debug symbols
     ./build-rpi5-stage4.sh \
@@ -535,26 +701,30 @@ EXIT STATUS
 
 FILES
     <work-dir>/                     finished products (shared with the x86 build)
-        <brand>-rpi5-arm64-<role>-<env>-<stamp>.img         Flashable raw image (default)
-        <brand>-rpi5-arm64-<role>-<env>-<stamp>.iso         Bootable ISO with installer (opt-in)
-        <brand>-rpi5-arm64-<role>-<env>-<stamp>.fs.tar.xz   Exact root filesystem tarball
-        <brand>-rpi5-arm64-<role>-<env>-<stamp>.stage4.tar.xz   Final stage4 tarball
+        <brand>-<board>-arm64-<role>-<env>-<stamp>.img         Flashable raw image (default)
+        <brand>-<board>-arm64-<role>-<env>-<stamp>.iso         Bootable ISO with installer (opt-in)
+        <brand>-<board>-arm64-<role>-<env>-<stamp>.fs.tar.xz   Exact root filesystem tarball
+        <brand>-<board>-arm64-<role>-<env>-<stamp>.stage4.tar.xz   Final stage4 tarball
         keys-<role>/                Per-role provisioning keys (build-all-roles)
         build.log                   Full build log
-    <work-dir>/snap-build-pi5/      per-arch heavy build tree (--build-subdir)
+    <work-dir>/snap-build-pi5/      per-arch heavy build tree (--build-subdir; shared by
+                                     ALL THREE boards — rpi5/rpi4/rpi3 are all aarch64)
         sysroot/                    Cross-compiled aarch64 root filesystem
         distfiles/                  Portage source archives
         pkgdir/                     Binary packages
         isoroot/                    ISO staging area
         log/  edb/                  emerge log + dep-metadata cache
 
-    Output artifacts are named (all share one UTC build stamp):
-        <brand>-rpi5-arm64-<role>-<env>-<UTC-stamp>.img            Flashable disk image (default)
-        <brand>-rpi5-arm64-<role>-<env>-<UTC-stamp>.stage4.tar.xz  Final stage4 tarball
-        <brand>-rpi5-arm64-<role>-<env>-<UTC-stamp>.fs.tar.xz      Mounted-tree filesystem tarball
-        <brand>-rpi5-arm64-<role>-<env>-<UTC-stamp>.iso           Bootable ISO with installer (--iso)
-    e.g. snapdragon-rpi5-arm64-frontend-test-20260610T193045Z.img
-    The <brand> prefix + <role>/<env> tokens keep the QEMU launchers and
+    <board> is "rpi5" (DEFAULT), "rpi4" (--board rpi4), or "rpi3" (--board rpi3,
+    desktop-only). Output artifacts are named (all share one UTC build stamp):
+        <brand>-<board>-arm64-<role>-<env>-<UTC-stamp>.img            Flashable disk image (default)
+        <brand>-<board>-arm64-<role>-<env>-<UTC-stamp>.stage4.tar.xz  Final stage4 tarball
+        <brand>-<board>-arm64-<role>-<env>-<UTC-stamp>.fs.tar.xz      Mounted-tree filesystem tarball
+        <brand>-<board>-arm64-<role>-<env>-<UTC-stamp>.iso           Bootable ISO with installer (--iso)
+    e.g. snapdragon-rpi5-arm64-frontend-test-20260610T193045Z.img (--board rpi5, DEFAULT)
+         snapdragon-rpi4-arm64-frontend-test-20260610T193045Z.img (--board rpi4)
+         snapdragon-rpi3-arm64-desktop-test-20260610T193045Z.img  (--board rpi3, desktop-only)
+    The <brand> prefix + <board>/<role>/<env> tokens keep the QEMU launchers and
     flash-disk.sh autodetect globs matching.
 
 NOTES
@@ -601,6 +771,7 @@ while [[ $# -gt 0 ]]; do
         -s|--specs-dir)       SPECS_DIR="$2";          shift 2 ;;
         -t|--target)          CROSS_TARGET="$2";       shift 2 ;;
         -j|--jobs)            JOBS="$2";               shift 2 ;;
+        --board)              BOARD="$2";              shift 2 ;;
         -c|--cpu)             RPI_CPU="$2";            shift 2 ;;
         -d|--defconfig)       RPI_DEFCONFIG="$2";      shift 2 ;;
         --dtb-prefix)         RPI_DTB_PREFIX="$2";     shift 2 ;;
@@ -613,6 +784,8 @@ while [[ $# -gt 0 ]]; do
         -C|--config)          CONFIG_FILE="$2";        shift 2 ;;  # sourced above
         --env)                ENV="$2";                shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2"; shift 2 ;;
+        --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
+        --release-state)      RELEASE_STATE="$2";      shift 2 ;;
         --brand)              BRAND="$2";              shift 2 ;;
         --brand-title)        BRAND_TITLE="$2";        shift 2 ;;
         --org)                ORG="$2";                shift 2 ;;
@@ -622,12 +795,21 @@ while [[ $# -gt 0 ]]; do
         --exclude-services)   EXCLUDE_SERVICES="$2";   shift 2 ;;
         -T|--timezone)        TIMEZONE="$2";           shift 2 ;;
         -u|--user)            DEFAULT_USER="$2";       shift 2 ;;
+        --standalone)         STANDALONE=true;         shift   ;;
+        --local-user)         LOCAL_USER="$2";          shift 2 ;;
+        --local-pass|--local-user-password) LOCAL_USER_PASS="$2"; shift 2 ;;
+        --encrypt-root)       ENCRYPT_ROOT=true;       shift   ;;
+        --luks-pass|--root-unlock-pass) LUKS_PASS="$2"; shift 2 ;;
         # DEPRECATED no-ops: images no longer bake a fallback password (random
         # one-time password is minted at first boot; real creds come from KEYS).
         # Accepted-and-ignored so existing callers/CI do not break.
         --user-password)      warn "--user-password is ignored: no password is baked into the image (random first-boot fallback + KEYS provisioning)"; shift 2 ;;
         --root-password)      warn "--root-password is ignored: root is locked on keyless boot; set root via the KEYS USB users.json hash"; shift 2 ;;
         -p|--extra-packages)  EXTRA_PACKAGES="$2";     shift 2 ;;
+        # User package deltas (validated + mandatory-floor-checked below); -p stays
+        # the frozen legacy extra-packages spelling, --packages-add is the new one.
+        --packages-add)       PACKAGES_ADD="$2";       shift 2 ;;
+        --packages-drop)      PACKAGES_DROP="$2";      shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";  shift 2 ;;
         --tailscale-version)  TAILSCALE_VERSION="$2";  shift 2 ;;
         --enable-wifi)        ENABLE_WIFI=true;        shift   ;;
@@ -638,6 +820,11 @@ while [[ $# -gt 0 ]]; do
         # Folds 'character-studio' into OPTIONAL_SERVICES (idempotent).
         --with-character-studio) WANT_CHARACTER_STUDIO=true;  shift ;;
         --no-character-studio)   WANT_CHARACTER_STUDIO=false; shift ;;
+        # edge-ai-tts (VN voice synthesis, B3) — OPTIONAL, DEFAULT-OFF. CPU-only,
+        # self-contained (NO edge-ai dependency, unlike edge-ai-analysis). Folds
+        # 'edge-ai-tts' into OPTIONAL_SERVICES (idempotent).
+        --with-edge-ai-tts)   WANT_EDGE_AI_TTS=true;  shift ;;
+        --no-edge-ai-tts)     WANT_EDGE_AI_TTS=false; shift ;;
         --skip-mesh)          SKIP_MESH=true;          shift   ;;
         --skip-tailscale)     SKIP_TAILSCALE=true;     shift   ;;
         --skip-kernel)        SKIP_KERNEL=true;        shift   ;;
@@ -713,6 +900,18 @@ if [ "${WANT_CHARACTER_STUDIO:-}" = "true" ]; then
     esac
 fi
 
+# edge-ai-tts (VN voice synthesis) opt-in fold: --with-edge-ai-tts folds
+# 'edge-ai-tts' into OPTIONAL_SERVICES (idempotent). DEFAULT-OFF; never
+# auto-selected. UNLIKE edge-ai-analysis it has NO edge-ai dependency (CPU-only,
+# self-contained) — no dependency-drop guard needed. When it stays unselected,
+# gate_optional_services() prunes the slug's app/manifests/route/row.
+if [ "${WANT_EDGE_AI_TTS:-}" = "true" ]; then
+    case " ${OPTIONAL_SERVICES} " in
+        *" edge-ai-tts "*) ;;
+        *) OPTIONAL_SERVICES="${OPTIONAL_SERVICES} edge-ai-tts" ;;
+    esac
+fi
+
 # EXCLUDE_SERVICES — apply the SUBTRACTIVE build-time exclusion LAST, so a slug
 # listed here is force-OFF regardless of how it became selected (built-in default,
 # brand.conf, --optional-services, or the games opt-in). gate_optional_services
@@ -740,6 +939,43 @@ if [ -z "${WORK_DIR}" ]; then
     WORK_DIR="$(pwd)/out"
 fi
 
+# ── select_board: map --board to its defconfig / DTB prefix / CPU / kernel-img ──
+# Only fills values the operator did NOT set on the CLI (mirrors
+# build-jetson-stage4.sh's select_board()), so an explicit -c/-d/--dtb-prefix/
+# --kernel-img always wins regardless of --board. rpi5 is the DEFAULT, so a run
+# with no --board flag at all resolves to EXACTLY the same RPI_CPU/RPI_DEFCONFIG/
+# RPI_DTB_PREFIX/RPI_KERNEL_IMG this script hardcoded before this axis existed —
+# every existing invocation stays 100% unaffected.
+select_board() {
+    local cpu defconfig dtb kimg desc
+    case "${BOARD}" in
+        rpi5)
+            cpu="cortex-a76"; defconfig="bcm2712_defconfig"; dtb="bcm2712"; kimg="kernel_2712.img"
+            desc="Raspberry Pi 5 (BCM2712, Cortex-A76)"
+            ;;
+        rpi4)
+            cpu="cortex-a72"; defconfig="bcm2711_defconfig"; dtb="bcm2711"; kimg="kernel8.img"
+            desc="Raspberry Pi 4 (BCM2711, Cortex-A72)"
+            ;;
+        rpi3)
+            # kernel8.img: the same "any 64-bit-capable Pi" image name Pi 4 uses
+            # (Pi 5 is the only board that needs its own kernel_2712.img) — Pi 3
+            # (BCM2837) is 64-bit-CAPABLE (Cortex-A53), unlike the EOL'd/skipped
+            # Pi 2, so this build stays arm64/aarch64 throughout, same cross
+            # toolchain as rpi4/rpi5, no 32-bit ARMv7 branch.
+            cpu="cortex-a53"; defconfig="bcmrpi3_defconfig"; dtb="bcm2837"; kimg="kernel8.img"
+            desc="Raspberry Pi 3 (BCM2837, Cortex-A53, 1GB RAM) — DESKTOP-ONLY"
+            ;;
+        *) err "--board must be one of: rpi5 | rpi4 | rpi3 (got '${BOARD}')"; exit 1 ;;
+    esac
+    [ -z "${RPI_CPU}" ]        && RPI_CPU="${cpu}"
+    [ -z "${RPI_DEFCONFIG}" ]  && RPI_DEFCONFIG="${defconfig}"
+    [ -z "${RPI_DTB_PREFIX}" ] && RPI_DTB_PREFIX="${dtb}"
+    [ -z "${RPI_KERNEL_IMG}" ] && RPI_KERNEL_IMG="${kimg}"
+    BOARD_DESC="${desc}"
+}
+select_board
+
 # Reconcile the legacy SKIP_ISO switch with the new BUILD_ISO design. The ISO is
 # now opt-in: SKIP_ISO is simply the negation of BUILD_ISO so the existing
 # prerequisite check (xorrisofs) and the Phase 5 gate keep working unchanged.
@@ -748,13 +984,81 @@ if ${BUILD_ISO}; then SKIP_ISO=false; else SKIP_ISO=true; fi
 # Validate role and derive a default hostname from it
 case "${ROLE}" in
     generic|pki|backend|frontend) ;;
-    *) echo "ERROR: --role must be one of: generic pki backend frontend" >&2; exit 1 ;;
+    desktop) ROLE_CLIENT=true; DESKTOP="light" ;;
+    *) echo "ERROR: --role must be one of: generic pki backend frontend desktop" >&2; exit 1 ;;
 esac
+
+# ── --board rpi3 is DESKTOP-ONLY (Phase 8) ─────────────────────────────────
+# Every other --role (generic/pki/backend/frontend) is a k8s cluster node —
+# containerd+kubelet+kubeadm+the hardened SELinux/audit stack on top of only
+# 1GB of RAM is not a build this script will produce quietly. Hard-error here,
+# BEFORE any prereq probe/mkdir/network fetch/sysroot write, so a Pi 3 k8s
+# node can never be built and then fail mysteriously at runtime from OOM.
+if [ "${BOARD}" = "rpi3" ] && ! ${ROLE_CLIENT}; then
+    err "--board rpi3 only composes onto --role desktop (got --role ${ROLE}) — 1GB RAM is not enough headroom for this repo's hardened SELinux/containerd/kubelet k8s stack on a cluster-node role."
+    echo "    Build --board rpi3 --role desktop, or pick --board rpi4/rpi5 for a cluster-node role." >&2
+    exit 1
+fi
+
+# Client-desktop make.conf USE (appended LAST in make.conf.tmpl so it overrides
+# the hardened headless -X/-gtk posture for --role desktop only; mirrors
+# build-x86-host-stage4.sh's CLIENT_USE mechanism). k8s cluster-node roles
+# leave both empty — headless nodes run no X server.
+if ${ROLE_CLIENT}; then
+    CLIENT_USE="X gtk dbus elogind udev"
+    INPUT_DEVICES="libinput"   # Xorg keyboard/mouse/touchpad (via x11-base/xorg-drivers)
+else
+    CLIENT_USE=""
+    INPUT_DEVICES=""
+fi
+
 if [ -z "${HOSTNAME}" ]; then
     case "${ROLE}" in
-        generic) HOSTNAME="gentoo-rpi5" ;;
+        # "gentoo-${BOARD}" -> "gentoo-rpi5" unchanged for the DEFAULT board.
+        generic) HOSTNAME="gentoo-${BOARD}" ;;
         *)       HOSTNAME="${BRAND}-${ROLE}" ;;
     esac
+fi
+
+# ── STANDALONE posture (composable onto --role desktop only — every OTHER
+# --role is a k8s cluster node, so this hard-errors on those) ──────────────
+if ${STANDALONE}; then
+    ${ROLE_CLIENT} || { err "--standalone only composes onto --role desktop (got --role ${ROLE})"; exit 1; }
+    SKIP_MESH=true
+    SKIP_TAILSCALE=true
+    ENCRYPT_ROOT=true        # guarantee the installer artifact (the FDE path)
+    [ -z "${LOCAL_USER}" ] && LOCAL_USER="${DEFAULT_USER}"
+    info "STANDALONE desktop: no mesh; local user '${LOCAL_USER}'; LUKS2-encrypted root (installer ISO)"
+fi
+
+# --encrypt-root independent of --standalone: forces the installer ISO, since
+# encryption happens at INSTALL time (specs-rpi5/installer/install.sh), not by
+# writing the default .img directly. The plaintext .img (if also produced)
+# remains a quick-flash, UNENCRYPTED option — --encrypt-root does not affect it.
+if ${ENCRYPT_ROOT}; then
+    if ! ${BUILD_ISO}; then
+        warn "--encrypt-root forces the installer ISO on (encryption only happens via the installer path) — overriding --skip-iso/default."
+    fi
+    BUILD_ISO=true
+    SKIP_ISO=false
+    if ${BUILD_IMG}; then
+        warn "--encrypt-root only encrypts the INSTALLER ISO's target — the default .img (if built) stays PLAINTEXT. Pass --no-img to build the ISO only."
+    fi
+fi
+
+# ── Standalone local-user password → build-time hash (never baked in plaintext,
+# mirrors build-x86-host-stage4.sh) ─────────────────────────────────────────
+LOCAL_PASSHASH=""
+if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]; then
+    [ -n "${LOCAL_USER}" ] && DEFAULT_USER="${LOCAL_USER}"
+    if [ -n "${LOCAL_USER_PASS}" ]; then
+        command -v openssl >/dev/null 2>&1 || { err "--local-pass needs openssl on the build host (app-crypt/... / dev-libs/openssl)"; exit 1; }
+        LOCAL_PASSHASH="$(openssl passwd -6 "${LOCAL_USER_PASS}")"
+        LOCAL_USER_PASS=""   # scrub the plaintext from the environment immediately
+        info "Standalone local user '${DEFAULT_USER}': password hashed at build time (SHA-512 crypt; plaintext not baked)."
+    else
+        ${STANDALONE} && warn "Standalone build with no --local-pass: a RANDOM one-time password is minted at first boot (printed once to console)."
+    fi
 fi
 
 # ── Charset allowlists for brand/identity/kernel/toolchain fields (fail-closed) ──
@@ -792,6 +1096,8 @@ _RE_KIMG='^[A-Za-z0-9._-]+$'
 _require_match "--brand"         "${BRAND}"          "${_RE_SLUG}"
 _require_match "--org"           "${ORG}"            "${_RE_ORG}"
 _require_match "--cluster-domain" "${CLUSTER_DOMAIN}" "${_RE_DNS}"
+# Orchestration superdomain: DNS-validated like --cluster-domain, only when set.
+[ -n "${SUPERDOMAIN}" ] && _require_match "--superdomain" "${SUPERDOMAIN}" "${_RE_DNS}"
 _require_match "--games-domain"  "${GAMES_DOMAIN}"   "${_RE_DNS}"
 _require_match "--hostname"      "${HOSTNAME}"       "${_RE_DNS}"
 _require_match "--user"          "${DEFAULT_USER}"   "${_RE_USER}"
@@ -815,6 +1121,12 @@ esac
 case "${ENV}" in
     test|prod) ;;
     *) err "--env must be one of: test | prod  (got '${ENV}')"; exit 1 ;;
+esac
+
+# ── Validate the release-state posture (baked into the image) ─────────────
+case "${RELEASE_STATE}" in
+    internal|public) ;;
+    *) err "--release-state must be one of: internal | public  (got '${RELEASE_STATE}')"; exit 1 ;;
 esac
 if [ "${ENV}" = "prod" ]; then
     # LOUD announced banner — a prod image bakes the REAL public domain and
@@ -852,9 +1164,13 @@ LOG_FILE="${WORK_DIR}/build.log"
 # Single, sortable UTC build stamp shared by EVERY artifact of this run, so the
 # .img / .iso / stage4 / fs tarball all carry the same identifier. Computed once
 # here at build start. Artifacts are named:
-#   ${BRAND}-rpi5-arm64-${ROLE}-${ENV}-${BUILD_TS}.<ext>
-# (the ${BRAND}- prefix + role token keep the QEMU launchers' and flash-disk.sh's
-#  'snapdragon-rpi5-*-<role>-*' / '*-<role>-*' autodetect globs matching.)
+#   ${BRAND}-${BOARD}-arm64-${ROLE}-${ENV}-${BUILD_TS}.<ext>
+# (${BOARD} is "rpi5" [DEFAULT], "rpi4", or "rpi3" [desktop-only] — the
+#  ${BRAND}- prefix + role token keep the QEMU launchers' and flash-disk.sh's
+#  generic 'snapdragon-*-<role>-*' autodetect glob matching regardless of
+#  board; only launch-pi.sh's FIRST-preference rpi5-specific glob is
+#  board-specific, and it falls through to that same generic pattern for a
+#  --board rpi4/rpi3 artifact.)
 BUILD_TS="$(date -u +%Y%m%dT%H%M%SZ)"
 info "Build stamp: ${BUILD_TS} (UTC; brand=${BRAND}, env=${ENV})"
 
@@ -894,14 +1210,22 @@ render_template() {
         -e "s|@@WORK_DIR@@|$(_sed_rep_escape "${BUILD_ROOT}")|g" \
         -e "s|@@RPI_KERNEL_IMG@@|$(_sed_rep_escape "${RPI_KERNEL_IMG}")|g" \
         -e "s|@@PCIE_LINE@@|$(_sed_rep_escape "${PCIE_LINE}")|g" \
+        -e "s|@@VC4_OVERLAY_LINE@@|$(_sed_rep_escape "${VC4_OVERLAY_LINE}")|g" \
+        -e "s|@@INITRAMFS_LINE@@|$(_sed_rep_escape "${INITRAMFS_LINE}")|g" \
+        -e "s|@@BOARD_DESC@@|$(_sed_rep_escape "${BOARD_DESC}")|g" \
+        -e "s|@@CONSOLE_UART@@|$(_sed_rep_escape "${CONSOLE_UART}")|g" \
         -e "s|@@HOSTNAME@@|$(_sed_rep_escape "${HOSTNAME}")|g" \
         -e "s|@@TIMEZONE@@|$(_sed_rep_escape "${TIMEZONE}")|g" \
         -e "s|@@DEFAULT_USER@@|$(_sed_rep_escape "${DEFAULT_USER}")|g" \
+        -e "s|@@STANDALONE@@|$(_sed_rep_escape "${STANDALONE}")|g" \
+        -e "s|@@LOCAL_PASSHASH@@|$(_sed_rep_escape "${LOCAL_PASSHASH}")|g" \
         -e "s|@@BRAND@@|$(_sed_rep_escape "${BRAND}")|g" \
         -e "s|@@BRAND_TITLE@@|$(_sed_rep_escape "${BRAND_TITLE}")|g" \
         -e "s|@@DOMAIN@@|$(_sed_rep_escape "${CLUSTER_DOMAIN}")|g" \
         -e "s|@@ORG@@|$(_sed_rep_escape "${ORG}")|g" \
         -e "s|@@ENV@@|$(_sed_rep_escape "${ENV}")|g" \
+        -e "s|@@CLIENT_USE@@|$(_sed_rep_escape "${CLIENT_USE}")|g" \
+        -e "s|@@INPUT_DEVICES@@|$(_sed_rep_escape "${INPUT_DEVICES}")|g" \
         "${src}" > "${dst}"
 }
 
@@ -1031,7 +1355,7 @@ gate_optional_services() {
                    warn "edge-ai-analysis requires edge-ai — dropping it (no model server selected)" ;;
             esac ;;
     esac
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio egress-vpn tor workloadConsole edge-ai edge-ai-analysis; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio egress-vpn tor workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -1183,6 +1507,18 @@ gate_optional_services() {
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
                     '/v1/analyze/**'
                 ;;
+            edge-ai-tts)
+                # Piper TTS + viseme timeline (VN voice, B3) — DEFAULT-OFF, NO
+                # dependsOn (CPU-only, self-contained; unlike edge-ai-analysis it
+                # schedules with or without edge-ai). Owns app 55b +
+                # manifests/edge-ai-tts + the /v1/synthesize/** route + route-access
+                # row. Image is a separate build artifact.
+                rm -f "${apps}/55b-edge-ai-tts.yaml"
+                rm -rf "${tree}/manifests/edge-ai-tts"
+                _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-tts
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                    '/v1/synthesize/**'
+                ;;
         esac
     done
     if ! _opt_selected akkoma && ! _opt_selected tuwunel; then
@@ -1192,6 +1528,10 @@ gate_optional_services() {
     # Repair a possible trailing comma if the LAST VALUES row of an INSERT was pruned.
     _opt_fix_trailing_comma "${tree}/manifests/route-access/initdb/20-schema.sql"
     _opt_render_installed_services
+    # Seed each per-slug OptionalService CR's `enabled` from the SAME selection so the
+    # (dark-by-default) admin-bff OptionalServiceReconciler's desired-state baseline
+    # matches this build (a USB built WITHOUT a slug ships its CR enabled:false).
+    _opt_render_optionalservice_cr
 }
 # Fix the dangling trailing comma left when the LAST VALUES row of an INSERT was
 # pruned: rewrite the trailing '),' of the final data row before 'ON CONFLICT' to ')'.
@@ -1313,7 +1653,7 @@ _opt_render_installed_services() {
     [ -f "${cm}" ] || return 0
     local slug val
     # The base optional services follow plain presence in OPTIONAL_SERVICES.
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio workloadConsole edge-ai edge-ai-analysis; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
         # Mirror the same flag into the optional-services ApplicationSet element so the
@@ -1333,6 +1673,42 @@ _opt_render_installed_services() {
     # the shield is genuinely in-path when installed (idempotent + reversible).
     _opt_wire_anubis_ingress "${val}"
     info "OPTIONAL_SERVICES: rendered installed-services ConfigMap (selected: ${OPTIONAL_SERVICES:-none}; ENV=${ENV}; anubis=${val})"
+}
+# Flip the `enabled:` value of ONE OptionalService CR (the block whose `slug: <slug>`)
+# in the baked seed file. awk anchors on the slug line then rewrites the FIRST enabled
+# line after it, preserving indentation (sub only touches the matched substring). The
+# end-anchored slug compare keeps edge-ai distinct from edge-ai-analysis/edge-ai-tts.
+_opt_set_cr_enabled() {
+    local f="$1" slug="$2" val="$3"
+    [ -f "${f}" ] || return 0
+    awk -v slug="${slug}" -v val="${val}" '
+        /^[[:space:]]*slug:[[:space:]]/ {
+            s=$0; sub(/^[[:space:]]*slug:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s)
+            arm=(s==slug)
+        }
+        arm && /^[[:space:]]*enabled:[[:space:]]*(true|false)[[:space:]]*$/ {
+            sub(/enabled:[[:space:]]*(true|false)/, "enabled: " val); arm=0
+        }
+        { print }
+    ' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
+}
+# Seed the per-slug OptionalService CRs (manifests/optional-services-operator/
+# seed-optionalservices.yaml) from the resolved OPTIONAL_SERVICES selection, mirroring
+# _opt_render_installed_services above (the CR is the runtime desired-state twin of the
+# installed-services ConfigMap boolean). anubis follows the SAME ENV-conditional
+# _opt_anubis_installed decision used for the ConfigMap; coturn stays at its false
+# baseline (not in the selection loop, matching the ConfigMap).
+_opt_render_optionalservice_cr() {
+    local seed="${SYSROOT}/var/lib/snapdragon/cluster/manifests/optional-services-operator/seed-optionalservices.yaml"
+    [ -f "${seed}" ] || return 0
+    local slug val
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio edge-ai edge-ai-analysis edge-ai-tts; do
+        if _opt_selected "${slug}"; then val="true"; else val="false"; fi
+        _opt_set_cr_enabled "${seed}" "${slug}" "${val}"
+    done
+    val="$(_opt_anubis_installed)"
+    _opt_set_cr_enabled "${seed}" anubis "${val}"
+    info "OPTIONAL_SERVICES: seeded OptionalService CR enabled flags (selected: ${OPTIONAL_SERVICES:-none}; anubis=${val})"
 }
 # Put the Anubis PoW gate genuinely IN FRONT of public ingress when installed.
 # The fe-gateway chart renders the public Ingress (host snapdragon.systems +
@@ -1414,16 +1790,112 @@ gate_env_apps() {
     if [ "${ENV}" = "prod" ]; then
         rm -f "${apps}/09-lan-dns.yaml" && \
             info "ENV=prod: pruned LAN wildcard-DNS app 09-lan-dns.yaml from the baked tree"
-        return 0
+    else
+        # ENV=test
+        rm -f "${apps}/12-cloudflared.yaml" && \
+            info "ENV=test: pruned go-live app 12-cloudflared.yaml from the baked tree"
+        case "${CLUSTER_DOMAIN}" in
+            *.test) info "ENV=test: LAN wildcard DNS authoritative for ${CLUSTER_DOMAIN}" ;;
+            *) rm -f "${apps}/09-lan-dns.yaml" && \
+                   warn "ENV=test but domain '${CLUSTER_DOMAIN}' is not .test — pruned 09-lan-dns.yaml so it cannot hijack a real domain (use brands/local.conf / 'make local' for a .test LAN build)" ;;
+        esac
     fi
-    # ENV=test
-    rm -f "${apps}/12-cloudflared.yaml" && \
-        info "ENV=test: pruned go-live app 12-cloudflared.yaml from the baked tree"
-    case "${CLUSTER_DOMAIN}" in
-        *.test) info "ENV=test: LAN wildcard DNS authoritative for ${CLUSTER_DOMAIN}" ;;
-        *) rm -f "${apps}/09-lan-dns.yaml" && \
-               warn "ENV=test but domain '${CLUSTER_DOMAIN}' is not .test — pruned 09-lan-dns.yaml so it cannot hijack a real domain (use brands/local.conf / 'make local' for a .test LAN build)" ;;
-    esac
+
+    # ── RELEASE_STATE gate (K8s-manifest enforcement — Layer 2 / the PRIMARY
+    # mechanism; INDEPENDENT of the ENV=prod/test split above). RELEASE_STATE
+    # is threaded from brand.conf like CLUSTER_DOMAIN (default "internal";
+    # validated against CLUSTER_DOMAIN in generate-brand-repos.sh). A
+    # RELEASE_STATE=internal build stays LAN/tailnet-only regardless of ENV,
+    # so this block runs for BOTH branches above — which is why the prod
+    # branch no longer `return`s early.
+    #
+    # This GENERALIZES the existing tailnet-only superadmin-gateway pattern
+    # (apps/22-gateway-superadmin.yaml + tier-ingress.yaml's superadmin
+    # carve-out) to the WHOLE brand: when not public, the public ingress
+    # controller never ships at all, both public-facing gateways serve ONLY
+    # the internal ingress class, and the tier-ingress NetworkPolicy admits
+    # from the internal facade instead of the (now-absent) public one.
+    #
+    # Layer 3 (bake_host_firewall(), the host nftables backstop) is called
+    # right after gate_env_apps() in the main build flow and enforces the
+    # SAME posture independently, at the netfilter layer.
+    if [ "${RELEASE_STATE:-internal}" != "public" ]; then
+        local cluster="${SYSROOT}/var/lib/snapdragon/cluster"
+        local netpol="${cluster}/manifests/networkpolicy/tier-ingress.yaml"
+
+        # a) The public ingress controller Application never ships — nothing
+        #    for a public IngressClass to bind to.
+        rm -f "${apps}/10-ingress-nginx.yaml" && \
+            info "RELEASE_STATE=internal: pruned the public ingress controller 10-ingress-nginx.yaml from the baked tree"
+
+        # b) Both public-facing gateways (be/fe) are repointed to serve ONLY
+        #    the internal ingress class (11-ingress-nginx-internal.yaml,
+        #    pinned to the pki node) instead of the now-absent public class.
+        local gw
+        for gw in "${apps}/20-gateway-be.yaml" "${apps}/20-gateway-fe.yaml"; do
+            [ -f "${gw}" ] && sed -i -E 's/^([[:space:]]*className: )nginx$/\1nginx-internal/' "${gw}"
+        done
+        info "RELEASE_STATE=internal: be/fe gateways repointed className nginx -> nginx-internal"
+
+        # c) tier-ingress.yaml's backend/frontend admit-lists currently let
+        #    the PUBLIC ingress-nginx namespace in; with the public
+        #    controller gone, admit from ingress-nginx-internal instead (the
+        #    pki namespace already carries this exact carve-out — see (a)/(b)
+        #    above and 22-gateway-superadmin.yaml).
+        [ -f "${netpol}" ] && sed -i -E \
+            -e 's/(kubernetes\.io\/metadata\.name: )ingress-nginx( \} \})/\1ingress-nginx-internal\2/' \
+            -e 's/# public facade/# internal facade (RELEASE_STATE=internal)/' \
+            "${netpol}" && \
+            info "RELEASE_STATE=internal: tier-ingress.yaml admits ingress-nginx-internal instead of the public ingress-nginx"
+    fi
+}
+
+# Layer 3 (defense-in-depth): host-level nftables backstop for RELEASE_STATE,
+# INDEPENDENT of the K8s ingress-class/NetworkPolicy split in gate_env_apps()
+# above and of firewalld (/etc/firewalld) — even if either is ever
+# misconfigured, an internal-only device still refuses public 80/443 at the
+# netfilter layer. Ships the reconcile agent (owns render + `nft -f` load,
+# scoped to its OWN nftables table so firewalld's tables are untouched) + its
+# OpenRC oneshot (ordered before containerd/kubelet/tailscaled — see the
+# init.d depend()) + its 60s convergence cron UNCONDITIONALLY (core
+# hardening, not opt-in — unlike the STAGED vpn/tor/domain reconciles). Also
+# bakes /etc/snapdragon/release-state, parallel to the existing
+# /etc/snapdragon/cluster-domain bake below. The FIRST-EVER ruleset load
+# happens at first boot (the oneshot), rendered from this baked value + the
+# (absent-by-default) go-live marker, so there is no separate build-time
+# nftables.conf to keep in sync.
+bake_host_firewall() {
+    mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/usr/lib/snapdragon" "${SYSROOT}/etc/init.d" "${SYSROOT}/etc/cron.d" "${SYSROOT}/etc/snapdragon"
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-firewall-reconcile"   "${SYSROOT}/usr/sbin/snapdragon-firewall-reconcile"
+    chmod +x "${SYSROOT}/usr/sbin/snapdragon-firewall-reconcile"
+    cp "${SHARED_SPECS}/etc/init.d/snapdragon-firewall-reconcile" "${SYSROOT}/etc/init.d/snapdragon-firewall-reconcile"
+    chmod +x "${SYSROOT}/etc/init.d/snapdragon-firewall-reconcile"
+    cp "${SHARED_SPECS}/etc/cron.d/snapdragon-firewall-reconcile" "${SYSROOT}/etc/cron.d/snapdragon-firewall-reconcile"
+    # ── Go-Live wizard: the human-facing effector of this same firewall-reconcile /
+    #    release-state mechanism (driver writes /etc/snapdragon/go-live; reconcile
+    #    converges <=60s). Baked unconditionally alongside reconcile — inert until the
+    #    marker is written. Front-ends: -cli (thin CLI) and -menu (thin ncurses console).
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-go-live"              "${SYSROOT}/usr/sbin/snapdragon-go-live"
+    chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live"
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-go-live-cli"          "${SYSROOT}/usr/sbin/snapdragon-go-live-cli"
+    chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live-cli"
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-go-live-menu"         "${SYSROOT}/usr/sbin/snapdragon-go-live-menu"
+    chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live-menu"
+    cp "${SHARED_SPECS}/usr/lib/snapdragon/go-live-providers.sh"  "${SYSROOT}/usr/lib/snapdragon/go-live-providers.sh"
+    echo "${RELEASE_STATE:-internal}" > "${SYSROOT}/etc/snapdragon/release-state"
+    # ── Go-Live web-UI effector: the 4th front-end (admin-bff's web console) can only
+    #    RECORD a signed intent (it runs in a pod, can't touch this host's filesystem);
+    #    this agent is what actually drives the SAME driver's commit/rollback for a
+    #    web-originated intent. Baked alongside the driver it depends on (harmlessly
+    #    inert without it — same fail-closed gate as every reconcile agent: missing
+    #    verify lib / node.env / baked pubkey -> keep cache, exit 0, apply nothing).
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-go-live-reconcile"     "${SYSROOT}/usr/sbin/snapdragon-go-live-reconcile"
+    chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live-reconcile"
+    cp "${SHARED_SPECS}/usr/lib/snapdragon/golive-verify.sh"       "${SYSROOT}/usr/lib/snapdragon/golive-verify.sh"
+    cp "${SHARED_SPECS}/etc/init.d/snapdragon-go-live-reconcile"   "${SYSROOT}/etc/init.d/snapdragon-go-live-reconcile"
+    chmod +x "${SYSROOT}/etc/init.d/snapdragon-go-live-reconcile"
+    cp "${SHARED_SPECS}/etc/cron.d/snapdragon-go-live-reconcile"   "${SYSROOT}/etc/cron.d/snapdragon-go-live-reconcile"
+    info "RELEASE_STATE=${RELEASE_STATE:-internal}: baked the host nftables backstop (snapdragon-firewall-reconcile renders + loads the live ruleset at boot + every 60s) + the go-live wizard (driver/registry/CLI/ncurses front-ends) + the web-UI go-live effector (snapdragon-go-live-reconcile)"
 }
 
 # Rewrites the cluster GitOps payload + role markers from the default
@@ -1438,17 +1910,31 @@ rebrand_sysroot() {
     fi
     banner "Rebranding baked config -> brand=${BRAND} domain=${CLUSTER_DOMAIN} org=${ORG}"
     local org_lc; org_lc="$(echo "${ORG}" | tr '[:upper:]' '[:lower:]')"
+    # Harbor image-project segment (registry.<host>/<project>/<svc>). Defaults to the
+    # brand; the HARBOR_PROJECT env is a first-class seam for a differently-named project.
+    local _hproj; _hproj="$(_sed_rep_escape "${HARBOR_PROJECT:-${BRAND}}")"
     local roots=("${SYSROOT}/var/lib/snapdragon/cluster" "${SYSROOT}/etc/snapdragon")
     local f
     while IFS= read -r -d '' f; do
+        # FROZEN k8s label-KEY / API-group namespace `snapdragon.systems/<suffix>` must NOT
+        # rebrand (it is compiled into operators/JVM and used as node/pod selectors). Every
+        # KEY form is preceded by a YAML-structural boundary (line-start, space, {, (, comma,
+        # quote, backtick); every HOST/URL form is preceded by a dot or slash. Protect the KEY
+        # namespace behind a sentinel (first two -e), rebrand hosts/URLs/emails/CORS in the
+        # middle, then restore the KEY namespace verbatim (last -e). The sentinel contains
+        # neither `snapdragon.systems` nor `snapdragon-`, so the middle rules skip it.
         sed -i \
+            -e "s|^snapdragon\.systems/|@@SDSYSKEY@@/|g" \
+            -e "s|\([ {(,\"'\`]\)snapdragon\.systems/|\1@@SDSYSKEY@@/|g" \
             -e "s|Snapdragon Systems|${BRAND_TITLE}|g" \
             -e "s|snapdragon-systems/|${org_lc}/|g" \
             -e "s|Snapdragon-Systems|${ORG}|g" \
             -e "s|//id\.snapdragon\.games|//id.${GAMES_DOMAIN}|g" \
             -e "s|//snapdragon\.games|//${GAMES_DOMAIN}|g" \
             -e "s|snapdragon\.systems|${CLUSTER_DOMAIN}|g" \
+            -e "s|\(registry\.[A-Za-z0-9.-]*\)/snapdragon/|\1/${_hproj}/|g" \
             -e "s|snapdragon-|${BRAND}-|g" \
+            -e "s|@@SDSYSKEY@@/|snapdragon.systems/|g" \
             "${f}"
     done < <(find "${roots[@]}" -type f -print0 2>/dev/null)
     info "Rebrand complete (compound names like '${BRAND}-systems-web' may want review)."
@@ -1462,31 +1948,86 @@ rebrand_sysroot() {
 # '^PLAN_'); exit 0. Invalid role/flag combos never reach this point — the
 # validation above already exited non-zero, which is exactly what the
 # tests/build-matrix harness relies on. NO secrets are echoed here.
+
+# ── user package deltas: validate + enforce the tier-1 mandatory floor ─────────
+# Before --print-plan and any mutation, so a malformed atom or an illegal drop
+# fails LOUDLY at the boundary. Atom charset mirrors core/validate.py exactly.
+_PKG_ATOM_RE='^[a-z0-9][a-z0-9+._-]*/[A-Za-z0-9+._-]+$'
+_validate_pkg_atoms() { # LABEL VALUE
+    local _lbl="$1" _a; local -a _arr
+    read -ra _arr <<< "$2"
+    for _a in "${_arr[@]}"; do
+        [[ "${_a}" =~ ${_PKG_ATOM_RE} ]] || { err "invalid ${_lbl} atom: '${_a}' — want a category/name atom (e.g. app-editors/vim)"; exit 1; }
+    done
+}
+_validate_pkg_atoms --packages-add  "${PACKAGES_ADD}"
+_validate_pkg_atoms --packages-drop "${PACKAGES_DROP}"
+# Tier-1 mandatory atoms (base + role class). Dropping one is rejected (Decision #5:
+# tier-2 defaults are droppable; tier-1 essentials are hard-locked).
+SNAP_MANDATORY_ATOMS="sys-block/parted app-misc/jq net-misc/networkmanager"
+if ${ROLE_CLIENT}; then
+    SNAP_MANDATORY_ATOMS="${SNAP_MANDATORY_ATOMS} x11-base/xorg-server x11-wm/openbox x11-misc/lightdm"
+else
+    SNAP_MANDATORY_ATOMS="${SNAP_MANDATORY_ATOMS} sys-cluster/kubelet sys-cluster/kubeadm app-containers/containerd"
+fi
+if [ -n "${PACKAGES_DROP}" ]; then
+    read -ra _drop_check <<< "${PACKAGES_DROP}"
+    for _d in "${_drop_check[@]}"; do
+        for _m in ${SNAP_MANDATORY_ATOMS}; do
+            [ "${_d}" = "${_m}" ] && { err "refusing to --packages-drop mandatory-payload atom '${_d}' — tier-1 essential"; exit 1; }
+        done
+    done
+fi
+
 if ${PRINT_PLAN}; then
     _plan() { printf 'PLAN_%s=%s\n' "$1" "$2"; }
     _plan BUILDER            "build-rpi5-stage4.sh"
-    _plan PLATFORM           "rpi5"
+    # PLATFORM doubles as the board id (rpi5 [DEFAULT] | rpi4 | rpi3) — reusing
+    # this existing key (rather than adding a new PLAN_BOARD key) keeps
+    # --print-plan output for the DEFAULT board (no --board flag) BYTE-IDENTICAL
+    # to before this axis existed: BOARD defaults to the literal string "rpi5",
+    # so this line's value is unchanged unless --board rpi4/rpi3 is explicitly
+    # passed.
+    _plan PLATFORM           "${BOARD}"
     _plan ARCH               "arm64"
     _plan ROLE               "${ROLE}"
     _plan ENV                "${ENV}"
-    _plan DESKTOP            "none"   # cluster node images are headless
-    _plan GPU_DRIVER         "none"   # BCM2712 VideoCore; no discrete-GPU driver matrix on the Pi
+    _plan DESKTOP            "${DESKTOP}"   # 'light' for --role desktop, else headless
+    _plan GPU_DRIVER         "none"   # VideoCore (V3D/VC4); no discrete-GPU driver matrix on any RPi board
     _ARTS="stage4.tar.xz"
     ${BUILD_IMG} && _ARTS="${_ARTS},img"
     ${BUILD_ISO} && _ARTS="${_ARTS},iso"
     ${BUILD_TAR} && _ARTS="${_ARTS},fs.tar.xz"
     _plan ARTIFACTS          "${_ARTS}"
-    _plan ARTIFACT_PREFIX    "${BRAND}-rpi5-arm64-${ROLE}-${ENV}-<timestamp>"
+    _plan ARTIFACT_PREFIX    "${BRAND}-${BOARD}-arm64-${ROLE}-${ENV}-<timestamp>"
     _plan WORK_DIR           "${WORK_DIR}"
     _plan JOBS               "${JOBS}"
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
+    _plan SUPERDOMAIN        "${SUPERDOMAIN}"
     _plan HOSTNAME           "${HOSTNAME}"
-    _plan K8S                "$([ "${ROLE}" = "pki" ] && echo control-plane || echo worker)"
-    _plan OPTIONAL_SERVICES  "${OPTIONAL_SERVICES:-none}"
+    _plan K8S                "$(${ROLE_CLIENT} && echo none || { [ "${ROLE}" = "pki" ] && echo control-plane || echo worker; })"
+    _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo "n/a (role=desktop; no cluster GitOps tree baked)" || echo "${OPTIONAL_SERVICES:-none}")"
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
-    _plan KERNEL             "raspberrypi-arm64 (defconfig=${RPI_DEFCONFIG} + hardened-k8s.config)"
-    _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} iso=${BUILD_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} sd_only=${SD_ONLY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} pcie_gen3=${PCIE_GEN3} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} enable_games=${ENABLE_GAMES}"
+    _plan STANDALONE         "${STANDALONE}"
+    _plan LOCAL_USER         "${LOCAL_USER:-$DEFAULT_USER}"
+    _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
+    _plan ENCRYPT_ROOT       "${ENCRYPT_ROOT}"
+    _plan LUKS_PASS          "$([ -n "${LUKS_PASS}" ] && echo REDACTED || echo none)"
+    # KERNEL fragment enumeration: rp1-pi5.config's split-out from
+    # hardened-k8s.config is deliberately NOT named here for --board rpi5 (the
+    # DEFAULT) — this exact string must stay byte-identical to the pre-Phase-6
+    # output. It IS genuinely applied at kernel-build time (see the
+    # _kernel_fragments array below) and IS named in the final build summary
+    # banner, which has no such constraint. bcm2711-pi4.config IS named here for
+    # --board rpi4, and bcm2837-pi3.config for --board rpi3 (both non-default
+    # invocations, free to look different/board-aware).
+    _kernel_plan_desc="hardened-k8s.config"
+    [ "${BOARD}" = "rpi4" ] && _kernel_plan_desc="${_kernel_plan_desc} + bcm2711-pi4.config"
+    [ "${BOARD}" = "rpi3" ] && _kernel_plan_desc="${_kernel_plan_desc} + bcm2837-pi3.config"
+    ${ROLE_CLIENT} && _kernel_plan_desc="${_kernel_plan_desc} + desktop.config"
+    _plan KERNEL             "raspberrypi-arm64 (defconfig=${RPI_DEFCONFIG} + ${_kernel_plan_desc})"
+    _plan FLAGS_EFFECTIVE    "env=${ENV} img=${BUILD_IMG} iso=${BUILD_ISO} tar=${BUILD_TAR} img_size=${ROOT_MiB} grow=${GROW_POLICY} sd_only=${SD_ONLY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} pcie_gen3=${PCIE_GEN3} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} enable_games=${ENABLE_GAMES} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT}"
     exit 0
 fi
 
@@ -1494,7 +2035,7 @@ banner "Verifying prerequisites"
 
 # Check spec directories (arch-specific + shared)
 if [ ! -d "${SPECS_DIR}" ]; then
-    err "RPi5 specs directory not found: ${SPECS_DIR}"
+    err "RPi specs directory not found: ${SPECS_DIR}"
     err "Expected to find it next to this script, or pass --specs-dir."
     exit 1
 fi
@@ -1503,7 +2044,8 @@ if [ ! -d "${SHARED_SPECS}" ]; then
     err "Expected to find specs/ next to this script."
     exit 1
 fi
-info "RPi5 specs:   ${SPECS_DIR}"
+info "Board:        ${BOARD_DESC}"
+info "RPi specs:    ${SPECS_DIR}"
 info "Shared specs: ${SHARED_SPECS}"
 
 # Check toolchain
@@ -1542,7 +2084,7 @@ done
 if [ "$(id -u)" -eq 0 ]; then
     mkdir -p /etc/portage/package.use
     cat > /etc/portage/package.use/snapdragon-cross-host-selinux <<'HOSTSELINUX'
-# Auto-written by build-rpi5-stage4.sh (rpi5 CROSS build). The HOST x86 selinux-python/
+# Auto-written by build-rpi5-stage4.sh (RPi CROSS build, --board rpi5|rpi4). The HOST x86 selinux-python/
 # policycoreutils toolchain — pulled to compile the docker/container policy that
 # containerd[selinux] requires — needs python bindings. Without this the cross_emerge
 # (no --autounmask) silently skips containerd. Safe to delete on a non-build host.
@@ -1670,11 +2212,79 @@ fi
 
 banner "Installing spec files into sysroot (hardened profile)"
 
-# Compute PCIE_LINE for templates
-if ${PCIE_GEN3}; then
+# Compute PCIE_LINE for templates. --pcie-gen3 only means anything on --board
+# rpi5: that dtparam forces Gen 3 link speed on Pi 5's user-facing NVMe FFC/M.2
+# HAT PCIe link. The standard Pi 4 Model B has NO user-facing PCIe slot at all
+# (its one PCIe lane is fully consumed internally by the VL805 USB3 bridge — see
+# specs-rpi5/kernel/hardened-k8s.config), and Pi 3 (BCM2837) has NO PCIe
+# controller of any kind — so force the line off (commented/no-op) for
+# --board rpi4/rpi3 regardless of the flag, with a loud warning instead of
+# silently doing nothing.
+if ${PCIE_GEN3} && [ "${BOARD}" != "rpi5" ]; then
+    case "${BOARD}" in
+        rpi4) warn "--pcie-gen3 has no effect on --board rpi4 (the standard Pi 4 Model B has no user-facing PCIe slot; its one PCIe lane is internal-only, wired to the VL805 USB3 bridge) — ignoring." ;;
+        rpi3) warn "--pcie-gen3 has no effect on --board rpi3 (BCM2837 has no PCIe controller at all — its USB/Ethernet ride the SoC's Synopsys DWC2 controller instead, see specs-rpi5/kernel/bcm2837-pi3.config) — ignoring." ;;
+    esac
+    PCIE_LINE="# dtparam=pciex1_gen=3"
+elif ${PCIE_GEN3}; then
     PCIE_LINE="dtparam=pciex1_gen=3"
 else
     PCIE_LINE="# dtparam=pciex1_gen=3"
+fi
+
+# Compute CONSOLE_UART for cmdline.txt.tmpl: each board exposes its serial
+# console on a DIFFERENT UART device node. Pi 5 has a DEDICATED debug UART on a
+# 3-pin JST connector (not the GPIO header), enumerated as ttyAMA10 by the
+# mainline/raspberrypi kernel — the historical hardcoded value here, unchanged
+# for --board rpi5. Pi 4 has no such dedicated debug port; its serial console is
+# the GPIO-header UART, ttyAMA0 (dtparam=uart0=on in config.txt, unchanged
+# board-agnostic already). NOT verified against a real Pi 4 boot in this
+# sandbox — cross-checked against Raspberry Pi's own forum/docs guidance only.
+# Pi 3 has an onboard Bluetooth module that, by default, claims the full PL011
+# UART (ttyAMA0) for itself, leaving only the clock-derived mini-UART (ttyS0)
+# on the GPIO header — the mini-UART's baud rate depends on the core clock,
+# which config.txt's already-unconditional enable_uart=1 stabilizes, so ttyS0
+# works out of the box with NO extra dtoverlay needed. Deliberately NOT
+# ttyAMA0+dtoverlay=disable-bt: that would coincidentally work with
+# ENABLE_BLUETOOTH's default (false) but silently contradict --enable-bluetooth
+# (BT would have no UART left) — ttyS0 is correct in EITHER radio state. NOT
+# verified against a real Pi 3 boot in this sandbox — cross-checked against
+# Raspberry Pi's own forum/docs guidance only, same confidence level as the
+# rpi4 line above.
+case "${BOARD}" in
+    rpi4) CONSOLE_UART="ttyAMA0" ;;
+    rpi3) CONSOLE_UART="ttyS0" ;;
+    *)    CONSOLE_UART="ttyAMA10" ;;
+esac
+
+# Compute VC4_OVERLAY_LINE for config.txt.tmpl. Pi 4/5's firmware already
+# defaults straight to the KMS-capable vc4/v3d device-tree binding with NO
+# explicit dtoverlay needed — this line stays a harmless, always-commented
+# no-op on those boards (byte-for-byte what config.txt already did before this
+# token existed, just spelled out instead of omitted). Pi 3's older firmware/
+# DTB does NOT default to KMS: without an explicit dtoverlay, the boot ROM
+# leaves the legacy, non-KMS firmware-managed framebuffer path active, which
+# this repo's modern Xorg/LXDE desktop stack cannot drive. HIGH UNCERTAINTY
+# (flagged explicitly): vc4-kms-v3d (full KMS, not the older vc4-fkms-v3d
+# Fake-KMS overlay) is Raspberry Pi OS's own current default for Pi 3 on a
+# recent kernel — chosen here on that basis — but NOT verified against a real
+# Pi 3 boot in this sandbox (no aarch64 hardware available); see
+# specs-rpi5/kernel/bcm2837-pi3.config's header for the full research trail.
+case "${BOARD}" in
+    rpi3) VC4_OVERLAY_LINE="dtoverlay=vc4-kms-v3d" ;;
+    *)    VC4_OVERLAY_LINE="# dtoverlay=vc4-kms-v3d (n/a — ${BOARD} firmware already defaults to KMS)" ;;
+esac
+
+# Compute INITRAMFS_LINE for config.txt.tmpl: the RPi firmware bootloader
+# normally goes straight from kernel to root= on cmdline.txt (no initramfs at
+# all). --encrypt-root needs one — a disk-boot dracut initramfs (built after
+# the kernel phase, see build_disk_initramfs() below) that unlocks the LUKS2
+# root before the real root= is mounted. 'followkernel' places it directly
+# after the kernel in memory, the RPi firmware's documented convention.
+if ${ENCRYPT_ROOT}; then
+    INITRAMFS_LINE="initramfs disk-initrd.img followkernel"
+else
+    INITRAMFS_LINE="# initramfs disk-initrd.img followkernel"
 fi
 
 # Portage directories
@@ -1702,6 +2312,22 @@ cp "${SPECS_DIR}/portage/profile/use.mask"                "${SYSROOT}/etc/portag
 cp "${SPECS_DIR}/portage/package.accept_keywords/"*       "${SYSROOT}/etc/portage/package.accept_keywords/"
 cp "${SPECS_DIR}/portage/package.use/"*                   "${SYSROOT}/etc/portage/package.use/"
 cp "${SPECS_DIR}/portage/package.env/"*                   "${SYSROOT}/etc/portage/package.env/"
+# dev-embedded/rpi-eeprom REQUIRED_USE is exactly-one-of ( pi4 pi5 ) — verified
+# against the live Gentoo ebuild (dev-embedded/rpi-eeprom's IUSE/REQUIRED_USE;
+# its DESCRIPTION is literally "Updater for Raspberry Pi 4/5 bootloader and the
+# VL805 USB controller" — there is no "pi3" value and never will be, this
+# package is Pi 4/5-only). The package.use/rpi5 file bakes "pi5" as its static
+# default (unchanged for --board rpi5). Flip it to "pi4" for --board rpi4 so
+# the installed EEPROM updater actually matches the board it is running on,
+# instead of silently building a Pi 5-flavored rpi-eeprom for a Pi 4 image.
+# --board rpi3 does NOT get a flip here — see the STAGE4_PACKAGES-level
+# EXCLUSION below instead (there is no "pi3" USE value to flip TO, and Pi 3 has
+# no flashable EEPROM at all to update in the first place).
+if [ "${BOARD}" = "rpi4" ]; then
+    sed -i -E 's/^(dev-embedded\/rpi-eeprom)[[:space:]]+pi5$/\1 pi4/' \
+        "${SYSROOT}/etc/portage/package.use/rpi5"
+    info "BOARD=rpi4: flipped dev-embedded/rpi-eeprom USE pi5 -> pi4"
+fi
 # Plain (non-templated) per-package env files, e.g. python-cross.conf. The .tmpl
 # env files (cross-go.conf) are rendered separately just below.
 cp "${SPECS_DIR}/portage/env/"*.conf                      "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
@@ -1749,28 +2375,49 @@ rm -f "${SYSROOT}/boot/config.txt" "${SYSROOT}/boot/cmdline.txt"
 # fstab is RPi-specific (mounts the /boot firmware partition) -> SPECS_DIR.
 cp "${SPECS_DIR}/etc/fstab"                               "${SYSROOT}/etc/fstab"
 
-# Everything below is arch-agnostic and shared with the x86 build -> SHARED_SPECS.
-mkdir -p "${SYSROOT}/etc/modules-load.d"
-cp "${SHARED_SPECS}/etc/modules-load.d/kubernetes.conf"   "${SYSROOT}/etc/modules-load.d/kubernetes.conf"
+# LUKS2 root (--encrypt-root): persist crypt-module support into any FUTURE
+# dracut regeneration on the installed system (e.g. a post-install kernel
+# rebuild), not just the disk-boot initramfs this build generates directly.
+if ${ENCRYPT_ROOT}; then
+    mkdir -p "${SYSROOT}/etc/dracut.conf.d"
+    cp "${SPECS_DIR}/etc/dracut.conf.d/60-snapdragon-crypt.conf" "${SYSROOT}/etc/dracut.conf.d/"
+fi
 
+# Everything below is arch-agnostic and shared with the x86 build -> SHARED_SPECS.
 mkdir -p "${SYSROOT}/etc/sysctl.d"
 cp "${SHARED_SPECS}/etc/sysctl.d/10-hardened.conf"        "${SYSROOT}/etc/sysctl.d/10-hardened.conf"
-cp "${SHARED_SPECS}/etc/sysctl.d/99-kubernetes.conf"      "${SYSROOT}/etc/sysctl.d/99-kubernetes.conf"
 
-mkdir -p "${SYSROOT}/etc/containerd"
-cp "${SHARED_SPECS}/etc/containerd/config.toml"           "${SYSROOT}/etc/containerd/config.toml"
+# k8s modules/sysctl + containerd/kubelet/kubeadm config + init scripts:
+# cluster-node roles only — meaningless (and the binaries won't exist) on
+# --role desktop (ROLE_CLIENT). Auto-loading ip_vs/vxlan/br_netfilter and
+# forcing net.ipv4.ip_forward=1 etc. has no business on a personal desktop.
+if ! ${ROLE_CLIENT}; then
+    mkdir -p "${SYSROOT}/etc/modules-load.d"
+    cp "${SHARED_SPECS}/etc/modules-load.d/kubernetes.conf"   "${SYSROOT}/etc/modules-load.d/kubernetes.conf"
 
-mkdir -p "${SYSROOT}/var/lib/kubelet"
-cp "${SHARED_SPECS}/etc/kubernetes/kubelet-config.yaml"   "${SYSROOT}/var/lib/kubelet/config.yaml"
+    cp "${SHARED_SPECS}/etc/sysctl.d/99-kubernetes.conf"      "${SYSROOT}/etc/sysctl.d/99-kubernetes.conf"
 
-mkdir -p "${SYSROOT}/etc/kubernetes"
-cp "${SHARED_SPECS}/etc/kubernetes/kubeadm-config.yaml"   "${SYSROOT}/etc/kubernetes/kubeadm-config.yaml"
+    mkdir -p "${SYSROOT}/etc/containerd"
+    cp "${SHARED_SPECS}/etc/containerd/config.toml"           "${SYSROOT}/etc/containerd/config.toml"
+
+    mkdir -p "${SYSROOT}/var/lib/kubelet"
+    cp "${SHARED_SPECS}/etc/kubernetes/kubelet-config.yaml"   "${SYSROOT}/var/lib/kubelet/config.yaml"
+
+    mkdir -p "${SYSROOT}/etc/kubernetes"
+    cp "${SHARED_SPECS}/etc/kubernetes/kubeadm-config.yaml"   "${SYSROOT}/etc/kubernetes/kubeadm-config.yaml"
+fi
 
 mkdir -p "${SYSROOT}/etc/init.d" "${SYSROOT}/etc/firewalld/zones"
-for svc in growroot containerd kubelet headscale tailscaled keys-provision; do
+for svc in growroot headscale tailscaled keys-provision; do
     cp "${SHARED_SPECS}/etc/init.d/${svc}" "${SYSROOT}/etc/init.d/${svc}"
     chmod +x "${SYSROOT}/etc/init.d/${svc}"
 done
+if ! ${ROLE_CLIENT}; then
+    for svc in containerd kubelet; do
+        cp "${SHARED_SPECS}/etc/init.d/${svc}" "${SYSROOT}/etc/init.d/${svc}"
+        chmod +x "${SYSROOT}/etc/init.d/${svc}"
+    done
+fi
 # firewalld installs /etc/init.d/firewalld; alias 'firewall' so the `after firewall`
 # deps in tailscaled/kubelet/headscale/containerd/egress-vpn still resolve.
 ln -sfn firewalld "${SYSROOT}/etc/init.d/firewall"
@@ -1797,6 +2444,13 @@ write_growfs_conf "${SYSROOT}/etc/growfs.conf"
 # keys-provision via `headscale policy set`.
 mkdir -p "${SYSROOT}/etc/headscale"
 cp "${SHARED_SPECS}/etc/headscale/config.yaml"            "${SYSROOT}/etc/headscale/config.yaml"
+# WS-SUPER-B: template the node's headscale MagicDNS suffix to the orchestration
+# superdomain so the baked config agrees with the KEYS/provision channel. "" = the
+# checked-in default (headnet.internal); provision.json stays authoritative at first boot.
+if [ -n "${SUPERDOMAIN}" ] && [ -f "${SYSROOT}/etc/headscale/config.yaml" ]; then
+    sed -i "s|^  base_domain: .*|  base_domain: ${SUPERDOMAIN}|" "${SYSROOT}/etc/headscale/config.yaml"
+    info "Templated headscale base_domain -> ${SUPERDOMAIN} (orchestration superdomain)"
+fi
 # Layer-A: bake the BOOTSTRAP policy AS the initial policy.hujson (NO any-to-any
 # :22 hole; KEEPS the k8s CIDR data-plane rule). First verified Layer-A sync
 # re-renders it from policy.hujson.tmpl. (See build-x86-host-stage4.sh rationale.)
@@ -1924,6 +2578,11 @@ chmod +x "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh" "$
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
+# Orchestration superdomain (WS-SUPER-B): record the mesh plane the image joins.
+if [ -n "${SUPERDOMAIN}" ]; then
+    echo "${SUPERDOMAIN}" > "${SYSROOT}/etc/snapdragon/superdomain"
+    info "Baked orchestration superdomain -> /etc/snapdragon/superdomain (${SUPERDOMAIN})"
+fi
 # Runtime ENV marker (test|prod). Read by bootstrap/provision; also documents
 # the image's posture. test => LAN wildcard DNS authoritative; prod => public.
 echo "${ENV}"            > "${SYSROOT}/etc/snapdragon/env"
@@ -1934,7 +2593,26 @@ if [ -n "${HEADSCALE_URL:-}" ]; then
     echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/snapdragon/headscale-url"
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/snapdragon/headscale-url"
 fi
-if [ -d "${SHARED_SPECS}/cluster" ]; then
+if ${STANDALONE}; then
+    # STANDALONE desktop: bake the marker so keys-provision skips all
+    # mesh-seeking no-ops and a normal LOCAL USER logs in with the build-set
+    # password (mirrors build-x86-host-stage4.sh). Only --role desktop can set
+    # STANDALONE (guarded above).
+    #
+    # NOTE: a --role desktop build WITHOUT --standalone deliberately does NOT
+    # write this marker (it wants headscale/tailscale mesh join). That means
+    # provision.sh's non-standalone k8s block (provision_kubernetes/_calico/
+    # _vault/_backup/_update/_snapdragon) still runs on a ROLE_CLIENT sysroot
+    # with no containerd/kubeadm/kubelet binaries and no cluster tree — this
+    # is safe ONLY because each of those functions self-guards on binary/
+    # kubeconfig/manifest-key presence; keep that guard when touching them.
+    echo "true" > "${SYSROOT}/etc/snapdragon/standalone"
+    info "Standalone desktop: local user '${DEFAULT_USER}', no mesh."
+fi
+# The cluster GitOps tree (ArgoCD/Casdoor apps) is meaningless on a client
+# desktop — it never runs kubeadm/joins the cluster — so skip it for
+# --role desktop (ROLE_CLIENT), same as the containerd/kubelet config above.
+if ! ${ROLE_CLIENT} && [ -d "${SHARED_SPECS}/cluster" ]; then
     mkdir -p "${SYSROOT}/var/lib/snapdragon"
     cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
     info "Installed cluster GitOps payload (role=${ROLE})"
@@ -1944,6 +2622,7 @@ if [ -d "${SHARED_SPECS}/cluster" ]; then
         *" games "*) parameterize_games_domain ;;  # rewrite .games -> ${GAMES_DOMAIN} (BEFORE rebrand; fixes games OIDC iss on the subdomain default)
     esac
     gate_env_apps              # prune ENV-specific ArgoCD apps from the baked copy
+    bake_host_firewall         # Layer 3: host nftables backstop for RELEASE_STATE (independent of gate_env_apps' K8s-manifest layer)
     gate_optional_services     # prune OPTIONAL services (akkoma/tuwunel/phpbb/games) not in OPTIONAL_SERVICES
 fi
 
@@ -1953,6 +2632,8 @@ fi
 rebrand_sysroot
 
 mkdir -p "${SYSROOT}/etc/local.d"
+[ -f "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" ] || {
+    err "missing first-boot finaliser template: ${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl"; exit 1; }
 render_template "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" "${SYSROOT}/etc/local.d/01-firstboot.start"
 chmod +x "${SYSROOT}/etc/local.d/01-firstboot.start"
 
@@ -1964,16 +2645,43 @@ echo "${TIMEZONE}" > "${SYSROOT}/etc/timezone"
 ln -sf "/usr/share/zoneinfo/${TIMEZONE}" "${SYSROOT}/etc/localtime"
 echo "en_US.UTF-8 UTF-8" > "${SYSROOT}/etc/locale.gen"
 
-# CNI / containerd directories
-mkdir -p "${SYSROOT}/opt/cni/bin"
-mkdir -p "${SYSROOT}/etc/cni/net.d"
-mkdir -p "${SYSROOT}/etc/containerd/certs.d"
+# CNI / containerd directories — cluster-node roles only.
+if ! ${ROLE_CLIENT}; then
+    mkdir -p "${SYSROOT}/opt/cni/bin"
+    mkdir -p "${SYSROOT}/etc/cni/net.d"
+    mkdir -p "${SYSROOT}/etc/containerd/certs.d"
+fi
 
 # OpenRC service links
 mkdir -p "${SYSROOT}/etc/runlevels/default"
 # growroot expands the root fs to fill the medium on first boot; it orders itself
 # before keys-provision so provisioning sees the full disk (no-op in containers).
-DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall containerd kubelet auditd local)
+DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall auditd local)
+if ! ${ROLE_CLIENT}; then
+    # snapdragon-firewall-reconcile's files are only ever baked for cluster-node
+    # roles (bake_host_firewall() is called from inside the `! ROLE_CLIENT &&
+    # -d cluster` block above) — enabling the service here too, never on the
+    # desktop branch below, mirrors build-x86-host-stage4.sh's own SVCS split.
+    DEFAULT_SVCS+=(snapdragon-firewall-reconcile snapdragon-go-live-reconcile containerd kubelet)
+else
+    # Desktop session bring-up: dbus + elogind (seat/login manager) + the
+    # display-manager OpenRC service (provided by gui-libs/display-manager-init,
+    # configured via /etc/conf.d/display-manager below). Mirrors
+    # build-frite-stage4.sh/build-jetson-stage4.sh's DESKTOP=light wiring.
+    DEFAULT_SVCS+=(dbus elogind display-manager)
+    mkdir -p "${SYSROOT}/etc/conf.d"
+    echo 'DISPLAYMANAGER="lightdm"' > "${SYSROOT}/etc/conf.d/display-manager"
+    # Wire the greeter + default session explicitly: with only lightdm-gtk-greeter
+    # installed the stock greeter-session (example-gtk-gnome) is absent -> blank
+    # greeter. Mirrors build-frite-stage4.sh/build-jetson-stage4.sh's identical fix.
+    mkdir -p "${SYSROOT}/etc/lightdm"
+    cat > "${SYSROOT}/etc/lightdm/lightdm.conf" <<'LIGHTDM'
+[LightDM]
+[Seat:*]
+greeter-session=lightdm-gtk-greeter
+user-session=LXDE
+LIGHTDM
+fi
 # Opt-in host-binary auto-update: link the boot oneshot + cadence cron into the
 # default runlevel as PLUMBING (every node), but the poller is DEFAULT-OFF / INERT —
 # it pulls nothing until a superadmin sets enabled:true in the snapdragon-update-policy
@@ -2131,6 +2839,18 @@ mapfile -t STAGE4_PACKAGES < <(
     grep -v '^\s*#' "${SPECS_DIR}/portage/packages.list" | grep -v '^\s*$'
 )
 
+# k8s cluster-node roles get the containerd/kubelet/kubeadm stack; --role desktop
+# (ROLE_CLIENT) gets the lean LXDE client stack instead — never both.
+if ! ${ROLE_CLIENT}; then
+    info "K8s cluster role — appending packages-k8s.list (containerd + kubeadm node set)"
+    mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
+        grep -v '^\s*#' "${SPECS_DIR}/portage/packages-k8s.list" | grep -v '^\s*$')
+else
+    info "Desktop role — appending packages-desktop.list (lean LXDE client set)"
+    mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
+        grep -v '^\s*#' "${SPECS_DIR}/portage/packages-desktop.list" | grep -v '^\s*$')
+fi
+
 # Egress VPN (DEFAULT-OFF optional service): the node packages.list always lists
 # net-vpn/wireguard-tools + net-vpn/openvpn, but they are ONLY needed when the
 # egress-vpn service is selected. PRUNE them from the install set otherwise so an
@@ -2148,6 +2868,52 @@ if ! _opt_selected egress-vpn; then
     info "OPTIONAL_SERVICES: egress-vpn NOT selected — pruned net-vpn/wireguard-tools + net-vpn/openvpn from the node packages"
 fi
 
+# BOARD-gated package: sys-apps/nvme-cli is only meaningful on --board rpi5,
+# which exposes a user-facing PCIe/NVMe path (the FFC/M.2 HAT connector); the
+# standard Pi 4 Model B has none (its one PCIe lane is fully internal, wired to
+# the VL805 USB3 bridge), and Pi 3 (BCM2837) has no PCIe controller at all —
+# see specs-rpi5/kernel/hardened-k8s.config. Prune it for --board rpi4/rpi3 so
+# the image doesn't carry NVMe tooling for hardware it cannot have.
+# sys-apps/pciutils/usbutils/i2c-tools stay unconditional — every board
+# genuinely has USB/I2C topology worth diagnosing (rpi3's USB is DWC2-based
+# rather than PCIe-attached xHCI, so usbutils/i2c-tools remain useful there;
+# pciutils is harmless dead weight on a board with no PCIe bus at all, matching
+# this codebase's existing "inert-but-harmless" tolerance elsewhere).
+if [ "${BOARD}" != "rpi5" ]; then
+    _kept=()
+    for _pkg in "${STAGE4_PACKAGES[@]}"; do
+        case "${_pkg}" in
+            sys-apps/nvme-cli) ;;   # drop (--board rpi4/rpi3: no user-facing NVMe path)
+            *) _kept+=("${_pkg}") ;;
+        esac
+    done
+    STAGE4_PACKAGES=("${_kept[@]}")
+    info "BOARD=${BOARD}: pruned sys-apps/nvme-cli (no user-facing NVMe path on this board)"
+fi
+
+# BOARD-gated package: dev-embedded/rpi-eeprom (the Pi 4/5 bootloader EEPROM
+# updater) has NO --board rpi3 value at all — its REQUIRED_USE is a hard
+# exactly-one-of ( pi4 pi5 ), verified against the live Gentoo ebuild (see the
+# comment on the package.use/rpi5 sed-flip above). Pi 3 has no flashable boot
+# EEPROM in the first place: it boots via bootcode.bin + start.elf read
+# directly off the FAT boot partition by the GPU's on-chip boot ROM, so there
+# is nothing for rpi-eeprom to manage even if its REQUIRED_USE could somehow be
+# satisfied. EXCLUDE it entirely for --board rpi3 (not just leave it
+# unflashed) — sys-apps/flashrom is dropped too since it is rpi-eeprom's only
+# puller in this packages.list (an UNCONDITIONAL RDEPEND; nothing else here
+# wants flashrom — see package.use/rpi5's own comment on it).
+if [ "${BOARD}" = "rpi3" ]; then
+    _kept=()
+    for _pkg in "${STAGE4_PACKAGES[@]}"; do
+        case "${_pkg}" in
+            dev-embedded/rpi-eeprom) ;;   # drop (--board rpi3: no EEPROM at all)
+            *) _kept+=("${_pkg}") ;;
+        esac
+    done
+    STAGE4_PACKAGES=("${_kept[@]}")
+    info "BOARD=rpi3: pruned dev-embedded/rpi-eeprom (no flashable boot EEPROM on this board; boots via bootcode.bin/start.elf instead)"
+fi
+
 # Tor v3 onion (hidden) service (DEFAULT-OFF optional service): net-vpn/tor (the v3
 # onion daemon, ships /etc/init.d/tor + /etc/tor/torrc + the tor:tor user) is NOT in
 # the base packages.list, so it is ADDED to the install set ONLY when 'tor' is selected
@@ -2159,11 +2925,38 @@ if _opt_selected tor; then
     info "OPTIONAL_SERVICES: tor selected — added net-vpn/tor to the node packages (v3 onion daemon; keypair off-git, minted first-boot)"
 fi
 
+# LUKS2 root (--encrypt-root): dracut generates the disk-boot initramfs that
+# unlocks it. cryptsetup/lvm2 are already unconditional in packages.list (used
+# today for the LUKS2 DATA partition on an attached NVMe/USB); dracut is new
+# and only needed for the root-encryption path, so it stays conditional.
+if ${ENCRYPT_ROOT}; then
+    STAGE4_PACKAGES+=(sys-kernel/dracut)
+fi
+
 # Append user-specified extra packages
 if [ -n "${EXTRA_PACKAGES}" ]; then
     read -ra _extras <<< "${EXTRA_PACKAGES}"
     STAGE4_PACKAGES+=("${_extras[@]}")
     info "Extra packages: ${EXTRA_PACKAGES}"
+fi
+
+# User package deltas (--packages-add / --packages-drop): adds appended, drops
+# filtered from the resolved set (validated + mandatory-floor-checked up front).
+if [ -n "${PACKAGES_ADD}" ]; then
+    read -ra _padd <<< "${PACKAGES_ADD}"
+    STAGE4_PACKAGES+=("${_padd[@]}")
+    info "Added packages (--packages-add): ${PACKAGES_ADD}"
+fi
+if [ -n "${PACKAGES_DROP}" ]; then
+    read -ra _pdrop <<< "${PACKAGES_DROP}"
+    _kept=()
+    for _p in "${STAGE4_PACKAGES[@]}"; do
+        _skip=false
+        for _d in "${_pdrop[@]}"; do [ "${_p}" = "${_d}" ] && { _skip=true; break; }; done
+        ${_skip} || _kept+=("${_p}")
+    done
+    STAGE4_PACKAGES=("${_kept[@]}")
+    info "Dropped packages (--packages-drop): ${PACKAGES_DROP}"
 fi
 
 info "Package count: ${#STAGE4_PACKAGES[@]}"
@@ -2187,7 +2980,27 @@ fi
 # matching "stage4 payload incomplete" assert). Binaries are aarch64, so test
 # for file presence in the sysroot rather than command -v.
 _payload_missing=""
-for _b in kubelet kubeadm kubectl containerd NetworkManager nmcli sshd auditd crond jq parted flashrom rpi-eeprom-update; do
+_payload_bins=(NetworkManager nmcli sshd auditd crond jq parted)
+# flashrom + rpi-eeprom-update only exist on --board rpi4/rpi5 — --board rpi3
+# excludes dev-embedded/rpi-eeprom entirely (see the STAGE4_PACKAGES prune
+# above), so neither binary is ever emerged on that board; asserting their
+# presence there would fail this gate on a perfectly correct rpi3 image.
+if [ "${BOARD}" != "rpi3" ]; then
+    _payload_bins+=(flashrom rpi-eeprom-update)
+fi
+if ! ${ROLE_CLIENT}; then
+    _payload_bins+=(kubelet kubeadm kubectl containerd)
+else
+    _payload_bins+=(Xorg openbox lxsession pcmanfm lightdm)
+fi
+# LUKS2 root (--encrypt-root): cryptsetup formats/opens the root at install time,
+# dracut generates the disk-boot initramfs that unlocks it at boot — both are
+# only conditionally emerged (cryptsetup is unconditional today, but assert it
+# here too now that it's load-bearing for a NEW use case: the root, not just an
+# attached data disk), so assert them explicitly rather than discovering a
+# silent emerge failure only on real hardware.
+${ENCRYPT_ROOT} && _payload_bins+=(cryptsetup dracut)
+for _b in "${_payload_bins[@]}"; do
     _found=false
     for _d in usr/bin usr/sbin bin sbin; do
         if [ -e "${SYSROOT}/${_d}/${_b}" ]; then _found=true; break; fi
@@ -2199,15 +3012,20 @@ if [ -n "${_payload_missing}" ]; then
     err "packages.list did not fully merge; review the emerge output above."
     exit 1
 fi
-info "Stage4 payload verified (kubelet kubeadm kubectl containerd NetworkManager nmcli sshd auditd crond jq parted flashrom rpi-eeprom-update)"
+if [ "${DESKTOP}" = "light" ] && [ ! -e "${SYSROOT}/etc/init.d/display-manager" ]; then
+    err "DESKTOP=light enables the 'display-manager' service but ${SYSROOT}/etc/init.d/display-manager is missing"
+    err "       (gui-libs/display-manager-init did not emerge) — the desktop would boot to a console. Aborting."
+    exit 1
+fi
+info "Stage4 payload verified (${_payload_bins[*]})"
 
 # ── 7a. Boot config (AFTER firmware is merged) ─────────────────────
 # Written now — not in the spec-install phase — so raspberrypi-firmware's
 # pkg_preinst didn't die on a pre-existing /boot/config.txt|cmdline.txt. Our
 # templated versions are authoritative and overlay the firmware's defaults.
 if [ -d "${SYSROOT}/boot" ]; then
-    render_template "${SPECS_DIR}/boot/config.txt.tmpl" "${SYSROOT}/boot/config.txt"
-    cp "${SPECS_DIR}/boot/cmdline.txt"                  "${SYSROOT}/boot/cmdline.txt"
+    render_template "${SPECS_DIR}/boot/config.txt.tmpl"   "${SYSROOT}/boot/config.txt"
+    render_template "${SPECS_DIR}/boot/cmdline.txt.tmpl"  "${SYSROOT}/boot/cmdline.txt"
     info "Boot config written (config.txt + cmdline.txt) over the firmware defaults"
 fi
 
@@ -2291,23 +3109,49 @@ else
         warn "You will need to provide a kernel separately."
     else
         info "Building kernel from ${KERNEL_SRC}..."
-        info "Defconfig: ${RPI_DEFCONFIG}  CPU: ${RPI_CPU}"
-        info "Config fragment: ${SPECS_DIR}/kernel/hardened-k8s.config"
+        info "Board: ${BOARD_DESC}  Defconfig: ${RPI_DEFCONFIG}  CPU: ${RPI_CPU}"
+        # hardened-k8s.config is the UNIVERSAL base fragment (applied to every
+        # role AND board, cluster node or desktop, Pi 3/4/5 — same pattern
+        # build-x86-host-stage4.sh's own identically-misnamed "hardened-k8s.config"
+        # and build-jetson-stage4.sh's hardened-node.config already use). It still
+        # carries the Pi 4/5-only PCIE_BRCMSTB/USB_XHCI_* lines UNCONDITIONALLY —
+        # on --board rpi3 these are deliberately left as harmless dead Kconfig
+        # weight (no matching hardware to bind to) rather than restructured out,
+        # matching this codebase's existing tolerance for "compiles but never
+        # binds" config elsewhere; see bcm2837-pi3.config's header for the
+        # reasoning. The BOARD-specific hardware fragment (rp1-pi5.config's
+        # RP1-exclusive NVMe/pinctrl/I2C-SPI/camera-ADC bits for --board rpi5,
+        # bcm2711-pi4.config's native Broadcom I2C/SPI/pinctrl for --board rpi4,
+        # or bcm2837-pi3.config's DWC2 USB/USB-Ethernet/BCM2835 GPIO-header bits
+        # for --board rpi3) is applied next — additive, NEVER more than one
+        # board's fragment (the boards' southbridge/USB hardware is mutually
+        # exclusive). desktop.config is purely ADDITIVE (input/HID/sound),
+        # applied LAST, ONLY for --role desktop, on ANY board.
+        _kernel_fragments=("${SPECS_DIR}/kernel/hardened-k8s.config")
+        case "${BOARD}" in
+            rpi5) _kernel_fragments+=("${SPECS_DIR}/kernel/rp1-pi5.config") ;;
+            rpi4) _kernel_fragments+=("${SPECS_DIR}/kernel/bcm2711-pi4.config") ;;
+            rpi3) _kernel_fragments+=("${SPECS_DIR}/kernel/bcm2837-pi3.config") ;;
+        esac
+        ${ROLE_CLIENT} && _kernel_fragments+=("${SPECS_DIR}/kernel/desktop.config")
+        info "Config fragments: ${_kernel_fragments[*]}"
         pushd "${KERNEL_SRC}" >/dev/null
 
         # Start from board defconfig
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" "${RPI_DEFCONFIG}"
 
-        # Apply config fragment from spec file
-        while IFS= read -r line; do
-            # Skip comments and blank lines
-            [[ "${line}" =~ ^[[:space:]]*# ]] && continue
-            [[ -z "${line// }" ]] && continue
+        # Apply each config fragment from spec file, in order
+        for _frag in "${_kernel_fragments[@]}"; do
+            while IFS= read -r line; do
+                # Skip comments and blank lines
+                [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+                [[ -z "${line// }" ]] && continue
 
-            # Parse: "enable CONFIG_FOO" / "module CONFIG_FOO" / etc.
-            read -r action rest <<< "${line}"
-            eval "scripts/config --${action} ${rest}"
-        done < "${SPECS_DIR}/kernel/hardened-k8s.config"
+                # Parse: "enable CONFIG_FOO" / "module CONFIG_FOO" / etc.
+                read -r action rest <<< "${line}"
+                eval "scripts/config --${action} ${rest}"
+            done < "${_frag}"
+        done
 
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" olddefconfig
 
@@ -2352,6 +3196,13 @@ else
             grep -q "^${must}=y" .config || { err "k8s node kernel option ${must} not enabled after olddefconfig (Service/kube-proxy/CNI/container-runtime would be impaired)"; exit 1; }
         done
         grep -q '^CONFIG_LSM="lockdown,yama,selinux,bpf"$' .config || { err "CONFIG_LSM malformed (expected lockdown,yama,selinux,bpf); lockdown/SELinux would not activate"; exit 1; }
+        # LUKS2/dm-crypt (hardened-k8s.config enables this unconditionally, for
+        # BOTH the existing attached-disk data-partition use case and the
+        # --encrypt-root path): refuse to ship a kernel that silently lost it,
+        # mirroring the SELinux/KSPP guards above.
+        for must in CONFIG_MD CONFIG_BLK_DEV_DM CONFIG_DM_CRYPT; do
+            grep -q "^${must}=y" .config || { err "LUKS2 kernel option ${must} not enabled after olddefconfig (a LUKS2 root/data-partition would not unlock)"; exit 1; }
+        done
 
         # Build
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" -j"${JOBS}" \
@@ -2361,6 +3212,11 @@ else
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" \
             INSTALL_MOD_PATH="${SYSROOT}" modules_install
 
+        # Captured here (from `make kernelrelease`) so build_disk_initramfs() can
+        # point dracut --kver at the EXACT module tree this build just installed
+        # under ${SYSROOT}/lib/modules/. Empty if the kernel is skipped/unbuilt.
+        RPI_KVER="$(make -s ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" kernelrelease 2>/dev/null | tail -1)"
+
         mkdir -p "${SYSROOT}/boot/overlays"
         cp arch/arm64/boot/Image "${SYSROOT}/boot/${RPI_KERNEL_IMG}"
         cp arch/arm64/boot/dts/broadcom/${RPI_DTB_PREFIX}*.dtb "${SYSROOT}/boot/"
@@ -2369,6 +3225,103 @@ else
 
         popd >/dev/null
         info "Kernel build complete."
+    fi
+fi
+
+# ── LUKS2 root disk-boot initramfs (--encrypt-root) ─────────────────────────
+# The RPi firmware bootloader normally goes straight from kernel to root= on
+# cmdline.txt — no initramfs at all. --encrypt-root needs one to unlock the
+# LUKS2 root before that root= is mounted. Generic (--no-hostonly) with the
+# dracut "crypt" module, staged at ${SYSROOT}/boot/disk-initrd.img (the exact
+# filename config.txt's INITRAMFS_LINE references). Same proven 3-strategy
+# cross-build fallback as build-frite-stage4.sh's build_disk_initramfs()
+# (qemu-chroot / host-sh dracut / host dracut binary) — ported here since this
+# is the FIRST time this board needs a dracut initramfs at all (the RPi
+# firmware boots the kernel directly otherwise).
+RPI_DISK_INITRD=""        # set non-empty once the disk-boot initramfs is staged
+build_disk_initramfs() {
+    [ -f "${SYSROOT}/boot/${RPI_KERNEL_IMG}" ] || {
+        warn "no kernel in sysroot boot — cannot build the disk-boot initramfs; an --encrypt-root install would NOT boot."
+        return 1; }
+    local kver="${RPI_KVER}"
+    if [ -z "${kver}" ] || [ ! -d "${SYSROOT}/lib/modules/${kver}" ]; then
+        kver="$(find "${SYSROOT}/lib/modules" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
+    fi
+    [ -n "${kver}" ] && [ -d "${SYSROOT}/lib/modules/${kver}" ] || {
+        warn "no module tree under ${SYSROOT}/lib/modules — cannot build the disk-boot initramfs; an --encrypt-root install would NOT boot."
+        return 1; }
+
+    local out="${SYSROOT}/boot/disk-initrd.img"
+    info "Generating disk-boot initramfs (dracut --add crypt, kver=${kver}) ..."
+
+    local sysroot_dracut="${SYSROOT}/usr/bin/dracut"
+
+    # ── Strategy 1: qemu-chroot (correct for cross-builds) ─────────────────────
+    local _qemu_interp
+    _qemu_interp="$(grep '^interpreter' /proc/sys/fs/binfmt_misc/qemu-aarch64 2>/dev/null | awk '{print $2}')"
+    if [ -n "${_qemu_interp}" ] && [ -x "${_qemu_interp}" ] && [ -x "${sysroot_dracut}" ]; then
+        local _mounts=() _qemu_staged=false
+        _rpi_disk_umount() {
+            local m
+            for m in "${_mounts[@]}"; do umount -l "${m}" 2>/dev/null || true; done
+            ${_qemu_staged} && rm -f "${SYSROOT}${_qemu_interp}" 2>/dev/null || true
+        }
+        trap '_rpi_disk_umount' RETURN
+        mkdir -p "${SYSROOT}/proc" "${SYSROOT}/sys" "${SYSROOT}/dev"
+        mount --bind /proc "${SYSROOT}/proc" && _mounts+=("${SYSROOT}/proc") || true
+        mount --bind /sys  "${SYSROOT}/sys"  && _mounts+=("${SYSROOT}/sys")  || true
+        mount --bind /dev  "${SYSROOT}/dev"  && _mounts+=("${SYSROOT}/dev")  || true
+        mkdir -p "${SYSROOT}$(dirname "${_qemu_interp}")"
+        if cp "${_qemu_interp}" "${SYSROOT}${_qemu_interp}" 2>/dev/null; then
+            _qemu_staged=true
+        else
+            warn "Could not stage qemu interpreter into sysroot; chroot may fail."
+        fi
+        info "Running dracut via qemu-chroot (kver=${kver}) ..."
+        # Capture into a var first, THEN head — piping the chroot directly into
+        # `head -60` under pipefail risks SIGPIPE-killing dracut mid-generation
+        # if it logs more than 60 lines (routine in a minimal cross-arch
+        # sysroot), truncating a run that would otherwise have succeeded.
+        _dracut_out="$(chroot "${SYSROOT}" /usr/bin/dracut --force --no-hostonly \
+            --add crypt --kver "${kver}" /boot/disk-initrd.img 2>&1)"
+        printf '%s\n' "${_dracut_out}" | head -60
+        if [ -s "${SYSROOT}/boot/disk-initrd.img" ]; then
+            RPI_DISK_INITRD="${out}"
+            _rpi_disk_umount; trap - RETURN
+            info "Disk-boot initramfs staged (qemu-chroot): ${out} ($(du -h "${out}" | cut -f1))"
+            return 0
+        fi
+        warn "qemu-chroot dracut did not produce a disk-boot initramfs; falling back."
+        _rpi_disk_umount; trap - RETURN
+    fi
+
+    # ── Strategy 2: run the sysroot dracut script on the host sh ───────────────
+    if [ -x "${sysroot_dracut}" ] && command -v sh >/dev/null; then
+        sh "${sysroot_dracut}" --force --no-hostonly \
+            --add crypt --kver "${kver}" --kmoddir "${SYSROOT}/lib/modules/${kver}" \
+            "${out}" 2>/dev/null && [ -s "${out}" ] && {
+                RPI_DISK_INITRD="${out}"
+                info "Disk-boot initramfs staged (host-sh dracut): ${out} ($(du -h "${out}" | cut -f1))"
+                return 0; }
+        warn "sysroot dracut (host-sh) did not produce a disk-boot initramfs; trying host dracut."
+    fi
+    if command -v dracut >/dev/null; then
+        dracut --force --no-hostonly \
+            --add crypt --kver "${kver}" --kmoddir "${SYSROOT}/lib/modules/${kver}" \
+            "${out}" 2>/dev/null && [ -s "${out}" ] && {
+                RPI_DISK_INITRD="${out}"
+                info "Disk-boot initramfs staged (host dracut): ${out} ($(du -h "${out}" | cut -f1))"
+                return 0; }
+    fi
+    warn "Could not generate the disk-boot initramfs (no usable dracut). An"
+    warn "--encrypt-root install would be UNBOOTABLE without it."
+    return 1
+}
+if ${ENCRYPT_ROOT} && ${BUILD_ISO}; then
+    build_disk_initramfs || true
+    if [ -z "${RPI_DISK_INITRD}" ] || [ ! -s "${RPI_DISK_INITRD}" ]; then
+        err "--encrypt-root requires the disk-boot initramfs (see warnings above) — refusing to build a payload that cannot boot an encrypted root."
+        exit 1
     fi
 fi
 
@@ -2416,7 +3369,7 @@ fi
 
 banner "Phase 4: Packaging stage4 tarball"
 
-STAGE4_TARBALL="${WORK_DIR}/${BRAND}-rpi5-arm64-${ROLE}-${ENV}-${BUILD_TS}.stage4.tar.xz"
+STAGE4_TARBALL="${WORK_DIR}/${BRAND}-${BOARD}-arm64-${ROLE}-${ENV}-${BUILD_TS}.stage4.tar.xz"
 
 # Force root ownership in the archive (--owner/--group=0): a non-root build owns
 # the sysroot as the build user, but the installed system must be root-owned.
@@ -2454,7 +3407,7 @@ build_img() {
     local p2_uuid p1_uuid
     loop=""; root_mnt=""
 
-    IMG_PATH="${WORK_DIR}/${BRAND}-rpi5-arm64-${ROLE}-${ENV}-${BUILD_TS}.img"
+    IMG_PATH="${WORK_DIR}/${BRAND}-${BOARD}-arm64-${ROLE}-${ENV}-${BUILD_TS}.img"
 
     # 1MiB alignment gap + 512MiB FAT boot + ROOT_MiB ext4 root + 1MiB slack.
     img_size_mib=$(( 1 + 512 + ROOT_MiB + 1 ))
@@ -2567,6 +3520,12 @@ build_img() {
     for fw in bootcode.bin fixup*.dat start*.elf; do
         cp "${SYSROOT}/boot/${fw}"            "${root_mnt}/boot/" 2>/dev/null || true
     done
+    # The .img's root is ALWAYS plaintext (written directly, no install step —
+    # see the --encrypt-root warning above), so it must never reference the
+    # disk-boot dracut initramfs even if this run also built the encrypted
+    # installer ISO: that initramfs isn't staged onto this boot partition at
+    # all, and referencing a missing file is needless boot-console noise.
+    sed -i -E 's/^initramfs .* followkernel$/# &/' "${root_mnt}/boot/config.txt"
 
     # The copies above are failure-tolerant (some files are board-optional),
     # but a boot partition without a device tree is UNBOOTABLE — the Pi
@@ -2630,7 +3589,7 @@ build_img() {
     # /boot/*. This is the .img's exact final filesystem (PARTUUID fstab + cmdline
     # baked in) — the rootfs "as if mounted".
     if ${BUILD_TAR}; then
-        local fs_tar="${WORK_DIR}/${BRAND}-rpi5-arm64-${ROLE}-${ENV}-${BUILD_TS}.fs.tar.xz"
+        local fs_tar="${WORK_DIR}/${BRAND}-${BOARD}-arm64-${ROLE}-${ENV}-${BUILD_TS}.fs.tar.xz"
         info "Filesystem tarball (mounted tree) -> ${fs_tar}"
         tar -C "${root_mnt}" --xattrs --xattrs-include='*.*' --numeric-owner -cpf - . 2>/dev/null \
             | xz -T0 -6 > "${fs_tar}" \
@@ -2712,6 +3671,27 @@ else
         exit 1
     fi
 
+    # LUKS2 root (--encrypt-root): stage the disk-boot dracut initramfs + the
+    # encrypt-root marker (install.sh reads it to default --encrypt on) + an
+    # optional seeded passphrase (0600; unattended installs only — omit it for
+    # an interactive on-target prompt, mirrors install-frite.sh/install-x86.sh).
+    if ${ENCRYPT_ROOT}; then
+        [ -n "${RPI_DISK_INITRD}" ] && [ -s "${RPI_DISK_INITRD}" ] || {
+            err "--encrypt-root requires the disk-boot initramfs but none was staged — refusing to ship an installer that cannot boot an encrypted root."
+            exit 1
+        }
+        cp "${RPI_DISK_INITRD}" "${ISO_DIR}/boot/disk-initrd.img"
+        touch "${ISO_DIR}/encrypt-root"
+        if [ -n "${LUKS_PASS}" ]; then
+            printf '%s' "${LUKS_PASS}" > "${ISO_DIR}/luks-passphrase"
+            chmod 0600 "${ISO_DIR}/luks-passphrase"
+            LUKS_PASS=""   # scrub the plaintext from the environment once seeded
+            warn "Seeded LUKS passphrase written into the ISO — the 0600 mode is Rock-Ridge metadata only, NOT an access-control boundary: anyone who obtains this .iso can read the plaintext passphrase with tools that ignore POSIX modes (7z, isoinfo) or by extracting it as themselves. Treat this ISO as a secret artifact: restrict distribution and delete after provisioning."
+        else
+            info "No --luks-pass given: install.sh will prompt interactively on the target."
+        fi
+    fi
+
     # Stage4 tarball — the staging dir must hold EXACTLY this run's tarball:
     # names embed BUILD_TS, and the bundled installer picks one with an
     # unsorted `find | head -1`. Belt-and-braces with the run-start isoroot
@@ -2722,9 +3702,25 @@ else
     # Installer script from spec file
     cp "${SPECS_DIR}/installer/install.sh" "${ISO_DIR}/install.sh"
     chmod +x "${ISO_DIR}/install.sh"
+    # install.sh is a plain (non-templated) spec file with a few "RPi 5"/"Pi 5"
+    # banner/comment mentions baked in for the historical single-board script;
+    # rewrite them on the STAGED ISO copy only (never the source spec file) for
+    # --board rpi4/rpi3 so the on-target installer banner ("Insert into RPi 5
+    # and boot.") doesn't lie about the hardware it just installed onto.
+    case "${BOARD}" in
+        rpi4) sed -i -e 's/RPi 5/RPi 4/g' -e 's/Pi 5/Pi 4/g' "${ISO_DIR}/install.sh" ;;
+        rpi3) sed -i -e 's/RPi 5/RPi 3/g' -e 's/Pi 5/Pi 3/g' "${ISO_DIR}/install.sh" ;;
+    esac
 
-    ISO_PATH="${WORK_DIR}/${BRAND}-rpi5-arm64-${ROLE}-${ENV}-${BUILD_TS}.iso"
-    VOLID="$(echo "GENTOO_RPI5_${ROLE}_K8S" | tr '[:lower:]' '[:upper:]' | cut -c1-32)"
+    # Client-role marker (install.sh reads it, same pattern as encrypt-root
+    # above, to skip the kubeadm-init hint in its final banner): a --role
+    # desktop sysroot never gets kubeadm/kubelet/kubectl or kubeadm-config.yaml
+    # (see packages-desktop.list / the ROLE_CLIENT guards above), so that
+    # advice is actively wrong on this image.
+    ${ROLE_CLIENT} && touch "${ISO_DIR}/client-role"
+
+    ISO_PATH="${WORK_DIR}/${BRAND}-${BOARD}-arm64-${ROLE}-${ENV}-${BUILD_TS}.iso"
+    VOLID="$(echo "GENTOO_${BOARD}_${ROLE}_$(${ROLE_CLIENT} && echo CLIENT || echo K8S)" | tr '[:lower:]' '[:upper:]' | cut -c1-32)"
 
     xorrisofs \
         -o "${ISO_PATH}" \
@@ -2739,19 +3735,36 @@ fi
 
 echo ""
 echo -e "${CYAN}${BOLD}=============================================="
-echo "  RPi 5 Hardened + Kubernetes Stage4 Complete"
+echo "  ${BOARD_DESC} Hardened $(${ROLE_CLIENT} && echo Desktop || echo "+ Kubernetes") Stage4 Complete"
 echo "==============================================${RESET}"
 echo ""
-echo "  Board:            Raspberry Pi 5 (${RPI_DTB_PREFIX} / ${RPI_CPU})"
+echo "  Board:            ${BOARD_DESC} (dtb=${RPI_DTB_PREFIX})"
 echo "  Profile:          ${PROFILE_PATH}"
-echo "  Kernel:           ${RPI_DEFCONFIG} + specs-rpi5/kernel/hardened-k8s.config"
-echo "  Role:             ${ROLE}   (cluster domain: ${CLUSTER_DOMAIN})"
+_kernel_banner_desc="specs-rpi5/kernel/hardened-k8s.config"
+case "${BOARD}" in
+    rpi5) _kernel_banner_desc="${_kernel_banner_desc} + rp1-pi5.config" ;;
+    rpi4) _kernel_banner_desc="${_kernel_banner_desc} + bcm2711-pi4.config" ;;
+    rpi3) _kernel_banner_desc="${_kernel_banner_desc} + bcm2837-pi3.config" ;;
+esac
+${ROLE_CLIENT} && _kernel_banner_desc="${_kernel_banner_desc} + desktop.config"
+echo "  Kernel:           ${RPI_DEFCONFIG} + ${_kernel_banner_desc}"
+echo "  Role:             ${ROLE}$(${ROLE_CLIENT} || echo "   (cluster domain: ${CLUSTER_DOMAIN})")"
 echo "  ENV:              ${ENV}   $([ "${ENV}" = test ] && echo '(LAN-first: cluster wildcard DNS; cloudflared/ACME pruned)' || echo '(PROD: public domain; Cloudflare/ACME; creds from keys USB)')"
 echo "  Brand:            ${BRAND} / \"${BRAND_TITLE}\" / ${ORG}${CONFIG_FILE:+   (profile: ${CONFIG_FILE})}"
 echo "  Hostname:         ${HOSTNAME}"
 echo "  Timezone:         ${TIMEZONE}"
-echo "  Serial console:   ttyAMA10 (RP1 UART)"
-echo "  PCIe Gen 3:       ${PCIE_GEN3}"
+_console_desc="GPIO-header UART"
+case "${BOARD}" in
+    rpi5) _console_desc="RP1 UART, dedicated debug connector" ;;
+    rpi3) _console_desc="GPIO-header mini-UART, shared core clock" ;;
+esac
+echo "  Serial console:   ${CONSOLE_UART} (${_console_desc})"
+_pcie_na=""
+case "${BOARD}" in
+    rpi4) _pcie_na="   (n/a — no user-facing PCIe slot on the standard Pi 4 Model B)" ;;
+    rpi3) _pcie_na="   (n/a — BCM2837 has no PCIe controller at all)" ;;
+esac
+echo "  PCIe Gen 3:       ${PCIE_GEN3}${_pcie_na}"
 echo ""
 echo "  Hardening:"
 echo "    - PIE/SSP/FORTIFY_SOURCE compiler flags"
@@ -2762,6 +3775,7 @@ echo "    - SSH: key-only, no root password login"
 echo "    - /boot nosuid,nodev,noexec  /tmp tmpfs restricted"
 echo "    - Audit subsystem enabled"
 echo ""
+if ! ${ROLE_CLIENT}; then
 echo "  Kubernetes:"
 echo "    - containerd + runc (CRI runtime)"
 echo "    - kubelet + kubeadm + kubectl"
@@ -2770,11 +3784,25 @@ echo "    - Cgroup v2 + full netfilter/IPVS/eBPF stack"
 echo "    - OverlayFS for container layers"
 echo "    - Kubelet: anon-auth off, webhook auth, seccomp default"
 echo ""
+else
+echo "  Desktop:"
+echo "    - X11 + Openbox + LXpanel + PCManFM (lean LXDE session)"
+echo "    - LightDM login manager"
+echo ""
+fi
+# NOTE: this SKIPPED branch is new — --skip-mesh (a pre-existing, role-independent
+# flag) previously still printed the full headscale/tailscale block below even
+# when neither was actually installed. Deliberate behavior change/fix, not a
+# regression: the banner now truthfully reflects --skip-mesh for every role.
+if ${SKIP_MESH}; then
+echo "  Mesh VPN + provisioning: SKIPPED (--skip-mesh$(${STANDALONE} && echo " / --standalone"))"
+else
 echo "  Mesh VPN + provisioning:"
 echo "    - headscale ${HEADSCALE_VERSION} (control server) + tailscale ${TAILSCALE_VERSION}"
 echo "    - First-boot provisioning from a USB FAT32 'KEYS' partition"
 echo "      (users, ssh keys, passwords, certs, headscale/k8s config)"
 echo "    - keys-provision engine: /usr/sbin/keys-provision"
+fi
 echo ""
 echo "  Artifacts:"
 echo "    Work directory:  ${WORK_DIR}  (products land here)"
@@ -2787,19 +3815,28 @@ echo "    Binary packages: ${BUILD_ROOT}/pkgdir"
 echo "    Build log:       ${LOG_FILE}"
 echo ""
 echo "  Credentials:"
+if ${STANDALONE}; then
+echo "    Local user '${LOCAL_USER:-$DEFAULT_USER}' logs in with the password set"
+echo "    at build time (--local-pass). No mesh/KEYS-USB provisioning runs."
+else
 echo "    No default password is baked in. With a KEYS USB, users come from"
 echo "    users.json (\$6\$ hashes). Without one, first boot mints a RANDOM"
 echo "    one-time password for '${DEFAULT_USER}' (printed to the boot console)"
 echo "    and LOCKS root — change it immediately."
+fi
 echo ""
 echo "  Spec files used:"
-echo "    ${SPECS_DIR}/   (aarch64/RPi5-specific)"
+echo "    ${SPECS_DIR}/   (aarch64/RPi-specific: ${BOARD_DESC})"
 echo "    ${SHARED_SPECS}/   (arch-agnostic, shared with x86)"
 echo ""
 echo "  === Post-install ==="
-echo "  1. Boot RPi 5, change all default passwords"
+echo "  1. Boot the ${BOARD_DESC}, change all default passwords"
 echo "  2. Add SSH pubkeys to ${DEFAULT_USER} and root"
+if ! ${ROLE_CLIENT}; then
 echo "  3. kubeadm init --config /etc/kubernetes/kubeadm-config.yaml"
 echo "  4. Install CNI (Flannel, Cilium, Calico, etc.)"
 echo "  5. Join workers: kubeadm join <cp>:6443 --token <t> --discovery-token-ca-cert-hash <h>"
+else
+echo "  3. Log in at the LightDM greeter as '${LOCAL_USER:-$DEFAULT_USER}'"
+fi
 echo ""

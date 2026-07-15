@@ -93,9 +93,36 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
           env:
+            # ── EFFECTIVE in-cluster BRAND env (mesh repo-templating, Phase 3) ──
+            # These override the application.yml env-defaults (deploy env wins).
+            # Kept LITERAL snapdragon.systems (NOT {{tokens}}): this manifest is the
+            # canonical, RAW ArgoCD-synced deploy source, and its per-tenant brand
+            # substitution is the existing build-x86-host-stage4.sh rebrand_sysroot
+            # sed pass (snapdragon.systems -> CLUSTER_DOMAIN), which rewrites all of
+            # these to the tenant domain at ISO build. All must derive from that SAME
+            # domain as the app.yml overlay or a tenant gets a self-inconsistent
+            # issuer. Frozen (untouched): label keys, nodeSelector, mTLS/ESO secret
+            # NAMES, the image alias — none templated.
+            #
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - name: CASDOOR_ISSUER_URI
               value: "https://id.snapdragon.systems"
+            # Default-admin Gmail/allowlist seed (local-part 'admin' stays literal).
+            - name: ADMIN_EMAILS
+              value: "admin@snapdragon.systems"
+            # WebAuthn brand value lives HERE, NOT app.yml (whose rp-id/origins
+            # defaults are the dev-safe localhost/https://localhost — WRONG for an
+            # in-cluster deploy). RP-ID = the admin host; origins = its https origin.
+            # Previously ABSENT (a latent bug: in-cluster WebAuthn RP-ID fell back to
+            # 'localhost'); adding the brand admin subdomain fixes it. rebrand_sysroot
+            # carries admin.snapdragon.systems -> admin.<domain> per tenant.
+            - name: APP_MFA_WEBAUTHN_RP_ID
+              value: "admin.snapdragon.systems"
+            - name: APP_MFA_WEBAUTHN_ORIGINS
+              value: "https://admin.snapdragon.systems"
+            # In-cluster app-store Kaniko push registry host (brand).
+            - name: APPSTORE_BUILDER_REGISTRY
+              value: "registry.snapdragon.systems"
             # ── API-to-API mTLS (server side) ─────────────────────────────────
             # Enforce a client cert chaining to the cluster CA. The store passwords
             # come from /stores/application-tls.properties (in-pod generated, loaded
@@ -208,7 +235,7 @@ spec:
             - { name: BACKUPS_BRAND_NAMESPACE_SUFFIXES,    value: "be,fe" }
             - { name: BACKUPS_INSTALLED_SERVICES_NAMESPACE, value: "snapdragon-backend" }
             # ── Forum admin/moderation console (the phpBB leg, via forum-bff) ──
-            # GO-LIVE: the snapdragon/jsonapi extension is live + proven end-to-end
+            # GO-LIVE: the snapdragon/forumapi extension is live + proven end-to-end
             # (live smoke 2026-06-23), so turn on the admin forum-moderation proxy
             # (external.forum.enabled). The leg is hasRole('ADMIN')-gated end-to-end
             # and calls forum-bff (EXTERNAL_FORUM_BASE_URL default). By design it
@@ -216,22 +243,92 @@ spec:
             # PhpbbAdminClient call is audited/stubbed, never hard-fails), so this is
             # safe on the always-deployed admin-bff for non-forum brands too.
             - { name: EXTERNAL_FORUM_ENABLED, value: "true" }
-            # ── MFA TOTP-secret encryption key (app.mfa.factor-key) — SHIPS DARK ─
+            # ── A3+A5 Casdoor-MFA step-up leg (app.casdoor.mfa.enabled) — GO-LIVE ──
+            # Platform-wide rollout: a FRESH bff_session MFA stamp becomes a co-equal,
+            # license-independent step-up satisfier alongside the existing token-based
+            # step-up leg. This is a pure additive OR — every consumer ORs mfaFresh
+            # against the pre-existing token-step-up check, so the token-only leg is
+            # completely unaffected and ordinary (non-step-up) login never touches this
+            # code path. bff_session.mfa_satisfied still defaults false at the schema,
+            # so nothing is retroactively granted; a session only satisfies step-up via
+            # this leg after the user actually completes an MFA stamp. Prerequisite
+            # APP_MFA_FACTOR_KEY (below) is already provisioned by gen-cluster-secrets.
+            - { name: APP_CASDOOR_MFA_ENABLED, value: "true" }
+            # ── MFA TOTP-secret encryption key (app.mfa.factor-key) ────────────
             # APP_MFA_FACTOR_KEY is the 256-bit AES-GCM data key MfaSecretCipher uses
             # to encrypt each enrolled TOTP secret at rest (and seed the recovery-code
             # keyed hash). Sourced from the ESO Secret admin-bff-mfa (key factor-key),
             # which ESO materializes from Vault secret/<brand>/admin-bff-mfa.factor_key
-            # (gen-cluster-secrets mints `openssl rand -base64 32`). DARK: the whole MFA
-            # surface stays off behind app.casdoor.mfa.enabled (default false); with no
-            # key the cipher is INERT and TOTP enroll refuses (no plaintext fallback).
-            # Providing the key only PROVISIONS it — it does NOT turn MFA on. optional:
-            # true so the pod still starts if the Secret is absent (cipher stays inert).
+            # (gen-cluster-secrets mints `openssl rand -base64 32`). Now that
+            # app.casdoor.mfa.enabled is "true" above, this key is load-bearing: without
+            # it the cipher is INERT and TOTP enroll refuses (no plaintext fallback).
+            # optional: true so the pod still starts if the Secret is somehow absent
+            # (cipher stays inert and TOTP enroll refuses, but the pod itself boots).
             - name: APP_MFA_FACTOR_KEY
               valueFrom:
                 secretKeyRef:
                   name: admin-bff-mfa
                   key: factor-key
                   optional: true
+            # ── Shared internal token — the INBOUND half (app.internal.token) ──
+            # Every /bff/internal/** caller (fe-gateway BffSessionAuthFilter,
+            # user-bff AdminBffInternalClient, mod-bff's session-introspect leg)
+            # already mounts this same ESO Secret and SENDS X-Internal-Token — but
+            # this manifest never mounted it, so auth-core's InternalTokenWebFilter
+            # had no expected value configured and the app-layer check silently
+            # no-op'd in-cluster (defence rested on mTLS + NetworkPolicy alone).
+            # Mounting it closes the loop: when the Secret exists, a missing or
+            # mismatched header fails CLOSED 401. optional: true keeps rollout
+            # order-independent (absent Secret → filter no-ops, exactly as today).
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: bff-internal-token
+                  key: token
+                  optional: true
+            # ── Native-login session→JWT exchange, SERVING side (auth-core) ────
+            # admin-bff is the exchange SERVER for the whole native-login fleet:
+            # POST /bff/internal/session/exchange swaps a caller's bff_ session for
+            # the custody-held Casdoor JWT. Its clients are user-bff's outbound
+            # federation/media forwarding (user-bff-api#111, ALWAYS ON), mod-bff's
+            # BearerForwardingFilter (mod-bff-api#72, lit in its manifest), the
+            # gateway's dark exchange leg, and admin-bff's OWN appeals-decide
+            # loopback (admin-bff-api#205, APP_BFF_EXCHANGE_ENABLED below). Serving
+            # a real Bearer needs BOTH app.bff.oidc.enabled (the refresh leg's
+            # OidcExchangeConfig beans; issuer + client-id come from auth-core's
+            # in-cluster defaults, exactly as user-bff-api relies on them) AND the
+            # custody key. Without these — the pre-fix state of this manifest —
+            # every exchange 503s "custody disabled" and each caller silently
+            # degrades to forwarding no Authorization header, so every
+            # federation-backed surface 401s for native-login users in-cluster.
+            - { name: APP_BFF_OIDC_ENABLED, value: "true" }
+            # Casdoor OIDC client secret for the exchange's refresh leg — the SAME
+            # user-bff-oidc ESO Secret user-bff-api mounts (one OIDC client, two
+            # consumers). optional: the pod boots without it; exchange refuses.
+            - name: APP_BFF_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-oidc
+                  key: client-secret
+                  optional: true
+            # AES-256-GCM custody key — MUST be byte-identical to user-bff-api's
+            # (user-bff ENCRYPTS the exchanged tokens, admin-bff DECRYPTS them), so
+            # mount the SAME user-bff-custody-key ESO Secret rather than minting a
+            # second key. optional: absent Secret → BffCustodyCipher unavailable →
+            # exchange 503s (fail-closed), pod still boots.
+            - name: APP_BFF_CUSTODY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: user-bff-custody-key
+                  key: key
+                  optional: true
+            # Lights admin-bff's OWN decide custody-exchange (admin-bff-api#205): a
+            # native-login admin's POST /bff/admin/moderation/{id}/decide exchanges
+            # the caller's bff_ session (loopback to the endpoint above — the
+            # self-base-url default auto-computes this Service's DNS + tracks TLS)
+            # and forwards the real JWT to federation-api. Fail-open like mod-bff's
+            # leg: exchange failure degrades to the pre-fix no-header behaviour.
+            - { name: APP_BFF_EXCHANGE_ENABLED, value: "true" }
           # Probes are HTTPS now that server.ssl is enabled. Because client-auth=need
           # rejects the TLS handshake of any caller WITHOUT a client cert, a plain
           # kubelet httpGet (which presents none) would fail — so the probe is an

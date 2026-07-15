@@ -63,27 +63,15 @@ sys-libs/libselinux
 sys-libs/libseccomp
 sys-process/audit
 
-# ── Container runtime ─────────────────────────────────────────────
-app-containers/containerd
-app-containers/runc
-app-containers/cni-plugins
-app-containers/cri-tools
-# nerdctl is KEYWORDS="~amd64" only in ::gentoo (no arm64 keyword at all), so it
-# can't be installed on the Pi via accept_keywords — it just masks and is
-# skipped. k8s nodes drive containerd via crictl/cri-tools, so nerdctl is an
-# x86-only dev convenience (kept in specs-x86). Omitted here on purpose.
-# app-containers/nerdctl
+# Container runtime + Kubernetes + their k8s-specific dependencies (containerd,
+# kubelet/kubeadm/kubectl, xfsprogs for CSI/PV filesystems, ...) moved to
+# packages-k8s.list — appended by build-rpi5-stage4.sh only for cluster-node
+# roles (not --role desktop; see ROLE_CLIENT).
 
-# ── Kubernetes ─────────────────────────────────────────────────────
-sys-cluster/kubelet
-sys-cluster/kubeadm
-sys-cluster/kubectl
-
-# ── K8s dependencies ──────────────────────────────────────────────
+# ── Base networking/storage tools (needed by every role, not just k8s) ────
 sys-apps/ethtool
 sys-apps/iproute2
 sys-fs/e2fsprogs
-sys-fs/xfsprogs
 sys-apps/util-linux
 
 # ── KEYS USB provisioning + attached storage + backups ────────────

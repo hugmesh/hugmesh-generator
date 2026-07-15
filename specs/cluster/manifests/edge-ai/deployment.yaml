@@ -33,9 +33,13 @@ spec:
       runtimeClassName: nvidia
       securityContext:
         seLinuxOptions:
-          # Unique MCS level (owncast=c39, casdoor-games-pg=c34); edge-ai -> c41.
+          # Unique MCS level (docs/SECURITY.md §3 matrix); edge-ai -> c73.
+          # Was c41, a PRE-EXISTING collision with social-ui host-web (s0:c41);
+          # moved to the next free category above the current max. MCS categories
+          # are self-contained isolation labels referenced nowhere else, so the
+          # reassignment is safe (no external reference to update).
           type: container_t
-          level: "s0:c41"
+          level: "s0:c73"
       containers:
         - name: ollama
           image: ollama/ollama:latest

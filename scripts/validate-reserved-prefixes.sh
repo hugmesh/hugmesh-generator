@@ -325,21 +325,26 @@ else:
     print("PASS: every publicly-routable Service is reserved or explicitly allowlisted.")
 
 # ---- 7) CODE-COPY assertion: each ReservedNames.java set == canonical -------
-# Mechanically asserts the four app-repo ReservedNames copies match the canonical
-# set (replaces hand-counting). SKIP-IF-ABSENT: a copy not checked out next to
-# this repo is reported as SKIP, not failed, so this repo's own CI stays green —
+# Mechanically asserts the app-repo ReservedNames copies match the canonical set
+# (replaces hand-counting). There are THREE physical copies today: federation-api
+# and actions each keep their own literal duplicate, and snapdragon-auth-core holds
+# the shared copy that user-bff-api + admin-bff-api both consume as a Maven
+# dependency (`import systems.snapdragon.authcore.reserved.ReservedNames`) — so
+# checking auth-core covers both BFFs, which no longer carry their own file. (The
+# old userbff/profile + adminbff/reserved paths were removed when the copy was
+# consolidated into auth-core; listing them here only produced silent SKIPs and
+# left the real shared copy unchecked.) SKIP-IF-ABSENT: a copy not checked out next
+# to this repo is reported as SKIP, not failed, so this repo's own CI stays green —
 # the app repos run their own ReservedNamesTest. Override the search root with
 # RESERVED_SIBLING_ROOT. Handles both field names in use (RESERVED_LABELS in
-# federation-api/user-bff-api; RESERVED in snapdragon-actions/admin-bff-api).
+# federation-api; RESERVED in snapdragon-actions/snapdragon-auth-core).
 CODE_COPIES = [
     ("federation-api", "snapdragon-federation-api",
      "src/main/java/systems/snapdragon/federation/controller/ReservedNames.java"),
-    ("user-bff-api", "snapdragon-user-bff-api",
-     "src/main/java/systems/snapdragon/userbff/profile/ReservedNames.java"),
     ("actions", "snapdragon-actions",
      "src/main/java/systems/snapdragon/actions/registration/ReservedNames.java"),
-    ("admin-bff-api", "snapdragon-admin-bff-api",
-     "src/main/java/systems/snapdragon/adminbff/reserved/ReservedNames.java"),
+    ("auth-core", "snapdragon-auth-core",
+     "src/main/java/systems/snapdragon/authcore/reserved/ReservedNames.java"),
 ]
 
 # Pull the quoted string literals out of the `RESERVED[_LABELS] = Set.of( … );`
@@ -397,6 +402,16 @@ _self_test_comment_stripping()
 print()
 print("== ReservedNames.java code-copy assertion ==")
 print(f"sibling search root : {sibling_root}")
+# CASE: parse_java_reserved() lower-cases every literal (the app-repo copies store
+# their labels lower-case and match case-insensitively — isReserved() lower-cases
+# the candidate first). The canonical YAML keeps the real on-disk case for the one
+# mixed-case label, `remoteEntry.json` (the actual module-federation manifest
+# filename). So this code-copy assertion must compare case-INSENSITIVELY, else
+# `remoteEntry.json` would false-flag as drift for every copy no matter how it is
+# spelled (parse always folds it to `remoteentry.json`). Stages 2-4 above keep case
+# on purpose (they match literal route path segments like `/remoteEntry.json`, where
+# case is significant) — only THIS stage folds it.
+reserved_set_lower = {r.lower() for r in reserved_set}
 any_checked = False
 for label, repo, rel in CODE_COPIES:
     jpath = os.path.join(sibling_root, repo, rel)
@@ -410,8 +425,8 @@ for label, repo, rel in CODE_COPIES:
               f"in {jpath}", file=sys.stderr)
         continue
     any_checked = True
-    only_canon = sorted(reserved_set - parsed)
-    only_copy = sorted(parsed - reserved_set)
+    only_canon = sorted(reserved_set_lower - parsed)
+    only_copy = sorted(parsed - reserved_set_lower)
     if only_canon or only_copy:
         failed = True
         print(f"  [FAIL] {label:<16} DRIFTED from canonical:", file=sys.stderr)

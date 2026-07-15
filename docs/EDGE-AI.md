@@ -165,6 +165,54 @@ then select the slug. Keep it deselected until the image is pushed (so no node
 ImagePull-fails). Everything stays on-prem — the wrapper only calls the in-cluster
 Ollama upstream.
 
+## 4c. Voice synthesis — TTS API for the mesh (`edge-ai-tts`)
+
+The **VN voice feature** (matrix-ui) needs short-line text-to-speech plus a mouth-shape
+timeline for 2D lipsync. The `edge-ai-tts` optional service is a stateless FastAPI
+wrapper around [Piper](https://github.com/OHF-Voice/piper1-gpl) that exposes:
+
+| Endpoint | Response |
+|---|---|
+| `POST /v1/synthesize` | `{audioBase64, sampleRate, format, durationMs, voice, visemes[]}` |
+
+**UNLIKE `edge-ai-analysis`, this service has NO `edge-ai` dependency.** It is
+CPU-only and self-contained: the default voice (`.onnx` + `.onnx.json`) is baked
+into the image at build time, no model is fetched and no upstream is called at
+request time — it schedules **anywhere in the mesh**, GPU node or not, and is wired
+on **both** `build-x86-host-stage4.sh` **and** `build-rpi5-stage4.sh` (unlike
+`edge-ai`/`edge-ai-analysis`, which are x86/GPU-only).
+
+It is reached at `https://ai.<domain>/v1/synthesize/**` (be-gateway, `ROLE_USER`
+floor) and in-cluster at `http://snapdragon-edge-ai-tts.snapdragon-inference.svc:8080`.
+Tenancy: the gateway-validated `X-Tenant-ID`/`X-User-ID` headers stamp every response.
+Config (model dir, default voice, Piper `length_scale`/`noise_scale`/`noise_w`,
+`max_chars`) is the `edge-ai-tts` ConfigMap.
+
+The **7-key viseme vocabulary** (`rest · AI · E · O · U · L · MBP`) is a CONTRACT with
+matrix-ui's `viseme.ts` mouth-shape map — keep the two in sync (see
+`specs/cluster/manifests/edge-ai-tts/image/README.md`).
+
+```bash
+# add the TTS API to any cluster role (CPU-only — no --with-edge-ai needed):
+./build-x86-host-stage4.sh --role be --with-edge-ai-tts
+./build-rpi5-stage4.sh     --role backend --with-edge-ai-tts
+```
+
+**CLI:** `--with-edge-ai-tts` / `--no-edge-ai-tts` (both builders), or list
+`edge-ai-tts` in `--optional-services`. **`scripts/build-menu.sh`:** the *Voice
+synthesis (TTS)* row in **Options → Edge-AI inference** (grouped there for UX only —
+its flag is emitted unconditionally, not gated to a GPU target). **Studio wizard:**
+*Network, identity & egress* — a standalone tri-state checkbox next to Character
+Studio (platform-gated like it, not mode-gated like the GPU Edge-AI group);
+`ImageConfig.edge_ai_tts` → `to_cli_args()`.
+
+**Slug:** `edge-ai-tts`, **DEFAULT-OFF**, **NO `dependsOn`**. The container is a
+**separate build artifact** — its source is
+`specs/cluster/manifests/edge-ai-tts/image/` (FastAPI + piper-tts + onnxruntime,
+CPU); build + push `registry.snapdragon.systems/snapdragon/edge-ai-tts:main` then
+select the slug. Keep it deselected until the image is pushed (so no node
+ImagePull-fails). Everything stays on-prem — synthesis is local CPU work.
+
 ## 5. Jetson Orin Nano (arm64 platform — EXPERIMENTAL, buildable)
 
 The NVIDIA **Jetson Orin Nano** (aarch64 + Ampere, 67 TOPS) runs the same `edge_ai`
@@ -232,6 +280,8 @@ specs/cluster/apps/54-edge-ai.yaml                    # edge-ai ArgoCD Applicati
 specs/cluster/manifests/edge-ai/                      #   namespace + ollama deployment+service + models ConfigMap + PVC
 specs/cluster/apps/55-edge-ai-analysis.yaml           # edge-ai-analysis ArgoCD Application (DEFAULT-OFF, dependsOn edge-ai)
 specs/cluster/manifests/edge-ai-analysis/             #   FastAPI analysis wrapper (deployment+service+configmap+netpol) + image/ source
+specs/cluster/apps/55b-edge-ai-tts.yaml                # edge-ai-tts ArgoCD Application (DEFAULT-OFF, NO dependsOn)
+specs/cluster/manifests/edge-ai-tts/                  #   FastAPI Piper TTS wrapper (deployment+service+configmap+netpol) + image/ source
 specs/cluster/optional-services.yaml                  # edge-ai slug entry (registry)
 specs/cluster/apps/13a-optional-services.yaml         # edge-ai runtime ApplicationSet element
 specs/cluster/apps/20-gateway-be.yaml                 # ai.<domain> host route

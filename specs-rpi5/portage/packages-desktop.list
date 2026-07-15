@@ -1,0 +1,53 @@
+# LIGHT desktop package set — Raspberry Pi 5 (BCM2712, aarch64)
+#
+# A LEAN desktop, NOT the full Plasma+gaming stage4. Appended to packages.list by
+# build-rpi5-stage4.sh when --role desktop is set (ROLE_CLIENT — no k8s stack).
+# Sized for the Pi 5's VideoCore VII (v3d/vc4 KMS driver, already unconditional
+# in make.conf's VIDEO_CARDS): X11 + a lightweight WM + a panel + a file manager +
+# a terminal + a minimal browser. No KDE/GNOME/Plasma, no compositor-heavy
+# Wayland session, no gaming stack. Mirrors specs-frite/portage/packages-light-desktop.list
+# and specs-jetson/portage/packages-desktop.list.
+
+# ── Display server (X11; lean) ─────────────────────────────────────
+x11-base/xorg-server
+# Materializes the X drivers from INPUT_DEVICES=libinput + VIDEO_CARDS="v3d vc4"
+# (already unconditional in specs-rpi5/portage/make.conf.tmpl); without it Xorg
+# has no input/video driver and the greeter is unusable.
+x11-base/xorg-drivers
+x11-apps/xrandr
+x11-apps/xset
+x11-apps/setxkbmap
+x11-terms/xterm
+
+# ── Desktop session: LXDE-lite (PCManFM + Openbox + LXpanel) ───────
+# LXDE is the canonical "lean desktop": GTK-based, no compositor required, runs
+# comfortably on the Pi 5. Openbox is the WM; lxpanel the panel; pcmanfm the
+# file manager; lxsession ties the session together.
+x11-wm/openbox
+lxde-base/lxpanel
+lxde-base/lxsession
+x11-misc/pcmanfm
+lxde-base/lxappearance
+
+# ── Login / session bring-up ───────────────────────────────────────
+# LightDM is the lean display manager; on a single-user appliance you can also
+# autostart Openbox from .xinitrc and drop lightdm — see RUNNING.md.
+x11-misc/lightdm
+x11-misc/lightdm-gtk-greeter
+# The OpenRC `display-manager` init script does NOT ship with lightdm itself —
+# it is provided by gui-libs/display-manager-init (configured via
+# /etc/conf.d/display-manager DISPLAYMANAGER="lightdm", written by the builder).
+# Without this the builder would enable a service the image never provides and
+# the desktop image would boot to a bare console.
+gui-libs/display-manager-init
+
+# ── Minimal apps ───────────────────────────────────────────────────
+media-gfx/feh
+app-editors/nano
+# A minimal, modern browser. NetSurf cross-compiles cleanly for arm64 and needs
+# no GPU acceleration.
+www-client/netsurf
+
+# ── Fonts (so the lean desktop is legible out of the box) ──────────
+media-fonts/dejavu
+media-fonts/noto

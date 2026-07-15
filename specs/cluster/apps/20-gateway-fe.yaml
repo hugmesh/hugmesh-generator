@@ -83,12 +83,33 @@ spec:
         routes:
           # Each federated micro-frontend on its own nginx remote (specific
           # paths first)…
+          # Every federated micro-frontend below is its own standalone nginx
+          # remote (own index.html/remoteEntry.json at its OWN webroot), so —
+          # exactly like login-ui below — each needs StripPrefix to map its
+          # gateway-prefixed path back to that webroot. Missing here for years:
+          # the host's native-federation loader fetches e.g. /admin/remoteEntry.json,
+          # which without the strip forwards as literal path /admin/remoteEntry.json
+          # to a container that only has /remoteEntry.json — nginx's SPA try_files
+          # fallback then silently serves index.html instead (wrong Content-Type,
+          # wrong content), so every one of these remotes has never actually loaded
+          # via the real gateway path. Confirmed live against the compose stack's
+          # identical route table (generator's tests/stack/gateway-routes/fe):
+          # adding StripPrefix made GET .../remoteEntry.json return the real
+          # federation manifest instead of index.html, and unblocked admin-ui/
+          # matrix-ui loading + rendering end-to-end post-login. forum-ui/
+          # character-studio-ui have no compose-stack equivalent to live-test
+          # against, but share the identical architecture, so the fix is applied
+          # here for consistency — NOT independently live-verified for those two.
           - id: matrix-ui
             uri: http://snapdragon-matrix-ui.snapdragon-frontend.svc.cluster.local:80
             path: /social/matrix/**
+            filters:
+              - StripPrefix=2
           - id: mastodon-ui
             uri: http://snapdragon-mastodon-ui.snapdragon-frontend.svc.cluster.local:80
             path: /social/mastodon/**
+            filters:
+              - StripPrefix=2
           # phpBB forum micro-frontend remote, served at the apex PATH
           # /social/forum/** (NOT a forum. subdomain — the *.snapdragon.systems
           # vanity wildcard would swallow forum.<domain>). Congruent with the
@@ -98,23 +119,35 @@ spec:
           - id: forum-ui
             uri: http://snapdragon-forum-ui.snapdragon-frontend.svc.cluster.local:80
             path: /social/forum/**
+            filters:
+              - StripPrefix=2
+          # login-ui is a STANDALONE Angular app built with base-href=/login/, so
+          # StripPrefix=1 maps /login/<asset> back to the webroot nginx serves.
           - id: login-ui
             uri: http://snapdragon-login-ui.snapdragon-frontend.svc.cluster.local:80
             path: /login/**
+            filters:
+              - StripPrefix=1
           - id: admin-ui
             uri: http://snapdragon-admin-ui.snapdragon-frontend.svc.cluster.local:80
             path: /admin/**
+            filters:
+              - StripPrefix=1
           # Moderation micro-frontend remote (/mod/** -> snapdragon-mod-ui). Role
           # floor ROLE_MOD (route-DB), declared with the other path-scoped MFE
           # remotes; the host loads its remoteEntry after a moderator logs in.
           - id: mod-ui
             uri: http://snapdragon-mod-ui.snapdragon-frontend.svc.cluster.local:80
             path: /mod/**
+            filters:
+              - StripPrefix=1
           # Self-service user micro-frontend remote (/user/** -> snapdragon-user-ui).
           # Role floor ROLE_USER (route-DB).
           - id: user-ui
             uri: http://snapdragon-user-ui.snapdragon-frontend.svc.cluster.local:80
             path: /user/**
+            filters:
+              - StripPrefix=1
           # Character Studio (VN) micro-frontend remote (/character-studio/** ->
           # snapdragon-character-studio-ui on :8080, non-root nginx). Role floor
           # ROLE_USER (route-DB). OPTIONAL slug `character-studio`:
@@ -122,12 +155,16 @@ spec:
           - id: character-studio-ui
             uri: http://snapdragon-character-studio-ui.snapdragon-frontend.svc.cluster.local:8080
             path: /character-studio/**
+            filters:
+              - StripPrefix=1
           # API documentation micro-frontend remote (/apidocs/** -> snapdragon-api-docs).
           # Role floor ROLE_ADMIN (route-DB) — the rendered OpenAPI/spec docs are
           # admin-only, matching federation's spec floor.
           - id: api-docs
             uri: http://snapdragon-api-docs.snapdragon-frontend.svc.cluster.local:80
             path: /apidocs/**
+            filters:
+              - StripPrefix=1
           # Same-origin BFFs: the /bff/** family proxies to the role BFFs in the
           # backend namespace, so the UIs' bff.service calls are first-party to
           # snapdragon.systems. Spring Cloud Gateway matches FIRST-IN-DECLARED-ORDER,
@@ -174,10 +211,9 @@ spec:
             path: /bff/wiki/**
           # SSO login/session/registration RELOCATED admin-bff -> user-bff-api: login
           # is a user concern, so the user BFF now owns /bff/login, /bff/register,
-          # /bff/me, /bff/session, /bff/provision AND the new OIDC token-handler
-          # callback (/bff/auth/callback). These are MORE-SPECIFIC than the /bff/**
-          # admin-bff catch-all below, so — like the mod/user/forum siblings above —
-          # they MUST be declared FIRST to win the route match. (The internal
+          # /bff/me, /bff/session, /bff/provision. These are MORE-SPECIFIC than the
+          # /bff/** admin-bff catch-all below, so — like the mod/user/forum siblings
+          # above — they MUST be declared FIRST to win the route match. (The internal
           # bff_->JWT exchange endpoint /bff/internal/** is NOT routed here: the
           # gateway's BffJwtExchangeWebFilter calls user-bff in-cluster directly.)
           - id: snapdragon-user-bff-api-login
@@ -195,9 +231,6 @@ spec:
           - id: snapdragon-user-bff-api-provision
             uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
             path: /bff/provision/**
-          - id: snapdragon-user-bff-api-oidc-callback
-            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
-            path: /bff/auth/callback
           - id: snapdragon-admin-bff-api
             uri: https://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
             path: /bff/**

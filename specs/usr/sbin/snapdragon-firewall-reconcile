@@ -1,0 +1,104 @@
+#!/bin/bash
+# snapdragon-firewall-reconcile — Layer 3 (defense-in-depth) host nftables
+# backstop for RELEASE_STATE. Renders + loads a SINGLE, independently-owned
+# nftables table (snapdragon_release_gate) enforcing the SAME internal-vs-
+# public posture as the K8s ingress-class/NetworkPolicy split (gate_env_apps()
+# in build-rpi5-stage4.sh / build-x86-host-stage4.sh, Layer 2 / the PRIMARY
+# mechanism) — but at the netfilter layer, so an internal-only device still
+# refuses public 80/443 even if a K8s manifest or the firewalld zone
+# (/etc/firewalld) were ever misconfigured.
+#
+# OWNS its own table end-to-end (render + `nft -f` apply) rather than
+# delegating to a package-provided nftables OpenRC service, mirroring how
+# snapdragon-tor-reconcile owns the `tor` daemon's lifecycle and
+# snapdragon-vpn-reconcile owns snapdragon-egress-vpn's: one script, one
+# init.d oneshot, one clearly-scoped nftables table. It NEVER touches any
+# OTHER table — firewalld (net-firewall/firewalld, FirewallBackend=nftables)
+# runs its own nftables tables independently; this script only ever
+# creates/flushes/redefines `table inet snapdragon_release_gate`, so the two
+# coexist without either clobbering the other (no `flush ruleset` here).
+#
+# Runs:
+#   * once at boot via the snapdragon-firewall-reconcile OpenRC oneshot,
+#     ordered BEFORE containerd/kubelet/tailscaled (see the init.d depend()),
+#     so the backstop is live before any pod network / ingress controller
+#     comes up.
+#   * on a 60s cron (the convergence floor — cron.d/snapdragon-firewall-
+#     reconcile) so flipping RELEASE_STATE by hand or writing the
+#     /etc/snapdragon/go-live marker on a LIVE device (the future go-live
+#     wizard) takes effect without a reboot/reflash.
+#
+# POSTURE:
+#   * RELEASE_STATE=public (baked at /etc/snapdragon/release-state, mirroring
+#     the /etc/snapdragon/cluster-domain bake) OR /etc/snapdragon/go-live
+#     present (live override) => PUBLIC: 80/443 fall through to the chain's
+#     `accept` policy — the K8s ingress-class + firewalld layers remain the
+#     actual enforcement point; this backstop simply steps aside.
+#   * otherwise (DEFAULT) => INTERNAL: DROP every inbound 80/443 packet whose
+#     source is outside the tailnet CGNAT range (100.64.0.0/10 — the SAME CIDR
+#     the tier-egress NetworkPolicy allow-lists for the tailnet).
+#
+# FAIL-CLOSED: any read/render/apply error KEEPS the existing ruleset in
+# place; the baked/first-ever posture (no release-state file yet) is
+# INTERNAL — deny by default, never allow.
+
+set -uo pipefail
+
+RELEASE_STATE_FILE="/etc/snapdragon/release-state"
+GO_LIVE_MARKER="/etc/snapdragon/go-live"
+RULESET="/etc/nftables.conf"
+TABLE="snapdragon_release_gate"
+LOG_TAG="snapdragon-firewall-reconcile"
+
+log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
+warn() { log "WARNING: $*"; }
+
+command -v nft >/dev/null 2>&1 || { warn "nft not found — cannot (re)load the host firewall backstop"; exit 0; }
+
+RELEASE_STATE="internal"
+[ -r "${RELEASE_STATE_FILE}" ] && RELEASE_STATE="$(cat "${RELEASE_STATE_FILE}" 2>/dev/null)"
+[ -n "${RELEASE_STATE}" ] || RELEASE_STATE="internal"
+
+GO_LIVE="absent"; [ -e "${GO_LIVE_MARKER}" ] && GO_LIVE="present"
+
+DROP_RULE=""
+POSTURE="internal (deny public 80/443 except tailnet)"
+if [ "${RELEASE_STATE}" = "public" ] || [ "${GO_LIVE}" = "present" ]; then
+    POSTURE="public (80/443 open; K8s ingress-class + firewalld enforce)"
+else
+    DROP_RULE="        tcp dport { 80, 443 } drop  # INTERNAL: refuse everything else"
+fi
+
+TMP="$(mktemp)" || { warn "mktemp failed — keeping the existing ruleset (fail-closed)"; exit 0; }
+trap 'rm -f "${TMP}"' EXIT
+cat > "${TMP}" <<RULES
+#!/usr/sbin/nft -f
+# Managed by ${LOG_TAG} — DO NOT hand-edit (rewritten every boot + every 60s
+# cron tick from ${RELEASE_STATE_FILE} + ${GO_LIVE_MARKER}).
+# STATE: release-state=${RELEASE_STATE} go-live=${GO_LIVE} -> ${POSTURE}
+
+# Idempotent per-table reload: create-if-missing, flush, then redefine — never
+# touches any OTHER table (firewalld runs its own nftables tables alongside;
+# this script owns ONLY table inet ${TABLE}).
+table inet ${TABLE} {}
+flush table inet ${TABLE}
+
+table inet ${TABLE} {
+    chain input {
+        type filter hook input priority filter + 10; policy accept;
+        # Tailnet (Tailscale CGNAT range) and loopback always admitted —
+        # matches the tier-egress NetworkPolicy's tailnet allow-list.
+        ip saddr 100.64.0.0/10 tcp dport { 80, 443 } accept
+        iifname "lo" accept
+${DROP_RULE}
+    }
+}
+RULES
+
+if ! NFT_ERR="$(nft -f "${TMP}" 2>&1)"; then
+    warn "nft -f failed (${NFT_ERR}) — keeping the existing ruleset (fail-closed)"
+    exit 0
+fi
+cp -f "${TMP}" "${RULESET}" 2>/dev/null || true
+log "applied: release-state=${RELEASE_STATE} go-live=${GO_LIVE} -> ${POSTURE}"
+exit 0

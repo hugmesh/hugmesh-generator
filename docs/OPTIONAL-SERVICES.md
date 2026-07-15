@@ -138,8 +138,11 @@ EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the res
 > **and `build-x86-host-stage4.sh`** with the same resolution order (built-in
 > default respecting env/brand.conf < `all`-sentinel expansion < the opt-in folds <
 > the EXCLUDE subtraction LAST). On x86 the subtraction runs after **every** opt-in
-> fold (games / edge-ai / tor / character-studio / edge-ai-analysis), so an excluded
-> slug is force-OFF there too regardless of how it was selected.
+> fold (games / edge-ai / tor / character-studio / edge-ai-analysis / edge-ai-tts),
+> so an excluded slug is force-OFF there too regardless of how it was selected.
+> `edge-ai-tts` (Piper TTS + viseme timeline, VN voice) is CPU-only and carries NO
+> `edge-ai` dependency — unlike `edge-ai-analysis` its opt-in fold is wired in
+> **both** builders, not just x86; see [EDGE-AI.md](EDGE-AI.md#4c-voice-synthesis--tts-api-for-the-mesh-edge-ai-tts).
 
 `gate_optional_services()` (in **both** `build-x86-host-stage4.sh` and
 `build-rpi5-stage4.sh`, authored per-script and anchored to the
@@ -266,8 +269,10 @@ Internal mTLS / `svc.cluster.local` SANs are unaffected.
 > **STATUS: build-time prune ✅ SHIPPED · build-time 13a render ✅ SHIPPED ·
 > federation `OverrideService` + public `GET /api/federation/capabilities` ✅ SHIPPED ·
 > host (snapdragon.systems) capabilities consumption + `menu.component` `enabled()`
-> greying ✅ SHIPPED · live admin-driven flip 🚧 PENDING (the admin-bff
-> `ApplicationSet` cut-over + `service_state` effector — the one remaining step).**
+> greying ✅ SHIPPED · live admin-driven flip 🟡 CODE-COMPLETE, SHIPS DARK (the
+> `OptionalService` **CRD + controller** — §7.1; reconciler
+> `app.optional-services.reconcile.enabled=false` by default) · hardcoded-app
+> cut-over 🚧 CLUSTER-GATED (§10).**
 > The UI hide/show path is now LIVE end-to-end: the federation-api `OverrideService`
 > kill-switch flips `federation_modules.enabled`/`circuit_state`, the public
 > capabilities endpoint drives logged-out greying, and the host shell consumes that
@@ -313,8 +318,72 @@ Because ArgoCD syncs from the repo (not the baked copy), live add/remove uses th
   `federation_modules.enabled`/`circuit_state` so the module vanishes/reappears
   in the next manifest render with no redeploy.
 
-These admin-bff `TasksController` / `ArgoController` seams + the `service_state`
-reconcile bridge are **separate cross-repo waves** (see §10).
+These admin-bff seams + the CRD reconcile bridge are described in §7.1 and §10.
+
+## 7.1. The `OptionalService` CRD + controller (the live-flip mechanism)
+
+The runtime desired-state object is a **CRD** (`optionalservices.platform.snapdragon.
+systems`, the platform's first CRD — `kind: OptionalService`, `shortName: optsvc`,
+namespaced in `devops`), reconciled by a **Lease-gated single-writer controller** in
+`snapdragon-admin-bff-api` (`systems.snapdragon.adminbff.optionalservices.
+OptionalServiceReconciler`, cloned from the `NodeStorageReconciler` /
+`Fabric8NodeStorageConfigMapWriter` precedent). The user chose the CRD over a watched
+ConfigMap or a git-committing reconciler: no DB migration, `kubectl`-native, directly
+admin-mutatable. It **replaces** the previously-proposed `service_state` Postgres
+table.
+
+**Mechanism (Option A — single-writer feeds the ApplicationSet's element list):**
+
+1. An admin/superadmin (or a GitOps commit) sets `spec.enabled` on one
+   `OptionalService` — e.g.
+   `kubectl -n devops patch optionalservice akkoma --type merge -p '{"spec":{"enabled":true}}'`.
+2. The reconciler reads all CRs, then is the **sole writer** of two targets, both
+   pure functions of the CR desired-state:
+   - **`apps/13a-optional-services.yaml`** — a read-modify-write that flips
+     `installed` on the matching inline list-generator **element** (by `slug`); the
+     ArgoCD ApplicationSet controller then creates/prunes `optional-<slug>` via the
+     `installed:"true"` selector.
+   - **`installed-services` ConfigMap** (`snapdragon-policy`) — a targeted merge-patch
+     of the matching greying boolean, keeping the admin console + host greying
+     consistent.
+3. Each CR's `/status` (`phase`, `installed`, `observedGeneration`, `conditions`) is
+   updated so `kubectl get optsvc` shows the effective state.
+
+**Closed slug set (verified against `optional-services.yaml` + the ConfigMap + 13a):**
+the CRD enum is the **12 cluster-service slugs** that have BOTH a 13a element AND a
+ConfigMap boolean — `akkoma tuwunel phpbb games owncast tube character-studio anubis
+coturn edge-ai edge-ai-analysis edge-ai-tts`. Deliberately EXCLUDED: `workloadConsole`
+(ConfigMap boolean but no 13a element — its RBAC is the hardcoded
+`apps/14-workload-console-rbac.yaml`; left build-determined) and the NODE services
+`egress-vpn`/`tor` (no cluster Application, no ConfigMap boolean — a separate
+node-reconcile track).
+
+**⚠ The `ignoreDifferences` KEYSTONE (the piece the whole mechanism hinges on).**
+ArgoCD's automated recurse roots (`app-of-apps.yaml` + `apps/00-app-of-apps-waved.
+yaml`, `selfHeal:true`) and the policy app (`apps/16`) would REVERT any live element /
+ConfigMap write back to git's inert baseline. So:
+
+- both roots carry `ignoreDifferences` on `argoproj.io ApplicationSet
+  optional-services` `jsonPointers:[/spec/generators/0/list/elements]` **+
+  `RespectIgnoreDifferences=true`**;
+- `apps/16` carries `ignoreDifferences` on the `installed-services` ConfigMap's 12
+  controller-owned `/data/<slug>` keys **+ `RespectIgnoreDifferences=true`**;
+- `apps/13d-optional-services-operator.yaml` (which deploys the CRD + RBAC + seed CRs)
+  carries `ignoreDifferences` on `OptionalService` `/spec/enabled` (+ `reason`,
+  `requestedBy`) so an admin's toggle is not selfHeal-reverted.
+
+Git holds the inert baseline; the controller-owned fields are allowed to diverge;
+every OTHER field stays fully selfHeal-enforced. Without this keystone the controller
+writes and ArgoCD immediately reverts — a no-op.
+
+**SHIPS DARK.** The reconciler defaults `app.optional-services.reconcile.enabled=false`
+(Noop client + Noop writers), so nothing is written until a live cluster deliberately
+enables it. The stage4 builders seed each per-slug CR's `enabled` from the resolved
+`OPTIONAL_SERVICES` (`_opt_render_optionalservice_cr`, alongside
+`_opt_render_installed_services`). **Enabling the reconciler requires the §10
+cut-over first** — otherwise flipping `akkoma`/etc. to `installed:"true"` makes the
+ApplicationSet create `optional-akkoma` that double-manages the same manifests as the
+still-present hardcoded `apps/30-akkoma.yaml` (Application `akkoma`).
 
 ## 8. Graceful-degradation expectations
 
@@ -372,14 +441,43 @@ When a service is **absent**, a user sees:
   bootstrap (HttpClient → the public capabilities endpoint) and `menu.component`'s
   `enabled()` greys out absent services (nav + data-driven home-services cards).
 
-**🚧 REMAINING TODO (the only open cross-repo step):**
+**🟡 CODE-COMPLETE, SHIPS DARK (this wave):**
 
-- **snapdragon-admin-bff-api:** implement the `TasksController` /
-  `ArgoController` seams + a `service_state` desired-state table + leader-gated
-  reconcile effector (reuse the SuspensionService/DomainLockService pattern) for
-  live add/remove; complete the ApplicationSet cut-over (§7) — delete the four
-  hardcoded `30-*`/`50-*` Applications and let the ApplicationSet own the surviving
-  workloads so an admin can flip a slug on a live cluster.
+- **snapdragon-admin-bff-api:** the `OptionalService` **CRD + Lease-gated
+  reconcile controller** (§7.1) — the `service_state` Postgres table is **replaced**
+  by the CRD (kubectl-native desired-state, no DB migration). The controller is the
+  single writer of the 13a element list + the greying ConfigMap, reconciled from the
+  CRs. `app.optional-services.reconcile.enabled=false` by default (Noop client +
+  writers). Offline-validated: CRD schema (`kubectl --dry-run=client` / kubeconform),
+  `kustomize build`, the pure `renderElements`/`renderInstalledServices` transforms +
+  the fake-client reconcile composition (JUnit). See the PR for the validated-vs-
+  cluster-gated split.
+- **snapdragon-generator:** the CRD/RBAC/seed bundle
+  (`manifests/optional-services-operator`), its `apps/13d` Application, the
+  `ignoreDifferences` keystone on both roots + `apps/16`, and the
+  `_opt_render_optionalservice_cr` build seeding.
+
+**🚧 CLUSTER-GATED FOLLOW-UP (cannot be verified without a live cluster):**
+
+- **The cut-over.** Delete the hardcoded `apps/30-akkoma.yaml` /
+  `apps/30-tuwunel.yaml` / `apps/30-phpbb.yaml` (+ `apps/38`/`39`/`49-forum-*`) /
+  `apps/50-games.yaml` / `apps/52-owncast.yaml` / `apps/53-tube.yaml` /
+  `apps/49b-character-studio-ui.yaml` and let the ApplicationSet own the surviving
+  workloads — coordinating the ESO split, route-access rows, stateful-svc scale-to-
+  zero, and the `CanonicalSeed.java` gateway floor (§9). THEN set
+  `app.optional-services.reconcile.enabled=true` (with the Lease under multi-replica).
+  Enabling BEFORE the cut-over double-manages akkoma/tuwunel/phpbb (§7.1).
+- **Live keystone verification.** That the fabric8 JSON write lands on the live
+  `argoproj.io/v1alpha1 ApplicationSet`, that ArgoCD re-generates/prunes
+  `optional-<slug>`, and that `ignoreDifferences` + `RespectIgnoreDifferences=true`
+  actually stop selfHeal from reverting the element/ConfigMap writes — all
+  offline-unverifiable.
+
+**🔭 NATURAL NEXT WAVE (not in this cut):** a superadmin BFF endpoint
+`PUT /bff/superadmin/optional-services/{slug}` (mirroring
+`WorkloadSuperadminController`/`GoLiveController` + a step-up gate) that patches the CR
+via the fabric8 client admin-bff already holds, and a toggle screen in
+`snapdragon-superadmin-service-catalog-ui`. kubectl-first; BFF endpoint + UI later.
 
 ## 11. Verification & rollback
 

@@ -1,19 +1,22 @@
 import { test, expect } from '@playwright/test';
-import { onboard, createRoom, joinRoom, shot } from './helpers';
+import { onboard, matrixUserId, createRoom, joinRoom, shot } from './helpers';
 
-test('two users chat with each other through the Matrix UI', async ({ browser, request }) => {
+test('two users chat with each other through the Matrix UI', async ({ browser }) => {
   const a = await browser.newContext({ ignoreHTTPSErrors: true });
   const b = await browser.newContext({ ignoreHTTPSErrors: true });
   const alice = await a.newPage();
   const bob = await b.newPage();
 
-  const sa = await onboard(alice, 'alice@gmail.com');
-  const sb = await onboard(bob, 'bob@gmail.com');
+  await onboard(alice, 'alice@gmail.com');
+  await onboard(bob, 'bob@gmail.com');
 
   // Establish a shared room BEFORE opening the chat view (the component reads
-  // joined rooms on init, then polls messages).
-  const roomId = await createRoom(request, sa, sb.matrix!.userId, 'general');
-  await joinRoom(request, sb, roomId);
+  // joined rooms on init, then polls messages). Created through each page's
+  // user-bff hsproxy (auth = the httpOnly bff_session cookie); the browser holds
+  // no Matrix token, so the peer id comes from the hsproxy whoami.
+  const bobUserId = await matrixUserId(bob);
+  const roomId = await createRoom(alice, bobUserId, 'general');
+  await joinRoom(bob, roomId);
 
   const q = `?room=${encodeURIComponent(roomId)}`;
   await alice.goto(`/social/matrix${q}`);

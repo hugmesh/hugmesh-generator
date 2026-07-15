@@ -69,7 +69,16 @@ spec:
         - name: api
           # snapdragon-actions — "Spring Actions for snapdragon hybrid architecture"
           image: snapdragon-systems/actions:dev
-          ports: [{ name: http, containerPort: 8080 }]
+          # snapdragon-actions' Dockerfile EXPOSEs 8090 (unlike every other Spring
+          # service here, which defaults to 8080) — see application.yml's
+          # `server.port: ${PORT:8090}`. The Service below stays on the stable
+          # :8080 other manifests reference (apps/20-gateway-be.yaml,
+          # charts/snapdragon-gateway/values.yaml) via the named "http" targetPort;
+          # only the container-internal port + readinessProbe below need to match
+          # where the app actually binds. Identical fix already live in
+          # tests/stack/compose.local.yaml (generator#253's review flagged this
+          # exact mismatch here too, never actioned until now).
+          ports: [{ name: http, containerPort: 8090 }]
           # CONTAINER-level hardening. CIS K8s 5.2.5 / 5.2.7-5.2.9. The JVM needs a
           # writable /tmp (perfdata, JIT scratch) and the RW /stores tmpfs the init
           # container built; everything else is read-only.
@@ -126,8 +135,8 @@ spec:
                 - -ec
                 - >-
                   curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
-                  --resolve snapdragon-api:8080:127.0.0.1
-                  https://snapdragon-api:8080/actuator/health/readiness
+                  --resolve snapdragon-api:8090:127.0.0.1
+                  https://snapdragon-api:8090/actuator/health/readiness
             initialDelaySeconds: 20
           resources: { requests: { cpu: 100m, memory: 384Mi }, limits: { cpu: "1", memory: 1Gi } }
           volumeMounts:

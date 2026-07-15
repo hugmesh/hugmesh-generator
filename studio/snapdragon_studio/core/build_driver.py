@@ -10,6 +10,7 @@ import os
 import shlex
 import subprocess
 import threading
+import uuid
 from collections.abc import Callable, Iterator
 
 from .config import ImageConfig
@@ -22,8 +23,37 @@ class BuildDriver:
         self.host = host or detect()
         self._proc: subprocess.Popen | None = None
         self._cancel = threading.Event()
+        # Cancel needs a HANDLE on the running child that survives the wrapper layers
+        # between us and the actual builder (PID1 bash in docker, root-owned sudo
+        # natively). We stamp a stable container name onto every docker run so
+        # `docker kill <name>` can reach PID1 (the bash builder ignores TERM forwarded
+        # to the docker CLI), and we run native builds in a fresh session/process group
+        # so `kill -TERM -<pgid>` (sudo-wrapped when non-root) reaches the whole tree —
+        # today's plain Popen.terminate() only signals the docker CLI / EPERMs against
+        # the root-owned sudo. One driver per image (WorklistDriver makes a fresh
+        # BuildDriver per entry), so the name is unique per build.
+        self._container_name = f"sd-build-{uuid.uuid4().hex[:12]}"
+        self._backend: str | None = None   # backend of the in-flight/last run — cancel keys on it
+        self._pgid: int | None = None       # native process-group id (== child pid via setsid)
 
     # ---- command assembly --------------------------------------------------
+    def _passthrough_env(self, cfg: ImageConfig) -> dict[str, str]:
+        """Config values the build environment consumes from ENV VARS, not argv:
+        HEADSCALE_URL (G2) is baked to /etc/snapdragon/headscale-url by the x86/
+        rpi5/frite builders when set (build-x86:2843, rpi5:2421, frite:948) — there
+        is deliberately NO builder flag for it (the Makefile's BRAND_ENV rides the
+        same env channel). PENTEST=1 (G40) is the OWASP pen-test knob consumed by
+        the fleet/make layer (scripts/build-all-roles.sh / the Makefile), forwarded
+        here so the BuildPage checkbox is never a widget-level no-op and the same
+        config drives every channel identically. Empty/false values are omitted so
+        an untouched config adds nothing."""
+        env: dict[str, str] = {}
+        if cfg.headscale_url:
+            env["HEADSCALE_URL"] = cfg.headscale_url
+        if cfg.pentest:
+            env["PENTEST"] = "1"
+        return env
+
     def command(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:
         backend = backend or self.host.default_backend
         out = cfg.output_dir or os.path.join(self.generator_dir, "out")
@@ -33,19 +63,33 @@ class BuildDriver:
         script = f"./{cfg.builder_script}"
         inner = [script, "-w", "/out" if backend == "docker" else out,
                  "-j", str(cfg.jobs), *cfg.to_cli_args()]
+        penv = self._passthrough_env(cfg)
         if backend == "native":
-            # run in the generator dir; needs root for the chroot/loop ops
-            return (["sudo"] if not self.host.is_root else []) + ["bash", *inner]
+            # run in the generator dir; needs root for the chroot/loop ops.
+            # Env passthrough rides an `env K=V` wrapper INSIDE the sudo boundary
+            # (sudo's env_reset would strip a caller-side export), so the printed
+            # command is copy-pasteable and run() needs no Popen env plumbing.
+            env_wrap = ["env", *(f"{k}={v}" for k, v in penv.items())] if penv else []
+            return ((["sudo"] if not self.host.is_root else [])
+                    + env_wrap + ["bash", *inner])
         if backend == "docker":
             # Asset paths outside the generator dir (wallpaper, branding dir, egress conf)
             # are not visible in the container — mount each and rewrite its flag value.
             asset_mounts, dcfg = self._remap_assets_for_docker(cfg)
             dinner = [script, "-w", "/out", "-j", str(cfg.jobs), *dcfg.to_cli_args()]
+            env_args: list[str] = []
+            for k, v in penv.items():
+                env_args += ["-e", f"{k}={v}"]
             return [
                 "docker", "run", "--rm", "--privileged",
+                # --init: a real PID1 that reaps and forwards signals so `docker kill`
+                # (cancel) actually stops the build instead of orphaning it. --name:
+                # the stable handle cancel() targets.
+                "--init", "--name", self._container_name,
                 "-v", f"{self.generator_dir}:/src",
                 "-v", f"{out}:/out",
                 *asset_mounts,
+                *env_args,
                 "-w", "/src", self.host.builder_image,
                 "bash", "-c", shlex.join(dinner),
             ]
@@ -75,42 +119,118 @@ class BuildDriver:
         return " ".join(shlex.quote(x) for x in self.command(cfg, backend))
 
     # ---- execution ---------------------------------------------------------
+    def _spawn(self, cmd: list[str], backend: str) -> subprocess.Popen:
+        """Popen cmd (cwd=generator_dir) recording the handle cancel() needs. Native
+        builds get their own session (start_new_session) so the whole sudo→bash→emerge
+        tree lands in one process group we can signal by negative pgid; docker builds
+        are reached by container name instead."""
+        self._cancel.clear()
+        self._backend = backend
+        self._pgid = None
+        self._proc = subprocess.Popen(
+            cmd, cwd=self.generator_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, start_new_session=(backend == "native"))
+        if backend == "native":
+            # start_new_session makes the child a session/group leader → pgid == pid.
+            self._pgid = self._proc.pid
+        return self._proc
+
+    def _stream(self, cmd: list[str], on_line: Callable[[str], None] | None,
+                backend: str) -> int:
+        """Spawn cmd, call on_line per output line, return the exit code. Shared by
+        run() and build_builder_image() so both stream identically and both respect
+        cancel(). On cancel the per-backend kill in cancel() stops the real build; here
+        we only stop reading (the pipe closes when the child dies) and reap it."""
+        proc = self._spawn(cmd, backend)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if on_line:
+                on_line(line.rstrip("\n"))
+            if self._cancel.is_set():
+                break
+        return proc.wait()
+
     def run(self, cfg: ImageConfig, backend: str | None = None,
             on_line: Callable[[str], None] | None = None) -> int:
         """Run the build, calling on_line for each output line. Returns the exit code.
         Blocking — callers run it on a worker thread (the GUI uses a QThread)."""
+        backend = backend or self.host.default_backend
         out = cfg.output_dir or os.path.join(self.generator_dir, "out")
         os.makedirs(out, exist_ok=True)
-        cmd = self.command(cfg, backend)
-        self._cancel.clear()
-        self._proc = subprocess.Popen(
-            cmd, cwd=self.generator_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1)
-        assert self._proc.stdout is not None
-        for line in self._proc.stdout:
-            if on_line:
-                on_line(line.rstrip("\n"))
-            if self._cancel.is_set():
-                self._proc.terminate()
-                break
-        return self._proc.wait()
+        return self._stream(self.command(cfg, backend), on_line, backend)
+
+    def build_builder_image(self, on_line: Callable[[str], None] | None = None) -> int:
+        """Build the Docker builder image (see HostInfo.builder_image) from
+        Dockerfile.build at the generator repo root — the same command as `make
+        docker-image`. Streams output the same way run() does; blocking, so callers run
+        it on a worker thread (the GUI uses a QThread)."""
+        # A plain `docker build` — no run container to name/kill, so it takes the cancel
+        # FALLBACK leg (terminate the docker-build CLI, which aborts the build) rather than
+        # the docker-run `docker kill <name>` path.
+        return self._stream(self.builder_image_build_command(), on_line, "builder-image")
 
     def iter_run(self, cfg: ImageConfig, backend: str | None = None) -> Iterator[str]:
+        backend = backend or self.host.default_backend
         out = cfg.output_dir or os.path.join(self.generator_dir, "out")
         os.makedirs(out, exist_ok=True)
-        self._proc = subprocess.Popen(
-            self.command(cfg, backend), cwd=self.generator_dir,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-        assert self._proc.stdout is not None
-        yield from (line.rstrip("\n") for line in self._proc.stdout)
-        self._proc.wait()
+        proc = self._spawn(self.command(cfg, backend), backend)
+        assert proc.stdout is not None
+        yield from (line.rstrip("\n") for line in proc.stdout)
+        proc.wait()
+
+    def _docker_kill(self) -> None:
+        subprocess.run(["docker", "kill", self._container_name],
+                       capture_output=True, check=False)
+
+    def _kill_native_group(self, sig: str = "TERM") -> None:
+        """Signal the whole native process group. Wrapped in sudo when we launched the
+        build with sudo (non-root host) — the build tree is root-owned, so an unprivileged
+        kill EPERMs. Negative pgid targets every process in the group (sudo → bash →
+        emerge → the compiler), not just the leader."""
+        if self._pgid is None:
+            return
+        cmd = (["sudo"] if not self.host.is_root else []) + ["kill", f"-{sig}", f"-{self._pgid}"]
+        subprocess.run(cmd, capture_output=True, check=False)
 
     def cancel(self) -> None:
+        """Stop the in-flight build honestly, per backend (design 2.5). Idempotent and
+        safe to call after the build has already finished (the kill just no-ops)."""
         self._cancel.set()
-        if self._proc and self._proc.poll() is None:
-            self._proc.terminate()
+        proc = self._proc
+        if self._backend == "docker":
+            self._docker_kill()
+        elif self._backend == "native":
+            self._kill_native_group("TERM")
+            if proc is not None:
+                try:
+                    proc.wait(timeout=10)   # graceful window before escalation
+                except subprocess.TimeoutExpired:
+                    self._kill_native_group("KILL")
+        elif proc is not None and proc.poll() is None:
+            proc.terminate()   # unknown/plain backend (e.g. builder-image build)
 
     # ---- preflight ---------------------------------------------------------
+    def _image_present(self) -> bool:
+        """Is self.host.builder_image already built? (`docker image inspect` — same
+        daemon-reachability caveats as platform_info._docker_ok.)"""
+        try:
+            r = subprocess.run(["docker", "image", "inspect", self.host.builder_image],
+                               capture_output=True, timeout=8)
+            return r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    def builder_image_build_command(self) -> list[str]:
+        """The exact command build_builder_image() runs — also shown in preflight
+        messages and by the GUI's "Build builder image now" button."""
+        return ["docker", "build", "-f", "Dockerfile.build", "-t", self.host.builder_image, "."]
+
+    def builder_image_missing(self, backend: str | None = None) -> bool:
+        """True iff backend is docker, the daemon is reachable, but the builder image has
+        not been built yet — exactly the condition the GUI should offer to fix."""
+        backend = backend or self.host.default_backend
+        return backend == "docker" and self.host.has_docker and not self._image_present()
+
     def preflight(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:
         """Return a list of human-readable problems that would stop a build (empty = OK)."""
         backend = backend or self.host.default_backend
@@ -123,6 +243,10 @@ class BuildDriver:
                                if cfg.platform == "jetson" else ""))
         if backend == "docker" and not self.host.has_docker:
             problems.append("Docker selected but the Docker daemon is not reachable.")
+        elif backend == "docker" and not self._image_present():
+            problems.append(
+                f"Docker builder image '{self.host.builder_image}' not found — build it "
+                f"first: {' '.join(self.builder_image_build_command())}")
         if backend == "native" and not self.host.is_root:
             problems.append("Native build needs root (the Studio will prepend sudo).")
         for label, path in (("wallpaper", cfg.wallpaper), ("branding-dir", cfg.branding_dir),

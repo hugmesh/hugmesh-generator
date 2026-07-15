@@ -89,9 +89,15 @@ IMG_SIZE_SET=false
 GROW_POLICY="fill"
 COMPRESS_IMG=false
 EXTRA_PACKAGES=""
+PACKAGES_ADD=""          # --packages-add : atoms to add on top of the derived set
+PACKAGES_DROP=""         # --packages-drop: default-set atoms to remove (mandatory floor honored)
 TIMEZONE="UTC"
 HOSTNAME=""
 CLUSTER_DOMAIN="snapdragon.systems"
+# Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix every
+# node joins. "" = builder default (legacy byte-identical). The Studio emits --superdomain
+# <effective> only for MESH builds; permanently internal, never the go-live apex.
+SUPERDOMAIN=""
 BRAND="snapdragon"
 BRAND_TITLE="Snapdragon Systems"
 ORG="Snapdragon-Systems"
@@ -102,6 +108,29 @@ CONFIG_FILE=""
 DEFAULT_USER="jetson"
 # NO baked default password (fleet OWASP posture): real creds come from the KEYS
 # USB; a keyless first boot mints a random one-time password + locks root.
+#
+# ── Standalone posture (mirrors build-x86-host-stage4.sh) ──────────
+# --standalone composes onto --role desktop: no mesh, a normal local user logs
+# in with a password set at build time instead of the KEYS-USB-provisioned
+# account, and forces --encrypt-root (LUKS2-encrypted root).
+STANDALONE=false        # --standalone : local user, no mesh, LUKS2-encrypted root
+LOCAL_USER=""           # --local-user NAME : the standalone local login account
+LOCAL_USER_PASS=""      # --local-pass PASS : plaintext; hashed at build, never baked raw
+# ── LUKS2 root encryption — BAKE-TIME, unlike x86/Frite/RPi5's install-time
+# model: the Orin has no separate installer step (build_img() IS the only
+# artifact, a single ext4 root written directly by the cross-build host), so
+# the LUKS2 container is formatted as part of THIS build, not a later install
+# run on/against the target. Independently triggerable from --standalone, same
+# as the other platforms — encrypts whatever --role is being built today, not
+# just --role desktop.
+ENCRYPT_ROOT=false      # --encrypt-root : LUKS2-encrypt the root (bake-time)
+LUKS_PASS=""            # --luks-pass PASS : plaintext; used directly by cryptsetup at
+                        # bake time. Omit it and a random passphrase is generated and
+                        # printed ONCE at the end of the build (first-boot-changeable
+                        # via `cryptsetup luksChangeKey` — there is no first-boot mint
+                        # step here the way there is for LOCAL_PASSHASH, since the
+                        # passphrase must already exist before the LUKS container can
+                        # be formatted at build time).
 
 # ── Radio attack surface (DISABLED BY DEFAULT — hardened posture) ──
 ENABLE_WIFI="${ENABLE_WIFI:-false}"
@@ -191,6 +220,27 @@ OPTIONS
     --permit-root-login no|yes|prohibit-password  (default no)
     --enable-wifi / --enable-bluetooth   (off by default)
 
+  Standalone (local user, no mesh, LUKS2-encrypted root; composes onto
+              --role desktop only)
+    --standalone         No mesh; a local user logs in with a build-time
+                          password instead of the KEYS-USB-provisioned account.
+                          Forces --encrypt-root.
+    --local-user NAME    The standalone local login account (default: --user).
+    --local-pass PASS    Plaintext; hashed at build (openssl passwd -6), never
+                          baked raw. Omit it and a random one-time password is
+                          minted + printed once at first boot instead.
+
+  Root disk encryption (LUKS2; bake-time — there is no separate install step
+              on this platform, so encryption happens as part of THIS build)
+    --encrypt-root       LUKS2-encrypt the root partition. Automatically
+                          forced on by --standalone. Requires cryptsetup on
+                          the BUILD HOST (not just the target sysroot).
+    --luks-pass PASS     Plaintext passphrase for the encrypted root; used
+                          directly by cryptsetup at build time. Omit it and a
+                          random passphrase is generated and printed ONCE at
+                          the end of the build — change it after first boot
+                          via `cryptsetup luksChangeKey`.
+
   Phases
     --skip-kernel / --skip-clean / --resume / --image-only
 
@@ -256,15 +306,25 @@ while [[ $# -gt 0 ]]; do
         -C|--config)          CONFIG_FILE="$2";           shift 2 ;;  # sourced above
         --env)                ENV="$2";                   shift 2 ;;
         --cluster-domain|--domain) CLUSTER_DOMAIN="$2";   shift 2 ;;
+        --superdomain) SUPERDOMAIN="$2"; shift 2 ;;
         --brand)              BRAND="$2";                 shift 2 ;;
         --brand-title)        BRAND_TITLE="$2";           shift 2 ;;
         --org)                ORG="$2";                   shift 2 ;;
         -T|--timezone)        TIMEZONE="$2";              shift 2 ;;
         -u|--user)            DEFAULT_USER="$2";          shift 2 ;;
+        --standalone)         STANDALONE=true;            shift   ;;
+        --local-user)         LOCAL_USER="$2";             shift 2 ;;
+        --local-pass|--local-user-password) LOCAL_USER_PASS="$2"; shift 2 ;;
+        --encrypt-root)       ENCRYPT_ROOT=true;          shift   ;;
+        --luks-pass|--root-unlock-pass) LUKS_PASS="$2";   shift 2 ;;
         # DEPRECATED no-ops (fleet posture): no password is baked into images.
         --user-password)      warn "--user-password is ignored: no password is baked into the image (random first-boot fallback + KEYS provisioning)"; shift 2 ;;
         --root-password)      warn "--root-password is ignored: root is locked on keyless boot; set root via the KEYS USB users.json hash"; shift 2 ;;
         -p|--extra-packages)  EXTRA_PACKAGES="$2";        shift 2 ;;
+        # User package deltas (validated + mandatory-floor-checked below); -p stays
+        # the frozen legacy extra-packages spelling, --packages-add is the new one.
+        --packages-add)       PACKAGES_ADD="$2";          shift 2 ;;
+        --packages-drop)      PACKAGES_DROP="$2";         shift 2 ;;
         --headscale-version)  HEADSCALE_VERSION="$2";     shift 2 ;;
         --tailscale-version)  TAILSCALE_VERSION="$2";     shift 2 ;;
         --enable-wifi)        ENABLE_WIFI=true;           shift   ;;
@@ -357,6 +417,68 @@ case "${ROLE}" in
         exit 1 ;;
 esac
 
+# ── STANDALONE posture (composable onto --role desktop only — a k8s cluster
+# role can't be a standalone appliance) ─────────────────────────────────────
+if ${STANDALONE}; then
+    ${ROLE_CLIENT} || { err "--standalone only composes onto --role desktop (got --role ${ROLE})"; exit 1; }
+    SKIP_MESH=true
+    SKIP_TAILSCALE=true
+    ENCRYPT_ROOT=true
+    [ -z "${LOCAL_USER}" ] && LOCAL_USER="${DEFAULT_USER}"
+    info "STANDALONE desktop: no mesh; local user '${LOCAL_USER}'; LUKS2-encrypted root"
+fi
+
+# ── --encrypt-root on a headless k8s role: this platform's disk-boot
+# initramfs only supports an interactive passphrase prompt (no keyfile/
+# Clevis/TPM factor yet — see the crypttab comment in Phase 4), so an
+# encrypted edge_ai/gpu-host/full node cannot rejoin the cluster after an
+# unattended reboot/power-cycle/panic without someone at a physical console.
+# STANDALONE (desktop-only, forced above) doesn't need this warning. ────────
+if ${ENCRYPT_ROOT} && ! ${ROLE_CLIENT}; then
+    warn "--encrypt-root on a headless --role ${ROLE} node: no unattended-unlock factor exists on this platform yet (passphrase-only prompt) — this node will hang at the LUKS prompt on any reboot/power-cycle with nobody at a physical console to unlock it. Make sure you have out-of-band console access to this fleet node, or hold off on --encrypt-root for cluster roles until a keyfile/Clevis/TPM factor ships."
+fi
+
+# ── --encrypt-root is currently a CONFIRMED-BROKEN combination on this
+# platform, not just an unverified-on-hardware risk — block it outright.
+# specs-jetson/boot/README.md documents the Orin's actual boot chain: the
+# NVIDIA UEFI L4TLauncher distro-boots /boot/extlinux/extlinux.conf directly
+# off the SAME single ext4 partition (JETSON_ROOT) that holds the whole
+# rootfs — there is no separate ESP/boot partition at all, unlike every other
+# platform in this repo (RPi5/Frite/Orange-Pi-5/Orange-Pi-Zero-2 all keep an
+# UNENCRYPTED boot partition split from the LUKS2 root specifically so the
+# firmware/bootloader can still read the kernel/initrd/extlinux.conf).
+# build_img() below has only ONE partition, so --encrypt-root LUKS2-encrypts
+# extlinux.conf/the kernel/the DTB/disk-initrd.img right along with the rest
+# of the root filesystem — the UEFI firmware (no LUKS2 support) can no longer
+# parse a filesystem there at all, so it can never even find something to
+# boot, regardless of dracut's own disk-initrd.img being otherwise correct.
+# This is a real, architectural boot-chain break (confirmed against this
+# platform's own boot documentation), not a hypothetical hardware risk — so
+# it is blocked here the same way rpi3+non-desktop is blocked on build-rpi5-
+# stage4.sh, rather than silently shipping an image that cannot boot. Fixing
+# this for real needs a separate unencrypted boot partition (mirroring RPi5's
+# split) — a distinct, larger undertaking of its own, deliberately NOT
+# attempted in this pass; see docs/STANDALONE-DESKTOP.md's Jetson section.
+if ${ENCRYPT_ROOT}; then
+    err "--encrypt-root is not supported on this platform yet: build_img() writes a SINGLE ext4 partition (JETSON_ROOT) that holds both /boot/extlinux/extlinux.conf AND the root filesystem, and the Orin's UEFI L4TLauncher reads that boot config directly off the raw partition before Linux/dracut ever runs — LUKS2-encrypting that single partition makes the firmware unable to find a kernel to boot at all. This needs a separate unencrypted boot partition (like RPi5/Frite/Orange-Pi-5) before it can work; see docs/STANDALONE-DESKTOP.md. (--standalone forces --encrypt-root and is blocked for the same reason.)"
+    exit 1
+fi
+
+# ── Standalone local-user password → build-time hash (never baked in plaintext,
+# mirrors build-x86-host-stage4.sh) ─────────────────────────────────────────
+LOCAL_PASSHASH=""
+if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]; then
+    [ -n "${LOCAL_USER}" ] && DEFAULT_USER="${LOCAL_USER}"
+    if [ -n "${LOCAL_USER_PASS}" ]; then
+        command -v openssl >/dev/null 2>&1 || { err "--local-pass needs openssl on the build host (app-crypt/... / dev-libs/openssl)"; exit 1; }
+        LOCAL_PASSHASH="$(openssl passwd -6 "${LOCAL_USER_PASS}")"
+        LOCAL_USER_PASS=""   # scrub the plaintext from the environment immediately
+        info "Standalone local user '${DEFAULT_USER}': password hashed at build time (SHA-512 crypt; plaintext not baked)."
+    else
+        ${STANDALONE} && warn "Standalone build with no --local-pass: a RANDOM one-time password is minted at first boot (printed once to console)."
+    fi
+fi
+
 # ── Validate kernel flavor / env / grow ────────────────────────────
 case "${KERNEL_FLAVOR}" in
     mainline|l4t) ;;
@@ -390,6 +512,7 @@ _RE_TRIPLET='^[A-Za-z0-9_.-]+$'
 _require_match "--brand"          "${BRAND}"          "${_RE_SLUG}"
 _require_match "--org"            "${ORG}"            "${_RE_ORG}"
 _require_match "--cluster-domain" "${CLUSTER_DOMAIN}" "${_RE_DNS}"
+[ -n "${SUPERDOMAIN}" ] && _require_match "--superdomain" "${SUPERDOMAIN}" "${_RE_DNS}"
 _require_match "--hostname"       "${HOSTNAME}"       "${_RE_DNS}"
 _require_match "--user"           "${DEFAULT_USER}"   "${_RE_USER}"
 _require_match "--brand-title"    "${BRAND_TITLE}"    "${_RE_TITLE}"
@@ -414,6 +537,36 @@ ART_PREFIX="${BRAND}-jetson-${JETSON_BOARD}-arm64-${ROLE}-${ENV}-${BUILD_TS}"
 # already exited non-zero, which is exactly what the tests/build-matrix harness
 # relies on. NO secrets are echoed here. NOTE: --kernel-flavor l4t IS a valid
 # plan (it validates + resolves); only the BUILD is stubbed (hard error below).
+
+# ── user package deltas: validate + enforce the tier-1 mandatory floor ─────────
+# Before --print-plan and any mutation, so a malformed atom or an illegal drop
+# fails LOUDLY at the boundary. Atom charset mirrors core/validate.py exactly.
+_PKG_ATOM_RE='^[a-z0-9][a-z0-9+._-]*/[A-Za-z0-9+._-]+$'
+_validate_pkg_atoms() { # LABEL VALUE
+    local _lbl="$1" _a; local -a _arr
+    read -ra _arr <<< "$2"
+    for _a in "${_arr[@]}"; do
+        [[ "${_a}" =~ ${_PKG_ATOM_RE} ]] || { err "invalid ${_lbl} atom: '${_a}' — want a category/name atom (e.g. app-editors/vim)"; exit 1; }
+    done
+}
+_validate_pkg_atoms --packages-add  "${PACKAGES_ADD}"
+_validate_pkg_atoms --packages-drop "${PACKAGES_DROP}"
+# Tier-1 mandatory atoms (base + role class). Dropping one is rejected (Decision #5).
+SNAP_MANDATORY_ATOMS="sys-block/parted app-misc/jq net-misc/networkmanager"
+if ${ROLE_CLIENT}; then
+    SNAP_MANDATORY_ATOMS="${SNAP_MANDATORY_ATOMS} x11-base/xorg-server x11-wm/openbox x11-misc/lightdm"
+else
+    SNAP_MANDATORY_ATOMS="${SNAP_MANDATORY_ATOMS} sys-cluster/kubelet sys-cluster/kubeadm app-containers/containerd"
+fi
+if [ -n "${PACKAGES_DROP}" ]; then
+    read -ra _drop_check <<< "${PACKAGES_DROP}"
+    for _d in "${_drop_check[@]}"; do
+        for _m in ${SNAP_MANDATORY_ATOMS}; do
+            [ "${_d}" = "${_m}" ] && { err "refusing to --packages-drop mandatory-payload atom '${_d}' — tier-1 essential"; exit 1; }
+        done
+    done
+fi
+
 if ${PRINT_PLAN}; then
     _plan() { printf 'PLAN_%s=%s\n' "$1" "$2"; }
     _plan BUILDER            "build-jetson-stage4.sh"
@@ -439,11 +592,17 @@ if ${PRINT_PLAN}; then
     _plan JOBS               "${JOBS}"
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
+    _plan SUPERDOMAIN        "${SUPERDOMAIN}"
     _plan HOSTNAME           "${HOSTNAME}"
     _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo none || { ${EDGE_AI} && echo edge-ai || echo none; })"
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
+    _plan STANDALONE         "${STANDALONE}"
+    _plan LOCAL_USER         "${LOCAL_USER:-$DEFAULT_USER}"
+    _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
+    _plan ENCRYPT_ROOT       "${ENCRYPT_ROOT}"
+    _plan LUKS_PASS          "$([ -n "${LUKS_PASS}" ] && echo REDACTED || echo none)"
     _plan STATUS             "EXPERIMENTAL (hardware validation pending — specs-jetson/README.md)"
-    _plan FLAGS_EFFECTIVE    "env=${ENV} role=${ROLE} board=${JETSON_BOARD} kernel_flavor=${KERNEL_FLAVOR} desktop=${DESKTOP} img=${BUILD_IMG} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH}"
+    _plan FLAGS_EFFECTIVE    "env=${ENV} role=${ROLE} board=${JETSON_BOARD} kernel_flavor=${KERNEL_FLAVOR} desktop=${DESKTOP} img=${BUILD_IMG} img_size=${ROOT_MiB} grow=${GROW_POLICY} compress=${COMPRESS_IMG} resume=${RESUME} skip_kernel=${SKIP_KERNEL} skip_mesh=${SKIP_MESH} skip_tailscale=${SKIP_TAILSCALE} permit_root_login=${PERMIT_ROOT_LOGIN} enable_wifi=${ENABLE_WIFI} enable_bluetooth=${ENABLE_BLUETOOTH} standalone=${STANDALONE} encrypt_root=${ENCRYPT_ROOT}"
     exit 0
 fi
 
@@ -514,6 +673,8 @@ render_template() {
         -e "s|@@HOSTNAME@@|$(_sed_rep_escape "${HOSTNAME}")|g" \
         -e "s|@@TIMEZONE@@|$(_sed_rep_escape "${TIMEZONE}")|g" \
         -e "s|@@DEFAULT_USER@@|$(_sed_rep_escape "${DEFAULT_USER}")|g" \
+        -e "s|@@STANDALONE@@|$(_sed_rep_escape "${STANDALONE}")|g" \
+        -e "s|@@LOCAL_PASSHASH@@|$(_sed_rep_escape "${LOCAL_PASSHASH}")|g" \
         -e "s|@@BRAND@@|$(_sed_rep_escape "${BRAND}")|g" \
         -e "s|@@BRAND_TITLE@@|$(_sed_rep_escape "${BRAND_TITLE}")|g" \
         -e "s|@@DOMAIN@@|$(_sed_rep_escape "${CLUSTER_DOMAIN}")|g" \
@@ -583,18 +744,32 @@ ZRAM_EOF
 # ── rebrand_sysroot (covers the baked cluster tree too, like rpi5/x86) ──
 rebrand_sysroot() {
     [ "${BRAND}" = "snapdragon" ] && [ "${CLUSTER_DOMAIN}" = "snapdragon.systems" ] && return 0
-    local _btitle _org _domain _brand
+    local _btitle _org _domain _brand _hproj
     _btitle="$(_sed_rep_escape "${BRAND_TITLE}")"
     _org="$(_sed_rep_escape "${ORG}")"
     _domain="$(_sed_rep_escape "${CLUSTER_DOMAIN}")"
     _brand="$(_sed_rep_escape "${BRAND}")"
+    # Harbor image-project segment (registry.<host>/<project>/<svc>). Defaults to the
+    # brand; the HARBOR_PROJECT env is a first-class seam for a differently-named project.
+    _hproj="$(_sed_rep_escape "${HARBOR_PROJECT:-${BRAND}}")"
     local f
     while IFS= read -r -d '' f; do
+        # FROZEN k8s label-KEY / API-group namespace `snapdragon.systems/<suffix>` must NOT
+        # rebrand (it is compiled into operators/JVM and used as node/pod selectors). Every
+        # KEY form is preceded by a YAML-structural boundary (line-start, space, {, (, comma,
+        # quote, backtick); every HOST/URL form is preceded by a dot or slash. Protect the KEY
+        # namespace behind a sentinel (first two -e), rebrand hosts/URLs/emails/CORS in the
+        # middle, then restore the KEY namespace verbatim (last -e). The sentinel contains
+        # neither `snapdragon.systems` nor `snapdragon-`, so the middle rules skip it.
         sed -i \
+            -e "s|^snapdragon\.systems/|@@SDSYSKEY@@/|g" \
+            -e "s|\([ {(,\"'\`]\)snapdragon\.systems/|\1@@SDSYSKEY@@/|g" \
             -e "s|Snapdragon Systems|${_btitle}|g" \
             -e "s|Snapdragon-Systems|${_org}|g" \
             -e "s|snapdragon\.systems|${_domain}|g" \
+            -e "s|\(registry\.[A-Za-z0-9.-]*\)/snapdragon/|\1/${_hproj}/|g" \
             -e "s|snapdragon-|${_brand}-|g" \
+            -e "s|@@SDSYSKEY@@/|snapdragon.systems/|g" \
             "${f}"
     done < <(find "${SYSROOT}/etc/snapdragon" "${SYSROOT}/var/lib/snapdragon/cluster" -type f -print0 2>/dev/null)
 }
@@ -637,17 +812,40 @@ sys-process/audit    python
 HOSTSELINUX
     info "Pre-seeded HOST /etc/portage/package.use: libselinux[python]+audit[python]"
 fi
-# .img assembly tools (best-effort: missing tools disable the .img, not the build).
+# .img assembly tools (best-effort: missing tools disable the .img, not the
+# build) — UNLESS --encrypt-root, since build_img() is the ONLY artifact that
+# can carry the LUKS2 root on this platform (no separate installer to fall
+# back to, unlike x86/Frite/RPi5); silently disabling it there would silently
+# ship a build with no encrypted artifact at all. cryptsetup is likewise a
+# HARD requirement (not best-effort) for --encrypt-root specifically.
 if ${BUILD_IMG}; then
     for t in parted losetup mkfs.ext4 blkid; do
-        command -v "$t" >/dev/null || { warn "missing ${t}; disabling .img build"; BUILD_IMG=false; break; }
+        if ! command -v "$t" >/dev/null; then
+            if ${ENCRYPT_ROOT}; then
+                err "missing ${t} on the build host — required to build the --encrypt-root .img (the only artifact this platform produces)"
+                exit 1
+            fi
+            warn "missing ${t}; disabling .img build"; BUILD_IMG=false; break
+        fi
     done
+fi
+if ${ENCRYPT_ROOT}; then
+    ${BUILD_IMG} || { err "--encrypt-root requires the .img (see warnings above) — refusing to run a build that cannot produce an encrypted artifact."; exit 1; }
+    command -v cryptsetup >/dev/null || { err "missing cryptsetup on the BUILD HOST — required by --encrypt-root to format the LUKS2 root at build time (emerge sys-fs/cryptsetup on the host running this script, not just the target sysroot)"; exit 1; }
+    # Fail fast on the UUID source too — checked again (defense in depth) right
+    # before use in Phase 4, but that's hours of cross-compilation away.
+    { command -v uuidgen >/dev/null 2>&1 || [ -r /proc/sys/kernel/random/uuid ]; } \
+        || { err "missing uuidgen (sys-apps/util-linux) AND /proc/sys/kernel/random/uuid on the BUILD HOST — required by --encrypt-root to mint the LUKS UUID at build time"; exit 1; }
 fi
 info "Cross-compiler: $(${CROSS_TARGET}-gcc --version | head -1)"
 info "Jobs: ${JOBS}"
 
 banner "Preparing build directories"
 mkdir -p "${WORK_DIR}" "${BUILD_ROOT}"/{distfiles,pkgdir,log} "${SYSROOT}" "${STAGE_DIR}"
+# Preserve the pre-log fds so secrets that must NOT be persisted (e.g. the
+# generated LUKS passphrase, printed once near the end of this script) can
+# still reach the operator's terminal without also landing in build.log.
+exec 3>&1 4>&2
 exec > >(tee -a "${LOG_FILE}") 2>&1
 info "Logging to ${LOG_FILE}"
 
@@ -709,6 +907,18 @@ cp "${SPECS_DIR}/etc/fstab" "${SYSROOT}/etc/fstab"
 mkdir -p "${SYSROOT}/etc/modules-load.d"
 cp "${SPECS_DIR}/etc/modules-load.d/jetson.conf" "${SYSROOT}/etc/modules-load.d/jetson.conf"
 
+# LUKS2 root (--encrypt-root): persist crypt-module support into any FUTURE
+# dracut regeneration on the installed system (e.g. a post-install kernel
+# rebuild), not just the disk-boot initramfs this build generates directly.
+if ${ENCRYPT_ROOT}; then
+    mkdir -p "${SYSROOT}/etc/dracut.conf.d"
+    cp "${SPECS_DIR}/etc/dracut.conf.d/60-snapdragon-crypt.conf" "${SYSROOT}/etc/dracut.conf.d/"
+else
+    # Belt-and-suspenders for --resume sysroots: remove a stale dracut crypt
+    # fragment left behind by a prior --encrypt-root build of this same sysroot.
+    rm -f "${SYSROOT}/etc/dracut.conf.d/60-snapdragon-crypt.conf"
+fi
+
 # ── Shared (arch-agnostic) mesh + provisioning + sshd — the SAME plumbing every
 # other node/client image bakes, so the Orin joins the SAME mesh with the SAME
 # key-only SSH + device-license posture. ────────────────────────────
@@ -725,6 +935,13 @@ write_growfs_conf "${SYSROOT}/etc/growfs.conf"
 
 mkdir -p "${SYSROOT}/etc/headscale"
 cp "${SHARED_SPECS}/etc/headscale/config.yaml"   "${SYSROOT}/etc/headscale/config.yaml"
+# WS-SUPER-B: template the node's headscale MagicDNS suffix to the orchestration
+# superdomain so the baked config agrees with the KEYS/provision channel. "" = the
+# checked-in default (headnet.internal); provision.json stays authoritative at first boot.
+if [ -n "${SUPERDOMAIN}" ] && [ -f "${SYSROOT}/etc/headscale/config.yaml" ]; then
+    sed -i "s|^  base_domain: .*|  base_domain: ${SUPERDOMAIN}|" "${SYSROOT}/etc/headscale/config.yaml"
+    info "Templated headscale base_domain -> ${SUPERDOMAIN} (orchestration superdomain)"
+fi
 # Layer-A: bake the BOOTSTRAP policy AS the initial policy.hujson (same as
 # rpi5/x86/frite; the first verified Layer-A sync re-renders it).
 cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson" "${SYSROOT}/etc/headscale/policy.hujson"
@@ -816,12 +1033,24 @@ fi
 mkdir -p "${SYSROOT}/etc/snapdragon"
 echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
 echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
+# Orchestration superdomain (WS-SUPER-B): record the mesh plane the image joins.
+if [ -n "${SUPERDOMAIN}" ]; then
+    echo "${SUPERDOMAIN}" > "${SYSROOT}/etc/snapdragon/superdomain"
+    info "Baked orchestration superdomain -> /etc/snapdragon/superdomain (${SUPERDOMAIN})"
+fi
 echo "${ENV}"            > "${SYSROOT}/etc/snapdragon/env"
 echo "jetson:${JETSON_BOARD}" > "${SYSROOT}/etc/snapdragon/board"
 echo "${KERNEL_FLAVOR}"  > "${SYSROOT}/etc/snapdragon/kernel-flavor"
 if [ -n "${HEADSCALE_URL:-}" ]; then
     echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/snapdragon/headscale-url"
     info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/snapdragon/headscale-url"
+fi
+if ${STANDALONE}; then
+    # STANDALONE desktop: bake the marker so keys-provision skips all
+    # mesh-seeking no-ops and a normal LOCAL USER logs in with the build-set
+    # password (mirrors build-x86-host-stage4.sh).
+    echo "true" > "${SYSROOT}/etc/snapdragon/standalone"
+    info "Standalone desktop: local user '${DEFAULT_USER}', no mesh."
 fi
 rebrand_sysroot
 
@@ -951,10 +1180,36 @@ if [ "${DESKTOP}" = "light" ]; then
     mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
         grep -v '^\s*#' "${SPECS_DIR}/portage/packages-desktop.list" | grep -v '^\s*$')
 fi
+if ${ENCRYPT_ROOT}; then
+    # sys-fs/lvm2 is NOT listed explicitly: sys-fs/cryptsetup unconditionally
+    # RDEPENDs on it (libdevmapper), so it is already pulled in transitively —
+    # same minimal-conditional-package convention as build-rpi5-stage4.sh /
+    # build-frite-stage4.sh's --encrypt-root package blocks.
+    info "--encrypt-root — appending cryptsetup/dracut (LUKS2 root + disk-boot initramfs; lvm2 pulled in transitively via cryptsetup)"
+    STAGE4_PACKAGES+=(sys-fs/cryptsetup sys-kernel/dracut)
+fi
 if [ -n "${EXTRA_PACKAGES}" ]; then
     read -ra _extras <<< "${EXTRA_PACKAGES}"
     STAGE4_PACKAGES+=("${_extras[@]}")
     info "Extra packages: ${EXTRA_PACKAGES}"
+fi
+# User package deltas (--packages-add / --packages-drop): adds appended, drops
+# filtered from the resolved set (validated + mandatory-floor-checked up front).
+if [ -n "${PACKAGES_ADD}" ]; then
+    read -ra _padd <<< "${PACKAGES_ADD}"
+    STAGE4_PACKAGES+=("${_padd[@]}")
+    info "Added packages (--packages-add): ${PACKAGES_ADD}"
+fi
+if [ -n "${PACKAGES_DROP}" ]; then
+    read -ra _pdrop <<< "${PACKAGES_DROP}"
+    _kept=()
+    for _p in "${STAGE4_PACKAGES[@]}"; do
+        _skip=false
+        for _d in "${_pdrop[@]}"; do [ "${_p}" = "${_d}" ] && { _skip=true; break; }; done
+        ${_skip} || _kept+=("${_p}")
+    done
+    STAGE4_PACKAGES=("${_kept[@]}")
+    info "Dropped packages (--packages-drop): ${PACKAGES_DROP}"
 fi
 [ -s "${SPECS_DIR}/portage/packages.list" ] || { err "packages.list is empty/missing: ${SPECS_DIR}/portage/packages.list"; exit 1; }
 [ "${#STAGE4_PACKAGES[@]}" -gt 0 ] || { err "no stage4 packages resolved from the package lists — refusing to build a payload-less image."; exit 1; }
@@ -981,6 +1236,9 @@ if [ "${ROLE_K8S}" != "none" ]; then
 fi
 if [ "${DESKTOP}" = "light" ]; then
     REQUIRED_BINS+=(Xorg openbox lxsession pcmanfm lightdm)
+fi
+if ${ENCRYPT_ROOT}; then
+    REQUIRED_BINS+=(cryptsetup dracut)
 fi
 payload_missing=""
 for _b in "${REQUIRED_BINS[@]}"; do
@@ -1063,17 +1321,28 @@ else
         pushd "${KERNEL_SRC}" >/dev/null
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" "${JETSON_DEFCONFIG}"
         # merge_config.sh handles Kconfig dependency resolution (same mechanism
-        # as the Frite builder). Two fragments: fleet posture, then Tegra SoC.
+        # as the Frite builder). Two fragments always; a third (LUKS2 crypt)
+        # ONLY for --encrypt-root, so a plain build never carries the extra
+        # kernel-config surface.
+        _kernel_fragments=("${SPECS_DIR}/kernel/hardened-node.config" "${SPECS_DIR}/kernel/tegra234.config")
+        ${ENCRYPT_ROOT} && _kernel_fragments+=("${SPECS_DIR}/kernel/luks-crypt.config")
         ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" \
-            bash scripts/kconfig/merge_config.sh -m .config \
-                "${SPECS_DIR}/kernel/hardened-node.config" \
-                "${SPECS_DIR}/kernel/tegra234.config"
+            bash scripts/kconfig/merge_config.sh -m .config "${_kernel_fragments[@]}"
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" olddefconfig
         # Refuse to ship a kernel that silently lost SELinux (fleet posture guard).
         for must in CONFIG_SECURITY_SELINUX CONFIG_SECURITY_SELINUX_BOOTPARAM; do
             grep -q "^${must}=y" .config || { err "SELinux kernel option ${must} not enabled after olddefconfig"; exit 1; }
         done
         grep -q '^CONFIG_LSM="yama,selinux,bpf"$' .config || { err "CONFIG_LSM malformed (expected yama,selinux,bpf)"; exit 1; }
+        # Refuse to ship a kernel that silently lost LUKS2/dm-crypt support for
+        # --encrypt-root builds (CONFIG_MD/BLK_DEV_DM/DM_CRYPT depend on each
+        # other transitively — a --defconfig override lacking CONFIG_MD would
+        # otherwise drop them with no build-time signal).
+        if ${ENCRYPT_ROOT}; then
+            for must in CONFIG_MD CONFIG_BLK_DEV_DM CONFIG_DM_CRYPT; do
+                grep -q "^${must}=y" .config || { err "--encrypt-root requires ${must}=y but it did not survive olddefconfig (check --defconfig)"; exit 1; }
+            done
+        fi
         JETSON_KVER="$(make -s ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" kernelrelease 2>/dev/null | tail -1)"
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" -j"${JOBS}" Image modules dtbs
         make ARCH=arm64 CROSS_COMPILE="${CROSS_TARGET}-" INSTALL_MOD_PATH="${SYSROOT}" modules_install
@@ -1089,6 +1358,110 @@ else
         fi
         popd >/dev/null
         info "Kernel build complete (Image + nvidia/tegra234 DTBs staged under /boot)."
+    fi
+fi
+
+# ── LUKS2 root disk-boot initramfs (--encrypt-root) ─────────────────────────
+# The Orin boots initrd-less today (boot-critical Tegra drivers are =y in the
+# fragments) — --encrypt-root needs one to unlock the LUKS2 root before that
+# root= is mounted. Generic (--no-hostonly) with the dracut "crypt" module,
+# staged at ${SYSROOT}/boot/disk-initrd.img. Same proven 3-strategy cross-build
+# fallback as build-frite-stage4.sh/build-rpi5-stage4.sh's
+# build_disk_initramfs() (qemu-chroot / host-sh dracut / host dracut binary) —
+# ported here since this is the FIRST time this board needs an initramfs at all.
+JETSON_DISK_INITRD=""        # set non-empty once the disk-boot initramfs is staged
+build_disk_initramfs() {
+    [ -f "${SYSROOT}/boot/${JETSON_KERNEL_IMG}" ] || {
+        warn "no kernel in sysroot boot — cannot build the disk-boot initramfs; an --encrypt-root build would NOT boot."
+        return 1; }
+    local kver="${JETSON_KVER}"
+    if [ -z "${kver}" ] || [ ! -d "${SYSROOT}/lib/modules/${kver}" ]; then
+        kver="$(find "${SYSROOT}/lib/modules" -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
+    fi
+    [ -n "${kver}" ] && [ -d "${SYSROOT}/lib/modules/${kver}" ] || {
+        warn "no module tree under ${SYSROOT}/lib/modules — cannot build the disk-boot initramfs; an --encrypt-root build would NOT boot."
+        return 1; }
+
+    local out="${SYSROOT}/boot/disk-initrd.img"
+    info "Generating disk-boot initramfs (dracut --add crypt, kver=${kver}) ..."
+
+    local sysroot_dracut="${SYSROOT}/usr/bin/dracut"
+
+    # ── Strategy 1: qemu-chroot (correct for cross-builds) ─────────────────────
+    local _qemu_interp
+    _qemu_interp="$(grep '^interpreter' /proc/sys/fs/binfmt_misc/qemu-aarch64 2>/dev/null | awk '{print $2}')"
+    if [ -n "${_qemu_interp}" ] && [ -x "${_qemu_interp}" ] && [ -x "${sysroot_dracut}" ]; then
+        local _mounts=() _qemu_staged=false
+        _jetson_disk_umount() {
+            local m
+            for m in "${_mounts[@]}"; do umount -l "${m}" 2>/dev/null || true; done
+            ${_qemu_staged} && rm -f "${SYSROOT}${_qemu_interp}" 2>/dev/null || true
+        }
+        trap '_jetson_disk_umount' RETURN
+        mkdir -p "${SYSROOT}/proc" "${SYSROOT}/sys" "${SYSROOT}/dev"
+        mount --bind /proc "${SYSROOT}/proc" && _mounts+=("${SYSROOT}/proc") || true
+        mount --bind /sys  "${SYSROOT}/sys"  && _mounts+=("${SYSROOT}/sys")  || true
+        mount --bind /dev  "${SYSROOT}/dev"  && _mounts+=("${SYSROOT}/dev")  || true
+        mkdir -p "${SYSROOT}$(dirname "${_qemu_interp}")"
+        if cp "${_qemu_interp}" "${SYSROOT}${_qemu_interp}" 2>/dev/null; then
+            _qemu_staged=true
+        else
+            warn "Could not stage qemu interpreter into sysroot; chroot may fail."
+        fi
+        info "Running dracut via qemu-chroot (kver=${kver}) ..."
+        # Capture into a var first, THEN head — piping the chroot directly into
+        # `head -60` under pipefail risks SIGPIPE-killing dracut mid-generation
+        # if it logs more than 60 lines (routine in a minimal cross-arch
+        # sysroot), truncating a run that would otherwise have succeeded.
+        _dracut_out="$(chroot "${SYSROOT}" /usr/bin/dracut --force --no-hostonly \
+            --add crypt --kver "${kver}" /boot/disk-initrd.img 2>&1)"
+        printf '%s\n' "${_dracut_out}" | head -60
+        if [ -s "${SYSROOT}/boot/disk-initrd.img" ]; then
+            JETSON_DISK_INITRD="${out}"
+            _jetson_disk_umount; trap - RETURN
+            info "Disk-boot initramfs staged (qemu-chroot): ${out} ($(du -h "${out}" | cut -f1))"
+            return 0
+        fi
+        warn "qemu-chroot dracut did not produce a disk-boot initramfs; falling back."
+        _jetson_disk_umount; trap - RETURN
+    fi
+
+    # ── Strategy 2: run the sysroot dracut script on the host sh ───────────────
+    if [ -x "${sysroot_dracut}" ] && command -v sh >/dev/null; then
+        sh "${sysroot_dracut}" --force --no-hostonly \
+            --add crypt --kver "${kver}" --kmoddir "${SYSROOT}/lib/modules/${kver}" \
+            "${out}" 2>/dev/null && [ -s "${out}" ] && {
+                JETSON_DISK_INITRD="${out}"
+                info "Disk-boot initramfs staged (host-sh dracut): ${out} ($(du -h "${out}" | cut -f1))"
+                return 0; }
+        warn "sysroot dracut (host-sh) did not produce a disk-boot initramfs; trying host dracut."
+    fi
+    if command -v dracut >/dev/null; then
+        dracut --force --no-hostonly \
+            --add crypt --kver "${kver}" --kmoddir "${SYSROOT}/lib/modules/${kver}" \
+            "${out}" 2>/dev/null && [ -s "${out}" ] && {
+                JETSON_DISK_INITRD="${out}"
+                info "Disk-boot initramfs staged (host dracut): ${out} ($(du -h "${out}" | cut -f1))"
+                return 0; }
+    fi
+    warn "Could not generate the disk-boot initramfs (no usable dracut). An"
+    warn "--encrypt-root build would be UNBOOTABLE without it."
+    return 1
+}
+if ${ENCRYPT_ROOT}; then
+    if ${SKIP_KERNEL}; then
+        # --skip-kernel/--image-only doesn't regenerate the initramfs, but an
+        # existing disk-initrd.img from a prior run of this same sysroot still
+        # counts — the HARD REQUIREMENT below must still be enforced either way
+        # (previously this whole block, including the fail-closed assert, was
+        # skipped under --skip-kernel — silently shipping an unbootable image).
+        [ -s "${SYSROOT}/boot/disk-initrd.img" ] && JETSON_DISK_INITRD="${SYSROOT}/boot/disk-initrd.img"
+    else
+        build_disk_initramfs || true
+    fi
+    if [ -z "${JETSON_DISK_INITRD}" ] || [ ! -s "${JETSON_DISK_INITRD}" ]; then
+        err "--encrypt-root requires the disk-boot initramfs at ${SYSROOT}/boot/disk-initrd.img (see warnings above) — refusing to build a payload that cannot boot an encrypted root. (--skip-kernel/--image-only do not regenerate it; run once without --skip-kernel first, or --resume onto a sysroot that already has it.)"
+        exit 1
     fi
 fi
 
@@ -1112,6 +1485,71 @@ APPEND_BASE="$(cat "${SPECS_DIR}/boot/cmdline.base")"
 mkdir -p "${SYSROOT}/boot/extlinux"
 JETSON_INITRD_LINE="    # (initrd-less: boot-critical Tegra drivers are built in)"
 JETSON_APPEND="${APPEND_BASE} root=LABEL=JETSON_ROOT"
+
+# ── LUKS2 root (--encrypt-root): unlike x86/Frite/RPi5's install-time model,
+# the LUKS UUID is CHOSEN HERE (not discovered from a formatted partition
+# afterward) — build_img() below formats the container with --uuid="${LUKS_UUID}"
+# later, so the extlinux cmdline and /etc/crypttab are correct on first render;
+# no post-hoc sed rewrite of a baked file is needed at all. ────────────────
+LUKS_UUID=""
+LUKS_PASS_GENERATED=false
+if ${ENCRYPT_ROOT}; then
+    if command -v uuidgen >/dev/null 2>&1; then
+        LUKS_UUID="$(uuidgen)"
+    elif [ -r /proc/sys/kernel/random/uuid ]; then
+        LUKS_UUID="$(cat /proc/sys/kernel/random/uuid)"
+    else
+        err "--encrypt-root needs uuidgen (sys-apps/util-linux) or /proc/sys/kernel/random/uuid on the build host"
+        exit 1
+    fi
+    # Guard against a broken/shimmed uuidgen (or truncated /proc read) that
+    # exits 0 but yields an empty or malformed string — this UUID gets baked
+    # into the cmdline, /etc/crypttab, AND cryptsetup's --uuid= with no other
+    # checkpoint before it's used.
+    if [[ ! "${LUKS_UUID}" =~ ^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$ ]]; then
+        err "generated LUKS UUID is empty or malformed: '${LUKS_UUID}'"
+        exit 1
+    fi
+    if [ -z "${LUKS_PASS}" ]; then
+        # Bake-time passphrase generation (unlike LOCAL_PASSHASH's first-boot
+        # mint): the LUKS container must be formatted with a real passphrase
+        # NOW, so there is no later boot-time point to defer this to. Printed
+        # ONCE at the end of the build; change it on the target via
+        # `cryptsetup luksChangeKey` at first real login.
+        if command -v openssl >/dev/null 2>&1; then
+            LUKS_PASS="$(openssl rand -base64 18)"
+        else
+            LUKS_PASS="$(head -c 18 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)"
+        fi
+        LUKS_PASS_GENERATED=true
+    fi
+    # rd.luks.name=<uuid>=cryptroot is REQUIRED alongside rd.luks.uuid=: with
+    # no /etc/crypttab baked into the disk-boot initramfs itself (dracut is
+    # run --no-hostonly, before this SYSROOT's own /etc/crypttab write below is
+    # even relevant to it), dracut's crypt module would otherwise default the
+    # mapper name to 'luks-<uuid>', not 'cryptroot' — root= would never resolve.
+    JETSON_APPEND="${APPEND_BASE} root=/dev/mapper/cryptroot rd.luks.uuid=${LUKS_UUID} rd.luks.name=${LUKS_UUID}=cryptroot"
+    # Belt-and-suspenders: the ONLY place that generates/validates this file is
+    # the SKIP_KERNEL-gated block above — re-check its existence right here so
+    # a reused/--image-only sysroot that never actually built one still fails
+    # loudly instead of rendering a boot config that points at nothing.
+    [ -s "${SYSROOT}/boot/disk-initrd.img" ] || {
+        err "--encrypt-root: ${SYSROOT}/boot/disk-initrd.img is missing — the sysroot was never built/validated with the disk-boot initramfs (e.g. --image-only reusing a pre-encrypt-root sysroot). Rebuild without --image-only/--skip-kernel first."
+        exit 1
+    }
+    JETSON_INITRD_LINE="    INITRD /boot/disk-initrd.img"
+    # crypttab: unlock 'cryptroot' from the LUKS partition at boot (passphrase
+    # prompt via the disk-boot initramfs — no keyfile factor on this platform
+    # yet). Written here (not after mkfs/extraction in build_img()) since the
+    # UUID is already known — it flows into the image via build_img()'s own
+    # tar-pipe of this SYSROOT, same as every other file under /etc.
+    printf 'cryptroot UUID=%s none luks\n' "${LUKS_UUID}" > "${SYSROOT}/etc/crypttab"
+    chmod 0600 "${SYSROOT}/etc/crypttab"
+else
+    # Belt-and-suspenders for --resume sysroots: remove a stale /etc/crypttab
+    # left behind by a prior --encrypt-root build of this same sysroot.
+    rm -f "${SYSROOT}/etc/crypttab"
+fi
 render_template "${SPECS_DIR}/boot/extlinux.conf.tmpl" "${SYSROOT}/boot/extlinux/extlinux.conf"
 if [ ! -f "${SYSROOT}/boot/${JETSON_KERNEL_IMG}" ]; then
     warn "Kernel ${JETSON_KERNEL_IMG} not in sysroot /boot — the image will not boot until one is added."
@@ -1135,6 +1573,7 @@ build_img() {
     # scans exactly this layout on microSD/NVMe/USB. growroot expands the root
     # to the medium on first boot.
     [ -f "${SYSROOT}/boot/${JETSON_KERNEL_IMG}" ] || {
+        ${ENCRYPT_ROOT} && { err "no kernel in sysroot /boot — cannot build the .img required by --encrypt-root (the only artifact this platform produces)"; exit 1; }
         warn "no kernel in sysroot /boot — skipping the .img (stage4 is still usable via TEGRAFLASH.md layering)."
         IMG_PATH="(not built — kernel missing)"; return 0; }
 
@@ -1148,20 +1587,56 @@ build_img() {
         set 1 boot off
 
     local loopdev
-    loopdev="$(losetup -Pf --show "${IMG_PATH}")" || { warn "losetup failed — leaving the .img unpopulated"; IMG_PATH="(not built — losetup failed)"; return 0; }
-    # Ensure the loop device is detached on every exit path from here on.
+    loopdev="$(losetup -Pf --show "${IMG_PATH}")" || {
+        ${ENCRYPT_ROOT} && { err "losetup failed — cannot build the .img required by --encrypt-root"; exit 1; }
+        warn "losetup failed — leaving the .img unpopulated"; IMG_PATH="(not built — losetup failed)"; return 0; }
+    # Ensure the loop device (and, for --encrypt-root, the LUKS mapping) are
+    # torn down on every exit path from here on. RETURN alone is NOT enough:
+    # bash's RETURN trap only fires on an explicit `return`/normal fallthrough,
+    # NOT when a later unguarded command in this function (mkfs.ext4, mount,
+    # the tar-pipe, ...) trips `set -e` — ERR is required to actually catch
+    # that case and close the LUKS mapping / detach the loop device instead of
+    # leaking both on the build host.
     _jetson_img_cleanup() {
+        # Disarm first so this can only ever run once, whether we get here via
+        # a normal return, an early `return 0`, or an errexit-triggered abort —
+        # traps are not function-scoped in bash, so leaving it armed would let
+        # an unrelated later failure re-invoke this with out-of-scope locals.
+        trap - RETURN ERR
         mountpoint -q "${STAGE_DIR}/imgroot" 2>/dev/null && umount "${STAGE_DIR}/imgroot" 2>/dev/null || true
+        ${ENCRYPT_ROOT} && { cryptsetup close cryptroot 2>/dev/null || true; }
         [ -n "${loopdev}" ] && losetup -d "${loopdev}" 2>/dev/null || true
     }
-    trap '_jetson_img_cleanup' RETURN
+    trap '_jetson_img_cleanup' RETURN ERR
 
     local part="${loopdev}p1"
     [ -b "${part}" ] || { sleep 1; partprobe "${loopdev}" 2>/dev/null || true; }
-    [ -b "${part}" ] || { warn "partition ${part} did not appear — leaving the .img unpopulated"; IMG_PATH="(not built — no loop partition)"; return 0; }
-    mkfs.ext4 -q -L JETSON_ROOT "${part}"
+    [ -b "${part}" ] || {
+        ${ENCRYPT_ROOT} && { err "partition ${part} did not appear — cannot build the .img required by --encrypt-root"; exit 1; }
+        warn "partition ${part} did not appear — leaving the .img unpopulated"; IMG_PATH="(not built — no loop partition)"; return 0; }
+
+    local root_dev="${part}"
+    if ${ENCRYPT_ROOT}; then
+        info "Creating LUKS2 container on ${part} (uuid=${LUKS_UUID})"
+        # cryptsetup's argon2id PBKDF auto-benchmark calibrates cost to whatever
+        # host runs THIS builder — but that is never the machine that unlocks
+        # the root (the Orin itself, at every future boot). Pin explicit,
+        # bounded cost parameters instead of inheriting a cost tuned to a fast
+        # cross-build host and paid at every boot by the weaker target.
+        printf '%s' "${LUKS_PASS}" | cryptsetup luksFormat --type luks2 --uuid="${LUKS_UUID}" \
+            --cipher aes-xts-plain64 --key-size 512 --hash sha512 --pbkdf argon2id \
+            --pbkdf-memory 262144 --iter-time 2000 --pbkdf-parallel 4 \
+            --batch-mode "${part}" -
+        # Clear a stale 'cryptroot' mapping left by a prior interrupted run —
+        # otherwise this open fails with cryptsetup's native "Device cryptroot
+        # already exists."
+        cryptsetup close cryptroot 2>/dev/null || true
+        printf '%s' "${LUKS_PASS}" | cryptsetup open "${part}" cryptroot -
+        root_dev="/dev/mapper/cryptroot"
+    fi
+    mkfs.ext4 -q -L JETSON_ROOT "${root_dev}"
     mkdir -p "${STAGE_DIR}/imgroot"
-    mount "${part}" "${STAGE_DIR}/imgroot"
+    mount "${root_dev}" "${STAGE_DIR}/imgroot"
     info "Populating the root filesystem from the sysroot ..."
     tar -C "${SYSROOT}" --xattrs-include='*.*' --numeric-owner -cpf - \
         --exclude='./usr/src' --exclude='./var/cache/distfiles' --exclude='./tmp/*' . \
@@ -1171,8 +1646,14 @@ build_img() {
         | tar -C "${STAGE_DIR}/imgroot" --numeric-owner -xpf -
     sync
     umount "${STAGE_DIR}/imgroot"
+    # Close the LUKS mapping only AFTER unmounting — cryptsetup close fails (and
+    # would leave the mapper device dangling) if the filesystem on top is still
+    # mounted. Suppressed/non-fatal: a transient 'device busy' right after
+    # umount (dm-crypt holders/udev not yet released) shouldn't abort a
+    # successful build.
+    ${ENCRYPT_ROOT} && { cryptsetup close cryptroot 2>/dev/null || true; }
     losetup -d "${loopdev}"; loopdev=""
-    trap - RETURN
+    trap - RETURN ERR
     info "Raw image: ${IMG_PATH} ($(du -sh "${IMG_PATH}" | cut -f1))"
     if ${COMPRESS_IMG}; then
         xz -T0 -9 -f "${IMG_PATH}"; IMG_PATH="${IMG_PATH}.xz"
@@ -1183,6 +1664,15 @@ build_img() {
 if ${BUILD_IMG}; then
     banner "Phase 5: Building the flashable raw .img (SD/NVMe)"
     build_img
+    # Belt-and-suspenders: catches ANY degrade-to-warn path inside build_img()
+    # (present and future) that lets IMG_PATH end up as a "(not built — ...)"
+    # placeholder instead of a real artifact — without this, a build could
+    # exit 0 and print a full success banner (including the LUKS passphrase
+    # disclosure below) while producing no image at all.
+    if ${ENCRYPT_ROOT} && [[ "${IMG_PATH}" != *.img && "${IMG_PATH}" != *.img.xz ]]; then
+        err "--encrypt-root requires a built .img but none was produced (IMG_PATH=${IMG_PATH}) — refusing to report success."
+        exit 1
+    fi
 else
     banner "Phase 5: SKIPPED .img (--no-img)"
 fi
@@ -1216,6 +1706,22 @@ echo "         a current Orin devkit UEFI distro-boots /boot/extlinux/extlinux.c
 echo "  QSPI / L4T+CUDA: out-of-band recovery-mode tegraflash — see"
 echo "         specs-jetson/installer/TEGRAFLASH.md."
 echo ""
+if ${ENCRYPT_ROOT}; then
+    echo -e "  ${YELLOW}${BOLD}Root is LUKS2-encrypted — boot will prompt for the passphrase.${RESET}"
+    if ${LUKS_PASS_GENERATED}; then
+        # Written to fd 3 (the pre-tee terminal fd saved before "exec >
+        # >(tee -a "${LOG_FILE}")" was installed), NOT the tee'd stdout every
+        # other echo/info in this script goes through — a plain echo here
+        # would also land in build.log, directly contradicting "does not
+        # persist it anywhere".
+        echo -e "  ${RED}${BOLD}Generated LUKS passphrase (shown ONCE — this build does not persist it" >&3
+        echo -e "  anywhere): ${LUKS_PASS}${RESET}" >&3
+        echo "  Record it now. Change it after first boot: cryptsetup luksChangeKey <root-partition>." >&3
+        echo -e "  ${RED}${BOLD}(passphrase redacted from build.log; see terminal scrollback only)${RESET}"
+    fi
+    echo ""
+fi
+unset LUKS_PASS
 echo -e "  ${YELLOW}${BOLD}REMINDER: EXPERIMENTAL — no physical Orin has booted this image yet."
 echo -e "  Validate on hardware before shipping (specs-jetson/README.md).${RESET}"
 echo ""

@@ -17,7 +17,7 @@
 # (runs as uid 101, listens on :8080 — no root, no NET_BIND privilege) and bakes the
 # Angular `dist/` remote (remoteEntry.json + chunks). The image placeholder below
 # (snapdragon-systems/character-studio-ui) is rewritten by the kustomization `images:`
-# transform to the in-cluster GitLab registry tag, matching the user-ui/wiki-ui shape.
+# transform to the in-cluster Harbor registry tag, matching the user-ui/wiki-ui shape.
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -38,8 +38,11 @@ spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
       securityContext:
         seLinuxOptions:
+          # Unique MCS level (docs/SECURITY.md §3 matrix); character-studio -> c74.
+          # Was c47, a PRE-EXISTING collision with user-ui (s0:c47); moved to the
+          # next free category above the current max.
           type: container_t
-          level: "s0:c47"
+          level: "s0:c74"
       containers:
         - name: web
           # PLACEHOLDER image (rewritten by kustomization images: transform). The base

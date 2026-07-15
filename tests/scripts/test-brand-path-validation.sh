@@ -189,5 +189,28 @@ else
 fi
 
 echo ""
+# render-handlebars.sh (opt-in `--engine handlebars`) must apply the SAME brand-scalar guards
+# as the default sed engine (generate-brand-repos.sh), else a hostile CLUSTER_DOMAIN injects
+# into the noEscape:true gateway route/host render. The script's own node/handlebars-installed
+# check precedes its guards, so drive the extracted guard block directly (the guards are what we
+# assert are present + fail-closed).
+echo "-- render-handlebars.sh brand-scalar guards (parity with the sed engine) --"
+RH="${REPO}/scripts/tooling/render-handlebars.sh"
+if [ -r "${RH}" ] && grep -q '_hbdie' "${RH}"; then
+  awk '/^_DNS_LABEL=/{f=1} f{print} /must be single-line/{c++} c&&/^fi$/{exit}' "${RH}" > "${W}/rhguards.sh"
+  ( BRAND=acme BRAND_TITLE=Acme ORG=acme HEADSCALE_URL= MESH_TAG=; CLUSTER_DOMAIN=$'evil.com\n  extraHosts: [x]'
+    source "${W}/rhguards.sh" ) >"${W}/ro" 2>"${W}/re"
+  [ $? -ne 0 ] && grep -q "invalid CLUSTER_DOMAIN" "${W}/re" \
+    && ok "render-handlebars newline CLUSTER_DOMAIN rejected (parity with sed engine)" \
+    || bad "render-handlebars newline CLUSTER_DOMAIN ACCEPTED (opt-in engine still injectable)"
+  ( BRAND=snapdragon BRAND_TITLE=Snapdragon ORG=snapdragon CLUSTER_DOMAIN=snapdragon.systems \
+    HEADSCALE_URL= MESH_TAG=; source "${W}/rhguards.sh" ) >"${W}/ro2" 2>"${W}/re2"
+  [ $? -eq 0 ] && ok "render-handlebars legit brand accepted" \
+    || bad "render-handlebars legit brand REJECTED: $(cat "${W}/re2")"
+else
+  bad "render-handlebars.sh brand-scalar guards not found (the injection fix is missing)"
+fi
+
+echo ""
 echo "== brand path-validation regression: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

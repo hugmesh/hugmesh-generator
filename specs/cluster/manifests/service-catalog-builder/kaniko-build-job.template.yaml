@@ -76,7 +76,7 @@ spec:
             - "--reproducible"
             - "--single-snapshot"
             - "--use-new-run"
-            # No-push-to-cache; the registry is the in-cluster GitLab registry, creds
+            # No-push-to-cache; the registry is the in-cluster Harbor registry, creds
             # mounted below at /kaniko/.docker (ESO-materialized, NEVER in git).
             - "--cache=false"
           env:
@@ -91,7 +91,7 @@ spec:
             requests: { cpu: "500m", memory: "1Gi" }
             limits:   { cpu: "2",    memory: "4Gi" }
           volumeMounts:
-            # Registry push credentials (the in-cluster GitLab registry pull/push secret,
+            # Registry push credentials (the in-cluster Harbor registry pull/push secret,
             # ESO-materialized into the build namespace as a dockerconfigjson). Read-only.
             - name: docker-config
               mountPath: /kaniko/.docker

@@ -7,8 +7,9 @@
 #
 # The output directory will contain a directory named <BRAND>-gitops/ with all
 # rendered Application CRDs under apps/. Push that directory to GitLab and the
-# ArgoCD ApplicationSet (specs/cluster/apps/00-app-of-apps-waved.yaml) will pick
-# it up once registered.
+# ArgoCD app-of-apps root Application (specs/cluster/apps/00-app-of-apps-waved.yaml
+# — a plain directory.recurse Application named snapdragon-root-waved, NOT an
+# ApplicationSet) will pick it up once registered.
 #
 # No external tools required beyond bash + sed + git.
 
@@ -25,11 +26,19 @@ fi
 
 BRAND_CONF="$1"
 OUT_DIR="./out"
+# ENGINE: sed (DEFAULT, unchanged behavior — no external tools) | handlebars
+# (opt-in; delegates to the REAL Handlebars renderer under scripts/tooling/,
+# proven byte-identical to sed by scripts/parity-gate.sh). BUILD-HOST ONLY —
+# the handlebars path needs Node, which must NOT run as root on the mesh-node
+# cron path (see docs/MESH-TEMPLATING.md).
+ENGINE="sed"
 
 shift
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --out-dir) OUT_DIR="$2"; shift 2 ;;
+    --engine) ENGINE="$2"; shift 2 ;;
+    --engine=*) ENGINE="${1#*=}"; shift ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -38,6 +47,15 @@ if [[ ! -f "$BRAND_CONF" ]]; then
   echo "Brand config not found: $BRAND_CONF" >&2
   exit 1
 fi
+
+# Opt-in Handlebars path: delegate to the wrapper and return. The DEFAULT sed
+# path below is untouched.
+case "$ENGINE" in
+  sed) : ;;
+  handlebars)
+    exec "${SCRIPT_DIR}/scripts/tooling/render-handlebars.sh" "$BRAND_CONF" --out-dir "$OUT_DIR" ;;
+  *) echo "Unknown --engine '$ENGINE' (want: sed | handlebars)" >&2; exit 1 ;;
+esac
 
 # ── Load brand config ─────────────────────────────────────────────────────────
 # shellcheck source=/dev/null
@@ -71,6 +89,13 @@ _die() { echo "[generate-brand-repos] FATAL: $*" >&2; exit 1; }
 # CLUSTER_DOMAIN: full DNS name (e.g. snapdragon.systems).
 [[ "$CLUSTER_DOMAIN" =~ $_DNS_NAME ]] \
   || _die "invalid CLUSTER_DOMAIN '${CLUSTER_DOMAIN}' (must be a DNS name)"
+# RELEASE_STATE: "internal" (DEFAULT, LAN/tailnet-only) or "public" (internet-
+# facing) — gates the ingress-class/NetworkPolicy posture baked by gate_env_apps()
+# and the host nftables firewall in the build-*-stage4.sh scripts. public makes
+# no sense paired with a non-routable *.test/*.internal CLUSTER_DOMAIN.
+if [[ "${RELEASE_STATE:-internal}" == "public" && "$CLUSTER_DOMAIN" =~ \.(test|internal)$ ]]; then
+  _die "invalid RELEASE_STATE 'public' with CLUSTER_DOMAIN '${CLUSTER_DOMAIN}' (a *.test/*.internal domain is not public-routable; use RELEASE_STATE=internal or set a real CLUSTER_DOMAIN)"
+fi
 # MESH_TAG: headscale ACL tag form 'tag:<slug>'.
 _RE_MESH='^tag:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
 [[ "$MESH_TAG" =~ $_RE_MESH ]] \
@@ -87,6 +112,15 @@ _RE_URL='^https?://[A-Za-z0-9._~:/?#@!$()*,=%+-]+$'
 case "$BRAND_TITLE" in
   *['"\$`|&']* ) _die "invalid BRAND_TITLE (forbidden chars: \" \\ \$ \` | &)" ;;
 esac
+# SECOND-ORDER TEMPLATE-INJECTION guard (Phase 6, fuzz case a): the old char denylist
+# above bans sed/shell metachars but NOT braces, so a BRAND_TITLE like '{{HARBOR_PROJECT}}'
+# PASSES it and then gets RE-EXPANDED by a later -e in render_template (the {{BRAND_TITLE}}
+# substitution runs first, emitting the literal {{HARBOR_PROJECT}}, which the subsequent
+# {{HARBOR_PROJECT}} -e then rewrites) — a confused-token / injection primitive. Reject any
+# brace so no brand value can smuggle a template token into a second render pass.
+case "$BRAND_TITLE" in
+  *['{}']* ) _die "invalid BRAND_TITLE (braces '{' '}' are forbidden — no template-token injection)" ;;
+esac
 # Reject any newline (or other control char) — must be a single printable line.
 if [[ "$BRAND_TITLE" == *$'\n'* || "$BRAND_TITLE" == *$'\r'* ]]; then
   _die "invalid BRAND_TITLE (must be single-line)"
@@ -94,17 +128,45 @@ fi
 [[ "${#BRAND_TITLE}" -le 128 ]] || _die "BRAND_TITLE too long (max 128)"
 
 # ── Derived variables ─────────────────────────────────────────────────────────
-# GITLAB_GROUP: lowercase slug of ORG for GitLab paths (e.g. "Example-Inc" → "example-inc")
+# GITLAB_GROUP: lowercase slug of ORG for the tenant's OWN GitOps repo hosting
+# path (the org/group segment of the push URL — see the "Next steps" hint below).
+# NOTE (Phase 5): the *-gitops app-of-apps directory is now published to
+# tailnet-internal FORGEJO by the house auth idiom (scripts/publish-tenant-set.sh),
+# NOT to gitlab — the only working ApplicationSet reads Forgejo. The variable name
+# is retained for continuity but the value is just the org slug (unrelated to
+# container images; that is HARBOR_PROJECT below).
 GITLAB_GROUP="${ORG,,}"
 GITLAB_GROUP="${GITLAB_GROUP//[^a-z0-9-]/-}"
 # Strip leading/trailing hyphens and collapse runs
 GITLAB_GROUP="$(echo "$GITLAB_GROUP" | sed 's/^-*//; s/-*$//')"
+
+# HARBOR_PROJECT: same slugging as GITLAB_GROUP above, but for the {{HARBOR_PROJECT}}
+# template token — the Harbor PROJECT namespace first-party container images are
+# pushed/pulled under (newName: registry.{{CLUSTER_DOMAIN}}/{{HARBOR_PROJECT}}/...).
+# Deliberately a SEPARATE variable from GITLAB_GROUP even though they compute the
+# same value today: one names a GitLab hosting group, the other a Harbor registry
+# project — conflating them was the pre-migration naming (formerly {{GITLAB_GROUP}}
+# reused for both), renamed here so the two concerns can diverge independently.
+HARBOR_PROJECT="${ORG,,}"
+HARBOR_PROJECT="${HARBOR_PROJECT//[^a-z0-9-]/-}"
+HARBOR_PROJECT="$(echo "$HARBOR_PROJECT" | sed 's/^-*//; s/-*$//')"
+
+# NS_PREFIX: the tenant namespace prefix the brand-repo ApplicationSet
+# (templates/apps/13d-brand-repos.yaml.hbs) targets as destination.namespace.
+# This is the {{NS_PREFIX}} export field FINALLY getting a template slot (Phase 5).
+# Defaults to the BRAND slug; a brand profile may override by setting NS_PREFIX.
+# Validated as a DNS label so it is safe as a namespace name + sed replacement.
+NS_PREFIX="${NS_PREFIX:-$BRAND}"
+[[ "$NS_PREFIX" =~ $_DNS_LABEL ]] \
+  || _die "invalid NS_PREFIX '${NS_PREFIX}' (must be a DNS label: ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\$)"
 
 echo "[generate-brand-repos] Brand:         ${BRAND}"
 echo "[generate-brand-repos] Title:         ${BRAND_TITLE}"
 echo "[generate-brand-repos] Org:           ${ORG}"
 echo "[generate-brand-repos] Domain:        ${CLUSTER_DOMAIN}"
 echo "[generate-brand-repos] GitLab group:  ${GITLAB_GROUP}"
+echo "[generate-brand-repos] Harbor project: ${HARBOR_PROJECT}"
+echo "[generate-brand-repos] NS prefix:      ${NS_PREFIX}"
 echo "[generate-brand-repos] Headscale:     ${HEADSCALE_URL}"
 echo "[generate-brand-repos] Mesh tag:      ${MESH_TAG}"
 echo ""
@@ -132,8 +194,9 @@ render_template() {
     -e "s|{{BRAND_TITLE}}|$(_sed_rep_escape "${BRAND_TITLE}")|g" \
     -e "s|{{CLUSTER_DOMAIN}}|$(_sed_rep_escape "${CLUSTER_DOMAIN}")|g" \
     -e "s|{{HEADSCALE_URL}}|$(_sed_rep_escape "${HEADSCALE_URL}")|g" \
-    -e "s|{{GITLAB_GROUP}}|$(_sed_rep_escape "${GITLAB_GROUP}")|g" \
+    -e "s|{{HARBOR_PROJECT}}|$(_sed_rep_escape "${HARBOR_PROJECT}")|g" \
     -e "s|{{MESH_TAG}}|$(_sed_rep_escape "${MESH_TAG}")|g" \
+    -e "s|{{NS_PREFIX}}|$(_sed_rep_escape "${NS_PREFIX}")|g" \
     -e "s|{{BRAND}}|$(_sed_rep_escape "${BRAND}")|g" \
     -e "s|{{ORG}}|$(_sed_rep_escape "${ORG}")|g" \
     "$src" > "$dst"
@@ -166,7 +229,7 @@ while IFS= read -r -d '' tmpl; do
   render_template "$tmpl" "$out"
   echo "  rendered: ${out_rel}"
   rendered=$((rendered + 1))
-done < <(find "$TEMPLATES_DIR" -name "*.hbs" -print0 | sort -z)
+done < <(find "$TEMPLATES_DIR" \( -path "$TEMPLATES_DIR/repos" -o -path "$TEMPLATES_DIR/archetypes" \) -prune -o -name "*.hbs" -print0 | sort -z)
 
 # ── Copy non-template static files ───────────────────────────────────────────
 while IFS= read -r -d '' f; do
@@ -174,19 +237,24 @@ while IFS= read -r -d '' f; do
   dst="${BRAND_OUT}/${rel}"
   mkdir -p "$(dirname "$dst")"
   cp "$f" "$dst"
-done < <(find "$TEMPLATES_DIR" -not -name "*.hbs" -not -type d -print0)
+done < <(find "$TEMPLATES_DIR" \( -path "$TEMPLATES_DIR/repos" -o -path "$TEMPLATES_DIR/archetypes" \) -prune -o \( -not -name "*.hbs" -not -type d -print0 \))
 
 echo ""
 echo "[generate-brand-repos] Rendered ${rendered} templates → ${BRAND_OUT}"
 echo ""
+# NOTE (Phase 5): this thin <BRAND>-gitops/ tree is the app-of-apps CRD DIRECTORY
+# (12/13 ArgoCD Application CRDs, consumed by the directory.recurse root
+# 'snapdragon-root-waved'). It is a DIFFERENT mechanism from the per-app repos the
+# scmProvider brand-repo ApplicationSet (apps/13d-brand-repos.yaml) discovers —
+# do NOT conflate them. The per-app FULL trees come from render-tenant-set.sh and
+# are pushed to tailnet-internal FORGEJO by scripts/publish-tenant-set.sh (NOT
+# gitlab — the only working ApplicationSet reads Forgejo).
 echo "Next steps:"
 echo "  1. Review the output:  ls ${BRAND_OUT}/apps/"
-echo "  2. Init and push:"
-echo "     cd ${BRAND_OUT}"
-echo "     git init -b main"
-echo "     git add apps/"
-echo "     git commit -m 'Initial ${BRAND} GitOps — generated by snapdragon-generator'"
-echo "     git remote add origin https://gitlab.${CLUSTER_DOMAIN}/${GITLAB_GROUP}/${BRAND}-gitops.git"
-echo "     git push -u origin main"
-echo "  3. Register in ArgoCD: add an Application pointing at the ${BRAND}-gitops repo"
-echo "     or add it to the ApplicationSet source list once PR7 is merged."
+echo "  2. Publish the app-of-apps CRD directory to tailnet-internal FORGEJO"
+echo "     under the tenant org (git init -b main; add; commit; push to"
+echo "     \${FORGEJO_BASE_URL}/${GITLAB_GROUP}/${BRAND}-gitops.git via an"
+echo "     Authorization: token header — see scripts/publish-tenant-set.sh for the"
+echo "     house auth idiom). The app-of-apps root 'snapdragon-root-waved' picks it up."
+echo "  3. The per-APP FULL trees (render-tenant-set.sh) are published separately by"
+echo "     scripts/publish-tenant-set.sh and auto-discovered by apps/13d-brand-repos.yaml."

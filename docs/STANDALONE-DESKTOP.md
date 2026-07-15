@@ -7,16 +7,88 @@ a password set at build time, the **installed system is LUKS2 full-disk
 encrypted**, and an optional **separate data disk** (Steam library + a gocryptfs
 Vaults store) is auto-detected and mounted at `/media`.
 
-Two named variants, for each desktop weight:
+Three named variants:
 
 | Role | Weight | Desktop | Default GPU |
 |------|--------|---------|-------------|
 | `standalone-thin`  | thin | LXDE / openbox | NVIDIA proprietary |
 | `standalone-thick` | full | **most-capable KDE Plasma workstation** | NVIDIA proprietary |
+| `standalone-unaffiliated` | full (thick) | KDE Plasma — **ZERO Snapdragon affiliation** (see below) | free / open (`all-free`) |
 
 Each variant emits **all four artifacts**: a live ISO, the stage4 tarball, the
 `.fs.tar.xz` filesystem tarball, and an **installer ISO** (which writes a
 LUKS2-encrypted system to disk).
+
+## Unaffiliated plain desktop (`standalone-unaffiliated`)
+
+A **plain hardened Gentoo desktop with ZERO Snapdragon affiliation** — the
+thick/Plasma weight of the standalone posture, with every trace of the platform
+removed or neutralized. Nothing in the image names, brands, or phones home to
+Snapdragon:
+
+- **Neutral boot chain**: `GENTOO_LIVE` / `GENTOO_INSTALL` ISO volids,
+  `gentoo.efi` UKI (with a `gentoo.install=` cmdline key), `GENTOO_ESP` /
+  `GENTOO_ROOT` partition labels, neutral GRUB titles and Secure Boot cert
+  subject ("Gentoo Linux").
+- **Neutral installer / hostname / artifacts**: neutral installer UI text, a
+  "Gentoo Installer" desktop entry, default hostname `gentoo-desktop`, and
+  artifact filenames `gentoo-x86-amd64-standalone-unaffiliated-<env>-<ts>.*`.
+- **No `snapdragon-*` tools or markers** (no `/etc/snapdragon` tree at all),
+  **no bundled generator source**, **no k8s/mesh payload** (no
+  containerd/kubelet/headscale/tailscale, no cluster GitOps tree, no
+  keys-provision, no Casdoor SSO).
+
+### Quick start
+
+```sh
+make x86-standalone-unaffiliated STANDALONE_FLAGS='--local-user alice --local-pass s3cret'
+```
+
+The role **presets everything** — combine it only with generic options
+(`--local-user` / `--local-pass`, `--gpu-driver`, `--encrypt-root` + the
+keyfile/YubiKey unlock factors, `--compress`, `--resume`, …).
+
+### Composable: `--unaffiliated` on any client role
+
+The posture is also an orthogonal flag: `--unaffiliated` folds onto any
+desktop/client role (`laptop` / `chromebook` / `desktop` / `standalone-*`) and
+forces the standalone posture plus the neutral identity. It is refused on
+cluster-node roles (a cluster node is Snapdragon platform machinery by
+definition).
+
+### Hard conflicts (builder exits non-zero)
+
+Unaffiliated means *no affiliation at all* — every flag that would bake a brand
+identity, brand assets, Snapdragon source, or platform machinery into the image
+is a **hard error**, not a silent override:
+
+- **Brand identity**: `--brand` / `--brand-title` / `--org` — there is no brand,
+  not even an explicit `--brand gentoo`; the builder forces the neutral
+  identity itself.
+- **Branding assets**: `--theme`, `--branding-dir`, `--wallpaper`,
+  `--grub-background`, `--grub-theme`, `--login-background`, `--brand-logo`,
+  `--accent-color`, `--color-scheme`, `--brand-locked`.
+- **Platform machinery**: `--bundle-source`, `--home-seed-code`,
+  `--with-tailscale`, `--with-sso`, `--person-role` / `--domains`.
+
+### What survives, under neutral names
+
+The functional (non-affiliating) machinery is kept — renamed so nothing on the
+image says "snapdragon":
+
+| Snapdragon builds | Unaffiliated build |
+|---|---|
+| `snapdragon-home-setup` + `/etc/snapdragon/home.conf` | `home-setup` + `/etc/gentoo/home.conf` (same create/adopt/archive/restore + eCryptfs machinery) |
+| `snapdragon-media-detect` (default ON) | `media-detect` + `/etc/gentoo/media.conf` — **default OFF**; kept only with an explicit `--media-data` |
+| `snapdragon-installer-autostart` / `snapdragon-calamares-install` | `gentoo-installer-autostart` / `gentoo-calamares-install` (same live-session Calamares/ncurses/CLI installer bridge) |
+| LUKS2 FDE installer | unchanged — same installer, neutral UI text |
+| `SNAPDRAGON_LIVE` / `SNAPDRAGON_INSTALL` volids | `GENTOO_LIVE` / `GENTOO_INSTALL` |
+| `snapdragon.efi` UKI + `snapdragon.install=` cmdline key | `gentoo.efi` + `gentoo.install=` |
+
+Everything below this section (GPU drivers, local user, FDE + unlock factors,
+Secure Boot, home provisioning, `--kernel-builtin`, QEMU verification) applies
+to the unaffiliated variant too, except where a flag is listed as a hard
+conflict above.
 
 ## Quick start
 
@@ -42,6 +114,14 @@ backgrounds / logo / accent / color scheme), home provisioning
 (`--installer-ui`), proxy/Snort/AIDE/`--kernel-builtin`/egress-VPN — and an
 **extra-builder-flags escape hatch** so any remaining CLI flag stays reachable
 without dropping to the shell.
+
+One menu default to know about: **branded** standalone builds from the ncurses
+menu start with `--theme boogiepop` preselected (the persisted `OPT_SA_THEME`
+default in `scripts/build-menu.sh`; pick **None** under "Branding theme" for
+the stock look), while the `standalone-unaffiliated` entry suppresses all
+theming (`--theme` is a hard conflict there, so the menu hides the option and
+never emits its persisted default). Direct `make` / CLI builds apply no theme
+unless you pass one — see the Desktop branding section below.
 
 Use the big scratch disk for the heavy build (namespaced; never touches portage's
 own dirs):
@@ -155,6 +235,103 @@ The posture is also available as orthogonal flags on the `laptop`/`chromebook`/
 
 See `build-x86-host-stage4.sh --help` for the full flag list.
 
+## ARM platforms (Frite, Raspberry Pi 5/4/3, Jetson, Orange Pi 5, Orange Pi Zero 2)
+
+`--standalone`/`--local-user`/`--local-pass`/`--encrypt-root` are **not x86-only**
+— every ARM builder **except Jetson** (see below) composes them onto its own
+desktop-shaped role the same way x86 does, via `--role desktop --standalone`:
+
+```sh
+./build-frite-stage4.sh    --board la-frite --standalone --encrypt-root \
+  --local-user alice --local-pass s3cret --flavor both
+./build-rpi5-stage4.sh     --role desktop --standalone --encrypt-root \
+  --local-user alice --local-pass s3cret                # add --board rpi4 | rpi3
+./build-orangepi5-stage4.sh --board orange-pi-5-plus --standalone --encrypt-root \
+  --local-user alice --local-pass s3cret --flavor both
+```
+
+`--standalone` cascades `SKIP_MESH=true SKIP_TAILSCALE=true` on every platform,
+exactly like x86 — no mesh/tailnet/Casdoor SSO dependency either way.
+
+### LUKS2 install model: cross-host vs. on-device
+
+Two genuinely different install stories, both real, both correct for their
+hardware:
+
+| Platform | Format happens on | Unlock happens on | PBKDF cost pinned? |
+|---|---|---|---|
+| x86 | the target itself (installer boots on it) | same | no |
+| Frite | the target itself (live→installer flow) | same | **no** |
+| Orange Pi 5 / 5 Plus | the target itself (live→installer flow) | same | **no** |
+| Orange Pi Zero 2 | the target itself (live→installer flow) | same | **no** |
+| RPi5 (rpi5/rpi4/rpi3 boards) | a **build/dev host**, writing the SD card/eMMC | **the Pi**, a different machine | **yes** — `--pbkdf-memory 262144 --iter-time 2000 --pbkdf-parallel 4` |
+| Jetson Orin | n/a — **`--encrypt-root` is blocked outright**, see below | n/a | n/a |
+
+The rule: `cryptsetup luksFormat`'s `argon2id` cost auto-benchmark measures
+*the machine running the format*. When that's also the machine that will
+later unlock the disk (Frite/Orange Pi 5/Orange Pi Zero 2's on-device
+live-then-install flow), the benchmark is trustworthy and pinning it would
+only make first-unlock slower for no security benefit. When format and unlock
+happen on **different** hardware (RPi5's installer runs on a dev host writing
+media the Pi itself will later boot), an unpinned benchmark tunes the KDF cost
+to the *wrong* machine — so RPi5 pins fixed, cross-platform-safe cost
+parameters instead.
+
+### Jetson: `--encrypt-root` is BLOCKED — a confirmed boot-chain break, not a deferred gap
+
+Unlike every other platform, Jetson has **no live/installer split at all**
+AND **no separate boot partition** — `build_img()` writes a single ext4
+partition (`JETSON_ROOT`) that holds the *entire* filesystem, including
+`/boot/extlinux/extlinux.conf`. The Orin's NVIDIA UEFI (`L4TLauncher`)
+distro-boots that file by reading it directly off the raw partition, before
+Linux or dracut ever run (`specs-jetson/boot/README.md`). LUKS2-encrypting
+that single partition would make the firmware unable to parse a filesystem
+there at all — it could never even locate a kernel to boot, regardless of
+how correct the rest of the LUKS/dracut plumbing is. Every other platform in
+this repo (RPi5/Frite/Orange Pi 5/Orange Pi Zero 2) avoids exactly this by
+keeping an **unencrypted** boot partition split from the LUKS2 root.
+
+This is a confirmed architectural fact (verified against this platform's own
+boot documentation), not a hardware-unverified risk — so `build-jetson-stage4.sh`
+hard-blocks `--encrypt-root` (and, by extension, `--standalone`, which forces
+`--encrypt-root` on) with a clear error rather than silently producing an
+image that cannot boot. Fixing this for real needs a separate unencrypted
+boot partition (mirroring RPi5's split) — a distinct, larger undertaking of
+its own, deliberately **not** attempted here. Until that lands, Jetson has
+**no standalone/LUKS story at all** (on top of its pre-existing, separately
+deferred no-live/installer-split gap).
+
+### Orange Pi Zero 2: headless, so no lightdm/desktop session
+
+Orange Pi Zero 2's `--standalone` composes onto its **`appliance`** role, not a
+`desktop` role — this platform has no GPU-driven display path at all (the
+Allwinner H616's display engine has no mainline kernel driver), so "local
+user, no mesh" here means an SSH/console login on a headless box, not a
+graphical greeter. Every other guarantee (LUKS2 FDE, local user + hashed
+password, no mesh/SSO) still applies identically.
+
+Because this is the only standalone-capable platform with **no GUI console at
+all**, `--standalone` also writes a `00-standalone-password-auth.conf` sshd
+drop-in that re-enables `PasswordAuthentication` for the local (non-root)
+user — standalone mode has no mesh, so there is no KEYS-USB
+`authorized_keys` distribution to provision an SSH key instead, and without
+this override the local user's password would be unusable for login by any
+means short of a physical serial-console cable. Root SSH login is
+unaffected — it stays governed by `--permit-root-login`/`00-root-login.conf`
+exactly as on every other platform.
+
+### RPi 3: desktop-only board
+
+`--board rpi3` on `build-rpi5-stage4.sh` **only** accepts `--role desktop` (1 GB
+RAM has no headroom for the k8s cluster-node stack) — the builder hard-errors
+on every other role for that board. This makes `--standalone` on Pi 3 a very
+natural fit: the desktop role is the *only* role it builds, and standalone is
+the desktop role's most complete configuration.
+
+See each platform's own `--help` (or `specs-<platform>/README.md` for the
+EXPERIMENTAL ones — Jetson, Orange Pi 5, Orange Pi Zero 2) for its full flag
+list; the composability contract above is identical to x86's.
+
 ## Home directory provisioning
 
 | `--home-mode` | What happens at install |
@@ -225,8 +402,20 @@ Precedence (later wins): `--theme` → `--branding-dir` → individual file flag
 `grub-background.png`, `login-background.png`, `logo.png`, `colors.colors` (all
 optional; `wallpaper.png` is the fallback for the two backgrounds).
 
-The stock **this-host** rebuild (`run-standalone-after-fleet.sh`) ships `--theme
-boogiepop` — the dark Boogiepop example theme (`specs-x86/branding/themes/boogiepop/`).
+No build channel applies a theme by itself **except the ncurses menu**: `make
+menu` defaults branded standalone builds to `--theme boogiepop` — the dark
+Boogiepop example theme (`specs-x86/branding/themes/boogiepop/`) — via the
+persisted `OPT_SA_THEME` default in `scripts/build-menu.sh` (pick **None**
+under "Branding theme" for the stock look). The direct channels bake no theme
+unless you pass one explicitly: `make x86-standalone` / `make
+x86-standalone-thick STANDALONE_FLAGS='--theme boogiepop'`, or a fleet run
+(`scripts/build-all-roles.sh`; `X86_STANDALONE=1` appends the three standalone
+variants to the role set, `X86_STANDALONE_ONLY=1` builds only them) with
+`--theme boogiepop` in its pass-through builder args. The
+`standalone-unaffiliated` role suppresses theming entirely: any `--theme` is a
+hard conflict, the menu never emits its persisted theme default for it, and a
+branded fleet run skips the unaffiliated role loudly (build it separately with
+`make x86-standalone-unaffiliated`).
 
 ### Re-theming on the running desktop
 
@@ -296,7 +485,8 @@ auto-pick `--gpu-driver`, Wi-Fi/BT, and a profile.
 wizard instead of raw flags, and runs a **local mesh node** from the system tray. It drives
 the build natively on Gentoo or via Docker elsewhere, covers the whole flag surface —
 including a **role & platform picker** (both standalone variants, the client devices, every
-cluster role, and the arm64 Frite/Jetson platforms), LUKS `--encrypt-root` + unlock factors,
+cluster role, and the arm64 Frite / RPi5 family (rpi5/rpi4/rpi3 boards) / Jetson / Orange Pi 5 /
+Orange Pi Zero 2 platforms), LUKS `--encrypt-root` + unlock factors,
 Steam delivery and desktop weight — accepts an admin **key-zip**, and (superadmin) sets up
 domains + users before building. Plaintext secrets (`--local-pass`/`--luks-pass`) are never
 written to a saved config. See [studio/README.md](../studio/README.md).

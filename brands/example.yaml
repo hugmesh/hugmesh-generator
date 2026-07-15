@@ -1,0 +1,59 @@
+# brands/example.yaml — STRUCTURED brand schema (mesh templating pilot, Phase 1).
+#
+# This is the forward-looking, structured shape for a brand profile. It is
+# ADDITIVE: the shell-sourced brands/*.conf path is unchanged and remains the
+# default. This YAML DEGRADES CLEANLY to today's 7 scalars via the loader
+# scripts/tooling/load-brand-schema.js, which emits shell KEY=VALUE lines that
+# any existing .conf consumer can `source` (so it stays shape-compatible).
+#
+# Mapping to the 7 legacy scalars:
+#   brand            -> BRAND
+#   title            -> BRAND_TITLE
+#   org              -> ORG
+#   domains[0]       -> CLUSTER_DOMAIN   (first domain = primary cluster domain)
+#   release_state    -> RELEASE_STATE
+#   mesh.headscale_url -> HEADSCALE_URL
+#   mesh.tag         -> MESH_TAG
+#   (HARBOR_PROJECT stays DERIVED from org by the shell, single source of truth)
+#
+# NEVER put secrets (ROOT_PASS, *_SECRET, *_TOKEN, VAULT_*, CA_KEY, MAIL_*) in a
+# committed brand file — structured or scalar. See scripts/tooling/tokens.json.
+
+brand: example
+title: Example Corp
+org: Example-Inc
+
+# domains[] is a LIST; the first entry is the primary CLUSTER_DOMAIN. Additional
+# entries are reserved for the multi-domain future (vanity/subdomain routing).
+domains:
+  - example.test
+
+release_state: internal            # internal (default) | public
+
+mesh:
+  headscale_url: https://headscale.example.test
+  tag: tag:example
+
+# services[] with an explicit `installed` flag — the structured replacement for
+# today's implicit "everything is on". Consumed later by the app-gate; ignored by
+# the scalar-degrade path (which only needs the 7 tokens).
+services:
+  - name: harbor
+    installed: true
+  - name: gateway
+    installed: true
+  - name: social-ui
+    installed: true
+  - name: forum-ui
+    installed: false
+
+# repos[] TENANT-SET manifest (Phase 4): {name, archetype, installed, identity}.
+# `overlay` is now archetype-derived (templates/archetypes/<archetype>), NOT a
+# per-repo hand overlay; `base` defaults to snapdragon-<name>. Read as STRUCTURED
+# data by the Node driver (render-tenant-set.js) ONLY — never degraded to shell.
+# See brands/acme.yaml for a full N-repo example.
+repos:
+  - { name: login-ui,     archetype: angular-mfe, installed: true, identity: { app_slug: login, title_word: Login } }
+  - { name: admin-bff-api, archetype: spring-bff, installed: true }
+  - { name: gateway,      archetype: gateway,     installed: true, identity: { profile: be } }
+  - { name: forum-ui,     archetype: angular-mfe, installed: false, identity: { app_slug: forum, title_word: Forum } }

@@ -1,0 +1,28 @@
+# extlinux.conf — U-Boot distro-boot config for the Orange Pi Zero 2 (Allwinner
+# H616). U-Boot's distro-boot scans the first partition of whatever block
+# device it finds (microSD/USB) for /extlinux/extlinux.conf and boots the entry
+# below — the SAME mechanism build-frite-stage4.sh / build-orangepi5-stage4.sh
+# use (NOT the RPi5 config.txt/cmdline.txt model, and NOT UEFI/GRUB).
+#
+# Variables substituted at build time (render_template in
+# build-orangepi-zero2-stage4.sh):
+#   @@OPIZ2_KERNEL_IMG@@   Kernel image filename in /boot (e.g. Image)
+#   @@OPIZ2_DTB@@          Board DTB path under /dtb (e.g.
+#                          allwinner/sun50i-h616-orangepi-zero2.dtb)
+#   @@OPIZ2_INITRD_LINE@@  INITRD line (live/installer/encrypted-disk boot) or a
+#                          comment (plaintext installed system)
+#   @@BRAND_TITLE@@        Menu label brand
+#
+# IMPORTANT: boot the DTB that ships WITH THE KERNEL (copied to /boot/dtb by the
+# builder), NOT any DTB baked into U-Boot itself.
+
+DEFAULT orangepizero2
+TIMEOUT 20
+MENU TITLE @@BRAND_TITLE@@ — Orange Pi Zero 2 (headless appliance)
+
+LABEL orangepizero2
+    MENU LABEL @@BRAND_TITLE@@ headless appliance
+    LINUX /@@OPIZ2_KERNEL_IMG@@
+    FDT /dtb/@@OPIZ2_DTB@@
+@@OPIZ2_INITRD_LINE@@
+    APPEND @@OPIZ2_APPEND@@

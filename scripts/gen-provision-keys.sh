@@ -88,6 +88,25 @@ MAIL_PROVIDER="${MAIL_PROVIDER:-protonmail}"
 VPN_SRC="${VPN_SRC:-}"              # dir of provider .conf/.ovpn to stage (own domain)
 VPN_DOMAIN="${VPN_DOMAIN:-${CLUSTER_DOMAIN:-}}"
 
+# ── Phase 7: foreign-mesh trust store (cross-mesh base admission, PUBKEYS ONLY) ─
+# Dir of <mesh-id>.ed25519.pub PUBLIC verifying halves to stage onto the KEYS
+# bundle so scripts/ingest-foreign-base.sh can admit those meshes' bases (no TOFU).
+FOREIGN_MESH_TRUST_SRC="${FOREIGN_MESH_TRUST_SRC:-}"
+
+# ── Orchestration superdomain (permanently INTERNAL; distinct from CLUSTER_DOMAIN) ──
+# The MagicDNS base_domain every mesh node joins. Written into the GENERATED
+# provision.json's .mesh.magic_dns_domain (+ derived .mesh.cp_dns_name); provision.sh
+# (specs/etc/keys-provision/provision.sh) consumes it as headscale dns.base_domain and
+# the kubeadm controlPlaneEndpoint — so ALL mesh nodes really join it, with ZERO
+# image-side / builder-flag changes (the KEYS channel, design §2.7).
+# PERMANENTLY INTERNAL (invariant I7): unlike CLUSTER_DOMAIN (the PUBLIC apex the
+# go-live wizard flips to a real domain), the superdomain is NEVER go-live-flipped and
+# never public. Default: <BRAND>.internal (matches the Studio's effective_superdomain()
+# = superdomain or f"{brand}.internal"; brand default 'snapdragon' => snapdragon.internal).
+# Override with SUPERDOMAIN (env/brand.conf) or --superdomain to pin an explicit
+# internal zone. Precedence: built-in (<brand>.internal) < env/brand.conf < CLI flag.
+SUPERDOMAIN="${SUPERDOMAIN:-}"
+
 # ── In-UI SSH-terminal key model: per-device sshd HOST + BFF DIAL keypairs ──────
 # The in-UI SSH terminal lets the BFF dial a device over the tailnet to drive an
 # operator console. That needs TWO per-device keypairs minted here, off-image-build:
@@ -161,6 +180,23 @@ Options:
                       subdir. (env: VPN_SRC)
       --vpn-domain D  Egress-VPN: the node's OWN brand domain for --vpn-src
                       (else CLUSTER_DOMAIN). (env: VPN_DOMAIN)
+      --foreign-mesh-trust DIR  Phase 7 cross-mesh: stage the foreign-mesh trust
+                      store from DIR/<mesh-id>.ed25519.pub (PUBLIC verifying halves
+                      ONLY) onto KEYS/mesh-trust/<mesh-id>/foreign-provenance-pub.ed25519
+                      — the EXACT path + base64-SPKI-DER form scripts/ingest-foreign-
+                      base.sh resolves a pinned pubkey from (MESH_TRUST_STORE /
+                      --trust-store, default keys-template/mesh-trust). Every file is
+                      validated as an Ed25519 PUBLIC key and NORMALISED to base64 SPKI
+                      DER; a private key or garbage ABORTS. Admitting a new foreign
+                      mesh is exactly this deliberate out-of-band pubkey add (explicit
+                      trust, never TOFU). Absent => nothing staged and foreign-base
+                      ingestion stays impossible (fail-closed).
+                      (env: FOREIGN_MESH_TRUST_SRC)
+      --superdomain D Orchestration superdomain: the mesh MagicDNS base_domain every
+                      node joins, written into provision.json .mesh.magic_dns_domain
+                      (+ derived .mesh.cp_dns_name). PERMANENTLY INTERNAL — never
+                      go-live-flipped, distinct from CLUSTER_DOMAIN (the public apex).
+                      Default: <BRAND>.internal. (env/brand.conf: SUPERDOMAIN)
       --device-id ID  In-UI SSH terminal: stable per-device id used as the Vault
                       path / ingest-metadata segment for this device's host + dial
                       key material. Default: a random short id. (env: DEVICE_ID)
@@ -200,6 +236,8 @@ while [[ $# -gt 0 ]]; do
         --registry-pub) REGISTRY_PUB_FILE="$2"; shift 2 ;;   # Layer-B: baked verifying key (mesh-extension role)
         --vpn-src)     VPN_SRC="$2"; shift 2 ;;               # egress-VPN: provider .conf/.ovpn to stage (own domain)
         --vpn-domain)  VPN_DOMAIN="$2"; shift 2 ;;            # egress-VPN: the node's own brand domain
+        --foreign-mesh-trust) FOREIGN_MESH_TRUST_SRC="$2"; shift 2 ;;  # Phase 7: foreign-mesh PUBLIC verifying keys to stage
+        --superdomain) SUPERDOMAIN="$2"; shift 2 ;;          # mesh MagicDNS base_domain (permanently internal); default <BRAND>.internal
         --device-id)   DEVICE_ID="$2"; shift 2 ;;            # in-UI SSH terminal: per-device Vault-seed path segment
         --dial-user)   DIAL_USER="$2"; shift 2 ;;            # in-UI SSH terminal: unprivileged login the BFF dials as
         --no-device-ssh) GEN_DEVICE_SSH=false; shift ;;      # in-UI SSH terminal: skip host+dial keypair generation
@@ -242,6 +280,59 @@ rm -rf "${OUT_DIR}/examples"
 # mesh-extension role (which repopulates it below) so SUPERADMIN/primary keys-out
 # carry NO device-registry material at all.
 [ "${ROLE}" = "mesh-extension" ] || rm -rf "${OUT_DIR}/device-registry"
+
+# ── Orchestration superdomain -> generated KEYS bundle (KEYS channel, design §2.7) ──
+# EVERY role's node joins the SAME orchestration superdomain, so stamp the effective
+# value into the GENERATED bundle here (the template's fixed default is replaced):
+#   * provision.json .mesh.magic_dns_domain  — authoritative; provision.sh's
+#     resolve_magic_dns_domain() sed-rewrites headscale dns.base_domain from it.
+#   * provision.json .mesh.cp_dns_name        — re-derived kube-api.<superdomain> only
+#     when it still tracked the old domain, so an operator override is preserved;
+#     provision.sh's resolve_cp_dns_name() feeds it to workers/additional CPs as the
+#     kubeadm join target.
+#   * kubernetes/kubeadm-config.yaml controlPlaneEndpoint + certSANs — the FIRST
+#     control-plane runs `kubeadm init --config` on this file VERBATIM (it is NOT
+#     re-derived at boot), so its base_domain MUST track the superdomain or the CP's
+#     apiserver cert SANs won't match kube-api.<superdomain> and TLS joins fail. This
+#     file's own header demands "keep in sync with .mesh.cp_dns_name/.magic_dns_domain";
+#     we honour that on the generated copy. (The static keys-template default + the
+#     image-baked specs/etc/{kubernetes/kubeadm-config,headscale/config}.yaml fallbacks
+#     are only used when KEYS lacks these files — flagged for follow-up alignment.)
+# PERMANENTLY INTERNAL (invariant I7): distinct from .snapdragon.cluster_domain (the
+# PUBLIC apex the go-live wizard flips), NEVER go-live-flipped. ZERO builder flags.
+EFFECTIVE_SUPERDOMAIN="${SUPERDOMAIN:-${BRAND:-snapdragon}.internal}"
+PROV="${OUT_DIR}/provision.json"
+if [ -f "${PROV}" ]; then
+    SD="${EFFECTIVE_SUPERDOMAIN}" python3 - "${PROV}" "${OUT_DIR}/kubernetes/kubeadm-config.yaml" <<'PY'
+import json, os, re, sys
+prov, kubeadm = sys.argv[1], sys.argv[2]
+sd = os.environ["SD"]
+
+# provision.json .mesh — authoritative magic_dns_domain + derived cp_dns_name.
+d = json.load(open(prov))
+mesh = d.setdefault("mesh", {})
+old = mesh.get("magic_dns_domain") or "headnet.internal"
+mesh["magic_dns_domain"] = sd
+cp = mesh.get("cp_dns_name") or ""
+if not cp or cp == "kube-api.%s" % old:      # preserve an explicit operator override
+    mesh["cp_dns_name"] = "kube-api.%s" % sd
+json.dump(d, open(prov, "w"), indent=2)
+open(prov, "a").write("\n")
+
+# kubeadm-config.yaml — rewrite its OWN base_domain (read from controlPlaneEndpoint,
+# NOT assumed equal to provision.json's) to the superdomain, everywhere it appears
+# (controlPlaneEndpoint + every certSAN suffix). No-op when absent / already custom.
+if os.path.isfile(kubeadm):
+    txt = open(kubeadm).read()
+    m = re.search(r'controlPlaneEndpoint:\s*"?kube-api\.([A-Za-z0-9.-]+?):6443"?', txt)
+    if m and m.group(1) != sd:
+        open(kubeadm, "w").write(txt.replace(m.group(1), sd))
+PY
+    echo "==> Orchestration superdomain: ${EFFECTIVE_SUPERDOMAIN}"
+    echo "    -> ${PROV} (.mesh.magic_dns_domain + .mesh.cp_dns_name)"
+    echo "    -> ${OUT_DIR}/kubernetes/kubeadm-config.yaml (controlPlaneEndpoint + certSANs)"
+    echo "    permanently internal — never go-live-flipped (distinct from cluster_domain)"
+fi
 
 # ── Layer-B device-license registry: per-node identity + verifying key ─────────
 # ONLY the ADMIN-owned `mesh-extension` role emits this. SUPERADMIN/primary roles
@@ -343,6 +434,72 @@ PLACEHOLDER
     fi
     chmod 0644 "${DR_DIR}/"* 2>/dev/null || true
     echo "  ${DR_DIR}/  (Layer-B ADMIN mesh-extension node identity + verifying key)"
+fi
+
+# ── Phase 7: foreign-mesh trust store (PUBKEYS ONLY, staged out-of-band) ───────
+# Cross-mesh base admission (scripts/ingest-foreign-base.sh) is NO-TOFU: it admits
+# a foreign base ONLY when the base's PROVENANCE signature verifies against a PINNED
+# pubkey resolved from the trust store at <mesh-id>/foreign-provenance-pub.ed25519
+# (base64 X.509 SPKI DER — the EXACT bytes the gate feeds to
+# `base64 -d | openssl pkey -pubin -inform DER`). This mode stages those pubkeys onto
+# the KEYS bundle at keys-out/mesh-trust/<mesh-id>/foreign-provenance-pub.ed25519 so
+# an operator can carry them to the build host's trust store (MESH_TRUST_STORE /
+# --trust-store, default keys-template/mesh-trust). Admitting a new foreign mesh IS
+# this deliberate out-of-band pubkey add — never TOFU. Each source file
+# <mesh-id>.ed25519.pub is validated as an Ed25519 PUBLIC key (PEM or base64 SPKI DER)
+# and NORMALISED to the base64-SPKI-DER one-liner the gate reads — the SAME
+# validate_registry_pub posture: openssl `-pubin` also REJECTS a mistakenly-supplied
+# PRIVATE key, and unverifiable bytes ABORT the whole run rather than staging a broken
+# verifier. No --foreign-mesh-trust => nothing staged => foreign-base ingestion on this
+# identity stays impossible (fail-closed default).
+if [ -n "${FOREIGN_MESH_TRUST_SRC}" ]; then
+    if [ ! -d "${FOREIGN_MESH_TRUST_SRC}" ]; then
+        echo "ERROR: --foreign-mesh-trust given (${FOREIGN_MESH_TRUST_SRC}) but it is not a directory" >&2
+        exit 1
+    fi
+    FMT_DIR="${OUT_DIR}/mesh-trust"
+    mkdir -p "${FMT_DIR}"
+    fmt_count=0
+    for fmt_key in "${FOREIGN_MESH_TRUST_SRC}"/*.ed25519.pub; do
+        [ -f "${fmt_key}" ] || continue
+        fmt_name="$(basename "${fmt_key}")"
+        fmt_mesh="${fmt_name%.ed25519.pub}"
+        if ! printf '%s' "${fmt_mesh}" | grep -Eq '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'; then
+            echo "ERROR: foreign-mesh trust key '${fmt_name}': mesh id '${fmt_mesh}' is not a DNS label" >&2
+            rm -rf "${FMT_DIR}"
+            exit 1
+        fi
+        fmt_dest_dir="${FMT_DIR}/${fmt_mesh}"
+        mkdir -p "${fmt_dest_dir}"
+        fmt_dest="${fmt_dest_dir}/foreign-provenance-pub.ed25519"
+        # NORMALISE to the base64-SPKI-DER one-liner the gate reads: a PEM PUBLIC KEY
+        # is re-encoded (DER | base64 -w0); anything else is assumed base64 SPKI DER
+        # and only whitespace-stripped. The round-trip validation below is the real
+        # gate — a private key / garbage never survives it.
+        if grep -q 'BEGIN PUBLIC KEY' "${fmt_key}" 2>/dev/null; then
+            openssl pkey -pubin -in "${fmt_key}" -outform DER 2>/dev/null | base64 -w0 > "${fmt_dest}"
+        else
+            tr -d '[:space:]' < "${fmt_key}" > "${fmt_dest}"
+        fi
+        # Validate the STAGED one-liner round-trips as an Ed25519 PUBLIC key (base64
+        # SPKI DER). openssl -pubin REJECTS a private key; a non-Ed25519 / truncated /
+        # garbage key fails here too — ABORT rather than stage a broken verifier.
+        if ! base64 -d "${fmt_dest}" 2>/dev/null \
+                | openssl pkey -pubin -inform DER -noout -text 2>/dev/null \
+                | grep -qi 'ED25519'; then
+            echo "ERROR: foreign-mesh trust key '${fmt_name}' does not parse as an Ed25519 PUBLIC key" >&2
+            echo "       (expected PEM 'BEGIN PUBLIC KEY' or base64 X.509 SPKI DER; NEVER a private key)" >&2
+            rm -rf "${FMT_DIR}"
+            exit 1
+        fi
+        chmod 0644 "${fmt_dest}"
+        fmt_count=$((fmt_count + 1))
+        echo "  ${fmt_dest}  (foreign-mesh '${fmt_mesh}' PROVENANCE verifying key — deliberate trust add, base64 SPKI DER)"
+    done
+    if [ "${fmt_count}" -eq 0 ]; then
+        echo "WARNING: --foreign-mesh-trust ${FOREIGN_MESH_TRUST_SRC} carried no *.ed25519.pub — trust store staged EMPTY (foreign ingestion stays impossible)" >&2
+    fi
+    echo "  ${FMT_DIR}/  (Phase 7 foreign-mesh trust store: ${fmt_count} pubkey(s), pubkeys ONLY, <mesh-id>/foreign-provenance-pub.ed25519)"
 fi
 
 # ── Egress VPN: stage provider configs onto KEYS/vpn/<domain>/ (secrets) ───────
@@ -608,6 +765,66 @@ PY
     fi
 }
 
+# Stage headscale's Casdoor OIDC application client-secret onto the pki node's
+# KEYS bundle, at the exact path keys-template/headscale/config.yaml's
+# client_secret_path expects (/var/lib/headscale/oidc_client_secret once copied
+# by provision_headscale() in specs/etc/keys-provision/provision.sh).
+#
+# WHY THIS IS SEPARATE FROM provision_mail_oauth's pattern: mail/OAuth creds are
+# OPERATOR-SUPPLIED (prompted interactively, no canonical source elsewhere).
+# headscale's OIDC secret is NOT operator-supplied — it is DETERMINISTICALLY
+# MINTED by gen-cluster-secrets.sh's CASDOOR_APPS loop (the SAME value the
+# casdoor-init Job registers as the Casdoor Application's clientSecret, so this
+# script and that Job MUST agree byte-for-byte or the OIDC handshake fails).
+# gen-cluster-secrets.sh ALWAYS writes it to keys-out/vault/secrets.json (its own
+# header comment: "OFFLINE — ALWAYS write a USB bundle under <out>/vault") — this
+# function's ONLY job is carrying that ALREADY-MINTED value forward into the
+# per-role KEYS bundle gen-provision-keys.sh is building, matching the
+# documented run order (docs/RUNNING.md: "gen-cluster-secrets - gen-provision-
+# keys - make-keys-usb"). It never mints or prompts for a value itself.
+#
+# Soft-fails (warn, do not exit 1) when the vault bundle is absent: an operator
+# may legitimately run gen-provision-keys.sh before gen-cluster-secrets.sh while
+# iterating on non-headscale parts of a role's bundle. A pki bundle assembled
+# without this file simply ships with headscale's OIDC app un-provisioned,
+# exactly the pre-existing (now-explicit-instead-of-silent) failure mode.
+provision_headscale_oidc_secret() {
+    local vault_json="${REPO_DIR}/keys-out/vault/secrets.json"
+    if [ ! -f "${vault_json}" ]; then
+        echo "==> Headscale OIDC secret: SKIPPED — ${vault_json} not found (run gen-cluster-secrets.sh first; headscale's Casdoor app will be un-provisioned without this)" >&2
+        return 0
+    fi
+    # gen-cluster-secrets.sh writes an IDENTICAL casdoor-app-secrets object into
+    # TWO namespaces ("<brand>-pki" AND "<brand>-forum", both from the same
+    # app_secrets dict) — this is not unique to pki. secrets.json is written
+    # with sort_keys=True, so "<brand>-forum" actually sorts (and matches)
+    # BEFORE "<brand>-pki" — "first match by shape" only works because both
+    # namespaces are guaranteed identical today. Find it by shape (rather than
+    # requiring this script to independently resolve BRAND) so it works
+    # regardless of brand.conf; if pki/forum secrets ever diverge, this needs
+    # to target "<brand>-pki" explicitly instead of "first match".
+    local secret
+    secret="$(python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+for ns in d.values():
+    apps = ns.get("casdoor-app-secrets")
+    if isinstance(apps, dict) and "headscale" in apps:
+        sys.stdout.write(apps["headscale"])
+        break
+' "${vault_json}" 2>/dev/null)"
+    if [ -z "${secret}" ]; then
+        echo "==> Headscale OIDC secret: SKIPPED — ${vault_json} has no casdoor-app-secrets.headscale entry (stale bundle? re-run gen-cluster-secrets.sh)" >&2
+        return 0
+    fi
+    local dest_dir="${OUT_DIR}/headscale"
+    mkdir -p "${dest_dir}"
+    local dest="${dest_dir}/oidc_client_secret"
+    printf '%s' "${secret}" > "${dest}"
+    chmod 600 "${dest}"
+    echo "==> Headscale OIDC secret: staged -> ${dest} (from ${vault_json})"
+}
+
 if [ "${ROLE}" = "pki" ]; then
     # ── pki node: FULL config — default user accounts + hashed passwords ──
     cp "${KEYFILE}.pub" "${OUT_DIR}/ssh/${ADMIN}.authorized_keys"
@@ -691,6 +908,9 @@ PY
     # Optional outbound-mail + GitHub/Discord OAuth creds for the cluster (pki
     # node carries the cluster config + secrets). Absent by default.
     provision_mail_oauth
+    # headscale's OIDC app client-secret (deterministically minted by
+    # gen-cluster-secrets.sh, carried forward here — never re-generated).
+    provision_headscale_oidc_secret
     echo; echo "Done (pki — config node). Generated:"
     if [ "${GEN_ROOT_PASSWORD}" = true ]; then
         echo "  ${OUT_DIR}/users.json            (default accounts: admin '${ADMIN}' hashed + root login ENABLED, hashed)"

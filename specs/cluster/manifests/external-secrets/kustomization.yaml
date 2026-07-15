@@ -22,6 +22,14 @@ resources:
   # slug is deselected the build prunes BOTH its app(s) AND its line here.
   - akkoma-externalsecrets.yaml    # akkoma-proxy-mtls + akkoma-admin
   - tuwunel-externalsecrets.yaml   # tuwunel-proxy-mtls + tuwunel-admin
+  # media-poisoner worker mTLS server+client-verify cert (media-poisoner-mtls).
+  # SAME Vault-PKI -> ESO -> kubernetes.io/tls shape as the homeserver proxy
+  # certs above, but mounted straight into the worker container itself (no
+  # sidecar) — see manifests/media-poisoner/deployment.yaml.
+  - media-poisoner-externalsecrets.yaml   # media-poisoner-mtls
+  # Harbor registry server cert (harbor-mtls) — SAME Vault-PKI -> ESO shape as
+  # media-poisoner above, consumed by apps/03a-harbor.yaml's expose.tls.
+  - harbor-externalsecrets.yaml   # harbor-mtls
   # coturn TURN/STUN long-term-credential SHARED SECRET (key `secret`), ESO/Vault
   # only (secret/snapdragon/coturn-shared-secret) — NEVER inline. Materializes only
   # once that Vault path is populated; coturn is DEFAULT-OFF so a default build never
@@ -34,10 +42,12 @@ resources:
   # path is populated (ships dark with the rest of the cloud-backups feature).
   - velero-externalsecrets.yaml    # velero-cloud-credentials
   # image-builder PUSH credential (ns snapdragon-image-builds, dockerconfigjson) —
-  # the WRITE_REGISTRY deploy token the in-cluster Kaniko build pipeline uses to push
-  # the images it builds (distinct from the gitlab-registry READ_REGISTRY pull secret).
-  # ESO/Vault only (secret/<brand>/image-builder-registry); inert until the opt-in
-  # apps-optional/60-image-builder.yaml Application creates the namespace (ships dark).
+  # now sourced from the Harbor PUSH-scoped robot account (distinct from the
+  # harbor-registry pull-scoped robot secret above) that
+  # manifests/harbor/harbor-provision-job.yaml mints and writes to
+  # secret/snapdragon/harbor-robots (push_name/push_secret). ESO/Vault only;
+  # inert until the opt-in apps-optional/60-image-builder.yaml Application
+  # creates the namespace (ships dark).
   - image-builder-externalsecrets.yaml   # image-builder-registry
   # SSO OIDC secrets — user-bff OIDC client credential (user-bff-oidc, ns
   # snapdragon-backend) + token custody key (user-bff-custody-key, ns

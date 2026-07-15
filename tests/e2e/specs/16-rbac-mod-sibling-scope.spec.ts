@@ -26,9 +26,15 @@ test.describe('RBAC: ROLE_MOD sibling scope (reaches moderation, denied infra/ad
     { gw: 'snapdragon-be-gateway', path: '/api/v1/pleroma/admin/config', what: 'akkoma moderation REST' },
     { gw: 'snapdragon-be-gateway', path: '/api/pleroma/admin/users', what: 'legacy akkoma admin' },
     { gw: 'snapdragon-be-gateway', path: '/pleroma/admin/index.html', what: 'akkoma AdminFE assets' },
-    { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', what: 'Matrix C-S API (mod user floor)' },
-    { gw: 'snapdragon-be-gateway', path: '/api/v1/timelines/home', what: 'Mastodon REST (mod user floor)' },
-    { gw: 'snapdragon-be-gateway', path: '/oauth/token', what: 'Mastodon OAuth (mod user floor)' },
+    { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', what: 'Matrix C-S API (mod superset on the ROLE_MATRIX-gated floor)' },
+    { gw: 'snapdragon-be-gateway', path: '/api/v1/timelines/home', what: 'Mastodon REST (mod superset on the ROLE_MASTODON-gated floor)' },
+    { gw: 'snapdragon-be-gateway', path: '/oauth/token', what: 'Mastodon OAuth (mod superset on the ROLE_MASTODON-gated floor)' },
+    // /_synapse/** is the host-scoped Synapse-compat catch-all added by commit
+    // 0100d3b (ROLE_MATRIX/ROLE_MOD/ROLE_ADMIN) — it is the GENERAL client
+    // surface, not a Matrix-admin-specific row (Matrix admin is enforced by
+    // admin-room membership, not an HTTP surface — see schema.sql), so mod (a
+    // paired superset) reaches it like any other homeserver floor row.
+    { gw: 'snapdragon-be-gateway', path: '/_synapse/client/versions', what: 'Synapse-compat surface (mod superset)' },
   ];
   for (const c of MOD_ALLOWED) {
     test(`mod ALLOWED ${c.path} (${c.what})`, async () => {
@@ -43,7 +49,12 @@ test.describe('RBAC: ROLE_MOD sibling scope (reaches moderation, denied infra/ad
     { gw: 'snapdragon-fe-gateway', path: '/bff/admin/allowlist', what: 'BFF admin allowlist' },
     { gw: 'snapdragon-be-gateway', path: '/infra/vault/secret', what: 'infra/vault (no route)' },
     { gw: 'snapdragon-be-gateway', path: '/infra/logs', what: 'logs (no route)' },
-    { gw: 'snapdragon-be-gateway', path: '/_synapse/admin/v1/server_version', what: 'Matrix server-admin (no route)' },
+    // NOTE: /_synapse/admin/v1/server_version is NOT here — /_synapse/** (added by
+    // commit 0100d3b) is a GENERAL host-scoped Synapse-compat catch-all, not a
+    // Matrix-admin-specific row, so mod (a paired superset) reaches it; see the
+    // MOD_ALLOWED /_synapse/client/versions case above. Matrix admin itself is
+    // enforced by admin-room membership (tuwunel-admin-sync), not an HTTP surface
+    // gated by a route row.
     { gw: 'snapdragon-fe-gateway', path: '/games/admin/sessions', what: 'games admin UI (mod alone ≠ games-admin)' },
     { gw: 'snapdragon-be-gateway', path: '/games/api/admin/role-grants', what: 'games admin API (mod alone ≠ games-admin)' },
   ];

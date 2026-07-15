@@ -9,6 +9,13 @@ sys-kernel/gentoo-sources
 sys-kernel/linux-firmware
 sys-firmware/intel-microcode
 sys-kernel/dracut
+# systemd-utils[boot] owns /usr/lib/systemd/boot/efi/linuxx64.efi.stub — the
+# sd-stub PE wrapper that dracut --uefi bundles kernel+initramfs+cmdline into
+# to emit the UKI. Without it dracut fails ("Can't find a uefi stub") and the Secure
+# Boot chain silently degrades to GRUB+vmlinuz. Already pulled in as the
+# profile's udev provider; USE="boot kernel-install" (package.use/containers)
+# adds the stub (kernel-install is REQUIRED_USE-mandatory with boot on >=260).
+sys-apps/systemd-utils
 sys-boot/grub
 sys-fs/dosfstools
 sys-block/parted

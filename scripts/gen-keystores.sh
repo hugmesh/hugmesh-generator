@@ -257,6 +257,17 @@ provision_domain() {
   # current caller validates before building DOMAIN_ROWS, but re-gate here so a future
   # caller cannot reach these root sinks with an unsafe brand/domain (fail-closed).
   validate_brand_domain "${d_brand}" "${d_domain}"
+  # REALPATH CONTAINMENT (Phase 6 — parity with generate-brand-repos.sh L197-206).
+  # d_ca_dir/d_ks_dir are ${CA}/${d_brand} and ${KS}/${d_brand}; ${OUT} is the root-owned
+  # node-local staging base (NEVER export-derived). d_brand is the sole export-derived path
+  # component and is DNS-label-validated three times, but anchor the destructive mkdir/rm
+  # sinks under ${OUT} as a realpath backstop so even a future regression cannot escape.
+  local _out_abs _cad_abs _ksd_abs
+  _out_abs="$(mkdir -p "${OUT}" 2>/dev/null; realpath -m -- "${OUT}")"
+  _cad_abs="$(realpath -m -- "${d_ca_dir}")"
+  _ksd_abs="$(realpath -m -- "${d_ks_dir}")"
+  case "${_cad_abs}/" in "${_out_abs}"/*) : ;; *) echo "ERROR: refusing CA dir outside OUT: '${d_ca_dir}' -> '${_cad_abs}'" >&2; exit 1 ;; esac
+  case "${_ksd_abs}/" in "${_out_abs}"/*) : ;; *) echo "ERROR: refusing keystore dir outside OUT: '${d_ks_dir}' -> '${_ksd_abs}'" >&2; exit 1 ;; esac
   mkdir -p "${d_ca_dir}" "${d_ks_dir}"
 
   # Cluster CA: provided external CA  >  reuse on disk  >  self-signed.

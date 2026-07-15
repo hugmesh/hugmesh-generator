@@ -121,11 +121,20 @@ services:
       SPRING_APPLICATION_NAME: snapdragon-pki-gateway
       PORT: "8080"
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
+      # additional-location DIRECTORY when a profile literally named {name} is
+      # active — so /config/application-routes.yml (the entire mounted route
+      # table for this gateway role) was silently never loading without this.
+      # Confirmed live: `/` 404'd (SCG's own no-route-matched response) until
+      # this was added; only the packaged application.yml's single placeholder
+      # route (Path=/api/**, uri=http://api:8080 — a nonexistent host) was ever
+      # active, which is also why unrelated /api/** paths 500'd.
+      SPRING_PROFILES_ACTIVE: routes
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
       CASSANDRA_KEYSPACE: snapdragon_gateway
-      CASSANDRA_LOCAL_DC: dc1
+      CASSANDRA_LOCAL_DC: datacenter1
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
     volumes:
       - ./gateway-routes/pki:/config:ro
@@ -148,12 +157,27 @@ services:
       SPRING_APPLICATION_NAME: snapdragon-be-gateway
       PORT: "8080"
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
+      # additional-location DIRECTORY when a profile literally named {name} is
+      # active — so /config/application-routes.yml (the entire mounted route
+      # table for this gateway role) was silently never loading without this.
+      # Confirmed live: `/` 404'd (SCG's own no-route-matched response) until
+      # this was added; only the packaged application.yml's single placeholder
+      # route (Path=/api/**, uri=http://api:8080 — a nonexistent host) was ever
+      # active, which is also why unrelated /api/** paths 500'd.
+      SPRING_PROFILES_ACTIVE: routes
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
       CASSANDRA_KEYSPACE: snapdragon_gateway
-      CASSANDRA_LOCAL_DC: dc1
+      CASSANDRA_LOCAL_DC: datacenter1
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+      # BFF session introspection back-channel (BffSessionAuthFilter) — same fix the
+      # fe-gateway block below carries: app.bff-session.bff-base-url defaults to the
+      # cluster-DNS 'http://admin-bff:8080', unresolvable in compose, so any browser
+      # request reaching this gateway with a bff_ session cookie (e.g. /be/api/** via
+      # the front door) would 503 session_backend_unavailable instead of authenticating.
+      APP_BFF_SESSION_BFF_BASE_URL: ${APP_BFF_SESSION_BFF_BASE_URL:-http://snapdragon-admin-bff-api:8080}
     volumes:
       - ./gateway-routes/be:/config:ro
     depends_on:
@@ -179,12 +203,28 @@ services:
       SPRING_APPLICATION_NAME: snapdragon-fe-gateway
       PORT: "8080"
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
+      # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
+      # additional-location DIRECTORY when a profile literally named {name} is
+      # active — so /config/application-routes.yml (the entire mounted route
+      # table for this gateway role) was silently never loading without this.
+      # Confirmed live: `/` 404'd (SCG's own no-route-matched response) until
+      # this was added; only the packaged application.yml's single placeholder
+      # route (Path=/api/**, uri=http://api:8080 — a nonexistent host) was ever
+      # active, which is also why unrelated /api/** paths 500'd.
+      SPRING_PROFILES_ACTIVE: routes
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       CASDOOR_JWKS_URI: "http://casdoor:8000/.well-known/jwks"
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
       CASSANDRA_KEYSPACE: snapdragon_gateway
-      CASSANDRA_LOCAL_DC: dc1
+      CASSANDRA_LOCAL_DC: datacenter1
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
+      # BFF session introspection back-channel (BffSessionAuthFilter): the gateway swaps the
+      # opaque bff_ cookie for the caller's identity/roles against admin-bff. The property
+      # app.bff-session.bff-base-url defaults to the cluster-DNS 'http://admin-bff:8080', which
+      # does NOT resolve in compose -> every authenticated /bff/** returns 503
+      # session_backend_unavailable ("Failed to resolve 'admin-bff'"). Point it at the compose
+      # admin-bff service so logged-in sessions (GET /bff/session, /bff/me, role-gated routes) work.
+      APP_BFF_SESSION_BFF_BASE_URL: ${APP_BFF_SESSION_BFF_BASE_URL:-http://snapdragon-admin-bff-api:8080}
     volumes:
       - ./gateway-routes/fe:/config:ro
     ports:
@@ -213,9 +253,16 @@ services:
     build:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-federation-api
     environment:
-      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
-      # In-DNS JWKS: compose issuer-uri is the browser-facing localhost:8000 (unreachable in-container),
-      # so point key retrieval at the container Casdoor or the resource server 500s every authed call.
+      # federation-api is the one Casdoor resource server that actually VALIDATES a
+      # Casdoor JWT's iss in compose: the BFFs forward a caller/custody JWT here (mod
+      # moderation/findings/manifest, user cards, and the admin-bff service-reconciler
+      # poll). Casdoor stamps iss=http://casdoor:8000 (the in-DNS name login mints
+      # through), so the resource server MUST validate against that — the browser-facing
+      # http://localhost:8000 used elsewhere never matches a real token here and 401s
+      # EVERY forwarded/service call. (Cluster is uniform https://id.snapdragon.systems,
+      # so this split is compose-only.)
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      # Explicit in-DNS JWKS (key fetch) — same host, so discovery + validation agree.
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       SPRING_R2DBC_URL: "r2dbc:postgresql://federation-db:5432/federation"
       SPRING_R2DBC_USERNAME: federation
@@ -252,9 +299,29 @@ services:
     build:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-admin-bff-api
     environment:
-      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
-      # In-DNS JWKS: compose issuer-uri is the browser-facing localhost:8000 (unreachable in-container),
-      # so point key retrieval at the container Casdoor or the resource server 500s every authed call.
+      # admin-bff both RECEIVES and MINTS Casdoor JWTs on the native-login path:
+      #  • RECEIVES — mod-bff forwards a caller/custody JWT to admin-bff's PUBLIC
+      #    surface for a native-login mod's ban / domain-lock write (mod-bff-api#70's
+      #    AdminSuspensionClient/AdminDomainLockClient); admin-bff's resource server
+      #    validates its iss. Casdoor stamps iss=http://casdoor:8000, so — exactly like
+      #    federation-api — admin-bff MUST validate against that, not the browser-facing
+      #    http://localhost:8000 (which never matches a real token and 401s the write).
+      #  • MINTS — admin-bff's OWN appeals-console decide leg (FederationApiClient.decide,
+      #    admin-bff-api#205) custody-exchanges a native-login admin's bff_ session for a
+      #    real Casdoor JWT (loopback to its own /bff/internal/session/exchange) and
+      #    forwards THAT to federation-api. That leg ships dark behind app.bff-exchange.enabled.
+      # Cluster is uniform (https://id.snapdragon.systems everywhere Casdoor also stamps),
+      # so the issuer split is compose-only.
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      # Turn ON admin-bff's decide custody-exchange (admin-bff-api#205) so a native-login
+      # admin's POST /bff/admin/moderation/{id}/decide reaches federation-api authenticated.
+      # The loopback exchange target defaults to http://localhost:<server.port> (8080, plain
+      # HTTP in compose) and hits admin-bff's own permitAll /bff/internal/session/exchange;
+      # custody is already keyed (APP_BFF_CUSTODY_KEY below). Fail-open by design: any
+      # exchange failure falls through to the pre-fix "no bearer" behaviour.
+      APP_BFF_EXCHANGE_ENABLED: ${APP_BFF_EXCHANGE_ENABLED:-true}
+      # Explicit in-DNS JWKS (key fetch) — same host as the issuer above, so discovery
+      # + iss-validation agree.
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       # 'dev' disables auth-core's InternalSurfaceBootGuard (@Profile !dev&!test), which
       # otherwise refuses to boot the /bff/internal/** surface over plain HTTP (it demands
@@ -262,6 +329,16 @@ services:
       # account + session + custody. INTERNAL_TOKEN unset -> InternalTokenWebFilter no-ops.
       SPRING_PROFILES_ACTIVE: ${ADMIN_BFF_PROFILES:-casdoor,dev}
       SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
+      # Provision broker (AuthController POST /provision/{matrix,mastodon}): the app
+      # defaults for broker.synapse-url / broker.mastodon-url are cluster-DNS hosts,
+      # unresolvable in compose — point them at the compose social tier (profile
+      # `social`; when it's down the provision legs fail with a named 502, same as
+      # any other absent upstream). Email domain: same contract + value as user-bff's
+      # APP_HS_TOKEN_MASTODON_EMAIL_DOMAIN above (admin-bff-api reads
+      # broker.mastodon-email-domain <- MASTODON_EMAIL_DOMAIN).
+      SYNAPSE_URL: ${SYNAPSE_URL:-http://synapse:8008}
+      MASTODON_URL: ${ADMIN_BFF_MASTODON_URL:-http://mastodon-web:3000}
+      MASTODON_EMAIL_DOMAIN: ${MASTODON_EMAIL_DOMAIN:-e2e.local}
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
       SPRING_R2DBC_URL: "r2dbc:postgresql://admin-bff-db:5432/adminbff"
       SPRING_R2DBC_USERNAME: adminbff
@@ -280,6 +357,20 @@ services:
       APP_BFF_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
       APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
       APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
+      # A3+A5 Casdoor-MFA step-up leg (app.casdoor.mfa.enabled). Platform-wide rollout
+      # (see specs/cluster/manifests/admin-bff-api/deployment.yaml): a fresh bff_session
+      # MFA stamp becomes a co-equal, license-independent step-up satisfier alongside the
+      # existing token-based step-up leg (pure additive OR — the token leg is unchanged).
+      APP_CASDOOR_MFA_ENABLED: ${APP_CASDOOR_MFA_ENABLED:-true}
+      # MFA TOTP-secret encryption key (app.mfa.factor-key) — the 256-bit AES-GCM
+      # data key MfaSecretCipher uses to encrypt each enrolled TOTP secret at rest
+      # (and seed the recovery-code keyed hash). In the cluster it comes from the ESO
+      # Secret admin-bff-mfa (see specs/cluster/manifests/admin-bff-api/deployment.yaml);
+      # compose never set it, so with APP_CASDOOR_MFA_ENABLED=true above the cipher was
+      # INERT and every TOTP enroll returned 503 "MFA factor key not provisioned" —
+      # MFA was un-exercisable on the local stack. Dev key (any 32-byte base64; the
+      # login-ui MFA enroll/challenge pages + the e2e MFA specs need it live).
+      APP_MFA_FACTOR_KEY: ${APP_MFA_FACTOR_KEY:-c25hcGRyYWdvbi1kZXYtbWZhLWZhY3Rvci1rZXktMzJieXRl}
     depends_on:
       admin-bff-db: { condition: service_healthy }
       route-access-db: { condition: service_healthy }
@@ -307,14 +398,52 @@ services:
       # so point key retrieval at the container Casdoor or the resource server 500s every authed call.
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       SPRING_PROFILES_ACTIVE: casdoor
-      FEDERATION_BASE_URL: "http://snapdragon-federation-api:8080"
+      # The mod/user BFF federation client reads federation-api.base-url
+      # (env FEDERATION_API_BASE_URL) — the "API" segment is load-bearing. The old
+      # FEDERATION_BASE_URL bound NOTHING (relaxed binding -> federation-api.url,
+      # which does not exist), so the client silently used its unresolvable
+      # cluster-DNS default and every federation-backed /bff/{mod,user}/** call
+      # 500'd ("Failed to resolve ...svc.cluster.local") in compose.
+      FEDERATION_API_BASE_URL: "http://snapdragon-federation-api:8080"
+      # admin-bff base for BOTH the native-login session bridge (mod-bff-api#68's
+      # BffCookieAuthenticationWebFilter introspects bff_ sessions against
+      # GET /bff/internal/session/introspect) AND the ban/domain-lock desired-state
+      # writes (AdminSuspensionClient/AdminDomainLockClient). The app default is the
+      # cluster-DNS host, unresolvable in compose — without this every /bff/mod/**
+      # request carrying a native-login bff_ cookie fails CLOSED (503), and mod
+      # ban/domain-lock writes can never reach admin-bff.
+      ADMIN_BFF_BASE_URL: "http://snapdragon-admin-bff-api:8080"
+      # Turn ON mod-bff's native-login bearer forwarding (mod-bff-api#72's
+      # BearerForwardingFilter custody exchange — SHIPS DARK, enabled=false default).
+      # Without it a native-login MOD/ADMIN passes mod-bff's own role gate but the
+      # downstream hop to federation-api / admin-bff's public surface / owncast-bff
+      # carries NO Authorization header and 401s (mod queue/findings/modules, ban,
+      # domain-lock). The exchange reuses the adminBffInternalWebClient above
+      # (ADMIN_BFF_BASE_URL) against admin-bff's /bff/internal/session/exchange;
+      # admin-bff's serving side is already keyed below (APP_BFF_OIDC_* +
+      # APP_BFF_CUSTODY_KEY). Fail-open by design: an exchange failure degrades to
+      # the pre-fix no-header behaviour (every downstream has its own fail-closed gate).
+      APP_BFF_EXCHANGE_ENABLED: ${APP_BFF_EXCHANGE_ENABLED:-true}
       # POST /bff/mod/findings/test-seed — e2e-fixture-only route. Ships dark upstream
       # (app.test-seed.enabled=false / APP_TEST_SEED_ENABLED unset); turned ON for the
       # test env so e2e seeding scripts can prime findings data (mod-bff-api#63).
       APP_TEST_SEED_ENABLED: "true"
+      # Placeholder config datastore (see the comment above snapdragon-mod-bff-api /
+      # snapdragon-user-bff-api higher up describing this): reuses admin-bff-db's
+      # adminbff database/credentials, no dedicated DB yet. Without this, Liquibase/
+      # R2DBC fall back to the app's own default (a cluster-DNS Postgres host), which
+      # doesn't resolve in compose and the container never boots.
+      SPRING_R2DBC_URL: "r2dbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_R2DBC_USERNAME: adminbff
+      SPRING_R2DBC_PASSWORD: adminbff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_LIQUIBASE_USER: adminbff
+      SPRING_LIQUIBASE_PASSWORD: adminbff
     depends_on:
+      admin-bff-db: { condition: service_healthy }
       casdoor: { condition: service_started }
       snapdragon-federation-api: { condition: service_started }
+      snapdragon-admin-bff-api: { condition: service_started }
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
       interval: 10s
@@ -332,27 +461,83 @@ services:
       # so point key retrieval at the container Casdoor or the resource server 500s every authed call.
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       SPRING_PROFILES_ACTIVE: casdoor
-      FEDERATION_BASE_URL: "http://snapdragon-federation-api:8080"
-      # ── Real OIDC web login: login-ui redirects to Casdoor's hosted form, then POSTs the
-      #    code here (/bff/auth/callback), which exchanges it (PKCE) and provisions the account
-      #    + session via admin-bff's internal surface. clientId/secret/redirect BYTE-MATCH the
-      #    seeded app-user-bff (tests/stack/seed-e2e.sh ensure_app) and login-ui's __SNAP_OIDC_*
-      #    globals. Ships dark upstream (app.bff.oidc.enabled=false); turned ON for the test env. ──
+      # The mod/user BFF federation client reads federation-api.base-url
+      # (env FEDERATION_API_BASE_URL) — the "API" segment is load-bearing. The old
+      # FEDERATION_BASE_URL bound NOTHING (relaxed binding -> federation-api.url,
+      # which does not exist), so the client silently used its unresolvable
+      # cluster-DNS default and every federation-backed /bff/{mod,user}/** call
+      # 500'd ("Failed to resolve ...svc.cluster.local") in compose.
+      FEDERATION_API_BASE_URL: "http://snapdragon-federation-api:8080"
+      # ── Native SSO login (POST /bff/login). login-ui renders a first-party
+      #    username/password form and POSTs it to user-bff at /bff/login (via the front
+      #    door). user-bff generates PKCE + state SERVER-SIDE, POSTs the credentials to
+      #    the INTERNAL Casdoor /api/login (APP_BFF_OIDC_ISSUER below — the in-DNS
+      #    http://casdoor:8000, NEVER a browser-reachable URL), gets an auth code back,
+      #    exchanges it (PKCE) and provisions the account + session via admin-bff's
+      #    internal surface. The browser NEVER receives a JWT, the code_verifier, the
+      #    state, or any Casdoor URL — only the opaque bff_ session cookie.
+      #    TWO internal-Casdoor legs, TWO distinct properties (both must target the in-DNS
+      #    http://casdoor:8000, NEVER a browser-reachable URL):
+      #      • the /api/login POST      -> APP_BFF_OIDC_LOGIN_BASE (CasdoorLoginConfig reads
+      #        app.bff.oidc.login-base; its DEFAULT is the CLUSTER-DNS
+      #        http://casdoor.snapdragon-pki.svc.cluster.local:8000, which is UNREACHABLE in
+      #        compose — so it MUST be set here or /bff/login times out. The browser-facing
+      #        issuer is deliberately NEVER used for the login leg.)
+      #      • the token exchange       -> APP_BFF_OIDC_ISSUER (auth-core OidcExchangeClient).
+      #    clientId/secret/redirect BYTE-MATCH the
+      #    seeded app-user-bff (tests/stack/seed-e2e.sh ensure_app). The redirect-uri is
+      #    an INTERNAL PKCE-match string only (Casdoor validates it against the registered
+      #    app); no browser ever visits it. Ships dark upstream (app.bff.oidc.enabled=false);
+      #    turned ON for the test env. ──
       APP_BFF_OIDC_ENABLED: "true"
       APP_BFF_OIDC_ISSUER: ${APP_BFF_OIDC_ISSUER:-http://casdoor:8000}
+      # The /api/login leg (separate from the exchange issuer above). Without this the
+      # login base falls to the unreachable cluster-DNS default and /bff/login fails.
+      APP_BFF_OIDC_LOGIN_BASE: ${APP_BFF_OIDC_LOGIN_BASE:-http://casdoor:8000}
       APP_BFF_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
       APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
-      APP_BFF_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://localhost:8088/login/callback}
+      APP_BFF_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://snapdragon-user-bff-api:8080/bff/auth/callback}
       APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
       ADMIN_BFF_INTERNAL_BASE_URL: ${ADMIN_BFF_INTERNAL_BASE_URL:-http://snapdragon-admin-bff-api:8080}
+      # Homeserver-token custody for the hsproxy (/bff/user/{matrix,mastodon}/**): app.hs-token.key
+      # encrypts the brokered Matrix/Mastodon access tokens AT REST. Without a key the HsTokenCipher
+      # is INERT and the hsproxy 503s. Dev key (compose dev posture; any passphrase is folded to a
+      # 256-bit AES key via SHA-256). The upstream matrix/mastodon proxy URLs default to cluster DNS
+      # (tuwunel-proxy / akkoma-proxy) which are absent in compose — point them at the compose
+      # Synapse + Mastodon so the proxied CS-API / Mastodon calls reach a live homeserver.
+      APP_HS_TOKEN_KEY: ${APP_HS_TOKEN_KEY:-dev-hs-token-key-do-not-use-in-prod}
+      APP_HS_TOKEN_MATRIX_URL: ${APP_HS_TOKEN_MATRIX_URL:-http://synapse:8008}
+      APP_HS_TOKEN_MASTODON_URL: ${APP_HS_TOKEN_MASTODON_URL:-http://mastodon-web:3000}
       # plain-HTTP local stack: the bff_ session cookie must not be Secure-only or the browser drops it
       APP_SESSION_COOKIE_SECURE: "false"
-      SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
+      # Homeserver service-account password the hsproxy broker mints with. The property is
+      # app.hs-token.svc-password <- env APP_HS_TOKEN_SVC_PASSWORD (EMPTY default,
+      # fail-closed 503) — user-bff never reads bare SVC_PASSWORD (that's admin-bff's
+      # ServiceTokenBroker name), so the old line below bound NOTHING and every hsproxy
+      # mint (any login mode) refused with "svc-password is unset" on the local stack.
+      # Same env-name-misnomer class as the FEDERATION_BASE_URL fix in #314.
+      APP_HS_TOKEN_SVC_PASSWORD: ${SVC_PASSWORD:-dev-svc-password}
+      # Email domain for broker-owned Mastodon accounts (user-bff-api's mastodon mint
+      # authenticates the password grant by EMAIL and the register leg must supply one:
+      # <localpart>@<this-domain>). MUST be a domain mastodon-web accepts —
+      # tests/stack/.mastodon.env allowlists e2e.local (EMAIL_DOMAIN_ALLOWLIST), the
+      # same domain seed-e2e.sh's tootctl accounts already use. Unset → mastodon mints
+      # fail closed 503 (matrix leg unaffected).
+      APP_HS_TOKEN_MASTODON_EMAIL_DOMAIN: ${APP_HS_TOKEN_MASTODON_EMAIL_DOMAIN:-e2e.local}
       # POST /bff/user/notifications/test-seed — e2e-fixture-only route. Ships dark upstream
       # (app.test-seed.enabled=false / APP_TEST_SEED_ENABLED unset); turned ON for the
       # test env so e2e seeding scripts can prime notifications data (user-bff-api#97).
       APP_TEST_SEED_ENABLED: "true"
+      # Placeholder config datastore, same as mod-bff-api above — see that service's
+      # comment for why this is needed.
+      SPRING_R2DBC_URL: "r2dbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_R2DBC_USERNAME: adminbff
+      SPRING_R2DBC_PASSWORD: adminbff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_LIQUIBASE_USER: adminbff
+      SPRING_LIQUIBASE_PASSWORD: adminbff
     depends_on:
+      admin-bff-db: { condition: service_healthy }
       casdoor: { condition: service_started }
       snapdragon-admin-bff-api: { condition: service_started }
       snapdragon-federation-api: { condition: service_started }
@@ -386,8 +571,15 @@ services:
       GM_SYNC_GAMES_ROLE: admin
     depends_on:
       casdoor: { condition: service_started }
+    # snapdragon-actions' Dockerfile EXPOSEs 8090 (unlike every other Spring
+    # service here, which defaults to 8080) — a healthcheck against :8080 always
+    # fails (connection refused), which is why this container showed "unhealthy"
+    # forever even though the app boots clean (verified live: its own boot log
+    # says "Netty started on port 8090"). Keep in sync with the be-gateway's
+    # snapdragon-api route in gateway-routes/be/application-routes.yml, which had
+    # the identical :8080 mismatch.
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8090/actuator/health/readiness || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -453,18 +645,17 @@ services:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-login-ui
-    # Runtime OIDC globals the login-ui nginx entrypoint writes into snap-config.js so its
-    # (already-built) Casdoor OIDC+PKCE flow turns ON. ISSUER is the BROWSER-reachable Casdoor
-    # (front-channel authorize); BFF_URL is the front door where login-ui POSTs /bff/auth/callback
-    # and hydrates /bff/session; CLIENT_ID + REDIRECT_URI BYTE-MATCH the seeded app-user-bff
-    # (seed-e2e.sh ensure_app) and user-bff's APP_BFF_OIDC_* — the SSO consistency invariant.
+    # Runtime globals the login-ui nginx entrypoint writes into snap-config.js so its
+    # (already-built) NATIVE login form turns ON. The browser NEVER learns a Casdoor URL:
+    # login-ui renders a first-party username/password form and POSTs it to SNAP_BFF_URL
+    # + /bff/login (the front door), then hydrates /bff/session — user-bff does all the
+    # PKCE + internal-Casdoor work server-side. No SNAP_OIDC_ISSUER / SNAP_CASDOOR_ISSUER /
+    # SNAP_OIDC_REDIRECT_URI here BY DESIGN: handing the browser a Casdoor origin or an
+    # authorize/redirect URL is exactly what this hardening removes. SNAP_BFF_URL is the
+    # only endpoint the browser talks to for auth.
     environment:
       SNAP_OIDC_ENABLED: "true"
-      SNAP_OIDC_ISSUER: ${SNAP_OIDC_ISSUER:-http://localhost:8000}
-      SNAP_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
-      SNAP_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://localhost:8088/login/callback}
       SNAP_BFF_URL: ${SNAP_BFF_URL:-http://localhost:8088}
-      SNAP_CASDOOR_ISSUER: ${SNAP_OIDC_ISSUER:-http://localhost:8000}
 
   snapdragon-mastodon-ui:
     <<: *amd64

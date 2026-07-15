@@ -1,0 +1,26 @@
+# edge-ai-tts — CPU-default Piper text-to-speech + viseme timeline for the VN voice
+# feature (B3), consumed by matrix-ui's VN client (DEFAULT-OFF). Unlike
+# edge-ai-analysis it has NO dependsOn edge-ai — it is self-contained CPU work
+# (baked-in voice model, no upstream call), so it schedules ANYWHERE in the mesh.
+# Opt-in: baked only when 'edge-ai-tts' is selected (--with-edge-ai-tts / in
+# --optional-services). gate_optional_services prunes it independently (its own
+# deselection only — never folded with edge-ai's).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-edge-ai-tts
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"   # no dependency — same wave as edge-ai itself
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/edge-ai-tts
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-inference
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

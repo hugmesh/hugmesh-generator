@@ -118,7 +118,7 @@ KEYS/                                 (FAT32, volume label "KEYS")
 | `network.wifi.{ssid,psk,country}` | Synthesises a NetworkManager Wi-Fi profile. |
 | `network` *(or `network/*.nmconnection`)* | Verbatim NM connection profiles are also copied. |
 | `mesh.endpoint` | Mesh control-server URL override. **Empty = local-first**: defaults to the pki node's primary LAN IPv4 (`http://<lanip>:8080`), so the node works before any public DNS exists. |
-| `mesh.magic_dns_domain` | headscale `dns.base_domain` (default `headnet.internal`). |
+| `mesh.magic_dns_domain` | The **orchestration superdomain** — the internal MagicDNS zone (headscale `dns.base_domain`) every mesh node joins. **Permanently internal**: it is `<brand>.internal` (default `snapdragon.internal`), distinct from the public `snapdragon.cluster_domain`, and is **never** go-live-flipped. `gen-provision-keys.sh` writes the effective value here (`SUPERDOMAIN` / `--superdomain`, default `<BRAND>.internal`). |
 | `mesh.cp_dns_name` | **Stable** MagicDNS control-plane name (default `kube-api.<magic_dns_domain>`) used as kubeadm `controlPlaneEndpoint` + every join target. |
 | `headscale.enabled` | Start the headscale control server (PKI node). |
 | `headscale.config_file` | Path on KEYS to a config that replaces the default. |
@@ -135,8 +135,9 @@ KEYS/                                 (FAT32, volume label "KEYS")
 | `kubernetes.join.{api_server,token,ca_cert_hash}` | Worker join parameters. Empty `api_server` auto-targets `mesh.cp_dns_name:6443`. |
 | `kubernetes.join.certificate_key` | **Additional control-plane only**: the `--certificate-key` from the first CP's `kubeadm init phase upload-certs` (also persisted at `/etc/snapdragon/kubeadm-certificate-key`). |
 | `snapdragon.role` | `pki` \| `backend` \| `frontend` — selects the cluster app set / namespace this node serves. |
-| `snapdragon.cluster_domain` | Base domain for gateways/ingress/Casdoor. |
+| `snapdragon.cluster_domain` | The **public apex** for gateways/ingress/Casdoor — the go-live target the wizard flips to a real routable domain. Distinct from `mesh.magic_dns_domain` (the permanently-internal orchestration superdomain, which is never go-live-flipped). |
 | `snapdragon.gitops.{enabled,argocd}` | On the PKI node, bootstrap ArgoCD + the app-of-apps. |
+| `snapdragon.gitops.repo_token_file` | Path on KEYS to a **fine-grained read-only GitHub PAT** (default `gitops/repo-token`) that lets ArgoCD clone the **private** GitOps repo. `provision_snapdragon()` reads it and exports it as `ARGOCD_REPO_TOKEN`; `bootstrap.sh` then creates the `snapdragon-generator-repo` repository Secret **before** the app-of-apps. **NEVER in git**, same offline custody as `vault/token` + `luks.key`. Absent ⇒ `bootstrap.sh` fails closed for the private repo (rotate = rewrite this file + re-run provisioning). |
 | `egress_vpn.domain` | OPTIONAL override for the node's own brand domain used to pick `KEYS/vpn/<domain>/` (defaults to `snapdragon.cluster_domain`). `provision_vpn()` installs ONLY this domain's configs, 0600. |
 | `vault.*` | Seed HashiCorp Vault / External Secrets Operator state; Vault is primary, USB is the offline fallback (see below). |
 | `storage.devices[]` | Set up attached M.2/NVMe or USB storage (see below). |

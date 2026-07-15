@@ -1,0 +1,72 @@
+# Harbor per-pod Ingress backstop — SAME shape/rationale as db-ingress.yaml's
+# db-ingress-route-access-db policy: tier-ingress.yaml admits the WHOLE
+# snapdragon-pki-adjacent from-set (snapdragon-backend, devops,
+# ingress-nginx-internal, self) to every pod it selects. Harbor's registry API
+# surface (pulls/pushes) is real attack surface reached from OTHER namespaces,
+# so it gets the same per-pod narrowing route-access-db/cassandra already have:
+# default-deny Ingress, reachable ONLY from its real callers.
+#
+# Real callers (confirmed):
+#   - be-gateway (snapdragon-backend) — pull-auth passthrough for image pulls
+#     that route through the backend gateway.
+#   - snapdragon-image-builds (the opt-in in-cluster Kaniko build namespace,
+#     manifests/image-builder/) — pushes the images it builds.
+#   - kubelet on every node — NOT expressible as a NetworkPolicy peer (kubelet
+#     image pulls go directly to the registry from the node's container
+#     runtime, not from a pod); this policy only constrains POD-to-pod/ns
+#     traffic, so node-level pulls are unaffected either way.
+#
+# gitlab-runner is DELIBERATELY NOT in this allow-list: confirmed by reading
+# .gitlab-ci.yml's build:images job — it does NOT push from the runner pod
+# itself. It dispatches a Kaniko Job INTO snapdragon-image-builds (kubectl
+# apply + wait), and THAT pod does the actual push using the
+# image-builder-registry credential. So snapdragon-image-builds already covers
+# CI's real push path; adding gitlab-runner here would be a broader grant than
+# what CI actually needs.
+#
+# EXCLUDES: Harbor's bundled Postgres/Redis (internal database.type=internal /
+# redis.type=internal subresources) are deliberately NOT isolated here, same
+# as GitLab's bundled postgresql/redis/minio today have no per-pod backstop —
+# confirmed convention for chart-bundled storage in this platform (only the
+# platform's OWN hand-written *-db Deployments + Cassandra get this treatment).
+#
+# ⚠ Pod label assumption: `app: harbor` is the goharbor/harbor-helm chart's
+# common label across core/portal/jobservice/registry/trivy (NOT applied to
+# the bundled postgresql/redis, which carry their own chart-internal labels —
+# confirming this does not accidentally re-widen their isolation posture).
+# VALIDATE against the deployed chart version (apps/03a-harbor.yaml pins
+# targetRevision: 1.16.x) before relying on this in production; if the label
+# differs, this policy silently matches nothing (fails closed, not open).
+#
+# DEPLOY: ships via the SAME auto-sync ArgoCD app as tier-ingress/db-ingress
+# (apps/08-networkpolicy.yaml — confirmed auto-sync today; db-ingress.yaml's
+# own header comment predates that flip and still says "MANUAL-sync", stale)
+# and needs LIVE on-cluster connectivity validation BEFORE it is relied upon.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: harbor-ingress
+  namespace: snapdragon-pki
+  labels: { app: harbor, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  podSelector:
+    matchLabels: { app: harbor }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # be-gateway (snapdragon-backend) — pull-auth passthrough.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+          podSelector:
+            matchLabels: { app.kubernetes.io/instance: snapdragon-be-gateway }
+        # snapdragon-image-builds (opt-in Kaniko build namespace) — image pushes.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-image-builds } }
+        # devops (ArgoCD) — the harbor-provision PostSync hook Job's own
+        # reconcile calls run IN snapdragon-pki (self), covered by the rule
+        # below; this entry is for ArgoCD's own health/sync probes if any.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }
+        # self (snapdragon-pki) — the harbor-provision Job talks to
+        # harbor-core over the in-namespace ClusterIP Service.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-pki } }
+      ports:
+        - { protocol: TCP, port: 80 }
+        - { protocol: TCP, port: 443 }

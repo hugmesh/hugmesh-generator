@@ -37,19 +37,23 @@ metadata:
   name: tier-ingress
   namespace: snapdragon-pki
 spec:
-  # EXCLUDES route-access-db + Cassandra from this BROAD namespace admittance —
-  # they are isolated per-pod by db-ingress.yaml (reachable only from the gateways
-  # + admin-bff-api/federation-api). k8s NetworkPolicy is additive with no exclude,
-  # so the broad from-set below MUST NOT select these DB pods or it would re-admit
-  # the whole from-set to them (ADR-32 DB-hardening). Keep this NotIn list in sync
-  # with db-ingress.yaml. (route-access-db carries `app: route-access-db`;
-  # Cassandra carries `app.kubernetes.io/name: cassandra` — two different label
-  # keys, so each needs its own NotIn term.)
+  # EXCLUDES route-access-db + Cassandra + Harbor from this BROAD namespace
+  # admittance — they are isolated per-pod by db-ingress.yaml / harbor-ingress.yaml
+  # (reachable only from the gateways + admin-bff-api/federation-api, and
+  # be-gateway + snapdragon-image-builds, respectively). k8s NetworkPolicy is
+  # additive with no exclude, so the broad from-set below MUST NOT select these
+  # pods or it would re-admit the whole from-set to them (ADR-32 DB-hardening;
+  # Harbor migration). Keep this NotIn list in sync with db-ingress.yaml /
+  # harbor-ingress.yaml. (route-access-db carries `app: route-access-db`;
+  # Cassandra carries `app.kubernetes.io/name: cassandra`; Harbor carries
+  # `app: harbor` — different label keys/values, so each needs its own NotIn
+  # term; Harbor happens to share the `app` key with route-access-db so it is
+  # added to that SAME values list rather than a new matchExpressions entry.)
   podSelector:
     matchExpressions:
       - key: app
         operator: NotIn
-        values: [route-access-db]
+        values: [route-access-db, harbor]
       - key: app.kubernetes.io/name
         operator: NotIn
         values: [cassandra]

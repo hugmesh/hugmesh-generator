@@ -1,0 +1,73 @@
+# {{BRAND_TITLE}} Harbor — in-cluster OCI container registry for this brand's
+# tenant namespaces. Generated from snapdragon-generator/templates/apps/03a-harbor.yaml.hbs
+# Mirrors specs/cluster/apps/03a-harbor.yaml (the reference "snapdragon.systems"
+# deployment) with {{BRAND}}/{{CLUSTER_DOMAIN}} substituted throughout. Deploys
+# into {{BRAND}}-pki, the SAME per-brand identity/control-plane namespace
+# convention route-access-db/pki-gateway already use (see
+# templates/apps/20-gateway-be.yaml.hbs, templates/apps/22-gateway-superadmin.yaml.hbs).
+#
+# NOTE ({{HARBOR_PROJECT}} token): the harbor-provision robot/project
+# reconcile Job (specs/cluster/manifests/harbor/harbor-provision-job.yaml) is
+# NOT yet brand-templated — only this Application CRD is, in this pass. Its
+# HARBOR_PROJECT env var is hardcoded "snapdragon" today; a follow-up pass
+# (the same one that renames the old GitLab-group token to {{HARBOR_PROJECT}}
+# across the other 12 templates + generate-brand-repos.sh's derivation site;
+# NOT spelled out literally here to avoid this comment itself being rewritten
+# by generate-brand-repos.sh's blind token substitution) should add a
+# templated project-provisioning Job here too, using {{HARBOR_PROJECT}} as the
+# project name so each brand gets its own isolated Harbor project instead of
+# sharing "snapdragon". Until then a brand's Harbor deploys with NO project/
+# robot accounts auto-provisioned (ships dark, same posture as any other
+# not-yet-wired brand follow-up in this generator).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{BRAND}}-harbor
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://helm.goharbor.io
+    chart: harbor
+    targetRevision: 1.16.x
+    helm:
+      releaseName: {{BRAND}}-harbor
+      values: |
+        # See specs/cluster/apps/03a-harbor.yaml's header comment for the
+        # nginx-internal class + harbor-mtls TLS reasoning (mirrored here 1:1).
+        expose:
+          type: ingress
+          tls:
+            enabled: true
+            certSource: secret
+            secret:
+              secretName: harbor-mtls
+          ingress:
+            hosts:
+              core: registry.{{CLUSTER_DOMAIN}}
+            className: nginx-internal
+        externalURL: https://registry.{{CLUSTER_DOMAIN}}
+        harborAdminPassword: ""     # unused; existingSecret below wins
+        existingSecretAdminPassword: harbor-admin
+        existingSecretAdminPasswordKey: HARBOR_ADMIN_PASSWORD
+        nodeSelector:
+          {{CLUSTER_DOMAIN}}/pki: "true"
+        persistence:
+          persistentVolumeClaim:
+            registry:      { storageClass: snapdragon-local }
+            jobservice:
+              jobLog:      { storageClass: snapdragon-local }
+            database:      { storageClass: snapdragon-local }
+            redis:         { storageClass: snapdragon-local }
+            trivy:         { storageClass: snapdragon-local }
+        trivy:
+          enabled: false
+        # internalTLS disabled — matches the platform's existing convention
+        # (see specs/cluster/apps/03a-harbor.yaml's comment): no app enables
+        # intra-component mTLS between its own bundled subcomponents.
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{BRAND}}-pki
+  syncPolicy:
+    automated: { prune: false, selfHeal: true }
+    syncOptions: [CreateNamespace=true, ServerSideApply=true]

@@ -23,9 +23,11 @@
 #   2. MATRIX (Synapse) — users e2e-user + e2e-mod; PUBLIC room X
 #      (#e2e-public-x:<server>) and INVITE-ONLY room Y (#e2e-invite-y:<server>,
 #      created by e2e-mod, e2e-user invited; e2e-user joined to X).
-#   3. MASTODON — accounts e2e-usera + e2e-userb; follower relationship
-#      e2e-userb -> e2e-usera; ONE pending moderation-queue item (an unresolved
-#      report of e2e-usera filed by e2e-userb).
+#   3. MASTODON — accounts e2e_usera + e2e_userb (underscore, not hyphen: Mastodon's
+#      username validator only accepts [a-z0-9_]+, so the hyphenated e2e- prefix used
+#      by every OTHER persona in this script cannot be reused here); follower
+#      relationship e2e_userb -> e2e_usera; ONE pending moderation-queue item (an
+#      unresolved report of e2e_usera filed by e2e_userb).
 #
 # IDEMPOTENT: every step probes before it creates (add-user skipped when
 # present, room aliases resolved before createRoom, tootctl "taken" tolerated,
@@ -75,13 +77,16 @@ CASDOOR_URL="${CASDOOR_URL:-http://localhost:8000}"
 CASDOOR_ADMIN_USER="${CASDOOR_ADMIN_USER:-admin}"
 CASDOOR_ADMIN_PASS="${CASDOOR_ADMIN_PASS:-123}"
 CASDOOR_ORG="${CASDOOR_ORG:-snapdragon}"
-# The OIDC application login-ui redirects to and user-bff exchanges the code against.
-# The compose Casdoor has NO app (only the cluster seeds one). clientId / secret /
-# redirectUri MUST byte-match login-ui's __SNAP_OIDC_CLIENT_ID__ / __SNAP_OIDC_REDIRECT_URI__
-# and user-bff's APP_BFF_OIDC_CLIENT_ID / _SECRET / _REDIRECT_URI in compose.local.yaml.
+# The confidential OAuth app user-bff drives NATIVE login through: user-bff POSTs the
+# username/password to the INTERNAL Casdoor /api/login with this app's OIDC/PKCE params,
+# gets an auth code, and exchanges it (authorization_code grant). The compose Casdoor has
+# NO app (only the cluster seeds one). clientId / secret / redirectUri MUST byte-match
+# user-bff's APP_BFF_OIDC_CLIENT_ID / _SECRET / _REDIRECT_URI in compose.local.yaml. The
+# redirectUri is an INTERNAL PKCE-match string only — Casdoor validates it against the
+# registered app; NO browser ever visits it (native login has no front-channel redirect).
 CASDOOR_APP_CLIENT_ID="${CASDOOR_APP_CLIENT_ID:-app-user-bff}"
 CASDOOR_APP_SECRET="${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}"
-CASDOOR_APP_REDIRECT_URI="${CASDOOR_APP_REDIRECT_URI:-http://localhost:8088/login/callback}"
+CASDOOR_APP_REDIRECT_URI="${CASDOOR_APP_REDIRECT_URI:-http://snapdragon-user-bff-api:8080/bff/auth/callback}"
 CASDOOR_BRAND_B_URL="${CASDOOR_BRAND_B_URL:-}"
 SYNAPSE_URL="${SYNAPSE_URL:-http://localhost:8008}"
 SYNAPSE_SERVER_NAME="${SYNAPSE_SERVER_NAME:-localhost}"
@@ -176,14 +181,16 @@ ensure_roles() { # <base-url> <org>
   done
 }
 
-# A fresh compose Casdoor has NO OAuth2 application, so login-ui's OIDC redirect has
-# nothing to authorize against and user-bff's code->token exchange has no client.
+# A fresh compose Casdoor has NO OAuth2 application, so user-bff's native-login
+# /api/login POST has no client to name and its code->token exchange has no client.
 # Create the app-user-bff confidential client, mirroring the cluster's reconcile_app
 # (specs/cluster/manifests/casdoor/init-job.yaml): authorization_code + refresh_token +
-# password grants, JWT-Custom / RS256 with the roles + permissions token attributes the
-# gateway RBAC reads from the minted JWT (an empty tokenFields set strips roles and
-# breaks authz platform-wide). No `cert` field — Casdoor signs with its built-in cert,
-# same as the cluster path. redirectUri / clientId / secret byte-match login-ui + user-bff.
+# password grants (native login uses the authorization_code grant — user-bff drives the
+# credentials through /api/login type=code, then exchanges the returned code), JWT-Custom /
+# RS256 with the roles + permissions token attributes the gateway RBAC reads from the minted
+# JWT (an empty tokenFields set strips roles and breaks authz platform-wide). No `cert` field
+# — Casdoor signs with its built-in cert, same as the cluster path. redirectUri / clientId /
+# secret byte-match user-bff's APP_BFF_OIDC_*.
 ensure_app() { # <base-url> <org>
   local base="$1" org="$2" app
   app="$(jq -n \
@@ -222,9 +229,42 @@ ensure_app    "${CASDOOR_URL}" "${CASDOOR_ORG}"
 # domain-locked/…) PLUS the three the UI suites additionally assume. Same
 # "username:ROLES:passwordEnv" spec shape; appended exactly like
 # tests/pentest/seed-personas.sh appends its attacker/load pools.
+#
+# The ad-hoc identities below (admin@snapdragon.systems, alice../frank@gmail.com,
+# dragoneer, rbac-pending@/rbac-approved@gmail.com) are the sequential, stateful
+# specs/02,04,05,06,07,08,09,17 personas — per helpers.ts's
+# onboard()/registerOnly() doc comment, native login has no self-registration
+# surface, so each must exist as a pre-seeded native Casdoor account (username
+# = the literal handle these specs hardcode) sharing the common E2E_PASSWORD.
+# admin@snapdragon.systems is the sole admin among them (spec 02/08/09
+# exercise admin-only views); the rest are bare ROLE_USER (the
+# nav-matrix/nav-mastodon gate in menu.component.ts checks only
+# capabilities.installed() + session.fullyRegistered(), not a per-service
+# role, so plain ROLE_USER is sufficient to reach both). mallory@gmail.com and
+# "rando" are DELIBERATELY absent — specs 03/07 assert sign-in is denied for an
+# identity no admin ever provisioned.
+#
+# rbac-pending@/rbac-approved@gmail.com (spec 17): POST /bff/admin/allowlist
+# does NOT gate native sign-in — that's a vestige of the removed Google/Discord
+# self-registration flow (SsoAuthController's separate, dark /bff/register
+# endpoint); /bff/login always validates against a REAL, pre-existing Casdoor
+# account, exactly like every other ad-hoc persona here. Seeded here so spec
+# 17's "pending vs completed registration" gate can exercise the SAME real
+# registerOnly()/onboard() mechanism as specs 02/03/04, not a self-provisioning
+# path that doesn't exist in the current architecture.
 EXTRA_SPECS="\
 e2e-superadmin:ROLE_SUPERADMIN:E2E_SUPERADMIN_PASSWORD \
-e2e-banned:ROLE_USER:E2E_BANNED_PASSWORD"
+e2e-banned:ROLE_USER:E2E_BANNED_PASSWORD \
+admin@snapdragon.systems:ROLE_ADMIN,ROLE_USER:E2E_PASSWORD \
+alice@gmail.com:ROLE_USER:E2E_PASSWORD \
+bob@gmail.com:ROLE_USER:E2E_PASSWORD \
+carol@gmail.com:ROLE_USER:E2E_PASSWORD \
+dave@gmail.com:ROLE_USER:E2E_PASSWORD \
+eve@gmail.com:ROLE_USER:E2E_PASSWORD \
+frank@gmail.com:ROLE_USER:E2E_PASSWORD \
+dragoneer:ROLE_USER:E2E_PASSWORD \
+rbac-pending@gmail.com:ROLE_USER:E2E_PASSWORD \
+rbac-approved@gmail.com:ROLE_USER:E2E_PASSWORD"
 
 ROLES_DIR="${SEED_WORKDIR}/roles-render"
 BASE_RENDER="${SEED_WORKDIR}/roles-render-base"
@@ -312,12 +352,14 @@ log "leg 2: Matrix users + rooms at ${SYNAPSE_URL} (server_name=${SYNAPSE_SERVER
 matrix_register() { # <user>
   local out
   # register_new_matrix_user reads registration_shared_secret from the config
-  # up-real.sh ensured; "User ID already taken" is the idempotent no-op.
+  # the synapse service's own entrypoint ensures (compose.real.yaml — self-
+  # heals on every container start); "User ID already taken" is the
+  # idempotent no-op.
   out="$(docker exec "${SYNAPSE_CTR}" register_new_matrix_user \
           -u "$1" -p "${E2E_PASSWORD}" --no-admin -c /data/homeserver.yaml \
           "http://localhost:8008" 2>&1)" \
     || { echo "${out}" | grep -qi "already taken\|already exists\|M_USER_IN_USE" \
-           || die "could not register Matrix user $1: ${out} (did up-real.sh set registration_shared_secret?)"; }
+           || die "could not register Matrix user $1: ${out} (is the synapse container's config missing registration_shared_secret? see compose.real.yaml's synapse entrypoint)"; }
   log "matrix user $1 present"
 }
 
@@ -378,28 +420,32 @@ log "leg 3: Mastodon accounts + follow + pending report at ${MASTODON_URL}"
 
 mastodon_account() { # <user>
   local out
+  # --email domain MUST be in this container's EMAIL_DOMAIN_ALLOWLIST
+  # (tests/stack/.mastodon.env: EMAIL_DOMAIN_ALLOWLIST=e2e.local) — any other
+  # domain (e.g. the snapdragon.test this used to hardcode) is rejected outright
+  # with a generic "email unreachable" failure, regardless of MX reachability.
   out="$(docker exec "${MASTODON_CTR}" bin/tootctl accounts create "$1" \
-          --email "$1@snapdragon.test" --confirmed --approve 2>&1)" \
+          --email "$1@e2e.local" --confirmed --approve 2>&1)" \
     || { echo "${out}" | grep -qi "taken\|exists" \
            || die "could not create Mastodon account $1: ${out}"; }
   log "mastodon account $1 present"
 }
-mastodon_account e2e-usera
-mastodon_account e2e-userb
+mastodon_account e2e_usera
+mastodon_account e2e_userb
 
 # Follow + report via rails runner INSIDE the container (tootctl has no follow/
 # report verb; the runner aborts non-zero on any missing precondition — honest).
 docker exec -i "${MASTODON_CTR}" bundle exec rails runner - <<'RUBY' || die "Mastodon follow/report seed failed (see runner output above)"
-a = Account.find_local("e2e-usera")
-b = Account.find_local("e2e-userb")
-abort("SEED-DEP: e2e-usera/e2e-userb missing (tootctl create failed earlier?)") unless a && b
+a = Account.find_local("e2e_usera")
+b = Account.find_local("e2e_userb")
+abort("SEED-DEP: e2e_usera/e2e_userb missing (tootctl create failed earlier?)") unless a && b
 
 if b.following?(a)
-  puts "[seed-e2e] follow e2e-userb -> e2e-usera exists"
+  puts "[seed-e2e] follow e2e_userb -> e2e_usera exists"
 else
   FollowService.new.call(b, a)
   abort("SEED-DEP: follow did not take") unless b.reload.following?(a)
-  puts "[seed-e2e] follow e2e-userb -> e2e-usera created"
+  puts "[seed-e2e] follow e2e_userb -> e2e_usera created"
 end
 
 if Report.unresolved.where(account: b, target_account: a).exists?

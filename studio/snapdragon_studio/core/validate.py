@@ -103,3 +103,21 @@ def validate_home_device(value: str) -> str:
 def validate_home_backup(value: str) -> str:
     _require(bool(_HOME_BACKUP.fullmatch(value)), "home_backup", value)
     return value
+
+
+# A Portage package atom (category/name): the space-separated words the ARM builders
+# read into --extra-packages (and the new --packages-add/--packages-drop lists) via
+# `read -ra`. The category is a lowercase slug; the package name may carry caps
+# (e.g. app-editors/vim, sys-fs/ecryptfs-utils, dev-libs/libFoo). Shell-word-safe — no
+# quote/space/$()/;|&/glob — so a value can never break out of the emerge command line.
+_PACKAGE_ATOM = re.compile(r"^[a-z0-9][a-z0-9+._-]*/[A-Za-z0-9+._-]+$")
+
+
+def validate_package_atoms(value: str) -> str:
+    """Validate a SPACE-SEPARATED list of Portage atoms (category/name). Empty is OK
+    (no packages). Every word must be a plain category/name atom — fail closed on any
+    shell/sed-meaningful character so the list stays a safe `read -ra` payload. Same
+    allowlist at every surface (Studio, headless, and the web DTO validators)."""
+    for atom in value.split():
+        _require(bool(_PACKAGE_ATOM.fullmatch(atom)), "package_atom", atom)
+    return value

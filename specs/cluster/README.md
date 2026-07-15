@@ -225,8 +225,8 @@ ClusterSecretStore **`snapdragon-vault`** (provider `vault`, token auth from the
 | `casdoor` (`db_password_plain`) | `casdoor-db` (`username`=`casdoor`/`password`) | `snapdragon-pki` |
 | `clickhouse` (`password`) | `clickhouse-auth` (`password`) | `snapdragon-backend`, `observability` |
 | `uptrace` (`pg_password`/`project_token`) | `uptrace-auth` (`pg-password`/`project-token`) | `observability` |
-| `gitlab-registry` (`username`/`token`) | `gitlab-registry` (`.dockerconfigjson`) | `snapdragon-backend`, `snapdragon-frontend`, `snapdragon-games` |
-| `image-builder-registry` (`username`/`token`) | `image-builder-registry` (`.dockerconfigjson`, **push**) | `snapdragon-image-builds` (opt-in) |
+| `harbor-robots` (`pull_name`/`pull_secret`) | `harbor-registry` (`.dockerconfigjson`) | `snapdragon-backend`, `snapdragon-frontend`, `snapdragon-games` |
+| `harbor-robots` (`push_name`/`push_secret`) | `image-builder-registry` (`.dockerconfigjson`, **push**) | `snapdragon-image-builds` (opt-in) |
 | `casdoor-apps` (`fragment-sync`) | `fragment-sync-casdoor` (`clientId`=`app-fragment-sync`/`clientSecret`) | `snapdragon-frontend` |
 
 The same materialized Secrets are also written to the KEYS stick at
@@ -237,19 +237,26 @@ unchanged.
 
 ## Notes / TODO before production
 
-- First-party images now pull from the in-cluster GitLab registry
+- First-party images now pull from the in-cluster **Harbor** registry (see
+  `apps/03a-harbor.yaml`; GitLab's own bundled registry no longer serves this)
   (`registry.snapdragon.systems/snapdragon/<repo>:main`, set per app via kustomize
-  `images:`) with the ESO-materialized `gitlab-registry` imagePullSecret.
-  PREREQUISITE: create a GitLab **group deploy token** (scope `read_registry`) and
-  store it at Vault `snapdragon/gitlab-registry` (`username`/`token`). Any app
-  without a source repo yet stays `:dev` until built.
+  `images:`) with the ESO-materialized `harbor-registry` imagePullSecret (renamed
+  from `gitlab-registry`). This is now AUTOMATED, not an operator-pasted token: the
+  `harbor-provision` PostSync Job (`apps/03b-harbor-provision.yaml` +
+  `manifests/harbor/harbor-provision-job.yaml`) creates the Harbor project and a
+  project-scoped **pull-only** robot account via Harbor's REST API and writes its
+  one-time-revealed secret to Vault `snapdragon/harbor-robots`
+  (`pull_name`/`pull_secret`) — Harbor never lets you re-read a robot secret once
+  minted, so that Job captures it immediately. `scripts/gen-cluster-secrets.sh`'s
+  `GITLAB_REGISTRY_TOKEN` remains only as a manual-override escape hatch for
+  local/offline testing. Any app without a source repo yet stays `:dev` until built.
 - The opt-in in-cluster Kaniko build pipeline (`manifests/image-builder`, enabled by
   copying `apps-optional/60-image-builder.yaml` into `apps/`) PUSHES with a SEPARATE
-  credential: create a GitLab **group deploy token** (scope `write_registry`) and store
-  it at Vault `snapdragon/image-builder-registry` (`username`/`token`). ESO materializes
-  it as the `image-builder-registry` `.dockerconfigjson` the Kaniko Job mounts. It is
-  distinct from the `read_registry` pull token above so the runtime pull secret can
-  never push.
+  credential: the SAME `harbor-provision` Job also mints a project-scoped
+  **push-only** robot account and writes it to Vault `snapdragon/harbor-robots`
+  (`push_name`/`push_secret`). ESO materializes it as the `image-builder-registry`
+  `.dockerconfigjson` the Kaniko Job mounts. It is distinct from the pull-scoped
+  robot account above so the runtime pull secret can never push.
 - Casdoor uses an `emptyDir` and the all-in-one image — switch to a PVC + an
   external DB, and seed the Google provider (`casdoor-google` Secret) + the
   gateway OAuth2 client.

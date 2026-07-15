@@ -127,5 +127,89 @@ if hostname_ok "${hn}"; then echo "hostname=\"${hn}\"" > "${WORK}/hostname"; els
 esc_ssid='../../../etc/cron.d/pwn'
 if ssid_ok "${esc_ssid}"; then bad "ssid traversal accepted as filename"; else ok "ssid traversal never used as .nmconnection filename"; fi
 
+# ── (cp_dns_name) headscale extra_records / /etc/hosts / kube-api endpoint injection ──
+# resolve_cp_dns_name() interpolates .mesh.cp_dns_name into headscale config.yaml
+# dns.extra_records, /etc/hosts, AND the kubeadm join API endpoint. Gate: reject anything that
+# is not a plain dotted DNS name (^[a-z0-9.-]+$ — blocks newlines/quotes/YAML-breakers) and fall
+# back to the derived default, matching the magic_dns_domain + ssh_user fail-closed gates.
+if ! grep -qF 'cp_dns_name is not a valid dotted DNS name' "${PROV}"; then
+  echo "  FAIL cp_dns_name fail-closed gate not found in provision.sh"; exit 1
+fi
+cp_dns_ok(){ local n="$1"; [[ "${n}" =~ ^[a-z0-9.-]+$ ]]; }
+ok "extracted + mirrored the real cp_dns_name gate predicate"
+# (A) injection payloads REJECTED
+for n in 'a b' 'a;reboot' 'a$(id)' 'a`id`' 'a|b' 'a"b' 'UP.PER' '' $'x\ny' 'a/b'; do
+  if rej cp_dns_ok "${n}"; then ok "cp_dns_name rejected: $(printf %q "${n}")"
+  else bad "cp_dns_name NOT rejected: $(printf %q "${n}")"; fi
+done
+# (B) legitimate values ACCEPTED
+for n in kube-api.snapdragon.internal cp.acme.internal kube-api.headnet.internal a.b.c; do
+  if cp_dns_ok "${n}"; then ok "cp_dns_name accepted: ${n}"; else bad "cp_dns_name rejected: ${n}"; fi
+done
+# End-to-end (needs jq — provision.sh needs it too): a malicious cp_dns_name must RESOLVE to a
+# single clean line with no injected A-record, driving the REAL resolvers extracted from the file.
+if command -v jq >/dev/null 2>&1; then
+  CPW="$(mktemp -d)"
+  { echo 'MANIFEST="$1"'; echo 'jqm(){ jq -r "$1" "${MANIFEST}" 2>/dev/null; }'
+    echo 'log(){ :; }'; echo 'warn(){ :; }'
+    awk '/^resolve_magic_dns_domain\(\) \{/,/^\}/' "${PROV}"
+    awk '/^resolve_cp_dns_name\(\) \{/,/^\}/' "${PROV}"
+    echo 'resolve_cp_dns_name 2>/dev/null'; } > "${CPW}/h.sh"
+  # JSON with escaped \n + \" — jq -r un-escapes them into the real newlines/quotes the exploit uses.
+  printf '%s' '{"mesh":{"cp_dns_name":"kube-api.evil\"\n      type: \"A\"\n      value: \"6.6.6.6\"\n    - name: \"x","magic_dns_domain":"snapdragon.internal"}}' > "${CPW}/evil.json"
+  cpout="$(bash "${CPW}/h.sh" "${CPW}/evil.json")"
+  if [ "$(printf '%s' "${cpout}" | wc -l)" -eq 0 ] && ! printf '%s' "${cpout}" | grep -q '6.6.6.6'; then
+    ok "malicious cp_dns_name resolved to a single clean line (no injected A-record): ${cpout}"
+  else
+    bad "malicious cp_dns_name leaked injection: $(printf %q "${cpout}")"
+  fi
+  rm -rf "${CPW}"
+else
+  ok "cp_dns_name resolver e2e skipped (jq absent)"
+fi
+
+# ── (node /etc/hosts) .nodes[].ip / .name (+ dom/facade/pki_ip) injection ────────
+# provision_hosts() writes ip/name/dom/facade/pki_ip VERBATIM into /etc/hosts; a newline
+# injects standalone host lines (map the control-plane MagicDNS name -> attacker IP = a
+# first-boot `kubeadm join` MITM). Gate: ip/pki_ip = bare IP literal ([0-9A-Fa-f:.]);
+# name/dom/facade = bare DNS/hostname ([A-Za-z0-9._-]); a malformed node is skipped.
+if ! grep -qF 'ip/name malformed' "${PROV}"; then
+  echo "  FAIL node /etc/hosts ip/name gate not found in provision.sh"; exit 1
+fi
+node_ip_ok(){   [[ "$1" =~ ^[0-9A-Fa-f:.]+$ ]]; }
+node_name_ok(){ [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]]; }
+ok "extracted + mirrored the real node ip/name gate predicates"
+for x in 'a b' 'a;b' 'a/b' 'evil' '' $'1.2\n3.4' '1.2.3.4 x' '10.0.0.1;reboot'; do
+  if rej node_ip_ok "${x}"; then ok "node ip rejected: $(printf %q "${x}")"
+  else bad "node ip NOT rejected: $(printf %q "${x}")"; fi
+done
+for x in $'w\n6.6.6.6 kube-api.snapdragon.internal' 'a b' 'a/b' 'a;b' '' $'x\ny' 'a"b'; do
+  if rej node_name_ok "${x}"; then ok "node name rejected: $(printf %q "${x}")"
+  else bad "node name NOT rejected: $(printf %q "${x}")"; fi
+done
+for x in 10.0.0.1 192.168.1.254 fe80::1 ::1; do
+  if node_ip_ok "${x}"; then ok "node ip accepted: ${x}"; else bad "node ip rejected: ${x}"; fi
+done
+for x in pki0 node-1 kube-api.snapdragon.internal w0; do
+  if node_name_ok "${x}"; then ok "node name accepted: ${x}"; else bad "node name rejected: ${x}"; fi
+done
+
+# ── (wifi psk) .network.wifi.psk INI injection ───────────────────────────────────
+# psk is written `psk=${psk}` in the 0600 .nmconnection here-doc; a newline injects INI
+# directives/sections (the SSID is already fenced for this class). Gate: 8-63 printable
+# (WPA passphrase) OR 64 hex (raw PSK); else the whole profile is skipped.
+if ! grep -qF 'not a valid WPA passphrase' "${PROV}"; then
+  echo "  FAIL wifi psk gate not found in provision.sh"; exit 1
+fi
+psk_ok(){ local p="$1"; { [ "${#p}" -ge 8 ] && [ "${#p}" -le 63 ] && [[ "${p}" =~ ^[[:print:]]+$ ]]; } || [[ "${p}" =~ ^[0-9A-Fa-f]{64}$ ]]; }
+ok "extracted + mirrored the real wifi psk gate predicate"
+for x in $'goodpass\n[wifi-security]\nkey-mgmt=none' 'short' $'12345678\nx' "$(printf 'g%.0s' {1..65})"; do
+  if rej psk_ok "${x}"; then ok "psk rejected: $(printf %q "${x}" | cut -c1-28)"
+  else bad "psk NOT rejected: $(printf %q "${x}" | cut -c1-28)"; fi
+done
+for x in goodpass1 MyWiFiPassword "$(printf 'a%.0s' {1..63})" "$(printf 'a%.0s' {1..8})" "$(printf '0%.0s' {1..64})"; do
+  if psk_ok "${x}"; then ok "psk accepted (len ${#x})"; else bad "psk rejected (len ${#x})"; fi
+done
+
 echo "== done: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

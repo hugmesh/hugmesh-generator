@@ -28,6 +28,11 @@ console.log
 # ── Local docker-compose stack (clone+build+run) ──────────────────
 # Cloned source repos the local stack builds from (scripts/clone-all-repos.sh).
 /.stack-src/
+# ── Mesh repo-templating (Phase 2) ────────────────────────────────
+# READ-ONLY Tier-2 base clones pulled by scripts/pull-repo-base.sh — never
+# committed/vendored (the overlay references the base, it is not vendored in).
+# Rendered per-tenant trees land under the already-ignored /out/.
+/.repo-base/
 # Generated Mastodon dev env (SOCIAL=1 tier) — holds generated secrets.
 tests/stack/.mastodon.env
 # seed-e2e.sh workdir — rendered role JSON (deterministic test passwords) +
@@ -57,6 +62,11 @@ ssh_host_*_key.pub
 keys-template/cloudflared/tunnel-token
 keys-template/cloudflared/credentials.json
 **/cloudflared/credentials.json
+# go-live wizard secrets (keys-layout token_dest paths emitted by the go-live
+# provider registry, specs/usr/lib/snapdragon/go-live-providers.sh) — the DDNS
+# token. Only *.example is committed.
+keys-template/ddns/token
+**/ddns/token
 # Encryption-at-rest key material — LUKS data-disk keyfile + etcd Secret
 # encryption key. Custody is the offline USB-KEYS stick / Vault, NEVER git.
 keys-template/secrets/luks.key
@@ -72,6 +82,10 @@ keys-template/vault/unseal-key
 keys-template/vault/token
 **/vault/unseal-key
 **/vault/token
+# Phase 7 foreign-mesh trust store — staged OUT-OF-BAND, pubkeys-only, never
+# committed (only README.md + the *.example placeholder are tracked; the
+# `*.example` name falls outside this glob).
+keys-template/mesh-trust/*/foreign-provenance-pub.ed25519
 
 # Brand profile may hold default passwords — never commit the real one
 # (brand.conf.example is the committed template).
@@ -86,3 +100,4 @@ brand.conf
 
 # Claude Code agent worktrees / scratch — never commit
 .claude/
+scripts/__pycache__/

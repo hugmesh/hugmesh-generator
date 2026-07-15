@@ -36,6 +36,7 @@ compose topology is a faithful translation of those manifests to compose DNS.
 
 ```bash
 make stack-up                 # ENV=test (default): clone -> build -> up -d
+make stack-seed               # REQUIRED for real SSO login: seed Casdoor (org+roles+app-user-bff+personas)
 make stack-logs               # tail logs
 make stack-ps                 # container status
 make stack-down               # stop + drop volumes
@@ -49,8 +50,17 @@ What `make stack-up` does:
    service from `./.stack-src/<repo>`.
 3. **up** — `docker compose ... up -d`.
 
-Then open **http://localhost:8088** (the fe-gateway front door) and
-**http://localhost:8000** (Casdoor).
+`make stack-up` alone does **not** seed any personas, so sign-in fails until you
+also run `make stack-seed` (`tests/stack/seed-e2e.sh`) — it creates the org/
+roles/personas that back every login, and is a **required** follow-up step, not
+optional (see "Seeding the e2e fixtures" below).
+
+Then open **http://localhost:8088** (the fe-gateway front door) and sign in at its
+**native login form** (`/login`) — the browser POSTs credentials to `/bff/login`
+and never touches Casdoor. Casdoor is still published at **http://localhost:8000**
+in this dev stack, but ONLY as an admin/seed convenience (the `seed-e2e.sh`
+provisioning transport); it is **not** part of the login path and has no
+browser-facing role. In the cluster Casdoor gets no public ingress at all.
 
 Useful overrides:
 
@@ -145,7 +155,7 @@ deliberately ships only dev placeholders so nothing secret is committed.
 | URL | Service |
 |---|---|
 | http://localhost:8088 | **Front door** — fe-gateway (Angular host + remotes, /bff, /_fragments, /be) |
-| http://localhost:8000 | Casdoor (OIDC identity) |
+| http://localhost:8000 | Casdoor (OIDC identity) — **admin/seed transport only**, not the login path; the browser never uses it (in-cluster it has no public ingress) |
 | http://localhost:8008 | Synapse / Matrix (only with `SOCIAL=1`) |
 | http://localhost:3000 | Mastodon web (only with `SOCIAL=1`) |
 | http://localhost:4000 | Mastodon streaming (only with `SOCIAL=1`) |
@@ -160,21 +170,31 @@ only the gateways are ingress-exposed.
 
 ---
 
-## Seeding the e2e fixtures — `tests/stack/seed-e2e.sh`
+## Seeding the e2e fixtures — `tests/stack/seed-e2e.sh` (a.k.a. `make stack-seed`)
 
-The UI e2e suites assume a set of personas/rooms/relationships exists. Against a
-**running** stack (front door `http://localhost:8088`, Casdoor
-`http://localhost:8000`, social tier up — `make stack-up SOCIAL=1` or, for the
-full Synapse/Mastodon first-run setup, `tests/stack/up-real.sh`), run:
+The UI e2e suites assume a set of personas/rooms/relationships exists, and —
+since PR #227 — this is also **the required step that makes login work at all**:
+a fresh compose Casdoor boots with no org/roles/personas, so without seeding
+there's nothing for the native `/bff/login` form (or an e2e persona) to
+authenticate against. Against a
+**running** core stack (front door `http://localhost:8088`, Casdoor
+`http://localhost:8000` — `make stack-up`), run:
 
 ```bash
-tests/stack/seed-e2e.sh
+make stack-seed                # core identity leg only (org+roles+app-user-bff+personas)
+make stack-up SOCIAL=1 && make stack-seed SOCIAL=1   # + Matrix/Mastodon fixtures
 ```
 
-It provisions (reusing `tests/qemu/seed-accounts.sh --roles` + its Casdoor apply
-hook — the same machinery the cluster/pentest seeds use):
+(equivalently `SEED_CASDOOR_ONLY=1 tests/stack/seed-e2e.sh` / `tests/stack/seed-e2e.sh`
+directly). It provisions (reusing `tests/qemu/seed-accounts.sh --roles` + its
+Casdoor apply hook — the same machinery the cluster/pentest seeds use):
 
-1. **Personas** (Casdoor org `snapdragon`): the standard matrix
+1. **The `app-user-bff` OAuth2 client** (`ensure_app()`): a confidential client
+   mirroring the cluster's `reconcile_app` (authorization_code + refresh_token
+   grants, JWT-Custom/RS256 with the roles+permissions token attributes gateway
+   RBAC reads). This is the piece a fresh compose Casdoor lacks entirely — without
+   it, browser SSO login has no application to redirect to.
+2. **Personas** (Casdoor org `snapdragon`): the standard matrix
    (`e2e-user`/`e2e-mod`/`e2e-admin`/…) **plus** `e2e-superadmin`, `e2e-banned`
    (ban = the **absence** of the platform access roles — seeded as the post-ban
    state) and the domain-locked pair (`e2e-*-domainlocked` — lock = the
@@ -183,12 +203,13 @@ hook — the same machinery the cluster/pentest seeds use):
    role members and pre-mints per-persona JWTs into `tests/stack/.seed-e2e/jwt-cache`
    (usable as `SNAP_PREMINT_DIR`). Default admin creds are the fresh-casdoor dev
    default (`admin`/`123`) — override `CASDOOR_ADMIN_PASS` otherwise.
-2. **Matrix (Synapse)**: users `e2e-mod` + `e2e-user`; **public room X**
+3. **Matrix (Synapse)**: users `e2e-mod` + `e2e-user`; **public room X**
    (`#e2e-public-x:localhost`) and **invite-only room Y** (`#e2e-invite-y:localhost`,
    `e2e-user` invited; verified `join_rule=invite`).
-3. **Mastodon**: accounts `e2e-usera` + `e2e-userb`; follower relationship
-   **`e2e-userb` → `e2e-usera`**; **one pending moderation-queue item** (an
-   unresolved report of `e2e-usera` filed by `e2e-userb`).
+4. **Mastodon**: accounts `e2e_usera` + `e2e_userb` (underscore — Mastodon's
+   username validator rejects hyphens); follower relationship
+   **`e2e_userb` → `e2e_usera`**; **one pending moderation-queue item** (an
+   unresolved report of `e2e_usera` filed by `e2e_userb`).
 
 The script is **idempotent** (probe-before-create everywhere; safe to re-run)
 and **fail-honest**: every unmet dependency dies with a message naming it (which
@@ -240,12 +261,17 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
 
 ## Honest limitations / what needs creds
 
-- **Casdoor is empty on first boot.** Logins, the federation manifest, and the
-  fragment fleet need Casdoor **apps/users** that this stack does NOT seed (the
-  cluster seeds them via `manifests/casdoor/init-*`). Expect the UIs to load but
-  auth-gated flows to 401 until you configure Casdoor (apps for admin-bff,
-  fragment-sync, actions; a test user). The route-access DB **does** seed from
-  `manifests/route-access/initdb/20-schema.sql`.
+- **Casdoor is empty on first boot, but `make stack-up` does NOT run the seeder.**
+  `make stack-seed` (`tests/stack/seed-e2e.sh`) is a **required** follow-up step,
+  not optional: it creates the `app-user-bff` OAuth2 client + the org/roles +
+  e2e personas, and once it has run, **real browser SSO login works end-to-end**
+  (`/login` with an e2e persona, e.g. `e2e-admin`/`e2e-pass` — see "Seeding the
+  e2e fixtures" above). Before seeding — or for Casdoor **apps/users** this
+  stack still doesn't provision (the federation manifest's fragment-sync client,
+  an `actions` client) — expect the UIs to load but those specific auth-gated
+  flows to 401 (the cluster seeds those via `manifests/casdoor/init-*`). The
+  route-access DB **does** seed from `manifests/route-access/initdb/20-schema.sql`
+  independent of `make stack-seed`.
 - **Fragment fleet serves an empty set** until federation has enabled modules +
   a valid `app-fragment-sync` Casdoor client — so `/_fragments/**` is up but
   empty. It is the standalone sync image on `:8081` (in k8s it is nginx + a sync
@@ -260,10 +286,15 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
   single local Casdoor with placeholder client creds, so the games sync job does
   nothing locally (no separate games Casdoor in this stack).
 - **Social tier is heavy + opt-in.** `SOCIAL=1` pulls Synapse + Mastodon
-  (web/sidekiq/streaming + Postgres/Redis). It does NOT run the
-  Synapse-config / Mastodon `db:prepare` first-run setup that `up-real.sh` does;
-  for a fully working social tier use `tests/stack/up-real.sh` (the dedicated
-  real-services bring-up) which handles those steps.
+  (web/sidekiq/streaming + Postgres/Redis). Synapse needs no separate
+  first-run step any more — its `synapse` service entrypoint
+  (`tests/stack/compose.real.yaml`) generates its config and self-heals
+  registration on every container start, the same way whether you bring it
+  up via `SOCIAL=1` or `tests/stack/up-real.sh`. Mastodon's `db:prepare`
+  first-run migration is NOT run by `SOCIAL=1`, though; for a fully working
+  Mastodon (and to skip a manual `rails db:prepare`), use
+  `tests/stack/up-real.sh` (the dedicated real-services bring-up), which
+  still handles that step.
 - **No TLS / no ingress / no SELinux-MCS.** The cluster's mTLS, nginx ingress,
   and per-pod SELinux levels are k8s concerns and are not reproduced here; the
   front door is plain HTTP on localhost.
