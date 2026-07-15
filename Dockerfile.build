@@ -154,10 +154,20 @@ FROM cross-${CROSSDEV} AS final
 #                           the .img ESP install and the live-ISO post-processing
 # Deliberately merged HERE (not in the toolchain stage) so the hours-long cached
 # crossdev stage above is not invalidated by this addition.
+# Also merged HERE (not the cached toolchain stage) so the crossdev layer stays cached:
+#   sys-kernel/dracut  — HOST dracut, invoked directly by build-x86-host-stage4.sh to
+#                        generate the disk-boot + --uefi UKI initramfs (grep :3930/:3959;
+#                        the :3677 preflight `for b in grub-install dracut parted ...`
+#                        hard-requires it). ARM boards (frite/opi5/rpi5) run dracut via
+#                        chroot into the target sysroot, so they do not need the host one —
+#                        but x86 does, and without it the x86 image/UKI build fails.
+#   sys-apps/gptfdisk  — sgdisk: create/inspect the GPT (ESP+root) the x86 .img uses.
 RUN emerge --verbose --noreplace \
         sys-boot/shim \
         app-crypt/sbsigntools \
-        app-crypt/efitools
+        app-crypt/efitools \
+        sys-kernel/dracut \
+        sys-apps/gptfdisk
 # The repo is bind-mounted here at runtime; output at /out. No ENTRYPOINT — we
 # do NOT want to hide `make`, so the container is a thin `make` wrapper. The
 # default CMD runs the whole fleet on the NATIVE (in-container, no-sudo) path
