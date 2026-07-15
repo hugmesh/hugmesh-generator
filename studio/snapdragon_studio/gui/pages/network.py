@@ -32,6 +32,15 @@ _TRI_TIP = ("3-state: checked = force ON (--with-…), unchecked = force OFF (--
             "part-checked square = leave the brand-profile/builder default.")
 
 
+def _hint(text: str) -> "QtWidgets.QLabel":
+    """A small word-wrapped gray helper label (the page-clarity pattern used across the
+    wizard: says what a group of fields is FOR, in plain language)."""
+    lab = QtWidgets.QLabel(text)
+    lab.setWordWrap(True)
+    lab.setStyleSheet("color: gray;")
+    return lab
+
+
 def _client_class_role(role: str, platform: str) -> bool:
     """True when the selected role builds a CLIENT-class (desktop) image — the
     class for which the builders accept --optional-services but never bake it
@@ -85,12 +94,19 @@ class NetworkPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
+        # Title/subtitle are set path-aware in initializePage (a standalone desktop has
+        # no mesh/tailnet, so this page IS its network-identity + egress + security step,
+        # while cloud/mesh use it for the domain, superdomain and cluster services).
         self.setTitle("Network, identity & egress")
         lay = QtWidgets.QVBoxLayout(self)
 
         # ---- Group 1: brand identity & domain (visited in ALL modes) -------------
         self.identity_box = QtWidgets.QGroupBox("Identity & domain")
         il = QtWidgets.QVBoxLayout(self.identity_box)
+        self.identity_help = _hint(
+            "Brand identity plus the PUBLIC apex domain the image serves — the go-live "
+            "target (distinct from the internal superdomain below).")
+        il.addWidget(self.identity_help)
         # brand profile (G3): -C/--config brands/*.conf — the sole carrier of the
         # HEADSCALE_URL / RELEASE_STATE / ADMIN_EMAILS / MAIL_* / EXCLUDE_SERVICES
         # presets; sourced by every builder before its CLI flags (CLI wins).
@@ -138,6 +154,10 @@ class NetworkPage(QtWidgets.QWizardPage):
         # ---- Group 3: mesh control plane (cloud AND mesh) ------------------------
         self.mesh_box = QtWidgets.QGroupBox("Mesh control plane")
         cp = QtWidgets.QVBoxLayout(self.mesh_box)
+        cp.addWidget(_hint(
+            "The internal orchestration superdomain every mesh node joins "
+            "(headscale/tailnet control plane). Permanently internal; never the "
+            "go-live apex above."))
         # Headscale URL (G2) — the brand mesh control-server URL baked to
         # /etc/snapdragon/headscale-url. NOT a builder flag on any platform
         # (NON_ARGV_FIELDS): build_driver delivers it as the HEADSCALE_URL env var
@@ -180,6 +200,9 @@ class NetworkPage(QtWidgets.QWizardPage):
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.egress, 1); h.addWidget(ebtn)
         self.egress_row = w   # greyed as one unit (line edit + Browse…) per platform
+        lay.addWidget(_hint(
+            "Egress VPN — route this image's outbound traffic through a provided VPN "
+            "profile (optional). Lock it to stop a managed node's user removing it."))
         lay.addWidget(_row("Egress VPN", w))
         self.egress_locked = QtWidgets.QCheckBox("Lock egress VPN (managed node — user cannot remove)")
         lay.addWidget(self.egress_locked)
@@ -254,6 +277,9 @@ class NetworkPage(QtWidgets.QWizardPage):
         # explicit none (G13) and the full user-level set (G14).
         self.services_box = QtWidgets.QGroupBox("Optional cluster services (--optional-services)")
         svl = QtWidgets.QVBoxLayout(self.services_box)
+        svl.addWidget(_hint(
+            "Which optional services this mesh runs (akkoma / tuwunel / phpbb "
+            "…). Leave everything unticked to keep the builder default set."))
         # UX-honesty note (PR #304 verify pass): on a CLIENT-class role the builders
         # ACCEPT these selections but never bake them — a desktop image carries no
         # cluster GitOps tree, so the build plan echoes OPTIONAL_SERVICES as
@@ -306,6 +332,22 @@ class NetworkPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         c = self.wiz.cfg
+        # Path-aware header (spec 3-7): a standalone desktop has no mesh/tailnet, so this
+        # page IS its network-identity / egress / security step; cloud/mesh use it for the
+        # domain, the orchestration superdomain and the cluster services.
+        if c.mode == "standalone":
+            self.setTitle("Network identity, egress & security")
+            self.setSubTitle(
+                "Brand identity, the optional egress VPN and the host security "
+                "stack for this standalone desktop. No mesh, no tailnet, no SSO.")
+        else:
+            self.setTitle("Domain, mesh & services")
+            self.setSubTitle(
+                "The cluster services this mesh runs, the public apex domain "
+                "it serves, and the internal orchestration superdomain every node joins."
+                if c.mode == "mesh" else
+                "The domain this client joins, its tailnet + SSO login, egress "
+                "and the optional services it can reach.")
         self.proxy_stack.setCurrentText(c.proxy_stack if c.proxy_stack in ("auto", "on", "off")
                                         else "auto")
         self.snort.setChecked(c.snort)

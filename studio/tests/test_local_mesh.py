@@ -1,0 +1,195 @@
+"""Local Docker mesh — the ModePage's fourth first-screen choice.
+
+Pins the behavior that the flow-clarity review found unguarded: the local-mesh GATE
+(the choice disables Next and reveals the inline launcher) and the LAUNCHER itself
+(it must open a LocalMeshDialog without crashing and drive a MeshNode-shaped node).
+A missing localmesh module used to slip through CI precisely because nothing here
+exercised the launcher — this file is that missing coverage.
+
+Runs the REAL wizard on Qt's offscreen platform; skipped whole when no Qt binding is
+installed (the pure-core LocalMeshConfig/LocalMeshNode assertions still need the core
+import, which does not require Qt, but they live here beside the GUI ones for locality).
+"""
+import os
+
+import pytest
+
+# must be set BEFORE the first QApplication is created
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+pytest.importorskip("snapdragon_studio.gui.qt",
+                    reason="no Qt binding (PySide6/PyQt6) installed")
+
+from snapdragon_studio.core.local_mesh import (  # noqa: E402  (after the importorskip gate)
+    LocalMeshConfig, LocalMeshNode,
+)
+from snapdragon_studio.core.mesh_node import MeshNode  # noqa: E402
+from snapdragon_studio.core.platform_info import HostInfo  # noqa: E402
+from snapdragon_studio.gui import wizard as wizard_mod  # noqa: E402
+from snapdragon_studio.gui.pages import localmesh as localmesh_mod  # noqa: E402
+from snapdragon_studio.gui.pages import ModePage  # noqa: E402
+from snapdragon_studio.gui.qt import QtWidgets  # noqa: E402
+
+STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
+
+HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
+                has_kvm=False, is_root=False, builder_image="snapdragon-builder")
+
+
+@pytest.fixture(autouse=True)
+def _pinned_host(monkeypatch):
+    monkeypatch.setattr(wizard_mod, "detect",
+                        lambda builder_image="snapdragon-builder": HOST)
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    return (QtWidgets.QApplication.instance()
+            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+
+
+@pytest.fixture
+def wiz(qapp):
+    w = wizard_mod.StudioWizard(GENERATOR_DIR)
+    w.show()
+    yield w
+    w.close()
+    w.deleteLater()
+
+
+def _mode_page(wiz):
+    return next(p for p in wiz._pages if isinstance(p, ModePage))
+
+
+# ---- the GATE (this is the assertion that would have caught the missing module) ----
+
+def test_localmesh_choice_gates_next_and_reveals_launcher(wiz):
+    mp = _mode_page(wiz)
+    mp._buttons["localmesh"].setChecked(True)
+    mp._on_mode_toggled()
+    # a local mesh builds no image: Next/Finish stay disabled, the inline launcher shows.
+    assert mp.isComplete() is False
+    assert mp.local_btn.isVisibleTo(mp) is True
+    # ...and it commits NOTHING to cfg.mode even if validatePage is reached.
+    assert mp.validatePage() is False
+
+
+@pytest.mark.parametrize("mode", ["mesh", "cloud", "standalone"])
+def test_image_choices_stay_complete_and_hide_launcher(wiz, mode):
+    mp = _mode_page(wiz)
+    mp._buttons[mode].setChecked(True)
+    mp._on_mode_toggled()
+    assert mp.isComplete() is True
+    assert mp.local_btn.isVisibleTo(mp) is False
+
+
+# ---- the LAUNCHER: opens a real dialog, never a ModuleNotFoundError ----
+
+def test_launch_local_mesh_opens_dialog_without_crash(wiz, monkeypatch):
+    opened = {}
+
+    def _fake_exec(self):
+        opened["dialog"] = self
+        return 0
+
+    # don't actually block on a modal — just prove the dialog constructs + .exec() runs.
+    monkeypatch.setattr(localmesh_mod.LocalMeshDialog, "exec", _fake_exec, raising=True)
+    mp = _mode_page(wiz)
+    mp._launch_local_mesh()  # must NOT raise (regression: ModuleNotFoundError)
+    assert isinstance(opened.get("dialog"), localmesh_mod.LocalMeshDialog)
+
+
+def test_dialog_start_builds_and_calls_a_mesh_node(qapp, monkeypatch):
+    calls = {}
+
+    def _fake_available(self):
+        return True, ""
+
+    def _fake_start(self):
+        calls["auth_key"] = self.cfg.auth_key
+        return True, "up"
+
+    monkeypatch.setattr(LocalMeshNode, "available", _fake_available, raising=True)
+    monkeypatch.setattr(LocalMeshNode, "start", _fake_start, raising=True)
+    monkeypatch.setattr(LocalMeshNode, "status", lambda self: _stopped(), raising=True)
+
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    dlg.auth_key.setText("tskey-live")
+    dlg.node_name.setText("mynode")
+    dlg._start()
+    assert calls.get("auth_key") == "tskey-live"       # launcher DID call MeshNode.start
+    # the node it drives IS a MeshNode (shared lifecycle with the tray)
+    assert isinstance(dlg.node, MeshNode)
+
+
+def test_dialog_start_is_gated_when_auth_key_missing(qapp, monkeypatch):
+    started = {"called": False}
+    monkeypatch.setattr(LocalMeshNode, "start",
+                        lambda self: started.__setitem__("called", True) or (True, ""),
+                        raising=True)
+    monkeypatch.setattr(LocalMeshNode, "status", lambda self: _stopped(), raising=True)
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    dlg.auth_key.setText("")   # no key -> available() gates, start() must NOT run
+    dlg._start()
+    assert started["called"] is False
+    assert "auth key" in dlg.status.text().lower()
+
+
+# ---- the pure-core runner (no Qt, no docker needed) ----
+
+def test_config_env_maps_the_overlay_vars():
+    e = LocalMeshConfig(auth_key="  tskey-abc  ", node_name="n1",
+                        login_server="https://hs.example.com").env()
+    assert e["TS_AUTHKEY"] == "tskey-abc"                    # trimmed
+    assert e["SNAPDRAGON_NODE_NAME"] == "n1"
+    assert e["TS_EXTRA_ARGS"] == "--accept-routes --login-server=https://hs.example.com"
+    # bare config: only the accept-routes default, no node-name / login-server keys
+    bare = LocalMeshConfig(auth_key="tskey-x").env()
+    assert bare == {"TS_AUTHKEY": "tskey-x", "TS_EXTRA_ARGS": "--accept-routes"}
+
+
+def test_available_gates_on_auth_key():
+    ok, why = LocalMeshNode(GENERATOR_DIR, LocalMeshConfig(auth_key="")).available()
+    assert ok is False and "auth key" in why.lower()
+    # with a key present the gate defers to MeshNode (docker/template checks) — the
+    # message, whatever it is, is NO LONGER the auth-key prompt.
+    _, why2 = LocalMeshNode(GENERATOR_DIR, LocalMeshConfig(auth_key="tskey-x")).available()
+    assert "auth key" not in why2.lower()
+
+
+def test_stage_writes_authkey_env(tmp_path):
+    node = LocalMeshNode(GENERATOR_DIR, LocalMeshConfig(
+        auth_key="tskey-xyz", node_name="mynode",
+        login_server="https://hs.example.com", workdir=str(tmp_path)))
+    node._stage()
+    env = _read_env(tmp_path / ".env")
+    assert env["TS_AUTHKEY"] == "tskey-xyz"
+    assert env["SNAPDRAGON_NODE_NAME"] == "mynode"
+    assert env["TS_EXTRA_ARGS"] == "--accept-routes --login-server=https://hs.example.com"
+
+
+def test_stage_overrides_any_bundled_env_key(tmp_path):
+    # a pre-existing .env in the workdir (as MeshNode._stage may copy from the stack dir)
+    # must not shadow the operator's auth key — ours wins.
+    (tmp_path / ".env").write_text("TS_AUTHKEY=stale\nOTHER=keep\n")
+    node = LocalMeshNode(GENERATOR_DIR, LocalMeshConfig(
+        auth_key="tskey-new", workdir=str(tmp_path)))
+    node._stage()
+    env = _read_env(tmp_path / ".env")
+    assert env["TS_AUTHKEY"] == "tskey-new"
+    assert env["OTHER"] == "keep"          # unrelated keys are preserved
+
+
+def _read_env(path):
+    out = {}
+    for line in path.read_text().splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            out[k] = v
+    return out
+
+
+def _stopped():
+    from snapdragon_studio.core.mesh_node import MeshStatus
+    return MeshStatus(running=False, detail="not started")

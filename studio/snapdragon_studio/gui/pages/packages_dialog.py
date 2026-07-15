@@ -70,7 +70,7 @@ class PackagesDialog(QtWidgets.QDialog):
 
         lay = QtWidgets.QVBoxLayout(self)
         hdr = QtWidgets.QLabel(
-            f"Packages for <b>{cfg.role or 'image'}</b> on "
+            f"These are the packages baked into the <b>{cfg.role or 'image'}</b> image on "
             f"<b>{cfg.platform or 'x86'}</b>. Essentials are locked; unchecking a default "
             "removes it (may return as a dependency); checking an extra adds it.")
         hdr.setWordWrap(True)

@@ -19,6 +19,8 @@ class RolePage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("Role & platform")
+        # initializePage() sets a path-aware subtitle (standalone vs. mesh client);
+        # this is the fallback before the mode is known.
         self.setSubTitle("Pick the image role, then the hardware platform that builds it.")
         lay = QtWidgets.QVBoxLayout(self)
         self.roles = QtWidgets.QListWidget()
@@ -107,6 +109,12 @@ class RolePage(QtWidgets.QWizardPage):
         # payload/affiliation flags (G21/G22)
         self.client_box = QtWidgets.QGroupBox("Client desktop options")
         cl = QtWidgets.QVBoxLayout(self.client_box)
+        client_help = QtWidgets.QLabel(
+            "Desktop weight overrides the role's baseline: thin = light LXDE desktop, "
+            "full = full Plasma desktop. Leave at (default) to keep the role's built-in weight.")
+        client_help.setWordWrap(True)
+        client_help.setStyleSheet("color: gray;")
+        cl.addWidget(client_help)
         self.desktop = QtWidgets.QComboBox()
         self.desktop.addItems(["(default)", "thin", "full"])
         self.steam = QtWidgets.QComboBox()
@@ -159,6 +167,16 @@ class RolePage(QtWidgets.QWizardPage):
         # somehow reached (the WorklistPage owns mesh role x platform).
         if c.mode == "mesh":
             return
+        # Path-aware subtitle (spec step 2): this page IS the desktop-TYPE picker — say
+        # which choice the user is making on the path they took at the first screen.
+        if c.mode == "standalone":
+            self.setSubTitle(
+                "Choose the desktop type — thick (full desktop) / thin (light desktop) / "
+                "unaffiliated (plain Gentoo, no Snapdragon) — and the hardware platform "
+                "that builds it.")
+        else:  # cloud — the mesh desktop CLIENT that joins an existing mesh
+            self.setSubTitle(
+                "Choose the client desktop type and the hardware platform that builds it.")
         self.roles.blockSignals(True)
         self.roles.clear()
         for role, platforms, label in ROLE_CHOICES[c.mode]:

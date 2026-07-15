@@ -556,6 +556,13 @@ class User:
     domain: str = ""
     role: str = "user"                 # superadmin|admin|mod|user (+games roles)
     email: str = ""
+    # First-login registration METHOD (spec 4/6): "" = derive (builder/provisioning
+    # default) | discord | gmail | password. Manifest-only — NEVER reaches to_cli_args
+    # (User is provisioning data, not argv). "password" records that this account is
+    # given a RANDOM password generated + presented at provisioning time; no plaintext
+    # secret is ever stored on the User (so it is safe to serialize/save like the other
+    # User fields — nothing to blank).
+    registration: str = ""
 
 
 @dataclass

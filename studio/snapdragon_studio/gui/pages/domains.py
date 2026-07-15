@@ -63,7 +63,12 @@ class DomainsPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
-        self.setTitle("Domains (superadmin)")
+        self.setTitle("Domains & their services")
+        self.setSubTitle(
+            "Beyond the superadmin apex, define the OTHER domains this mesh "
+            "hosts and pick which optional services each one provides in the table. "
+            "Every domain you add here is given its own default admin with a "
+            "generated random password (surfaced on the next, Users, step).")
         lay = QtWidgets.QVBoxLayout(self)
         # read-only header naming the orchestration superdomain (spec 5): all mesh nodes
         # join it, it is never a table row and is never attachable.
@@ -71,6 +76,15 @@ class DomainsPage(QtWidgets.QWizardPage):
         self.header.setWordWrap(True)
         self.header.setTextFormat(Qt.TextFormat.RichText)
         lay.addWidget(self.header)
+        # STEP 5 clarity: what the two editable columns are FOR (the 'Applies to' column
+        # is mesh-only and hidden in cloud — see initializePage).
+        self.table_help = QtWidgets.QLabel(
+            "‘Optional services’ = the per-domain service slugs this domain provides "
+            "(space/comma-separated; empty = the cluster-wide set applies). ‘Applies to’ "
+            "= which built node images the domain attaches to.")
+        self.table_help.setWordWrap(True)
+        self.table_help.setStyleSheet("color: gray;")
+        lay.addWidget(self.table_help)
         # 'Optional services' fills Domain.optional_services (G19) — the per-domain
         # service slugs consumed by cluster provisioning via the mesh manifest
         # (space/comma-separated; empty = the cluster-wide set applies). 'Applies to'
@@ -92,6 +106,15 @@ class DomainsPage(QtWidgets.QWizardPage):
         rem.clicked.connect(self._remove)
         btns.addWidget(add); btns.addWidget(rem); btns.addStretch(1)
         lay.addLayout(btns)
+        # STEP 6 surfacing: each domain gets a default admin whose credentials are
+        # generated + presented at provisioning — not entered or stored here.
+        self.admin_note = QtWidgets.QLabel(
+            "Each domain automatically gets a default admin account. Its random "
+            "password is generated and shown at provisioning time — you never type or "
+            "store it here. Add named users to each domain on the next step.")
+        self.admin_note.setWordWrap(True)
+        self.admin_note.setStyleSheet("color: gray;")
+        lay.addWidget(self.admin_note)
 
     def _entries(self):
         """The current worklist entries (mesh); empty when no worklist is set."""

@@ -23,7 +23,15 @@ from ._widgets import _row
 # role intersections, and seeding them directly would bypass that default-deny.
 USER_ROLE_CHOICES = ("superadmin", "admin", "mod", "user", "games", "games-services")
 
-_COL_USER, _COL_DOMAIN, _COL_ROLE, _COL_EMAIL = range(4)
+# Per-user first-login REGISTRATION method (spec 4/6). "derive" = "" on the User (the
+# provisioning default); discord/gmail = OAuth self-registration at first login; password
+# = a random password is generated + presented at provisioning (no secret is typed or
+# stored here). Manifest-only — never reaches the argv (User is provisioning data).
+USER_REGISTRATION_CHOICES = ("derive", "discord", "gmail", "password")
+
+# Registration is appended as the LAST column so the Domain/Role cell indices tests
+# read (cellWidget(row, 1) / cellWidget(row, 2)) are unchanged.
+_COL_USER, _COL_DOMAIN, _COL_ROLE, _COL_EMAIL, _COL_REG = range(5)
 # a loaded domain that is not among the defined domains is kept, but flagged — never
 # silently rewritten to a defined one.
 _UNDEFINED = " (not defined)"
@@ -34,12 +42,26 @@ class UsersPage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
-        self.setTitle("Users (superadmin)")
+        self.setTitle("Superusers & domain users")
+        self.setSubTitle(
+            "Name the superusers (locked to the orchestration superdomain) "
+            "and add users to each domain. For every user pick how they first sign in: "
+            "Discord or Gmail self-registration, or a password issued at provisioning.")
         lay = QtWidgets.QVBoxLayout(self)
-        self.table = QtWidgets.QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Username", "Domain", "Role", "Email"])
+        self.table = QtWidgets.QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(
+            ["Username", "Domain", "Role", "Email", "Registration"])
         self.table.horizontalHeader().setStretchLastSection(True)
         lay.addWidget(self.table)
+        # STEP 4/6 clarity: what the Registration column means.
+        self.reg_help = QtWidgets.QLabel(
+            "Registration: ‘discord’/‘gmail’ let the user self-register with that "
+            "account at first login; ‘password’ means a random password is generated "
+            "and presented at provisioning (never typed or stored here); ‘derive’ keeps "
+            "the provisioning default.")
+        self.reg_help.setWordWrap(True)
+        self.reg_help.setStyleSheet("color: gray;")
+        lay.addWidget(self.reg_help)
         # shown when a row references a domain that is not (yet) defined on the Domains
         # page — kept as-is, flagged (never silently rewritten).
         self.warn = QtWidgets.QLabel("")
@@ -110,7 +132,7 @@ class UsersPage(QtWidgets.QWizardPage):
             dom_combo.setEnabled(True)
         self._update_warning()
 
-    def _add(self, username="", domain="", role="user", email=""):
+    def _add(self, username="", domain="", role="user", email="", registration=""):
         r = self.table.rowCount()
         self.table.insertRow(r)
         self.table.setItem(r, _COL_USER, QtWidgets.QTableWidgetItem(username))
@@ -125,6 +147,11 @@ class UsersPage(QtWidgets.QWizardPage):
             lambda _t, d=dom_combo, rc=role_combo: self._apply_role_lock(d, rc))
         dom_combo.currentTextChanged.connect(lambda _t: self._update_warning())
         self.table.setItem(r, _COL_EMAIL, QtWidgets.QTableWidgetItem(email))
+        # per-user first-login registration method ("" -> the 'derive' default)
+        reg_combo = QtWidgets.QComboBox()
+        reg_combo.addItems(USER_REGISTRATION_CHOICES)
+        reg_combo.setCurrentText(registration or "derive")
+        self.table.setCellWidget(r, _COL_REG, reg_combo)
         self._apply_role_lock(dom_combo, role_combo)
 
     def _remove(self):
@@ -150,7 +177,8 @@ class UsersPage(QtWidgets.QWizardPage):
         c = self.wiz.cfg
         if self.table.rowCount() == 0:
             for u in c.users:
-                self._add(u.username, u.domain, u.role, u.email)
+                self._add(u.username, u.domain, u.role, u.email,
+                          getattr(u, "registration", ""))
         else:
             # back-nav: newly-defined domains must appear in every row's dropdown, and
             # a superadmin lock re-pins to the current superdomain.
@@ -177,7 +205,11 @@ class UsersPage(QtWidgets.QWizardPage):
             role_combo = self.table.cellWidget(r, _COL_ROLE)
             role = role_combo.currentText() if role_combo else "user"
             email = self.table.item(r, _COL_EMAIL).text().strip() if self.table.item(r, _COL_EMAIL) else ""
-            out.append(User(username=username, domain=domain, role=role, email=email))
+            reg_combo = self.table.cellWidget(r, _COL_REG)
+            reg = reg_combo.currentText() if isinstance(reg_combo, QtWidgets.QComboBox) else "derive"
+            registration = "" if reg == "derive" else reg
+            out.append(User(username=username, domain=domain, role=role, email=email,
+                            registration=registration))
         c = self.wiz.cfg
         c.users = out
         pr = self.person_role.currentText()

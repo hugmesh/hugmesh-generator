@@ -22,8 +22,9 @@ class SystemPage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("System identity")
-        self.setSubTitle("Baked host identity — blank fields keep the builder's "
-                         "role-derived hostname, UTC and default account.")
+        self.setSubTitle("The host identity baked into this node/desktop image — "
+                         "hostname, timezone and default account. Blank fields keep the "
+                         "builder's role-derived hostname, UTC and default account.")
         lay = QtWidgets.QVBoxLayout(self)
         self.hostname = QtWidgets.QLineEdit()
         self.hostname.setPlaceholderText("role-derived when blank (-H/--hostname)")

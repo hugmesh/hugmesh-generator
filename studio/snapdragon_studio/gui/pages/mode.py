@@ -1,4 +1,18 @@
-"""ModePage — the standalone / cloud / mesh Studio-mode radios."""
+"""ModePage — STEP 1: pick ONE of four clearly-distinct things to build.
+
+The four first-screen choices map onto the EXISTING three emission modes plus one
+non-image side-flow (design step1Taxonomy):
+
+  - MESH NODE            -> cfg.mode="mesh"        (superadmin builds node images)
+  - LOCAL DOCKER MESH    -> NO cfg.mode            (side-flow: run a dockerized mesh HERE)
+  - MESH DESKTOP CLIENT  -> cfg.mode="cloud"       (branded tailnet + SSO client)
+  - STANDALONE GENTOO    -> cfg.mode="standalone"  (hardened/unaffiliated personal desktop)
+
+cfg.mode stays exactly {"standalone","cloud","mesh"} — unchanged — so to_cli_args() /
+materialize() / the mesh manifest stay byte-identical for equivalent selections. The
+LOCAL DOCKER MESH choice builds no image, so it never sets cfg.mode: it disables
+Next/Finish (isComplete False) and runs from an inline modal launcher instead.
+"""
 from __future__ import annotations
 
 from ..qt import QtWidgets
@@ -11,41 +25,105 @@ class ModePage(QtWidgets.QWizardPage):
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
-        self.setTitle("What are you building?")
+        self.setTitle("What do you want to build?")
+        self.setSubTitle(
+            "Pick one. Three of these build an image; LOCAL DOCKER MESH instead runs a "
+            "mesh on this machine right now.")
         lay = QtWidgets.QVBoxLayout(self)
         self.group = QtWidgets.QButtonGroup(self)
+        # FOUR clearly-distinct choices, in the spec's STEP-1 order. Each carries
+        # property("mode"): the three IMAGE choices commit cfg.mode in validatePage
+        # exactly as before; "localmesh" is a transient side-flow that never touches
+        # cfg.mode. The DEFAULT is chosen by id (standalone) below, NOT by index, so a
+        # visual reorder can't change which choice the no-pick default flow exercises.
         self.modes = [
-            ("standalone", "Standalone hardened desktop",
-             "A personal LUKS-encrypted Gentoo+SELinux desktop. No mesh, no SSO — or an "
-             "UNAFFILIATED plain Gentoo desktop — zero Snapdragon branding/tooling."),
-            ("cloud", "Branded cloud image", "A tailnet client tied to a domain (mesh + SSO). Drop in an admin-provided key-zip."),
-            ("mesh", "Superadmin mesh", "Set up domains and attach users, then build mesh node image(s)."),
+            ("mesh", "Mesh node",
+             "Superadmin: build the server node image(s) — PKI, backend, frontend, GPU, "
+             "edge-AI — that run a mesh on dedicated hardware."),
+            ("localmesh", "Local Docker mesh",
+             "Run a mesh on THIS machine in Docker — no separate server hardware. "
+             "Configure it and launch the dockerized node right here."),
+            ("cloud", "Mesh desktop client",
+             "Build a branded desktop that JOINS an existing mesh (tailnet + SSO). "
+             "Load your admin-provided key-zip or configuration link."),
+            ("standalone", "Standalone Gentoo desktop",
+             "A personal hardened LUKS/SELinux desktop — or a plain UNAFFILIATED Gentoo "
+             "desktop with zero Snapdragon branding/tooling. No mesh, no SSO."),
         ]
+        self._buttons = {}
         for i, (mid, label, desc) in enumerate(self.modes):
             rb = QtWidgets.QRadioButton(label)
             rb.setProperty("mode", mid)
             sub = QtWidgets.QLabel(desc)
+            sub.setWordWrap(True)
             sub.setStyleSheet("color: gray;")
             sub.setContentsMargins(24, 0, 0, 8)
-            self.group.addButton(rb, i)
+            self.group.addButton(rb, i)          # button id == index in self.modes
+            self._buttons[mid] = rb
             lay.addWidget(rb)
             lay.addWidget(sub)
-        self.group.button(0).setChecked(True)
+        # DEFAULT is standalone BY ID (not index) — test_standalone_flow_skips_admin_pages
+        # relies on the no-pick default resolving to standalone (ImageConfig.mode default).
+        self._buttons["standalone"].setChecked(True)
+
+        # LOCAL DOCKER MESH builds no image: its radio disables Next/Finish (isComplete
+        # False) and reveals this inline launcher instead. The launcher opens the
+        # self-contained LocalMeshDialog (deferred import — the FleetDialog/golive
+        # precedent), which reuses core/mesh_node.py to run the local dockerized node.
+        self.local_btn = QtWidgets.QPushButton("Configure & run local mesh…")
+        self.local_btn.setToolTip(
+            "Runs a mesh on this machine via docker compose — no server hardware. "
+            "Provide a tailnet/headscale auth key; the node joins and serves locally.")
+        self.local_btn.clicked.connect(self._launch_local_mesh)
+        self.local_btn.setVisible(False)
+        lay.addWidget(self.local_btn)
+
+        # keep Next's enabled state (isComplete) and the launcher's visibility live as the
+        # selection changes — connected AFTER the default check so it fires only on change.
+        self.group.buttonToggled.connect(self._on_mode_toggled)
         lay.addStretch(1)
+
+    def _selected_mode(self):
+        btn = self.group.checkedButton()
+        return btn.property("mode") if btn is not None else None
+
+    def _on_mode_toggled(self, *_):
+        self.local_btn.setVisible(self._selected_mode() == "localmesh")
+        self.completeChanged.emit()
+
+    def isComplete(self):
+        # LOCAL DOCKER MESH has no image to advance to — the run happens in the modal
+        # launcher, so Next/Finish stay disabled while it is selected. Every IMAGE choice
+        # is always complete.
+        return self._selected_mode() != "localmesh"
+
+    def _launch_local_mesh(self):
+        # deferred import: LocalMeshDialog is self-contained (FleetDialog/golive
+        # precedent) and only needed if the operator actually opens it.
+        from .localmesh import LocalMeshDialog
+        LocalMeshDialog(self.wiz.generator_dir, parent=self.wiz).exec()
 
     def initializePage(self):
         # reflect the config's mode in the radios (a loaded config / back-navigation)
         # — otherwise the constructor's standalone default would silently clobber it
-        # on the next validatePage.
-        for i, (mid, _label, _desc) in enumerate(self.modes):
-            if mid == self.wiz.cfg.mode:
-                self.group.button(i).setChecked(True)
+        # on the next validatePage. cfg.mode is only ever an IMAGE mode
+        # (standalone/cloud/mesh); the transient localmesh radio is never restored from
+        # cfg (it holds no cfg.mode), so a loaded config always re-selects a real choice.
+        rb = self._buttons.get(self.wiz.cfg.mode)
+        if rb is not None:
+            rb.setChecked(True)
+        self._on_mode_toggled()
 
     def validatePage(self):
         btn = self.group.checkedButton()
         if btn is None:
             return False
         mid = btn.property("mode")
+        # LOCAL DOCKER MESH is a side-flow, not an image build: it commits NOTHING to
+        # cfg.mode and never advances (isComplete gates Next off; this guard makes the
+        # no-advance explicit even if validatePage is reached some other way).
+        if mid == "localmesh":
+            return False
         prev = self.wiz.cfg.mode
         self.wiz.cfg.mode = mid
         # a role from another mode is meaningless here — reset to the mode default

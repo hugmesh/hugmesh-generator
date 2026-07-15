@@ -13,7 +13,8 @@ class HardwarePage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("Target hardware")
-        self.setSubTitle("Pick a machine, or scan the one you're on.")
+        self.setSubTitle("Tune the GPU, Wi-Fi/Bluetooth and kernel for the target — "
+                         "or scan this machine to autofill them.")
         lay = QtWidgets.QVBoxLayout(self)
         self.profile = QtWidgets.QComboBox()
         self.profiles = profiles.load(wiz.generator_dir)
