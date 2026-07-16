@@ -1370,8 +1370,15 @@ run_parity_taxonomy_checks() {
 # offer rpi3 in ANY menu — including this one. This bucket (a) re-emits the catalog and
 # fails on drift from the committed copy, and (b) asserts no non-desktop role exposes rpi3.
 # NON-VACUITY: the desktop rpi5 role MUST still carry rpi3 (proves the check discriminates,
-# not just "rpi3 absent everywhere"). FAIL-CLOSED: 3 expected assertions.
-CAT_EXPECTED=3
+# not just "rpi3 absent everywhere").
+# DEVICE VIEW (arch->family->device taxonomy, additive keys from core/device_catalog):
+# (4) no UNSUPPORTED device is serialized with derived roles or selectable config axes
+# (visible-but-not-buildable is the whole point of listing them, #351); (5) NON-VACUITY —
+# at least one unsupported AND one experimental device exist, proving the status badge
+# machinery discriminates; (6) the rpi3 DEVICE's mesh roles are exactly {rpi5-desktop}
+# (the device-level twin of the node-rpi3 axis gate in (2)/(3)).
+# FAIL-CLOSED: 6 expected assertions.
+CAT_EXPECTED=6
 run_catalog_checks() {
     local out="${TMP_DIR}/catalog.out"
     if ! "${PYTHON}" - "${REPO_DIR}" >"${out}" 2>&1 <<'PY'
@@ -1412,6 +1419,23 @@ desk = [e for e in committed["roles"]["cloud"] if e["role"] == "rpi5-desktop"]
 axis = desk and [p for p in desk[0]["platforms"] if p["platform"] == "rpi5"]
 if not (axis and "rpi3" in axis[0]["axes"].get("board", [])):
     fails.append("NON-VACUITY: desktop rpi5 role lost rpi3 — the gate would be vacuously green")
+# (4) device view honesty: no unsupported device carries derived roles / config axes
+devices = committed.get("devices", [])
+bad = [d["id"] for d in devices
+       if d.get("status") == "unsupported"
+       and (d.get("config_axes") or any(d.get("roles", {}).values()))]
+if not devices:
+    fails.append("DEVICE-VIEW: web catalog lost its devices key (arch/family/device taxonomy)")
+elif bad:
+    fails.append(f"UNSUPPORTED-BUILDABLE: unsupported devices serialized with roles/axes: {bad}")
+# (5) NON-VACUITY: the status machinery must discriminate — both non-default statuses exist
+statuses = {d.get("status") for d in devices}
+if not {"unsupported", "experimental"} <= statuses:
+    fails.append(f"STATUS-VACUITY: need >=1 unsupported AND >=1 experimental device, got {sorted(s for s in statuses if s)}")
+# (6) the rpi3 DEVICE offers exactly the desktop image on mesh (device-level node gate)
+rpi3 = [d for d in devices if d.get("id") == "rpi3"]
+if not (rpi3 and {r["role"] for r in rpi3[0].get("roles", {}).get("mesh", [])} == {"rpi5-desktop"}):
+    fails.append("DEVICE-RPI3: the rpi3 device's mesh roles are not exactly {rpi5-desktop}")
 
 for f in fails:
     print("CAT FAIL", f)

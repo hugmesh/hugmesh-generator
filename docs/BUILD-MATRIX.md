@@ -68,6 +68,20 @@ Note: `build-rpi5-stage4.sh` is a **single builder covering three boards** via
 `--board rpi5\|rpi4\|rpi3` (the `--board` axis, not a separate script per
 board) — see "Board axes vs. new builders" below.
 
+**Arch-first device taxonomy** ✅ (Studio) / 🔭 (menu, CLI guided help): the Studio's
+machine tier now presents an architecture selector over a family-grouped **device
+catalog** (`studio/snapdragon_studio/core/device_catalog.py` +
+`core/device-catalog.json`) with the #351 honesty statuses (supported / experimental
+labelled / unsupported visible-but-unselectable, reason shown). A device is exactly a
+`(platform, board)` pair and its roles are **derived** from `ROLE_CHOICES` +
+`rpi_boards_for_role()` — the selection layer regrouped, the emission untouched (the
+GUI column + the byte-identical `matrix.tsv` guard it). The web/JOB channel gets the
+same hierarchy via the `archs`/`families`/`devices` keys of
+[`docs/catalog/image-catalog.json`](catalog/image-catalog.json) (the `CAT` bucket, now
+6 assertions, pins its honesty); the ncurses menu / CLI guided help should render from
+that committed JSON — see the PARITY-TODO in
+[`docs/STUDIO-WIZARD-FLOW.md`](STUDIO-WIZARD-FLOW.md).
+
 Every channel is crossed with the **build ENV** (`test` | `prod`), threaded as
 `--env` on the builders and `ENV=` through make — see the
 [Build ENV section of the README](../README.md#build-env-testprod-baked-at-image-creation).

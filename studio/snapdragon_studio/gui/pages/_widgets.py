@@ -20,6 +20,22 @@ def _row(label, widget):
     return w
 
 
+# Device-catalog status badges (shared by RolePage's device browser and the mesh
+# WorklistPage group rows): (badge text, color). SUPPORTED carries no badge —
+# buildability is the default claim; the non-default statuses must be explicit (#351).
+_STATUS_BADGES = {
+    "supported": ("", ""),
+    "experimental": ("EXPERIMENTAL — hardware validation pending; fail-loud preflight",
+                     "#a65d00"),
+    "unsupported": ("NOT BUILDABLE", "#777777"),
+}
+
+
+def status_badge(status):
+    """(badge text, css color) for a device-catalog status."""
+    return _STATUS_BADGES[status]
+
+
 def _file_picker(parent, line_edit, caption, file_filter="All files (*)", directory=False):
     def pick():
         if directory:

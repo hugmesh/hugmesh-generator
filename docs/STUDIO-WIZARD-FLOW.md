@@ -63,7 +63,7 @@ non-monotonically across a path). The conceptual steps:
 | # | Conceptual step | Realised by |
 | --- | --- | --- |
 | 1 | Choose what to build (4 choices) | `mode.py` |
-| 2 | Pick the target MACHINE, then the image type / per-node hardware | `role.py` (image paths — **machine-first**: machine cards → filtered image-type list → inline board/flavor + the x86 machine-profile preset) · `worklist.py` (mesh: one row per node, with a per-row Encryption column) · `hardware.py` (GPU/Wi-Fi/kernel TUNING + this-machine scan) |
+| 2 | Pick the target MACHINE, then the image type / per-node hardware | `role.py` (image paths — **arch-first**: architecture selector → family-grouped searchable device browser (status badges) → the device's derived image-type list → inline board/flavor + the x86 machine-profile preset) · `worklist.py` (mesh: one row per node, with a per-row Encryption column) · `hardware.py` (GPU/Wi-Fi/kernel TUNING + this-machine scan) |
 | 3 | Optional cluster services | the services group on `network.py` (mesh/cloud) |
 | 4 | The domain joined + tailnet/SSO login + first-login registration | `network.py` (cloud) · `users.py` (per-user registration method) |
 | 5 | The orchestration superdomain + the other domains | the mesh-control-plane group on `network.py` · `domains.py` |
@@ -271,6 +271,35 @@ and the all-options-in-all-menus rule are in
   column guards it) — this is menu shape only. (Confirmed still absent:
   `scripts/build-menu.sh` has no machine-first picker or per-node encryption column as of
   this pass.)
+
+### Arch-first device taxonomy (ncurses + CLI) 🔭
+- The Studio's step-2 machine tier is now **arch-first**: an architecture selector
+  (x86-64 / ARM64 — extensible enum) over a **family-grouped, searchable device
+  browser** sourced from
+  [`core/device_catalog.py`](../studio/snapdragon_studio/core/device_catalog.py) +
+  `core/device-catalog.json`, with the #351 honesty statuses on every row
+  (SUPPORTED / EXPERIMENTAL labelled + fail-loud / UNSUPPORTED visible-but-unselectable
+  with the reason shown). A device IS a `(platform, board)` pair and its roles are
+  **derived** from `ROLE_CHOICES` + `rpi_boards_for_role()` — never stored, never
+  invented.
+- **The Next button is device-gated** (the #351 gate at the button): `isComplete()`
+  and `validatePage()` both require a real, SELECTABLE catalog device to be current.
+  Keyboard navigation stopping on a family **header** row, or an architecture whose
+  devices are all UNSUPPORTED (ARMv7 / RISC-V today), disarms the image-type list and
+  disables Next — there is **no fallback platform**, so a stale role can never pair
+  with the wrong builder. Landing back on a device re-arms the list (the in-visit role
+  choice is preserved).
+- A committed **EXPERIMENTAL alias** (e.g. Pi 400 → the Pi 4's `(rpi5, rpi4)` axes) is
+  restored **as itself** on Back-navigation — the label and fail-loud note survive the
+  round-trip instead of folding to the supported sibling.
+- The ncurses menu and the CLI guided help should render the **same
+  arch → family → device → role hierarchy**. The machine-readable source is the
+  committed web catalog's `archs` / `families` / `devices` keys
+  ([`docs/catalog/image-catalog.json`](catalog/image-catalog.json), emitted by
+  [`scripts/emit-image-catalog.py`](../scripts/emit-image-catalog.py) and drift-guarded
+  by the build-matrix `CAT` bucket) — render from it, do not re-declare the device
+  list. Emission stays byte-identical (a device only pins the `--board`/platform values
+  the channels already accept; the MENU/CLI columns guard it).
 
 ### CLI (`build-image.sh` / `make <role>`)
 - **✅ shipped** — `docker/build-image.sh`'s `print_intents_guide()` (fired on an explicit

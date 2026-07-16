@@ -53,8 +53,11 @@ def wiz(qapp):
     w.deleteLater()
 
 
-def _visible_machines(role_page):
-    return {p for p, c in role_page._machine_rows.items() if c.isVisible()}
+def _pickable_devices(role_page):
+    """Device ids whose browser row is actually selectable for a build in the current
+    mode (the honesty gate: unsupported / zero-role-in-mode rows carry no flags)."""
+    return {did for did, item in role_page._device_items.items()
+            if item.flags() & Qt.ItemFlag.ItemIsSelectable}
 
 
 def _role_ids(role_page):
@@ -65,15 +68,22 @@ def _role_ids(role_page):
 # ---- machine tier = the union of THIS mode's ROLE_CHOICES platforms ----------------
 
 @pytest.mark.parametrize("mode", ["standalone", "cloud"])
-def test_machine_cards_are_the_mode_platform_union(wiz, mode):
-    """The cards shown are exactly the platform UNION of ROLE_CHOICES[mode] — no
-    hardcoded list. jetson is NOT in standalone/cloud, so it gets NO card (mesh-only)."""
+def test_pickable_devices_span_the_mode_platform_union(wiz, mode):
+    """The PICKABLE device rows span exactly the platform UNION of ROLE_CHOICES[mode] —
+    no hardcoded list. jetson is NOT in standalone/cloud (mesh-only), so its devices are
+    visible in the browser but never pickable here."""
+    from snapdragon_studio.core import device_catalog
+    cat = device_catalog.load_catalog()
     pick_mode(wiz, mode)
     page = advance_to(wiz, wizard_mod.RolePage)
     union = {p for _r, plats, _l in ROLE_CHOICES[mode] for p in plats}
-    assert _visible_machines(page) == union
+    pickable = _pickable_devices(page)
+    assert {cat.device(d).builder_platform for d in pickable} == union
     assert union == {"x86", "rpi5", "frite", "orangepi5", "orangepizero2"}
-    assert "jetson" not in _visible_machines(page)
+    assert not any(cat.device(d).builder_platform == "jetson" for d in pickable)
+    # …but the jetson devices are still LISTED (visibility, #351), with the reason text
+    assert "orin-nano" in page._device_items
+    assert f"no {mode} image" in page._device_items["orin-nano"].text(2)
 
 
 def test_x86_card_is_default_and_first(wiz):
@@ -95,16 +105,14 @@ def test_selecting_machine_filters_image_types(wiz):
     assert page.rpi5_box.isVisible() and not page.client_box.isVisible()
 
 
-def test_experimental_tag_rides_through_card_label(wiz):
-    """#351: the EXPERIMENTAL tagging on orangepi5/orangepizero2 rides through unchanged
-    because the card sub-label is PLATFORM_LABELS[p]."""
+def test_experimental_badge_rides_through_device_rows(wiz):
+    """#351: the EXPERIMENTAL tagging on the Orange Pi devices rides through — the
+    status column carries the badge (with the fail-loud caveat) on every pickable
+    experimental device row."""
     pick_mode(wiz, "cloud")
     page = advance_to(wiz, wizard_mod.RolePage)
-    # the card container holds the radio + the PLATFORM_LABELS gray sub-label
-    from snapdragon_studio.gui.qt import QtWidgets
-    for plat in ("orangepi5", "orangepizero2"):
-        labels = page._machine_rows[plat].findChildren(QtWidgets.QLabel)
-        assert any("EXPERIMENTAL" in lab.text() for lab in labels), plat
+    for did in ("orange-pi-5", "orange-pi-5-plus", "orange-pi-zero2"):
+        assert "EXPERIMENTAL" in page._device_items[did].text(2), did
 
 
 # ---- EMISSION IDENTITY: machine-first yields the SAME cfg for the same intent ------
