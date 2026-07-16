@@ -808,6 +808,27 @@ if ${ENCRYPT_ROOT}; then
     info "cross-dracut preflight OK: qemu-${DRACUT_CROSS_QEMU_ARCH} registered ($(dracut_cross_qemu_interp)); the arm64 disk-boot initramfs is buildable via qemu-chroot."
 fi
 
+# Host-side (container /) build-backend keyword acceptance. The cross-emerge
+# resolves build-time deps (BDEPEND) against the CONTAINER's own /etc/portage —
+# an amd64 root — so the sysroot's specs-*/portage/package.accept_keywords
+# files CANNOT cover the host-side installs (the emerge.log "to /" batch).
+# dev-python/vcs-versioning (setuptools-scm's backend, pulled transitively by
+# the fleet SELinux toolchain) is keyworded amd64-first upstream: in the tree
+# window before amd64 stabilization the host half of the chain dies with
+# "masked by: ~amd64 keyword" even though the sysroot side is accepted (the
+# post-#352 frite failure). Accept it host-side too (** — pure python,
+# arch-independent), mirroring the HOSTSELINUX package.use pre-seed precedent.
+if [ "$(id -u)" -eq 0 ] && [ -d /etc/portage ]; then
+    mkdir -p /etc/portage/package.accept_keywords
+    cat > /etc/portage/package.accept_keywords/snapdragon-host-build-backends <<'HOSTKW'
+# setuptools-scm's vcs-versioning backend: pure-python/arch-independent, often
+# keyworded amd64-first upstream. HOST-side twin of the sysroot's
+# package.accept_keywords/setuptools-scm-backend (see that file's rationale).
+dev-python/vcs-versioning **
+HOSTKW
+    info "Pre-seeded HOST /etc/portage/package.accept_keywords: vcs-versioning (build-backend)"
+fi
+
 # Host SELinux policy build tools (same rationale as the Pi5/Frite builders).
 HOST_POLICY_TOOLS=()
 command -v checkpolicy      &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/checkpolicy)

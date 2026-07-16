@@ -205,6 +205,20 @@ RUN mkdir -p /etc/portage/package.use && \
       'virtual/zlib static-libs' \
       'sys-libs/zlib static-libs' \
       > /etc/portage/package.use/snapdragon-qemu-user
+# HOST-side (container /) build-backend keyword acceptance: the cross-emerge
+# resolves BDEPEND against THIS amd64 root, so the sysroot's per-board
+# specs-*/portage/package.accept_keywords files cannot cover the "to /" batch.
+# dev-python/vcs-versioning (setuptools-scm's backend, pulled by the fleet
+# SELinux toolchain) is keyworded amd64-first upstream — bake the acceptance in
+# so a fresh image tree can never mask the host half of the chain. The ARM
+# stage4 scripts ALSO write this file at run time (belt-and-braces for images
+# built before this line existed).
+RUN mkdir -p /etc/portage/package.accept_keywords && \
+    printf '%s\n' \
+      '# pure-python/arch-independent build backend; amd64-first keyworded upstream.' \
+      '# Host-side twin of specs-*/portage/package.accept_keywords/setuptools-scm-backend.' \
+      'dev-python/vcs-versioning **' \
+      > /etc/portage/package.accept_keywords/snapdragon-host-build-backends
 RUN emerge --verbose --noreplace \
         sys-boot/shim \
         app-crypt/sbsigntools \
