@@ -75,6 +75,15 @@ spec:
           # lever. lands in snapdragon-backend so it shares the TURN shared secret
           # with tuwunel.
           - { slug: coturn,  path: specs/cluster/manifests/coturn,        namespace: snapdragon-backend,  installed: "false" }
+          # meshbridge — Meshtastic LoRa mesh <-> Matrix bridge (DEFAULT-OFF,
+          # RUNTIME-ONLY). Like coturn/anubis, meshbridge ships NO baked bootstrap
+          # Application: it is wired ONLY here. installed:"false" is the SAFE
+          # DEFAULT (no pod, no radios, no rooms bridged). Flip to "true" (+ the
+          # installed-services ConfigMap meshbridge flag) to add it on a LIVE
+          # cluster — the per-domain add/remove lever. Lands in snapdragon-backend
+          # so the appservice speaks the in-namespace tuwunel CS API (dependsOn
+          # tuwunel — greyed in the console when the homeserver is off).
+          - { slug: meshbridge, path: specs/cluster/manifests/meshbridge,  namespace: snapdragon-backend,  installed: "false" }
           # edge-ai — GPU inference node (OpenAI-compatible model API). DEFAULT-OFF,
           # GPU-gated; the edge_ai node role auto-selects it. installed flag mirrored
           # from the installed-services ConfigMap by _opt_render_installed_services.

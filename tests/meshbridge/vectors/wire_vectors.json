@@ -1,0 +1,163 @@
+{
+  "decode": [
+    {
+      "name": "text_packet_full_meta",
+      "parser": "FromRadio",
+      "hex": "12470defbeadde15ffffffff1802221b0801121768656c6c6f2066726f6d20746865206d65736820e29aa135327906003dc08d7668450000e840480360abffffffffffffffff017805",
+      "expect": {
+        "packet": {
+          "from": 3735928559,
+          "to": 4294967295,
+          "channel": 2,
+          "id": 424242,
+          "rx_time": 1752600000,
+          "rx_snr": 7.25,
+          "hop_limit": 3,
+          "rx_rssi": -85,
+          "hop_start": 5,
+          "decoded": {
+            "portnum": 1,
+            "payload": {
+              "__bytes__": "68656c6c6f2066726f6d20746865206d65736820e29aa1"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "node_info",
+      "parser": "FromRadio",
+      "hex": "223208f8acd19101121e0a09213132333435363738120c547261696c204e6f646520371a03544e3725000058c12d3b8e76684802",
+      "expect": {
+        "node_info": {
+          "num": 305419896,
+          "snr": -13.5,
+          "hops_away": 2,
+          "last_heard": 1752600123,
+          "user": {
+            "id": "!12345678",
+            "long_name": "Trail Node 7",
+            "short_name": "TN7"
+          }
+        }
+      }
+    },
+    {
+      "name": "my_info",
+      "parser": "FromRadio",
+      "hex": "1a05088d98ac50",
+      "expect": {
+        "my_info": {
+          "my_node_num": 168496141
+        }
+      }
+    },
+    {
+      "name": "config_complete",
+      "parser": "FromRadio",
+      "hex": "38fe9503",
+      "expect": {
+        "config_complete_id": 51966
+      }
+    },
+    {
+      "name": "rebooted",
+      "parser": "FromRadio",
+      "hex": "4001",
+      "expect": {
+        "rebooted": true
+      }
+    },
+    {
+      "name": "channel_secondary",
+      "parser": "FromRadio",
+      "hex": "52150801120f1201011a08736e61706d65736830011802",
+      "expect": {
+        "channel": {
+          "index": 1,
+          "role": 2,
+          "settings": {
+            "name": "snapmesh",
+            "psk": {
+              "__bytes__": "01"
+            },
+            "downlink_enabled": true
+          }
+        }
+      }
+    },
+    {
+      "name": "queue_status_negative_res",
+      "parser": "FromRadio",
+      "hex": "5a1108eaffffffffffffffff01100718102063",
+      "expect": {
+        "queue_status": {
+          "res": -22,
+          "free": 7,
+          "maxlen": 16,
+          "mesh_packet_id": 99
+        }
+      }
+    },
+    {
+      "name": "unmodeled_config_variant",
+      "parser": "FromRadio",
+      "hex": "2a040a020801",
+      "expect": {}
+    },
+    {
+      "name": "telemetry_device_metrics",
+      "parser": "Telemetry",
+      "hex": "0d888f7668120a0857150000784028901c",
+      "expect": {
+        "time": 1752600456,
+        "device_metrics": {
+          "battery_level": 87,
+          "voltage": 3.875,
+          "uptime_seconds": 3600
+        }
+      }
+    },
+    {
+      "name": "telemetry_unmodeled_variant",
+      "parser": "Telemetry",
+      "hex": "0dd59076681a050d0000ac41",
+      "expect": {
+        "time": 1752600789
+      }
+    },
+    {
+      "name": "encrypted_packet",
+      "parser": "FromRadio",
+      "hex": "12170d0403020115ffffffff2a06deadbeef00013507000000",
+      "expect": {
+        "packet": {
+          "from": 16909060,
+          "to": 4294967295,
+          "id": 7,
+          "encrypted": {
+            "__bytes__": "deadbeef0001"
+          }
+        }
+      }
+    }
+  ],
+  "encode": [
+    {
+      "name": "text_broadcast_ch1",
+      "hex": "0a2515ffffffff180122130801120f5b616c6963655d206869206d65736835dec0000048035001"
+    },
+    {
+      "name": "text_ch0_no_ack",
+      "hex": "0a1e15ffffffff22100801120c302d63682064656661756c7435010000004807"
+    },
+    {
+      "name": "want_config",
+      "hex": "18effd02"
+    },
+    {
+      "name": "heartbeat",
+      "hex": "3a00"
+    }
+  ]
+}

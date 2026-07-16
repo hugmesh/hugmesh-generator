@@ -85,6 +85,18 @@ data:
   # Flip to "true" (+ the 13a element) for a per-domain LIVE add; tuwunel's dark/
   # gated turn_uris/turn_secret then take effect (no-op until coturn is up).
   coturn: "false"
+  # meshbridge — Meshtastic LoRa mesh <-> Matrix bridge (DEFAULT-OFF,
+  # RUNTIME-ONLY: like coturn it has NO baked bootstrap Application — the
+  # apps/13a ApplicationSet element + THIS flag are the only gate). The literal
+  # "false" baseline is the SAFE DEFAULT: the stage4 builders do NOT rewrite it
+  # (meshbridge is not in their hardcoded render loop), so a default build ships
+  # the bridge dark and the ApplicationSet never creates it even on a
+  # repo-synced cluster — byte-identical to today's mainline. Flip to "true"
+  # (+ the 13a element) for a per-domain LIVE add; the register Job then posts
+  # the appservice registration into the tuwunel admin room on sync. dependsOn
+  # tuwunel (see services.json below): the console greys meshbridge out while
+  # the homeserver is off.
+  meshbridge: "false"
   # edge-ai — GPU inference node serving an OpenAI-compatible model API to the mesh
   # (DEFAULT-OFF, GPU-gated). Rendered true/false by _opt_render_installed_services
   # from OPTIONAL_SERVICES; the literal baseline is the SAFE DEFAULT (off). The
@@ -119,6 +131,7 @@ data:
       { "slug": "workloadConsole", "displayName": "Workload Console", "namespace": "snapdragon-backend", "mountAt": "/admin/workloads", "hidden": true },
       { "slug": "anubis",  "displayName": "Anubis (anti-scraper PoW gate)", "namespace": "snapdragon-frontend", "mountAt": null },
       { "slug": "coturn",  "displayName": "coturn (TURN/STUN server)", "namespace": "snapdragon-backend", "mountAt": null, "dependsOn": "tuwunel" },
+      { "slug": "meshbridge", "displayName": "Mesh radio bridge (Meshtastic ↔ Matrix)", "namespace": "snapdragon-backend", "mountAt": null, "dependsOn": "tuwunel" },
       { "slug": "edge-ai", "displayName": "Edge AI (inference)", "namespace": "snapdragon-inference", "mountAt": "/admin/edge-ai" },
       { "slug": "edge-ai-analysis", "displayName": "Edge AI — analysis API", "namespace": "snapdragon-inference", "mountAt": "/admin/edge-ai-analysis", "dependsOn": "edge-ai" },
       { "slug": "edge-ai-tts", "displayName": "Edge AI — voice synthesis (TTS)", "namespace": "snapdragon-inference", "mountAt": "/admin/edge-ai-tts" }
