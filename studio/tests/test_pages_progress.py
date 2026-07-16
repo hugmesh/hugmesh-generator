@@ -81,7 +81,8 @@ def _install_replay_builddriver(monkeypatch, lines, code=0):
     """A fake BuildDriver whose run() replays a captured stdout stream through on_line —
     drives the REAL ProgressPage end-to-end (parse -> _apply_state -> QProgressBar)."""
     class ReplayBuildDriver:
-        def __init__(self, gen, host, graphical=False):
+        def __init__(self, gen, host, graphical=False, workdir=None):
+            self.workdir = workdir
             self.cancelled = False
 
         def run(self, cfg, backend, on_line=None):
@@ -121,7 +122,8 @@ def _install_fake_builddriver(monkeypatch, codes=None, on_run=None):
     codes = codes or {}
 
     class FakeBuildDriver:
-        def __init__(self, gen, host, graphical=False):
+        def __init__(self, gen, host, graphical=False, workdir=None):
+            self.workdir = workdir
             self.cancelled = False
 
         def run(self, cfg, backend, on_line=None):
@@ -510,7 +512,7 @@ def _install_streaming_builddriver(monkeypatch, lines, codes=None, default=0):
     codes = codes or {}
 
     class StreamDriver:
-        def __init__(self, gen, host, graphical=False):
+        def __init__(self, gen, host, graphical=False, workdir=None):
             self.cancelled = False
 
         def run(self, cfg, backend, on_line=None):
@@ -674,7 +676,7 @@ def test_stopping_a_running_image_settles_its_stage_neutral_not_red(monkeypatch,
     banners = CAPTURED_X86_STREAM[:13]              # advance into the running emerge stage
 
     class StopMidStageDriver:
-        def __init__(self, gen, host, graphical=False):
+        def __init__(self, gen, host, graphical=False, workdir=None):
             self.cancelled = False
 
         def run(self, cfg, backend, on_line=None):

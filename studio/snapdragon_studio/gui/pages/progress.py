@@ -22,6 +22,7 @@ from collections import deque
 
 from ..qt import QtCore, QtGui, QtWidgets, Qt, Signal
 from ..tray import write_build_status
+from ...core import build_sessions
 from ...core import flash_targets
 from ...core.progress_parse import ProgressParser, platform_phases
 from ...core.stage_tracker import StageTracker
@@ -235,6 +236,10 @@ class ProgressPage(QtWidgets.QWizardPage):
 
         self.driver: WorklistDriver | None = None
         self.worker: _WorklistWorker | None = None
+        # durable session record (core/build_sessions) — created in initializePage,
+        # WRITTEN only at real dispatch (_start_worker) and updated per image / at finish.
+        self._session: build_sessions.BuildSession | None = None
+        self._session_done = False
         self._rows: list[_Row] = []
         self._selected = 0
         self._selected_stage: int | None = None   # None = the job's raw log is shown
@@ -280,10 +285,18 @@ class ProgressPage(QtWidgets.QWizardPage):
             return
         backend = getattr(self.wiz, "build_backend", None)
         generate_keys = getattr(self.wiz, "generate_node_keys", True)
+        # per-session artifact dir + durable record: the id BuildPage minted for its
+        # preview (pending_session_id) is consumed here so preview == dispatch; a
+        # RESTART pins an existing id so the SAME record/workdir is reused. Nothing is
+        # written until _start_worker (real dispatch).
+        self._session = build_sessions.new_session(
+            wl, self.wiz.generator_dir, backend=backend, generate_keys=generate_keys,
+            session_id=getattr(self.wiz, "pending_session_id", None))
+        self._session_done = False
         try:
             self.driver = WorklistDriver(self.wiz.generator_dir, wl, host=self.wiz.host,
                                          backend=backend, generate_keys=generate_keys,
-                                         graphical=True)
+                                         graphical=True, workdir=self._session.workdir)
             materialized = self.driver.materialize()
             problems = self.driver.preflight()
         except Exception as e:                      # invalid identity / materialize failure
@@ -372,6 +385,8 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.worker.keys.connect(self._on_keys)
         self.worker.finished_all.connect(self._on_finished_all)
         self._write_status()                  # building 0% -> the tray shows a badge
+        if self._session is not None:         # START record: status "running" + pid
+            build_sessions.start(self._session)
         self.completeChanged.emit()
         self.worker.start()
 
@@ -456,6 +471,10 @@ class ProgressPage(QtWidgets.QWizardPage):
                 if row.job_item is not None:
                     self.tree.expandItem(row.job_item)
                 self._focus_node(i, fj)
+        if self._session is not None and self.driver is not None:   # partial truth
+            r = self.driver.results[i]
+            build_sessions.update_image(self._session, i, status=r.status,
+                                        exit_code=r.exit_code, keys_ok=r.keys_ok)
         self._write_status()
         self._refresh_overall()
         self.completeChanged.emit()
@@ -476,6 +495,7 @@ class ProgressPage(QtWidgets.QWizardPage):
             if row.stop_btn is not None:
                 row.stop_btn.setEnabled(False)
         self.log.appendPlainText(f"\n=== worklist finished (summary exit {code}) ===")
+        self._finalize_session()              # FINISH record: outcome + error tails
         self._write_status()                  # final complete/error badge for the tray
         self._refresh_overall()
         # post-build device flashing — ONLY on an all-ok run (never for a failure).
@@ -483,6 +503,26 @@ class ProgressPage(QtWidgets.QWizardPage):
             self._refresh_flash_targets()
             self._maybe_auto_flash()
         self.completeChanged.emit()
+
+    def _finalize_session(self, status: str | None = None) -> None:
+        """FINISH write for the session record (once per run): status from the driver
+        results — all ok -> complete, any failed -> failed, else stopped — unless
+        forced (the wizard-close abort passes "stopped" since it really cancels), plus
+        the failed rows' error tails. Clears the wizard's pending id so a second build
+        mints a fresh session."""
+        if self._session is None or self._session_done or self.driver is None:
+            return
+        self._session_done = True
+        results = self.driver.results
+        tails = {results[i].entry.id:
+                 list(self._rows[i].buffer)[-build_sessions.ERROR_TAIL_LINES:]
+                 for i in range(min(len(self._rows), len(results)))
+                 if results[i].status == "failed"}
+        build_sessions.finish(self._session,
+                              status or build_sessions.overall_status(
+                                  [r.status for r in results]), tails)
+        if getattr(self.wiz, "pending_session_id", None) == self._session.id:
+            self.wiz.pending_session_id = None
 
     def _run_all_ok(self) -> bool:
         return (bool(self._rows) and self.driver is not None
@@ -700,6 +740,7 @@ class ProgressPage(QtWidgets.QWizardPage):
             if self.driver is not None:
                 self.driver.cancel_all()
             self.worker.wait(3000)
+            self._finalize_session(status="stopped")   # honest: the close cancelled it
         if self.flash_worker is not None and self.flash_worker.isRunning():
             self.flash_worker.wait(3000)
 
@@ -710,7 +751,8 @@ class ProgressPage(QtWidgets.QWizardPage):
 
     def _flash_argv_for(self, target) -> list[str]:
         c = self.wiz.cfg
-        work_dir = c.output_dir or os.path.join(self.wiz.generator_dir, "out")
+        work_dir = (self._session.workdir if self._session is not None else
+                    c.output_dir or os.path.join(self.wiz.generator_dir, "out"))
         role = c.role if c.role in self._FLASH_ROLES else "host"
         arch = flash_targets.arch_for_platform(c.platform)
         return flash_targets.flash_argv(target, generator_dir=self.wiz.generator_dir,

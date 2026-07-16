@@ -1,7 +1,8 @@
-"""WelcomePage — intro blurb + load/save of the ImageConfig JSON."""
+"""WelcomePage — intro blurb + load/save of the ImageConfig JSON + previous builds."""
 from __future__ import annotations
 
 from ..qt import Qt, QtWidgets
+from .sessions_widget import PreviousBuildsWidget
 
 
 class WelcomePage(QtWidgets.QWizardPage):
@@ -38,7 +39,17 @@ class WelcomePage(QtWidgets.QWizardPage):
         btns.addStretch(1)
         btns.addWidget(fleet)
         lay.addLayout(btns)
+        # "Previous builds" — the first-class session manager (hides itself when there
+        # are no sessions/unmanaged builds, so a first run renders exactly as before).
+        self.previous_builds = PreviousBuildsWidget(wiz)
+        self.previous_builds.setVisible(False)
+        lay.addWidget(self.previous_builds)
         lay.addStretch(1)
+
+    def initializePage(self):
+        # refresh every time the first screen is (re)shown — a finished/redone build
+        # must appear without restarting the Studio.
+        self.previous_builds.refresh()
 
     def _load(self):
         p, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Load config", "", "JSON (*.json)")

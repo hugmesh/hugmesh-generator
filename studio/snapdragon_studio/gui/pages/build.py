@@ -20,8 +20,10 @@ import os
 
 from ..qt import QtCore, QtWidgets, Signal
 from ._scroll import scrollable
+from ...core import build_sessions
 from ...core import flash_targets
 from ...core import worklist as worklist_mod
+from ...core.build_driver import BuildDriver
 from ...core.config import (ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE, image_class,
                             resolve_platform_defaults)
 from ...core.worklist_driver import WorklistDriver
@@ -425,6 +427,16 @@ class BuildPage(QtWidgets.QWizardPage):
         b = self.backend.currentText()
         return None if b == "auto" else b
 
+    def _pending_session_workdir(self) -> str:
+        """The per-session artifact dir the NEXT dispatch will use. Mints the session id
+        ONCE per build attempt (lazily): Back-and-forth reuses the same id, and
+        ProgressPage clears wiz.pending_session_id at finish so a second run mints a
+        new one. Runtime driver state only — never written into cfg.output_dir."""
+        if not getattr(self.wiz, "pending_session_id", None):
+            self.wiz.pending_session_id = build_sessions.new_session_id()
+        out = self.wiz.cfg.output_dir or os.path.join(self.wiz.generator_dir, "out")
+        return build_sessions.session_workdir(out, self.wiz.pending_session_id)
+
     # ---- worklist assembly (the commit shape) ----------------------------------
     def _current_worklist(self):
         """The WorklistConfig this Review page would commit RIGHT NOW: the mesh selection
@@ -494,7 +506,13 @@ class BuildPage(QtWidgets.QWizardPage):
             # is shared and re-edited/saved, so it must never be mutated by a preview render.
             pc = copy.deepcopy(c)
             resolve_platform_defaults(pc)
-            cmdline = self.wiz.driver.command_string(pc, self._backend())
+            # Session-aware preview honesty: the GUI dispatch runs with the per-session
+            # workdir (-w <out>/sessions/<id>/ — ProgressPage consumes the same pending
+            # id), so the pane must show LITERALLY that argv. Headless --print-command
+            # keeps the default because a headless run really uses the default.
+            cmdline = BuildDriver(self.wiz.generator_dir, self.wiz.host, graphical=True,
+                                  workdir=self._pending_session_workdir()
+                                  ).command_string(pc, self._backend())
         except ValueError as e:  # e.g. unbalanced quotes in the extra-flags escape hatch
             self.cmd.setPlainText("")
             self.log.setPlainText(f"Command error: {e}")
@@ -616,8 +634,11 @@ class BuildPage(QtWidgets.QWizardPage):
     # ---- mesh worklist summary --------------------------------------------------
     def _refresh_worklist_table(self):
         try:
+            # workdir: the per-entry Preview buttons must show the session -w the real
+            # dispatch will use (same honesty rule as the main command pane above).
             self._wl_driver = WorklistDriver(self.wiz.generator_dir, self._current_worklist(),
-                                             host=self.wiz.host, backend=self._backend())
+                                             host=self.wiz.host, backend=self._backend(),
+                                             workdir=self._pending_session_workdir())
             self._materialized = self._wl_driver.materialize()
         except Exception as e:
             self._materialized = []

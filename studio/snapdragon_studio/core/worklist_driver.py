@@ -82,12 +82,20 @@ class EntryResult:
 class WorklistDriver:
     def __init__(self, generator_dir: str, worklist: WorklistConfig,
                  host: HostInfo | None = None, backend: str | None = None,
-                 generate_keys: bool = True, graphical: bool = False):
+                 generate_keys: bool = True, graphical: bool = False,
+                 workdir: str | None = None):
         self.generator_dir = os.path.abspath(generator_dir)
         self.worklist = worklist
         self.host = host or detect()
         self.backend = backend or self.host.default_backend
         self.generate_keys = generate_keys
+        # Runtime-only work-dir override (per-session artifact dirs): None — every
+        # headless/golden channel — keeps _output_dir() and every per-image BuildDriver
+        # byte-identical to before. The GUI's ProgressPage passes the per-session
+        # <out>/sessions/<id>/ dir here at REAL dispatch; it is driver state, never
+        # written into the config, so previews/goldens for the same config only differ
+        # where the run itself will (the -w / docker -v out mount).
+        self.workdir = workdir
         # Threaded to every per-image BuildDriver this driver constructs so a GUI-launched
         # native build (the ProgressPage's run driver, graphical=True) elevates through a
         # graphical auth path instead of prompting into an invisible terminal.
@@ -115,21 +123,25 @@ class WorklistDriver:
         return self.worklist.base.mode == "mesh"
 
     def _output_dir(self) -> str:
-        return self.worklist.base.output_dir or os.path.join(self.generator_dir, "out")
+        return (self.workdir or self.worklist.base.output_dir
+                or os.path.join(self.generator_dir, "out"))
 
     # ---- previews / preflight ---------------------------------------------
     def command_string(self, cfg: ImageConfig, backend: str | None = None) -> str:
         """The exact per-image builder invocation (for the Review page's Preview button).
-        Delegates to a throwaway BuildDriver so flag translation stays single-sourced."""
-        return BuildDriver(self.generator_dir, self.host, graphical=self.graphical).command_string(
-            cfg, backend or self.backend)
+        Delegates to a throwaway BuildDriver so flag translation stays single-sourced —
+        including the session workdir override, which is what keeps the preview honest
+        (it shows LITERALLY the -w the dispatched build will run with)."""
+        return BuildDriver(self.generator_dir, self.host, graphical=self.graphical,
+                           workdir=self.workdir).command_string(cfg, backend or self.backend)
 
     def preflight(self) -> list[str]:
         """Aggregate preflight: a problem common to EVERY image is reported once
         (unlabelled); an image-specific problem is prefixed ``[<entry.id>]``. Empty = OK.
         This is what the Review page's problems pane renders and isComplete() keys on."""
         per_entry = [(entry.id, BuildDriver(self.generator_dir, self.host,
-                        graphical=self.graphical).preflight(cfg, self.backend))
+                        graphical=self.graphical, workdir=self.workdir)
+                      .preflight(cfg, self.backend))
                      for entry, cfg in self.materialize()]
         if len(per_entry) <= 1:
             return per_entry[0][1] if per_entry else []
@@ -207,7 +219,8 @@ class WorklistDriver:
             if on_entry_start:
                 on_entry_start(i)
 
-            driver = BuildDriver(self.generator_dir, self.host, graphical=self.graphical)
+            driver = BuildDriver(self.generator_dir, self.host, graphical=self.graphical,
+                                 workdir=self.workdir)
             with self._lock:
                 self._drivers[i] = driver
             code = driver.run(cfg, self.backend,
