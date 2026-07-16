@@ -105,6 +105,78 @@ services:
       interval: 5s
       retries: 20
 
+  # forum-bff-db — forum-bff's own Postgres (Liquibase-owned schema, EMPTY DB).
+  # specs/cluster/manifests/forum-bff-db. Same shape/creds convention as
+  # admin-bff-db (owner-role connect, dev placeholder password).
+  forum-bff-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: forumbff
+      POSTGRES_USER: forumbff
+      POSTGRES_PASSWORD: forumbff
+    volumes:
+      - forum-bff-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forumbff -d forumbff"]
+      interval: 5s
+      retries: 20
+
+  # wiki-bff-db — wiki-bff's own Postgres (Liquibase-owned schema, EMPTY DB).
+  # specs/cluster/manifests/wiki-bff-db.
+  wiki-bff-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: wikibff
+      POSTGRES_USER: wikibff
+      POSTGRES_PASSWORD: wikibff
+    volumes:
+      - wiki-bff-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wikibff -d wikibff"]
+      interval: 5s
+      retries: 20
+
+  # owncast-bff-db — owncast-bff's own Postgres (Liquibase-owned schema, EMPTY DB).
+  # DB/user name "owncast_bff" matches the literal r2dbc URL owncast-bff-api's
+  # deployment.yaml uses (specs/cluster/manifests/owncast/deployment.yaml) — the
+  # cluster manifest references a snapdragon-owncast-db host that has no dedicated
+  # manifest of its own yet (pre-existing cluster-side gap); this compose service
+  # is the local-stack equivalent, named like its forum/wiki siblings.
+  owncast-bff-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: owncast_bff
+      POSTGRES_USER: owncast_bff
+      POSTGRES_PASSWORD: owncast_bff
+    volumes:
+      - owncast-bff-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U owncast_bff -d owncast_bff"]
+      interval: 5s
+      retries: 20
+
+  # tube-bff-db — tube-bff's own Postgres (Liquibase-owned schema, EMPTY DB).
+  # DB/user name "tube_bff" matches the literal r2dbc URL tube-bff-api's
+  # deployment.yaml uses (specs/cluster/manifests/tube/deployment.yaml) — same
+  # pre-existing cluster-side gap (no dedicated snapdragon-tube-db manifest yet)
+  # as owncast-bff-db above.
+  tube-bff-db:
+    <<: *amd64
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tube_bff
+      POSTGRES_USER: tube_bff
+      POSTGRES_PASSWORD: tube_bff
+    volumes:
+      - tube-bff-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tube_bff -d tube_bff"]
+      interval: 5s
+      retries: 20
+
   # ════════════════════════════════════════════════════════════════════
   #  GATEWAYS — ONE image (snapdragon-gateway), run 3x as pki/be/fe. The
   #  per-gateway route table is mounted from gateway-routes/<role>.yml into
@@ -585,6 +657,132 @@ services:
       retries: 30
       start_period: 60s
 
+  # forum-bff / wiki-bff / owncast-bff / tube-bff — the same spring-bff archetype
+  # class as admin-bff/federation-api (templates/archetypes/spring-bff: "Class
+  # members: admin/user/mod/forum/owncast/tube/wiki-bff-api + federation-api"),
+  # so they share admin-bff/federation-api's OAuth2-resource-server shape: they
+  # VALIDATE a forwarded Casdoor JWT (not their own login flow), so both
+  # CASDOOR_ISSUER_URI and CASDOOR_JWKS_URI point at the in-DNS casdoor:8000 (the
+  # host Casdoor actually stamps into iss) — same reasoning as admin-bff-api /
+  # snapdragon-federation-api above, NOT the browser-facing localhost:8000
+  # mod-bff/user-bff use for their own OIDC login legs.
+  snapdragon-forum-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-forum-bff-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      SPRING_PROFILES_ACTIVE: casdoor
+      # No phpBB pod in the local core stack (snapdragon-forum's phpBB extension is
+      # a separate, isolated-namespace-only piece not wired here) — keep the
+      # upstream stub-seam OFF so forum-bff boots clean and always-audits instead
+      # of failing every forum call against an absent backend (documented
+      # limitation, same class as admin-bff's Kafka/ClickHouse omission above).
+      PHPBB_ENABLED: "false"
+      EXTERNAL_FORUM_ENABLED: "false"
+      SPRING_R2DBC_URL: "r2dbc:postgresql://forum-bff-db:5432/forumbff"
+      SPRING_R2DBC_USERNAME: forumbff
+      SPRING_R2DBC_PASSWORD: forumbff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://forum-bff-db:5432/forumbff"
+      SPRING_LIQUIBASE_USER: forumbff
+      SPRING_LIQUIBASE_PASSWORD: forumbff
+    depends_on:
+      forum-bff-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  snapdragon-wiki-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-wiki-bff-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      SPRING_PROFILES_ACTIVE: casdoor
+      SPRING_R2DBC_URL: "r2dbc:postgresql://wiki-bff-db:5432/wikibff"
+      SPRING_R2DBC_USERNAME: wikibff
+      SPRING_R2DBC_PASSWORD: wikibff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://wiki-bff-db:5432/wikibff"
+      SPRING_LIQUIBASE_USER: wikibff
+      SPRING_LIQUIBASE_PASSWORD: wikibff
+    depends_on:
+      wiki-bff-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  snapdragon-owncast-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-owncast-bff-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      SPRING_PROFILES_ACTIVE: casdoor
+      SPRING_R2DBC_URL: "r2dbc:postgresql://owncast-bff-db:5432/owncast_bff"
+      SPRING_R2DBC_USERNAME: owncast_bff
+      SPRING_R2DBC_PASSWORD: owncast_bff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://owncast-bff-db:5432/owncast_bff"
+      SPRING_LIQUIBASE_USER: owncast_bff
+      SPRING_LIQUIBASE_PASSWORD: owncast_bff
+    depends_on:
+      owncast-bff-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # NOTE: the third-party `owncast/owncast` HLS streaming server itself (RTMP
+  # ingest + the live-video pod owncast-bff-api fronts, see
+  # specs/cluster/manifests/owncast/deployment.yaml) is intentionally NOT wired
+  # here — this task's scope is the UI+BFF pair only (the always-present
+  # federated console + its resource-server BFF), matching the task's own framing.
+  # owncast-bff-api boots and serves the console/admin-grant surface without a
+  # live streaming backend (documented limitation, same class as forum's phpBB
+  # omission above).
+
+  snapdragon-tube-bff-api:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-tube-bff-api
+    environment:
+      CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
+      CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
+      SPRING_PROFILES_ACTIVE: casdoor
+      SPRING_R2DBC_URL: "r2dbc:postgresql://tube-bff-db:5432/tube_bff"
+      SPRING_R2DBC_USERNAME: tube_bff
+      SPRING_R2DBC_PASSWORD: tube_bff
+      SPRING_LIQUIBASE_URL: "jdbc:postgresql://tube-bff-db:5432/tube_bff"
+      SPRING_LIQUIBASE_USER: tube_bff
+      SPRING_LIQUIBASE_PASSWORD: tube_bff
+    depends_on:
+      tube-bff-db: { condition: service_healthy }
+      casdoor: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # NOTE: the tube-media Nginx sidecar (signed-URL-gated /tube/content/** static
+  # serving, specs/cluster/manifests/tube/deployment.yaml) is intentionally NOT
+  # wired here for the same reason as the owncast streaming server above — out of
+  # this task's UI+BFF scope (documented limitation).
+
   # ════════════════════════════════════════════════════════════════════
   #  STATIC FRAGMENT FLEET — the remote-fragment SYNC image (Spring-Native).
   #  In k8s this is an nginx pod + a sync sidecar over a shared volume; for
@@ -672,8 +870,53 @@ services:
     build:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-api-docs
 
+  # forum-ui — mounted at /social/forum/** (a PATH remote, not a forum.<domain>
+  # subdomain — the *.snapdragon.systems vanity wildcard would swallow it),
+  # congruent with the matrix-ui/mastodon-ui shells at /social/matrix,
+  # /social/mastodon (specs/cluster/apps/49-forum-ui.yaml). No env needed, same as
+  # matrix-ui/mastodon-ui above.
+  snapdragon-forum-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-forum-ui
+
+  # wiki-ui / owncast-ui / tube-ui — federated remotes added for the full local
+  # repo set (same rationale as mod-ui/user-ui above): the cluster serves them via
+  # the dynamic module-federation remote-fragment fleet rather than a fixed
+  # gateway path, so they have no cluster route yet, but a direct /<slug>/** path
+  # here (mirroring admin-ui/mod-ui/user-ui) is reachable + e2e-testable locally.
+  snapdragon-wiki-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-wiki-ui
+
+  snapdragon-owncast-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-owncast-ui
+
+  snapdragon-tube-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-tube-ui
+
+  # character-studio-ui — mounted at /character-studio/** (already a canonical
+  # cluster route-access row, specs/cluster/manifests/route-access/initdb/20-schema.sql).
+  # No dedicated BFF: it talks to the always-present BFFs over the existing
+  # same-origin /bff/** routes (see specs/cluster/manifests/character-studio's own
+  # comment — "no dedicated BFF in this slug yet"), so no BFF/DB service is added
+  # for it here.
+  snapdragon-character-studio-ui:
+    <<: *amd64
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-character-studio-ui
+
 volumes:
   route-access-pg:
   federation-pg:
   admin-bff-pg:
+  forum-bff-pg:
+  wiki-bff-pg:
+  owncast-bff-pg:
+  tube-bff-pg:
   federation-bundles:

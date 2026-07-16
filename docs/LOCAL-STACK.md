@@ -162,11 +162,13 @@ deliberately ships only dev placeholders so nothing secret is committed.
 | 127.0.0.1:9042 | Cassandra (gateway revocation list + URL registry) |
 
 The fe-gateway routes (`tests/stack/gateway-routes/fe/`) fan out from the front
-door to `/admin/**`, `/login/**`, `/social/**`, `/mod/**`, `/user/**`,
-`/api-docs/**`, `/bff/**` (admin-bff), `/_fragments/**` (fragment fleet), and
-`/be/**` (the be-gateway → federation + actions). Only the fe-gateway is published
-to the host; everything else is internal compose DNS, exactly as in the cluster
-only the gateways are ingress-exposed.
+door to `/admin/**`, `/login/**`, `/social/**` (matrix/mastodon/forum),
+`/mod/**`, `/user/**`, `/api-docs/**`, `/wiki/**`, `/owncast/**`, `/tube/**`,
+`/character-studio/**`, `/bff/**` (each of admin/mod/user/forum/wiki/owncast/tube-bff,
+then the admin-bff catch-all), `/_fragments/**` (fragment fleet), and `/be/**`
+(the be-gateway → federation + actions). Only the fe-gateway is published to the
+host; everything else is internal compose DNS, exactly as in the cluster only the
+gateways are ingress-exposed.
 
 ---
 
@@ -246,11 +248,15 @@ not verify.
 | `snapdragon-federation-api` | build `snapdragon-federation-api` | `manifests/federation-api` |
 | `snapdragon-admin-bff-api` | build `snapdragon-admin-bff-api` | `manifests/admin-bff-api` |
 | `snapdragon-mod-bff-api` / `-user-bff-api` | build the respective repos | (not yet in cluster; wired by analogy) |
+| `snapdragon-forum-bff-api` / `-wiki-bff-api` / `-owncast-bff-api` / `-tube-bff-api` | build the respective repos (spring-bff archetype siblings of admin-bff/federation-api) | `manifests/forum-bff-api` / `wiki-bff-api` / (owncast + tube ship co-located in-cluster; no dedicated BFF manifest dir yet) |
 | `snapdragon-api` | build `snapdragon-actions` | `manifests/snapdragon-apis` |
 | `snapdragon-remote-fragment` | build `snapdragon-remote-fragment` (sync image) | `manifests/remote-fragment` |
 | `snapdragon-systems-web` | build `snapdragon.systems` | `manifests/frontend` |
-| `snapdragon-{admin,mod,user,login,mastodon,matrix}-ui`, `-api-docs` | build each UI repo | `manifests/social-ui` + the remote repos |
+| `snapdragon-{admin,mod,user,login,mastodon,matrix,forum}-ui`, `-api-docs` | build each UI repo | `manifests/social-ui` + the remote repos |
+| `snapdragon-{wiki,owncast,tube}-ui` | build the respective repos | cluster serves these via the module-federation remote-fragment fleet, not a fixed gateway path; this compose stack adds a direct `/<slug>/**` route (mirroring mod-ui/user-ui) for local reachability + e2e |
+| `snapdragon-character-studio-ui` | build `snapdragon-character-studio-ui` | `manifests/character-studio` (no dedicated BFF — talks to the existing BFFs over `/bff/**`) |
 | `route-access-db` / `federation-db` / `admin-bff-db` | `postgres:16-alpine` | `manifests/route-access` / `federation-db` / `admin-bff-db` |
+| `forum-bff-db` / `wiki-bff-db` / `owncast-bff-db` / `tube-bff-db` | `postgres:16-alpine` | `manifests/forum-bff-db` / `wiki-bff-db` / (owncast/tube: no dedicated DB manifest yet — pre-existing cluster-side gap) |
 | `cassandra`, `casdoor`, `casdoor-db` | upstream images | `compose.real.yaml` (included) |
 | `synapse`, `mastodon-*` | upstream images (`social` profile) | `compose.real.yaml` (included, opt-in) |
 
@@ -301,3 +307,31 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
 - **prod creds are NOT committed.** `ENV=prod` only changes the issuer URL; you
   must inject real secrets yourself (see ENV section). Nothing secret lives in
   this repo — only dev placeholders matching the cluster's dev placeholders.
+- **forum-bff has no phpBB backend here.** `snapdragon-forum` (the isolated
+  phpBB pod + its `forum-api` extension) is not wired into this stack, so
+  `PHPBB_ENABLED`/`EXTERNAL_FORUM_ENABLED` are forced `"false"` — forum-bff
+  boots clean and always-audits instead of failing every call against an
+  absent backend (same class of limitation as the admin-bff analytics note
+  above). The owncast third-party streaming pod (RTMP ingest) and the
+  tube-media signed-URL Nginx sidecar are likewise out of scope here (only the
+  UI+BFF pair for each is wired) — `manifests/owncast` / `manifests/tube` show
+  the full cluster shape.
+- **`ROLE_WIKI` / `ROLE_FORUM` (and the derived `ROLE_FORUM_MOD`) are not yet
+  seeded in `manifests/casdoor/init-data-configmap.yaml`** — a pre-existing gap
+  predating this compose wiring (the `gateway_route_access` rows that gate
+  `/bff/wiki/**`, `/bff/forum/**`, `/social/forum/**` etc. already referenced
+  these roles). Until a Casdoor seed grants them, only an admin/superadmin
+  persona (via the gateway's documented admin-bypass) reaches the forum/wiki
+  surfaces end-to-end locally; `ROLE_TUBE`/`ROLE_OWNCAST` ARE already seeded,
+  so a persona granted those reaches tube/owncast normally.
+- **superadmin-service-catalog is intentionally NOT wired to the `:8088` front
+  door.** Its cluster design (`specs/cluster/apps/22-gateway-superadmin.yaml`)
+  is TAILNET-ONLY behind a dedicated `snapdragon-superadmin-gateway` — "off
+  EVERY public-ingress gateway" by design (network isolation is one of its
+  three intentional locks). This compose stack has no equivalent third
+  gateway; adding the route to the shared fe-gateway would collapse that
+  lock, so it is left unwired here (a real fix is a separate, dedicated
+  superadmin-gateway compose service + published port, not a `:8088` route).
+  There is likewise no separate "superadmin-appstore" service/repo to wire —
+  that name is the design doc's project codename for this same
+  service-catalog feature, not a distinct deliverable.

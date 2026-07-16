@@ -457,6 +457,26 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- tube-bff are the domain enforcement; the gateway only checks role.
   ('snapdragon-fe-gateway',  '/bff/tube/**',          'ROLE_TUBE',    true),  -- tube BFF (tube-access floor)
   ('snapdragon-be-gateway',  '/tube/content/**',       'ROLE_TUBE',    true),  -- tube media serving (signed URL)
+  -- ── Wiki / Owncast / Tube UI MOUNT rows (pre-existing gap, filled here) ─────
+  -- The wiki-ui/owncast-ui/tube-ui repos' own Dockerfiles document the intended
+  -- gateway gate ("Serves on :8080 to MATCH the federation-api <slug> module
+  -- registration... reachable only behind the gateway's /<slug>=ROLE_<SLUG>
+  -- route-access gate") but no row for the UI's OWN mount path (as opposed to its
+  -- BFF's /bff/<slug>/** path above) was ever added to this canonical seed — only
+  -- the BFF rows existed. Congruent with the /admin/**, /mod/**, /user/**,
+  -- /character-studio/** UI-mount rows above: same non-ROLE_ADMIN-paired floor
+  -- convention as /social/forum/** (admins reach it via the gateway admin-bypass,
+  -- so do NOT pair ROLE_ADMIN here either). Reuses the SAME roles already granted
+  -- to the sibling /bff/wiki/**, /bff/owncast/**, /bff/tube/** rows above — no new
+  -- role invented. Harmless additively in the cluster too: no SCG route currently
+  -- points at /wiki/**, /owncast/**, /tube/** in apps/20-gateway-fe.yaml, so the
+  -- row simply goes unmatched there until/unless such a route is added; it takes
+  -- effect where the local compose gateway-routes/fe/application-routes.yml DOES
+  -- add the matching direct-path route (mirroring the mod-ui/user-ui local
+  -- convenience routes).
+  ('snapdragon-fe-gateway',  '/wiki/**',              'ROLE_WIKI',    true),  -- wiki UI (wiki-access floor)
+  ('snapdragon-fe-gateway',  '/owncast/**',           'ROLE_OWNCAST', true),  -- owncast UI (owncast-access floor)
+  ('snapdragon-fe-gateway',  '/tube/**',              'ROLE_TUBE',    true),  -- tube UI (tube-access floor)
   -- ── SUPERADMIN APP-STORE — TAILNET-ONLY superadmin-gateway (snapdragon-superadmin-
   -- appstore design, V6) ──────────────────────────────────────────────────────────
   -- The superadmin infra control plane is served by its OWN gateway
