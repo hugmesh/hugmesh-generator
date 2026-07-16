@@ -258,6 +258,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         # flash-to-a-device state (post-build)
         self.flash_worker: _FlashWorker | None = None
         self._flash_targets: list = []
+        self._flash_queue: list = []       # Review-page plan assignments, run sequentially
+        # entry_id -> the CONCRETE artifact that entry's build produced (snapshot diff
+        # around each sequential entry build) — what the flash plan passes as
+        # --artifact so flash-disk.sh never has to guess between same-role images.
+        self._entry_artifacts: dict[str, str] = {}
+        self._entry_baseline: dict[str, float] = {}
         self._flash_timer = QtCore.QTimer(self)
         self._flash_timer.setInterval(2500)        # live device come/go refresh
         self._flash_timer.timeout.connect(self._refresh_flash_targets)
@@ -334,6 +340,9 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.log_header.setText("Log")
         self.log.setPlainText("")
         self._last_status = None
+        self._flash_queue = []
+        self._entry_artifacts = {}
+        self._entry_baseline = {}
         self.flash_group.setVisible(False)        # only an all-ok finish reveals it
         self.total_bar.setRange(0, 100)
         self.total_bar.setValue(0)
@@ -391,6 +400,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.worker.start()
 
     # ---- slots (GUI thread) -----------------------------------------------------
+    def _work_dir(self) -> str:
+        """The build output dir — the same resolution the flash plan's work_dir and
+        WorklistDriver._output_dir use."""
+        return (self.wiz.cfg.output_dir
+                or os.path.join(self.wiz.generator_dir, "out"))
+
     def _on_entry_start(self, i: int) -> None:
         row = self._rows[i]
         self._set_status(row, "running")
@@ -400,6 +415,12 @@ class ProgressPage(QtWidgets.QWizardPage):
             self.tree.expandItem(row.job_item)      # GH-Actions focuses the active job
         if not self._tick.isActive():
             self._tick.start()
+        # read-only baseline of the flashable artifacts already in the work dir, so
+        # _on_entry_done can identify by diff WHICH image THIS entry produced (the
+        # worklist is sequential, so the diff is unambiguous). This is what lets the
+        # flash plan pass a concrete --artifact instead of trusting flash-disk.sh's
+        # newest-mtime role glob, which cannot tell same-role entries apart.
+        self._entry_baseline = flash_targets.snapshot_artifacts(self._work_dir())
         self._refresh_overall()
 
     def _on_line(self, i: int, line: str) -> None:
@@ -442,6 +463,13 @@ class ProgressPage(QtWidgets.QWizardPage):
             self._render_stage(row, j, now)
         self._set_status(row, status)
         row.terminal = True
+        if status == "ok" and self.driver is not None:
+            # record the artifact THIS entry produced (diff vs its start baseline);
+            # "" (nothing new / compressed-only output) stays unrecorded, so a flash
+            # assignment for this entry fails SAFE (skipped, never a glob guess).
+            art = flash_targets.new_artifact(self._work_dir(), self._entry_baseline)
+            if art:
+                self._entry_artifacts[self.driver.results[i].entry.id] = art
         if row.job_item is not None and row.job_t_start is not None:
             row.job_item.setText(_COL_TIME, _fmt_elapsed(now - row.job_t_start))
         if status == "ok":
@@ -736,6 +764,10 @@ class ProgressPage(QtWidgets.QWizardPage):
         builder process or a live QThread."""
         self._flash_timer.stop()
         self._tick.stop()
+        # drop any still-queued plan assignments FIRST: a running dd outlives the 3s
+        # join below, and when its done signal finally fires, _flash_done would chain
+        # _flash_next — starting the NEXT destructive flash after the user aborted.
+        self._flash_queue = []
         if self.worker is not None and self.worker.isRunning():
             if self.driver is not None:
                 self.driver.cancel_all()
@@ -816,6 +848,18 @@ class ProgressPage(QtWidgets.QWizardPage):
         silently flash a DIFFERENT removable disk that took the same node after the
         originally-selected one was unplugged. We require the re-scanned target at that
         path to also match the stashed device's size + model before writing."""
+        # preferred: the Review-page per-device plan (multi-device, per-image). The
+        # assignments run SEQUENTIALLY (chained from _flash_done); the identity check
+        # runs PER ASSIGNMENT inside _flash_next, immediately before each write — a
+        # single up-front scan here would be minutes stale for assignment 2..N (each
+        # dd takes minutes), reopening the same-node stick-swap TOCTOU the check
+        # exists to stop.
+        plan = getattr(self.wiz, "flash_plan", None)
+        if plan:
+            self._flash_queue = list(plan)
+            self._flash_next()
+            return
+        # legacy single-target tuple stash (pre-table configs / older callers)
         opted, want = getattr(self.wiz, "flash_after", (False, None))
         if not opted or want is None:
             return
@@ -837,13 +881,61 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.log.appendPlainText(f"Flash-after-build: flashing {want_path} (opted in)…")
         self._start_flash(target)
 
-    def _start_flash(self, target) -> None:
+    def _flash_next(self) -> None:
+        """Run the next queued plan assignment (sequential: chained from _flash_done,
+        so two flashers can never run at once).
+
+        BOTH safety checks run HERE, immediately before each destructive write —
+        never once for the whole queue, because the previous flash took minutes and
+        any earlier validation is stale by now (TOCTOU):
+
+        * identity: a FRESH read-only scan must show a device at the assigned path
+          whose size + model match the one assigned at build time — /dev/sdX is
+          enumeration-order dependent, so a same-node different-stick swap during an
+          earlier flash would otherwise be blindly written;
+        * artifact: the CONCRETE image recorded for this assignment's entry (the
+          per-entry snapshot diff, see _on_entry_start/_on_entry_done) is passed as
+          --artifact. Without one we SKIP rather than let flash-disk.sh's role glob
+          guess — it cannot tell two same-role entries apart.
+
+        A failed check skips THAT assignment (logged) and moves on to the next."""
+        while self._flash_queue:
+            if self.flash_worker is not None and self.flash_worker.isRunning():
+                self.flash_worker.wait(3000)  # the previous worker already emitted done
+            a = self._flash_queue.pop(0)
+            artifact = self._entry_artifacts.get(a.entry_id, "")
+            if not artifact:
+                self.log.appendPlainText(
+                    f"Flash plan: no artifact was recorded for {a.entry_id} in this run "
+                    f"— skipped for safety (flash manually: scripts/flash-disk.sh "
+                    f"--artifact <image> {a.target.path}).")
+                continue
+            live = next((t for t in flash_targets.list_targets()
+                         if t.path == a.target.path), None)
+            if live is None:
+                self.log.appendPlainText(
+                    f"Flash plan: device {a.target.path} is no longer attached — skipped.")
+                continue
+            if live.size != a.target.size or live.model != a.target.model:
+                self.log.appendPlainText(
+                    f"Flash plan: the device now at {a.target.path} is not the one "
+                    f"assigned at build time (identity changed) — skipped for safety.")
+                continue
+            self.log.appendPlainText(
+                f"Flash plan: {a.entry_id} ({os.path.basename(artifact)}) → "
+                f"{a.target.path} (opted in)…")
+            self._start_flash(a.target, argv=flash_targets.assignment_argv(
+                a, generator_dir=self.wiz.generator_dir, artifact=artifact))
+            return
+
+    def _start_flash(self, target, argv: list[str] | None = None) -> None:
         if self.flash_worker is not None and self.flash_worker.isRunning():
             return
         self.flash_btn.setEnabled(False)
         self.flash_refresh_btn.setEnabled(False)
         self.log.appendPlainText(f"\n=== flashing {target.path} via scripts/flash-disk.sh ===")
-        self.flash_worker = _FlashWorker(self._flash_argv_for(target), self.wiz.generator_dir)
+        self.flash_worker = _FlashWorker(argv or self._flash_argv_for(target),
+                                         self.wiz.generator_dir)
         self.flash_worker.line.connect(lambda s: self.log.appendPlainText(s))
         self.flash_worker.done.connect(self._flash_done)
         self.flash_worker.start()
@@ -852,6 +944,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.log.appendPlainText(f"=== flash exited {code} ===")
         self.flash_refresh_btn.setEnabled(True)
         self._refresh_flash_targets()
+        self._flash_next()                    # chain the next plan assignment (if any)
 
     # ---- wizard contract --------------------------------------------------------
     def isComplete(self) -> bool:

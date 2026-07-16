@@ -29,8 +29,10 @@ _MAX_SIZE = 256 * (1 << 30)           # ~256 GiB
 _MMC_RE = re.compile(r"^mmcblk[0-9]+$")
 
 # the exact lsblk field set verified present on the host (bytes sizes, JSON).
+# LABEL/MOUNTPOINT are universal `lsblk -o` fields — same single call, no extra
+# subprocess — and feed the device table's Model/Label + mounted columns.
 _LSBLK_ARGS = ["lsblk", "-J", "-b", "-o",
-               "NAME,PATH,TRAN,RM,TYPE,SIZE,HOTPLUG,MODEL,VENDOR"]
+               "NAME,PATH,TRAN,RM,TYPE,SIZE,HOTPLUG,MODEL,VENDOR,LABEL,MOUNTPOINT"]
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,14 @@ class FlashTarget:
     transport: str
     removable: bool
     kind: str          # "mmc" | "usb" | "removable"
+    # trailing DEFAULTED fields: every pre-existing positional constructor call keeps
+    # working, and the golden detection behavior is unchanged when they stay default.
+    fs_label: str = ""                       # first non-empty child partition LABEL
+    mountpoints: tuple[str, ...] = ()        # this disk's + descendants' MOUNTPOINTs
+
+    @property
+    def mounted(self) -> bool:
+        return bool(self.mountpoints)
 
     def label(self) -> str:
         """A one-line human label for the dropdown: path, model/vendor, size, kind."""
@@ -114,6 +124,27 @@ def _accept(dev: dict) -> bool:
     return _MIN_SIZE <= size <= _MAX_SIZE
 
 
+def _collect_label_mounts(dev: dict) -> tuple[str, tuple[str, ...]]:
+    """Walk this disk node + ALL descendants (the same recursion shape as
+    _disk_contains) collecting the first non-empty partition LABEL and every non-null
+    MOUNTPOINT — read-only decoration for the device table's Label/Mounted columns."""
+    label = ""
+    mounts: list[str] = []
+
+    def _walk(node: dict) -> None:
+        nonlocal label
+        if not label and (node.get("label") or "").strip():
+            label = str(node.get("label")).strip()
+        mp = node.get("mountpoint")
+        if mp:
+            mounts.append(str(mp))
+        for child in node.get("children") or []:
+            _walk(child)
+
+    _walk(dev)
+    return label, tuple(mounts)
+
+
 def _targets_from_lsblk_json(data: dict, root_src: str) -> list[FlashTarget]:
     out: list[FlashTarget] = []
     for dev in data.get("blockdevices") or []:
@@ -123,14 +154,33 @@ def _targets_from_lsblk_json(data: dict, root_src: str) -> list[FlashTarget]:
             continue
         name = dev.get("name") or ""
         transport = dev.get("tran") or ""
+        fs_label, mountpoints = _collect_label_mounts(dev)
         out.append(FlashTarget(
             path=dev.get("path") or f"/dev/{name}",
             size=int(dev.get("size") or 0),
             model=(dev.get("model") or "").strip(),
             transport=transport,
             removable=bool(dev.get("rm")),
-            kind=_kind(name, transport)))
+            kind=_kind(name, transport),
+            fs_label=fs_label,
+            mountpoints=mountpoints))
     return out
+
+
+def _mounts_for_dev(name: str) -> tuple[str, ...]:
+    """Mountpoints of /dev/<name> and its partitions from a read-only /proc/mounts
+    prefix match (the sysfs-fallback twin of the lsblk MOUNTPOINT column)."""
+    prefix = f"/dev/{name}"
+    mounts: list[str] = []
+    try:
+        with open("/proc/mounts", encoding="utf-8") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].startswith(prefix):
+                    mounts.append(parts[1])
+    except OSError:
+        pass
+    return tuple(mounts)
 
 
 def _targets_from_sysfs(root_src: str) -> list[FlashTarget]:
@@ -170,7 +220,8 @@ def _targets_from_sysfs(root_src: str) -> list[FlashTarget]:
         model = _read(os.path.join(base, name, "device", "model"))
         transport = "usb" if is_usb else ""
         out.append(FlashTarget(path=path, size=size, model=model, transport=transport,
-                               removable=removable, kind=_kind(name, transport)))
+                               removable=removable, kind=_kind(name, transport),
+                               mountpoints=_mounts_for_dev(name)))
     return out
 
 
@@ -191,6 +242,10 @@ def list_targets() -> list[FlashTarget]:
 
 # ── argv builder (delegates the destructive write to flash-disk.sh) ──────────────────
 _ARM64_PLATFORMS = ("rpi5", "orangepi5", "orangepizero2", "frite", "jetson")
+
+# flash-disk.sh accepts only these --role tokens; any client/desktop role maps to the
+# generic 'host' artifact glob (same set as ProgressPage._FLASH_ROLES).
+FLASH_ROLE_TOKENS = frozenset({"pki", "backend", "frontend", "host", "be", "fe", "omnibus"})
 
 
 def arch_for_platform(platform: str) -> str:
@@ -223,3 +278,83 @@ def flash_argv(target: FlashTarget, *, generator_dir: str, role: str, arch: str,
         argv += ["--work-dir", work_dir]
     argv += ["--no-confirm", target.path]
     return argv
+
+
+@dataclass(frozen=True)
+class FlashAssignment:
+    """One row of the Review-page post-build flash plan: WHICH worklist image
+    (entry_id) goes to WHICH attached device, plus the flash-disk.sh parameters
+    (role token / arch / artifact work dir) resolved at commit time. Purely
+    declarative — building the argv still delegates to flash_argv()/flash-disk.sh,
+    and execution stays post-build on the ProgressPage behind its TOCTOU re-check."""
+    target: FlashTarget
+    entry_id: str
+    role: str
+    arch: str
+    work_dir: str
+
+
+def assignment_argv(a: FlashAssignment, *, generator_dir: str,
+                    artifact: str | None = None) -> list[str]:
+    """The scripts/flash-disk.sh invocation for one plan assignment — a thin wrapper
+    over the existing flash_argv() so no second (unaudited) write path can exist.
+
+    ``artifact`` is the CONCRETE built image resolved for this assignment's entry
+    (see :func:`new_artifact`). Passing it emits ``--artifact`` so the per-row image
+    pick is honored EXACTLY: flash-disk.sh's newest-mtime ``*-<role>-*`` auto-glob
+    cannot discriminate two worklist entries sharing a role token (be.rpi5 vs
+    be.jetson are both ``--role be --arch arm64``; every client/desktop role folds
+    to ``host``), so relying on the glob would flash the same newest artifact to
+    differently-assigned devices."""
+    return flash_argv(a.target, generator_dir=generator_dir, role=a.role, arch=a.arch,
+                      artifact=artifact, work_dir=a.work_dir)
+
+
+# ── per-entry artifact tracking (the flash plan's entry_id → built-image map) ─────────
+# flashable extensions flash-disk.sh accepts, and the same kernel/initramfs/initrd/
+# squashfs blob filter its list_candidates() applies (they share the .img extension).
+_ARTIFACT_EXTS = (".img", ".iso")
+_ARTIFACT_BLOB_RE = re.compile(r"(^|-)(kernel|initramfs|initrd|squashfs)", re.IGNORECASE)
+
+
+def _is_flashable_artifact(name: str) -> bool:
+    return (name.lower().endswith(_ARTIFACT_EXTS)
+            and not _ARTIFACT_BLOB_RE.search(name))
+
+
+def snapshot_artifacts(work_dir: str) -> dict[str, float]:
+    """{filename: mtime} of the flashable artifacts (*.img/*.iso minus kernel/
+    initramfs/squashfs blobs) currently in ``work_dir`` — the read-only baseline the
+    ProgressPage takes when a worklist entry STARTS building, so the artifact that
+    entry PRODUCED can be identified by diff when it finishes (the worklist runs
+    entries sequentially, so the diff is unambiguous)."""
+    out: dict[str, float] = {}
+    try:
+        names = os.listdir(work_dir)
+    except OSError:
+        return out
+    for name in names:
+        if not _is_flashable_artifact(name):
+            continue
+        try:
+            out[name] = os.stat(os.path.join(work_dir, name)).st_mtime
+        except OSError:
+            continue
+    return out
+
+
+def new_artifact(work_dir: str, baseline: dict[str, float]) -> str:
+    """The flashable artifact a just-finished entry build produced: the newest-mtime
+    *.img (else *.iso) in ``work_dir`` that is NEW or REWRITTEN vs the entry-start
+    ``baseline`` snapshot. Returns "" when nothing qualifies — the fail-safe the
+    flash plan SKIPS on rather than falling back to flash-disk.sh's role glob (which
+    cannot tell two same-role entries apart)."""
+    fresh = snapshot_artifacts(work_dir)
+    changed = [(name, mtime) for name, mtime in fresh.items()
+               if baseline.get(name) != mtime]
+    if not changed:
+        return ""
+    imgs = [c for c in changed if c[0].lower().endswith(".img")]
+    pool = imgs or changed
+    name = max(pool, key=lambda c: c[1])[0]
+    return os.path.join(os.path.abspath(work_dir), name)
