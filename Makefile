@@ -316,7 +316,7 @@ ORANGEPIZERO2_PASS    := ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
         flash qemu qemu-rpi qemu-x86 \
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
-        stack-clone stack-mastodon-env stack-build stack-up stack-down stack-logs stack-ps
+        stack-clone stack-mastodon-env stack-m2-bootstrap stack-build stack-up stack-down stack-logs stack-ps
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z0-9_.+-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -738,10 +738,27 @@ else
 CASDOOR_ISSUER ?= http://localhost:8000
 endif
 # Env exported into every compose invocation (build contexts + service env).
+# DOCKER_BUILDKIT=1 belt-and-braces: several service Dockerfiles use BuildKit
+# syntax (`# syntax=docker/dockerfile:1.7` + RUN --mount=type=secret), which a
+# legacy-builder fallback (e.g. an env where the user-scoped buildx plugin in
+# ~/.docker/cli-plugins is not visible) fails on with opaque parse errors.
 STACK_ENV := STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
-             PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)'
+             PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
+             DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
 COMPOSE_CMD   ?= docker compose
+# ── private-maven cold-build wiring (see tests/stack/m2-bootstrap.sh) ──
+# Four Java services (admin/user/mod-bff, federation-api) resolve org-PRIVATE
+# systems.snapdragon:* maven artifacts at image-build time. `make
+# stack-m2-bootstrap` builds those artifacts FROM SOURCE into a persistent
+# cache and serves them from a local registry container, writing
+# $(STACK_M2_ENV) (gitignored). Whenever that env file exists, every
+# build-capable stack call auto-includes the committed override
+# $(STACK_M2_COMPOSE), threading CI_API_V4_URL/GITLAB_GROUP_ID as build args.
+# Without it, builds still work IF the images/artifacts are already local.
+STACK_M2_ENV     := tests/stack/.m2-registry.env
+STACK_M2_COMPOSE := tests/stack/compose.m2-local.yaml
+STACK_M2_FLAGS    = $(if $(wildcard $(STACK_M2_ENV)),--env-file $(STACK_M2_ENV) -f $(STACK_M2_COMPOSE),)
 # When SOCIAL=1, the included compose.real.yaml mastodon services need an
 # env_file (tests/stack/.mastodon.env). Ensure it exists before any social
 # compose call so the profile renders/runs (NOT needed for the core stack).
@@ -771,25 +788,25 @@ stack-clone: ## clone/update all snapdragon repos into ./.stack-src (idempotent)
 # stack (docker logs snapdragon-local-mastodon-web-1 showed the exact
 # HostAuthorization block on every /api/v1/**, /api/v2/**, /oauth/** call proxied
 # through the be-gateway).
+# Delegated to tests/stack/gen-mastodon-env.sh (shared with up-real.sh) so a
+# FRESH checkout gets a COMPLETE env: the old inline recipe only ran when the
+# file was absent and never wrote ACTIVE_RECORD_ENCRYPTION_* (Mastodon v4.3 /
+# Rails 7.1 refuses to boot without them) or EMAIL_DOMAIN_ALLOWLIST (required
+# by seed-e2e.sh's @e2e.local personas). The script also self-heals an
+# existing file: only missing/empty keys are generated, nothing is clobbered.
 stack-mastodon-env:
-	@if [ ! -f tests/stack/.mastodon.env ]; then \
-	  echo "==> Generating dev tests/stack/.mastodon.env (SOCIAL tier)"; \
-	  { echo "LOCAL_DOMAIN=localhost"; \
-	    echo "SECRET_KEY_BASE=$$(openssl rand -hex 64)"; \
-	    echo "OTP_SECRET=$$(openssl rand -hex 64)"; \
-	    echo "DB_HOST=mastodon-db"; echo "DB_USER=mastodon"; echo "DB_NAME=mastodon"; echo "DB_PASS=mastodon"; \
-	    echo "REDIS_HOST=mastodon-redis"; \
-	    echo "ALTERNATE_DOMAINS=mastodon-web:3000"; \
-	  } > tests/stack/.mastodon.env; \
-	fi
+	@bash tests/stack/gen-mastodon-env.sh
+
+stack-m2-bootstrap: ## COLD-BUILD prereq: build the private systems.snapdragon maven artifacts FROM SOURCE + serve them from a local registry container
+	bash tests/stack/m2-bootstrap.sh
 
 stack-build: stack-clone $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) build
 
 stack-up: stack-clone $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
-	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)"
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) build
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) up -d
+	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) up -d
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
 

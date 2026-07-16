@@ -118,6 +118,12 @@ for repo in "${REPOS[@]}"; do
   fi
 done
 
+# Post-clone patch pass — the COMMITTED, general mechanism for the small source
+# tweaks the LOCAL stack needs on the cloned trees (idempotent + CRLF-tolerant;
+# see scripts/patch-stack-src.sh). Runs EVERY time because the update path
+# above `reset --hard`s each checkout, wiping any previously applied patch.
+bash "${HERE}/patch-stack-src.sh" "${STACK_SRC}"
+
 echo "==> Done: ${ok} ok, ${fail} failed/skipped, in ${STACK_SRC}"
 if [ "${fail}" -gt 0 ]; then
   echo "    Some repos did not clone. Check GitHub auth (gh auth login) or the"

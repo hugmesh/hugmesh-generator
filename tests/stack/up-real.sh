@@ -49,28 +49,14 @@ MASTODON_ENV="${HERE}/.mastodon.env"
 
 echo "==> Real integration stack (compose.real.yaml)"
 
-# ── 1. Mastodon secrets: guarantee .mastodon.env has non-empty secrets ──
-# The file is committed with working dev secrets; this regenerates only the
-# ones a fresh/edited checkout may have blanked, so the file is never partial.
-ensure_secret() { # KEY generator-cmd...
-  local key="$1"; shift
-  local cur; cur="$(grep -E "^${key}=" "${MASTODON_ENV}" 2>/dev/null | cut -d= -f2- || true)"
-  if [ -z "${cur}" ]; then
-    local val; val="$("$@")"
-    if grep -qE "^${key}=" "${MASTODON_ENV}" 2>/dev/null; then
-      sed -i "s|^${key}=.*|${key}=${val}|" "${MASTODON_ENV}"
-    else
-      printf '%s=%s\n' "${key}" "${val}" >> "${MASTODON_ENV}"
-    fi
-    echo "  generated ${key}"
-  fi
-}
-if [ ! -f "${MASTODON_ENV}" ]; then
-  echo "ERROR: ${MASTODON_ENV} missing (expected committed Mastodon env). Aborting." >&2
-  exit 1
-fi
-ensure_secret SECRET_KEY_BASE openssl rand -hex 64
-ensure_secret OTP_SECRET      openssl rand -hex 64
+# ── 1. Mastodon secrets: guarantee .mastodon.env exists and is COMPLETE ──
+# .mastodon.env is GITIGNORED (dev secrets never land in git), so a fresh
+# checkout has NO file at all — generate it instead of aborting. The shared
+# gen-mastodon-env.sh writes/heals EVERY key the compose.real.yaml mastodon
+# services need (LOCAL_DOMAIN/DB/REDIS, SECRET_KEY_BASE/OTP_SECRET, the
+# ACTIVE_RECORD_ENCRYPTION_* trio Mastodon v4.3 refuses to boot without, and
+# seed-e2e.sh's EMAIL_DOMAIN_ALLOWLIST), touching only missing/empty keys.
+MASTODON_ENV="${MASTODON_ENV}" bash "${HERE}/gen-mastodon-env.sh"
 
 # (Synapse config generation/self-heal now lives in the synapse service's own
 # entrypoint — see compose.real.yaml — so there is no separate step here.)

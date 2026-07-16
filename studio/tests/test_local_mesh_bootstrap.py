@@ -216,6 +216,10 @@ def test_read_superadmin_missing_is_empty(tmp_path):
 def _patch_up_happy(monkeypatch, seed_calls, start_calls):
     monkeypatch.setattr(LocalMeshBootstrap, "guard_host_local",
                         lambda self: (True, ""), raising=True)
+    # host cold-build preflight green — its fail-fast behaviour has dedicated
+    # both-ways coverage in test_local_stack_preflight.py
+    monkeypatch.setattr(LocalMeshBootstrap, "preflight",
+                        lambda self: [], raising=True)
     monkeypatch.setattr(LocalMeshBootstrap, "generate_creds",
                         lambda self: (True, "generated"), raising=True)
 
@@ -296,6 +300,8 @@ def test_up_refuses_when_guard_fails(tmp_path, monkeypatch):
 def test_up_stops_if_superadmin_unreadable(tmp_path, monkeypatch):
     monkeypatch.setattr(LocalMeshBootstrap, "guard_host_local",
                         lambda self: (True, ""), raising=True)
+    monkeypatch.setattr(LocalMeshBootstrap, "preflight",
+                        lambda self: [], raising=True)
     monkeypatch.setattr(LocalMeshBootstrap, "generate_creds",
                         lambda self: (True, "gen"), raising=True)
     started = {"called": False}
@@ -334,8 +340,9 @@ def test_stack_node_exports_domain_only_when_set(tmp_path, monkeypatch):
 
     monkeypatch.setattr("snapdragon_studio.core.local_stack_node.subprocess.run",
                         _fake_run)
-    monkeypatch.setattr(LocalStackNode, "available", lambda self: (True, ""),
-                        raising=True)
+    # start() gates on the cold-build preflight; pin it green so this test keeps
+    # capturing the env of the `make stack-up` call itself.
+    monkeypatch.setattr(LocalStackNode, "preflight", lambda self: [], raising=True)
     # with a domain -> DOMAIN exported into `make`
     LocalStackNode(GENERATOR_DIR, env="prod", domain="corp.example").start()
     assert captured["env"]["DOMAIN"] == "corp.example"

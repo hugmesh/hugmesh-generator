@@ -19,6 +19,16 @@ compose topology is a faithful translation of those manifests to compose DNS.
 
 - **Docker** with **Compose v2** (`docker compose version` ≥ v2). Docker Desktop
   on Windows includes it; on Linux install `docker-compose-plugin`.
+- **BuildKit / buildx** visible **in the environment you run `make` from**.
+  Several service Dockerfiles use BuildKit syntax (`# syntax=docker/dockerfile:1.7`
+  + `RUN --mount=type=secret`); the Makefile exports `DOCKER_BUILDKIT=1`, but the
+  buildx CLI plugin is often installed **per-user** (`~/.docker/cli-plugins`), so a
+  `sudo`/systemd/other-`HOME` invocation silently falls back to the legacy builder
+  and dies with opaque Dockerfile parse errors. `docker buildx version` must work
+  as the invoking user.
+- **A cold build** (no `snapdragon-local-*` images yet — e.g. a fresh box or a
+  wiped docker data-root) additionally needs the org-private maven artifacts:
+  run **`make stack-m2-bootstrap` once first** (see "Cold builds" below).
 - **x86_64 / amd64.** First-party images are amd64 (Temurin JRE, node-alpine,
   nginx). On Apple Silicon / arm64 you'd need emulation (out of scope).
 - **GitHub access OR internal VPN** so the repos can be cloned. Either:
@@ -71,6 +81,60 @@ make stack-up STACK_SRC=/srv/snap-src        # clone/build from a different dir
 make stack-clone GIT_BASE=https://gitlab.snapdragon.systems/snapdragon  # VPN mirror
 make stack-up ENV=prod CASDOOR_ISSUER=https://id.snapdragon.systems     # prod mode
 ```
+
+---
+
+## Cold builds — `make stack-m2-bootstrap` (private maven artifacts)
+
+Four Java services (**admin/user/mod-bff, federation-api**) resolve org-PRIVATE
+maven artifacts (`systems.snapdragon:snapdragon-parent/-commons/-auth-core/
+-build-config`) at **image-build** time via their committed `settings.xml`
+(`${env.CI_API_V4_URL}/groups/${env.GITLAB_GROUP_ID}/-/packages/maven` — the
+GitLab group registry, unreachable off the VPN). While the built
+`snapdragon-local-*` images exist locally you never notice; on a **cold build**
+(fresh box, wiped docker data-root) `docker compose build` fails resolving them.
+
+```bash
+make stack-m2-bootstrap   # once (idempotent; re-run after a docker restart)
+make stack-up             # now auto-wires the local registry into the build
+```
+
+What it does (`tests/stack/m2-bootstrap.sh` — everything from SOURCE, nothing
+vendored):
+
+1. Clones the four library repos at **pinned commits** (the repos carry no git
+   tags; each SHA's `pom.xml` is exactly the version the services require —
+   including BOTH `snapdragon-auth-core` 2.3.3 (user-bff) and 2.3.4 (admin-bff))
+   into `~/.cache/snapdragon-stack-maven/src` and `mvn install`s them into
+   `~/.cache/snapdragon-stack-maven/m2` using the official `maven` Docker image
+   (no host JDK/maven needed). Cached artifacts are skipped — no re-clone/re-build.
+2. Serves that m2 repo from a tiny static registry **container**
+   (`snapdragon-m2-registry`, busybox httpd) shaped like the GitLab group
+   registry URL. It must be a container: on some hosts, host-published ports are
+   NOT reachable from `docker build` containers, so the build reaches it by its
+   docker-bridge IP.
+3. Writes `tests/stack/.m2-registry.env` (gitignored). Whenever that file
+   exists, `make stack-up`/`stack-build` auto-include the committed override
+   `tests/stack/compose.m2-local.yaml`, threading `CI_API_V4_URL`/
+   `GITLAB_GROUP_ID` as build args into the four services. No token is needed:
+   the Dockerfiles' `ci_job_token` secret mount is optional-guarded and the
+   static registry ignores auth headers.
+
+Two committed companions make the resolution actually work:
+
+- the Makefile exports `DOCKER_BUILDKIT=1` on every stack compose call (the
+  Dockerfiles use BuildKit secret mounts), and
+- `scripts/clone-all-repos.sh` runs `scripts/patch-stack-src.sh` after every
+  clone/update — the general post-clone patch pass. Its current patch injects a
+  `maven-default-http-blocker` mirror override into each consumer repo's
+  `settings.xml` (idempotent, marker-scoped), because Maven 3.9's bundled
+  settings block ALL external `http://` repositories and the local registry is
+  plain HTTP by design.
+
+The registry container survives reboots (`--restart unless-stopped`), but its
+bridge IP can change when docker restarts — `make stack-m2-bootstrap` is cheap
+to re-run and refreshes `.m2-registry.env`. Remove it with
+`docker rm -f snapdragon-m2-registry` once your images are built.
 
 ---
 
