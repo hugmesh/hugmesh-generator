@@ -159,7 +159,8 @@ Client desktops also bake the mainline e-ink display drivers as kernel **modules
 
 ### Local user with a password (no SSO)
 `--local-user NAME` + `--local-pass PASS` create a normal user. The password is
-hashed at build time with `openssl passwd -6` — **the plaintext is never baked**.
+hashed at build time (yescrypt `$y$` where the build host's libcrypt supports
+it, SHA-512 crypt `$6$` fallback) — **the plaintext is never baked**.
 With no `--local-pass`, a random one-time password is minted at first boot and
 printed once to the console. `wheel` is the sudo path. `--skip-sso` removes the
 Casdoor/OIDC desktop login from any client image (auto-on for standalone).

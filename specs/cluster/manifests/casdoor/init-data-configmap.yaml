@@ -115,6 +115,23 @@
 # boundary (arch/core builds stay ROLE_SUPERADMIN by longest-pattern-match). Seeds
 # EMPTY (users []); membership is granted via the admin-bff/casdoor grant flow.
 #
+# ROLE_FORUM ("Forum Access") and ROLE_WIKI ("Wiki Access") are per-service
+# access-floor roles, SIBLINGS of ROLE_TUBE/ROLE_OWNCAST/ROLE_MATRIX (empty
+# "roles" array — no inheritance; default-deny wherever they hold no route row).
+# The canonical route-access seed (manifests/route-access/initdb/20-schema.sql)
+# keys /social/forum/** + /bff/forum/** on ROLE_FORUM and /wiki/** + /bff/wiki/**
+# on ROLE_WIKI. ROLE_FORUM_MOD ("Forum Moderator") is the DERIVED composite role
+# (= ROLE_MOD INTERSECT ROLE_FORUM, cf. ROLE_GAMES_ADMIN) keying the single
+# /bff/forum/moderation/** row; like ROLE_GAMES_ADMIN it stays EMPTY in this
+# seed — the forum reconcile flow materializes membership. All three seed EMPTY
+# (users []); membership is granted via the admin-bff/casdoor grant flow. They
+# were referenced by the route-access seed + the forum admin-sync Job but never
+# seeded here, so no user could ever hold them (their routes were unreachable
+# for non-admins). Names are the LITERAL ROLE_* strings like every sibling row:
+# the gateway strips ONE leading ROLE_ then re-prefixes (Roles.canonicalRoleName
+# — no double-prefix) and route-row matching strips/uppercases both sides, so
+# the seeded name lines up with the route table end-to-end.
+#
 # ROLE_SERVICE ("Internal service-to-service") is the machine role for internal
 # client-credentials callers that need the INTERNAL/ROLE_SERVICE endpoints (e.g.
 # the signup-gate proxy calling the federation username-availability check). Its
@@ -165,6 +182,9 @@ data:
         { "owner": "snapdragon", "name": "desktop-sudo", "displayName": "Desktop SSO sudo (governed desktop polkit gate)", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_TUBE",    "displayName": "Tube Access",    "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_OWNCAST", "displayName": "Owncast Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_WIKI",      "displayName": "Wiki Access",     "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_FORUM",     "displayName": "Forum Access",    "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "snapdragon", "name": "ROLE_FORUM_MOD", "displayName": "Forum Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_GATEWAY",   "displayName": "Gateway service", "users": ["snapdragon/svc-pki-gateway","snapdragon/svc-be-gateway","snapdragon/svc-fe-gateway"], "roles": [], "domains": [], "isEnabled": true },
         { "owner": "snapdragon", "name": "ROLE_API",       "displayName": "API service",     "users": ["snapdragon/svc-api"], "roles": [], "domains": [], "isEnabled": true },

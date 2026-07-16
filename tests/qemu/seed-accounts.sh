@@ -505,9 +505,10 @@ emit_roles() {
     local declared_roles="ROLE_ADMIN ROLE_MOD ROLE_MATRIX ROLE_MASTODON \
 ROLE_MATRIX_DOMAINLOCKED ROLE_MASTODON_DOMAINLOCKED \
 ROLE_MATRIX_EXTERNAL_CLIENT ROLE_MASTODON_EXTERNAL_CLIENT \
-ROLE_FORUM ROLE_GAMES ROLE_GAMES_ADMIN ROLE_USER"
-    # Seed every declared role as an empty member set first (so ROLE_GAMES_ADMIN
-    # is present-but-empty — the games-admin-sync Job fills it).
+ROLE_FORUM ROLE_FORUM_MOD ROLE_WIKI ROLE_GAMES ROLE_GAMES_ADMIN ROLE_USER"
+    # Seed every declared role as an empty member set first (so the DERIVED
+    # ROLE_GAMES_ADMIN / ROLE_FORUM_MOD are present-but-empty — the
+    # games-admin-sync / forum reconcile Jobs fill them).
     for r in ${declared_roles}; do
         role_members_json="$(echo "${role_members_json}" | jq --arg r "${r}" '. + {($r): []}')"
     done

@@ -218,6 +218,7 @@ RUN mkdir -p /etc/portage/package.accept_keywords && \
       '# pure-python/arch-independent build backend; amd64-first keyworded upstream.' \
       '# Host-side twin of specs-*/portage/package.accept_keywords/setuptools-scm-backend.' \
       'dev-python/vcs-versioning **' \
+      'dev-python/setuptools-scm **' \
       > /etc/portage/package.accept_keywords/snapdragon-host-build-backends
 RUN emerge --verbose --noreplace \
         sys-boot/shim \

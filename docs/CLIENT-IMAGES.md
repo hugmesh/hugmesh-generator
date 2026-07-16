@@ -178,7 +178,7 @@ the native amd64 chroot build with grub-EFI.
   // Increment 3: superadmin client variant only. crypt(3) hash (mkpasswd -m
   // sha512crypt / -m yescrypt). Plaintext NEVER in git/image. May instead live on
   // the KEYS USB at secrets/device-password.hash (manifest takes precedence).
-  "device_password_hash": "$6$...."
+  "device_password_hash": "$y$...."   // any crypt(3) hash: $y$ yescrypt (preferred) or $6$ sha512crypt
 }
 ```
 The build bakes `/etc/snapdragon/{identity-role,domains,desktop-weight}` directly

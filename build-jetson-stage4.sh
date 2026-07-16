@@ -55,6 +55,10 @@ SHARED_SPECS="${SCRIPT_DIR}/specs"       # arch-agnostic specs (mesh, provisioni
 # builders so the stage3/headscale/tailscale fetches are GPG/checksum-verified.
 # shellcheck source=scripts/_download-lib.sh
 source "${SCRIPT_DIR}/scripts/_download-lib.sh"
+# Shared /etc/shadow password-KDF helper (ph_crypt_hash): yescrypt ($y$) where
+# the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
+# shellcheck source=scripts/_passhash-lib.sh
+source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
 
 # Cross-dracut helper: qemu-aarch64 binfmt registration + the availability
 # predicate the --encrypt-root fail-fast preflight and the qemu-chroot initramfs
@@ -235,7 +239,7 @@ OPTIONS
                           password instead of the KEYS-USB-provisioned account.
                           Forces --encrypt-root.
     --local-user NAME    The standalone local login account (default: --user).
-    --local-pass PASS    Plaintext; hashed at build (openssl passwd -6), never
+    --local-pass PASS    Plaintext; hashed at build (yescrypt, $6$ fallback), never
                           baked raw. Omit it and a random one-time password is
                           minted + printed once at first boot instead.
 
@@ -480,9 +484,15 @@ if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]; then
     [ -n "${LOCAL_USER}" ] && DEFAULT_USER="${LOCAL_USER}"
     if [ -n "${LOCAL_USER_PASS}" ]; then
         command -v openssl >/dev/null 2>&1 || { err "--local-pass needs openssl on the build host (app-crypt/... / dev-libs/openssl)"; exit 1; }
-        LOCAL_PASSHASH="$(openssl passwd -6 "${LOCAL_USER_PASS}")"
+        # ph_crypt_hash (scripts/_passhash-lib.sh): yescrypt ($y$) when the build
+        # host's libcrypt round-trips it, else SHA-512 crypt ($6$). This hash is
+        # what a stolen-device attacker cracks offline — docs/CRYPTO-AUDIT.md row 12.
+        LOCAL_PASSHASH="$(ph_crypt_hash "${LOCAL_USER_PASS}")"
         LOCAL_USER_PASS=""   # scrub the plaintext from the environment immediately
-        info "Standalone local user '${DEFAULT_USER}': password hashed at build time (SHA-512 crypt; plaintext not baked)."
+        case "${LOCAL_PASSHASH}" in
+            '$y$'*) info "Standalone local user '${DEFAULT_USER}': password hashed at build time (yescrypt; plaintext not baked)." ;;
+            *)      info "Standalone local user '${DEFAULT_USER}': password hashed at build time (SHA-512 crypt fallback — build-host libcrypt lacks yescrypt; plaintext not baked)." ;;
+        esac
     else
         ${STANDALONE} && warn "Standalone build with no --local-pass: a RANDOM one-time password is minted at first boot (printed once to console)."
     fi
@@ -825,6 +835,10 @@ if [ "$(id -u)" -eq 0 ] && [ -d /etc/portage ]; then
 # keyworded amd64-first upstream. HOST-side twin of the sysroot's
 # package.accept_keywords/setuptools-scm-backend (see that file's rationale).
 dev-python/vcs-versioning **
+# setuptools-scm itself: the container-stable 10.0.5 fails its own wheel
+# REBUILD once vcs-versioning-2 is installed ("unable to detect version",
+# real jetson host-side failure 2026-07-16); the working 10.2.x is ~amd64.
+dev-python/setuptools-scm **
 HOSTKW
     info "Pre-seeded HOST /etc/portage/package.accept_keywords: vcs-versioning (build-backend)"
 fi

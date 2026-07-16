@@ -28,9 +28,11 @@
 #   @@HOSTNAME@@           Target hostname
 #   @@DEFAULT_USER@@       Fallback non-root user (NAME ONLY — no baked password)
 #   @@STANDALONE@@         "true" for a self-contained STANDALONE desktop image
-#   @@LOCAL_PASSHASH@@     STANDALONE only — crypt(3) $6$ hash of the --local-pass
-#                          password (built with `openssl passwd -6`; the plaintext
-#                          is NEVER baked). Empty => random one-time password.
+#   @@LOCAL_PASSHASH@@     STANDALONE only — crypt(3) hash of the --local-pass
+#                          password (yescrypt $y$ where the build host supports
+#                          it, SHA-512 crypt $6$ fallback — scripts/_passhash-lib.sh;
+#                          the plaintext is NEVER baked). Empty => random one-time
+#                          password.
 
 locale-gen
 eselect locale set en_US.utf8
@@ -48,7 +50,8 @@ if [ "@@STANDALONE@@" = "true" ] && [ ! -f /var/lib/keys-provision/users.created
     fi
     grep -q '^%wheel ALL=(ALL) ALL' /etc/sudoers || echo "%wheel ALL=(ALL) ALL" >> /etc/sudoers
     if [ -n "@@LOCAL_PASSHASH@@" ]; then
-        # Apply the build-time SHA-512 crypt hash (NOT plaintext) to /etc/shadow.
+        # Apply the build-time crypt(3) hash (NOT plaintext) to /etc/shadow.
+        # chpasswd -e takes the hash verbatim ($y$ and $6$ both land as-is).
         echo '@@DEFAULT_USER@@:@@LOCAL_PASSHASH@@' | chpasswd -e
         echo "Standalone desktop: local user @@DEFAULT_USER@@ ready (password set at build time)."
     else

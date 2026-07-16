@@ -28,18 +28,37 @@ for s in build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh \
     f="${GEN}/${s}"
     if [ ! -f "${f}" ]; then bad "${s}: script missing"; continue; fi
     if grep -q 'package.accept_keywords/snapdragon-host-build-backends' "${f}" \
-       && grep -q "dev-python/vcs-versioning \*\*" "${f}"; then
-        ok "${s}: writes the HOST-side vcs-versioning acceptance"
+       && grep -q "dev-python/vcs-versioning \*\*" "${f}" \
+       && grep -q "dev-python/setuptools-scm \*\*" "${f}"; then
+        ok "${s}: writes the HOST-side vcs-versioning + setuptools-scm acceptance"
     else
-        bad "${s}: missing the HOST-side vcs-versioning acceptance block"
+        bad "${s}: missing the HOST-side vcs-versioning/setuptools-scm acceptance block"
     fi
 done
 
 if grep -q 'package.accept_keywords/snapdragon-host-build-backends' "${GEN}/Dockerfile.build" \
-   && grep -q "dev-python/vcs-versioning \*\*" "${GEN}/Dockerfile.build"; then
-    ok "Dockerfile.build: bakes the HOST-side acceptance into the FINAL stage"
+   && grep -q "dev-python/vcs-versioning \*\*" "${GEN}/Dockerfile.build" \
+   && grep -q "dev-python/setuptools-scm \*\*" "${GEN}/Dockerfile.build"; then
+    ok "Dockerfile.build: bakes the HOST-side acceptance (both atoms) into the FINAL stage"
 else
-    bad "Dockerfile.build: missing the baked HOST-side acceptance"
+    bad "Dockerfile.build: missing the baked HOST-side acceptance (both atoms)"
+fi
+
+# The x86 CHROOT is stable-keyworded (ACCEPT_KEYWORDS="amd64") and got NO
+# acceptance from #352/#360 (ARM-only) — the 2026-07-16 five-x86-image failure.
+# Its specs file must carry BOTH atoms and is copied unconditionally by the
+# build-x86 accept_keywords loop (no case-filter entry for it).
+f="${GEN}/specs-x86/portage/package.accept_keywords/setuptools-scm-backend"
+if [ -f "${f}" ] && grep -q "dev-python/vcs-versioning \*\*" "${f}" \
+   && grep -q "dev-python/setuptools-scm \*\*" "${f}"; then
+    ok "specs-x86: chroot-side acceptance present (both atoms)"
+else
+    bad "specs-x86: chroot-side acceptance missing"
+fi
+if grep -qE 'setuptools-scm-backend\)' "${GEN}/build-x86-host-stage4.sh"; then
+    bad "build-x86: setuptools-scm-backend must NOT be role-filtered in the copy loop"
+else
+    ok "build-x86: setuptools-scm-backend copied unconditionally (no case filter)"
 fi
 
 # The sysroot-side file (#352) must ALSO survive — the two are twins, not
