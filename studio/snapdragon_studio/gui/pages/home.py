@@ -10,8 +10,10 @@ from dataclasses import MISSING
 
 from ..qt import QtWidgets
 from ._scroll import scrollable
-from ...core.config import HOME_DESKTOP_FIELDS, ImageConfig, home_options_allowed
-from ._gating import clear_unsupported, gate_widgets, gate_widgets_role_class
+from ...core.config import (
+    HOME_DESKTOP_FIELDS, PLATFORM_LABELS, ImageConfig, home_options_allowed,
+)
+from ._gating import clear_unsupported, gate_widgets, gate_widgets_role_class, platform_supports
 from ._widgets import _file_picker, _row
 
 # the media-data combo's leave-the-builder-default sentinel (the builder default is
@@ -133,8 +135,17 @@ class HomePage(QtWidgets.QWizardPage):
         # to the standalone checkbox (G28): the ARM builders accept --local-user/
         # --local-pass independently (rename/hash the image's default account), and
         # x86 always bakes the local user.
-        login = QtWidgets.QGroupBox("Local login")
+        self.login = QtWidgets.QGroupBox("Your login & standalone account")
+        login = self.login
         ll = QtWidgets.QVBoxLayout(login)
+        # standalone framing (spec 4): on the standalone path the local user + root-disk
+        # password ARE the primary action — say so plainly at the top of the group.
+        self.standalone_helper = QtWidgets.QLabel(
+            "This is your standalone login and full-disk-encryption setup — the account "
+            "you log in with, and the passphrase that encrypts the whole disk.")
+        self.standalone_helper.setWordWrap(True)
+        self.standalone_helper.setStyleSheet("color: gray;")
+        ll.addWidget(self.standalone_helper)
         self.standalone = QtWidgets.QCheckBox(
             "Standalone: no mesh/SSO, local user below logs in with a build-time password "
             "(--standalone; client roles only — laptop/chromebook/desktop, rpi5-desktop/"
@@ -157,11 +168,20 @@ class HomePage(QtWidgets.QWizardPage):
         # root-disk encryption (installer LUKS2 FDE) + unlock factors — the node-relevant
         # remainder: stays live in ALL modes (in mesh it becomes the worklist
         # encrypt_root default; jetson entries are auto-exempted in materialize()).
-        enc = QtWidgets.QGroupBox("Root-disk encryption (LUKS2)")
+        enc = QtWidgets.QGroupBox("Root-disk encryption (LUKS2 full-disk)")
         el = QtWidgets.QVBoxLayout(enc)
         self.encrypt_root = QtWidgets.QCheckBox(
             "Encrypt the target root (--encrypt-root; installer prompts for a passphrase)")
         el.addWidget(self.encrypt_root)
+        # device-cannot-encrypt note (spec 4): shown INSTEAD of the checkbox when the
+        # target platform has no full-disk-encryption path (jetson's single boot+root
+        # partition — see docs/STANDALONE-DESKTOP.md). Dormant in standalone (jetson is
+        # not a standalone platform) but correct if reached, and shares the predicate
+        # with the mesh worklist's per-row jetson handling.
+        self.no_enc_note = QtWidgets.QLabel("")
+        self.no_enc_note.setWordWrap(True)
+        self.no_enc_note.setStyleSheet("color: #a65d00;")
+        el.addWidget(self.no_enc_note)
         self.luks_pass = QtWidgets.QLineEdit()
         self.luks_pass.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         self.luks_pass.setPlaceholderText("optional unattended passphrase; NOT saved to configs")
@@ -243,6 +263,22 @@ class HomePage(QtWidgets.QWizardPage):
             # undone (leave the per-platform greying + its tooltips above untouched).
             for w in self._home_widgets:
                 w.setVisible(True)
+        # standalone framing (spec 4): show the "this is your login + FDE" helper only on
+        # the standalone path (a personal desktop), where the local user + root-disk
+        # password ARE the primary action.
+        self.standalone_helper.setVisible(c.mode == "standalone")
+        # device-cannot-encrypt (spec 4): hide the --encrypt-root checkbox and show a
+        # plain reason when the target platform has no FDE path (jetson). luks_pass is
+        # _ALL_PLATFORMS and emits regardless, so it is NOT hidden/cleared here.
+        can_encrypt = platform_supports("encrypt_root", c.platform)
+        self.encrypt_root.setVisible(can_encrypt)
+        self.no_enc_note.setVisible(not can_encrypt)
+        if not can_encrypt:
+            label = PLATFORM_LABELS.get(c.platform, c.platform or "x86")
+            self.no_enc_note.setText(
+                f"This device ({label}) cannot do full-disk encryption — the Orin's "
+                "single boot+root partition has no separate LUKS path yet "
+                "(docs/STANDALONE-DESKTOP.md).")
         self.mode_help.setVisible(home_allowed)
         self.copy_home_btn.setVisible(home_allowed)
         # the copy-home preset only makes sense where home provisioning is live — track
@@ -266,7 +302,13 @@ class HomePage(QtWidgets.QWizardPage):
         c.standalone = self.standalone.isChecked()
         c.local_user = self.local_user.text().strip() or c.local_user
         c.local_pass = self.local_pass.text()
-        c.encrypt_root = self.encrypt_root.isChecked()
+        # encrypt_root only where the platform can do FDE (the checkbox is hidden on
+        # jetson). Byte-identical: _ENC_PLATFORMS platforms are unchanged; jetson is
+        # already excluded from encrypt_root emission (and to_cli_args RAISES on a
+        # jetson image with encrypt_root set), so forcing False there is both safe and
+        # required if the branch is ever reached.
+        c.encrypt_root = self.encrypt_root.isChecked() and platform_supports(
+            "encrypt_root", c.platform)
         c.luks_pass = self.luks_pass.text()
         kf = self.unlock_keyfile.currentText()
         c.unlock_keyfile = "" if kf == "(off)" else kf

@@ -1,8 +1,12 @@
-"""HardwarePage — machine profile presets, the this-machine scan, GPU/radio/kernel knobs."""
+"""HardwarePage — the this-machine scan and the GPU/radio/kernel TUNING knobs.
+
+The machine-defining PROFILE PRESET moved to the RolePage's x86 machine card (spec fold
+2): the target machine is chosen in ONE place. The GPU/Wi-Fi/Bluetooth/kernel controls
+here are TUNING (the profile only pre-fills them), and the this-machine scan stays."""
 from __future__ import annotations
 
 from ..qt import QtWidgets
-from ...core import hw_scan, profiles
+from ...core import hw_scan
 from ...core.config import GPU_DRIVER_ALIASES, GPU_DRIVER_CHOICES
 from ._gating import clear_unsupported, gate_widgets
 from ._widgets import _row
@@ -14,23 +18,9 @@ class HardwarePage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self.setTitle("Target hardware")
         self.setSubTitle("Tune the GPU, Wi-Fi/Bluetooth and kernel for the target — "
-                         "or scan this machine to autofill them.")
+                         "or scan this machine to autofill them. The machine profile "
+                         "preset is chosen with the machine on the earlier step.")
         lay = QtWidgets.QVBoxLayout(self)
-        self.profile = QtWidgets.QComboBox()
-        self.profiles = profiles.load(wiz.generator_dir)
-        self.profile.addItem("(none / generic)", "")
-        for p in self.profiles:
-            self.profile.addItem(p.label, p.id)
-        # hw_profile is a GUI-side PRESET ONLY (G41, decided document-as-preset): it
-        # pre-fills the GPU/Wi-Fi/Bluetooth fields below and round-trips in saved
-        # configs, but NO builder has a profile flag — say so, so nobody expects the
-        # profile id itself to reach the command.
-        self.profile.setToolTip(
-            "A preset only — picking a profile pre-fills the GPU driver and "
-            "Wi-Fi/Bluetooth fields below and never emits a builder flag itself; "
-            "the fields it set are what reach the build command.")
-        lay.addWidget(_row("Machine profile (preset — never emits a flag itself)",
-                           self.profile))
 
         self.scan_btn = QtWidgets.QPushButton("Scan THIS machine")
         self.scan_btn.clicked.connect(self._scan)
@@ -82,23 +72,11 @@ class HardwarePage(QtWidgets.QWizardPage):
         al.addWidget(self.pcie_gen3)
         lay.addWidget(self.arm_box)
         lay.addStretch(1)
-        self.profile.currentIndexChanged.connect(self._profile_changed)
 
     def _set_gpu(self, value):
         """Select a combo entry; builder vendor aliases (hwprofiles say 'intel')
         normalize to the canonical id so they can't silently fail to match."""
         self.gpu.setCurrentText(GPU_DRIVER_ALIASES.get(value, value) or "auto")
-
-    def _profile_changed(self):
-        pid = self.profile.currentData()
-        if pid == "this-machine-scan":
-            self._scan()
-            return
-        p = next((x for x in self.profiles if x.id == pid), None)
-        if p:
-            self._set_gpu(p.gpu_driver)
-            self.wifi.setChecked(p.enable_wifi)
-            self.bt.setChecked(p.enable_bluetooth)
 
     def _scan(self):
         s = hw_scan.scan()
@@ -147,7 +125,8 @@ class HardwarePage(QtWidgets.QWizardPage):
         c.enable_wifi = self.wifi.isChecked()
         c.enable_bluetooth = self.bt.isChecked()
         c.kernel_builtin = self.builtin.isChecked()
-        c.hw_profile = self.profile.currentData() or ""
+        # hw_profile is set on the RolePage (the machine card owns the profile preset);
+        # HardwarePage no longer touches it, so a revisit here cannot clobber it back to "".
         c.cpu = self.cpu.text().strip()
         c.defconfig = self.defconfig.text().strip()
         c.dtb = self.dtb.text().strip()

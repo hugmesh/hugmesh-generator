@@ -63,7 +63,7 @@ non-monotonically across a path). The conceptual steps:
 | # | Conceptual step | Realised by |
 | --- | --- | --- |
 | 1 | Choose what to build (4 choices) | `mode.py` |
-| 2 | Pick the role / per-node hardware | `role.py` (image paths) · `worklist.py` (mesh: one row per node) · `hardware.py` |
+| 2 | Pick the target MACHINE, then the image type / per-node hardware | `role.py` (image paths — **machine-first**: machine cards → filtered image-type list → inline board/flavor + the x86 machine-profile preset) · `worklist.py` (mesh: one row per node, with a per-row Encryption column) · `hardware.py` (GPU/Wi-Fi/kernel TUNING + this-machine scan) |
 | 3 | Optional cluster services | the services group on `network.py` (mesh/cloud) |
 | 4 | The domain joined + tailnet/SSO login + first-login registration | `network.py` (cloud) · `users.py` (per-user registration method) |
 | 5 | The orchestration superdomain + the other domains | the mesh-control-plane group on `network.py` · `domains.py` |
@@ -102,6 +102,49 @@ collected into `cfg`.
   now a first-class column on `users.py`, backed by the additive `User.registration`
   manifest field (see the emission note below).
 
+### Selection-clarity pass (`role.py` / `hardware.py` / `system.py` / `home.py` / `worklist.py`)
+
+A GUI-only reorganisation — **emission is byte-identical** (the build-matrix `matrix.tsv`
++ TOTAL are unchanged; the `to_cli_args` golden tests stay green):
+
+- **Machine-first single-image picker** (`role.py`). The user picks the **target machine
+  as a card** (the platform union of `ROLE_CHOICES[mode]` — x86 / Raspberry Pi / La Frite /
+  Orange Pi 5 / Orange Pi Zero 2; jetson is mesh-only, so it gets no card here), then the
+  **image type** filtered to what that machine supports, with the board/flavor/desktop
+  knobs inline underneath. The redundant standalone "Platform" combo is **removed** — the
+  card **is** the platform. Chromebook stays an x86 *image type*, not its own card. The
+  reachable `(role, platform)` set is the same catalog, merely pivoted, so `cfg.platform/
+  role/board/flavor` are identical for the same intent.
+- **Machine-profile preset folded onto the x86 card** (out of `hardware.py`). The target
+  machine is now defined in **one** place: the profile that seeds GPU/Wi-Fi/kernel
+  defaults lives with the machine card (x86-only — `profiles.json` is all-x86). The
+  Hardware page keeps the GPU/Wi-Fi/Bluetooth/kernel **tuning** and the this-machine scan.
+  `hw_profile` is `NON_ARGV` (never emitted); the gpu/wifi/bt it pre-fills are finalised on
+  the Hardware page exactly as before, so the argv is unchanged.
+- **Node fallback login** (`system.py`) is retitled *"Node fallback login (mesh nodes)"*
+  with a clear WHAT/WHEN note, and is **hidden entirely** (not greyed) on flows where it
+  is meaningless — hidden on the desktop standalone/cloud paths and on ARM. On the mesh
+  flow the gate keys on the **worklist entries themselves** — shown iff *any* checked row
+  is a node-class role on the x86 builder — never on the base config: the base role is
+  just the *first* checked row (catalog order puts `rpi5-desktop` before `edge_ai`) and
+  the base platform is forced `x86` for the shared option-superset pages, so a base-keyed
+  gate would hide+clear creds an x86 node row still consumes (emission loss) and show
+  them on an all-ARM worklist that consumes them nowhere. The creds are blanked only when
+  **no** checked entry consumes them. Narrowing the widget to node-class flows is
+  emission-safe (see the honest note below).
+- **Standalone account & disk encryption** (`home.py`) is framed as the primary standalone
+  action (retitled groups + a helper line). A device that cannot do full-disk encryption
+  (jetson's single boot+root partition) **hides** the `--encrypt-root` checkbox and shows
+  the reason (`luks_pass` is `_ALL_PLATFORMS` and is left untouched). This branch is dormant
+  in standalone (jetson is not a standalone platform) but correct if reached.
+- **Per-node encryption scoping** (`worklist.py`). The mesh worklist gains a per-row
+  **Encryption** column (`default` / `on` / `off` → `WorklistEntry.encrypt_root`), so the
+  previously-ambiguous "which device gets encrypted?" is answered per node; jetson rows
+  show a disabled *"off — jetson cannot encrypt"* cell. A hint spells out that the
+  unattended LUKS passphrase (set once on the Home step) applies to **every** encrypted node.
+  The column is additive and defaults to `default` (inherit the base), so an untouched
+  worklist is byte-identical to before.
+
 ## Emission note — the one additive manifest field
 
 `User.registration` (default `""` = derive) is an **additive** field on the mesh
@@ -111,6 +154,16 @@ is unchanged. `from_dict` tolerates and round-trips it. The external cluster-pro
 consumer of `mesh_manifest` JSON is expected to ignore unknown keys (forward-compat); if
 a strict byte-identity reading of the manifest is ever required, that is the one field to
 account for.
+
+### Honest note — node fallback creds are widget-scoped, not argv-gated
+
+`--user-password` / `--root-password` are **not** role-gated in `to_cli_args()`: an x86
+desktop that *explicitly* set them today would still emit them. The selection-clarity pass
+**hides** the widget on desktop flows and blanks the fields there, so a desktop image can
+no longer *collect* them from the GUI. This is an intentional **clarity narrowing**, not a
+silent behaviour change — "node fallback creds on a personal desktop" is not a represented
+or tested intent (no golden exercises it), so scoping the widget to node-class flows is
+byte-identical for every guarded case.
 
 ---
 
@@ -135,6 +188,14 @@ and the all-options-in-all-menus rule are in
   node name / login-server, so the menu does not reimplement compose.
 - Drop hard step numbers in the screen headers in favour of the descriptive titles, same
   rationale as the GUI.
+- Mirror the Studio's **machine-first** step-2 shape: pick the target machine first, then
+  the image type it supports (not a role list with a separate platform sub-menu), fold the
+  x86 machine-profile preset in with the machine choice, and surface the mesh worklist's
+  **per-node encryption** column + the "one LUKS passphrase for the whole fleet" note.
+  Offer the node-fallback-login prompt with the same worklist-keyed rule (only when some
+  selected image is an x86 node — never keyed to whichever image happens to be listed
+  first). Emission parity is mandatory (the MENU column guards it) — this is menu shape
+  only.
 
 ### CLI (`build-image.sh` / `make <role>`) 🔭
 - The CLI already emits every image path; the parity gap is **discoverability**, not

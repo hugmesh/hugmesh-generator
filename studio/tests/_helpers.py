@@ -50,23 +50,19 @@ def pick_mode(wiz, mode):
 
 
 def pick_role(wiz, role):
-    """Advance to RolePage and select the list item whose role id == `role`."""
+    """Advance to RolePage and select the image-type row whose role id == `role`
+    (machine-first: this picks the machine card that supports the role first)."""
     page = advance_to(wiz, wizard_mod.RolePage)
-    for i in range(page.roles.count()):
-        it = page.roles.item(i)
-        if it.data(Qt.ItemDataRole.UserRole)[0] == role:
-            page.roles.setCurrentItem(it)
-            return page
-    raise AssertionError(f"role {role} not offered on RolePage")
+    if not page.select_role(role):
+        raise AssertionError(f"role {role} not offered on RolePage")
+    return page
 
 
 def pick_platform(role_page, plat):
-    """Select `plat` in a RolePage's platform combo (the role must offer it)."""
-    for i in range(role_page.platform.count()):
-        if role_page.platform.itemData(i) == plat:
-            role_page.platform.setCurrentIndex(i)
-            return
-    raise AssertionError(f"platform {plat} not offered for this role")
+    """Select the machine card for `plat` on a RolePage (the machine IS the platform)."""
+    if plat not in role_page._machine_buttons:
+        raise AssertionError(f"machine card {plat} not present on RolePage")
+    role_page.select_machine(plat)
 
 
 def pairs(args):

@@ -111,20 +111,15 @@ def pick_mode(wiz, mode):
 
 def pick_role(wiz, role):
     page = advance_to(wiz, wizard_mod.RolePage)
-    for i in range(page.roles.count()):
-        it = page.roles.item(i)
-        if it.data(Qt.ItemDataRole.UserRole)[0] == role:
-            page.roles.setCurrentItem(it)
-            return page
-    raise AssertionError(f"role {role} not offered on RolePage")
+    if not page.select_role(role):     # machine-first: selects the supporting card too
+        raise AssertionError(f"role {role} not offered on RolePage")
+    return page
 
 
 def pick_platform(role_page, plat):
-    for i in range(role_page.platform.count()):
-        if role_page.platform.itemData(i) == plat:
-            role_page.platform.setCurrentIndex(i)
-            return
-    raise AssertionError(f"platform {plat} not offered for this role")
+    if plat not in role_page._machine_buttons:
+        raise AssertionError(f"machine card {plat} not present on RolePage")
+    role_page.select_machine(plat)
 
 
 # ── the builder mock boundary (image paths 1-3) ────────────────────────────────────────
