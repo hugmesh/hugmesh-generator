@@ -56,11 +56,17 @@ test.describe('RBAC: BFF admin API gating (ROLE_ADMIN surface, exists today)', (
     await api.dispose();
   });
 
-  test('unauthenticated caller is DENIED every /bff/admin/** endpoint (403)', async ({ baseURL }) => {
+  test('unauthenticated caller is DENIED every /bff/admin/** endpoint (401)', async ({ baseURL }) => {
     const api = await request.newContext({ baseURL, ignoreHTTPSErrors: true });
     for (const ep of ADMIN_GET_ENDPOINTS) {
       const r = await api.get(ep);
-      expect(r.status(), `anon GET ${ep}`).toBe(403);
+      // 401 (not 403): an ANONYMOUS caller is UNAUTHENTICATED. The real fe/be-gateway
+      // SecurityConfig ends every chain with anyExchange().authenticated() and /bff/admin/**
+      // is not in PUBLIC_PATHS, so a request carrying no bff_session/JWT is rejected by the
+      // authentication entry-point (401) before any role rule runs. 403 is reserved for an
+      // AUTHENTICATED principal that lacks ROLE_ADMIN (the route-access "else 403 fail-closed"
+      // path) — asserted by the plain-user test below. (Matches spec 28's anon→401 finding.)
+      expect(r.status(), `anon GET ${ep}`).toBe(401);
     }
     await api.dispose();
   });

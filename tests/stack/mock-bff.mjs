@@ -289,7 +289,8 @@ const server = http.createServer(async (req, res) => {
 
     // ── Admin allowlist (the INVITE = provision a native account) ──
     if (p === '/bff/admin/allowlist') {
-      if (!me || !me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' });
+      if (!me) return send(res, 401, { error: 'login required' });                            // anon → 401 (unauthenticated): mirrors the real gateway's anyExchange().authenticated() entry-point
+      if (!me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' }); // authenticated but not admin → 403 (forbidden by the route-access role rule)
       if (req.method === 'GET') return send(res, 200, { emails: [...allowEmails], discord: [...allowDiscord] });
       if (req.method === 'POST') {
         if (!csrfOk(req)) return send(res, 403, { error: 'csrf' });
@@ -310,7 +311,8 @@ const server = http.createServer(async (req, res) => {
     }
     // ── Admin usage analytics (from ClickHouse), admin role only ──
     if (req.method === 'GET' && p === '/bff/admin/usage') {
-      if (!me || !me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' });
+      if (!me) return send(res, 401, { error: 'login required' });                            // anon → 401 (unauthenticated): mirrors the real gateway's anyExchange().authenticated() entry-point
+      if (!me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' }); // authenticated but not admin → 403 (forbidden by the route-access role rule)
       try {
         const J = async (sql) => JSON.parse(await ch(sql + ' FORMAT JSON')).data;
         const byModule = await J('SELECT module, count() AS events, uniqExact(actor) AS users FROM snapdragon.usage_events GROUP BY module ORDER BY events DESC');
@@ -333,7 +335,8 @@ const server = http.createServer(async (req, res) => {
 
     // ── Admin: grant/revoke registered users access to namespaces ──
     if (p === '/bff/admin/namespace-access') {
-      if (!me || !me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' });
+      if (!me) return send(res, 401, { error: 'login required' });                            // anon → 401 (unauthenticated): mirrors the real gateway's anyExchange().authenticated() entry-point
+      if (!me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' }); // authenticated but not admin → 403 (forbidden by the route-access role rule)
       if (req.method === 'GET') {
         const out = [...grants.entries()].map(([user, ns]) => ({ user, namespaces: [...ns] }));
         return send(res, 200, { namespaces: NAMESPACES, grants: out });
@@ -350,7 +353,8 @@ const server = http.createServer(async (req, res) => {
 
     // ── Admin: per-gateway role->URL external access rules (Postgres-backed) ──
     if (p === '/bff/admin/route-access') {
-      if (!me || !me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' });
+      if (!me) return send(res, 401, { error: 'login required' });                            // anon → 401 (unauthenticated): mirrors the real gateway's anyExchange().authenticated() entry-point
+      if (!me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' }); // authenticated but not admin → 403 (forbidden by the route-access role rule)
       if (req.method === 'GET') return send(res, 200, { rules: routeAccess });
       if (req.method === 'POST') {
         const b = await bodyOf(req);
@@ -370,7 +374,8 @@ const server = http.createServer(async (req, res) => {
 
     // ── Admin: latest delivered ISO download links (from the CI pipeline) ──
     if (req.method === 'GET' && p === '/bff/admin/isos') {
-      if (!me || !me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' });
+      if (!me) return send(res, 401, { error: 'login required' });                            // anon → 401 (unauthenticated): mirrors the real gateway's anyExchange().authenticated() entry-point
+      if (!me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' }); // authenticated but not admin → 403 (forbidden by the route-access role rule)
       return send(res, 200, { isos: ISOS });
     }
 
