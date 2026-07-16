@@ -251,7 +251,7 @@ Each entry under `users[]`:
 |---|---|
 | `name` | Login name (required). |
 | `comment`, `shell`, `uid`, `groups[]` | Standard account attributes. |
-| `password_hash` | SHA-512 crypt hash (`openssl passwd -6` / `mkpasswd -m sha512crypt`). Preferred. |
+| `password_hash` | crypt(3) hash — yescrypt preferred (`mkpasswd -m yescrypt`; gen-provision-keys.sh emits it automatically), SHA-512 crypt (`openssl passwd -6`) also accepted. Preferred over `password`. |
 | `password` | Plaintext fallback (hashed by the system on apply — avoid committing). |
 | `sudo` | Add a sudoers entry. |
 | `sudo_nopasswd` | Make that entry `NOPASSWD`. |

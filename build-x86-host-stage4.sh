@@ -22,6 +22,10 @@ SHARED_SPECS="${SCRIPT_DIR}/specs"       # arch-agnostic specs (etc/, cluster/)
 # one still trusting unverified downloads; CRYPTO-AUDIT.md supply-chain section.)
 # shellcheck source=scripts/_download-lib.sh
 source "${SCRIPT_DIR}/scripts/_download-lib.sh"
+# Shared /etc/shadow password-KDF helper (ph_crypt_hash): yescrypt ($y$) where
+# the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
+# shellcheck source=scripts/_passhash-lib.sh
+source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
 
 # ── Defaults ───────────────────────────────────────────────────────
 WORK_DIR=""
@@ -180,7 +184,7 @@ PRINT_PLAN=false
 # client and NOT a k8s node: NO headscale/tailscale, NO Casdoor/OIDC SSO login,
 # NO cluster GitOps tree. It boots straight to a lightdm greeter where a NORMAL
 # LOCAL USER logs in with a password set at build time (--local-pass, hashed
-# here with `openssl passwd -6` and never baked in plaintext). The two named
+# here with a salted crypt(3) KDF and never baked in plaintext). The two named
 # role arms `standalone-thin` (LXDE) and `standalone-thick` (the most-capable
 # Plasma workstation) preset this posture; the flags below also compose onto the
 # laptop/chromebook/desktop client roles. See docs/STANDALONE-DESKTOP.md.
@@ -531,7 +535,7 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             standalone-thick role.
       --local-user NAME     Standalone local login account (default: ${DEFAULT_USER}).
       --local-pass PASS     Password for the local user. Hashed at build time
-                            (openssl passwd -6); the plaintext is NEVER baked.
+                            (yescrypt, $6$ fallback); the plaintext is NEVER baked.
   GPU driver — all common cards; FREE (open) drivers are the default (GPU roles):
       --gpu-driver VALUE    all-free (DEFAULT — open Mesa for every vendor; any GPU;
                             NVIDIA=nouveau) | nvidia-free (nouveau) | nvidia
@@ -1289,17 +1293,24 @@ elif [ -n "${PERSON_ROLE}" ] || [ -n "${DOMAINS}" ]; then
 fi
 
 # ── Standalone local-user password → build-time hash (never baked in plaintext) ──
-# --local-pass takes a PLAINTEXT password; we hash it here with `openssl passwd -6`
-# (SHA-512 crypt) and bake only the hash into the firstboot template. The local
-# user name doubles as the firstboot DEFAULT_USER so the two paths agree.
+# --local-pass takes a PLAINTEXT password; we hash it here with `ph_crypt_hash`
+# (yescrypt $y$, SHA-512 crypt $6$ fallback) and bake only the hash into the
+# firstboot template. The local user name doubles as the firstboot
+# DEFAULT_USER so the two paths agree.
 LOCAL_PASSHASH=""
 if ${STANDALONE} || [ -n "${LOCAL_USER}" ] || [ -n "${LOCAL_USER_PASS}" ]; then
     [ -n "${LOCAL_USER}" ] && DEFAULT_USER="${LOCAL_USER}"
     if [ -n "${LOCAL_USER_PASS}" ]; then
         command -v openssl >/dev/null 2>&1 || { err "--local-pass needs openssl on the build host (app-crypt/... / dev-libs/openssl)"; exit 1; }
-        LOCAL_PASSHASH="$(openssl passwd -6 "${LOCAL_USER_PASS}")"
+        # ph_crypt_hash (scripts/_passhash-lib.sh): yescrypt ($y$) when the build
+        # host's libcrypt round-trips it, else SHA-512 crypt ($6$). This hash is
+        # what a stolen-device attacker cracks offline — docs/CRYPTO-AUDIT.md row 12.
+        LOCAL_PASSHASH="$(ph_crypt_hash "${LOCAL_USER_PASS}")"
         LOCAL_USER_PASS=""   # scrub the plaintext from the environment immediately
-        info "Standalone local user '${DEFAULT_USER}': password hashed at build time (SHA-512 crypt; plaintext not baked)."
+        case "${LOCAL_PASSHASH}" in
+            '$y$'*) info "Standalone local user '${DEFAULT_USER}': password hashed at build time (yescrypt; plaintext not baked)." ;;
+            *)      info "Standalone local user '${DEFAULT_USER}': password hashed at build time (SHA-512 crypt fallback — build-host libcrypt lacks yescrypt; plaintext not baked)." ;;
+        esac
     else
         ${STANDALONE} && warn "Standalone build with no --local-pass: a RANDOM one-time password is minted at first boot (printed once to console)."
     fi

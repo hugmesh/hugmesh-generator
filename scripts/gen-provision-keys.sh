@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # gen-provision-keys.sh — populate a KEYS provisioning directory with real
-# secrets (SSH keypair + SHA-512 password hashes) by editing copies of the
-# templates. Output is a ready-to-write directory you hand to make-keys-usb.sh.
+# secrets (SSH keypair + crypt(3) password hashes — yescrypt where the host
+# supports it, SHA-512 crypt fallback) by editing copies of the templates.
+# Output is a ready-to-write directory you hand to make-keys-usb.sh.
 #
 # In-UI SSH-terminal key model (default ON; GEN_DEVICE_SSH=false to skip), it ALSO
 # mints, per device, the two keypairs the BFF-dialed in-UI SSH terminal needs:
@@ -22,6 +23,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Shared /etc/shadow password-KDF helper (ph_crypt_hash): yescrypt ($y$) where
+# the host libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
+# shellcheck source=scripts/_passhash-lib.sh
+source "${SCRIPT_DIR}/_passhash-lib.sh"
 
 # brand.conf / brands/<BRAND>.conf may set CA_CERT/CA_KEY/CA_KEY_PASS (and BRAND).
 # Source them so the pki-role kubeadm-CA seeding decision below sees a CA set via
@@ -136,7 +142,8 @@ cat <<EOF
 Usage: $0 [OPTIONS]
 
   Builds a filled-in KEYS directory (default: ${OUT_DIR}) from the template,
-  generating an SSH keypair and SHA-512 password hashes.
+  generating an SSH keypair and salted crypt(3) password hashes (yescrypt
+  where the host supports it, SHA-512 crypt fallback).
 
 Options:
   -o, --out DIR       Output directory. Default: ${OUT_DIR}
@@ -829,11 +836,16 @@ if [ "${ROLE}" = "pki" ]; then
     # ── pki node: FULL config — default user accounts + hashed passwords ──
     cp "${KEYFILE}.pub" "${OUT_DIR}/ssh/${ADMIN}.authorized_keys"
     # gen_hash WHO — prompts (or --random mints) a password, prints only a
-    # NON-SECRET note (never the cleartext), and emits the SHA-512 crypt hash on
+    # NON-SECRET note (never the cleartext), and emits the crypt(3) hash on
     # stdout for storage in the key-USB users.json. The plaintext NEVER reaches
     # the console (was: `echo "${who} password: ${pw}"` — removed for hardening).
+    # KDF: ph_crypt_hash (scripts/_passhash-lib.sh) — yescrypt ($y$, memory-hard)
+    # when the host libcrypt round-trips it, else SHA-512 crypt ($6$, the
+    # pre-2026-07 behavior). The hash lands VERBATIM in the image's real
+    # /etc/shadow via provision.sh's `chpasswd -e`, so this KDF is exactly what
+    # a stolen-device attacker cracks offline (docs/CRYPTO-AUDIT.md row 12).
     gen_hash() {
-        local who="$1" pw
+        local who="$1" pw h
         if ${RANDOM_PW}; then
             pw="$(openssl rand -base64 18)"
             echo "  ${who}: random password generated (stored salted+hashed in users.json — not printed)" >&2
@@ -846,7 +858,12 @@ if [ "${ROLE}" = "pki" ]; then
                 echo >&2
             fi
         fi
-        openssl passwd -6 "${pw}"
+        h="$(ph_crypt_hash "${pw}")"
+        case "${h}" in
+            '$y$'*) echo "  ${who}: KDF yescrypt (\$y\$ — memory-hard)" >&2 ;;
+            *)      echo "  ${who}: KDF sha512crypt (\$6\$ fallback — host libcrypt lacks yescrypt)" >&2 ;;
+        esac
+        printf '%s\n' "${h}"
     }
     echo "==> Setting password hashes (pki node)"
     ADMIN_HASH="$(gen_hash "${ADMIN}")"
