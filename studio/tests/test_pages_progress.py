@@ -497,3 +497,221 @@ def test_auto_flash_fires_when_identity_matches(monkeypatch, wiz):
     page._start_flash = lambda t: started.append(t)  # type: ignore[assignment]
     page._maybe_auto_flash()
     assert len(started) == 1 and started[0].path == "/dev/sdb"
+
+
+# ── nested, drillable job/stage tree (GitHub-Actions style) ───────────────────────────
+_RED = "#c5221f"
+_GREEN = "#188038"
+
+
+def _install_streaming_builddriver(monkeypatch, lines, codes=None, default=0):
+    """A BuildDriver that replays a captured banner stream per image and returns a
+    per-role (or default) exit code — drives the REAL ProgressPage nested tree end to end."""
+    codes = codes or {}
+
+    class StreamDriver:
+        def __init__(self, gen, host, graphical=False):
+            self.cancelled = False
+
+        def run(self, cfg, backend, on_line=None):
+            if on_line:
+                for ln in lines:
+                    on_line(ln)
+            return codes.get(cfg.role, default)
+
+        def cancel(self):
+            self.cancelled = True
+
+        def preflight(self, cfg, backend):
+            return []
+
+        def command_string(self, cfg, backend=None):
+            return f"cmd:{cfg.role}"
+
+    monkeypatch.setattr(wd, "BuildDriver", StreamDriver)
+
+
+def _x86_worklist(tmp_path, roles=("pki", "be", "fe")):
+    return WorklistConfig(base=_mesh_base(tmp_path),
+                          entries=[WorklistEntry(role=r, platform="x86") for r in roles])
+
+
+def test_job_tree_lists_all_images_up_front_and_advances_states(monkeypatch, qapp, wiz,
+                                                                tmp_path):
+    """(a) the job list is fully populated the moment initializePage runs (GH-Actions lists
+    every job up front) and each job reaches passed/failed as the driver dispatches it."""
+    _install_streaming_builddriver(monkeypatch, CAPTURED_X86_STREAM, codes={"be": 3})
+    _install_fake_genkeys(monkeypatch)
+    _prime(wiz, _x86_worklist(tmp_path))
+    page = _progress_page(wiz)
+    page.initializePage()
+    assert page.tree.topLevelItemCount() == 3           # all jobs listed immediately
+    assert all(page._rows[i].job_item is not None for i in range(3))
+    _run_to_completion(qapp, page)
+    assert [page.driver.results[i].status for i in range(3)] == ["ok", "failed", "ok"]
+    # the passed jobs are green, the failed job is red — in the tree item itself
+    assert page._rows[0].job_item.foreground(0).color().name() == _GREEN
+    assert page._rows[1].job_item.foreground(0).color().name() == _RED
+    assert page._rows[2].job_item.foreground(0).color().name() == _GREEN
+
+
+def test_stages_appear_under_job_from_phase_table_as_banners_cross(wiz):
+    """(b) each job's children are the honest phase-table stages, and they advance
+    done/running as the parser crosses the `==> ` banners (no invented taxonomy)."""
+    from snapdragon_studio.core.progress_parse import platform_phases
+    page = _progress_page(wiz)
+    page._reset()
+    page._build_row(0, "acme-x86", "x86")
+    job = page._rows[0].job_item
+    assert job.childCount() == len(platform_phases("x86"))     # all stages present, pending
+    for ln in CAPTURED_X86_STREAM[:6]:
+        page._on_line(0, ln)
+    states = [s.state for s in page._rows[0].tracker.stages]
+    assert "done" in states and "running" in states            # crossed -> done, current -> running
+    assert page._rows[0].stage_items[0].text(1) in ("done", "skipped", "running")
+
+
+def test_clicking_a_stage_shows_that_stage_log_slice(wiz):
+    """(c) drilling into a stage loads only THAT stage's captured log slice; the job node
+    still shows the full raw log."""
+    page = _progress_page(wiz)
+    page._reset()
+    page._build_row(0, "acme-x86", "x86")
+    for ln in CAPTURED_X86_STREAM:
+        page._on_line(0, ln)
+    tracker = page._rows[0].tracker
+    ej = next(j for j, s in enumerate(tracker.stages)
+              if any("Emerging" in ln for ln in s.lines))       # the emerge stage
+    page._on_item_clicked(page._rows[0].stage_items[ej])
+    text = page.log.toPlainText()
+    assert "Emerging" in text                                   # the stage's own lines
+    assert "stage3-amd64" not in text                           # NOT the whole job log
+    assert "▸" in page.log_header.text()                        # header retitled to the stage
+    # clicking the JOB node shows the full raw log (nothing is lost)
+    page._on_item_clicked(page._rows[0].job_item)
+    assert "stage3-amd64" in page.log.toPlainText()
+    assert "Emerging" in page.log.toPlainText()
+
+
+def test_failed_run_no_stage_renders_green_and_page_stays_responsive(monkeypatch, qapp,
+                                                                     wiz, tmp_path):
+    """(d)+(e) a build that fails partway reds its running stage and NEVER paints a
+    pending/skipped stage green; and the page settles (isComplete) — proof the GUI thread
+    never blocked on the build (no freeze)."""
+    partial = CAPTURED_X86_STREAM[:13]                          # stops mid-emerge
+    _install_streaming_builddriver(monkeypatch, partial, default=1)
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      brand="acme", output_dir=str(tmp_path / "out"))
+    _prime(wiz, synthesize(cfg))
+    page = _progress_page(wiz)
+    page.initializePage()
+    _run_to_completion(qapp, page)
+    assert page.isComplete()                                    # settled -> main thread stayed live
+    assert page.driver.results[0].status == "failed"
+    row = page._rows[0]
+    fj = row.tracker.failed_index()
+    assert fj is not None
+    assert row.stage_items[fj].foreground(0).color().name() == _RED
+    # trailing stages stay pending (never fabricated done/green)
+    assert all(s.state == "pending" for s in row.tracker.stages[fj + 1:])
+    for s, item in zip(row.tracker.stages, row.stage_items):
+        if s.state in ("pending", "skipped", "stopped"):
+            assert item.foreground(0).color().name() != _GREEN   # neutral, never green
+
+
+def test_next_failure_cycles_across_failed_images(monkeypatch, qapp, wiz, tmp_path):
+    """(d) the Next-failure affordance cycles through every failed job, expanding it and
+    loading its failing stage's log — GH-Actions failure list."""
+    _install_streaming_builddriver(monkeypatch, CAPTURED_X86_STREAM,
+                                   codes={"pki": 2, "fe": 5})
+    _install_fake_genkeys(monkeypatch)
+    _prime(wiz, _x86_worklist(tmp_path))
+    page = _progress_page(wiz)
+    page.initializePage()
+    _run_to_completion(qapp, page)
+    assert page.next_fail_btn.isEnabled()
+    assert len(page._failures) == 2
+    seen = []
+    for _ in range(2):
+        page._next_failure()
+        i, j = page._failures[page._fail_ptr]
+        seen.append(i)
+        row = page._rows[i]
+        item = row.job_item if j is None else row.stage_items[j]
+        assert page.tree.currentItem() is item                 # landed on the failed node
+        if j is not None:
+            assert row.stage_items[j].foreground(0).color().name() == _RED
+    assert set(seen) == {0, 2}                                  # both failed images visited
+
+
+def test_pre_banner_failure_reds_job_with_no_failed_child_stage(wiz):
+    """#339 honesty: a build that dies before any banner (broken docker) has NO running
+    stage, so no child stage is faked-failed — the JOB itself goes red and its drill-down
+    is the raw log where the error actually is; the failure is still navigable."""
+    page = _progress_page(wiz)
+    page._reset()
+    page._build_row(0, "acme-x86", "x86")
+    page._on_line(0, "docker: error while creating mount source path")   # no banner
+    page._on_entry_done(0, 1)
+    row = page._rows[0]
+    assert row.job_item.foreground(0).color().name() == _RED             # JOB is red
+    assert row.tracker.failed_index() is None                           # no faked stage
+    assert all(s.state == "pending" for s in row.tracker.stages)
+    assert page._failures == [(0, None)]                               # navigable, points at the job
+    assert page.next_fail_btn.isEnabled()
+    assert "mount source path" in page.log.toPlainText()               # focus = the raw log
+
+
+def test_stopping_a_running_image_settles_its_stage_neutral_not_red(monkeypatch, qapp,
+                                                                    wiz, tmp_path):
+    """A user Stop of a RUNNING image: proc.wait() returns the killed process's nonzero code
+    (e.g. 143/SIGTERM) while the driver records res.status='stopped'. The currently-running
+    STAGE must settle NEUTRAL (grey 'stopped') under a grey STOPPED job — never red FAILED.
+    Before the fix the raw 143 reached tracker.finalize and painted the active stage red,
+    contradicting the StageTracker cancel contract and telling the user a *cancelled* build
+    'failed'."""
+    box = {}
+    banners = CAPTURED_X86_STREAM[:13]              # advance into the running emerge stage
+
+    class StopMidStageDriver:
+        def __init__(self, gen, host, graphical=False):
+            self.cancelled = False
+
+        def run(self, cfg, backend, on_line=None):
+            if on_line:
+                for ln in banners:
+                    on_line(ln)
+            if cfg.role == "pki":                   # user hits Stop while this image runs
+                box["page"]._stop_all()
+                return 143                          # killed process exit code (SIGTERM)
+            return 0
+
+        def cancel(self):
+            self.cancelled = True
+
+        def preflight(self, cfg, backend):
+            return []
+
+        def command_string(self, cfg, backend=None):
+            return f"cmd:{cfg.role}"
+
+    monkeypatch.setattr(wd, "BuildDriver", StopMidStageDriver)
+    _install_fake_genkeys(monkeypatch)
+    _prime(wiz, _x86_worklist(tmp_path))
+    page = _progress_page(wiz)
+    box["page"] = page
+    page.initializePage()
+    _run_to_completion(qapp, page)
+
+    row = page._rows[0]
+    assert page.driver.results[0].status == "stopped"          # driver saw a user cancel
+    assert row.job_item.foreground(0).color().name() != _RED   # JOB neutral (grey), not red
+    # the running stage settled NEUTRAL (stopped) — NOT red FAILED
+    assert row.tracker.failed_index() is None
+    assert not any(s.state == "failed" for s in row.tracker.stages)
+    assert any(s.state == "stopped" for s in row.tracker.stages)
+    for s, item in zip(row.tracker.stages, row.stage_items):
+        assert item.foreground(0).color().name() != _RED       # no red stage anywhere
+    # a Stop is not a failure -> no failure-navigation entry is fabricated
+    assert page._failures == []
+    assert not page.next_fail_btn.isEnabled()

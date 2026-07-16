@@ -17,15 +17,17 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from collections import deque
 
-from ..qt import QtCore, QtWidgets, Signal
+from ..qt import QtCore, QtGui, QtWidgets, Qt, Signal
 from ..tray import write_build_status
 from ...core import flash_targets
-from ...core.progress_parse import ProgressParser
+from ...core.progress_parse import ProgressParser, platform_phases
+from ...core.stage_tracker import StageTracker
 from ...core.worklist_driver import WorklistDriver
 
-# status id -> (symbol, colour) for the per-row status glyph.
+# status id -> (symbol, colour) for the per-JOB status glyph (col0).
 _STATUS_GLYPH = {
     "queued": ("○", "#888888"),
     "running": ("●", "#1a73e8"),
@@ -33,6 +35,30 @@ _STATUS_GLYPH = {
     "failed": ("✗", "#c5221f"),
     "stopped": ("■", "#888888"),
 }
+
+# stage state -> (symbol, colour) for the per-STAGE glyph (nested under a job). Neutral
+# glyphs (pending/skipped/stopped) are grey and NEVER green — only a stage the parser
+# actually advanced past shows the green ✓, so the tree can't claim a stage passed that
+# the builder never completed.
+_STAGE_GLYPH = {
+    "pending": ("○", "#888888"),
+    "running": ("●", "#1a73e8"),
+    "done": ("✓", "#188038"),
+    "failed": ("✗", "#c5221f"),
+    "skipped": ("–", "#888888"),
+    "stopped": ("■", "#888888"),
+}
+
+# tree column indices.
+_COL_NAME, _COL_PROGRESS, _COL_TIME = 0, 1, 2
+
+
+def _fmt_elapsed(secs: float | None) -> str:
+    """m:ss elapsed for the Time column (empty for a stage that never started)."""
+    if secs is None:
+        return ""
+    secs = int(secs)
+    return f"{secs // 60}:{secs % 60:02d}"
 
 
 class _WorklistWorker(QtCore.QThread):
@@ -95,13 +121,20 @@ class _Row:
         self.index = index
         self.label = label
         self.parser = ProgressParser(platform)
-        self.buffer: deque[str] = deque(maxlen=4000)
+        # StageTracker reuses the parser's EXACT ordered phase table (no parallel taxonomy)
+        # so the nested stages and the bar can never disagree.
+        self.tracker = StageTracker(platform_phases(platform or "x86"))
+        self.buffer: deque[str] = deque(maxlen=4000)   # authoritative full raw job log
         self.terminal = False
+        self.job_t_start: float | None = None
         # widgets (wired by ProgressPage._build_row)
-        self.status: QtWidgets.QLabel | None = None
+        self.status: QtWidgets.QLabel | None = None    # kept for compat; col0 shows the glyph
         self.bar: QtWidgets.QProgressBar | None = None
-        self.phase: QtWidgets.QLabel | None = None
+        self.phase: QtWidgets.QLabel | None = None     # off-tree; still updated (tests read it)
         self.stop_btn: QtWidgets.QToolButton | None = None
+        # tree items (wired by ProgressPage._build_row)
+        self.job_item: QtWidgets.QTreeWidgetItem | None = None
+        self.stage_items: list[QtWidgets.QTreeWidgetItem] = []
 
 
 class ProgressPage(QtWidgets.QWizardPage):
@@ -140,16 +173,24 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.total_bar.setStyleSheet(self._TOTAL_BAR_QSS.format(chunk="#1a73e8"))  # blue
         lay.addWidget(self.total_bar)
 
-        self._rows_host = QtWidgets.QWidget()
-        self._rows_lay = QtWidgets.QVBoxLayout(self._rows_host)
-        self._rows_lay.setContentsMargins(0, 0, 0, 0)
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(self._rows_host)
-        # loosen the cramped 230px cap so multi-image worklists read without cramping
-        scroll.setMinimumHeight(180)
-        scroll.setMaximumHeight(340)
-        lay.addWidget(scroll)
+        # ── NESTED, DRILLABLE job/stage tree (GitHub-Actions style) — replaces the flat
+        # QVBoxLayout-of-QFrames. A QTreeWidget (the established Studio idiom, cf.
+        # worklist.py / packages_dialog.py) already scrolls itself, so it slots directly
+        # in below the TOTAL bar (no wrapping QScrollArea — that would double-scroll). Each
+        # top-level item is a JOB (one image); its children are the STAGES from the honest
+        # phase table. The #348 PART bar is embedded into a job's Progress column via
+        # setItemWidget, so row.bar stays the SAME widget object every existing test reads.
+        self.tree = QtWidgets.QTreeWidget()
+        self.tree.setColumnCount(3)
+        self.tree.setHeaderLabels(["Job / Stage", "Progress", "Time"])
+        self.tree.setColumnWidth(_COL_NAME, 320)
+        self.tree.setColumnWidth(_COL_PROGRESS, 220)
+        self.tree.setMinimumHeight(180)
+        self.tree.setMaximumHeight(340)
+        self.tree.itemClicked.connect(self._on_item_clicked)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_tree_menu)
+        lay.addWidget(self.tree)
 
         self.footer = QtWidgets.QLabel("")
         self.footer.setWordWrap(True)
@@ -170,6 +211,11 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.flash_group.setVisible(False)
         lay.addWidget(self.flash_group)
 
+        # drill-down detail pane: the SAME single QPlainTextEdit, retitled by the header to
+        # show whether it's a whole job's raw log or one stage's slice.
+        self.log_header = QtWidgets.QLabel("Log")
+        self.log_header.setStyleSheet("font-weight: bold;")
+        lay.addWidget(self.log_header)
         self.log = QtWidgets.QPlainTextEdit()
         self.log.setReadOnly(True)
         lay.addWidget(self.log, 1)
@@ -178,6 +224,12 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.stop_all_btn = QtWidgets.QPushButton("Stop all")
         self.stop_all_btn.clicked.connect(self._stop_all)
         btns.addWidget(self.stop_all_btn)
+        # GH-Actions-style failure list: cycles through every failed job/stage, expanding
+        # and loading each one's log slice. Enabled once ≥1 failure is recorded.
+        self.next_fail_btn = QtWidgets.QPushButton("Next failure ⤥")
+        self.next_fail_btn.setEnabled(False)
+        self.next_fail_btn.clicked.connect(self._next_failure)
+        btns.addWidget(self.next_fail_btn)
         btns.addStretch(1)
         lay.addLayout(btns)
 
@@ -185,10 +237,19 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.worker: _WorklistWorker | None = None
         self._rows: list[_Row] = []
         self._selected = 0
+        self._selected_stage: int | None = None   # None = the job's raw log is shown
         self._all_terminal = False
         self._manifest_path = ""
         self._keys_done: list[str] = []
         self._last_status: tuple | None = None    # de-dupes build-status file writes
+        # failure navigation: (job index, stage index or None), in dispatch order.
+        self._failures: list[tuple[int, int | None]] = []
+        self._fail_ptr = -1
+        # one repeating 1s timer makes the running job/stage visibly "tick" — a couple of
+        # label writes per second, no per-line cost; stopped once the run settles.
+        self._tick = QtCore.QTimer(self)
+        self._tick.setInterval(1000)
+        self._tick.timeout.connect(self._on_tick)
         # flash-to-a-device state (post-build)
         self.flash_worker: _FlashWorker | None = None
         self._flash_targets: list = []
@@ -245,17 +306,19 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._start_worker()
 
     def _reset(self) -> None:
-        while self._rows_lay.count():
-            item = self._rows_lay.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+        self._tick.stop()
+        self.tree.clear()               # drops every job + stage item (and its embedded bar)
         self._rows = []
         self._selected = 0
+        self._selected_stage = None
+        self._failures = []
+        self._fail_ptr = -1
+        self.next_fail_btn.setEnabled(False)
         self._all_terminal = False
         self._manifest_path = ""
         self._keys_done = []
         self.footer.setText("")
+        self.log_header.setText("Log")
         self.log.setPlainText("")
         self._last_status = None
         self.flash_group.setVisible(False)        # only an all-ok finish reveals it
@@ -270,32 +333,32 @@ class ProgressPage(QtWidgets.QWizardPage):
 
     def _build_row(self, index: int, label: str, platform: str) -> None:
         row = _Row(index, label, platform)
-        w = QtWidgets.QFrame()
-        w.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
-        h = QtWidgets.QHBoxLayout(w)
-        h.setContentsMargins(6, 2, 6, 2)
+        # JOB item (top-level) — the GitHub-Actions "all jobs listed up front" seam.
+        job_item = QtWidgets.QTreeWidgetItem(self.tree)
+        job_item.setData(_COL_NAME, Qt.ItemDataRole.UserRole, (index, None))
+        row.job_item = job_item
+        # row.status stays a real QLabel for back-compat; col0 carries the visible glyph.
         row.status = QtWidgets.QLabel()
-        row.status.setFixedWidth(16)
-        h.addWidget(row.status)
-        name = QtWidgets.QLabel(label)
-        name.setMinimumWidth(150)
-        h.addWidget(name)
+        # the #348 PART bar, embedded into the job's Progress column (same widget object).
         row.bar = QtWidgets.QProgressBar()
         row.bar.setRange(0, 100)
         row.bar.setValue(0)
-        h.addWidget(row.bar, 1)
+        self.tree.setItemWidget(job_item, _COL_PROGRESS, row.bar)
+        # off-tree phase label — no longer shown (the running STAGE conveys the phase) but
+        # still updated so every existing assertion on row.phase.text() holds.
         row.phase = QtWidgets.QLabel("queued")
-        row.phase.setMinimumWidth(150)
-        row.phase.setStyleSheet("color: gray;")
-        h.addWidget(row.phase)
+        # kept for back-compat + the per-image Stop context-menu action (see _on_tree_menu).
         row.stop_btn = QtWidgets.QToolButton()
         row.stop_btn.setText("Stop")
         row.stop_btn.clicked.connect(lambda _=False, i=index: self._stop_one(i))
-        h.addWidget(row.stop_btn)
-        # clicking anywhere on the row shows its log; a lightweight event filter keeps the
-        # child widgets clickable too.
-        w.mousePressEvent = lambda _e, i=index: self._select_row(i)  # type: ignore[assignment]
-        self._rows_lay.addWidget(w)
+        # STAGE children — one per phase-table row, keyed by phase_index, all "pending".
+        row.stage_items = []
+        now = time.monotonic()
+        for j in range(len(row.tracker.stages)):
+            child = QtWidgets.QTreeWidgetItem(job_item)
+            child.setData(_COL_NAME, Qt.ItemDataRole.UserRole, (index, j))
+            row.stage_items.append(child)
+            self._render_stage(row, j, now)
         self._set_status(row, "queued")
         self._rows.append(row)
 
@@ -314,8 +377,14 @@ class ProgressPage(QtWidgets.QWizardPage):
 
     # ---- slots (GUI thread) -----------------------------------------------------
     def _on_entry_start(self, i: int) -> None:
-        self._set_status(self._rows[i], "running")
-        self._rows[i].phase.setText("starting…")
+        row = self._rows[i]
+        self._set_status(row, "running")
+        row.phase.setText("starting…")
+        row.job_t_start = time.monotonic()
+        if row.job_item is not None:
+            self.tree.expandItem(row.job_item)      # GH-Actions focuses the active job
+        if not self._tick.isActive():
+            self._tick.start()
         self._refresh_overall()
 
     def _on_line(self, i: int, line: str) -> None:
@@ -323,23 +392,49 @@ class ProgressPage(QtWidgets.QWizardPage):
         row.buffer.append(line)
         state = row.parser.feed(line)
         self._apply_state(row, state)
+        # attribute the line to the currently-running stage + advance stage state on a
+        # banner transition. O(1) per line; tree items are touched only on a transition.
+        now = time.monotonic()
+        delta = row.tracker.feed(line, state.phase_index, now)
+        if delta.any():
+            for j in delta.touched():
+                self._render_stage(row, j, now)
         self._write_status()
         self._refresh_overall()
+        # live drill-down append: only when the arriving line's target matches the current
+        # selection — the whole job (stage None) gets every line; a selected stage gets a
+        # line only while it is the running stage of that job.
         if i == self._selected:
-            self.log.appendPlainText(line)
+            if self._selected_stage is None or row.tracker.cur == self._selected_stage:
+                self.log.appendPlainText(line)
 
     def _on_entry_done(self, i: int, code) -> None:
         row = self._rows[i]
+        now = time.monotonic()
         if code is not None:
             row.parser.finalize(code)
         status = self.driver.results[i].status if self.driver else (
             "ok" if code == 0 else "failed")
+        # settle the nested stages: exit 0 -> running done + trailing skipped; cancel ->
+        # running stopped (neutral); nonzero -> running stage failed. Never fabricates a
+        # done/green stage the builder didn't complete. A user-initiated Stop of a RUNNING
+        # image makes proc.wait() return the killed process's nonzero code (e.g. 143/137)
+        # while res.status is "stopped"; map that cancel back to None so the running stage
+        # settles NEUTRAL (stopped) instead of red FAILED under a grey STOPPED job.
+        stage_code = None if status == "stopped" else code
+        row.tracker.finalize(stage_code, now)
+        for j in range(len(row.stage_items)):
+            self._render_stage(row, j, now)
         self._set_status(row, status)
         row.terminal = True
+        if row.job_item is not None and row.job_t_start is not None:
+            row.job_item.setText(_COL_TIME, _fmt_elapsed(now - row.job_t_start))
         if status == "ok":
             row.bar.setRange(0, 100)
             row.bar.setValue(100)
             row.phase.setText("done")
+            if row.job_item is not None:
+                self.tree.collapseItem(row.job_item)   # settled -> tuck it away
         else:
             # failed/stopped: take the bar OUT of indeterminate (busy) mode and hold the
             # last known percent, so the row reads as a stalled determinate bar instead of
@@ -350,6 +445,17 @@ class ProgressPage(QtWidgets.QWizardPage):
             row.bar.setRange(0, 100)
             row.bar.setValue(last if last is not None else 0)
             row.phase.setText("stopped" if status == "stopped" else "FAILED")
+            if status == "failed":
+                # FAILURE FOCUS: expand the job and land the user on the exact failing
+                # stage's log slice (or the job's raw log if it died before any banner —
+                # #339: no fake stage is invented to host that error).
+                fj = row.tracker.failed_index()
+                self._failures.append((i, fj))
+                self._fail_ptr = len(self._failures) - 1
+                self.next_fail_btn.setEnabled(True)
+                if row.job_item is not None:
+                    self.tree.expandItem(row.job_item)
+                self._focus_node(i, fj)
         self._write_status()
         self._refresh_overall()
         self.completeChanged.emit()
@@ -364,6 +470,7 @@ class ProgressPage(QtWidgets.QWizardPage):
 
     def _on_finished_all(self, code: int) -> None:
         self._all_terminal = True
+        self._tick.stop()                      # nothing running -> stop the elapsed ticker
         self.stop_all_btn.setEnabled(False)
         for row in self._rows:
             if row.stop_btn is not None:
@@ -474,12 +581,99 @@ class ProgressPage(QtWidgets.QWizardPage):
         if row.status is not None:
             row.status.setText(sym)
             row.status.setStyleSheet(f"color: {colour}; font-weight: bold;")
+        if row.job_item is not None:
+            row.job_item.setText(_COL_NAME, f"{sym}  {row.label}")
+            row.job_item.setForeground(_COL_NAME, QtGui.QBrush(QtGui.QColor(colour)))
+
+    def _render_stage(self, row: _Row, j: int, now: float) -> None:
+        """Reflect one stage's tracker state onto its tree item (glyph+label, state word,
+        elapsed). Called only on a transition or the 1s tick — never per line."""
+        st = row.tracker.stages[j]
+        item = row.stage_items[j]
+        sym, colour = _STAGE_GLYPH.get(st.state, ("○", "#888888"))
+        item.setText(_COL_NAME, f"{sym}  {st.label}")
+        item.setForeground(_COL_NAME, QtGui.QBrush(QtGui.QColor(colour)))
+        item.setText(_COL_PROGRESS, st.state)
+        item.setText(_COL_TIME, _fmt_elapsed(st.elapsed(now)))
+
+    def _on_tick(self) -> None:
+        """Make the running job + its active stage visibly tick their elapsed time. One
+        pass over the (at most one) running row — a couple of label writes per second."""
+        now = time.monotonic()
+        for row in self._rows:
+            if row.terminal or row.job_t_start is None:
+                continue
+            if row.job_item is not None:
+                row.job_item.setText(_COL_TIME, _fmt_elapsed(now - row.job_t_start))
+            if row.tracker.cur >= 0:
+                self._render_stage(row, row.tracker.cur, now)
+
+    # ---- drill-down selection ---------------------------------------------------
+    def _on_item_clicked(self, item, _col: int = 0) -> None:
+        data = item.data(_COL_NAME, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+        i, j = data
+        self._load_detail(i, j)
+
+    def _load_detail(self, i: int, stage_j: int | None) -> None:
+        """Load the selected node's log into the shared pane: a JOB shows its full raw log;
+        a STAGE shows only that stage's captured slice."""
+        if not (0 <= i < len(self._rows)):
+            return
+        row = self._rows[i]
+        self._selected = i
+        self._selected_stage = stage_j
+        if stage_j is None:
+            self.log.setPlainText("\n".join(row.buffer))
+            self.log_header.setText(f"Log — {row.label}")
+        else:
+            st = row.tracker.stages[stage_j]
+            self.log.setPlainText("\n".join(st.lines))
+            self.log_header.setText(f"Log — {row.label} ▸ {st.label}")
+
+    def _focus_node(self, i: int, stage_j: int | None) -> None:
+        """Expand the job, select the target node, and load its log slice — the shared
+        primitive behind failure-focus and the Next-failure button."""
+        if not (0 <= i < len(self._rows)):
+            return
+        row = self._rows[i]
+        item = row.job_item if stage_j is None else row.stage_items[stage_j]
+        if row.job_item is not None:
+            self.tree.expandItem(row.job_item)
+        if item is not None:
+            self.tree.setCurrentItem(item)     # programmatic: does NOT re-fire itemClicked
+        self._load_detail(i, stage_j)
+
+    def _next_failure(self) -> None:
+        """Cycle to the next recorded failure (wrapping), like GH-Actions' failure list."""
+        if not self._failures:
+            return
+        self._fail_ptr = (self._fail_ptr + 1) % len(self._failures)
+        i, stage_j = self._failures[self._fail_ptr]
+        self._focus_node(i, stage_j)
+
+    def _on_tree_menu(self, pos) -> None:
+        """Right-click a still-running job/stage to Stop that one image (the per-image Stop
+        that the old per-row button offered, now that the row is a tree node)."""
+        item = self.tree.itemAt(pos)
+        if item is None:
+            return
+        data = item.data(_COL_NAME, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+        i, _j = data
+        if not (0 <= i < len(self._rows)) or self._rows[i].terminal:
+            return
+        menu = QtWidgets.QMenu(self.tree)
+        act = menu.addAction(f"Stop {self._rows[i].label}")
+        act.triggered.connect(lambda _=False, idx=i: self._stop_one(idx))
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
 
     def _select_row(self, i: int) -> None:
         if not self._rows:
             return
-        self._selected = i
-        self.log.setPlainText("\n".join(self._rows[i].buffer))
+        self._focus_node(i, None)
 
     def _refresh_footer(self) -> None:
         parts = []
@@ -501,6 +695,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         """Cancel and join a still-running build so the wizard closing never orphans a
         builder process or a live QThread."""
         self._flash_timer.stop()
+        self._tick.stop()
         if self.worker is not None and self.worker.isRunning():
             if self.driver is not None:
                 self.driver.cancel_all()
