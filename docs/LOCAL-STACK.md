@@ -19,6 +19,16 @@ compose topology is a faithful translation of those manifests to compose DNS.
 
 - **Docker** with **Compose v2** (`docker compose version` ≥ v2). Docker Desktop
   on Windows includes it; on Linux install `docker-compose-plugin`.
+- **BuildKit / buildx** visible **in the environment you run `make` from**.
+  Several service Dockerfiles use BuildKit syntax (`# syntax=docker/dockerfile:1.7`
+  + `RUN --mount=type=secret`); the Makefile exports `DOCKER_BUILDKIT=1`, but the
+  buildx CLI plugin is often installed **per-user** (`~/.docker/cli-plugins`), so a
+  `sudo`/systemd/other-`HOME` invocation silently falls back to the legacy builder
+  and dies with opaque Dockerfile parse errors. `docker buildx version` must work
+  as the invoking user.
+- **A cold build** (no `snapdragon-local-*` images yet — e.g. a fresh box or a
+  wiped docker data-root) additionally needs the org-private maven artifacts:
+  run **`make stack-m2-bootstrap` once first** (see "Cold builds" below).
 - **x86_64 / amd64.** First-party images are amd64 (Temurin JRE, node-alpine,
   nginx). On Apple Silicon / arm64 you'd need emulation (out of scope).
 - **GitHub access OR internal VPN** so the repos can be cloned. Either:
@@ -71,6 +81,60 @@ make stack-up STACK_SRC=/srv/snap-src        # clone/build from a different dir
 make stack-clone GIT_BASE=https://gitlab.snapdragon.systems/snapdragon  # VPN mirror
 make stack-up ENV=prod CASDOOR_ISSUER=https://id.snapdragon.systems     # prod mode
 ```
+
+---
+
+## Cold builds — `make stack-m2-bootstrap` (private maven artifacts)
+
+Four Java services (**admin/user/mod-bff, federation-api**) resolve org-PRIVATE
+maven artifacts (`systems.snapdragon:snapdragon-parent/-commons/-auth-core/
+-build-config`) at **image-build** time via their committed `settings.xml`
+(`${env.CI_API_V4_URL}/groups/${env.GITLAB_GROUP_ID}/-/packages/maven` — the
+GitLab group registry, unreachable off the VPN). While the built
+`snapdragon-local-*` images exist locally you never notice; on a **cold build**
+(fresh box, wiped docker data-root) `docker compose build` fails resolving them.
+
+```bash
+make stack-m2-bootstrap   # once (idempotent; re-run after a docker restart)
+make stack-up             # now auto-wires the local registry into the build
+```
+
+What it does (`tests/stack/m2-bootstrap.sh` — everything from SOURCE, nothing
+vendored):
+
+1. Clones the four library repos at **pinned commits** (the repos carry no git
+   tags; each SHA's `pom.xml` is exactly the version the services require —
+   including BOTH `snapdragon-auth-core` 2.3.3 (user-bff) and 2.3.4 (admin-bff))
+   into `~/.cache/snapdragon-stack-maven/src` and `mvn install`s them into
+   `~/.cache/snapdragon-stack-maven/m2` using the official `maven` Docker image
+   (no host JDK/maven needed). Cached artifacts are skipped — no re-clone/re-build.
+2. Serves that m2 repo from a tiny static registry **container**
+   (`snapdragon-m2-registry`, busybox httpd) shaped like the GitLab group
+   registry URL. It must be a container: on some hosts, host-published ports are
+   NOT reachable from `docker build` containers, so the build reaches it by its
+   docker-bridge IP.
+3. Writes `tests/stack/.m2-registry.env` (gitignored). Whenever that file
+   exists, `make stack-up`/`stack-build` auto-include the committed override
+   `tests/stack/compose.m2-local.yaml`, threading `CI_API_V4_URL`/
+   `GITLAB_GROUP_ID` as build args into the four services. No token is needed:
+   the Dockerfiles' `ci_job_token` secret mount is optional-guarded and the
+   static registry ignores auth headers.
+
+Two committed companions make the resolution actually work:
+
+- the Makefile exports `DOCKER_BUILDKIT=1` on every stack compose call (the
+  Dockerfiles use BuildKit secret mounts), and
+- `scripts/clone-all-repos.sh` runs `scripts/patch-stack-src.sh` after every
+  clone/update — the general post-clone patch pass. Its current patch injects a
+  `maven-default-http-blocker` mirror override into each consumer repo's
+  `settings.xml` (idempotent, marker-scoped), because Maven 3.9's bundled
+  settings block ALL external `http://` repositories and the local registry is
+  plain HTTP by design.
+
+The registry container survives reboots (`--restart unless-stopped`), but its
+bridge IP can change when docker restarts — `make stack-m2-bootstrap` is cheap
+to re-run and refreshes `.m2-registry.env`. Remove it with
+`docker rm -f snapdragon-m2-registry` once your images are built.
 
 ---
 
@@ -162,11 +226,13 @@ deliberately ships only dev placeholders so nothing secret is committed.
 | 127.0.0.1:9042 | Cassandra (gateway revocation list + URL registry) |
 
 The fe-gateway routes (`tests/stack/gateway-routes/fe/`) fan out from the front
-door to `/admin/**`, `/login/**`, `/social/**`, `/mod/**`, `/user/**`,
-`/api-docs/**`, `/bff/**` (admin-bff), `/_fragments/**` (fragment fleet), and
-`/be/**` (the be-gateway → federation + actions). Only the fe-gateway is published
-to the host; everything else is internal compose DNS, exactly as in the cluster
-only the gateways are ingress-exposed.
+door to `/admin/**`, `/login/**`, `/social/**` (matrix/mastodon/forum),
+`/mod/**`, `/user/**`, `/api-docs/**`, `/wiki/**`, `/owncast/**`, `/tube/**`,
+`/character-studio/**`, `/bff/**` (each of admin/mod/user/forum/wiki/owncast/tube-bff,
+then the admin-bff catch-all), `/_fragments/**` (fragment fleet), and `/be/**`
+(the be-gateway → federation + actions). Only the fe-gateway is published to the
+host; everything else is internal compose DNS, exactly as in the cluster only the
+gateways are ingress-exposed.
 
 ---
 
@@ -246,11 +312,15 @@ not verify.
 | `snapdragon-federation-api` | build `snapdragon-federation-api` | `manifests/federation-api` |
 | `snapdragon-admin-bff-api` | build `snapdragon-admin-bff-api` | `manifests/admin-bff-api` |
 | `snapdragon-mod-bff-api` / `-user-bff-api` | build the respective repos | (not yet in cluster; wired by analogy) |
+| `snapdragon-forum-bff-api` / `-wiki-bff-api` / `-owncast-bff-api` / `-tube-bff-api` | build the respective repos (spring-bff archetype siblings of admin-bff/federation-api) | `manifests/forum-bff-api` / `wiki-bff-api` / (owncast + tube ship co-located in-cluster; no dedicated BFF manifest dir yet) |
 | `snapdragon-api` | build `snapdragon-actions` | `manifests/snapdragon-apis` |
 | `snapdragon-remote-fragment` | build `snapdragon-remote-fragment` (sync image) | `manifests/remote-fragment` |
 | `snapdragon-systems-web` | build `snapdragon.systems` | `manifests/frontend` |
-| `snapdragon-{admin,mod,user,login,mastodon,matrix}-ui`, `-api-docs` | build each UI repo | `manifests/social-ui` + the remote repos |
+| `snapdragon-{admin,mod,user,login,mastodon,matrix,forum}-ui`, `-api-docs` | build each UI repo | `manifests/social-ui` + the remote repos |
+| `snapdragon-{wiki,owncast,tube}-ui` | build the respective repos | cluster serves these via the module-federation remote-fragment fleet, not a fixed gateway path; this compose stack adds a direct `/<slug>/**` route (mirroring mod-ui/user-ui) for local reachability + e2e |
+| `snapdragon-character-studio-ui` | build `snapdragon-character-studio-ui` | `manifests/character-studio` (no dedicated BFF — talks to the existing BFFs over `/bff/**`) |
 | `route-access-db` / `federation-db` / `admin-bff-db` | `postgres:16-alpine` | `manifests/route-access` / `federation-db` / `admin-bff-db` |
+| `forum-bff-db` / `wiki-bff-db` / `owncast-bff-db` / `tube-bff-db` | `postgres:16-alpine` | `manifests/forum-bff-db` / `wiki-bff-db` / (owncast/tube: no dedicated DB manifest yet — pre-existing cluster-side gap) |
 | `cassandra`, `casdoor`, `casdoor-db` | upstream images | `compose.real.yaml` (included) |
 | `synapse`, `mastodon-*` | upstream images (`social` profile) | `compose.real.yaml` (included, opt-in) |
 
@@ -301,3 +371,31 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
 - **prod creds are NOT committed.** `ENV=prod` only changes the issuer URL; you
   must inject real secrets yourself (see ENV section). Nothing secret lives in
   this repo — only dev placeholders matching the cluster's dev placeholders.
+- **forum-bff has no phpBB backend here.** `snapdragon-forum` (the isolated
+  phpBB pod + its `forum-api` extension) is not wired into this stack, so
+  `PHPBB_ENABLED`/`EXTERNAL_FORUM_ENABLED` are forced `"false"` — forum-bff
+  boots clean and always-audits instead of failing every call against an
+  absent backend (same class of limitation as the admin-bff analytics note
+  above). The owncast third-party streaming pod (RTMP ingest) and the
+  tube-media signed-URL Nginx sidecar are likewise out of scope here (only the
+  UI+BFF pair for each is wired) — `manifests/owncast` / `manifests/tube` show
+  the full cluster shape.
+- **`ROLE_WIKI` / `ROLE_FORUM` (and the derived `ROLE_FORUM_MOD`) are not yet
+  seeded in `manifests/casdoor/init-data-configmap.yaml`** — a pre-existing gap
+  predating this compose wiring (the `gateway_route_access` rows that gate
+  `/bff/wiki/**`, `/bff/forum/**`, `/social/forum/**` etc. already referenced
+  these roles). Until a Casdoor seed grants them, only an admin/superadmin
+  persona (via the gateway's documented admin-bypass) reaches the forum/wiki
+  surfaces end-to-end locally; `ROLE_TUBE`/`ROLE_OWNCAST` ARE already seeded,
+  so a persona granted those reaches tube/owncast normally.
+- **superadmin-service-catalog is intentionally NOT wired to the `:8088` front
+  door.** Its cluster design (`specs/cluster/apps/22-gateway-superadmin.yaml`)
+  is TAILNET-ONLY behind a dedicated `snapdragon-superadmin-gateway` — "off
+  EVERY public-ingress gateway" by design (network isolation is one of its
+  three intentional locks). This compose stack has no equivalent third
+  gateway; adding the route to the shared fe-gateway would collapse that
+  lock, so it is left unwired here (a real fix is a separate, dedicated
+  superadmin-gateway compose service + published port, not a `:8088` route).
+  There is likewise no separate "superadmin-appstore" service/repo to wire —
+  that name is the design doc's project codename for this same
+  service-catalog feature, not a distinct deliverable.

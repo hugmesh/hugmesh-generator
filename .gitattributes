@@ -17,3 +17,9 @@ Dockerfile* text eol=lf
 
 # PowerShell is Windows-side; CRLF is fine and conventional there.
 *.ps1       text eol=crlf
+
+# cmd batch is Windows-side AND goto-heavy: cmd's label scanner mis-reads labels in
+# LF-only files (the classic goto-skips-label bug), so .bat MUST be CRLF both in the
+# checkout and in the qemu FAT payload built from it. Without this rule the repo-root
+# `* text=auto eol=lf` default would silently re-normalize the bootstrapper to LF.
+*.bat       text eol=crlf

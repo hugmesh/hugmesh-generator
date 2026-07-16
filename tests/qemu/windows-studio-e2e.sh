@@ -10,8 +10,20 @@
 # autologon, and a Startup / SetupComplete hook that runs `D:\run-selftest.bat` off the
 # injected payload disk. The whole studio/ tree + a tiny guest runner are packed into a
 # FAT "payload" disk (a stock Windows guest has no virtio-9p driver, so a shared FAT is the
-# transport); the guest runs the .bat, writes a MARKER back to the FAT, and powers off; the
-# host reads the marker back with mtools and decides pass/fail.
+# transport); the guest runs the .bat, writes markers back to the FAT, and powers off; the
+# host reads the markers back with mtools and decides pass/fail.
+#
+# The runner has TWO legs (both required for a PASS; no new guest prerequisites, so
+# existing operator images keep passing):
+#   1. DETECT leg: `snapdragon-studio.bat /detect > DETECT.txt` — the guided
+#      bootstrapper's report mode (never prompts, never installs). Expected in the guest:
+#      DETECT_EXITCODE=0, `DETECT python=found` (Python on PATH is part of the operator
+#      image contract above), a DEFINITE pyside6/docker verdict either way (the minimal
+#      image usually reports missing for both — a docker-equipped image must also pass),
+#      and a winget line.
+#   2. MARKER leg (the UNCHANGED #345 contract): `snapdragon-studio.bat --print-command
+#      --backend native > MARKER.txt` must exit 0 and emit a builder command — proving
+#      the bootstrapped .bat still honors the byte-compatible headless launch line.
 #
 # DARK-GATED: the real boot needs WINDOWS_QEMU_IMAGE (+ qemu/OVMF/mtools). Without them the
 # script SKIPS cleanly (exit 0) — mirroring the IMAGEGEN_KIND_E2E dark-e2e idiom.
@@ -47,11 +59,20 @@ skip() { echo "SKIP: $*"; exit 0; }
 # ── payload FAT: the whole studio/ tree + a guest runner the Startup hook launches ─────
 GUEST_RUNNER='@echo off
 REM run-selftest.bat — the payload-disk entrypoint the Windows guest Startup hook runs.
-REM Exercises the SHIPPED launcher headlessly and round-trips a MARKER back through the
-REM shared FAT so the host can verify it after power-off.
+REM Leg 1: the bootstrapper DETECT report (/detect never prompts, never installs).
+REM Leg 2 (the unchanged #345 contract): exercise the SHIPPED launcher headlessly.
+REM Both round-trip through the shared FAT so the host can verify after power-off.
+REM Redirect-first form below is load-bearing: real cmd.exe parses a digit immediately
+REM before a redirect operator as a stream handle even mid-token, so an echo whose
+REM expanded tail is `...=0` followed directly by the append operator EATS the 0
+REM (handle 0 gets redirected; the token never lands in the file). wine cmd does NOT
+REM reproduce this, so only the static guards (stage_payload + test_bat_bootstrap.py)
+REM catch a regression before a real boot.
 cd /d "%~dp0studio"
+call snapdragon-studio.bat /detect > DETECT.txt 2>&1
+>> DETECT.txt echo DETECT_EXITCODE=%ERRORLEVEL%
 call snapdragon-studio.bat --print-command --backend native > MARKER.txt 2>&1
-echo EXITCODE=%ERRORLEVEL%>> MARKER.txt
+>> MARKER.txt echo EXITCODE=%ERRORLEVEL%
 shutdown /s /t 0'
 
 stage_payload() {   # $1 = staging dir
@@ -63,12 +84,35 @@ stage_payload() {   # $1 = staging dir
     rsync -a --exclude '__pycache__' --exclude '*.pyc' --exclude '.pytest_cache' \
         "${STUDIO_DIR}/snapdragon_studio" "${STUDIO_DIR}/snapdragon-studio.bat" \
         "${STUDIO_DIR}/requirements.txt" "${dest}/studio/"
-    printf '%s\r\n' "${GUEST_RUNNER}" > "${dest}/run-selftest.bat"
+    # every line CRLF: cmd is CRLF-native and the shipped .bat is goto-heavy (cmd's label
+    # scanner breaks on LF), so the runner is written the same way for consistency.
+    printf '%s\n' "${GUEST_RUNNER}" | sed 's/$/\r/' > "${dest}/run-selftest.bat"
     # fail LOUD if the runner or the shipped launcher lost their entrypoint before we ever boot.
     grep -q 'python -m snapdragon_studio' "${dest}/studio/snapdragon-studio.bat" \
         || { echo "payload validation FAILED: shipped .bat lost its entrypoint" >&2; exit 1; }
     grep -q 'snapdragon-studio.bat --print-command' "${dest}/run-selftest.bat" \
         || { echo "payload validation FAILED: guest runner lost its --print-command call" >&2; exit 1; }
+    # the bootstrap-detect leg: runner calls /detect; the shipped .bat still carries the
+    # DETECT vocabulary and the pinned winget IDs (the same lines test_bat_bootstrap.py pins).
+    grep -q 'snapdragon-studio.bat /detect' "${dest}/run-selftest.bat" \
+        || { echo "payload validation FAILED: guest runner lost its /detect leg" >&2; exit 1; }
+    grep -q 'DETECT python=' "${dest}/studio/snapdragon-studio.bat" \
+        || { echo "payload validation FAILED: shipped .bat lost its DETECT report" >&2; exit 1; }
+    grep -q 'set "WINGET_PYTHON_ID=Python.Python.3.12"' "${dest}/studio/snapdragon-studio.bat" \
+        || { echo "payload validation FAILED: shipped .bat lost its pinned Python winget ID" >&2; exit 1; }
+    grep -q 'set "WINGET_DOCKER_ID=Docker.DockerDesktop"' "${dest}/studio/snapdragon-studio.bat" \
+        || { echo "payload validation FAILED: shipped .bat lost its pinned Docker winget ID" >&2; exit 1; }
+    # CRLF guard: an LF-normalized .bat would boot but die at the first goto label.
+    grep -qU $'\r' "${dest}/studio/snapdragon-studio.bat" \
+        || { echo "payload validation FAILED: shipped .bat is not CRLF (goto labels would break)" >&2; exit 1; }
+    # digit-eating-redirect guard: `...%ERRORLEVEL%>> file` loses the digit on REAL
+    # cmd.exe (digit-before->> parses as a stream handle); wine's cmd does not reproduce
+    # the quirk, so this static check is the only pre-boot net. Redirect-first form
+    # (`>> file echo ...%ERRORLEVEL%`) is required in the guest runner.
+    if grep -q '%>' "${dest}/run-selftest.bat"; then
+        echo "payload validation FAILED: guest runner has a '%>' redirect (real cmd eats the expanded digit; use the redirect-first form)" >&2
+        exit 1
+    fi
 }
 
 pack_fat() {        # $1 = staging dir, $2 = output image
@@ -92,7 +136,14 @@ if ${DRY_RUN}; then
     mcopy -i "${WORK}/payload.fat" "::/studio/snapdragon-studio.bat" "${WORK}/rb-launcher.bat"
     grep -q 'snapdragon-studio.bat --print-command' "${WORK}/rb-runner.bat"
     grep -q 'python -m snapdragon_studio' "${WORK}/rb-launcher.bat"
-    echo "PASS (--dry-run): payload FAT packs and the guest runner + shipped launcher round-trip."
+    # the detect leg survives the FAT round-trip too (same greps as stage_payload, read
+    # back off the packed image — the packing half of the new leg, zero qemu needed).
+    grep -q 'snapdragon-studio.bat /detect' "${WORK}/rb-runner.bat"
+    grep -q 'DETECT python=' "${WORK}/rb-launcher.bat"
+    grep -q 'WINGET_PYTHON_ID=Python.Python.3.12' "${WORK}/rb-launcher.bat"
+    grep -q 'WINGET_DOCKER_ID=Docker.DockerDesktop' "${WORK}/rb-launcher.bat"
+    echo "PASS (--dry-run): payload FAT packs; the guest runner (detect + marker legs) and"
+    echo "  the shipped launcher (entrypoint, DETECT report, pinned winget IDs) round-trip."
     exit 0
 fi
 
@@ -157,11 +208,34 @@ if ! mcopy -i "${WORK}/payload.fat" "::/studio/MARKER.txt" "${MARKER}" 2>/dev/nu
     exit 1
 fi
 echo "── MARKER.txt ──"; cat "${MARKER}"
-if grep -q 'EXITCODE=0' "${MARKER}" \
-   && grep -qE 'build-(x86-host|rpi5|frite|jetson|orangepi5|orangepi-zero2)-stage4\.sh' "${MARKER}"; then
-    echo "PASS: the shipped snapdragon-studio.bat ran in the Windows guest and emitted a builder command."
-    exit 0
+if ! grep -q 'EXITCODE=0' "${MARKER}" \
+   || ! grep -qE 'build-(x86-host|rpi5|frite|jetson|orangepi5|orangepi-zero2)-stage4\.sh' "${MARKER}"; then
+    echo "FAIL: MARKER present but missing EXITCODE=0 and/or a builder command."
+    echo "── serial log tail ──"; tail -n 25 "${SERIAL}" 2>/dev/null || true
+    exit 1
 fi
-echo "FAIL: MARKER present but missing EXITCODE=0 and/or a builder command."
-echo "── serial log tail ──"; tail -n 25 "${SERIAL}" 2>/dev/null || true
-exit 1
+
+# ── detect leg: the bootstrapper's /detect report is part of the pass now ──────────────
+DETECT="${WORK}/DETECT.txt"
+if ! mcopy -i "${WORK}/payload.fat" "::/studio/DETECT.txt" "${DETECT}" 2>/dev/null; then
+    echo "FAIL: MARKER passed but DETECT.txt is missing from the payload disk — the guest"
+    echo "  runner's /detect leg did not run (it executes BEFORE the marker leg, so this"
+    echo "  points at the shipped .bat crashing on /detect, not at the guest hook)."
+    exit 1
+fi
+echo "── DETECT.txt ──"; cat "${DETECT}"
+DETECT_FAIL=""
+grep -q  'DETECT_EXITCODE=0'                "${DETECT}" || DETECT_FAIL="${DETECT_FAIL} DETECT_EXITCODE=0"
+grep -q  'DETECT python=found'              "${DETECT}" || DETECT_FAIL="${DETECT_FAIL} python=found"
+grep -qE 'DETECT pyside6=(found|missing)'   "${DETECT}" || DETECT_FAIL="${DETECT_FAIL} pyside6-verdict"
+grep -qE 'DETECT docker=(found|missing)'    "${DETECT}" || DETECT_FAIL="${DETECT_FAIL} docker-verdict"
+grep -q  'DETECT winget='                   "${DETECT}" || DETECT_FAIL="${DETECT_FAIL} winget-verdict"
+if [ -n "${DETECT_FAIL}" ]; then
+    echo "FAIL: the launcher ran but the /detect report is missing:${DETECT_FAIL}"
+    echo "  (python=found is an operator-image contract — Python 3.10+ on PATH; pyside6/"
+    echo "  docker only need a DEFINITE verdict either way — missing is fine on a minimal image.)"
+    exit 1
+fi
+echo "PASS: the shipped snapdragon-studio.bat ran in the Windows guest — /detect reported"
+echo "  correctly AND the headless launch emitted a builder command."
+exit 0

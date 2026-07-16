@@ -1,0 +1,47 @@
+# compose.m2-local.yaml — COLD-BUILD override: thread the LOCAL private-maven
+# registry (tests/stack/m2-bootstrap.sh) into the four Java services whose
+# Dockerfiles resolve org-private systems.snapdragon:* artifacts via their
+# committed settings.xml (${env.CI_API_V4_URL}/groups/${env.GITLAB_GROUP_ID}/
+# -/packages/maven). Everything else in compose.local.yaml is untouched.
+#
+# NOT included by hand: `make stack-up`/`stack-build` auto-append
+#   --env-file tests/stack/.m2-registry.env -f tests/stack/compose.m2-local.yaml
+# whenever the env file exists — i.e. whenever `make stack-m2-bootstrap` has
+# run. The env file (gitignored) carries CI_API_V4_URL (the registry
+# container's docker-bridge IP — host-bound ports are not reachable from build
+# containers on some hosts, so the registry is itself a container) and
+# GITLAB_GROUP_ID.
+#
+# No ci_job_token secret is wired: every Dockerfile guards the secret mount
+# (`if [ -f /run/secrets/ci_job_token ]`) and the static registry ignores auth
+# headers, so builds succeed without any token. BuildKit itself (the
+# `# syntax=docker/dockerfile:1.7` + secret-mount syntax) is enabled by the
+# Makefile exporting DOCKER_BUILDKIT=1 on every stack compose call.
+services:
+  snapdragon-federation-api:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-federation-api
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
+
+  snapdragon-admin-bff-api:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-admin-bff-api
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
+
+  snapdragon-mod-bff-api:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-mod-bff-api
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
+
+  snapdragon-user-bff-api:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/snapdragon-user-bff-api
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}

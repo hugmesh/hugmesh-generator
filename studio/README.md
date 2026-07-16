@@ -45,10 +45,32 @@ a **local mesh node** from the system tray.
 pip install -r requirements.txt        # PySide6 (or use an existing PyQt6)
 ./snapdragon-studio
 
-# Windows (Docker Desktop required for builds)
-pip install -r requirements.txt
+# Windows — the .bat is a guided bootstrapper: just double-click (or run) it
 snapdragon-studio.bat
 ```
+
+On Windows, `snapdragon-studio.bat` bootstraps a bare box end-to-end:
+
+- **Ready box** (Python 3.10+ with PySide6/PyQt6 importable, or the local venv built):
+  launches the wizard immediately — no report, no prompts.
+- **Bare box**: prints a machine-greppable `DETECT …` report (python / pyside6 / venv /
+  docker / winget) and offers **consent-gated** installs — nothing is ever installed
+  without an explicit `y/N` answer, every offer shows the exact command first, and only
+  `winget` (the OS package manager) is used: `Python.Python.3.12` for Python and
+  `Docker.DockerDesktop` for Docker Desktop. Studio deps go into a project-local venv at
+  `studio/.venv-studio` (`python -m venv` + `pip install -r requirements.txt`); the
+  launcher activates it automatically on later runs.
+- **Docker Desktop is OPTIONAL**: only the docker build backend needs it (native builds
+  are not available on Windows), it needs WSL2 + a reboot/log-out + admin, and declining
+  it never blocks the wizard — config/preview/`--print-command` all work without it (the
+  docker backend stays greyed by the wizard's own preflight gating).
+- Flags: `snapdragon-studio.bat /detect` prints the DETECT report and exits (never
+  prompts, installs, or launches); `/auto` accepts every offer; any `--`-prefixed arg
+  (e.g. `--print-command`) runs **headless** — no prompts, no installs, straight to
+  `python -m snapdragon_studio` (the automation/e2e contract).
+- No `winget` (LTSC/Server editions)? The launcher prints the manual install URLs
+  (python.org / docs.docker.com) and exits with code 3 — it never downloads or executes
+  anything itself.
 
 Headless preview of the exact build command for a saved config — **Qt-free** (only
 `core/` is imported, so it runs with no display and no PySide6/PyQt6 installed):

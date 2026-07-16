@@ -14,9 +14,39 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import urllib.request
 from dataclasses import dataclass
 
 _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
+
+# ── cold-build preflight wiring (mirrors the Makefile's m2 knobs) ──────────────
+# `make stack-m2-bootstrap` (tests/stack/m2-bootstrap.sh) builds the org-private
+# maven artifacts from source, serves them from a registry container, and writes
+# this (gitignored) env file; the Makefile auto-includes the m2 compose override
+# whenever the file exists.
+_M2_ENV_FILE = os.path.join("tests", "stack", ".m2-registry.env")
+M2_REGISTRY_CONTAINER = "snapdragon-m2-registry"
+M2_BOOTSTRAP_HINT = "run `make stack-m2-bootstrap` first"
+# The registry-readiness probe fetches a REAL artifact through the exact URL
+# shape the services' settings.xml (and the compose build args) will use — the
+# same artifact m2-bootstrap.sh self-checks after standing the registry up.
+_M2_CHECK_ARTIFACT = ("systems/snapdragon/snapdragon-parent/2.7.0/"
+                      "snapdragon-parent-2.7.0.pom")
+_M2_PROBE_TIMEOUT_S = 3.0
+# compose.local.yaml sets `name: snapdragon-local`, so built images are named
+# <project>-<service>. These four services resolve PRIVATE maven artifacts at
+# image-build time — a cold build of any of them needs the m2 registry.
+_COMPOSE_PROJECT = "snapdragon-local"
+PRIVATE_ARTIFACT_SERVICES = (
+    "snapdragon-admin-bff-api",
+    "snapdragon-user-bff-api",
+    "snapdragon-mod-bff-api",
+    "snapdragon-federation-api",
+)
+# A full cold build (17 service images incl. four fat Spring builds) comfortably
+# exceeds 10 GiB of layers + build cache; demand sane headroom up front instead
+# of failing 40 minutes into `docker compose build`.
+PREFLIGHT_MIN_FREE_GIB = 20
 
 
 def _compose_base() -> list[str]:
@@ -67,8 +97,149 @@ class LocalStackNode:
             return False, f"stack compose file missing: {self.compose_file}"
         return True, ""
 
-    def _make(self, target: str, timeout: int,
-              extra_env: dict[str, str] | None = None) -> tuple[bool, str]:
+    # ---- cold-build preflight ----------------------------------------------------
+    # Each probe is a tiny method so tests can mock it both ways; every docker call
+    # runs in self._build_env() — the SAME env `make stack-up` will use — and NOTHING
+    # here fabricates readiness: a probe that cannot run reports a problem.
+
+    def _probe(self, cmd: list[str], timeout: int = 15) -> tuple[int, str]:
+        try:
+            r = subprocess.run(cmd, env=self._build_env(), capture_output=True,
+                               text=True, timeout=timeout)
+            return r.returncode, (r.stdout or r.stderr).strip()
+        except (OSError, subprocess.SubprocessError) as e:
+            return 1, str(e)
+
+    def _docker_ready(self) -> tuple[bool, str]:
+        rc, out = self._probe(["docker", "info", "--format", "{{.ServerVersion}}"])
+        return (rc == 0 and bool(out)), out
+
+    def _buildx_visible(self) -> bool:
+        """True when the buildx CLI plugin resolves in the env compose will run
+        with. It is installed PER-USER (~/.docker/cli-plugins), so a root/systemd/
+        other-HOME invocation can silently fall back to the legacy builder — which
+        cannot parse the services' `# syntax=`/secret-mount Dockerfiles."""
+        rc, _ = self._probe(["docker", "buildx", "version"])
+        return rc == 0
+
+    def _docker_root_free_gib(self) -> float:
+        """Free GiB under the docker data-root (where every layer/build lands);
+        falls back to the generator checkout's filesystem when the data-root is
+        not visible (e.g. a remote daemon)."""
+        rc, root = self._probe(["docker", "info", "--format", "{{.DockerRootDir}}"])
+        path = root if rc == 0 and root and os.path.exists(root) else self.generator_dir
+        try:
+            return shutil.disk_usage(path).free / (1024 ** 3)
+        except OSError:
+            return 0.0
+
+    def _image_present(self, image: str) -> bool:
+        rc, out = self._probe(["docker", "images", "-q", image])
+        return rc == 0 and bool(out.strip())
+
+    @staticmethod
+    def _m2_env_values(env_file: str) -> dict[str, str]:
+        """KEY=VALUE pairs from the bootstrap's env file (comments/blanks skipped)."""
+        vals: dict[str, str] = {}
+        try:
+            with open(env_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, _, value = line.partition("=")
+                    vals[key.strip()] = value.strip()
+        except OSError:
+            pass
+        return vals
+
+    def _url_ok(self, url: str, timeout: float = _M2_PROBE_TIMEOUT_S) -> tuple[bool, str]:
+        """GET ``url``; (True, "") only on a 2xx. Default-fail: any error —
+        unreachable IP, connection refused, 404, timeout, garbage URL — reports
+        why instead of raising."""
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as r:  # noqa: S310 - fixed path over the env-file URL
+                status = getattr(r, "status", 0)
+                if 200 <= status < 300:
+                    return True, ""
+                return False, f"HTTP {status}"
+        except (OSError, ValueError) as e:  # URLError/HTTPError/timeout are OSError
+            return False, str(e)
+
+    def m2_registry_ready(self) -> tuple[bool, str]:
+        """Are the private-maven cold-build prerequisites in place — really?
+        `make stack-m2-bootstrap` writes the (gitignored) env file and starts the
+        registry container, but neither existing-file nor container-running checks
+        are honest on their own: a docker/host restart can hand the restarted
+        container a DIFFERENT bridge IP while the env file stays frozen, and the
+        build would then die deep inside `docker compose build` on maven
+        connection-refused noise. So probe a known artifact THROUGH the exact URL
+        the build args will use — one GET subsumes env-file presence, container
+        liveness, IP freshness, and a non-emptied m2 cache."""
+        env_file = os.path.join(self.generator_dir, _M2_ENV_FILE)
+        if not os.path.exists(env_file):
+            return False, f"{_M2_ENV_FILE} missing"
+        vals = self._m2_env_values(env_file)
+        base = vals.get("CI_API_V4_URL", "").rstrip("/")
+        if not base:
+            return False, f"{_M2_ENV_FILE} has no CI_API_V4_URL"
+        group = vals.get("GITLAB_GROUP_ID", "1")
+        url = f"{base}/groups/{group}/-/packages/maven/{_M2_CHECK_ARTIFACT}"
+        ok, why = self._url_ok(url)
+        if not ok:
+            return False, (f"registry {M2_REGISTRY_CONTAINER} did not serve the "
+                           f"check artifact via {base} ({why}); a docker restart "
+                           f"can change its bridge IP while {_M2_ENV_FILE} stays "
+                           f"stale")
+        return True, ""
+
+    def preflight(self) -> list[str]:
+        """Fail-fast COLD-BUILD readiness check for `make stack-up`. Returns SHORT,
+        actionable problem lines (empty list = ready) instead of letting the
+        operator find out via the truncated tail of a 30-minute compose build.
+        Covers: docker daemon, BuildKit/buildx visibility IN THE ENV the build
+        will use, disk headroom, and — when the private-artifact services' images
+        are absent and must cold-build — the m2 registry prerequisites."""
+        ok, why = self.available()
+        if not ok:
+            return [why]
+        ok, why = self._docker_ready()
+        if not ok:
+            return [f"docker daemon not reachable: {why or 'docker info failed'} — "
+                    f"start docker, then retry."]
+        problems: list[str] = []
+        env = self._build_env()
+        if env.get("DOCKER_BUILDKIT") == "0":
+            problems.append("DOCKER_BUILDKIT=0 is set in this environment — the stack "
+                            "Dockerfiles need BuildKit (secret mounts); unset it.")
+        if not self._buildx_visible():
+            problems.append("docker buildx is not visible in THIS environment — the "
+                            "plugin is per-user (~/.docker/cli-plugins), so run as the "
+                            "user that installed it (not via sudo/systemd) or install "
+                            "buildx system-wide; without it the legacy builder cannot "
+                            "parse the services' BuildKit Dockerfiles.")
+        free = self._docker_root_free_gib()
+        if free < PREFLIGHT_MIN_FREE_GIB:
+            problems.append(f"only {free:.0f} GiB free under the docker data-root — a "
+                            f"cold stack build needs ~{PREFLIGHT_MIN_FREE_GIB} GiB; free "
+                            f"space (e.g. `docker system prune`) and retry.")
+        missing = [s for s in PRIVATE_ARTIFACT_SERVICES
+                   if not self._image_present(f"{_COMPOSE_PROJECT}-{s}")]
+        if missing:
+            ready, why = self.m2_registry_ready()
+            if not ready:
+                problems.append(
+                    f"cold build required ({len(missing)} private-maven service "
+                    f"image(s) missing: {', '.join(missing)}) but the local maven "
+                    f"registry is not up ({why}) — {M2_BOOTSTRAP_HINT}; it builds the "
+                    f"org-private artifacts from source and serves them to the build.")
+        return problems
+
+    def _build_env(self, extra_env: dict[str, str] | None = None) -> dict[str, str]:
+        """The EXACT env every `make stack-*` subprocess runs with. The preflight
+        checks run against this same dict — a BuildKit/buildx probe in any other
+        env (sudo, systemd, a different HOME) would fabricate readiness, because
+        the buildx CLI plugin is per-user (~/.docker/cli-plugins)."""
         env = os.environ.copy()
         env["ENV"] = self.env
         env["SOCIAL"] = "1" if self.social else ""
@@ -83,6 +254,11 @@ class LocalStackNode:
         # only — never argv — mirroring the golive/token-file secret discipline.
         if extra_env:
             env.update(extra_env)
+        return env
+
+    def _make(self, target: str, timeout: int,
+              extra_env: dict[str, str] | None = None) -> tuple[bool, str]:
+        env = self._build_env(extra_env)
         try:
             r = subprocess.run(["make", target], cwd=self.generator_dir, env=env,
                                capture_output=True, text=True, timeout=timeout)
@@ -91,9 +267,13 @@ class LocalStackNode:
             return False, str(e)
 
     def start(self) -> tuple[bool, str]:
-        ok, why = self.available()
-        if not ok:
-            return False, why
+        # Fail-fast for EVERY caller — the tray's "start" invokes start() directly
+        # (not via LocalMeshBootstrap.up()), and without this gate a cold box gets
+        # the doomed 30-minute build + a truncated compose tail. preflight()
+        # subsumes available(), so problems arrive as short actionable lines.
+        problems = self.preflight()
+        if problems:
+            return False, "\n".join(problems)
         # stack-clone + build + up -d — can take a while on first run (image pulls/builds).
         return self._make("stack-up", timeout=1800)
 

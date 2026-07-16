@@ -23,6 +23,18 @@ spring:
                 - Path=/social/mastodon/**
               filters:
                 - StripPrefix=2
+            # forum-ui — a PATH remote at /social/forum (NOT a forum.<domain>
+            # subdomain, which the *.snapdragon.systems vanity wildcard would
+            # swallow), congruent with matrix-ui/mastodon-ui above
+            # (specs/cluster/apps/49-forum-ui.yaml). Its Dockerfile serves plain
+            # nginx on :80, like matrix-ui/mastodon-ui (NOT the nginx-unprivileged
+            # :8080 image the wiki/owncast/tube/character-studio remotes use below).
+            - id: forum-ui
+              uri: http://snapdragon-forum-ui:80
+              predicates:
+                - Path=/social/forum/**
+              filters:
+                - StripPrefix=2
             # login-ui is a STANDALONE Angular app (its own index.html; no
             # module-federation remoteEntry in this stack) built with
             # base-href=/login/ (snapdragon-login-ui companion change), so the
@@ -63,6 +75,39 @@ spring:
                 - Path=/api-docs/**
               filters:
                 - StripPrefix=1
+            # wiki-ui / owncast-ui / tube-ui / character-studio-ui — federated
+            # remotes on nginx-unprivileged :8080 (their Dockerfiles document these
+            # exact mount paths + gate roles: "/wiki=ROLE_WIKI", "/owncast=
+            # ROLE_OWNCAST", "/tube=ROLE_TUBE" route-access gates; character-studio
+            # is already a canonical cluster route-access row). Matching
+            # gateway_route_access rows for wiki/owncast/tube are added in
+            # specs/cluster/manifests/route-access/initdb/20-schema.sql (a
+            # pre-existing gap — those repos' own Dockerfiles expected the row,
+            # it was never added).
+            - id: wiki-ui
+              uri: http://snapdragon-wiki-ui:8080
+              predicates:
+                - Path=/wiki/**
+              filters:
+                - StripPrefix=1
+            - id: owncast-ui
+              uri: http://snapdragon-owncast-ui:8080
+              predicates:
+                - Path=/owncast/**
+              filters:
+                - StripPrefix=1
+            - id: tube-ui
+              uri: http://snapdragon-tube-ui:8080
+              predicates:
+                - Path=/tube/**
+              filters:
+                - StripPrefix=1
+            - id: character-studio-ui
+              uri: http://snapdragon-character-studio-ui:8080
+              predicates:
+                - Path=/character-studio/**
+              filters:
+                - StripPrefix=1
             # SSO/login + user surface -> user-bff. MUST precede the /bff/** admin
             # catch-all (SCG matches in list order). NATIVE login: the browser POSTs
             # username/password to /bff/login (permitAll at the BFF); user-bff runs PKCE +
@@ -81,6 +126,30 @@ spring:
               uri: http://snapdragon-mod-bff-api:8080
               predicates:
                 - Path=/bff/mod/**
+            # forum/wiki/owncast/tube BFFs — same SIBLING shape as mod-bff/user-bff
+            # above (each a non-overlapping /bff/<slug>/** prefix), so each MUST
+            # also precede the /bff/** admin catch-all below. gateway_route_access
+            # already seeds role-gated rows for these exact prefixes (ROLE_FORUM,
+            # ROLE_FORUM_MOD, ROLE_WIKI, ROLE_OWNCAST, ROLE_TUBE — specs/cluster/
+            # manifests/route-access/initdb/20-schema.sql), so no schema change was
+            # needed for the BFF routes themselves (only the wiki/owncast/tube UI
+            # mount rows above were a genuine gap).
+            - id: snapdragon-forum-bff-api
+              uri: http://snapdragon-forum-bff-api:8080
+              predicates:
+                - Path=/bff/forum/**
+            - id: snapdragon-wiki-bff-api
+              uri: http://snapdragon-wiki-bff-api:8080
+              predicates:
+                - Path=/bff/wiki/**
+            - id: snapdragon-owncast-bff-api
+              uri: http://snapdragon-owncast-bff-api:8080
+              predicates:
+                - Path=/bff/owncast/**
+            - id: snapdragon-tube-bff-api
+              uri: http://snapdragon-tube-bff-api:8080
+              predicates:
+                - Path=/bff/tube/**
             # Same-origin BFF: everything else under /bff/** -> the admin BFF (route-DB role
             # rules apply). Includes /bff/internal/**, /bff/public/**, and the admin surfaces.
             - id: snapdragon-admin-bff-api

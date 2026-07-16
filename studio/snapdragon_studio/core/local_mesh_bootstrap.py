@@ -207,6 +207,16 @@ class LocalMeshBootstrap:
                                 "real tailnet.")
         return problems
 
+    def preflight(self) -> list[str]:
+        """Fail-fast COLD-BUILD readiness (LocalStackNode.preflight): docker daemon,
+        BuildKit/buildx visibility in the EXACT env `make stack-up` will run with,
+        disk headroom, and the private-maven prerequisites when the service images
+        must cold-build. Returns SHORT actionable problems (empty = ready) — the
+        alternative is the operator diagnosing a truncated compose-build tail.
+        Unlike validate() (pure config), this probes the host, so it runs on
+        ``up`` (and is callable from the GUI) but never on mere selection."""
+        return self._stack_node().preflight()
+
     # ---- confirm-before-run manifest (PURE, no side effects) --------------------
     def plan(self) -> str:
         """A human-readable manifest of EXACTLY what an ``up`` will generate + start —
@@ -331,6 +341,16 @@ class LocalMeshBootstrap:
         problems = self.validate()
         if problems:
             return False, ["cannot start:", *(f"  - {p}" for p in problems)]
+
+        # Host preflight BEFORE any side effect (no creds are minted for a host
+        # that cannot build/run the stack). On failure the operator gets a SHORT
+        # actionable plan — e.g. "run `make stack-m2-bootstrap` first" — instead
+        # of a wall of compose noise 30 minutes into a doomed cold build.
+        problems = self.preflight()
+        if problems:
+            return False, ["preflight failed — nothing was generated or started. "
+                           "Fix, then retry:",
+                           *(f"  - {p}" for p in problems)]
 
         ok, msg = self.generate_creds()
         log.append(f"[creds] {msg}")

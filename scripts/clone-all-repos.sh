@@ -50,6 +50,16 @@ REPOS=(
   snapdragon-mastodon-ui
   snapdragon-matrix-ui
   snapdragon-api-docs
+  # ── forum/wiki/owncast/tube/character-studio UI+BFF pairs ──
+  snapdragon-forum-ui
+  snapdragon-forum-bff-api
+  snapdragon-wiki-ui
+  snapdragon-wiki-bff-api
+  snapdragon-owncast-ui
+  snapdragon-owncast-bff-api
+  snapdragon-tube-ui
+  snapdragon-tube-bff-api
+  snapdragon-character-studio-ui
 )
 
 echo "==> Cloning ${#REPOS[@]} Snapdragon repos into ${STACK_SRC}"
@@ -107,6 +117,12 @@ for repo in "${REPOS[@]}"; do
     fi
   fi
 done
+
+# Post-clone patch pass — the COMMITTED, general mechanism for the small source
+# tweaks the LOCAL stack needs on the cloned trees (idempotent + CRLF-tolerant;
+# see scripts/patch-stack-src.sh). Runs EVERY time because the update path
+# above `reset --hard`s each checkout, wiping any previously applied patch.
+bash "${HERE}/patch-stack-src.sh" "${STACK_SRC}"
 
 echo "==> Done: ${ok} ok, ${fail} failed/skipped, in ${STACK_SRC}"
 if [ "${fail}" -gt 0 ]; then
