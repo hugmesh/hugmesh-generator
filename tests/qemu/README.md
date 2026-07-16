@@ -95,14 +95,28 @@ fragment) and `launch-x86.sh --gpu` attaches a virtio-GPU.
 
 ## Windows Studio `.bat` e2e (`windows-studio-e2e.sh`)
 
-Proves the SHIPPED Windows launcher works on real Windows: `snapdragon-studio.bat`
-runs `python -m snapdragon_studio %*`, and `--print-command` is a **headless-safe**
-mode (app.py returns before importing Qt), so it exercises the whole launcher →
-module → builder-command path with no display. The harness packs the entire `studio/`
-tree onto a FAT **payload** disk (a stock Windows guest has no virtio-9p driver, so a
-shared FAT is the transport), boots the guest, runs the `.bat`, writes a `MARKER.txt`
-back to the FAT, and reads it back with `mtools` after power-off — asserting the run
-exited `0` **and** emitted a `build-*-stage4.sh` command.
+Proves the SHIPPED Windows launcher works on real Windows. `snapdragon-studio.bat` is
+the **guided bootstrapper** (see `studio/README.md`, "Run"): on automation args it goes
+straight to `python -m snapdragon_studio %*`, and `--print-command` is a
+**headless-safe** mode (app.py returns before importing Qt), so it exercises the whole
+launcher → module → builder-command path with no display. The harness packs the entire
+`studio/` tree onto a FAT **payload** disk (a stock Windows guest has no virtio-9p
+driver, so a shared FAT is the transport), boots the guest, runs the `.bat` **twice**,
+writes the results back to the FAT, and reads them back with `mtools` after power-off:
+
+1. **DETECT leg** (`snapdragon-studio.bat /detect > DETECT.txt`) — the bootstrapper's
+   report mode; it never prompts and never installs, so it needs **no new guest
+   prerequisites** and existing operator images keep passing. The verdict requires
+   `DETECT_EXITCODE=0`, `DETECT python=found` (Python on PATH is already part of the
+   image contract below), a **definite** `DETECT pyside6=` and `DETECT docker=` verdict
+   either way (`missing` is the expected answer on a minimal image — a docker-equipped
+   image must also pass), and a `DETECT winget=` line.
+2. **MARKER leg** (unchanged) — `snapdragon-studio.bat --print-command --backend
+   native > MARKER.txt` must exit `0` **and** emit a `build-*-stage4.sh` command.
+
+A missing `MARKER.txt` is still INCONCLUSIVE (guest hook/boot problem); a present
+`MARKER.txt` with a missing/failing `DETECT.txt` is a **FAIL** — the detect leg runs
+first, so that points at the shipped `.bat`, not the guest.
 
 Because we cannot ship a Windows image, the guest is **operator-provided** (like the
 Gentoo build prerequisites above):
@@ -112,8 +126,8 @@ Gentoo build prerequisites above):
   is **not** needed for `--print-command` (it is Qt-free);
 - **autologon** to the desktop, and a **Startup / SetupComplete hook** that runs
   `D:\run-selftest.bat` — the tiny runner the harness places at the payload-disk root.
-  It `cd`s into `D:\studio`, runs `snapdragon-studio.bat --print-command --backend
-  native`, appends `EXITCODE=%ERRORLEVEL%`, and `shutdown /s /t 0`.
+  It `cd`s into `D:\studio`, runs the `/detect` leg, then `snapdragon-studio.bat
+  --print-command --backend native`, appends the exit codes, and `shutdown /s /t 0`.
 
 The base image is never mutated (a throwaway qcow2 overlay is booted on top); the
 payload FAT the guest sees as **`D:`** is rebuilt per run.
@@ -130,7 +144,9 @@ WINDOWS_QEMU_IMAGE=/srv/vm/win-min.qcow2 ./tests/qemu/windows-studio-e2e.sh --ti
 
 Without `WINDOWS_QEMU_IMAGE` (or qemu/OVMF/mtools) the real-boot path **SKIPS cleanly**
 (`SKIP: …`, exit 0), so CI stays green. The always-run **offline** half of this proof —
-that the `.bat` targets the right entrypoint and that
-`python -m snapdragon_studio --print-command` really emits a builder command on Linux —
-lives in the studio pytest suite (`studio/tests/test_bat_launcher.py`) and runs every
-pass.
+that the `.bat` targets the right entrypoint, that
+`python -m snapdragon_studio --print-command` really emits a builder command on Linux
+(`studio/tests/test_bat_launcher.py`), and the bootstrapper's static contract (CRLF,
+label resolution, pinned winget IDs, consent gating, the DETECT vocabulary — the same
+tokens this harness asserts; `studio/tests/test_bat_bootstrap.py`) — lives in the
+studio pytest suite and runs every pass.
