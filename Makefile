@@ -666,9 +666,14 @@ docker-image: ## build the self-contained Gentoo builder image (LONG first time:
 # baked in. IMAGE_GEN_TAG defaults to the registry ref the Job manifest
 # expects; an operator still has to `docker push` it and flip
 # admin-bff-api's imagegen.launch.enabled for any of this to go live.
+# GIT_SHA is baked into the image as GENERATOR_REV (see Dockerfile.image-gen)
+# purely for the build-image.sh terminal ingest message to report which
+# generator revision produced the image; falls back to empty (not a fake
+# placeholder) outside a git checkout so the message suffix just stays absent.
 IMAGE_GEN_TAG ?= registry.snapdragon.systems/snapdragon/image-gen:latest
+GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null)
 image-gen-docker-image: ## build the admin-bff-api image-gen Job worker (needs $(IMAGE) built first)
-	docker build -f docker/Dockerfile.image-gen -t $(IMAGE_GEN_TAG) .
+	docker build -f docker/Dockerfile.image-gen --build-arg GIT_SHA=$(GIT_SHA) -t $(IMAGE_GEN_TAG) .
 
 ## ── flash / emulate / test ────────────────────────────────────────────
 # These run HOST-side. flash writes /dev/sdX (inherently privileged -> SUDO).
