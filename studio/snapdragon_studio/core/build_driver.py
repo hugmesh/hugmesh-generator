@@ -60,9 +60,16 @@ def _askpass_helper_path() -> str | None:
 
 class BuildDriver:
     def __init__(self, generator_dir: str, host: HostInfo | None = None, *,
-                 graphical: bool = False):
+                 graphical: bool = False, workdir: str | None = None):
         self.generator_dir = os.path.abspath(generator_dir)
         self.host = host or detect()
+        # Runtime-only work-dir override (per-session artifact dirs, GUI dispatch).
+        # None (the default — every --print-* channel, the goldens, and the unit tests)
+        # keeps the computed out dir byte-identical to before: `cfg.output_dir or
+        # <generator>/out`. The override is DRIVER state, never config state — it is
+        # deliberately never written into cfg.output_dir, so config save/load and
+        # --print-specs round-trip untouched for the same config.
+        self.workdir = workdir
         # A GUI-launched build (True) must never route a sudo password prompt into an
         # invisible terminal: _elevation_prefix picks a GRAPHICAL auth path (sudo -A +
         # a Qt askpass, else pkexec) instead of bare `sudo`. A terminal/headless launch
@@ -136,7 +143,7 @@ class BuildDriver:
 
     def command(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:
         backend = backend or self.host.default_backend
-        out = cfg.output_dir or os.path.join(self.generator_dir, "out")
+        out = self.workdir or cfg.output_dir or os.path.join(self.generator_dir, "out")
         # cfg.platform picks the builder (x86/rpi5/frite/jetson); all four scripts sit
         # at the generator-repo root, so ./<script> works both natively (cwd =
         # generator_dir) and in the container (the repo is mounted at /src).
@@ -238,7 +245,7 @@ class BuildDriver:
         """Run the build, calling on_line for each output line. Returns the exit code.
         Blocking — callers run it on a worker thread (the GUI uses a QThread)."""
         backend = backend or self.host.default_backend
-        out = cfg.output_dir or os.path.join(self.generator_dir, "out")
+        out = self.workdir or cfg.output_dir or os.path.join(self.generator_dir, "out")
         os.makedirs(out, exist_ok=True)
         return self._stream(self.command(cfg, backend), on_line, backend)
 
@@ -254,7 +261,7 @@ class BuildDriver:
 
     def iter_run(self, cfg: ImageConfig, backend: str | None = None) -> Iterator[str]:
         backend = backend or self.host.default_backend
-        out = cfg.output_dir or os.path.join(self.generator_dir, "out")
+        out = self.workdir or cfg.output_dir or os.path.join(self.generator_dir, "out")
         os.makedirs(out, exist_ok=True)
         proc = self._spawn(self.command(cfg, backend), backend)
         assert proc.stdout is not None

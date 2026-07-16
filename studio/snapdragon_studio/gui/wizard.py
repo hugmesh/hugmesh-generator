@@ -48,6 +48,10 @@ class StudioWizard(QtWidgets.QWizard):
         # The active worklist envelope (mesh: the WorklistPage builds it; standalone/cloud:
         # BuildPage synthesizes a 1-entry worklist at Build time). None until a page sets it.
         self.worklist = None
+        # The build-session id of the NEXT dispatch (core/build_sessions): minted lazily
+        # by BuildPage's preview (so preview == dispatch), pinned by a RESTART (same
+        # record + workdir reused), cleared by ProgressPage at finish.
+        self.pending_session_id = None
         # graphical=True: a build reached from the GUI must elevate through a password
         # DIALOG (sudo -A askpass / pkexec), never a sudo prompt on an invisible terminal.
         self.driver = BuildDriver(self.generator_dir, self.host, graphical=True)
@@ -137,6 +141,44 @@ class StudioWizard(QtWidgets.QWizard):
         self.cfg = base
         self.worklist = wl
         self.restart()
+
+    def load_session(self, data):
+        """REDO ("edit as new"): load a session record's config snapshot — the full
+        worklist envelope dict — back into the wizard. Exactly load_config minus the
+        file read; the user lands on Welcome with every page pre-populated and walks
+        the config pages to edit. The eventual Build mints a FRESH session id/workdir
+        (pending_session_id is cleared here)."""
+        wl = worklist_mod.WorklistConfig.from_dict(data)
+        self.cfg = wl.base
+        self.worklist = wl
+        self.pending_session_id = None
+        self.restart()
+
+    def start_build_from_session(self, session, resume=False):
+        """RESTART: re-dispatch a session's exact recorded config into the SAME
+        per-session workdir. Restores the recorded dispatch params (backend /
+        generate-keys), optionally sets --resume on the base config (the builders'
+        documented reuse-the-build-tree flag — a user-chosen runtime option), pins
+        pending_session_id = session.id so ProgressPage reuses the record + workdir
+        (status back to running, restarts incremented, prior outcome archived), and
+        jumps straight to the terminal progress page. Safe without extra guards:
+        ProgressPage.initializePage re-runs the full preflight and refuses to launch
+        on failure (the existing direct/back-nav defence)."""
+        wl = worklist_mod.WorklistConfig.from_dict(session.config)
+        # Explicitly assign (not merely raise) the flag: a prior resume-restart
+        # re-snapshots resume=true into the persisted record, so an UNCHECKED box
+        # must actively clear it or --resume ratchets on for every later restart.
+        wl.base.resume = bool(resume)
+        self.cfg = wl.base
+        self.worklist = wl
+        self.build_backend = session.backend
+        self.generate_node_keys = session.generate_keys
+        self.pending_session_id = session.id
+        self.setStartId(self._page_ids["progress"])
+        try:
+            self.restart()
+        finally:
+            self.setStartId(-1)      # restore the normal first page for later flows
 
     def save_config(self, path):
         """Persist the current config, blanking plaintext secrets (returns the aggregated

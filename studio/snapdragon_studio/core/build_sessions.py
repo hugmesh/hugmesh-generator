@@ -1,0 +1,363 @@
+"""Build-session records — durable per-dispatch build history (model + IO, no Qt).
+
+Every GUI-dispatched build run becomes a persisted :class:`BuildSession`: id +
+timestamps + a human label, the FULL config snapshot (the same worklist envelope
+``Save config…`` writes, secrets blanked), the per-session artifact workdir
+(``<out>/sessions/<id>/`` — see :func:`session_workdir`), the dispatch params, final
+status and per-image outcomes, and a pointer to the per-session ``build.log``.
+
+Records live one-file-per-session under :func:`sessions_dir` — the exact same
+directory family AND ``$SNAPDRAGON_STUDIO_STATE_DIR`` override as the tray's
+``build_status_path()`` (gui/tray.py), so the tests' ``_isolated_state_dir`` fixture
+isolates both for free.
+
+Write discipline (all best-effort, atomic tmp+``os.replace`` — a build must NEVER
+die because a record could not be written, mirroring ``tray.write_build_status``):
+
+* :func:`start` — at REAL dispatch, status ``running`` + pid/hostname;
+* :func:`update_image` — one atomic rewrite per image completion (never per line),
+  so a later crash still preserves partial truth;
+* :func:`finish` — terminal status + the failed rows' error tails.
+
+Crash honesty: a SIGKILL'd/crashed Studio simply leaves the last-written record —
+status ``running`` with whatever per-image outcomes were true. :func:`load_all`
+never rewrites records; :func:`is_stale` lets a UI RENDER "running (process gone)"
+without ever mutating the record into a fake terminal state. Corrupt JSON files are
+skipped (surfaced via :func:`scan` as unreadable paths), never a crash.
+
+Qt-free by construction (the :mod:`.worklist_driver` precedent) — imported by the
+GUI pages and driven directly by the pure-core tests.
+"""
+from __future__ import annotations
+
+import json
+import os
+import socket
+import uuid
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from typing import Any
+
+from .config import SECRET_FIELDS
+from .worklist import WorklistConfig
+
+# Session terminal/lifecycle states. Per-image states reuse the worklist_driver
+# vocabulary (queued/running/ok/failed/stopped) verbatim.
+RUNNING, COMPLETE, FAILED, STOPPED = "running", "complete", "failed", "stopped"
+
+# How many trailing log lines finish() keeps per FAILED image (the error pointer a
+# "View errors" affordance renders without re-reading a multi-GB build.log).
+ERROR_TAIL_LINES = 40
+
+LOG_NAME = "build.log"   # the builders' LOG_FILE basename (keys off -w)
+
+
+# ── paths ─────────────────────────────────────────────────────────────────────────────
+def sessions_dir() -> str:
+    """The session-record directory. Honours ``$SNAPDRAGON_STUDIO_STATE_DIR`` (tests /
+    hygiene) exactly like ``tray.build_status_path``; defaults to
+    ``~/.snapdragon/studio/sessions``."""
+    base = os.environ.get("SNAPDRAGON_STUDIO_STATE_DIR") or os.path.join(
+        os.path.expanduser("~"), ".snapdragon", "studio")
+    return os.path.join(base, "sessions")
+
+
+def session_workdir(out_dir: str, session_id: str) -> str:
+    """The per-session ARTIFACT dir: ``<out>/sessions/<id>/``. Everything a GUI run
+    lands in the shared ``<out>`` today (the per-entry ``wl-*`` trees, ``build.log``,
+    the mesh manifest, ``keys-*``) lands here instead — applied as a runtime driver
+    ``workdir`` override at dispatch, NEVER written into the config (goldens /
+    ``--print-command`` keep the non-session default for the same config)."""
+    return os.path.join(os.path.abspath(out_dir), "sessions", session_id)
+
+
+def new_session_id() -> str:
+    """A sortable id: ``%Y%m%d-%H%M%S-`` + 6 hex chars (uniqueness within the second)."""
+    return datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
+
+
+def _now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+# ── labels ────────────────────────────────────────────────────────────────────────────
+def derive_label(wl: WorklistConfig) -> str:
+    """A human row label: 1 entry -> ``role · platform[ · board/flavor]``;
+    N entries -> ``mesh · N images (platforms)``."""
+    entries = wl.entries
+    if len(entries) == 1:
+        e = entries[0]
+        parts = [e.role or "(role unset)", e.platform or "x86"]
+        axis = e.board or e.flavor
+        if axis:
+            parts.append(axis)
+        return " · ".join(parts)
+    platforms: list[str] = []
+    for e in entries:
+        if e.platform and e.platform not in platforms:
+            platforms.append(e.platform)
+    return f"mesh · {len(entries)} images ({', '.join(platforms)})"
+
+
+# ── the record ────────────────────────────────────────────────────────────────────────
+@dataclass
+class BuildSession:
+    """One persisted build-creation session (see the module docstring)."""
+    id: str = ""
+    created: str = ""                 # first minted
+    started: str = ""                 # latest run's dispatch time
+    finished: str = ""                # latest run's terminal time ("" while running)
+    label: str = ""                   # derive_label() summary
+    # the FULL worklist envelope (WorklistConfig.to_dict(), secrets blanked) — reload
+    # is WorklistConfig.from_dict, byte-compatible with what Save config… writes.
+    config: dict = field(default_factory=dict)
+    # SECRET_FIELDS that were set at dispatch but NOT persisted (same blanking rule as
+    # save) — RESTART/REDO warn the user to re-enter them instead of failing silently.
+    blanked_secrets: list = field(default_factory=list)
+    workdir: str = ""                 # absolute per-session artifact dir
+    backend: str | None = None        # exact dispatch params BuildPage stashes
+    generate_keys: bool = True
+    status: str = RUNNING             # running | complete | failed | stopped
+    # [{id, role, platform, status, exit_code, keys_ok}] — mirrors EntryResult.
+    images: list = field(default_factory=list)
+    log_path: str = ""                # <workdir>/build.log (the builders' LOG_FILE)
+    error_tail: dict = field(default_factory=dict)   # {image_id: [last ~40 lines]}
+    pid: int | None = None            # crash honesty: is_stale() probes this
+    hostname: str = ""
+    restarts: int = 0                 # RESTART count (== len(runs) - 1)
+    runs: list = field(default_factory=list)         # dispatch timestamps, oldest first
+    history: list = field(default_factory=list)      # prior runs' outcomes (RESTART)
+
+    def path(self) -> str:
+        return os.path.join(sessions_dir(), f"{self.id}.json")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "BuildSession":
+        if not isinstance(d, dict):
+            raise ValueError("session record must be a JSON object")
+        known = set(cls.__dataclass_fields__)  # type: ignore[attr-defined]
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+    def worklist(self) -> WorklistConfig:
+        """The config snapshot as a live WorklistConfig (RESTART/REDO's round-trip)."""
+        return WorklistConfig.from_dict(self.config)
+
+
+# ── construction at dispatch ──────────────────────────────────────────────────────────
+def new_session(wl: WorklistConfig, generator_dir: str, *,
+                backend: str | None = None, generate_keys: bool = True,
+                session_id: str | None = None) -> BuildSession:
+    """Assemble the BuildSession for a dispatch (no write — :func:`start` writes).
+
+    ``session_id`` naming an EXISTING record means RESTART: the record is reloaded and
+    UPDATED in place — its prior outcome (status/images/error_tail) is archived into
+    ``history`` rather than silently erased, and the same workdir is reused. A fresh /
+    unknown id creates a new record with a fresh ``<out>/sessions/<id>/`` workdir."""
+    out = wl.base.output_dir or os.path.join(os.path.abspath(generator_dir), "out")
+    sid = session_id or new_session_id()
+
+    s: BuildSession | None = None
+    if session_id:
+        try:
+            s = load(os.path.join(sessions_dir(), f"{session_id}.json"))
+        except (OSError, ValueError):
+            s = None
+    if s is not None and s.status != RUNNING:      # archive the prior run's truth
+        s.history.append({"started": s.started, "finished": s.finished,
+                          "status": s.status, "images": s.images,
+                          "error_tail": s.error_tail})
+    if s is None:
+        s = BuildSession(id=sid, created=_now())
+        s.workdir = session_workdir(out, sid)
+
+    s.label = derive_label(wl)
+    s.config = wl.to_dict()                        # secrets blanked (the save rule)
+    s.blanked_secrets = [k for k in SECRET_FIELDS if getattr(wl.base, k, "")]
+    s.backend = backend
+    s.generate_keys = generate_keys
+    s.images = [{"id": e.id, "role": e.role, "platform": e.platform,
+                 "status": "queued", "exit_code": None, "keys_ok": None}
+                for e in wl.entries]
+    s.error_tail = {}
+    s.log_path = os.path.join(s.workdir, LOG_NAME)
+    return s
+
+
+# ── write points (atomic, best-effort — exactly like tray.write_build_status) ─────────
+def save(s: BuildSession) -> None:
+    """Atomically persist the record. Best-effort: a build must never die because a
+    record could not be written."""
+    path = s.path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(s.to_dict(), fh, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def start(s: BuildSession) -> None:
+    """START write, at REAL dispatch: status ``running`` + pid/hostname. On a RESTART
+    the same record flips back to running with ``restarts`` incremented and the new
+    dispatch appended to ``runs``."""
+    s.started = _now()
+    s.finished = ""
+    s.status = RUNNING
+    s.pid = os.getpid()
+    s.hostname = socket.gethostname()
+    s.runs.append(s.started)
+    s.restarts = max(0, len(s.runs) - 1)
+    save(s)
+
+
+def update_image(s: BuildSession, index: int, *, status: str,
+                 exit_code: int | None = None, keys_ok: bool | None = None) -> None:
+    """Per-image completion write (one atomic rewrite per image, never per line) so a
+    later crash still preserves partial truth."""
+    if 0 <= index < len(s.images):
+        s.images[index].update(status=status, exit_code=exit_code, keys_ok=keys_ok)
+    save(s)
+
+
+def finish(s: BuildSession, status: str,
+           error_tail: dict[str, list[str]] | None = None) -> None:
+    """FINISH write: the terminal status (complete/failed/stopped) plus the failed
+    rows' error tails (the honest error pointer, never fabricated)."""
+    s.finished = _now()
+    s.status = status
+    s.error_tail = {k: list(v)[-ERROR_TAIL_LINES:] for k, v in (error_tail or {}).items()}
+    save(s)
+
+
+def overall_status(image_statuses: list[str]) -> str:
+    """The session's terminal status from the per-image driver results: all ok ->
+    complete; any failed -> failed; else stopped (mirrors summary_exit_code's
+    tolerance semantics without inventing a new state)."""
+    if image_statuses and all(st == "ok" for st in image_statuses):
+        return COMPLETE
+    if any(st == "failed" for st in image_statuses):
+        return FAILED
+    return STOPPED
+
+
+# ── reads ─────────────────────────────────────────────────────────────────────────────
+def load(path: str) -> BuildSession:
+    """Load one record; raises OSError/ValueError on a missing/corrupt file."""
+    with open(path, encoding="utf-8") as fh:
+        return BuildSession.from_dict(json.load(fh))
+
+
+def scan() -> tuple[list[BuildSession], list[str]]:
+    """All records newest-first (the sortable id is the sort key) plus the paths of
+    unreadable/corrupt files — surfaced, never rewritten, never a crash."""
+    sessions: list[BuildSession] = []
+    unreadable: list[str] = []
+    try:
+        names = sorted(os.listdir(sessions_dir()), reverse=True)
+    except OSError:
+        return [], []
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(sessions_dir(), name)
+        try:
+            sessions.append(load(path))
+        except (OSError, ValueError):
+            unreadable.append(path)
+    return sessions, unreadable
+
+
+def load_all() -> list[BuildSession]:
+    """The readable records, newest-first. Never rewrites anything on disk."""
+    return scan()[0]
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True         # exists but not ours / unknown — do not claim it died
+    return True
+
+
+def is_stale(s: BuildSession) -> bool:
+    """True when a record says ``running`` but its recorded pid (on THIS host) is gone
+    — the UI renders "running (process gone — likely interrupted)". Purely a RENDER
+    hint: the record itself is never mutated into a fake terminal state. A running
+    record from another host is never called stale (we cannot probe it)."""
+    return (s.status == RUNNING and bool(s.pid)
+            and s.hostname == socket.gethostname()
+            and not _pid_alive(int(s.pid)))
+
+
+# ── pre-session (unmanaged) discovery ─────────────────────────────────────────────────
+@dataclass
+class UnmanagedBuild:
+    """A best-effort discovered pre-session build tree: a ``wl-<role>.<platform>``
+    dir under the default out dir that no session record owns. Status is honestly
+    ``unknown`` — never fabricated — and no config snapshot exists (Restart/Redo do
+    not apply)."""
+    path: str
+    role: str
+    platform: str
+    mtime: float
+    has_log: bool
+    log_path: str
+
+
+def discover_unmanaged(out_dir: str) -> list[UnmanagedBuild]:
+    """Scan ``out_dir`` (top level only — session trees live under ``out/sessions/``
+    and are never scanned) for ``wl-<role>.<platform>`` build dirs, newest first.
+    Best-effort: an unreadable out dir yields an empty list."""
+    found: list[UnmanagedBuild] = []
+    legacy_log = os.path.join(out_dir, LOG_NAME)
+    has_legacy_log = os.path.isfile(legacy_log)
+    try:
+        names = os.listdir(out_dir)
+    except OSError:
+        return []
+    for name in names:
+        if not name.startswith("wl-") or "." not in name[3:]:
+            continue
+        path = os.path.join(out_dir, name)
+        if not os.path.isdir(path):
+            continue
+        role, _, platform = name[3:].rpartition(".")
+        try:
+            mtime = os.stat(path).st_mtime
+        except OSError:
+            mtime = 0.0
+        found.append(UnmanagedBuild(path=path, role=role, platform=platform,
+                                    mtime=mtime, has_log=has_legacy_log,
+                                    log_path=legacy_log))
+    found.sort(key=lambda u: u.mtime, reverse=True)
+    return found
+
+
+# ── search (dumb, fast, unit-testable) ────────────────────────────────────────────────
+def session_haystack(s: BuildSession) -> str:
+    """The precomputed lowercase filter haystack for a session row: label + roles +
+    platforms + status + ISO date."""
+    parts = [s.label, s.status, s.created, s.started]
+    for img in s.images:
+        parts += [str(img.get("role", "")), str(img.get("platform", ""))]
+    return " ".join(p for p in parts if p).lower()
+
+
+def unmanaged_haystack(u: UnmanagedBuild) -> str:
+    return " ".join([u.role, u.platform, "unknown", "unmanaged",
+                     datetime.fromtimestamp(u.mtime).isoformat(timespec="seconds")
+                     if u.mtime else ""]).lower()
+
+
+def matches(haystack: str, query: str) -> bool:
+    """Case-insensitive substring match: every whitespace-separated term of ``query``
+    must appear in the haystack."""
+    return all(tok in haystack for tok in query.lower().split())

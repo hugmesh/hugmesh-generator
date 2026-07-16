@@ -20,12 +20,15 @@ import os
 
 from ..qt import QtCore, QtWidgets, Signal
 from ._scroll import scrollable
+from ...core import build_sessions
 from ...core import flash_targets
 from ...core import worklist as worklist_mod
+from ...core.build_driver import BuildDriver
 from ...core.config import (ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE, image_class,
                             resolve_platform_defaults)
 from ...core.worklist_driver import WorklistDriver
-from ._gating import clear_unsupported, gate_widgets
+from ._device_table import DeviceTable
+from ._gating import clear_unsupported, gate_widgets, platform_supports, unsupported_note
 from ._widgets import _file_picker, _row
 from .packages_dialog import PackagesDialog
 
@@ -127,7 +130,9 @@ class BuildPage(QtWidgets.QWizardPage):
         # mesh run state (populated in initializePage when mode == mesh)
         self._wl_driver: WorklistDriver | None = None
         self._materialized: list = []
-        self._flash_after_targets: list = []
+        # the keys-USB dir last written through the keys_usb field by a device-table
+        # assignment (so un-assigning never clobbers a hand-typed path)
+        self._assigned_keys_dir = ""
 
         lay = scrollable(self)
         self.backend = QtWidgets.QComboBox()
@@ -239,21 +244,17 @@ class BuildPage(QtWidgets.QWizardPage):
         self.image_only = QtWidgets.QCheckBox(
             "Image only — skip the live/installer media (--image-only; frite/jetson/orangepi*)")
         arl.addWidget(self.image_only)
-        # flash-with-build opt-in (never on by default): when a removable/SD/eMMC target
-        # is attached, offer to flash the just-built artifact to it after a successful
-        # build. The actual write still goes through scripts/flash-disk.sh (typed-path
-        # confirm re-validated by the GUI, unmount, whole-disk refusal, the real dd) on
-        # the ProgressPage — this only records the intent + the chosen device.
-        self.flash_after = QtWidgets.QCheckBox(
-            "After a successful build, flash to an attached device…  (off by default)")
-        self.flash_after.setChecked(False)
-        arl.addWidget(self.flash_after)
-        self.flash_after_combo = QtWidgets.QComboBox()
-        self.flash_after_row = _row("Flash target", self.flash_after_combo)
-        arl.addWidget(self.flash_after_row)
-        self.flash_after.toggled.connect(
-            lambda on: self.flash_after_combo.setEnabled(on and self.flash_after_combo.count() > 0))
         lay.addWidget(art)
+
+        # per-device flash / keys assignment table (replaces the old single-target
+        # flash-with-build checkbox+dropdown). Every row defaults to "(none)" so no
+        # flashing is ever the commit default; the actual write still goes through
+        # scripts/flash-disk.sh on the ProgressPage (post-build, TOCTOU re-checked),
+        # and a Keys-USB assignment writes through the existing keys_usb field below.
+        self.device_table = DeviceTable(images_provider=self._flash_image_choices,
+                                        keys_gate=self._keys_gate,
+                                        on_assignment_changed=self._on_device_assignment)
+        lay.addWidget(self.device_table)
 
         # Secure Boot + KEYS-USB signing chain (G5; x86 only). The builder default is
         # ON with a THROWAWAY org key — threading the existing fleet key/cert PATHS
@@ -337,6 +338,7 @@ class BuildPage(QtWidgets.QWizardPage):
         self.backend.currentIndexChanged.connect(lambda _=0: self._schedule_recompute())
         # never leave a probe thread running past the wizard
         self.wiz.finished.connect(self._join_preflight_worker)
+        self.wiz.finished.connect(lambda *_a: self.device_table.join())
 
     def initializePage(self):
         self.wiz.collect_all()
@@ -418,12 +420,22 @@ class BuildPage(QtWidgets.QWizardPage):
             "secure_boot": self.sb_box,
             "distdir": self.distdir_row,
         }, hide=True)
-        self._refresh_flash_after_targets()
+        self.device_table.refresh()          # auto-refresh the device table on entry
         self._preview()
 
     def _backend(self):
         b = self.backend.currentText()
         return None if b == "auto" else b
+
+    def _pending_session_workdir(self) -> str:
+        """The per-session artifact dir the NEXT dispatch will use. Mints the session id
+        ONCE per build attempt (lazily): Back-and-forth reuses the same id, and
+        ProgressPage clears wiz.pending_session_id at finish so a second run mints a
+        new one. Runtime driver state only — never written into cfg.output_dir."""
+        if not getattr(self.wiz, "pending_session_id", None):
+            self.wiz.pending_session_id = build_sessions.new_session_id()
+        out = self.wiz.cfg.output_dir or os.path.join(self.wiz.generator_dir, "out")
+        return build_sessions.session_workdir(out, self.wiz.pending_session_id)
 
     # ---- worklist assembly (the commit shape) ----------------------------------
     def _current_worklist(self):
@@ -494,7 +506,13 @@ class BuildPage(QtWidgets.QWizardPage):
             # is shared and re-edited/saved, so it must never be mutated by a preview render.
             pc = copy.deepcopy(c)
             resolve_platform_defaults(pc)
-            cmdline = self.wiz.driver.command_string(pc, self._backend())
+            # Session-aware preview honesty: the GUI dispatch runs with the per-session
+            # workdir (-w <out>/sessions/<id>/ — ProgressPage consumes the same pending
+            # id), so the pane must show LITERALLY that argv. Headless --print-command
+            # keeps the default because a headless run really uses the default.
+            cmdline = BuildDriver(self.wiz.generator_dir, self.wiz.host, graphical=True,
+                                  workdir=self._pending_session_workdir()
+                                  ).command_string(pc, self._backend())
         except ValueError as e:  # e.g. unbalanced quotes in the extra-flags escape hatch
             self.cmd.setPlainText("")
             self.log.setPlainText(f"Command error: {e}")
@@ -579,35 +597,41 @@ class BuildPage(QtWidgets.QWizardPage):
         except Exception as e:
             return [f"cannot assemble the build: {e}"]
 
-    def _refresh_flash_after_targets(self) -> None:
-        """Populate the flash-with-build target combo from a READ-ONLY device scan
-        (flash_targets.list_targets); hide/grey the opt-in when nothing is attached so
-        the default stays non-destructive."""
+    # ---- device table (flash / keys assignment) ----------------------------------
+    def _flash_image_choices(self) -> list[tuple]:
+        """[(entry_id, role, platform)] for the per-device Image combo — the would-be-
+        committed worklist (mesh = the WorklistPage selection; standalone/cloud = the
+        synthesized 1-entry shape, so the combo shows exactly one image and the
+        single-image case degrades gracefully)."""
         try:
-            targets = flash_targets.list_targets()
+            wl = self._current_worklist()
         except Exception:
-            targets = []
-        # keep the FlashTarget objects (not just paths) so validatePage can stash a
-        # stable device IDENTITY for ProgressPage's auto-flash TOCTOU guard.
-        self._flash_after_targets = targets
-        prev = self.flash_after_combo.currentData()
-        self.flash_after_combo.clear()
-        for t in targets:
-            self.flash_after_combo.addItem(t.label(), t.path)
-        if prev is not None:
-            i = self.flash_after_combo.findData(prev)
-            if i >= 0:
-                self.flash_after_combo.setCurrentIndex(i)
-        has = bool(targets)
-        self.flash_after.setEnabled(has)
-        self.flash_after_row.setVisible(has)
-        if not has:
-            self.flash_after.setChecked(False)
-            self.flash_after.setToolTip(
-                "No attached removable / SD / eMMC target detected.")
-        else:
-            self.flash_after.setToolTip("")
-        self.flash_after_combo.setEnabled(has and self.flash_after.isChecked())
+            return []
+        return [(e.id, e.role, e.platform) for e in wl.entries]
+
+    def _keys_gate(self) -> tuple:
+        """(allowed, reason) for the table's Keys-USB role: keys_usb is platform-gated
+        (x86-only today per PLATFORM_FIELD_SUPPORT) — an assignment the builder would
+        silently drop is never offered (the hide-inapplicable honesty rule)."""
+        platform = self.wiz.cfg.platform
+        return (platform_supports("keys_usb", platform), unsupported_note(platform))
+
+    def _on_device_assignment(self) -> None:
+        """A Keys-USB assignment writes THROUGH the existing keys_usb line edit, so
+        cfg.keys_usb flows down the pre-existing --keys-usb emission and the command
+        preview updates immediately (no new argv path). Un-assigning clears the field
+        only while it still equals the assigned dir — never a hand-typed path."""
+        ka = self.device_table.keys_assignment()
+        assigned = ka[1] if ka else ""
+        if assigned:
+            if self.keys_usb.text().strip() != assigned:
+                self.keys_usb.setText(assigned)
+                self._preview()
+        elif self._assigned_keys_dir and \
+                self.keys_usb.text().strip() == self._assigned_keys_dir:
+            self.keys_usb.setText("")
+            self._preview()
+        self._assigned_keys_dir = assigned
 
     def _set_problems(self, problems: list[str]) -> None:
         self._problems = problems
@@ -616,8 +640,11 @@ class BuildPage(QtWidgets.QWizardPage):
     # ---- mesh worklist summary --------------------------------------------------
     def _refresh_worklist_table(self):
         try:
+            # workdir: the per-entry Preview buttons must show the session -w the real
+            # dispatch will use (same honesty rule as the main command pane above).
             self._wl_driver = WorklistDriver(self.wiz.generator_dir, self._current_worklist(),
-                                             host=self.wiz.host, backend=self._backend())
+                                             host=self.wiz.host, backend=self._backend(),
+                                             workdir=self._pending_session_workdir())
             self._materialized = self._wl_driver.materialize()
         except Exception as e:
             self._materialized = []
@@ -710,11 +737,26 @@ class BuildPage(QtWidgets.QWizardPage):
         self.wiz.build_backend = self._backend()
         self.wiz.generate_node_keys = (self.gen_keys.isChecked()
                                        if self.wiz.cfg.mode == "mesh" else True)
-        # flash-with-build opt-in (default OFF): stash the full FlashTarget (path + size +
-        # model) so ProgressPage can re-validate device IDENTITY, not just the /dev path,
-        # before it auto-launches the flasher (the only auto path) — a TOCTOU guard for a
-        # device swapped onto the same node during a long build.
-        path = self.flash_after_combo.currentData() if self.flash_after.isChecked() else None
-        target = next((t for t in self._flash_after_targets if t.path == path), None)
-        self.wiz.flash_after = (self.flash_after.isChecked() and target is not None, target)
+        # per-device post-build flash plan (default: EMPTY — every row's Role combo
+        # defaults to "(none)", so no flashing is ever the commit default). Each
+        # assignment stashes the full FlashTarget identity (path + size + model) so
+        # ProgressPage can re-run the TOCTOU identity check before writing anything.
+        entries = {e.id: e for e in self.wiz.worklist.entries}
+        work_dir = (self.wiz.cfg.output_dir
+                    or os.path.join(self.wiz.generator_dir, "out"))
+        plan = []
+        for target, entry_id in self.device_table.flash_assignments():
+            entry = entries.get(entry_id)
+            if entry is None:
+                continue                # image no longer in the committed worklist
+            role = (entry.role if entry.role in flash_targets.FLASH_ROLE_TOKENS
+                    else "host")        # flash-disk.sh's --role token set
+            plan.append(flash_targets.FlashAssignment(
+                target=target, entry_id=entry_id, role=role,
+                arch=flash_targets.arch_for_platform(entry.platform),
+                work_dir=work_dir))
+        self.wiz.flash_plan = plan
+        # legacy single-target stash kept (always OFF — the table superseded it) so
+        # ProgressPage's legacy tuple branch and its tests are untouched.
+        self.wiz.flash_after = (False, None)
         return True

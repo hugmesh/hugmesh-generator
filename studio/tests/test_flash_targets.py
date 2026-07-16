@@ -6,6 +6,7 @@ size sanity), the system-disk exclusion (the disk backing '/'), the sysfs fallba
 that flash_argv produces a SAFE flash-disk.sh invocation (never a raw dd).
 """
 import json
+import os
 
 from snapdragon_studio.core import flash_targets as ft
 from snapdragon_studio.core.flash_targets import FlashTarget
@@ -133,3 +134,117 @@ def test_arch_for_platform():
     assert ft.arch_for_platform("orangepi5") == "arm64"
     assert ft.arch_for_platform("x86") == "x86"
     assert ft.arch_for_platform("") == "x86"
+
+
+# ── label / mountpoint decoration (the device-table columns) ──────────────────────────
+def test_label_and_mountpoints_collected_from_children(monkeypatch):
+    """LABEL/MOUNTPOINT ride the SAME single lsblk call: the first non-empty child
+    partition LABEL and every descendant MOUNTPOINT decorate the target (read-only)."""
+    data = {"blockdevices": [
+        {"name": "sdb", "path": "/dev/sdb", "tran": "usb", "rm": True, "type": "disk",
+         "size": 16 * GIB, "hotplug": True, "model": "Ultra USB 3.0", "vendor": "SanDisk",
+         "label": None, "mountpoint": None,
+         "children": [
+             {"name": "sdb1", "path": "/dev/sdb1", "type": "part", "rm": True,
+              "size": 15 * GIB, "hotplug": True, "label": "KEYS",
+              "mountpoint": "/run/media/magus/KEYS"}]},
+        {"name": "mmcblk0", "path": "/dev/mmcblk0", "tran": None, "rm": False,
+         "type": "disk", "size": 16 * GIB, "hotplug": False, "model": "SD16G",
+         "vendor": None, "label": None, "mountpoint": None},
+    ]}
+    _stub_lsblk(monkeypatch, data)
+    monkeypatch.setattr(ft, "_root_source", lambda: "/dev/nvme0n1p2")
+    by_path = {t.path: t for t in ft.list_targets()}
+    sdb = by_path["/dev/sdb"]
+    assert sdb.fs_label == "KEYS"
+    assert sdb.mountpoints == ("/run/media/magus/KEYS",)
+    assert sdb.mounted is True
+    mmc = by_path["/dev/mmcblk0"]
+    assert mmc.fs_label == "" and mmc.mountpoints == () and mmc.mounted is False
+
+
+def test_flashtarget_trailing_fields_are_defaulted_positional_compat():
+    """The frozen dataclass grew ONLY trailing defaulted fields: every pre-existing
+    positional constructor call keeps working and yields the same detection shape."""
+    t = FlashTarget("/dev/sdb", 16 * GIB, "SD", "usb", True, "usb")
+    assert t.fs_label == "" and t.mountpoints == () and t.mounted is False
+
+
+# ── FlashAssignment / assignment_argv (the Review-page per-device plan) ───────────────
+def test_assignment_argv_is_safe_flash_disk_sh_call():
+    """assignment_argv delegates whole to the existing flash_argv — the script path is
+    the argv head (after the askpass launcher) and 'dd' never appears: no second write
+    path exists."""
+    t = FlashTarget("/dev/sdb", 16 * GIB, "SanDisk Ultra", "usb", True, "usb")
+    a = ft.FlashAssignment(target=t, entry_id="pki.rpi5", role="pki", arch="arm64",
+                           work_dir="/gen/out")
+    argv = ft.assignment_argv(a, generator_dir="/gen")
+    assert argv[:2] == ["sudo", "-A"]              # askpass launcher (no-tty case)
+    assert argv[2].endswith("scripts/flash-disk.sh")
+    assert argv[-1] == "/dev/sdb"                  # target device is the final positional
+    assert ("--role", "pki") == (argv[3], argv[4])
+    assert "--arch" in argv and "arm64" in argv
+    assert "--work-dir" in argv and "/gen/out" in argv
+    assert "dd" not in argv                        # never re-implemented here
+
+
+def test_assignment_argv_passes_the_concrete_artifact():
+    """The per-row image pick must be REAL: two assignments sharing a role token
+    (be.rpi5 + be.jetson are both --role be --arch arm64) would otherwise emit
+    byte-identical argvs and flash-disk.sh's newest-mtime role glob would write the
+    SAME image to both devices. The resolved per-entry artifact rides --artifact."""
+    t1 = FlashTarget("/dev/sdb", 16 * GIB, "SanDisk Ultra", "usb", True, "usb")
+    t2 = FlashTarget("/dev/sdc", 32 * GIB, "Cruzer", "usb", True, "usb")
+    a1 = ft.FlashAssignment(target=t1, entry_id="be.rpi5", role="be", arch="arm64",
+                            work_dir="/gen/out")
+    a2 = ft.FlashAssignment(target=t2, entry_id="be.jetson", role="be", arch="arm64",
+                            work_dir="/gen/out")
+    v1 = ft.assignment_argv(a1, generator_dir="/gen",
+                            artifact="/gen/out/snapdragon-rpi5-arm64-backend-x.img")
+    v2 = ft.assignment_argv(a2, generator_dir="/gen",
+                            artifact="/gen/out/snapdragon-jetson-arm64-backend-y.img")
+    assert v1 != v2                                # non-vacuous: the pick changes the argv
+    assert ("--artifact", "/gen/out/snapdragon-rpi5-arm64-backend-x.img") in \
+        zip(v1, v1[1:])
+    assert ("--artifact", "/gen/out/snapdragon-jetson-arm64-backend-y.img") in \
+        zip(v2, v2[1:])
+    assert "dd" not in v1 and "dd" not in v2
+
+
+# ── per-entry artifact tracking (snapshot diff around each sequential build) ──────────
+def _touch(path, mtime=None):
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("x")
+    if mtime is not None:
+        os.utime(path, (mtime, mtime))
+
+
+def test_snapshot_and_new_artifact_pick_the_entrys_own_image(tmp_path):
+    """new_artifact returns exactly the image the entry's build ADDED (or rewrote)
+    since its start baseline — never a pre-existing same-role image, never a
+    kernel/initramfs/squashfs blob that shares the .img extension."""
+    old = tmp_path / "snapdragon-rpi5-arm64-backend-old.img"
+    _touch(old, 1000)
+    base = ft.snapshot_artifacts(str(tmp_path))
+    assert set(base) == {"snapdragon-rpi5-arm64-backend-old.img"}
+    # the entry's build produces a NEW same-role image + a kernel blob
+    _touch(tmp_path / "snapdragon-jetson-arm64-backend-new.img", 2000)
+    _touch(tmp_path / "snapdragon-jetson-kernel.img", 3000)   # filtered blob
+    got = ft.new_artifact(str(tmp_path), base)
+    assert got == str(tmp_path / "snapdragon-jetson-arm64-backend-new.img")
+
+
+def test_new_artifact_detects_a_rewritten_image_and_prefers_img_over_iso(tmp_path):
+    img = tmp_path / "snapdragon-rpi5-arm64-be-x.img"
+    _touch(img, 1000)
+    base = ft.snapshot_artifacts(str(tmp_path))
+    _touch(img, 5000)                                          # rebuilt in place
+    _touch(tmp_path / "gentoo-rpi5-arm64-be-k8s-x.iso", 6000)  # newer iso also produced
+    assert ft.new_artifact(str(tmp_path), base) == str(img)    # .img preferred
+
+
+def test_new_artifact_empty_when_nothing_new_is_the_fail_safe(tmp_path):
+    _touch(tmp_path / "snapdragon-rpi5-arm64-be-x.img", 1000)
+    base = ft.snapshot_artifacts(str(tmp_path))
+    assert ft.new_artifact(str(tmp_path), base) == ""          # skip, never glob-guess
+    assert ft.new_artifact(str(tmp_path / "missing"), {}) == ""
