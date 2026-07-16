@@ -220,6 +220,23 @@ RUN mkdir -p /etc/portage/package.accept_keywords && \
       'dev-python/vcs-versioning **' \
       'dev-python/setuptools-scm **' \
       > /etc/portage/package.accept_keywords/snapdragon-host-build-backends
+# Same host-half logic for USE: the tree's default PYTHON_TARGETS has moved past
+# this root's dev-lang/python:3.12, so the accepted setuptools-scm-10.2 chain
+# (vcs-versioning → setuptools-83 → jaraco-*) aborts the "to /" batch with
+# "USE changes are necessary: >=dev-python/… python_targets_python3_12"
+# (reproduced against the failed 2026-07-16 jetson fleet sysroot). Bake the
+# 3.12-target seed in; the ARM stage4 scripts also write it at run time.
+RUN mkdir -p /etc/portage/package.use && \
+    printf '%s\n' \
+      '# Keep the python3.12 target enabled for host-side (BDEPEND "to /") installs —' \
+      '# twin of the sysroot/chroot specs' \
+      '# portage/package.use/python-targets seed (see that file for the rationale).' \
+      '*/* PYTHON_TARGETS: python3_12' \
+      '# The 3.12 tooling cascade pulls host dev-lang/python:3.12 → util-linux[pam] →' \
+      '# pam-1.7.2, whose pambase→passwdqc chain requires pam[audit] (twin of the' \
+      '# sysroot package.use/pam-audit seed; harmless in the build container).' \
+      'sys-libs/pam audit' \
+      > /etc/portage/package.use/snapdragon-host-build-backends
 RUN emerge --verbose --noreplace \
         sys-boot/shim \
         app-crypt/sbsigntools \

@@ -1,0 +1,11 @@
+# ── pam needs USE=audit on the hardened payload (tree drift 2026-07) ─────────
+# The synced tree's sys-libs/pam-1.7.2 upgrade sits on a chain the hardened/
+# SELinux payload always resolves (util-linux[pam] → pam → pambase[passwdqc] →
+# sys-auth/passwdqc), and passwdqc-2.1.0-r1 now requires pam built with
+# USE=audit. The sysroot's global USE carries selinux but not audit, so the
+# @world/payload emerge proposes ">=sys-libs/pam-1.7.2 audit" and ABORTS —
+# reproduced against the failed 2026-07-16 jetson fleet sysroot (session
+# 20260715-235432), queued directly behind the python-targets wall (see
+# package.use/python-targets). auditd IS the fleet posture, so enabling pam's
+# audit hooks is the honest resolution, not a workaround.
+sys-libs/pam audit

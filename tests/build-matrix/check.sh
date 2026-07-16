@@ -1437,7 +1437,9 @@ run_nongating_smokes() {
     local spec name path out rc
     for spec in "worklist-smoke:${TEST_DIR}/worklist-smoke.sh" \
                 "image-spec-parity:${REPO_DIR}/tests/build-image-spec-parity.sh" \
-                "image-spec-guards:${REPO_DIR}/tests/build-image-spec-guards.sh"; do
+                "image-spec-guards:${REPO_DIR}/tests/build-image-spec-guards.sh" \
+                "host-accept-keywords:${REPO_DIR}/tests/scripts/test-host-accept-keywords.sh" \
+                "python-targets-seed:${REPO_DIR}/tests/scripts/test-python-targets-seed.sh"; do
         name="${spec%%:*}"; path="${spec#*:}"
         if [ ! -f "${path}" ]; then
             SMOKE_REPORT+="  ${name}: SKIP (not present)"$'\n'; continue
