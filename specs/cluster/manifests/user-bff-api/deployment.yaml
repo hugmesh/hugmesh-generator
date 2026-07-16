@@ -236,7 +236,7 @@ spec:
             - { name: HS_TOKEN_PROXY_CLIENT_KEY_STORE_TYPE,   value: "PKCS12" }
             - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE,      value: "/stores/truststore.p12" }
             - { name: HS_TOKEN_PROXY_CLIENT_TRUST_STORE_TYPE, value: "PKCS12" }
-            # ── SSO OIDC login (user-bff now owns login, PR-1/5 routing) ──────────
+            # ── SSO OIDC login (user-bff owns native login: POST /bff/login) ──────
             # Enabling OIDC (app.bff.oidc.enabled) also gates AdminBffInternalClient:
             # when false the client is a fail-closed stub and EVERY account/session op
             # errors. Custody key (AES-256-GCM) encrypts the exchanged access/refresh

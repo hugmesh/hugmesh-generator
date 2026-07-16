@@ -1,10 +1,15 @@
-# Mesh repo-templating — current state (Phase 1 + Phase 2 pilot)
+# Mesh repo-templating — current state (Phases 1–7)
 
 This documents the additive Handlebars render engine + guardrails landed for the
-mesh repo-templating pilot. **Nothing about the existing single-brand behavior
-changes:** `sed` remains the default renderer and the default cluster-manifest
-path is untouched. Phase 1 = the engine + guardrails + parity gate (below).
-Phase 2 = the **login-ui overlay pilot** (see "Phase 2" at the end).
+mesh repo-templating effort, through **Phase 7** (cross-mesh decentralization).
+**Nothing about the existing single-brand behavior changes:** `sed` remains the
+default renderer and the default cluster-manifest path is untouched. Phase 1 =
+the engine + guardrails + parity gate (below). Phase 2 = the **login-ui overlay
+pilot** (see "Phase 2" below); Phase 4 = archetype-based full tenant-set
+rendering; Phase 5 = the first tailnet-internal publish (see
+[`PHASE5-DECISIONS.md`](PHASE5-DECISIONS.md)); Phase 6 = hardening the root
+mesh-node reconcile render path; Phase 7 = cross-mesh foreign-base ingestion +
+outbound exposure (below).
 
 ## ⚠️ CRITICAL CONSTRAINT — Node must never run as root on the mesh-node cron path
 

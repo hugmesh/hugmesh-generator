@@ -34,7 +34,7 @@ subdirs included.
 
 ## Current State
 
-_As of 2026-06-24. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
+_As of 2026-07-16. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
 
 - **✅ Hardened image fleet** — three RPi 5 role images (pki / backend / frontend)
   + the x86_64 GPU host, all SELinux **ENFORCING** with per-app MCS identities,
@@ -70,17 +70,33 @@ _As of 2026-06-24. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   Postgres table** (source of truth) via `GatewayRouteAccessFilter` —
   ADMIN/GAME-MASTER bypass within own domain, SUPERADMIN cross-domain. Because there
   is no front-channel redirect, **Casdoor needs no public ingress**; Cloudflare
-  fronts only the platform front door in prod. **Login/session/account logic is
-  RELOCATING from admin-bff → user-bff** (the shared core lives in
+  fronts only the platform front door in prod. **Login/session/account logic has
+  RELOCATED from admin-bff → user-bff** (the shared core lives in
   `snapdragon-auth-core`); account/session **data stays in admin-bff-db**, reached
   by user-bff via admin-bff `/bff/internal` over mTLS + `X-Internal-Token`. The
-  generator leg of this relocation (user-bff Casdoor confidential client with the
-  internal redirect-uri, relocated `/bff/login|register|me|session|provision`
-  fe-gateway routes, permitAll `/bff/login` route-access seed) has progressed on
-  `main` and **ships dark**: PR-1/5 (#156, OIDC client + login route seed), PR-2/5
-  (#171, user-bff native-login enable + gateway BFF-session filter) and PR-3/5
-  (#172, SSO custody-key + internal-token bootstrap seeding) are merged; PR-4/5 and
-  PR-5/5 remain **🚧 in-flight**.
+  generator leg of this relocation — the user-bff Casdoor confidential client with
+  the internal redirect-uri, the relocated `/bff/login|register|me|session|provision`
+  fe-gateway routes, the permitAll `/bff/login` route-access seed, and retiring the
+  dead `/bff/auth/callback` OAuth-redirect route the old browser-driven model used
+  — is **on `main` and lit by default**: `APP_BFF_OIDC_ENABLED` /
+  `APP_SESSION_COOKIE_ENABLED` / `APP_BFF_EXCHANGE_ENABLED` are all baked `"true"`
+  in `specs/cluster/manifests/{user,admin,mod}-bff-api/deployment.yaml`; only the
+  Casdoor client secret and the AES custody key remain ESO-secret-gated
+  (`optional: true`, populated from Vault before real logins work). Covered
+  end-to-end by [`tests/e2e/specs/27-native-login.spec.ts`](tests/e2e/specs/27-native-login.spec.ts),
+  which drives the real form and asserts the browser never navigates to a Casdoor
+  origin.
+- **✅ Casdoor MFA (TOTP + WebAuthn + recovery codes)** — enrollment/challenge live
+  in admin-bff via `snapdragon-auth-core`: `APP_CASDOOR_MFA_ENABLED` is baked
+  `"true"`, `APP_MFA_FACTOR_KEY` (ESO/Vault) encrypts enrolled TOTP secrets at
+  rest, and `APP_MFA_WEBAUTHN_RP_ID`/`_ORIGINS` are branded per-tenant (not left
+  on the dev-only `localhost` default); `login-ui`/`admin-ui` ship the
+  enroll/challenge/security pages. `mfa_satisfied` is stamped into the opaque
+  `bff_` session. **🔭 Remaining (ships dark):** the gateway's D8
+  privileged-MFA step-up floor (`GatewayRouteAccessFilter` +
+  `gateway_route_access.mfa_required`) is implemented but stays off behind
+  `app.mfa.enforce-privileged-floor` (default `false`) until an operator flips
+  it — see [`docs/ROUTE-ACCESS.md`](docs/ROUTE-ACCESS.md).
 - **✅ SCG-5 route config** — Spring Cloud Gateway 5.0 moved route config from
   `spring.cloud.gateway.routes` to `spring.cloud.gateway.server.webflux.routes`
   (the legacy prefix silently binds nothing). The `snapdragon-gateway` chart
@@ -129,13 +145,15 @@ _As of 2026-06-24. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
 _Designed / in-flight — see the Roadmap section of
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)._
 
-- **🚧 SSO end-to-end, live + e2e** — finish the admin-bff → user-bff login
-  relocation (PR-1/5 → 5/5), prove the `bff_` → custody-JWT swap end-to-end
-  through the gateway, and cover it with the multi-user UI e2e.
-- **🔭 Casdoor MFA** — WebAuthn + TOTP + recovery, per-role defaults, step-up
-  (sudo / SSH-via-UI / superadmin ops); `mfa_satisfied` stamped into the opaque
-  `bff_` session, gateway `amr` → `MFA_SATISFIED` authority + per-route
-  `mfa_required`.
+- **🔭 SSO kind-cluster e2e** — the admin-bff → user-bff native-login relocation
+  itself has shipped and is lit by default (see [Current State](#current-state));
+  `tests/e2e/specs/27-native-login.spec.ts` already proves the `bff_` swap on the
+  **compose** stack. Still open: the same proof against a **kind** cluster.
+- **🔭 MFA privileged-floor enforcement** — TOTP/WebAuthn enrollment + the
+  `mfa_satisfied` session stamp are shipped (see [Current State](#current-state));
+  remaining is flipping the gateway's `app.mfa.enforce-privileged-floor` on with
+  real per-role defaults (superadmin/admin required, mod relaxable, user
+  optional) for sudo / SSH-via-UI / superadmin ops step-up.
 - **🔭 Encrypted versioned backups** — Velero + kopia/restic to attached node
   storage or total-cloud; per-domain + superadmin, step-up gated.
 - **🔭 Egress VPN drop-in** — admin-supplied WireGuard/OpenVPN `.conf` for node
@@ -174,9 +192,11 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   operate-licenses; per-node sshd obeys the signed export. [`docs/DEVICE-REGISTRY-KEY-ROTATION.md`](docs/DEVICE-REGISTRY-KEY-ROTATION.md).
 - **✅ Pen-test CI** — continuous OWASP (ZAP + Dependency-Check + nuclei + k6) as a
   GitLab pipeline stage, not a deployed CronJob. [`docs/PENTEST-SCHEDULES.md`](docs/PENTEST-SCHEDULES.md).
-- **🚧 / 🔭 Roadmap** — Workload Console (RBAC backstop on `main`, ships dark),
-  Casdoor MFA, desktop app governance, notifications external channels, generator
-  supply-chain hardening. See the Roadmap section of [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+- **🚧 / 🔭 Roadmap** — Workload Console (RBAC backstop on `main`, ships dark), the
+  MFA privileged-floor step-up gate (enrollment/challenge itself is shipped — see
+  [Current State](#current-state)), desktop app governance, notifications external
+  channels, generator supply-chain hardening. See the Roadmap section of
+  [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Images
 
