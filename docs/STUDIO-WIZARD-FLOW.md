@@ -171,6 +171,79 @@ byte-identical for every guarded case.
 
 Like the mesh-wizard redesign's web spec, the Studio GUI is the **reference**
 implementation of this flow; the other build channels must mirror the same 4-choice → 7-step
+shape so a user gets the same clarity regardless of front-end. The channel map
+and the all-options-in-all-menus rule are in
+[`docs/BUILD-MATRIX.md`](BUILD-MATRIX.md).
+
+**Status (2026-07-16) — most of this section has shipped.** The **ncurses menu** and
+**CLI** four-choice parity, the **Local Docker mesh** face on both channels, and the
+**parity-enforcement** gate all landed in
+[#342](https://github.com/Snapdragon-Systems/snapdragon-generator/pull/342); the ncurses
+Local-mesh screen was later extended with the from-scratch bootstrapper (#346) and the
+RPi/Chromebook desktop surfacing (#351). The build-matrix `TAXO` bucket
+(`tests/build-matrix/check.sh` → `run_parity_taxonomy_checks`) proves all three
+front-ends carry the same four golden choices — **16/16 green**, emission byte-identical
+(CLI/MAKE/MENU/GUI/JOB 118 each, 0 failed). **Two items remain deferred (🔭):** the
+admin web-UI modal (a cross-repo BFF concern, out of scope for the generator repo) and
+the deeper ncurses **machine-first step-2 reshape** (a design-heavy TUI redesign — see
+the marked bullet below). Per-subsection status is inline below:
+**✅ shipped** · **🔭 planned / deferred**.
+
+### ncurses console menu (`make menu` → `scripts/build-menu.sh`) — ✅ mostly shipped (#342/#346/#351); one 🔭 residual
+- **✅ #342** Present the **same four top-level choices** as the opening screen (Mesh node /
+  Local Docker mesh / Mesh desktop client / Standalone Gentoo desktop) rather than jumping
+  straight into role/platform selection. — realised by `mode_screen()`, a thin clarity/router
+  layer on top of the existing screens.
+- **✅ #342** Route the three image choices to the existing `OPT_*` make-composition unchanged
+  (emission parity is mandatory — the build-matrix MENU column guards it). — the three image
+  choices funnel into `build_screen` / `single_role_screen` / `standalone_screen` verbatim;
+  MENU column stays 118/0.
+- **✅ #342 (+ #346)** Add a **Local Docker mesh** screen that shells the same lifecycle as the
+  Studio launcher — reuse a shared entrypoint over `core/mesh_node.py`'s compose lifecycle (a
+  small `snapdragon-mesh-node` helper), prompting for `TS_AUTHKEY` (masked) + optional
+  node name / login-server, so the menu does not reimplement compose. — realised by
+  `local_mesh_screen()` (shells `python3 -m snapdragon_studio.core.local_mesh`; masked
+  auth key via `ui_password`, node name, login server, up/down/status/logs); #346 added the
+  from-scratch bootstrapper sub-screen.
+- **✅ #342** Drop hard step numbers in the screen headers in favour of the descriptive titles,
+  same rationale as the GUI. — the menu's user-facing screen titles are descriptive
+  ("What do you want to build?", etc.); the only `STEP 1` token is a source comment, not a
+  header.
+- **🔭 RESIDUAL (still deferred — design-heavy TUI redesign):** Mirror the Studio's
+  **machine-first** step-2 shape: pick the target machine first, then
+  the image type it supports (not a role list with a separate platform sub-menu), fold the
+  x86 machine-profile preset in with the machine choice, and surface the mesh worklist's
+  **per-node encryption** column + the "one LUKS passphrase for the whole fleet" note.
+  Offer the node-fallback-login prompt with the same worklist-keyed rule (only when some
+  selected image is an x86 node — never keyed to whichever image happens to be listed
+  first). Emission parity is mandatory (the MENU column guards it) — this is menu shape
+  only. — **NOTE:** `single_role_screen()` is already architecture-first (machine → role →
+  board), so the ordering half is partly present; what is NOT done is the GUI-specific
+  reshape — folding the `profiles.json` x86 machine-profile preset onto the machine choice,
+  a per-node **encryption** column on a menu worklist (the menu has no per-node worklist
+  table; `build_screen` offers whole-fleet targets, not a per-row table), and a
+  worklist-keyed node-fallback-login prompt. These are genuine console-TUI design calls
+  (how a GUI table maps onto linear `dialog`/`whiptail` menus) and should be designed
+  deliberately, not guessed.
+
+### CLI (`build-image.sh` / `make <role>`) — ✅ shipped (#342)
+- **✅ #342** The CLI already emits every image path; the parity gap is **discoverability**, not
+  emission. Add a short `--help` / guided preamble that frames the same four intents and
+  points at the flags each maps to (`--role`/worklist for mesh node, the client SSO/keyzip
+  flags for mesh desktop client, `--encrypt-root`/home flags for standalone). — realised by
+  `print_intents_guide()` in `docker/build-image.sh` (fires on `-h`/`--help`/`help`; the real
+  env-driven Job path is byte-identical).
+- **✅ #342** Document the **Local Docker mesh** as an explicit non-build subcommand
+  (e.g. `snapdragon-mesh-node up --authkey-file …`) so the CLI channel has a first-class
+  face for the fourth choice instead of only the image builds. — realised by the
+  `core/local_mesh.py` argparse CLI (`up`/`down`/`status`/`logs`, `--authkey-file`) and the
+  Makefile `mesh-node-up` / `mesh-node-down` / `mesh-node-status` / `mesh-node-logs` targets;
+  the intents guide points at both.
+
+### Admin web-UI generator (image-gen BFF modal) — 🔭 deferred (cross-repo; out of scope for the generator repo)
+- Mirror the four choices as the top-level selector in the admin image-gen modal, exactly
+  as the go-live web effector mirrors its CLI/ncurses/Studio front-ends
+  ([`docs/GO-LIVE-WIZARD.md`](GO-LIVE-WIZARD.md) "4-interface parity").
 shape so a user gets the same clarity regardless of front-end. **The basic 4-choice mirror
 already shipped for ncurses + CLI (PR #342); the machine-first step-2 shape and the
 admin web-UI mirror are still open** — see the per-channel status below. The channel map
@@ -223,6 +296,15 @@ and the all-options-in-all-menus rule are in
   for a local node" hint, or, if a hosted equivalent is ever wanted, drive it through a
   node-local reconcile agent rather than reimplementing compose in the BFF.
 
+### Parity enforcement — ✅ shipped (#342)
+- **✅ #342** Extend the build-matrix / all-menus parity checks so the **four-choice taxonomy** and
+  the per-user `registration` option are asserted present in every channel that claims to
+  offer them (the code-copy assertion idiom used elsewhere in
+  [`docs/BUILD-MATRIX.md`](BUILD-MATRIX.md)). — realised by the `TAXO` bucket
+  (`run_parity_taxonomy_checks` in `tests/build-matrix/check.sh`): 12 taxonomy assertions
+  (4 `mode.py` + 4 menu + 4 cli) + 4 `registration` tokens = **16 expected**, each anchored
+  **non-vacuously** to the real opening-item shape per channel (menu `ui_menu` item line;
+  cli numbered intent) so dropping any choice is a genuine grep miss, not a false pass.
 ### Parity enforcement
 - **✅ shipped** — `tests/build-matrix/check.sh`'s TAXO block asserts the **four-choice
   taxonomy** (golden labels from `mode.py`, cross-checked against the ncurses and CLI
