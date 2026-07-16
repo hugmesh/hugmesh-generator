@@ -1684,6 +1684,43 @@ def test_domain_games_migration_is_load_level(tmp_path):
     assert cfg.domains[0].optional_services == ["games"]
 
 
+# ---- User.registration: additive manifest-only field (round-trip + forward-compat) --
+
+def test_user_registration_round_trip_and_manifest(tmp_path):
+    # The additive `registration` User field (first-login method: "" = derive | discord |
+    # gmail | password) is MANIFEST-ONLY provisioning data (never argv). It must survive
+    # BOTH emission paths — mesh_manifest() and to_dict() (the --print-specs surface) —
+    # round-trip through from_dict(to_dict()) + save/load, default to "" when absent, and
+    # from_dict must tolerate + DROP an unknown FUTURE user key without losing it.
+    cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
+                      users=[User(username="ada", domain="a.acme", role="admin",
+                                  email="ada@a.acme", registration="gmail"),
+                             User(username="bob", domain="a.acme")])
+    # 1) reaches mesh_manifest()["users"][0]; absent -> "" default
+    assert cfg.mesh_manifest()["users"][0]["registration"] == "gmail"
+    assert cfg.mesh_manifest()["users"][1]["registration"] == ""
+    # 2) reaches to_dict()["users"][0] (carried to --print-specs)
+    assert cfg.to_dict()["users"][0]["registration"] == "gmail"
+    assert cfg.to_dict()["users"][1]["registration"] == ""
+    # 3) round-trips through from_dict(to_dict()) and through an on-disk save/load
+    r = ImageConfig.from_dict(cfg.to_dict())
+    assert r.users[0].registration == "gmail"
+    assert r.users[1].registration == ""
+    p = tmp_path / "c.json"
+    cfg.save(str(p))
+    assert ImageConfig.load(str(p)).users[0].registration == "gmail"
+
+
+def test_user_registration_from_dict_drops_unknown_future_key():
+    # forward-compat: an unknown future user key is tolerated + DROPPED (matching the
+    # nested from_dict filter), while a known `registration` is preserved.
+    cfg = ImageConfig.from_dict({"mode": "mesh", "role": "omnibus",
+                                 "users": [{"username": "cid", "registration": "discord",
+                                            "future_unknown_key": "whatever"}]})
+    assert cfg.users[0].registration == "discord"
+    assert not hasattr(cfg.users[0], "future_unknown_key")
+
+
 # ---- ImageConfig.load() envelope guard ------------------------------------------
 
 def test_load_rejects_worklist_envelope(tmp_path):
