@@ -52,6 +52,20 @@ lint:download-verify:
   script:
     - bash tests/scripts/test-download-verify.sh
 
+# ARM cross-dracut helper (scripts/_dracut-cross-lib.sh): the --encrypt-root
+# qemu-aarch64 binfmt registration + the availability predicate the fail-fast
+# preflight evaluates. Proves preflight_ok is FALSE when qemu-aarch64 is
+# unregistered / its interpreter is missing (the pki.rpi5 failure conditions),
+# TRUE when present, register_qemu is non-fatal, the preflight dies fast with the
+# actionable message, and EVERY ARM builder sources+wires the lib. No root,
+# mocks binfmt_misc; cheap.
+lint:dracut-cross-lib:
+  stage: lint
+  image: bash:5
+  tags: [snapdragon-x86]
+  script:
+    - bash tests/scripts/test-dracut-cross-lib.sh
+
 # media-poisoner (m)TLS entrypoint gate. Runs the worker's unittest suite:
 # the config-resolution fail-closed contract (a PARTIAL POISON_TLS_* env must
 # ABORT startup, never silently serve plaintext) + a LIVE mutual-TLS handshake

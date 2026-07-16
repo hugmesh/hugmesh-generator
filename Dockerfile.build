@@ -162,12 +162,56 @@ FROM cross-${CROSSDEV} AS final
 #                        chroot into the target sysroot, so they do not need the host one —
 #                        but x86 does, and without it the x86 image/UKI build fails.
 #   sys-apps/gptfdisk  — sgdisk: create/inspect the GPT (ESP+root) the x86 .img uses.
+#   app-emulation/qemu — STATIC qemu-aarch64 USER emulator (/usr/bin/qemu-aarch64). The
+#                        ARM boards generate their arm64 disk-boot/live initramfs by
+#                        chrooting INTO the target sysroot and running the sysroot's own
+#                        dracut under this emulator (Strategy 1 in build_disk_initramfs);
+#                        it is the ONLY strategy that emits a correct arm64 initramfs (the
+#                        host is amd64). An --encrypt-root ARM build is UNBOOTABLE without
+#                        it (live log: "no usable dracut" -> refuse). Configured just below
+#                        with static-user (MANDATORY: build_disk_initramfs copies the
+#                        interpreter INTO the arm64 sysroot and execs it under chroot, where
+#                        only a STATICALLY linked binary can run) + QEMU_USER_TARGETS=aarch64,
+#                        and -qemu_softmmu_targets_x86_64 to cancel the amd64 profile's
+#                        QEMU_SOFTMMU_TARGETS="x86_64" (arch/amd64/make.defaults) so ONLY the
+#                        small, fast aarch64 user emulator is built — no x86_64 system
+#                        emulator, no firmware blobs. USE_EXPAND variables cannot be set
+#                        per-package via package.env (portage ignores USE there) and qemu has
+#                        no plain `softmmu` USE flag, so the expanded per-package flag in
+#                        package.use is the ONLY correct mechanism. qemu's static-user DEPEND
+#                        pulls dev-libs/glib:2[static-libs(+)], virtual/zlib:=[static-libs(+)]
+#                        and (USE=xattr is on in the base profile) sys-apps/attr[static-libs(+)]
+#                        — all of which HAVE a real, default-OFF static-libs flag (so the (+)
+#                        default does NOT apply), and glib forwards static-libs to
+#                        dev-libs/libpcre2 — so package.use below must enable static-libs on
+#                        that whole closure or the emerge halts with 'USE changes necessary'
+#                        (autounmask is off; empirically reproduced with a fresh-stage3-like
+#                        portage config). This mirrors the Gentoo Embedded Handbook
+#                        qemu-user-chroot recipe.
+#                        binfmt_misc registration is a kernel-GLOBAL, RUN-time concern (a
+#                        build-time registration does not survive into a fresh `docker run`),
+#                        so it is done at run time by dracut_cross_register_qemu() in
+#                        scripts/_dracut-cross-lib.sh — the image only ships the binary.
+# ALL of the above are merged HERE, in the FINAL stage, NOT in the cached toolchain/
+# crossdev stages, so adding them never invalidates the hours-long crossdev layer.
+# Write qemu's portage config first (in the FINAL stage so the crossdev cache is
+# preserved), then emerge it alongside the rest.
+RUN mkdir -p /etc/portage/package.use && \
+    printf '%s\n' \
+      'app-emulation/qemu static-user qemu_user_targets_aarch64 -qemu_softmmu_targets_x86_64' \
+      'dev-libs/glib static-libs' \
+      'dev-libs/libpcre2 static-libs' \
+      'sys-apps/attr static-libs' \
+      'virtual/zlib static-libs' \
+      'sys-libs/zlib static-libs' \
+      > /etc/portage/package.use/snapdragon-qemu-user
 RUN emerge --verbose --noreplace \
         sys-boot/shim \
         app-crypt/sbsigntools \
         app-crypt/efitools \
         sys-kernel/dracut \
-        sys-apps/gptfdisk
+        sys-apps/gptfdisk \
+        app-emulation/qemu
 # The repo is bind-mounted here at runtime; output at /out. No ENTRYPOINT — we
 # do NOT want to hide `make`, so the container is a thin `make` wrapper. The
 # default CMD runs the whole fleet on the NATIVE (in-container, no-sudo) path
