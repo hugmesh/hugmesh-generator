@@ -480,5 +480,92 @@ assert_has "domain"                     "DOMAIN=acme.example"
 assert_has "root login"                 "PERMIT_ROOT_LOGIN=prohibit-password"
 assert_has "native"                     "NATIVE=1"
 
+# ── enterprise-phone screen (phone_screen/_phone_run) — WS-MENU additive block ──
+# The phone wizard is a NON-BUILD choice (like Local Docker mesh): it must never
+# touch build_make_cmd, never persist state (no OPT_PHONE_*, save_conf untouched),
+# run its driver FOREGROUND only, and move the auth key via a chmod-600 mktemp
+# file under STATE_DIR that is shredded after the run.
+MENU_SH="${REPO_DIR}/scripts/build-menu.sh"
+_fail() { FAIL=$((FAIL+1)); printf 'FAIL %s\n' "$1" >&2; }
+# assert_grep NAME ERE FILE / assert_ngrep NAME ERE FILE — file-shape assertions
+assert_grep()  { grep -qE -- "$2" "$3" && _ok || _fail "$1: /$2/ missing from $3"; }
+assert_ngrep() { grep -qE -- "$2" "$3" && _fail "$1: /$2/ unexpectedly present in $3" || _ok; }
+
+# the four GOLDEN mode_screen items stay byte-identical (same opening-item-shape
+# anchor the build-matrix TAXO bucket uses), and the phone item joins them as a
+# REAL pickable item — not merely prose.
+assert_grep "taxo: meshnode golden item intact"   '^[[:space:]]*meshnode[[:space:]]+"Mesh node — build server node image\(s\) for a mesh on dedicated hardware"'                          "${MENU_SH}"
+assert_grep "taxo: localmesh golden item intact"  '^[[:space:]]*localmesh[[:space:]]+"Local Docker mesh — run a mesh on THIS machine in Docker \(no image built\)"'                        "${MENU_SH}"
+assert_grep "taxo: client golden item intact"     '^[[:space:]]*client[[:space:]]+"Mesh desktop client — a branded desktop that JOINS an existing mesh \(tailnet \+ SSO\)"'                "${MENU_SH}"
+assert_grep "taxo: standalone golden item intact" '^[[:space:]]*standalone[[:space:]]+"Standalone Gentoo desktop — hardened personal / UNAFFILIATED desktop \(no mesh/SSO\)"'              "${MENU_SH}"
+assert_grep "phone: opening item present"         '^[[:space:]]*phone[[:space:]]+"Enterprise phone '  "${MENU_SH}"
+assert_grep "phone: routed to phone_screen"       '^[[:space:]]*phone\)[[:space:]]+phone_screen '     "${MENU_SH}"
+
+# no persistence: no OPT_PHONE_* anywhere, and the phone functions never call
+# save_conf / launch_build / setsid (foreground-only, function-local state).
+assert_ngrep "phone: no OPT_PHONE_* state"        'OPT_PHONE' "${MENU_SH}"
+phone_region="$(sed -n '/^phone_screen() {/,/^}/p' "${MENU_SH}"; sed -n '/^_phone_run() {/,/^}/p' "${MENU_SH}")"
+case "${phone_region}" in
+    *'--authkey-file'*) _ok ;;
+    *) _fail "phone: region extraction vacuous (phone_screen/_phone_run not found)" ;;
+esac
+printf '%s' "${phone_region}" | grep -q 'setsid'       && _fail "phone: setsid in phone region (must run foreground)" || _ok
+printf '%s' "${phone_region}" | grep -q 'launch_build' && _fail "phone: launch_build in phone region (must run foreground)" || _ok
+printf '%s' "${phone_region}" | grep -q 'save_conf'    && _fail "phone: save_conf in phone region (state must stay function-local)" || _ok
+
+# save_conf stays phone-free: a fresh save leaks no phone/auth-key material.
+reset_opts; save_conf
+grep -qiE 'phone|authkey|tskey' "${CONF_FILE}" && _fail "conf: phone/auth-key state leaked into menu.conf" || _ok
+
+# ── _phone_run behavioural checks against a stub driver ────────────────────────
+# The stub records its argv and, at CHILD runtime, the --authkey-file's content +
+# mode — proving the secret travels by 0600 file only and is shredded afterwards.
+PHONE_STUB_OUT="${SNAP_MENU_STATE}/phone-stub-out"; mkdir -p "${PHONE_STUB_OUT}"
+export PHONE_STUB_OUT
+SNAP_PHONE_WIZARD="${SNAP_MENU_STATE}/stub-phone-wizard.sh"
+cat >"${SNAP_PHONE_WIZARD}" <<'EOSTUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"${PHONE_STUB_OUT:?}/argv"
+prev=""
+for a in "$@"; do
+    if [ "${prev}" = "--authkey-file" ]; then
+        cat -- "${a}" >"${PHONE_STUB_OUT}/key-content" 2>/dev/null
+        stat -c '%a' -- "${a}" >"${PHONE_STUB_OUT}/key-mode" 2>/dev/null
+        printf '%s' "${a}" >"${PHONE_STUB_OUT}/key-path"
+    fi
+    prev="${a}"
+done
+exit "${PHONE_STUB_RC:-0}"
+EOSTUB
+chmod +x "${SNAP_PHONE_WIZARD}"
+
+# all settings set: full deterministic argv (auth key OFF the argv, file at tail)
+PHONE_SECRET='tskey-auth-Sup3r Secret!'
+_phone_run enroll "${PHONE_SECRET}" comet beta S1TEST "" "https://hs.example" admin </dev/null 2>/dev/null
+assert_eq "phone run: argv (verb first, options in order, secret off-argv)" \
+    "$(head -n -2 "${PHONE_STUB_OUT}/argv")" \
+    "$(printf '%s\n' enroll --codename comet --channel beta --serial S1TEST --login-server https://hs.example --role admin)"
+grep -qF -- "${PHONE_SECRET}" "${PHONE_STUB_OUT}/argv" && _fail "phone run: auth key leaked onto argv" || _ok
+case "$(cat "${PHONE_STUB_OUT}/key-path")" in
+    "${SNAP_MENU_STATE}"/phonekey.*) _ok ;;
+    *) _fail "phone run: keyfile not under STATE_DIR: $(cat "${PHONE_STUB_OUT}/key-path")" ;;
+esac
+assert_eq "phone run: keyfile content is the secret" "$(cat "${PHONE_STUB_OUT}/key-content")" "${PHONE_SECRET}"
+assert_eq "phone run: keyfile mode 600 at child runtime" "$(cat "${PHONE_STUB_OUT}/key-mode")" "600"
+[ -e "$(cat "${PHONE_STUB_OUT}/key-path")" ] && _fail "phone run: keyfile survived (must be shredded)" || _ok
+
+# nothing set: bare verb only — no empty/bogus flags, no --authkey-file
+_phone_run status "" "" "" "" "" "" "" </dev/null 2>/dev/null
+assert_eq "phone run: bare verb argv" "$(cat "${PHONE_STUB_OUT}/argv")" "status"
+
+# keys-dir mode: --keys-dir threads; server/role stay driver-side (keys-dir files)
+_phone_run detect "" "" stable "" "/tmp/pw-keys" "" "" </dev/null 2>/dev/null
+assert_eq "phone run: keys-dir argv" "$(cat "${PHONE_STUB_OUT}/argv")" \
+    "$(printf '%s\n' detect --channel stable --keys-dir /tmp/pw-keys)"
+
+# a failing driver must not kill the sourced-menu shell (set -e is absent by design)
+PHONE_STUB_RC=7 _phone_run status "" "" "" "" "" "" "" </dev/null 2>/dev/null
+assert_eq "phone run: nonzero driver rc survives" "$?" "0"
+
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]

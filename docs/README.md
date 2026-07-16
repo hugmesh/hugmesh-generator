@@ -52,6 +52,7 @@ The doc set for the image/infra layer. State key used throughout:
 ## Client images
 
 - [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) — per-user device images (FD-04 ✅ shipped; FD-06/07/08 + desktop-app governance 🔭 deferred).
+- [`ENTERPRISE-PHONES.md`](ENTERPRISE-PHONES.md) — the fourth onboarding form (🚧): verified GrapheneOS onto a USB-connected Pixel → mesh enroll → escrowed enterprise profile → device-registry ingest (`scripts/phone-wizard.sh`).
 - [`STANDALONE-DESKTOP.md`](STANDALONE-DESKTOP.md) — hardened standalone NVIDIA desktop images (not a cluster node).
 
 ## Testing

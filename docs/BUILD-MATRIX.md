@@ -48,6 +48,15 @@ Qt-free entrypoint (`python3 -m snapdragon_studio.core.local_mesh`, wrapped by
 `make mesh-node-up`), shared verbatim by the GUI launcher, the ncurses `local_mesh_screen`,
 and the Makefile targets. It never enters `resolve_build_target`/`build_make_cmd`.
 
+**The enterprise-phone wizard (🚧) rides the same non-build precedent, one step
+further out.** [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh)
+([`ENTERPRISE-PHONES.md`](ENTERPRISE-PHONES.md)) builds no image at all — it
+flashes an externally-released, signature-verified GrapheneOS artifact onto a
+USB-connected Pixel — so the phone is **not a matrix row, not a platform, not an
+emission, and not a channel choice**: it never enters
+`resolve_build_target`/`build_make_cmd`, and the harness deliberately does not
+gate it.
+
 **Per-user first-login `registration` (discord / gmail / password / derive) is
 manifest-only.** It is an additive `User.registration` field surfaced in the Studio
 `users.py` + `--print-specs`; the ncurses/CLI image builders carry no per-user mesh

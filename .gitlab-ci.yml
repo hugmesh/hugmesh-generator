@@ -122,6 +122,24 @@ lint:shellinj-regression:
     - bash tests/scripts/test-brand-path-validation.sh
     - bash tests/scripts/test-provision-manifest-injection.sh
 
+# Enterprise-phone wizard gate. Offline logic test for scripts/phone-wizard.sh
+# (the GrapheneOS-on-Pixel onboarding driver): adb/fastboot/curl are PATH-shim
+# stubs, but the sshsig supply-chain crypto is REAL (an ephemeral ed25519 key
+# signs the fixture artifact; the driver verifies via dlv_verify_sshsig).
+# Asserts plan is offline/dry-run, tamper -> exit 3 + artifact DELETED, the
+# signer-fingerprint pin fails closed, destructive verbs refuse on a non-TTY,
+# escrow lands 0600 under vault-seed/, and a secret sweep proves no pre-auth
+# key or passphrase ever reaches stdout/stderr/argv. No network, no root, no
+# device, no privileged runner needed.
+lint:phone-wizard:
+  stage: lint
+  image: bash:5
+  tags: [snapdragon-x86]
+  before_script:
+    - apk add --no-cache jq openssh-keygen coreutils findutils grep sed python3 libarchive-tools
+  script:
+    - bash tests/phone/test-phone-wizard.sh
+
 # Studio identity-allowlist unit tests: the fail-closed validators in
 # studio/snapdragon_studio/core/validate.py (DNS-label / hostname / username /
 # accent allowlists + the trailing-newline re.fullmatch regression). Cheap; no
