@@ -13,8 +13,18 @@ object exposing ``.cfg``, so tests can instantiate it directly.
 from __future__ import annotations
 
 from ..qt import QtWidgets
-from ._gating import clear_unsupported, gate_widgets
+from ...core.config import image_class
+from ._gating import clear_unsupported, gate_widgets, gate_widgets_role_class, platform_supports
 from ._widgets import _row
+
+# Node fallback creds are only MEANINGFUL when an x86 node-class image is being built
+# (the mesh flow — gated on the worklist's checked entries, see _node_creds_apply). On
+# a personal Standalone or a cloud desktop — all desktop-class — the group is HIDDEN
+# entirely (spec 3, mirroring #348's "hide inapplicable options"), not shown
+# greyed/irrelevant.
+_NODE_CREDS_REASON = (
+    "Node fallback login applies to mesh NODE images only — a desktop image logs in "
+    "with the local user set on the Home step. Hidden here; reappears on the mesh flow.")
 
 
 class SystemPage(QtWidgets.QWizardPage):
@@ -37,13 +47,16 @@ class SystemPage(QtWidgets.QWizardPage):
         lay.addWidget(_row("Default user", self.user))
         # node FALLBACK credentials (G27): without these, a GUI-built mesh fleet
         # ships the builder's DEFAULT credentials. x86 only — rpi5's equivalents
-        # are deprecated no-ops, so the group greys per the capability table.
-        creds = QtWidgets.QGroupBox("Node fallback credentials")
-        cl = QtWidgets.QVBoxLayout(creds)
+        # are deprecated no-ops. Shown ONLY on the mesh (node-class) flow; hidden on
+        # desktop images (spec 3 clarity narrowing).
+        self.creds = QtWidgets.QGroupBox("Node fallback login (mesh nodes)")
+        cl = QtWidgets.QVBoxLayout(self.creds)
         self.creds_note = QtWidgets.QLabel(
-            "Fallback login for the baked user/root account on x86 nodes — without "
-            "them a GUI-built mesh fleet ships the builder's default credentials. "
-            "Hashed at build time; NEVER written to a saved config.")
+            "Sets the baked USER and ROOT account passwords for the mesh node images "
+            "you are building. WHEN USED: only if a node ever needs a local "
+            "console/rescue login — the mesh itself uses SSO. Leave blank to keep the "
+            "builder's defaults. x86 nodes only; hashed at build time; never written "
+            "to a saved config.")
         self.creds_note.setWordWrap(True)
         cl.addWidget(self.creds_note)
         self.user_password = QtWidgets.QLineEdit()
@@ -54,8 +67,28 @@ class SystemPage(QtWidgets.QWizardPage):
         self.root_password.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
         self.root_password.setPlaceholderText("hashed at build time; NOT saved to configs")
         cl.addWidget(_row("Root password", self.root_password))
-        lay.addWidget(creds)
+        lay.addWidget(self.creds)
         lay.addStretch(1)
+
+    def _node_creds_apply(self, c) -> bool:
+        """True when the node fallback credentials are meaningful for this FLOW: some
+        image being built is a node-class role on a builder that actually parses
+        --user-password/--root-password (x86 today, per PLATFORM_FIELD_SUPPORT).
+
+        Mesh keys on the WORKLIST ENTRIES, never the base config: WorklistPage sets
+        the base role to the FIRST checked row (catalog order — a desktop row like
+        rpi5-desktop can precede an x86 node row like edge_ai) and forces the base
+        platform to "x86" regardless of the rows. Keying on the base would therefore
+        (a) hide+clear the creds while an x86 node image that CONSUMES them is being
+        built (emission loss, order-dependent), and (b) show them on an all-ARM
+        worklist where no entry receives the flags. Per-entry, both stay honest."""
+        wl = getattr(self.wiz, "worklist", None)
+        if c.mode == "mesh" and wl is not None and wl.entries:
+            return any(image_class(c.mode, e.role) == "node"
+                       and platform_supports("user_password", e.platform)
+                       for e in wl.entries)
+        return (image_class(c.mode, c.role) == "node"
+                and platform_supports("user_password", c.platform))
 
     def initializePage(self):
         c = self.wiz.cfg
@@ -71,6 +104,14 @@ class SystemPage(QtWidgets.QWizardPage):
             "user_password": self.user_password,
             "root_password": self.root_password,
         })
+        # role-class + platform HIDE (spec 3, #348 idiom): the whole group is shown ONLY
+        # when the fallback creds are meaningful — a node-class image (mesh flow) on the
+        # x86 builder. Hidden entirely on desktop images (standalone/cloud) and on ARM,
+        # rather than showing a greyed/irrelevant field. Re-gated every visit so it
+        # reappears if a node role is later in scope; emission preserved by the clear
+        # in validatePage plus clear_unsupported.
+        gate_widgets_role_class(self.creds, self._node_creds_apply(c),
+                                _NODE_CREDS_REASON, hide=True)
 
     def validatePage(self):
         c = self.wiz.cfg
@@ -83,4 +124,14 @@ class SystemPage(QtWidgets.QWizardPage):
         # typed while platform was x86 can never linger into the live command for
         # an ARM build (never saved to configs regardless: SECRET_FIELDS).
         clear_unsupported(c, ("user_password", "root_password"))
+        # role-class clear (belt & braces, mirroring the HomePage node/desktop clear):
+        # blank the creds ONLY when NO image in this flow consumes them — a desktop
+        # image, or a mesh worklist with no x86 node row (per-entry strip would drop
+        # them silently anyway). NEVER cleared while any x86 node entry is checked,
+        # even when the base role is a desktop row (emission guard). Emission-safe:
+        # no desktop golden sets these (they default "" there), and to_cli_args only
+        # emits them non-empty + x86.
+        if not self._node_creds_apply(c):
+            c.user_password = ""
+            c.root_password = ""
         return True

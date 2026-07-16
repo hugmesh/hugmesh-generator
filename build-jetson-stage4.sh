@@ -56,6 +56,15 @@ SHARED_SPECS="${SCRIPT_DIR}/specs"       # arch-agnostic specs (mesh, provisioni
 # shellcheck source=scripts/_download-lib.sh
 source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 
+# Cross-dracut helper: qemu-aarch64 binfmt registration + the availability
+# predicate the --encrypt-root fail-fast preflight and the qemu-chroot initramfs
+# strategy rely on. Sourced for consistency with the other ARM boards; note that
+# Jetson currently hard-errors on --encrypt-root earlier (single boot+root
+# partition), so the preflight/register below are inert TODAY and "just work" if
+# Jetson gains a separate boot partition. See scripts/_dracut-cross-lib.sh.
+# shellcheck source=scripts/_dracut-cross-lib.sh
+source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
+
 WORK_DIR=""
 BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-jetson}"  # per-arch isolation (never shares the Pi/Frite/x86 sysroot)
 CROSS_TARGET="aarch64-unknown-linux-gnu"
@@ -782,6 +791,23 @@ info "Shared specs: ${SHARED_SPECS}"
 for tool in "${CROSS_TARGET}-gcc" "${CROSS_TARGET}-strip" curl tar file; do
     command -v "${tool}" &>/dev/null || { err "${tool} not found in PATH."; exit 1; }
 done
+
+# ── Cross-dracut (--encrypt-root) fail-FAST preflight ───────────────
+# Mirror of the other ARM boards for consistency. NOTE: Jetson hard-errors on
+# --encrypt-root much earlier (a single boot+root partition the Orin UEFI reads
+# raw cannot be LUKS-encrypted), so this block is UNREACHABLE today; it is here
+# so that if/when Jetson gains a separate unencrypted boot partition, the same
+# fail-FAST guard applies. Runs only on a real build (after --print-plan).
+if ${ENCRYPT_ROOT}; then
+    dracut_cross_register_qemu || true
+    if ! dracut_cross_preflight_ok; then
+        err "--encrypt-root on ${BRAND}-${JETSON_BOARD}-${ROLE} (if this build came from a multi-image mesh worklist, THIS node image is the affected one) needs the arm64 disk-boot initramfs, but no usable cross-dracut strategy is available: ${DRACUT_CROSS_BINFMT_NODE} is not registered and/or $(dracut_cross_qemu_interp) is missing/not executable."
+        err "Fix: rebuild the builder image so it ships a static qemu-aarch64 (make docker-image — Dockerfile.build FINAL stage now emerges app-emulation/qemu[static-user] QEMU_USER_TARGETS=aarch64) AND run the build in a --privileged container so binfmt_misc can be mounted/registered. Refusing now BEFORE the multi-hour @stage4/kernel build rather than after."
+        exit 1
+    fi
+    info "cross-dracut preflight OK: qemu-${DRACUT_CROSS_QEMU_ARCH} registered ($(dracut_cross_qemu_interp)); the arm64 disk-boot initramfs is buildable via qemu-chroot."
+fi
+
 # Host SELinux policy build tools (same rationale as the Pi5/Frite builders).
 HOST_POLICY_TOOLS=()
 command -v checkpolicy      &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/checkpolicy)
@@ -1386,6 +1412,10 @@ build_disk_initramfs() {
     info "Generating disk-boot initramfs (dracut --add crypt, kver=${kver}) ..."
 
     local sysroot_dracut="${SYSROOT}/usr/bin/dracut"
+
+    # Ensure qemu-aarch64 is registered in binfmt_misc (idempotent, non-fatal;
+    # kernel-global, so it must be (re)done at run time — see _dracut-cross-lib.sh).
+    dracut_cross_register_qemu || true
 
     # ── Strategy 1: qemu-chroot (correct for cross-builds) ─────────────────────
     local _qemu_interp

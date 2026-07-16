@@ -42,7 +42,11 @@ _FLAVOR_CHOICES = {
     "orangepizero2": ORANGEPIZERO2_FLAVORS,
 }
 
-_COL_CHECK, _COL_ROLE, _COL_PLATFORM, _COL_BOARD, _COL_FLAVOR, _COL_NOTES = range(6)
+_COL_CHECK, _COL_ROLE, _COL_PLATFORM, _COL_BOARD, _COL_FLAVOR, _COL_ENC, _COL_NOTES = range(7)
+
+# per-entry encrypt_root override values (worklist.WorklistEntry.encrypt_root):
+# "default" inherits the worklist-wide Home-step encrypt_root; on/off force it.
+_ENC_CHOICES = ("default", "on", "off")
 
 
 def _row_notes(role: str, platform: str) -> str:
@@ -104,17 +108,34 @@ class WorklistPage(QtWidgets.QWizardPage):
 
         self.tree = QtWidgets.QTreeWidget()
         self.tree.setRootIsDecorated(False)
-        self.tree.setHeaderLabels(["", "Role", "Platform", "Board", "Flavor/Desktop", "Notes"])
+        self.tree.setHeaderLabels(
+            ["", "Role", "Platform", "Board", "Flavor/Desktop", "Encryption", "Notes"])
         self.tree.setColumnWidth(_COL_CHECK, 28)
         # Name what the per-row columns MEAN: Board + Flavor/Desktop are each node's
-        # hardware target (spec 2c "pick the hardware per node"); Notes is auto-derived.
+        # hardware target (spec 2c "pick the hardware per node"); Encryption is the
+        # per-node root-disk choice (spec 4); Notes is auto-derived.
         hdr = self.tree.headerItem()
         hdr.setToolTip(_COL_BOARD, "Per-node hardware: the target board for ARM nodes.")
         hdr.setToolTip(_COL_FLAVOR,
                        "Per-node hardware: image flavor (live / installer) or desktop variant.")
+        hdr.setToolTip(_COL_ENC,
+                       "Per-node root-disk encryption: 'default' inherits the Home-step "
+                       "choice; 'on'/'off' override it for THIS node. The unattended LUKS "
+                       "passphrase (Home step) is shared by every encrypted node.")
         hdr.setToolTip(_COL_NOTES,
                        "Auto: this node's encryption reality, GPU, and client-brand caveats.")
         lay.addWidget(self.tree, 1)
+
+        # spec 4: answer the WHICH-device question for the fleet-wide LUKS passphrase —
+        # it is set ONCE on the Home step and applies to every encrypted node here; the
+        # per-row Encryption column above scopes WHETHER each node is encrypted.
+        self.enc_hint = QtWidgets.QLabel(
+            "Root-disk encryption is per node (the Encryption column). The unattended "
+            "LUKS passphrase set on the Home step applies to EVERY encrypted node in "
+            "this worklist.")
+        self.enc_hint.setWordWrap(True)
+        self.enc_hint.setStyleSheet("color: gray;")
+        lay.addWidget(self.enc_hint)
 
         # gray helper: reinforce that each row = one node, the columns = per-node
         # hardware, and point forward to the SERVICES / domains / users steps that
@@ -134,6 +155,9 @@ class WorklistPage(QtWidgets.QWizardPage):
         self.rows: dict[str, QtWidgets.QTreeWidgetItem] = {}
         self._combos: dict[str, tuple[QtWidgets.QComboBox | None,
                                       QtWidgets.QComboBox | None]] = {}
+        # id -> per-row encrypt_root combo (None for jetson, which cannot encrypt — its
+        # cell is a disabled display and validatePage keeps the prior/default value).
+        self._enc_combos: dict[str, QtWidgets.QComboBox | None] = {}
         self._id_axes: dict[str, tuple[str, str]] = {}   # id -> (role, platform)
 
         for role, platforms, _label in ROLE_CHOICES["mesh"]:
@@ -167,8 +191,24 @@ class WorklistPage(QtWidgets.QWizardPage):
             flavor_combo.addItems(list(_FLAVOR_CHOICES[platform]))
             self.tree.setItemWidget(item, _COL_FLAVOR, flavor_combo)
 
+        # per-node root-disk encryption (spec 4). jetson cannot encrypt (its builder
+        # forces off, _resolve_encrypt_root), so its cell is a disabled display; every
+        # other platform gets a default/on/off combo defaulting to "default" (inherit
+        # the Home-step choice) — additive + byte-identical for existing worklists.
+        enc_combo = None
+        if platform == "jetson":
+            disp = QtWidgets.QComboBox()
+            disp.addItem("off — jetson cannot encrypt")
+            disp.setEnabled(False)
+            self.tree.setItemWidget(item, _COL_ENC, disp)
+        else:
+            enc_combo = QtWidgets.QComboBox()
+            enc_combo.addItems(list(_ENC_CHOICES))
+            self.tree.setItemWidget(item, _COL_ENC, enc_combo)
+
         self.rows[rid] = item
         self._combos[rid] = (board_combo, flavor_combo)
+        self._enc_combos[rid] = enc_combo
         self._id_axes[rid] = (role, platform)
         self._sync_combo_enabled(rid)
 
@@ -183,7 +223,7 @@ class WorklistPage(QtWidgets.QWizardPage):
 
     def _sync_combo_enabled(self, rid: str) -> None:
         on = self._is_checked(self.rows[rid])
-        for combo in self._combos[rid]:
+        for combo in (*self._combos[rid], self._enc_combos[rid]):
             if combo is not None:
                 combo.setEnabled(on)
 
@@ -228,6 +268,11 @@ class WorklistPage(QtWidgets.QWizardPage):
                                    Qt.CheckState.Checked if e else Qt.CheckState.Unchecked)
                 if e is not None:
                     self._apply_axes_to_combos(rid, e.board, e.flavor)
+                    enc_combo = self._enc_combos[rid]
+                    if enc_combo is not None and e.encrypt_root:
+                        j = enc_combo.findText(e.encrypt_root)
+                        if j >= 0:
+                            enc_combo.setCurrentIndex(j)
         else:
             # fresh mesh entry: pre-check the mode-default row so the flow is navigable
             # (like RolePage preselecting MODE_DEFAULT_ROLE) — the superadmin adds more.
@@ -277,10 +322,18 @@ class WorklistPage(QtWidgets.QWizardPage):
             board = board_combo.currentText() if board_combo is not None else ""
             flavor = flavor_combo.currentText() if flavor_combo is not None else ""
             keep = prior.get(rid)                     # a row staying checked KEEPS its state
+            # per-row encryption (spec 4): read the combo where present; jetson (no combo)
+            # keeps its prior/default value (materialize forces it off regardless). Combos
+            # default to "default", so an untouched worklist is byte-identical to before.
+            enc_combo = self._enc_combos[rid]
+            if enc_combo is not None:
+                encrypt_root = enc_combo.currentText()
+            else:
+                encrypt_root = keep.encrypt_root if keep else "default"
             entries.append(WorklistEntry(
                 role=role, platform=platform, board=board, flavor=flavor,
                 desktop=keep.desktop if keep else "",
-                encrypt_root=keep.encrypt_root if keep else "default",
+                encrypt_root=encrypt_root,
                 packages_add=keep.packages_add if keep else "",
                 packages_drop=keep.packages_drop if keep else "",
             ))

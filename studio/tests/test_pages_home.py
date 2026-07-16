@@ -26,7 +26,7 @@ from snapdragon_studio.core.config import (   # noqa: E402  (after the importors
 )
 from snapdragon_studio.core.platform_info import HostInfo  # noqa: E402
 from snapdragon_studio.gui import wizard as wizard_mod  # noqa: E402
-from snapdragon_studio.gui.pages.home import _MEDIA_DEFAULT  # noqa: E402
+from snapdragon_studio.gui.pages.home import HomePage, _MEDIA_DEFAULT  # noqa: E402
 from snapdragon_studio.gui.pages.system import SystemPage  # noqa: E402
 from snapdragon_studio.gui.qt import Qt, QtWidgets  # noqa: E402
 
@@ -74,12 +74,9 @@ def advance_to(wiz, page_cls):
 
 def pick_role(wiz, role):
     page = advance_to(wiz, wizard_mod.RolePage)
-    for i in range(page.roles.count()):
-        it = page.roles.item(i)
-        if it.data(Qt.ItemDataRole.UserRole)[0] == role:
-            page.roles.setCurrentItem(it)
-            return page
-    raise AssertionError(f"role {role} not offered on RolePage")
+    if not page.select_role(role):
+        raise AssertionError(f"role {role} not offered on RolePage")
+    return page
 
 
 def flag_pairs(args):
@@ -263,6 +260,53 @@ def test_local_login_composes_without_standalone_on_arm(wiz):
     assert ("--local-pass", "hunter2") in pairs
 
 
+# ---- HomePage: standalone framing + device-cannot-encrypt (spec 4) -------------
+
+def test_home_standalone_framing_shown_only_on_standalone(wiz):
+    """spec 4: on the standalone path the local user + root-disk password read as the
+    primary action — the 'this is your login & FDE' helper shows and the group is
+    retitled. On a cloud desktop the helper is hidden."""
+    home = advance_to(wiz, wizard_mod.HomePage)          # standalone default flow
+    assert home.standalone_helper.isVisible()
+    assert home.login.title().startswith("Your login")
+    c = wiz.cfg
+    c.mode = "cloud"; c.role = "desktop"; c.platform = "x86"
+    wiz.restart()
+    home = advance_to(wiz, wizard_mod.HomePage)
+    assert not home.standalone_helper.isVisible()
+
+
+def test_home_encrypt_hidden_when_device_cannot_encrypt(qapp):
+    """spec 4: a device with no FDE path (jetson) HIDES the --encrypt-root checkbox and
+    shows a plain reason. encrypt_root is forced off (byte-identical — jetson is excluded
+    from encrypt_root emission), but luks_pass (_ALL_PLATFORMS) is NOT cleared. Driven by
+    direct instantiation since jetson is not reachable as a standalone/cloud desktop."""
+    cfg = ImageConfig(mode="cloud", role="jetson-desktop", platform="jetson",
+                      luks_pass="secret")
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert not page.encrypt_root.isVisibleTo(page)
+    assert page.no_enc_note.isVisibleTo(page)
+    assert "cannot do full-disk encryption" in page.no_enc_note.text()
+    page.encrypt_root.setChecked(True)                   # even if somehow set
+    assert page.validatePage()
+    assert cfg.encrypt_root is False                     # forced off (jetson excluded)
+    assert cfg.luks_pass == "secret"                     # _ALL_PLATFORMS — not cleared
+
+
+def test_home_encrypt_checkbox_shown_on_encryptable_platform(qapp):
+    """The checkbox stays visible + functional on an FDE-capable platform (x86)."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert page.encrypt_root.isVisibleTo(page)
+    assert not page.no_enc_note.isVisibleTo(page)
+    page.encrypt_root.setChecked(True)
+    assert page.validatePage()
+    assert cfg.encrypt_root is True
+    assert "--encrypt-root" in cfg.to_cli_args()
+
+
 # ---- SystemPage: baked identity (G26) + node fallback credentials (G27) --------
 # Instantiated directly — the page only needs a wiz-like object exposing .cfg, so
 # these stay green before StudioWizard registers the "system" slug.
@@ -301,12 +345,15 @@ def test_system_identity_blank_leaves_builder_defaults(qapp):
 
 def test_system_credentials_masked_secret_and_never_saved(qapp):
     """G27: both credentials are masked widgets, live in SECRET_FIELDS, reach the
-    live x86 argv — and are BLANKED from the serialized config."""
-    page = _system_page()
+    live x86 argv — and are BLANKED from the serialized config. Driven on a mesh
+    NODE image (the only flow where node fallback creds are meaningful/shown)."""
+    page = _system_page(ImageConfig(mode="mesh", role="pki", platform="x86"))
     assert page.user_password.echoMode() == QtWidgets.QLineEdit.EchoMode.Password
     assert page.root_password.echoMode() == QtWidgets.QLineEdit.EchoMode.Password
     assert "user_password" in SECRET_FIELDS and "root_password" in SECRET_FIELDS
     page.initializePage()
+    # node-class x86: the group is shown (checked via the shown wizard in the flow
+    # tests below; a directly-instantiated page is never shown so isVisible() is False).
     assert page.user_password.isEnabled() and page.root_password.isEnabled()
     page.user_password.setText("fallback-user-pw")
     page.root_password.setText("fallback-root-pw")
@@ -317,6 +364,36 @@ def test_system_credentials_masked_secret_and_never_saved(qapp):
     assert ("--root-password", "fallback-root-pw") in pairs
     d = c.to_dict()   # save() path — plaintext secrets must be blanked
     assert d["user_password"] == "" and d["root_password"] == ""
+
+
+def test_system_credentials_hidden_and_cleared_on_desktop(wiz):
+    """spec 3: node fallback creds are meaningless on a personal desktop — the whole
+    group is HIDDEN (not greyed) on the standalone/cloud (desktop-class) flow, and any
+    stale secret is blanked so it can never ride a desktop image's argv."""
+    c = wiz.cfg
+    c.user_password = "stale-user"; c.root_password = "stale-root"
+    wiz.restart()
+    sysp = advance_to(wiz, wizard_mod.SystemPage)   # standalone default flow
+    assert not sysp.creds.isVisible()               # hidden entirely on a desktop image
+    assert sysp.hostname.isVisible()                # identity fields stay
+    advance_to(wiz, wizard_mod.HomePage)
+    assert c.user_password == "" and c.root_password == ""
+    args = c.to_cli_args()
+    assert "--user-password" not in args and "--root-password" not in args
+
+
+def test_system_credentials_shown_on_mesh_node_flow(wiz):
+    """The group reappears on the mesh node (node-class x86) flow — the one place the
+    fallback creds are meaningful — proving the hide re-gates per visit."""
+    from _helpers import check_worklist_rows
+    c = wiz.cfg
+    c.mode = "mesh"
+    wiz.restart()
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(wl, "pki.x86")
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    assert sysp.creds.isVisible()
+    assert sysp.user_password.isEnabled() and sysp.root_password.isEnabled()
 
 
 def test_system_credentials_grey_and_clear_on_arm(qapp):
@@ -336,3 +413,82 @@ def test_system_credentials_grey_and_clear_on_arm(qapp):
     args = cfg.to_cli_args()
     assert "--user-password" not in args and "--root-password" not in args
     assert ("--hostname", "node-9") in flag_pairs(args)
+
+
+def test_system_credentials_survive_desktop_first_mesh_worklist(wiz):
+    """EMISSION GUARD (review HIGH): the mesh creds gate keys on the WORKLIST, never
+    the base config. WorklistPage sets the base role to the FIRST checked row, and
+    rpi5-desktop (desktop-class) precedes edge_ai in the mesh catalog — keying on the
+    base would hide the group AND clear the typed creds even though the x86 edge_ai
+    NODE image consumes --user-password/--root-password. The materialized x86 argv
+    must carry both flags, exactly as the pre-clarity page emitted them."""
+    from _helpers import check_worklist_rows
+    c = wiz.cfg
+    c.mode = "mesh"
+    wiz.restart()
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(wl, "rpi5-desktop.rpi5", "edge_ai.x86")
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    # premise of the regression: the FIRST entry really is desktop-class
+    assert wiz.worklist.entries[0].role == "rpi5-desktop"
+    assert sysp.creds.isVisible()      # shown: an x86 node row is checked
+    sysp.user_password.setText("fleet-user-pw")
+    sysp.root_password.setText("fleet-root-pw")
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert c.user_password == "fleet-user-pw"      # role-class clear must NOT fire
+    node_argv = next(cfg.to_cli_args() for e, cfg in build._materialized
+                     if e.platform == "x86")
+    pairs = flag_pairs(node_argv)
+    assert ("--user-password", "fleet-user-pw") in pairs
+    assert ("--root-password", "fleet-root-pw") in pairs
+    # ...and the ARM desktop row never picks the flags up (per-entry strip)
+    arm_argv = next(cfg.to_cli_args() for e, cfg in build._materialized
+                    if e.platform == "rpi5")
+    assert "--user-password" not in arm_argv and "--root-password" not in arm_argv
+
+
+def test_system_credentials_hidden_and_cleared_on_all_arm_worklist(wiz):
+    """spec 3 twin of the desktop-first case: an ALL-ARM node worklist consumes the
+    fallback creds on no entry (rpi5's equivalents are deprecated no-ops), so the
+    group must HIDE — not show a control whose value would be silently stripped —
+    and stale creds must blank. (The base platform is forced 'x86' for the shared
+    option-superset pages, so a base-keyed gate would wrongly SHOW the group.)"""
+    from _helpers import check_worklist_rows
+    c = wiz.cfg
+    c.mode = "mesh"
+    c.user_password = "stale-user"; c.root_password = "stale-root"
+    wiz.restart()
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(wl, "pki.rpi5", "be.rpi5")
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    assert not sysp.creds.isVisible()
+    assert sysp.hostname.isVisible()               # identity fields stay
+    advance_to(wiz, wizard_mod.HomePage)
+    assert c.user_password == "" and c.root_password == ""
+
+
+def test_system_credentials_survive_going_back_to_add_a_desktop_row(wiz):
+    """In-session variant of the desktop-first regression: creds typed while the
+    worklist was node-only must survive going BACK and adding a desktop row that
+    then sorts first — re-gating on the next System visit keeps the group shown and
+    the stored creds intact (they were silently discarded before the fix)."""
+    from _helpers import check_worklist_rows
+    c = wiz.cfg
+    c.mode = "mesh"
+    wiz.restart()
+    wl = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(wl, "edge_ai.x86")
+    sysp = advance_to(wiz, wizard_mod.SystemPage)
+    assert sysp.creds.isVisible()
+    sysp.user_password.setText("fleet-user-pw")
+    sysp.root_password.setText("fleet-root-pw")
+    advance_to(wiz, wizard_mod.HomePage)           # validates System -> cfg stores creds
+    while not isinstance(wiz.currentPage(), wizard_mod.WorklistPage):
+        wiz.back()                                 # back to the worklist...
+    check_worklist_rows(wiz.currentPage(), "rpi5-desktop.rpi5", "edge_ai.x86")
+    sysp = advance_to(wiz, wizard_mod.SystemPage)  # ...and forward again
+    assert wiz.worklist.entries[0].role == "rpi5-desktop"
+    assert sysp.creds.isVisible()
+    assert sysp.user_password.text() == "fleet-user-pw"
+    advance_to(wiz, wizard_mod.HomePage)
+    assert c.user_password == "fleet-user-pw" and c.root_password == "fleet-root-pw"

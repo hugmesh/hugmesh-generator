@@ -84,12 +84,9 @@ def pick_mode(wiz, mode):
 
 def pick_role(wiz, role):
     page = advance_to(wiz, wizard_mod.RolePage)
-    for i in range(page.roles.count()):
-        it = page.roles.item(i)
-        if it.data(Qt.ItemDataRole.UserRole)[0] == role:
-            page.roles.setCurrentItem(it)
-            return page
-    raise AssertionError(f"role {role} not offered on RolePage")
+    if not page.select_role(role):     # machine-first: selects the supporting card too
+        raise AssertionError(f"role {role} not offered on RolePage")
+    return page
 
 
 def pairs(args):
@@ -301,11 +298,14 @@ def test_hardware_arm_box_hidden_and_cleared_on_x86(wiz):
         assert flag not in args
 
 
-def test_hardware_profile_is_labeled_preset_only(wiz):
-    """G41 (decided document-as-preset): the profile combo says it never emits a
-    builder flag itself — it only pre-fills the gpu/wifi/bt fields."""
+def test_role_profile_is_labeled_preset_only(wiz):
+    """G41 (decided document-as-preset): the profile combo — now folded onto the
+    RolePage's x86 machine card (spec fold 2) — says it never emits a builder flag
+    itself; it only pre-fills the gpu/wifi/bt fields. HardwarePage no longer has one."""
+    role = advance_to(wiz, wizard_mod.RolePage)
+    assert "never emits a builder flag" in role.profile.toolTip()
     hw = advance_to(wiz, wizard_mod.HardwarePage)
-    assert "never emits a builder flag" in hw.profile.toolTip()
+    assert not hasattr(hw, "profile")   # the preset moved off the Hardware page
 
 
 # ---- BuildPage: artifact matrix (G23/G24) ---------------------------------------

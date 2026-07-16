@@ -27,6 +27,8 @@ from snapdragon_studio.core.platform_info import HostInfo
 from snapdragon_studio.gui import wizard as wizard_mod
 from snapdragon_studio.gui.qt import Qt, QtWidgets
 
+from _helpers import check_worklist_rows  # noqa: E402
+
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
@@ -87,20 +89,15 @@ def pick_mode(wiz, mode):
 
 def pick_role(wiz, role):
     page = advance_to(wiz, wizard_mod.RolePage)
-    for i in range(page.roles.count()):
-        it = page.roles.item(i)
-        if it.data(Qt.ItemDataRole.UserRole)[0] == role:
-            page.roles.setCurrentItem(it)
-            return page
-    raise AssertionError(f"role {role} not offered on RolePage")
+    if not page.select_role(role):
+        raise AssertionError(f"role {role} not offered on RolePage")
+    return page
 
 
 def pick_platform(role_page, plat):
-    for i in range(role_page.platform.count()):
-        if role_page.platform.itemData(i) == plat:
-            role_page.platform.setCurrentIndex(i)
-            return
-    raise AssertionError(f"platform {plat} not offered for this role")
+    if plat not in role_page._machine_buttons:
+        raise AssertionError(f"machine card {plat} not present on RolePage")
+    role_page.select_machine(plat)
 
 
 # ---- page catalog / slug map --------------------------------------------------
@@ -317,6 +314,47 @@ def test_mesh_worklist_multiselect_builds_entries_and_prunes_domain_refs(wiz):
     assert wiz.cfg.platform == "x86"                      # option-superset gating
     # be.rpi5 is no longer a checked row, so its attachment is pruned; omnibus.x86 stays
     assert wiz.cfg.domains[0].images == ["omnibus.x86"]
+
+
+# ---- WorklistPage: per-row encryption scoping (spec 4) -------------------------
+
+def test_worklist_per_row_encryption_column_and_jetson_disabled(wiz):
+    """spec 4: each buildable node row gets a default/on/off Encryption combo; the
+    jetson row shows a DISABLED 'off — jetson cannot encrypt' cell (no combo). The
+    fleet-wide LUKS-passphrase scoping hint is present."""
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+    # a normal node row has an editable combo defaulting to "default" (inherit Home)
+    combo = page._enc_combos["be.x86"]
+    assert combo is not None
+    assert [combo.itemText(i) for i in range(combo.count())] == ["default", "on", "off"]
+    assert combo.currentText() == "default"
+    # jetson cannot encrypt: no combo, a disabled display cell instead
+    assert page._enc_combos["edge_ai.jetson"] is None
+    assert "applies to EVERY encrypted node" in page.enc_hint.text()
+
+
+def test_worklist_untouched_rows_are_byte_identical(wiz):
+    """Emission identity: an untouched worklist resolves every row's encrypt_root to
+    'default' — exactly as before the per-row column existed (additive default)."""
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(page, "pki.x86", "be.x86", "fe.x86")
+    assert page.validatePage()
+    assert {e.encrypt_root for e in wiz.worklist.entries} == {"default"}
+
+
+def test_worklist_per_row_encryption_override_flows(wiz):
+    """A per-row 'on'/'off' override writes entry.encrypt_root for THAT node only,
+    while untouched rows stay 'default' (inherit the base) — the WHICH-device scoping."""
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(page, "pki.x86", "be.x86")
+    page._enc_combos["pki.x86"].setCurrentText("on")
+    page._enc_combos["be.x86"].setCurrentText("off")
+    assert page.validatePage()
+    by_id = {e.id: e.encrypt_root for e in wiz.worklist.entries}
+    assert by_id == {"pki.x86": "on", "be.x86": "off"}
 
 
 def test_switching_back_to_standalone_clears_stranded_admin_state(wiz):

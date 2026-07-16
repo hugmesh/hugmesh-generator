@@ -103,6 +103,12 @@ def test_role_list_keeps_usable_height(wiz):
 
 
 def test_progress_page_still_scrolls(wiz):
-    """Regression guard: ProgressPage already scrolled before this change; keep it that way."""
+    """Regression guard: ProgressPage must still scroll its build view. The old flat
+    QVBoxLayout-of-QFrames lived in a QScrollArea; the nested job/stage view is now a
+    QTreeWidget, which is itself a QAbstractScrollArea (it scrolls natively) — so the guard
+    asserts the page owns a scrolling job/stage widget, not specifically a QScrollArea."""
     prog = _pages_by_name(wiz)["ProgressPage"]
-    assert _scroll_of(prog) is not None
+    assert isinstance(prog.tree, QtWidgets.QTreeWidget)
+    assert prog.tree.findChildren  # sanity: it's a real widget
+    # a QTreeWidget IS a QAbstractScrollArea, so the build view scrolls without a wrapper.
+    assert isinstance(prog.tree, QtWidgets.QAbstractScrollArea)
