@@ -69,7 +69,10 @@ class WelcomePage(QtWidgets.QWizardPage):
                 QtWidgets.QMessageBox.warning(self, "Passwords not saved", "\n".join(warnings))
 
     def _fleet(self):
-        # deferred import: FleetDialog is self-contained (golive.py precedent)
-        # and only needed if the operator actually opens it
-        from .fleet import FleetDialog
-        FleetDialog(self.wiz.generator_dir, parent=self.wiz).exec()
+        # deferred import: the fleet window is self-contained (golive.py precedent)
+        # and only needed if the operator actually opens it. open_fleet_window owns
+        # the ONE non-modal instance (show(), never exec()) — this page, the
+        # Previous-builds manager and the whole wizard stay interactive while the
+        # fleet window is open and while a fleet run streams.
+        from . import fleet
+        fleet.open_fleet_window(self.wiz)

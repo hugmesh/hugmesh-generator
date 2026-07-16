@@ -51,6 +51,10 @@ ERROR_TAIL_LINES = 40
 
 LOG_NAME = "build.log"   # the builders' LOG_FILE basename (keys off -w)
 
+# A fleet run's teed stream (the GUI writes it — build-all-roles.sh has no LOG_FILE
+# of its own, so the tee is the honest per-session log, real content only).
+FLEET_LOG_NAME = "fleet.log"
+
 
 # ── paths ─────────────────────────────────────────────────────────────────────────────
 def sessions_dir() -> str:
@@ -99,12 +103,52 @@ def derive_label(wl: WorklistConfig) -> str:
     return f"mesh · {len(entries)} images ({', '.join(platforms)})"
 
 
+def fleet_platform_families(cfg) -> list[str]:
+    """The platform families a FleetConfig actually builds, in the script's own
+    order — a faithful mirror of scripts/build-all-roles.sh's sequential knob
+    evaluation (each *_ONLY zeroes every EARLIER family but not a later opt-in;
+    PENTEST_ONLY skips all image builds)."""
+    if cfg.pentest_only:
+        return ["pentest"]
+    rpi = not cfg.skip_rpi
+    x86 = not cfg.skip_x86
+    if x86 and cfg.x86_standalone_only:        # elif chain: SKIP_X86 wins over it
+        rpi = False
+    frite = cfg.frite or cfg.frite_only
+    if cfg.frite_only:
+        rpi = x86 = False
+    jetson = cfg.jetson or cfg.jetson_only
+    if cfg.jetson_only:
+        rpi = x86 = frite = False
+    opi5 = cfg.orangepi5 or cfg.orangepi5_only
+    if cfg.orangepi5_only:
+        rpi = x86 = frite = jetson = False
+    opz2 = cfg.orangepizero2 or cfg.orangepizero2_only
+    if cfg.orangepizero2_only:
+        rpi = x86 = frite = jetson = opi5 = False
+    fams = [name for name, on in (
+        ("rpi5", rpi), ("x86", x86), ("frite", frite), ("jetson", jetson),
+        ("orangepi5", opi5), ("orangepizero2", opz2)) if on]
+    if cfg.pentest:
+        fams.append("pentest")
+    return fams
+
+
+def derive_fleet_label(cfg) -> str:
+    """A human row label for a fleet run: ``fleet: rpi5, x86, frite``."""
+    fams = fleet_platform_families(cfg)
+    return "fleet: " + (", ".join(fams) if fams else "(nothing selected)")
+
+
 # ── the record ────────────────────────────────────────────────────────────────────────
 @dataclass
 class BuildSession:
     """One persisted build-creation session (see the module docstring)."""
     id: str = ""
     created: str = ""                 # first minted
+    # "wizard" (single-image/mesh worklist run) | "fleet" (build-all-roles run).
+    # from_dict filters unknown keys, so pre-existing records load as "wizard".
+    kind: str = "wizard"
     started: str = ""                 # latest run's dispatch time
     finished: str = ""                # latest run's terminal time ("" while running)
     label: str = ""                   # derive_label() summary
@@ -183,6 +227,49 @@ def new_session(wl: WorklistConfig, generator_dir: str, *,
                 for e in wl.entries]
     s.error_tail = {}
     s.log_path = os.path.join(s.workdir, LOG_NAME)
+    return s
+
+
+def new_fleet_session(cfg, generator_dir: str, *, backend: str | None = None,
+                      session_id: str | None = None) -> BuildSession:
+    """Assemble the BuildSession for a FLEET dispatch (core.fleet.FleetConfig —
+    duck-typed so this module stays import-light). Mirrors :func:`new_session`
+    exactly, including the RESTART semantics: ``session_id`` naming an existing
+    non-running record reloads it, archives its prior outcome into ``history`` and
+    reuses the same workdir; a fresh/unknown id gets a fresh
+    ``<out>/sessions/<id>/`` where out = cfg.output_dir or <generator>/out.
+
+    One honest AGGREGATE image row: build-all-roles.sh streams many roles through
+    one process and we cannot truthfully attribute per-role outcomes from its
+    stream, so we record exactly one "all-roles" row instead of fabricating N.
+    Nothing is written until :func:`start` (the ProgressPage precedent)."""
+    out = cfg.output_dir or os.path.join(os.path.abspath(generator_dir), "out")
+    sid = session_id or new_session_id()
+
+    s: BuildSession | None = None
+    if session_id:
+        try:
+            s = load(os.path.join(sessions_dir(), f"{session_id}.json"))
+        except (OSError, ValueError):
+            s = None
+    if s is not None and s.status != RUNNING:      # archive the prior run's truth
+        s.history.append({"started": s.started, "finished": s.finished,
+                          "status": s.status, "images": s.images,
+                          "error_tail": s.error_tail})
+    if s is None:
+        s = BuildSession(id=sid, created=_now())
+        s.workdir = session_workdir(out, sid)
+
+    s.kind = "fleet"
+    s.label = derive_fleet_label(cfg)
+    s.config = cfg.to_dict()                       # no SECRET fields in a fleet config
+    s.blanked_secrets = []
+    s.backend = backend
+    s.images = [{"id": "fleet", "role": "all-roles",
+                 "platform": ", ".join(fleet_platform_families(cfg)),
+                 "status": "queued", "exit_code": None, "keys_ok": None}]
+    s.error_tail = {}
+    s.log_path = os.path.join(s.workdir, FLEET_LOG_NAME)
     return s
 
 

@@ -323,6 +323,14 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
             elif "Redo" not in why:
                 QtWidgets.QMessageBox.warning(self, "Restart refused", why)
             return
+        if getattr(s, "kind", "wizard") == "fleet":
+            # a fleet run restarts through the fleet window, pinned to the SAME
+            # record/workdir (prior outcome archived); it lands on the Review step,
+            # so "Build fleet now" there IS the confirmation. Deferred import — the
+            # fleet channel stays self-contained (welcome.py precedent).
+            from . import fleet
+            fleet.open_fleet_window(self.wiz, session=s)
+            return
         has_trees = any(n.startswith("wl-") for n in
                         (os.listdir(s.workdir) if os.path.isdir(s.workdir) else []))
         box = QtWidgets.QMessageBox(self)
@@ -347,6 +355,13 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         if r is None or r.kind != "session":
             return
         s = r.session
+        if getattr(s, "kind", "wizard") == "fleet":
+            # REDO for a fleet run: load its config into the fleet window as a NEW
+            # session (fresh record/workdir minted at Review). No secrets exist in
+            # a fleet config, so no blanked-secrets warning applies.
+            from . import fleet
+            fleet.open_fleet_window(self.wiz, session=s, reuse_record=False)
+            return
         self.wiz.load_session(s.config)
         if s.blanked_secrets:
             QtWidgets.QMessageBox.warning(

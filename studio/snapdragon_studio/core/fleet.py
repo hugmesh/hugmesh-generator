@@ -166,7 +166,12 @@ class FleetDriver(BuildDriver):
 
     def command(self, cfg: FleetConfig, backend: str | None = None) -> list[str]:  # type: ignore[override]
         backend = backend or self.host.default_backend
-        out = cfg.output_dir or os.path.join(self.generator_dir, "out")
+        # self.workdir: the same runtime per-session override BuildDriver.command
+        # honours (#357) — set by the GUI at dispatch, NEVER written into the
+        # FleetConfig, default None, so command(cfg) without an override stays
+        # byte-identical. run()/command_string() both call command(), so the
+        # override flows through dispatch, preview and preflight for free.
+        out = self.workdir or cfg.output_dir or os.path.join(self.generator_dir, "out")
         penv = cfg.to_env()
         inner = [f"./{FLEET_SCRIPT}", "-w", "/out" if backend == "docker" else out,
                  "-j", str(cfg.jobs), *cfg.to_cli_args()]
