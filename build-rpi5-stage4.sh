@@ -2101,6 +2101,10 @@ if [ "$(id -u)" -eq 0 ] && [ -d /etc/portage ]; then
 # keyworded amd64-first upstream. HOST-side twin of the sysroot's
 # package.accept_keywords/setuptools-scm-backend (see that file's rationale).
 dev-python/vcs-versioning **
+# setuptools-scm itself: the container-stable 10.0.5 fails its own wheel
+# REBUILD once vcs-versioning-2 is installed ("unable to detect version",
+# real jetson host-side failure 2026-07-16); the working 10.2.x is ~amd64.
+dev-python/setuptools-scm **
 HOSTKW
     info "Pre-seeded HOST /etc/portage/package.accept_keywords: vcs-versioning (build-backend)"
 fi
