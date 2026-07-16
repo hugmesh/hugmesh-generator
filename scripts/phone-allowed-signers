@@ -1,0 +1,23 @@
+# scripts/phone-allowed-signers — PINNED GrapheneOS factory-image signing key.
+#
+# Provenance: fetched 2026-07-15 over TLS from
+#   https://releases.grapheneos.org/allowed_signers
+# per the official CLI install verification procedure
+#   https://grapheneos.org/install/cli
+# (the old signify factory.pub is GONE — releases.grapheneos.org returns HTTP 410
+# for it; OpenSSH sshsig signatures over the -install- zips are the ONLY current
+# verification method).
+#
+# Expected key fingerprint (the wizard double-pins this via `ssh-keygen -lf`
+# before every verify; PW_EXPECTED_SIGNER_FP overrides, tests only):
+#   SHA256:AhgHif0mei+9aNyKLfMZBh2yptHdw/aN7Tlh/j2eFwM
+#
+# OPERATOR CROSS-CHECK (do this when updating this file): fetch the URL above
+# from a second network/device, and compare the key against the copy published
+# at https://grapheneos.org/install/cli — both the base64 blob and the
+# `ssh-keygen -lf` fingerprint must match before committing a change here.
+#
+# ssh-keygen ignores these '#' comment lines in allowed_signers files (verified
+# against OpenSSH 10.3 for both `-Y verify` and `-lf`), so the wizard can point
+# `ssh-keygen -Y verify -f` at this file as-is.
+contact@grapheneos.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIUg/m5CoP83b0rfSCzYSVA4cw4ir49io5GPoxbgxdJE

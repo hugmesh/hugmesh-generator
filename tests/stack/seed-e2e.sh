@@ -231,8 +231,8 @@ ensure_app    "${CASDOOR_URL}" "${CASDOOR_ORG}"
 # tests/pentest/seed-personas.sh appends its attacker/load pools.
 #
 # The ad-hoc identities below (admin@snapdragon.systems, alice../frank@gmail.com,
-# dragoneer, rbac-pending@/rbac-approved@gmail.com) are the sequential, stateful
-# specs/02,04,05,06,07,08,09,17 personas — per helpers.ts's
+# dragoneer, rbac-plain@/rbac-login-user@/rbac-pending@/rbac-approved@gmail.com)
+# are the sequential, stateful specs/02,04,05,06,07,08,09,13,15,17 personas — per helpers.ts's
 # onboard()/registerOnly() doc comment, native login has no self-registration
 # surface, so each must exist as a pre-seeded native Casdoor account (username
 # = the literal handle these specs hardcode) sharing the common E2E_PASSWORD.
@@ -244,7 +244,8 @@ ensure_app    "${CASDOOR_URL}" "${CASDOOR_ORG}"
 # "rando" are DELIBERATELY absent — specs 03/07 assert sign-in is denied for an
 # identity no admin ever provisioned.
 #
-# rbac-pending@/rbac-approved@gmail.com (spec 17): POST /bff/admin/allowlist
+# rbac-plain@ (spec 13) / rbac-login-user@ (spec 15) / rbac-pending@ +
+# rbac-approved@gmail.com (spec 17): POST /bff/admin/allowlist
 # does NOT gate native sign-in — that's a vestige of the removed Google/Discord
 # self-registration flow (SsoAuthController's separate, dark /bff/register
 # endpoint); /bff/login always validates against a REAL, pre-existing Casdoor
@@ -252,6 +253,15 @@ ensure_app    "${CASDOOR_URL}" "${CASDOOR_ORG}"
 # 17's "pending vs completed registration" gate can exercise the SAME real
 # registerOnly()/onboard() mechanism as specs 02/03/04, not a self-provisioning
 # path that doesn't exist in the current architecture.
+# rbac-plain@/rbac-login-user@gmail.com are the "invite then sign in as a plain
+# ROLE_USER" personas specs 13 (BFF admin-API gating) + 15 (per-realm login)
+# hardcode: the admin INVITES the handle, then the SAME handle signs in and must
+# carry EXACTLY ['user'] (spec 15) and be DENIED every /bff/admin/** endpoint
+# (spec 13). The invite provisions the account in the MOCK stack, but against a
+# real Casdoor /bff/login validates against a pre-existing account only — so, as
+# with rbac-pending/rbac-approved, the handle must be pre-seeded as a bare
+# ROLE_USER here or the login 401s at setup and the denial/role assertions never
+# run. Bare ROLE_USER (no elevated role) is exactly what both specs presuppose.
 # ROLE_SUPERADMIN persona login. Defaults to e2e-superadmin so ordinary e2e runs
 # (and every UI spec that logs in as e2e-superadmin) are UNCHANGED. The from-scratch
 # local-mesh bootstrapper (studio core/local_mesh_bootstrap) bridges the minted
@@ -270,6 +280,8 @@ dave@gmail.com:ROLE_USER:E2E_PASSWORD \
 eve@gmail.com:ROLE_USER:E2E_PASSWORD \
 frank@gmail.com:ROLE_USER:E2E_PASSWORD \
 dragoneer:ROLE_USER:E2E_PASSWORD \
+rbac-plain@gmail.com:ROLE_USER:E2E_PASSWORD \
+rbac-login-user@gmail.com:ROLE_USER:E2E_PASSWORD \
 rbac-pending@gmail.com:ROLE_USER:E2E_PASSWORD \
 rbac-approved@gmail.com:ROLE_USER:E2E_PASSWORD"
 

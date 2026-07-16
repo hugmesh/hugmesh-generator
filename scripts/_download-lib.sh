@@ -57,6 +57,14 @@
 #   dlv_gpg_cleanup
 #       — remove the ephemeral GNUPGHOME created by dlv_import_key.
 #
+#   dlv_verify_sshsig <file> <sig> <allowed_signers> <identity> <namespace> [expected_key_fp]
+#       — verify an OpenSSH sshsig signature (`ssh-keygen -Y verify`) against a
+#         pinned allowed_signers file (GrapheneOS factory images use this). When
+#         <expected_key_fp> is non-empty, first assert every key in the
+#         allowed_signers file carries that SHA256 fingerprint (fail-closed
+#         tamper check — catches a replaced AND an appended key). Dies on any
+#         failure, logs OK on success.
+#
 # Tunables (env, set by the caller before sourcing or before a call):
 #   DLV_QUIET=1                 suppress dlv_info chatter (errors still show)
 #   DLV_GENTOO_KEY=<fpr>        override the Gentoo release-eng key fingerprint
@@ -359,5 +367,57 @@ dlv_verify_stage3() {
     fi
     rm -rf "${tmpd}"
     dlv_info "stage3 verified (signed DIGESTS + ${want_algo}): ${base}"
+    return 0
+}
+
+# ── OpenSSH signatures (sshsig) ────────────────────────────────────
+# <file>             the artifact the signature covers (read via stdin redirect)
+# <sig>              the detached .sig produced by `ssh-keygen -Y sign`
+# <allowed_signers>  pinned "principal keytype base64" file ('#' comments OK)
+# <identity>         the principal to verify as (e.g. contact@grapheneos.org)
+# <namespace>        the sshsig namespace (e.g. "factory images")
+# [expected_key_fp]  optional SHA256:… fingerprint double-pin
+#
+# The fingerprint pre-check runs against EVERY key line in the allowed_signers
+# file: `-Y verify` accepts ANY listed key for the principal, so an attacker who
+# can append a line (not just replace one) would otherwise get a valid verify
+# with their own key. Fail-closed: unparseable/missing keys die too.
+dlv_verify_sshsig() {
+    local file="$1" sig="$2" signers="$3" identity="$4" namespace="$5" expected_fp="${6:-}"
+    dlv_require_tools ssh-keygen || return 1
+    [ -f "${file}" ]    || { dlv_die "file to verify does not exist: ${file}"; return 1; }
+    [ -f "${sig}" ]     || { dlv_die "sshsig signature missing: ${sig}"; return 1; }
+    [ -f "${signers}" ] || { dlv_die "allowed_signers file missing: ${signers}"; return 1; }
+
+    if [ -n "${expected_fp}" ]; then
+        # ssh-keygen -lf prints "bits SHA256:… principal (TYPE)" per key line and
+        # skips '#' comments (verified against OpenSSH 10.3).
+        local fps fp
+        fps="$(ssh-keygen -lf "${signers}" 2>/dev/null | awk '{print $2}')"
+        if [ -z "${fps}" ]; then
+            dlv_die "could not fingerprint any key in ${signers} (fail-closed)"
+            return 1
+        fi
+        for fp in ${fps}; do
+            if [ "${fp}" != "${expected_fp}" ]; then
+                dlv_die "allowed_signers key fingerprint MISMATCH for ${signers}
+          expected: ${expected_fp}
+          found:    ${fp}
+        the pinned signer file may have been TAMPERED with — refusing to verify."
+                return 1
+            fi
+        done
+    fi
+
+    if ! ssh-keygen -Y verify -f "${signers}" -I "${identity}" -n "${namespace}" \
+            -s "${sig}" < "${file}" >/dev/null 2>&1; then
+        dlv_die "sshsig verification FAILED for ${file}
+          sig:       ${sig}
+          identity:  ${identity}
+          namespace: ${namespace}
+        refusing to use an artifact that does not verify."
+        return 1
+    fi
+    dlv_info "sshsig OK: $(basename "${file}") (identity=${identity}, namespace='${namespace}')"
     return 0
 }

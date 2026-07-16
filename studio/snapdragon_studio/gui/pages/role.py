@@ -1,42 +1,40 @@
-"""RolePage — MACHINE-FIRST image picker: choose the target MACHINE as a card, then
-the IMAGE TYPE (role) that machine supports, with the per-machine board/flavor/desktop
-knobs inline underneath. The x86 card additionally carries the machine-profile PRESET
-(seeds GPU/Wi-Fi/kernel defaults; never emits a flag itself), so the target machine is
-defined in exactly ONE place across the flow.
+"""RolePage — ARCH-FIRST device picker: choose the ARCHITECTURE (x86-64 / ARM64 / …),
+browse the family-grouped DEVICE CATALOG (searchable, with honest status badges), then
+the IMAGE TYPE (role) that device really supports, with the per-machine
+board/flavor/desktop knobs inline underneath. The x86 devices additionally carry the
+machine-profile PRESET (seeds GPU/Wi-Fi/kernel defaults; never emits a flag itself),
+so the target machine is defined in exactly ONE place across the flow.
+
+The browser is driven by ``core.device_catalog``: a catalog device IS a
+``(platform, board)`` pair — exactly the two cfg fields the previous machine card +
+per-platform board combo produced — and its roles are DERIVED from the same
+``ROLE_CHOICES``/``rpi_boards_for_role`` predicates, so for every board/role selectable
+before, the emitted cfg (platform/board/role/flavor) and argv are unchanged by
+construction. The #351 honesty rule is structural: UNSUPPORTED devices are listed but
+not selectable (reason shown); EXPERIMENTAL ones are labelled; a device only ever
+offers the roles its builder really accepts.
 
 Emission is UNCHANGED: validatePage writes the SAME cfg fields via the SAME
-platform-branch cascade the role→platform combo produced — the machine card IS the
-platform, and the reachable (role, platform) set is the same ROLE_CHOICES[mode]
-catalog merely pivoted (machine→roles instead of role→machines).
+platform-branch cascade — the selected device supplies the platform (and pins the
+board combo), and the reachable (role, platform) set is the same ROLE_CHOICES[mode]
+catalog merely pivoted (device→roles instead of role→machines).
 """
 from __future__ import annotations
 
-from ..qt import Qt, QtWidgets
+from ..qt import Qt, QtGui, QtWidgets
 from ._scroll import scrollable
-from ...core import hw_scan, profiles
+from ...core import device_catalog, hw_scan, profiles
 from ...core.config import (
     FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, GPU_DRIVER_ALIASES, GPU_DRIVER_CHOICES,
     JETSON_BOARDS, KERNEL_FLAVOR_CHOICES, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
-    ORANGEPIZERO2_FLAVORS, PLATFORM_LABELS, ROLE_CHOICES, RPI_BOARDS, UNAFFILIATED_ROLE,
+    ORANGEPIZERO2_FLAVORS, ROLE_CHOICES, RPI_BOARDS, UNAFFILIATED_ROLE,
     rpi_boards_for_role,
 )
-from ._widgets import _row
+from ._widgets import _row, status_badge
 
-# canonical machine-card order — x86 first (the default platform), matching today's
+# canonical machine order — x86 first (the default platform), matching today's
 # default-platform behaviour; ARM boards follow in a stable order.
 _MACHINE_ORDER = ("x86", "rpi5", "frite", "orangepi5", "orangepizero2", "jetson")
-
-# Short, friendly card names for the machine tier; the detailed PLATFORM_LABELS text
-# (which carries #351's "EXPERIMENTAL: hardware validation pending" tags) rides through
-# as the card's gray sub-description, so the experimental tagging is unchanged.
-_MACHINE_CARD_NAME = {
-    "x86": "x86 PC / laptop",
-    "rpi5": "Raspberry Pi 3 / 4 / 5",
-    "frite": "La Frite (Amlogic)",
-    "orangepi5": "Orange Pi 5",
-    "orangepizero2": "Orange Pi Zero 2",
-    "jetson": "Jetson Orin",
-}
 
 
 def _machine_sort_key(plat: str) -> int:
@@ -44,7 +42,7 @@ def _machine_sort_key(plat: str) -> int:
 
 
 class RolePage(QtWidgets.QWizardPage):
-    """Machine-first single-image picker. Mesh skips this page (the WorklistPage owns
+    """Arch-first single-image picker. Mesh skips this page (the WorklistPage owns
     role × platform); standalone/cloud build ONE image here."""
     def __init__(self, wiz):
         super().__init__()
@@ -52,41 +50,81 @@ class RolePage(QtWidgets.QWizardPage):
         self.setTitle("Target machine & image type")
         # initializePage() sets a path-aware subtitle (standalone vs. mesh client);
         # this is the fallback before the mode is known.
-        self.setSubTitle("Pick the machine you're building for, then the image type it runs.")
+        self.setSubTitle("Pick the architecture and the device you're building for, "
+                         "then the image type it runs.")
         lay = scrollable(self)
 
-        # ── machine tier: one card per platform in the UNION of ROLE_CHOICES for the
-        # two single-image modes (standalone/cloud share the same union; the current
-        # mode's subset is shown per-visit). The card IS the platform axis. ─────────
+        self._catalog = device_catalog.load_catalog()
+        # the platform union of the two single-image modes (standalone/cloud share the
+        # same union; the current mode's subset gates role derivation per-visit).
         self._all_machines = sorted(
             {p for m in ("standalone", "cloud")
              for _r, plats, _l in ROLE_CHOICES[m] for p in plats},
             key=_machine_sort_key)
+        # compat shim for the established pick_platform/select_machine test entry
+        # points: platform id -> its default catalog device (the same (platform,
+        # board) pair the old card + default board combo produced).
+        self._machine_buttons = {p: device_catalog.default_device_for_platform(p)
+                                 for p in self._all_machines}
+
+        # ── machine tier: architecture selector + searchable, family-grouped device
+        # browser (the device IS the platform+board axes; #351 statuses ride on the
+        # rows: UNSUPPORTED visible-but-unselectable, EXPERIMENTAL labelled). ────────
         self.machine_box = QtWidgets.QGroupBox("Target machine")
         mbl = QtWidgets.QVBoxLayout(self.machine_box)
-        self.machine_group = QtWidgets.QButtonGroup(self)
-        self._machine_buttons: dict[str, QtWidgets.QRadioButton] = {}
-        self._machine_rows: dict[str, QtWidgets.QWidget] = {}
-        for i, plat in enumerate(self._all_machines):
-            rb = QtWidgets.QRadioButton(_MACHINE_CARD_NAME.get(plat, plat))
-            rb.setProperty("machine", plat)
-            sub = QtWidgets.QLabel(PLATFORM_LABELS[plat])   # rides #351's EXPERIMENTAL tags
-            sub.setWordWrap(True)
-            sub.setStyleSheet("color: gray;")
-            sub.setContentsMargins(24, 0, 0, 8)
-            self.machine_group.addButton(rb, i)
-            self._machine_buttons[plat] = rb
-            container = QtWidgets.QWidget()
-            cvl = QtWidgets.QVBoxLayout(container)
-            cvl.setContentsMargins(0, 0, 0, 0)
-            cvl.addWidget(rb)
-            cvl.addWidget(sub)
-            self._machine_rows[plat] = container
-            mbl.addWidget(container)
+
+        arch_row = QtWidgets.QWidget()
+        arch_lay = QtWidgets.QHBoxLayout(arch_row)
+        arch_lay.setContentsMargins(0, 0, 0, 0)
+        arch_lay.addWidget(QtWidgets.QLabel("Architecture:"))
+        self.arch_group = QtWidgets.QButtonGroup(self)
+        self._arch_buttons: dict[str, QtWidgets.QRadioButton] = {}
+        for i, arch in enumerate(self._catalog.archs):
+            # extensible enum: render only archs that actually carry >=1 device
+            if not self._catalog.devices_for_arch(arch.id):
+                continue
+            rb = QtWidgets.QRadioButton(arch.label)
+            rb.setProperty("arch", arch.id)
+            self.arch_group.addButton(rb, i)
+            self._arch_buttons[arch.id] = rb
+            arch_lay.addWidget(rb)
+        arch_lay.addStretch(1)
+        mbl.addWidget(arch_row)
+
+        self.device_search = QtWidgets.QLineEdit()
+        self.device_search.setPlaceholderText(
+            "Search devices — name, SoC, or family (e.g. \"potato\", \"RK3588\")")
+        self.device_search.setClearButtonEnabled(True)
+        mbl.addWidget(self.device_search)
+
+        self.device_tree = QtWidgets.QTreeWidget()
+        self.device_tree.setHeaderLabels(["Device", "SoC / details", "Status"])
+        self.device_tree.setRootIsDecorated(True)
+        self.device_tree.setMinimumHeight(240)
+        self.device_tree.setColumnWidth(0, 300)
+        self.device_tree.setColumnWidth(1, 260)
+        self._family_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
+        self._device_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
+        for fam in self._catalog.families:
+            fitem = QtWidgets.QTreeWidgetItem(self.device_tree)
+            fitem.setText(0, f"{fam.label} — {fam.vendor}")
+            fitem.setFlags(Qt.ItemFlag.ItemIsEnabled)   # a header, never selectable
+            font = fitem.font(0)
+            font.setBold(True)
+            fitem.setFont(0, font)
+            self._family_items[fam.id] = fitem
+            for dev in self._catalog.devices_in_family(fam.id):
+                ditem = QtWidgets.QTreeWidgetItem(fitem)
+                ditem.setText(0, dev.label)
+                ditem.setText(1, dev.soc)
+                ditem.setData(0, Qt.ItemDataRole.UserRole, dev.id)
+                self._device_items[dev.id] = ditem
+            fitem.setExpanded(True)
+        mbl.addWidget(self.device_tree)
         lay.addWidget(self.machine_box)
 
-        # ── image-type tier: the roles the CHOSEN machine supports (filtered from the
-        # same ROLE_CHOICES[mode] catalog). Selecting a card repopulates this list. ──
+        # ── image-type tier: the roles the CHOSEN device supports (DERIVED from the
+        # same ROLE_CHOICES[mode] catalog). Selecting a device repopulates this list. ──
         lay.addWidget(QtWidgets.QLabel("Image type"))
         self.roles = QtWidgets.QListWidget()
         # Keep a healthy visible height for the role list inside the scroll area
@@ -95,9 +133,9 @@ class RolePage(QtWidgets.QWizardPage):
         lay.addWidget(self.roles, 1)
 
         # ── machine-profile PRESET — folded here from the Hardware page (spec fold 2):
-        # a preset only, shown inline UNDER the x86 card (profiles.json is all-x86). It
+        # a preset only, shown inline for x86 devices (profiles.json is all-x86). It
         # pre-fills the GPU/Wi-Fi/Bluetooth fields the Hardware step finalises and never
-        # emits a builder flag itself. Hidden on non-x86 cards (no profiles there). ──
+        # emits a builder flag itself. Hidden on non-x86 devices (no profiles there). ──
         self.profiles = profiles.load(getattr(wiz, "generator_dir", ""))
         self.profile = QtWidgets.QComboBox()
         self.profile.addItem("(none / generic)", "")
@@ -235,7 +273,9 @@ class RolePage(QtWidgets.QWizardPage):
         lay.addWidget(self.note)
         lay.addStretch(1)
         self.roles.currentRowChanged.connect(self._role_changed)
-        self.machine_group.buttonToggled.connect(self._on_machine_toggled)
+        self.device_tree.currentItemChanged.connect(self._on_device_item_changed)
+        self.arch_group.buttonToggled.connect(self._on_arch_toggled)
+        self.device_search.textChanged.connect(self._apply_device_filter)
         self.profile.currentIndexChanged.connect(self._profile_changed)
 
     def _uboot_rows(self, box_layout, url_hint):
@@ -253,6 +293,148 @@ class RolePage(QtWidgets.QWizardPage):
         box_layout.addWidget(skip)
         return url, defconfig, skip
 
+    # ---- device browser plumbing ---------------------------------------------------
+    def _mode(self) -> str:
+        mode = getattr(self.wiz.cfg, "mode", "") or "standalone"
+        return mode if mode in ROLE_CHOICES else "standalone"
+
+    def _refresh_device_statuses(self) -> None:
+        """Per-mode honesty pass over every device row: status badge + selectability.
+        UNSUPPORTED rows are visible but never selectable (reason shown, #351); a
+        selectable device with zero roles in THIS mode is likewise unselectable here,
+        with an inline explanation instead of a dead-end (e.g. rpi3 in standalone,
+        the mesh-only Jetson boards in standalone/cloud)."""
+        mode = self._mode()
+        for did, item in self._device_items.items():
+            dev = self._catalog.device(did)
+            roles = device_catalog.roles_for(did, mode)
+            if dev.status == "unsupported":
+                badge, color = status_badge("unsupported")
+                text = f"{badge} — {dev.reason}"
+                pickable = False
+            elif not roles:
+                others = [m for m in ROLE_CHOICES if device_catalog.roles_for(did, m)]
+                text = (f"no {mode} image — " + (dev.notes or
+                        f"offered on the {'/'.join(others) or 'other'} path"))
+                color = "#777777"
+                pickable = False
+            else:
+                text, color = status_badge(dev.status)
+                pickable = True
+            item.setText(2, text)
+            if color:
+                item.setForeground(2, QtGui.QBrush(QtGui.QColor(color)))
+            tip = device_catalog.status_reason(did) or dev.notes
+            for col in range(3):
+                item.setToolTip(col, tip)
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                          if pickable else Qt.ItemFlag.NoItemFlags)
+
+    def _current_arch(self) -> str | None:
+        btn = self.arch_group.checkedButton()
+        return btn.property("arch") if btn is not None else None
+
+    def _apply_device_filter(self, _text: str = "") -> None:
+        """Arch + search filtering (presentation only — never touches cfg)."""
+        arch = self._current_arch()
+        hits = {d.id for d in self._catalog.search(self.device_search.text())}
+        for fam in self._catalog.families:
+            fitem = self._family_items[fam.id]
+            any_visible = False
+            for dev in self._catalog.devices_in_family(fam.id):
+                show = (arch is None or dev.arch == arch) and dev.id in hits
+                self._device_items[dev.id].setHidden(not show)
+                any_visible = any_visible or show
+            fitem.setHidden(not any_visible)
+
+    def _on_arch_toggled(self, btn, checked) -> None:
+        if not checked:
+            return
+        self._apply_device_filter()
+        # keep the selection coherent with the arch tier: if the current device is now
+        # filtered out, hop to the arch's first selectable device (cfg only changes at
+        # validatePage, so this is presentation-safe).
+        did = self._selected_device()
+        arch = btn.property("arch")
+        if did is not None and self._catalog.device(did).arch == arch:
+            return
+        for dev in self._catalog.devices_for_arch(arch):
+            item = self._device_items[dev.id]
+            if not item.isHidden() and item.flags() & Qt.ItemFlag.ItemIsSelectable:
+                self.device_tree.setCurrentItem(item)
+                return
+        # an all-unsupported arch (ARMv7 / RISC-V today): NOTHING is selectable, so the
+        # hidden prior device must not stay armed with its contradictory role list —
+        # clear the selection outright (the item-changed handler disarms the role list
+        # and Next) and say so honestly instead of a silent dead screen.
+        self.device_tree.setCurrentItem(None)
+        self.note.setText("No buildable device on this architecture yet — each row's "
+                          "status column says why.")
+
+    def _selected_device(self) -> str | None:
+        it = self.device_tree.currentItem()
+        return it.data(0, Qt.ItemDataRole.UserRole) if it is not None else None
+
+    def _on_device_item_changed(self, cur, _prev) -> None:
+        did = cur.data(0, Qt.ItemDataRole.UserRole) if cur is not None else None
+        if did is None or not device_catalog.selectable(did):
+            # KEYBOARD nav lands current on family HEADERS (they keep ItemIsEnabled so
+            # they render normally, and QTreeView's moveCursor stops on enabled rows);
+            # the arch tier may also clear the selection outright. Either way there is
+            # NO chosen device now — DISARM the image-type list so isComplete() and
+            # validatePage() both gate Next. Leaving the previous device's roles armed
+            # would let a stale role pair with a fallback platform and emit an argv the
+            # builder is guaranteed to hard-error on (#351).
+            self._disarm_roles()
+            return
+        dev = self._catalog.device(did)
+        prefer = (self._current_role_id() or self._role_pref
+                  or self.wiz.cfg.role)
+        self._populate_roles(did, prefer)
+        self._update_boxes(dev.builder_platform)
+        self._role_changed(self.roles.currentRow())
+        self._apply_device_pin(dev)
+        self.note.setText(device_catalog.status_reason(did)
+                          if dev.status == "experimental" else "")
+        self.completeChanged.emit()
+
+    # last role the user actually picked in the list this visit — survives a keyboard
+    # pass over a family header (the disarm clears the list) so re-landing on a device
+    # restores the same image-type choice.
+    _role_pref: str | None = None
+
+    def _disarm_roles(self) -> None:
+        """No device is chosen (current is a family header / cleared): empty the
+        image-type list and re-evaluate isComplete(), disabling Next. The stale
+        previous-device role list must never stay armed without its device (#351)."""
+        pref = self._current_role_id()
+        if pref is not None:
+            self._role_pref = pref
+        if self.roles.count():
+            self.roles.blockSignals(True)
+            self.roles.clear()
+            self.roles.blockSignals(False)
+        self.completeChanged.emit()
+
+    _BOARD_COMBO_ATTR = {"rpi5": "rpi5_board", "jetson": "jetson_board",
+                         "frite": "board", "orangepi5": "orangepi5_board"}
+
+    def _apply_device_pin(self, dev) -> None:
+        """The device pins the board axis: the per-platform board combo becomes a
+        read-only identity display (one machine picker per flow — the browser)."""
+        attr = self._BOARD_COMBO_ATTR.get(dev.builder_platform)
+        if attr is None:
+            return
+        combo = getattr(self, attr)
+        if dev.builder_board:
+            combo.setCurrentText(dev.builder_board)
+            combo.setEnabled(False)
+            combo.setToolTip("Board pinned by the selected device — pick a different "
+                             "device in the browser above to change it.")
+        else:  # a platform-default device without a pinned board: keep it editable
+            combo.setEnabled(True)
+            combo.setToolTip("")
+
     # ---- machine / role plumbing -------------------------------------------------
     def _platforms_for_role(self, mode: str, role: str):
         for r, plats, _l in ROLE_CHOICES[mode]:
@@ -261,8 +443,8 @@ class RolePage(QtWidgets.QWizardPage):
         return None
 
     def _selected_machine(self):
-        btn = self.machine_group.checkedButton()
-        return btn.property("machine") if btn is not None else None
+        did = self._selected_device()
+        return self._catalog.device(did).builder_platform if did else None
 
     def _current_role(self):
         it = self.roles.currentItem()
@@ -273,15 +455,16 @@ class RolePage(QtWidgets.QWizardPage):
         it = self.roles.currentItem()
         return it.data(Qt.ItemDataRole.UserRole)[0] if it else None
 
-    def _populate_roles(self, machine: str, prefer: str) -> None:
-        """Fill the image-type list with the roles the chosen MACHINE supports (the
-        same ROLE_CHOICES[mode] catalog pivoted machine→roles); pre-select ``prefer``."""
+    def _populate_roles(self, device_id: str, prefer: str) -> None:
+        """Fill the image-type list with the roles the chosen DEVICE really supports
+        (DERIVED: device_catalog.roles_for — the same ROLE_CHOICES[mode] catalog,
+        narrowed by the device's board/role_allow gates); pre-select ``prefer``."""
         self.roles.blockSignals(True)
         self.roles.clear()
         target = None
-        for role, platforms, label in ROLE_CHOICES[self.wiz.cfg.mode]:
-            if machine not in platforms:
-                continue
+        mode = self._mode()
+        for role, label in device_catalog.roles_for(device_id, mode):
+            platforms = self._platforms_for_role(mode, role)
             it = QtWidgets.QListWidgetItem(f"{role} — {label}")
             it.setData(Qt.ItemDataRole.UserRole, (role, platforms))
             self.roles.addItem(it)
@@ -293,18 +476,9 @@ class RolePage(QtWidgets.QWizardPage):
             self.roles.setCurrentRow(0)
         self.roles.blockSignals(False)
 
-    def _on_machine_toggled(self, btn, checked) -> None:
-        if not checked:
-            return
-        machine = btn.property("machine")
-        prefer = self._current_role_id() or self.wiz.cfg.role
-        self._populate_roles(machine, prefer)
-        self._update_boxes(machine)
-        self._role_changed(self.roles.currentRow())
-
     def _update_boxes(self, machine: str) -> None:
         """Machine-driven inline knob visibility (same setVisible cascade the old
-        combo drove, now keyed on the selected card)."""
+        card drove, now keyed on the selected device's platform)."""
         self.frite_box.setVisible(machine == "frite")
         self.jetson_box.setVisible(machine == "jetson")
         self.rpi5_box.setVisible(machine == "rpi5")
@@ -313,21 +487,33 @@ class RolePage(QtWidgets.QWizardPage):
         # desktop weight / Steam are x86 desktop-image knobs (client + standalone)
         self.client_box.setVisible(machine == "x86"
                                    and self.wiz.cfg.mode in ("standalone", "cloud"))
-        # the machine-profile preset lives with the x86 card only (profiles.json is x86)
+        # the machine-profile preset lives with the x86 devices only (profiles.json is x86)
         x86 = machine == "x86"
         self.profile_row.setVisible(x86)
         self.profile_note.setVisible(x86)
         self.scan_out.setVisible(x86)
-        self.note.setText("EXPERIMENTAL — hardware validation pending (specs-jetson/README.md); "
-                          "the Jetson builder is being brought up." if machine == "jetson" else "")
 
     # ---- test / navigation entry points ------------------------------------------
+    def select_device(self, device_id: str) -> None:
+        """Select a catalog device in the browser (aligns the arch tier, repopulates
+        the image-type list). Raises KeyError for an unknown id; a non-selectable
+        (unsupported / no-role-in-mode) device is left unselected — honesty gate."""
+        dev = self._catalog.device(device_id)
+        ab = self._arch_buttons.get(dev.arch)
+        if ab is not None and not ab.isChecked():
+            self.arch_group.blockSignals(True)
+            ab.setChecked(True)
+            self.arch_group.blockSignals(False)
+            self._apply_device_filter()
+        self.device_tree.setCurrentItem(self._device_items[device_id])
+
     def select_machine(self, plat: str) -> None:
-        """Select the machine card for ``plat`` (repopulates the image-type list)."""
-        self._machine_buttons[plat].setChecked(True)
+        """Select the DEFAULT device for ``plat`` (compat shim for the established
+        machine-first entry point; repopulates the image-type list)."""
+        self.select_device(self._machine_buttons[plat])
 
     def select_role(self, role: str) -> bool:
-        """Select the machine that supports ``role`` (if the current one doesn't), then
+        """Select a device that supports ``role`` (if the current one doesn't), then
         the role in the image-type list. Returns True on success."""
         plats = self._platforms_for_role(self.wiz.cfg.mode, role)
         if plats and self._selected_machine() not in plats:
@@ -338,6 +524,14 @@ class RolePage(QtWidgets.QWizardPage):
                 self.roles.setCurrentItem(it)
                 return True
         return False
+
+    def isComplete(self) -> bool:
+        """Next requires a real, SELECTABLE catalog device with >=1 derived role.
+        Keyboard focus on a family header, an all-unsupported arch screen, or a
+        zero-role device all leave Next disabled — the #351 gate at the button."""
+        did = self._selected_device()
+        return (did is not None and device_catalog.selectable(did)
+                and self.roles.count() > 0)
 
     def initializePage(self):
         c = self.wiz.cfg
@@ -351,31 +545,59 @@ class RolePage(QtWidgets.QWizardPage):
         # which choice the user is making on the path they took at the first screen.
         if c.mode == "standalone":
             self.setSubTitle(
-                "Choose the target machine, then the desktop type — thick (full desktop) / "
-                "thin (light desktop) / unaffiliated (plain Gentoo, no Snapdragon).")
+                "Choose the architecture and target device, then the desktop type — "
+                "thick (full desktop) / thin (light desktop) / unaffiliated (plain "
+                "Gentoo, no Snapdragon).")
         else:  # cloud — the mesh desktop CLIENT that joins an existing mesh
             self.setSubTitle(
-                "Choose the target machine, then the client desktop type it runs.")
-        # machine cards = the UNION of THIS mode's ROLE_CHOICES platforms (#351 gating
-        # rides through the shared card labels).
-        mode_machines = {p for _r, plats, _l in ROLE_CHOICES[c.mode] for p in plats}
-        for plat, container in self._machine_rows.items():
-            container.setVisible(plat in mode_machines)
-        # resolve the default machine EXACTLY as the old page did: c.platform if it is a
-        # supported platform of c.role, else the role's first platform (c.platform-or-
-        # platforms[0]). Falls back to the first mode machine if the role is unknown.
+                "Choose the architecture and target device, then the client desktop "
+                "type it runs.")
+        # per-mode honesty pass over the browser rows (role derivation is mode-scoped)
+        self._refresh_device_statuses()
+        # resolve the default machine EXACTLY as before: c.platform if it is a
+        # supported platform of c.role, else the role's first platform; then map the
+        # (platform, board) axes back to their catalog device (supported preferred,
+        # so (rpi5, rpi4) resolves to the Pi 4 itself, not an experimental alias).
         role_plats = self._platforms_for_role(c.mode, c.role)
+        mode_machines = {p for _r, plats, _l in ROLE_CHOICES[c.mode] for p in plats}
         if role_plats:
             default_machine = c.platform if c.platform in role_plats else role_plats[0]
         else:
             default_machine = next((p for p in self._all_machines if p in mode_machines),
                                    "x86")
-        self.machine_group.blockSignals(True)
-        self._machine_buttons[default_machine].setChecked(True)
-        self.machine_group.blockSignals(False)
-        self._populate_roles(default_machine, c.role)
+        try:
+            did = device_catalog.device_for_axes(
+                default_machine, c.board if c.platform == default_machine else "")
+        except ValueError:   # stale/foreign board value: fall back to the default device
+            did = self._machine_buttons.get(default_machine) \
+                or device_catalog.default_device_for_platform(default_machine)
+        # device_for_axes prefers the SUPPORTED device for shared axes — but if THIS
+        # page committed an experimental alias with the same axes (Pi 400 → (rpi5,
+        # rpi4)), restore the alias itself on Back-navigation so its EXPERIMENTAL
+        # label and fail-loud note survive the round-trip.
+        last = getattr(self, "_committed_device", None)
+        if last is not None and last != did:
+            ldev = self._catalog.device(last)
+            if (device_catalog.selectable(last)
+                    and ldev.builder_platform == default_machine
+                    and ldev.builder_board ==
+                        self._catalog.device(did).builder_board):
+                did = last
+        dev = self._catalog.device(did)
+        ab = self._arch_buttons.get(dev.arch)
+        if ab is not None:
+            self.arch_group.blockSignals(True)
+            ab.setChecked(True)
+            self.arch_group.blockSignals(False)
+        self._apply_device_filter()
+        self.device_tree.blockSignals(True)
+        self.device_tree.setCurrentItem(self._device_items[did])
+        self.device_tree.blockSignals(False)
+        self._populate_roles(did, c.role)
         self._update_boxes(default_machine)
         self._role_changed(self.roles.currentRow())
+        self.note.setText(device_catalog.status_reason(did)
+                          if dev.status == "experimental" else "")
         if c.board:
             if c.platform == "jetson":
                 self.jetson_board.setCurrentText(c.board)
@@ -413,6 +635,9 @@ class RolePage(QtWidgets.QWizardPage):
         # only restore where the compose is legal (_role_changed may have just
         # disabled + cleared the checkbox for this mode/role)
         self.unaffiliated.setChecked(c.unaffiliated and self.unaffiliated.isEnabled())
+        # the device pins the board combo LAST (after the c.board restore above — the
+        # restore and the pin agree by construction, device_for_axes ate c.board).
+        self._apply_device_pin(dev)
 
     def _role_changed(self, _row):
         role, _platforms = self._current_role()
@@ -420,7 +645,8 @@ class RolePage(QtWidgets.QWizardPage):
         # rpi3 is DESKTOP-ONLY (1GB RAM): a node/appliance rpi5 role (generic) must not
         # offer it — mirror the builder's hard-error at the SELECTION layer so the pick
         # can't dead-end. Repopulate the board list per role-class, preserving a still-
-        # valid selection (rpi5/rpi4) across a role switch.
+        # valid selection (rpi5/rpi4) across a role switch. (With the device browser
+        # this is structural anyway — the rpi3 DEVICE derives no node roles at all.)
         if machine == "rpi5":
             boards = rpi_boards_for_role(role)
             if [self.rpi5_board.itemText(i) for i in range(self.rpi5_board.count())] != list(boards):
@@ -477,10 +703,22 @@ class RolePage(QtWidgets.QWizardPage):
             c.enable_bluetooth = p.enable_bluetooth
 
     def validatePage(self):
+        # #351 gate (belt & braces under isComplete): REFUSE to commit unless a real
+        # selectable device is current — never fall back to a default platform, which
+        # would pair a stale role with the wrong builder and emit a guaranteed-broken
+        # argv (e.g. '--role rpi5-desktop' at build-x86-host-stage4.sh). Returning
+        # False before any cfg write keeps the last committed config intact.
+        did = self._selected_device()
+        if did is None or not device_catalog.selectable(did):
+            return False
         c = self.wiz.cfg
         role, _platforms = self._current_role()
         c.role = role
-        c.platform = self._selected_machine() or "x86"
+        c.platform = self._selected_machine()
+        # remember the exact DEVICE committed (an experimental alias like the Pi 400
+        # shares its supported sibling's (platform, board) axes — initializePage
+        # restores the alias itself on Back-navigation, keeping its label + note).
+        self._committed_device = did
         # composable payload/affiliation flags (G21/G22) — x86-client-box-only, so a
         # value picked before a platform/mode switch can never linger into the argv.
         # isVisibleTo(self), not isVisible(): collect_all() re-validates this page
@@ -540,7 +778,7 @@ class RolePage(QtWidgets.QWizardPage):
         steam = self.steam.currentText()
         c.steam = "" if (steam == "(default)" or not x86_client) else steam
         # machine-profile preset (folded from Hardware): NON_ARGV round-trip field.
-        # x86-only (the picker is hidden on ARM cards) so a stale x86 profile can't
+        # x86-only (the picker is hidden on ARM devices) so a stale x86 profile can't
         # linger on an ARM build's saved config.
         c.hw_profile = (self.profile.currentData() or "") if c.platform == "x86" else ""
         return True

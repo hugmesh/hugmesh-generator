@@ -1435,7 +1435,9 @@ standalone_screen() {
 # the three IMAGE choices funnel into the EXISTING screens (build_screen /
 # single_role_screen / standalone_screen), each of which already calls build_make_cmd
 # verbatim, so emission stays byte-identical. The fourth choice (Local Docker mesh)
-# builds NO image and never touches build_make_cmd.
+# builds NO image and never touches build_make_cmd. The Enterprise-phone choice
+# (phone_screen) likewise builds NO image — it drives scripts/phone-wizard.sh and is
+# NOT part of the four-label golden taxonomy (it sits outside mode.py's ModePage).
 mode_screen() {
     local choice
     while :; do
@@ -1445,6 +1447,7 @@ mode_screen() {
             localmesh  "Local Docker mesh — run a mesh on THIS machine in Docker (no image built)" \
             client     "Mesh desktop client — a branded desktop that JOINS an existing mesh (tailnet + SSO)" \
             standalone "Standalone Gentoo desktop — hardened personal / UNAFFILIATED desktop (no mesh/SSO)" \
+            phone      "Enterprise phone — flash a USB Pixel with VERIFIED GrapheneOS + enroll it in the mesh (no image built)" \
             advanced   "Advanced — all build targets & fleet options (the full menu)" \
             back "‹ back to main menu")" || return 0
         # NOTE: the four choice LABELS above are the single golden source of the
@@ -1467,6 +1470,10 @@ mode_screen() {
             # → the x86 standalone screen; the ARM standalone posture stays reachable via
             # single_role_screen's desktop roles + arm_secrets_prompt (Advanced too).
             standalone) single_role_screen ;;
+            # → the SECOND non-build choice: the enterprise-phone driver (flash a real
+            # Pixel handset + enroll it in the mesh). Like localmesh it never touches
+            # build_make_cmd — the driver owns ALL the logic, phone_screen stays thin.
+            phone)      phone_screen ;;
             # → the full build menu verbatim, the escape hatch that keeps EVERY existing
             # option/path reachable (all-options-in-all-menus).
             advanced)   build_screen ;;
@@ -1688,6 +1695,123 @@ clean_screen() {
     ( cd "${REPO_DIR}" && make clean "WORK_DIR=${OPT_WORK_DIR}" $([ "${OPT_PATH}" = native ] && echo NATIVE=1) ) \
         && ui_msg "Clean" "Work dir wiped." \
         || ui_msg "Clean" "Clean failed (see terminal output / permissions)."
+}
+
+# ── Enterprise phone (Pixel/GrapheneOS) — flashes a HANDSET, builds NO image ────
+# A THIN face over scripts/phone-wizard.sh, the driver that owns ALL the logic
+# (device-catalog fail-closed gate, sshsig verification, typed-serial flash gate,
+# vault-seed escrow custody) — the menu never reimplements or bypasses any of it,
+# and never passes --yes/--force. Every setting here is FUNCTION-LOCAL: nothing
+# is persisted to menu.conf (save_conf is untouched — a phone serial or auth key
+# has no business in a saved conf). The auth key is entered masked (ui_password),
+# handed over via a chmod-600 mktemp file (--authkey-file) and shredded after the
+# run — the same non-persisted custody as the SA_*/ARM_* secrets and
+# _local_mesh_run's TS_AUTHKEY. Runs are FOREGROUND on purpose (no launch_build/
+# setsid): the driver is interactive (typed-serial confirm, operator runbooks on
+# stdout), so detaching it would orphan its prompts.
+phone_screen() {
+    local wiz="${SNAP_PHONE_WIZARD:-${SCRIPT_DIR}/phone-wizard.sh}"
+    if [ ! -x "${wiz}" ]; then
+        ui_msg "Enterprise phone" "driver not found/executable: ${wiz}\n\nThis checkout has no enterprise-phone wizard (see docs/ENTERPRISE-PHONES.md)."
+        return 0
+    fi
+    local codename="" channel="stable" serial="" keys_dir="" login_server="" authkey="" role="" choice
+    while :; do
+        local keyl
+        keyl="$([ -n "${authkey}" ] && echo '(set)' || echo '(unset — enroll then expects your own custody)')"
+        choice="$(ui_menu "Enterprise phone" \
+            "Flash a USB-connected Google Pixel with VERIFIED GrapheneOS and enroll it in the mesh — no image build. Dry-run by default; every destructive step is gated by the driver itself. Masked auth key; never saved to ${CONF_FILE}." \
+            device  "Device codename ...... ${codename:-<detect at run>}" \
+            channel "Release channel ...... ${channel}" \
+            serial  "Serial ............... ${serial:-<auto when exactly 1 device>}" \
+            keys    "Keys dir ............. ${keys_dir:-<none — use server/auth key below>}" \
+            server  "Login server ......... ${login_server:-<from keys-dir>}" \
+            authkey "Auth key ............. ${keyl}" \
+            role    "Mesh role ............ ${role:-<driver default: user>}" \
+            wizard  "★ Guided wizard (detect → fetch → flash → enroll → profile → ingest)" \
+            plan    "Preview the plan (dry-run — touches NOTHING)" \
+            detect  "Detect the connected device (read-only)" \
+            fetch   "Fetch + VERIFY GrapheneOS" \
+            flash   "FLASH the device (DESTRUCTIVE — typed-serial gate)" \
+            enroll  "Enroll in the mesh (tailnet join)" \
+            profile "Create + escrow the enterprise profile" \
+            ingest  "Emit the device-registry ingest record" \
+            status  "Status (read-only)" \
+            back    "‹ back")" || return 0
+        case "${choice}" in
+            device)
+                # Picker fed LIVE from the driver's own vetted catalog (the driver
+                # FAILS CLOSED, exit 4, on any codename not in it — no bypass here).
+                local tsv devs=() cn nm
+                tsv="$(dirname "${wiz}")/phone-devices.tsv"
+                if [ -f "${tsv}" ]; then
+                    while IFS=$'\t' read -r cn nm; do
+                        case "${cn}" in ''|'#'*) continue ;; esac
+                        devs+=("${cn}" "${nm} (${cn})")
+                    done <"${tsv}"
+                fi
+                if [ "${#devs[@]}" -eq 0 ]; then
+                    codename="$(ui_input "Device codename" "GrapheneOS device codename (blank = detect at run)" "${codename}")"
+                else
+                    cn="$(ui_menu "Device" "The vetted GrapheneOS device catalog ($(basename "${tsv}"))." \
+                        detect "<detect at run — probe the connected device>" "${devs[@]}")" || cn=""
+                    case "${cn}" in detect) codename="" ;; "") : ;; *) codename="${cn}" ;; esac
+                fi ;;
+            channel) channel="$(ui_menu "Channel" "GrapheneOS release channel (stable is the vetted default)" \
+                        stable "stable — production releases" \
+                        beta   "beta  — preview" \
+                        alpha  "alpha — earliest")" || channel="stable"; [ -n "${channel}" ] || channel="stable" ;;
+            serial)  serial="$(ui_input "Serial" "Target device serial (blank = auto when exactly one device is connected)" "${serial}")" ;;
+            keys)    keys_dir="$(ui_input "Keys dir" "Keys dir, docker-mesh-node layout: login-server, tailscale/authkey, role (blank = use the server/auth-key fields)" "${keys_dir}")" ;;
+            server)  login_server="$(ui_input "Login server" "Headscale control URL (blank = the keys-dir login-server file)" "${login_server}")" ;;
+            authkey) authkey="$(ui_password "Auth key" "One-time tailnet/headscale pre-auth key (blank = unset; the enroll runbook then expects it from your own custody)")" ;;
+            role)    role="$(ui_menu "Mesh role" "Mesh role for the enrollment record" \
+                        default    "<driver default — user, or the keys-dir role file>" \
+                        user       "user" \
+                        mod        "mod" \
+                        admin      "admin" \
+                        superadmin "superadmin")" || role=""
+                     [ "${role}" = default ] && role="" ;;
+            wizard|plan|detect|fetch|flash|enroll|profile|ingest|status)
+                _phone_run "${choice}" "${authkey}" "${codename}" "${channel}" "${serial}" "${keys_dir}" "${login_server}" "${role}" ;;
+            back|"") return 0 ;;
+        esac
+    done
+}
+
+# _phone_run VERB AUTHKEY CODENAME CHANNEL SERIAL KEYS_DIR LOGIN_SERVER ROLE — one
+# FOREGROUND child invocation of the enterprise-phone driver, terminal fully
+# attached (stdin for its typed-serial/wizard prompts, stdout for its runbooks).
+# The auth key (when set) goes into a chmod-600 mktemp file (off the argv / process
+# table) and is shredded afterwards — _local_mesh_bootstrap_run's exact pattern.
+_phone_run() {
+    local verb="$1" authkey="$2" codename="$3" channel="$4" serial="$5" keys_dir="$6" login_server="$7" role="$8"
+    local wiz="${SNAP_PHONE_WIZARD:-${SCRIPT_DIR}/phone-wizard.sh}"
+    local -a args=("${verb}")
+    [ -n "${codename}" ]     && args+=(--codename "${codename}")
+    [ -n "${channel}" ]      && args+=(--channel "${channel}")
+    [ -n "${serial}" ]       && args+=(--serial "${serial}")
+    [ -n "${keys_dir}" ]     && args+=(--keys-dir "${keys_dir}")
+    [ -n "${login_server}" ] && args+=(--login-server "${login_server}")
+    [ -n "${role}" ]         && args+=(--role "${role}")
+    local keyfile=""
+    if [ -n "${authkey}" ]; then
+        keyfile="$(mktemp "${STATE_DIR}/phonekey.XXXXXX")" || { ui_msg "Enterprise phone" "could not create a temp file for the auth key"; return 0; }
+        chmod 600 "${keyfile}" 2>/dev/null || true
+        printf '%s' "${authkey}" >"${keyfile}"
+        args+=(--authkey-file "${keyfile}")
+    fi
+    say "running: scripts/phone-wizard.sh ${verb} (foreground — output follows)"
+    "${wiz}" "${args[@]}"
+    local rc=$?
+    if [ -n "${keyfile}" ]; then
+        command -v shred >/dev/null 2>&1 && shred -u "${keyfile}" 2>/dev/null || rm -f "${keyfile}"
+    fi
+    if [ "${rc}" -eq 0 ]; then say "phone-wizard ${verb}: OK"; else warn "phone-wizard ${verb}: exit ${rc}"; fi
+    # Pause so the driver's output survives the next menu redraw — but only when a
+    # human is actually attached (tests call this with stdin redirected).
+    if [ -t 0 ]; then read -r -p "press Enter to return to the menu… " _ </dev/tty || true; fi
+    return 0
 }
 
 main_menu() {

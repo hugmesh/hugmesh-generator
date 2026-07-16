@@ -8,19 +8,34 @@ the base ImageConfig, collected by the pages downstream. Per-image hardware/GPU/
 facts derive from the row (no per-image hardware page); theming/home surfaces are
 never offered here — a mesh node is node-class (specs 2/7).
 
+PRESENTATION (device-catalog restructure): the rows are grouped under family headers
+from ``core.device_catalog`` (x86 PCs / Raspberry Pi / NVIDIA Jetson), with an
+architecture filter + search box above the tree, and honest info rows for the devices
+that have NO mesh role (frite/opi5/opz2 single-image boards, and every UNSUPPORTED
+device with its reason — visible, never checkable, #351). The ENTRY IDENTITY CONTRACT
+is untouched: entries remain ``(role, platform, board, flavor, ...)``, ids remain
+``f"{role}.{platform}"`` (Domain.images references + the ``rows`` id->item mapping
+depend on it), and the per-row Board combo remains the device axis WITHIN a family —
+its choices still come from ``rpi_boards_for_role``/the config board tuples, so the
+rpi3 node-gate and every emitted entry are byte-identical. (A per-device duplication
+of the role rows was considered and rejected: the same ``role.platform`` id under
+several device rows cannot satisfy the one-item-per-id contract.)
+
 The page is only VISITED in mesh (MODE_SKIPPED_PAGES); standalone/cloud skip it and
 synthesize a 1-entry worklist at Build time instead, so the driver/progress/manifest
 have exactly one shape.
 """
 from __future__ import annotations
 
-from ..qt import Qt, QtWidgets
+from ..qt import Qt, QtGui, QtWidgets
+from ...core import device_catalog
 from ...core.config import (
     FRITE_BOARDS, FRITE_FLAVORS, JETSON_BOARDS, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
     ORANGEPIZERO2_FLAVORS, PLATFORM_LABELS, ROLE_CHOICES, RPI_BOARDS, image_class,
     rpi_boards_for_role,
 )
 from ...core.worklist import WorklistConfig, WorklistEntry, entry_id
+from ._widgets import status_badge
 
 # The GPU-bearing mesh roles (Notes-column callout); mirrors the builder's GPU roles.
 _GPU_ROLES = ("be+gpu", "edge_ai", "gpu-host")
@@ -67,14 +82,16 @@ def _row_notes(role: str, platform: str) -> str:
 
 class WorklistPage(QtWidgets.QWizardPage):
     """A checkable role x platform table sourced from ``ROLE_CHOICES["mesh"]`` — one
-    top-level row per (role, platform) pair. Checking a row adds a WorklistEntry with
-    that row's stable id (``f"{role}.{platform}"``); board/flavor are row attributes so
-    an id never dangles on a board edit. validatePage reconciles the worklist against
-    the checked rows and prunes unchecked ids from every ``Domain.images``."""
+    row per (role, platform) pair, grouped under device-catalog family headers.
+    Checking a row adds a WorklistEntry with that row's stable id
+    (``f"{role}.{platform}"``); board/flavor are row attributes so an id never dangles
+    on a board edit. validatePage reconciles the worklist against the checked rows and
+    prunes unchecked ids from every ``Domain.images``."""
 
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz
+        self._catalog = device_catalog.load_catalog()
         # spec 2c: this IS the "mesh node" path's multi-image step. Say plainly that each
         # row is one server node image, that pki+be+fe are required together, and that
         # GPU / Edge-AI nodes can wait — the core "make each step clear" ask.
@@ -92,7 +109,8 @@ class WorklistPage(QtWidgets.QWizardPage):
 
         # spec 2c convenience: one click checks the standard x86 pki+be+fe trio (the
         # minimum buildable-together set) without disturbing any GPU/edge rows already
-        # picked — additive, never a reset.
+        # picked — additive, never a reset. Plus the arch filter + device search
+        # (presentation only — a hidden checked row still builds).
         trio_row = QtWidgets.QWidget()
         trio_lay = QtWidgets.QHBoxLayout(trio_row)
         trio_lay.setContentsMargins(0, 0, 0, 0)
@@ -103,11 +121,20 @@ class WorklistPage(QtWidgets.QWizardPage):
             "provided config.")
         self.trio_btn.clicked.connect(self._select_trio)
         trio_lay.addWidget(self.trio_btn)
-        trio_lay.addStretch(1)
+        self.arch_filter = QtWidgets.QComboBox()
+        self.arch_filter.addItem("All architectures", "")
+        for arch in self._catalog.archs:
+            if self._catalog.devices_for_arch(arch.id):
+                self.arch_filter.addItem(arch.label, arch.id)
+        trio_lay.addWidget(self.arch_filter)
+        self.device_search = QtWidgets.QLineEdit()
+        self.device_search.setPlaceholderText("Search devices / roles…")
+        self.device_search.setClearButtonEnabled(True)
+        trio_lay.addWidget(self.device_search, 1)
         lay.addWidget(trio_row)
 
         self.tree = QtWidgets.QTreeWidget()
-        self.tree.setRootIsDecorated(False)
+        self.tree.setRootIsDecorated(True)
         self.tree.setHeaderLabels(
             ["", "Role", "Platform", "Board", "Flavor/Desktop", "Encryption", "Notes"])
         self.tree.setColumnWidth(_COL_CHECK, 28)
@@ -141,15 +168,16 @@ class WorklistPage(QtWidgets.QWizardPage):
         # hardware, and point forward to the SERVICES / domains / users steps that
         # follow (STEP 3-6) so the mesh-node path reads as an obvious sequence.
         self.hint = QtWidgets.QLabel(
-            "Each row is one server node image. The Board and Flavor/Desktop columns "
-            "set that node's hardware; the Notes column is filled in automatically. "
-            "Next you'll choose the cluster services each node runs, then the domains "
-            "and users.")
+            "Each row is one server node image, grouped by device family. The Board and "
+            "Flavor/Desktop columns set that node's hardware; the Notes column is filled "
+            "in automatically. Grayed rows are devices with no mesh role — shown so the "
+            "answer is honest, never buildable from here. Next you'll choose the cluster "
+            "services each node runs, then the domains and users.")
         self.hint.setWordWrap(True)
         self.hint.setStyleSheet("color: gray;")
         lay.addWidget(self.hint)
 
-        # id -> top-level QTreeWidgetItem (the _helpers.check_worklist_rows contract:
+        # id -> the checkable QTreeWidgetItem (the _helpers.check_worklist_rows contract:
         # `.rows` is a mapping id -> item, and each item carries the check state on
         # column 0). id -> (board_combo|None, flavor_combo|None) for validatePage reads.
         self.rows: dict[str, QtWidgets.QTreeWidgetItem] = {}
@@ -159,22 +187,75 @@ class WorklistPage(QtWidgets.QWizardPage):
         # cell is a disabled display and validatePage keeps the prior/default value).
         self._enc_combos: dict[str, QtWidgets.QComboBox | None] = {}
         self._id_axes: dict[str, tuple[str, str]] = {}   # id -> (role, platform)
+        # family id -> group header item; per-item arch (for the arch filter).
+        self._family_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
+        self._item_arch: dict[int, str] = {}
 
         for role, platforms, _label in ROLE_CHOICES["mesh"]:
             for platform in platforms:
                 self._build_row(role, platform)
 
+        # honest info rows (#351): every catalog device with NO mesh role — the
+        # single-image-only boards (frite/opi5/opz2, chromebook) and every UNSUPPORTED
+        # device with its reason. Visible, disabled, never checkable.
+        for dev in self._catalog.devices:
+            if dev.status != "unsupported" and device_catalog.roles_for(dev.id, "mesh"):
+                continue   # covered by its platform's checkable role rows above
+            self._build_info_row(dev)
+
+        # expand the buildable groups; collapse the info-only ones (visibility without
+        # noise). A group is buildable iff any child carries an entry id.
+        for fitem in self._family_items.values():
+            has_rows = any(
+                fitem.child(i).data(_COL_CHECK, Qt.ItemDataRole.UserRole) is not None
+                for i in range(fitem.childCount()))
+            fitem.setExpanded(has_rows)
+
         self.tree.itemChanged.connect(self._on_item_changed)
+        self.arch_filter.currentIndexChanged.connect(self._apply_filter)
+        self.device_search.textChanged.connect(self._apply_filter)
+
+    # ---- tree construction ---------------------------------------------------------
+    def _family_group(self, family_id: str) -> QtWidgets.QTreeWidgetItem:
+        """The (lazily created) family header row: bold label + arch + the family's
+        honesty badge (EXPERIMENTAL rides up from its devices, e.g. NVIDIA Jetson)."""
+        item = self._family_items.get(family_id)
+        if item is not None:
+            return item
+        fam = self._catalog.family(family_id)
+        arch = next((a.label for a in self._catalog.archs if a.id == fam.arch), fam.arch)
+        item = QtWidgets.QTreeWidgetItem(self.tree)
+        item.setText(_COL_ROLE, f"{fam.label} — {arch}")
+        statuses = {d.status for d in self._catalog.devices_in_family(family_id)}
+        if "supported" not in statuses and "experimental" in statuses:
+            badge, color = status_badge("experimental")
+            item.setText(_COL_NOTES, badge)
+            item.setForeground(_COL_NOTES, QtGui.QBrush(QtGui.QColor(color)))
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled)   # a header: no check, no select
+        font = item.font(_COL_ROLE)
+        font.setBold(True)
+        item.setFont(_COL_ROLE, font)
+        self._family_items[family_id] = item
+        self._item_arch[id(item)] = fam.arch
+        return item
+
+    def _platform_family(self, platform: str) -> str:
+        """A mesh platform's device family (via its default catalog device)."""
+        return self._catalog.device(
+            device_catalog.default_device_for_platform(platform)).family
 
     def _build_row(self, role: str, platform: str) -> None:
         rid = entry_id(role, platform)
-        item = QtWidgets.QTreeWidgetItem(self.tree)
+        group = self._family_group(self._platform_family(platform))
+        item = QtWidgets.QTreeWidgetItem(group)
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         item.setCheckState(_COL_CHECK, Qt.CheckState.Unchecked)
         item.setText(_COL_ROLE, role)
         item.setText(_COL_PLATFORM, PLATFORM_LABELS.get(platform, platform))
         item.setText(_COL_NOTES, _row_notes(role, platform))
         item.setData(_COL_CHECK, Qt.ItemDataRole.UserRole, rid)
+        self._item_arch[id(item)] = self._catalog.device(
+            device_catalog.default_device_for_platform(platform)).arch
 
         board_combo = flavor_combo = None
         # rpi5's board choices are ROLE-dependent: a node role (pki/be/fe) may target
@@ -212,9 +293,47 @@ class WorklistPage(QtWidgets.QWizardPage):
         self._id_axes[rid] = (role, platform)
         self._sync_combo_enabled(rid)
 
+    def _build_info_row(self, dev) -> None:
+        """A disabled, uncheckable visibility row (#351): the device exists, and here
+        is exactly why it has nothing to build on the mesh path."""
+        group = self._family_group(dev.family)
+        item = QtWidgets.QTreeWidgetItem(group)
+        item.setText(_COL_ROLE, dev.label)
+        item.setText(_COL_PLATFORM, dev.soc)
+        if dev.status == "unsupported":
+            badge, _color = status_badge("unsupported")
+            reason = f"{badge} — {dev.reason}"
+        else:
+            reason = ("no mesh/cluster-node role — "
+                      + (dev.notes or "single-image flows only"))
+            if dev.status == "experimental":
+                reason = f"{status_badge('experimental')[0]} · {reason}"
+        item.setText(_COL_NOTES, reason)
+        for col in (_COL_ROLE, _COL_PLATFORM, _COL_NOTES):
+            item.setToolTip(col, reason)
+        item.setFlags(Qt.ItemFlag.NoItemFlags)   # visible, never checkable/selectable
+        self._item_arch[id(item)] = dev.arch
+
+    # ---- arch/search filtering (presentation only) ----------------------------------
+    def _apply_filter(self, *_a) -> None:
+        arch = self.arch_filter.currentData() or ""
+        needle = self.device_search.text().strip().lower()
+        for fitem in self._family_items.values():
+            any_visible = False
+            for i in range(fitem.childCount()):
+                child = fitem.child(i)
+                show = not arch or self._item_arch.get(id(child), "") == arch
+                if show and needle:
+                    hay = " ".join(child.text(c) for c in
+                                   (_COL_ROLE, _COL_PLATFORM, _COL_NOTES)).lower()
+                    show = needle in hay
+                child.setHidden(not show)
+                any_visible = any_visible or show
+            fitem.setHidden(not any_visible)
+
     # ---- id/row exposure (WS-FLOWUI contract for tests + IDENTUI/REVIEWUI) --------
     def row_for_id(self, rid: str) -> QtWidgets.QTreeWidgetItem:
-        """The top-level QTreeWidgetItem for a stable entry id (``f"{role}.{platform}"``)."""
+        """The checkable QTreeWidgetItem for a stable entry id (``f"{role}.{platform}"``)."""
         return self.rows[rid]
 
     # ---- state helpers -----------------------------------------------------------

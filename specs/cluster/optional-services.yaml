@@ -430,6 +430,52 @@ spec:
       federationModule: null      # signalled to clients via Matrix voip/turnServer
       casdoorSeed: null
 
+    # ── meshbridge — Meshtastic LoRa mesh <-> Matrix bridge (DEFAULT-OFF) ──────
+    # meshbridge attaches LoRa mesh radios (USB-serial, LoRa-WiFi TCP:4403, or a
+    # WAN-linked mesh via Meshtastic's MQTT JSON integration) and bridges their
+    # text traffic into tuwunel as a Matrix APPSERVICE (exclusive @mesh-.* user
+    # namespace; per-room opt-in via the systems.snapdragon.mesh.bridge state
+    # event). See docs/MESHTASTIC-BRIDGE.md. It lands in snapdragon-backend
+    # ALONGSIDE tuwunel because the appservice speaks the plain in-namespace CS
+    # API (tuwunel:8008) and receives AS transaction pushes on :8009 — neither
+    # leg ever transits a gateway.
+    #
+    # RUNTIME-ONLY (the coturn/anubis pattern): NO hardcoded apps/*.yaml — wired
+    # ONLY through the runtime optional-services ApplicationSet (apps/13a) with
+    # installed:"false", created/pruned at runtime by flipping the `meshbridge`
+    # flag in the installed-services ConfigMap + the 13a element. A DEFAULT
+    # build is byte-identical to today's mainline (no pod, no policy, no rooms
+    # bridged).
+    #
+    # dependsOn tuwunel: like coturn, the dependency is declared in the
+    # installed-services services.json entry (the admin console greys meshbridge
+    # when tuwunel is off) — the bridge is meaningless without the homeserver it
+    # posts into. meshbridge owns NO gateway HOST and NO gateway routes: nothing
+    # user-facing speaks HTTP to it (rooms opt in via Matrix state events; radio
+    # registration is a user-bff surface that user-bff already owns).
+    - slug: meshbridge
+      displayName: "Mesh radio bridge (Meshtastic ↔ Matrix)"
+      namespace: snapdragon-backend
+      default: off
+      # RUNTIME-ONLY: no bootstrap Application (see header) — gated solely by the
+      # 13a ApplicationSet element + the installed-services ConfigMap flag.
+      apps: []
+      sharedApps: []
+      manifestPath: manifests/meshbridge
+      # Per-service ExternalSecret file (appservice token pair + Casdoor machine
+      # client + optional MQTT broker password; ESO/Vault only, never inline).
+      esoFile: manifests/external-secrets/meshbridge-externalsecrets.yaml
+      esoKeys: [meshbridge-appservice]
+      gatewayHost: null           # no public HTTP host; AS push + CS API are in-namespace
+      gatewayRouteIds: []         # no gateway routes
+      routeAccessRows: []         # no gateway route-access gating
+      federationModule: null      # surfaces ride existing modules (rooms UI / user-bff)
+      # casdoorSeed models a per-slug Casdoor INSTANCE (games), not client
+      # seeding — the bridge's client-credentials client (ROLE_SERVICE, for
+      # user-bff's internal mesh-devices surface) is provisioned MANUALLY at
+      # enable time; see the meshbridge-externalsecrets.yaml header.
+      casdoorSeed: null
+
     # ── egress-vpn — node-level split-tunnel egress VPN (DEFAULT-OFF) ──────────
     # UNLIKE the others, egress-vpn is a NODE service (a wg-quick/openvpn OpenRC
     # service + a signed-export reconcile agent on the MESH NODES), NOT a cluster

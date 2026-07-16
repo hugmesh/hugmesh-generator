@@ -21,6 +21,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _GEN_ROOT = os.path.dirname(_HERE)                       # scripts/ -> repo root
 sys.path.insert(0, os.path.join(_GEN_ROOT, "studio"))
 
+from snapdragon_studio.core import device_catalog  # noqa: E402
 from snapdragon_studio.core.config import (  # noqa: E402
     DESKTOP_ROLES, FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS, NODE_ROLES,
     ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, PLATFORM_LABELS,
@@ -58,6 +59,35 @@ def platform_axes(platform: str, role: str) -> dict:
     return axes
 
 
+def device_entry(dev: "device_catalog.Device") -> dict:
+    """One web-catalog device: the arch/family/status taxonomy plus the DERIVED
+    per-mode role lists and the exact cfg axes selecting it writes. The #351 honesty
+    statuses ride through verbatim: an UNSUPPORTED device serializes with NO
+    config_axes and NO roles — visible in the modal, never selectable for a build
+    (the CAT bucket pins this)."""
+    entry = {
+        "id": dev.id,
+        "label": dev.label,
+        "family": dev.family,
+        "arch": dev.arch,
+        "soc": dev.soc,
+        "status": dev.status,
+        "reason": dev.reason,
+        "notes": dev.notes,
+    }
+    if dev.status in device_catalog.SELECTABLE_STATUSES:
+        entry["config_axes"] = device_catalog.config_axes(dev.id)
+        entry["roles"] = {
+            mode: [{"role": r, "label": l}
+                   for r, l in device_catalog.roles_for(dev.id, mode)]
+            for mode in ROLE_CHOICES
+        }
+    else:
+        entry["config_axes"] = None
+        entry["roles"] = {}
+    return entry
+
+
 def build_image_catalog() -> dict:
     roles: dict[str, list[dict]] = {}
     for mode, choices in ROLE_CHOICES.items():
@@ -70,10 +100,19 @@ def build_image_catalog() -> dict:
             }
             for (role, platforms, label) in choices
         ]
+    # The arch -> family -> device hierarchy (ADDITIVE keys — the existing
+    # roles/platform_labels/role_class grammar is untouched): generated from
+    # core/device_catalog, whose role derivation is the SAME ROLE_CHOICES +
+    # rpi_boards_for_role predicates used above, so the two views cannot drift.
+    cat = device_catalog.load_catalog()
     return {
         "roles": roles,
         "platform_labels": dict(PLATFORM_LABELS),
         "role_class": {"desktop": list(DESKTOP_ROLES), "node": list(NODE_ROLES)},
+        "archs": [{"id": a.id, "label": a.label} for a in cat.archs],
+        "families": [{"id": f.id, "label": f.label, "vendor": f.vendor, "arch": f.arch}
+                     for f in cat.families],
+        "devices": [device_entry(d) for d in cat.devices],
     }
 
 

@@ -14,6 +14,19 @@
 #   (4) the MFA claim emits as a FLAT snake_case top-level "mfa_satisfied_at"
 #       whose value is a STRING (casdoor properties are map[string]string), and
 #       "mfa_satisfied".
+#   (5) [2026-07-16] ACCOUNT-TAKEOVER REGRESSION LOCK — the token carries NO
+#       `preferred_username` (nor camelCase `preferredUsername`) claim; the
+#       identity is carried by `name`. user-bff historically folded an inbound
+#       `preferred_username` into a `discord:<preferred_username>` identity key,
+#       an account-takeover vector; user-bff PR #124 removes that fold
+#       structurally, and this negative assertion locks the COMPLEMENTARY
+#       config-level mitigation (the JWT_CUSTOM_TOKEN_FIELDS allow-list simply
+#       never serializes preferred_username) so the vector cannot silently
+#       re-open if an app reverts to plain tokenFormat=JWT or someone adds
+#       preferred_username to satisfy an OIDC client. See the block-(3a) comment.
+#       A static (offline, no-container) companion guard lives in
+#       tests/scripts/test-casdoor-jwt-no-preferred-username.sh — it runs on
+#       every CI box, including ones that SKIP this held-until-live mint.
 #
 # ⚠ A wrong/empty tokenFields set strips roles/permissions/isAdmin and breaks ALL
 # authz across 11 repos. This test is the mandatory gate before the JWT-Custom
@@ -283,6 +296,42 @@ for c in ("iss", "sub", "aud", "exp", "name", "email"):
         bad(f"required claim missing: {c}")
     else:
         ok(f"claim present: {c} = {claims.get(c)!r}")
+
+# (3a) ACCOUNT-TAKEOVER REGRESSION LOCK [2026-07-16] — the token MUST NOT carry a
+# `preferred_username` claim (nor its camelCase `preferredUsername` variant).
+#
+# WHY THIS IS A SECURITY GATE, not cosmetics: user-bff historically folded an
+# inbound token's `preferred_username` into a `discord:<preferred_username>`
+# identity key, letting a caller who controls that claim collide with / take over
+# another user's account. The STRUCTURAL fix removing that fold ships in user-bff
+# PR #124. This assertion locks the COMPLEMENTARY config-level mitigation that
+# ALSO holds the vector shut today: the JWT_CUSTOM_TOKEN_FIELDS allow-list in
+# specs/cluster/manifests/casdoor/init-job.yaml emits the identity as `name`
+# (casdoor's Name field) and NEVER serializes a `preferred_username`.
+#
+# That omission is INCIDENTAL — the allow-list exists for an unrelated secret-leak
+# fix (D6+D8, block (1) above). If any systems app ever reverts to plain
+# tokenFormat=JWT (which serializes the full user object incl. a
+# `preferred_username` from casdoor's Name json tag — the games/threewizards realm
+# already uses plain JWT), or someone adds `preferred_username` to the allow-list
+# to satisfy an OIDC client, the takeover silently re-opens. Keeping this claim
+# absent is the defense-in-depth that makes such a regression LOUD. DO NOT add
+# preferred_username to the token without re-auditing user-bff's identity-key
+# derivation first (user-bff PR #124).
+for takeover in ("preferred_username", "preferredUsername"):
+    if takeover in claims:
+        bad(f"ACCOUNT-TAKEOVER VECTOR: {takeover} present in token -> {claims[takeover]!r} "
+            f"(re-opens user-bff's discord:<preferred_username> fold — see PR #124)")
+    else:
+        ok(f"account-takeover claim absent: {takeover}")
+# Restate the allow-list identity shape so the intent is unmissable: the username
+# identity is carried by `name` (the allow-listed Name field, asserted present by
+# the (3) loop above), NOT by preferred_username.
+if claims.get("name") not in (None, ""):
+    ok(f"identity carried by `name` (not preferred_username): {claims.get('name')!r}")
+else:
+    bad("identity claim `name` missing — JWT-Custom allow-list shape broken")
+
 # isAdmin a real boolean
 if isinstance(claims.get("isAdmin"), bool) and claims.get("isAdmin") is True:
     ok("isAdmin present as boolean true")

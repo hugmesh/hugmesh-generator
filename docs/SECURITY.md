@@ -49,7 +49,7 @@ Vault-managed mTLS keystore:
 | `forum-bff-api` | `sa-forum-bff` | `s0:c53` | `svc-forum-bff` / `ROLE_FORUM_API` | `forum-bff.snapdragon-backend.svc` |
 | `forum-bff-db` | `sa-forum-bff-db` | `s0:c52` | (DB) | (non-Java: PEM, no JKS) |
 | `wiki-bff-api` | `sa-wiki-bff` | `s0:c69` | `svc-wiki-bff` / `ROLE_WIKI_API` | `wiki-bff.snapdragon-backend.svc` |
-| `wiki-bff-db` | `sa-wiki-bff-db` | *(reserve next free category)* | (DB) | (non-Java: PEM, no JKS) |
+| `wiki-bff-db` | `sa-wiki-bff-db` | `s0:c68` | (DB) | (non-Java: PEM, no JKS) |
 | `service-catalog-ui` (no Deployment yet — see note) | `sa-service-catalog-ui` | `s0:c49` *(reserved)* | `svc-service-catalog-ui` / `ROLE_SUPERADMIN_UI` | `snapdragon-superadmin-service-catalog-ui.snapdragon-frontend.svc` |
 | `service-catalog-builder` (Kaniko build pods) | (per-build) | `s0:c54` | (build pod) | (non-Java: no JKS) |
 | `route-access` | `sa-route-access` | `s0:c15` | (DB) | — |
@@ -92,6 +92,8 @@ Vault-managed mTLS keystore:
 | `edge-ai` (ollama inference — GPU) | per-app SA | `s0:c73` | — | (non-Java: no JKS) |
 | `character-studio` (ui) | per-app SA | `s0:c74` | — | — |
 | `image-builder` (app-image Kaniko build pods) | (per-build) | `s0:c75` | (build pod) | (non-Java: no JKS) |
+| `edge-ai-tts` (Piper TTS) | per-app SA | `s0:c72` | — | (non-Java: no JKS) |
+| meshbridge (Meshtastic ↔ Matrix bridge — optional, default-off) | `sa-meshbridge` | `s0:c76` | (Casdoor machine client — manual, see meshbridge ESO) | (non-Java: no JKS) |
 
 The matrix is the contract: `seLinuxOptions.level` per Deployment (added to each
 chart/manifest), a `ServiceAccount` per app, a Casdoor service user+role created

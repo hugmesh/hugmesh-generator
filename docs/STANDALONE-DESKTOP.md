@@ -90,6 +90,16 @@ Secure Boot, home provisioning, `--kernel-builtin`, QEMU verification) applies
 to the unaffiliated variant too, except where a flag is listed as a hard
 conflict above.
 
+**Verifying the neutrality guarantee.** [`scripts/verify-artifact-neutrality.sh`](../scripts/verify-artifact-neutrality.sh)
+is a standalone, manually-run gate that checks a build-output directory (live
+ISO, installer ISO, disk image, fs/stage4 tarballs, and the extracted sysroot)
+against every property claimed above — neutral volids/labels/GRUB titles, no
+`/etc/snapdragon` marker tree or bundled generator source, no k8s/mesh payload,
+and an attributed raw-string sweep (Qualcomm Snapdragon driver strings in
+kernel/firmware are expected and not a failure). Run it against the artifacts
+produced by `make x86-standalone-unaffiliated`; see the script's own `--help`
+for options.
+
 ## Quick start
 
 ```sh

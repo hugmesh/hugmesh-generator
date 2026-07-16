@@ -2117,6 +2117,23 @@ dev-python/vcs-versioning **
 dev-python/setuptools-scm **
 HOSTKW
     info "Pre-seeded HOST /etc/portage/package.accept_keywords: vcs-versioning (build-backend)"
+    # The tree's default PYTHON_TARGETS has moved past the container's
+    # dev-lang/python:3.12 — the same host-side BDEPEND batch then aborts on
+    # "The following USE changes are necessary to proceed:
+    #  >=dev-python/…  python_targets_python3_12" (empirically reproduced against
+    # the failed 2026-07-16 jetson sysroot). HOST twin of the sysroot's
+    # package.use/python-targets seed — see that file's full rationale.
+    mkdir -p /etc/portage/package.use
+    cat > /etc/portage/package.use/snapdragon-host-build-backends <<'HOSTPYUSE'
+# Keep the python3.12 target enabled for host-side (BDEPEND "to /") installs —
+# twin of the sysroot's package.use/python-targets (see that file's rationale).
+*/* PYTHON_TARGETS: python3_12
+# The 3.12 tooling cascade pulls host dev-lang/python:3.12 → util-linux[pam] →
+# pam-1.7.2, whose pambase→passwdqc chain requires pam[audit] (twin of the
+# sysroot's package.use/pam-audit; harmless in the ephemeral build container).
+sys-libs/pam audit
+HOSTPYUSE
+    info "Pre-seeded HOST /etc/portage/package.use: PYTHON_TARGETS python3_12 (build-backend chain)"
 fi
 
 # ── Host SELinux policy build tools ────────────────────────────────

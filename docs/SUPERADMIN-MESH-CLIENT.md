@@ -52,6 +52,8 @@ client at all and mesh-join failed regardless of group membership.
 
 ## Step 1 — join the mesh over OIDC (✅)
 
+> See also: [`ENTERPRISE-PHONES.md`](ENTERPRISE-PHONES.md) (🚧) — the same headscale join for an enterprise **phone** (pre-auth key or Casdoor OIDC, ADR-14 register-and-approve), driven by `scripts/phone-wizard.sh enroll`.
+
 On the superadmin's device (laptop/console), with the Tailscale client
 installed, log in against the platform headscale, requesting SSH:
 

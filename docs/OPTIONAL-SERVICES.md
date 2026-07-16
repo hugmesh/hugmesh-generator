@@ -16,7 +16,8 @@ The platform splits into two tiers:
   [EDGE-AI.md](EDGE-AI.md)), **character-studio** (the VN character-studio frontend
   remote — character creator + chat surface mounted at `/character-studio`, ROLE_USER;
   DEFAULT-OFF, admin gate). (Plus the non-user-level optional slugs **egress-vpn**
-  / **tor** / **workloadConsole** / **anubis** / **coturn**, gated by the same registry.)
+  / **tor** / **workloadConsole** / **anubis** / **coturn** / **meshbridge**, gated
+  by the same registry.)
 
   **tor** (Tor v3 onion hidden service, DEFAULT-OFF) follows the same node-scoped
   model as egress-vpn (`scope: node`): add with `--with-tor` (x86/Studio/build-menu)
@@ -33,6 +34,17 @@ The platform splits into two tiers:
   lands in `snapdragon-backend` next to tuwunel so they share one TURN secret. When
   off, Matrix calls keep host-only ICE (`iceServers: []`) — byte-identical to
   mainline. See [`docs/COTURN.md`](COTURN.md).
+
+  **meshbridge** (Meshtastic LoRa mesh ↔ Matrix bridge) is a DEFAULT-OFF,
+  **runtime-only** slug (the coturn pattern: `apps: []`, no baked Application)
+  that lands in `snapdragon-backend` next to tuwunel: it is a Matrix APPSERVICE
+  (exclusive `@mesh-.*` user namespace, registered by a PostSync Job via the
+  tuwunel admin room) speaking the in-namespace CS API, with radios attached by
+  USB-serial, LoRa-WiFi TCP (:4403) or a Meshtastic MQTT-JSON broker. `dependsOn:
+  tuwunel` (declared in the installed-services `services.json`, like coturn) —
+  the console greys it while the homeserver is off. When off, nothing references
+  it — byte-identical to mainline. See
+  [`docs/MESHTASTIC-BRIDGE.md`](MESHTASTIC-BRIDGE.md).
 
 The optional services are **add/remove-by-command on any generated USB image**,
 **identically on Pi5 (arm64) and x86 (amd64)** — the gate operates on the
@@ -350,13 +362,17 @@ table.
    updated so `kubectl get optsvc` shows the effective state.
 
 **Closed slug set (verified against `optional-services.yaml` + the ConfigMap + 13a):**
-the CRD enum is the **12 cluster-service slugs** that have BOTH a 13a element AND a
-ConfigMap boolean — `akkoma tuwunel phpbb games owncast tube character-studio anubis
-coturn edge-ai edge-ai-analysis edge-ai-tts`. Deliberately EXCLUDED: `workloadConsole`
-(ConfigMap boolean but no 13a element — its RBAC is the hardcoded
-`apps/14-workload-console-rbac.yaml`; left build-determined) and the NODE services
-`egress-vpn`/`tor` (no cluster Application, no ConfigMap boolean — a separate
-node-reconcile track).
+the CRD enum is the **12 cluster-service slugs** — `akkoma tuwunel phpbb games owncast
+tube character-studio anubis coturn edge-ai edge-ai-analysis edge-ai-tts`. Deliberately
+EXCLUDED: `workloadConsole` (ConfigMap boolean but no 13a element — its RBAC is the
+hardcoded `apps/14-workload-console-rbac.yaml`; left build-determined) and the NODE
+services `egress-vpn`/`tor` (no cluster Application, no ConfigMap boolean — a separate
+node-reconcile track). **NOT YET in the enum: `meshbridge`** — it has BOTH a 13a
+element AND a ConfigMap boolean (so the manual GitOps flip works today), but adding it
+to the CRD requires the operator wave to extend the enum
+(`manifests/optional-services-operator/crd-optionalservice.yaml`) + seed CR AND the
+controller's built-in OptionalServiceRegistry (separate repo) in lockstep; until then
+the live-flip CRD mechanism does not cover it.
 
 **⚠ The `ignoreDifferences` KEYSTONE (the piece the whole mechanism hinges on).**
 ArgoCD's automated recurse roots (`app-of-apps.yaml` + `apps/00-app-of-apps-waved.

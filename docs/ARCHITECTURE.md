@@ -72,22 +72,23 @@ flowchart TD
     BEGW -. "headscale-forward ONLY (scale.snapdragon.systems) — pki is NOT internet-facing" .-> PKIGW["snapdragon-pki-gateway<br/>(internal ingress on the pki node only)"]
     PKIGW --> PKI
 
+    subgraph SSO["SSO / native login — shipped, lit by default"]
+        AUTHCORE["auth-core: account/session/MFA + custody seams (2.3.0)"]
+        GWEXCH["gateway bff_-exchange filter"]
+        LOGINOIDC["login-ui native login form -> POST /bff/login"]
+        UBRELOC["user-bff native login + server-side Casdoor exchange"]
+        CUSTKEY["SSO custody-key + internal-token bootstrap"]
+    end
+
     subgraph ROADMAP["Roadmap / in-flight — NOT all shipped"]
         WC["Workload Console (admin-bff module, ships dark)"]
-        MFA["Casdoor MFA (design done)"]
+        MFA["MFA privileged-floor enforcement (enroll/challenge shipped; step-up gate ships dark)"]
         DESKGOV["Desktop app governance (queued)"]
         NOTIFY["Notifications: external channels (in-flight)"]
-        subgraph SSO["SSO / BFF JWT custody (ships dark)"]
-            AUTHCORE["auth-core: account/session/MFA + custody seams (✅ 2.3.0)"]
-            GWEXCH["gateway bff_-exchange filter (✅ PR-2/5 #171)"]
-            LOGINOIDC["login-ui native login form -> POST /bff/login (✅ shipped)"]
-            UBRELOC["user-bff native login + PKCE relocation (✅ PR-2/5 #171)"]
-            CUSTKEY["SSO custody-key + internal-token bootstrap (✅ PR-3/5 #172)"]
-        end
     end
 
     classDef planned stroke-dasharray:4,stroke:#888,color:#555;
-    class ROADMAP,WC,MFA,DESKGOV,NOTIFY,SSO,AUTHCORE,GWEXCH,LOGINOIDC,UBRELOC,CUSTKEY planned;
+    class ROADMAP,WC,MFA,DESKGOV,NOTIFY planned;
 ```
 
 > The **superadmin Service Catalog** surface (tailnet-only `snapdragon-superadmin-gateway`
@@ -227,11 +228,18 @@ sequenceDiagram
   and the two BFF databases (admin-bff-db / user-bff-db) are mutually denied at the
   NetworkPolicy layer.
 
-**Ships-dark flags** (all default off/blank): `app.bff.oidc.enabled`
-(user-bff/auth-core) · `app.bff.custody-key` (`BffCustodyCipher`) ·
-`app.session.cookie.enabled` (the `bff_` cookie) ·
-`snapdragon.gateway.bff-exchange.enabled` (gateway swap) · `__SNAP_OIDC_ENABLED__`
-(login-ui).
+**Safety-flag posture.** Each piece above is individually gateable off
+(`app.bff.oidc.enabled` on user-bff/auth-core · `app.bff.custody-key` on
+`BffCustodyCipher` · `app.session.cookie.enabled` for the `bff_` cookie ·
+`snapdragon.gateway.bff-exchange.enabled` for the gateway swap ·
+`__SNAP_OIDC_ENABLED__` on login-ui), but **none of them ship dark on `main`**:
+`specs/cluster/manifests/{user,admin,mod}-bff-api/deployment.yaml` bake
+`APP_BFF_OIDC_ENABLED` / `APP_SESSION_COOKIE_ENABLED` / `APP_BFF_EXCHANGE_ENABLED`
+`"true"` by default, and `social-ui/deployment.yaml` bakes `SNAP_OIDC_ENABLED`
+`"true"`. Only the **secret values** behind two of them — the Casdoor client
+secret and the AES custody key — are `optional: true` ESO-Secret refs, so a
+fresh cluster without Vault/ESO populated boots with the flags lit but the
+ciphers inert until those Secrets land.
 
 ### Progress (as of 2026-06-25)
 
@@ -396,6 +404,7 @@ backstops noted below may already be present but inert.
 - **🔭 Desktop app governance** — per-license SSO-enforced sudo + admin-curated
   Plasma Discover store + user install-requests + admin remote-install; extends
   [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md).
+- **🚧 Enterprise phones (GrapheneOS on Pixel)** — the fourth onboarding form: `scripts/phone-wizard.sh` flashes signature-verified GrapheneOS, enrolls the handset into the orchestration superdomain (headscale tailnet, ADR-14 register-and-approve), escrows a separately-encrypted enterprise profile, and emits a `phone-ingest/v1` device-registry record; see [`ENTERPRISE-PHONES.md`](ENTERPRISE-PHONES.md).
 - **🚧 Notifications external channels** — Matrix DM + Akkoma feed + phpBB + email
   adapters on top of the shipped in-app MVP; mod-bff `notify_channels` directive.
 - **✅ Generator supply-chain hardening** — stage3 GPG/sha + headscale /

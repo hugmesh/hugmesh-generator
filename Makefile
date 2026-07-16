@@ -313,6 +313,7 @@ ORANGEPIZERO2_PASS    := ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
 .PHONY: help menu mesh-node-up mesh-node-down mesh-node-status mesh-node-logs go-live go-live-menu clean build-all build-everything matrix-check pentest pentest-seed rebuild \
         rpi x86 omnibus frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
         orangepizero2 orangepizero2-live orangepizero2-installer \
+        phone-plan phone-detect phone-fetch phone-flash phone-enroll phone-profile phone-rotate-profile-pass phone-remove-profile phone-ingest phone-status phone-wizard \
         flash qemu qemu-rpi qemu-x86 \
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
@@ -486,6 +487,83 @@ go-live-menu: ## preview the on-device go-live CONSOLE menu (ncurses front-end; 
 	GL_PROVIDERS_LIB='$(CURDIR)/specs/usr/lib/snapdragon/go-live-providers.sh' \
 	GL_OUT_DIR='$(GOLIVE_OUT)/out' \
 	  bash specs/usr/sbin/snapdragon-go-live-menu
+
+# ── Enterprise-phone wizard (onboarding form — builds NO image) ──────────────
+# Thin delegates to the ONE driver, scripts/phone-wizard.sh: flash a USB-
+# connected Google Pixel with VERIFIED GrapheneOS, enroll it in the brand's
+# tailnet, provision the escrowed enterprise profile, emit the device-registry
+# ingest record. HOST-SIDE ONLY — deliberately NEVER dispatched into the
+# builder container: the driver needs the host's USB bus (adb/fastboot) and a
+# real TTY for its typed-serial destructive gates. Default posture is dry-run/
+# read-only (plan/detect/status); the state-changing verbs stay gated INSIDE
+# the driver (flash: typed-serial confirm on a TTY; non-TTY needs BOTH YES=1
+# AND SERIAL=). Secrets follow the mesh-node-up custody pattern: AUTHKEY_FILE=
+# and PASS_FILE= forward file PATHS only — no secret ever rides argv.
+# Knobs (forwarded only when set; PHONE_ROLE, because ROLE is the build knob):
+#   SERIAL= CODENAME= CHANNEL= GRAPHENE_VERSION= OUT_DIR= KEYS_DIR=
+#   LOGIN_SERVER= AUTHKEY_FILE= PASS_FILE= DEVICE_ID= SUPERDOMAIN= PHONE_ROLE=
+#   PROFILE_NAME= TAILSCALE_APK= APK_SIGNER_SHA256= INGEST_URL= CLIENT_CERT=
+#   CLIENT_KEY= CA= YES=1 FORCE=1 FORCE_FWUPD=1 RESOLVE=1 SHOW_AUTHKEY=1
+PHONE_WORK_DIR ?= $(WORK_DIR)/phone-wizard
+_PHONE_ARGS = --work-dir "$(PHONE_WORK_DIR)" \
+  $(if $(SERIAL),--serial "$(SERIAL)") \
+  $(if $(CODENAME),--codename "$(CODENAME)") \
+  $(if $(CHANNEL),--channel "$(CHANNEL)") \
+  $(if $(GRAPHENE_VERSION),--graphene-version "$(GRAPHENE_VERSION)") \
+  $(if $(OUT_DIR),--out "$(OUT_DIR)") \
+  $(if $(KEYS_DIR),--keys-dir "$(KEYS_DIR)") \
+  $(if $(LOGIN_SERVER),--login-server "$(LOGIN_SERVER)") \
+  $(if $(AUTHKEY_FILE),--authkey-file "$(AUTHKEY_FILE)") \
+  $(if $(PASS_FILE),--pass-file "$(PASS_FILE)") \
+  $(if $(DEVICE_ID),--device-id "$(DEVICE_ID)") \
+  $(if $(SUPERDOMAIN),--superdomain "$(SUPERDOMAIN)") \
+  $(if $(PHONE_ROLE),--role "$(PHONE_ROLE)") \
+  $(if $(PROFILE_NAME),--profile-name "$(PROFILE_NAME)") \
+  $(if $(TAILSCALE_APK),--tailscale-apk "$(TAILSCALE_APK)") \
+  $(if $(APK_SIGNER_SHA256),--apk-signer-sha256 "$(APK_SIGNER_SHA256)") \
+  $(if $(INGEST_URL),--ingest-url "$(INGEST_URL)") \
+  $(if $(CLIENT_CERT),--client-cert "$(CLIENT_CERT)") \
+  $(if $(CLIENT_KEY),--client-key "$(CLIENT_KEY)") \
+  $(if $(CA),--ca "$(CA)") \
+  $(if $(strip $(YES)),--yes) \
+  $(if $(strip $(FORCE)),--force) \
+  $(if $(strip $(FORCE_FWUPD)),--force-fwupd) \
+  $(if $(strip $(RESOLVE)),--resolve) \
+  $(if $(strip $(SHOW_AUTHKEY)),--show-authkey)
+
+phone-plan: ## dry-run the enterprise-phone wizard: validate knobs + catalog, print PLAN_* lines ([PLAN_VERB=flash] plans one verb)
+	@bash scripts/phone-wizard.sh plan $(PLAN_VERB) $(_PHONE_ARGS)
+
+phone-detect: ## read-only probe of the USB-connected Pixel (serial, codename, current OS)
+	@bash scripts/phone-wizard.sh detect $(_PHONE_ARGS)
+
+phone-fetch: ## download + sshsig-VERIFY the GrapheneOS install zip (CODENAME=… [CHANNEL=stable])
+	@bash scripts/phone-wizard.sh fetch $(_PHONE_ARGS)
+
+phone-flash: ## DESTRUCTIVE: wipe + flash the VERIFIED artifact (SERIAL=… required; non-TTY also YES=1)
+	$(if $(strip $(SERIAL)),,$(error phone-flash: refusing — SERIAL= is required (make phone-detect lists connected devices)))
+	@bash scripts/phone-wizard.sh flash $(_PHONE_ARGS)
+
+phone-enroll: ## join the flashed phone to the mesh tailnet (KEYS_DIR=… or LOGIN_SERVER=…+AUTHKEY_FILE=…)
+	@bash scripts/phone-wizard.sh enroll $(_PHONE_ARGS)
+
+phone-profile: ## create + escrow the enterprise secondary user (vault-seed custody; operator sets the credential)
+	@bash scripts/phone-wizard.sh profile $(_PHONE_ARGS)
+
+phone-rotate-profile-pass: ## rotate + re-escrow the enterprise-profile passphrase (previous kept as .prev-<ts>)
+	@bash scripts/phone-wizard.sh rotate-profile-pass $(_PHONE_ARGS)
+
+phone-remove-profile: ## DESTRUCTIVE: remove the enterprise profile (typed confirm on a TTY; non-TTY needs YES=1)
+	@bash scripts/phone-wizard.sh remove-profile $(_PHONE_ARGS)
+
+phone-ingest: ## emit the phone-ingest/v1 device-registry record (INGEST_URL=+mTLS flags to POST it)
+	@bash scripts/phone-wizard.sh ingest $(_PHONE_ARGS)
+
+phone-status: ## read-only: tools, device, tailnet, profile + escrow PRESENCE (never contents)
+	@bash scripts/phone-wizard.sh status $(_PHONE_ARGS)
+
+phone-wizard: ## interactive guided full phone flow (TTY): detect->fetch->flash->enroll->profile->ingest
+	@bash scripts/phone-wizard.sh wizard $(_PHONE_ARGS)
 
 rebuild: ## from-scratch: wipe the work dir, then build the whole default fleet
 ifndef NATIVE

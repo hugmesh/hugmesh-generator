@@ -14,12 +14,17 @@ The doc set for the image/infra layer. State key used throughout:
 - [`BUILD-MATRIX.md`](BUILD-MATRIX.md) — the canonical platform×role×env build matrix, the four build channels (CLI / make / ncurses menu / Studio GUI), the **all-options-in-all-menus** rule + the `make matrix-check` harness (✅).
 - [`STUDIO-WIZARD-FLOW.md`](STUDIO-WIZARD-FLOW.md) — the Studio image-build wizard's **4-choice → 7-step** flow (mesh node / local Docker mesh / mesh client / standalone), per-path page map, and the ncurses/CLI/web-UI **parity TODO** (✅ GUI; 🔭 other channels).
 - [`RESERVED-PREFIXES.md`](RESERVED-PREFIXES.md) — reserved `ROLE_`/`DOMAIN_` and route first-segment prefixes.
+- [`GO-LIVE-WIZARD.md`](GO-LIVE-WIZARD.md) — superadmin go-live wizard (bring-your-own-domain / cloudflare-tunnel / DuckDNS-DDNS / tailscale-funnel / router-portforward providers), CLI + ncurses + Studio front-ends (✅ v1 consolidated).
+- [`SUPERADMIN-MESH-CLIENT.md`](SUPERADMIN-MESH-CLIENT.md) — how a platform superadmin joins the tailnet mesh and reaches nodes over SSH.
+- [`IMAGE-GEN-PROGRESS.md`](IMAGE-GEN-PROGRESS.md) — the image-build worker's optional non-terminal `PROGRESS_URL` side channel (fills the web progress bar between the start frame and the terminal `COMPLETED`/`FAILED`/`ERROR` result).
 
 ## Architecture
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — full topology, gateway pattern, identity, multi-tenancy/superadmin, role cascade, and the roadmap.
 - [`ROUTE-ACCESS.md`](ROUTE-ACCESS.md) — `gateway_route_access` model (incl. 🔭 MFA-required fail-closed gating).
 - [`HEAVY-TIER.md`](HEAVY-TIER.md) — heavy datastores (Kafka/ClickHouse/Uptrace) on the x86 worker.
+- [`MESH-TEMPLATING.md`](MESH-TEMPLATING.md) — multi-tenant mesh repo-templating: Handlebars render engine, guardrails, archetype rendering, and cross-mesh foreign-base ingestion (Phases 1–7, ✅ merged).
+- [`PHASE5-DECISIONS.md`](PHASE5-DECISIONS.md) — Phase 5 detail: the first tailnet-internal publish of rendered tenant repos to Forgejo, signed provenance, domain-reconcile writeback.
 
 ## Security & hardening
 
@@ -47,6 +52,7 @@ The doc set for the image/infra layer. State key used throughout:
 ## Client images
 
 - [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) — per-user device images (FD-04 ✅ shipped; FD-06/07/08 + desktop-app governance 🔭 deferred).
+- [`ENTERPRISE-PHONES.md`](ENTERPRISE-PHONES.md) — the fourth onboarding form (🚧): verified GrapheneOS onto a USB-connected Pixel → mesh enroll → escrowed enterprise profile → device-registry ingest (`scripts/phone-wizard.sh`).
 - [`STANDALONE-DESKTOP.md`](STANDALONE-DESKTOP.md) — hardened standalone NVIDIA desktop images (not a cluster node).
 
 ## Testing
