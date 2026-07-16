@@ -92,6 +92,39 @@ else
     bad "register_qemu must be non-fatal (return 0) even on failure"
 fi
 
+# ── 5b. pre-existing registration + interpreter missing in-container ─────────
+# The kernel-global case the pki.rpi5 triage hit: the HOST's qemu-aarch64
+# registration is visible but its interpreter path does not exist in the
+# container. register_qemu must return 0, warn ONCE actionably (rebuild the
+# builder image), and NEVER print the old contradictory "registration failed"
+# WARN + "registered" INFO pair for the same entry.
+DRACUT_CROSS_BINFMT_NODE="${WORK}/node-hostglobal"
+mk_node "${DRACUT_CROSS_BINFMT_NODE}" "${WORK}/definitely-not-here-qemu"
+OUT5B="$(dracut_cross_register_qemu 2>&1)"; RC5B=$?
+if [ "${RC5B}" -eq 0 ]; then
+    ok "register_qemu returns 0 on a pre-existing (host-global) registration"
+else
+    bad "register_qemu must return 0 when the node pre-exists (got rc=${RC5B})"
+fi
+case "${OUT5B}" in
+    *"rebuild the builder image"*) ok "existing-registration + missing interp warns actionably (rebuild hint)" ;;
+    *) bad "expected an actionable rebuild-the-builder-image WARN, got: ${OUT5B}" ;;
+esac
+case "${OUT5B}" in
+    *"registration failed"*) bad "must not print the contradictory 'registration failed' for an existing entry" ;;
+    *) ok "no contradictory 'registration failed' WARN for an existing entry" ;;
+esac
+
+# ── 5c. pre-existing registration + interpreter USABLE -> quiet no-op ────────
+DRACUT_CROSS_BINFMT_NODE="${WORK}/node-hostglobal-good"
+mk_node "${DRACUT_CROSS_BINFMT_NODE}" "${MOCK_QEMU}"
+OUT5C="$(dracut_cross_register_qemu 2>&1)"; RC5C=$?
+if [ "${RC5C}" -eq 0 ] && [ -z "${OUT5C}" ]; then
+    ok "register_qemu is a quiet no-op when the existing registration is usable"
+else
+    bad "usable pre-existing registration should be silent rc=0 (rc=${RC5C}, out: ${OUT5C})"
+fi
+
 # ── 6. the pinned registration line carries the verified magic/mask/interp ──
 # magic/mask verified byte-for-byte from a host with qemu-aarch64 registered.
 EXPECT=':qemu-aarch64:M::\x7f\x45\x4c\x46\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/qemu-aarch64:OC'

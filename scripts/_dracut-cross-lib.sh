@@ -115,9 +115,28 @@ dracut_cross_qemu_interp() {
 # dracut_cross_register_qemu — idempotent, non-fatal binfmt_misc mount+register.
 # Always returns 0; the caller must never abort on it (a non-encrypt build, or an
 # unprivileged container where mount/register are denied, must proceed).
+# _dxc_report_existing — a qemu-aarch64 registration already exists (from this
+# container, a prior run, or a HOST-side registration — binfmt_misc is
+# KERNEL-GLOBAL, so mounting it inside a container exposes the host's entries).
+# Without the F (fix-binary) flag the kernel opens the interpreter path in the
+# EXECUTING process's mount namespace, so an inherited registration only helps
+# if the interpreter also exists INSIDE this container. Stay quiet when it is
+# usable (this runs on every build); WARN actionably when it is not.
+_dxc_report_existing() {
+    local hinterp
+    hinterp="$(dracut_cross_qemu_interp)"
+    if [ ! -x "${hinterp}" ]; then
+        _dxc_warn "qemu-${DRACUT_CROSS_QEMU_ARCH} is already registered (kernel-global) -> ${hinterp}, but that interpreter is missing in THIS container — rebuild the builder image (make docker-image) so it ships the static qemu."
+    fi
+}
+
 dracut_cross_register_qemu() {
-    # Already registered (this or a prior container/run) — nothing to do.
-    [ -e "${DRACUT_CROSS_BINFMT_NODE}" ] && return 0
+    # Already registered (this or a prior container/run, or host-side with
+    # binfmt_misc already mounted) — report honestly, nothing to write.
+    if [ -e "${DRACUT_CROSS_BINFMT_NODE}" ]; then
+        _dxc_report_existing
+        return 0
+    fi
 
     # binfmt_misc must be mounted before we can register. In a --privileged
     # container this succeeds; otherwise it is denied and we fall through
@@ -125,6 +144,15 @@ dracut_cross_register_qemu() {
     if ! mountpoint -q /proc/sys/fs/binfmt_misc 2>/dev/null; then
         mount -t binfmt_misc none /proc/sys/fs/binfmt_misc 2>/dev/null \
             || _dxc_warn "could not mount binfmt_misc (need a --privileged container); qemu-aarch64 will be unregistered."
+    fi
+
+    # The mount may have just made a HOST-side registration visible. Recognize
+    # it here instead of falling through to a doomed EEXIST write — which used
+    # to print a misleading "registration failed" WARN immediately followed by
+    # a "registered" INFO for the very same entry.
+    if [ -e "${DRACUT_CROSS_BINFMT_NODE}" ]; then
+        _dxc_report_existing
+        return 0
     fi
 
     local reg="/proc/sys/fs/binfmt_misc/register"
@@ -152,11 +180,16 @@ dracut_cross_register_qemu() {
         }
     done
 
-    # Fall back to the pinned literal registration line.
-    printf '%s\n' "${DRACUT_CROSS_BINFMT_LINE}" > "${reg}" 2>/dev/null \
-        || _dxc_warn "writing the qemu-${DRACUT_CROSS_QEMU_ARCH} registration failed."
-    if [ -e "${DRACUT_CROSS_BINFMT_NODE}" ]; then
+    # Fall back to the pinned literal registration line. Re-check the node
+    # before warning: a write can fail EEXIST because something else registered
+    # the same name concurrently, which is a success for our purposes — never
+    # print "failed" and "registered" for the same entry.
+    if printf '%s\n' "${DRACUT_CROSS_BINFMT_LINE}" > "${reg}" 2>/dev/null; then
         _dxc_info "registered qemu-${DRACUT_CROSS_QEMU_ARCH} -> $(dracut_cross_qemu_interp)."
+    elif [ -e "${DRACUT_CROSS_BINFMT_NODE}" ]; then
+        _dxc_info "qemu-${DRACUT_CROSS_QEMU_ARCH} registered concurrently -> $(dracut_cross_qemu_interp)."
+    else
+        _dxc_warn "writing the qemu-${DRACUT_CROSS_QEMU_ARCH} registration failed."
     fi
     return 0
 }
