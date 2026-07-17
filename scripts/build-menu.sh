@@ -340,18 +340,21 @@ ui_input() {
     printf '%s' "${val:-${def}}"
 }
 
-# ui_password TITLE TEXT  -> echoes the entered secret (hidden input). Never logged,
-# never persisted by the caller. Empty result is a valid "skip".
+# ui_password TITLE TEXT [DEFAULT]  -> echoes the entered secret (hidden input).
+# On cancel, returns DEFAULT (same return-only contract as ui_input) instead of
+# wiping it — the box itself is never pre-filled with the secret, only the
+# returned value falls back. Never logged, never persisted by the caller. Empty
+# result (submitted, not cancelled) is a valid "skip".
 ui_password() {
-    local title="$1" text="$2" val
+    local title="$1" text="$2" def="${3:-}" val
     if [ "${HAVE_TUI}" = 1 ]; then
         val="$(whiptail --title "${WT_TITLE} — ${title}" --passwordbox "${text}" 12 78 3>&1 1>&2 2>&3)" \
-            || { printf ''; return 0; }
+            || { printf '%s' "${def}"; return 0; }
         printf '%s' "${val}"; return 0
     fi
-    read -r -s -p "${text}: " val </dev/tty || val=""
+    read -r -s -p "${text}: " val </dev/tty || val="${def}"
     printf '\n' >&2
-    printf '%s' "${val}"
+    printf '%s' "${val:-${def}}"
 }
 
 # arm_secrets_prompt LABEL — masked, non-persisted --local-pass/--luks-pass
@@ -369,8 +372,8 @@ arm_secrets_prompt() {
             luks "Unattended LUKS pass $([ -n "${ARM_LUKS_PASS}" ] && echo '(set — advanced)' || echo '(prompts at build/install — recommended)')" \
             done "‹ done")" || return 0
         case "${choice}" in
-            pass) ARM_LOCAL_PASS="$(ui_password "Password" "Local login password (blank = random one-time at first boot)")" ;;
-            luks) ARM_LUKS_PASS="$(ui_password "Unattended LUKS" "Bake an unattended LUKS passphrase (ADVANCED; blank = prompt at build/install)")" ;;
+            pass) ARM_LOCAL_PASS="$(ui_password "Password" "Local login password (blank = random one-time at first boot)" "${ARM_LOCAL_PASS}")" ;;
+            luks) ARM_LUKS_PASS="$(ui_password "Unattended LUKS" "Bake an unattended LUKS passphrase (ADVANCED; blank = prompt at build/install)" "${ARM_LUKS_PASS}")" ;;
             *) return 0 ;;
         esac
     done
@@ -1381,7 +1384,7 @@ standalone_screen() {
         choice="$(ui_menu "Standalone ${weight}" "${prompt}" "${items[@]}")" || return 0
         case "${choice}" in
             user)    OPT_SA_USER="$(ui_input "User" "Local login user name" "${OPT_SA_USER}")" ;;
-            pass)    SA_LOCAL_PASS="$(ui_password "Password" "Password for ${OPT_SA_USER} (blank = random one-time at first boot)")" ;;
+            pass)    SA_LOCAL_PASS="$(ui_password "Password" "Password for ${OPT_SA_USER} (blank = random one-time at first boot)" "${SA_LOCAL_PASS}")" ;;
             gpu)     OPT_SA_GPU="$(ui_menu "GPU driver" "Video card / driver (FREE = open, no EULA — the default):" \
                          all-free "All free (any GPU; NVIDIA=nouveau) — default" \
                          nvidia-free "NVIDIA free (nouveau)" \
@@ -1414,7 +1417,7 @@ standalone_screen() {
                       done ;;
             kernel)  OPT_SA_KBUILTIN="$([ "${OPT_SA_KBUILTIN}" = yes ] && echo no || echo yes)" ;;
             egress)  OPT_SA_EGRESS="$(ui_input "Egress VPN" "Path to a WireGuard .conf / OpenVPN .ovpn (empty = none)" "${OPT_SA_EGRESS}")" ;;
-            luks)    SA_LUKS_PASS="$(ui_password "Unattended LUKS" "Bake an unattended LUKS passphrase into the installer ISO (ADVANCED; blank = installer prompts at install)")" ;;
+            luks)    SA_LUKS_PASS="$(ui_password "Unattended LUKS" "Bake an unattended LUKS passphrase into the installer ISO (ADVANCED; blank = installer prompts at install)" "${SA_LUKS_PASS}")" ;;
             build)   save_conf
                      if [ "${unaff}" = yes ]; then
                          build_make_cmd "x86-${role}" "x86 ${role} UNAFFILIATED plain Gentoo desktop (${OPT_PATH}, ENV=${OPT_ENV})" 1
@@ -1509,7 +1512,7 @@ local_mesh_screen() {
             scratch "⚙ Generate & start a NEW local mesh FROM SCRATCH …" \
             back    "‹ back")" || return 0
         case "${choice}" in
-            authkey) authkey="$(ui_password "Auth key" "Tailnet/headscale auth key (tskey-… ; required to start)")" ;;
+            authkey) authkey="$(ui_password "Auth key" "Tailnet/headscale auth key (tskey-… ; required to start)" "${authkey}")" ;;
             name)    node_name="$(ui_input "Node name" "Optional hostname on the tailnet (blank = snapdragon-node)" "${node_name}")" ;;
             server)  login_server="$(ui_input "Login server" "Optional self-hosted headscale URL (blank = Tailscale default)" "${login_server}")" ;;
             up|stop|status|logs)
@@ -1553,7 +1556,7 @@ local_mesh_bootstrap_screen() {
             superadmin) superadmin="$(ui_input "Superadmin username" "The platform superadmin login to mint" "${superadmin}")"; [ -n "${superadmin}" ] || superadmin="superadmin" ;;
             social)    if [ -n "${social}" ]; then social=""; else social=1; fi ;;
             domain)    domain="$(ui_input "Public domain" "Public apex domain (required in prod; blank = brand default in test)" "${domain}")" ;;
-            authkey)   authkey="$(ui_password "Auth key" "Tailnet/headscale auth key (required in prod)")" ;;
+            authkey)   authkey="$(ui_password "Auth key" "Tailnet/headscale auth key (required in prod)" "${authkey}")" ;;
             plan|up|down|status)
                 _local_mesh_bootstrap_run "${choice}" "${env}" "${superadmin}" "${social}" "${domain}" "${authkey}" ;;
             back|"") return 0 ;;
@@ -1575,13 +1578,15 @@ _local_mesh_bootstrap_run() {
         chmod 600 "${keyfile}" 2>/dev/null || true
         printf '%s' "${authkey}" >"${keyfile}"
         args+=(--authkey-file "${keyfile}")
+        trap '_phone_shred_key' INT TERM EXIT
     fi
     args+=(--generator-dir "${REPO_DIR}")
     local out
     out="$(PYTHONPATH="${REPO_DIR}/studio" python3 -m snapdragon_studio.core.local_mesh_bootstrap "${args[@]}" 2>&1)"
     local rc=$?
     if [ -n "${keyfile}" ]; then
-        command -v shred >/dev/null 2>&1 && shred -u "${keyfile}" 2>/dev/null || rm -f "${keyfile}"
+        trap - INT TERM EXIT
+        _phone_shred_key
     fi
     ui_msg "Local mesh (from scratch) — ${sub} (rc=${rc})" "${out:-(no output)}"
 }
@@ -1598,6 +1603,7 @@ _local_mesh_run() {
         chmod 600 "${keyfile}" 2>/dev/null || true
         printf '%s' "${authkey}" >"${keyfile}"
         args+=(--authkey-file "${keyfile}")
+        trap '_phone_shred_key' INT TERM EXIT
     fi
     [ -n "${node_name}" ]    && args+=(--node-name "${node_name}")
     [ -n "${login_server}" ] && args+=(--login-server "${login_server}")
@@ -1606,7 +1612,8 @@ _local_mesh_run() {
     out="$(PYTHONPATH="${REPO_DIR}/studio" python3 -m snapdragon_studio.core.local_mesh "${args[@]}" 2>&1)"
     local rc=$?
     if [ -n "${keyfile}" ]; then
-        command -v shred >/dev/null 2>&1 && shred -u "${keyfile}" 2>/dev/null || rm -f "${keyfile}"
+        trap - INT TERM EXIT
+        _phone_shred_key
     fi
     ui_msg "Local Docker mesh — ${sub} (rc=${rc})" "${out:-(no output)}"
 }
@@ -1757,20 +1764,23 @@ phone_screen() {
                         detect "<detect at run — probe the connected device>" "${devs[@]}")" || cn=""
                     case "${cn}" in detect) codename="" ;; "") : ;; *) codename="${cn}" ;; esac
                 fi ;;
-            channel) channel="$(ui_menu "Channel" "GrapheneOS release channel (stable is the vetted default)" \
+            channel) local prev_channel="${channel}"
+                     channel="$(ui_menu "Channel" "GrapheneOS release channel (stable is the vetted default)" \
                         stable "stable — production releases" \
                         beta   "beta  — preview" \
-                        alpha  "alpha — earliest")" || channel="stable"; [ -n "${channel}" ] || channel="stable" ;;
+                        alpha  "alpha — earliest")" || channel="${prev_channel}"
+                     [ -n "${channel}" ] || channel="${prev_channel:-stable}" ;;
             serial)  serial="$(ui_input "Serial" "Target device serial (blank = auto when exactly one device is connected)" "${serial}")" ;;
             keys)    keys_dir="$(ui_input "Keys dir" "Keys dir, docker-mesh-node layout: login-server, tailscale/authkey, role (blank = use the server/auth-key fields)" "${keys_dir}")" ;;
             server)  login_server="$(ui_input "Login server" "Headscale control URL (blank = the keys-dir login-server file)" "${login_server}")" ;;
-            authkey) authkey="$(ui_password "Auth key" "One-time tailnet/headscale pre-auth key (blank = unset; the enroll runbook then expects it from your own custody)")" ;;
-            role)    role="$(ui_menu "Mesh role" "Mesh role for the enrollment record" \
+            authkey) authkey="$(ui_password "Auth key" "One-time tailnet/headscale pre-auth key (blank = unset; the enroll runbook then expects it from your own custody)" "${authkey}")" ;;
+            role)    local prev_role="${role}"
+                     role="$(ui_menu "Mesh role" "Mesh role for the enrollment record" \
                         default    "<driver default — user, or the keys-dir role file>" \
                         user       "user" \
                         mod        "mod" \
                         admin      "admin" \
-                        superadmin "superadmin")" || role=""
+                        superadmin "superadmin")" || role="${prev_role}"
                      [ "${role}" = default ] && role="" ;;
             wizard|plan|detect|fetch|flash|enroll|profile|ingest|status)
                 _phone_run "${choice}" "${authkey}" "${codename}" "${channel}" "${serial}" "${keys_dir}" "${login_server}" "${role}" ;;
@@ -1779,11 +1789,26 @@ phone_screen() {
     done
 }
 
+# _phone_shred_key — best-effort shred+remove of the CALLING function's local
+# ${keyfile}. Used as an INT/TERM/EXIT trap handler around a foreground (or
+# captured-via-command-substitution) child, so an operator Ctrl-C — or any other
+# early exit — mid-run never leaves the plaintext auth-key temp file behind.
+# Bash traps run in the interrupted call's own environment, so this sees the
+# caller's local ${keyfile}; shared by _phone_run and the local-mesh siblings
+# above, which all name their auth-key temp file variable "keyfile".
+_phone_shred_key() {
+    [ -n "${keyfile:-}" ] || return 0
+    command -v shred >/dev/null 2>&1 && shred -u "${keyfile}" 2>/dev/null || rm -f "${keyfile}"
+}
+
 # _phone_run VERB AUTHKEY CODENAME CHANNEL SERIAL KEYS_DIR LOGIN_SERVER ROLE — one
 # FOREGROUND child invocation of the enterprise-phone driver, terminal fully
 # attached (stdin for its typed-serial/wizard prompts, stdout for its runbooks).
 # The auth key (when set) goes into a chmod-600 mktemp file (off the argv / process
-# table) and is shredded afterwards — _local_mesh_bootstrap_run's exact pattern.
+# table) and is shredded afterwards — _local_mesh_bootstrap_run's exact pattern —
+# with an INT/TERM/EXIT trap covering the foreground run too, so a Ctrl-C mid-run
+# still shreds it (traps are process-global, so the trap is cleared again right
+# after normal cleanup).
 _phone_run() {
     local verb="$1" authkey="$2" codename="$3" channel="$4" serial="$5" keys_dir="$6" login_server="$7" role="$8"
     local wiz="${SNAP_PHONE_WIZARD:-${SCRIPT_DIR}/phone-wizard.sh}"
@@ -1800,12 +1825,14 @@ _phone_run() {
         chmod 600 "${keyfile}" 2>/dev/null || true
         printf '%s' "${authkey}" >"${keyfile}"
         args+=(--authkey-file "${keyfile}")
+        trap '_phone_shred_key' INT TERM EXIT
     fi
     say "running: scripts/phone-wizard.sh ${verb} (foreground — output follows)"
     "${wiz}" "${args[@]}"
     local rc=$?
     if [ -n "${keyfile}" ]; then
-        command -v shred >/dev/null 2>&1 && shred -u "${keyfile}" 2>/dev/null || rm -f "${keyfile}"
+        trap - INT TERM EXIT
+        _phone_shred_key
     fi
     if [ "${rc}" -eq 0 ]; then say "phone-wizard ${verb}: OK"; else warn "phone-wizard ${verb}: exit ${rc}"; fi
     # Pause so the driver's output survives the next menu redraw — but only when a

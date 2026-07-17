@@ -567,5 +567,70 @@ assert_eq "phone run: keys-dir argv" "$(cat "${PHONE_STUB_OUT}/argv")" \
 PHONE_STUB_RC=7 _phone_run status "" "" "" "" "" "" "" </dev/null 2>/dev/null
 assert_eq "phone run: nonzero driver rc survives" "$?" "0"
 
+# ── phone_screen(): drive its OWN choice-to-local-variable case block ───────────
+# Finding #22 (tests-coverage): every _phone_run check above proves argv-building
+# is correct GIVEN already-correct inputs — none of them ever go through
+# phone_screen()'s own interactive `case "${choice}" in device) channel) serial)
+# keys) server) authkey) role) ...` loop that turns menu picks into those inputs
+# in the first place. A typo'd case label or a swapped/misassigned local there
+# would slip straight past every check above undetected.
+
+# #10 regression pin (static, source-text only): ui_password's DEFAULT-preserving
+# contract on both the whiptail-cancel and non-TUI read-failure paths. Actually
+# driving those paths live would require a real /dev/tty, which this offline
+# suite must never touch (see ui_menu's own text fallback, which explicitly
+# reads from /dev/tty, never stdin) — that's also why the walk below stubs
+# ui_menu/ui_input/ui_password rather than feeding stdin into the real ones.
+ui_password_body="$(sed -n '/^ui_password() {/,/^}/p' "${MENU_SH}")"
+printf '%s' "${ui_password_body}" | grep -qF 'def="${3:-}"' \
+    && _ok || _fail "ui_password: no DEFAULT (3rd) param — regressed #10's preserve-on-cancel contract"
+printf '%s' "${ui_password_body}" | grep -qF '|| { printf '"'"'%s'"'"' "${def}"; return 0; }' \
+    && _ok || _fail "ui_password: whiptail-cancel path no longer falls back to DEFAULT"
+printf '%s' "${ui_password_body}" | grep -qF '|| val="${def}"' \
+    && _ok || _fail "ui_password: non-TUI read-failure path no longer falls back to DEFAULT"
+
+# Stub _phone_run (capture argv instead of exec'ing the driver) and ui_menu/
+# ui_input/ui_password (one scripted-response QUEUE per function) then walk
+# phone_screen through one full pass: device -> channel -> serial -> keys ->
+# server -> authkey -> role -> plan -> back. Queue order mirrors exactly what
+# phone_screen's loop is expected to call: the OUTER menu is asked once per
+# field visited plus once for "plan" and once for "back" (11 calls total);
+# `channel` and `role` also open a nested ui_menu of their own. Each queue is a
+# newline-delimited FIFO FILE, not a bash array — phone_screen invokes these via
+# command substitution ("$(ui_menu ...)"), which forks a SUBSHELL, so a pop that
+# only mutated an in-memory array would vanish the instant that subshell exits
+# and every call would silently re-read the same head element forever; a file
+# pop (read the first line, then rewrite the file without it) survives the
+# subshell boundary because it's a real filesystem mutation, not shell state.
+# Runs AFTER the real _phone_run/ui_* checks above so it doesn't disturb them.
+PHONE_SCREEN_ARGV="${SNAP_MENU_STATE}/phone-screen-argv"
+_phone_run() { printf '%s\n' "$@" >"${PHONE_SCREEN_ARGV}"; }
+_UI_MENU_Q="${SNAP_MENU_STATE}/ui-menu.q"
+_UI_INPUT_Q="${SNAP_MENU_STATE}/ui-input.q"
+_UI_PASSWORD_Q="${SNAP_MENU_STATE}/ui-password.q"
+printf '%s\n' device channel beta serial keys server authkey role admin plan back >"${_UI_MENU_Q}"
+printf '%s\n' comet S9PIXEL "" "https://hs.example.test"                          >"${_UI_INPUT_Q}"
+printf '%s\n' "tskey-auth-Sup3r Secret!"                                          >"${_UI_PASSWORD_Q}"
+_q_pop()      { head -n1 "$1"; sed -i '1d' "$1"; }
+ui_menu()     { _q_pop "${_UI_MENU_Q}"; }
+ui_input()    { _q_pop "${_UI_INPUT_Q}"; }
+ui_password() { _q_pop "${_UI_PASSWORD_Q}"; }
+
+phone_screen
+
+# device/channel/serial/keys/server/authkey/role must each have landed in the
+# right positional slot of the _phone_run call phone_screen made for "plan" —
+# proving the case block's local-variable assignments are wired to the right
+# fields (a swapped/typo'd case label would scramble this ordering), including
+# a masked authkey with an embedded space to prove byte-exact capture.
+expected_argv="$(printf '%s\n' plan "tskey-auth-Sup3r Secret!" comet beta S9PIXEL "" "https://hs.example.test" admin)"
+assert_eq "phone_screen: captured _phone_run argv matches the driven field selections" \
+    "$(cat "${PHONE_SCREEN_ARGV}" 2>/dev/null)" "${expected_argv}"
+# every queued response must have actually been consumed — too few calls (a
+# field silently skipped) leaves a nonzero-size leftover queue file.
+[ -s "${_UI_MENU_Q}" ]     && _bad "phone_screen: ui_menu queue not fully consumed: $(cat "${_UI_MENU_Q}")"     || _ok
+[ -s "${_UI_INPUT_Q}" ]    && _bad "phone_screen: ui_input queue not fully consumed: $(cat "${_UI_INPUT_Q}")"   || _ok
+[ -s "${_UI_PASSWORD_Q}" ] && _bad "phone_screen: ui_password queue not fully consumed"                          || _ok
+
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]
