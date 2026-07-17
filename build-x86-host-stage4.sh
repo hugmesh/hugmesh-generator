@@ -1254,11 +1254,67 @@ ${HOME_ENCRYPTED} && info "Home: per-user ecryptfs layered on the LUKS2 root (lo
 [ "${HOME_SEED_CODE}" != none ] && info "Home: seeding the Snapdragon stack code (${HOME_SEED_CODE}) into ~/snapdragon-stack"
 # A KEYS USB (--keys-usb DIR) supplies the existing Secure Boot signing key so the
 # installed host boots under the key already enrolled in its firmware.
+# Remember what the OPERATOR actually passed, before auto-discovery writes to the same two
+# variables: the cert-without-key check below must speak about flags that were really given.
+SECUREBOOT_CERT_EXPLICIT="${SECUREBOOT_CERT}"
 if [ -n "${KEYS_USB}" ]; then
     [ -d "${KEYS_USB}" ] || { err "--keys-usb: directory not found: ${KEYS_USB}"; exit 1; }
     [ -z "${SECUREBOOT_KEY}"  ] && [ -f "${KEYS_USB}/Keys/kernel_key.pem" ] && SECUREBOOT_KEY="${KEYS_USB}/Keys/kernel_key.pem"
     [ -z "${SECUREBOOT_CERT}" ] && [ -f "${KEYS_USB}/Keys/kernel_key.der" ] && SECUREBOOT_CERT="${KEYS_USB}/Keys/kernel_key.der"
     info "KEYS USB: ${KEYS_USB} (Secure Boot key: ${SECUREBOOT_KEY:-<none found>})"
+    # The two probes above are INDEPENDENT -f tests. A KEYS USB carrying only the public
+    # kernel_key.der (private key withheld / on an HSM — a normal shape) therefore sets
+    # CERT and leaves KEY empty. That is not an error: with no key, :378's documented
+    # default applies ("a throwaway org key is generated under WORK_DIR/secureboot") and
+    # the build is a correct dev/test image. Say so once, rather than failing a workflow
+    # that never asked for Secure Boot signing.
+    if [ -n "${SECUREBOOT_CERT}" ] && [ -z "${SECUREBOOT_KEY}" ]; then
+        warn "KEYS USB has Keys/kernel_key.der but no Keys/kernel_key.pem: the cert alone"
+        warn "  cannot sign. Falling back to a generated throwaway Secure Boot key — this"
+        warn "  image will NOT boot under Secure Boot on a host enrolled to that cert."
+    fi
+fi
+# Secure Boot signing material must be VALIDATED HERE, not discovered at signing time.
+# The signing block (see "signing UKI with the provided KEYS key") is guarded by
+# `[ -n "${SECUREBOOT_KEY}" ] && [ -f "${SECUREBOOT_KEY}" ]`, and its else-path silently
+# generates a throwaway org key instead. So an unreadable key/cert path did not fail: it
+# SKIPPED, the UKI got signed by a key that is in no firmware db, and the build exited 0.
+# The breakage only surfaced when the delivered image refused to boot on the target —
+# hours per image later. --keys-usb has had this preflight all along (just above); the
+# loose --secureboot-key/--secureboot-cert paths never did. Fail fast instead, at second 0.
+if [ -n "${SECUREBOOT_KEY}" ] && [ ! -f "${SECUREBOOT_KEY}" ]; then
+    err "--secureboot-key: file not found: ${SECUREBOOT_KEY}"
+    err "  (the UKI would otherwise be signed with a throwaway generated key that is in no"
+    err "   firmware db, and the image would NOT boot under Secure Boot on the target.)"
+    err "  NOTE: under the docker backend the path must be visible INSIDE the container."
+    exit 1
+fi
+if [ -n "${SECUREBOOT_CERT}" ] && [ ! -f "${SECUREBOOT_CERT}" ]; then
+    err "--secureboot-cert: file not found: ${SECUREBOOT_CERT}"; exit 1
+fi
+# A cert with no key is inert: the signing block keys off SECUREBOOT_KEY, so the cert is
+# read only from within it. Passing one alone silently signs with the throwaway key.
+# EXPLICIT only. Using ${SECUREBOOT_CERT} here would also catch the --keys-usb der-only
+# case handled above, and hard-error a build the operator never asked to sign — telling
+# them "--secureboot-cert needs ... (or --keys-usb DIR)" while naming a flag they did not
+# pass and prescribing the one they did. Passing --secureboot-cert by hand is a request to
+# sign, so a missing key there IS a real dead-end; auto-discovery is not.
+if [ -n "${SECUREBOOT_CERT_EXPLICIT}" ] && [ -z "${SECUREBOOT_KEY}" ]; then
+    err "--secureboot-cert needs --secureboot-key (or --keys-usb DIR): a cert alone is never used"
+    exit 1
+fi
+# --distdir WARNS rather than errs, and the asymmetry with the secureboot preflight above
+# is deliberate: an ignored signing key yields a WRONG ARTIFACT (an image that will not
+# boot), while an ignored distfiles cache yields a CORRECT artifact that merely took longer
+# to build. Erroring here would break the legitimate "cache drive is sometimes attached"
+# workflow to prevent nothing. But the silence was still wrong: the flag is documented as
+# "set explicitly to FORCE one", and an unusable value quietly fell back to the /media/*
+# auto-detect scan — so an operator who mistyped it, or ran under docker without the path
+# mounted, was told nothing and simply paid for a full re-download.
+if [ -n "${DISTDIR_SRC}" ] && [ ! -d "${DISTDIR_SRC}" ]; then
+    warn "--distdir: not a directory: ${DISTDIR_SRC} — IGNORING it and falling back to the"
+    warn "  /media/* auto-detect scan (sources will be re-downloaded if no cache is found)."
+    warn "  Under the docker backend the path must be visible INSIDE the container."
 fi
 
 # ── Client person-role + domain validation (FD-08) ──────────────────

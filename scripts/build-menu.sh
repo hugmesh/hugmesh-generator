@@ -719,7 +719,29 @@ build_make_cmd() {
         esac
         # Installer front-ends offered on the live ISO (empty = builder default:
         # standalone='all', everything else 'cli').
-        [ -n "${OPT_INSTALLER_UI}" ] && bf+=" --installer-ui ${OPT_INSTALLER_UI}"
+        #
+        # PARITY NOTE (this channel composes its bf+= string by hand and NEVER imports
+        # studio's config.py, so no python-side gate can ever reach it — it has to be
+        # fixed here, separately, on purpose):
+        # The DEFAULT is already right and must stay that way. OPT_INSTALLER_UI="" emits
+        # NOTHING, so build-x86-host-stage4.sh's own sentinel fires and a node role
+        # resolves to 'cli' while a standalone gets 'all'. That is the builder deciding
+        # with full knowledge of the role — strictly better than any constant this menu
+        # could hardcode. tests/build-matrix/check.sh (MENUTHR i1/i2) pins it so a future
+        # "make the menu match the GUI" change cannot quietly turn the default into a flat
+        # value and hand a headless node an ISO installer stack.
+        # An EXPLICIT choice is still HONOURED on a node target: the builder accepts it
+        # (calamares on a pki node is buildable, just useless ~16 wasted min of Qt), and
+        # this menu's contract is all-options-in-all-menus. Inventing a block the builder
+        # does not have would be a worse lie than the one being fixed. So: warn, and let
+        # the operator decide — the same posture as the rpi3/role warning above.
+        if [ -n "${OPT_INSTALLER_UI}" ]; then
+            case "${target}" in
+                x86-standalone*|x86-laptop|x86-chromebook|x86-desktop) ;;
+                *) [ "${OPT_INSTALLER_UI}" = cli ] || warn "--installer-ui ${OPT_INSTALLER_UI} on '${target}': this is a headless cluster-node role with no live/installer ISO to offer front-ends on. The builder accepts it and will spend the build time anyway (calamares pulls the whole Qt installer stack). Leave 'Installer UI' at <builder default> to get the role-correct 'cli'." ;;
+            esac
+            bf+=" --installer-ui ${OPT_INSTALLER_UI}"
+        fi
         # Extra builder flags — the verbatim escape hatch, LAST so they can override.
         [ -n "${OPT_EXTRA_FLAGS}" ] && bf+=" ${OPT_EXTRA_FLAGS}"
         [ -n "${bf}" ] && RUN_MAKE+=("STANDALONE_FLAGS=${bf# }")

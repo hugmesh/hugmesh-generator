@@ -228,7 +228,24 @@ trap 'rm -rf "${SNAP_MENU_STATE}"' EXIT
 # shellcheck disable=SC1091
 source "${REPO_DIR}/scripts/build-menu.sh"
 
-# baseline: every option build_make_cmd reads, at the script's own defaults
+# i0 — THE MENU'S PRISTINE DEFAULT. This is the ONLY point where build-menu.sh's own
+# top-level OPT_INSTALLER_UI default is observable: reset_opts (below) HARDCODES
+# OPT_INSTALLER_UI="", which MASKS it, so every probe that calls reset_opts first —
+# including i1 — tests the emit condition against a value the harness supplied rather
+# than the one the script ships. Review mutation-proved the gap: setting build-menu.sh's
+# default to "all" (precisely the flat-default regression i1 claims to prevent) left
+# check.sh at TOTAL 774 passed / 0 failed. i1 pins the EMIT CONDITION; this pins the
+# DEFAULT. Both are needed — a flat default is the regression that actually hurts,
+# because it is what the GUI channel's own bug looked like (config.py's
+# `installer_ui: str = "all"`, #384).
+case "${OPT_INSTALLER_UI}" in
+    "") echo "MENUTHR PASS build-menu.sh (i0 installer-ui default is empty = defer to builder)" ;;
+    *)  echo "MENUTHR FAIL build-menu.sh — i0: build-menu.sh's top-level OPT_INSTALLER_UI default is '${OPT_INSTALLER_UI}', not empty. A flat default kills build-x86-host-stage4.sh's `[ -z \"\${INSTALLER_UI}\" ]` sentinel for EVERY target, so headless nodes get an ISO installer stack. Empty = defer to the builder's role-aware fork." ;;
+esac
+
+# baseline: every option build_make_cmd reads, at the script's own defaults.
+# NOTE: this deliberately RESTATES OPT_INSTALLER_UI="" so probes are hermetic — which is
+# exactly why i0 above must run BEFORE the first reset_opts call.
 reset_opts() {
     OPT_WORK_DIR=/tmp/matrix-menu-out OPT_JOBS=4 OPT_ENV=test OPT_PATH=docker
     OPT_BRAND="" OPT_DOMAIN="" OPT_RESUME=no OPT_OMNIBUS=no OPT_PENTEST=no
@@ -332,6 +349,36 @@ for target in rpi-backend x86-pki frite jetson-edge_ai orangepi5 orangepizero2; 
     fi
 done
 
+# ── MENU role-class parity: the ncurses channel's OWN installer-ui contract ─────
+# The menu composes its flag string by hand and NEVER imports studio's config.py,
+# so a validation layer added in python CANNOT reach this channel. Its contract is
+# therefore pinned here, on its own terms.
+#
+# i1 — DEFER ON NODES. At the menu's default (OPT_INSTALLER_UI=""), no --installer-ui
+# may be emitted for a node target: silence is what lets build-x86-host-stage4.sh's
+# own `[ -z "${INSTALLER_UI}" ] && { ${STANDALONE} && INSTALLER_UI=all || INSTALLER_UI=cli; }`
+# sentinel resolve the role-correct value. Emitting ANY constant here would kill that
+# fork and bake an ISO installer stack into a headless node (~16 min/image of Qt).
+# This is the guard that stops a future "make the menu match the GUI" edit from
+# importing the GUI's flat-default bug into the one channel that never had it.
+# i2 — HONOUR ON DESKTOPS. An explicit value must still thread through, or the fix
+# would have silently broken the knob instead.
+for target in x86-pki x86-be x86-fe x86-omnibus; do
+    reset_opts
+    build_make_cmd "${target}" "installer-ui default ${target}" 1
+    case "${RUN_MAKE[*]}" in
+        *--installer-ui*) echo "MENUTHR FAIL ${target} — i1: emitted --installer-ui at the menu default; the builder's role-aware sentinel is now dead code and this node gets an ISO installer stack (argv: ${RUN_MAKE[*]})" ;;
+        *)                echo "MENUTHR PASS ${target} (i1 installer-ui defers to builder)" ;;
+    esac
+done
+reset_opts
+OPT_INSTALLER_UI=calamares
+build_make_cmd x86-standalone-thick "installer-ui explicit desktop" 1
+case "${RUN_MAKE[*]}" in
+    *"--installer-ui calamares"*) echo "MENUTHR PASS x86-standalone-thick (i2 explicit installer-ui honoured)" ;;
+    *) echo "MENUTHR FAIL x86-standalone-thick — i2: explicit --installer-ui calamares dropped (argv: ${RUN_MAKE[*]})" ;;
+esac
+
 # ── fleet-option threading: RESUME/PENTEST/OMNIBUS/FRITE_FLEET/JETSON_FLEET ──
 # must gate to BOTH whole-fleet targets, build-all and build-everything — the
 # exact class of gap the '★ FULL matrix' menu entry introduced (a new fleet
@@ -415,13 +462,19 @@ MENU_EOF
     MENU_PASS=$(grep -c '^MENU PASS' "${out}" || true)
     MENU_FAIL=$(grep -c '^MENU FAIL' "${out}" || true)
     # the child's MENU→MAKE threading probes count toward the THRD bucket;
-    # FAIL-CLOSED like everything else: 6 probes expected (rpi-backend, x86-pki,
-    # frite, jetson-edge_ai, orangepi5, orangepizero2 — see the probe list
-    # above; keep this count in sync with that list's length), shortfall = failures.
+    # FAIL-CLOSED like everything else: 12 probes expected, shortfall = failures.
+    #   6 IMGFLAGS/EXTRA_FLAGS threading (rpi-backend, x86-pki, frite, jetson-edge_ai,
+    #     orangepi5, orangepizero2)
+    # + 1 installer-ui menu DEFAULT i0 (build-menu.sh's pristine OPT_INSTALLER_UI)
+    # + 4 installer-ui role-class parity i1 (x86-pki, x86-be, x86-fe, x86-omnibus)
+    # + 1 installer-ui parity i2 (x86-standalone-thick)
+    # Keep this count in sync with those probe lists' lengths. It is fail-closed for a
+    # reason: a probe that stops EMITTING (renamed target, early `continue`) would
+    # otherwise vanish silently and take its coverage with it.
     local mthr_pass
     mthr_pass=$(grep -c '^MENUTHR PASS' "${out}" || true)
     THR_PASS=$((THR_PASS + mthr_pass))
-    THR_FAIL=$((THR_FAIL + 6 - mthr_pass))
+    THR_FAIL=$((THR_FAIL + 12 - mthr_pass))
     # same fail-closed accounting for the fleet-option (build-all/build-everything)
     # threading probes: 2 expected (one per fleet target).
     local fthr_pass

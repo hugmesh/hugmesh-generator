@@ -22,7 +22,14 @@ from ...core.config import (
     X86_NODE_ROLES,
     tailnet_sso_visible,
 )
-from ._gating import clear_unsupported, gate_widgets, platform_supports
+from ._gating import (
+    clear_unsupported,
+    gate_widgets,
+    gate_widgets_role_class,
+    out_of_scope_note,
+    platform_supports,
+    scope_allows,
+)
 from ._widgets import _file_picker, _row
 
 # The three-state checkboxes (G34): a plain checkbox could only ever emit the
@@ -490,6 +497,17 @@ class NetworkPage(QtWidgets.QWizardPage):
             "optional_services": self.services_box,
             "enable_games": self.games,
         })
+        # Egress VPN is desktop-class ONLY, and the platform gate above cannot say so:
+        # egress_vpn is x86-supported, and the mesh worklist base forces platform="x86"
+        # (the option superset), so on a mesh flow that gate passes and the row stayed live
+        # on every cluster node. The builder warns "--egress-vpn given for a non-desktop
+        # role ... ignoring" — but "ignoring" covers only the staging leg; the VPN userspace
+        # packages and the CONFIG_WIREGUARD kernel fragment are NOT role-gated, so a node
+        # paid for a VPN it will never use. HIDE the row (same idiom as the home group and
+        # the standalone checkbox) so it cannot be set on a node-class image at all.
+        egress_ok = scope_allows("egress_vpn", c)
+        gate_widgets_role_class([self.egress_row, self.egress_locked], egress_ok,
+                                out_of_scope_note("egress_vpn", c), hide=True)
         # gate_widgets blanks the tooltip on every ENABLED widget — restore the
         # 3-state legend on the live tri-state boxes (disabled ones keep the
         # unsupported-platform note it set).
@@ -517,8 +535,13 @@ class NetworkPage(QtWidgets.QWizardPage):
         c.games_domain = self.games_domain.text().strip()
         rs = self.release_state.currentText()
         c.release_state = "" if rs == "default" else rs
-        c.egress_vpn = self.egress.text().strip()
-        c.egress_vpn_locked = self.egress_locked.isChecked()
+        # Scope-gated collect, mirroring HomePage's standalone line: the hidden widget
+        # KEEPS its text/checked state, so without this a conf picked while the role was a
+        # desktop would silently ride a later switch to a node role. cfg is the source of
+        # truth initializePage re-reads, so an in-scope image collects exactly as before.
+        egress_ok = scope_allows("egress_vpn", c)
+        c.egress_vpn = self.egress.text().strip() if egress_ok else ""
+        c.egress_vpn_locked = self.egress_locked.isChecked() and egress_ok
         c.proxy_stack = self.proxy_stack.currentText()
         c.snort = self.snort.isChecked()
         c.aide = _tri_value(self.aide)

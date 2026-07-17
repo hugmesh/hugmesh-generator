@@ -25,8 +25,65 @@ import uuid
 from collections.abc import Callable, Iterator
 
 from . import host_resources
-from .config import ImageConfig
+from .config import PLATFORM_FIELD_SUPPORT, ImageConfig, scope_violations
 from .platform_info import HostInfo, detect
+
+# Config fields holding a HOST path that the builder must be able to READ. Under the docker
+# backend the container sees only /src (the generator repo) and /out, so any path outside
+# those is invisible in-container; _remap_assets_for_docker bind-mounts each of these :ro
+# and rewrites the flag to the in-container path.
+#
+# This list is the whole ballgame, and it used to be an inline tuple with NO test pinning
+# it — which is exactly how it drifted. A field MISSING here does not fail loudly: the flag
+# is emitted carrying an unreachable host path, and every consumer in the builder guards its
+# path with `[ -f ]` / `[ -d ]` and SKIPS when the test fails. So the flag was accepted,
+# ignored, and the build exited 0:
+#   * secureboot_key/_cert — the UKI got signed with a throwaway generated key that is in no
+#     firmware db => the delivered image does NOT boot under Secure Boot on the target. This
+#     fired for a PERFECTLY CORRECT host path, on the DEFAULT backend, every single time.
+#   * distdir            — silently fell back to scanning /media/*, so a build that was
+#     supposed to reuse a local cache re-downloaded everything instead.
+#   * keys_usb           — the builder does err on a missing dir, so this one at least failed
+#     loudly; it is mounted here so the flag actually WORKS under docker rather than being a
+#     native-only feature that hard-errors the moment you use the default backend.
+# test_docker_asset_mounts.py pins this list against the real path-valued flag surface so a
+# newly-added path field cannot rejoin the silent-ignore club.
+DOCKER_ASSET_FIELDS: tuple[str, ...] = (
+    # Order is load-bearing ONLY in that each field's index names its /assets/<i>/ dir;
+    # append new fields at the END so existing mounts keep their paths.
+    "wallpaper", "grub_background", "login_background",
+    "brand_logo", "color_scheme", "branding_dir", "egress_vpn",
+    "secureboot_key", "secureboot_cert", "keys_usb", "distdir",
+)
+
+# Path-valued fields that must EXIST on the host or the build is stopped BEFORE dispatch.
+# Derived from DOCKER_ASSET_FIELDS because the two lists are siblings and drifted together:
+# the same four fields were missing from BOTH, so a mistyped signing key was neither mounted
+# nor reported — it was simply ignored an hour into the build.
+#   * distdir is deliberately EXCLUDED — it warns instead (see _PATH_ADVISORY). An unusable
+#     distfiles cache costs build TIME; it never changes the artifact, so blocking on it
+#     would break the "cache drive is sometimes attached" workflow to prevent nothing.
+#   * keyzip is added here but is NOT in DOCKER_ASSET_FIELDS: Studio reads and unpacks it
+#     itself on the host, so it is never a builder flag and never needs a mount.
+_PATH_MUST_EXIST: tuple[str, ...] = tuple(
+    f for f in DOCKER_ASSET_FIELDS if f != "distdir") + ("keyzip",)
+_PATH_ADVISORY: tuple[str, ...] = ("distdir",)
+# Labels that are NOT just the field name kebab-cased (which is also the flag spelling).
+_PATH_LABELS: dict[str, str] = {"keyzip": "key-zip"}
+
+
+def _path_label(field: str) -> str:
+    return _PATH_LABELS.get(field, field.replace("_", "-"))
+
+
+def _path_field_emitted(field: str, cfg: ImageConfig) -> bool:
+    """True when this platform's builder actually receives ``field``. keyzip is host-side
+    (never a flag) so it always counts; everything else defers to the platform table."""
+    if field == "keyzip":
+        return True
+    platforms = PLATFORM_FIELD_SUPPORT.get(field)
+    return platforms is None or (cfg.platform or "x86") in platforms
+
 
 # Memoized path of the GUI askpass helper (see _askpass_helper_path). One per process
 # is enough — the helper body only depends on this interpreter's path/location.
@@ -225,8 +282,7 @@ class BuildDriver:
         dcfg = copy.deepcopy(cfg)
         mounts: list[str] = []
         gen = self.generator_dir + os.sep
-        for i, field in enumerate(("wallpaper", "grub_background", "login_background",
-                                   "brand_logo", "color_scheme", "branding_dir", "egress_vpn")):
+        for i, field in enumerate(DOCKER_ASSET_FIELDS):
             p = getattr(dcfg, field, "")
             if not p:
                 continue
@@ -394,14 +450,27 @@ class BuildDriver:
             problems.append(
                 f"Docker builder image '{self.host.builder_image}' not found — build it "
                 f"first: {' '.join(self.builder_image_build_command())}")
+        # #382's rule, preserved verbatim: elevation is an ADVISORY, so block ONLY when no
+        # helper exists at all (a real dead end). The advisory itself lives in
+        # preflight_warnings(). Never widen this back into "not root => block": a GUI Studio
+        # is never root, and that blocked every native build.
         if backend == "native" and not self.host.is_root and not self._can_elevate():
             problems.append(
                 "Native build needs root and no elevation helper is available — install "
                 "sudo or pkexec (polkit), or run the Studio as root.")
-        for label, path in (("wallpaper", cfg.wallpaper), ("branding-dir", cfg.branding_dir),
-                            ("egress-vpn", cfg.egress_vpn), ("key-zip", cfg.keyzip)):
-            if path and not os.path.exists(path):
-                problems.append(f"{label} path does not exist: {path}")
+        for field in _PATH_MUST_EXIST:
+            path = getattr(cfg, field, "")
+            # Only a path the builder will actually RECEIVE can be a problem. Without this
+            # gate a stale x86-only value (secureboot_key, wallpaper, ...) riding an ARM
+            # config would BLOCK a build over a flag that platform never emits.
+            if not path or not _path_field_emitted(field, cfg):
+                continue
+            if not os.path.exists(path):
+                problems.append(f"{_path_label(field)} path does not exist: {path}")
+        # Out-of-scope values the BUILDER ITSELF hard-errors on (today: rpi5 + --standalone
+        # + a node role). Catching them here turns a post-dispatch dead-end into a second-0
+        # message; the accepted-but-wrong shapes warn instead (see _config_warnings).
+        problems += scope_violations(cfg)[0]
         return problems
 
     def preflight_warnings(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:
@@ -409,17 +478,42 @@ class BuildDriver:
         preflight(), deliberately separate because problems BLOCK (Review's
         isComplete gates on them; ProgressPage refuses dispatch) and a low-memory
         host must WARN, never block and never silently throttle: this computes and
-        returns text only, mutating neither cfg.jobs nor the cap. ``cfg`` is unused
-        today but keeps the signature parallel to preflight() for future per-config
-        warnings."""
-        del cfg  # reserved for future per-config warnings
+        returns text only, mutating neither cfg.jobs nor the cap.
+
+        ``cfg`` is no longer the unused placeholder it was: _config_warnings() now fills the
+        per-config slot this signature always reserved (out-of-scope values the builder
+        ACCEPTS but builds wrong, and an unusable --distdir). The BLOCK/WARN split is
+        builder truth, not taste — see scope_violations()."""
         backend = backend or self.host.default_backend
         out: list[str] = []
-        # Elevation is an ADVISORY, not a blocker: the driver prepends sudo/pkexec
+        # Elevation is an ADVISORY, not a blocker (#382): the driver prepends sudo/pkexec
         # itself (_elevation_prefix), so say an auth prompt is coming rather than
         # refusing the build — preflight() only blocks when NO helper exists at all.
         if backend == "native" and not self.host.is_root and self._can_elevate():
             out.append("Native build runs as root via "
                        f"{self._elevation_prefix()[0]} — expect an authentication prompt.")
+        # Per-config advisories (this branch): out-of-scope values the builder ACCEPTS and
+        # builds wrong, plus an unusable --distdir. Ordered after the host/elevation notice
+        # so the two SOURCES stay visually separable, as _config_warnings' docstring says.
+        out += self._config_warnings(cfg)
         out += host_resources.low_memory_warnings(backend=backend)
+        return out
+
+    def _config_warnings(self, cfg: ImageConfig) -> list[str]:
+        """Per-config ADVISORY text (the `cfg` half preflight_warnings reserved a slot for).
+
+        Kept as its own method so the warning SOURCES stay separable: host-resource warnings
+        depend on the machine, these depend only on the config."""
+        # Out-of-scope values the builder ACCEPTS and builds silently wrong (finding 1's
+        # --config half: x86 + --standalone + a node role). Never blocked — the builder has
+        # no such constraint and inventing one would be its own lie.
+        out: list[str] = list(scope_violations(cfg)[1])
+        for field in _PATH_ADVISORY:
+            path = getattr(cfg, field, "")
+            if path and _path_field_emitted(field, cfg) and not os.path.exists(path):
+                # Mirrors build-x86-host-stage4.sh's own --distdir warning: an unusable cache
+                # is silently dropped for the /media/* auto-detect scan. Correct artifact,
+                # just a full re-download — so it warns here rather than blocking.
+                out.append(f"{_path_label(field)} path does not exist: {path} — it will be "
+                           f"IGNORED and sources re-downloaded (the build still succeeds).")
         return out

@@ -23,7 +23,12 @@ from __future__ import annotations
 
 from dataclasses import MISSING
 
-from ...core.config import PLATFORM_FIELD_SUPPORT, ImageConfig
+from ...core.config import (
+    PLATFORM_FIELD_SUPPORT,
+    ImageConfig,
+    field_in_scope,
+    scope_reject_reason,
+)
 
 
 def platform_supports(fld: str, platform: str) -> bool:
@@ -32,6 +37,45 @@ def platform_supports(fld: str, platform: str) -> bool:
     Unknown fields are all-platform (fail-open)."""
     platforms = PLATFORM_FIELD_SUPPORT.get(fld)
     return platforms is None or (platform or "x86") in platforms
+
+
+def scope_allows(fld: str, cfg: ImageConfig) -> bool:
+    """The composed field gate: is this field meaningful for THIS image on all three axes
+    (platform x role-class x mode)?
+
+    ``platform_supports`` answers only "does this builder PARSE the flag" — and that is the
+    hole the whole FIELD_SCOPE track exists to close, because the x86 builder parses plenty
+    of flags that are meaningless on a cluster node. It takes them, warns-and-ignores or
+    silently builds the wrong image, and exits 0. So a platform-valid but role-invalid
+    combination sails through the only gate that ever existed. This adds the other two axes.
+
+    Unknown fields stay FAIL-OPEN, the same rule platform_supports keeps: never gate a
+    universal knob just because nobody wrote it down.
+
+    Thin delegate to core.config.field_in_scope so the predicate has ONE implementation:
+    the wizard and any Qt-free consumer (worklist materialize, --print-command) cannot
+    disagree about whether a field applies. This module keeps the name the pages call."""
+    return field_in_scope(fld, cfg)
+
+
+def out_of_scope_note(fld: str, cfg: ImageConfig) -> str:
+    """The reason text for a row hidden by ``scope_allows`` — names the builder's contract
+    rather than just asserting the option is unavailable."""
+    # Reason-precise: scope_reject_reason names the AXIS that actually rejected. Testing
+    # `image_class not in scope.classes` directly (the first cut) told a jetson-desktop —
+    # rejected by the PLATFORM axis, and desktop-class — that it was "a cluster node /
+    # headless appliance". The row's whole job is to explain WHY, so a wrong why is worse
+    # than none.
+    reason = scope_reject_reason(fld, cfg)
+    if reason == "class":
+        return (f"Not applicable to this image: {cfg.role or 'this role'} is a cluster "
+                "node / headless appliance, and this option only means something on a "
+                "desktop-class image. The builder would take the flag and quietly build "
+                "the wrong thing, so the wizard does not offer it here.")
+    if reason == "platform":
+        return unsupported_note(cfg.platform)
+    return (f"Not applicable in {cfg.mode or 'this'} mode — every image in this flow "
+            "exists to join the cluster, which is exactly what this option turns off.")
 
 
 def unsupported_note(platform: str) -> str:

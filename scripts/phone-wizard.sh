@@ -5,7 +5,10 @@
 # desktops, and the Local Docker mesh node (clients/docker-mesh-node). It takes a
 # USB-connected Google Pixel and turns it into an enterprise-managed mesh device:
 #
-#   detect  -> fetch (verified GrapheneOS -install- zip) -> flash -> enroll
+#   detect -> fetch (verified GrapheneOS -install- zip) -> flash -> attest
+#   (self-hosted AttestationServer pairing, via a Snapdragon-forked Auditor
+#   app) -> mdm-enroll (Headwind MDM device-owner enrollment — MUST run before
+#   'profile', which permanently forecloses device-owner mode) -> enroll
 #   (headscale tailnet join, register-and-approve) -> profile (a separately-
 #   encrypted GrapheneOS secondary user whose credential is escrowed into the
 #   platform's per-device vault-seed custody chain) -> ingest (device registry).
@@ -22,9 +25,17 @@
 # mesh and the go-live wizard triad, this driver owns ALL the logic and the
 # menu/GUI faces stay thin.
 #
-# NON-GOALS (v1, deliberate): no MDM agent, no on-phone resident daemon, no APK
-# store — remote management is limited to these USB-tethered verbs plus the
-# mesh-side controls (headscale key expiry, Casdoor revocation). Deferred work
+# MANAGEMENT PLANE (Phase 3 — supersedes the earlier "no MDM agent" non-goal):
+# self-hosted Headwind MDM (com.hmdm.launcher/.AdminReceiver, set via adb
+# device-owner) is the on-phone DPC for every enrolled phone; self-hosted
+# GrapheneOS AttestationServer (paired via a Snapdragon-forked Auditor app,
+# package systems.snapdragon.auditor) is the hardware-rooted trust signal.
+# Both are tailnet-only optional-services on the existing cluster — no SaaS/
+# commercial MDM, no Google Play Integrity, no Google FCM/Pub/Sub dependency.
+# Attestation is advisory/logged (not enrollment-blocking) in v1. Remaining
+# NON-GOALS: no APK store, no fleet-wide OTA/compliance posture beyond what
+# Headwind CE ships. Deferred work (Casdoor SSO for Headwind, an automated
+# `attest --attestation-verdict-source api` mode, GrapheneOS QR provisioning)
 # is tracked in docs/ENTERPRISE-PHONES.md.
 #
 # SECRET-CUSTODY MODEL: no secret ever travels on argv, in PLAN output, or to
@@ -53,6 +64,13 @@ GRAPHENE_IDENTITY="contact@grapheneos.org"
 GRAPHENE_NAMESPACE="factory images"
 GRAPHENE_SIGNER_FP_PIN="SHA256:AhgHif0mei+9aNyKLfMZBh2yptHdw/aN7Tlh/j2eFwM"
 
+# ── Snapdragon Auditor fork identity (Phase 3 attestation coupling) ────────
+# applicationId is deliberately DIFFERENT from the stock GrapheneOS Auditor
+# (app.attestation.auditor) — avoids clobbering a stock install and keeps the
+# --auditor-signer-sha256 pin unambiguous. See docs/ENTERPRISE-PHONES.md for
+# the fork rationale (DOMAIN=attestation.snapdragon.systems, own release key).
+AUDITOR_PACKAGE="systems.snapdragon.auditor"
+
 # ── Env seams (tests override these; defaults are the real thing) ──
 ADB="${PW_ADB:-adb}"
 FASTBOOT="${PW_FASTBOOT:-fastboot}"
@@ -80,6 +98,12 @@ ROLE=""
 PROFILE_NAME="enterprise"
 TAILSCALE_APK=""
 APK_SIGNER_SHA256=""
+HEADWIND_APK=""
+HEADWIND_SIGNER_SHA256=""
+HEADWIND_URL="${HMDM_URL:-}"
+AUDITOR_APK=""
+AUDITOR_SIGNER_SHA256=""
+ATTESTATION_URL="${ATTEST_URL:-}"
 INGEST_URL=""
 CLIENT_CERT=""
 CLIENT_KEY=""
@@ -136,10 +160,12 @@ Usage: $0 <verb> [options]
 
   Enterprise-phone wizard: flash a USB-connected Google Pixel with VERIFIED
   GrapheneOS, enroll it in the brand's orchestration superdomain (headscale
-  tailnet), provision an escrowed enterprise profile, and emit a device-registry
-  ingest record. The DEFAULT posture is dry-run/read-only: only 'fetch',
-  'flash', 'enroll', 'profile', 'rotate-profile-pass', 'remove-profile' and
-  'ingest' change anything, and the destructive ones are gated.
+  tailnet), pair it to the self-hosted AttestationServer trust root, enroll it
+  as a Headwind MDM device-owner, provision an escrowed enterprise profile,
+  and emit a device-registry ingest record. The DEFAULT posture is
+  dry-run/read-only: only 'fetch', 'flash', 'attest', 'mdm-enroll', 'enroll',
+  'profile', 'rotate-profile-pass', 'remove-profile' and 'ingest' change
+  anything, and the destructive ones are gated.
 
 Verbs:
   plan [verb]          Dry-run (DEFAULT target: wizard). Validates options +
@@ -156,6 +182,30 @@ Verbs:
   flash                DESTRUCTIVE: wipe the phone and flash the VERIFIED
                        artifact. Typed-serial confirmation on a TTY; non-TTY
                        requires BOTH --yes AND a matching --serial.
+  attest               Install the Snapdragon-forked Auditor (signer-pinned
+                       via --auditor-signer-sha256) and print the pairing
+                       runbook for the self-hosted AttestationServer at
+                       --attestation-url. The in-app QR scan cannot be driven
+                       over adb — this is an OPERATOR-ATTESTED pairing
+                       (verdict:"operator-paired"), not a cryptographic
+                       verification by this wizard. Runs BEFORE mdm-enroll:
+                       captures the hardware trust root on the cleanest
+                       possible device state.
+  mdm-enroll           Enroll the phone as a Headwind MDM device-owner
+                       (com.hmdm.launcher/.AdminReceiver via
+                       `dpm set-device-owner`). FRESH-DEVICE precondition:
+                       `pm list users` must show exactly ONE user, else this
+                       fails closed (exit 2) — device-owner mode is a
+                       one-shot AOSP gate, permanently foreclosed once a
+                       secondary user/account exists (--force downgrades to
+                       a warning). MUST run before 'profile'. Installs the
+                       DPC via --headwind-apk (signer-pinned via
+                       --headwind-signer-sha256) and pushes an init.json
+                       (com.hmdm.BASE_URL=--headwind-url) into the app's
+                       external files dir. GrapheneOS device-owner via adb is
+                       RELIABLE; stock-Android is BEST-EFFORT (Play Protect's
+                       DPC allow-list may block provisioning — not a wizard
+                       bug).
   enroll               Add a running phone to the mesh (freshly flashed OR an
                        ALREADY-RUNNING GrapheneOS or stock-Android phone — the
                        OS probe records which, it never gates enrollment;
@@ -178,7 +228,8 @@ Verbs:
   status               Read-only: tools, device, tailnet, profile, escrow
                        presence (never contents).
   wizard               Interactive guided full flow (TTY): detect -> fetch ->
-                       flash -> enroll -> profile -> ingest, re-entrant.
+                       flash -> attest -> mdm-enroll -> enroll -> profile ->
+                       ingest, re-entrant.
   help                 This help.
 
 Options:
@@ -205,6 +256,20 @@ Options:
   --profile-name N       Secondary-user name. Default: ${PROFILE_NAME}
   --tailscale-apk F      Tailscale APK to adb-install during enroll.
   --apk-signer-sha256 H  Pin: APK signer cert SHA-256 (fail-closed if set).
+  --headwind-apk F       Headwind DPC APK to adb-install during mdm-enroll.
+  --headwind-signer-sha256 H
+                         Pin: Headwind APK signer cert SHA-256 (fail-closed
+                         if set).
+  --headwind-url URL     Headwind server base URL, written into the DPC's
+                         non-interactive init.json config
+                         (com.hmdm.BASE_URL). Env: HMDM_URL.
+  --auditor-apk F        Snapdragon Auditor fork APK to adb-install during
+                         attest.
+  --auditor-signer-sha256 H
+                         Pin: Auditor APK signer cert SHA-256 (fail-closed
+                         if set) — the fork's release-cert digest.
+  --attestation-url URL  Self-hosted AttestationServer console URL, printed
+                         in the attest pairing runbook. Env: ATTEST_URL.
   --ingest-url URL       POST the ingest record here (needs the mTLS flags).
   --client-cert F --client-key F --ca F
                          mTLS client identity + CA for --ingest-url.
@@ -238,6 +303,8 @@ Env seams (tests): PW_ADB, PW_FASTBOOT, PW_RELEASES_URL, PW_ALLOWED_SIGNERS,
   PW_EXPECTED_SIGNER_FP (empty allowed ONLY with PW_ALLOWED_SIGNERS overridden),
   PW_SKIP_FP_PIN=1, PW_JOIN_TIMEOUT, PW_POLL_INTERVAL,
   PW_FASTBOOT_REAPPEAR_TIMEOUT.
+  Also: HMDM_URL / ATTEST_URL supply default --headwind-url /
+  --attestation-url values (an explicit flag always wins).
 
 Exit codes:
   0 success   1 usage/runtime error   2 missing tool / precondition / refused
@@ -531,6 +598,33 @@ profile_user_id() {
         | awk -F'[{:}]' -v n="${name}" '$0 ~ /UserInfo\{/ && $3 == n { print $2; exit }'
 }
 
+# ── Shared: signer-pinned APK verification (fail-closed when a pin is given,
+# no-op otherwise) ──────────────────────────────────────────────────────────
+# Pulls the CURRENTLY INSTALLED base.apk for <pkg> and checks its apksigner
+# cert digest against <expected> — keeps the check honest (pins what is
+# actually on the device, not the file that was pushed). Used by enroll
+# (Tailscale), mdm-enroll (Headwind DPC), and attest (Auditor fork) — one
+# apksigner-verify code path for every sideloaded APK this wizard trusts.
+# <label> names the app in messages; <flag> names the option in the
+# require_tool hint (e.g. --apk-signer-sha256).
+verify_installed_signer() {
+    local s="$1" pkg="$2" expected="$3" label="$4" flag="$5"
+    [ -n "${expected}" ] || return 0
+    require_tool apksigner "install dev-util/android-sdk-build-tools (apksigner) — required to enforce ${flag}"
+    local rpath tmpapk digest
+    rpath="$("${ADB}" -s "${s}" shell pm path "${pkg}" 2>/dev/null | tr -d '\r' | sed -n 's/^package://p' | head -n1)"
+    [ -n "${rpath}" ] || pw_die 2 "cannot resolve the installed APK path for ${pkg}"
+    tmpapk="$(mktemp --suffix=.apk)"
+    "${ADB}" -s "${s}" pull "${rpath}" "${tmpapk}" >/dev/null 2>&1 || { rm -f "${tmpapk}"; pw_die 1 "adb pull of ${rpath} failed"; }
+    digest="$(apksigner verify --print-certs "${tmpapk}" 2>/dev/null \
+        | sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-f]+)$/\1/p' | head -n1)"
+    rm -f "${tmpapk}"
+    if [ -z "${digest}" ] || [ "${digest}" != "$(tr 'A-F' 'a-f' <<<"${expected}")" ]; then
+        pw_die 3 "${label} APK signer digest MISMATCH (got '${digest:-none}', pinned '${expected}') — refusing to proceed with an untrusted ${label} client"
+    fi
+    pw_info "${label} APK signer pin OK"
+}
+
 # ── verb: plan ─────────────────────────────────────────────────────
 cmd_plan() {
     local target="${1:-wizard}"
@@ -576,15 +670,17 @@ cmd_plan() {
     ingest_disp="${INGEST_URL:-emit-only}"
 
     case "${target}" in
-        wizard)  steps="detect,fetch,flash,enroll,profile,ingest" ;;
-        fetch)   steps="resolve-version,download,verify,extract" ;;
-        flash)   steps="preflight,detect,verify-artifact,confirm,unlock,flash-all,lock" ;;
-        enroll)  if [ "${NO_USB}" -eq 1 ]; then
-                     steps="join-runbook,record-operator-attested"
-                 else
-                     steps="adb-sanity,tailscale-app,join-runbook,verify-join,record"
-                 fi ;;
-        profile) steps="create-user,start-user,escrow,set-credential,record" ;;
+        wizard)     steps="detect,fetch,flash,attest,mdm-enroll,enroll,profile,ingest" ;;
+        fetch)      steps="resolve-version,download,verify,extract" ;;
+        flash)      steps="preflight,detect,verify-artifact,confirm,unlock,flash-all,lock" ;;
+        attest)     steps="adb-sanity,auditor-install,pairing-runbook,record" ;;
+        mdm-enroll) steps="adb-sanity,fresh-device-precondition,dpc-install,set-device-owner,push-init-json,record" ;;
+        enroll)     if [ "${NO_USB}" -eq 1 ]; then
+                        steps="join-runbook,record-operator-attested"
+                    else
+                        steps="adb-sanity,tailscale-app,join-runbook,verify-join,record"
+                    fi ;;
+        profile)    steps="create-user,start-user,escrow,set-credential,record" ;;
         detect|status|ingest|plan|rotate-profile-pass|remove-profile) steps="${target}" ;;
         *) pw_die 1 "plan: unknown target verb '${target}' (see --help)" ;;
     esac
@@ -610,6 +706,10 @@ PLAN_SUPERDOMAIN=${SUPERDOMAIN}
 PLAN_ROLE=${ROLE}
 PLAN_ESCROW_PATH=${escrow_disp}
 PLAN_INGEST_URL=${ingest_disp}
+PLAN_HEADWIND_URL=${HEADWIND_URL:-unset}
+PLAN_HEADWIND_SIGNER_FP=${HEADWIND_SIGNER_SHA256:-unpinned}
+PLAN_ATTESTATION_URL=${ATTESTATION_URL:-unset}
+PLAN_AUDITOR_SIGNER_FP=${AUDITOR_SIGNER_SHA256:-unpinned}
 PLAN_STEPS=${steps}
 EOF
 }
@@ -836,7 +936,209 @@ cmd_flash() {
         || pw_die 1 "fastboot flashing lock failed/declined — the device REMAINS UNLOCKED; re-run flash or lock manually before deployment"
 
     pw_info "flash complete. Boot the device, complete first-boot setup, then enable"
-    pw_info "Developer options + USB debugging (Owner profile) and run 'enroll'."
+    pw_info "Developer options + USB debugging (Owner profile) and run 'attest',"
+    pw_info "THEN 'mdm-enroll' (device-owner mode is foreclosed once 'profile' runs)."
+}
+
+# ── verb: attest ───────────────────────────────────────────────────
+# Installs the Snapdragon-forked Auditor and prints the AttestationServer
+# pairing runbook. Runs FIRST among the two new Phase-3 verbs (before
+# mdm-enroll) because it needs no device-owner state and captures the
+# hardware trust root on the cleanest possible device state (see
+# docs/ENTERPRISE-PHONES.md, "CRITICAL ordering").
+#
+# Pairing (O3, unresolved upstream): no confirmed headless "submit and get a
+# JSON verdict" API exists for the self-hosted AttestationServer — the
+# Auditor<->AttestationServer TOFU pairing is driven INSIDE the Auditor app UI
+# by scanning a QR code the AttestationServer console renders (it encodes
+# domain/userId/subscribeKey). This wizard has no way to drive an in-app
+# camera scan over adb, so this step is honestly OPERATOR-ATTESTED
+# (verdict:"operator-paired"), never a claimed cryptographic pass. Attestation
+# is advisory/logged in v1 (D9) — never a hard enrollment-blocking precondition.
+cmd_attest() {
+    require_android_tools
+    require_jq
+    [ -n "${ATTESTATION_URL}" ] || pw_die 1 "attest needs --attestation-url (or ATTEST_URL) — the self-hosted AttestationServer console URL"
+
+    choose_device
+    local s="${SEL_SERIAL}"
+    local state
+    state="$("${ADB}" -s "${s}" get-state 2>/dev/null | tr -d '\r\n' || true)"
+    [ "${state}" = "device" ] || pw_die 2 "attest needs the device up in adb (state: ${state:-none}) — complete first-boot setup, enable USB debugging, and retry"
+
+    if [ -z "${CODENAME}" ]; then
+        CODENAME="$(probe_codename "${s}" adb)"
+    fi
+    require_codename
+    SERIAL="${s}"
+    resolve_device_id
+
+    local pkg="${AUDITOR_PACKAGE}"
+    if [ -n "${AUDITOR_APK}" ]; then
+        [ -f "${AUDITOR_APK}" ] || pw_die 1 "--auditor-apk not found: ${AUDITOR_APK}"
+        pw_info "installing ${AUDITOR_APK}"
+        "${ADB}" -s "${s}" install -r "${AUDITOR_APK}" || pw_die 1 "adb install failed"
+    fi
+    if ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -qx "package:${pkg}"; then
+        if [ -n "${AUDITOR_APK}" ]; then
+            pw_die 1 "installed the APK but ${pkg} is not listed — wrong APK?"
+        fi
+        pw_die 1 "no --auditor-apk given and ${pkg} is not installed — pass --auditor-apk"
+    fi
+    verify_installed_signer "${s}" "${pkg}" "${AUDITOR_SIGNER_SHA256}" "Auditor" "--auditor-signer-sha256"
+
+    echo
+    echo "== attestation pairing runbook (operator, on the handset) =="
+    echo "  1. Open the Auditor app (package: ${pkg})."
+    echo "  2. Choose to pair with / verify against a remote server."
+    echo "  3. Open the AttestationServer console in a browser:"
+    echo "       ${ATTESTATION_URL}"
+    echo "     and scan the displayed QR code with the Auditor app — it"
+    echo "     encodes domain/userId/subscribeKey. This wizard CANNOT drive"
+    echo "     that in-app camera scan; the pairing step is operator-attested."
+    echo "  4. Confirm the app reports a successful pairing / first audit."
+    echo
+    if [ -t 0 ]; then
+        local ack=""
+        read -r -p "Press Enter once pairing is confirmed on the handset (or type skip): " ack
+        [ "${ack}" = "skip" ] && pw_warn "pairing confirmation SKIPPED by operator — attestation.json still records verdict:operator-paired (unverified by this wizard)"
+    else
+        pw_warn "non-TTY: cannot wait for operator ack — confirm pairing on the handset before deploying"
+    fi
+
+    local rec_dir="${OUT_DIR}/device/${DEVICE_ID}" rec
+    mkdir -p "${rec_dir}"
+    rec="${rec_dir}/attestation.json"
+    jq -n \
+        --arg device_id "${DEVICE_ID}" \
+        --arg auditor_package "${pkg}" \
+        --arg attestation_url "${ATTESTATION_URL}" \
+        --arg at "$(now_iso)" \
+        '{device_id:$device_id, auditor_package:$auditor_package,
+          attestation_url:$attestation_url, verdict:"operator-paired", at:$at}' \
+        > "${rec}"
+    pw_info "attestation record written: ${rec} (verdict: operator-paired — operator-attested, NOT cryptographically verified by this wizard)"
+}
+
+# ── verb: mdm-enroll ────────────────────────────────────────────────
+# Enrolls the phone as a Headwind MDM device-owner
+# (com.hmdm.launcher/.AdminReceiver via `dpm set-device-owner`). This is a
+# ONE-SHOT AOSP gate: it only succeeds while the target user has ZERO
+# secondary users and ZERO added accounts, and is PERMANENT for the life of
+# the OS install once foreclosed (no undo short of a reflash). MUST run
+# before 'profile' (which creates the escrowed secondary user that forecloses
+# it) — see docs/ENTERPRISE-PHONES.md, "CRITICAL ordering".
+cmd_mdm_enroll() {
+    require_android_tools
+    require_jq
+    [ -n "${HEADWIND_URL}" ] || pw_die 1 "mdm-enroll needs --headwind-url (or HMDM_URL) — the DPC's non-interactive init.json config target"
+
+    choose_device
+    local s="${SEL_SERIAL}"
+    local state
+    state="$("${ADB}" -s "${s}" get-state 2>/dev/null | tr -d '\r\n' || true)"
+    [ "${state}" = "device" ] || pw_die 2 "mdm-enroll needs the device up in adb (state: ${state:-none}) — complete first-boot setup, enable USB debugging, and retry"
+
+    if [ -z "${CODENAME}" ]; then
+        CODENAME="$(probe_codename "${s}" adb)"
+    fi
+    require_codename
+    SERIAL="${s}"
+    resolve_device_id
+
+    # FRESH-DEVICE precondition (fail-closed): if the operator runs the verbs
+    # out of order, this turns the cryptic AOSP IllegalStateException into a
+    # clear, documented exit-2 message instead of a mid-flow surprise.
+    # --force downgrades it to a warning (matches the GrapheneOS-fingerprint-
+    # probe --force convention already used elsewhere in this driver).
+    local users_out user_count
+    users_out="$("${ADB}" -s "${s}" shell pm list users 2>/dev/null | tr -d '\r')"
+    user_count="$(awk '$0 ~ /UserInfo\{/ {c++} END{print c+0}' <<<"${users_out}")"
+    if [ "${user_count}" -ne 1 ]; then
+        if [ "${FORCE}" -eq 1 ]; then
+            pw_warn "device already reports ${user_count} users/profiles (want exactly 1) — device-owner mode may already be foreclosed; continuing under --force, dpm set-device-owner may fail"
+        else
+            pw_die 2 "a secondary user/account already exists — device-owner mode is no longer obtainable; reflash to retry"
+        fi
+    fi
+
+    # OS probe: GrapheneOS device-owner via adb is RELIABLE (no Play Protect
+    # gate exists at setup). Stock Android is BEST-EFFORT — since late 2025
+    # Play Protect enforces an approved-DPC allow-list at provisioning time on
+    # Play-Protect-certified devices, which can block an unlisted custom DPC
+    # with an opaque appeal path. The raw adb `dpm set-device-owner` call this
+    # verb uses is architecturally a DIFFERENT code path than the
+    # provisioning-UI flow that allow-list historically gates, but that has
+    # NOT been independently reconfirmed against 2026-era Play Protect builds
+    # — so this advisory prints un-suppressibly before every attempt, and a
+    # resulting failure on stock Android is a normal exit-1 (not a wizard bug).
+    probe_os "${s}"
+    case "${OS_ID}" in
+        grapheneos) pw_info "device OS: GrapheneOS — device-owner via adb is the reliable path here" ;;
+        android)    pw_warn "device OS: stock Android${OS_VERSION:+ ${OS_VERSION}} — device-owner via adb is BEST-EFFORT on certified stock builds (Play Protect's DPC allow-list may block provisioning; a resulting failure is not a wizard bug)" ;;
+        *)          pw_warn "device OS could not be determined — proceeding, but device-owner via adb is unverified on this build" ;;
+    esac
+
+    # Install the Headwind DPC APK (signer-pinned via the same apksigner-
+    # verify logic 'enroll' uses for the Tailscale APK).
+    local pkg="com.hmdm.launcher"
+    if [ -n "${HEADWIND_APK}" ]; then
+        [ -f "${HEADWIND_APK}" ] || pw_die 1 "--headwind-apk not found: ${HEADWIND_APK}"
+        pw_info "installing ${HEADWIND_APK}"
+        "${ADB}" -s "${s}" install -r "${HEADWIND_APK}" || pw_die 1 "adb install failed"
+    fi
+    if ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -qx "package:${pkg}"; then
+        if [ -n "${HEADWIND_APK}" ]; then
+            pw_die 1 "installed the APK but ${pkg} is not listed — wrong APK?"
+        fi
+        pw_die 1 "no --headwind-apk given and ${pkg} is not installed — pass --headwind-apk"
+    fi
+    verify_installed_signer "${s}" "${pkg}" "${HEADWIND_SIGNER_SHA256}" "Headwind" "--headwind-signer-sha256"
+
+    # Device-owner: the one-shot AOSP call itself.
+    pw_info "running: dpm set-device-owner ${pkg}/.AdminReceiver"
+    local dpm_out
+    dpm_out="$("${ADB}" -s "${s}" shell dpm set-device-owner "${pkg}/.AdminReceiver" 2>&1 | tr -d '\r' || true)"
+    if ! grep -q '^Success:' <<<"${dpm_out}"; then
+        local hint=""
+        [ "${OS_ID}" = "android" ] && hint=" (stock-Android Play Protect's DPC allow-list is the likely cause — see the advisory above)"
+        pw_die 1 "dpm set-device-owner failed: ${dpm_out}${hint}"
+    fi
+    pw_info "device owner set: ${dpm_out}"
+
+    # Non-interactive config-injection (O4, verified against upstream Headwind
+    # source): the app reads com.hmdm.BASE_URL (+ optional
+    # DEVICE_ID/CONFIG/GROUP/CERTS keys) from an init.json file dropped in its
+    # external files dir (getExternalFilesDir()/init.json,
+    # updateSettingsFromFile()) — this is the confirmed non-interactive
+    # mechanism this driver can push over adb without any operator QR-scan
+    # (the server also emits the same payload via
+    # GET /public/qr/json/{id} for a QR-provisioning flow this driver does
+    # not perform).
+    local ext_dir="/sdcard/Android/data/${pkg}/files" tmp_init
+    "${ADB}" -s "${s}" shell mkdir -p "${ext_dir}" >/dev/null 2>&1 || true
+    tmp_init="$(mktemp)"
+    jq -n --arg base_url "${HEADWIND_URL}" '{"com.hmdm.BASE_URL":$base_url}' > "${tmp_init}"
+    "${ADB}" -s "${s}" push "${tmp_init}" "${ext_dir}/init.json" >/dev/null 2>&1 \
+        || { rm -f "${tmp_init}"; pw_die 1 "adb push of init.json to ${ext_dir} failed"; }
+    rm -f "${tmp_init}"
+    pw_info "init.json pushed: ${ext_dir}/init.json (com.hmdm.BASE_URL=${HEADWIND_URL})"
+
+    local rec_dir="${OUT_DIR}/device/${DEVICE_ID}" rec
+    mkdir -p "${rec_dir}"
+    rec="${rec_dir}/mdm.json"
+    jq -n \
+        --arg device_id "${DEVICE_ID}" \
+        --arg serial "${s}" \
+        --arg dpc_package "${pkg}" \
+        --arg headwind_url "${HEADWIND_URL}" \
+        --arg os "${OS_ID}" \
+        --arg enrolled_at "$(now_iso)" \
+        '{device_id:$device_id, serial:$serial, dpc_package:$dpc_package,
+          headwind_url:$headwind_url, os:$os, set_via:"adb-device-owner",
+          enrolled_at:$enrolled_at}' \
+        > "${rec}"
+    pw_info "mdm record written: ${rec}"
 }
 
 # ── verb: enroll (--no-usb variant) ─────────────────────────────────
@@ -986,23 +1288,9 @@ cmd_enroll() {
         done
     fi
     # Signer pin (fail-closed when given): verify the ON-DEVICE apk's signing
-    # cert digest with apksigner. Pulling the base.apk keeps the check honest —
-    # we pin what is actually installed, not the file we happened to install.
-    if [ -n "${APK_SIGNER_SHA256}" ]; then
-        require_tool apksigner "install dev-util/android-sdk-build-tools (apksigner) — required to enforce --apk-signer-sha256"
-        local rpath tmpapk digest
-        rpath="$("${ADB}" -s "${s}" shell pm path "${pkg}" 2>/dev/null | tr -d '\r' | sed -n 's/^package://p' | head -n1)"
-        [ -n "${rpath}" ] || pw_die 2 "cannot resolve the installed APK path for ${pkg}"
-        tmpapk="$(mktemp --suffix=.apk)"
-        "${ADB}" -s "${s}" pull "${rpath}" "${tmpapk}" >/dev/null 2>&1 || { rm -f "${tmpapk}"; pw_die 1 "adb pull of ${rpath} failed"; }
-        digest="$(apksigner verify --print-certs "${tmpapk}" 2>/dev/null \
-            | sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-f]+)$/\1/p' | head -n1)"
-        rm -f "${tmpapk}"
-        if [ -z "${digest}" ] || [ "${digest}" != "$(tr 'A-F' 'a-f' <<<"${APK_SIGNER_SHA256}")" ]; then
-            pw_die 3 "Tailscale APK signer digest MISMATCH (got '${digest:-none}', pinned '${APK_SIGNER_SHA256}') — refusing to enroll with an untrusted client"
-        fi
-        pw_info "Tailscale APK signer pin OK"
-    fi
+    # cert digest with apksigner (shared helper — same logic mdm-enroll and
+    # attest reuse for the Headwind DPC and Auditor fork APKs).
+    verify_installed_signer "${s}" "${pkg}" "${APK_SIGNER_SHA256}" "Tailscale" "--apk-signer-sha256"
 
     # (3) Join runbook. The pre-auth key is NEVER passed via adb shell argv
     # (adb shell command lines are visible in device-side logcat/ps) and is
@@ -1294,6 +1582,16 @@ cmd_ingest() {
         prof_uid="$(jq -r '.user_id // "null"' "${prof}")"
     fi
 
+    # Fold the attest record in when present (Phase 3) — advisory/logged
+    # fields only (D9: attestation is never enrollment-blocking in v1).
+    local attest_json="${rec_dir}/attestation.json"
+    local attestation_url="" auditor_package="" attestation_verdict=""
+    if [ -f "${attest_json}" ]; then
+        attestation_url="$(jq -r '.attestation_url // empty' "${attest_json}")"
+        auditor_package="$(jq -r '.auditor_package // empty' "${attest_json}")"
+        attestation_verdict="$(jq -r '.verdict // empty' "${attest_json}")"
+    fi
+
     mkdir -p "${rec_dir}"
     local ingest="${rec_dir}/ingest.json"
     jq -n \
@@ -1311,6 +1609,9 @@ cmd_ingest() {
         --arg attached_domain "${attached}" \
         --argjson profile_present "${prof_present}" \
         --argjson profile_uid "${prof_uid}" \
+        --arg attestation_url "${attestation_url}" \
+        --arg auditor_package "${auditor_package}" \
+        --arg attestation_verdict "${attestation_verdict}" \
         --arg enrolled_at "${enrolled_at}" \
         --arg generated_at "$(now_iso)" \
         '{schema:"phone-ingest/v1", device_id:$device_id, device_class:"phone",
@@ -1321,6 +1622,8 @@ cmd_ingest() {
           attached_domain:$attached_domain,
           enterprise_profile:{present:$profile_present, user_id:$profile_uid,
                               credential_custody:"vault-seed"},
+          attestation_url:$attestation_url, auditor_package:$auditor_package,
+          attestation_verdict:$attestation_verdict,
           enrolled_at:$enrolled_at, generated_at:$generated_at}' \
         > "${ingest}"
     pw_info "ingest record written: ${ingest}"
@@ -1404,28 +1707,33 @@ wiz_confirm() {
 }
 
 cmd_wizard() {
-    [ -t 0 ] || pw_die 2 "the wizard is interactive and needs a TTY — use the individual verbs (detect/fetch/flash/enroll/profile/ingest) for scripting"
+    [ -t 0 ] || pw_die 2 "the wizard is interactive and needs a TTY — use the individual verbs (detect/fetch/flash/attest/mdm-enroll/enroll/profile/ingest) for scripting"
 
-    # Front-load enroll's hard, knowable-in-advance precondition (a login
-    # server) BEFORE Step 3's destructive flash runs — otherwise an operator
-    # can complete the irreversible bootloader-unlock/wipe/flash/lock
-    # sequence only to have Step 4 (enroll) immediately die on this same
-    # check. Mirrors cmd_flash's own preflight-before-destructive-gate style.
+    # Front-load every downstream step's hard, knowable-in-advance
+    # preconditions BEFORE Step 3's destructive flash runs — otherwise an
+    # operator can complete the irreversible bootloader-unlock/wipe/flash/lock
+    # sequence only to have a later step immediately die on one of these same
+    # checks. Mirrors cmd_flash's own preflight-before-destructive-gate style.
     resolve_keys
     [ -n "${LOGIN_SERVER}" ] || pw_die 1 "no login server — pass --login-server URL or --keys-dir with a login-server file"
+    [ -n "${ATTESTATION_URL}" ] || pw_die 1 "no --attestation-url (or ATTEST_URL) — the self-hosted AttestationServer console URL, needed by Step 4 (attest)"
+    [ -n "${HEADWIND_URL}" ] || pw_die 1 "no --headwind-url (or HMDM_URL) — the Headwind DPC's non-interactive config target, needed by Step 5 (mdm-enroll)"
 
     echo "== enterprise-phone wizard =="
-    echo "Guided flow: detect -> fetch -> flash -> enroll -> profile -> ingest."
+    echo "Guided flow: detect -> fetch -> flash -> attest -> mdm-enroll -> enroll -> profile -> ingest."
     echo "Each step asks first; already-completed steps can be skipped (re-entrant)."
+    echo "CRITICAL ordering: attest runs on the cleanest device state (before"
+    echo "device-owner); mdm-enroll (device-owner) MUST run before profile, which"
+    echo "creates the secondary user that permanently forecloses device-owner mode."
     echo
 
-    # 1/6 detect (fills SERIAL/CODENAME for everything after).
-    if wiz_confirm "Step 1/6 — detect the USB-connected device?"; then
+    # 1/8 detect (fills SERIAL/CODENAME for everything after).
+    if wiz_confirm "Step 1/8 — detect the USB-connected device?"; then
         cmd_detect
     fi
     resolve_device_id
 
-    # 2/6 fetch (skippable when a verified artifact already exists).
+    # 2/8 fetch (skippable when a verified artifact already exists).
     local have_verified=0
     if [ -n "${CODENAME}" ]; then
         local z
@@ -1435,13 +1743,13 @@ cmd_wizard() {
         fi
     fi
     if [ "${have_verified}" -eq 1 ]; then
-        if wiz_confirm "Step 2/6 — a VERIFIED artifact already exists; re-run fetch anyway?"; then cmd_fetch; fi
+        if wiz_confirm "Step 2/8 — a VERIFIED artifact already exists; re-run fetch anyway?"; then cmd_fetch; fi
     else
-        if wiz_confirm "Step 2/6 — fetch + verify GrapheneOS for '${CODENAME:-<detect first>}' (${CHANNEL})?"; then cmd_fetch; fi
+        if wiz_confirm "Step 2/8 — fetch + verify GrapheneOS for '${CODENAME:-<detect first>}' (${CHANNEL})?"; then cmd_fetch; fi
     fi
 
-    # 3/6 flash (its own typed-serial gate runs inside).
-    if wiz_confirm "Step 3/6 — FLASH the device (DESTROYS ALL DATA)?"; then
+    # 3/8 flash (its own typed-serial gate runs inside).
+    if wiz_confirm "Step 3/8 — FLASH the device (DESTROYS ALL DATA)?"; then
         cmd_flash
         echo
         echo "  Handset time: boot GrapheneOS, complete first-boot setup, then enable"
@@ -1449,23 +1757,39 @@ cmd_wizard() {
         read -r -p "  Press Enter when the device is back up with USB debugging enabled… " _
     fi
 
-    # 4/6 enroll (skippable when the record already exists).
-    if [ -n "${DEVICE_ID}" ] && [ -f "${OUT_DIR}/device/${DEVICE_ID}/enrollment.json" ]; then
-        if wiz_confirm "Step 4/6 — enrollment record already exists; re-enroll?"; then cmd_enroll; fi
+    # 4/8 attest — BEFORE mdm-enroll: needs no device-owner state and captures
+    # the hardware trust root on the cleanest possible device state.
+    if [ -n "${DEVICE_ID}" ] && [ -f "${OUT_DIR}/device/${DEVICE_ID}/attestation.json" ]; then
+        if wiz_confirm "Step 4/8 — attestation record already exists; re-pair?"; then cmd_attest; fi
     else
-        if wiz_confirm "Step 4/6 — enroll the device in the mesh (tailnet join)?"; then cmd_enroll; fi
+        if wiz_confirm "Step 4/8 — pair the device to the self-hosted AttestationServer?"; then cmd_attest; fi
+    fi
+
+    # 5/8 mdm-enroll — MUST run before Step 7 (profile), which creates the
+    # secondary user that permanently forecloses device-owner mode.
+    if [ -n "${DEVICE_ID}" ] && [ -f "${OUT_DIR}/device/${DEVICE_ID}/mdm.json" ]; then
+        if wiz_confirm "Step 5/8 — MDM enrollment record already exists; re-enroll (fails if a secondary user now exists)?"; then cmd_mdm_enroll; fi
+    else
+        if wiz_confirm "Step 5/8 — enroll the device as a Headwind MDM device-owner?"; then cmd_mdm_enroll; fi
+    fi
+
+    # 6/8 enroll (skippable when the record already exists).
+    if [ -n "${DEVICE_ID}" ] && [ -f "${OUT_DIR}/device/${DEVICE_ID}/enrollment.json" ]; then
+        if wiz_confirm "Step 6/8 — enrollment record already exists; re-enroll?"; then cmd_enroll; fi
+    else
+        if wiz_confirm "Step 6/8 — enroll the device in the mesh (tailnet join)?"; then cmd_enroll; fi
     fi
     resolve_device_id
 
-    # 5/6 profile.
+    # 7/8 profile.
     if [ -n "${DEVICE_ID}" ] && [ -f "${OUT_DIR}/device/${DEVICE_ID}/profile.json" ]; then
-        if wiz_confirm "Step 5/6 — profile record already exists; rotate its passphrase instead?"; then cmd_rotate_profile_pass; fi
+        if wiz_confirm "Step 7/8 — profile record already exists; rotate its passphrase instead?"; then cmd_rotate_profile_pass; fi
     else
-        if wiz_confirm "Step 5/6 — create + escrow the enterprise profile?"; then cmd_profile; fi
+        if wiz_confirm "Step 7/8 — create + escrow the enterprise profile?"; then cmd_profile; fi
     fi
 
-    # 6/6 ingest.
-    if wiz_confirm "Step 6/6 — emit the device-registry ingest record?"; then cmd_ingest; fi
+    # 8/8 ingest.
+    if wiz_confirm "Step 8/8 — emit the device-registry ingest record?"; then cmd_ingest; fi
 
     echo
     pw_info "wizard complete — records under ${OUT_DIR}/device/${DEVICE_ID:-<device-id>}/, escrow under ${OUT_DIR}/vault-seed/"
@@ -1499,6 +1823,12 @@ main() {
             --profile-name)        _need_arg "$1" $#; PROFILE_NAME="$2"; shift 2 ;;
             --tailscale-apk)       _need_arg "$1" $#; TAILSCALE_APK="$2"; shift 2 ;;
             --apk-signer-sha256)   _need_arg "$1" $#; APK_SIGNER_SHA256="$2"; shift 2 ;;
+            --headwind-apk)          _need_arg "$1" $#; HEADWIND_APK="$2"; shift 2 ;;
+            --headwind-signer-sha256) _need_arg "$1" $#; HEADWIND_SIGNER_SHA256="$2"; shift 2 ;;
+            --headwind-url)          _need_arg "$1" $#; HEADWIND_URL="$2"; shift 2 ;;
+            --auditor-apk)           _need_arg "$1" $#; AUDITOR_APK="$2"; shift 2 ;;
+            --auditor-signer-sha256) _need_arg "$1" $#; AUDITOR_SIGNER_SHA256="$2"; shift 2 ;;
+            --attestation-url)       _need_arg "$1" $#; ATTESTATION_URL="$2"; shift 2 ;;
             --ingest-url)          _need_arg "$1" $#; INGEST_URL="$2"; shift 2 ;;
             --client-cert)         _need_arg "$1" $#; CLIENT_CERT="$2"; shift 2 ;;
             --client-key)          _need_arg "$1" $#; CLIENT_KEY="$2"; shift 2 ;;
@@ -1536,6 +1866,8 @@ main() {
         detect)              cmd_detect ;;
         fetch)               cmd_fetch ;;
         flash)               cmd_flash ;;
+        attest)               cmd_attest ;;
+        mdm-enroll)           cmd_mdm_enroll ;;
         enroll)              cmd_enroll ;;
         profile)             cmd_profile ;;
         rotate-profile-pass) cmd_rotate_profile_pass ;;

@@ -310,7 +310,12 @@ SECURE_BOOT_CHOICES = ("", "on", "off")
 SECRET_FIELDS = ("local_pass", "luks_pass", "user_password", "root_password")
 
 
-# ── capability table: which platforms' arg builders EMIT each option field ──────────
+# ── capability table (PLATFORM axis): which platforms' arg builders EMIT each field ──
+# This table declares ONE axis — the platform. It is no longer the authority the wizard
+# gates on: FIELD_SCOPE below is, and it DERIVES PLATFORM_FIELD_SUPPORT from this dict
+# (see the FieldScope block). Keep declaring platform support HERE; declare the
+# role-class / mode axes in _FIELD_SCOPE_OVERRIDES.
+#
 # THE contract WS2 (per-platform widget greying) and WS6 (parity/coverage differ)
 # consume: an ImageConfig field is "supported" on a platform iff that platform's
 # _<platform>_args() emits something for it (a builder that does not parse the flag would
@@ -330,7 +335,7 @@ _IMAGE_ONLY_PLATFORMS = ("frite", "jetson", "orangepi5", "orangepizero2")
 _X86 = ("x86",)
 _X86_RPI5 = ("x86", "rpi5")
 
-PLATFORM_FIELD_SUPPORT: dict[str, tuple[str, ...]] = {
+_FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # brand plane — every builder parses these identically (x86 unaffiliated suppresses).
     "brand": _ALL_PLATFORMS, "brand_title": _ALL_PLATFORMS, "org": _ALL_PLATFORMS,
     "brand_profile": _ALL_PLATFORMS,
@@ -461,8 +466,247 @@ HOME_DESKTOP_FIELDS = ("home_mode", "home_device", "home_backup", "home_encrypte
 
 def image_class(mode: str, role: str) -> str:
     """"desktop" (person device / standalone desktop) or "node" (cluster infra / headless
-    appliance). Role id is authoritative; mode is accepted for signature stability."""
+    appliance). Role id is authoritative; mode is accepted for signature stability.
+
+    This mirrors build-x86-host-stage4.sh's OWN ROLE_CLIENT: the role arms that set
+    ROLE_CLIENT=true are exactly the roles that are "desktop" here. That correspondence is
+    not a comment — tests/test_builder_default_drift.py (GUARD B) parses the builder's role
+    case block and asserts set-equality, so this function cannot drift from builder truth."""
     return "desktop" if role in DESKTOP_ROLES else "node"
+
+
+# ── FIELD_SCOPE: the field-gating authority (platform x role-class x mode) ───────────
+# PLATFORM_FIELD_SUPPORT scopes a field by PLATFORM ONLY. That makes a "platform-valid but
+# role-invalid" combination UNREPRESENTABLE — and therefore unvalidated: the x86 builder
+# happily PARSES flags that are meaningless on a cluster node (it warns and ignores, or
+# silently builds the wrong thing), so the platform gate passes and nothing else looks.
+# FIELD_SCOPE adds the two missing axes so such a combination can at least be SAID.
+#
+# Every axis defaults to "everything", so a field needs an entry in _FIELD_SCOPE_OVERRIDES
+# ONLY when it is genuinely narrower than its platform tuple. Fields absent from the table
+# entirely stay fail-open (never grey a universal knob) — see _gating.platform_supports.
+_ALL_CLASSES = ("desktop", "node")
+_ALL_MODES = tuple(MODE_SKIPPED_PAGES)          # standalone | cloud | mesh (single source)
+
+
+@dataclass(frozen=True)
+class BuilderDefault:
+    """A default the BUILDER resolves FOR ITSELF when the flag is left unset — the
+    ``[ -z "${VAR}" ] && { COND && VAR=<t> || VAR=<f>; }`` sentinel form that
+    build-x86-host-stage4.sh uses for exactly four variables (GUARD A pins the set).
+
+    DESIGN DEVIATION, and the code is why: the audited shape for this record was
+    ``(var, when_standalone, otherwise, policy)`` — it assumed every sentinel forks on
+    ``${STANDALONE}``. Only two of the four do (INSTALLER_UI :1244, BUNDLE_SOURCE :1248).
+    GPU_DRIVER :1190 forks on ``${GPU}`` and HOME_MODE :1227 on
+    ``[ -n "${INCLUDE_HOME_ARCHIVE}" ]``. A ``when_standalone`` field would therefore have
+    recorded a fiction for half the table, and GUARD A could only ever have checked the
+    variable NAMES. Carrying the fork ``condition`` verbatim instead lets the guard pin the
+    whole sentinel — name, condition and both arms — so a builder-side edit to any part of
+    it goes RED.
+
+    ``policy`` is what STUDIO does about that sentinel, and it is descriptive of today's
+    code, not aspirational:
+
+    * ``defer``    — studio emits NOTHING while the field sits at its dataclass default, so
+                     the sentinel fires and the builder's own fork owns the value. This is
+                     the correct posture: the builder knows the role.
+    * ``resolve``  — studio reproduces the builder's fork ITSELF for a field whose scope
+                     excludes the current role-class. RESERVED, and deliberately unused
+                     today: the audited plan put bundle_source here via a materialize-time
+                     lane, and the codebase rejected that placement (see the note under
+                     FIELD_SCOPE). Any future use must resolve in a place BOTH the worklist
+                     and flat channels pass through, or the two disagree about the same cell.
+    * ``override`` — studio emits a FLAT CONSTANT that kills the sentinel outright, so the
+                     builder's role-aware default is unreachable. This is a KNOWN GAP, not
+                     a design: it is how --installer-ui ships an ISO-installer stack onto a
+                     headless cluster node. Declaring it here makes the gap a fact the test
+                     suite states out loud, and GUARD A asserts the emission really is
+                     unconditional — so whoever fixes one MUST come here and flip it.
+    """
+    var: str
+    condition: str
+    when_true: str
+    when_false: str
+    policy: str = "defer"
+
+
+BUILDER_DEFAULT_POLICIES = ("defer", "resolve", "override")
+
+
+@dataclass(frozen=True)
+class FieldScope:
+    """The axes on which a config field is in scope. ``platforms`` is which builders parse
+    the flag at all; ``classes`` / ``modes`` are which IMAGES the flag is meaningful for;
+    ``builder_default`` records the builder's own unset-fork for the field, if it has one.
+
+    ``class_platforms`` is a DESIGN DEVIATION the code forced, and it is worth stating
+    plainly. The audited shape was a flat ``(platforms x classes x modes)`` product, which
+    silently assumes a field's role-class rule holds on EVERY platform it is parsed on.
+    For --standalone that is false, and asserting it shipped a new bug in the very class
+    this track exists to kill:
+
+      * build-x86-host-stage4.sh   — 48 ROLE_CLIENT refs; ACCEPTS --standalone on a node
+                                     role and builds the wrong image  -> class rule is real
+      * build-rpi5-stage4.sh:1037  — ${ROLE_CLIENT} || err ...; exit 1 -> class rule is real
+      * build-frite / -orangepi5 / -orangepi-zero2-stage4.sh
+                                   — ZERO occurrences of ROLE_CLIENT or ROLE_K8S. They
+                                     compose ${STANDALONE} unconditionally, and
+                                     build-orangepi-zero2-stage4.sh:218-226 documents
+                                     --standalone as a posture this image composes.
+
+    The orangepizero2 role IS node-class (a headless appliance) AND its defining posture is
+    --standalone; ROLE_CHOICES calls it a "standalone HEADLESS APPLIANCE". A flat
+    classes=("desktop",) therefore HID the checkbox on that flow and force-cleared the value
+    — a silently non-standalone, non-FDE image where an FDE appliance was asked for. So the
+    class axis carries the platforms it is TRUE on: None means "everywhere" (the common
+    case), a tuple means the narrowing applies only on those builders and every other
+    platform stays fully open. GUARD B cannot catch this — it pins image_class to the x86
+    builder, which is exactly the builder that does not govern orangepizero2."""
+    platforms: tuple[str, ...] = _ALL_PLATFORMS
+    classes: tuple[str, ...] = _ALL_CLASSES
+    modes: tuple[str, ...] = _ALL_MODES
+    builder_default: "BuilderDefault | None" = None
+    class_platforms: "tuple[str, ...] | None" = None
+
+
+# The builder's four self-resolving defaults, transcribed from build-x86-host-stage4.sh.
+# GUARD A (tests/test_builder_default_drift.py) parses the real sentinels and asserts this
+# table matches them EXACTLY — set of variables, fork condition, and both arms — and that
+# each declared ``policy`` is the emission studio actually produces. Neither side can drift.
+_BD_GPU_DRIVER = BuilderDefault(
+    var="GPU_DRIVER", condition="${GPU}", when_true="all-free", when_false="none",
+    policy="defer")          # gpu_driver="auto" emits nothing -> the builder forks on --gpu
+_BD_HOME_MODE = BuilderDefault(
+    var="HOME_MODE", condition='[ -n "${INCLUDE_HOME_ARCHIVE}" ]',
+    when_true="archive", when_false="create",
+    policy="defer")          # home_mode="create" emits nothing -> builder picks archive/create
+_BD_INSTALLER_UI = BuilderDefault(
+    var="INSTALLER_UI", condition="${STANDALONE}", when_true="all", when_false="cli",
+    policy="resolve")        # CLOSED by #384 (merged 2026-07-17). The flat default still
+                             # always emits, so :1244 itself never fires — but studio now
+                             # computes the builder's OWN `when_false` arm ("cli") for
+                             # node-class x86 at MATERIALIZE time
+                             # (resolve_installer_ui_default, called from
+                             # worklist._materialize_one + app.py --print-command), so the
+                             # emitted value matches what the sentinel would have chosen.
+                             # That is `resolve`, not `defer`: studio states the value
+                             # explicitly rather than omitting the flag. Desktop-class is
+                             # deliberately untouched (byte-identical) — the builder's
+                             # non-standalone client arm is "cli", so deferring for
+                             # everyone would strip calamares from a mesh laptop.
+_BD_BUNDLE_SOURCE = BuilderDefault(
+    var="BUNDLE_SOURCE", condition="${STANDALONE}", when_true="true", when_false="false",
+    policy="override")       # GAP (finding 4/5): bundle_source=True ALWAYS emits, so :1248
+                             # never fires and a headless node gets 33MB of generator tree.
+                             # See resolve-lane note under FIELD_SCOPE for why the fix is
+                             # NOT a materialize-time resolve.
+
+# Platforms whose builder gates --standalone on role-class AT ALL — the union of "errors on
+# a node" (rpi5 :1037) and "accepts it and builds the wrong thing" (x86, ROLE_K8S=none).
+# frite / orangepi5 / orangepi-zero2 parse --standalone with NO role concept whatsoever
+# (zero ROLE_CLIENT/ROLE_K8S occurrences), so there is no class rule there to enforce and
+# Studio must not invent one. test_field_scope.py derives this set from the builder scripts
+# and asserts equality, so a builder that grows or loses a role-class concept goes RED here
+# rather than letting the tuple rot into a fiction.
+_STANDALONE_CLASS_GATED_PLATFORMS = ("x86", "rpi5")
+
+# Role-class / mode narrowings. Entries here either restate a rule the codebase ALREADY
+# enforces elsewhere — a test pins each to the predicate that owns it so the two cannot
+# disagree — or carry an enforcement landing in the SAME commit:
+#   * THEME_FIELDS       -> branding_allowed()      (desktop-class, and never in mesh)
+#   * HOME_DESKTOP_FIELDS-> home_options_allowed()  (desktop-class, any mode)
+#   * standalone         -> HomePage's hide gate + scope_allows()  [finding 1]
+# bundle_source's classes=("desktop",) is the ONE narrowing here with no enforcement yet: it
+# is read by GUARD A (which pins the gap as `override`) but by no gate, because the fix
+# belongs in to_cli_args and lands with finding 4/5. It is declared rather than withheld
+# precisely so the guard can hold the gap open — see the note under FIELD_SCOPE.
+# Fields whose scope is still a GAP with no consumer (egress_vpn-on-node, ...) remain
+# deliberately undeclared: a scope nothing reads would be policy with no effect. They land
+# with their enforcement, not before.
+_FIELD_SCOPE_OVERRIDES: dict[str, FieldScope] = {
+    **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("desktop",),
+                     modes=tuple(m for m in _ALL_MODES if m != "mesh"))
+       for f in THEME_FIELDS},
+    **{f: FieldScope(platforms=_FIELD_PLATFORMS[f], classes=("desktop",))
+       for f in HOME_DESKTOP_FIELDS},
+    # --standalone means "no mesh/SSO, local user logs in with a build-time password". It is
+    # a DESKTOP posture: a NODE has no local desktop session to log into. The x86 builder
+    # still PARSES it on a node role, which is
+    # exactly why nothing caught it: ROLE_K8S=none so the node gets no kubelet/kubeadm/
+    # containerd and no cluster GitOps tree, while the full desktop stack IS built
+    # (packages-desktop.list, ROOT_MiB 16384, Xorg/openbox/lightdm) — a node that can
+    # never join the mesh it was built for, discovered hours later at deploy time. On rpi5
+    # the same worklist hard-errors at build-rpi5-stage4.sh:1037, after dispatch.
+    # ...but ONLY on the two builders that actually have a role-class concept. frite,
+    # orangepi5 and orangepi-zero2 have ZERO occurrences of ROLE_CLIENT/ROLE_K8S and
+    # compose ${STANDALONE} unconditionally; orangepizero2's role is node-class and
+    # --standalone is its DEFINING posture ("standalone HEADLESS APPLIANCE" — ROLE_CHOICES,
+    # build-orangepi-zero2-stage4.sh:218-226). Applying the class rule there hid the
+    # checkbox on the flow whose whole point it is, and force-cleared the value on load.
+    # See FieldScope.class_platforms for why the flat product could not say this.
+    #
+    # NO MODE AXIS — deliberately, and this was a REGRESSION this branch shipped and had to
+    # take back. The first cut read modes=(standalone, cloud), on the reasoning above that
+    # "--standalone is self-contradictory in mesh mode". That reasoning is prose, not builder
+    # truth, and it invented a constraint: build-rpi5-stage4.sh:1037 gates --standalone on
+    # ROLE_CLIENT *only*, never on mode, and :998 sets ROLE_CLIENT=true for its desktop arm.
+    # So mesh + rpi5-desktop + --standalone is ACCEPTED by the builder — and is a DOCUMENTED
+    # combination: ROLE_CHOICES describes rpi5-desktop as "compose with --standalone for FDE,
+    # no mesh". The mode axis blocked dispatch on it (build_driver:preflight) and hid the
+    # checkbox for it in the wizard, i.e. this branch committed the exact bug class it exists
+    # to fix. classes=("desktop",) alone already excludes every node role in EVERY mode,
+    # which IS finding 1 — the mode axis bought nothing but the false positives.
+    # test_scope_violations.py sweeps ALL modes against the builder's real ROLE_CLIENT arms
+    # so this cannot come back.
+    "standalone": FieldScope(platforms=_FIELD_PLATFORMS["standalone"], classes=("desktop",),
+                             class_platforms=_STANDALONE_CLASS_GATED_PLATFORMS),
+    # Egress VPN is a DESKTOP/tailnet-client feature and the builder says so itself:
+    #   build-x86-host-stage4.sh:3061  if ! ${ROLE_CLIENT} && [ -n "${EGRESS_VPN_FILE}" ]; then
+    #                          :3062      warn "--egress-vpn given for a non-desktop role
+    #                                      (${ROLE}); ... — ignoring."
+    # Note "ignoring" is only HALF true, which is what makes this worth gating rather than
+    # leaving to the builder: the STAGING leg :3064 is role-gated, but the PACKAGE leg :3572
+    # (`if [ -n "${EGRESS_VPN_FILE}" ]` — net-vpn/wireguard-tools, or networkmanager-openvpn
+    # + openvpn for a .ovpn) and the CONFIG_WIREGUARD kernel fragment :3849 are NOT. So a
+    # node still emerged the VPN userspace it was just told it would not use. Mode is
+    # deliberately unrestricted: the builder gates on ROLE_CLIENT alone, and a cloud or
+    # standalone DESKTOP legitimately takes an egress conf.
+    "egress_vpn": FieldScope(platforms=_FIELD_PLATFORMS["egress_vpn"], classes=("desktop",)),
+    "egress_vpn_locked": FieldScope(platforms=_FIELD_PLATFORMS["egress_vpn_locked"],
+                                    classes=("desktop",)),
+    "gpu_driver": FieldScope(platforms=_FIELD_PLATFORMS["gpu_driver"],
+                             builder_default=_BD_GPU_DRIVER),
+    "home_mode": FieldScope(platforms=_FIELD_PLATFORMS["home_mode"], classes=("desktop",),
+                            builder_default=_BD_HOME_MODE),
+    "installer_ui": FieldScope(platforms=_FIELD_PLATFORMS["installer_ui"],
+                               builder_default=_BD_INSTALLER_UI),
+    # bundle_source bakes the 33MB generator tree + /usr/sbin/snapdragon-regenerate into
+    # the image: the self-hosting posture of a branded STANDALONE appliance, and dead
+    # weight on a headless PKI/backend node. The builder says so itself at :1248.
+    "bundle_source": FieldScope(platforms=_FIELD_PLATFORMS["bundle_source"],
+                                classes=("desktop",), builder_default=_BD_BUNDLE_SOURCE),
+}
+
+FIELD_SCOPE: dict[str, FieldScope] = {
+    fld: _FIELD_SCOPE_OVERRIDES.get(fld, FieldScope(platforms=plats))
+    for fld, plats in _FIELD_PLATFORMS.items()
+}
+
+# DERIVED compat view — the platform axis projected back out under its historical name, so
+# every existing consumer (_gating.platform_supports/gate_widgets/clear_unsupported,
+# strip_platform_unsupported, scripts/emit-image-catalog.py, the test_cli_args diff-probe)
+# keeps reading the same mapping it always did. Never hand-edit: edit _FIELD_PLATFORMS.
+PLATFORM_FIELD_SUPPORT: dict[str, tuple[str, ...]] = {
+    fld: scope.platforms for fld, scope in FIELD_SCOPE.items()
+}
+
+# DERIVED: field -> the builder's own unset-fork for it. GUARD A asserts this projection is
+# exactly the sentinel set parsed out of the real builder scripts. Never hand-edit.
+BUILDER_DEFAULTS: dict[str, BuilderDefault] = {
+    fld: scope.builder_default for fld, scope in FIELD_SCOPE.items()
+    if scope.builder_default is not None
+}
 
 
 def rpi_boards_for_role(role: str) -> tuple[str, ...]:
@@ -664,10 +908,186 @@ def effective_installer_ui(cfg: "ImageConfig") -> str:
     return probe.installer_ui
 
 
+def _field_default(name: str):
+    """The dataclass default for one ImageConfig field."""
+    f = ImageConfig.__dataclass_fields__[name]  # type: ignore[attr-defined]
+    return f.default_factory() if f.default is MISSING else f.default
+
+
+def class_axis_violated(fld: str, cfg: "ImageConfig") -> bool:
+    """Is ``fld``'s ROLE-CLASS narrowing violated by this image, on a platform where that
+    narrowing is actually builder-true?
+
+    Split out from field_in_scope because the three axes reject for THREE DIFFERENT
+    REASONS, and a caller that only knows "out of scope" cannot tell them apart. The first
+    cut of scope_violations() collapsed them, and every message it produced blamed
+    role-class — so a jetson-desktop (rejected by the PLATFORM axis) and an rpi5-desktop in
+    mesh (rejected by the MODE axis) were both told they were "a cluster-node image" that
+    the builder would build wrong. Both are desktop-class. The prose was fiction.
+
+    Returns False when the platform axis already owns the rejection (that gate, and
+    strip_platform_unsupported, are the flag-not-parsed story) and False when the field's
+    class rule simply does not hold on this builder (``class_platforms``)."""
+    scope = FIELD_SCOPE.get(fld)
+    if scope is None:
+        return False
+    plat = cfg.platform or "x86"
+    if plat not in scope.platforms:
+        return False
+    if scope.class_platforms is not None and plat not in scope.class_platforms:
+        return False
+    return image_class(cfg.mode, cfg.role) not in scope.classes
+
+
+def scope_reject_reason(fld: str, cfg: "ImageConfig") -> str | None:
+    """Which AXIS puts ``fld`` out of scope for this image — ``"platform"`` | ``"class"`` |
+    ``"mode"`` — or None if it is in scope. The ONE implementation of the axis rules: the
+    wizard's reason text, the Qt-free gate and the --config validator all read it, so they
+    cannot disagree about whether (or why) a field applies.
+
+    Class is checked before mode deliberately: a mesh/pki/x86 image violates both, and the
+    class story ("the builder builds a desktop stack with ROLE_K8S=none") is the one that
+    names the real consequence."""
+    scope = FIELD_SCOPE.get(fld)
+    if scope is None:
+        return None
+    if (cfg.platform or "x86") not in scope.platforms:
+        return "platform"
+    if class_axis_violated(fld, cfg):
+        return "class"
+    if cfg.mode not in scope.modes:
+        return "mode"
+    return None
+
+
+def field_in_scope(fld: str, cfg: "ImageConfig") -> bool:
+    """Qt-free twin of gui/pages/_gating.scope_allows: is ``fld`` meaningful for THIS image
+    (platform x role-class x mode)? Unknown fields are in scope everywhere (fail-open —
+    never gate a universal knob)."""
+    return scope_reject_reason(fld, cfg) is None
+
+
+# Platforms whose builder HARD-ERRORS on --standalone with a cluster-node role, verbatim:
+#   build-rpi5-stage4.sh:1037
+#     ${ROLE_CLIENT} || { err "--standalone only composes onto --role desktop (got --role
+#                        ${ROLE})"; exit 1; }
+# x86 is deliberately NOT here: build-x86-host-stage4.sh ACCEPTS --standalone on a pki/be
+# role and builds a desktop-stack image with ROLE_K8S=none. That difference is the whole
+# reason the two get different tiers below — it is builder truth, not a preference.
+_STANDALONE_NODE_HARD_ERROR_PLATFORMS = ("rpi5",)
+
+
+def scope_violations(cfg: "ImageConfig") -> tuple[list[str], list[str]]:
+    """Out-of-scope values a config carries, split ``(blocking, advisory)``.
+
+    This is finding 1's OTHER half. Hiding the checkbox fixes the wizard, but the
+    ``--config`` / worker / build-image.sh channels never draw a widget: they hand a JSON
+    straight to to_cli_args. So the JSON needs its own answer, and the tiering rule is the
+    design's governing principle — NEVER invent a constraint the builder does not have:
+
+    * BLOCK is reserved for a REAL post-dispatch dead-end, i.e. one the builder itself
+      errs on. rpi5 + --standalone + a node role is exactly that (:1037 above): it dies
+      AFTER dispatch, after the operator has already paid the queue. Catching it at second
+      0 is strictly better and invents nothing.
+    * WARN is for a value the builder ACCEPTS. x86 + --standalone + a node role builds
+      SUCCESSFULLY and silently wrong (full desktop stack, ROLE_K8S=none, so the node can
+      never join the mesh it was built for). Blocking it would invent a constraint the
+      builder does not have and break anyone deliberately building that shape; staying
+      silent is what let the bug ship. So it warns, loudly, naming the consequence.
+
+    LEAK vs EXPLICIT: only a value differing from the dataclass default is reported. A
+    field sitting at its default is a LEAK (nobody asked for it) and belongs to the
+    resolve lane, not here — this is the same rule _DEFAULT_LEAK_ROLES states for role
+    resolution, applied to the scope axes. It also keeps bundle_source (default True, so
+    True-on-a-node is a leak) deliberately OUT of this function: finding 4/5 is a resolve,
+    not a warning. Nothing here fires for any config that was already valid.
+    """
+    blocking: list[str] = []
+    advisory: list[str] = []
+    # class_axis_violated, NOT `not field_in_scope(...)`: the latter is true for THREE
+    # different reasons and every message below speaks about role-class. A jetson-desktop
+    # (platform axis: --standalone is not in _ENC_PLATFORMS) and an rpi5-desktop in mesh
+    # mode (mode axis) are both DESKTOP-class images whose builders take --standalone
+    # happily — rpi5-desktop sets ROLE_CLIENT=true, so :1037 does not fire at all. Reporting
+    # either as a cluster node that can never join the mesh would be inventing a constraint
+    # AND lying about why. The class axis is the only one the builder itself gates on.
+    if cfg.standalone and class_axis_violated("standalone", cfg):
+        plat = cfg.platform or "x86"
+        where = f"--role {cfg.role}" + (f" in {cfg.mode} mode" if cfg.mode else "")
+        if plat in _STANDALONE_NODE_HARD_ERROR_PLATFORMS:
+            blocking.append(
+                f"standalone=true with {where}: the {plat} builder hard-errors on this "
+                f"(--standalone only composes onto a desktop role), so the build would fail "
+                f"AFTER dispatch. Drop standalone, or build a desktop role.")
+        else:
+            advisory.append(
+                f"standalone=true with {where}: --standalone is a DESKTOP posture and this is "
+                f"a cluster-node image. The builder ACCEPTS it and exits 0, but the result is "
+                f"silently wrong: no kubelet/kubeadm/containerd and no cluster GitOps tree "
+                f"(ROLE_K8S=none) while the full desktop stack is still built — a node that "
+                f"can NEVER join the mesh it was built for. Drop standalone unless you really "
+                f"mean a standalone desktop.")
+    return blocking, advisory
+
+
+# ── why finding 4/5's fix is NOT a materialize-time resolve ──────────────────────────
+# The audited design routed bundle_source's leak through a "silently resolve at materialize"
+# lane, next to resolve_platform_defaults. It was implemented, and the codebase rejected it:
+# tests/test_worklist.py::test_materialize_matches_hand_built_flat_config pins "a
+# materialized mesh entry's argv equals the argv of the flat single-image config a user
+# would build by hand for that image" — the redesign's CORE parity claim. bundle_source's
+# leak is present identically in BOTH channels (both simply leave the field at its dataclass
+# default), so correcting it in only one makes the same cell build two different images
+# depending on which channel dispatched it. That is a worse bug than the one being fixed.
+#
+# resolve_platform_defaults survives at materialize precisely because it does NOT have this
+# property: it fires only for a role/flavor that is INVALID for the target platform, a shape
+# a hand-built config for the same cell never carries — so equivalence holds for every valid
+# cell. bundle_source's leak fires on perfectly VALID cells, so it cannot live there.
+#
+# The honest fix is therefore in to_cli_args (which both channels share) — i.e. stop emitting
+# the flag when the field is at its default and the role-class is out of scope, letting
+# build-x86:1248 fire. That changes emission for existing node configs, so it belongs with
+# finding 4/5 proper (step (c)), not here. BUILDER_DEFAULTS declares the gap as `override`
+# and GUARD A pins it, so it cannot be forgotten.
+#
+# TODO(finding 4/5, bundle_source): step (c) attempted this and found a SECOND blocker the
+# audit did not have, which is why it is still not fixed here. Recorded rather than worked
+# around, because the workaround would be a silent-wrong-image bug of its own:
+#
+#   THE LEAK/EXPLICIT DISCRIMINATOR DOES NOT EXIST FOR THIS FIELD. The whole tier design
+#   rests on "at the dataclass default => leak => resolve; explicitly set => honour + WARN".
+#   That works for `standalone` (default False, so True is unambiguously explicit) and it is
+#   what scope_violations() keys on. It CANNOT work for bundle_source: the default is True,
+#   and from_dict is `cls(**{k: v for k, v in d.items() if k in known})` — it keeps no record
+#   of which keys the JSON actually carried. So a config that OMITS the key and one that says
+#   `"bundle_source": true` produce byte-identical objects. Resolving True-on-a-node would
+#   therefore ALSO silently override an operator who explicitly asked for the source tree on
+#   a node — the exact "silently corrected an explicit value" anti-pattern the WARN tier
+#   exists to prevent. Trading a silent-wrong-image for a different silent-wrong-image is not
+#   a fix.
+#
+#   The real fix needs an unset state, and the codebase already has the idiom: `tailscale` /
+#   `sso` are tri-states ('' | True | False) normalized at load (see from_dict), where ''
+#   means "nobody said" and the flag is simply not emitted. bundle_source wants the same
+#   shape, so the builder's :1248 fork owns the value whenever the operator stayed quiet.
+#
+#   SEQUENCING, and the reason this waits rather than races: --installer-ui :1244 is the
+#   IDENTICAL sentinel four lines above :1248, with the identical `override` gap, and its fix
+#   is owned by fix/studio-installer-ui-node-default. That PR is the reference exemplar. It
+#   also decides the shape of the shared surface (a to_cli_args role-gate splits
+#   test_cli_args.py's X86_TAIL into DESKTOP/NODE variants; a materialize-time resolve does
+#   not). Landing a DIFFERENT mechanism for the sibling flag first would both collide with
+#   that PR's exact surface and leave two neighbouring flags resolving their identical
+#   builder sentinel two different ways — worse than the gap. So: land the exemplar, then
+#   mirror it here. GUARD A's test_guard_a_policy_override_pins_the_known_gap goes RED the
+#   moment either flag stops emitting unconditionally, which is what forces this to be
+#   revisited rather than quietly inherited.
+
+
 def _reset_field(cfg: "ImageConfig", name: str) -> bool:
     """Reset one ImageConfig field to its dataclass default. True iff it changed."""
-    f = ImageConfig.__dataclass_fields__[name]  # type: ignore[attr-defined]
-    default = f.default_factory() if f.default is MISSING else f.default
+    default = _field_default(name)
     if getattr(cfg, name) != default:
         setattr(cfg, name, default)
         return True
