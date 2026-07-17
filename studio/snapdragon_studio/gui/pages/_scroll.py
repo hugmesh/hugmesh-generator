@@ -1,8 +1,11 @@
 """Shared helper: let a tall wizard page scroll instead of clipping.
 
-The Studio wizard window is a fixed 820x640 (``StudioWizard``); several pages
-stack more rows/group-boxes than fit that height (Review&Build, Network, Role,
-Home), so their lower controls were clipped with no way to reach them.
+The Studio wizard window opens at one screen-clamped "medium" size for every page
+(``StudioWizard`` / ``gui.wizard.medium_size``) and the user may resize it smaller;
+several pages stack more rows/group-boxes than fit that height (Review&Build,
+Network, Role, Home), so their lower controls were clipped with no way to reach
+them. This is what keeps a tall page SCROLLING rather than growing the window —
+the wizard deliberately does not resize itself to fit its pages.
 
 ``scrollable(page)`` gives the page a single vertical ``QScrollArea`` whose inner
 widget carries the real content layout, and returns that content layout. Callers

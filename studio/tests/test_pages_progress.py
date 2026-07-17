@@ -402,21 +402,33 @@ def test_total_bar_advances_across_multiple_images(monkeypatch, qapp, wiz, tmp_p
     assert "done" in page.total_label.text().lower()
 
 
-def test_flash_group_hidden_until_all_ok_and_window_grows(monkeypatch, qapp, wiz, tmp_path):
-    """The post-build 'Flash to a device' group stays hidden until an all-ok run, and the
-    terminal page grows the window for readability."""
+def test_flash_group_hidden_until_all_ok_and_window_is_left_alone(monkeypatch, qapp, wiz,
+                                                                  tmp_path):
+    """The post-build 'Flash to a device' group stays hidden until an all-ok run, and
+    landing on the terminal page does NOT resize the window.
+
+    This page used to ratchet the window up to >=1040x780 "for readability", which this
+    test pinned. That ratchet was the second root cause of the wildly-resizing wizard:
+    it only ever grew (so every page after stayed oversized) and it ignored the screen
+    entirely — on a display smaller than 1040x780 it made the window bigger than the
+    display, which is why the old assertion could not simply be kept. Readability is now
+    a property of the wizard's screen-clamped default size (gui.wizard.medium_size), so
+    the requirement is inverted: this page must leave the geometry exactly as it found
+    it."""
     monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets", lambda: [])
     _install_replay_builddriver(monkeypatch, CAPTURED_X86_STREAM, code=0)
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
                       brand="acme", output_dir=str(tmp_path / "out"))
     _prime(wiz, synthesize(cfg))
     page = _progress_page(wiz)
+    before = wiz.size()
     page.initializePage()
     # (the progress fixture doesn't show() the wizard, so assert the explicit hidden flag)
     assert page.flash_group.isHidden()            # never before completion
-    assert wiz.width() >= 1040 and wiz.height() >= 780
+    assert wiz.size() == before, "the terminal page resized the window (the old ratchet)"
     _run_to_completion(qapp, page)
     assert page.flash_group.isHidden()             # no targets attached -> stays hidden
+    assert wiz.size() == before                    # and it stays put across the build
 
 
 def test_flash_group_reveals_on_ok_with_a_fake_target(monkeypatch, qapp, wiz, tmp_path):

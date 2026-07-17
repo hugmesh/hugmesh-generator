@@ -606,12 +606,12 @@ class ProgressPage(QtWidgets.QWizardPage):
     def initializePage(self) -> None:
         if self.worker is not None and self.worker.isRunning():
             return
-        # grow the window for readability on the terminal build page (guarded so it only
-        # ever grows — never shrinks an already-larger window, and earlier pages are
-        # unaffected since this fires on landing here).
-        tw, th = 1040, 780
-        if self.wiz.width() < tw or self.wiz.height() < th:
-            self.wiz.resize(max(self.wiz.width(), tw), max(self.wiz.height(), th))
+        # NO window resize here. This page used to ratchet the window up to 1040x780
+        # for build-log readability; that grew but never shrank (so the window stayed
+        # oversized on every page after) and ignored the screen entirely (on an 800x800
+        # display it made the window bigger than the display). The wizard now OPENS at
+        # that same readable size, screen-clamped, for every page — gui/wizard.py
+        # medium_size() — so this page gets its readability without the one-way jump.
         self._flash_timer.start()                  # live device refresh while on this page
         self._reset()
         wl = getattr(self.wiz, "worklist", None)

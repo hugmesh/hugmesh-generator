@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 
-from .qt import QtWidgets
+from .qt import QtCore, QtGui, QtWidgets
 from ..core.build_driver import BuildDriver
 from ..core.config import ImageConfig, MODE_SKIPPED_PAGES, WIZARD_PAGE_SLUGS
 from ..core.platform_info import detect
@@ -26,11 +26,65 @@ from .pages import (
 from .pages._widgets import _file_picker, _row  # noqa: F401
 
 __all__ = [
-    "StudioWizard",
+    "StudioWizard", "medium_size", "centred_top_left",
     "WelcomePage", "ModePage", "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage", "DomainsPage", "UsersPage",
     "SystemPage", "HomePage", "BuildPage", "ProgressPage",
 ]
+
+# The wizard's ONE size, for every page (the "medium" — pages used to jump between
+# 1040x780 and 1431x780 as you walked them). 1040x780 is deliberately the size the
+# terminal ProgressPage used to ratchet itself up to for build-log readability: it is
+# the largest any page genuinely wanted, so adopting it as the default makes that
+# ratchet redundant (it was removed) and every page settles on one size.
+#
+# _MARGIN keeps the window off the screen edges on small displays. Clamping to the
+# REAL screen is the point: the old ratchet resized to a hardcoded 1040x780 with no
+# regard for the display, so an 800x800 screen got a window larger than itself.
+_PREFERRED = (1040, 780)
+_MARGIN = 0.92
+
+
+def medium_size(avail) -> "QtCore.QSize":
+    """The wizard's default size for an available screen rect — the preferred size
+    clamped to fit ``avail`` (QGuiApplication.primaryScreen().availableGeometry()).
+
+    Pure function of the rect (no display needed) so the clamp is directly testable
+    against screens the test host does not have. Measured: 1080p/1440p -> 1040x780,
+    768p laptop -> 1040x706, 1024x600 netbook -> 942x552, 800x800 -> 736x736 — all
+    of which clear every page's minimumSizeHint (widest: WorklistPage at 518, tallest:
+    ProgressPage at 401)."""
+    w, h = _PREFERRED
+    return QtCore.QSize(min(w, int(avail.width() * _MARGIN)),
+                        min(h, int(avail.height() * _MARGIN)))
+
+
+def centred_top_left(frame, avail) -> "QtCore.QPoint":
+    """Where to move a window whose frame rect is ``frame`` to centre it on ``avail``.
+
+    Pure function of the two rects, for the same reason medium_size() is one — but
+    here testability is the WHOLE point rather than a bonus. QWizard is a QDialog, and
+    Qt's QDialog::adjustPosition already auto-centres a parentless dialog on show, so a
+    test that merely shows the wizard and measures its centre passes even with all of
+    our centring deleted (verified: a bare QWizard lands dead-centre, 0px error). Only
+    a test that drives this arithmetic over screens the host does not have can actually
+    fail when the centring is wrong, so the arithmetic lives here in the open.
+
+    The move() that consumes this is still load-bearing beyond the centring itself: it
+    sets Qt's explicit-position flag, which is what stops adjustPosition re-centring the
+    window over a position the user dragged it to (see showEvent)."""
+    fg = QtCore.QRect(frame)
+    fg.moveCenter(avail.center())
+    return fg.topLeft()
+
+
+def _available_geometry():
+    """The primary screen's available rect, or a 1080p stand-in when there is no
+    screen at all (never crash the constructor on a headless import)."""
+    screen = QtGui.QGuiApplication.primaryScreen()
+    if screen is None:                       # pragma: no cover - needs a screenless Qt
+        return QtCore.QRect(0, 0, 1920, 1080)
+    return screen.availableGeometry()
 
 
 class StudioWizard(QtWidgets.QWizard):
@@ -57,7 +111,12 @@ class StudioWizard(QtWidgets.QWizard):
         self.driver = BuildDriver(self.generator_dir, self.host, graphical=True)
         self.setWindowTitle("Snapdragon Image Studio")
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
-        self.resize(820, 640)
+        # ONE size for the whole flow, clamped to the real screen (see medium_size).
+        # resize(), not setFixedSize() — the user stays free to resize; a page taller
+        # than the window SCROLLS (pages/_scroll.py), it does not grow the window.
+        # Nothing is persisted: no QSettings, so the wizard remembers no geometry.
+        self.resize(medium_size(_available_geometry()))
+        self._centred_once = False
         # One page-constructor per WIZARD_PAGE_SLUGS entry, SAME order — nextId() keys the
         # mode-gated skip set (MODE_SKIPPED_PAGES) by slug, so drift here would silently
         # skip the WRONG page. ProgressPage lands in WS-REVIEWUI (gui/pages/progress.py);
@@ -77,6 +136,26 @@ class StudioWizard(QtWidgets.QWizard):
         for p in self._pages:
             self.addPage(p)
         self._page_ids = dict(zip([slug for slug, _ctor in present], self.pageIds()))
+
+    def showEvent(self, event):
+        """Centre on the primary screen the FIRST time the wizard is shown.
+
+        One-shot: re-centring on every show would yank the window back from wherever
+        the user dragged it (show/hide happens around dialogs and restart()), and the
+        move() below is what pins that — it sets Qt's explicit-position flag, which
+        stops QDialog::adjustPosition (QWizard IS a QDialog) re-centring on later shows.
+
+        Centres frameGeometry() rather than geometry() so the window MANAGER's frame is
+        included WHERE THE PLATFORM HAS ALREADY APPLIED ONE. On X11/Wayland it usually
+        has not by the first showEvent, so frameGeometry() == geometry() and this
+        degrades to client-area centring — off-centre by about half a title bar, which
+        is why the tests allow a few px of slack. Exact frame centring would need to be
+        deferred to the first resize/singleShot(0); not worth the flicker for ~15px."""
+        super().showEvent(event)
+        if self._centred_once:
+            return
+        self._centred_once = True
+        self.move(centred_top_left(self.frameGeometry(), _available_geometry()))
 
     def nextId(self):
         """Mode-gated page flow: pages that do not apply to the selected Studio mode
