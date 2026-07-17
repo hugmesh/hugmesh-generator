@@ -150,6 +150,13 @@ source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
 # predicate the --encrypt-root fail-fast preflight and the qemu-chroot initramfs
 # strategy rely on. Shared so the ARM boards do not drift on the load-bearing
 # bit. See scripts/_dracut-cross-lib.sh.
+# Host-safety guard: the container predicate gating every HOST-mutating step
+# (the /etc/portage seeds + the host emerge below, and _dracut-cross-lib.sh's
+# kernel-global binfmt registration). Fail-safe: an unproven runtime is treated
+# as the operator's real machine and nothing is written. See
+# scripts/_host-guard-lib.sh.
+# shellcheck source=scripts/_host-guard-lib.sh
+source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
 # shellcheck source=scripts/_dracut-cross-lib.sh
 source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 
@@ -1010,7 +1017,12 @@ unset _exec_blockers
 # "masked by: ~amd64 keyword" even though the sysroot side is accepted (the
 # post-#352 frite failure). Accept it host-side too (** — pure python,
 # arch-independent), mirroring the HOSTSELINUX package.use pre-seed precedent.
-if [ "$(id -u)" -eq 0 ] && [ -d /etc/portage ]; then
+# HOST-MUTATION SITE. The seed below rewrites /etc/portage on whatever root this
+# runs as — including "*/* PYTHON_TARGETS: python3_12 python3_13", a WILDCARD,
+# system-wide python-target change. That is correct in the throwaway builder
+# container (it is why the fleet builds work) and WRONG on the operator's real
+# machine, so the container proof — not merely root+/etc/portage — gates it.
+if hostguard_mutation_allowed; then
     mkdir -p /etc/portage/package.accept_keywords
     cat > /etc/portage/package.accept_keywords/snapdragon-host-build-backends <<'HOSTKW'
 # setuptools-scm's vcs-versioning backend: pure-python/arch-independent, often
@@ -1068,6 +1080,12 @@ sys-libs/libselinux python
 sys-process/audit python
 HOSTPYUSE
     info "Pre-seeded HOST /etc/portage/package.use: PYTHON_TARGETS python3_12 (build-backend chain)"
+elif [ "$(id -u)" -eq 0 ] && [ -d /etc/portage ]; then
+    # Native root on a real host: VERIFY read-only, never write. Proceeds when the
+    # host already satisfies the config; else fails fast with a reviewable command.
+    hostguard_require_host_portage || exit 1
+else
+    info "Not root / no /etc/portage — HOST portage seed skipped (the cross emerge will use the existing config)."
 fi
 
 # Host SELinux policy build tools (same rationale as every other builder:
@@ -1084,7 +1102,7 @@ command -v sefcontext_compile &>/dev/null || HOST_POLICY_TOOLS+=(sys-libs/libsel
 command -v semodule           &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/policycoreutils)
 if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
     readarray -t HOST_POLICY_TOOLS < <(printf '%s\n' "${HOST_POLICY_TOOLS[@]}" | sort -u)
-    if [ "$(id -u)" -eq 0 ] && command -v emerge &>/dev/null; then
+    if hostguard_mutation_allowed && [ "$(id -u)" -eq 0 ] && command -v emerge &>/dev/null; then
         warn "Missing host SELinux build tools: ${HOST_POLICY_TOOLS[*]} — emerging natively"
         emerge --noreplace --quiet "${HOST_POLICY_TOOLS[@]}" \
             || { err "Failed to install host SELinux build tools (${HOST_POLICY_TOOLS[*]})."; exit 1; }
@@ -1096,11 +1114,34 @@ if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
 fi
 # The LIVE/INSTALLER images need a squasher (mksquashfs, or tar2sqfs from
 # squashfs-tools-ng) + xorriso to wrap the squashfs ISO.
+# NATIVE HOST-TOOL PREFLIGHT: in the builder container this keeps TODAY'S
+# behavior verbatim (warn now, skip the image later — both tools were measured
+# present in snapdragon-builder:latest, so the hard path is unreachable during
+# fleet builds). On a real host, warning up front and then silently skipping a
+# requested image hours later is dishonest — fail fast with the exact emerge.
+# xorriso is asymmetric and the preflight must not flatten that: --flavor installer
+# hard-errors later without it ("cannot build the INSTALLER ISO"), so failing fast
+# is strictly better; a LIVE-only build instead leaves a supported LIVE TREE it
+# reports as "(tree; no xorriso to wrap an ISO)", so that site is --soft. Failing
+# fast there would turn a build that SUCCEEDS today into exit 1.
+if ${BUILD_INSTALLER}; then
+    hostguard_require_host_tools "the installer ISO (--flavor installer)" "dev-libs/libisoburn" \
+            -- xorriso \
+        || warn "missing xorriso — the installer image step will warn + skip"
+elif ${BUILD_LIVE}; then
+    hostguard_require_host_tools "the LIVE ISO" "dev-libs/libisoburn" --soft \
+            --hint "Without it the LIVE medium is left as an unwrapped tree." \
+            -- xorriso \
+        || warn "missing xorriso — the LIVE image will be left as a tree"
+fi
+# The squasher is NOT soft: without it the live rootfs cannot be built at all
+# (installer hard-errors; LIVE dies mid-squash), so the artifact is genuinely lost.
 if ${BUILD_LIVE} || ${BUILD_INSTALLER}; then
-    command -v xorriso >/dev/null || warn "missing xorriso — the live/installer image step will warn + skip"
-    if ! command -v mksquashfs >/dev/null && ! command -v tar2sqfs >/dev/null; then
-        warn "missing mksquashfs AND tar2sqfs — the live/installer image step will warn + skip"
-    fi
+    hostguard_require_host_tools "the live/installer image" \
+            "sys-fs/squashfs-tools" \
+            --hint "Or emerge sys-fs/squashfs-tools-ng instead (its tar2sqfs also works)." \
+            -- "mksquashfs|tar2sqfs" \
+        || warn "missing mksquashfs AND tar2sqfs — the live/installer image step will warn + skip"
 fi
 info "Cross-compiler: $(${CROSS_TARGET}-gcc --version | head -1)"
 info "Jobs: ${JOBS}"

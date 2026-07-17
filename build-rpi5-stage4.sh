@@ -56,6 +56,13 @@ source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
 # predicate the --encrypt-root fail-fast preflight and build_disk_initramfs()'s
 # Strategy 1 (qemu-chroot) rely on. Shared so rpi5/frite/opi5/opi-zero2/jetson do
 # not drift on the load-bearing bit. See scripts/_dracut-cross-lib.sh.
+# Host-safety guard: the container predicate gating every HOST-mutating step
+# (the /etc/portage seeds + the host emerge below, and _dracut-cross-lib.sh's
+# kernel-global binfmt registration). Fail-safe: an unproven runtime is treated
+# as the operator's real machine and nothing is written. See
+# scripts/_host-guard-lib.sh.
+# shellcheck source=scripts/_host-guard-lib.sh
+source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
 # shellcheck source=scripts/_dracut-cross-lib.sh
 source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 
@@ -2309,7 +2316,12 @@ unset _exec_blockers
 # "masked by: ~amd64 keyword" even though the sysroot side is accepted (the
 # post-#352 frite failure). Accept it host-side too (** — pure python,
 # arch-independent), mirroring the HOSTSELINUX package.use pre-seed precedent.
-if [ "$(id -u)" -eq 0 ] && [ -d /etc/portage ]; then
+# HOST-MUTATION SITE. The seed below rewrites /etc/portage on whatever root this
+# runs as — including "*/* PYTHON_TARGETS: python3_12 python3_13", a WILDCARD,
+# system-wide python-target change. That is correct in the throwaway builder
+# container (it is why the fleet builds work) and WRONG on the operator's real
+# machine, so the container proof — not merely root+/etc/portage — gates it.
+if hostguard_mutation_allowed; then
     mkdir -p /etc/portage/package.accept_keywords
     cat > /etc/portage/package.accept_keywords/snapdragon-host-build-backends <<'HOSTKW'
 # setuptools-scm's vcs-versioning backend: pure-python/arch-independent, often
@@ -2367,6 +2379,12 @@ sys-libs/libselinux python
 sys-process/audit python
 HOSTPYUSE
     info "Pre-seeded HOST /etc/portage/package.use: PYTHON_TARGETS python3_12 (build-backend chain)"
+elif [ "$(id -u)" -eq 0 ] && [ -d /etc/portage ]; then
+    # Native root on a real host: VERIFY read-only, never write. Proceeds when the
+    # host already satisfies the config; else fails fast with a reviewable command.
+    hostguard_require_host_portage || exit 1
+else
+    info "Not root / no /etc/portage — HOST portage seed skipped (the cross emerge will use the existing config)."
 fi
 
 # ── Host SELinux policy build tools ────────────────────────────────
@@ -2394,7 +2412,7 @@ fi
 # silently SKIPPED and trips the stage4 assert. Pre-seed the HOST config so the host
 # selinux toolchain can build with python. (specs-rpi5/portage/package.use/selinux covers
 # the TARGET libselinux/audit; this covers the HOST x86 build tools — distinct configs.)
-if [ "$(id -u)" -eq 0 ]; then
+if hostguard_mutation_allowed && [ "$(id -u)" -eq 0 ]; then
     mkdir -p /etc/portage/package.use
     cat > /etc/portage/package.use/snapdragon-cross-host-selinux <<'HOSTSELINUX'
 # Auto-written by build-rpi5-stage4.sh (RPi CROSS build, --board rpi5|rpi4). The HOST x86 selinux-python/
@@ -2419,7 +2437,7 @@ command -v sefcontext_compile &>/dev/null || HOST_POLICY_TOOLS+=(sys-libs/libsel
 command -v semodule           &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/policycoreutils)
 if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
     readarray -t HOST_POLICY_TOOLS < <(printf '%s\n' "${HOST_POLICY_TOOLS[@]}" | sort -u)
-    if [ "$(id -u)" -eq 0 ] && command -v emerge &>/dev/null; then
+    if hostguard_mutation_allowed && [ "$(id -u)" -eq 0 ] && command -v emerge &>/dev/null; then
         warn "Missing host SELinux build tools: ${HOST_POLICY_TOOLS[*]} — emerging natively"
         # NATIVE host emerge (no ROOT/SYSROOT/PORTAGE_CONFIGROOT overrides):
         # these are x86 build tools, NOT part of the aarch64 sysroot.

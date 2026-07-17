@@ -26,6 +26,13 @@ source "${SCRIPT_DIR}/scripts/_download-lib.sh"
 # the build host's libcrypt provably supports it, SHA-512 crypt ($6$) fallback.
 # shellcheck source=scripts/_passhash-lib.sh
 source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
+# Host-safety guard. Unlike the ARM builders this script seeds NO host
+# /etc/portage and runs no host emerge (its emerge/dracut calls are inside
+# `chroot "${SYSROOT}"` heredocs, so they mutate the sysroot, not /). It is here
+# ONLY for hostguard_require_host_tools: a native run must not warn-and-silently
+# drop a requested artifact hours in. See scripts/_host-guard-lib.sh.
+# shellcheck source=scripts/_host-guard-lib.sh
+source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
 
 # ── Defaults ───────────────────────────────────────────────────────
 WORK_DIR=""
@@ -2430,27 +2437,52 @@ for t in curl tar file; do command -v "$t" >/dev/null || { err "missing tool: $t
 # .img builder tools (default deliverable) — losetup/mkfs/parted/grub-mkimage must
 # be present and the build must run as root (already enforced). grub-mkimage must
 # support the x86_64-efi target for the GRUB-EFI removable install.
+# NATIVE HOST-TOOL PREFLIGHT. In the builder container each block below keeps
+# TODAY'S behavior verbatim (warn + disable) — every tool here was measured
+# present in snapdragon-builder:latest, so the hard path is unreachable during
+# fleet builds. On a real host, silently disabling an artifact the operator
+# explicitly asked for (or that is ON BY DEFAULT, as --live-iso is) is dishonest:
+# fail fast, up front, with the exact emerge, instead of finishing hours later
+# missing the thing they wanted.
 if ${BUILD_IMG}; then
-    for t in parted losetup mkfs.vfat mkfs.ext4 blkid grub-mkimage; do
-        command -v "$t" >/dev/null || { warn "missing ${t}; disabling .img build"; BUILD_IMG=false; break; }
-    done
+    if ! hostguard_require_host_tools ".img build" \
+            "sys-block/parted sys-apps/util-linux sys-fs/dosfstools sys-fs/e2fsprogs sys-boot/grub" \
+            --hint "Or pass --no-img to build without the raw .img." \
+            -- parted losetup mkfs.vfat mkfs.ext4 blkid grub-mkimage; then
+        for t in parted losetup mkfs.vfat mkfs.ext4 blkid grub-mkimage; do
+            command -v "$t" >/dev/null || { warn "missing ${t}; disabling .img build"; BUILD_IMG=false; break; }
+        done
+    fi
     if ${BUILD_IMG} && [ ! -d /usr/lib/grub/x86_64-efi ]; then
         warn "grub x86_64-efi target not found (/usr/lib/grub/x86_64-efi); .img will not be UEFI-bootable"
         warn "rebuild sys-boot/grub with GRUB_PLATFORMS containing efi-64"
     fi
 fi
 if ${LIVE_ISO}; then
-    for t in grub-mkrescue xorriso; do
-        command -v "$t" >/dev/null || { warn "missing ${t}; disabling --live-iso"; LIVE_ISO=false; break; }
-    done
+    if ! hostguard_require_host_tools "--live-iso" "sys-boot/grub dev-libs/libisoburn" \
+            --hint "Or pass --no-live-iso to build without it." \
+            -- grub-mkrescue xorriso; then
+        for t in grub-mkrescue xorriso; do
+            command -v "$t" >/dev/null || { warn "missing ${t}; disabling --live-iso"; LIVE_ISO=false; break; }
+        done
+    fi
     # Either mksquashfs (sys-fs/squashfs-tools) or tar2sqfs (sys-fs/squashfs-tools-ng)
     # can squash the rootfs; the squash step below picks whichever is present.
-    if ${LIVE_ISO} && ! command -v mksquashfs >/dev/null && ! command -v tar2sqfs >/dev/null; then
+    if ${LIVE_ISO} && ! hostguard_require_host_tools "--live-iso" \
+            "sys-fs/squashfs-tools" \
+            --hint "Or emerge sys-fs/squashfs-tools-ng instead (its tar2sqfs also works). Or pass --no-live-iso to build without it." \
+            -- "mksquashfs|tar2sqfs"; then
         warn "missing mksquashfs AND tar2sqfs; disabling --live-iso"; LIVE_ISO=false
     fi
 fi
+# --installer-iso is SOFT: unlike .img/--live-iso, a missing xorriso does not lose
+# the artifact — the build leaves an installable TREE, a first-class deliverable it
+# reports as INSTALLER_ISO_PATH="... (tree; no xorriso to wrap an ISO)". Failing
+# fast here would turn a build that SUCCEEDS today into exit 1.
 if ${INSTALLER_ISO}; then
-    command -v xorriso >/dev/null || warn "no xorriso; installer ISO will be left as a plain tree"
+    if ! hostguard_require_host_tools "--installer-iso" "dev-libs/libisoburn" --soft -- xorriso; then
+        warn "no xorriso; installer ISO will be left as a plain tree"
+    fi
 fi
 # Secure Boot chain tools live on the BUILD HOST (UKI/GRUB signing happens outside
 # the chroot; shim is copied off the host). Warn EARLY and non-fatally — the build

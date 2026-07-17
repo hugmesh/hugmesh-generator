@@ -265,6 +265,20 @@ RUN emerge --verbose --noreplace \
         app-emulation/qemu \
         sys-libs/libselinux \
         sys-apps/policycoreutils
+# ── Host-safety marker (belt-and-braces) ───────────────────────────────────────
+# scripts/_host-guard-lib.sh refuses to seed /etc/portage or run a host emerge
+# unless it can PROVE this root is disposable. Under Docker /.dockerenv (created
+# by the daemon in every container) already proves it — which is precisely why
+# STALE images built before this marker existed keep working with no rebuild.
+# This file is the redundant second proof: it earns its keep under podman with a
+# scrubbed /run, and it makes the container's self-identification greppable and
+# auditable by tests/scripts/test-host-mutation-guard.sh. Baked LAST, in the
+# FINAL stage, so the hours-long crossdev layers are untouched (see the rule at
+# the top of this stage).
+RUN printf '%s\n' \
+      'snapdragon builder container — build-*-stage4.sh may mutate THIS root'"'"'s /etc/portage.' \
+      > /etc/snapdragon-builder-container
+LABEL org.snapdragon.builder-container="1"
 # The repo is bind-mounted here at runtime; output at /out. No ENTRYPOINT — we
 # do NOT want to hide `make`, so the container is a thin `make` wrapper. The
 # default CMD runs the whole fleet on the NATIVE (in-container, no-sudo) path
