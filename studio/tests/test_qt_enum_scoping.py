@@ -18,26 +18,38 @@ import pytest
 
 _PKG = pathlib.Path(__file__).resolve().parents[1] / "snapdragon_studio"
 
-# Qt classes whose enum members are commonly reached unscoped. The VALUE is the scoped
-# enum type the member really lives under, i.e. what the fix looks like.
-_UNSCOPED = {
-    "QWizard": ("WizardButton", ("BackButton", "NextButton", "CommitButton",
+# (class, scoped enum type, members) triples: the enum members most easily reached
+# unscoped, and the scope they really live under (i.e. what the fix looks like). A class
+# may appear more than once — ``Qt`` alone carries many scopes.
+_UNSCOPED = [
+    ("QWizard", "WizardButton", ("BackButton", "NextButton", "CommitButton",
                                  "FinishButton", "CancelButton", "HelpButton",
                                  "CustomButton1", "CustomButton2", "CustomButton3",
                                  "Stretch", "NoButton")),
-    "QDialogButtonBox": ("StandardButton", ("Ok", "Cancel", "Yes", "No", "Apply",
+    ("QDialogButtonBox", "StandardButton", ("Ok", "Cancel", "Yes", "No", "Apply",
                                             "Close", "Save", "Reset")),
-    "QMessageBox": ("StandardButton", ("Ok", "Cancel", "Yes", "No")),
-}
+    ("QMessageBox", "StandardButton", ("Ok", "Cancel", "Yes", "No")),
+    # ── Qt.* scopes exercised by the progress page's log panel (2026-07-17) ──
+    ("Qt", "ArrowType", ("NoArrow", "UpArrow", "DownArrow", "LeftArrow", "RightArrow")),
+    ("Qt", "Orientation", ("Horizontal", "Vertical")),
+    ("Qt", "WindowType", ("Window", "Dialog", "Tool", "Popup", "SubWindow",
+                          "FramelessWindowHint", "WindowStaysOnTopHint")),
+    ("Qt", "TextInteractionFlag", ("NoTextInteraction", "TextSelectableByMouse",
+                                   "TextSelectableByKeyboard", "TextEditorInteraction",
+                                   "TextBrowserInteraction", "LinksAccessibleByMouse")),
+    ("Qt", "WidgetAttribute", ("WA_DeleteOnClose", "WA_StyledBackground",
+                               "WA_TransparentForMouseEvents")),
+    ("QSizePolicy", "Policy", ("Fixed", "Minimum", "Maximum", "Preferred",
+                               "Expanding", "MinimumExpanding", "Ignored")),
+]
 
 
 def _sources():
     return sorted(_PKG.rglob("*.py"))
 
 
-@pytest.mark.parametrize("cls,scope_members", sorted(_UNSCOPED.items()))
-def test_no_unscoped_qt_enum_access(cls, scope_members):
-    scope, members = scope_members
+@pytest.mark.parametrize("cls,scope,members", _UNSCOPED)
+def test_no_unscoped_qt_enum_access(cls, scope, members):
     # `QWizard.BackButton` but NOT `QWizard.WizardButton.BackButton`
     pat = re.compile(rf"\b{cls}\.(?!{scope}\b)({'|'.join(members)})\b")
     bad = []
@@ -54,7 +66,22 @@ def test_no_unscoped_qt_enum_access(cls, scope_members):
 
 def test_the_guard_itself_bites():
     """Non-vacuity: the pattern must actually match the shape that shipped the crash."""
-    scope, members = _UNSCOPED["QWizard"]
+    scope, members = next((s, m) for c, s, m in _UNSCOPED if c == "QWizard")
     pat = re.compile(rf"\bQWizard\.(?!{scope}\b)({'|'.join(members)})\b")
     assert pat.search("btn = wiz.button(QtWidgets.QWizard.BackButton)")      # the bug
     assert not pat.search("btn = wiz.button(QtWidgets.QWizard.WizardButton.BackButton)")  # the fix
+
+
+def test_the_guard_covers_the_new_log_panel_enums():
+    """Non-vacuity for the Qt.* scopes the detachable log panel added: the unscoped form
+    of each must be caught (PyQt6 exposes only the scoped one)."""
+    for cls, scope, member, bad in (
+            ("Qt", "ArrowType", "DownArrow", "btn.setArrowType(Qt.DownArrow)"),
+            ("Qt", "Orientation", "Vertical", "QSplitter(Qt.Vertical)"),
+            ("Qt", "WindowType", "Window", "QWidget(parent, Qt.Window)"),
+            ("Qt", "TextInteractionFlag", "TextSelectableByMouse",
+             "lb.setTextInteractionFlags(Qt.TextSelectableByMouse)")):
+        members = next(m for c, s, m in _UNSCOPED if c == cls and s == scope)
+        pat = re.compile(rf"\b{cls}\.(?!{scope}\b)({'|'.join(members)})\b")
+        assert pat.search(bad), bad
+        assert not pat.search(bad.replace(f"{cls}.{member}", f"{cls}.{scope}.{member}"))
