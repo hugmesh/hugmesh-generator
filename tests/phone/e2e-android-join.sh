@@ -650,6 +650,18 @@ echo "-- Scenario E: no-USB operator-attested lifecycle --"
 new_device android; clear_logs
 OUTE="${WORK}/out-e"; mkdir -p "${OUTE}"
 NOUSB_ID="phone-nousb01"
+# E0 — NEGATIVE: no adb probe runs in --no-usb, so the model can't be read; a
+# missing --codename must fail clearly (rc 1) rather than record an empty
+# codename that strands the follow-up ingest. Makes ZERO adb calls.
+run enroll --no-usb --device-id "${NOUSB_ID}" \
+    --login-server "${LOGIN_SERVER}" --authkey-file "${AUTHKEY_FILE}" --out "${OUTE}"
+if [ "${RC}" -eq 1 ] && has "needs --codename" && [ ! -s "${LOGD}/adb.log" ] \
+   && [ ! -f "${OUTE}/device/${NOUSB_ID}/enrollment.json" ]; then
+    ok "E0 NEGATIVE: --no-usb without --codename -> exit 1 (no record written, zero adb)"
+else
+    bad "E0 no-usb-no-codename rc=${RC}, want 1"; echo "${OUT_TXT}"
+fi
+clear_logs
 run enroll --no-usb --device-id "${NOUSB_ID}" --codename "${CODENAME}" \
     --login-server "${LOGIN_SERVER}" --authkey-file "${AUTHKEY_FILE}" --out "${OUTE}"
 ENRE="${OUTE}/device/${NOUSB_ID}/enrollment.json"

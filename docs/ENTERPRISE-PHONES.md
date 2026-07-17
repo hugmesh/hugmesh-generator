@@ -67,7 +67,7 @@ anything, and the destructive ones are gated.
 | `flash` | **DESTRUCTIVE** | Wipe the phone and flash the VERIFIED artifact. Typed-serial confirmation on a TTY; non-TTY requires BOTH `--yes` AND a matching `--serial`. Refuses anything without a matching verification marker, and re-verifies the signature again before flashing. |
 | `attest` | device + out-dir | Install the signer-pinned Snapdragon-forked Auditor (`--auditor-apk`/`--auditor-signer-sha256`) and print the self-hosted [AttestationServer](#management-plane) pairing runbook (`--attestation-url`). The in-app QR scan cannot be driven over adb, so this is an **operator-attested** pairing (`verdict:"operator-paired"`), not a cryptographic verification by the wizard. Runs **before** `mdm-enroll` — see [Management plane](#management-plane) for why. Writes `attestation.json`. |
 | `mdm-enroll` | device + out-dir | Enroll the phone as a Headwind MDM device-owner (`dpm set-device-owner com.hmdm.launcher/.AdminReceiver`) after a fail-closed fresh-device precondition (`pm list users` must show exactly one user AND `dumpsys account` must show zero accounts). Installs the signer-pinned DPC APK (`--headwind-apk`/`--headwind-signer-sha256`) and pushes a non-interactive `init.json` (`com.hmdm.BASE_URL=--headwind-url`) into its external files dir. **MUST run before `profile`** — see [Management plane](#management-plane). Writes `mdm.json`. |
-| `enroll` | out-dir | Add a running phone to the mesh — freshly flashed **or already-running**, GrapheneOS **or stock Android** (the OS probe records which; it never gates — see [Onboarding existing phones](#onboarding-existing-phones-no-reflash)). Guided tailnet join with keys from `--keys-dir` (docker-mesh-node layout) or `--login-server`/`--authkey-file`; verifies `tailscale0` got a 100.64/10 address and writes the enrollment record. `--no-usb` drops adb entirely (guided handset-only runbook, operator-attested record). |
+| `enroll` | out-dir | Add a running phone to the mesh — freshly flashed **or already-running**, GrapheneOS **or stock Android** (the OS probe records which; it never gates — see [Onboarding existing phones](#onboarding-existing-phones-no-reflash)). Guided tailnet join with keys from `--keys-dir` (docker-mesh-node layout) or `--login-server`/`--authkey-file`; verifies the tailnet join (a 100.64/10 address on the Tailscale `tun*` interface — Android names it `tun0`, not `tailscale0`) and writes the enrollment record. `--no-usb` drops adb entirely (guided handset-only runbook, operator-attested record; needs `--device-id` + `--codename`). |
 | `profile` | device + out-dir | Create the `enterprise` secondary user, generate + escrow its passphrase (vault-seed custody), operator sets the credential on the handset (default path). **This permanently forecloses device-owner mode** — see [Management plane](#management-plane); it must never run before `mdm-enroll`. |
 | `rotate-profile-pass` | out-dir (+device) | Generate + escrow a new profile passphrase atomically (previous escrow kept as `.prev-<ts>`). |
 | `remove-profile` | **DESTRUCTIVE** | Remove the enterprise user (typed profile-name confirm, or `--yes`); escrow retired to `.revoked-<ts>`. Per-profile FBE keys are evicted — the profile's data is gone. |
@@ -171,7 +171,7 @@ $ scripts/phone-wizard.sh mdm-enroll --serial <S> --headwind-apk hmdm.apk \
 $ scripts/phone-wizard.sh enroll --serial <S> --keys-dir <keys>         # or --login-server + --authkey-file
 # an ALREADY-RUNNING phone (GrapheneOS or stock Android) — no flash needed:
 $ scripts/phone-wizard.sh enroll --keys-dir <keys>                     # os probe records grapheneos|android
-$ scripts/phone-wizard.sh enroll --no-usb --keys-dir <keys> --device-id phone-existing-01   # no adb at all
+$ scripts/phone-wizard.sh enroll --no-usb --keys-dir <keys> --device-id phone-existing-01 --codename oriole   # no adb at all
 $ scripts/phone-wizard.sh profile --serial <S>
 $ scripts/phone-wizard.sh ingest --device-id phone-<s>                  # emit-only; add --ingest-url + mTLS flags to POST
 ```
@@ -232,8 +232,12 @@ enforced in code, fail-closed — not prose.
   (41 chars, comfortably above the 28-char bar the custody model requires) —
   lowercase-only so it is typable on the handset lockscreen keyboard.
 - **Tailscale on Android** is package `com.tailscale.ipn`; a successful tailnet
-  join is verified by polling for a CGNAT (`100.64/10`) address on
-  `tailscale0` over adb.
+  join is verified by polling for a CGNAT (`100.64/10`) address on the
+  Tailscale `tun*` interface over adb. (Android's Tailscale app is a
+  `VpnService`, so the kernel names its interface `tun0`/`tunN`, never
+  `tailscale0` — that name only exists on desktop `tailscaled`. The probe
+  scopes the CGNAT match to `tun*` so a cellular carrier-NAT `100.64/10`
+  address on an `rmnet*` interface is not mistaken for a join.)
 
 ## The orchestration superdomain (what the phone joins)
 
@@ -333,8 +337,10 @@ at the custom coordination server, authenticate with the pre-auth key (the
 key is still **never** echoed without `--show-authkey`) — then writes an
 `enrollment.json` marked `verification:"operator-attested"` with
 `tailscale_ip:null`: the wizard performed no adb probe to confirm the join
-itself. It needs `--device-id` explicitly (there is no adb serial to derive
-one from) and exits 0 with a **NEXT STEPS** block telling the operator how to
+itself. It needs `--device-id` **and** `--codename` explicitly (no adb probe
+runs, so there is no serial to derive the id from and no way to read the device
+model — an empty codename would strand the follow-up `ingest`) and exits 0 with
+a **NEXT STEPS** block telling the operator how to
 verify the join **mesh-side** instead: approve the PENDING node (ADR-14) in
 the superadmin UI, then confirm a `100.64/10` tailnet address there or via
 `headscale nodes list`.
@@ -343,7 +349,7 @@ the superadmin UI, then confirm a `100.64/10` tailnet address there or via
 | --- | --- | --- |
 | adb required | yes | no |
 | OS recorded | `grapheneos` \| `android` \| `unknown` (probed) | `unknown` (not probed) |
-| Join verified by | polling `tailscale0` for a `100.64/10` address | operator, mesh-side, after the fact |
+| Join verified by | polling the Tailscale `tun*` interface for a `100.64/10` address | operator, mesh-side, after the fact |
 | `enrollment.json` `verification` | `adb-heuristic` (best-effort, spoofable getprop signal — see above) | `operator-attested` |
 | `enrollment.json` `tailscale_ip` | the polled address | `null` |
 

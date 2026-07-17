@@ -216,7 +216,8 @@ Verbs:
                        --authkey-file; verifies the tailnet join and writes the
                        enrollment record. --no-usb skips every adb probe:
                        guided handset-only runbook, operator-attested record
-                       (tailscale_ip left null) — verify the join mesh-side.
+                       (tailscale_ip left null; needs --device-id + --codename)
+                       — verify the join mesh-side.
   profile              Create the "enterprise" secondary user, generate +
                        escrow its passphrase (vault-seed custody), operator
                        sets the credential on the handset (default path).
@@ -289,7 +290,8 @@ Options:
                          server, authkey custody) and records an
                          operator-attested enrollment (tailscale_ip null) —
                          verify the join mesh-side afterwards. Needs
-                         --device-id (no adb serial to derive one from).
+                         --device-id AND --codename (no adb probe to derive the
+                         serial-based id or read the device model).
   --i-understand-adb-exposure
                          Set the profile credential over adb (the passphrase
                          lands in adb argv — visible via ps/procfs on THIS
@@ -1193,6 +1195,13 @@ cmd_mdm_enroll() {
 cmd_enroll_no_usb() {
     resolve_device_id
     [ -n "${DEVICE_ID}" ] || pw_die 1 "--no-usb enroll needs --device-id (there is no adb serial to derive one from)"
+    # No adb probe runs in this mode, so the device model cannot be read — the
+    # operator must state it, and it must validate against the catalog. Without
+    # this the record carries an empty codename and the follow-up 'ingest' this
+    # verb's own NEXT STEPS prescribes dies (ingest's require_codename can neither
+    # resolve the marketing name nor validate an empty codename).
+    [ -n "${CODENAME}" ] || pw_die 1 "--no-usb enroll needs --codename (no adb probe to read the device model) — e.g. --codename oriole; run 'detect' on a tethered device, or see https://grapheneos.org/releases"
+    require_codename
 
     echo
     echo "== no-USB guided handset runbook (operator + handset only; no adb) =="

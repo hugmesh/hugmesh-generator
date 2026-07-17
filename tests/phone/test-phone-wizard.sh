@@ -867,6 +867,10 @@ run enroll --no-usb --keys-dir "${KEYS}" --out "${OUT}"
 [ "${RC}" -eq 1 ] && ok "(15) --no-usb without --device-id -> exit 1 (no adb serial to derive one)" \
     || bad "(15) --no-usb no-device-id rc=${RC}, want 1"
 run enroll --no-usb --keys-dir "${KEYS}" --out "${OUT}" --device-id "${NOUSB_DEVID}"
+[ "${RC}" -eq 1 ] && has "needs --codename" \
+    && ok "(15) --no-usb with --device-id but no --codename -> exit 1 (no probe to read the model)" \
+    || { bad "(15) --no-usb no-codename rc=${RC}, want 1"; echo "${OUT_TXT}"; }
+run enroll --no-usb --keys-dir "${KEYS}" --out "${OUT}" --device-id "${NOUSB_DEVID}" --codename "${CODENAME}"
 [ "${RC}" -eq 0 ] && has "no-USB guided handset runbook" && has "NEXT STEPS" \
     && ok "(15) --no-usb enroll exits 0 with the guided runbook + NEXT-STEPS block" \
     || { bad "(15) --no-usb enroll rc=${RC}"; echo "${OUT_TXT}"; }
@@ -879,10 +883,11 @@ NOUSB_ENR="${OUT}/device/${NOUSB_DEVID}/enrollment.json"
     && [ "$(jq -r '.verification' "${NOUSB_ENR}")" = "operator-attested" ] \
     && [ "$(jq -r '.tailscale_ip' "${NOUSB_ENR}")" = "null" ] \
     && [ "$(jq -r '.login_server' "${NOUSB_ENR}")" = "https://headscale.phone-test.invalid" ] \
-    && ok "(15) --no-usb enrollment.json is verification:operator-attested with tailscale_ip:null" \
+    && [ "$(jq -r '.codename' "${NOUSB_ENR}")" = "${CODENAME}" ] \
+    && ok "(15) --no-usb enrollment.json is verification:operator-attested, tailscale_ip:null, codename recorded" \
     || bad "(15) --no-usb enrollment.json missing/wrong"
 # --show-authkey is the DELIBERATE disclosure path — captured OUTSIDE the sweep.
-NOUSB_SHOWKEY_OUT="$(pw enroll --no-usb --keys-dir "${KEYS}" --out "${OUT}" --device-id "${NOUSB_DEVID}" --show-authkey)"
+NOUSB_SHOWKEY_OUT="$(pw enroll --no-usb --keys-dir "${KEYS}" --out "${OUT}" --device-id "${NOUSB_DEVID}" --codename "${CODENAME}" --show-authkey)"
 grep -qF -- "${AUTHKEY_VALUE}" <<<"${NOUSB_SHOWKEY_OUT}" \
     && ok "(15) --no-usb --show-authkey still displays the key once (explicit opt-in)" \
     || bad "(15) --no-usb --show-authkey did not display the key"
