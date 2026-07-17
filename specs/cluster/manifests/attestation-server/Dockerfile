@@ -1,9 +1,13 @@
 # specs/cluster/manifests/attestation-server/Dockerfile
 #
-# STATUS: STARTING POINT, NOT PROVEN. Structurally cloned from headwind's Dockerfile convention, but
-# grounded in real source reads of GrapheneOS/AttestationServer (commit 98b6c130, main). This exact
-# container has NOT been built/run/tested in this environment — treat every stage as needing a real
-# test build before trusting it in a cluster.
+# STATUS: BUILD STAGE PROVEN; runtime packaging not yet run. Grounded in real source reads of
+# GrapheneOS/AttestationServer (commit 98b6c130, main). The build stage below was VERIFIED
+# 2026-07-17 on the host (openjdk 25, Gradle wrapper 9.6.1): clone 98b6c130 --recurse-submodules,
+# apply the DOMAIN + bind seds below, `./gradlew build` -> BUILD SUCCESSFUL in ~18s, producing
+# build/libs/attestation-server.jar + the native libsqlite4java-linux-amd64-1.0.392.so + deps (the
+# full deployable unit). So the source + our two patches compile cleanly. What remains UNproven:
+# the runtime stage's image packaging (base image, non-root user, COPY of build/libs, ENTRYPOINT)
+# has not been run as an actual `docker build` here — validate that before trusting it in a cluster.
 #
 # STRUCTURAL DIFFERENCE FROM headwind's Dockerfile: AttestationServer is a standalone Java app with
 # its OWN embedded com.sun.net.httpserver.HttpServer (not a servlet-container WAR deploy like

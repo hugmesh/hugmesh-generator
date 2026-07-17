@@ -194,7 +194,8 @@ Verbs:
   mdm-enroll           Enroll the phone as a Headwind MDM device-owner
                        (com.hmdm.launcher/.AdminReceiver via
                        `dpm set-device-owner`). FRESH-DEVICE precondition:
-                       `pm list users` must show exactly ONE user, else this
+                       `pm list users` must show exactly ONE user AND
+                       `dumpsys account` must show ZERO accounts, else this
                        fails closed (exit 2) — device-owner mode is a
                        one-shot AOSP gate, permanently foreclosed once a
                        secondary user/account exists (--force downgrades to
@@ -1059,6 +1060,23 @@ cmd_mdm_enroll() {
             pw_warn "device already reports ${user_count} users/profiles (want exactly 1) — device-owner mode may already be foreclosed; continuing under --force, dpm set-device-owner may fail"
         else
             pw_die 2 "a secondary user/account already exists — device-owner mode is no longer obtainable; reflash to retry"
+        fi
+    fi
+
+    # ACCOUNT check: dpm set-device-owner also fails if ANY account (Google or
+    # otherwise) has been added, independent of the user count above — a device
+    # can report exactly 1 user and still be foreclosed. Without this check the
+    # user-count precondition passes, then dpm set-device-owner fails with an
+    # opaque AOSP error — exactly the "mid-flow surprise" this precondition
+    # exists to prevent (see the comment above).
+    local accounts_out account_count
+    accounts_out="$("${ADB}" -s "${s}" shell dumpsys account 2>/dev/null | tr -d '\r')"
+    account_count="$(grep -c 'Account {' <<<"${accounts_out}" || true)"
+    if [ "${account_count}" -gt 0 ]; then
+        if [ "${FORCE}" -eq 1 ]; then
+            pw_warn "device already has ${account_count} account(s) added — device-owner mode may already be foreclosed; continuing under --force, dpm set-device-owner may fail"
+        else
+            pw_die 2 "device already has ${account_count} account(s) added — device-owner mode is no longer obtainable; reflash to retry"
         fi
     fi
 

@@ -79,18 +79,31 @@ spec:
             requests: { cpu: 100m, memory: 256Mi }
             limits:   { memory: 512Mi }
         - name: smtp-config-seeder
-          # OPEN ITEM / best-effort mechanism — read the header comment in
-          # ../external-secrets/attestation-server-externalsecrets.yaml before trusting this in
-          # production. AttestationServer reads SMTP settings ONLY from its own SQLite
-          # `Configuration` table (no env var / config file path exists). This sidecar waits for the
-          # app to create attestation.db on first boot, then performs a best-effort one-time upsert
-          # of that Configuration row from the mounted attestation-server-smtp Secret. The exact
-          # Configuration table column list/order is NOT confirmed by recon (README.md:65-82 shows
-          # only an example INSERT, not the full schema) — run
-          # `sqlite3 /data/attestation.db ".schema Configuration"` against a real running instance
-          # and correct the INSERT below BEFORE relying on this in production.
+          # CONFIRMED against real upstream source (no longer an open item on the
+          # table shape): AttestationServer.java@74ff42d0:186-189 —
+          #   CREATE TABLE IF NOT EXISTS Configuration (key TEXT PRIMARY KEY NOT
+          #   NULL, value ANY NOT NULL) STRICT;
+          # — a 2-column key/value STRICT table, NOT a wide emailUsername/.../
+          # emailFrom column layout. AlertDispatcher.java:52-59 confirms the read
+          # shape (6 correlated `SELECT value FROM Configuration WHERE key = '...'`
+          # scalar subqueries) and the upstream README.md's own documented INSERT
+          # example matches the key/value INSERT below.
           image: alpine:3.20   # TODO: pin to a real internal sqlite3-cli image if the platform has one;
                                 # alpine + runtime `apk add` needs egress at pod start, flagged as a gap.
+          # Root-capable OVERRIDE of the Pod-level securityContext (runAsNonRoot:true,
+          # runAsUser:1000 above): stock alpine:3.20's /etc/apk, /lib/apk/db and
+          # /var/cache/apk are root-owned, so `apk add` as UID 1000 fails permission
+          # every time (silently swallowed by the `|| true` below) and sqlite3 is
+          # never installed — a permanent CrashLoopBackOff on this container.
+          # Kubernetes lets a container securityContext override the Pod's field-by-
+          # field, so this sidecar alone runs as root while the main container stays
+          # non-root.
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
           command:
             - /bin/sh
             - -c
@@ -102,9 +115,12 @@ spec:
                 sleep 5
               done
               if [ ! -f /data/.smtp-seeded ]; then
-                # TODO(confirm real column list via `.schema Configuration`) — placeholder shape only.
+                # CONFIRMED shape: Configuration is key/value (AttestationServer.java:186-189,
+                # AlertDispatcher.java:52-59). Wrapped in an explicit transaction so a failing
+                # INSERT rolls back the DELETE instead of leaving the table wiped with no SMTP
+                # row and no retry-guard (sqlite3's CLI does not auto-wrap multiple statements).
                 sqlite3 /data/attestation.db \
-                  "DELETE FROM Configuration; INSERT INTO Configuration (emailUsername, emailPassword, emailHost, emailPort, emailFrom) VALUES ('${ATTESTATION_SMTP_USER}', '${ATTESTATION_SMTP_PASSWORD}', '${ATTESTATION_SMTP_HOST}', ${ATTESTATION_SMTP_PORT}, '${ATTESTATION_SMTP_FROM}');" \
+                  "BEGIN IMMEDIATE; DELETE FROM Configuration; INSERT INTO Configuration (key, value) VALUES ('emailUsername', '${ATTESTATION_SMTP_USER}'), ('emailPassword', '${ATTESTATION_SMTP_PASSWORD}'), ('emailHost', '${ATTESTATION_SMTP_HOST}'), ('emailPort', '${ATTESTATION_SMTP_PORT}'), ('emailFrom', '${ATTESTATION_SMTP_FROM}'); COMMIT;" \
                   && touch /data/.smtp-seeded
               fi
               sleep infinity

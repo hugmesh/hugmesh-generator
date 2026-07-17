@@ -636,9 +636,10 @@ spec:
       gatewayHost: null
       gatewayRouteIds: [attestation-auditor, attestation-status, attestation-console]
       routeAccessRows:
-        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/auditor/** }  # device/Auditor-app check-in, PUBLIC (tailnet-locked)
-        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/api/status }  # device-facing despite /api/ prefix, PUBLIC — must precede /attest/api/** below
-        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/api/**     }  # human console, ROLE_SUPERADMIN
+        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/auditor/**        }  # device/Auditor-app check-in, PUBLIC (tailnet-locked)
+        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/api/status        }  # device-facing despite /api/ prefix, PUBLIC — must precede /attest/api/** below
+        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/api/create-account }  # explicit DENY: CreateAccountHandler has no app-layer auth — must precede /attest/api/** below
+        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/api/**            }  # human console, ROLE_SUPERADMIN
       federationModule: null
       casdoorSeed: null
 

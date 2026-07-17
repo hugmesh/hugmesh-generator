@@ -2037,7 +2037,7 @@ gate_optional_services() {
                 _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" attestation-server-externalsecrets.yaml
                 _opt_drop_route "${apps}/22-gateway-superadmin.yaml" attestation-auditor attestation-status attestation-console
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-superadmin-gateway \
-                    '/attest/auditor/**' '/attest/api/status' '/attest/api/**'
+                    '/attest/auditor/**' '/attest/api/status' '/attest/api/create-account' '/attest/api/**'
                 ;;
             tor)
                 # NODE service (DISTRO tor daemon + a reconcile agent), not a cluster
@@ -2127,11 +2127,12 @@ _opt_drop_route() {
                 # indentation of this line (leading spaces)
                 match(line, /^ */); cur=RLENGTH
                 if (skip) {
-                    # a comment ABOVE the next sibling can attach; stop skipping
-                    # once we reach a line at or below the captured item indent
-                    # that begins a new list item or a shallower key.
-                    if (line ~ /^ *- id:/ && cur<=ind) { skip=0 }
-                    else if (line !~ /^ *$/ && cur<=ind && line !~ /^ *#/) { skip=0 }
+                    # Stop skipping once we reach ANY non-blank line at or below the
+                    # captured item indent — including a comment, since a trailing
+                    # comment block at this indent may document the NEXT surviving
+                    # route rather than the one being removed (excluding comments
+                    # from this check would silently swallow that documentation).
+                    if (line !~ /^ *$/ && cur<=ind) { skip=0 }
                     else { next }
                 }
                 if (line ~ ("^ *- id: " rid "$")) { skip=1; ind=cur; next }
