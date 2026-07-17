@@ -90,9 +90,22 @@ spec:
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - { name: CASDOOR_ISSUER_URI, value: "https://id.snapdragon.systems" }
-            # Multi-tenant issuer list (for multi-brand deployments). Mirrors the
-            # pattern used by the other BFFs.
-            - { name: APP_TENANCY_ISSUERS, value: "https://id.snapdragon.systems" }
+            # APP_TENANCY_ISSUERS is deliberately NOT set here. Do not "fix" this by
+            # adding it — doing so silently hides every existing wiki page and ACL.
+            # Unset, commons' DomainRegistry seeds the back-compat single-issuer entry
+            # {CASDOOR_ISSUER_URI -> "default"}, so domainOf() == "default" — which is
+            # exactly what the existing rows are stamped with (wiki_page /
+            # wiki_attachment / wiki_audit_log / wiki_access each declare
+            # `domain varchar(64) defaultValue="default"`).
+            # Setting it to the gateway archetype's pattern
+            # ("https://id.snapdragon.systems=<brand>") makes domainOf() return "<brand>",
+            # so every `WHERE domain = ...` read stops matching those "default" rows.
+            # A single pair also leaves isMultiIssuer() false, so the fail-closed
+            # multi-issuer decoder never activates: no 401, no error — the rows just
+            # vanish. Later writes then stamp NEW rows "<brand>", so rolling back leaves
+            # split-brain data.
+            # Multi-brand for wiki therefore REQUIRES a data migration re-stamping the
+            # existing domain='default' rows first. Config alone is not enough.
             # ── Content datastore (wiki_page / wiki_attachment / wiki_audit_log) ─
             # The app's application.yml defaults spring.r2dbc + spring.liquibase to
             # a literal `snapdragon-pg` host that does NOT exist; OVERRIDE both here
