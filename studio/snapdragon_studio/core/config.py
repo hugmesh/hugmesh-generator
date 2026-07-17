@@ -15,6 +15,7 @@ platform never has a desktop mode).
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 import shlex
@@ -583,6 +584,84 @@ def resolve_platform_defaults(cfg: "ImageConfig") -> None:
     # worker's one-artifact ingest contract holds (to_cli_args's default is "both").
     if plat in _ISO_FLAVOR_PLATFORMS and not cfg.flavor:
         cfg.flavor = "installer"
+
+
+# The --installer-ui values that flip the builder's WANT_CALAMARES true, hence pull
+# app-admin/calamares into PKGS (build-x86-host-stage4.sh:1246 / :3532). Mirrored here
+# deliberately; tests/scripts/test-installer-ui-node-default.sh re-extracts the set from
+# that LIVE builder line and fails if the two ever drift.
+_CALAMARES_INSTALLER_UI = ("calamares", "all")
+# What a headless node emits instead. Explicit (not "" = defer-to-builder) so the intent
+# is auditable in --print-command / --print-specs rather than inferred from an absence;
+# same WANT_CALAMARES=false outcome as the builder's own :1244 non-standalone default.
+_NODE_INSTALLER_UI = "cli"
+
+
+def resolve_installer_ui_default(cfg: "ImageConfig") -> str | None:
+    """Role-class twin of resolve_platform_defaults (#337/#344): a headless x86 NODE must
+    never request a graphical installer front-end.
+
+    The builder ALREADY implements this rule — build-x86-host-stage4.sh:1244 defaults an
+    UNSET ``INSTALLER_UI`` to ``all`` for --standalone and ``cli`` for every other role —
+    but the Studio's flat dataclass default (``installer_ui: str = "all"``) means
+    to_cli_args:1732 always passes an explicit value, so that ``[ -z ... ]`` guard can
+    never fire and every node inherits the standalone-only ``all``. That is not merely
+    wasteful: the USE closure app-admin/calamares needs (specs-x86/portage/package.use/
+    desktop) is copied ONLY for ROLE_CLIENT roles (:2496), so on a node calamares is
+    UNSATISFIABLE, not just heavy — it killed 5 x86 node images on boost[python] (#380)
+    and 5 more on libpwquality[python] the next run. image_class() is the exact
+    ROLE_CLIENT complement, so it is the right predicate.
+
+    ONE-DIRECTIONAL by design: node-class only. A mesh CLIENT (laptop) and a STANDALONE
+    desktop legitimately want calamares and CAN build it, and the builder's own default
+    for a non-standalone client is ``cli`` — so deferring for everyone would silently
+    strip the graphical installer from mesh desktops. Desktops return early and are
+    byte-identical by construction.
+
+    An explicit ``all``/``calamares`` on a node is OVERRIDDEN, not honoured: on a node it
+    is not a preference the builder can satisfy, so honouring it buys a guaranteed ~16min
+    failure. Precedent: clear_role_class_fields() already silently resets explicitly-set
+    theme/home fields on a node for the same "the role class does not permit this" reason.
+
+    Mutates ``cfg`` in place. Returns a human-readable note iff it changed something, else
+    None (the core/ house idiom — cf. save():896 — since core/ has no logger; the caller
+    routes it to STDERR, never stdout, which is app.py's argv channel). Called at
+    MATERIALIZE time only (WorklistConfig._materialize_one) and on app.py's headless
+    --print-command cfg — NEVER in to_cli_args, so emission stays a faithful field->argv
+    translation (invariant I3).
+    """
+    if (cfg.platform or "x86") != "x86":
+        return None                       # installer_ui is _X86-only (PLATFORM_FIELD_SUPPORT:389)
+    if image_class(cfg.mode, cfg.role) != "node":
+        return None                       # client / standalone: untouched, byte-identical
+    if cfg.installer_ui not in _CALAMARES_INSTALLER_UI:
+        return None                       # already cli/ncurses: WANT_CALAMARES is false already
+    prev = cfg.installer_ui
+    cfg.installer_ui = _NODE_INSTALLER_UI
+    return (f"installer_ui {prev!r} -> {_NODE_INSTALLER_UI!r} for headless node role "
+            f"{cfg.role!r}: build-x86-host-stage4.sh gates the calamares USE closure "
+            f"(package.use/desktop) on ROLE_CLIENT:2496, so a node cannot resolve "
+            f"app-admin/calamares — and has no display to run it.")
+
+
+def effective_installer_ui(cfg: "ImageConfig") -> str:
+    """The installer_ui value the BUILD will actually receive for ``cfg`` — i.e. what
+    materialize emits — WITHOUT mutating ``cfg``.
+
+    Exists so a display surface can ASK the resolver instead of RESTATING its rule. The
+    GUI previously hard-coded "a node shows cli", which silently disagreed with the
+    resolver's ACTUAL (conditional) rule: only the calamares-triggering values are
+    rewritten, so a node configured for "ncurses" really does build ncurses and must be
+    shown as such. Any future change to resolve_installer_ui_default's trigger set now
+    reaches every reporter for free — the two cannot drift.
+
+    Shallow probe copy is deliberate and sufficient: resolve_installer_ui_default READS
+    only platform/mode/role and WRITES only the installer_ui str, so no mutable field is
+    shared-mutated; ImageConfig has no __post_init__, so copy.copy is a faithful clone.
+    """
+    probe = copy.copy(cfg)
+    resolve_installer_ui_default(probe)
+    return probe.installer_ui
 
 
 def _reset_field(cfg: "ImageConfig", name: str) -> bool:

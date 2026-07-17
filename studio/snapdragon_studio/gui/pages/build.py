@@ -24,16 +24,41 @@ from ...core import build_sessions
 from ...core import flash_targets
 from ...core import worklist as worklist_mod
 from ...core.build_driver import BuildDriver
-from ...core.config import (ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE, image_class,
-                            resolve_platform_defaults)
+from ...core.config import (ENV_CHOICES, ImageConfig, UNAFFILIATED_ROLE,
+                            effective_installer_ui, image_class,
+                            resolve_installer_ui_default, resolve_platform_defaults)
 from ...core.worklist_driver import WorklistDriver
 from ._device_table import DeviceTable
-from ._gating import clear_unsupported, gate_widgets, platform_supports, unsupported_note
+from ._gating import (clear_unsupported, gate_widgets, gate_widgets_role_class,
+                      platform_supports, unsupported_note)
 from ._widgets import _file_picker, _row
 from .packages_dialog import PackagesDialog
 
 # mesh roles whose image carries a GPU stack (the summary "GPU" chip).
 _GPU_MESH_ROLES = ("be+gpu", "edge_ai", "gpu-host")
+
+# Why the Installer-UI combo is greyed on a headless node image. Two DIFFERENT true
+# statements, because the resolver's rewrite is CONDITIONAL: it only replaces the
+# calamares-triggering values (all/calamares). Claiming "pinned to CLI" for a node whose
+# config already says "ncurses" would be a lie — ncurses needs no desktop USE closure and
+# really is what gets built. The row is greyed for EVERY node either way (a node's
+# front-end is a role consequence, not an interactive choice), but the stated reason must
+# match what actually happens. core.config.effective_installer_ui is the single authority.
+_INSTALLER_UI_REWRITTEN_REASON = (
+    "Headless node images install unattended (CLI). The graphical Calamares front-end "
+    "needs the desktop USE closure the builder only ships for client/standalone roles "
+    "(ROLE_CLIENT), so a node image cannot build it — choose a client or standalone "
+    "role to pick an installer front-end.")
+
+
+def _installer_ui_reason(shown: str, rewritten: bool) -> str:
+    """The greyed-combo tooltip for a node: why it shows `shown` and can't be changed."""
+    if rewritten:
+        return _INSTALLER_UI_REWRITTEN_REASON
+    return (f"Node images do not choose an installer front-end interactively — the role "
+            f"decides it. {shown!r} is already a headless front-end (it pulls no "
+            f"Calamares), so the image is built with it as-is — choose a client or "
+            f"standalone role to pick a different front-end.")
 
 
 def _tri_combo(default_label="(builder default)"):
@@ -164,7 +189,11 @@ class BuildPage(QtWidgets.QWizardPage):
         lay.addWidget(_row("Parallel jobs", self.jobs))
         self.installer_ui = QtWidgets.QComboBox()
         self.installer_ui.addItems(["all", "cli", "ncurses", "calamares"])
-        lay.addWidget(_row("Installer UI", self.installer_ui))
+        # Keep the ROW (label + combo): the role-class gate below greys the label with
+        # its widget — gating the bare combo would strand a live "Installer UI" label
+        # beside a dead control.
+        self.installer_ui_row = _row("Installer UI", self.installer_ui)
+        lay.addWidget(self.installer_ui_row)
         # --img-size MiB: every builder parses it; 0 = "(role default)" emits nothing
         # (the builders size the compact root per role/desktop payload themselves).
         self.img_size = QtWidgets.QSpinBox()
@@ -363,6 +392,36 @@ class BuildPage(QtWidgets.QWizardPage):
         self.installer_ui.setCurrentText(c.installer_ui or "all")
         # the installer-UI choice is an x86 ISO knob; the arm builders have no flag
         self.installer_ui.setEnabled(c.platform in ("", "x86"))
+        # Role-class honesty (#355 idiom): a headless x86 NODE cannot build the graphical
+        # Calamares front-end — the desktop USE closure it needs is ROLE_CLIENT-gated in
+        # build-x86-host-stage4.sh:2496 — so materialize rewrites installer_ui to "cli"
+        # (core.config.resolve_installer_ui_default). Show THAT, not a stale "all" the
+        # image will never honour: without the setCurrentText the combo would lie, and
+        # validatePage would write the lie back into the config.
+        # ASK the resolver, never RESTATE it: its rewrite is CONDITIONAL (calamares/all
+        # only), so hard-coding "a node shows cli" lied for a node carrying "ncurses" —
+        # that value pulls no calamares, is left alone by the resolver, and really is what
+        # the image gets. effective_installer_ui() is the same authority materialize uses,
+        # so the combo cannot drift from the argv if that rule ever changes.
+        # Disable-with-reason rather than home.py's hide=True on purpose: the field stays
+        # APPLICABLE to x86 (the builder parses --installer-ui) — it is the ROLE that
+        # decides it, and hiding it would leave a node operator with no way to see WHY the
+        # graphical installer is gone. The tooltip is the whole point.
+        node = image_class(c.mode, c.role) == "node" and (c.platform or "x86") == "x86"
+        shown = effective_installer_ui(c) if node else (c.installer_ui or "all")
+        if node:
+            self.installer_ui.setCurrentText(shown)   # what materialize actually emits
+        # Gate the ROW, never the combo itself: gate_widgets_role_class setEnabled(True)s
+        # when allowed, so passing the combo would CLOBBER the ARM platform gate set just
+        # above (an ARM image is not node-class here, so it would be re-enabled). Qt
+        # composes the two (effective = parent AND own), so the row gate stacks safely.
+        # Every-visit re-gate (the _gating contract): flipping role back to a client
+        # restores the combo, so this can never strand a desktop on "cli".
+        reason = _installer_ui_reason(shown, rewritten=shown != (c.installer_ui or "all")) if node else ""
+        gate_widgets_role_class(self.installer_ui_row, not node, reason)
+        # ...and put the reason on the combo too — the row's tooltip only covers the
+        # label, and the control itself is what a confused operator hovers.
+        self.installer_ui.setToolTip(reason)
         self.img_size.setValue(c.img_size)
         # Restore the parallel-jobs spinbox from the loaded config — validatePage writes
         # c.jobs = self.jobs.value() back, so without this a saved non-default jobs value is
@@ -467,7 +526,15 @@ class BuildPage(QtWidgets.QWizardPage):
         c.output_dir = self.outdir.text().strip()
         c.jobs = self.jobs.value()
         c.env = self.env.currentText()
-        c.installer_ui = self.installer_ui.currentText()
+        # installer_ui: on a NODE the combo is a READ-ONLY REPORT of what
+        # resolve_installer_ui_default() will emit ("cli"), not a user choice — so it must
+        # NOT be written back. Writing it back persisted "cli" into the config, and a
+        # LATER desktop image then inherited it (initializePage restores from c.installer_ui),
+        # silently stripping the graphical installer from an image that wants and can build
+        # one. The resolver at materialize is the authority for nodes; the user's real
+        # preference is preserved untouched across a node detour.
+        if image_class(c.mode, c.role) != "node" or (c.platform or "x86") != "x86":
+            c.installer_ui = self.installer_ui.currentText()
         c.img_size = self.img_size.value()
         c.cached = self.cached.isChecked()
         c.live_toram = self.live_toram.isChecked()
@@ -519,6 +586,16 @@ class BuildPage(QtWidgets.QWizardPage):
             # is shared and re-edited/saved, so it must never be mutated by a preview render.
             pc = copy.deepcopy(c)
             resolve_platform_defaults(pc)
+            # ...and the role-class twin, for the same reason: the real build path applies
+            # BOTH resolvers, so without this the pane rendered `--installer-ui all` for an
+            # x86 node while the build ran `--installer-ui cli`. The pane is copy-pasteable:
+            # that stale argv, run by hand, is exactly the WANT_CALAMARES=true (:1246) ->
+            # app-admin/calamares (:3532) -> unsatisfiable libpwquality[python] wall this
+            # change exists to prevent. `pc` is already a deepcopy, so the user's stored
+            # preference still survives a node detour untouched. The note is dropped on
+            # purpose — this is a GUI pane, not app.py's stderr channel; the greyed combo
+            # and its tooltip already carry the reason.
+            resolve_installer_ui_default(pc)
             # Session-aware preview honesty: the GUI dispatch runs with the per-session
             # workdir (-w <out>/sessions/<id>/ — ProgressPage consumes the same pending
             # id), so the pane must show LITERALLY that argv. Headless --print-command

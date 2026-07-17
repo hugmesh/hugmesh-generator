@@ -7,6 +7,7 @@ toggle (G40) and the hw-profile preset-only labeling (G41).
 Runs the REAL wizard on Qt's offscreen platform (no display needed) and is skipped
 whole when no Qt binding is installed — same harness as test_wizard.py.
 """
+import copy
 import os
 
 import pytest
@@ -17,9 +18,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("snapdragon_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core.config import ImageConfig, UNAFFILIATED_ROLE  # noqa: E402
+from snapdragon_studio.core.config import (ImageConfig, UNAFFILIATED_ROLE,  # noqa: E402
+                                           resolve_installer_ui_default)
 from snapdragon_studio.core.platform_info import HostInfo    # noqa: E402
 from snapdragon_studio.gui import wizard as wizard_mod       # noqa: E402
+from snapdragon_studio.gui.pages import build as build_mod   # noqa: E402
 from snapdragon_studio.gui.qt import Qt, QtWidgets           # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -682,3 +685,132 @@ def test_three_arg_preflight_done_still_works(wiz):
     assert "Warnings" not in build.log.toPlainText()
     assert build.isComplete()
     build._join_preflight_worker()
+
+
+# ---- BuildPage: Installer-UI role-class honesty (headless node -> cli) -----------
+# The combo used to offer "all" and DEFAULT to it even for a mesh-node fleet, where the
+# graphical Calamares front-end is not merely expensive but UNBUILDABLE: its USE closure
+# (specs-x86/portage/package.use/desktop) is copied only for ROLE_CLIENT roles
+# (build-x86-host-stage4.sh:2496). A combo reading "all" on a node LIED about what the
+# image would get; materialize now rewrites it to "cli", and the combo must say so.
+
+def test_installer_ui_pinned_and_greyed_on_a_mesh_node(wiz):
+    """A mesh node: the combo reads what materialize will actually emit ("cli"), is
+    greyed, and carries the explanatory reason (disable-with-reason, NOT hidden — the
+    operator must be able to see WHY).
+
+    Mesh has NO RolePage — the role comes from the WorklistPage selection (the flow is
+    ModePage -> WorklistPage), so this drives the worklist, not pick_role()."""
+    pick_mode(wiz, "mesh")
+    wl_page = advance_to(wiz, wizard_mod.WorklistPage)
+    wl_page.row_for_id("pki.x86").setCheckState(0, Qt.CheckState.Checked)
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert build.installer_ui.currentText() == "cli"
+    assert not build.installer_ui.isEnabled()
+    assert not build.installer_ui_row.isEnabled()
+    assert build.installer_ui.toolTip()               # the reason is on the control
+    assert build.installer_ui_row.toolTip()           # ...and on the label row
+    assert build.installer_ui.isVisible()             # greyed, never hidden
+
+
+def test_installer_ui_live_and_all_on_a_cloud_client(wiz):
+    """No-regression: a client keeps the full choice, defaulted to "all", ungreyed and
+    with no tooltip — byte-identical to the pre-fix behaviour."""
+    pick_mode(wiz, "cloud")
+    pick_role(wiz, "laptop")
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert build.installer_ui.currentText() == "all"
+    assert build.installer_ui.isEnabled()
+    assert build.installer_ui_row.isEnabled()
+    assert build.installer_ui.toolTip() == ""
+    assert wiz.cfg.installer_ui == "all"
+
+
+def test_installer_ui_regate_restores_the_combo_when_role_leaves_node_class(wiz):
+    """The every-visit re-gate contract: a node visit must never STRAND a later desktop
+    on "cli" — going back and picking a client role re-enables the combo and restores
+    "all" (validatePage writes the combo's value back, so a stuck "cli" would silently
+    strip a desktop's graphical installer)."""
+    pick_mode(wiz, "mesh")
+    wl_page = advance_to(wiz, wizard_mod.WorklistPage)
+    wl_page.row_for_id("pki.x86").setCheckState(0, Qt.CheckState.Checked)
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert not build.installer_ui.isEnabled() and build.installer_ui.currentText() == "cli"
+    # flip to a desktop-class role and come back (back_to: pick_mode advances FORWARD
+    # only, and BuildPage is downstream of ModePage)
+    back_to(wiz, wizard_mod.ModePage)
+    pick_mode(wiz, "cloud")
+    pick_role(wiz, "laptop")
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert build.installer_ui.isEnabled()
+    assert build.installer_ui.currentText() == "all"
+    assert build.installer_ui.toolTip() == ""
+    assert wiz.cfg.installer_ui == "all"      # the node visit must not have poisoned it
+
+
+def test_installer_ui_node_visit_does_not_persist_cli_into_the_config(wiz):
+    """REGRESSION (found by the re-gate test): _preview() used to write the combo back
+    UNCONDITIONALLY, so a node visit persisted "cli" into cfg.installer_ui — and every
+    LATER desktop image inherited it, silently losing its graphical installer. On a node
+    the combo REPORTS what the resolver will emit; it is not a user choice, so it is not
+    written back. The user's real preference survives a node detour."""
+    pick_mode(wiz, "mesh")
+    wl_page = advance_to(wiz, wizard_mod.WorklistPage)
+    wl_page.row_for_id("pki.x86").setCheckState(0, Qt.CheckState.Checked)
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    assert build.installer_ui.currentText() == "cli"      # the combo reports "cli"...
+    build._preview()                                      # ...and validatePage/_preview
+    assert wiz.cfg.installer_ui == "all"                  # ...must NOT persist it
+
+
+def test_installer_ui_command_pane_shows_the_resolved_value_for_a_node(wiz):
+    """REGRESSION (review mustFix #1): the combo was honest but the COMMAND PANE was not.
+    _preview() deep-copied the cfg and applied only resolve_platform_defaults, never its
+    role-class twin — so the pane rendered `--installer-ui all` for an x86 node while the
+    real build ran `--installer-ui cli`. The pane is COPY-PASTEABLE and its own contract
+    is "DISPLAY the same command the real build will run": an operator pasting the stale
+    argv got WANT_CALAMARES=true (:1246) -> app-admin/calamares (:3532) -> the
+    unsatisfiable libpwquality[python] wall this whole change exists to prevent."""
+    pick_mode(wiz, "mesh")
+    wl_page = advance_to(wiz, wizard_mod.WorklistPage)
+    wl_page.row_for_id("pki.x86").setCheckState(0, Qt.CheckState.Checked)
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    build._preview()
+    cmd = build.cmd.toPlainText()
+    assert "--installer-ui cli" in cmd
+    assert "--installer-ui all" not in cmd      # the exact pre-fix lie
+    assert wiz.cfg.installer_ui == "all"        # ...and the preview must not mutate cfg
+
+
+@pytest.mark.parametrize("stored,shown", [("all", "cli"), ("ncurses", "ncurses")])
+def test_installer_ui_node_displays_what_will_actually_be_emitted(wiz, stored, shown):
+    """REGRESSION (review mustFix #2): the GUI RESTATED the resolver's rule ("a node shows
+    cli") instead of ASKING it. The resolver's rewrite is CONDITIONAL — it only replaces
+    the calamares-triggering values (all/calamares) — so a node carrying "ncurses" builds
+    ncurses, and pinning the display to "cli" was a lie in the opposite direction, with a
+    tooltip whose stated reason was also false. Both surfaces (combo + command pane) must
+    agree with core.config.effective_installer_ui, which is what materialize applies.
+
+    Reachable for real: loading a saved config with installer_ui="ncurses" on a node role,
+    or picking a client, choosing ncurses, then switching to a node role."""
+    pick_mode(wiz, "mesh")
+    wl_page = advance_to(wiz, wizard_mod.WorklistPage)
+    wl_page.row_for_id("pki.x86").setCheckState(0, Qt.CheckState.Checked)
+    wiz.cfg.installer_ui = stored
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    build.initializePage()                  # re-enter carrying the stored value
+    # the value a materialized node entry really gets — computed, never hard-coded
+    probe = copy.deepcopy(wiz.cfg)
+    resolve_installer_ui_default(probe)
+    assert probe.installer_ui == shown      # guards the expectation itself
+    assert build.installer_ui.currentText() == shown
+    build._preview()
+    assert f"--installer-ui {shown}" in build.cmd.toPlainText()
+    assert not build.installer_ui.isEnabled()   # greyed for EVERY node either way
+    assert build.installer_ui.toolTip()         # ...and always says why
+    # ...and the stated REASON must be true too, not just present: the pre-fix tooltip
+    # told an ncurses node "installs unattended (CLI)... choose a client role to pick a
+    # front-end" while an ncurses front-end is precisely what it was about to build.
+    claims_cli_pin = build_mod._INSTALLER_UI_REWRITTEN_REASON in build.installer_ui.toolTip()
+    assert claims_cli_pin is (shown != stored)
+    assert wiz.cfg.installer_ui == stored       # never written back on a node

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -34,6 +35,7 @@ from .config import (
     ImageConfig,
     SECRET_FIELDS,
     clear_role_class_fields,
+    resolve_installer_ui_default,
     resolve_platform_defaults,
     strip_platform_unsupported,
 )
@@ -214,6 +216,15 @@ class WorklistConfig:
         #    --with-tailscale/--with-sso; ARM joins mesh unless --skip-mesh).
         strip_platform_unsupported(cfg)
         clear_role_class_fields(cfg)
+        # 5b. Role-class installer-UI resolution (#337's twin). AFTER strip_platform_
+        #    unsupported, never before: strip resets installer_ui to the dataclass
+        #    default "all" on non-x86, which would undo a "cli" set earlier and bake a
+        #    misleading value into the materialized spec. Node-class x86 only — a client/
+        #    standalone entry returns early, so desktop argv stays byte-identical.
+        #    The note is a WARNING for stderr, never stdout (app.py's argv channel).
+        note = resolve_installer_ui_default(cfg)
+        if note:
+            print(f"warning: {note}", file=sys.stderr)
         if cfg.mode == "mesh":
             cfg.tailscale = True
             cfg.sso = True

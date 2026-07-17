@@ -108,7 +108,11 @@ def main(argv=None) -> int:
     if args.print_command:
         # Qt-free path: core only — must work with no display and no Qt installed.
         from .core.build_driver import BuildDriver
-        from .core.config import ImageConfig, resolve_platform_defaults
+        from .core.config import (
+            ImageConfig,
+            resolve_installer_ui_default,
+            resolve_platform_defaults,
+        )
         # graphical stays False (default): this is the headless single-build command
         # channel — its sudo prefix is a literal `sudo ` the callers strip (test_headless
         # removeprefix, build-matrix check.sh ${cmdline#sudo }), never `sudo -A`/pkexec.
@@ -128,6 +132,14 @@ def main(argv=None) -> int:
             # `--flavor both` and build TWO ISOs the worker can't disambiguate (G2). Same
             # #337 resolver the materialize path uses; in-place mutation is safe here.
             resolve_platform_defaults(cfg)
+            # Role-class twin of the above, same reason: this flat path bypasses
+            # worklist._materialize_one, so without it a headless x86 node would print
+            # `--installer-ui all` and pull an UNSATISFIABLE app-admin/calamares (the
+            # desktop USE closure is ROLE_CLIENT-gated). The note goes to STDERR — stdout
+            # here IS the argv channel and any extra byte corrupts every consumer.
+            note = resolve_installer_ui_default(cfg)
+            if note:
+                print(f"warning: {note}", file=sys.stderr)
             print(driver.command_string(cfg, backend))
         except (ValueError, OSError) as exc:
             # ValueError: bad JSON / non-dict config / envelope-vs-flat mismatch /
