@@ -135,14 +135,11 @@ class WorklistDriver:
         return BuildDriver(self.generator_dir, self.host, graphical=self.graphical,
                            workdir=self.workdir).command_string(cfg, backend or self.backend)
 
-    def preflight(self) -> list[str]:
-        """Aggregate preflight: a problem common to EVERY image is reported once
-        (unlabelled); an image-specific problem is prefixed ``[<entry.id>]``. Empty = OK.
-        This is what the Review page's problems pane renders and isComplete() keys on."""
-        per_entry = [(entry.id, BuildDriver(self.generator_dir, self.host,
-                        graphical=self.graphical, workdir=self.workdir)
-                      .preflight(cfg, self.backend))
-                     for entry, cfg in self.materialize()]
+    @staticmethod
+    def _aggregate_per_entry(per_entry: list[tuple[str, list[str]]]) -> list[str]:
+        """Shared dedupe shape for preflight() and preflight_warnings(): a message
+        common to EVERY image is reported once (unlabelled); an image-specific one is
+        prefixed ``[<entry.id>]``."""
         if len(per_entry) <= 1:
             return per_entry[0][1] if per_entry else []
         n = len(per_entry)
@@ -161,6 +158,27 @@ class WorklistDriver:
                 else:
                     out.append(f"[{eid}] {p}")
         return out
+
+    def preflight(self) -> list[str]:
+        """Aggregate preflight problems (empty = OK) — the BLOCKING channel: this is
+        what the Review page's problems pane renders and isComplete() keys on, and
+        what ProgressPage refuses dispatch over."""
+        per_entry = [(entry.id, BuildDriver(self.generator_dir, self.host,
+                        graphical=self.graphical, workdir=self.workdir)
+                      .preflight(cfg, self.backend))
+                     for entry, cfg in self.materialize()]
+        return self._aggregate_per_entry(per_entry)
+
+    def preflight_warnings(self) -> list[str]:
+        """Aggregate ADVISORY warnings (see BuildDriver.preflight_warnings) — the
+        parallel non-blocking channel: rendered alongside the problems pane and
+        written as leading Progress log lines, gating NOTHING and throttling
+        nothing. Same dedupe shape as preflight()."""
+        per_entry = [(entry.id, BuildDriver(self.generator_dir, self.host,
+                        graphical=self.graphical, workdir=self.workdir)
+                      .preflight_warnings(cfg, self.backend))
+                     for entry, cfg in self.materialize()]
+        return self._aggregate_per_entry(per_entry)
 
     # ---- mesh manifest v2 (design 2.6) ------------------------------------
     def manifest_v2(self) -> dict:

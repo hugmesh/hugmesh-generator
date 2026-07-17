@@ -88,7 +88,9 @@ class _PreflightWorker(QtCore.QThread):
     run on the Qt main event loop from BuildPage._preview(), stalling the wizard AND the
     shared-process tray for up to ~16s on a slow docker daemon. Carries a monotonically
     increasing req_id so the GUI slot can drop stale results from rapid config changes."""
-    done = Signal(object, bool, int)     # (problems: list[str], image_missing: bool, req_id)
+    # (problems: list[str], image_missing: bool, req_id, warnings: list[str]) — warnings
+    # ride LAST so pre-existing 3-arg callers/tests of the slot stay valid.
+    done = Signal(object, bool, int, object)
 
     def __init__(self, generator_dir, worklist, host, backend, driver, req_id):
         super().__init__()
@@ -100,16 +102,27 @@ class _PreflightWorker(QtCore.QThread):
         self._req_id = req_id
 
     def run(self):
+        warnings: list[str] = []
         try:
-            problems = WorklistDriver(self._generator_dir, self._worklist,
-                                      host=self._host, backend=self._backend).preflight()
+            drv = WorklistDriver(self._generator_dir, self._worklist,
+                                 host=self._host, backend=self._backend)
+            problems = drv.preflight()
         except Exception as e:
             problems = [f"cannot assemble the build: {e}"]
+        else:
+            # advisory low-memory warnings (2026-07-15 freeze guard) — a PARALLEL
+            # channel: rendered under the problems pane, never fed to _set_problems,
+            # so the Build button never gates on one. A warning-channel failure must
+            # never clobber the problems result — warnings just stay empty.
+            try:
+                warnings = drv.preflight_warnings()
+            except Exception:
+                warnings = []
         try:
             image_missing = self._driver.builder_image_missing(self._backend)
         except Exception:
             image_missing = False
-        self.done.emit(problems, image_missing, self._req_id)
+        self.done.emit(problems, image_missing, self._req_id, warnings)
 
 
 class BuildPage(QtWidgets.QWizardPage):
@@ -556,18 +569,26 @@ class BuildPage(QtWidgets.QWizardPage):
         self._preflight_worker.done.connect(self._on_preflight_done)
         self._preflight_worker.start()
 
-    def _on_preflight_done(self, problems, image_missing: bool, req_id: int) -> None:
+    def _on_preflight_done(self, problems, image_missing: bool, req_id: int,
+                           warnings=()) -> None:
         """GUI-thread slot: apply the probe result, or drop it (and re-fire) if a newer
-        config change has superseded this req_id."""
+        config change has superseded this req_id. ``warnings`` are advisory (low-memory
+        guard): rendered as text ONLY — never routed through _set_problems, so
+        isComplete()/the Build button never gate on one."""
         if req_id != self._recompute_gen:
             self._recompute_timer.start()            # a newer request is pending — run it
             return
         self._set_problems(list(problems))
         self.build_image_btn.setVisible(bool(image_missing))
         if self._problems:
-            self.log.setPlainText("Preflight:\n  - " + "\n  - ".join(self._problems))
+            text = "Preflight:\n  - " + "\n  - ".join(self._problems)
         else:
-            self.log.setPlainText("Preflight OK.")
+            text = "Preflight OK."
+        warns = list(warnings)
+        if warns:
+            text += ("\nWarnings (advisory — the build is not blocked):\n  - "
+                     + "\n  - ".join(warns))
+        self.log.setPlainText(text)
         self._set_busy(False)
 
     def _set_busy(self, busy: bool) -> None:

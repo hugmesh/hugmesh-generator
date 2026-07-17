@@ -88,6 +88,31 @@ This headless path is what the build-matrix harness (`make matrix-check` at
 the repo root) drives to prove the GUI channel agrees with the
 CLI/make/menu/job channels on every matrix cell.
 
+## Memory guard (2026-07-15 host-freeze incident)
+
+A dockerized build runs under a **container memory cap** by default
+(`--memory`/`--memory-swap`, equal — zero container swap), so a runaway compile
+OOMs the *container* with an honest build failure instead of freezing the host.
+The default is `max(2 GiB, min(MemTotal − 4 GiB, 75% of MemTotal))`; the cap is
+always visible verbatim in the command preview. Override with
+`SNAPDRAGON_BUILD_MEMORY` (`16g`/`8192m` — a docker size string; `0`/`off`/`none`
+disables the cap entirely).
+
+A **fresh** config's parallel-jobs default is host-aware —
+`max(2, min(cores, MemAvailable_GiB / 2))`, override with `SNAPDRAGON_BUILD_JOBS`
+— but a saved config's explicit `jobs` value is always used verbatim. When the
+host looks memory-tight at dispatch (< 4 GiB available, or swap > 90% full) the
+Review/Progress pages show an advisory **warning** (never a block, never a
+silent throttle) — computed from a fresh `/proc/meminfo` reading at each
+preflight, not a Studio-launch snapshot, because memory filling up *during* a
+session is exactly the incident signature. A docker build killed by the cap
+exits 137 (a bare SIGKILL — docker prints nothing); the Studio appends an
+explicit log hint ("likely killed by its memory cap") naming the cap value and
+the remedies. Asymmetry, honestly: **native builds cannot be memory-capped
+by the Studio** — on a tight host prefer the Docker backend. On hosts without
+`/proc/meminfo` (Windows/macOS) everything degrades to the historical behavior:
+no cap, flat-8 jobs, no warnings.
+
 Tray-only (mesh-node controller):
 
 ```sh
