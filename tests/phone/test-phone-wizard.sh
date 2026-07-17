@@ -149,9 +149,13 @@ case "${1:-}" in
             'am start-user '*|'am switch-user '*) echo ok ;;
             'pm list packages') cat "${S}/packages" 2>/dev/null || echo 'package:com.tailscale.ipn' ;;
             'pm path '*)        echo 'package:/data/app/stub/base.apk' ;;
-            'ip -o addr show dev tailscale0')
+            'ip -o addr show')
+                # Real Android names the Tailscale VpnService iface tun0 (kernel
+                # tun%d), never tailscale0 — the driver now probes ALL interfaces
+                # and scopes to tun*. Fixture toggle unchanged: an empty
+                # tailscale-addr file forces the not-joined (timeout) path.
                 cat "${S}/tailscale-addr" 2>/dev/null \
-                    || printf '30: tailscale0    inet 100.64.0.7/32 scope global tailscale0\n' ;;
+                    || printf '5: tun0    inet 100.64.0.7/32 scope global tun0\\       valid_lft forever preferred_lft forever\n' ;;
             'dumpsys lock_settings'|'locksettings set-password '*) : ;;
             'dpm set-device-owner '*)
                 # Knob (${S}/dpm-fail): simulate the real one-shot AOSP
@@ -603,7 +607,7 @@ run enroll --keys-dir "${KEYS}" --out "${OUT}"
 [ "${RC}" -eq 0 ] && ok "(12) enroll (stub adb, GrapheneOS probe + tailnet join) exits 0" || { bad "(12) enroll rc=${RC}"; echo "${OUT_TXT}"; }
 has "https://headscale.phone-test.invalid" && ok "(12) join runbook names the headscale login server" \
     || bad "(12) runbook missing the login server"
-has "tailnet join VERIFIED: 100.64.0.7" && ok "(12) tailnet join verified from the stub tailscale0 CGNAT address" \
+has "tailnet join VERIFIED: 100.64.0.7" && ok "(12) tailnet join verified from the stub tun0 CGNAT address" \
     || bad "(12) join not verified"
 ! has "${AUTHKEY_VALUE}" && ok "(12) pre-auth key NOT displayed without --show-authkey" \
     || bad "(12) authkey LEAKED to output without --show-authkey"
@@ -702,7 +706,7 @@ rm -f "${STATE}/adb-getstate"
 : > "${STATE}/tailscale-addr"
 run enroll --keys-dir "${KEYS}" --out "${OUT}"
 [ "${RC}" -eq 1 ] && has "device never got a tailnet address" \
-    && ok "(18) blank tailscale0 fixture -> exit 1 within PW_JOIN_TIMEOUT (join-verify timeout fires)" \
+    && ok "(18) blank tun0 fixture -> exit 1 within PW_JOIN_TIMEOUT (join-verify timeout fires)" \
     || bad "(18) tailnet-timeout rc=${RC}, want 1"
 rm -f "${STATE}/tailscale-addr"
 
