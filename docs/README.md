@@ -41,6 +41,7 @@ The doc set for the image/infra layer. State key used throughout:
 ## Optional services & platform features
 
 - [`OPTIONAL-SERVICES.md`](OPTIONAL-SERVICES.md) — akkoma/tuwunel/phpBB/games/owncast/tube/character-studio add/remove framework (✅ build-time, 🚧 live cut-over).
+- [`MESHTASTIC-BRIDGE.md`](MESHTASTIC-BRIDGE.md) — Meshtastic LoRa mesh ↔ Matrix bridge, a DEFAULT-OFF runtime-only optional service (Matrix appservice + LoRa radio transports over USB-serial / TCP / MQTT).
 - [`EGRESS-VPN.md`](EGRESS-VPN.md) — outgoing public egress via operator `.conf`.
 - [`NODE-STORAGE.md`](NODE-STORAGE.md) — attach + register node-pinned storage.
 - [`GAMES-APPSTORE.md`](GAMES-APPSTORE.md) — per-domain FOSS game-server catalog + instance lifecycle.
@@ -52,7 +53,7 @@ The doc set for the image/infra layer. State key used throughout:
 ## Client images
 
 - [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md) — per-user device images (FD-04 ✅ shipped; FD-06/07/08 + desktop-app governance 🔭 deferred).
-- [`ENTERPRISE-PHONES.md`](ENTERPRISE-PHONES.md) — the fourth onboarding form (🚧): verified GrapheneOS onto a USB-connected Pixel → mesh enroll → escrowed enterprise profile → device-registry ingest (`scripts/phone-wizard.sh`).
+- [`ENTERPRISE-PHONES.md`](ENTERPRISE-PHONES.md) — the fourth onboarding form (✅ merged): verified GrapheneOS onto a USB-connected Pixel → attest → Headwind MDM enroll → mesh enroll → escrowed enterprise profile → device-registry ingest (`scripts/phone-wizard.sh`); real pre-deploy gaps remain (see its Deferred section).
 - [`STANDALONE-DESKTOP.md`](STANDALONE-DESKTOP.md) — hardened standalone NVIDIA desktop images (not a cluster node).
 
 ## Testing

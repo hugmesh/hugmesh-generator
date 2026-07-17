@@ -570,7 +570,12 @@ phone-ingest: ## emit the phone-ingest/v1 device-registry record (INGEST_URL=+mT
 phone-status: ## read-only: tools, device, tailnet, profile + escrow PRESENCE (never contents)
 	@bash scripts/phone-wizard.sh status $(_PHONE_ARGS)
 
-phone-wizard: ## interactive guided full phone flow (TTY): detect->fetch->flash->enroll->profile->ingest
+# TODO: no phone-mdm-enroll / phone-attest targets yet for scripts/phone-wizard.sh's
+# 'mdm-enroll'/'attest' verbs (Headwind device-owner enrollment / AttestationServer
+# pairing, #390) — only reachable via the driver directly, not `make`. See
+# docs/ENTERPRISE-PHONES.md "Deferred".
+
+phone-wizard: ## interactive guided full phone flow (TTY): detect->fetch->flash->attest->mdm-enroll->enroll->profile->ingest
 	@bash scripts/phone-wizard.sh wizard $(_PHONE_ARGS)
 
 rebuild: ## from-scratch: wipe the work dir, then build the whole default fleet

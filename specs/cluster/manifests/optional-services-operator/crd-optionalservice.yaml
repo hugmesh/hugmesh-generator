@@ -93,6 +93,13 @@ spec:
                     settable here — the controller resolves them from its built-in
                     OptionalServiceRegistry so an admin cannot repoint a slug at an
                     arbitrary manifest path.
+                  # TODO: meshbridge (#374, merged after this CRD's #326) already has a
+                  # 13a ApplicationSet element + installed-services ConfigMap key (the
+                  # same 1:1 shape this enum claims is closed at 12) but was never added
+                  # here or to seed-optionalservices.yaml -- so the live CRD-driven
+                  # add/remove path (still dark by default, app.optional-services.reconcile.enabled=false)
+                  # cannot govern it once flipped on. Needs the same enum+seed-CR
+                  # treatment #326 gave the other 12 slugs.
                   type: string
                   enum:
                     - akkoma
