@@ -219,6 +219,16 @@ RUN mkdir -p /etc/portage/package.accept_keywords && \
       '# Host-side twin of specs-*/portage/package.accept_keywords/setuptools-scm-backend.' \
       'dev-python/vcs-versioning **' \
       'dev-python/setuptools-scm **' \
+      '# HOST twins of the sysroot SELinux 3.11 userspace: libselinux-3.11 /' \
+      '# policycoreutils-3.11 pkg_postinst run HOST sefcontext_compile / semodule' \
+      '# on the ROOT!=/ merge (real jetson cross-build failure, session' \
+      '# 20260716-160638-f8c153); the 3.11 window is still ~amd64 and host tool' \
+      '# versions must be >= the target 3.11 policy toolchain.' \
+      'sys-libs/libsepol ~amd64' \
+      'sys-libs/libselinux ~amd64' \
+      '# policycoreutils-3.11 RDEPENDs >=libsemanage-3.11 (pretend-resolve proven).' \
+      'sys-libs/libsemanage ~amd64' \
+      'sys-apps/policycoreutils ~amd64' \
       > /etc/portage/package.accept_keywords/snapdragon-host-build-backends
 # Same host-half logic for USE: the tree's default PYTHON_TARGETS has moved past
 # this root's dev-lang/python:3.12, so the accepted setuptools-scm-10.2 chain
@@ -231,11 +241,20 @@ RUN mkdir -p /etc/portage/package.use && \
       '# Keep the python3.12 target enabled for host-side (BDEPEND "to /") installs —' \
       '# twin of the sysroot/chroot specs' \
       '# portage/package.use/python-targets seed (see that file for the rationale).' \
-      '*/* PYTHON_TARGETS: python3_12' \
+      '# python3_13 rides along: the image-installed python ecosystem carries the' \
+      '# 3_13 target, and a 3_12-only seed flips -python3_13 on rebuilds, wedging' \
+      '# the resolver in a setuptools-scm slot conflict (hit by the host SELinux' \
+      '# 3.11 tools emerge; additive 3_12+3_13 resolves cleanly).' \
+      '*/* PYTHON_TARGETS: python3_12 python3_13' \
       '# The 3.12 tooling cascade pulls host dev-lang/python:3.12 → util-linux[pam] →' \
       '# pam-1.7.2, whose pambase→passwdqc chain requires pam[audit] (twin of the' \
       '# sysroot package.use/pam-audit seed; harmless in the build container).' \
       'sys-libs/pam audit' \
+      '# Host policycoreutils-3.11 (SELinux 3.11 parity tools) needs the python' \
+      '# bindings halves of its dep chain (autounmask-proven pretend resolve):' \
+      '# policycoreutils -> libselinux[python], selinux-python -> audit[python].' \
+      'sys-libs/libselinux python' \
+      'sys-process/audit python' \
       > /etc/portage/package.use/snapdragon-host-build-backends
 RUN emerge --verbose --noreplace \
         sys-boot/shim \
@@ -243,7 +262,9 @@ RUN emerge --verbose --noreplace \
         app-crypt/efitools \
         sys-kernel/dracut \
         sys-apps/gptfdisk \
-        app-emulation/qemu
+        app-emulation/qemu \
+        sys-libs/libselinux \
+        sys-apps/policycoreutils
 # The repo is bind-mounted here at runtime; output at /out. No ENTRYPOINT — we
 # do NOT want to hide `make`, so the container is a thin `make` wrapper. The
 # default CMD runs the whole fleet on the NATIVE (in-container, no-sudo) path

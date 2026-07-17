@@ -1516,6 +1516,16 @@ SYSROOT="${BUILD_ROOT}/sysroot"
 ISO_DIR="${BUILD_ROOT}/isoroot"
 CHOST="x86_64-pc-linux-gnu"
 
+# Build logs (fix D, session 20260716-160638-f8c153): this builder used to have
+# NO log redirect at all — its 5 node-image runs (~16min each) of that session
+# left nothing on disk and the boost[python] wall could only be diagnosed from
+# the Studio session JSON error_tail. Mirror the ARM builders: a session-shared
+# build.log (tee -a append; what Studio's build_sessions.log_path and
+# build-menu.sh monitor) PLUS a per-image build-<entry-id>.log derived from the
+# EXISTING --build-subdir argv (wl-<entry-id> for worklist runs). No new flags.
+LOG_FILE="${WORK_DIR}/build.log"
+IMAGE_LOG_FILE="${WORK_DIR}/build-${BUILD_SUBDIR#wl-}.log"
+
 # Single, sortable UTC build stamp shared by EVERY artifact of this run, so the
 # .img / .iso / stage4 / fs tarball all carry the same identifier. Computed once
 # here at build start. Artifacts are named:
@@ -2370,6 +2380,17 @@ fi
 # ── 1. Directories ─────────────────────────────────────────────────
 banner "Preparing build directories"
 mkdir -p "${WORK_DIR}" "${BUILD_ROOT}"/{distfiles,pkgdir} "${SYSROOT}" "${ISO_DIR}"
+# Preserve the pre-log fds so secrets that must NOT be persisted can still be
+# routed to the operator's terminal (>&3) without landing in the logs — same
+# fd 3/4 idiom as the ARM builders. (Audited: LUKS_PASS is only ever written
+# to a 0600 file on the installer ISO and REDACTED in --print-plan output;
+# DEFAULT_USER_PASS is sed-substituted into sysroot config, never echoed.)
+exec 3>&1 4>&2
+exec > >(tee -a "${LOG_FILE}" "${IMAGE_LOG_FILE}") 2>&1
+info "Logging to ${LOG_FILE} (session-shared) + ${IMAGE_LOG_FILE} (this image)"
+# Run banner: the shared log interleaves runs (append) and a RESTART appends to
+# the per-image log too — keep every chunk attributable to its run.
+echo "==== ${BUILD_SUBDIR#wl-} (${BUILD_SUBDIR}) start ${BUILD_TS} brand=${BRAND} role=${ROLE} env=${ENV} ===="
 info "Work dir:   ${WORK_DIR}  (products land here)"
 info "Build root: ${BUILD_ROOT}  (per-arch sysroot/distfiles/pkgdir)"
 

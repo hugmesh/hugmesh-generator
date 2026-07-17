@@ -80,7 +80,8 @@ def test_start_writes_running_record_and_finish_updates_it(tmp_path):
     assert on_disk.log_path == os.path.join(on_disk.workdir, "build.log")
     assert on_disk.images == [{"id": "standalone-thick.x86", "role": "standalone-thick",
                                "platform": "x86", "status": "queued",
-                               "exit_code": None, "keys_ok": None}]
+                               "exit_code": None, "keys_ok": None,
+                               "log": "build-standalone-thick.x86.log"}]
 
     bs.update_image(s, 0, status="failed", exit_code=2)
     bs.finish(s, "failed", {"standalone-thick.x86": ["boom line 1", "boom line 2"]})
@@ -194,3 +195,23 @@ def test_haystack_and_matches(tmp_path):
     u = bs.UnmanagedBuild(path="/x/wl-pki.x86", role="pki", platform="x86",
                           mtime=0.0, has_log=False, log_path="")
     assert bs.matches(bs.unmanaged_haystack(u), "unknown pki")
+
+
+# ── per-image logs (fix D): the builders' build-<entry-id>.log twin ───────────────────
+def test_image_log_name_matches_builder_derivation(tmp_path):
+    # The shell side derives IMAGE_LOG_FILE="${WORK_DIR}/build-${BUILD_SUBDIR#wl-}.log"
+    # from the --build-subdir the driver already passes (wl-<entry-id>); the python
+    # side must mint the identical basename for the session record.
+    assert bs.image_log_name("edge_ai.jetson") == "build-edge_ai.jetson.log"
+    assert bs.image_log_name("standalone-thick.x86") == "build-standalone-thick.x86.log"
+
+
+def test_new_session_stamps_per_image_log_and_keeps_shared_log_path(tmp_path):
+    wl = _mesh_wl(tmp_path)
+    s = bs.new_session(wl, str(tmp_path / "gen"))
+    # shared session log: semantics UNCHANGED (every existing reader keeps working)
+    assert s.log_path == os.path.join(s.workdir, bs.LOG_NAME)
+    assert bs.LOG_NAME == "build.log"
+    # each image row carries its own on-disk log basename
+    for row, entry in zip(s.images, wl.entries):
+        assert row["log"] == f"build-{entry.id}.log"
