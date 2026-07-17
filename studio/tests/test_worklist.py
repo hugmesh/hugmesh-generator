@@ -16,6 +16,8 @@ from snapdragon_studio.core.config import (
     Domain,
     ImageConfig,
     User,
+    effective_installer_ui,
+    resolve_installer_ui_default,
     resolve_platform_defaults,
     roles_for_platform,
 )
@@ -296,6 +298,14 @@ def test_materialize_matches_hand_built_flat_config():
     flat = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
                        brand_title="Acme", org="Acme-Inc", cluster_domain="acme.example",
                        tailscale=True, sso=True, build_subdir="wl-omnibus.x86")
+    # The flat CHANNEL is app.py's --print-command, which resolves the platform AND the
+    # role-class installer-UI default before emitting — mirror it here, exactly as this
+    # test already mirrors the tailscale/sso forcing by hand. Without this the comparison
+    # would pit a resolved materialize against a RAW dataclass and the parity claim would
+    # be tested against something no channel actually emits (omnibus is a node, so the
+    # real flat channel emits `--installer-ui cli` too — verified). This still bites if
+    # the two call sites ever diverge, which is the invariant the test exists to protect.
+    resolve_installer_ui_default(flat)
     assert materialized.to_cli_args() == flat.to_cli_args()
 
 
@@ -454,6 +464,121 @@ def test_resolve_platform_defaults_is_noop_for_valid_inputs():
         before = (cfg.role, cfg.flavor)
         resolve_platform_defaults(cfg)
         assert (cfg.role, cfg.flavor) == before
+
+
+# ---- installer-UI role-class resolver (headless node -> cli) ---------------------
+# The Studio's flat `installer_ui: str = "all"` default made to_cli_args ALWAYS pass an
+# explicit value, so build-x86-host-stage4.sh:1244's `[ -z "${INSTALLER_UI}" ]` guard
+# could never fire and every headless node inherited the standalone-only "all" — pulling
+# an app-admin/calamares whose USE closure (package.use/desktop) the builder only copies
+# for ROLE_CLIENT roles (:2496). That killed 5 x86 node images on boost[python] and 5
+# more on libpwquality[python] (session 20260716-235722-54d2f7), ~16min each.
+
+X86_NODE_ROLES_UNDER_TEST = ("pki", "be", "fe", "be+gpu", "omnibus", "edge_ai")
+# The two values that flip the builder's WANT_CALAMARES true (:1246).
+CALAMARES_TRIGGERS = ("all", "calamares")
+
+
+@pytest.mark.parametrize("role", X86_NODE_ROLES_UNDER_TEST)
+@pytest.mark.parametrize("bad", CALAMARES_TRIGGERS)
+def test_installer_ui_node_rewrites_calamares_triggers_to_cli(role, bad):
+    """Every x86 node role x every WANT_CALAMARES-triggering value -> "cli" + a note.
+    Covers the (2) decision: an EXPLICIT "calamares" is overridden, not honoured — on a
+    node it is unsatisfiable, so honouring it buys a guaranteed ~16min failure."""
+    cfg = ImageConfig(mode="mesh", role=role, platform="x86", installer_ui=bad)
+    note = resolve_installer_ui_default(cfg)
+    assert cfg.installer_ui == "cli"
+    assert note and role in note        # the note names the offending role
+
+
+@pytest.mark.parametrize("mode,role", [("cloud", "laptop"), ("cloud", "chromebook"),
+                                       ("cloud", "desktop"), ("standalone", "standalone-thin"),
+                                       ("standalone", "standalone-thick"),
+                                       ("standalone", "standalone-unaffiliated")])
+def test_installer_ui_desktop_class_untouched(mode, role):
+    """Client + standalone are byte-identical: they legitimately want calamares and CAN
+    build it (ROLE_CLIENT gets package.use/desktop). The rule is one-directional."""
+    cfg = ImageConfig(mode=mode, role=role, platform="x86", installer_ui="all")
+    assert resolve_installer_ui_default(cfg) is None
+    assert cfg.installer_ui == "all"
+
+
+@pytest.mark.parametrize("plat,role", [("rpi5", "pki"), ("rpi5", "be"), ("jetson", "edge_ai")])
+def test_installer_ui_non_x86_untouched(plat, role):
+    """installer_ui is _X86-only (PLATFORM_FIELD_SUPPORT), matching the evidence that the
+    rpi5/jetson entries of the failed session survived."""
+    cfg = ImageConfig(mode="mesh", role=role, platform=plat, installer_ui="all")
+    assert resolve_installer_ui_default(cfg) is None
+    assert cfg.installer_ui == "all"
+
+
+@pytest.mark.parametrize("mode,role,plat,stored", [
+    ("mesh", "pki", "x86", "all"),          # rewritten
+    ("mesh", "pki", "x86", "ncurses"),      # NOT rewritten — the GUI's old blind spot
+    ("mesh", "pki", "rpi5", "all"),         # non-x86 no-op
+    ("cloud", "laptop", "x86", "all"),      # desktop no-op
+])
+def test_effective_installer_ui_agrees_with_the_resolver_without_mutating(mode, role, plat, stored):
+    """effective_installer_ui() is the read-only twin display surfaces ASK instead of
+    RESTATING the rule (the GUI used to hard-code "a node shows cli" and so lied for a
+    node carrying "ncurses"). Contract: it returns exactly what the resolver would leave
+    behind, and it must NOT touch the caller's cfg — the GUI calls it on the LIVE
+    wizard cfg on every page visit, so a mutation there would persist "cli" into a user's
+    saved preference and silently strip a later desktop's graphical installer."""
+    cfg = ImageConfig(mode=mode, role=role, platform=plat, installer_ui=stored)
+    got = effective_installer_ui(cfg)
+    assert cfg.installer_ui == stored           # the probe copy must be non-destructive
+    twin = ImageConfig(mode=mode, role=role, platform=plat, installer_ui=stored)
+    resolve_installer_ui_default(twin)          # what materialize really leaves behind
+    assert got == twin.installer_ui             # ...and the report matches it exactly
+
+
+@pytest.mark.parametrize("value", ["cli", "ncurses"])
+def test_installer_ui_node_non_graphical_values_are_noops(value):
+    """A node already asking for a NON-graphical front-end is left alone — neither value
+    sets WANT_CALAMARES (:1246), and ncurses is a TUI that needs no Qt/KDE closure, so
+    rewriting it would override a legitimate, satisfiable choice for no reason."""
+    cfg = ImageConfig(mode="mesh", role="pki", platform="x86", installer_ui=value)
+    assert resolve_installer_ui_default(cfg) is None
+    assert cfg.installer_ui == value
+
+
+def test_installer_ui_resolver_runs_in_materialize_for_the_real_failed_shape():
+    """END-TO-END on tonight's EXACT shape: a mesh worklist whose base carries
+    installer_ui="all" (session 20260716-235722-54d2f7), materialized. The x86 nodes must
+    emit `--installer-ui cli` in the FULL argv; the ARM entries keep "all"."""
+    base = ImageConfig(mode="mesh", installer_ui="all", installer_iso=False)
+    wl = WorklistConfig(base=base, entries=[
+        WorklistEntry(role="pki", platform="x86"),
+        WorklistEntry(role="omnibus", platform="x86"),
+        WorklistEntry(role="pki", platform="rpi5"),
+    ])
+    got = {e.id: cfg for e, cfg in wl.materialize()}
+    for eid in ("pki.x86", "omnibus.x86"):
+        args = got[eid].to_cli_args()
+        assert ("--installer-ui", "cli") in pairs_of(args), f"{eid}: {args}"
+        # the load-bearing assertion: WANT_CALAMARES can never go true
+        for trigger in CALAMARES_TRIGGERS:
+            assert ("--installer-ui", trigger) not in pairs_of(args)
+    # ARM carries no --installer-ui flag at all (strip_platform_unsupported + _X86)
+    assert "--installer-ui" not in got["pki.rpi5"].to_cli_args()
+
+
+def test_installer_ui_materialize_leaves_client_argv_byte_identical():
+    """The no-regression fence: a cloud client's materialized argv is IDENTICAL to the
+    same config's, proving the resolver cannot perturb a desktop image."""
+    base = ImageConfig(mode="cloud", installer_ui="all")
+    wl = WorklistConfig(base=base, entries=[WorklistEntry(role="laptop", platform="x86")])
+    _e, cfg = wl.materialize()[0]
+    ref = ImageConfig(mode="cloud", role="laptop", platform="x86", installer_ui="all",
+                      build_subdir="wl-laptop.x86")
+    assert cfg.to_cli_args() == ref.to_cli_args()
+    assert ("--installer-ui", "all") in pairs_of(cfg.to_cli_args())
+
+
+def pairs_of(args):
+    """argv adjacent-pair view — assert on the flag's VALUE, never a substring grep."""
+    return list(zip(args, args[1:]))
 
 
 def test_platform_default_role_map_grounded_in_catalog():

@@ -1,0 +1,35 @@
+# Headwind MDM — raw-manifests Application, cloned from apps/30-phpbb.yaml's shape
+# (source.path=specs/cluster/manifests/<dir>, not Helm like apps/03a-harbor.yaml).
+# Deploys the Deployment/Service/DB tree ONLY — no Ingress (see optional-services.yaml
+# headwind slug + apps/22-gateway-superadmin.yaml's new routes for reachability;
+# decision rationale in the Phase-1 spec §0).
+#
+# namespace snapdragon-pki is already created (idempotently) by
+# apps/06-vault-pki.yaml / apps/20-gateway-pki.yaml — CreateNamespace=true kept
+# here too for idempotency, matching every other Application in this repo.
+#
+# syncPolicy.automated.prune: false — DELIBERATE, not inherited blindly from
+# apps/30-phpbb.yaml's prune:true. snapdragon-pki is a SHARED namespace (harbor,
+# vault, casdoor, route-access-db, the pki-gateway, the superadmin-gateway all
+# co-reside here), unlike phpbb's own DEDICATED snapdragon-forum namespace, so
+# an over-broad prune has a materially worse blast radius here — matches
+# apps/03a-harbor.yaml's explicit "prune off: stateful CRDs/PVCs" rationale for
+# the SAME namespace. Confirm this choice at PR review; it is a judgment call,
+# not a fact pulled from an identical existing precedent.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-headwind
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/headwind
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-pki
+  syncPolicy:
+    automated: { prune: false, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

@@ -766,3 +766,63 @@ def test_no_warning_lines_on_a_healthy_host(monkeypatch, qapp, wiz, tmp_path):
     assert "WARNING" not in page.log.toPlainText()
     _run_to_completion(qapp, page)
     assert page.driver.results[0].status == "ok"
+
+
+# ── Back after a settled run (2026-07-17: "there's no way to go back after a build fails")
+# BuildPage is a Qt commit page, so Qt disables Back on ProgressPage. Correct mid-build;
+# a DEAD END once the run has failed — the operator could not return to Review & Build to
+# fix the config and rebuild. Back must re-arm exactly when the run settles.
+def _back_btn(wiz):
+    from snapdragon_studio.gui.qt import QtWidgets
+    return wiz.button(QtWidgets.QWizard.BackButton)
+
+
+def test_back_is_disabled_while_a_build_is_in_flight(monkeypatch, qapp, wiz, tmp_path):
+    _install_fake_builddriver(monkeypatch)
+    _install_fake_genkeys(monkeypatch)
+    _prime(wiz, _mesh_worklist(tmp_path))
+    page = _progress_page(wiz)
+    page.initializePage()
+    assert not page._all_terminal
+    assert not _back_btn(wiz).isEnabled()      # in flight -> no stepping back
+    # DRAIN the run before returning: an abandoned worker thread outlives this test,
+    # and its session record then lands in whatever $SNAPDRAGON_STUDIO_STATE_DIR the
+    # NEXT test has isolated to (each test gets its own tmp_path) — a cross-file
+    # poisoner that surfaces as a wrong session count somewhere else entirely.
+    _run_to_completion(qapp, page)
+
+
+def test_back_is_rearmed_after_a_FAILED_run_so_the_operator_can_fix_and_retry(
+        monkeypatch, qapp, wiz, tmp_path):
+    _install_fake_builddriver(monkeypatch, codes={"be": 3})
+    _install_fake_genkeys(monkeypatch)
+    _prime(wiz, _mesh_worklist(tmp_path))
+    page = _progress_page(wiz)
+    page.initializePage()
+    _run_to_completion(qapp, page)
+    assert "failed" in [page.driver.results[i].status for i in range(3)]
+    assert page._all_terminal
+    assert _back_btn(wiz).isEnabled(), "a failed build must not be a dead end"
+
+
+def test_back_is_rearmed_after_a_successful_run_too(monkeypatch, qapp, wiz, tmp_path):
+    _install_fake_builddriver(monkeypatch)
+    _install_fake_genkeys(monkeypatch)
+    _prime(wiz, _mesh_worklist(tmp_path))
+    page = _progress_page(wiz)
+    page.initializePage()
+    _run_to_completion(qapp, page)
+    assert _back_btn(wiz).isEnabled()
+
+
+def test_back_goes_off_again_when_a_new_run_starts(monkeypatch, qapp, wiz, tmp_path):
+    _install_fake_builddriver(monkeypatch, codes={"be": 3})
+    _install_fake_genkeys(monkeypatch)
+    _prime(wiz, _mesh_worklist(tmp_path))
+    page = _progress_page(wiz)
+    page.initializePage()
+    _run_to_completion(qapp, page)
+    assert _back_btn(wiz).isEnabled()
+    page.initializePage()                       # operator went back, fixed cfg, rebuilt
+    assert not _back_btn(wiz).isEnabled()
+    _run_to_completion(qapp, page)              # drain (see the in-flight test's note)

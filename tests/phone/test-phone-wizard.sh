@@ -36,8 +36,11 @@
 #        no artifact -> 2; bytes changed since fetch -> 2; old fastboot -> 2.
 #   (11) flash happy path (stubbed fastboot): flash-all.sh runs with
 #        ANDROID_SERIAL bound; unlock precedes lock; exit 0.
-#   (12) enroll: no login server -> 1; non-GrapheneOS device -> 2 (--force
-#        downgrades); tailnet join verified from stub tailscale0 addr;
+#   (12) enroll (ADDENDUM 2026-07-16 — existing-device onboarding): no login
+#        server -> 1; GrapheneOS enrolls, os=grapheneos recorded; STOCK
+#        ANDROID enrolls WITHOUT --force, os=android recorded (first-class,
+#        not a degraded path); genuinely UNDETECTABLE OS still needs --force
+#        (os=unknown); tailnet join verified from stub tailscale0 addr;
 #        enrollment.json fields; authkey NEVER shown without --show-authkey.
 #   (13) profile lifecycle: escrow 0600/0700 + passphrase shape; duplicate -> 2;
 #        rotate keeps .prev-<ts>; --pass-file honored, empty -> 1; remove
@@ -46,6 +49,26 @@
 #        mTLS identity -> 2 (fail-closed); POST goes through curl with the
 #        record; then a sweep proving NO secret (authkey, any escrowed or
 #        supplied passphrase) ever appeared on stdout/stderr or any stub argv.
+#   (15) enroll --no-usb (ADDENDUM 2026-07-16): needs --device-id (no adb
+#        serial to derive one); makes ZERO adb calls; enrollment.json is
+#        verification:"operator-attested" with tailscale_ip:null; authkey
+#        absent from stdout by default, shown once with --show-authkey.
+#   (16) Tailscale APK signer-digest pin (--apk-signer-sha256, apksigner
+#        PATH-shim stub): match -> OK; mismatch -> exit 3; apksigner missing
+#        -> exit 2; empty apksigner output -> exit 3 (fail-closed).
+#   (17) enroll's adb-unreachable precondition (get-state != device) actually
+#        triggers -> exit 2.
+#   (18) enroll's tailnet-join VERIFY timeout actually triggers (blank
+#        tailscale0 fixture) -> exit 1 within PW_JOIN_TIMEOUT.
+#   (19) flash's SEL_STATE==adb reboot-into-bootloader wait loop
+#        (PW_FASTBOOT_REAPPEAR_TIMEOUT seam): happy path (serial reappears
+#        mid-poll) and the dieout (never reappears -> exit 1, flash-all
+#        never ran).
+#   (20) fastboot unlock/lock failure branches (stub knobs fb-flashing-fail /
+#        fb-unlocked): already-unlocked fallback, unlock-fail-and-locked
+#        abort, lock-fail-leaves-device-unlocked.
+#   (21) flash-all.sh failure path: exit 1, "do NOT lock", and no
+#        'flashing lock' line ever reaches fastboot.log.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -87,12 +110,16 @@ printf 'ADB %s\n' "$*" >> "${L}/adb.log"
 case "${1:-}" in
     devices)   cat "${S}/adb-devices" 2>/dev/null || echo "List of devices attached"; exit 0 ;;
     get-state) cat "${S}/adb-getstate" 2>/dev/null || echo device; exit 0 ;;
-    reboot|install|pull) exit 0 ;;
+    reboot|install) exit 0 ;;
+    pull)
+        [ -n "${3:-}" ] && { cp "${S}/apk-fixture" "${3}" 2>/dev/null || printf 'apk-fixture-bytes\n' > "${3}"; }
+        exit 0 ;;
     shell)
         shift
         case "$*" in
             'getprop ro.product.device')            cat "${S}/codename" 2>/dev/null || echo oriole ;;
             'getprop ro.build.version.incremental') cat "${S}/incremental" 2>/dev/null || echo 2026071500 ;;
+            'getprop ro.build.version.release')     cat "${S}/release" 2>/dev/null || echo 14 ;;
             'getprop ro.build.fingerprint')         echo 'google/oriole/oriole:14/TEST/2026071500:user/release-keys' ;;
             'getprop net.hostname')                 echo phone-stub-host ;;
             getprop)                                cat "${S}/getprop-dump" 2>/dev/null || echo '[ro.gos]: [grapheneos]' ;;
@@ -125,10 +152,13 @@ case "${1:-}" in
     getvar)
         case "${2:-}" in
             product)  echo "product: $(cat "${S}/codename" 2>/dev/null || echo oriole)" >&2 ;;
-            unlocked) echo 'unlocked: yes' >&2 ;;
+            unlocked) echo "unlocked: $(cat "${S}/fb-unlocked" 2>/dev/null || echo yes)" >&2 ;;
         esac
         exit 0 ;;
-    flashing)  exit 0 ;;
+    flashing)
+        fail="$(cat "${S}/fb-flashing-fail" 2>/dev/null || true)"
+        case ",${fail}," in *",${2:-},"*) exit 1 ;; esac
+        exit 0 ;;
     *) exit 0 ;;
 esac
 EOF
@@ -152,7 +182,19 @@ f="${FX}/$(basename "${url}")"
 if [ -n "${dest}" ]; then cp "${f}" "${dest}"; else cat "${f}"; fi
 exit 0
 EOF
-chmod +x "${BIN}/adb" "${BIN}/fastboot" "${BIN}/curl"
+cat > "${BIN}/apksigner" <<'EOF'
+#!/usr/bin/env bash
+S="${PW_STUB_STATE:?}"; L="${PW_STUB_LOG_DIR:?}"
+printf 'APKSIGNER %s\n' "$*" >> "${L}/apksigner.log"
+if [ -f "${S}/apksigner-digest" ]; then
+    d="$(cat "${S}/apksigner-digest" 2>/dev/null)"
+    [ -n "${d}" ] && printf 'Signer #1 certificate SHA-256 digest: %s\n' "${d}"
+else
+    printf 'Signer #1 certificate SHA-256 digest: %s\n' "deadbeefcafef00d"
+fi
+exit 0
+EOF
+chmod +x "${BIN}/adb" "${BIN}/fastboot" "${BIN}/curl" "${BIN}/apksigner"
 
 reset_state() {
     printf 'List of devices attached\n' > "${STATE}/adb-devices"
@@ -161,8 +203,10 @@ reset_state() {
     printf '%s\n' "${CODENAME}" > "${STATE}/codename"
     printf '2026071500\n' > "${STATE}/incremental"
     printf '[ro.gos]: [grapheneos]\n' > "${STATE}/getprop-dump"
+    printf '14\n' > "${STATE}/release"
     printf 'package:com.tailscale.ipn\n' > "${STATE}/packages"
-    rm -f "${STATE}/user-created" "${STATE}/tailscale-addr" "${STATE}/adb-getstate"
+    rm -f "${STATE}/user-created" "${STATE}/tailscale-addr" "${STATE}/adb-getstate" \
+          "${STATE}/fb-flashing-fail" "${STATE}/fb-unlocked" "${STATE}/apksigner-digest"
 }
 clear_logs() { : > "${LOGD}/adb.log"; : > "${LOGD}/fastboot.log"; : > "${LOGD}/curl.log"; }
 reset_state; clear_logs; : > "${LOGD}/flash-all.log"
@@ -240,6 +284,10 @@ run not-a-verb
 [ "${RC}" -eq 1 ] && ok "(1) unknown verb -> exit 1" || bad "(1) unknown verb rc=${RC}, want 1"
 run plan --codename "${CODENAME}" --not-an-option
 [ "${RC}" -eq 1 ] && ok "(1) unknown option -> exit 1" || bad "(1) unknown option rc=${RC}, want 1"
+run plan --codename "${CODENAME}" --serial
+[ "${RC}" -eq 1 ] && has "requires a value" && ! has "unbound variable" \
+    && ok "(1) option given without its value -> clean pw_die rc 1 (not bash's unbound-variable abort)" \
+    || bad "(1) --serial-without-value rc=${RC}, out='${OUT_TXT}'"
 
 # ── (2) plan is OFFLINE + DRY-RUN, secrets only as presence markers ─────────
 clear_logs
@@ -370,6 +418,9 @@ run "PW_EXPECTED_SIGNER_FP=" plan --codename "${CODENAME}"
 run "PW_SKIP_FP_PIN=1" plan --codename "${CODENAME}"
 [ "${RC}" -eq 0 ] && [ "$(plan_val SIGNER_FP)" = "unpinned" ] && ok "(8) PW_SKIP_FP_PIN=1 -> unpinned" \
     || bad "(8) PW_SKIP_FP_PIN rc=${RC}, fp='$(plan_val SIGNER_FP)'"
+run "PW_SKIP_FP_PIN=1" "PW_ALLOWED_SIGNERS=" plan --codename "${CODENAME}"
+[ "${RC}" -eq 3 ] && ok "(8) PW_SKIP_FP_PIN=1 WITHOUT overriding ALLOWED_SIGNERS (default signers file) -> pw_die rc 3 (closes the fail-open bypass)" \
+    || bad "(8) PW_SKIP_FP_PIN=1 + default signers rc=${RC}, want 3"
 
 # ── (9) fetch idempotency + malformed metadata ───────────────────────────────
 clear_logs
@@ -427,6 +478,92 @@ LOCK_LN="$(grep -n 'flashing lock' "${LOGD}/fastboot.log" | head -n1 | cut -d: -
 grep -q -- "-s ${SERIAL_A} flashing" "${LOGD}/fastboot.log" && ok "(11) flashing verbs bound to -s <serial>" \
     || bad "(11) flashing verbs not serial-bound"
 
+# ── (19) flash: SEL_STATE==adb reboot-into-bootloader wait loop ────────────
+# Device starts up in adb (not already in fastboot) -> flash must `adb reboot
+# bootloader` then poll for the same serial to reappear in fastboot, using the
+# PW_FASTBOOT_REAPPEAR_TIMEOUT seam so the test doesn't cost real minutes.
+reset_state
+printf 'List of devices attached\n%s             device usb:1-4\n' "${SERIAL_A}" > "${STATE}/adb-devices"
+: > "${STATE}/fb-devices"
+: > "${LOGD}/flash-all.log"; : > "${LOGD}/fastboot.log"; : > "${LOGD}/adb.log"
+( sleep 1; printf '%s\tfastboot\n' "${SERIAL_A}" > "${STATE}/fb-devices" ) &
+run "PW_FASTBOOT_REAPPEAR_TIMEOUT=6" flash --work-dir "${WD}" --yes --serial "${SERIAL_A}" --force-fwupd
+wait
+[ "${RC}" -eq 0 ] && ok "(19) flash from adb state: reboot-into-bootloader happy path (serial reappears mid-poll) exits 0" \
+    || { bad "(19) adb-reboot happy path rc=${RC}"; echo "${OUT_TXT}"; }
+grep -q 'reboot bootloader' "${LOGD}/adb.log" && ok "(19) adb reboot bootloader was issued before the fastboot poll" \
+    || bad "(19) 'adb reboot bootloader' missing from adb.log"
+grep -q "serial=${SERIAL_A}" "${LOGD}/flash-all.log" \
+    && ok "(19) flash-all.sh ran once the device reappeared in fastboot" \
+    || bad "(19) flash-all.sh did not run after the device reappeared"
+
+reset_state
+printf 'List of devices attached\n%s             device usb:1-4\n' "${SERIAL_A}" > "${STATE}/adb-devices"
+: > "${STATE}/fb-devices"
+: > "${LOGD}/flash-all.log"; : > "${LOGD}/fastboot.log"
+run "PW_FASTBOOT_REAPPEAR_TIMEOUT=2" flash --work-dir "${WD}" --yes --serial "${SERIAL_A}" --force-fwupd
+[ "${RC}" -eq 1 ] && has "did not reappear in fastboot" \
+    && ok "(19) flash from adb state: device that NEVER reappears in fastboot dies (exit 1) within the shrunk timeout" \
+    || bad "(19) adb-reboot dieout rc=${RC}, out='${OUT_TXT}'"
+[ ! -s "${LOGD}/flash-all.log" ] && ok "(19) flash-all.sh never ran when the device never reappeared" \
+    || bad "(19) flash-all.sh ran despite the reappear dieout"
+
+# ── (20) flash: fastboot unlock/lock failure branches (stub knobs) ─────────
+reset_state
+printf '%s\tfastboot\n' "${SERIAL_A}" > "${STATE}/fb-devices"
+printf 'unlock\n' > "${STATE}/fb-flashing-fail"
+printf 'yes\n' > "${STATE}/fb-unlocked"
+: > "${LOGD}/flash-all.log"; : > "${LOGD}/fastboot.log"
+run flash --work-dir "${WD}" --yes --serial "${SERIAL_A}" --force-fwupd
+[ "${RC}" -eq 0 ] && has "already unlocked" \
+    && ok "(20) unlock report fails but getvar unlocked=yes -> already-unlocked-continuing" \
+    || bad "(20) unlock-fail+unlocked=yes rc=${RC}, out='${OUT_TXT}'"
+grep -q "serial=${SERIAL_A}" "${LOGD}/flash-all.log" \
+    && ok "(20) flashing proceeded via the already-unlocked fallback" || bad "(20) flash-all.sh did not run via the fallback"
+
+printf 'no\n' > "${STATE}/fb-unlocked"
+: > "${LOGD}/flash-all.log"
+run flash --work-dir "${WD}" --yes --serial "${SERIAL_A}" --force-fwupd
+[ "${RC}" -eq 1 ] && has "aborting before any flash" \
+    && ok "(20) unlock report fails and getvar unlocked=no -> exit 1, aborts before any flash" \
+    || bad "(20) unlock-fail+unlocked=no rc=${RC}, out='${OUT_TXT}'"
+[ ! -s "${LOGD}/flash-all.log" ] && ok "(20) flash-all.sh never ran after the unlock-abort" \
+    || bad "(20) flash-all.sh ran despite the unlock-abort"
+
+rm -f "${STATE}/fb-flashing-fail" "${STATE}/fb-unlocked"
+printf 'lock\n' > "${STATE}/fb-flashing-fail"
+: > "${LOGD}/flash-all.log"; : > "${LOGD}/fastboot.log"
+run flash --work-dir "${WD}" --yes --serial "${SERIAL_A}" --force-fwupd
+[ "${RC}" -eq 1 ] && has "REMAINS UNLOCKED" \
+    && ok "(20) lock report fails -> exit 1, device REMAINS UNLOCKED" \
+    || bad "(20) lock-fail rc=${RC}, out='${OUT_TXT}'"
+grep -q "serial=${SERIAL_A}" "${LOGD}/flash-all.log" \
+    && ok "(20) flash-all.sh DID run before the lock failure (flash itself succeeded)" \
+    || bad "(20) flash-all.sh did not run before the lock failure"
+rm -f "${STATE}/fb-flashing-fail" "${STATE}/fb-unlocked"
+
+# ── (21) flash: flash-all.sh failure path (partial-flash abort) ────────────
+FLASHDIR_21="${WD}/${CODENAME}-install-${VER}"
+cp "${FLASHDIR_21}/flash-all.sh" "${FLASHDIR_21}/flash-all.sh.bak"
+cat > "${FLASHDIR_21}/flash-all.sh" <<'FAEOF'
+#!/bin/sh
+printf 'FLASH-ALL FAILING serial=%s pwd=%s\n' "${ANDROID_SERIAL:-none}" "$PWD" >> "${PW_STUB_LOG_DIR:?}/flash-all.log"
+exit 7
+FAEOF
+reset_state
+printf '%s\tfastboot\n' "${SERIAL_A}" > "${STATE}/fb-devices"
+: > "${LOGD}/flash-all.log"; : > "${LOGD}/fastboot.log"
+run flash --work-dir "${WD}" --yes --serial "${SERIAL_A}" --force-fwupd
+[ "${RC}" -eq 1 ] && has "flash-all.sh FAILED" && has "do NOT lock" \
+    && ok "(21) flash-all.sh failure -> exit 1, 'do NOT lock' guidance shown" \
+    || bad "(21) flash-all-fail rc=${RC}, out='${OUT_TXT}'"
+grep -q 'flashing unlock' "${LOGD}/fastboot.log" && ok "(21) flashing-unlock WAS attempted before the flash-all failure" \
+    || bad "(21) flashing unlock missing from fastboot.log"
+! grep -q 'flashing lock' "${LOGD}/fastboot.log" \
+    && ok "(21) NO flashing-lock line reaches fastboot.log after a flash-all.sh failure (re-lock never runs)" \
+    || bad "(21) a flashing-lock line ran despite the flash-all.sh failure"
+mv "${FLASHDIR_21}/flash-all.sh.bak" "${FLASHDIR_21}/flash-all.sh"
+
 # ── (12) enroll ──────────────────────────────────────────────────────────────
 reset_state
 printf 'List of devices attached\n%s             device usb:1-4\n' "${SERIAL_A}" > "${STATE}/adb-devices"
@@ -447,22 +584,104 @@ ENR="${OUT}/device/${DEVID}/enrollment.json"
     && [ "$(jq -r '.tailscale_ip' "${ENR}")" = "100.64.0.7" ] \
     && [ "$(jq -r '.role' "${ENR}")" = "admin" ] \
     && [ "$(jq -r '.login_server' "${ENR}")" = "https://headscale.phone-test.invalid" ] \
-    && ok "(12) enrollment.json carries serial/codename/tailscale_ip/role/login_server" \
+    && [ "$(jq -r '.os' "${ENR}")" = "grapheneos" ] \
+    && [ "$(jq -r '.os_version' "${ENR}")" = "2026071500" ] \
+    && [ "$(jq -r '.verification' "${ENR}")" = "adb-heuristic" ] \
+    && ok "(12) enrollment.json carries serial/codename/tailscale_ip/role/login_server/os" \
     || bad "(12) enrollment.json missing/wrong"
 # --show-authkey is the DELIBERATE disclosure path — captured OUTSIDE the sweep.
 SHOWKEY_OUT="$(pw enroll --keys-dir "${KEYS}" --out "${OUT}" --show-authkey)"
 grep -qF -- "${AUTHKEY_VALUE}" <<<"${SHOWKEY_OUT}" && ok "(12) --show-authkey displays the key once (explicit opt-in)" \
     || bad "(12) --show-authkey did not display the key"
+# ADDENDUM 2026-07-16: stock Android is a first-class supported OS for enroll
+# — NOT a degraded/forced path. A device that looks like plain Android (no
+# GrapheneOS calendar-datestamp incremental, no 'grapheneos' in getprop, but a
+# normal ro.build.version.release) enrolls WITHOUT --force.
 printf 'eng.userdebug.1\n' > "${STATE}/incremental"
 printf '[ro.build.flavor]: [aosp]\n' > "${STATE}/getprop-dump"
+printf '14\n' > "${STATE}/release"
 run enroll --keys-dir "${KEYS}" --out "${OUT}"
-[ "${RC}" -eq 2 ] && has "does not look like GrapheneOS" \
-    && ok "(12) non-GrapheneOS device refused (exit 2, fail-closed sanity probe)" \
-    || bad "(12) non-GOS rc=${RC}, want 2"
+[ "${RC}" -eq 0 ] && has "stock Android" \
+    && ok "(12) stock-Android device enrolls WITHOUT --force (first-class OS)" \
+    || bad "(12) stock-Android enroll rc=${RC}, want 0"
+[ "$(jq -r '.os' "${ENR}")" = "android" ] && [ "$(jq -r '.os_version' "${ENR}")" = "14" ] \
+    && ok "(12) enrollment.json records os=android (+ os_version) for stock Android" \
+    || bad "(12) stock-Android enrollment.json os fields wrong"
+# A datestamp-SHAPED incremental (YYYYMMDDNN) alone must NOT be enough to
+# classify a device as GrapheneOS -- require the harder getprop marker too
+# (a common AOSP/vendor build-number convention, no GrapheneOS-unique signal).
+printf '2025011500\n' > "${STATE}/incremental"
+printf '[ro.build.flavor]: [lineage_oriole-userdebug]\n[ro.product.brand]: [lineage]\n' > "${STATE}/getprop-dump"
+printf '14\n' > "${STATE}/release"
+run enroll --keys-dir "${KEYS}" --out "${OUT}"
+[ "${RC}" -eq 0 ] && [ "$(jq -r '.os' "${ENR}")" != "grapheneos" ] \
+    && ok "(12) datestamp-shaped incremental WITHOUT a grapheneos getprop marker is NOT misclassified as grapheneos" \
+    || bad "(12) datestamp-only incremental rc=${RC}, os='$(jq -r '.os' "${ENR}" 2>/dev/null)'"
+# A genuinely UNDETECTABLE OS (no GrapheneOS signal AND no readable release
+# property) still needs --force — only "unknown" gates, never "android".
+: > "${STATE}/release"
+run enroll --keys-dir "${KEYS}" --out "${OUT}"
+[ "${RC}" -eq 2 ] && has "could not determine the device OS" \
+    && ok "(12) genuinely undetectable OS still refused without --force (exit 2)" \
+    || bad "(12) undetectable-OS rc=${RC}, want 2"
 run enroll --keys-dir "${KEYS}" --out "${OUT}" --force
-[ "${RC}" -eq 0 ] && ok "(12) --force downgrades the GrapheneOS probe to a warning" || bad "(12) --force enroll rc=${RC}"
+[ "${RC}" -eq 0 ] && [ "$(jq -r '.os' "${ENR}")" = "unknown" ] \
+    && ok "(12) --force downgrades the undetectable-OS gate to a warning (os=unknown)" \
+    || bad "(12) --force enroll rc=${RC}"
 printf '2026071500\n' > "${STATE}/incremental"
 printf '[ro.gos]: [grapheneos]\n' > "${STATE}/getprop-dump"
+printf '14\n' > "${STATE}/release"
+run enroll --keys-dir "${KEYS}" --out "${OUT}"   # regenerate enrollment.json as GrapheneOS for the downstream ingest checks
+[ "${RC}" -eq 0 ] && [ "$(jq -r '.os' "${ENR}")" = "grapheneos" ] \
+    && ok "(12) enrollment.json regenerated as os=grapheneos after restoring the default probe state" \
+    || bad "(12) enroll re-run after state restore rc=${RC}"
+
+# ── (16) enroll: Tailscale APK signer-digest pin (--apk-signer-sha256) ─────
+DIGEST_OK="deadbeefcafef00d"
+DIGEST_BAD="cafebabefeedface"
+printf '%s\n' "${DIGEST_OK}" > "${STATE}/apksigner-digest"
+run enroll --keys-dir "${KEYS}" --out "${OUT}" --apk-signer-sha256 "${DIGEST_OK}"
+[ "${RC}" -eq 0 ] && has "Tailscale APK signer pin OK" \
+    && ok "(16) --apk-signer-sha256 matching digest -> OK, enroll proceeds" \
+    || bad "(16) apk-signer match rc=${RC}, out='${OUT_TXT}'"
+run enroll --keys-dir "${KEYS}" --out "${OUT}" --apk-signer-sha256 "${DIGEST_BAD}"
+[ "${RC}" -eq 3 ] && has "signer digest MISMATCH" \
+    && ok "(16) --apk-signer-sha256 mismatched digest -> exit 3 (fail-closed supply-chain gate)" \
+    || bad "(16) apk-signer mismatch rc=${RC}, want 3, out='${OUT_TXT}'"
+: > "${STATE}/apksigner-digest"
+run enroll --keys-dir "${KEYS}" --out "${OUT}" --apk-signer-sha256 "${DIGEST_OK}"
+[ "${RC}" -eq 3 ] && ok "(16) empty/unparseable apksigner output -> exit 3 (fail-closed, not a false pass)" \
+    || bad "(16) apk-signer empty-output rc=${RC}, want 3"
+rm -f "${STATE}/apksigner-digest"
+mv "${BIN}/apksigner" "${WORK}/apksigner.hidden"
+run enroll --keys-dir "${KEYS}" --out "${OUT}" --apk-signer-sha256 "${DIGEST_OK}"
+[ "${RC}" -eq 2 ] && has "apksigner" \
+    && ok "(16) apksigner tool missing -> exit 2 (require_tool preflight)" \
+    || bad "(16) apksigner-missing rc=${RC}, want 2"
+mv "${WORK}/apksigner.hidden" "${BIN}/apksigner"
+
+# ── (17) enroll: adb-unreachable precondition actually triggers ────────────
+printf 'offline\n' > "${STATE}/adb-getstate"
+run enroll --keys-dir "${KEYS}" --out "${OUT}"
+[ "${RC}" -eq 2 ] && has "not reachable over adb" \
+    && ok "(17) adb get-state != device -> exit 2 (not-reachable handset runbook)" \
+    || bad "(17) adb-unreachable rc=${RC}, want 2"
+rm -f "${STATE}/adb-getstate"
+
+# ── (18) enroll: tailnet-join VERIFY timeout actually triggers ─────────────
+: > "${STATE}/tailscale-addr"
+run enroll --keys-dir "${KEYS}" --out "${OUT}"
+[ "${RC}" -eq 1 ] && has "device never got a tailnet address" \
+    && ok "(18) blank tailscale0 fixture -> exit 1 within PW_JOIN_TIMEOUT (join-verify timeout fires)" \
+    || bad "(18) tailnet-timeout rc=${RC}, want 1"
+rm -f "${STATE}/tailscale-addr"
+
+# Regenerate enrollment.json as GrapheneOS (default probe state) for the
+# downstream (13)/(14) checks, after the (16)-(18) state perturbations above.
+run enroll --keys-dir "${KEYS}" --out "${OUT}"
+[ "${RC}" -eq 0 ] && [ "$(jq -r '.os' "${ENR}")" = "grapheneos" ] \
+    && ok "(12) enrollment.json regenerated as os=grapheneos after the (16)-(18) probes" \
+    || bad "(12) enroll re-run after (16)-(18) rc=${RC}"
 
 # ── (13) profile lifecycle ───────────────────────────────────────────────────
 run profile --out "${OUT}"
@@ -511,6 +730,32 @@ run profile --out "${OUT}"   # recreate for ingest (fresh escrow + user)
 [ "${RC}" -eq 0 ] && ok "(13) profile re-creates cleanly after removal (re-entrant)" || bad "(13) recreate rc=${RC}"
 GEN_PASS3="$(cat "${ESCROW}" 2>/dev/null)"
 
+# ── (13) --i-understand-adb-exposure: credential-set-via-adb path ──────────
+# The ONE deliberate secret-exposure branch in the whole custody model — must
+# be exercised so a regression (flag parsing break, arg mis-order, default
+# flip) cannot silently ship undetected.
+run remove-profile --out "${OUT}" --yes
+[ "${RC}" -eq 0 ] && ok "(13) remove-profile --yes clears state ahead of the adb-exposure case" \
+    || bad "(13) pre-adb-exposure cleanup rc=${RC}"
+run profile --out "${OUT}" --i-understand-adb-exposure
+[ "${RC}" -eq 0 ] && ok "(13) profile --i-understand-adb-exposure exits 0" \
+    || { bad "(13) adb-exposure profile rc=${RC}"; echo "${OUT_TXT}"; }
+[ "$(jq -r '.set_via' "${PROF}")" = "adb" ] && ok "(13) profile.json records set_via=adb for the --i-understand-adb-exposure path" \
+    || bad "(13) set_via '$(jq -r '.set_via' "${PROF}" 2>/dev/null)', want adb"
+has "argv exposure accepted via --i-understand-adb-exposure" \
+    && ok "(13) the adb-exposure info line is shown (documented, not silently swept)" \
+    || bad "(13) missing the adb-exposure acknowledgement line"
+ADB_EXPOSURE_PASS="$(cat "${ESCROW}" 2>/dev/null)"
+grep -qF -- "${ADB_EXPOSURE_PASS}" "${LOGD}/adb.log" \
+    && ok "(13) the escrowed passphrase DOES appear in adb.log for this one opt-in path (inverse of the secret sweep, scoped here only)" \
+    || bad "(13) --i-understand-adb-exposure passphrase did NOT reach adb.log as documented"
+run remove-profile --out "${OUT}" --yes
+run profile --out "${OUT}"
+[ "${RC}" -eq 0 ] && [ "$(jq -r '.set_via' "${PROF}")" = "operator" ] \
+    && ok "(13) state restored to the default operator-set credential path after the adb-exposure case" \
+    || bad "(13) adb-exposure state restore rc=${RC}, set_via='$(jq -r '.set_via' "${PROF}" 2>/dev/null)'"
+GEN_PASS3="$(cat "${ESCROW}" 2>/dev/null)"
+
 # ── (14) ingest + SECRET SWEEP ──────────────────────────────────────────────
 run ingest --out "${OUT}"
 [ "${RC}" -eq 1 ] && ok "(14) ingest without --device-id/--serial -> exit 1" || bad "(14) bare ingest rc=${RC}, want 1"
@@ -531,6 +776,16 @@ ING="${OUT}/device/${DEVID}/ingest.json"
     && [ "$(jq -r '.enterprise_profile.credential_custody' "${ING}")" = "vault-seed" ] \
     && ok "(14) record carries the enterprise-profile presence + custody (never the secret)" \
     || bad "(14) enterprise_profile block wrong"
+# An EXPLICIT --superdomain that happens to equal the compiled-in default
+# string must still be honored over the enrollment record's (different)
+# value -- not silently treated as "not passed" and overridden.
+cp "${ENR}" "${ENR}.sdbak"
+jq '.superdomain = "corp-a.internal"' "${ENR}" > "${ENR}.tmp" && mv "${ENR}.tmp" "${ENR}"
+run ingest --device-id "${DEVID}" --out "${OUT}" --superdomain snapdragon.internal
+[ "${RC}" -eq 0 ] && [ "$(jq -r '.superdomain' "${ING}")" = "snapdragon.internal" ] \
+    && ok "(14) explicit --superdomain snapdragon.internal is honored over a differing enrollment-record value (not silently overridden)" \
+    || bad "(14) explicit-superdomain-equals-default rc=${RC}, superdomain='$(jq -r '.superdomain' "${ING}" 2>/dev/null)'"
+mv "${ENR}.sdbak" "${ENR}"
 run ingest --device-id "${DEVID}" --out "${OUT}" --ingest-url https://registry.phone-test.invalid/self-report
 [ "${RC}" -eq 2 ] && ok "(14) --ingest-url without mTLS identity -> exit 2 (fail-closed)" \
     || bad "(14) no-mTLS POST rc=${RC}, want 2"
@@ -570,6 +825,35 @@ sweep_one "generated passphrase #3" "${GEN_PASS3}"
 sweep_one "--pass-file passphrase" "${FILE_PASS}"
 [ "${LEAK}" -eq 0 ] && ok "(14) SECRET SWEEP clean: no authkey/passphrase on stdout, stderr, or any stub argv" \
     || bad "(14) SECRET SWEEP found leaks (see above)"
+
+# ── (15) enroll --no-usb (ADDENDUM 2026-07-16: guided handset-only path) ────
+clear_logs
+NOUSB_DEVID="phone-nousb-test"
+run enroll --no-usb --keys-dir "${KEYS}" --out "${OUT}"
+[ "${RC}" -eq 1 ] && ok "(15) --no-usb without --device-id -> exit 1 (no adb serial to derive one)" \
+    || bad "(15) --no-usb no-device-id rc=${RC}, want 1"
+run enroll --no-usb --keys-dir "${KEYS}" --out "${OUT}" --device-id "${NOUSB_DEVID}"
+[ "${RC}" -eq 0 ] && has "no-USB guided handset runbook" && has "NEXT STEPS" \
+    && ok "(15) --no-usb enroll exits 0 with the guided runbook + NEXT-STEPS block" \
+    || { bad "(15) --no-usb enroll rc=${RC}"; echo "${OUT_TXT}"; }
+[ ! -s "${LOGD}/adb.log" ] && ok "(15) --no-usb made ZERO adb calls (stub log stays empty)" \
+    || { bad "(15) --no-usb touched adb"; cat "${LOGD}/adb.log"; }
+! has "${AUTHKEY_VALUE}" && ok "(15) --no-usb: pre-auth key NOT shown without --show-authkey" \
+    || bad "(15) --no-usb authkey LEAKED to output"
+NOUSB_ENR="${OUT}/device/${NOUSB_DEVID}/enrollment.json"
+[ -f "${NOUSB_ENR}" ] \
+    && [ "$(jq -r '.verification' "${NOUSB_ENR}")" = "operator-attested" ] \
+    && [ "$(jq -r '.tailscale_ip' "${NOUSB_ENR}")" = "null" ] \
+    && [ "$(jq -r '.login_server' "${NOUSB_ENR}")" = "https://headscale.phone-test.invalid" ] \
+    && ok "(15) --no-usb enrollment.json is verification:operator-attested with tailscale_ip:null" \
+    || bad "(15) --no-usb enrollment.json missing/wrong"
+# --show-authkey is the DELIBERATE disclosure path — captured OUTSIDE the sweep.
+NOUSB_SHOWKEY_OUT="$(pw enroll --no-usb --keys-dir "${KEYS}" --out "${OUT}" --device-id "${NOUSB_DEVID}" --show-authkey)"
+grep -qF -- "${AUTHKEY_VALUE}" <<<"${NOUSB_SHOWKEY_OUT}" \
+    && ok "(15) --no-usb --show-authkey still displays the key once (explicit opt-in)" \
+    || bad "(15) --no-usb --show-authkey did not display the key"
+[ ! -s "${LOGD}/adb.log" ] && ok "(15) --no-usb --show-authkey run also made ZERO adb calls" \
+    || bad "(15) --no-usb --show-authkey touched adb"
 
 echo
 echo "== phone-wizard test: ${P} passed, ${F} failed =="

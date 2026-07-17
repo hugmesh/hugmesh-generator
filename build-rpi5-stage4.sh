@@ -1381,7 +1381,7 @@ gate_optional_services() {
                    warn "edge-ai-analysis requires edge-ai — dropping it (no model server selected)" ;;
             esac ;;
     esac
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio egress-vpn tor workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio headwind attestation-server egress-vpn tor workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -1510,6 +1510,37 @@ gate_optional_services() {
                 rm -rf "${tree}/manifests/workload-console-rbac"
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
                     '/bff/superadmin/workloads/**' '/bff/admin/workloads/**'
+                ;;
+            headwind)
+                # Headwind MDM (Enterprise Phones) — DEFAULT-OFF, admin-only devops
+                # service (Harbor/superadmin posture). Owns its bootstrap Application +
+                # manifests dir + per-service ESO file + TWO routes on the EXISTING
+                # tailnet superadmin-gateway (NOT be/fe — no gatewayHost of its own)
+                # + their route-access rows. When deselected the superadmin console's
+                # Headwind entry greys out (installed-services "false").
+                rm -f "${apps}/23-headwind.yaml"
+                rm -rf "${tree}/manifests/headwind"
+                rm -f "${tree}/manifests/external-secrets/headwind-externalsecrets.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" headwind-externalsecrets.yaml
+                _opt_drop_route "${apps}/22-gateway-superadmin.yaml" headwind-console headwind-checkin
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-superadmin-gateway \
+                    '/hmdm/manage/**' '/hmdm/rest/**'
+                ;;
+            attestation-server)
+                # AttestationServer (GrapheneOS Hardware Trust Root) — DEFAULT-OFF,
+                # admin-only devops service (Harbor/superadmin posture). Owns its
+                # bootstrap Application + manifests dir + per-service ESO file +
+                # THREE routes on the EXISTING tailnet superadmin-gateway (NOT be/fe
+                # — no gatewayHost of its own) + their route-access rows. When
+                # deselected the superadmin console's AttestationServer entry greys
+                # out (installed-services "false").
+                rm -f "${apps}/24-attestation-server.yaml"
+                rm -rf "${tree}/manifests/attestation-server"
+                rm -f "${tree}/manifests/external-secrets/attestation-server-externalsecrets.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" attestation-server-externalsecrets.yaml
+                _opt_drop_route "${apps}/22-gateway-superadmin.yaml" attestation-auditor attestation-status attestation-console
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-superadmin-gateway \
+                    '/attest/auditor/**' '/attest/api/status' '/attest/api/**'
                 ;;
             edge-ai)
                 # Edge-AI GPU inference service (DEFAULT-OFF, GPU-gated). Owns its
@@ -1679,7 +1710,7 @@ _opt_render_installed_services() {
     [ -f "${cm}" ] || return 0
     local slug val
     # The base optional services follow plain presence in OPTIONAL_SERVICES.
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio headwind attestation-server workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"
         # Mirror the same flag into the optional-services ApplicationSet element so the

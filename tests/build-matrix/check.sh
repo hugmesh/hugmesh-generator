@@ -539,8 +539,15 @@ check_gui() { # platform role env board flavor desktop
         standalone_probe=true
     fi
     gui_config_json "${platform}" "${role}" "${env}" "${board}" "${flavor}" "${desktop}" >"${cfg}"
+    # STDOUT ONLY into "${out}" — it is the ARGV channel: the token greps below read it and
+    # gui_plan_from_command re-runs its FIRST LINE as a real command. Merging stderr (2>&1)
+    # let any warning the Studio legitimately writes to stderr land ahead of the argv
+    # (stderr is unbuffered; a redirected stdout is block-buffered) and be executed as the
+    # command. Diagnostics are preserved: stderr is appended to the tail only on failure.
     if ! (cd studio && "${PYTHON}" -m snapdragon_studio --print-command \
-            --config "${cfg}" --backend native --generator-dir "${REPO_DIR}") >"${out}" 2>&1; then
+            --config "${cfg}" --backend native --generator-dir "${REPO_DIR}") \
+            >"${out}" 2>"${out}.err"; then
+        cat "${out}.err" >>"${out}"
         _fail GUI "${row}" "--print-command exited non-zero" "${out}"; GUI_FAIL=$((GUI_FAIL+1)); return
     fi
     local miss=""
@@ -842,8 +849,14 @@ guithr() { # NAME CFG-JSON EXPECT...
     local cfg="${TMP_DIR}/guithr.json" out="${TMP_DIR}/guithr.out" plan="${TMP_DIR}/guithr.plan"
     GUITHR_RUN=$((GUITHR_RUN+1))
     printf '%s\n' "${json}" >"${cfg}"
+    # STDOUT ONLY — see check_gui: "${out}" is the ARGV channel (the expectation greps read
+    # it and gui_plan_from_command EXECUTES its first line). A merged stderr warning became
+    # line 1 and was run as the command, failing every node-role probe with
+    # "builder-rejected-argv". Stderr still surfaces in the FAIL tail below.
     if ! (cd studio && "${PYTHON}" -m snapdragon_studio --print-command \
-            --config "${cfg}" --backend native --generator-dir "${REPO_DIR}") >"${out}" 2>&1; then
+            --config "${cfg}" --backend native --generator-dir "${REPO_DIR}") \
+            >"${out}" 2>"${out}.err"; then
+        cat "${out}.err" >>"${out}"
         _fail GUITHR "${name}" "--print-command exited non-zero" "${out}"
         THR_FAIL=$((THR_FAIL+1)); return
     fi
@@ -1465,6 +1478,7 @@ run_nongating_smokes() {
                 "host-accept-keywords:${REPO_DIR}/tests/scripts/test-host-accept-keywords.sh" \
                 "python-targets-seed:${REPO_DIR}/tests/scripts/test-python-targets-seed.sh" \
                 "calamares-boost-seed:${REPO_DIR}/tests/scripts/test-calamares-boost-seed.sh" \
+                "installer-ui-node-default:${REPO_DIR}/tests/scripts/test-installer-ui-node-default.sh" \
                 "host-selinux-tools:${REPO_DIR}/tests/scripts/test-host-selinux-tools.sh" \
                 "builder-log-paths:${REPO_DIR}/tests/scripts/test-builder-log-paths.sh" \
                 "dracut-cross-lib:${REPO_DIR}/tests/scripts/test-dracut-cross-lib.sh"; do

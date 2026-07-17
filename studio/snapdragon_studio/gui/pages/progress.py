@@ -288,6 +288,7 @@ class ProgressPage(QtWidgets.QWizardPage):
             self.log.setPlainText("No images to build.")
             self._all_terminal = True
             self.completeChanged.emit()
+            self._sync_back_button()
             return
         backend = getattr(self.wiz, "build_backend", None)
         generate_keys = getattr(self.wiz, "generate_node_keys", True)
@@ -309,6 +310,7 @@ class ProgressPage(QtWidgets.QWizardPage):
             self.log.setPlainText(f"Cannot start the build: {e}")
             self._all_terminal = True
             self.completeChanged.emit()
+            self._sync_back_button()
             return
         for i, (entry, cfg) in enumerate(materialized):
             self._build_row(i, entry.id, cfg.platform or "x86")
@@ -321,6 +323,7 @@ class ProgressPage(QtWidgets.QWizardPage):
                                   + "\n  - ".join(problems))
             self._all_terminal = True
             self.completeChanged.emit()
+            self._sync_back_button()
             return
         # ADVISORY low-memory warnings (2026-07-15 freeze guard): leading log lines
         # only, deliberately outside the blocking branch above — dispatch proceeds,
@@ -343,6 +346,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._fail_ptr = -1
         self.next_fail_btn.setEnabled(False)
         self._all_terminal = False
+        self._sync_back_button()      # a fresh run is in flight -> Back disabled again
         self._manifest_path = ""
         self._keys_done = []
         self.footer.setText("")
@@ -406,6 +410,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         if self._session is not None:         # START record: status "running" + pid
             build_sessions.start(self._session)
         self.completeChanged.emit()
+        self._sync_back_button()
         self.worker.start()
 
     # ---- slots (GUI thread) -----------------------------------------------------
@@ -515,6 +520,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._write_status()
         self._refresh_overall()
         self.completeChanged.emit()
+        self._sync_back_button()
 
     def _on_manifest(self, path: str) -> None:
         self._manifest_path = path
@@ -540,6 +546,7 @@ class ProgressPage(QtWidgets.QWizardPage):
             self._refresh_flash_targets()
             self._maybe_auto_flash()
         self.completeChanged.emit()
+        self._sync_back_button()
 
     def _finalize_session(self, status: str | None = None) -> None:
         """FINISH write for the session record (once per run): status from the driver
@@ -956,6 +963,29 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._flash_next()                    # chain the next plan assignment (if any)
 
     # ---- wizard contract --------------------------------------------------------
+    def _sync_back_button(self) -> None:
+        """Re-arm Back once the run has SETTLED, so a failed build is not a dead end.
+
+        BuildPage is a Qt commit page (build.py setCommitPage(True) — "Build" is a real
+        point of no return for the run it starts), and Qt disables Back on the page
+        FOLLOWING a commit page. That is correct while a build is in flight, but it also
+        made a FAILED build unrecoverable: the operator could not step back to Review &
+        Build to fix the config and rebuild — the whole wizard had to be redone (real
+        report 2026-07-17: "there's no way to go back after a build fails"). Once every
+        row is terminal the run is over, so nothing is left uncommitted by stepping back;
+        the next Build just starts a new run (build_sessions already models runs /
+        restarts / history).
+
+        Qt re-disables the button on each button-state update, so this is called after
+        every completeChanged emit (which triggers one) rather than a single time.
+        """
+        wiz = self.wizard()
+        if wiz is None:
+            return
+        btn = wiz.button(QtWidgets.QWizard.BackButton)
+        if btn is not None:
+            btn.setEnabled(self._all_terminal)
+
     def isComplete(self) -> bool:
         """Finish is enabled only once every image row is terminal (the run has settled)."""
         return self._all_terminal

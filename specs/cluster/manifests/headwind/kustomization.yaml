@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: snapdragon-pki
+resources:
+  - headwind-db.yaml
+  - headwind.yaml
+
+configMapGenerator:
+  - name: headwind-db-initdb
+    files:
+      - initdb/00-hardening.sql
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+# Custom build-from-source image pulls from the in-cluster Harbor registry,
+# mirroring forum/kustomization.yaml exactly (mutable :main tag; snapdragon-pki
+# is not in the Kyverno digest-pin enforced-namespace list).
+images:
+  - name: snapdragon-systems/headwind
+    newName: registry.snapdragon.systems/snapdragon/snapdragon-headwind
+    newTag: main
+patches:
+  - target: { kind: Deployment, name: headwind }
+    patch: |
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value:
+          - name: harbor-registry

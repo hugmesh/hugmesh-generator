@@ -585,6 +585,63 @@ spec:
       federationModule: null
       casdoorSeed: null
 
+    # ── headwind — Headwind MDM (Apache-2.0 Android device-owner DPC), devops-only ──
+    # Admin-only devops tool (Harbor/superadmin posture, ns snapdragon-pki),
+    # TAILNET-ONLY. Rides the EXISTING superadmin-gateway (apps/22-gateway-
+    # superadmin.yaml) for its two routes rather than owning a gatewayHost/Ingress
+    # of its own — same non-gatewayHost posture as workloadConsole immediately
+    # above, and consistent with every other non-be/fe-gateway optional-service
+    # (coturn/tube/owncast/meshbridge all set gatewayHost: null too). The
+    # superadmin console itself resolves via a LITERAL host
+    # (superadmin.snapdragon.systems) + a LAN/VPN /etc/hosts alias, never a
+    # public wildcard — the OPTIONAL headwind.<domain> friendly alias, if ever
+    # added, is an `ingress.extraHosts` entry on that SAME Application, not a
+    # second Ingress/Application.
+    - slug: headwind
+      displayName: "Headwind MDM (Enterprise Phones)"
+      namespace: snapdragon-pki
+      default: off
+      apps:
+        - apps/23-headwind.yaml
+      sharedApps: []
+      manifestPath: manifests/headwind
+      esoFile: manifests/external-secrets/headwind-externalsecrets.yaml
+      esoKeys: [headwind-db-auth, headwind-admin]
+      gatewayHost: null
+      gatewayRouteIds: [headwind-console, headwind-checkin]
+      routeAccessRows:
+        - { gateway: snapdragon-superadmin-gateway, urlPattern: /hmdm/manage/** }  # human console, ROLE_SUPERADMIN
+        - { gateway: snapdragon-superadmin-gateway, urlPattern: /hmdm/rest/**   }  # device check-in, PUBLIC (own token; network-locked)
+      federationModule: null
+      casdoorSeed: null
+
+    # ── attestation-server — GrapheneOS AttestationServer (hardware trust root) ──
+    # Verifies GrapheneOS/Auditor hardware-attestation submissions. SQLite-backed
+    # (single pod, no cluster DB engine), no Ingress — reachable only through the
+    # apps/22-gateway-superadmin.yaml routes below (tailnet-only), same posture as
+    # headwind. 3-route split: device/Auditor-app calls (PUBLIC, network-locked)
+    # vs. the browser/console (ROLE_SUPERADMIN) — /attest/api/status is
+    # device-facing despite the /api/ prefix, so it gets its own PUBLIC row and
+    # MUST be evaluated before the /attest/api/** console row.
+    - slug: attestation-server
+      displayName: "GrapheneOS AttestationServer (Hardware Trust Root)"
+      namespace: snapdragon-pki
+      default: off
+      apps:
+        - apps/24-attestation-server.yaml
+      sharedApps: []
+      manifestPath: manifests/attestation-server
+      esoFile: manifests/external-secrets/attestation-server-externalsecrets.yaml
+      esoKeys: [attestation-server-smtp]
+      gatewayHost: null
+      gatewayRouteIds: [attestation-auditor, attestation-status, attestation-console]
+      routeAccessRows:
+        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/auditor/** }  # device/Auditor-app check-in, PUBLIC (tailnet-locked)
+        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/api/status }  # device-facing despite /api/ prefix, PUBLIC — must precede /attest/api/** below
+        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/api/**     }  # human console, ROLE_SUPERADMIN
+      federationModule: null
+      casdoorSeed: null
+
     # ── anubis — proof-of-work anti-scraper gate fronting public ingress ──────
     # Anubis (github.com/TecharoHQ, ghcr.io/techarohq/anubis) sits in front of the
     # fe-gateway (TARGET=snapdragon-fe-gateway) on its :8923 PoW gate and exposes a

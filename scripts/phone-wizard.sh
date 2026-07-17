@@ -10,6 +10,13 @@
 #   encrypted GrapheneOS secondary user whose credential is escrowed into the
 #   platform's per-device vault-seed custody chain) -> ingest (device registry).
 #
+# `enroll` is ALSO a first-class standalone path for phones this wizard never
+# flashed: an already-running GrapheneOS phone OR a stock Android phone (the
+# OS probe records which, it never gates enrollment). `enroll --no-usb` drops
+# the adb dependency entirely — a guided handset runbook plus an
+# operator-attested record, for hosts with no USB/adb access to the device.
+# `flash` remains GrapheneOS/Pixel-only.
+#
 # It follows the repo's documented NON-BUILD precedent: the phone is NOT a
 # build-matrix cell, NOT a platform, NOT a WorklistEntry — like the Local Docker
 # mesh and the go-live wizard triad, this driver owns ALL the logic and the
@@ -27,7 +34,10 @@
 # escrowed under <out>/vault-seed/device/<device-id>/ — destined for Vault at
 # secret/<brand>/device/<device-id>/phone-profile — and is by DEFAULT set on the
 # handset by the operator (setting it over `adb shell` puts it in adb argv,
-# which is visible phone-side; that path requires --i-understand-adb-exposure).
+# which is visible BOTH phone-side (logcat/ps on the device) AND on THIS
+# host, in the local adb client's own argv (ps/procfs) for the life of that
+# process — a real risk on shared provisioning hosts/jump boxes/CI runners;
+# that path requires --i-understand-adb-exposure).
 #
 # Docs: docs/ENTERPRISE-PHONES.md
 set -euo pipefail
@@ -58,13 +68,14 @@ CODENAME=""
 CHANNEL="stable"
 GRAPHENE_VERSION=""
 WORK_DIR="${REPO_DIR}/out/phone-wizard"
-OUT_DIR="${REPO_DIR}/keys-out"
+OUT_DIR="${REPO_DIR}/out/phone-wizard/keys-out"
 KEYS_DIR=""
 LOGIN_SERVER=""
 AUTHKEY_FILE=""
 PASS_FILE=""
 DEVICE_ID=""
 SUPERDOMAIN="snapdragon.internal"
+SUPERDOMAIN_SET=0
 ROLE=""
 PROFILE_NAME="enterprise"
 TAILSCALE_APK=""
@@ -81,6 +92,7 @@ ADB_EXPOSURE_OK=0
 RESOLVE=0
 NO_COLOR=0
 PRINT_PLAN=0
+NO_USB=0
 
 # ── Logging (stdout is reserved for machine lines + runbooks) ──────
 C_RED=''; C_GRN=''; C_YEL=''; C_RST=''
@@ -100,6 +112,13 @@ pw_warn() { printf '%s[phone-wizard] WARN:%s %s\n' "${C_YEL}" "${C_RST}" "$*" >&
 # 4 unknown codename / requested device not found.
 pw_die() { local rc="$1"; shift; printf '%s[phone-wizard] ERROR:%s %s\n' "${C_RED}" "${C_RST}" "$*" >&2; exit "${rc}"; }
 have()   { command -v "$1" >/dev/null 2>&1; }
+
+# _need_arg <flag> <remaining-arg-count> — every value-taking option in
+# main()'s parse loop calls this before dereferencing "$2", so an option
+# given as the last argument (no value) fails through the controlled
+# usage()/pw_die() path instead of bash's own uncaught "unbound variable"
+# abort under set -u.
+_need_arg() { [ "$2" -ge 2 ] || pw_die 1 "option $1 requires a value"; }
 
 # Missing tool → exit 2, naming it + an install hint (fail-closed preflight).
 require_tool() {
@@ -137,10 +156,16 @@ Verbs:
   flash                DESTRUCTIVE: wipe the phone and flash the VERIFIED
                        artifact. Typed-serial confirmation on a TTY; non-TTY
                        requires BOTH --yes AND a matching --serial.
-  enroll               Post-first-boot (adb): guided tailnet join with keys
-                       from --keys-dir (docker-mesh-node layout) or
-                       --login-server/--authkey-file; verifies tailscale0 and
-                       writes the enrollment record.
+  enroll               Add a running phone to the mesh (freshly flashed OR an
+                       ALREADY-RUNNING GrapheneOS or stock-Android phone — the
+                       OS probe records which, it never gates enrollment;
+                       'flash' stays GrapheneOS/Pixel-only). Post-first-boot
+                       (adb): guided tailnet join with keys from --keys-dir
+                       (docker-mesh-node layout) or --login-server/
+                       --authkey-file; verifies tailscale0 and writes the
+                       enrollment record. --no-usb skips every adb probe:
+                       guided handset-only runbook, operator-attested record
+                       (tailscale_ip left null) — verify the join mesh-side.
   profile              Create the "enterprise" secondary user, generate +
                        escrow its passphrase (vault-seed custody), operator
                        sets the credential on the handset (default path).
@@ -184,13 +209,25 @@ Options:
   --client-cert F --client-key F --ca F
                          mTLS client identity + CA for --ingest-url.
   --yes                  Non-interactive confirmation (see per-verb gates).
-  --force                Downgrade the GrapheneOS sanity probe to a warning.
+  --force                Downgrade hard-requirement checks to warnings: the
+                         enroll OS-probe (OS genuinely undetectable), the
+                         flash fastboot-version preflight (version string
+                         unparsable — normally enforces GrapheneOS's
+                         >=35.0.2 requirement), and the enroll Tailscale-
+                         package-appear wait (skip confirming install).
   --force-fwupd          Proceed with flashing even if fwupd is running.
   --show-authkey         Display the pre-auth key ONCE during enroll (default:
                          never displayed; operator pastes from own custody).
+  --no-usb               enroll only: skip every adb probe. Prints a guided
+                         handset-only runbook (Tailscale install, login
+                         server, authkey custody) and records an
+                         operator-attested enrollment (tailscale_ip null) —
+                         verify the join mesh-side afterwards. Needs
+                         --device-id (no adb serial to derive one from).
   --i-understand-adb-exposure
                          Set the profile credential over adb (the passphrase
-                         lands in adb argv, visible phone-side — documented
+                         lands in adb argv — visible via ps/procfs on THIS
+                         host as well as phone-side (logcat/ps); documented
                          residual exposure; default is operator-set).
   --resolve              Allow 'plan' to resolve the version (network).
   --print-plan           Alias for the 'plan' verb (plans the given verb).
@@ -199,7 +236,8 @@ Options:
 
 Env seams (tests): PW_ADB, PW_FASTBOOT, PW_RELEASES_URL, PW_ALLOWED_SIGNERS,
   PW_EXPECTED_SIGNER_FP (empty allowed ONLY with PW_ALLOWED_SIGNERS overridden),
-  PW_SKIP_FP_PIN=1, PW_JOIN_TIMEOUT, PW_POLL_INTERVAL.
+  PW_SKIP_FP_PIN=1, PW_JOIN_TIMEOUT, PW_POLL_INTERVAL,
+  PW_FASTBOOT_REAPPEAR_TIMEOUT.
 
 Exit codes:
   0 success   1 usage/runtime error   2 missing tool / precondition / refused
@@ -217,6 +255,20 @@ now_ts()  { date -u '+%Y%m%dT%H%M%SZ'; }
 # segment allows (mirrors gen-provision-keys.sh DEVICE_ID sanitation).
 sanitize_id() {
     printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | tr -s '-' | sed -e 's/^-*//' -e 's/-*$//'
+}
+
+# POSIX single-quote-escape a value for interpolation into a REMOTE shell
+# command string (adb shell re-joins argv into one command line device-side —
+# local bash argv-array separation does not survive the trip). Used anywhere
+# a secret/operator value must be handed to `adb shell` safely.
+quote_for_remote_sh() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+
+# Fail-closed --profile-name charset gate: this value is interpolated into a
+# `pm create-user` remote-shell command and (via profile_user_id) used to
+# match an on-device user — restrict it to a safe, unambiguous charset so
+# neither trip can be abused.
+validate_profile_name() {
+    [[ "${PROFILE_NAME}" =~ ^[A-Za-z0-9_-]+$ ]] || pw_die 1 "invalid --profile-name '${PROFILE_NAME}' (must match [A-Za-z0-9_-]+)"
 }
 
 # Resolve DEVICE_ID: explicit --device-id (sanitized) wins; else derive from
@@ -253,11 +305,12 @@ validate_channel() {
 # trusting the DEFAULT allowed_signers file is refused — an empty pin is only
 # meaningful when the test harness supplies its own signers file.
 effective_signer_fp() {
+    local fp
     if [ "${PW_SKIP_FP_PIN:-0}" = "1" ]; then
-        printf ''
-        return 0
+        fp=""
+    else
+        fp="${PW_EXPECTED_SIGNER_FP-${GRAPHENE_SIGNER_FP_PIN}}"
     fi
-    local fp="${PW_EXPECTED_SIGNER_FP-${GRAPHENE_SIGNER_FP_PIN}}"
     if [ -z "${fp}" ] && [ -z "${PW_ALLOWED_SIGNERS:-}" ]; then
         pw_die 3 "refusing to skip the signer fingerprint pin while using the default allowed_signers (${ALLOWED_SIGNERS}); override PW_ALLOWED_SIGNERS too, or set PW_SKIP_FP_PIN=1"
     fi
@@ -353,6 +406,32 @@ probe_codename() {
     fi
 }
 
+# OS probe (best-effort; ADDENDUM 2026-07-16): identify GrapheneOS vs stock
+# Android vs a genuinely undetectable OS over adb. Sets OS_ID
+# (grapheneos|android|unknown) + OS_VERSION (GrapheneOS's calendar-datestamp
+# incremental, or the Android release number — whichever was actually read).
+# Never fatal here: callers decide whether "unknown" gates behind --force.
+OS_ID=""
+OS_VERSION=""
+probe_os() {
+    local s="$1" incr relnum has_gos_marker=1
+    OS_ID="unknown"; OS_VERSION=""
+    incr="$("${ADB}" -s "${s}" shell getprop ro.build.version.incremental 2>/dev/null | tr -d '\r\n' || true)"
+    # The bare YYYYMMDDNN datestamp shape is NOT GrapheneOS-unique (common on
+    # other AOSP-derived/vendor ROMs) — require it AND a harder GrapheneOS-
+    # specific getprop marker, not either alone, so a non-GrapheneOS ROM with
+    # a datestamp-shaped incremental can't be misclassified.
+    "${ADB}" -s "${s}" shell getprop 2>/dev/null | grep -qi grapheneos || has_gos_marker=0
+    if [[ "${incr}" =~ ^20[0-9]{8}$ ]] && [ "${has_gos_marker}" -eq 1 ]; then
+        OS_ID="grapheneos"; OS_VERSION="${incr}"
+        return 0
+    fi
+    relnum="$("${ADB}" -s "${s}" shell getprop ro.build.version.release 2>/dev/null | tr -d '\r\n' || true)"
+    if [ -n "${relnum}" ]; then
+        OS_ID="android"; OS_VERSION="${relnum}"
+    fi
+}
+
 # ── Artifact naming / verification ─────────────────────────────────
 zip_path()    { printf '%s/%s-install-%s.zip' "${WORK_DIR}" "${CODENAME}" "$1"; }
 version_cache_path() { printf '%s/.resolved-%s-%s' "${WORK_DIR}" "${CODENAME}" "${CHANNEL}"; }
@@ -443,10 +522,13 @@ resolve_passphrase() {
 
 # ── pm list users parsing ──────────────────────────────────────────
 # Lines look like: "	UserInfo{10:enterprise:410}". Prints the id for <name>.
+# Parsed with awk + PLAIN STRING equality (not a regex/sed match) so a name
+# containing regex metacharacters (., *, [, …) can never match a DIFFERENT
+# on-device user than the one literally named.
 profile_user_id() {
     local s="$1" name="$2"
     "${ADB}" -s "${s}" shell pm list users 2>/dev/null | tr -d '\r' \
-        | sed -nE "s/^.*UserInfo\{([0-9]+):${name}:[^}]*\}.*$/\1/p" | head -n1
+        | awk -F'[{:}]' -v n="${name}" '$0 ~ /UserInfo\{/ && $3 == n { print $2; exit }'
 }
 
 # ── verb: plan ─────────────────────────────────────────────────────
@@ -497,7 +579,11 @@ cmd_plan() {
         wizard)  steps="detect,fetch,flash,enroll,profile,ingest" ;;
         fetch)   steps="resolve-version,download,verify,extract" ;;
         flash)   steps="preflight,detect,verify-artifact,confirm,unlock,flash-all,lock" ;;
-        enroll)  steps="adb-sanity,tailscale-app,join-runbook,verify-join,record" ;;
+        enroll)  if [ "${NO_USB}" -eq 1 ]; then
+                     steps="join-runbook,record-operator-attested"
+                 else
+                     steps="adb-sanity,tailscale-app,join-runbook,verify-join,record"
+                 fi ;;
         profile) steps="create-user,start-user,escrow,set-credential,record" ;;
         detect|status|ingest|plan|rotate-profile-pass|remove-profile) steps="${target}" ;;
         *) pw_die 1 "plan: unknown target verb '${target}' (see --help)" ;;
@@ -560,6 +646,13 @@ cmd_fetch() {
 
     mkdir -p "${WORK_DIR}"
 
+    # Track whether GRAPHENE_VERSION came from an explicit --graphene-version
+    # pin on THIS invocation, so a one-off pin (e.g. downgrade testing) never
+    # poisons the shared per-channel cache read by every future unpinned
+    # fetch/flash for this codename+channel.
+    local user_pinned=0
+    [ -n "${GRAPHENE_VERSION}" ] && user_pinned=1
+
     # Version: explicit pin > cached resolution (kept next to its verified zip,
     # so a re-fetch is fully offline/idempotent) > live channel metadata.
     if [ -z "${GRAPHENE_VERSION}" ] && [ -f "$(version_cache_path)" ]; then
@@ -596,7 +689,10 @@ cmd_fetch() {
     # Refresh the marker set: exactly ONE marker, matching the current bytes.
     rm -f "${zip}".verified-* 2>/dev/null || true
     : > "${marker}"
-    printf '%s\n' "${GRAPHENE_VERSION}" > "$(version_cache_path)"
+    # Never let an explicit one-off --graphene-version pin overwrite the
+    # shared per-channel cache — only organically-resolved (cache-hit or
+    # live channel-lookup) versions get persisted for future unpinned runs.
+    [ "${user_pinned}" -eq 1 ] || printf '%s\n' "${GRAPHENE_VERSION}" > "$(version_cache_path)"
 
     if ! find_flash_dir >/dev/null; then
         require_tool bsdtar "install app-arch/libarchive"
@@ -685,14 +781,17 @@ cmd_flash() {
     if [ "${SEL_STATE}" = "adb" ]; then
         pw_info "rebooting ${s} into the bootloader"
         "${ADB}" -s "${s}" reboot bootloader || pw_die 1 "adb reboot bootloader failed"
+        # Env seams (tests shrink these): PW_FASTBOOT_REAPPEAR_TIMEOUT,
+        # PW_POLL_INTERVAL (shared with the enroll tailnet-join poll).
+        local reappear_timeout="${PW_FASTBOOT_REAPPEAR_TIMEOUT:-120}"
         local waited=0
         while :; do
             list_devices
             local found=0 fb
             for fb in ${FB_SERIALS[@]+"${FB_SERIALS[@]}"}; do [ "${fb}" = "${s}" ] && found=1; done
             [ "${found}" -eq 1 ] && break
-            waited=$((waited + 2)); sleep 2
-            [ "${waited}" -lt 120 ] || pw_die 1 "device ${s} did not reappear in fastboot within 120s"
+            waited=$((waited + POLL_INTERVAL)); sleep "${POLL_INTERVAL}"
+            [ "${waited}" -lt "${reappear_timeout}" ] || pw_die 1 "device ${s} did not reappear in fastboot within ${reappear_timeout}s"
         done
     fi
 
@@ -740,12 +839,87 @@ cmd_flash() {
     pw_info "Developer options + USB debugging (Owner profile) and run 'enroll'."
 }
 
+# ── verb: enroll (--no-usb variant) ─────────────────────────────────
+# Guided handset-only runbook (operator + handset, no adb whatsoever): for
+# hosts with no USB/adb access to the device, or an operator who would rather
+# not tether it. Records an OPERATOR-ATTESTED enrollment (verification field)
+# with tailscale_ip left null — the wizard did not verify the join itself;
+# the operator verifies it mesh-side (headscale / superadmin UI) afterwards.
+cmd_enroll_no_usb() {
+    resolve_device_id
+    [ -n "${DEVICE_ID}" ] || pw_die 1 "--no-usb enroll needs --device-id (there is no adb serial to derive one from)"
+
+    echo
+    echo "== no-USB guided handset runbook (operator + handset only; no adb) =="
+    echo "  Every adb probe is skipped in this mode. Perform these steps"
+    echo "  directly on the handset, then verify the join MESH-SIDE afterwards"
+    echo "  (see NEXT STEPS below) — this wizard cannot confirm it for you."
+    echo
+    echo "  1. Install Tailscale on the handset (Play Store 'Tailscale', or a"
+    echo "     vetted APK from your own custody)."
+    echo "  2. Open Tailscale -> Settings -> Accounts -> use a CUSTOM"
+    echo "     coordination server:  ${LOGIN_SERVER}"
+    echo "  3. Authenticate with the one-time pre-auth key (SEC-08: single-use,"
+    echo "     24h expiry — mint a fresh one if it is stale), or via Casdoor"
+    echo "     OIDC with the snapdragon/headscale group."
+    if [ "${SHOW_AUTHKEY}" -eq 1 ]; then
+        if [ -n "${AUTHKEY_FILE}" ] && [ -f "${AUTHKEY_FILE}" ]; then
+            echo "  --show-authkey: the pre-auth key follows on the NEXT line (shown once):"
+            cat "${AUTHKEY_FILE}"
+        else
+            pw_warn "--show-authkey given but no authkey file resolved (--authkey-file / keys-dir)"
+        fi
+    else
+        echo "     (pre-auth key NOT displayed — paste it from your own custody, or"
+        echo "      re-run with --show-authkey)"
+    fi
+    echo "  4. ADR-14 register-and-approve: the node registers as PENDING and"
+    echo "     only joins after a superadmin approves it in the superadmin UI."
+    echo
+
+    local rec_dir="${OUT_DIR}/device/${DEVICE_ID}" rec
+    mkdir -p "${rec_dir}"
+    rec="${rec_dir}/enrollment.json"
+    jq -n \
+        --arg device_id "${DEVICE_ID}" \
+        --arg serial "${SERIAL}" \
+        --arg codename "${CODENAME}" \
+        --arg superdomain "${SUPERDOMAIN}" \
+        --arg login_server "${LOGIN_SERVER}" \
+        --arg role "${ROLE}" \
+        --arg attached_domain "${ATTACHED_DOMAIN}" \
+        --arg enrolled_at "$(now_iso)" \
+        '{device_id:$device_id, serial:$serial, codename:$codename, os:"unknown",
+          os_version:"", superdomain:$superdomain, login_server:$login_server,
+          tailscale_ip:null, role:$role, attached_domain:$attached_domain,
+          enrolled_at:$enrolled_at, verification:"operator-attested"}' \
+        > "${rec}"
+    pw_info "enrollment record written (operator-attested, no-usb): ${rec}"
+
+    echo
+    echo "== NEXT STEPS: verify the join mesh-side (no adb probe was run) =="
+    echo "  1. In the superadmin UI, approve the PENDING node (ADR-14) once it"
+    echo "     registers — the handset's Tailscale app shows 'Connected' after."
+    echo "  2. Confirm the device appears with a 100.64/10 tailnet address"
+    echo "     (headscale nodes list, or the superadmin mesh-devices view)."
+    echo "  3. Once verified, run 'ingest' (add --ingest-url to publish it) to"
+    echo "     record the device. 'profile' still needs adb if you also want"
+    echo "     the escrowed enterprise-profile container on this handset."
+    echo
+}
+
 # ── verb: enroll ───────────────────────────────────────────────────
 cmd_enroll() {
-    require_android_tools
     require_jq
     resolve_keys
     [ -n "${LOGIN_SERVER}" ] || pw_die 1 "no login server — pass --login-server URL or --keys-dir with a login-server file"
+
+    if [ "${NO_USB}" -eq 1 ]; then
+        cmd_enroll_no_usb
+        return 0
+    fi
+
+    require_android_tools
 
     # Device must be up in adb (Owner profile, USB debugging enabled).
     choose_device
@@ -770,18 +944,20 @@ cmd_enroll() {
     SERIAL="${s}"
     resolve_device_id
 
-    # (1) Sanity: is this actually GrapheneOS? (best-effort probe; fail-closed,
-    # --force downgrades to a warning).
-    local incr havegos=0
-    incr="$("${ADB}" -s "${s}" shell getprop ro.build.version.incremental 2>/dev/null | tr -d '\r\n' || true)"
-    [[ "${incr}" =~ ^20[0-9]{8}$ ]] && havegos=1
-    if [ "${havegos}" -eq 0 ] && "${ADB}" -s "${s}" shell getprop 2>/dev/null | grep -qi grapheneos; then
-        havegos=1
-    fi
-    if [ "${havegos}" -eq 0 ]; then
-        [ "${FORCE}" -eq 1 ] || pw_die 2 "device does not look like GrapheneOS (ro.build.version.incremental='${incr}') — flash it first, or pass --force to enroll anyway"
-        pw_warn "device does not look like GrapheneOS — continuing under --force"
-    fi
+    # (1) OS probe (ADDENDUM 2026-07-16): GrapheneOS and stock Android are
+    # BOTH first-class supported OSes for enroll — this wizard onboards
+    # ALREADY-RUNNING phones, not only ones it flashed itself. The probe
+    # records os/os_version below; it only GATES when the OS is genuinely
+    # undetectable ('unknown'), and --force downgrades even that to a warning.
+    probe_os "${s}"
+    case "${OS_ID}" in
+        grapheneos) : ;;
+        android)    pw_info "device OS: stock Android${OS_VERSION:+ ${OS_VERSION}} — supported for enroll ('flash' remains GrapheneOS/Pixel-only)" ;;
+        unknown)
+            [ "${FORCE}" -eq 1 ] || pw_die 2 "could not determine the device OS (adb getprop returned nothing usable) — pass --force to enroll anyway"
+            pw_warn "device OS could not be determined — continuing under --force (recorded as os=unknown)"
+            ;;
+    esac
 
     # (2) Tailscale app.
     local pkg="com.tailscale.ipn"
@@ -875,16 +1051,19 @@ cmd_enroll() {
         --arg device_id "${DEVICE_ID}" \
         --arg serial "${s}" \
         --arg codename "${CODENAME}" \
+        --arg os "${OS_ID}" \
+        --arg os_version "${OS_VERSION}" \
         --arg superdomain "${SUPERDOMAIN}" \
         --arg login_server "${LOGIN_SERVER}" \
         --arg tailscale_ip "${addr}" \
         --arg role "${ROLE}" \
         --arg attached_domain "${ATTACHED_DOMAIN}" \
         --arg enrolled_at "$(now_iso)" \
-        '{device_id:$device_id, serial:$serial, codename:$codename,
-          superdomain:$superdomain, login_server:$login_server,
+        '{device_id:$device_id, serial:$serial, codename:$codename, os:$os,
+          os_version:$os_version, superdomain:$superdomain, login_server:$login_server,
           tailscale_ip:$tailscale_ip, role:$role,
-          attached_domain:$attached_domain, enrolled_at:$enrolled_at}' \
+          attached_domain:$attached_domain, enrolled_at:$enrolled_at,
+          verification:"adb-heuristic"}' \
         > "${rec}"
     pw_info "enrollment record written: ${rec}"
 }
@@ -897,11 +1076,23 @@ set_profile_credential() {
     local s="$1" uid="$2"
     SET_VIA="operator"
     if [ "${ADB_EXPOSURE_OK}" -eq 1 ]; then
-        # DOCUMENTED RESIDUAL EXPOSURE: adb shell argv is visible phone-side
-        # (logcat/ps). Gated behind --i-understand-adb-exposure; see
-        # docs/ENTERPRISE-PHONES.md.
-        pw_info "setting the profile credential over adb (user ${uid}) — argv exposure accepted via --i-understand-adb-exposure"
-        "${ADB}" -s "${s}" shell locksettings set-password --user "${uid}" "${PASS_VALUE}" >/dev/null \
+        # DOCUMENTED RESIDUAL EXPOSURE: adb shell argv is visible BOTH
+        # phone-side (logcat/ps on the device) AND on THIS host, in the local
+        # adb client's own argv (ps auxww / /proc/<pid>/cmdline) for the life
+        # of the adb child process — a real risk on shared provisioning
+        # workstations, jump boxes, or CI runners. Gated behind
+        # --i-understand-adb-exposure; see docs/ENTERPRISE-PHONES.md.
+        #
+        # `adb shell` re-joins all post-'shell' argv elements into ONE remote
+        # command line that the device's shell re-parses (local bash argv-
+        # array separation does not survive the trip) — so PASS_VALUE must be
+        # single-quote-escaped and passed as one pre-quoted command string,
+        # never as a bare argv element, or shell metacharacters in a strong
+        # passphrase become live remote-shell syntax (command injection).
+        pw_info "setting the profile credential over adb (user ${uid}) — argv exposure accepted via --i-understand-adb-exposure (visible on this host's process table too)"
+        local q_pass
+        q_pass="$(quote_for_remote_sh "${PASS_VALUE}")"
+        "${ADB}" -s "${s}" shell "locksettings set-password --user ${uid} ${q_pass}" >/dev/null \
             || pw_die 1 "locksettings set-password failed for user ${uid}"
         SET_VIA="adb"
     else
@@ -1065,6 +1256,7 @@ cmd_ingest() {
     local enr="${rec_dir}/enrollment.json" prof="${rec_dir}/profile.json"
     local serial="${SERIAL}" codename="${CODENAME}" login_server="${LOGIN_SERVER}"
     local ts_ip="" enrolled_at="" attached="${ATTACHED_DOMAIN}" role="${ROLE}"
+    local os_id="" os_version=""
     if [ -f "${enr}" ]; then
         serial="${serial:-$(jq -r '.serial // empty' "${enr}")}"
         codename="${codename:-$(jq -r '.codename // empty' "${enr}")}"
@@ -1073,20 +1265,28 @@ cmd_ingest() {
         enrolled_at="$(jq -r '.enrolled_at // empty' "${enr}")"
         attached="${attached:-$(jq -r '.attached_domain // empty' "${enr}")}"
         role="$(jq -r --arg d "${role}" '.role // $d' "${enr}")"
-        [ "${SUPERDOMAIN}" = "snapdragon.internal" ] && SUPERDOMAIN="$(jq -r --arg d "${SUPERDOMAIN}" '.superdomain // $d' "${enr}")"
+        os_id="$(jq -r '.os // empty' "${enr}")"
+        os_version="$(jq -r '.os_version // empty' "${enr}")"
+        [ "${SUPERDOMAIN_SET}" -eq 0 ] && SUPERDOMAIN="$(jq -r --arg d "${SUPERDOMAIN}" '.superdomain // $d' "${enr}")"
     fi
     [ -n "${codename}" ] || pw_die 1 "cannot resolve the codename — pass --codename or run enroll first"
     CODENAME="${codename}"
     require_codename
 
     # Live best-effort extras over adb (never fatal — phones may be unplugged).
-    local os_version="" ts_hostname="${DEVICE_ID}"
+    # os/os_version: prefer the recorded enrollment fact; fall back to a live
+    # probe only when nothing was recorded (e.g. ingest run standalone).
+    local ts_hostname="${DEVICE_ID}"
     if [ -n "${serial}" ] && have "${ADB}"; then
-        os_version="$("${ADB}" -s "${serial}" shell getprop ro.build.version.incremental 2>/dev/null | tr -d '\r\n' || true)"
+        if [ -z "${os_id}" ]; then
+            probe_os "${serial}"
+            os_id="${OS_ID}"; os_version="${OS_VERSION}"
+        fi
         local hn
         hn="$("${ADB}" -s "${serial}" shell getprop net.hostname 2>/dev/null | tr -d '\r\n' || true)"
         [ -n "${hn}" ] && ts_hostname="${hn}"
     fi
+    os_id="${os_id:-unknown}"
 
     local prof_present=false prof_uid=null
     if [ -f "${prof}" ]; then
@@ -1101,6 +1301,7 @@ cmd_ingest() {
         --arg serial "${serial}" \
         --arg codename "${codename}" \
         --arg marketing_name "${DEVICE_NAME}" \
+        --arg os "${os_id}" \
         --arg os_version "${os_version}" \
         --arg superdomain "${SUPERDOMAIN}" \
         --arg login_server "${login_server}" \
@@ -1114,7 +1315,7 @@ cmd_ingest() {
         --arg generated_at "$(now_iso)" \
         '{schema:"phone-ingest/v1", device_id:$device_id, device_class:"phone",
           serial:$serial, codename:$codename, marketing_name:$marketing_name,
-          os:"grapheneos", os_version:$os_version, superdomain:$superdomain,
+          os:$os, os_version:$os_version, superdomain:$superdomain,
           login_server:$login_server, tailscale_ip:$tailscale_ip,
           tailscale_hostname:$tailscale_hostname, role:$role,
           attached_domain:$attached_domain,
@@ -1140,11 +1341,13 @@ cmd_ingest() {
     else
         echo
         echo "== next step: register the device =="
-        echo "  Emit-only mode. To self-report into the device registry, POST the"
-        echo "  record with the platform's mTLS client identity:"
-        echo "    $0 ingest --device-id ${DEVICE_ID} --ingest-url https://<bff>/bff/internal/device-enrollment/self-report \\"
-        echo "       --client-cert <cert> --client-key <key> --ca <ca-chain>"
-        echo "  or hand ${ingest} to the registry importer."
+        echo "  Emit-only mode. No dedicated phone-ingest registry endpoint"
+        echo "  exists yet (the /bff/internal/device-enrollment/self-report"
+        echo "  route is a DIFFERENT, machine-key-fp cluster-node contract —"
+        echo "  it will reject this phone-ingest/v1 record). Hand ${ingest}"
+        echo "  to the registry importer, or use --ingest-url once a real"
+        echo "  phone-ingest endpoint is stood up (mTLS client identity via"
+        echo "  --client-cert/--client-key/--ca)."
     fi
 }
 
@@ -1202,6 +1405,15 @@ wiz_confirm() {
 
 cmd_wizard() {
     [ -t 0 ] || pw_die 2 "the wizard is interactive and needs a TTY — use the individual verbs (detect/fetch/flash/enroll/profile/ingest) for scripting"
+
+    # Front-load enroll's hard, knowable-in-advance precondition (a login
+    # server) BEFORE Step 3's destructive flash runs — otherwise an operator
+    # can complete the irreversible bootloader-unlock/wipe/flash/lock
+    # sequence only to have Step 4 (enroll) immediately die on this same
+    # check. Mirrors cmd_flash's own preflight-before-destructive-gate style.
+    resolve_keys
+    [ -n "${LOGIN_SERVER}" ] || pw_die 1 "no login server — pass --login-server URL or --keys-dir with a login-server file"
+
     echo "== enterprise-phone wizard =="
     echo "Guided flow: detect -> fetch -> flash -> enroll -> profile -> ingest."
     echo "Each step asks first; already-completed steps can be skipped (re-entrant)."
@@ -1271,30 +1483,31 @@ main() {
     local plan_target=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --serial)              SERIAL="$2"; shift 2 ;;
-            --codename)            CODENAME="$2"; shift 2 ;;
-            --channel)             CHANNEL="$2"; shift 2 ;;
-            --graphene-version)    GRAPHENE_VERSION="$2"; shift 2 ;;
-            --work-dir)            WORK_DIR="$2"; shift 2 ;;
-            --out)                 OUT_DIR="$2"; shift 2 ;;
-            --keys-dir)            KEYS_DIR="$2"; shift 2 ;;
-            --login-server)        LOGIN_SERVER="$2"; shift 2 ;;
-            --authkey-file)        AUTHKEY_FILE="$2"; shift 2 ;;
-            --pass-file)           PASS_FILE="$2"; shift 2 ;;
-            --device-id)           DEVICE_ID="$2"; shift 2 ;;
-            --superdomain)         SUPERDOMAIN="$2"; shift 2 ;;
-            --role)                ROLE="$2"; shift 2 ;;
-            --profile-name)        PROFILE_NAME="$2"; shift 2 ;;
-            --tailscale-apk)       TAILSCALE_APK="$2"; shift 2 ;;
-            --apk-signer-sha256)   APK_SIGNER_SHA256="$2"; shift 2 ;;
-            --ingest-url)          INGEST_URL="$2"; shift 2 ;;
-            --client-cert)         CLIENT_CERT="$2"; shift 2 ;;
-            --client-key)          CLIENT_KEY="$2"; shift 2 ;;
-            --ca)                  CA_FILE="$2"; shift 2 ;;
+            --serial)              _need_arg "$1" $#; SERIAL="$2"; shift 2 ;;
+            --codename)            _need_arg "$1" $#; CODENAME="$2"; shift 2 ;;
+            --channel)             _need_arg "$1" $#; CHANNEL="$2"; shift 2 ;;
+            --graphene-version)    _need_arg "$1" $#; GRAPHENE_VERSION="$2"; shift 2 ;;
+            --work-dir)            _need_arg "$1" $#; WORK_DIR="$2"; shift 2 ;;
+            --out)                 _need_arg "$1" $#; OUT_DIR="$2"; shift 2 ;;
+            --keys-dir)            _need_arg "$1" $#; KEYS_DIR="$2"; shift 2 ;;
+            --login-server)        _need_arg "$1" $#; LOGIN_SERVER="$2"; shift 2 ;;
+            --authkey-file)        _need_arg "$1" $#; AUTHKEY_FILE="$2"; shift 2 ;;
+            --pass-file)           _need_arg "$1" $#; PASS_FILE="$2"; shift 2 ;;
+            --device-id)           _need_arg "$1" $#; DEVICE_ID="$2"; shift 2 ;;
+            --superdomain)         _need_arg "$1" $#; SUPERDOMAIN="$2"; SUPERDOMAIN_SET=1; shift 2 ;;
+            --role)                _need_arg "$1" $#; ROLE="$2"; shift 2 ;;
+            --profile-name)        _need_arg "$1" $#; PROFILE_NAME="$2"; shift 2 ;;
+            --tailscale-apk)       _need_arg "$1" $#; TAILSCALE_APK="$2"; shift 2 ;;
+            --apk-signer-sha256)   _need_arg "$1" $#; APK_SIGNER_SHA256="$2"; shift 2 ;;
+            --ingest-url)          _need_arg "$1" $#; INGEST_URL="$2"; shift 2 ;;
+            --client-cert)         _need_arg "$1" $#; CLIENT_CERT="$2"; shift 2 ;;
+            --client-key)          _need_arg "$1" $#; CLIENT_KEY="$2"; shift 2 ;;
+            --ca)                  _need_arg "$1" $#; CA_FILE="$2"; shift 2 ;;
             --yes)                 ASSUME_YES=1; shift ;;
             --force)               FORCE=1; shift ;;
             --force-fwupd)         FORCE_FWUPD=1; shift ;;
             --show-authkey)        SHOW_AUTHKEY=1; shift ;;
+            --no-usb)              NO_USB=1; shift ;;
             --i-understand-adb-exposure) ADB_EXPOSURE_OK=1; shift ;;
             --resolve)             RESOLVE=1; shift ;;
             --print-plan)          PRINT_PLAN=1; shift ;;
@@ -1310,6 +1523,7 @@ main() {
         esac
     done
     apply_colors
+    validate_profile_name
 
     # --print-plan anywhere plans the given verb instead of running it.
     if [ "${PRINT_PLAN}" -eq 1 ] && [ "${verb}" != "plan" ]; then

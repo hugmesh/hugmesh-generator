@@ -1,4 +1,4 @@
-# Enterprise phones — GrapheneOS on Google Pixel (the fourth onboarding form)
+# Enterprise phones — GrapheneOS + existing-device onboarding (the fourth onboarding form)
 
 > **Status: 🚧 v1 driver in-flight** (branch `feat/pixel-graphene-phone-wizard`).
 > One driver, [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh), owns the
@@ -10,14 +10,20 @@ This is the **fourth onboarding form**: alongside the appliance images
 ([`BUILD-MATRIX.md`](BUILD-MATRIX.md)), the client desktops
 ([`CLIENT-IMAGES.md`](CLIENT-IMAGES.md)), and the FD-09 Local Docker mesh node
 ([`clients/docker-mesh-node/`](../clients/docker-mesh-node)), the platform can
-now take a **USB-connected Google Pixel** and turn it into an
-enterprise-managed mesh device:
+take a **USB-connected Google Pixel** and turn it into an enterprise-managed
+mesh device end to end:
 
 ```
 detect ─► fetch (VERIFIED GrapheneOS -install- zip) ─► flash ─► enroll (headscale
 tailnet join, register-and-approve) ─► profile (separately-encrypted GrapheneOS
 secondary user, credential escrowed into vault-seed custody) ─► ingest (device registry)
 ```
+
+`enroll` also stands alone as a **first-class existing-device onboarding
+path**: a phone this wizard never flashed — GrapheneOS *or stock Android* —
+USB-guided or (`--no-usb`) with no adb at all. See
+[Onboarding existing phones (no reflash)](#onboarding-existing-phones-no-reflash).
+`flash` itself remains GrapheneOS/Pixel-only.
 
 It follows the repo's documented **non-build precedent** (see the
 Local-Docker-mesh paragraph in [`BUILD-MATRIX.md`](BUILD-MATRIX.md)): the phone
@@ -42,7 +48,7 @@ destructive ones are gated.
 | `detect` | never | Read-only probe: adb/fastboot device list, serial, codename, current OS fingerprint. Prints `DEVICE_*` lines. |
 | `fetch` | work-dir | Resolve the `--channel` release, download the GrapheneOS `<codename>-install-<version>.zip`(+`.sig`) into `--work-dir`, verify the sshsig **fail-closed**, extract, write a `.verified-<sha256>` marker. Idempotent (a cached resolution next to its verified zip makes re-fetch fully offline). |
 | `flash` | **DESTRUCTIVE** | Wipe the phone and flash the VERIFIED artifact. Typed-serial confirmation on a TTY; non-TTY requires BOTH `--yes` AND a matching `--serial`. Refuses anything without a matching verification marker, and re-verifies the signature again before flashing. |
-| `enroll` | out-dir | Post-first-boot (adb): guided tailnet join with keys from `--keys-dir` (docker-mesh-node layout) or `--login-server`/`--authkey-file`; verifies `tailscale0` got a 100.64/10 address and writes the enrollment record. |
+| `enroll` | out-dir | Add a running phone to the mesh — freshly flashed **or already-running**, GrapheneOS **or stock Android** (the OS probe records which; it never gates — see [Onboarding existing phones](#onboarding-existing-phones-no-reflash)). Guided tailnet join with keys from `--keys-dir` (docker-mesh-node layout) or `--login-server`/`--authkey-file`; verifies `tailscale0` got a 100.64/10 address and writes the enrollment record. `--no-usb` drops adb entirely (guided handset-only runbook, operator-attested record). |
 | `profile` | device + out-dir | Create the `enterprise` secondary user, generate + escrow its passphrase (vault-seed custody), operator sets the credential on the handset (default path). |
 | `rotate-profile-pass` | out-dir (+device) | Generate + escrow a new profile passphrase atomically (previous escrow kept as `.prev-<ts>`). |
 | `remove-profile` | **DESTRUCTIVE** | Remove the enterprise user (typed profile-name confirm, or `--yes`); escrow retired to `.revoked-<ts>`. Per-profile FBE keys are evicted — the profile's data is gone. |
@@ -69,7 +75,10 @@ always compared against what is actually detected) · `--codename C` (see
 stable|beta|alpha` (default `stable`) · `--graphene-version V` (pin an exact
 release, skips channel resolution) · `--work-dir D` (artifact dir, default
 `out/phone-wizard`) · `--out D` (output tree: enrollment/profile/ingest records
-+ vault-seed escrow; default `keys-out`).
++ vault-seed escrow; default `out/phone-wizard/keys-out` — deliberately its
+own namespace under `--work-dir`'s tree, not the repo-root `keys-out/` that
+[`gen-provision-keys.sh`](../scripts/gen-provision-keys.sh) treats as its own
+disposable scratch space and unconditionally `rm -rf`s).
 
 Mesh + identity: `--keys-dir D` (docker-mesh-node layout — see
 [Enrollment](#enrollment--mesh-join)) · `--login-server URL` (headscale control
@@ -90,10 +99,18 @@ Ingest: `--ingest-url URL` + `--client-cert F --client-key F --ca F` (mTLS
 client identity; POST is refused without cert+key).
 
 Gates + overrides: `--yes` (non-interactive confirmation, per-verb gates) ·
-`--force` (downgrade the GrapheneOS sanity probe to a warning) · `--force-fwupd`
-(proceed even if fwupd is running) · `--show-authkey` (display the pre-auth key
-ONCE during enroll; default: never displayed) · `--i-understand-adb-exposure`
-(set the profile credential over adb — see
+`--force` (downgrade THREE independent hard-requirement checks to warnings:
+the `enroll` OS-probe gate — only when the OS is genuinely undetectable,
+GrapheneOS and stock Android never need it; `flash`'s fastboot-version
+preflight — when the `fastboot --version` string is unparsable, normally
+enforcing GrapheneOS's ≥35.0.2 requirement; and `enroll`'s
+Tailscale-package-appear wait — skip confirming the app actually installed
+before the tailnet-join poll starts) · `--force-fwupd` (proceed even if fwupd
+is running) · `--show-authkey` (display
+the pre-auth key ONCE during enroll; default: never displayed) · `--no-usb`
+(enroll only: skip every adb probe — see
+[Onboarding existing phones](#onboarding-existing-phones-no-reflash)) ·
+`--i-understand-adb-exposure` (set the profile credential over adb — see
 [Secret custody](#secret-custody-model)) · `--resolve` (allow `plan` to resolve
 the version over the network) · `--print-plan` (alias for the `plan` verb) ·
 `--no-color`.
@@ -113,6 +130,9 @@ $ scripts/phone-wizard.sh detect
 $ scripts/phone-wizard.sh fetch  --codename komodo --channel stable
 $ scripts/phone-wizard.sh flash  --serial <S> --codename komodo         # typed-serial confirm on a TTY
 $ scripts/phone-wizard.sh enroll --serial <S> --keys-dir <keys>         # or --login-server + --authkey-file
+# an ALREADY-RUNNING phone (GrapheneOS or stock Android) — no flash needed:
+$ scripts/phone-wizard.sh enroll --keys-dir <keys>                     # os probe records grapheneos|android
+$ scripts/phone-wizard.sh enroll --no-usb --keys-dir <keys> --device-id phone-existing-01   # no adb at all
 $ scripts/phone-wizard.sh profile --serial <S>
 $ scripts/phone-wizard.sh ingest --device-id phone-<s>                  # emit-only; add --ingest-url + mTLS flags to POST
 ```
@@ -229,6 +249,60 @@ fail-closed) — pinning the installed artifact, not the file we happened to
 install. On success a non-secret `enrollment.json` is written under
 `<out>/device/<device-id>/`.
 
+## Onboarding existing phones (no reflash)
+
+`enroll` does not assume the device came through this wizard's own `flash` —
+it is a first-class path for **already-running** phones, both existing
+GrapheneOS phones and **stock Android** phones. `flash` stays
+GrapheneOS/Pixel-only; nothing here changes that.
+
+### USB-guided (adb) — the default `enroll` above
+
+The OS probe (`ro.build.version.incremental` datestamp **AND** a `grapheneos`
+getprop marker — both required, not either alone, so a non-GrapheneOS ROM
+with a datestamp-shaped incremental can't be misclassified — else
+`ro.build.version.release`) records what it finds — `os:"grapheneos"` or
+`os:"android"` — into `enrollment.json` and, downstream, `ingest.json`. It
+**never gates** on which one it finds: stock Android is a supported OS for
+enroll, not a `--force`-guarded fallback. `--force` is reserved for the case
+the probe genuinely cannot tell (no GrapheneOS signal **and** no readable
+release property) — that case alone is recorded `os:"unknown"` and refuses
+without `--force`.
+
+**This is a best-effort, SPOOFABLE heuristic, not a security boundary.** Every
+signal it reads (`ro.build.version.incremental`, the `grapheneos` getprop
+string, `ro.build.version.release`) is a build/OEM-controlled property that a
+tampered or custom ROM can set to whatever it wants — the probe cannot
+cryptographically attest what OS is actually running (that is what the
+🔭 [self-hosted AttestationServer trust root](#management-plane-roadmap) is
+for, and it isn't wired up yet). Downstream consumers of `enrollment.json` /
+`ingest.json` must not treat the `os` field as a verified fact; that is also
+why its verification tier is named `adb-heuristic`, not `adb-verified` — see
+the table below.
+
+### `--no-usb` — no adb at all
+
+`enroll --no-usb` drops the adb dependency entirely for hosts with no
+USB/adb access to the handset (or an operator who would rather not tether
+it). It prints a guided, handset-only runbook — install Tailscale, point it
+at the custom coordination server, authenticate with the pre-auth key (the
+key is still **never** echoed without `--show-authkey`) — then writes an
+`enrollment.json` marked `verification:"operator-attested"` with
+`tailscale_ip:null`: the wizard performed no adb probe to confirm the join
+itself. It needs `--device-id` explicitly (there is no adb serial to derive
+one from) and exits 0 with a **NEXT STEPS** block telling the operator how to
+verify the join **mesh-side** instead: approve the PENDING node (ADR-14) in
+the superadmin UI, then confirm a `100.64/10` tailnet address there or via
+`headscale nodes list`.
+
+| | USB-guided `enroll` | `enroll --no-usb` |
+| --- | --- | --- |
+| adb required | yes | no |
+| OS recorded | `grapheneos` \| `android` \| `unknown` (probed) | `unknown` (not probed) |
+| Join verified by | polling `tailscale0` for a `100.64/10` address | operator, mesh-side, after the fact |
+| `enrollment.json` `verification` | `adb-heuristic` (best-effort, spoofable getprop signal — see above) | `operator-attested` |
+| `enrollment.json` `tailscale_ip` | the polled address | `null` |
+
 ## Enterprise profile — escrowed credential custody
 
 `profile` creates the `enterprise` secondary user (`pm create-user`), then
@@ -243,8 +317,13 @@ destined for Vault at `secret/<brand>/device/<device-id>/phone-profile` (the
 per-device vault-seed custody chain). By **default the operator sets the
 credential on the handset** by reading the 0600 escrow file themselves — the
 wizard never prints it. Setting it over `adb shell locksettings set-password`
-puts the passphrase **in adb argv, which is visible phone-side**
-(logcat/`ps`); that path is a documented residual exposure and requires the
+puts the passphrase **in adb argv, which is visible on BOTH exposure
+surfaces**: phone-side (logcat/`ps` on the device) **and** on the operator's
+own host, in the local `adb` client process's own argv (`ps auxww` /
+`/proc/<pid>/cmdline`, or any execve/audit logging) for the life of that
+child process — a real risk on a shared provisioning workstation, jump box,
+or CI runner, i.e. exactly the kind of host this driver is designed to run
+on unattended. That path is a documented residual exposure and requires the
 explicit `--i-understand-adb-exposure` gate.
 
 Lifecycle: `rotate-profile-pass` rotates the escrow atomically (stage `.new`,
@@ -267,17 +346,30 @@ deliberate exception is the gated adb credential-set path above.
 
 `ingest` emits `<out>/device/<device-id>/ingest.json`, schema
 **`phone-ingest/v1`**: `device_id`, `device_class:"phone"`, `serial`,
-`codename`, `marketing_name`, `os:"grapheneos"`, `os_version`, `superdomain`,
-`login_server`, `tailscale_ip`, `tailscale_hostname`, `role`,
-`attached_domain`, `enterprise_profile{present,user_id,credential_custody}`,
-`enrolled_at`, `generated_at`. Recorded facts (enrollment/profile records) are
-preferred; live adb detection fills only what is missing and reachable.
+`codename`, `marketing_name`, `os` (`grapheneos`|`android`|`unknown` —
+inherited from `enrollment.json`'s OS probe, see
+[Onboarding existing phones](#onboarding-existing-phones-no-reflash)),
+`os_version`, `superdomain`, `login_server`, `tailscale_ip`,
+`tailscale_hostname`, `role`, `attached_domain`,
+`enterprise_profile{present,user_id,credential_custody}`, `enrolled_at`,
+`generated_at`. Recorded facts (enrollment/profile records) are preferred;
+live adb detection fills only what is missing and reachable.
 
-Default is **emit-only**. With `--ingest-url` the record is POSTed with the
-platform's mTLS client identity (`--client-cert`/`--client-key` + `--ca`),
-mirroring the device-enrollment-report transport — fail-closed when the
-identity material is missing. Alternatively, hand the record to the registry
-importer.
+Default is **emit-only**. **No dedicated `phone-ingest/v1` registry endpoint
+exists yet** — `/bff/internal/device-enrollment/self-report` is a
+**different, disjoint contract**: it is the node-side `machineKeyFp`
+self-report used for headscale cluster-node reconciliation
+(`specs/usr/sbin/snapdragon-device-enrollment-report`), keyed on fields
+(`machineKeyFp`, `hostname`, `meshId`, `tailnetId`) that a phone-ingest
+record never has, and its BFF handler requires `machineKeyFp` — posting a
+`phone-ingest/v1` record there fails Bean Validation and lands nowhere
+useful. This is a documented follow-up, not a working target: build a real
+phone-ingest route (its own controller/DTO/table, same mTLS-gated
+`/bff/internal/**` transport pattern — client cert/key + `--ca`,
+fail-closed when the identity material is missing) before pointing
+`--ingest-url` at production. Until then, hand the emitted `ingest.json` to
+the registry importer, or use `--ingest-url` once a real phone-ingest
+endpoint is stood up.
 
 ## Remote-management model (v1, deliberate)
 
@@ -286,6 +378,24 @@ management is limited to the USB-tethered verbs above plus the **mesh-side
 controls**: headscale key expiry / node removal, and Casdoor credential
 revocation. Losing the phone therefore costs mesh membership and platform
 sessions, not custody of anything the escrow chain holds.
+
+## Management plane (roadmap)
+
+🔭 **Separate design track, in flight** — this is a roadmap paragraph, not
+something this driver wires up. The intended device-management plane, for
+**both** stock-Android and GrapheneOS phones, is self-hosted **Headwind MDM**
+([github.com/h-mdm](https://github.com/h-mdm), Apache-2.0): a device-owner
+DPC provisioned over adb, giving policy/compliance control without routing
+through any Google-run enterprise-mobility backend. Paired with it: a
+self-hosted GrapheneOS **AttestationServer** trust root, so the platform can
+verify a phone's boot/verified-boot state against its own root of trust
+instead of a third party's. Neither is wired into `phone-wizard.sh` yet, and
+no v1 decision in this driver precludes either device class from joining that
+plane later. The platform is kept fully sovereign here: a managed-Google-Play
+/ Android-Enterprise-style plane routed through a third-party SaaS vendor's
+backend was evaluated for this role and **rejected** — Headwind MDM's
+device-owner DPC path needs no Google-run or vendor-hosted backend for
+either OS.
 
 ## Summary
 
@@ -302,7 +412,9 @@ sessions, not custody of anything the escrow chain holds.
 | `make phone-*` thin face (host-side delegates; secrets stay file-path knobs) | `Makefile` | 🚧 |
 | Thin ncurses-menu/Studio faces over the driver (non-build precedent) | — | 🔭 |
 | MDM agent / on-phone daemon / APK store | — | 🔭 (deliberate v1 non-goals) |
-| OTA/update posture management (GrapheneOS updates itself; no fleet lever) | — | 🔭 |
+| Existing-device onboarding (GrapheneOS + stock Android, USB-guided or `--no-usb`, no reflash) | `enroll` | 🚧 |
+| Self-hosted management plane: Headwind MDM (device-owner DPC) + GrapheneOS AttestationServer trust root | — | 🔭 (separate design track) |
+| OTA/update posture management (GrapheneOS updates itself; no management-plane lever yet) | — | 🔭 |
 
 ## Deferred
 
@@ -315,6 +427,7 @@ Tracked here per the driver's header. Still 🔭, by design:
 - **Any on-phone agent** (MDM, resident daemon, APK store) — v1 keeps remote
   management at the mesh side (headscale key expiry, Casdoor revocation) plus
   the USB-tethered verbs.
-- **Fleet OTA posture** — GrapheneOS's own updater handles OS updates; a
-  fleet-visible update/compliance report would ride a future agent, which v1
-  deliberately does not have.
+- **OTA/update posture reporting** — GrapheneOS's own updater handles OS
+  updates; a management-plane-visible update/compliance report (see
+  [Management plane (roadmap)](#management-plane-roadmap)) would ride a
+  future agent, which v1 deliberately does not have.

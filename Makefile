@@ -505,26 +505,34 @@ go-live-menu: ## preview the on-device go-live CONSOLE menu (ncurses front-end; 
 #   PROFILE_NAME= TAILSCALE_APK= APK_SIGNER_SHA256= INGEST_URL= CLIENT_CERT=
 #   CLIENT_KEY= CA= YES=1 FORCE=1 FORCE_FWUPD=1 RESOLVE=1 SHOW_AUTHKEY=1
 PHONE_WORK_DIR ?= $(WORK_DIR)/phone-wizard
-_PHONE_ARGS = --work-dir "$(PHONE_WORK_DIR)" \
-  $(if $(SERIAL),--serial "$(SERIAL)") \
-  $(if $(CODENAME),--codename "$(CODENAME)") \
-  $(if $(CHANNEL),--channel "$(CHANNEL)") \
-  $(if $(GRAPHENE_VERSION),--graphene-version "$(GRAPHENE_VERSION)") \
-  $(if $(OUT_DIR),--out "$(OUT_DIR)") \
-  $(if $(KEYS_DIR),--keys-dir "$(KEYS_DIR)") \
-  $(if $(LOGIN_SERVER),--login-server "$(LOGIN_SERVER)") \
-  $(if $(AUTHKEY_FILE),--authkey-file "$(AUTHKEY_FILE)") \
-  $(if $(PASS_FILE),--pass-file "$(PASS_FILE)") \
-  $(if $(DEVICE_ID),--device-id "$(DEVICE_ID)") \
-  $(if $(SUPERDOMAIN),--superdomain "$(SUPERDOMAIN)") \
-  $(if $(PHONE_ROLE),--role "$(PHONE_ROLE)") \
-  $(if $(PROFILE_NAME),--profile-name "$(PROFILE_NAME)") \
-  $(if $(TAILSCALE_APK),--tailscale-apk "$(TAILSCALE_APK)") \
-  $(if $(APK_SIGNER_SHA256),--apk-signer-sha256 "$(APK_SIGNER_SHA256)") \
-  $(if $(INGEST_URL),--ingest-url "$(INGEST_URL)") \
-  $(if $(CLIENT_CERT),--client-cert "$(CLIENT_CERT)") \
-  $(if $(CLIENT_KEY),--client-key "$(CLIENT_KEY)") \
-  $(if $(CA),--ca "$(CA)") \
+# Exported so bash — not Make — performs the substitution below: a value with
+# an embedded ", `, or $(...) (e.g. a spoofed USB device serial) is inserted
+# by the shell as an inert string via "$$VAR", instead of being spliced by
+# Make as literal recipe text that /bin/sh would re-parse as shell syntax.
+export PHONE_WORK_DIR SERIAL CODENAME CHANNEL GRAPHENE_VERSION OUT_DIR \
+  KEYS_DIR LOGIN_SERVER AUTHKEY_FILE PASS_FILE DEVICE_ID SUPERDOMAIN \
+  PHONE_ROLE PROFILE_NAME TAILSCALE_APK APK_SIGNER_SHA256 INGEST_URL \
+  CLIENT_CERT CLIENT_KEY CA
+_PHONE_ARGS = --work-dir "$$PHONE_WORK_DIR" \
+  $${SERIAL:+--serial "$$SERIAL"} \
+  $${CODENAME:+--codename "$$CODENAME"} \
+  $${CHANNEL:+--channel "$$CHANNEL"} \
+  $${GRAPHENE_VERSION:+--graphene-version "$$GRAPHENE_VERSION"} \
+  $${OUT_DIR:+--out "$$OUT_DIR"} \
+  $${KEYS_DIR:+--keys-dir "$$KEYS_DIR"} \
+  $${LOGIN_SERVER:+--login-server "$$LOGIN_SERVER"} \
+  $${AUTHKEY_FILE:+--authkey-file "$$AUTHKEY_FILE"} \
+  $${PASS_FILE:+--pass-file "$$PASS_FILE"} \
+  $${DEVICE_ID:+--device-id "$$DEVICE_ID"} \
+  $${SUPERDOMAIN:+--superdomain "$$SUPERDOMAIN"} \
+  $${PHONE_ROLE:+--role "$$PHONE_ROLE"} \
+  $${PROFILE_NAME:+--profile-name "$$PROFILE_NAME"} \
+  $${TAILSCALE_APK:+--tailscale-apk "$$TAILSCALE_APK"} \
+  $${APK_SIGNER_SHA256:+--apk-signer-sha256 "$$APK_SIGNER_SHA256"} \
+  $${INGEST_URL:+--ingest-url "$$INGEST_URL"} \
+  $${CLIENT_CERT:+--client-cert "$$CLIENT_CERT"} \
+  $${CLIENT_KEY:+--client-key "$$CLIENT_KEY"} \
+  $${CA:+--ca "$$CA"} \
   $(if $(strip $(YES)),--yes) \
   $(if $(strip $(FORCE)),--force) \
   $(if $(strip $(FORCE_FWUPD)),--force-fwupd) \

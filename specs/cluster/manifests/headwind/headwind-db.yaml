@@ -1,0 +1,103 @@
+# headwind-db — dedicated Postgres 16 for Headwind MDM (Apache-2.0). Cloned from
+# specs/cluster/manifests/forum/phpbb-db.yaml. PostgreSQL-only upstream (pom.xml
+# postgresql JDBC + Postgres-only Liquibase DDL) — matches the platform's
+# zero-MySQL norm, no exception needed.
+#
+# Lives in snapdragon-pki (shared control-plane namespace: harbor/vault/casdoor/
+# route-access-db/pki-gateway/superadmin-gateway all co-reside here), created
+# idempotently by apps/06-vault-pki.yaml / apps/20-gateway-pki.yaml. NO dedicated
+# namespace.yaml/network-policy.yaml here — tier-ingress.yaml already admits
+# self-namespace traffic (verified: manifests/networkpolicy/tier-ingress.yaml:70).
+#
+# NO owner/app role split (unlike phpbb-db.yaml) — VERIFIED not wireable:
+# hmdm-server's Liquibase (migrations) and MyBatis (runtime queries) share the
+# SAME single JDBC.username/JDBC.password context init-params, and Liquibase
+# runs on EVERY pod start (Initializer.getModules() adds LiquibaseModule
+# unconditionally) — the app role must retain DDL rights forever, so it cannot
+# be demoted to a runtime-only role after first boot. The app connects as the
+# single OWNER role `headwind` (ESO Secret headwind-db-auth/password) for BOTH
+# Liquibase-migrate and runtime queries. See headwind.yaml's matching comment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: headwind-db
+  namespace: snapdragon-pki
+  labels: { app.kubernetes.io/name: headwind-db, app.kubernetes.io/part-of: snapdragon.systems }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # single writer over an RWO PVC (phpbb-db.yaml precedent)
+  selector: { matchLabels: { app.kubernetes.io/name: headwind-db } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: headwind-db } }
+    spec:
+      serviceAccountName: sa-headwind-db
+      nodeSelector: { snapdragon.systems/pki: "true" }   # co-locate w/ harbor/vault/casdoor
+      securityContext:
+        seLinuxOptions: { type: container_t, level: "s0:c77" }  # next free MCS category after meshbridge's c76 (docs/SECURITY.md)
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ name: postgres, containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_DB,   value: "headwind" }
+            # OWNER role, used for BOTH Liquibase-migrate and runtime — verified:
+            # hmdm shares one datasource across migrate+runtime, so no runtime-role
+            # demotion is possible (see header comment above).
+            - { name: POSTGRES_USER, value: "headwind" }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: headwind-db-auth, key: password } }
+            - { name: POSTGRES_INITDB_ARGS, value: "--auth-host=scram-sha-256 --auth-local=scram-sha-256" }
+            - { name: PGDATA, value: "/var/lib/postgresql/data/pgdata" }
+          args:
+            - -c
+            - password_encryption=scram-sha-256
+            - -c
+            - max_connections=50
+            - -c
+            - log_connections=on
+            - -c
+            - log_disconnections=on
+            - -c
+            - log_min_duration_statement=2000
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "headwind", "-d", "headwind"] }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec: { command: ["pg_isready", "-U", "headwind", "-d", "headwind"] }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+          volumeMounts:
+            - { name: data,   mountPath: /var/lib/postgresql/data }
+            - { name: initdb, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: headwind-db }
+        - name: initdb
+          configMap: { name: headwind-db-initdb }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: headwind-db
+  namespace: snapdragon-pki
+  labels: { app.kubernetes.io/name: headwind-db }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: snapdragon-local
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: headwind-db
+  namespace: snapdragon-pki
+  labels: { app.kubernetes.io/name: headwind-db }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: headwind-db }
+  ports:
+    - { name: postgres, port: 5432, targetPort: postgres }

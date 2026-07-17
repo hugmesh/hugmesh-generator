@@ -181,3 +181,53 @@ def test_askpass_helper_is_written_executable_and_self_contained(monkeypatch, tm
     body = open(p, encoding="utf-8").read()
     assert "--askpass" in body and "snapdragon_studio" in body
     assert body.startswith("#!")
+
+
+# ── preflight must NOT block a native build the driver can elevate ───────────────────
+# Regression: preflight() appended a BLOCKING problem ("Native build needs root (the
+# Studio will prepend sudo)") whenever the Studio was not root. Since a GUI Studio is
+# NEVER root, that made every native build permanently undispatchable — blocked by a
+# check whose own text said the driver handles it. Real report 2026-07-17: "native
+# builds are also failing". Problems BLOCK (Review isComplete / ProgressPage dispatch);
+# elevation is an ADVISORY, so it belongs in preflight_warnings().
+def test_preflight_does_not_block_native_when_sudo_is_available(monkeypatch, tmp_path):
+    monkeypatch.setattr(bd.shutil, "which", lambda n: "/usr/bin/sudo" if n == "sudo" else None)
+    d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
+    probs = d.preflight(_cfg(tmp_path, "x86", "pki"), "native")
+    assert not [p for p in probs if "elevation helper" in p or "needs root" in p], probs
+
+
+def test_preflight_does_not_block_native_when_only_pkexec_is_available(monkeypatch, tmp_path):
+    monkeypatch.setattr(bd.shutil, "which", lambda n: "/usr/bin/pkexec" if n == "pkexec" else None)
+    d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
+    probs = d.preflight(_cfg(tmp_path, "x86", "pki"), "native")
+    assert not [p for p in probs if "elevation helper" in p or "needs root" in p], probs
+
+
+def test_preflight_DOES_block_native_when_no_elevation_helper_exists(monkeypatch, tmp_path):
+    monkeypatch.setattr(bd.shutil, "which", lambda n: None)   # no sudo, no pkexec
+    d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
+    probs = d.preflight(_cfg(tmp_path, "x86", "pki"), "native")
+    assert [p for p in probs if "no elevation helper" in p], probs
+
+
+def test_native_elevation_is_surfaced_as_a_warning_not_a_problem(monkeypatch, tmp_path):
+    monkeypatch.setattr(bd.shutil, "which", lambda n: "/usr/bin/sudo" if n == "sudo" else None)
+    d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
+    warns = d.preflight_warnings(_cfg(tmp_path, "x86", "pki"), "native")
+    assert [w for w in warns if "authentication prompt" in w], warns
+
+
+def test_root_native_neither_blocks_nor_warns_about_elevation(tmp_path):
+    d = BuildDriver(str(tmp_path), host(is_root=True), graphical=True)
+    assert not [p for p in d.preflight(_cfg(tmp_path, "x86", "pki"), "native")
+                if "elevation helper" in p or "needs root" in p]
+    assert not [w for w in d.preflight_warnings(_cfg(tmp_path, "x86", "pki"), "native")
+                if "authentication prompt" in w]
+
+
+def test_docker_backend_never_gets_an_elevation_warning(monkeypatch, tmp_path):
+    monkeypatch.setattr(bd.shutil, "which", lambda n: "/usr/bin/sudo" if n == "sudo" else None)
+    d = BuildDriver(str(tmp_path), host(is_root=False), graphical=True)
+    assert not [w for w in d.preflight_warnings(_cfg(tmp_path, "x86", "pki"), "docker")
+                if "authentication prompt" in w]

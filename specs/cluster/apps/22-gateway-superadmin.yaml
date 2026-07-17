@@ -90,6 +90,56 @@ spec:
           - id: superadmin-federation
             uri: https://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080
             path: /api/federation/**
+          # Headwind MDM human console (JSP, no Angular guard — locks 1+2 [network +
+          # route-access] are the enforcement boundary here, not lock 3; see the
+          # Phase-1 spec §0). ROOT-context WAR mounted at /manage/**; StripPrefix=1
+          # removes the platform-chosen /hmdm path segment before it reaches Tomcat.
+          - id: headwind-console
+            uri: http://headwind.snapdragon-pki.svc.cluster.local:8080
+            path: /hmdm/manage/**
+            filters:
+              - StripPrefix=1
+          # Headwind device check-in / MDM push REST surface. Network-locked (same
+          # tailnet-only Ingress as the row above) but NOT Casdoor-role-gated at the
+          # platform layer — Headwind's own per-device enrollment token governs
+          # inside (route-access role='PUBLIC', see 20-schema.sql). ROOT-context WAR
+          # mounted at /rest/**.
+          - id: headwind-checkin
+            uri: http://headwind.snapdragon-pki.svc.cluster.local:8080
+            path: /hmdm/rest/**
+            filters:
+              - StripPrefix=1
+          # AttestationServer device/Auditor-app surface (AppPostHandler — requires
+          # ABSENCE of an Origin header). Real paths: /auditor/challenge,
+          # /auditor/verify, /auditor/submit. Network-locked only (route-access
+          # role='PUBLIC', see 20-schema.sql) — no app-layer auth.
+          - id: attestation-auditor
+            uri: http://attestation-server.snapdragon-pki.svc.cluster.local:8080
+            path: /attest/auditor/**
+            filters:
+              - StripPrefix=1
+          # /api/status is device-facing (AppPostHandler) despite living under
+          # /api/, unlike every other /api/* path on this server — MUST be
+          # evaluated before attestation-console below or the exact-match status
+          # check-in gets swallowed by the console prefix route (route-access
+          # role='PUBLIC', see 20-schema.sql).
+          - id: attestation-status
+            uri: http://attestation-server.snapdragon-pki.svc.cluster.local:8080
+            path: /attest/api/status
+            filters:
+              - StripPrefix=1
+          # AttestationServer human console (PostHandler — requires matching
+          # Origin/Content-Type/Sec-Fetch-*): login, create-account, devices.json,
+          # attestation-history.json, account, configuration, delete-device,
+          # rotate, logout(-everywhere), change-password. /api/create-account has
+          # NO app-level auth/invite gate — this route's ROLE_SUPERADMIN gate
+          # (route-access, see 20-schema.sql) is the only guard against open
+          # self-signup.
+          - id: attestation-console
+            uri: http://attestation-server.snapdragon-pki.svc.cluster.local:8080
+            path: /attest/api/**
+            filters:
+              - StripPrefix=1
   destination:
     server: https://kubernetes.default.svc
     namespace: snapdragon-pki

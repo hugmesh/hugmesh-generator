@@ -388,3 +388,77 @@ def test_print_specs_emits_materialized_flat_specs(tmp_path):
          "--image", "9", "--generator-dir", GENERATOR_DIR],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r2.returncode == 2 and "out of range" in r2.stderr
+
+
+# ---- installer-UI role-class resolution on the headless path ---------------------
+# app.py's --print-command branch bypasses worklist._materialize_one, so it needs its OWN
+# resolve_installer_ui_default() call; without it a headless x86 node prints
+# `--installer-ui all` and pulls an UNSATISFIABLE app-admin/calamares (the desktop USE
+# closure is ROLE_CLIENT-gated, build-x86-host-stage4.sh:2496). See the real 5x failure in
+# session 20260716-235722-54d2f7.
+
+def _flag_value(command_line, flag):
+    """The VALUE of `flag` in a printed command line, via a REAL argv parser (shlex) —
+    never a substring grep, which would happily match a comment, a longer flag, or the
+    wrong occurrence. Returns None when the flag is absent."""
+    import shlex
+    argv = shlex.split(command_line)
+    return argv[argv.index(flag) + 1] if flag in argv else None
+
+
+@pytest.mark.parametrize("role", ["pki", "be", "fe", "be+gpu", "omnibus", "edge_ai"])
+@pytest.mark.parametrize("bad", ["all", "calamares"])
+def test_print_command_node_never_emits_a_calamares_installer_ui(tmp_path, role, bad):
+    """Every x86 mesh node, fed each WANT_CALAMARES-triggering value, must print
+    `--installer-ui cli` — so the builder's WANT_CALAMARES (:1246) stays false."""
+    cfg = ImageConfig(mode="mesh", role=role, platform="x86", installer_ui=bad)
+    p = tmp_path / f"node-{role}-{bad}.json"
+    cfg.save(str(p))
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    assert _flag_value(r.stdout, "--installer-ui") == "cli"
+    # the note is a WARNING: it must ride stderr and NEVER pollute the argv channel
+    assert "warning:" in r.stderr and "warning:" not in r.stdout
+
+
+@pytest.mark.parametrize("mode,role", [("cloud", "laptop"), ("standalone", "standalone-thick")])
+def test_print_command_desktop_installer_ui_unchanged(tmp_path, mode, role):
+    """No-regression fence: a client/standalone keeps emitting its chosen value, and the
+    resolver stays silent (no stderr note)."""
+    cfg = ImageConfig(mode=mode, role=role, platform="x86", installer_ui="all")
+    p = tmp_path / f"desktop-{role}.json"
+    cfg.save(str(p))
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    assert _flag_value(r.stdout, "--installer-ui") == "all"
+    assert "installer_ui" not in r.stderr
+
+
+def test_print_command_agrees_with_materialize_for_a_node(tmp_path):
+    """PARITY: both call sites (app.py's flat path and worklist._materialize_one) must
+    resolve identically — a node's printed argv must match its materialized argv. Drop
+    either call site and this leg fails."""
+    from snapdragon_studio.core.worklist import WorklistConfig, WorklistEntry
+    base = ImageConfig(mode="mesh", installer_ui="all")
+    wl = WorklistConfig(base=base, entries=[WorklistEntry(role="pki", platform="x86")])
+    _e, materialized = wl.materialize()[0]
+
+    cfg = ImageConfig(mode="mesh", role="pki", platform="x86", installer_ui="all")
+    p = tmp_path / "parity.json"
+    cfg.save(str(p))
+    env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+         "--generator-dir", GENERATOR_DIR, "--backend", "native"],
+        capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
+    assert r.returncode == 0, r.stderr
+    assert _flag_value(r.stdout, "--installer-ui") == "cli"
+    assert materialized.installer_ui == "cli"

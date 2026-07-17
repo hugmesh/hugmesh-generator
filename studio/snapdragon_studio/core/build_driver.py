@@ -138,6 +138,14 @@ class BuildDriver:
             return ["pkexec"]
         return ["sudo"]
 
+    def _can_elevate(self) -> bool:
+        """True iff a non-root native build can actually reach root. Single-sources the
+        SAME helpers _elevation_prefix() picks from, so preflight() can never block a
+        build the driver would have elevated fine (the pre-2026-07-17 bug: preflight
+        appended a BLOCKING problem whose own text said "the Studio will prepend sudo",
+        so a GUI Studio — never run as root — could never dispatch ANY native build)."""
+        return bool(shutil.which("sudo") or shutil.which("pkexec"))
+
     def _elevation_env(self) -> dict[str, str] | None:
         """Caller-side environment the elevation prefix needs, or ``None`` to inherit the
         ambient env unchanged. Only ``sudo -A`` needs anything (SUDO_ASKPASS pointing at
@@ -386,8 +394,10 @@ class BuildDriver:
             problems.append(
                 f"Docker builder image '{self.host.builder_image}' not found — build it "
                 f"first: {' '.join(self.builder_image_build_command())}")
-        if backend == "native" and not self.host.is_root:
-            problems.append("Native build needs root (the Studio will prepend sudo).")
+        if backend == "native" and not self.host.is_root and not self._can_elevate():
+            problems.append(
+                "Native build needs root and no elevation helper is available — install "
+                "sudo or pkexec (polkit), or run the Studio as root.")
         for label, path in (("wallpaper", cfg.wallpaper), ("branding-dir", cfg.branding_dir),
                             ("egress-vpn", cfg.egress_vpn), ("key-zip", cfg.keyzip)):
             if path and not os.path.exists(path):
@@ -404,4 +414,12 @@ class BuildDriver:
         warnings."""
         del cfg  # reserved for future per-config warnings
         backend = backend or self.host.default_backend
-        return host_resources.low_memory_warnings(backend=backend)
+        out: list[str] = []
+        # Elevation is an ADVISORY, not a blocker: the driver prepends sudo/pkexec
+        # itself (_elevation_prefix), so say an auth prompt is coming rather than
+        # refusing the build — preflight() only blocks when NO helper exists at all.
+        if backend == "native" and not self.host.is_root and self._can_elevate():
+            out.append("Native build runs as root via "
+                       f"{self._elevation_prefix()[0]} — expect an authentication prompt.")
+        out += host_resources.low_memory_warnings(backend=backend)
+        return out
