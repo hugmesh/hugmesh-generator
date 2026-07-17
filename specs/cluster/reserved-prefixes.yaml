@@ -89,7 +89,14 @@ metadata:
   # publicly-routable host the YAML was missing, introduced by PR #189 (commit
   # 25f6b473) and undetected until this pass. The app-repo ReservedNames copies
   # should add `ai` too to stay in sync.
-  revision: "6"
+  # revision 6 -> 7: reserve `hmdm` for the Headwind MDM optional-service's
+  # tailnet-only superadmin-gateway routes (`/hmdm/manage/**` human console,
+  # `/hmdm/rest/**` device check-in — both on snapdragon-superadmin-gateway,
+  # apps/22-gateway-superadmin.yaml). Ships ATOMICALLY with the route in the
+  # same PR that adds apps/23-headwind.yaml (NOT a forum/phpbb-style forward-
+  # reserve — see the "planned" subsection for that distinct category). The
+  # four app-repo ReservedNames copies should add `hmdm` too to stay in sync.
+  revision: "7"
 spec:
   # The canonical reserved set (77 labels). KEEP SORTED BY CATEGORY (comments) but
   # the validator treats it as an unordered SET. Do not duplicate; the validator
@@ -118,6 +125,13 @@ spec:
     # vanity username equal to it would shadow a live route. The app-repo ReservedNames
     # copies SHOULD add `superadmin` too to stay in sync.
     - superadmin
+    # `hmdm`: Headwind MDM's device console + device check-in are served at
+    # /hmdm/manage/** and /hmdm/rest/** on the SAME TAILNET superadmin-gateway
+    # `superadmin` above is reserved for (snapdragon-superadmin-gateway,
+    # apps/22-gateway-superadmin.yaml) — a DEDICATED first-segment route prefix,
+    # same rationale as `superadmin`. The app-repo ReservedNames copies SHOULD
+    # add `hmdm` too to stay in sync.
+    - hmdm
     - apidocs
     - api-docs
     - be

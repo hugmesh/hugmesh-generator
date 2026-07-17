@@ -344,6 +344,17 @@ PHPBB_DB_PASSWORD="$(openssl rand -base64 24)"
 PHPBB_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 PHPBB_ADMIN_PASSWORD="$(openssl rand -base64 24)"
 
+# Headwind MDM (self-hosted Android device-management server, DEFAULT-OFF
+# optional-service, ns snapdragon-pki). headwind-db OWNER role `headwind` —
+# used for BOTH install/Liquibase-migrate AND runtime (VERIFIED not
+# separable: hmdm-server shares one datasource across migrate+runtime, so
+# there is no non-owner runtime role) — + the Headwind local first-install
+# admin (LocalAuth.java — CE has no OIDC/SAML). Kept on ONE Vault path
+# (headwind) so the two ExternalSecrets (headwind-db-auth / headwind-admin)
+# resolve it.
+HEADWIND_DB_PASSWORD="$(openssl rand -base64 24)"
+HEADWIND_ADMIN_PASSWORD="$(openssl rand -base64 24)"
+
 # Akkoma/Pleroma RUNTIME app secrets (was a raw kind:Secret with REPLACE_*
 # placeholders in manifests/akkoma/akkoma.yaml — now ESO-sourced from Vault).
 # SECRET_KEY_BASE + SIGNING_SALT = Phoenix endpoint signing; AKKOMA_DB_PASSWORD =
@@ -448,6 +459,11 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
             ADMIN_PASSWORD="${PHPBB_ADMIN_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/forum-db" \
             app_password="${PHPBB_DB_APP_PASSWORD}"
+        # Headwind MDM (backend-only, ns snapdragon-pki, DEFAULT-OFF). ONE Vault
+        # path holds both properties.
+        vault kv put "${VAULT_KV_MOUNT}/${BASE}/headwind" \
+            DB_PASSWORD="${HEADWIND_DB_PASSWORD}" \
+            ADMIN_PASSWORD="${HEADWIND_ADMIN_PASSWORD}"
         # Akkoma/Pleroma runtime app secrets (akkoma-secrets ESO <- secret/<brand>/
         # akkoma). Replaces the former plaintext REPLACE_* kind:Secret. SECRET_KEY_BASE
         # + SIGNING_SALT = Phoenix signing; DB_PASSWORD = akkoma-db owner pw.
@@ -500,7 +516,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         # AND the harbor-provision Job (project/robot-account REST calls).
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/harbor" \
             admin_password_plain="${HARBOR_ADMIN_PASSWORD}"
-        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,forum,forum-db,akkoma,route-access-db,uptrace,mail,harbor-robots,harbor}"
+        echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,forum,forum-db,akkoma,route-access-db,uptrace,mail,harbor-robots,harbor,headwind}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
         echo "         skipping the online write. Writing the offline bundle only." >&2
@@ -572,6 +588,8 @@ WIKI_BFF_DB_APP_PASSWORD="${WIKI_BFF_DB_APP_PASSWORD}" \
 PHPBB_DB_PASSWORD="${PHPBB_DB_PASSWORD}" \
 PHPBB_DB_APP_PASSWORD="${PHPBB_DB_APP_PASSWORD}" \
 PHPBB_ADMIN_PASSWORD="${PHPBB_ADMIN_PASSWORD}" \
+HEADWIND_DB_PASSWORD="${HEADWIND_DB_PASSWORD}" \
+HEADWIND_ADMIN_PASSWORD="${HEADWIND_ADMIN_PASSWORD}" \
 AKKOMA_SECRET_KEY_BASE="${AKKOMA_SECRET_KEY_BASE}" \
 AKKOMA_SIGNING_SALT="${AKKOMA_SIGNING_SALT}" \
 AKKOMA_DB_PASSWORD="${AKKOMA_DB_PASSWORD}" \
@@ -635,6 +653,18 @@ data = {
         # pki-gateway's OWN read-only route-access password (user pki_gateway).
         "route-access-pki-gateway": {
             "password": os.environ["ROUTE_ACCESS_PKI_GATEWAY_PASSWORD"],
+        },
+        # Headwind MDM (DEFAULT-OFF optional-service). OWNER role only — VERIFIED
+        # not separable from runtime (see gen-cluster-secrets.sh's HEADWIND_DB_PASSWORD
+        # comment) — so this materializes only the two ExternalSecrets headwind
+        # actually uses (headwind-db-auth, headwind-admin), unlike phpbb-secrets'
+        # owner/app split.
+        "headwind-db-auth": {
+            "password": os.environ["HEADWIND_DB_PASSWORD"],
+        },
+        "headwind-admin": {
+            "username": "admin",
+            "password": os.environ["HEADWIND_ADMIN_PASSWORD"],
         },
     },
     f"{brand}-backend": {

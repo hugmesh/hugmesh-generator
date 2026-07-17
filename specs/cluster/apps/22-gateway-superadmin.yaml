@@ -90,6 +90,25 @@ spec:
           - id: superadmin-federation
             uri: https://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080
             path: /api/federation/**
+          # Headwind MDM human console (JSP, no Angular guard — locks 1+2 [network +
+          # route-access] are the enforcement boundary here, not lock 3; see the
+          # Phase-1 spec §0). ROOT-context WAR mounted at /manage/**; StripPrefix=1
+          # removes the platform-chosen /hmdm path segment before it reaches Tomcat.
+          - id: headwind-console
+            uri: http://headwind.snapdragon-pki.svc.cluster.local:8080
+            path: /hmdm/manage/**
+            filters:
+              - StripPrefix=1
+          # Headwind device check-in / MDM push REST surface. Network-locked (same
+          # tailnet-only Ingress as the row above) but NOT Casdoor-role-gated at the
+          # platform layer — Headwind's own per-device enrollment token governs
+          # inside (route-access role='PUBLIC', see 20-schema.sql). ROOT-context WAR
+          # mounted at /rest/**.
+          - id: headwind-checkin
+            uri: http://headwind.snapdragon-pki.svc.cluster.local:8080
+            path: /hmdm/rest/**
+            filters:
+              - StripPrefix=1
   destination:
     server: https://kubernetes.default.svc
     namespace: snapdragon-pki

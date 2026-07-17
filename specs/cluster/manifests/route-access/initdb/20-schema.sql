@@ -493,7 +493,19 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- App-Store CONSOLE path is reachable ONLY via the tailnet superadmin-gateway.
   ('snapdragon-superadmin-gateway', '/bff/superadmin/**',        'ROLE_SUPERADMIN', true),  -- App-Store BFF control plane (tailnet)
   ('snapdragon-superadmin-gateway', '/superadmin/service-catalog/**', 'ROLE_SUPERADMIN', true),  -- service-catalog-ui federated remote (tailnet)
-  ('snapdragon-superadmin-gateway', '/api/federation/**',        'ROLE_SUPERADMIN', true)   -- federation manifest/bundles for the superadmin shell (tailnet)
+  ('snapdragon-superadmin-gateway', '/api/federation/**',        'ROLE_SUPERADMIN', true),  -- federation manifest/bundles for the superadmin shell (tailnet)
+  -- ── Headwind MDM (Enterprise Phones) — DEFAULT-OFF optional-service `headwind`,
+  -- rides the EXISTING tailnet superadmin-gateway (no gatewayHost of its own).
+  -- Console = human JSP UI, gated ROLE_SUPERADMIN like every other row on this
+  -- gateway. Check-in = device MQTT-push/REST surface: network-locked (this
+  -- gateway is tailnet-only end-to-end) but role='PUBLIC' so the Casdoor JWT
+  -- check is SKIPPED — Headwind's own per-device enrollment token is the real
+  -- authenticator for this path. A route with ZERO matching allow rows is
+  -- default-deny, so this row is REQUIRED (not "omit to make it public").
+  -- ⚠ gate_optional_services REMOVES both rows when the headwind slug is
+  -- deselected (see optional-services.yaml headwind.routeAccessRows).
+  ('snapdragon-superadmin-gateway', '/hmdm/manage/**',           'ROLE_SUPERADMIN', true),  -- Headwind MDM human console (tailnet, JSP — no Angular guard)
+  ('snapdragon-superadmin-gateway', '/hmdm/rest/**',              'PUBLIC',           true)   -- Headwind device check-in/push (network-locked; Headwind's own device token, not Casdoor)
 ON CONFLICT DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────────
