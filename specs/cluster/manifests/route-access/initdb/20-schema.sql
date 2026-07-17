@@ -54,6 +54,28 @@ ALTER TABLE gateway_route_access ADD COLUMN IF NOT EXISTS domain text;
 -- admin-bff 001-copy (see the CREATE-TABLE note above).
 ALTER TABLE gateway_route_access ADD COLUMN IF NOT EXISTS mfa_required boolean DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_route_access_gw ON gateway_route_access (gateway, url_pattern);
+-- De-duplicate any rows a PRE-FIX re-application of this file already produced
+-- (the `id` PK is a random uuid, never supplied by the INSERT below, so
+-- `ON CONFLICT DO NOTHING` could not previously detect a repeat row) before
+-- adding the real uniqueness constraint just below — otherwise CREATE UNIQUE
+-- INDEX fails outright on an already-duplicated table during an in-place
+-- upgrade. Keeps the row with the lowest ctid (arbitrary but stable) per key.
+DELETE FROM gateway_route_access a USING gateway_route_access b
+  WHERE a.ctid < b.ctid
+    AND a.gateway = b.gateway
+    AND a.url_pattern = b.url_pattern
+    AND a.role = b.role
+    AND COALESCE(a.casdoor_user, '') = COALESCE(b.casdoor_user, '')
+    AND COALESCE(a.domain, '')       = COALESCE(b.domain, '');
+-- Real uniqueness key for a seed row: the table's only constraint was the
+-- random `id uuid PRIMARY KEY`, so `ON CONFLICT DO NOTHING` below never fired
+-- on a re-apply (every run generates fresh, non-colliding ids) — re-applying
+-- this file against an existing route-access-db (the file's own header claims
+-- this is supported for an in-place cluster upgrade) duplicated all seed
+-- rows. casdoor_user/domain are nullable and NULLs never compare equal in a
+-- plain unique index, so COALESCE them to a non-null sentinel.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_route_access_row
+  ON gateway_route_access (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(domain, ''));
 
 -- Canonical seed — one allow row per (gateway, url_pattern, role) in the routing
 -- contract. Role semantics (mirroring the snapdragon.games SecurityConfig
@@ -507,16 +529,30 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-superadmin-gateway', '/hmdm/manage/**',           'ROLE_SUPERADMIN', true),  -- Headwind MDM human console (tailnet, JSP — no Angular guard)
   ('snapdragon-superadmin-gateway', '/hmdm/rest/**',              'PUBLIC',           true),  -- Headwind device check-in/push (network-locked; Headwind's own device token, not Casdoor)
   -- AttestationServer (GrapheneOS hardware-attestation verification) rows. All
-  -- three REQUIRED — a route with ZERO matching allow rows is default-deny, same
+  -- REQUIRED — a route with ZERO matching allow rows is default-deny, same
   -- as the headwind rows above. /attest/api/status is device-facing despite the
   -- /api/ prefix, so it gets its own PUBLIC row; the gateway route ordering
   -- (apps/22-gateway-superadmin.yaml) must evaluate it before /attest/api/**.
-  -- ⚠ gate_optional_services REMOVES all three rows when the attestation-server
+  -- ⚠ gate_optional_services REMOVES all rows when the attestation-server
   -- slug is deselected (see optional-services.yaml attestation-server.routeAccessRows).
   ('snapdragon-superadmin-gateway', '/attest/auditor/**',         'PUBLIC',           true),  -- AttestationServer device/Auditor-app check-in (network-locked; no Casdoor)
   ('snapdragon-superadmin-gateway', '/attest/api/status',         'PUBLIC',           true),  -- device-facing despite /api/ prefix — must precede /attest/api/** below
-  ('snapdragon-superadmin-gateway', '/attest/api/**',             'ROLE_SUPERADMIN', true)   -- AttestationServer human console
-ON CONFLICT DO NOTHING;
+  -- Explicit DENY, MORE SPECIFIC than the /attest/api/** console row below (so it
+  -- wins the "most specific matching url_pattern wins" rule documented in this
+  -- file's header comment). CreateAccountHandler (AttestationServer.java:1212-1239)
+  -- has ZERO app-layer auth — no verifySession() call, unlike ChangePasswordHandler
+  -- (line 1256) which has one. PostHandler's base checks are an Origin/Content-Type/
+  -- Sec-Fetch-* CSRF-shape check, not authentication, so any ROLE_SUPERADMIN caller
+  -- on the tailnet could otherwise self-mint a brand-new attestation-server account.
+  -- Accounts are provisioned out-of-band by an operator via `kubectl exec` into the
+  -- attestation-server pod + a loopback POST to /api/create-account (ClusterIP-only,
+  -- not gateway-proxied).
+  ('snapdragon-superadmin-gateway', '/attest/api/create-account', 'ROLE_SUPERADMIN', false), -- explicit DENY: no app-layer auth on this handler
+  ('snapdragon-superadmin-gateway', '/attest/api/**',             'ROLE_SUPERADMIN', true)   -- AttestationServer human console (create-account explicitly excluded above)
+-- Targets the uq_route_access_row expression index above (must match its
+-- definition exactly, COALESCE included) so a genuine repeat seed row is
+-- skipped instead of duplicated on a re-apply.
+ON CONFLICT (gateway, url_pattern, role, COALESCE(casdoor_user, ''), COALESCE(domain, '')) DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Per-machine-user LEAST-PRIVILEGE grants. The login roles are created in

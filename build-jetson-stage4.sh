@@ -66,6 +66,13 @@ source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
 # Jetson currently hard-errors on --encrypt-root earlier (single boot+root
 # partition), so the preflight/register below are inert TODAY and "just work" if
 # Jetson gains a separate boot partition. See scripts/_dracut-cross-lib.sh.
+# Host-safety guard: the container predicate gating every HOST-mutating step
+# (the /etc/portage seeds + the host emerge below, and _dracut-cross-lib.sh's
+# kernel-global binfmt registration). Fail-safe: an unproven runtime is treated
+# as the operator's real machine and nothing is written. See
+# scripts/_host-guard-lib.sh.
+# shellcheck source=scripts/_host-guard-lib.sh
+source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
 # shellcheck source=scripts/_dracut-cross-lib.sh
 source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 
@@ -925,7 +932,12 @@ unset _exec_blockers
 # "masked by: ~amd64 keyword" even though the sysroot side is accepted (the
 # post-#352 frite failure). Accept it host-side too (** — pure python,
 # arch-independent), mirroring the HOSTSELINUX package.use pre-seed precedent.
-if [ "$(id -u)" -eq 0 ] && [ -d /etc/portage ]; then
+# HOST-MUTATION SITE. The seed below rewrites /etc/portage on whatever root this
+# runs as — including "*/* PYTHON_TARGETS: python3_12 python3_13", a WILDCARD,
+# system-wide python-target change. That is correct in the throwaway builder
+# container (it is why the fleet builds work) and WRONG on the operator's real
+# machine, so the container proof — not merely root+/etc/portage — gates it.
+if hostguard_mutation_allowed; then
     mkdir -p /etc/portage/package.accept_keywords
     cat > /etc/portage/package.accept_keywords/snapdragon-host-build-backends <<'HOSTKW'
 # setuptools-scm's vcs-versioning backend: pure-python/arch-independent, often
@@ -983,6 +995,12 @@ sys-libs/libselinux python
 sys-process/audit python
 HOSTPYUSE
     info "Pre-seeded HOST /etc/portage/package.use: PYTHON_TARGETS python3_12 (build-backend chain)"
+elif [ "$(id -u)" -eq 0 ] && [ -d /etc/portage ]; then
+    # Native root on a real host: VERIFY read-only, never write. Proceeds when the
+    # host already satisfies the config; else fails fast with a reviewable command.
+    hostguard_require_host_portage || exit 1
+else
+    info "Not root / no /etc/portage — HOST portage seed skipped (the cross emerge will use the existing config)."
 fi
 
 # Host SELinux policy build tools (same rationale as the Pi5/Frite builders).
@@ -997,7 +1015,7 @@ command -v sefcontext_compile &>/dev/null || HOST_POLICY_TOOLS+=(sys-libs/libsel
 command -v semodule           &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/policycoreutils)
 if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
     readarray -t HOST_POLICY_TOOLS < <(printf '%s\n' "${HOST_POLICY_TOOLS[@]}" | sort -u)
-    if [ "$(id -u)" -eq 0 ] && command -v emerge &>/dev/null; then
+    if hostguard_mutation_allowed && [ "$(id -u)" -eq 0 ] && command -v emerge &>/dev/null; then
         warn "Missing host SELinux build tools: ${HOST_POLICY_TOOLS[*]} — emerging natively"
         emerge --noreplace --quiet "${HOST_POLICY_TOOLS[@]}" \
             || { err "Failed to install host SELinux build tools (${HOST_POLICY_TOOLS[*]})."; exit 1; }
@@ -1010,7 +1028,7 @@ fi
 # containerd[selinux] host toolchain pre-seed (k8s roles; same as the rpi5 cross
 # build): the HOST selinux-python/policycoreutils chain needs python bindings or
 # the cross_emerge silently skips containerd and trips the payload assert.
-if [ "${ROLE_K8S}" != "none" ] && [ "$(id -u)" -eq 0 ]; then
+if [ "${ROLE_K8S}" != "none" ] && hostguard_mutation_allowed && [ "$(id -u)" -eq 0 ]; then
     mkdir -p /etc/portage/package.use
     cat > /etc/portage/package.use/snapdragon-cross-host-selinux <<'HOSTSELINUX'
 # Auto-written by build-jetson-stage4.sh (Jetson CROSS build; same rationale as
@@ -1033,6 +1051,14 @@ if ${BUILD_IMG}; then
                 err "missing ${t} on the build host — required to build the --encrypt-root .img (the only artifact this platform produces)"
                 exit 1
             fi
+            # Non-encrypt NATIVE build: fail fast with the emerge rather than
+            # silently dropping the .img the operator asked for. In the builder
+            # container this returns non-zero and today's warn+disable below runs
+            # verbatim (all four tools measured present in the image).
+            hostguard_require_host_tools "the .img build" \
+                    "sys-block/parted sys-apps/util-linux sys-fs/e2fsprogs" \
+                    --hint "Or pass --no-img to build without the flashable .img." \
+                    -- parted losetup mkfs.ext4 blkid || true
             warn "missing ${t}; disabling .img build"; BUILD_IMG=false; break
         fi
     done

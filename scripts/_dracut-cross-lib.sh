@@ -70,6 +70,15 @@ if [ -n "${_DRACUT_CROSS_LIB_SOURCED:-}" ]; then
 fi
 _DRACUT_CROSS_LIB_SOURCED=1
 
+# Host-safety guard. dracut_cross_register_qemu() mounts binfmt_misc and writes a
+# registration, and binfmt_misc is KERNEL-GLOBAL (see the (b) note above) — on a
+# native root build that mutates the OPERATOR'S kernel and mount namespace, not a
+# disposable container. Sourced here (idempotent, no side effects) so the guard
+# travels with this library rather than depending on each of the 5 ARM builders
+# remembering to source it first.
+# shellcheck source=scripts/_host-guard-lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/_host-guard-lib.sh"
+
 # ── Pinned constants (ONE audited copy) ────────────────────────────
 # The binfmt_misc node the aarch64 registration appears at, and the interpreter
 # path the host registers (matches the /usr/bin/qemu-aarch64 the Dockerfile.build
@@ -135,6 +144,21 @@ dracut_cross_register_qemu() {
     # binfmt_misc already mounted) — report honestly, nothing to write.
     if [ -e "${DRACUT_CROSS_BINFMT_NODE}" ]; then
         _dxc_report_existing
+        return 0
+    fi
+
+    # HOST-MUTATION GATE. Everything below this point mounts a kernel filesystem
+    # into the caller's mount namespace and writes a KERNEL-GLOBAL interpreter
+    # registration. In the builder container that is required and disposable; on
+    # the operator's machine it is a change to their running kernel that this
+    # build has no business making. The already-registered fast path above stays
+    # FIRST and unconditional, so a host that has qemu binfmt set up properly
+    # (systemd-binfmt) satisfies us and the build proceeds — that IS "proceed if
+    # the host already satisfies it". Stay NON-FATAL (contract: always return 0);
+    # the callers' fail-fast preflights (jetson/rpi5) then report the real,
+    # actionable problem at the right altitude.
+    if ! hostguard_mutation_allowed; then
+        _dxc_warn "qemu-${DRACUT_CROSS_QEMU_ARCH} is not registered and this is not a build container — refusing to mount binfmt_misc / write a KERNEL-GLOBAL registration on your system. Either: emerge app-emulation/qemu with static-user + QEMU_USER_TARGETS=aarch64 and enable systemd-binfmt (or app-emulation/qemu-binfmt), or run the build in the container (make docker-image)."
         return 0
     fi
 

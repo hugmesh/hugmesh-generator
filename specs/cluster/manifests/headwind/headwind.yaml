@@ -40,6 +40,14 @@
 # (manifests/coturn/deployment.yaml Service comment; optional-services.yaml
 # coturn.gatewayHost comment). Do not invent a NodePort/stream-passthrough
 # config with no working precedent in this repo. See §4/§6 below.
+#
+# ADMIN CREDENTIALS — VERIFIED against h-mdm/hmdm-docker's docker-entrypoint.sh
+# (no HEADWIND_ADMIN_USERNAME/PASSWORD anywhere in it or its templates) + h-mdm/
+# hmdm-server's Liquibase db.changelog.xml (changeSet 18.02.18-20:20 unconditionally
+# seeds login=admin/password=admin, MD5 21232f297a57a5a743894a0e4a801fc3). GO-LIVE
+# CHECKLIST ITEM: log in with admin/admin right after first boot and rotate the
+# password via Headwind's own Admin > user-settings UI — there is no env-var or
+# other out-of-band provisioning path. See the container env block below.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -102,17 +110,22 @@ spec:
             # comment.
             - name: SQL_PASS
               valueFrom: { secretKeyRef: { name: headwind-db-auth, key: password } }
-            # TODO(confirm): the exact env keys hmdm-docker's entrypoint honors
-            # for the FIRST-INSTALL admin are UNCONFIRMED — hmdm seeds a default
-            # admin via init.sql, and the entrypoint may not read admin creds
-            # from env at all (may need a post-install password change instead).
-            # HEADWIND_ADMIN_USERNAME/PASSWORD below are NOT verified against
-            # docker-entrypoint.sh; left wired (harmless if unread) but flagged
-            # — do not treat this as a proven first-install path before go-live.
-            - name: HEADWIND_ADMIN_USERNAME
-              valueFrom: { secretKeyRef: { name: headwind-admin, key: username } }
-            - name: HEADWIND_ADMIN_PASSWORD
-              valueFrom: { secretKeyRef: { name: headwind-admin, key: password } }
+            # VERIFIED (h-mdm/hmdm-docker docker-entrypoint.sh line 67 + templates/
+            # sql/hmdm_init.en.sql line 6): ADMIN_EMAIL is the ONLY admin-provisioning
+            # env var the entrypoint honors — it is templated into hmdm_init.sql as
+            # `_ADMIN_EMAIL_`, setting the SEEDED admin user's email and forcing
+            # passwordReset=true + a fresh passwordResetToken. There is NO env-var path
+            # for admin username/password: the WAR's Liquibase migration (h-mdm/hmdm-
+            # server db.changelog.xml, changeSet 18.02.18-20:20) unconditionally seeds
+            # a HARDCODED default admin (login=admin, password=admin, MD5
+            # 21232f297a57a5a743894a0e4a801fc3) on every boot. HEADWIND_ADMIN_USERNAME/
+            # PASSWORD were confirmed dead (never read anywhere in the entrypoint or its
+            # templates) and have been removed.
+            # GO-LIVE REQUIREMENT: operator must log in with admin/admin immediately
+            # after first boot and change the password via Headwind's own
+            # Admin > user-settings UI — there is no other provisioning path.
+            - name: ADMIN_EMAIL
+              valueFrom: { secretKeyRef: { name: headwind-admin, key: email } }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }

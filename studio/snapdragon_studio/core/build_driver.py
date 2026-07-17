@@ -89,6 +89,33 @@ def _path_field_emitted(field: str, cfg: ImageConfig) -> bool:
 # is enough — the helper body only depends on this interpreter's path/location.
 _ASKPASS_PATH_CACHE: str | None = None
 
+# Directories a root build's PATH has but an unprivileged Studio's typically does
+# not. See _host_tool_present().
+_SBIN_DIRS = ("/usr/sbin", "/sbin", "/usr/bin", "/bin")
+
+
+def _host_tool_present(*names: str) -> bool:
+    """True iff ANY of ``names`` exists as an executable on this host.
+
+    Deliberately does NOT rely on shutil.which() alone. Squash/disk tooling
+    installs into /usr/sbin on some hosts, and the Studio runs as an
+    unprivileged user whose PATH typically omits /usr/sbin — while the build
+    itself runs as ROOT via sudo/pkexec (_elevation_prefix), with /usr/sbin on
+    PATH. A PATH-only probe therefore reports "missing" for a tool the build
+    would find. Probe explicit directories too.
+
+    This residual false-negative risk is exactly why the caller belongs in the
+    ADVISORY channel (preflight_warnings), never in blocking preflight(): a
+    wrong answer here costs a spurious warning line, never a blocked build. The
+    builder script's own hostguard_require_host_tools remains authoritative.
+    """
+    for n in names:
+        if shutil.which(n):
+            return True
+        if any(os.access(os.path.join(d, n), os.X_OK) for d in _SBIN_DIRS):
+            return True
+    return False
+
 
 def docker_memory_args() -> list[str]:
     """The container memory-cap leg of the docker-run wrapper: ``[]`` (cap disabled /
@@ -492,7 +519,17 @@ class BuildDriver:
         if backend == "native" and not self.host.is_root and self._can_elevate():
             out.append("Native build runs as root via "
                        f"{self._elevation_prefix()[0]} — expect an authentication prompt.")
-        # Per-config advisories (this branch): out-of-scope values the builder ACCEPTS and
+        # Native host-tool advisory. The builder scripts now REFUSE (fail fast)
+        # rather than silently dropping a requested artifact when a host tool is
+        # missing, so surface the most common shortfall here — before the
+        # operator commits to a long build. Advisory only: see
+        # _host_tool_present() for why this must never block.
+        # Kept adjacent to the elevation notice above: both are HOST/native facts,
+        # which keeps them separable from the per-config block below.
+        if backend == "native" and not _host_tool_present("mksquashfs", "tar2sqfs"):
+            out.append("Native build: neither mksquashfs nor tar2sqfs found — the live ISO "
+                       "will be refused. Install sys-fs/squashfs-tools.")
+        # Per-config advisories (#387): out-of-scope values the builder ACCEPTS and
         # builds wrong, plus an unusable --distdir. Ordered after the host/elevation notice
         # so the two SOURCES stay visually separable, as _config_warnings' docstring says.
         out += self._config_warnings(cfg)

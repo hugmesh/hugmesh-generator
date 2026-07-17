@@ -64,7 +64,7 @@ anything, and the destructive ones are gated.
 | `fetch` | work-dir | Resolve the `--channel` release, download the GrapheneOS `<codename>-install-<version>.zip`(+`.sig`) into `--work-dir`, verify the sshsig **fail-closed**, extract, write a `.verified-<sha256>` marker. Idempotent (a cached resolution next to its verified zip makes re-fetch fully offline). |
 | `flash` | **DESTRUCTIVE** | Wipe the phone and flash the VERIFIED artifact. Typed-serial confirmation on a TTY; non-TTY requires BOTH `--yes` AND a matching `--serial`. Refuses anything without a matching verification marker, and re-verifies the signature again before flashing. |
 | `attest` | device + out-dir | Install the signer-pinned Snapdragon-forked Auditor (`--auditor-apk`/`--auditor-signer-sha256`) and print the self-hosted [AttestationServer](#management-plane) pairing runbook (`--attestation-url`). The in-app QR scan cannot be driven over adb, so this is an **operator-attested** pairing (`verdict:"operator-paired"`), not a cryptographic verification by the wizard. Runs **before** `mdm-enroll` — see [Management plane](#management-plane) for why. Writes `attestation.json`. |
-| `mdm-enroll` | device + out-dir | Enroll the phone as a Headwind MDM device-owner (`dpm set-device-owner com.hmdm.launcher/.AdminReceiver`) after a fail-closed fresh-device precondition (`pm list users` must show exactly one user). Installs the signer-pinned DPC APK (`--headwind-apk`/`--headwind-signer-sha256`) and pushes a non-interactive `init.json` (`com.hmdm.BASE_URL=--headwind-url`) into its external files dir. **MUST run before `profile`** — see [Management plane](#management-plane). Writes `mdm.json`. |
+| `mdm-enroll` | device + out-dir | Enroll the phone as a Headwind MDM device-owner (`dpm set-device-owner com.hmdm.launcher/.AdminReceiver`) after a fail-closed fresh-device precondition (`pm list users` must show exactly one user AND `dumpsys account` must show zero accounts). Installs the signer-pinned DPC APK (`--headwind-apk`/`--headwind-signer-sha256`) and pushes a non-interactive `init.json` (`com.hmdm.BASE_URL=--headwind-url`) into its external files dir. **MUST run before `profile`** — see [Management plane](#management-plane). Writes `mdm.json`. |
 | `enroll` | out-dir | Add a running phone to the mesh — freshly flashed **or already-running**, GrapheneOS **or stock Android** (the OS probe records which; it never gates — see [Onboarding existing phones](#onboarding-existing-phones-no-reflash)). Guided tailnet join with keys from `--keys-dir` (docker-mesh-node layout) or `--login-server`/`--authkey-file`; verifies `tailscale0` got a 100.64/10 address and writes the enrollment record. `--no-usb` drops adb entirely (guided handset-only runbook, operator-attested record). |
 | `profile` | device + out-dir | Create the `enterprise` secondary user, generate + escrow its passphrase (vault-seed custody), operator sets the credential on the handset (default path). **This permanently forecloses device-owner mode** — see [Management plane](#management-plane); it must never run before `mdm-enroll`. |
 | `rotate-profile-pass` | out-dir (+device) | Generate + escrow a new profile passphrase atomically (previous escrow kept as `.prev-<ts>`). |
@@ -485,10 +485,12 @@ add a user or account:
 - **`mdm-enroll` runs next (5/8)**, and is the *last* point at which
   device-owner mode is obtainable — `cmd_mdm_enroll()` opens with a
   fail-closed precondition check (`adb shell pm list users` must show exactly
-  one user); running it out of order turns the cryptic AOSP
-  `IllegalStateException` into a documented `exit 2`
-  ("a secondary user/account already exists — device-owner mode is no longer
-  obtainable; reflash to retry"). `--force` downgrades this to a warning.
+  one user AND `adb shell dumpsys account` must show zero accounts —
+  `dpm set-device-owner` fails if either is violated, independently);
+  running it out of order turns the cryptic AOSP `IllegalStateException`
+  into a documented `exit 2` ("a secondary user/account already exists —
+  device-owner mode is no longer obtainable; reflash to retry"). `--force`
+  downgrades this to a warning.
 - **`profile` (7/8) is what permanently forecloses the window** — it creates
   the escrowed `enterprise` secondary user. It must never run before
   `mdm-enroll`.
