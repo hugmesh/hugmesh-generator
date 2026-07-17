@@ -109,6 +109,37 @@ spec:
             path: /hmdm/rest/**
             filters:
               - StripPrefix=1
+          # AttestationServer device/Auditor-app surface (AppPostHandler — requires
+          # ABSENCE of an Origin header). Real paths: /auditor/challenge,
+          # /auditor/verify, /auditor/submit. Network-locked only (route-access
+          # role='PUBLIC', see 20-schema.sql) — no app-layer auth.
+          - id: attestation-auditor
+            uri: http://attestation-server.snapdragon-pki.svc.cluster.local:8080
+            path: /attest/auditor/**
+            filters:
+              - StripPrefix=1
+          # /api/status is device-facing (AppPostHandler) despite living under
+          # /api/, unlike every other /api/* path on this server — MUST be
+          # evaluated before attestation-console below or the exact-match status
+          # check-in gets swallowed by the console prefix route (route-access
+          # role='PUBLIC', see 20-schema.sql).
+          - id: attestation-status
+            uri: http://attestation-server.snapdragon-pki.svc.cluster.local:8080
+            path: /attest/api/status
+            filters:
+              - StripPrefix=1
+          # AttestationServer human console (PostHandler — requires matching
+          # Origin/Content-Type/Sec-Fetch-*): login, create-account, devices.json,
+          # attestation-history.json, account, configuration, delete-device,
+          # rotate, logout(-everywhere), change-password. /api/create-account has
+          # NO app-level auth/invite gate — this route's ROLE_SUPERADMIN gate
+          # (route-access, see 20-schema.sql) is the only guard against open
+          # self-signup.
+          - id: attestation-console
+            uri: http://attestation-server.snapdragon-pki.svc.cluster.local:8080
+            path: /attest/api/**
+            filters:
+              - StripPrefix=1
   destination:
     server: https://kubernetes.default.svc
     namespace: snapdragon-pki

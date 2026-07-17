@@ -111,6 +111,22 @@ data:
   # dependsOn (CPU-only, self-contained — schedules with or without edge-ai). Image
   # is a separate build artifact; keep "false" until built+pushed.
   edge-ai-tts: "false"
+  # headwind — Headwind MDM (Enterprise Phones), DEFAULT-OFF, admin-only devops
+  # service (Harbor/superadmin posture, snapdragon-pki namespace). BACKFILL: this
+  # key was missing despite headwind being present in both build scripts'
+  # _opt_render_installed_services loops since Phase 1 — the sed-based renderer
+  # here was a silent no-op for headwind until this fix. Rendered true/false by
+  # _opt_render_installed_services from OPTIONAL_SERVICES; the literal baseline
+  # below is the SAFE DEFAULT (off). No frontend remote (JSP console reached only
+  # via the superadmin-gateway routes) — mountAt null, like anubis/coturn/meshbridge.
+  headwind: "false"
+  # attestation-server — GrapheneOS AttestationServer (Hardware Trust Root),
+  # DEFAULT-OFF, admin-only devops service (Harbor/superadmin posture,
+  # snapdragon-pki namespace). Same shape as headwind: no frontend remote (its
+  # console is reached only via the superadmin-gateway /attest/api/** route) —
+  # mountAt null. Rendered true/false by _opt_render_installed_services from
+  # OPTIONAL_SERVICES; the literal baseline below is the SAFE DEFAULT (off).
+  attestation-server: "false"
   # Per-slug metadata the admin console + greying-out predicate read (mountAt =
   # where the federation manifest mounts the remote; namespace = its k8s ns).
   # The games-services (app-store operator UI) capability RIDES the `games` install
@@ -134,5 +150,7 @@ data:
       { "slug": "meshbridge", "displayName": "Mesh radio bridge (Meshtastic ↔ Matrix)", "namespace": "snapdragon-backend", "mountAt": null, "dependsOn": "tuwunel" },
       { "slug": "edge-ai", "displayName": "Edge AI (inference)", "namespace": "snapdragon-inference", "mountAt": "/admin/edge-ai" },
       { "slug": "edge-ai-analysis", "displayName": "Edge AI — analysis API", "namespace": "snapdragon-inference", "mountAt": "/admin/edge-ai-analysis", "dependsOn": "edge-ai" },
-      { "slug": "edge-ai-tts", "displayName": "Edge AI — voice synthesis (TTS)", "namespace": "snapdragon-inference", "mountAt": "/admin/edge-ai-tts" }
+      { "slug": "edge-ai-tts", "displayName": "Edge AI — voice synthesis (TTS)", "namespace": "snapdragon-inference", "mountAt": "/admin/edge-ai-tts" },
+      { "slug": "headwind", "displayName": "Headwind MDM (Enterprise Phones)", "namespace": "snapdragon-pki", "mountAt": null },
+      { "slug": "attestation-server", "displayName": "GrapheneOS AttestationServer (Hardware Trust Root)", "namespace": "snapdragon-pki", "mountAt": null }
     ]

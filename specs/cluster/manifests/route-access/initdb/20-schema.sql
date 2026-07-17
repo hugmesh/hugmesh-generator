@@ -505,7 +505,17 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- ⚠ gate_optional_services REMOVES both rows when the headwind slug is
   -- deselected (see optional-services.yaml headwind.routeAccessRows).
   ('snapdragon-superadmin-gateway', '/hmdm/manage/**',           'ROLE_SUPERADMIN', true),  -- Headwind MDM human console (tailnet, JSP — no Angular guard)
-  ('snapdragon-superadmin-gateway', '/hmdm/rest/**',              'PUBLIC',           true)   -- Headwind device check-in/push (network-locked; Headwind's own device token, not Casdoor)
+  ('snapdragon-superadmin-gateway', '/hmdm/rest/**',              'PUBLIC',           true),  -- Headwind device check-in/push (network-locked; Headwind's own device token, not Casdoor)
+  -- AttestationServer (GrapheneOS hardware-attestation verification) rows. All
+  -- three REQUIRED — a route with ZERO matching allow rows is default-deny, same
+  -- as the headwind rows above. /attest/api/status is device-facing despite the
+  -- /api/ prefix, so it gets its own PUBLIC row; the gateway route ordering
+  -- (apps/22-gateway-superadmin.yaml) must evaluate it before /attest/api/**.
+  -- ⚠ gate_optional_services REMOVES all three rows when the attestation-server
+  -- slug is deselected (see optional-services.yaml attestation-server.routeAccessRows).
+  ('snapdragon-superadmin-gateway', '/attest/auditor/**',         'PUBLIC',           true),  -- AttestationServer device/Auditor-app check-in (network-locked; no Casdoor)
+  ('snapdragon-superadmin-gateway', '/attest/api/status',         'PUBLIC',           true),  -- device-facing despite /api/ prefix — must precede /attest/api/** below
+  ('snapdragon-superadmin-gateway', '/attest/api/**',             'ROLE_SUPERADMIN', true)   -- AttestationServer human console
 ON CONFLICT DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────────

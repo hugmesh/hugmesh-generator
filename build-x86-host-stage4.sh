@@ -1800,7 +1800,7 @@ gate_optional_services() {
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     local slug
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio headwind egress-vpn workloadConsole edge-ai edge-ai-analysis edge-ai-tts tor; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio headwind attestation-server egress-vpn workloadConsole edge-ai edge-ai-analysis edge-ai-tts tor; do
         _opt_selected "${slug}" && continue
         info "OPTIONAL_SERVICES: '${slug}' NOT selected — pruning it from the baked tree"
         case "${slug}" in
@@ -1960,6 +1960,22 @@ gate_optional_services() {
                 _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-superadmin-gateway \
                     '/hmdm/manage/**' '/hmdm/rest/**'
                 ;;
+            attestation-server)
+                # AttestationServer (GrapheneOS Hardware Trust Root) — DEFAULT-OFF,
+                # admin-only devops service (Harbor/superadmin posture). Owns its
+                # bootstrap Application + manifests dir + per-service ESO file +
+                # THREE routes on the EXISTING tailnet superadmin-gateway (NOT be/fe
+                # — no gatewayHost of its own) + their route-access rows. When
+                # deselected the superadmin console's AttestationServer entry greys
+                # out (installed-services "false").
+                rm -f "${apps}/24-attestation-server.yaml"
+                rm -rf "${tree}/manifests/attestation-server"
+                rm -f "${tree}/manifests/external-secrets/attestation-server-externalsecrets.yaml"
+                _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" attestation-server-externalsecrets.yaml
+                _opt_drop_route "${apps}/22-gateway-superadmin.yaml" attestation-auditor attestation-status attestation-console
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-superadmin-gateway \
+                    '/attest/auditor/**' '/attest/api/status' '/attest/api/**'
+                ;;
             tor)
                 # NODE service (DISTRO tor daemon + a reconcile agent), not a cluster
                 # Application. Prune the per-service NetworkPolicy interaction (file +
@@ -2104,7 +2120,7 @@ _opt_render_installed_services() {
     local cm="${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy/installed-services-configmap.yaml"
     [ -f "${cm}" ] || return 0
     local slug val
-    for slug in akkoma tuwunel phpbb games owncast tube character-studio headwind workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
+    for slug in akkoma tuwunel phpbb games owncast tube character-studio headwind attestation-server workloadConsole edge-ai edge-ai-analysis edge-ai-tts; do
         if _opt_selected "${slug}"; then val="true"; else val="false"; fi
         # '#'-delimited so the (true|false) alternation does not collide with the delimiter.
         sed -i -E "s#^([[:space:]]*)${slug}:[[:space:]]*\"(true|false)\"#\\1${slug}: \"${val}\"#" "${cm}"

@@ -46,6 +46,12 @@ tests/stack/.seed-e2e/
 # Output of scripts/gen-provision-keys.sh, gen-cluster-secrets.sh, gen-keystores.sh
 # (keys-out/) and any filled-in per-role KEYS dir.
 /keys-out/
+# clients/snapdragon-auditor/gen-auditor-signing-key.sh's release signing key
+# defaults into keys-out/ (already ignored above) — these are defense-in-depth
+# in case OUTDIR is ever pointed elsewhere inside the repo. The key itself
+# belongs on the pki USB / Vault, same custody as cluster-ca.key; NEVER git.
+*.jks
+keystore.properties
 # In-UI SSH-terminal DIAL PRIVATE key + Vault-seed tree (NEVER baked/bundled/git).
 # Belt-and-braces if gen-provision-keys.sh is pointed at a custom --out dir inside
 # the repo: the dial private key and its vault-seed tree must never be committed.

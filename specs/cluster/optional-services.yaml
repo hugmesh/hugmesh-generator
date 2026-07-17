@@ -615,6 +615,33 @@ spec:
       federationModule: null
       casdoorSeed: null
 
+    # ── attestation-server — GrapheneOS AttestationServer (hardware trust root) ──
+    # Verifies GrapheneOS/Auditor hardware-attestation submissions. SQLite-backed
+    # (single pod, no cluster DB engine), no Ingress — reachable only through the
+    # apps/22-gateway-superadmin.yaml routes below (tailnet-only), same posture as
+    # headwind. 3-route split: device/Auditor-app calls (PUBLIC, network-locked)
+    # vs. the browser/console (ROLE_SUPERADMIN) — /attest/api/status is
+    # device-facing despite the /api/ prefix, so it gets its own PUBLIC row and
+    # MUST be evaluated before the /attest/api/** console row.
+    - slug: attestation-server
+      displayName: "GrapheneOS AttestationServer (Hardware Trust Root)"
+      namespace: snapdragon-pki
+      default: off
+      apps:
+        - apps/24-attestation-server.yaml
+      sharedApps: []
+      manifestPath: manifests/attestation-server
+      esoFile: manifests/external-secrets/attestation-server-externalsecrets.yaml
+      esoKeys: [attestation-server-smtp]
+      gatewayHost: null
+      gatewayRouteIds: [attestation-auditor, attestation-status, attestation-console]
+      routeAccessRows:
+        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/auditor/** }  # device/Auditor-app check-in, PUBLIC (tailnet-locked)
+        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/api/status }  # device-facing despite /api/ prefix, PUBLIC — must precede /attest/api/** below
+        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/api/**     }  # human console, ROLE_SUPERADMIN
+      federationModule: null
+      casdoorSeed: null
+
     # ── anubis — proof-of-work anti-scraper gate fronting public ingress ──────
     # Anubis (github.com/TecharoHQ, ghcr.io/techarohq/anubis) sits in front of the
     # fe-gateway (TARGET=snapdragon-fe-gateway) on its :8923 PoW gate and exposes a

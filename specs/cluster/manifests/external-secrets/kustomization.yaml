@@ -38,6 +38,13 @@ resources:
   # line + the file via gate_optional_services(), same mechanism as
   # akkoma/tuwunel above.
   - headwind-externalsecrets.yaml   # headwind-db-auth, headwind-admin
+  # AttestationServer (GrapheneOS Hardware Trust Root) — DEFAULT-OFF optional-
+  # service (slug attestation-server, optional-services.yaml). ONE ExternalSecret
+  # (attestation-server-smtp) reusing the EXISTING shared outbound-mail Vault doc
+  # (secret/snapdragon/mail) — same document casdoor-smtp/akkoma-smtp already
+  # read; no new Vault path. Deselecting attestation-server prunes THIS line +
+  # the file via gate_optional_services(), same mechanism as headwind above.
+  - attestation-server-externalsecrets.yaml   # attestation-server-smtp
   # coturn TURN/STUN long-term-credential SHARED SECRET (key `secret`), ESO/Vault
   # only (secret/snapdragon/coturn-shared-secret) — NEVER inline. Materializes only
   # once that Vault path is populated; coturn is DEFAULT-OFF so a default build never

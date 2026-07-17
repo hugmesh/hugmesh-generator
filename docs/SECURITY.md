@@ -94,6 +94,9 @@ Vault-managed mTLS keystore:
 | `image-builder` (app-image Kaniko build pods) | (per-build) | `s0:c75` | (build pod) | (non-Java: no JKS) |
 | `edge-ai-tts` (Piper TTS) | per-app SA | `s0:c72` | — | (non-Java: no JKS) |
 | meshbridge (Meshtastic ↔ Matrix bridge — optional, default-off) | `sa-meshbridge` | `s0:c76` | (Casdoor machine client — manual, see meshbridge ESO) | (non-Java: no JKS) |
+| `headwind-db` (Headwind MDM Postgres — optional, default-off) | `sa-headwind-db` | `s0:c77` | (DB) | (non-Java: PEM, no JKS) |
+| `headwind` (Headwind MDM app — optional, default-off) | `sa-headwind` | `s0:c78` | — (LocalAuth admin, not Casdoor — see headwind-admin ESO) | (Java/Tomcat: no JKS — plain HTTP, TLS terminated at gateway) |
+| `attestation-server` (GrapheneOS AttestationServer — optional, default-off, single pod, no DB leg) | `sa-attestation-server` | `s0:c79` | — (SQLite-local accounts, not Casdoor — `/attest/api/**` gated ROLE_SUPERADMIN at the gateway) | (Java: no JKS — plain HTTP, TLS terminated at gateway) |
 
 The matrix is the contract: `seLinuxOptions.level` per Deployment (added to each
 chart/manifest), a `ServiceAccount` per app, a Casdoor service user+role created

@@ -1,0 +1,36 @@
+# AttestationServer (GrapheneOS hardware-attestation verification service) — Phase 2
+# optional-service. raw-manifests Application, cloned from apps/23-headwind.yaml's shape
+# (source.path=specs/cluster/manifests/<dir>, not Helm like apps/03a-harbor.yaml).
+#
+# NOTE: no Ingress is defined by this Application. Reachability is provided entirely by
+# the EXISTING apps/22-gateway-superadmin.yaml Spring Cloud Gateway Application
+# (tailnet-only, ROLE_SUPERADMIN-gated console + PUBLIC-but-tailnet-only device/auditor
+# routes under /attest/**) — see that file's new attestation-auditor/attestation-status/
+# attestation-console routes and optional-services.yaml's attestation-server slug.
+#
+# namespace snapdragon-pki is already created (idempotently) by
+# apps/06-vault-pki.yaml / apps/20-gateway-pki.yaml — CreateNamespace=true kept here too
+# for idempotency, matching every other Application in this repo (same rationale as
+# apps/23-headwind.yaml's comment).
+#
+# syncPolicy.automated.prune: false — DELIBERATE, mirrors apps/23-headwind.yaml exactly.
+# snapdragon-pki is a SHARED namespace (harbor, vault, casdoor, route-access-db, the
+# pki-gateway, the superadmin-gateway, headwind all co-reside here); an over-broad prune
+# has a materially worse blast radius here than a dedicated-namespace app.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: snapdragon-attestation-server
+  namespace: devops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/attestation-server
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: snapdragon-pki
+  syncPolicy:
+    automated: { prune: false, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

@@ -838,6 +838,19 @@ if os.environ.get("MAIL_ENABLED") == "1":
         "AKKOMA_SMTP_TLS": os.environ["MAIL_TLS"],
         "AKKOMA_SMTP_FROM": os.environ["MAIL_FROM"],
     }
+    # AttestationServer (DEFAULT-OFF optional-service) reuses this SAME shared
+    # mail doc — no new Vault path. Consumed by the smtp-config-seeder sidecar
+    # (NOT read as process env vars by the app itself; it only reads SMTP
+    # settings from its own SQLite Configuration table — see
+    # attestation-server-externalsecrets.yaml). k8s keys mirror the
+    # attestation-server-smtp ExternalSecret template.data shape.
+    data[f"{brand}-pki"]["attestation-server-smtp"] = {
+        "ATTESTATION_SMTP_HOST": os.environ["MAIL_HOST"],
+        "ATTESTATION_SMTP_PORT": os.environ["MAIL_PORT"],
+        "ATTESTATION_SMTP_USER": os.environ["MAIL_USER"],
+        "ATTESTATION_SMTP_PASSWORD": os.environ["MAIL_PASSWORD"],
+        "ATTESTATION_SMTP_FROM": os.environ["MAIL_FROM"],
+    }
 
 with open(sys.argv[1], "w") as f:
     json.dump(data, f, indent=2, sort_keys=True)
