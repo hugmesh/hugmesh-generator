@@ -145,7 +145,7 @@ the native amd64 chroot build with grub-EFI.
   `.ps1/.cmd` and Linux `sh` wrappers, one-line Casdoor login, honoring the
   ADR-14 mesh-join latch + register-and-approve admission. **Not** `make stack-up`
   (that's the local-dev full-stack runner).
-- **See also:** [`ENTERPRISE-PHONES.md`](ENTERPRISE-PHONES.md) — the **fourth onboarding form** (🚧): a GrapheneOS Pixel phone onboarded alongside the appliance images, these client desktops, and this FD-09 Docker mesh node; its `enroll` verb reuses this mesh node's `keys.example` keys-dir layout.
+- **See also:** [`MDM.md`](MDM.md) — the **fourth onboarding form** (🚧): a GrapheneOS Pixel phone onboarded alongside the appliance images, these client desktops, and this FD-09 Docker mesh node; its `enroll` verb reuses this mesh node's `keys.example` keys-dir layout.
 
 ### 6 — FD-08 delegated build pipeline — 🔭 DEFERRED (roadmap)
 - superadmin-owned, role-gated ArgoCD pipeline: admin **configures** a

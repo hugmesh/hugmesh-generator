@@ -106,6 +106,12 @@ if [ "${STOREPASS}" != "${STOREPASS_CONFIRM}" ]; then
   echo "ERROR: passwords did not match" >&2
   exit 1
 fi
+# keytool's `-storepass:env STOREPASS` reads the password from the CHILD
+# process's environment, so a plain shell variable is invisible to it and every
+# keytool call below fails with "Cannot find environment variable: STOREPASS".
+# Export it for the duration; the `unset STOREPASS` after the last keytool call
+# scrubs it back out of the environment.
+export STOREPASS
 
 echo "==> Generating EC secp256r1 release key (alias: ${ALIAS}, validity: ${VALIDITY_DAYS}d)" >&2
 keytool -genkeypair -v \

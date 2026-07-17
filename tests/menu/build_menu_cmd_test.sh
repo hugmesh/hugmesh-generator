@@ -480,7 +480,7 @@ assert_has "domain"                     "DOMAIN=acme.example"
 assert_has "root login"                 "PERMIT_ROOT_LOGIN=prohibit-password"
 assert_has "native"                     "NATIVE=1"
 
-# ── enterprise-phone screen (phone_screen/_phone_run) — WS-MENU additive block ──
+# ── MDM phone screen (phone_screen/_phone_run) — WS-MENU additive block ──
 # The phone wizard is a NON-BUILD choice (like Local Docker mesh): it must never
 # touch build_make_cmd, never persist state (no OPT_PHONE_*, save_conf untouched),
 # run its driver FOREGROUND only, and move the auth key via a chmod-600 mktemp
@@ -498,7 +498,7 @@ assert_grep "taxo: meshnode golden item intact"   '^[[:space:]]*meshnode[[:space
 assert_grep "taxo: localmesh golden item intact"  '^[[:space:]]*localmesh[[:space:]]+"Local Docker mesh — run a mesh on THIS machine in Docker \(no image built\)"'                        "${MENU_SH}"
 assert_grep "taxo: client golden item intact"     '^[[:space:]]*client[[:space:]]+"Mesh desktop client — a branded desktop that JOINS an existing mesh \(tailnet \+ SSO\)"'                "${MENU_SH}"
 assert_grep "taxo: standalone golden item intact" '^[[:space:]]*standalone[[:space:]]+"Standalone Gentoo desktop — hardened personal / UNAFFILIATED desktop \(no mesh/SSO\)"'              "${MENU_SH}"
-assert_grep "phone: opening item present"         '^[[:space:]]*phone[[:space:]]+"Enterprise phone '  "${MENU_SH}"
+assert_grep "phone: opening item present"         '^[[:space:]]*phone[[:space:]]+"MDM phone '  "${MENU_SH}"
 assert_grep "phone: routed to phone_screen"       '^[[:space:]]*phone\)[[:space:]]+phone_screen '     "${MENU_SH}"
 
 # no persistence: no OPT_PHONE_* anywhere, and the phone functions never call

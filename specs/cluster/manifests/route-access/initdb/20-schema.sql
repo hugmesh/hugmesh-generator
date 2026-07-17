@@ -516,7 +516,7 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-superadmin-gateway', '/bff/superadmin/**',        'ROLE_SUPERADMIN', true),  -- App-Store BFF control plane (tailnet)
   ('snapdragon-superadmin-gateway', '/superadmin/service-catalog/**', 'ROLE_SUPERADMIN', true),  -- service-catalog-ui federated remote (tailnet)
   ('snapdragon-superadmin-gateway', '/api/federation/**',        'ROLE_SUPERADMIN', true),  -- federation manifest/bundles for the superadmin shell (tailnet)
-  -- ── Headwind MDM (Enterprise Phones) — DEFAULT-OFF optional-service `headwind`,
+  -- ── Headwind MDM (managed phones) — DEFAULT-OFF optional-service `headwind`,
   -- rides the EXISTING tailnet superadmin-gateway (no gatewayHost of its own).
   -- Console = human JSP UI, gated ROLE_SUPERADMIN like every other row on this
   -- gateway. Check-in = device MQTT-push/REST surface: network-locked (this

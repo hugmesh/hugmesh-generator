@@ -119,8 +119,15 @@ spec:
                 # AlertDispatcher.java:52-59). Wrapped in an explicit transaction so a failing
                 # INSERT rolls back the DELETE instead of leaving the table wiped with no SMTP
                 # row and no retry-guard (sqlite3's CLI does not auto-wrap multiple statements).
+                # SQL-quote the secret values: these come straight from the Secret, and a single
+                # quote is a perfectly legal character in an SMTP password/username. Interpolated
+                # raw it would terminate the '...' literal early, the INSERT would fail, the whole
+                # transaction would roll back, and SMTP would be SILENTLY never seeded (alerts
+                # dead). Doubling every ' is the correct SQLite escaping (also closes the SQL
+                # injection path a crafted secret value would otherwise open).
+                sqlq() { printf '%s' "$1" | sed "s/'/''/g"; }
                 sqlite3 /data/attestation.db \
-                  "BEGIN IMMEDIATE; DELETE FROM Configuration; INSERT INTO Configuration (key, value) VALUES ('emailUsername', '${ATTESTATION_SMTP_USER}'), ('emailPassword', '${ATTESTATION_SMTP_PASSWORD}'), ('emailHost', '${ATTESTATION_SMTP_HOST}'), ('emailPort', '${ATTESTATION_SMTP_PORT}'), ('emailFrom', '${ATTESTATION_SMTP_FROM}'); COMMIT;" \
+                  "BEGIN IMMEDIATE; DELETE FROM Configuration; INSERT INTO Configuration (key, value) VALUES ('emailUsername', '$(sqlq "${ATTESTATION_SMTP_USER}")'), ('emailPassword', '$(sqlq "${ATTESTATION_SMTP_PASSWORD}")'), ('emailHost', '$(sqlq "${ATTESTATION_SMTP_HOST}")'), ('emailPort', '$(sqlq "${ATTESTATION_SMTP_PORT}")'), ('emailFrom', '$(sqlq "${ATTESTATION_SMTP_FROM}")'); COMMIT;" \
                   && touch /data/.smtp-seeded
               fi
               sleep infinity

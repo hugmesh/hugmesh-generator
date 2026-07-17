@@ -122,7 +122,7 @@ lint:shellinj-regression:
     - bash tests/scripts/test-brand-path-validation.sh
     - bash tests/scripts/test-provision-manifest-injection.sh
 
-# Enterprise-phone wizard gate. Offline logic test for scripts/phone-wizard.sh
+# MDM phone wizard gate. Offline logic test for scripts/phone-wizard.sh
 # (the GrapheneOS-on-Pixel onboarding driver): adb/fastboot/curl are PATH-shim
 # stubs, but the sshsig supply-chain crypto is REAL (an ephemeral ed25519 key
 # signs the fixture artifact; the driver verifies via dlv_verify_sshsig).
@@ -140,7 +140,7 @@ lint:phone-wizard:
   script:
     - bash tests/phone/test-phone-wizard.sh
 
-# Enterprise-phone END-TO-END gate. Onboards a MOCKED stock-Android Pixel through
+# MDM phone END-TO-END gate. Onboards a MOCKED stock-Android Pixel through
 # scripts/phone-wizard.sh's real verb chain in sequence against ONE stateful mock
 # device (detect -> enroll[pending->joined] -> mdm-enroll -> attest -> profile ->
 # ingest -> status -> remove-profile -> re-ingest). adb/fastboot/curl/apksigner are
