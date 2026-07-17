@@ -69,6 +69,14 @@ SEED_SUPERADMIN_USERNAME_ENV = "CASDOOR_SUPERADMIN_USERNAME"
 DEFAULT_BRAND = "snapdragon"
 DEFAULT_DOMAIN = "snapdragon.systems"
 
+# A BCP-47-shaped locale tag: a primary subtag plus optional script/region subtags
+# (e.g. de, fr, pt-BR, zh-Hant, en-XA). Deliberately lenient on SHAPE only — the
+# authority on whether a catalog EXISTS is the login-ui build, which fails loudly
+# on a requested locale with no messages.<locale>.xlf. Validating existence here
+# would invent a constraint this config cannot honestly check (the login-ui repo
+# is not cloned until `make stack-clone`).
+_LOCALE_RE = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$")
+
 _REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir))
 
@@ -160,6 +168,17 @@ class LocalMeshBootstrapConfig:
     # sets nothing new, STACK_SRC stays unset, the Makefile's own default resolves as now.
     source_mode: str = "clone"
     source_dir: str = ""
+    # Translation catalogs the login-ui image is BUILT with. EMPTY (the default) =
+    # English-only: the image ships zero catalog files and the browser issues zero
+    # catalog requests — the smallest artifact, and no i18n network surface at all
+    # on the LAN-only/offline test path this config defaults to.
+    #
+    # This is a CLUSTER-plane fact, not desktop theming: the web login is served to
+    # browsers by the mesh, so it is NOT scoped to x86 and does NOT belong with
+    # brand_logo/color_scheme/login_background (all _X86, all desktop-class
+    # surfaces a mesh node never carries). It lives here, on the config that
+    # actually brings up the stack that BUILDS the login-ui image.
+    web_locales: tuple[str, ...] = ()
 
     def is_prod(self) -> bool:
         return self.env == "prod"
@@ -222,7 +241,8 @@ class LocalMeshBootstrap:
         return LocalStackNode(self.generator_dir, env=self.cfg.env,
                               social=self.cfg.social, domain=domain,
                               source_mode=self.cfg.source_mode,
-                              source_dir=self.cfg.source_dir)
+                              source_dir=self.cfg.source_dir,
+                              web_locales=self.cfg.web_locales)
 
     def _mesh_node(self) -> LocalMeshNode:
         return LocalMeshNode(self.generator_dir, LocalMeshConfig(
@@ -321,6 +341,17 @@ class LocalMeshBootstrap:
                         f"{sd} holds NONE of the {len(self.expected_contexts())} "
                         f"expected build contexts (snapdragon-*) — almost certainly the "
                         f"wrong directory; compose errors on the first build context.")
+        # FORM only. Whether a catalog actually EXISTS for a locale is checked by the
+        # login-ui build itself (tools/i18n/emit-shipped-locales.mjs fails loudly on a
+        # requested locale with no messages.<locale>.xlf). The catalogs live in that
+        # repo, which is not even cloned yet at this point (`make stack-clone` fetches
+        # it), so validating existence here would mean inventing a constraint this
+        # config cannot honestly check — and getting it wrong in BOTH directions:
+        # rejecting a locale the repo does have, or passing one it doesn't.
+        for loc in self.cfg.web_locales:
+            if not _LOCALE_RE.match(loc):
+                problems.append(f"web locale '{loc}' is not a BCP-47-shaped tag "
+                                f"(e.g. de, fr, pt-BR, en-XA).")
         if self.cfg.is_prod():
             if not self.cfg.cluster_domain.strip():
                 problems.append("prod requires a public cluster domain "
@@ -386,6 +417,9 @@ class LocalMeshBootstrap:
         lines.append(f"Domain:     {c.resolved_domain()}"
                      + ("" if c.is_prod() else "  (brand default; not a public issuer in test)"))
         lines.append(f"Issuer:     {c.issuer()}")
+        lines.append("Web login:  "
+                     + (", ".join(c.web_locales) + " (+ English source)" if c.web_locales
+                        else "English only (no translation catalogs shipped)"))
         lines.append("")
         lines.append("(1) GENERATE credentials (offline — VAULT_ADDR left unset):")
         lines.append(f"      {GEN_CLUSTER_SECRETS} --out {self.vault_dir}")
@@ -409,6 +443,11 @@ class LocalMeshBootstrap:
             lines.append("              (make stack-clone — every compose service builds")
             lines.append("               from those real, buildable files)")
         lines.append(f"      make stack-up   (ENV={c.env}, SOCIAL={'on' if c.social else 'off'})")
+        _wl = ",".join(c.web_locales)
+        lines.append(f"      make stack-up   (ENV={c.env}, SOCIAL={'on' if c.social else 'off'}"
+                     + (f", SNAP_WEB_LOCALES={_wl}" if _wl else "") + ")")
+        if _wl:
+            lines.append(f"          -> login-ui image ships i18n/{{{_wl}}}.json catalogs")
         lines.append("      make stack-seed (provisions ROLE_SUPERADMIN with the minted")
         lines.append("                       password, bridged via env only)")
         lines.append("")
@@ -596,13 +635,25 @@ def _read_authkey(args: argparse.Namespace) -> str:
     return (args.authkey or "").strip()
 
 
+def _parse_web_locales(raw: str) -> tuple[str, ...]:
+    """Parse a comma/space-separated --web-locales value into a deduped tuple,
+    order-preserving. Empty => () => English-only."""
+    seen: list[str] = []
+    for tok in re.split(r"[,\s]+", raw or ""):
+        tok = tok.strip()
+        if tok and tok not in seen:
+            seen.append(tok)
+    return tuple(seen)
+
+
 def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
     return LocalMeshBootstrapConfig(
         env=args.env, superadmin_username=args.superadmin_username,
         out_dir=args.out, social=args.social, auth_key=_read_authkey(args),
         login_server=args.login_server, node_name=args.node_name,
         brand=args.brand, cluster_domain=args.cluster_domain,
-        source_mode=args.source_mode, source_dir=args.source_dir)
+        source_mode=args.source_mode, source_dir=args.source_dir,
+        web_locales=_parse_web_locales(args.web_locales))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -647,6 +698,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--source-dir", default="",
                    help="the source tree for --source-mode existing; each service "
                         "builds from <dir>/snapdragon-<name>.")
+    p.add_argument("--web-locales", default="",
+                   help="translation catalogs the web login image ships, comma-"
+                        "separated (e.g. de,fr,pt-BR). EMPTY (default) = English-"
+                        "only: zero catalog files, zero catalog requests. English is "
+                        "the source language and needs no catalog.")
     key = p.add_mutually_exclusive_group()
     key.add_argument("--authkey-file", default="",
                      help="path to a file holding the tailnet/headscale auth key "

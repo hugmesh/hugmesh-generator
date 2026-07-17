@@ -833,8 +833,17 @@ endif
 # syntax (`# syntax=docker/dockerfile:1.7` + RUN --mount=type=secret), which a
 # legacy-builder fallback (e.g. an env where the user-scoped buildx plugin in
 # ~/.docker/cli-plugins is not visible) fails on with opaque parse errors.
+# Translation catalogs the login-ui image ships (comma-separated locale tags).
+# EMPTY (default) = English-only: zero catalog files in the image, zero catalog
+# requests in the browser. English is the login-ui's source language, so it needs
+# no catalog and the default is the smallest artifact. Threaded into the compose
+# build arg (tests/stack/compose.local.yaml -> the login-ui Dockerfile's
+# ARG SNAP_WEB_LOCALES); the Studio sets it via LocalMeshBootstrapConfig.web_locales.
+#   make stack-up SNAP_WEB_LOCALES=de,fr
+SNAP_WEB_LOCALES ?=
 STACK_ENV := STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
+             SNAP_WEB_LOCALES='$(SNAP_WEB_LOCALES)' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
 COMPOSE_CMD   ?= docker compose
