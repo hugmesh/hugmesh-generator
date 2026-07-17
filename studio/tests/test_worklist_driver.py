@@ -10,6 +10,7 @@ import pytest
 from snapdragon_studio.core.config import Domain, ImageConfig, User
 from snapdragon_studio.core.platform_info import HostInfo
 from snapdragon_studio.core import worklist_driver as wd
+from snapdragon_studio.core import build_driver as bd
 from snapdragon_studio.core.worklist_driver import WorklistDriver, key_profile
 from snapdragon_studio.core.worklist import WorklistConfig, WorklistEntry, synthesize
 
@@ -238,13 +239,17 @@ def test_cancel_all_midrun_stops_current_and_remaining(monkeypatch, tmp_path):
 
 
 # ── aggregate preflight (REAL BuildDriver against the tree) ───────────────────────────
-def test_preflight_shared_once_and_per_entry_labelled(tmp_path):
+def test_preflight_shared_once_and_per_entry_labelled(tmp_path, monkeypatch):
     # empty generator dir + non-root native: every image lacks its (platform-specific)
-    # builder script AND shares the "needs root" problem.
+    # builder script AND shares the elevation problem. NOTE: non-root alone is NOT a
+    # problem any more — the driver elevates via sudo/pkexec (2026-07-17: blocking it
+    # made every GUI native build undispatchable), so the shared-problem fixture here
+    # hides BOTH helpers to keep exercising the shared-vs-per-entry dedup contract.
+    monkeypatch.setattr(bd.shutil, "which", lambda n: None)
     wl = _worklist(tmp_path, roles=(("pki", "x86"), ("be", "x86"), ("pki", "rpi5")))
     drv = WorklistDriver(str(tmp_path), wl, host=host(is_root=False), backend="native")
     problems = drv.preflight()
-    root_msgs = [p for p in problems if "needs root" in p]
+    root_msgs = [p for p in problems if "elevation helper" in p]
     assert len(root_msgs) == 1 and not root_msgs[0].startswith("[")   # shared -> once, unlabelled
     # x86 script missing appears labelled for BOTH x86 entries; rpi5 for its one entry
     assert sum(1 for p in problems if "build-x86-host-stage4.sh" in p) == 2
