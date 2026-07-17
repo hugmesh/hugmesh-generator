@@ -1,8 +1,15 @@
 # Enterprise phones — GrapheneOS + existing-device onboarding (the fourth onboarding form)
 
-> **Status: 🚧 v1 driver in-flight** (branch `feat/pixel-graphene-phone-wizard`).
-> One driver, [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh), owns the
-> whole flow; nothing in this document is shipped on `main` yet.
+> **Status: 🚧 v1/v2 driver + management-plane glue in-flight, self-hosted
+> management plane REAL** (branch `feat/phone-wizard-mdm-attest`, off `main`,
+> which already carries the flash/enroll/profile/ingest driver and the
+> existing-device onboarding path). One driver,
+> [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh), owns the whole
+> flow. **Headwind MDM** and the **GrapheneOS AttestationServer** are merged,
+> default-off cluster optional-services (see
+> [Management plane](#management-plane)) — the `attest` and `mdm-enroll`
+> verbs that drive them from this wizard are in-flight on this branch, not
+> yet merged to `main`.
 
 _State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned / deferred**._
 
@@ -14,16 +21,24 @@ take a **USB-connected Google Pixel** and turn it into an enterprise-managed
 mesh device end to end:
 
 ```
-detect ─► fetch (VERIFIED GrapheneOS -install- zip) ─► flash ─► enroll (headscale
-tailnet join, register-and-approve) ─► profile (separately-encrypted GrapheneOS
-secondary user, credential escrowed into vault-seed custody) ─► ingest (device registry)
+detect ─► fetch (VERIFIED GrapheneOS -install- zip) ─► flash ─► attest
+(self-hosted AttestationServer pairing, via a Snapdragon-forked Auditor app)
+─► mdm-enroll (Headwind MDM device-owner enrollment — MUST run before
+'profile', which permanently forecloses device-owner mode) ─► enroll
+(headscale tailnet join, register-and-approve) ─► profile (separately-encrypted
+GrapheneOS secondary user, credential escrowed into vault-seed custody)
+─► ingest (device registry)
 ```
 
 `enroll` also stands alone as a **first-class existing-device onboarding
 path**: a phone this wizard never flashed — GrapheneOS *or stock Android* —
 USB-guided or (`--no-usb`) with no adb at all. See
 [Onboarding existing phones (no reflash)](#onboarding-existing-phones-no-reflash).
-`flash` itself remains GrapheneOS/Pixel-only.
+`flash` itself remains GrapheneOS/Pixel-only. `attest` and `mdm-enroll` are
+likewise adb-based and apply to freshly-flashed **and** already-running
+phones — see [Management plane](#management-plane) for the ordering
+constraint that makes device-owner enrollment a one-shot, fresh-device-only
+operation.
 
 It follows the repo's documented **non-build precedent** (see the
 Local-Docker-mesh paragraph in [`BUILD-MATRIX.md`](BUILD-MATRIX.md)): the phone
@@ -38,9 +53,9 @@ ncurses-menu/Studio faces are 🔭 (see [Deferred](#deferred)).
 ## Verbs (the real surface)
 
 `scripts/phone-wizard.sh <verb> [options]`. The **default posture is
-dry-run/read-only**: only `fetch`, `flash`, `enroll`, `profile`,
-`rotate-profile-pass`, `remove-profile` and `ingest` change anything, and the
-destructive ones are gated.
+dry-run/read-only**: only `fetch`, `flash`, `attest`, `mdm-enroll`, `enroll`,
+`profile`, `rotate-profile-pass`, `remove-profile` and `ingest` change
+anything, and the destructive ones are gated.
 
 | Verb | Mutates? | What it does |
 | --- | --- | --- |
@@ -48,13 +63,15 @@ destructive ones are gated.
 | `detect` | never | Read-only probe: adb/fastboot device list, serial, codename, current OS fingerprint. Prints `DEVICE_*` lines. |
 | `fetch` | work-dir | Resolve the `--channel` release, download the GrapheneOS `<codename>-install-<version>.zip`(+`.sig`) into `--work-dir`, verify the sshsig **fail-closed**, extract, write a `.verified-<sha256>` marker. Idempotent (a cached resolution next to its verified zip makes re-fetch fully offline). |
 | `flash` | **DESTRUCTIVE** | Wipe the phone and flash the VERIFIED artifact. Typed-serial confirmation on a TTY; non-TTY requires BOTH `--yes` AND a matching `--serial`. Refuses anything without a matching verification marker, and re-verifies the signature again before flashing. |
+| `attest` | device + out-dir | Install the signer-pinned Snapdragon-forked Auditor (`--auditor-apk`/`--auditor-signer-sha256`) and print the self-hosted [AttestationServer](#management-plane) pairing runbook (`--attestation-url`). The in-app QR scan cannot be driven over adb, so this is an **operator-attested** pairing (`verdict:"operator-paired"`), not a cryptographic verification by the wizard. Runs **before** `mdm-enroll` — see [Management plane](#management-plane) for why. Writes `attestation.json`. |
+| `mdm-enroll` | device + out-dir | Enroll the phone as a Headwind MDM device-owner (`dpm set-device-owner com.hmdm.launcher/.AdminReceiver`) after a fail-closed fresh-device precondition (`pm list users` must show exactly one user). Installs the signer-pinned DPC APK (`--headwind-apk`/`--headwind-signer-sha256`) and pushes a non-interactive `init.json` (`com.hmdm.BASE_URL=--headwind-url`) into its external files dir. **MUST run before `profile`** — see [Management plane](#management-plane). Writes `mdm.json`. |
 | `enroll` | out-dir | Add a running phone to the mesh — freshly flashed **or already-running**, GrapheneOS **or stock Android** (the OS probe records which; it never gates — see [Onboarding existing phones](#onboarding-existing-phones-no-reflash)). Guided tailnet join with keys from `--keys-dir` (docker-mesh-node layout) or `--login-server`/`--authkey-file`; verifies `tailscale0` got a 100.64/10 address and writes the enrollment record. `--no-usb` drops adb entirely (guided handset-only runbook, operator-attested record). |
-| `profile` | device + out-dir | Create the `enterprise` secondary user, generate + escrow its passphrase (vault-seed custody), operator sets the credential on the handset (default path). |
+| `profile` | device + out-dir | Create the `enterprise` secondary user, generate + escrow its passphrase (vault-seed custody), operator sets the credential on the handset (default path). **This permanently forecloses device-owner mode** — see [Management plane](#management-plane); it must never run before `mdm-enroll`. |
 | `rotate-profile-pass` | out-dir (+device) | Generate + escrow a new profile passphrase atomically (previous escrow kept as `.prev-<ts>`). |
 | `remove-profile` | **DESTRUCTIVE** | Remove the enterprise user (typed profile-name confirm, or `--yes`); escrow retired to `.revoked-<ts>`. Per-profile FBE keys are evicted — the profile's data is gone. |
-| `ingest` | out-dir (+POST) | Emit the `phone-ingest/v1` device-registry record; with `--ingest-url` + the mTLS flags, POST it (fail-closed without client cert+key). |
+| `ingest` | out-dir (+POST) | Emit the `phone-ingest/v1` device-registry record (folding in `attestation.json`'s fields when present — see [Ingest](#ingest--device-registry)); with `--ingest-url` + the mTLS flags, POST it (fail-closed without client cert+key). |
 | `status` | never | Read-only: tools, device, tailnet, profile, escrow **presence** (never contents). |
-| `wizard` | (per step) | Interactive guided full flow (TTY only): detect → fetch → flash → enroll → profile → ingest, re-entrant — already-completed steps can be skipped. |
+| `wizard` | (per step) | Interactive guided full flow (TTY only): detect → fetch → flash → attest → mdm-enroll → enroll → profile → ingest, re-entrant — already-completed steps can be skipped. |
 | `help` | never | Usage. |
 
 ### Exit codes (auditable contract)
@@ -95,18 +112,31 @@ else one is generated from `/dev/urandom`) · `--profile-name N` (default
 Enroll extras: `--tailscale-apk F` (adb-install during enroll) ·
 `--apk-signer-sha256 H` (pin the APK signer cert SHA-256; fail-closed when set).
 
+Management-plane extras (see [Management plane](#management-plane)):
+`--headwind-apk F` (Headwind DPC APK to adb-install during `mdm-enroll`) ·
+`--headwind-signer-sha256 H` (pin the Headwind APK signer cert SHA-256;
+fail-closed when set) · `--headwind-url URL` (Headwind server base URL,
+written into the DPC's non-interactive `init.json` as `com.hmdm.BASE_URL`;
+env `HMDM_URL`) · `--auditor-apk F` (Snapdragon-forked Auditor APK to
+adb-install during `attest`) · `--auditor-signer-sha256 H` (pin the Auditor
+fork's release-cert SHA-256; fail-closed when set) · `--attestation-url URL`
+(self-hosted AttestationServer console URL, printed in the `attest` pairing
+runbook; env `ATTEST_URL`).
+
 Ingest: `--ingest-url URL` + `--client-cert F --client-key F --ca F` (mTLS
 client identity; POST is refused without cert+key).
 
 Gates + overrides: `--yes` (non-interactive confirmation, per-verb gates) ·
-`--force` (downgrade THREE independent hard-requirement checks to warnings:
+`--force` (downgrade FOUR independent hard-requirement checks to warnings:
 the `enroll` OS-probe gate — only when the OS is genuinely undetectable,
 GrapheneOS and stock Android never need it; `flash`'s fastboot-version
 preflight — when the `fastboot --version` string is unparsable, normally
-enforcing GrapheneOS's ≥35.0.2 requirement; and `enroll`'s
+enforcing GrapheneOS's ≥35.0.2 requirement; `enroll`'s
 Tailscale-package-appear wait — skip confirming the app actually installed
-before the tailnet-join poll starts) · `--force-fwupd` (proceed even if fwupd
-is running) · `--show-authkey` (display
+before the tailnet-join poll starts; and `mdm-enroll`'s fresh-device
+precondition — see [Management plane](#management-plane) for why this one is
+a one-shot, not-really-safe-to-force check) · `--force-fwupd` (proceed even if
+fwupd is running) · `--show-authkey` (display
 the pre-auth key ONCE during enroll; default: never displayed) · `--no-usb`
 (enroll only: skip every adb probe — see
 [Onboarding existing phones](#onboarding-existing-phones-no-reflash)) ·
@@ -118,17 +148,24 @@ the version over the network) · `--print-plan` (alias for the `plan` verb) ·
 Env seams (tests override these; defaults are the real thing): `PW_ADB`,
 `PW_FASTBOOT`, `PW_RELEASES_URL`, `PW_ALLOWED_SIGNERS`, `PW_EXPECTED_SIGNER_FP`
 (empty allowed ONLY with `PW_ALLOWED_SIGNERS` overridden), `PW_SKIP_FP_PIN=1`,
-`PW_JOIN_TIMEOUT`, `PW_POLL_INTERVAL`.
+`PW_JOIN_TIMEOUT`, `PW_POLL_INTERVAL`. Also `HMDM_URL` / `ATTEST_URL` supply
+default `--headwind-url` / `--attestation-url` values (an explicit flag always
+wins).
 
 ### Quick start
 
 ```console
 $ scripts/phone-wizard.sh plan                      # offline dry-run of the whole flow (PLAN_* lines)
-$ scripts/phone-wizard.sh wizard                    # guided TTY flow: detect → fetch → flash → enroll → profile → ingest
+$ scripts/phone-wizard.sh wizard                    # guided TTY flow: detect → fetch → flash → attest → mdm-enroll → enroll → profile → ingest
 # scripted, step by step:
 $ scripts/phone-wizard.sh detect
 $ scripts/phone-wizard.sh fetch  --codename komodo --channel stable
 $ scripts/phone-wizard.sh flash  --serial <S> --codename komodo         # typed-serial confirm on a TTY
+# management plane, immediately after flash, BEFORE 'profile' (see Management plane):
+$ scripts/phone-wizard.sh attest     --serial <S> --auditor-apk auditor.apk \
+    --auditor-signer-sha256 <fork-cert-sha256> --attestation-url <attestation-server-console-url>
+$ scripts/phone-wizard.sh mdm-enroll --serial <S> --headwind-apk hmdm.apk \
+    --headwind-signer-sha256 <headwind-cert-sha256> --headwind-url <headwind-console-url>   # tailnet-only; see Management plane
 $ scripts/phone-wizard.sh enroll --serial <S> --keys-dir <keys>         # or --login-server + --authkey-file
 # an ALREADY-RUNNING phone (GrapheneOS or stock Android) — no flash needed:
 $ scripts/phone-wizard.sh enroll --keys-dir <keys>                     # os probe records grapheneos|android
@@ -272,13 +309,18 @@ without `--force`.
 **This is a best-effort, SPOOFABLE heuristic, not a security boundary.** Every
 signal it reads (`ro.build.version.incremental`, the `grapheneos` getprop
 string, `ro.build.version.release`) is a build/OEM-controlled property that a
-tampered or custom ROM can set to whatever it wants — the probe cannot
-cryptographically attest what OS is actually running (that is what the
-🔭 [self-hosted AttestationServer trust root](#management-plane-roadmap) is
-for, and it isn't wired up yet). Downstream consumers of `enrollment.json` /
-`ingest.json` must not treat the `os` field as a verified fact; that is also
-why its verification tier is named `adb-heuristic`, not `adb-verified` — see
-the table below.
+tampered or custom ROM can set to whatever it wants — `enroll`'s own OS probe
+cannot cryptographically attest what OS is actually running. That is what the
+self-hosted [AttestationServer trust root](#management-plane) is for (`attest`
+— hardware-backed, both classes); it is now wired up, but it is a **separate
+verb producing a separate, parallel record** (`attestation.json`,
+advisory/logged per D9, and itself only *operator-attested* pairing in v1, not
+a wizard-verified cryptographic pass — see [Management
+plane](#management-plane)). It does not retroactively upgrade `enroll`'s own
+`os` field. Downstream consumers of `enrollment.json` / `ingest.json` must
+still not treat the `os` field as a verified fact; that is also why its
+verification tier is named `adb-heuristic`, not `adb-verified` — see the table
+below.
 
 ### `--no-usb` — no adb at all
 
@@ -351,9 +393,25 @@ inherited from `enrollment.json`'s OS probe, see
 [Onboarding existing phones](#onboarding-existing-phones-no-reflash)),
 `os_version`, `superdomain`, `login_server`, `tailscale_ip`,
 `tailscale_hostname`, `role`, `attached_domain`,
-`enterprise_profile{present,user_id,credential_custody}`, `enrolled_at`,
+`enterprise_profile{present,user_id,credential_custody}`,
+`attestation_url`, `auditor_package`, `attestation_verdict` (folded in from
+`attestation.json` when `attest` has run — empty strings otherwise; advisory
+fields only, per D9 never enrollment-blocking), `enrolled_at`,
 `generated_at`. Recorded facts (enrollment/profile records) are preferred;
-live adb detection fills only what is missing and reachable.
+live adb detection fills only what is missing and reachable. The schema
+string stays `phone-ingest/v1` — the new attestation fields are additive, so
+a pre-Phase-3 consumer can still parse the record.
+
+**`mdm.json` is not yet folded into `ingest.json`.** `mdm-enroll` writes its
+own record (`device_id`, `serial`, `dpc_package`, `headwind_url`, `os`,
+`set_via:"adb-device-owner"`, `enrolled_at`) alongside `attestation.json` and
+`enrollment.json` under `<out>/device/<device-id>/`, but — unlike the
+attestation fields above — `cmd_ingest()` does not currently read it. Until a
+future revision folds `mdm.json` into the ingest record (or bumps the schema
+to carry a dedicated `mdm{...}` object, per the design's `phone-ingest/v2`
+sketch), a device-registry consumer that needs MDM-enrollment status must
+read `mdm.json` directly. Tracked as a real, currently-open gap — not
+silently glossed over.
 
 Default is **emit-only**. **No dedicated `phone-ingest/v1` registry endpoint
 exists yet** — `/bff/internal/device-enrollment/self-report` is a
@@ -371,37 +429,153 @@ fail-closed when the identity material is missing) before pointing
 the registry importer, or use `--ingest-url` once a real phone-ingest
 endpoint is stood up.
 
-## Remote-management model (v1, deliberate)
+## Remote-management model
 
-There is **no MDM agent, no on-phone resident daemon, no APK store**. Remote
-management is limited to the USB-tethered verbs above plus the **mesh-side
-controls**: headscale key expiry / node removal, and Casdoor credential
-revocation. Losing the phone therefore costs mesh membership and platform
-sessions, not custody of anything the escrow chain holds.
+Remote management is the USB-tethered verbs above (now including `attest` and
+`mdm-enroll`, see [Management plane](#management-plane)) plus the **mesh-side
+controls** that were always there: headscale key expiry / node removal, and
+Casdoor credential revocation. The earlier v1 non-goal — "no MDM agent, no
+on-phone resident daemon" — is **superseded**: Headwind's DPC agent
+(`com.hmdm.launcher`) is now an on-phone resident daemon by design, running in
+device-owner mode on every phone that has run `mdm-enroll`. What is still
+true, and remains a deliberate v1 non-goal: **no first-party APK store** —
+`phone-wizard.sh` sideloads exactly two vetted, signer-pinned APKs (the
+Headwind DPC, the Snapdragon Auditor fork) plus the optional Tailscale APK;
+general app push/update/delete across a fleet is a Headwind CE console
+capability, reachable by an operator directly against the Headwind server, not
+something this wizard drives. Losing a phone that never ran `mdm-enroll`
+still costs only mesh membership and platform sessions; a phone that **has**
+been enrolled as a Headwind device-owner is additionally reachable through the
+Headwind console for remote wipe/lock/policy — see
+[Management plane](#management-plane).
 
-## Management plane (roadmap)
+## Management plane
 
-🔭 **Separate design track, in flight** — this is a roadmap paragraph, not
-something this driver wires up. The intended device-management plane, for
-**both** stock-Android and GrapheneOS phones, is self-hosted **Headwind MDM**
-([github.com/h-mdm](https://github.com/h-mdm), Apache-2.0): a device-owner
-DPC provisioned over adb, giving policy/compliance control without routing
-through any Google-run enterprise-mobility backend. Paired with it: a
-self-hosted GrapheneOS **AttestationServer** trust root, so the platform can
-verify a phone's boot/verified-boot state against its own root of trust
-instead of a third party's. Neither is wired into `phone-wizard.sh` yet, and
-no v1 decision in this driver precludes either device class from joining that
-plane later. The platform is kept fully sovereign here: a managed-Google-Play
-/ Android-Enterprise-style plane routed through a third-party SaaS vendor's
-backend was evaluated for this role and **rejected** — Headwind MDM's
-device-owner DPC path needs no Google-run or vendor-hosted backend for
-either OS.
+**Now real, not a roadmap paragraph.** The device-management plane for
+**both** stock-Android and GrapheneOS phones is two independent, self-hosted,
+default-off cluster optional-services — **Headwind MDM**
+([github.com/h-mdm](https://github.com/h-mdm), Apache-2.0,
+`specs/cluster/apps/23-headwind.yaml`) and the **GrapheneOS
+AttestationServer** (MIT, forked, `specs/cluster/apps/24-attestation-server.yaml`)
+— both merged to `main` as cluster manifests (namespace `snapdragon-pki`,
+tailnet-only, Harbor/superadmin devops posture, no public
+`*.CLUSTER_DOMAIN` surface). `scripts/phone-wizard.sh`'s `attest` and
+`mdm-enroll` verbs are the operator-facing glue that drives them from the
+handset side; those two verbs are what is in-flight on this branch (see the
+top-of-doc status banner). No managed-Google-Play / Android-Enterprise-style
+plane routed through a third-party SaaS vendor's backend was used or
+considered for either half — both services are sovereign, no Google
+FCM/Pub/Sub/Play-Integrity dependency for management traffic.
+
+### Ordering: attest, then mdm-enroll, then profile — never reversed
+
+Device-owner mode (`dpm set-device-owner`) is a **one-shot AOSP gate**: it
+only succeeds while the target user has zero secondary users and zero added
+accounts, and is **permanent** for the life of the OS install once foreclosed
+— no undo short of a reflash. The wizard's 8-step order places both
+management-plane verbs immediately after `flash`, before anything that could
+add a user or account:
+
+```
+1/8 detect  2/8 fetch  3/8 flash  4/8 attest  5/8 mdm-enroll  6/8 enroll  7/8 profile  8/8 ingest
+```
+
+- **`attest` runs first (4/8)** — it needs no device-owner state, so it
+  captures the hardware trust root on the cleanest possible device state.
+- **`mdm-enroll` runs next (5/8)**, and is the *last* point at which
+  device-owner mode is obtainable — `cmd_mdm_enroll()` opens with a
+  fail-closed precondition check (`adb shell pm list users` must show exactly
+  one user); running it out of order turns the cryptic AOSP
+  `IllegalStateException` into a documented `exit 2`
+  ("a secondary user/account already exists — device-owner mode is no longer
+  obtainable; reflash to retry"). `--force` downgrades this to a warning.
+- **`profile` (7/8) is what permanently forecloses the window** — it creates
+  the escrowed `enterprise` secondary user. It must never run before
+  `mdm-enroll`.
+- **Already-enrolled / already-running phones** (see [Onboarding existing
+  phones](#onboarding-existing-phones-no-reflash)) cannot retroactively obtain
+  device-owner mode — an inherent AOSP constraint, not a wizard limitation.
+  The honest composed flow for such a device is `attest` → `enroll` →
+  `profile` → `ingest`, with `mdm.json` simply never written and MDM
+  enrollment requiring a factory-reset-and-redo.
+
+### `mdm-enroll` — Headwind device-owner enrollment
+
+`mdm-enroll` runs `dpm set-device-owner com.hmdm.launcher/.AdminReceiver`
+over adb against a fresh device, after installing the Headwind DPC APK
+(`--headwind-apk`, signer-pinned via `--headwind-signer-sha256` using the same
+`verify_installed_signer()` apksigner-verify helper `enroll` uses for the
+Tailscale APK — it pulls the currently-installed `base.apk` and checks its
+apksigner cert digest, pinning what is actually on the device). Once
+device-owner mode is set, the wizard pushes a non-interactive `init.json`
+(`{"com.hmdm.BASE_URL": "<--headwind-url>"}`) into the app's external files
+dir (`getExternalFilesDir()/init.json`), which Headwind's own
+`updateSettingsFromFile()` reads on next launch — no operator QR scan needed
+for the server-pointing step itself. Writes `mdm.json` (`device_id`, `serial`,
+`dpc_package`, `headwind_url`, `os`, `set_via:"adb-device-owner"`,
+`enrolled_at`) under `<out>/device/<device-id>/`.
+
+**Stock-Android caveat (best-effort, not a wizard bug).** GrapheneOS
+device-owner enrollment via adb is the **reliable** path — no Play Protect
+gate exists at setup on GrapheneOS at all. Since late 2025, Google Play
+Protect enforces an approved-DPC allow-list at provisioning time on
+Play-Protect-certified stock-Android devices; an unlisted custom DPC can hit
+that block with an opaque appeal path. `cmd_mdm_enroll()` prints an
+un-suppressible advisory before attempting `dpm set-device-owner` on a
+stock-Android device, and a resulting failure is a normal `exit 1`
+(precondition/tool failure) with the allow-list named as the likely cause —
+not treated as a driver defect.
+
+### `attest` — AttestationServer pairing via the Snapdragon-forked Auditor
+
+`attest` installs our own fork of GrapheneOS's Auditor app — package
+`systems.snapdragon.auditor` (deliberately different from the stock
+`app.attestation.auditor`, so a pin is unambiguous and a stock install is
+never clobbered) — signer-pinned via `--auditor-signer-sha256`, using the same
+shared apksigner-verify helper `mdm-enroll` and `enroll` use. It then prints a
+runbook pointing the operator at the self-hosted AttestationServer console
+(`--attestation-url`, e.g. `https://attestation.snapdragon.systems`) to scan
+the pairing QR code from inside the Auditor app. **The in-app camera scan
+cannot be driven over adb** — this wizard performs no cryptographic
+verification of the attestation chain itself, so the pairing is recorded
+honestly as `verdict:"operator-paired"`, never a claimed cryptographic pass.
+Attestation is **advisory/logged in v1** (D9), not a hard enrollment-blocking
+precondition — fleet-scale operational characteristics (alerting granularity,
+a machine-queryable verdict API) are undocumented upstream and are meant to
+be piloted before promoting this to a hard gate. Writes `attestation.json`
+(`device_id`, `auditor_package`, `attestation_url`, `verdict`, `at`) under
+`<out>/device/<device-id>/`, and its `attestation_url` / `auditor_package` /
+`attestation_verdict` fields are folded into `ingest.json` — see
+[Ingest](#ingest--device-registry).
+
+### The coupling: the fork's signer pin *is* the server's trust anchor
+
+The self-hosted AttestationServer only trusts attestations that carry our
+own Auditor fork's identity — this is a build-time patch to
+`AttestationProtocol.java`'s `AUDITOR_APP_PACKAGE_NAME_RELEASE` /
+`AUDITOR_APP_SIGNATURE_DIGEST_RELEASE` constants
+(`specs/cluster/manifests/attestation-server/Dockerfile`), not the stock
+GrapheneOS Auditor's published pin. Concretely:
+
+```
+server AUDITOR_SIGNER_DIGEST  ===  Snapdragon Auditor fork's release-signing-cert SHA-256
+server ATTESTATION_DOMAIN     ===  fork's DOMAIN constant  ===  attestation.snapdragon.systems
+```
+
+These are **built and set together** — if `AUDITOR_SIGNER_DIGEST` does not
+exactly equal the fork's real release-cert digest, the server rejects
+*every* attestation from our own app, with no partial-credit or fallback
+path. The `--auditor-signer-sha256` value `attest` pins on-device must be the
+same digest the AttestationServer image was built with. This is the same
+value operationally, checked at two independent points (the wizard's
+apksigner-verify on-device, and the server's compiled-in constant) — a
+mismatch anywhere in the chain fails closed, never silently.
 
 ## Summary
 
 | Capability | Where | State |
 | --- | --- | --- |
-| Driver: full verb surface (`plan`/`detect`/`fetch`/`flash`/`enroll`/`profile`/`rotate-profile-pass`/`remove-profile`/`ingest`/`status`/`wizard`) | [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | 🚧 |
+| Driver: full verb surface (`plan`/`detect`/`fetch`/`flash`/`attest`/`mdm-enroll`/`enroll`/`profile`/`rotate-profile-pass`/`remove-profile`/`ingest`/`status`/`wizard`) | [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | 🚧 |
 | Fail-closed artifact verification (sshsig + double fingerprint pin, tamper ⇒ delete + exit 3) | `dlv_verify_sshsig` + [`scripts/phone-allowed-signers`](../scripts/phone-allowed-signers) | 🚧 |
 | Pinned device catalog (21 devices, unknown codename ⇒ exit 4, no escape hatch) | [`scripts/phone-devices.tsv`](../scripts/phone-devices.tsv) | 🚧 |
 | Destructive gates (typed-serial flash confirm; non-TTY needs `--yes`+`--serial`; typed profile-name removal) | `flash` / `remove-profile` | 🚧 |
@@ -411,23 +585,49 @@ either OS.
 | Offline `plan` dry-run + `REDACTED` secret discipline | `plan` / `--print-plan` | 🚧 |
 | `make phone-*` thin face (host-side delegates; secrets stay file-path knobs) | `Makefile` | 🚧 |
 | Thin ncurses-menu/Studio faces over the driver (non-build precedent) | — | 🔭 |
-| MDM agent / on-phone daemon / APK store | — | 🔭 (deliberate v1 non-goals) |
+| APK store (general fleet app push/update/delete beyond the wizard's own vetted, signer-pinned sideloads) | — | 🔭 (deliberate v1 non-goal; Headwind's own console can do this directly, see [Remote-management model](#remote-management-model)) |
 | Existing-device onboarding (GrapheneOS + stock Android, USB-guided or `--no-usb`, no reflash) | `enroll` | 🚧 |
-| Self-hosted management plane: Headwind MDM (device-owner DPC) + GrapheneOS AttestationServer trust root | — | 🔭 (separate design track) |
-| OTA/update posture management (GrapheneOS updates itself; no management-plane lever yet) | — | 🔭 |
+| Headwind MDM cluster optional-service (Postgres-backed, tailnet-only, `snapdragon-pki` namespace) | `specs/cluster/apps/23-headwind.yaml`, `specs/cluster/manifests/headwind/` | ✅ merged |
+| GrapheneOS AttestationServer cluster optional-service (SQLite PVC, tailnet-only, forked Auditor identity baked in) | `specs/cluster/apps/24-attestation-server.yaml`, `specs/cluster/manifests/attestation-server/` | ✅ merged |
+| `mdm-enroll` verb — Headwind device-owner enrollment, fresh-device precondition, signer-pinned DPC APK, `init.json` `BASE_URL` injection | `cmd_mdm_enroll()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | 🚧 in-flight this branch |
+| `attest` verb — Snapdragon-forked Auditor pairing to the self-hosted AttestationServer, operator-attested verdict | `cmd_attest()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | 🚧 in-flight this branch |
+| 8-step wizard order (`attest`/`mdm-enroll` immediately post-flash, before `profile`) | `cmd_wizard()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | 🚧 in-flight this branch |
+| Auditor-fork ↔ AttestationServer signer-digest coupling (`AUDITOR_SIGNER_DIGEST`) | [Management plane](#management-plane) | ✅ server-side patch merged; digest itself is set at Auditor-fork release-signing time (operator step, outside this repo) |
+| OTA/update posture management (GrapheneOS updates itself; Headwind CE ships no OTA lever) | — | 🔭 |
 
 ## Deferred
 
-Tracked here per the driver's header. Still 🔭, by design:
+Tracked here per the driver's header. Still 🔭, by design. The earlier
+**"any on-phone agent (MDM, resident daemon, APK store)"** entry is
+**superseded and removed from this list** — Headwind's device-owner DPC is
+now delivered (see [Management plane](#management-plane)); only the
+APK-store half of that non-goal still stands (see the Summary table).
 
 - **Thin ncurses-menu/Studio faces** — over the driver's verbs, exactly like
   the Local Docker mesh and go-live precedents (driver owns all logic; faces
   stay thin, no build-matrix row). The `make phone-*` face is already 🚧 on
   this branch.
-- **Any on-phone agent** (MDM, resident daemon, APK store) — v1 keeps remote
-  management at the mesh side (headscale key expiry, Casdoor revocation) plus
-  the USB-tethered verbs.
+- **Casdoor SSO for Headwind** — nothing in this recon confirmed Headwind has
+  OIDC/SAML support (its own auth is local username/password behind a
+  pluggable `HmdmAuthInterface`); until that is independently confirmed,
+  Headwind stays gated by network reachability + `ROLE_SUPERADMIN` route
+  access plus a Vault-managed local admin account, not Casdoor identity
+  federation.
+- **`attest --attestation-verdict-source api`** — an automated, machine-queryable
+  attestation-verdict mode. No confirmed headless "submit and get a JSON
+  verdict" API surface exists for the self-hosted AttestationServer today
+  (its `/api/devices.json` sits behind a login-session cookie, not a bare API
+  key); `attest` ships only the operator-attested pairing tier in v1.
+- **GrapheneOS QR-at-setup provisioning** — Headwind's `SetupWizard2` PRs
+  remain unmerged upstream as of this recon. ADB is the only supported
+  GrapheneOS device-owner path today; `cmd_mdm_enroll()` is written so that
+  QR provisioning, once it lands upstream, only touches the function's
+  internals, not the wizard's step order or exit-code contract.
 - **OTA/update posture reporting** — GrapheneOS's own updater handles OS
-  updates; a management-plane-visible update/compliance report (see
-  [Management plane (roadmap)](#management-plane-roadmap)) would ride a
-  future agent, which v1 deliberately does not have.
+  updates; Headwind CE ships no OTA lever, so a management-plane-visible
+  update/compliance report would ride a future agent capability this driver
+  does not have.
+- **Folding `mdm.json` into `ingest.json`** (or a `phone-ingest/v2` schema
+  bump carrying a dedicated `mdm{...}` object) — see
+  [Ingest](#ingest--device-registry). A real, currently-open gap, not a
+  design decision.

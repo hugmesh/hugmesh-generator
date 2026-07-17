@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # test-phone-wizard.sh — offline logic test for the enterprise-phone wizard
 # driver (scripts/phone-wizard.sh): GrapheneOS Pixel onboarding — detect ->
-# fetch (verified) -> flash -> enroll -> profile -> ingest.
+# fetch (verified) -> flash -> attest (self-hosted AttestationServer pairing)
+# -> mdm-enroll (Headwind MDM device-owner) -> enroll -> profile -> ingest.
 #
 # Runs ANYWHERE with bash + jq + ssh-keygen + sha256sum — NO network, NO root,
 # NO device, NO adb/fastboot install. The android tools and curl are PATH-shim
@@ -69,6 +70,23 @@
 #        abort, lock-fail-leaves-device-unlocked.
 #   (21) flash-all.sh failure path: exit 1, "do NOT lock", and no
 #        'flashing lock' line ever reaches fastboot.log.
+#   (22) mdm-enroll (Phase 3: Headwind MDM device-owner enrollment): FRESH
+#        device (1 user) + valid --headwind-apk/signer pin -> dpm
+#        set-device-owner com.hmdm.launcher/.AdminReceiver in adb.log,
+#        mdm.json fields correct; NON-fresh (2 users) -> exit 2 (one-shot
+#        AOSP gate), --force downgrades to a warning and proceeds;
+#        --headwind-signer-sha256 mismatch -> exit 3.
+#   (23) attest (Phase 3: self-hosted AttestationServer pairing via the
+#        Snapdragon-forked Auditor, package systems.snapdragon.auditor):
+#        valid --auditor-apk/signer -> attestation.json
+#        {auditor_package, verdict:"operator-paired"}; ingest folds the
+#        attestation fields in; --auditor-signer-sha256 mismatch -> exit 3;
+#        the authkey/secret sweep still passes after these runs.
+#   (24) wizard step ordering (STATIC, no execution): cmd_wizard's body
+#        references exactly Step 1/8..8/8, and its actual verb calls are
+#        wired in source order detect < fetch < flash < attest < mdm-enroll
+#        < enroll < profile < ingest — attest/mdm-enroll both strictly
+#        before profile (the step that forecloses device-owner mode).
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -135,6 +153,17 @@ case "${1:-}" in
                 cat "${S}/tailscale-addr" 2>/dev/null \
                     || printf '30: tailscale0    inet 100.64.0.7/32 scope global tailscale0\n' ;;
             'dumpsys lock_settings'|'locksettings set-password '*) : ;;
+            'dpm set-device-owner '*)
+                # Knob (${S}/dpm-fail): simulate the real one-shot AOSP
+                # IllegalStateException a stale device-owner attempt hits.
+                # Not exercised by the fresh-device/--force cases below
+                # (those rely on the driver's OWN pm-list-users precondition
+                # gate firing first), kept for completeness/future use.
+                if [ -e "${S}/dpm-fail" ]; then
+                    printf 'java.lang.IllegalStateException: Not allowed to set the device owner because there are already several users on the device.\n' >&2
+                    exit 1
+                fi
+                printf 'Success: Device owner set to package ComponentInfo{com.hmdm.launcher/com.hmdm.launcher.AdminReceiver}\n' ;;
             *) : ;;
         esac
         exit 0 ;;
@@ -303,8 +332,9 @@ run plan --codename "${CODENAME}" --work-dir "${PLAN_WD}" --out "${PLAN_OUT}"
 [ "$(plan_val SIGNER_FP)" = "${FP}" ] && ok "(2) plan shows the effective signer pin" || bad "(2) plan signer fp '$(plan_val SIGNER_FP)'"
 [ "$(plan_val AUTHKEY)" = "REDACTED:absent" ] && [ "$(plan_val PROFILE_PASS)" = "REDACTED:generate" ] \
     && ok "(2) plan renders secrets as REDACTED presence markers only" || bad "(2) plan secret markers wrong"
-[ "$(plan_val STEPS)" = "detect,fetch,flash,enroll,profile,ingest" ] \
-    && ok "(2) plan (default wizard target) lists the full step chain" || bad "(2) plan steps '$(plan_val STEPS)'"
+[ "$(plan_val STEPS)" = "detect,fetch,flash,attest,mdm-enroll,enroll,profile,ingest" ] \
+    && ok "(2) plan (default wizard target) lists the full 8-step chain (Phase 3: attest+mdm-enroll)" \
+    || bad "(2) plan steps '$(plan_val STEPS)'"
 [ ! -s "${LOGD}/curl.log" ] && ok "(2) plan made ZERO network (curl) calls" || { bad "(2) plan called curl"; cat "${LOGD}/curl.log"; }
 [ ! -e "${PLAN_WD}" ] && [ ! -e "${PLAN_OUT}" ] && ok "(2) plan touched NOTHING (no work/out dirs created)" \
     || bad "(2) plan created dirs (dry-run violated)"
@@ -854,6 +884,160 @@ grep -qF -- "${AUTHKEY_VALUE}" <<<"${NOUSB_SHOWKEY_OUT}" \
     || bad "(15) --no-usb --show-authkey did not display the key"
 [ ! -s "${LOGD}/adb.log" ] && ok "(15) --no-usb --show-authkey run also made ZERO adb calls" \
     || bad "(15) --no-usb --show-authkey touched adb"
+
+# ── (22) mdm-enroll (Phase 3: Headwind MDM device-owner enrollment) ────────
+reset_state
+rm -f "${STATE}/adb-getstate" "${STATE}/dpm-fail" "${STATE}/apksigner-digest"
+printf 'List of devices attached\n%s             device usb:1-4\n' "${SERIAL_A}" > "${STATE}/adb-devices"
+printf 'package:com.tailscale.ipn\npackage:com.hmdm.launcher\n' > "${STATE}/packages"
+HEADWIND_URL_T="https://headwind.phone-test.invalid"
+DIGEST_HW_OK="00112233445566778899aabbccddeeff0011223344556677889900aabbccdd"
+DIGEST_HW_BAD="ffeeddccbbaa99887766554433221100ffeeddccbbaa998877665544332211"
+printf '%s\n' "${DIGEST_HW_OK}" > "${STATE}/apksigner-digest"
+
+clear_logs
+run mdm-enroll --out "${OUT}" --headwind-url "${HEADWIND_URL_T}" --headwind-signer-sha256 "${DIGEST_HW_OK}"
+[ "${RC}" -eq 0 ] && ok "(22) mdm-enroll on a FRESH device (1 user) exits 0" \
+    || { bad "(22) mdm-enroll fresh-device rc=${RC}"; echo "${OUT_TXT}"; }
+grep -q 'dpm set-device-owner com.hmdm.launcher/.AdminReceiver' "${LOGD}/adb.log" \
+    && ok "(22) 'dpm set-device-owner com.hmdm.launcher/.AdminReceiver' appears in adb.log" \
+    || { bad "(22) dpm set-device-owner call missing/wrong in adb.log"; cat "${LOGD}/adb.log"; }
+MDM="${OUT}/device/${DEVID}/mdm.json"
+[ -f "${MDM}" ] \
+    && [ "$(jq -r '.device_id' "${MDM}")" = "${DEVID}" ] \
+    && [ "$(jq -r '.serial' "${MDM}")" = "${SERIAL_A}" ] \
+    && [ "$(jq -r '.dpc_package' "${MDM}")" = "com.hmdm.launcher" ] \
+    && [ "$(jq -r '.headwind_url' "${MDM}")" = "${HEADWIND_URL_T}" ] \
+    && [ "$(jq -r '.os' "${MDM}")" = "grapheneos" ] \
+    && [ "$(jq -r '.set_via' "${MDM}")" = "adb-device-owner" ] \
+    && ok "(22) mdm.json fields correct (device_id/serial/dpc_package/headwind_url/os/set_via)" \
+    || bad "(22) mdm.json missing/wrong: $(cat "${MDM}" 2>/dev/null)"
+
+# NON-fresh device (2 users) -> refused (exit 2): device-owner mode is a
+# one-shot AOSP gate, permanently foreclosed once a secondary user exists.
+touch "${STATE}/user-created"
+run mdm-enroll --out "${OUT}" --headwind-url "${HEADWIND_URL_T}" --headwind-signer-sha256 "${DIGEST_HW_OK}"
+[ "${RC}" -eq 2 ] && has "device-owner mode is no longer obtainable" \
+    && ok "(22) NON-fresh device (2 users) refused (exit 2, fail-closed one-shot AOSP gate)" \
+    || bad "(22) non-fresh mdm-enroll rc=${RC}, want 2, out='${OUT_TXT}'"
+
+# --force downgrades the precondition to a warning and proceeds anyway.
+run mdm-enroll --out "${OUT}" --headwind-url "${HEADWIND_URL_T}" --headwind-signer-sha256 "${DIGEST_HW_OK}" --force
+[ "${RC}" -eq 0 ] && has "continuing under --force" \
+    && ok "(22) --force downgrades the NON-fresh precondition to a warning and proceeds (rc 0)" \
+    || bad "(22) --force mdm-enroll rc=${RC}, want 0, out='${OUT_TXT}'"
+rm -f "${STATE}/user-created"
+
+# --headwind-signer-sha256 mismatch -> exit 3 (fail-closed supply-chain gate,
+# same apksigner-verify helper --apk-signer-sha256/--auditor-signer-sha256 use).
+run mdm-enroll --out "${OUT}" --headwind-url "${HEADWIND_URL_T}" --headwind-signer-sha256 "${DIGEST_HW_BAD}"
+[ "${RC}" -eq 3 ] && has "signer digest MISMATCH" \
+    && ok "(22) --headwind-signer-sha256 mismatch -> exit 3 (fail-closed)" \
+    || bad "(22) headwind-signer-mismatch rc=${RC}, want 3, out='${OUT_TXT}'"
+rm -f "${STATE}/apksigner-digest"
+
+# ── (23) attest (Phase 3: self-hosted AttestationServer pairing via the
+#      Snapdragon-forked Auditor) ──────────────────────────────────────────
+reset_state
+rm -f "${STATE}/adb-getstate" "${STATE}/apksigner-digest"
+printf 'List of devices attached\n%s             device usb:1-4\n' "${SERIAL_A}" > "${STATE}/adb-devices"
+printf 'package:com.tailscale.ipn\npackage:systems.snapdragon.auditor\n' > "${STATE}/packages"
+ATTEST_URL_T="https://attest.phone-test.invalid"
+DIGEST_AUD_OK="990e04f0864b19f14f84e0e432f7a393f297ab105a22c1e1b10b442a4a62c42"
+DIGEST_AUD_BAD="deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+printf '%s\n' "${DIGEST_AUD_OK}" > "${STATE}/apksigner-digest"
+
+clear_logs
+run attest --out "${OUT}" --attestation-url "${ATTEST_URL_T}" --auditor-signer-sha256 "${DIGEST_AUD_OK}"
+[ "${RC}" -eq 0 ] && has "Auditor APK signer pin OK" \
+    && ok "(23) attest (valid --auditor-signer-sha256 pin) exits 0" \
+    || { bad "(23) attest rc=${RC}"; echo "${OUT_TXT}"; }
+ATT="${OUT}/device/${DEVID}/attestation.json"
+[ -f "${ATT}" ] \
+    && [ "$(jq -r '.device_id' "${ATT}")" = "${DEVID}" ] \
+    && [ "$(jq -r '.auditor_package' "${ATT}")" = "systems.snapdragon.auditor" ] \
+    && [ "$(jq -r '.verdict' "${ATT}")" = "operator-paired" ] \
+    && [ "$(jq -r '.attestation_url' "${ATT}")" = "${ATTEST_URL_T}" ] \
+    && ok "(23) attestation.json: auditor_package=systems.snapdragon.auditor, verdict=operator-paired" \
+    || bad "(23) attestation.json missing/wrong: $(cat "${ATT}" 2>/dev/null)"
+
+# ingest folds the attestation fields in (advisory/logged, D9).
+run ingest --device-id "${DEVID}" --out "${OUT}"
+[ "${RC}" -eq 0 ] \
+    && [ "$(jq -r '.auditor_package' "${ING}")" = "systems.snapdragon.auditor" ] \
+    && [ "$(jq -r '.attestation_verdict' "${ING}")" = "operator-paired" ] \
+    && [ "$(jq -r '.attestation_url' "${ING}")" = "${ATTEST_URL_T}" ] \
+    && ok "(23) ingest folds the attestation fields in (auditor_package/attestation_verdict/attestation_url)" \
+    || bad "(23) ingest attestation-fold missing/wrong: $(cat "${ING}" 2>/dev/null)"
+
+# --auditor-signer-sha256 mismatch -> exit 3 (fail-closed).
+run attest --out "${OUT}" --attestation-url "${ATTEST_URL_T}" --auditor-signer-sha256 "${DIGEST_AUD_BAD}"
+[ "${RC}" -eq 3 ] && has "signer digest MISMATCH" \
+    && ok "(23) --auditor-signer-sha256 mismatch -> exit 3 (fail-closed)" \
+    || bad "(23) auditor-signer-mismatch rc=${RC}, want 3, out='${OUT_TXT}'"
+rm -f "${STATE}/apksigner-digest"
+
+# The authkey/secret sweep still passes after the attest + mdm-enroll runs
+# above (neither verb handles a secret, but re-run the sweep so a regression
+# that accidentally routed one through this new code cannot go undetected).
+LEAK=0
+sweep_one "tailscale pre-auth key (post attest/mdm-enroll)" "${AUTHKEY_VALUE}"
+sweep_one "generated passphrase #1 (post attest/mdm-enroll)" "${GEN_PASS1}"
+sweep_one "generated passphrase #3 (post attest/mdm-enroll)" "${GEN_PASS3}"
+sweep_one "--pass-file passphrase (post attest/mdm-enroll)" "${FILE_PASS}"
+[ "${LEAK}" -eq 0 ] && ok "(23) SECRET SWEEP still clean after the attest + mdm-enroll runs" \
+    || bad "(23) SECRET SWEEP found a leak after attest/mdm-enroll (see above)"
+
+# ── (24) wizard step ordering (STATIC: grep cmd_wizard's own source body —
+#      no execution, no TTY needed) ─────────────────────────────────────────
+WIZ_START="$(grep -n '^cmd_wizard()' "${DRIVER}" | head -n1 | cut -d: -f1)"
+if [ -n "${WIZ_START}" ]; then
+    WIZ_END="$(awk -v s="${WIZ_START}" 'NR>s && /^}/{print NR; exit}' "${DRIVER}")"
+else
+    bad "(24) cmd_wizard() not found in ${DRIVER}"
+    WIZ_START=0; WIZ_END=0
+fi
+line_of() {  # $1 = grep -E pattern; first matching CODE line NUMBER within
+             # cmd_wizard's body (or empty) — comment-only lines are
+             # skipped, so a prose mention (e.g. "Mirrors cmd_flash's own
+             # preflight..." in the front-loading comment, well before the
+             # real Step 3 call) can never masquerade as the actual call.
+    awk -v s="${WIZ_START}" -v e="${WIZ_END}" -v pat="$1" \
+        'NR>=s && NR<=e {
+             line=$0; sub(/^[ \t]+/, "", line);
+             if (line ~ /^#/) next;
+             if ($0 ~ pat) { print NR; exit }
+         }' "${DRIVER}"
+}
+
+STEP_LABELS="$(sed -n "${WIZ_START},${WIZ_END}p" "${DRIVER}" | grep -oE 'Step [0-9]/8' | sort -u)"
+EXPECTED_LABELS="$(printf 'Step %d/8\n' 1 2 3 4 5 6 7 8)"
+[ "${STEP_LABELS}" = "${EXPECTED_LABELS}" ] \
+    && ok "(24) cmd_wizard references exactly Step 1/8..8/8, no gaps/dup numbering" \
+    || bad "(24) cmd_wizard step labels wrong: got '$(tr '\n' ',' <<<"${STEP_LABELS}")'"
+
+L_DETECT="$(line_of 'cmd_detect')"
+L_FETCH="$(line_of 'cmd_fetch')"
+L_FLASH="$(line_of 'cmd_flash')"
+L_ATTEST="$(line_of 'cmd_attest')"
+L_MDM="$(line_of 'cmd_mdm_enroll')"
+L_ENROLL="$(line_of 'cmd_enroll;')"
+L_PROFILE="$(line_of 'cmd_profile;')"
+L_INGEST="$(line_of 'cmd_ingest')"
+if [ -n "${L_DETECT}" ] && [ -n "${L_FETCH}" ] && [ -n "${L_FLASH}" ] && [ -n "${L_ATTEST}" ] \
+   && [ -n "${L_MDM}" ] && [ -n "${L_ENROLL}" ] && [ -n "${L_PROFILE}" ] && [ -n "${L_INGEST}" ] \
+   && [ "${L_DETECT}" -lt "${L_FETCH}" ] && [ "${L_FETCH}" -lt "${L_FLASH}" ] \
+   && [ "${L_FLASH}" -lt "${L_ATTEST}" ] && [ "${L_ATTEST}" -lt "${L_MDM}" ] \
+   && [ "${L_MDM}" -lt "${L_ENROLL}" ] && [ "${L_ENROLL}" -lt "${L_PROFILE}" ] \
+   && [ "${L_PROFILE}" -lt "${L_INGEST}" ]; then
+    ok "(24) cmd_wizard calls are wired in the correct source order: detect < fetch < flash < attest < mdm-enroll < enroll < profile < ingest"
+else
+    bad "(24) cmd_wizard call order wrong (lines: detect=${L_DETECT:-?} fetch=${L_FETCH:-?} flash=${L_FLASH:-?} attest=${L_ATTEST:-?} mdm-enroll=${L_MDM:-?} enroll=${L_ENROLL:-?} profile=${L_PROFILE:-?} ingest=${L_INGEST:-?})"
+fi
+[ -n "${L_ATTEST}" ] && [ -n "${L_MDM}" ] && [ -n "${L_PROFILE}" ] \
+    && [ "${L_ATTEST}" -lt "${L_PROFILE}" ] && [ "${L_MDM}" -lt "${L_PROFILE}" ] \
+    && ok "(24) both attest and mdm-enroll are wired strictly before profile (the step that forecloses device-owner mode)" \
+    || bad "(24) attest/mdm-enroll not both wired before profile (attest=${L_ATTEST:-?} mdm-enroll=${L_MDM:-?} profile=${L_PROFILE:-?})"
 
 echo
 echo "== phone-wizard test: ${P} passed, ${F} failed =="
