@@ -11,9 +11,16 @@ from dataclasses import MISSING
 from ..qt import QtWidgets
 from ._scroll import scrollable
 from ...core.config import (
-    HOME_DESKTOP_FIELDS, PLATFORM_LABELS, ImageConfig, home_options_allowed,
+    HOME_DESKTOP_FIELDS, PLATFORM_LABELS, ImageConfig, home_options_allowed, image_class,
 )
-from ._gating import clear_unsupported, gate_widgets, gate_widgets_role_class, platform_supports
+from ._gating import (
+    clear_unsupported,
+    gate_widgets,
+    gate_widgets_role_class,
+    out_of_scope_note,
+    platform_supports,
+    scope_allows,
+)
 from ._widgets import _file_picker, _row
 
 # the media-data combo's leave-the-builder-default sentinel (the builder default is
@@ -192,11 +199,43 @@ class HomePage(QtWidgets.QWizardPage):
         self.unlock_yubikey = QtWidgets.QComboBox()
         self.unlock_yubikey.addItems(["(off)", "boot", "login"])
         el.addWidget(_row("YubiKey unlock", self.unlock_yubikey))
+        self._unlock_combos = (self.unlock_keyfile, self.unlock_yubikey)
         lay.addWidget(enc)
         lay.addStretch(1)
 
     def _mode_changed(self, _text: str = "") -> None:
         self.mode_help.setText(_HOME_MODE_HELP.get(self.mode.currentText(), ""))
+
+    def _sync_unlock_choices(self, c) -> None:
+        """Offer the "login" unlock factor only on a desktop-class image (finding 8).
+
+        The builder writes the login-factor marker from inside its `elif ${ROLE_CLIENT}`
+        branch (build-x86-host-stage4.sh:3174-3175), so on a cluster-node role
+        `--unlock-keyfile login` produces NO marker: the factor silently does not exist.
+        The flag is still PARSED and validated (:1220), so nothing errs — and
+        `--unlock-yubikey login` even adds sys-auth/pam-u2f to the package set at :3561,
+        which is NOT role-gated. So a node paid to emerge a PAM module for a login factor
+        it was never going to have.
+
+        Per-ITEM rather than per-field on purpose: "boot" is genuinely valid on a node (the
+        installer enrolls it as a LUKS keyslot, :4796-4802), so this removes exactly the one
+        choice the builder cannot honour and leaves the rest of the row working. FIELD_SCOPE
+        is a field-level model and cannot express this, which is why it is a page-local rule
+        and not a scope declaration — recording that rather than bending the model.
+        """
+        want = ["(off)", "boot"] + (["login"] if image_class(c.mode, c.role) == "desktop" else [])
+        for combo in self._unlock_combos:
+            if [combo.itemText(i) for i in range(combo.count())] == want:
+                continue
+            prev = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(want)
+            # A stale "login" picked while this was a desktop must not survive the switch;
+            # fall back to "(off)" rather than silently re-reading as "boot" (which would
+            # invent a boot-time factor the operator never asked for).
+            combo.setCurrentText(prev if prev in want else "(off)")
+            combo.blockSignals(False)
 
     def _preset_copy_home(self) -> None:
         # Nudge into the copy-an-existing-home flow (archive bakes a home tarball in);
@@ -224,6 +263,11 @@ class HomePage(QtWidgets.QWizardPage):
         self.local_pass.setText(c.local_pass)
         self.encrypt_root.setChecked(c.encrypt_root)
         self.luks_pass.setText(c.luks_pass)
+        # Finding 8: the "login" unlock factor is a DESKTOP-only choice, and unlike every
+        # other finding here the scope is per-ITEM, not per-field — "boot" stays perfectly
+        # valid on a node (the installer enrolls it into a LUKS keyslot), so hiding the
+        # whole row would remove a working option. Only the one meaningless choice goes.
+        self._sync_unlock_choices(c)
         self.unlock_keyfile.setCurrentText(c.unlock_keyfile or "(off)")
         self.unlock_yubikey.setCurrentText(c.unlock_yubikey or "(off)")
         # --home-* provisioning (incl. the archive/seed extras), the media-data set
@@ -267,6 +311,18 @@ class HomePage(QtWidgets.QWizardPage):
         # the standalone path (a personal desktop), where the local user + root-disk
         # password ARE the primary action.
         self.standalone_helper.setVisible(c.mode == "standalone")
+        # --standalone is a DESKTOP posture and a contradiction in mesh, where every image
+        # exists to join the cluster (finding 1). HomePage is visited in mesh — mode-skip
+        # only drops role/hardware/branding — and this checkbox sat inside the login group
+        # ungated by anything, so a single tick rode the deepcopied worklist base onto
+        # EVERY node entry. The x86 builder then takes --standalone on a pki role without
+        # complaint: ROLE_K8S=none, so no kubelet/kubeadm/containerd and no cluster GitOps
+        # tree, yet the full desktop stack IS built — an image that can never join the mesh
+        # it was built for, found out hours later at deploy. HIDE (not grey) it out of
+        # scope, matching the home-group idiom above, so it cannot be set at all.
+        standalone_ok = scope_allows("standalone", c)
+        gate_widgets_role_class(self.standalone, standalone_ok,
+                                out_of_scope_note("standalone", c), hide=True)
         # device-cannot-encrypt (spec 4): hide the --encrypt-root checkbox and show a
         # plain reason when the target platform has no FDE path (jetson). luks_pass is
         # _ALL_PLATFORMS and emits regardless, so it is NOT hidden/cleared here.
@@ -299,7 +355,12 @@ class HomePage(QtWidgets.QWizardPage):
         c.media_data = "" if md == _MEDIA_DEFAULT else md
         c.media_label = self.media_label.text().strip()
         c.no_vaults = self.no_vaults.isChecked()
-        c.standalone = self.standalone.isChecked()
+        # Mirrors the encrypt_root line below: the collect itself carries the scope gate,
+        # so a stale tick made on a standalone/cloud desktop can never survive a switch to
+        # a mesh/node image (the hidden widget keeps its checked state; cfg is the source
+        # of truth that initializePage re-reads). This is the emission-preserving half of
+        # the hide above — on an in-scope image the value collects exactly as before.
+        c.standalone = self.standalone.isChecked() and scope_allows("standalone", c)
         c.local_user = self.local_user.text().strip() or c.local_user
         c.local_pass = self.local_pass.text()
         # encrypt_root only where the platform can do FDE (the checkbox is hidden on
@@ -310,10 +371,15 @@ class HomePage(QtWidgets.QWizardPage):
         c.encrypt_root = self.encrypt_root.isChecked() and platform_supports(
             "encrypt_root", c.platform)
         c.luks_pass = self.luks_pass.text()
+        # "login" is desktop-only (see _sync_unlock_choices): drop a stale one rather than
+        # emit a factor the builder's ROLE_CLIENT branch will never write a marker for.
+        # The combo is already repopulated on a node, so this only catches a value that
+        # arrived from a loaded config rather than from this page.
+        _factors_ok = image_class(c.mode, c.role) == "desktop"
         kf = self.unlock_keyfile.currentText()
-        c.unlock_keyfile = "" if kf == "(off)" else kf
+        c.unlock_keyfile = "" if kf == "(off)" or (kf == "login" and not _factors_ok) else kf
         yk = self.unlock_yubikey.currentText()
-        c.unlock_yubikey = "" if yk == "(off)" else yk
+        c.unlock_yubikey = "" if yk == "(off)" or (yk == "login" and not _factors_ok) else yk
         # x86-only fields (see initializePage) — force-clear on every other platform
         # so a stale choice picked while platform was x86 (or "") can never linger
         # into a saved config or a generated command for an ARM build.

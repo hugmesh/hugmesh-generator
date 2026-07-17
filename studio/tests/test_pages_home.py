@@ -492,3 +492,134 @@ def test_system_credentials_survive_going_back_to_add_a_desktop_row(wiz):
     assert sysp.user_password.text() == "fleet-user-pw"
     advance_to(wiz, wizard_mod.HomePage)
     assert c.user_password == "fleet-user-pw" and c.root_password == "fleet-root-pw"
+
+
+# ── finding 1: the Standalone checkbox on a mesh/node image ─────────────────────────
+
+def test_home_standalone_hidden_and_dropped_on_a_mesh_node(qapp):
+    """THE defect. HomePage IS visited in mesh (mode-skip only drops role/hardware/
+    branding), and this checkbox sat in the login group gated by nothing — so one tick rode
+    the deepcopied worklist base onto EVERY node entry, and the x86 builder took
+    --standalone on a pki role without a word: ROLE_K8S=none (no kubelet/kubeadm/
+    containerd, no cluster GitOps tree) yet the full desktop stack still built. A mesh whose
+    nodes can never join it, found out hours per image later at deploy.
+
+    HIDE (not grey), and drop the value on collect even if the widget stayed checked from an
+    earlier desktop visit."""
+    cfg = ImageConfig(mode="mesh", role="pki", platform="x86")
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert not page.standalone.isVisibleTo(page), "--standalone still offered on a mesh node"
+    assert "cluster" in page.standalone.toolTip()
+    page.standalone.setChecked(True)              # stale tick from a previous desktop visit
+    assert page.validatePage()
+    assert cfg.standalone is False, "a hidden --standalone still reached the config"
+    assert "--standalone" not in cfg.to_cli_args()
+
+
+def test_home_standalone_live_on_the_orangepizero2_node_class_appliance(qapp):
+    """REGRESSION PIN (review finding 1) — the GUI half.
+
+    The first cut declared --standalone classes=("desktop",) flat, which hid this checkbox
+    on the orangepizero2 flow and, worse, made validatePage() force-clear the value:
+    home.py's collect is the ONLY writer of cfg.standalone, so an operator loading a saved
+    orangepizero2 standalone config silently got a NON-standalone, non-FDE image — the exact
+    silent-wrong-image class this PR exists to kill, newly introduced by its own fix.
+
+    orangepizero2 is node-class AND standalone: build-orangepi-zero2-stage4.sh has zero
+    ROLE_CLIENT/ROLE_K8S and composes ${STANDALONE} unconditionally (:218-226), and
+    ROLE_CHOICES calls the role a "standalone HEADLESS APPLIANCE". There is no builder rule
+    to honour here, so the wizard must not invent one."""
+    cfg = ImageConfig(mode="standalone", role="orangepizero2", platform="orangepizero2")
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert page.standalone.isVisibleTo(page), (
+        "--standalone hidden on the orangepizero2 appliance — the flow's whole point is "
+        "unreachable in the wizard")
+    page.standalone.setChecked(True)
+    assert page.validatePage()
+    assert cfg.standalone is True, "the wizard force-cleared an explicitly-ticked --standalone"
+    assert "--standalone" in cfg.to_cli_args()
+
+
+def test_home_standalone_live_on_a_standalone_desktop(qapp):
+    """The other direction — the gate must not eat the flow --standalone exists for.
+    Emission stays byte-identical on an in-scope image."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert page.standalone.isVisibleTo(page)
+    assert page.standalone.toolTip() == ""
+    page.standalone.setChecked(True)
+    assert page.validatePage()
+    assert cfg.standalone is True
+    assert "--standalone" in cfg.to_cli_args()
+
+
+def test_home_standalone_re_gates_per_visit(qapp):
+    """The hide is re-evaluated on every initializePage, so a node visit cannot permanently
+    strand the checkbox — the same every-visit contract gate_widgets_role_class documents."""
+    cfg = ImageConfig(mode="mesh", role="pki", platform="x86")
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert not page.standalone.isVisibleTo(page)
+    cfg.mode, cfg.role = "standalone", "standalone-thick"
+    page.initializePage()
+    assert page.standalone.isVisibleTo(page), "checkbox stranded after a mesh visit"
+
+
+# ── finding 8: the "login" unlock factor on a node image ────────────────────────────
+
+def test_home_login_unlock_factor_not_offered_on_a_node(qapp):
+    """The builder writes the login-factor marker from inside its `elif ${ROLE_CLIENT}`
+    branch (build-x86-host-stage4.sh:3174-3175), so on a cluster-node role
+    `--unlock-keyfile login` writes NO marker — the factor silently does not exist. The
+    flag still parses and validates (:1220) so nothing errs, and `--unlock-yubikey login`
+    even adds sys-auth/pam-u2f to the package set at :3561, which is NOT role-gated: the
+    node emerged a PAM module for a login factor it was never going to have.
+
+    Note this is an ITEM-level gate, not a hidden row: 'boot' stays valid on a node (the
+    installer enrolls it as a LUKS keyslot), so only the meaningless choice goes."""
+    cfg = ImageConfig(mode="mesh", role="pki", platform="x86")
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    for combo in (page.unlock_keyfile, page.unlock_yubikey):
+        items = [combo.itemText(i) for i in range(combo.count())]
+        assert items == ["(off)", "boot"], f"'login' still offered on a node: {items}"
+
+
+def test_home_login_unlock_factor_offered_on_a_desktop(qapp):
+    """The other direction — the gate must not eat the factor on the images that have it."""
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86")
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    for combo in (page.unlock_keyfile, page.unlock_yubikey):
+        items = [combo.itemText(i) for i in range(combo.count())]
+        assert items == ["(off)", "boot", "login"], items
+
+
+def test_home_stale_login_factor_dropped_on_collect_not_downgraded(qapp):
+    """A 'login' arriving from a LOADED CONFIG (no widget involved) must be dropped, and
+    must fall back to (off) — NOT to 'boot'. Downgrading would invent a boot-time factor
+    the operator never asked for, which is its own silent-wrong-image bug."""
+    cfg = ImageConfig(mode="mesh", role="pki", platform="x86")
+    cfg.unlock_keyfile = "login"
+    cfg.unlock_yubikey = "login"
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert page.validatePage()
+    assert cfg.unlock_keyfile == ""
+    assert cfg.unlock_yubikey == ""
+    argv = cfg.to_cli_args()
+    assert "--unlock-keyfile" not in argv and "--unlock-yubikey" not in argv
+
+
+def test_home_boot_unlock_factor_survives_on_a_node(qapp):
+    """'boot' is genuinely valid on a node — the fix must not take it away."""
+    cfg = ImageConfig(mode="mesh", role="pki", platform="x86")
+    cfg.unlock_keyfile = "boot"
+    page = HomePage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
+    page.initializePage()
+    assert page.validatePage()
+    assert cfg.unlock_keyfile == "boot"
+    assert "--unlock-keyfile" in cfg.to_cli_args()

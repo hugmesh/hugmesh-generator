@@ -16,6 +16,7 @@ import zipfile
 from dataclasses import dataclass, field
 
 from . import local_login_agent
+from .config import field_in_scope, image_class
 from .validate import (
     IdentityValidationError,
     validate_brand,
@@ -60,11 +61,37 @@ class KeyZipContents:
         return ", ".join(bits) or "(nothing recognized)"
 
     def apply_to(self, cfg) -> None:
-        """Wire recognized payloads into an ImageConfig."""
+        """Wire recognized payloads into an ImageConfig.
+
+        SCOPE-GATED (finding 6). Every assignment here is an INJECTION: the payload comes
+        from the admin's zip, not from anything the operator ticked, and KeyZipPage is
+        visited in mesh mode. So an admin zip carrying an egress conf silently set
+        cfg.egress_vpn on EVERY mesh node — with no operator action anywhere and no widget
+        to see it on. The x86 builder then warns "egress VPN is a desktop/tailnet-node
+        feature — ignoring", and IT MEANS ONLY THE STAGING: the package leg (net-vpn/
+        wireguard-tools, or networkmanager-openvpn + openvpn for a .ovpn) and the
+        CONFIG_WIREGUARD kernel fragment are NOT role-gated, so the VPN userspace was
+        emerged into headless nodes that will never use it.
+
+        Skipping an out-of-scope injection is NOT the "silently corrected an explicit
+        value" anti-pattern the WARN tier exists to prevent — nobody chose this value for
+        this image. It IS recorded in ``warnings`` (the channel the wizard already shows),
+        so the operator is told the payload was recognized and deliberately not applied.
+        """
+        def _inject(fld: str, value: str, what: str) -> None:
+            if field_in_scope(fld, cfg):
+                setattr(cfg, fld, value)
+            else:
+                self.warnings.append(
+                    f"{what} found in the key-zip but NOT applied: it is out of scope for "
+                    f"this {image_class(cfg.mode, cfg.role)}-class image "
+                    f"(--role {cfg.role}{f', {cfg.mode} mode' if cfg.mode else ''}). "
+                    f"The builder would ignore it while still baking its cost into the image.")
+
         if self.has_branding:
-            cfg.branding_dir = os.path.join(self.staging_dir, "branding")
+            _inject("branding_dir", os.path.join(self.staging_dir, "branding"), "Branding")
         if self.egress_conf:
-            cfg.egress_vpn = self.egress_conf
+            _inject("egress_vpn", self.egress_conf, "Egress-VPN conf")
         if self.domain_conf:
             _apply_domain_conf(self.domain_conf, cfg, self.warnings)
         # Secure-Boot signing chain (G5): the admin zip already ships the fleet SB
