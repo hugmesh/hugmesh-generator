@@ -1,4 +1,4 @@
-# Enterprise phones — GrapheneOS + existing-device onboarding (the fourth onboarding form)
+# Mobile Device Management (MDM) — GrapheneOS + existing-device phone onboarding (the fourth onboarding form)
 
 > **Status: ✅ shipped on `main`** — the flash/enroll/profile/ingest driver,
 > the existing-device onboarding path, **Headwind MDM**, the **GrapheneOS
@@ -18,7 +18,7 @@ This is the **fourth onboarding form**: alongside the appliance images
 ([`BUILD-MATRIX.md`](BUILD-MATRIX.md)), the client desktops
 ([`CLIENT-IMAGES.md`](CLIENT-IMAGES.md)), and the FD-09 Local Docker mesh node
 ([`clients/docker-mesh-node/`](../clients/docker-mesh-node)), the platform can
-take a **USB-connected Google Pixel** and turn it into an enterprise-managed
+take a **USB-connected Google Pixel** and turn it into an MDM-managed
 mesh device end to end:
 
 ```

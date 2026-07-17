@@ -30,7 +30,7 @@ resources:
   # Harbor registry server cert (harbor-mtls) — SAME Vault-PKI -> ESO shape as
   # media-poisoner above, consumed by apps/03a-harbor.yaml's expose.tls.
   - harbor-externalsecrets.yaml   # harbor-mtls
-  # Headwind MDM (Enterprise Phones) — DEFAULT-OFF optional-service (slug
+  # Headwind MDM (managed phones) — DEFAULT-OFF optional-service (slug
   # headwind, optional-services.yaml). TWO ExternalSecrets (headwind-db-auth /
   # headwind-admin) from ONE Vault path (secret/<brand>/headwind) — OWNER role
   # only, VERIFIED not separable from runtime (hmdm shares one datasource for

@@ -1460,7 +1460,7 @@ standalone_screen() {
 # the three IMAGE choices funnel into the EXISTING screens (build_screen /
 # single_role_screen / standalone_screen), each of which already calls build_make_cmd
 # verbatim, so emission stays byte-identical. The fourth choice (Local Docker mesh)
-# builds NO image and never touches build_make_cmd. The Enterprise-phone choice
+# builds NO image and never touches build_make_cmd. The MDM phone choice
 # (phone_screen) likewise builds NO image — it drives scripts/phone-wizard.sh and is
 # NOT part of the four-label golden taxonomy (it sits outside mode.py's ModePage).
 mode_screen() {
@@ -1472,7 +1472,7 @@ mode_screen() {
             localmesh  "Local Docker mesh — run a mesh on THIS machine in Docker (no image built)" \
             client     "Mesh desktop client — a branded desktop that JOINS an existing mesh (tailnet + SSO)" \
             standalone "Standalone Gentoo desktop — hardened personal / UNAFFILIATED desktop (no mesh/SSO)" \
-            phone      "Enterprise phone — flash a USB Pixel with VERIFIED GrapheneOS + enroll it in the mesh (no image built)" \
+            phone      "MDM phone — flash a USB Pixel with VERIFIED GrapheneOS + enroll it in the mesh (no image built)" \
             advanced   "Advanced — all build targets & fleet options (the full menu)" \
             back "‹ back to main menu")" || return 0
         # NOTE: the four choice LABELS above are the single golden source of the
@@ -1495,7 +1495,7 @@ mode_screen() {
             # → the x86 standalone screen; the ARM standalone posture stays reachable via
             # single_role_screen's desktop roles + arm_secrets_prompt (Advanced too).
             standalone) single_role_screen ;;
-            # → the SECOND non-build choice: the enterprise-phone driver (flash a real
+            # → the SECOND non-build choice: the MDM phone driver (flash a real
             # Pixel handset + enroll it in the mesh). Like localmesh it never touches
             # build_make_cmd — the driver owns ALL the logic, phone_screen stays thin.
             phone)      phone_screen ;;
@@ -1726,7 +1726,7 @@ clean_screen() {
         || ui_msg "Clean" "Clean failed (see terminal output / permissions)."
 }
 
-# ── Enterprise phone (Pixel/GrapheneOS) — flashes a HANDSET, builds NO image ────
+# ── MDM phone (Pixel/GrapheneOS) — flashes a HANDSET, builds NO image ────
 # A THIN face over scripts/phone-wizard.sh, the driver that owns ALL the logic
 # (device-catalog fail-closed gate, sshsig verification, typed-serial flash gate,
 # vault-seed escrow custody) — the menu never reimplements or bypasses any of it,
@@ -1741,14 +1741,14 @@ clean_screen() {
 phone_screen() {
     local wiz="${SNAP_PHONE_WIZARD:-${SCRIPT_DIR}/phone-wizard.sh}"
     if [ ! -x "${wiz}" ]; then
-        ui_msg "Enterprise phone" "driver not found/executable: ${wiz}\n\nThis checkout has no enterprise-phone wizard (see docs/ENTERPRISE-PHONES.md)."
+        ui_msg "MDM phone" "driver not found/executable: ${wiz}\n\nThis checkout has no MDM phone wizard (see docs/MDM.md)."
         return 0
     fi
     local codename="" channel="stable" serial="" keys_dir="" login_server="" authkey="" role="" choice
     while :; do
         local keyl
         keyl="$([ -n "${authkey}" ] && echo '(set)' || echo '(unset — enroll then expects your own custody)')"
-        choice="$(ui_menu "Enterprise phone" \
+        choice="$(ui_menu "MDM phone" \
             "Flash a USB-connected Google Pixel with VERIFIED GrapheneOS and enroll it in the mesh — no image build. Dry-run by default; every destructive step is gated by the driver itself. Masked auth key; never saved to ${CONF_FILE}." \
             device  "Device codename ...... ${codename:-<detect at run>}" \
             channel "Release channel ...... ${channel}" \
@@ -1824,7 +1824,7 @@ _phone_shred_key() {
 }
 
 # _phone_run VERB AUTHKEY CODENAME CHANNEL SERIAL KEYS_DIR LOGIN_SERVER ROLE — one
-# FOREGROUND child invocation of the enterprise-phone driver, terminal fully
+# FOREGROUND child invocation of the MDM phone driver, terminal fully
 # attached (stdin for its typed-serial/wizard prompts, stdout for its runbooks).
 # The auth key (when set) goes into a chmod-600 mktemp file (off the argv / process
 # table) and is shredded afterwards — _local_mesh_bootstrap_run's exact pattern —
@@ -1843,7 +1843,7 @@ _phone_run() {
     [ -n "${role}" ]         && args+=(--role "${role}")
     local keyfile=""
     if [ -n "${authkey}" ]; then
-        keyfile="$(mktemp "${STATE_DIR}/phonekey.XXXXXX")" || { ui_msg "Enterprise phone" "could not create a temp file for the auth key"; return 0; }
+        keyfile="$(mktemp "${STATE_DIR}/phonekey.XXXXXX")" || { ui_msg "MDM phone" "could not create a temp file for the auth key"; return 0; }
         chmod 600 "${keyfile}" 2>/dev/null || true
         printf '%s' "${authkey}" >"${keyfile}"
         args+=(--authkey-file "${keyfile}")

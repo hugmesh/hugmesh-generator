@@ -135,7 +135,7 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
 - **✅ Data-access standard** — the Spring services use **Spring Data R2DBC
   reactive repositories** (no raw SQL strings / inline `@Query`).
 - **✅ Wiki service (snapdragon-wiki-bff-api + snapdragon-wiki-ui)** — fully deployed; manifests in `specs/cluster/manifests/wiki-bff-api/` + `manifests/wiki-ui/`, ArgoCD apps `34a-wiki-bff-db`, `34b-wiki-bff-api`, `49a-wiki-ui`; fe-gateway routes `/bff/wiki/**` (#173, #176).
-- **✅ Enterprise-phone MDM (fourth onboarding form)** — `scripts/phone-wizard.sh`
+- **✅ MDM phone MDM (fourth onboarding form)** — `scripts/phone-wizard.sh`
   flashes verified GrapheneOS onto a USB-connected Pixel (or onboards an
   existing GrapheneOS/stock-Android phone with no reflash), attests it to a
   self-hosted **GrapheneOS AttestationServer**, device-owner-enrolls it into
@@ -143,7 +143,7 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   optional-services), joins it to the mesh tailnet, and escrows an enterprise
   profile. Real pre-deploy gaps remain (Casdoor SSO for Headwind, an
   automated attestation-verdict API, `make phone-mdm-enroll`/`phone-attest`
-  targets) — see [`docs/ENTERPRISE-PHONES.md`](docs/ENTERPRISE-PHONES.md)
+  targets) — see [`docs/MDM.md`](docs/MDM.md)
   "Deferred".
 
 > The auth model is documented in depth in [`docs/SECURITY.md`](docs/SECURITY.md)

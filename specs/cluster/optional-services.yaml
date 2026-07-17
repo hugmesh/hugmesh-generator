@@ -598,7 +598,7 @@ spec:
     # added, is an `ingress.extraHosts` entry on that SAME Application, not a
     # second Ingress/Application.
     - slug: headwind
-      displayName: "Headwind MDM (Enterprise Phones)"
+      displayName: "Headwind MDM (managed phones)"
       namespace: snapdragon-pki
       default: off
       apps:

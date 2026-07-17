@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# phone-wizard.sh — enterprise-phone onboarding driver (GrapheneOS on Google Pixel).
+# phone-wizard.sh — MDM phone onboarding driver (GrapheneOS on Google Pixel).
 #
 # This is the FOURTH onboarding form, alongside the appliance images, the client
 # desktops, and the Local Docker mesh node (clients/docker-mesh-node). It takes a
-# USB-connected Google Pixel and turns it into an enterprise-managed mesh device:
+# USB-connected Google Pixel and turns it into an MDM-managed mesh device:
 #
 #   detect -> fetch (verified GrapheneOS -install- zip) -> flash -> attest
 #   (self-hosted AttestationServer pairing, via a Snapdragon-forked Auditor
@@ -36,7 +36,7 @@
 # NON-GOALS: no APK store, no fleet-wide OTA/compliance posture beyond what
 # Headwind CE ships. Deferred work (Casdoor SSO for Headwind, an automated
 # `attest --attestation-verdict-source api` mode, GrapheneOS QR provisioning)
-# is tracked in docs/ENTERPRISE-PHONES.md.
+# is tracked in docs/MDM.md.
 #
 # SECRET-CUSTODY MODEL: no secret ever travels on argv, in PLAN output, or to
 # stdout/logs (REDACTED presence markers only). The tailscale pre-auth key and
@@ -50,7 +50,7 @@
 # process — a real risk on shared provisioning hosts/jump boxes/CI runners;
 # that path requires --i-understand-adb-exposure).
 #
-# Docs: docs/ENTERPRISE-PHONES.md
+# Docs: docs/MDM.md
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -67,7 +67,7 @@ GRAPHENE_SIGNER_FP_PIN="SHA256:AhgHif0mei+9aNyKLfMZBh2yptHdw/aN7Tlh/j2eFwM"
 # ── Snapdragon Auditor fork identity (Phase 3 attestation coupling) ────────
 # applicationId is deliberately DIFFERENT from the stock GrapheneOS Auditor
 # (app.attestation.auditor) — avoids clobbering a stock install and keeps the
-# --auditor-signer-sha256 pin unambiguous. See docs/ENTERPRISE-PHONES.md for
+# --auditor-signer-sha256 pin unambiguous. See docs/MDM.md for
 # the fork rationale (DOMAIN=attestation.snapdragon.systems, own release key).
 AUDITOR_PACKAGE="systems.snapdragon.auditor"
 
@@ -158,7 +158,7 @@ usage() {
 cat <<EOF
 Usage: $0 <verb> [options]
 
-  Enterprise-phone wizard: flash a USB-connected Google Pixel with VERIFIED
+  MDM phone wizard: flash a USB-connected Google Pixel with VERIFIED
   GrapheneOS, enroll it in the brand's orchestration superdomain (headscale
   tailnet), pair it to the self-hosted AttestationServer trust root, enroll it
   as a Headwind MDM device-owner, provision an escrowed enterprise profile,
@@ -973,7 +973,7 @@ cmd_flash() {
 # pairing runbook. Runs FIRST among the two new Phase-3 verbs (before
 # mdm-enroll) because it needs no device-owner state and captures the
 # hardware trust root on the cleanest possible device state (see
-# docs/ENTERPRISE-PHONES.md, "CRITICAL ordering").
+# docs/MDM.md, "CRITICAL ordering").
 #
 # Pairing (O3, unresolved upstream): no confirmed headless "submit and get a
 # JSON verdict" API exists for the self-hosted AttestationServer — the
@@ -1055,7 +1055,7 @@ cmd_attest() {
 # secondary users and ZERO added accounts, and is PERMANENT for the life of
 # the OS install once foreclosed (no undo short of a reflash). MUST run
 # before 'profile' (which creates the escrowed secondary user that forecloses
-# it) — see docs/ENTERPRISE-PHONES.md, "CRITICAL ordering".
+# it) — see docs/MDM.md, "CRITICAL ordering".
 cmd_mdm_enroll() {
     require_android_tools
     require_jq
@@ -1420,7 +1420,7 @@ set_profile_credential() {
         # adb client's own argv (ps auxww / /proc/<pid>/cmdline) for the life
         # of the adb child process — a real risk on shared provisioning
         # workstations, jump boxes, or CI runners. Gated behind
-        # --i-understand-adb-exposure; see docs/ENTERPRISE-PHONES.md.
+        # --i-understand-adb-exposure; see docs/MDM.md.
         #
         # `adb shell` re-joins all post-'shell' argv elements into ONE remote
         # command line that the device's shell re-parses (local bash argv-
@@ -1785,7 +1785,7 @@ cmd_wizard() {
     [ -n "${ATTESTATION_URL}" ] || pw_die 1 "no --attestation-url (or ATTEST_URL) — the self-hosted AttestationServer console URL, needed by Step 4 (attest)"
     [ -n "${HEADWIND_URL}" ] || pw_die 1 "no --headwind-url (or HMDM_URL) — the Headwind DPC's non-interactive config target, needed by Step 5 (mdm-enroll)"
 
-    echo "== enterprise-phone wizard =="
+    echo "== MDM phone wizard =="
     echo "Guided flow: detect -> fetch -> flash -> attest -> mdm-enroll -> enroll -> profile -> ingest."
     echo "Each step asks first; already-completed steps can be skipped (re-entrant)."
     echo "CRITICAL ordering: attest runs on the cleanest device state (before"

@@ -74,7 +74,7 @@ ok()  { echo "  PASS $*"; P=$((P+1)); }
 bad() { echo "  FAIL $*"; F=$((F+1)); }
 WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}" 2>/dev/null' EXIT
 
-echo "== enterprise-phone e2e: a mocked stock-Android Pixel joins the mesh =="
+echo "== MDM phone e2e: a mocked stock-Android Pixel joins the mesh =="
 
 # ── Layout ─────────────────────────────────────────────────────────
 BIN="${WORK}/bin"; LOGD="${WORK}/logs"; FIX="${WORK}/fixtures"

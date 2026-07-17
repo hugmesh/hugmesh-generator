@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-phone-wizard.sh — offline logic test for the enterprise-phone wizard
+# test-phone-wizard.sh — offline logic test for the MDM phone wizard
 # driver (scripts/phone-wizard.sh): GrapheneOS Pixel onboarding — detect ->
 # fetch (verified) -> flash -> attest (self-hosted AttestationServer pairing)
 # -> mdm-enroll (Headwind MDM device-owner) -> enroll -> profile -> ingest.
@@ -104,7 +104,7 @@ ok()  { echo "  PASS $*"; P=$((P+1)); }
 bad() { echo "  FAIL $*"; F=$((F+1)); }
 WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}" 2>/dev/null' EXIT
 
-echo "== enterprise-phone wizard: offline driver test (stub tools + REAL sshsig crypto) =="
+echo "== MDM phone wizard: offline driver test (stub tools + REAL sshsig crypto) =="
 
 # ── Layout ─────────────────────────────────────────────────────────
 BIN="${WORK}/bin"; STATE="${WORK}/state"; LOGD="${WORK}/logs"
