@@ -107,9 +107,10 @@ class WorklistPage(QtWidgets.QWizardPage):
         self.header.setTextFormat(Qt.TextFormat.RichText)
         lay.addWidget(self.header)
 
-        # spec 2c convenience: one click checks the standard x86 pki+be+fe trio (the
-        # minimum buildable-together set) without disturbing any GPU/edge rows already
-        # picked — additive, never a reset. Plus the arch filter + device search
+        # spec 2c convenience: one click checks the pki+be+fe trio (the minimum
+        # buildable-together set) on whichever architectures the arch filter admits,
+        # without disturbing any GPU/edge rows already picked — additive, never a reset.
+        # Plus the arch filter + device search
         # (presentation only — a hidden checked row still builds).
         trio_row = QtWidgets.QWidget()
         trio_lay = QtWidgets.QHBoxLayout(trio_row)
@@ -117,8 +118,9 @@ class WorklistPage(QtWidgets.QWizardPage):
         self.trio_btn = QtWidgets.QPushButton("Select the required trio (pki + be + fe)")
         self.trio_btn.setToolTip(
             "PKI + Backend + Frontend are the minimum a mesh needs and are built "
-            "together. GPU / Edge-AI nodes can be added here or built later from a "
-            "provided config.")
+            "together. Checks them on every architecture the filter beside this button "
+            "admits — 'All architectures' selects the trio on x86 AND arm64. GPU / "
+            "Edge-AI nodes can be added here or built later from a provided config.")
         self.trio_btn.clicked.connect(self._select_trio)
         trio_lay.addWidget(self.trio_btn)
         self.arch_filter = QtWidgets.QComboBox()
@@ -353,14 +355,26 @@ class WorklistPage(QtWidgets.QWizardPage):
         self.completeChanged.emit()
 
     def _select_trio(self) -> None:
-        """spec 2c: check the standard x86 pki+be+fe rows in one click. Additive — it
-        never unchecks a GPU/edge row the superadmin already picked (the trio is the
-        REQUIRED-together minimum, not the whole worklist)."""
+        """spec 2c: check the pki+be+fe rows in one click, on every architecture the arch
+        filter currently admits — "All architectures" checks the trio on x86 AND arm64,
+        because pki/be/fe are buildable on both (ROLE_CHOICES gives each of them
+        ("x86", "rpi5")), and a superadmin who has not narrowed the filter means all of
+        them. Pinning this to x86 (as it did until 2026-07-17) silently ignored the
+        dropdown and produced an x86-only mesh from a button that claims to select "the
+        required trio".
+
+        Arch membership is read from the SAME ``_item_arch`` map ``_apply_filter`` uses,
+        so the button and the filter can never disagree about what an architecture
+        contains. Additive — it never unchecks a GPU/edge row the superadmin already
+        picked (the trio is the REQUIRED-together minimum, not the whole worklist)."""
+        arch = self.arch_filter.currentData() or ""      # "" == All architectures
         self.tree.blockSignals(True)
-        for role in _REQUIRED_TRIO:
-            item = self.rows.get(entry_id(role, "x86"))
-            if item is not None:
-                item.setCheckState(_COL_CHECK, Qt.CheckState.Checked)
+        for rid, item in self.rows.items():
+            if rid.split(".", 1)[0] not in _REQUIRED_TRIO:
+                continue
+            if arch and self._item_arch.get(id(item), "") != arch:
+                continue
+            item.setCheckState(_COL_CHECK, Qt.CheckState.Checked)
         self.tree.blockSignals(False)
         for rid in self.rows:
             self._sync_combo_enabled(rid)

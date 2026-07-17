@@ -421,3 +421,63 @@ def test_roles_repopulate_from_catalog_derivation(wiz):
     for did in ("x86-pc", "rpi5", "rpi4", "rpi3", "la-frite", "orange-pi-5"):
         page.select_device(did)
         assert _role_ids(page) == [r for r, _l in device_catalog.roles_for(did, "cloud")], did
+
+
+# ── the required-trio button honours the arch filter ────────────────────────────────
+# Until 2026-07-17 _select_trio() hardcoded entry_id(role, "x86"), so the button ignored
+# the dropdown next to it: with "All architectures" showing, one click produced an
+# x86-ONLY mesh from a control that claims to select "the required trio". pki/be/fe are
+# buildable on x86 AND rpi5 (ROLE_CHOICES gives each ("x86", "rpi5")), so an unnarrowed
+# filter must check both. Real report: "the button ... with the 'All architectures'
+# dropdown selected should check fe/be/pki on x86 and arm".
+def _checked_ids(page):
+    from snapdragon_studio.gui.qt import Qt
+    return {rid for rid, it in page.rows.items()
+            if it.checkState(0) == Qt.CheckState.Checked}
+
+
+def test_trio_button_with_all_architectures_checks_x86_AND_arm(wiz):
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+    assert page.arch_filter.currentData() in ("", None)   # "All architectures" default
+    page.trio_btn.click()
+    got = _checked_ids(page)
+    assert {"pki.x86", "be.x86", "fe.x86"} <= got, got
+    assert {"pki.rpi5", "be.rpi5", "fe.rpi5"} <= got, f"arm trio not selected: {got}"
+
+
+def _trio_delta(page, arch_id):
+    """Rows the trio button NEWLY checks under an arch filter. A delta (not an absolute
+    set) because the wiz fixture is shared down the file — an unrelated row another test
+    left checked is not this button's doing, and the button is additive by contract."""
+    idx = page.arch_filter.findData(arch_id)
+    assert idx >= 0, f"arch id {arch_id!r} not in the filter: " + repr(
+        [page.arch_filter.itemData(i) for i in range(page.arch_filter.count())])
+    page.arch_filter.setCurrentIndex(idx)
+    before = _checked_ids(page)
+    page.trio_btn.click()
+    return _checked_ids(page) - before
+
+
+def test_trio_button_narrowed_to_arm64_checks_only_arm(wiz):
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+    added = _trio_delta(page, "arm64")
+    assert added == {"pki.rpi5", "be.rpi5", "fe.rpi5"}, added
+
+
+def test_trio_button_narrowed_to_x86_checks_only_x86(wiz):
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+    added = _trio_delta(page, "x86-64")
+    assert added == {"pki.x86", "be.x86", "fe.x86"}, added
+
+
+def test_trio_button_stays_additive_and_does_not_touch_gpu_rows(wiz):
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(page, "be+gpu.x86")
+    page.trio_btn.click()
+    got = _checked_ids(page)
+    assert "be+gpu.x86" in got, "the trio button must never unpick an existing row"
+    assert {"pki.x86", "be.x86", "fe.x86", "pki.rpi5"} <= got
