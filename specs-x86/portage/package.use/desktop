@@ -26,15 +26,7 @@ kde-plasma/discover flatpak
 # These apply to BOTH thin and thick (both ship Discover), hence desktop not capable.
 dev-libs/appstream qt6
 app-text/xmlto text
-# app-admin/calamares (graphical installer; any --installer-ui with a graphical
-# leg — the standalone default 'all' included) hard-depends on
-# >=dev-libs/boost-1.72.0:=[python,python_targets_pythonX_Y(-)]. boost builds
-# WITHOUT python by default, so the whole payload emerge fails resolution
-# ("no ebuilds built with USE flags to satisfy ...[python...]") and NOTHING in
-# packages.list merges. Caught by the first x86 desktop build ever run to this
-# phase (2026-07-08); the builder's AUTOUNMASK-PRETEND replay listed exactly
-# this one change.
-dev-libs/boost python
+# boost[python] moved to package.use/boost (calamares is not client-only).
 # Rest of the calamares payload USE closure, computed by converging the SAME
 # resolution the builder runs (chroot pretend loop against the live sysroot,
 # 2026-07-08) until it succeeded — the failure surfaces only ONE package per

@@ -3,6 +3,15 @@
 The GUI calls ``command(...)`` to preview the exact invocation and ``run(...)`` to
 stream it line-by-line into the progress page. Identical config -> identical command on
 Linux and Windows; the only difference is the backend wrapper.
+
+MEMORY-GUARD ASYMMETRY (2026-07-15 host-freeze incident): docker builds run under a
+container memory cap by default (``--memory``/``--memory-swap`` in the docker-run
+wrapper — see :func:`docker_memory_args`), so a runaway compile OOMs the CONTAINER
+with an honest build failure instead of freezing the host. NATIVE builds cannot be
+memory-capped by the Studio (no cgroup wrapper around a sudo'd chroot build) — on a
+memory-tight host the preflight WARNING recommends the docker backend instead. The
+warning channel (:meth:`BuildDriver.preflight_warnings`) is advisory only: it never
+blocks a build and never silently throttles jobs or the cap.
 """
 from __future__ import annotations
 
@@ -15,12 +24,29 @@ import threading
 import uuid
 from collections.abc import Callable, Iterator
 
+from . import host_resources
 from .config import ImageConfig
 from .platform_info import HostInfo, detect
 
 # Memoized path of the GUI askpass helper (see _askpass_helper_path). One per process
 # is enough — the helper body only depends on this interpreter's path/location.
 _ASKPASS_PATH_CACHE: str | None = None
+
+
+def docker_memory_args() -> list[str]:
+    """The container memory-cap leg of the docker-run wrapper: ``[]`` (cap disabled /
+    memory unknown) or ``["--memory", v, "--memory-swap", v]``. memory-swap == memory
+    means ZERO container swap — a runaway compile OOMs promptly instead of thrashing
+    the host's swap (the 2026-07-15 freeze signature). Knob: SNAPDRAGON_BUILD_MEMORY
+    (unset = auto formula; 0/off/none = no cap; anything else = verbatim docker size).
+
+    Module-level (not a BuildDriver method) so FleetDriver.command (core/fleet.py) can
+    adopt the identical cap as a two-line follow-up — the actual incident was a fleet
+    build. Evaluated at command()-assembly time, so preview == dispatch by construction."""
+    v = host_resources.build_memory_flag()
+    if v is None:
+        return []
+    return ["--memory", v, "--memory-swap", v]
 
 
 def _askpass_helper_path() -> str | None:
@@ -172,6 +198,9 @@ class BuildDriver:
                 # (cancel) actually stops the build instead of orphaning it. --name:
                 # the stable handle cancel() targets.
                 "--init", "--name", self._container_name,
+                # Container memory cap (docker-run wrapper only — the inner builder
+                # argv below is byte-untouched): see docker_memory_args.
+                *docker_memory_args(),
                 "-v", f"{self.generator_dir}:/src",
                 "-v", f"{out}:/out",
                 *asset_mounts,
@@ -247,7 +276,26 @@ class BuildDriver:
         backend = backend or self.host.default_backend
         out = self.workdir or cfg.output_dir or os.path.join(self.generator_dir, "out")
         os.makedirs(out, exist_ok=True)
-        return self._stream(self.command(cfg, backend), on_line, backend)
+        code = self._stream(self.command(cfg, backend), on_line, backend)
+        # CAP-KILL ATTRIBUTION (the guard's failure UX): a container OOM-kill exits 137
+        # with NO docker-side explanation on the stream — the compile log just ends
+        # mid-line. Without this line, the one person the cap protects sees a bare
+        # FAILED and blames their config. Only when a cap was actually in force, only
+        # docker (native has no cgroup cap), and NOT on a user Stop (`docker kill` is
+        # also SIGKILL/137 — cancel() sets _cancel first, and the worklist maps that
+        # run to STOPPED). Wording says "likely": 137 is any SIGKILL, we cannot prove
+        # the OOM-killer from the exit code alone. Log-text only — the exit code and
+        # FAILED status stay untouched (the build DID fail; honestly).
+        if (code == 137 and backend == "docker" and on_line is not None
+                and not self._cancel.is_set()):
+            cap = host_resources.build_memory_flag()
+            if cap is not None:
+                on_line(f"!! exit 137 — the builder container was likely killed by its "
+                        f"memory cap (--memory {cap}), which protects the HOST from a "
+                        f"runaway compile (2026-07-15 freeze guard). Remedies: lower "
+                        f"parallel jobs, free host memory, or raise/disable the cap via "
+                        f"{host_resources.MEMORY_ENV}.")
+        return code
 
     def build_builder_image(self, on_line: Callable[[str], None] | None = None) -> int:
         """Build the Docker builder image (see HostInfo.builder_image) from
@@ -345,3 +393,15 @@ class BuildDriver:
             if path and not os.path.exists(path):
                 problems.append(f"{label} path does not exist: {path}")
         return problems
+
+    def preflight_warnings(self, cfg: ImageConfig, backend: str | None = None) -> list[str]:
+        """ADVISORY warnings (empty = nothing to say) — a PARALLEL channel to
+        preflight(), deliberately separate because problems BLOCK (Review's
+        isComplete gates on them; ProgressPage refuses dispatch) and a low-memory
+        host must WARN, never block and never silently throttle: this computes and
+        returns text only, mutating neither cfg.jobs nor the cap. ``cfg`` is unused
+        today but keeps the signature parallel to preflight() for future per-config
+        warnings."""
+        del cfg  # reserved for future per-config warnings
+        backend = backend or self.host.default_backend
+        return host_resources.low_memory_warnings(backend=backend)

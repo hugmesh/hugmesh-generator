@@ -1463,7 +1463,11 @@ run_nongating_smokes() {
                 "image-spec-parity:${REPO_DIR}/tests/build-image-spec-parity.sh" \
                 "image-spec-guards:${REPO_DIR}/tests/build-image-spec-guards.sh" \
                 "host-accept-keywords:${REPO_DIR}/tests/scripts/test-host-accept-keywords.sh" \
-                "python-targets-seed:${REPO_DIR}/tests/scripts/test-python-targets-seed.sh"; do
+                "python-targets-seed:${REPO_DIR}/tests/scripts/test-python-targets-seed.sh" \
+                "calamares-boost-seed:${REPO_DIR}/tests/scripts/test-calamares-boost-seed.sh" \
+                "host-selinux-tools:${REPO_DIR}/tests/scripts/test-host-selinux-tools.sh" \
+                "builder-log-paths:${REPO_DIR}/tests/scripts/test-builder-log-paths.sh" \
+                "dracut-cross-lib:${REPO_DIR}/tests/scripts/test-dracut-cross-lib.sh"; do
         name="${spec%%:*}"; path="${spec#*:}"
         if [ ! -f "${path}" ]; then
             SMOKE_REPORT+="  ${name}: SKIP (not present)"$'\n'; continue

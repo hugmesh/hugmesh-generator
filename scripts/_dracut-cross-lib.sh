@@ -202,3 +202,36 @@ dracut_cross_preflight_ok() {
     interp="$(dracut_cross_qemu_interp)"
     [ -n "${interp}" ] && [ -x "${interp}" ]
 }
+
+# ── Target-exec package family ─────────────────────────────────────
+# waf-configured packages EXECUTE cross-built test binaries at configure time
+# via the binfmt qemu interpreter ("Checking uname machine type: not found /
+# Checking simple C program: not found -> The configuration failed"). When
+# qemu-aarch64 is unusable in the build container they are KNOWN to fail
+# ~40min into Phase 2 and then silently drop from the payload (surfacing much
+# later as the payload-incomplete assert) — real jetson edge_ai failure,
+# session 20260716-160638-f8c153 (tdb-1.4.15 + talloc-2.4.4 -> samba-4.24.4 +
+# cifs-utils-7.7 dropped). EXACTLY the evidence-proven waf family is pinned
+# here; sys-libs/tevent and dev-libs/ldb are same-family (waf) candidates but
+# unproven in this codebase's package sets, so they are deliberately NOT
+# listed — a missed atom degrades to today's late failure, never a false
+# early block.
+DRACUT_CROSS_TARGET_EXEC_ATOMS="sys-libs/tdb sys-libs/talloc net-fs/samba net-fs/cifs-utils"
+
+# dracut_cross_target_exec_blockers — PURE filter for the fail-fast preflight:
+# reads package atoms one per line on stdin and prints (one per line) the
+# intersection with the pinned target-exec family above. No side effects;
+# empty input or no match -> empty output, always returns 0.
+dracut_cross_target_exec_blockers() {
+    local _atom _fam
+    while IFS= read -r _atom; do
+        [ -n "${_atom}" ] || continue
+        for _fam in ${DRACUT_CROSS_TARGET_EXEC_ATOMS}; do
+            if [ "${_atom}" = "${_fam}" ]; then
+                printf '%s\n' "${_atom}"
+                break
+            fi
+        done
+    done
+    return 0
+}

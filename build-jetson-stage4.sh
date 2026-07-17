@@ -542,6 +542,15 @@ BUILD_ROOT="${WORK_DIR}/${BUILD_SUBDIR}"
 SYSROOT="${BUILD_ROOT}/sysroot"
 STAGE_DIR="${BUILD_ROOT}/staging"
 LOG_FILE="${WORK_DIR}/build.log"
+# Per-image log (fix D, session 20260716-160638-f8c153): the session-shared
+# build.log above is tee -a APPENDED by every builder of a multi-image
+# worklist, and a builder that dies before its redirect leaves nothing at all
+# — 8 of that session's 9 images left no usable on-disk log. Each run ALSO
+# tees to its own per-image file, derived from the EXISTING --build-subdir
+# argv (Studio worklist runs pass wl-<entry-id> -> /out/build-<entry-id>.log;
+# standalone CLI runs get build-snap-build-<board>.log). No new flags, no
+# argv change; uniqueness is the worklist's own entry-id collision invariant.
+IMAGE_LOG_FILE="${WORK_DIR}/build-${BUILD_SUBDIR#wl-}.log"
 BUILD_TS="$(date -u +%Y%m%dT%H%M%SZ)"
 
 # Image / artifact name prefix (board in the name so flash-disk autodetect works).
@@ -793,6 +802,69 @@ rebrand_sysroot() {
     done < <(find "${SYSROOT}/etc/snapdragon" "${SYSROOT}/var/lib/snapdragon/cluster" -type f -print0 2>/dev/null)
 }
 
+# ── Stage4 package-set resolver (single source of truth) ──────────────────────
+# Factored VERBATIM from the former inline Phase-2 assembly so the
+# prerequisites-time qemu preflight and Phase 2 resolve the IDENTICAL package
+# set — ONE assembly, no drift. Atoms are printed one per line on stdout;
+# the informational lines go to stderr (suppressed with arg "quiet", which
+# the preflight uses). All inputs (role/flavor flags, EXTRA_PACKAGES,
+# PACKAGES_ADD/PACKAGES_DROP — validated up front) are resolved before the
+# "Verifying prerequisites" banner, so this is callable at t=0.
+resolve_stage4_packages() {
+    local _rsp_quiet="${1:-}"
+    _rsp_info() { [ "${_rsp_quiet}" = "quiet" ] || info "$1" >&2; }
+    local STAGE4_PACKAGES _extras _padd _pdrop _kept _p _d _skip _pkg
+    STAGE4_PACKAGES=()
+    mapfile -t STAGE4_PACKAGES < <(grep -v '^\s*#' "${SPECS_DIR}/portage/packages.list" | grep -v '^\s*$')
+    if [ "${ROLE_K8S}" != "none" ]; then
+        _rsp_info "Cluster role — appending packages-k8s.list (containerd + kubeadm node set)"
+        mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
+            grep -v '^\s*#' "${SPECS_DIR}/portage/packages-k8s.list" | grep -v '^\s*$')
+    fi
+    if ${EDGE_AI}; then
+        _rsp_info "Edge-AI role — appending packages-edge-ai.list (inference-node extras)"
+        mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
+            grep -v '^\s*#' "${SPECS_DIR}/portage/packages-edge-ai.list" | grep -v '^\s*$')
+    fi
+    if [ "${DESKTOP}" = "light" ]; then
+        _rsp_info "Desktop role — appending packages-desktop.list (lean LXDE client set)"
+        mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
+            grep -v '^\s*#' "${SPECS_DIR}/portage/packages-desktop.list" | grep -v '^\s*$')
+    fi
+    if ${ENCRYPT_ROOT}; then
+        # sys-fs/lvm2 is NOT listed explicitly: sys-fs/cryptsetup unconditionally
+        # RDEPENDs on it (libdevmapper), so it is already pulled in transitively —
+        # same minimal-conditional-package convention as build-rpi5-stage4.sh /
+        # build-frite-stage4.sh's --encrypt-root package blocks.
+        _rsp_info "--encrypt-root — appending cryptsetup/dracut (LUKS2 root + disk-boot initramfs; lvm2 pulled in transitively via cryptsetup)"
+        STAGE4_PACKAGES+=(sys-fs/cryptsetup sys-kernel/dracut)
+    fi
+    if [ -n "${EXTRA_PACKAGES}" ]; then
+        read -ra _extras <<< "${EXTRA_PACKAGES}"
+        STAGE4_PACKAGES+=("${_extras[@]}")
+        _rsp_info "Extra packages: ${EXTRA_PACKAGES}"
+    fi
+    # User package deltas (--packages-add / --packages-drop): adds appended, drops
+    # filtered from the resolved set (validated + mandatory-floor-checked up front).
+    if [ -n "${PACKAGES_ADD}" ]; then
+        read -ra _padd <<< "${PACKAGES_ADD}"
+        STAGE4_PACKAGES+=("${_padd[@]}")
+        _rsp_info "Added packages (--packages-add): ${PACKAGES_ADD}"
+    fi
+    if [ -n "${PACKAGES_DROP}" ]; then
+        read -ra _pdrop <<< "${PACKAGES_DROP}"
+        _kept=()
+        for _p in "${STAGE4_PACKAGES[@]}"; do
+            _skip=false
+            for _d in "${_pdrop[@]}"; do [ "${_p}" = "${_d}" ] && { _skip=true; break; }; done
+            ${_skip} || _kept+=("${_p}")
+        done
+        STAGE4_PACKAGES=("${_kept[@]}")
+        _rsp_info "Dropped packages (--packages-drop): ${PACKAGES_DROP}"
+    fi
+    [ "${#STAGE4_PACKAGES[@]}" -eq 0 ] || printf '%s\n' "${STAGE4_PACKAGES[@]}"
+}
+
 banner "Verifying prerequisites"
 [ -d "${SPECS_DIR}" ]    || { err "Jetson specs directory not found: ${SPECS_DIR}"; exit 1; }
 [ -d "${SHARED_SPECS}" ] || { err "Shared specs directory not found: ${SHARED_SPECS}"; exit 1; }
@@ -818,6 +890,31 @@ if ${ENCRYPT_ROOT}; then
     info "cross-dracut preflight OK: qemu-${DRACUT_CROSS_QEMU_ARCH} registered ($(dracut_cross_qemu_interp)); the arm64 disk-boot initramfs is buildable via qemu-chroot."
 fi
 
+# ── General missing-qemu preflight (t=0 instead of t=40min) ─────────
+# tdb/talloc/samba/cifs-utils configure with waf, which EXECUTES cross-built
+# test binaries via the kernel's binfmt_misc qemu-aarch64 interpreter. When
+# that interpreter is unusable in THIS container they fail ~40min into Phase 2
+# ("Checking simple C program: not found") and silently DROP from the payload,
+# surfacing only as the payload-incomplete assert hours later (real jetson
+# edge_ai failure, session 20260716-160638-f8c153). Refuse up front IFF the
+# resolved package set actually contains one of the pinned waf-family atoms
+# (see DRACUT_CROSS_TARGET_EXEC_ATOMS in scripts/_dracut-cross-lib.sh);
+# a missing qemu must NEVER block a build that would succeed, so a waf-free
+# set only WARNs. Runs only on a real build (after --print-plan), same as the
+# --encrypt-root fail-fast above.
+dracut_cross_register_qemu || true   # idempotent; the same attempt the real build makes
+if ! dracut_cross_preflight_ok; then
+    _exec_blockers="$(resolve_stage4_packages quiet | dracut_cross_target_exec_blockers | tr '\n' ' ')"
+    _exec_blockers="${_exec_blockers% }"
+    if [ -n "${_exec_blockers}" ]; then
+        err "${_exec_blockers} build by EXECUTING cross-compiled test binaries (waf configure — the tdb/talloc/samba/cifs-utils family) but qemu-aarch64 is unusable in THIS container: ${DRACUT_CROSS_BINFMT_NODE} is not registered and/or $(dracut_cross_qemu_interp) is missing/not executable. They would fail ~40min in and be silently dropped from the payload (payload-incomplete assert)."
+        err "Fix: rebuild the builder image so it ships a static qemu-aarch64 (make docker-image — Dockerfile.build FINAL stage emerges app-emulation/qemu[static-user] QEMU_USER_TARGETS=aarch64) AND run the build in a --privileged container so binfmt_misc can be mounted/registered. Refusing now BEFORE the multi-hour cross build rather than after."
+        exit 1
+    fi
+    warn "qemu-aarch64 unusable in this container — no target-exec (waf-family) packages in the resolved set; continuing."
+fi
+unset _exec_blockers
+
 # Host-side (container /) build-backend keyword acceptance. The cross-emerge
 # resolves build-time deps (BDEPEND) against the CONTAINER's own /etc/portage —
 # an amd64 root — so the sysroot's specs-*/portage/package.accept_keywords
@@ -839,6 +936,21 @@ dev-python/vcs-versioning **
 # REBUILD once vcs-versioning-2 is installed ("unable to detect version",
 # real jetson host-side failure 2026-07-16); the working 10.2.x is ~amd64.
 dev-python/setuptools-scm **
+# HOST twins of the sysroot's SELinux userspace toolchain: libselinux-3.11's
+# and policycoreutils-3.11's pkg_postinst invoke HOST sefcontext_compile /
+# semodule against the ROOT!=/ merge ("sefcontext_compile: command not found"
+# -> die "Failed to recompile contexts"; "semodule: command not found" ->
+# die "Failed to rebuild policy store mcs" — real jetson edge_ai cross-build
+# failure, session 20260716-160638-f8c153). The build container ships neither
+# tool, and the 3.11 SELinux userspace is still ~amd64, so accept the window
+# host-side; host tool versions should be >= the target's 3.11 policy
+# toolchain (exact 3.11 parity preferred).
+sys-libs/libsepol ~amd64
+sys-libs/libselinux ~amd64
+# policycoreutils-3.11 RDEPENDs >=sys-libs/libsemanage-3.11 (pretend-resolve
+# proven in the throwaway builder container; 3.10 stays masked otherwise).
+sys-libs/libsemanage ~amd64
+sys-apps/policycoreutils ~amd64
 HOSTKW
     info "Pre-seeded HOST /etc/portage/package.accept_keywords: vcs-versioning (build-backend)"
     # The tree's default PYTHON_TARGETS has moved past the container's
@@ -851,11 +963,24 @@ HOSTKW
     cat > /etc/portage/package.use/snapdragon-host-build-backends <<'HOSTPYUSE'
 # Keep the python3.12 target enabled for host-side (BDEPEND "to /") installs —
 # twin of the sysroot's package.use/python-targets (see that file's rationale).
-*/* PYTHON_TARGETS: python3_12
+# python3_13 is enabled ALONGSIDE 3_12: the builder image's installed python
+# ecosystem (setuptools/jaraco-*/hatch-vcs) was built with the 3_13 target, and
+# a 3_12-only seed flips -python3_13 on every rebuild, wedging the resolver in
+# a setuptools-scm slot conflict (empirically hit by the host SELinux-3.11
+# tools emerge below; additive 3_12+3_13 resolves cleanly).
+*/* PYTHON_TARGETS: python3_12 python3_13
 # The 3.12 tooling cascade pulls host dev-lang/python:3.12 → util-linux[pam] →
 # pam-1.7.2, whose pambase→passwdqc chain requires pam[audit] (twin of the
 # sysroot's package.use/pam-audit; harmless in the ephemeral build container).
 sys-libs/pam audit
+# Host emerge of sys-apps/policycoreutils-3.11 (HOST_POLICY_TOOLS below) needs
+# the python-bindings halves of its dep chain: policycoreutils ->
+# libselinux[python] and selinux-python -> audit[python] (autounmask output of
+# the pretend resolve in the throwaway builder container; same two lines the
+# k8s-only snapdragon-cross-host-selinux seed carries, but the host policy
+# tools are needed for EVERY SELinux cross build, not just k8s roles).
+sys-libs/libselinux python
+sys-process/audit python
 HOSTPYUSE
     info "Pre-seeded HOST /etc/portage/package.use: PYTHON_TARGETS python3_12 (build-backend chain)"
 fi
@@ -865,6 +990,11 @@ HOST_POLICY_TOOLS=()
 command -v checkpolicy      &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/checkpolicy)
 command -v semodule_package &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/semodule-utils)
 command -v m4               &>/dev/null || HOST_POLICY_TOOLS+=(sys-devel/m4)
+# HOST tool halves of the sysroot's SELinux 3.11 userspace (see the HOSTKW
+# ~amd64 window above): the libselinux/policycoreutils pkg_postinst phases run
+# these on the ROOT!=/ merge (session 20260716-160638-f8c153).
+command -v sefcontext_compile &>/dev/null || HOST_POLICY_TOOLS+=(sys-libs/libselinux)
+command -v semodule           &>/dev/null || HOST_POLICY_TOOLS+=(sys-apps/policycoreutils)
 if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
     readarray -t HOST_POLICY_TOOLS < <(printf '%s\n' "${HOST_POLICY_TOOLS[@]}" | sort -u)
     if [ "$(id -u)" -eq 0 ] && command -v emerge &>/dev/null; then
@@ -873,7 +1003,7 @@ if [ "${#HOST_POLICY_TOOLS[@]}" -ne 0 ]; then
             || { err "Failed to install host SELinux build tools (${HOST_POLICY_TOOLS[*]})."; exit 1; }
     else
         err "Missing host SELinux build tools: ${HOST_POLICY_TOOLS[*]}"
-        err "Install on the BUILD host: emerge sys-apps/checkpolicy sys-apps/semodule-utils sys-devel/m4"
+        err "Install on the BUILD host: emerge sys-apps/checkpolicy sys-apps/semodule-utils sys-devel/m4 sys-libs/libselinux sys-apps/policycoreutils (accept ~amd64 for the SELinux 3.11 window: libsepol/libselinux/policycoreutils)"
         exit 1
     fi
 fi
@@ -924,8 +1054,11 @@ mkdir -p "${WORK_DIR}" "${BUILD_ROOT}"/{distfiles,pkgdir,log} "${SYSROOT}" "${ST
 # generated LUKS passphrase, printed once near the end of this script) can
 # still reach the operator's terminal without also landing in build.log.
 exec 3>&1 4>&2
-exec > >(tee -a "${LOG_FILE}") 2>&1
-info "Logging to ${LOG_FILE}"
+exec > >(tee -a "${LOG_FILE}" "${IMAGE_LOG_FILE}") 2>&1
+info "Logging to ${LOG_FILE} (session-shared) + ${IMAGE_LOG_FILE} (this image)"
+# Run banner: the shared log interleaves runs (append) and a RESTART appends to
+# the per-image log too — keep every chunk attributable to its run.
+echo "==== ${BUILD_SUBDIR#wl-} (${BUILD_SUBDIR}) start ${BUILD_TS} brand=${BRAND} role=${ROLE} env=${ENV} ===="
 
 banner "Fetching latest arm64 stage3 seed tarball (glibc — CUDA needs glibc)"
 STAGE3_FILE=$(curl -sL "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
@@ -1242,53 +1375,10 @@ cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" @system
     || warn "@system had package failures (--keep-going); continuing"
 
 banner "Phase 2: Cross-building stage4 packages (role=${ROLE})"
-mapfile -t STAGE4_PACKAGES < <(grep -v '^\s*#' "${SPECS_DIR}/portage/packages.list" | grep -v '^\s*$')
-if [ "${ROLE_K8S}" != "none" ]; then
-    info "Cluster role — appending packages-k8s.list (containerd + kubeadm node set)"
-    mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
-        grep -v '^\s*#' "${SPECS_DIR}/portage/packages-k8s.list" | grep -v '^\s*$')
-fi
-if ${EDGE_AI}; then
-    info "Edge-AI role — appending packages-edge-ai.list (inference-node extras)"
-    mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
-        grep -v '^\s*#' "${SPECS_DIR}/portage/packages-edge-ai.list" | grep -v '^\s*$')
-fi
-if [ "${DESKTOP}" = "light" ]; then
-    info "Desktop role — appending packages-desktop.list (lean LXDE client set)"
-    mapfile -t -O "${#STAGE4_PACKAGES[@]}" STAGE4_PACKAGES < <(
-        grep -v '^\s*#' "${SPECS_DIR}/portage/packages-desktop.list" | grep -v '^\s*$')
-fi
-if ${ENCRYPT_ROOT}; then
-    # sys-fs/lvm2 is NOT listed explicitly: sys-fs/cryptsetup unconditionally
-    # RDEPENDs on it (libdevmapper), so it is already pulled in transitively —
-    # same minimal-conditional-package convention as build-rpi5-stage4.sh /
-    # build-frite-stage4.sh's --encrypt-root package blocks.
-    info "--encrypt-root — appending cryptsetup/dracut (LUKS2 root + disk-boot initramfs; lvm2 pulled in transitively via cryptsetup)"
-    STAGE4_PACKAGES+=(sys-fs/cryptsetup sys-kernel/dracut)
-fi
-if [ -n "${EXTRA_PACKAGES}" ]; then
-    read -ra _extras <<< "${EXTRA_PACKAGES}"
-    STAGE4_PACKAGES+=("${_extras[@]}")
-    info "Extra packages: ${EXTRA_PACKAGES}"
-fi
-# User package deltas (--packages-add / --packages-drop): adds appended, drops
-# filtered from the resolved set (validated + mandatory-floor-checked up front).
-if [ -n "${PACKAGES_ADD}" ]; then
-    read -ra _padd <<< "${PACKAGES_ADD}"
-    STAGE4_PACKAGES+=("${_padd[@]}")
-    info "Added packages (--packages-add): ${PACKAGES_ADD}"
-fi
-if [ -n "${PACKAGES_DROP}" ]; then
-    read -ra _pdrop <<< "${PACKAGES_DROP}"
-    _kept=()
-    for _p in "${STAGE4_PACKAGES[@]}"; do
-        _skip=false
-        for _d in "${_pdrop[@]}"; do [ "${_p}" = "${_d}" ] && { _skip=true; break; }; done
-        ${_skip} || _kept+=("${_p}")
-    done
-    STAGE4_PACKAGES=("${_kept[@]}")
-    info "Dropped packages (--packages-drop): ${PACKAGES_DROP}"
-fi
+# Resolved via resolve_stage4_packages() (defined above "Verifying
+# prerequisites") — the SAME single-sourced resolver the qemu preflight
+# consulted at t=0, so the two can never drift.
+mapfile -t STAGE4_PACKAGES < <(resolve_stage4_packages)
 [ -s "${SPECS_DIR}/portage/packages.list" ] || { err "packages.list is empty/missing: ${SPECS_DIR}/portage/packages.list"; exit 1; }
 [ "${#STAGE4_PACKAGES[@]}" -gt 0 ] || { err "no stage4 packages resolved from the package lists — refusing to build a payload-less image."; exit 1; }
 info "Package count: ${#STAGE4_PACKAGES[@]}"

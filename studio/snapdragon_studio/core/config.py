@@ -21,6 +21,7 @@ import shlex
 from dataclasses import dataclass, field, asdict, MISSING
 from typing import Any
 
+from .host_resources import default_jobs
 from .validate import (
     IdentityValidationError,
     validate_accent_color,
@@ -813,7 +814,11 @@ class ImageConfig:
     users: list[User] = field(default_factory=list)
     # ── build ──
     output_dir: str = ""
-    jobs: int = 8
+    # Host-aware default (cores AND memory headroom; see host_resources.default_jobs —
+    # 2026-07-15 host-freeze guard). Applies exactly ONCE, at fresh-config creation:
+    # to_dict/asdict pins the number into the saved JSON, and from_dict assigns a
+    # present "jobs" key verbatim — an existing config's -j emission is byte-identical.
+    jobs: int = field(default_factory=default_jobs)
     compress: bool = False             # --compress: xz -9 the finished image(s)
     resume: bool = False               # --resume: reuse an existing sysroot
     # build plumbing / phases (change baked content or phases, not artifacts)

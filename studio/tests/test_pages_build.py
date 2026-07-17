@@ -643,3 +643,42 @@ def test_review_mesh_shows_per_image_summary_and_keeps_worklist(wiz):
     assert build.validatePage() is True
     assert {e.id for e in wiz.worklist.entries} >= {"omnibus.x86", "be.rpi5"}
     assert wiz.build_backend == build._backend()
+
+
+# ── low-memory preflight WARNING on the Review pane (2026-07-15 freeze guard) ─────────
+def test_preflight_warning_renders_but_never_gates_build(wiz):
+    """A warning rides the problems pane as TEXT ONLY: it appears under 'Preflight OK.'
+    without entering _problems, so isComplete()/the Build button gate exactly as before."""
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    warning = ("Low host memory: 2.0 GiB available, swap 100% full — a heavy compile "
+               "can freeze the host; consider lowering parallel jobs or closing apps.")
+    build._on_preflight_done([], False, build._recompute_gen, [warning])
+    text = build.log.toPlainText()
+    assert "Preflight OK." in text
+    assert "Warnings (advisory — the build is not blocked):" in text
+    assert warning in text
+    assert build._problems == []                    # never routed into the blocking channel
+    assert build.isComplete()                       # Build stays enabled despite the warning
+    build._join_preflight_worker()
+
+
+def test_preflight_warning_appends_under_a_problems_list(wiz):
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    build._on_preflight_done(["some blocking problem"], False, build._recompute_gen,
+                             ["Low host memory: warn"])
+    text = build.log.toPlainText()
+    assert "Preflight:\n  - some blocking problem" in text
+    assert "Low host memory: warn" in text
+    assert build._problems == ["some blocking problem"]   # the warning did not join them
+    assert not build.isComplete()                          # blocked by the PROBLEM only
+    build._join_preflight_worker()
+
+
+def test_three_arg_preflight_done_still_works(wiz):
+    """The pre-warning slot arity (problems, image_missing, req_id) keeps working —
+    warnings default to empty."""
+    build = advance_to(wiz, wizard_mod.BuildPage)
+    build._on_preflight_done([], False, build._recompute_gen)
+    assert "Warnings" not in build.log.toPlainText()
+    assert build.isComplete()
+    build._join_preflight_worker()

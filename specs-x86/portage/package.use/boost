@@ -1,0 +1,17 @@
+# app-admin/calamares (graphical installer; any --installer-ui with a graphical
+# leg — the standalone default 'all' included) hard-depends on
+# >=dev-libs/boost-1.72.0:=[python,python_targets_pythonX_Y(-)]. boost builds
+# WITHOUT python by default, so the whole payload emerge fails resolution
+# ("no ebuilds built with USE flags to satisfy ...[python...]") and NOTHING in
+# packages.list merges. Caught by the first x86 desktop build ever run to this
+# phase (2026-07-08); the builder's AUTOUNMASK-PRETEND replay listed exactly
+# this one change.
+#
+# role-INDEPENDENT (no case entry in build-x86-host-stage4.sh's package.use copy
+# loop) because app-admin/calamares is a PKGS atom for ANY role when
+# --installer-ui=calamares|all (WANT_CALAMARES), not just ROLE_CLIENT — this
+# line used to live in package.use/desktop, which the copy loop gates on
+# ROLE_CLIENT, so node images (pki/be/fe/be+gpu/omnibus) hit the identical
+# boost[python] resolution wall ~16min in. Real 5x x86 node-image failure,
+# session 20260716-160638-f8c153.
+dev-libs/boost python

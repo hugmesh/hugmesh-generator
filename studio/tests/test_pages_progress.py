@@ -139,6 +139,12 @@ def _install_fake_builddriver(monkeypatch, codes=None, on_run=None):
         def preflight(self, cfg, backend):
             return []
 
+        def preflight_warnings(self, cfg, backend):
+            # the REAL warning source (host_resources), so a test can pin the meminfo
+            # snapshot and see the genuine aggregate/dedupe/log-line path fire
+            from snapdragon_studio.core import host_resources
+            return host_resources.low_memory_warnings(backend=backend)
+
         def command_string(self, cfg, backend=None):
             return f"cmd:{cfg.role}"
 
@@ -717,3 +723,46 @@ def test_stopping_a_running_image_settles_its_stage_neutral_not_red(monkeypatch,
     # a Stop is not a failure -> no failure-navigation entry is fabricated
     assert page._failures == []
     assert not page.next_fail_btn.isEnabled()
+
+
+# ── low-memory preflight WARNING at dispatch (2026-07-15 freeze guard) ─────────────────
+def test_low_memory_warning_logged_but_dispatch_proceeds(monkeypatch, qapp, wiz, tmp_path):
+    """A memory-tight host at dispatch WARNS (leading log lines, incident wording) but
+    the worker still starts and the run completes — a warning is never a block.
+
+    Deliberately the exact incident shape: only the DISPATCH-TIME seam (_meminfo_fresh)
+    reads tight, while the process-launch snapshot (_meminfo_cached, conftest-pinned)
+    still says healthy — a Studio launched on a healthy host that got tight while the
+    user configured must warn anyway."""
+    from snapdragon_studio.core import host_resources as hr
+    tight = {"MemTotal": 32 * hr.GIB, "MemAvailable": 2 * hr.GIB,
+             "SwapTotal": 4 * hr.GIB, "SwapFree": 0}
+    monkeypatch.setattr(hr, "_meminfo_fresh", lambda: dict(tight))
+    _install_fake_builddriver(monkeypatch)
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      brand="acme", output_dir=str(tmp_path / "out"))
+    _prime(wiz, synthesize(cfg))
+    page = _progress_page(wiz)
+    page.initializePage()
+    log = page.log.toPlainText()
+    assert "WARNING: Low host memory" in log
+    assert "a heavy compile can freeze the host" in log
+    _run_to_completion(qapp, page)                    # the build ran despite the warning
+    assert page.driver.results[0].status == "ok"
+    assert page.isComplete()
+
+
+def test_no_warning_lines_on_a_healthy_host(monkeypatch, qapp, wiz, tmp_path):
+    from snapdragon_studio.core import host_resources as hr
+    healthy = {"MemTotal": 32 * hr.GIB, "MemAvailable": 24 * hr.GIB,
+               "SwapTotal": 4 * hr.GIB, "SwapFree": 4 * hr.GIB}
+    monkeypatch.setattr(hr, "_meminfo_fresh", lambda: dict(healthy))
+    _install_fake_builddriver(monkeypatch)
+    cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
+                      brand="acme", output_dir=str(tmp_path / "out"))
+    _prime(wiz, synthesize(cfg))
+    page = _progress_page(wiz)
+    page.initializePage()
+    assert "WARNING" not in page.log.toPlainText()
+    _run_to_completion(qapp, page)
+    assert page.driver.results[0].status == "ok"

@@ -51,6 +51,15 @@ ERROR_TAIL_LINES = 40
 
 LOG_NAME = "build.log"   # the builders' LOG_FILE basename (keys off -w)
 
+
+def image_log_name(entry_id: str) -> str:
+    """The per-image log basename a builder writes NEXT TO the shared build.log —
+    derived from the builders' ``IMAGE_LOG_FILE="${WORK_DIR}/build-${BUILD_SUBDIR#wl-}.log"``
+    (the worklist driver passes ``--build-subdir wl-<entry-id>``, so a Studio run's
+    per-image log is ``build-<entry-id>.log``). The shared ``build.log`` (log_path)
+    is unchanged: still written, still what every existing reader opens."""
+    return f"build-{entry_id}.log"
+
 # A fleet run's teed stream (the GUI writes it — build-all-roles.sh has no LOG_FILE
 # of its own, so the tee is the honest per-session log, real content only).
 FLEET_LOG_NAME = "fleet.log"
@@ -223,7 +232,8 @@ def new_session(wl: WorklistConfig, generator_dir: str, *,
     s.backend = backend
     s.generate_keys = generate_keys
     s.images = [{"id": e.id, "role": e.role, "platform": e.platform,
-                 "status": "queued", "exit_code": None, "keys_ok": None}
+                 "status": "queued", "exit_code": None, "keys_ok": None,
+                 "log": image_log_name(e.id)}
                 for e in wl.entries]
     s.error_tail = {}
     s.log_path = os.path.join(s.workdir, LOG_NAME)

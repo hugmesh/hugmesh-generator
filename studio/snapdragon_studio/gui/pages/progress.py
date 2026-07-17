@@ -322,6 +322,15 @@ class ProgressPage(QtWidgets.QWizardPage):
             self._all_terminal = True
             self.completeChanged.emit()
             return
+        # ADVISORY low-memory warnings (2026-07-15 freeze guard): leading log lines
+        # only, deliberately outside the blocking branch above — dispatch proceeds,
+        # and nothing is throttled (the argv is identical with or without them).
+        try:
+            warnings = self.driver.preflight_warnings()
+        except Exception:
+            warnings = []
+        for w in warnings:
+            self.log.appendPlainText(f"WARNING: {w}")
         self._start_worker()
 
     def _reset(self) -> None:

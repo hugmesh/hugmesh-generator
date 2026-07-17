@@ -240,38 +240,6 @@ the marked bullet below). Per-subsection status is inline below:
   Makefile `mesh-node-up` / `mesh-node-down` / `mesh-node-status` / `mesh-node-logs` targets;
   the intents guide points at both.
 
-### Admin web-UI generator (image-gen BFF modal) — 🔭 deferred (cross-repo; out of scope for the generator repo)
-- Mirror the four choices as the top-level selector in the admin image-gen modal, exactly
-  as the go-live web effector mirrors its CLI/ncurses/Studio front-ends
-  ([`docs/GO-LIVE-WIZARD.md`](GO-LIVE-WIZARD.md) "4-interface parity").
-shape so a user gets the same clarity regardless of front-end. **The basic 4-choice mirror
-already shipped for ncurses + CLI (PR #342); the machine-first step-2 shape and the
-admin web-UI mirror are still open** — see the per-channel status below. The channel map
-and the all-options-in-all-menus rule are in
-[`docs/BUILD-MATRIX.md`](BUILD-MATRIX.md).
-
-### ncurses console menu (`make menu` → `scripts/build-menu.sh`)
-- **✅ shipped** — `mode_screen()` presents the **same four top-level choices** as the
-  opening screen (Mesh node / Local Docker mesh / Mesh desktop client / Standalone Gentoo
-  desktop) with labels mirroring `mode.py` verbatim, routing the three image choices to
-  the existing `OPT_*` make-composition unchanged; the build-matrix MENU column guards
-  emission parity.
-- **✅ shipped** — `local_mesh_screen()` shells the same `core/local_mesh.main()`
-  entrypoint the CLI/Makefile use (masked `TS_AUTHKEY` prompt → chmod-600 mktemp →
-  shredded), so the menu does not reimplement compose.
-- **✅ shipped** — hard step numbers dropped from the screen headers in favour of
-  descriptive titles, same rationale as the GUI.
-- **🔭 still open** — mirror the Studio's **machine-first** step-2 shape: pick the target
-  machine first, then the image type it supports (not a role list with a separate
-  platform sub-menu), fold the x86 machine-profile preset in with the machine choice, and
-  surface the mesh worklist's **per-node encryption** column + the "one LUKS passphrase
-  for the whole fleet" note. Offer the node-fallback-login prompt with the same
-  worklist-keyed rule (only when some selected image is an x86 node — never keyed to
-  whichever image happens to be listed first). Emission parity is mandatory (the MENU
-  column guards it) — this is menu shape only. (Confirmed still absent:
-  `scripts/build-menu.sh` has no machine-first picker or per-node encryption column as of
-  this pass.)
-
 ### Arch-first device taxonomy (ncurses + CLI) 🔭
 - The Studio's step-2 machine tier is now **arch-first**: an architecture selector
   (x86-64 / ARM64 — extensible enum) over a **family-grouped, searchable device
@@ -301,19 +269,9 @@ and the all-options-in-all-menus rule are in
   list. Emission stays byte-identical (a device only pins the `--board`/platform values
   the channels already accept; the MENU/CLI columns guard it).
 
-### CLI (`build-image.sh` / `make <role>`)
-- **✅ shipped** — `docker/build-image.sh`'s `print_intents_guide()` (fired on an explicit
-  `-h`/`--help`/`help` positional only, so the env-driven Job path stays byte-identical)
-  frames the same four intents and points at the flags/`make` faces each maps to.
-- **✅ shipped** — the **Local Docker mesh** intent is documented and reachable as an
-  explicit non-build face: `python3 -m snapdragon_studio.core.local_mesh up
-  --authkey-file <file>` / `make mesh-node-up AUTHKEY_FILE=…` (see the `mesh-node-{up,
-  down,status,logs}` Makefile targets), distinct from the permanently-installed
-  `snapdragon-mesh-node` end-user appliance.
-
-### Admin web-UI generator (image-gen BFF modal) 🔭
-- **Still open.** Mirror the four choices as the top-level selector in the admin image-gen
-  modal, exactly as the go-live web effector mirrors its CLI/ncurses/Studio front-ends
+### Admin web-UI generator (image-gen BFF modal) — 🔭 deferred (cross-repo; out of scope for the generator repo)
+- Mirror the four choices as the top-level selector in the admin image-gen modal, exactly
+  as the go-live web effector mirrors its CLI/ncurses/Studio front-ends
   ([`docs/GO-LIVE-WIZARD.md`](GO-LIVE-WIZARD.md) "4-interface parity"). This surface lives
   in a different repo (the image-gen BFF), so nothing to mirror exists in this repo yet.
 - The three image choices map to the same generator request the modal already emits —
@@ -334,10 +292,5 @@ and the all-options-in-all-menus rule are in
   (4 `mode.py` + 4 menu + 4 cli) + 4 `registration` tokens = **16 expected**, each anchored
   **non-vacuously** to the real opening-item shape per channel (menu `ui_menu` item line;
   cli numbered intent) so dropping any choice is a genuine grep miss, not a false pass.
-### Parity enforcement
-- **✅ shipped** — `tests/build-matrix/check.sh`'s TAXO block asserts the **four-choice
-  taxonomy** (golden labels from `mode.py`, cross-checked against the ncurses and CLI
-  channels, plus a non-vacuity check that a bogus label is *not* matched) and the
-  per-user `registration` tokens are present in every channel that claims to offer them.
 - **🔭 still open** — extend the same TAXO-style gate to the machine-first step-2 shape
   once ncurses grows it, so the two don't drift apart again.
