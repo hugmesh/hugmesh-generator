@@ -95,6 +95,7 @@ DEVICE_ID=""
 SUPERDOMAIN="snapdragon.internal"
 SUPERDOMAIN_SET=0
 ROLE=""
+ROLE_SET=0
 PROFILE_NAME="enterprise"
 TAILSCALE_APK=""
 APK_SIGNER_SHA256=""
@@ -361,6 +362,12 @@ catalog_lookup() {
 # Fail-closed codename gate (exit 4, no --allow-unknown escape in v1).
 require_codename() {
     [ -n "${CODENAME}" ] || pw_die 1 "a device codename is required (pass --codename, or connect the device so 'detect' can read it)"
+    # Distinguish "no catalog at all" (a missing precondition, exit 2) from
+    # "codename not in the catalog" (exit 4). catalog_lookup's own pw_die 2
+    # fires inside the $(...) subshell below, so its exit code never reaches
+    # the parent — the `|| pw_die 4` would swallow it and mislabel a missing
+    # catalog as an unknown codename. Check the file here, in the main shell.
+    [ -f "${DEVICES_TSV}" ] || pw_die 2 "device catalog missing: ${DEVICES_TSV}"
     DEVICE_NAME="$(catalog_lookup "${CODENAME}")" || pw_die 4 "unknown codename '${CODENAME}' — not in ${DEVICES_TSV}. Check https://grapheneos.org/releases and extend the catalog if this is a new device."
 }
 
@@ -562,10 +569,16 @@ resolve_version() {
     GRAPHENE_VERSION="${mver}"
 }
 
-# Locate the extracted flash-all.sh dir for CODENAME (+version when known).
+# Locate the extracted flash-all.sh dir bound to a SPECIFIC verified zip ($1).
+# The GrapheneOS -install- zip extracts to one top-level dir named exactly the
+# zip's basename sans .zip. Matching that exact dir — not a codename-wide glob —
+# keeps flash bound to the verified VERSION: a stale extraction of a *different*
+# version (e.g. a prior `fetch` that was never cleaned up) can never be the tree
+# we hand to flash-all.sh.
 find_flash_dir() {
-    local hit
-    hit="$(find "${WORK_DIR}" -maxdepth 2 -type f -name flash-all.sh -path "*${CODENAME}*" 2>/dev/null | head -n1 || true)"
+    local zip="$1" stem hit
+    stem="$(basename "${zip}" .zip)"
+    hit="$(find "${WORK_DIR}" -maxdepth 2 -type f -name flash-all.sh -path "*/${stem}/flash-all.sh" 2>/dev/null | head -n1 || true)"
     [ -n "${hit}" ] && dirname "${hit}" || return 1
 }
 
@@ -822,11 +835,11 @@ cmd_fetch() {
     # live channel-lookup) versions get persisted for future unpinned runs.
     [ "${user_pinned}" -eq 1 ] || printf '%s\n' "${GRAPHENE_VERSION}" > "$(version_cache_path)"
 
-    if ! find_flash_dir >/dev/null; then
+    if ! find_flash_dir "${zip}" >/dev/null; then
         require_tool bsdtar "install app-arch/libarchive"
         pw_info "extracting $(basename "${zip}")"
         bsdtar -x -f "${zip}" -C "${WORK_DIR}" || pw_die 1 "extraction failed for ${zip}"
-        find_flash_dir >/dev/null || pw_die 1 "extracted zip contains no flash-all.sh — unexpected artifact layout"
+        find_flash_dir "${zip}" >/dev/null || pw_die 1 "extracted zip contains no flash-all.sh — unexpected artifact layout"
     fi
 
     pw_info "fetch complete: $(basename "${zip}") VERIFIED (sha256 ${sha})"
@@ -838,6 +851,12 @@ cmd_flash() {
     require_android_tools
     require_tool ssh-keygen "install net-misc/openssh"
     require_tool sha256sum "install sys-apps/coreutils"
+    # Guard the signer set BEFORE any verify: verify_artifact_or_die deletes the
+    # artifact and reports exit 3 (tamper) on ANY dlv_verify failure — including
+    # a merely-absent allowed_signers file. Treat a missing signer set as the
+    # missing precondition it is (exit 2), and never destroy a verified artifact
+    # over it. Mirrors the same guard in cmd_fetch.
+    [ -f "${ALLOWED_SIGNERS}" ] || pw_die 2 "allowed_signers file missing: ${ALLOWED_SIGNERS}"
     validate_channel
 
     # Preflight: fastboot >= 35 (GrapheneOS hard requirement: >= 35.0.2).
@@ -882,10 +901,10 @@ cmd_flash() {
     pw_info "artifact re-verified: $(basename "${zip}")"
 
     local flashdir
-    if ! flashdir="$(find_flash_dir)"; then
+    if ! flashdir="$(find_flash_dir "${zip}")"; then
         require_tool bsdtar "install app-arch/libarchive"
         bsdtar -x -f "${zip}" -C "${WORK_DIR}" || pw_die 1 "extraction failed for ${zip}"
-        flashdir="$(find_flash_dir)" || pw_die 1 "extracted zip contains no flash-all.sh"
+        flashdir="$(find_flash_dir "${zip}")" || pw_die 1 "extracted zip contains no flash-all.sh"
     fi
 
     # Destructive gate: typed-serial confirmation on a TTY; non-TTY needs BOTH
@@ -1613,7 +1632,7 @@ cmd_ingest() {
         ts_ip="$(jq -r '.tailscale_ip // empty' "${enr}")"
         enrolled_at="$(jq -r '.enrolled_at // empty' "${enr}")"
         attached="${attached:-$(jq -r '.attached_domain // empty' "${enr}")}"
-        role="$(jq -r --arg d "${role}" '.role // $d' "${enr}")"
+        [ "${ROLE_SET}" -eq 0 ] && role="$(jq -r --arg d "${role}" '.role // $d' "${enr}")"
         os_id="$(jq -r '.os // empty' "${enr}")"
         os_version="$(jq -r '.os_version // empty' "${enr}")"
         [ "${SUPERDOMAIN_SET}" -eq 0 ] && SUPERDOMAIN="$(jq -r --arg d "${SUPERDOMAIN}" '.superdomain // $d' "${enr}")"
@@ -1885,7 +1904,7 @@ main() {
             --pass-file)           _need_arg "$1" $#; PASS_FILE="$2"; shift 2 ;;
             --device-id)           _need_arg "$1" $#; DEVICE_ID="$2"; shift 2 ;;
             --superdomain)         _need_arg "$1" $#; SUPERDOMAIN="$2"; SUPERDOMAIN_SET=1; shift 2 ;;
-            --role)                _need_arg "$1" $#; ROLE="$2"; shift 2 ;;
+            --role)                _need_arg "$1" $#; ROLE="$2"; ROLE_SET=1; shift 2 ;;
             --profile-name)        _need_arg "$1" $#; PROFILE_NAME="$2"; shift 2 ;;
             --tailscale-apk)       _need_arg "$1" $#; TAILSCALE_APK="$2"; shift 2 ;;
             --apk-signer-sha256)   _need_arg "$1" $#; APK_SIGNER_SHA256="$2"; shift 2 ;;
