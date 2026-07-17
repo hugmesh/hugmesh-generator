@@ -21,7 +21,8 @@ from snapdragon_studio.core import worklist_driver as wd               # noqa: E
 from snapdragon_studio.core.worklist import (                         # noqa: E402
     WorklistConfig, WorklistEntry, synthesize)
 from snapdragon_studio.gui import wizard as wizard_mod                 # noqa: E402
-from snapdragon_studio.gui.qt import QtWidgets                         # noqa: E402
+from snapdragon_studio.gui.qt import Qt, QtWidgets                     # noqa: E402
+from snapdragon_studio.gui.pages.progress import _display_safe         # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -861,3 +862,434 @@ def test_auto_backend_is_resolved_before_it_lands_in_the_session_record(
     from snapdragon_studio.core import build_sessions
     with open(page._session.path()) as fh:
         assert json.load(fh)["backend"] == "native"
+
+
+# ══ the log panel: proportions, collapse, detach, watch-help ══════════════════════════
+# The report: "the final build screen should show mainly the tree of the build with the
+# current log below it taking up at most 1/3 of the vertical screen and that log should be
+# minimizable, detachable, and there should be greyed help text with a command to watch it
+# build in terminal".
+#
+# Every assertion below MEASURES a real, shown, laid-out page — asserting stretch factors
+# or setSizes() calls would just restate intent, and the original defect (a missing stretch
+# on addWidget(self.tree)) was invisible at that level while being 44%-of-the-screen
+# obvious on-screen.
+
+def _shown_progress_page(qapp, wiz, h=780):
+    """The REAL progress page, actually DISPLAYED and laid out at a realistic size.
+
+    Showing it matters: the wizard opens on page 0, so without navigating here every
+    widget reports its unlaid-out 640x480 default and any ratio measured off it is
+    meaningless (a live-fire lesson while building this — the first harness "measured"
+    100% for both panes).
+    """
+    wiz.setStartId(wiz._page_ids["progress"])
+    wiz.restart()
+    wiz.resize(1040, h)
+    wiz.show()
+    page = _progress_page(wiz)
+    for _ in range(20):
+        qapp.processEvents()
+    assert wiz.currentPage() is page
+    return page
+
+
+def test_tree_dominates_and_log_is_at_most_one_third(qapp, wiz):
+    """(1) PROPORTIONS — measured after a real show+resize, at every realistic height.
+
+    Pre-fix this page measured tree 31% / log 44% at its own 1040x780, worsening to
+    21%/61% at 900: `lay.addWidget(self.tree)` had no stretch (so the tree was pinned to
+    its ~192px sizeHint forever) while `lay.addWidget(self.log, 1)` ate every spare pixel.
+    """
+    page = _shown_progress_page(qapp, wiz)
+    tree_pane = page.splitter.widget(0)
+    for h in (620, 780, 900, 1100):
+        wiz.resize(1040, h)
+        for _ in range(20):
+            qapp.processEvents()
+        ph, lp, tp = page.height(), page.log_panel.height(), tree_pane.height()
+        assert lp <= ph / 3, f"at wizard h={h}: log {lp}px > 1/3 of page {ph}px"
+        assert tp >= 1.5 * lp, f"at wizard h={h}: tree {tp}px does not dominate log {lp}px"
+        assert page.tree.height() > 192, (
+            f"at wizard h={h}: tree {page.tree.height()}px is still stuck at its sizeHint")
+
+
+def test_tree_is_not_capped_and_grows_with_the_window(qapp, wiz):
+    """The second, unreported defect found by measuring: self.tree.setMaximumHeight(340)
+    capped the tree even once it WAS stretched, leaving a growing band of dead grey space
+    under it inside its own pane. The cap had to go, not just the stretch be fixed."""
+    page = _shown_progress_page(qapp, wiz, h=620)
+    for _ in range(20):
+        qapp.processEvents()
+    short = page.tree.height()
+    wiz.resize(1040, 1100)
+    for _ in range(20):
+        qapp.processEvents()
+    tall = page.tree.height()
+    assert tall > short, f"tree did not grow with the window: {short} -> {tall}"
+    assert tall > 340, f"tree still capped at the old 340px maximum ({tall})"
+    # and it fills its pane — no dead space under it (footer aside)
+    pane = page.splitter.widget(0)
+    assert tall >= pane.height() - page.footer.height() - 12
+
+
+def test_log_is_collapsible_and_the_tree_takes_the_space(qapp, wiz):
+    """(2) MINIMIZABLE — the pane must really shrink to the header, not just blank out.
+    Hiding self.log alone left the splitter pane at full size (QSplitter does not re-lay a
+    pane when a GRANDCHILD hides) = an empty grey box, which is why _set_log_collapsed
+    resizes the pane too."""
+    page = _shown_progress_page(qapp, wiz)
+    tree_pane = page.splitter.widget(0)
+    open_tree, open_log = tree_pane.height(), page.log_panel.height()
+
+    page.log_collapse_btn.setChecked(True)
+    for _ in range(20):
+        qapp.processEvents()
+    assert page.log_panel.height() < open_log / 2, "the log pane did not actually collapse"
+    assert tree_pane.height() > open_tree, "the tree did not get the collapsed space"
+    assert not page.log.isVisible()
+    # the header survives as the restore handle — a collapse you cannot undo is a bug
+    assert page.log_header.isVisible()
+    assert page.log_collapse_btn.isVisible()
+
+    page.log_collapse_btn.setChecked(False)
+    for _ in range(20):
+        qapp.processEvents()
+    assert page.log.isVisible()
+    assert page.log_panel.height() == open_log, "expand did not restore the previous share"
+    assert tree_pane.height() == open_tree
+
+
+def test_output_appended_while_collapsed_is_all_there_on_expand(qapp, wiz):
+    """(2) Collapsing must NEVER lose output: the reader is not stopped and nothing
+    branches on collapsed state — appendPlainText is a QTextDocument operation, entirely
+    independent of widget visibility."""
+    page = _shown_progress_page(qapp, wiz)
+    page._reset()
+    page._build_row(0, "acme-x86", "x86")
+    page._select_row(0)
+    page.log_collapse_btn.setChecked(True)
+    for _ in range(10):
+        qapp.processEvents()
+    assert not page.log.isVisible()
+
+    for ln in CAPTURED_X86_STREAM:                 # a real build streaming while collapsed
+        page._on_line(0, ln)
+    page.log_collapse_btn.setChecked(False)
+    for _ in range(10):
+        qapp.processEvents()
+
+    shown = page.log.toPlainText()
+    for ln in CAPTURED_X86_STREAM:
+        # compare against the DISPLAYED form: _on_line sanitises builder escapes
+        # (they painted boxes in the pane) — the no-loss guarantee is unchanged.
+        assert _display_safe(ln) in shown, f"line lost while the log was collapsed: {ln!r}"
+    # and the build state itself advanced normally underneath
+    assert page._rows[0].bar.value() > 0
+
+
+def test_detach_while_collapsed_shows_the_log_body_not_an_empty_window(qapp, wiz):
+    """(2)x(3) COLLAPSE x DETACH — the interaction, not either alone.
+
+    Collapse then Detach used to hand back a 900x500 top-level window containing nothing
+    but the header row: _set_log_collapsed had hidden the body and _detach_log never
+    reconciled that state. "Put the log in its own window" and "hide the log body" are
+    contradictory; the operator asked for the former, so detaching force-expands.
+    """
+    page = _shown_progress_page(qapp, wiz)
+    page._reset()
+    page._build_row(0, "acme-x86", "x86")
+    page._select_row(0)
+    page.log_collapse_btn.setChecked(True)
+    for _ in range(10):
+        qapp.processEvents()
+    assert not page.log.isVisible()
+
+    page._toggle_detach()
+    for _ in range(10):
+        qapp.processEvents()
+
+    assert page._log_window is not None
+    assert page.log.isVisible(), "detached window is empty — the log body stayed hidden"
+    assert page.log_help_row.isVisible(), "the watch-command help vanished in the window"
+    assert not page.log_collapse_btn.isChecked(), "detach must clear the collapse flag"
+    # collapse is meaningless in a dedicated window — don't offer the trap
+    assert not page.log_collapse_btn.isVisible()
+    # and the stream still lands in the (now visible) detached body
+    page._on_line(0, "==> streamed after detach-while-collapsed")
+    assert "==> streamed after detach-while-collapsed" in page.log.toPlainText()
+
+
+def test_collapse_while_detached_then_redock_does_not_leave_a_dead_pane(qapp, wiz):
+    """(1)x(2)x(3) — re-dock must not hand a body-hidden panel its full 1/3 share.
+
+    _redock_log used to call _restore_sizes() unconditionally, so a panel collapsed while
+    detached came back as 187px (28% of the page) of grey nothing — the exact dead-space
+    defect this change set out to remove. The docked layout is now a pure function of the
+    collapse flag, so this holds however the flag was set.
+    """
+    page = _shown_progress_page(qapp, wiz)
+    page._reset()
+    page._build_row(0, "acme-x86", "x86")
+    page._select_row(0)
+    page._detach_log()
+    for _ in range(10):
+        qapp.processEvents()
+
+    # setChecked directly: the button is hidden while detached, so this is the only way in
+    # — and the invariant must hold for it too, not merely be unreachable by mouse.
+    page.log_collapse_btn.setChecked(True)
+    for _ in range(10):
+        qapp.processEvents()
+    # collapse does NOT blank the detached window while it is still detached
+    assert page.log.isVisible()
+
+    page._redock_log()
+    for _ in range(10):
+        qapp.processEvents()
+
+    header_h = page.log_panel.minimumSizeHint().height()
+    assert not page.log.isVisible(), "the collapse flag was ignored on re-dock"
+    assert page.log_panel.height() <= header_h + 4, (
+        f"re-docked collapsed panel is {page.log_panel.height()}px of dead space "
+        f"(header is {header_h}px)")
+    assert page.log_panel.height() < page.height() / 4
+    assert page.log_header.isVisible(), "no handle left to restore the log"
+    assert page.log_collapse_btn.isVisible(), "the collapse control never came back"
+
+    # ...and it expands normally afterwards, back to a real ~1/3 share
+    page.log_collapse_btn.setChecked(False)
+    for _ in range(10):
+        qapp.processEvents()
+    assert page.log.isVisible()
+    assert page.log_panel.height() > header_h * 2
+
+
+def test_detached_log_keeps_receiving_the_stream(qapp, wiz):
+    """(3a) Detach mid-build with output still streaming. self.log never moves (only its
+    PANEL does), so the _on_line append target is invariant under detach."""
+    page = _shown_progress_page(qapp, wiz)
+    page._reset()
+    page._build_row(0, "acme-x86", "x86")
+    page._select_row(0)
+    page._on_line(0, CAPTURED_X86_STREAM[0])
+    docked_tree = page.splitter.widget(0).height()
+
+    page._toggle_detach()
+    for _ in range(10):
+        qapp.processEvents()
+    assert page._log_window is not None
+    assert page._log_window.isVisible()
+    assert page.splitter.indexOf(page.log_panel) == -1        # out of the splitter
+    assert page.log.parent() is page.log_panel                # the log itself never moved
+    # no empty pane is left behind: the tree is the splitter's only pane and fills it
+    assert page.splitter.count() == 1
+    assert page.splitter.widget(0).height() == page.splitter.height()
+    assert page.splitter.widget(0).height() > docked_tree      # and it really did grow
+
+    for ln in CAPTURED_X86_STREAM[1:]:            # still streaming, now into the window
+        page._on_line(0, ln)
+    for ln in CAPTURED_X86_STREAM:
+        assert _display_safe(ln) in page.log.toPlainText(), \
+            f"line lost while detached: {ln!r}"
+
+
+def test_closing_the_detached_window_redocks_and_the_stream_continues(qapp, wiz):
+    """(3b) Closing the detached window must RE-DOCK, never orphan the widget or lose the
+    stream — and must not destroy self.log out from under the running build."""
+    page = _shown_progress_page(qapp, wiz)
+    page._reset()
+    page._build_row(0, "acme-x86", "x86")
+    page._select_row(0)
+    page._detach_log()
+    for _ in range(10):
+        qapp.processEvents()
+    win = page._log_window
+
+    win.close()                                    # the operator clicks the window's X
+    for _ in range(20):
+        qapp.processEvents()
+    assert page._log_window is None
+    assert page.splitter.indexOf(page.log_panel) == 1, "the panel did not go back"
+    assert page.log_panel.isVisible() and page.log.isVisible()
+    # the stream survives the close — this is the assertion that catches the
+    # reparent-then-destroy trap (a deleted C++ log under a live Python wrapper)
+    page._on_line(0, "==> after the window closed")
+    assert "==> after the window closed" in page.log.toPlainText()
+    # and Detach re-opens it
+    page._toggle_detach()
+    for _ in range(10):
+        qapp.processEvents()
+    assert page._log_window is not None
+
+
+def test_reset_while_detached_redocks_without_crashing(qapp, wiz):
+    """(3c) Page teardown/reset while detached — "where Qt bites". _reset must re-dock
+    first, so the panel is never left parented to a window the page no longer tracks."""
+    page = _shown_progress_page(qapp, wiz)
+    page._reset()
+    page._build_row(0, "acme-x86", "x86")
+    page._select_row(0)
+    page._detach_log()
+    for _ in range(10):
+        qapp.processEvents()
+
+    page._reset()                                  # a second build starts while detached
+    for _ in range(20):
+        qapp.processEvents()
+    assert page._log_window is None
+    assert page.splitter.indexOf(page.log_panel) == 1
+    # self.log's C++ object is ALIVE: appending after teardown must not RuntimeError
+    page._build_row(0, "acme-x86", "x86")
+    page._select_row(0)
+    page._on_line(0, "==> second run line")
+    assert "==> second run line" in page.log.toPlainText()
+
+
+def test_wizard_close_while_detached_leaves_no_orphan_window(qapp, wiz):
+    """(3c) The wizard closing while detached must not orphan a top-level window, and must
+    not take self.log's C++ object with it (_abort_run re-docks before teardown)."""
+    page = _shown_progress_page(qapp, wiz)
+    page._reset()
+    page._build_row(0, "acme-x86", "x86")
+    page._select_row(0)
+    page._detach_log()
+    for _ in range(10):
+        qapp.processEvents()
+    win = page._log_window
+
+    page._abort_run()                              # what wiz.finished fires
+    for _ in range(20):
+        qapp.processEvents()
+    assert page._log_window is None
+    assert page.splitter.indexOf(page.log_panel) == 1
+    assert not win.isVisible(), "the detached window was orphaned on the wizard's close"
+    page._on_line(0, "==> alive after abort")      # no RuntimeError = the log survived
+    assert "==> alive after abort" in page.log.toPlainText()
+
+
+def test_watch_help_names_the_real_per_image_log_file(monkeypatch, qapp, wiz, tmp_path):
+    """(4) The help must name the REAL file — derived from the same helpers the builders
+    and the session record use, never a hardcoded guess. The builders write
+    IMAGE_LOG_FILE="${WORK_DIR}/build-${BUILD_SUBDIR#wl-}.log"; build_sessions is the twin.
+    """
+    from snapdragon_studio.core import build_sessions
+    _install_streaming_builddriver(monkeypatch, CAPTURED_X86_STREAM)
+    _install_fake_genkeys(monkeypatch)
+    _prime(wiz, _x86_worklist(tmp_path))
+    page = _shown_progress_page(qapp, wiz)
+    page.initializePage()
+    _run_to_completion(qapp, page)
+
+    workdir = page._session.workdir
+    expect = os.path.join(workdir, build_sessions.image_log_name(page._rows[0].label))
+    txt = page.log_help.text()
+    assert expect in txt, f"help does not name the selected job's real log:\n{txt}"
+    assert page._session.log_path in txt, "help does not offer the whole-run log"
+    # -F (not -f): a queued job's file does not exist yet and `tail -f` would just exit
+    assert f"tail -F -n +1 {expect}" in txt
+    # says plainly that the pane and the file are ONE stream
+    assert "Same stream" in txt
+    # greyed AND actually selectable — help you cannot copy is useless
+    assert "color: gray" in page.log_help.styleSheet()
+    flags = page.log_help.textInteractionFlags()
+    assert flags & Qt.TextInteractionFlag.TextSelectableByMouse
+    # the Copy button really puts the command on the clipboard
+    page._copy_watch_command()
+    assert QtWidgets.QApplication.clipboard().text() == f"tail -F -n +1 {expect}"
+
+
+def test_watch_help_follows_the_selected_job(monkeypatch, qapp, wiz, tmp_path):
+    """(4) "updating with the selected job" — through the real selection funnel."""
+    from snapdragon_studio.core import build_sessions
+    _install_streaming_builddriver(monkeypatch, CAPTURED_X86_STREAM)
+    _install_fake_genkeys(monkeypatch)
+    _prime(wiz, _x86_worklist(tmp_path))
+    page = _shown_progress_page(qapp, wiz)
+    page.initializePage()
+    _run_to_completion(qapp, page)
+
+    def path_for(i):
+        return os.path.join(page._session.workdir,
+                            build_sessions.image_log_name(page._rows[i].label))
+
+    page._focus_node(0, None)
+    assert path_for(0) in page.log_help.text()
+    page._focus_node(1, None)                       # select another JOB
+    assert path_for(1) in page.log_help.text()
+    assert path_for(0) not in page.log_help.text()
+    # a STAGE shows its JOB's file: stages are slices of that one file, so naming a
+    # per-stage path would be a fabrication
+    page._focus_node(1, 0)
+    assert path_for(1) in page.log_help.text()
+
+
+def test_watch_help_is_honest_before_any_dispatch(qapp, wiz):
+    """(4) No dispatch (no worklist / preflight failure / pre-dispatch) => no builder has
+    opened a log file. Naming a path that does not and will not exist would be a lie."""
+    page = _shown_progress_page(qapp, wiz)
+    page.initializePage()                           # no worklist primed
+    assert "No build session yet" in page.log_help.text()
+    assert "tail" not in page.log_help.text()
+    assert not page.log_copy_btn.isEnabled()
+
+
+def test_watch_command_matches_the_host_os(qapp, wiz):
+    """(4) Never offer a command that cannot exist on the host: Windows has no tail."""
+    page = _shown_progress_page(qapp, wiz)
+    assert page._watch_command("/o/build-pki.x86.log") == "tail -F -n +1 /o/build-pki.x86.log"
+    # paths with spaces are quoted, not concatenated into a broken command
+    assert page._watch_command("/o/My Builds/b.log") == "tail -F -n +1 '/o/My Builds/b.log'"
+    wiz.host = HostInfo(os="windows", is_gentoo=False, has_docker=True, has_bash=False,
+                        has_kvm=False, is_root=False, builder_image="b")
+    assert page._watch_command(r"C:\o\b.log") == 'Get-Content -Wait -Tail 50 "C:\\o\\b.log"'
+
+
+def test_ansi_escapes_never_reach_any_operator_visible_surface(
+        monkeypatch, qapp, wiz, tmp_path):
+    """Builder colour/cursor escapes must not paint BOXES in the GUI.
+
+    Operator report (2026-07-17): "the logs in the gui are showing boxes for
+    undisplayable chars". Root cause: the builders colour output unconditionally, so
+    real lines arrive wrapped in SGR escapes, and the x86 emerge stream also emits
+    cursor moves ("\x1b[A", "\x1b[72C") — a real 53 MB session log carries 351 ESC
+    bytes. ProgressParser strip_ansi()es internally, so the phase table was fine, but
+    _on_line appended the RAW line, and Qt has no glyph for ESC -> a box each.
+
+    Three operator-visible surfaces consumed that raw line, and this pins all three:
+      1. the log pane, 2. row.buffer (-> error_tail -> the session record shown in the
+      sessions list), 3. the stage tracker's per-stage drill-down slices.
+    The on-disk build.log is NOT covered here and must KEEP its colours — the driver
+    writes it, and the watch command's `tail -f` renders them.
+    """
+    _install_fake_builddriver(monkeypatch)
+    _prime(wiz, _mesh_worklist(tmp_path, roles=(("pki", "x86"),)))
+    page = _progress_page(wiz)
+    page.initializePage()
+    _run_to_completion(qapp, page)
+
+    # a REAL captured shape: an SGR-wrapped banner + a cursor-move status line.
+    page._selected, page._selected_stage = 0, None
+    page._on_line(0, "\x1b[1;36m==> Rebranding baked config\x1b[0m")
+    page._on_line(0, "\x1b[A\x1b[72C \x1b[34;01m[ \x1b[31;01m!!\x1b[34;01m ]\x1b[0m")
+    qapp.processEvents()
+
+    assert "\x1b" not in page.log.toPlainText()                 # 1. the log pane
+    assert "==> Rebranding baked config" in page.log.toPlainText()   # text survives
+    assert not any("\x1b" in b for b in page._rows[0].buffer)   # 2. buffer -> error_tail
+    tracker = page._rows[0].tracker
+    slices = "".join("".join(st.lines) for st in tracker.stages)
+    assert "\x1b" not in slices                                  # 3. per-stage slices
+
+
+def test_display_safe_strips_escapes_but_keeps_real_text():
+    """_display_safe is lossless for real text: it removes only bytes Qt cannot paint.
+    TAB is deliberately kept (real layout in builder output, and Qt renders it)."""
+    from snapdragon_studio.gui.pages.progress import _display_safe
+    assert _display_safe("\x1b[1;36m==> Rebranding\x1b[0m") == "==> Rebranding"
+    assert _display_safe("\x1b[A\x1b[72C [ !! ]") == " [ !! ]"      # cursor moves
+    assert _display_safe("plain line") == "plain line"              # untouched
+    assert _display_safe("col1\tcol2") == "col1\tcol2"              # TAB KEPT
+    assert _display_safe("bar 50%\r") == "bar 50%"                  # CR dropped
+    assert _display_safe("\x1b") == ""                              # bare ESC dropped
+    assert _display_safe(_display_safe("\x1b[0ma")) == "a"          # idempotent

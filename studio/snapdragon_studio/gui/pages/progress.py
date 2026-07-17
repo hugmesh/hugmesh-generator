@@ -12,10 +12,22 @@ Finish is disabled until every row is terminal (ok / failed / stopped); Back is 
 free because the Review page is a commit page. Nothing here fakes a percent — an image whose
 builder has not yet hit a known phase banner shows an indeterminate (busy) bar, exactly as
 :class:`~...core.progress_parse.ProgressParser` reports it.
+
+LAYOUT: the job/stage TREE is the primary surface and the log is secondary, so the two sit
+in a vertical QSplitter (tree ~2 : log ~1, i.e. the log takes at most a third) that the
+operator can drag. The log panel — header + log + "watch it in a terminal" help — can be
+collapsed to its header or detached into its own window; neither ever interrupts the
+reader or loses a line, because :meth:`ProgressPage._on_line` appends to the
+QPlainTextEdit's *document*, which is independent of the widget's visibility or parent.
+The help names the REAL file the builder writes (``build_sessions.image_log_name`` — the
+studio twin of the builders' ``IMAGE_LOG_FILE``): the GUI pane and that file are one
+stream, so `tail -F` on it shows exactly what this page shows.
 """
 from __future__ import annotations
 
 import os
+import re
+import shlex
 import subprocess
 import time
 from collections import deque
@@ -24,9 +36,25 @@ from ..qt import QtCore, QtGui, QtWidgets, Qt, Signal
 from ..tray import write_build_status
 from ...core import build_sessions
 from ...core import flash_targets
-from ...core.progress_parse import ProgressParser, platform_phases
+from ...core.progress_parse import ProgressParser, platform_phases, strip_ansi
 from ...core.stage_tracker import StageTracker
 from ...core.worklist_driver import WorklistDriver
+
+# Residual control bytes AFTER strip_ansi() — a bare ESC that formed no complete
+# SGR/CSI sequence, plus BEL/BS/CR/VT/FF (the x86 emerge stream carries CR from its
+# progress bars) and DEL. The class spares EXACTLY two: \x09 TAB (real layout in
+# builder output, and Qt renders it) and \x0a LF (never reaches here — the reader
+# splits on it — but excluded so this stays safe if it ever sees a whole block).
+_C0_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _display_safe(line: str) -> str:
+    """A builder line made safe for a Qt text widget: drop the colour/cursor escapes
+    first, then any control byte left over. Qt has no glyph for these, so each one
+    paints a BOX (the operator's 2026-07-17 report). Idempotent and lossless for real
+    text — it only removes bytes that could never render."""
+    return _C0_RE.sub("", strip_ansi(line))
+
 
 # status id -> (symbol, colour) for the per-JOB status glyph (col0).
 _STATUS_GLYPH = {
@@ -115,6 +143,42 @@ class _FlashWorker(QtCore.QThread):
         self.done.emit(proc.wait())
 
 
+class _DetachedLogWindow(QtWidgets.QWidget):
+    """The top-level window the log panel is popped into by "Detach ⇱".
+
+    Two deliberate ownership choices, both load-bearing (see ProgressPage._detach_log):
+
+    * **Parented to the WIZARD** (``Qt.WindowType.Window`` makes it a real top-level
+      anyway), so it can never outlive the app or linger as a stray window — and so
+      dropping the last Python reference does NOT destroy it (the wizard owns it).
+    * **No WA_DeleteOnClose**: closing must RE-DOCK the panel, not destroy it. The
+      closeEvent below routes every close through the page's single re-dock primitive,
+      which reparents the panel out of this window BEFORE the window can be destroyed.
+
+    Without that ordering, destroying this window would destroy its children — including
+    the QPlainTextEdit the still-running build streams into — and the next line to arrive
+    would raise ``RuntimeError: wrapped C/C++ object ... has been deleted`` (PyQt6) /
+    ``Internal C++ object ... already deleted`` (PySide6) inside _on_line. That is a Qt
+    SLOT, where an unhandled exception ABORTS the Studio mid-build. Both were reproduced
+    on both bindings while designing this; the two choices above are what defeat them.
+    """
+
+    def __init__(self, parent, page):
+        super().__init__(parent, Qt.WindowType.Window)
+        self._page = page
+        self.setWindowTitle("Build log")
+        self.resize(900, 500)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(6, 6, 6, 6)
+
+    def closeEvent(self, ev):
+        # Re-dock rather than orphan: the panel goes back into the splitter (and the
+        # stream keeps landing) instead of being destroyed with this window. _redock_log
+        # clears the page's window ref FIRST, so this cannot recurse.
+        self._page._redock_log()
+        ev.accept()
+
+
 class _Row:
     """The per-image UI + parse state (one worklist entry)."""
 
@@ -187,16 +251,101 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.tree.setColumnWidth(_COL_NAME, 320)
         self.tree.setColumnWidth(_COL_PROGRESS, 220)
         self.tree.setMinimumHeight(180)
-        self.tree.setMaximumHeight(340)
+        # NO setMaximumHeight: the tree is the PRIMARY surface and must grow with the
+        # window. It used to be capped at 340px, which (once the stretch below was fixed)
+        # left a growing band of dead grey space under it inside its own splitter pane at
+        # tall windows. The splitter now bounds it instead — draggable, not hard-capped.
         self.tree.itemClicked.connect(self._on_item_clicked)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_tree_menu)
-        lay.addWidget(self.tree)
 
         self.footer = QtWidgets.QLabel("")
         self.footer.setWordWrap(True)
         self.footer.setStyleSheet("color: gray;")
-        lay.addWidget(self.footer)
+
+        # ── TREE / LOG split ──────────────────────────────────────────────────────────
+        # The reported defect: "the final build screen should show mainly the tree of the
+        # build with the current log below it taking up at most 1/3 of the vertical".
+        # It did the opposite — `addWidget(self.tree)` carried NO stretch (so the tree was
+        # pinned to its ~192px sizeHint forever) while `addWidget(self.log, 1)` took every
+        # spare pixel. Measured at the 1040x780 this page resizes itself to: tree 31% /
+        # log 44%, and the inversion WORSENED with height (21% / 61% at 900).
+        #
+        # A QSplitter fixes the proportions AND hands the operator the drag handle: the
+        # tree pane gets stretch 2, the log pane stretch 1 (~2:1, log <= 1/3), and only the
+        # LOG pane is collapsible — the tree can never be dragged shut.
+        self.splitter = QtWidgets.QSplitter(Qt.Orientation.Vertical)
+
+        tree_pane = QtWidgets.QWidget()
+        tree_lay = QtWidgets.QVBoxLayout(tree_pane)
+        tree_lay.setContentsMargins(0, 0, 0, 0)
+        tree_lay.addWidget(self.tree, 1)      # stretch 1: the tree absorbs the pane
+        tree_lay.addWidget(self.footer)       # the footer rides directly under the tree
+        self.splitter.addWidget(tree_pane)
+
+        # the log PANEL (header row + log + watch-help) is the unit that collapses and
+        # detaches. self.log NEVER moves — its parent is always this panel — so the
+        # _on_line append path is invariant under detach/re-dock (see _detach_log).
+        self.log_panel = QtWidgets.QWidget()
+        log_lay = QtWidgets.QVBoxLayout(self.log_panel)
+        log_lay.setContentsMargins(0, 0, 0, 0)
+
+        hdr = QtWidgets.QHBoxLayout()
+        hdr.setContentsMargins(0, 0, 0, 0)
+        # drill-down detail pane: the SAME single QPlainTextEdit, retitled by the header to
+        # show whether it's a whole job's raw log or one stage's slice.
+        self.log_header = QtWidgets.QLabel("Log")
+        self.log_header.setStyleSheet("font-weight: bold;")
+        hdr.addWidget(self.log_header)
+        hdr.addStretch(1)
+        self.log_collapse_btn = QtWidgets.QToolButton()
+        self.log_collapse_btn.setArrowType(Qt.ArrowType.DownArrow)
+        self.log_collapse_btn.setAutoRaise(True)
+        self.log_collapse_btn.setCheckable(True)
+        self.log_collapse_btn.setToolTip("Collapse the log")
+        self.log_collapse_btn.toggled.connect(self._set_log_collapsed)
+        hdr.addWidget(self.log_collapse_btn)
+        self.log_detach_btn = QtWidgets.QToolButton()
+        self.log_detach_btn.setText("Detach ⇱")
+        self.log_detach_btn.setAutoRaise(True)
+        self.log_detach_btn.setToolTip("Pop the log out into its own window")
+        self.log_detach_btn.clicked.connect(self._toggle_detach)
+        hdr.addWidget(self.log_detach_btn)
+        log_lay.addLayout(hdr)
+
+        self.log = QtWidgets.QPlainTextEdit()
+        self.log.setReadOnly(True)
+        # 0, not the default sizeHint floor: the log pane must be draggable/collapsible
+        # all the way shut, leaving just the header row as the restore handle.
+        self.log.setMinimumHeight(0)
+        log_lay.addWidget(self.log, 1)
+
+        # ── "watch it in a terminal" help (greyed, selectable, REAL path) ─────────────
+        self.log_help_row = QtWidgets.QWidget()
+        help_lay = QtWidgets.QHBoxLayout(self.log_help_row)
+        help_lay.setContentsMargins(0, 0, 0, 0)
+        self.log_help = QtWidgets.QLabel("")
+        self.log_help.setWordWrap(True)
+        self.log_help.setStyleSheet("color: gray;")      # greyed, like self.footer
+        # greyed help the operator cannot copy is useless — make it a real selection.
+        self.log_help.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        help_lay.addWidget(self.log_help, 1)
+        self.log_copy_btn = QtWidgets.QToolButton()
+        self.log_copy_btn.setText("Copy")
+        self.log_copy_btn.setAutoRaise(True)
+        self.log_copy_btn.setToolTip("Copy the watch command to the clipboard")
+        self.log_copy_btn.clicked.connect(self._copy_watch_command)
+        help_lay.addWidget(self.log_copy_btn)
+        log_lay.addWidget(self.log_help_row)
+
+        self.splitter.addWidget(self.log_panel)
+        self.splitter.setStretchFactor(0, 2)      # tree pane: 2 shares of any spare space
+        self.splitter.setStretchFactor(1, 1)      # log pane:  1 share  -> ~1/3
+        self.splitter.setCollapsible(0, False)    # the tree can never be dragged shut
+        self.splitter.setCollapsible(1, True)     # the log can
+        lay.addWidget(self.splitter, 1)           # the splitter absorbs ALL spare height
 
         # ── post-build "Flash to a device" group (hidden until an all-ok run finishes) ──
         self.flash_group = QtWidgets.QGroupBox("Flash to a device")
@@ -210,16 +359,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self.flash_btn.clicked.connect(self._flash_clicked)
         fg.addWidget(self.flash_btn)
         self.flash_group.setVisible(False)
-        lay.addWidget(self.flash_group)
-
-        # drill-down detail pane: the SAME single QPlainTextEdit, retitled by the header to
-        # show whether it's a whole job's raw log or one stage's slice.
-        self.log_header = QtWidgets.QLabel("Log")
-        self.log_header.setStyleSheet("font-weight: bold;")
-        lay.addWidget(self.log_header)
-        self.log = QtWidgets.QPlainTextEdit()
-        self.log.setReadOnly(True)
-        lay.addWidget(self.log, 1)
+        lay.addWidget(self.flash_group)          # below the splitter, beside the action bar
 
         btns = QtWidgets.QHBoxLayout()
         self.stop_all_btn = QtWidgets.QPushButton("Stop all")
@@ -236,6 +376,17 @@ class ProgressPage(QtWidgets.QWizardPage):
 
         self.driver: WorklistDriver | None = None
         self.worker: _WorklistWorker | None = None
+        # log panel state: the detached window (None = docked), the splitter sizes to
+        # restore on expand/re-dock, and the one-shot 2:1 seed (applied on first show —
+        # NOT in __init__, where the splitter's height is still 0).
+        self._log_window: _DetachedLogWindow | None = None
+        self._saved_sizes: list[int] = []
+        self._split_seeded = False
+        self._help_cmd = ""                     # what the help's Copy button yields
+        # True only once a build is REALLY dispatched (_start_worker). Until then no
+        # builder has opened a log file, so the watch-help must not name a path that
+        # does not and will not exist (no worklist / preflight failure / pre-dispatch).
+        self._dispatched = False
         # durable session record (core/build_sessions) — created in initializePage,
         # WRITTEN only at real dispatch (_start_worker) and updated per image / at finish.
         self._session: build_sessions.BuildSession | None = None
@@ -270,6 +421,186 @@ class ProgressPage(QtWidgets.QWizardPage):
         # never orphan a running build when the wizard closes — cancel and join the
         # worker on the wizard's finished signal (QWizard is a QDialog).
         self.wiz.finished.connect(self._abort_run)
+
+    # ---- log panel: split / collapse / detach / watch-help ----------------------
+    def showEvent(self, ev) -> None:
+        super().showEvent(ev)
+        self._seed_split()
+
+    def resizeEvent(self, ev) -> None:
+        super().resizeEvent(ev)
+        self._seed_split()
+
+    def _seed_split(self) -> None:
+        """Seed the 2:1 tree:log split ONCE, on the first show/resize that gives the
+        splitter a real height (it is 0 in __init__, so setSizes there is a no-op). After
+        this the stretch factors (2 vs 1) keep the ratio as the window grows, and any
+        operator drag is theirs to keep — this never fights it."""
+        if self._split_seeded:
+            return
+        h = self.splitter.height()
+        if h <= 0:
+            return
+        self._split_seeded = True
+        self._saved_sizes = self._default_sizes(h)
+        self.splitter.setSizes(self._saved_sizes)
+
+    @staticmethod
+    def _default_sizes(h: int) -> list[int]:
+        top = int(h * 2 / 3)
+        return [top, h - top]
+
+    def _restore_sizes(self) -> None:
+        """Put the log pane back to its pre-collapse/pre-detach share (or a fresh 2:1)."""
+        h = self.splitter.height()
+        sizes = self._saved_sizes
+        if len(sizes) != 2 or sizes[1] <= 0 or sum(sizes) <= 0:
+            sizes = self._default_sizes(h if h > 0 else 600)
+        self.splitter.setSizes(sizes)
+
+    def _log_is_docked(self) -> bool:
+        return self.splitter.indexOf(self.log_panel) != -1
+
+    def _set_log_collapsed(self, collapsed: bool) -> None:
+        """Collapse/restore the log BODY, keeping the header row as the restore handle.
+
+        Hiding self.log alone is NOT enough: QSplitter does not re-lay a pane when a
+        GRANDCHILD hides, so the pane kept its full size and the operator got an empty grey
+        box instead of the tree's space back (measured while building this). So the pane is
+        resized to the header's height too — 23px collapsed, header still visible.
+
+        COLLAPSE ONLY MEANS ANYTHING WHILE DOCKED. In the detached window the log body IS
+        the window's entire content, so honouring `collapsed` there would leave a blank
+        900x500 box (review finding B, reproduced on both bindings). The body's visibility
+        is therefore `collapsed AND docked`, never `collapsed` alone — that makes the empty
+        window unreachable even for a programmatic setChecked, not merely hard to click.
+
+        Output is NEVER lost while collapsed: appendPlainText is a QTextDocument
+        operation, wholly independent of widget visibility, and _on_line is untouched —
+        it does not branch on collapsed state and the reader is never stopped.
+        """
+        docked = self._log_is_docked()
+        if collapsed and docked:
+            sizes = self.splitter.sizes()
+            if len(sizes) == 2 and sizes[1] > 0:
+                self._saved_sizes = sizes          # remember the share to restore
+        body_visible = not (collapsed and docked)
+        self.log.setVisible(body_visible)
+        self.log_help_row.setVisible(body_visible)
+        if docked:
+            if collapsed:
+                hh = self.log_panel.minimumSizeHint().height()
+                self.splitter.setSizes([max(0, self.splitter.height() - hh), hh])
+            else:
+                self._restore_sizes()
+        self.log_collapse_btn.setArrowType(
+            Qt.ArrowType.RightArrow if collapsed else Qt.ArrowType.DownArrow)
+        self.log_collapse_btn.setToolTip(
+            "Expand the log" if collapsed else "Collapse the log")
+
+    def _toggle_detach(self) -> None:
+        self._redock_log() if self._log_window is not None else self._detach_log()
+
+    def _detach_log(self) -> None:
+        """Pop the log panel into its own top-level window.
+
+        Only the PANEL moves — self.log's parent stays log_panel, so _on_line's
+        appendPlainText target is untouched and a build streaming mid-detach cannot
+        break. The now-empty splitter pane disappears and the tree takes the full height.
+
+        Detaching FORCE-EXPANDS: "put the log in its own window" and "hide the log body"
+        are contradictory instructions, and the operator asked for the former. Without
+        this, Collapse-then-Detach handed back a blank 900x500 window (review finding B).
+        The collapse control is hidden for the duration — the state it toggles has no
+        meaning here, so offering it would only be a trap.
+        """
+        if self._log_window is not None:
+            return
+        if self._log_is_docked():
+            sizes = self.splitter.sizes()
+            if len(sizes) == 2 and sizes[1] > 0:
+                self._saved_sizes = sizes
+        # While still DOCKED, so this routes through the normal restore-sizes path and
+        # leaves _saved_sizes meaning what it says.
+        self.log_collapse_btn.setChecked(False)
+        self.log_collapse_btn.setVisible(False)
+        win = _DetachedLogWindow(self.wiz, self)
+        win.layout().addWidget(self.log_panel)     # reparents the panel onto the window
+        self._log_window = win
+        win.show()
+        self.log_detach_btn.setText("Re-dock ⇲")
+        self.log_detach_btn.setToolTip("Put the log back in the build page")
+
+    def _redock_log(self) -> None:
+        """Put the panel back in the splitter — the ONE primitive every exit path uses
+        (the Re-dock button, the detached window's close, _reset, and _abort_run).
+
+        insertWidget reparents the panel off the window BEFORE the window is ever
+        destroyed. That ordering is what makes the reparent-then-destroy trap (a deleted
+        C++ QPlainTextEdit under a live Python wrapper, raising inside the _on_line slot
+        and aborting the app) unreachable.
+
+        The docked layout is a PURE FUNCTION of the collapse flag: rather than
+        unconditionally handing the pane its full share back, re-dock replays
+        _set_log_collapsed. An unconditional _restore_sizes() here gave a body-hidden
+        panel 28% of the page — 187px of dead grey, the very defect this change set out to
+        remove (review finding A).
+        """
+        win = self._log_window
+        if win is None:
+            return
+        self._log_window = None            # FIRST: re-entrancy guard for closeEvent
+        self.splitter.insertWidget(1, self.log_panel)   # reparent off the window
+        self.log_panel.setVisible(True)
+        self.log_collapse_btn.setVisible(True)
+        # Sizes + body visibility derived from the flag, never assumed.
+        self._set_log_collapsed(self.log_collapse_btn.isChecked())
+        win.hide()
+        win.deleteLater()                  # safe now: the panel is no longer its child
+        self.log_detach_btn.setText("Detach ⇱")
+        self.log_detach_btn.setToolTip("Pop the log out into its own window")
+
+    def _watch_command(self, path: str) -> str:
+        """The REAL command to follow `path` on THIS host.
+
+        `tail -F`, not `tail -f`: a queued/pre-dispatch job has no log file yet, and
+        `tail -f` exits on a missing file while `-F` retries by name — so the command is
+        copy-paste-correct BEFORE the job starts. `-n +1` starts at the top, so the
+        terminal shows the same stream from the beginning. Windows has no tail at all.
+        """
+        host = getattr(self.wiz, "host", None)
+        if getattr(host, "os", "linux") == "windows":
+            return f'Get-Content -Wait -Tail 50 "{path}"'
+        return f"tail -F -n +1 {shlex.quote(path)}"
+
+    def _refresh_log_help(self) -> None:
+        """Point the greyed help at the CURRENTLY SELECTED job's real log file.
+
+        The paths are derived from the same helpers the builders and the session record
+        use — never guessed: build_sessions.image_log_name(entry_id) is the studio twin of
+        the builders' IMAGE_LOG_FILE="${WORK_DIR}/build-${BUILD_SUBDIR#wl-}.log", and
+        _session.log_path is the shared build.log. A STAGE selection shows its JOB's path:
+        stages are slices of that one file, so there is no per-stage file to name.
+        """
+        if not self._dispatched or self._session is None or not self._rows:
+            self._help_cmd = ""
+            self.log_help.setText("No build session yet — no log file exists on disk.")
+            self.log_copy_btn.setEnabled(False)
+            return
+        i = self._selected if 0 <= self._selected < len(self._rows) else 0
+        img_path = os.path.join(self._session.workdir,
+                                build_sessions.image_log_name(self._rows[i].label))
+        self._help_cmd = self._watch_command(img_path)
+        self.log_copy_btn.setEnabled(True)
+        self.log_help.setText(
+            "Same stream as this pane — the GUI reads the very file the builder writes. "
+            "Watch it in a terminal:\n"
+            f"    {self._help_cmd}\n"
+            f"    whole run:  {self._watch_command(self._session.log_path)}")
+
+    def _copy_watch_command(self) -> None:
+        if self._help_cmd:
+            QtWidgets.QApplication.clipboard().setText(self._help_cmd)
 
     # ---- lifecycle --------------------------------------------------------------
     def initializePage(self) -> None:
@@ -347,6 +678,11 @@ class ProgressPage(QtWidgets.QWizardPage):
 
     def _reset(self) -> None:
         self._tick.stop()
+        # re-dock FIRST, before anything clears: a page reset while the log is detached
+        # must not leave the panel (and self.log, which it owns) parented to a window
+        # this page no longer tracks. _redock_log is a no-op when already docked.
+        self._redock_log()
+        self._dispatched = False        # nothing is running -> no log file to point at yet
         self.tree.clear()               # drops every job + stage item (and its embedded bar)
         self._rows = []
         self._selected = 0
@@ -360,7 +696,8 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._keys_done = []
         self.footer.setText("")
         self.log_header.setText("Log")
-        self.log.setPlainText("")
+        self.log.setPlainText("")       # the DOCUMENT clears; the widget itself is alive
+        self._refresh_log_help()        # back to "no build session yet"
         self._last_status = None
         self._flash_queue = []
         self._entry_artifacts = {}
@@ -418,6 +755,10 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._write_status()                  # building 0% -> the tray shows a badge
         if self._session is not None:         # START record: status "running" + pid
             build_sessions.start(self._session)
+        # a builder is really launching now, so the per-image log files are real (or are
+        # about to be — `tail -F` handles the not-yet-created case): show the paths.
+        self._dispatched = True
+        self._refresh_log_help()
         self.completeChanged.emit()
         self._sync_back_button()
         self.worker.start()
@@ -448,6 +789,18 @@ class ProgressPage(QtWidgets.QWizardPage):
 
     def _on_line(self, i: int, line: str) -> None:
         row = self._rows[i]
+        # SANITISE ONCE, HERE. The builders colour their output unconditionally, so a
+        # real line arrives as e.g. "\x1b[1;36m==> Rebranding\x1b[0m" — and the x86
+        # emerge output also emits cursor moves ("\x1b[A", "\x1b[72C"). Qt has no glyph
+        # for ESC, so every one of them painted a BOX in the log (351 ESCs in a real
+        # 53 MB session log). The parser already strip_ansi()es internally, so only the
+        # DISPLAY path was ever raw — and it fed THREE operator-visible surfaces: this
+        # pane, row.buffer -> error_tail -> the session record/sessions list, and the
+        # stage tracker's per-stage slices. strip_ansi is idempotent, so feeding the
+        # cleaned line to the parser/tracker changes no phase/stage behaviour.
+        # NOT the on-disk build.log: WorklistDriver writes that itself and it KEEPS its
+        # colours, which is what makes the watch command's `tail -f` render correctly.
+        line = _display_safe(line)
         row.buffer.append(line)
         state = row.parser.feed(line)
         self._apply_state(row, state)
@@ -724,6 +1077,9 @@ class ProgressPage(QtWidgets.QWizardPage):
             st = row.tracker.stages[stage_j]
             self.log.setPlainText("\n".join(st.lines))
             self.log_header.setText(f"Log — {row.label} ▸ {st.label}")
+        # the single funnel for every selection change (_on_item_clicked, _focus_node,
+        # failure navigation), so the watch-help always names the SELECTED job's log.
+        self._refresh_log_help()
 
     def _focus_node(self, i: int, stage_j: int | None) -> None:
         """Expand the job, select the target node, and load its log slice — the shared
@@ -787,6 +1143,11 @@ class ProgressPage(QtWidgets.QWizardPage):
     def _abort_run(self, *_a) -> None:
         """Cancel and join a still-running build so the wizard closing never orphans a
         builder process or a live QThread."""
+        # re-dock BEFORE the wizard destroys its children: the detached window is one of
+        # them, and it owns the log panel. Reparenting the panel back into this page first
+        # means the window can be destroyed without taking self.log's C++ object with it —
+        # which would make the next streamed line raise inside the _on_line slot.
+        self._redock_log()
         self._flash_timer.stop()
         self._tick.stop()
         # drop any still-queued plan assignments FIRST: a running dd outlives the 3s
