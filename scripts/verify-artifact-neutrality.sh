@@ -19,10 +19,11 @@
 #   * disk image         — snapdragon-free GPT partition names, FAT ESP labeled
 #                          GENTOO_ESP, ESP carries EFI/BOOT/bootx64.efi
 #   * UKI (Secure Boot)  — a gentoo UKI is checked on the INSTALLED ESP and the
-#                          sysroot /boot (NOT the live ISO). Until the platform
-#                          fix lands (the UKI build needs the ukify/sd-stub
-#                          bits from sys-apps/systemd-utils[boot] in the build
-#                          profile), a missing UKI is a WARN, not a FAIL.
+#                          sysroot /boot (NOT the live ISO). A snapdragon-named
+#                          UKI FAILs. A missing UKI is a WARN, not a FAIL:
+#                          absence is a boot-chain regression, not a
+#                          brand-neutrality violation, and only neutrality
+#                          violations fail this gate.
 #   * sysroot            — marker tree / tools / k8s / hostname neutrality
 #   * fs + stage4 tars   — same neutrality sweep over the tarball listings
 #                          (multi-GB xz — these passes take minutes)
@@ -358,7 +359,7 @@ if [ -s "$UKI_HITS" ]; then
       "UKI present on installed ESP / sysroot boot: $(head -2 "$UKI_HITS" | tr '\n' ' ')" \
       "UKI found but snapdragon-named: $(grep -i snapdragon "$UKI_HITS" | head -2 | tr '\n' ' ')"
 elif [ "$UKI_SOURCES" -gt 0 ]; then
-  warn "no UKI (gentoo*.efi / EFI/Linux/*.efi) on the installed ESP or sysroot /boot — expected until the Secure-Boot platform fix lands: building the UKI needs the ukify/sd-stub bits from sys-apps/systemd-utils[boot] in the build profile. WARN only, not a FAIL."
+  warn "no UKI (gentoo*.efi / EFI/Linux/*.efi) on the installed ESP or sysroot /boot — the build profile already wires the UKI chain (sys-kernel/dracut[uefi] + sys-apps/systemd-utils[boot], landed in #307), so a missing UKI is a genuine finding, NOT an expected or blocked state: the in-chroot 'dracut --uefi' step failed or was skipped and the Secure Boot chain has degraded to GRUB+vmlinuz. Check the builder log for 'dracut --uefi failed' / 'UKI skipped'. WARN not FAIL: absence is a boot-chain regression, not a brand-neutrality violation."
 elif [ "$total_found" -gt 0 ] || [ -n "$SYSROOT" ]; then
   warn "no installed ESP or sysroot boot tree available — UKI check could not run"
 fi
