@@ -1,18 +1,34 @@
-"""NetworkPage — three role-class groupboxes up top (brand identity & domain, the
-tailnet/SSO toggles, the mesh control plane incl. the orchestration superdomain),
-then egress VPN, the security stack, edge-AI, Tor, Character Studio, edge-ai-tts
-(voice synthesis) and the optional cluster-services checklist (with the
-explicit-none / all-services sentinels and the subtractive exclude list).
+"""NetworkPage — the domain/mesh/services step, as COLLAPSIBLE sections (identity &
+domain, tailnet/SSO, the mesh control plane incl. the orchestration superdomain,
+egress VPN, the security stack, edge-AI, and the optional cluster services — Tor,
+Character Studio, edge-ai-tts and the slug checklist with its explicit-none /
+all-services sentinels and subtractive exclude list).
 
 The tailnet/SSO group is user-editable ONLY for cloud branded desktops
 (``tailnet_sso_visible``, spec 3): standalone and mesh hide it (mesh forces
 tailscale=sso on off-UI in enter_mesh_defaults/materialize — never here). The mesh
-control plane (incl. the superdomain, spec 5) shows for cloud AND mesh."""
+control plane (incl. the superdomain, spec 5) shows for cloud AND mesh.
+
+Two things a reader must not conflate, because they look alike and are not:
+
+* COLLAPSING (``_widgets.Collapsible``) is presentation only. It never touches
+  enabled-ness, and it cannot change what the page collects or emits: validatePage()
+  reads widget VALUES, which a hidden widget keeps.
+* PLATFORM/ROLE GATING (``_gating``) greys or hides a surface the builder has no flag
+  for, and ``clear_unsupported`` RESETS those fields in validatePage. It keys on
+  ``platform_supports(field, platform)`` — the capability table — never on widget
+  visibility, so a folded section is never mistaken for an unsupported one.
+
+Services are MESH-WIDE (see _SERVICES_SCOPE_NOTE): they are baked into the cluster
+GitOps tree every node shares, so there is deliberately no per-node service table."""
 from __future__ import annotations
+
+from dataclasses import MISSING
 
 from ..qt import Qt, QtWidgets
 from ._scroll import scrollable
 from ...core.config import (
+    ImageConfig,
     OPTIONAL_SERVICES_BY_PLATFORM,
     OPTIONAL_SERVICES_CHOICES,
     RELEASE_STATE_CHOICES,
@@ -30,7 +46,7 @@ from ._gating import (
     platform_supports,
     scope_allows,
 )
-from ._widgets import _file_picker, _row
+from ._widgets import _file_picker, _row, collapsible
 
 # The three-state checkboxes (G34): a plain checkbox could only ever emit the
 # positive flag, so a brand-profile (-C) default could never be forced OFF from
@@ -38,6 +54,50 @@ from ._widgets import _file_picker, _row
 # (the square) = emit neither and leave the brand.conf/builder default.
 _TRI_TIP = ("3-state: checked = force ON (--with-…), unchecked = force OFF (--no-…), "
             "part-checked square = leave the brand-profile/builder default.")
+
+# The same explanation as _TRI_TIP, but VISIBLE. The tri-state was reported as
+# "options like tor, character studio and edge ai are partially selected but it's not
+# clear why" — the meaning existed only as a hover tooltip, which nobody hovers when
+# they do not already know there is something to learn. The square is the DEFAULT
+# state for these boxes, so the first thing the operator sees needs to explain itself
+# on the page. Same styled-QLabel idiom as services_role_note / _hint().
+_TRI_LEGEND = (
+    "These are 3-state boxes: ■ part-checked (the default) leaves the brand "
+    "profile's / builder's own choice alone · ☑ checked forces the service ON · "
+    "☐ unchecked forces it OFF. The square is why some boxes start part-selected — "
+    "it means \"don't override\", not \"partly enabled\"."
+)
+
+# Services are MESH-WIDE, not per-node — stated on the page because the operator
+# reasonably asked whether they were selectable per node (as the worklist's per-node
+# columns are). Grounded in the builders, not in UI convenience:
+#   * build-rpi5-stage4.sh:1376 gate_optional_services() prunes each unselected slug's
+#     Argo apps/*.yaml + manifests/ + gateway routes out of the baked CLUSTER GitOps
+#     tree at ${SYSROOT}/var/lib/snapdragon/cluster — it is not a node package set;
+#   * build-rpi5-stage4.sh:2958 bakes that tree into EVERY cluster-class node (only
+#     ROLE_CLIENT desktops skip it), and specs/cluster/app-of-apps.yaml recurses with
+#     prune:true — so two nodes with different service sets would be two conflicting
+#     desired states for ONE cluster, and the surviving tree would DELETE the other's
+#     services. Per-node service sets would produce a broken cluster, not a choice.
+#   * Studio's own model already agrees: core/worklist.py WorklistEntry carries no
+#     service field, and _materialize_one deepcopies the shared base into every node.
+_SERVICES_SCOPE_NOTE = (
+    "Chosen ONCE for the whole mesh — not per node. These selections are baked into "
+    "the cluster GitOps tree that every cluster node shares, so a single set of "
+    "services is what makes a coherent cluster (per-node sets would fight each other). "
+    "What IS per node is on the earlier node-images step: the node's ROLE (an edge-AI "
+    "node is chosen there) and its hardware."
+)
+
+# The honest exception, stated rather than papered over: two slugs really are
+# node-scoped in the registry (specs/cluster/optional-services.yaml:498 egress-vpn and
+# :534 tor both carry `scope: node`), but Studio has no per-node service field and
+# adding one would change the emitted argv — out of scope for a presentation fix.
+# Queued as a real feature rather than silently omitted.
+_SERVICES_NODE_SCOPE_CAVEAT = (
+    "Note: tor and egress-vpn are node-scoped services in the platform registry, but "
+    "Studio applies them mesh-wide today (every cluster node gets the same setting)."
+)
 
 
 def _hint(text: str) -> "QtWidgets.QLabel":
@@ -79,6 +139,18 @@ def _client_class_role(role: str, platform: str) -> bool:
     return False
 
 
+def _field_default(name: str):
+    """An ImageConfig field's declared default.
+
+    Used by the default-expansion rule so it compares against the dataclass's own
+    truth rather than literals restated in the GUI (``snort`` defaults to True, for
+    example, which a hand-written "off means default" check gets exactly backwards).
+    Mirrors _gating.clear_unsupported's default lookup.
+    """
+    f = ImageConfig.__dataclass_fields__[name]
+    return f.default_factory() if f.default is MISSING else f.default
+
+
 def _tri_state(value):
     """config tri-state value ('', 'on', 'off', or a back-compat bool) -> CheckState."""
     if value is True or value == "on":
@@ -108,8 +180,19 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.setTitle("Network, identity & egress")
         lay = scrollable(self)
 
+        # The 3-state legend lives at PAGE level, not per section: tri-state boxes are
+        # spread across three sections (aide in Security, edge_ai in Edge-AI, tor /
+        # character-studio / edge-ai-tts in Services), so a per-section legend would be
+        # both repeated and invisible whenever that section is collapsed. One always-on
+        # line at the top explains the square wherever it turns up.
+        self.tri_legend = _hint(_TRI_LEGEND)
+        lay.addWidget(self.tri_legend)
+
         # ---- Group 1: brand identity & domain (visited in ALL modes) -------------
-        self.identity_box = QtWidgets.QGroupBox("Identity & domain")
+        # Each group is wrapped in a Collapsible (see _widgets.Collapsible) whose header
+        # carries the section title — hence the untitled QGroupBoxes here: the name is
+        # set once, on the collapsible() call right after each group is built.
+        self.identity_box = QtWidgets.QGroupBox("")
         il = QtWidgets.QVBoxLayout(self.identity_box)
         self.identity_help = _hint(
             "Brand identity plus the PUBLIC apex domain the image serves — the go-live "
@@ -142,17 +225,25 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.release_state = QtWidgets.QComboBox()
         self.release_state.addItems(("default", *RELEASE_STATE_CHOICES))
         il.addWidget(_row("Release state (--release-state)", self.release_state))
-        lay.addWidget(self.identity_box)
+        # Identity carries the REQUIRED fields (brand id, the public apex domain), so it
+        # is never collapsed by default — default expansion must not hide a must-set field.
+        self.identity_section = collapsible("Identity & domain", self.identity_box)
+        lay.addWidget(self.identity_section)
 
         # ---- Group 2: tailnet + SSO (cloud branded desktops only, spec 3) --------
-        self.tailnet_box = QtWidgets.QGroupBox("Tailnet + SSO")
+        self.tailnet_box = QtWidgets.QGroupBox("")
         tl = QtWidgets.QVBoxLayout(self.tailnet_box)
         self.tailscale = QtWidgets.QCheckBox("Join the tailnet (tailscale/headscale)")
         self.sso = QtWidgets.QCheckBox("Enable SSO login (Casdoor)")
         tl.addWidget(self.tailscale)
         tl.addWidget(self.sso)
-        lay.addWidget(self.tailnet_box)
+        # Two checkboxes and a real join decision — expanded.
+        self.tailnet_section = collapsible("Tailnet + SSO", self.tailnet_box)
+        lay.addWidget(self.tailnet_section)
         # shown INSTEAD of the group when it is hidden (standalone/mesh), explaining why.
+        # Deliberately a PAGE-level sibling of the section, not inside it: it is the
+        # replacement for the whole hidden section, so it must survive the section's
+        # own visibility gate.
         self.tailnet_reason = QtWidgets.QLabel()
         self.tailnet_reason.setWordWrap(True)
         self.tailnet_reason.setStyleSheet("color: gray;")
@@ -160,7 +251,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         lay.addWidget(self.tailnet_reason)
 
         # ---- Group 3: mesh control plane (cloud AND mesh) ------------------------
-        self.mesh_box = QtWidgets.QGroupBox("Mesh control plane")
+        self.mesh_box = QtWidgets.QGroupBox("")
         cp = QtWidgets.QVBoxLayout(self.mesh_box)
         cp.addWidget(_hint(
             "The internal orchestration superdomain every mesh node joins "
@@ -200,7 +291,10 @@ class NetworkPage(QtWidgets.QWizardPage):
             "manifest + the KEYS channel — never the go-live apex.")
         self.superdomain_row = _row("Orchestration superdomain", self.superdomain)
         cp.addWidget(self.superdomain_row)
-        lay.addWidget(self.mesh_box)
+        # Carries the superdomain, which on a MESH build is a field the operator may
+        # genuinely need to set — expanded rather than folded away.
+        self.mesh_section = collapsible("Mesh control plane", self.mesh_box)
+        lay.addWidget(self.mesh_section)
 
         # ---- egress VPN ----------------------------------------------------------
         self.egress = QtWidgets.QLineEdit()
@@ -208,14 +302,24 @@ class NetworkPage(QtWidgets.QWizardPage):
         w = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0)
         h.addWidget(self.egress, 1); h.addWidget(ebtn)
         self.egress_row = w   # greyed as one unit (line edit + Browse…) per platform
-        lay.addWidget(_hint(
+        # The egress widgets were loose on the page; they get a plain container purely
+        # so the section has one thing to fold. The container is NEVER gated itself —
+        # gate_widgets_role_class still drives egress_row/egress_locked directly, so the
+        # role-class hide keeps working exactly as before.
+        self.egress_box = QtWidgets.QWidget()
+        eg = QtWidgets.QVBoxLayout(self.egress_box)
+        eg.setContentsMargins(0, 0, 0, 0)
+        eg.addWidget(_hint(
             "Egress VPN — route this image's outbound traffic through a provided VPN "
             "profile (optional). Lock it to stop a managed node's user removing it."))
-        lay.addWidget(_row("Egress VPN", w))
+        eg.addWidget(_row("Egress VPN", w))
         self.egress_locked = QtWidgets.QCheckBox("Lock egress VPN (managed node — user cannot remove)")
-        lay.addWidget(self.egress_locked)
+        eg.addWidget(self.egress_locked)
+        self.egress_section = collapsible("Egress VPN", self.egress_box)
+        lay.addWidget(self.egress_section)
         # network/host security stack
-        sec = QtWidgets.QGroupBox("Security stack")
+        sec = QtWidgets.QGroupBox("")
+        self.security_box = sec
         sl = QtWidgets.QVBoxLayout(sec)
         # Proxy stack is TRI-STATE like the builder's flag pair: auto (emit nothing —
         # the builder enables it on client desktops itself) | on | off. A checkbox
@@ -236,10 +340,14 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.root_login = QtWidgets.QComboBox()
         self.root_login.addItems(["no", "prohibit-password", "yes"])
         sl.addWidget(_row("Root SSH login", self.root_login))
-        lay.addWidget(sec)
+        # Every control here ships a sane hardened default (proxy auto / snort off /
+        # aide "leave default" / root-login no), so this folds away when it is all
+        # default — initializePage re-expands it if anything is overridden or gated.
+        self.security_section = collapsible("Security stack", sec, expanded=False)
+        lay.addWidget(self.security_section)
         # edge-AI inference (GPU cluster roles — cloud/mesh). Serves an OpenAI-compatible
         # model API to the mesh; the model library (runtime/preload/default) is tunable.
-        self.edge_ai_box = QtWidgets.QGroupBox("Edge-AI inference (GPU model API to the mesh)")
+        self.edge_ai_box = QtWidgets.QGroupBox("")
         el = QtWidgets.QVBoxLayout(self.edge_ai_box)
         self.edge_ai = QtWidgets.QCheckBox(
             "Serve an OpenAI-compatible model API on the GPU node (edge_ai role / be+gpu / omnibus)")
@@ -257,18 +365,36 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.edge_ai_analysis = QtWidgets.QCheckBox(
             "Analysis API — image NSFW/abuse classify + perceptual-hash, log triage (separate image)")
         el.addWidget(self.edge_ai_analysis)
-        lay.addWidget(self.edge_ai_box)
+        # Default-off service with builder-default runtime/models — folds away until it
+        # is actually in play (initializePage expands it when the tri-state is overridden,
+        # which includes the edge_ai role's auto-check).
+        self.edge_ai_section = collapsible(
+            "Edge-AI inference (GPU model API to the mesh)", self.edge_ai_box, expanded=False)
+        lay.addWidget(self.edge_ai_section)
+        # ---- the optional-services section --------------------------------------
+        # tor / character-studio / edge-ai-tts were loose on the page, directly above the
+        # services box they belong with; they are grouped into that SECTION now. They are
+        # deliberately kept as SIBLINGS of services_box, not children of it: gate_widgets
+        # maps "optional_services" -> services_box and disables it as a unit (G12), and
+        # reparenting these three into it would silently drag them into that grey.
+        svc_content = QtWidgets.QWidget()
+        sv_outer = QtWidgets.QVBoxLayout(svc_content)
+        sv_outer.setContentsMargins(0, 0, 0, 0)
+        self.services_scope_note = _hint(_SERVICES_SCOPE_NOTE)
+        sv_outer.addWidget(self.services_scope_note)
+        self.services_node_scope_note = _hint(_SERVICES_NODE_SCOPE_CAVEAT)
+        sv_outer.addWidget(self.services_node_scope_note)
         # Tor v3 onion (hidden) service (node-scoped; cloud/mesh cluster node builds).
         self.tor_onion = QtWidgets.QCheckBox(
             "Tor v3 onion service — expose the cluster gateway as a .onion (default off)")
         self.tor_onion.setTristate(True)   # G34: --with-tor / --no-tor / leave default
-        lay.addWidget(self.tor_onion)
+        sv_outer.addWidget(self.tor_onion)
         # Character Studio (VN) frontend remote — OPTIONAL, DEFAULT-OFF (admin gate).
         # Cloud/mesh cluster builds only (it is a frontend cluster service).
         self.character_studio = QtWidgets.QCheckBox(
             "Character Studio (VN) — character creator + chat remote at /character-studio (default off)")
         self.character_studio.setTristate(True)   # G34: --with-/--no-character-studio / default
-        lay.addWidget(self.character_studio)
+        sv_outer.addWidget(self.character_studio)
         # edge-ai-tts (VN voice synthesis) — OPTIONAL, DEFAULT-OFF. CPU-only,
         # self-contained (NO edge-ai/GPU dependency, unlike the Analysis API inside
         # edge_ai_box above) — deliberately placed OUTSIDE edge_ai_box (which hides
@@ -278,7 +404,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.edge_ai_tts = QtWidgets.QCheckBox(
             "Edge AI — voice synthesis (TTS) — Piper TTS + viseme timeline for VN voice (default off)")
         self.edge_ai_tts.setTristate(True)   # G34: --with-/--no-edge-ai-tts / default
-        lay.addWidget(self.edge_ai_tts)
+        sv_outer.addWidget(self.edge_ai_tts)
         # cluster optional services (--optional-services multi-select) + the games stack.
         # An empty checklist emits NOTHING (the builder default akkoma tuwunel phpbb
         # applies), so the two sentinels get their own mutually-exclusive checkboxes:
@@ -326,7 +452,12 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.games = QtWidgets.QCheckBox(
             "Enable games — bake the Snapdragon Game Studio + the games.<domain> service")
         svl.addWidget(self.games)
-        lay.addWidget(self.services_box)
+        sv_outer.addWidget(self.services_box)
+        # EXPANDED by default and not folded away: this section is where the tri-state
+        # boxes the operator asked about live, and the legend + the mesh-wide scope
+        # answer are only useful if they are on screen when the page loads.
+        self.services_section = collapsible("Optional cluster services", svc_content)
+        lay.addWidget(self.services_section)
         lay.addStretch(1)
 
     def _sentinel_toggled(self, box, on):
@@ -373,6 +504,10 @@ class NetworkPage(QtWidgets.QWizardPage):
         # sso keeps its x86-only platform gate below.
         ss_visible = tailnet_sso_visible(c)
         self.tailnet_box.setVisible(ss_visible)
+        # Hide the SECTION alongside its content, or a mode-gated-away group leaves an
+        # orphan header behind that expands to nothing. The gate above still drives the
+        # box itself, so every existing isVisible() gate assertion keeps its meaning.
+        self.tailnet_section.setVisible(ss_visible)
         self.tailnet_reason.setVisible(not ss_visible)
         if not ss_visible:
             self.tailnet_reason.setText(
@@ -386,6 +521,7 @@ class NetworkPage(QtWidgets.QWizardPage):
         # mesh control plane (incl. the superdomain) — cloud AND mesh, hidden standalone.
         show_cp = c.mode in ("cloud", "mesh")
         self.mesh_box.setVisible(show_cp)
+        self.mesh_section.setVisible(show_cp)
         self.headscale_url.setText(c.headscale_url)
         self.headscale_version.setText(c.headscale_version)
         self.tailscale_version.setText(c.tailscale_version)
@@ -421,7 +557,14 @@ class NetworkPage(QtWidgets.QWizardPage):
         self.edge_ai_default.setText(c.edge_ai_model_default)
         self.edge_ai_analysis.setChecked(c.edge_ai_analysis)
         # edge-AI is a GPU CLUSTER service — only meaningful for cloud/mesh node builds.
-        self.edge_ai_box.setVisible(c.mode in ("cloud", "mesh"))
+        # The gate is pinned on the SECTION, never on edge_ai_box: the box is the
+        # section's collapsible CONTENT, so set_expanded() drives its setVisible() too.
+        # Setting the mode gate there as well would make edge_ai_box.isVisible() mean
+        # "applicable AND expanded" — two meanings on one flag, exactly the confusion
+        # between collapse and the platform/mode gate this page must not have (a
+        # collapsed section would read as an inapplicable one). The section is the
+        # gate's only carrier; the box's visibility means "expanded" and nothing else.
+        self.edge_ai_section.setVisible(c.mode in ("cloud", "mesh"))
         self.tor_onion.setCheckState(_tri_state(c.tor_onion_service)
                                      if platform_supports("tor_onion_service", c.platform)
                                      else Qt.CheckState.Unchecked)
@@ -508,12 +651,59 @@ class NetworkPage(QtWidgets.QWizardPage):
         egress_ok = scope_allows("egress_vpn", c)
         gate_widgets_role_class([self.egress_row, self.egress_locked], egress_ok,
                                 out_of_scope_note("egress_vpn", c), hide=True)
+        # Fold the whole SECTION away with its content: the gate above hides the field
+        # and the lock box, but _row()'s "Egress VPN" caption and this section's header
+        # are not gate members, so a node-class image was left with an Egress VPN header
+        # over an empty body. (The orphan caption predates the sections; hiding the
+        # section takes it with it.) The gate still drives the widgets themselves, so
+        # every existing egress gate assertion keeps its meaning.
+        self.egress_section.setVisible(egress_ok)
         # gate_widgets blanks the tooltip on every ENABLED widget — restore the
         # 3-state legend on the live tri-state boxes (disabled ones keep the
         # unsupported-platform note it set).
         for w in (self.aide, self.edge_ai, self.tor_onion, self.character_studio, self.edge_ai_tts):
             if w.isEnabled():
                 w.setToolTip(_TRI_TIP)
+        self._apply_default_expansion()
+
+    def _apply_default_expansion(self):
+        """Fold away the optional sections that are entirely at their defaults, and only
+        those. Re-evaluated on every visit, from the CONFIG — never from widget
+        visibility, so it can never be confused with (or interfere with) the platform
+        gate: collapsing changes nothing about what the page collects or emits.
+
+        Applied through set_default_expanded(), so this is a DEFAULT and not a command:
+        re-deriving on every visit is what lets a change made on an earlier page open
+        the section that shows it (picking the edge_ai role auto-checks the service),
+        but a section the operator opened by hand is never re-folded underneath them.
+
+        A section is force-expanded when it holds something the operator should see: an
+        overridden tri-state (i.e. one that is not the leave-the-default square), a
+        non-default value, or a greyed control whose gate note explains itself. The
+        sections carrying required or must-set fields (identity, mesh/superdomain) and
+        the ones the reports were about (services) are never collapsed by default."""
+        # Compared against ImageConfig's OWN declared defaults, never against restated
+        # literals: `snort` for instance defaults to True, so a hand-written "snort is
+        # off when default" would fold the section away on a config that had actually
+        # overridden it to off. _field_default() cannot drift from the dataclass.
+        sec_default = (self.proxy_stack.currentText() == _field_default("proxy_stack")
+                       and self.snort.isChecked() == _field_default("snort")
+                       and self.aide.checkState() == _tri_state(_field_default("aide"))
+                       and self.root_login.currentText() == _field_default("root_login"))
+        # A greyed control means a gate note the operator should be able to read.
+        sec_gated = not (self.proxy_stack.isEnabled() and self.snort.isEnabled()
+                         and self.aide.isEnabled())
+        self.security_section.set_default_expanded(not sec_default or sec_gated)
+        # Edge-AI: the tri-state is the section's switch — expanded whenever it is
+        # overridden either way (the edge_ai ROLE auto-checks it, which must show), or
+        # when any of its tuning fields carry a value.
+        edge_default = (
+            self.edge_ai.checkState() == _tri_state(_field_default("edge_ai_service"))
+            and self.edge_ai_analysis.isChecked() == _field_default("edge_ai_analysis")
+            and self.edge_ai_models.text().strip() == _field_default("edge_ai_models")
+            and self.edge_ai_default.text().strip() == _field_default("edge_ai_model_default")
+            and self.edge_ai_runtime.currentText() == _field_default("edge_ai_runtime"))
+        self.edge_ai_section.set_default_expanded(not edge_default)
 
     def validatePage(self):
         c = self.wiz.cfg

@@ -139,7 +139,46 @@ class WorklistPage(QtWidgets.QWizardPage):
         self.tree.setRootIsDecorated(True)
         self.tree.setHeaderLabels(
             ["", "Role", "Platform", "Board", "Flavor/Desktop", "Encryption", "Notes"])
-        self.tree.setColumnWidth(_COL_CHECK, 28)
+        # COLUMN SIZING. The check column is this page's PRIMARY control (it is what
+        # selects a node to build), so it must be fully visible on arrival with no
+        # dragging. It used to be a hardcoded 28px with NO resize policy set on the
+        # header at all — every column sat at the 100px default while the check column
+        # needed 60, and the #375 family-group rows indent children by indentation()
+        # (20px), leaving ~8px for the checkbox indicator on a child row: the operator's
+        # "selection buttons are only visible after expanding the column".
+        hdr_view = self.tree.header()
+        hdr_view.setMinimumSectionSize(24)
+        # ResizeToContents measures the real indicator + indent and re-measures after
+        # initializePage() populates the tree (the widths below are set once here).
+        hdr_view.setSectionResizeMode(_COL_CHECK, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        # Role/Platform are NOT ResizeToContents on purpose: their longest cells want
+        # 391px/627px, which would push the rest of the row off-screen. Explicit widths
+        # that fit the medium window instead.
+        # 210px fits the family-group labels that head each block ("x86 PCs — x86-64
+        # (Intel/AMD)") and every buildable role id. The longest cells are ~467px (the
+        # grey unbuildable device rows' prose names) — no width fits those without eating
+        # the row, so they truncate and keep their tooltip; that text is informational,
+        # while the check/board/flavor controls are what the operator has to act on.
+        self.tree.setColumnWidth(_COL_ROLE, 210)
+        self.tree.setColumnWidth(_COL_PLATFORM, 110)
+        # TRAP: _COL_BOARD/_COL_FLAVOR/_COL_ENC hold setItemWidget() combos, so the
+        # ITEM TEXT is empty and sizeHintForColumn() reports 0 for them. Giving these
+        # ResizeToContents collapses them to ~0 and HIDES the combos — trading this
+        # report for a worse one. They must stay Interactive with explicit widths.
+        # Sized to the COMBO each column carries. Budget: check + these + the Notes
+        # stretch floor (100 = defaultSectionSize; Stretch will not go below it) fit
+        # inside the medium window's ~980px viewport with ~330px left for Notes. On a
+        # much narrower window the row does scroll horizontally — that is deliberate:
+        # squeezing 3 combo columns + Role/Platform under ~576px would starve them into
+        # uselessness, and a scrollbar is the honest answer. The CHECK column is
+        # unaffected either way: it is section 0 at viewport x=0, so it stays visible
+        # without dragging at any width, which is what the report was about.
+        self.tree.setColumnWidth(_COL_BOARD, 100)
+        self.tree.setColumnWidth(_COL_FLAVOR, 120)
+        self.tree.setColumnWidth(_COL_ENC, 90)
+        # Notes absorbs the slack, replacing the accidental stretchLastSection outcome
+        # that handed Notes 452px while Role starved at 100.
+        hdr_view.setSectionResizeMode(_COL_NOTES, QtWidgets.QHeaderView.ResizeMode.Stretch)
         # Name what the per-row columns MEAN: Board + Flavor/Desktop are each node's
         # hardware target (spec 2c "pick the hardware per node"); Encryption is the
         # per-node root-disk choice (spec 4); Notes is auto-derived.
@@ -174,7 +213,8 @@ class WorklistPage(QtWidgets.QWizardPage):
             "Flavor/Desktop columns set that node's hardware; the Notes column is filled "
             "in automatically. Grayed rows are devices with no mesh role — shown so the "
             "answer is honest, never buildable from here. Next you'll choose the cluster "
-            "services each node runs, then the domains and users.")
+            "services this mesh runs (once, for every node — they are baked into the "
+            "shared cluster GitOps tree), then the domains and users.")
         self.hint.setWordWrap(True)
         self.hint.setStyleSheet("color: gray;")
         lay.addWidget(self.hint)

@@ -96,14 +96,27 @@ class KeyZipPage(QtWidgets.QWizardPage):
         # SNAPDRAGON_REMEMBER_ROLES_FOR_PASSWORDLESS_LOGIN env var): this is the
         # actual gate checked at import time, seeded from that CLI/env default so
         # the box still starts unchecked unless the operator asked for it.
+        #
+        # The LABEL stays short and the prose moves to a wrapped gray QLabel below it
+        # (the _hint / BrandingPage.unaffiliated_note idiom) — not cosmetic: a QCheckBox
+        # CANNOT word-wrap, so a long label becomes a hard horizontal floor under the
+        # page's minimumSizeHint. The old 249-char label measured a 1387px minimum
+        # width, which QWizard cannot lay out below — it forced the whole window to
+        # 1431px the moment this page was reached, and it never shrank back. That was
+        # the "size changes wildly" report. Keep this label short.
         self.remember_roles = QtWidgets.QCheckBox(
-            "Remember human-loginable roles (e.g. platform superadmin) from this "
-            "key-zip for passwordless login — writes real login credentials to "
-            "local disk (~/.config/snapdragon-studio/local-login/roles.json, "
-            "mode 0600). Never DB passwords or other machine secrets.")
+            "Remember loginable roles from this key-zip for passwordless login")
         self.remember_roles.setChecked(
             bool(getattr(wiz, "remember_roles_for_passwordless_login", False)))
         lay.addWidget(self.remember_roles)
+        remember_help = QtWidgets.QLabel(
+            "Remembers human-loginable roles (e.g. platform superadmin) from this "
+            "key-zip and writes real login credentials to local disk "
+            "(~/.config/snapdragon-studio/local-login/roles.json, mode 0600). "
+            "Never DB passwords or other machine secrets.")
+        remember_help.setWordWrap(True)
+        remember_help.setStyleSheet("color: gray;")
+        lay.addWidget(remember_help)
 
         self.out = QtWidgets.QLabel("")
         self.out.setWordWrap(True)

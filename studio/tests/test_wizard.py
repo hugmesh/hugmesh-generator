@@ -581,7 +581,10 @@ def test_standalone_rpi5_generic_reaches_services_and_games(wiz):
     assert net.services_box.isVisible() and net.services_box.isEnabled()
     assert net.games.isEnabled() and net.character_studio.isEnabled()
     assert net.edge_ai_tts.isEnabled()
-    assert not net.edge_ai_box.isVisible()   # node-only boxes stay mode-gated
+    # Node-only surfaces stay mode-gated. Assert the SECTION, not edge_ai_box: the box
+    # is the section's collapsible content, so its visibility also means "expanded" —
+    # asserting there would pass on a merely-collapsed section and stop pinning the gate.
+    assert not net.edge_ai_section.isVisible()
     assert not net.tor_onion.isVisible()
     net.services.item(0).setCheckState(Qt.CheckState.Checked)
     net.games.setChecked(True)

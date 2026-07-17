@@ -41,6 +41,15 @@ _UNSCOPED = [
                                "WA_TransparentForMouseEvents")),
     ("QSizePolicy", "Policy", ("Fixed", "Minimum", "Maximum", "Preferred",
                                "Expanding", "MinimumExpanding", "Ignored")),
+    # ── added by fix/studio-wizard-ux (2026-07-17): worklist columns + collapsibles ──
+    ("QHeaderView", "ResizeMode", ("Interactive", "Fixed", "Stretch", "ResizeToContents",
+                                   "Custom")),
+    ("QToolButton", "ToolButtonPopupMode", ("DelayedPopup", "MenuButtonPopup",
+                                            "InstantPopup")),
+    ("Qt", "ToolButtonStyle", ("ToolButtonIconOnly", "ToolButtonTextOnly",
+                               "ToolButtonTextBesideIcon", "ToolButtonTextUnderIcon",
+                               "ToolButtonFollowStyle")),
+    ("Qt", "CheckState", ("Unchecked", "PartiallyChecked", "Checked")),
 ]
 
 
@@ -62,6 +71,22 @@ def test_no_unscoped_qt_enum_access(cls, scope, members):
                 bad.append(f"{f.relative_to(_PKG.parent)}:{i}: {cls}.{m.group(1)} "
                            f"-> use {cls}.{scope}.{m.group(1)} (PyQt6 has no {cls}.{m.group(1)})")
     assert not bad, "unscoped Qt enum access crashes PyQt6 at runtime:\n  " + "\n  ".join(bad)
+
+
+# NOTE (conflict resolution, 2026-07-17): fix/studio-wizard-ux carried a SECOND
+# structure (_UNSCOPED_QT_NS) + its own scanning test for the Qt.* namespace. #399
+# landed first and folds Qt.* into the SINGLE _UNSCOPED list as ("Qt", scope,
+# members) entries, which the parametrized test above already scans with the
+# identical regex — so that test was an exact duplicate and is dropped, and this
+# branch's four new Qt scopes were folded into the list instead. The Qt.* NON-
+# VACUITY check below is kept: it hardcodes its pattern and guards the Qt.* half.
+
+
+def test_the_qt_namespace_guard_bites():
+    """Non-vacuity for the Qt.* half."""
+    pat = re.compile(r"\bQt\.(?!ArrowType\b)(DownArrow|RightArrow)\b")
+    assert pat.search("btn.setArrowType(Qt.DownArrow)")                  # the bug shape
+    assert not pat.search("btn.setArrowType(Qt.ArrowType.DownArrow)")    # the fix
 
 
 def test_the_guard_itself_bites():
