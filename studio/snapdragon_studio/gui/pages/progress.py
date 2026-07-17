@@ -982,7 +982,14 @@ class ProgressPage(QtWidgets.QWizardPage):
         wiz = self.wizard()
         if wiz is None:
             return
-        btn = wiz.button(QtWidgets.QWizard.BackButton)
+        # SCOPED enum (QWizard.WizardButton.BackButton), not QWizard.BackButton:
+        # PyQt6 exposes enum members ONLY on the scoped type, so the unscoped form
+        # AttributeErrors — and an unhandled exception in a Qt slot ABORTS the app,
+        # so it crashed the Studio on Build for every PyQt6 user (2026-07-17).
+        # PySide6 tolerates both, which is exactly why the test suite missed it.
+        # The scoped form is what the rest of this file uses (Qt.CheckState.Checked,
+        # Qt.ItemFlag.ItemIsUserCheckable) and works on BOTH bindings.
+        btn = wiz.button(QtWidgets.QWizard.WizardButton.BackButton)
         if btn is not None:
             btn.setEnabled(self._all_terminal)
 

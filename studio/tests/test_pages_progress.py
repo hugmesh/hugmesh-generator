@@ -773,8 +773,12 @@ def test_no_warning_lines_on_a_healthy_host(monkeypatch, qapp, wiz, tmp_path):
 # a DEAD END once the run has failed — the operator could not return to Review & Build to
 # fix the config and rebuild. Back must re-arm exactly when the run settles.
 def _back_btn(wiz):
+    # SCOPED enum on purpose: PyQt6 has no QWizard.BackButton (only
+    # QWizard.WizardButton.BackButton), while PySide6 accepts both — so a test using
+    # the unscoped form passes under PySide6 and the shipped code still crashes every
+    # PyQt6 user. Mirror exactly what progress.py calls.
     from snapdragon_studio.gui.qt import QtWidgets
-    return wiz.button(QtWidgets.QWizard.BackButton)
+    return wiz.button(QtWidgets.QWizard.WizardButton.BackButton)
 
 
 def test_back_is_disabled_while_a_build_is_in_flight(monkeypatch, qapp, wiz, tmp_path):
