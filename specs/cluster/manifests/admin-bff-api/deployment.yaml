@@ -49,7 +49,7 @@ spec:
       # chaining to the cluster CA (client-auth=need). keytool + openssl ship in
       # the eclipse-temurin JRE image, so we reuse the app image. The store
       # password is generated HERE, kept only in the tmpfs /stores emptyDir (never
-      # in git / a Secret / Vault), and emitted into application-tls.properties that
+      # in git / a Secret / Vault), and emitted into application.properties that
       # the app loads via SPRING_CONFIG_ADDITIONAL_LOCATION=file:/stores/ — so the
       # SSL_*_PASSWORD env vars stay empty in the pod spec and the secret never
       # leaves the pod.
@@ -75,12 +75,22 @@ spec:
               # Spring SSL config picked up from file:/stores/ (added to
               # SPRING_CONFIG_ADDITIONAL_LOCATION). Sets ONLY the in-pod-generated
               # store passwords; SSL_ENABLED / SSL_CLIENT_AUTH / paths come from env.
+              # FILENAME IS LOAD-BEARING — do NOT rename this back to
+              # application-tls.properties (or any application-<name>.properties).
+              # SPRING_CONFIG_ADDITIONAL_LOCATION only adds a SEARCH DIRECTORY; Spring
+              # auto-loads a profile-named doc (application-<name>.properties) from it ONLY
+              # when a profile literally named <name> is active. No manifest activates a
+              # `tls` profile, so the old application-tls.properties was silently never
+              # loaded and the store passwords fell back to the packaged application.yml's
+              # ${SSL_KEY_STORE_PASSWORD:} -> "" (empty), which cannot open the PKCS12
+              # keystore. Plain application.properties loads UNCONDITIONALLY from the
+              # additional location, with no profile needed.
               umask 077
-              cat > /stores/application-tls.properties <<EOF
+              cat > /stores/application.properties <<EOF
               server.ssl.key-store-password=${P}
               server.ssl.trust-store-password=${P}
               EOF
-              echo "keystore + truststore + application-tls.properties built"
+              echo "keystore + truststore + application.properties built"
           volumeMounts:
             - { name: pki,    mountPath: /pki, readOnly: true }
             - { name: stores, mountPath: /stores }
@@ -125,7 +135,7 @@ spec:
               value: "registry.snapdragon.systems"
             # ── API-to-API mTLS (server side) ─────────────────────────────────
             # Enforce a client cert chaining to the cluster CA. The store passwords
-            # come from /stores/application-tls.properties (in-pod generated, loaded
+            # come from /stores/application.properties (in-pod generated, loaded
             # via SPRING_CONFIG_ADDITIONAL_LOCATION) — NOT set here, so the secret
             # never enters the pod spec. DEPLOY-ORDER: keep this in lockstep with the
             # gateway/BFF client-cert wave (see PR body) — flipping client-auth=need
@@ -136,7 +146,7 @@ spec:
             - { name: SSL_KEY_STORE_TYPE,   value: "PKCS12" }
             - { name: SSL_TRUST_STORE,      value: "/stores/truststore.p12" }
             - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
-            # Load the in-pod-generated store passwords (application-tls.properties).
+            # Load the in-pod-generated store passwords (application.properties).
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
             # R2DBC handle to the gateway_route_access Postgres (snapdragon-pki).
             # Least-privilege: admin-bff is the ONLY writer, so it logs in as its

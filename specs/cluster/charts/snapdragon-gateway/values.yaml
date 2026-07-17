@@ -81,7 +81,7 @@ extraEnv: []
 # Per-app mTLS keystore, built at startup from the Vault-PKI-issued, ESO-synced
 # TLS Secret (manifests/external-secrets/pki-externalsecrets.yaml). When enabled,
 # an initContainer assembles keystore.p12 (identity) + truststore.p12 (cluster
-# CA) into an in-pod tmpfs and emits application-tls.properties (snapdragon.tls.*
+# CA) into an in-pod tmpfs and emits application.properties (snapdragon.tls.*
 # the app consumes for cross-namespace mTLS). The store password is generated
 # in-pod and never leaves it. Default OFF so existing plaintext deployments and
 # probes are unaffected; turn on per gateway in apps/20-gateway-*.yaml.
@@ -98,7 +98,7 @@ keystore:
   # docs/CRYPTO-AUDIT.md). TLSv1.3 only by default: forward-secret, AEAD-only,
   # and the prerequisite for post-quantum hybrid key exchange. The build-keystore
   # initContainer writes server.ssl.enabled-protocols=<this> into
-  # application-tls.properties. Set to "TLSv1.3,TLSv1.2" only if a legacy peer
+  # application.properties. Set to "TLSv1.3,TLSv1.2" only if a legacy peer
   # cannot negotiate 1.3.
   tlsProtocols: "TLSv1.3"
   # POST-QUANTUM HYBRID KEY EXCHANGE (documented migration path, gated OFF).

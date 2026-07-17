@@ -290,7 +290,16 @@ class ProgressPage(QtWidgets.QWizardPage):
             self.completeChanged.emit()
             self._sync_back_button()
             return
-        backend = getattr(self.wiz, "build_backend", None)
+        # Resolve "auto" HERE, once, so the record and the driver agree. BuildPage's
+        # combo maps "auto" -> None (build.py _backend), and WorklistDriver separately
+        # re-resolves `backend or host.default_backend` at six call sites — so an auto
+        # build used to persist backend=None while really running native, leaving the
+        # record unable to say what ran and letting a restart (wizard.py restores
+        # build_backend from session.backend) silently pick a DIFFERENT backend if the
+        # host default had changed since. Resolving once keeps "auto" a UI-only concept.
+        # "none" (no usable backend) resolves the same as None did: the driver raises.
+        backend = (getattr(self.wiz, "build_backend", None)
+                   or self.wiz.host.default_backend)
         generate_keys = getattr(self.wiz, "generate_node_keys", True)
         # per-session artifact dir + durable record: the id BuildPage minted for its
         # preview (pending_session_id) is consumed here so preview == dispatch; a

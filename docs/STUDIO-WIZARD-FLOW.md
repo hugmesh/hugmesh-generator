@@ -292,5 +292,3 @@ the marked bullet below). Per-subsection status is inline below:
   (4 `mode.py` + 4 menu + 4 cli) + 4 `registration` tokens = **16 expected**, each anchored
   **non-vacuously** to the real opening-item shape per channel (menu `ui_menu` item line;
   cli numbered intent) so dropping any choice is a genuine grep miss, not a false pass.
-- **🔭 still open** — extend the same TAXO-style gate to the machine-first step-2 shape
-  once ncurses grows it, so the two don't drift apart again.

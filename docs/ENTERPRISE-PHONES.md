@@ -1,15 +1,16 @@
 # Enterprise phones — GrapheneOS + existing-device onboarding (the fourth onboarding form)
 
-> **Status: 🚧 v1/v2 driver + management-plane glue in-flight, self-hosted
-> management plane REAL** (branch `feat/phone-wizard-mdm-attest`, off `main`,
-> which already carries the flash/enroll/profile/ingest driver and the
-> existing-device onboarding path). One driver,
+> **Status: ✅ shipped on `main`** — the flash/enroll/profile/ingest driver,
+> the existing-device onboarding path, **Headwind MDM**, the **GrapheneOS
+> AttestationServer**, and the `attest`/`mdm-enroll` verbs that drive them
+> from this wizard are all merged (#376/#381/#383/#386/#390, hardened by the
+> 9-defect pre-deploy-gap pass in #393). One driver,
 > [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh), owns the whole
 > flow. **Headwind MDM** and the **GrapheneOS AttestationServer** are merged,
 > default-off cluster optional-services (see
-> [Management plane](#management-plane)) — the `attest` and `mdm-enroll`
-> verbs that drive them from this wizard are in-flight on this branch, not
-> yet merged to `main`.
+> [Management plane](#management-plane)). Real pre-deploy gaps remain — see
+> [Deferred](#deferred) — but nothing in this doc is pending on an unmerged
+> branch.
 
 _State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned / deferred**._
 
@@ -45,9 +46,10 @@ Local-Docker-mesh paragraph in [`BUILD-MATRIX.md`](BUILD-MATRIX.md)): the phone
 is **NOT a build-matrix cell, NOT a platform, NOT a WorklistEntry** — nothing is
 compiled or imaged here. Like the Local Docker mesh and the go-live wizard triad
 ([`GO-LIVE-WIZARD.md`](GO-LIVE-WIZARD.md)), the driver owns ALL the logic and
-the faces stay thin: `make phone-*` targets (🚧, host-side pass-through
+the faces stay thin: `make phone-*` targets (✅ shipped, host-side pass-through
 delegates in the Makefile — never dispatched into the builder container, since
-the driver needs the host USB bus and a real TTY for its destructive gates);
+the driver needs the host USB bus and a real TTY for its destructive gates;
+`mdm-enroll`/`attest` have no `make` target yet, see [Deferred](#deferred));
 ncurses-menu/Studio faces are 🔭 (see [Deferred](#deferred)).
 
 ## Verbs (the real surface)
@@ -461,8 +463,8 @@ AttestationServer** (MIT, forked, `specs/cluster/apps/24-attestation-server.yaml
 tailnet-only, Harbor/superadmin devops posture, no public
 `*.CLUSTER_DOMAIN` surface). `scripts/phone-wizard.sh`'s `attest` and
 `mdm-enroll` verbs are the operator-facing glue that drives them from the
-handset side; those two verbs are what is in-flight on this branch (see the
-top-of-doc status banner). No managed-Google-Play / Android-Enterprise-style
+handset side (merged via #390, hardened by #393 — see the top-of-doc status
+banner). No managed-Google-Play / Android-Enterprise-style
 plane routed through a third-party SaaS vendor's backend was used or
 considered for either half — both services are sovereign, no Google
 FCM/Pub/Sub/Play-Integrity dependency for management traffic.
@@ -585,15 +587,15 @@ mismatch anywhere in the chain fails closed, never silently.
 | Escrowed enterprise profile (vault-seed custody, operator-set default, atomic rotation, revocation trail) | `profile` / `rotate-profile-pass` / `remove-profile` | 🚧 |
 | `phone-ingest/v1` registry record + mTLS POST | `ingest` | 🚧 |
 | Offline `plan` dry-run + `REDACTED` secret discipline | `plan` / `--print-plan` | 🚧 |
-| `make phone-*` thin face (host-side delegates; secrets stay file-path knobs) | `Makefile` | 🚧 |
+| `make phone-*` thin face (host-side delegates; secrets stay file-path knobs) — missing `mdm-enroll`/`attest` targets | `Makefile` | 🚧 (11/13 verbs) |
 | Thin ncurses-menu/Studio faces over the driver (non-build precedent) | — | 🔭 |
 | APK store (general fleet app push/update/delete beyond the wizard's own vetted, signer-pinned sideloads) | — | 🔭 (deliberate v1 non-goal; Headwind's own console can do this directly, see [Remote-management model](#remote-management-model)) |
 | Existing-device onboarding (GrapheneOS + stock Android, USB-guided or `--no-usb`, no reflash) | `enroll` | 🚧 |
 | Headwind MDM cluster optional-service (Postgres-backed, tailnet-only, `snapdragon-pki` namespace) | `specs/cluster/apps/23-headwind.yaml`, `specs/cluster/manifests/headwind/` | ✅ merged |
 | GrapheneOS AttestationServer cluster optional-service (SQLite PVC, tailnet-only, forked Auditor identity baked in) | `specs/cluster/apps/24-attestation-server.yaml`, `specs/cluster/manifests/attestation-server/` | ✅ merged |
-| `mdm-enroll` verb — Headwind device-owner enrollment, fresh-device precondition, signer-pinned DPC APK, `init.json` `BASE_URL` injection | `cmd_mdm_enroll()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | 🚧 in-flight this branch |
-| `attest` verb — Snapdragon-forked Auditor pairing to the self-hosted AttestationServer, operator-attested verdict | `cmd_attest()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | 🚧 in-flight this branch |
-| 8-step wizard order (`attest`/`mdm-enroll` immediately post-flash, before `profile`) | `cmd_wizard()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | 🚧 in-flight this branch |
+| `mdm-enroll` verb — Headwind device-owner enrollment, fresh-device precondition (now checks accounts too, not just users — #393), signer-pinned DPC APK, `init.json` `BASE_URL` injection | `cmd_mdm_enroll()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | ✅ merged (#390, hardened #393) |
+| `attest` verb — Snapdragon-forked Auditor pairing to the self-hosted AttestationServer, operator-attested verdict | `cmd_attest()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | ✅ merged (#390) |
+| 8-step wizard order (`attest`/`mdm-enroll` immediately post-flash, before `profile`) | `cmd_wizard()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | ✅ merged (#390) |
 | Auditor-fork ↔ AttestationServer signer-digest coupling (`AUDITOR_SIGNER_DIGEST`) | [Management plane](#management-plane) | ✅ server-side patch merged; digest itself is set at Auditor-fork release-signing time (operator step, outside this repo) |
 | OTA/update posture management (GrapheneOS updates itself; Headwind CE ships no OTA lever) | — | 🔭 |
 
@@ -607,8 +609,13 @@ APK-store half of that non-goal still stands (see the Summary table).
 
 - **Thin ncurses-menu/Studio faces** — over the driver's verbs, exactly like
   the Local Docker mesh and go-live precedents (driver owns all logic; faces
-  stay thin, no build-matrix row). The `make phone-*` face is already 🚧 on
-  this branch.
+  stay thin, no build-matrix row). The `make phone-*` face is ✅ merged
+  (`phone-plan`/`phone-detect`/`phone-fetch`/`phone-flash`/`phone-enroll`/
+  `phone-profile`/`phone-rotate-profile-pass`/`phone-remove-profile`/
+  `phone-ingest`/`phone-status`/`phone-wizard` targets in the `Makefile`) but
+  **has no `phone-mdm-enroll` / `phone-attest` targets yet** — confirmed absent
+  via `grep '^phone-' Makefile` — so the two newest verbs are only reachable
+  via `scripts/phone-wizard.sh` directly, not `make`.
 - **Casdoor SSO for Headwind** — nothing in this recon confirmed Headwind has
   OIDC/SAML support (its own auth is local username/password behind a
   pluggable `HmdmAuthInterface`); until that is independently confirmed,

@@ -39,7 +39,7 @@ spec:
       # (identity) + truststore.p12 (cluster CA) for server.ssl.* to REQUIRE a
       # client cert chaining to the cluster CA. Store password generated in-pod,
       # kept only in the tmpfs /stores emptyDir, emitted into
-      # application-tls.properties via SPRING_CONFIG_ADDITIONAL_LOCATION — never
+      # application.properties via SPRING_CONFIG_ADDITIONAL_LOCATION — never
       # in git / a Secret / the pod spec.
       initContainers:
         - name: build-keystore
@@ -58,12 +58,22 @@ spec:
               keytool -importcert -noprompt -alias snapdragon-cluster-ca \
                 -file /pki/ca.crt -keystore /stores/truststore.p12 \
                 -storetype PKCS12 -storepass "${P}"
+              # FILENAME IS LOAD-BEARING — do NOT rename this back to
+              # application-tls.properties (or any application-<name>.properties).
+              # SPRING_CONFIG_ADDITIONAL_LOCATION only adds a SEARCH DIRECTORY; Spring
+              # auto-loads a profile-named doc (application-<name>.properties) from it ONLY
+              # when a profile literally named <name> is active. No manifest activates a
+              # `tls` profile, so the old application-tls.properties was silently never
+              # loaded and the store passwords fell back to the packaged application.yml's
+              # ${SSL_KEY_STORE_PASSWORD:} -> "" (empty), which cannot open the PKCS12
+              # keystore. Plain application.properties loads UNCONDITIONALLY from the
+              # additional location, with no profile needed.
               umask 077
-              cat > /stores/application-tls.properties <<EOF
+              cat > /stores/application.properties <<EOF
               server.ssl.key-store-password=${P}
               server.ssl.trust-store-password=${P}
               EOF
-              echo "keystore + truststore + application-tls.properties built"
+              echo "keystore + truststore + application.properties built"
           volumeMounts:
             - { name: pki,    mountPath: /pki, readOnly: true }
             - { name: stores, mountPath: /stores }
@@ -78,7 +88,7 @@ spec:
           env:
             # ── API-to-API mTLS (server side) ─────────────────────────────────
             # Require a client cert chaining to the cluster CA. Store passwords come
-            # from /stores/application-tls.properties (in-pod generated, loaded via
+            # from /stores/application.properties (in-pod generated, loaded via
             # SPRING_CONFIG_ADDITIONAL_LOCATION) so they never enter the pod spec.
             # DEPLOY-ORDER: deploy with the gateway/BFF client-cert wave.
             - { name: SSL_ENABLED,          value: "true" }
@@ -90,9 +100,22 @@ spec:
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - { name: CASDOOR_ISSUER_URI, value: "https://id.snapdragon.systems" }
-            # Multi-tenant issuer list (for multi-brand deployments). Mirrors the
-            # pattern used by the other BFFs.
-            - { name: APP_TENANCY_ISSUERS, value: "https://id.snapdragon.systems" }
+            # APP_TENANCY_ISSUERS is deliberately NOT set here. Do not "fix" this by
+            # adding it — doing so silently hides every existing wiki page and ACL.
+            # Unset, commons' DomainRegistry seeds the back-compat single-issuer entry
+            # {CASDOOR_ISSUER_URI -> "default"}, so domainOf() == "default" — which is
+            # exactly what the existing rows are stamped with (wiki_page /
+            # wiki_attachment / wiki_audit_log / wiki_access each declare
+            # `domain varchar(64) defaultValue="default"`).
+            # Setting it to the gateway archetype's pattern
+            # ("https://id.snapdragon.systems=<brand>") makes domainOf() return "<brand>",
+            # so every `WHERE domain = ...` read stops matching those "default" rows.
+            # A single pair also leaves isMultiIssuer() false, so the fail-closed
+            # multi-issuer decoder never activates: no 401, no error — the rows just
+            # vanish. Later writes then stamp NEW rows "<brand>", so rolling back leaves
+            # split-brain data.
+            # Multi-brand for wiki therefore REQUIRES a data migration re-stamping the
+            # existing domain='default' rows first. Config alone is not enough.
             # ── Content datastore (wiki_page / wiki_attachment / wiki_audit_log) ─
             # The app's application.yml defaults spring.r2dbc + spring.liquibase to
             # a literal `snapdragon-pg` host that does NOT exist; OVERRIDE both here

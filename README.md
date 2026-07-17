@@ -34,7 +34,7 @@ subdirs included.
 
 ## Current State
 
-_As of 2026-07-16. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
+_As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** · **🔭 planned**._
 
 - **✅ Hardened image fleet** — three RPi 5 role images (pki / backend / frontend)
   + the x86_64 GPU host, all SELinux **ENFORCING** with per-app MCS identities,
@@ -122,7 +122,9 @@ _As of 2026-07-16. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   TODO — see
   [`specs/cluster/manifests/character-studio/FEDERATION-REGISTRATION-TODO.md`](specs/cluster/manifests/character-studio/FEDERATION-REGISTRATION-TODO.md))
   / **edge-AI** (GPU inference, OpenAI model API to the mesh —
-  [docs/EDGE-AI.md](docs/EDGE-AI.md)); the UI greys out when a service is absent, games defaults
+  [docs/EDGE-AI.md](docs/EDGE-AI.md)) / **meshbridge** (Meshtastic LoRa mesh ↔
+  Matrix bridge, DEFAULT-OFF runtime-only, `dependsOn: tuwunel` —
+  [docs/MESHTASTIC-BRIDGE.md](docs/MESHTASTIC-BRIDGE.md)); the UI greys out when a service is absent, games defaults
   to `games.<domain>`. Build-time prune ships; the **🚧 live ApplicationSet
   cut-over is pending**. A/V is currently **LAN-only** (no TURN/SFU yet).
 - **✅ Egress-VPN**, **✅ Node storage**, **✅ Games App-Store control plane**,
@@ -133,6 +135,16 @@ _As of 2026-07-16. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
 - **✅ Data-access standard** — the Spring services use **Spring Data R2DBC
   reactive repositories** (no raw SQL strings / inline `@Query`).
 - **✅ Wiki service (snapdragon-wiki-bff-api + snapdragon-wiki-ui)** — fully deployed; manifests in `specs/cluster/manifests/wiki-bff-api/` + `manifests/wiki-ui/`, ArgoCD apps `34a-wiki-bff-db`, `34b-wiki-bff-api`, `49a-wiki-ui`; fe-gateway routes `/bff/wiki/**` (#173, #176).
+- **✅ Enterprise-phone MDM (fourth onboarding form)** — `scripts/phone-wizard.sh`
+  flashes verified GrapheneOS onto a USB-connected Pixel (or onboards an
+  existing GrapheneOS/stock-Android phone with no reflash), attests it to a
+  self-hosted **GrapheneOS AttestationServer**, device-owner-enrolls it into
+  **Headwind MDM** (both merged, default-off, tailnet-only cluster
+  optional-services), joins it to the mesh tailnet, and escrows an enterprise
+  profile. Real pre-deploy gaps remain (Casdoor SSO for Headwind, an
+  automated attestation-verdict API, `make phone-mdm-enroll`/`phone-attest`
+  targets) — see [`docs/ENTERPRISE-PHONES.md`](docs/ENTERPRISE-PHONES.md)
+  "Deferred".
 
 > The auth model is documented in depth in [`docs/SECURITY.md`](docs/SECURITY.md)
 > and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the application-side login
@@ -176,7 +188,8 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   gateway. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/SECURITY.md`](docs/SECURITY.md).
 - **✅ Optional services (add/remove)** — akkoma / tuwunel / phpBB / games /
   owncast / tube / character-studio (+ egress-vpn / tor / workloadConsole /
-  anubis / coturn); the UI greys out when a service is absent, games defaults to
+  anubis / coturn / meshbridge / headwind / attestation-server); the UI greys
+  out when a service is absent, games defaults to
   `games.<domain>`. Build-time prune ships; the **🚧 live ApplicationSet
   cut-over is pending**. See
   [`docs/OPTIONAL-SERVICES.md`](docs/OPTIONAL-SERVICES.md).

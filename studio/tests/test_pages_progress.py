@@ -830,3 +830,34 @@ def test_back_goes_off_again_when_a_new_run_starts(monkeypatch, qapp, wiz, tmp_p
     page.initializePage()                       # operator went back, fixed cfg, rebuilt
     assert not _back_btn(wiz).isEnabled()
     _run_to_completion(qapp, page)              # drain (see the in-flight test's note)
+
+
+def test_auto_backend_is_resolved_before_it_lands_in_the_session_record(
+        monkeypatch, qapp, wiz, tmp_path):
+    """"auto" must be RESOLVED to the backend that actually runs before it is persisted.
+
+    Regression (operator's 2026-07-17 native run, session 20260717-043931-afb54a): the
+    Backend combo defaults to "auto"; BuildPage._backend maps "auto" -> None; that None
+    was handed STRAIGHT to new_session, so the durable record said ``backend: None``
+    while WorklistDriver separately resolved ``backend or host.default_backend`` and
+    really ran NATIVE. The record therefore could not say what ran, and a restart
+    (SnapdragonWizard restores ``build_backend = session.backend``) would re-resolve
+    against whatever the host default happened to be THEN — silently switching backends.
+
+    The pinned HOST fixture is Gentoo without docker -> default_backend == "native".
+    """
+    _install_fake_builddriver(monkeypatch)
+    _prime(wiz, _mesh_worklist(tmp_path))        # _prime sets build_backend = None ("auto")
+    assert wiz.host.default_backend == "native"  # the fixture's premise, pinned
+    page = _progress_page(wiz)
+    page.initializePage()
+    _run_to_completion(qapp, page)
+
+    # the in-memory record and the driver agree on the RESOLVED backend...
+    assert page._session.backend == "native"
+    assert page.driver.backend == "native"
+    # ...and so does the artifact on disk, which is what the sessions list / tray read.
+    import json
+    from snapdragon_studio.core import build_sessions
+    with open(page._session.path()) as fh:
+        assert json.load(fh)["backend"] == "native"
