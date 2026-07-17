@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# phone-wizard.sh — enterprise-phone onboarding driver (GrapheneOS on Google Pixel).
+# phone-wizard.sh — MDM phone onboarding driver (GrapheneOS on Google Pixel).
 #
 # This is the FOURTH onboarding form, alongside the appliance images, the client
 # desktops, and the Local Docker mesh node (clients/docker-mesh-node). It takes a
-# USB-connected Google Pixel and turns it into an enterprise-managed mesh device:
+# USB-connected Google Pixel and turns it into an MDM-managed mesh device:
 #
 #   detect -> fetch (verified GrapheneOS -install- zip) -> flash -> attest
 #   (self-hosted AttestationServer pairing, via a Snapdragon-forked Auditor
@@ -36,7 +36,7 @@
 # NON-GOALS: no APK store, no fleet-wide OTA/compliance posture beyond what
 # Headwind CE ships. Deferred work (Casdoor SSO for Headwind, an automated
 # `attest --attestation-verdict-source api` mode, GrapheneOS QR provisioning)
-# is tracked in docs/ENTERPRISE-PHONES.md.
+# is tracked in docs/MDM.md.
 #
 # SECRET-CUSTODY MODEL: no secret ever travels on argv, in PLAN output, or to
 # stdout/logs (REDACTED presence markers only). The tailscale pre-auth key and
@@ -50,7 +50,7 @@
 # process — a real risk on shared provisioning hosts/jump boxes/CI runners;
 # that path requires --i-understand-adb-exposure).
 #
-# Docs: docs/ENTERPRISE-PHONES.md
+# Docs: docs/MDM.md
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -67,7 +67,7 @@ GRAPHENE_SIGNER_FP_PIN="SHA256:AhgHif0mei+9aNyKLfMZBh2yptHdw/aN7Tlh/j2eFwM"
 # ── Snapdragon Auditor fork identity (Phase 3 attestation coupling) ────────
 # applicationId is deliberately DIFFERENT from the stock GrapheneOS Auditor
 # (app.attestation.auditor) — avoids clobbering a stock install and keeps the
-# --auditor-signer-sha256 pin unambiguous. See docs/ENTERPRISE-PHONES.md for
+# --auditor-signer-sha256 pin unambiguous. See docs/MDM.md for
 # the fork rationale (DOMAIN=attestation.snapdragon.systems, own release key).
 AUDITOR_PACKAGE="systems.snapdragon.auditor"
 
@@ -77,7 +77,7 @@ FASTBOOT="${PW_FASTBOOT:-fastboot}"
 RELEASES_URL="${PW_RELEASES_URL:-https://releases.grapheneos.org}"
 ALLOWED_SIGNERS="${PW_ALLOWED_SIGNERS:-${SCRIPT_DIR}/phone-allowed-signers}"
 DEVICES_TSV="${SCRIPT_DIR}/phone-devices.tsv"
-JOIN_TIMEOUT="${PW_JOIN_TIMEOUT:-300}"      # seconds to wait for tailscale0
+JOIN_TIMEOUT="${PW_JOIN_TIMEOUT:-300}"      # seconds to wait for the tailnet tun iface
 POLL_INTERVAL="${PW_POLL_INTERVAL:-5}"      # seconds between polls
 
 # ── Options (defaults) ─────────────────────────────────────────────
@@ -95,6 +95,7 @@ DEVICE_ID=""
 SUPERDOMAIN="snapdragon.internal"
 SUPERDOMAIN_SET=0
 ROLE=""
+ROLE_SET=0
 PROFILE_NAME="enterprise"
 TAILSCALE_APK=""
 APK_SIGNER_SHA256=""
@@ -158,7 +159,7 @@ usage() {
 cat <<EOF
 Usage: $0 <verb> [options]
 
-  Enterprise-phone wizard: flash a USB-connected Google Pixel with VERIFIED
+  MDM phone wizard: flash a USB-connected Google Pixel with VERIFIED
   GrapheneOS, enroll it in the brand's orchestration superdomain (headscale
   tailnet), pair it to the self-hosted AttestationServer trust root, enroll it
   as a Headwind MDM device-owner, provision an escrowed enterprise profile,
@@ -213,10 +214,11 @@ Verbs:
                        'flash' stays GrapheneOS/Pixel-only). Post-first-boot
                        (adb): guided tailnet join with keys from --keys-dir
                        (docker-mesh-node layout) or --login-server/
-                       --authkey-file; verifies tailscale0 and writes the
+                       --authkey-file; verifies the tailnet join and writes the
                        enrollment record. --no-usb skips every adb probe:
                        guided handset-only runbook, operator-attested record
-                       (tailscale_ip left null) — verify the join mesh-side.
+                       (tailscale_ip left null; needs --device-id + --codename)
+                       — verify the join mesh-side.
   profile              Create the "enterprise" secondary user, generate +
                        escrow its passphrase (vault-seed custody), operator
                        sets the credential on the handset (default path).
@@ -289,7 +291,8 @@ Options:
                          server, authkey custody) and records an
                          operator-attested enrollment (tailscale_ip null) —
                          verify the join mesh-side afterwards. Needs
-                         --device-id (no adb serial to derive one from).
+                         --device-id AND --codename (no adb probe to derive the
+                         serial-based id or read the device model).
   --i-understand-adb-exposure
                          Set the profile credential over adb (the passphrase
                          lands in adb argv — visible via ps/procfs on THIS
@@ -359,6 +362,12 @@ catalog_lookup() {
 # Fail-closed codename gate (exit 4, no --allow-unknown escape in v1).
 require_codename() {
     [ -n "${CODENAME}" ] || pw_die 1 "a device codename is required (pass --codename, or connect the device so 'detect' can read it)"
+    # Distinguish "no catalog at all" (a missing precondition, exit 2) from
+    # "codename not in the catalog" (exit 4). catalog_lookup's own pw_die 2
+    # fires inside the $(...) subshell below, so its exit code never reaches
+    # the parent — the `|| pw_die 4` would swallow it and mislabel a missing
+    # catalog as an unknown codename. Check the file here, in the main shell.
+    [ -f "${DEVICES_TSV}" ] || pw_die 2 "device catalog missing: ${DEVICES_TSV}"
     DEVICE_NAME="$(catalog_lookup "${CODENAME}")" || pw_die 4 "unknown codename '${CODENAME}' — not in ${DEVICES_TSV}. Check https://grapheneos.org/releases and extend the catalog if this is a new device."
 }
 
@@ -500,6 +509,31 @@ probe_os() {
     fi
 }
 
+# Read the device's tailnet (CGNAT 100.64/10) address over adb, if joined.
+# Prints the address on stdout, or nothing.
+#
+# The Tailscale Android app is a VpnService: Android's kernel names its TUN
+# interface `tun0` (or `tunN` when a lower index is already taken) — NEVER
+# `tailscale0`. That `tailscale0` name only exists on desktop Linux/macOS/Windows
+# where the tailscaled daemon creates and names its own device; on Android the
+# VpnService API exposes no interface-name setter, the AOSP JNI passes an empty
+# ifr_name, and the kernel's `tun%d` template fills it in (verified against the
+# VpnService.Builder reference, AOSP com_android_server_connectivity_Vpn.cpp, and
+# the kernel drivers/net/tun.c). So `ip addr show dev tailscale0` matches nothing
+# on a real handset — probe ALL interfaces instead and REQUIRE the address to sit
+# on a tun* interface. The tun scoping is load-bearing, not cosmetic: a bare
+# 100.64/10 grep would false-positive on the carrier-grade-NAT address a cellular
+# rmnet_data* interface legitimately carries. `ip addr` works from the adb `shell`
+# SELinux domain (the netlink clamp-down that breaks `ip` inside apps excludes
+# shell), so no root is needed.
+tailnet_cgnat_addr() {
+    local s="$1"
+    "${ADB}" -s "${s}" shell ip -o addr show 2>/dev/null | tr -d '\r' \
+        | grep -E '[[:space:]]tun[0-9]+[[:space:]]' \
+        | grep -oE 'inet 100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}' \
+        | head -n1 | awk '{print $2}' || true
+}
+
 # ── Artifact naming / verification ─────────────────────────────────
 zip_path()    { printf '%s/%s-install-%s.zip' "${WORK_DIR}" "${CODENAME}" "$1"; }
 version_cache_path() { printf '%s/.resolved-%s-%s' "${WORK_DIR}" "${CODENAME}" "${CHANNEL}"; }
@@ -535,10 +569,16 @@ resolve_version() {
     GRAPHENE_VERSION="${mver}"
 }
 
-# Locate the extracted flash-all.sh dir for CODENAME (+version when known).
+# Locate the extracted flash-all.sh dir bound to a SPECIFIC verified zip ($1).
+# The GrapheneOS -install- zip extracts to one top-level dir named exactly the
+# zip's basename sans .zip. Matching that exact dir — not a codename-wide glob —
+# keeps flash bound to the verified VERSION: a stale extraction of a *different*
+# version (e.g. a prior `fetch` that was never cleaned up) can never be the tree
+# we hand to flash-all.sh.
 find_flash_dir() {
-    local hit
-    hit="$(find "${WORK_DIR}" -maxdepth 2 -type f -name flash-all.sh -path "*${CODENAME}*" 2>/dev/null | head -n1 || true)"
+    local zip="$1" stem hit
+    stem="$(basename "${zip}" .zip)"
+    hit="$(find "${WORK_DIR}" -maxdepth 2 -type f -name flash-all.sh -path "*/${stem}/flash-all.sh" 2>/dev/null | head -n1 || true)"
     [ -n "${hit}" ] && dirname "${hit}" || return 1
 }
 
@@ -795,11 +835,11 @@ cmd_fetch() {
     # live channel-lookup) versions get persisted for future unpinned runs.
     [ "${user_pinned}" -eq 1 ] || printf '%s\n' "${GRAPHENE_VERSION}" > "$(version_cache_path)"
 
-    if ! find_flash_dir >/dev/null; then
+    if ! find_flash_dir "${zip}" >/dev/null; then
         require_tool bsdtar "install app-arch/libarchive"
         pw_info "extracting $(basename "${zip}")"
         bsdtar -x -f "${zip}" -C "${WORK_DIR}" || pw_die 1 "extraction failed for ${zip}"
-        find_flash_dir >/dev/null || pw_die 1 "extracted zip contains no flash-all.sh — unexpected artifact layout"
+        find_flash_dir "${zip}" >/dev/null || pw_die 1 "extracted zip contains no flash-all.sh — unexpected artifact layout"
     fi
 
     pw_info "fetch complete: $(basename "${zip}") VERIFIED (sha256 ${sha})"
@@ -811,6 +851,12 @@ cmd_flash() {
     require_android_tools
     require_tool ssh-keygen "install net-misc/openssh"
     require_tool sha256sum "install sys-apps/coreutils"
+    # Guard the signer set BEFORE any verify: verify_artifact_or_die deletes the
+    # artifact and reports exit 3 (tamper) on ANY dlv_verify failure — including
+    # a merely-absent allowed_signers file. Treat a missing signer set as the
+    # missing precondition it is (exit 2), and never destroy a verified artifact
+    # over it. Mirrors the same guard in cmd_fetch.
+    [ -f "${ALLOWED_SIGNERS}" ] || pw_die 2 "allowed_signers file missing: ${ALLOWED_SIGNERS}"
     validate_channel
 
     # Preflight: fastboot >= 35 (GrapheneOS hard requirement: >= 35.0.2).
@@ -855,10 +901,10 @@ cmd_flash() {
     pw_info "artifact re-verified: $(basename "${zip}")"
 
     local flashdir
-    if ! flashdir="$(find_flash_dir)"; then
+    if ! flashdir="$(find_flash_dir "${zip}")"; then
         require_tool bsdtar "install app-arch/libarchive"
         bsdtar -x -f "${zip}" -C "${WORK_DIR}" || pw_die 1 "extraction failed for ${zip}"
-        flashdir="$(find_flash_dir)" || pw_die 1 "extracted zip contains no flash-all.sh"
+        flashdir="$(find_flash_dir "${zip}")" || pw_die 1 "extracted zip contains no flash-all.sh"
     fi
 
     # Destructive gate: typed-serial confirmation on a TTY; non-TTY needs BOTH
@@ -946,7 +992,7 @@ cmd_flash() {
 # pairing runbook. Runs FIRST among the two new Phase-3 verbs (before
 # mdm-enroll) because it needs no device-owner state and captures the
 # hardware trust root on the cleanest possible device state (see
-# docs/ENTERPRISE-PHONES.md, "CRITICAL ordering").
+# docs/MDM.md, "CRITICAL ordering").
 #
 # Pairing (O3, unresolved upstream): no confirmed headless "submit and get a
 # JSON verdict" API exists for the self-hosted AttestationServer — the
@@ -1028,7 +1074,7 @@ cmd_attest() {
 # secondary users and ZERO added accounts, and is PERMANENT for the life of
 # the OS install once foreclosed (no undo short of a reflash). MUST run
 # before 'profile' (which creates the escrowed secondary user that forecloses
-# it) — see docs/ENTERPRISE-PHONES.md, "CRITICAL ordering".
+# it) — see docs/MDM.md, "CRITICAL ordering".
 cmd_mdm_enroll() {
     require_android_tools
     require_jq
@@ -1168,6 +1214,13 @@ cmd_mdm_enroll() {
 cmd_enroll_no_usb() {
     resolve_device_id
     [ -n "${DEVICE_ID}" ] || pw_die 1 "--no-usb enroll needs --device-id (there is no adb serial to derive one from)"
+    # No adb probe runs in this mode, so the device model cannot be read — the
+    # operator must state it, and it must validate against the catalog. Without
+    # this the record carries an empty codename and the follow-up 'ingest' this
+    # verb's own NEXT STEPS prescribes dies (ingest's require_codename can neither
+    # resolve the marketing name nor validate an empty codename).
+    [ -n "${CODENAME}" ] || pw_die 1 "--no-usb enroll needs --codename (no adb probe to read the device model) — e.g. --codename oriole; run 'detect' on a tethered device, or see https://grapheneos.org/releases"
+    require_codename
 
     echo
     echo "== no-USB guided handset runbook (operator + handset only; no adb) =="
@@ -1335,16 +1388,15 @@ cmd_enroll() {
     echo "     joins after a superadmin approves it in the superadmin UI."
     echo
 
-    # (4) Verify the join: poll for a CGNAT (100.64/10) address on tailscale0.
-    pw_info "waiting up to ${JOIN_TIMEOUT}s for tailscale0 to get a 100.64/10 address"
+    # (4) Verify the join: poll for a CGNAT (100.64/10) address on the Tailscale
+    # tun* interface (see tailnet_cgnat_addr — Android names it tun0, not tailscale0).
+    pw_info "waiting up to ${JOIN_TIMEOUT}s for a tailnet (100.64/10) address on the Tailscale tun interface"
     local waited=0 addr=""
     while :; do
-        addr="$("${ADB}" -s "${s}" shell ip -o addr show dev tailscale0 2>/dev/null | tr -d '\r' \
-            | grep -oE 'inet 100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}' \
-            | head -n1 | awk '{print $2}' || true)"
+        addr="$(tailnet_cgnat_addr "${s}")"
         [ -n "${addr}" ] && break
         waited=$((waited + POLL_INTERVAL))
-        [ "${waited}" -lt "${JOIN_TIMEOUT}" ] || pw_die 1 "device never got a tailnet address (tailscale0, 100.64/10) within ${JOIN_TIMEOUT}s — join FAILED or still pending superadmin approval; re-run enroll once approved"
+        [ "${waited}" -lt "${JOIN_TIMEOUT}" ] || pw_die 1 "device never got a tailnet address (100.64/10 on a tun* interface) within ${JOIN_TIMEOUT}s — join FAILED or still pending superadmin approval; re-run enroll once approved"
         sleep "${POLL_INTERVAL}"
     done
     pw_info "tailnet join VERIFIED: ${addr}"
@@ -1387,7 +1439,7 @@ set_profile_credential() {
         # adb client's own argv (ps auxww / /proc/<pid>/cmdline) for the life
         # of the adb child process — a real risk on shared provisioning
         # workstations, jump boxes, or CI runners. Gated behind
-        # --i-understand-adb-exposure; see docs/ENTERPRISE-PHONES.md.
+        # --i-understand-adb-exposure; see docs/MDM.md.
         #
         # `adb shell` re-joins all post-'shell' argv elements into ONE remote
         # command line that the device's shell re-parses (local bash argv-
@@ -1544,6 +1596,16 @@ cmd_remove_profile() {
     else
         pw_warn "no escrow file at ${escrow} — nothing to retire"
     fi
+
+    # Retire the profile record alongside the escrow, so a later 'ingest' reports
+    # the profile ABSENT. The two custody artifacts (escrow + profile.json) must
+    # move in lockstep; leaving profile.json behind makes ingest feed the registry
+    # enterprise_profile.present:true for a container that no longer exists.
+    local prof_rec="${OUT_DIR}/device/${DEVICE_ID}/profile.json"
+    if [ -f "${prof_rec}" ]; then
+        mv "${prof_rec}" "${prof_rec}.revoked-$(now_ts)"
+        pw_info "profile record retired: ${prof_rec}.revoked-*"
+    fi
 }
 
 # ── verb: ingest ───────────────────────────────────────────────────
@@ -1570,7 +1632,7 @@ cmd_ingest() {
         ts_ip="$(jq -r '.tailscale_ip // empty' "${enr}")"
         enrolled_at="$(jq -r '.enrolled_at // empty' "${enr}")"
         attached="${attached:-$(jq -r '.attached_domain // empty' "${enr}")}"
-        role="$(jq -r --arg d "${role}" '.role // $d' "${enr}")"
+        [ "${ROLE_SET}" -eq 0 ] && role="$(jq -r --arg d "${role}" '.role // $d' "${enr}")"
         os_id="$(jq -r '.os // empty' "${enr}")"
         os_version="$(jq -r '.os_version // empty' "${enr}")"
         [ "${SUPERDOMAIN_SET}" -eq 0 ] && SUPERDOMAIN="$(jq -r --arg d "${SUPERDOMAIN}" '.superdomain // $d' "${enr}")"
@@ -1687,12 +1749,17 @@ cmd_status() {
         for s in ${ADB_SERIALS[@]+"${ADB_SERIALS[@]}"}; do
             echo "device ${s}: adb"
             local addr
-            addr="$("${ADB}" -s "${s}" shell ip -o addr show dev tailscale0 2>/dev/null | tr -d '\r' \
-                | grep -oE 'inet 100\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -n1 | awk '{print $2}' || true)"
-            echo "  tailscale0: ${addr:-no address (not joined / app not running)}"
+            addr="$(tailnet_cgnat_addr "${s}")"
+            echo "  tailnet (tun*): ${addr:-no address (not joined / app not running)}"
             local uid
             uid="$(profile_user_id "${s}" "${PROFILE_NAME}")"
-            echo "  profile '${PROFILE_NAME}': ${uid:+present (user id ${uid})}${uid:-absent}"
+            # NB: NOT `${uid:+present…}${uid:-absent}` — with uid=10 the `:-`
+            # branch still expands to the value, printing "present (user id 10)10".
+            if [ -n "${uid}" ]; then
+                echo "  profile '${PROFILE_NAME}': present (user id ${uid})"
+            else
+                echo "  profile '${PROFILE_NAME}': absent"
+            fi
             if [ -z "${DEVICE_ID}" ]; then SERIAL="${s}"; resolve_device_id; fi
         done
         [ "${#FB_SERIALS[@]}" -eq 0 ] && [ "${#ADB_SERIALS[@]}" -eq 0 ] && echo "no device connected"
@@ -1737,7 +1804,7 @@ cmd_wizard() {
     [ -n "${ATTESTATION_URL}" ] || pw_die 1 "no --attestation-url (or ATTEST_URL) — the self-hosted AttestationServer console URL, needed by Step 4 (attest)"
     [ -n "${HEADWIND_URL}" ] || pw_die 1 "no --headwind-url (or HMDM_URL) — the Headwind DPC's non-interactive config target, needed by Step 5 (mdm-enroll)"
 
-    echo "== enterprise-phone wizard =="
+    echo "== MDM phone wizard =="
     echo "Guided flow: detect -> fetch -> flash -> attest -> mdm-enroll -> enroll -> profile -> ingest."
     echo "Each step asks first; already-completed steps can be skipped (re-entrant)."
     echo "CRITICAL ordering: attest runs on the cleanest device state (before"
@@ -1837,7 +1904,7 @@ main() {
             --pass-file)           _need_arg "$1" $#; PASS_FILE="$2"; shift 2 ;;
             --device-id)           _need_arg "$1" $#; DEVICE_ID="$2"; shift 2 ;;
             --superdomain)         _need_arg "$1" $#; SUPERDOMAIN="$2"; SUPERDOMAIN_SET=1; shift 2 ;;
-            --role)                _need_arg "$1" $#; ROLE="$2"; shift 2 ;;
+            --role)                _need_arg "$1" $#; ROLE="$2"; ROLE_SET=1; shift 2 ;;
             --profile-name)        _need_arg "$1" $#; PROFILE_NAME="$2"; shift 2 ;;
             --tailscale-apk)       _need_arg "$1" $#; TAILSCALE_APK="$2"; shift 2 ;;
             --apk-signer-sha256)   _need_arg "$1" $#; APK_SIGNER_SHA256="$2"; shift 2 ;;

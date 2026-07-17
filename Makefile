@@ -488,7 +488,7 @@ go-live-menu: ## preview the on-device go-live CONSOLE menu (ncurses front-end; 
 	GL_OUT_DIR='$(GOLIVE_OUT)/out' \
 	  bash specs/usr/sbin/snapdragon-go-live-menu
 
-# ── Enterprise-phone wizard (onboarding form — builds NO image) ──────────────
+# ── MDM phone wizard (onboarding form — builds NO image) ──────────────
 # Thin delegates to the ONE driver, scripts/phone-wizard.sh: flash a USB-
 # connected Google Pixel with VERIFIED GrapheneOS, enroll it in the brand's
 # tailnet, provision the escrowed enterprise profile, emit the device-registry
@@ -539,7 +539,7 @@ _PHONE_ARGS = --work-dir "$$PHONE_WORK_DIR" \
   $(if $(strip $(RESOLVE)),--resolve) \
   $(if $(strip $(SHOW_AUTHKEY)),--show-authkey)
 
-phone-plan: ## dry-run the enterprise-phone wizard: validate knobs + catalog, print PLAN_* lines ([PLAN_VERB=flash] plans one verb)
+phone-plan: ## dry-run the MDM phone wizard: validate knobs + catalog, print PLAN_* lines ([PLAN_VERB=flash] plans one verb)
 	@bash scripts/phone-wizard.sh plan $(PLAN_VERB) $(_PHONE_ARGS)
 
 phone-detect: ## read-only probe of the USB-connected Pixel (serial, codename, current OS)
@@ -573,7 +573,7 @@ phone-status: ## read-only: tools, device, tailnet, profile + escrow PRESENCE (n
 # TODO: no phone-mdm-enroll / phone-attest targets yet for scripts/phone-wizard.sh's
 # 'mdm-enroll'/'attest' verbs (Headwind device-owner enrollment / AttestationServer
 # pairing, #390) — only reachable via the driver directly, not `make`. See
-# docs/ENTERPRISE-PHONES.md "Deferred".
+# docs/MDM.md "Deferred".
 
 phone-wizard: ## interactive guided full phone flow (TTY): detect->fetch->flash->attest->mdm-enroll->enroll->profile->ingest
 	@bash scripts/phone-wizard.sh wizard $(_PHONE_ARGS)

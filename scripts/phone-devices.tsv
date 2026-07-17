@@ -1,4 +1,4 @@
-# scripts/phone-devices.tsv — enterprise-phone device catalog (GrapheneOS targets).
+# scripts/phone-devices.tsv — MDM phone device catalog (GrapheneOS targets).
 #
 # Provenance: fetched 2026-07-15 from https://grapheneos.org/releases — the 21
 # devices GrapheneOS ships release channels for. The wizard FAILS CLOSED on any

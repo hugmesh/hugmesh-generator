@@ -69,16 +69,24 @@ done
 command -v apksigner >/dev/null 2>&1 \
   || { echo "ERROR: apksigner not found (Android SDK build-tools; e.g. dev-util/android-sdk-build-tools)" >&2; exit 1; }
 
+# Hand the keystore password to apksigner through the ENVIRONMENT (env:VAR),
+# never `pass:<cleartext>` on the argv: argv is world-readable via ps /
+# /proc/<pid>/cmdline for the whole signing window, and this is the offline
+# Auditor release-signing key's password. Both the --ks-pass-env path and the
+# interactive path funnel through one exported var so apksigner (the child)
+# reads it itself. (`--ks-pass-env FOO` may name a var that is set but not
+# exported — re-exporting under a canonical name makes env: work regardless.)
 if [ -n "${PASS_ENV}" ]; then
   [ -n "${!PASS_ENV:-}" ] || { echo "ERROR: env var ${PASS_ENV} is empty/unset" >&2; exit 1; }
-  KS_PASS_ARG="pass:${!PASS_ENV}"
+  export APKSIGNER_KS_PASS="${!PASS_ENV}"
 else
   echo -n "Enter the keystore/key password for alias '${ALIAS}' (input hidden): " >&2
   read -rs KS_PASS_RAW
   echo >&2
   [ -n "${KS_PASS_RAW}" ] || { echo "ERROR: empty password refused" >&2; exit 1; }
-  KS_PASS_ARG="pass:${KS_PASS_RAW}"
+  export APKSIGNER_KS_PASS="${KS_PASS_RAW}"
 fi
+KS_PASS_ARG="env:APKSIGNER_KS_PASS"
 
 echo "==> Signing $(basename "${UNSIGNED}") -> ${OUT_APK}" >&2
 apksigner sign \
@@ -88,7 +96,7 @@ apksigner sign \
   --key-pass "${KS_PASS_ARG}" \
   --out "${OUT_APK}" \
   "${UNSIGNED}"
-unset KS_PASS_RAW KS_PASS_ARG
+unset KS_PASS_RAW KS_PASS_ARG APKSIGNER_KS_PASS
 
 echo "==> Verifying signature" >&2
 apksigner verify "${OUT_APK}"

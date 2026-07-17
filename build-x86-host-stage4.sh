@@ -2009,7 +2009,7 @@ gate_optional_services() {
                     '/bff/superadmin/workloads/**' '/bff/admin/workloads/**'
                 ;;
             headwind)
-                # Headwind MDM (Enterprise Phones) — DEFAULT-OFF, admin-only devops
+                # Headwind MDM (managed phones) — DEFAULT-OFF, admin-only devops
                 # service (Harbor/superadmin posture). Owns its bootstrap Application +
                 # manifests dir + per-service ESO file + TWO routes on the EXISTING
                 # tailnet superadmin-gateway (NOT be/fe — no gatewayHost of its own)

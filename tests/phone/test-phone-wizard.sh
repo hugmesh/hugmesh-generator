@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-phone-wizard.sh — offline logic test for the enterprise-phone wizard
+# test-phone-wizard.sh — offline logic test for the MDM phone wizard
 # driver (scripts/phone-wizard.sh): GrapheneOS Pixel onboarding — detect ->
 # fetch (verified) -> flash -> attest (self-hosted AttestationServer pairing)
 # -> mdm-enroll (Headwind MDM device-owner) -> enroll -> profile -> ingest.
@@ -104,7 +104,7 @@ ok()  { echo "  PASS $*"; P=$((P+1)); }
 bad() { echo "  FAIL $*"; F=$((F+1)); }
 WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}" 2>/dev/null' EXIT
 
-echo "== enterprise-phone wizard: offline driver test (stub tools + REAL sshsig crypto) =="
+echo "== MDM phone wizard: offline driver test (stub tools + REAL sshsig crypto) =="
 
 # ── Layout ─────────────────────────────────────────────────────────
 BIN="${WORK}/bin"; STATE="${WORK}/state"; LOGD="${WORK}/logs"
@@ -149,9 +149,13 @@ case "${1:-}" in
             'am start-user '*|'am switch-user '*) echo ok ;;
             'pm list packages') cat "${S}/packages" 2>/dev/null || echo 'package:com.tailscale.ipn' ;;
             'pm path '*)        echo 'package:/data/app/stub/base.apk' ;;
-            'ip -o addr show dev tailscale0')
+            'ip -o addr show')
+                # Real Android names the Tailscale VpnService iface tun0 (kernel
+                # tun%d), never tailscale0 — the driver now probes ALL interfaces
+                # and scopes to tun*. Fixture toggle unchanged: an empty
+                # tailscale-addr file forces the not-joined (timeout) path.
                 cat "${S}/tailscale-addr" 2>/dev/null \
-                    || printf '30: tailscale0    inet 100.64.0.7/32 scope global tailscale0\n' ;;
+                    || printf '5: tun0    inet 100.64.0.7/32 scope global tun0\\       valid_lft forever preferred_lft forever\n' ;;
             'dumpsys lock_settings'|'locksettings set-password '*) : ;;
             'dpm set-device-owner '*)
                 # Knob (${S}/dpm-fail): simulate the real one-shot AOSP
@@ -603,7 +607,7 @@ run enroll --keys-dir "${KEYS}" --out "${OUT}"
 [ "${RC}" -eq 0 ] && ok "(12) enroll (stub adb, GrapheneOS probe + tailnet join) exits 0" || { bad "(12) enroll rc=${RC}"; echo "${OUT_TXT}"; }
 has "https://headscale.phone-test.invalid" && ok "(12) join runbook names the headscale login server" \
     || bad "(12) runbook missing the login server"
-has "tailnet join VERIFIED: 100.64.0.7" && ok "(12) tailnet join verified from the stub tailscale0 CGNAT address" \
+has "tailnet join VERIFIED: 100.64.0.7" && ok "(12) tailnet join verified from the stub tun0 CGNAT address" \
     || bad "(12) join not verified"
 ! has "${AUTHKEY_VALUE}" && ok "(12) pre-auth key NOT displayed without --show-authkey" \
     || bad "(12) authkey LEAKED to output without --show-authkey"
@@ -702,7 +706,7 @@ rm -f "${STATE}/adb-getstate"
 : > "${STATE}/tailscale-addr"
 run enroll --keys-dir "${KEYS}" --out "${OUT}"
 [ "${RC}" -eq 1 ] && has "device never got a tailnet address" \
-    && ok "(18) blank tailscale0 fixture -> exit 1 within PW_JOIN_TIMEOUT (join-verify timeout fires)" \
+    && ok "(18) blank tun0 fixture -> exit 1 within PW_JOIN_TIMEOUT (join-verify timeout fires)" \
     || bad "(18) tailnet-timeout rc=${RC}, want 1"
 rm -f "${STATE}/tailscale-addr"
 
@@ -863,6 +867,10 @@ run enroll --no-usb --keys-dir "${KEYS}" --out "${OUT}"
 [ "${RC}" -eq 1 ] && ok "(15) --no-usb without --device-id -> exit 1 (no adb serial to derive one)" \
     || bad "(15) --no-usb no-device-id rc=${RC}, want 1"
 run enroll --no-usb --keys-dir "${KEYS}" --out "${OUT}" --device-id "${NOUSB_DEVID}"
+[ "${RC}" -eq 1 ] && has "needs --codename" \
+    && ok "(15) --no-usb with --device-id but no --codename -> exit 1 (no probe to read the model)" \
+    || { bad "(15) --no-usb no-codename rc=${RC}, want 1"; echo "${OUT_TXT}"; }
+run enroll --no-usb --keys-dir "${KEYS}" --out "${OUT}" --device-id "${NOUSB_DEVID}" --codename "${CODENAME}"
 [ "${RC}" -eq 0 ] && has "no-USB guided handset runbook" && has "NEXT STEPS" \
     && ok "(15) --no-usb enroll exits 0 with the guided runbook + NEXT-STEPS block" \
     || { bad "(15) --no-usb enroll rc=${RC}"; echo "${OUT_TXT}"; }
@@ -875,10 +883,11 @@ NOUSB_ENR="${OUT}/device/${NOUSB_DEVID}/enrollment.json"
     && [ "$(jq -r '.verification' "${NOUSB_ENR}")" = "operator-attested" ] \
     && [ "$(jq -r '.tailscale_ip' "${NOUSB_ENR}")" = "null" ] \
     && [ "$(jq -r '.login_server' "${NOUSB_ENR}")" = "https://headscale.phone-test.invalid" ] \
-    && ok "(15) --no-usb enrollment.json is verification:operator-attested with tailscale_ip:null" \
+    && [ "$(jq -r '.codename' "${NOUSB_ENR}")" = "${CODENAME}" ] \
+    && ok "(15) --no-usb enrollment.json is verification:operator-attested, tailscale_ip:null, codename recorded" \
     || bad "(15) --no-usb enrollment.json missing/wrong"
 # --show-authkey is the DELIBERATE disclosure path — captured OUTSIDE the sweep.
-NOUSB_SHOWKEY_OUT="$(pw enroll --no-usb --keys-dir "${KEYS}" --out "${OUT}" --device-id "${NOUSB_DEVID}" --show-authkey)"
+NOUSB_SHOWKEY_OUT="$(pw enroll --no-usb --keys-dir "${KEYS}" --out "${OUT}" --device-id "${NOUSB_DEVID}" --codename "${CODENAME}" --show-authkey)"
 grep -qF -- "${AUTHKEY_VALUE}" <<<"${NOUSB_SHOWKEY_OUT}" \
     && ok "(15) --no-usb --show-authkey still displays the key once (explicit opt-in)" \
     || bad "(15) --no-usb --show-authkey did not display the key"
