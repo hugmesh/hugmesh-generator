@@ -77,7 +77,7 @@ FASTBOOT="${PW_FASTBOOT:-fastboot}"
 RELEASES_URL="${PW_RELEASES_URL:-https://releases.grapheneos.org}"
 ALLOWED_SIGNERS="${PW_ALLOWED_SIGNERS:-${SCRIPT_DIR}/phone-allowed-signers}"
 DEVICES_TSV="${SCRIPT_DIR}/phone-devices.tsv"
-JOIN_TIMEOUT="${PW_JOIN_TIMEOUT:-300}"      # seconds to wait for tailscale0
+JOIN_TIMEOUT="${PW_JOIN_TIMEOUT:-300}"      # seconds to wait for the tailnet tun iface
 POLL_INTERVAL="${PW_POLL_INTERVAL:-5}"      # seconds between polls
 
 # ── Options (defaults) ─────────────────────────────────────────────
@@ -213,7 +213,7 @@ Verbs:
                        'flash' stays GrapheneOS/Pixel-only). Post-first-boot
                        (adb): guided tailnet join with keys from --keys-dir
                        (docker-mesh-node layout) or --login-server/
-                       --authkey-file; verifies tailscale0 and writes the
+                       --authkey-file; verifies the tailnet join and writes the
                        enrollment record. --no-usb skips every adb probe:
                        guided handset-only runbook, operator-attested record
                        (tailscale_ip left null) — verify the join mesh-side.
@@ -498,6 +498,31 @@ probe_os() {
     if [ -n "${relnum}" ]; then
         OS_ID="android"; OS_VERSION="${relnum}"
     fi
+}
+
+# Read the device's tailnet (CGNAT 100.64/10) address over adb, if joined.
+# Prints the address on stdout, or nothing.
+#
+# The Tailscale Android app is a VpnService: Android's kernel names its TUN
+# interface `tun0` (or `tunN` when a lower index is already taken) — NEVER
+# `tailscale0`. That `tailscale0` name only exists on desktop Linux/macOS/Windows
+# where the tailscaled daemon creates and names its own device; on Android the
+# VpnService API exposes no interface-name setter, the AOSP JNI passes an empty
+# ifr_name, and the kernel's `tun%d` template fills it in (verified against the
+# VpnService.Builder reference, AOSP com_android_server_connectivity_Vpn.cpp, and
+# the kernel drivers/net/tun.c). So `ip addr show dev tailscale0` matches nothing
+# on a real handset — probe ALL interfaces instead and REQUIRE the address to sit
+# on a tun* interface. The tun scoping is load-bearing, not cosmetic: a bare
+# 100.64/10 grep would false-positive on the carrier-grade-NAT address a cellular
+# rmnet_data* interface legitimately carries. `ip addr` works from the adb `shell`
+# SELinux domain (the netlink clamp-down that breaks `ip` inside apps excludes
+# shell), so no root is needed.
+tailnet_cgnat_addr() {
+    local s="$1"
+    "${ADB}" -s "${s}" shell ip -o addr show 2>/dev/null | tr -d '\r' \
+        | grep -E '[[:space:]]tun[0-9]+[[:space:]]' \
+        | grep -oE 'inet 100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}' \
+        | head -n1 | awk '{print $2}' || true
 }
 
 # ── Artifact naming / verification ─────────────────────────────────
@@ -1335,16 +1360,15 @@ cmd_enroll() {
     echo "     joins after a superadmin approves it in the superadmin UI."
     echo
 
-    # (4) Verify the join: poll for a CGNAT (100.64/10) address on tailscale0.
-    pw_info "waiting up to ${JOIN_TIMEOUT}s for tailscale0 to get a 100.64/10 address"
+    # (4) Verify the join: poll for a CGNAT (100.64/10) address on the Tailscale
+    # tun* interface (see tailnet_cgnat_addr — Android names it tun0, not tailscale0).
+    pw_info "waiting up to ${JOIN_TIMEOUT}s for a tailnet (100.64/10) address on the Tailscale tun interface"
     local waited=0 addr=""
     while :; do
-        addr="$("${ADB}" -s "${s}" shell ip -o addr show dev tailscale0 2>/dev/null | tr -d '\r' \
-            | grep -oE 'inet 100\.(6[4-9]|[7-9][0-9]|1[0-1][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3}' \
-            | head -n1 | awk '{print $2}' || true)"
+        addr="$(tailnet_cgnat_addr "${s}")"
         [ -n "${addr}" ] && break
         waited=$((waited + POLL_INTERVAL))
-        [ "${waited}" -lt "${JOIN_TIMEOUT}" ] || pw_die 1 "device never got a tailnet address (tailscale0, 100.64/10) within ${JOIN_TIMEOUT}s — join FAILED or still pending superadmin approval; re-run enroll once approved"
+        [ "${waited}" -lt "${JOIN_TIMEOUT}" ] || pw_die 1 "device never got a tailnet address (100.64/10 on a tun* interface) within ${JOIN_TIMEOUT}s — join FAILED or still pending superadmin approval; re-run enroll once approved"
         sleep "${POLL_INTERVAL}"
     done
     pw_info "tailnet join VERIFIED: ${addr}"
@@ -1544,6 +1568,16 @@ cmd_remove_profile() {
     else
         pw_warn "no escrow file at ${escrow} — nothing to retire"
     fi
+
+    # Retire the profile record alongside the escrow, so a later 'ingest' reports
+    # the profile ABSENT. The two custody artifacts (escrow + profile.json) must
+    # move in lockstep; leaving profile.json behind makes ingest feed the registry
+    # enterprise_profile.present:true for a container that no longer exists.
+    local prof_rec="${OUT_DIR}/device/${DEVICE_ID}/profile.json"
+    if [ -f "${prof_rec}" ]; then
+        mv "${prof_rec}" "${prof_rec}.revoked-$(now_ts)"
+        pw_info "profile record retired: ${prof_rec}.revoked-*"
+    fi
 }
 
 # ── verb: ingest ───────────────────────────────────────────────────
@@ -1687,12 +1721,17 @@ cmd_status() {
         for s in ${ADB_SERIALS[@]+"${ADB_SERIALS[@]}"}; do
             echo "device ${s}: adb"
             local addr
-            addr="$("${ADB}" -s "${s}" shell ip -o addr show dev tailscale0 2>/dev/null | tr -d '\r' \
-                | grep -oE 'inet 100\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -n1 | awk '{print $2}' || true)"
-            echo "  tailscale0: ${addr:-no address (not joined / app not running)}"
+            addr="$(tailnet_cgnat_addr "${s}")"
+            echo "  tailnet (tun*): ${addr:-no address (not joined / app not running)}"
             local uid
             uid="$(profile_user_id "${s}" "${PROFILE_NAME}")"
-            echo "  profile '${PROFILE_NAME}': ${uid:+present (user id ${uid})}${uid:-absent}"
+            # NB: NOT `${uid:+present…}${uid:-absent}` — with uid=10 the `:-`
+            # branch still expands to the value, printing "present (user id 10)10".
+            if [ -n "${uid}" ]; then
+                echo "  profile '${PROFILE_NAME}': present (user id ${uid})"
+            else
+                echo "  profile '${PROFILE_NAME}': absent"
+            fi
             if [ -z "${DEVICE_ID}" ]; then SERIAL="${s}"; resolve_device_id; fi
         done
         [ "${#FB_SERIALS[@]}" -eq 0 ] && [ "${#ADB_SERIALS[@]}" -eq 0 ] && echo "no device connected"
