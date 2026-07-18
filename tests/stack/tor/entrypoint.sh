@@ -9,12 +9,16 @@
 set -eu
 
 UPSTREAM="${TOR_ONION_UPSTREAM:-snapdragon-fe-gateway:8080}"
-HS_DIR="/var/lib/tor/snapdragon-onion"
+DATA_DIR="/var/lib/tor"
+HS_DIR="${DATA_DIR}/snapdragon-onion"
 OUT_DIR="/onion-out"
 
 mkdir -p "$HS_DIR" "$OUT_DIR"
-# tor REFUSES a HiddenServiceDir that is not mode 0700 owned by the tor user.
-chown -R tor:tor "$HS_DIR" 2>/dev/null || true
+# tor REFUSES a HiddenServiceDir that is not mode 0700 owned by the tor user, and
+# (after it setuid's to `User tor` below) needs to WRITE its own state/lock/cache
+# files directly under DataDirectory too — chown the whole tree, not just HS_DIR,
+# so a startup here never depends on the alpine tor package having preset it.
+chown -R tor:tor "$DATA_DIR"
 chmod 700 "$HS_DIR"
 
 cat > /etc/tor/torrc <<EOF
