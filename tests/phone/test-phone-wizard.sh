@@ -831,6 +831,40 @@ run ingest --device-id "${DEVID}" --out "${OUT}" --ingest-url https://registry.p
     && grep -q -- "--data-binary @${ING}" "${LOGD}/curl.log" \
     && ok "(14) mTLS ingest POSTs the record through curl (stub-observed)" \
     || { bad "(14) ingest POST wrong (rc=${RC})"; cat "${LOGD}/curl.log"; }
+# No token flag -> no X-Internal-Token header material at all.
+grep -q -- "-H @" "${LOGD}/curl.log" && bad "(14) tokenless ingest sent a header file" \
+    || ok "(14) tokenless ingest sends NO internal-token header (mTLS-only deployments unchanged)"
+
+# --internal-token-file: the armed-prod internal gate. The token must reach curl
+# via a 0600 header FILE (-H @file), never argv, and the file must not outlive
+# the POST. ITOK_VALUE joins the secret sweep below.
+ITOK_VALUE="itok-$(date +%s)-sweepable-internal-token"
+printf '%s\n' "${ITOK_VALUE}" > "${WORK}/internal.token"
+clear_logs
+run ingest --device-id "${DEVID}" --out "${OUT}" --ingest-url https://registry.phone-test.invalid/self-report \
+    --client-cert "${WORK}/client.crt" --client-key "${WORK}/client.key" --ca "${WORK}/client.crt" \
+    --internal-token-file "${WORK}/internal.token"
+HDRFILE="${OUT}/device/${DEVID}/.ingest-token-header"
+[ "${RC}" -eq 0 ] && grep -q -- "-H @${HDRFILE}" "${LOGD}/curl.log" \
+    && ok "(14) token ingest passes the header FILE to curl (-H @file, stub-observed)" \
+    || { bad "(14) token ingest header-file wiring wrong (rc=${RC})"; cat "${LOGD}/curl.log"; }
+grep -qF -- "${ITOK_VALUE}" "${LOGD}/curl.log" && bad "(14) INTERNAL TOKEN LEAKED onto curl argv" \
+    || ok "(14) the token VALUE never appears on curl argv (rides the header file only)"
+[ ! -f "${HDRFILE}" ] && ok "(14) the token header file is deleted after the POST" \
+    || bad "(14) the token header file lingers at ${HDRFILE}"
+
+# Fail-closed: a missing or empty token file is a precondition error (exit 2).
+run ingest --device-id "${DEVID}" --out "${OUT}" --ingest-url https://registry.phone-test.invalid/self-report \
+    --client-cert "${WORK}/client.crt" --client-key "${WORK}/client.key" --ca "${WORK}/client.crt" \
+    --internal-token-file "${WORK}/no-such.token"
+[ "${RC}" -eq 2 ] && ok "(14) --internal-token-file pointing nowhere -> exit 2 (fail-closed)" \
+    || bad "(14) missing token file rc=${RC}, want 2"
+: > "${WORK}/empty.token"
+run ingest --device-id "${DEVID}" --out "${OUT}" --ingest-url https://registry.phone-test.invalid/self-report \
+    --client-cert "${WORK}/client.crt" --client-key "${WORK}/client.key" --ca "${WORK}/client.crt" \
+    --internal-token-file "${WORK}/empty.token"
+[ "${RC}" -eq 2 ] && ok "(14) an EMPTY token file -> exit 2 (fail-closed, no blank header)" \
+    || bad "(14) empty token file rc=${RC}, want 2"
 
 # status is read-only and must also never leak secrets — capture into the sweep.
 run status --device-id "${DEVID}" --out "${OUT}"
@@ -857,6 +891,7 @@ sweep_one "generated passphrase #1" "${GEN_PASS1}"
 sweep_one "generated passphrase #2" "${GEN_PASS2}"
 sweep_one "generated passphrase #3" "${GEN_PASS3}"
 sweep_one "--pass-file passphrase" "${FILE_PASS}"
+sweep_one "internal ingest token" "${ITOK_VALUE}"
 [ "${LEAK}" -eq 0 ] && ok "(14) SECRET SWEEP clean: no authkey/passphrase on stdout, stderr, or any stub argv" \
     || bad "(14) SECRET SWEEP found leaks (see above)"
 

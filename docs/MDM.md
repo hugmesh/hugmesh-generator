@@ -425,7 +425,9 @@ Default is **emit-only**. The dedicated registry endpoint is
 **`POST /bff/internal/device-registry/phone-ingest`** (snapdragon-admin-bff-api):
 point `--ingest-url` at it with the mTLS identity flags
 (`--client-cert`/`--client-key`/`--ca`; the wizard fails closed without
-them). It accepts exactly this `phone-ingest/v1` shape (snake_case, unknown
+them), plus `--internal-token-file F` when the deployment arms the BFF's
+app-layer `X-Internal-Token` gate (armed prod 401s the POST without it; the
+token rides a 0600 `-H @file` header file, never curl's argv). It accepts exactly this `phone-ingest/v1` shape (snake_case, unknown
 additive keys ignored; non-phone `schema`/`device_class` is a clean 400),
 UPSERTs one `phone_device` row per `device_id` (a re-ingest refreshes the
 telemetry and bumps `ingest_count`), and rides the same mTLS-gated

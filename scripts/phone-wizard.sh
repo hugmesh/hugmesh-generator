@@ -109,6 +109,7 @@ INGEST_URL=""
 CLIENT_CERT=""
 CLIENT_KEY=""
 CA_FILE=""
+INTERNAL_TOKEN_FILE=""
 ASSUME_YES=0
 FORCE=0
 FORCE_FWUPD=0
@@ -276,6 +277,12 @@ Options:
   --ingest-url URL       POST the ingest record here (needs the mTLS flags).
   --client-cert F --client-key F --ca F
                          mTLS client identity + CA for --ingest-url.
+  --internal-token-file F
+                         File holding the X-Internal-Token value the BFF's
+                         internal surface requires when ARMED in prod (an
+                         armed deployment 401s the POST without it). The
+                         token rides a 0600 header file (-H @file) — it
+                         never appears on curl's argv.
   --yes                  Non-interactive confirmation (see per-verb gates).
   --force                Downgrade hard-requirement checks to warnings: the
                          enroll OS-probe (OS genuinely undetectable), the
@@ -1717,9 +1724,24 @@ cmd_ingest() {
         local args=(-sS -m 30 --fail -X POST -H 'Content-Type: application/json' --data-binary @"${ingest}")
         [ -n "${CA_FILE}" ] && args+=(--cacert "${CA_FILE}")
         args+=(--cert "${CLIENT_CERT}" --key "${CLIENT_KEY}")
+        # X-Internal-Token: the BFF's /bff/internal/** surface is ALSO gated by an
+        # app-layer token when armed in prod (fail-closed 401 before mTLS alone
+        # suffices). The token value must never ride curl's argv (world-readable in
+        # /proc for the request window) — build a 0600 header file and pass -H @file.
+        local hdrfile=""
+        if [ -n "${INTERNAL_TOKEN_FILE}" ]; then
+            [ -s "${INTERNAL_TOKEN_FILE}" ] \
+                || pw_die 2 "--internal-token-file is missing or empty: ${INTERNAL_TOKEN_FILE}"
+            hdrfile="${rec_dir}/.ingest-token-header"
+            (umask 077; printf 'X-Internal-Token: %s\n' "$(tr -d '\n' < "${INTERNAL_TOKEN_FILE}")" > "${hdrfile}")
+            args+=(-H @"${hdrfile}")
+        fi
         pw_info "POSTing ingest record to ${INGEST_URL}"
-        curl "${args[@]}" "${INGEST_URL}" >/dev/null \
-            || pw_die 1 "ingest POST failed (${INGEST_URL}) — the record is still at ${ingest}; retry with the same flags"
+        if ! curl "${args[@]}" "${INGEST_URL}" >/dev/null; then
+            [ -n "${hdrfile}" ] && rm -f "${hdrfile}"
+            pw_die 1 "ingest POST failed (${INGEST_URL}) — the record is still at ${ingest}; retry with the same flags"
+        fi
+        [ -n "${hdrfile}" ] && rm -f "${hdrfile}"
         pw_info "ingest POST accepted"
     else
         echo
@@ -1727,7 +1749,9 @@ cmd_ingest() {
         echo "  Emit-only mode. To register the phone in the device registry,"
         echo "  re-run with --ingest-url pointing at the admin-bff phone-ingest"
         echo "  endpoint (POST /bff/internal/device-registry/phone-ingest) plus"
-        echo "  the mTLS identity flags --client-cert/--client-key/--ca — the"
+        echo "  the mTLS identity flags --client-cert/--client-key/--ca, and"
+        echo "  --internal-token-file when the deployment arms the internal"
+        echo "  X-Internal-Token gate (armed prod 401s without it) — the"
         echo "  record UPSERTs one registry row per device_id and a superadmin"
         echo "  reads the fleet at /bff/superadmin/phone-devices. (Do NOT use"
         echo "  /bff/internal/device-enrollment/self-report — that is the"
@@ -1918,6 +1942,7 @@ main() {
             --ingest-url)          _need_arg "$1" $#; INGEST_URL="$2"; shift 2 ;;
             --client-cert)         _need_arg "$1" $#; CLIENT_CERT="$2"; shift 2 ;;
             --client-key)          _need_arg "$1" $#; CLIENT_KEY="$2"; shift 2 ;;
+            --internal-token-file) _need_arg "$1" $#; INTERNAL_TOKEN_FILE="$2"; shift 2 ;;
             --ca)                  _need_arg "$1" $#; CA_FILE="$2"; shift 2 ;;
             --yes)                 ASSUME_YES=1; shift ;;
             --force)               FORCE=1; shift ;;
