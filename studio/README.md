@@ -49,7 +49,13 @@ a **local mesh node** from the system tray.
   is offered, and a flavour the finished run didn't produce is skipped with the
   reason, never guessed. Flashing runs post-build via `scripts/flash-disk.sh`
   behind a fresh per-device identity re-check.
-- **Local mesh node**: start/stop/inspect a dockerized node from the **system tray**.
+- **Local mesh node**: start/stop/inspect a dockerized node from the **system tray**;
+  the wizard's **local Docker mesh** flow is complete end-to-end from the GUI — a
+  **Check readiness** probe (docker/buildx/disk/maven, read-only), the cold-build
+  maven prerequisite (`make stack-m2-bootstrap`) as a button, live **streamed**
+  build output with a **Cancel** that stops the whole process group, cold-aware
+  timeouts (a first build compiles ~24 images and is never killed at minute 30),
+  and an **Open web UI** shortcut to the running stack's front door.
 
 ## Run
 

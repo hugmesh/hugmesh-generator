@@ -214,10 +214,12 @@ def test_bootstrap_start_is_gated_behind_acknowledgement(qapp, monkeypatch):
 def test_bootstrap_up_collects_config_and_runs(qapp, monkeypatch):
     seen = {}
 
-    def _fake_up(self):
+    def _fake_up(self, on_line=None, cancel=None):
         seen["env"] = self.cfg.env
         seen["superadmin"] = self.cfg.superadmin_username
         seen["social"] = self.cfg.social
+        if on_line is not None:
+            on_line("[done] platform up")   # the real up() streams milestones too
         return True, ["[done] platform up"]
 
     monkeypatch.setattr(LocalMeshBootstrap, "up", _fake_up, raising=True)
@@ -256,9 +258,11 @@ def test_bootstrap_web_locales_widget_collects_and_shows_in_plan(qapp):
 
 def test_bootstrap_up_carries_web_locales(qapp, monkeypatch):
     seen = {}
-    monkeypatch.setattr(LocalMeshBootstrap, "up",
-                        lambda self: seen.update(web_locales=self.cfg.web_locales) or (True, ["ok"]),
-                        raising=True)
+    monkeypatch.setattr(
+        LocalMeshBootstrap, "up",
+        lambda self, on_line=None, cancel=None:
+            seen.update(web_locales=self.cfg.web_locales) or (True, ["ok"]),
+        raising=True)
     monkeypatch.setattr(LocalMeshNode, "status", lambda self: _stopped(), raising=True)
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     dlg.web_locales.setText("en-XA")
@@ -270,9 +274,11 @@ def test_bootstrap_up_carries_web_locales(qapp, monkeypatch):
 
 def test_bootstrap_up_blocked_by_validation(qapp, monkeypatch):
     up_ran = {"called": False}
-    monkeypatch.setattr(LocalMeshBootstrap, "up",
-                        lambda self: up_ran.__setitem__("called", True) or (True, []),
-                        raising=True)
+    monkeypatch.setattr(
+        LocalMeshBootstrap, "up",
+        lambda self, on_line=None, cancel=None:
+            up_ran.__setitem__("called", True) or (True, []),
+        raising=True)
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     dlg.env_prod.setChecked(True)     # prod without domain/key -> validate() blocks
     dlg.ack.setChecked(True)

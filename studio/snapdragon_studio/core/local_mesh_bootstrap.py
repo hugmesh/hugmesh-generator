@@ -544,12 +544,34 @@ class LocalMeshBootstrap:
                 "password": str(sa.get("password", ""))}
 
     # ---- lifecycle --------------------------------------------------------------
-    def up(self) -> tuple[bool, list[str]]:
+    def m2_bootstrap(self, on_line=None, cancel=None) -> tuple[bool, list[str]]:
+        """`make stack-m2-bootstrap` — the cold-build prerequisite preflight names
+        ("run `make stack-m2-bootstrap` first"): builds the org-private maven
+        artifacts FROM SOURCE and serves them from the local registry container.
+        Exposed here so the GUI can run it — a from-scratch bring-up must never
+        require a terminal detour. Streams via ``on_line``; ``cancel`` terminates
+        the whole build process group."""
+        ok, why = self.guard_host_local()
+        if not ok:
+            return False, [why]
+        ok, msg = self._stack_node().m2_bootstrap(on_line=on_line, cancel=cancel)
+        return ok, [f"[m2-bootstrap] {'ok' if ok else 'FAILED'}: {msg[-600:]}"]
+
+    def up(self, on_line=None, cancel=None) -> tuple[bool, list[str]]:
         """The from-scratch bring-up. Returns (ok, log-lines). NO secret VALUE ever
         appears in the log lines — only the username + the path its password landed
         in. Order: guard -> generate -> read superadmin -> stack-up -> stack-seed
-        (password bridged via env) -> (prod) attach overlay."""
+        (password bridged via env) -> (prod) attach overlay.
+
+        ``on_line`` streams progress AS IT HAPPENS (creds milestones + the live
+        `make` output) — without it a cold bring-up is an hour of silence ending in
+        one text blob; ``cancel`` terminates the running build's process group."""
         log: list[str] = []
+
+        def _note(line: str) -> None:
+            log.append(line)
+            if on_line is not None:
+                on_line(line)
         ok, why = self.guard_host_local()
         if not ok:
             return False, [why]
@@ -568,22 +590,22 @@ class LocalMeshBootstrap:
                            *(f"  - {p}" for p in problems)]
 
         ok, msg = self.generate_creds()
-        log.append(f"[creds] {msg}")
+        _note(f"[creds] {msg}")
         if not ok:
             return False, log
 
         sa = self.read_superadmin()
         if not sa.get("password"):
-            log.append(f"[creds] could not read the minted superadmin from "
-                       f"{self.secrets_json}")
+            _note(f"[creds] could not read the minted superadmin from "
+                  f"{self.secrets_json}")
             return False, log
         # NOTE: log the USERNAME + WHERE the password is — never the value.
-        log.append(f"[creds] minted superadmin '{sa['username']}' "
-                   f"(password in {self.secrets_json})")
+        _note(f"[creds] minted superadmin '{sa['username']}' "
+              f"(password in {self.secrets_json})")
 
         stack = self._stack_node()
-        ok, msg = stack.start()
-        log.append(f"[stack-up] {'ok' if ok else 'FAILED'}: {msg[:400]}")
+        ok, msg = stack.start(on_line=on_line, cancel=cancel)
+        _note(f"[stack-up] {'ok' if ok else 'FAILED'}: {msg[:400]}")
         if not ok:
             return False, log
 
@@ -594,8 +616,8 @@ class LocalMeshBootstrap:
         ok, msg = stack.seed({
             SEED_SUPERADMIN_USERNAME_ENV: sa["username"],
             SEED_SUPERADMIN_PASSWORD_ENV: sa["password"],
-        })
-        log.append(f"[stack-seed] {'ok' if ok else 'FAILED'}: {msg[:400]}")
+        }, on_line=on_line, cancel=cancel)
+        _note(f"[stack-seed] {'ok' if ok else 'FAILED'}: {msg[:400]}")
         if not ok:
             return False, log
 
@@ -606,14 +628,14 @@ class LocalMeshBootstrap:
             # export it — same gap local_mesh.main() closes before start()).
             os.environ[ENV_AUTHKEY] = self.cfg.auth_key.strip()
             ok, msg = mesh.start()
-            log.append(f"[mesh-overlay] {'ok' if ok else 'FAILED'}: {msg[:400]}")
+            _note(f"[mesh-overlay] {'ok' if ok else 'FAILED'}: {msg[:400]}")
             if not ok:
                 return False, log
         else:
-            log.append("[mesh-overlay] skipped (LAN-only / no auth key)")
+            _note("[mesh-overlay] skipped (LAN-only / no auth key)")
 
-        log.append(f"[done] platform up. Front door: {self._stack_node().web_url}  "
-                   f"| Casdoor issuer: {self.cfg.issuer()}")
+        _note(f"[done] platform up. Front door: {self._stack_node().web_url}  "
+              f"| Casdoor issuer: {self.cfg.issuer()}")
         return True, log
 
     def down(self) -> tuple[bool, list[str]]:

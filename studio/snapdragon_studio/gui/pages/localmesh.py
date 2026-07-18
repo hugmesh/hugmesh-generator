@@ -47,9 +47,10 @@ in the status text, not faked with a progress bar.
 """
 from __future__ import annotations
 
+import threading
 import types
 
-from ..qt import QtCore, QtWidgets, Signal
+from ..qt import QtCore, QtGui, QtWidgets, Signal
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
 from ...core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales,
@@ -60,24 +61,37 @@ from ._widgets import _row, collapsible
 
 
 class _MeshWorker(QtCore.QThread):
-    """Runs ONE mesh verb (a zero-arg callable returning (ok, lines-or-msg)) off the
-    GUI thread. Hold a reference on the page (self.worker) — a local would be GC'd
-    mid-run and take the thread with it."""
+    """Runs ONE mesh verb off the GUI thread. Hold a reference on the page
+    (self.worker) — a local would be GC'd mid-run and take the thread with it.
+
+    Two verb shapes:
+      * buffered (the original): a zero-arg callable returning (ok, lines-or-msg) —
+        the result lines are emitted when it finishes;
+      * streaming: ``stream=True`` and the callable takes (on_line, cancel) — every
+        line is emitted AS THE VERB RUNS (line.emit is thread-safe: a queued
+        signal), and the returned lines are NOT re-emitted (they already streamed —
+        re-dumping them doubled every milestone in the log)."""
     line = Signal(str)
     done = Signal(bool)
 
-    def __init__(self, fn, parent=None):
+    def __init__(self, fn, parent=None, stream=False, cancel=None):
         super().__init__(parent)
         self._fn = fn
+        self._stream = stream
+        self.cancel = cancel
 
     def run(self):  # noqa: D102 — QThread contract
         try:
-            ok, out = self._fn()
+            if self._stream:
+                ok, _out = self._fn(self.line.emit, self.cancel)
+            else:
+                ok, out = self._fn()
+                for ln in (out if isinstance(out, (list, tuple)) else [out]):
+                    if ln:
+                        self.line.emit(str(ln))
         except Exception as e:  # a worker exception must NEVER abort the app
-            ok, out = False, [f"!! {type(e).__name__}: {e}"]
-        for ln in (out if isinstance(out, (list, tuple)) else [out]):
-            if ln:
-                self.line.emit(str(ln))
+            self.line.emit(f"!! {type(e).__name__}: {e}")
+            ok = False
         self.done.emit(bool(ok))
 
 
@@ -352,6 +366,39 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.boot_down_btn.clicked.connect(self._bootstrap_down)
         brow.addWidget(self.boot_start_btn)
         brow.addWidget(self.boot_down_btn)
+        # Host readiness WITHOUT committing to anything: the same preflight `up`
+        # runs (docker daemon, buildx-in-env, disk headroom, maven prerequisites),
+        # surfaced on demand so problems appear BEFORE the operator acknowledges.
+        self.preflight_btn = QtWidgets.QPushButton("Check readiness")
+        self.preflight_btn.setToolTip(
+            "Read-only host probes — docker daemon, buildx visibility in the exact "
+            "build env, disk headroom under the docker data-root, and (for a cold "
+            "build) the local maven registry. Nothing is generated or started.")
+        self.preflight_btn.clicked.connect(self._check_readiness)
+        brow.addWidget(self.preflight_btn)
+        # The cold-build prerequisite preflight names — runnable HERE so a
+        # from-scratch bring-up never needs a terminal detour.
+        self.m2_btn = QtWidgets.QPushButton("Build maven prereqs (m2)")
+        self.m2_btn.setToolTip(
+            "`make stack-m2-bootstrap`: builds the org-private systems.snapdragon "
+            "maven artifacts FROM SOURCE and serves them from a local registry "
+            "container — required once before the FIRST (cold) stack build; "
+            "readiness tells you when. Streams below; long (Spring builds).")
+        self.m2_btn.clicked.connect(self._m2_bootstrap)
+        brow.addWidget(self.m2_btn)
+        self.cancel_btn = QtWidgets.QPushButton("Cancel")
+        self.cancel_btn.setToolTip("Terminate the running verb's whole process "
+                                   "group (make + compose + docker builds).")
+        self.cancel_btn.clicked.connect(self._cancel_clicked)
+        self.cancel_btn.setVisible(False)
+        brow.addWidget(self.cancel_btn)
+        self.open_web_btn = QtWidgets.QPushButton("Open web UI")
+        self.open_web_btn.setToolTip(
+            "Open the running stack's front door (http://localhost:8088) in your "
+            "browser. Does nothing destructive; if the stack is down the browser "
+            "just shows a connection error.")
+        self.open_web_btn.clicked.connect(self._open_web_ui)
+        brow.addWidget(self.open_web_btn)
         brow.addStretch(1)
         lay.addLayout(brow)
 
@@ -420,32 +467,54 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         )
 
     # ── worker plumbing (the no-freeze fix) ──────────────────────────────────────
-    def _launch(self, label: str, fn):
-        """Run one verb off the GUI thread; buttons + Finish re-arm on done. The
-        status text states the honest limitation: output arrives when the verb
-        FINISHES (LocalStackNode buffers via subprocess.run) — the thread buys a
-        responsive wizard, not live progress."""
+    def _launch(self, label: str, fn, stream: bool = False,
+                cancellable: bool = False):
+        """Run one verb off the GUI thread; buttons + Finish re-arm on done.
+        ``stream=True`` verbs take (on_line, cancel) and their output lands in the
+        log LIVE (what makes an hour-long cold compose build watchable);
+        ``cancellable`` arms the Cancel button, which terminates the verb's whole
+        process group. Buffered verbs keep the honest old caveat: output arrives
+        when the step finishes."""
         if self._running:
             return
         self._running = True
         self._set_verbs_enabled(False)
-        self.status.setText(f"{label} — this can take several minutes; the wizard "
-                            f"stays responsive. Output appears when the step finishes.")
-        self.worker = _MeshWorker(fn, parent=self)
+        cancel = threading.Event() if cancellable else None
+        if stream:
+            self.status.setText(f"{label} — output streams below as it happens; the "
+                                f"wizard stays responsive."
+                                + (" Cancel stops the whole build."
+                                   if cancellable else ""))
+        else:
+            self.status.setText(f"{label} — this can take several minutes; the wizard "
+                                f"stays responsive. Output appears when the step "
+                                f"finishes.")
+        self.cancel_btn.setVisible(cancellable)
+        self.cancel_btn.setEnabled(cancellable)
+        self.worker = _MeshWorker(fn, parent=self, stream=stream, cancel=cancel)
         self.worker.line.connect(self.log.appendPlainText)
         self.worker.done.connect(self._verb_done)
         self.completeChanged.emit()
         self.worker.start()
 
+    def _cancel_clicked(self):
+        w = self.worker
+        if w is not None and w.cancel is not None and self._running:
+            w.cancel.set()
+            self.cancel_btn.setEnabled(False)
+            self.status.setText("Cancelling — terminating the build process group…")
+
     def _verb_done(self, ok: bool):
         self._running = False
         self._set_verbs_enabled(True)
+        self.cancel_btn.setVisible(False)
         self.status.setText("Done." if ok else "FAILED (see log).")
         self._refresh_status()
         self.completeChanged.emit()
 
     def _set_verbs_enabled(self, on: bool):
-        for b in (self.start_btn, self.stop_btn, self.logs_btn, self.boot_down_btn):
+        for b in (self.start_btn, self.stop_btn, self.logs_btn, self.boot_down_btn,
+                  self.preflight_btn, self.m2_btn):
             b.setEnabled(on)
         # the bootstrap start additionally requires the acknowledgement
         self.boot_start_btn.setEnabled(on and self.ack.isChecked())
@@ -523,10 +592,49 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self.log.appendPlainText(f"WARNING: {warn}")
         self.log.appendPlainText("[bootstrap] generating credentials + starting the "
                                  "full platform stack from scratch …")
-        self._launch("Bootstrapping", self.boot.up)
+        boot = self.boot
+        self._launch("Bootstrapping",
+                     lambda on_line, cancel: boot.up(on_line=on_line, cancel=cancel),
+                     stream=True, cancellable=True)
 
     def _bootstrap_down(self):
         self._launch("Stopping the stack", self.boot.down)
+
+    def _check_readiness(self):
+        """Read-only host preflight on demand — the exact probes `up` gates on,
+        BEFORE the operator commits. Runs off-thread (docker probes can block)."""
+        self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
+        boot = self.boot
+
+        def probe():
+            problems = boot.preflight()
+            if problems:
+                return False, ["[readiness] NOT ready:",
+                               *(f"  - {p}" for p in problems),
+                               "[readiness] fix the above; 'Build maven prereqs "
+                               "(m2)' covers the maven-registry one."]
+            return True, ["[readiness] READY — docker daemon, buildx, disk "
+                          "headroom and maven prerequisites all check out."]
+
+        self._launch("Checking host readiness", probe)
+
+    def _m2_bootstrap(self):
+        """The cold-build prerequisite, from the GUI: streams `make
+        stack-m2-bootstrap` (org-private maven artifacts built from source into
+        the local registry container)."""
+        self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
+        boot = self.boot
+        self.log.appendPlainText("[m2-bootstrap] building the private maven "
+                                 "artifacts from source (one-time cold-build "
+                                 "prerequisite) …")
+        self._launch("Building maven prerequisites",
+                     lambda on_line, cancel: boot.m2_bootstrap(on_line=on_line,
+                                                               cancel=cancel),
+                     stream=True, cancellable=True)
+
+    def _open_web_ui(self):
+        QtGui.QDesktopServices.openUrl(
+            QtCore.QUrl(self.boot._stack_node().web_url))
 
 
 class LocalMeshDialog(QtWidgets.QDialog):
