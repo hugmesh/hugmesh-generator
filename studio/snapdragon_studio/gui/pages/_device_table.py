@@ -33,9 +33,15 @@ ROLE_NONE = "none"
 ROLE_FLASH = "flash"
 ROLE_KEYS = "keys"
 
-_COLUMNS = ("Device", "Model / Label", "Size", "Bus", "Mounted", "Role", "Image / Dir")
+_COLUMNS = ("Device", "Model / Label", "Size", "Bus", "Mounted", "Role",
+            "Image / Dir", "Artifact")
 _COL_ROLE = 5
 _COL_EXTRA = 6
+# per-flash-row FLAVOUR pick (install/live/img): which of the entry's built
+# artifacts is written. Choices come from flash_targets.flavors_for_platform for the
+# ASSIGNED image's platform (hide-inapplicable: a flavour that platform's builder
+# cannot emit would make the plan skip 100% of the time).
+_COL_FLAVOR = 7
 
 
 class _ScanWorker(QtCore.QThread):
@@ -60,8 +66,11 @@ class _ScanWorker(QtCore.QThread):
 class DeviceTable(QtWidgets.QGroupBox):
     """The per-device assignment table (see module docstring).
 
-    ``images_provider()`` returns ``[(entry_id, role, platform)]`` for the would-be-
-    committed worklist (the per-row Image combo). ``keys_gate()`` returns
+    ``images_provider()`` returns ``[(entry_id, role, platform, domains)]`` for the
+    would-be-committed worklist (the per-row Image combo; ``domains`` — the cluster
+    domain names attached to that entry — decorates the label so a device is
+    assigned "the beta.example backend", not a bare id). 3-tuples without domains
+    stay accepted. ``keys_gate()`` returns
     ``(allowed, reason)`` for the platform-level Keys-USB gating (keys_usb is x86-only
     today). ``on_assignment_changed()`` fires after any role / image / dir change so
     the page can write a keys assignment through the existing keys_usb field."""
@@ -148,6 +157,9 @@ class DeviceTable(QtWidgets.QGroupBox):
             fs_label = (t.fs_label or "").strip()
             name = (f"{model} · {fs_label}" if model and fs_label
                     else model or fs_label or "(unknown)")
+            hint = t.hint()
+            if hint:
+                name = f"{name} — {hint}" if name != "(unknown)" else hint
             self.table.setItem(i, 1, QtWidgets.QTableWidgetItem(name))
             self.table.setItem(i, 2, QtWidgets.QTableWidgetItem(
                 f"{t.size / (1 << 30):.1f} GiB"))
@@ -199,12 +211,13 @@ class DeviceTable(QtWidgets.QGroupBox):
             combo = QtWidgets.QComboBox()
             combo.setToolTip("Which built image is flashed to this device after a "
                              "successful build (via scripts/flash-disk.sh).")
-            try:
-                choices = list(self._images_provider())
-            except Exception:
-                choices = []
-            for entry_id, _role, _platform in choices:
-                combo.addItem(entry_id, entry_id)
+            for entry_id, _role, _platform, domains in self._image_choices():
+                label = entry_id + (f"  ({', '.join(domains)})" if domains else "")
+                combo.addItem(label, entry_id)
+                if domains:
+                    combo.setItemData(combo.count() - 1,
+                                      "domains: " + ", ".join(domains),
+                                      QtCore.Qt.ItemDataRole.ToolTipRole)
             i = combo.findData(a.get("entry_id", ""))
             if i >= 0:
                 combo.setCurrentIndex(i)
@@ -221,6 +234,65 @@ class DeviceTable(QtWidgets.QGroupBox):
         else:
             self.table.removeCellWidget(row, _COL_EXTRA)
             self.table.setItem(row, _COL_EXTRA, QtWidgets.QTableWidgetItem(""))
+        self._set_flavor_cell(row, t)
+
+    def _image_choices(self) -> list[tuple]:
+        """Normalized ``(entry_id, role, platform, domains)`` rows from the provider
+        (3-tuples get an empty domains tail); [] on provider failure."""
+        try:
+            raw = list(self._images_provider())
+        except Exception:
+            return []
+        out = []
+        for c in raw:
+            entry_id, role, platform = c[0], c[1], c[2]
+            domains = tuple(c[3]) if len(c) > 3 and c[3] else ()
+            out.append((entry_id, role, platform, domains))
+        return out
+
+    def _entry_platform(self, entry_id: str) -> str:
+        for eid, _role, platform, _domains in self._image_choices():
+            if eid == entry_id:
+                return platform
+        return ""
+
+    def _set_flavor_cell(self, row: int, t) -> None:
+        """The Artifact column: a flavour combo for a flash row with an assigned
+        image (choices = what that image's platform can emit), else empty."""
+        a = self._assign.get(t.path)
+        if not (a and a.get("role") == ROLE_FLASH and a.get("entry_id")):
+            self.table.removeCellWidget(row, _COL_FLAVOR)
+            self.table.setItem(row, _COL_FLAVOR, QtWidgets.QTableWidgetItem(""))
+            if a is not None:
+                a.pop("flavor", None)   # no image, no flavour — nothing may linger
+            return
+        platform = self._entry_platform(a["entry_id"])
+        combo = QtWidgets.QComboBox()
+        combo.setToolTip(
+            "WHICH built artifact is written: the OS .img, the live USB "
+            "(.live.iso) or the install USB (.installer.iso). Only what this "
+            "image's platform actually builds is offered; 'auto' takes the newest "
+            "built (.img preferred). A flavour the finished build did not produce "
+            "is skipped at flash time with the reason — never guessed.")
+        for fl in flash_targets.flavors_for_platform(platform):
+            combo.addItem(flash_targets.FLAVOR_LABELS.get(fl, fl), fl)
+        prev = a.get("flavor", flash_targets.FLAVOR_AUTO)
+        i = combo.findData(prev)
+        combo.setCurrentIndex(i if i >= 0 else 0)
+        a["flavor"] = combo.currentData() or flash_targets.FLAVOR_AUTO
+        combo.currentIndexChanged.connect(lambda _=0, r=row: self._flavor_changed(r))
+        self.table.setCellWidget(row, _COL_FLAVOR, combo)
+
+    def _flavor_changed(self, row: int) -> None:
+        if row >= len(self._targets):
+            return
+        t = self._targets[row]
+        a = self._assign.get(t.path)
+        combo = self.table.cellWidget(row, _COL_FLAVOR)
+        if a is not None and a.get("role") == ROLE_FLASH and combo is not None:
+            a["flavor"] = combo.currentData() or flash_targets.FLAVOR_AUTO
+        self._render_plan()
+        self._notify()
 
     # ---- assignment state ------------------------------------------------------------
     def _role_changed(self, row: int) -> None:
@@ -269,6 +341,7 @@ class DeviceTable(QtWidgets.QGroupBox):
         combo = self.table.cellWidget(row, _COL_EXTRA)
         if a is not None and a.get("role") == ROLE_FLASH and combo is not None:
             a["entry_id"] = combo.currentData() or ""
+        self._set_flavor_cell(row, t)   # the new image's platform bounds the flavours
         self._render_plan()
         self._notify()
 
@@ -295,12 +368,14 @@ class DeviceTable(QtWidgets.QGroupBox):
 
     # ---- what the page reads -----------------------------------------------------
     def flash_assignments(self) -> list[tuple]:
-        """[(FlashTarget, entry_id)] for every row assigned as a flash target."""
+        """[(FlashTarget, entry_id, flavor)] for every row assigned as a flash
+        target (flavor is a flash_targets flavour token; "auto" = newest built)."""
         out = []
         for t in self._targets:
             a = self._assign.get(t.path)
             if a and a.get("role") == ROLE_FLASH and a.get("entry_id"):
-                out.append((t, a["entry_id"]))
+                out.append((t, a["entry_id"], a.get("flavor",
+                                                    flash_targets.FLAVOR_AUTO)))
         return out
 
     def keys_assignment(self):
@@ -315,11 +390,12 @@ class DeviceTable(QtWidgets.QGroupBox):
         """The read-only post-build plan summary — flash assignments never appear in
         the build command; this label is where they show instead."""
         parts = []
-        for t, entry_id in self.flash_assignments():
+        for t, entry_id, flavor in self.flash_assignments():
             name = (t.model or t.fs_label or "").strip()
             gib = t.size / (1 << 30)
             desc = f"{name}, {gib:.0f} GiB" if name else f"{gib:.0f} GiB"
-            parts.append(f"{entry_id} → {t.path} ({desc})")
+            flav = "" if flavor == flash_targets.FLAVOR_AUTO else f" [{flavor}]"
+            parts.append(f"{entry_id}{flav} → {t.path} ({desc})")
         if parts:
             self.plan_label.setText(
                 "Post-build plan — after a successful build (via scripts/flash-disk.sh): "
