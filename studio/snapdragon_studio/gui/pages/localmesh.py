@@ -54,8 +54,9 @@ from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
 from ...core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales,
     discover_brands)
+from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
-from ._widgets import _row
+from ._widgets import _row, collapsible
 
 
 class _MeshWorker(QtCore.QThread):
@@ -306,6 +307,14 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "login-ui image build fails loudly.")
         lay.addWidget(_row("Web login languages", self.web_locales))
 
+        # Web login THEME — the same shared group BrandingPage hosts (one
+        # implementation, two frames): this flow is terminal at this page, so
+        # BrandingPage is unreachable from it. Collapsed: a from-scratch bring-up
+        # usually starts with the shipped brand.
+        self.login_theme = LoginThemeGroup()
+        lay.addWidget(collapsible("Web login theme (colours + fonts)",
+                                  self.login_theme, expanded=False))
+
         # prod-only overlay group.
         self.prod_group = QtWidgets.QGroupBox("Mesh overlay (prod only)")
         pg = QtWidgets.QVBoxLayout(self.prod_group)
@@ -356,6 +365,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.superadmin.textChanged.connect(self._refresh_plan)
         self.social.toggled.connect(self._refresh_plan)
         self.web_locales.textChanged.connect(self._refresh_plan)
+        self.login_theme.primary.textChanged.connect(self._refresh_plan)
+        self.login_theme.secondary.textChanged.connect(self._refresh_plan)
+        self.login_theme.font_preset.currentIndexChanged.connect(self._refresh_plan)
+        self.login_theme.font_file.textChanged.connect(self._refresh_plan)
         self.boot_domain.textChanged.connect(self._refresh_plan)
         self.boot_auth_key.textChanged.connect(self._refresh_plan)
         self.boot_login_server.textChanged.connect(self._refresh_plan)
@@ -400,6 +413,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             source_mode=("existing" if self.src_existing.isChecked() else "clone"),
             source_dir=self.src_dir.text().strip(),
             web_locales=_parse_web_locales(self.web_locales.text()),
+            # "" on invalid input, with the reason in error_text() — the verb
+            # handlers refuse to launch on it, so a typo can never silently ship
+            # an unthemed stack the operator believed was themed.
+            login_theme_css=self.login_theme.compose_css(),
         )
 
     # ── worker plumbing (the no-freeze fix) ──────────────────────────────────────
@@ -494,6 +511,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             self.status.setText("Acknowledge the plan first.")
             return
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
+        if self.login_theme.error_text():
+            self.status.setText(
+                "Cannot start: web login theme: " + self.login_theme.error_text())
+            return
         problems = self.boot.validate()
         if problems:
             self.status.setText("Cannot start: " + "; ".join(problems))

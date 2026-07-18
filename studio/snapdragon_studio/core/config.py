@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import shlex
 from dataclasses import dataclass, field, asdict, MISSING
@@ -1446,6 +1447,35 @@ class ImageConfig:
         return self.superdomain or f"{self.brand}.internal"
 
     # ---- identity validation (fail-closed) ---------------------------------
+    def login_theme_css(self) -> str:
+        """The derived snap-theme.css text for this config's ``login_*`` choices, or
+        "" when unthemed. The ONE cfg->css point (wraps theme.compose_login_css):
+        the wizard's browser preview, the localmesh bootstrap and any headless
+        caller all share it, so the previewed bytes ARE the delivered bytes.
+
+        Raises ValueError with the gate reasons on a blocked upload / malformed
+        colour — callers on Qt slots must catch (an unhandled slot exception
+        aborts PyQt6)."""
+        from . import fonts as _fonts     # local: keep module import Qt/asset-free
+        from . import theme as _theme
+        font_bytes = b""
+        family = ""
+        if self.login_font_file:
+            try:
+                with open(self.login_font_file, "rb") as fh:
+                    font_bytes = fh.read()
+            except OSError as exc:
+                raise ValueError(f"cannot read login_font_file: {exc}") from exc
+            blocks, _warns = _fonts.check_font(
+                os.path.basename(self.login_font_file), font_bytes)
+            if blocks:
+                raise ValueError("; ".join(blocks))
+            family = os.path.splitext(os.path.basename(self.login_font_file))[0] \
+                .replace("-", " ").replace("_", " ")
+        return _theme.compose_login_css(
+            self.login_primary_color, self.login_secondary_color,
+            font_preset=self.login_font, font_family=family, font_bytes=font_bytes)
+
     def validate_identity(self) -> None:
         """Allowlist every identity field that flows into a root-sourced KEY=VALUE
         file (brand.conf / home.conf) or a sed replacement in the generator.
