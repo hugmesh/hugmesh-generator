@@ -32,6 +32,11 @@
 .PARAMETER Social
   Also bring up the heavy Synapse/Mastodon social tier (the `social` profile).
 
+.PARAMETER Tor
+  Also publish the fe-gateway as a Tor v3 .onion (the `tor` profile) — INBOUND
+  reachability over Tor with no public IP/DNS/ports. Read the address from
+  tests\stack\tor-onion\hostname once tor publishes it (~30s).
+
 .PARAMETER Down
   Tear the stack down (docker compose down -v) instead of bringing it up.
 
@@ -54,6 +59,7 @@ param(
   [string]$CasdoorIssuer = '',
   [int]$PublicHostPort = 8088,
   [switch]$Social,
+  [switch]$Tor,
   [switch]$Down,
   [switch]$UseHostGit
 )
@@ -87,7 +93,7 @@ $env:STACK_SRC = '../../.stack-src'
 
 if ($Down) {
   Write-Host '==> Tearing down the local stack (docker compose down -v)'
-  docker compose -f $Compose --profile social down -v
+  docker compose -f $Compose --profile social --profile tor down -v
   return
 }
 
@@ -134,8 +140,9 @@ if (-not $UseHostGit) {
 
 # ── 1b. Social tier needs a Mastodon env_file before compose renders it ─────
 $profileArgs = @()
+if ($Tor) { $profileArgs += @('--profile', 'tor') }
 if ($Social) {
-  $profileArgs = @('--profile', 'social')
+  $profileArgs += @('--profile', 'social')
   $mastodonEnv = Join-Path $StackDir '.mastodon.env'
   if (-not (Test-Path $mastodonEnv)) {
     Write-Host '==> Generating dev tests\stack\.mastodon.env (SOCIAL tier)'
@@ -156,12 +163,15 @@ docker compose -f $Compose @profileArgs build
 if ($LASTEXITCODE -ne 0) { throw 'docker compose build failed.' }
 
 # ── 3. Up ──────────────────────────────────────────────────────────────────
-Write-Host "==> Starting the stack (ENV=$Env, host port $PublicHostPort, social=$($Social.IsPresent))"
+Write-Host "==> Starting the stack (ENV=$Env, host port $PublicHostPort, social=$($Social.IsPresent), tor=$($Tor.IsPresent))"
 docker compose -f $Compose @profileArgs up -d
 if ($LASTEXITCODE -ne 0) { throw 'docker compose up failed.' }
 
 Write-Host ''
 Write-Host "Stack up. Front door: http://localhost:$PublicHostPort"
 Write-Host "Casdoor (identity):  http://localhost:8000"
+if ($Tor) {
+  Write-Host "Tor onion: read tests\stack\tor-onion\hostname once tor publishes it (~30s) — open it in Tor Browser"
+}
 Write-Host "Logs:  docker compose -f `"$Compose`" logs -f"
 Write-Host "Down:  pwsh -File scripts\stack-up.ps1 -Down"

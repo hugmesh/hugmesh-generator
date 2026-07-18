@@ -23,6 +23,11 @@ from dataclasses import dataclass
 
 _COMPOSE_FILE = os.path.join("tests", "stack", "compose.local.yaml")
 
+# Where the OPT-IN snapdragon-tor service copies the minted v3 .onion hostname
+# (PUBLIC — never the key) for the host/GUI to read. Bind-mounted from ./tor-onion
+# in the compose file; written ~30s after `make stack-up TOR=1`.
+_TOR_ONION_HOSTNAME_FILE = os.path.join("tests", "stack", "tor-onion", "hostname")
+
 # ── cold-build preflight wiring (mirrors the Makefile's m2 knobs) ──────────────
 # `make stack-m2-bootstrap` (tests/stack/m2-bootstrap.sh) builds the org-private
 # maven artifacts from source, serves them from a registry container, and writes
@@ -87,11 +92,17 @@ class LocalStackNode:
     def __init__(self, generator_dir: str, env: str = "test", social: bool = False,
                  public_host_port: int = 8088, domain: str = "",
                  source_mode: str = "clone", source_dir: str = "",
-                 web_locales: tuple[str, ...] = (), login_theme_css: str = ""):
+                 web_locales: tuple[str, ...] = (), login_theme_css: str = "",
+                 with_tor: bool = False):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
         self.social = social
+        # Opt-in Tor v3 onion for the local mesh: threads TOR=1 into `make stack-*`
+        # so the Makefile adds `--profile tor` and the snapdragon-tor service comes
+        # up, publishing the fe-gateway as a .onion. DEFAULT off — the unprofiled
+        # stack is byte-identical to before (mirrors the `social` opt-in).
+        self.with_tor = with_tor
         self.public_host_port = public_host_port
         # Public apex threaded into `make stack-up` as DOMAIN. In prod the Makefile
         # derives CASDOOR_ISSUER = https://id.$(DOMAIN); left empty (the default, and
@@ -135,6 +146,24 @@ class LocalStackNode:
     @property
     def web_url(self) -> str:
         return f"http://localhost:{self.public_host_port}"
+
+    def onion_hostname(self) -> str:
+        """The local mesh's minted v3 .onion address, or "" if not published yet.
+        Reads the PUBLIC hostname the snapdragon-tor service copies to
+        ./tor-onion/hostname (bind-mount) ~30s after a `TOR=1` bring-up. Never
+        raises — an absent/unreadable file (tor off, or not yet minted) is "".
+        The private key never leaves the tor-onion-keys volume, so it is not here."""
+        try:
+            with open(os.path.join(self.generator_dir, _TOR_ONION_HOSTNAME_FILE),
+                      encoding="utf-8") as f:
+                return "".join(f.read().split())
+        except OSError:
+            return ""
+
+    def onion_url(self) -> str:
+        """``http://<onion>/`` for the published onion, or "" when none yet."""
+        h = self.onion_hostname()
+        return f"http://{h}/" if h else ""
 
     def available(self) -> tuple[bool, str]:
         if not shutil.which("make"):
@@ -291,6 +320,11 @@ class LocalStackNode:
         env = os.environ.copy()
         env["ENV"] = self.env
         env["SOCIAL"] = "1" if self.social else ""
+        # TOR=1 -> the Makefile's STACK_TOR_PROFILE adds `--profile tor` and the
+        # snapdragon-tor service comes up. Set explicitly (""=off) so an inherited
+        # TOR=1 in the operator's shell can't silently flip it, exactly like SOCIAL —
+        # and `$(strip $(TOR))` empty leaves the unprofiled env byte-identical.
+        env["TOR"] = "1" if self.with_tor else ""
         env["PUBLIC_HOST_PORT"] = str(self.public_host_port)
         # Only export DOMAIN when set, so existing callers (and ENV=test) keep the
         # Makefile's own default. In prod this pins the Casdoor issuer to the same

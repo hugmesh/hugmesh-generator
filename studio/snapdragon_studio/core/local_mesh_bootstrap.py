@@ -40,6 +40,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 
 from . import theme
@@ -155,6 +156,12 @@ class LocalMeshBootstrapConfig:
     superadmin_username: str = "superadmin"
     out_dir: str = ""
     social: bool = False
+    # Publish the local mesh's fe-gateway as a Tor v3 .onion (the OPT-IN `tor`
+    # compose profile — docs/TOR-HIDDEN-SERVICE.md). DEFAULT off; when on, the
+    # from-scratch bring-up also starts the snapdragon-tor service and up() reports
+    # the minted .onion address. Mirrors the NODE `tor` optional service, scaled to
+    # the local docker mesh; reachability is over Tor, with no public IP/DNS/ports.
+    with_tor: bool = False
     auth_key: str = ""
     login_server: str = ""
     node_name: str = ""
@@ -251,7 +258,8 @@ class LocalMeshBootstrap:
                               source_mode=self.cfg.source_mode,
                               source_dir=self.cfg.source_dir,
                               web_locales=self.cfg.web_locales,
-                              login_theme_css=self.cfg.login_theme_css)
+                              login_theme_css=self.cfg.login_theme_css,
+                              with_tor=self.cfg.with_tor)
 
     def _mesh_node(self) -> LocalMeshNode:
         return LocalMeshNode(self.generator_dir, LocalMeshConfig(
@@ -455,9 +463,15 @@ class LocalMeshBootstrap:
         # i18n union-rebase; ONE line, with every knob it carries, is the contract)
         _wl = ",".join(c.web_locales)
         lines.append(f"      make stack-up   (ENV={c.env}, SOCIAL={'on' if c.social else 'off'}"
+                     + f", TOR={'on' if c.with_tor else 'off'}"
                      + (f", SNAP_WEB_LOCALES={_wl}" if _wl else "")
                      + (", SNAP_THEME_CSS=<derived>" if c.login_theme_css.strip() else "")
                      + ")")
+        if c.with_tor:
+            lines.append("          -> also starts snapdragon-tor (the `tor` profile):")
+            lines.append("             publishes the fe-gateway as a v3 .onion, reachable")
+            lines.append("             in Tor Browser (no public IP/DNS/ports). The address")
+            lines.append("             is reported at the end + via `make stack-onion`.")
         if _wl:
             lines.append(f"          -> login-ui image ships i18n/{{{_wl}}}.json catalogs")
         if c.login_theme_css.strip():
@@ -634,9 +648,38 @@ class LocalMeshBootstrap:
         else:
             _note("[mesh-overlay] skipped (LAN-only / no auth key)")
 
+        # Tor onion — report the minted .onion once the snapdragon-tor service
+        # publishes it (tor bootstraps + uploads the descriptor in ~30s). Never
+        # fatal: a slow/absent publish just tells the operator how to read it later.
+        if self.cfg.with_tor:
+            onion = self._await_onion(stack, _note, cancel)
+            if onion:
+                _note(f"[tor] onion published — reachable in Tor Browser: {onion}")
+            else:
+                _note("[tor] onion still publishing — read it later with "
+                      "`make stack-onion` (or tests/stack/tor-onion/hostname)")
+
         _note(f"[done] platform up. Front door: {self._stack_node().web_url}  "
               f"| Casdoor issuer: {self.cfg.issuer()}")
         return True, log
+
+    def _await_onion(self, stack, note, cancel, timeout_s: int = 45) -> str:
+        """Poll the stack for the published .onion URL, up to ``timeout_s`` (tor
+        needs ~30s to bootstrap + upload the v3 descriptor). Returns the URL, or ""
+        if it has not appeared yet / was cancelled. Cancel-aware; 1s granularity."""
+        deadline = time.monotonic() + timeout_s
+        announced = False
+        while time.monotonic() < deadline:
+            if cancel is not None and cancel():
+                return ""
+            url = stack.onion_url()
+            if url:
+                return url
+            if not announced:
+                note("[tor] waiting for the onion descriptor to publish (~30s)…")
+                announced = True
+            time.sleep(1)
+        return stack.onion_url()
 
     def down(self) -> tuple[bool, list[str]]:
         """Tear down BOTH composed projects: the stack (make stack-down) + the mesh
@@ -697,7 +740,8 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
         print(f"WARNING: {w}", file=sys.stderr)
     return LocalMeshBootstrapConfig(
         env=args.env, superadmin_username=args.superadmin_username,
-        out_dir=args.out, social=args.social, auth_key=_read_authkey(args),
+        out_dir=args.out, social=args.social, with_tor=args.with_tor,
+        auth_key=_read_authkey(args),
         login_server=args.login_server, node_name=args.node_name,
         brand=args.brand, cluster_domain=args.cluster_domain,
         source_mode=args.source_mode, source_dir=args.source_dir,
@@ -734,6 +778,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="runtime creds dir (default: the gitignored keys-out/).")
     p.add_argument("--social", action="store_true",
                    help="also bring up the social (Matrix/Mastodon) profile.")
+    p.add_argument("--with-tor", action="store_true",
+                   help="also publish the fe-gateway as a Tor v3 .onion (the `tor` "
+                        "profile) — reachable in Tor Browser, no public IP/DNS/ports.")
     p.add_argument("--brand", default=DEFAULT_BRAND,
                    help=f"brand slug (default: {DEFAULT_BRAND}).")
     p.add_argument("--cluster-domain", default="",

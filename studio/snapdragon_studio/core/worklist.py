@@ -32,6 +32,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .config import (
+    INFRA_SERVICES_CHOICES,
+    OPTIONAL_SERVICES_BY_PLATFORM,
     ImageConfig,
     SECRET_FIELDS,
     clear_role_class_fields,
@@ -44,6 +46,21 @@ WORKLIST_SCHEMA = "snapdragon-worklist/v1"
 
 # encrypt_root override sentinels on a worklist entry.
 ENCRYPT_ROOT_CHOICES = ("default", "on", "off")
+
+# Per-node INFRA (scope:node) services a mesh worklist entry may opt into,
+# independently per node — the Tor v3 onion (docs/TOR-HIDDEN-SERVICE.md) and the
+# node egress-VPN (docs/EGRESS-VPN.md). A subset of config.INFRA_SERVICES_CHOICES:
+# only the two that are genuine per-NODE image services (workloadConsole/anubis are
+# cluster-plane, not a per-node image axis). ADDITIVE to the mesh-wide default the
+# Network page sets — so "the mesh has no onion, but node X exposes one" is now
+# expressible, which a single mesh-wide flag could not say.
+WORKLIST_INFRA_SERVICES = ("tor", "egress-vpn")
+
+# The ONLY platform whose builder takes the Tor onion as the dedicated --with-tor
+# flag (tor_onion_service is an x86-only field). On rpi5, tor is a --optional-services
+# node slug instead; every other platform expresses neither, so the selection is
+# dropped there rather than emitted as a flag the builder would ignore.
+_TOR_WITH_FLAG_PLATFORMS = ("x86",)
 
 
 def entry_id(role: str, platform: str) -> str:
@@ -70,10 +87,17 @@ class WorklistEntry:
     encrypt_root: str = "default"    # "default" | "on" | "off"; jetson rows forced "off"
     packages_add: str = ""           # per-image Portage atoms to add (space-separated)
     packages_drop: str = ""          # per-image Portage atoms to drop (space-separated)
+    # Per-node scope:node infra services (WORKLIST_INFRA_SERVICES). ADDITIVE to the
+    # mesh-wide Network-page default; emitted via each platform's real mechanism in
+    # materialize (x86 tor -> --with-tor; rpi5 tor/egress-vpn -> --optional-services).
+    infra_services: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.id:
             self.id = entry_id(self.role, self.platform)
+        # Tolerate a list from JSON (from_dict) — the field is a tuple by contract.
+        if not isinstance(self.infra_services, tuple):
+            self.infra_services = tuple(self.infra_services or ())
 
     @property
     def build_subdir(self) -> str:
@@ -86,6 +110,8 @@ class WorklistEntry:
             "board": self.board, "flavor": self.flavor, "desktop": self.desktop,
             "encrypt_root": self.encrypt_root,
             "packages_add": self.packages_add, "packages_drop": self.packages_drop,
+            # a JSON list on disk; __post_init__ re-tuples it on load
+            "infra_services": list(self.infra_services),
         }
 
     @classmethod
@@ -211,6 +237,18 @@ class WorklistConfig:
         cfg.encrypt_root = self._resolve_encrypt_root(entry)
         cfg.build_subdir = entry.build_subdir
 
+        # 4b. Per-node infra (scope:node) services — the Tor onion + node egress-VPN
+        #     (docs/TOR-HIDDEN-SERVICE.md / EGRESS-VPN.md), ADDITIVE to the mesh-wide
+        #     Network-page default already on the base. Emitted via the mechanism THIS
+        #     platform's builder actually accepts, so a per-node selection is a REAL
+        #     flag, never a silent no-op (the dead-default class this file guards):
+        #       - x86 tor  -> --with-tor            (tor_onion_service; the x86-only field)
+        #       - rpi5 tor / rpi5 egress-vpn -> --optional-services <slug> (node services)
+        #     BEFORE step 5 so strip_platform_unsupported is the safety net; a service the
+        #     entry's platform cannot express (frite/jetson/opi5/opz2 parse neither) is
+        #     dropped, never emitted.
+        self._apply_infra_services(cfg, entry)
+
         # 5. Defensive re-application of the two gating axes (belt & braces I4), then the
         #    mesh tailnet forcing (matching builder reality: x86 mesh emits
         #    --with-tailscale/--with-sso; ARM joins mesh unless --skip-mesh).
@@ -232,6 +270,23 @@ class WorklistConfig:
         # 6. Fail closed — includes superdomain + the package-atom regex.
         cfg.validate_identity()
         return cfg
+
+    def _apply_infra_services(self, cfg: ImageConfig, entry: WorklistEntry) -> None:
+        """Fold the entry's per-node infra services onto ``cfg`` via each platform's
+        real builder mechanism (see step 4b). Unknown / platform-inexpressible slugs
+        are dropped — a per-node toggle never becomes a flag the builder ignores."""
+        plat_optional = OPTIONAL_SERVICES_BY_PLATFORM.get(entry.platform, ())
+        for svc in entry.infra_services:
+            if svc not in WORKLIST_INFRA_SERVICES:
+                continue                                   # not a per-node infra slug
+            if svc == "tor" and entry.platform in _TOR_WITH_FLAG_PLATFORMS:
+                cfg.tor_onion_service = True               # x86: the dedicated --with-tor
+            elif svc in INFRA_SERVICES_CHOICES and svc in plat_optional:
+                # rpi5: a real --optional-services node service. Append (dedup); the
+                # sentinel forms (none/all) are never per-node, so a plain slug is safe.
+                if svc not in cfg.optional_services:
+                    cfg.optional_services = [*cfg.optional_services, svc]
+            # else: this platform's builder expresses neither -> drop (no dead flag).
 
     def _resolve_encrypt_root(self, entry: WorklistEntry) -> bool:
         """Resolve the entry's tri-state override to a concrete bool. Jetson is forced

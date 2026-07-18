@@ -937,6 +937,32 @@ services:
     build:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-character-studio-ui
 
+  # ── snapdragon-tor — v3 onion (hidden service) for the local mesh (OPT-IN) ──
+  # Publishes the fe-gateway as a Tor v3 .onion, mirroring the NODE `tor` optional
+  # service (docs/TOR-HIDDEN-SERVICE.md) for the LOCAL docker mesh — INBOUND
+  # reachability with NO public IP / DNS / open ports. OPT-IN behind the `tor`
+  # compose profile: `make stack-up TOR=1` (or `--profile tor`); a default stack
+  # never creates it, so the unprofiled stack is byte-identical to before. Built
+  # from ./tor (multi-arch alpine+tor, NO platform pin) so it runs natively on
+  # Linux docker AND Docker Desktop (Windows/macOS) and on arm64 hosts. tor
+  # resolves `snapdragon-fe-gateway` over the compose network and forwards the
+  # onion :80 there. The minted .onion hostname is copied to ./tor-onion/hostname
+  # (gitignored) for the host/GUI to read; the private key persists in the
+  # tor-onion-keys volume so the address is stable across restarts.
+  snapdragon-tor:
+    profiles: ["tor"]
+    build:
+      context: ./tor
+    environment:
+      TOR_ONION_UPSTREAM: ${TOR_ONION_UPSTREAM:-snapdragon-fe-gateway:8080}
+    volumes:
+      - tor-onion-keys:/var/lib/tor/snapdragon-onion
+      - ./tor-onion:/onion-out
+    depends_on:
+      snapdragon-fe-gateway:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   route-access-pg:
   federation-pg:
@@ -946,3 +972,7 @@ volumes:
   owncast-bff-pg:
   tube-bff-pg:
   federation-bundles:
+  # v3 onion key custody for the OPT-IN snapdragon-tor service (`--profile tor`).
+  # Persisting the key keeps the .onion address stable across restarts; only the
+  # PUBLIC hostname is ever copied out (to ./tor-onion) — the key never leaves here.
+  tor-onion-keys:

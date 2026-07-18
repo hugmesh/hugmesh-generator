@@ -317,7 +317,7 @@ ORANGEPIZERO2_PASS    := ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
         flash qemu qemu-rpi qemu-x86 \
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
-        stack-clone stack-mastodon-env stack-m2-bootstrap stack-build stack-up stack-down stack-logs stack-ps
+        stack-clone stack-mastodon-env stack-m2-bootstrap stack-build stack-up stack-down stack-logs stack-ps stack-onion
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z0-9_.+-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -846,6 +846,11 @@ STACK_ENV := STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              SNAP_WEB_LOCALES='$(SNAP_WEB_LOCALES)' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
+# Opt-in Tor v3 onion for the LOCAL mesh (the `tor` compose profile, built from
+# tests/stack/tor). `make stack-up TOR=1` publishes the fe-gateway as a stable
+# .onion — INBOUND reachability with no public IP/DNS/ports. Read the address with
+# `make stack-onion`. See docs/TOR-HIDDEN-SERVICE.md + the snapdragon-tor service.
+STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)
 COMPOSE_CMD   ?= docker compose
 # ── private-maven cold-build wiring (see tests/stack/m2-bootstrap.sh) ──
 # Four Java services (admin/user/mod-bff, federation-api) resolve org-PRIVATE
@@ -905,13 +910,14 @@ stack-m2-bootstrap: ## COLD-BUILD prereq: build the private systems.snapdragon m
 	bash tests/stack/m2-bootstrap.sh
 
 stack-build: stack-clone $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
 
-stack-up: stack-clone $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
-	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) build
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) up -d
+stack-up: stack-clone $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon; TOR=1 adds a Tor .onion)
+	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off), tor=$(if $(strip $(TOR)),on,off)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) up -d
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  | Casdoor: http://localhost:8000"
+	@$(if $(strip $(TOR)),echo "    Tor onion: run 'make stack-onion' once tor publishes (~30s) for the .onion address";)
 	@echo "    Logs: make stack-logs   Down: make stack-down"
 
 stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real SSO login; SOCIAL=1 also seeds Matrix/Mastodon
@@ -920,10 +926,17 @@ stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real 
 	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin / e2e-pass)."
 
 stack-down: ## stop the local stack and drop its volumes
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social down -v
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor down -v
 
 stack-logs: ## tail logs from the running local stack
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) logs -f --tail=100
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_TOR_PROFILE) logs -f --tail=100
 
 stack-ps: ## list the local stack's containers + status
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) ps
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_TOR_PROFILE) ps
+
+stack-onion: ## print the local mesh's Tor .onion address (needs a `make stack-up TOR=1` bring-up)
+	@if [ -s tests/stack/tor-onion/hostname ]; then \
+	  echo "http://$$(cat tests/stack/tor-onion/hostname)/   (open in Tor Browser)"; \
+	else \
+	  echo "no .onion yet — bring up with 'make stack-up TOR=1' and wait ~30s for tor to publish it"; \
+	fi

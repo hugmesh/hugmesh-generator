@@ -41,6 +41,10 @@ tests/stack/.m2-registry.env
 # seed-e2e.sh workdir — rendered role JSON (deterministic test passwords) +
 # pre-minted per-persona JWTs. Runtime-only; never commit.
 tests/stack/.seed-e2e/
+# The OPT-IN snapdragon-tor service (`make stack-up TOR=1`) copies the minted
+# PUBLIC .onion hostname here for the host/GUI to read (the private key stays in
+# the tor-onion-keys volume). Runtime-only, machine-specific; never commit.
+tests/stack/tor-onion/
 
 # ── Generated secrets — NEVER commit ──────────────────────────────
 # Output of scripts/gen-provision-keys.sh, gen-cluster-secrets.sh, gen-keystores.sh
