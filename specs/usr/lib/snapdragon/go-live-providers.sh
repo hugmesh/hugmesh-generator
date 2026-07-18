@@ -600,7 +600,7 @@ glp_emit_tor-onion() {
         printf 'GO-LIVE — Tor v3 onion (hidden service)\n'
         printf '=======================================\n\n'
         printf 'INBOUND reachability with NO public IP, NO public DNS, NO open ports, and\n'
-        printf 'NO Cloudflare. The node`s own Tor daemon dials OUT to the Tor network and\n'
+        printf "NO Cloudflare. The node's own Tor daemon dials OUT to the Tor network and\n"
         printf 'publishes the in-cluster fe-gateway as a STABLE v3 .onion.\n\n'
         if [ -n "${onion}" ]; then
             printf 'Your address:  %s\n' "${onion}"
