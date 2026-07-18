@@ -414,6 +414,11 @@ class ProgressPage(QtWidgets.QWizardPage):
         # around each sequential entry build) — what the flash plan passes as
         # --artifact so flash-disk.sh never has to guess between same-role images.
         self._entry_artifacts: dict[str, str] = {}
+        # EVERY flashable artifact each entry produced (newest first) — one x86
+        # entry can emit .img + .live.iso + .installer.iso in a single run, and the
+        # per-device FLAVOUR pick needs the whole set (recording only the newest
+        # would make every non-default flavour unreachable).
+        self._entry_artifact_sets: dict[str, tuple[str, ...]] = {}
         self._entry_baseline: dict[str, float] = {}
         self._flash_timer = QtCore.QTimer(self)
         self._flash_timer.setInterval(2500)        # live device come/go refresh
@@ -701,6 +706,7 @@ class ProgressPage(QtWidgets.QWizardPage):
         self._last_status = None
         self._flash_queue = []
         self._entry_artifacts = {}
+        self._entry_artifact_sets = {}
         self._entry_baseline = {}
         self.flash_group.setVisible(False)        # only an all-ok finish reveals it
         self.total_bar.setRange(0, 100)
@@ -843,9 +849,13 @@ class ProgressPage(QtWidgets.QWizardPage):
             # record the artifact THIS entry produced (diff vs its start baseline);
             # "" (nothing new / compressed-only output) stays unrecorded, so a flash
             # assignment for this entry fails SAFE (skipped, never a glob guess).
-            art = flash_targets.new_artifact(self._work_dir(), self._entry_baseline)
-            if art:
-                self._entry_artifacts[self.driver.results[i].entry.id] = art
+            arts = flash_targets.new_artifacts(self._work_dir(), self._entry_baseline)
+            if arts:
+                eid = self.driver.results[i].entry.id
+                self._entry_artifact_sets[eid] = arts
+                # the single auto pick (newest .img else newest) — unchanged contract
+                self._entry_artifacts[eid] = flash_targets.pick_artifact(
+                    arts, flash_targets.FLAVOR_AUTO)
         if row.job_item is not None and row.job_t_start is not None:
             row.job_item.setText(_COL_TIME, _fmt_elapsed(now - row.job_t_start))
         if status == "ok":
@@ -1289,12 +1299,30 @@ class ProgressPage(QtWidgets.QWizardPage):
             if self.flash_worker is not None and self.flash_worker.isRunning():
                 self.flash_worker.wait(3000)  # the previous worker already emitted done
             a = self._flash_queue.pop(0)
-            artifact = self._entry_artifacts.get(a.entry_id, "")
+            flavor = getattr(a, "flavor", flash_targets.FLAVOR_AUTO)
+            artifact = flash_targets.pick_artifact(
+                self._entry_artifact_sets.get(a.entry_id, ()), flavor)
             if not artifact:
-                self.log.appendPlainText(
-                    f"Flash plan: no artifact was recorded for {a.entry_id} in this run "
-                    f"— skipped for safety (flash manually: scripts/flash-disk.sh "
-                    f"--artifact <image> {a.target.path}).")
+                # legacy single-record store (pre-flavour callers/tests seed only
+                # this): honour it when it satisfies the requested flavour.
+                single = self._entry_artifacts.get(a.entry_id, "")
+                if single and (flavor == flash_targets.FLAVOR_AUTO or
+                               flash_targets.classify_artifact_flavor(single) == flavor):
+                    artifact = single
+            if not artifact:
+                built = self._entry_artifact_sets.get(a.entry_id, ())
+                if built and flavor != flash_targets.FLAVOR_AUTO:
+                    names = ", ".join(os.path.basename(b) for b in built)
+                    self.log.appendPlainText(
+                        f"Flash plan: {a.entry_id} built no '{flavor}' artifact this "
+                        f"run (built: {names}) — skipped rather than writing the "
+                        f"wrong image. Check the build's flavor axis (e.g. --flavor "
+                        f"both) or pick 'auto'.")
+                else:
+                    self.log.appendPlainText(
+                        f"Flash plan: no artifact was recorded for {a.entry_id} in this run "
+                        f"— skipped for safety (flash manually: scripts/flash-disk.sh "
+                        f"--artifact <image> {a.target.path}).")
                 continue
             live = next((t for t in flash_targets.list_targets()
                          if t.path == a.target.path), None)
@@ -1307,8 +1335,9 @@ class ProgressPage(QtWidgets.QWizardPage):
                     f"Flash plan: the device now at {a.target.path} is not the one "
                     f"assigned at build time (identity changed) — skipped for safety.")
                 continue
+            flav = "" if flavor == flash_targets.FLAVOR_AUTO else f" [{flavor}]"
             self.log.appendPlainText(
-                f"Flash plan: {a.entry_id} ({os.path.basename(artifact)}) → "
+                f"Flash plan: {a.entry_id}{flav} ({os.path.basename(artifact)}) → "
                 f"{a.target.path} (opted in)…")
             self._start_flash(a.target, argv=flash_targets.assignment_argv(
                 a, generator_dir=self.wiz.generator_dir, artifact=artifact))

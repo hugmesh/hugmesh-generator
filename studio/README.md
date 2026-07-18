@@ -36,6 +36,15 @@ a **local mesh node** from the system tray.
   the ASUS VivoBook, and popular Amazon/Best Buy/Costco/Walmart laptops & gaming desktops.
 - **Build backend**: native on Gentoo, otherwise **Docker** (Windows uses Docker Desktop).
   Same config → same command on every OS.
+- **Device imaging**: the Review & Build page lists every attached USB/SD/eMMC
+  device (recognising a Pi in rpiboot gadget mode and Libre-Computer/Amlogic
+  eMMC in burn mode; the disk backing `/` can never appear) and lets you assign
+  each one a worklist image **with its cluster domains shown**, plus **which
+  artifact it becomes — install USB (`.installer.iso`), live USB (`.live.iso`)
+  or the OS image (`.img`)** — only what that platform's builder actually emits
+  is offered, and a flavour the finished run didn't produce is skipped with the
+  reason, never guessed. Flashing runs post-build via `scripts/flash-disk.sh`
+  behind a fresh per-device identity re-check.
 - **Local mesh node**: start/stop/inspect a dockerized node from the **system tray**.
 
 ## Run

@@ -27,6 +27,11 @@ from dataclasses import dataclass
 _MIN_SIZE = 1 << 30                    # 1 GiB
 _MAX_SIZE = 256 * (1 << 30)           # ~256 GiB
 _MMC_RE = re.compile(r"^mmcblk[0-9]+$")
+# SBC identity hints (see FlashTarget.hint): the usb-gadget identity strings a Pi
+# compute module in rpiboot mode / an Amlogic (Libre Computer) board in burn mode
+# actually present as VENDOR/MODEL.
+_RPIBOOT_RE = re.compile(r"raspberry|rpi[- ]?boot|bcm27[01][0-9]", re.IGNORECASE)
+_AMLOGIC_RE = re.compile(r"amlogic|gx-?chip|libre\s*computer", re.IGNORECASE)
 
 # the exact lsblk field set verified present on the host (bytes sizes, JSON).
 # LABEL/MOUNTPOINT are universal `lsblk -o` fields — same single call, no extra
@@ -47,6 +52,7 @@ class FlashTarget:
     # working, and the golden detection behavior is unchanged when they stay default.
     fs_label: str = ""                       # first non-empty child partition LABEL
     mountpoints: tuple[str, ...] = ()        # this disk's + descendants' MOUNTPOINTs
+    vendor: str = ""                         # lsblk VENDOR / sysfs device/vendor
 
     @property
     def mounted(self) -> bool:
@@ -57,6 +63,22 @@ class FlashTarget:
         gib = self.size / (1 << 30)
         name = (self.model or "").strip() or "(unknown)"
         return f"{self.path} — {name} · {gib:.1f} GiB · {self.kind}"
+
+    def hint(self) -> str:
+        """A recognisable-SBC decoration for the device table, or "".
+
+        Matched on the USB identity strings these devices actually present, not
+        guessed from bus type: a Raspberry Pi CM in rpiboot/usbboot gadget mode
+        enumerates with a BCM2708/2710/2711/2712 boot MODEL, and an Amlogic SBC
+        (Libre Computer La Frite/Le Potato line) in burn/gadget mode presents an
+        Amlogic/GX-CHIP identity. Purely a LABEL — detection/eligibility is
+        unchanged, so an unrecognised adapter loses nothing."""
+        probe = f"{self.vendor} {self.model}".lower()
+        if _RPIBOOT_RE.search(probe):
+            return "Raspberry Pi eMMC (rpiboot gadget)"
+        if _AMLOGIC_RE.search(probe):
+            return "Libre Computer / Amlogic eMMC (burn mode)"
+        return ""
 
 
 # ── detection (read-only) ────────────────────────────────────────────────────────────
@@ -163,7 +185,8 @@ def _targets_from_lsblk_json(data: dict, root_src: str) -> list[FlashTarget]:
             removable=bool(dev.get("rm")),
             kind=_kind(name, transport),
             fs_label=fs_label,
-            mountpoints=mountpoints))
+            mountpoints=mountpoints,
+            vendor=(dev.get("vendor") or "").strip()))
     return out
 
 
@@ -218,10 +241,11 @@ def _targets_from_sysfs(root_src: str) -> list[FlashTarget]:
         if root_src and (path == root_src or os.path.realpath(path) == root_src):
             continue
         model = _read(os.path.join(base, name, "device", "model"))
+        vendor = _read(os.path.join(base, name, "device", "vendor"))
         transport = "usb" if is_usb else ""
         out.append(FlashTarget(path=path, size=size, model=model, transport=transport,
                                removable=removable, kind=_kind(name, transport),
-                               mountpoints=_mounts_for_dev(name)))
+                               mountpoints=_mounts_for_dev(name), vendor=vendor))
     return out
 
 
@@ -280,18 +304,73 @@ def flash_argv(target: FlashTarget, *, generator_dir: str, role: str, arch: str,
     return argv
 
 
+# ── artifact FLAVOURS (the install / live / img axis) ────────────────────────────────
+# Classified by the EXACT suffixes the builders emit (evidence: each builder's _ARTS
+# summary + artifact-path assignments):
+#   x86:            <brand>-x86-amd64-<role>-<env>-<ts>.img / .live.iso / .installer.iso
+#   frite/opi5/opz2:                       <prefix>.live.iso / .installer.iso  (no .img)
+#   rpi5:           <prefix>.img (+ a plain .iso that carries NO flavour suffix)
+#   jetson:         <prefix>.img
+# x86 secure-boot re-signs emit "<name>.live-sb.iso" / "<name>.installer-sb.iso" — the
+# (-sb)? alternation keeps them in their flavour class. A plain ".iso" classifies as ""
+# (unflavoured): it is only reachable through the "auto" pick, never mis-sold as
+# live/installer.
+FLAVOR_AUTO = "auto"
+_FLAVOR_RES: tuple[tuple[str, re.Pattern], ...] = (
+    ("installer", re.compile(r"\.installer(-sb)?\.iso$", re.IGNORECASE)),
+    ("live", re.compile(r"\.live(-sb)?\.iso$", re.IGNORECASE)),
+    ("img", re.compile(r"\.img$", re.IGNORECASE)),
+)
+# what each platform's BUILDER can emit (same evidence) — the GUI offers only these,
+# per the hide-inapplicable rule: a flavour the builder cannot produce would make the
+# flash plan skip 100% of the time.
+_PLATFORM_FLAVORS = {
+    "x86": ("img", "live", "installer"),
+    "rpi5": ("img",),
+    "jetson": ("img",),
+    "frite": ("live", "installer"),
+    "orangepi5": ("live", "installer"),
+    "orangepizero2": ("live", "installer"),
+}
+FLAVOR_LABELS = {
+    FLAVOR_AUTO: "auto — newest built (.img preferred)",
+    "img": "OS image (.img — boots as the installed system)",
+    "live": "live USB (.live.iso)",
+    "installer": "install USB (.installer.iso)",
+}
+
+
+def classify_artifact_flavor(name: str) -> str:
+    """"installer" | "live" | "img" | "" for an artifact FILENAME (see table above)."""
+    base = os.path.basename(name)
+    for flavor, rx in _FLAVOR_RES:
+        if rx.search(base):
+            return flavor
+    return ""
+
+
+def flavors_for_platform(platform: str) -> tuple[str, ...]:
+    """The flavour choices offered for a worklist entry's platform: always "auto",
+    plus exactly what that platform's builder can emit."""
+    return (FLAVOR_AUTO,) + _PLATFORM_FLAVORS.get(platform or "x86", ("img",))
+
+
 @dataclass(frozen=True)
 class FlashAssignment:
     """One row of the Review-page post-build flash plan: WHICH worklist image
     (entry_id) goes to WHICH attached device, plus the flash-disk.sh parameters
     (role token / arch / artifact work dir) resolved at commit time. Purely
     declarative — building the argv still delegates to flash_argv()/flash-disk.sh,
-    and execution stays post-build on the ProgressPage behind its TOCTOU re-check."""
+    and execution stays post-build on the ProgressPage behind its TOCTOU re-check.
+    ``flavor`` (trailing default: pre-existing positional constructions unchanged)
+    picks WHICH of the entry's artifacts is written — install/live/img — resolved
+    against the entry's recorded artifact set at flash time (pick_artifact)."""
     target: FlashTarget
     entry_id: str
     role: str
     arch: str
     work_dir: str
+    flavor: str = FLAVOR_AUTO
 
 
 def assignment_argv(a: FlashAssignment, *, generator_dir: str,
@@ -343,18 +422,45 @@ def snapshot_artifacts(work_dir: str) -> dict[str, float]:
     return out
 
 
-def new_artifact(work_dir: str, baseline: dict[str, float]) -> str:
-    """The flashable artifact a just-finished entry build produced: the newest-mtime
-    *.img (else *.iso) in ``work_dir`` that is NEW or REWRITTEN vs the entry-start
-    ``baseline`` snapshot. Returns "" when nothing qualifies — the fail-safe the
-    flash plan SKIPS on rather than falling back to flash-disk.sh's role glob (which
-    cannot tell two same-role entries apart)."""
+def new_artifacts(work_dir: str, baseline: dict[str, float]) -> tuple[str, ...]:
+    """EVERY flashable artifact a just-finished entry build produced (NEW or
+    REWRITTEN vs the entry-start ``baseline``), absolute paths, newest first.
+
+    Plural on purpose: one x86 entry can legitimately produce .img + .live.iso +
+    .installer.iso in a single run, and the per-device FLAVOUR pick needs the whole
+    set — recording only the newest would make every non-default flavour
+    unreachable."""
     fresh = snapshot_artifacts(work_dir)
-    changed = [(name, mtime) for name, mtime in fresh.items()
-               if baseline.get(name) != mtime]
-    if not changed:
+    changed = sorted(
+        ((name, mtime) for name, mtime in fresh.items()
+         if baseline.get(name) != mtime),
+        key=lambda c: c[1], reverse=True)
+    return tuple(os.path.join(os.path.abspath(work_dir), name)
+                 for name, _ in changed)
+
+
+def pick_artifact(artifacts: tuple[str, ...] | list[str], flavor: str) -> str:
+    """The artifact matching ``flavor`` out of an entry's recorded set, or "".
+
+    "auto" keeps the established preference (newest .img, else newest anything) —
+    byte-identical to the pre-flavour behaviour. A specific flavour returns ONLY a
+    matching artifact: when the entry didn't produce one (e.g. the build ran
+    ``--flavor live`` but the device asked for installer) the flash plan SKIPS with
+    the reason instead of writing the wrong image."""
+    arts = list(artifacts)
+    if not arts:
         return ""
-    imgs = [c for c in changed if c[0].lower().endswith(".img")]
-    pool = imgs or changed
-    name = max(pool, key=lambda c: c[1])[0]
-    return os.path.join(os.path.abspath(work_dir), name)
+    if flavor in (FLAVOR_AUTO, "", None):
+        imgs = [a for a in arts if a.lower().endswith(".img")]
+        return (imgs or arts)[0]
+    for a in arts:
+        if classify_artifact_flavor(a) == flavor:
+            return a
+    return ""
+
+
+def new_artifact(work_dir: str, baseline: dict[str, float]) -> str:
+    """The single auto-picked artifact (newest .img else newest) — the pre-flavour
+    contract, kept for existing callers/tests; == pick_artifact(new_artifacts(...),
+    "auto")."""
+    return pick_artifact(new_artifacts(work_dir, baseline), FLAVOR_AUTO)

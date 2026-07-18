@@ -697,15 +697,27 @@ class BuildPage(QtWidgets.QWizardPage):
 
     # ---- device table (flash / keys assignment) ----------------------------------
     def _flash_image_choices(self) -> list[tuple]:
-        """[(entry_id, role, platform)] for the per-device Image combo — the would-be-
-        committed worklist (mesh = the WorklistPage selection; standalone/cloud = the
-        synthesized 1-entry shape, so the combo shows exactly one image and the
-        single-image case degrades gracefully)."""
+        """[(entry_id, role, platform, domains)] for the per-device Image combo — the
+        would-be-committed worklist (mesh = the WorklistPage selection; standalone/
+        cloud = the synthesized 1-entry shape, so the combo shows exactly one image
+        and the single-image case degrades gracefully). ``domains`` are the cluster
+        Domain names attached to the entry (a Domain with an empty images list
+        attaches to every image — config.Domain), so the combo reads "be.rpi5
+        (beta.example)" and a device is assigned a node WITH its domain, not a bare
+        id."""
         try:
             wl = self._current_worklist()
         except Exception:
             return []
-        return [(e.id, e.role, e.platform) for e in wl.entries]
+        domains = list(getattr(self.wiz.cfg, "domains", ()) or ())
+        out = []
+        for e in wl.entries:
+            attached = tuple(
+                d.name for d in domains
+                if getattr(d, "name", "") and (
+                    not getattr(d, "images", None) or e.id in d.images))
+            out.append((e.id, e.role, e.platform, attached))
+        return out
 
     def _keys_gate(self) -> tuple:
         """(allowed, reason) for the table's Keys-USB role: keys_usb is platform-gated
@@ -843,7 +855,7 @@ class BuildPage(QtWidgets.QWizardPage):
         work_dir = (self.wiz.cfg.output_dir
                     or os.path.join(self.wiz.generator_dir, "out"))
         plan = []
-        for target, entry_id in self.device_table.flash_assignments():
+        for target, entry_id, flavor in self.device_table.flash_assignments():
             entry = entries.get(entry_id)
             if entry is None:
                 continue                # image no longer in the committed worklist
@@ -852,7 +864,7 @@ class BuildPage(QtWidgets.QWizardPage):
             plan.append(flash_targets.FlashAssignment(
                 target=target, entry_id=entry_id, role=role,
                 arch=flash_targets.arch_for_platform(entry.platform),
-                work_dir=work_dir))
+                work_dir=work_dir, flavor=flavor))
         self.wiz.flash_plan = plan
         # legacy single-target stash kept (always OFF — the table superseded it) so
         # ProgressPage's legacy tuple branch and its tests are untouched.
