@@ -1724,13 +1724,14 @@ cmd_ingest() {
     else
         echo
         echo "== next step: register the device =="
-        echo "  Emit-only mode. No dedicated phone-ingest registry endpoint"
-        echo "  exists yet (the /bff/internal/device-enrollment/self-report"
-        echo "  route is a DIFFERENT, machine-key-fp cluster-node contract —"
-        echo "  it will reject this phone-ingest/v1 record). Hand ${ingest}"
-        echo "  to the registry importer, or use --ingest-url once a real"
-        echo "  phone-ingest endpoint is stood up (mTLS client identity via"
-        echo "  --client-cert/--client-key/--ca)."
+        echo "  Emit-only mode. To register the phone in the device registry,"
+        echo "  re-run with --ingest-url pointing at the admin-bff phone-ingest"
+        echo "  endpoint (POST /bff/internal/device-registry/phone-ingest) plus"
+        echo "  the mTLS identity flags --client-cert/--client-key/--ca — the"
+        echo "  record UPSERTs one registry row per device_id and a superadmin"
+        echo "  reads the fleet at /bff/superadmin/phone-devices. (Do NOT use"
+        echo "  /bff/internal/device-enrollment/self-report — that is the"
+        echo "  machine-key-fp cluster-node contract; it rejects this record.)"
     fi
 }
 
