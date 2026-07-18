@@ -20,6 +20,29 @@ mesh:
   headscale_url: https://headscale.acme.games
   tag: tag:acme
 
+# Web login theme (OPTIONAL — omit the block for the shipped default brand).
+# Colours/fonts for the login-ui the MESH serves to browsers; NOT desktop theming.
+# Derivation single-source: studio/snapdragon_studio/core/theme.py. Render with
+#   scripts/tooling/derive-theme.py --brand-yaml brands/acme.yaml              # raw css
+#   scripts/tooling/derive-theme.py --brand-yaml brands/acme.yaml --configmap  # manifest
+# and the login-ui Deployment picks the ConfigMap up via an OPTIONAL env ref
+# (specs/cluster/manifests/social-ui/deployment.yaml) — apply + restart to
+# rebrand, delete to revert; no image rebuild either way.
+#   primary/secondary: "#RRGGBB". Legibility is guaranteed by construction (text
+#     tokens are auto-derived to >= 4.5:1), so no colour is ever rejected.
+#   font: a studio core/fonts.py FONT_PRESETS name (system stacks only — the
+#     shipped CSP `font-src 'self' data:` blocks any CDN by code).
+#   font_file (path relative to this yaml) embeds a .woff2/.woff/.ttf/.otf as a
+#     data: URI; then font_licence + font_source are REQUIRED — embedding a face
+#     is a licensing decision, and it is recorded (with the sha256) in the css.
+# login_theme:
+#   primary: "#ffd700"
+#   secondary: "#7c4dff"
+#   font: "System UI"
+#   # font_file: assets/acme-brand.woff2
+#   # font_licence: "SIL OFL 1.1"
+#   # font_source: "https://fonts.example.com/acme-brand"
+
 # Optional-service toggles (structured; the driver instantiates exactly the
 # installed set). These name-level flags mirror the per-repo repos[].installed.
 services:

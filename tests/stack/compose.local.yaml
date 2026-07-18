@@ -873,6 +873,13 @@ services:
     environment:
       SNAP_OIDC_ENABLED: "true"
       SNAP_BFF_URL: ${SNAP_BFF_URL:-http://localhost:8088}
+      # Runtime login THEME: already-derived --sd-* token text (studio core/theme.py
+      # css_root(); Studio threads it LocalMeshBootstrapConfig.login_theme_css ->
+      # LocalStackNode._build_env() -> STACK_ENV -> here). The login-ui entrypoint
+      # (50-snap-theme.sh) writes it verbatim to snap-theme.css — an ENV VAR, not a
+      # build arg, and that distinction is the point: a rebrand is compose up with a
+      # new value, NO image rebuild. Empty (the default) => shipped default brand.
+      SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
 
   snapdragon-mastodon-ui:
     <<: *amd64

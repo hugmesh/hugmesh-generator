@@ -277,12 +277,15 @@ def test_cloud_and_mesh_flows_keep_their_admin_pages(wiz, mode):
     for slug in ("keyzip", "domains", "users"):
         assert wiz.hasVisitedPage(wiz._page_ids[slug])
     # mesh drives its image set off the WorklistPage (a role x platform multi-select)
-    # instead of the single-image role/hardware/branding pages; cloud keeps those and
-    # skips the worklist (MODE_SKIPPED_PAGES).
+    # instead of the single-image role/hardware pages; cloud keeps those and skips the
+    # worklist (MODE_SKIPPED_PAGES). BrandingPage is VISITED in mesh since the web
+    # login-theme section landed there (the mesh serves the login page it themes);
+    # its desktop-asset half still greys+clears by role-class (see the greying test).
     if mode == "mesh":
         assert wiz.hasVisitedPage(wiz._page_ids["worklist"])
-        for slug in ("role", "hardware", "branding"):
+        for slug in ("role", "hardware"):
             assert not wiz.hasVisitedPage(wiz._page_ids[slug])
+        assert wiz.hasVisitedPage(wiz._page_ids["branding"])
     else:
         assert not wiz.hasVisitedPage(wiz._page_ids["worklist"])
         assert wiz.hasVisitedPage(wiz._page_ids["role"])

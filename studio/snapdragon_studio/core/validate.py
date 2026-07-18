@@ -85,6 +85,15 @@ def validate_accent_color(value: str) -> str:
     return value
 
 
+def validate_login_color(field: str, value: str) -> str:
+    # web login-theme colours keep the same strict "#RRGGBB"-or-empty shape as
+    # accent_color: they flow into the SNAP_THEME_CSS token text (compose env /
+    # ConfigMap) and brands/<brand>.yaml, never free-form. "" = shipped default.
+    ok = value == "" or bool(_ACCENT.fullmatch(value))
+    _require(ok, field, value)
+    return value
+
+
 def validate_domain_name(value: str) -> str:
     _require(bool(_DNS_NAME.fullmatch(value)), "domain", value)
     return value

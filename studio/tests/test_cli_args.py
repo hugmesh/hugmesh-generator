@@ -1316,7 +1316,13 @@ def test_non_argv_fields_set():
     # GUI preset). superdomain STARTED here (v1 = manifest + KEYS channel) but WS-SUPER-B
     # flipped it to an emitted --superdomain (mesh-only), so it is NO LONGER here — like
     # packages_add/packages_drop (WS-BUILDER), it now lives in PLATFORM_FIELD_SUPPORT.
-    assert set(NON_ARGV_FIELDS) == {"headscale_url", "pentest", "hw_profile"}
+    # login_* (web login theme) follow the headscale_url precedent: cluster-plane data
+    # carried as SNAP_THEME_CSS env / brands yaml, emitted by NO builder argv — the
+    # login-ui is a Deployment the mesh SERVES, not desktop-image bytes.
+    assert set(NON_ARGV_FIELDS) == {
+        "headscale_url", "pentest", "hw_profile",
+        "login_primary_color", "login_secondary_color", "login_font",
+        "login_font_file", "login_font_licence", "login_font_source"}
     # and none of them appear in the capability table (they are not "silently dropped")
     for f in NON_ARGV_FIELDS:
         assert f not in PLATFORM_FIELD_SUPPORT

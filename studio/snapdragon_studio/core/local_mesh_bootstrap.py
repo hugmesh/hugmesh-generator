@@ -42,6 +42,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
+from . import theme
 from .local_mesh import ENV_AUTHKEY, LocalMeshConfig, LocalMeshNode
 from .local_stack_node import LocalStackNode
 from .mesh_node import MeshNode
@@ -179,6 +180,13 @@ class LocalMeshBootstrapConfig:
     # surfaces a mesh node never carries). It lives here, on the config that
     # actually brings up the stack that BUILDS the login-ui image.
     web_locales: tuple[str, ...] = ()
+    # ALREADY-DERIVED snap-theme.css text for the login-ui (studio core/theme.py is
+    # the single derivation; GUI/CLI compose it, this config only CARRIES it). Like
+    # web_locales this is cluster-plane web-login data, not desktop theming — but
+    # unlike web_locales it is RUNTIME: compose passes it as the SNAP_THEME_CSS env
+    # and the login-ui entrypoint writes snap-theme.css at container start, so a
+    # rebrand needs no image rebuild. EMPTY = shipped default brand, byte-identical.
+    login_theme_css: str = ""
 
     def is_prod(self) -> bool:
         return self.env == "prod"
@@ -242,7 +250,8 @@ class LocalMeshBootstrap:
                               social=self.cfg.social, domain=domain,
                               source_mode=self.cfg.source_mode,
                               source_dir=self.cfg.source_dir,
-                              web_locales=self.cfg.web_locales)
+                              web_locales=self.cfg.web_locales,
+                              login_theme_css=self.cfg.login_theme_css)
 
     def _mesh_node(self) -> LocalMeshNode:
         return LocalMeshNode(self.generator_dir, LocalMeshConfig(
@@ -442,12 +451,20 @@ class LocalMeshBootstrap:
             lines.append("      SOURCE: download/update all repos into ./.stack-src")
             lines.append("              (make stack-clone — every compose service builds")
             lines.append("               from those real, buildable files)")
-        lines.append(f"      make stack-up   (ENV={c.env}, SOCIAL={'on' if c.social else 'off'})")
+        # (a stray duplicate of this line — the pre-locale variant — shipped in the
+        # i18n union-rebase; ONE line, with every knob it carries, is the contract)
         _wl = ",".join(c.web_locales)
         lines.append(f"      make stack-up   (ENV={c.env}, SOCIAL={'on' if c.social else 'off'}"
-                     + (f", SNAP_WEB_LOCALES={_wl}" if _wl else "") + ")")
+                     + (f", SNAP_WEB_LOCALES={_wl}" if _wl else "")
+                     + (", SNAP_THEME_CSS=<derived>" if c.login_theme_css.strip() else "")
+                     + ")")
         if _wl:
             lines.append(f"          -> login-ui image ships i18n/{{{_wl}}}.json catalogs")
+        if c.login_theme_css.strip():
+            lines.append(f"          -> login-ui serves the CUSTOM login theme "
+                         f"({len(c.login_theme_css)} chars of derived --sd-* css,")
+            lines.append("             written to snap-theme.css at container start — "
+                         "rebrand needs no rebuild)")
         lines.append("      make stack-seed (provisions ROLE_SUPERADMIN with the minted")
         lines.append("                       password, bridged via env only)")
         lines.append("")
@@ -647,13 +664,23 @@ def _parse_web_locales(raw: str) -> tuple[str, ...]:
 
 
 def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
+    # Compose the theme HERE (raising on a malformed colour / unknown preset before
+    # anything starts) so the config carries only the derived text and every
+    # entrypoint shares theme.compose_login_css — never a second derivation. The
+    # legibility WARNINGS (never blocking, #387) ride the same composition site.
+    login_theme_css = theme.compose_login_css(
+        args.login_primary, args.login_secondary, font_preset=args.login_font)
+    for w in theme.warnings(args.login_primary or theme._DEFAULT_PRIMARY,
+                            args.login_secondary) if login_theme_css else []:
+        print(f"WARNING: {w}", file=sys.stderr)
     return LocalMeshBootstrapConfig(
         env=args.env, superadmin_username=args.superadmin_username,
         out_dir=args.out, social=args.social, auth_key=_read_authkey(args),
         login_server=args.login_server, node_name=args.node_name,
         brand=args.brand, cluster_domain=args.cluster_domain,
         source_mode=args.source_mode, source_dir=args.source_dir,
-        web_locales=_parse_web_locales(args.web_locales))
+        web_locales=_parse_web_locales(args.web_locales),
+        login_theme_css=login_theme_css)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -703,6 +730,21 @@ def main(argv: list[str] | None = None) -> int:
                         "separated (e.g. de,fr,pt-BR). EMPTY (default) = English-"
                         "only: zero catalog files, zero catalog requests. English is "
                         "the source language and needs no catalog.")
+    p.add_argument("--login-primary", default="",
+                   help="web login-theme primary colour (#RRGGBB). Derives the full "
+                        "--sd-* palette (core/theme.py) into SNAP_THEME_CSS; the "
+                        "login-ui writes it to snap-theme.css at container start. "
+                        "EMPTY (default) = the shipped brand, byte-identical.")
+    p.add_argument("--login-secondary", default="",
+                   help="web login-theme secondary/accent colour (#RRGGBB); empty = "
+                        "the shipped accent (#7c4dff).")
+    p.add_argument("--login-font", default="",
+                   help="web login font preset by NAME (see studio core/fonts.py "
+                        "FONT_PRESETS, e.g. 'System UI', 'Bootstrap native stack'); "
+                        "system stacks only — no CDN (the shipped CSP blocks it), no "
+                        "bundled binaries. Font-file upload lives in the Studio GUI "
+                        "and scripts/tooling/derive-theme.py, which also record the "
+                        "licence decision.")
     key = p.add_mutually_exclusive_group()
     key.add_argument("--authkey-file", default="",
                      help="path to a file holding the tailnet/headscale auth key "
