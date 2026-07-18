@@ -24,7 +24,11 @@ a **local mesh node** from the system tray.
   `--gpu-driver` matrix**: all-free / nvidia-free / nvidia / amd-free / amd-pro /
   intel-free / intel-pro / none, or auto), the **test|prod `--env` picker** on the Build
   page, branding (boot screen / login /
-  wallpaper / accent), Wi-Fi/BT, **kernel built-in vs modules**, egress VPN, home mode +
+  wallpaper / accent), the **web login theme** (primary/secondary colours with every
+  other token derived at guaranteed WCAG-AA legibility, 7 system font stacks or an
+  uploaded face with recorded licence/sha256, live token board + a real-browser
+  preview of the captured login page; applied at container start — no rebuild),
+  Wi-Fi/BT, **kernel built-in vs modules**, egress VPN, home mode +
   eCryptfs, installer front-ends, cached/uncached — plus the **cluster optional-services
   catalog** (+ games), client **desktop weight + Steam delivery**, **LUKS root encryption**
   (`--encrypt-root` + keyfile/YubiKey unlock factors), `--compress`/`--resume`, and an

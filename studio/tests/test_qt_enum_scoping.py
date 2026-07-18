@@ -50,6 +50,9 @@ _UNSCOPED = [
                                "ToolButtonTextBesideIcon", "ToolButtonTextUnderIcon",
                                "ToolButtonFollowStyle")),
     ("Qt", "CheckState", ("Unchecked", "PartiallyChecked", "Checked")),
+    # ── added with the web-login-theme group (2026-07-18): swatch alignment ──
+    ("Qt", "AlignmentFlag", ("AlignLeft", "AlignRight", "AlignHCenter", "AlignVCenter",
+                             "AlignCenter", "AlignTop", "AlignBottom", "AlignJustify")),
 ]
 
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import shlex
 from dataclasses import dataclass, field, asdict, MISSING
@@ -31,6 +32,7 @@ from .validate import (
     validate_domain_name,
     validate_home_backup,
     validate_home_device,
+    validate_login_color,
     validate_org,
     validate_package_atoms,
     validate_username,
@@ -74,7 +76,11 @@ MODE_SKIPPED_PAGES = {
     # a desktop-class surface a mesh node never carries).
     "standalone": ("worklist", "keyzip", "domains", "users"),  # single image, no admin/mesh plane
     "cloud": ("worklist",),                                     # single image, admin plane via key-zip
-    "mesh": ("role", "hardware", "branding"),                  # the WorklistPage owns role x platform
+    # mesh USED to skip "branding" outright; it no longer can: the page now also hosts
+    # the WEB login theme (login_* — NON_ARGV_FIELDS), which themes the login-ui the
+    # MESH serves to browsers. The desktop-asset half still greys+clears in mesh via
+    # branding_allowed (role-class), so unskipping shows exactly the mesh-relevant half.
+    "mesh": ("role", "hardware"),                              # the WorklistPage owns role x platform
 }
 
 # platform id -> builder script at the generator-repo root. All four are reachable
@@ -432,7 +438,14 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
 # v1 KEYS channel remains authoritative for the secret side. packages_add/packages_drop likewise
 # STARTED here (WS-CORE Phase 1) and were flipped by WS-BUILDER to emitted
 # --packages-add/--packages-drop — they too now live in PLATFORM_FIELD_SUPPORT above, not here.
-NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile")
+# login_* (web login theme) follow the headscale_url precedent exactly: mesh/cluster-
+# plane config, carried structurally (brands yaml / SNAP_THEME_CSS env), emitted by NO
+# image builder's argv — the login-ui is a k8s Deployment the mesh SERVES, not a byte
+# of any desktop image. Scoping them _X86 would gate them OFF on the only plane that
+# renders them (the --flavor-both/installer_ui="all" dead-knob class, inverted).
+NON_ARGV_FIELDS = ("headscale_url", "pentest", "hw_profile",
+                   "login_primary_color", "login_secondary_color", "login_font",
+                   "login_font_file", "login_font_licence", "login_font_source")
 
 
 # ── role-class capability layer (Qt-free; BESIDE PLATFORM_FIELD_SUPPORT, NEVER inside
@@ -1239,6 +1252,18 @@ class ImageConfig:
     accent_color: str = ""
     color_scheme: str = ""
     brand_locked: bool = False
+    # ── web login theme (mesh/cluster-plane, NON-ARGV — see NON_ARGV_FIELDS) ──
+    # These theme the Angular login-ui a node SERVES to browsers, not the desktop
+    # image the fields above bake — which is why they are NOT x86-gated: the only
+    # platform that renders them is the mesh plane the desktop gate would hide.
+    # Derivation single-source: core/theme.py; delivery: SNAP_THEME_CSS env
+    # (compose/localmesh) or the snap-theme ConfigMap (scripts/tooling/derive-theme.py).
+    login_primary_color: str = ""      # "#RRGGBB"; "" = shipped default (#ffd700 family)
+    login_secondary_color: str = ""    # "#RRGGBB" accent driver; "" = shipped #7c4dff
+    login_font: str = ""               # a core/fonts.py FONT_PRESETS name; "" = shipped Arial stack
+    login_font_file: str = ""          # uploaded woff2/woff/ttf/otf, embedded as a data: URI
+    login_font_licence: str = ""       # REQUIRED with login_font_file (recorded for audit)
+    login_font_source: str = ""        # REQUIRED with login_font_file: vendor/URL provenance
     # ── egress VPN ──
     egress_vpn: str = ""               # --egress-vpn FILE
     egress_vpn_locked: bool = False
@@ -1422,6 +1447,35 @@ class ImageConfig:
         return self.superdomain or f"{self.brand}.internal"
 
     # ---- identity validation (fail-closed) ---------------------------------
+    def login_theme_css(self) -> str:
+        """The derived snap-theme.css text for this config's ``login_*`` choices, or
+        "" when unthemed. The ONE cfg->css point (wraps theme.compose_login_css):
+        the wizard's browser preview, the localmesh bootstrap and any headless
+        caller all share it, so the previewed bytes ARE the delivered bytes.
+
+        Raises ValueError with the gate reasons on a blocked upload / malformed
+        colour — callers on Qt slots must catch (an unhandled slot exception
+        aborts PyQt6)."""
+        from . import fonts as _fonts     # local: keep module import Qt/asset-free
+        from . import theme as _theme
+        font_bytes = b""
+        family = ""
+        if self.login_font_file:
+            try:
+                with open(self.login_font_file, "rb") as fh:
+                    font_bytes = fh.read()
+            except OSError as exc:
+                raise ValueError(f"cannot read login_font_file: {exc}") from exc
+            blocks, _warns = _fonts.check_font(
+                os.path.basename(self.login_font_file), font_bytes)
+            if blocks:
+                raise ValueError("; ".join(blocks))
+            family = os.path.splitext(os.path.basename(self.login_font_file))[0] \
+                .replace("-", " ").replace("_", " ")
+        return _theme.compose_login_css(
+            self.login_primary_color, self.login_secondary_color,
+            font_preset=self.login_font, font_family=family, font_bytes=font_bytes)
+
     def validate_identity(self) -> None:
         """Allowlist every identity field that flows into a root-sourced KEY=VALUE
         file (brand.conf / home.conf) or a sed replacement in the generator.
@@ -1437,6 +1491,32 @@ class ImageConfig:
         validate_org(self.org)
         validate_brand_title(self.brand_title)
         validate_accent_color(self.accent_color)
+        # web login theme: colours keep the strict #RRGGBB-or-empty shape (they flow
+        # into SNAP_THEME_CSS / brands yaml); a font preset must be a known name (a
+        # typo here would silently fall back at render time — fail closed instead);
+        # an uploaded font is a licensing decision, so it REQUIRES recorded
+        # licence + source provenance next to it.
+        validate_login_color("login_primary_color", self.login_primary_color)
+        validate_login_color("login_secondary_color", self.login_secondary_color)
+        if self.login_font:
+            from .fonts import FONT_PRESETS   # local import: keep config Qt/asset-free
+            if self.login_font not in FONT_PRESETS:
+                raise IdentityValidationError(
+                    f"unknown login_font preset: {self.login_font!r} — "
+                    f"known: {', '.join(FONT_PRESETS)}")
+        if self.login_font_file:
+            if not self.login_font_file.lower().endswith(
+                    (".woff2", ".woff", ".ttf", ".otf")):
+                raise IdentityValidationError(
+                    f"login_font_file must be .woff2/.woff/.ttf/.otf: "
+                    f"{self.login_font_file!r}")
+            for fld in ("login_font_licence", "login_font_source"):
+                v = getattr(self, fld)
+                if not v or not v.isprintable():
+                    raise IdentityValidationError(
+                        f"{fld} is required (printable, non-empty) when uploading a "
+                        "font — embedding a face we cannot attribute is the licensing "
+                        "landmine the upload path exists to make explicit")
         # cluster_domain + per-domain names flow into --domains / the mesh manifest
         validate_domain_name(self.cluster_domain)
         if self.games_domain:

@@ -83,6 +83,20 @@ spec:
           # this same var). Never independently verified against a real cluster.
           env:
             - { name: SNAP_OIDC_ENABLED, value: "true" }
+            # Runtime login theme: already-derived --sd-* css text the entrypoint
+            # (50-snap-theme.sh) writes to snap-theme.css at container start.
+            # OPTIONAL by design — no `login-theme` ConfigMap (the unbranded
+            # default) means the env is simply absent and the image's compiled
+            # :root fallback renders the shipped brand. Produce the ConfigMap with
+            #   scripts/tooling/derive-theme.py --brand-yaml brands/<b>.yaml --configmap
+            # then apply + restart to rebrand; delete + restart to revert. Never a
+            # rebuild: rebrand-without-rebuild is the point of the env channel.
+            - name: SNAP_THEME_CSS
+              valueFrom:
+                configMapKeyRef:
+                  name: login-theme
+                  key: SNAP_THEME_CSS
+                  optional: true
           resources: { requests: { cpu: 50m, memory: 96Mi }, limits: { cpu: 300m, memory: 192Mi } }
 ---
 apiVersion: v1

@@ -73,7 +73,7 @@ class LocalStackNode:
     def __init__(self, generator_dir: str, env: str = "test", social: bool = False,
                  public_host_port: int = 8088, domain: str = "",
                  source_mode: str = "clone", source_dir: str = "",
-                 web_locales: tuple[str, ...] = ()):
+                 web_locales: tuple[str, ...] = (), login_theme_css: str = ""):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -110,6 +110,13 @@ class LocalStackNode:
         # bytes. (Which catalog a given browser LOADS is a separate, runtime question
         # the app answers by locale detection.)
         self.web_locales = tuple(web_locales)
+        # ALREADY-DERIVED snap-theme.css text (studio core/theme.py css_root() is the
+        # single derivation; this class only carries the text). RUNTIME on purpose —
+        # the mirror image of web_locales' build-time reasoning above: the login-ui
+        # entrypoint writes it to snap-theme.css at container START, so a rebrand is
+        # `compose up` with a new value and NO image rebuild. EMPTY (the default) =
+        # no injection: the image's compiled :root fallback renders the shipped brand.
+        self.login_theme_css = login_theme_css
 
     @property
     def web_url(self) -> str:
@@ -289,6 +296,11 @@ class LocalStackNode:
         # an empty value mean the same thing: English-only.
         if self.web_locales:
             env["SNAP_WEB_LOCALES"] = ",".join(self.web_locales)
+        # Same only-when-set discipline: compose's ${SNAP_THEME_CSS:-} defaults empty,
+        # so unset and empty both mean "shipped default brand" and the unthemed env
+        # stays byte-identical to every existing caller.
+        if self.login_theme_css.strip():
+            env["SNAP_THEME_CSS"] = self.login_theme_css
         # extra_env carries per-target overrides (e.g. the bridged
         # E2E_SUPERADMIN_PASSWORD for `stack-seed`). Values ride the subprocess env
         # only — never argv — mirroring the golive/token-file secret discipline.

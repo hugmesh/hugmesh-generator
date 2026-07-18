@@ -1,11 +1,15 @@
-"""BrandingPage — a PREMADE theme (preset) XOR fully-custom branding (boot/login/
-wallpaper assets, GRUB theme dir, accent + colour scheme), plus the brand lock.
+"""BrandingPage — TWO branding surfaces with opposite scopes:
 
-Theming is a DESKTOP-class surface (spec 2): the whole form greys+clears on node
-images and in mesh mode (``branding_allowed``), on the unaffiliated role (a builder
-hard-conflict), and off-x86 where no builder parses ``--theme``/… (the fields are
-x86-only emission). The premade combo and the eight custom fields are an exclusive
-either/or so the two branding channels can never fight."""
+* DESKTOP assets (premade theme XOR custom boot/login/wallpaper/GRUB/accent, plus
+  the brand lock): x86-only emission, greys+clears on node images and in mesh mode
+  (``branding_allowed``) and on the unaffiliated role (a builder hard-conflict).
+  The premade combo and the eight custom fields are an exclusive either/or so the
+  two branding channels can never fight.
+* The WEB LOGIN THEME (colours/fonts for the login page the MESH serves to
+  browsers): NON-argv mesh-plane fields (config NON_ARGV_FIELDS), deliberately
+  OUTSIDE the desktop gating — mesh mode visits this page exactly FOR this half,
+  and greying it there would gate the knob off on the only plane that renders it.
+"""
 from __future__ import annotations
 
 import os
@@ -15,7 +19,9 @@ from ...core.config import UNAFFILIATED_ROLE, branding_allowed
 from ._gating import (
     clear_unsupported, gate_widgets_role_class, platform_supports, unsupported_note,
 )
-from ._widgets import _file_picker, _row
+from ._logintheme import LoginThemeGroup
+from ._scroll import scrollable
+from ._widgets import _file_picker, _row, collapsible
 
 # every widget-backed field on this page — all x86-only emission, so the whole
 # form greys as one unit off-x86 (G10) and clears on Next.
@@ -39,9 +45,11 @@ class BrandingPage(QtWidgets.QWizardPage):
         super().__init__()
         self.wiz = wiz
         self.setTitle("Branding")
-        self.setSubTitle("A premade theme, or a fully custom brand identity — "
-                         "consistent across the desktop.")
-        lay = QtWidgets.QVBoxLayout(self)
+        self.setSubTitle("Desktop branding (theme or custom assets) plus the web "
+                         "login theme the mesh serves.")
+        # scrollable: the login-theme group grew this page past the #400 jitter
+        # budget — tall content scrolls inside the page instead of resizing the window.
+        lay = scrollable(self)
         # shown INSTEAD of the (disabled) form when the unaffiliated role is selected
         self.unaffiliated_note = QtWidgets.QLabel(
             "Branding does not apply — unaffiliated build (plain Gentoo, zero brand identity).")
@@ -118,6 +126,16 @@ class BrandingPage(QtWidgets.QWizardPage):
         self.locked = QtWidgets.QCheckBox("Lock branding (user cannot re-theme — managed image)")
         form_lay.addWidget(self.locked)
         lay.addWidget(self.form)
+
+        # WEB login theme — OUTSIDE self.form on purpose: the desktop gating
+        # (role-class / platform / unaffiliated) must never grey it, because it
+        # themes the login page the MESH serves, not the desktop image. Collapsed
+        # by default in desktop flows; initializePage expands it in mesh, where it
+        # is the reason the page is shown at all.
+        self.login_theme = LoginThemeGroup()
+        self.login_collapsible = collapsible("Web login theme", self.login_theme,
+                                             expanded=False)
+        lay.addWidget(self.login_collapsible)
         lay.addStretch(1)
 
         self.rb_preset.toggled.connect(self._mode_toggled)
@@ -193,6 +211,12 @@ class BrandingPage(QtWidgets.QWizardPage):
         reason = unsupported_note(c.platform) if not platform_ok else _ROLE_CLASS_REASON
         gate_widgets_role_class(self.form, enabled, "" if enabled else reason)
 
+        # web login theme: ALWAYS active (mesh-plane, not desktop). In mesh the
+        # desktop half is greyed, so this half IS the page — open it by default
+        # (respecting an operator who folded it themselves).
+        self.login_theme.load(c)
+        self.login_collapsible.set_default_expanded(c.mode == "mesh")
+
     def _blank_all(self, c):
         """Clear every branding field — the shared clear for the unaffiliated role and
         for any greyed (node/mesh/off-x86) image, so a stale value can never poison a
@@ -204,6 +228,11 @@ class BrandingPage(QtWidgets.QWizardPage):
 
     def validatePage(self):
         c = self.wiz.cfg
+        # web login theme commits FIRST and UNCONDITIONALLY: it is mesh-plane data,
+        # so neither the unaffiliated role nor the desktop role-class/platform
+        # clears below may touch it (an unaffiliated IMAGE can ride a mesh whose
+        # login page is themed — different scopes).
+        self.login_theme.commit(c)
         if c.role == UNAFFILIATED_ROLE:
             # branding is a builder HARD CONFLICT on the unaffiliated role — clear
             # everything so a role switch cannot poison the argv.
