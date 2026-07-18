@@ -114,7 +114,7 @@ def test_preflight_page_shows_the_driver_status(wiz):
 
 def test_exposure_models_come_from_the_registry(wiz):
     page = advance_to(wiz, golive_mod.GoLiveExposurePage)
-    assert page.models == ["tunnel", "public-dns", "ddns", "funnel", "router"]
+    assert page.models == ["tunnel", "public-dns", "ddns", "funnel", "router", "onion"]
     assert page.group.checkedButton() is not None
 
 

@@ -92,7 +92,7 @@ def test_providers_come_from_the_real_driver_list():
     assert os.path.exists(os.path.join(GENERATOR_DIR, *REGISTRY_REL.split("/")))
     ids = [p.id for p in d.providers()]
     assert ids == ["cloudflare-tunnel", "byo-domain", "duckdns",
-                   "tailscale-funnel", "router-portforward"]
+                   "tailscale-funnel", "router-portforward", "tor-onion"]
     cf = d.provider("cloudflare-tunnel")
     assert cf.mechanism == "deeplink" and cf.model == "tunnel" and cf.status == "full"
     assert cf.needs("token") and cf.offers("tunnel-cname") and not cf.offers("ingress-ip")
@@ -100,13 +100,17 @@ def test_providers_come_from_the_real_driver_list():
     assert byo.mechanism == "files" and byo.model == "public-dns"
     assert byo.offers("ingress-ip") and byo.offers("tunnel-cname") and not byo.needs("token")
     assert d.provider("tailscale-funnel").inputs == []
+    # tor-onion: its own mechanism/model, takes NO inputs (not even a domain).
+    tor = d.provider("tor-onion")
+    assert tor.mechanism == "onion" and tor.model == "onion" and tor.status == "full"
+    assert tor.inputs == [] and tor.optional == []
     assert d.provider("nope") is None
 
 
 @requires_bash
 def test_models_are_unique_and_in_registry_order():
     d = GoLiveDriver(GENERATOR_DIR)
-    assert d.models() == ["tunnel", "public-dns", "ddns", "funnel", "router"]
+    assert d.models() == ["tunnel", "public-dns", "ddns", "funnel", "router", "onion"]
 
 
 @requires_bash
@@ -159,6 +163,29 @@ def test_run_streams_lines_from_the_driver(monkeypatch, tmp_path):
     assert seen["cmd"][:3] == ["bash", f"./{DRIVER_REL}", "plan"]
     assert seen["cwd"] == d.generator_dir
     assert lines == ["[go-live] record set -> out/records.csv", "[go-live] plan done"]
+
+
+@requires_bash
+def test_tor_onion_plan_emits_the_onion_and_needs_no_domain(tmp_path, monkeypatch):
+    """The tor-onion provider (mechanism `onion`) runs through the REAL driver: it
+    reads GL_ONION_HOSTNAME, writes onion.txt with that address, and — unlike every
+    other provider — passes preflight with NO domain (the .onion IS the endpoint)."""
+    d = GoLiveDriver(GENERATOR_DIR)
+    onion = "txljwl7mdg7t3wmqdci77ttof5ikxeqg2epmfadzfxlzxvjgtx5k4fad.onion"
+    monkeypatch.setenv("GL_ONION_HOSTNAME", onion)
+    # no cluster-domain bake to autofill from, and no --domain supplied
+    monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", str(tmp_path / "missing"))
+    out = tmp_path / "out"
+    opts = GoLiveOptions(provider="tor-onion", out_dir=str(out))
+    assert d.preflight(opts) == []                     # domain NOT required for onion
+    code = d.run("plan", opts)
+    assert code == 0
+    assert (out / "onion.txt").read_text().strip() == onion
+    instructions = (out / "instructions.txt").read_text()
+    assert "NO public" in instructions and "--with-tor" in instructions
+    # a real domain-bearing provider still fails preflight with no domain
+    assert d.preflight(GoLiveOptions(provider="byo-domain",
+                                     out_dir=str(out))) != []
 
 
 def test_status_text_strips_ansi(monkeypatch, tmp_path):
