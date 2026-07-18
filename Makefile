@@ -380,6 +380,7 @@ mesh-node-logs: ## tail the Local Docker mesh node's container logs
 # `plan` only previews; `up` is the explicit action (prod TTY-confirms, no bypass).
 # Knobs: ENV=test|prod, SOCIAL=1, SUPERADMIN=…, CLUSTER_DOMAIN=…, AUTHKEY_FILE=… .
 _MESH_BOOTSTRAP_ARGS = --env "$(ENV)" $(if $(strip $(SOCIAL)),--social) \
+  $(if $(strip $(TOR)),--with-tor) \
   $(if $(SUPERADMIN),--superadmin-username "$(SUPERADMIN)") \
   $(if $(CLUSTER_DOMAIN),--cluster-domain "$(CLUSTER_DOMAIN)") \
   $(if $(OUT_DIR),--out "$(OUT_DIR)") \

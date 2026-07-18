@@ -632,5 +632,25 @@ assert_eq "phone_screen: captured _phone_run argv matches the driven field selec
 [ -s "${_UI_INPUT_Q}" ]    && _bad "phone_screen: ui_input queue not fully consumed: $(cat "${_UI_INPUT_Q}")"   || _ok
 [ -s "${_UI_PASSWORD_Q}" ] && _bad "phone_screen: ui_password queue not fully consumed"                          || _ok
 
+# ── mesh-bootstrap: the Tor toggle threads --with-tor into the shared entrypoint ──
+# _local_mesh_bootstrap_run shells `python3 -m snapdragon_studio.core.local_mesh_bootstrap`
+# with an args array; stub python3 to CAPTURE that argv and prove the tor param (arg 7)
+# becomes --with-tor (and only when set), mirroring the --social wiring.
+MESH_ARGV_CAP="$(mktemp)"
+ui_msg() { :; }                                  # swallow the result dialog
+python3() { printf '%s\n' "$@" > "${MESH_ARGV_CAP}"; return 0; }
+
+_local_mesh_bootstrap_run plan test superadmin "" "" "" 1   # tor=1 (7th arg), no social
+grep -q -- '--with-tor' "${MESH_ARGV_CAP}" \
+    && _ok || { FAIL=$((FAIL+1)); printf 'FAIL mesh-bootstrap tor on: no --with-tor in %s\n' "$(cat "${MESH_ARGV_CAP}")" >&2; }
+grep -q -- '--social' "${MESH_ARGV_CAP}" \
+    && { FAIL=$((FAIL+1)); printf 'FAIL mesh-bootstrap tor on: unexpected --social\n' >&2; } || _ok
+
+_local_mesh_bootstrap_run plan test superadmin "" "" "" ""   # tor unset -> no --with-tor
+grep -q -- '--with-tor' "${MESH_ARGV_CAP}" \
+    && { FAIL=$((FAIL+1)); printf 'FAIL mesh-bootstrap tor off: unexpected --with-tor\n' >&2; } || _ok
+unset -f python3 ui_msg
+rm -f "${MESH_ARGV_CAP}"
+
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]
