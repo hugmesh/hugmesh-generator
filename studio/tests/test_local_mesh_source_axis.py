@@ -76,6 +76,7 @@ def test_collect_bootstrap_drops_no_operator_visible_field(qapp_localmesh_page):
     page.env_prod.setChecked(True)
     page.superadmin.setText("boss")
     page.social.setChecked(True)
+    page.with_tor.setChecked(True)
     page.boot_domain.setText("acme.example")
     page.boot_auth_key.setText("tskey-x")
     page.boot_login_server.setText("https://hs.acme.example")
@@ -83,7 +84,8 @@ def test_collect_bootstrap_drops_no_operator_visible_field(qapp_localmesh_page):
     page.src_existing.setChecked(True)
     page.src_dir.setText("/some/tree")
     c = page.collect_bootstrap()
-    assert (c.env, c.superadmin_username, c.social) == ("prod", "boss", True)
+    assert (c.env, c.superadmin_username, c.social, c.with_tor) == (
+        "prod", "boss", True, True)
     assert (c.cluster_domain, c.auth_key, c.login_server) == (
         "acme.example", "tskey-x", "https://hs.acme.example")
     assert (c.brand, c.source_mode, c.source_dir) == (

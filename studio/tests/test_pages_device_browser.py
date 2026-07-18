@@ -21,6 +21,7 @@ from snapdragon_studio.core import device_catalog  # noqa: E402
 from snapdragon_studio.core.config import ROLE_CHOICES  # noqa: E402
 from snapdragon_studio.core.platform_info import HostInfo  # noqa: E402
 from snapdragon_studio.gui import wizard as wizard_mod  # noqa: E402
+from snapdragon_studio.gui.pages.worklist import _COL_NOTES  # noqa: E402
 from snapdragon_studio.gui.qt import Qt, QtGui, QtWidgets  # noqa: E402
 
 from _helpers import advance_to, check_worklist_rows, pick_mode  # noqa: E402
@@ -327,8 +328,8 @@ def test_worklist_family_groups_and_badges(wiz):
     page = advance_to(wiz, wizard_mod.WorklistPage)
     assert {"x86-pcs", "raspberry-pi", "nvidia-jetson"} <= set(page._family_items)
     # jetson: no supported device in the family -> the header carries the badge
-    # (in the Notes column, col 6)
-    assert "EXPERIMENTAL" in page._family_items["nvidia-jetson"].text(6)
+    # (in the Notes column)
+    assert "EXPERIMENTAL" in page._family_items["nvidia-jetson"].text(_COL_NOTES)
     # role rows nest under their family header and keep their stable ids
     assert page.rows["pki.x86"].parent() is page._family_items["x86-pcs"]
     assert page.rows["pki.rpi5"].parent() is page._family_items["raspberry-pi"]
@@ -344,7 +345,7 @@ def test_worklist_unsupported_info_rows_visible_never_checkable(wiz):
     for i in range(bpi.childCount()):
         child = bpi.child(i)
         assert not (child.flags() & Qt.ItemFlag.ItemIsUserCheckable)
-        assert child.text(6)   # the reason rides in the Notes column
+        assert child.text(_COL_NOTES)   # the reason rides in the Notes column
     # info rows never mint entry ids
     assert not any(rid.endswith(".banana-pi") for rid in page.rows)
 
@@ -375,6 +376,27 @@ def test_worklist_emission_identity_rpi4_pki_and_jetson_edge_ai(wiz):
     by_id = {e.id: (e.role, e.platform, e.board) for e in wiz.worklist.entries}
     assert by_id == {"pki.rpi5": ("pki", "rpi5", "rpi4"),
                      "edge_ai.jetson": ("edge_ai", "jetson", "orin-nx-16gb")}
+
+
+def test_worklist_services_column_sets_per_node_tor(wiz):
+    """The per-node Services combo carries a Tor-onion selection into the
+    WorklistEntry and, through materialize, into that ONE node's --with-tor argv —
+    while a sibling node with no selection stays clean (proves per-node, GUI end)."""
+    pick_mode(wiz, "mesh")
+    page = advance_to(wiz, wizard_mod.WorklistPage)
+    check_worklist_rows(page, "be.x86", "pki.x86")
+    svc = page._services_combos["be.x86"]
+    assert svc is not None                       # x86 expresses the Tor onion
+    i = next(j for j in range(svc.count()) if tuple(svc.itemData(j) or ()) == ("tor",))
+    svc.setCurrentIndex(i)
+    assert page.validatePage()
+    by_id = {e.id: e for e in wiz.worklist.entries}
+    assert by_id["be.x86"].infra_services == ("tor",)
+    assert by_id["pki.x86"].infra_services == ()
+    # and it reaches argv for that node only
+    mats = {e.id: cfg for e, cfg in wiz.worklist.materialize()}
+    assert "--with-tor" in mats["be.x86"].to_cli_args()
+    assert "--with-tor" not in mats["pki.x86"].to_cli_args()
 
 
 def test_worklist_arch_filter_is_presentation_only(wiz):

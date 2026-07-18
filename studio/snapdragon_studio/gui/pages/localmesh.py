@@ -306,6 +306,15 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.social = QtWidgets.QCheckBox("Also bring up the social (Matrix/Mastodon) profile")
         lay.addWidget(self.social)
 
+        # Tor v3 onion for the local mesh (the OPT-IN `tor` compose profile). When
+        # on, the bring-up also starts snapdragon-tor, which publishes the fe-gateway
+        # as a stable .onion — reachable in Tor Browser with no public IP/DNS/ports.
+        # The minted address is reported in the log + copyable via the button below.
+        self.with_tor = QtWidgets.QCheckBox(
+            "Expose the mesh as a Tor v3 .onion (reachable in Tor Browser — no public "
+            "IP/DNS/ports)")
+        lay.addWidget(self.with_tor)
+
         # Web login languages. NOT a desktop-theming knob (those are x86-only and
         # skipped in mesh mode) — the web login is served to browsers BY the mesh,
         # so this is a cluster-plane fact and belongs here, on the config that
@@ -399,6 +408,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             "just shows a connection error.")
         self.open_web_btn.clicked.connect(self._open_web_ui)
         brow.addWidget(self.open_web_btn)
+        self.copy_onion_btn = QtWidgets.QPushButton("Copy .onion address")
+        self.copy_onion_btn.setToolTip(
+            "Copy the local mesh's minted Tor .onion address to the clipboard (open "
+            "it in Tor Browser — a normal browser cannot reach a .onion). Enabled "
+            "only after a TOR=1 bring-up has published the address.")
+        self.copy_onion_btn.clicked.connect(self._copy_onion)
+        brow.addWidget(self.copy_onion_btn)
         brow.addStretch(1)
         lay.addLayout(brow)
 
@@ -411,6 +427,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.src_dir.textChanged.connect(self._refresh_plan)
         self.superadmin.textChanged.connect(self._refresh_plan)
         self.social.toggled.connect(self._refresh_plan)
+        self.with_tor.toggled.connect(self._refresh_plan)
         self.web_locales.textChanged.connect(self._refresh_plan)
         self.login_theme.primary.textChanged.connect(self._refresh_plan)
         self.login_theme.secondary.textChanged.connect(self._refresh_plan)
@@ -453,6 +470,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             env=("prod" if self.env_prod.isChecked() else "test"),
             superadmin_username=self.superadmin.text().strip() or "superadmin",
             social=self.social.isChecked(),
+            with_tor=self.with_tor.isChecked(),
             cluster_domain=self.boot_domain.text().strip(),
             auth_key=self.boot_auth_key.text().strip(),
             login_server=self.boot_login_server.text().strip(),
@@ -635,6 +653,24 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     def _open_web_ui(self):
         QtGui.QDesktopServices.openUrl(
             QtCore.QUrl(self.boot._stack_node().web_url))
+
+    def _copy_onion(self):
+        """Copy the published .onion address to the clipboard. A normal browser
+        can't open a .onion, so we copy (for pasting into Tor Browser) rather than
+        openUrl — and say plainly when none has been published yet."""
+        url = self.boot._stack_node().onion_url()
+        if not url:
+            QtWidgets.QMessageBox.information(
+                self, "No .onion yet",
+                "No Tor .onion has been published. Bring the mesh up with "
+                "'Expose the mesh as a Tor v3 .onion' ticked (TOR=1) and wait ~30s "
+                "for tor to publish the address.")
+            return
+        QtWidgets.QApplication.clipboard().setText(url)
+        QtWidgets.QMessageBox.information(
+            self, "Onion address copied",
+            f"Copied to the clipboard:\n\n{url}\n\nOpen it in Tor Browser (a normal "
+            "browser cannot reach a .onion).")
 
 
 class LocalMeshDialog(QtWidgets.QDialog):

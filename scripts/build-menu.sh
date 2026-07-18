@@ -1559,13 +1559,14 @@ local_mesh_bootstrap_screen() {
         ui_msg "Local mesh (from scratch)" "python3 is required (it drives the shared snapdragon_studio.core.local_mesh_bootstrap entrypoint)."
         return 0
     fi
-    local env="test" superadmin="superadmin" social="" domain="" authkey="" choice
+    local env="test" superadmin="superadmin" social="" tor="" domain="" authkey="" choice
     while :; do
         choice="$(ui_menu "Local mesh — from scratch" \
             "Generate ALL credentials + start a NEW superadmin-controlled mesh on THIS machine (full platform stack, seeded superadmin). Nothing runs until you pick 'up'. Creds land in the gitignored keys-out/ at runtime only." \
             env       "Environment .......... ${env}" \
             superadmin "Superadmin username .. ${superadmin}" \
             social    "Social profile ....... ${social:+on}${social:-off}" \
+            tor       "Tor v3 .onion ........ ${tor:+on}${tor:-off}  (expose the mesh over Tor; no public IP/DNS/ports)" \
             domain    "Public domain (prod) . ${domain:-<brand default in test>}" \
             authkey   "Auth key (prod) ...... $([ -n "${authkey}" ] && echo '(set)' || echo '(unset)')" \
             plan      "★ Preview the plan (no side effects)" \
@@ -1577,10 +1578,11 @@ local_mesh_bootstrap_screen() {
             env)       env="$(ui_menu "Environment" "test = LAN-only/offline (safe default); prod = real public domain" test "test — LAN-only / offline" prod "prod — real public domain")" || env="test"; [ -n "${env}" ] || env="test" ;;
             superadmin) superadmin="$(ui_input "Superadmin username" "The platform superadmin login to mint" "${superadmin}")"; [ -n "${superadmin}" ] || superadmin="superadmin" ;;
             social)    if [ -n "${social}" ]; then social=""; else social=1; fi ;;
+            tor)       if [ -n "${tor}" ]; then tor=""; else tor=1; fi ;;
             domain)    domain="$(ui_input "Public domain" "Public apex domain (required in prod; blank = brand default in test)" "${domain}")" ;;
             authkey)   authkey="$(ui_password "Auth key" "Tailnet/headscale auth key (required in prod)" "${authkey}")" ;;
             plan|up|down|status)
-                _local_mesh_bootstrap_run "${choice}" "${env}" "${superadmin}" "${social}" "${domain}" "${authkey}" ;;
+                _local_mesh_bootstrap_run "${choice}" "${env}" "${superadmin}" "${social}" "${domain}" "${authkey}" "${tor}" ;;
             back|"") return 0 ;;
         esac
     done
@@ -1590,9 +1592,10 @@ local_mesh_bootstrap_screen() {
 # invocation. The auth key (when set) goes into a chmod-600 mktemp file (off the argv)
 # and is shredded afterwards.
 _local_mesh_bootstrap_run() {
-    local sub="$1" env="$2" superadmin="$3" social="$4" domain="$5" authkey="$6"
+    local sub="$1" env="$2" superadmin="$3" social="$4" domain="$5" authkey="$6" tor="$7"
     local -a args=("${sub}" --env "${env}" --superadmin-username "${superadmin}")
     [ -n "${social}" ] && args+=(--social)
+    [ -n "${tor}" ] && args+=(--with-tor)
     [ -n "${domain}" ] && args+=(--cluster-domain "${domain}")
     local keyfile=""
     if [ -n "${authkey}" ]; then

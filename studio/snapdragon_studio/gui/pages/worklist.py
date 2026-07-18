@@ -30,11 +30,33 @@ from __future__ import annotations
 from ..qt import Qt, QtGui, QtWidgets
 from ...core import device_catalog
 from ...core.config import (
-    FRITE_BOARDS, FRITE_FLAVORS, JETSON_BOARDS, ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS,
-    ORANGEPIZERO2_FLAVORS, PLATFORM_LABELS, ROLE_CHOICES, RPI_BOARDS, image_class,
-    rpi_boards_for_role,
+    FRITE_BOARDS, FRITE_FLAVORS, JETSON_BOARDS, OPTIONAL_SERVICES_BY_PLATFORM,
+    ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, PLATFORM_LABELS,
+    ROLE_CHOICES, RPI_BOARDS, image_class, rpi_boards_for_role,
 )
-from ...core.worklist import WorklistConfig, WorklistEntry, entry_id
+from ...core.worklist import (
+    WORKLIST_INFRA_SERVICES, WorklistConfig, WorklistEntry, entry_id,
+)
+
+
+def _infra_service_options(platform: str) -> list[tuple[str, tuple[str, ...]]]:
+    """(label, infra_services-tuple) options for a node's per-node Services combo,
+    by what THIS platform's builder can actually express (mirrors worklist.py's
+    materialize emission): x86 expresses the Tor onion (--with-tor); rpi5 expresses
+    tor + egress-vpn (--optional-services); every other platform expresses neither,
+    so it gets NO combo. Keeps the GUI honest with the argv (no dead per-node flag)."""
+    plat_opt = OPTIONAL_SERVICES_BY_PLATFORM.get(platform, ())
+    expr = [s for s in WORKLIST_INFRA_SERVICES
+            if (s == "tor" and platform == "x86") or s in plat_opt]
+    if not expr:
+        return []
+    labels = {"tor": "Tor onion", "egress-vpn": "Egress VPN"}
+    opts: list[tuple[str, tuple[str, ...]]] = [("—", ())]
+    for s in expr:
+        opts.append((labels[s], (s,)))
+    if len(expr) > 1:                                   # a "both" option (rpi5)
+        opts.append((" + ".join(labels[s] for s in expr), tuple(expr)))
+    return opts
 from ._widgets import status_badge
 
 # The GPU-bearing mesh roles (Notes-column callout); mirrors the builder's GPU roles.
@@ -57,7 +79,7 @@ _FLAVOR_CHOICES = {
     "orangepizero2": ORANGEPIZERO2_FLAVORS,
 }
 
-_COL_CHECK, _COL_ROLE, _COL_PLATFORM, _COL_BOARD, _COL_FLAVOR, _COL_ENC, _COL_NOTES = range(7)
+_COL_CHECK, _COL_ROLE, _COL_PLATFORM, _COL_BOARD, _COL_FLAVOR, _COL_ENC, _COL_SERVICES, _COL_NOTES = range(8)
 
 # per-entry encrypt_root override values (worklist.WorklistEntry.encrypt_root):
 # "default" inherits the worklist-wide Home-step encrypt_root; on/off force it.
@@ -138,7 +160,8 @@ class WorklistPage(QtWidgets.QWizardPage):
         self.tree = QtWidgets.QTreeWidget()
         self.tree.setRootIsDecorated(True)
         self.tree.setHeaderLabels(
-            ["", "Role", "Platform", "Board", "Flavor/Desktop", "Encryption", "Notes"])
+            ["", "Role", "Platform", "Board", "Flavor/Desktop", "Encryption",
+             "Services", "Notes"])
         # COLUMN SIZING. The check column is this page's PRIMARY control (it is what
         # selects a node to build), so it must be fully visible on arrival with no
         # dragging. It used to be a hardcoded 28px with NO resize policy set on the
@@ -176,6 +199,7 @@ class WorklistPage(QtWidgets.QWizardPage):
         self.tree.setColumnWidth(_COL_BOARD, 100)
         self.tree.setColumnWidth(_COL_FLAVOR, 120)
         self.tree.setColumnWidth(_COL_ENC, 90)
+        self.tree.setColumnWidth(_COL_SERVICES, 120)
         # Notes absorbs the slack, replacing the accidental stretchLastSection outcome
         # that handed Notes 452px while Role starved at 100.
         hdr_view.setSectionResizeMode(_COL_NOTES, QtWidgets.QHeaderView.ResizeMode.Stretch)
@@ -190,6 +214,11 @@ class WorklistPage(QtWidgets.QWizardPage):
                        "Per-node root-disk encryption: 'default' inherits the Home-step "
                        "choice; 'on'/'off' override it for THIS node. The unattended LUKS "
                        "passphrase (Home step) is shared by every encrypted node.")
+        hdr.setToolTip(_COL_SERVICES,
+                       "Per-node scope:node infra service — expose THIS node as a Tor v3 "
+                       ".onion (and, on rpi5, a node egress-VPN). ADDS to the mesh-wide "
+                       "Network-page default; only shown where the platform's builder can "
+                       "actually bake it (x86 tor; rpi5 tor + egress-vpn).")
         hdr.setToolTip(_COL_NOTES,
                        "Auto: this node's encryption reality, GPU, and client-brand caveats.")
         lay.addWidget(self.tree, 1)
@@ -228,6 +257,9 @@ class WorklistPage(QtWidgets.QWizardPage):
         # id -> per-row encrypt_root combo (None for jetson, which cannot encrypt — its
         # cell is a disabled display and validatePage keeps the prior/default value).
         self._enc_combos: dict[str, QtWidgets.QComboBox | None] = {}
+        # id -> per-row Services combo (None where the platform expresses no per-node
+        # infra service). Each item's data is the infra_services tuple it selects.
+        self._services_combos: dict[str, QtWidgets.QComboBox | None] = {}
         self._id_axes: dict[str, tuple[str, str]] = {}   # id -> (role, platform)
         # family id -> group header item; per-item arch (for the arch filter).
         self._family_items: dict[str, QtWidgets.QTreeWidgetItem] = {}
@@ -329,9 +361,21 @@ class WorklistPage(QtWidgets.QWizardPage):
             enc_combo.addItems(list(_ENC_CHOICES))
             self.tree.setItemWidget(item, _COL_ENC, enc_combo)
 
+        # per-node scope:node infra services (Tor onion / node egress-VPN). Only built
+        # where the platform's builder can express one (x86 tor; rpi5 tor+egress) — an
+        # inexpressible platform gets no combo, so the GUI can never offer a dead flag.
+        services_combo = None
+        infra_opts = _infra_service_options(platform)
+        if infra_opts:
+            services_combo = QtWidgets.QComboBox()
+            for label, tup in infra_opts:
+                services_combo.addItem(label, tup)
+            self.tree.setItemWidget(item, _COL_SERVICES, services_combo)
+
         self.rows[rid] = item
         self._combos[rid] = (board_combo, flavor_combo)
         self._enc_combos[rid] = enc_combo
+        self._services_combos[rid] = services_combo
         self._id_axes[rid] = (role, platform)
         self._sync_combo_enabled(rid)
 
@@ -384,7 +428,8 @@ class WorklistPage(QtWidgets.QWizardPage):
 
     def _sync_combo_enabled(self, rid: str) -> None:
         on = self._is_checked(self.rows[rid])
-        for combo in (*self._combos[rid], self._enc_combos[rid]):
+        for combo in (*self._combos[rid], self._enc_combos[rid],
+                      self._services_combos[rid]):
             if combo is not None:
                 combo.setEnabled(on)
 
@@ -446,6 +491,7 @@ class WorklistPage(QtWidgets.QWizardPage):
                         j = enc_combo.findText(e.encrypt_root)
                         if j >= 0:
                             enc_combo.setCurrentIndex(j)
+                    self._apply_infra_to_combo(rid, e.infra_services)
         else:
             # fresh mesh entry: pre-check the mode-default row so the flow is navigable
             # (like RolePage preselecting MODE_DEFAULT_ROLE) — the superadmin adds more.
@@ -458,6 +504,19 @@ class WorklistPage(QtWidgets.QWizardPage):
         for rid in self.rows:
             self._sync_combo_enabled(rid)
         self.completeChanged.emit()
+
+    def _apply_infra_to_combo(self, rid: str, infra_services) -> None:
+        """Reflect a saved entry's infra_services onto its Services combo (match the
+        item whose data tuple equals the saved set; fall back to '—')."""
+        combo = self._services_combos[rid]
+        if combo is None:
+            return
+        want = tuple(infra_services or ())
+        for i in range(combo.count()):
+            if tuple(combo.itemData(i) or ()) == want:
+                combo.setCurrentIndex(i)
+                return
+        combo.setCurrentIndex(0)                       # unknown/inexpressible -> none
 
     def _apply_axes_to_combos(self, rid: str, board: str, flavor: str) -> None:
         board_combo, flavor_combo = self._combos[rid]
@@ -503,12 +562,22 @@ class WorklistPage(QtWidgets.QWizardPage):
                 encrypt_root = enc_combo.currentText()
             else:
                 encrypt_root = keep.encrypt_root if keep else "default"
+            # per-node infra services: read the Services combo's selected tuple where
+            # present; a platform with no combo keeps its prior/empty set (materialize
+            # drops anything inexpressible anyway). Untouched combos sit on '—' == (),
+            # so an existing worklist stays byte-identical.
+            services_combo = self._services_combos[rid]
+            if services_combo is not None:
+                infra_services = tuple(services_combo.currentData() or ())
+            else:
+                infra_services = keep.infra_services if keep else ()
             entries.append(WorklistEntry(
                 role=role, platform=platform, board=board, flavor=flavor,
                 desktop=keep.desktop if keep else "",
                 encrypt_root=encrypt_root,
                 packages_add=keep.packages_add if keep else "",
                 packages_drop=keep.packages_drop if keep else "",
+                infra_services=infra_services,
             ))
         if not entries:
             return False   # isComplete() already blocks Next; guard the collect path too
