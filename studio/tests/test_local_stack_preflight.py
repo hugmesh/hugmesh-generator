@@ -299,7 +299,7 @@ def test_start_runs_stack_up_when_preflight_green(monkeypatch):
     monkeypatch.setattr(LocalStackNode, "preflight", lambda self: [], raising=True)
     seen = {}
 
-    def _make(self, target, timeout, extra_env=None):
+    def _make(self, target, timeout, extra_env=None, on_line=None, cancel=None):
         seen["target"], seen["timeout"] = target, timeout
         return True, "up"
     monkeypatch.setattr(LocalStackNode, "_make", _make, raising=True)

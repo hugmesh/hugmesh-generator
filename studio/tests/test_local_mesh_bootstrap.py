@@ -223,11 +223,11 @@ def _patch_up_happy(monkeypatch, seed_calls, start_calls):
     monkeypatch.setattr(LocalMeshBootstrap, "generate_creds",
                         lambda self: (True, "generated"), raising=True)
 
-    def _fake_stack_start(self):
+    def _fake_stack_start(self, on_line=None, cancel=None):
         start_calls.append(True)
         return True, "stack up"
 
-    def _fake_stack_seed(self, extra_env=None, timeout=600):
+    def _fake_stack_seed(self, extra_env=None, timeout=600, on_line=None, cancel=None):
         seed_calls.append(dict(extra_env or {}))
         return True, "seeded"
 

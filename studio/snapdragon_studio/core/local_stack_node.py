@@ -11,9 +11,13 @@ docker compose (read-only, cheap) since they don't need any of that setup.
 """
 from __future__ import annotations
 
+import collections
 import os
+import select
 import shutil
+import signal
 import subprocess
+import time
 import urllib.request
 from dataclasses import dataclass
 
@@ -47,6 +51,16 @@ PRIVATE_ARTIFACT_SERVICES = (
 # exceeds 10 GiB of layers + build cache; demand sane headroom up front instead
 # of failing 40 minutes into `docker compose build`.
 PREFLIGHT_MIN_FREE_GIB = 20
+
+# stack-up ceilings. The old flat 1800 s KILLED every healthy cold bring-up: a
+# from-scratch `make stack-up` compiles ~24 service images (four fat Spring builds
+# among them) and routinely runs well past 30 minutes — the GUI then reported
+# FAILED (TimeoutExpired) while docker was building fine. Warm restarts (images
+# present) keep the tight ceiling; cold builds get a generous one and rely on the
+# streamed output + operator Cancel instead of a guess-the-duration timeout.
+WARM_STACK_UP_TIMEOUT_S = 1800
+COLD_STACK_UP_TIMEOUT_S = 6 * 3600
+M2_BOOTSTRAP_TIMEOUT_S = 3 * 3600
 
 
 def _compose_base() -> list[str]:
@@ -309,16 +323,93 @@ class LocalStackNode:
         return env
 
     def _make(self, target: str, timeout: int,
-              extra_env: dict[str, str] | None = None) -> tuple[bool, str]:
+              extra_env: dict[str, str] | None = None,
+              on_line=None, cancel=None) -> tuple[bool, str]:
+        """Run ``make <target>``. Without ``on_line``/``cancel`` this is the original
+        buffered contract (subprocess.run, full output at the end). WITH them it
+        STREAMS: merged stdout+stderr line-by-line into ``on_line`` as the build
+        runs (what makes an hour-long cold compose build watchable in the GUI), and
+        ``cancel`` (a threading.Event-like with .is_set()) terminates the whole
+        process GROUP — make's compose/docker children included, which is why the
+        child starts in its own session. The returned message is the output TAIL
+        (last 400 lines), which is what error reporting actually needs."""
         env = self._build_env(extra_env)
+        if on_line is None and cancel is None:
+            try:
+                r = subprocess.run(["make", target], cwd=self.generator_dir, env=env,
+                                   capture_output=True, text=True, timeout=timeout)
+                return (r.returncode == 0), (r.stderr or r.stdout).strip()
+            except (OSError, subprocess.SubprocessError) as e:
+                return False, str(e)
         try:
-            r = subprocess.run(["make", target], cwd=self.generator_dir, env=env,
-                               capture_output=True, text=True, timeout=timeout)
-            return (r.returncode == 0), (r.stderr or r.stdout).strip()
-        except (OSError, subprocess.SubprocessError) as e:
+            proc = subprocess.Popen(
+                ["make", target], cwd=self.generator_dir, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                errors="replace", start_new_session=(os.name == "posix"))
+        except OSError as e:
             return False, str(e)
+        tail: collections.deque[str] = collections.deque(maxlen=400)
+        deadline = time.monotonic() + timeout
+        cancelled = timed_out = False
 
-    def start(self) -> tuple[bool, str]:
+        def _kill() -> None:
+            try:
+                if os.name == "posix":
+                    os.killpg(proc.pid, signal.SIGTERM)
+                else:
+                    proc.terminate()
+            except OSError:
+                pass
+
+        while True:
+            if cancel is not None and cancel.is_set() and not cancelled:
+                cancelled = True
+                _kill()
+            if time.monotonic() > deadline and not (cancelled or timed_out):
+                timed_out = True
+                _kill()
+            # 1 s select keeps cancel/timeout responsive while the build is quiet;
+            # non-POSIX pipes can't select — there the loop blocks per line (cancel
+            # still lands on the next line, and the local stack is a Linux surface).
+            if os.name == "posix":
+                ready, _, _ = select.select([proc.stdout], [], [], 1.0)
+                if not ready:
+                    if proc.poll() is not None:
+                        break
+                    continue
+            line = proc.stdout.readline()
+            if line == "":
+                break
+            line = line.rstrip("\n")
+            tail.append(line)
+            if on_line is not None:
+                on_line(line)
+        try:
+            rc = proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            try:
+                if os.name == "posix":
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
+            except OSError:
+                pass
+            rc = proc.wait()
+        text = "\n".join(tail).strip()
+        if cancelled:
+            return False, f"cancelled by operator.\n{text}"[:8000]
+        if timed_out:
+            return False, (f"timed out after {timeout} s (process group terminated)."
+                           f"\n{text}")[:8000]
+        return rc == 0, text
+
+    def cold_build_expected(self) -> bool:
+        """True when any private-maven service image is absent — the first stack-up
+        will COMPILE the fleet (hours-scale) instead of restarting it (minutes)."""
+        return any(not self._image_present(f"{_COMPOSE_PROJECT}-{s}")
+                   for s in PRIVATE_ARTIFACT_SERVICES)
+
+    def start(self, on_line=None, cancel=None) -> tuple[bool, str]:
         # Fail-fast for EVERY caller — the tray's "start" invokes start() directly
         # (not via LocalMeshBootstrap.up()), and without this gate a cold box gets
         # the doomed 30-minute build + a truncated compose tail. preflight()
@@ -326,15 +417,36 @@ class LocalStackNode:
         problems = self.preflight()
         if problems:
             return False, "\n".join(problems)
-        # stack-clone + build + up -d — can take a while on first run (image pulls/builds).
-        return self._make("stack-up", timeout=1800)
+        # stack-clone + build + up -d. COLD (service images absent) compiles ~24
+        # images and needs the generous ceiling — the flat 1800 s here used to kill
+        # every healthy first bring-up at minute 30 and report it FAILED.
+        cold = self.cold_build_expected()
+        if cold and on_line is not None:
+            on_line("[stack-up] COLD BUILD: service images are absent, so this first "
+                    "run compiles the whole stack (~24 images, four fat Spring "
+                    "builds) — well over an hour on most machines. Output streams "
+                    "below; Cancel stays available.")
+        return self._make("stack-up",
+                          timeout=(COLD_STACK_UP_TIMEOUT_S if cold
+                                   else WARM_STACK_UP_TIMEOUT_S),
+                          on_line=on_line, cancel=cancel)
 
     def seed(self, extra_env: dict[str, str] | None = None,
-             timeout: int = 600) -> tuple[bool, str]:
+             timeout: int = 600, on_line=None, cancel=None) -> tuple[bool, str]:
         """`make stack-seed` — provision Casdoor identity (org+roles+personas) into
         the already-running stack. ``extra_env`` bridges secret values (the minted
         E2E_SUPERADMIN_PASSWORD) through the subprocess env, never argv."""
-        return self._make("stack-seed", timeout=timeout, extra_env=extra_env)
+        return self._make("stack-seed", timeout=timeout, extra_env=extra_env,
+                          on_line=on_line, cancel=cancel)
+
+    def m2_bootstrap(self, on_line=None, cancel=None) -> tuple[bool, str]:
+        """`make stack-m2-bootstrap` — the COLD-BUILD prerequisite: build the
+        org-private maven artifacts FROM SOURCE and serve them from the local
+        registry container. This is the action preflight's "run `make
+        stack-m2-bootstrap` first" hint names — callable from the GUI so a
+        from-scratch bring-up never needs a terminal."""
+        return self._make("stack-m2-bootstrap", timeout=M2_BOOTSTRAP_TIMEOUT_S,
+                          on_line=on_line, cancel=cancel)
 
     def stop(self) -> tuple[bool, str]:
         return self._make("stack-down", timeout=300)
