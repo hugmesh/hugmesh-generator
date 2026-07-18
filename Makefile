@@ -855,9 +855,13 @@ STACK_M2_FLAGS    = $(if $(wildcard $(STACK_M2_ENV)),--env-file $(STACK_M2_ENV) 
 # compose call so the profile renders/runs (NOT needed for the core stack).
 STACK_SOCIAL_DEP := $(if $(strip $(SOCIAL)),stack-mastodon-env,)
 
-stack-clone: ## clone/update all snapdragon repos into ./.stack-src (idempotent)
-	STACK_SRC='$(STACK_SRC)' GIT_BASE='$(GIT_BASE)' GIT_REF='$(GIT_REF)' \
-	  bash scripts/clone-all-repos.sh
+stack-clone: ## clone/update all snapdragon repos into ./.stack-src (idempotent; STACK_NO_CLONE=1 skips)
+	@if [ -n "$(STACK_NO_CLONE)" ]; then \
+	  echo "==> stack-clone: SKIPPED (STACK_NO_CLONE=1) — building from $(STACK_SRC) as-is"; \
+	else \
+	  STACK_SRC='$(STACK_SRC)' GIT_BASE='$(GIT_BASE)' GIT_REF='$(GIT_REF)' \
+	    bash scripts/clone-all-repos.sh; \
+	fi
 
 # Guarantee tests/stack/.mastodon.env exists with non-empty dev secrets (only the
 # SOCIAL=1 path needs it). Synapse's config/registration self-heals via its own

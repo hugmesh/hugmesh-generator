@@ -108,6 +108,7 @@ def test_page_slugs_map_to_the_right_pages(wiz):
     "worklist" (mesh multi-select) and "progress" (terminal) slugs are included;
     ProgressPage lands in WS-REVIEWUI, so it is None-tolerant until registered."""
     expect = {"welcome": wizard_mod.WelcomePage, "mode": wizard_mod.ModePage,
+              "localmesh": wizard_mod.LocalMeshPage,
               "role": wizard_mod.RolePage, "worklist": wizard_mod.WorklistPage,
               "hardware": wizard_mod.HardwarePage, "branding": wizard_mod.BrandingPage,
               "network": wizard_mod.NetworkPage, "keyzip": wizard_mod.KeyZipPage,
