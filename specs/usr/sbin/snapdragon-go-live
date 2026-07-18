@@ -196,9 +196,20 @@ cmd_plan() {
     local f
     for f in "${out}"/*; do [ -e "${f}" ] && echo "  - ${f}"; done
     echo
-    echo "NEXT: apply the edge (records/creds above), verify propagation, THEN run:"
-    echo "  snapdragon-go-live commit --provider ${provider}   # trips /etc/snapdragon/go-live"
-    echo "posture converges to PUBLIC within 60s via snapdragon-firewall-reconcile."
+    # onion is the ONE mechanism that needs NO public flip: the node's own Tor daemon
+    # serves the .onion outbound, reachable with the firewall CLOSED. Steering an
+    # onion-only operator to `commit` would open public 80/443 they explicitly don't
+    # want — the exact footgun the hidden service avoids. See instructions.txt.
+    if [ "$(glp_mechanism "${provider}")" = "onion" ]; then
+        echo "NEXT: the .onion is LIVE whenever the node's tor service is running (built"
+        echo "  with --with-tor) — see onion.txt / instructions.txt. NO public flip is"
+        echo "  needed: the host stays INTERNAL and stays reachable over Tor. Only run"
+        echo "  'commit' if you ALSO want a clearnet edge live alongside the onion."
+    else
+        echo "NEXT: apply the edge (records/creds above), verify propagation, THEN run:"
+        echo "  snapdragon-go-live commit --provider ${provider}   # trips /etc/snapdragon/go-live"
+        echo "posture converges to PUBLIC within 60s via snapdragon-firewall-reconcile."
+    fi
 }
 
 # ── Confirmation gate (fail-safe) ────────────────────────────────────────────────

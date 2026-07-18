@@ -56,7 +56,7 @@
 # ── Registry rows ──────────────────────────────────────────────────────────────
 # Order here is the PRIORITISED v1 list (flagship first). The driver lists in
 # this order.
-GO_LIVE_PROVIDER_IDS=(cloudflare-tunnel byo-domain duckdns tailscale-funnel router-portforward)
+GO_LIVE_PROVIDER_IDS=(cloudflare-tunnel byo-domain duckdns tailscale-funnel router-portforward tor-onion)
 
 declare -gA GO_LIVE_LABEL=(
     [cloudflare-tunnel]="Cloudflare Tunnel"
@@ -64,6 +64,7 @@ declare -gA GO_LIVE_LABEL=(
     [duckdns]="DuckDNS / Cloudflare-DDNS (dynamic IP)"
     [tailscale-funnel]="Tailscale / Headscale Funnel"
     [router-portforward]="Router port-forward"
+    [tor-onion]="Tor v3 onion (hidden service)"
 )
 declare -gA GO_LIVE_MECH=(
     [cloudflare-tunnel]="deeplink"
@@ -71,6 +72,12 @@ declare -gA GO_LIVE_MECH=(
     [duckdns]="ddns"
     [tailscale-funnel]="funnel"
     [router-portforward]="instructions"
+    # onion — NO public DNS, NO public IP, NO open inbound ports: the node's local
+    # Tor daemon dials OUT and serves a stable v3 .onion. Reachability comes purely
+    # from the `--with-tor` node service (docs/TOR-HIDDEN-SERVICE.md); this provider
+    # only surfaces the minted address + how to reach it. Its own mechanism value so
+    # front-ends can give it distinct UI (it takes NO inputs — not even a domain).
+    [tor-onion]="onion"
 )
 # full = implemented end-to-end. (stub is retained in the taxonomy for any future
 # provider added ahead of its emit; all v1 providers are full.)
@@ -80,6 +87,7 @@ declare -gA GO_LIVE_STATUS=(
     [duckdns]="full"
     [tailscale-funnel]="full"
     [router-portforward]="full"
+    [tor-onion]="full"
 )
 # Deep-link URL TEMPLATE. {domain} is substituted with GL_DOMAIN by glp_deeplink().
 declare -gA GO_LIVE_DEEPLINK=(
@@ -88,6 +96,7 @@ declare -gA GO_LIVE_DEEPLINK=(
     [duckdns]="https://www.duckdns.org/domains"
     [tailscale-funnel]="https://login.tailscale.com/admin/settings/features"
     [router-portforward]="https://portforward.io/"
+    [tor-onion]="https://www.torproject.org/download/"   # get Tor Browser to reach the .onion
 )
 # One-line human summary of what each provider EMITS / does.
 declare -gA GO_LIVE_EMITS=(
@@ -96,6 +105,7 @@ declare -gA GO_LIVE_EMITS=(
     [duckdns]="a single-token DDNS updater + cron drop-in (no dashboard)"
     [tailscale-funnel]="the tailnet-native funnel enable commands (no public DNS records at all)"
     [router-portforward]="printed port-forward instructions + a deep-link to your gateway/portforward.io (no mutation)"
+    [tor-onion]="the node's minted .onion address + Tor Browser reachability card (NO public DNS/IP/ports)"
 )
 # Does this provider mutate PUBLIC DNS? funnel/router do not (tailnet / NAT only).
 declare -gA GO_LIVE_PUBLIC_DNS=(
@@ -536,6 +546,87 @@ glp_emit_router-portforward() {
         printf '5. Rollback:  snapdragon-go-live rollback   (and remove the port-forward rules)\n\n'
         printf 'CAVEAT: behind CGNAT (no reachable public WAN IP) port-forwarding cannot work —\n'
         printf 'use cloudflare-tunnel or tailscale-funnel instead.\n'
+    } > "${out}/instructions.txt"
+    return 0
+}
+
+# ── EMIT: tor-onion (#6) — v3 hidden service, NO public DNS/IP/ports ──────────────
+# The onion is served by the node's OWN Tor daemon (the `tor` optional service,
+# docs/TOR-HIDDEN-SERVICE.md): the snapdragon-tor-reconcile agent mints + PERSISTS
+# the v3 keypair off-git under /var/lib/tor/snapdragon-onion and EXPORTS the public
+# hostname to /var/lib/snapdragon/tor/hostname. This provider does NOT mint anything
+# and touches NO public edge — it reads that exported hostname (when present) and
+# renders the reachability card + Tor Browser guidance. Unlike every other provider,
+# reachability is INDEPENDENT of the go-live marker: the onion is live whenever the
+# node's tor service is running, with no ports opened. GL_ONION_HOSTNAME overrides
+# the file (e.g. a from-a-dev-box preview, or a node queried over the mesh).
+_GLP_ONION_HOSTNAME_FILES=(/var/lib/snapdragon/tor/hostname /var/lib/tor/snapdragon-onion/hostname)
+_glp_onion_hostname() {
+    if [ -n "${GL_ONION_HOSTNAME:-}" ]; then printf '%s' "${GL_ONION_HOSTNAME}"; return 0; fi
+    local f
+    for f in "${_GLP_ONION_HOSTNAME_FILES[@]}"; do
+        if [ -r "${f}" ]; then tr -d '[:space:]' < "${f}"; return 0; fi
+    done
+    return 1
+}
+glp_emit_tor-onion() {
+    local out="$1" onion=""
+    onion="$(_glp_onion_hostname || true)"
+
+    # onion.txt — the address itself (the ONLY artifact that ever leaves the node).
+    {
+        if [ -n "${onion}" ]; then
+            printf '%s\n' "${onion}"
+        else
+            printf '# NOT-YET-MINTED — no exported hostname found on THIS host.\n'
+            printf '# The v3 .onion is minted on the NODE at first boot by\n'
+            printf '# snapdragon-tor-reconcile (needs the `tor` optional service baked:\n'
+            printf '# build with --with-tor). Read it ON THE NODE with:\n'
+            printf '#   cat /var/lib/snapdragon/tor/hostname\n'
+            printf '# then re-run this plan there, or pass GL_ONION_HOSTNAME=<addr>.\n'
+        fi
+    } > "${out}/onion.txt"
+
+    # deeplinks.txt — how a visitor reaches a .onion.
+    {
+        printf '# Reaching a .onion (share these with your visitors):\n'
+        printf 'Download Tor Browser        https://www.torproject.org/download/\n'
+        printf 'What is an onion service    https://community.torproject.org/onion-services/\n'
+        printf 'Onion-Location / verifying  https://support.torproject.org/onionservices/\n'
+    } > "${out}/deeplinks.txt"
+
+    # instructions.txt — the flow + the posture note (this is the DIFFERENT one).
+    {
+        printf 'GO-LIVE — Tor v3 onion (hidden service)\n'
+        printf '=======================================\n\n'
+        printf 'INBOUND reachability with NO public IP, NO public DNS, NO open ports, and\n'
+        printf "NO Cloudflare. The node's own Tor daemon dials OUT to the Tor network and\n"
+        printf 'publishes the in-cluster fe-gateway as a STABLE v3 .onion.\n\n'
+        if [ -n "${onion}" ]; then
+            printf 'Your address:  %s\n' "${onion}"
+            printf 'Open it:       Tor Browser -> http://%s/\n\n' "${onion}"
+        else
+            printf 'Your address:  (minted on the node — see onion.txt)\n\n'
+        fi
+        printf 'PREREQUISITE (the reachability, not this wizard, comes from it):\n'
+        printf '  1. Build the node image with the `tor` service:  --with-tor\n'
+        printf '     (Studio: Network & services -> "Tor v3 onion service"; or add `tor`\n'
+        printf '      to OPTIONAL_SERVICES / brand.conf). It is a NODE service, DEFAULT-OFF,\n'
+        printf '      and a no-op on CLIENT/standalone-desktop roles.\n'
+        printf '  2. On first boot snapdragon-tor-reconcile mints + PERSISTS the v3 keypair\n'
+        printf '     under /var/lib/tor/snapdragon-onion (off-git, never a Secret) and writes\n'
+        printf '     /etc/tor/torrc mapping the onion :80 -> the fe-gateway ingress\n'
+        printf '     (127.0.0.1:8443 by default; override in /etc/snapdragon/tor/upstream).\n'
+        printf '  3. The .onion is then LIVE — reachable from any Tor Browser, immediately.\n\n'
+        printf 'POSTURE — this is the one provider that does NOT need the public flip:\n'
+        printf '  The onion works with the firewall CLOSED (release-state internal). You do\n'
+        printf '  NOT need `snapdragon-go-live commit` to be reachable over Tor. Commit only\n'
+        printf '  if you ALSO want a clearnet edge (byo-domain/tunnel/funnel) live alongside\n'
+        printf '  the onion — for Tor-only exposure, leave the host internal and just share\n'
+        printf '  the .onion. (rollback/commit never touch the onion either way.)\n\n'
+        printf 'VERIFY (from any machine with Tor):\n'
+        printf '  torsocks curl -sI http://%s/     # answers over Tor\n' "${onion:-<your-onion>}"
+        printf '  # or just open it in Tor Browser.\n'
     } > "${out}/instructions.txt"
     return 0
 }

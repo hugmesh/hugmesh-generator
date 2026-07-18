@@ -56,6 +56,10 @@ _MECH_MODEL = {
     "ddns": "ddns",
     "funnel": "funnel",
     "instructions": "router",
+    # onion — its own exposure model: no public DNS/IP/ports, reachable only over
+    # Tor (docs/TOR-HIDDEN-SERVICE.md). Takes NO inputs (not even a domain — the
+    # .onion address IS the endpoint, minted on the node).
+    "onion": "onion",
 }
 # Which inputs each mechanism (required, optional) drives on the inputs page. This
 # is derived purely from the mechanism taxonomy the registry publishes — the
@@ -66,7 +70,12 @@ _MECH_INPUTS = {
     "files":        ([],                     ["ingress-ip", "ingress-ipv6", "tunnel-cname"]),
     "funnel":       ([],                     []),
     "instructions": ([],                     []),
+    "onion":        ([],                     []),   # no inputs — the .onion is the endpoint
 }
+
+# Mechanisms that need NO public domain (the endpoint is not a DNS name). For these
+# the driver's --domain is purely cosmetic, so the front-end must not demand it.
+_NO_DOMAIN_MECHANISMS = frozenset({"onion"})
 
 # Terminal emulators the commit/rollback can run in, most-specific first; each
 # entry is (binary, exec-style args that precede the command argv).
@@ -380,10 +389,13 @@ class GoLiveDriver:
             problems.append(f"provider registry not found: {self.registry_path}")
         if not shutil.which("bash"):
             problems.append("bash is required to run the go-live driver.")
-        if not (opts.domain or self.autofill_domain()):
+        p = self.provider(opts.provider) if opts.provider else None
+        # Onion (and any future no-domain mechanism) has no public DNS name — the
+        # .onion address IS the endpoint, so don't demand a domain for it.
+        needs_domain = not (p and p.mechanism in _NO_DOMAIN_MECHANISMS)
+        if needs_domain and not (opts.domain or self.autofill_domain()):
             problems.append("Domain is required (no /etc/snapdragon/cluster-domain bake "
                             "found to autofill from).")
-        p = self.provider(opts.provider) if opts.provider else None
         if not opts.provider:
             problems.append("Pick a provider first (plan needs one).")
         elif p is None:

@@ -25,7 +25,7 @@ import os
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
 from ..wizard import _file_picker, _row
-from ...core.golive_driver import GoLiveDriver, GoLiveOptions
+from ...core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
 
 # exactly one page per slug, same order — mirrors WIZARD_PAGE_SLUGS' role for the
 # build wizard (tests pin each slug to its page class)
@@ -51,6 +51,11 @@ MODEL_LABELS = {
     "router": ("Router port-forward (instructions only)",
                "Forward WAN 80/443 to the ingress node yourself — the wizard renders "
                "the exact checklist and never touches the router."),
+    "onion": ("Tor v3 onion (hidden service — no public IP/DNS/ports)",
+              "The node's own Tor daemon serves a stable .onion, reachable in Tor "
+              "Browser. No public IP, no DNS records, no open inbound ports — needs "
+              "the node built with --with-tor. The onion is live with the firewall "
+              "CLOSED, so it needs no 'go-live' flip at all."),
 }
 
 # one-line description of what each mechanism's `plan` emits (the registry does not
@@ -63,6 +68,8 @@ MECH_EMITS = {
     "ddns": "a real single-token DDNS updater + a cron drop-in (no dashboard).",
     "funnel": "the tailnet-native funnel enable commands (no public DNS records at all).",
     "instructions": "printed port-forward instructions + router deep-links (no mutation).",
+    "onion": "the node's minted .onion address + a Tor Browser reachability card "
+             "(no public DNS/IP/ports; needs --with-tor baked on the node).",
 }
 
 
@@ -306,7 +313,11 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
     def validatePage(self):
         o = self.wiz.opts
         o.domain = self.domain.text().strip()
-        if not o.domain:
+        p = self.wiz.driver.provider(o.provider)
+        # Onion has no public DNS name (the .onion IS the endpoint) — don't demand a
+        # domain for it; every other mechanism still needs one downstream.
+        domain_required = not (p and p.mechanism in _NO_DOMAIN_MECHANISMS)
+        if domain_required and not o.domain:
             QtWidgets.QMessageBox.warning(
                 self, "Domain required",
                 "Every downstream step needs the public domain — no baked cluster "
@@ -499,8 +510,22 @@ class GoLiveFlipPage(QtWidgets.QWizardPage):
 
     def initializePage(self):
         d = self.wiz.opts.domain
-        self.warning.setText(f"ABOUT TO GO PUBLIC: {d} will accept public 80/443 "
-                             "within 60s of the flip.")
+        p = self.wiz.driver.provider(self.wiz.opts.provider)
+        if p and p.mechanism in _NO_DOMAIN_MECHANISMS:
+            # Onion needs NO flip — it is already reachable over Tor with the firewall
+            # closed. Committing here would additionally open public 80/443, which a
+            # Tor-only operator explicitly does not want. Say so plainly.
+            self.warning.setText(
+                "TOR ONION NEEDS NO FLIP: your .onion is already reachable with the "
+                "host INTERNAL. Committing here would ALSO open public 80/443 — only "
+                "do it if you additionally want a clearnet edge. For Tor-only exposure, "
+                "skip the flip and just share the .onion.")
+            self.confirm.setPlaceholderText(
+                "type the domain to arm the (optional) clearnet flip — Tor needs none")
+        else:
+            self.warning.setText(f"ABOUT TO GO PUBLIC: {d} will accept public 80/443 "
+                                 "within 60s of the flip.")
+            self.confirm.setPlaceholderText("type the domain exactly to arm the flip")
         self.confirm.clear()
         self.flip_btn.setEnabled(False)
         self.out.setText("")
