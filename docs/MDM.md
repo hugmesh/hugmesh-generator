@@ -421,21 +421,24 @@ sketch), a device-registry consumer that needs MDM-enrollment status must
 read `mdm.json` directly. Tracked as a real, currently-open gap — not
 silently glossed over.
 
-Default is **emit-only**. **No dedicated `phone-ingest/v1` registry endpoint
-exists yet** — `/bff/internal/device-enrollment/self-report` is a
-**different, disjoint contract**: it is the node-side `machineKeyFp`
+Default is **emit-only**. The dedicated registry endpoint is
+**`POST /bff/internal/device-registry/phone-ingest`** (snapdragon-admin-bff-api):
+point `--ingest-url` at it with the mTLS identity flags
+(`--client-cert`/`--client-key`/`--ca`; the wizard fails closed without
+them), plus `--internal-token-file F` when the deployment arms the BFF's
+app-layer `X-Internal-Token` gate (armed prod 401s the POST without it; the
+token rides a 0600 `-H @file` header file, never curl's argv). It accepts exactly this `phone-ingest/v1` shape (snake_case, unknown
+additive keys ignored; non-phone `schema`/`device_class` is a clean 400),
+UPSERTs one `phone_device` row per `device_id` (a re-ingest refreshes the
+telemetry and bumps `ingest_count`), and rides the same mTLS-gated
+`/bff/internal/**` transport as the node self-report. A superadmin reads the
+fleet at `GET /bff/superadmin/phone-devices` (+ `/{deviceId}`). Do **not**
+point `--ingest-url` at `/bff/internal/device-enrollment/self-report` — that
+is a **different, disjoint contract**: the node-side `machineKeyFp`
 self-report used for headscale cluster-node reconciliation
-(`specs/usr/sbin/snapdragon-device-enrollment-report`), keyed on fields
-(`machineKeyFp`, `hostname`, `meshId`, `tailnetId`) that a phone-ingest
-record never has, and its BFF handler requires `machineKeyFp` — posting a
-`phone-ingest/v1` record there fails Bean Validation and lands nowhere
-useful. This is a documented follow-up, not a working target: build a real
-phone-ingest route (its own controller/DTO/table, same mTLS-gated
-`/bff/internal/**` transport pattern — client cert/key + `--ca`,
-fail-closed when the identity material is missing) before pointing
-`--ingest-url` at production. Until then, hand the emitted `ingest.json` to
-the registry importer, or use `--ingest-url` once a real phone-ingest
-endpoint is stood up.
+(`specs/usr/sbin/snapdragon-device-enrollment-report`), whose handler
+requires `machineKeyFp` — a `phone-ingest/v1` record posted there fails Bean
+Validation and lands nowhere useful.
 
 ## Remote-management model
 
