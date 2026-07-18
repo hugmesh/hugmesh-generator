@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -71,6 +72,60 @@ DEFAULT_DOMAIN = "snapdragon.systems"
 _REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir))
 
+# BRAND is a Vault path segment AND a dot-sourced profile selector (brands/<BRAND>.conf).
+# Mirror scripts/gen-keystores.sh:45-53's DNS-label gate EXACTLY — that script hard-errors
+# and refuses to source the profile for a non-label BRAND, so we BLOCK the same shape (and
+# no stricter). A value like `../../evil` would otherwise select an arbitrary shell file.
+_BRAND_DNS_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+
+# brands/domains.conf is a MULTI-DOMAIN CA registry (its own header :1-8 says so), not a
+# brand profile — never offer it as a brand slug.
+_NON_BRAND_CONF = frozenset({"domains"})
+
+# The `context:` values compose.local.yaml resolves are ${STACK_SRC:-…}/snapdragon-<name>.
+# Parse the repo dir name straight out of the consumer file so the "expected build context"
+# set cannot drift from what `docker compose build` will actually resolve.
+_CONTEXT_RE = re.compile(r"\$\{STACK_SRC[^}]*\}/(snapdragon[A-Za-z0-9._-]+)")
+_COMPOSE_LOCAL = os.path.join("tests", "stack", "compose.local.yaml")
+
+
+def discover_brands(generator_dir: str) -> list[str]:
+    """Brand slugs with a real shell profile at brands/<slug>.conf — the ONLY files
+    gen-cluster-secrets.sh:36-38 and the builders ever source. DEFAULT_BRAND leads even
+    though it has NO .conf: the `-f` guard silently skips a missing profile, and that is
+    exactly what the CLI's ``--brand`` default resolves to (brands/README.md documents
+    ``.conf`` as the profile form). Deliberately does NOT offer ``acme`` (only acme.yaml
+    exists — a tenant-set manifest for the render path, a DIFFERENT catalog with a
+    DIFFERENT consumer) nor ``domains`` (a CA registry, see _NON_BRAND_CONF)."""
+    brands_dir = os.path.join(generator_dir, "brands")
+    slugs: set[str] = set()
+    try:
+        for name in os.listdir(brands_dir):
+            if name.endswith(".conf"):
+                slug = name[: -len(".conf")]
+                if slug and slug not in _NON_BRAND_CONF:
+                    slugs.add(slug)
+    except OSError:
+        pass
+    slugs.discard(DEFAULT_BRAND)
+    return [DEFAULT_BRAND] + sorted(slugs)
+
+
+def expected_build_contexts(generator_dir: str) -> list[str]:
+    """The repo directory names ``docker compose build`` will resolve as build contexts,
+    parsed from the ${STACK_SRC:-…}/snapdragon-<name> ``context:`` values in
+    tests/stack/compose.local.yaml. Derived from the file compose ACTUALLY reads, so it
+    cannot drift from what a build resolves (deriving from clone-all-repos.sh's REPOS
+    would drift — the two sets differ). Sorted + de-duplicated (snapdragon-gateway
+    appears 3x — one image, three service roles)."""
+    path = os.path.join(generator_dir, _COMPOSE_LOCAL)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return []
+    return sorted(set(_CONTEXT_RE.findall(text)))
+
 
 @dataclass
 class LocalMeshBootstrapConfig:
@@ -96,6 +151,15 @@ class LocalMeshBootstrapConfig:
     node_name: str = ""
     brand: str = DEFAULT_BRAND
     cluster_domain: str = ""
+    # WHERE the buildable repo source comes from:
+    #   "clone"    — TODAY'S behaviour: `make stack-clone` downloads all repos into
+    #                ./.stack-src, then compose builds from there. source_dir ignored.
+    #   "existing" — build from a tree the operator already has (STACK_SRC=<source_dir>),
+    #                and SKIP the clone (STACK_NO_CLONE=1) so it is never git-reset.
+    # DEFAULT "clone" + empty source_dir == zero regression: LocalStackNode._build_env()
+    # sets nothing new, STACK_SRC stays unset, the Makefile's own default resolves as now.
+    source_mode: str = "clone"
+    source_dir: str = ""
 
     def is_prod(self) -> bool:
         return self.env == "prod"
@@ -156,12 +220,41 @@ class LocalMeshBootstrap:
         # brand apex. In test the issuer is localhost, so DOMAIN is left empty.
         domain = self.cfg.resolved_domain() if self.cfg.is_prod() else ""
         return LocalStackNode(self.generator_dir, env=self.cfg.env,
-                              social=self.cfg.social, domain=domain)
+                              social=self.cfg.social, domain=domain,
+                              source_mode=self.cfg.source_mode,
+                              source_dir=self.cfg.source_dir)
 
     def _mesh_node(self) -> LocalMeshNode:
         return LocalMeshNode(self.generator_dir, LocalMeshConfig(
             auth_key=self.cfg.auth_key, node_name=self.cfg.node_name,
             login_server=self.cfg.login_server))
+
+    # ---- source-tree coverage (Qt-free; drives the GUI source axis) -------------
+    def expected_contexts(self) -> list[str]:
+        """Repo dir names compose.local.yaml will build (see expected_build_contexts)."""
+        return expected_build_contexts(self.generator_dir)
+
+    def source_coverage(self) -> tuple[list[str], list[str]]:
+        """(found, missing) expected build contexts under ``cfg.source_dir`` — only
+        meaningful in 'existing' mode. found+missing == expected_contexts(). Never
+        rounds up: a context counts as found only if the directory is really there."""
+        expected = self.expected_contexts()
+        base = self.cfg.source_dir.strip()
+        if not base or not os.path.isdir(base):
+            return [], expected
+        found = [c for c in expected if os.path.isdir(os.path.join(base, c))]
+        missing = [c for c in expected if c not in found]
+        return found, missing
+
+    # ---- brand-profile discovery (Qt-free) --------------------------------------
+    def brand_conf_path(self) -> str:
+        return os.path.join(self.generator_dir, "brands", f"{self.cfg.brand}.conf")
+
+    def brand_has_conf(self) -> bool:
+        """True when brands/<brand>.conf exists — the file gen-cluster-secrets.sh's
+        `-f` guard sources. DEFAULT_BRAND has none, and that is correct (built-in
+        defaults); this just reports the honest state rather than pretending."""
+        return bool(self.cfg.brand.strip()) and os.path.isfile(self.brand_conf_path())
 
     # ---- guards -----------------------------------------------------------------
     @staticmethod
@@ -196,6 +289,38 @@ class LocalMeshBootstrap:
             problems.append(f"ENV must be 'test' or 'prod' (got '{self.cfg.env}').")
         if not self.cfg.superadmin_username.strip():
             problems.append("Superadmin username must not be empty.")
+        # BRAND — a Vault path segment + a dot-sourced profile selector. BLOCK only the
+        # shapes the tool itself hard-errors on (#387): empty (BASE=${BRAND:-snapdragon}
+        # would silently mean something other than the UI shows) and non-DNS-label
+        # (gen-keystores.sh:45-53 refuses to source brands/<brand>.conf). A brand with no
+        # .conf is NOT blocked — the tool accepts it and exits 0 (see warnings()).
+        brand = self.cfg.brand.strip()
+        if not brand:
+            problems.append("Brand must not be empty — it is the secret/<BRAND>/ Vault "
+                            "base path segment.")
+        elif not _BRAND_DNS_LABEL.match(brand):
+            problems.append(f"Brand '{brand}' is not a DNS label [a-z0-9-] — "
+                            f"gen-keystores.sh refuses to source brands/{brand}.conf.")
+        # SOURCE axis — BLOCK only where compose will certainly hard-error.
+        sm = self.cfg.source_mode
+        if sm not in ("clone", "existing"):
+            problems.append(f"source_mode must be 'clone' or 'existing' (got '{sm}').")
+        elif sm == "existing":
+            sd = self.cfg.source_dir.strip()
+            if not sd:
+                problems.append("Building from an existing tree needs a directory — "
+                                "an empty STACK_SRC would silently fall back to the "
+                                "Makefile default and build the WRONG tree.")
+            elif not os.path.isdir(sd):
+                problems.append(f"Source tree not found: {sd} — compose hard-errors on "
+                                f"a missing build context.")
+            else:
+                found, _missing = self.source_coverage()
+                if not found:
+                    problems.append(
+                        f"{sd} holds NONE of the {len(self.expected_contexts())} "
+                        f"expected build contexts (snapdragon-*) — almost certainly the "
+                        f"wrong directory; compose errors on the first build context.")
         if self.cfg.is_prod():
             if not self.cfg.cluster_domain.strip():
                 problems.append("prod requires a public cluster domain "
@@ -206,6 +331,30 @@ class LocalMeshBootstrap:
                                 "(--authkey-file) to attach the mesh overlay to the "
                                 "real tailnet.")
         return problems
+
+    def warnings(self) -> list[str]:
+        """ADVISORY (never blocks — per the #387 rule these are shapes the tools accept
+        and exit 0 on): a brand with no profile file, and an existing tree missing some
+        of the build contexts compose will eventually ask for."""
+        out: list[str] = []
+        brand = self.cfg.brand.strip()
+        if brand and _BRAND_DNS_LABEL.match(brand) and not self.brand_has_conf():
+            if brand != DEFAULT_BRAND:
+                out.append(
+                    f"No brands/{brand}.conf profile — gen-cluster-secrets.sh runs fine "
+                    f"with built-in defaults (the -f guard just skips sourcing), but "
+                    f"MAIL_*/OAuth presets a profile would set stay unset.")
+        if self.cfg.source_mode == "existing" and self.cfg.source_dir.strip() \
+                and os.path.isdir(self.cfg.source_dir.strip()):
+            found, missing = self.source_coverage()
+            if found and missing:
+                out.append(
+                    f"{len(found)} of {len(found) + len(missing)} expected build "
+                    f"contexts found under {self.cfg.source_dir.strip()} — compose "
+                    f"builds fine until it reaches a missing one "
+                    f"(missing: {', '.join(missing[:4])}"
+                    + (", …" if len(missing) > 4 else "") + ").")
+        return out
 
     def preflight(self) -> list[str]:
         """Fail-fast COLD-BUILD readiness (LocalStackNode.preflight): docker daemon,
@@ -249,6 +398,16 @@ class LocalMeshBootstrap:
         lines.append("")
         lines.append("(2) START the full platform stack (compose project via")
         lines.append("    tests/stack/compose.local.yaml — Casdoor + DB + gateway + BFFs):")
+        if c.source_mode == "existing":
+            found, missing = self.source_coverage()
+            lines.append(f"      SOURCE: your existing tree {c.source_dir.strip()}")
+            lines.append(f"              ({len(found)} of {len(found) + len(missing)} "
+                         "expected build contexts found; STACK_NO_CLONE=1 — your")
+            lines.append("               checkouts are NEVER fetched, updated, or reset)")
+        else:
+            lines.append("      SOURCE: download/update all repos into ./.stack-src")
+            lines.append("              (make stack-clone — every compose service builds")
+            lines.append("               from those real, buildable files)")
         lines.append(f"      make stack-up   (ENV={c.env}, SOCIAL={'on' if c.social else 'off'})")
         lines.append("      make stack-seed (provisions ROLE_SUPERADMIN with the minted")
         lines.append("                       password, bridged via env only)")
@@ -442,7 +601,8 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
         env=args.env, superadmin_username=args.superadmin_username,
         out_dir=args.out, social=args.social, auth_key=_read_authkey(args),
         login_server=args.login_server, node_name=args.node_name,
-        brand=args.brand, cluster_domain=args.cluster_domain)
+        brand=args.brand, cluster_domain=args.cluster_domain,
+        source_mode=args.source_mode, source_dir=args.source_dir)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -478,6 +638,15 @@ def main(argv: list[str] | None = None) -> int:
                    help=f"brand slug (default: {DEFAULT_BRAND}).")
     p.add_argument("--cluster-domain", default="",
                    help="public apex domain (REQUIRED in prod).")
+    p.add_argument("--source-mode", choices=("clone", "existing"), default="clone",
+                   help="'clone' (default) = make stack-clone downloads/updates all "
+                        "repos into ./.stack-src and compose builds from there — "
+                        "today's exact behaviour. 'existing' = build from a tree you "
+                        "already have (--source-dir), with STACK_NO_CLONE=1 so your "
+                        "checkouts are never fetched or git-reset.")
+    p.add_argument("--source-dir", default="",
+                   help="the source tree for --source-mode existing; each service "
+                        "builds from <dir>/snapdragon-<name>.")
     key = p.add_mutually_exclusive_group()
     key.add_argument("--authkey-file", default="",
                      help="path to a file holding the tailnet/headscale auth key "

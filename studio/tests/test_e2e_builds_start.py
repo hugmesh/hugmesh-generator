@@ -326,14 +326,18 @@ def test_standalone_desktop_starts(monkeypatch, qapp, wiz, role):
 
 # ── (4a) LOCAL DOCKER MESH — the non-image GATE (does not dead-end the wizard) ──────────
 def test_localmesh_choice_gates_next_without_dead_end(wiz):
+    # page-flow contract (the popout is gone): the localmesh radio ENABLES Next,
+    # validatePage raises the transient wizard flag, cfg.mode stays an image mode,
+    # and the registered LocalMeshPage is in-flow and terminal.
     mp = next(p for p in wiz._pages if isinstance(p, ModePage))
     mp._buttons["localmesh"].setChecked(True)
     mp._on_mode_toggled()
-    # a local mesh builds no image: Next/Finish disabled, the inline launcher revealed,
-    # and NOTHING committed to cfg.mode even if validatePage is reached.
-    assert mp.isComplete() is False
-    assert mp.local_btn.isVisibleTo(mp) is True
-    assert mp.validatePage() is False
+    before = wiz.cfg.mode
+    assert mp.isComplete() is True
+    assert mp.validatePage() is True
+    assert wiz.localmesh_selected is True and wiz.cfg.mode == before
+    lm = wiz.page(wiz._page_ids["localmesh"])
+    assert lm.applies_to(wiz.cfg) is True and lm.nextId() == -1
 
 
 # ── (4b) LOCAL DOCKER MESH — LAUNCH to a REAL dispatched `docker compose up -d` ─────────
@@ -369,6 +373,12 @@ def test_localmesh_launch_dispatches_compose_up(qapp, tmp_path, monkeypatch):
     dlg.auth_key.setText("tskey-live")
     dlg.node_name.setText("mynode")
     dlg._start()
+    # verbs run on a _MeshWorker thread since the page conversion (the no-freeze
+    # fix) — join it and pump the loop so its queued signals land before asserting.
+    if dlg.page.worker is not None:
+        dlg.page.worker.wait(5000)
+    for _ in range(200):
+        qapp.processEvents()
 
     # the node lifecycle STARTED (a real dispatch, not a crash / dead-end). _start() flashes
     # "Started." then _refresh_status() replaces it with the live status — so the terminal

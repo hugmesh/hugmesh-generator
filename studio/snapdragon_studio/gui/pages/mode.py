@@ -10,8 +10,10 @@ non-image side-flow (design step1Taxonomy):
 
 cfg.mode stays exactly {"standalone","cloud","mesh"} — unchanged — so to_cli_args() /
 materialize() / the mesh manifest stay byte-identical for equivalent selections. The
-LOCAL DOCKER MESH choice builds no image, so it never sets cfg.mode: it disables
-Next/Finish (isComplete False) and runs from an inline modal launcher instead.
+LOCAL DOCKER MESH choice builds no image, so it never sets cfg.mode: validatePage
+raises the transient ``wiz.localmesh_selected`` flag and Next flows into the
+registered LocalMeshPage (the operator rejected the old modal popout), which
+dynamically skips itself on every image-mode flow via applies_to().
 """
 from __future__ import annotations
 
@@ -66,20 +68,9 @@ class ModePage(QtWidgets.QWizardPage):
         # relies on the no-pick default resolving to standalone (ImageConfig.mode default).
         self._buttons["standalone"].setChecked(True)
 
-        # LOCAL DOCKER MESH builds no image: its radio disables Next/Finish (isComplete
-        # False) and reveals this inline launcher instead. The launcher opens the
-        # self-contained LocalMeshDialog (deferred import — the FleetDialog/golive
-        # precedent), which reuses core/mesh_node.py to run the local dockerized node.
-        self.local_btn = QtWidgets.QPushButton("Configure & run local mesh…")
-        self.local_btn.setToolTip(
-            "Runs a mesh on this machine via docker compose — no server hardware. "
-            "Provide a tailnet/headscale auth key; the node joins and serves locally.")
-        self.local_btn.clicked.connect(self._launch_local_mesh)
-        self.local_btn.setVisible(False)
-        lay.addWidget(self.local_btn)
-
-        # keep Next's enabled state (isComplete) and the launcher's visibility live as the
-        # selection changes — connected AFTER the default check so it fires only on change.
+        # every choice now has a next page (localmesh flows into LocalMeshPage), so the
+        # only live wiring left is keeping Next's enabled state fresh on change —
+        # connected AFTER the default check so it fires only on change.
         self.group.buttonToggled.connect(self._on_mode_toggled)
         lay.addStretch(1)
 
@@ -88,20 +79,13 @@ class ModePage(QtWidgets.QWizardPage):
         return btn.property("mode") if btn is not None else None
 
     def _on_mode_toggled(self, *_):
-        self.local_btn.setVisible(self._selected_mode() == "localmesh")
         self.completeChanged.emit()
 
     def isComplete(self):
-        # LOCAL DOCKER MESH has no image to advance to — the run happens in the modal
-        # launcher, so Next/Finish stay disabled while it is selected. Every IMAGE choice
-        # is always complete.
-        return self._selected_mode() != "localmesh"
-
-    def _launch_local_mesh(self):
-        # deferred import: LocalMeshDialog is self-contained (FleetDialog/golive
-        # precedent) and only needed if the operator actually opens it.
-        from .localmesh import LocalMeshDialog
-        LocalMeshDialog(self.wiz.generator_dir, parent=self.wiz).exec()
+        # every choice has a next page now: the three image modes continue as before,
+        # and LOCAL DOCKER MESH flows into the registered LocalMeshPage (the old modal
+        # launcher premise — "the run happens in the popout" — is gone).
+        return self._selected_mode() is not None
 
     def initializePage(self):
         # reflect the config's mode in the radios (a loaded config / back-navigation)
@@ -120,10 +104,12 @@ class ModePage(QtWidgets.QWizardPage):
             return False
         mid = btn.property("mode")
         # LOCAL DOCKER MESH is a side-flow, not an image build: it commits NOTHING to
-        # cfg.mode and never advances (isComplete gates Next off; this guard makes the
-        # no-advance explicit even if validatePage is reached some other way).
+        # cfg.mode. It advances into the registered LocalMeshPage via the transient
+        # wizard flag its applies_to() reads (never persisted — a loaded config always
+        # re-selects a real image mode; see initializePage).
+        self.wiz.localmesh_selected = (mid == "localmesh")
         if mid == "localmesh":
-            return False
+            return True
         prev = self.wiz.cfg.mode
         self.wiz.cfg.mode = mid
         # a role from another mode is meaningless here — reset to the mode default

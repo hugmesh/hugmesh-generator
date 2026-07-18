@@ -71,7 +71,8 @@ class StackStatus:
 
 class LocalStackNode:
     def __init__(self, generator_dir: str, env: str = "test", social: bool = False,
-                 public_host_port: int = 8088, domain: str = ""):
+                 public_host_port: int = 8088, domain: str = "",
+                 source_mode: str = "clone", source_dir: str = ""):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -83,6 +84,17 @@ class LocalStackNode:
         # localhost. Threading it here is what keeps a from-scratch bootstrap's
         # running issuer aligned with the domain its secrets were minted for.
         self.domain = domain
+        # WHERE compose finds the buildable repo source. "clone" (the default) sets
+        # NOTHING: STACK_SRC stays unset, the Makefile's `STACK_SRC ?= .stack-src`
+        # resolves as it always has and `stack-clone` populates it — byte-identical
+        # env to before this field existed. "existing" points STACK_SRC at a tree the
+        # operator already has AND sets STACK_NO_CLONE=1, because `stack-up` depends
+        # unconditionally on `stack-clone`, whose update path `git reset --hard`s any
+        # checkout already present under STACK_SRC (clone-all-repos.sh:88-99) — run
+        # against the operator's own working tree that silently DESTROYS uncommitted
+        # work. The skip gate is a safety interlock, not a convenience.
+        self.source_mode = source_mode
+        self.source_dir = source_dir
 
     @property
     def web_url(self) -> str:
@@ -249,6 +261,13 @@ class LocalStackNode:
         # apex the minted secrets use (Makefile: CASDOOR_ISSUER = https://id.$(DOMAIN)).
         if self.domain:
             env["DOMAIN"] = self.domain
+        # "existing" source mode: build from the operator's tree, and NEVER let
+        # stack-clone touch it (see __init__ — its update path git-reset --hard's
+        # every checkout under STACK_SRC). Set as a pair or not at all; "clone"
+        # mode must stay byte-identical to the pre-field env.
+        if self.source_mode == "existing" and self.source_dir.strip():
+            env["STACK_SRC"] = os.path.abspath(self.source_dir.strip())
+            env["STACK_NO_CLONE"] = "1"
         # extra_env carries per-target overrides (e.g. the bridged
         # E2E_SUPERADMIN_PASSWORD for `stack-seed`). Values ride the subprocess env
         # only — never argv — mirroring the golive/token-file secret discipline.

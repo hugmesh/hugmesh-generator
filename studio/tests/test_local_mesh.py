@@ -59,46 +59,84 @@ def wiz(qapp):
     w.deleteLater()
 
 
+def _drain_worker(qapp, host, timeout_ms=5000):
+    """Join the _MeshWorker (verbs run OFF the GUI thread since the page
+    conversion — the no-freeze fix) and pump the loop so its queued line/done
+    signals land before the test asserts."""
+    w = getattr(host, "worker", None)
+    if w is not None:
+        w.wait(timeout_ms)
+    for _ in range(200):
+        qapp.processEvents()
+
+
 def _mode_page(wiz):
     return next(p for p in wiz._pages if isinstance(p, ModePage))
 
 
 # ---- the GATE (this is the assertion that would have caught the missing module) ----
 
-def test_localmesh_choice_gates_next_and_reveals_launcher(wiz):
-    mp = _mode_page(wiz)
-    mp._buttons["localmesh"].setChecked(True)
-    mp._on_mode_toggled()
-    # a local mesh builds no image: Next/Finish stay disabled, the inline launcher shows.
-    assert mp.isComplete() is False
-    assert mp.local_btn.isVisibleTo(mp) is True
-    # ...and it commits NOTHING to cfg.mode even if validatePage is reached.
-    assert mp.validatePage() is False
+# (test_localmesh_choice_gates_next_and_reveals_launcher was DELETED with the popout:
+# it pinned the old contract — Next disabled + a modal launcher button. The page-flow
+# replacements above pin the new one: Next ENABLED, flows into the registered
+# LocalMeshPage, cfg.mode untouched.)
 
 
 @pytest.mark.parametrize("mode", ["mesh", "cloud", "standalone"])
 def test_image_choices_stay_complete_and_hide_launcher(wiz, mode):
+    # page-flow contract: EVERY choice is complete (each has a next page now), and
+    # committing an image mode lowers the transient localmesh flag so LocalMeshPage
+    # is dynamically skipped (applies_to reads wiz.localmesh_selected).
     mp = _mode_page(wiz)
     mp._buttons[mode].setChecked(True)
     mp._on_mode_toggled()
     assert mp.isComplete() is True
-    assert mp.local_btn.isVisibleTo(mp) is False
+    assert mp.validatePage() is True
+    assert wiz.localmesh_selected is False
+    lm = wiz.page(wiz._page_ids["localmesh"])
+    assert lm.applies_to(wiz.cfg) is False
 
 
 # ---- the LAUNCHER: opens a real dialog, never a ModuleNotFoundError ----
 
-def test_launch_local_mesh_opens_dialog_without_crash(wiz, monkeypatch):
-    opened = {}
-
-    def _fake_exec(self):
-        opened["dialog"] = self
-        return 0
-
-    # don't actually block on a modal — just prove the dialog constructs + .exec() runs.
-    monkeypatch.setattr(localmesh_mod.LocalMeshDialog, "exec", _fake_exec, raising=True)
+def test_localmesh_choice_flows_into_the_wizard_page_not_a_popout(wiz):
+    # THE CONVERSION ITSELF (operator: "follow the same gui wizard and not pop out
+    # a new window"): the localmesh radio makes Next flow into the REGISTERED
+    # LocalMeshPage — no dialog, no .exec(). The page is terminal for its branch.
     mp = _mode_page(wiz)
-    mp._launch_local_mesh()  # must NOT raise (regression: ModuleNotFoundError)
-    assert isinstance(opened.get("dialog"), localmesh_mod.LocalMeshDialog)
+    assert not hasattr(mp, "local_btn")          # the popout launcher is GONE
+    mp._buttons_by_mode = None
+    for b in mp.group.buttons():
+        if b.property("mode") == "localmesh":
+            b.setChecked(True)
+    assert mp.isComplete() is True               # Next is enabled for this choice now
+    assert mp.validatePage() is True
+    assert wiz.localmesh_selected is True
+    lm = wiz.page(wiz._page_ids["localmesh"])
+    assert lm.applies_to(wiz.cfg) is True        # the page is IN the flow
+    assert lm.nextId() == -1 and lm.isFinalPage()  # and terminal: Finish, no image
+
+
+def test_localmesh_never_touches_cfg_mode(wiz):
+    # cfg.mode stays an IMAGE mode: picking localmesh commits NOTHING to cfg (the
+    # transient flag lives on the wizard), so save()/argv can never see "localmesh".
+    mp = _mode_page(wiz)
+    before = wiz.cfg.mode
+    for b in mp.group.buttons():
+        if b.property("mode") == "localmesh":
+            b.setChecked(True)
+    assert mp.validatePage() is True
+    assert wiz.cfg.mode == before
+
+
+def test_dialog_shim_still_hosts_the_page_standalone(qapp, monkeypatch):
+    # the standalone-host promise survives the conversion: LocalMeshDialog wraps the
+    # SAME LocalMeshPage (one implementation, two frames) and delegates its former
+    # widget surface, so pre-conversion callers keep working unchanged.
+    monkeypatch.setattr(LocalMeshNode, "status", lambda self: _stopped(), raising=True)
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    assert isinstance(dlg.page, localmesh_mod.LocalMeshPage)
+    assert dlg.tabs is dlg.page.tabs             # delegation, not a second copy
 
 
 def test_dialog_start_builds_and_calls_a_mesh_node(qapp, monkeypatch):
@@ -119,6 +157,7 @@ def test_dialog_start_builds_and_calls_a_mesh_node(qapp, monkeypatch):
     dlg.auth_key.setText("tskey-live")
     dlg.node_name.setText("mynode")
     dlg._start()
+    _drain_worker(qapp, dlg.page)
     assert calls.get("auth_key") == "tskey-live"       # launcher DID call MeshNode.start
     # the node it drives IS a MeshNode (shared lifecycle with the tray)
     assert isinstance(dlg.node, MeshNode)
@@ -189,6 +228,7 @@ def test_bootstrap_up_collects_config_and_runs(qapp, monkeypatch):
     dlg.social.setChecked(True)
     dlg.ack.setChecked(True)
     dlg._bootstrap_up()
+    _drain_worker(qapp, dlg.page)
     assert seen == {"env": "test", "superadmin": "root-boss", "social": True}
     assert "[done] platform up" in dlg.log.toPlainText()
 
