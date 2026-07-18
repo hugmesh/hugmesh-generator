@@ -21,6 +21,16 @@
 #                     target — that mapping is entirely this script's own
 #                     convention (documented below).
 #   SSH_KEYS_ALLOWED  literal "true" or "false".
+#   TOR_ONION         OPTIONAL, literal "true" or "false" (default "false" when
+#                     absent). Legacy channel only: "true" folds the Tor v3 onion
+#                     NODE service onto an x86 node build via the x86 builder's
+#                     additive, idempotent --with-tor flag (exposes fe-gateway as a
+#                     v3 .onion). Rejected LOUDLY for imageType=client (the onion is
+#                     a cluster-node service, not a client-image feature) or a non-
+#                     x86 resolved platform (rpi5/edge Tor nodes have no dedicated
+#                     --with-tor flag — use the IMAGE_SPEC_JSON channel, where the
+#                     Studio emits the correct per-platform mechanism). INERT in spec
+#                     mode: the spec is authoritative for image content, tor included.
 #   INGEST_URL        the fully-substituted terminal-report POST URL.
 #   INTERNAL_TOKEN    OPTIONAL (secretKeyRef optional:true) — may be absent.
 #   ARTIFACT_DIR      /artifacts/build-${BUILD_ID} — where products are written.
@@ -359,6 +369,11 @@ DOMAIN="${DOMAIN:-}"
 IMAGE_TYPE="${IMAGE_TYPE:-}"
 HARDWARE_CLASS="${HARDWARE_CLASS:-}"
 SSH_KEYS_ALLOWED="${SSH_KEYS_ALLOWED:-false}"
+# OPTIONAL Tor onion NODE-service toggle (LEGACY channel only; see the header
+# contract note). "true" -> the x86 builder's additive --with-tor on an x86 node
+# build. Default "false"; validated to the literal true/false below and gated to
+# x86 node builds after resolve. Inert when IMAGE_SPEC_JSON drives the build.
+TOR_ONION="${TOR_ONION:-false}"
 INGEST_URL="${INGEST_URL:-}"
 INTERNAL_TOKEN="${INTERNAL_TOKEN:-}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-}"
@@ -563,6 +578,11 @@ done
 case "$SSH_KEYS_ALLOWED" in
   true|false) ;;
   *) die ERROR "SSH_KEYS_ALLOWED must be the literal string 'true' or 'false' (got '${SSH_KEYS_ALLOWED}')" ;;
+esac
+
+case "$TOR_ONION" in
+  true|false) ;;
+  *) die ERROR "TOR_ONION must be the literal string 'true' or 'false' (got '${TOR_ONION}')" ;;
 esac
 
 case "$IMAGE_TYPE" in
@@ -938,18 +958,34 @@ if [ -n "$IMAGE_SPEC_JSON" ]; then
   resolve_spec_target
 else
   BUILD_MODE="legacy"
-  # PRINT_ONLY is a spec-channel preview only; the legacy path has nothing extra
-  # to preview (resolve_build_target + run_*_build already assemble the command
-  # byte-identically, and printing it would still run no build here).
-  if [ "$PRINT_ONLY" = "1" ]; then
-    die ERROR "BUILD_IMAGE_SH_PRINT_ONLY requires the IMAGE_SPEC_JSON channel (there is no legacy command to preview)"
-  fi
   resolve_build_target || die FAILED "unsupported IMAGE_TYPE='${IMAGE_TYPE}' / HARDWARE_CLASS='${HARDWARE_CLASS}' combination — see build-image.sh's header comment for the supported HARDWARE_CLASS convention"
 fi
 
 HOSTNAME_OUT="sdimg-$(printf '%s' "$BUILD_ID" | tr 'A-Z' 'a-z' | tr -cd 'a-z0-9' | cut -c1-8)"
 log "resolved: platform=${PLATFORM} role=${BUILD_ROLE:-<n/a>} keys_role=${KEYS_ROLE} imageType=${IMAGE_TYPE} hardwareClass=${HARDWARE_CLASS:-<default>} hostname=${HOSTNAME_OUT}"
 [ "$BUILD_MODE" = "spec" ] && log "image-spec channel active: builder flags derived from ${IMAGE_SPEC_JSON} via the Studio; worker overlays --cluster-domain/-H/-w/-j/--env (+ the single-artifact --no-*iso/--no-tar policy)"
+
+# TOR_ONION (LEGACY channel only). The Tor v3 onion is a k8s cluster NODE service
+# the x86 builder folds via the additive, idempotent --with-tor flag
+# (build-x86-host-stage4.sh:755/923). It has NO dedicated flag on rpi5 (there tor
+# rides --optional-services, an allow-list that would clobber the node's default
+# service set from this minimal env path) and no expression at all on
+# frite/jetson/orangepi5/orangepizero2 — so restrict TOR_ONION to x86 node builds
+# and fail LOUDLY elsewhere, pointing at the richer IMAGE_SPEC_JSON channel where the
+# Studio already emits the correct per-platform tor mechanism. In spec mode the
+# spec's own tor_onion_service rode through --print-command, so TOR_ONION is inert.
+if [ "$TOR_ONION" = "true" ]; then
+  if [ "$BUILD_MODE" = "spec" ]; then
+    log "TOR_ONION=true ignored in image-spec mode: the spec is authoritative for image content (its tor_onion_service already rode through --print-command)"
+  elif [ "$IMAGE_TYPE" = "client" ]; then
+    die FAILED "TOR_ONION=true is invalid for imageType=client — the Tor onion is a cluster NODE service, not a client-image feature"
+  elif [ "$PLATFORM" != "x86" ]; then
+    die FAILED "TOR_ONION=true is only supported for x86 node builds on the legacy env channel (resolved platform='${PLATFORM}'); for an rpi5/edge Tor-onion node use the IMAGE_SPEC_JSON channel, where the Studio emits the correct per-platform tor mechanism"
+  else
+    log "TOR_ONION=true: the x86 node build will expose fe-gateway as a Tor v3 .onion (--with-tor)"
+  fi
+fi
+
 case "$PLATFORM" in
   jetson|orangepi5|orangepizero2)
     warn "${PLATFORM} is EXPERIMENTAL in the generator (hardware validation pending) — proceeding anyway since it was explicitly requested"
@@ -969,7 +1005,14 @@ run_x86_build() {
       [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
       ;;
   esac
-  ./build-x86-host-stage4.sh "$@"
+  # Tor v3 onion NODE service (legacy channel). --with-tor is additive + idempotent
+  # (folds 'tor' onto any x86 node role; build-x86-host-stage4.sh:923). Validated to
+  # x86 + a non-client imageType by the TOR_ONION gate after resolve; the guard here
+  # keeps run_x86_build self-consistent. Spec mode carries tor through the spec.
+  if [ "$BUILD_MODE" = "legacy" ] && [ "$TOR_ONION" = "true" ] && [ "$IMAGE_TYPE" != "client" ]; then
+    set -- "$@" --with-tor
+  fi
+  dispatch_builder ./build-x86-host-stage4.sh "$@"
 }
 
 run_rpi5_build() {
@@ -980,7 +1023,7 @@ run_rpi5_build() {
     set -- "$@" --standalone
     [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
   fi
-  ./build-rpi5-stage4.sh "$@"
+  dispatch_builder ./build-rpi5-stage4.sh "$@"
 }
 
 run_frite_build() {
@@ -992,7 +1035,7 @@ run_frite_build() {
     set -- "$@" --standalone
     [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
   fi
-  ./build-frite-stage4.sh "$@"
+  dispatch_builder ./build-frite-stage4.sh "$@"
 }
 
 run_jetson_build() {
@@ -1000,7 +1043,7 @@ run_jetson_build() {
          --cluster-domain "$DOMAIN" -H "$HOSTNAME_OUT" \
          --role "$BUILD_ROLE" --board "$JETSON_BOARD_OUT" --kernel-flavor mainline
   [ -n "$BRAND_FLAGS_CFG" ] && set -- "$@" --config "$BRAND_FLAGS_CFG"
-  ./build-jetson-stage4.sh "$@"
+  dispatch_builder ./build-jetson-stage4.sh "$@"
 }
 
 run_orangepi5_build() {
@@ -1012,7 +1055,7 @@ run_orangepi5_build() {
     set -- "$@" --standalone
     [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
   fi
-  ./build-orangepi5-stage4.sh "$@"
+  dispatch_builder ./build-orangepi5-stage4.sh "$@"
 }
 
 run_orangepizero2_build() {
@@ -1024,7 +1067,7 @@ run_orangepizero2_build() {
     set -- "$@" --standalone
     [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
   fi
-  ./build-orangepi-zero2-stage4.sh "$@"
+  dispatch_builder ./build-orangepi-zero2-stage4.sh "$@"
 }
 
 # dispatch_builder ARGV... — execute the fully-assembled builder command, OR
@@ -1032,8 +1075,11 @@ run_orangepizero2_build() {
 # and return WITHOUT executing. One-token-per-line survives values with spaces
 # (e.g. a brand title) with no shell re-quoting, so the image-spec parity fixture
 # can slice the argv between the markers and diff it against the Studio's
-# --print-command tokens. Only the spec path (run_spec_build) routes through this;
-# the legacy run_*_build() functions exec their script directly and are unchanged.
+# --print-command tokens. BOTH channels route through this: run_spec_build (the
+# image-spec parity fixture) and the six legacy run_*_build() functions (so the
+# legacy IMAGE_TYPE/HARDWARE_CLASS command is CI-previewable too — e.g. asserting
+# TOR_ONION=true adds --with-tor on x86). In a real build (PRINT_ONLY unset) it just
+# execs the assembled command, byte-identically to a direct `./build-*.sh "$@"`.
 dispatch_builder() {
   if [ "$PRINT_ONLY" = "1" ]; then
     printf '__BUILDER_ARGV_BEGIN__\n'
