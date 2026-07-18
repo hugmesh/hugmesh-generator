@@ -52,7 +52,8 @@ import types
 from ..qt import QtCore, QtWidgets, Signal
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
 from ...core.local_mesh_bootstrap import (
-    LocalMeshBootstrap, LocalMeshBootstrapConfig, discover_brands)
+    LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales,
+    discover_brands)
 from ._scroll import scrollable
 from ._widgets import _row
 
@@ -290,6 +291,21 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.social = QtWidgets.QCheckBox("Also bring up the social (Matrix/Mastodon) profile")
         lay.addWidget(self.social)
 
+        # Web login languages. NOT a desktop-theming knob (those are x86-only and
+        # skipped in mesh mode) — the web login is served to browsers BY the mesh,
+        # so this is a cluster-plane fact and belongs here, on the config that
+        # brings up the stack that builds the login-ui image. EMPTY = English-only
+        # (the source language; smallest artifact; zero catalog requests).
+        self.web_locales = QtWidgets.QLineEdit()
+        self.web_locales.setPlaceholderText("English only — e.g. de, fr, pt-BR to add catalogs")
+        self.web_locales.setToolTip(
+            "Translation catalogs the web login IMAGE ships (comma-separated locale "
+            "tags). English is the source language and always works with no catalog, "
+            "so leaving this empty ships the smallest image and issues zero catalog "
+            "requests. A locale here must have a catalog in the login-ui repo, or the "
+            "login-ui image build fails loudly.")
+        lay.addWidget(_row("Web login languages", self.web_locales))
+
         # prod-only overlay group.
         self.prod_group = QtWidgets.QGroupBox("Mesh overlay (prod only)")
         pg = QtWidgets.QVBoxLayout(self.prod_group)
@@ -339,6 +355,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.src_dir.textChanged.connect(self._refresh_plan)
         self.superadmin.textChanged.connect(self._refresh_plan)
         self.social.toggled.connect(self._refresh_plan)
+        self.web_locales.textChanged.connect(self._refresh_plan)
         self.boot_domain.textChanged.connect(self._refresh_plan)
         self.boot_auth_key.textChanged.connect(self._refresh_plan)
         self.boot_login_server.textChanged.connect(self._refresh_plan)
@@ -382,6 +399,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             brand=self.brand.currentText().strip(),
             source_mode=("existing" if self.src_existing.isChecked() else "clone"),
             source_dir=self.src_dir.text().strip(),
+            web_locales=_parse_web_locales(self.web_locales.text()),
         )
 
     # ── worker plumbing (the no-freeze fix) ──────────────────────────────────────

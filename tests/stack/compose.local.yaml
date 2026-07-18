@@ -843,6 +843,25 @@ services:
     <<: *amd64
     build:
       context: ${STACK_SRC:-../../.stack-src}/snapdragon-login-ui
+      args:
+        # WHICH TRANSLATION CATALOGS THIS IMAGE SHIPS. Comma-separated locale tags;
+        # EMPTY (the default) => English-only, zero catalog files in the image and
+        # zero catalog requests in the browser. English is the login-ui's SOURCE
+        # language, compiled into the bundle, so it needs no catalog — the default
+        # is genuinely the smallest artifact.
+        #
+        # A BUILD ARG, not an `environment:` entry, and that distinction is the whole
+        # point: which catalogs SHIP is decided at build time. Selecting among
+        # catalogs already baked into every image via a runtime env var would leave
+        # every image byte-identical — a knob wired to nothing. (WHICH catalog a
+        # given browser then loads IS runtime, and is answered by locale detection
+        # inside the app; that is a different question.)
+        #
+        # Threaded from the Studio: LocalMeshBootstrapConfig.web_locales ->
+        # LocalStackNode._build_env() -> `make stack-up` (STACK_ENV) -> here ->
+        # the login-ui Dockerfile's ARG SNAP_WEB_LOCALES. Provable:
+        #   docker run --rm <image> ls -R /usr/share/nginx/html/i18n
+        SNAP_WEB_LOCALES: ${SNAP_WEB_LOCALES:-}
     # Runtime globals the login-ui nginx entrypoint writes into snap-config.js so its
     # (already-built) NATIVE login form turns ON. The browser NEVER learns a Casdoor URL:
     # login-ui renders a first-party username/password form and POSTs it to SNAP_BFF_URL

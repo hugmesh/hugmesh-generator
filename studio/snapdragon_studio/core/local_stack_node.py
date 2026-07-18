@@ -72,7 +72,8 @@ class StackStatus:
 class LocalStackNode:
     def __init__(self, generator_dir: str, env: str = "test", social: bool = False,
                  public_host_port: int = 8088, domain: str = "",
-                 source_mode: str = "clone", source_dir: str = ""):
+                 source_mode: str = "clone", source_dir: str = "",
+                 web_locales: tuple[str, ...] = ()):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -95,6 +96,20 @@ class LocalStackNode:
         # work. The skip gate is a safety interlock, not a convenience.
         self.source_mode = source_mode
         self.source_dir = source_dir
+        # Translation catalogs the login-ui image is BUILT with (comma-joined into
+        # SNAP_WEB_LOCALES for `make stack-up` -> compose build arg -> the login-ui
+        # Dockerfile). EMPTY (the default) = English-only: the image ships zero
+        # catalog files and the browser issues zero catalog requests. English is the
+        # login-ui's SOURCE language — compiled into the bundle — so it needs no
+        # catalog, which is why the default is genuinely the smallest artifact and
+        # not a special case.
+        #
+        # BUILD-time on purpose: which catalogs SHIP has to be decided when the image
+        # is built. An `environment:` var picking among catalogs already baked into
+        # every image would leave every image byte-identical — a knob that changes no
+        # bytes. (Which catalog a given browser LOADS is a separate, runtime question
+        # the app answers by locale detection.)
+        self.web_locales = tuple(web_locales)
 
     @property
     def web_url(self) -> str:
@@ -268,6 +283,12 @@ class LocalStackNode:
         if self.source_mode == "existing" and self.source_dir.strip():
             env["STACK_SRC"] = os.path.abspath(self.source_dir.strip())
             env["STACK_NO_CLONE"] = "1"
+        # Only export when non-empty so the default path stays byte-identical to
+        # every existing caller (and to a plain `make stack-up`), exactly like DOMAIN.
+        # The Makefile's own SNAP_WEB_LOCALES default is empty, so an unset value and
+        # an empty value mean the same thing: English-only.
+        if self.web_locales:
+            env["SNAP_WEB_LOCALES"] = ",".join(self.web_locales)
         # extra_env carries per-target overrides (e.g. the bridged
         # E2E_SUPERADMIN_PASSWORD for `stack-seed`). Values ride the subprocess env
         # only — never argv — mirroring the golive/token-file secret discipline.

@@ -233,6 +233,41 @@ def test_bootstrap_up_collects_config_and_runs(qapp, monkeypatch):
     assert "[done] platform up" in dlg.log.toPlainText()
 
 
+def test_bootstrap_web_locales_widget_defaults_to_english_only(qapp):
+    """The 'Web login languages' field is empty by default, so collect_bootstrap
+    yields web_locales=() and the plan states English-only. This is the operator's
+    'exclude' state — and the anti-dead-knob default (zero catalogs shipped)."""
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    assert dlg.web_locales.text() == ""
+    assert dlg.collect_bootstrap().web_locales == ()
+    assert "English only" in dlg.plan_view.toPlainText()
+
+
+def test_bootstrap_web_locales_widget_collects_and_shows_in_plan(qapp):
+    """Typing locales flows into the config AND updates the read-only plan preview
+    — the operator sees exactly which catalogs will ship before acknowledging."""
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    dlg.web_locales.setText("de, fr")
+    assert dlg.collect_bootstrap().web_locales == ("de", "fr")
+    plan = dlg.plan_view.toPlainText()
+    assert "de, fr" in plan
+    assert "SNAP_WEB_LOCALES=de,fr" in plan
+
+
+def test_bootstrap_up_carries_web_locales(qapp, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(LocalMeshBootstrap, "up",
+                        lambda self: seen.update(web_locales=self.cfg.web_locales) or (True, ["ok"]),
+                        raising=True)
+    monkeypatch.setattr(LocalMeshNode, "status", lambda self: _stopped(), raising=True)
+    dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
+    dlg.web_locales.setText("en-XA")
+    dlg.ack.setChecked(True)
+    dlg._bootstrap_up()
+    _drain_worker(qapp, dlg.page)
+    assert seen == {"web_locales": ("en-XA",)}
+
+
 def test_bootstrap_up_blocked_by_validation(qapp, monkeypatch):
     up_ran = {"called": False}
     monkeypatch.setattr(LocalMeshBootstrap, "up",
