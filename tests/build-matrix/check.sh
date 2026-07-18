@@ -1528,6 +1528,7 @@ run_nongating_smokes() {
     for spec in "worklist-smoke:${TEST_DIR}/worklist-smoke.sh" \
                 "image-spec-parity:${REPO_DIR}/tests/build-image-spec-parity.sh" \
                 "image-spec-guards:${REPO_DIR}/tests/build-image-spec-guards.sh" \
+                "image-tor-onion:${REPO_DIR}/tests/build-image-tor-onion.sh" \
                 "host-accept-keywords:${REPO_DIR}/tests/scripts/test-host-accept-keywords.sh" \
                 "python-targets-seed:${REPO_DIR}/tests/scripts/test-python-targets-seed.sh" \
                 "calamares-boost-seed:${REPO_DIR}/tests/scripts/test-calamares-boost-seed.sh" \
