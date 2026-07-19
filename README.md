@@ -19,7 +19,10 @@ way in is `make local` (a LAN `.test` fleet) or `make prod`; see
 > end-to-end runbook (prerequisites → clone → `brand.conf` + build knobs → build
 > → keys + KEYS USB → flash → provision → cluster). Then read
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full topology and
-> [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md) for LAN testing.
+> [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md) for LAN testing. To generate a
+> whole platform from scratch and **serve it** — locally, then publicly over a Tor
+> `.onion` / a Dynamic-DNS host / a tunnel — follow
+> [`docs/SERVE-YOUR-MESH.md`](docs/SERVE-YOUR-MESH.md).
 
 All build output lands in a **git-ignored** work directory (`./out` by default,
 for both `make` and the scripts called directly; override with `WORK_DIR=` /
