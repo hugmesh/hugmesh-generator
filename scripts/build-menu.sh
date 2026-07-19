@@ -1748,9 +1748,16 @@ phone_screen() {
         return 0
     fi
     local codename="" channel="stable" serial="" keys_dir="" login_server="" authkey="" role="" choice
+    # Management-plane knobs (Headwind DPC / Auditor attestation / ingest token) —
+    # file-path/URL/hex-digest values only, same custody posture as the Makefile's
+    # _PHONE_ARGS seam: the ingest token itself stays in the operator's 0600 file,
+    # only its PATH ever reaches an argv. Edited in the mdm sub-screen below.
+    local headwind_apk="" headwind_signer="" headwind_url=""
+    local auditor_apk="" auditor_signer="" attestation_url="" token_file=""
     while :; do
-        local keyl
+        local keyl mdml
         keyl="$([ -n "${authkey}" ] && echo '(set)' || echo '(unset — enroll then expects your own custody)')"
+        mdml="$([ -n "${headwind_apk}${headwind_signer}${headwind_url}${auditor_apk}${auditor_signer}${attestation_url}${token_file}" ] && echo '(customized)' || echo '(driver defaults / HMDM_URL, ATTEST_URL env)')"
         choice="$(ui_menu "MDM phone" \
             "Flash a USB-connected Google Pixel with VERIFIED GrapheneOS and enroll it in the mesh — no image build. Dry-run by default; every destructive step is gated by the driver itself. Masked auth key; never saved to ${CONF_FILE}." \
             device  "Device codename ...... ${codename:-<detect at run>}" \
@@ -1760,13 +1767,18 @@ phone_screen() {
             server  "Login server ......... ${login_server:-<from keys-dir>}" \
             authkey "Auth key ............. ${keyl}" \
             role    "Mesh role ............ ${role:-<driver default: user>}" \
-            wizard  "★ Guided wizard (detect → fetch → flash → enroll → profile → ingest)" \
+            mdm     "MDM / attestation .... ${mdml}" \
+            wizard  "★ Guided wizard (detect → fetch → flash → attest → mdm-enroll → enroll → profile → ingest)" \
             plan    "Preview the plan (dry-run — touches NOTHING)" \
             detect  "Detect the connected device (read-only)" \
             fetch   "Fetch + VERIFY GrapheneOS" \
             flash   "FLASH the device (DESTRUCTIVE — typed-serial gate)" \
+            attest  "Attest hardware via the Auditor fork (operator-attested pairing)" \
+            mdm-enroll "Make the Headwind DPC device owner (fresh-device gate)" \
             enroll  "Enroll in the mesh (tailnet join)" \
             profile "Create + escrow the enterprise profile" \
+            rotate-profile-pass "Rotate the enterprise-profile passphrase (re-escrow)" \
+            remove-profile "Remove the enterprise profile (retires the escrow)" \
             ingest  "Emit the device-registry ingest record" \
             status  "Status (read-only)" \
             back    "‹ back")" || return 0
@@ -1807,9 +1819,46 @@ phone_screen() {
                         admin      "admin" \
                         superadmin "superadmin")" || role="${prev_role}"
                      [ "${role}" = default ] && role="" ;;
-            wizard|plan|detect|fetch|flash|enroll|profile|ingest|status)
-                _phone_run "${choice}" "${authkey}" "${codename}" "${channel}" "${serial}" "${keys_dir}" "${login_server}" "${role}" ;;
+            mdm)     _phone_mdm_settings ;;
+            wizard|plan|detect|fetch|flash|attest|mdm-enroll|enroll|profile|rotate-profile-pass|remove-profile|ingest|status)
+                _phone_run "${choice}" "${authkey}" "${codename}" "${channel}" "${serial}" "${keys_dir}" "${login_server}" "${role}" \
+                    "${headwind_apk}" "${headwind_signer}" "${headwind_url}" \
+                    "${auditor_apk}" "${auditor_signer}" "${attestation_url}" "${token_file}" ;;
             back|"") return 0 ;;
+        esac
+    done
+}
+
+# _phone_mdm_settings — sub-screen editing phone_screen's management-plane knob
+# locals (bash dynamic scoping: a callee reads/writes the caller's locals, so
+# the state stays function-local to phone_screen — nothing is ever save_conf'd).
+# All values are paths/URLs/hex digests, not secrets; the one secret-adjacent
+# field (the ingest internal token) is taken as a FILE PATH only — the token
+# value itself never enters the menu process at all (custody stays with the
+# operator's 0600 file, mirroring the wizard's own --internal-token-file
+# contract and the Makefile INTERNAL_TOKEN_FILE knob).
+_phone_mdm_settings() {
+    local mchoice
+    while :; do
+        mchoice="$(ui_menu "MDM / attestation settings" \
+            "Management-plane extras for attest / mdm-enroll / ingest. Blank = driver default (HMDM_URL and ATTEST_URL env still apply driver-side). Signer digests are the SHA-256 pins the driver refuses to install without." \
+            hwapk    "Headwind DPC APK ......... ${headwind_apk:-<unset>}" \
+            hwsigner "Headwind signer SHA-256 .. ${headwind_signer:-<unset>}" \
+            hwurl    "Headwind server URL ...... ${headwind_url:-<driver env HMDM_URL>}" \
+            audapk   "Auditor fork APK ......... ${auditor_apk:-<unset>}" \
+            audsigner "Auditor signer SHA-256 ... ${auditor_signer:-<unset>}" \
+            atturl   "AttestationServer URL .... ${attestation_url:-<driver env ATTEST_URL>}" \
+            token    "Ingest token FILE ........ ${token_file:-<unset — path only, never the value>}" \
+            back     "‹ back")" || return 0
+        case "${mchoice}" in
+            hwapk)    headwind_apk="$(ui_input "Headwind DPC APK" "Path to the Headwind MDM DPC APK to adb-install during mdm-enroll (blank = require already-installed)" "${headwind_apk}")" ;;
+            hwsigner) headwind_signer="$(ui_input "Headwind signer SHA-256" "Expected APK signing-cert SHA-256 (hex, no colons) — mdm-enroll fails closed on mismatch" "${headwind_signer}")" ;;
+            hwurl)    headwind_url="$(ui_input "Headwind server URL" "Headwind base URL written into the DPC's init.json (blank = driver HMDM_URL env)" "${headwind_url}")" ;;
+            audapk)   auditor_apk="$(ui_input "Auditor fork APK" "Path to the Snapdragon Auditor fork APK to adb-install during attest (blank = require already-installed)" "${auditor_apk}")" ;;
+            audsigner) auditor_signer="$(ui_input "Auditor signer SHA-256" "Expected Auditor signing-cert SHA-256 (hex, no colons) — attest fails closed on mismatch" "${auditor_signer}")" ;;
+            atturl)   attestation_url="$(ui_input "AttestationServer URL" "Self-hosted AttestationServer console URL for the pairing runbook (blank = driver ATTEST_URL env)" "${attestation_url}")" ;;
+            token)    token_file="$(ui_input "Ingest token FILE" "PATH to a 0600 file holding the X-Internal-Token value for ingest (the path is passed through; the value never touches argv or this menu)" "${token_file}")" ;;
+            back|"")  return 0 ;;
         esac
     done
 }
@@ -1826,16 +1875,23 @@ _phone_shred_key() {
     command -v shred >/dev/null 2>&1 && shred -u "${keyfile}" 2>/dev/null || rm -f "${keyfile}"
 }
 
-# _phone_run VERB AUTHKEY CODENAME CHANNEL SERIAL KEYS_DIR LOGIN_SERVER ROLE — one
+# _phone_run VERB AUTHKEY CODENAME CHANNEL SERIAL KEYS_DIR LOGIN_SERVER ROLE
+#            [HEADWIND_APK HEADWIND_SIGNER HEADWIND_URL AUDITOR_APK
+#             AUDITOR_SIGNER ATTESTATION_URL TOKEN_FILE] — one
 # FOREGROUND child invocation of the MDM phone driver, terminal fully
 # attached (stdin for its typed-serial/wizard prompts, stdout for its runbooks).
 # The auth key (when set) goes into a chmod-600 mktemp file (off the argv / process
 # table) and is shredded afterwards — _local_mesh_bootstrap_run's exact pattern —
 # with an INT/TERM/EXIT trap covering the foreground run too, so a Ctrl-C mid-run
 # still shreds it (traps are process-global, so the trap is cleared again right
-# after normal cleanup).
+# after normal cleanup). Positions 9-15 are the management-plane knobs (paths/
+# URLs/digests only — the ingest token travels as a file PATH, value off-argv,
+# matching the Makefile _PHONE_ARGS custody pattern); the --authkey-file pair
+# stays LAST so the argv-shape tests can pin the secret's file at the tail.
 _phone_run() {
     local verb="$1" authkey="$2" codename="$3" channel="$4" serial="$5" keys_dir="$6" login_server="$7" role="$8"
+    local headwind_apk="${9:-}" headwind_signer="${10:-}" headwind_url="${11:-}"
+    local auditor_apk="${12:-}" auditor_signer="${13:-}" attestation_url="${14:-}" token_file="${15:-}"
     local wiz="${SNAP_PHONE_WIZARD:-${SCRIPT_DIR}/phone-wizard.sh}"
     local -a args=("${verb}")
     [ -n "${codename}" ]     && args+=(--codename "${codename}")
@@ -1844,6 +1900,13 @@ _phone_run() {
     [ -n "${keys_dir}" ]     && args+=(--keys-dir "${keys_dir}")
     [ -n "${login_server}" ] && args+=(--login-server "${login_server}")
     [ -n "${role}" ]         && args+=(--role "${role}")
+    [ -n "${headwind_apk}" ]    && args+=(--headwind-apk "${headwind_apk}")
+    [ -n "${headwind_signer}" ] && args+=(--headwind-signer-sha256 "${headwind_signer}")
+    [ -n "${headwind_url}" ]    && args+=(--headwind-url "${headwind_url}")
+    [ -n "${auditor_apk}" ]     && args+=(--auditor-apk "${auditor_apk}")
+    [ -n "${auditor_signer}" ]  && args+=(--auditor-signer-sha256 "${auditor_signer}")
+    [ -n "${attestation_url}" ] && args+=(--attestation-url "${attestation_url}")
+    [ -n "${token_file}" ]      && args+=(--internal-token-file "${token_file}")
     local keyfile=""
     if [ -n "${authkey}" ]; then
         keyfile="$(mktemp "${STATE_DIR}/phonekey.XXXXXX")" || { ui_msg "MDM phone" "could not create a temp file for the auth key"; return 0; }

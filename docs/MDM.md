@@ -50,7 +50,10 @@ the faces stay thin: `make phone-*` targets (✅ shipped, host-side pass-through
 delegates in the Makefile — never dispatched into the builder container, since
 the driver needs the host USB bus and a real TTY for its destructive gates;
 all 13 verbs have targets, including `phone-mdm-enroll`/`phone-attest`);
-ncurses-menu/Studio faces are 🔭 (see [Deferred](#deferred)).
+the ncurses-menu face (✅ shipped: `phone_screen` in `scripts/build-menu.sh`
+wraps all 13 verbs, with an MDM/attestation sub-screen threading the
+Headwind/Auditor/ingest-token knobs file-path-only); the Studio face is 🔭
+(see [Deferred](#deferred)).
 
 ## Verbs (the real surface)
 
@@ -597,7 +600,8 @@ mismatch anywhere in the chain fails closed, never silently.
 | `phone-ingest/v1` registry record + mTLS POST | `ingest` | 🚧 |
 | Offline `plan` dry-run + `REDACTED` secret discipline | `plan` / `--print-plan` | 🚧 |
 | `make phone-*` thin face (host-side delegates; secrets stay file-path knobs) — all 13 verbs incl. `phone-mdm-enroll`/`phone-attest` | `Makefile` | 🚧 |
-| Thin ncurses-menu/Studio faces over the driver (non-build precedent) | — | 🔭 |
+| Thin ncurses-menu face over the driver (all 13 verbs + MDM/attestation knob sub-screen, non-build precedent) | `phone_screen` in [`scripts/build-menu.sh`](../scripts/build-menu.sh) | ✅ |
+| Thin Studio (GUI) face over the driver | — | 🔭 |
 | APK store (general fleet app push/update/delete beyond the wizard's own vetted, signer-pinned sideloads) | — | 🔭 (deliberate v1 non-goal; Headwind's own console can do this directly, see [Remote-management model](#remote-management-model)) |
 | Existing-device onboarding (GrapheneOS + stock Android, USB-guided or `--no-usb`, no reflash) | `enroll` | 🚧 |
 | Headwind MDM cluster optional-service (Postgres-backed, tailnet-only, `snapdragon-pki` namespace) | `specs/cluster/apps/23-headwind.yaml`, `specs/cluster/manifests/headwind/` | ✅ merged |
@@ -616,12 +620,15 @@ Tracked here per the driver's header. Still 🔭, by design. The earlier
 now delivered (see [Management plane](#management-plane)); only the
 APK-store half of that non-goal still stands (see the Summary table).
 
-- **Thin ncurses-menu/Studio faces** — over the driver's verbs, exactly like
+- **Thin Studio (GUI) face** — over the driver's verbs, exactly like
   the Local Docker mesh and go-live precedents (driver owns all logic; faces
   stay thin, no build-matrix row). The `make phone-*` face is ✅ complete —
   all 13 verbs, including `phone-mdm-enroll` and `phone-attest` (with the
   `HEADWIND_*`/`AUDITOR_*`/`ATTESTATION_URL`/`INTERNAL_TOKEN_FILE` knobs
-  forwarded file-path-only, per the custody pattern).
+  forwarded file-path-only, per the custody pattern) — and the **ncurses-menu
+  face is ✅ complete** (`phone_screen` wraps all 13 verbs; the MDM/attestation
+  sub-screen threads the same knobs, ingest token as a file path only). Only
+  the Studio face remains 🔭.
 - **Casdoor SSO for Headwind** — nothing in this recon confirmed Headwind has
   OIDC/SAML support (its own auth is local username/password behind a
   pluggable `HmdmAuthInterface`); until that is independently confirmed,

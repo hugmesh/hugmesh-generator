@@ -501,10 +501,23 @@ assert_grep "taxo: standalone golden item intact" '^[[:space:]]*standalone[[:spa
 assert_grep "phone: opening item present"         '^[[:space:]]*phone[[:space:]]+"MDM phone '  "${MENU_SH}"
 assert_grep "phone: routed to phone_screen"       '^[[:space:]]*phone\)[[:space:]]+phone_screen '     "${MENU_SH}"
 
+# MDM parity: every driver verb is a pickable item, the guided-wizard label
+# shows the post-#390 8-step order (attest + mdm-enroll BEFORE enroll — the
+# device-owner-before-secondary-user foreclosure), and the dispatch case
+# routes all 13 verbs.
+assert_grep "phone: attest item present"          '^[[:space:]]*attest[[:space:]]+"Attest '           "${MENU_SH}"
+assert_grep "phone: mdm-enroll item present"      '^[[:space:]]*mdm-enroll[[:space:]]+"Make the Headwind DPC device owner' "${MENU_SH}"
+assert_grep "phone: rotate-profile-pass item"     '^[[:space:]]*rotate-profile-pass[[:space:]]+"'     "${MENU_SH}"
+assert_grep "phone: remove-profile item"          '^[[:space:]]*remove-profile[[:space:]]+"'          "${MENU_SH}"
+assert_grep "phone: wizard label carries the 8-step order" \
+    'detect → fetch → flash → attest → mdm-enroll → enroll → profile → ingest' "${MENU_SH}"
+assert_grep "phone: dispatch case covers all 13 verbs" \
+    'wizard\|plan\|detect\|fetch\|flash\|attest\|mdm-enroll\|enroll\|profile\|rotate-profile-pass\|remove-profile\|ingest\|status\)' "${MENU_SH}"
+
 # no persistence: no OPT_PHONE_* anywhere, and the phone functions never call
 # save_conf / launch_build / setsid (foreground-only, function-local state).
 assert_ngrep "phone: no OPT_PHONE_* state"        'OPT_PHONE' "${MENU_SH}"
-phone_region="$(sed -n '/^phone_screen() {/,/^}/p' "${MENU_SH}"; sed -n '/^_phone_run() {/,/^}/p' "${MENU_SH}")"
+phone_region="$(sed -n '/^phone_screen() {/,/^}/p' "${MENU_SH}"; sed -n '/^_phone_run() {/,/^}/p' "${MENU_SH}"; sed -n '/^_phone_mdm_settings() {/,/^}/p' "${MENU_SH}")"
 case "${phone_region}" in
     *'--authkey-file'*) _ok ;;
     *) _fail "phone: region extraction vacuous (phone_screen/_phone_run not found)" ;;
@@ -539,13 +552,24 @@ exit "${PHONE_STUB_RC:-0}"
 EOSTUB
 chmod +x "${SNAP_PHONE_WIZARD}"
 
-# all settings set: full deterministic argv (auth key OFF the argv, file at tail)
+# all settings set: full deterministic argv (auth key OFF the argv, file at tail).
+# Positions 9-15 are the management-plane knobs (MDM parity): their flags must
+# thread in order, BEFORE the trailing --authkey-file pair.
 PHONE_SECRET='tskey-auth-Sup3r Secret!'
-_phone_run enroll "${PHONE_SECRET}" comet beta S1TEST "" "https://hs.example" admin </dev/null 2>/dev/null
+PHONE_TOKEN_FILE="${SNAP_MENU_STATE}/ingest-token"
+printf '%s' 'itok-Sup3rIngest!' >"${PHONE_TOKEN_FILE}"
+_phone_run enroll "${PHONE_SECRET}" comet beta S1TEST "" "https://hs.example" admin \
+    /apks/hmdm.apk AABB11 https://hmdm.example /apks/auditor.apk CCDD22 https://attest.example "${PHONE_TOKEN_FILE}" </dev/null 2>/dev/null
 assert_eq "phone run: argv (verb first, options in order, secret off-argv)" \
     "$(head -n -2 "${PHONE_STUB_OUT}/argv")" \
-    "$(printf '%s\n' enroll --codename comet --channel beta --serial S1TEST --login-server https://hs.example --role admin)"
+    "$(printf '%s\n' enroll --codename comet --channel beta --serial S1TEST --login-server https://hs.example --role admin \
+        --headwind-apk /apks/hmdm.apk --headwind-signer-sha256 AABB11 --headwind-url https://hmdm.example \
+        --auditor-apk /apks/auditor.apk --auditor-signer-sha256 CCDD22 --attestation-url https://attest.example \
+        --internal-token-file "${PHONE_TOKEN_FILE}")"
 grep -qF -- "${PHONE_SECRET}" "${PHONE_STUB_OUT}/argv" && _fail "phone run: auth key leaked onto argv" || _ok
+# ingest-token custody: the token FILE PATH threads, the token VALUE never does
+# (the menu passes the operator's path straight through — it never reads the file).
+grep -qF -- 'itok-Sup3rIngest!' "${PHONE_STUB_OUT}/argv" && _fail "phone run: ingest token VALUE leaked onto argv" || _ok
 case "$(cat "${PHONE_STUB_OUT}/key-path")" in
     "${SNAP_MENU_STATE}"/phonekey.*) _ok ;;
     *) _fail "phone run: keyfile not under STATE_DIR: $(cat "${PHONE_STUB_OUT}/key-path")" ;;
@@ -608,8 +632,16 @@ _phone_run() { printf '%s\n' "$@" >"${PHONE_SCREEN_ARGV}"; }
 _UI_MENU_Q="${SNAP_MENU_STATE}/ui-menu.q"
 _UI_INPUT_Q="${SNAP_MENU_STATE}/ui-input.q"
 _UI_PASSWORD_Q="${SNAP_MENU_STATE}/ui-password.q"
-printf '%s\n' device channel beta serial keys server authkey role admin plan back >"${_UI_MENU_Q}"
-printf '%s\n' comet S9PIXEL "" "https://hs.example.test"                          >"${_UI_INPUT_Q}"
+# The walk now also descends into the mdm sub-screen (_phone_mdm_settings) and
+# fills all 7 management-plane knobs before running "plan" — proving the
+# sub-screen's case block mutates phone_screen's locals (bash dynamic scoping)
+# and that they land in _phone_run slots 9-15 in order.
+printf '%s\n' device channel beta serial keys server authkey role admin \
+              mdm hwapk hwsigner hwurl audapk audsigner atturl token back \
+              plan back >"${_UI_MENU_Q}"
+printf '%s\n' comet S9PIXEL "" "https://hs.example.test" \
+              /apks/hmdm.apk AABB11 https://hmdm.example.test \
+              /apks/auditor.apk CCDD22 https://attest.example.test /run/itok >"${_UI_INPUT_Q}"
 printf '%s\n' "tskey-auth-Sup3r Secret!"                                          >"${_UI_PASSWORD_Q}"
 _q_pop()      { head -n1 "$1"; sed -i '1d' "$1"; }
 ui_menu()     { _q_pop "${_UI_MENU_Q}"; }
@@ -623,7 +655,8 @@ phone_screen
 # proving the case block's local-variable assignments are wired to the right
 # fields (a swapped/typo'd case label would scramble this ordering), including
 # a masked authkey with an embedded space to prove byte-exact capture.
-expected_argv="$(printf '%s\n' plan "tskey-auth-Sup3r Secret!" comet beta S9PIXEL "" "https://hs.example.test" admin)"
+expected_argv="$(printf '%s\n' plan "tskey-auth-Sup3r Secret!" comet beta S9PIXEL "" "https://hs.example.test" admin \
+    /apks/hmdm.apk AABB11 https://hmdm.example.test /apks/auditor.apk CCDD22 https://attest.example.test /run/itok)"
 assert_eq "phone_screen: captured _phone_run argv matches the driven field selections" \
     "$(cat "${PHONE_SCREEN_ARGV}" 2>/dev/null)" "${expected_argv}"
 # every queued response must have actually been consumed — too few calls (a
