@@ -69,9 +69,10 @@ data:
   # self-signed JKS (password 123456). We terminate TLS at the gateway
   # (apps/22-gateway-superadmin.yaml), so force http on :8080 here.
   PROTOCOL: http
-  # TODO(confirm): verify this is the exact key docker-entrypoint.sh reads for
-  # the public base URL host against templates/conf/context_template.xml
-  # before go-live — unconfirmed in this recon pass.
+  # CONFIRMED against the now-vendored Dockerfile docker/templates/conf/
+  # context_template.xml: the entrypoint substitutes _BASE_DOMAIN_ into the
+  # context's `base.url` Parameter (_PROTOCOL_://_BASE_DOMAIN_) — this key is
+  # exactly what the derived docker-entrypoint.sh reads.
   BASE_DOMAIN: superadmin.snapdragon.systems
 ---
 apiVersion: apps/v1
@@ -91,7 +92,7 @@ spec:
       nodeSelector: { snapdragon.systems/pki: "true" }
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000    # TODO: pin to the custom image's actual USER UID once built (phpbb.yaml pins UID 33 www-data)
+        runAsUser: 1000    # CONFIRMED by a real image build+boot: USER hmdm is uid=1000/gid=1000
         runAsGroup: 1000
         fsGroup: 1000
         seccompProfile: { type: RuntimeDefault }
@@ -144,10 +145,11 @@ spec:
             requests: { cpu: 250m, memory: 512Mi }
             limits:   { cpu: "2",  memory: 1536Mi }
           volumeMounts:
-            # TODO(confirm): the actual hmdm uploaded-file directory property
-            # (e.g. files.directory). Mounting tomcat's own /work is a SAFE
-            # floor (survives restarts) but may not be where hmdm persists
-            # uploaded APKs/configs — verify before go-live.
+            # CONFIRMED against the vendored context_template.xml: hmdm's
+            # base.directory IS /usr/local/tomcat/work, and files.directory /
+            # plugins.files.directory / log4j.config all live beneath it — this
+            # single mount persists uploaded APKs, plugin files, init.sql and
+            # logs across restarts.
             - { name: data, mountPath: /usr/local/tomcat/work }
       volumes:
         - name: data
