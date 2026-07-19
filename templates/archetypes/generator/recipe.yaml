@@ -1,0 +1,79 @@
+# ============================================================================
+# generator/recipe.yaml — ANCHORED brand-delta edits for the GENERATOR itself.
+# ============================================================================
+#
+# Applied by scripts/tooling/render-recipe.js onto a read-only clone of THIS
+# repo (snapdragon-generator) — the tenant-set member the 13d ApplicationSet and
+# GENERATOR_ORG_GROUP CI-include always PRESUMED existed at the tenant's forge
+# (<org-slug>/snapdragon-generator) but nothing ever rendered/published. NO
+# _skeleton on purpose: like a foreign base, the BASE IS REQUIRED — a "skeleton
+# generator" would be a non-functional placeholder masquerading as the build
+# system, so an unpullable base FAILS the render instead of emitting a lie.
+#
+# DELIBERATELY NARROW (the fork-and-tokenize ban, MESH-TEMPLATING.md:159, applies
+# doubly to a repo this size): 'snapdragon-generator' the NAME, every `snapdragon`
+# in scripts/specs/src, the snapdragon.systems/* label keys and X-Snapdragon-*
+# wire headers are upstream CODE/PROTOCOL identity and stay literal. Only the
+# README display brand, the CI include org/group, and the branding doc's per-org
+# FILENAME (the renames[] pilot) are tenant-scoped. The rendered tenant generator
+# MUST keep `make stack-up` (tests/stack/compose.local.yaml) and every builder
+# entrypoint byte-untouched — building the local mesh stays an option for the
+# tenant, and the hermetic archetype test asserts exactly that.
+#
+# brands/ SEEDING NOTE: the emitted copy retains the upstream brands/ examples
+# (example/local/acme) untouched. A tenant seeds its OWN brand there —
+# brands/<their-brand>.yaml — in their forge copy; we do not pre-write one,
+# because a half-filled brand profile in a pushed tree would immediately drift
+# from the authoritative profile the OPERATOR keeps (and re-renders would
+# ff-refuse against tenant edits to it). Documented in docs/BRANDING.md, which
+# the renames[] demo below re-files per-org.
+#
+# find  = the UPSTREAM literal (drift oracle: validate-repo-templates.sh asserts
+#         it is still present in a freshly-pulled base).
+# replace = the tenant-branded form.
+edits:
+  - file: README.md
+    optional: false          # the generator always ships a README
+    anchors:
+      # README title-paragraph display brand: the images are built "for the
+      # <BRAND_TITLE> cluster" in the tenant copy. Repo-identity `#
+      # snapdragon-generator` heading + code-path mentions stay literal.
+      - id: readme-title-brand
+        find: "Snapdragon cluster"
+        replace: "{{BRAND_TITLE}} cluster"
+        required: true
+  - file: .gitlab-ci.yml
+    optional: false
+    anchors:
+      # Same single CI-include seam as every other archetype: the centralized
+      # include org/group. PRESENCE-TOLERANT (required: false) — deliberately,
+      # and unlike spring-bff/angular-mfe: the generator's OWN CI today carries
+      # NO `Snapdragon-Systems/snapdragon-generator` include (the other repos
+      # include FROM it; it does not include itself — verified against the real
+      # base, where a required:true here would be a false DRIFT). The anchor
+      # stays so the seam rebrands the moment the generator's CI ever adopts
+      # the standard include, exactly the class-UNION no-op contract above.
+      - id: ci-include-org
+        find: "Snapdragon-Systems/snapdragon-generator"
+        replace: "{{GENERATOR_ORG_GROUP}}"
+  - file: docs/BRANDING.md
+    optional: false
+    anchors:
+      # The branding doc's own display brand — edited BEFORE the rename below
+      # (edits[] always run first; they address PRE-rename paths).
+      - id: branding-doc-title
+        find: "Snapdragon tenant branding"
+        replace: "{{BRAND_TITLE}} tenant branding"
+        required: true
+
+# renames[] PILOT (the first per-org FILE rename in the pipeline): the branding
+# doc is re-filed under the tenant's org slug so N orgs' generator copies carry
+# distinctly-named branding docs (safe, NON-CONTRACT file — the engine refuses
+# contract names like snapdragon-deploy.yaml / .snapdragon-provenance.json /
+# .snapdragon-mesh-admitted outright). Applied AFTER edits; both sides rendered
+# through the same fail-closed classifier gate.
+renames:
+  - id: branding-doc-per-org
+    from: docs/BRANDING.md
+    to: docs/BRANDING-{{ORG_SLUG}}.md
+    required: true

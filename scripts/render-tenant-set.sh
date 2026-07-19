@@ -12,7 +12,7 @@
 #
 # Usage:
 #   scripts/render-tenant-set.sh brands/<brand>.yaml --enable-repo-tree \
-#       [--out-dir DIR] [--offline] [--only a,b]
+#       [--out-dir DIR] [--offline] [--only a,b] [--ref TAG|SHA]
 #
 # --enable-repo-tree is REQUIRED (opt-in; this path is additive and never part of
 # the default sed cluster-manifest render).

@@ -1,7 +1,9 @@
 # Mesh repo-templating — current state (Phases 1–7)
 
 This documents the additive Handlebars render engine + guardrails landed for the
-mesh repo-templating effort, through **Phase 7** (cross-mesh decentralization).
+mesh repo-templating effort, through **Phase 7** (cross-mesh decentralization)
+plus the **I5 extensions** (generator archetype, `renames[]`, versioned
+re-render + PR delivery — final section below).
 **Nothing about the existing single-brand behavior changes:** `sed` remains the
 default renderer and the default cluster-manifest path is untouched. Phase 1 =
 the engine + guardrails + parity gate (below). Phase 2 = the **login-ui overlay
@@ -564,3 +566,101 @@ lockout.
    registry `revoked` / `revokedKeys` flags + the advisory-floor re-check at every
    consume (R4); a live revocation feed that reflects a compromise WITHOUT an
    operator registry edit is a cluster/PKI concern.
+
+# Generator archetype, renames[], versioned re-render + PR delivery (I5)
+
+Four additive extensions on the Phase-4/5 machinery. The architecture is
+UNCHANGED: overlay/recipe over a read-only base; **whole-repo tokenization stays
+BANNED** (the fork-and-tokenize rule above) and the frozen protocol constants
+stay literal.
+
+## `renames[]` — the recipe's second (and last) op type
+
+`scripts/tooling/render-recipe.js` now applies an optional `renames:` list
+(`{from, to, required?}`) **AFTER** all `edits[]` (edits address PRE-rename
+paths). Both sides are Handlebars-rendered through the SAME fail-closed
+classifier gate as anchor find/replace. Fail-closed refusals (each aborts the
+render): absolute paths; any `..` segment; a realpath (symlinked parents
+included) escaping the target tree; renaming a **directory** (files only — a dir
+rename could silently move the `deploy/` discovery contract); clobbering an
+existing destination; and the hardcoded **contract denylist** —
+`snapdragon-deploy.yaml`, `.snapdragon-provenance.json`,
+`.snapdragon-mesh-admitted` (renaming those breaks the 13d `pathsExist`
+discovery filter, the fixed provenance manifest name, and the publish
+launder-refusal stamp reads) plus their siblings (`.sig`, base-origin/base-ref
+markers). A missing optional `from` no-ops (presence-tolerant, like anchors);
+`required: true` refuses. The recipe-touched backstop scan in
+`render-repo-tree.sh` follows the rename map so a moved file is still scanned.
+
+## The `generator` archetype — the generator itself as a tenant-set member
+
+`templates/archetypes/generator/` (`recipe.yaml` + `_identity.env`, **NO
+`_skeleton`** — like a foreign base, the base is REQUIRED; a "skeleton
+generator" would be a non-functional placeholder masquerading as the build
+system, so an unpullable base fails the render). This closes the gap where
+`GENERATOR_ORG_GROUP` / 13d presumed a tenant-hosted
+`<org-slug>/snapdragon-generator` that nothing ever rendered. Deliberately
+narrow: README display brand (`Snapdragon cluster` → `{{BRAND_TITLE}} cluster`),
+the CI include org/group, and the branding doc — whose per-org FILENAME is the
+`renames[]` pilot (`docs/BRANDING.md` → `docs/BRANDING-{{ORG_SLUG}}.md`;
+`ORG_SLUG` is registered live in `tokens.json`, derived from the single ORG slug
+rule, value-identical to `NPM_SCOPE`). Everything else — `Makefile`,
+`tests/stack/compose.local.yaml`, every builder — is byte-untouched, so the
+tenant copy keeps `make stack-up` (building the local mesh) working; the
+hermetic archetype test asserts exactly that. `repos[]` rows take
+`{name: generator, archetype: generator}` (base resolves to
+`snapdragon-generator` via the standard `snapdragon-<name>` rule). The tenant
+seeds their OWN `brands/<brand>.yaml` in their copy; the pipeline never
+pre-writes one.
+
+## Versioned re-render — `--ref <tag|sha>`
+
+`render-tenant-set` / `render-repo-tree.sh` / `pull-repo-base.sh` accept
+`--ref`. Unlike the best-effort `GIT_REF` env path, an explicit `--ref` is
+**fail-closed**: an unresolvable ref refuses instead of silently reusing a stale
+cache, and a 40-hex sha is fetched directly. The overlay tree records the ref as
+a one-line `.snapdragon-base-ref` marker (same travels-with-the-tree idiom as
+the Phase-7 base-origin marker; no `--ref` = no marker = byte-identical default
+trees), and the publish tail stamps it into the provenance as `base.ref`
+(omitted when absent — pre-versioning manifests re-render byte-identical).
+`base.commitSha` stays the ground truth; on a `--base`/`*_BASE_DIR` override
+nothing is fetched, so the marker records the operator's CLAIM (logged as such).
+Foreign bases never take a ref — their pin stays the immutable digest through
+the Phase-7 gate (the combination is refused).
+
+> **HONEST LIMIT — the Phase-8 gap still applies.** `--ref` is a *version
+> selector*, not integrity verification: the own-mesh base is still cloned
+> TLS-only with NO signature/content-digest/provenance/SBOM check
+> (`pull-repo-base.sh`, Phase-8 deferral). Pinning `v1.2.3` tells you WHICH
+> tree you asked for, not that the forge gave you an unmutated one — and a
+> **tag can be re-pointed server-side**. Only the foreign-mesh path
+> (digest pin + pinned-key signature) has real content binding today.
+
+## Delivery is now push-ff **OR** PR — `publish-tenant-set.sh --pr`
+
+The DEFAULT is unchanged: direct push to `main`, fast-forward-only, never
+`--force`, refusing on tenant-side divergence. `--pr` is the reconciliation
+path that refusal used to dead-end in: push the regenerated tree to the
+generator-owned branch `templating/update-<version>` (`<version>` = the base
+ref, from the in-tree marker or `--ref` — both present and disagreeing
+refuses), then **create-or-update** a Forgejo PR (`POST
+/api/v1/repos/{org}/{repo}/pulls`; on 409 the existing open PR for that head
+branch is looked up and `PATCH`ed). "Update per version from other repos" is
+therefore: re-render at the new ref → same-name branch → the same PR updates.
+The PR branch is regeneration output, replaced whole on every re-render (forced
+refspec on `templating/update-*` ONLY — a namespace hard-guard makes `main`
+unreachable from that push, and main custody is untouched in every mode). PAT
+custody unchanged: `GIT_CONFIG_*` env header for git, `-H @0600-file` for curl —
+never argv, never the URL, never persisted.
+
+## Exit gate — `tests/domain-registry/test-templating-rename-pr.sh`
+
+Build-host runnable (no root, no network; the Forgejo API is a PATH-shadowed
+recording `curl` stub and the push remote is a local bare repo). Covers: every
+`renames[]` refusal class + the happy path; the generator archetype rendered
+over a FABRICATED tiny fixture base (never a real clone) asserting the anchors +
+rename land AND `Makefile`/`tests/stack/compose.local.yaml` stay byte-identical;
+`--ref` plumbing against a local `file://` upstream (tag content proven, marker
+written, fail-closed on a bogus ref); provenance `base.ref` stamping; `--pr`
+endpoint/branch/no-PAT-on-argv proofs incl. the 409→PATCH update leg; and the
+residual-`{{TOKEN}}` sweep staying green through `render-tenant-set.js`.

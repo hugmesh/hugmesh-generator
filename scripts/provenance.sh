@@ -28,6 +28,12 @@
 #                        (--origin-mesh empty/absent = own mesh = base.originMesh is
 #                         OMITTED — every pre-Phase-7 manifest re-renders byte-identical,
 #                         preserving the determinism/idempotency contract.)
+#                        [--base-ref TAG|SHA]      # versioned-render stamp: the ref the
+#                        (own-mesh base was pulled at (render-repo-tree.sh --ref). Emitted
+#                         as base.ref; empty/absent = OMITTED — same byte-identical
+#                         backwards-compat contract as --origin-mesh. base.commitSha
+#                         stays the ground truth; the ref is the human version label
+#                         the --pr branch name embeds.)
 #   provenance.sh sign   --repo-dir DIR --key ED25519_PRIV.pem
 #   provenance.sh verify --repo-dir DIR --pub ED25519_PUB.pem
 #   provenance.sh keygen --key PRIV.pem --pub PUB.pem     # TEST keypair (build-host verify)
@@ -48,7 +54,7 @@ cmd="${1:-}"; shift || true
 # ── shared arg parse ────────────────────────────────────────────────────────
 REPO_DIR="" BRAND="" ORG="" CLUSTER_DOMAIN="" REPO="" ARCHETYPE=""
 BASE_SHA="" BASE_MODE="" RECIPE_SHA="" GEN_REPO="snapdragon-generator" GEN_COMMIT=""
-ENGINE="handlebars" PRODUCED_AT="" KEY="" PUB="" ORIGIN_MESH=""
+ENGINE="handlebars" PRODUCED_AT="" KEY="" PUB="" ORIGIN_MESH="" BASE_REF=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo-dir) REPO_DIR="$2"; shift 2 ;;
@@ -68,6 +74,9 @@ while [[ $# -gt 0 ]]; do
     # backwards-compatible — empty = own mesh = base.originMesh is OMITTED, so
     # every pre-Phase-7 manifest re-renders byte-identical (determinism contract).
     --origin-mesh) ORIGIN_MESH="$2"; shift 2 ;;
+    # Versioned render (I5): the tag/sha the own-mesh base was pulled at. OPTIONAL
+    # and backwards-compatible — empty = base.ref OMITTED (byte-identical manifests).
+    --base-ref) BASE_REF="$2"; shift 2 ;;
     --key) KEY="$2"; shift 2 ;;
     --pub) PUB="$2"; shift 2 ;;
     *) _die "unknown argument: $1" ;;
@@ -101,6 +110,12 @@ case "$cmd" in
     # crafted value can never splice into base{} (it is _jesc'd too — defence in depth).
     [[ -z "$ORIGIN_MESH" || "$ORIGIN_MESH" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
       || _die "--origin-mesh '${ORIGIN_MESH}' is not a DNS label"
+    # base-ref shape guard (same rule as the render/pull --ref flags): a crafted
+    # value can never splice into base{} (it is _jesc'd too — defence in depth).
+    if [[ -n "$BASE_REF" ]]; then
+      [[ "$BASE_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,120}$ && "$BASE_REF" != *..* ]] \
+        || _die "--base-ref '${BASE_REF}' is not a tag/branch/sha shape ([A-Za-z0-9._/-], no '..')"
+    fi
     # producedAt: deterministic. Prefer explicit --produced-at, else SOURCE_DATE_EPOCH,
     # else the empty string (NEVER `date` now — that would break idempotency).
     if [[ -z "$PRODUCED_AT" && -n "${SOURCE_DATE_EPOCH:-}" ]]; then
@@ -114,6 +129,12 @@ case "$cmd" in
       printf '  "base": {\n'
       printf '    "repo": "snapdragon-%s",\n' "$(_jesc "$REPO")"
       printf '    "commitSha": "%s",\n' "$(_jesc "$BASE_SHA")"
+      # Versioned render (I5): base.ref is the tag/sha label the own-mesh base was
+      # pulled at. OMITTED when empty so every pre-versioning manifest re-renders
+      # byte-identical (determinism/idempotency contract, same as originMesh).
+      if [[ -n "$BASE_REF" ]]; then
+        printf '    "ref": "%s",\n' "$(_jesc "$BASE_REF")"
+      fi
       # Phase 7: base.originMesh records the FOREIGN mesh a cross-mesh base came
       # from. OMITTED when empty (own mesh) so pre-Phase-7 manifests stay
       # byte-identical — determinism/idempotency contract preserved.

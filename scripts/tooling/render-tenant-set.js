@@ -23,7 +23,13 @@
 //
 // Usage:
 //   node scripts/tooling/render-tenant-set.js brands/<brand>.yaml \
-//        --out-dir DIR [--offline] [--only name1,name2]
+//        --out-dir DIR [--offline] [--only name1,name2] [--ref TAG|SHA]
+//
+// --ref pins every OWN-MESH base pull to that tag/sha (plumbed through
+// render-repo-tree.sh --ref -> pull-repo-base.sh --ref, fail-closed there) and
+// stamps each overlay tree's `.snapdragon-base-ref` marker — the versioned
+// re-render half of the PR-delivery flow (publish-tenant-set.sh --pr). Foreign
+// (origin{}) rows are untouched: their pin stays the immutable digest.
 //
 // Env: <NAME>_BASE_DIR overrides (read-only base clones) + OFFLINE are passed
 // through to pull-repo-base.sh per repo. Exit 0 iff every installed repo emitted
@@ -38,7 +44,11 @@ const classifier = require('./token-classifier');
 const TOOLING = __dirname;
 const REPO_ROOT = path.resolve(TOOLING, '..', '..');
 const SCRIPTS = path.join(REPO_ROOT, 'scripts');
-const ARCHETYPES = new Set(['spring-bff', 'angular-mfe', 'gateway']);
+// 'generator' (Lane-E/I5): the generator repo ITSELF as a tenant-set member —
+// base REQUIRED like a foreign base (no _skeleton: a skeleton generator would be
+// a non-functional lie), recipe-only rebrand + the renames[] demo. The tenant's
+// hosted copy 13d/GENERATOR_ORG_GROUP always presumed is now actually rendered.
+const ARCHETYPES = new Set(['spring-bff', 'angular-mfe', 'gateway', 'generator']);
 // RESERVED brand scalars: validated/derived tenant-brand identity that render-
 // repo-tree.sh exports (behind DNS/forbidden-char guards) from the signed brand
 // .conf. A repos[].identity key is PER-REPO identity, never brand — so an identity
@@ -46,7 +56,8 @@ const ARCHETYPES = new Set(['spring-bff', 'angular-mfe', 'gateway']);
 // shell script is the hard enforcement point). Mirrors _RESERVED_SCALARS there.
 const RESERVED_SCALARS = new Set([
   'BRAND', 'BRAND_TITLE', 'ORG', 'CLUSTER_DOMAIN', 'NPM_SCOPE',
-  'HOST_NAME', 'GENERATOR_ORG_GROUP', 'REPO_NAME', 'HEADSCALE_URL', 'MESH_TAG',
+  'HOST_NAME', 'GENERATOR_ORG_GROUP', 'REPO_NAME', 'ORG_SLUG',
+  'HEADSCALE_URL', 'MESH_TAG',
 ]);
 // C0 control chars + DEL: a raw newline in an identity value would splice an
 // attacker-shaped line into the noEscape-rendered YAML/config. Screened at both
@@ -61,17 +72,22 @@ function die(msg) { process.stderr.write(`[render-tenant-set] FATAL: ${msg}\n`);
 function log(msg) { process.stderr.write(`[render-tenant-set] ${msg}\n`); }
 
 function parseArgs(argv) {
-  const out = { yaml: null, outDir: './out', offline: false, only: null };
+  const out = { yaml: null, outDir: './out', offline: false, only: null, ref: null };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--out-dir') out.outDir = argv[++i];
     else if (a === '--offline') out.offline = true;
     else if (a === '--only') out.only = new Set((argv[++i] || '').split(',').map((s) => s.trim()).filter(Boolean));
+    else if (a === '--ref') out.ref = argv[++i];
     else rest.push(a);
   }
-  if (rest.length !== 1) die('usage: render-tenant-set.js brands/<brand>.yaml --out-dir DIR [--offline] [--only a,b]');
+  if (rest.length !== 1) die('usage: render-tenant-set.js brands/<brand>.yaml --out-dir DIR [--offline] [--only a,b] [--ref TAG|SHA]');
   out.yaml = rest[0];
+  // Shape-gate here too (defense in depth; render-repo-tree.sh re-validates).
+  if (out.ref !== null && !(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,120}$/.test(out.ref) && !out.ref.includes('..'))) {
+    die(`invalid --ref '${out.ref}' (want a tag/branch/sha: [A-Za-z0-9._/-], no '..')`);
+  }
   return out;
 }
 
@@ -150,10 +166,14 @@ function main() {
       foreignArgs.push('--foreign-mesh', mesh, '--pinned-digest', digest);
     }
 
+    // --ref pins the OWN-MESH pull only; a foreign row's pin is its immutable
+    // digest (render-repo-tree.sh refuses the combination, so don't send it).
+    const refArgs = (args.ref && foreignArgs.length === 0) ? ['--ref', args.ref] : [];
     const cmd = [
       confPath, '--enable-repo-tree',
       '--repo', r.name, '--archetype', arch,
       '--out-dir', args.outDir,
+      ...refArgs,
       ...foreignArgs,
       ...setArgs,
     ];

@@ -33,6 +33,24 @@
 //           find: "https://id.snapdragon.systems"          # rendered w/ ctx
 //           replace: "https://id.{{CLUSTER_DOMAIN}}"       # rendered w/ ctx
 //           required: false       # (default false) if true, MUST match >=1x
+//   renames:                      # applied AFTER all edits[] (edits address
+//     - from: docs/BRANDING.md    #   PRE-rename paths); both sides are rendered
+//       to: docs/BRANDING-{{ORG_SLUG}}.md   # through the SAME classifier gate
+//       required: false           # (default false) missing `from` => no-op skip
+//
+// renames[] is FAIL-CLOSED (each violation aborts the whole render):
+//   * absolute paths on either side;
+//   * any `..` segment on either side;
+//   * a resolved path (realpath — symlinked parents included) escaping the
+//     target tree on either side;
+//   * a CONTRACT-DENYLISTED name on either side — snapdragon-deploy.yaml +
+//     .snapdragon-provenance.json + .snapdragon-mesh-admitted (renaming those
+//     breaks the 13d pathsExist discovery filter, the provenance manifest's
+//     fixed name, and the publish launder-refusal stamp checks) plus their
+//     fail-closed siblings (.sig / base-origin / base-ref markers);
+//   * renaming a DIRECTORY (files only — a dir rename could silently move the
+//     `deploy/` discovery contract);
+//   * a destination that already exists (never clobber).
 //
 // Tokens come from the environment (the fixed brand set + --extra-tokens), the
 // SAME context builder render-handlebars.js uses.
@@ -43,7 +61,7 @@
 //
 // Exit 0 on success (prints per-anchor hit counts to stderr). Non-zero on a gate
 // violation (frozen/denylisted/unknown token in find or replace), a missing
-// REQUIRED anchor, or a missing REQUIRED file.
+// REQUIRED anchor, a missing REQUIRED file, or any renames[] refusal above.
 
 const fs = require('fs');
 const path = require('path');
@@ -84,6 +102,61 @@ function renderGated(str, ctx, label) {
   return Handlebars.compile(String(str), { noEscape: true, strict: false })(ctx);
 }
 
+// ── renames[] guards ─────────────────────────────────────────────────────────
+// CONTRACT DENYLIST: fixed-name files the platform's discovery/provenance/publish
+// machinery HARDCODES. Renaming any of them in an emitted tree breaks, in order:
+// the 13d brand-repo ApplicationSet pathsExist filter (snapdragon-deploy.yaml),
+// provenance.sh's fixed MANIFEST/SIG names, and publish-tenant-set.sh's Phase-7
+// launder-refusal stamp + durable-marker reads. The last two entries are OUR
+// outbound lineage markers — publish keys fail-closed behavior off their exact
+// names, so a recipe may never move them either.
+const RENAME_CONTRACT_DENYLIST = new Set([
+  'snapdragon-deploy.yaml',
+  '.snapdragon-provenance.json',
+  '.snapdragon-provenance.json.sig',
+  '.snapdragon-mesh-admitted',
+  '.snapdragon-base-origin.json',
+  '.snapdragon-base-ref',
+]);
+
+// Shape-validate ONE side of a rename (already Handlebars-rendered). Returns the
+// resolved absolute path; die()s on any fail-closed violation. `side` labels the
+// error ("from"/"to"); `id` is the rename's human label.
+function resolveRenameSide(targetDir, rel, side, id) {
+  if (typeof rel !== 'string' || rel.length === 0) {
+    die(`rename '${id}': ${side} must be a non-empty string`);
+  }
+  if (/[\x00-\x1f\x7f]/.test(rel)) {
+    die(`rename '${id}': ${side} '${rel}' contains a control character — refusing`);
+  }
+  if (path.isAbsolute(rel)) {
+    die(`rename '${id}': ${side} '${rel}' is an ABSOLUTE path — renames are repo-relative only (fail-closed)`);
+  }
+  // Any '..' segment is refused outright (belt) — the realpath containment below
+  // is the suspenders for symlinked parents.
+  if (rel.split(/[\\/]/).includes('..')) {
+    die(`rename '${id}': ${side} '${rel}' contains a '..' segment — refusing (tree-escape guard)`);
+  }
+  if (RENAME_CONTRACT_DENYLIST.has(path.basename(rel))) {
+    die(`rename '${id}': ${side} '${rel}' names a CONTRACT file (${path.basename(rel)}) — the 13d discovery filter / provenance manifest / publish admission stamps hardcode it; refusing (fail-closed)`);
+  }
+  const abs = path.resolve(targetDir, rel);
+  if (abs === targetDir || !abs.startsWith(targetDir + path.sep)) {
+    die(`rename '${id}': ${side} '${rel}' escapes the target dir — refusing`);
+  }
+  return abs;
+}
+
+// Realpath containment for an EXISTING path (follows symlinked parents): the
+// lexical checks above cannot see a symlinked dir inside the tree pointing out.
+function assertRealUnder(targetDir, existingPath, side, id) {
+  const realRoot = fs.realpathSync(targetDir);
+  const real = fs.realpathSync(existingPath);
+  if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+    die(`rename '${id}': ${side} '${existingPath}' resolves (through a symlink) to '${real}' OUTSIDE the target tree — refusing`);
+  }
+}
+
 // Replace EVERY literal occurrence of `find` with `repl`; return [newContent, n].
 function replaceAllLiteral(hay, find, repl) {
   if (find === '') return [hay, 0];
@@ -114,9 +187,12 @@ function main() {
     die(`recipe YAML parse error: ${e.message}`);
   }
   if (!recipe || !Array.isArray(recipe.edits)) die('recipe must have an edits[] list');
+  if (recipe.renames !== undefined && !Array.isArray(recipe.renames)) {
+    die('recipe renames must be a list when present');
+  }
 
   const ctx = engine.buildContext(args.extraTokens); // fail-closed on token names
-  const report = { recipe: recipePath, target: targetDir, files: [] };
+  const report = { recipe: recipePath, target: targetDir, files: [], renames: [] };
   let totalHits = 0;
 
   for (const edit of recipe.edits) {
@@ -159,8 +235,51 @@ function main() {
     report.files.push(fileRep);
   }
 
+  // ── renames[] — applied AFTER all edits (edits address PRE-rename paths) ────
+  // Both sides ride through the SAME renderGated() classifier gate as anchor
+  // find/replace (a denylisted/frozen/unknown token in a path aborts), then the
+  // fail-closed shape/containment/contract guards above.
+  let totalRenames = 0;
+  for (const r of (recipe.renames || [])) {
+    if (!r || typeof r.from !== 'string' || typeof r.to !== 'string') {
+      die('each rename needs string `from` + `to`');
+    }
+    const id = r.id || `${r.from} -> ${r.to}`;
+    const label = `recipe ${path.basename(recipePath)} [rename ${id}]`;
+    const from = renderGated(r.from, ctx, `${label} (from)`);
+    const to = renderGated(r.to, ctx, `${label} (to)`);
+    const absFrom = resolveRenameSide(targetDir, from, 'from', id);
+    const absTo = resolveRenameSide(targetDir, to, 'to', id);
+
+    if (!fs.existsSync(absFrom)) {
+      if (r.required === true) {
+        die(`rename '${id}': REQUIRED source '${from}' absent in the target tree (base drift?)`);
+      }
+      log(`rename skip (absent, optional): ${from}`);
+      report.renames.push({ id, from, to, applied: false, required: false });
+      continue;
+    }
+    assertRealUnder(targetDir, absFrom, 'from', id);
+    // Files only: a directory rename could silently relocate the deploy/
+    // discovery contract or an entire marker-bearing subtree.
+    if (!fs.lstatSync(absFrom).isFile()) {
+      die(`rename '${id}': source '${from}' is not a regular file — renames[] operates on files only (fail-closed)`);
+    }
+    if (fs.existsSync(absTo)) {
+      die(`rename '${id}': destination '${to}' already exists — refusing to clobber`);
+    }
+    // Create the destination's parent (inside the tree — containment proven
+    // above), then realpath-check IT too (a symlinked parent could escape).
+    fs.mkdirSync(path.dirname(absTo), { recursive: true });
+    assertRealUnder(targetDir, path.dirname(absTo), 'to (parent)', id);
+    fs.renameSync(absFrom, absTo);
+    totalRenames++;
+    report.renames.push({ id, from, to, applied: true, required: r.required === true });
+    log(`rename: ${from} -> ${to}`);
+  }
+
   if (args.report) fs.writeFileSync(path.resolve(args.report), JSON.stringify(report, null, 2));
-  log(`applied ${totalHits} anchored edit(s) across ${report.files.length} file(s) in ${targetDir}`);
+  log(`applied ${totalHits} anchored edit(s) across ${report.files.length} file(s) + ${totalRenames} rename(s) in ${targetDir}`);
 }
 
 main();

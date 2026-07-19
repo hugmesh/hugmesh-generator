@@ -62,10 +62,29 @@
 #
 # Usage:
 #   scripts/publish-tenant-set.sh <rendered-set-dir> [--brand-yaml FILE] \
-#       [--org ORG] [--only a,b] [--dry-run]
+#       [--org ORG] [--only a,b] [--dry-run] [--pr] [--ref TAG|SHA]
 #
 # --dry-run   run steps 1-4 (contract + provenance + scan + local commit) but
 #             DO NOT create org/repo or push. Fail-closed token check still applies.
+#
+# --pr        PR DELIVERY MODE (I5). Instead of the ff-only push to `main`, push
+#             the tree to the generator-owned branch `templating/update-<version>`
+#             (NEVER main) and create-or-update a Forgejo PR (POST
+#             /api/v1/repos/{org}/{repo}/pulls; on 409 the existing open PR for
+#             that head branch is PATCHed). <version> = the base ref the tree was
+#             rendered at — read from the in-tree `.snapdragon-base-ref` marker
+#             (render-repo-tree.sh --ref writes it) or passed with --ref; both
+#             present and disagreeing is a fail-closed refusal. The PR branch is
+#             REGENERATION OUTPUT: each re-render replaces it (forced refspec on
+#             that one branch), which is exactly the "update the PR" semantics —
+#             main custody is UNCHANGED (ff-only, never --force, still the
+#             default no---pr behavior; tenant-side edits reconcile via the PR).
+#             PAT custody unchanged: header via GIT_CONFIG_* env / curl -H @file,
+#             never argv/URL/persisted.
+#
+# --ref TAG|SHA  explicit base-version label for the provenance base.ref stamp +
+#             the --pr branch name, when the tree carries no marker (or to
+#             cross-check the marker — mismatch refuses).
 #
 # Exit 0 iff every selected repo was scanned-clean and pushed (or, --dry-run,
 # committed). Any secret finding / non-ff / missing token aborts fail-closed.
@@ -82,16 +101,28 @@ command -v git >/dev/null 2>&1 || _die "git not found (build-host tool)"
 # ── args ─────────────────────────────────────────────────────────────────────
 [[ $# -ge 1 ]] || _die "usage: $0 <rendered-set-dir> [--brand-yaml FILE] [--org ORG] [--only a,b] [--dry-run]"
 SET_DIR="$1"; shift
-BRAND_YAML="" ONLY="" DRY_RUN=0 ORG_OVERRIDE=""
+BRAND_YAML="" ONLY="" DRY_RUN=0 ORG_OVERRIDE="" PR_MODE=0 REF_OVERRIDE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --brand-yaml) BRAND_YAML="$2"; shift 2 ;;
     --org)        ORG_OVERRIDE="$2"; shift 2 ;;
     --only)       ONLY="$2"; shift 2 ;;
     --dry-run)    DRY_RUN=1; shift ;;
+    --pr)         PR_MODE=1; shift ;;
+    --ref)        REF_OVERRIDE="$2"; shift 2 ;;
     *) _die "unknown argument: $1" ;;
   esac
 done
+# Same ref shape rule as render-repo-tree.sh/pull-repo-base.sh --ref.
+if [[ -n "$REF_OVERRIDE" ]]; then
+  [[ "$REF_OVERRIDE" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,120}$ && "$REF_OVERRIDE" != *..* ]] \
+    || _die "invalid --ref '${REF_OVERRIDE}' (want a tag/branch/sha: [A-Za-z0-9._/-], no '..')"
+fi
+# --pr needs jq up front (PR JSON payload build + open-PR lookup) — fail-closed
+# before any network/push, same posture as the token check below.
+if [[ "$PR_MODE" -eq 1 ]]; then
+  command -v jq >/dev/null 2>&1 || _die "jq required for --pr (PR payload build / open-PR lookup) — fail-closed"
+fi
 [[ -d "$SET_DIR" ]] || _die "rendered-set-dir '$SET_DIR' is not a directory"
 SET_DIR="$(cd "$SET_DIR" && pwd)"
 
@@ -138,7 +169,11 @@ _AUTH_HEADER="Authorization: token ${PUSH_TOKEN}"
 AUTH_HDR_FILE="$(umask 077 && mktemp)" || _die "mktemp failed for auth header file"
 printf '%s\n' "${_AUTH_HEADER}" > "${AUTH_HDR_FILE}"
 chmod 600 "${AUTH_HDR_FILE}" 2>/dev/null || true
-_cleanup() { [[ -n "${AUTH_HDR_FILE:-}" ]] && rm -f "${AUTH_HDR_FILE}" 2>/dev/null; return 0; }
+_cleanup() {
+  [[ -n "${AUTH_HDR_FILE:-}" ]] && rm -f "${AUTH_HDR_FILE}" 2>/dev/null
+  [[ -n "${PR_RESP_FILE:-}" ]] && rm -f "${PR_RESP_FILE}" 2>/dev/null
+  return 0
+}
 trap _cleanup EXIT
 # Drop the plaintext token variable now the header is captured (defence-in-depth;
 # nothing below needs the bare token — only _AUTH_HEADER / AUTH_HDR_FILE).
@@ -167,6 +202,48 @@ forgejo_ensure_repo() {
     409) _log "Forgejo repo ${FORGEJO_ORG}/${repo} already exists (409) — OK" ;;
     000) _die "Forgejo REST unreachable at ${api} (tailnet/base-url/TLS?) — fail-closed" ;;
     *)   _die "Forgejo repo-create returned HTTP ${code} for ${FORGEJO_ORG}/${repo}" ;;
+  esac
+}
+
+# ── Forgejo REST: create-or-update the PR for a templating/update-* branch ───
+# POST /repos/{org}/{repo}/pulls; a 409 means a PR for that head branch already
+# exists — look it up in the open list and PATCH title/body (the branch push that
+# preceded this call already updated the PR's CONTENT). Auth rides the SAME
+# 0600-header-file custody as forgejo_ensure_repo: never argv, never the URL.
+forgejo_ensure_pr() {
+  local repo="$1" branch="$2" ver="$3"
+  [[ "$FORGEJO_API_MODE" == "rest" ]] || { _log "API_MODE=${FORGEJO_API_MODE}: skipping Forgejo PR ensure for '${repo}'"; return 0; }
+  command -v curl >/dev/null 2>&1 || _die "curl required for FORGEJO_API_MODE=rest"
+  local api="${FORGEJO_BASE_URL%/}/api/v1/repos/${FORGEJO_ORG}/${repo}/pulls"
+  local title="templating: update ${repo} to base ${ver}"
+  local body="Automated tenant-set re-render at base ref \`${ver}\` (snapdragon-generator ${GEN_COMMIT}). The head branch is regenerated whole on every re-render at this ref; review and merge into main (main stays fast-forward-only, direct-push default unchanged)."
+  local payload; payload="$(jq -n --arg t "$title" --arg h "$branch" --arg b "$body" \
+      '{title: $t, head: $h, base: "main", body: $b}')"
+  PR_RESP_FILE="${PR_RESP_FILE:-$(umask 077 && mktemp)}"
+  local code
+  code="$(curl -sS -o "$PR_RESP_FILE" -w '%{http_code}' -m 15 \
+      -H @"${AUTH_HDR_FILE}" -H 'Content-Type: application/json' \
+      -X POST "$api" -d "$payload" 2>/dev/null || echo 000)"
+  case "$code" in
+    201) _log "  created Forgejo PR (${branch} -> main) for ${FORGEJO_ORG}/${repo}" ;;
+    409)
+      local idx
+      idx="$(curl -sS -m 15 -H @"${AUTH_HDR_FILE}" \
+            "${api}?state=open&limit=50" 2>/dev/null \
+          | jq -r --arg h "$branch" '[ .[] | select(.head.ref == $h) ][0].number // empty')"
+      [[ -n "$idx" && "$idx" =~ ^[0-9]+$ ]] \
+        || _die "Forgejo says a PR for head '${branch}' exists (409) but the open-PR list has none — cannot update, resolve manually (fail-closed)"
+      local pcode
+      pcode="$(curl -sS -o "$PR_RESP_FILE" -w '%{http_code}' -m 15 \
+          -H @"${AUTH_HDR_FILE}" -H 'Content-Type: application/json' \
+          -X PATCH "${api}/${idx}" \
+          -d "$(jq -n --arg t "$title" --arg b "$body" '{title: $t, body: $b}')" 2>/dev/null || echo 000)"
+      case "$pcode" in
+        200|201) _log "  updated existing Forgejo PR #${idx} (${branch} -> main) for ${FORGEJO_ORG}/${repo} (content already refreshed by the branch push)" ;;
+        *) _die "Forgejo PR update (PATCH ${api}/${idx}) returned HTTP ${pcode} — fail-closed" ;;
+      esac ;;
+    000) _die "Forgejo REST unreachable at ${api} (tailnet/base-url/TLS?) — fail-closed" ;;
+    *)   _die "Forgejo PR create returned HTTP ${code} for ${FORGEJO_ORG}/${repo} (branch ${branch})" ;;
   esac
 }
 
@@ -222,6 +299,8 @@ infer_archetype() {
   if [[ -f "${dir}/federation-base.js" || -f "${dir}/package.json" && -f "${dir}/build.js" ]]; then echo "angular-mfe"; return; fi
   if [[ -f "${dir}/pom.xml" || -f "${dir}/build.gradle" || -f "${dir}/build.gradle.kts" ]]; then echo "spring-bff"; return; fi
   if [[ -d "${dir}/deploy" && -f "${dir}/deploy/ingress.yaml" ]]; then echo "gateway"; return; fi
+  # The generator itself (I5): its sed-CRD entrypoint is the unambiguous marker.
+  if [[ -f "${dir}/generate-brand-repos.sh" ]]; then echo "generator"; return; fi
   echo "unknown"
 }
 
@@ -245,6 +324,25 @@ publish_one() {
 
   _log "── ${FORGEJO_ORG}/${base} ──"
   ensure_discovery_contract "$dir" "$brand" "$repo"
+
+  # ── VERSIONED-RENDER ref (I5) ───────────────────────────────────────────────
+  # render-repo-tree.sh --ref writes a one-line `.snapdragon-base-ref` marker into
+  # the tree (same travels-with-the-tree idiom as the base-origin marker). It
+  # feeds the provenance base.ref stamp and the --pr branch name. An explicit
+  # --ref here must AGREE with a present marker — a disagreement means the
+  # operator is publishing a tree rendered at a different version (fail-closed).
+  local base_ref=""
+  if [[ -f "${dir}/.snapdragon-base-ref" ]]; then
+    base_ref="$(head -n1 "${dir}/.snapdragon-base-ref" | tr -d '\r')"
+    [[ "$base_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,120}$ && "$base_ref" != *..* ]] \
+      || _die "in-tree .snapdragon-base-ref marker in ${base} is not a tag/branch/sha shape — refusing (fail-closed)"
+  fi
+  if [[ -n "$REF_OVERRIDE" ]]; then
+    if [[ -n "$base_ref" && "$base_ref" != "$REF_OVERRIDE" ]]; then
+      _die "--ref '${REF_OVERRIDE}' disagrees with ${base}'s own base-ref marker '${base_ref}' — render/publish version drift, refusing"
+    fi
+    base_ref="$REF_OVERRIDE"
+  fi
 
   # provenance: capture the base commit sha + mode from the rendered tree's own
   # git base if a cache clone is present; else skeleton (no base).
@@ -382,14 +480,18 @@ publish_one() {
   fi
 
   # base.originMesh is emitted ONLY for a foreign-overlay base (empty otherwise, so
-  # own-mesh/skeleton manifests stay byte-identical to pre-Phase-7).
+  # own-mesh/skeleton manifests stay byte-identical to pre-Phase-7). base.ref is
+  # likewise emitted ONLY when a versioned render recorded one (I5).
   local -a origin_args=()
   [[ -n "$origin_mesh" ]] && origin_args=(--origin-mesh "$origin_mesh")
+  local -a base_ref_args=()
+  [[ -n "$base_ref" ]] && base_ref_args=(--base-ref "$base_ref")
   "${SCRIPT_DIR}/provenance.sh" write --repo-dir "$dir" \
       --brand "$brand" --org "$FORGEJO_ORG" --cluster-domain "${CLUSTER_DOMAIN:-}" \
       --repo "$repo" --archetype "$arch" \
       --base-sha "$base_sha" --base-mode "$base_mode" \
       "${origin_args[@]}" \
+      ${base_ref_args[@]+"${base_ref_args[@]}"} \
       --recipe-sha "$rsha" --generator-commit "$GEN_COMMIT" --engine handlebars
 
   if [[ -n "${PROVENANCE_SIGNING_KEY:-}" ]]; then
@@ -436,21 +538,49 @@ publish_one() {
   git -C "$dir" remote remove origin >/dev/null 2>&1 || true
   git -C "$dir" remote add origin "$remote"
 
-  # FAST-FORWARD-ONLY push. No --force, ever. The token rides as an http header via
-  # the GIT_CONFIG_* env (never in argv, never persisted to .git/config or reflog).
-  # A non-ff (someone edited tenant-side) fails the push, which we surface fail-
-  # closed rather than clobbering.
-  _log "  pushing to ${remote} (fast-forward-only)"
-  if GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="${_AUTH_HEADER}" \
-       git -C "$dir" push origin main 2>&1 | sed 's/^/[publish]   git: /' >&2; then
-    _log "  pushed ${base} -> ${FORGEJO_ORG}/${base}@main"
+  if [[ "$PR_MODE" -eq 1 ]]; then
+    # ── PR DELIVERY (I5): branch push + create-or-update PR — NEVER main ──────
+    [[ -n "$base_ref" ]] \
+      || _die "--pr for ${base} needs a base version: render with --ref (writes the in-tree .snapdragon-base-ref marker) or pass --ref here — the PR branch name embeds it (templating/update-<version>)"
+    local ver="${base_ref//\//-}"           # branch-name-safe version component
+    local pr_branch="templating/update-${ver}"
+    # Namespace hard-guard: the forced refspec below may ONLY ever target the
+    # generator-owned templating/update-* namespace — main is unreachable here.
+    case "$pr_branch" in
+      templating/update-?*) : ;;
+      *) _die "internal: PR branch '${pr_branch}' escaped the templating/update-* namespace — refusing" ;;
+    esac
+    # FORCED refspec on the PR branch only (the '+'): each publish run commits a
+    # FRESH regeneration history (git init above), so consecutive updates of the
+    # same-version branch are non-ff BY CONSTRUCTION — "replace the branch" IS
+    # the PR-update semantics. This does NOT touch main custody: main is never
+    # pushed in --pr mode, and the default (no --pr) path below stays ff-only
+    # with no --force, exactly as before. Token custody identical (env header).
+    _log "  pushing PR branch ${pr_branch} -> ${remote} (generator-owned regeneration branch; main untouched)"
+    if GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="${_AUTH_HEADER}" \
+         git -C "$dir" push origin "+HEAD:refs/heads/${pr_branch}" 2>&1 | sed 's/^/[publish]   git: /' >&2; then
+      _log "  pushed ${base} -> ${FORGEJO_ORG}/${base}@${pr_branch}"
+    else
+      _die "PR-branch push failed for ${base} (transport error) — nothing merged, main untouched"
+    fi
+    forgejo_ensure_pr "$base" "$pr_branch" "$base_ref"
   else
-    _die "push refused for ${base} (non-fast-forward or transport error) — NOT force-pushing; reconcile tenant-side edits first"
+    # FAST-FORWARD-ONLY push. No --force, ever. The token rides as an http header via
+    # the GIT_CONFIG_* env (never in argv, never persisted to .git/config or reflog).
+    # A non-ff (someone edited tenant-side) fails the push, which we surface fail-
+    # closed rather than clobbering.
+    _log "  pushing to ${remote} (fast-forward-only)"
+    if GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader GIT_CONFIG_VALUE_0="${_AUTH_HEADER}" \
+         git -C "$dir" push origin main 2>&1 | sed 's/^/[publish]   git: /' >&2; then
+      _log "  pushed ${base} -> ${FORGEJO_ORG}/${base}@main"
+    else
+      _die "push refused for ${base} (non-fast-forward or transport error) — NOT force-pushing; reconcile tenant-side edits first"
+    fi
   fi
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
-_log "publish tail: set=${SET_DIR} forgejo=${FORGEJO_BASE_URL} org=${FORGEJO_ORG} api-mode=${FORGEJO_API_MODE} dry-run=${DRY_RUN}"
+_log "publish tail: set=${SET_DIR} forgejo=${FORGEJO_BASE_URL} org=${FORGEJO_ORG} api-mode=${FORGEJO_API_MODE} dry-run=${DRY_RUN} pr=${PR_MODE}${REF_OVERRIDE:+ ref=${REF_OVERRIDE}}"
 # Optional CLUSTER_DOMAIN for provenance.tenant.clusterDomain (from the brand YAML
 # if given, else env). Best-effort: never fatal.
 if [[ -n "$BRAND_YAML" && -f "$BRAND_YAML" ]]; then
