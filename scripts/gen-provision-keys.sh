@@ -258,6 +258,40 @@ for t in openssl ssh-keygen python3; do
 done
 [ -d "${TEMPLATE}" ] || { echo "ERROR: template not found: ${TEMPLATE}" >&2; exit 1; }
 
+# ── Escrow-clobber guard (defense-in-depth) ─────────────────────────────────────
+# The `rm -rf ${OUT_DIR}` below rebuilds the bundle from the template — safe for
+# everything THIS script mints (all of it regenerates), but OTHER tools escrow
+# NON-regenerable secrets under <out>/vault-seed/device/<id>/ too: the MDM
+# phone-wizard's enterprise-profile.pass is the passphrase of an already-created
+# on-device work profile, and destroying it locks that profile forever. The
+# wizard's default --out was moved off keys-out after a real near-collision, but
+# an operator can still point both tools at one directory. So: before deleting,
+# scan the existing tree for vault-seed/device files this script did NOT create
+# (ours are exactly ssh/dial_private_key{,.pub} + ingest.json) and REFUSE if any
+# exist. Deliberately NO --force override: the escape hatch is the operator
+# moving the escrow (or deleting the directory themselves), so the destructive
+# step can never happen as a flag-typo side effect.
+if [ -d "${OUT_DIR}/vault-seed/device" ]; then
+    FOREIGN_ESCROW="$(find "${OUT_DIR}/vault-seed/device" -type f \
+        ! -name 'ingest.json' \
+        ! \( -path '*/ssh/dial_private_key' \) \
+        ! \( -path '*/ssh/dial_private_key.pub' \) \
+        2>/dev/null)"
+    if [ -n "${FOREIGN_ESCROW}" ]; then
+        {
+            echo "ERROR: refusing to delete ${OUT_DIR} — vault-seed/device holds escrowed"
+            echo "files this script did not create (they do NOT regenerate; e.g. an MDM"
+            echo "enterprise-profile passphrase is the ONLY copy that can unlock its"
+            echo "on-device profile):"
+            printf '%s\n' "${FOREIGN_ESCROW}" | sed 's/^/    /'
+            echo "Move them to their owning tool's --out directory (phone-wizard defaults"
+            echo "to out/phone-wizard/keys-out/), or pick a different -o/--out for this"
+            echo "run. If you truly mean to destroy them, delete ${OUT_DIR} yourself first."
+        } >&2
+        exit 1
+    fi
+fi
+
 echo "==> Building ${OUT_DIR} from ${TEMPLATE} (role=${ROLE})"
 rm -rf "${OUT_DIR}"
 cp -r "${TEMPLATE}" "${OUT_DIR}"

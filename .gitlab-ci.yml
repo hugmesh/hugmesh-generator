@@ -122,6 +122,20 @@ lint:shellinj-regression:
     - bash tests/scripts/test-brand-path-validation.sh
     - bash tests/scripts/test-provision-manifest-injection.sh
 
+# gen-provision-keys.sh escrow-clobber guard: its leading `rm -rf keys-out` must
+# REFUSE when the existing tree holds vault-seed/device files another tool
+# escrowed (e.g. the phone-wizard's enterprise-profile.pass — the only copy able
+# to unlock an already-created on-device work profile), while still allowing
+# reruns over its own regenerable output. Offline; no privileged runner needed.
+lint:provision-keys-escrow-guard:
+  stage: lint
+  image: bash:5
+  tags: [snapdragon-x86]
+  before_script:
+    - apk add --no-cache jq openssl openssh-keygen python3 coreutils findutils grep sed
+  script:
+    - bash tests/scripts/test-provision-keys-escrow-guard.sh
+
 # MDM phone wizard gate. Offline logic test for scripts/phone-wizard.sh
 # (the GrapheneOS-on-Pixel onboarding driver): adb/fastboot/curl are PATH-shim
 # stubs, but the sshsig supply-chain crypto is REAL (an ephemeral ed25519 key
