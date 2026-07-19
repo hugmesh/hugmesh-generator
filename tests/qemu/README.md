@@ -63,6 +63,9 @@ runner polls until `--timeout`. Console output is captured to
 | `verify-client.sh` | Client desktop: non-root boot + console-assertion verification (laptop/chromebook/desktop). |
 | `launch-x86.sh` | Boot a self-booting x86 `.img` under OVMF/KVM (`--gpu`, `--keys-img`, `--run-dir`). |
 | `launch-pi.sh` | Boot a Pi kernel+stage4 under `-M virt` with a KEYS disk. |
+| `launch-arm.sh` | Boot a non-Pi ARM `.img` (frite/jetson/orangepi5/orangepizero2) under `-M virt` (kernel+DTB direct). |
+| `run-matrix-e2e.sh` | Opt-in matrix driver: walk `matrix.tsv`, boot each cell + assert size/load. |
+| `matrix-assertions.sh` | `assert_size` / `assert_build_load` / `assert_runtime_load` helpers (limits read from the code). |
 | `make-test-keys.sh` | Packs a directory into a FAT32 `KEYS` image (reusable, non-root with mtools). |
 | `assertions.sh` | The node checks, executed inside the guest over SSH. |
 | `seed-accounts.sh` | Renders/pushes the E2E account + Casdoor-role fixtures. |
@@ -150,3 +153,63 @@ that the `.bat` targets the right entrypoint, that
 label resolution, pinned winget IDs, consent gating, the DETECT vocabulary — the same
 tokens this harness asserts; `studio/tests/test_bat_bootstrap.py`) — lives in the
 studio pytest suite and runs every pass.
+
+## Matrix QEMU e2e (`run-matrix-e2e.sh` — opt-in)
+
+Boots the **whole device build matrix** — every `(platform, role, env, board, flavor,
+desktop)` cell of `tests/build-matrix/matrix.tsv` (118 rows; the same single source of
+truth `check.sh` walks) — under `qemu-system`, and per row asserts the **boot marker**,
+the image **SIZE**, and the runtime **LOAD** envelope. Like `run-qemu-test.sh` it
+**never builds anything**: it boots operator-supplied golden `.img`/`.iso` artifacts
+(`windows-studio-e2e.sh`'s operator-image contract). x86 rows self-boot via
+`launch-x86.sh`, rpi5 via `launch-pi.sh`, every other aarch64 platform via the
+generalized `launch-arm.sh`. The JOB-channel pseudo-roles are translated to their real
+form exactly as `check.sh`'s CLI leg documents: rpi5 `standalone-desktop` →
+`--role desktop --standalone`; ARM `flavor=standalone` → `flavor=installer --standalone`.
+
+Every LIMIT is **read from the code**, never hardcoded:
+
+- **SIZE** — `assert_size` reads `ROOT_MiB` from the row's builder `--print-plan`
+  (`img_size=<ROOT_MiB>`, which every builder emits and `check.sh` already proves
+  prints), computes the compact layout `(1 + 512 + ROOT_MiB + 1) MiB`, and asserts the
+  built `.img` (or, for `compress=true` rows, its `xz --list` uncompressed size) does not
+  exceed it. The Pi default was reconciled to `9216` here (bugfix #414 had bumped the
+  docs/help/tests but missed `build-rpi5-stage4.sh`'s `ROOT_MiB`).
+- **BUILD LOAD** — `assert_build_load` proves the 2026-07-15 host-freeze caps are wired
+  into the docker build channel: `host_resources.build_memory_flag()`/`default_jobs()`
+  produce the caps, `build_driver.docker_memory_args()` carries them as `--memory`, and
+  `docker/build-image.sh` threads `-j "$JOBS"`. (Native builds cannot be cgroup-capped,
+  so this is a docker-channel invariant only.)
+- **RUNTIME LOAD** — `assert_runtime_load` re-boots the row under its **device RAM
+  ceiling** (`ram_mb` in `device-catalog.json`, e.g. rpi3 = 1024, orin-nano-4gb = 4096)
+  and asserts it still reaches the boot marker with **no oom-killer**. This is a boot
+  **envelope** check (does the image come up inside device RAM), *not* a peak-load
+  stress test — a QEMU node with `kubernetes.bootstrap=false` does not exercise the
+  cluster's real memory peak. Multi-SKU boards (rpi5/4, la-frite) declare no single
+  ceiling, so their runtime-load re-boot is skipped rather than guessed.
+
+```bash
+# ALWAYS-RUN, hermetic (no root, no boot, no builder): enumerate every row + resolve
+# its launcher / normalized invocation / RAM ceiling. This is the CI-green half.
+tests/qemu/run-matrix-e2e.sh --dry-run
+make qemu-matrix-enumerate
+
+# real boot (operator supplies golden artifacts under WORK_DIR):
+SNAPDRAGON_QEMU_E2E=1 make qemu-matrix MATRIX_FILTER=x86/be+gpu
+SNAPDRAGON_QEMU_E2E=1 tests/qemu/run-matrix-e2e.sh --only jetson/edge_ai -w /srv/img
+```
+
+Gated exactly like the Tor onion e2e: without `SNAPDRAGON_QEMU_E2E=1` (and qemu) the
+boot path **SKIPs cleanly** (exit 0), and a missing artifact for a row is a per-row SKIP,
+never a FAIL. EXPERIMENTAL boards (frite/jetson/orangepi) may be **INCONCLUSIVE** under
+`-M virt` (no vendor firmware) — recorded as soft-pass, not FAIL. Under TCG on an x86
+host the full 118-cell walk is many hours (no aarch64 KVM), so keep it nightly and use
+`--only` / `MATRIX_FILTER` for a subset.
+
+The always-run **offline** half of this proof lives in the studio pytest suite
+(`studio/tests/test_qemu_matrix_e2e.py`): the harness-exists check, the matrix
+enumeration + per-platform census, the launcher resolution, the pseudo-role translation,
+the `(1 + 512 + ROOT_MiB + 1)` size formula, the `img_size=`-from-`--print-plan` parser,
+the `ram_mb` ceiling accessor, and the driver's `--dry-run` (118 rows) — all runs every
+pass with the gate unset. The pure Python view of the enumeration + maths is
+`studio/snapdragon_studio/core/build_matrix.py`.

@@ -558,7 +558,7 @@ kubectl -n devops get secret argocd-initial-admin-secret -o jsonpath='{.data.pas
 ## Disk growth on first boot (growable USB)
 
 The `.img` artifacts are built **compact** — only as large as the ext4 root
-(`--img-size`, default9216 MiB on the Pi / 8192 MiB on x86) plus the 512 MiB
+(`--img-size`, default 9216 MiB on the Pi / 8192 MiB on x86) plus the 512 MiB
 boot/ESP partition and alignment. They are **never padded** to the size of the
 target USB, so they flash fast and a small image can be written to a large
 medium. The root (ext4) partition is the **LAST** partition in the table.

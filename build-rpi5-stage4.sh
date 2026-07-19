@@ -105,7 +105,7 @@ RESUME=false
 BUILD_IMG=true          # produce the flashable raw .img (the Pi live USB)
 BUILD_ISO=false         # no installer/ISO by default for the Pi (--iso to force)
 BUILD_TAR=true          # also emit the mounted-filesystem tarball (.fs.tar.xz)
-ROOT_MiB=6144           # ext4 root partition size in the .img (growroot expands it on first boot)
+ROOT_MiB=9216           # ext4 root partition size in the .img (growroot expands it on first boot)
 GROW_POLICY="fill"      # first-boot grow policy baked into /etc/growfs.conf: fill|none|<size> (see growroot)
 SD_ONLY=false           # use literal /dev/mmcblk0p2 instead of PARTUUID/LABEL identity
 COMPRESS_IMG=false      # xz -9 the finished .img
@@ -459,7 +459,7 @@ OPTIONS
         to the size of the target USB. growroot then expands the root to fill
         the medium (or the --grow cap) on first boot, so this only needs to
         fit the stage4 plus a little headroom.
-        Default:9216
+        Default: 9216
 
     --grow fill|none|<size>
         First-boot grow policy baked into the image (/etc/growfs.conf, read

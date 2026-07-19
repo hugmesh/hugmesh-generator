@@ -314,7 +314,7 @@ ORANGEPIZERO2_PASS    := ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
         rpi x86 omnibus frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
         orangepizero2 orangepizero2-live orangepizero2-installer \
         phone-plan phone-detect phone-fetch phone-flash phone-mdm-enroll phone-attest phone-enroll phone-profile phone-rotate-profile-pass phone-remove-profile phone-ingest phone-status phone-wizard \
-        flash qemu qemu-rpi qemu-x86 \
+        flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate \
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
         stack-clone stack-mastodon-env stack-m2-bootstrap stack-build stack-up stack-down stack-logs stack-ps
@@ -805,6 +805,13 @@ qemu-x86: ## boot an x86 role image in QEMU: make qemu-x86 ROLE=be+gpu
 
 qemu: qemu-$(if $(filter arm64,$(ARCH)),rpi,x86) ## boot ROLE/ARCH in QEMU (ARCH=x86|arm64)
 
+qemu-matrix: ## boot+assert size/load for matrix rows (opt-in; SNAPDRAGON_QEMU_E2E=1; MATRIX_FILTER=x86/be+gpu)
+	SNAPDRAGON_QEMU_E2E=$(if $(SNAPDRAGON_QEMU_E2E),$(SNAPDRAGON_QEMU_E2E),1) \
+	  $(SUDO) tests/qemu/run-matrix-e2e.sh -w "$(WORK_DIR)" $(if $(MATRIX_FILTER),--only $(MATRIX_FILTER),)
+
+qemu-matrix-enumerate: ## dry-run enumerate every matrix row + its launcher/size/RAM (no boot, no build)
+	tests/qemu/run-matrix-e2e.sh --dry-run $(if $(MATRIX_FILTER),--only $(MATRIX_FILTER),)
+
 playwright-deps: ## install the Playwright deps + chromium (needed once for e2e)
 	cd tests/e2e && { [ -d node_modules ] || npm ci || npm install; } \
 	  && npx playwright install --with-deps chromium
@@ -867,6 +874,7 @@ STACK_ENV := STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              SNAP_WEB_LOCALES='$(SNAP_WEB_LOCALES)' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
+STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)
 COMPOSE_CMD   ?= docker compose
 # ── private-maven cold-build wiring (see tests/stack/m2-bootstrap.sh) ──
 # Four Java services (admin/user/mod-bff, federation-api) resolve org-PRIVATE
@@ -926,12 +934,12 @@ stack-m2-bootstrap: ## COLD-BUILD prereq: build the private systems.snapdragon m
 	bash tests/stack/m2-bootstrap.sh
 
 stack-build: stack-clone $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
 
 stack-up: stack-clone $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) build
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) up -d
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) up -d
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  | Casdoor: http://localhost:8000"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
 
@@ -941,10 +949,10 @@ stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real 
 	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin / e2e-pass)."
 
 stack-down: ## stop the local stack and drop its volumes
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social down -v
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor down -v
 
 stack-logs: ## tail logs from the running local stack
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) logs -f --tail=100
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_TOR_PROFILE) logs -f --tail=100
 
 stack-ps: ## list the local stack's containers + status
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) ps
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_TOR_PROFILE) ps
