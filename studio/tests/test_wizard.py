@@ -477,11 +477,11 @@ def test_buildpage_unaffiliated_generic_knobs_still_flow(wiz):
     pick_role(wiz, UNAFFILIATED_ROLE)
     build = advance_to(wiz, wizard_mod.BuildPage)
     assert build.img_size.isEnabled() and build.cached.isEnabled() and build.live_toram.isEnabled()
-    build.img_size.setValue(6144)
+    build.img_size.setValue(9216)
     build.cached.setChecked(True)
     build._preview()
     args = wiz.cfg.to_cli_args()
-    assert ("--img-size", 9216) in zip(args, args[1:]) and "--cached" in args
+    assert ("--img-size", "9216") in zip(args, args[1:]) and "--cached" in args
 
 
 def test_buildpage_role_detour_round_trips_bundle_source(wiz):

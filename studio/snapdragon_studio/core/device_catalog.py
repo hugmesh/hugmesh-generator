@@ -74,6 +74,9 @@ class Device:
     reason: str                    # non-empty for every non-supported entry
     role_allow: tuple[str, ...] | None   # NARROWING allowlist (may only shrink)
     notes: str
+    ram_mb: int | None = None      # device RAM ceiling (MiB) for the QEMU-e2e runtime
+                                   # load envelope; None where the board ships in several
+                                   # RAM SKUs (no single ceiling to assert)
 
 
 @dataclass(frozen=True)
@@ -139,6 +142,7 @@ def load_catalog() -> DeviceCatalog:
                 status=d["status"], reason=d.get("reason", ""),
                 role_allow=tuple(d["role_allow"]) if d.get("role_allow") is not None else None,
                 notes=d.get("notes", ""),
+                ram_mb=d.get("ram_mb"),
             )
             for d in raw["devices"]
         )
@@ -191,6 +195,15 @@ def config_axes(device_id: str) -> dict[str, str]:
     if dev.builder_platform is None:
         raise ValueError(f"device {device_id!r} is unsupported — no builder axes")
     return {"platform": dev.builder_platform, "board": dev.builder_board}
+
+
+def ram_mb_for(device_id: str) -> int | None:
+    """The device RAM ceiling (MiB) for the QEMU-e2e runtime-load envelope, or ``None``
+    when the catalog declares none (the board ships in several RAM SKUs, so there is no
+    single ceiling to assert — the harness then skips the memory-capped re-boot for that
+    row rather than guessing). Declared only where the SoC free text pins one RAM size
+    (e.g. rpi3's 1 GB, the orin-nano-4gb / orin-nx-8gb / orin-nx-16gb SKU labels)."""
+    return load_catalog().device(device_id).ram_mb
 
 
 def status_reason(device_id: str) -> str:
