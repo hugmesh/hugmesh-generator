@@ -99,6 +99,26 @@ validate_inputs() {
         [[ "${CD_ENTRA_TENANT}" =~ ^[A-Za-z0-9.-]+$ ]] \
             || die "CD_ENTRA_TENANT must be a tenant GUID or domain ([A-Za-z0-9.-])"
     fi
+    # --idp: identity-provider passthrough. casdoor (the native default) means
+    # "the mesh brings its own IdP — emit nothing extra"; external choices
+    # shape-check here because issuer/client/jwks land in emitted configs.
+    case "${CD_IDP:-casdoor}" in
+        casdoor)
+            [ -z "${CD_IDP_ISSUER:-}${CD_IDP_CLIENT_ID:-}${CD_IDP_JWKS:-}" ] \
+                || die "--idp-issuer/--idp-client-id/--idp-jwks need an external --idp (entra|aws|oidc); the casdoor default derives its own issuer" ;;
+        entra|aws|oidc)
+            [[ "${CD_IDP_ISSUER:-}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._/-]*)?$ ]] \
+                || die "--idp ${CD_IDP} requires --idp-issuer (plain https:// URL — it is baked into emitted configs)"
+            if [ -n "${CD_IDP_CLIENT_ID:-}" ]; then
+                [[ "${CD_IDP_CLIENT_ID}" =~ ^[A-Za-z0-9._-]+$ ]] \
+                    || die "--idp-client-id must be a plain client identifier ([A-Za-z0-9._-])"
+            fi
+            if [ -n "${CD_IDP_JWKS:-}" ]; then
+                [[ "${CD_IDP_JWKS}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._/-]*)?$ ]] \
+                    || die "--idp-jwks must be a plain https:// URL"
+            fi ;;
+        *) die "unknown --idp '${CD_IDP}' (valid: casdoor | entra | aws | oidc)" ;;
+    esac
 }
 
 # ── Context (READ-ONLY: the driver never writes outside --out-dir) ───────────────
@@ -163,6 +183,7 @@ cmd_plan() {
 
     log "planning provider=${provider} domain=${CD_DOMAIN:-<unset>} out=${out} (PURE — nothing mutated)"
     cdp_emit "${provider}" "${out}" || die "provider '${provider}' emit failed"
+    emit_idp_artifacts "${provider}" "${out}"
 
     echo
     echo "== cloud-deploy PLAN (preview only — nothing has been created) =="
@@ -174,7 +195,7 @@ cmd_plan() {
     echo
     echo "artifacts emitted under ${out}:"
     local f
-    for f in "${out}"/* "${out}"/entra/* "${out}"/entra/env/*; do [ -f "${f}" ] && echo "  - ${f}"; done
+    for f in "${out}"/* "${out}"/entra/* "${out}"/entra/env/* "${out}"/idp/*; do [ -f "${f}" ] && echo "  - ${f}"; done
     echo
     local ascript; ascript="$(cdp_apply_script "${provider}")"
     if [ -n "${ascript}" ]; then
@@ -190,6 +211,51 @@ cmd_plan() {
     echo "and goes public only via 'snapdragon-go-live commit' on that node."
 }
 
+# I7: IdP passthrough. With an EXTERNAL --idp the plan additionally emits
+# idp/idp.conf — the same shape the node builders bake as /etc/snapdragon/idp.conf
+# — plus notes, so the deployed VM and its operator agree on the issuer. The
+# casdoor default emits NOTHING (the mesh brings its own IdP). No secrets: issuer,
+# client id and JWKS URL are public identifiers.
+emit_idp_artifacts() {
+    local provider="$1" out="$2"
+    [ "${CD_IDP:-casdoor}" = "casdoor" ] && return 0
+    mkdir -p "${out}/idp"
+    local jwks="${CD_IDP_JWKS:-}"
+    if [ -z "${jwks}" ]; then
+        case "${CD_IDP}" in
+            # Entra does NOT serve /.well-known/jwks — its keys live under /discovery.
+            entra) jwks="${CD_IDP_ISSUER%/}/discovery/v2.0/keys" ;;
+            *)     jwks="${CD_IDP_ISSUER%/}/.well-known/jwks" ;;
+        esac
+    fi
+    {
+        echo "provider=${CD_IDP}"
+        echo "issuer=${CD_IDP_ISSUER}"
+        [ -n "${CD_IDP_CLIENT_ID:-}" ] && echo "client_id=${CD_IDP_CLIENT_ID}"
+        echo "jwks_uri=${jwks}"
+    } > "${out}/idp/idp.conf"
+    {
+        echo "External IdP passthrough (--idp ${CD_IDP})"
+        echo "==========================================="
+        echo
+        echo "idp.conf mirrors what 'build-*-stage4.sh --idp ${CD_IDP} --idp-issuer ...'"
+        echo "bakes into the image as /etc/snapdragon/idp.conf. If the image you are"
+        echo "deploying was built with the casdoor default, rebuild it with the same"
+        echo "--idp flags — this plan file does not retrofit a built image."
+        echo
+        echo "What external mode does NOT change (Casdoor-coupled, see"
+        echo "docs/IDENTITY-PROVIDERS.md in the generator repo): the native /bff/login"
+        echo "leg, MFA step-up stamping, role-sync jobs and signup-gate."
+        if [ "${CD_IDP}" = "aws" ] && [ "${provider}" = "aws-ec2" ]; then
+            echo
+            echo "AWS note: for a Cognito user pool the issuer is"
+            echo "  https://cognito-idp.<region>.amazonaws.com/<pool-id>"
+            echo "and group claims arrive as 'cognito:groups' (NOT 'roles') — consumers"
+            echo "keyed on the roles claim need their group-claim name remapped."
+        fi
+    } > "${out}/idp/README.md"
+}
+
 # ── Confirmation gate (fail-safe; NO --yes flag exists on this driver) ───────────
 confirm() {
     local prompt="$1"
@@ -202,18 +268,22 @@ confirm() {
     case "${ans}" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 
-# Credentials custody check for the mutating verbs: file present, readable, and
-# 0600/0400 — a group/world-readable cloud credential is refused outright.
+# Credentials custody check for the mutating verbs. ANY supplied creds file is
+# custody-checked (readable + 0600/0400) — even for providers that authenticate
+# through their own CLI session (az login) — so apply's "0600-checked" line is
+# always true. The needs-creds gate governs only whether a MISSING file refuses.
 require_creds() {
     local provider="$1"
+    if [ -n "${CD_CREDS_FILE:-}" ]; then
+        [ -r "${CD_CREDS_FILE}" ] || die "creds file not readable: ${CD_CREDS_FILE}"
+        local mode; mode="$(stat -c '%a' "${CD_CREDS_FILE}" 2>/dev/null || echo '')"
+        case "${mode}" in
+            600|400) ;;
+            *) die "creds file ${CD_CREDS_FILE} must be 0600 (or 0400), found ${mode:-unreadable} — chmod 0600 it first" ;;
+        esac
+    fi
     cdp_needs_creds "${provider}" || return 0
     [ -n "${CD_CREDS_FILE:-}" ] || die "provider '${provider}' requires --creds-file (referenced by PATH only — its contents never touch argv)"
-    [ -r "${CD_CREDS_FILE}" ]   || die "creds file not readable: ${CD_CREDS_FILE}"
-    local mode; mode="$(stat -c '%a' "${CD_CREDS_FILE}" 2>/dev/null || echo '')"
-    case "${mode}" in
-        600|400) ;;
-        *) die "creds file ${CD_CREDS_FILE} must be 0600 (or 0400), found ${mode:-unreadable} — chmod 0600 it first" ;;
-    esac
 }
 
 # ── Sub: apply (TTY-confirmed; runs the plan's emitted apply script) ─────────────
@@ -260,6 +330,8 @@ cmd_status() {
     echo "check commands (run them YOURSELF — this driver never calls cloud APIs):"
     echo "  $(cdp_check "${provider}")"
     [ -x "${out}/status.sh" ] && echo "  bash ${out}/status.sh   # emitted read-only checker"
+    # A successful read-only status must exit 0 even when no status.sh was emitted.
+    return 0
 }
 
 # ── Sub: destroy (TTY-confirmed; runs the plan's emitted destroy.sh) ─────────────
@@ -289,6 +361,8 @@ USAGE:
   snapdragon-cloud-deploy list
   snapdragon-cloud-deploy plan    --provider ID [--image FILE] [--domain D] [--region R]
                                   [--creds-file FILE] [--out-dir DIR] [--keys-dir DIR]
+                                  [--idp casdoor|entra|aws|oidc --idp-issuer URL
+                                   [--idp-client-id ID] [--idp-jwks URL]]
   snapdragon-cloud-deploy apply   --provider ID [--out-dir DIR] [--creds-file FILE]
   snapdragon-cloud-deploy status  --provider ID [--out-dir DIR]
   snapdragon-cloud-deploy destroy --provider ID [--out-dir DIR] [--creds-file FILE]
@@ -305,6 +379,8 @@ main() {
     local provider="" out="${DEFAULT_OUT_DIR}"
     CD_IMAGE="${CD_IMAGE:-}" CD_REGION="${CD_REGION:-}" CD_CREDS_FILE="${CD_CREDS_FILE:-}"
     CD_KEYS_DIR="${CD_KEYS_DIR:-${ETC}/keys}" CD_DOMAIN_OVERRIDE=""
+    CD_IDP="${CD_IDP:-casdoor}" CD_IDP_ISSUER="${CD_IDP_ISSUER:-}"
+    CD_IDP_CLIENT_ID="${CD_IDP_CLIENT_ID:-}" CD_IDP_JWKS="${CD_IDP_JWKS:-}"
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -315,6 +391,10 @@ main() {
             --creds-file) CD_CREDS_FILE="$2"; shift 2 ;;
             --out-dir)    out="$2"; shift 2 ;;
             --keys-dir)   CD_KEYS_DIR="$2"; shift 2 ;;
+            --idp)           CD_IDP="$2"; shift 2 ;;
+            --idp-issuer)    CD_IDP_ISSUER="$2"; shift 2 ;;
+            --idp-client-id) CD_IDP_CLIENT_ID="$2"; shift 2 ;;
+            --idp-jwks)      CD_IDP_JWKS="$2"; shift 2 ;;
             -h|--help)    usage; exit 0 ;;
             *) die "unknown flag '$1' (see --help; there is deliberately no --yes flag)" ;;
         esac
@@ -322,6 +402,7 @@ main() {
     OUT_DIR="${out}"
     validate_inputs
     export CD_IMAGE CD_REGION CD_CREDS_FILE CD_KEYS_DIR
+    export CD_IDP CD_IDP_ISSUER CD_IDP_CLIENT_ID CD_IDP_JWKS
 
     case "${cmd}" in
         list|providers|ls)  cmd_list ;;

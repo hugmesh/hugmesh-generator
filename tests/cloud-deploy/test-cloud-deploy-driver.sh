@@ -87,6 +87,9 @@ CREDS="${WORK}/creds"; printf '[default]\naws_access_key_id=AKIATESTFAKEKEY00000
 cdd() { CD_ETC_SNAPDRAGON="${ETC}" CD_PROVIDERS_LIB="${LIB}" bash "${DRIVER}" "$@" </dev/null 2>&1; }
 # Mutating-verb wrapper: stubs FIRST on PATH + the test-only confirmation seam.
 cdy() { PATH="${STUB}:${PATH}" CD_ASSUME_YES=1 CD_ETC_SNAPDRAGON="${ETC}" CD_PROVIDERS_LIB="${LIB}" bash "${DRIVER}" "$@" </dev/null 2>&1; }
+# Non-TTY gate probe: stubs on PATH but NO assume-yes — if the confirmation gate
+# ever regressed, the leak lands in ARGV_LOG (and never reaches a real CLI).
+cdn() { PATH="${STUB}:${PATH}" CD_ETC_SNAPDRAGON="${ETC}" CD_PROVIDERS_LIB="${LIB}" bash "${DRIVER}" "$@" </dev/null 2>&1; }
 
 echo "== cloud-deploy wizard: offline driver + 4-provider emission test =="
 
@@ -208,12 +211,18 @@ grep -q '<domain type="kvm">' "${GENOUT}/domain.xml" && grep -q 'firmware="efi"'
     && ok "domain.xml is a UEFI kvm libvirt domain" || bad "domain.xml wrong"
 
 # (e) FAIL-SAFE gates ------------------------------------------------------------
-out="$(cdd apply --provider aws-ec2 --out-dir "${AWSOUT}" --creds-file "${CREDS}")"; rc=$?
-[ "${rc}" -ne 0 ] && [ ! -s "${ARGV_LOG}" ] && ok "apply on a non-TTY refused (fail-safe), no cloud call" \
-    || { bad "apply on non-TTY did NOT fail-safe (rc=${rc})"; echo "${out}"; }
-out="$(cdd destroy --provider aws-ec2 --out-dir "${AWSOUT}" --creds-file "${CREDS}")"; rc=$?
-[ "${rc}" -ne 0 ] && [ ! -s "${ARGV_LOG}" ] && ok "destroy on a non-TTY refused (fail-safe), no cloud call" \
-    || { bad "destroy on non-TTY did NOT fail-safe (rc=${rc})"; echo "${out}"; }
+# Stubs ARE on PATH here (cdn): a gate regression would run apply.sh and its
+# aws calls would land in ARGV_LOG — so the emptiness assertion can really fail.
+: > "${ARGV_LOG}"
+out="$(cdn apply --provider aws-ec2 --out-dir "${AWSOUT}" --creds-file "${CREDS}")"; rc=$?
+[ "${rc}" -ne 0 ] && [ ! -s "${ARGV_LOG}" ] && echo "${out}" | grep -q 'not a TTY' \
+    && ok "apply on a non-TTY refused AT THE GATE (fail-safe), no cloud call" \
+    || { bad "apply on non-TTY did NOT fail-safe at the gate (rc=${rc})"; echo "${out}"; }
+: > "${ARGV_LOG}"
+out="$(cdn destroy --provider aws-ec2 --out-dir "${AWSOUT}" --creds-file "${CREDS}")"; rc=$?
+[ "${rc}" -ne 0 ] && [ ! -s "${ARGV_LOG}" ] && echo "${out}" | grep -q 'not a TTY' \
+    && ok "destroy on a non-TTY refused AT THE GATE (fail-safe), no cloud call" \
+    || { bad "destroy on non-TTY did NOT fail-safe at the gate (rc=${rc})"; echo "${out}"; }
 # There is deliberately NO --yes flag on this driver.
 out="$(cdd apply --provider aws-ec2 --out-dir "${AWSOUT}" --creds-file "${CREDS}" --yes)"; rc=$?
 [ "${rc}" -ne 0 ] && ok "a --yes flag is rejected (no confirmation bypass exists)" || bad "--yes was ACCEPTED"
@@ -296,6 +305,38 @@ if command -v make >/dev/null 2>&1; then
 else
     ok "make absent — OIDC_ISSUER seam proof skipped (covered on CI images with make)"
 fi
+
+# (j) I7 IdP passthrough ---------------------------------------------------------
+# Default (casdoor): NO idp/ dir — the plan tree is byte-identical to pre-I7.
+IDPDEF="${WORK}/out-idp-default"
+cdd plan --provider aws-ec2 --image "${IMG}" --out-dir "${IDPDEF}" >/dev/null
+[ ! -e "${IDPDEF}/idp" ] && ok "idp: casdoor default emits NO idp/ artifacts" || bad "idp: default unexpectedly emitted idp/"
+# External entra: idp.conf lands with the Entra-specific JWKS default.
+IDPOUT="${WORK}/out-idp-entra"
+cdd plan --provider azure-image --image "${VHD}" --out-dir "${IDPOUT}" \
+    --idp entra --idp-issuer https://login.microsoftonline.com/tid/v2.0 --idp-client-id app-mesh >/dev/null
+grep -q '^provider=entra$' "${IDPOUT}/idp/idp.conf" \
+    && grep -q '^issuer=https://login.microsoftonline.com/tid/v2.0$' "${IDPOUT}/idp/idp.conf" \
+    && grep -q '^client_id=app-mesh$' "${IDPOUT}/idp/idp.conf" \
+    && ok "idp: entra idp.conf carries provider/issuer/client_id" || bad "idp: entra idp.conf wrong: $(cat "${IDPOUT}/idp/idp.conf" 2>/dev/null)"
+grep -q '^jwks_uri=https://login.microsoftonline.com/tid/v2.0/discovery/v2.0/keys$' "${IDPOUT}/idp/idp.conf" \
+    && ok "idp: entra JWKS defaults to /discovery/v2.0/keys (NOT /.well-known/jwks)" || bad "idp: entra jwks default wrong"
+# aws-ec2 + --idp aws: the cognito:groups claim-name note appears.
+IDPAWS="${WORK}/out-idp-aws"
+cdd plan --provider aws-ec2 --image "${IMG}" --out-dir "${IDPAWS}" \
+    --idp aws --idp-issuer https://cognito-idp.us-east-1.amazonaws.com/pool-1 >/dev/null
+grep -q 'cognito:groups' "${IDPAWS}/idp/README.md" \
+    && ok "idp: aws-on-aws-ec2 README carries the cognito:groups claim note" || bad "idp: cognito note missing"
+# Validation refusals — each must die BEFORE any emit.
+cdd plan --provider aws-ec2 --out-dir "${WORK}/x1" --idp nonsense >/dev/null 2>&1 \
+    && bad "idp: unknown --idp accepted" || ok "idp: unknown --idp refused"
+cdd plan --provider aws-ec2 --out-dir "${WORK}/x2" --idp entra >/dev/null 2>&1 \
+    && bad "idp: external without --idp-issuer accepted" || ok "idp: external without --idp-issuer refused"
+cdd plan --provider aws-ec2 --out-dir "${WORK}/x3" --idp entra --idp-issuer http://insecure.example >/dev/null 2>&1 \
+    && bad "idp: http:// issuer accepted" || ok "idp: non-https issuer refused"
+cdd plan --provider aws-ec2 --out-dir "${WORK}/x4" --idp-issuer https://x.example >/dev/null 2>&1 \
+    && bad "idp: issuer with casdoor default accepted" || ok "idp: --idp-issuer without external --idp refused"
+[ ! -e "${WORK}/x1/idp" ] && [ ! -e "${WORK}/x2/idp" ] && ok "idp: refused plans emitted nothing" || bad "idp: a refused plan left artifacts"
 
 echo
 echo "== cloud-deploy wizard test: ${P} passed, ${F} failed =="
