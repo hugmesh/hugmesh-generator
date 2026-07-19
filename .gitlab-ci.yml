@@ -167,6 +167,75 @@ lint:phone-android-e2e:
   script:
     - bash tests/phone/e2e-android-join.sh
 
+# Makefile phone-* FACE gate. Offline threading test for the 13 phone-* delegate
+# targets and the _PHONE_ARGS seam: the REAL repo Makefile is the SUT (run via
+# `make -f` from a staged tmpdir whose scripts/phone-wizard.sh is an
+# argv-capture stub — the real wizard never executes). Proves every target
+# delegates the right verb; HEADWIND_*/AUDITOR_*/ATTESTATION_URL/SERIAL knobs
+# thread to their exact flags; unset knobs leave flags ABSENT (exact-argv
+# negative control); AUTHKEY_FILE/PASS_FILE/INTERNAL_TOKEN_FILE forward PATHS
+# only (secret contents swept off argv/stdout/stderr with a proven-armed
+# detector); phone-flash without SERIAL refuses via $(error) and never invokes
+# the wizard; and the `"$$VAR"` shell-substitution quoting is load-bearing —
+# spaces/quotes survive as one argv element and `$(...)`/backticks are NEVER
+# executed (the seam was a past injection-fix site). apk bash supplies the
+# /bin/bash the Makefile's SHELL := /bin/bash needs (the bash:5 image only
+# ships /usr/local/bin/bash). No device, no docker, no build, no network.
+lint:make-phone-face:
+  stage: lint
+  image: bash:5
+  tags: [snapdragon-x86]
+  before_script:
+    - apk add --no-cache bash make coreutils grep sed
+  script:
+    - bash tests/phone/test-make-phone-face.sh
+
+# MDM manifests RENDER gate. kustomize-renders specs/cluster/manifests/headwind/
+# + attestation-server/ (kubectl kustomize; mirrors test-coturn-optional-service's
+# pure-render pattern) and asserts the load-bearing invariants on the RENDERED
+# stream: the 3 per-app SAs land in the right set (automount off), both
+# custom-image Deployments stay runAsNonRoot uid-1000 (the attestation seeder's
+# deliberate root override confined to that one sidecar), every Service is
+# ClusterIP (8080+31000 on headwind; no NodePort/LoadBalancer anywhere —
+# tailnet-only posture), PROTOCOL=http survives, ADMIN_EMAIL comes from Secret
+# headwind-admin and the dead HEADWIND_ADMIN_USERNAME/PASSWORD vars stay
+# removed, attestation probes stay tcpSocket (upstream serves NO GET routes),
+# the smtp seeder + its Secret are wired, and images follow the
+# registry.snapdragon.systems/snapdragon/... convention. Negative controls on
+# STAGED COPIES prove the render gate and the PROTOCOL invariant both bite.
+# Cheap; no cluster, no privileged runner needed.
+lint:mdm-manifests-render:
+  stage: lint
+  image: bash:5
+  tags: [snapdragon-x86]
+  before_script:
+    - apk add --no-cache kubectl coreutils grep sed gawk
+  script:
+    - bash tests/stack/test-mdm-manifests-render.sh
+
+# MDM Dockerfile PATCH-GATE lint, fully offline (the two manifest Dockerfiles
+# were proven by real builds; CI never rebuilds them). EXTRACTS the sed+grep RUN
+# blocks from the REAL Dockerfile text (the Dockerfile is the SUT) and executes
+# them against committed fixtures replicating the exact upstream declaration
+# shapes at the pinned AttestationServer commit 98b6c130 — including the
+# LINE-WRAPPED release-digest declaration the first real build tripped over.
+# Proves each patch lands + each fail-loud grep gate passes with the committed
+# ARG defaults; the placeholder posture holds (a green run does NOT imply a real
+# AUDITOR_SIGNER_DIGEST was pinned); only the RELEASE pin is repointed; and
+# mutation controls fire: a changed digest literal / reshaped declaration FAILS
+# the extracted gates loud, a benign one-line rewrap still patches, and the
+# headwind build.properties randomize step mints fresh 48-hex secrets on the
+# real committed file (reshaped placeholder trips the `! grep` gate; a deleted
+# line — invisible to that gate — is caught by the suite's own hex check).
+lint:attestation-dockerfile-patches:
+  stage: lint
+  image: bash:5
+  tags: [snapdragon-x86]
+  before_script:
+    - apk add --no-cache coreutils grep sed
+  script:
+    - bash tests/stack/test-attestation-dockerfile-patches.sh
+
 # Studio identity-allowlist unit tests: the fail-closed validators in
 # studio/snapdragon_studio/core/validate.py (DNS-label / hostname / username /
 # accent allowlists + the trailing-newline re.fullmatch regression). Cheap; no
