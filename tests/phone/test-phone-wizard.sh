@@ -46,7 +46,7 @@
 #   (13) profile lifecycle: escrow 0600/0700 + passphrase shape; duplicate -> 2;
 #        rotate keeps .prev-<ts>; --pass-file honored, empty -> 1; remove
 #        refuses non-TTY without --yes, --yes retires escrow to .revoked-<ts>.
-#   (14) ingest + SECRET SWEEP: phone-ingest/v1 record fields; POST without
+#   (14) ingest + SECRET SWEEP: phone-ingest/v2 record fields; POST without
 #        mTLS identity -> 2 (fail-closed); POST goes through curl with the
 #        record; then a sweep proving NO secret (authkey, any escrowed or
 #        supplied passphrase) ever appeared on stdout/stderr or any stub argv.
@@ -796,10 +796,18 @@ run ingest --out "${OUT}"
 run ingest --device-id "${DEVID}" --out "${OUT}"
 ING="${OUT}/device/${DEVID}/ingest.json"
 [ "${RC}" -eq 0 ] && [ -f "${ING}" ] && ok "(14) ingest emits the record (exit 0)" || { bad "(14) ingest rc=${RC}"; echo "${OUT_TXT}"; }
-[ "$(jq -r '.schema' "${ING}")" = "phone-ingest/v1" ] && [ "$(jq -r '.device_class' "${ING}")" = "phone" ] \
+[ "$(jq -r '.schema' "${ING}")" = "phone-ingest/v2" ] && [ "$(jq -r '.device_class' "${ING}")" = "phone" ] \
     && [ "$(jq -r '.os' "${ING}")" = "grapheneos" ] \
-    && ok "(14) record is schema=phone-ingest/v1, device_class=phone, os=grapheneos" \
+    && ok "(14) record is schema=phone-ingest/v2, device_class=phone, os=grapheneos" \
     || bad "(14) record schema fields wrong"
+# No mdm-enroll has run at this point (group 22 is later), so the v2 mdm fold
+# must report the NEGATIVE shape — enrolled:false with empty fields, mirroring
+# enterprise_profile's presence contract, never a missing object.
+[ "$(jq -r '.mdm.enrolled' "${ING}")" = "false" ] \
+    && [ "$(jq -r '.mdm.dpc_package' "${ING}")" = "" ] \
+    && [ "$(jq -r '.mdm.headwind_url' "${ING}")" = "" ] \
+    && ok "(14) v2 mdm fold: negative shape (enrolled:false, empty fields) before any mdm-enroll" \
+    || bad "(14) v2 mdm negative fold wrong: $(jq -c '.mdm' "${ING}" 2>/dev/null)"
 [ "$(jq -r '.codename' "${ING}")" = "${CODENAME}" ] && [ "$(jq -r '.marketing_name' "${ING}")" = "Pixel 6" ] \
     && [ "$(jq -r '.serial' "${ING}")" = "${SERIAL_A}" ] && [ "$(jq -r '.tailscale_ip' "${ING}")" = "100.64.0.7" ] \
     && [ "$(jq -r '.role' "${ING}")" = "admin" ] \
@@ -979,6 +987,18 @@ run mdm-enroll --out "${OUT}" --headwind-url "${HEADWIND_URL_T}" --headwind-sign
     && ok "(22) --headwind-signer-sha256 mismatch -> exit 3 (fail-closed)" \
     || bad "(22) headwind-signer-mismatch rc=${RC}, want 3, out='${OUT_TXT}'"
 rm -f "${STATE}/apksigner-digest"
+
+# With mdm.json now on disk, a re-ingest must fold it POSITIVELY into the v2
+# record (the group-14 check proved the enrolled:false shape pre-mdm-enroll).
+run ingest --device-id "${DEVID}" --out "${OUT}"
+[ "${RC}" -eq 0 ] \
+    && [ "$(jq -r '.mdm.enrolled' "${ING}")" = "true" ] \
+    && [ "$(jq -r '.mdm.dpc_package' "${ING}")" = "com.hmdm.launcher" ] \
+    && [ "$(jq -r '.mdm.headwind_url' "${ING}")" = "${HEADWIND_URL_T}" ] \
+    && [ "$(jq -r '.mdm.set_via' "${ING}")" = "adb-device-owner" ] \
+    && [ -n "$(jq -r '.mdm.enrolled_at // empty' "${ING}")" ] \
+    && ok "(22) re-ingest folds mdm.json into the v2 record (enrolled/dpc/url/set_via/at)" \
+    || bad "(22) v2 mdm positive fold wrong (rc=${RC}): $(jq -c '.mdm' "${ING}" 2>/dev/null)"
 
 # ── (23) attest (Phase 3: self-hosted AttestationServer pairing via the
 #      Snapdragon-forked Auditor) ──────────────────────────────────────────

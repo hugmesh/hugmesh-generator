@@ -74,7 +74,7 @@ anything, and the destructive ones are gated.
 | `profile` | device + out-dir | Create the `enterprise` secondary user, generate + escrow its passphrase (vault-seed custody), operator sets the credential on the handset (default path). **This permanently forecloses device-owner mode** — see [Management plane](#management-plane); it must never run before `mdm-enroll`. |
 | `rotate-profile-pass` | out-dir (+device) | Generate + escrow a new profile passphrase atomically (previous escrow kept as `.prev-<ts>`). |
 | `remove-profile` | **DESTRUCTIVE** | Remove the enterprise user (typed profile-name confirm, or `--yes`); escrow retired to `.revoked-<ts>`. Per-profile FBE keys are evicted — the profile's data is gone. |
-| `ingest` | out-dir (+POST) | Emit the `phone-ingest/v1` device-registry record (folding in `attestation.json`'s fields when present — see [Ingest](#ingest--device-registry)); with `--ingest-url` + the mTLS flags, POST it (fail-closed without client cert+key). |
+| `ingest` | out-dir (+POST) | Emit the `phone-ingest/v2` device-registry record (folding in `attestation.json` and `mdm.json` fields when present — see [Ingest](#ingest--device-registry)); with `--ingest-url` + the mTLS flags, POST it (fail-closed without client cert+key). |
 | `status` | never | Read-only: tools, device, tailnet, profile, escrow **presence** (never contents). |
 | `wizard` | (per step) | Interactive guided full flow (TTY only): detect → fetch → flash → attest → mdm-enroll → enroll → profile → ingest, re-entrant — already-completed steps can be skipped. |
 | `help` | never | Usage. |
@@ -398,7 +398,7 @@ deliberate exception is the gated adb credential-set path above.
 ## Ingest — device registry
 
 `ingest` emits `<out>/device/<device-id>/ingest.json`, schema
-**`phone-ingest/v1`**: `device_id`, `device_class:"phone"`, `serial`,
+**`phone-ingest/v2`**: `device_id`, `device_class:"phone"`, `serial`,
 `codename`, `marketing_name`, `os` (`grapheneos`|`android`|`unknown` —
 inherited from `enrollment.json`'s OS probe, see
 [Onboarding existing phones](#onboarding-existing-phones-no-reflash)),
@@ -407,22 +407,18 @@ inherited from `enrollment.json`'s OS probe, see
 `enterprise_profile{present,user_id,credential_custody}`,
 `attestation_url`, `auditor_package`, `attestation_verdict` (folded in from
 `attestation.json` when `attest` has run — empty strings otherwise; advisory
-fields only, per D9 never enrollment-blocking), `enrolled_at`,
+fields only, per D9 never enrollment-blocking),
+`mdm{enrolled,dpc_package,headwind_url,set_via,enrolled_at}` (folded in from
+`mdm.json` when `mdm-enroll` has run — `enrolled:false` with empty fields
+otherwise, mirroring `enterprise_profile`'s presence contract), `enrolled_at`,
 `generated_at`. Recorded facts (enrollment/profile records) are preferred;
-live adb detection fills only what is missing and reachable. The schema
-string stays `phone-ingest/v1` — the new attestation fields are additive, so
-a pre-Phase-3 consumer can still parse the record.
+live adb detection fills only what is missing and reachable.
 
-**`mdm.json` is not yet folded into `ingest.json`.** `mdm-enroll` writes its
-own record (`device_id`, `serial`, `dpc_package`, `headwind_url`, `os`,
-`set_via:"adb-device-owner"`, `enrolled_at`) alongside `attestation.json` and
-`enrollment.json` under `<out>/device/<device-id>/`, but — unlike the
-attestation fields above — `cmd_ingest()` does not currently read it. Until a
-future revision folds `mdm.json` into the ingest record (or bumps the schema
-to carry a dedicated `mdm{...}` object, per the design's `phone-ingest/v2`
-sketch), a device-registry consumer that needs MDM-enrollment status must
-read `mdm.json` directly. Tracked as a real, currently-open gap — not
-silently glossed over.
+The `mdm{...}` object is what bumped the schema string `v1`→`v2` — it closed
+the tracked "mdm.json is not folded into ingest.json" gap. The BFF endpoint
+accepts BOTH `phone-ingest/v1` and `phone-ingest/v2` (v1 producers keep
+working; the `mdm` fields simply stay null for them), so the bump is not a
+breaking change on the registry side.
 
 Default is **emit-only**. The dedicated registry endpoint is
 **`POST /bff/internal/device-registry/phone-ingest`** (snapdragon-admin-bff-api):
@@ -430,7 +426,7 @@ point `--ingest-url` at it with the mTLS identity flags
 (`--client-cert`/`--client-key`/`--ca`; the wizard fails closed without
 them), plus `--internal-token-file F` when the deployment arms the BFF's
 app-layer `X-Internal-Token` gate (armed prod 401s the POST without it; the
-token rides a 0600 `-H @file` header file, never curl's argv). It accepts exactly this `phone-ingest/v1` shape (snake_case, unknown
+token rides a 0600 `-H @file` header file, never curl's argv). It accepts the `phone-ingest/v2` shape — and still the older `phone-ingest/v1` — (snake_case, unknown
 additive keys ignored; non-phone `schema`/`device_class` is a clean 400),
 UPSERTs one `phone_device` row per `device_id` (a re-ingest refreshes the
 telemetry and bumps `ingest_count`), and rides the same mTLS-gated
@@ -440,7 +436,7 @@ point `--ingest-url` at `/bff/internal/device-enrollment/self-report` — that
 is a **different, disjoint contract**: the node-side `machineKeyFp`
 self-report used for headscale cluster-node reconciliation
 (`specs/usr/sbin/snapdragon-device-enrollment-report`), whose handler
-requires `machineKeyFp` — a `phone-ingest/v1` record posted there fails Bean
+requires `machineKeyFp` — a `phone-ingest/v2` record posted there fails Bean
 Validation and lands nowhere useful.
 
 ## Remote-management model
@@ -597,7 +593,7 @@ mismatch anywhere in the chain fails closed, never silently.
 | Destructive gates (typed-serial flash confirm; non-TTY needs `--yes`+`--serial`; typed profile-name removal) | `flash` / `remove-profile` | 🚧 |
 | Tailnet enroll (keys-dir contract, SEC-08 pre-auth or Casdoor OIDC, ADR-14 approval, 100.64/10 join verify) | `enroll` | 🚧 |
 | Escrowed enterprise profile (vault-seed custody, operator-set default, atomic rotation, revocation trail) | `profile` / `rotate-profile-pass` / `remove-profile` | 🚧 |
-| `phone-ingest/v1` registry record + mTLS POST | `ingest` | 🚧 |
+| `phone-ingest/v2` registry record (attestation + mdm folds) + mTLS POST | `ingest` | 🚧 |
 | Offline `plan` dry-run + `REDACTED` secret discipline | `plan` / `--print-plan` | 🚧 |
 | `make phone-*` thin face (host-side delegates; secrets stay file-path knobs) — all 13 verbs incl. `phone-mdm-enroll`/`phone-attest` | `Makefile` | 🚧 |
 | Thin ncurses-menu face over the driver (all 13 verbs + MDM/attestation knob sub-screen, non-build precedent) | `phone_screen` in [`scripts/build-menu.sh`](../scripts/build-menu.sh) | ✅ |

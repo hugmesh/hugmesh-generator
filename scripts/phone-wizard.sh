@@ -227,7 +227,7 @@ Verbs:
                        (previous escrow kept as .prev-<ts>).
   remove-profile       DESTRUCTIVE: remove the enterprise user (typed
                        profile-name confirm, or --yes); escrow -> .revoked-<ts>.
-  ingest               Emit the phone-ingest/v1 device-registry record;
+  ingest               Emit the phone-ingest/v2 device-registry record;
                        with --ingest-url + mTLS flags, POST it.
   status               Read-only: tools, device, tailnet, profile, escrow
                        presence (never contents).
@@ -1679,6 +1679,20 @@ cmd_ingest() {
         attestation_verdict="$(jq -r '.verdict // empty' "${attest_json}")"
     fi
 
+    # Fold the mdm-enroll record in the same way (the schema v2 addition —
+    # docs/MDM.md tracked this as the last open ingest gap). Advisory-only,
+    # mirroring enterprise_profile: enrolled:false with empty fields when the
+    # device never ran mdm-enroll.
+    local mdm_json="${rec_dir}/mdm.json"
+    local mdm_enrolled=false mdm_dpc_package="" mdm_headwind_url="" mdm_set_via="" mdm_enrolled_at=""
+    if [ -f "${mdm_json}" ]; then
+        mdm_enrolled=true
+        mdm_dpc_package="$(jq -r '.dpc_package // empty' "${mdm_json}")"
+        mdm_headwind_url="$(jq -r '.headwind_url // empty' "${mdm_json}")"
+        mdm_set_via="$(jq -r '.set_via // empty' "${mdm_json}")"
+        mdm_enrolled_at="$(jq -r '.enrolled_at // empty' "${mdm_json}")"
+    fi
+
     mkdir -p "${rec_dir}"
     local ingest="${rec_dir}/ingest.json"
     jq -n \
@@ -1699,9 +1713,14 @@ cmd_ingest() {
         --arg attestation_url "${attestation_url}" \
         --arg auditor_package "${auditor_package}" \
         --arg attestation_verdict "${attestation_verdict}" \
+        --argjson mdm_enrolled "${mdm_enrolled}" \
+        --arg mdm_dpc_package "${mdm_dpc_package}" \
+        --arg mdm_headwind_url "${mdm_headwind_url}" \
+        --arg mdm_set_via "${mdm_set_via}" \
+        --arg mdm_enrolled_at "${mdm_enrolled_at}" \
         --arg enrolled_at "${enrolled_at}" \
         --arg generated_at "$(now_iso)" \
-        '{schema:"phone-ingest/v1", device_id:$device_id, device_class:"phone",
+        '{schema:"phone-ingest/v2", device_id:$device_id, device_class:"phone",
           serial:$serial, codename:$codename, marketing_name:$marketing_name,
           os:$os, os_version:$os_version, superdomain:$superdomain,
           login_server:$login_server, tailscale_ip:$tailscale_ip,
@@ -1711,6 +1730,9 @@ cmd_ingest() {
                               credential_custody:"vault-seed"},
           attestation_url:$attestation_url, auditor_package:$auditor_package,
           attestation_verdict:$attestation_verdict,
+          mdm:{enrolled:$mdm_enrolled, dpc_package:$mdm_dpc_package,
+               headwind_url:$mdm_headwind_url, set_via:$mdm_set_via,
+               enrolled_at:$mdm_enrolled_at},
           enrolled_at:$enrolled_at, generated_at:$generated_at}' \
         > "${ingest}"
     pw_info "ingest record written: ${ingest}"
