@@ -227,10 +227,19 @@ forgejo_ensure_pr() {
   case "$code" in
     201) _log "  created Forgejo PR (${branch} -> main) for ${FORGEJO_ORG}/${repo}" ;;
     409)
-      local idx
-      idx="$(curl -sS -m 15 -H @"${AUTH_HDR_FILE}" \
-            "${api}?state=open&limit=50" 2>/dev/null \
-          | jq -r --arg h "$branch" '[ .[] | select(.head.ref == $h) ][0].number // empty')"
+      # Paginate the open-PR list (busy repos can hold >50 open PRs; a first-page
+      # miss must not masquerade as the phantom-409 case). Bounded at 10 pages.
+      local idx="" page pg_json
+      for page in 1 2 3 4 5 6 7 8 9 10; do
+        pg_json="$(curl -sS -m 15 -H @"${AUTH_HDR_FILE}" \
+              "${api}?state=open&limit=50&page=${page}" 2>/dev/null)" || pg_json=""
+        [[ -z "$pg_json" || "$pg_json" == "[]" ]] && break
+        idx="$(jq -r --arg h "$branch" \
+              '[ .[] | select(.head.ref == $h) ][0].number // empty' <<<"$pg_json")"
+        [[ -n "$idx" ]] && break
+        # short page = last page
+        [[ "$(jq 'length' <<<"$pg_json")" -lt 50 ]] && break
+      done
       [[ -n "$idx" && "$idx" =~ ^[0-9]+$ ]] \
         || _die "Forgejo says a PR for head '${branch}' exists (409) but the open-PR list has none — cannot update, resolve manually (fail-closed)"
       local pcode
@@ -341,7 +350,11 @@ publish_one() {
     if [[ -n "$base_ref" && "$base_ref" != "$REF_OVERRIDE" ]]; then
       _die "--ref '${REF_OVERRIDE}' disagrees with ${base}'s own base-ref marker '${base_ref}' — render/publish version drift, refusing"
     fi
-    base_ref="$REF_OVERRIDE"
+    # A tree with NO marker was not rendered at any pinned ref — stamping the
+    # operator's --ref into provenance base.ref would be an unverified claim.
+    # Fail closed: re-render with --ref so the marker travels with the tree.
+    [[ -n "$base_ref" ]] \
+      || _die "--ref '${REF_OVERRIDE}' but ${base} carries no .snapdragon-base-ref marker (tree was rendered unpinned) — re-render with 'render-repo-tree.sh --ref ${REF_OVERRIDE}' so provenance base.ref is fetch-proven, not claimed"
   fi
 
   # provenance: capture the base commit sha + mode from the rendered tree's own

@@ -618,11 +618,16 @@ pre-writes one.
 `render-tenant-set` / `render-repo-tree.sh` / `pull-repo-base.sh` accept
 `--ref`. Unlike the best-effort `GIT_REF` env path, an explicit `--ref` is
 **fail-closed**: an unresolvable ref refuses instead of silently reusing a stale
-cache, and a 40-hex sha is fetched directly. The overlay tree records the ref as
-a one-line `.snapdragon-base-ref` marker (same travels-with-the-tree idiom as
-the Phase-7 base-origin marker; no `--ref` = no marker = byte-identical default
-trees), and the publish tail stamps it into the provenance as `base.ref`
-(omitted when absent — pre-versioning manifests re-render byte-identical).
+cache, and a 40-hex sha is fetched directly (NOTE: sha fetch needs the server to
+allow sha-in-want — `uploadpack.allowAnySHA1InWant` or `allowReachableSHA1InWant`;
+some Forgejo/GitHub configs disable it, in which case pin a TAG instead). The
+overlay tree records the ref as a one-line `.snapdragon-base-ref` marker (same
+travels-with-the-tree idiom as the Phase-7 base-origin marker; no `--ref` = no
+marker = byte-identical default trees), and the publish tail stamps it into the
+provenance as `base.ref` (omitted when absent — pre-versioning manifests
+re-render byte-identical). `publish --pr --ref X` on a tree WITHOUT the marker
+refuses — an unpinned render would make `base.ref` an operator claim rather than
+a fetch-proven fact.
 `base.commitSha` stays the ground truth; on a `--base`/`*_BASE_DIR` override
 nothing is fetched, so the marker records the operator's CLAIM (logged as such).
 Foreign bases never take a ref — their pin stays the immutable digest through
