@@ -2369,6 +2369,13 @@ bake_host_firewall() {
     cp "${SHARED_SPECS}/usr/sbin/snapdragon-go-live-menu"         "${SYSROOT}/usr/sbin/snapdragon-go-live-menu"
     chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live-menu"
     cp "${SHARED_SPECS}/usr/lib/snapdragon/go-live-providers.sh"  "${SYSROOT}/usr/lib/snapdragon/go-live-providers.sh"
+    # ── Cloud-deploy wizard: go-live's SIBLING driver+registry (plan/apply/status/
+    #    destroy of a PACKAGED x86 image onto aws-ec2/azure-image/openshift-cnv/
+    #    generic-qcow2). Baked beside the go-live set — inert until an operator runs
+    #    it: plan is a pure offline render, apply/destroy are TTY-gated (no --yes).
+    cp "${SHARED_SPECS}/usr/sbin/snapdragon-cloud-deploy"         "${SYSROOT}/usr/sbin/snapdragon-cloud-deploy"
+    chmod +x "${SYSROOT}/usr/sbin/snapdragon-cloud-deploy"
+    cp "${SHARED_SPECS}/usr/lib/snapdragon/cloud-deploy-providers.sh" "${SYSROOT}/usr/lib/snapdragon/cloud-deploy-providers.sh"
     echo "${RELEASE_STATE:-internal}" > "${SYSROOT}/etc/snapdragon/release-state"
     # ── Go-Live web-UI effector: the 4th front-end (admin-bff's web console) can only
     #    RECORD a signed intent (it runs in a pod, can't touch this host's filesystem);
