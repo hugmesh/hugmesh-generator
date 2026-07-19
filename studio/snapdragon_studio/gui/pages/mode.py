@@ -1,19 +1,21 @@
-"""ModePage — STEP 1: pick ONE of four clearly-distinct things to build.
+"""ModePage — STEP 1: pick ONE of five clearly-distinct things to build.
 
-The four first-screen choices map onto the EXISTING three emission modes plus one
-non-image side-flow (design step1Taxonomy):
+The first-screen choices map onto the EXISTING three emission modes plus two
+non-image side-flows (design step1Taxonomy):
 
   - MESH NODE            -> cfg.mode="mesh"        (superadmin builds node images)
   - LOCAL DOCKER MESH    -> NO cfg.mode            (side-flow: run a dockerized mesh HERE)
   - MESH DESKTOP CLIENT  -> cfg.mode="cloud"       (branded tailnet + SSO client)
   - STANDALONE GENTOO    -> cfg.mode="standalone"  (hardened/unaffiliated personal desktop)
+  - MDM PHONE            -> NO cfg.mode            (side-flow: flash+enroll a Pixel HERE)
 
 cfg.mode stays exactly {"standalone","cloud","mesh"} — unchanged — so to_cli_args() /
 materialize() / the mesh manifest stay byte-identical for equivalent selections. The
-LOCAL DOCKER MESH choice builds no image, so it never sets cfg.mode: validatePage
-raises the transient ``wiz.localmesh_selected`` flag and Next flows into the
-registered LocalMeshPage (the operator rejected the old modal popout), which
-dynamically skips itself on every image-mode flow via applies_to().
+LOCAL DOCKER MESH and MDM PHONE choices build no image, so they never set cfg.mode:
+validatePage raises the transient ``wiz.localmesh_selected`` / ``wiz.phone_selected``
+flag and Next flows into the registered LocalMeshPage / PhonePage (the operator
+rejected the old modal popout), each dynamically skipping itself on every image-mode
+flow via applies_to().
 """
 from __future__ import annotations
 
@@ -29,15 +31,16 @@ class ModePage(QtWidgets.QWizardPage):
         self.wiz = wiz
         self.setTitle("What do you want to build?")
         self.setSubTitle(
-            "Pick one. Three of these build an image; LOCAL DOCKER MESH instead runs a "
-            "mesh on this machine right now.")
+            "Pick one. Three of these build an image; LOCAL DOCKER MESH runs a mesh on "
+            "this machine right now, and MDM PHONE flashes + enrolls a USB Pixel.")
         lay = QtWidgets.QVBoxLayout(self)
         self.group = QtWidgets.QButtonGroup(self)
-        # FOUR clearly-distinct choices, in the spec's STEP-1 order. Each carries
+        # FIVE clearly-distinct choices, in the spec's STEP-1 order. Each carries
         # property("mode"): the three IMAGE choices commit cfg.mode in validatePage
-        # exactly as before; "localmesh" is a transient side-flow that never touches
-        # cfg.mode. The DEFAULT is chosen by id (standalone) below, NOT by index, so a
-        # visual reorder can't change which choice the no-pick default flow exercises.
+        # exactly as before; "localmesh" and "phone" are transient side-flows that
+        # never touch cfg.mode. The DEFAULT is chosen by id (standalone) below, NOT by
+        # index, so a visual reorder can't change which choice the no-pick default flow
+        # exercises.
         self.modes = [
             ("mesh", "Mesh node",
              "Superadmin: build the server node image(s) — PKI, backend, frontend, GPU, "
@@ -51,6 +54,9 @@ class ModePage(QtWidgets.QWizardPage):
             ("standalone", "Standalone Gentoo desktop",
              "A personal hardened LUKS/SELinux desktop — or a plain UNAFFILIATED Gentoo "
              "desktop with zero Snapdragon branding/tooling. No mesh, no SSO."),
+            ("phone", "MDM phone",
+             "Flash a USB Pixel with VERIFIED GrapheneOS and enroll it in the mesh — "
+             "no image build. Runs the same driver right here."),
         ]
         self._buttons = {}
         for i, (mid, label, desc) in enumerate(self.modes):
@@ -108,7 +114,12 @@ class ModePage(QtWidgets.QWizardPage):
         # wizard flag its applies_to() reads (never persisted — a loaded config always
         # re-selects a real image mode; see initializePage).
         self.wiz.localmesh_selected = (mid == "localmesh")
+        # MDM PHONE is likewise a side-flow, not an image build: it commits NOTHING to
+        # cfg.mode, advancing into the registered PhonePage via its own transient flag.
+        self.wiz.phone_selected = (mid == "phone")
         if mid == "localmesh":
+            return True
+        if mid == "phone":
             return True
         prev = self.wiz.cfg.mode
         self.wiz.cfg.mode = mid

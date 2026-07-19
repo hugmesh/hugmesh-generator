@@ -17,8 +17,8 @@ from ..core.platform_info import detect
 from ..core import worklist as worklist_mod
 from .pages import (
     BrandingPage, BuildPage, DomainsPage, HardwarePage, HomePage, KeyZipPage,
-    LocalMeshPage, ModePage, NetworkPage, ProgressPage, RolePage, SystemPage,
-    UsersPage, WelcomePage, WorklistPage,
+    LocalMeshPage, ModePage, NetworkPage, PhonePage, ProgressPage, RolePage,
+    SystemPage, UsersPage, WelcomePage, WorklistPage,
 )
 # re-exported for golive.py (and any other page set) — the helpers moved to
 # gui/pages/_widgets.py with the page split, but this module stays their
@@ -27,7 +27,8 @@ from .pages._widgets import _file_picker, _row  # noqa: F401
 
 __all__ = [
     "StudioWizard", "medium_size", "centred_top_left",
-    "WelcomePage", "ModePage", "RolePage", "WorklistPage", "HardwarePage",
+    "WelcomePage", "ModePage", "LocalMeshPage", "PhonePage", "RolePage",
+    "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage", "DomainsPage", "UsersPage",
     "SystemPage", "HomePage", "BuildPage", "ProgressPage",
 ]
@@ -106,6 +107,9 @@ class StudioWizard(QtWidgets.QWizard):
         # LocalMeshPage.applies_to(), NEVER persisted into cfg (cfg.mode stays an
         # image mode; ModePage.initializePage documents why).
         self.localmesh_selected = False
+        # transient: ModePage's MDM PHONE choice — read by PhonePage.applies_to(),
+        # likewise NEVER persisted into cfg (the phone is not an image mode).
+        self.phone_selected = False
         # The build-session id of the NEXT dispatch (core/build_sessions): minted lazily
         # by BuildPage's preview (so preview == dispatch), pinned by a RESTART (same
         # record + workdir reused), cleared by ProgressPage at finish.
@@ -127,9 +131,9 @@ class StudioWizard(QtWidgets.QWizard):
         # until then it is None and the flow terminates on BuildPage — the None-filter
         # keeps the slug->id map aligned and the drift assert fail-loud.
         page_ctors = [
-            WelcomePage, ModePage, LocalMeshPage, RolePage, WorklistPage, HardwarePage,
-            BrandingPage, NetworkPage, KeyZipPage, DomainsPage, UsersPage, SystemPage,
-            HomePage, BuildPage, ProgressPage,
+            WelcomePage, ModePage, LocalMeshPage, PhonePage, RolePage, WorklistPage,
+            HardwarePage, BrandingPage, NetworkPage, KeyZipPage, DomainsPage, UsersPage,
+            SystemPage, HomePage, BuildPage, ProgressPage,
         ]
         assert len(page_ctors) == len(WIZARD_PAGE_SLUGS), (
             f"page constructors ({len(page_ctors)}) drifted from "
