@@ -57,6 +57,16 @@ emission, and not a channel choice**: it never enters
 `resolve_build_target`/`build_make_cmd`, and the harness deliberately does not
 gate it.
 
+**Cloud image packaging rides the same non-build precedent.**
+[`scripts/cloud-package.sh`](../scripts/cloud-package.sh)
+([`CLOUD-IMAGE-PACKAGING.md`](CLOUD-IMAGE-PACKAGING.md)) re-packages an
+**already-built** x86 raw `.img` as `qcow2` / fixed `VHD` / checksummed raw for
+cloud import. Output format is a post-build property of an existing artifact,
+not an image option — so it is **not a matrix row, not an axis, and not a
+channel choice**: it never enters `resolve_build_target`/`build_make_cmd`, the
+builders' emission is untouched, and the harness deliberately does not gate it
+(its own hermetic suite is `tests/scripts/test-cloud-package.sh`).
+
 **Per-user first-login `registration` (discord / gmail / password / derive) is
 manifest-only.** It is an additive `User.registration` field surfaced in the Studio
 `users.py` + `--print-specs`; the ncurses/CLI image builders carry no per-user mesh
