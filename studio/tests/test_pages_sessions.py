@@ -375,3 +375,73 @@ def test_restart_with_deleted_workdir_offers_redo(qapp, wiz, tmp_path):
     ok, why = PreviousBuildsWidget.can_restart(s)
     assert not ok
     assert "Redo" in why
+
+
+# ── delete / cleanup affordance ───────────────────────────────────────────────────────
+def test_delete_button_gating(qapp, wiz, tmp_path):
+    _seed_sessions(tmp_path)
+    wiz.cfg.output_dir = str(tmp_path / "out")
+    w = _welcome_page(wiz).previous_builds
+    w.refresh()
+    w.table.clearSelection()
+    w._update_buttons()
+    assert not w.delete_btn.isEnabled()            # nothing selected -> no per-row delete
+    assert w.delete_all_btn.isEnabled()            # rows exist -> bulk cleanup available
+    w.table.selectRow(0)
+    assert w.delete_btn.isEnabled()                # any row is deletable
+
+
+def test_delete_finished_session_drops_the_row(monkeypatch, qapp, wiz, tmp_path):
+    ok, bad = _seed_sessions(tmp_path)
+    wiz.cfg.output_dir = str(tmp_path / "out")
+    w = _welcome_page(wiz).previous_builds
+    w.refresh()
+    assert len(bs.scan()[0]) == 2
+    monkeypatch.setattr(QtWidgets.QMessageBox, "exec",
+                        lambda self: QtWidgets.QMessageBox.StandardButton.Ok)
+    row = next(i for i, r in enumerate(w._row_data)
+               if r.kind == "session" and r.session.id == ok.id)
+    w.table.selectRow(row)
+    w._delete()
+    assert not os.path.exists(ok.path())           # record unlinked
+    assert len(bs.scan()[0]) == 1                   # scan count dropped
+    ids = {r.session.id for r in w._row_data if r.kind == "session"}
+    assert ok.id not in ids and bad.id in ids       # row gone after refresh, sibling kept
+
+
+def test_delete_active_session_refused_with_warning(monkeypatch, qapp, wiz, tmp_path):
+    s = bs.new_session(synthesize(_standalone_cfg(tmp_path)), GENERATOR_DIR)
+    bs.start(s)                                    # running, our live pid -> active
+    wiz.cfg.output_dir = str(tmp_path / "no-out")
+    w = _welcome_page(wiz).previous_builds
+    w.refresh()
+    warned = []
+    monkeypatch.setattr(QtWidgets.QMessageBox, "warning",
+                        lambda *a, **k: warned.append(a[2]))
+    monkeypatch.setattr(QtWidgets.QMessageBox, "exec",
+                        lambda self: pytest.fail("confirm shown for an active session"))
+    w.table.selectRow(0)
+    w._delete()
+    assert warned and "another Studio process" in warned[0]
+    assert os.path.exists(s.path())                # in-progress record left intact
+    assert "another Studio process" in w.delete_btn.toolTip()   # blocked reason shown
+
+
+def test_delete_all_finished_prunes_but_keeps_running(monkeypatch, qapp, wiz, tmp_path):
+    _seed_sessions(tmp_path)                        # 2 terminal records
+    running = bs.new_session(synthesize(_standalone_cfg(tmp_path, role="be")),
+                             GENERATOR_DIR)
+    bs.start(running)                              # active -> must be skipped
+    wiz.cfg.output_dir = str(tmp_path / "out")
+    w = _welcome_page(wiz).previous_builds
+    w.refresh()
+    assert w.table.rowCount() == 3
+    monkeypatch.setattr(QtWidgets.QMessageBox, "exec",
+                        lambda self: QtWidgets.QMessageBox.StandardButton.Ok)
+    info = []
+    monkeypatch.setattr(QtWidgets.QMessageBox, "information",
+                        lambda *a, **k: info.append(a[2]))
+    w._delete_all()
+    assert [r.id for r in bs.load_all()] == [running.id]   # only the active one kept
+    assert info and "skipped 1" in info[0]
+    assert w.table.rowCount() == 1                  # list refreshed to the survivor

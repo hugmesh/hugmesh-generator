@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -436,6 +437,83 @@ def discover_unmanaged(out_dir: str) -> list[UnmanagedBuild]:
                                     log_path=legacy_log))
     found.sort(key=lambda u: u.mtime, reverse=True)
     return found
+
+
+# ── deletion / cleanup (best-effort, three-way guarded — the Welcome delete affordance) ─
+def is_active(s: BuildSession) -> bool:
+    """True when a record is a build in progress RIGHT NOW — status ``running`` and NOT
+    stale (its pid is alive on this host, or it is a running record from another host we
+    cannot probe). The never-delete guard: an active session is a live build and its
+    record / artifacts must never be removed out from under it. (Same predicate the
+    RESTART gate uses — see :meth:`sessions_widget.PreviousBuildsWidget.can_restart`.)"""
+    return s.status == RUNNING and not is_stale(s)
+
+
+def _is_session_workdir(path: str, session_id: str) -> bool:
+    """Safety shape-check for ANY rmtree: True only when ``path`` matches the
+    ``<out>/sessions/<id>`` footprint :func:`session_workdir` mints — the basename IS the
+    session id and its parent dir is ``sessions``. A hand-edited/tampered record whose
+    ``workdir`` points elsewhere (``/``, ``$HOME``, the shared out dir) fails this and is
+    never rmtree'd — record deletion (a cheap unlink) still proceeds."""
+    norm = os.path.normpath(path)
+    return (os.path.basename(norm) == session_id
+            and os.path.basename(os.path.dirname(norm)) == "sessions")
+
+
+def delete(s: BuildSession, *, remove_artifacts: bool = False) -> bool:
+    """Delete a session record — and, only when asked, its artifact tree. Refuses an
+    ACTIVE (in-progress) session: returns False, nothing touched.
+
+    Best-effort like the write points: the record ``<id>.json`` is unlinked in a
+    try/except (an already-gone file is success, never a crash). The artifact dir is
+    rmtree'd ONLY when ``remove_artifacts`` is set AND ``s.workdir`` passes the
+    :func:`_is_session_workdir` shape-check, so a poisoned workdir can never rmtree an
+    arbitrary path. Returns True once the record is gone."""
+    if is_active(s):
+        return False
+    try:
+        os.remove(s.path())
+    except OSError:
+        pass
+    if (remove_artifacts and _is_session_workdir(s.workdir, s.id)
+            and os.path.isdir(s.workdir)):
+        shutil.rmtree(s.workdir, ignore_errors=True)
+    return True
+
+
+def delete_path(path: str) -> None:
+    """Best-effort unlink of a single record file — for corrupt/unreadable records that
+    never parse into a :class:`BuildSession` (surfaced by :func:`scan`). Never raises."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def delete_unmanaged(u: UnmanagedBuild, *, remove_tree: bool = True) -> bool:
+    """Delete a discovered pre-session ``wl-*`` build tree (they accumulate identically
+    to session dirs). Guarded by the same shape discipline: rmtree runs only when the
+    basename is a ``wl-*`` dir that exists — never the shared out dir or a forged path.
+    Returns True on removal, False when the guard refuses or ``remove_tree`` is off."""
+    if (remove_tree and os.path.basename(os.path.normpath(u.path)).startswith("wl-")
+            and os.path.isdir(u.path)):
+        shutil.rmtree(u.path, ignore_errors=True)
+        return True
+    return False
+
+
+def prune(*, remove_artifacts: bool = False) -> tuple[int, int]:
+    """Bulk-delete every NON-active session record (powers "Delete all finished"):
+    iterate the readable records, skip each active (in-progress) one, pass every other
+    to :func:`delete`. Returns ``(deleted, skipped_active)``."""
+    deleted = skipped = 0
+    for s in load_all():
+        if is_active(s):
+            skipped += 1
+            continue
+        if delete(s, remove_artifacts=remove_artifacts):
+            deleted += 1
+    return deleted, skipped
 
 
 # ── search (dumb, fast, unit-testable) ────────────────────────────────────────────────

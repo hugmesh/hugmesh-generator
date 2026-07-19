@@ -182,6 +182,122 @@ def test_discover_unmanaged_finds_wl_dirs_only(tmp_path):
     assert bs.discover_unmanaged(str(tmp_path / "missing")) == []
 
 
+# ── deletion / cleanup ────────────────────────────────────────────────────────────────
+def test_is_active_true_only_while_genuinely_running(tmp_path):
+    s = bs.new_session(_standalone_wl(tmp_path), str(tmp_path))
+    bs.start(s)
+    assert bs.is_active(s)                             # running with our own live pid
+    bs.finish(s, "complete")
+    assert not bs.is_active(s)                         # terminal record
+
+
+def test_is_session_workdir_shape_check(tmp_path):
+    sid = "20260715-120000-abcdef"
+    good = bs.session_workdir(str(tmp_path / "out"), sid)
+    assert bs._is_session_workdir(good, sid)
+    assert bs._is_session_workdir(good + "/", sid)                 # trailing slash ok
+    assert not bs._is_session_workdir(str(tmp_path), sid)          # no sessions/ parent
+    assert not bs._is_session_workdir(str(tmp_path / "out"), sid)  # basename != id
+    assert not bs._is_session_workdir(good, "another-id")          # id mismatch
+
+
+def test_delete_removes_record_and_drops_from_load_all(tmp_path):
+    s = bs.new_session(_standalone_wl(tmp_path), str(tmp_path))
+    bs.start(s)
+    bs.finish(s, "complete")
+    assert os.path.exists(s.path())
+    assert bs.delete(s) is True
+    assert not os.path.exists(s.path())
+    assert bs.load_all() == []
+
+
+def test_delete_refuses_a_running_session(tmp_path):
+    s = bs.new_session(_standalone_wl(tmp_path), str(tmp_path))
+    bs.start(s)                                        # running, our live pid -> active
+    assert bs.delete(s) is False                       # never delete an in-progress build
+    assert os.path.exists(s.path())                    # the file survives untouched
+
+
+def test_delete_allows_a_stale_running_record(tmp_path):
+    s = bs.new_session(_standalone_wl(tmp_path), str(tmp_path))
+    bs.start(s)
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    s.pid = proc.pid                                   # a genuinely dead pid -> stale
+    assert bs.is_stale(s) and not bs.is_active(s)
+    assert bs.delete(s) is True                         # a crashed Studio is deletable
+    assert not os.path.exists(s.path())
+
+
+def test_delete_with_artifacts_rmtrees_the_session_workdir(tmp_path):
+    s = bs.new_session(_standalone_wl(tmp_path), str(tmp_path))
+    bs.start(s)
+    bs.finish(s, "complete")
+    os.makedirs(os.path.join(s.workdir, "wl-standalone-thick.x86"))
+    assert os.path.isdir(s.workdir)
+    assert bs.delete(s, remove_artifacts=True) is True
+    assert not os.path.exists(s.path())
+    assert not os.path.isdir(s.workdir)                # artifacts rmtree'd too
+
+
+def test_delete_never_rmtrees_a_poisoned_workdir(tmp_path):
+    s = bs.new_session(_standalone_wl(tmp_path), str(tmp_path))
+    bs.start(s)
+    bs.finish(s, "complete")
+    poison = tmp_path / "precious"
+    poison.mkdir()
+    (poison / "keep.txt").write_text("do not delete")
+    s.workdir = str(poison)                            # out-of-shape (tampered) path
+    assert not bs._is_session_workdir(s.workdir, s.id)
+    assert bs.delete(s, remove_artifacts=True) is True  # record removed regardless
+    assert not os.path.exists(s.path())
+    assert poison.is_dir() and (poison / "keep.txt").exists()   # NEVER rmtree'd
+
+
+def test_delete_is_best_effort_on_missing_file(tmp_path):
+    s = bs.new_session(_standalone_wl(tmp_path), str(tmp_path))
+    s.status = bs.COMPLETE                             # terminal, but never persisted
+    assert not os.path.exists(s.path())
+    assert bs.delete(s) is True                         # must not raise on a gone file
+
+
+def test_prune_deletes_terminal_and_skips_active(tmp_path):
+    for _ in range(2):
+        s = bs.new_session(_standalone_wl(tmp_path), str(tmp_path))
+        bs.start(s)
+        bs.finish(s, "complete")
+    active = bs.new_session(_standalone_wl(tmp_path), str(tmp_path))
+    bs.start(active)                                   # still running -> must be skipped
+    deleted, skipped = bs.prune()
+    assert (deleted, skipped) == (2, 1)
+    assert [r.id for r in bs.load_all()] == [active.id]  # only the active one survives
+
+
+def test_delete_path_removes_a_corrupt_record(tmp_path):
+    os.makedirs(bs.sessions_dir(), exist_ok=True)
+    bad = os.path.join(bs.sessions_dir(), "00000000-000000-bad.json")
+    with open(bad, "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    assert bs.scan()[1] == [bad]                       # surfaced as unreadable
+    bs.delete_path(bad)
+    assert not os.path.exists(bad)
+    bs.delete_path(bad)                                # best-effort: no raise once gone
+
+
+def test_delete_unmanaged_rmtrees_a_wl_tree_only(tmp_path):
+    out = tmp_path / "out"
+    (out / "wl-pki.x86").mkdir(parents=True)
+    found = bs.discover_unmanaged(str(out))
+    assert len(found) == 1
+    assert bs.delete_unmanaged(found[0]) is True
+    assert not (out / "wl-pki.x86").exists()
+    # a forged non-wl path (e.g. the shared out dir itself) is refused
+    forged = bs.UnmanagedBuild(path=str(out), role="x", platform="x", mtime=0.0,
+                               has_log=False, log_path="")
+    assert bs.delete_unmanaged(forged) is False
+    assert out.is_dir()
+
+
 # ── search helpers ────────────────────────────────────────────────────────────────────
 def test_haystack_and_matches(tmp_path):
     s = bs.new_session(_mesh_wl(tmp_path), str(tmp_path))
