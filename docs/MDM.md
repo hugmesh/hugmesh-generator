@@ -415,10 +415,17 @@ otherwise, mirroring `enterprise_profile`'s presence contract), `enrolled_at`,
 live adb detection fills only what is missing and reachable.
 
 The `mdm{...}` object is what bumped the schema string `v1`→`v2` — it closed
-the tracked "mdm.json is not folded into ingest.json" gap. The BFF endpoint
-accepts BOTH `phone-ingest/v1` and `phone-ingest/v2` (v1 producers keep
-working; the `mdm` fields simply stay null for them), so the bump is not a
-breaking change on the registry side.
+the tracked "mdm.json is not folded into ingest.json" gap.
+
+**Merge-order note (cross-repo):** the `v2` bump is additive, but the BFF's
+`PhoneIngestRequest` DTO pattern-pins the accepted schema string. Widening it
+to accept both `phone-ingest/v1` and `phone-ingest/v2` is a coordinated
+snapdragon-admin-bff-api change that **must land first** — until it does, a
+`POST` of a `v2` record to a `v1`-only registry fails Bean Validation with a
+clean `400` (the record is still written to disk, so nothing is lost; only the
+POST leg fails). Once the BFF accepts both, v1 producers keep working (the
+`mdm` fields simply stay null for them) and the bump is non-breaking on the
+registry side.
 
 Default is **emit-only**. The dedicated registry endpoint is
 **`POST /bff/internal/device-registry/phone-ingest`** (snapdragon-admin-bff-api):

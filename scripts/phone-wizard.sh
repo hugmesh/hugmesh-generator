@@ -989,6 +989,25 @@ cmd_flash() {
     "${FASTBOOT}" -s "${s}" flashing lock \
         || pw_die 1 "fastboot flashing lock failed/declined — the device REMAINS UNLOCKED; re-run flash or lock manually before deployment"
 
+    # A wipe/flash destroys the handset's device-owner (Headwind DPC) and its
+    # hardware-attestation pairing, so any prior on-disk mdm.json / attestation.json
+    # for THIS device now describe state that no longer exists. Retire them
+    # (best-effort) to .stale-<ts> so a later `ingest` cannot fold a phantom
+    # mdm.enrolled:true / operator-paired verdict into the registry record.
+    # enrollment.json/profile.json are intentionally left: enroll and profile
+    # re-run after flash in the wizard order and overwrite their own records.
+    [ -n "${DEVICE_ID}" ] || { SERIAL="${s}"; resolve_device_id; }
+    if [ -n "${DEVICE_ID}" ]; then
+        local flrec="${OUT_DIR}/device/${DEVICE_ID}" fts stale
+        fts="$(now_iso | tr -d ':')"
+        for stale in mdm.json attestation.json; do
+            if [ -f "${flrec}/${stale}" ]; then
+                mv "${flrec}/${stale}" "${flrec}/${stale}.stale-${fts}"
+                pw_info "retired stale ${stale} (device wiped) -> ${stale}.stale-${fts}"
+            fi
+        done
+    fi
+
     pw_info "flash complete. Boot the device, complete first-boot setup, then enable"
     pw_info "Developer options + USB debugging (Owner profile) and run 'attest',"
     pw_info "THEN 'mdm-enroll' (device-owner mode is foreclosed once 'profile' runs)."

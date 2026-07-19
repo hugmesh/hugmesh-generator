@@ -267,15 +267,26 @@ done
 # wizard's default --out was moved off keys-out after a real near-collision, but
 # an operator can still point both tools at one directory. So: before deleting,
 # scan the existing tree for vault-seed/device files this script did NOT create
-# (ours are exactly ssh/dial_private_key{,.pub} + ingest.json) and REFUSE if any
-# exist. Deliberately NO --force override: the escape hatch is the operator
-# moving the escrow (or deleting the directory themselves), so the destructive
-# step can never happen as a flag-typo side effect.
+# (ours are exactly <id>/ssh/dial_private_key{,.pub} + <id>/ingest.json) and
+# REFUSE if any exist. Deliberately NO --force override: the escape hatch is the
+# operator moving the escrow (or deleting the directory themselves), so the
+# destructive step can never happen as a flag-typo side effect.
+#
+# SCOPE: this guards non-regenerable SECRETS only (the escrow tree), NOT the
+# wizard's device *records* (enrollment/mdm/attestation.json) — those regenerate
+# by re-running the corresponding verbs, so their loss is recoverable, unlike an
+# escrowed profile passphrase. The whitelist patterns are ANCHORED to the exact
+# layout our files occupy (device/<id>/ingest.json and device/<id>/ssh/…), so a
+# foreign file that merely reuses one of those basenames at some OTHER depth is
+# treated as foreign (refused), not silently excused.
+# The `[^/]+` in the -regex patterns pins <id> to a SINGLE path component, so
+# (unlike a -path glob, whose * spans slashes) a file at some deeper path that
+# merely reuses one of our basenames is NOT excused.
 if [ -d "${OUT_DIR}/vault-seed/device" ]; then
-    FOREIGN_ESCROW="$(find "${OUT_DIR}/vault-seed/device" -type f \
-        ! -name 'ingest.json' \
-        ! \( -path '*/ssh/dial_private_key' \) \
-        ! \( -path '*/ssh/dial_private_key.pub' \) \
+    FOREIGN_ESCROW="$(find "${OUT_DIR}/vault-seed/device" -mindepth 1 -type f \
+        ! -regex '.*/device/[^/]+/ingest\.json' \
+        ! -regex '.*/device/[^/]+/ssh/dial_private_key' \
+        ! -regex '.*/device/[^/]+/ssh/dial_private_key\.pub' \
         2>/dev/null)"
     if [ -n "${FOREIGN_ESCROW}" ]; then
         {

@@ -113,5 +113,20 @@ else
     bad "(d) mixed tree not refused (rc=${RC_D}) or escrow lost: $(printf '%s' "${LOG_D}" | head -3)"
 fi
 
+# ── (e) anchoring: a foreign file that REUSES a whitelisted basename at a
+# DEEPER path must still be treated as foreign (the -regex [^/]+ anchor) ──
+OUT_E="${WORK}/keys-out-e"
+mkdir -p "${OUT_E}/vault-seed/device/dev-cafe/backup"
+echo '{"stolen":true}' > "${OUT_E}/vault-seed/device/dev-cafe/backup/ingest.json"   # NOT device/<id>/ingest.json
+set +e
+LOG_E="$(cd "${REPO}" && "${GPK}" -o "${OUT_E}" 2>&1)"
+RC_E=$?
+set -e
+if [ "${RC_E}" -eq 1 ] && [ -f "${OUT_E}/vault-seed/device/dev-cafe/backup/ingest.json" ]; then
+    ok "(e) a deeper backup/ingest.json is foreign (basename reuse not excused), refused + intact"
+else
+    bad "(e) deeper ingest.json wrongly excused (rc=${RC_E}): $(printf '%s' "${LOG_E}" | head -3)"
+fi
+
 echo "== ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

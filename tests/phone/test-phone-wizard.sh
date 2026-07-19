@@ -512,6 +512,30 @@ LOCK_LN="$(grep -n 'flashing lock' "${LOGD}/fastboot.log" | head -n1 | cut -d: -
 grep -q -- "-s ${SERIAL_A} flashing" "${LOGD}/fastboot.log" && ok "(11) flashing verbs bound to -s <serial>" \
     || bad "(11) flashing verbs not serial-bound"
 
+# (11) re-flash retires stale device-owner / attestation records: a wipe
+# destroys on-device DPC + attestation state, so a prior mdm.json/attestation.json
+# for this device must be moved aside (.stale-<ts>) or a later ingest would fold
+# a phantom enrolled:true / operator-paired verdict. enrollment.json/profile.json
+# are left (enroll/profile re-run after flash and overwrite their own records).
+FLREC="${WD%/*}/device/phone-$(printf '%s' "${SERIAL_A}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | tr -s '-')"
+# ^ DEVICE_ID default = phone-<sanitize_id(SERIAL)>, --out defaults under the work dir's parent
+mkdir -p "${FLREC}"
+printf '{"enrolled":true,"set_via":"adb-device-owner"}' > "${FLREC}/mdm.json"
+printf '{"verdict":"operator-paired"}'                  > "${FLREC}/attestation.json"
+printf '{"role":"admin"}'                               > "${FLREC}/enrollment.json"
+: > "${LOGD}/flash-all.log"; : > "${LOGD}/fastboot.log"
+run flash --work-dir "${WD}" --out "${WD%/*}" --serial "${SERIAL_A}" --yes --force-fwupd
+if [ "${RC}" -eq 0 ] && [ ! -f "${FLREC}/mdm.json" ] && [ ! -f "${FLREC}/attestation.json" ] \
+   && ls "${FLREC}"/mdm.json.stale-* >/dev/null 2>&1 && ls "${FLREC}"/attestation.json.stale-* >/dev/null 2>&1; then
+    ok "(11) re-flash retires stale mdm.json + attestation.json to .stale-<ts>"
+else
+    bad "(11) flash did not retire stale device records (rc=${RC}, mdm=$(ls "${FLREC}"/mdm.json* 2>/dev/null))"
+fi
+[ -f "${FLREC}/enrollment.json" ] \
+    && ok "(11) re-flash leaves enrollment.json (enroll re-runs and overwrites it)" \
+    || bad "(11) flash wrongly retired enrollment.json"
+rm -rf "${FLREC}"
+
 # ── (19) flash: SEL_STATE==adb reboot-into-bootloader wait loop ────────────
 # Device starts up in adb (not already in fastboot) -> flash must `adb reboot
 # bootloader` then poll for the same serial to reappear in fastboot, using the
