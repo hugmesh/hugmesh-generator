@@ -22,8 +22,8 @@
 #   (4) phone-ingest SECRET CUSTODY: AUTHKEY_FILE/PASS_FILE/INTERNAL_TOKEN_FILE
 #       forward file PATHS only — the files' secret CONTENTS never appear on
 #       argv/stdout/stderr (sweep with a proven-armed detector);
-#   (5) phone-flash WITHOUT SERIAL refuses via the $(error) hard-require and
-#       the wizard is NEVER invoked; WITH SERIAL it delegates (positive control);
+#   (5) phone-flash WITHOUT SERIAL refuses via the shell-level [ -n "$SERIAL" ]
+#       guard and the wizard is NEVER invoked; WITH SERIAL it delegates;
 #   (6) a knob value with spaces + quotes survives as ONE argv element (the
 #       `"$$VAR"` quoting is load-bearing);
 #   (7) injection posture: `$(...)`, backticks and $VAR inside a knob value are
@@ -239,6 +239,40 @@ if [ "${RC}" -eq 0 ] && argv_is plan flash --work-dir "${WD}"; then
 else
   bad "(8) PLAN_VERB rc=${RC} $(argv_show)"
 fi
+
+# ── (9) MAKE-LEVEL injection neutralized on the non-seam knobs ────────────────
+# Section (7) proves the _PHONE_ARGS SHELL seam ($${VAR:+...}) is inert, but the
+# flash SERIAL guard, the boolean flags, and PLAN_VERB were once read via Make's
+# own $(strip $(SERIAL))/$(if $(strip $(YES)))/$(PLAN_VERB) — those expand the
+# value at MAKE-EXPANSION time, so an environment-origin (recursively-expanded)
+# value carrying $(shell …) EXECUTES before any recipe line runs. This is the
+# real bug the sweep found; all four now go through the shell instead. Each probe
+# plants a $(shell touch <marker>) payload and asserts the marker never appears.
+echo '-- 9) make-level $(shell …) injection is neutralized on SERIAL/YES/FORCE/PLAN_VERB --'
+inj_probe() { # inj_probe <label> <target> <VAR>
+  local label="$1" target="$2" var="$3" marker="${WORK}/pwn-${3}"
+  rm -f "${marker}"
+  # The payload is a Make function call; it fires at expansion time on the
+  # vulnerable form, is an inert string through the shell form.
+  run_make "${target}" "${var}=\$(shell touch ${marker})x"
+  if [ -e "${marker}" ]; then
+    bad "(9) MAKE-LEVEL INJECTION via ${var}: \$(shell …) executed at expansion time"
+  else
+    ok "(9) ${var} carries \$(shell …) inertly (${label})"
+  fi
+}
+inj_probe "flash SERIAL guard"  phone-flash  SERIAL
+inj_probe "boolean YES"         phone-status YES
+inj_probe "boolean FORCE"       phone-status FORCE
+inj_probe "PLAN_VERB"           phone-plan   PLAN_VERB
+# The flash guard must STILL refuse an unset serial (the fix is a shell guard,
+# not a removal): a value that Make would once have executed is now just a
+# non-empty serial string, so flash actually DELEGATES with it verbatim.
+run_make phone-flash 'SERIAL=$(shell touch '"${WORK}"'/should-not-exist)x'
+argv_is flash --work-dir "${WD}" --serial '$(shell touch '"${WORK}"'/should-not-exist)x' \
+  && [ ! -e "${WORK}/should-not-exist" ] \
+  && ok "(9) the once-injectable SERIAL now rides argv as an inert literal (guard still gates)" \
+  || bad "(9) SERIAL passthrough wrong: $(argv_show)"
 
 echo "== RESULT: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

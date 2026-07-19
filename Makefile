@@ -511,12 +511,21 @@ PHONE_WORK_DIR ?= $(WORK_DIR)/phone-wizard
 # an embedded ", `, or $(...) (e.g. a spoofed USB device serial) is inserted
 # by the shell as an inert string via "$$VAR", instead of being spliced by
 # Make as literal recipe text that /bin/sh would re-parse as shell syntax.
+# This custody applies to the BOOLEAN flags and PLAN_VERB too: they are read
+# via the shell ($${YES:+--yes}, $${PLAN_VERB}, and the phone-flash SERIAL
+# guard's [ -n "$$SERIAL" ]) rather than Make's $(if $(strip $(YES))) / $(error)
+# — those forms expand the value at MAKE time, so a $(shell …) payload in YES/
+# FORCE/RESOLVE/SHOW_AUTHKEY/FORCE_FWUPD/SERIAL/PLAN_VERB would EXECUTE during
+# recipe expansion (a real command-injection; reproduced + fixed). A recursive
+# (=) variable never re-runs command substitution once it holds a shell string,
+# so the shell forms are inert.
 export PHONE_WORK_DIR SERIAL CODENAME CHANNEL GRAPHENE_VERSION OUT_DIR \
   KEYS_DIR LOGIN_SERVER AUTHKEY_FILE PASS_FILE DEVICE_ID SUPERDOMAIN \
   PHONE_ROLE PROFILE_NAME TAILSCALE_APK APK_SIGNER_SHA256 INGEST_URL \
   CLIENT_CERT CLIENT_KEY CA INTERNAL_TOKEN_FILE HEADWIND_APK \
   HEADWIND_SIGNER_SHA256 HEADWIND_URL AUDITOR_APK AUDITOR_SIGNER_SHA256 \
-  ATTESTATION_URL
+  ATTESTATION_URL \
+  YES FORCE FORCE_FWUPD RESOLVE SHOW_AUTHKEY PLAN_VERB
 _PHONE_ARGS = --work-dir "$$PHONE_WORK_DIR" \
   $${SERIAL:+--serial "$$SERIAL"} \
   $${CODENAME:+--codename "$$CODENAME"} \
@@ -544,14 +553,14 @@ _PHONE_ARGS = --work-dir "$$PHONE_WORK_DIR" \
   $${AUDITOR_APK:+--auditor-apk "$$AUDITOR_APK"} \
   $${AUDITOR_SIGNER_SHA256:+--auditor-signer-sha256 "$$AUDITOR_SIGNER_SHA256"} \
   $${ATTESTATION_URL:+--attestation-url "$$ATTESTATION_URL"} \
-  $(if $(strip $(YES)),--yes) \
-  $(if $(strip $(FORCE)),--force) \
-  $(if $(strip $(FORCE_FWUPD)),--force-fwupd) \
-  $(if $(strip $(RESOLVE)),--resolve) \
-  $(if $(strip $(SHOW_AUTHKEY)),--show-authkey)
+  $${YES:+--yes} \
+  $${FORCE:+--force} \
+  $${FORCE_FWUPD:+--force-fwupd} \
+  $${RESOLVE:+--resolve} \
+  $${SHOW_AUTHKEY:+--show-authkey}
 
 phone-plan: ## dry-run the MDM phone wizard: validate knobs + catalog, print PLAN_* lines ([PLAN_VERB=flash] plans one verb)
-	@bash scripts/phone-wizard.sh plan $(PLAN_VERB) $(_PHONE_ARGS)
+	@bash scripts/phone-wizard.sh plan $${PLAN_VERB} $(_PHONE_ARGS)
 
 phone-detect: ## read-only probe of the USB-connected Pixel (serial, codename, current OS)
 	@bash scripts/phone-wizard.sh detect $(_PHONE_ARGS)
@@ -560,7 +569,7 @@ phone-fetch: ## download + sshsig-VERIFY the GrapheneOS install zip (CODENAME=�
 	@bash scripts/phone-wizard.sh fetch $(_PHONE_ARGS)
 
 phone-flash: ## DESTRUCTIVE: wipe + flash the VERIFIED artifact (SERIAL=… required; non-TTY also YES=1)
-	$(if $(strip $(SERIAL)),,$(error phone-flash: refusing — SERIAL= is required (make phone-detect lists connected devices)))
+	@[ -n "$$SERIAL" ] || { echo 'phone-flash: refusing — SERIAL= is required (make phone-detect lists connected devices)' >&2; exit 2; }
 	@bash scripts/phone-wizard.sh flash $(_PHONE_ARGS)
 
 phone-enroll: ## join the flashed phone to the mesh tailnet (KEYS_DIR=… or LOGIN_SERVER=…+AUTHKEY_FILE=…)
