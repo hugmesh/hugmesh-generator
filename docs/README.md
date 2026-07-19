@@ -8,6 +8,7 @@ The doc set for the image/infra layer. State key used throughout:
 ## Operating & building
 
 - [`RUNNING.md`](RUNNING.md) — end-to-end runbook (clone → build → keys → flash → provision → cluster).
+- [`NIXOS-STEAMOS.md`](NIXOS-STEAMOS.md) — launching the Studio wizard + ncurses menu on NixOS / SteamOS (Steam Deck) / Arch / Debian / Fedora: the additive Nix flake (`flake.nix`/`shell.nix`) + the portable POSIX launcher (`scripts/studio-launch.sh`) for hosts without `python3`/`make`/FHS (✅).
 - [`LOCAL-TESTING.md`](LOCAL-TESTING.md) — LAN `.test` fleet testing.
 - [`LOCAL-STACK.md`](LOCAL-STACK.md) — `make stack-up` local-dev compose stack (opt-in upstream Synapse/Mastodon for dev only).
 - [`DEVOPS.md`](DEVOPS.md) — GitLab CI, runner, binhost, build distribution.
