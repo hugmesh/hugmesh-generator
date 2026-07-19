@@ -1,13 +1,13 @@
 # specs/cluster/manifests/attestation-server/Dockerfile
 #
-# STATUS: BUILD STAGE PROVEN; runtime packaging not yet run. Grounded in real source reads of
-# GrapheneOS/AttestationServer (commit 98b6c130, main). The build stage below was VERIFIED
-# 2026-07-17 on the host (openjdk 25, Gradle wrapper 9.6.1): clone 98b6c130 --recurse-submodules,
-# apply the DOMAIN + bind seds below, `./gradlew build` -> BUILD SUCCESSFUL in ~18s, producing
-# build/libs/attestation-server.jar + the native libsqlite4java-linux-amd64-1.0.392.so + deps (the
-# full deployable unit). So the source + our two patches compile cleanly. What remains UNproven:
-# the runtime stage's image packaging (base image, non-root user, COPY of build/libs, ENTRYPOINT)
-# has not been run as an actual `docker build` here — validate that before trusting it in a cluster.
+# STATUS: FULL IMAGE PROVEN — real `docker build` green + smoke-booted 2026-07-19 (507MB): the
+# container starts as uid=1000(attestation), applies the SQLite schema ("Existing schema version: 1")
+# and creates /data/attestation.db{,-shm,-wal} owned 1000:1000 with the native sqlite4java .so
+# loading. The build stage was first proven on-host 2026-07-17 (openjdk 25, Gradle 9.6.1, ~18s).
+# The first real docker builds also caught + fixed three packaging bugs: git absent from the temurin
+# builder base; the runtime base's preexisting ubuntu UID/GID 1000 colliding with `attestation`; and
+# Patch 3's digest sed assuming a single-line declaration (it is line-wrapped — see Patch 3).
+# Still gated on operator custody: a REAL --build-arg AUDITOR_SIGNER_DIGEST (see FORK COUPLING).
 #
 # STRUCTURAL DIFFERENCE FROM headwind's Dockerfile: AttestationServer is a standalone Java app with
 # its OWN embedded com.sun.net.httpserver.HttpServer (not a servlet-container WAR deploy like
@@ -33,6 +33,12 @@
 # ---- Stage 1: build ----
 FROM eclipse-temurin:25-jdk AS builder
 WORKDIR /build
+
+# git is NOT in the temurin base (first real build failed here: "git: not
+# found") — needed for the pinned clone + its sqlite4java submodule.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 ARG ATTESTATION_COMMIT=98b6c130
 ARG ATTESTATION_DOMAIN=attestation.snapdragon.systems
@@ -84,16 +90,17 @@ RUN sed -i \
 # upstream values: harmless dead pins that no real device of ours will ever present, and cheapest to
 # keep in sync with any future upstream AttestationProtocol.java changes.
 #
-# Identifier names are source-confirmed (spec §3 table, real read of AttestationProtocol.java:164-172);
-# the exact declaration syntax around each identifier (field type/visibility) is NOT independently
-# re-verified in this pass — the sed below matches on the identifier + the known stock literal value
-# only, and the grep -q afterward is the real gate: if upstream's declaration shape ever changes, this
-# build fails LOUD instead of silently keeping the stock (wrong) pin.
+# Declaration shape CONFIRMED at 98b6c130 by the first real docker build (whose fail-loud grep gate
+# caught the original single-line assumption): AUDITOR_APP_PACKAGE_NAME_RELEASE keeps `= "literal"` on
+# ONE line, but AUDITOR_APP_SIGNATURE_DIGEST_RELEASE is LINE-WRAPPED (`... =` newline `"990E..."`,
+# AttestationProtocol.java:167-168) — so the digest sed matches the unique stock digest LITERAL
+# itself, not the declaration. The greps stay the real gate: if upstream reshapes either declaration
+# again, this build fails LOUD instead of silently keeping the stock (wrong) pin.
 RUN sed -i \
     "s|AUDITOR_APP_PACKAGE_NAME_RELEASE = \"app.attestation.auditor\"|AUDITOR_APP_PACKAGE_NAME_RELEASE = \"${AUDITOR_PACKAGE}\"|" \
     src/main/java/app/attestation/server/AttestationProtocol.java \
     && sed -i \
-    "s|AUDITOR_APP_SIGNATURE_DIGEST_RELEASE = \"990E04F0864B19F14F84E0E432F7A393F297AB105A22C1E1B10B442A4A62C42C\"|AUDITOR_APP_SIGNATURE_DIGEST_RELEASE = \"${AUDITOR_SIGNER_DIGEST}\"|" \
+    "s|\"990E04F0864B19F14F84E0E432F7A393F297AB105A22C1E1B10B442A4A62C42C\"|\"${AUDITOR_SIGNER_DIGEST}\"|" \
     src/main/java/app/attestation/server/AttestationProtocol.java \
     && grep -q "${AUDITOR_PACKAGE}" src/main/java/app/attestation/server/AttestationProtocol.java \
     && grep -q "${AUDITOR_SIGNER_DIGEST}" src/main/java/app/attestation/server/AttestationProtocol.java
@@ -117,7 +124,13 @@ RUN ./gradlew build --no-daemon
 # ---- Stage 2: runtime ----
 FROM eclipse-temurin:25-jre AS runtime
 
-RUN groupadd -g 1000 attestation \
+# The Ubuntu-based temurin runtime ALREADY ships an `ubuntu` user at UID/GID
+# 1000 (first real build failed on "GID '1000' already exists") — remove it and
+# claim 1000 for `attestation`, keeping the image UID aligned with
+# attestation-server.yaml's runAsUser/runAsGroup/fsGroup: 1000.
+RUN userdel -r ubuntu 2>/dev/null || true \
+    && groupdel ubuntu 2>/dev/null || true \
+    && groupadd -g 1000 attestation \
     && useradd -u 1000 -g attestation -M -s /usr/sbin/nologin attestation \
     && mkdir -p /app /data \
     && chown -R attestation:attestation /app /data

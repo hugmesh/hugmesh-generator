@@ -11,11 +11,16 @@
 # source provenance. See headwind.yaml's "WAR PROVENANCE" header comment for
 # the full rationale.
 #
-# ─────────────────────── STATUS: STARTING POINT, NOT PROVEN ───────────────────
-# This Dockerfile has NOT been test-built in this recon pass. Every path/file
-# name below is believed-correct from reading the upstream source tree, not
-# verified by a green `docker build`. Three real gaps before it can be trusted
-# as CI-buildable:
+# ─────────────────────── STATUS: PROVEN by a real `docker build` ──────────────
+# Built green 2026-07-19 (948MB) against hmdm-server@daed2099 staged as the
+# build context with this Dockerfile + docker/ copied in: full Maven reactor +
+# frontend-maven-plugin (Node/npm/grunt AngularJS bundle) -> a real 43MB
+# webapps/ROOT.war; smoke run confirms USER hmdm uid/gid 1000, the entrypoint
+# rendering ROOT.xml (0600, XML-entity-escaped values — a password containing
+# & | @ round-trips) + init.sql (ADMIN_EMAIL stamped, zero h-mdm.com URLs
+# left), then waiting on Postgres. The first real build also caught the missing
+# server/build.properties requirement (now vendored + build-time-randomized
+# secrets — see below). Remaining operational notes:
 #
 #   1. BUILD-TIME EGRESS (NOT air-gap-friendly without a mirror): the reactor's
 #      server/pom.xml runs the frontend-maven-plugin, which downloads Node 18 +
@@ -25,16 +30,17 @@
 #      real internet egress (or an internal npm/jitpack mirror) at image-build
 #      time; this is a harder requirement than the platform's usual
 #      Maven-Central-only builds.
-#   2. UNVENDORED FILES: hmdm-docker's docker-entrypoint.sh (the env->ROOT.xml
-#      templating logic headwind.yaml's ConfigMap/env block depends on) +
-#      templates/conf/context_template.xml + tomcat_conf/server.xml are NOT
-#      present anywhere in this repo. They must be fetched from the Apache-2.0
-#      h-mdm/hmdm-docker repo (pinned ref) and vendored into a docker/ subdir
-#      next to this Dockerfile (paths referenced below) before this build can
-#      succeed — it will fail on the COPY steps until that happens.
-#   3. The launcher.war output path (server/target/launcher.war) and the
-#      ROOT.xml JDBC.*/SQL_*/PROTOCOL/BASE_DOMAIN env contract are read from
-#      the upstream source tree, not confirmed by an actual build+boot.
+#   2. RESOLVED — runtime files are VENDORED under docker/ (see
+#      docker/README.md for the pinned h-mdm/hmdm-docker ref + provenance
+#      table): the two Tomcat templates + log4j + the hmdm_init.en.sql seed +
+#      recovery-mail templates verbatim, and a DERIVED docker-entrypoint.sh
+#      (upstream's is the prebuilt-WAR/root/letsencrypt flow — unusable here;
+#      the derivation header lists every divergence). The ROOT.xml
+#      SQL_*/PROTOCOL/BASE_DOMAIN env contract headwind.yaml carries is now
+#      CONFIRMED against the vendored context_template.xml.
+#   3. RESOLVED — the launcher.war output path (server/target/launcher.war) is
+#      CONFIRMED by the green reactor build (the runtime COPY --from=builder
+#      succeeded and the smoke run shows the 43MB ROOT.war in webapps/).
 #
 # aapt (Android Asset Packaging Tool) is a RUNTIME dependency (hmdm's
 # aapt.command config param parses uploaded APKs), not just a build tool —
@@ -47,6 +53,19 @@ WORKDIR /src
 # Network required: Maven Central + jitpack.io + the npm registry (transitively,
 # via frontend-maven-plugin — see gap #1 above).
 COPY . .
+# server/build.properties is REQUIRED by the reactor's copy-resources (first
+# real build failed without it: "Error loading property file"). The vendored
+# copy carries baked DEFAULTS only — every deployment-relevant key is overridden
+# at runtime by the entrypoint-rendered ROOT.xml context. The two baked secrets
+# (jwt.secretkey for console sessions, hash.secret) are randomized PER IMAGE
+# BUILD here so no committed constant ever ships in a layer.
+COPY docker/build.properties server/build.properties
+RUN JWT=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n') \
+    && HASH=$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n') \
+    && sed -i -e "s/^jwt.secretkey=RANDOMIZE-AT-IMAGE-BUILD/jwt.secretkey=${JWT}/" \
+              -e "s/^hash.secret=RANDOMIZE-AT-IMAGE-BUILD/hash.secret=${HASH}/" \
+              server/build.properties \
+    && ! grep -q RANDOMIZE-AT-IMAGE-BUILD server/build.properties
 RUN mvn -B -DskipTests install
 
 # ── stage 2: runtime ─────────────────────────────────────────────────────────
@@ -66,28 +85,32 @@ RUN apt-get update \
     && groupadd -g 1000 hmdm \
     && useradd -u 1000 -g hmdm -M -d /usr/local/tomcat -s /usr/sbin/nologin hmdm
 
-# TODO(unvendored — see gap #2 above): these three files do NOT exist in this
-# repo yet. Fetch from the Apache-2.0 h-mdm/hmdm-docker repo (pin a ref) and
-# vendor them into docker/ next to this Dockerfile before building — these
-# COPY steps will fail until then.
+# Vendored runtime files (docker/ next to this Dockerfile — stage it into the
+# build context alongside the hmdm-server checkout; provenance + pinned ref in
+# docker/README.md). Templates land under /opt/hmdm/templates (the upstream
+# TEMPLATE_DIR convention the entrypoint reads); server.xml replaces Tomcat's.
 COPY docker/docker-entrypoint.sh   /usr/local/bin/docker-entrypoint.sh
-COPY docker/context_template.xml   /usr/local/tomcat/conf/context_template.xml
+COPY docker/templates/             /opt/hmdm/templates/
 COPY docker/server.xml             /usr/local/tomcat/conf/server.xml
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# /dev/urandom for SecureRandom at BUILD time (upstream's entrypoint edits the
+# root-owned java.security at RUNTIME — impossible rootless; same effect here).
+RUN sed -i 's|securerandom.source=file:/dev/random|securerandom.source=file:/dev/urandom|' \
+        /opt/java/openjdk/conf/security/java.security
 
 # Replace the stock Tomcat welcome ROOT with the built Headwind WAR.
 RUN rm -rf /usr/local/tomcat/webapps/ROOT
 COPY --from=builder /src/server/target/launcher.war /usr/local/tomcat/webapps/ROOT.war
 
-RUN chown -R hmdm:hmdm /usr/local/tomcat
+RUN chown -R hmdm:hmdm /usr/local/tomcat /opt/hmdm
 USER hmdm
 
 # 8080 HTTP, 8443 HTTPS (unused — PROTOCOL=http forces the gateway-terminated
 # path, see headwind.yaml's ConfigMap), 31000 embedded ActiveMQ/MQTT.
 EXPOSE 8080 8443 31000
 
-# ENTRYPOINT invocation is a best-guess mirror of hmdm-docker's own image
-# (env-templating entrypoint that then execs Tomcat) — NOT verified against an
-# actual build; confirm docker-entrypoint.sh's real exec line once vendored.
+# The DERIVED entrypoint renders ROOT.xml + init.sql from the vendored
+# templates, waits for Postgres, then exec's the CMD (upstream ran catalina
+# un-exec'd; ours preserves PID-1 signal handling).
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["catalina.sh", "run"]

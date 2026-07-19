@@ -49,7 +49,7 @@ compiled or imaged here. Like the Local Docker mesh and the go-live wizard triad
 the faces stay thin: `make phone-*` targets (✅ shipped, host-side pass-through
 delegates in the Makefile — never dispatched into the builder container, since
 the driver needs the host USB bus and a real TTY for its destructive gates;
-`mdm-enroll`/`attest` have no `make` target yet, see [Deferred](#deferred));
+all 13 verbs have targets, including `phone-mdm-enroll`/`phone-attest`);
 ncurses-menu/Studio faces are 🔭 (see [Deferred](#deferred)).
 
 ## Verbs (the real surface)
@@ -596,7 +596,7 @@ mismatch anywhere in the chain fails closed, never silently.
 | Escrowed enterprise profile (vault-seed custody, operator-set default, atomic rotation, revocation trail) | `profile` / `rotate-profile-pass` / `remove-profile` | 🚧 |
 | `phone-ingest/v1` registry record + mTLS POST | `ingest` | 🚧 |
 | Offline `plan` dry-run + `REDACTED` secret discipline | `plan` / `--print-plan` | 🚧 |
-| `make phone-*` thin face (host-side delegates; secrets stay file-path knobs) — missing `mdm-enroll`/`attest` targets | `Makefile` | 🚧 (11/13 verbs) |
+| `make phone-*` thin face (host-side delegates; secrets stay file-path knobs) — all 13 verbs incl. `phone-mdm-enroll`/`phone-attest` | `Makefile` | 🚧 |
 | Thin ncurses-menu/Studio faces over the driver (non-build precedent) | — | 🔭 |
 | APK store (general fleet app push/update/delete beyond the wizard's own vetted, signer-pinned sideloads) | — | 🔭 (deliberate v1 non-goal; Headwind's own console can do this directly, see [Remote-management model](#remote-management-model)) |
 | Existing-device onboarding (GrapheneOS + stock Android, USB-guided or `--no-usb`, no reflash) | `enroll` | 🚧 |
@@ -618,13 +618,10 @@ APK-store half of that non-goal still stands (see the Summary table).
 
 - **Thin ncurses-menu/Studio faces** — over the driver's verbs, exactly like
   the Local Docker mesh and go-live precedents (driver owns all logic; faces
-  stay thin, no build-matrix row). The `make phone-*` face is ✅ merged
-  (`phone-plan`/`phone-detect`/`phone-fetch`/`phone-flash`/`phone-enroll`/
-  `phone-profile`/`phone-rotate-profile-pass`/`phone-remove-profile`/
-  `phone-ingest`/`phone-status`/`phone-wizard` targets in the `Makefile`) but
-  **has no `phone-mdm-enroll` / `phone-attest` targets yet** — confirmed absent
-  via `grep '^phone-' Makefile` — so the two newest verbs are only reachable
-  via `scripts/phone-wizard.sh` directly, not `make`.
+  stay thin, no build-matrix row). The `make phone-*` face is ✅ complete —
+  all 13 verbs, including `phone-mdm-enroll` and `phone-attest` (with the
+  `HEADWIND_*`/`AUDITOR_*`/`ATTESTATION_URL`/`INTERNAL_TOKEN_FILE` knobs
+  forwarded file-path-only, per the custody pattern).
 - **Casdoor SSO for Headwind** — nothing in this recon confirmed Headwind has
   OIDC/SAML support (its own auth is local username/password behind a
   pluggable `HmdmAuthInterface`); until that is independently confirmed,

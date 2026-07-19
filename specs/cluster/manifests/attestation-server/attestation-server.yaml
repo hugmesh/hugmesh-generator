@@ -47,9 +47,9 @@ spec:
       nodeSelector: { snapdragon.systems/pki: "true" }   # co-locate w/ harbor/vault/casdoor/headwind
       securityContext:
         runAsNonRoot: true
-        runAsUser: 1000    # TODO(confirm): must match the Dockerfile's non-root `attestation` user UID
-        runAsGroup: 1000   # TODO(confirm)
-        fsGroup: 1000      # TODO(confirm): must own the PVC mount so both containers can read/write attestation.db
+        runAsUser: 1000    # CONFIRMED by a real image build+boot: USER attestation is uid=1000
+        runAsGroup: 1000   # CONFIRMED: gid=1000(attestation)
+        fsGroup: 1000      # CONFIRMED: the smoke boot created /data/attestation.db{,-shm,-wal} owned 1000:1000
         seccompProfile: { type: RuntimeDefault }
         seLinuxOptions: { type: container_t, level: "s0:c79" }  # next free MCS category (headwind-db holds c77, headwind holds c78 — docs/SECURITY.md)
       containers:
