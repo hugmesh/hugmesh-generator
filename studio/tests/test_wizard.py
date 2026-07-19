@@ -481,7 +481,7 @@ def test_buildpage_unaffiliated_generic_knobs_still_flow(wiz):
     build.cached.setChecked(True)
     build._preview()
     args = wiz.cfg.to_cli_args()
-    assert ("--img-size", "6144") in zip(args, args[1:]) and "--cached" in args
+    assert ("--img-size", 9216) in zip(args, args[1:]) and "--cached" in args
 
 
 def test_buildpage_role_detour_round_trips_bundle_source(wiz):

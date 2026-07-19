@@ -459,7 +459,7 @@ OPTIONS
         to the size of the target USB. growroot then expands the root to fill
         the medium (or the --grow cap) on first boot, so this only needs to
         fit the stage4 plus a little headroom.
-        Default: 6144
+        Default:9216
 
     --grow fill|none|<size>
         First-boot grow policy baked into the image (/etc/growfs.conf, read
