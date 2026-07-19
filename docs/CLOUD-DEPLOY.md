@@ -109,6 +109,27 @@ Gen2 image, VM Image Builder template, Entra notes) · `openshift-cnv`
   its own message (use the ncurses/Makefile face on a real terminal) — the GUI
   never injects an answer.
 
+## Identity provider passthrough
+
+Every deploy face carries the same IdP picker the node and local-mesh setups
+offer: the built-in IdP (Casdoor) is the default and adds **nothing** to the
+plan; picking an external provider (`--idp entra|aws|oidc` + `--idp-issuer`,
+optional `--idp-client-id`/`--idp-jwks`; GUI combo; ncurses "Identity provider"
+entry; `make deploy-plan IDP= IDP_ISSUER=…`) makes the plan additionally emit
+`idp/idp.conf` + `idp/README.md` — the same shape the node builders bake as
+`/etc/snapdragon/idp.conf`, so the deployed VM and its operator agree on the
+issuer. Deploying an image *built* with external-IdP flags? Pick the same
+provider here. Entra's JWKS defaults to `/discovery/v2.0/keys` (it does not
+serve `/.well-known/jwks`); Cognito's group claims arrive as `cognito:groups`.
+See `docs/IDENTITY-PROVIDERS.md` for what external mode does and does not
+change.
+
+For the **local docker stack**, the same override rides the Makefile seam:
+`make stack-up OIDC_ISSUER=https://login.microsoftonline.com/<tenant>/v2.0`
+replaces the derived Casdoor issuer in `STACK_ENV`; empty/unset leaves today's
+behavior byte-for-byte. The azure plan's `entra/env/` fragments reference this
+seam too.
+
 ## Where things live
 
 | Piece | Path |

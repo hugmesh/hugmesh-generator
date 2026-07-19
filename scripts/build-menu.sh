@@ -1705,6 +1705,7 @@ deploy_screen() {
         return 0
     fi
     local provider="" image="" domain="" region="" creds_file="" creds="" out_dir="" keys_dir="" choice
+    local idp="" idp_issuer="" idp_client_id="" idp_jwks=""
     while :; do
         local credl
         if [ -n "${creds}" ]; then credl='(pasted — staged 0600 at run, then shredded)'
@@ -1720,6 +1721,7 @@ deploy_screen() {
             creds    "Creds (paste) ........ ${credl}" \
             outdir   "Out dir .............. ${out_dir:-<driver default>}" \
             keysdir  "Keys dir ............. ${keys_dir:-<unset>}" \
+            idp      "Identity provider .... ${idp:-casdoor (built-in, default)}" \
             list     "List providers (the driver's registry table)" \
             plan     "★ Plan — render the provider artifacts OFFLINE (touches NO cloud)" \
             apply    "APPLY the rendered plan (driver-confirmed; real resources, real cost)" \
@@ -1735,16 +1737,33 @@ deploy_screen() {
             creds)    creds="$(ui_password "Creds (paste)" "Paste credential content (blank = use the creds-file path). Staged to a chmod-600 temp file at run, shredded after — never on argv, never saved." "${creds}")" ;;
             outdir)   out_dir="$(ui_input "Out dir" "Where 'plan' renders its artifacts (blank = driver default)" "${out_dir}")" ;;
             keysdir)  keys_dir="$(ui_input "Keys dir" "Optional keys dir for the provider's KEYS-volume notes" "${keys_dir}")" ;;
+            idp)
+                # Same picker the node/localmesh setups offer: built-in default
+                # adds nothing; an external pick asks for its issuer details.
+                idp="$(ui_menu "Identity provider" \
+                    "The built-in IdP is the default (emits nothing extra). Pick an external provider to record it in the plan's idp/idp.conf — deploys of an image BUILT with external IdP flags should match." \
+                    casdoor "Built-in (default)" \
+                    entra   "Azure Entra ID" \
+                    aws     "AWS Cognito" \
+                    oidc    "Other OIDC provider")" || continue
+                if [ -n "${idp}" ] && [ "${idp}" != "casdoor" ]; then
+                    idp_issuer="$(ui_input "IdP issuer" "https:// issuer URL — Entra: https://login.microsoftonline.com/<tenant>/v2.0 ; Cognito: https://cognito-idp.<region>.amazonaws.com/<pool-id>" "${idp_issuer}")"
+                    idp_client_id="$(ui_input "IdP client id" "Optional client id registered at the IdP" "${idp_client_id}")"
+                    idp_jwks="$(ui_input "IdP JWKS" "Optional JWKS URL override (Entra defaults to /discovery/v2.0/keys)" "${idp_jwks}")"
+                else
+                    idp="" idp_issuer="" idp_client_id="" idp_jwks=""
+                fi ;;
             list|plan|apply|status|destroy)
-                _deploy_run "${choice}" "${provider}" "${image}" "${domain}" "${region}" "${creds_file}" "${creds}" "${out_dir}" "${keys_dir}" ;;
+                _deploy_run "${choice}" "${provider}" "${image}" "${domain}" "${region}" "${creds_file}" "${creds}" "${out_dir}" "${keys_dir}" "${idp}" "${idp_issuer}" "${idp_client_id}" "${idp_jwks}" ;;
             back|"") return 0 ;;
         esac
     done
 }
 
-# _deploy_run VERB PROVIDER IMAGE DOMAIN REGION CREDS_FILE CREDS OUT_DIR KEYS_DIR —
-# one child invocation of the shared entrypoint, flags in the driver's pinned order
-# (--provider --image --domain --region --creds-file --out-dir --keys-dir). Pasted
+# _deploy_run VERB PROVIDER IMAGE DOMAIN REGION CREDS_FILE CREDS OUT_DIR KEYS_DIR
+# [IDP IDP_ISSUER IDP_CLIENT_ID IDP_JWKS] — one child invocation of the shared
+# entrypoint, flags in the driver's pinned order (--provider --image --domain
+# --region --creds-file --out-dir --keys-dir --idp*). Pasted
 # creds (when set) go into a chmod-600 mktemp file (off the argv / process table)
 # as --creds-file and are shredded afterwards — _local_mesh_bootstrap_run's exact
 # pattern, sharing the _phone_shred_key INT/TERM/EXIT trap (the shredder reads the
@@ -1753,6 +1772,7 @@ deploy_screen() {
 # confirmation prompts reach the operator (deliberately no --yes / CD_ASSUME_YES).
 _deploy_run() {
     local verb="$1" provider="$2" image="$3" domain="$4" region="$5" creds_file="$6" creds="$7" out_dir="$8" keys_dir="$9"
+    local idp="${10:-}" idp_issuer="${11:-}" idp_client_id="${12:-}" idp_jwks="${13:-}"
     local -a args=("${verb}")
     [ -n "${provider}" ] && args+=(--provider "${provider}")
     [ -n "${image}" ]    && args+=(--image "${image}")
@@ -1770,6 +1790,13 @@ _deploy_run() {
     fi
     [ -n "${out_dir}" ]  && args+=(--out-dir "${out_dir}")
     [ -n "${keys_dir}" ] && args+=(--keys-dir "${keys_dir}")
+    # IdP passthrough: casdoor/blank adds nothing (argv identical to pre-IdP).
+    if [ -n "${idp}" ] && [ "${idp}" != "casdoor" ]; then
+        args+=(--idp "${idp}")
+        [ -n "${idp_issuer}" ]    && args+=(--idp-issuer "${idp_issuer}")
+        [ -n "${idp_client_id}" ] && args+=(--idp-client-id "${idp_client_id}")
+        [ -n "${idp_jwks}" ]      && args+=(--idp-jwks "${idp_jwks}")
+    fi
     args+=(--generator-dir "${REPO_DIR}")
     local rc=0
     case "${verb}" in

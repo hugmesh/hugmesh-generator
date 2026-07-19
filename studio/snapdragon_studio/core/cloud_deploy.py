@@ -104,6 +104,12 @@ class CloudDeployOptions:
     out_dir: str = ""       # where plan renders its artifacts
     keys_dir: str = ""
     creds: str = ""         # transient secret — staged to a 0600 file, never argv
+    # IdP passthrough (I7): casdoor is the native default and emits NOTHING; an
+    # external choice (entra/aws/oidc) makes the plan add idp/idp.conf artifacts.
+    idp: str = ""           # "" or casdoor = default; entra / aws / oidc = external
+    idp_issuer: str = ""
+    idp_client_id: str = ""
+    idp_jwks: str = ""
 
     def to_cli_args(self) -> list[str]:
         """The driver flags (no verb, no secret) in the driver's pinned order:
@@ -126,6 +132,15 @@ class CloudDeployOptions:
             args += ["--out-dir", self.out_dir.strip()]
         if self.keys_dir.strip():
             args += ["--keys-dir", self.keys_dir.strip()]
+        # casdoor/blank emits nothing — argv stays byte-identical to pre-IdP flows.
+        if self.idp.strip() and self.idp.strip() != "casdoor":
+            args += ["--idp", self.idp.strip()]
+            if self.idp_issuer.strip():
+                args += ["--idp-issuer", self.idp_issuer.strip()]
+            if self.idp_client_id.strip():
+                args += ["--idp-client-id", self.idp_client_id.strip()]
+            if self.idp_jwks.strip():
+                args += ["--idp-jwks", self.idp_jwks.strip()]
         return args
 
 
@@ -162,10 +177,13 @@ class CloudDeploy:
 
     def providers(self) -> list[tuple[str, str, str]]:
         """Parse ``snapdragon-cloud-deploy list`` — THE parseable registry API — into
-        (id, status, description) rows. The table is TAB-separated
-        ``ID<TAB>STATUS<TAB>DESCRIPTION``; a header row (ID in column one), ``#``
-        comments, blank lines and trailing prose (no TAB) are skipped. Driver
-        missing or failing → [] (the caller shows available()'s message)."""
+        (id, status, description) rows. The table is the go-live house shape:
+        space-padded printf columns ``ID FORMAT STATE DESCRIPTION`` whose first
+        three columns are single tokens, so ``split(None, 3)`` recovers the
+        description verbatim (golive_driver.py precedent — NEVER tab-dependent).
+        The header row, ``#`` comments, blank lines and trailing prose are dropped
+        by requiring a known STATE token. Driver missing or failing → []
+        (the caller shows available()'s message)."""
         ok, _why = self.available()
         if not ok:
             return []
@@ -179,16 +197,18 @@ class CloudDeploy:
             return []
         rows: list[tuple[str, str, str]] = []
         for line in lines:
-            s = line.rstrip("\n")
-            if not s.strip() or s.lstrip().startswith("#") or "\t" not in s:
+            s = line.strip()
+            if not s or s.startswith("#"):
                 continue
-            parts = s.split("\t")
-            pid = parts[0].strip()
-            if not pid or pid.upper() == "ID":     # header row
+            parts = s.split(None, 3)
+            if len(parts) < 4:
                 continue
-            status = parts[1].strip() if len(parts) > 1 else ""
-            desc = parts[2].strip() if len(parts) > 2 else ""
-            rows.append((pid, status, desc))
+            pid, _fmt, state, desc = parts
+            # Known-STATE filter drops the header row and the epilogue prose
+            # (which also split into >=4 whitespace fields).
+            if pid.upper() == "ID" or state not in ("full", "stub"):
+                continue
+            rows.append((pid, state, desc))
         return rows
 
     # ── command assembly ─────────────────────────────────────────────────────────

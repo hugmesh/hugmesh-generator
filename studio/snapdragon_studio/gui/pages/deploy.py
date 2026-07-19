@@ -149,6 +149,35 @@ class DeployPage(QtWidgets.QWizardPage):
         kd_row.addWidget(self.keys_browse)
         lay.addWidget(_row("Keys dir", self._wrap(kd_row)))
 
+        # IdP passthrough (same picker the node/localmesh setups offer): the
+        # built-in IdP is the default and adds nothing; an external choice makes
+        # the plan emit idp/idp.conf beside the provider artifacts.
+        self.idp = QtWidgets.QComboBox()
+        self.idp.addItem("Casdoor (built-in — default)", "")
+        self.idp.addItem("Azure Entra ID", "entra")
+        self.idp.addItem("AWS Cognito", "aws")
+        self.idp.addItem("Other OIDC provider", "oidc")
+        self.idp.setToolTip(
+            "Identity provider recorded in the plan's idp/idp.conf. The built-in "
+            "default emits nothing; deploys of an image BUILT with external IdP "
+            "flags should pick the same provider here.")
+        self.idp.currentIndexChanged.connect(self._idp_changed)
+        lay.addWidget(_row("Identity provider", self.idp))
+
+        self.idp_issuer = QtWidgets.QLineEdit()
+        self.idp_issuer.setPlaceholderText(
+            "issuer URL — Entra: https://login.microsoftonline.com/<tenant>/v2.0 · "
+            "Cognito: https://cognito-idp.<region>.amazonaws.com/<pool-id>")
+        lay.addWidget(_row("IdP issuer", self.idp_issuer))
+        self.idp_client_id = QtWidgets.QLineEdit()
+        self.idp_client_id.setPlaceholderText("optional client id registered at the IdP")
+        lay.addWidget(_row("IdP client id", self.idp_client_id))
+        self.idp_jwks = QtWidgets.QLineEdit()
+        self.idp_jwks.setPlaceholderText(
+            "optional JWKS URL override (Entra defaults to /discovery/v2.0/keys)")
+        lay.addWidget(_row("IdP JWKS", self.idp_jwks))
+        self._idp_changed()
+
         # Plan preview (read-only, live) — the confirm-before-run surface.
         lay.addWidget(QtWidgets.QLabel("Plan preview (pure — nothing runs until you pick a verb):"))
         self.plan_view = QtWidgets.QPlainTextEdit()
@@ -271,6 +300,12 @@ class DeployPage(QtWidgets.QWizardPage):
         if d:
             self.keys_dir.setText(d)
 
+    def _idp_changed(self, *_a):
+        """External IdP enables its detail fields; the built-in default greys them."""
+        external = bool(self.idp.currentData())
+        for w in (self.idp_issuer, self.idp_client_id, self.idp_jwks):
+            w.setEnabled(external)
+
     def collect(self) -> CloudDeployOptions:
         """Widgets -> CloudDeployOptions (pasted creds transient — never persisted)."""
         return CloudDeployOptions(
@@ -282,6 +317,10 @@ class DeployPage(QtWidgets.QWizardPage):
             out_dir=self.out_dir.text().strip(),
             keys_dir=self.keys_dir.text().strip(),
             creds=self.creds.text().strip(),
+            idp=(self.idp.currentData() or ""),
+            idp_issuer=self.idp_issuer.text().strip(),
+            idp_client_id=self.idp_client_id.text().strip(),
+            idp_jwks=self.idp_jwks.text().strip(),
         )
 
     def _reload_providers(self):

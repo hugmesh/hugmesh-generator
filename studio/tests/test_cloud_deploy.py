@@ -39,8 +39,9 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 # A stub driver that records its argv and — at CHILD runtime — the --creds-file's
 # content + octal mode + path, proving the secret travels by 0600 file only. Its
-# `list` verb emits the I2 TAB table (header + rows + trailing prose) so the
-# provider-picker parse is proven against the registry's pinned shape.
+# `list` verb emits the REAL driver's space-padded printf table (header + rows +
+# trailing prose) so the provider-picker parse is proven against the go-live
+# house shape, never a tab-dependent one.
 _STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$@" >"${CD_STUB_OUT:?}/argv"
 prev=""
@@ -53,13 +54,15 @@ for a in "$@"; do
     prev="${a}"
 done
 if [ "$1" = "list" ]; then
-    printf 'ID\\tSTATUS\\tDESCRIPTION\\n'
-    printf 'aws-ec2\\tfull\\tAWS EC2 AMI via import-snapshot\\n'
-    printf 'azure-image\\tfull\\tAzure managed image (Gen2 fixed VHD)\\n'
-    printf 'openshift-cnv\\tfull\\tOpenShift Virtualization (KubeVirt qcow2)\\n'
-    printf 'generic-qcow2\\tfull\\tAny libvirt/qcow2 host or PaaS\\n'
-    printf '\\n'
-    printf 'All providers are fully implemented.\\n'
+    # The REAL driver's table shape: space-padded printf columns (go-live house
+    # pattern), NEVER tabs — the parser must whitespace-split, not tab-split.
+    printf '%-16s %-10s %-6s %s\n' 'ID' 'FORMAT' 'STATE' 'DESCRIPTION'
+    printf '%-16s %-10s %-6s %s\n' 'aws-ec2' 'raw' 'full' 'AWS EC2 AMI via import-snapshot'
+    printf '%-16s %-10s %-6s %s\n' 'azure-image' 'vhd-fixed' 'full' 'Azure managed image (Gen2 fixed VHD)'
+    printf '%-16s %-10s %-6s %s\n' 'openshift-cnv' 'qcow2' 'full' 'OpenShift Virtualization (KubeVirt qcow2)'
+    printf '%-16s %-10s %-6s %s\n' 'generic-qcow2' 'qcow2' 'full' 'Any libvirt/qcow2 host or PaaS'
+    printf '\n'
+    printf 'All providers are fully implemented. plan --provider ID emits artifacts.\n'
 fi
 echo "stub ran verb=$1"
 exit "${CD_STUB_RC:-0}"
@@ -168,9 +171,31 @@ def test_to_cli_args_never_contains_pasted_creds():
     assert opts.to_cli_args() == ["--provider", "aws-ec2"]
 
 
+def test_to_cli_args_idp_default_emits_nothing():
+    # The built-in default keeps argv byte-identical to pre-IdP flows — both the
+    # blank and the explicit "casdoor" spelling.
+    for default in ("", "casdoor"):
+        opts = CloudDeployOptions(provider="aws-ec2", idp=default,
+                                  idp_issuer="https://x.example")
+        assert opts.to_cli_args() == ["--provider", "aws-ec2"]
+
+
+def test_to_cli_args_idp_external_appends_after_pinned_flags():
+    opts = CloudDeployOptions(
+        provider="azure-image", idp="entra",
+        idp_issuer="https://login.microsoftonline.com/tid/v2.0",
+        idp_client_id="app-mesh")
+    assert opts.to_cli_args() == [
+        "--provider", "azure-image",
+        "--idp", "entra",
+        "--idp-issuer", "https://login.microsoftonline.com/tid/v2.0",
+        "--idp-client-id", "app-mesh",
+    ]
+
+
 # ---- pure-core: provider registry parse + availability --------------------------
 
-def test_providers_parses_the_tab_table_and_skips_header_and_prose(tmp_path, monkeypatch):
+def test_providers_parses_the_space_padded_table_and_skips_header_and_prose(tmp_path, monkeypatch):
     _install_stub(tmp_path, monkeypatch)
     rows = CloudDeploy(str(tmp_path)).providers()
     assert [r[0] for r in rows] == ["aws-ec2", "azure-image", "openshift-cnv",

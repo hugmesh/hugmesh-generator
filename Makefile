@@ -614,12 +614,17 @@ phone-wizard: ## interactive guided full phone flow (TTY): detect->fetch->flash-
 # Knobs (forwarded only when set; DEPLOY_IMAGE, because IMAGE is the builder-
 # container knob at the top of this file):
 #   PROVIDER= DEPLOY_IMAGE= DOMAIN= REGION= CREDS_FILE= OUT_DIR= KEYS_DIR=
+#   IDP= IDP_ISSUER= IDP_CLIENT_ID= IDP_JWKS=   (IdP passthrough; casdoor default)
 # The values are read by BASH ($${VAR:+…}), not spliced by Make — the
-# _PHONE_ARGS injection custody: a $(shell …) payload in a knob stays an
-# inert string instead of executing at recipe-expansion time. All of these
-# knobs are command-line/environment supplied (no Makefile-side defaults),
-# and both sources are auto-exported to the recipe shell, so no export line
-# is needed.
+# _PHONE_ARGS injection custody: an ENVIRONMENT-supplied $(shell …) payload
+# stays an inert string instead of executing at recipe-expansion time. (A
+# command-line assignment `make deploy-plan 'PROVIDER=$(shell …)'` still
+# expands at Make's own assignment step — identical to the phone-* precedent
+# and to every Make CLI variable; invoking make already implies shell access,
+# so the custody line here is the env/recipe path, not the CLI assignment.)
+# All of these knobs are command-line/environment supplied (no Makefile-side
+# defaults), and both sources are auto-exported to the recipe shell, so no
+# export line is needed.
 _CLOUD_DEPLOY_ARGS = $${PROVIDER:+--provider "$$PROVIDER"} \
   $${DEPLOY_IMAGE:+--image "$$DEPLOY_IMAGE"} \
   $${DOMAIN:+--domain "$$DOMAIN"} \
@@ -627,6 +632,10 @@ _CLOUD_DEPLOY_ARGS = $${PROVIDER:+--provider "$$PROVIDER"} \
   $${CREDS_FILE:+--creds-file "$$CREDS_FILE"} \
   $${OUT_DIR:+--out-dir "$$OUT_DIR"} \
   $${KEYS_DIR:+--keys-dir "$$KEYS_DIR"} \
+  $${IDP:+--idp "$$IDP"} \
+  $${IDP_ISSUER:+--idp-issuer "$$IDP_ISSUER"} \
+  $${IDP_CLIENT_ID:+--idp-client-id "$$IDP_CLIENT_ID"} \
+  $${IDP_JWKS:+--idp-jwks "$$IDP_JWKS"} \
   --generator-dir .
 
 deploy-plan: ## render the cloud-deploy provider artifacts OFFLINE (PROVIDER= DEPLOY_IMAGE= [DOMAIN= REGION= CREDS_FILE= OUT_DIR= KEYS_DIR=])
