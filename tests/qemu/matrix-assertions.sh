@@ -44,6 +44,27 @@ _ma_py() {
     ( cd "${MA_STUDIO}" && QT_QPA_PLATFORM=offscreen "${MA_PY}" "$@" )
 }
 
+# ── Golden-artifact resolution (mirrors each launcher's autodetect convention) ─────
+# resolve_artifact PLATFORM BOARD ROLE [WORK_DIR] -> newest matching .img/.img.xz, or ""
+# (empty = no artifact for this row → the driver SKIPs it). The launcher does its own
+# precise autodetect too; the driver resolves here so it can decide SKIP-vs-boot AND
+# hand the launcher an explicit --img (so both faces boot the SAME file). Kernel /
+# initramfs / squashfs / rootfs blobs are excluded so they can never be mistaken for a
+# bootable image.
+resolve_artifact() {
+    local plat="$1" board="$2" role="$3" wd="${4:-${WORK_DIR:-.}}" f pat
+    for pat in \
+        "${wd}/snapdragon-${plat}-${board:+${board}-}"*"${role}"*".img" \
+        "${wd}/snapdragon-${plat}-"*".img" \
+        "${wd}/snapdragon-${plat}-"*".img.xz" \
+        "${wd}/"*".img" ; do
+        # shellcheck disable=SC2086 -- intentional glob expansion of the pattern
+        f="$(ls -1t ${pat} 2>/dev/null | grep -viE '(kernel|initramfs|initrd|squashfs|/Image$|rootfs\.img)' | head -1)"
+        [ -n "${f}" ] && { printf '%s' "${f}"; return 0; }
+    done
+    return 0
+}
+
 # ── img_size / ROOT_MiB from a builder --print-plan blob ──────────────────────────
 # plan_root_mib < plan.txt  →  echoes the ROOT_MiB (img_size=) the row's builder plans.
 # Delegates to build_matrix.parse_img_size_mib so the shell + python read it identically.

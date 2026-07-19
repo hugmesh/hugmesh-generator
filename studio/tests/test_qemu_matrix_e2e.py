@@ -12,6 +12,7 @@ image-size formula, the ``img_size=``-from-``--print-plan`` parser, and the shel
 driver's ``--dry-run`` (which enumerates all 118 rows with no root/boot/builder).
 """
 import os
+import re
 import shutil
 import subprocess
 
@@ -155,6 +156,68 @@ def test_driver_boot_path_skips_clean_without_opt_in(monkeypatch):
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0
     assert "SKIP" in (r.stdout + r.stderr)
+
+
+def test_driver_boot_path_skips_when_no_artifact_even_opted_in(tmp_path):
+    # Opted in + qemu bypassed by the launcher stub, but the WORK_DIR is EMPTY: the row
+    # must SKIP because the ARTIFACT is absent — NOT because the boot path is a stub.
+    # (This is exactly why the no-build sandbox skips: no golden images, not "always skip".)
+    stub = tmp_path / "launch-stub.sh"
+    stub.write_text("#!/usr/bin/env bash\nexit 0\n"); stub.chmod(0o755)
+    env = {**os.environ, "SNAPDRAGON_QEMU_E2E": "1",
+           "SNAP_QEMU_LAUNCH_CMD": f"bash {stub}"}
+    r = subprocess.run(["bash", DRIVER, "--only", "x86/be+gpu", "-w", str(tmp_path)],
+                       env=env, capture_output=True, text=True, timeout=180)
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = r.stdout + r.stderr
+    assert "no golden artifact" in out           # the SKIP names the real reason
+    assert re.search(r"skip=[1-9]", out)
+
+
+def test_driver_really_boots_and_asserts_with_a_present_artifact(tmp_path):
+    """HERMETIC wiring proof (no real qemu / no build): with a resolvable artifact and
+    stub launcher/plan, the driver must ACTUALLY resolve → assert_size → boot →
+    assert_runtime_load → tally a PASS (ran increments, fail=0). Guards against a
+    regression to an unconditional-skip boot path."""
+    plan = tmp_path / "plan.sh"
+    plan.write_text('#!/usr/bin/env bash\necho "FLAGS_EFFECTIVE: role=$2 img_size=9216"\n'); plan.chmod(0o755)
+    launch = tmp_path / "launch.sh"
+    launch.write_text(
+        "#!/usr/bin/env bash\nrundir=''\n"
+        "while [ $# -gt 0 ]; do case \"$1\" in --run-dir) rundir=\"$2\"; shift 2;; *) shift;; esac; done\n"
+        "[ -n \"$rundir\" ] && printf 'boot\\n[  OK  ] reached target Graphical Interface\\nlogin:\\n' > \"$rundir/console.log\"\n"
+        "exit 0\n")
+    launch.chmod(0o755)
+    wd = tmp_path / "wd"; wd.mkdir()
+    (wd / "snapdragon-x86-be+gpu-prod-ts.img").write_bytes(b"\0" * (1 << 20))  # 1 MiB << ceiling
+    env = {**os.environ, "SNAPDRAGON_QEMU_E2E": "1",
+           "SNAP_QEMU_PLAN_CMD": f"bash {plan}", "SNAP_QEMU_LAUNCH_CMD": f"bash {launch}"}
+    r = subprocess.run(["bash", DRIVER, "--only", "x86/be+gpu", "-w", str(wd)],
+                       env=env, capture_output=True, text=True, timeout=180)
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = r.stdout + r.stderr
+    assert "size OK" in out                          # assert_size actually ran
+    assert re.search(r"x86/be\+gpu[^:]*: PASS", out)  # the row passed (label carries /env)
+    m = re.search(r"ran=(\d+) pass=(\d+) skip=\d+ inconclusive=\d+ fail=(\d+)", out)
+    assert m, f"no RESULT census:\n{out}"
+    assert int(m.group(1)) >= 2 and int(m.group(2)) >= 2 and int(m.group(3)) == 0
+
+
+def test_driver_fails_the_row_when_the_image_is_oversize(tmp_path):
+    # The SIZE assertion must actually FAIL a too-big image (not silently pass).
+    plan = tmp_path / "plan.sh"
+    plan.write_text('#!/usr/bin/env bash\necho "img_size=1"\n'); plan.chmod(0o755)   # ceiling 515 MiB
+    launch = tmp_path / "launch.sh"
+    launch.write_text("#!/usr/bin/env bash\nexit 0\n"); launch.chmod(0o755)
+    wd = tmp_path / "wd"; wd.mkdir()
+    with open(wd / "snapdragon-x86-be+gpu-prod-ts.img", "wb") as fh:
+        fh.truncate(600 * (1 << 20))             # 600 MiB sparse > 515 MiB ceiling
+    env = {**os.environ, "SNAPDRAGON_QEMU_E2E": "1",
+           "SNAP_QEMU_PLAN_CMD": f"bash {plan}", "SNAP_QEMU_LAUNCH_CMD": f"bash {launch}"}
+    r = subprocess.run(["bash", DRIVER, "--only", "x86/be+gpu", "-w", str(wd)],
+                       env=env, capture_output=True, text=True, timeout=180)
+    out = r.stdout + r.stderr
+    assert re.search(r"fail=[1-9]", out), f"oversize image should fail the row:\n{out}"
 
 
 # ── OPT-IN: the real matrix boot walk (needs qemu + operator artifacts) ───────────
