@@ -856,6 +856,16 @@ CASDOOR_ISSUER ?= https://id.$(if $(strip $(DOMAIN)),$(DOMAIN),snapdragon.system
 else
 CASDOOR_ISSUER ?= http://localhost:8000
 endif
+# External-IdP seam (Entra ID et al — see the azure-image provider's entra/ emit
+# from snapdragon-cloud-deploy): OIDC_ISSUER, when set NON-EMPTY, overrides the
+# derived CASDOOR_ISSUER above and rides the SAME CASDOOR_ISSUER_URI threading
+# below — the CASDOOR_* env NAMES are cross-repo bindings and are deliberately
+# NOT renamed. Default/empty = today's Casdoor-derived behavior, byte-for-byte.
+#   make stack-up OIDC_ISSUER=https://login.microsoftonline.com/<tenant>/v2.0
+OIDC_ISSUER ?=
+ifneq ($(strip $(OIDC_ISSUER)),)
+CASDOOR_ISSUER := $(OIDC_ISSUER)
+endif
 # Env exported into every compose invocation (build contexts + service env).
 # DOCKER_BUILDKIT=1 belt-and-braces: several service Dockerfiles use BuildKit
 # syntax (`# syntax=docker/dockerfile:1.7` + RUN --mount=type=secret), which a
