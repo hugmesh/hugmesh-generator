@@ -14,6 +14,8 @@
 #     until the operator uploads vetted APKs through the console).
 #   - java.security urandom tweak moved to BUILD time (root-owned file).
 #   - exec "$@" (upstream ran catalina.sh un-exec'd, orphaning PID 1 signals).
+#   - Fail-closed required-env validation before rendering (upstream silently
+#     renders empty values into ROOT.xml when an env var is missing).
 set -eu
 
 HMDM_DIR=/opt/hmdm
@@ -34,6 +36,18 @@ BASE_DIR=$TOMCAT_DIR/work
 esc() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
 xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e "s/'/\&apos;/g" -e 's/"/\&quot;/g'; }
 sql() { printf '%s' "$1" | sed -e "s/'/''/g"; }
+
+# Fail-closed env validation BEFORE any rendering. `set -u` alone is NOT enough
+# here: an unset variable inside a $(...) render substitution only aborts that
+# SUBSHELL — the outer sed still runs with an empty replacement and writes a
+# complete-looking ROOT.xml (e.g. jdbc:postgresql://:5432/db), which the
+# [ ! -f ] idempotence guards below would then pin across restarts even after
+# the env is corrected. So refuse up front, before any file is touched.
+for V in SQL_HOST SQL_PORT SQL_BASE SQL_USER SQL_PASS PROTOCOL BASE_DOMAIN ADMIN_EMAIL; do
+    eval "VAL=\${${V}:-}"
+    [ -n "${VAL}" ] || { echo "ERROR: required env ${V} is unset or empty" >&2; exit 1; }
+done
+unset V VAL
 
 for DIR in cache files plugins logs; do
     [ -d "$BASE_DIR/$DIR" ] || mkdir -p "$BASE_DIR/$DIR"
