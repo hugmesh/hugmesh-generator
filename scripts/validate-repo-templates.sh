@@ -45,7 +45,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$ARCHETYPE" ]] || _die "missing --archetype (spring-bff|angular-mfe|gateway)"
+[[ -n "$ARCHETYPE" ]] || _die "missing --archetype (spring-bff|angular-mfe|gateway|generator)"
 [[ "$ARCHETYPE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || _die "invalid --archetype '$ARCHETYPE'"
 ARCH_DIR="${REPO_ROOT}/templates/archetypes/${ARCHETYPE}"
 [[ -d "$ARCH_DIR" ]] || _die "no archetype overlay '${ARCHETYPE}' at ${ARCH_DIR}"
@@ -57,6 +57,7 @@ if [[ -z "$REPO" ]]; then
     spring-bff)   REPO="admin-bff-api" ;;
     angular-mfe)  REPO="login-ui" ;;
     gateway)      REPO="gateway" ;;
+    generator)    REPO="generator" ;;   # exemplar member IS the generator itself
     *) _die "no default exemplar repo for archetype '${ARCHETYPE}' — pass --repo" ;;
   esac
 fi

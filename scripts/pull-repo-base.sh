@@ -21,6 +21,12 @@
 #                    Point at the internal mirror on the VPN, e.g.
 #                    GIT_BASE=https://gitlab.snapdragon.systems/snapdragon
 #   GIT_REF          (default main)  branch/tag to check out.
+#   --ref TAG|SHA    explicit VERSIONED pin for the own-mesh pull (templating
+#                    re-render-at-a-version). Unlike the best-effort GIT_REF env
+#                    path, an unresolvable --ref FAILS CLOSED (no silent stale
+#                    cache reuse), and a 40-hex sha is fetched directly (clone
+#                    --branch cannot take a sha). Refused with --foreign — a
+#                    foreign base is pinned by IMMUTABLE digest via the gate.
 #   REPO_BASE_CACHE  (default <repo-root>/.repo-base)  gitignored clone cache.
 #   LOGIN_UI_BASE_DIR / <NAME>_BASE_DIR   if set to an existing dir, that local
 #                    read-only clone is used AS-IS (no fetch). Used by this pilot
@@ -153,6 +159,7 @@ FOREIGN_MAX_FILES="${FOREIGN_MAX_FILES:-20000}"            # == gate FIB_MAX_FIL
 FOREIGN_FETCH_MAX_BYTES="${FOREIGN_FETCH_MAX_BYTES:-${FOREIGN_MAX_BYTES}}"
 
 NAME=""
+PIN_REF=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --foreign)        FOREIGN=1; shift ;;
@@ -161,12 +168,21 @@ while [[ $# -gt 0 ]]; do
     --pinned-tree-sha256) PINNED_TREE_SHA256="$2"; shift 2 ;;
     --trust-store)    MESH_TRUST_STORE="$2"; shift 2 ;;
     --min-generation) MIN_GENERATION="$2"; shift 2 ;;
-    -*) die "unknown flag '$1' (usage: $0 [--foreign --mesh ID [--pinned-digest SHA] [--pinned-tree-sha256 SHA] [--trust-store DIR] [--min-generation N]] <repo-short-name>)" ;;
+    --ref)            PIN_REF="$2"; shift 2 ;;
+    -*) die "unknown flag '$1' (usage: $0 [--ref TAG|SHA] [--foreign --mesh ID [--pinned-digest SHA] [--pinned-tree-sha256 SHA] [--trust-store DIR] [--min-generation N]] <repo-short-name>)" ;;
     *)  [[ -z "$NAME" ]] || die "exactly one <repo-short-name> expected (got '${NAME}' and '$1')"
         NAME="$1"; shift ;;
   esac
 done
-[[ -n "$NAME" ]] || die "usage: $0 [--foreign --mesh ID ...] <repo-short-name>   (e.g. login-ui)"
+[[ -n "$NAME" ]] || die "usage: $0 [--ref TAG|SHA] [--foreign --mesh ID ...] <repo-short-name>   (e.g. login-ui)"
+
+# ── --ref (versioned own-mesh pin) shape + mode guards ──────────────────────
+if [[ -n "$PIN_REF" ]]; then
+  [[ "$PIN_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,120}$ && "$PIN_REF" != *..* ]] \
+    || die "invalid --ref '${PIN_REF}' (want a tag/branch/sha: [A-Za-z0-9._/-], no '..')"
+  [[ "$FOREIGN" -eq 0 ]] \
+    || die "--ref cannot be combined with --foreign (a foreign base is pinned by an IMMUTABLE digest through the ingestion gate, never a ref)"
+fi
 # Slug allowlist: DNS-label-ish short name, so it is safe as a path component and
 # as an env-var suffix. (login-ui, admin-bff-api, …)
 [[ "$NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
@@ -295,12 +311,36 @@ if [[ "$FOREIGN" -eq 1 ]]; then
   exit 0
 fi
 
+# ── _prb_pin_ref CLONE_DIR REF — FAIL-CLOSED checkout of an explicit --ref ──────
+# The GIT_REF env path below stays best-effort (warn + reuse cache) for backwards
+# compatibility; an EXPLICIT --ref is a versioned-render pin and must never
+# silently degrade to a stale/wrong tree. A 40-hex sha is fetched directly
+# (clone/fetch --branch cannot take a sha); tags/branches fetch the ref itself and
+# detach at FETCH_HEAD (exactly what was fetched — no local-tag/branch mapping
+# ambiguity). OFFLINE=1: no fetch, the ref must resolve from cached objects.
+_prb_pin_ref() {
+  local dir="$1" ref="$2"
+  if [[ "$OFFLINE" == "1" ]]; then
+    git -C "$dir" checkout -q --detach "$ref" 2>/dev/null \
+      || die "offline and pinned --ref '${ref}' does not resolve from the cached objects in ${dir} — fail-closed (no silent fallback)"
+    return 0
+  fi
+  git -C "$dir" fetch --depth 1 origin "$ref" >&2 2>&1 \
+    || die "cannot fetch pinned --ref '${ref}' for ${REPO} — fail-closed (no silent fallback to a stale cache)"
+  git -C "$dir" checkout -q --detach FETCH_HEAD 2>/dev/null \
+    || die "cannot check out pinned --ref '${ref}' (FETCH_HEAD) in ${dir}"
+}
+
 # 1) Explicit local read-only base override (this pilot points at the present clone).
 ENV_KEY="$(printf '%s' "$NAME" | tr 'a-z-' 'A-Z_')_BASE_DIR"
 OVERRIDE="${!ENV_KEY:-}"
 if [[ -n "$OVERRIDE" ]]; then
   [[ -d "$OVERRIDE" ]] || die "${ENV_KEY}='${OVERRIDE}' is not a directory"
   abs="$(cd "$OVERRIDE" && pwd)"
+  # --ref + override: nothing is fetched, so the pin cannot be applied here. The
+  # caller records the ref as the operator's CLAIM (render-repo-tree.sh marker
+  # note); provenance base.commitSha stays the ground truth.
+  [[ -n "$PIN_REF" ]] && log "NOTE: --ref '${PIN_REF}' with a ${ENV_KEY} override — the local dir is used AS-IS (ref not applied; operator's claim)"
   log "using local read-only base for ${REPO}: ${abs} (via ${ENV_KEY}); NOT fetched, NOT copied into the generator"
   printf '%s\n' "$abs"
   exit 0
@@ -309,7 +349,10 @@ fi
 # 2) Present cache clone — reuse (fast-forward when online, use as-is when offline).
 CLONE_DIR="${REPO_BASE_CACHE}/${REPO}"
 if [[ -d "${CLONE_DIR}/.git" ]]; then
-  if [[ "$OFFLINE" == "1" ]]; then
+  if [[ -n "$PIN_REF" ]]; then
+    log "pinning cached base ${CLONE_DIR} to --ref ${PIN_REF} (fail-closed)"
+    _prb_pin_ref "$CLONE_DIR" "$PIN_REF"
+  elif [[ "$OFFLINE" == "1" ]]; then
     log "offline: reusing cached base ${CLONE_DIR} as-is"
   else
     log "updating cached base ${CLONE_DIR} (fetch ${GIT_REF})"
@@ -328,6 +371,22 @@ if [[ "$OFFLINE" == "1" ]]; then
 fi
 command -v git >/dev/null 2>&1 || die "git not found"
 mkdir -p "$REPO_BASE_CACHE"
+
+# 3a) Fresh clone at an explicit --ref pin (fail-closed; sha needs init+fetch).
+if [[ -n "$PIN_REF" ]]; then
+  log "cloning read-only base ${GIT_BASE}/${REPO}.git @ pinned --ref ${PIN_REF} -> ${CLONE_DIR} (TLS only; integrity UNVERIFIED — Phase 8)"
+  if [[ "$PIN_REF" =~ ^[0-9a-f]{40}$ ]]; then
+    mkdir -p "$CLONE_DIR"
+    git -C "$CLONE_DIR" init -q
+    git -C "$CLONE_DIR" remote add origin "${GIT_BASE}/${REPO}.git" 2>/dev/null || true
+    _prb_pin_ref "$CLONE_DIR" "$PIN_REF"
+  else
+    git clone --depth 1 --branch "$PIN_REF" "${GIT_BASE}/${REPO}.git" "$CLONE_DIR" >&2 2>&1 \
+      || die "clone at pinned --ref '${PIN_REF}' failed for ${GIT_BASE}/${REPO}.git — fail-closed (an explicit version pin never falls back)"
+  fi
+  printf '%s\n' "$CLONE_DIR"
+  exit 0
+fi
 # DEFERRED (documented, not a bug): the FIRST-PARTY base is git-cloned over TLS
 # with NO commit signature / content-digest / provenance / SBOM / vuln
 # verification. That is an ACCEPTABLE deferral ONLY because the base is

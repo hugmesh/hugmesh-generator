@@ -229,15 +229,20 @@ while IFS= read -r -d '' tmpl; do
   render_template "$tmpl" "$out"
   echo "  rendered: ${out_rel}"
   rendered=$((rendered + 1))
-done < <(find "$TEMPLATES_DIR" \( -path "$TEMPLATES_DIR/repos" -o -path "$TEMPLATES_DIR/archetypes" \) -prune -o -name "*.hbs" -print0 | sort -z)
+done < <(find "$TEMPLATES_DIR" \( -path "$TEMPLATES_DIR/repos" -o -path "$TEMPLATES_DIR/archetypes" -o -path "$TEMPLATES_DIR/mesh-trust" \) -prune -o -name "*.hbs" -print0 | sort -z)
 
 # ── Copy non-template static files ───────────────────────────────────────────
+# templates/mesh-trust/ (Phase-7 BUILD-HOST admission policy: registry.json +
+# advisory-floor.txt) is pruned like repos/archetypes: it is OUR trust config,
+# never tenant CRD payload — copying it into <BRAND>-gitops leaked it into every
+# published CRD dir AND broke the sed<->handlebars parity gate (the .hbs-only
+# handlebars sweep correctly never picked it up).
 while IFS= read -r -d '' f; do
   rel="${f#"${TEMPLATES_DIR}/"}"
   dst="${BRAND_OUT}/${rel}"
   mkdir -p "$(dirname "$dst")"
   cp "$f" "$dst"
-done < <(find "$TEMPLATES_DIR" \( -path "$TEMPLATES_DIR/repos" -o -path "$TEMPLATES_DIR/archetypes" \) -prune -o \( -not -name "*.hbs" -not -type d -print0 \))
+done < <(find "$TEMPLATES_DIR" \( -path "$TEMPLATES_DIR/repos" -o -path "$TEMPLATES_DIR/archetypes" -o -path "$TEMPLATES_DIR/mesh-trust" \) -prune -o \( -not -name "*.hbs" -not -type d -print0 \))
 
 echo ""
 echo "[generate-brand-repos] Rendered ${rendered} templates → ${BRAND_OUT}"

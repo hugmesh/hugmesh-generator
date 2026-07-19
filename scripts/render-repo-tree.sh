@@ -28,7 +28,7 @@
 #
 # Usage:
 #   scripts/render-repo-tree.sh brands/example.conf --enable-repo-tree \
-#       [--repo login-ui] [--out-dir ./out] [--base DIR] \
+#       [--repo login-ui] [--out-dir ./out] [--base DIR] [--ref TAG|SHA] \
 #       [--foreign-mesh ID --pinned-digest SHA [--trust-store DIR] [--min-generation N]]
 #
 # --enable-repo-tree is REQUIRED (the opt-in gate). --base DIR forces a specific
@@ -87,7 +87,14 @@ declare -a SET_VALUES=()
 # row (e.g. cluster_domain:) would re-export the scalar AFTER its validator ran,
 # shadowing the DNS/forbidden-char guard and enabling YAML line-injection into the
 # rendered application.yml. The legitimate identity keys never collide with these.
-_RESERVED_SCALARS=" BRAND BRAND_TITLE ORG CLUSTER_DOMAIN NPM_SCOPE HOST_NAME GENERATOR_ORG_GROUP REPO_NAME HEADSCALE_URL MESH_TAG "
+_RESERVED_SCALARS=" BRAND BRAND_TITLE ORG CLUSTER_DOMAIN NPM_SCOPE HOST_NAME GENERATOR_ORG_GROUP REPO_NAME ORG_SLUG HEADSCALE_URL MESH_TAG "
+# --ref <tag|sha>: pin the OWN-MESH base pull to a specific tag/branch/sha (plumbed
+# to pull-repo-base.sh --ref). The pinned ref is recorded as a one-line
+# `.snapdragon-base-ref` marker in BRAND_OUT so the publish tail can stamp
+# provenance base.ref + derive the --pr branch name from it. Empty = today's
+# behavior (GIT_REF env / `main`), and NO marker is written — the default emitted
+# tree stays byte-identical.
+BASE_REF=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --enable-repo-tree) ENABLED=1; shift ;;
@@ -95,6 +102,7 @@ while [[ $# -gt 0 ]]; do
     --archetype) ARCHETYPE="$2"; shift 2 ;;
     --out-dir)   OUT_DIR="$2"; shift 2 ;;
     --base)      BASE_OVERRIDE="$2"; shift 2 ;;
+    --ref)       BASE_REF="$2"; shift 2 ;;
     --foreign-mesh)   FOREIGN_MESH="$2"; shift 2 ;;
     --pinned-digest)  PINNED_DIGEST="$2"; shift 2 ;;
     --pinned-tree-sha256) PINNED_TREE_SHA256="$2"; shift 2 ;;
@@ -128,6 +136,17 @@ fi
 
 [[ -f "$BRAND_CONF" ]] || _die "brand config not found: $BRAND_CONF"
 [[ "$REPO" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || _die "invalid --repo '$REPO'"
+
+# ── --ref shape validation (versioned own-mesh pull) ─────────────────────────
+# A git tag/branch/sha shape: no whitespace/metachars, no '..' (refname rule +
+# our tree-escape hygiene), bounded length. FOREIGN bases never take a ref —
+# they are pinned by IMMUTABLE digest through the Phase-7 gate.
+if [[ -n "$BASE_REF" ]]; then
+  [[ "$BASE_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,120}$ && "$BASE_REF" != *..* ]] \
+    || _die "invalid --ref '${BASE_REF}' (want a tag/branch/sha: [A-Za-z0-9._/-], no '..')"
+  [[ -z "$FOREIGN_MESH" ]] \
+    || _die "--ref cannot be combined with --foreign-mesh (a foreign base is pinned by an IMMUTABLE --pinned-digest, never a ref)"
+fi
 
 # ── Foreign-mesh mode arg validation (Phase 7, fail-closed) ──────────────────
 # Shape checks only — the REAL enforcement (digest pin, pinned-key signature,
@@ -164,7 +183,7 @@ fi
 # repo). Phase 4: the overlay dir is templates/archetypes/<archetype>, and the
 # repo->archetype map lives in the repos[] manifest (passed here via --archetype).
 # One archetype overlay serves the whole class; per-repo variance is --set identity.
-[[ -n "$ARCHETYPE" ]] || _die "missing --archetype (spring-bff|angular-mfe|gateway) — the repo's class from the repos[] manifest"
+[[ -n "$ARCHETYPE" ]] || _die "missing --archetype (spring-bff|angular-mfe|gateway|generator) — the repo's class from the repos[] manifest"
 [[ "$ARCHETYPE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || _die "invalid --archetype '$ARCHETYPE'"
 OVERLAY_DIR="${REPO_ROOT}/templates/archetypes/${ARCHETYPE}"
 [[ -d "$OVERLAY_DIR" ]] || _die "no archetype overlay '${ARCHETYPE}' at ${OVERLAY_DIR}"
@@ -222,12 +241,16 @@ HOST_NAME="${BRAND}-host"
 # hosting the (upstream-named) generator. 'snapdragon-generator' is upstream code
 # identity and stays literal; only the org/group is rebranded.
 GENERATOR_ORG_GROUP="${NPM_SCOPE}/snapdragon-generator"
+# ORG_SLUG: the SAME ORG slug exposed as a PATH-SAFE FILENAME token (the generator
+# archetype's renames[] demo emits docs/BRANDING-<ORG_SLUG>.md). Single slug rule:
+# identical to NPM_SCOPE by construction — a second derivation would fork the rule.
+ORG_SLUG="${NPM_SCOPE}"
 
 # REPO_NAME: the repo short name as a render token (skeleton READMEs reference it).
 REPO_NAME="$REPO"
-export BRAND BRAND_TITLE ORG NPM_SCOPE HOST_NAME GENERATOR_ORG_GROUP REPO_NAME
+export BRAND BRAND_TITLE ORG NPM_SCOPE HOST_NAME GENERATOR_ORG_GROUP REPO_NAME ORG_SLUG
 export CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-}" HEADSCALE_URL="${HEADSCALE_URL:-}" MESH_TAG="${MESH_TAG:-}"
-EXTRA_TOKENS="NPM_SCOPE,HOST_NAME,GENERATOR_ORG_GROUP,REPO_NAME"
+EXTRA_TOKENS="NPM_SCOPE,HOST_NAME,GENERATOR_ORG_GROUP,REPO_NAME,ORG_SLUG"
 
 # Fold in the per-repo IDENTITY --set tokens. Each is exported and appended to
 # EXTRA_TOKENS; the classifier (in render-handlebars/render-recipe buildContext)
@@ -251,8 +274,12 @@ if [[ -n "$BASE_OVERRIDE" ]]; then
   _log "using --base ${BASE} (read-only)"
 else
   # pull-repo-base.sh prints ONLY the resolved path on stdout (logs -> stderr).
-  if BASE="$("${SCRIPT_DIR}/pull-repo-base.sh" "$REPO")"; then
-    _log "resolved read-only base: ${BASE}"
+  # An explicit --ref rides through as the puller's --ref (fail-closed there: an
+  # unresolvable pinned ref refuses instead of silently falling back to HEAD).
+  _ref_args=()
+  [[ -n "$BASE_REF" ]] && _ref_args=(--ref "$BASE_REF")
+  if BASE="$("${SCRIPT_DIR}/pull-repo-base.sh" ${_ref_args[@]+"${_ref_args[@]}"} "$REPO")"; then
+    _log "resolved read-only base: ${BASE}${BASE_REF:+ (pinned ref ${BASE_REF})}"
   else
     BASE=""
     _log "base not pullable — will use skeleton fallback"
@@ -327,7 +354,28 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
       --exclude='./.snapdragon-sbom.json' \
       --exclude='./.snapdragon-mesh-admitted' \
       --exclude='./.foreign-mesh-id' \
+      --exclude='./.snapdragon-base-ref' \
       --exclude='./.snapdragon-base-origin*' -cf - . | tar -C "$BRAND_OUT" -xf -
+
+  # ── VERSIONED-RENDER MARKER (explicit --ref only) ───────────────────────────
+  # One line, the pinned ref. TRAVELS WITH BRAND_OUT (same durable-marker idiom as
+  # .snapdragon-base-origin.json) so the publish tail can stamp provenance
+  # base.ref and derive the --pr branch `templating/update-<ref>` without being
+  # separately told. A stale/planted marker in the BASE is stripped by the tar
+  # exclude above; OURS is written after, authoritatively. No --ref => no marker
+  # => the default emitted tree stays byte-identical to pre-versioning renders.
+  # HONESTY: on a --base/*_BASE_DIR override nothing was fetched, so the marker
+  # records the OPERATOR'S CLAIM of the base's version; the fetch-proven half is
+  # the pull-repo-base.sh --ref path (which dies on an unresolvable ref). Ground
+  # truth either way stays provenance base.commitSha.
+  if [[ -n "$BASE_REF" ]]; then
+    printf '%s\n' "$BASE_REF" > "${BRAND_OUT}/.snapdragon-base-ref"
+    if [[ -n "$BASE_OVERRIDE" ]]; then
+      _log "wrote base-ref marker ${BASE_REF} (NOTE: --base override — the ref is the operator's claim, not fetch-proven)"
+    else
+      _log "wrote base-ref marker ${BASE_REF}"
+    fi
+  fi
 
   # ── Phase 7 DURABLE BASE-ORIGIN MARKER (foreign-mesh mode ONLY) ───────────────
   # The publish launder-belt's foreign-origin detection keyed SOLELY off the
@@ -416,10 +464,20 @@ JSON
         --report "${TMP}/recipe-report.json"
     # Backstop: scan exactly the recipe-touched files (no excludes) so a branded
     # substring can never smuggle a secret past the path-scoped emit scan below.
+    # renames[] (applied AFTER edits) may have MOVED a touched file, so follow the
+    # report's rename map (from -> to) and also scan every rename DESTINATION —
+    # a moved file is recipe-touched by definition.
     _touched=()
     while IFS= read -r rel; do
       [[ -n "$rel" && -f "${BRAND_OUT}/${rel}" ]] && _touched+=("${BRAND_OUT}/${rel}")
-    done < <(node -e 'const r=require(process.argv[1]);for(const f of r.files){if(f.present&&(f.anchors||[]).some(a=>a.hits>0))console.log(f.file)}' "${TMP}/recipe-report.json")
+    done < <(node -e '
+      const r = require(process.argv[1]);
+      const moved = new Map((r.renames || []).filter(x => x.applied).map(x => [x.from, x.to]));
+      for (const f of r.files) {
+        if (f.present && (f.anchors || []).some(a => a.hits > 0)) console.log(moved.get(f.file) || f.file);
+      }
+      for (const to of moved.values()) console.log(to);
+    ' "${TMP}/recipe-report.json" | sort -u)
     if [[ ${#_touched[@]} -gt 0 ]]; then
       _log "scanning ${#_touched[@]} recipe-touched file(s) (no excludes — recipe-output backstop)"
       if ! "${SCRIPT_DIR}/secret-scan.sh" "${_touched[@]}" >&2; then
