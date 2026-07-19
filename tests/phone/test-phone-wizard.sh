@@ -989,6 +989,15 @@ MDM="${OUT}/device/${DEVID}/mdm.json"
     && ok "(22) mdm.json fields correct (device_id/serial/dpc_package/headwind_url/os/set_via)" \
     || bad "(22) mdm.json missing/wrong: $(cat "${MDM}" 2>/dev/null)"
 
+# mdm-enroll must tell the operator the device is only a HINT until a SUPERADMIN
+# confirms it managed — the spoof-proof trust boundary (self-report never makes
+# a phone lockable). The NEXT STEP must name the management endpoint + mode.
+printf '%s' "${OUT_TXT}" | grep -q 'SUPERADMIN must CONFIRM this device as managed' \
+    && printf '%s' "${OUT_TXT}" | grep -q 'phone-devices/'"${DEVID}"'/management' \
+    && printf '%s' "${OUT_TXT}" | grep -q 'mesh_owned' \
+    && ok "(22) mdm-enroll prints the superadmin managed-confirmation NEXT STEP (trust boundary)" \
+    || bad "(22) mdm-enroll NEXT STEP missing the managed-confirmation guidance"
+
 # NON-fresh device (2 users) -> refused (exit 2): device-owner mode is a
 # one-shot AOSP gate, permanently foreclosed once a secondary user exists.
 touch "${STATE}/user-created"

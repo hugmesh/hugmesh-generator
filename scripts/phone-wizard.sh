@@ -1229,6 +1229,17 @@ cmd_mdm_enroll() {
           enrolled_at:$enrolled_at}' \
         > "${rec}"
     pw_info "mdm record written: ${rec}"
+    echo
+    echo "== NEXT STEP: a SUPERADMIN must CONFIRM this device as managed =="
+    echo "  This wizard's ingest record is device-reported and trivially spoofable"
+    echo "  inside the cluster, so it CANNOT by itself make the phone lockable. The"
+    echo "  device-owner enrolment above is only a HINT. To make this phone"
+    echo "  mesh-owned (and therefore remotely lockable), a SUPERADMIN must confirm"
+    echo "  it in the fleet console:"
+    echo "    PUT /bff/superadmin/phone-devices/${DEVICE_ID}/management  {\"mode\":\"mesh_owned\"}"
+    echo "  (or the 'Mark managed' action on the Phone-fleet page). A BYOD phone"
+    echo "  left unmanaged can NEVER be locked. See docs/MDM.md 'Roles & device"
+    echo "  management' for the trust model."
 }
 
 # ── verb: enroll (--no-usb variant) ─────────────────────────────────
