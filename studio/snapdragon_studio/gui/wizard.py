@@ -18,9 +18,9 @@ from ..core.config import ImageConfig, MODE_SKIPPED_PAGES, WIZARD_PAGE_SLUGS
 from ..core.platform_info import detect
 from ..core import worklist as worklist_mod
 from .pages import (
-    BrandingPage, BuildPage, DomainsPage, HardwarePage, HomePage, KeyZipPage,
-    LocalMeshPage, ModePage, NetworkPage, PhonePage, ProgressPage, RolePage,
-    SystemPage, UsersPage, WelcomePage, WorklistPage,
+    BrandingPage, BuildPage, DeployPage, DomainsPage, HardwarePage, HomePage,
+    KeyZipPage, LocalMeshPage, ModePage, NetworkPage, PhonePage, ProgressPage,
+    RolePage, SystemPage, UsersPage, WelcomePage, WorklistPage,
 )
 # re-exported for golive.py (and any other page set) — the helpers moved to
 # gui/pages/_widgets.py with the page split, but this module stays their
@@ -29,8 +29,8 @@ from .pages._widgets import _file_picker, _row  # noqa: F401
 
 __all__ = [
     "StudioWizard", "medium_size", "centred_top_left",
-    "WelcomePage", "ModePage", "LocalMeshPage", "PhonePage", "RolePage",
-    "WorklistPage", "HardwarePage",
+    "WelcomePage", "ModePage", "LocalMeshPage", "PhonePage", "DeployPage",
+    "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage", "DomainsPage", "UsersPage",
     "SystemPage", "HomePage", "BuildPage", "ProgressPage",
 ]
@@ -112,6 +112,9 @@ class StudioWizard(QtWidgets.QWizard):
         # transient: ModePage's MDM PHONE choice — read by PhonePage.applies_to(),
         # likewise NEVER persisted into cfg (the phone is not an image mode).
         self.phone_selected = False
+        # transient: ModePage's CLOUD DEPLOY choice — read by DeployPage.applies_to(),
+        # likewise NEVER persisted into cfg (a deploy is not an image mode).
+        self.deploy_selected = False
         # The build-session id of the NEXT dispatch (core/build_sessions): minted lazily
         # by BuildPage's preview (so preview == dispatch), pinned by a RESTART (same
         # record + workdir reused), cleared by ProgressPage at finish.
@@ -140,7 +143,8 @@ class StudioWizard(QtWidgets.QWizard):
         # until then it is None and the flow terminates on BuildPage — the None-filter
         # keeps the slug->id map aligned and the drift assert fail-loud.
         page_ctors = [
-            WelcomePage, ModePage, LocalMeshPage, PhonePage, RolePage, WorklistPage,
+            WelcomePage, ModePage, LocalMeshPage, PhonePage, DeployPage, RolePage,
+            WorklistPage,
             HardwarePage, BrandingPage, NetworkPage, KeyZipPage, DomainsPage, UsersPage,
             SystemPage, HomePage, BuildPage, ProgressPage,
         ]

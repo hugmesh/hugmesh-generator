@@ -148,6 +148,10 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   automated attestation-verdict API, `make phone-mdm-enroll`/`phone-attest`
   targets) — see [`docs/MDM.md`](docs/MDM.md)
   "Deferred".
+- **🚧 Cloud deploy (Studio/ncurses/`make deploy-*` side-flow)** — publish an
+  already-built, cloud-packaged x86 image to AWS/Azure/OpenShift/any-qcow2 host
+  via offline-rendered plans (x86-only, no real-cloud CI verification) — see
+  [`docs/CLOUD-DEPLOY.md`](docs/CLOUD-DEPLOY.md).
 
 > The auth model is documented in depth in [`docs/SECURITY.md`](docs/SECURITY.md)
 > and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the application-side login

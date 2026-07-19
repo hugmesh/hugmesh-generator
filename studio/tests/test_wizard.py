@@ -109,6 +109,7 @@ def test_page_slugs_map_to_the_right_pages(wiz):
     ProgressPage lands in WS-REVIEWUI, so it is None-tolerant until registered."""
     expect = {"welcome": wizard_mod.WelcomePage, "mode": wizard_mod.ModePage,
               "localmesh": wizard_mod.LocalMeshPage, "phone": wizard_mod.PhonePage,
+              "deploy": wizard_mod.DeployPage,
               "role": wizard_mod.RolePage, "worklist": wizard_mod.WorklistPage,
               "hardware": wizard_mod.HardwarePage, "branding": wizard_mod.BrandingPage,
               "network": wizard_mod.NetworkPage, "keyzip": wizard_mod.KeyZipPage,
@@ -281,7 +282,24 @@ def test_phone_side_flow_reaches_terminal_page_and_skips_images(wiz):
     assert wiz.localmesh_selected is False
     assert wiz.cfg.mode == before                       # phone never sets cfg.mode
     assert page.nextId() == -1 and page.isFinalPage()   # terminal: Finish, no image
-    for slug in ("localmesh", "role", "hardware", "branding", "build"):
+    for slug in ("localmesh", "deploy", "role", "hardware", "branding", "build"):
+        assert not wiz.hasVisitedPage(wiz._page_ids[slug])
+
+
+def test_deploy_side_flow_reaches_terminal_page_and_skips_images(wiz):
+    """Cloud deploy is the third non-image side-flow: the radio routes Mode →
+    Deploy (terminal, nextId==-1), leaves cfg.mode an image mode untouched, and no
+    image page (role/hardware/branding/build) — nor the other side-flows — is ever
+    visited."""
+    pick_mode(wiz, "deploy")
+    before = wiz.cfg.mode
+    page = advance_to(wiz, wizard_mod.DeployPage)
+    assert wiz.deploy_selected is True
+    assert wiz.phone_selected is False
+    assert wiz.localmesh_selected is False
+    assert wiz.cfg.mode == before                       # deploy never sets cfg.mode
+    assert page.nextId() == -1 and page.isFinalPage()   # terminal: Finish, no image
+    for slug in ("localmesh", "phone", "role", "hardware", "branding", "build"):
         assert not wiz.hasVisitedPage(wiz._page_ids[slug])
 
 

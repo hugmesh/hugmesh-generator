@@ -685,5 +685,100 @@ grep -q -- '--with-tor' "${MESH_ARGV_CAP}" \
 unset -f python3 ui_msg
 rm -f "${MESH_ARGV_CAP}"
 
+# ── Cloud deploy screen (deploy_screen/_deploy_run) — mirrors the phone block ──
+# The deploy track is a NON-BUILD choice (like localmesh/phone): it must never
+# touch build_make_cmd, never persist state (no OPT_DEPLOY_*, save_conf
+# untouched), and move pasted creds via a chmod-600 mktemp file under STATE_DIR
+# (--creds-file) that is shredded after the run.
+assert_grep "deploy: opening item present"    '^[[:space:]]*deploy[[:space:]]+"Cloud deploy '        "${MENU_SH}"
+assert_grep "deploy: routed to deploy_screen" '^[[:space:]]*deploy\)[[:space:]]+deploy_screen '      "${MENU_SH}"
+assert_grep "deploy: apply item present"      '^[[:space:]]*apply[[:space:]]+"APPLY '                "${MENU_SH}"
+assert_grep "deploy: destroy item present"    '^[[:space:]]*destroy[[:space:]]+"DESTROY '            "${MENU_SH}"
+assert_ngrep "deploy: no OPT_DEPLOY_* state"  'OPT_DEPLOY' "${MENU_SH}"
+deploy_region="$(sed -n '/^deploy_screen() {/,/^}/p' "${MENU_SH}"; sed -n '/^_deploy_run() {/,/^}/p' "${MENU_SH}")"
+case "${deploy_region}" in
+    *'--creds-file'*) _ok ;;
+    *) _fail "deploy: region extraction vacuous (deploy_screen/_deploy_run not found)" ;;
+esac
+printf '%s' "${deploy_region}" | grep -q 'setsid'         && _fail "deploy: setsid in deploy region (apply/destroy must run foreground)" || _ok
+printf '%s' "${deploy_region}" | grep -q 'launch_build'   && _fail "deploy: launch_build in deploy region (never a build)" || _ok
+printf '%s' "${deploy_region}" | grep -q 'save_conf'      && _fail "deploy: save_conf in deploy region (state must stay function-local)" || _ok
+printf '%s' "${deploy_region}" | grep -q 'build_make_cmd' && _fail "deploy: build_make_cmd in deploy region (never a build)" || _ok
+printf '%s' "${deploy_region}" | grep -qE 'CD_ASSUME_YES|--yes' && _fail "deploy: confirmation bypass in deploy region" || _ok
+
+# save_conf stays deploy-free: a fresh save leaks no deploy/creds material.
+reset_opts; save_conf
+grep -qiE 'deploy|creds' "${CONF_FILE}" && _fail "conf: deploy/creds state leaked into menu.conf" || _ok
+
+# ── _deploy_run behavioural checks against a stub driver ───────────────────────
+# _deploy_run shells the shared Qt-free entrypoint (python3 -m
+# snapdragon_studio.core.cloud_deploy), which resolves the DRIVER through the
+# SNAP_CLOUD_DEPLOY_CMD env seam — stub it to record the DRIVER argv and, at
+# CHILD runtime, the --creds-file's content + mode, proving pasted creds travel
+# by 0600 file only and are shredded afterwards (the phone-stub twin).
+CD_STUB_OUT="${SNAP_MENU_STATE}/deploy-stub-out"; mkdir -p "${CD_STUB_OUT}"
+export CD_STUB_OUT
+SNAP_CLOUD_DEPLOY_CMD="${SNAP_MENU_STATE}/stub-cloud-deploy.sh"
+export SNAP_CLOUD_DEPLOY_CMD
+cat >"${SNAP_CLOUD_DEPLOY_CMD}" <<'EOSTUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >"${CD_STUB_OUT:?}/argv"
+prev=""
+for a in "$@"; do
+    if [ "${prev}" = "--creds-file" ]; then
+        cat -- "${a}" >"${CD_STUB_OUT}/creds-content" 2>/dev/null
+        stat -c '%a' -- "${a}" >"${CD_STUB_OUT}/creds-mode" 2>/dev/null
+        printf '%s' "${a}" >"${CD_STUB_OUT}/creds-path"
+    fi
+    prev="${a}"
+done
+exit "${CD_STUB_RC:-0}"
+EOSTUB
+chmod +x "${SNAP_CLOUD_DEPLOY_CMD}"
+ui_msg() { :; }                                  # swallow the result dialog
+
+# all settings set, creds PASTED: full deterministic driver argv in the pinned
+# flag order, the pasted secret OFF the argv (a 0600 STATE_DIR temp file rides
+# --creds-file instead) and shredded after the run.
+DEPLOY_SECRET='aws_secret_access_key = Sup3r Secret!'
+_deploy_run plan aws-ec2 /tmp/node.qcow2 acme.example eu-central-1 "" "${DEPLOY_SECRET}" /tmp/cd-out /tmp </dev/null 2>/dev/null
+assert_eq "deploy run: driver argv (verb first, flags in pinned order, secret off-argv)" \
+    "$(head -n 9 "${CD_STUB_OUT}/argv")" \
+    "$(printf '%s\n' plan --provider aws-ec2 --image /tmp/node.qcow2 --domain acme.example --region eu-central-1)"
+grep -qF -- "${DEPLOY_SECRET}" "${CD_STUB_OUT}/argv" && _fail "deploy run: creds leaked onto argv" || _ok
+case "$(cat "${CD_STUB_OUT}/creds-path")" in
+    "${SNAP_MENU_STATE}"/deploycreds.*) _ok ;;
+    *) _fail "deploy run: creds file not under STATE_DIR: $(cat "${CD_STUB_OUT}/creds-path")" ;;
+esac
+assert_eq "deploy run: creds file content is the secret" "$(cat "${CD_STUB_OUT}/creds-content")" "${DEPLOY_SECRET}"
+assert_eq "deploy run: creds file mode 600 at child runtime" "$(cat "${CD_STUB_OUT}/creds-mode")" "600"
+[ -e "$(cat "${CD_STUB_OUT}/creds-path")" ] && _fail "deploy run: creds file survived (must be shredded)" || _ok
+# the --creds-file pair sits between --region and --out-dir (the pinned order),
+# then --out-dir/--keys-dir close the tail.
+argv_tail="$(tail -n 6 "${CD_STUB_OUT}/argv")"
+case "${argv_tail}" in
+    "--creds-file"*"--out-dir"*"/tmp/cd-out"*) _ok ;;
+    *) _fail "deploy run: tail not --creds-file … --out-dir …: ${argv_tail}" ;;
+esac
+
+# nothing set: bare verb only — no empty/bogus flags, no --creds-file
+_deploy_run status "" "" "" "" "" "" "" "" </dev/null 2>/dev/null
+assert_eq "deploy run: bare verb argv" "$(cat "${CD_STUB_OUT}/argv")" "status"
+
+# creds-FILE mode: the operator's path threads verbatim; nothing staged, nothing
+# shredded (custody stays with the operator's own 0600 file).
+rm -f "${CD_STUB_OUT}/creds-path"
+printf '%s' 'k=v' >"${SNAP_MENU_STATE}/op-creds"; chmod 600 "${SNAP_MENU_STATE}/op-creds"
+_deploy_run status generic-qcow2 "" "" "" "${SNAP_MENU_STATE}/op-creds" "" "" "" </dev/null 2>/dev/null
+assert_eq "deploy run: creds-file path argv" "$(cat "${CD_STUB_OUT}/argv")" \
+    "$(printf '%s\n' status --provider generic-qcow2 --creds-file "${SNAP_MENU_STATE}/op-creds")"
+[ -f "${SNAP_MENU_STATE}/op-creds" ] && _ok || _fail "deploy run: operator creds file was destroyed (must be left alone)"
+grep -qF -- 'k=v' "${CD_STUB_OUT}/argv" && _fail "deploy run: creds-file VALUE leaked onto argv" || _ok
+
+# a failing driver must not kill the sourced-menu shell (set -e is absent by design)
+CD_STUB_RC=7 _deploy_run status "" "" "" "" "" "" "" "" </dev/null 2>/dev/null
+assert_eq "deploy run: nonzero driver rc survives" "$?" "0"
+unset -f ui_msg
+
 printf '\n%d passed, %d failed\n' "${PASS}" "${FAIL}"
 [ "${FAIL}" -eq 0 ]

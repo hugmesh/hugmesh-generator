@@ -7,6 +7,7 @@ golive.py is NOT part of this set: it is the separate go-live wizard's page modu
 from .welcome import WelcomePage
 from .localmesh import LocalMeshDialog, LocalMeshPage
 from .phone import PhoneDialog, PhonePage
+from .deploy import DeployDialog, DeployPage
 from .mode import ModePage
 from .role import RolePage
 from .worklist import WorklistPage
@@ -31,7 +32,8 @@ except ImportError:                    # pragma: no cover — until WS-REVIEWUI 
 
 __all__ = [
     "WelcomePage", "ModePage", "LocalMeshPage", "LocalMeshDialog",
-    "PhonePage", "PhoneDialog", "RolePage", "WorklistPage", "HardwarePage",
+    "PhonePage", "PhoneDialog", "DeployPage", "DeployDialog", "RolePage",
+    "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage", "DomainsPage", "UsersPage",
     "SystemPage", "HomePage", "BuildPage", "ProgressPage",
 ]
