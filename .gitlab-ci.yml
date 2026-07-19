@@ -63,7 +63,7 @@ lint:cloud-package:
   image: bash:5
   tags: [snapdragon-x86]
   before_script:
-    - apk add --no-cache coreutils findutils grep
+    - apk add --no-cache coreutils findutils grep gawk
   script:
     - bash tests/scripts/test-cloud-package.sh
 

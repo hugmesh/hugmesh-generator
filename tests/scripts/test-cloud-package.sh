@@ -121,6 +121,10 @@ line2="$(tail -n1 "${OUT2}/cloud-package.manifest")"
 [ "$(echo "${line2}" | awk '{print $2}')" = "qcow2" ] && ok "qcow2: manifest FORMAT token" || bad "qcow2: FORMAT token wrong"
 [ "$(echo "${line2}" | awk '{print $8}')" = "$(sha256sum "${Q_OUT}" | awk '{print $1}')" ] \
     && ok "qcow2: manifest SHA256 hashes the PRODUCED artifact" || bad "qcow2: manifest SHA256 wrong"
+# BYTES must be the PRODUCED artifact's size, not the input's — the stub's output
+# is deliberately tiny, so stamping the input size here would fail loudly.
+[ "$(echo "${line2}" | awk '{print $6}')" = "$(stat -c %s "${Q_OUT}")" ] \
+    && ok "qcow2: manifest BYTES is the PRODUCED artifact size" || bad "qcow2: manifest BYTES wrong (input size leaked?)"
 
 # ── 3. vhd-fixed, compact-image shape (1+512+ROOT+1 MiB): NO padding ─────────
 # The builder's own size is already whole-MiB — the round-up must be a no-op:
@@ -143,6 +147,9 @@ echo "${vline}" | grep -qF " ${WHOLE_IMG} " \
     || bad "vhd whole-MiB: source size wrong: ${vline}"
 [ "$(stat -c %s "${WHOLE_IMG}")" -eq "$(( 516 * MIB ))" ] \
     && ok "vhd whole-MiB: input .img untouched" || bad "vhd whole-MiB: input was mutated"
+vmline="$(tail -n1 "${OUT3}/cloud-package.manifest")"
+[ "$(echo "${vmline}" | awk '{print $6}')" = "$(stat -c %s "${V_OUT}")" ] \
+    && ok "vhd whole-MiB: manifest BYTES is the PRODUCED artifact size" || bad "vhd whole-MiB: manifest BYTES wrong (input size leaked?)"
 
 # ── 4. vhd-fixed, odd-size input: padded UP on a working copy ────────────────
 # 3 MiB + 4096 B must become EXACTLY 4 MiB (round UP — rounding DOWN would
@@ -195,9 +202,11 @@ refuse() {  # refuse <label> <stderr-regex> <args...>
 # u-boot/L4T explanation, for ALL three formats (the refusal is format-independent).
 ARM_RPI="${WORK}/acme-rpi5-arm64-pki-test-20260719.img";                    truncate -s "${MIB}" "${ARM_RPI}"
 ARM_JET="${WORK}/acme-jetson-orin-nano-arm64-edge_ai-prod-20260719.img";   truncate -s "${MIB}" "${ARM_JET}"
-refuse "refusal: rpi5 -arm64- image (qcow2)"    'u-boot|ARM'    --img "${ARM_RPI}" --format qcow2
-refuse "refusal: jetson -arm64- image (vhd)"    'u-boot|ARM'    --img "${ARM_JET}" --format vhd-fixed
-refuse "refusal: rpi5 -arm64- image (raw too)"  'u-boot|ARM'    --img "${ARM_RPI}" --format raw
+# Match on phrases unique to the ARM refusal die — NOT 'ARM', which the fixture
+# filename itself contains and every die message echoes (any die would match).
+refuse "refusal: rpi5 -arm64- image (qcow2)"    'u-boot/L4T|cloud-viable'    --img "${ARM_RPI}" --format qcow2
+refuse "refusal: jetson -arm64- image (vhd)"    'u-boot/L4T|cloud-viable'    --img "${ARM_JET}" --format vhd-fixed
+refuse "refusal: rpi5 -arm64- image (raw too)"  'u-boot/L4T|cloud-viable'    --img "${ARM_RPI}" --format raw
 # Unrecognizable name: fail closed rather than package an unknown platform.
 NONAME="${WORK}/backup-of-something.img"; truncate -s "${MIB}" "${NONAME}"
 refuse "refusal: name without -x86-amd64- marker" 'x86-amd64|provenance' --img "${NONAME}" --format qcow2
