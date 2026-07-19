@@ -122,6 +122,20 @@ lint:shellinj-regression:
     - bash tests/scripts/test-brand-path-validation.sh
     - bash tests/scripts/test-provision-manifest-injection.sh
 
+# gen-provision-keys.sh escrow-clobber guard: its leading `rm -rf keys-out` must
+# REFUSE when the existing tree holds vault-seed/device files another tool
+# escrowed (e.g. the phone-wizard's enterprise-profile.pass — the only copy able
+# to unlock an already-created on-device work profile), while still allowing
+# reruns over its own regenerable output. Offline; no privileged runner needed.
+lint:provision-keys-escrow-guard:
+  stage: lint
+  image: bash:5
+  tags: [snapdragon-x86]
+  before_script:
+    - apk add --no-cache jq openssl openssh-keygen python3 coreutils findutils grep sed
+  script:
+    - bash tests/scripts/test-provision-keys-escrow-guard.sh
+
 # MDM phone wizard gate. Offline logic test for scripts/phone-wizard.sh
 # (the GrapheneOS-on-Pixel onboarding driver): adb/fastboot/curl are PATH-shim
 # stubs, but the sshsig supply-chain crypto is REAL (an ephemeral ed25519 key
@@ -139,6 +153,23 @@ lint:phone-wizard:
     - apk add --no-cache jq openssh-keygen coreutils findutils grep sed python3 libarchive-tools
   script:
     - bash tests/phone/test-phone-wizard.sh
+
+# Headwind entrypoint gate. Offline e2e of the DERIVED docker-entrypoint.sh
+# against the REAL vendored templates: the esc/xml/sql escaping layers round-trip
+# a hostile SQL_PASS through a strict XML parse (Tomcat's bar), init.sql gets
+# quote-doubling + the h-mdm.com URL rewrite, ROOT.xml lands 0600, the psql wait
+# loop retries with the password on env (never argv), the CMD is exec'd (PID-1
+# proof), and a missing required env fails closed BEFORE any render (regression:
+# set -u inside $() once left an empty-host ROOT.xml that the idempotence guard
+# would pin forever). No docker, no network, no root.
+lint:headwind-entrypoint:
+  stage: lint
+  image: bash:5
+  tags: [snapdragon-x86]
+  before_script:
+    - apk add --no-cache python3 coreutils findutils grep sed
+  script:
+    - bash tests/phone/e2e-headwind-entrypoint.sh
 
 # MDM phone END-TO-END gate. Onboards a MOCKED stock-Android Pixel through
 # scripts/phone-wizard.sh's real verb chain in sequence against ONE stateful mock

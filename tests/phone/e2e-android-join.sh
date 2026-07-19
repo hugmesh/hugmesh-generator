@@ -45,7 +45,7 @@
 #   A  stock-Android Pixel joins: full lifecycle, os=android recorded as a
 #      FIRST-CLASS path (NO --force anywhere), tailnet-join pending->verified,
 #      Headwind device-owner set + init.json payload verified, Auditor paired,
-#      escrowed enterprise profile, phone-ingest/v1 record POSTed over mTLS,
+#      escrowed enterprise profile, phone-ingest/v2 record POSTed over mTLS,
 #      status reports the live device, remove-profile retires the profile and a
 #      re-ingest reflects it. All records cross-consistent.
 #   B  ordering foreclosure (the teeth): profile BEFORE mdm-enroll -> exit 2;
@@ -446,7 +446,7 @@ grep -q 'UserInfo{10:enterprise' <<<"${USERS_NOW}" \
     && ok "A6 the mock now reports 2 users (device-owner mode is foreclosed from here on)" \
     || bad "A6 secondary user not reflected in device state"
 
-# A7 — ingest: fold enrollment + mdm + attest + profile into one phone-ingest/v1
+# A7 — ingest: fold enrollment + mdm + attest + profile into one phone-ingest/v2
 # record and POST it over mTLS.
 clear_logs
 if [ "${HAVE_OPENSSL}" -eq 1 ]; then
@@ -459,7 +459,7 @@ else
 fi
 ING="${OUT}/device/${DEVID}/ingest.json"
 if [ "${RC}" -eq 0 ] && [ -f "${ING}" ] \
-   && [ "$(jq -r '.schema'                     "${ING}")" = "phone-ingest/v1" ] \
+   && [ "$(jq -r '.schema'                     "${ING}")" = "phone-ingest/v2" ] \
    && [ "$(jq -r '.device_class'               "${ING}")" = "phone" ] \
    && [ "$(jq -r '.os'                         "${ING}")" = "android" ] \
    && [ "$(jq -r '.serial'                     "${ING}")" = "${SERIAL}" ] \
@@ -468,9 +468,21 @@ if [ "${RC}" -eq 0 ] && [ -f "${ING}" ] \
    && [ "$(jq -r '.enterprise_profile.user_id' "${ING}")" = "10" ] \
    && [ "$(jq -r '.attestation_verdict'        "${ING}")" = "operator-paired" ] \
    && [ "$(jq -r '.auditor_package'            "${ING}")" = "systems.snapdragon.auditor" ]; then
-    ok "A7 ingest: phone-ingest/v1 folds enrollment+mdm+attest+profile (os=android, profile present, attested)"
+    ok "A7 ingest: phone-ingest/v2 folds enrollment+attest+profile (os=android, profile present, attested)"
 else
     bad "A7 ingest.json fields wrong: $(cat "${ING}" 2>/dev/null)"
+fi
+# The v2 mdm object must carry the REAL A4 mdm-enroll facts — a record claiming
+# device-owner enrollment that never happened (or dropping one that did) is
+# exactly what the registry consumes this for.
+if [ "$(jq -r '.mdm.enrolled'     "${ING}")" = "true" ] \
+   && [ "$(jq -r '.mdm.dpc_package'  "${ING}")" = "com.hmdm.launcher" ] \
+   && [ "$(jq -r '.mdm.headwind_url' "${ING}")" = "${HEADWIND_URL}" ] \
+   && [ "$(jq -r '.mdm.set_via'      "${ING}")" = "adb-device-owner" ] \
+   && [ -n "$(jq -r '.mdm.enrolled_at // empty' "${ING}")" ]; then
+    ok "A7 ingest: v2 mdm fold carries the A4 device-owner facts (dpc/url/set_via/at)"
+else
+    bad "A7 v2 mdm fold wrong: $(jq -c '.mdm' "${ING}" 2>/dev/null)"
 fi
 # The enrollment facts the registry actually consumes — a record naming the wrong
 # coordination server would otherwise sail through.

@@ -50,7 +50,10 @@ the faces stay thin: `make phone-*` targets (✅ shipped, host-side pass-through
 delegates in the Makefile — never dispatched into the builder container, since
 the driver needs the host USB bus and a real TTY for its destructive gates;
 all 13 verbs have targets, including `phone-mdm-enroll`/`phone-attest`);
-ncurses-menu/Studio faces are 🔭 (see [Deferred](#deferred)).
+the ncurses-menu face (✅ shipped: `phone_screen` in `scripts/build-menu.sh`
+wraps all 13 verbs, with an MDM/attestation sub-screen threading the
+Headwind/Auditor/ingest-token knobs file-path-only); the Studio face is 🔭
+(see [Deferred](#deferred)).
 
 ## Verbs (the real surface)
 
@@ -71,7 +74,7 @@ anything, and the destructive ones are gated.
 | `profile` | device + out-dir | Create the `enterprise` secondary user, generate + escrow its passphrase (vault-seed custody), operator sets the credential on the handset (default path). **This permanently forecloses device-owner mode** — see [Management plane](#management-plane); it must never run before `mdm-enroll`. |
 | `rotate-profile-pass` | out-dir (+device) | Generate + escrow a new profile passphrase atomically (previous escrow kept as `.prev-<ts>`). |
 | `remove-profile` | **DESTRUCTIVE** | Remove the enterprise user (typed profile-name confirm, or `--yes`); escrow retired to `.revoked-<ts>`. Per-profile FBE keys are evicted — the profile's data is gone. |
-| `ingest` | out-dir (+POST) | Emit the `phone-ingest/v1` device-registry record (folding in `attestation.json`'s fields when present — see [Ingest](#ingest--device-registry)); with `--ingest-url` + the mTLS flags, POST it (fail-closed without client cert+key). |
+| `ingest` | out-dir (+POST) | Emit the `phone-ingest/v2` device-registry record (folding in `attestation.json` and `mdm.json` fields when present — see [Ingest](#ingest--device-registry)); with `--ingest-url` + the mTLS flags, POST it (fail-closed without client cert+key). |
 | `status` | never | Read-only: tools, device, tailnet, profile, escrow **presence** (never contents). |
 | `wizard` | (per step) | Interactive guided full flow (TTY only): detect → fetch → flash → attest → mdm-enroll → enroll → profile → ingest, re-entrant — already-completed steps can be skipped. |
 | `help` | never | Usage. |
@@ -395,7 +398,7 @@ deliberate exception is the gated adb credential-set path above.
 ## Ingest — device registry
 
 `ingest` emits `<out>/device/<device-id>/ingest.json`, schema
-**`phone-ingest/v1`**: `device_id`, `device_class:"phone"`, `serial`,
+**`phone-ingest/v2`**: `device_id`, `device_class:"phone"`, `serial`,
 `codename`, `marketing_name`, `os` (`grapheneos`|`android`|`unknown` —
 inherited from `enrollment.json`'s OS probe, see
 [Onboarding existing phones](#onboarding-existing-phones-no-reflash)),
@@ -404,22 +407,25 @@ inherited from `enrollment.json`'s OS probe, see
 `enterprise_profile{present,user_id,credential_custody}`,
 `attestation_url`, `auditor_package`, `attestation_verdict` (folded in from
 `attestation.json` when `attest` has run — empty strings otherwise; advisory
-fields only, per D9 never enrollment-blocking), `enrolled_at`,
+fields only, per D9 never enrollment-blocking),
+`mdm{enrolled,dpc_package,headwind_url,set_via,enrolled_at}` (folded in from
+`mdm.json` when `mdm-enroll` has run — `enrolled:false` with empty fields
+otherwise, mirroring `enterprise_profile`'s presence contract), `enrolled_at`,
 `generated_at`. Recorded facts (enrollment/profile records) are preferred;
-live adb detection fills only what is missing and reachable. The schema
-string stays `phone-ingest/v1` — the new attestation fields are additive, so
-a pre-Phase-3 consumer can still parse the record.
+live adb detection fills only what is missing and reachable.
 
-**`mdm.json` is not yet folded into `ingest.json`.** `mdm-enroll` writes its
-own record (`device_id`, `serial`, `dpc_package`, `headwind_url`, `os`,
-`set_via:"adb-device-owner"`, `enrolled_at`) alongside `attestation.json` and
-`enrollment.json` under `<out>/device/<device-id>/`, but — unlike the
-attestation fields above — `cmd_ingest()` does not currently read it. Until a
-future revision folds `mdm.json` into the ingest record (or bumps the schema
-to carry a dedicated `mdm{...}` object, per the design's `phone-ingest/v2`
-sketch), a device-registry consumer that needs MDM-enrollment status must
-read `mdm.json` directly. Tracked as a real, currently-open gap — not
-silently glossed over.
+The `mdm{...}` object is what bumped the schema string `v1`→`v2` — it closed
+the tracked "mdm.json is not folded into ingest.json" gap.
+
+**Merge-order note (cross-repo):** the `v2` bump is additive, but the BFF's
+`PhoneIngestRequest` DTO pattern-pins the accepted schema string. Widening it
+to accept both `phone-ingest/v1` and `phone-ingest/v2` is a coordinated
+snapdragon-admin-bff-api change that **must land first** — until it does, a
+`POST` of a `v2` record to a `v1`-only registry fails Bean Validation with a
+clean `400` (the record is still written to disk, so nothing is lost; only the
+POST leg fails). Once the BFF accepts both, v1 producers keep working (the
+`mdm` fields simply stay null for them) and the bump is non-breaking on the
+registry side.
 
 Default is **emit-only**. The dedicated registry endpoint is
 **`POST /bff/internal/device-registry/phone-ingest`** (snapdragon-admin-bff-api):
@@ -427,7 +433,7 @@ point `--ingest-url` at it with the mTLS identity flags
 (`--client-cert`/`--client-key`/`--ca`; the wizard fails closed without
 them), plus `--internal-token-file F` when the deployment arms the BFF's
 app-layer `X-Internal-Token` gate (armed prod 401s the POST without it; the
-token rides a 0600 `-H @file` header file, never curl's argv). It accepts exactly this `phone-ingest/v1` shape (snake_case, unknown
+token rides a 0600 `-H @file` header file, never curl's argv). It accepts the `phone-ingest/v2` shape — and still the older `phone-ingest/v1` — (snake_case, unknown
 additive keys ignored; non-phone `schema`/`device_class` is a clean 400),
 UPSERTs one `phone_device` row per `device_id` (a re-ingest refreshes the
 telemetry and bumps `ingest_count`), and rides the same mTLS-gated
@@ -437,7 +443,7 @@ point `--ingest-url` at `/bff/internal/device-enrollment/self-report` — that
 is a **different, disjoint contract**: the node-side `machineKeyFp`
 self-report used for headscale cluster-node reconciliation
 (`specs/usr/sbin/snapdragon-device-enrollment-report`), whose handler
-requires `machineKeyFp` — a `phone-ingest/v1` record posted there fails Bean
+requires `machineKeyFp` — a `phone-ingest/v2` record posted there fails Bean
 Validation and lands nowhere useful.
 
 ## Remote-management model
@@ -594,10 +600,11 @@ mismatch anywhere in the chain fails closed, never silently.
 | Destructive gates (typed-serial flash confirm; non-TTY needs `--yes`+`--serial`; typed profile-name removal) | `flash` / `remove-profile` | 🚧 |
 | Tailnet enroll (keys-dir contract, SEC-08 pre-auth or Casdoor OIDC, ADR-14 approval, 100.64/10 join verify) | `enroll` | 🚧 |
 | Escrowed enterprise profile (vault-seed custody, operator-set default, atomic rotation, revocation trail) | `profile` / `rotate-profile-pass` / `remove-profile` | 🚧 |
-| `phone-ingest/v1` registry record + mTLS POST | `ingest` | 🚧 |
+| `phone-ingest/v2` registry record (attestation + mdm folds) + mTLS POST | `ingest` | 🚧 |
 | Offline `plan` dry-run + `REDACTED` secret discipline | `plan` / `--print-plan` | 🚧 |
 | `make phone-*` thin face (host-side delegates; secrets stay file-path knobs) — all 13 verbs incl. `phone-mdm-enroll`/`phone-attest` | `Makefile` | 🚧 |
-| Thin ncurses-menu/Studio faces over the driver (non-build precedent) | — | 🔭 |
+| Thin ncurses-menu face over the driver (all 13 verbs + MDM/attestation knob sub-screen, non-build precedent) | `phone_screen` in [`scripts/build-menu.sh`](../scripts/build-menu.sh) | ✅ |
+| Thin Studio (GUI) face over the driver | — | 🔭 |
 | APK store (general fleet app push/update/delete beyond the wizard's own vetted, signer-pinned sideloads) | — | 🔭 (deliberate v1 non-goal; Headwind's own console can do this directly, see [Remote-management model](#remote-management-model)) |
 | Existing-device onboarding (GrapheneOS + stock Android, USB-guided or `--no-usb`, no reflash) | `enroll` | 🚧 |
 | Headwind MDM cluster optional-service (Postgres-backed, tailnet-only, `snapdragon-pki` namespace) | `specs/cluster/apps/23-headwind.yaml`, `specs/cluster/manifests/headwind/` | ✅ merged |
@@ -616,12 +623,15 @@ Tracked here per the driver's header. Still 🔭, by design. The earlier
 now delivered (see [Management plane](#management-plane)); only the
 APK-store half of that non-goal still stands (see the Summary table).
 
-- **Thin ncurses-menu/Studio faces** — over the driver's verbs, exactly like
+- **Thin Studio (GUI) face** — over the driver's verbs, exactly like
   the Local Docker mesh and go-live precedents (driver owns all logic; faces
   stay thin, no build-matrix row). The `make phone-*` face is ✅ complete —
   all 13 verbs, including `phone-mdm-enroll` and `phone-attest` (with the
   `HEADWIND_*`/`AUDITOR_*`/`ATTESTATION_URL`/`INTERNAL_TOKEN_FILE` knobs
-  forwarded file-path-only, per the custody pattern).
+  forwarded file-path-only, per the custody pattern) — and the **ncurses-menu
+  face is ✅ complete** (`phone_screen` wraps all 13 verbs; the MDM/attestation
+  sub-screen threads the same knobs, ingest token as a file path only). Only
+  the Studio face remains 🔭.
 - **Casdoor SSO for Headwind** — nothing in this recon confirmed Headwind has
   OIDC/SAML support (its own auth is local username/password behind a
   pluggable `HmdmAuthInterface`); until that is independently confirmed,
