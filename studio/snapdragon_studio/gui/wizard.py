@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import os
 
-from .qt import QtCore, QtGui, QtWidgets
+from .qt import BINDING, QtCore, QtGui, QtWidgets
+from .branding_icon import brand_icon
+from .. import __version__
 from ..core.build_driver import BuildDriver
 from ..core.config import ImageConfig, MODE_SKIPPED_PAGES, WIZARD_PAGE_SLUGS
 from ..core.platform_info import detect
@@ -118,7 +120,14 @@ class StudioWizard(QtWidgets.QWizard):
         # DIALOG (sudo -A askpass / pkexec), never a sudo prompt on an invisible terminal.
         self.driver = BuildDriver(self.generator_dir, self.host, graphical=True)
         self.setWindowTitle("Snapdragon Image Studio")
+        self.setWindowIcon(brand_icon())
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
+        # A user-facing About surface (name / version / license): the Qt binding used to
+        # be dumped to stdout as dev noise. QWizard's Help button is the natural, always-
+        # visible home for it in this page flow.
+        self.setOption(QtWidgets.QWizard.WizardOption.HaveHelpButton, True)
+        self.setButtonText(QtWidgets.QWizard.WizardButton.HelpButton, "About")
+        self.helpRequested.connect(self._show_about)
         # ONE size for the whole flow, clamped to the real screen (see medium_size).
         # resize(), not setFixedSize() — the user stays free to resize; a page taller
         # than the window SCROLLS (pages/_scroll.py), it does not grow the window.
@@ -144,6 +153,25 @@ class StudioWizard(QtWidgets.QWizard):
         for p in self._pages:
             self.addPage(p)
         self._page_ids = dict(zip([slug for slug, _ctor in present], self.pageIds()))
+
+    def _about_text(self) -> str:
+        """The About-box body: name, version and the runtime Qt license note. Kept as a
+        pure method (no dialog) so a headless test can assert the version + the license
+        keyed on the ACTUAL binding without popping a modal."""
+        # PySide6 ships under the LGPL, PyQt6 under the GPL — which one is live is a
+        # runtime fact (qt.py BINDING), so the disclosure must follow it.
+        licence = ("PySide6 (LGPL v3)" if BINDING == "PySide6"
+                   else "PyQt6 (GPL v3)" if BINDING == "PyQt6"
+                   else BINDING or "unknown")
+        return (
+            f"<b>Snapdragon Image Studio</b><br>"
+            f"Version {__version__}<br><br>"
+            "Assemble and run a Snapdragon image build — a mesh server node, a local "
+            "Docker mesh, a mesh desktop client, or a standalone Gentoo desktop.<br><br>"
+            f"Qt binding: {licence}")
+
+    def _show_about(self):
+        QtWidgets.QMessageBox.about(self, "About Snapdragon Image Studio", self._about_text())
 
     def showEvent(self, event):
         """Centre on the primary screen the FIRST time the wizard is shown.

@@ -20,6 +20,7 @@ flow via applies_to().
 from __future__ import annotations
 
 from ..qt import QtWidgets
+from ..styles import muted
 from ...core.config import (
     MODE_DEFAULT_ROLE, ROLE_CHOICES, UNAFFILIATED_ROLE, enter_mesh_defaults,
 )
@@ -64,7 +65,8 @@ class ModePage(QtWidgets.QWizardPage):
             rb.setProperty("mode", mid)
             sub = QtWidgets.QLabel(desc)
             sub.setWordWrap(True)
-            sub.setStyleSheet("color: gray;")
+            # muted (not bare "gray", which goes near-invisible on some dark palettes)
+            sub.setStyleSheet(muted())
             sub.setContentsMargins(24, 0, 0, 8)
             self.group.addButton(rb, i)          # button id == index in self.modes
             self._buttons[mid] = rb

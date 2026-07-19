@@ -1,7 +1,9 @@
 """WelcomePage — intro blurb + load/save of the ImageConfig JSON + previous builds."""
 from __future__ import annotations
 
+from ... import advanced_mode
 from ..qt import Qt, QtWidgets
+from ..styles import WARN
 from .sessions_widget import PreviousBuildsWidget
 
 
@@ -14,30 +16,33 @@ class WelcomePage(QtWidgets.QWizardPage):
             "Build a mesh server node, run a local Docker mesh, build a mesh desktop "
             "client, or build a standalone Gentoo desktop — you'll pick which on the next screen.")
         lay = QtWidgets.QVBoxLayout(self)
-        info = QtWidgets.QLabel(
-            "This studio assembles and runs a Snapdragon image build.\n\n"
-            f"Backend: <b>{wiz.host.default_backend}</b> ({wiz.host.summary()})\n\n"
-            "On Gentoo it can build natively; everywhere else (including Windows) it drives "
-            "the dockerized build. Everything you set here maps to the generator's flags.")
+        info = QtWidgets.QLabel(self._intro_html())
         info.setWordWrap(True)
         info.setTextFormat(Qt.TextFormat.RichText)
         lay.addWidget(info)
         btns = QtWidgets.QHBoxLayout()
         load = QtWidgets.QPushButton("Load config…")
+        load.setToolTip("Reopen a previously saved image configuration (or worklist).")
         save = QtWidgets.QPushButton("Save config…")
-        fleet = QtWidgets.QPushButton("Fleet build…")
-        fleet.setToolTip(
-            "Build EVERY role for the selected platforms in one run — the GUI "
-            "front-end to scripts/build-all-roles.sh, for when you want a whole "
-            "release worth of images instead of the single image this wizard "
-            "configures. Also reachable as `snapdragon_studio --fleet`.")
+        save.setToolTip("Save the current settings to a JSON file to build later or share.")
         load.clicked.connect(self._load)
         save.clicked.connect(self._save)
-        fleet.clicked.connect(self._fleet)
         btns.addWidget(load)
         btns.addWidget(save)
         btns.addStretch(1)
-        btns.addWidget(fleet)
+        # Fleet build is a power tool — it builds EVERY role for a whole release, not the
+        # single image this wizard configures. Keep it off the public first screen unless
+        # expert mode is on ($SNAPDRAGON_STUDIO_ADVANCED); `snapdragon_studio --fleet`
+        # stays available regardless, so no power user loses access.
+        if advanced_mode():
+            fleet = QtWidgets.QPushButton("Fleet build…")
+            fleet.setToolTip(
+                "Build EVERY role for the selected platforms in one run — the GUI "
+                "front-end to scripts/build-all-roles.sh, for when you want a whole "
+                "release worth of images instead of the single image this wizard "
+                "configures. Also reachable as `snapdragon_studio --fleet`.")
+            fleet.clicked.connect(self._fleet)
+            btns.addWidget(fleet)
         lay.addLayout(btns)
         # "Previous builds" — the first-class session manager (hides itself when there
         # are no sessions/unmanaged builds, so a first run renders exactly as before).
@@ -45,6 +50,29 @@ class WelcomePage(QtWidgets.QWizardPage):
         self.previous_builds.setVisible(False)
         lay.addWidget(self.previous_builds)
         lay.addStretch(1)
+
+    def _intro_html(self) -> str:
+        """The intro paragraph, keyed on whether this machine can actually build.
+
+        Pure method (returns HTML, touches no widget) so a headless test can assert the
+        no-backend guidance appears WITHOUT a Docker/Gentoo host. When the host has no
+        build backend, ``default_backend`` is "none" — the old page cheerfully printed
+        "Backend: none" and the user only hit the wall at Build time; now it says so
+        up-front and how to fix it."""
+        host = self.wiz.host
+        if host.default_backend == "none":
+            return (
+                "This studio assembles and runs a Snapdragon image build.<br><br>"
+                f'<b style="color:{WARN}">This machine can\'t build images yet.</b> '
+                "Install Docker Desktop on Windows or macOS (and start it), or run "
+                "Studio on a Gentoo host to build natively. You can still configure and "
+                "save an image now, then build it on a machine that can.<br><br>"
+                f"Detected: {host.summary()}")
+        return (
+            "This studio assembles and runs a Snapdragon image build.<br><br>"
+            f"Build backend: <b>{host.default_backend}</b> ({host.summary()})<br><br>"
+            "On Gentoo it builds natively; everywhere else (including Windows) it drives "
+            "the dockerized build.")
 
     def initializePage(self):
         # refresh every time the first screen is (re)shown — a finished/redone build

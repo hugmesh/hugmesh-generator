@@ -45,6 +45,7 @@ import os
 from collections import deque
 
 from ..qt import QtCore, QtWidgets, Signal
+from ..branding_icon import brand_icon
 from ...core import build_sessions
 from ...core.config import (
     ENV_CHOICES, FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS,
@@ -578,6 +579,7 @@ class FleetWindow(QtWidgets.QDialog):
     def __init__(self, generator_dir: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Snapdragon fleet build (build-all-roles)")
+        self.setWindowIcon(brand_icon())
         lay = QtWidgets.QVBoxLayout(self)
         scroll = QtWidgets.QScrollArea(); scroll.setWidgetResizable(True)
         self.page = FleetPage(generator_dir)

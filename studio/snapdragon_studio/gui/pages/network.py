@@ -270,9 +270,11 @@ class NetworkPage(QtWidgets.QWizardPage):
         cp.addWidget(_row("Headscale URL", self.headscale_url))
         # mesh agent version pins + the headscale-only posture (G29; all builders)
         self.headscale_version = QtWidgets.QLineEdit()
-        self.headscale_version.setPlaceholderText("--headscale-version pin  (empty = builder default)")
+        self.headscale_version.setPlaceholderText("Pin a Headscale version (leave blank for the builder default)")
+        self.headscale_version.setToolTip("Pins the Headscale agent version — the --headscale-version builder flag.")
         self.tailscale_version = QtWidgets.QLineEdit()
-        self.tailscale_version.setPlaceholderText("--tailscale-version pin  (empty = builder default)")
+        self.tailscale_version.setPlaceholderText("Pin a Tailscale version (leave blank for the builder default)")
+        self.tailscale_version.setToolTip("Pins the Tailscale agent version — the --tailscale-version builder flag.")
         cp.addWidget(_row("Headscale version", self.headscale_version))
         cp.addWidget(_row("Tailscale version", self.tailscale_version))
         self.skip_tailscale = QtWidgets.QCheckBox(
