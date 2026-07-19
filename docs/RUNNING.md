@@ -325,7 +325,7 @@ Full flag reference: `./build-rpi5-stage4.sh --help` and
 | `--optional-services "…"` | all four | prune optional services (see §2a) |
 | `--games-domain` | `games.<domain>` | games host + OIDC issuer (see §2b) |
 | `--grow fill\|none\|<size>` / `--no-grow` | `fill` | first-boot grow (see §2c) |
-| `--img-size MiB` | 6144 (Pi) / 8192 (x86) | compact ext4 root size |
+| `--img-size MiB` |9216 (Pi) / 8192 (x86) | compact ext4 root size |
 | `-w, --work-dir` | `./out` | products dir |
 | `-j, --jobs N` | `$(nproc)` | parallel emerge/make jobs |
 | `--skip-mesh` / `--skip-tailscale` / `--skip-kernel` / `--skip-clean` / `--resume` | off | phases |

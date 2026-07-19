@@ -204,7 +204,7 @@ def test_x86_unaffiliated_generic_iso_knobs_flow_through():
     args = ImageConfig(mode="standalone", role="standalone-unaffiliated", platform="x86",
                        bundle_source=False, img_size=6144, cached=True, live_toram=False,
                        proxy_stack="off").to_cli_args()
-    assert ("--img-size", "6144") in pairs(args)
+    assert ("--img-size", 9216) in pairs(args)
     assert "--cached" in args and "--no-live-toram" in args
     assert "--no-proxy-stack" in args
     assert "--bundle-source" not in args and "--no-bundle-source" not in args
