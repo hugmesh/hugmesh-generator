@@ -1514,6 +1514,7 @@ mode_screen() {
             client     "Mesh desktop client — a branded desktop that JOINS an existing mesh (tailnet + SSO)" \
             standalone "Standalone Gentoo desktop — hardened personal / UNAFFILIATED desktop (no mesh/SSO)" \
             phone      "MDM phone — flash a USB Pixel with VERIFIED GrapheneOS + enroll it in the mesh (no image built)" \
+            deploy     "Cloud deploy — publish a cloud-packaged x86 image to a cloud provider (no image built)" \
             advanced   "Advanced — all build targets & fleet options (the full menu)" \
             back "‹ back to main menu")" || return 0
         # NOTE: the four choice LABELS above are the single golden source of the
@@ -1540,6 +1541,11 @@ mode_screen() {
             # Pixel handset + enroll it in the mesh). Like localmesh it never touches
             # build_make_cmd — the driver owns ALL the logic, phone_screen stays thin.
             phone)      phone_screen ;;
+            # → the THIRD non-build choice: deploy the OUTPUT of a build (an already
+            # cloud-packaged x86 artifact) via the canonical cloud-deploy driver.
+            # Like localmesh/phone it never touches build_make_cmd — the driver owns
+            # ALL the gates, deploy_screen stays thin.
+            deploy)     deploy_screen ;;
             # → the full build menu verbatim, the escape hatch that keeps EVERY existing
             # option/path reachable (all-options-in-all-menus).
             advanced)   build_screen ;;
@@ -1682,6 +1688,142 @@ _local_mesh_run() {
         _phone_shred_key
     fi
     ui_msg "Local Docker mesh — ${sub} (rc=${rc})" "${out:-(no output)}"
+}
+
+# ── Cloud deploy (sixth choice) — publishes a PACKAGED image, builds NO image ───
+# Shells the SAME Qt-free entrypoint the Studio DeployPage and the Makefile
+# deploy-* delegates drive (python3 -m snapdragon_studio.core.cloud_deploy), which
+# fronts the ONE canonical driver specs/usr/sbin/snapdragon-cloud-deploy — the menu
+# never reimplements any gate (provider registry, validate_inputs, creds-present
+# check, apply/destroy confirmation). Pasted creds are entered masked (ui_password —
+# same non-persisted contract as the SA_*/ARM_* secrets and the phone auth key),
+# written to a chmod-600 mktemp file under STATE_DIR for the child (--creds-file),
+# then shredded. Never persisted to menu.conf.
+deploy_screen() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        ui_msg "Cloud deploy" "python3 is required (it drives the shared snapdragon_studio.core.cloud_deploy entrypoint)."
+        return 0
+    fi
+    local provider="" image="" domain="" region="" creds_file="" creds="" out_dir="" keys_dir="" choice
+    local idp="" idp_issuer="" idp_client_id="" idp_jwks=""
+    while :; do
+        local credl
+        if [ -n "${creds}" ]; then credl='(pasted — staged 0600 at run, then shredded)'
+        elif [ -n "${creds_file}" ]; then credl="file: ${creds_file}"
+        else credl='(unset — apply refuses without creds)'; fi
+        choice="$(ui_menu "Cloud deploy" \
+            "Publish an already-built, cloud-PACKAGED x86 image (scripts/cloud-package.sh output) to a cloud provider — no image build. 'plan' renders readable artifacts OFFLINE; only apply/destroy mutate anything, each confirmed by the driver itself. Masked creds; never saved to ${CONF_FILE}." \
+            provider "Provider ............. ${provider:-<pick from 'List providers'>}" \
+            image    "Image ................ ${image:-<cloud-packaged artifact (.qcow2/.vhd/.img)>}" \
+            domain   "Domain ............... ${domain:-<unset>}" \
+            region   "Region ............... ${region:-<unset>}" \
+            credfile "Creds file (path) .... ${creds_file:-<unset — or paste below>}" \
+            creds    "Creds (paste) ........ ${credl}" \
+            outdir   "Out dir .............. ${out_dir:-<driver default>}" \
+            keysdir  "Keys dir ............. ${keys_dir:-<unset>}" \
+            idp      "Identity provider .... ${idp:-casdoor (built-in, default)}" \
+            list     "List providers (the driver's registry table)" \
+            plan     "★ Plan — render the provider artifacts OFFLINE (touches NO cloud)" \
+            apply    "APPLY the rendered plan (driver-confirmed; real resources, real cost)" \
+            status   "Status (reads emitted state hints — never calls a cloud API)" \
+            destroy  "DESTROY (driver-confirmed; runs the emitted destroy.sh)" \
+            back     "‹ back")" || return 0
+        case "${choice}" in
+            provider) provider="$(ui_input "Provider" "Registry id — aws-ec2 / azure-image / openshift-cnv / generic-qcow2 (see 'List providers')" "${provider}")" ;;
+            image)    image="$(ui_input "Image" "Path to the cloud-PACKAGED artifact (scripts/cloud-package.sh output)" "${image}")" ;;
+            domain)   domain="$(ui_input "Domain" "Public apex domain for the deployed node (optional)" "${domain}")" ;;
+            region)   region="$(ui_input "Region" "Provider region, e.g. eu-central-1 (optional)" "${region}")" ;;
+            credfile) creds_file="$(ui_input "Creds file" "PATH to your 0600 credentials file (only the path is passed through; the contents never touch this menu)" "${creds_file}")" ;;
+            creds)    creds="$(ui_password "Creds (paste)" "Paste credential content (blank = use the creds-file path). Staged to a chmod-600 temp file at run, shredded after — never on argv, never saved." "${creds}")" ;;
+            outdir)   out_dir="$(ui_input "Out dir" "Where 'plan' renders its artifacts (blank = driver default)" "${out_dir}")" ;;
+            keysdir)  keys_dir="$(ui_input "Keys dir" "Optional keys dir for the provider's KEYS-volume notes" "${keys_dir}")" ;;
+            idp)
+                # Same picker the node/localmesh setups offer: built-in default
+                # adds nothing; an external pick asks for its issuer details.
+                idp="$(ui_menu "Identity provider" \
+                    "The built-in IdP is the default (emits nothing extra). Pick an external provider to record it in the plan's idp/idp.conf — deploys of an image BUILT with external IdP flags should match." \
+                    casdoor "Built-in (default)" \
+                    entra   "Azure Entra ID" \
+                    aws     "AWS Cognito" \
+                    oidc    "Other OIDC provider")" || continue
+                if [ -n "${idp}" ] && [ "${idp}" != "casdoor" ]; then
+                    idp_issuer="$(ui_input "IdP issuer" "https:// issuer URL — Entra: https://login.microsoftonline.com/<tenant>/v2.0 ; Cognito: https://cognito-idp.<region>.amazonaws.com/<pool-id>" "${idp_issuer}")"
+                    idp_client_id="$(ui_input "IdP client id" "Optional client id registered at the IdP" "${idp_client_id}")"
+                    idp_jwks="$(ui_input "IdP JWKS" "Optional JWKS URL override (Entra defaults to /discovery/v2.0/keys)" "${idp_jwks}")"
+                else
+                    idp="" idp_issuer="" idp_client_id="" idp_jwks=""
+                fi ;;
+            list|plan|apply|status|destroy)
+                _deploy_run "${choice}" "${provider}" "${image}" "${domain}" "${region}" "${creds_file}" "${creds}" "${out_dir}" "${keys_dir}" "${idp}" "${idp_issuer}" "${idp_client_id}" "${idp_jwks}" ;;
+            back|"") return 0 ;;
+        esac
+    done
+}
+
+# _deploy_run VERB PROVIDER IMAGE DOMAIN REGION CREDS_FILE CREDS OUT_DIR KEYS_DIR
+# [IDP IDP_ISSUER IDP_CLIENT_ID IDP_JWKS] — one child invocation of the shared
+# entrypoint, flags in the driver's pinned order (--provider --image --domain
+# --region --creds-file --out-dir --keys-dir --idp*). Pasted
+# creds (when set) go into a chmod-600 mktemp file (off the argv / process table)
+# as --creds-file and are shredded afterwards — _local_mesh_bootstrap_run's exact
+# pattern, sharing the _phone_shred_key INT/TERM/EXIT trap (the shredder reads the
+# caller's local "keyfile"). list/plan/status are captured into ui_msg; apply and
+# destroy run FOREGROUND with the terminal attached so the driver's own
+# confirmation prompts reach the operator (deliberately no --yes / CD_ASSUME_YES).
+_deploy_run() {
+    local verb="$1" provider="$2" image="$3" domain="$4" region="$5" creds_file="$6" creds="$7" out_dir="$8" keys_dir="$9"
+    local idp="${10:-}" idp_issuer="${11:-}" idp_client_id="${12:-}" idp_jwks="${13:-}"
+    local -a args=("${verb}")
+    [ -n "${provider}" ] && args+=(--provider "${provider}")
+    [ -n "${image}" ]    && args+=(--image "${image}")
+    [ -n "${domain}" ]   && args+=(--domain "${domain}")
+    [ -n "${region}" ]   && args+=(--region "${region}")
+    local keyfile=""
+    if [ -n "${creds}" ]; then
+        keyfile="$(mktemp "${STATE_DIR}/deploycreds.XXXXXX")" || { ui_msg "Cloud deploy" "could not create a temp file for the creds"; return 0; }
+        chmod 600 "${keyfile}" 2>/dev/null || true
+        printf '%s' "${creds}" >"${keyfile}"
+        args+=(--creds-file "${keyfile}")
+        trap '_phone_shred_key' INT TERM EXIT
+    elif [ -n "${creds_file}" ]; then
+        args+=(--creds-file "${creds_file}")
+    fi
+    [ -n "${out_dir}" ]  && args+=(--out-dir "${out_dir}")
+    [ -n "${keys_dir}" ] && args+=(--keys-dir "${keys_dir}")
+    # IdP passthrough: casdoor/blank adds nothing (argv identical to pre-IdP).
+    if [ -n "${idp}" ] && [ "${idp}" != "casdoor" ]; then
+        args+=(--idp "${idp}")
+        [ -n "${idp_issuer}" ]    && args+=(--idp-issuer "${idp_issuer}")
+        [ -n "${idp_client_id}" ] && args+=(--idp-client-id "${idp_client_id}")
+        [ -n "${idp_jwks}" ]      && args+=(--idp-jwks "${idp_jwks}")
+    fi
+    args+=(--generator-dir "${REPO_DIR}")
+    local rc=0
+    case "${verb}" in
+        apply|destroy)
+            # FOREGROUND, terminal attached (the _phone_run posture): the driver's
+            # own TTY confirmation prompts run untouched — never piped, never
+            # detached, never bypassed.
+            say "running: cloud-deploy ${verb} (foreground — output follows)"
+            PYTHONPATH="${REPO_DIR}/studio" python3 -m snapdragon_studio.core.cloud_deploy "${args[@]}"
+            rc=$?
+            if [ "${rc}" -eq 0 ]; then say "cloud-deploy ${verb}: OK"; else warn "cloud-deploy ${verb}: exit ${rc}"; fi
+            # Pause so the driver's output survives the next menu redraw — but only
+            # when a human is actually attached (tests call this with stdin redirected).
+            if [ -t 0 ]; then read -r -p "press Enter to return to the menu… " _ </dev/tty || true; fi
+            ;;
+        *)
+            local out
+            out="$(PYTHONPATH="${REPO_DIR}/studio" python3 -m snapdragon_studio.core.cloud_deploy "${args[@]}" 2>&1)"
+            rc=$?
+            ui_msg "Cloud deploy — ${verb} (rc=${rc})" "${out:-(no output)}"
+            ;;
+    esac
+    if [ -n "${keyfile}" ]; then
+        trap - INT TERM EXIT
+        _phone_shred_key
+    fi
+    return 0
 }
 
 build_screen() {

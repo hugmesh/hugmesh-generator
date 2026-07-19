@@ -314,6 +314,7 @@ ORANGEPIZERO2_PASS    := ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
         rpi x86 omnibus frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
         orangepizero2 orangepizero2-live orangepizero2-installer \
         phone-plan phone-detect phone-fetch phone-flash phone-mdm-enroll phone-attest phone-enroll phone-profile phone-rotate-profile-pass phone-remove-profile phone-ingest phone-status phone-wizard \
+        deploy-plan deploy-apply deploy-status deploy-destroy \
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate \
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
@@ -598,6 +599,56 @@ phone-attest: ## install the pinned Snapdragon Auditor fork + guided Attestation
 
 phone-wizard: ## interactive guided full phone flow (TTY): detect->fetch->flash->attest->mdm-enroll->enroll->profile->ingest
 	@bash scripts/phone-wizard.sh wizard $(_PHONE_ARGS)
+
+# ── Cloud deploy (publishes a PACKAGED image — builds NO image) ───────
+# Thin delegates to the shared Qt-free entrypoint
+# snapdragon_studio.core.cloud_deploy, which fronts the ONE canonical driver
+# specs/usr/sbin/snapdragon-cloud-deploy — the exact same face the Studio
+# DeployPage and the ncurses deploy_screen drive. `plan` renders the provider
+# artifacts OFFLINE into OUT_DIR (readable scripts/policies/checklists; no
+# cloud API is touched); only apply/destroy mutate anything, and BOTH stay
+# TTY-confirmed INSIDE the driver (deliberately no YES= bypass knob here —
+# the entrypoint runs them terminal-attached so the prompts reach you).
+# Secrets follow the phone-wizard custody pattern: CREDS_FILE= forwards a
+# file PATH only — no secret ever rides argv or this Makefile.
+# Knobs (forwarded only when set; DEPLOY_IMAGE, because IMAGE is the builder-
+# container knob at the top of this file):
+#   PROVIDER= DEPLOY_IMAGE= DOMAIN= REGION= CREDS_FILE= OUT_DIR= KEYS_DIR=
+#   IDP= IDP_ISSUER= IDP_CLIENT_ID= IDP_JWKS=   (IdP passthrough; casdoor default)
+# The values are read by BASH ($${VAR:+…}), not spliced by Make — the
+# _PHONE_ARGS injection custody: an ENVIRONMENT-supplied $(shell …) payload
+# stays an inert string instead of executing at recipe-expansion time. (A
+# command-line assignment `make deploy-plan 'PROVIDER=$(shell …)'` still
+# expands at Make's own assignment step — identical to the phone-* precedent
+# and to every Make CLI variable; invoking make already implies shell access,
+# so the custody line here is the env/recipe path, not the CLI assignment.)
+# All of these knobs are command-line/environment supplied (no Makefile-side
+# defaults), and both sources are auto-exported to the recipe shell, so no
+# export line is needed.
+_CLOUD_DEPLOY_ARGS = $${PROVIDER:+--provider "$$PROVIDER"} \
+  $${DEPLOY_IMAGE:+--image "$$DEPLOY_IMAGE"} \
+  $${DOMAIN:+--domain "$$DOMAIN"} \
+  $${REGION:+--region "$$REGION"} \
+  $${CREDS_FILE:+--creds-file "$$CREDS_FILE"} \
+  $${OUT_DIR:+--out-dir "$$OUT_DIR"} \
+  $${KEYS_DIR:+--keys-dir "$$KEYS_DIR"} \
+  $${IDP:+--idp "$$IDP"} \
+  $${IDP_ISSUER:+--idp-issuer "$$IDP_ISSUER"} \
+  $${IDP_CLIENT_ID:+--idp-client-id "$$IDP_CLIENT_ID"} \
+  $${IDP_JWKS:+--idp-jwks "$$IDP_JWKS"} \
+  --generator-dir .
+
+deploy-plan: ## render the cloud-deploy provider artifacts OFFLINE (PROVIDER= DEPLOY_IMAGE= [DOMAIN= REGION= CREDS_FILE= OUT_DIR= KEYS_DIR=])
+	@PYTHONPATH=studio python3 -m snapdragon_studio.core.cloud_deploy plan $(_CLOUD_DEPLOY_ARGS)
+
+deploy-apply: ## EXECUTE the rendered plan's apply.sh (driver TTY-confirms; REAL cloud resources + cost)
+	@PYTHONPATH=studio python3 -m snapdragon_studio.core.cloud_deploy apply $(_CLOUD_DEPLOY_ARGS)
+
+deploy-status: ## read the emitted state hints / print the provider check commands (never calls a cloud API)
+	@PYTHONPATH=studio python3 -m snapdragon_studio.core.cloud_deploy status $(_CLOUD_DEPLOY_ARGS)
+
+deploy-destroy: ## run the rendered plan's destroy.sh (driver TTY-confirms)
+	@PYTHONPATH=studio python3 -m snapdragon_studio.core.cloud_deploy destroy $(_CLOUD_DEPLOY_ARGS)
 
 rebuild: ## from-scratch: wipe the work dir, then build the whole default fleet
 ifndef NATIVE
