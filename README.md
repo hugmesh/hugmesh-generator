@@ -236,6 +236,8 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 > and the SAME mesh + KEYS-USB provisioning + hardened key-only SSH as the other
 > client images. See [Frite light desktop](#frite-light-desktop-libre-computer-lela-frite).
 
+> **Cloud targets:** `scripts/cloud-package.sh` re-packages a built **x86** raw `.img` as `qcow2` / fixed `VHD` / checksummed raw for KubeVirt, Azure and AWS import — see [`docs/CLOUD-IMAGE-PACKAGING.md`](docs/CLOUD-IMAGE-PACKAGING.md).
+
 ## Build ENV (`test`|`prod`) — baked at image creation
 
 Each image is stamped with a **build ENV** at creation time, written to
