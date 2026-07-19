@@ -404,7 +404,7 @@ backstops noted below may already be present but inert.
 - **🔭 Desktop app governance** — per-license SSO-enforced sudo + admin-curated
   Plasma Discover store + user install-requests + admin remote-install; extends
   [`CLIENT-IMAGES.md`](CLIENT-IMAGES.md).
-- **🚧 MDM phones (GrapheneOS on Pixel)** — the fourth onboarding form: `scripts/phone-wizard.sh` flashes signature-verified GrapheneOS, enrolls the handset into the orchestration superdomain (headscale tailnet, ADR-14 register-and-approve), escrows a separately-encrypted enterprise profile, and emits a `phone-ingest/v1` device-registry record; see [`MDM.md`](MDM.md).
+- **🚧 MDM phones (GrapheneOS on Pixel)** — the fourth onboarding form: `scripts/phone-wizard.sh` flashes signature-verified GrapheneOS, enrolls the handset into the orchestration superdomain (headscale tailnet, ADR-14 register-and-approve), escrows a separately-encrypted enterprise profile, and emits a `phone-ingest/v2` device-registry record; see [`MDM.md`](MDM.md).
 - **🚧 Notifications external channels** — Matrix DM + Akkoma feed + phpBB + email
   adapters on top of the shipped in-app MVP; mod-bff `notify_channels` directive.
 - **✅ Generator supply-chain hardening** — stage3 GPG/sha + headscale /

@@ -240,10 +240,22 @@ def main(argv=None) -> int:
         return 0
 
     # GUI
+    from . import __version__, advanced_mode
     from .gui.qt import QtWidgets, BINDING  # noqa: N806
+    from .gui.branding_icon import brand_icon
     app = QtWidgets.QApplication(sys.argv if argv is None else [sys.argv[0], *argv])
     app.setApplicationName("Snapdragon Image Studio")
-    print(f"[studio] Qt binding: {BINDING}")
+    # Brand identity: a title-bar/taskbar/alt-tab icon, a display name, a version and a
+    # .desktop id (the last is what groups the icon correctly under Wayland). Without
+    # these every window rendered the generic Python/Qt icon.
+    app.setApplicationDisplayName("Snapdragon Image Studio")
+    app.setApplicationVersion(__version__)
+    app.setWindowIcon(brand_icon())
+    if hasattr(app, "setDesktopFileName"):
+        app.setDesktopFileName("snapdragon-image-studio")
+    if advanced_mode():
+        # dev console line — expert-only now; it used to print on every launch.
+        print(f"[studio] Qt binding: {BINDING}", file=sys.stderr)
 
     wizard = None
     golive = None

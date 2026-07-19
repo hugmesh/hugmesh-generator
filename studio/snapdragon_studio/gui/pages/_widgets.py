@@ -112,6 +112,12 @@ def _row(label, widget):
     h.setContentsMargins(0, 0, 0, 0)
     lab = QtWidgets.QLabel(label)
     lab.setMinimumWidth(150)
+    # Accessibility, wired from the one choke point every form row goes through (146×):
+    # the label BUDDIES its field, and the field carries the label as its accessible
+    # name, so a screen reader can announce "Hostname, edit" instead of a bare edit box.
+    # Pure a11y metadata — no visual change, no effect on layout or emission.
+    lab.setBuddy(widget)
+    widget.setAccessibleName(label)
     h.addWidget(lab)
     h.addWidget(widget, 1)
     return w

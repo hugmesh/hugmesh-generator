@@ -4,3 +4,6 @@ build/
 dist/
 *.spec
 .venv/
+# The bootstrap venv the Windows .bat and scripts/studio-launch.sh build (the plain
+# .venv/ glob above does not match this name).
+.venv-studio/

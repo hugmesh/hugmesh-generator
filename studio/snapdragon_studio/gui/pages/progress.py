@@ -1316,7 +1316,7 @@ class ProgressPage(QtWidgets.QWizardPage):
                     self.log.appendPlainText(
                         f"Flash plan: {a.entry_id} built no '{flavor}' artifact this "
                         f"run (built: {names}) — skipped rather than writing the "
-                        f"wrong image. Check the build's flavor axis (e.g. --flavor "
+                        f"wrong image. Check the build's image variant (e.g. build "
                         f"both) or pick 'auto'.")
                 else:
                     self.log.appendPlainText(

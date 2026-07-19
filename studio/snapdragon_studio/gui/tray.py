@@ -25,37 +25,18 @@ import os
 import webbrowser
 
 from .qt import Qt, QtCore, QtGui, QtWidgets
+from .branding_icon import (
+    ICON_PX as _ICON_PX, brand_icon as _brand_icon, brand_pixmap as _brand_pixmap)
 from ..core.mesh_node import MeshNode
 from ..core.local_stack_node import LocalStackNode
 
-_ICON_PX = 64
 # the four build states a badge can show; anything else renders as the plain brand icon.
 _BUILD_STATES = ("idle", "building", "error", "complete")
 
 
-# ── brand icon + build-state badge overlay (dependency-free QPainter) ─────────────────
-def _brand_pixmap() -> QtGui.QPixmap:
-    """A fresh navy rounded square with a white 'S' — the brand mark. Returned fresh each
-    call so a badge painter can mutate it without touching a shared pixmap."""
-    pm = QtGui.QPixmap(_ICON_PX, _ICON_PX)
-    pm.fill(Qt.GlobalColor.transparent)
-    p = QtGui.QPainter(pm)
-    p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-    p.setBrush(QtGui.QColor("#1f2740"))
-    p.setPen(QtGui.QColor("#3f5b8c"))
-    p.drawRoundedRect(4, 4, 56, 56, 12, 12)
-    p.setPen(QtGui.QColor("white"))
-    f = p.font(); f.setBold(True); f.setPointSize(30); p.setFont(f)
-    p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, "S")
-    p.end()
-    return pm
-
-
-def _brand_icon() -> QtGui.QIcon:
-    """The plain brand icon (no build badge)."""
-    return QtGui.QIcon(_brand_pixmap())
-
-
+# ── build-state badge overlay (dependency-free QPainter) ──────────────────────────────
+# The plain brand mark (_brand_pixmap/_brand_icon) now lives in gui/branding_icon.py so
+# every top-level window can reuse it; the tray owns only the build-state badge below.
 def _render_icon(state: str = "idle", percent: int | None = None) -> QtGui.QIcon:
     """The brand icon with a dependency-free corner badge painted per build state:
 

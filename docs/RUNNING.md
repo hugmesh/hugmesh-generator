@@ -87,6 +87,34 @@ writes):
   `blkid`, `partprobe` (and **root** for the actual write)
 - `clone-all-repos.sh` — `git`, and `gh` (logged in) **or** a token/VPN to the mirror
 
+### 0d. NixOS / SteamOS / gaming distros (Studio wizard + menu, no `make` needed)
+
+Just want the **Studio wizard** or the **ncurses menu** on a host where `python3` /
+`make` are absent or the layout is non-FHS (NixOS, SteamOS / Steam Deck, Arch,
+Debian/Ubuntu, Fedora)? Two **additive** front doors (they change nothing above):
+
+- **Nix** — `flake.nix` / `shell.nix` supply python3 + PySide6 + make + whiptail:
+
+  ```bash
+  nix develop            # then: ./scripts/studio-launch.sh   or   make menu
+  nix run .#studio       # launch the wizard directly (nix run .#menu for the menu)
+  nix-shell              # non-flake parity (shell.nix)
+  ```
+
+- **Portable launcher** — `scripts/studio-launch.sh` detects the distro, uses the
+  system Python when it can, else bootstraps a project-local venv (consent-gated),
+  and exports `PYTHONPATH=$REPO/studio` so it runs from any directory:
+
+  ```bash
+  ./scripts/studio-launch.sh          # detect → offer a venv (y/N) → launch the wizard
+  ./scripts/studio-launch.sh --detect # print the DETECT report and exit
+  ./scripts/studio-launch.sh --menu   # hand off to the ncurses build menu
+  ```
+
+See [`docs/NIXOS-STEAMOS.md`](NIXOS-STEAMOS.md) for per-distro copy-paste blocks
+(SteamOS Desktop vs Game Mode, `QT_QPA_PLATFORM=xcb`, read-only rootfs, the
+missing-`make` caveat for real builds).
+
 ---
 
 ## 1. Clone the generator

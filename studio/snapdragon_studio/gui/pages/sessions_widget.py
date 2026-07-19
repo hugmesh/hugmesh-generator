@@ -217,6 +217,14 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         for b in (self.restart_btn, self.redo_btn, self.open_btn, self.log_btn):
             btns.addWidget(b)
         btns.addStretch(1)
+        # destructive actions live on the right, past the stretch — a session record is a
+        # cheap unlink, artifacts a confirmed opt-in; both refuse an in-progress build.
+        self.delete_btn = QtWidgets.QPushButton("Delete")
+        self.delete_btn.clicked.connect(self._delete)
+        self.delete_all_btn = QtWidgets.QPushButton("Delete all finished…")
+        self.delete_all_btn.clicked.connect(self._delete_all)
+        for b in (self.delete_btn, self.delete_all_btn):
+            btns.addWidget(b)
         lay.addLayout(btns)
         self._update_buttons()
 
@@ -293,13 +301,23 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
                    or (r is not None and r.kind == "unmanaged" and r.unmanaged.has_log)
                    or (r is not None and r.kind == "unreadable"))
         self.log_btn.setEnabled(bool(r is not None and has_log))
+        # Delete: any selected row is deletable (record unlink / tree rmtree); an ACTIVE
+        # session shows the blocked reason (the hard guard still re-runs at click time).
+        self.delete_btn.setEnabled(r is not None)
+        if is_session and build_sessions.is_active(r.session):
+            self.delete_btn.setToolTip(
+                "This session is running in another Studio process — stop it there "
+                "first.")
+        else:
+            self.delete_btn.setToolTip("")
+        self.delete_all_btn.setEnabled(bool(self._row_data))
 
     # ---- guards (pure-ish, offscreen-testable) --------------------------------------
     @staticmethod
     def can_restart(session) -> tuple[bool, str]:
         """RESTART gate: refuse a genuinely-running session (another Studio process);
         a deleted workdir means only REDO applies (the caller offers it)."""
-        if session.status == "running" and not build_sessions.is_stale(session):
+        if build_sessions.is_active(session):
             return False, ("This session appears to be running in another Studio "
                            "process — stop it there first.")
         if not os.path.isdir(session.workdir):
@@ -381,3 +399,66 @@ class PreviousBuildsWidget(QtWidgets.QGroupBox):
         if r is None:
             return
         _SessionDetailDialog(r, parent=self).exec()
+
+    # ---- delete / cleanup ------------------------------------------------------------
+    def _delete(self) -> None:
+        r = self._selected()
+        if r is None:
+            return
+        if r.kind == "session":
+            s = r.session
+            if build_sessions.is_active(s):    # re-evaluated at click time, never cached
+                QtWidgets.QMessageBox.warning(
+                    self, "Delete refused",
+                    "This session appears to be running in another Studio process — "
+                    "stop it there first.")
+                return
+            box = QtWidgets.QMessageBox(self)
+            box.setWindowTitle("Delete build session")
+            box.setText(f"Delete the record for “{r.label}”?")
+            box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok
+                                   | QtWidgets.QMessageBox.StandardButton.Cancel)
+            # records are cheap; the built artifacts on disk may still be wanted, so the
+            # rmtree is an explicit opt-in that defaults OFF.
+            cb = QtWidgets.QCheckBox("Also delete build artifacts on disk:\n"
+                                     + s.workdir)
+            cb.setChecked(False)
+            box.setCheckBox(cb)
+            if box.exec() != QtWidgets.QMessageBox.StandardButton.Ok:
+                return
+            build_sessions.delete(s, remove_artifacts=cb.isChecked())
+        elif r.kind == "unmanaged":
+            if QtWidgets.QMessageBox.question(
+                    self, "Delete build tree",
+                    f"Permanently delete this unmanaged build tree?\n\n{r.location}"
+            ) != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+            build_sessions.delete_unmanaged(r.unmanaged)
+        else:                                  # unreadable record — a cheap unlink
+            if QtWidgets.QMessageBox.question(
+                    self, "Delete record",
+                    f"Delete this unreadable record file?\n\n{r.path}"
+            ) != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+            build_sessions.delete_path(r.path)
+        self.refresh()
+
+    def _delete_all(self) -> None:
+        if not self._row_data:
+            return
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Delete all finished sessions")
+        box.setText("Delete every finished build-session record?\n"
+                    "Sessions still running are kept.")
+        box.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok
+                               | QtWidgets.QMessageBox.StandardButton.Cancel)
+        cb = QtWidgets.QCheckBox("Also delete build artifacts on disk")
+        cb.setChecked(False)                   # parity with per-row: records-only default
+        box.setCheckBox(cb)
+        if box.exec() != QtWidgets.QMessageBox.StandardButton.Ok:
+            return
+        deleted, skipped = build_sessions.prune(remove_artifacts=cb.isChecked())
+        QtWidgets.QMessageBox.information(
+            self, "Delete all finished",
+            f"Deleted {deleted}; skipped {skipped} still running.")
+        self.refresh()

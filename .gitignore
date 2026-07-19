@@ -104,6 +104,15 @@ keys-template/mesh-trust/*/foreign-provenance-pub.ed25519
 # (brand.conf.example is the committed template).
 brand.conf
 
+# ── Studio launcher / Nix dev-shell scratch (scripts/studio-launch.sh, flake.nix) ──
+# The consent-gated Studio bootstrap venv (studio/.venv-studio; also matches the
+# path the Windows .bat builds); direnv's cache; and `nix build`/`nix run` result
+# symlinks. All generated, machine-specific, never committed.
+.venv-studio/
+.direnv/
+/result
+/result-*
+
 # ── Editor / OS noise ─────────────────────────────────────────────
 *.swp
 *~

@@ -152,6 +152,17 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
         self.preview_btn.clicked.connect(self._open_preview)
         lay.addWidget(self.preview_btn)
 
+        # Feedback for the preview open itself (distinct from the red css error_note):
+        # confirms the launch + the file path, and — when no browser could be launched
+        # (a headless / minimal / Wayland desktop with no xdg-open handler) — shows the
+        # path to open manually instead of the button appearing to do nothing.
+        self.preview_note = QtWidgets.QLabel("")
+        self.preview_note.setWordWrap(True)
+        self.preview_note.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.preview_note.setVisible(False)
+        lay.addWidget(self.preview_note)
+
         # uploaded-font state (bytes cached once, validated at pick time)
         self._font_bytes = b""
         self._font_family = ""
@@ -313,10 +324,22 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
 
     def _open_preview(self, *_):
         """Write the captured real login page with the CURRENT theme substituted and
-        open it in the operator's default browser (the actual runtime target)."""
+        open it in the operator's default browser (the actual runtime target).
+
+        Robust open: Qt's QDesktopServices.openUrl first, then the Qt-free
+        login_preview.open_in_browser fallback (stdlib webbrowser + xdg-open/$BROWSER)
+        — and if NOTHING can launch a browser (headless / minimal / Wayland desktop
+        with no registered handler), the file path is surfaced for a manual open so
+        the button never silently does nothing."""
+        self.preview_note.setVisible(False)
         css = self.compose_css()
         if self._error:
-            return   # red note already visible; nothing sensible to preview
+            # The red error_note already explains the theme error; make the button's
+            # inaction explicit rather than a silent no-op.
+            self.preview_note.setStyleSheet("color: #b00020;")
+            self.preview_note.setText("Fix the theme error above before previewing.")
+            self.preview_note.setVisible(True)
+            return
         out_dir = os.path.join(tempfile.gettempdir(), "snapdragon-studio-preview")
         try:
             path = login_preview.write_preview(css, out_dir)
@@ -324,4 +347,15 @@ class LoginThemeGroup(QtWidgets.QGroupBox):
             self.error_note.setText(f"preview failed: {exc}")
             self.error_note.setVisible(True)
             return
-        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path))
+        opened = bool(QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(path)))
+        if not opened:
+            opened, _how = login_preview.open_in_browser(path)
+        if opened:
+            self.preview_note.setStyleSheet("color: #2e7d32;")
+            self.preview_note.setText(f"Preview opened in your browser.\nFile: {path}")
+        else:
+            self.preview_note.setStyleSheet("color: #b00020;")
+            self.preview_note.setText(
+                "Could not launch a browser automatically. Open this file manually:\n"
+                + path)
+        self.preview_note.setVisible(True)

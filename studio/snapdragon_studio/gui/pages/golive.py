@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
+from ..branding_icon import brand_icon
 from ..wizard import _file_picker, _row
 from ...core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
 
@@ -261,7 +262,7 @@ class GoLiveInputsPage(QtWidgets.QWizardPage):
         # secrets: masked value OR a token file; the file wins (driver semantics).
         # The masked value is staged to a 0600 temp file at generate time, deleted
         # after the run, and never persisted — it deliberately has no place in opts.
-        self.token_box = QtWidgets.QGroupBox("Provider token (never persisted, never in argv)")
+        self.token_box = QtWidgets.QGroupBox("Provider token (never saved, never in argv)")
         tl = QtWidgets.QVBoxLayout(self.token_box)
         self.token_secret = QtWidgets.QLineEdit()
         self.token_secret.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
@@ -581,6 +582,7 @@ class GoLiveWizard(QtWidgets.QWizard):
         self.token_secret = ""      # masked provider token — staged per run, never saved
         self.verify_ok = False
         self.setWindowTitle("Snapdragon Go-Live Wizard")
+        self.setWindowIcon(brand_icon())
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
         self.resize(820, 640)
         self._pages = [

@@ -19,7 +19,10 @@ way in is `make local` (a LAN `.test` fleet) or `make prod`; see
 > end-to-end runbook (prerequisites → clone → `brand.conf` + build knobs → build
 > → keys + KEYS USB → flash → provision → cluster). Then read
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full topology and
-> [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md) for LAN testing.
+> [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md) for LAN testing. To generate a
+> whole platform from scratch and **serve it** — locally, then publicly over a Tor
+> `.onion` / a Dynamic-DNS host / a tunnel — follow
+> [`docs/SERVE-YOUR-MESH.md`](docs/SERVE-YOUR-MESH.md).
 
 All build output lands in a **git-ignored** work directory (`./out` by default,
 for both `make` and the scripts called directly; override with `WORK_DIR=` /
@@ -813,7 +816,7 @@ live list). Common overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`,
 | Target | What it does |
 |---|---|
 | `make docker-image` (alias `docker`) | build the self-contained Gentoo builder image (LONG first time). |
-| `make menu` | interactive console build menu (`scripts/build-menu.sh`) — pick images with live progress; quit without stopping the build. |
+| `make menu` | interactive console build menu (`scripts/build-menu.sh`) — pick images with live progress; quit without stopping the build. On NixOS/SteamOS/no-`make` hosts, `scripts/studio-launch.sh --menu` reaches it too (see [`docs/NIXOS-STEAMOS.md`](docs/NIXOS-STEAMOS.md)). |
 | `make local` | ENV=test + `brands/local.conf` → the LAN `snapdragon.test` fleet. |
 | `make prod` | ENV=prod, real domain (announced; creds from the keys USB). |
 | `make build-all` / `make rebuild` | the default fleet (3 Pi + x86 pki/be/fe/be+gpu); `rebuild` wipes first. |
@@ -844,6 +847,14 @@ builders' `--print-plan` dry run, `make -n` recipe inspection, the menu's
 composed command and the Studio's headless `--print-command` — plus negative
 checks that invalid combinations fail loudly. See
 [`docs/BUILD-MATRIX.md`](docs/BUILD-MATRIX.md).
+
+> **On NixOS / SteamOS (Steam Deck) / Arch / Debian / Fedora**, where `python3` or
+> `make` may be absent or the layout is non-FHS, an **additive** Nix flake
+> (`flake.nix` / `shell.nix`) and a portable launcher
+> (`scripts/studio-launch.sh` — detects the distro, bootstraps a project-local venv,
+> and works when `make` is absent by shelling the builder scripts directly) bring up
+> the Studio wizard and the menu. They add nothing to the build engine and leave the
+> `make` targets untouched. See [`docs/NIXOS-STEAMOS.md`](docs/NIXOS-STEAMOS.md).
 
 ## Spec files
 

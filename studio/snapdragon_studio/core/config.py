@@ -61,13 +61,13 @@ MODE_DEFAULT_ROLE = {
 # contract is testable without a GUI toolkit. Skipped pages are never VISITED, and
 # collect_all() only reads visited pages — so a skipped page's widgets can never
 # leak stale values into a saved config or the emitted argv.
-# "localmesh" sits IMMEDIATELY after "mode" (nextId()'s skip walk is positional):
-# the non-image side-flow page, dynamically skipped via applies_to() on every image
-# mode. It is deliberately NOT a MODE_SKIPPED_PAGES key — _ALL_MODES derives the
-# legal ImageConfig.mode set from that dict, and localmesh is not an image mode.
-WIZARD_PAGE_SLUGS = ("welcome", "mode", "localmesh", "role", "worklist", "hardware",
-                     "branding", "network", "keyzip", "domains", "users", "system",
-                     "home", "build", "progress")
+# "localmesh" and "phone" sit IMMEDIATELY after "mode" (nextId()'s skip walk is
+# positional): the two non-image side-flow pages, each dynamically skipped via
+# applies_to() on every image mode. Neither is a MODE_SKIPPED_PAGES key — _ALL_MODES
+# derives the legal ImageConfig.mode set from that dict, and neither is an image mode.
+WIZARD_PAGE_SLUGS = ("welcome", "mode", "localmesh", "phone", "role", "worklist",
+                     "hardware", "branding", "network", "keyzip", "domains", "users",
+                     "system", "home", "build", "progress")
 MODE_SKIPPED_PAGES = {
     # standalone/cloud build ONE image the old way (role/hardware/branding per image);
     # the mesh worklist is skipped there. mesh builds N images from a role x platform

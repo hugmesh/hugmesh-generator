@@ -85,6 +85,22 @@ def test_plan_test_skips_overlay_prod_attaches(tmp_path):
     assert "ATTACHED" in prod
 
 
+def test_plan_points_to_go_live_for_public_exposure(tmp_path):
+    # The from-scratch bring-up serves LOCALLY; the plan must make the SEPARATE
+    # public-exposure path discoverable (the "no clear way to serve onion/DDNS" gap).
+    p = _boot(tmp_path, env="test").plan()
+    assert "SERVE" in p and "Go Live" in p
+    assert "tor-onion" in p and "duckdns" in p        # onion + a common Dynamic DNS
+    assert "Local front door" in p
+
+
+def test_plan_tor_on_reports_onion_not_go_live_for_public(tmp_path):
+    # With Tor already enabled the public step is already satisfied — do not tell the
+    # operator to run Go Live for an onion they already have.
+    p = _boot(tmp_path, env="test", with_tor=True).plan()
+    assert "already ON — the Tor v3 .onion" in p
+
+
 def test_plan_flags_prod_blockers(tmp_path):
     p = _boot(tmp_path, env="prod").plan()  # no domain, no key
     assert "BLOCKERS" in p

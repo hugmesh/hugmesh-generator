@@ -313,11 +313,11 @@ ORANGEPIZERO2_PASS    := ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
 .PHONY: help menu mesh-node-up mesh-node-down mesh-node-status mesh-node-logs go-live go-live-menu clean build-all build-everything matrix-check pentest pentest-seed rebuild \
         rpi x86 omnibus frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
         orangepizero2 orangepizero2-live orangepizero2-installer \
-        phone-plan phone-detect phone-fetch phone-flash phone-enroll phone-profile phone-rotate-profile-pass phone-remove-profile phone-ingest phone-status phone-wizard \
+        phone-plan phone-detect phone-fetch phone-flash phone-mdm-enroll phone-attest phone-enroll phone-profile phone-rotate-profile-pass phone-remove-profile phone-ingest phone-status phone-wizard \
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate \
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
-        stack-clone stack-mastodon-env stack-m2-bootstrap stack-build stack-up stack-down stack-logs stack-ps stack-onion
+        stack-clone stack-mastodon-env stack-m2-bootstrap stack-build stack-up stack-down stack-logs stack-ps
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z0-9_.+-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -380,7 +380,6 @@ mesh-node-logs: ## tail the Local Docker mesh node's container logs
 # `plan` only previews; `up` is the explicit action (prod TTY-confirms, no bypass).
 # Knobs: ENV=test|prod, SOCIAL=1, SUPERADMIN=…, CLUSTER_DOMAIN=…, AUTHKEY_FILE=… .
 _MESH_BOOTSTRAP_ARGS = --env "$(ENV)" $(if $(strip $(SOCIAL)),--social) \
-  $(if $(strip $(TOR)),--with-tor) \
   $(if $(SUPERADMIN),--superadmin-username "$(SUPERADMIN)") \
   $(if $(CLUSTER_DOMAIN),--cluster-domain "$(CLUSTER_DOMAIN)") \
   $(if $(OUT_DIR),--out "$(OUT_DIR)") \
@@ -504,16 +503,29 @@ go-live-menu: ## preview the on-device go-live CONSOLE menu (ncurses front-end; 
 #   SERIAL= CODENAME= CHANNEL= GRAPHENE_VERSION= OUT_DIR= KEYS_DIR=
 #   LOGIN_SERVER= AUTHKEY_FILE= PASS_FILE= DEVICE_ID= SUPERDOMAIN= PHONE_ROLE=
 #   PROFILE_NAME= TAILSCALE_APK= APK_SIGNER_SHA256= INGEST_URL= CLIENT_CERT=
-#   CLIENT_KEY= CA= YES=1 FORCE=1 FORCE_FWUPD=1 RESOLVE=1 SHOW_AUTHKEY=1
+#   CLIENT_KEY= CA= INTERNAL_TOKEN_FILE= HEADWIND_APK= HEADWIND_SIGNER_SHA256=
+#   HEADWIND_URL= AUDITOR_APK= AUDITOR_SIGNER_SHA256= ATTESTATION_URL=
+#   YES=1 FORCE=1 FORCE_FWUPD=1 RESOLVE=1 SHOW_AUTHKEY=1
 PHONE_WORK_DIR ?= $(WORK_DIR)/phone-wizard
 # Exported so bash — not Make — performs the substitution below: a value with
 # an embedded ", `, or $(...) (e.g. a spoofed USB device serial) is inserted
 # by the shell as an inert string via "$$VAR", instead of being spliced by
 # Make as literal recipe text that /bin/sh would re-parse as shell syntax.
+# This custody applies to the BOOLEAN flags and PLAN_VERB too: they are read
+# via the shell ($${YES:+--yes}, $${PLAN_VERB}, and the phone-flash SERIAL
+# guard's [ -n "$$SERIAL" ]) rather than Make's $(if $(strip $(YES))) / $(error)
+# — those forms expand the value at MAKE time, so a $(shell …) payload in YES/
+# FORCE/RESOLVE/SHOW_AUTHKEY/FORCE_FWUPD/SERIAL/PLAN_VERB would EXECUTE during
+# recipe expansion (a real command-injection; reproduced + fixed). A recursive
+# (=) variable never re-runs command substitution once it holds a shell string,
+# so the shell forms are inert.
 export PHONE_WORK_DIR SERIAL CODENAME CHANNEL GRAPHENE_VERSION OUT_DIR \
   KEYS_DIR LOGIN_SERVER AUTHKEY_FILE PASS_FILE DEVICE_ID SUPERDOMAIN \
   PHONE_ROLE PROFILE_NAME TAILSCALE_APK APK_SIGNER_SHA256 INGEST_URL \
-  CLIENT_CERT CLIENT_KEY CA
+  CLIENT_CERT CLIENT_KEY CA INTERNAL_TOKEN_FILE HEADWIND_APK \
+  HEADWIND_SIGNER_SHA256 HEADWIND_URL AUDITOR_APK AUDITOR_SIGNER_SHA256 \
+  ATTESTATION_URL \
+  YES FORCE FORCE_FWUPD RESOLVE SHOW_AUTHKEY PLAN_VERB
 _PHONE_ARGS = --work-dir "$$PHONE_WORK_DIR" \
   $${SERIAL:+--serial "$$SERIAL"} \
   $${CODENAME:+--codename "$$CODENAME"} \
@@ -534,14 +546,21 @@ _PHONE_ARGS = --work-dir "$$PHONE_WORK_DIR" \
   $${CLIENT_CERT:+--client-cert "$$CLIENT_CERT"} \
   $${CLIENT_KEY:+--client-key "$$CLIENT_KEY"} \
   $${CA:+--ca "$$CA"} \
-  $(if $(strip $(YES)),--yes) \
-  $(if $(strip $(FORCE)),--force) \
-  $(if $(strip $(FORCE_FWUPD)),--force-fwupd) \
-  $(if $(strip $(RESOLVE)),--resolve) \
-  $(if $(strip $(SHOW_AUTHKEY)),--show-authkey)
+  $${INTERNAL_TOKEN_FILE:+--internal-token-file "$$INTERNAL_TOKEN_FILE"} \
+  $${HEADWIND_APK:+--headwind-apk "$$HEADWIND_APK"} \
+  $${HEADWIND_SIGNER_SHA256:+--headwind-signer-sha256 "$$HEADWIND_SIGNER_SHA256"} \
+  $${HEADWIND_URL:+--headwind-url "$$HEADWIND_URL"} \
+  $${AUDITOR_APK:+--auditor-apk "$$AUDITOR_APK"} \
+  $${AUDITOR_SIGNER_SHA256:+--auditor-signer-sha256 "$$AUDITOR_SIGNER_SHA256"} \
+  $${ATTESTATION_URL:+--attestation-url "$$ATTESTATION_URL"} \
+  $${YES:+--yes} \
+  $${FORCE:+--force} \
+  $${FORCE_FWUPD:+--force-fwupd} \
+  $${RESOLVE:+--resolve} \
+  $${SHOW_AUTHKEY:+--show-authkey}
 
 phone-plan: ## dry-run the MDM phone wizard: validate knobs + catalog, print PLAN_* lines ([PLAN_VERB=flash] plans one verb)
-	@bash scripts/phone-wizard.sh plan $(PLAN_VERB) $(_PHONE_ARGS)
+	@bash scripts/phone-wizard.sh plan $${PLAN_VERB} $(_PHONE_ARGS)
 
 phone-detect: ## read-only probe of the USB-connected Pixel (serial, codename, current OS)
 	@bash scripts/phone-wizard.sh detect $(_PHONE_ARGS)
@@ -550,7 +569,7 @@ phone-fetch: ## download + sshsig-VERIFY the GrapheneOS install zip (CODENAME=�
 	@bash scripts/phone-wizard.sh fetch $(_PHONE_ARGS)
 
 phone-flash: ## DESTRUCTIVE: wipe + flash the VERIFIED artifact (SERIAL=… required; non-TTY also YES=1)
-	$(if $(strip $(SERIAL)),,$(error phone-flash: refusing — SERIAL= is required (make phone-detect lists connected devices)))
+	@[ -n "$$SERIAL" ] || { echo 'phone-flash: refusing — SERIAL= is required (make phone-detect lists connected devices)' >&2; exit 2; }
 	@bash scripts/phone-wizard.sh flash $(_PHONE_ARGS)
 
 phone-enroll: ## join the flashed phone to the mesh tailnet (KEYS_DIR=… or LOGIN_SERVER=…+AUTHKEY_FILE=…)
@@ -571,10 +590,11 @@ phone-ingest: ## emit the phone-ingest/v1 device-registry record (INGEST_URL=+mT
 phone-status: ## read-only: tools, device, tailnet, profile + escrow PRESENCE (never contents)
 	@bash scripts/phone-wizard.sh status $(_PHONE_ARGS)
 
-# TODO: no phone-mdm-enroll / phone-attest targets yet for scripts/phone-wizard.sh's
-# 'mdm-enroll'/'attest' verbs (Headwind device-owner enrollment / AttestationServer
-# pairing, #390) — only reachable via the driver directly, not `make`. See
-# docs/MDM.md "Deferred".
+phone-mdm-enroll: ## Headwind MDM device-owner enrollment (fresh device only; HEADWIND_APK=+HEADWIND_SIGNER_SHA256= pin, HEADWIND_URL= into init.json)
+	@bash scripts/phone-wizard.sh mdm-enroll $(_PHONE_ARGS)
+
+phone-attest: ## install the pinned Snapdragon Auditor fork + guided AttestationServer pairing (AUDITOR_APK=+AUDITOR_SIGNER_SHA256=, ATTESTATION_URL=)
+	@bash scripts/phone-wizard.sh attest $(_PHONE_ARGS)
 
 phone-wizard: ## interactive guided full phone flow (TTY): detect->fetch->flash->attest->mdm-enroll->enroll->profile->ingest
 	@bash scripts/phone-wizard.sh wizard $(_PHONE_ARGS)
@@ -854,11 +874,6 @@ STACK_ENV := STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              SNAP_WEB_LOCALES='$(SNAP_WEB_LOCALES)' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
-# Opt-in Tor v3 onion for the LOCAL mesh (the `tor` compose profile, built from
-# tests/stack/tor). `make stack-up TOR=1` publishes the fe-gateway as a stable
-# .onion — INBOUND reachability with no public IP/DNS/ports. Read the address with
-# `make stack-onion`. See docs/TOR-HIDDEN-SERVICE.md + the snapdragon-tor service.
-STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)
 COMPOSE_CMD   ?= docker compose
 # ── private-maven cold-build wiring (see tests/stack/m2-bootstrap.sh) ──
 # Four Java services (admin/user/mod-bff, federation-api) resolve org-PRIVATE
@@ -918,14 +933,13 @@ stack-m2-bootstrap: ## COLD-BUILD prereq: build the private systems.snapdragon m
 	bash tests/stack/m2-bootstrap.sh
 
 stack-build: stack-clone $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) build
 
-stack-up: stack-clone $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon; TOR=1 adds a Tor .onion)
-	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off), tor=$(if $(strip $(TOR)),on,off)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) up -d
+stack-up: stack-clone $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
+	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) build
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) up -d
 	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  | Casdoor: http://localhost:8000"
-	@$(if $(strip $(TOR)),echo "    Tor onion: run 'make stack-onion' once tor publishes (~30s) for the .onion address";)
 	@echo "    Logs: make stack-logs   Down: make stack-down"
 
 stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real SSO login; SOCIAL=1 also seeds Matrix/Mastodon
@@ -934,17 +948,10 @@ stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real 
 	@echo "==> Seeded. Real SSO web login: open http://localhost:$(PUBLIC_HOST_PORT)/login and sign in with an e2e persona (e.g. e2e-admin / e2e-pass)."
 
 stack-down: ## stop the local stack and drop its volumes
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor down -v
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social down -v
 
 stack-logs: ## tail logs from the running local stack
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_TOR_PROFILE) logs -f --tail=100
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) logs -f --tail=100
 
 stack-ps: ## list the local stack's containers + status
-	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_TOR_PROFILE) ps
-
-stack-onion: ## print the local mesh's Tor .onion address (needs a `make stack-up TOR=1` bring-up)
-	@if [ -s tests/stack/tor-onion/hostname ]; then \
-	  echo "http://$$(cat tests/stack/tor-onion/hostname)/   (open in Tor Browser)"; \
-	else \
-	  echo "no .onion yet — bring up with 'make stack-up TOR=1' and wait ~30s for tor to publish it"; \
-	fi
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) ps

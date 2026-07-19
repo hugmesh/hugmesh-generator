@@ -37,13 +37,17 @@ class SystemPage(QtWidgets.QWizardPage):
                          "builder's role-derived hostname, UTC and default account.")
         lay = QtWidgets.QVBoxLayout(self)
         self.hostname = QtWidgets.QLineEdit()
-        self.hostname.setPlaceholderText("role-derived when blank (-H/--hostname)")
+        self.hostname.setPlaceholderText("Leave blank to use the role-derived hostname")
+        self.hostname.setToolTip("Sets the baked hostname — the -H/--hostname builder flag.")
         lay.addWidget(_row("Hostname", self.hostname))
         self.timezone = QtWidgets.QLineEdit()
-        self.timezone.setPlaceholderText("Area/Location, e.g. Europe/Berlin; UTC when blank (-T/--timezone)")
+        self.timezone.setPlaceholderText("Area/Location, e.g. Europe/Berlin (leave blank for UTC)")
+        self.timezone.setToolTip("Sets the system timezone — the -T/--timezone builder flag.")
         lay.addWidget(_row("Timezone", self.timezone))
         self.user = QtWidgets.QLineEdit()
-        self.user.setPlaceholderText("baked default account name (-u/--user; distinct from --local-user)")
+        self.user.setPlaceholderText("Default account name (leave blank for the builder default)")
+        self.user.setToolTip("The baked default account — the -u/--user builder flag "
+                             "(distinct from --local-user).")
         lay.addWidget(_row("Default user", self.user))
         # node FALLBACK credentials (G27): without these, a GUI-built mesh fleet
         # ships the builder's DEFAULT credentials. x86 only — rpi5's equivalents

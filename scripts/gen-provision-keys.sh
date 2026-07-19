@@ -258,6 +258,51 @@ for t in openssl ssh-keygen python3; do
 done
 [ -d "${TEMPLATE}" ] || { echo "ERROR: template not found: ${TEMPLATE}" >&2; exit 1; }
 
+# ── Escrow-clobber guard (defense-in-depth) ─────────────────────────────────────
+# The `rm -rf ${OUT_DIR}` below rebuilds the bundle from the template — safe for
+# everything THIS script mints (all of it regenerates), but OTHER tools escrow
+# NON-regenerable secrets under <out>/vault-seed/device/<id>/ too: the MDM
+# phone-wizard's enterprise-profile.pass is the passphrase of an already-created
+# on-device work profile, and destroying it locks that profile forever. The
+# wizard's default --out was moved off keys-out after a real near-collision, but
+# an operator can still point both tools at one directory. So: before deleting,
+# scan the existing tree for vault-seed/device files this script did NOT create
+# (ours are exactly <id>/ssh/dial_private_key{,.pub} + <id>/ingest.json) and
+# REFUSE if any exist. Deliberately NO --force override: the escape hatch is the
+# operator moving the escrow (or deleting the directory themselves), so the
+# destructive step can never happen as a flag-typo side effect.
+#
+# SCOPE: this guards non-regenerable SECRETS only (the escrow tree), NOT the
+# wizard's device *records* (enrollment/mdm/attestation.json) — those regenerate
+# by re-running the corresponding verbs, so their loss is recoverable, unlike an
+# escrowed profile passphrase. The whitelist patterns are ANCHORED to the exact
+# layout our files occupy (device/<id>/ingest.json and device/<id>/ssh/…), so a
+# foreign file that merely reuses one of those basenames at some OTHER depth is
+# treated as foreign (refused), not silently excused.
+# The `[^/]+` in the -regex patterns pins <id> to a SINGLE path component, so
+# (unlike a -path glob, whose * spans slashes) a file at some deeper path that
+# merely reuses one of our basenames is NOT excused.
+if [ -d "${OUT_DIR}/vault-seed/device" ]; then
+    FOREIGN_ESCROW="$(find "${OUT_DIR}/vault-seed/device" -mindepth 1 -type f \
+        ! -regex '.*/device/[^/]+/ingest\.json' \
+        ! -regex '.*/device/[^/]+/ssh/dial_private_key' \
+        ! -regex '.*/device/[^/]+/ssh/dial_private_key\.pub' \
+        2>/dev/null)"
+    if [ -n "${FOREIGN_ESCROW}" ]; then
+        {
+            echo "ERROR: refusing to delete ${OUT_DIR} — vault-seed/device holds escrowed"
+            echo "files this script did not create (they do NOT regenerate; e.g. an MDM"
+            echo "enterprise-profile passphrase is the ONLY copy that can unlock its"
+            echo "on-device profile):"
+            printf '%s\n' "${FOREIGN_ESCROW}" | sed 's/^/    /'
+            echo "Move them to their owning tool's --out directory (phone-wizard defaults"
+            echo "to out/phone-wizard/keys-out/), or pick a different -o/--out for this"
+            echo "run. If you truly mean to destroy them, delete ${OUT_DIR} yourself first."
+        } >&2
+        exit 1
+    fi
+fi
+
 echo "==> Building ${OUT_DIR} from ${TEMPLATE} (role=${ROLE})"
 rm -rf "${OUT_DIR}"
 cp -r "${TEMPLATE}" "${OUT_DIR}"
