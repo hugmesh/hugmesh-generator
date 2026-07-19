@@ -463,8 +463,88 @@ capability, reachable by an operator directly against the Headwind server, not
 something this wizard drives. Losing a phone that never ran `mdm-enroll`
 still costs only mesh membership and platform sessions; a phone that **has**
 been enrolled as a Headwind device-owner is additionally reachable through the
-Headwind console for remote wipe/lock/policy — see
-[Management plane](#management-plane).
+Headwind console for remote wipe/lock/policy, and — once a superadmin has
+confirmed it as **managed** — through the platform's own reversible, audited,
+step-up-gated **remote lockout** (see
+[Roles & device management](#roles--device-management-managed-vs-byod-and-remote-lockout)).
+A BYOD phone the owner never took device-owner of is deliberately outside all of
+this. See [Management plane](#management-plane).
+
+## Roles & device management (managed vs BYOD, and remote lockout)
+
+A phone is a **device**, not a role-bearing user. The human holding it
+authenticates to the platform exactly as they always do — a Casdoor login
+carrying their normal role (`user`/`mod`/`admin`/`superadmin`) — and that
+identity is what governs everything they do through the gateways. The phone's
+own identity is a *device* identity: a headscale/tailnet node plus (when
+enrolled) a Headwind DPC posture. So `phone_device.role` is **inventory
+telemetry, never an authorization input** — a phone can never grant its holder
+access it did not already have, and the ingest channel (`/bff/internal/**`,
+mTLS, device-reported) is stated in-code to "confer NO access." A guard test in
+`snapdragon-admin-bff-api` pins this invariant so it cannot regress.
+
+Two device classes, and only one is remotely manageable:
+
+- **Mesh-owned (managed).** The mesh owner flashed / device-owner-enrolled the
+  phone with **physical access** (`mdm-enroll`, USB, fresh-device-only). Such a
+  phone can be **remotely locked** by a superadmin.
+- **BYOD.** A phone the mesh owner never took device-owner of (plain `enroll`,
+  including `--no-usb`). Normal registration, mesh membership, telemetry — but
+  the owner has **no** management lever over it. A BYOD phone **can never be
+  locked**; the lock endpoint refuses it with a clean 409.
+
+**The trust boundary (why the distinction is spoof-proof).** The phone's
+self-reported device-owner facts (`mdm.enrolled` / `mdm.set_via`,
+[phone-ingest/v2](#ingest--device-registry)) arrive over the same in-cluster
+mTLS ingest that "confers no access" — they are **trivially spoofable within
+the cluster**, so they are treated only as an *advisory promotion hint*.
+Lock-eligibility hangs off a separate, **authoritative** field —
+`phone_device.management_mode` (`unmanaged` default, or `mesh_owned`) — that is
+**writable only via `/bff/superadmin/**` by a SUPERADMIN**, never by the ingest
+path. This mirrors the node registry's `owner_type`, which is likewise
+operator-assigned at register time and never self-claimed. Concretely: after
+`mdm-enroll`, the wizard prints a NEXT STEP telling the operator that a
+superadmin must **confirm** the phone as managed in the fleet console
+(`PUT /bff/superadmin/phone-devices/<id>/management {"mode":"mesh_owned"}`, or
+the *Mark managed* action on the Phone-fleet page). The confirmation — a
+superadmin-JWT-authenticated, step-up-gated action — is the authoritative act;
+the device's self-report is only what surfaces the phone as *eligible to
+promote*.
+
+**Remote lockout** is a reversible, audited control-plane action modeled on the
+node SSH-license revoke precedent (`device_ssh_license`): a CAS
+`unlocked ↔ locked` state with a monotonic `lock_generation` and a
+`lock_propagation_state` (`pending`/`applied`/`failed`/`degraded`), rows never
+deleted (the state is its own audit trail). It is **SUPERADMIN-only and
+step-up-gated** (`X-PhoneLock-StepUp`, mirroring SSH key issuance) — the
+step-up stands in for the physical-access assurance the provisioning side had.
+Endpoints: `POST /bff/superadmin/phone-devices/<id>/lock` (409 unless
+`management_mode = mesh_owned`), `.../unlock`, and `.../management`. Gateway
+RBAC needs no new row — the existing tailnet
+`snapdragon-superadmin-gateway` → `/bff/superadmin/** → ROLE_SUPERADMIN` floor
+already governs them (longest-pattern-wins); the per-method `@PreAuthorize` is
+the fine gate.
+
+Enforcement has **two flag-gated legs**, both best-effort, with the
+control-plane lock state always authoritative regardless of their outcome:
+
+1. **DPC lock via Headwind** (`app.phone-lock.headwind.enabled`, default off) —
+   commands the device-owner DPC to lock through Headwind's `/rest` surface.
+2. **Mesh-access cut** (`app.phone-lock.mesh-deny.enabled`, default off) —
+   denies the locked phone's tailnet node at the headscale ACL layer (the same
+   push mechanism the node SSH-license revoke uses), so a locked phone loses
+   platform + mesh reachability, not just its screen.
+
+With both legs off (the default) a lock still records authoritative,
+audited state and reports `propagation_state = degraded` with the reason
+"issue the lock via the Headwind `/manage` console" — so the capability is
+useful the moment the manifests are deployed, and hardens as the legs are
+enabled. **Honest infra gaps:** real-time DPC push to phones over MQTT
+(`:31000`) is still the deferred tailnet-topology work noted in
+`headwind.yaml`; the mesh-deny leg additionally needs the headscale-ACL feature
+(`app.registry.headscale-acl.enabled`) and the phone→node ACL identity. These
+are why the legs ship default-off, not because the control plane is
+incomplete.
 
 ## Management plane
 
