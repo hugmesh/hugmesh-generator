@@ -248,9 +248,44 @@ if [ -z "${NO_TUI:-}" ] && [ -t 0 ] && [ -t 1 ] \
 fi
 WT_TITLE="Snapdragon Image Builder"
 
+# _u STRING… — return STRING with the handful of non-ASCII glyphs the menu labels
+# use (em/en dash, ellipsis, guillemets, arrows, star, box-art, bullets) folded to
+# ASCII WHEN the locale/terminal is not UTF-8 (UTF8=0). In a UTF-8 locale the string
+# passes through byte-for-byte. Pure bash ${//} substitution (no sed/iconv/locale
+# dependency), so it is correct even under C/POSIX where a multibyte glyph would
+# otherwise reach whiptail (and the text fallback) as mojibake. Applied at the ui_*
+# choke points below to every DISPLAYED string — never to a menu TAG (return value).
+_u() {
+    local s="$*"
+    [ "${UTF8}" = 1 ] && { printf '%s' "${s}"; return 0; }
+    s="${s//★/*}";  s="${s//●/*}";  s="${s//•/*}";  s="${s//▶/>}";  s="${s//⚙/*}"
+    s="${s//‹/<}";  s="${s//›/>}";  s="${s//→/->}"; s="${s//←/<-}"
+    s="${s//—/-}";  s="${s//–/-}";  s="${s//…/...}"
+    s="${s//═/=}";  s="${s//─/-}"
+    s="${s//║/|}";  s="${s//╔/+}";  s="${s//╗/+}";  s="${s//╚/+}";  s="${s//╝/+}"
+    s="${s//“/\"}"; s="${s//”/\"}"; s="${s//‘/\'}"; s="${s//’/\'}"
+    printf '%s' "${s}"
+}
+
+# _u_items ARGS… — transliterate ONLY the label of each (tag,label[,state]) group
+# for the menu/checklist text builders. STRIDE (2 for menu, 3 for checklist) is read
+# from _U_STRIDE. Emits the rewritten args NUL-safe via a global array _U_OUT so tags
+# (the return values) are never altered — only what the user SEES.
+_u_items() {
+    _U_OUT=()
+    local n=0 stride="${_U_STRIDE:-2}"
+    local a
+    for a in "$@"; do
+        if [ "$((n % stride))" -eq 1 ]; then _U_OUT+=("$(_u "${a}")"); else _U_OUT+=("${a}"); fi
+        n=$((n + 1))
+    done
+}
+
 # ui_menu TITLE PROMPT  tag1 item1  tag2 item2 ...   -> echoes chosen tag, rc=1 on cancel
 ui_menu() {
     local title="$1" prompt="$2"; shift 2
+    title="$(_u "${title}")"; prompt="$(_u "${prompt}")"
+    _U_STRIDE=2 _u_items "$@"; set -- "${_U_OUT[@]}"
     if [ "${HAVE_TUI}" = 1 ]; then
         whiptail --title "${WT_TITLE} — ${title}" --notags --menu "${prompt}" \
             22 78 12 "$@" 3>&1 1>&2 2>&3
@@ -281,6 +316,8 @@ ui_menu() {
 # The multi-select analogue of ui_menu (whiptail --checklist / a text toggle loop).
 ui_checklist() {
     local title="$1" prompt="$2"; shift 2
+    title="$(_u "${title}")"; prompt="$(_u "${prompt}")"
+    _U_STRIDE=3 _u_items "$@"; set -- "${_U_OUT[@]}"
     if [ "${HAVE_TUI}" = 1 ]; then
         local out
         out="$(whiptail --title "${WT_TITLE} — ${title}" --notags --separate-output \
@@ -319,6 +356,7 @@ ui_checklist() {
 # ui_yesno TITLE TEXT  -> rc 0 = yes, 1 = no
 ui_yesno() {
     local title="$1" text="$2"
+    title="$(_u "${title}")"; text="$(_u "${text}")"
     if [ "${HAVE_TUI}" = 1 ]; then
         whiptail --title "${WT_TITLE} — ${title}" --yesno "${text}" 14 78
         return $?
@@ -331,6 +369,7 @@ ui_yesno() {
 # ui_input TITLE TEXT DEFAULT  -> echoes the entered value (default on empty/cancel)
 ui_input() {
     local title="$1" text="$2" def="$3" val
+    title="$(_u "${title}")"; text="$(_u "${text}")"
     if [ "${HAVE_TUI}" = 1 ]; then
         val="$(whiptail --title "${WT_TITLE} — ${title}" --inputbox "${text}" 12 78 "${def}" 3>&1 1>&2 2>&3)" \
             || { printf '%s' "${def}"; return 0; }
@@ -347,6 +386,7 @@ ui_input() {
 # result (submitted, not cancelled) is a valid "skip".
 ui_password() {
     local title="$1" text="$2" def="${3:-}" val
+    title="$(_u "${title}")"; text="$(_u "${text}")"
     if [ "${HAVE_TUI}" = 1 ]; then
         val="$(whiptail --title "${WT_TITLE} — ${title}" --passwordbox "${text}" 12 78 3>&1 1>&2 2>&3)" \
             || { printf '%s' "${def}"; return 0; }
@@ -382,6 +422,7 @@ arm_secrets_prompt() {
 # ui_msg TITLE TEXT  -> informational box / printout
 ui_msg() {
     local title="$1" text="$2"
+    title="$(_u "${title}")"; text="$(_u "${text}")"
     if [ "${HAVE_TUI}" = 1 ]; then
         whiptail --title "${WT_TITLE} — ${title}" --scrolltext --msgbox "${text}" 22 78
     else
