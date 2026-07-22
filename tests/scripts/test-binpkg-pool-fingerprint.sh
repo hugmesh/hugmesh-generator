@@ -73,6 +73,30 @@ else
     bad "fresh pool preflight returned non-zero"
 fi
 
+# (1b) UNSTAMPED pool that ALREADY holds binpkgs → adopts BUT warns loudly (the
+# first-rollout / manually-shared-dir case the guard must not be silently inert on).
+POOL_NE="${TMP}/pool-unstamped-nonempty"; mkdir -p "${POOL_NE}"
+printf 'fake index\n' > "${POOL_NE}/Packages"          # pool looks populated, no stamp
+w1="${TMP}/w1.txt"
+if pool_fingerprint_preflight "${POOL_NE}" "${MC_A76}" 2>"${w1}"; then
+    if grep -qi 'UNSTAMPED' "${w1}" && grep -q 'SIGILL' "${w1}"; then
+        ok "unstamped NON-EMPTY pool: adopted but WARNED (SIGILL risk made visible)"
+    else
+        bad "unstamped non-empty pool adopted SILENTLY (no warning): $(cat "${w1}")"
+    fi
+    [ "$(cat "${POOL_NE}/.snapdragon-pool-fingerprint")" = "${FP_A76}" ] \
+        && ok "unstamped non-empty pool got stamped after the warning" \
+        || bad "unstamped non-empty pool was not stamped"
+else
+    bad "unstamped non-empty pool wrongly REFUSED (should adopt-with-warning)"
+fi
+# an EMPTY unstamped pool must NOT warn (normal fresh-pool path stays quiet)
+POOL_E="${TMP}/pool-unstamped-empty"; mkdir -p "${POOL_E}"
+w2="${TMP}/w2.txt"
+pool_fingerprint_preflight "${POOL_E}" "${MC_A76}" 2>"${w2}" || true
+grep -qi 'UNSTAMPED' "${w2}" && bad "empty fresh pool warned (should be silent)" \
+    || ok "empty fresh pool adopts SILENTLY (no spurious warning)"
+
 # (2) matching stamp → passes (same board, next role reuses the pool)
 if pool_fingerprint_preflight "${POOL}" "${MC_A76}"; then
     ok "matching stamp: reuse across same-board roles is allowed"

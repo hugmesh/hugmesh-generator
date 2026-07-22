@@ -100,14 +100,31 @@ pipeline compares CFLAGS before reuse.
   the `-mcpu` portage ignores.
 - **Preflight** (`pool_fingerprint_preflight`) runs in every build, just before
   the first `--usepkg` emerge:
-  - **absent stamp** → write `${PKGDIR}/.snapdragon-pool-fingerprint` fresh, proceed;
+  - **absent stamp, EMPTY pool** → write `${PKGDIR}/.snapdragon-pool-fingerprint`
+    fresh, proceed silently (the normal fresh-pool path);
+  - **absent stamp, pool already holds binpkgs** → adopt (stamp fresh) **but WARN
+    loudly** naming the SIGILL risk + the flush command. An unstamped non-empty
+    pool is the first-rollout case (every pre-guard pool is unstamped) and the
+    manually-shared-`--build-subdir` case; hard-refusing would nuke every
+    legitimate same-board cache, so the risk is made *visible* instead;
   - **matching stamp** → proceed (safe same-board/role reuse);
   - **mismatched stamp** → **die** with a clear SIGILL/ABI-mismatch message,
     refusing the reuse.
 
+**Why this guard — not just the per-board directories — is the real net.** The
+per-board `BUILD_SUBDIR` split is the primary isolation, but if a future change
+regressed it (e.g. reverted rpi5/rpi4/rpi3 back to one shared `snap-build-pi5`),
+the fingerprint preflight still **fails closed at build time**: the a76 build
+stamps the pool, the subsequent a72 build sees the mismatch and *dies* rather
+than shipping a SIGILL image. So the safety property is enforced by code that
+runs on every real build — not only by the (non-gating) regression tests below.
+
 Hermetic proof: `tests/scripts/test-binpkg-pool-fingerprint.sh` (a76/a72/a53 →
 three distinct fingerprints from `-mcpu` alone; wrong stamp refuses; matching
-passes; absent writes fresh; a correctness **salt** flips it).
+passes; empty pool writes fresh silently; a non-empty unstamped pool adopts +
+warns; a correctness **salt** flips it). These are registered as **non-gating**
+smokes per the harness convention — the *live* guard above is what enforces the
+invariant; the tests are regression coverage for it.
 
 ---
 
@@ -132,7 +149,16 @@ make prebuild-binaries ARCH=x86                    # -> snap-build-x86 sysroot p
 
 # 2. later per-role image builds reuse the pool via --usepkg (already wired):
 make rpi RPI_BOARD=rpi4                             # backend/frontend/… reuse pi4 pool
+make x86 RESUME=--resume                            # x86: MUST pass --resume (see below)
 ```
+
+> **x86 caveat — pass `RESUME=--resume` to consume an x86 prebuild.** The x86 pool
+> lives *inside* the sysroot (`/var/cache/binpkgs`), unlike the ARM pools which sit
+> in `${BUILD_ROOT}/pkgdir` outside the sysroot. A non-`--resume` x86 build wipes
+> the sysroot (the wipe-on-non-resume guard) and therefore the prebuilt pool with
+> it — so `make prebuild-binaries ARCH=x86` then a plain `make x86` recompiles from
+> scratch. Always thread `RESUME=--resume` into the consuming x86 build. The ARM
+> boards have no such caveat (their pool survives a sysroot wipe).
 
 - **Union feed:** `python3 -m snapdragon_studio.core.prebuild_union <platform>`
   prints the sorted role-union atom list — `set().union` over the EXISTING

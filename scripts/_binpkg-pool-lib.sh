@@ -53,11 +53,32 @@ pool_fingerprint_of() {
 }
 
 # pool_fingerprint_guard PKGDIR FP -> preflight over an existing pool.
-#   FP empty          -> return 0 (unknown fingerprint; nothing to compare).
-#   pool has no stamp -> write FP fresh, return 0.
-#   stamp == FP       -> return 0 (safe to reuse).
-#   stamp != FP       -> print a LOUD message to stderr, return 1 (caller must abort).
+#   FP empty                      -> return 0 (unknown fingerprint; nothing to compare).
+#   no stamp + EMPTY pool         -> write FP fresh, return 0 (normal fresh-pool path).
+#   no stamp + pool HAS binpkgs   -> write FP fresh but WARN LOUDLY, return 0. An
+#       unstamped pool that already holds binaries pre-dates this guard (a pool built
+#       on an older tree, or a pool an operator manually pointed two boards at). We can
+#       NOT tell which board built those binaries — adopting them under this build's key
+#       is only safe if they are same-board. Hard-refusing would destroy every legitimate
+#       pre-guard same-board cache on first rollout, so we adopt-with-a-loud-warning: the
+#       risk is made VISIBLE (with the flush command) without nuking valid caches. The
+#       PRIMARY defense remains the per-board directory split (each board its own pkgdir).
+#   stamp == FP                   -> return 0 (safe to reuse).
+#   stamp != FP                   -> print a LOUD message to stderr, return 1 (caller aborts).
 # The stamp file is `${PKGDIR}/.snapdragon-pool-fingerprint`.
+# _pool_has_binpkgs PKGDIR -> 0 if the pool already holds binary packages (Packages
+# index or any gpkg/tbz2/xpak), else 1. Used to decide adopt-silently vs adopt-with-warning.
+_pool_has_binpkgs() {
+    local d="${1%/}"
+    [ -s "${d}/Packages" ] && return 0
+    local f
+    for f in "${d}"/*.gpkg.tar "${d}"/*.tbz2 "${d}"/*.xpak; do
+        [ -e "${f}" ] && return 0
+    done
+    # binpkgs also nest under <category>/<pkg>.{gpkg.tar,tbz2}
+    [ -n "$(find "${d}" -maxdepth 3 \( -name '*.gpkg.tar' -o -name '*.tbz2' \) -print -quit 2>/dev/null)" ] && return 0
+    return 1
+}
 pool_fingerprint_guard() {
     local pkgdir="$1" fp="${2:-}" fpfile
     fpfile="${pkgdir%/}/.snapdragon-pool-fingerprint"
@@ -80,6 +101,20 @@ pool_fingerprint_guard() {
             echo "    * flush the stale pool:  rm -rf '${pkgdir}'"
         } >&2
         return 1
+    fi
+    # No stamp yet. If the pool ALREADY holds binpkgs of unknown provenance, adopt but
+    # WARN — an unstamped non-empty pool is exactly the first-rollout / manually-shared
+    # case where the guard would otherwise be silently inert.
+    if _pool_has_binpkgs "${pkgdir}"; then
+        {
+            echo "WARNING: adopting an UNSTAMPED binpkg pool that already holds binaries: ${pkgdir}"
+            echo "  fingerprint now stamped: ${fp}"
+            echo "  These binaries pre-date the ABI fingerprint guard, so their build key"
+            echo "  (CHOST + CFLAGS/-mcpu + profile) is UNKNOWN. If this pool was ever populated"
+            echo "  by a DIFFERENT board (e.g. two boards pointed at the same --build-subdir),"
+            echo "  reusing them would SIGILL at runtime. If it is a same-board pool this is safe."
+            echo "  If unsure, flush it:  rm -rf '${pkgdir}'   (a fresh pool recompiles once, then reuses)."
+        } >&2
     fi
     printf '%s\n' "${fp}" > "${fpfile}" 2>/dev/null || true
     return 0
