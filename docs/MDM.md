@@ -615,6 +615,116 @@ still work). This is intentional — a fleet customer re-confirms a device lock 
 not with an operator credential — so **enable MFA before handing a fleet owner
 lock/unlock**.
 
+## MDM providers
+
+Device management is a **pluggable provider registry**, not a single hard-coded
+backend. Two providers ship, both **primary and first-class** — the driver
+validates `--mdm-provider` against the registry
+([`specs/usr/lib/snapdragon/mdm-providers.sh`](../specs/usr/lib/snapdragon/mdm-providers.sh),
+mirroring the go-live wizard's `go-live-providers.sh`) and branches on each
+provider's *mechanism*, never on its id:
+
+| | **`headwind`** (DEFAULT) | **`azure-intune`** (opt-in) |
+| --- | --- | --- |
+| Control plane | **Self-hosted** Headwind MDM (your cluster) | **Microsoft Graph / Intune** (SaaS) |
+| Sovereignty | 🟢 **Sovereign** — no external control plane | 🔴 **Cloud** — third-party SaaS dependency |
+| Mechanism | `dpc-adb` — DPC promoted to device-owner over adb (`dpm set-device-owner`) | `os-enrollment` — Entra registration + Company Portal / provisioning package (**OS-level, not adb**) |
+| Enroll driver step | Installs + configures the DPC over adb | Prints a **runbook**; records the Graph `managedDevice` id |
+| Remote lock | Mesh-owned DPC enforces on-device | `POST …/deviceManagement/managedDevices/{id}/remoteLock` |
+| Secret custody | none needed device-side | client-credentials secret lives **only** in the cluster (Vault → ExternalSecret → admin-bff), never the wizard/argv |
+
+**The DEFAULT is always the sovereign provider.** `--mdm-provider` defaults to
+`headwind`; selecting `azure-intune` is an explicit per-deployment opt-in that
+**forfeits sovereignty for that fleet** (a hard Microsoft SaaS dependency for
+management traffic). Sovereignty is preserved by default and only ever
+relinquished on a deliberate operator choice.
+
+> **Not the Entra login app.** The Intune provider is device-management only. Its
+> Azure app registration is a **confidential client-credentials Graph app**
+> (Microsoft Graph `.default` scope,
+> `DeviceManagementManagedDevices.PrivilegedOperations.All` for `remoteLock`) —
+> **disjoint** from any Entra *OIDC login* app the platform's cloud-deploy /
+> identity work may register. Different app registration, different secret, no
+> shared config key.
+
+### `azure-intune` — enrollment (OS-level, `os-enrollment` mechanism)
+
+Intune enrollment happens **in the OS**, not over adb — `dpm set-device-owner`
+is a Headwind-only, sovereign mechanism and is **not used** for Intune. So
+`mdm-enroll --mdm-provider azure-intune` drives nothing over adb; it prints the
+registry's enrollment runbook and records the resulting Graph device id:
+
+1. Register the device with **Entra ID** (Microsoft Entra device registration)
+   under the target tenant.
+2. Install the **Intune Company Portal** app, sign in with the enrolling Entra
+   account, complete the Company-Portal flow (or apply your Android Enterprise
+   **provisioning package**).
+3. The device appears as a **`managedDevice`** in the Intune admin center.
+4. Pass `--intune-device-id <managedDevice-id>` (obtain it from the admin center
+   device blade, or via Graph `GET …/deviceManagement/managedDevices`). The
+   wizard records it into `mdm.json` / `ingest.json` (device-reported); the
+   admin-bff `AzureIntuneLockClient` targets it on lock.
+
+### `azure-intune` — remote lock (Graph `remoteLock`)
+
+The lock leg is **server-side only** (admin-bff `AzureIntuneLockClient`) — the
+wizard never holds the Graph secret. On lock it mints a **client-credentials**
+token and calls the Intune `remoteLock` action:
+
+```
+token:  POST https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token
+        scope = https://graph.microsoft.com/.default
+lock:   POST https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/{id}/remoteLock
+```
+
+The mesh-deny leg (headscale cut) fires **regardless of provider** — it is a
+platform-side action independent of the DPC backend, so a locked device is cut
+from the mesh whether it is Headwind- or Intune-managed.
+
+### The unlock **asymmetry** (Intune)
+
+Intune has **no native force-unlock**. A `remoteLock` is *user-unlockable
+device-side* with the existing passcode — the handset owner can simply unlock
+it. So the platform "unlock" action for an Intune device:
+
+- **clears the control-plane lock record** (and lifts the provider-independent
+  mesh-deny cut / can re-enable the device), and
+- **does NOT push a credential or force-unlock the handset** — there is no Graph
+  primitive that does so.
+
+This is deliberately different from a self-hosted DPC, where the mesh-owned
+controller has fuller on-device authority. The admin-ui surfaces this as a note
+on the Lock/Unlock action for Intune devices. The control-plane lock **state**
+is authoritative regardless of provider: an unknown or spoofed device-reported
+provider only *degrades enforcement* (the matching DPC leg is skipped), it never
+blocks the lock record or the mesh-deny cut.
+
+### Client-credentials app-registration setup (Intune)
+
+One confidential Graph app registration per Entra tenant:
+
+1. **Entra admin center → App registrations → New registration** (single tenant).
+2. **Certificates & secrets → New client secret** — copy the value once.
+3. **API permissions → Microsoft Graph → Application permissions →**
+   `DeviceManagementManagedDevices.PrivilegedOperations.All` (for `remoteLock`);
+   **Grant admin consent**.
+4. Seed Vault (never argv, never a manifest literal):
+   ```
+   vault kv put secret/snapdragon/azure-intune \
+     TENANT_ID=<tenant-guid> CLIENT_ID=<app-guid> CLIENT_SECRET=<client-secret>
+   ```
+5. Opt in: uncomment `azure-intune-externalsecrets.yaml` in the external-secrets
+   `kustomization.yaml` **and** set `app.phone-lock.azure-intune.enabled=true` on
+   admin-bff. Until both are done the leg is dark
+   (`NoopAzureIntuneLockClient`), and the default (Headwind, sovereign) posture
+   stands.
+
+The credential materializes via
+[`specs/cluster/manifests/external-secrets/azure-intune-externalsecrets.yaml`](../specs/cluster/manifests/external-secrets/azure-intune-externalsecrets.yaml)
+into the admin-bff env (`APP_PHONELOCK_AZUREINTUNE_*`, Spring relaxed binding) —
+blank-safe (renders empty until the Vault path is populated), default-off, and
+labelled with the sovereignty-forfeiture caveat.
+
 ## Management plane
 
 **Now real, not a roadmap paragraph.** The device-management plane for

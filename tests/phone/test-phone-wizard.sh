@@ -1147,6 +1147,109 @@ fi
     && ok "(24) both attest and mdm-enroll are wired strictly before profile (the step that forecloses device-owner mode)" \
     || bad "(24) attest/mdm-enroll not both wired before profile (attest=${L_ATTEST:-?} mdm-enroll=${L_MDM:-?} profile=${L_PROFILE:-?})"
 
+# ── (25) MDM provider selection (--mdm-provider headwind|azure-intune) ──────
+# The wizard sources the MDM provider registry and branches mdm-enroll on the
+# provider's MECHANISM (dpc-adb vs os-enrollment), never on a hard-coded id.
+# Assert: the provider threads through plan; a bogus provider/intune-id is
+# rejected; the azure-intune os-enrollment path prints the Intune RUNBOOK, makes
+# ZERO adb calls, needs no --headwind-url, and lands mdm_provider +
+# intune_device_id in mdm.json/ingest.json; and NO azure secret (tenant/client
+# secret) is EVER accepted on argv or emitted (custody is server-side only).
+clear_logs
+
+# default provider is the sovereign one; plan surfaces it.
+run plan --codename "${CODENAME}"
+[ "$(plan_val MDM_PROVIDER)" = "headwind" ] && [ "$(plan_val MDM_MECHANISM)" = "dpc-adb" ] \
+    && [ "$(plan_val MDM_SOVEREIGNTY)" = "sovereign" ] \
+    && ok "(25) plan default: MDM provider=headwind, mechanism=dpc-adb, sovereignty=sovereign" \
+    || bad "(25) plan default provider fields wrong (provider=$(plan_val MDM_PROVIDER), mech=$(plan_val MDM_MECHANISM))"
+
+# azure-intune threads through plan (provider/mechanism/sovereignty + intune id).
+run plan --codename "${CODENAME}" --mdm-provider azure-intune --intune-device-id abc-123
+[ "$(plan_val MDM_PROVIDER)" = "azure-intune" ] && [ "$(plan_val MDM_MECHANISM)" = "os-enrollment" ] \
+    && [ "$(plan_val MDM_SOVEREIGNTY)" = "cloud" ] && [ "$(plan_val INTUNE_DEVICE_ID)" = "abc-123" ] \
+    && ok "(25) plan --mdm-provider azure-intune threads provider/mechanism/sovereignty/intune-id" \
+    || bad "(25) azure plan threading wrong (provider=$(plan_val MDM_PROVIDER), mech=$(plan_val MDM_MECHANISM), sov=$(plan_val MDM_SOVEREIGNTY), id=$(plan_val INTUNE_DEVICE_ID))"
+
+# plan mdm-enroll steps are mechanism-specific (os-enrollment runbook, not adb).
+run plan mdm-enroll --mdm-provider azure-intune
+[ "$(plan_val STEPS)" = "os-enrollment-runbook,record-intune-device-id" ] \
+    && ok "(25) plan mdm-enroll (azure) lists os-enrollment steps (no adb dpm)" \
+    || bad "(25) azure mdm-enroll plan steps '$(plan_val STEPS)'"
+run plan mdm-enroll --mdm-provider headwind
+[ "$(plan_val STEPS)" = "adb-sanity,fresh-device-precondition,dpc-install,set-device-owner,push-init-json,record" ] \
+    && ok "(25) plan mdm-enroll (headwind) still lists the adb device-owner steps" \
+    || bad "(25) headwind mdm-enroll plan steps '$(plan_val STEPS)'"
+
+# validation: unknown provider + malformed intune id fail closed (exit 1).
+run plan --codename "${CODENAME}" --mdm-provider not-a-provider
+[ "${RC}" -eq 1 ] && has "must be one of" && ok "(25) unknown --mdm-provider -> exit 1 (validated vs the registry)" \
+    || bad "(25) unknown provider rc=${RC}, want 1"
+run plan --codename "${CODENAME}" --mdm-provider azure-intune --intune-device-id 'bad id!'
+[ "${RC}" -eq 1 ] && has "invalid --intune-device-id" && ok "(25) malformed --intune-device-id -> exit 1" \
+    || bad "(25) bad intune id rc=${RC}, want 1"
+
+# azure-intune mdm-enroll (os-enrollment): runbook path, ZERO adb, no --headwind-url.
+reset_state; clear_logs
+AZ_DEVID="phone-az-test"
+AZ_INTUNE_ID="12345678-90ab-cdef-1234-567890abcdef"
+run mdm-enroll --mdm-provider azure-intune --out "${OUT}"
+[ "${RC}" -eq 1 ] && has "needs --device-id" \
+    && ok "(25) azure mdm-enroll without --device-id -> exit 1 (OS-level, no adb serial)" \
+    || bad "(25) azure mdm-enroll no-device-id rc=${RC}, want 1"
+run mdm-enroll --mdm-provider azure-intune --out "${OUT}" --device-id "${AZ_DEVID}" --intune-device-id "${AZ_INTUNE_ID}"
+[ "${RC}" -eq 0 ] && ok "(25) azure mdm-enroll exits 0 (no --headwind-url required)" \
+    || { bad "(25) azure mdm-enroll rc=${RC}"; echo "${OUT_TXT}"; }
+[ ! -s "${LOGD}/adb.log" ] && ok "(25) azure mdm-enroll made ZERO adb calls (os-enrollment, stub log empty)" \
+    || { bad "(25) azure mdm-enroll touched adb"; cat "${LOGD}/adb.log"; }
+has "remoteLock" && has "UNLOCK ASYMMETRY" && has "NOT over adb" \
+    && ok "(25) azure mdm-enroll prints the Intune runbook (remoteLock + unlock asymmetry + os-level)" \
+    || bad "(25) azure mdm-enroll runbook incomplete"
+has "SUPERADMIN must CONFIRM this device as managed" \
+    && ok "(25) azure mdm-enroll still prints the superadmin managed-confirmation NEXT STEP (trust boundary)" \
+    || bad "(25) azure mdm-enroll missing the managed-confirmation guidance"
+AZ_MDM="${OUT}/device/${AZ_DEVID}/mdm.json"
+[ -f "${AZ_MDM}" ] \
+    && [ "$(jq -r '.mdm_provider' "${AZ_MDM}")" = "azure-intune" ] \
+    && [ "$(jq -r '.intune_device_id' "${AZ_MDM}")" = "${AZ_INTUNE_ID}" ] \
+    && [ "$(jq -r '.set_via' "${AZ_MDM}")" = "intune-os-enrollment" ] \
+    && [ "$(jq -r '.dpc_package' "${AZ_MDM}")" = "" ] \
+    && ok "(25) azure mdm.json: mdm_provider=azure-intune, intune_device_id set, set_via=intune-os-enrollment, no DPC" \
+    || bad "(25) azure mdm.json wrong: $(cat "${AZ_MDM}" 2>/dev/null)"
+
+# ingest folds the azure provider fields (top-level device-reported + nested).
+AZ_ING="${OUT}/device/${AZ_DEVID}/ingest.json"
+run ingest --device-id "${AZ_DEVID}" --codename "${CODENAME}" --out "${OUT}"
+[ "${RC}" -eq 0 ] \
+    && [ "$(jq -r '.mdm_provider' "${AZ_ING}")" = "azure-intune" ] \
+    && [ "$(jq -r '.intune_device_id' "${AZ_ING}")" = "${AZ_INTUNE_ID}" ] \
+    && [ "$(jq -r '.mdm.provider' "${AZ_ING}")" = "azure-intune" ] \
+    && [ "$(jq -r '.mdm.set_via' "${AZ_ING}")" = "intune-os-enrollment" ] \
+    && ok "(25) ingest folds azure fields: top-level mdm_provider/intune_device_id + nested mdm.provider" \
+    || bad "(25) azure ingest fold wrong: $(jq -c '{mdm_provider,intune_device_id,mdm}' "${AZ_ING}" 2>/dev/null)"
+
+# a headwind device's ingest reports mdm_provider=headwind at top level (backfill
+# default) — build a fresh headwind mdm.json and confirm the default lands.
+HW_DEVID="phone-hw-prov-test"
+HW_REC="${OUT}/device/${HW_DEVID}"; mkdir -p "${HW_REC}"
+printf '{"mdm_provider":"headwind","dpc_package":"com.hmdm.launcher","headwind_url":"https://hw.invalid","set_via":"adb-device-owner","enrolled_at":"2026-07-22T00:00:00Z","intune_device_id":""}' > "${HW_REC}/mdm.json"
+run ingest --device-id "${HW_DEVID}" --codename "${CODENAME}" --out "${OUT}"
+HW_ING="${HW_REC}/ingest.json"
+[ "${RC}" -eq 0 ] && [ "$(jq -r '.mdm_provider' "${HW_ING}")" = "headwind" ] \
+    && [ "$(jq -r '.intune_device_id' "${HW_ING}")" = "" ] \
+    && ok "(25) a headwind device's ingest carries top-level mdm_provider=headwind, empty intune_device_id" \
+    || bad "(25) headwind ingest provider fold wrong: $(jq -c '{mdm_provider,intune_device_id}' "${HW_ING}" 2>/dev/null)"
+
+# STRUCTURAL secret hygiene: the wizard exposes NO flag that accepts an azure
+# tenant/client secret on argv (custody is server-side only, admin-bff env). The
+# only azure-specific input is --intune-device-id, which is a device id, not a
+# secret. Prove no such secret flag exists in the driver source.
+if grep -Eq -- '--(tenant|client-secret|azure-secret|graph-secret|intune-secret)' "${DRIVER}"; then
+    bad "(25) SECRET HYGIENE: the wizard exposes an azure tenant/client-secret flag on argv"
+else
+    ok "(25) SECRET HYGIENE: the wizard has NO azure tenant/client-secret argv flag (custody is server-side only)"
+fi
+
 echo
 echo "== phone-wizard test: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ] || exit 1

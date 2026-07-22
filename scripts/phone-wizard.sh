@@ -59,6 +59,15 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=scripts/_download-lib.sh
 source "${SCRIPT_DIR}/_download-lib.sh"
 
+# ── MDM provider registry (headwind | azure-intune) ────────────────────────────
+# The single place that describes which device-management backends exist and how
+# each enrolls a handset. cmd_mdm_enroll dispatches on the provider's MECHANISM
+# (dpc-adb vs os-enrollment) read from this registry, and never hard-codes the
+# two providers. Mirrors how snapdragon-go-live sources go-live-providers.sh.
+MDM_PROVIDERS_LIB="${PW_MDM_PROVIDERS_LIB:-${REPO_DIR}/specs/usr/lib/snapdragon/mdm-providers.sh}"
+# shellcheck source=specs/usr/lib/snapdragon/mdm-providers.sh
+source "${MDM_PROVIDERS_LIB}"
+
 # ── Pinned GrapheneOS supply-chain facts (see scripts/phone-allowed-signers) ─
 GRAPHENE_IDENTITY="contact@grapheneos.org"
 GRAPHENE_NAMESPACE="factory images"
@@ -99,6 +108,8 @@ ROLE_SET=0
 PROFILE_NAME="enterprise"
 TAILSCALE_APK=""
 APK_SIGNER_SHA256=""
+MDM_PROVIDER="headwind"      # default = the sovereign provider (validated vs the registry)
+INTUNE_DEVICE_ID=""          # (azure-intune) the Graph managedDevice id the lock leg targets
 HEADWIND_APK=""
 HEADWIND_SIGNER_SHA256=""
 HEADWIND_URL="${HMDM_URL:-}"
@@ -260,6 +271,17 @@ Options:
   --profile-name N       Secondary-user name. Default: ${PROFILE_NAME}
   --tailscale-apk F      Tailscale APK to adb-install during enroll.
   --apk-signer-sha256 H  Pin: APK signer cert SHA-256 (fail-closed if set).
+  --mdm-provider P       MDM backend for mdm-enroll: headwind|azure-intune.
+                         Default: headwind (the SOVEREIGN, self-hosted DPC).
+                         headwind -> device-owner over adb (dpc-adb mechanism);
+                         azure-intune -> an OS-level Entra/Company-Portal
+                         enrollment RUNBOOK (os-enrollment; no adb dpm) — cloud
+                         SaaS, opt-in, forfeits sovereignty for this fleet.
+  --intune-device-id ID  (azure-intune) the Graph managedDevice id the remote-
+                         lock leg targets ([A-Za-z0-9-], <=128). Supply it once
+                         the device appears in the Intune admin center, or the
+                         runbook explains how to obtain it. Recorded into the
+                         ingest record (device-reported).
   --headwind-apk F       Headwind DPC APK to adb-install during mdm-enroll.
   --headwind-signer-sha256 H
                          Pin: Headwind APK signer cert SHA-256 (fail-closed
@@ -383,6 +405,24 @@ validate_channel() {
         stable|beta|alpha) : ;;
         *) pw_die 1 "--channel must be stable|beta|alpha (got '${CHANNEL}')" ;;
     esac
+}
+
+# Fail-closed --mdm-provider gate. Validated AGAINST THE REGISTRY (never a
+# hard-coded id list here) so adding a provider row to mdm-providers.sh is the
+# only edit needed. The error lists the known ids straight from the registry.
+validate_mdm_provider() {
+    if ! mdmp_known "${MDM_PROVIDER}"; then
+        pw_die 1 "--mdm-provider must be one of: ${MDM_PROVIDER_IDS[*]} (got '${MDM_PROVIDER}')"
+    fi
+}
+
+# --intune-device-id charset/size gate (mirrors the admin-bff @Size on the
+# intune_device_id column). Graph managedDevice ids are GUIDs, but keep the gate
+# permissive-but-bounded: [A-Za-z0-9-] up to 128 chars, never empty when set.
+validate_intune_device_id() {
+    [ -n "${INTUNE_DEVICE_ID}" ] || return 0
+    [[ "${INTUNE_DEVICE_ID}" =~ ^[A-Za-z0-9-]{1,128}$ ]] \
+        || pw_die 1 "invalid --intune-device-id '${INTUNE_DEVICE_ID}' (must be [A-Za-z0-9-], 1-128 chars — the Graph managedDevice id)"
 }
 
 # Effective signer-fingerprint pin. Fail-closed: skipping the pin while still
@@ -677,6 +717,8 @@ verify_installed_signer() {
 cmd_plan() {
     local target="${1:-wizard}"
     validate_channel
+    validate_mdm_provider
+    validate_intune_device_id
     local name="" version zip_url sig_url fp_disp authkey_disp pass_disp
     local devid_disp serial_disp escrow_disp ingest_disp steps
 
@@ -722,7 +764,11 @@ cmd_plan() {
         fetch)      steps="resolve-version,download,verify,extract" ;;
         flash)      steps="preflight,detect,verify-artifact,confirm,unlock,flash-all,lock" ;;
         attest)     steps="adb-sanity,auditor-install,pairing-runbook,record" ;;
-        mdm-enroll) steps="adb-sanity,fresh-device-precondition,dpc-install,set-device-owner,push-init-json,record" ;;
+        mdm-enroll) if [ "$(mdmp_mechanism "${MDM_PROVIDER}")" = "os-enrollment" ]; then
+                        steps="os-enrollment-runbook,record-intune-device-id"
+                    else
+                        steps="adb-sanity,fresh-device-precondition,dpc-install,set-device-owner,push-init-json,record"
+                    fi ;;
         enroll)     if [ "${NO_USB}" -eq 1 ]; then
                         steps="join-runbook,record-operator-attested"
                     else
@@ -754,6 +800,10 @@ PLAN_SUPERDOMAIN=${SUPERDOMAIN}
 PLAN_ROLE=${ROLE}
 PLAN_ESCROW_PATH=${escrow_disp}
 PLAN_INGEST_URL=${ingest_disp}
+PLAN_MDM_PROVIDER=${MDM_PROVIDER}
+PLAN_MDM_MECHANISM=$(mdmp_mechanism "${MDM_PROVIDER}")
+PLAN_MDM_SOVEREIGNTY=$(mdmp_sovereignty "${MDM_PROVIDER}")
+PLAN_INTUNE_DEVICE_ID=${INTUNE_DEVICE_ID:-unset}
 PLAN_HEADWIND_URL=${HEADWIND_URL:-unset}
 PLAN_HEADWIND_SIGNER_FP=${HEADWIND_SIGNER_SHA256:-unpinned}
 PLAN_ATTESTATION_URL=${ATTESTATION_URL:-unset}
@@ -1101,7 +1151,24 @@ cmd_attest() {
 # the OS install once foreclosed (no undo short of a reflash). MUST run
 # before 'profile' (which creates the escrowed secondary user that forecloses
 # it) — see docs/MDM.md, "CRITICAL ordering".
+# ── verb: mdm-enroll (provider dispatcher) ─────────────────────────────────
+# Branches on the SELECTED provider's MECHANISM from the registry (never on a
+# hard-coded provider id): dpc-adb -> the Headwind device-owner adb flow;
+# os-enrollment -> the Intune OS-level enrollment runbook. Adding a provider is
+# a registry edit — this dispatcher does not change.
 cmd_mdm_enroll() {
+    validate_mdm_provider
+    validate_intune_device_id
+    local mech; mech="$(mdmp_mechanism "${MDM_PROVIDER}")"
+    case "${mech}" in
+        dpc-adb)       cmd_mdm_enroll_dpc ;;
+        os-enrollment) cmd_mdm_enroll_os ;;
+        *) pw_die 1 "mdm-enroll: unsupported mechanism '${mech}' for provider '${MDM_PROVIDER}'" ;;
+    esac
+}
+
+# ── mdm-enroll: dpc-adb mechanism (Headwind self-hosted DPC, sovereign) ────────
+cmd_mdm_enroll_dpc() {
     require_android_tools
     require_jq
     [ -n "${HEADWIND_URL}" ] || pw_die 1 "mdm-enroll needs --headwind-url (or HMDM_URL) — the DPC's non-interactive init.json config target"
@@ -1220,12 +1287,14 @@ cmd_mdm_enroll() {
     jq -n \
         --arg device_id "${DEVICE_ID}" \
         --arg serial "${s}" \
+        --arg mdm_provider "${MDM_PROVIDER}" \
         --arg dpc_package "${pkg}" \
         --arg headwind_url "${HEADWIND_URL}" \
         --arg os "${OS_ID}" \
         --arg enrolled_at "$(now_iso)" \
-        '{device_id:$device_id, serial:$serial, dpc_package:$dpc_package,
-          headwind_url:$headwind_url, os:$os, set_via:"adb-device-owner",
+        '{device_id:$device_id, serial:$serial, mdm_provider:$mdm_provider,
+          dpc_package:$dpc_package, headwind_url:$headwind_url, os:$os,
+          intune_device_id:"", set_via:"adb-device-owner",
           enrolled_at:$enrolled_at}' \
         > "${rec}"
     pw_info "mdm record written: ${rec}"
@@ -1252,6 +1321,68 @@ cmd_mdm_enroll() {
     echo "  The owner then sees/locks ONLY their own in-domain phones (owner+domain"
     echo "  is the sole tenancy wall). See docs/MDM.md 'Fleet owners & enterprise"
     echo "  subscription'."
+}
+
+# ── mdm-enroll: os-enrollment mechanism (Microsoft Intune, cloud SaaS) ─────────
+# Intune enrollment is OS-LEVEL (Entra device registration + the Company Portal
+# app, or an Android Enterprise provisioning package) — NOT an adb `dpm` call.
+# There is nothing to drive over adb here, so this verb prints the registry's
+# provider RUNBOOK and records the operator-supplied Graph managedDevice id the
+# remote-lock leg (admin-bff AzureIntuneLockClient) will target. The Graph
+# client-credentials secret is NEVER handled here — it lives only in the cluster
+# (azure-intune ExternalSecret -> admin-bff env). Records the same mdm.json shape
+# as the dpc flow so `ingest` folds it identically, with mdm_provider set to the
+# selected provider and set_via marking the OS-enrollment path.
+cmd_mdm_enroll_os() {
+    require_jq
+
+    # No adb serial is required (nothing is driven over adb). Derive the device
+    # id like the --no-usb enroll path: --device-id wins, else the serial.
+    resolve_device_id
+    [ -n "${DEVICE_ID}" ] || pw_die 1 "mdm-enroll --mdm-provider ${MDM_PROVIDER} needs --device-id (Intune enrollment is OS-level; there is no adb serial to derive one from — pass the same --device-id used at enroll)"
+
+    # Render the provider's OS-enrollment runbook via the registry (never a
+    # hard-coded provider body). The emit reads the MDMP_* context globals.
+    local rec_dir="${OUT_DIR}/device/${DEVICE_ID}"
+    mkdir -p "${rec_dir}"
+    MDMP_DEVICE_ID="${DEVICE_ID}" \
+    MDMP_INTUNE_DEVICE_ID="${INTUNE_DEVICE_ID}" \
+        mdmp_emit "${MDM_PROVIDER}" "${rec_dir}" \
+        || pw_die 1 "mdm-enroll: failed to render the ${MDM_PROVIDER} enrollment runbook"
+    echo
+    cat "${rec_dir}/runbook.txt"
+    echo
+
+    # The record. mdm_provider = the selected provider; set_via distinguishes the
+    # OS-enrollment path from adb-device-owner. dpc_package/headwind_url are empty
+    # (no DPC), intune_device_id carries the Graph managedDevice id.
+    local rec="${rec_dir}/mdm.json"
+    jq -n \
+        --arg device_id "${DEVICE_ID}" \
+        --arg serial "${SERIAL}" \
+        --arg mdm_provider "${MDM_PROVIDER}" \
+        --arg intune_device_id "${INTUNE_DEVICE_ID}" \
+        --arg enrolled_at "$(now_iso)" \
+        '{device_id:$device_id, serial:$serial, mdm_provider:$mdm_provider,
+          dpc_package:"", headwind_url:"", os:"", intune_device_id:$intune_device_id,
+          set_via:"intune-os-enrollment", enrolled_at:$enrolled_at}' \
+        > "${rec}"
+    pw_info "mdm record written (${MDM_PROVIDER}, os-enrollment): ${rec}"
+
+    if [ -z "${INTUNE_DEVICE_ID}" ]; then
+        pw_warn "no --intune-device-id recorded — the Intune remote-lock leg targets managedDevices/{id}; re-run with --intune-device-id once the device appears in the Intune admin center (see the runbook above)"
+    fi
+
+    echo
+    echo "== NEXT STEP: a SUPERADMIN must CONFIRM this device as managed =="
+    echo "  As with every provider, this wizard's ingest record is device-reported"
+    echo "  and trivially spoofable inside the cluster — it CANNOT by itself make"
+    echo "  the phone lockable. To make this phone mesh-owned (remotely lockable),"
+    echo "  a SUPERADMIN must confirm it in the fleet console:"
+    echo "    PUT /bff/superadmin/phone-devices/${DEVICE_ID}/management  {\"mode\":\"mesh_owned\"}"
+    echo "  The BFF fans the lock to the matching provider leg (azure-intune ->"
+    echo "  Graph remoteLock) plus the provider-independent mesh-deny leg. See"
+    echo "  docs/MDM.md 'MDM providers' for the Intune lock/unlock asymmetry."
 }
 
 # ── verb: enroll (--no-usb variant) ─────────────────────────────────
@@ -1726,9 +1857,15 @@ cmd_ingest() {
     # mirroring enterprise_profile: enrolled:false with empty fields when the
     # device never ran mdm-enroll.
     local mdm_json="${rec_dir}/mdm.json"
-    local mdm_enrolled=false mdm_dpc_package="" mdm_headwind_url="" mdm_set_via="" mdm_enrolled_at=""
+    local mdm_enrolled=false mdm_provider="headwind" mdm_intune_device_id=""
+    local mdm_dpc_package="" mdm_headwind_url="" mdm_set_via="" mdm_enrolled_at=""
     if [ -f "${mdm_json}" ]; then
         mdm_enrolled=true
+        # provider defaults to headwind for records written before the co-equal-
+        # provider addition (device-reported, self-report — the enforcer degrades
+        # gracefully on an unknown/spoofed provider, never blocks the lock record).
+        mdm_provider="$(jq -r '.mdm_provider // "headwind"' "${mdm_json}")"
+        mdm_intune_device_id="$(jq -r '.intune_device_id // empty' "${mdm_json}")"
         mdm_dpc_package="$(jq -r '.dpc_package // empty' "${mdm_json}")"
         mdm_headwind_url="$(jq -r '.headwind_url // empty' "${mdm_json}")"
         mdm_set_via="$(jq -r '.set_via // empty' "${mdm_json}")"
@@ -1756,6 +1893,8 @@ cmd_ingest() {
         --arg auditor_package "${auditor_package}" \
         --arg attestation_verdict "${attestation_verdict}" \
         --argjson mdm_enrolled "${mdm_enrolled}" \
+        --arg mdm_provider "${mdm_provider}" \
+        --arg mdm_intune_device_id "${mdm_intune_device_id}" \
         --arg mdm_dpc_package "${mdm_dpc_package}" \
         --arg mdm_headwind_url "${mdm_headwind_url}" \
         --arg mdm_set_via "${mdm_set_via}" \
@@ -1772,8 +1911,10 @@ cmd_ingest() {
                               credential_custody:"vault-seed"},
           attestation_url:$attestation_url, auditor_package:$auditor_package,
           attestation_verdict:$attestation_verdict,
-          mdm:{enrolled:$mdm_enrolled, dpc_package:$mdm_dpc_package,
-               headwind_url:$mdm_headwind_url, set_via:$mdm_set_via,
+          mdm_provider:$mdm_provider, intune_device_id:$mdm_intune_device_id,
+          mdm:{enrolled:$mdm_enrolled, provider:$mdm_provider,
+               dpc_package:$mdm_dpc_package, headwind_url:$mdm_headwind_url,
+               intune_device_id:$mdm_intune_device_id, set_via:$mdm_set_via,
                enrolled_at:$mdm_enrolled_at},
           enrolled_at:$enrolled_at, generated_at:$generated_at}' \
         > "${ingest}"
@@ -1997,6 +2138,8 @@ main() {
             --profile-name)        _need_arg "$1" $#; PROFILE_NAME="$2"; shift 2 ;;
             --tailscale-apk)       _need_arg "$1" $#; TAILSCALE_APK="$2"; shift 2 ;;
             --apk-signer-sha256)   _need_arg "$1" $#; APK_SIGNER_SHA256="$2"; shift 2 ;;
+            --mdm-provider)          _need_arg "$1" $#; MDM_PROVIDER="$2"; shift 2 ;;
+            --intune-device-id)      _need_arg "$1" $#; INTUNE_DEVICE_ID="$2"; shift 2 ;;
             --headwind-apk)          _need_arg "$1" $#; HEADWIND_APK="$2"; shift 2 ;;
             --headwind-signer-sha256) _need_arg "$1" $#; HEADWIND_SIGNER_SHA256="$2"; shift 2 ;;
             --headwind-url)          _need_arg "$1" $#; HEADWIND_URL="$2"; shift 2 ;;
