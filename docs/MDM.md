@@ -603,6 +603,18 @@ From then on the owner sees and locks/unlocks **only** their own in-domain
 phones on the public Phone-fleet page; they **cannot** mark-managed, set an
 owner, or grant entitlements — those stay SUPERADMIN-only provisioning acts.
 
+**Step-up for fleet lock/unlock — requires MFA enabled.** The two mutations
+(`.../lock`, `.../unlock`) are step-up-gated exactly like the superadmin plane, but
+a fleet owner satisfies step-up **only via the Casdoor-MFA leg** — a fresh MFA
+re-confirmation on their session. They **cannot** use the workload-token leg: the
+only mint endpoints (`/bff/admin/desktop/step-up`, `/bff/superadmin/workload/step-up`)
+are `ADMIN`/`SUPERADMIN` and require an operator SSH license a fleet customer never
+holds. So fleet lock/unlock is reachable **only where `app.casdoor.mfa.enabled=true`**;
+with MFA dark, a fleet owner's lock/unlock fails closed with a **403** (their list/get
+still work). This is intentional — a fleet customer re-confirms a device lock with MFA,
+not with an operator credential — so **enable MFA before handing a fleet owner
+lock/unlock**.
+
 ## Management plane
 
 **Now real, not a roadmap paragraph.** The device-management plane for
