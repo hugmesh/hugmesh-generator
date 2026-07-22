@@ -204,6 +204,10 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
   `games.<domain>`. Build-time prune ships; the **🚧 live ApplicationSet
   cut-over is pending**. See
   [`docs/OPTIONAL-SERVICES.md`](docs/OPTIONAL-SERVICES.md).
+- **✅ Managed backing services** — point in-mesh datastores (Postgres, object
+  store, Kafka, ClickHouse, SMTP) at a hosted AWS/Azure equivalent per image
+  (`--managed-service id=endpoint`); self-hosted stays the byte-identical default.
+  [`docs/MANAGED-SERVICES.md`](docs/MANAGED-SERVICES.md).
 - **✅ Egress-VPN** — admins drop provider WireGuard/OpenVPN `.conf` for outgoing
   public egress, split-tunnel keeps the tailnet direct. [`docs/EGRESS-VPN.md`](docs/EGRESS-VPN.md).
 - **✅ Node storage** — attach + register extra storage to a node, node-pinned

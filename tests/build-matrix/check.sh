@@ -1539,7 +1539,8 @@ run_nongating_smokes() {
                 "host-selinux-tools:${REPO_DIR}/tests/scripts/test-host-selinux-tools.sh" \
                 "builder-log-paths:${REPO_DIR}/tests/scripts/test-builder-log-paths.sh" \
                 "dracut-cross-lib:${REPO_DIR}/tests/scripts/test-dracut-cross-lib.sh" \
-                "host-mutation-guard:${REPO_DIR}/tests/scripts/test-host-mutation-guard.sh"; do
+                "host-mutation-guard:${REPO_DIR}/tests/scripts/test-host-mutation-guard.sh" \
+                "managed-services-gate:${REPO_DIR}/tests/managed-services/test-managed-services-gate.sh"; do
         name="${spec%%:*}"; path="${spec#*:}"
         if [ ! -f "${path}" ]; then
             SMOKE_REPORT+="  ${name}: SKIP (not present)"$'\n'; continue

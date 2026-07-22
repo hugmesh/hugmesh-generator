@@ -212,6 +212,32 @@ else
     echo "==> Mail: ENABLED via provider '${MAIL_PROVIDER}' (${MAIL_HOST}:${MAIL_PORT}, tls=${MAIL_TLS}, from=${MAIL_FROM})"
 fi
 
+# ── MANAGED BACKING SERVICES creds (OPTIONAL, OPERATOR-SUPPLIED) ─────
+# When a mesh points a backing service at a HOSTED cloud equivalent
+# (--managed-service / MANAGED_SERVICES at build time), the hosted service's
+# credentials are OPERATOR-SUPPLIED — NEVER generator-minted. This block resolves
+# them env -> keys-file -> blank, exactly like mail: a Vault path is written ONLY
+# when real creds resolve, and the offline bundle mirrors the MATERIALIZED Secret.
+#
+# velero / object-store S3 IAM creds -> secret/<brand>/velero (ESO
+# velero-cloud-credentials, INI key `cloud`). This fills the gap the recon flagged:
+# the mesh never had a keys-file/env hook for this path (it was a fully-MANUAL
+# `vault kv put` per docs/CLOUD-BACKUPS.md). blank/absent = DISABLED (velero already
+# ships dark; provisioning then materializes NOTHING — no empty Secret). Managed DB
+# passwords stay on their existing per-DB paths (secret/<brand>/<x>-db) — the
+# operator seeds the RDS/Azure-PG password there via the SAME env/keys-file the
+# minted value used; documented in docs/MANAGED-SERVICES.md.
+MANAGED_VELERO_ACCESS_KEY_ID="${MANAGED_VELERO_ACCESS_KEY_ID:-$(keyfile_get managed.velero.access_key_id)}"
+MANAGED_VELERO_SECRET_ACCESS_KEY="${MANAGED_VELERO_SECRET_ACCESS_KEY:-$(keyfile_get managed.velero.secret_access_key)}"
+if [ -n "${MANAGED_VELERO_ACCESS_KEY_ID}" ] && [ -n "${MANAGED_VELERO_SECRET_ACCESS_KEY}" ]; then
+    MANAGED_VELERO_ENABLED=1
+    echo "==> Managed velero object-store creds: ENABLED (secret/${BASE}/velero)"
+else
+    MANAGED_VELERO_ENABLED=0
+    MANAGED_VELERO_ACCESS_KEY_ID=""; MANAGED_VELERO_SECRET_ACCESS_KEY=""
+    echo "==> Managed velero object-store creds: disabled (no MANAGED_VELERO_ACCESS_KEY_ID/SECRET) — velero stays dark"
+fi
+
 # Registry pull/push credentials.
 #
 # HARBOR MIGRATION: these two are now automated. Project + robot-account
@@ -516,6 +542,14 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         # AND the harbor-provision Job (project/robot-account REST calls).
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/harbor" \
             admin_password_plain="${HARBOR_ADMIN_PASSWORD}"
+        # Managed velero object-store creds (operator-supplied) — WRITTEN ONLY when
+        # enabled so a blank never CLOBBERS a manually-seeded secret/<brand>/velero.
+        if [ "${MANAGED_VELERO_ENABLED}" = "1" ]; then
+            vault kv put "${VAULT_KV_MOUNT}/${BASE}/velero" \
+                access_key_id="${MANAGED_VELERO_ACCESS_KEY_ID}" \
+                secret_access_key="${MANAGED_VELERO_SECRET_ACCESS_KEY}"
+            echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/velero (managed object-store creds)"
+        fi
         echo "    wrote ${VAULT_KV_MOUNT}/${BASE}/{casdoor,casdoor-apps,casdoor-superadmin,casdoor-games,clickhouse,federation-db,admin-bff-db,admin-bff-mfa,user-bff-custody-key,user-bff-hs-token,bff-internal-token,mod-bff-db,user-bff-db,forum-bff-db,wiki-bff-db,forum,forum-db,akkoma,route-access-db,uptrace,mail,harbor-robots,harbor,headwind}"
     else
         echo "WARNING: VAULT_ADDR is set but the 'vault' CLI is not installed;" >&2
@@ -550,6 +584,9 @@ CASDOOR_GITHUB_CLIENT_SECRET="${CASDOOR_GITHUB_CLIENT_SECRET}" \
 CASDOOR_DISCORD_CLIENT_ID="${CASDOOR_DISCORD_CLIENT_ID}" \
 CASDOOR_DISCORD_CLIENT_SECRET="${CASDOOR_DISCORD_CLIENT_SECRET}" \
 MAIL_ENABLED="${MAIL_ENABLED}" \
+MANAGED_VELERO_ENABLED="${MANAGED_VELERO_ENABLED}" \
+MANAGED_VELERO_ACCESS_KEY_ID="${MANAGED_VELERO_ACCESS_KEY_ID}" \
+MANAGED_VELERO_SECRET_ACCESS_KEY="${MANAGED_VELERO_SECRET_ACCESS_KEY}" \
 MAIL_HOST="${MAIL_HOST}" \
 MAIL_PORT="${MAIL_PORT}" \
 MAIL_TLS="${MAIL_TLS}" \
@@ -850,6 +887,23 @@ if os.environ.get("MAIL_ENABLED") == "1":
         "ATTESTATION_SMTP_USER": os.environ["MAIL_USER"],
         "ATTESTATION_SMTP_PASSWORD": os.environ["MAIL_PASSWORD"],
         "ATTESTATION_SMTP_FROM": os.environ["MAIL_FROM"],
+    }
+
+# ── MANAGED backing services (OPTIONAL) — velero object-store creds ──
+# Mirror secret/<brand>/velero as the MATERIALIZED velero-cloud-credentials Secret
+# (ns `velero` — the Helm chart namespace, NOT brand-prefixed; key `cloud` = the AWS
+# INI the ESO template renders) so an offline/USB provision seeds it too. Only when
+# ENABLED (real operator creds); disabled => omit ENTIRELY so velero stays dark and
+# no empty Secret is materialized. This fills the gap the recon flagged (the mesh
+# only ever wrote this path by hand).
+if os.environ.get("MANAGED_VELERO_ENABLED") == "1":
+    data["velero"] = {
+        "velero-cloud-credentials": {
+            "cloud": "[default]\naws_access_key_id={}\naws_secret_access_key={}\n".format(
+                os.environ["MANAGED_VELERO_ACCESS_KEY_ID"],
+                os.environ["MANAGED_VELERO_SECRET_ACCESS_KEY"],
+            ),
+        },
     }
 
 with open(sys.argv[1], "w") as f:

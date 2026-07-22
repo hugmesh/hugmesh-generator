@@ -412,10 +412,13 @@ services:
       MASTODON_URL: ${ADMIN_BFF_MASTODON_URL:-http://mastodon-web:3000}
       MASTODON_EMAIL_DOMAIN: ${MASTODON_EMAIL_DOMAIN:-e2e.local}
       ROUTE_ACCESS_R2DBC_URL: "r2dbc:postgresql://gateway:gateway@route-access-db:5432/gateway"
-      SPRING_R2DBC_URL: "r2dbc:postgresql://admin-bff-db:5432/adminbff"
+      # MANAGED backing service seam: default in-stack admin-bff-db; set
+      # MANAGED_ADMIN_BFF_{R2DBC,LIQUIBASE}_URL (via STACK_ENV) to a hosted RDS/Azure-PG
+      # endpoint to validate managed mode locally. UNSET = byte-identical default.
+      SPRING_R2DBC_URL: "${MANAGED_ADMIN_BFF_R2DBC_URL:-r2dbc:postgresql://admin-bff-db:5432/adminbff}"
       SPRING_R2DBC_USERNAME: adminbff
       SPRING_R2DBC_PASSWORD: adminbff
-      SPRING_LIQUIBASE_URL: "jdbc:postgresql://admin-bff-db:5432/adminbff"
+      SPRING_LIQUIBASE_URL: "${MANAGED_ADMIN_BFF_LIQUIBASE_URL:-jdbc:postgresql://admin-bff-db:5432/adminbff}"
       SPRING_LIQUIBASE_USER: adminbff
       SPRING_LIQUIBASE_PASSWORD: adminbff
       CASSANDRA_CONTACT_POINTS: "cassandra:9042"
@@ -681,10 +684,11 @@ services:
       # limitation, same class as admin-bff's Kafka/ClickHouse omission above).
       PHPBB_ENABLED: "false"
       EXTERNAL_FORUM_ENABLED: "false"
-      SPRING_R2DBC_URL: "r2dbc:postgresql://forum-bff-db:5432/forumbff"
+      # MANAGED backing service seam (default in-stack forum-bff-db; UNSET = default).
+      SPRING_R2DBC_URL: "${MANAGED_FORUM_BFF_R2DBC_URL:-r2dbc:postgresql://forum-bff-db:5432/forumbff}"
       SPRING_R2DBC_USERNAME: forumbff
       SPRING_R2DBC_PASSWORD: forumbff
-      SPRING_LIQUIBASE_URL: "jdbc:postgresql://forum-bff-db:5432/forumbff"
+      SPRING_LIQUIBASE_URL: "${MANAGED_FORUM_BFF_LIQUIBASE_URL:-jdbc:postgresql://forum-bff-db:5432/forumbff}"
       SPRING_LIQUIBASE_USER: forumbff
       SPRING_LIQUIBASE_PASSWORD: forumbff
     depends_on:
@@ -705,10 +709,11 @@ services:
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       SPRING_PROFILES_ACTIVE: casdoor
-      SPRING_R2DBC_URL: "r2dbc:postgresql://wiki-bff-db:5432/wikibff"
+      # MANAGED backing service seam (default in-stack wiki-bff-db; UNSET = default).
+      SPRING_R2DBC_URL: "${MANAGED_WIKI_BFF_R2DBC_URL:-r2dbc:postgresql://wiki-bff-db:5432/wikibff}"
       SPRING_R2DBC_USERNAME: wikibff
       SPRING_R2DBC_PASSWORD: wikibff
-      SPRING_LIQUIBASE_URL: "jdbc:postgresql://wiki-bff-db:5432/wikibff"
+      SPRING_LIQUIBASE_URL: "${MANAGED_WIKI_BFF_LIQUIBASE_URL:-jdbc:postgresql://wiki-bff-db:5432/wikibff}"
       SPRING_LIQUIBASE_USER: wikibff
       SPRING_LIQUIBASE_PASSWORD: wikibff
     depends_on:

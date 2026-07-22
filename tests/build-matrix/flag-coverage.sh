@@ -50,6 +50,8 @@ x86 --nvidia — pure alias of '--gpu-driver nvidia' (the fielded matrix spellin
 x86 --nvidia-driver — back-compat open|proprietary alias of --gpu-driver
 x86 --skip-mesh — alias posture; the Studio emits the explicit --no-tailscale pair
 x86 --skip-sso — alias posture; the Studio emits the explicit --no-sso pair
+x86 --managed-service — managed backing-services axis (I8-DESIGN); driven by the MANAGED_SERVICES env / build-image Job channel, NOT a Studio ImageConfig field yet (the Studio surface is lane M2, deferred)
+rpi5 --managed-service — managed backing-services axis (I8-DESIGN); driven by the MANAGED_SERVICES env / build-image Job channel, NOT a Studio field yet (Studio surface is lane M2, deferred)
 rpi5 --both — pure alias of '--img --iso' (both fielded individually)
 rpi5 --user-password — deprecated no-op on this builder (warn+ignore; x86-only field by design)
 rpi5 --root-password — deprecated no-op on this builder (warn+ignore; x86-only field by design)

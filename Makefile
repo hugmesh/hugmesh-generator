@@ -930,9 +930,29 @@ endif
 # ARG SNAP_WEB_LOCALES); the Studio sets it via LocalMeshBootstrapConfig.web_locales.
 #   make stack-up SNAP_WEB_LOCALES=de,fr
 SNAP_WEB_LOCALES ?=
+# MANAGED backing services (local-stack validation of managed mode; see
+# specs/cluster/backing-services.yaml + docs/MANAGED-SERVICES.md). EMPTY by default
+# so compose falls back to the in-stack containers BYTE-IDENTICALLY (the compose
+# consumers read `$${MANAGED_*:-in-stack-default}`). Set one to a hosted endpoint to
+# point the local stack at an external RDS/Azure-PG, e.g.
+#   make stack-up MANAGED_ADMIN_BFF_R2DBC_URL='r2dbc:postgresql://my.rds:5432/adminbff'
+# NOTE: the compose stack has no Kafka/ClickHouse/MinIO to replace — those managed
+# ids are image-time only; local managed mode is DB-endpoint validation.
+MANAGED_ADMIN_BFF_R2DBC_URL    ?=
+MANAGED_ADMIN_BFF_LIQUIBASE_URL ?=
+MANAGED_FORUM_BFF_R2DBC_URL    ?=
+MANAGED_FORUM_BFF_LIQUIBASE_URL ?=
+MANAGED_WIKI_BFF_R2DBC_URL     ?=
+MANAGED_WIKI_BFF_LIQUIBASE_URL  ?=
 STACK_ENV := STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
              SNAP_WEB_LOCALES='$(SNAP_WEB_LOCALES)' \
+             MANAGED_ADMIN_BFF_R2DBC_URL='$(MANAGED_ADMIN_BFF_R2DBC_URL)' \
+             MANAGED_ADMIN_BFF_LIQUIBASE_URL='$(MANAGED_ADMIN_BFF_LIQUIBASE_URL)' \
+             MANAGED_FORUM_BFF_R2DBC_URL='$(MANAGED_FORUM_BFF_R2DBC_URL)' \
+             MANAGED_FORUM_BFF_LIQUIBASE_URL='$(MANAGED_FORUM_BFF_LIQUIBASE_URL)' \
+             MANAGED_WIKI_BFF_R2DBC_URL='$(MANAGED_WIKI_BFF_R2DBC_URL)' \
+             MANAGED_WIKI_BFF_LIQUIBASE_URL='$(MANAGED_WIKI_BFF_LIQUIBASE_URL)' \
              DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
 STACK_PROFILE := $(if $(strip $(SOCIAL)),--profile social,)
 STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)

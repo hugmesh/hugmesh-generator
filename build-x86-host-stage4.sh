@@ -111,6 +111,17 @@ OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"
 # re-enumerate the whole positive list. Whitespace/comma separated.
 # Example (brand.conf): EXCLUDE_SERVICES="phpbb tuwunel"  (forum-less + Matrix-less).
 EXCLUDE_SERVICES="${EXCLUDE_SERVICES:-}"
+# MANAGED_SERVICES — the MANAGED BACKING SERVICES selection (brand.conf / env), a
+# WHITESPACE-separated list of `id=endpoint` tokens (commas are literal — a kafka
+# endpoint is a comma-list of brokers) (e.g. "kafka=msk-broker:9098
+# postgres-admin-bff=my.rds.amazonaws.com:5432"). Each id names a backing service
+# (see specs/cluster/backing-services.yaml) whose in-mesh workload is pruned and
+# whose consumer endpoint is repointed at <endpoint> by gate_backing_services().
+# EMPTY (default) = SELF-HOSTED, byte-identical mainline (the #1 invariant). CLI
+# --managed-service id=endpoint APPENDS to this. Tier-3 (docs-only) ids are
+# fail-closed refused; creds are operator-supplied via gen-cluster-secrets, never
+# argv/git. See docs/MANAGED-SERVICES.md.
+MANAGED_SERVICES="${MANAGED_SERVICES:-}"
 # Games opt-in toggle. --enable-games or ENABLE_GAMES=true folds 'games' into
 # OPTIONAL_SERVICES (post-arg-parse, idempotent), baking the games subdomain.
 ENABLE_GAMES="${ENABLE_GAMES:-false}"
@@ -757,6 +768,10 @@ while [[ $# -gt 0 ]]; do
         --optional-services) OPTIONAL_SERVICES="$2"; shift 2 ;;
         --all-services)      OPTIONAL_SERVICES="all"; shift   ;;
         --exclude-services)  EXCLUDE_SERVICES="$2";   shift 2 ;;
+        # Managed backing service (repeatable): --managed-service id=endpoint APPENDS
+        # to MANAGED_SERVICES. Point one in-mesh datastore at a hosted cloud endpoint
+        # (see specs/cluster/backing-services.yaml + docs/MANAGED-SERVICES.md).
+        --managed-service)   MANAGED_SERVICES="${MANAGED_SERVICES:+${MANAGED_SERVICES} }$2"; shift 2 ;;
         -u|--user) DEFAULT_USER="$2"; shift 2 ;;
         --user-password) DEFAULT_USER_PASS="$2"; shift 2 ;;
         --root-password) ROOT_PASS="$2"; shift 2 ;;
@@ -2334,6 +2349,228 @@ _opt_render_optionalservice_cr() {
     done
     info "OPTIONAL_SERVICES: seeded OptionalService CR enabled flags (selected: ${OPTIONAL_SERVICES:-none})"
 }
+
+# ============================================================================
+# MANAGED BACKING SERVICES — gate_backing_services() + helpers. See
+# specs/cluster/backing-services.yaml (the DECLARED contract; this is its
+# executable twin — keep the case arms in sync). Applied AFTER
+# gate_optional_services(). SELF-HOSTED IS THE DEFAULT: an EMPTY MANAGED_SERVICES
+# selection returns immediately and the baked tree is byte-identical mainline
+# (the #1 invariant). Managed mode, per selected id: prune the in-mesh workload
+# app+manifests, repoint the consumer endpoint env value(s) at the operator-
+# supplied endpoint, keep the ESO Secret names/Vault paths (creds ride the KEYS
+# USB via gen-cluster-secrets, never argv/git). Fail-closed: unknown id / tier-3
+# (docs-only) id / malformed endpoint => FATAL.
+# ============================================================================
+# Tier 1-2 ids (managed IS implemented). Tier 3 ids are mode-locked self-hosted.
+_MGD_TIER12_IDS="velero-objectstore smtp kafka clickhouse federation-bundles postgres-admin-bff postgres-user-bff postgres-mod-bff postgres-forum-bff postgres-wiki-bff postgres-casdoor"
+_MGD_TIER3_IDS="cassandra harbor vault-kv vault-pki"
+_mgd_die() { echo "FATAL(managed-services): $1" >&2; exit 1; }
+# The tier-3 blocker one-liner (WHY --managed-service <id> is refused in v1).
+_mgd_tier3_blocker() {
+    case "$1" in
+        cassandra) echo "auth/TLS live only in the dark cassandra-hardening overlay; Keyspaces/Cosmos need TLS+SigV4 on 9142 with no live-path driver wiring";;
+        harbor)    echo "registry host literal in ~30 kustomizations + dockerconfigjson + kaniko; robot-account Job has no ECR/ACR analog; 12h ECR tokens break static pull secrets; loses air-gap";;
+        vault-kv)  echo "mechanical but broad: 1 ClusterSecretStore + ~90 remoteRef renames + writer re-point + drop vault-token seeding for IRSA — deferred wave";;
+        vault-pki) echo "hardest: VaultDynamicSecret is Vault-only; needs a cert-manager re-architecture keeping <app>-mtls names; USB CA-custody has no managed analog";;
+        *)         echo "tier-3 managed swap not implemented in v1";;
+    esac
+}
+# Endpoint (RHS of id=endpoint) for a selected id; exit 1 if not selected.
+_mgd_endpoint() {
+    local want="$1" tok id
+    for tok in ${MANAGED_SERVICES}; do
+        id="${tok%%=*}"
+        [ "${id}" = "${want}" ] && { printf '%s' "${tok#*=}"; return 0; }
+    done
+    return 1
+}
+_mgd_selected()  { _mgd_endpoint "$1" >/dev/null 2>&1; }
+_mgd_is_tier12() { case " ${_MGD_TIER12_IDS} " in *" $1 "*) return 0;; esac; return 1; }
+_mgd_is_tier3()  { case " ${_MGD_TIER3_IDS} "  in *" $1 "*) return 0;; esac; return 1; }
+# Fail-closed validation of the whole MANAGED_SERVICES selection.
+validate_managed_services() {
+    local tok id ep
+    for tok in ${MANAGED_SERVICES}; do
+        case "${tok}" in *=*) : ;; *) _mgd_die "'${tok}' is malformed — expected id=endpoint";; esac
+        id="${tok%%=*}"; ep="${tok#*=}"
+        [ -n "${id}" ] || _mgd_die "empty id in token '${tok}'"
+        # Endpoint shape: non-empty and must carry a host (not a bare `:port`). Note
+        # whitespace can't reach here — word-splitting already tokenises on it.
+        [ -n "${ep}" ] || _mgd_die "'${id}' has an empty endpoint (id=endpoint required)"
+        case "${ep}" in :*) _mgd_die "'${id}' endpoint '${ep}' has no host (bare :port)";; esac
+        if _mgd_is_tier3 "${id}"; then
+            _mgd_die "'${id}' is TIER-3 (mode-locked self-hosted, docs-only in v1) — $(_mgd_tier3_blocker "${id}"). See docs/MANAGED-SERVICES.md."
+        fi
+        _mgd_is_tier12 "${id}" || _mgd_die "unknown backing-service id '${id}'. Known tier-1/2: ${_MGD_TIER12_IDS}. Tier-3 (docs-only): ${_MGD_TIER3_IDS}."
+    done
+}
+# Rewrite the `value: "…"` line immediately following `- name: <ENV>` in a k8s
+# container env list (exact-name anchored so SPRING_R2DBC_URL != _USERNAME; FIRST
+# occurrence only; a valueFrom block is left untouched).
+_mgd_rewrite_env() {
+    local f="$1" env="$2" val="$3"
+    [ -f "${f}" ] || return 0
+    awk -v env="${env}" -v val="${val}" '
+        BEGIN{done=0}
+        {
+            if (!done && $0 ~ ("^[[:space:]]*- name: " env "[[:space:]]*$")) {
+                print
+                if ((getline nl) > 0) {
+                    if (nl ~ /^[[:space:]]*value:[[:space:]]*/) {
+                        match(nl, /^[[:space:]]*/); ind=substr(nl,1,RLENGTH)
+                        print ind "value: \"" val "\""; done=1; next
+                    } else { print nl; next }
+                }
+                next
+            }
+            print
+        }' "${f}" > "${f}.tmp" && mv "${f}.tmp" "${f}"
+}
+# Per-service Postgres: repoint BOTH URLs (R2DBC + Liquibase), delete the DB app +
+# manifests. Guarded on the consumer file existing (phpbb may have pruned it first).
+_mgd_pg() {  # tree endpoint dbname consumer_manifest db_app db_manifest
+    local tree="$1" ep="$2" db="$3" cons="$4" dbapp="$5" dbman="$6"
+    _mgd_rewrite_env "${tree}/${cons}" SPRING_R2DBC_URL    "r2dbc:postgresql://${ep}/${db}"
+    _mgd_rewrite_env "${tree}/${cons}" SPRING_LIQUIBASE_URL "jdbc:postgresql://${ep}/${db}"
+    rm -f  "${tree}/${dbapp}"
+    rm -rf "${tree}/${dbman}"
+}
+# Casdoor PG: NO app prune (05-casdoor IS the IdP). Flip host+port+sslmode inside
+# the single libpq dataSourceName string (dbname=casdoor kept), drop the bundled
+# pg.yaml manifest + its kustomization line. Managed PG enforces TLS -> require.
+_mgd_pg_casdoor() {  # tree endpoint(host[:port])
+    local tree="$1" ep="$2" h p
+    h="${ep%%:*}"; p="5432"; case "${ep}" in *:*) p="${ep##*:}";; esac
+    local cm="${tree}/manifests/casdoor/app-conf-configmap.yaml"
+    [ -f "${cm}" ] && sed -i -E "s#host=[^ ]+ port=[0-9]+#host=${h} port=${p}#; s#sslmode=[a-z-]+#sslmode=require#" "${cm}"
+    rm -f "${tree}/manifests/casdoor/pg.yaml"
+    _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" pg.yaml
+}
+# Velero BSL: rewrite bucket/region/s3Url in the FIRST YAML doc only (the VSL doc
+# after '---' has its own region). endpoint=aws => real S3 (drop s3Url); else the
+# S3-compatible URL. bucket/region from MANAGED_VELERO_{BUCKET,REGION} env.
+_mgd_velero() {  # tree endpoint(aws|url)
+    local tree="$1" ep="$2"
+    local bsl="${tree}/manifests/velero/backupstoragelocation.yaml"
+    [ -f "${bsl}" ] || return 0
+    local bucket="${MANAGED_VELERO_BUCKET:-snapdragon-backups}"
+    local region="${MANAGED_VELERO_REGION:-us-east-1}"
+    local s3url="${ep}"; [ "${ep}" = "aws" ] && s3url=""
+    awk -v bucket="${bucket}" -v region="${region}" -v s3url="${s3url}" '
+        BEGIN{doc=0}
+        /^---/ { doc++ }
+        {
+            if (doc==0) {
+                if ($0 ~ /^[[:space:]]*bucket:[[:space:]]/) { match($0,/^[[:space:]]*/); print substr($0,1,RLENGTH) "bucket: " bucket; next }
+                if ($0 ~ /^[[:space:]]*region:[[:space:]]/) { match($0,/^[[:space:]]*/); print substr($0,1,RLENGTH) "region: " region; next }
+                if ($0 ~ /^[[:space:]]*s3Url:[[:space:]]/)  {
+                    if (s3url=="") next
+                    match($0,/^[[:space:]]*/); print substr($0,1,RLENGTH) "s3Url: " s3url; next
+                }
+            }
+            print
+        }' "${bsl}" > "${bsl}.tmp" && mv "${bsl}.tmp" "${bsl}"
+}
+# Federation bundles: flip APP_BUNDLES_STORAGE=s3 + inject APP_BUNDLES_S3_* env
+# after APP_BUNDLES_DIR (idempotent). endpoint = bucket | bucket@https://endpoint.
+# Creds ride the AWS default chain (IRSA/env) — no static-key Secret.
+_mgd_fed_bundles() {  # tree endpoint
+    local tree="$1" ep="$2"
+    local dep="${tree}/manifests/federation-api/deployment.yaml"
+    [ -f "${dep}" ] || return 0
+    local bucket="${ep%%@*}" endpoint=""
+    case "${ep}" in *@*) endpoint="${ep#*@}";; esac
+    local region="${MANAGED_FEDERATION_BUNDLES_REGION:-us-east-1}"
+    _mgd_rewrite_env "${dep}" APP_BUNDLES_STORAGE "s3"
+    grep -q 'APP_BUNDLES_S3_BUCKET' "${dep}" && return 0
+    awk -v bkt="${bucket}" -v ep="${endpoint}" -v rgn="${region}" '
+        { print }
+        /^[[:space:]]*- name: APP_BUNDLES_DIR[[:space:]]*$/ { match($0,/^[[:space:]]*/); nind=substr($0,1,RLENGTH); pend=1; next }
+        pend==1 && /^[[:space:]]*value:/ {
+            print nind "- name: APP_BUNDLES_S3_BUCKET";   print nind "  value: \"" bkt "\""
+            print nind "- name: APP_BUNDLES_S3_ENDPOINT"; print nind "  value: \"" ep "\""
+            print nind "- name: APP_BUNDLES_S3_REGION";   print nind "  value: \"" rgn "\""
+            pend=0
+        }' "${dep}" > "${dep}.tmp" && mv "${dep}.tmp" "${dep}"
+}
+# Bake /etc/snapdragon/backing-services.conf (id=endpoint list; NO creds) +
+# README-MANAGED.md (the standing honesty notes) into the baked tree.
+_mgd_bake_readme() {  # tree
+    local tree="$1"; local rd="${tree}/README-MANAGED.md"
+    { echo "# Managed backing services (this image)"; echo
+      echo "This image points one or more in-mesh backing services at a hosted cloud"
+      echo "endpoint. Self-hosted is the platform default; only the ids listed in"
+      echo "\`/etc/snapdragon/backing-services.conf\` were repointed. Full runbooks:"
+      echo "docs/MANAGED-SERVICES.md."; echo
+      echo "## Selected"; echo
+      local id ep
+      for id in ${_MGD_TIER12_IDS}; do _mgd_selected "${id}" || continue; ep="$(_mgd_endpoint "${id}")"; echo "- \`${id}\` -> \`${ep}\`"; done
+      echo
+      echo "## Honesty notes (READ before relying on this image)"; echo
+      echo "- **TLS delta:** in-mesh Postgres/ClickHouse run plaintext. Managed RDS /"
+      echo "  Azure-PG / ClickHouse-Cloud enforce TLS — add \`?ssl=true&sslMode=require\`"
+      echo "  to the URLs and the managed CA to each app's truststore OUT OF BAND. The"
+      echo "  build repoints the HOST only; it does not invent TLS params (except the"
+      echo "  Casdoor DSN sslmode, flipped to \`require\`)."
+      echo "- **Role-split SQL:** each DB's \`initdb/10-roles.sh\` (owner + least-priv app"
+      echo "  role) runs via docker-entrypoint-initdb.d and NEVER runs on RDS. Run that"
+      echo "  role-split SQL against the managed DB by hand."
+      echo "- **Citus:** federation-db + route-access-db need Citus (initdb/90-citus.sh)"
+      echo "  which vanilla RDS lacks — they are NOT managed ids in v1 (Azure Cosmos DB"
+      echo "  for PostgreSQL does have Citus)."
+      echo "- **Creds:** operator-supplied only, delivered via ESO/Vault on the KEYS USB"
+      echo "  (gen-cluster-secrets managed block). Never minted, never in this image."
+    } > "${rd}"
+}
+gate_backing_services() {
+    local tree="${SYSROOT}/var/lib/snapdragon/cluster"
+    local apps="${tree}/apps"
+    [ -d "${apps}" ] || return 0
+    # #1 INVARIANT: empty selection => zero change. Tokens are WHITESPACE-separated
+    # (all whitespace: space/tab/newline) — commas are LITERAL (a kafka endpoint is itself a comma-list of brokers).
+    [ -z "${MANAGED_SERVICES//[[:space:]]/}" ] && return 0
+    validate_managed_services
+    local id ep churl hostport
+    for id in ${_MGD_TIER12_IDS}; do
+        _mgd_selected "${id}" || continue
+        ep="$(_mgd_endpoint "${id}")"
+        info "MANAGED_SERVICES: '${id}' -> '${ep}' — pruning in-mesh workload + repointing consumers"
+        case "${id}" in
+            postgres-admin-bff) _mgd_pg "${tree}" "${ep}" adminbff manifests/admin-bff-api/deployment.yaml apps/30-admin-bff-db.yaml manifests/admin-bff-db ;;
+            postgres-user-bff)  _mgd_pg "${tree}" "${ep}" userbff  manifests/user-bff-api/deployment.yaml  apps/34-user-bff-db.yaml  manifests/user-bff-db ;;
+            postgres-mod-bff)   _mgd_pg "${tree}" "${ep}" modbff   manifests/mod-bff-api/deployment.yaml   apps/32-mod-bff-db.yaml   manifests/mod-bff-db ;;
+            postgres-forum-bff) _mgd_pg "${tree}" "${ep}" forumbff manifests/forum-bff-api/deployment.yaml apps/38-forum-bff-db.yaml manifests/forum-bff-db ;;
+            postgres-wiki-bff)  _mgd_pg "${tree}" "${ep}" wikibff  manifests/wiki-bff-api/deployment.yaml  apps/34a-wiki-bff-db.yaml manifests/wiki-bff-db ;;
+            postgres-casdoor)   _mgd_pg_casdoor "${tree}" "${ep}" ;;
+            kafka)
+                _mgd_rewrite_env "${tree}/manifests/admin-bff-api/deployment.yaml" SPRING_KAFKA_BOOTSTRAP_SERVERS "${ep}"
+                rm -f "${apps}/35-analytics-kafka.yaml"; rm -rf "${tree}/manifests/analytics/kafka"
+                ;;
+            clickhouse)
+                churl="${ep}"; case "${ep}" in *"://"*) ;; *) churl="https://${ep}";; esac
+                _mgd_rewrite_env "${tree}/manifests/admin-bff-api/deployment.yaml" CLICKHOUSE_URL "${churl}"
+                hostport="${ep#*://}"
+                [ -f "${tree}/manifests/observability/deployment.yaml" ] && \
+                    sed -i -E "s#(clickhouse://[^@]+@)[^/]+#\\1${hostport}#" "${tree}/manifests/observability/deployment.yaml"
+                rm -f "${apps}/35-analytics-clickhouse.yaml"; rm -rf "${tree}/manifests/analytics/clickhouse"
+                ;;
+            velero-objectstore) _mgd_velero "${tree}" "${ep}" ;;
+            federation-bundles) _mgd_fed_bundles "${tree}" "${ep}" ;;
+            smtp) : ;;  # pure creds/host via gen-cluster-secrets MAIL_*; recorded in the conf only
+        esac
+    done
+    mkdir -p "${SYSROOT}/etc/snapdragon"
+    { echo "# Managed backing services baked into this image (see docs/MANAGED-SERVICES.md)."
+      echo "# Self-hosted is the default; only the ids below were repointed at a hosted endpoint."
+      echo "# Format: <id>=<endpoint>  (creds are NOT here — they ride ESO/Vault via the KEYS USB)."
+      for id in ${_MGD_TIER12_IDS}; do _mgd_selected "${id}" || continue; echo "${id}=$(_mgd_endpoint "${id}")"; done
+    } > "${SYSROOT}/etc/snapdragon/backing-services.conf"
+    chmod 644 "${SYSROOT}/etc/snapdragon/backing-services.conf"
+    _mgd_bake_readme "${tree}"
+    info "MANAGED_SERVICES: baked /etc/snapdragon/backing-services.conf + README-MANAGED.md"
+}
+
 # Parameterize the games-realm OIDC identity on GAMES_DOMAIN. rebrand_sysroot does
 # NOT touch the .games literals (its rules match snapdragon.systems / snapdragon-),
 # so the games host + issuer + redirects would otherwise stay snapdragon.games and
@@ -3499,6 +3736,7 @@ else
     gate_env_apps             # prune ENV-specific ArgoCD apps from the baked copy
     bake_host_firewall        # Layer 3: host nftables backstop for RELEASE_STATE (independent of gate_env_apps' K8s-manifest layer)
     gate_optional_services    # prune OPTIONAL services (akkoma/tuwunel/phpbb/games) not in OPTIONAL_SERVICES
+    gate_backing_services     # MANAGED backing services: prune in-mesh datastore + repoint consumer at hosted endpoint (empty selection = no-op)
     rebrand_sysroot           # rewrites snapdragon.systems -> ${CLUSTER_DOMAIN} (incl. lan-dns/cloudflared/games)
     apply_idp_external        # I6.3: AFTER rebrand — idp.conf bake + issuer/JWKS rewrite + Casdoor-app gating + README-IDP.md; casdoor default = no-op
 fi
