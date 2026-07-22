@@ -45,6 +45,16 @@ from .validate import (
 _TIMEZONE_RE = re.compile(r"^[A-Za-z0-9_+./-]+$")
 _MEDIA_LABEL_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
+# External-IdP identity values (I6). Both flow into a root-baked idp.conf AND the
+# REPLACEMENT side of the builders' issuer/JWKS sed rewrite, so the allowlist
+# excludes everything shell/sed-meaningful (quotes, spaces, |, &, \, ;). An issuer
+# or JWKS URL must be https:// (the token-validation trust anchor — an http
+# external issuer would be a downgrade the platform never had); a client id keeps
+# the union of the real providers' shapes (Entra GUIDs, Cognito alnum ids,
+# generic OIDC slugs).
+_IDP_URL_RE = re.compile(r"^https://[A-Za-z0-9][A-Za-z0-9._:/%=+-]*$")
+_IDP_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+
 
 # Studio "mode" -> sensible default role. The wizard lets the user override role.
 MODE_DEFAULT_ROLE = {
@@ -65,7 +75,13 @@ MODE_DEFAULT_ROLE = {
 # walk is positional): the three non-image side-flow pages, each dynamically skipped
 # via applies_to() on every image mode. None is a MODE_SKIPPED_PAGES key — _ALL_MODES
 # derives the legal ImageConfig.mode set from that dict, and none is an image mode.
-WIZARD_PAGE_SLUGS = ("welcome", "mode", "localmesh", "phone", "deploy", "role",
+# "idp" sits immediately BEFORE "role" (operator direction I6.2: the IdP choice is
+# one of the FIRST steps, its own screen) — a node (mesh-mode) run reads
+# welcome -> mode -> idp -> worklist/…; the localmesh/phone/deploy side-flow slugs in
+# between are terminal or dynamically skipped anyway. Non-node modes statically
+# skip "idp" via MODE_SKIPPED_PAGES below, so client/standalone flows keep today's
+# behaviour byte-identically.
+WIZARD_PAGE_SLUGS = ("welcome", "mode", "localmesh", "phone", "deploy", "idp", "role",
                      "worklist", "hardware", "branding", "network", "keyzip",
                      "domains", "users", "system", "home", "build", "progress")
 MODE_SKIPPED_PAGES = {
@@ -74,8 +90,12 @@ MODE_SKIPPED_PAGES = {
     # multi-select on the WorklistPage instead of the single-image role/hardware/branding
     # pages (per-image hardware/GPU/board facts derive from the worklist row; theming is
     # a desktop-class surface a mesh node never carries).
-    "standalone": ("worklist", "keyzip", "domains", "users"),  # single image, no admin/mesh plane
-    "cloud": ("worklist",),                                     # single image, admin plane via key-zip
+    # "idp" (the mesh-node identity-provider picker) is a NODE-plane choice: the
+    # desktop-client and standalone flows never see it (their SSO posture is the
+    # with/no-sso axis, unchanged), so both skip it statically and their flows +
+    # argv stay byte-identical to before the page existed.
+    "standalone": ("idp", "worklist", "keyzip", "domains", "users"),  # single image, no admin/mesh plane
+    "cloud": ("idp", "worklist"),                               # single image, admin plane via key-zip
     # mesh USED to skip "branding" outright; it no longer can: the page now also hosts
     # the WEB login theme (login_* — NON_ARGV_FIELDS), which themes the login-ui the
     # MESH serves to browsers. The desktop-asset half still greys+clears in mesh via
@@ -305,6 +325,41 @@ X86_NODE_ROLES = ("pki", "be", "fe", "be+gpu", "omnibus", "edge_ai")
 # (build-x86:674 / bake_host_firewall:2888; rpi5:1089-1091). Only x86 + rpi5 parse it.
 RELEASE_STATE_CHOICES = ("internal", "public")
 
+# Mesh-node identity provider (I6). Casdoor is the NATIVE DEFAULT: with idp left at
+# "casdoor" every argv, sysroot byte and test outcome is IDENTICAL to today (the #1
+# invariant). External mode is a CONFIG AXIS the two mesh-node builders
+# (build-x86-host-stage4.sh / build-rpi5-stage4.sh) honour via --idp/--idp-issuer/
+# --idp-client-id/--idp-jwks — see docs/IDENTITY-PROVIDERS.md for what external mode
+# honestly does and does NOT do (native /bff/login, MFA stamping, role-sync jobs and
+# the signup gate remain Casdoor-only).
+IDP_CHOICES = ("casdoor", "entra", "aws", "oidc")
+IDP_LABELS = {
+    "casdoor": "Casdoor (built-in) — default",
+    "entra": "Azure Entra ID",
+    "aws": "AWS Cognito",
+    "oidc": "Other OIDC provider",
+}
+# Per-provider derived JWKS path when --idp-jwks is left empty (documented choice:
+# Entra publishes keys at /discovery/v2.0/keys; Cognito at /.well-known/jwks.json;
+# a generic OIDC provider gets the Casdoor-shaped /.well-known/jwks the baked tree
+# already pins — override with idp_jwks when your provider differs).
+IDP_JWKS_SUFFIX = {
+    "entra": "/discovery/v2.0/keys",
+    "aws": "/.well-known/jwks.json",
+    "oidc": "/.well-known/jwks",
+}
+
+
+def idp_effective_jwks(idp: str, issuer: str, jwks: str) -> str:
+    """The JWKS URL external mode bakes: the explicit override, else the
+    per-provider derivation off the issuer (single source for GUI preview,
+    localmesh plan and tests; the builders derive the same value in shell)."""
+    if jwks:
+        return jwks
+    if idp in IDP_JWKS_SUFFIX and issuer:
+        return issuer.rstrip("/") + IDP_JWKS_SUFFIX[idp]
+    return ""
+
 # --kernel-flavor (jetson only): mainline (default) | l4t. The l4t BUILD is a stub that
 # hard-errors today, but the plan/matrix/--print-plan accept the axis (G36).
 KERNEL_FLAVOR_CHOICES = ("mainline", "l4t")
@@ -386,6 +441,10 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # edge_ai_tts is CPU-only + self-contained (NO edge-ai dependency) — wired on
     # BOTH x86 AND rpi5 (unlike edge_ai_analysis, which is x86/GPU-only).
     "edge_ai_tts": _X86_RPI5,
+    # mesh-node identity provider (I6) — the two node builders only. Casdoor
+    # default emits nothing; the probe uses an external combo (multi-key entry).
+    "idp": _X86_RPI5, "idp_issuer": _X86_RPI5, "idp_client_id": _X86_RPI5,
+    "idp_jwks": _X86_RPI5,
     # tor / character-studio / services.
     "tor_onion_service": _X86, "character_studio": _X86_RPI5,
     "optional_services": _X86_RPI5, "exclude_services": _X86_RPI5, "enable_games": _X86_RPI5,
@@ -1223,6 +1282,15 @@ class ImageConfig:
     headscale_version: str = ""        # --headscale-version pin (all)
     tailscale_version: str = ""        # --tailscale-version pin (all)
     skip_tailscale: bool = False       # --skip-tailscale: headscale-only posture, distinct from --skip-mesh (all)
+    # ── mesh-node identity provider (I6; x86 + rpi5 node builders) ──
+    # "casdoor" (the NATIVE DEFAULT) emits NOTHING — argv/sysroot byte-identity is
+    # the hard invariant. External providers emit --idp/--idp-issuer/--idp-client-id
+    # [--idp-jwks]; validate_identity() fail-closes the combinations (external needs
+    # an https issuer + client id; casdoor requires the other three EMPTY).
+    idp: str = "casdoor"               # IDP_CHOICES: casdoor | entra | aws | oidc
+    idp_issuer: str = ""               # external OIDC issuer URL (https://…)
+    idp_client_id: str = ""            # external OIDC client id (public identifier, not a secret)
+    idp_jwks: str = ""                 # external JWKS URL override ("" = per-provider derivation)
     # ── hardware ──
     gpu_driver: str = "auto"           # auto|nvidia|amd-free|amd-pro|intel|none
     nvidia_cuda: bool = False          # --nvidia-cuda (CUDA bake for GPU/edge-AI images; x86)
@@ -1529,6 +1597,36 @@ class ImageConfig:
         for d in self.domains:
             if getattr(d, "name", ""):
                 validate_domain_name(d.name)
+        # ── mesh-node identity provider (I6) — fail-closed at the earliest boundary.
+        # The values flow into a root-baked idp.conf AND the builders' issuer/JWKS
+        # sed rewrite, so both the combination rules and the charset are enforced
+        # HERE (before --print-command / the GUI preview / any dispatch).
+        if self.idp not in IDP_CHOICES:
+            raise IdentityValidationError(
+                f"unknown idp: {self.idp!r} — known: {', '.join(IDP_CHOICES)}")
+        if self.idp == "casdoor":
+            # The byte-identity invariant: the built-in default carries ZERO external
+            # identity residue. A stray issuer/client/jwks with idp=casdoor is a
+            # config bug (a half-switched provider), never silently ignored.
+            for fld in ("idp_issuer", "idp_client_id", "idp_jwks"):
+                if getattr(self, fld):
+                    raise IdentityValidationError(
+                        f"{fld} is set but idp is 'casdoor' (the built-in default) — "
+                        "clear the field or pick an external provider (entra/aws/oidc)")
+        else:
+            if not self.idp_issuer or not _IDP_URL_RE.fullmatch(self.idp_issuer):
+                raise IdentityValidationError(
+                    f"idp={self.idp!r} requires an https:// idp_issuer "
+                    f"(got {self.idp_issuer!r}) — the issuer is the token-validation "
+                    "trust anchor and must be TLS")
+            if not self.idp_client_id or not _IDP_CLIENT_ID_RE.fullmatch(self.idp_client_id):
+                raise IdentityValidationError(
+                    f"idp={self.idp!r} requires a non-empty idp_client_id "
+                    f"(got {self.idp_client_id!r}; allowlist [A-Za-z0-9._:/-], max 128)")
+            if self.idp_jwks and not _IDP_URL_RE.fullmatch(self.idp_jwks):
+                raise IdentityValidationError(
+                    f"idp_jwks must be an https:// URL (got {self.idp_jwks!r}) — "
+                    "leave empty to derive the per-provider default")
         # baked host identity (-H/-T/-u) flows into root-sourced config; fail closed.
         if self.hostname:
             validate_domain_name(self.hostname)   # a hostname is a DNS label/name
@@ -1726,6 +1824,20 @@ class ImageConfig:
             a += ["--exclude-services", " ".join(self.exclude_services)]
         return a
 
+    def _idp_args(self) -> list[str]:
+        """--idp/--idp-issuer/--idp-client-id [--idp-jwks] — the mesh-node identity
+        provider (I6; parsed by the x86 + rpi5 node builders ONLY). Emitted ONLY
+        when idp != casdoor: the built-in default emits NOTHING, so every existing
+        flow's argv stays byte-identical (the #1 invariant). validate_identity()
+        already fail-closed the combination + charset before emission."""
+        if self.idp == "casdoor":
+            return []
+        a = ["--idp", self.idp, "--idp-issuer", self.idp_issuer,
+             "--idp-client-id", self.idp_client_id]
+        if self.idp_jwks:
+            a += ["--idp-jwks", self.idp_jwks]
+        return a
+
     def _character_studio_args(self) -> list[str]:
         """--with-character-studio / --no-character-studio tri-state (x86 + rpi5)."""
         cs = self._tri(self.character_studio)
@@ -1900,6 +2012,9 @@ class ImageConfig:
             a += ["--enable-games"]
         a += self._character_studio_args()
         a += self._edge_ai_tts_args()
+        # mesh-node identity provider (I6) — rpi5 shares the x86 node-builder
+        # surface; the casdoor default emits nothing (byte-identity).
+        a += self._idp_args()
         a += self._rpi5_artifact_args()
         return a
 
@@ -2242,6 +2357,11 @@ class ImageConfig:
         # cloud/mesh cluster build (the builder guards on !ROLE_CLIENT / no-op on a
         # standalone desktop with no cluster tree). Tri-state (--no-character-studio).
         a += self._character_studio_args()
+
+        # mesh-node identity provider (I6). Casdoor default = ZERO emission (the
+        # byte-identity invariant); external providers thread the 4 idp flags the
+        # builder bakes into idp.conf + the post-rebrand issuer/JWKS rewrite.
+        a += self._idp_args()
 
         # cluster optional services (+ explicit-none / all sentinels + the subtractive
         # exclude list) and the games stack (--enable-games folds 'games' in).

@@ -95,6 +95,13 @@ OPT_X86_EDGE_AI_ANALYSIS="no" # yes => also bake the edge-ai-analysis task API (
 OPT_EDGE_AI_TTS="no"          # yes => --with-edge-ai-tts: Piper TTS + viseme timeline (VN voice, separate image)
 # ── Tor v3 onion (hidden) service — node-scoped optional, DEFAULT-OFF ──────────
 OPT_TOR_ONION="no"            # yes => --with-tor: expose the in-cluster fe-gateway as a v3 .onion
+# Mesh-node identity provider (I6). casdoor = built-in default (emits NOTHING —
+# argv byte-identical); entra|aws|oidc = external OIDC (issuer/client/jwks are
+# PUBLIC identifiers, safe to persist; client SECRETS are never a flag here).
+OPT_IDP="casdoor"
+OPT_IDP_ISSUER=""
+OPT_IDP_CLIENT_ID=""
+OPT_IDP_JWKS=""
 # ── Character Studio (VN) frontend remote — OPTIONAL, DEFAULT-OFF (admin gate) ──
 OPT_CHARACTER_STUDIO="no"     # yes => --with-character-studio: VN character-studio remote at /character-studio
 # ── OPTIONAL services catalog (cluster roles; specs/cluster/optional-services.yaml) ─
@@ -195,6 +202,10 @@ save_conf() {
         printf 'OPT_X86_EDGE_AI_ANALYSIS=%q\n' "${OPT_X86_EDGE_AI_ANALYSIS}"
         printf 'OPT_EDGE_AI_TTS=%q\n'   "${OPT_EDGE_AI_TTS}"
         printf 'OPT_TOR_ONION=%q\n'     "${OPT_TOR_ONION}"
+        printf 'OPT_IDP=%q\n'           "${OPT_IDP}"
+        printf 'OPT_IDP_ISSUER=%q\n'    "${OPT_IDP_ISSUER}"
+        printf 'OPT_IDP_CLIENT_ID=%q\n' "${OPT_IDP_CLIENT_ID}"
+        printf 'OPT_IDP_JWKS=%q\n'      "${OPT_IDP_JWKS}"
         printf 'OPT_CHARACTER_STUDIO=%q\n' "${OPT_CHARACTER_STUDIO}"
         printf 'OPT_SERVICES=%q\n'      "${OPT_SERVICES}"
         printf 'OPT_INSTALLER_UI=%q\n'  "${OPT_INSTALLER_UI}"
@@ -707,6 +718,13 @@ build_make_cmd() {
                 case ",${OPT_SERVICES}," in *,games,*) bf+=" --enable-games" ;; esac
             fi
             [ "${OPT_TOR_ONION}" = yes ] && bf+=" --with-tor"
+            # External IdP (I6): casdoor default adds NOTHING (byte-identical). An
+            # external provider threads --idp + issuer + client-id [+ jwks]; issuer
+            # and jwks are double-quoted as one shell word (survives both make legs).
+            if [ -n "${OPT_IDP}" ] && [ "${OPT_IDP}" != casdoor ]; then
+                bf+=" --idp ${OPT_IDP} --idp-issuer \"${OPT_IDP_ISSUER}\" --idp-client-id \"${OPT_IDP_CLIENT_ID}\""
+                [ -n "${OPT_IDP_JWKS}" ] && bf+=" --idp-jwks \"${OPT_IDP_JWKS}\""
+            fi
             [ "${OPT_CHARACTER_STUDIO}" = yes ] && bf+=" --with-character-studio"
             # edge-ai-tts rides HERE (not the GPU-target case below with
             # edge-ai-analysis) — it is CPU-only + self-contained, NO edge-ai
@@ -1185,6 +1203,44 @@ home_screen() {
     done
 }
 
+# Mesh-node identity provider (I6). Its OWN screen: pick the provider, then (for
+# an external one) the issuer / client-id / optional JWKS. Casdoor is the built-in
+# default and emits NOTHING onto the builder argv. Reachable from Options and
+# threaded into bf in build_flags(). Issuer/client/jwks are PUBLIC identifiers
+# (persisted); a client SECRET is never entered or passed here.
+idp_screen() {
+    while true; do
+        local ext_l=""
+        [ "${OPT_IDP}" != casdoor ] && ext_l="  issuer=${OPT_IDP_ISSUER:-<unset>} client=${OPT_IDP_CLIENT_ID:-<unset>} jwks=${OPT_IDP_JWKS:-<derived>}"
+        local choice
+        choice="$(ui_menu "Identity provider" \
+            "Which IdP the mesh-node's services TRUST for token validation. 'casdoor' is the built-in default (no change). An external provider (Entra / Cognito / other OIDC) re-points the baked issuer + JWKS pins and gates the in-cluster Casdoor apps out. What does NOT port to external mode (native login, MFA step-up, role/group sync) is documented in docs/IDENTITY-PROVIDERS.md.${ext_l}" \
+            provider "Provider ............ ${OPT_IDP}" \
+            issuer   "Issuer URL .......... ${OPT_IDP_ISSUER:-<external only>}" \
+            client   "Client id ........... ${OPT_IDP_CLIENT_ID:-<external only>}" \
+            jwks     "JWKS URL (optional) . ${OPT_IDP_JWKS:-<derived per provider>}" \
+            back     "‹ back")" || { save_conf; return 0; }
+        case "${choice}" in
+            provider)
+                local p
+                p="$(ui_menu "Identity provider" "Pick the token IdP. Casdoor is the built-in default." \
+                    casdoor "Casdoor (built-in — default)" \
+                    entra   "Azure Entra ID" \
+                    aws     "AWS Cognito" \
+                    oidc    "Other OIDC provider")" || p=""
+                if [ -n "${p}" ]; then
+                    OPT_IDP="${p}"
+                    if [ "${p}" = casdoor ]; then OPT_IDP_ISSUER="" OPT_IDP_CLIENT_ID="" OPT_IDP_JWKS=""; fi
+                fi ;;
+            issuer)  OPT_IDP_ISSUER="$(ui_input "Issuer URL" "External OIDC issuer (https://). Entra: https://login.microsoftonline.com/<tenant>/v2.0 ; Cognito: https://cognito-idp.<region>.amazonaws.com/<pool-id>" "${OPT_IDP_ISSUER}")" ;;
+            client)  OPT_IDP_CLIENT_ID="$(ui_input "Client id" "External OIDC public client id (secrets are never entered here)" "${OPT_IDP_CLIENT_ID}")" ;;
+            jwks)    OPT_IDP_JWKS="$(ui_input "JWKS URL" "Optional JWKS override. Empty derives per provider (Entra: /discovery/v2.0/keys, else /.well-known/jwks)" "${OPT_IDP_JWKS}")" ;;
+            back|"") save_conf; return 0 ;;
+        esac
+        save_conf
+    done
+}
+
 options_screen() {
     while true; do
         local resume_l omni_l frite_fleet_l jetson_fleet_l orangepi5_fleet_l pen_l
@@ -1211,6 +1267,7 @@ options_screen() {
             edgeai   "Edge-AI service ..... $([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)   (be+gpu/omnibus; edge_ai role always on)" \
             services "Optional services ... ${OPT_SERVICES:-<default: akkoma,tuwunel,phpbb>}" \
             tor      "Tor v3 onion ........ $([ "${OPT_TOR_ONION}" = yes ] && echo on || echo off)   (node service; exposes fe-gateway as .onion; default off)" \
+            idp      "Identity provider ... ${OPT_IDP}$([ "${OPT_IDP}" != casdoor ] && echo " (${OPT_IDP_ISSUER:-issuer unset})")   (mesh-node token IdP; casdoor=built-in default)" \
             charstudio "Character Studio (VN) $([ "${OPT_CHARACTER_STUDIO}" = yes ] && echo on || echo off)   (frontend remote at /character-studio; default off)" \
             advbrand "Advanced branding ... $({ [ -n "${OPT_BR_WALLPAPER}${OPT_BR_GRUB_BG}${OPT_BR_LOGIN_BG}${OPT_BR_LOGO}${OPT_BR_ACCENT}${OPT_BR_SCHEME}" ] && echo overrides; } || echo '<preset>')   (wallpaper/GRUB/login/logo/accent/scheme)" \
             home     "Home provisioning ... ${OPT_HOME_MODE:-<default>}   (standalone/client desktops)" \
@@ -1235,6 +1292,7 @@ options_screen() {
             edgeai)  edge_ai_options_screen ;;
             services) services_screen ;;
             tor)     OPT_TOR_ONION="$([ "${OPT_TOR_ONION}" = yes ] && echo no || echo yes)" ;;
+            idp)     idp_screen ;;
             charstudio) OPT_CHARACTER_STUDIO="$([ "${OPT_CHARACTER_STUDIO}" = yes ] && echo no || echo yes)"
                         services_sync_charstudio ;;   # the checklist mirrors the toggle
             advbrand) branding_screen ;;
@@ -1614,6 +1672,7 @@ local_mesh_bootstrap_screen() {
             superadmin "Superadmin username .. ${superadmin}" \
             social    "Social profile ....... ${social:+on}${social:-off}" \
             tor       "Tor v3 .onion ........ ${tor:+on}${tor:-off}  (expose the mesh over Tor; no public IP/DNS/ports)" \
+            idp       "Identity provider .... ${OPT_IDP}$([ "${OPT_IDP}" != casdoor ] && echo " (${OPT_IDP_ISSUER:-issuer unset})")   (casdoor=built-in default)" \
             domain    "Public domain (prod) . ${domain:-<brand default in test>}" \
             authkey   "Auth key (prod) ...... $([ -n "${authkey}" ] && echo '(set)' || echo '(unset)')" \
             plan      "★ Preview the plan (no side effects)" \
@@ -1626,6 +1685,7 @@ local_mesh_bootstrap_screen() {
             superadmin) superadmin="$(ui_input "Superadmin username" "The platform superadmin login to mint" "${superadmin}")"; [ -n "${superadmin}" ] || superadmin="superadmin" ;;
             social)    if [ -n "${social}" ]; then social=""; else social=1; fi ;;
             tor)       if [ -n "${tor}" ]; then tor=""; else tor=1; fi ;;
+            idp)       idp_screen ;;   # I6.6: same picker on the local-mesh flow (shared OPT_IDP* state)
             domain)    domain="$(ui_input "Public domain" "Public apex domain (required in prod; blank = brand default in test)" "${domain}")" ;;
             authkey)   authkey="$(ui_password "Auth key" "Tailnet/headscale auth key (required in prod)" "${authkey}")" ;;
             plan|up|down|status)
@@ -1643,6 +1703,11 @@ _local_mesh_bootstrap_run() {
     local -a args=("${sub}" --env "${env}" --superadmin-username "${superadmin}")
     [ -n "${social}" ] && args+=(--social)
     [ -n "${tor}" ] && args+=(--with-tor)
+    # I6.6: external IdP threads --idp* (casdoor default adds nothing — byte-identical).
+    if [ -n "${OPT_IDP}" ] && [ "${OPT_IDP}" != casdoor ]; then
+        args+=(--idp "${OPT_IDP}" --idp-issuer "${OPT_IDP_ISSUER}" --idp-client-id "${OPT_IDP_CLIENT_ID}")
+        [ -n "${OPT_IDP_JWKS}" ] && args+=(--idp-jwks "${OPT_IDP_JWKS}")
+    fi
     [ -n "${domain}" ] && args+=(--cluster-domain "${domain}")
     local keyfile=""
     if [ -n "${authkey}" ]; then
@@ -1828,7 +1893,7 @@ _deploy_run() {
 
 build_screen() {
     local choice
-    choice="$(ui_menu "Build" "What do you want to build?  (path=${OPT_PATH}, ENV=${OPT_ENV}, -j${OPT_JOBS})" \
+    choice="$(ui_menu "Build" "What do you want to build?  (path=${OPT_PATH}, ENV=${OPT_ENV}, -j${OPT_JOBS}, IdP=${OPT_IDP})" \
         all  "Default fleet — 3 Pi + 4 x86 roles" \
         everything "★ FULL matrix — 3 Pi + 12 x86 + Frite + Jetson + Orange Pi 5 + Orange Pi Zero 2 (build-everything)" \
         rpi  "All 3 Raspberry Pi roles" \
@@ -1836,6 +1901,7 @@ build_screen() {
         one  "A single arch + role …" \
         omni "x86 omnibus (all-in-one node)" \
         frite "Frite light-desktop image …" \
+        idp  "Identity provider … ${OPT_IDP}$([ "${OPT_IDP}" != casdoor ] && echo ' (external)')   (node token IdP; casdoor=built-in)" \
         back "‹ back to main menu")" || return 0
     case "${choice}" in
         all)   build_make_cmd build-all "default fleet (3 Pi + 4 x86)" 7; launch_build ;;
@@ -1845,6 +1911,7 @@ build_screen() {
         one)   single_role_screen ;;
         omni)  build_make_cmd omnibus "x86 omnibus" 1; launch_build ;;
         frite) frite_screen ;;
+        idp)   idp_screen ;;   # I6.5: the IdP picker is reachable EARLY in the guided node flow
         back|"") return 0 ;;
     esac
 }

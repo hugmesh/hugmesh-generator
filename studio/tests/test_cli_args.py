@@ -92,7 +92,12 @@ def test_mode_skipped_pages_match_the_page_catalog():
     assert set(MODE_SKIPPED_PAGES) == set(MODE_DEFAULT_ROLE)
     for slugs in MODE_SKIPPED_PAGES.values():
         assert set(slugs) <= set(WIZARD_PAGE_SLUGS)
-    assert MODE_SKIPPED_PAGES["standalone"] == ("worklist", "keyzip", "domains", "users")
+    # "idp" (the mesh-node IdP picker, I6) is a NODE-plane page: both non-node
+    # modes skip it statically so their flows stay byte-identical.
+    assert MODE_SKIPPED_PAGES["standalone"] == ("idp", "worklist", "keyzip",
+                                                "domains", "users")
+    assert "idp" in MODE_SKIPPED_PAGES["cloud"]
+    assert "idp" not in MODE_SKIPPED_PAGES["mesh"]
     # 'role' is no longer universally structural — mesh skips it (the WorklistPage owns
     # role x platform there); welcome/mode/build stay structural in every mode.
     for structural in ("welcome", "mode", "build"):
@@ -1394,6 +1399,18 @@ _FIELD_PROBE = {
     "edge_ai_tts": {"edge_ai_tts": True},
     "tor_onion_service": {"tor_onion_service": True},
     "character_studio": {"character_studio": True},
+    # mesh-node identity provider (I6): the casdoor default emits NOTHING, so every
+    # probe is the minimal VALID external combo (multi-key prerequisite entries,
+    # like egress_vpn_locked) — emission on x86 + rpi5 only.
+    "idp": {"idp": "oidc", "idp_issuer": "https://idp.example",
+            "idp_client_id": "probe-client"},
+    "idp_issuer": {"idp": "oidc", "idp_issuer": "https://idp.example",
+                   "idp_client_id": "probe-client"},
+    "idp_client_id": {"idp": "oidc", "idp_issuer": "https://idp.example",
+                      "idp_client_id": "probe-client"},
+    "idp_jwks": {"idp": "oidc", "idp_issuer": "https://idp.example",
+                 "idp_client_id": "probe-client",
+                 "idp_jwks": "https://idp.example/keys"},
     "optional_services": {"optional_services": ["akkoma"]},
     "exclude_services": {"exclude_services": ["games"]},
     "enable_games": {"enable_games": True},

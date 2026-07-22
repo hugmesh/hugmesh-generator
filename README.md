@@ -157,7 +157,11 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
 > and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the application-side login
 > relocation + OIDC token-handler live in `snapdragon-user-bff-api`,
 > `snapdragon-admin-bff-api`, `snapdragon-auth-core` and the `snapdragon-gateway`
-> repos.
+> repos. A mesh node can validate tokens against the built-in **Casdoor** (the
+> default) or an external OIDC provider (Azure Entra ID / AWS Cognito / generic
+> OIDC) — see [`docs/IDENTITY-PROVIDERS.md`](docs/IDENTITY-PROVIDERS.md) for the
+> `--idp` flags, the wizard/ncurses pickers, and the honest limits of external
+> mode.
 
 ## Roadmap
 

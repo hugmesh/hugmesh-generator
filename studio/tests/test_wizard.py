@@ -109,7 +109,7 @@ def test_page_slugs_map_to_the_right_pages(wiz):
     ProgressPage lands in WS-REVIEWUI, so it is None-tolerant until registered."""
     expect = {"welcome": wizard_mod.WelcomePage, "mode": wizard_mod.ModePage,
               "localmesh": wizard_mod.LocalMeshPage, "phone": wizard_mod.PhonePage,
-              "deploy": wizard_mod.DeployPage,
+              "deploy": wizard_mod.DeployPage, "idp": wizard_mod.IdpPage,
               "role": wizard_mod.RolePage, "worklist": wizard_mod.WorklistPage,
               "hardware": wizard_mod.HardwarePage, "branding": wizard_mod.BrandingPage,
               "network": wizard_mod.NetworkPage, "keyzip": wizard_mod.KeyZipPage,

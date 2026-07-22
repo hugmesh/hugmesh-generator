@@ -9,6 +9,7 @@ from .localmesh import LocalMeshDialog, LocalMeshPage
 from .phone import PhoneDialog, PhonePage
 from .deploy import DeployDialog, DeployPage
 from .mode import ModePage
+from .idp import IdpPage
 from .role import RolePage
 from .worklist import WorklistPage
 from .hardware import HardwarePage
@@ -32,8 +33,8 @@ except ImportError:                    # pragma: no cover — until WS-REVIEWUI 
 
 __all__ = [
     "WelcomePage", "ModePage", "LocalMeshPage", "LocalMeshDialog",
-    "PhonePage", "PhoneDialog", "DeployPage", "DeployDialog", "RolePage",
-    "WorklistPage", "HardwarePage",
+    "PhonePage", "PhoneDialog", "DeployPage", "DeployDialog", "IdpPage",
+    "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage", "DomainsPage", "UsersPage",
     "SystemPage", "HomePage", "BuildPage", "ProgressPage",
 ]

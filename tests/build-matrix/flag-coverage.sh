@@ -165,6 +165,15 @@ SAMPLES = {
     "edge_ai_tts": [{"edge_ai_tts": "on"}, {"edge_ai_tts": "off"}],
     "tor_onion_service": [{"tor_onion_service": "on"}, {"tor_onion_service": "off"}],
     "character_studio": [{"character_studio": "on"}, {"character_studio": "off"}],
+    # idp (I6): the external-OIDC combo fields the --idp/--idp-issuer/--idp-client-id
+    # [--idp-jwks] flags. casdoor (the default) emits nothing by design, so the sample
+    # must pick an external provider + its required issuer/client-id (mirrors
+    # test_cli_args._FIELD_PROBE). Scoped _X86_RPI5, so checked on x86/rpi5 only.
+    "idp": [{"idp": "oidc", "idp_issuer": "https://idp.example", "idp_client_id": "probe-client"}],
+    "idp_issuer": [{"idp": "oidc", "idp_issuer": "https://idp.example", "idp_client_id": "probe-client"}],
+    "idp_client_id": [{"idp": "oidc", "idp_issuer": "https://idp.example", "idp_client_id": "probe-client"}],
+    "idp_jwks": [{"idp": "oidc", "idp_issuer": "https://idp.example", "idp_client_id": "probe-client",
+                  "idp_jwks": "https://idp.example/keys"}],
     "optional_services": [{"optional_services": ["akkoma"]},
                           {"optional_services": ["none"]}, {"optional_services": ["all"]}],
     "exclude_services": [{"exclude_services": ["games"]}],

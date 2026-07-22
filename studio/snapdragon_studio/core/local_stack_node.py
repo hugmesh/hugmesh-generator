@@ -93,7 +93,8 @@ class LocalStackNode:
                  public_host_port: int = 8088, domain: str = "",
                  source_mode: str = "clone", source_dir: str = "",
                  web_locales: tuple[str, ...] = (), login_theme_css: str = "",
-                 with_tor: bool = False):
+                 with_tor: bool = False, idp: str = "casdoor",
+                 idp_issuer: str = "", idp_client_id: str = "", idp_jwks: str = ""):
         self.generator_dir = os.path.abspath(generator_dir)
         self.compose_file = os.path.join(self.generator_dir, _COMPOSE_FILE)
         self.env = env
@@ -142,6 +143,19 @@ class LocalStackNode:
         # `compose up` with a new value and NO image rebuild. EMPTY (the default) =
         # no injection: the image's compiled :root fallback renders the shipped brand.
         self.login_theme_css = login_theme_css
+        # ── identity provider (I6.6) — env-var threading ONLY. idp="casdoor" (the
+        # default) sets NOTHING: the stack env stays byte-identical to before these
+        # params existed. An EXTERNAL provider exports the provider-neutral
+        # OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_JWKS_URI vars for `make stack-*`.
+        # The Makefile hunk that CONSUMES them is Lane B's seam (this lane must not
+        # edit the Makefile); until that seam lands the vars ride the env inert —
+        # documented, not overclaimed. The local compose stack additionally keeps
+        # its two-issuer Casdoor split, so an external IdP in the TEST env remains
+        # validation-only config either way (docs/IDENTITY-PROVIDERS.md).
+        self.idp = idp
+        self.idp_issuer = idp_issuer
+        self.idp_client_id = idp_client_id
+        self.idp_jwks = idp_jwks
 
     @property
     def web_url(self) -> str:
@@ -349,6 +363,17 @@ class LocalStackNode:
         # stays byte-identical to every existing caller.
         if self.login_theme_css.strip():
             env["SNAP_THEME_CSS"] = self.login_theme_css
+        # External IdP (I6.6): exported ONLY for an external provider WITH an issuer,
+        # so the casdoor default (and a half-configured external) leaves the env
+        # byte-identical. Consumed by the Lane-B Makefile OIDC seam when it lands;
+        # inert-but-present until then (documented in __init__). Values are public
+        # endpoints/identifiers — never secrets.
+        if self.idp != "casdoor" and self.idp_issuer.strip():
+            env["OIDC_ISSUER"] = self.idp_issuer.strip()
+            if self.idp_client_id.strip():
+                env["OIDC_CLIENT_ID"] = self.idp_client_id.strip()
+            if self.idp_jwks.strip():
+                env["OIDC_JWKS_URI"] = self.idp_jwks.strip()
         # extra_env carries per-target overrides (e.g. the bridged
         # E2E_SUPERADMIN_PASSWORD for `stack-seed`). Values ride the subprocess env
         # only — never argv — mirroring the golive/token-file secret discipline.

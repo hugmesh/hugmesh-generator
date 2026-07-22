@@ -374,6 +374,16 @@ SSH_KEYS_ALLOWED="${SSH_KEYS_ALLOWED:-false}"
 # build. Default "false"; validated to the literal true/false below and gated to
 # x86 node builds after resolve. Inert when IMAGE_SPEC_JSON drives the build.
 TOR_ONION="${TOR_ONION:-false}"
+# IDP (LEGACY channel only). Mesh-node identity provider for token validation.
+# casdoor (default) = built-in, emits nothing. entra|aws|oidc = external OIDC:
+# forwarded to the x86/rpi5 node builders as --idp/--idp-issuer/--idp-client-id
+# [--idp-jwks] (both take them). INERT in spec mode (the spec's own idp fields
+# already rode through --print-command). Secrets never travel here.
+IDP="${IDP:-casdoor}"
+IDP_ISSUER="${IDP_ISSUER:-}"
+IDP_CLIENT_ID="${IDP_CLIENT_ID:-}"
+IDP_JWKS="${IDP_JWKS:-}"
+IDP_EXTRA_ARGS=()
 INGEST_URL="${INGEST_URL:-}"
 INTERNAL_TOKEN="${INTERNAL_TOKEN:-}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-}"
@@ -583,6 +593,26 @@ esac
 case "$TOR_ONION" in
   true|false) ;;
   *) die ERROR "TOR_ONION must be the literal string 'true' or 'false' (got '${TOR_ONION}')" ;;
+esac
+
+# IDP validation. casdoor (default) = no-op; external needs an https issuer + a
+# client id (secrets are never env/flags). Validated unconditionally: only the
+# legacy channel forwards IDP_* onto the builder (compute_idp_flags), and the
+# spec channel never sets IDP (defaults to casdoor), so validating here is
+# correct for both — a nonsensical IDP=entra with a spec build is rejected, not
+# silently ignored.
+case "$IDP" in
+  casdoor)
+    if [ -n "${IDP_ISSUER}${IDP_CLIENT_ID}${IDP_JWKS}" ]; then
+      die ERROR "IDP_ISSUER/IDP_CLIENT_ID/IDP_JWKS require an external IDP (entra|aws|oidc); the casdoor default derives its own issuer"
+    fi ;;
+  entra|aws|oidc)
+    case "$IDP_ISSUER" in
+      https://*) ;;
+      *) die ERROR "IDP=${IDP} requires IDP_ISSUER as an https:// URL (baked into the node's idp.conf and issuer/JWKS pins)" ;;
+    esac
+    [ -n "$IDP_CLIENT_ID" ] || die ERROR "IDP=${IDP} requires IDP_CLIENT_ID (a public client identifier; secrets are never passed here)" ;;
+  *) die ERROR "IDP must be casdoor|entra|aws|oidc (got '${IDP}')" ;;
 esac
 
 case "$IMAGE_TYPE" in
@@ -1012,7 +1042,21 @@ run_x86_build() {
   if [ "$BUILD_MODE" = "legacy" ] && [ "$TOR_ONION" = "true" ] && [ "$IMAGE_TYPE" != "client" ]; then
     set -- "$@" --with-tor
   fi
-  dispatch_builder ./build-x86-host-stage4.sh "$@"
+  compute_idp_flags
+  dispatch_builder ./build-x86-host-stage4.sh "$@" "${IDP_EXTRA_ARGS[@]}"
+}
+
+# compute_idp_flags — populate the global IDP_EXTRA_ARGS array with the external-
+# IdP flags (a function can't mutate the caller's $@, so callers append the array
+# after their own positional build-up). casdoor/spec-mode = empty array => argv
+# byte-identical. Shared by both node builders, which each take
+# --idp/--idp-issuer/--idp-client-id[--idp-jwks].
+compute_idp_flags() {
+  IDP_EXTRA_ARGS=()
+  [ "$BUILD_MODE" = "legacy" ] || return 0
+  [ "$IDP" = "casdoor" ] && return 0
+  IDP_EXTRA_ARGS=("--idp" "$IDP" "--idp-issuer" "$IDP_ISSUER" "--idp-client-id" "$IDP_CLIENT_ID")
+  [ -n "$IDP_JWKS" ] && IDP_EXTRA_ARGS+=("--idp-jwks" "$IDP_JWKS")
 }
 
 run_rpi5_build() {
@@ -1023,7 +1067,8 @@ run_rpi5_build() {
     set -- "$@" --standalone
     [ -n "$TARGET_NAME" ] && set -- "$@" --local-user "$TARGET_NAME"
   fi
-  dispatch_builder ./build-rpi5-stage4.sh "$@"
+  compute_idp_flags
+  dispatch_builder ./build-rpi5-stage4.sh "$@" "${IDP_EXTRA_ARGS[@]}"
 }
 
 run_frite_build() {

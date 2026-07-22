@@ -44,6 +44,8 @@ import time
 from dataclasses import dataclass
 
 from . import theme
+from .config import IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
+    idp_effective_jwks
 from .local_mesh import ENV_AUTHKEY, LocalMeshConfig, LocalMeshNode
 from .local_stack_node import LocalStackNode
 from .mesh_node import MeshNode
@@ -194,9 +196,32 @@ class LocalMeshBootstrapConfig:
     # and the login-ui entrypoint writes snap-theme.css at container start, so a
     # rebrand needs no image rebuild. EMPTY = shipped default brand, byte-identical.
     login_theme_css: str = ""
+    # ── identity provider (I6.6 — the SAME picker the node wizard carries) ──
+    # "casdoor" (the DEFAULT) threads NOTHING: the stack env stays byte-identical
+    # to before these fields existed (the #1 invariant). An external provider
+    # threads OIDC_ISSUER / OIDC_CLIENT_ID / OIDC_JWKS_URI into the `make stack-*`
+    # env (env vars ONLY — the Makefile seam that consumes them is Lane B's hunk;
+    # until it lands the vars ride the env inert). HONEST LIMIT: the local compose
+    # stack pins a two-issuer split (browser localhost:8000 / in-DNS casdoor:8000)
+    # and always the in-cluster JWKS, so an external IdP in the TEST env is
+    # VALIDATION-ONLY CONFIG — the running local stack keeps its Casdoor. plan()
+    # says so out loud instead of overclaiming.
+    idp: str = "casdoor"               # IDP_CHOICES: casdoor | entra | aws | oidc
+    idp_issuer: str = ""               # external OIDC issuer (https://…)
+    idp_client_id: str = ""            # external OIDC client id (public, not a secret)
+    idp_jwks: str = ""                 # external JWKS URL ("" = per-provider derivation)
 
     def is_prod(self) -> bool:
         return self.env == "prod"
+
+    def idp_external(self) -> bool:
+        return self.idp != "casdoor"
+
+    def effective_idp_jwks(self) -> str:
+        """The JWKS URL the external threading advertises (explicit override, else
+        the per-provider derivation — the ONE derivation config.py owns)."""
+        return idp_effective_jwks(self.idp, self.idp_issuer.strip(),
+                                  self.idp_jwks.strip())
 
     def resolved_domain(self) -> str:
         """The apex the minted Casdoor issuer/superadmin align with. In prod the
@@ -259,7 +284,11 @@ class LocalMeshBootstrap:
                               source_dir=self.cfg.source_dir,
                               web_locales=self.cfg.web_locales,
                               login_theme_css=self.cfg.login_theme_css,
-                              with_tor=self.cfg.with_tor)
+                              with_tor=self.cfg.with_tor,
+                              idp=self.cfg.idp,
+                              idp_issuer=self.cfg.idp_issuer.strip(),
+                              idp_client_id=self.cfg.idp_client_id.strip(),
+                              idp_jwks=self.cfg.effective_idp_jwks())
 
     def _mesh_node(self) -> LocalMeshNode:
         return LocalMeshNode(self.generator_dir, LocalMeshConfig(
@@ -369,6 +398,30 @@ class LocalMeshBootstrap:
             if not _LOCALE_RE.match(loc):
                 problems.append(f"web locale '{loc}' is not a BCP-47-shaped tag "
                                 f"(e.g. de, fr, pt-BR, en-XA).")
+        # ── identity provider (I6.6) — the SAME fail-closed rules ImageConfig
+        # enforces (external needs https issuer + client id; casdoor requires the
+        # other fields EMPTY so the default env stays byte-identical).
+        if self.cfg.idp not in IDP_CHOICES:
+            problems.append(f"idp must be one of {', '.join(IDP_CHOICES)} "
+                            f"(got '{self.cfg.idp}').")
+        elif not self.cfg.idp_external():
+            for fld in ("idp_issuer", "idp_client_id", "idp_jwks"):
+                if getattr(self.cfg, fld).strip():
+                    problems.append(f"{fld} is set but idp is 'casdoor' (the built-in "
+                                    "default) — clear it or pick an external provider.")
+        else:
+            iss = self.cfg.idp_issuer.strip()
+            cid = self.cfg.idp_client_id.strip()
+            jwks = self.cfg.idp_jwks.strip()
+            if not iss or not _IDP_URL_RE.fullmatch(iss):
+                problems.append(f"idp={self.cfg.idp} requires an https:// issuer URL "
+                                f"(got '{iss}').")
+            if not cid or not _IDP_CLIENT_ID_RE.fullmatch(cid):
+                problems.append(f"idp={self.cfg.idp} requires a client id "
+                                f"(allowlist [A-Za-z0-9._:/-], got '{cid}').")
+            if jwks and not _IDP_URL_RE.fullmatch(jwks):
+                problems.append(f"idp_jwks must be an https:// URL (got '{jwks}') — "
+                                "leave empty to derive the provider default.")
         if self.cfg.is_prod():
             if not self.cfg.cluster_domain.strip():
                 problems.append("prod requires a public cluster domain "
@@ -434,6 +487,19 @@ class LocalMeshBootstrap:
         lines.append(f"Domain:     {c.resolved_domain()}"
                      + ("" if c.is_prod() else "  (brand default; not a public issuer in test)"))
         lines.append(f"Issuer:     {c.issuer()}")
+        # I6.6: disclose the chosen IdP — and the honest external-mode limit (the
+        # local compose stack's two-issuer split means an external IdP here is
+        # validation-only config; the running local stack keeps its Casdoor).
+        lines.append(f"IdP:        {IDP_LABELS.get(c.idp, c.idp)}")
+        if c.idp_external():
+            lines.append(f"            issuer: {c.idp_issuer.strip()}")
+            lines.append(f"            client: {c.idp_client_id.strip()}")
+            lines.append(f"            jwks:   {c.effective_idp_jwks()}")
+            lines.append("            LIMIT: in the LOCAL TEST stack this is VALIDATION-ONLY")
+            lines.append("            config (threaded as OIDC_ISSUER/OIDC_CLIENT_ID/OIDC_JWKS_URI")
+            lines.append("            env; the compose stack keeps its two-issuer Casdoor split, and")
+            lines.append("            native login/MFA/roles stay Casdoor-only — see")
+            lines.append("            docs/IDENTITY-PROVIDERS.md).")
         lines.append("Web login:  "
                      + (", ".join(c.web_locales) + " (+ English source)" if c.web_locales
                         else "English only (no translation catalogs shipped)"))
@@ -466,6 +532,7 @@ class LocalMeshBootstrap:
                      + f", TOR={'on' if c.with_tor else 'off'}"
                      + (f", SNAP_WEB_LOCALES={_wl}" if _wl else "")
                      + (", SNAP_THEME_CSS=<derived>" if c.login_theme_css.strip() else "")
+                     + (f", OIDC_ISSUER={c.idp_issuer.strip()}" if c.idp_external() else "")
                      + ")")
         if c.with_tor:
             lines.append("          -> also starts snapdragon-tor (the `tor` profile):")
@@ -759,7 +826,9 @@ def _cfg_from_args(args: argparse.Namespace) -> LocalMeshBootstrapConfig:
         brand=args.brand, cluster_domain=args.cluster_domain,
         source_mode=args.source_mode, source_dir=args.source_dir,
         web_locales=_parse_web_locales(args.web_locales),
-        login_theme_css=login_theme_css)
+        login_theme_css=login_theme_css,
+        idp=args.idp, idp_issuer=args.idp_issuer,
+        idp_client_id=args.idp_client_id, idp_jwks=args.idp_jwks)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -827,6 +896,22 @@ def main(argv: list[str] | None = None) -> int:
                         "bundled binaries. Font-file upload lives in the Studio GUI "
                         "and scripts/tooling/derive-theme.py, which also record the "
                         "licence decision.")
+    p.add_argument("--idp", choices=IDP_CHOICES, default="casdoor",
+                   help="identity provider (I6.6): casdoor (DEFAULT — the built-in "
+                        "IdP; threads NOTHING, byte-identical env) | entra | aws | "
+                        "oidc. External providers thread OIDC_ISSUER/OIDC_CLIENT_ID/"
+                        "OIDC_JWKS_URI into the stack env. HONEST LIMIT: the local "
+                        "test stack keeps its two-issuer Casdoor split, so this is "
+                        "validation-only config there (docs/IDENTITY-PROVIDERS.md).")
+    p.add_argument("--idp-issuer", default="",
+                   help="external OIDC issuer URL (https://…; required unless "
+                        "--idp casdoor).")
+    p.add_argument("--idp-client-id", default="",
+                   help="external OIDC client id (public identifier — never a "
+                        "secret; required unless --idp casdoor).")
+    p.add_argument("--idp-jwks", default="",
+                   help="external JWKS URL override (empty = the provider's "
+                        "documented default derived from the issuer).")
     key = p.add_mutually_exclusive_group()
     key.add_argument("--authkey-file", default="",
                      help="path to a file holding the tailnet/headscale auth key "

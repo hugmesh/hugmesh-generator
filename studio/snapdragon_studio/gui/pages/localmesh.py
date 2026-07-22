@@ -51,6 +51,7 @@ import threading
 import types
 
 from ..qt import QtCore, QtGui, QtWidgets, Signal
+from ...core.config import IDP_CHOICES, IDP_LABELS, idp_effective_jwks
 from ...core.local_mesh import LocalMeshConfig, LocalMeshNode
 from ...core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshBootstrapConfig, _parse_web_locales,
@@ -58,6 +59,19 @@ from ...core.local_mesh_bootstrap import (
 from ._logintheme import LoginThemeGroup
 from ._scroll import scrollable
 from ._widgets import _row, collapsible
+
+# Per-provider placeholder hints — the SAME endpoint shapes gui/pages/idp.py
+# carries (one picker, two frames: the node wizard page and this bootstrap tab).
+_IDP_ISSUER_HINTS = {
+    "entra": "https://login.microsoftonline.com/<tenant-id>/v2.0",
+    "aws": "https://cognito-idp.<region>.amazonaws.com/<user-pool-id>",
+    "oidc": "https://id.example.org (the token `iss` value, exactly)",
+}
+_IDP_JWKS_HINTS = {
+    "entra": "empty = <issuer>/discovery/v2.0/keys",
+    "aws": "empty = <issuer>/.well-known/jwks.json",
+    "oidc": "empty = <issuer>/.well-known/jwks",
+}
 
 
 class _MeshWorker(QtCore.QThread):
@@ -338,6 +352,43 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         lay.addWidget(collapsible("Web login theme (colours + fonts)",
                                   self.login_theme, expanded=False))
 
+        # IDENTITY PROVIDER (I6.6) — the SAME picker the node wizard's IdP page
+        # carries. Casdoor (built-in) is the default and threads NOTHING; an
+        # external provider threads OIDC_ISSUER/OIDC_CLIENT_ID/OIDC_JWKS_URI into
+        # the stack env (validation-only in the local TEST stack — the honest note
+        # below and the plan preview both say so).
+        self.idp_box = QtWidgets.QGroupBox("Identity provider")
+        ib = QtWidgets.QVBoxLayout(self.idp_box)
+        self.idp = QtWidgets.QComboBox()
+        for idp_id in IDP_CHOICES:
+            self.idp.addItem(IDP_LABELS[idp_id], idp_id)
+        self.idp.setToolTip(
+            "Casdoor (built-in) is the native default — zero configuration, "
+            "byte-identical stack env. External providers thread the provider-"
+            "neutral OIDC_* env vars into `make stack-up`.")
+        ib.addWidget(_row("Provider", self.idp))
+        self.idp_issuer = QtWidgets.QLineEdit()
+        self.idp_issuer.setToolTip("External OIDC issuer URL (https://…) — must "
+                                   "byte-match the token `iss` claim.")
+        ib.addWidget(_row("Issuer URL", self.idp_issuer))
+        self.idp_client_id = QtWidgets.QLineEdit()
+        self.idp_client_id.setPlaceholderText("the provider's client id (public — never a secret)")
+        ib.addWidget(_row("Client ID", self.idp_client_id))
+        self.idp_jwks = QtWidgets.QLineEdit()
+        self.idp_jwks.setToolTip("Optional JWKS URL override; empty derives the "
+                                 "provider's documented default from the issuer.")
+        ib.addWidget(_row("JWKS URL", self.idp_jwks))
+        self.idp_note = QtWidgets.QLabel(
+            "HONEST LIMIT: the local compose stack pins its own two-issuer Casdoor "
+            "split, so an external IdP here is VALIDATION-ONLY config (threaded as "
+            "OIDC_ISSUER/OIDC_CLIENT_ID/OIDC_JWKS_URI env). Native login, MFA "
+            "step-up and roles stay Casdoor-only — see docs/IDENTITY-PROVIDERS.md.")
+        self.idp_note.setWordWrap(True)
+        self.idp_note.setStyleSheet("color: gray;")
+        ib.addWidget(self.idp_note)
+        lay.addWidget(collapsible("Identity provider (Casdoor built-in / external OIDC)",
+                                  self.idp_box, expanded=False))
+
         # prod-only overlay group.
         self.prod_group = QtWidgets.QGroupBox("Mesh overlay (prod only)")
         pg = QtWidgets.QVBoxLayout(self.prod_group)
@@ -433,6 +484,10 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.login_theme.secondary.textChanged.connect(self._refresh_plan)
         self.login_theme.font_preset.currentIndexChanged.connect(self._refresh_plan)
         self.login_theme.font_file.textChanged.connect(self._refresh_plan)
+        self.idp.currentIndexChanged.connect(self._refresh_plan)
+        self.idp_issuer.textChanged.connect(self._refresh_plan)
+        self.idp_client_id.textChanged.connect(self._refresh_plan)
+        self.idp_jwks.textChanged.connect(self._refresh_plan)
         self.boot_domain.textChanged.connect(self._refresh_plan)
         self.boot_auth_key.textChanged.connect(self._refresh_plan)
         self.boot_login_server.textChanged.connect(self._refresh_plan)
@@ -482,7 +537,21 @@ class LocalMeshPage(QtWidgets.QWizardPage):
             # handlers refuse to launch on it, so a typo can never silently ship
             # an unthemed stack the operator believed was themed.
             login_theme_css=self.login_theme.compose_css(),
+            # I6.6 identity provider — casdoor default carries EMPTY endpoint
+            # fields (byte-identical env); validate() fail-closes the combinations.
+            idp=self.selected_idp(),
+            idp_issuer=(self.idp_issuer.text().strip()
+                        if self.selected_idp() != "casdoor" else ""),
+            idp_client_id=(self.idp_client_id.text().strip()
+                           if self.selected_idp() != "casdoor" else ""),
+            idp_jwks=(self.idp_jwks.text().strip()
+                      if self.selected_idp() != "casdoor" else ""),
         )
+
+    def selected_idp(self) -> str:
+        """The provider id behind the combo's current row (data role, never the
+        display label — labels are free to change)."""
+        return self.idp.currentData() or "casdoor"
 
     # ── worker plumbing (the no-freeze fix) ──────────────────────────────────────
     def _launch(self, label: str, fn, stream: bool = False,
@@ -565,6 +634,16 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.prod_group.setVisible(prod)
         self.src_dir.setEnabled(self.src_existing.isChecked())
         self.src_browse.setEnabled(self.src_existing.isChecked())
+        # IdP endpoint fields enabled IFF an external provider is picked (casdoor
+        # needs — and permits — nothing); placeholders follow the provider.
+        ext = self.selected_idp() != "casdoor"
+        for w in (self.idp_issuer, self.idp_client_id, self.idp_jwks):
+            w.setEnabled(ext)
+        self.idp_issuer.setPlaceholderText(
+            _IDP_ISSUER_HINTS.get(self.selected_idp(), "") if ext
+            else "built-in Casdoor — nothing to configure")
+        self.idp_jwks.setPlaceholderText(
+            _IDP_JWKS_HINTS.get(self.selected_idp(), "") if ext else "")
         self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
         # live, never-rounded-up coverage for the existing-tree mode
         if self.src_existing.isChecked():

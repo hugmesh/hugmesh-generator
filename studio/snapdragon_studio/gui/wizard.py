@@ -18,7 +18,7 @@ from ..core.config import ImageConfig, MODE_SKIPPED_PAGES, WIZARD_PAGE_SLUGS
 from ..core.platform_info import detect
 from ..core import worklist as worklist_mod
 from .pages import (
-    BrandingPage, BuildPage, DeployPage, DomainsPage, HardwarePage, HomePage,
+    BrandingPage, BuildPage, DeployPage, DomainsPage, HardwarePage, HomePage, IdpPage,
     KeyZipPage, LocalMeshPage, ModePage, NetworkPage, PhonePage, ProgressPage,
     RolePage, SystemPage, UsersPage, WelcomePage, WorklistPage,
 )
@@ -29,7 +29,7 @@ from .pages._widgets import _file_picker, _row  # noqa: F401
 
 __all__ = [
     "StudioWizard", "medium_size", "centred_top_left",
-    "WelcomePage", "ModePage", "LocalMeshPage", "PhonePage", "DeployPage",
+    "WelcomePage", "ModePage", "LocalMeshPage", "PhonePage", "DeployPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage", "DomainsPage", "UsersPage",
     "SystemPage", "HomePage", "BuildPage", "ProgressPage",
@@ -143,10 +143,9 @@ class StudioWizard(QtWidgets.QWizard):
         # until then it is None and the flow terminates on BuildPage — the None-filter
         # keeps the slug->id map aligned and the drift assert fail-loud.
         page_ctors = [
-            WelcomePage, ModePage, LocalMeshPage, PhonePage, DeployPage, RolePage,
-            WorklistPage,
-            HardwarePage, BrandingPage, NetworkPage, KeyZipPage, DomainsPage, UsersPage,
-            SystemPage, HomePage, BuildPage, ProgressPage,
+            WelcomePage, ModePage, LocalMeshPage, PhonePage, DeployPage, IdpPage,
+            RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,
+            DomainsPage, UsersPage, SystemPage, HomePage, BuildPage, ProgressPage,
         ]
         assert len(page_ctors) == len(WIZARD_PAGE_SLUGS), (
             f"page constructors ({len(page_ctors)}) drifted from "

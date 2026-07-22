@@ -215,6 +215,16 @@ ENABLE_WIFI="${ENABLE_WIFI:-false}"
 ENABLE_BLUETOOTH="${ENABLE_BLUETOOTH:-false}"
 # Root SSH login DISABLED by default (hardened); opt back in with --permit-root-login.
 PERMIT_ROOT_LOGIN="${PERMIT_ROOT_LOGIN:-no}"
+# ── Mesh-node identity provider (I6; docs/IDENTITY-PROVIDERS.md) ─────────────
+# casdoor (the NATIVE DEFAULT) changes NOTHING — every sysroot byte is identical
+# to before the axis existed. --idp entra|aws|oidc (+ --idp-issuer/--idp-client-id
+# [--idp-jwks]) switches token VALIDATION to an external OIDC provider: idp.conf
+# bake + post-rebrand issuer/JWKS rewrite + Casdoor-app gating + README-IDP.md
+# (mirrors build-x86-host-stage4.sh byte-for-byte).
+IDP="${IDP:-casdoor}"
+IDP_ISSUER="${IDP_ISSUER:-}"
+IDP_CLIENT_ID="${IDP_CLIENT_ID:-}"
+IDP_JWKS="${IDP_JWKS:-}"
 SEED_STAGE3_URL="https://distfiles.gentoo.org/releases/arm64/autobuilds/latest-stage3-arm64-openrc.txt"
 
 # Mesh VPN (installed as upstream static arm64 binaries, not emerged)
@@ -620,6 +630,28 @@ OPTIONS
         ConfigMap + 13a ApplicationSet flag is rendered "false" (graceful degrade).
         Example: --exclude-services "phpbb tuwunel". (env/brand.conf: EXCLUDE_SERVICES)
 
+    --idp P
+        Identity provider the baked services TRUST: casdoor (DEFAULT — the
+        built-in IdP, zero change) | entra (Azure Entra ID) | aws (AWS Cognito) |
+        oidc (any other OIDC provider). External mode bakes /etc/snapdragon/
+        idp.conf, rewrites the baked tree's issuer/JWKS pins, gates the Casdoor
+        apps out and drops README-IDP.md stating what does NOT work externally
+        (native /bff/login, MFA stamping, roles/groups, signup-gate — see
+        docs/IDENTITY-PROVIDERS.md). Fail-closed validation.
+
+    --idp-issuer URL
+        External OIDC issuer (https:// — REQUIRED unless --idp casdoor; must
+        byte-match the token `iss` claim).
+
+    --idp-client-id ID
+        External OIDC client id (a PUBLIC identifier; REQUIRED unless --idp
+        casdoor. Client SECRETS are never flags — they ride KEYS/Vault).
+
+    --idp-jwks URL
+        External JWKS override. Empty derives per provider: entra
+        <issuer>/discovery/v2.0/keys, aws <issuer>/.well-known/jwks.json,
+        oidc <issuer>/.well-known/jwks.
+
   Phases
     --skip-kernel
         Skip kernel compilation.  Useful when iterating on userspace
@@ -843,6 +875,12 @@ while [[ $# -gt 0 ]]; do
         # 'edge-ai-tts' into OPTIONAL_SERVICES (idempotent).
         --with-edge-ai-tts)   WANT_EDGE_AI_TTS=true;  shift ;;
         --no-edge-ai-tts)     WANT_EDGE_AI_TTS=false; shift ;;
+        # Mesh-node identity provider (I6) — casdoor DEFAULT = zero change; external
+        # providers validated fail-closed below (see _validate_idp).
+        --idp)                IDP="$2";               shift 2 ;;
+        --idp-issuer)         IDP_ISSUER="$2";        shift 2 ;;
+        --idp-client-id)      IDP_CLIENT_ID="$2";     shift 2 ;;
+        --idp-jwks)           IDP_JWKS="$2";          shift 2 ;;
         --skip-mesh)          SKIP_MESH=true;          shift   ;;
         --skip-tailscale)     SKIP_TAILSCALE=true;     shift   ;;
         --skip-kernel)        SKIP_KERNEL=true;        shift   ;;
@@ -1129,6 +1167,59 @@ _require_match "--brand-title"   "${BRAND_TITLE}"    "${_RE_TITLE}"
 _require_match "--cpu"           "${RPI_CPU}"        "${_RE_CPU}"
 _require_match "--target"        "${CROSS_TARGET}"   "${_RE_TRIPLET}"
 _require_match "--kernel-img"    "${RPI_KERNEL_IMG}" "${_RE_KIMG}"
+
+# ── Mesh-node IdP (I6): fail-closed validation + per-provider JWKS derivation ──
+# Mirrors build-x86-host-stage4.sh / studio core/config.validate_identity
+# byte-for-byte: unknown provider dies; casdoor (the default) with ANY external
+# field dies (byte-identity invariant); external without an https issuer + client
+# id dies. Charset allowlists exclude everything shell/sed-meaningful — the values
+# land in the root-baked idp.conf AND the replacement side of the issuer rewrite.
+_IDP_URL_RE='^https://[A-Za-z0-9][A-Za-z0-9._:/%=+-]*$'
+_IDP_CLIENT_ID_RE='^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$'
+_validate_idp() {
+    case "${IDP}" in
+        casdoor)
+            [ -n "${IDP_ISSUER}" ]    && { err "--idp-issuer is set but --idp is 'casdoor' (the built-in default) — clear it or pick --idp entra|aws|oidc"; exit 1; }
+            [ -n "${IDP_CLIENT_ID}" ] && { err "--idp-client-id is set but --idp is 'casdoor' (the built-in default) — clear it or pick --idp entra|aws|oidc"; exit 1; }
+            [ -n "${IDP_JWKS}" ]      && { err "--idp-jwks is set but --idp is 'casdoor' (the built-in default) — clear it or pick --idp entra|aws|oidc"; exit 1; }
+            ;;
+        entra|aws|oidc)
+            [[ "${IDP_ISSUER}" =~ ${_IDP_URL_RE} ]] \
+                || { err "--idp ${IDP} requires an https:// --idp-issuer (got '${IDP_ISSUER}') — the issuer is the token-validation trust anchor and must be TLS"; exit 1; }
+            [[ "${IDP_CLIENT_ID}" =~ ${_IDP_CLIENT_ID_RE} ]] \
+                || { err "--idp ${IDP} requires --idp-client-id (allowlist [A-Za-z0-9._:/-], max 128; got '${IDP_CLIENT_ID}')"; exit 1; }
+            if [ -n "${IDP_JWKS}" ]; then
+                [[ "${IDP_JWKS}" =~ ${_IDP_URL_RE} ]] \
+                    || { err "--idp-jwks must be an https:// URL (got '${IDP_JWKS}') — leave empty to derive the provider default"; exit 1; }
+            fi
+            ;;
+        *)
+            err "unknown --idp '${IDP}' (known: casdoor entra aws oidc)"
+            exit 1
+            ;;
+    esac
+    # Explicit success: the casdoor arm's last `[ -n … ]` legitimately evaluates
+    # false, and under `set -e` a rc=1 falling out of the function would abort the
+    # whole build for the DEFAULT provider.
+    return 0
+}
+_idp_default_jwks() {
+    # The documented per-provider JWKS derivation off the issuer (used when
+    # --idp-jwks is empty): entra publishes at /discovery/v2.0/keys, Cognito at
+    # /.well-known/jwks.json; a generic OIDC provider gets the Casdoor-shaped
+    # /.well-known/jwks the baked tree already pins (override if yours differs).
+    case "${IDP}" in
+        entra) printf '%s/discovery/v2.0/keys' "${IDP_ISSUER%/}" ;;
+        aws)   printf '%s/.well-known/jwks.json' "${IDP_ISSUER%/}" ;;
+        oidc)  printf '%s/.well-known/jwks' "${IDP_ISSUER%/}" ;;
+        *)     printf '' ;;
+    esac
+}
+_validate_idp
+if [ "${IDP}" != "casdoor" ] && [ -z "${IDP_JWKS}" ]; then
+    IDP_JWKS="$(_idp_default_jwks)"
+    info "IdP: --idp-jwks empty — derived the ${IDP} default: ${IDP_JWKS}"
+fi
 
 # ── Validate/normalize the first-boot grow policy (baked into /etc/growfs.conf) ──
 # fill (DEFAULT, fill the whole medium) | none/off/0 (keep compact) | a concrete
@@ -2015,6 +2106,110 @@ rebrand_sysroot() {
     info "Rebrand complete (compound names like '${BRAND}-systems-web' may want review)."
 }
 
+# ── Mesh-node IdP external mode (I6.3) — the baked-tree passes ────────────────
+# Byte-identical mirrors of build-x86-host-stage4.sh's four functions: all are
+# self-guarding no-ops for the casdoor default (byte-identity) and for absent
+# trees; the ONE call site (apply_idp_external) runs AFTER rebrand_sysroot so the
+# issuer literals already read id.<CLUSTER_DOMAIN>. Extracted + fixture-tested by
+# tests/scripts/test-idp-builder-functions.sh — never a real build.
+bake_idp_conf() {
+    [ "${IDP}" = "casdoor" ] && return 0
+    mkdir -p "${SYSROOT}/etc/snapdragon"
+    cat > "${SYSROOT}/etc/snapdragon/idp.conf" <<EOF
+# Identity provider this image's services TRUST (--idp; docs/IDENTITY-PROVIDERS.md).
+# PUBLIC identifiers only — client SECRETS ride KEYS/Vault provisioning, never here.
+provider=${IDP}
+issuer=${IDP_ISSUER}
+client_id=${IDP_CLIENT_ID}
+jwks_uri=${IDP_JWKS}
+EOF
+    chmod 0644 "${SYSROOT}/etc/snapdragon/idp.conf"
+    info "IdP: baked /etc/snapdragon/idp.conf (provider=${IDP}, 0644, no secrets)"
+}
+
+rewrite_idp_sysroot() {
+    # The idp-aware pass AFTER rebrand_sysroot: re-point every issuer literal
+    # (https://id.<CLUSTER_DOMAIN>, incl. the @@CLUSTER_DOMAIN@@ first-boot
+    # template form) at the external issuer, and every in-cluster/derived JWKS pin
+    # at the external JWKS. JWKS rules run FIRST so the issuer rule cannot
+    # half-rewrite a jwks URL into <external-issuer>/.well-known/jwks.
+    [ "${IDP}" = "casdoor" ] && return 0
+    local iss_e jwks_e dom_re f n=0
+    iss_e="$(_sed_rep_escape "${IDP_ISSUER}")"
+    jwks_e="$(_sed_rep_escape "${IDP_JWKS}")"
+    dom_re="${CLUSTER_DOMAIN//./\\.}"
+    while IFS= read -r -d '' f; do
+        if grep -qE "https://id\.(${dom_re}|@@CLUSTER_DOMAIN@@)|/\.well-known/jwks" "${f}" 2>/dev/null; then
+            sed -i -E \
+                -e "s|https?://casdoor[A-Za-z0-9.:_-]*/\.well-known/jwks|${jwks_e}|g" \
+                -e "s|https://id\.${dom_re}/\.well-known/jwks|${jwks_e}|g" \
+                -e "s|https://id\.@@CLUSTER_DOMAIN@@/\.well-known/jwks|${jwks_e}|g" \
+                -e "s|https://id\.${dom_re}|${iss_e}|g" \
+                -e "s|https://id\.@@CLUSTER_DOMAIN@@|${iss_e}|g" \
+                "${f}"
+            n=$((n+1))
+        fi
+    done < <(find "${SYSROOT}/var/lib/snapdragon/cluster" "${SYSROOT}/etc/snapdragon" -type f -print0 2>/dev/null)
+    info "IdP: rewrote issuer -> ${IDP_ISSUER} + JWKS pins -> ${IDP_JWKS} in ${n} file(s)"
+}
+
+gate_casdoor_apps() {
+    # External provider: the built-in Casdoor deployment must NOT ride along —
+    # prune its ArgoCD apps + manifest trees from the baked GitOps payload
+    # (same rm-from-the-baked-copy design as gate_env_apps/gate_optional_services;
+    # the repo itself is never touched).
+    [ "${IDP}" = "casdoor" ] && return 0
+    local tree="${SYSROOT}/var/lib/snapdragon/cluster"
+    [ -d "${tree}" ] || return 0
+    rm -f "${tree}/apps/05-casdoor.yaml" "${tree}/apps/06-casdoor-games.yaml"
+    rm -rf "${tree}/manifests/casdoor" "${tree}/manifests/casdoor-games"
+    info "IdP: external provider — gated the built-in Casdoor apps/manifests out of the baked tree"
+}
+
+write_idp_readme() {
+    [ "${IDP}" = "casdoor" ] && return 0
+    mkdir -p "${SYSROOT}/etc/snapdragon"
+    cat > "${SYSROOT}/etc/snapdragon/README-IDP.md" <<EOF
+# External identity provider (--idp ${IDP})
+
+This image was built to TRUST an external OIDC provider:
+
+  provider:  ${IDP}
+  issuer:    ${IDP_ISSUER}
+  client id: ${IDP_CLIENT_ID}
+  jwks:      ${IDP_JWKS}
+
+What that changed in this image:
+  * /etc/snapdragon/idp.conf carries provider/issuer/client_id/jwks_uri (no secrets).
+  * The baked cluster tree's issuer literals (https://id.<cluster-domain>) and
+    in-cluster JWKS pins were rewritten to the values above, so resource servers
+    VALIDATE tokens minted by your provider.
+  * The built-in Casdoor applications/manifests were removed from the GitOps tree.
+
+What does NOT work with an external provider (Casdoor-only until the service
+repos grow provider support — full table: docs/IDENTITY-PROVIDERS.md in the
+generator repo):
+  * The native first-party /bff/login leg (user-bff drives Casdoor's proprietary
+    POST /api/login; an external provider needs a browser front-channel).
+  * MFA step-up stamping (mfa_satisfied is written via the Casdoor API).
+  * The roles/permissions/groups token model — headscale allowed_groups, Harbor
+    oidc_group_claim, sssd allowlists all read Casdoor-shaped claims.
+  * signup-gate and the role-membership sync jobs (Casdoor REST API callers).
+  * JWKS egress: the pki-namespace NetworkPolicy only allows in-cluster JWKS —
+    HTTPS egress to your provider needs an egress-policy change on the cluster.
+EOF
+    chmod 0644 "${SYSROOT}/etc/snapdragon/README-IDP.md"
+    info "IdP: dropped /etc/snapdragon/README-IDP.md (the honest external-mode limits note)"
+}
+
+apply_idp_external() {
+    [ "${IDP}" = "casdoor" ] && return 0
+    bake_idp_conf
+    rewrite_idp_sysroot
+    gate_casdoor_apps
+    write_idp_readme
+}
+
 # ── --print-plan: emit the resolved plan and exit BEFORE ANY mutation ──────────
 # Runs AFTER full arg parsing / role+env+grow validation / the optional-services
 # resolution (all/exclude/opt-in folds) / allowlist checks, but BEFORE the prereq
@@ -2084,6 +2279,10 @@ if ${PRINT_PLAN}; then
     _plan K8S                "$(${ROLE_CLIENT} && echo none || { [ "${ROLE}" = "pki" ] && echo control-plane || echo worker; })"
     _plan OPTIONAL_SERVICES  "$(${ROLE_CLIENT} && echo "n/a (role=desktop; no cluster GitOps tree baked)" || echo "${OPTIONAL_SERVICES:-none}")"
     _plan MESH               "$(${SKIP_MESH} && echo skip || echo "headscale=${HEADSCALE_VERSION},tailscale=$(${SKIP_TAILSCALE} && echo skip || echo "${TAILSCALE_VERSION}")")"
+    _plan IDP                "${IDP}"
+    _plan IDP_ISSUER         "${IDP_ISSUER:-none}"
+    _plan IDP_CLIENT_ID      "${IDP_CLIENT_ID:-none}"
+    _plan IDP_JWKS           "${IDP_JWKS:-none}"
     _plan STANDALONE         "${STANDALONE}"
     _plan LOCAL_USER         "${LOCAL_USER:-$DEFAULT_USER}"
     _plan LOCAL_PASS         "$([ -n "${LOCAL_PASSHASH}" ] && echo REDACTED || echo none)"
@@ -2980,6 +3179,9 @@ fi
 # Runs AFTER gate_env_apps so the surviving lan-dns/cloudflared manifests get
 # their snapdragon.systems -> ${CLUSTER_DOMAIN} rewrite too.
 rebrand_sysroot
+# I6.3: AFTER rebrand — idp.conf bake + issuer/JWKS rewrite + Casdoor-app gating +
+# README-IDP.md. casdoor default = guaranteed no-op (byte-identity).
+apply_idp_external
 
 mkdir -p "${SYSROOT}/etc/local.d"
 [ -f "${SHARED_SPECS}/etc/local.d/01-firstboot.start.tmpl" ] || {
