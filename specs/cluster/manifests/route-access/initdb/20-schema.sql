@@ -444,9 +444,11 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- endpoints (/bff/superadmin/phone-devices/<id>/owner,
   -- /bff/superadmin/fleet-entitlements/**) need NO new row — they fall under the
   -- existing be-gateway + superadmin-gateway '/bff/superadmin/** -> ROLE_SUPERADMIN'
-  -- floors (tailnet-only). ⚠ DUAL-WRITE PARTNERS in OTHER repos: the admin-bff
-  -- 001-gateway-route-access Liquibase copy + the gateway CanonicalSeed.fe() baked
-  -- floor must gain the SAME three rows in lockstep.
+  -- floors (tailnet-only). ⚠ DUAL-WRITE PARTNER in OTHER repo: the gateway
+  -- CanonicalSeed.fe() baked floor must gain the SAME three rows in lockstep (done).
+  -- (admin-bff's 001-gateway-route-access changelog is table DDL only — it seeds NO
+  -- route-access ROWS, so it is NOT a row-seed partner despite the mfa_required
+  -- SCHEMA note above.)
   ('snapdragon-fe-gateway',  '/bff/admin/phone-fleet/**', 'ROLE_FLEET_ADMIN', true),  -- fleet-owner phone console (non-superadmin; owner+domain wall + entitlement in admin-bff)
   ('snapdragon-fe-gateway',  '/bff/admin/phone-fleet/**', 'ROLE_ADMIN',       true),  -- (admins superset — longer pattern wins, so pair explicitly)
   ('snapdragon-fe-gateway',  '/bff/admin/phone-fleet/**', 'ROLE_SUPERADMIN',  true),  -- (superadmins superset — longer pattern wins, so pair explicitly)
