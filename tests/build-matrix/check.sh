@@ -1540,6 +1540,10 @@ run_nongating_smokes() {
                 "builder-log-paths:${REPO_DIR}/tests/scripts/test-builder-log-paths.sh" \
                 "dracut-cross-lib:${REPO_DIR}/tests/scripts/test-dracut-cross-lib.sh" \
                 "host-mutation-guard:${REPO_DIR}/tests/scripts/test-host-mutation-guard.sh" \
+                "sharedbinpkg-prebuild-target:${TEST_DIR}/prebuild-smoke.sh" \
+                "sharedbinpkg-per-board-pkgdir:${REPO_DIR}/tests/scripts/test-rpi5-per-board-pkgdir.sh" \
+                "sharedbinpkg-ro-distdir:${REPO_DIR}/tests/scripts/test-arm-ro-distdir.sh" \
+                "sharedbinpkg-pool-fingerprint:${REPO_DIR}/tests/scripts/test-binpkg-pool-fingerprint.sh" \
                 "managed-services-gate:${REPO_DIR}/tests/managed-services/test-managed-services-gate.sh"; do
         name="${spec%%:*}"; path="${spec#*:}"
         if [ ! -f "${path}" ]; then

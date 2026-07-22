@@ -83,6 +83,7 @@ OPT_JETSON_FLEET="no"     # yes => fleet-build Jetson too (full-fleet build only
 OPT_ORANGEPI5_FLEET="no"  # yes => fleet-build Orange Pi 5 too (full-fleet build only; ORANGEPI5=1)
 OPT_PENTEST="no"          # yes => run the OWASP pen-test after the build (PENTEST=1)
 OPT_IMGFLAGS=""           # e.g. --no-iso (img only) / --no-img (iso only)
+OPT_DISTDIR=""            # shared READ-ONLY distfiles cache dir (--distdir); arch-independent sources reused fleet-wide (shared-binpkg Lane 3). Empty = private per-build.
 # ── Edge-AI inference service (GPU cluster roles: be+gpu / omnibus / edge_ai) ───
 OPT_X86_EDGE_AI="no"          # yes => add the edge-ai service to be+gpu/omnibus (edge_ai role always has it)
 OPT_EDGE_AI_RUNTIME="ollama"  # edge-ai inference runtime (ollama | vllm)
@@ -195,6 +196,7 @@ save_conf() {
         printf 'OPT_ORANGEPI5_FLEET=%q\n' "${OPT_ORANGEPI5_FLEET}"
         printf 'OPT_PENTEST=%q\n'       "${OPT_PENTEST}"
         printf 'OPT_IMGFLAGS=%q\n'      "${OPT_IMGFLAGS}"
+        printf 'OPT_DISTDIR=%q\n'       "${OPT_DISTDIR}"
         printf 'OPT_X86_EDGE_AI=%q\n'   "${OPT_X86_EDGE_AI}"
         printf 'OPT_EDGE_AI_RUNTIME=%q\n' "${OPT_EDGE_AI_RUNTIME}"
         printf 'OPT_EDGE_AI_MODELS=%q\n'  "${OPT_EDGE_AI_MODELS}"
@@ -581,6 +583,11 @@ build_make_cmd() {
         x86-*|jetson-*|frite|orangepi5|orangepizero2|rpi-*|build-all|build-everything) ;;   # STANDALONE_FLAGS channel / no passthrough
         *) [ -n "${OPT_EXTRA_FLAGS}" ] && imgflags="${imgflags:+${imgflags} }${OPT_EXTRA_FLAGS}" ;;
     esac
+    # Shared READ-ONLY distfiles (shared-binpkg Lane 3): a --distdir cache path is
+    # arch-independent (SOURCE tarballs), so it threads to EVERY builder via IMG_FLAGS
+    # (single-arch + prebuild-binaries invocations honor $(IMG_FLAGS)); new fetches
+    # still land in each build's private DISTDIR. Empty by default (no change).
+    [ -n "${OPT_DISTDIR}" ] && imgflags="${imgflags:+${imgflags} }--distdir ${OPT_DISTDIR}"
     [ -n "${imgflags}" ] && RUN_MAKE+=("IMG_FLAGS=${imgflags}")
     # Root SSH login: only forwarded when opted IN; empty => every image stays hardened
     # (PermitRootLogin no) by the builders' own default. Applies to ALL targets/arches.
@@ -1273,6 +1280,7 @@ options_screen() {
             home     "Home provisioning ... ${OPT_HOME_MODE:-<default>}   (standalone/client desktops)" \
             instui   "Installer UI ........ ${OPT_INSTALLER_UI:-<builder default>}   (cli|ncurses|calamares|all)" \
             imgflags "Image format flags .. ${OPT_IMGFLAGS:-<both .img + .iso>}" \
+            distdir  "Shared distfiles .... ${OPT_DISTDIR:-<none>}   (--distdir RO source cache; reused fleet-wide)" \
             extraflags "Extra builder flags . ${OPT_EXTRA_FLAGS:-<none>}   (passed VERBATIM — escape hatch)" \
             rootlogin "Root SSH login ...... ${OPT_ROOT_LOGIN}   (no=hardened | prohibit-password | yes)" \
             back     "‹ back to main menu")" || return 0
@@ -1306,6 +1314,7 @@ options_screen() {
                          all       "all       — every front-end")" || iu=""
                      case "${iu}" in default|"") OPT_INSTALLER_UI="" ;; *) OPT_INSTALLER_UI="${iu}" ;; esac ;;
             imgflags) OPT_IMGFLAGS="$(ui_input "Image flags" "IMG_FLAGS (e.g. --no-iso, --no-img, empty = both)" "${OPT_IMGFLAGS}")" ;;
+            distdir) OPT_DISTDIR="$(ui_input "Shared distfiles" "Path to a shared READ-ONLY distfiles (source-tarball) cache reused across builds (--distdir / SNAP_DISTDIR_SRC; shared-binpkg Lane 3). Arch-independent, safe fleet-wide; new fetches still land in each build's private DISTDIR. Empty = private only" "${OPT_DISTDIR}")" ;;
             extraflags) OPT_EXTRA_FLAGS="$(ui_input "Extra builder flags" "Extra builder flags, threaded VERBATIM onto the single-role builder invocation (x86/jetson/frite/orangepi5/orangepizero2/rpi-<role> via STANDALONE_FLAGS; the rpi/x86/omnibus FLEET targets — multiple roles per build — via IMG_FLAGS instead, since a standalone-shaped flag has no single role to apply to there). The escape hatch guaranteeing all-options-in-all-menus. Empty = none" "${OPT_EXTRA_FLAGS}")" ;;
             rootlogin) case "${OPT_ROOT_LOGIN}" in
                            no) OPT_ROOT_LOGIN=prohibit-password ;;
@@ -1900,6 +1909,7 @@ build_screen() {
         x86  "All 4 default x86 roles" \
         one  "A single arch + role …" \
         omni "x86 omnibus (all-in-one node)" \
+        prebuild "Prebuild shared binpkg pool … (compile once, reuse via --usepkg)" \
         frite "Frite light-desktop image …" \
         idp  "Identity provider … ${OPT_IDP}$([ "${OPT_IDP}" != casdoor ] && echo ' (external)')   (node token IdP; casdoor=built-in)" \
         back "‹ back to main menu")" || return 0
@@ -1910,10 +1920,34 @@ build_screen() {
         x86)   build_make_cmd x86 "all 4 x86 roles" 4; launch_build ;;
         one)   single_role_screen ;;
         omni)  build_make_cmd omnibus "x86 omnibus" 1; launch_build ;;
+        prebuild) prebuild_screen ;;
         frite) frite_screen ;;
         idp)   idp_screen ;;   # I6.5: the IdP picker is reachable EARLY in the guided node flow
         back|"") return 0 ;;
     esac
+}
+
+# Prebuild a platform's role-UNION binpkg pool ONCE (shared-binpkg Lane 4c): pick a
+# platform, then run `make prebuild-binaries ARCH=<platform> [BOARD=]`. It compiles
+# the union with --packages-only (no image emitted) into the PER-BOARD pkgdir; later
+# per-role image builds reuse it via --usepkg (guarded by the pool fingerprint).
+prebuild_screen() {
+    local arch
+    arch="$(ui_menu "Prebuild binpkg pool" "Compile a platform's role-union binpkg pool ONCE (reused via --usepkg by later per-role image builds; per-board — SIGILL-safe):" \
+        x86           "x86 (amd64) pool" \
+        rpi5          "Raspberry Pi (board = ${OPT_RPI_BOARD}; per-board -mcpu pool)" \
+        frite         "La Frite family (arm64)" \
+        jetson        "Jetson Orin (arm64; board = ${OPT_JETSON_BOARD})" \
+        orangepi5     "Orange Pi 5 (arm64; board = ${OPT_ORANGEPI5_BOARD})" \
+        orangepizero2 "Orange Pi Zero 2 (arm64)" \
+        back "‹ back")" || return 0
+    [ "${arch}" = back ] || [ -z "${arch}" ] && return 0
+    build_make_cmd prebuild-binaries "prebuild ${arch} role-union binpkg pool (compile once)" 1
+    RUN_MAKE+=("ARCH=${arch}")
+    # PER-BOARD isolation (Lane 2): thread the Pi board so the pool lands in the
+    # snap-build-pi5/-pi4/-pi3 subdir keyed to its -mcpu (never crosses boards).
+    [ "${arch}" = rpi5 ] && RUN_MAKE+=("BOARD=${OPT_RPI_BOARD}")
+    launch_build
 }
 
 frite_screen() {

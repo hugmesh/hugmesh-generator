@@ -289,6 +289,36 @@ negatives (31 CLI/channel + 12 GUI gating) + 12 flag-coverage checks =
 make matrix-check                 # or: bash tests/build-matrix/check.sh
 ```
 
+### Shared-binpkg prebuild flags (host/CI build-phase, not GUI options)
+
+The shared-binpkg track (**✅ shipped**, see
+[`docs/SHARED-BINPKG.md`](SHARED-BINPKG.md)) adds two builder flags that are
+deliberately **not** Studio `ImageConfig` fields — they are host/CI
+**build-phase** controls, the same class as `--specs-dir`/`--target`, and are
+carried on the `flag-coverage.sh` allowlist with that documented reason:
+
+- **`--packages-only`** (all six builders) — run the emerge that populates the
+  per-board `PKGDIR` under `FEATURES=buildpkg`, then `exit 0` **before** any
+  image assembly (x86 before Phase 6 mesh; ARM before kernel/img/iso/tar).
+  Emits nothing image-shaped; adds a `PLAN_PACKAGES_ONLY=0|1` fact to
+  `--print-plan`. It is driven by the **`prebuild-binaries`** make target, never
+  a GUI knob.
+- **`--distdir DIR`** (+ `SNAP_DISTDIR_SRC` env) — reuse a shared **read-only**
+  distfiles (source-tarball) cache. Arch-independent, so one fleet-wide pool is
+  safe on every board (x86 *does* field it as a GUI knob; the five ARM builders
+  take it as host plumbing only, hence the ARM allowlist entries).
+
+The **`prebuild-binaries ARCH=<platform> [BOARD=]`** make target computes the
+platform's role-union via the Qt-free `python3 -m
+snapdragon_studio.core.prebuild_union <platform>` module and invokes the builder
+once with `--packages-only` into the per-board pool (MAKE channel). The ncurses
+menu surfaces it as **Build → Prebuild shared binpkg pool** plus a **Shared
+distfiles** option; a non-gating `sharedbinpkg-*` smoke set (`prebuild-smoke.sh`
++ the three hermetic tests) exercises the target, the per-board pkgdir
+distinctness, the RO-distfiles wiring and the pool fingerprint guard. The
+compile-once **speedup + correctness is UNPROVEN without a live fleet build** —
+the mechanism + the fingerprint SIGILL guard ship; the live proof is owed.
+
 ### `--print-plan` — the dry-run contract
 
 Every builder takes `--print-plan`: resolve + **validate** every flag, print
