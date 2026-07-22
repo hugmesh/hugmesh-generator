@@ -426,6 +426,32 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('snapdragon-fe-gateway',  '/bff/register/**',      'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/provision/**',     'ROLE_USER',      true),
   ('snapdragon-fe-gateway',  '/bff/me/**',            'ROLE_USER',      true),
+  -- ── FLEET-OWNER phone console (fleet-admin entitlement tier) ────────────────
+  -- The admin-bff /bff/admin/phone-fleet/** surface lets a NON-superadmin fleet
+  -- owner manage ONLY their own phones on the PUBLIC fe-gateway. It rides the
+  -- /bff/** catch-all route to admin-bff (20-gateway-fe.yaml) but needs its OWN
+  -- route-access rows: the generic /bff/admin/** row below is ROLE_ADMIN-ONLY, so
+  -- a pure ROLE_FLEET_ADMIN would be DEFAULT-DENIED at the gateway on the
+  -- most-specific match unless a ROLE_FLEET_ADMIN allow row exists on the LONGER
+  -- /bff/admin/phone-fleet/** pattern (longest-pattern-wins, like
+  -- /bff/forum/admin/** over /bff/forum/**). Because the longer pattern WINS, the
+  -- /bff/admin/** ROLE_ADMIN row no longer covers this subpath, so ROLE_ADMIN and
+  -- ROLE_SUPERADMIN are PAIRED here explicitly (the converter does not auto-grant
+  -- the narrower fleet role to them). The owner+domain tenancy wall + the
+  -- fleet_entitlement gate are enforced INSIDE admin-bff (@PreAuthorize + the
+  -- physical_owner/owner_domain scope predicate) — these gateway rows are the
+  -- coarse defence-in-depth. The SUPERADMIN owner-assignment + entitlement-admin
+  -- endpoints (/bff/superadmin/phone-devices/<id>/owner,
+  -- /bff/superadmin/fleet-entitlements/**) need NO new row — they fall under the
+  -- existing be-gateway + superadmin-gateway '/bff/superadmin/** -> ROLE_SUPERADMIN'
+  -- floors (tailnet-only). ⚠ DUAL-WRITE PARTNER in OTHER repo: the gateway
+  -- CanonicalSeed.fe() baked floor must gain the SAME three rows in lockstep (done).
+  -- (admin-bff's 001-gateway-route-access changelog is table DDL only — it seeds NO
+  -- route-access ROWS, so it is NOT a row-seed partner despite the mfa_required
+  -- SCHEMA note above.)
+  ('snapdragon-fe-gateway',  '/bff/admin/phone-fleet/**', 'ROLE_FLEET_ADMIN', true),  -- fleet-owner phone console (non-superadmin; owner+domain wall + entitlement in admin-bff)
+  ('snapdragon-fe-gateway',  '/bff/admin/phone-fleet/**', 'ROLE_ADMIN',       true),  -- (admins superset — longer pattern wins, so pair explicitly)
+  ('snapdragon-fe-gateway',  '/bff/admin/phone-fleet/**', 'ROLE_SUPERADMIN',  true),  -- (superadmins superset — longer pattern wins, so pair explicitly)
   ('snapdragon-fe-gateway',  '/bff/admin/**',         'ROLE_ADMIN',     true),
   -- Same-origin role BFFs (fe-gateway proxies /bff/** subpaths to the dedicated
   -- BFFs in the backend ns). The /bff/mod/** + /bff/user/** prefixes are SIBLINGS

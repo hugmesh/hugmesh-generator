@@ -998,6 +998,17 @@ printf '%s' "${OUT_TXT}" | grep -q 'SUPERADMIN must CONFIRM this device as manag
     && ok "(22) mdm-enroll prints the superadmin managed-confirmation NEXT STEP (trust boundary)" \
     || bad "(22) mdm-enroll NEXT STEP missing the managed-confirmation guidance"
 
+# mdm-enroll must ALSO document the fleet-owner hand-off (enterprise subscription
+# tier): a SUPERADMIN assigns physical_owner + owner_domain, grants ROLE_FLEET_ADMIN
+# and the fleet_entitlement so a non-superadmin owner manages ONLY their own phones
+# on the PUBLIC surface (owner+domain is the sole tenancy wall).
+printf '%s' "${OUT_TXT}" | grep -q 'hand this device to a FLEET OWNER' \
+    && printf '%s' "${OUT_TXT}" | grep -q 'phone-devices/'"${DEVID}"'/owner' \
+    && printf '%s' "${OUT_TXT}" | grep -q 'ROLE_FLEET_ADMIN' \
+    && printf '%s' "${OUT_TXT}" | grep -q 'fleet-entitlements/' \
+    && ok "(22) mdm-enroll prints the fleet-owner provisioning NEXT STEP (owner+entitlement)" \
+    || bad "(22) mdm-enroll NEXT STEP missing the fleet-owner provisioning guidance"
+
 # NON-fresh device (2 users) -> refused (exit 2): device-owner mode is a
 # one-shot AOSP gate, permanently foreclosed once a secondary user exists.
 touch "${STATE}/user-created"

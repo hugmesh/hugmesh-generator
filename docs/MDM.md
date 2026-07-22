@@ -546,6 +546,75 @@ enabled. **Honest infra gaps:** real-time DPC push to phones over MQTT
 are why the legs ship default-off, not because the control plane is
 incomplete.
 
+### Fleet owners & enterprise subscription
+
+The lockout controls above are **SUPERADMIN-only** and reached over the tailnet.
+The **fleet-owner** tier lets a *non-superadmin* enterprise customer manage the
+subset of phones **they** own — locking/unlocking their own handsets — from the
+**public** front-door gateway, without ever seeing anyone else's devices. Three
+thin seams make that safe:
+
+- **`ROLE_FLEET_ADMIN` capability.** A dedicated Casdoor role, a *sibling* of
+  `admin`/`mod` (never a superset of `admin`, never auto-granted). It is the only
+  non-superadmin role that reaches `/bff/admin/phone-fleet/**`. Granted by a
+  SUPERADMIN via the existing role-grant surface (it is listed in the admin-bff
+  `GRANTABLE_ROLE_PATTERN`).
+- **Owner-within-domain scoping (the tenancy wall).** Two operator-authoritative
+  columns on `phone_device` — **`physical_owner`** (the Casdoor subject who owns
+  the handset) and **`owner_domain`** (the brand/domain it belongs to). Like
+  `management_mode`, both are **writable only via `/bff/superadmin/**` by a
+  SUPERADMIN**, never by the spoofable ingest path (the ingest INSERT/REFRESH
+  column lists omit them, so a re-ingest can never set or overwrite them). Every
+  fleet-owner read and mutation is predicated
+  `WHERE physical_owner = :callerSubject AND owner_domain = :callerDomain`
+  (owner **and** domain — both walls). A device the caller does not own in their
+  own domain returns **404**, never 403, so the surface cannot be used to
+  enumerate other owners' devices, and a cross-owner lock matches **zero rows**
+  (never a lock).
+- **`fleet_entitlement` (the enterprise-subscription seam).** A thin
+  per-subject table (`active` / `seats` / `expires_at`). Every fleet-owner
+  endpoint additionally requires `FleetEntitlementService.isEntitled(subject)` —
+  a row that **exists AND is `active` AND is unexpired** — and **fails closed**
+  (no row → not entitled → **403 "fleet entitlement required"**). SUPERADMIN is
+  exempt. This is deliberately *thin*: it gates access, it is not a billing
+  system.
+
+**The PUBLIC-fe-gateway caveat.** Unlike the superadmin lockout plane (tailnet-
+only, network-isolated), the fleet surface is reachable on the **public**
+`snapdragon-fe-gateway` at `/bff/admin/phone-fleet/**`. There is therefore **no
+tailnet defence-in-depth** in front of it: the **owner + domain predicate is the
+SOLE tenancy wall**, so both legs of it are load-bearing and every path
+fails closed. The gateway route-access seed carries a dedicated
+`/bff/admin/phone-fleet/** → ROLE_FLEET_ADMIN` allow row (plus `ROLE_ADMIN` /
+`ROLE_SUPERADMIN` as supersets) — a coarse gate ahead of the app-layer wall —
+because the generic `/bff/admin/** → ROLE_ADMIN` floor would otherwise
+default-deny a pure fleet owner (longest-pattern-wins).
+
+**How a SUPERADMIN provisions a fleet** (one-time, per fleet owner):
+
+1. **Assign the owner** on each handed-over device —
+   `PUT /bff/superadmin/phone-devices/<id>/owner {"physicalOwner":"<subject>","ownerDomain":"<domain>"}`
+   (SUPERADMIN + step-up). This sets the two authoritative columns.
+2. **Grant the capability** — grant `ROLE_FLEET_ADMIN` to that subject.
+3. **Grant the entitlement** —
+   `PUT /bff/superadmin/fleet-entitlements/<subject> {"active":true,"seats":<n>,"expiresAt":"<ts?>"}`.
+
+From then on the owner sees and locks/unlocks **only** their own in-domain
+phones on the public Phone-fleet page; they **cannot** mark-managed, set an
+owner, or grant entitlements — those stay SUPERADMIN-only provisioning acts.
+
+**Step-up for fleet lock/unlock — requires MFA enabled.** The two mutations
+(`.../lock`, `.../unlock`) are step-up-gated exactly like the superadmin plane, but
+a fleet owner satisfies step-up **only via the Casdoor-MFA leg** — a fresh MFA
+re-confirmation on their session. They **cannot** use the workload-token leg: the
+only mint endpoints (`/bff/admin/desktop/step-up`, `/bff/superadmin/workload/step-up`)
+are `ADMIN`/`SUPERADMIN` and require an operator SSH license a fleet customer never
+holds. So fleet lock/unlock is reachable **only where `app.casdoor.mfa.enabled=true`**;
+with MFA dark, a fleet owner's lock/unlock fails closed with a **403** (their list/get
+still work). This is intentional — a fleet customer re-confirms a device lock with MFA,
+not with an operator credential — so **enable MFA before handing a fleet owner
+lock/unlock**.
+
 ## Management plane
 
 **Now real, not a roadmap paragraph.** The device-management plane for
