@@ -1240,6 +1240,18 @@ cmd_mdm_enroll() {
     echo "  (or the 'Mark managed' action on the Phone-fleet page). A BYOD phone"
     echo "  left unmanaged can NEVER be locked. See docs/MDM.md 'Roles & device"
     echo "  management' for the trust model."
+    echo
+    echo "== OPTIONAL: hand this device to a FLEET OWNER (enterprise subscription) =="
+    echo "  To let a non-superadmin fleet owner manage this phone on the PUBLIC"
+    echo "  Phone-fleet surface, a SUPERADMIN provisions the fleet (never the ingest):"
+    echo "    1. assign owner:  PUT /bff/superadmin/phone-devices/${DEVICE_ID}/owner"
+    echo "         {\"physicalOwner\":\"<subject>\",\"ownerDomain\":\"<domain>\"}"
+    echo "    2. grant the ROLE_FLEET_ADMIN capability to that subject"
+    echo "    3. grant the entitlement:  PUT /bff/superadmin/fleet-entitlements/<subject>"
+    echo "         {\"active\":true,\"seats\":<n>}"
+    echo "  The owner then sees/locks ONLY their own in-domain phones (owner+domain"
+    echo "  is the sole tenancy wall). See docs/MDM.md 'Fleet owners & enterprise"
+    echo "  subscription'."
 }
 
 # ── verb: enroll (--no-usb variant) ─────────────────────────────────
