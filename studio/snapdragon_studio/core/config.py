@@ -1103,6 +1103,23 @@ def scope_violations(cfg: "ImageConfig") -> tuple[list[str], list[str]]:
                 f"(ROLE_K8S=none) while the full desktop stack is still built — a node that "
                 f"can NEVER join the mesh it was built for. Drop standalone unless you really "
                 f"mean a standalone desktop.")
+    # nvidia_cuda × gpu_driver — the exact combo behind the 2026-07-19 08:2x burst
+    # of eight 1-second dispatch deaths (empty session dirs, error only in the
+    # record tail). The x86 builder hard-errors on an EXPLICIT non-nvidia driver
+    # (real post-dispatch dead-end → BLOCK) and implies nvidia when the driver is
+    # unset/auto (accepted → ADVISORY naming the implication, per the tiering rule).
+    if cfg.nvidia_cuda and (cfg.platform or "x86") == "x86":
+        gd = cfg.gpu_driver or "auto"
+        if gd not in ("auto", "nvidia"):
+            blocking.append(
+                f"nvidia_cuda=true with gpu_driver={gd}: CUDA needs the proprietary "
+                f"NVIDIA driver, and the x86 builder hard-errors on this pair AFTER "
+                f"dispatch. Switch the GPU driver to 'nvidia', or drop the CUDA bake.")
+        elif gd == "auto":
+            advisory.append(
+                "nvidia_cuda=true with gpu_driver=auto: the builder will imply "
+                "--gpu-driver nvidia (CUDA needs the proprietary driver). Pick "
+                "'nvidia' explicitly if that is what you mean.")
     return blocking, advisory
 
 

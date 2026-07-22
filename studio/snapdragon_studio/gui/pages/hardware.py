@@ -36,11 +36,15 @@ class HardwarePage(QtWidgets.QWizardPage):
         self.gpu.addItems(list(GPU_DRIVER_CHOICES))
         lay.addWidget(_row("GPU driver", self.gpu))
         # --nvidia-cuda (G33): CUDA bake for GPU/edge-AI images. The builder
-        # hard-errors unless --gpu-driver nvidia (the proprietary driver) — its
-        # check is the authoritative safety net, same as every other combo rule.
+        # hard-errors on an EXPLICIT non-nvidia driver (and implies nvidia when the
+        # driver is unset), so the checkbox greys out under a contradicting driver
+        # pick instead of shipping the dead pair to a 1-second dispatch death —
+        # scope_violations() is the same rule for the widgetless JSON channels.
         self.nvidia_cuda = QtWidgets.QCheckBox(
-            "Bake the CUDA toolkit (--nvidia-cuda — requires GPU driver 'nvidia', the proprietary one)")
+            "Bake the CUDA toolkit (--nvidia-cuda — needs GPU driver 'nvidia', the proprietary one)")
         lay.addWidget(self.nvidia_cuda)
+        self.gpu.currentTextChanged.connect(self._gate_cuda)
+        self._gate_cuda(self.gpu.currentText())
         self.wifi = QtWidgets.QCheckBox("Enable Wi-Fi (off by default — hardened)")
         self.bt = QtWidgets.QCheckBox("Enable Bluetooth (off by default — hardened)")
         self.builtin = QtWidgets.QCheckBox("Compile most everything into the kernel (built-in, not modules)")
@@ -83,6 +87,21 @@ class HardwarePage(QtWidgets.QWizardPage):
         normalize to the canonical id so they can't silently fail to match."""
         self.gpu.setCurrentText(GPU_DRIVER_ALIASES.get(value, value) or "auto")
 
+    def _gate_cuda(self, driver: str):
+        """Grey out (and clear) the CUDA checkbox under a driver that contradicts it.
+        CUDA needs the proprietary 'nvidia' driver; the builder implies it when the
+        driver is unset/auto but HARD-ERRORS on an explicit non-nvidia pick — the
+        combo behind the 2026-07-19 burst of eight 1-second dispatch deaths. 'auto'
+        stays enabled (the builder will imply nvidia; scope_violations advises)."""
+        ok = (driver or "auto") in ("auto", "nvidia")
+        self.nvidia_cuda.setEnabled(ok)
+        if not ok and self.nvidia_cuda.isChecked():
+            self.nvidia_cuda.setChecked(False)
+        self.nvidia_cuda.setToolTip(
+            "" if ok else
+            f"Disabled under GPU driver '{driver}': CUDA needs the proprietary "
+            f"'nvidia' driver (the builder hard-errors on this pair).")
+
     def _scan(self):
         s = hw_scan.scan()
         self._set_gpu(s.recommended_gpu_driver)
@@ -97,6 +116,9 @@ class HardwarePage(QtWidgets.QWizardPage):
         c = self.wiz.cfg
         self._set_gpu(c.gpu_driver)
         self.nvidia_cuda.setChecked(c.nvidia_cuda)
+        # A loaded config can carry a contradicting pair (cuda=true + amd driver) —
+        # gate AFTER restoring so the box greys/clears rather than shipping the pair.
+        self._gate_cuda(self.gpu.currentText())
         self.wifi.setChecked(c.enable_wifi)
         self.bt.setChecked(c.enable_bluetooth)
         self.builtin.setChecked(c.kernel_builtin)

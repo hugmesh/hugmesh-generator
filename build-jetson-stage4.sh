@@ -1458,7 +1458,7 @@ else
     HS_REL="https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}"
     HS_URL="${HS_REL}/headscale_${HEADSCALE_VERSION}_linux_arm64"
     HS_BIN="${SYSROOT}/usr/bin/headscale"
-    if ! curl -fL -o "${HS_BIN}" "${HS_URL}"; then
+    if ! curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${HS_BIN}" "${HS_URL}"; then
         err "headscale ${HEADSCALE_VERSION} fetch failed (${HS_URL}) — the image bakes the mesh; aborting (use --skip-mesh to opt out)."; exit 1
     fi
     HS_SUMS="${BUILD_ROOT}/headscale_${HEADSCALE_VERSION}_checksums.txt"
@@ -1475,7 +1475,7 @@ else
     else
         TS_URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
         TS_TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_arm64.tgz"
-        if ! curl -fL -o "${TS_TGZ}" "${TS_URL}"; then
+        if ! curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${TS_TGZ}" "${TS_URL}"; then
             err "tailscale ${TAILSCALE_VERSION} fetch failed (${TS_URL}) — tailscaled is enabled in the runlevel; aborting (use --skip-tailscale to opt out)."; exit 1
         fi
         TS_SHA="${TS_TGZ}.sha256"

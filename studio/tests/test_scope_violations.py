@@ -55,6 +55,43 @@ def test_x86_standalone_on_a_node_warns_and_never_blocks():
     assert "ROLE_K8S=none" in advisory[0]
 
 
+# ── nvidia_cuda × gpu_driver: the 2026-07-19 08:2x burst of 8 dispatch deaths ───────────
+def test_cuda_with_explicit_non_nvidia_driver_blocks():
+    """cuda + amd-free is the EXACT pair the operator shipped 8 times (empty session dirs,
+    1-second deaths). The x86 builder hard-errors on it -> BLOCK (a real post-dispatch dead
+    end), naming the fix. This is what a Studio preflight must catch BEFORE dispatch."""
+    blocking, advisory = scope_violations(_cfg(nvidia_cuda=True, gpu_driver="amd-free"))
+    assert len(blocking) == 1 and advisory == []
+    assert "nvidia" in blocking[0].lower() and "amd-free" in blocking[0]
+
+
+def test_cuda_with_auto_driver_advises_the_implication():
+    """gpu_driver=auto is ACCEPTED — the builder implies --gpu-driver nvidia — so it warns
+    (names the implication), never blocks. Blocking would invent a constraint."""
+    blocking, advisory = scope_violations(_cfg(nvidia_cuda=True, gpu_driver="auto"))
+    assert blocking == []
+    assert len(advisory) == 1 and "imply" in advisory[0].lower()
+
+
+def test_cuda_with_nvidia_driver_is_silent():
+    assert scope_violations(_cfg(nvidia_cuda=True, gpu_driver="nvidia")) == ([], [])
+
+
+def test_cuda_false_is_silent_under_any_driver():
+    for gd in ("auto", "amd-free", "nvidia", "intel-free"):
+        assert scope_violations(_cfg(nvidia_cuda=False, gpu_driver=gd)) == ([], [])
+
+
+def test_cuda_rule_is_x86_only():
+    # rpi5 has no CUDA path; the rule must not fire off-platform (rpi5 can't set the pair
+    # in practice, but guard against a future ARM CUDA field inventing a false block).
+    cfg = ImageConfig(platform="rpi5", role="desktop", mode="mesh", env="test")
+    cfg.nvidia_cuda = True
+    cfg.gpu_driver = "amd-free"
+    blocking, _ = scope_violations(cfg)
+    assert all("nvidia_cuda" not in b for b in blocking)
+
+
 def test_rpi5_standalone_on_a_node_blocks_because_the_builder_hard_errors():
     """build-rpi5-stage4.sh:1037 errs and exits 1 — a real post-dispatch dead-end, so this
     is the one shape that earns a BLOCK. Same field, same value, different platform: the

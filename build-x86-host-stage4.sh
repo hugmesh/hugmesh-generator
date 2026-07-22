@@ -1247,8 +1247,20 @@ esac
 if [ "${GPU_DRIVER}" != "none" ] && [ "${GPU_DRIVER}" != "all-free" ] && ! ${GPU}; then
     warn "--gpu-driver ${GPU_DRIVER} on a non-GPU role '${ROLE}' — forcing the GPU stack on."; GPU=true
 fi
-## TODO; This is clearly blocking good builds atm and is wrong
-# ${NVIDIA_CUDA} && [ "${GPU_DRIVER}" != "nvidia" ] && { err "--nvidia-cuda requires --gpu-driver nvidia (the proprietary NVIDIA driver)"; exit 1; }
+# --nvidia-cuda needs the proprietary NVIDIA driver. An UNSET driver is IMPLIED
+# to nvidia (mirroring the --nvidia alias) so plain "--nvidia-cuda" just works;
+# an EXPLICIT non-nvidia driver is a real contradiction and refuses — without
+# this, the NVIDIA_PROPRIETARY gate below silently drops the CUDA list and the
+# operator gets an image without the toolkit they asked for.
+if ${NVIDIA_CUDA}; then
+    if [ -z "${GPU_DRIVER}" ]; then
+        warn "--nvidia-cuda without --gpu-driver — implying --gpu-driver nvidia (CUDA needs the proprietary driver)"
+        GPU_DRIVER="nvidia"
+    elif [ "${GPU_DRIVER}" != "nvidia" ]; then
+        err "--nvidia-cuda requires --gpu-driver nvidia (the proprietary NVIDIA driver) — got --gpu-driver ${GPU_DRIVER}. Drop --nvidia-cuda, or switch to --gpu-driver nvidia."
+        exit 1
+    fi
+fi
 # edge_ai inference node: default CUDA on when on the proprietary NVIDIA driver (the
 # inference runtime needs it). Skipped for an AMD/Intel edge node (future ROCm path).
 if ${EDGE_AI} && [ "${GPU_DRIVER}" = "nvidia" ]; then NVIDIA_CUDA=true; fi
@@ -2726,11 +2738,11 @@ info "Build root: ${BUILD_ROOT}  (per-arch sysroot/distfiles/pkgdir)"
 # ── 2. Seed stage3 ─────────────────────────────────────────────────
 banner "Fetching amd64 hardened stage3 seed"
 # The index is PGP-signed; select the stage3 tarball line, ignoring armor/comments.
-STAGE3_FILE=$(curl -sL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
+STAGE3_FILE=$(curl -sL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors "${SEED_STAGE3_URL}" | awk '/stage3-.*\.tar\.xz/{print $1; exit}')
 # Per-arch: the amd64 seed must not be reused by (or clobber) the aarch64 build.
 STAGE3_LOCAL="${BUILD_ROOT}/$(basename "${STAGE3_FILE}")"
 STAGE3_URL="https://distfiles.gentoo.org/releases/amd64/autobuilds/${STAGE3_FILE}"
-[ -f "${STAGE3_LOCAL}" ] || { info "Downloading $(basename "${STAGE3_FILE}")"; curl -fL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o "${STAGE3_LOCAL}" "${STAGE3_URL}"; }
+[ -f "${STAGE3_LOCAL}" ] || { info "Downloading $(basename "${STAGE3_FILE}")"; curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${STAGE3_LOCAL}" "${STAGE3_URL}"; }
 
 # SUPPLY-CHAIN: verify the seed's integrity+authenticity before we trust a single
 # byte of it. dlv_verify_stage3 fetches the matching .DIGESTS(.asc), GPG-verifies
@@ -4059,7 +4071,7 @@ else
     # (Mirrors the rpi5/frite/jetson builders' Phase 2.5 verification.)
     HS_REL="https://github.com/juanfont/headscale/releases/download/v${HEADSCALE_VERSION}"
     HS_BIN="${SYSROOT}/usr/bin/headscale"
-    if curl -fL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o "${HS_BIN}" \
+    if curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${HS_BIN}" \
         "${HS_REL}/headscale_${HEADSCALE_VERSION}_linux_amd64"; then
         # Verify sha256 against the release checksums.txt BEFORE trusting it.
         HS_SUMS="${BUILD_ROOT}/headscale_${HEADSCALE_VERSION}_checksums.txt"
@@ -4082,7 +4094,7 @@ else
     if ! ${SKIP_TAILSCALE}; then
         TS_URL="https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz"
         TGZ="${BUILD_ROOT}/tailscale_${TAILSCALE_VERSION}_amd64.tgz"
-        if curl -fL --retry 5 --retry-delay 5 --retry-connrefused --retry-all-errors -o "${TGZ}" "${TS_URL}"; then
+        if curl -fL --retry 8 --retry-delay 8 --retry-max-time 600 --retry-connrefused --retry-all-errors -o "${TGZ}" "${TS_URL}"; then
             # Verify sha256 against the published <tgz>.sha256 sidecar BEFORE extracting.
             TS_SHA="${TGZ}.sha256"
             if ! dlv_fetch "${TS_URL}.sha256" "${TS_SHA}" \
