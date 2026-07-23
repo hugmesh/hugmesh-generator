@@ -160,38 +160,62 @@ done
 echo "==> Artifacts: ${built} built, ${skipped} already cached"
 
 # ── the registry container ─────────────────────────────────────────────────────
-# Keep an already-running registry (the bind mount picks up new artifacts live —
-# and its bridge IP stays stable); (re)create it otherwise.
-if [ "$(docker inspect -f '{{.State.Running}}' "${REGISTRY_NAME}" 2>/dev/null || true)" != "true" ]; then
+# The artifacts live in ${M2_REPO} on the HOST (mounted :ro); the container itself
+# is stateless and disposable, so recreating it is always safe (loses nothing).
+_start_registry() { # force-(re)create a fresh container from ${M2_REPO}
   docker rm -f "${REGISTRY_NAME}" >/dev/null 2>&1 || true
   echo "==> Starting registry container ${REGISTRY_NAME} (${REGISTRY_IMAGE})"
   docker run -d --name "${REGISTRY_NAME}" --restart unless-stopped \
     -v "${M2_REPO}:/www/groups/${GITLAB_GROUP_ID}/-/packages/maven:ro" \
     "${REGISTRY_IMAGE}" httpd -f -p "${REGISTRY_PORT}" -h /www >/dev/null
-else
-  echo "==> Registry container ${REGISTRY_NAME} already running (kept)"
-fi
-
+}
 # Range over Networks: newer docker engines no longer populate the legacy
 # top-level .NetworkSettings.IPAddress key (map has no entry on docker 29).
-REGISTRY_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${REGISTRY_NAME}")"
-if [ -z "${REGISTRY_IP}" ]; then
-  echo "ERROR: could not determine the registry container's bridge IP" >&2
-  exit 1
-fi
-CI_API_V4_URL="http://${REGISTRY_IP}:${REGISTRY_PORT}"
-
-# Self-check: the exact URL shape the services' settings.xml will GET.
-CHECK_URL="${CI_API_V4_URL}/groups/${GITLAB_GROUP_ID}/-/packages/maven/systems/hugmesh/hugmesh-parent/2.7.0/hugmesh-parent-2.7.0.pom"
-for _ in 1 2 3 4 5; do
-  curl -sf -o /dev/null "${CHECK_URL}" && break
-  sleep 1
-done
-curl -sf -o /dev/null "${CHECK_URL}" || {
-  echo "ERROR: registry self-check failed: ${CHECK_URL}" >&2
-  exit 1
+_registry_ip() { docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${REGISTRY_NAME}"; }
+# Self-check the EXACT URL shape the services' settings.xml will GET (5 quick tries).
+CHECK_PATH="groups/${GITLAB_GROUP_ID}/-/packages/maven/systems/hugmesh/hugmesh-parent/2.7.0/hugmesh-parent-2.7.0.pom"
+_registry_serves() { # $1 = base http://IP:PORT ; returns 0 iff the parent POM is served
+  local _; for _ in 1 2 3 4 5; do curl -sf -o /dev/null "$1/${CHECK_PATH}" && return 0; sleep 1; done; return 1
 }
-echo "==> Registry self-check OK: ${CHECK_URL}"
+
+# Keep an already-running registry (the bind mount picks up new artifacts live, and
+# its bridge IP stays stable); (re)create it otherwise.
+kept_registry=false
+if [ "$(docker inspect -f '{{.State.Running}}' "${REGISTRY_NAME}" 2>/dev/null || true)" != "true" ]; then
+  _start_registry
+else
+  echo "==> Registry container ${REGISTRY_NAME} already running (kept)"
+  kept_registry=true
+fi
+
+_resolve_ip() { # sets REGISTRY_IP + CI_API_V4_URL, or exits
+  REGISTRY_IP="$(_registry_ip)"
+  if [ -z "${REGISTRY_IP}" ]; then
+    echo "ERROR: could not determine the registry container's bridge IP" >&2
+    exit 1
+  fi
+  CI_API_V4_URL="http://${REGISTRY_IP}:${REGISTRY_PORT}"
+}
+_resolve_ip
+
+# A KEPT container that cannot serve the cached artifacts is stale — almost always
+# its bind mount and/or bridge IP went stale across a docker DAEMON restart (the
+# --restart container comes back up, but the IP the last bootstrap recorded in
+# .m2-registry.env — and sometimes the mount — no longer hold). Recreate it ONCE
+# (host artifacts are untouched) and re-check, rather than hard-failing and forcing
+# the operator to `docker rm -f ${REGISTRY_NAME}` by hand.
+if ! _registry_serves "${CI_API_V4_URL}"; then
+  if [ "${kept_registry}" = true ]; then
+    echo "==> Kept registry failed its self-check (stale after a docker restart?) — recreating once…" >&2
+    _start_registry
+    _resolve_ip
+  fi
+  _registry_serves "${CI_API_V4_URL}" || {
+    echo "ERROR: registry self-check failed: ${CI_API_V4_URL}/${CHECK_PATH}" >&2
+    exit 1
+  }
+fi
+echo "==> Registry self-check OK: ${CI_API_V4_URL}/${CHECK_PATH}"
 
 # ── the env file compose interpolates the build args from ─────────────────────
 {
