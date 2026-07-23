@@ -29,6 +29,9 @@ from ..qt import Qt, QtWidgets
 from ._scroll import scrollable
 from ...core.config import (
     ImageConfig,
+    MANAGED_SERVICE_TIER3_BLOCKER,
+    MANAGED_SERVICE_TIER3_IDS,
+    MANAGED_SERVICE_TIER12_IDS,
     OPTIONAL_SERVICES_BY_PLATFORM,
     OPTIONAL_SERVICES_CHOICES,
     RELEASE_STATE_CHOICES,
@@ -97,6 +100,19 @@ _SERVICES_SCOPE_NOTE = (
 _SERVICES_NODE_SCOPE_CAVEAT = (
     "Note: tor and egress-vpn are node-scoped services in the platform registry, but "
     "Studio applies them mesh-wide today (every cluster node gets the same setting)."
+)
+
+# Managed backing services (I8/M2). Honest inline note: 'managed' points ONE in-mesh
+# datastore/infra at a hosted cloud endpoint INSTEAD of running it in-cluster. Self-hosted
+# is the default for every service — leaving every box unchecked is byte-identical to
+# today. Creds are operator-supplied via ESO/Vault (never entered here, never on argv).
+_MANAGED_SCOPE_NOTE = (
+    "Point an in-mesh backing service (a datastore/infra the mesh normally runs itself) "
+    "at a HOSTED cloud endpoint (AWS / Azure) INSTEAD of running it in-cluster. "
+    "Self-hosted is the default for every service — leave a box unchecked to keep the "
+    "in-mesh workload byte-identically. Endpoints are non-secret coordinates; credentials "
+    "are supplied separately via the KEYS USB (ESO/Vault), never here. "
+    "See docs/MANAGED-SERVICES.md."
 )
 
 
@@ -460,6 +476,41 @@ class NetworkPage(QtWidgets.QWizardPage):
         # answer are only useful if they are on screen when the page loads.
         self.services_section = collapsible("Optional cluster services", svc_content)
         lay.addWidget(self.services_section)
+
+        # ---- managed backing services (I8/M2) -----------------------------------
+        # Per tier-1/2 backing service: a self-hosted(default)/managed toggle + an
+        # endpoint line-edit enabled ONLY when managed. Tier-3 ids are shown read-only
+        # with their blocker note (the builder REFUSES a managed swap for them in v1).
+        # Platform-gated to x86/rpi5 via gate_widgets("managed_services", managed_box) —
+        # the only two builders that parse --managed-service / bake a cluster tree.
+        self.managed_box = QtWidgets.QGroupBox("Managed backing services (--managed-service)")
+        mgl = QtWidgets.QVBoxLayout(self.managed_box)
+        mgl.addWidget(_hint(_MANAGED_SCOPE_NOTE))
+        # id -> (managed-checkbox, endpoint line-edit)
+        self.managed_rows: dict[str, tuple] = {}
+        for sid in MANAGED_SERVICE_TIER12_IDS:
+            chk = QtWidgets.QCheckBox(f"{sid} — managed (hosted endpoint)")
+            ep = QtWidgets.QLineEdit()
+            ep.setPlaceholderText("hosted endpoint, e.g. host:port | https://host | aws")
+            ep.setEnabled(False)
+            # endpoint is live only while 'managed' is checked (self-hosted = no endpoint)
+            chk.toggled.connect(lambda on, e=ep: e.setEnabled(on))
+            mgl.addWidget(chk)
+            mgl.addWidget(_row("  endpoint", ep))
+            self.managed_rows[sid] = (chk, ep)
+        # tier-3: named but REFUSED in v1 — read-only, with the blocker (why not yet).
+        mgl.addWidget(_hint(
+            "The following are named in the registry but stay self-hosted in v1 (the "
+            "builder refuses a managed swap for them — the reason is shown):"))
+        for sid in MANAGED_SERVICE_TIER3_IDS:
+            lab = QtWidgets.QLabel(
+                f"{sid}: self-hosted only — {MANAGED_SERVICE_TIER3_BLOCKER.get(sid, '')}")
+            lab.setWordWrap(True)
+            lab.setEnabled(False)
+            mgl.addWidget(lab)
+        self.managed_section = collapsible("Managed backing services", self.managed_box,
+                                           expanded=False)
+        lay.addWidget(self.managed_section)
         lay.addStretch(1)
 
     def _sentinel_toggled(self, box, on):
@@ -641,7 +692,18 @@ class NetworkPage(QtWidgets.QWizardPage):
             "edge_ai_tts": self.edge_ai_tts,
             "optional_services": self.services_box,
             "enable_games": self.games,
+            "managed_services": self.managed_box,
         })
+        # Managed backing services (I8/M2): a cluster concern — shown for cloud/mesh
+        # builds (a standalone desktop bakes no cluster tree), platform-gated to x86/rpi5
+        # by gate_widgets above. Populate each tier-1/2 row from cfg.managed_services;
+        # an id present => managed (checked) with its endpoint, else self-hosted (default).
+        self.managed_section.setVisible(c.mode in ("cloud", "mesh"))
+        for sid, (chk, ep) in self.managed_rows.items():
+            endpoint = c.managed_services.get(sid, "")
+            chk.setChecked(bool(endpoint))
+            ep.setText(endpoint)
+            ep.setEnabled(bool(endpoint))
         # Egress VPN is desktop-class ONLY, and the platform gate above cannot say so:
         # egress_vpn is x86-supported, and the mesh worklist base forces platform="x86"
         # (the option superset), so on a mesh flow that gate passes and the row stayed live
@@ -706,6 +768,9 @@ class NetworkPage(QtWidgets.QWizardPage):
             and self.edge_ai_default.text().strip() == _field_default("edge_ai_model_default")
             and self.edge_ai_runtime.currentText() == _field_default("edge_ai_runtime"))
         self.edge_ai_section.set_default_expanded(not edge_default)
+        # Managed backing services: all-default (nothing managed) folds away; a live
+        # managed selection forces it open so the endpoints are visible on load.
+        self.managed_section.set_default_expanded(bool(self.wiz.cfg.managed_services))
 
     def validatePage(self):
         c = self.wiz.cfg
@@ -759,6 +824,16 @@ class NetworkPage(QtWidgets.QWizardPage):
                                    if self.services.item(i).checkState() == Qt.CheckState.Checked]
         c.exclude_services = self.exclude.text().replace(",", " ").split()
         c.enable_games = self.games.isChecked()
+        # Managed backing services (I8/M2): a row contributes id -> endpoint ONLY when
+        # 'managed' is checked AND an endpoint is entered — a checked-but-empty row is an
+        # incomplete selection, dropped so the default (no boxes checked) stays byte-
+        # identical. Endpoint SHAPE is fail-closed later by to_cli_args/validate_identity
+        # (tier-3 refused, no shell metachars), the same boundary the idp fields use.
+        c.managed_services = {
+            sid: ep.text().strip()
+            for sid, (chk, ep) in self.managed_rows.items()
+            if chk.isChecked() and ep.text().strip()
+        }
         # the greyed (platform-unsupported) widgets were still collected above —
         # reset those fields to their defaults so a value picked while another
         # platform was selected can't linger into save() or the emitted argv.
@@ -768,5 +843,6 @@ class NetworkPage(QtWidgets.QWizardPage):
             "edge_ai_service", "edge_ai_runtime", "edge_ai_models",
             "edge_ai_model_default", "edge_ai_analysis", "edge_ai_tts", "tor_onion_service",
             "character_studio", "optional_services", "exclude_services", "enable_games",
+            "managed_services",
         ))
         return True

@@ -1414,6 +1414,10 @@ _FIELD_PROBE = {
     "optional_services": {"optional_services": ["akkoma"]},
     "exclude_services": {"exclude_services": ["games"]},
     "enable_games": {"enable_games": True},
+    # managed backing services (I8/M2): the EMPTY default emits nothing (byte-identity),
+    # so the probe supplies a tier-1/2 id=endpoint that fields --managed-service on the
+    # two node builders (x86 + rpi5) only. Mirrors flag-coverage.sh's SAMPLES entry.
+    "managed_services": {"managed_services": {"kafka": "msk-broker:9098"}},
     "desktop": {"desktop": "thin"}, "steam": {"steam": "native"},
     "media_data": {"media_data": "off"}, "media_label": {"media_label": "DATA"},
     "no_vaults": {"no_vaults": True},

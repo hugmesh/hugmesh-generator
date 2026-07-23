@@ -56,6 +56,17 @@ ENCRYPT_ROOT_CHOICES = ("default", "on", "off")
 # expressible, which a single mesh-wide flag could not say.
 WORKLIST_INFRA_SERVICES = ("tor", "egress-vpn")
 
+# Managed backing services (I8/M2) are deliberately NOT a per-node worklist axis. A
+# "managed" backing service repoints the WHOLE mesh's shared datastore/infra at ONE
+# hosted cloud endpoint — every node talks to the same logical service, so the choice is
+# mesh-wide by nature (exactly like optional_services: WorklistEntry carries no
+# managed_services field). It is threaded as the single-image ImageConfig.managed_services
+# on the shared base, which _materialize_one deepcopies onto every entry; step 5's
+# strip_platform_unsupported then clears it on any non-x86/rpi5 node (it is _X86_RPI5-
+# scoped, the two cluster-tree builders). So there is no inexpressible-per-node case to
+# DROP here — the mesh-wide field simply rides the base, and no dead --managed-service is
+# ever emitted for a platform that cannot express it.
+
 # The ONLY platform whose builder takes the Tor onion as the dedicated --with-tor
 # flag (tor_onion_service is an x86-only field). On rpi5, tor is a --optional-services
 # node slug instead; every other platform expresses neither, so the selection is

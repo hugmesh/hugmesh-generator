@@ -111,6 +111,18 @@ OPT_CHARACTER_STUDIO="no"     # yes => --with-character-studio: VN character-stu
 # 'none' = EXPLICITLY none (=> --optional-services ""). The checklist supersedes
 # the lone character-studio toggle above — the two are kept in sync both ways.
 OPT_SERVICES=""
+# ── MANAGED backing services (I8/M2; specs/cluster/backing-services.yaml) ────────
+# SPACE-separated `id=endpoint` tokens (mirrors the builders' MANAGED_SERVICES env,
+# so a kafka broker-list endpoint keeps its literal commas). EMPTY = every backing
+# service self-hosted = the byte-identical default (casdoor-style: adds NOTHING).
+# Composed into bf as a repeatable `--managed-service id=endpoint`. Only TIER-1/2 ids
+# may be repointed; TIER-3 ids are refused (shown read-only). Endpoints are non-secret
+# coordinates (persisted); creds ride the KEYS USB via ESO/Vault, never here.
+OPT_MANAGED_SERVICES=""
+MANAGED_TIER12_IDS=(velero-objectstore smtp kafka clickhouse federation-bundles \
+                    postgres-admin-bff postgres-user-bff postgres-mod-bff \
+                    postgres-forum-bff postgres-wiki-bff postgres-casdoor)
+MANAGED_TIER3_IDS=(cassandra harbor vault-kv vault-pki)
 # ── Installer front-ends offered on the live ISO (--installer-ui) ───────────────
 OPT_INSTALLER_UI=""           # cli | ncurses | calamares | all (empty = builder default)
 # ── Extra builder flags — the verbatim escape hatch (all-options-in-all-menus) ──
@@ -210,6 +222,7 @@ save_conf() {
         printf 'OPT_IDP_JWKS=%q\n'      "${OPT_IDP_JWKS}"
         printf 'OPT_CHARACTER_STUDIO=%q\n' "${OPT_CHARACTER_STUDIO}"
         printf 'OPT_SERVICES=%q\n'      "${OPT_SERVICES}"
+        printf 'OPT_MANAGED_SERVICES=%q\n' "${OPT_MANAGED_SERVICES}"
         printf 'OPT_INSTALLER_UI=%q\n'  "${OPT_INSTALLER_UI}"
         printf 'OPT_EXTRA_FLAGS=%q\n'   "${OPT_EXTRA_FLAGS}"
         printf 'OPT_BR_WALLPAPER=%q\n'  "${OPT_BR_WALLPAPER}"
@@ -732,6 +745,16 @@ build_make_cmd() {
                 bf+=" --idp ${OPT_IDP} --idp-issuer \"${OPT_IDP_ISSUER}\" --idp-client-id \"${OPT_IDP_CLIENT_ID}\""
                 [ -n "${OPT_IDP_JWKS}" ] && bf+=" --idp-jwks \"${OPT_IDP_JWKS}\""
             fi
+            # Managed backing services (I8/M2): each space-separated id=endpoint token ->
+            # a repeatable --managed-service (double-quoted as one shell word, surviving
+            # both make legs; a kafka endpoint's literal commas stay inside the word).
+            # EMPTY (all self-hosted) adds NOTHING — byte-identical (casdoor-style default).
+            if [ -n "${OPT_MANAGED_SERVICES}" ]; then
+                local _ms
+                for _ms in ${OPT_MANAGED_SERVICES}; do
+                    [ -n "${_ms}" ] && bf+=" --managed-service \"${_ms}\""
+                done
+            fi
             [ "${OPT_CHARACTER_STUDIO}" = yes ] && bf+=" --with-character-studio"
             # edge-ai-tts rides HERE (not the GPU-target case below with
             # edge-ai-analysis) — it is CPU-only + self-contained, NO edge-ai
@@ -1137,6 +1160,65 @@ services_screen() {
     save_conf
 }
 
+# ── MANAGED backing services (I8/M2; specs/cluster/backing-services.yaml) ────────
+# Per tier-1/2 service pick self-hosted (default) OR managed + a hosted endpoint;
+# OPT_MANAGED_SERVICES holds the space-separated id=endpoint tokens (see the state
+# block). Mirrors services_screen but each id carries an endpoint, so this is a
+# per-id sub-menu (idp_screen's shape) rather than a checklist. Tier-3 ids are shown
+# read-only — the builder REFUSES a managed swap for them in v1.
+_managed_endpoint() {  # id -> prints its endpoint (empty rc1 if self-hosted)
+    local want="$1" tok
+    for tok in ${OPT_MANAGED_SERVICES}; do
+        case "${tok}" in "${want}="*) printf '%s' "${tok#*=}"; return 0 ;; esac
+    done
+    return 1
+}
+_managed_set() {  # id endpoint  (empty endpoint => remove = self-hosted)
+    local id="$1" ep="$2" out="" tok
+    for tok in ${OPT_MANAGED_SERVICES}; do
+        [ -z "${tok}" ] && continue
+        case "${tok}" in "${id}="*) continue ;; esac   # drop any existing entry for id
+        out="${out:+${out} }${tok}"
+    done
+    [ -n "${ep}" ] && out="${out:+${out} }${id}=${ep}"
+    OPT_MANAGED_SERVICES="${out}"
+}
+managed_services_screen() {
+    while true; do
+        local -a rows=(); local id ep
+        for id in "${MANAGED_TIER12_IDS[@]}"; do
+            ep="$(_managed_endpoint "${id}")" || ep=""
+            rows+=("${id}" "${id} ......... ${ep:-<self-hosted (default)>}")
+        done
+        for id in "${MANAGED_TIER3_IDS[@]}"; do
+            rows+=("${id}" "${id} ......... self-hosted ONLY (refused in v1)")
+        done
+        rows+=(back "‹ back")
+        local c
+        c="$(ui_menu "Managed backing services" \
+            "Point an in-mesh backing service at a HOSTED cloud endpoint instead of running it in-cluster (x86 / rpi5 cluster nodes). Self-hosted (unset) is the default and byte-identical. Endpoints are non-secret coordinates; credentials ride the KEYS USB (ESO/Vault), never here. See docs/MANAGED-SERVICES.md:" \
+            "${rows[@]}")" || { save_conf; return 0; }
+        case "${c}" in
+            back|"") save_conf; return 0 ;;
+            cassandra|harbor|vault-kv|vault-pki)
+                ui_msg "Self-hosted only (v1)" \
+                    "'${c}' is TIER-3: the builder refuses --managed-service for it in v1 (it stays self-hosted). See docs/MANAGED-SERVICES.md for the blocker." ;;
+            *)  local cur mode ep
+                cur="$(_managed_endpoint "${c}")" || cur=""
+                mode="$(ui_menu "${c}" "Run '${c}' self-hosted (in-cluster) or point it at a hosted cloud endpoint?" \
+                    self-hosted "self-hosted — run the in-mesh workload (default)" \
+                    managed     "managed — point at a hosted cloud endpoint")" || mode=""
+                case "${mode}" in
+                    self-hosted) _managed_set "${c}" "" ;;
+                    managed)
+                        ep="$(ui_input "Endpoint for ${c}" "Hosted endpoint: host:port | https://host | aws (velero) | bucket[@https://ep] (federation-bundles) | broker1,broker2 (kafka). Non-secret; creds via KEYS USB." "${cur}")"
+                        _managed_set "${c}" "${ep}" ;;
+                esac ;;
+        esac
+        save_conf
+    done
+}
+
 # Advanced branding: per-piece artwork/palette OVERRIDES layered on top of the
 # brand profile / --theme preset (which stay as-is; empty = keep the preset piece).
 branding_screen() {
@@ -1273,6 +1355,7 @@ options_screen() {
             pentest  "OWASP pen-test ...... ${pen_l}   (full-fleet build only)" \
             edgeai   "Edge-AI service ..... $([ "${OPT_X86_EDGE_AI}" = yes ] && echo on || echo off)   (be+gpu/omnibus; edge_ai role always on)" \
             services "Optional services ... ${OPT_SERVICES:-<default: akkoma,tuwunel,phpbb>}" \
+            managed  "Managed backing svcs  ${OPT_MANAGED_SERVICES:-<all self-hosted>}   (point a datastore at a hosted cloud endpoint; default self-hosted)" \
             tor      "Tor v3 onion ........ $([ "${OPT_TOR_ONION}" = yes ] && echo on || echo off)   (node service; exposes fe-gateway as .onion; default off)" \
             idp      "Identity provider ... ${OPT_IDP}$([ "${OPT_IDP}" != casdoor ] && echo " (${OPT_IDP_ISSUER:-issuer unset})")   (mesh-node token IdP; casdoor=built-in default)" \
             charstudio "Character Studio (VN) $([ "${OPT_CHARACTER_STUDIO}" = yes ] && echo on || echo off)   (frontend remote at /character-studio; default off)" \
@@ -1299,6 +1382,7 @@ options_screen() {
             pentest) OPT_PENTEST="$([ "${OPT_PENTEST}" = yes ] && echo no || echo yes)" ;;
             edgeai)  edge_ai_options_screen ;;
             services) services_screen ;;
+            managed) managed_services_screen ;;
             tor)     OPT_TOR_ONION="$([ "${OPT_TOR_ONION}" = yes ] && echo no || echo yes)" ;;
             idp)     idp_screen ;;
             charstudio) OPT_CHARACTER_STUDIO="$([ "${OPT_CHARACTER_STUDIO}" = yes ] && echo no || echo yes)"

@@ -55,6 +55,15 @@ _MEDIA_LABEL_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _IDP_URL_RE = re.compile(r"^https://[A-Za-z0-9][A-Za-z0-9._:/%=+-]*$")
 _IDP_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 
+# Managed backing-service endpoint (I8/M2 — the RHS of --managed-service id=<endpoint>).
+# The value flows onto argv AND into the root-baked /etc/snapdragon/backing-services.conf,
+# so it must be shell/sed-safe: reject quotes, spaces, |, &, ;, $, backticks, <, >, (, ).
+# The allowed set covers host[:port], comma broker-lists (kafka), http(s):// URLs,
+# bucket@endpoint (federation-bundles) and the bare 'aws' sentinel (velero-objectstore).
+# Anchoring the FIRST char to alnum rejects both a bare ':port' (no host) and a leading
+# '-'. Mirrors the builders' validate_managed_services host/shape guard.
+_MANAGED_ENDPOINT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@,%+=-]*$")
+
 
 # Studio "mode" -> sensible default role. The wizard lets the user override role.
 MODE_DEFAULT_ROLE = {
@@ -360,6 +369,32 @@ def idp_effective_jwks(idp: str, issuer: str, jwks: str) -> str:
         return issuer.rstrip("/") + IDP_JWKS_SUFFIX[idp]
     return ""
 
+# Managed backing services (I8 / M2). The tier-1/2 ids a --managed-service may repoint
+# (self-hosted -> hosted cloud endpoint) and the tier-3 ids the registry NAMES but
+# REFUSES in v1 (docsOnly + modeLocked self-hosted). Mirrors
+# specs/cluster/backing-services.yaml AND the two node builders' _MGD_TIER12_IDS /
+# _MGD_TIER3_IDS (gate_backing_services' executable twin). A hermetic test
+# (test_managed_services.py) asserts these three sources agree, so the constant here can
+# never drift from the builder that actually parses --managed-service.
+MANAGED_SERVICE_TIER12_IDS = (
+    "velero-objectstore", "smtp", "kafka", "clickhouse", "federation-bundles",
+    "postgres-admin-bff", "postgres-user-bff", "postgres-mod-bff",
+    "postgres-forum-bff", "postgres-wiki-bff", "postgres-casdoor")
+MANAGED_SERVICE_TIER3_IDS = ("cassandra", "harbor", "vault-kv", "vault-pki")
+# Short WHY-refused one-liner per tier-3 id (mirrors the builders' _mgd_tier3_blocker) —
+# surfaced verbatim when validate_identity() refuses a tier-3 --managed-service selection.
+MANAGED_SERVICE_TIER3_BLOCKER = {
+    "cassandra": "auth/TLS live only in the dark cassandra-hardening overlay; "
+                 "Keyspaces/Cosmos need TLS+SigV4 on 9142 with no live-path driver wiring",
+    "harbor": "registry host literal in ~30 kustomizations + dockerconfigjson + kaniko; "
+              "robot-account Job has no ECR/ACR analog; 12h ECR tokens break static pull "
+              "secrets; loses air-gap",
+    "vault-kv": "mechanical but broad: 1 ClusterSecretStore + ~90 remoteRef renames + "
+                "writer re-point + drop vault-token seeding for IRSA — deferred wave",
+    "vault-pki": "hardest: VaultDynamicSecret is Vault-only; needs a cert-manager "
+                 "re-architecture keeping <app>-mtls names; USB CA-custody has no managed analog",
+}
+
 # --kernel-flavor (jetson only): mainline (default) | l4t. The l4t BUILD is a stub that
 # hard-errors today, but the plan/matrix/--print-plan accept the axis (G36).
 KERNEL_FLAVOR_CHOICES = ("mainline", "l4t")
@@ -448,6 +483,9 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # tor / character-studio / services.
     "tor_onion_service": _X86, "character_studio": _X86_RPI5,
     "optional_services": _X86_RPI5, "exclude_services": _X86_RPI5, "enable_games": _X86_RPI5,
+    # managed backing services (I8/M2) — the two node builders parse --managed-service;
+    # a mesh-node cluster concern, so scoped to the only builders that bake a cluster tree.
+    "managed_services": _X86_RPI5,
     # client desktop weight / steam / media.
     "desktop": ("x86", "frite"), "steam": _X86,
     "media_data": _X86, "media_label": _X86, "no_vaults": _X86,
@@ -1379,6 +1417,18 @@ class ImageConfig:
     optional_services: list[str] = field(default_factory=list)  # --optional-services slugs (+ none/all sentinels)
     exclude_services: list[str] = field(default_factory=list)   # --exclude-services subtractive list (applied last)
     enable_games: bool = False         # --enable-games (Game Studio + games.<domain>)
+    # ── managed backing services (I8/M2; x86 + rpi5 node builders) ──
+    # Map backing-service id -> operator-supplied HOSTED endpoint. The EMPTY default
+    # (every backing service self-hosted) emits NOTHING — argv/sysroot byte-identity is
+    # the #1 invariant. Each entry emits a repeatable `--managed-service id=endpoint`
+    # (to_cli_args); the builder's gate_backing_services() then prunes the in-mesh
+    # workload + repoints the consumer at <endpoint>. Only TIER-1/2 ids
+    # (MANAGED_SERVICE_TIER12_IDS) are accepted; a TIER-3 docs-only id is REFUSED with its
+    # blocker (validate_identity, mirroring the builder's fail-closed die). dict[str,str]
+    # round-trips through save/load and the IMAGE_SPEC_JSON channel natively (JSON object),
+    # and prevents a duplicate id. MESH-WIDE by nature (every node talks to the same
+    # logical service) — a single-image field, deliberately NOT a per-node worklist axis.
+    managed_services: dict[str, str] = field(default_factory=dict)  # id -> endpoint (repeatable --managed-service id=endpoint)
     # ── client desktop weight / gaming delivery (x86 client roles; frite: light|none) ──
     desktop: str = ""                  # --desktop: x86 thin|full; frite light|none ("" = default)
     steam: str = ""                    # --steam native|flatpak|none ("" = builder default)
@@ -1644,6 +1694,25 @@ class ImageConfig:
                 raise IdentityValidationError(
                     f"idp_jwks must be an https:// URL (got {self.idp_jwks!r}) — "
                     "leave empty to derive the per-provider default")
+        # ── managed backing services (I8/M2) — fail-closed at the earliest boundary.
+        # Each id/endpoint flows onto --managed-service argv AND the root-baked
+        # backing-services.conf, so both the known-set membership and the endpoint charset
+        # are enforced HERE (before --print-command / the GUI preview / any dispatch). The
+        # empty default (all self-hosted) validates trivially — byte-identity holds.
+        for sid, ep in self.managed_services.items():
+            if sid in MANAGED_SERVICE_TIER3_IDS:
+                raise IdentityValidationError(
+                    f"managed-service {sid!r} is TIER-3 (mode-locked self-hosted, docs-only "
+                    f"in v1) — {MANAGED_SERVICE_TIER3_BLOCKER.get(sid, 'not implemented')}. "
+                    "See docs/MANAGED-SERVICES.md")
+            if sid not in MANAGED_SERVICE_TIER12_IDS:
+                raise IdentityValidationError(
+                    f"unknown managed-service id {sid!r} — known tier-1/2: "
+                    f"{', '.join(MANAGED_SERVICE_TIER12_IDS)}")
+            if not ep or not _MANAGED_ENDPOINT_RE.fullmatch(ep):
+                raise IdentityValidationError(
+                    f"managed-service {sid!r} endpoint {ep!r} is empty or malformed — "
+                    "expected host[:port] or a URL (no shell metacharacters, no bare :port)")
         # baked host identity (-H/-T/-u) flows into root-sourced config; fail closed.
         if self.hostname:
             validate_domain_name(self.hostname)   # a hostname is a DNS label/name
@@ -1841,6 +1910,18 @@ class ImageConfig:
             a += ["--exclude-services", " ".join(self.exclude_services)]
         return a
 
+    def _managed_services_args(self) -> list[str]:
+        """--managed-service id=endpoint (REPEATABLE) — the managed backing-services axis
+        (I8/M2; parsed by the x86 + rpi5 node builders ONLY, gate_backing_services). The
+        EMPTY default (every backing service self-hosted) emits NOTHING, so every existing
+        flow's argv stays byte-identical (the #1 invariant). Ids/endpoints are fail-closed
+        by validate_identity() before emission (tier-3 refused, endpoint shape-checked).
+        Emitted in SORTED-id order for a deterministic argv."""
+        a: list[str] = []
+        for sid in sorted(self.managed_services):
+            a += ["--managed-service", f"{sid}={self.managed_services[sid]}"]
+        return a
+
     def _idp_args(self) -> list[str]:
         """--idp/--idp-issuer/--idp-client-id [--idp-jwks] — the mesh-node identity
         provider (I6; parsed by the x86 + rpi5 node builders ONLY). Emitted ONLY
@@ -2027,6 +2108,9 @@ class ImageConfig:
         a += self._services_args()
         if self.enable_games:
             a += ["--enable-games"]
+        # managed backing services (I8/M2) — rpi5 shares the x86 node-builder axis;
+        # the empty default emits nothing (byte-identity).
+        a += self._managed_services_args()
         a += self._character_studio_args()
         a += self._edge_ai_tts_args()
         # mesh-node identity provider (I6) — rpi5 shares the x86 node-builder
@@ -2385,6 +2469,12 @@ class ImageConfig:
         a += self._services_args()
         if self.enable_games:
             a += ["--enable-games"]
+
+        # managed backing services (I8/M2). The empty default = every backing service
+        # self-hosted = ZERO emission (byte-identity); each selected id threads a
+        # repeatable --managed-service id=endpoint the builder's gate_backing_services
+        # honours (prune in-mesh workload + repoint the consumer).
+        a += self._managed_services_args()
 
         # Secure Boot + KEYS-USB signing chain (x86 only). SECURE_BOOT defaults ON in
         # the builder with a throwaway org key; --keys-usb / --secureboot-key/-cert

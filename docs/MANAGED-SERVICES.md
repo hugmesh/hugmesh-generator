@@ -55,6 +55,41 @@ endpoint **aborts the build** with the reason.
 Optional companions (env / brand.conf): `MANAGED_VELERO_BUCKET`,
 `MANAGED_VELERO_REGION`, `MANAGED_FEDERATION_BUNDLES_REGION`.
 
+## Studio + ncurses surface (M2)
+
+The same axis is selectable in the two interactive front-ends. Every front-end just
+composes the same `--managed-service id=endpoint` the builders parse — the empty
+default (all self-hosted) emits nothing, so an untouched surface is byte-identical.
+
+* **Studio wizard** (`studio/.../gui/pages/network.py`): a **Managed backing
+  services** section on the Domain/mesh/services step. Per tier-1/2 service a
+  *self-hosted (default) / managed* toggle plus an endpoint line-edit that is live
+  only when *managed* is checked; tier-3 services are shown read-only with their
+  blocker note (the builder refuses them in v1). The section is shown for
+  cloud/mesh builds and platform-gated to x86/rpi5 (`gate_widgets`, like
+  `optional_services`); it saves/loads `ImageConfig.managed_services`
+  (`dict[str,str]` id→endpoint). Because it is an `ImageConfig` field it rides the
+  `IMAGE_SPEC_JSON` / `--config` batch+web spec channel automatically.
+* **`ImageConfig.managed_services`** (`studio/.../core/config.py`): scoped
+  `_X86_RPI5` in the platform capability table; `to_cli_args()` emits one
+  `--managed-service id=endpoint` per entry in sorted-id order (empty = no flag);
+  `validate_identity()` fail-closes each id to the tier-1/2 set (a tier-3 id is
+  REFUSED with its blocker) and shape-checks the endpoint (`host[:port]`/URL, no
+  shell metacharacters). Mesh-wide by nature, so it is a single-image field — NOT a
+  per-node `WorklistEntry` axis (every node talks to the same logical service; the
+  base config's value deepcopies onto every materialized entry).
+* **ncurses menu** (`scripts/build-menu.sh`): Options → **Managed backing services**
+  (`managed_services_screen`) — per tier-1/2 service pick self-hosted/managed and an
+  endpoint; tier-3 ids are shown but refused. Persisted as the space-separated
+  `OPT_MANAGED_SERVICES` (`id=endpoint` tokens, so a kafka broker-list keeps its
+  commas) via `save_conf`, and composed into the build flags as a repeatable
+  `--managed-service "id=endpoint"` exactly as `OPT_SERVICES` composes
+  `--optional-services`.
+
+The **web worklist toggle** (admin-ui) that would surface managed vs self-hosted
+state in the browser is a **separate cross-repo follow-up** (admin-ui + admin-bff),
+not part of this generator-side surface. See the SEAM GAP note at the bottom.
+
 ## Difficulty ranking (verbatim-honest, from recon)
 
 | Service | AWS / Azure target | Difficulty | Blocking specifics | v1 |

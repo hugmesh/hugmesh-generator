@@ -50,8 +50,6 @@ x86 --nvidia — pure alias of '--gpu-driver nvidia' (the fielded matrix spellin
 x86 --nvidia-driver — back-compat open|proprietary alias of --gpu-driver
 x86 --skip-mesh — alias posture; the Studio emits the explicit --no-tailscale pair
 x86 --skip-sso — alias posture; the Studio emits the explicit --no-sso pair
-x86 --managed-service — managed backing-services axis (I8-DESIGN); driven by the MANAGED_SERVICES env / build-image Job channel, NOT a Studio ImageConfig field yet (the Studio surface is lane M2, deferred)
-rpi5 --managed-service — managed backing-services axis (I8-DESIGN); driven by the MANAGED_SERVICES env / build-image Job channel, NOT a Studio field yet (Studio surface is lane M2, deferred)
 rpi5 --both — pure alias of '--img --iso' (both fielded individually)
 rpi5 --user-password — deprecated no-op on this builder (warn+ignore; x86-only field by design)
 rpi5 --root-password — deprecated no-op on this builder (warn+ignore; x86-only field by design)
@@ -186,6 +184,10 @@ SAMPLES = {
                           {"optional_services": ["none"]}, {"optional_services": ["all"]}],
     "exclude_services": [{"exclude_services": ["games"]}],
     "enable_games": [{"enable_games": True}],
+    # managed backing services (I8/M2): a tier-1/2 id=endpoint fields --managed-service on
+    # the two node builders (x86 + rpi5) — the field now FIELDS the flag the allowlist used
+    # to hold open. The EMPTY default emits nothing (byte-identity). Mirrors _FIELD_PROBE.
+    "managed_services": [{"managed_services": {"kafka": "msk-broker:9098"}}],
     "desktop": [{"desktop": "thin"}], "steam": [{"steam": "native"}],
     "media_data": [{"media_data": "on"}, {"media_data": "off"}],
     "media_label": [{"media_label": "DATA"}], "no_vaults": [{"no_vaults": True}],
