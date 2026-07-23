@@ -16,8 +16,8 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LIB="${REPO}/specs/usr/lib/snapdragon/storage-verify.sh"
-AGENT="${REPO}/specs/usr/sbin/snapdragon-node-storage-reconcile"
+LIB="${REPO}/specs/usr/lib/hugmesh/storage-verify.sh"
+AGENT="${REPO}/specs/usr/sbin/hugmesh-node-storage-reconcile"
 
 P=0; F=0
 ok()  { echo "  PASS $*"; P=$((P+1)); }

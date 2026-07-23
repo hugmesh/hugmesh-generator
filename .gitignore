@@ -41,7 +41,7 @@ tests/stack/.m2-registry.env
 # seed-e2e.sh workdir — rendered role JSON (deterministic test passwords) +
 # pre-minted per-persona JWTs. Runtime-only; never commit.
 tests/stack/.seed-e2e/
-# The OPT-IN snapdragon-tor service (`make stack-up TOR=1`) copies the minted
+# The OPT-IN hugmesh-tor service (`make stack-up TOR=1`) copies the minted
 # PUBLIC .onion hostname here for the host/GUI to read (the private key stays in
 # the tor-onion-keys volume). Runtime-only, machine-specific; never commit.
 tests/stack/tor-onion/
@@ -50,7 +50,7 @@ tests/stack/tor-onion/
 # Output of scripts/gen-provision-keys.sh, gen-cluster-secrets.sh, gen-keystores.sh
 # (keys-out/) and any filled-in per-role KEYS dir.
 /keys-out/
-# clients/snapdragon-auditor/gen-auditor-signing-key.sh's release signing key
+# clients/hugmesh-auditor/gen-auditor-signing-key.sh's release signing key
 # defaults into keys-out/ (already ignored above) — these are defense-in-depth
 # in case OUTDIR is ever pointed elsewhere inside the repo. The key itself
 # belongs on the pki USB / Vault, same custody as cluster-ca.key; NEVER git.
@@ -76,7 +76,7 @@ keys-template/cloudflared/tunnel-token
 keys-template/cloudflared/credentials.json
 **/cloudflared/credentials.json
 # go-live wizard secrets (keys-layout token_dest paths emitted by the go-live
-# provider registry, specs/usr/lib/snapdragon/go-live-providers.sh) — the DDNS
+# provider registry, specs/usr/lib/hugmesh/go-live-providers.sh) — the DDNS
 # token. Only *.example is committed.
 keys-template/ddns/token
 **/ddns/token

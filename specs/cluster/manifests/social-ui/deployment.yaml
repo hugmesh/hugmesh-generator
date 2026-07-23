@@ -1,19 +1,19 @@
 # Federated micro-frontend remotes — EACH on its own nginx (own repo + pod) in
-# the snapdragon-frontend namespace, federated into the snapdragon.systems host:
-#   snapdragon-matrix-ui   (/social/matrix, /social/matrix/call)
-#   snapdragon-mastodon-ui (/social/mastodon)
-#   snapdragon-login-ui    (/login)
-#   snapdragon-admin-ui    (/admin, /admin/usage, /admin/namespaces — admin role)
-# Repos: github.com/Snapdragon-Systems/snapdragon-{matrix,mastodon,login,admin}-ui
+# the hugmesh-frontend namespace, federated into the hugmesh.systems host:
+#   hugmesh-matrix-ui   (/social/matrix, /social/matrix/call)
+#   hugmesh-mastodon-ui (/social/mastodon)
+#   hugmesh-login-ui    (/login)
+#   hugmesh-admin-ui    (/admin, /admin/usage, /admin/namespaces — admin role)
+# Repos: github.com/Snapdragon-Systems/hugmesh-{matrix,mastodon,login,admin}-ui
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: snapdragon-matrix-ui, namespace: snapdragon-frontend, labels: { app: snapdragon-matrix-ui, app.kubernetes.io/part-of: snapdragon.systems } }
+metadata: { name: hugmesh-matrix-ui, namespace: hugmesh-frontend, labels: { app: hugmesh-matrix-ui, app.kubernetes.io/part-of: hugmesh.systems } }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-matrix-ui } }
+  selector: { matchLabels: { app: hugmesh-matrix-ui } }
   template:
-    metadata: { labels: { app: snapdragon-matrix-ui } }
+    metadata: { labels: { app: hugmesh-matrix-ui } }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
       securityContext:
@@ -28,17 +28,17 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: snapdragon-matrix-ui, namespace: snapdragon-frontend }
-spec: { selector: { app: snapdragon-matrix-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
+metadata: { name: hugmesh-matrix-ui, namespace: hugmesh-frontend }
+spec: { selector: { app: hugmesh-matrix-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: snapdragon-mastodon-ui, namespace: snapdragon-frontend, labels: { app: snapdragon-mastodon-ui, app.kubernetes.io/part-of: snapdragon.systems } }
+metadata: { name: hugmesh-mastodon-ui, namespace: hugmesh-frontend, labels: { app: hugmesh-mastodon-ui, app.kubernetes.io/part-of: hugmesh.systems } }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-mastodon-ui } }
+  selector: { matchLabels: { app: hugmesh-mastodon-ui } }
   template:
-    metadata: { labels: { app: snapdragon-mastodon-ui } }
+    metadata: { labels: { app: hugmesh-mastodon-ui } }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
       securityContext:
@@ -53,17 +53,17 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: snapdragon-mastodon-ui, namespace: snapdragon-frontend }
-spec: { selector: { app: snapdragon-mastodon-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
+metadata: { name: hugmesh-mastodon-ui, namespace: hugmesh-frontend }
+spec: { selector: { app: hugmesh-mastodon-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: snapdragon-login-ui, namespace: snapdragon-frontend, labels: { app: snapdragon-login-ui, app.kubernetes.io/part-of: snapdragon.systems } }
+metadata: { name: hugmesh-login-ui, namespace: hugmesh-frontend, labels: { app: hugmesh-login-ui, app.kubernetes.io/part-of: hugmesh.systems } }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-login-ui } }
+  selector: { matchLabels: { app: hugmesh-login-ui } }
   template:
-    metadata: { labels: { app: snapdragon-login-ui } }
+    metadata: { labels: { app: hugmesh-login-ui } }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
       securityContext:
@@ -101,17 +101,17 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: snapdragon-login-ui, namespace: snapdragon-frontend }
-spec: { selector: { app: snapdragon-login-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
+metadata: { name: hugmesh-login-ui, namespace: hugmesh-frontend }
+spec: { selector: { app: hugmesh-login-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: snapdragon-admin-ui, namespace: snapdragon-frontend, labels: { app: snapdragon-admin-ui, app.kubernetes.io/part-of: snapdragon.systems } }
+metadata: { name: hugmesh-admin-ui, namespace: hugmesh-frontend, labels: { app: hugmesh-admin-ui, app.kubernetes.io/part-of: hugmesh.systems } }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-admin-ui } }
+  selector: { matchLabels: { app: hugmesh-admin-ui } }
   template:
-    metadata: { labels: { app: snapdragon-admin-ui } }
+    metadata: { labels: { app: hugmesh-admin-ui } }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
       securityContext:
@@ -126,5 +126,5 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: snapdragon-admin-ui, namespace: snapdragon-frontend }
-spec: { selector: { app: snapdragon-admin-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
+metadata: { name: hugmesh-admin-ui, namespace: hugmesh-frontend }
+spec: { selector: { app: hugmesh-admin-ui }, ports: [{ name: http, port: 80, targetPort: http }] }

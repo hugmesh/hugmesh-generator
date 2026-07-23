@@ -3,7 +3,7 @@
 # ============================================================================
 #
 # Exposes OUR tailnet-internal Forgejo (manifests/forgejo/, ClusterIP :3000 in
-# snapdragon-pki) so a FOREIGN mesh can PULL our source over the tailnet — the
+# hugmesh-pki) so a FOREIGN mesh can PULL our source over the tailnet — the
 # outbound half of cross-mesh decentralization (the inbound half is the fail-closed
 # ingest gate, scripts/ingest-foreign-base.sh).
 #
@@ -30,9 +30,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: mesh-forge-exposure
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     app.kubernetes.io/name: mesh-forge
 data:
   # THE OPT-IN. "false" => fully dark (this whole exposure is inert). Flip to "true"
@@ -54,9 +54,9 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: mesh-forge-default-deny
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     app.kubernetes.io/name: mesh-forge
 spec:
   podSelector:

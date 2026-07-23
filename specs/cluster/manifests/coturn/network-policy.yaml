@@ -7,7 +7,7 @@
 # policy therefore allows broad ingress on the STUN/TURN ports + relay window and
 # direct egress on the relay window, while still default-denying everything else.
 #
-# coturn carries app=snapdragon-coturn (NOT app.kubernetes.io/name in the
+# coturn carries app=hugmesh-coturn (NOT app.kubernetes.io/name in the
 # homeserver NotIn set), so the homeserver-isolation/homeserver-egress backstops do
 # NOT select it — it is a distinct app with its own policy here.
 #
@@ -24,15 +24,15 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: coturn-allow
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: coturn
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/optional-service: coturn
 spec:
   podSelector:
     matchLabels:
-      app: snapdragon-coturn
+      app: hugmesh-coturn
   policyTypes: [Ingress, Egress]
   ingress:
     # STUN/TURN (RFC 5389/5766) 3478 + TLS 5349 — public service, any source.

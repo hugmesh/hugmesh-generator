@@ -5,7 +5,7 @@
 # mechanism Tor Browser uses (Tor's own SOCKS proxy + an onion HTTP fetch).
 #
 # This is the MECHANISM proof behind two features that both publish a v3 .onion:
-#   - the OPT-IN local-mesh `snapdragon-tor` service (tests/stack/tor/, `TOR=1`);
+#   - the OPT-IN local-mesh `hugmesh-tor` service (tests/stack/tor/, `TOR=1`);
 #   - the NODE `tor` optional service + the `tor-onion` go-live provider
 #     (docs/TOR-HIDDEN-SERVICE.md).
 # Both rely on: torrc HiddenServiceDir/HiddenServicePort -> a v3 .onion whose
@@ -53,7 +53,7 @@ set -u -o pipefail
 # exit unless KEEP_WORKDIR=1 or an external WORKDIR was supplied.
 _WE_MADE_WORKDIR=""
 if [ -z "${WORKDIR:-}" ]; then
-    WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/snapdragon-onion-e2e.XXXXXX")"
+    WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/hugmesh-onion-e2e.XXXXXX")"
     _WE_MADE_WORKDIR=1
 fi
 SOCKS_PORT="${SOCKS_PORT:-39050}"
@@ -77,7 +77,7 @@ TORRC="${WORKDIR}/torrc"
 TOR_LOG="${WORKDIR}/tor.log"
 
 # A unique, greppable marker so a match cannot be a coincidence.
-MARKER="SNAPDRAGON-ONION-E2E-OK-$(date +%s)-${RANDOM}${RANDOM}"
+MARKER="HUGMESH-ONION-E2E-OK-$(date +%s)-${RANDOM}${RANDOM}"
 
 # PIDs of the processes we start (for cleanup).
 HTTP_PID=""
@@ -156,7 +156,7 @@ chmod 0700 "${HS_DIR}" "${TOR_DATA}"
 
 cat > "${WEBROOT}/index.html" <<EOF
 <!doctype html>
-<html><head><title>Snapdragon onion e2e</title></head>
+<html><head><title>HugMesh onion e2e</title></head>
 <body><h1>${MARKER}</h1>
 <p>Served by a local HTTP backend, reached over Tor as a v3 onion service.</p>
 </body></html>

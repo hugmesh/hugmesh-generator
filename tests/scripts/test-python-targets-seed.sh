@@ -77,14 +77,14 @@ for s in build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh \
          build-orangepi-zero2-stage4.sh build-jetson-stage4.sh; do
     f="${GEN}/${s}"
     if [ -f "${f}" ] \
-       && grep -q 'package.use/snapdragon-host-build-backends' "${f}" \
+       && grep -q 'package.use/hugmesh-host-build-backends' "${f}" \
        && grep -qF '*/* PYTHON_TARGETS: python3_12' "${f}"; then
         ok "${s}: writes the HOST-side python3.12-target seed"
     else
         bad "${s}: missing the HOST-side package.use python-targets pre-seed"
     fi
 done
-if grep -q 'package.use/snapdragon-host-build-backends' "${GEN}/Dockerfile.build" \
+if grep -q 'package.use/hugmesh-host-build-backends' "${GEN}/Dockerfile.build" \
    && grep -qF '*/* PYTHON_TARGETS: python3_12' "${GEN}/Dockerfile.build"; then
     ok "Dockerfile.build: bakes the HOST-side python3.12-target seed"
 else

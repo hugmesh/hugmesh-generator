@@ -1,17 +1,17 @@
 # phpbb — the BACKEND-ONLY phpBB forum homeserver, wrapped headless by
-# snapdragon-forum-bff-api (users) + snapdragon-admin-bff-api (admin console). It
+# hugmesh-forum-bff-api (users) + hugmesh-admin-bff-api (admin console). It
 # has NO gateway route and NO ingress; the only ingress is forum-bff-api +
 # admin-bff-api + the reconcile Job, enforced by network-policy.yaml in this
-# isolated snapdragon-forum namespace.
+# isolated hugmesh-forum namespace.
 #
 # HEADLESS MECHANISM: phpBB has NO official REST API. The chosen mechanism is a
-# thin CUSTOM phpBB extension `snapdragon/forumapi` (the phpbbcli identifier ==
+# thin CUSTOM phpBB extension `hugmesh/forumapi` (the phpbbcli identifier ==
 # install DIRECTORY path == composer name; NO hyphen — the hyphenated form is
 # un-enableable by phpBB's name regex + dir match). phpBB 3.1+ ships Symfony
 # HttpKernel/Controller/Routing; the extension registers config/routing.yml +
 # controllers returning JsonResponse, DI-injecting phpBB's own services so reads
 # AND writes honor phpBB's consistency/permission logic) exposed at
-# /api/v1/snapdragon/**. The extension validates the Casdoor JWT (JWKS) on every
+# /api/v1/hugmesh/**. The extension validates the Casdoor JWT (JWKS) on every
 # request, re-derives groups/ROLE_ADMIN from the verified token (never caller-
 # supplied data), and binds the phpBB user by Casdoor `sub` (not localpart).
 #
@@ -19,7 +19,7 @@
 # phpBB 3.3.11. The init->main filesystem split is resolved as:
 #   * initContainer (OWNER creds): DDL-once headless schema install (guarded by a
 #     <prefix>config table probe) + registration lockdown. The install YAML's
-#     `extensions:` node enables snapdragon/forumapi.
+#     `extensions:` node enables hugmesh/forumapi.
 #   * MAIN container IMAGE entrypoint: regenerate config.php from env every boot
 #     (least-privilege phpbb_app role) so the main FS — which never sees the
 #     initContainer's config.php — always has a working config; ensure the ext is
@@ -30,19 +30,19 @@
 # BLOCKING THE DEFAULT phpBB UIs (our Angular forum-ui is the single source of
 # truth): there is NO route to phpBB AT ALL (the NetworkPolicy + no-ingress is the
 # PRIMARY control). Defense in depth: the IMAGE denies every .php except app.php at
-# the Apache layer (snapdragon-lockdown.conf), so index/ucp/adm/posting/viewforum
-# return 403 while /api/v1/snapdragon/** still routes through app.php; registration
+# the Apache layer (hugmesh-lockdown.conf), so index/ucp/adm/posting/viewforum
+# return 403 while /api/v1/hugmesh/** still routes through app.php; registration
 # is disabled (require_activation=3); forum-bff strips Set-Cookie + drops any
 # text/html phpBB body. We do NOT use phpBB board_disable — it is enforced in
 # $user->setup() inside app.php BEFORE the extension dispatches, so it would also
-# break /api/v1/snapdragon/health (validated; that is why the Apache lockdown is used).
+# break /api/v1/hugmesh/health (validated; that is why the Apache lockdown is used).
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: phpbb-config
-  namespace: snapdragon-forum
-  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-forum
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   # phpBB DB connection + lockdown knobs the install/bootstrap initContainer reads.
   # The RUNTIME login is the NON-OWNER least-privilege role phpbb_app (DML only);
@@ -57,7 +57,7 @@ data:
     # here: the OWNER password (DB_PASSWORD) and the runtime app-role password
     # (PHPBB_APP_PASSWORD) come from the ESO Secrets via the container env.
     PHPBB_DB_DRIVER=phpbb\db\driver\postgres
-    PHPBB_DB_HOST=phpbb-db.snapdragon-forum.svc.cluster.local
+    PHPBB_DB_HOST=phpbb-db.hugmesh-forum.svc.cluster.local
     PHPBB_DB_PORT=5432
     PHPBB_DB_NAME=phpbb
     PHPBB_TABLE_PREFIX=phpbb_
@@ -70,20 +70,20 @@ data:
     PHPBB_INSTALL_CONFIG=/tmp/install-config.yml
     # Headless extension (phpbbcli identifier == install DIRECTORY path; NO hyphen —
     # the hyphenated form is un-enableable by phpBB's name regex + dir match).
-    PHPBB_EXTENSION=snapdragon/forumapi
+    PHPBB_EXTENSION=hugmesh/forumapi
     # Lockdown intent (the IMAGE enforces it deterministically, NOT phpBB config):
     #   * registration disabled  -> initContainer sets require_activation=3 (admin approval)
     #   * board/ACP/login locked  -> the IMAGE denies every .php except app.php at the
-    #     Apache layer (snapdragon-lockdown.conf), so index/ucp/adm/posting/viewforum
-    #     return 403 while /api/v1/snapdragon/** still routes through app.php. We do NOT
+    #     Apache layer (hugmesh-lockdown.conf), so index/ucp/adm/posting/viewforum
+    #     return 403 while /api/v1/hugmesh/** still routes through app.php. We do NOT
     #     set phpBB board_disable: phpBB enforces it in $user->setup() inside app.php
-    #     BEFORE the extension dispatches, which would also kill /api/v1/snapdragon/**.
+    #     BEFORE the extension dispatches, which would also kill /api/v1/hugmesh/**.
     PHPBB_REGISTRATION_DISABLED=1
   # Headless-install YAML CONSUMED by the initContainer (rendered with the OWNER creds
   # at runtime — no secret literals here). Schema = phpbb/install/installer_configuration.php
   # (validated against phpBB 3.3.11). The ${PLACEHOLDER}s are substituted by bootstrap.sh
   # from env (the OWNER password comes from the phpbb-secrets Secret as DB_PASSWORD).
-  # The `extensions:` node enables snapdragon/forumapi as part of the install.
+  # The `extensions:` node enables hugmesh/forumapi as part of the install.
   install-config.yml: |
     installer:
         admin:
@@ -93,7 +93,7 @@ data:
         board:
             lang: en
             name: '${BOARD_NAME}'
-            description: 'Backend-only phpBB (headless via snapdragon/forumapi)'
+            description: 'Backend-only phpBB (headless via hugmesh/forumapi)'
         database:
             dbms: postgres
             dbhost: '${PHPBB_DB_HOST}'
@@ -112,7 +112,7 @@ data:
             server_port: 80
             script_path: /
         extensions:
-            - snapdragon/forumapi
+            - hugmesh/forumapi
   # The initContainer bootstrap: render the install YAML with the OWNER creds, run the
   # phpBB headless install (DDL-ONCE, guarded by a table-existence probe so it is safe on
   # every pod restart), then set the registration lockdown. The MAIN container's IMAGE
@@ -152,7 +152,7 @@ data:
       echo "[phpbb-bootstrap] DB empty ($already) — rendering install YAML + headless install as OWNER"
       # Render ${PLACEHOLDER}s from env (PHP is always present; no envsubst dependency).
       ADMIN_NAME="${ADMIN_NAME:-sysadmin}" ADMIN_EMAIL="${ADMIN_EMAIL:-admin@localhost}" \
-      BOARD_NAME="${BOARD_NAME:-Snapdragon Forum}" \
+      BOARD_NAME="${BOARD_NAME:-HugMesh Forum}" \
       php -r '
           $t=file_get_contents("/config/install-config.yml");
           $t=preg_replace_callback("/\\$\\{([A-Z0-9_]+)\\}/",function($m){return getenv($m[1]);},$t);
@@ -173,8 +173,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: phpbb
-  namespace: snapdragon-forum
-  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-forum
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }
@@ -208,7 +208,7 @@ spec:
         # does NOT share (only the `store` PVC is shared) — the main container's image
         # entrypoint therefore regenerates config.php from env on every boot.
         - name: bootstrap
-          # ⚠️ Custom image = official phpBB + the snapdragon/forumapi extension baked
+          # ⚠️ Custom image = official phpBB + the hugmesh/forumapi extension baked
           # in (immutable, version-locked). Placeholder pinned to the in-cluster
           # registry; replace newTag when the extension image is built (kustomization).
           image: snapdragon-systems/phpbb:dev
@@ -227,8 +227,8 @@ spec:
               valueFrom: { secretKeyRef: { name: phpbb-secrets, key: ADMIN_PASSWORD } }
             # Non-secret first-install identity (the board name + admin localpart/email).
             - { name: ADMIN_NAME,  value: "sysadmin" }
-            - { name: ADMIN_EMAIL, value: "admin@snapdragon.systems" }
-            - { name: BOARD_NAME,  value: "Snapdragon Forum" }
+            - { name: ADMIN_EMAIL, value: "admin@hugmesh.systems" }
+            - { name: BOARD_NAME,  value: "HugMesh Forum" }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
@@ -247,22 +247,22 @@ spec:
             # from these on every boot (the main FS never sees the initContainer's
             # config.php). Non-secret values mirror the phpbb.env ConfigMap.
             - { name: PHPBB_DB_DRIVER,   value: "phpbb\\db\\driver\\postgres" }
-            - { name: PHPBB_DB_HOST,     value: "phpbb-db.snapdragon-forum.svc.cluster.local" }
+            - { name: PHPBB_DB_HOST,     value: "phpbb-db.hugmesh-forum.svc.cluster.local" }
             - { name: PHPBB_DB_PORT,     value: "5432" }
             - { name: PHPBB_DB_NAME,     value: "phpbb" }
             - { name: PHPBB_DB_USER,     value: "phpbb_app" }
             - { name: PHPBB_TABLE_PREFIX, value: "phpbb_" }
-            - { name: PHPBB_EXTENSION,   value: "snapdragon/forumapi" }
+            - { name: PHPBB_EXTENSION,   value: "hugmesh/forumapi" }
             # PHPBB_INSTALL_CONFIG intentionally UNSET in the main container — DDL is the
             # initContainer's job; the entrypoint only regenerates config + enables the ext.
             # RUNTIME DB login password = the least-privilege app role phpbb_app.
             - name: PHPBB_APP_PASSWORD
               valueFrom: { secretKeyRef: { name: phpbb-db-app-auth, key: password } }
-            # The extension's JWT validation config — the extension reads SNAPDRAGON_*
+            # The extension's JWT validation config — the extension reads HUGMESH_*
             # (config_provider.php), NOT CASDOOR_ISSUER_URI. jwks_uri MUST be https://
             # (the provider fails closed otherwise). Per-brand Casdoor -> distinct issuer.
-            - { name: SNAPDRAGON_JWKS_URI,   value: "https://id.snapdragon.systems/.well-known/jwks" }
-            - { name: SNAPDRAGON_JWT_ISSUER, value: "https://id.snapdragon.systems" }
+            - { name: HUGMESH_JWKS_URI,   value: "https://id.hugmesh.systems/.well-known/jwks" }
+            - { name: HUGMESH_JWT_ISSUER, value: "https://id.hugmesh.systems" }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
@@ -270,11 +270,11 @@ spec:
           # is locked at the Apache layer). Proves the forum-api surface answers; the
           # board/ACP/login are intentionally 403.
           readinessProbe:
-            httpGet: { path: /api/v1/snapdragon/health, port: http }
+            httpGet: { path: /api/v1/hugmesh/health, port: http }
             initialDelaySeconds: 30
             periodSeconds: 15
           livenessProbe:
-            httpGet: { path: /api/v1/snapdragon/health, port: http }
+            httpGet: { path: /api/v1/hugmesh/health, port: http }
             initialDelaySeconds: 60
             periodSeconds: 20
           resources:
@@ -294,21 +294,21 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: phpbb-data
-  namespace: snapdragon-forum
+  namespace: hugmesh-forum
   labels: { app.kubernetes.io/name: phpbb }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 10Gi } }
 ---
 # ClusterIP, internal-only. Reached ONLY by forum-bff-api / admin-bff-api / the
 # sync Job (enforced by network-policy.yaml). NEVER routed by a gateway/ingress.
-# DNS: phpbb.snapdragon-forum.svc.cluster.local
+# DNS: phpbb.hugmesh-forum.svc.cluster.local
 apiVersion: v1
 kind: Service
 metadata:
   name: phpbb
-  namespace: snapdragon-forum
+  namespace: hugmesh-forum
   labels: { app.kubernetes.io/name: phpbb }
 spec:
   type: ClusterIP

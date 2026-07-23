@@ -106,7 +106,7 @@ allow_reason() { # platform flag -> print reason, rc 0 if allowlisted
 gui_vocab() {
     (cd studio && "${PYTHON}" - <<'PYEOF'
 import sys
-from snapdragon_studio.core.config import (
+from hugmesh_studio.core.config import (
     BUILDER_SCRIPTS, PLATFORM_FIELD_SUPPORT, ImageConfig, Domain)
 
 BASELINES = {

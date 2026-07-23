@@ -1,12 +1,12 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: snapdragon-games
+namespace: hugmesh-games
 # casdoor-games — the SEPARATE, INDEPENDENT GAMES-realm Casdoor (org "threewizards"),
-# mirroring the canonical snapdragon.games Casdoor. Same instance shape as the systems
+# mirroring the canonical hugmesh.games Casdoor. Same instance shape as the systems
 # manifests/casdoor/ (pg / app-conf / deployment / service / init-data / init-job) but
 # with the games role catalog and a GitHub OAuth provider. The cross-realm
-# ROLE_GAMES_ADMIN(systems) -> admin(games) mirror is the scheduled snapdragon-actions
-# job (manifests/snapdragon-apis), NOT part of this kustomization.
+# ROLE_GAMES_ADMIN(systems) -> admin(games) mirror is the scheduled hugmesh-actions
+# job (manifests/hugmesh-apis), NOT part of this kustomization.
 resources:
   - pg.yaml                    # external Postgres backing casdoor-games (db threewizards)
   - app-conf-configmap.yaml    # Casdoor app.conf pointing at casdoor-games-pg
@@ -15,6 +15,6 @@ resources:
   - init-data-configmap.yaml   # declarative threewizards org / role catalog / app shell
   - init-job.yaml              # threewizards-app client-secret + GitHub provider seed
 # The "casdoor-games-github" Secret (clientId / clientSecret) is materialized by
-# External Secrets Operator from Vault (ClusterSecretStore "snapdragon-vault", remote
+# External Secrets Operator from Vault (ClusterSecretStore "hugmesh-vault", remote
 # path secret/<brand>/casdoor-games) — see manifests/external-secrets. The casdoor-games
 # Deployment keeps its existing secretKeyRef usage unchanged.

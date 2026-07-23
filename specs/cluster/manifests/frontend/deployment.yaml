@@ -1,13 +1,13 @@
-# snapdragon.systems Angular host — the gateway-forwarded front page.
-# Built from github.com/Snapdragon-Systems/snapdragon.systems (Dockerfile +
+# hugmesh.systems Angular host — the gateway-forwarded front page.
+# Built from github.com/Snapdragon-Systems/hugmesh.systems (Dockerfile +
 # nginx.conf in that repo). Shows Matrix/Mastodon links to logged-in users;
 # login/registration is delegated to Casdoor (Google + admin accounts).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: snapdragon-systems-web
-  namespace: snapdragon-frontend
-  labels: { app: snapdragon-systems-web, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-frontend
+  labels: { app: snapdragon-systems-web, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   selector: { matchLabels: { app: snapdragon-systems-web } }
@@ -18,7 +18,7 @@ spec:
       # POD-level hardening (replicates the media-poisoner exemplar pattern):
       # CIS K8s 5.2.6 (runAsNonRoot), 5.7.2 (seccompProfile RuntimeDefault),
       # NIST 800-53 AC-6 (least privilege) / SC-39 (process isolation),
-      # NIST 800-190 §4.5.3 (run as non-root). The first-party snapdragon.systems
+      # NIST 800-190 §4.5.3 (run as non-root). The first-party hugmesh.systems
       # nginx image is built to serve on an unprivileged port as UID 101 (the
       # nginx-unprivileged convention), so dropping ALL caps + non-root is safe.
       securityContext:
@@ -29,7 +29,7 @@ spec:
           level: "s0:c40"
       containers:
         - name: web
-          image: snapdragon-systems/snapdragon.systems:dev
+          image: snapdragon-systems/hugmesh.systems:dev
           ports: [{ name: http, containerPort: 8080 }]  # nginx-unprivileged listens on 8080 (non-root can't bind 80); probe + Service targetPort follow the named 'http' port
           # CONTAINER-level hardening (audit: pod-only seLinuxOptions had NO
           # container securityContext). CIS K8s 5.2.5 (allowPrivilegeEscalation:
@@ -45,9 +45,9 @@ spec:
           env:
             # The host reads these at runtime to render the social links and
             # drive the Casdoor login button (no external login UI of its own).
-            - { name: CASDOOR_ISSUER, value: "https://id.snapdragon.systems" }
-            - { name: MATRIX_URL,   value: "https://matrix.snapdragon.systems" }
-            - { name: MASTODON_URL, value: "https://mastodon.snapdragon.systems" }
+            - { name: CASDOOR_ISSUER, value: "https://id.hugmesh.systems" }
+            - { name: MATRIX_URL,   value: "https://matrix.hugmesh.systems" }
+            - { name: MASTODON_URL, value: "https://mastodon.hugmesh.systems" }
             - { name: SOCIAL_UI_BASE, value: "/social" }
           readinessProbe: { httpGet: { path: /, port: http }, initialDelaySeconds: 5 }
           resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { cpu: 500m, memory: 256Mi } }
@@ -70,7 +70,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: snapdragon-systems-web
-  namespace: snapdragon-frontend
+  namespace: hugmesh-frontend
 spec:
   selector: { app: snapdragon-systems-web }
   ports: [{ name: http, port: 80, targetPort: http }]

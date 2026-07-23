@@ -4,7 +4,7 @@ kind: Kustomization
 # ConfigMaps + StatefulSet + Service). Raft integrated storage on a LUKS-backed
 # PVC, a TLS listener, and a sidecar that auto-unseals from the USB-KEYS-seeded
 # `vault-unseal` Secret on restart. Backs the ClusterSecretStore
-# "snapdragon-vault" consumed by External Secrets Operator. See deployment.yaml
+# "hugmesh-vault" consumed by External Secrets Operator. See deployment.yaml
 # for the one-time `vault operator init` + multi-replica-HA follow-up notes.
 resources:
   - deployment.yaml

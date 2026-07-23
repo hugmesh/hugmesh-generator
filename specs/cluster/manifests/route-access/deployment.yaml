@@ -1,11 +1,11 @@
 # route-access-db — Postgres source of truth for the gateway_route_access table
-# (the role->URL external-access rules). Lives in snapdragon-pki next to Casdoor
+# (the role->URL external-access rules). Lives in hugmesh-pki next to Casdoor
 # (the identity tier owns the access policy). ClusterIP only; the only writers
 # are the admin-bff (CRUD), and the only readers are the three gateways
 # (R2DBC at ROUTE_ACCESS_R2DBC_URL), which then read-cache the rows in Cassandra.
 #
 # Credentials: ALL passwords come from the ESO Secret route-access-db-roles (Vault
-# secret/snapdragon/route-access-db; in test the offline bundle materializes the
+# secret/hugmesh/route-access-db; in test the offline bundle materializes the
 # SAME Secret — no committed literal). The OWNER role is only used for DDL; every
 # runtime consumer logs in as its OWN least-privilege, non-owner role (see below).
 #
@@ -28,8 +28,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: route-access-db
-  namespace: snapdragon-pki
-  labels: { app: route-access-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: route-access-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over a RWO PVC

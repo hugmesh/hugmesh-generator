@@ -10,7 +10,7 @@
 # NOT re-implement that machinery; it parameterizes it per tenant/mesh.
 #
 # WHAT IT RECONCILES (idempotent, GET-then-skip):
-#   * a per-tenant Harbor PROJECT  snapdragon-<brand>  (public:false);
+#   * a per-tenant Harbor PROJECT  hugmesh-<brand>  (public:false);
 #   * a cross-mesh PULL robot       robot$<brand>-mesh-pull   (pull-only, project-
 #     scoped) whose secret is written ONCE into Vault (Harbor reveals it once);
 #   * a PUSH robot                  robot$<brand>-mesh-push   (push-only) the tenant
@@ -20,7 +20,7 @@
 #
 # >>> DEFERRED-TO-CLUSTER (never faked build-host-side): the LIVE run needs a booted
 # >>> Harbor (chart pin in apps/03a-harbor.yaml) + Vault + the cluster CA copied into
-# >>> snapdragon-pki (the SAME cluster-ca gap the Phase-5 provision job documents).
+# >>> hugmesh-pki (the SAME cluster-ca gap the Phase-5 provision job documents).
 # >>> Cross-mesh IMAGE TRUST additionally needs Trivy flipped on (it ships
 # >>> enabled:false in apps/03a-harbor.yaml) so a foreign pull is vuln-gated cluster-
 # >>> side — the honest complement to the build-host advisory floor the INBOUND gate
@@ -31,10 +31,10 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: harbor-mesh-action-script
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels:
     app: harbor
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     app.kubernetes.io/name: mesh-harbor
 data:
   # BRAND/mesh come from the ServiceCatalogEntry / domain-creation event; injected as
@@ -48,7 +48,7 @@ data:
     # Fail-closed: no brand => nothing to reconcile (never create a wildcard project).
     if not BRAND:
         sys.stderr.write("[mesh-harbor] no BRAND — refusing (fail-closed)\n"); sys.exit(0)
-    PROJECT = "snapdragon-%s" % BRAND
+    PROJECT = "hugmesh-%s" % BRAND
     # (1) ensure project (GET-then-POST; 409=exists=OK) — public:false.
     # (2) ensure PULL robot robot$%s-mesh-pull  (project-scoped, pull only) for the
     #     FOREIGN mesh; write its once-revealed secret into Vault KV.
@@ -62,10 +62,10 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: harbor-mesh-action
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels:
     app: harbor
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     app.kubernetes.io/name: mesh-harbor
   annotations:
     # PostSync so it runs after Harbor is reconciled by the Phase-5 provision job.
@@ -88,7 +88,7 @@ spec:
           env:
             - { name: BRAND,        value: "" }        # injected per-tenant by the appset
             - { name: FOREIGN_MESH, value: "" }        # injected per-tenant by the appset
-            - { name: HARBOR_URL,   value: "http://harbor-core.snapdragon-pki.svc.cluster.local" }
+            - { name: HARBOR_URL,   value: "http://harbor-core.hugmesh-pki.svc.cluster.local" }
           volumeMounts:
             - { name: script, mountPath: /script }
       volumes:

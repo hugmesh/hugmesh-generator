@@ -16,11 +16,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: workload-console-mutate
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: workload-console
     app.kubernetes.io/component: rbac-mutate
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 rules:
   - apiGroups: [""]
     resources: ["pods"]

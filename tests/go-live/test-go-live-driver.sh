@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # test-go-live-driver.sh — offline logic test for the go-live wizard foundation:
-# the shared driver (specs/usr/sbin/snapdragon-go-live) + the provider registry
-# (specs/usr/lib/snapdragon/go-live-providers.sh), exercised end-to-end by the
+# the shared driver (specs/usr/sbin/hugmesh-go-live) + the provider registry
+# (specs/usr/lib/hugmesh/go-live-providers.sh), exercised end-to-end by the
 # one fully-implemented provider (byo-domain).
 #
 # Runs ANYWHERE with just bash — NO root, NO network, NO live /etc. It points the
-# driver's GL_ETC_SNAPDRAGON seam at a throwaway dir so it can never touch the
-# host's /etc/snapdragon, mirroring how the reconcile tests use DR_*/*_ENV seams.
+# driver's GL_ETC_HUGMESH seam at a throwaway dir so it can never touch the
+# host's /etc/hugmesh, mirroring how the reconcile tests use DR_*/*_ENV seams.
 # named-checkzone is used ONLY if present (else a grep-based zone sanity check).
 #
 # Asserts the wizard's contract:
@@ -24,8 +24,8 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DRIVER="${REPO}/specs/usr/sbin/snapdragon-go-live"
-LIB="${REPO}/specs/usr/lib/snapdragon/go-live-providers.sh"
+DRIVER="${REPO}/specs/usr/sbin/hugmesh-go-live"
+LIB="${REPO}/specs/usr/lib/hugmesh/go-live-providers.sh"
 
 [ -r "${DRIVER}" ] || { echo "  FAIL driver missing: ${DRIVER}"; exit 1; }
 [ -r "${LIB}" ]    || { echo "  FAIL registry lib missing: ${LIB}"; exit 1; }
@@ -45,7 +45,7 @@ MARKER="${ETC}/go-live"
 
 # Always invoke the driver with the seams pointing at the throwaway tree, stdin
 # from /dev/null so the "non-TTY" fail-safe path is exercised by default.
-gl() { GL_ETC_SNAPDRAGON="${ETC}" GL_PROVIDERS_LIB="${LIB}" bash "${DRIVER}" "$@" </dev/null 2>&1; }
+gl() { GL_ETC_HUGMESH="${ETC}" GL_PROVIDERS_LIB="${LIB}" bash "${DRIVER}" "$@" </dev/null 2>&1; }
 
 echo "== go-live wizard foundation: offline driver + byo-domain emit test =="
 
@@ -128,7 +128,7 @@ grep -q 'cloudflared/tunnel-token' "${CFOUT}/token-drop.txt" 2>/dev/null && ok "
 DDOUT="${WORK}/ddout"; mkdir -p "${DDOUT}"
 gl plan --provider duckdns --ddns-subdomain myhome --out-dir "${DDOUT}" >/dev/null
 [ -x "${DDOUT}/ddns-update.sh" ] && ok "duckdns emits an executable ddns-update.sh" || bad "duckdns updater missing/not executable"
-[ -s "${DDOUT}/ddns.cron" ] && grep -q '\*/5 .* root /usr/local/sbin/snapdragon-ddns-update' "${DDOUT}/ddns.cron" && ok "duckdns emits the root cron drop-in" || bad "duckdns cron drop-in missing/wrong"
+[ -s "${DDOUT}/ddns.cron" ] && grep -q '\*/5 .* root /usr/local/sbin/hugmesh-ddns-update' "${DDOUT}/ddns.cron" && ok "duckdns emits the root cron drop-in" || bad "duckdns cron drop-in missing/wrong"
 bash -n "${DDOUT}/ddns-update.sh" && ok "emitted ddns-update.sh parses (bash -n)" || bad "emitted ddns-update.sh has a syntax error"
 grep -q "SUBDOMAIN=myhome" "${DDOUT}/ddns-update.sh" && ok "duckdns updater carries the validated subdomain" || bad "duckdns updater missing subdomain"
 # The token is read from a keys-layout FILE at runtime, never embedded / in argv.

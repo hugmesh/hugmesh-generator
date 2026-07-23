@@ -35,11 +35,11 @@ from __future__ import annotations
 import os
 import re
 
-from snapdragon_studio.core.build_driver import (
+from hugmesh_studio.core.build_driver import (
     DOCKER_ASSET_FIELDS, _PATH_ADVISORY, _PATH_MUST_EXIST, BuildDriver,
 )
-from snapdragon_studio.core.config import PLATFORM_FIELD_SUPPORT, ImageConfig
-from snapdragon_studio.core.platform_info import HostInfo
+from hugmesh_studio.core.config import PLATFORM_FIELD_SUPPORT, ImageConfig
+from hugmesh_studio.core.platform_info import HostInfo
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -56,7 +56,7 @@ _HOST_PATH_FIELDS = {
 
 def _driver(backend: str = "docker") -> BuildDriver:
     host = HostInfo(os="linux", is_gentoo=True, has_docker=True, has_bash=True,
-                    has_kvm=False, is_root=True, builder_image="snapdragon-builder")
+                    has_kvm=False, is_root=True, builder_image="hugmesh-builder")
     return BuildDriver(GENERATOR_DIR, host)
 
 

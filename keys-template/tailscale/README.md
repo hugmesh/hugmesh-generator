@@ -7,8 +7,8 @@ want the node to join the headscale mesh automatically at first boot (set
 On the PKI node the key is generated after headscale starts:
 
 ```bash
-headscale users create snapdragon
-headscale preauthkeys create --user snapdragon --reusable --expiration 24h
+headscale users create hugmesh
+headscale preauthkeys create --user hugmesh --reusable --expiration 24h
 ```
 
 The PKI node's first-boot provisioning writes generated preauth keys to
@@ -23,15 +23,15 @@ entirely by `provision.json` `tailscale.up_args` (appended verbatim to
 `tailscale up`). Each node sets:
 
 ```text
---advertise-tags=tag:snapdragon,tag:<role> \
+--advertise-tags=tag:hugmesh,tag:<role> \
 --advertise-routes=10.244.0.0/16,10.96.0.0/12 \
 --accept-routes \
 --snat-subnet-routes=false
 ```
 
-- `--advertise-tags=tag:snapdragon,tag:<role>` — fleet membership tag plus the
+- `--advertise-tags=tag:hugmesh,tag:<role>` — fleet membership tag plus the
   node's role tag (`tag:pki` / `tag:be` / `tag:fe` / `tag:host`). Allowed by
-  `headscale/policy.hujson` `tagOwners` (owner `snapdragon`).
+  `headscale/policy.hujson` `tagOwners` (owner `hugmesh`).
 - `--advertise-routes=10.244.0.0/16,10.96.0.0/12` — the cluster pod + service
   CIDRs (keep in sync with `kubernetes/kubeadm-config.yaml`). Auto-approved by
   the policy's `autoApprovers.routes`.
@@ -39,6 +39,6 @@ entirely by `provision.json` `tailscale.up_args` (appended verbatim to
 - `--snat-subnet-routes=false` — preserve real pod/service source IPs across the
   mesh.
 
-The pki node's policy (`policy.hujson`) is what makes `tag:snapdragon ↔
-tag:snapdragon` and the two CIDRs reachable; without a loaded policy headscale
+The pki node's policy (`policy.hujson`) is what makes `tag:hugmesh ↔
+tag:hugmesh` and the two CIDRs reachable; without a loaded policy headscale
 falls back to allow-all with no tags or route approval.

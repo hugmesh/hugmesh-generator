@@ -3,11 +3,11 @@
 Runs tests/stack/tor-onion-e2e.sh: it mints a real v3 .onion for a local HTTP
 backend and fetches it back over the LIVE Tor network via tor's SOCKS proxy — the
 exact path Tor Browser uses. This is the MECHANISM proof behind all three tor
-surfaces: the local-mesh `snapdragon-tor` service, the node `tor` optional service,
+surfaces: the local-mesh `hugmesh-tor` service, the node `tor` optional service,
 and the `tor-onion` go-live provider (docs/TOR-HIDDEN-SERVICE.md).
 
 SKIPPED by default: it needs the host tor daemon AND live Tor network access, and
-takes ~60s. Enable with SNAPDRAGON_TOR_E2E=1 (and `tor` installed). Proven live on
+takes ~60s. Enable with HUGMESH_TOR_E2E=1 (and `tor` installed). Proven live on
 2026-07-18: onion minted in ~1s, tor bootstrapped in ~46s, marker fetched over Tor
 in ~60s (tor 0.4.9.11).
 """
@@ -24,8 +24,8 @@ HARNESS = os.path.join(GENERATOR_DIR, "tests", "stack", "tor-onion-e2e.sh")
 _tor = shutil.which("tor") or ("/usr/bin/tor" if os.path.exists("/usr/bin/tor") else None)
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("SNAPDRAGON_TOR_E2E") != "1" or _tor is None,
-    reason="live Tor onion e2e is opt-in — set SNAPDRAGON_TOR_E2E=1 with tor installed")
+    os.environ.get("HUGMESH_TOR_E2E") != "1" or _tor is None,
+    reason="live Tor onion e2e is opt-in — set HUGMESH_TOR_E2E=1 with tor installed")
 
 
 def test_the_harness_exists_and_is_executable():

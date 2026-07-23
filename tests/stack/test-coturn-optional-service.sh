@@ -80,7 +80,7 @@ fi
 echo "-- 1b) ESO shared-secret is a Vault reference (no literal) --"
 [ -f "${ESO}" ] && ok "coturn-externalsecrets.yaml exists" || bad "coturn ESO file missing"
 grep -q 'kind: ExternalSecret' "${ESO}"                       && ok "ESO: ExternalSecret CRD" || bad "ESO: not an ExternalSecret"
-grep -q 'key: snapdragon/coturn-shared-secret' "${ESO}"       && ok "ESO: references Vault path snapdragon/coturn-shared-secret" || bad "ESO: Vault path ref missing"
+grep -q 'key: hugmesh/coturn-shared-secret' "${ESO}"       && ok "ESO: references Vault path hugmesh/coturn-shared-secret" || bad "ESO: Vault path ref missing"
 # A literal would be a long inline base64/hex value on a secret-ish key; the
 # legitimate lines are short refs (secretKey: secret / property: secret / key: <path>).
 if grep -nE '(static-auth-secret|secretKey|property)[[:space:]]*[:=][[:space:]]*"?[A-Za-z0-9+/]{20,}' "${ESO}" | grep -qv '#'; then
@@ -99,7 +99,7 @@ svc = {s["slug"]: s for s in d["spec"]["services"]}
 c = svc["coturn"]
 assert c["default"] in (False, "off"), f"default={c['default']!r}"
 assert c.get("apps") in ([], None), f"apps={c.get('apps')!r} (must be [] — runtime-only, no baked Application)"
-assert c["namespace"] == "snapdragon-backend", f"ns={c['namespace']!r} (must share tuwunel's ns)"
+assert c["namespace"] == "hugmesh-backend", f"ns={c['namespace']!r} (must share tuwunel's ns)"
 assert c["esoFile"].endswith("coturn-externalsecrets.yaml"), c["esoFile"]
 PY
 else

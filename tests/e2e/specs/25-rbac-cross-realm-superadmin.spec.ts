@@ -12,7 +12,7 @@ import { tags } from './report-tags';
 // Two NEW guarantees on top of the spec-12 contract oracle:
 //
 //   (i) ROLE_SUPERADMIN tier. The infra App-Store/console is served by its OWN
-//       tailnet-only gateway (snapdragon-superadmin-gateway,
+//       tailnet-only gateway (hugmesh-superadmin-gateway,
 //       specs/cluster/apps/22-gateway-superadmin.yaml). Every route under that
 //       gateway is ROLE_SUPERADMIN in gateway_route_access
 //       (specs/cluster/manifests/route-access/initdb/20-schema.sql). We assert
@@ -21,16 +21,16 @@ import { tags } from './report-tags';
 //       is a DISTINCT tier, NOT a superset admin inherits, so there is no
 //       down-cascade.
 //
-//  (ii) Cross-realm issuer isolation. The SYSTEMS Casdoor (org "snapdragon",
-//       issuer id.snapdragon.systems) and the GAMES Casdoor (org "threewizards",
-//       issuer id.snapdragon.games) are INDEPENDENT. A token minted by one issuer
+//  (ii) Cross-realm issuer isolation. The SYSTEMS Casdoor (org "hugmesh",
+//       issuer id.hugmesh.systems) and the GAMES Casdoor (org "threewizards",
+//       issuer id.hugmesh.games) are INDEPENDENT. A token minted by one issuer
 //       carries that realm's roles ONLY; the OTHER realm's gateway must treat its
 //       claims as absent. We assert a games-realm identity carries NO systems
 //       ROLE_* into a systems gateway decision (→ DENY on every privileged route),
 //       and that a systems identity carries no games role into the games realm.
 //
 // We do NOT reimplement the systems→games sync PROPAGATION assertion — that lives
-// in snapdragon-actions/e2e (sync-steps.ts) and owns it. Here we only add the
+// in hugmesh-actions/e2e (sync-steps.ts) and owns it. Here we only add the
 // issuer-isolation invariant plus a CATALOGUE-CONSISTENCY check that the games
 // e2e-gamesadmin `syncedFromSystems` matches the systems ROLE_GAMES_ADMIN
 // derivation (so the two catalogues cannot silently disagree about the seam).
@@ -41,7 +41,7 @@ import { tags } from './report-tags';
 
 const LIVE = process.env.LIVE_GATEWAY === '1';
 const CASDOOR_URL = process.env.SYSTEMS_CASDOOR_URL || '';
-const CASDOOR_ORG = process.env.SYSTEMS_CASDOOR_ORG || 'snapdragon';
+const CASDOOR_ORG = process.env.SYSTEMS_CASDOOR_ORG || 'hugmesh';
 const CASDOOR_CLIENT_ID = process.env.SYSTEMS_CASDOOR_CLIENT_ID || '';
 const CASDOOR_CLIENT_SECRET = process.env.SYSTEMS_CASDOOR_CLIENT_SECRET || '';
 const SUPERADMIN_GW_URL =
@@ -103,7 +103,7 @@ test.describe('RBAC: ROLE_SUPERADMIN tier (superadmin-gateway contract)', () => 
     + tags({ role: 'ROLE_SUPERADMIN', layer: 'gateway' }), async () => {
     const path = '/api/federation/manifest';
     // ROLE_USER reaches it on the public be-gateway floor …
-    expect(gatewayDecision('snapdragon-be-gateway', path, ['ROLE_USER'])).toBe('ALLOW');
+    expect(gatewayDecision('hugmesh-be-gateway', path, ['ROLE_USER'])).toBe('ALLOW');
     // … but is DENIED the SAME path on the tailnet superadmin-gateway.
     expect(gatewayDecision(SUPERADMIN_GATEWAY as Gateway, path, ['ROLE_USER'])).toBe('DENY');
     expect(gatewayDecision(SUPERADMIN_GATEWAY as Gateway, path, ['ROLE_SUPERADMIN'])).toBe('ALLOW');
@@ -115,8 +115,8 @@ test.describe('RBAC: cross-realm issuer isolation (systems ⟂ games)', () => {
   test('the two realms have DISTINCT issuers '
     + tags({ layer: 'casdoor' }), async () => {
     expect(SYSTEMS_ISSUER).not.toBe(GAMES_ISSUER);
-    expect(SYSTEMS_ISSUER).toBe('id.snapdragon.systems');
-    expect(GAMES_ISSUER).toBe('id.snapdragon.games');
+    expect(SYSTEMS_ISSUER).toBe('id.hugmesh.systems');
+    expect(GAMES_ISSUER).toBe('id.hugmesh.games');
   });
 
   test('INVARIANT: a games-realm identity carries NO systems ROLE_* into systems '
@@ -136,10 +136,10 @@ test.describe('RBAC: cross-realm issuer isolation (systems ⟂ games)', () => {
       const crossRealmRoles = g.roles; // what the systems gateway would "see" if it (wrongly) trusted the games token
       // Privileged systems routes across all systems gateways → DENY for a games identity.
       const probes: { gw: Gateway; path: string }[] = [
-        { gw: 'snapdragon-fe-gateway', path: '/admin/usage' },
-        { gw: 'snapdragon-be-gateway', path: '/api/admin/route-access' },
-        { gw: 'snapdragon-fe-gateway', path: '/games/admin/sessions' },
-        { gw: 'snapdragon-be-gateway', path: '/games/api/admin/role-grants' },
+        { gw: 'hugmesh-fe-gateway', path: '/admin/usage' },
+        { gw: 'hugmesh-be-gateway', path: '/api/admin/route-access' },
+        { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions' },
+        { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants' },
         { gw: SUPERADMIN_GATEWAY as Gateway, path: '/bff/superadmin/service-store/catalog' },
       ];
       for (const p of probes) {
@@ -153,7 +153,7 @@ test.describe('RBAC: cross-realm issuer isolation (systems ⟂ games)', () => {
     + 'realm — even the synced games admin is materialized natively, not by token '
     + 'bleed ' + tags({ layer: 'casdoor' }), async () => {
     // The ONLY systems→games link is the ROLE_GAMES_ADMIN→admin SYNC (a row
-    // materialized in the games Casdoor by snapdragon-actions), NOT a claim the
+    // materialized in the games Casdoor by hugmesh-actions), NOT a claim the
     // systems token carries into the games gateway. So no systems ROLE_* is a
     // native games role, and the games realm grants 'admin' via the synced ROW.
     for (const u of SYSTEMS_SEED_USERS) {
@@ -173,7 +173,7 @@ test.describe('RBAC: cross-realm issuer isolation (systems ⟂ games)', () => {
     // ROLE_GAMES_ADMIN, and the systems user it mirrors must actually DERIVE
     // ROLE_GAMES_ADMIN ( = ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD) ). This is the
     // catalogue half of the seam; the PROPAGATION proof is owned by
-    // snapdragon-actions/e2e (sync-steps.ts) and is NOT duplicated here.
+    // hugmesh-actions/e2e (sync-steps.ts) and is NOT duplicated here.
     const synced = GAMES_SEED_USERS.find((u) => u.syncedFromSystems);
     expect(synced, 'a games user synced from systems must exist').toBeTruthy();
     expect(synced!.syncedFromSystems).toBe('ROLE_GAMES_ADMIN');
@@ -214,7 +214,7 @@ test.describe('RBAC: LIVE superadmin-gateway enforcement', () => {
   test.skip(!LIVE || !CASDOOR_URL,
     'pending: needs LIVE_GATEWAY=1 + a real SYSTEMS_CASDOOR_URL seeded with the '
     + 'superadmin role (seed-accounts.sh --roles) + the tailnet superadmin-gateway '
-    + 'up (snapdragon-superadmin-gateway is README/manifest-only offline).');
+    + 'up (hugmesh-superadmin-gateway is README/manifest-only offline).');
 
   for (const route of SUPERADMIN_ALLOW_ROUTES) {
     for (const username of ['e2e-superadmin', 'e2e-admin']) {

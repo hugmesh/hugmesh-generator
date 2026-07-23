@@ -8,17 +8,17 @@ import subprocess
 
 import pytest
 
-from snapdragon_studio.core.build_driver import BuildDriver
-from snapdragon_studio.core.config import ImageConfig
-from snapdragon_studio.core.platform_info import HostInfo
+from hugmesh_studio.core.build_driver import BuildDriver
+from hugmesh_studio.core.config import ImageConfig
+from hugmesh_studio.core.platform_info import HostInfo
 
-_RUN = "snapdragon_studio.core.build_driver.subprocess.run"
-_POPEN = "snapdragon_studio.core.build_driver.subprocess.Popen"
+_RUN = "hugmesh_studio.core.build_driver.subprocess.run"
+_POPEN = "hugmesh_studio.core.build_driver.subprocess.Popen"
 
 
 def host(is_root=True, has_docker=True):
     return HostInfo(os="linux", is_gentoo=True, has_docker=has_docker, has_bash=True,
-                    has_kvm=False, is_root=is_root, builder_image="snapdragon-builder")
+                    has_kvm=False, is_root=is_root, builder_image="hugmesh-builder")
 
 
 def _cfg(tmp_path, platform="x86", role="omnibus"):
@@ -66,7 +66,7 @@ def test_docker_command_carries_init_and_stable_name(tmp_path):
     i = cmd.index("--name")
     assert cmd[i - 1] == "--init"
     assert cmd[i + 1] == d._container_name
-    assert i < cmd.index("snapdragon-builder")                    # a docker-run arg, not inner argv
+    assert i < cmd.index("hugmesh-builder")                    # a docker-run arg, not inner argv
     assert "--name" not in cmd[-1]                                # never leaks into the builder argv
 
 

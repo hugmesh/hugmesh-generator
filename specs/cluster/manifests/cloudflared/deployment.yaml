@@ -15,7 +15,7 @@ metadata:
   namespace: devops
   labels:
     app.kubernetes.io/name: cloudflared
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   replicas: 2                       # HA: two tunnel connectors
   selector:

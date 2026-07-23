@@ -27,18 +27,18 @@
 # by an unprivileged caller of the builder script.
 #
 # WHY /.dockerenv IS LOAD-BEARING (measured, not assumed). Probed inside the
-# operator's existing snapdragon-builder:latest — an image that PREDATES this
+# operator's existing hugmesh-builder:latest — an image that PREDATES this
 # library, which must keep building the fleet with no rebuild:
 #     /.dockerenv                       -> PRESENT
 #     /run/.containerenv                -> absent
-#     /etc/snapdragon-builder-container -> absent (image predates this PR)
-#     $container / $SNAPDRAGON_BUILDER  -> unset
+#     /etc/hugmesh-builder-container -> absent (image predates this PR)
+#     $container / $HUGMESH_BUILDER  -> unset
 # /.dockerenv is the ONLY signal a stale image already carries, and the Docker
 # DAEMON creates it in every container — it is not baked into the image, so it
 # cannot go stale. That is what keeps today's fleet builds working unchanged.
 #
 # REJECTED SIGNAL — `grep -q docker /proc/1/cgroup`, the classic heuristic.
-# Mutation-proven dead: measured inside snapdragon-builder:latest,
+# Mutation-proven dead: measured inside hugmesh-builder:latest,
 # `head -1 /proc/1/cgroup` returns `0::/` (cgroup v2 unified) — no "docker"
 # substring. Relying on it would have declared the FLEET CONTAINER a host and
 # bricked every build. Do not add it back.
@@ -54,7 +54,7 @@
 # PYTHON_TARGETS` wildcard on a marker-less root with `container=docker` exported
 # and NO warning — while the deliberate hatch below grants the same power noisily.
 # Nothing is lost: the file markers cover docker/podman/buildah, and a bare
-# chroot/nspawn runner has SNAPDRAGON_ASSUME_CONTAINER=1, which warns.
+# chroot/nspawn runner has HUGMESH_ASSUME_CONTAINER=1, which warns.
 #
 # Following scripts/_dracut-cross-lib.sh's precedent, this file is meant to be
 # SOURCED, never executed:
@@ -81,7 +81,7 @@ _HOST_GUARD_LIB_SOURCED=1
 # The marker Dockerfile.build's FINAL stage bakes. Redundant with /.dockerenv
 # under Docker; it earns its keep under podman-with-a-scrubbed-/run and makes the
 # container's self-identification greppable/auditable by the sync test.
-HOSTGUARD_MARKER_FILE="/etc/snapdragon-builder-container"
+HOSTGUARD_MARKER_FILE="/etc/hugmesh-builder-container"
 HOSTGUARD_DOCKER_MARKER="/.dockerenv"
 HOSTGUARD_PODMAN_MARKER="/run/.containerenv"
 
@@ -99,7 +99,7 @@ _hg_err()  { printf '%s[host-guard] ERROR:%s %s\n' "${_HG_RED}" "${_HG_RST}" "$*
 
 # hostguard_in_container — predicate: 0 iff we can PROVE this root is disposable.
 # Whitelist of positive proofs; the fallthrough is "treat as HOST". Produces no
-# output. NEVER consults SNAPDRAGON_ASSUME_CONTAINER (see
+# output. NEVER consults HUGMESH_ASSUME_CONTAINER (see
 # hostguard_mutation_allowed) — this answers "what am I?", not "what may I do?".
 hostguard_in_container() {
     # Docker: the daemon creates this in EVERY container. The one signal the
@@ -115,7 +115,7 @@ hostguard_in_container() {
     # desktop — the exact bug this library exists to close. Docker/podman/buildah
     # are already covered by the two runtime-CREATED file markers above; a bare
     # chroot/nspawn CI runner uses the documented, WARNING escape hatch
-    # (SNAPDRAGON_ASSUME_CONTAINER=1 in hostguard_mutation_allowed) instead, which
+    # (HUGMESH_ASSUME_CONTAINER=1 in hostguard_mutation_allowed) instead, which
     # grants the same power but says so out loud. If nspawn/lxc detection is ever
     # genuinely wanted, corroborate it with a runtime-CREATED FILE (nspawn writes
     # /run/systemd/container) and route it through that warning path — never let an
@@ -144,8 +144,8 @@ hostguard_mutation_allowed() {
     if hostguard_in_container; then
         return 0
     fi
-    if [ "${SNAPDRAGON_ASSUME_CONTAINER:-}" = "1" ]; then
-        _hg_warn "SNAPDRAGON_ASSUME_CONTAINER=1 — operator override: treating this root as disposable. Host /etc/portage and installed packages MAY BE MODIFIED."
+    if [ "${HUGMESH_ASSUME_CONTAINER:-}" = "1" ]; then
+        _hg_warn "HUGMESH_ASSUME_CONTAINER=1 — operator override: treating this root as disposable. Host /etc/portage and installed packages MAY BE MODIFIED."
         return 0
     fi
     return 1
@@ -237,7 +237,7 @@ hostguard_require_host_portage() {
     if [ "${#miss_kw[@]}" -ne 0 ]; then
         _hg_err ""
         _hg_err "  MISSING ~amd64/** keywords: ${miss_kw[*]}"
-        _hg_err "  sudo mkdir -p ${kw_dir} && sudo tee ${kw_dir}/snapdragon-host-build-backends <<'EOF'"
+        _hg_err "  sudo mkdir -p ${kw_dir} && sudo tee ${kw_dir}/hugmesh-host-build-backends <<'EOF'"
         _hg_err "  dev-python/vcs-versioning **"
         _hg_err "  dev-python/setuptools-scm **"
         _hg_err "  sys-libs/libsepol ~amd64"
@@ -249,7 +249,7 @@ hostguard_require_host_portage() {
     if [ "${#miss_use[@]}" -ne 0 ]; then
         _hg_err ""
         _hg_err "  MISSING USE flags: ${miss_use[*]}"
-        _hg_err "  sudo mkdir -p ${use_dir} && sudo tee ${use_dir}/snapdragon-host-build-backends <<'EOF'"
+        _hg_err "  sudo mkdir -p ${use_dir} && sudo tee ${use_dir}/hugmesh-host-build-backends <<'EOF'"
         _hg_err "  sys-libs/libselinux python"
         _hg_err "  sys-process/audit python"
         _hg_err "  sys-libs/pam audit"
@@ -297,7 +297,7 @@ hostguard_require_host_portage() {
 #                        so a stale image can never be broken by this guard. Gating
 #                        the HARD failure on containment is deliberate and keeps the
 #                        blast radius at zero: every tool below was measured
-#                        PRESENT in snapdragon-builder:latest, so the native
+#                        PRESENT in hugmesh-builder:latest, so the native
 #                        branch is unreachable during fleet builds.
 # Exits 1              — a tool is missing on a real host and the artifact would be
 #                        LOST: name the artifact, the missing tools and the

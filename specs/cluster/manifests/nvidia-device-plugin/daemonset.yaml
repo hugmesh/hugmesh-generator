@@ -1,6 +1,6 @@
 # nvidia-device-plugin DaemonSet — registers nvidia.com/gpu with kubelet on each
 # GPU node so the scheduler can place GPU workloads. Standard upstream plugin
-# (nvcr.io/nvidia/k8s-device-plugin), constrained to Snapdragon GPU nodes.
+# (nvcr.io/nvidia/k8s-device-plugin), constrained to HugMesh GPU nodes.
 #
 # GPU-NODE-ONLY: the nodeSelector snapdragon.systems/compute=gpu (the label
 # keys-provision sets on be+gpu / omnibus / edge_ai) means this DaemonSet runs
@@ -19,7 +19,7 @@ metadata:
   name: nvidia-device-plugin-daemonset
   namespace: kube-system
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     app: nvidia-device-plugin
 spec:
   selector:

@@ -4,17 +4,17 @@ triplicated across test_wizard.py, test_pages_build.py and test_pages_identity.p
 Consolidated here (design 6) so a flow change is edited in ONE place. These drive the
 REAL wizard on Qt's offscreen platform; importing this module pulls in the Qt binding,
 so a pure-core test module (e.g. test_worklist.py) must NOT import it — it is for the
-GUI test files only, which already `pytest.importorskip("snapdragon_studio.gui.qt")`.
+GUI test files only, which already `pytest.importorskip("hugmesh_studio.gui.qt")`.
 
-The page-class arguments are resolved against ``snapdragon_studio.gui.wizard`` lazily
+The page-class arguments are resolved against ``hugmesh_studio.gui.wizard`` lazily
 (inside each function body, or passed in by the caller), so this module imports cleanly
 even before the WorklistPage/ProgressPage classes land in their own workstreams.
 """
 from __future__ import annotations
 
-from snapdragon_studio.core.config import WIZARD_PAGE_SLUGS
-from snapdragon_studio.gui import wizard as wizard_mod
-from snapdragon_studio.gui.qt import Qt
+from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS
+from hugmesh_studio.gui import wizard as wizard_mod
+from hugmesh_studio.gui.qt import Qt
 
 
 def advance_to(wiz, page_cls):

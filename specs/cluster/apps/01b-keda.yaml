@@ -2,7 +2,7 @@
 # plane. Installs the KEDA operator + metrics-apiserver into the `keda` namespace.
 #
 # Why now: the stateless BFF/UI fleet (manifests/<svc>/hpa.yaml) and the gateway
-# chart (charts/snapdragon-gateway autoscaling block) now ship plain
+# chart (charts/hugmesh-gateway autoscaling block) now ship plain
 # autoscaling/v2 CPU+memory HorizontalPodAutoscalers, modelled on the existing
 # manifests/remote-fragment/hpa.yaml. Those v2 HPAs only need metrics-server
 # (already live at apps/01-metrics-server.yaml). KEDA is installed alongside as the

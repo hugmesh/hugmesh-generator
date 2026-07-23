@@ -2,7 +2,7 @@
 """derive-theme.py — render the login-ui snap-theme.css text (or its ConfigMap) from
 brand colours/fonts, at RENDER time on a dev/CI box.
 
-The derivation is studio/snapdragon_studio/core/theme.py — imported, never copied:
+The derivation is studio/hugmesh_studio/core/theme.py — imported, never copied:
 the Studio GUI, the mesh-bootstrap CLI and this script all call the SAME
 compose_login_css(), so a palette can never differ between the in-window token
 board, the local compose stack and a rendered cluster manifest. (A second
@@ -41,10 +41,10 @@ import sys
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(_ROOT, "studio"))
 
-from snapdragon_studio.core import fonts, theme  # noqa: E402
+from hugmesh_studio.core import fonts, theme  # noqa: E402
 
 DEFAULT_CONFIGMAP_NAME = "login-theme"
-DEFAULT_NAMESPACE = "snapdragon-frontend"
+DEFAULT_NAMESPACE = "hugmesh-frontend"
 
 
 def _fail(msg: str) -> "int":
@@ -77,7 +77,7 @@ def _configmap(css: str, name: str, namespace: str) -> str:
         "metadata:\n"
         f"  name: {name}\n"
         f"  namespace: {namespace}\n"
-        "  labels: { app.kubernetes.io/part-of: snapdragon, app.kubernetes.io/component: login-theme }\n"
+        "  labels: { app.kubernetes.io/part-of: hugmesh, app.kubernetes.io/component: login-theme }\n"
         "data:\n"
         "  SNAP_THEME_CSS: |\n"
         f"{indented}\n"

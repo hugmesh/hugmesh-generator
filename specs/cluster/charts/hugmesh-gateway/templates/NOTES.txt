@@ -1,0 +1,17 @@
+{{ include "hugmesh-gateway.name" . }} deployed as SPRING_APPLICATION_NAME={{ .Values.instance.name }}.
+
+  Issuer (Casdoor): {{ .Values.casdoor.issuerUri }}
+  Cassandra:        {{ .Values.cassandra.contactPoints }} (keyspace {{ .Values.cassandra.keyspace }})
+  Service:          {{ include "hugmesh-gateway.name" . }}:{{ .Values.service.port }} ({{ .Values.service.type }})
+{{- if .Values.ingress.enabled }}
+  Internal host:    {{ .Values.ingress.host }}  (Cloudflare terminates the public name)
+{{- end }}
+
+  Routes:
+{{- range .Values.routes }}
+    {{ .path }} -> {{ .uri }}
+{{- end }}
+
+This gateway validates the internal Casdoor JWT only. /api/auth, /api/login and
+/api/registration are public (Google-federated sign-up works); everything else
+requires authentication. No external login UI is exposed by the gateway itself.

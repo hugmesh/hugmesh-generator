@@ -17,10 +17,10 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: test-runner-orchestrator
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: test-runner
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: test
 data:
   orchestrator.sh: |
@@ -31,12 +31,12 @@ data:
     # ── tunables (env-overridable via the Deployment) ───────────────────────
     POLL="${POLL_SECONDS:-15}"
     HEAVY_COOLDOWN="${HEAVY_COOLDOWN_SECONDS:-300}"   # debounce the x86-attach edge
-    NS_FE="${NS_FRONTEND:-snapdragon-frontend}"
-    NS_BE="${NS_BACKEND:-snapdragon-backend}"
-    NS_PKI="${NS_PKI:-snapdragon-pki}"
+    NS_FE="${NS_FRONTEND:-hugmesh-frontend}"
+    NS_BE="${NS_BACKEND:-hugmesh-backend}"
+    NS_PKI="${NS_PKI:-hugmesh-pki}"
     # REQUIRED workloads (ENUMERATED, not "every Deployment") whose readiness
     # gates the LEAN run. Name:namespace. Keep in step with the deployed apps.
-    REQUIRED_LEAN="${REQUIRED_LEAN:-snapdragon-systems-web:${NS_FE} snapdragon-admin-bff-api:${NS_BE} snapdragon-federation-api:${NS_BE}}"
+    REQUIRED_LEAN="${REQUIRED_LEAN:-snapdragon-systems-web:${NS_FE} hugmesh-admin-bff-api:${NS_BE} hugmesh-federation-api:${NS_BE}}"
     # ArgoCD Applications that must be Synced+Healthy before the lean run.
     REQUIRED_APPS="${REQUIRED_APPS:-frontend admin-bff-api federation-api}"
     # Seed/admin-sync Jobs that must be Complete (positive seed signal).
@@ -127,23 +127,23 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-test-runner
-  namespace: snapdragon-backend
+  name: hugmesh-test-runner
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: test-runner
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: test
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-test-runner } }
+  selector: { matchLabels: { app: hugmesh-test-runner } }
   strategy: { type: Recreate }
   template:
     metadata:
       labels:
-        app: snapdragon-test-runner
+        app: hugmesh-test-runner
         snapdragon.systems/tier: test
     spec:
-      serviceAccountName: snapdragon-test-runner
+      serviceAccountName: hugmesh-test-runner
       securityContext:
         runAsNonRoot: true
         runAsUser: 1001

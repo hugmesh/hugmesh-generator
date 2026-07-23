@@ -17,7 +17,7 @@ metadata:
   labels:
     app.kubernetes.io/name: workload-console
     app.kubernetes.io/component: policy
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   validationFailureAction: Enforce
   background: true
@@ -29,13 +29,13 @@ spec:
           - resources:
               kinds: ["Pod", "Deployment", "StatefulSet", "DaemonSet"]
               namespaces:
-                - snapdragon-backend
-                - snapdragon-frontend
-                - snapdragon-forum
-                - snapdragon-games
-                - snapdragon-games-instances
-                - snapdragon-tube
-                - snapdragon-owncast
+                - hugmesh-backend
+                - hugmesh-frontend
+                - hugmesh-forum
+                - hugmesh-games
+                - hugmesh-games-instances
+                - hugmesh-tube
+                - hugmesh-owncast
       validate:
         message: >-
           App-tier container images must be digest-pinned to the own registry

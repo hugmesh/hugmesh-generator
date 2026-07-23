@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""snapdragon-media-poisoner — FastAPI service stub.
+"""hugmesh-media-poisoner — FastAPI service stub.
 
 The OPTIONAL x86/GPU heavy-tier worker that applies an AI-cloak/poison perturbation
-to image bytes BEFORE the homeserver ingests them. The snapdragon-user-bff-api
+to image bytes BEFORE the homeserver ingests them. The hugmesh-user-bff-api
 media-proxy is the ONLY caller:
 
   POST /poison   multipart/form-data: image=<file>, mode=<none|light|glaze|nightshade>,
@@ -58,7 +58,7 @@ TRANSPORT = transport_mode()
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
 
 app = FastAPI(
-    title="snapdragon-media-poisoner",
+    title="hugmesh-media-poisoner",
     description="Optional x86/GPU AI-cloak/poison worker. Best-effort, not a guarantee.",
     version="0.1.0",
 )

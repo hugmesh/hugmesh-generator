@@ -1,9 +1,9 @@
-# user-bff-db — dedicated Postgres for snapdragon-user-bff-api's config datastore
+# user-bff-db — dedicated Postgres for hugmesh-user-bff-api's config datastore
 # (the user_profile / user_preference / user_block tables the user BFF owns).
-# Lives in snapdragon-backend next to the BFF it serves. ClusterIP only.
+# Lives in hugmesh-backend next to the BFF it serves. ClusterIP only.
 #
 # NOTE: like admin-bff, the user-bff app's application.yml defaults its
-# spring.r2dbc/spring.liquibase to a literal `snapdragon-pg` host that does NOT
+# spring.r2dbc/spring.liquibase to a literal `hugmesh-pg` host that does NOT
 # exist anywhere in the cluster; this dedicated `user-bff-db` Service is the real
 # backing store, and the user-bff Deployment OVERRIDES the R2DBC/Liquibase URLs to
 # point here (mirrors how federation-db backs federation, admin-bff-db backs admin-bff).
@@ -25,8 +25,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: user-bff-db
-  namespace: snapdragon-backend
-  labels: { app: user-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: user-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over a RWO PVC

@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # test-go-live-reconcile-verify.sh — offline logic test for the go-live wizard's
 # fourth (web-UI) interface leg: the verify lib
-# (specs/usr/lib/snapdragon/golive-verify.sh) + the agent's apply seams
-# (specs/usr/sbin/snapdragon-go-live-reconcile sourced with GLR_* env seams,
-# driving the REAL specs/usr/sbin/snapdragon-go-live driver sandboxed via
-# GL_ETC_SNAPDRAGON).
+# (specs/usr/lib/hugmesh/golive-verify.sh) + the agent's apply seams
+# (specs/usr/sbin/hugmesh-go-live-reconcile sourced with GLR_* env seams,
+# driving the REAL specs/usr/sbin/hugmesh-go-live driver sandboxed via
+# GL_ETC_HUGMESH).
 #
 # Runs ANYWHERE with bash + jq + openssl + base64 — NO live mesh, NO BFF, NO
 # network, NO root. SKIPs (exit 0) only if a required tool is genuinely absent.
 # Mirrors tests/domain-registry/test-domain-reconcile-verify.sh step for step
 # for the verify half; the apply half is new (go-live-specific: drive the real
 # commit/rollback subcommands and assert on the REAL marker file the driver
-# writes, in a sandboxed --etc-snapdragon, never touching the real host /etc).
+# writes, in a sandboxed --etc-hugmesh, never touching the real host /etc).
 #
 # Assertions:
 #   (0) canonical reconstruction matches an inline reference AND an independent
@@ -56,10 +56,10 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LIB="${REPO}/specs/usr/lib/snapdragon/golive-verify.sh"
-AGENT="${REPO}/specs/usr/sbin/snapdragon-go-live-reconcile"
-DRIVER="${REPO}/specs/usr/sbin/snapdragon-go-live"
-PROVIDERS_LIB="${REPO}/specs/usr/lib/snapdragon/go-live-providers.sh"
+LIB="${REPO}/specs/usr/lib/hugmesh/golive-verify.sh"
+AGENT="${REPO}/specs/usr/sbin/hugmesh-go-live-reconcile"
+DRIVER="${REPO}/specs/usr/sbin/hugmesh-go-live"
+PROVIDERS_LIB="${REPO}/specs/usr/lib/hugmesh/go-live-providers.sh"
 
 [ -r "${LIB}" ]    || { echo "  FAIL verify lib missing: ${LIB}"; exit 1; }
 [ -r "${AGENT}" ]  || { echo "  FAIL agent missing: ${AGENT}"; exit 1; }
@@ -83,7 +83,7 @@ openssl genpkey -algorithm ed25519 -out "${FPRIV}" 2>/dev/null
 # shellcheck source=/dev/null
 . "${LIB}" || { echo "  FAIL could not source ${LIB}"; exit 1; }
 
-NODE="mkey:abc"; GEN=7; DOM="acme.snapdragon.systems"
+NODE="mkey:abc"; GEN=7; DOM="acme.hugmesh.systems"
 # Build a signed go-live export carrying ONE entry (this node's domain), signed by $1
 # (priv pem) at generation $2. Sign the FILE (not a captured string — command substitution
 # strips trailing newlines and would diverge from what verify_sig reads).
@@ -98,7 +98,7 @@ make_signed_export() {
             { clusterDomain: $dom, targetState: $state,
               exposureModel: (if $state == "public" then "tunnel" else "" end),
               provider: (if $state == "public" then $provider else "" end),
-              requestedBy: "superadmin@acme.snapdragon.systems", intentId: "intent-1", generation: $gen }
+              requestedBy: "superadmin@acme.hugmesh.systems", intentId: "intent-1", generation: $gen }
         ] end)
     }')"
     jq -n --argjson b "${body}" '{ body:$b, contentHash:"x", signature:null, publicKey:"advertised-ignored", signed:false }' > "${out}"
@@ -116,7 +116,7 @@ canon_ref() {
     printf 'node=%s\n' "${NODE}"
     printf 'generation=%s\n' "${GEN}"
     printf 'dom=%s\tstate=%s\tmodel=%s\tprovider=%s\tby=%s\tintent=%s\tgen=%s\n' \
-        "${DOM}" "public" "tunnel" "generic-registrar" "superadmin@acme.snapdragon.systems" "intent-1" "${GEN}"
+        "${DOM}" "public" "tunnel" "generic-registrar" "superadmin@acme.hugmesh.systems" "intent-1" "${GEN}"
 }
 make_signed_export "${PRIV}" "${GEN}" "${WORK}/good.json" "public" "generic-registrar" "${DOM}"
 REFC="${WORK}/ref.bin"; canon_ref > "${REFC}"
@@ -187,9 +187,9 @@ if golive_verify_export "${WORK}/good.json" "${PUB_B64}" "${LG}"; then bad "(f) 
 
 # ────────────────────────────────────────────────────────────────────────────────────
 # APPLY-SIDE TESTS — source the agent with GLR_* seams (the main guard prevents auto-run),
-# driving the REAL driver against a sandboxed GL_ETC_SNAPDRAGON (never the real host /etc).
+# driving the REAL driver against a sandboxed GL_ETC_HUGMESH (never the real host /etc).
 # ────────────────────────────────────────────────────────────────────────────────────
-SANDBOX_ETC="${WORK}/etc-snapdragon"
+SANDBOX_ETC="${WORK}/etc-hugmesh"
 mkdir -p "${SANDBOX_ETC}"
 printf '%s' "${DOM}" > "${SANDBOX_ETC}/cluster-domain"
 
@@ -198,9 +198,9 @@ GLR_PUB_KEY="${PUB_B64}"
 GLR_CACHE_DIR="${WORK}/cache"
 GLR_VERIFY_LIB="${LIB}"
 GLR_DRIVER="${DRIVER}"
-GL_ETC_SNAPDRAGON="${SANDBOX_ETC}"
+GL_ETC_HUGMESH="${SANDBOX_ETC}"
 GL_PROVIDERS_LIB="${PROVIDERS_LIB}"
-export GLR_NODE_ENV GLR_PUB_KEY GLR_CACHE_DIR GLR_VERIFY_LIB GLR_DRIVER GL_ETC_SNAPDRAGON GL_PROVIDERS_LIB
+export GLR_NODE_ENV GLR_PUB_KEY GLR_CACHE_DIR GLR_VERIFY_LIB GLR_DRIVER GL_ETC_HUGMESH GL_PROVIDERS_LIB
 mkdir -p "${GLR_CACHE_DIR}"
 # shellcheck source=/dev/null
 . "${AGENT}"   # main is guarded; this just loads the functions with the GLR_* config
@@ -270,7 +270,7 @@ else
 fi
 
 # ── Case (b''): absence contract — no entry for this node's domain -> no-op ──────────
-make_signed_export "${PRIV}" 9 "${WORK}/other-domain.json" "public" "generic-registrar" "other-brand.snapdragon.systems"
+make_signed_export "${PRIV}" 9 "${WORK}/other-domain.json" "public" "generic-registrar" "other-brand.hugmesh.systems"
 NO_ENTRY="$(gv_entry_for_domain "${WORK}/other-domain.json" "${DOM}")"
 if [ -z "${NO_ENTRY}" ]; then
     ok "(b'') absence contract: no entry found for this node's own domain in a foreign-domain export"
@@ -407,7 +407,7 @@ printf 'dummy-cert\n' > "${CERT_FILE}"; printf 'dummy-key\n' > "${KEY_FILE}"
 rm -f "${MARKER}" "${SANDBOX_ETC}/release-state" "${ACK_STUB_DIR}/requests.log"
 entry_ack_ok="$(jq -nc --arg dom "${DOM}" '{
     clusterDomain:$dom, targetState:"public", exposureModel:"tunnel",
-    provider:"generic-registrar", requestedBy:"superadmin@acme.snapdragon.systems",
+    provider:"generic-registrar", requestedBy:"superadmin@acme.hugmesh.systems",
     intentId:"intent-ack-ok", generation:321
 }')"
 PATH="${ACK_STUB_DIR}/bin:${PATH}" MACHINE_KEY_FP="${ACK_NODE_FP}" BFF_URL="${ACK_BFF}" \
@@ -433,7 +433,7 @@ rm -f "${MARKER}" "${SANDBOX_ETC}/release-state" "${ACK_STUB_DIR}/requests.log"
 printf 'fail\n' > "${ACK_STUB_DIR}/mode"
 entry_ack_fail="$(jq -nc --arg dom "${DOM}" '{
     clusterDomain:$dom, targetState:"public", exposureModel:"tunnel",
-    provider:"generic-registrar", requestedBy:"superadmin@acme.snapdragon.systems",
+    provider:"generic-registrar", requestedBy:"superadmin@acme.hugmesh.systems",
     intentId:"intent-ack-fail", generation:322
 }')"
 RC=0
@@ -472,7 +472,7 @@ split_body="$(jq -n --argjson envgen "${ENVELOPE_GEN}" --argjson rowgen "${ROW_G
     --arg node "${NODE}" --arg dom "${DOM}" --arg intent "${ACK_SPLIT_INTENT}" '{
     node:$node, generation:$envgen,
     entries: [ { clusterDomain:$dom, targetState:"public", exposureModel:"tunnel",
-                 provider:"generic-registrar", requestedBy:"superadmin@acme.snapdragon.systems",
+                 provider:"generic-registrar", requestedBy:"superadmin@acme.hugmesh.systems",
                  intentId:$intent, generation:$rowgen } ]
 }')"
 jq -n --argjson b "${split_body}" '{ body:$b, contentHash:"x", signature:null, publicKey:"advertised-ignored", signed:false }' > "${WORK}/split-gen.json"
@@ -543,7 +543,7 @@ fi
 # the same already-converged state).
 entry_new_but_converged="$(jq -nc --arg dom "${DOM}" '{
     clusterDomain:$dom, targetState:"public", exposureModel:"tunnel",
-    provider:"generic-registrar", requestedBy:"superadmin@acme.snapdragon.systems",
+    provider:"generic-registrar", requestedBy:"superadmin@acme.hugmesh.systems",
     intentId:"intent-new-never-seen-before", generation:999
 }')"
 REQ_COUNT_BEFORE_O="$(grep -c '^URL=' "${ACK_STUB_DIR}/requests.log" 2>/dev/null || echo 0)"
@@ -565,7 +565,7 @@ G_MARKER_ETC="${WORK}/inert-etc"; mkdir -p "${G_MARKER_ETC}"
 printf '%s' "${DOM}" > "${G_MARKER_ETC}/cluster-domain"
 printf 'MACHINE_KEY_FP=mkey:abc\nBFF_EXPORT_URL=\nBFF_CLIENT_CERT=\nBFF_CLIENT_KEY=\n' > "${WORK}/node-empty.env"
 env GLR_NODE_ENV="${WORK}/node-empty.env" GLR_PUB_KEY="${PUB_B64}" GLR_CACHE_DIR="${WORK}/inert-cache" \
-    GLR_VERIFY_LIB="${LIB}" GLR_DRIVER="${DRIVER}" GL_ETC_SNAPDRAGON="${G_MARKER_ETC}" GL_PROVIDERS_LIB="${PROVIDERS_LIB}" \
+    GLR_VERIFY_LIB="${LIB}" GLR_DRIVER="${DRIVER}" GL_ETC_HUGMESH="${G_MARKER_ETC}" GL_PROVIDERS_LIB="${PROVIDERS_LIB}" \
     bash "${AGENT}" >/dev/null 2>&1
 RC=$?
 if [ "${RC}" -eq 0 ] && [ ! -e "${G_MARKER_ETC}/go-live" ]; then
@@ -579,7 +579,7 @@ G2_ETC="${WORK}/inert2-etc"; mkdir -p "${G2_ETC}"
 printf '%s' "${DOM}" > "${G2_ETC}/cluster-domain"
 printf 'MACHINE_KEY_FP=mkey:abc\nBFF_EXPORT_URL=https://api.example.test\nBFF_CLIENT_CERT=/nonexistent\nBFF_CLIENT_KEY=/nonexistent\n' > "${WORK}/node-keyless.env"
 env GLR_NODE_ENV="${WORK}/node-keyless.env" GLR_PUB_KEY="/nonexistent-placeholder-key" GLR_CACHE_DIR="${WORK}/inert2-cache" \
-    GLR_VERIFY_LIB="${LIB}" GLR_DRIVER="${DRIVER}" GL_ETC_SNAPDRAGON="${G2_ETC}" GL_PROVIDERS_LIB="${PROVIDERS_LIB}" \
+    GLR_VERIFY_LIB="${LIB}" GLR_DRIVER="${DRIVER}" GL_ETC_HUGMESH="${G2_ETC}" GL_PROVIDERS_LIB="${PROVIDERS_LIB}" \
     bash "${AGENT}" >/dev/null 2>&1
 RC2=$?
 if [ "${RC2}" -eq 0 ] && [ ! -e "${G2_ETC}/go-live" ]; then

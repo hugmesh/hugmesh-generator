@@ -5,8 +5,8 @@ usual assumptions (`python3` on PATH, `make` installed, an FHS layout) do **not*
 hold: NixOS, SteamOS / Steam Deck, Arch, Debian/Ubuntu, Fedora.
 
 Everything here is **additive** — it adds new launch paths, it does not change the
-existing `make` targets, the Windows `studio/snapdragon-studio.bat`, or the
-`python -m snapdragon_studio` entrypoint. Nothing installs anything without a `y/N`
+existing `make` targets, the Windows `studio/hugmesh-studio.bat`, or the
+`python -m hugmesh_studio` entrypoint. Nothing installs anything without a `y/N`
 confirmation (or `--auto`), and the launcher never calls a system package manager
 for you — it only prints the exact command to run.
 
@@ -27,7 +27,7 @@ The launcher's flags mirror the Windows `.bat`:
 | `--detect` | print the machine-greppable `DETECT …` report and exit (never prompts/installs/launches) |
 | `--auto` | as guided, but accept every offer without a prompt |
 | `--menu` | hand off to the ncurses build menu (`scripts/build-menu.sh`) |
-| `--<anything-else>` | **headless** automation (e.g. `--print-command`): no prompts, no installs, straight to `python3 -m snapdragon_studio` |
+| `--<anything-else>` | **headless** automation (e.g. `--print-command`): no prompts, no installs, straight to `python3 -m hugmesh_studio` |
 
 ---
 
@@ -149,7 +149,7 @@ display and no PySide6/PyQt6 — the build-matrix GUI channel relies on this:
 ```
 
 Any `--`-prefixed arg other than `--detect` / `--auto` / `--menu` takes this headless
-path: no prompts, no installs, straight to `python3 -m snapdragon_studio` with the
+path: no prompts, no installs, straight to `python3 -m hugmesh_studio` with the
 args forwarded.
 
 ## What the launcher detects
@@ -160,7 +160,7 @@ args forwarded.
 DETECT os=steamos id_like=arch family=arch nix_shell=0 gamescope=1
 DETECT python=found version=3.11.6 path=/usr/bin/python3.11
 DETECT qt=missing binding=none scope=none
-DETECT venv=missing path=/home/deck/snapdragon-generator/studio/.venv-studio
+DETECT venv=missing path=/home/deck/hugmesh-generator/studio/.venv-studio
 DETECT make=missing
 DETECT whiptail=found
 DETECT nix=missing

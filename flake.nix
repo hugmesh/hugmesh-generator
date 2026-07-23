@@ -1,5 +1,5 @@
 {
-  description = "Snapdragon Image Studio + ncurses build menu — a dev shell and launchers for NixOS, SteamOS/Steam Deck and other non-FHS / gaming distros where python3 + make are often absent.";
+  description = "HugMesh Image Studio + ncurses build menu — a dev shell and launchers for NixOS, SteamOS/Steam Deck and other non-FHS / gaming distros where python3 + make are often absent.";
 
   inputs = {
     # Pin a recent stable channel — its python3Packages.pyside6 satisfies
@@ -34,22 +34,22 @@
 
         # `nix run .#studio` — launch the wizard without entering a dev shell first.
         studioApp = pkgs.writeShellApplication {
-          name = "snapdragon-studio";
+          name = "hugmesh-studio";
           runtimeInputs = commonInputs;
           text = ''
-            cd "''${SNAPDRAGON_GENERATOR_DIR:-$PWD}" || exit 1
+            cd "''${HUGMESH_GENERATOR_DIR:-$PWD}" || exit 1
             export PYTHONPATH="$PWD/studio''${PYTHONPATH:+:$PYTHONPATH}"
-            exec ${pythonEnv}/bin/python3 -m snapdragon_studio "$@"
+            exec ${pythonEnv}/bin/python3 -m hugmesh_studio "$@"
           '';
         };
 
         # `nix run .#menu` — the ncurses build menu (inherits gnumake from runtimeInputs, so
         # its REAL `make` build targets work; the python-driven local-mesh submenus too).
         menuApp = pkgs.writeShellApplication {
-          name = "snapdragon-menu";
+          name = "hugmesh-menu";
           runtimeInputs = commonInputs;
           text = ''
-            cd "''${SNAPDRAGON_GENERATOR_DIR:-$PWD}" || exit 1
+            cd "''${HUGMESH_GENERATOR_DIR:-$PWD}" || exit 1
             export PYTHONPATH="$PWD/studio''${PYTHONPATH:+:$PYTHONPATH}"
             exec bash scripts/build-menu.sh "$@"
           '';
@@ -61,20 +61,20 @@
           buildInputs = commonInputs;
           shellHook = ''
             export PYTHONPATH="$PWD/studio''${PYTHONPATH:+:$PYTHONPATH}"
-            echo "Snapdragon dev shell — Studio + ncurses menu ready."
+            echo "HugMesh dev shell — Studio + ncurses menu ready."
             echo "  ./scripts/studio-launch.sh      # launch the Studio wizard"
             echo "  make menu                       # ncurses build menu (or ./scripts/build-menu.sh)"
-            echo "  python3 -m snapdragon_studio    # direct wizard launch (PYTHONPATH is set)"
+            echo "  python3 -m hugmesh_studio    # direct wizard launch (PYTHONPATH is set)"
           '';
         };
 
         apps.studio = {
           type = "app";
-          program = "${studioApp}/bin/snapdragon-studio";
+          program = "${studioApp}/bin/hugmesh-studio";
         };
         apps.menu = {
           type = "app";
-          program = "${menuApp}/bin/snapdragon-menu";
+          program = "${menuApp}/bin/hugmesh-menu";
         };
         apps.default = self.apps.${system}.studio;
 

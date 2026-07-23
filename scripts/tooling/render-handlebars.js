@@ -179,7 +179,7 @@ function main() {
     // output is byte-identical to sed (this is what keeps the parity gate green).
     // SAFETY: assertTemplateSafe()'s fail-closed frozen/denied RAW-BODY scan has
     // ALREADY run over these bodies above, so a dot-body naming a frozen constant
-    // (e.g. {{ .snapdragon.systems/x }}) was refused before we reach here — this
+    // (e.g. {{ .hugmesh.systems/x }}) was refused before we reach here — this
     // passthrough only ever carries inert ArgoCD context refs, never a brand token or
     // a secret value.
     const goTmpl = [];

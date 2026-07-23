@@ -1,4 +1,4 @@
-// report-tags.ts — the role/layer tagging convention the snapdragon reporter maps
+// report-tags.ts — the role/layer tagging convention the hugmesh reporter maps
 // each test onto, so the admin-bff TestReportsController + the admin-ui console can
 // pivot the run by ROLE and by ENFORCEMENT LAYER (not just pass/fail counts).
 //

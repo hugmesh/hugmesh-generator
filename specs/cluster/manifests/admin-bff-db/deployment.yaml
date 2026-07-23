@@ -1,10 +1,10 @@
-# admin-bff-db — dedicated Postgres for snapdragon-admin-bff-api's config
+# admin-bff-db — dedicated Postgres for hugmesh-admin-bff-api's config
 # datastore (durable accounts / allowlist / sessions / namespace-grants /
 # iso_artifacts / gateway_route_access — the tables its single R2DBC handle backs,
 # distinct from the route-access-db handle it also holds). Lives in
-# snapdragon-backend next to the BFF it serves. ClusterIP only.
+# hugmesh-backend next to the BFF it serves. ClusterIP only.
 #
-# NOTE: the literal hostname `snapdragon-pg` that admin-bff's application.yml
+# NOTE: the literal hostname `hugmesh-pg` that admin-bff's application.yml
 # defaults to does NOT exist anywhere in the cluster; this dedicated `admin-bff-db`
 # Service is the real backing store, and the admin-bff Deployment OVERRIDES the
 # R2DBC/Liquibase URLs to point here (mirrors how federation-db backs federation).
@@ -26,8 +26,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: admin-bff-db
-  namespace: snapdragon-backend
-  labels: { app: admin-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: admin-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over a RWO PVC

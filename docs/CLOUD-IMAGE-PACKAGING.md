@@ -6,7 +6,7 @@ actually accepts. It is a standalone **post-build operator step**, deliberately
 a matrix axis, and not a matrix row** ([`BUILD-MATRIX.md`](BUILD-MATRIX.md)):
 the artifact a builder emits is unchanged; this tool only re-packages one you
 already have. The **deploy** half (upload/import/register against a provider)
-is the separate `snapdragon-cloud-deploy` driver, which consumes these
+is the separate `hugmesh-cloud-deploy` driver, which consumes these
 artifacts — this document covers packaging only.
 
 ## Usage

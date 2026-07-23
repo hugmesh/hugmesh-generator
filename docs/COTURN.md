@@ -30,10 +30,10 @@ standard), NOT static usernames/passwords:
    accounts, no database. The credential expires (`turn_ttl`, 24 h here).
 
 Because step 2 and step 3 use the **same secret**, coturn and tuwunel must both
-hold it. That is why they live in the **same namespace** (`snapdragon-backend`):
+hold it. That is why they live in the **same namespace** (`hugmesh-backend`):
 
 ```
-Vault: secret/snapdragon/coturn-shared-secret  (property: secret)
+Vault: secret/hugmesh/coturn-shared-secret  (property: secret)
    │  ESO (manifests/external-secrets/coturn-externalsecrets.yaml)
    ▼
 k8s Secret coturn-shared-secret  (key: secret)   ← ONE source of truth
@@ -42,7 +42,7 @@ k8s Secret coturn-shared-secret  (key: secret)   ← ONE source of truth
 ```
 
 **No literal secret is ever committed.** The ExternalSecret only references the
-Vault path; the admin/DevOps must provision `secret/snapdragon/coturn-shared-secret`
+Vault path; the admin/DevOps must provision `secret/hugmesh/coturn-shared-secret`
 in Vault at bootstrap. Until then ESO leaves the Secret unmaterialised — and since
 coturn is default-off, nothing is broken.
 
@@ -62,7 +62,7 @@ The switch is `turn_secret`: empty = dark, populated = live. It is populated
 ## 4. Enabling it (per-domain, on a live cluster)
 
 1. Provision the shared secret in Vault:
-   `vault kv put secret/snapdragon/coturn-shared-secret secret=<32+ random bytes>`
+   `vault kv put secret/hugmesh/coturn-shared-secret secret=<32+ random bytes>`
 2. Flip the two runtime gates to `true`:
    - the `coturn` element in `specs/cluster/apps/13a-optional-services.yaml`
    - the `coturn` key in `specs/cluster/manifests/policy/installed-services-configmap.yaml`
@@ -110,7 +110,7 @@ relay, not federated traffic), so the label is **optional** — coturn's own
 - **Group-call SFU.** coturn is a 1:1/mesh relay only. Scalable **group** calls
   (MatrixRTC / Element Call) need a separate **SFU** (LiveKit / sfu-to-sfu); that
   is a future optional service, not this one.
-- **Matrix-UI ICE change.** The `snapdragon-matrix-ui` graceful-degradation
+- **Matrix-UI ICE change.** The `hugmesh-matrix-ui` graceful-degradation
   (`voip/turnServer` empty/404 → `iceServers: []`) is the existing behaviour; any
   explicit UI fetch wiring is a separate PR in that repo.
 - **Build-time prune branch.** coturn is RUNTIME-ONLY (anubis pattern), so it needs

@@ -23,8 +23,8 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 OUT_DIR="${REPO_DIR}/keys-out/vault"
 
 # ── brand.conf (built-in defaults < brand.conf < env) ───────────────
-BRAND="${BRAND:-snapdragon}"
-CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-snapdragon.systems}"
+BRAND="${BRAND:-hugmesh}"
+CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-hugmesh.systems}"
 VAULT_KV_MOUNT="${VAULT_KV_MOUNT:-secret}"
 if [ -f "${REPO_DIR}/brand.conf" ]; then
     # shellcheck disable=SC1091
@@ -62,7 +62,7 @@ Options:
   -h, --help    Show this help.
 
 Environment:
-  BRAND           Brand slug = Vault base path segment. Default: snapdragon
+  BRAND           Brand slug = Vault base path segment. Default: hugmesh
   VAULT_ADDR      Vault server URL. Empty = offline / USB-only delivery.
   VAULT_TOKEN     Vault token (or AppRole secret-id) for online writes + bundle.
   VAULT_KV_MOUNT  KV v2 mount. Default: secret
@@ -87,7 +87,7 @@ for t in openssl python3; do
     command -v "$t" >/dev/null || { echo "ERROR: missing tool: $t" >&2; exit 1; }
 done
 
-BASE="${BRAND:-snapdragon}"
+BASE="${BRAND:-hugmesh}"
 
 echo "==> Generating cluster secrets for base 'secret/${BASE}/' (brand=${BRAND})"
 
@@ -256,10 +256,10 @@ fi
 # the identical secret/<brand>/harbor-robots path/keys so the override actually
 # feeds the same ExternalSecrets the live Job would; they are no longer the
 # primary path an operator is expected to fill in.
-GITLAB_REGISTRY_USER="${GITLAB_REGISTRY_USER:-snapdragon-deploy}"
+GITLAB_REGISTRY_USER="${GITLAB_REGISTRY_USER:-hugmesh-deploy}"
 GITLAB_REGISTRY_TOKEN="${GITLAB_REGISTRY_TOKEN:-REPLACE_WITH_GITLAB_DEPLOY_TOKEN}"
 
-IMAGE_BUILDER_REGISTRY_USER="${IMAGE_BUILDER_REGISTRY_USER:-snapdragon-image-builder}"
+IMAGE_BUILDER_REGISTRY_USER="${IMAGE_BUILDER_REGISTRY_USER:-hugmesh-image-builder}"
 IMAGE_BUILDER_REGISTRY_TOKEN="${IMAGE_BUILDER_REGISTRY_TOKEN:-REPLACE_WITH_GITLAB_WRITE_REGISTRY_DEPLOY_TOKEN}"
 
 # Harbor's own built-in superuser ("admin") password. Consumed by BOTH the
@@ -275,7 +275,7 @@ CASDOOR_CLIENT_SECRET="$(openssl rand -hex 32)"
 
 # ── GAMES-realm Casdoor (casdoor-games, org "threewizards") ─────────
 # A SEPARATE, INDEPENDENT Casdoor from the systems one above, mirroring the
-# canonical snapdragon.games realm. Its secrets live under a distinct Vault path
+# canonical hugmesh.games realm. Its secrets live under a distinct Vault path
 # (secret/<brand>/casdoor-games). The threewizards-app clientId is the fixed
 # "twclient001" (set in the casdoor-games-app ExternalSecret template); only the
 # client-secret, admin password, DB password, and GitHub provider creds are minted.
@@ -364,14 +364,14 @@ BFF_INTERNAL_TOKEN="$(openssl rand -hex 32)"
 
 # phpBB forum (backend-only). phpbb-db OWNER (install/migrate) + phpbb_app runtime
 # role + the phpBB first-install admin. Kept on their OWN Vault paths (forum,
-# forum-db) so the isolated snapdragon-forum namespace's phpbb-secrets /
+# forum-db) so the isolated hugmesh-forum namespace's phpbb-secrets /
 # phpbb-db-app-auth ExternalSecrets resolve them.
 PHPBB_DB_PASSWORD="$(openssl rand -base64 24)"
 PHPBB_DB_APP_PASSWORD="$(openssl rand -base64 24)"
 PHPBB_ADMIN_PASSWORD="$(openssl rand -base64 24)"
 
 # Headwind MDM (self-hosted Android device-management server, DEFAULT-OFF
-# optional-service, ns snapdragon-pki). headwind-db OWNER role `headwind` —
+# optional-service, ns hugmesh-pki). headwind-db OWNER role `headwind` —
 # used for BOTH install/Liquibase-migrate AND runtime (VERIFIED not
 # separable: hmdm-server shares one datasource across migrate+runtime, so
 # there is no non-owner runtime role) — + the Headwind local first-install
@@ -477,7 +477,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/wiki-bff-db" \
             password="${WIKI_BFF_DB_PASSWORD}" \
             app_password="${WIKI_BFF_DB_APP_PASSWORD}"
-        # phpBB forum (backend-only, isolated snapdragon-forum ns). phpbb-secrets
+        # phpBB forum (backend-only, isolated hugmesh-forum ns). phpbb-secrets
         # multi-key (DB_PASSWORD owner + ADMIN_PASSWORD first-install admin) at
         # /forum; the phpbb_app runtime role password at /forum-db (app_password).
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/forum" \
@@ -485,7 +485,7 @@ if [ -n "${VAULT_ADDR:-}" ] && [ -n "${VAULT_TOKEN:-}" ]; then
             ADMIN_PASSWORD="${PHPBB_ADMIN_PASSWORD}"
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/forum-db" \
             app_password="${PHPBB_DB_APP_PASSWORD}"
-        # Headwind MDM (backend-only, ns snapdragon-pki, DEFAULT-OFF). ONE Vault
+        # Headwind MDM (backend-only, ns hugmesh-pki, DEFAULT-OFF). ONE Vault
         # path holds both properties.
         vault kv put "${VAULT_KV_MOUNT}/${BASE}/headwind" \
             DB_PASSWORD="${HEADWIND_DB_PASSWORD}" \
@@ -753,7 +753,7 @@ data = {
             "key": os.environ["USER_BFF_HS_TOKEN_KEY"],
         },
         # bff-internal-token: shared back-channel auth token (INTERNAL_TOKEN).
-        # Mounted in BOTH snapdragon-backend (user-bff) and snapdragon-frontend
+        # Mounted in BOTH hugmesh-backend (user-bff) and hugmesh-frontend
         # (fe-gateway); the frontend entry is added below.
         "bff-internal-token": {
             "token": os.environ["BFF_INTERNAL_TOKEN"],
@@ -779,7 +779,7 @@ data = {
         "route-access-admin-bff": {
             "password": os.environ["ROUTE_ACCESS_ADMIN_BFF_PASSWORD"],
         },
-        # snapdragon-actions two-Casdoor sync: admin client per side. SYSTEMS side
+        # hugmesh-actions two-Casdoor sync: admin client per side. SYSTEMS side
         # reuses the systems Casdoor OIDC client; GAMES side reuses threewizards-app.
         "casdoor-sync-systems": {
             "clientId": os.environ["CASDOOR_CLIENT_ID"],

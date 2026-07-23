@@ -4,7 +4,7 @@
 # clients keep their existing host-only ICE behaviour (iceServers:[]) — a default
 # build is byte-identical to today's mainline.
 #
-# Lives in snapdragon-backend ALONGSIDE tuwunel so the long-term-credential shared
+# Lives in hugmesh-backend ALONGSIDE tuwunel so the long-term-credential shared
 # secret (Secret coturn-shared-secret, ESO-synced from Vault) is reachable by BOTH
 # coturn (which validates client creds) and tuwunel (which mints them). See
 # manifests/external-secrets/coturn-externalsecrets.yaml.
@@ -19,10 +19,10 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: coturn-config
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: coturn
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/optional-service: coturn
 data:
   # turnserver.conf — HARDENED, SECRET-FREE. The static-auth-secret is NEVER in
@@ -30,8 +30,8 @@ data:
   # command (see the Deployment below), so no secret is ever committed to git.
   turnserver.conf: |
     # Matrix realm — matches the homeserver server_name (tuwunel).
-    realm=snapdragon.systems
-    server-name=coturn.snapdragon-backend.svc.cluster.local
+    realm=hugmesh.systems
+    server-name=coturn.hugmesh-backend.svc.cluster.local
     # Listen on all pod interfaces.
     listening-ip=0.0.0.0
     listening-port=3478
@@ -81,24 +81,24 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-coturn
-  namespace: snapdragon-backend
+  name: hugmesh-coturn
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: coturn
-    app: snapdragon-coturn
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-coturn
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/optional-service: coturn
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: snapdragon-coturn
+      app: hugmesh-coturn
   template:
     metadata:
       labels:
-        app: snapdragon-coturn
+        app: hugmesh-coturn
         app.kubernetes.io/name: coturn
-        app.kubernetes.io/part-of: snapdragon.systems
+        app.kubernetes.io/part-of: hugmesh.systems
         snapdragon.systems/optional-service: coturn
     spec:
       serviceAccountName: sa-coturn
@@ -108,7 +108,7 @@ spec:
       securityContext:
         # Unique MCS category s0:c67 (docs/SECURITY.md §3 matrix row). No two
         # workloads may share a category — coturn is isolated from tuwunel (c32)
-        # et al. even though it co-resides in snapdragon-backend.
+        # et al. even though it co-resides in hugmesh-backend.
         seLinuxOptions:
           type: container_t
           level: "s0:c67"
@@ -176,15 +176,15 @@ apiVersion: v1
 kind: Service
 metadata:
   name: coturn
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: coturn
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/optional-service: coturn
 spec:
   type: ClusterIP
   selector:
-    app: snapdragon-coturn
+    app: hugmesh-coturn
   ports:
     - { name: stun-udp,  port: 3478, targetPort: stun-udp,  protocol: UDP }
     - { name: stun-tcp,  port: 3478, targetPort: stun-tcp,  protocol: TCP }

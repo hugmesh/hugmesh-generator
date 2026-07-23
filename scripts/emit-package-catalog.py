@@ -29,7 +29,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _GEN_ROOT = os.path.dirname(_HERE)                       # scripts/ -> repo root
 sys.path.insert(0, os.path.join(_GEN_ROOT, "studio"))
 
-from snapdragon_studio.core.package_catalog import (  # noqa: E402
+from hugmesh_studio.core.package_catalog import (  # noqa: E402
     build_catalog, validate_roles_tiers,
 )
 

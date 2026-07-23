@@ -33,7 +33,7 @@ for arch in x86 rpi5 frite jetson orangepi5 orangepizero2; do
     out="$(make -n prebuild-binaries ARCH="${arch}" 2>&1)" || { bad "${arch}: make -n exited non-zero"; continue; }
     miss=""
     grep -q -- '--packages-only' <<<"${out}"                          || miss+=" --packages-only"
-    grep -q 'snapdragon_studio.core.prebuild_union' <<<"${out}"       || miss+=" prebuild_union"
+    grep -q 'hugmesh_studio.core.prebuild_union' <<<"${out}"       || miss+=" prebuild_union"
     grep -q "${BUILDER[$arch]}" <<<"${out}"                           || miss+=" ${BUILDER[$arch]}"
     if [ -z "${miss}" ]; then
         ok "${arch}: -> ${BUILDER[$arch]} --packages-only (+ prebuild_union)"

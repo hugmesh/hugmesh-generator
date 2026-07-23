@@ -1,4 +1,4 @@
-# PodDisruptionBudget for snapdragon-remote-fragment. This workload runs an HPA (hpa.yaml) with
+# PodDisruptionBudget for hugmesh-remote-fragment. This workload runs an HPA (hpa.yaml) with
 # minReplicas: 2 — an HA pair — so a voluntary disruption (node drain / cluster
 # upgrade) must never take BOTH pods at once. minAvailable: 1 lets a drain evict at
 # most one pod while guaranteeing the second keeps serving, so a rolling node
@@ -14,12 +14,12 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: snapdragon-remote-fragment
+  name: hugmesh-remote-fragment
   labels:
-    app: snapdragon-remote-fragment
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-remote-fragment
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: snapdragon-remote-fragment
+      app: hugmesh-remote-fragment

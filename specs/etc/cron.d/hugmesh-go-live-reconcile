@@ -1,0 +1,18 @@
+# hugmesh-go-live-reconcile — web-UI go-live effector convergence timer (60s).
+#
+# The TIMER half of the go-live wizard's fourth (web-UI) interface leg (the
+# OpenRC service runs the agent once at boot; this cron entry re-runs it every
+# 60s). cronie reads /etc/cron.d (the same mechanism provision.sh uses for
+# hugmesh-device-registry-sync + hugmesh-domain-reconcile + hugmesh-vpn-reconcile).
+# Installed on every fleet node (core, not an optional-service gate).
+#
+# The agent is FAIL-CLOSED + idempotent: a failed fetch/verify keeps the
+# last-good cache + applies nothing; a successful one drives the canonical
+# `hugmesh-go-live commit`/`rollback` subcommands ONLY on an actual state
+# transition for THIS node's own cluster domain. The authoritative fast path
+# for CLI/ncurses/Studio operators is the driver itself (immediate, interactive);
+# this pull is the convergence path for a web-UI-recorded intent / missed pushes
+# / reboots.
+#
+# Field order: min hour dom month dow user command
+* * * * * root /usr/sbin/hugmesh-go-live-reconcile >> /var/log/hugmesh-go-live-reconcile.log 2>&1

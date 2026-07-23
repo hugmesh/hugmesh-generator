@@ -25,13 +25,13 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core import flash_targets as ft        # noqa: E402
-from snapdragon_studio.core.flash_targets import FlashTarget  # noqa: E402
-from snapdragon_studio.gui.pages import _device_table as dt_mod  # noqa: E402
-from snapdragon_studio.gui.qt import QtWidgets                # noqa: E402
+from hugmesh_studio.core import flash_targets as ft        # noqa: E402
+from hugmesh_studio.core.flash_targets import FlashTarget  # noqa: E402
+from hugmesh_studio.gui.pages import _device_table as dt_mod  # noqa: E402
+from hugmesh_studio.gui.qt import QtWidgets                # noqa: E402
 
 GIB = 1 << 30
 SDB = FlashTarget("/dev/sdb", 16 * GIB, "SanDisk Ultra", "usb", True, "usb")
@@ -201,7 +201,7 @@ def _progress_stub(monkeypatch, *, sets=None, singles=None, queue):
     is the shipped code, not a re-implementation."""
     from types import SimpleNamespace
 
-    from snapdragon_studio.gui.pages.progress import ProgressPage
+    from hugmesh_studio.gui.pages.progress import ProgressPage
     page = ProgressPage.__new__(ProgressPage)
     page.log = _Lines()
     page.flash_worker = None

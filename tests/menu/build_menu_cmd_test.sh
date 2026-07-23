@@ -202,7 +202,7 @@ assert_has "client: home backup"        "--home-backup auto"
 build_make_cmd x86-pki "pki" 1
 assert_not "cluster: no home flags"     "--home-mode"
 
-# ── UNAFFILIATED standalone desktop: plain Gentoo, ZERO Snapdragon affiliation ──
+# ── UNAFFILIATED standalone desktop: plain Gentoo, ZERO HugMesh affiliation ──
 # The role PRESETS the neutral identity builder-side and HARD-ERRORS on any
 # brand/branding/bundle-source/seed-code flag, so the menu channel must emit the
 # x86-standalone-unaffiliated target + the generic desktop options ONLY. The trap:
@@ -666,7 +666,7 @@ assert_eq "phone_screen: captured _phone_run argv matches the driven field selec
 [ -s "${_UI_PASSWORD_Q}" ] && _bad "phone_screen: ui_password queue not fully consumed"                          || _ok
 
 # ── mesh-bootstrap: the Tor toggle threads --with-tor into the shared entrypoint ──
-# _local_mesh_bootstrap_run shells `python3 -m snapdragon_studio.core.local_mesh_bootstrap`
+# _local_mesh_bootstrap_run shells `python3 -m hugmesh_studio.core.local_mesh_bootstrap`
 # with an args array; stub python3 to CAPTURE that argv and prove the tor param (arg 7)
 # becomes --with-tor (and only when set), mirroring the --social wiring.
 MESH_ARGV_CAP="$(mktemp)"
@@ -712,7 +712,7 @@ grep -qiE 'deploy|creds' "${CONF_FILE}" && _fail "conf: deploy/creds state leake
 
 # ── _deploy_run behavioural checks against a stub driver ───────────────────────
 # _deploy_run shells the shared Qt-free entrypoint (python3 -m
-# snapdragon_studio.core.cloud_deploy), which resolves the DRIVER through the
+# hugmesh_studio.core.cloud_deploy), which resolves the DRIVER through the
 # SNAP_CLOUD_DEPLOY_CMD env seam — stub it to record the DRIVER argv and, at
 # CHILD runtime, the --creds-file's content + mode, proving pasted creds travel
 # by 0600 file only and are shredded afterwards (the phone-stub twin).

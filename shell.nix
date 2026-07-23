@@ -23,7 +23,7 @@ pkgs.mkShell {
   ];
   shellHook = ''
     export PYTHONPATH="$PWD/studio''${PYTHONPATH:+:$PYTHONPATH}"
-    echo "Snapdragon dev shell (nix-shell) — Studio + ncurses menu ready."
-    echo "  ./scripts/studio-launch.sh   |   make menu   |   python3 -m snapdragon_studio"
+    echo "HugMesh dev shell (nix-shell) — Studio + ncurses menu ready."
+    echo "  ./scripts/studio-launch.sh   |   make menu   |   python3 -m hugmesh_studio"
   '';
 }

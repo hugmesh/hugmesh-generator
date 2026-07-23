@@ -19,7 +19,7 @@
 import http from 'node:http';
 
 const PORT = Number(process.env.PORT || 8403);
-const ADMINS = new Set((process.env.ADMIN_EMAILS || 'admin@snapdragon.systems').split(','));
+const ADMINS = new Set((process.env.ADMIN_EMAILS || 'admin@hugmesh.systems').split(','));
 // The deterministic native password every seeded/invited persona signs in with —
 // matches the e2e helper's LOGIN_PASSWORD (E2E_PASSWORD ?? 'e2e-pass').
 const LOGIN_PASSWORD = process.env.E2E_PASSWORD || 'e2e-pass';
@@ -29,28 +29,28 @@ const accounts = new Map();                   // username -> {username,label,rol
 const sessions = new Map();                   // bff_ token -> username
 const grants = new Map();                     // username -> Set(namespace) (admin-granted namespace access)
 const usageMem = [];                          // in-memory usage events (fallback when ClickHouse is absent)
-const NAMESPACES = ['snapdragon-pki', 'snapdragon-backend', 'snapdragon-frontend', 'snapdragon-games', 'observability'];
+const NAMESPACES = ['hugmesh-pki', 'hugmesh-backend', 'hugmesh-frontend', 'hugmesh-games', 'observability'];
 // Per-gateway role->URL external access rules (stands in for the Postgres
 // gateway_route_access table the gateways read + Cassandra-cache).
 let nextRule = 1;
 const routeAccess = [
-  { id: String(nextRule++), gateway: 'snapdragon-fe-gateway', url_pattern: '/admin/**', role: 'ROLE_ADMIN', allow: true },
-  { id: String(nextRule++), gateway: 'snapdragon-fe-gateway', url_pattern: '/social/**', role: 'ROLE_USER', allow: true },
-  { id: String(nextRule++), gateway: 'snapdragon-be-gateway', url_pattern: '/api/**', role: 'ROLE_USER', allow: true },
+  { id: String(nextRule++), gateway: 'hugmesh-fe-gateway', url_pattern: '/admin/**', role: 'ROLE_ADMIN', allow: true },
+  { id: String(nextRule++), gateway: 'hugmesh-fe-gateway', url_pattern: '/social/**', role: 'ROLE_USER', allow: true },
+  { id: String(nextRule++), gateway: 'hugmesh-be-gateway', url_pattern: '/api/**', role: 'ROLE_USER', allow: true },
 ];
 // Latest delivered ISO artifacts (stands in for the GitLab generic package "latest" links).
 const ISOS = [
-  { name: 'gentoo-rpi5-arm64-pki-k8s-2026.0.iso', url: 'https://gitlab.snapdragon.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-pki-k8s-2026.0.iso' },
-  { name: 'gentoo-rpi5-arm64-backend-k8s-2026.0.iso', url: 'https://gitlab.snapdragon.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-backend-k8s-2026.0.iso' },
-  { name: 'gentoo-rpi5-arm64-frontend-k8s-2026.0.iso', url: 'https://gitlab.snapdragon.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-frontend-k8s-2026.0.iso' },
-  { name: 'gentoo-x86-snapdragon-host-2026.0.iso', url: 'https://gitlab.snapdragon.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-x86-snapdragon-host-2026.0.iso' },
+  { name: 'gentoo-rpi5-arm64-pki-k8s-2026.0.iso', url: 'https://gitlab.hugmesh.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-pki-k8s-2026.0.iso' },
+  { name: 'gentoo-rpi5-arm64-backend-k8s-2026.0.iso', url: 'https://gitlab.hugmesh.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-backend-k8s-2026.0.iso' },
+  { name: 'gentoo-rpi5-arm64-frontend-k8s-2026.0.iso', url: 'https://gitlab.hugmesh.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-rpi5-arm64-frontend-k8s-2026.0.iso' },
+  { name: 'gentoo-x86-hugmesh-host-2026.0.iso', url: 'https://gitlab.hugmesh.systems/api/v4/projects/1/packages/generic/iso/latest/gentoo-x86-hugmesh-host-2026.0.iso' },
 ];
 // Real-service brokering: the BFF mints Matrix (Synapse) + Mastodon tokens
 // server-side so the UI never holds homeserver admin creds. Point at the real
 // Synapse/Mastodon; default to the integration stack ports.
 const SYNAPSE_URL = process.env.SYNAPSE_URL || 'http://localhost:8008';
 const MASTODON_URL = process.env.MASTODON_URL || 'http://localhost:8402';
-const SVC_PW = process.env.SVC_PASSWORD || 'snapdragon-svc-pw';
+const SVC_PW = process.env.SVC_PASSWORD || 'hugmesh-svc-pw';
 
 const send = (res, code, obj, extraHeaders = {}) => {
   res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*',
@@ -96,8 +96,8 @@ async function ch(sql) {
 }
 async function ensureUsageTable() {
   try {
-    await ch('CREATE DATABASE IF NOT EXISTS snapdragon');
-    await ch('CREATE TABLE IF NOT EXISTS snapdragon.usage_events ' +
+    await ch('CREATE DATABASE IF NOT EXISTS hugmesh');
+    await ch('CREATE TABLE IF NOT EXISTS hugmesh.usage_events ' +
              '(ts DateTime DEFAULT now(), actor String, role String, action String, module String) ' +
              'ENGINE = MergeTree ORDER BY ts');
     chErr('usage_events ready');
@@ -111,7 +111,7 @@ function record(actor, roles, action) {
   const mod = MODULE_OF[action] || 'host';
   usageMem.push({ actor: String(actor), role, action, module: mod, ts: Date.now() });
   const esc = (s) => String(s).replace(/'/g, "\\'");
-  ch(`INSERT INTO snapdragon.usage_events (actor, role, action, module) VALUES ('${esc(actor)}','${role}','${action}','${mod}')`).catch((e) => chErr('insert: ' + e.message));
+  ch(`INSERT INTO hugmesh.usage_events (actor, role, action, module) VALUES ('${esc(actor)}','${role}','${action}','${mod}')`).catch((e) => chErr('insert: ' + e.message));
 }
 function usageFromMemory() {
   const hourAgo = Date.now() - 3600_000;
@@ -315,10 +315,10 @@ const server = http.createServer(async (req, res) => {
       if (!me.roles.includes('admin')) return send(res, 403, { error: 'admin role required' }); // authenticated but not admin → 403 (forbidden by the route-access role rule)
       try {
         const J = async (sql) => JSON.parse(await ch(sql + ' FORMAT JSON')).data;
-        const byModule = await J('SELECT module, count() AS events, uniqExact(actor) AS users FROM snapdragon.usage_events GROUP BY module ORDER BY events DESC');
-        const byAction = await J('SELECT action, count() AS events FROM snapdragon.usage_events GROUP BY action ORDER BY events DESC');
-        const active = (await J("SELECT uniqExact(actor) AS n FROM snapdragon.usage_events WHERE ts > now() - INTERVAL 1 HOUR"))[0] || { n: 0 };
-        const total = (await J('SELECT count() AS n FROM snapdragon.usage_events'))[0] || { n: 0 };
+        const byModule = await J('SELECT module, count() AS events, uniqExact(actor) AS users FROM hugmesh.usage_events GROUP BY module ORDER BY events DESC');
+        const byAction = await J('SELECT action, count() AS events FROM hugmesh.usage_events GROUP BY action ORDER BY events DESC');
+        const active = (await J("SELECT uniqExact(actor) AS n FROM hugmesh.usage_events WHERE ts > now() - INTERVAL 1 HOUR"))[0] || { n: 0 };
+        const total = (await J('SELECT count() AS n FROM hugmesh.usage_events'))[0] || { n: 0 };
         const out = { byModule, byAction, activeUsers: Number(active.n), totalEvents: Number(total.n) };
         return send(res, 200, out.totalEvents > 0 ? out : usageFromMemory());
       } catch (e) {

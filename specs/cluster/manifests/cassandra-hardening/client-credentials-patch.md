@@ -12,19 +12,19 @@ The Spring apps already read `CASSANDRA_CONTACT_POINTS`; the DataStax driver pic
 up `CASSANDRA_USER` / `CASSANDRA_PASSWORD` (Spring `spring.cassandra.username` /
 `.password`) when present — so this is purely additive env.
 
-## admin-bff-api (ns snapdragon-backend) — role `admin_bff_cass`
+## admin-bff-api (ns hugmesh-backend) — role `admin_bff_cass`
 ```yaml
 - name: CASSANDRA_USER
   value: "admin_bff_cass"
 - name: CASSANDRA_PASSWORD
   valueFrom: { secretKeyRef: { name: cassandra-app-creds, key: admin-bff } }
 ```
-(`cassandra-app-creds` must be mirrored into `snapdragon-backend` — add the same
+(`cassandra-app-creds` must be mirrored into `hugmesh-backend` — add the same
 ExternalSecret with `target.name: cassandra-app-creds` in that namespace, or use a
 `PushSecret`/`ClusterExternalSecret`. The DB-hardening ESO convention is one ES per
-namespace; the overlay ships the `snapdragon-pki` copy used by the bootstrap Job.)
+namespace; the overlay ships the `hugmesh-pki` copy used by the bootstrap Job.)
 
-## federation-api (ns snapdragon-backend) — role `federation_cass`
+## federation-api (ns hugmesh-backend) — role `federation_cass`
 ```yaml
 - name: CASSANDRA_USER
   value: "federation_cass"
@@ -35,12 +35,12 @@ Federation's manifest cache is gated by `MANIFEST_CACHE_ENABLED=false`; if it st
 off, federation never opens a Cassandra session and these can be deferred until the
 cache is enabled.
 
-## Gateways (snapdragon-gateway chart) — roles `pki_gw_cass` / `be_gw_cass` / `fe_gw_cass` / `sa_gw_cass`
-Add to `specs/cluster/charts/snapdragon-gateway/values.yaml` `cassandra:` block (and
+## Gateways (hugmesh-gateway chart) — roles `pki_gw_cass` / `be_gw_cass` / `fe_gw_cass` / `sa_gw_cass`
+Add to `specs/cluster/charts/hugmesh-gateway/values.yaml` `cassandra:` block (and
 template the env in `templates/deployment.yaml` next to `CASSANDRA_CONTACT_POINTS`):
 ```yaml
 cassandra:
-  contactPoints: cassandra.snapdragon-pki.svc.cluster.local:9042
+  contactPoints: cassandra.hugmesh-pki.svc.cluster.local:9042
   keyspace: snapdragon_gateway
   localDc: dc1
   # NEW (flip-time): per-gateway least-privilege role + creds Secret.
@@ -50,7 +50,7 @@ cassandra:
 ```
 Per-gateway override in `apps/20-gateway-be.yaml` / `20-gateway-fe.yaml` /
 `20-gateway-pki.yaml` / `22-gateway-superadmin.yaml`. Each gateway namespace
-(`snapdragon-backend`, `snapdragon-frontend`, `snapdragon-pki`) needs the
+(`hugmesh-backend`, `hugmesh-frontend`, `hugmesh-pki`) needs the
 `cassandra-app-creds` ES mirrored into it (same note as admin-bff above).
 
 ## TLS (Stage 2) — additional per-consumer wiring

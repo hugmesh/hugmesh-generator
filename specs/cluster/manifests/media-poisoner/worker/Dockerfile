@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
-# snapdragon-media-poisoner — the OPTIONAL x86/GPU AI-cloak/poison worker.
+# hugmesh-media-poisoner — the OPTIONAL x86/GPU AI-cloak/poison worker.
 #
 # DEFAULT (lean) build: CPU-portable, Pillow+numpy perturbation only. Small image,
 # runs on any node (including a CPU-only test node), so the BFF round-trip survival
 # gate is exercisable end-to-end without a GPU. On the real x86 GPU node the worker
 # reaches the host render devices via the /dev/dri hostPath the Deployment mounts
-# (vendor-agnostic, same contract as snapdragon-games).
+# (vendor-agnostic, same contract as hugmesh-games).
 #
 # GPU build (the documented follow-up, NOT built here): set POISON_VARIANT=gpu and
 # add requirements-gpu.txt with a torch wheel from the CUDA or ROCm pytorch index.

@@ -1,20 +1,20 @@
 # casdoor-games — the GAMES-realm Casdoor identity provider, a SEPARATE, INDEPENDENT
 # Casdoor instance from the systems one (manifests/casdoor/). It mirrors the canonical
-# snapdragon.games Casdoor (org "threewizards", app "threewizards-app"): it issues the
+# hugmesh.games Casdoor (org "threewizards", app "threewizards-app"): it issues the
 # OAuth2/OIDC JWTs the games BFF (manifests/games) validates, and owns its OWN native
 # users/roles (GitHub-OAuth players, player / uploader / mod / publisher / play-* roles)
-# that need NOT exist in the systems Casdoor. Runs in the snapdragon-games namespace on
+# that need NOT exist in the systems Casdoor. Runs in the hugmesh-games namespace on
 # its OWN external Postgres (casdoor-games-pg, db "threewizards").
 #
-# The ONLY cross-realm coupling is the scheduled snapdragon-actions job that mirrors the
+# The ONLY cross-realm coupling is the scheduled hugmesh-actions job that mirrors the
 # systems ROLE_GAMES_ADMIN set into this realm's "admin" role (one-way systems->games);
-# everything else here is independent of snapdragon.systems.
+# everything else here is independent of hugmesh.systems.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: casdoor-games
-  namespace: snapdragon-games
-  labels: { app: casdoor-games, app.kubernetes.io/part-of: snapdragon.games }
+  namespace: hugmesh-games
+  labels: { app: casdoor-games, app.kubernetes.io/part-of: hugmesh.games }
 spec:
   replicas: 1
   strategy: { type: Recreate }
@@ -45,7 +45,7 @@ spec:
             - name: CASDOOR_DB_PASSWORD
               valueFrom: { secretKeyRef: { name: casdoor-games-db, key: password } }
             # GitHub OAuth federation client credentials — lets people sign up as a
-            # NATIVE games "player" (mirrors the snapdragon.games GitHub provider).
+            # NATIVE games "player" (mirrors the hugmesh.games GitHub provider).
             # Created by an admin in Casdoor, or seeded by the casdoor-games-init Job.
             - name: GITHUB_CLIENT_ID
               valueFrom: { secretKeyRef: { name: casdoor-games-github, key: clientId, optional: true } }
@@ -62,7 +62,7 @@ spec:
             # against the deployed image.
             - { name: app-conf, mountPath: /conf/app.conf, subPath: app.conf, readOnly: true }
             # Declarative seed (threewizards org / role catalog / seed users), mirrored
-            # from the snapdragon.games init_data.json.tpl. Casdoor imports
+            # from the hugmesh.games init_data.json.tpl. Casdoor imports
             # init_data.json from its working dir on boot. NOTE: the exact mount path
             # depends on the casbin/casdoor workdir — validate/adjust if auto-import
             # doesn't fire; the casdoor-games-init Job seeds the OAuth2 application +

@@ -1,12 +1,12 @@
-# Persistent storage for the snapdragon-federation-api Postgres data directory
+# Persistent storage for the hugmesh-federation-api Postgres data directory
 # (federation_modules / user_modules / moderation_requests / federation_override).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: federation-db
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels: { app: federation-db }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 2Gi } }

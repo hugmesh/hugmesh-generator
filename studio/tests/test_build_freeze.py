@@ -13,32 +13,32 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core import build_driver as bd            # noqa: E402
-from snapdragon_studio.core.platform_info import HostInfo        # noqa: E402
-from snapdragon_studio.gui import tray as tray_mod               # noqa: E402
-from snapdragon_studio.gui import wizard as wizard_mod           # noqa: E402
-from snapdragon_studio.gui.qt import QtWidgets                   # noqa: E402
+from hugmesh_studio.core import build_driver as bd            # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo        # noqa: E402
+from hugmesh_studio.gui import tray as tray_mod               # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod           # noqa: E402
+from hugmesh_studio.gui.qt import QtWidgets                   # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 # host WITH docker so the (now off-thread) probe actually runs
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=True, has_bash=True,
-                has_kvm=False, is_root=True, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=True, builder_image="hugmesh-builder")
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("SNAPDRAGON_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
 
 
 def _build_page(wiz):
@@ -52,7 +52,7 @@ def test_docker_recompute_off_main_thread_tray_never_freezes(qapp, monkeypatch):
         return True
     monkeypatch.setattr(bd.BuildDriver, "_image_present", slow_present)
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
     # keep tray construction cheap (its node.status() would otherwise probe docker)
     monkeypatch.setattr(tray_mod._Section, "refresh", lambda self: None)
 
@@ -97,7 +97,7 @@ def test_stale_recompute_result_is_dropped(qapp, monkeypatch):
     results are dropped so the preview never flickers to an outdated preflight)."""
     monkeypatch.setattr(bd.BuildDriver, "_image_present", lambda self: True)
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
     wiz = wizard_mod.StudioWizard(GENERATOR_DIR)
     build = _build_page(wiz)
     build.initializePage()
@@ -120,7 +120,7 @@ def test_run_recompute_rearms_when_a_probe_is_still_in_flight(qapp, monkeypatch)
     (not silently return) so a pending recompute always has a trigger left."""
     monkeypatch.setattr(bd.BuildDriver, "_image_present", lambda self: True)
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
     wiz = wizard_mod.StudioWizard(GENERATOR_DIR)
     build = _build_page(wiz)
     build.initializePage()

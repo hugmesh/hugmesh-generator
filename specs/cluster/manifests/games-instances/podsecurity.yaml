@@ -1,4 +1,4 @@
-# snapdragon-games-instances — the RESTRICTIVE PodSecurity profile every per-domain
+# hugmesh-games-instances — the RESTRICTIVE PodSecurity profile every per-domain
 # game-server instance Deployment MUST carry. This is the EXEMPLAR the 13c ApplicationSet
 # template (apps/13c-games-instances.yaml) renders per instance: a runtime-class +
 # securityContext baseline so an arbitrary curated FOSS image runs with the LEAST
@@ -25,9 +25,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: games-instance-template
-  namespace: snapdragon-games-instances
+  namespace: hugmesh-games-instances
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/games-instance: "true"
     snapdragon.systems/games-instance-template: "true"
   annotations:
@@ -68,7 +68,7 @@ spec:
             requests: { cpu: 250m, memory: 256Mi }
             limits:   { cpu: "2",  memory: 2Gi }
           volumeMounts:
-            # World saves: per-instance RWO PVC on snapdragon-local (see the PVC template).
+            # World saves: per-instance RWO PVC on hugmesh-local (see the PVC template).
             - { name: world, mountPath: /data }
             # Scratch for a readOnlyRootFilesystem image (tmp, runtime state).
             - { name: scratch, mountPath: /tmp }
@@ -78,20 +78,20 @@ spec:
         - name: scratch
           emptyDir: {}
 ---
-# Per-instance world-save PVC exemplar — RWO on snapdragon-local (node-pinned local PV).
+# Per-instance world-save PVC exemplar — RWO on hugmesh-local (node-pinned local PV).
 # World saves are per-instance and NOT HA: an instance is pinned to its storage node (no
 # live-migration of saves). Surfaced as a residual in docs/GAMES-APPSTORE.md.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: games-instance-template-world
-  namespace: snapdragon-games-instances
+  namespace: hugmesh-games-instances
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/games-instance-template: "true"
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources:
     requests:
       storage: 2Gi

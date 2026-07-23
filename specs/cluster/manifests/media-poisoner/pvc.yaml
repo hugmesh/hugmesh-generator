@@ -1,4 +1,4 @@
-# Model-weights store for snapdragon-media-poisoner.
+# Model-weights store for hugmesh-media-poisoner.
 #
 # The LEAN (shipped) perturbation needs NO weights — this PVC + the model-weights-seed
 # initContainer exist so the GPU / SD-VAE PGD follow-up only has to swap the worker
@@ -14,9 +14,9 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: media-poisoner-models
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-media-poisoner }
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-media-poisoner }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 8Gi } }

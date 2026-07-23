@@ -9,15 +9,15 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: clickhouse
-  namespace: snapdragon-backend
-  labels: { app: clickhouse, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: clickhouse, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   selector: { matchLabels: { app: clickhouse } }
   template:
     metadata: { labels: { app: clickhouse } }
     spec:
-      # The analytics/telemetry warehouse runs on the x86_64 host: snapdragon-local
+      # The analytics/telemetry warehouse runs on the x86_64 host: hugmesh-local
       # storage (the data disks at /mnt/data + /mnt/usb) lives there, so the
       # clickhouse-data PV is node-local to that host. (backend Pis have no big disk.)
       # nodeSelector — NOT a taint: the shared x86 host stays schedulable for
@@ -37,7 +37,7 @@ spec:
             limits:   { cpu: "1",  memory: 2Gi }
           ports: [{ name: http, containerPort: 8123 }, { name: native, containerPort: 9000 }]
           env:
-            - { name: CLICKHOUSE_DB, value: snapdragon }
+            - { name: CLICKHOUSE_DB, value: hugmesh }
             - { name: CLICKHOUSE_USER, value: snap }
             - { name: CLICKHOUSE_PASSWORD, valueFrom: { secretKeyRef: { name: clickhouse-auth, key: password } } }
           volumeMounts: [{ name: data, mountPath: /var/lib/clickhouse }]
@@ -47,9 +47,9 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: clickhouse-data
-  namespace: snapdragon-backend
-  labels: { app: clickhouse, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: clickhouse, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 20Gi } }

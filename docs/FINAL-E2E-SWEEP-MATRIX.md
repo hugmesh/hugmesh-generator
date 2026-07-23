@@ -52,7 +52,7 @@ serializes (correct results, one at a time) **FAILS** — concurrency is contrac
 | # | action | casdoor | gateway | bff | homeserver | egress | ui | sse | status |
 |---|---|---|---|---|---|---|---|---|---|
 | M1 | moderate an assigned user (akkoma admin) | claim=ROLE_MOD | ALLOW | ALLOW | effect applied | — | panel shown | action msg | **WIRED** (B/C; F: cross-observer — an ADMIN reads the mod's audit row back via `GET /bff/mod/audit`, bounded read-after-write) |
-| M2 | reach `/api/admin/**` (snapdragon admin) | — | **DENY** | **DENY** | — | — | hidden | deny msg | **WIRED** (B/C negative) |
+| M2 | reach `/api/admin/**` (hugmesh admin) | — | **DENY** | **DENY** | — | — | hidden | deny msg | **WIRED** (B/C negative) |
 | M3 | reach `/bff/admin/**` | — | **DENY** | **DENY** | — | — | hidden | deny msg | **WIRED** (B/C negative) |
 | M4 | moderate an ADMIN or a peer mod | — | DENY (out of block) | DENY | no effect | — | disabled + helptext | deny msg | **DOC** (sibling rule under load; block scoping is M1's inverse) |
 | M5 | reach infra/logs/server-admin | — | DENY (no route) | — | — | — | absent | — | **DOC** (contract-locked in spec 16) |
@@ -94,8 +94,8 @@ the forum rows + the `domain` column (absent from that oracle) are mirrored 1:1 
 unperturbed. **VALIDATES OFFLINE** (no cluster); **LIVE pending a kernel-fixed x86
 image** (the QEMU cluster cannot boot yet).
 
-The realms: **SYSTEMS** (org `snapdragon`, issuer `id.snapdragon.systems`, native
-`ROLE_*`), **GAMES** (org `threewizards`, issuer `id.snapdragon.games`, independent
+The realms: **SYSTEMS** (org `hugmesh`, issuer `id.hugmesh.systems`, native
+`ROLE_*`), **GAMES** (org `threewizards`, issuer `id.hugmesh.games`, independent
 Casdoor, native lowercase `player`/`admin`; namespace surfaces `/games/admin/**` +
 `/games/api/admin/**` gated on the DERIVED systems `ROLE_GAMES_ADMIN`), **FORUM**
 (phpBB via forum-bff: `/social/forum/**` + `/bff/forum/**`, access role `ROLE_FORUM`,
@@ -120,7 +120,7 @@ derived `ROLE_FORUM_MOD = ROLE_MOD ∩ ROLE_FORUM`; phpBB itself has NO gateway 
 | CR15 | per-domain · model | `domainApplies`: NULL/blank/`default` unscoped; a brand row applies to its brand only | fidelity | **WIRED** |
 
 NB the systems→games SYNC **propagation** proof (`ROLE_GAMES_ADMIN`→games `admin`)
-is owned by `snapdragon-actions/e2e` (`sync-steps.ts`) and is NOT duplicated here;
+is owned by `hugmesh-actions/e2e` (`sync-steps.ts`) and is NOT duplicated here;
 spec 26 asserts only the cross-realm **authz isolation** half (the catalogue +
 issuer-isolation invariants).
 

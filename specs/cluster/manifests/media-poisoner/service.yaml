@@ -1,6 +1,6 @@
-# ClusterIP — reached ONLY in-cluster by snapdragon-user-bff-api's media-proxy over
+# ClusterIP — reached ONLY in-cluster by hugmesh-user-bff-api's media-proxy over
 # stable DNS:
-#   snapdragon-media-poisoner.snapdragon-backend.svc.cluster.local:8080
+#   hugmesh-media-poisoner.hugmesh-backend.svc.cluster.local:8080
 # The BFF hard-codes this FQDN (MEDIA_POISONING_WORKER_URL on the user-bff-api
 # Deployment) for both POST /poison and the GET /health capability probe. On a
 # Pi5-only cluster the backing pod is Pending, so this Service has NO Ready
@@ -9,11 +9,11 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: snapdragon-media-poisoner
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-media-poisoner }
+  name: hugmesh-media-poisoner
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-media-poisoner }
 spec:
   type: ClusterIP
-  selector: { app: snapdragon-media-poisoner }
+  selector: { app: hugmesh-media-poisoner }
   ports:
     - { name: http, port: 8080, targetPort: http }

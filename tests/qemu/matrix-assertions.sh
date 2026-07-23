@@ -6,7 +6,7 @@
 #
 # This file is a library: it defines functions and constants only, it never boots or
 # builds anything on its own. The runtime-load re-boot is the one function that starts
-# QEMU, and it is invoked only on the gated (SNAPDRAGON_QEMU_E2E=1 + artifacts) path.
+# QEMU, and it is invoked only on the gated (HUGMESH_QEMU_E2E=1 + artifacts) path.
 #
 # Design:
 #   assert_size        the built .img/ISO is <= (1+512+ROOT_MiB+1) MiB, with ROOT_MiB
@@ -19,14 +19,14 @@
 #                      envelope that proves rpi3 (1GB) / orin-nano-4gb (4GB) fit.
 #
 # These helpers assume the caller has set MA_PY (a python that can import
-# snapdragon_studio.core) and MA_REPO (the generator repo root); source-time defaults
+# hugmesh_studio.core) and MA_REPO (the generator repo root); source-time defaults
 # resolve both so the file is usable standalone for `bash -n` / unit probing.
 
 # ── Resolve the repo root + a python that can import the studio core ───────────────
 _MA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${MA_REPO:=$(cd "${_MA_DIR}/../.." && pwd)}"
 if [ -z "${MA_PY:-}" ]; then
-    for _c in "/var/tmp/portage/snapdragon-work/.venv-studio/bin/python" \
+    for _c in "/var/tmp/portage/hugmesh-work/.venv-studio/bin/python" \
               "${MA_REPO}/studio/.venv/bin/python" "python3"; do
         command -v "${_c}" >/dev/null 2>&1 && { MA_PY="${_c}"; break; }
     done
@@ -54,9 +54,9 @@ _ma_py() {
 resolve_artifact() {
     local plat="$1" board="$2" role="$3" wd="${4:-${WORK_DIR:-.}}" f pat
     for pat in \
-        "${wd}/snapdragon-${plat}-${board:+${board}-}"*"${role}"*".img" \
-        "${wd}/snapdragon-${plat}-"*".img" \
-        "${wd}/snapdragon-${plat}-"*".img.xz" \
+        "${wd}/hugmesh-${plat}-${board:+${board}-}"*"${role}"*".img" \
+        "${wd}/hugmesh-${plat}-"*".img" \
+        "${wd}/hugmesh-${plat}-"*".img.xz" \
         "${wd}/"*".img" ; do
         # shellcheck disable=SC2086 -- intentional glob expansion of the pattern
         f="$(ls -1t ${pat} 2>/dev/null | grep -viE '(kernel|initramfs|initrd|squashfs|/Image$|rootfs\.img)' | head -1)"
@@ -69,12 +69,12 @@ resolve_artifact() {
 # plan_root_mib < plan.txt  →  echoes the ROOT_MiB (img_size=) the row's builder plans.
 # Delegates to build_matrix.parse_img_size_mib so the shell + python read it identically.
 plan_root_mib() {
-    _ma_py -c 'import sys; from snapdragon_studio.core.build_matrix import parse_img_size_mib; print(parse_img_size_mib(sys.stdin.read()))'
+    _ma_py -c 'import sys; from hugmesh_studio.core.build_matrix import parse_img_size_mib; print(parse_img_size_mib(sys.stdin.read()))'
 }
 
 # expected_image_bytes ROOT_MiB → echoes (1+512+ROOT_MiB+1)*MiB (the compact layout).
 expected_image_bytes() {
-    _ma_py -c "from snapdragon_studio.core.build_matrix import compact_image_bytes; print(compact_image_bytes(int('$1')))"
+    _ma_py -c "from hugmesh_studio.core.build_matrix import compact_image_bytes; print(compact_image_bytes(int('$1')))"
 }
 
 # ── SIZE assertion ────────────────────────────────────────────────────────────────
@@ -110,11 +110,11 @@ assert_size() {
 # this assertion is a docker-channel invariant only.
 assert_build_load() {
     local mem jobs mem_args
-    mem="$(_ma_py -c 'from snapdragon_studio.core.host_resources import build_memory_flag; print(build_memory_flag() or "none")')"
-    jobs="$(_ma_py -c 'from snapdragon_studio.core.host_resources import default_jobs; print(default_jobs())')"
+    mem="$(_ma_py -c 'from hugmesh_studio.core.host_resources import build_memory_flag; print(build_memory_flag() or "none")')"
+    jobs="$(_ma_py -c 'from hugmesh_studio.core.host_resources import default_jobs; print(default_jobs())')"
     info "build-host caps: --memory=${mem} jobs=${jobs} (host_resources.py)"
     # docker_memory_args() must emit the SAME cap (or [] when disabled/unknown).
-    mem_args="$(_ma_py -c 'from snapdragon_studio.core.build_driver import docker_memory_args; print(" ".join(docker_memory_args()))')"
+    mem_args="$(_ma_py -c 'from hugmesh_studio.core.build_driver import docker_memory_args; print(" ".join(docker_memory_args()))')"
     if [ "${mem}" != "none" ]; then
         case "${mem_args}" in
             *"--memory ${mem}"*) : ;;

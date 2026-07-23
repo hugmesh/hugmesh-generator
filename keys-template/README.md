@@ -83,8 +83,8 @@ KEYS/                                 (FAT32, volume label "KEYS")
 > (`.conf`, first-class) / OpenVPN (`.ovpn`, fallback) configs the mesh node uses
 > for OUTGOING / egress traffic on public flows. `provision_vpn()` installs ONLY
 > the node's OWN domain's configs (`.egress_vpn.domain` else
-> `.snapdragon.cluster_domain`), mode `0600`, root-owned, into
-> `/etc/snapdragon/vpn/`. A config under another tenant's `<domain>/` is never
+> `.hugmesh.cluster_domain`), mode `0600`, root-owned, into
+> `/etc/hugmesh/vpn/`. A config under another tenant's `<domain>/` is never
 > installed on this node (per-domain isolation). Stage them with
 > `gen-provision-keys.sh --vpn-src DIR [--vpn-domain D]` (copies verbatim — these
 > are **secrets**, never committed). See `keys-template/vpn/README.md`.
@@ -92,7 +92,7 @@ KEYS/                                 (FAT32, volume label "KEYS")
 > `desktop-governance/` is **OPTIONAL and absent by default**. It carries the
 > desktop app-governance config TEMPLATES for client desktops (laptop /
 > chromebook / desktop). `provision_desktop_governance()` uses these only if the
-> image did not bake them at `/etc/snapdragon/desktop-governance/`, then renders
+> image did not bake them at `/etc/hugmesh/desktop-governance/`, then renders
 > them (substituting the node's domain) into Discover/Flatpak, polkit, and SSSD.
 > Default-deny / empty-store / ships-dark: no config ⇒ empty Discover store, no
 > user has sudo. These files are **not secrets** (they carry hosts + the
@@ -118,7 +118,7 @@ KEYS/                                 (FAT32, volume label "KEYS")
 | `network.wifi.{ssid,psk,country}` | Synthesises a NetworkManager Wi-Fi profile. |
 | `network` *(or `network/*.nmconnection`)* | Verbatim NM connection profiles are also copied. |
 | `mesh.endpoint` | Mesh control-server URL override. **Empty = local-first**: defaults to the pki node's primary LAN IPv4 (`http://<lanip>:8080`), so the node works before any public DNS exists. |
-| `mesh.magic_dns_domain` | The **orchestration superdomain** — the internal MagicDNS zone (headscale `dns.base_domain`) every mesh node joins. **Permanently internal**: it is `<brand>.internal` (default `snapdragon.internal`), distinct from the public `snapdragon.cluster_domain`, and is **never** go-live-flipped. `gen-provision-keys.sh` writes the effective value here (`SUPERDOMAIN` / `--superdomain`, default `<BRAND>.internal`). |
+| `mesh.magic_dns_domain` | The **orchestration superdomain** — the internal MagicDNS zone (headscale `dns.base_domain`) every mesh node joins. **Permanently internal**: it is `<brand>.internal` (default `hugmesh.internal`), distinct from the public `hugmesh.cluster_domain`, and is **never** go-live-flipped. `gen-provision-keys.sh` writes the effective value here (`SUPERDOMAIN` / `--superdomain`, default `<BRAND>.internal`). |
 | `mesh.cp_dns_name` | **Stable** MagicDNS control-plane name (default `kube-api.<magic_dns_domain>`) used as kubeadm `controlPlaneEndpoint` + every join target. |
 | `headscale.enabled` | Start the headscale control server (PKI node). |
 | `headscale.config_file` | Path on KEYS to a config that replaces the default. |
@@ -133,12 +133,12 @@ KEYS/                                 (FAT32, volume label "KEYS")
 | `kubernetes.config_file` | kubeadm config override on KEYS (`controlPlaneEndpoint` = the stable `mesh.cp_dns_name`). |
 | `kubernetes.pki_dir` | Directory on KEYS copied to `/etc/kubernetes/pki` (shared CA across control-plane nodes). |
 | `kubernetes.join.{api_server,token,ca_cert_hash}` | Worker join parameters. Empty `api_server` auto-targets `mesh.cp_dns_name:6443`. |
-| `kubernetes.join.certificate_key` | **Additional control-plane only**: the `--certificate-key` from the first CP's `kubeadm init phase upload-certs` (also persisted at `/etc/snapdragon/kubeadm-certificate-key`). |
-| `snapdragon.role` | `pki` \| `backend` \| `frontend` — selects the cluster app set / namespace this node serves. |
-| `snapdragon.cluster_domain` | The **public apex** for gateways/ingress/Casdoor — the go-live target the wizard flips to a real routable domain. Distinct from `mesh.magic_dns_domain` (the permanently-internal orchestration superdomain, which is never go-live-flipped). |
-| `snapdragon.gitops.{enabled,argocd}` | On the PKI node, bootstrap ArgoCD + the app-of-apps. |
-| `snapdragon.gitops.repo_token_file` | Path on KEYS to a **fine-grained read-only GitHub PAT** (default `gitops/repo-token`) that lets ArgoCD clone the **private** GitOps repo. `provision_snapdragon()` reads it and exports it as `ARGOCD_REPO_TOKEN`; `bootstrap.sh` then creates the `snapdragon-generator-repo` repository Secret **before** the app-of-apps. **NEVER in git**, same offline custody as `vault/token` + `luks.key`. Absent ⇒ `bootstrap.sh` fails closed for the private repo (rotate = rewrite this file + re-run provisioning). |
-| `egress_vpn.domain` | OPTIONAL override for the node's own brand domain used to pick `KEYS/vpn/<domain>/` (defaults to `snapdragon.cluster_domain`). `provision_vpn()` installs ONLY this domain's configs, 0600. |
+| `kubernetes.join.certificate_key` | **Additional control-plane only**: the `--certificate-key` from the first CP's `kubeadm init phase upload-certs` (also persisted at `/etc/hugmesh/kubeadm-certificate-key`). |
+| `hugmesh.role` | `pki` \| `backend` \| `frontend` — selects the cluster app set / namespace this node serves. |
+| `hugmesh.cluster_domain` | The **public apex** for gateways/ingress/Casdoor — the go-live target the wizard flips to a real routable domain. Distinct from `mesh.magic_dns_domain` (the permanently-internal orchestration superdomain, which is never go-live-flipped). |
+| `hugmesh.gitops.{enabled,argocd}` | On the PKI node, bootstrap ArgoCD + the app-of-apps. |
+| `hugmesh.gitops.repo_token_file` | Path on KEYS to a **fine-grained read-only GitHub PAT** (default `gitops/repo-token`) that lets ArgoCD clone the **private** GitOps repo. `provision_hugmesh()` reads it and exports it as `ARGOCD_REPO_TOKEN`; `bootstrap.sh` then creates the `hugmesh-generator-repo` repository Secret **before** the app-of-apps. **NEVER in git**, same offline custody as `vault/token` + `luks.key`. Absent ⇒ `bootstrap.sh` fails closed for the private repo (rotate = rewrite this file + re-run provisioning). |
+| `egress_vpn.domain` | OPTIONAL override for the node's own brand domain used to pick `KEYS/vpn/<domain>/` (defaults to `hugmesh.cluster_domain`). `provision_vpn()` installs ONLY this domain's configs, 0600. |
 | `vault.*` | Seed HashiCorp Vault / External Secrets Operator state; Vault is primary, USB is the offline fallback (see below). |
 | `storage.devices[]` | Set up attached M.2/NVMe or USB storage (see below). |
 | `backup.*` | Schedule etcd + PostgreSQL backups to attached storage / network share. |
@@ -165,8 +165,8 @@ it — handy for putting container/image layers on fast NVMe instead of the SD c
 Backs up Kubernetes `etcd` (control-plane) and PostgreSQL (via `kubectl exec`
 into the DB pods) on a cron schedule, to **any combination** of: attached
 storage (`local`), an NFS share, and/or a CIFS/SMB share. The config is written
-to `/etc/snapdragon/backup.json` (a plain file you can also edit on the device),
-and the run script is `/usr/local/sbin/snapdragon-backup`.
+to `/etc/hugmesh/backup.json` (a plain file you can also edit on the device),
+and the run script is `/usr/local/sbin/hugmesh-backup`.
 
 | Field | Meaning |
 |---|---|
@@ -183,10 +183,10 @@ and the run script is `/usr/local/sbin/snapdragon-backup`.
 ### Secrets / Vault (`vault.*`)
 
 Application secrets live in **HashiCorp Vault** (KV v2, mount `secret`, under the
-brand base path — default `snapdragon/`). Vault is the **source of truth**; the
+brand base path — default `hugmesh/`). Vault is the **source of truth**; the
 USB stick carries an **offline copy** so a fresh device can come up with no
 reachable Vault. Integration is via the **External Secrets Operator (ESO)**: a
-`ClusterSecretStore` named `snapdragon-vault` plus one `ExternalSecret` per
+`ClusterSecretStore` named `hugmesh-vault` plus one `ExternalSecret` per
 workload Secret (deployed by ArgoCD). The workloads keep their existing
 `secretKeyRef` usage unchanged — ESO just materializes the Secrets below.
 
@@ -196,15 +196,15 @@ is guarded and logged; a failure never aborts the rest of provisioning.
 | Field | Meaning |
 |---|---|
 | `enabled` | Master switch. If not `true`, Vault/ESO seeding is skipped. |
-| `address` | Vault URL (e.g. `https://vault.snapdragon.systems`). Empty ⇒ offline-only. |
+| `address` | Vault URL (e.g. `https://vault.hugmesh.systems`). Empty ⇒ offline-only. |
 | `kv_mount` | KV v2 mount used by the `ClusterSecretStore` (default `secret`). |
-| `base_path` | Base segment under the mount; equals the brand slug (default `snapdragon`). |
+| `base_path` | Base segment under the mount; equals the brand slug (default `hugmesh`). |
 | `token_file` | Path on KEYS to a Vault token / AppRole secret-id (default `vault/token`). |
 | `install_eso` | Hint that ESO should be installed (ESO itself is deployed by ArgoCD). |
 
 **Online (primary).** When `address` is set **and** `KEYS/vault/token` exists,
 the token is loaded into a k8s Secret `vault-token` (key `token`) in the
-`external-secrets` namespace so the `snapdragon-vault` `ClusterSecretStore` can
+`external-secrets` namespace so the `hugmesh-vault` `ClusterSecretStore` can
 authenticate to Vault. ESO then keeps the workload Secrets in sync
 (`refreshInterval 1h`).
 
@@ -227,12 +227,12 @@ via the attached USB*. The bundle mirrors exactly what ESO would materialize:
 
 | Namespace | Secret | Keys (from Vault) |
 |---|---|---|
-| `snapdragon-pki` | `casdoor-google` | `clientId` ← `casdoor.google_client_id`, `clientSecret` ← `casdoor.google_client_secret` |
-| `snapdragon-pki` | `casdoor-github` | `clientId` ← `casdoor.github_client_id`, `clientSecret` ← `casdoor.github_client_secret` |
-| `snapdragon-pki` | `casdoor-discord` | `clientId` ← `casdoor.discord_client_id`, `clientSecret` ← `casdoor.discord_client_secret` |
-| `snapdragon-pki` | `casdoor-smtp` *(opt)* | `CASDOOR_SMTP_*` ← `mail.{host,port,user,password,from}` |
-| `snapdragon-backend` | `clickhouse-auth` | `password` ← `clickhouse.password` |
-| `snapdragon-backend` | `akkoma-smtp` *(opt)* | `AKKOMA_SMTP_*` ← `mail.{host,port,user,password,tls,from}` |
+| `hugmesh-pki` | `casdoor-google` | `clientId` ← `casdoor.google_client_id`, `clientSecret` ← `casdoor.google_client_secret` |
+| `hugmesh-pki` | `casdoor-github` | `clientId` ← `casdoor.github_client_id`, `clientSecret` ← `casdoor.github_client_secret` |
+| `hugmesh-pki` | `casdoor-discord` | `clientId` ← `casdoor.discord_client_id`, `clientSecret` ← `casdoor.discord_client_secret` |
+| `hugmesh-pki` | `casdoor-smtp` *(opt)* | `CASDOOR_SMTP_*` ← `mail.{host,port,user,password,from}` |
+| `hugmesh-backend` | `clickhouse-auth` | `password` ← `clickhouse.password` |
+| `hugmesh-backend` | `akkoma-smtp` *(opt)* | `AKKOMA_SMTP_*` ← `mail.{host,port,user,password,tls,from}` |
 | `observability` | `clickhouse-auth` | `password` ← `clickhouse.password` |
 | `observability` | `uptrace-auth` | `pg-password` ← `uptrace.pg_password`, `project-token` ← `uptrace.project_token` |
 
@@ -240,8 +240,8 @@ The `casdoor-smtp` / `akkoma-smtp` rows are **optional**: the bundle only carrie
 them when real `mail.user` + `mail.password` resolve (otherwise no SMTP is wired).
 `casdoor-github` / `casdoor-discord` are seeded with placeholders until real OAuth
 client creds are supplied. The Vault paths backing these (KV v2, snake_case keys)
-are `secret/snapdragon/casdoor`, `secret/snapdragon/clickhouse`,
-`secret/snapdragon/uptrace`, and `secret/snapdragon/mail`.
+are `secret/hugmesh/casdoor`, `secret/hugmesh/clickhouse`,
+`secret/hugmesh/uptrace`, and `secret/hugmesh/mail`.
 
 ## `users.json`
 

@@ -3,7 +3,7 @@
 # list-generator + installed-flag + selector pattern) and gated by the SAME games-up
 # install-state.
 #
-# WHAT IT OWNS: the snapdragon-games-instances namespace + its default-deny NetworkPolicy
+# WHAT IT OWNS: the hugmesh-games-instances namespace + its default-deny NetworkPolicy
 # + enforced restricted PodSecurity + the per-instance Deployment/Service/PVC hardening
 # exemplar (manifests/games-instances). The base element below installs that surrounding
 # hardening so every per-instance pod lands inside the isolation boundary.
@@ -44,7 +44,7 @@ spec:
         # every per-instance pod lands inside. `installed` mirrors the games slug's state.
         # Scaffolded "false" (ships dark) until PR10 wires the games-up flip.
         elements:
-          - { slug: games-instances, path: specs/cluster/manifests/games-instances, namespace: snapdragon-games-instances, installed: "false" }
+          - { slug: games-instances, path: specs/cluster/manifests/games-instances, namespace: hugmesh-games-instances, installed: "false" }
       selector:
         matchLabels:
           installed: "true"
@@ -52,12 +52,12 @@ spec:
     metadata:
       name: "games-{{ .slug }}"
       labels:
-        app.kubernetes.io/part-of: snapdragon.systems
+        app.kubernetes.io/part-of: hugmesh.systems
         snapdragon.systems/games-instances: "{{ .slug }}"
     spec:
       project: default
       source:
-        repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+        repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
         targetRevision: main
         path: "{{ .path }}"
       destination:

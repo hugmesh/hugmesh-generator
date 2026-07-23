@@ -1,10 +1,10 @@
-# federation-db — dedicated Postgres for snapdragon-federation-api's OWN tables
+# federation-db — dedicated Postgres for hugmesh-federation-api's OWN tables
 # (federation_modules / user_modules / moderation_requests / federation_override).
-# Lives in snapdragon-backend next to the federation app it serves. ClusterIP only;
-# the only client is snapdragon-federation-api (R2DBC at runtime + a JDBC handle that
+# Lives in hugmesh-backend next to the federation app it serves. ClusterIP only;
+# the only client is hugmesh-federation-api (R2DBC at runtime + a JDBC handle that
 # Liquibase uses ONCE at startup to apply the changelog).
 #
-# NOTE: the literal hostname `snapdragon-pg` that federation's application.yml
+# NOTE: the literal hostname `hugmesh-pg` that federation's application.yml
 # defaults to does NOT exist anywhere in the cluster; this dedicated `federation-db`
 # Service is the real backing store, and the federation Deployment OVERRIDES the
 # R2DBC/Liquibase URLs to point here.
@@ -14,7 +14,7 @@
 # applied by the app at boot. This DB only needs to exist EMPTY (POSTGRES_DB).
 #
 # Credentials: the OWNER POSTGRES_PASSWORD is sourced from Vault via External
-# Secrets (ESO Secret federation-db-auth, key password <- secret/snapdragon/
+# Secrets (ESO Secret federation-db-auth, key password <- secret/hugmesh/
 # federation-db). The OWNER role is now used by the federation app for DDL/Liquibase
 # ONLY. At RUNTIME the app logs in as the dedicated NON-OWNER least-privilege role
 # `federation_app` (its OWN password, ESO Secret federation-db-app-auth, created by
@@ -26,8 +26,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: federation-db
-  namespace: snapdragon-backend
-  labels: { app: federation-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: federation-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over a RWO PVC

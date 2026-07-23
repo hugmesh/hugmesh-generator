@@ -1,11 +1,11 @@
-# Harbor — the in-cluster OCI container registry, in the snapdragon-pki
+# Harbor — the in-cluster OCI container registry, in the hugmesh-pki
 # namespace (control-plane/identity tier; see the harbor-provision Job comment
 # for why this namespace vs. a dedicated "registry" one).
 #
 # REPLACES GitLab's bundled container registry as the thing that actually
 # serves images (GitLab itself, and its Generic Package Registry used for ISO
 # delivery, are UNCHANGED — see .gitlab-ci.yml deliver:isos). The hostname
-# registry.{{CLUSTER_DOMAIN}} / registry.snapdragon.systems IS repointed by this
+# registry.{{CLUSTER_DOMAIN}} / registry.hugmesh.systems IS repointed by this
 # Application: expose.type: ingress below claims that hostname directly, and
 # GitLab's own bundled registry subchart is disabled in apps/03-gitlab.yaml
 # (registry.enabled: false) in the SAME migration so nothing else can claim it.
@@ -36,14 +36,14 @@
 # equivalent and is strictly better — a real PKI-issued cert instead of a
 # self-signed default.)
 #
-# Reachable in-cluster at harbor-core.snapdragon-pki.svc.cluster.local
+# Reachable in-cluster at harbor-core.hugmesh-pki.svc.cluster.local
 # (unaffected by the above) for the provisioning Job (harbor-provision, see
 # manifests/harbor/) and for be-gateway/image-builder pull+push via
 # imagePullSecrets/newName (already wired, see the harbor-registry/
-# image-builder-registry ExternalSecrets and the registry.snapdragon.systems
+# image-builder-registry ExternalSecrets and the registry.hugmesh.systems
 # newName rewrites across manifests/*/kustomization.yaml).
 #
-# NOTE (operator/DNS): registry.snapdragon.systems resolving to the pki node's
+# NOTE (operator/DNS): registry.hugmesh.systems resolving to the pki node's
 # IP for LAN/VPN clients (mirroring the scale.<domain> facade alias
 # provision_hosts already writes) is a platform DNS-topology question that
 # predates this migration and applies identically regardless of which backend
@@ -54,7 +54,7 @@
 # Modeled directly on apps/03-gitlab.yaml's shape: bundled Postgres+Redis via
 # the chart's own subcharts (this platform has no shared DB operator — every
 # service bundles its own, same as GitLab's postgresql/redis/minio above).
-# Storage pinned to snapdragon-local, matching every other stateful app here.
+# Storage pinned to hugmesh-local, matching every other stateful app here.
 #
 # mTLS: expose.tls consumes the harbor-mtls Secret (Vault-PKI issued, see
 # manifests/external-secrets/harbor-externalsecrets.yaml + the "harbor" role
@@ -101,24 +101,24 @@ spec:
               secretName: harbor-mtls
           ingress:
             hosts:
-              core: registry.snapdragon.systems
+              core: registry.hugmesh.systems
             className: nginx-internal
-        externalURL: https://registry.snapdragon.systems
+        externalURL: https://registry.hugmesh.systems
         harborAdminPassword: ""     # unused; existingSecret below wins
         existingSecretAdminPassword: harbor-admin
         existingSecretAdminPasswordKey: HARBOR_ADMIN_PASSWORD
         # Pin everything to the pki/control-plane node, matching every other
-        # snapdragon-pki workload (casdoor, route-access-db, vault, ...).
+        # hugmesh-pki workload (casdoor, route-access-db, vault, ...).
         nodeSelector:
           snapdragon.systems/pki: "true"
         persistence:
           persistentVolumeClaim:
-            registry:      { storageClass: snapdragon-local }
+            registry:      { storageClass: hugmesh-local }
             jobservice:
-              jobLog:      { storageClass: snapdragon-local }
-            database:      { storageClass: snapdragon-local }   # bundled Postgres
-            redis:         { storageClass: snapdragon-local }   # bundled Redis
-            trivy:         { storageClass: snapdragon-local }
+              jobLog:      { storageClass: hugmesh-local }
+            database:      { storageClass: hugmesh-local }   # bundled Postgres
+            redis:         { storageClass: hugmesh-local }   # bundled Redis
+            trivy:         { storageClass: hugmesh-local }
         trivy:
           enabled: false   # vulnerability scanning is a follow-up, not this migration
         # internalTLS (pod-to-pod mTLS between Harbor's OWN bundled
@@ -129,7 +129,7 @@ spec:
         # roles are used. Leaving this off matches that existing convention.
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-pki
+    namespace: hugmesh-pki
   syncPolicy:
     automated: { prune: false, selfHeal: true }   # prune off: stateful CRDs/PVCs, same as GitLab
     syncOptions: [CreateNamespace=true, ServerSideApply=true]

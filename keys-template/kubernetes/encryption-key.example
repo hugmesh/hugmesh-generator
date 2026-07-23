@@ -16,5 +16,5 @@
 # keys-provision (ensure_encryption_config) reads this before `kubeadm init`/
 # `join` and writes /etc/kubernetes/encryption-config.yaml (aescbc provider). If
 # absent, a fresh key is minted on the first control plane and saved to
-# /etc/snapdragon/etcd-encryption.key with a WARNING to copy it to the other CPs.
+# /etc/hugmesh/etcd-encryption.key with a WARNING to copy it to the other CPs.
 # See docs/ENCRYPTION-AT-REST.md (KMS-via-Vault-Transit is the documented upgrade).

@@ -16,7 +16,7 @@
 #   * --dry-run          ALWAYS runs, no root, no boot, no builder: enumerates + resolves
 #                        a launcher + normalized invocation + RAM ceiling for every row.
 #                        This is the CI-green, hermetic path.
-#   * boot path          runs ONLY when SNAPDRAGON_QEMU_E2E=1 AND qemu is installed;
+#   * boot path          runs ONLY when HUGMESH_QEMU_E2E=1 AND qemu is installed;
 #                        otherwise SKIP-clean (exit 0). Per row, a missing artifact is a
 #                        per-row SKIP (exit-0 accounting), never a FAIL.
 #
@@ -27,7 +27,7 @@
 #
 #   bash tests/qemu/run-matrix-e2e.sh --dry-run                 # hermetic enumeration
 #   bash tests/qemu/run-matrix-e2e.sh --only x86/be+gpu         # subset
-#   SNAPDRAGON_QEMU_E2E=1 bash tests/qemu/run-matrix-e2e.sh --only x86/be+gpu  # real boot
+#   HUGMESH_QEMU_E2E=1 bash tests/qemu/run-matrix-e2e.sh --only x86/be+gpu  # real boot
 set -u -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,7 +49,7 @@ Usage: $0 [--dry-run] [--only PLATFORM[/ROLE]] [-w WORK_DIR]
   -w, --work-dir DIR  Where per-platform golden artifacts are autodetected. Default: ${WORK_DIR}
   -h, --help          This help.
 
-The real boot path runs only with SNAPDRAGON_QEMU_E2E=1 and qemu installed; otherwise
+The real boot path runs only with HUGMESH_QEMU_E2E=1 and qemu installed; otherwise
 it SKIPs clean (exit 0). A missing artifact for a row is a per-row SKIP, not a FAIL.
 EOF
 exit "${1:-0}"
@@ -143,13 +143,13 @@ normalize_row() {
 # Device RAM ceiling (MiB) for (platform, board) via the catalog, or "" if none.
 row_ram_mb() {
     local plat="$1" board="$2"
-    _ma_py -c "from snapdragon_studio.core.build_matrix import row_ram_mb; from snapdragon_studio.core.build_matrix import MatrixRow; r=MatrixRow('${plat}','','', '${board}','',''); v=row_ram_mb(r); print('' if v is None else v)" 2>/dev/null || true
+    _ma_py -c "from hugmesh_studio.core.build_matrix import row_ram_mb; from hugmesh_studio.core.build_matrix import MatrixRow; r=MatrixRow('${plat}','','', '${board}','',''); v=row_ram_mb(r); print('' if v is None else v)" 2>/dev/null || true
 }
 
 # ── Preflight gating for the boot path ────────────────────────────────────────────
 if ! ${DRY_RUN}; then
-    if [ "${SNAPDRAGON_QEMU_E2E:-}" != "1" ]; then
-        info "SKIP: matrix QEMU e2e is opt-in — set SNAPDRAGON_QEMU_E2E=1 (with qemu) or pass --dry-run."
+    if [ "${HUGMESH_QEMU_E2E:-}" != "1" ]; then
+        info "SKIP: matrix QEMU e2e is opt-in — set HUGMESH_QEMU_E2E=1 (with qemu) or pass --dry-run."
         exit 0
     fi
     # The stub-launcher seam (SNAP_QEMU_LAUNCH_CMD) replaces qemu for the hermetic

@@ -2,28 +2,28 @@
 #
 # tier-ingress.yaml admits the WHOLE owning namespace (+ frontend / ingress) to
 # every pod it selects via podSelector:{}. Under tier-ingress ALONE, any pod in
-# snapdragon-backend could open a Postgres socket directly to admin-bff-db /
+# hugmesh-backend could open a Postgres socket directly to admin-bff-db /
 # mod-bff-db / user-bff-db / federation-db / forum-bff-db / wiki-bff-db, and any
-# pod in snapdragon-pki (plus the cross-namespace from-set) could reach route-access-db
+# pod in hugmesh-pki (plus the cross-namespace from-set) could reach route-access-db
 # and Cassandra — bypassing the BFF / route-access authz that those stores back.
 #
 # This file is the per-pod backstop that closes that lateral path: each DB pod
 # becomes default-deny for Ingress and is reachable ONLY from its real consumers,
 # matched by the EXACT pod labels those consumers carry (verified against the
-# deployment manifests): the *-bff-api / federation-api pods (app: snapdragon-*)
+# deployment manifests): the *-bff-api / federation-api pods (app: hugmesh-*)
 # and, for route-access-db + Cassandra, the four gateways
-# (app.kubernetes.io/instance: snapdragon-*-gateway — same convention used by
+# (app.kubernetes.io/instance: hugmesh-*-gateway — same convention used by
 # homeserver-isolation.yaml).
 #
 # IMPORTANT — k8s NetworkPolicy is ADDITIVE (union of all selecting policies); it
 # has NO deny/exclude. So this isolation only holds once the BROAD tier-ingress
-# policies STOP selecting these DB pods. tier-ingress.yaml (snapdragon-backend +
-# snapdragon-pki) was therefore narrowed with a podSelector matchExpressions that
+# policies STOP selecting these DB pods. tier-ingress.yaml (hugmesh-backend +
+# hugmesh-pki) was therefore narrowed with a podSelector matchExpressions that
 # EXCLUDES the DB pods (app NotIn the set) — mirroring the homeserver NotIn trick.
 # This file and tier-ingress.yaml are a PAIR — keep the exclude lists in sync.
 #
-# CROSS-NAMESPACE: route-access-db + Cassandra live in snapdragon-pki but are
-# consumed by gateways/APIs in snapdragon-backend and snapdragon-frontend. A
+# CROSS-NAMESPACE: route-access-db + Cassandra live in hugmesh-pki but are
+# consumed by gateways/APIs in hugmesh-backend and hugmesh-frontend. A
 # NetworkPolicy podSelector only matches pods in the policy's OWN namespace, so
 # those cross-namespace consumers are admitted by a combined
 # namespaceSelector + podSelector peer (AND within one from-entry) that pins both
@@ -35,52 +35,52 @@
 # (real pod labels + Citus/initdb cross-DB role bootstrap traffic) BEFORE it is
 # relied upon. Ships DARK until then.
 ---
-# ── route-access-db (Postgres, snapdragon-pki) ─────────────────────────────────
+# ── route-access-db (Postgres, hugmesh-pki) ─────────────────────────────────
 # Consumers: all four gateways (route-access lookups) + admin-bff-api (route-access
 # admin writes via the `admin_bff` role / ROUTE_ACCESS_DB url). be-gateway lives in
-# snapdragon-backend, fe-gateway in snapdragon-frontend, pki-gateway +
-# superadmin-gateway in snapdragon-pki (self).
+# hugmesh-backend, fe-gateway in hugmesh-frontend, pki-gateway +
+# superadmin-gateway in hugmesh-pki (self).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: db-ingress-route-access-db
-  namespace: snapdragon-pki
-  labels: { app: route-access-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: route-access-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app: route-access-db }
   policyTypes: [Ingress]
   ingress:
     - from:
-        # be-gateway (snapdragon-backend) — route-access lookups.
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+        # be-gateway (hugmesh-backend) — route-access lookups.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
           podSelector:
-            matchLabels: { app.kubernetes.io/instance: snapdragon-be-gateway }
-        # admin-bff-api (snapdragon-backend) — route-access admin writes.
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+            matchLabels: { app.kubernetes.io/instance: hugmesh-be-gateway }
+        # admin-bff-api (hugmesh-backend) — route-access admin writes.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
           podSelector:
-            matchLabels: { app: snapdragon-admin-bff-api }
-        # fe-gateway (snapdragon-frontend) — route-access lookups.
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }
+            matchLabels: { app: hugmesh-admin-bff-api }
+        # fe-gateway (hugmesh-frontend) — route-access lookups.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }
           podSelector:
-            matchLabels: { app.kubernetes.io/instance: snapdragon-fe-gateway }
-        # pki-gateway (snapdragon-pki, self) — route-access lookups.
+            matchLabels: { app.kubernetes.io/instance: hugmesh-fe-gateway }
+        # pki-gateway (hugmesh-pki, self) — route-access lookups.
         - podSelector:
-            matchLabels: { app.kubernetes.io/instance: snapdragon-pki-gateway }
-        # superadmin-gateway (snapdragon-pki, self) — route-access lookups.
+            matchLabels: { app.kubernetes.io/instance: hugmesh-pki-gateway }
+        # superadmin-gateway (hugmesh-pki, self) — route-access lookups.
         - podSelector:
-            matchLabels: { app.kubernetes.io/instance: snapdragon-superadmin-gateway }
+            matchLabels: { app.kubernetes.io/instance: hugmesh-superadmin-gateway }
       ports:
         - { protocol: TCP, port: 5432 }
 ---
-# ── admin-bff-db (Postgres, snapdragon-backend) ────────────────────────────────
+# ── admin-bff-db (Postgres, hugmesh-backend) ────────────────────────────────
 # Consumer: admin-bff-api only (adminbff datasource).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: db-ingress-admin-bff-db
-  namespace: snapdragon-backend
-  labels: { app: admin-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: admin-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app: admin-bff-db }
@@ -88,18 +88,18 @@ spec:
   ingress:
     - from:
         - podSelector:
-            matchLabels: { app: snapdragon-admin-bff-api }
+            matchLabels: { app: hugmesh-admin-bff-api }
       ports:
         - { protocol: TCP, port: 5432 }
 ---
-# ── mod-bff-db (Postgres, snapdragon-backend) ──────────────────────────────────
+# ── mod-bff-db (Postgres, hugmesh-backend) ──────────────────────────────────
 # Consumer: mod-bff-api only (modbff datasource).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: db-ingress-mod-bff-db
-  namespace: snapdragon-backend
-  labels: { app: mod-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: mod-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app: mod-bff-db }
@@ -107,18 +107,18 @@ spec:
   ingress:
     - from:
         - podSelector:
-            matchLabels: { app: snapdragon-mod-bff-api }
+            matchLabels: { app: hugmesh-mod-bff-api }
       ports:
         - { protocol: TCP, port: 5432 }
 ---
-# ── user-bff-db (Postgres, snapdragon-backend) ─────────────────────────────────
+# ── user-bff-db (Postgres, hugmesh-backend) ─────────────────────────────────
 # Consumer: user-bff-api only (userbff datasource).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: db-ingress-user-bff-db
-  namespace: snapdragon-backend
-  labels: { app: user-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: user-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app: user-bff-db }
@@ -126,11 +126,11 @@ spec:
   ingress:
     - from:
         - podSelector:
-            matchLabels: { app: snapdragon-user-bff-api }
+            matchLabels: { app: hugmesh-user-bff-api }
       ports:
         - { protocol: TCP, port: 5432 }
 ---
-# ── federation-db (Postgres, snapdragon-backend) ───────────────────────────────
+# ── federation-db (Postgres, hugmesh-backend) ───────────────────────────────
 # Consumers: federation-api (federation datasource) + admin-bff-api (the admin-bff
 # cross-DB federation handle — see admin-bff-api deployment JDBC/R2DBC to
 # federation-db).
@@ -138,8 +138,8 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: db-ingress-federation-db
-  namespace: snapdragon-backend
-  labels: { app: federation-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: federation-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app: federation-db }
@@ -147,20 +147,20 @@ spec:
   ingress:
     - from:
         - podSelector:
-            matchLabels: { app: snapdragon-federation-api }
+            matchLabels: { app: hugmesh-federation-api }
         - podSelector:
-            matchLabels: { app: snapdragon-admin-bff-api }
+            matchLabels: { app: hugmesh-admin-bff-api }
       ports:
         - { protocol: TCP, port: 5432 }
 ---
-# ── forum-bff-db (Postgres, snapdragon-backend) ────────────────────────────────
+# ── forum-bff-db (Postgres, hugmesh-backend) ────────────────────────────────
 # Consumer: forum-bff-api only (forumbff datasource).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: db-ingress-forum-bff-db
-  namespace: snapdragon-backend
-  labels: { app: forum-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: forum-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app: forum-bff-db }
@@ -168,18 +168,18 @@ spec:
   ingress:
     - from:
         - podSelector:
-            matchLabels: { app: snapdragon-forum-bff-api }
+            matchLabels: { app: hugmesh-forum-bff-api }
       ports:
         - { protocol: TCP, port: 5432 }
 ---
-# ── wiki-bff-db (Postgres, snapdragon-backend) ─────────────────────────────────
+# ── wiki-bff-db (Postgres, hugmesh-backend) ─────────────────────────────────
 # Consumer: wiki-bff-api only (wikibff datasource).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: db-ingress-wiki-bff-db
-  namespace: snapdragon-backend
-  labels: { app: wiki-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: wiki-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app: wiki-bff-db }
@@ -187,13 +187,13 @@ spec:
   ingress:
     - from:
         - podSelector:
-            matchLabels: { app: snapdragon-wiki-bff-api }
+            matchLabels: { app: hugmesh-wiki-bff-api }
       ports:
         - { protocol: TCP, port: 5432 }
 ---
-# ── cassandra (snapdragon-pki, port 9042) ──────────────────────────────────────
+# ── cassandra (hugmesh-pki, port 9042) ──────────────────────────────────────
 # Consumers: admin-bff-api (CASSANDRA_CONTACT_POINTS) + federation-api
-# (MANIFEST_CACHE_CASSANDRA), both in snapdragon-backend, plus the gateways. Pod
+# (MANIFEST_CACHE_CASSANDRA), both in hugmesh-backend, plus the gateways. Pod
 # matched by the standard app.kubernetes.io/name: cassandra label. Same default-
 # deny-except shape as the DB policies above; cross-namespace consumers pinned by
 # namespaceSelector + podSelector.
@@ -201,35 +201,35 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: db-ingress-cassandra
-  namespace: snapdragon-pki
-  labels: { app.kubernetes.io/name: cassandra, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/name: cassandra, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app.kubernetes.io/name: cassandra }
   policyTypes: [Ingress]
   ingress:
     - from:
-        # admin-bff-api (snapdragon-backend) — CASSANDRA_CONTACT_POINTS.
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+        # admin-bff-api (hugmesh-backend) — CASSANDRA_CONTACT_POINTS.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
           podSelector:
-            matchLabels: { app: snapdragon-admin-bff-api }
-        # federation-api (snapdragon-backend) — MANIFEST_CACHE_CASSANDRA.
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+            matchLabels: { app: hugmesh-admin-bff-api }
+        # federation-api (hugmesh-backend) — MANIFEST_CACHE_CASSANDRA.
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
           podSelector:
-            matchLabels: { app: snapdragon-federation-api }
-        # be-gateway (snapdragon-backend).
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+            matchLabels: { app: hugmesh-federation-api }
+        # be-gateway (hugmesh-backend).
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
           podSelector:
-            matchLabels: { app.kubernetes.io/instance: snapdragon-be-gateway }
-        # fe-gateway (snapdragon-frontend).
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }
+            matchLabels: { app.kubernetes.io/instance: hugmesh-be-gateway }
+        # fe-gateway (hugmesh-frontend).
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }
           podSelector:
-            matchLabels: { app.kubernetes.io/instance: snapdragon-fe-gateway }
-        # pki-gateway (snapdragon-pki, self).
+            matchLabels: { app.kubernetes.io/instance: hugmesh-fe-gateway }
+        # pki-gateway (hugmesh-pki, self).
         - podSelector:
-            matchLabels: { app.kubernetes.io/instance: snapdragon-pki-gateway }
-        # superadmin-gateway (snapdragon-pki, self).
+            matchLabels: { app.kubernetes.io/instance: hugmesh-pki-gateway }
+        # superadmin-gateway (hugmesh-pki, self).
         - podSelector:
-            matchLabels: { app.kubernetes.io/instance: snapdragon-superadmin-gateway }
+            matchLabels: { app.kubernetes.io/instance: hugmesh-superadmin-gateway }
       ports:
         - { protocol: TCP, port: 9042 }

@@ -99,7 +99,7 @@ grep -qE '^\s*gate_backing_services\b' "${BUILDER}" && grep -qE '^\s*gate_backin
 # ── Fixture tree: copy the REAL manifests the gate touches into a sysroot. ──────
 seed() {
     SYSROOT="${WORK}/sysroot-$1"; rm -rf "${SYSROOT}"
-    tree="${SYSROOT}/var/lib/snapdragon/cluster"
+    tree="${SYSROOT}/var/lib/hugmesh/cluster"
     mkdir -p "${tree}/apps" "${tree}/manifests"
     local a m
     for a in 30-admin-bff-db 34-user-bff-db 32-mod-bff-db 38-forum-bff-db 34a-wiki-bff-db \
@@ -122,7 +122,7 @@ if diff -r "${WORK}/snapshot" "${tree}" >/dev/null 2>&1; then
 else
     bad "DEFAULT selection mutated the tree"; diff -r "${WORK}/snapshot" "${tree}" | head
 fi
-[ -e "${SYSROOT}/etc/snapdragon/backing-services.conf" ] \
+[ -e "${SYSROOT}/etc/hugmesh/backing-services.conf" ] \
     && bad "DEFAULT wrote backing-services.conf (should not)" \
     || ok "DEFAULT: no backing-services.conf baked"
 
@@ -134,7 +134,7 @@ seed default
 cp -r "${tree}" "${WORK}/snapshot-ws"
 MANAGED_SERVICES="$(printf '\t \n')" gate_backing_services
 if diff -r "${WORK}/snapshot-ws" "${tree}" >/dev/null 2>&1 \
-   && [ ! -e "${SYSROOT}/etc/snapdragon/backing-services.conf" ]; then
+   && [ ! -e "${SYSROOT}/etc/hugmesh/backing-services.conf" ]; then
     ok "WHITESPACE-only MANAGED_SERVICES: baked tree byte-identical (no bake)"
 else
     bad "WHITESPACE-only selection mutated the tree / baked a conf"
@@ -185,7 +185,7 @@ grep -q 'region: eu-west-1' "${bsl}"         && ok "velero: BSL region set" || b
 # Grep an ACTIVE (uncommented) s3Url line only — the commented per-brand template
 # further down legitimately still mentions s3Url.
 grep -qE '^[[:space:]]*s3Url:' "${bsl}" && bad "velero: active s3Url survived for real-AWS (should be dropped)" || ok "velero: active s3Url dropped for endpoint=aws (real S3)"
-grep -q 'region: snapdragon' "${bsl}" && ok "velero: the VSL doc-1 region left untouched (only doc-0 rewritten)" || bad "velero: clobbered the VSL region"
+grep -q 'region: hugmesh' "${bsl}" && ok "velero: the VSL doc-1 region left untouched (only doc-0 rewritten)" || bad "velero: clobbered the VSL region"
 
 # ── 3e. Casdoor PG: DSN host+sslmode flipped, pg.yaml + kustomize line dropped ──
 seed casdoor
@@ -211,8 +211,8 @@ grep -q 'value: "https://s3.example.com"' "${fdep}" \
 # ── 3g. backing-services.conf baked with the selection (no creds) ──────────────
 seed conf
 MANAGED_SERVICES="kafka=b-1.msk:9098 smtp=email-smtp.us-east-1.amazonaws.com:587" gate_backing_services
-conf="${SYSROOT}/etc/snapdragon/backing-services.conf"
-[ -f "${conf}" ] && ok "conf: /etc/snapdragon/backing-services.conf baked" || bad "conf: not baked"
+conf="${SYSROOT}/etc/hugmesh/backing-services.conf"
+[ -f "${conf}" ] && ok "conf: /etc/hugmesh/backing-services.conf baked" || bad "conf: not baked"
 grep -q '^kafka=b-1.msk:9098$' "${conf}" && ok "conf: records kafka=endpoint" || bad "conf: kafka line missing"
 grep -q '^smtp=email-smtp.us-east-1.amazonaws.com:587$' "${conf}" && ok "conf: records smtp=endpoint (recorded even w/ no manifest seam)" || bad "conf: smtp line missing"
 [ -f "${tree}/README-MANAGED.md" ] && grep -q 'Role-split SQL' "${tree}/README-MANAGED.md" \

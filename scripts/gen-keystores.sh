@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # gen-keystores.sh — generate the per-API machine-user JKS keystores + the
-# shared truststore for the Snapdragon cluster, from a single cluster CA.
+# shared truststore for the HugMesh cluster, from a single cluster CA.
 #
 # Each Java API/UI machine user (the Spring Cloud Gateways + Spring services)
 # gets its own JKS keystore (private key + CA-signed cert) used as its mTLS
@@ -58,8 +58,8 @@ if [ -n "${BRAND:-}" ] && [ -f "${REPO}/brands/${BRAND}.conf" ]; then
   # shellcheck disable=SC1090
   . "${REPO}/brands/${BRAND}.conf"
 fi
-DOMAIN="${CLUSTER_DOMAIN:-snapdragon.systems}"
-BRAND="${BRAND:-snapdragon}"
+DOMAIN="${CLUSTER_DOMAIN:-hugmesh.systems}"
+BRAND="${BRAND:-hugmesh}"
 
 # ── Multi-tenancy: per-domain CA loop (PR4) ─────────────────────────
 # By DEFAULT this script provisions ONE domain (the single ${BRAND}/${DOMAIN}
@@ -373,12 +373,12 @@ EXT
 # ── Slug / DNS-name validation (#4) ────────────────────────────────────────────
 # domains.conf rows ultimately originate from the SIGNED #118 cross-domain export
 # (authenticity-verified, NOT content-validated) when this script is driven by
-# snapdragon-domain-reconcile. The brand slug (_b) and domain (_d) are later built
+# hugmesh-domain-reconcile. The brand slug (_b) and domain (_d) are later built
 # straight into ROOT filesystem paths in the multi-domain branch:
 #   _ca_dir="${CA}/${_b}"; _ks_dir="${KS}/${_b}"  -> mkdir -p / rm -f (as root)
 # so a value containing '/' or '..' would escape the output tree. Validate each
 # parsed row up front and FAIL CLOSED on a bad slug/domain; legit slugs
-# (e.g. snapdragon) and domains (e.g. snapdragon.systems) still pass.
+# (e.g. hugmesh) and domains (e.g. hugmesh.systems) still pass.
 _KS_DNS_LABEL='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
 _KS_DNS_NAME='^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'
 validate_brand_domain() {

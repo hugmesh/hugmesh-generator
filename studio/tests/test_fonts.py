@@ -11,7 +11,7 @@ import base64
 
 import pytest
 
-from snapdragon_studio.core import fonts
+from hugmesh_studio.core import fonts
 
 _WOFF2 = b"wOF2" + b"\x00" * 60
 _WOFF = b"wOFF" + b"\x00" * 60

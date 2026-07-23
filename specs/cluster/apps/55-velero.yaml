@@ -97,7 +97,7 @@ spec:
 
         # ── node-agent DaemonSet (filesystem/PV backups) ──────────────────────
         # Required for Kopia filesystem backups of PVs (the pv_snapshot services:
-        # etcd/pvc/matrix/games/tube/owncast). Scheduled on the snapdragon nodes
+        # etcd/pvc/matrix/games/tube/owncast). Scheduled on the hugmesh nodes
         # that actually carry app-tier PVs.
         deployNodeAgent: true
         nodeAgent:
@@ -149,7 +149,7 @@ spec:
 
         # The chart creates the `velero` ServiceAccount for the SERVER. The
         # admin-bff effector uses a SEPARATE least-privilege SA in
-        # snapdragon-backend (manifests/velero/rbac.yaml) — it only needs to
+        # hugmesh-backend (manifests/velero/rbac.yaml) — it only needs to
         # CREATE/GET the Backup/Restore CRs, not run Velero.
         serviceAccount:
           server:

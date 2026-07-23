@@ -12,7 +12,7 @@ distro-boots our image directly:
 
 ```sh
 # microSD or NVMe-over-USB adapter on any Linux box:
-xz -dc snapdragon-jetson-orin-nano-arm64-edge_ai-test-<ts>.img.xz | \
+xz -dc hugmesh-jetson-orin-nano-arm64-edge_ai-test-<ts>.img.xz | \
     sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
 # or:  sudo scripts/flash-disk.sh --arch arm64 --role edge_ai /dev/sdX
 ```
@@ -43,7 +43,7 @@ recovery mode):
    sudo ./tools/kernel_flash/l4t_initrd_flash.sh --external-device nvme0n1p1 \
         -c tools/kernel_flash/flash_l4t_external.xml jetson-orin-nano-devkit nvme0n1p1
    ```
-   then layer the Snapdragon stage4 (`*.stage4.tar.xz`) over the L4T rootfs —
+   then layer the HugMesh stage4 (`*.stage4.tar.xz`) over the L4T rootfs —
    the provisioning/mesh plumbing is arch- and kernel-flavor-agnostic.
 
 Until step 4 is hardware-validated, `build-jetson-stage4.sh --kernel-flavor

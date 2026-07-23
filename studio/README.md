@@ -1,6 +1,6 @@
-# Snapdragon Image Studio
+# HugMesh Image Studio
 
-A cross-platform desktop app (Linux **and Windows**) that builds Snapdragon images with a
+A cross-platform desktop app (Linux **and Windows**) that builds HugMesh images with a
 Calamares-style wizard — no need to remember `build-x86-host-stage4.sh` flags. It also runs
 a **local mesh node** from the system tray.
 
@@ -12,7 +12,7 @@ a **local mesh node** from the system tray.
 - **Role & platform picker** — EVERY documented image role, grouped by mode (the
   all-options-in-all-menus rule, [docs/BUILD-MATRIX.md](../docs/BUILD-MATRIX.md)): both
   standalone variants **plus the two plain-Gentoo arms** — `standalone-unaffiliated`
-  (an x86 desktop with ZERO Snapdragon branding/tooling baked; branding pages disable
+  (an x86 desktop with ZERO HugMesh branding/tooling baked; branding pages disable
   themselves and any conflicting setting fails the command loudly, exactly like the
   builder) and the rpi5 `generic` unbranded arm64 server; the laptop/chromebook/desktop
   clients **and the arm64 La Frite family** (board + live/installer flavor +
@@ -62,13 +62,13 @@ a **local mesh node** from the system tray.
 ```sh
 # Linux (Gentoo can build natively; others need Docker)
 pip install -r requirements.txt        # PySide6 (or use an existing PyQt6)
-./snapdragon-studio
+./hugmesh-studio
 
 # Windows — the .bat is a guided bootstrapper: just double-click (or run) it
-snapdragon-studio.bat
+hugmesh-studio.bat
 ```
 
-On Windows, `snapdragon-studio.bat` bootstraps a bare box end-to-end:
+On Windows, `hugmesh-studio.bat` bootstraps a bare box end-to-end:
 
 - **Ready box** (Python 3.10+ with PySide6/PyQt6 importable, or the local venv built):
   launches the wizard immediately — no report, no prompts.
@@ -83,10 +83,10 @@ On Windows, `snapdragon-studio.bat` bootstraps a bare box end-to-end:
   are not available on Windows), it needs WSL2 + a reboot/log-out + admin, and declining
   it never blocks the wizard — config/preview/`--print-command` all work without it (the
   docker backend stays greyed by the wizard's own preflight gating).
-- Flags: `snapdragon-studio.bat /detect` prints the DETECT report and exits (never
+- Flags: `hugmesh-studio.bat /detect` prints the DETECT report and exits (never
   prompts, installs, or launches); `/auto` accepts every offer; any `--`-prefixed arg
   (e.g. `--print-command`) runs **headless** — no prompts, no installs, straight to
-  `python -m snapdragon_studio` (the automation/e2e contract).
+  `python -m hugmesh_studio` (the automation/e2e contract).
 - No `winget` (LTSC/Server editions)? The launcher prints the manual install URLs
   (python.org / docs.docker.com) and exits with code 3 — it never downloads or executes
   anything itself.
@@ -95,8 +95,8 @@ Headless preview of the exact build command for a saved config — **Qt-free** (
 `core/` is imported, so it runs with no display and no PySide6/PyQt6 installed):
 
 ```sh
-python -m snapdragon_studio --print-command --config my-image.json
-python -m snapdragon_studio --print-command --config my-image.json --backend docker
+python -m hugmesh_studio --print-command --config my-image.json
+python -m hugmesh_studio --print-command --config my-image.json --backend docker
 # --backend auto|native|docker (auto = the host default; a host with no build
 # backend still prints a deterministic native command)
 ```
@@ -114,11 +114,11 @@ A dockerized build runs under a **container memory cap** by default
 OOMs the *container* with an honest build failure instead of freezing the host.
 The default is `max(2 GiB, min(MemTotal − 4 GiB, 75% of MemTotal))`; the cap is
 always visible verbatim in the command preview. Override with
-`SNAPDRAGON_BUILD_MEMORY` (`16g`/`8192m` — a docker size string; `0`/`off`/`none`
+`HUGMESH_BUILD_MEMORY` (`16g`/`8192m` — a docker size string; `0`/`off`/`none`
 disables the cap entirely).
 
 A **fresh** config's parallel-jobs default is host-aware —
-`max(2, min(cores, MemAvailable_GiB / 2))`, override with `SNAPDRAGON_BUILD_JOBS`
+`max(2, min(cores, MemAvailable_GiB / 2))`, override with `HUGMESH_BUILD_JOBS`
 — but a saved config's explicit `jobs` value is always used verbatim. When the
 host looks memory-tight at dispatch (< 4 GiB available, or swap > 90% full) the
 Review/Progress pages show an advisory **warning** (never a block, never a
@@ -135,7 +135,7 @@ no cap, flat-8 jobs, no warnings.
 Tray-only (mesh-node controller):
 
 ```sh
-python -m snapdragon_studio --tray
+python -m hugmesh_studio --tray
 ```
 
 Fleet builds (every role for the selected platforms in one run — the GUI
@@ -143,21 +143,21 @@ front-end to `scripts/build-all-roles.sh`; also reachable from the wizard's
 welcome page):
 
 ```sh
-python -m snapdragon_studio --fleet
+python -m hugmesh_studio --fleet
 ```
 
 ## Package a Windows .exe
 
 ```sh
 pip install pyinstaller PySide6
-pyinstaller --noconfirm --windowed --name SnapdragonImageStudio \
-  --collect-all PySide6 -p . snapdragon_studio/__main__.py
+pyinstaller --noconfirm --windowed --name HugMeshImageStudio \
+  --collect-all PySide6 -p . hugmesh_studio/__main__.py
 ```
 
 ## Layout
 
 ```
-snapdragon_studio/
+hugmesh_studio/
   core/        config (flag mapping) · build_driver (native/docker) · hw_scan ·
                profiles · keyzip · mesh_node · platform_info     <- headless, unit-testable
   gui/         qt shim (PySide6|PyQt6) · wizard (pages) · tray

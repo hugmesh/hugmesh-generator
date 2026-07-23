@@ -7,9 +7,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: edge-ai-tts
-  namespace: snapdragon-inference
+  namespace: hugmesh-inference
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/slug: edge-ai-tts
 data:
   # Where voice files (<id>.onnx + <id>.onnx.json) live. The default voice is baked

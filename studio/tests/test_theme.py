@@ -13,7 +13,7 @@ The two claims that MUST be tests, not comments (they die silently otherwise):
 """
 import pytest
 
-from snapdragon_studio.core import theme
+from hugmesh_studio.core import theme
 
 # ── golden pin: the shipped login-ui literals ───────────────────────────────────────
 # styles.scss :root (the consumed --sd-* contract)

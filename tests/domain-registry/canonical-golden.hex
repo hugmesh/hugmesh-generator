@@ -1,14 +1,14 @@
 # canonical-golden.hex — JVM-DERIVED golden canonical-bytes vector (lowercase hex) for the
 # domain-registry signed-export signature path. This is the EXTERNAL, INDEPENDENT anchor that
 # tests/domain-registry/test-domain-reconcile-verify.sh Case 0 compares the bash
-# domain_canonical_bytes (specs/usr/lib/snapdragon/domain-verify.sh) output against, so a FUTURE
+# domain_canonical_bytes (specs/usr/lib/hugmesh/domain-verify.sh) output against, so a FUTURE
 # self-consistent-but-wrong edit to the bash reconstruction is caught (the ACCEPT/REJECT cases
 # alone cannot catch that — they sign whatever domain_canonical_bytes emits and verify the same).
 #
 # DERIVATION ROUTE: JVM. Produced by tests/domain-registry/Golden.java, a single-file Java program
 # that copies the byte-layout of canonicalBytes VERBATIM from the authoritative admin-bff signer
-#   snapdragon-admin-bff-api:
-#   src/main/java/systems/snapdragon/adminbff/domainregistry/DomainRegistryExportService.java
+#   hugmesh-admin-bff-api:
+#   src/main/java/systems/hugmesh/adminbff/domainregistry/DomainRegistryExportService.java
 #   static byte[] canonicalBytes(DomainExportBody)   (the merged #118 version on origin/main)
 # Cross-checked byte-for-byte against an independent python3 byte-assembly of the documented layout.
 #

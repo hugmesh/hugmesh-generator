@@ -1,8 +1,8 @@
-# Snapdragon tenant branding — what a tenant's generator copy rebrands (and what it never touches)
+# HugMesh tenant branding — what a tenant's generator copy rebrands (and what it never touches)
 
 This file documents the branding surface of a TENANT'S copy of the generator —
 the repo the mesh templating pipeline publishes to the tenant forge as
-`<org-slug>/snapdragon-generator` (the project the `GENERATOR_ORG_GROUP`
+`<org-slug>/hugmesh-generator` (the project the `GENERATOR_ORG_GROUP`
 CI-include and the 13d brand-repo ApplicationSet have always pointed at).
 
 It is also the pipeline's **renames[] pilot**: when the `generator` archetype
@@ -23,7 +23,7 @@ engine (scripts/tooling/render-recipe.js) refuses to rename the contract set
 
 ## Never rebranded (upstream code / protocol identity)
 
-* the repo name `snapdragon-generator` and every `snapdragon` in
+* the repo name `hugmesh-generator` and every `hugmesh` in
   `scripts/**`, `specs/**`, builder entrypoints — code identity;
 * `snapdragon.systems/*` label KEYS, `X-Snapdragon-Local` and the other wire
   headers, the step-up subprotocol prefix — FROZEN protocol constants

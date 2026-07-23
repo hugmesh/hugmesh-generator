@@ -1,7 +1,7 @@
-# snapdragon-media-poisoner — the OPTIONAL x86/GPU AI-cloak/poison worker.
+# hugmesh-media-poisoner — the OPTIONAL x86/GPU AI-cloak/poison worker.
 #
 # Applies a bounded perturbation to image bytes BEFORE the homeserver ingests them
-# (poison-before-ingest). The ONLY caller is snapdragon-user-bff-api's media-proxy
+# (poison-before-ingest). The ONLY caller is hugmesh-user-bff-api's media-proxy
 # (/bff/user/media/upload): the BFF holds the uploaded bytes, calls POST /poison
 # here, then does the REAL homeserver upload of the poisoned bytes via the existing
 # akkoma-proxy / tuwunel-proxy mTLS proxies. This worker NEVER mounts the homeserver
@@ -9,7 +9,7 @@
 # homeserver pod) and reaches no homeserver directly — it is a pure byte-in/byte-out
 # perturbation service.
 #
-# SCHEDULING (clones the snapdragon-games contract verbatim): it requires the x86_64
+# SCHEDULING (clones the hugmesh-games contract verbatim): it requires the x86_64
 # GPU node (nodeSelector arch=amd64 + snapdragon.systems/compute=gpu) and gets the
 # host DRI render nodes (/dev/dri hostPath) for vendor-agnostic GPU use — NO vendor
 # device plugin, so it runs on any amdgpu/i915/nouveau card. On a Pi5-only cluster
@@ -18,26 +18,26 @@
 # (warn-before-post). That degradation is pure k8s protocol-probe availability — no
 # Eureka/Config/Task, consistent with the rest of the heavy tier.
 #
-# Placed in snapdragon-backend (the BFF's namespace, same-origin DNS) — the x86_64
+# Placed in hugmesh-backend (the BFF's namespace, same-origin DNS) — the x86_64
 # host carries backend=true AND compute=gpu, so the nodeSelector still pins it there.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-media-poisoner
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-media-poisoner, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-media-poisoner
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-media-poisoner, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   # Single writer of the compute path. concurrency=1 is enforced in-process
   # (uvicorn --workers 1) so the CPU path can't starve the control/data plane; this
   # replica floor pairs with that.
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-media-poisoner } }
+  selector: { matchLabels: { app: hugmesh-media-poisoner } }
   strategy: { type: Recreate }
   template:
-    metadata: { labels: { app: snapdragon-media-poisoner } }
+    metadata: { labels: { app: hugmesh-media-poisoner } }
     spec:
       # Require the x86_64 GPU node (labelled by keys-provision on that image) —
-      # IDENTICAL to snapdragon-games. Absent that node => Pending => lean fallback.
+      # IDENTICAL to hugmesh-games. Absent that node => Pending => lean fallback.
       nodeSelector:
         kubernetes.io/arch: amd64
         snapdragon.systems/compute: gpu
@@ -76,7 +76,7 @@ spec:
         - name: media-poisoner
           # First-party image, rewritten to the in-cluster Harbor registry by the
           # kustomization (like every other app). :dev tracked for dev.
-          image: snapdragon-systems/snapdragon-media-poisoner:dev
+          image: snapdragon-systems/hugmesh-media-poisoner:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
             allowPrivilegeEscalation: false
@@ -116,7 +116,7 @@ spec:
             limits:   { cpu: "2",  memory: 2Gi }
           volumeMounts:
             # /dev/dri render node access for unprivileged, vendor-agnostic GPU use
-            # (same as snapdragon-games). Harmless/unused on the lean CPU path.
+            # (same as hugmesh-games). Harmless/unused on the lean CPU path.
             - { name: dri, mountPath: /dev/dri }
             - { name: model-weights, mountPath: /models, readOnly: true }
             # readOnlyRootFilesystem: true => give uvicorn/python a writable /tmp.

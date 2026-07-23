@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""snapdragon-media-poisoner — serving entrypoint with OPTIONAL (m)TLS.
+"""hugmesh-media-poisoner — serving entrypoint with OPTIONAL (m)TLS.
 
 Default (no TLS env set) is byte-identical to the previous behaviour: plain
 HTTP on 0.0.0.0:8080, single worker — the in-cluster ClusterIP posture where

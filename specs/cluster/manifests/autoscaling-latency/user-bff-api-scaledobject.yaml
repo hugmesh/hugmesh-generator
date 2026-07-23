@@ -7,11 +7,11 @@
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: snapdragon-user-bff-api-latency
-  namespace: snapdragon-backend
+  name: hugmesh-user-bff-api-latency
+  namespace: hugmesh-backend
   labels:
-    app: snapdragon-user-bff-api
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-user-bff-api
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/autoscaler: latency-rps
   annotations:
     snapdragon.systems/dark: "true"
@@ -20,7 +20,7 @@ spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-user-bff-api
+    name: hugmesh-user-bff-api
   minReplicaCount: 2                   # matches manifests/user-bff-api/hpa.yaml floor
   maxReplicaCount: 6
   pollingInterval: 30
@@ -40,5 +40,5 @@ spec:
       metadata:
         serverAddress: http://prometheus-server.observability.svc.cluster.local:80
         query: |
-          sum(rate(http_server_requests_seconds_count{app="snapdragon-user-bff-api"}[1m]))
+          sum(rate(http_server_requests_seconds_count{app="hugmesh-user-bff-api"}[1m]))
         threshold: "60"

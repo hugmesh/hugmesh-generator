@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # gen-keystores.sh — generate the per-API machine-user JKS keystores + the
-# shared truststore for the Snapdragon cluster, from a single cluster CA.
+# shared truststore for the HugMesh cluster, from a single cluster CA.
 #
 # Each Java API/UI machine user (the Spring Cloud Gateways + Spring services)
 # gets its own JKS keystore (private key + CA-signed cert) used as its mTLS
@@ -46,8 +46,8 @@ if [ -n "${BRAND:-}" ] && [ -f "${REPO}/brands/${BRAND}.conf" ]; then
   # shellcheck disable=SC1090
   . "${REPO}/brands/${BRAND}.conf"
 fi
-DOMAIN="${CLUSTER_DOMAIN:-snapdragon.systems}"
-BRAND="${BRAND:-snapdragon}"
+DOMAIN="${CLUSTER_DOMAIN:-hugmesh.systems}"
+BRAND="${BRAND:-hugmesh}"
 
 # ── External CA inputs (optional) ──────────────────────────────────
 # Provide an EXISTING CA to use as the issuer for every generated leaf cert,

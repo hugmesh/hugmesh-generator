@@ -17,7 +17,7 @@ metadata:
   name: snapdragon-systems-web
   labels:
     app: snapdragon-systems-web
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   minAvailable: 1
   selector:

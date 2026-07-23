@@ -28,9 +28,9 @@ import zipfile
 
 import pytest
 
-from snapdragon_studio.core import keyzip
-from snapdragon_studio.core.keyzip import KeyZipContents
-from snapdragon_studio.core.local_login_agent import load_manifest
+from hugmesh_studio.core import keyzip
+from hugmesh_studio.core.keyzip import KeyZipContents
+from hugmesh_studio.core.local_login_agent import load_manifest
 
 
 # A realistic (trimmed) offline vault/secrets.json, mirroring the EXACT shape
@@ -39,7 +39,7 @@ from snapdragon_studio.core.local_login_agent import load_manifest
 # alongside a representative sample of machine/service secrets that must NEVER be
 # mirrored, including the two ambiguous-but-excluded admin logins.
 SECRETS_JSON = {
-    "snapdragon-pki": {
+    "hugmesh-pki": {
         "casdoor-google": {"clientId": "REPLACE", "clientSecret": "REPLACE"},
         # ambiguous (Casdoor built-in superuser, but the generator's own comment
         # ties it to the casdoor-init Job's machine API login) -> must be EXCLUDED.
@@ -53,11 +53,11 @@ SECRETS_JSON = {
         },
         "admin-bff-mfa": {"factor-key": "MFA-FACTOR-KEY-SECRET"},
     },
-    "snapdragon-backend": {
+    "hugmesh-backend": {
         "clickhouse-auth": {"password": "CLICKHOUSE-SECRET"},
         "federation-db": {"password": "FED-DB-SECRET", "app_password": "FED-APP-SECRET"},
     },
-    "snapdragon-games": {
+    "hugmesh-games": {
         # the games-realm twin of casdoor-admin — same exclusion reasoning.
         "casdoor-games-admin": {"username": "admin", "password": "GAMES-ADMIN-SECRET"},
         "casdoor-games-db": {"username": "threewizards", "password": "GAMES-DB-SECRET"},
@@ -137,7 +137,7 @@ def test_enabled_writes_only_the_superadmin_role(tmp_path):
     role = m.roles[0]
     assert role.username == "superadmin"
     assert role.secret == "SUPERADMIN-SECRET-XYZ"
-    assert role.brand == "snapdragon"
+    assert role.brand == "hugmesh"
     assert role.label  # non-empty human label
 
 
@@ -211,7 +211,7 @@ def test_enabled_but_secrets_json_is_a_list_is_a_noop(tmp_path):
     "not-a-dict",
 ])
 def test_incomplete_superadmin_entry_is_skipped(tmp_path, broken_entry):
-    obj = {"snapdragon-pki": {"casdoor-superadmin": broken_entry}}
+    obj = {"hugmesh-pki": {"casdoor-superadmin": broken_entry}}
     contents = _bundle(tmp_path, secrets_obj=obj)
     manifest_path = tmp_path / "roles.json"
     result = keyzip.emit_passwordless_login_roles(
@@ -221,7 +221,7 @@ def test_incomplete_superadmin_entry_is_skipped(tmp_path, broken_entry):
 
 
 def test_no_pki_section_at_all_is_a_noop(tmp_path):
-    obj = {"snapdragon-backend": {"clickhouse-auth": {"password": "x"}}}
+    obj = {"hugmesh-backend": {"clickhouse-auth": {"password": "x"}}}
     contents = _bundle(tmp_path, secrets_obj=obj)
     manifest_path = tmp_path / "roles.json"
     result = keyzip.emit_passwordless_login_roles(
@@ -271,7 +271,7 @@ def test_reimport_updates_the_same_role_id_idempotently(tmp_path):
     keyzip.emit_passwordless_login_roles(contents, enabled=True, manifest_path=str(manifest_path))
 
     rotated = json.loads(json.dumps(SECRETS_JSON))
-    rotated["snapdragon-pki"]["casdoor-superadmin"]["password"] = "ROTATED-SECRET"
+    rotated["hugmesh-pki"]["casdoor-superadmin"]["password"] = "ROTATED-SECRET"
     contents2 = _bundle(tmp_path / "second", secrets_obj=rotated)
     keyzip.emit_passwordless_login_roles(contents2, enabled=True, manifest_path=str(manifest_path))
 
@@ -284,7 +284,7 @@ def test_reimport_updates_the_same_role_id_idempotently(tmp_path):
 
 def test_default_manifest_path_used_when_none_given(tmp_path, monkeypatch):
     target = tmp_path / "custom-dir" / "roles.json"
-    monkeypatch.setenv("SNAPDRAGON_LOCAL_LOGIN_MANIFEST", str(target))
+    monkeypatch.setenv("HUGMESH_LOCAL_LOGIN_MANIFEST", str(target))
     contents = _bundle(tmp_path)
     result = keyzip.emit_passwordless_login_roles(contents, enabled=True, manifest_path=None)
     assert result == ["superadmin"]

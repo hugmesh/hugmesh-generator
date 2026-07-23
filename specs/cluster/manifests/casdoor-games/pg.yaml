@@ -3,26 +3,26 @@
 # but for the SEPARATE games identity provider. Casdoor stores the threewizards
 # org / roles / users / applications / providers here, so the games realm survives
 # restarts independently of the systems Casdoor. Database name "threewizards"
-# matches the snapdragon.games canonical compose stack (docker-compose.yml ->
+# matches the hugmesh.games canonical compose stack (docker-compose.yml ->
 # POSTGRES_DB: threewizards). Credentials come from the ESO-materialized Secret
 # "casdoor-games-db" (Vault path secret/<brand>/casdoor-games) — never committed.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: casdoor-games-pg-data
-  namespace: snapdragon-games
-  labels: { app: casdoor-games-pg, app.kubernetes.io/part-of: snapdragon.games }
+  namespace: hugmesh-games
+  labels: { app: casdoor-games-pg, app.kubernetes.io/part-of: hugmesh.games }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 5Gi } }
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: casdoor-games-pg
-  namespace: snapdragon-games
-  labels: { app: casdoor-games-pg, app.kubernetes.io/part-of: snapdragon.games }
+  namespace: hugmesh-games
+  labels: { app: casdoor-games-pg, app.kubernetes.io/part-of: hugmesh.games }
 spec:
   replicas: 1
   strategy: { type: Recreate }
@@ -59,7 +59,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: casdoor-games-pg, namespace: snapdragon-games }
+metadata: { name: casdoor-games-pg, namespace: hugmesh-games }
 spec:
   selector: { app: casdoor-games-pg }
   ports: [{ name: pg, port: 5432, targetPort: pg }]

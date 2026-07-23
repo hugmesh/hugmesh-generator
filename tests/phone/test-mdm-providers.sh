@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-mdm-providers.sh — offline unit test for the MDM PROVIDER REGISTRY
-# (specs/usr/lib/snapdragon/mdm-providers.sh), the sourceable data+emit library
+# (specs/usr/lib/hugmesh/mdm-providers.sh), the sourceable data+emit library
 # the phone wizard drives. Mirrors tests/go-live/test-go-live-driver.sh's
 # conventions for the go-live provider registry (P/F counters, mktemp+trap,
 # source-the-lib-and-assert-its-contract).
@@ -21,7 +21,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LIB="${REPO}/specs/usr/lib/snapdragon/mdm-providers.sh"
+LIB="${REPO}/specs/usr/lib/hugmesh/mdm-providers.sh"
 [ -r "${LIB}" ] || { echo "  FAIL registry lib missing: ${LIB}"; exit 1; }
 command -v bash >/dev/null || { echo "SKIP: need bash"; exit 0; }
 
@@ -32,7 +32,7 @@ WORK="$(mktemp -d)"; trap 'rm -rf "${WORK}" 2>/dev/null' EXIT
 
 echo "== MDM provider registry: offline unit test =="
 
-# shellcheck source=specs/usr/lib/snapdragon/mdm-providers.sh
+# shellcheck source=specs/usr/lib/hugmesh/mdm-providers.sh
 source "${LIB}"
 
 # ── (a) registry shape: ids vs the parallel arrays ──────────────────────────

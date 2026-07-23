@@ -21,7 +21,7 @@ producer that fills the gap without touching the terminal contract.
   is NOT in the required-env loop, and touches neither `send_ingest`, the terminal
   `COMPLETED` path, nor `resolve_build_target()`.
 - **Parsing is reused, not reimplemented.** `progress-tap.py` imports the SAME
-  `snapdragon_studio.core.progress_parse.ProgressParser` (+ `progress-tables.json`)
+  `hugmesh_studio.core.progress_parse.ProgressParser` (+ `progress-tables.json`)
   that drives the Studio GUI, via `PYTHONPATH=<generator>/studio`. Percent is `null`
   (indeterminate) until the first `==> ` banner, then a monotonic, never-backwards
   `(phase_index + emerge_fraction)/phase_count` capped at 99 (100/terminal stays the

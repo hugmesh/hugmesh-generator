@@ -15,7 +15,7 @@ spec:
     helm:
       releaseName: gitlab-runner
       values: |
-        gitlabUrl: https://gitlab.snapdragon.systems
+        gitlabUrl: https://gitlab.hugmesh.systems
         # runnerToken from Vault/ESO secret 'gitlab-runner-secret'.
         runners:
           config: |

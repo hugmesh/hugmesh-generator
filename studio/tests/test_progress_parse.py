@@ -6,8 +6,8 @@ import re
 
 import pytest
 
-from snapdragon_studio.core import progress_parse as pp
-from snapdragon_studio.core.config import BUILDER_SCRIPTS
+from hugmesh_studio.core import progress_parse as pp
+from hugmesh_studio.core.config import BUILDER_SCRIPTS
 
 _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

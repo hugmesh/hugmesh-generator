@@ -22,17 +22,17 @@ import pytest
 # must be set BEFORE the first QApplication is created
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core.config import (   # noqa: E402  (after the importorskip gate)
+from hugmesh_studio.core.config import (   # noqa: E402  (after the importorskip gate)
     Domain, OPTIONAL_SERVICES_BY_PLATFORM, OPTIONAL_SERVICES_CHOICES,
     PERSON_ROLE_CHOICES, SERVICES_ALL, SERVICES_NONE, User, WIZARD_PAGE_SLUGS,
 )
-from snapdragon_studio.core.platform_info import HostInfo
-from snapdragon_studio.gui import wizard as wizard_mod
-from snapdragon_studio.gui.pages.users import USER_ROLE_CHOICES
-from snapdragon_studio.gui.qt import Qt, QtWidgets
+from hugmesh_studio.core.platform_info import HostInfo
+from hugmesh_studio.gui import wizard as wizard_mod
+from hugmesh_studio.gui.pages.users import USER_ROLE_CHOICES
+from hugmesh_studio.gui.qt import Qt, QtWidgets
 
 # shared wizard-navigation helpers (studio/tests is on sys.path via conftest/pytest);
 # consolidated in _helpers so a flow change is edited in ONE place (design 6). mesh now
@@ -46,19 +46,19 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 # a canned host so wizard construction never probes the machine (docker info &c.)
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
-                has_kvm=False, is_root=False, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-identity-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-identity-tests"]))
 
 
 @pytest.fixture
@@ -529,7 +529,7 @@ def test_domains_applies_to_writes_domain_images(wiz):
 
 # ---- KeyZipPage/core.keyzip: Secure-Boot key wiring (G5) -----------------------------
 
-STAGING = os.path.join(os.path.expanduser("~"), ".snapdragon", "keyzip")
+STAGING = os.path.join(os.path.expanduser("~"), ".hugmesh", "keyzip")
 
 
 def _import_zip(wiz, zip_path):

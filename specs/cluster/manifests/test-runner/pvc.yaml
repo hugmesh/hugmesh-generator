@@ -3,24 +3,24 @@
 # Layout the test Jobs write (per-run-id, content addressed by ts+commit):
 #   /reports/lean/run-<ts>-<commit>/{junit.xml, report.json, summary.json, logs/}
 #   /reports/heavy/run-<ts>-<commit>/{junit.xml, report.json, summary.json, logs/}
-# SECRETS ARE SCRUBBED at write time by the snapdragon reporter + a sed pass in
+# SECRETS ARE SCRUBBED at write time by the hugmesh reporter + a sed pass in
 # the Job (and re-sanitized on read by the admin-bff TestReportsController).
 #
-# RWO on snapdragon-local (the backend node's disk via the local-path
+# RWO on hugmesh-local (the backend node's disk via the local-path
 # provisioner) — the admin-bff pod and the test Jobs both run in
-# snapdragon-backend and mount this read/write (admin-bff) / write (Job). The
+# hugmesh-backend and mount this read/write (admin-bff) / write (Job). The
 # retention policy (keep N newest run dirs) is enforced by the orchestrator's
 # prune step, not the volume.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: test-reports
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: test-reports
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: test
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 5Gi } }

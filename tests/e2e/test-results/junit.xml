@@ -1,106 +1,106 @@
 <testsuites id="" name="" tests="49" failures="0" skipped="49" errors="0" time="0.011989999999999952">
 <testsuite name="12-rbac-gateway-route-access.spec.ts" timestamp="2026-07-03T07:57:34.599Z" hostname="chromium" tests="28" failures="0" skipped="28" time="0" errors="0">
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-fe-gateway /admin/usage — e2e-admin =&gt; ALLOW (admin reaches the admin UI)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-fe-gateway /admin/usage — e2e-admin =&gt; ALLOW (admin reaches the admin UI)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-fe-gateway /admin/usage — e2e-adminonly =&gt; ALLOW (ROLE_ADMIN alone reaches /admin)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-fe-gateway /admin/usage — e2e-adminonly =&gt; ALLOW (ROLE_ADMIN alone reaches /admin)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-fe-gateway /admin/usage — e2e-mod =&gt; DENY (ROLE_MOD is NOT a superset of admin)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-fe-gateway /admin/usage — e2e-mod =&gt; DENY (ROLE_MOD is NOT a superset of admin)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-fe-gateway /admin/usage — e2e-gamesonly =&gt; DENY (plain games member denied admin UI)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-fe-gateway /admin/usage — e2e-gamesonly =&gt; DENY (plain games member denied admin UI)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-fe-gateway /admin/usage — e2e-user =&gt; DENY (plain user denied admin UI)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-fe-gateway /admin/usage — e2e-user =&gt; DENY (plain user denied admin UI)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /api/admin/route-access — e2e-admin =&gt; ALLOW (admin reaches the admin API)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /api/admin/route-access — e2e-admin =&gt; ALLOW (admin reaches the admin API)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /api/admin/route-access — e2e-mod =&gt; DENY (mod DENIED the snapdragon admin API)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /api/admin/route-access — e2e-mod =&gt; DENY (mod DENIED the hugmesh admin API)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /api/admin/route-access — e2e-user =&gt; DENY (user DENIED the admin API)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /api/admin/route-access — e2e-user =&gt; DENY (user DENIED the admin API)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-fe-gateway /bff/admin/allowlist — e2e-admin =&gt; ALLOW (admin reaches the BFF admin allowlist)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-fe-gateway /bff/admin/allowlist — e2e-admin =&gt; ALLOW (admin reaches the BFF admin allowlist)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-fe-gateway /bff/admin/allowlist — e2e-mod =&gt; DENY (mod DENIED /bff/admin (stays ROLE_ADMIN))" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-fe-gateway /bff/admin/allowlist — e2e-mod =&gt; DENY (mod DENIED /bff/admin (stays ROLE_ADMIN))" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /api/v1/pleroma/admin/config — e2e-mod =&gt; ALLOW (mod reaches akkoma moderation REST)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /api/v1/pleroma/admin/config — e2e-mod =&gt; ALLOW (mod reaches akkoma moderation REST)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /api/v1/pleroma/admin/config — e2e-admin =&gt; ALLOW (admin (superset) reaches akkoma moderation)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /api/v1/pleroma/admin/config — e2e-admin =&gt; ALLOW (admin (superset) reaches akkoma moderation)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /api/v1/pleroma/admin/config — e2e-user =&gt; DENY (plain user DENIED akkoma moderation)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /api/v1/pleroma/admin/config — e2e-user =&gt; DENY (plain user DENIED akkoma moderation)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /_matrix/client/v3/sync — e2e-mod =&gt; ALLOW (mod has a Matrix user floor (not auto-granted ROLE_USER))" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /_matrix/client/v3/sync — e2e-mod =&gt; ALLOW (mod has a Matrix user floor (not auto-granted ROLE_USER))" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /_matrix/client/v3/sync — e2e-user =&gt; ALLOW (user reaches Matrix C-S API)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /_matrix/client/v3/sync — e2e-user =&gt; ALLOW (user reaches Matrix C-S API)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /api/v1/timelines/home — e2e-mod =&gt; ALLOW (mod has a Mastodon user floor)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /api/v1/timelines/home — e2e-mod =&gt; ALLOW (mod has a Mastodon user floor)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /api/v1/timelines/home — e2e-user =&gt; ALLOW (user reaches Mastodon REST API)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /api/v1/timelines/home — e2e-user =&gt; ALLOW (user reaches Mastodon REST API)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-fe-gateway /games/admin/sessions — e2e-gamesadmin =&gt; ALLOW (ROLE_GAMES ∩ ROLE_ADMIN earned ROLE_GAMES_ADMIN -&gt; reaches games admin UI)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-fe-gateway /games/admin/sessions — e2e-gamesadmin =&gt; ALLOW (ROLE_GAMES ∩ ROLE_ADMIN earned ROLE_GAMES_ADMIN -&gt; reaches games admin UI)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-fe-gateway /games/admin/sessions — e2e-gamesonly =&gt; DENY (ROLE_GAMES alone is NOT games-admin (default-deny))" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-fe-gateway /games/admin/sessions — e2e-gamesonly =&gt; DENY (ROLE_GAMES alone is NOT games-admin (default-deny))" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-fe-gateway /games/admin/sessions — e2e-adminonly =&gt; DENY (ROLE_ADMIN alone is NOT games-admin (default-deny))" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-fe-gateway /games/admin/sessions — e2e-adminonly =&gt; DENY (ROLE_ADMIN alone is NOT games-admin (default-deny))" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-fe-gateway /games/admin/sessions — e2e-mod =&gt; DENY (ROLE_MOD alone is NOT games-admin)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-fe-gateway /games/admin/sessions — e2e-mod =&gt; DENY (ROLE_MOD alone is NOT games-admin)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /games/api/admin/role-grants — e2e-gamesadmin =&gt; ALLOW (derived ROLE_GAMES_ADMIN reaches games admin API)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /games/api/admin/role-grants — e2e-gamesadmin =&gt; ALLOW (derived ROLE_GAMES_ADMIN reaches games admin API)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /games/api/admin/role-grants — e2e-gamesonly =&gt; DENY (ROLE_GAMES alone denied games admin API)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /games/api/admin/role-grants — e2e-gamesonly =&gt; DENY (ROLE_GAMES alone denied games admin API)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /games/api/admin/role-grants — e2e-adminonly =&gt; DENY (ROLE_ADMIN alone denied games admin API)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /games/api/admin/role-grants — e2e-adminonly =&gt; DENY (ROLE_ADMIN alone denied games admin API)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /infra/logs — e2e-admin =&gt; DENY (no route row -&gt; default-deny (infra/logs has no external route))" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /infra/logs — e2e-admin =&gt; DENY (no route row -&gt; default-deny (infra/logs has no external route))" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › snapdragon-be-gateway /infra/logs — e2e-mod =&gt; DENY (mod has no infra/logs route)" classname="12-rbac-gateway-route-access.spec.ts">
+<testcase name="RBAC: gateway route-access ALLOW/DENY (schema.sql contract) › hugmesh-be-gateway /infra/logs — e2e-mod =&gt; DENY (mod has no infra/logs route)" classname="12-rbac-gateway-route-access.spec.ts">
 <skipped>
 </skipped>
 </testcase>
@@ -138,7 +138,7 @@
 <skipped>
 </skipped>
 </testcase>
-<testcase name="RBAC: ROLE_MOD sibling scope (reaches moderation, denied infra/admin) › mod DENIED /api/admin/route-access (snapdragon admin API)" classname="16-rbac-mod-sibling-scope.spec.ts">
+<testcase name="RBAC: ROLE_MOD sibling scope (reaches moderation, denied infra/admin) › mod DENIED /api/admin/route-access (hugmesh admin API)" classname="16-rbac-mod-sibling-scope.spec.ts">
 <skipped>
 </skipped>
 </testcase>

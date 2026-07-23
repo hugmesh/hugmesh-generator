@@ -1,5 +1,5 @@
 # {{BRAND_TITLE}} fe-gateway — front door for {{CLUSTER_DOMAIN}} (Angular host) + MFE remotes.
-# Generated from snapdragon-generator/templates/apps/20-gateway-fe.yaml.hbs
+# Generated from hugmesh-generator/templates/apps/20-gateway-fe.yaml.hbs
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -8,9 +8,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
-    path: specs/cluster/charts/snapdragon-gateway
+    path: specs/cluster/charts/hugmesh-gateway
     helm:
       releaseName: {{BRAND}}-fe-gateway
       values: |
@@ -44,7 +44,7 @@ spec:
                 key: password
           - name: ROUTE_ACCESS_R2DBC_URL
             value: r2dbc:postgresql://fe_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.{{BRAND}}-pki.svc.cluster.local:5432/gateway
-          - name: SNAPDRAGON_GATEWAY_MTLS_ENABLED
+          - name: HUGMESH_GATEWAY_MTLS_ENABLED
             value: "true"
           # ── BFF session bridge: opaque bff_ → Spring SecurityContext ──────────
           # Mirrors specs/cluster/apps/20-gateway-fe.yaml (kept in sync by hand):

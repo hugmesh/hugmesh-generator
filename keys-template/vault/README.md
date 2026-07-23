@@ -74,7 +74,7 @@ the LUKS-encrypted PVC and the sidecar re-unseals it from `vault/vault-unseal`.
 ## Provisioning order: Vault first, USB second
 
 1. **Vault (online, preferred).** If the cluster can reach `VAULT_ADDR`, the
-   External Secrets Operator's `ClusterSecretStore` "snapdragon-vault"
+   External Secrets Operator's `ClusterSecretStore` "hugmesh-vault"
    (provider `vault`, KV v2, mount `secret`, token auth from the k8s Secret
    `vault-token` in the `external-secrets` namespace) reads
    `secret/<brand>/{casdoor,clickhouse,uptrace}` and materializes the k8s
@@ -109,7 +109,7 @@ Casdoor + Akkoma stay on native login + admin-approval registration with **no
 SMTP wired**. See `scripts/gen-cluster-secrets.sh` and the brand `MAIL_PROVIDER`
 knob (`protonmail` default | `gmail` | `outlook` | `smtp` | `none`).
 
-`<brand>` defaults to `snapdragon` (the Vault base path segment equals the
+`<brand>` defaults to `hugmesh` (the Vault base path segment equals the
 brand slug). Vault stores keys in `snake_case`; the materialized k8s Secrets use
 the `camelCase`/`kebab-case` keys above — the generator handles the mapping.
 
@@ -129,7 +129,7 @@ secret/<brand>/casdoor-apps : one key per Casdoor OAuth2 application = that app'
                             Materialized by the casdoor-app-secrets ExternalSecret
                             (dataFrom extract) AND, for the sidecar, the
                             fragment-sync-casdoor ExternalSecret (ns
-                            snapdragon-frontend, clientId pinned to app-fragment-sync).
+                            hugmesh-frontend, clientId pinned to app-fragment-sync).
 secret/<brand>/clickhouse : password
 secret/<brand>/uptrace    : pg_password, project_token
 secret/<brand>/cloudflared: tunnel_token     (PROD go-live ONLY — read-if-present)
@@ -151,7 +151,7 @@ Put the raw token in `KEYS/cloudflared/tunnel-token` (see that folder's README).
 ./scripts/gen-cluster-secrets.sh
 
 # Online + offline: also pushes to Vault
-VAULT_ADDR=https://vault.snapdragon.systems VAULT_TOKEN=s.xxxx \
+VAULT_ADDR=https://vault.hugmesh.systems VAULT_TOKEN=s.xxxx \
   ./scripts/gen-cluster-secrets.sh
 ```
 

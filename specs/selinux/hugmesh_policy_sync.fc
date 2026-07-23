@@ -1,0 +1,16 @@
+# hugmesh_policy_sync.fc
+# Label the Layer-A headscale policy-sync agent binary as the entrypoint of
+# hugmesh_policy_sync_t. The binary is copied to /usr/sbin by the
+# (protected) build script; the OpenRC init (hugmesh-policy-sync) + the
+# cron.d drop-in are baked alongside and installed (rc-update add) ONLY on the
+# headscale control (pki) node by provision_headscale_policy_sync().
+# provision_selinux()'s first-boot relabel (setfiles / restorecon -RF /)
+# applies this.
+#
+# The registry cache it reads (/etc/hugmesh/registry/*) is labelled
+# hugmesh_authkeys_cache_t by hugmesh_authkeys.fc. The rendered
+# policy.hujson lives in /etc/headscale and stays etc_t in v1 (see the .te
+# INFERRED-WIDE note — narrow to a headscale-specific type after the AVC pass
+# if one is available).
+
+/usr/sbin/gen-headscale-policy.sh    --    gen_context(system_u:object_r:hugmesh_policy_sync_exec_t,s0)

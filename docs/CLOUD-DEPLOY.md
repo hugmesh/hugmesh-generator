@@ -2,10 +2,10 @@
 
 > **Status: 🚧 in-flight** — the Studio DeployPage, the ncurses `deploy_screen`, the
 > `make deploy-*` delegates and the shared Qt-free entrypoint
-> (`snapdragon_studio.core.cloud_deploy`) are in this tree; they all front the ONE
-> canonical driver **`specs/usr/sbin/snapdragon-cloud-deploy`** (built in the
+> (`hugmesh_studio.core.cloud_deploy`) are in this tree; they all front the ONE
+> canonical driver **`specs/usr/sbin/hugmesh-cloud-deploy`** (built in the
 > parallel deploy-driver lane, together with its provider registry
-> `specs/usr/lib/snapdragon/cloud-deploy-providers.sh` and the packaging script
+> `specs/usr/lib/hugmesh/cloud-deploy-providers.sh` and the packaging script
 > `scripts/cloud-package.sh`). Until that lane merges, every face reports
 > "driver not found" honestly — nothing pretends to deploy.
 >
@@ -17,7 +17,7 @@ It takes the **output** of a normal x86 build and walks it into a cloud:
 
 ```
 (1) generate            (2) cloud-package                (3) deploy
-build-x86-host-stage4   scripts/cloud-package.sh         snapdragon-cloud-deploy
+build-x86-host-stage4   scripts/cloud-package.sh         hugmesh-cloud-deploy
   -> <name>.img           --img <raw.img>                  plan   (offline render)
                           --format qcow2|vhd-fixed|raw     apply  (confirmed)
                           --out-dir <dir>                  status (reads hints)
@@ -73,7 +73,7 @@ Gen2 image, VM Image Builder template, Entra notes) · `openshift-cnv`
   `make deploy-plan PROVIDER=aws-ec2 DEPLOY_IMAGE=work/x86.img.qcow2 REGION=… OUT_DIR=…`
   then `deploy-apply` / `deploy-status` / `deploy-destroy` with the same knobs
   (`DEPLOY_IMAGE`, because `IMAGE` is the builder-container knob).
-- **Python module** — `PYTHONPATH=studio python3 -m snapdragon_studio.core.cloud_deploy
+- **Python module** — `PYTHONPATH=studio python3 -m hugmesh_studio.core.cloud_deploy
   plan --provider … --image …` (what ncurses/Make actually shell).
 
 ### Credential custody (the phone-wizard bar)
@@ -117,7 +117,7 @@ plan; picking an external provider (`--idp entra|aws|oidc` + `--idp-issuer`,
 optional `--idp-client-id`/`--idp-jwks`; GUI combo; ncurses "Identity provider"
 entry; `make deploy-plan IDP= IDP_ISSUER=…`) makes the plan additionally emit
 `idp/idp.conf` + `idp/README.md` — the same shape the node builders bake as
-`/etc/snapdragon/idp.conf`, so the deployed VM and its operator agree on the
+`/etc/hugmesh/idp.conf`, so the deployed VM and its operator agree on the
 issuer. Deploying an image *built* with external-IdP flags? Pick the same
 provider here. Entra's JWKS defaults to `/discovery/v2.0/keys` (it does not
 serve `/.well-known/jwks`); Cognito's group claims arrive as `cognito:groups`.
@@ -134,11 +134,11 @@ seam too.
 
 | Piece | Path |
 | --- | --- |
-| Qt-free core (all faces shell this) | `studio/snapdragon_studio/core/cloud_deploy.py` |
-| Studio page + standalone dialog | `studio/snapdragon_studio/gui/pages/deploy.py` |
+| Qt-free core (all faces shell this) | `studio/hugmesh_studio/core/cloud_deploy.py` |
+| Studio page + standalone dialog | `studio/hugmesh_studio/gui/pages/deploy.py` |
 | ncurses screen | `scripts/build-menu.sh` (`deploy_screen` / `_deploy_run`) |
 | Make delegates | `Makefile` (`deploy-plan/apply/status/destroy`) |
-| Driver + registry (parallel lane) | `specs/usr/sbin/snapdragon-cloud-deploy`, `specs/usr/lib/snapdragon/cloud-deploy-providers.sh` |
+| Driver + registry (parallel lane) | `specs/usr/sbin/hugmesh-cloud-deploy`, `specs/usr/lib/hugmesh/cloud-deploy-providers.sh` |
 | Packaging (parallel lane) | `scripts/cloud-package.sh` |
 | Tests (hermetic, stub driver) | `studio/tests/test_cloud_deploy.py`, `tests/menu/build_menu_cmd_test.sh` (deploy block) |
 

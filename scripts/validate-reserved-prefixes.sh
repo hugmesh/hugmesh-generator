@@ -24,7 +24,7 @@
 #   4) SCOPED Service-name drift — reserved ⊇ the PUBLICLY-ROUTABLE Services
 #      (those a gateway route uri/host actually targets), MINUS an explicit
 #      INTERNAL allowlist (mTLS proxies, *-db/*-pg datastores, infra brokers,
-#      lan-dns, the snapdragon-*-api/-ui/-web pod helpers). This is the design's
+#      lan-dns, the hugmesh-*-api/-ui/-web pod helpers). This is the design's
 #      "scoped" check: a naive "every kind:Service must be reserved" rule would be
 #      RED on day one (akkoma-proxy/kafka/*-db are Services but never public), so
 #      we scope to what a route actually exposes and exempt the rest by allowlist;
@@ -107,11 +107,11 @@ def first_segment(path: str) -> str:
 
 
 # Path/host first-labels that are NOT dedicated app prefixes and must be ignored:
-#   - apex host (snapdragon) and wildcards (*) are not reserved labels
+#   - apex host (hugmesh) and wildcards (*) are not reserved labels
 #   - "/" (front page) and "/**" (catch-all) yield empty segments
 #   - DEEP sub-paths that are NOT a first segment of a top-level route. We only
 #     ever take the FIRST segment, so e.g. /api/v1/pleroma/... contributes "api".
-IGNORE = {"", "snapdragon", "*"}
+IGNORE = {"", "hugmesh", "*"}
 
 # Normalization: a few deployed segments carry punctuation the reserved list
 # spells without it (the reserved list is the username/label form). Map them.
@@ -173,8 +173,8 @@ def add(label, source):
 
 def service_of_uri(uri):
     """Extract the in-cluster Service name a route uri points at.
-    e.g. https://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080
-         -> 'snapdragon-federation-api' ; returns None for non-cluster uris."""
+    e.g. https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080
+         -> 'hugmesh-federation-api' ; returns None for non-cluster uris."""
     m = re.match(r"^[a-z0-9+.-]+://([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local", str(uri))
     return m.group(1) if m else None
 
@@ -257,7 +257,7 @@ else:
 #
 # The allowlist is the set of routed-but-internal targets: the platform's own
 # gateways/BFFs/UIs (already covered by their PATH prefix, e.g. /bff, /admin —
-# the bare snapdragon-*-api/-ui/-web Service name is an implementation detail,
+# the bare hugmesh-*-api/-ui/-web Service name is an implementation detail,
 # not a public username surface) plus infra patterns. Keep it narrow and explicit.
 SERVICE_ALLOW_EXACT = {
     # mTLS homeserver PROXY sidecars — internal, behind the reserved mastodon./
@@ -272,16 +272,16 @@ SERVICE_ALLOW_EXACT = {
     "signup-gate",
 }
 # Regex patterns for routed-but-internal Service families:
-#   * ALL `snapdragon-*` Services — the platform's own gateways / BFFs / UIs /
+#   * ALL `hugmesh-*` Services — the platform's own gateways / BFFs / UIs /
 #     APIs / web / remote-fragment. These are ALWAYS reached via a reserved PATH
 #     prefix or reserved HOST (already checked by stages 3/5); the bare branded
 #     Service name (which sed-rebrands per deployer, see the branding model) is an
 #     implementation detail, NOT a public username first-label. Exempt as a family
-#     so adding a new snapdragon-*-api/-ui never trips this stage spuriously — its
+#     so adding a new hugmesh-*-api/-ui never trips this stage spuriously — its
 #     PUBLIC surface (the route prefix) is what stage 3/5 enforces is reserved.
 #   * `*-db` / `*-pg` datastores — never publicly routed.
 SERVICE_ALLOW_PATTERNS = [
-    re.compile(r"^snapdragon-.*$"),  # the platform-internal snapdragon-* family
+    re.compile(r"^hugmesh-.*$"),  # the platform-internal hugmesh-* family
     re.compile(r"^.*-(db|pg)$"),     # *-db / *-pg datastores
 ]
 
@@ -327,9 +327,9 @@ else:
 # ---- 7) CODE-COPY assertion: each ReservedNames.java set == canonical -------
 # Mechanically asserts the app-repo ReservedNames copies match the canonical set
 # (replaces hand-counting). There are THREE physical copies today: federation-api
-# and actions each keep their own literal duplicate, and snapdragon-auth-core holds
+# and actions each keep their own literal duplicate, and hugmesh-auth-core holds
 # the shared copy that user-bff-api + admin-bff-api both consume as a Maven
-# dependency (`import systems.snapdragon.authcore.reserved.ReservedNames`) — so
+# dependency (`import systems.hugmesh.authcore.reserved.ReservedNames`) — so
 # checking auth-core covers both BFFs, which no longer carry their own file. (The
 # old userbff/profile + adminbff/reserved paths were removed when the copy was
 # consolidated into auth-core; listing them here only produced silent SKIPs and
@@ -337,14 +337,14 @@ else:
 # to this repo is reported as SKIP, not failed, so this repo's own CI stays green —
 # the app repos run their own ReservedNamesTest. Override the search root with
 # RESERVED_SIBLING_ROOT. Handles both field names in use (RESERVED_LABELS in
-# federation-api; RESERVED in snapdragon-actions/snapdragon-auth-core).
+# federation-api; RESERVED in hugmesh-actions/hugmesh-auth-core).
 CODE_COPIES = [
-    ("federation-api", "snapdragon-federation-api",
-     "src/main/java/systems/snapdragon/federation/controller/ReservedNames.java"),
-    ("actions", "snapdragon-actions",
-     "src/main/java/systems/snapdragon/actions/registration/ReservedNames.java"),
-    ("auth-core", "snapdragon-auth-core",
-     "src/main/java/systems/snapdragon/authcore/reserved/ReservedNames.java"),
+    ("federation-api", "hugmesh-federation-api",
+     "src/main/java/systems/hugmesh/federation/controller/ReservedNames.java"),
+    ("actions", "hugmesh-actions",
+     "src/main/java/systems/hugmesh/actions/registration/ReservedNames.java"),
+    ("auth-core", "hugmesh-auth-core",
+     "src/main/java/systems/hugmesh/authcore/reserved/ReservedNames.java"),
 ]
 
 # Pull the quoted string literals out of the `RESERVED[_LABELS] = Set.of( … );`

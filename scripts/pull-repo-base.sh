@@ -19,7 +19,7 @@
 # Env knobs:
 #   GIT_BASE         (default https://github.com/Snapdragon-Systems)  clone base URL.
 #                    Point at the internal mirror on the VPN, e.g.
-#                    GIT_BASE=https://gitlab.snapdragon.systems/snapdragon
+#                    GIT_BASE=https://gitlab.hugmesh.systems/hugmesh
 #   GIT_REF          (default main)  branch/tag to check out.
 #   --ref TAG|SHA    explicit VERSIONED pin for the own-mesh pull (templating
 #                    re-render-at-a-version). Unlike the best-effort GIT_REF env
@@ -188,7 +188,7 @@ fi
 [[ "$NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
   || die "invalid repo short name '${NAME}' (want a DNS label)"
 
-REPO="snapdragon-${NAME}"
+REPO="hugmesh-${NAME}"
 
 # ════════════════════════════════════════════════════════════════════════════
 # FOREIGN-MESH MODE — resolve the RAW foreign tree, then REQUIRE the inbound

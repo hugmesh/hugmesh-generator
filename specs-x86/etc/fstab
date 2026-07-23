@@ -1,4 +1,4 @@
-# /etc/fstab — Snapdragon x86_64 host image (UEFI GPT: p1 ESP + p2 ext4 root).
+# /etc/fstab — HugMesh x86_64 host image (UEFI GPT: p1 ESP + p2 ext4 root).
 #
 # PARTUUID-based, mirroring specs-rpi5/etc/fstab's style so ONE built image
 # boots from any disk it is dd'd onto (SATA/NVMe/USB) — no device-name or

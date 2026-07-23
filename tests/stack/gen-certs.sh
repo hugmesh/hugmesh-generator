@@ -6,7 +6,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="${1:-${HERE}/certs}"
-DOMAIN="${SNAP_DOMAIN:-snapdragon.systems}"
+DOMAIN="${SNAP_DOMAIN:-hugmesh.systems}"
 mkdir -p "${OUT}"
 
 echo "==> Generating CA + server cert for *.${DOMAIN} (+localhost) in ${OUT}"
@@ -14,12 +14,12 @@ echo "==> Generating CA + server cert for *.${DOMAIN} (+localhost) in ${OUT}"
 # Root CA (the cluster CA the KEYS stick would distribute).
 openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
     -keyout "${OUT}/ca.key" -out "${OUT}/ca.crt" \
-    -subj "/O=Snapdragon Systems/CN=Snapdragon Cluster CA" 2>/dev/null
+    -subj "/O=HugMesh Systems/CN=HugMesh Cluster CA" 2>/dev/null
 
 # Server key + CSR.
 openssl req -newkey rsa:2048 -nodes \
     -keyout "${OUT}/server.key" -out "${OUT}/server.csr" \
-    -subj "/O=Snapdragon Systems/CN=${DOMAIN}" 2>/dev/null
+    -subj "/O=HugMesh Systems/CN=${DOMAIN}" 2>/dev/null
 
 cat > "${OUT}/san.ext" <<EOF
 subjectAltName = DNS:${DOMAIN},DNS:*.${DOMAIN},DNS:id.${DOMAIN},DNS:matrix.${DOMAIN},DNS:mastodon.${DOMAIN},DNS:localhost,IP:127.0.0.1

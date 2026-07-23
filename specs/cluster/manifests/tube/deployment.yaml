@@ -6,16 +6,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-tube
-  namespace: snapdragon-tube
+  name: hugmesh-tube
+  namespace: hugmesh-tube
   labels:
-    app: snapdragon-tube
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-tube
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-tube } }
+  selector: { matchLabels: { app: hugmesh-tube } }
   template:
-    metadata: { labels: { app: snapdragon-tube } }
+    metadata: { labels: { app: hugmesh-tube } }
     spec:
       # GPU-gated: require the x86_64 GPU worker (labelled by keys-provision).
       nodeSelector:
@@ -35,9 +35,9 @@ spec:
           env:
             # Systems-realm Casdoor: JWKS auto-discovered via CASDOOR_ISSUER_URI.
             - { name: CASDOOR_ISSUER_URI,
-                value: "http://casdoor.snapdragon-casdoor.svc.cluster.local:8000" }
+                value: "http://casdoor.hugmesh-casdoor.svc.cluster.local:8000" }
             - { name: SPRING_R2DBC_URL,
-                value: "r2dbc:postgresql://snapdragon-tube-db.snapdragon-tube.svc.cluster.local:5432/tube_bff" }
+                value: "r2dbc:postgresql://hugmesh-tube-db.hugmesh-tube.svc.cluster.local:5432/tube_bff" }
             # HMAC key for tube-media signed URLs (ESO -> tube-media-key Secret).
             - { name: TUBE_MEDIA_KEY,
                 valueFrom: { secretKeyRef: { name: tube-media-key, key: mediaKey } } }
@@ -102,7 +102,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: tube-media-nginx-conf
-  namespace: snapdragon-tube
+  namespace: hugmesh-tube
 data:
   default.conf: |
     server {
@@ -124,29 +124,29 @@ data:
 apiVersion: v1
 kind: Service
 metadata:
-  name: snapdragon-tube-bff-api
-  namespace: snapdragon-tube
+  name: hugmesh-tube-bff-api
+  namespace: hugmesh-tube
 spec:
-  selector: { app: snapdragon-tube }
+  selector: { app: hugmesh-tube }
   ports:
     - { name: http, port: 8080, targetPort: bff-http }
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: snapdragon-tube-ui
-  namespace: snapdragon-tube
+  name: hugmesh-tube-ui
+  namespace: hugmesh-tube
 spec:
-  selector: { app: snapdragon-tube }
+  selector: { app: hugmesh-tube }
   ports:
     - { name: http, port: 8080, targetPort: ui-http }
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: snapdragon-tube-media
-  namespace: snapdragon-tube
+  name: hugmesh-tube-media
+  namespace: hugmesh-tube
 spec:
-  selector: { app: snapdragon-tube }
+  selector: { app: hugmesh-tube }
   ports:
     - { name: http, port: 8081, targetPort: media-http }

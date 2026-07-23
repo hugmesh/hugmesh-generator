@@ -23,7 +23,7 @@ Feature: Layer-A headscale SSH ACL is generated from the signed device-license e
     And the headscale policy is rendered from policy.hujson.tmpl by gen-headscale-policy.sh
     And headscale SSH is default-deny — only the rendered ssh[] accepts apply
     # SOURCE-SIDE CAVEAT (FIX-OIDC-USERS deferred): every generated edge uses the
-    # advisory src tag:snapdragon until per-tenant Casdoor->headscale OIDC users
+    # advisory src tag:hugmesh until per-tenant Casdoor->headscale OIDC users
     # land; the load-bearing per-operator SOURCE authenticity + per-key %f pinning
     # stay in Layer-B. These scenarios assert the DESTINATION cut + default-deny.
 
@@ -59,16 +59,16 @@ Feature: Layer-A headscale SSH ACL is generated from the signed device-license e
 
   Scenario: Non-:22 fleet traffic still rides the CIDR data-plane only (k8s, not SSH)
     When the policy is rendered
-    Then the acls[] keeps exactly the {src:[tag:snapdragon], dst:[10.244.0.0/16:*,10.96.0.0/12:*]} rule
-    And the acls[] contains NO any-to-any tag:snapdragon -> tag:snapdragon:* rule
+    Then the acls[] keeps exactly the {src:[tag:hugmesh], dst:[10.244.0.0/16:*,10.96.0.0/12:*]} rule
+    And the acls[] contains NO any-to-any tag:hugmesh -> tag:hugmesh:* rule
 
   Scenario: The bootstrap policy already drops the any-to-any :22 hole (pre-export)
     Given the baked policy.bootstrap.hujson applied during provisioning
-    Then it has NO any-to-any tag:snapdragon -> tag:snapdragon:* rule
+    Then it has NO any-to-any tag:hugmesh -> tag:hugmesh:* rule
     And it keeps the 10.244/10.96 data-plane rule
     And it has a single conservative @@TS_SSH_USER@@ ssh accept for the bootstrap window
 
   Scenario: Server-forced destination tags are not self-applyable (FIX-SERVERTAG)
-    Then tag:dev_*, tag:superadmin (and tag:mesh_*/tag:dom_* when present) are listed in tagOwners as owned by the control "snapdragon" user only
+    Then tag:dev_*, tag:superadmin (and tag:mesh_*/tag:dom_* when present) are listed in tagOwners as owned by the control "hugmesh" user only
     And no preauth key is minted that would let a node self-advertise them
     # the live-rejection of a forged advertise-tags is a NEEDS-HEADSCALE assertion

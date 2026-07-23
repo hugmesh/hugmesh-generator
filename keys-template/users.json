@@ -3,7 +3,7 @@
   "users": [
     {
       "name": "admin",
-      "comment": "Snapdragon cluster admin",
+      "comment": "HugMesh cluster admin",
       "groups": ["wheel", "audio", "video", "usb"],
       "shell": "/bin/bash",
       "uid": 1000,

@@ -1,9 +1,9 @@
 // rbac-roles.ts — the SYSTEMS-side role/user catalogue the RBAC specs iterate.
 //
-// This is the systems analogue of snapdragon.games/e2e/tests/helpers/roles.ts
+// This is the systems analogue of hugmesh.games/e2e/tests/helpers/roles.ts
 // SEED_USERS: a single authoritative list of seed identities + the Casdoor roles
-// each one holds, in the SYSTEMS realm (org "snapdragon", issuer
-// id.snapdragon.systems). The specs drive a per-role test matrix off this list
+// each one holds, in the SYSTEMS realm (org "hugmesh", issuer
+// id.hugmesh.systems). The specs drive a per-role test matrix off this list
 // instead of hard-coding strings in each `test.describe` body, so adding a role
 // is a one-line change here and the assertions follow.
 //
@@ -34,7 +34,7 @@
 
 export type SystemsRole =
   | 'ROLE_SUPERADMIN'  // infra control-plane tier; ABOVE admin. Reaches the tailnet-only
-                       // superadmin-gateway (snapdragon-superadmin-gateway) Service Catalog/console
+                       // superadmin-gateway (hugmesh-superadmin-gateway) Service Catalog/console
                        // surface. NOT a superset that auto-grants admin: it is its OWN ROLE_*.
   | 'ROLE_ADMIN'
   | 'ROLE_MOD'
@@ -50,7 +50,7 @@ export type SystemsRole =
   | 'ROLE_USER';
 
 export interface SystemsSeedUser {
-  /** Casdoor username in org "snapdragon" (also the login handle). */
+  /** Casdoor username in org "hugmesh" (also the login handle). */
   username: string;
   /** Per-user password env var; falls back to E2E_PASSWORD then 'e2e-pass'. */
   passwordEnv: string;
@@ -91,7 +91,7 @@ export const SYSTEMS_SEED_USERS: SystemsSeedUser[] = [
     roles: ['ROLE_SUPERADMIN'],
     expectGamesAdmin: false,
     registrationComplete: true,
-    note: 'Infra superadmin — reaches the tailnet-only snapdragon-superadmin-gateway Service Catalog/console (/bff/superadmin/**, /superadmin/service-catalog/**, /api/federation/**); ADMIN must NOT reach these.',
+    note: 'Infra superadmin — reaches the tailnet-only hugmesh-superadmin-gateway Service Catalog/console (/bff/superadmin/**, /superadmin/service-catalog/**, /api/federation/**); ADMIN must NOT reach these.',
   },
   {
     username: 'e2e-admin',
@@ -332,16 +332,16 @@ export function swarmTargetsForMod(
 
 // ── ROLE_SUPERADMIN tier — the tailnet-only infra control plane ──────────────
 // The superadmin Service Catalog/console is served by its OWN gateway
-// (snapdragon-superadmin-gateway, specs/cluster/apps/22-gateway-superadmin.yaml),
+// (hugmesh-superadmin-gateway, specs/cluster/apps/22-gateway-superadmin.yaml),
 // NOT by the public fe/be/pki gateways. Every route under that gateway name is
 // gated ROLE_SUPERADMIN in gateway_route_access
 // (specs/cluster/manifests/route-access/initdb/20-schema.sql). These are the
 // ALLOW routes (copied 1:1 from the manifest's superadmin-gateway rows) the
 // spec asserts ROLE_SUPERADMIN reaches and ROLE_ADMIN is DENIED (no down-cascade).
-export const SUPERADMIN_GATEWAY = 'snapdragon-superadmin-gateway' as const;
+export const SUPERADMIN_GATEWAY = 'hugmesh-superadmin-gateway' as const;
 
 /** The ROLE_SUPERADMIN ALLOW routes on the superadmin-gateway — the three rows
- *  seeded in 20-schema.sql under gateway = snapdragon-superadmin-gateway, plus a
+ *  seeded in 20-schema.sql under gateway = hugmesh-superadmin-gateway, plus a
  *  representative concrete path to probe each glob with. */
 export const SUPERADMIN_ALLOW_ROUTES: { urlPattern: string; probe: string; what: string }[] = [
   { urlPattern: '/bff/superadmin/**',      probe: '/bff/superadmin/service-store/catalog', what: 'Service Catalog BFF control plane (tailnet)' },
@@ -363,15 +363,15 @@ export const SUPERADMIN_DENY_ROLES: SystemsRole[] = [
 // treat its ROLE_*/role claims as absent (issuer isolation). The spec uses these
 // to assert a games-realm identity carries NO systems ROLE_* into a systems
 // gateway decision (and vice-versa).
-export const SYSTEMS_ISSUER = 'id.snapdragon.systems' as const;  // org "snapdragon"
-export const GAMES_ISSUER = 'id.snapdragon.games' as const;      // org "threewizards"
+export const SYSTEMS_ISSUER = 'id.hugmesh.systems' as const;  // org "hugmesh"
+export const GAMES_ISSUER = 'id.hugmesh.games' as const;      // org "threewizards"
 
-/** The GAMES realm (org "threewizards", issuer id.snapdragon.games) is an
+/** The GAMES realm (org "threewizards", issuer id.hugmesh.games) is an
  *  INDEPENDENT Casdoor. The only systems->games automatic sync is
- *  ROLE_GAMES_ADMIN(systems) -> admin(games) (snapdragon-actions
+ *  ROLE_GAMES_ADMIN(systems) -> admin(games) (hugmesh-actions
  *  GameMasterAdminSyncAction). We seed exactly one native player here, and the
  *  synced games admin is EXPECTED to appear from e2e-gamesadmin — but that
- *  cross-realm assertion is owned by snapdragon-actions/e2e (sync-steps.ts), so
+ *  cross-realm assertion is owned by hugmesh-actions/e2e (sync-steps.ts), so
  *  here we only record the expectation. */
 export interface GamesSeedUser {
   username: string;
@@ -379,7 +379,7 @@ export interface GamesSeedUser {
   /** Native games role(s). */
   roles: string[];
   /** True when the row exists ONLY because of the systems->games sync (not seeded
-   *  natively) — asserted by snapdragon-actions/e2e, recorded here for the matrix. */
+   *  natively) — asserted by hugmesh-actions/e2e, recorded here for the matrix. */
   syncedFromSystems?: string;
   note: string;
 }
@@ -396,7 +396,7 @@ export const GAMES_SEED_USERS: GamesSeedUser[] = [
     passwordEnv: 'E2E_GAMESADMIN_PASSWORD',
     roles: ['admin'],
     syncedFromSystems: 'ROLE_GAMES_ADMIN',
-    note: 'games admin appears via systems->games sync from e2e-gamesadmin (ROLE_GAMES_ADMIN). Asserted by snapdragon-actions/e2e.',
+    note: 'games admin appears via systems->games sync from e2e-gamesadmin (ROLE_GAMES_ADMIN). Asserted by hugmesh-actions/e2e.',
   },
 ];
 

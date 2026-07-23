@@ -28,7 +28,7 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GEN="${REPO}/scripts/gen-keystores.sh"
 GOLD="${REPO}/tests/keystores/golden/gen-keystores.pre-mt.sh"
-BRAND="${BRAND:-snapdragon}"
+BRAND="${BRAND:-hugmesh}"
 SERVICES=("${BRAND}-pki-gateway" "${BRAND}-be-gateway" "${BRAND}-fe-gateway"
           "${BRAND}-api" "${BRAND}-admin-bff-api" "${BRAND}-mod-bff-api" "${BRAND}-user-bff-api")
 

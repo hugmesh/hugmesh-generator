@@ -120,7 +120,7 @@ spec:
       # The scalar coordinates rewritten in the BSL (not env — plain YAML values).
       endpointFields:
         - { file: manifests/velero/backupstoragelocation.yaml, key: "s3Url",  note: "set to the S3-compatible URL, or DELETED for real AWS S3 (endpoint=aws)" }
-        - { file: manifests/velero/backupstoragelocation.yaml, key: "bucket", note: "from MANAGED_VELERO_BUCKET (default snapdragon-backups)" }
+        - { file: manifests/velero/backupstoragelocation.yaml, key: "bucket", note: "from MANAGED_VELERO_BUCKET (default hugmesh-backups)" }
         - { file: manifests/velero/backupstoragelocation.yaml, key: "region", note: "from MANAGED_VELERO_REGION (default us-east-1)" }
       esoSecret: velero-cloud-credentials     # ns velero, key `cloud` = AWS INI
       vaultPath: velero                        # secret/<brand>/velero.{access_key_id,secret_access_key}
@@ -432,7 +432,7 @@ spec:
       docsOnly: true
       modeLocked: self-hosted
       consumers:
-        - manifest: charts/snapdragon-gateway/templates/deployment.yaml
+        - manifest: charts/hugmesh-gateway/templates/deployment.yaml
           fields: [CASSANDRA_CONTACT_POINTS, CASSANDRA_KEYSPACE, CASSANDRA_LOCAL_DC]
         - manifest: manifests/admin-bff-api/deployment.yaml
           fields: [CASSANDRA_CONTACT_POINTS]
@@ -492,9 +492,9 @@ spec:
       modeLocked: self-hosted
       consumers:
         - manifest: manifests/external-secrets/secretstore.yaml
-          fields: [ClusterSecretStore snapdragon-vault]
+          fields: [ClusterSecretStore hugmesh-vault]
         - manifest: (~90 ExternalSecret remoteRef.key across manifests/external-secrets/*)
-          fields: [remoteRef.key snapdragon/<path>]
+          fields: [remoteRef.key hugmesh/<path>]
       inMesh:
         apps: [apps/02-vault.yaml]
         manifests: [manifests/vault]

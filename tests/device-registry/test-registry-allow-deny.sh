@@ -5,7 +5,7 @@
 #
 # WHAT IT DOES (runs ANYWHERE with bash + jq + openssl + base64 + awk — NO live
 # mesh, NO live sshd, NO live headscale, NO BFF). It evaluates the ONE auth
-# predicate from the VERIFIED DESIGN (snapdragon-device-license-registry memory):
+# predicate from the VERIFIED DESIGN (hugmesh-device-license-registry memory):
 #
 #   SUPERADMIN -> ALLOW iff P's node ∈ D.mesh_id AND offered key K enrolled to P.
 #   ADMIN      -> DENY  if D.owner_type=='SUPERADMIN';
@@ -18,11 +18,11 @@
 # against BOTH fail-closed enforcement layers, driven from ONE signed export:
 #
 #   * LAYER B (per-node sshd) — REAL: it RUNS the actual
-#       specs/usr/sbin/snapdragon-authorized-keys-lookup against a per-test
+#       specs/usr/sbin/hugmesh-authorized-keys-lookup against a per-test
 #       fake-root (the script's absolute paths are rewritten under $LKROOT so the
 #       UNPRIVILEGED test can stage node.env + the baked pubkey + the signed export
 #       cache). The lookup's own verify (sourced from the REAL
-#       specs/usr/lib/snapdragon/registry-verify.sh), monotonic-rollback guard,
+#       specs/usr/lib/hugmesh/registry-verify.sh), monotonic-rollback guard,
 #       mesh guard, per-node fp match, per-key %f pin, and fail-closed empty-on-
 #       error deny are exercised end to end. The signed export is a REAL detached
 #       Ed25519 signature over the REAL canonical bytes (we mint a throwaway
@@ -46,8 +46,8 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LOOKUP_SRC="${REPO}/specs/usr/sbin/snapdragon-authorized-keys-lookup"
-VERIFY_LIB="${REPO}/specs/usr/lib/snapdragon/registry-verify.sh"
+LOOKUP_SRC="${REPO}/specs/usr/sbin/hugmesh-authorized-keys-lookup"
+VERIFY_LIB="${REPO}/specs/usr/lib/hugmesh/registry-verify.sh"
 RENDERER="${REPO}/specs/usr/sbin/gen-headscale-policy.sh"
 TMPL="${REPO}/specs/etc/headscale/policy.hujson.tmpl"
 
@@ -109,23 +109,23 @@ sign_export() {
 # per-test $LKROOT so an UNPRIVILEGED test can stage the node files and RUN THE REAL
 # SCRIPT. Returns the lookup's stdout (an authorized_keys line == ALLOW; empty == DENY).
 build_lookup() {  # builds $WORK/lookup.sh once
-    sed -e "s#\"/etc/snapdragon#\"${LKROOT}/etc/snapdragon#g" \
-        -e "s#\"/var/lib/snapdragon#\"${LKROOT}/var/lib/snapdragon#g" \
-        -e "s#\"/usr/lib/snapdragon#\"${LKROOT}/usr/lib/snapdragon#g" \
+    sed -e "s#\"/etc/hugmesh#\"${LKROOT}/etc/hugmesh#g" \
+        -e "s#\"/var/lib/hugmesh#\"${LKROOT}/var/lib/hugmesh#g" \
+        -e "s#\"/usr/lib/hugmesh#\"${LKROOT}/usr/lib/hugmesh#g" \
         "${LOOKUP_SRC}" > "${WORK}/lookup.sh"
     chmod +x "${WORK}/lookup.sh"
 }
 # stage_node <machine_key_fp> <mesh_id> <pub_b64_file> <signed_export.json> <last_good|"">
 stage_node() {
     rm -rf "${LKROOT}"
-    mkdir -p "${LKROOT}/etc/snapdragon/registry" \
-             "${LKROOT}/var/lib/snapdragon/device-registry" \
-             "${LKROOT}/usr/lib/snapdragon"
-    cp "${VERIFY_LIB}" "${LKROOT}/usr/lib/snapdragon/registry-verify.sh"
-    printf 'MACHINE_KEY_FP=%s\nMESH_ID=%s\n' "$1" "$2" > "${LKROOT}/etc/snapdragon/registry/node.env"
-    cp "$3" "${LKROOT}/etc/snapdragon/registry/registry-pub.ed25519"
-    cp "$4" "${LKROOT}/var/lib/snapdragon/device-registry/export.json"
-    if [ -n "${5:-}" ]; then printf '%s\n' "$5" > "${LKROOT}/var/lib/snapdragon/device-registry/last-good-generation"; fi
+    mkdir -p "${LKROOT}/etc/hugmesh/registry" \
+             "${LKROOT}/var/lib/hugmesh/device-registry" \
+             "${LKROOT}/usr/lib/hugmesh"
+    cp "${VERIFY_LIB}" "${LKROOT}/usr/lib/hugmesh/registry-verify.sh"
+    printf 'MACHINE_KEY_FP=%s\nMESH_ID=%s\n' "$1" "$2" > "${LKROOT}/etc/hugmesh/registry/node.env"
+    cp "$3" "${LKROOT}/etc/hugmesh/registry/registry-pub.ed25519"
+    cp "$4" "${LKROOT}/var/lib/hugmesh/device-registry/export.json"
+    if [ -n "${5:-}" ]; then printf '%s\n' "$5" > "${LKROOT}/var/lib/hugmesh/device-registry/last-good-generation"; fi
     build_lookup
 }
 # lookup_allows <login_user> <offered_fp> <type> <keyblob> -> rc 0 == ALLOW (non-empty), 1 == DENY
@@ -283,7 +283,7 @@ echo "-- Case 12: baked-key-after-AuthorizedKeysFile-none — the cmd is the SOL
 # key is ignored' behaviour is sshd's, needs a booted node).
 DROPIN="${REPO}/specs/etc/ssh/sshd_config.d/device-registry.conf"
 if grep -Eq '^[[:space:]]*AuthorizedKeysFile[[:space:]]+none[[:space:]]*$' "${DROPIN}" \
-   && grep -Eq '^[[:space:]]*AuthorizedKeysCommand[[:space:]]+/usr/sbin/snapdragon-authorized-keys-lookup' "${DROPIN}" \
+   && grep -Eq '^[[:space:]]*AuthorizedKeysCommand[[:space:]]+/usr/sbin/hugmesh-authorized-keys-lookup' "${DROPIN}" \
    && grep -Eq '^[[:space:]]*AuthorizedKeysCommandUser[[:space:]]+nobody' "${DROPIN}"; then
     ok "device-registry.conf: AuthorizedKeysFile none + AuthorizedKeysCommand(lookup) + User nobody (FIX-AUTHKEYSFILE-NONE)"
 else bad "device-registry.conf must make the lookup the SOLE key source (none + command + nobody)"; fi
@@ -332,24 +332,24 @@ ssh_allowed() {
 }
 
 echo "-- Case 13: ADMIN -> own licensed node-a (ALLOW) [REAL-LAYER-A] --"
-if ssh_allowed "tag:snapdragon" "superadmin" "${TAG_A} tag:snapdragon ${MESH_TAG}"; then
+if ssh_allowed "tag:hugmesh" "superadmin" "${TAG_A} tag:hugmesh ${MESH_TAG}"; then
     ok "rendered ssh edge to ${TAG_A} present -> admin reaches node-a:22"
 else bad "admin should reach node-a:22"; fi
 
 echo "-- Case 14: ADMIN -> SUPERADMIN/core node (DENY: export omits it) [REAL-LAYER-A] --"
-if ssh_allowed "tag:snapdragon" "superadmin" "${TAG_CORE} tag:snapdragon ${MESH_TAG}"; then
+if ssh_allowed "tag:hugmesh" "superadmin" "${TAG_CORE} tag:hugmesh ${MESH_TAG}"; then
     bad "admin must NOT reach a core node"
 else ok "no tag:dev_<fpCORE> edge -> default-deny -> admin DENIED to core node:22"; fi
 
 echo "-- Case 15: ADMIN -> OTHER-domain node (DENY) [REAL-LAYER-A] --"
-if ssh_allowed "tag:snapdragon" "superadmin" "${TAG_Z} tag:snapdragon ${MESH_TAG}"; then
+if ssh_allowed "tag:hugmesh" "superadmin" "${TAG_Z} tag:hugmesh ${MESH_TAG}"; then
     bad "admin must NOT reach an other-domain node"
 else ok "no tag:dev_<fpZ> edge -> default-deny -> admin DENIED to node-z:22"; fi
 
 echo "-- Case 16: SUPERADMIN in-mesh -> ALL mesh nodes incl. core (ALLOW via tag:mesh) [REAL-LAYER-A] --"
 allsup=1
 for nt in "${TAG_CORE}" "${TAG_A}" "${TAG_Z}"; do
-    ssh_allowed "tag:superadmin" "superadmin" "${nt} ${MESH_TAG} tag:snapdragon" || allsup=0
+    ssh_allowed "tag:superadmin" "superadmin" "${nt} ${MESH_TAG} tag:hugmesh" || allsup=0
 done
 [ "${allsup}" = 1 ] && ok "superadmin reaches core/node-a/node-z:22 via tag:mesh_east-01 (incl. nodes the export omits)" \
                      || bad "superadmin should reach every in-mesh node via tag:mesh"
@@ -357,19 +357,19 @@ done
 echo "-- Case 17: SUPERADMIN NOT in mesh -> DENY (cross-mesh / un-meshed) [REAL-LAYER-A] --"
 # A node NOT force-tagged tag:mesh_east-01 (e.g. only tag:mesh_west-02, or never
 # enrolled so carrying neither) is unreachable by the mesh-scoped superadmin rule.
-if ssh_allowed "tag:superadmin" "superadmin" "tag:mesh_west-02 tag:snapdragon"; then
+if ssh_allowed "tag:superadmin" "superadmin" "tag:mesh_west-02 tag:hugmesh"; then
     bad "superadmin must NOT reach a node outside its mesh"
 else ok "node lacks tag:mesh_east-01 -> superadmin DENIED (mesh-membership is the precondition)"; fi
 
 echo "-- Case 18: FORGED TAG — server-assigned dst tags are control-owned, not self-applyable [REAL-LAYER-A] --"
 # A node self-advertising tag:dev_<otherfp> cannot win: the dst tags live in
-# tagOwners under the control 'snapdragon' user only; the LIVE override (forced tag
+# tagOwners under the control 'hugmesh' user only; the LIVE override (forced tag
 # beats --advertise-tags) is a NEEDS-HEADSCALE assertion, but the policy ENCODES
 # the non-self-applyability here.
 ownerok=1
-strip "${LA_RENDERED}" | jq -e --arg t "${TAG_A}" '.tagOwners[$t] == ["snapdragon"]' >/dev/null 2>&1 || ownerok=0
-strip "${LA_RENDERED}" | jq -e '.tagOwners["tag:superadmin"] == ["snapdragon"]' >/dev/null 2>&1 || ownerok=0
-[ "${ownerok}" = 1 ] && ok "tag:dev_<fpA> + tag:superadmin owned by control 'snapdragon' only -> a node cannot self-advertise a forged dst" \
+strip "${LA_RENDERED}" | jq -e --arg t "${TAG_A}" '.tagOwners[$t] == ["hugmesh"]' >/dev/null 2>&1 || ownerok=0
+strip "${LA_RENDERED}" | jq -e '.tagOwners["tag:superadmin"] == ["hugmesh"]' >/dev/null 2>&1 || ownerok=0
+[ "${ownerok}" = 1 ] && ok "tag:dev_<fpA> + tag:superadmin owned by control 'hugmesh' only -> a node cannot self-advertise a forged dst" \
                      || bad "server-forced dst tags must be control-owned in tagOwners"
 echo "   ([MODEL] that a LIVE headscale REJECTS a forged --advertise-tags and the"
 echo "    forced tag WINS is NEEDS-HEADSCALE; the non-self-applyable ownership is asserted here.)"

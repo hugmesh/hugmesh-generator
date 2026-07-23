@@ -1,6 +1,6 @@
 # local-path-provisioner — backs cluster PVCs with the x86_64 host's local disks:
 # the device disk (/mnt/data) and the attached USB (/mnt/usb). Pinned to the
-# amd64 host (the disks live there). StorageClass "snapdragon-local" is the
+# amd64 host (the disks live there). StorageClass "hugmesh-local" is the
 # cluster default, so ArgoCD (devops) and the stateful apps (postgres, redis,
 # cassandra, clickhouse, etcd backups) provision onto these disks.
 apiVersion: v1
@@ -69,7 +69,7 @@ spec:
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: snapdragon-local
+  name: hugmesh-local
   annotations:
     storageclass.kubernetes.io/is-default-class: "true"
     # ── Encryption at rest ────────────────────────────────────────

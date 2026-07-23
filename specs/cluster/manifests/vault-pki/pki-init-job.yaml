@@ -7,7 +7,7 @@ kind: Job
 metadata:
   name: vault-pki-init
   namespace: vault
-  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: secrets }
+  labels: { app.kubernetes.io/part-of: hugmesh.systems, snapdragon.systems/tier: secrets }
   annotations:
     # Re-run on every ArgoCD sync; the script is idempotent. PostSync so Vault
     # (synced from manifests/vault) is already up.
@@ -50,7 +50,7 @@ spec:
               valueFrom:
                 secretKeyRef: { name: vault-bootstrap, key: token, optional: true }
             - name: CLUSTER_DOMAIN
-              value: "snapdragon.systems"
+              value: "hugmesh.systems"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

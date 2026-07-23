@@ -15,13 +15,13 @@
 #
 # ══════════════════════════ FORK COUPLING (READ BEFORE TOUCHING AUDITOR_* ARGS) ══════════════════════════
 # DECISION 2026-07-17 (auditor-fork-decision.md): we are NOT interoperating with the stock GrapheneOS
-# Auditor app. We fork+re-sign our OWN Auditor (systems.snapdragon.auditor, Track 2 of that decision),
+# Auditor app. We fork+re-sign our OWN Auditor (systems.hugmesh.auditor, Track 2 of that decision),
 # so THIS server must pin to OUR fork's identity, not upstream's. This is a deliberate override of
 # AttestationServer's own upstream default (which pins to the stock Auditor's package/signer).
 #
 #   server AUDITOR_SIGNER_DIGEST  ===  our Auditor fork's release-signing-cert SHA-256  (Track 2 output)
-#   server AUDITOR_PACKAGE        ===  our Auditor fork's applicationId (systems.snapdragon.auditor)
-#   server ATTESTATION_DOMAIN     ===  fork DOMAIN  ===  attestation.snapdragon.systems (both sides)
+#   server AUDITOR_PACKAGE        ===  our Auditor fork's applicationId (systems.hugmesh.auditor)
+#   server ATTESTATION_DOMAIN     ===  fork DOMAIN  ===  attestation.hugmesh.systems (both sides)
 #
 # These are BUILT AND SET TOGETHER. If AUDITOR_SIGNER_DIGEST does not exactly equal the real fork
 # release cert's SHA-256 digest, this server will REJECT EVERY ATTESTATION from our own app — there is
@@ -41,13 +41,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 ARG ATTESTATION_COMMIT=98b6c130
-ARG ATTESTATION_DOMAIN=attestation.snapdragon.systems
+ARG ATTESTATION_DOMAIN=attestation.hugmesh.systems
 # Our Auditor fork's identity (see FORK COUPLING banner above). AUDITOR_SIGNER_DIGEST is a
 # placeholder: SET-FROM-FORK-RELEASE-CERT — replace with
 # `keytool -printcert -jarfile <fork-release.apk>` (or an equivalent apksigner cert-dump), SHA-256,
 # uppercase hex, no colons — once Track 2 produces a real signed release build. Do not build a
 # cluster-bound image with the placeholder still in place.
-ARG AUDITOR_PACKAGE=systems.snapdragon.auditor
+ARG AUDITOR_PACKAGE=systems.hugmesh.auditor
 ARG AUDITOR_SIGNER_DIGEST=SET-FROM-FORK-RELEASE-CERT
 
 RUN git clone --recurse-submodules https://github.com/GrapheneOS/AttestationServer.git . \

@@ -15,17 +15,17 @@ import pytest
 # must be set BEFORE the first QApplication is created
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core.config import (   # noqa: E402  (after the importorskip gate)
+from hugmesh_studio.core.config import (   # noqa: E402  (after the importorskip gate)
     ImageConfig, MODE_SKIPPED_PAGES, OPTIONAL_SERVICES_CHOICES, ROLE_CHOICES,
     UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS, superadmin_plane_applies,
 )
-from snapdragon_studio.core.local_login_agent import load_manifest  # noqa: E402
-from snapdragon_studio.core.platform_info import HostInfo
-from snapdragon_studio.gui import wizard as wizard_mod
-from snapdragon_studio.gui.qt import Qt, QtWidgets
+from hugmesh_studio.core.local_login_agent import load_manifest  # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo
+from hugmesh_studio.gui import wizard as wizard_mod
+from hugmesh_studio.gui.qt import Qt, QtWidgets
 
 from _helpers import check_worklist_rows  # noqa: E402
 
@@ -34,19 +34,19 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 # a canned host so wizard construction never probes the machine (docker info &c.)
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
-                has_kvm=False, is_root=False, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture
@@ -329,7 +329,7 @@ def test_mesh_worklist_multiselect_builds_entries_and_prunes_domain_refs(wiz):
     rows by stable id (``{role}.{platform}``), defaults navigable (the mode-default row
     pre-checked), builds one WorklistEntry per checked row, pins the shared-page gating to
     the x86 option-superset, and prunes an unchecked row's id from every Domain.images."""
-    from snapdragon_studio.core.config import Domain
+    from hugmesh_studio.core.config import Domain
 
     pick_mode(wiz, "mesh")
     page = advance_to(wiz, wizard_mod.WorklistPage)
@@ -658,7 +658,7 @@ def test_branding_form_greyed_for_mesh_node(qapp):
     the branding page in mesh (MODE_SKIPPED_PAGES)."""
     from types import SimpleNamespace
 
-    from snapdragon_studio.core.config import ImageConfig
+    from hugmesh_studio.core.config import ImageConfig
     cfg = ImageConfig(mode="mesh", role="omnibus", platform="x86",
                       theme="boogiepop", wallpaper="/tmp/w.png", brand_locked=True)
     page = wizard_mod.BrandingPage(SimpleNamespace(cfg=cfg, generator_dir=GENERATOR_DIR))
@@ -853,7 +853,7 @@ def test_superdomain_editable_and_committed_in_mesh(wiz):
 # checkbox — not the constructor default — is the actual gate at import time.
 
 _KEYS_SECRETS_JSON = {
-    "snapdragon-pki": {
+    "hugmesh-pki": {
         "casdoor-admin": {"username": "admin", "password": "ADMIN-PLAINTEXT-SECRET"},
         "casdoor-superadmin": {"username": "superadmin", "password": "SUPERADMIN-SECRET-XYZ"},
     },

@@ -3,7 +3,7 @@
 # Playwright docker image (browsers bundled; no host browser install needed).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IMAGE="${PW_IMAGE:-snapdragongames-e2e:latest}"
+IMAGE="${PW_IMAGE:-hugmeshgames-e2e:latest}"
 BASE_URL="${SNAP_BASE_URL:-https://localhost:8443}"
 mkdir -p "${HERE}/screenshots"
 

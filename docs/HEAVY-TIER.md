@@ -7,7 +7,7 @@ GitOps and how the test architecture detects it.
 
 ## The ArgoCD app split (per-bundle, auto-floor + manual-heavy)
 
-The former single `snapdragon-analytics` Application auto-synced (prune+selfHeal)
+The former single `hugmesh-analytics` Application auto-synced (prune+selfHeal)
 the **whole** kafka+clickhouse bundle. On a Pi-only cluster the amd64-pinned pods
 are unschedulable, so that app churned **Synced-but-Progressing forever**. It is
 now split into per-bundle Apps (the manifests were **restructured, not deleted** —
@@ -15,15 +15,15 @@ now split into per-bundle Apps (the manifests were **restructured, not deleted**
 
 | app | path | sync | arch | what |
 |---|---|---|---|---|
-| `snapdragon-analytics-discovery` | `manifests/analytics/discovery` | **AUTO** (prune+selfHeal) | any | the clickhouse/kafka **ClusterIP Services** only — the lightweight floor a Pi-only cluster always satisfies, so `clickhouse:8123` / `kafka:9092` DNS always resolves |
-| `snapdragon-analytics-clickhouse` | `manifests/analytics/clickhouse` | **MANUAL** (operator opt-in) | amd64 | the ClickHouse warehouse pod + its 20Gi node-local PV |
-| `snapdragon-analytics-kafka` | `manifests/analytics/kafka` | **MANUAL** | amd64 | the KRaft broker pod + its node-local PV |
-| `snapdragon-observability` | `manifests/observability` | **MANUAL** | amd64 | Uptrace + its Postgres (depends on ClickHouse) |
+| `hugmesh-analytics-discovery` | `manifests/analytics/discovery` | **AUTO** (prune+selfHeal) | any | the clickhouse/kafka **ClusterIP Services** only — the lightweight floor a Pi-only cluster always satisfies, so `clickhouse:8123` / `kafka:9092` DNS always resolves |
+| `hugmesh-analytics-clickhouse` | `manifests/analytics/clickhouse` | **MANUAL** (operator opt-in) | amd64 | the ClickHouse warehouse pod + its 20Gi node-local PV |
+| `hugmesh-analytics-kafka` | `manifests/analytics/kafka` | **MANUAL** | amd64 | the KRaft broker pod + its node-local PV |
+| `hugmesh-observability` | `manifests/observability` | **MANUAL** | amd64 | Uptrace + its Postgres (depends on ClickHouse) |
 
 **MANUAL** = the Application has **no `syncPolicy.automated` block**, so ArgoCD
 never auto-syncs or self-heals it. An operator syncs it deliberately
-(`argocd app sync snapdragon-analytics-clickhouse`, or the UI Sync button) **after**
-attaching the x86 host and mounting its `snapdragon-local` data disk.
+(`argocd app sync hugmesh-analytics-clickhouse`, or the UI Sync button) **after**
+attaching the x86 host and mounting its `hugmesh-local` data disk.
 
 ### nodeSelector, NOT a taint
 

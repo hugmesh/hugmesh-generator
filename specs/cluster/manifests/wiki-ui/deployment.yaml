@@ -1,18 +1,18 @@
-# snapdragon-wiki-ui — the Angular wiki micro-frontend remote that serves the
+# hugmesh-wiki-ui — the Angular wiki micro-frontend remote that serves the
 # platform wiki (wiki pages, attachments, audit log, access control). Its own nginx
-# (own repo + pod) in the snapdragon-frontend namespace, federated into the
-# snapdragon.systems host: it serves a remoteEntry.json the host's loadRemoteModule
+# (own repo + pod) in the hugmesh-frontend namespace, federated into the
+# hugmesh.systems host: it serves a remoteEntry.json the host's loadRemoteModule
 # consumes. Talks to wiki-bff-api via the same-origin /bff/wiki/** fe-gateway route.
-# Repo: github.com/Snapdragon-Systems/snapdragon-wiki-ui
+# Repo: github.com/Snapdragon-Systems/hugmesh-wiki-ui
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: snapdragon-wiki-ui, namespace: snapdragon-frontend, labels: { app: snapdragon-wiki-ui, app.kubernetes.io/part-of: snapdragon.systems } }
+metadata: { name: hugmesh-wiki-ui, namespace: hugmesh-frontend, labels: { app: hugmesh-wiki-ui, app.kubernetes.io/part-of: hugmesh.systems } }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-wiki-ui } }
+  selector: { matchLabels: { app: hugmesh-wiki-ui } }
   template:
-    metadata: { labels: { app: snapdragon-wiki-ui } }
+    metadata: { labels: { app: hugmesh-wiki-ui } }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
       # POD-level hardening (replicates the frontend/binhost SAFE exemplar):
@@ -21,7 +21,7 @@ spec:
       # NIST 800-190 §4.5.3 (run as non-root). SAFE here because the wiki-ui
       # image is built FROM nginxinc/nginx-unprivileged:1.27-alpine and serves
       # on the unprivileged port 8080 as the baked-in UID 101 (verified in the
-      # snapdragon-wiki-ui Dockerfile + nginx.conf), so non-root + drop-ALL is
+      # hugmesh-wiki-ui Dockerfile + nginx.conf), so non-root + drop-ALL is
       # not a privileged-port bind. The existing pod seLinuxOptions are kept.
       securityContext:
         runAsNonRoot: true
@@ -36,7 +36,7 @@ spec:
           # named 'http' port feeds the Service targetPort: http, so it follows.
           # (Also corrects a latent mismatch: the image EXPOSE/listen is 8080 but
           # the manifest previously declared containerPort 80 — the federation
-          # registration already targets snapdragon-wiki-ui:8080.)
+          # registration already targets hugmesh-wiki-ui:8080.)
           ports: [{ name: http, containerPort: 8080 }]
           # CONTAINER-level hardening (audit: pod-only seLinuxOptions had NO
           # container securityContext). CIS K8s 5.2.5 (allowPrivilegeEscalation:
@@ -68,5 +68,5 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: snapdragon-wiki-ui, namespace: snapdragon-frontend }
-spec: { selector: { app: snapdragon-wiki-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
+metadata: { name: hugmesh-wiki-ui, namespace: hugmesh-frontend }
+spec: { selector: { app: hugmesh-wiki-ui }, ports: [{ name: http, port: 80, targetPort: http }] }

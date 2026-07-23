@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# studio-launch.sh — Snapdragon Image Studio launcher + guided Linux bootstrap for
+# studio-launch.sh — HugMesh Image Studio launcher + guided Linux bootstrap for
 # NixOS / SteamOS (Steam Deck) / Arch / Debian·Ubuntu / Fedora and other non-FHS or
-# no-`make` hosts. The POSIX sibling of studio/snapdragon-studio.bat.
+# no-`make` hosts. The POSIX sibling of studio/hugmesh-studio.bat.
 #
 # On a ready box it launches the wizard straight away. On a bare box it DETECTS what is
 # missing (a Python 3.10+, PySide6/PyQt6, a venv, make, whiptail, nix), reports each fact
@@ -15,12 +15,12 @@
 #   scripts/studio-launch.sh --auto      as guided, but every offer is accepted
 #   scripts/studio-launch.sh --menu      hand off to the ncurses build menu (build-menu.sh)
 #   scripts/studio-launch.sh --...       any OTHER --arg is HEADLESS automation: no prompts,
-#                                        no installs, straight to `python3 -m snapdragon_studio`
+#                                        no installs, straight to `python3 -m hugmesh_studio`
 #                                        (e.g. --print-command, the build-matrix GUI channel)
 #
-# Unlike the older studio/snapdragon-studio one-liner (which only worked when the CWD was
+# Unlike the older studio/hugmesh-studio one-liner (which only worked when the CWD was
 # studio/), this exports PYTHONPATH=$REPO/studio so the wizard launches from ANY directory —
-# the canonical invocation the Makefile uses (PYTHONPATH=studio python3 -m snapdragon_studio).
+# the canonical invocation the Makefile uses (PYTHONPATH=studio python3 -m hugmesh_studio).
 #
 # Exit codes: 0 launched (or --detect done), 1 launch/probe failure or no Python on a host we
 # cannot bootstrap, 2 a required step was declined.
@@ -37,12 +37,12 @@ STUDIO_DIR="${REPO_DIR}/studio"
 # (studio/.venv-studio) — so on a read-only rootfs (SteamOS) nothing outside $HOME is touched.
 VENV_DIR="${STUDIO_DIR}/.venv-studio"
 VENV_PY="${VENV_DIR}/bin/python"
-# Mirrors studio/snapdragon-studio.bat's PYTHON_MIN=3.10 and studio/README.md.
+# Mirrors studio/hugmesh-studio.bat's PYTHON_MIN=3.10 and studio/README.md.
 PYTHON_MIN_MAJOR=3
 PYTHON_MIN_MINOR=10
 
-# THE load-bearing fix vs studio/snapdragon-studio:3-4 (which computed `here` but never used
-# it): export PYTHONPATH so `python3 -m snapdragon_studio` resolves from any working directory.
+# THE load-bearing fix vs studio/hugmesh-studio:3-4 (which computed `here` but never used
+# it): export PYTHONPATH so `python3 -m hugmesh_studio` resolves from any working directory.
 export PYTHONPATH="${STUDIO_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
 # ── Colours (only when stderr is a TTY, matching scripts/build-menu.sh) ──────────
@@ -232,7 +232,7 @@ launch_python() {
         warn "Game Mode (gamescope) detected — set QT_QPA_PLATFORM=${QT_QPA_PLATFORM} (XWayland)."
         warn "The wizard is keyboard/mouse-heavy; Desktop Mode is recommended."
     fi
-    exec "${py}" -m snapdragon_studio "$@"
+    exec "${py}" -m hugmesh_studio "$@"
 }
 
 launch_menu() {
@@ -281,8 +281,8 @@ run_interactive() {
         say "    nix run .#studio       # launch the wizard directly"
         say "    nix run .#menu         # launch the ncurses build menu"
         if have_nix; then
-            confirm "nix develop \"${REPO_DIR}\" -c python3 -m snapdragon_studio ${FORWARD[*]-}" \
-                && exec nix develop "${REPO_DIR}" -c python3 -m snapdragon_studio ${FORWARD[@]+"${FORWARD[@]}"}
+            confirm "nix develop \"${REPO_DIR}\" -c python3 -m hugmesh_studio ${FORWARD[*]-}" \
+                && exec nix develop "${REPO_DIR}" -c python3 -m hugmesh_studio ${FORWARD[@]+"${FORWARD[@]}"}
             exit 2
         fi
         die "nix is not on PATH — install Nix (https://nixos.org/download) or use a host with python3 + PySide6."
@@ -296,7 +296,7 @@ run_interactive() {
     { [ "${QT_SCOPE}" = system ] && [ -n "${PY_CMD}" ]; } && launch_python "${PY_CMD}" ${FORWARD[@]+"${FORWARD[@]}"}
 
     # Not ready — DETECT report + a consent-gated project-local venv.
-    say "Snapdragon Image Studio — Linux setup check (${fam})"
+    say "HugMesh Image Studio — Linux setup check (${fam})"
     run_detect
     printf '\n' >&2
     [ "${OS_ID}" = steamos ] && say "SteamOS/Steam Deck: run this from DESKTOP MODE (keyboard/mouse); the venv stays inside this checkout, so the read-only rootfs is never modified — no 'steamos-readonly disable', no pacman."

@@ -1,0 +1,23 @@
+# HugMesh Spring APIs (hugmesh-actions). Backend Pis.
+# hugmesh-actions runs the scheduled ROLE_GAMES_ADMIN(systems) -> admin(games)
+# Casdoor sync, so it syncs in wave "2" — AFTER both the systems Casdoor (apps/05,
+# wave "0") and the GAMES-realm Casdoor (apps/06-casdoor-games, wave "1").
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hugmesh-apis
+  namespace: devops
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
+    targetRevision: main
+    path: specs/cluster/manifests/hugmesh-apis
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hugmesh-backend
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]

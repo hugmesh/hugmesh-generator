@@ -334,7 +334,7 @@ if [ -f "${DOCKERFILE}" ]; then
             && ok "Dockerfile.build: ${pkg} static-libs enabled (qemu[static-user] DEPEND closure)" \
             || bad "Dockerfile.build: ${pkg} static-libs MISSING — qemu[static-user] emerge halts with 'USE changes necessary'"
     done
-    if grep -qE '/etc/portage/(package\.)?env/snapdragon-qemu-user' "${DOCKERFILE}"; then
+    if grep -qE '/etc/portage/(package\.)?env/hugmesh-qemu-user' "${DOCKERFILE}"; then
         bad "Dockerfile.build: no-op per-package USE_EXPAND via package.env/env is back (portage ignores it)"
     else
         ok "Dockerfile.build: no per-package USE_EXPAND-via-package.env no-op"

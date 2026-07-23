@@ -19,8 +19,8 @@ import subprocess
 
 import pytest
 
-from snapdragon_studio.core import mesh_node
-from snapdragon_studio.core.mesh_node import MeshNode
+from hugmesh_studio.core import mesh_node
+from hugmesh_studio.core.mesh_node import MeshNode
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)

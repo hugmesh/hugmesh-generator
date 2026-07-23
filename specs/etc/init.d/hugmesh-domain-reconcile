@@ -1,0 +1,34 @@
+#!/sbin/openrc-run
+
+description="Sync + verify the signed cross-domain domain-registry export (#118), then emit per-domain CA + brand GitOps repos"
+
+# Domain-registry -> brand-repo bridge (#4): runs the fetch/verify/emit agent ONCE at boot (a
+# oneshot). The 60s timer half is a cron.d drop-in (OpenRC has no native timer; cronie is already
+# in the node image). The BFF drives fast propagation; this boot-oneshot + cron pull is the
+# convergence FLOOR.
+#
+# Enabled (rc-update add) ONLY when the `domain-registry-bridge` optional service is selected
+# (the stage4 gate) — otherwise it stays a baked-but-inert no-op. The agent is FAIL-CLOSED: on any
+# fetch/verify failure it keeps the last-good cache + emits NOTHING and exits 0, so a failed sync
+# never faults the boot. It NEVER mutates repo-tracked files — only its node-local staging dir.
+
+depend() {
+    need net
+    use dns logger
+    # After first-boot provisioning (which bakes node.env + the public key) and after the mesh
+    # join (the in-cluster mTLS transport the /export call uses).
+    after keys-provision tailscaled
+}
+
+command="/usr/sbin/hugmesh-domain-reconcile"
+command_background=false
+
+start() {
+    ebegin "Reconciling the domain registry into per-domain CA + brand GitOps repos (fail-closed; keeps last-good on error)"
+    "${command}"
+    eend $? "domain-registry reconcile reported an unexpected error (cache preserved; nothing emitted)"
+}
+
+stop() {
+    return 0
+}

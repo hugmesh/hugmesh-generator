@@ -47,8 +47,8 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: homeserver-egress-akkoma
-  namespace: snapdragon-backend
-  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app.kubernetes.io/name: akkoma }
@@ -68,7 +68,7 @@ spec:
             matchLabels: { app.kubernetes.io/name: akkoma-db }
       ports:
         - { protocol: TCP, port: 5432 }
-    # 3. the FORWARD egress-proxy (snapdragon-backend). ALL outbound federation
+    # 3. the FORWARD egress-proxy (hugmesh-backend). ALL outbound federation
     #    HTTP(S) is forced through it; the proxy enforces the per-actor force-local
     #    allowlist driven by the domain-lock loop. Direct internet egress is denied
     #    (no rule below opens it), so the proxy cannot be bypassed.
@@ -86,8 +86,8 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: homeserver-egress-akkoma-db
-  namespace: snapdragon-backend
-  labels: { app.kubernetes.io/name: akkoma-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app.kubernetes.io/name: akkoma-db }
@@ -111,8 +111,8 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: homeserver-egress-tuwunel
-  namespace: snapdragon-backend
-  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app.kubernetes.io/name: tuwunel }

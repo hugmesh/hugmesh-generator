@@ -76,7 +76,7 @@ fail=0
 # from a minimal raw config, via the Studio's --print-specs.
 materialize() {  # NAME RAW_JSON
   printf '%s' "$2" > "$work/$1.raw.json"
-  "$PY" -m snapdragon_studio --print-specs \
+  "$PY" -m hugmesh_studio --print-specs \
       --config "$work/$1.raw.json" --generator-dir "$GEN" > "$work/$1.json"
 }
 
@@ -175,13 +175,13 @@ detect() {  # LABEL WORKDIR IMG_GLOB XZ_GLOB WANT_COUNT WANT_BASENAME
   fi
 }
 wc4="$work/w-compress"; mkdir -p "$wc4"
-: > "$wc4/snapdragon-x86-be+gpu-prod-ts.img.xz"
-: > "$wc4/snapdragon-x86-be+gpu-prod-ts.stage4.tar.xz"   # sibling, must NOT match
-: > "$wc4/snapdragon-x86-be+gpu-prod-ts.fs.tar.xz"       # sibling, must NOT match
+: > "$wc4/hugmesh-x86-be+gpu-prod-ts.img.xz"
+: > "$wc4/hugmesh-x86-be+gpu-prod-ts.stage4.tar.xz"   # sibling, must NOT match
+: > "$wc4/hugmesh-x86-be+gpu-prod-ts.fs.tar.xz"       # sibling, must NOT match
 detect x86-compressed "$wc4" '*.img' '*.img.xz' 1 image.img.xz
-wc4b="$work/w-raw"; mkdir -p "$wc4b"; : > "$wc4b/snapdragon.img"
+wc4b="$work/w-raw"; mkdir -p "$wc4b"; : > "$wc4b/hugmesh.img"
 detect x86-uncompressed "$wc4b" '*.img' '*.img.xz' 1 image.img
-wc4c="$work/w-iso-xz"; mkdir -p "$wc4c"; : > "$wc4c/snapdragon-frite.iso.xz"
+wc4c="$work/w-iso-xz"; mkdir -p "$wc4c"; : > "$wc4c/hugmesh-frite.iso.xz"
 detect frite-compressed "$wc4c" '*.iso' '*.iso.xz' 1 image.iso.xz
 
 # ── G5: dial-key selector follows k8s Secret symlinks ────────────────────────────

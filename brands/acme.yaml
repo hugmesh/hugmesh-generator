@@ -22,7 +22,7 @@ mesh:
 
 # Web login theme (OPTIONAL — omit the block for the shipped default brand).
 # Colours/fonts for the login-ui the MESH serves to browsers; NOT desktop theming.
-# Derivation single-source: studio/snapdragon_studio/core/theme.py. Render with
+# Derivation single-source: studio/hugmesh_studio/core/theme.py. Render with
 #   scripts/tooling/derive-theme.py --brand-yaml brands/acme.yaml              # raw css
 #   scripts/tooling/derive-theme.py --brand-yaml brands/acme.yaml --configmap  # manifest
 # and the login-ui Deployment picks the ConfigMap up via an OPTIONAL env ref
@@ -52,7 +52,7 @@ services:
     installed: true
 
 # ── repos[] TENANT-SET MANIFEST ─────────────────────────────────────────────
-# {name, archetype, installed, identity}. `base` defaults to snapdragon-<name>;
+# {name, archetype, installed, identity}. `base` defaults to hugmesh-<name>;
 # the overlay is archetype-derived (templates/archetypes/<archetype>), NOT a
 # per-repo hand overlay. `identity` carries per-repo, NON-brand code identity as
 # render tokens (angular-mfe: app_slug/title_word; gateway: profile). Spring-BFF

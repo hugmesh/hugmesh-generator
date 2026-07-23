@@ -3,7 +3,7 @@
 # =============================================================================
 # This is the GITOPS/ADMISSION layer of the reserved-prefix rule. It makes the
 # reserved set (specs/cluster/reserved-prefixes.yaml, mirrored into the
-# snapdragon-policy/reserved-prefixes ConfigMap) an enforced invariant at
+# hugmesh-policy/reserved-prefixes ConfigMap) an enforced invariant at
 # admission/sync time, so a reserved label can never be (mis)used where it would
 # create a vanity-shadowing collision on .systems or .games.
 #
@@ -32,18 +32,18 @@ kind: ClusterPolicy
 metadata:
   name: reserved-prefixes
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     app.kubernetes.io/component: policy
   annotations:
     policies.kyverno.io/title: Reserved prefixes / vanity-collision guard
-    policies.kyverno.io/category: Snapdragon Routing
+    policies.kyverno.io/category: HugMesh Routing
     policies.kyverno.io/severity: high
     policies.kyverno.io/subject: Ingress, HTTPRoute, User/Profile/Vanity CRDs
     snapdragon.systems/source: specs/cluster/reserved-prefixes.yaml
     policies.kyverno.io/description: >-
       Blocks resources that would let a vanity username / profile handle collide
       with a dedicated platform route prefix or reserved subdomain. The reserved
-      set is read from the snapdragon-policy/reserved-prefixes ConfigMap (mirror
+      set is read from the hugmesh-policy/reserved-prefixes ConfigMap (mirror
       of specs/cluster/reserved-prefixes.yaml).
 spec:
   validationFailureAction: Enforce
@@ -51,13 +51,13 @@ spec:
   failurePolicy: Fail
   rules:
     # -------------------------------------------------------------------------
-    # (1) INGRESS — a vanity host is <label>.snapdragon.systems /
-    #     <label>.snapdragon.games. Any Ingress that admits a wildcard vanity
-    #     host (*.snapdragon.systems / *.snapdragon.games) is the gateway's own
+    # (1) INGRESS — a vanity host is <label>.hugmesh.systems /
+    #     <label>.hugmesh.games. Any Ingress that admits a wildcard vanity
+    #     host (*.hugmesh.systems / *.hugmesh.games) is the gateway's own
     #     vanity ingress and is exempt (it dispatches to the resolver, which does
     #     its own reserved check). A NON-wildcard Ingress whose host's FIRST DNS
     #     LABEL is reserved is fine when it IS the platform service for that label
-    #     (it lives in a snapdragon-* namespace) — what we forbid is some other
+    #     (it lives in a hugmesh-* namespace) — what we forbid is some other
     #     workload grabbing a reserved host. We approximate "platform" by the
     #     part-of label; everything else with a reserved first-label is rejected.
     # -------------------------------------------------------------------------
@@ -72,19 +72,19 @@ spec:
           # Skip the platform's own components (gateways/cloudflared carry this).
           - key: "{{ request.object.metadata.labels.\"app.kubernetes.io/part-of\" || '' }}"
             operator: NotEquals
-            value: "snapdragon.systems"
+            value: "hugmesh.systems"
       context:
         - name: reserved
           configMap:
             name: reserved-prefixes
-            namespace: snapdragon-policy
+            namespace: hugmesh-policy
       validate:
         message: >-
           Ingress host '{{ element }}' uses a RESERVED first label, which would
           shadow a dedicated platform route/subdomain. Reserved labels live in
-          specs/cluster/reserved-prefixes.yaml (snapdragon-policy/reserved-prefixes
+          specs/cluster/reserved-prefixes.yaml (hugmesh-policy/reserved-prefixes
           ConfigMap). Pick a non-reserved host or label the platform component
-          app.kubernetes.io/part-of=snapdragon.systems.
+          app.kubernetes.io/part-of=hugmesh.systems.
         foreach:
           - list: "request.object.spec.rules[].host"
             # First DNS label of the host (everything before the first dot).
@@ -93,8 +93,8 @@ spec:
             deny:
               conditions:
                 all:
-                  # only consider snapdragon.systems / .games hosts
-                  - key: "{{ regex_match('^[^.]+\\.snapdragon\\.(systems|games)$', element) }}"
+                  # only consider hugmesh.systems / .games hosts
+                  - key: "{{ regex_match('^[^.]+\\.hugmesh\\.(systems|games)$', element) }}"
                     operator: Equals
                     value: true
                   # …whose first label is in the reserved set
@@ -106,7 +106,7 @@ spec:
     # (2) GATEWAY-API HTTPRoute — same rule for hostnames, PLUS a path-prefix
     #     guard: a HTTPRoute whose first path segment is a reserved prefix is a
     #     dedicated platform route and must be owned by a platform component
-    #     (part-of=snapdragon.systems); anything else claiming /<reserved>/** is
+    #     (part-of=hugmesh.systems); anything else claiming /<reserved>/** is
     #     a shadowing collision and is rejected.
     # -------------------------------------------------------------------------
     - name: httproute-host-not-reserved-vanity
@@ -119,12 +119,12 @@ spec:
         all:
           - key: "{{ request.object.metadata.labels.\"app.kubernetes.io/part-of\" || '' }}"
             operator: NotEquals
-            value: "snapdragon.systems"
+            value: "hugmesh.systems"
       context:
         - name: reserved
           configMap:
             name: reserved-prefixes
-            namespace: snapdragon-policy
+            namespace: hugmesh-policy
       validate:
         message: >-
           HTTPRoute hostname '{{ element }}' uses a RESERVED first label and would
@@ -135,7 +135,7 @@ spec:
             deny:
               conditions:
                 all:
-                  - key: "{{ regex_match('^[^.]+\\.snapdragon\\.(systems|games)$', element) }}"
+                  - key: "{{ regex_match('^[^.]+\\.hugmesh\\.(systems|games)$', element) }}"
                     operator: Equals
                     value: true
                   - key: "{{ split(element, '.')[0] }}"
@@ -155,7 +155,7 @@ spec:
         any:
           - resources:
               kinds:
-                # Group-qualified so this only ever matches a snapdragon CRD,
+                # Group-qualified so this only ever matches a hugmesh CRD,
                 # never some unrelated "User" kind from another API group.
                 - snapdragon.systems/v1alpha1/VanityClaim
                 - snapdragon.systems/v1alpha1/Profile
@@ -164,7 +164,7 @@ spec:
         - name: reserved
           configMap:
             name: reserved-prefixes
-            namespace: snapdragon-policy
+            namespace: hugmesh-policy
       validate:
         message: >-
           handle '{{ request.object.spec.handle || request.object.spec.username

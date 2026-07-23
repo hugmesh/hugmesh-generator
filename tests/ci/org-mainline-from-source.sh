@@ -5,8 +5,8 @@
 #
 # WHY THIS EXISTS
 # --------------
-# Each repo's own GitLab CI resolves the shared libraries (snapdragon-commons,
-# snapdragon-auth-core, incl. the `tests` classifier) from the GitLab Maven *registry*
+# Each repo's own GitLab CI resolves the shared libraries (hugmesh-commons,
+# hugmesh-auth-core, incl. the `tests` classifier) from the GitLab Maven *registry*
 # via CI_JOB_TOKEN — i.e. it builds against the last PUBLISHED artifact, not against the
 # current source of those libs. When a shared lib changes its API but is re-published
 # under the SAME version ("content-bump-without-version-bump"), a dependent whose tests
@@ -17,7 +17,7 @@
 # That is exactly how three silent reds reached main on 2026-06-26 (mod-bff, auth-core,
 # admin-bff) — all caught only by a manual from-source sweep. This script automates that
 # sweep so the drift is caught mechanically. See the org memory
-# `snapdragon-silent-red-main-rootcause` for the full diagnosis.
+# `hugmesh-silent-red-main-rootcause` for the full diagnosis.
 #
 # WHAT IT DOES
 # -----------
@@ -38,7 +38,7 @@
 #
 # ENV
 #   GITHUB_ROOT  parent dir holding the repo clones        (default: /home/magus/GitHub)
-#   WORK         scratch dir for throwaway worktrees       (default: /var/tmp/portage/snapdragon-mainline-verify)
+#   WORK         scratch dir for throwaway worktrees       (default: /var/tmp/portage/hugmesh-mainline-verify)
 #   MVN          maven launcher                            (default: mvn)
 #   SKIP_LIB_BUILD=1   reuse already-installed libs (faster re-runs)
 #
@@ -46,34 +46,34 @@
 set -uo pipefail
 
 GITHUB_ROOT="${GITHUB_ROOT:-/home/magus/GitHub}"
-WORK="${WORK:-/var/tmp/portage/snapdragon-mainline-verify}"
+WORK="${WORK:-/var/tmp/portage/hugmesh-mainline-verify}"
 MVN="${MVN:-mvn}"
 
 # Shared libs to build FROM SOURCE, in dependency order. Each is installed at BOTH its own
 # <version> AND its <parent> version (see build_lib) — because dependents resolve the two
 # libs at DIFFERENT coordinates: the commons MAIN jar resolves at 2.0.0 (its own version,
-# pinned by snapdragon-parent's <snapdragon-commons.version>), while the auth-core MAIN jar
+# pinned by hugmesh-parent's <hugmesh-commons.version>), while the auth-core MAIN jar
 # resolves at 2.7.0 (the parent line, via the BOM) and some repos pin commons:2.7.0:tests.
 # Installing at both (deduped) makes the from-source build the one actually consumed for
 # every dependent's main-jar AND tests-classifier coordinate, self-correcting as the line bumps.
 LIBS=(
-  "snapdragon-commons"
-  "snapdragon-auth-core"
+  "hugmesh-commons"
+  "hugmesh-auth-core"
 )
 
 # Dependents verified against the from-source libs (full `mvn test`).
 DEPENDENTS_DEFAULT=(
-  snapdragon-admin-bff-api
-  snapdragon-mod-bff-api
-  snapdragon-user-bff-api
-  snapdragon-federation-api
-  snapdragon-gateway
-  snapdragon-forum-bff-api
-  snapdragon-wiki-bff-api
-  snapdragon-tube-bff-api
-  snapdragon-owncast-bff-api
-  snapdragon-actions
-  snapdragon-remote-fragment
+  hugmesh-admin-bff-api
+  hugmesh-mod-bff-api
+  hugmesh-user-bff-api
+  hugmesh-federation-api
+  hugmesh-gateway
+  hugmesh-forum-bff-api
+  hugmesh-wiki-bff-api
+  hugmesh-tube-bff-api
+  hugmesh-owncast-bff-api
+  hugmesh-actions
+  hugmesh-remote-fragment
 )
 
 DEPENDENTS=("$@")
@@ -85,7 +85,7 @@ FAILED=0
 
 log() { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
 
-# Add a <version> to the snapdragon-commons `tests`-classifier dep when a pom omits it and
+# Add a <version> to the hugmesh-commons `tests`-classifier dep when a pom omits it and
 # relies on a parent BOM entry that does not manage the classifier (a per-repo pom quirk
 # that otherwise breaks the offline build). Idempotent; rewrites in place.
 patch_commons_tests_version() {
@@ -95,9 +95,9 @@ p = sys.argv[1]
 s = open(p).read()
 def fix(m):
     b = m.group(0)
-    if 'snapdragon-commons' in b and '<classifier>tests</classifier>' in b and '<version>' not in b:
-        b = b.replace('<artifactId>snapdragon-commons</artifactId>',
-                      '<artifactId>snapdragon-commons</artifactId>\n      <version>${snapdragon-commons.version}</version>', 1)
+    if 'hugmesh-commons' in b and '<classifier>tests</classifier>' in b and '<version>' not in b:
+        b = b.replace('<artifactId>hugmesh-commons</artifactId>',
+                      '<artifactId>hugmesh-commons</artifactId>\n      <version>${hugmesh-commons.version}</version>', 1)
     return b
 open(p, 'w').write(re.sub(r'<dependency>.*?</dependency>', fix, s, flags=re.S))
 PY
@@ -120,7 +120,7 @@ build_lib() {  # repo
   # Install the lib from source at EVERY version a dependent might resolve it as. A
   # dependent resolves an intra-org lib in one of two ways, and they DIFFER per lib:
   #   - the lib's OWN <version> — e.g. the commons MAIN jar resolves to 2.0.0, because
-  #     snapdragon-parent's <dependencyManagement> pins it via <snapdragon-commons.version>
+  #     hugmesh-parent's <dependencyManagement> pins it via <hugmesh-commons.version>
   #     = 2.0.0 and dependents declare commons with NO explicit <version>; commons' own
   #     pom <version> is also 2.0.0, so 2.0.0 IS current source.
   #   - the lib's <parent> version (the org line, currently 2.7.0) — e.g. admin-bff
@@ -169,7 +169,7 @@ tail = re.sub(r'<version>[^<]+</version>', f'<version>{ver}</version>', tail, co
 open(p, 'w').write(head + tail)
 PY
     log "lib: $repo → install $ver (from source)"
-    rm -rf "$HOME/.m2/repository/systems/snapdragon/$repo/$ver" 2>/dev/null || true
+    rm -rf "$HOME/.m2/repository/systems/hugmesh/$repo/$ver" 2>/dev/null || true
     # shellcheck disable=SC2086
     ( cd "$dest" && "$MVN" -q -o install $skips ) || ( cd "$dest" && "$MVN" -q install $skips )
     local r=$?

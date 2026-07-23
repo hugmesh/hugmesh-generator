@@ -7,11 +7,11 @@ import { onboard, shot } from './helpers';
 // testid that no longer exists anywhere in the current UI.
 //
 // Uptrace observability is server-configured (BffService.uptraceUrl(), wired to
-// https://uptrace.snapdragon.systems by default) but has NO UI entry point
+// https://uptrace.hugmesh.systems by default) but has NO UI entry point
 // anywhere in admin-ui or the host — no `nav-uptrace` equivalent was ever built.
 // This spec no longer asserts it (queued as an open product gap, not a test bug).
 test('admin grants a registered user access to a namespace', async ({ page }) => {
-  await onboard(page, 'admin@snapdragon.systems');
+  await onboard(page, 'admin@hugmesh.systems');
 
   await page.getByTestId('profile-trigger').click();
   await page.getByTestId('menu-admin').click();
@@ -21,11 +21,11 @@ test('admin grants a registered user access to a namespace', async ({ page }) =>
 
   // Grant alice access to the backend namespace.
   await page.getByTestId('ns-user').fill('alice@gmail.com');
-  await page.getByTestId('ns-select').selectOption('snapdragon-backend');
+  await page.getByTestId('ns-select').selectOption('hugmesh-backend');
   await page.getByTestId('ns-grant').click();
 
   const row = page.getByTestId('ns-grants').locator('[data-user="alice@gmail.com"]');
-  await expect(row).toContainText('snapdragon-backend');
+  await expect(row).toContainText('hugmesh-backend');
   await shot(page, '09-namespace-grant');
 });
 

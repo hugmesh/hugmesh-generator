@@ -1,6 +1,6 @@
 #!/bin/bash
 # bootstrap-kind.sh — reusable LOCAL kind bring-up for a CURATED slice of the
-# Snapdragon GitOps tree: Vault + Vault-PKI + Casdoor (+ its dedicated
+# HugMesh GitOps tree: Vault + Vault-PKI + Casdoor (+ its dedicated
 # casdoor-pg Postgres) + Harbor (+ harbor-provision), and everything those
 # transitively need (namespaces, local-path storage, ArgoCD itself, External
 # Secrets Operator + its Vault ClusterSecretStore config, ingress-nginx
@@ -16,7 +16,7 @@
 # reuses an already-initialized Vault, re-applies everything else via
 # `kubectl apply`).
 #
-# Targets the CORE reference "snapdragon.systems" apps/ tree (specs/cluster/
+# Targets the CORE reference "hugmesh.systems" apps/ tree (specs/cluster/
 # apps/*.yaml as committed on the GitOps repo), NOT a brand-templated tenant
 # (templates/apps/*.hbs + brands/*.conf render OTHER tenant domains from these
 # same core apps — this script intentionally does not touch that templating
@@ -27,12 +27,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLUSTER_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"       # specs/cluster (this dir is specs/cluster/bootstrap/kind-local)
 REPO_ROOT="$(cd "${CLUSTER_DIR}/../.." && pwd)"        # repo root (for `git show <branch>:<path>`)
 
-CLUSTER_NAME="${KIND_CLUSTER_NAME:-snapdragon-local}"
+CLUSTER_NAME="${KIND_CLUSTER_NAME:-hugmesh-local}"
 ARGOCD_VERSION="${ARGOCD_VERSION:-stable}"
 ARGOCD_NS="${ARGOCD_NS:-devops}"
-REPO="${SNAPDRAGON_GITOPS_REPO:-https://github.com/Snapdragon-Systems/snapdragon-generator.git}"
-REV="${SNAPDRAGON_GITOPS_REV:-main}"
-# The Harbor migration (registry.snapdragon.systems cutover) is not yet merged
+REPO="${HUGMESH_GITOPS_REPO:-https://github.com/Snapdragon-Systems/hugmesh-generator.git}"
+REV="${HUGMESH_GITOPS_REV:-main}"
+# The Harbor migration (registry.hugmesh.systems cutover) is not yet merged
 # to main (open draft PR, branch below). Its Application objects + the
 # manifests they point at only exist on this branch today. Once that PR
 # merges, set HARBOR_BRANCH=main (or just drop the override block below
@@ -75,7 +75,7 @@ kubectl version >/dev/null 2>&1 || { echo "cluster not reachable after kind crea
 #      - snapdragon.systems/pki=true         (vault, vault-pki-init, casdoor +
 #        casdoor-pg, harbor + harbor-provision — all pinned to the pki node)
 #      - snapdragon.systems/local-path=true  (the local-path-provisioner
-#        DaemonSet; every PVC above is carved from the snapdragon-local SC)
+#        DaemonSet; every PVC above is carved from the hugmesh-local SC)
 #    kubernetes.io/arch=amd64 is already correct on a kind/amd64 host. Nothing
 #    in this curated subset needs snapdragon.systems/backend or a
 #    snapdragon.systems/role=pki style label (checked — only the two above).
@@ -99,17 +99,17 @@ kubectl apply -f "${CLUSTER_DIR}/namespaces/namespaces.yaml"
 #    /mnt/data/local-path + /mnt/usb/local-path INSIDE the kind node
 #    container's own filesystem; no real block devices needed.
 # ─────────────────────────────────────────────────────────────────────────
-log "Local storage (snapdragon-local StorageClass)"
+log "Local storage (hugmesh-local StorageClass)"
 kubectl apply -k "${CLUSTER_DIR}/manifests/local-path"
 
-# snapdragon-local sets itself as the cluster-default StorageClass
+# hugmesh-local sets itself as the cluster-default StorageClass
 # (storageclass.kubernetes.io/is-default-class: "true"). kind's own built-in
 # class ("standard") is ALSO marked default, and having two default
 # StorageClasses makes any unqualified PVC (no storageClassName) ambiguous —
 # the PVC admission controller errors instead of picking one. Resolve it by
 # stripping the default annotation from kind's "standard" class rather than
-# touching snapdragon-local (every real-cluster PVC in this repo already pins
-# storageClassName: snapdragon-local explicitly, so this only affects
+# touching hugmesh-local (every real-cluster PVC in this repo already pins
+# storageClassName: hugmesh-local explicitly, so this only affects
 # hypothetical unqualified PVCs on this dev cluster).
 if kubectl get storageclass standard >/dev/null 2>&1; then
   IS_DEFAULT="$(kubectl get storageclass standard -o jsonpath='{.metadata.annotations.storageclass\.kubernetes\.io/is-default-class}' 2>/dev/null || true)"
@@ -149,7 +149,7 @@ kubectl -n "${ARGOCD_NS}" rollout status deploy/argocd-repo-server --timeout=300
 kubectl -n "${ARGOCD_NS}" rollout status deploy/argocd-applicationset-controller --timeout=180s || true
 
 # ─────────────────────────────────────────────────────────────────────────
-# 5b) Repo credentials. snapdragon-generator is a PRIVATE GitHub repo — every
+# 5b) Repo credentials. hugmesh-generator is a PRIVATE GitHub repo — every
 #     git-path Application below (Vault, vault-pki, ESO config, Casdoor,
 #     harbor-provision) fails to sync with "authentication required:
 #     Repository not found" unless ArgoCD's repo-server has a credential for
@@ -171,7 +171,7 @@ kubectl -n "${ARGOCD_NS}" rollout status deploy/argocd-applicationset-controller
 # ─────────────────────────────────────────────────────────────────────────
 if [ -n "${ARGOCD_REPO_TOKEN:-}" ]; then
   log "Registering ArgoCD repo credential for ${REPO} (from \$ARGOCD_REPO_TOKEN, never printed)"
-  kubectl -n "${ARGOCD_NS}" create secret generic snapdragon-generator-repo \
+  kubectl -n "${ARGOCD_NS}" create secret generic hugmesh-generator-repo \
     --from-literal=type=git \
     --from-literal=url="${REPO}" \
     --from-literal=username=x-access-token \
@@ -180,7 +180,7 @@ if [ -n "${ARGOCD_REPO_TOKEN:-}" ]; then
     | kubectl label --local -f - "argocd.argoproj.io/secret-type=repository" --dry-run=client -o yaml \
     | kubectl apply -f - >/dev/null
 else
-  warn "\$ARGOCD_REPO_TOKEN not set — every git-path Application below will fail to sync against the private snapdragon-generator repo with 'authentication required'. Re-run with ARGOCD_REPO_TOKEN=<a token with read access to this repo> to fix (see README.md)."
+  warn "\$ARGOCD_REPO_TOKEN not set — every git-path Application below will fail to sync against the private hugmesh-generator repo with 'authentication required'. Re-run with ARGOCD_REPO_TOKEN=<a token with read access to this repo> to fix (see README.md)."
 fi
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -212,7 +212,7 @@ fi
 apply_core_app() {
   local file="$1"
   log "Applying (main) specs/cluster/apps/${file}"
-  sed -e "s#repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git#repoURL: ${REPO}#" \
+  sed -e "s#repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git#repoURL: ${REPO}#" \
       -e "s#targetRevision: main#targetRevision: ${REV}#" \
       "${CLUSTER_DIR}/apps/${file}" | kubectl apply -f -
 }
@@ -220,7 +220,7 @@ apply_core_app() {
 CORE_APPS=(
   06-vault-pki.yaml                # vault-pki-init PostSync hook Job
   03-external-secrets.yaml         # ESO controller + CRDs (Helm chart)
-  04-external-secrets-config.yaml  # ClusterSecretStore "snapdragon-vault" + ExternalSecrets
+  04-external-secrets-config.yaml  # ClusterSecretStore "hugmesh-vault" + ExternalSecrets
   11-ingress-nginx-internal.yaml   # nginx-internal (LAN/VPN-only) — Harbor's Ingress uses this class
   05-casdoor.yaml                  # Casdoor + its dedicated casdoor-pg Postgres
 )
@@ -246,7 +246,7 @@ VREF="$(vault_ref)"
 log "Applying (${VREF}) specs/cluster/apps/02-vault.yaml (targetRevision overridden: main -> ${VAULT_BRANCH}, picks up the vault-tls-init openssl fix)"
 git -C "${REPO_ROOT}" show "${VREF}:specs/cluster/apps/02-vault.yaml" \
   | sed -e "s#targetRevision: main#targetRevision: ${VAULT_BRANCH}#" \
-        -e "s#repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git#repoURL: ${REPO}#" \
+        -e "s#repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git#repoURL: ${REPO}#" \
   | kubectl apply -f -
 
 log "Fetching Harbor Applications from branch '${HARBOR_BRANCH}' (not yet merged to main)"
@@ -269,7 +269,7 @@ git -C "${REPO_ROOT}" show "${HREF}:specs/cluster/apps/03a-harbor.yaml" | kubect
 log "Applying (${HREF}) specs/cluster/apps/03b-harbor-provision.yaml (targetRevision overridden: main -> ${HARBOR_BRANCH})"
 git -C "${REPO_ROOT}" show "${HREF}:specs/cluster/apps/03b-harbor-provision.yaml" \
   | sed -e "s#targetRevision: main#targetRevision: ${HARBOR_BRANCH}#" \
-        -e "s#repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git#repoURL: ${REPO}#" \
+        -e "s#repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git#repoURL: ${REPO}#" \
   | kubectl apply -f -
 
 # Explicitly NOT applied (deliberately out of scope for this validation pass —
@@ -372,7 +372,7 @@ else
   kubectl -n vault create secret generic vault-bootstrap \
     --from-literal=token="${ROOT_TOKEN}" \
     --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  # vault-token (ns external-secrets): the ClusterSecretStore "snapdragon-vault"
+  # vault-token (ns external-secrets): the ClusterSecretStore "hugmesh-vault"
   # auth Secret, so ESO can actually reach Vault (KV + the PKI issue paths the
   # per-app mTLS ExternalSecrets use) instead of just having Vault up unused.
   kubectl create namespace external-secrets --dry-run=client -o yaml | kubectl apply -f - >/dev/null

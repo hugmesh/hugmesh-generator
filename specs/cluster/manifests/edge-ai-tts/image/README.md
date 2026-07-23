@@ -103,8 +103,8 @@ is a later optional flag, not the default.
 
 ## Build
 ```sh
-docker build -t registry.snapdragon.systems/snapdragon/edge-ai-tts:main .
-docker push  registry.snapdragon.systems/snapdragon/edge-ai-tts:main
+docker build -t registry.hugmesh.systems/hugmesh/edge-ai-tts:main .
+docker push  registry.hugmesh.systems/hugmesh/edge-ai-tts:main
 ```
 Runs as non-root (uid 65532) with a read-only rootfs (pod mounts an emptyDir at `/tmp`).
 

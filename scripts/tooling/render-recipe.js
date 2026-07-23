@@ -18,7 +18,7 @@
 // OWN base file: per (file, anchor) an upstream-literal `find` and a tokenized
 // `replace`. BOTH are rendered through the SAME Handlebars context + fail-closed
 // classifier gate (render-handlebars.assertTemplateSafe) — so `find` can carry
-// per-repo IDENTITY tokens (e.g. `@snapdragon/{{APP_SLUG}}`) to match the base,
+// per-repo IDENTITY tokens (e.g. `@hugmesh/{{APP_SLUG}}`) to match the base,
 // and `replace` carries the brand delta. PRESENCE-TOLERANT: an anchor that does
 // not occur in a given repo's base simply no-ops (user-bff has no mfa/totp/
 // admin-emails/appstore keys -> those anchors match 0 and are skipped — exactly
@@ -30,7 +30,7 @@
 //       optional: true            # (default true) missing target file => skip
 //       anchors:
 //         - id: oidc-issuer-host  # human label for logs / drift oracle
-//           find: "https://id.snapdragon.systems"          # rendered w/ ctx
+//           find: "https://id.hugmesh.systems"          # rendered w/ ctx
 //           replace: "https://id.{{CLUSTER_DOMAIN}}"       # rendered w/ ctx
 //           required: false       # (default false) if true, MUST match >=1x
 //   renames:                      # applied AFTER all edits[] (edits address
@@ -115,8 +115,8 @@ const RENAME_CONTRACT_DENYLIST = new Set([
   '.snapdragon-provenance.json',
   '.snapdragon-provenance.json.sig',
   '.snapdragon-mesh-admitted',
-  '.snapdragon-base-origin.json',
-  '.snapdragon-base-ref',
+  '.hugmesh-base-origin.json',
+  '.hugmesh-base-ref',
 ]);
 
 // Shape-validate ONE side of a rename (already Handlebars-rendered). Returns the

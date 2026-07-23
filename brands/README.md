@@ -3,7 +3,7 @@
 A **brand profile** is a plain shell file the image builders `source` to rebrand
 the images and select the brand's **own isolated mesh**. It rewrites every
 namespace, hostname, gateway name, image org, ingress host and title in the
-baked cluster payload from the Snapdragon defaults to your brand/domain at build
+baked cluster payload from the HugMesh defaults to your brand/domain at build
 time, and points the node at the brand's own headscale control plane.
 
 ## Files here
@@ -11,7 +11,7 @@ time, and points the node at the brand's own headscale control plane.
 | File | Committed? | Contains |
 |------|-----------|----------|
 | `example.conf` | yes | a complete, safe-to-commit example (no secrets) |
-| `local.conf` | yes | the **LAN `.test` profile** — `snapdragon.test`, no OAuth/SMTP/Cloudflare, wildcard DNS on. Used by `make local` (ENV=test). |
+| `local.conf` | yes | the **LAN `.test` profile** — `hugmesh.test`, no OAuth/SMTP/Cloudflare, wildcard DNS on. Used by `make local` (ENV=test). |
 | `<yourbrand>.conf` | yes | your brand's branding + domain + mesh (no secrets) |
 | `../brand.conf` | **no** (gitignored) | the same vars **with real passwords/tokens** |
 

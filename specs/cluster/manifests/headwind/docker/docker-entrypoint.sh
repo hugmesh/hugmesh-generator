@@ -1,5 +1,5 @@
 #!/bin/sh
-# snapdragon-headwind entrypoint — DERIVED from h-mdm/hmdm-docker's
+# hugmesh-headwind entrypoint — DERIVED from h-mdm/hmdm-docker's
 # docker-entrypoint.sh (Apache-2.0; pinned ref in docker/README.md), reduced to
 # the steps that apply to THIS image and deployment (build-from-source WAR,
 # rootless UID 1000, in-cluster Postgres, PROTOCOL=http behind the

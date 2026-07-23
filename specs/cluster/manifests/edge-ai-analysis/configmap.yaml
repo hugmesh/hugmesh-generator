@@ -6,9 +6,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: edge-ai-analysis
-  namespace: snapdragon-inference
+  namespace: hugmesh-inference
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/slug: edge-ai-analysis
 data:
   # Which edge-ai model serves each task (must be in the edge-ai-models catalog/preload).

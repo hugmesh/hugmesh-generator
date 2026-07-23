@@ -5,7 +5,7 @@ docker cross-platform").
 Pins the wiring end-to-end WITHOUT bringing up docker (nobuild):
   1. TOR gate: with_tor -> TOR=1 in the make-env (the Makefile's STACK_TOR_PROFILE
      adds `--profile tor`); OFF is byte-identical to before (no TOR footgun).
-  2. onion readout: LocalStackNode reads the PUBLIC hostname the snapdragon-tor
+  2. onion readout: LocalStackNode reads the PUBLIC hostname the hugmesh-tor
      service copies to tests/stack/tor-onion/hostname; absent => "" (never raises).
   3. config -> stack threading + the plan text + up() reporting the address.
   4. TEXTUAL pins on the real Makefile / compose / build context so a refactor
@@ -17,9 +17,9 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from snapdragon_studio.core.local_mesh_bootstrap import (   # noqa: E402
+from hugmesh_studio.core.local_mesh_bootstrap import (   # noqa: E402
     LocalMeshBootstrap, LocalMeshBootstrapConfig)
-from snapdragon_studio.core.local_stack_node import LocalStackNode  # noqa: E402
+from hugmesh_studio.core.local_stack_node import LocalStackNode  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -119,10 +119,10 @@ def test_makefile_threads_the_tor_profile_through_stack_targets():
 
 def test_compose_defines_the_optin_tor_service():
     compose = _read("tests", "stack", "compose.local.yaml")
-    assert "snapdragon-tor:" in compose
-    tor = compose.split("snapdragon-tor:", 1)[1]
+    assert "hugmesh-tor:" in compose
+    tor = compose.split("hugmesh-tor:", 1)[1]
     assert 'profiles: ["tor"]' in tor              # OPT-IN, never in a default stack
-    assert "TOR_ONION_UPSTREAM" in tor and "snapdragon-fe-gateway:8080" in tor
+    assert "TOR_ONION_UPSTREAM" in tor and "hugmesh-fe-gateway:8080" in tor
     assert "tor-onion-keys:" in compose            # the persisted-key volume exists
 
 

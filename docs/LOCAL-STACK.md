@@ -1,6 +1,6 @@
-# Run the ENTIRE Snapdragon stack locally (docker-compose)
+# Run the ENTIRE HugMesh stack locally (docker-compose)
 
-This brings up the **whole Snapdragon platform on one x86_64 machine** via
+This brings up the **whole HugMesh platform on one x86_64 machine** via
 docker-compose, **building every first-party service from its cloned repo** —
 the three gateways, the Spring backends (federation / admin-bff / mod-bff /
 user-bff / actions), the static fragment fleet, and every Angular remote +
@@ -26,7 +26,7 @@ compose topology is a faithful translation of those manifests to compose DNS.
   `sudo`/systemd/other-`HOME` invocation silently falls back to the legacy builder
   and dies with opaque Dockerfile parse errors. `docker buildx version` must work
   as the invoking user.
-- **A cold build** (no `snapdragon-local-*` images yet — e.g. a fresh box or a
+- **A cold build** (no `hugmesh-local-*` images yet — e.g. a fresh box or a
   wiped docker data-root) additionally needs the org-private maven artifacts:
   run **`make stack-m2-bootstrap` once first** (see "Cold builds" below).
 - **x86_64 / amd64.** First-party images are amd64 (Temurin JRE, node-alpine,
@@ -34,7 +34,7 @@ compose topology is a faithful translation of those manifests to compose DNS.
 - **GitHub access OR internal VPN** so the repos can be cloned. Either:
   - `gh auth login` (GitHub CLI logged in), or
   - a git credential helper / token (`GH_TOKEN` / `GITHUB_TOKEN`), or
-  - the VPN + the internal mirror (`GIT_BASE=https://gitlab.snapdragon.systems/snapdragon`).
+  - the VPN + the internal mirror (`GIT_BASE=https://gitlab.hugmesh.systems/hugmesh`).
 - **Resources:** the core platform is ~10 JVM/nginx containers + 3 Postgres +
   Cassandra. Budget **~8 GB RAM** for the core, **~12–16 GB** with `SOCIAL=1`
   (Synapse + the full Mastodon tier). First build compiles several Maven + Angular
@@ -78,8 +78,8 @@ Useful overrides:
 make stack-up SOCIAL=1                       # also bring up Synapse + Mastodon
 make stack-up PUBLIC_HOST_PORT=9090          # publish the front door elsewhere
 make stack-up STACK_SRC=/srv/snap-src        # clone/build from a different dir
-make stack-clone GIT_BASE=https://gitlab.snapdragon.systems/snapdragon  # VPN mirror
-make stack-up ENV=prod CASDOOR_ISSUER=https://id.snapdragon.systems     # prod mode
+make stack-clone GIT_BASE=https://gitlab.hugmesh.systems/hugmesh  # VPN mirror
+make stack-up ENV=prod CASDOOR_ISSUER=https://id.hugmesh.systems     # prod mode
 ```
 
 ---
@@ -87,11 +87,11 @@ make stack-up ENV=prod CASDOOR_ISSUER=https://id.snapdragon.systems     # prod m
 ## Cold builds — `make stack-m2-bootstrap` (private maven artifacts)
 
 Four Java services (**admin/user/mod-bff, federation-api**) resolve org-PRIVATE
-maven artifacts (`systems.snapdragon:snapdragon-parent/-commons/-auth-core/
+maven artifacts (`systems.hugmesh:hugmesh-parent/-commons/-auth-core/
 -build-config`) at **image-build** time via their committed `settings.xml`
 (`${env.CI_API_V4_URL}/groups/${env.GITLAB_GROUP_ID}/-/packages/maven` — the
 GitLab group registry, unreachable off the VPN). While the built
-`snapdragon-local-*` images exist locally you never notice; on a **cold build**
+`hugmesh-local-*` images exist locally you never notice; on a **cold build**
 (fresh box, wiped docker data-root) `docker compose build` fails resolving them.
 
 ```bash
@@ -104,12 +104,12 @@ vendored):
 
 1. Clones the four library repos at **pinned commits** (the repos carry no git
    tags; each SHA's `pom.xml` is exactly the version the services require —
-   including BOTH `snapdragon-auth-core` 2.3.3 (user-bff) and 2.3.4 (admin-bff))
-   into `~/.cache/snapdragon-stack-maven/src` and `mvn install`s them into
-   `~/.cache/snapdragon-stack-maven/m2` using the official `maven` Docker image
+   including BOTH `hugmesh-auth-core` 2.3.3 (user-bff) and 2.3.4 (admin-bff))
+   into `~/.cache/hugmesh-stack-maven/src` and `mvn install`s them into
+   `~/.cache/hugmesh-stack-maven/m2` using the official `maven` Docker image
    (no host JDK/maven needed). Cached artifacts are skipped — no re-clone/re-build.
 2. Serves that m2 repo from a tiny static registry **container**
-   (`snapdragon-m2-registry`, busybox httpd) shaped like the GitLab group
+   (`hugmesh-m2-registry`, busybox httpd) shaped like the GitLab group
    registry URL. It must be a container: on some hosts, host-published ports are
    NOT reachable from `docker build` containers, so the build reaches it by its
    docker-bridge IP.
@@ -134,7 +134,7 @@ Two committed companions make the resolution actually work:
 The registry container survives reboots (`--restart unless-stopped`), but its
 bridge IP can change when docker restarts — `make stack-m2-bootstrap` is cheap
 to re-run and refreshes `.m2-registry.env`. Remove it with
-`docker rm -f snapdragon-m2-registry` once your images are built.
+`docker rm -f hugmesh-m2-registry` once your images are built.
 
 ---
 
@@ -149,14 +149,14 @@ either — just pass a token for private repos.
 # From the repo root, in PowerShell:
 pwsh -File scripts\stack-up.ps1 -GhToken ghp_yourtoken         # ENV=test (default)
 pwsh -File scripts\stack-up.ps1 -GhToken ghp_yourtoken -Social # + Synapse/Mastodon
-pwsh -File scripts\stack-up.ps1 -Env prod -CasdoorIssuer https://id.snapdragon.systems
+pwsh -File scripts\stack-up.ps1 -Env prod -CasdoorIssuer https://id.hugmesh.systems
 pwsh -File scripts\stack-up.ps1 -Down                          # tear down (-v)
 ```
 
 On the VPN with public mirrors you can skip the token and point at the mirror:
 
 ```powershell
-pwsh -File scripts\stack-up.ps1 -GitBase https://gitlab.snapdragon.systems/snapdragon
+pwsh -File scripts\stack-up.ps1 -GitBase https://gitlab.hugmesh.systems/hugmesh
 ```
 
 If you DO have git on Windows and prefer it over the container clone, add
@@ -200,7 +200,7 @@ selects the identity issuer the whole stack trusts:
 
 | | `test` (default) | `prod` |
 |---|---|---|
-| Casdoor issuer (`CASDOOR_ISSUER_URI`) | `http://localhost:8000` (the local Casdoor) | the **real** issuer, e.g. `https://id.snapdragon.systems` |
+| Casdoor issuer (`CASDOOR_ISSUER_URI`) | `http://localhost:8000` (the local Casdoor) | the **real** issuer, e.g. `https://id.hugmesh.systems` |
 | creds | **dev placeholders** (committed: `gateway`/`federation`/`adminbff` DB passwords, dev Casdoor client ids) | **real** — sourced from **your env / the keys USB**, NOT committed |
 | domain-ish env (host MATRIX_URL/MASTODON_URL) | `http://localhost:…` | real `https://…` domain |
 
@@ -260,7 +260,7 @@ Casdoor apply hook — the same machinery the cluster/pentest seeds use):
    grants, JWT-Custom/RS256 with the roles+permissions token attributes gateway
    RBAC reads). This is the piece a fresh compose Casdoor lacks entirely — without
    it, browser SSO login has no application to redirect to.
-2. **Personas** (Casdoor org `snapdragon`): the standard matrix
+2. **Personas** (Casdoor org `hugmesh`): the standard matrix
    (`e2e-user`/`e2e-mod`/`e2e-admin`/…) **plus** `e2e-superadmin`, `e2e-banned`
    (ban = the **absence** of the platform access roles — seeded as the post-ban
    state) and the domain-locked pair (`e2e-*-domainlocked` — lock = the
@@ -308,17 +308,17 @@ not verify.
 
 | compose service | image / build | k8s source |
 |---|---|---|
-| `snapdragon-{pki,be,fe}-gateway` | build `snapdragon-gateway` (×3, `SPRING_APPLICATION_NAME`) | `apps/20-gateway-*.yaml` + `charts/snapdragon-gateway` |
-| `snapdragon-federation-api` | build `snapdragon-federation-api` | `manifests/federation-api` |
-| `snapdragon-admin-bff-api` | build `snapdragon-admin-bff-api` | `manifests/admin-bff-api` |
-| `snapdragon-mod-bff-api` / `-user-bff-api` | build the respective repos | (not yet in cluster; wired by analogy) |
-| `snapdragon-forum-bff-api` / `-wiki-bff-api` / `-owncast-bff-api` / `-tube-bff-api` | build the respective repos (spring-bff archetype siblings of admin-bff/federation-api) | `manifests/forum-bff-api` / `wiki-bff-api` / (owncast + tube ship co-located in-cluster; no dedicated BFF manifest dir yet) |
-| `snapdragon-api` | build `snapdragon-actions` | `manifests/snapdragon-apis` |
-| `snapdragon-remote-fragment` | build `snapdragon-remote-fragment` (sync image) | `manifests/remote-fragment` |
+| `hugmesh-{pki,be,fe}-gateway` | build `snapdragon-gateway` (×3, `SPRING_APPLICATION_NAME`) | `apps/20-gateway-*.yaml` + `charts/hugmesh-gateway` |
+| `hugmesh-federation-api` | build `snapdragon-federation-api` | `manifests/federation-api` |
+| `hugmesh-admin-bff-api` | build `snapdragon-admin-bff-api` | `manifests/admin-bff-api` |
+| `hugmesh-mod-bff-api` / `-user-bff-api` | build the respective repos | (not yet in cluster; wired by analogy) |
+| `hugmesh-forum-bff-api` / `-wiki-bff-api` / `-owncast-bff-api` / `-tube-bff-api` | build the respective repos (spring-bff archetype siblings of admin-bff/federation-api) | `manifests/forum-bff-api` / `wiki-bff-api` / (owncast + tube ship co-located in-cluster; no dedicated BFF manifest dir yet) |
+| `hugmesh-api` | build `snapdragon-actions` | `manifests/hugmesh-apis` |
+| `hugmesh-remote-fragment` | build `snapdragon-remote-fragment` (sync image) | `manifests/remote-fragment` |
 | `snapdragon-systems-web` | build `snapdragon.systems` | `manifests/frontend` |
-| `snapdragon-{admin,mod,user,login,mastodon,matrix,forum}-ui`, `-api-docs` | build each UI repo | `manifests/social-ui` + the remote repos |
-| `snapdragon-{wiki,owncast,tube}-ui` | build the respective repos | cluster serves these via the module-federation remote-fragment fleet, not a fixed gateway path; this compose stack adds a direct `/<slug>/**` route (mirroring mod-ui/user-ui) for local reachability + e2e |
-| `snapdragon-character-studio-ui` | build `snapdragon-character-studio-ui` | `manifests/character-studio` (no dedicated BFF — talks to the existing BFFs over `/bff/**`) |
+| `hugmesh-{admin,mod,user,login,mastodon,matrix,forum}-ui`, `-api-docs` | build each UI repo | `manifests/social-ui` + the remote repos |
+| `hugmesh-{wiki,owncast,tube}-ui` | build the respective repos | cluster serves these via the module-federation remote-fragment fleet, not a fixed gateway path; this compose stack adds a direct `/<slug>/**` route (mirroring mod-ui/user-ui) for local reachability + e2e |
+| `hugmesh-character-studio-ui` | build `snapdragon-character-studio-ui` | `manifests/character-studio` (no dedicated BFF — talks to the existing BFFs over `/bff/**`) |
 | `route-access-db` / `federation-db` / `admin-bff-db` | `postgres:16-alpine` | `manifests/route-access` / `federation-db` / `admin-bff-db` |
 | `forum-bff-db` / `wiki-bff-db` / `owncast-bff-db` / `tube-bff-db` | `postgres:16-alpine` | `manifests/forum-bff-db` / `wiki-bff-db` / (owncast/tube: no dedicated DB manifest yet — pre-existing cluster-side gap) |
 | `cassandra`, `casdoor`, `casdoor-db` | upstream images | `compose.real.yaml` (included) |
@@ -352,7 +352,7 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
 - **mod-bff / user-bff** have no cluster manifest yet; their env here is wired by
   analogy (Casdoor resource server + federation URL) and may need adjustment when
   their real manifests land.
-- **snapdragon-actions two-Casdoor sync is inert:** both Casdoor URLs point at the
+- **hugmesh-actions two-Casdoor sync is inert:** both Casdoor URLs point at the
   single local Casdoor with placeholder client creds, so the games sync job does
   nothing locally (no separate games Casdoor in this stack).
 - **Social tier is heavy + opt-in.** `SOCIAL=1` pulls Synapse + Mastodon
@@ -371,7 +371,7 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
 - **prod creds are NOT committed.** `ENV=prod` only changes the issuer URL; you
   must inject real secrets yourself (see ENV section). Nothing secret lives in
   this repo — only dev placeholders matching the cluster's dev placeholders.
-- **forum-bff has no phpBB backend here.** `snapdragon-forum` (the isolated
+- **forum-bff has no phpBB backend here.** `hugmesh-forum` (the isolated
   phpBB pod + its `forum-api` extension) is not wired into this stack, so
   `PHPBB_ENABLED`/`EXTERNAL_FORUM_ENABLED` are forced `"false"` — forum-bff
   boots clean and always-audits instead of failing every call against an
@@ -390,7 +390,7 @@ compose-DNS translation of the `routes:` in each `apps/20-gateway-*.yaml`.
   so a persona granted those reaches tube/owncast normally.
 - **superadmin-service-catalog is intentionally NOT wired to the `:8088` front
   door.** Its cluster design (`specs/cluster/apps/22-gateway-superadmin.yaml`)
-  is TAILNET-ONLY behind a dedicated `snapdragon-superadmin-gateway` — "off
+  is TAILNET-ONLY behind a dedicated `hugmesh-superadmin-gateway` — "off
   EVERY public-ingress gateway" by design (network isolation is one of its
   three intentional locks). This compose stack has no equivalent third
   gateway; adding the route to the shared fe-gateway would collapse that

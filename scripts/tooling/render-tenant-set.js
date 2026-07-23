@@ -27,7 +27,7 @@
 //
 // --ref pins every OWN-MESH base pull to that tag/sha (plumbed through
 // render-repo-tree.sh --ref -> pull-repo-base.sh --ref, fail-closed there) and
-// stamps each overlay tree's `.snapdragon-base-ref` marker — the versioned
+// stamps each overlay tree's `.hugmesh-base-ref` marker — the versioned
 // re-render half of the PR-delivery flow (publish-tenant-set.sh --pr). Foreign
 // (origin{}) rows are untouched: their pin stays the immutable digest.
 //

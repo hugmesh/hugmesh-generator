@@ -64,7 +64,7 @@ fail=0
 # ── materialize the spec fixtures (one flat ImageConfig each) ────────────────
 "$PY" - "$work" "$SPEC_DOMAIN" <<'PYEOF'
 import sys
-from snapdragon_studio.core.config import Domain, ImageConfig, User
+from hugmesh_studio.core.config import Domain, ImageConfig, User
 work, dom = sys.argv[1], sys.argv[2]
 
 # x86 node with a mesh control-plane URL (exercises the Studio's `env K=V`
@@ -88,7 +88,7 @@ f.save(f"{work}/spec-frite.json")
 
 # an envelope (NOT a flat image) to prove the loud reject passes through.
 with open(f"{work}/envelope.json", "w") as fh:
-    fh.write('{"schema": "snapdragon-worklist/v1", "base": {}, "entries": []}')
+    fh.write('{"schema": "hugmesh-worklist/v1", "base": {}, "entries": []}')
 print("ok")
 PYEOF
 
@@ -98,7 +98,7 @@ PYEOF
 # leading `sudo` (present only off-root) stripped.
 gui_argv() {
   local line
-  line="$("$PY" -m snapdragon_studio --print-command \
+  line="$("$PY" -m hugmesh_studio --print-command \
       --config "$1" --backend native --generator-dir "$GEN")"
   local arr
   eval "arr=( $line )"                    # trusted: shlex.quote output, re-tokenised

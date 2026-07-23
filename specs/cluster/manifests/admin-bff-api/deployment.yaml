@@ -1,10 +1,10 @@
-# admin-bff — the Backend-For-Frontend that the snapdragon-admin-ui talks to for
+# admin-bff — the Backend-For-Frontend that the hugmesh-admin-ui talks to for
 # route-access CRUD (and the other admin BFF endpoints: /bff/login,
 # /bff/register, /bff/provision, /bff/me, /bff/admin/route-access).
 #
 # It is the ONLY writer of the gateway_route_access table (Postgres source of
-# truth in snapdragon-pki; the gateways read-cache it in Cassandra). It is a
-# ClusterIP-only service in snapdragon-backend: nothing reaches it from outside
+# truth in hugmesh-pki; the gateways read-cache it in Cassandra). It is a
+# ClusterIP-only service in hugmesh-backend: nothing reaches it from outside
 # except via the fe-gateway, which routes same-origin /bff/** to it AND enforces
 # the Casdoor role rules (/bff/admin/** => ROLE_ADMIN) from the route DB first.
 #
@@ -13,14 +13,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-admin-bff-api
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-admin-bff-api, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-admin-bff-api
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-admin-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-admin-bff-api } }
+  selector: { matchLabels: { app: hugmesh-admin-bff-api } }
   template:
-    metadata: { labels: { app: snapdragon-admin-bff-api } }
+    metadata: { labels: { app: hugmesh-admin-bff-api } }
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
       # ── Cloud-backups effector identity (least-privilege Velero CR apply) ────
@@ -41,9 +41,9 @@ spec:
           type: container_t
           level: "s0:c23"
       # ── API-to-API mTLS identity (build-keystore) ───────────────────────────
-      # Mirrors the snapdragon-gateway chart's build-keystore initContainer. It
+      # Mirrors the hugmesh-gateway chart's build-keystore initContainer. It
       # turns the Vault-PKI-issued, ESO-synced TLS Secret
-      # (snapdragon-admin-bff-api-mtls: tls.crt/tls.key/ca.crt) into the PKCS12
+      # (hugmesh-admin-bff-api-mtls: tls.crt/tls.key/ca.crt) into the PKCS12
       # keystore.p12 (this service's identity) + truststore.p12 (cluster CA) that
       # the server-side server.ssl.* config (merged) loads to REQUIRE a client cert
       # chaining to the cluster CA (client-auth=need). keytool + openssl ship in
@@ -66,10 +66,10 @@ spec:
               P="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
               # mTLS identity: key + cert -> PKCS12 (Spring reads PKCS12 natively).
               openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
-                -certfile /pki/ca.crt -name snapdragon-admin-bff-api \
+                -certfile /pki/ca.crt -name hugmesh-admin-bff-api \
                 -out /stores/keystore.p12 -passout "pass:${P}"
               # Truststore: the issuing (cluster) CA so we trust cluster peers.
-              keytool -importcert -noprompt -alias snapdragon-cluster-ca \
+              keytool -importcert -noprompt -alias hugmesh-cluster-ca \
                 -file /pki/ca.crt -keystore /stores/truststore.p12 \
                 -storetype PKCS12 -storepass "${P}"
               # Spring SSL config picked up from file:/stores/ (added to
@@ -95,7 +95,7 @@ spec:
             - { name: pki,    mountPath: /pki, readOnly: true }
             - { name: stores, mountPath: /stores }
       containers:
-        - name: snapdragon-admin-bff-api
+        - name: hugmesh-admin-bff-api
           image: snapdragon-systems/admin-bff-api:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
@@ -105,10 +105,10 @@ spec:
           env:
             # ── EFFECTIVE in-cluster BRAND env (mesh repo-templating, Phase 3) ──
             # These override the application.yml env-defaults (deploy env wins).
-            # Kept LITERAL snapdragon.systems (NOT {{tokens}}): this manifest is the
+            # Kept LITERAL hugmesh.systems (NOT {{tokens}}): this manifest is the
             # canonical, RAW ArgoCD-synced deploy source, and its per-tenant brand
             # substitution is the existing build-x86-host-stage4.sh rebrand_sysroot
-            # sed pass (snapdragon.systems -> CLUSTER_DOMAIN), which rewrites all of
+            # sed pass (hugmesh.systems -> CLUSTER_DOMAIN), which rewrites all of
             # these to the tenant domain at ISO build. All must derive from that SAME
             # domain as the app.yml overlay or a tenant gets a self-inconsistent
             # issuer. Frozen (untouched): label keys, nodeSelector, mTLS/ESO secret
@@ -116,23 +116,23 @@ spec:
             #
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
             - name: CASDOOR_ISSUER_URI
-              value: "https://id.snapdragon.systems"
+              value: "https://id.hugmesh.systems"
             # Default-admin Gmail/allowlist seed (local-part 'admin' stays literal).
             - name: ADMIN_EMAILS
-              value: "admin@snapdragon.systems"
+              value: "admin@hugmesh.systems"
             # WebAuthn brand value lives HERE, NOT app.yml (whose rp-id/origins
             # defaults are the dev-safe localhost/https://localhost — WRONG for an
             # in-cluster deploy). RP-ID = the admin host; origins = its https origin.
             # Previously ABSENT (a latent bug: in-cluster WebAuthn RP-ID fell back to
             # 'localhost'); adding the brand admin subdomain fixes it. rebrand_sysroot
-            # carries admin.snapdragon.systems -> admin.<domain> per tenant.
+            # carries admin.hugmesh.systems -> admin.<domain> per tenant.
             - name: APP_MFA_WEBAUTHN_RP_ID
-              value: "admin.snapdragon.systems"
+              value: "admin.hugmesh.systems"
             - name: APP_MFA_WEBAUTHN_ORIGINS
-              value: "https://admin.snapdragon.systems"
+              value: "https://admin.hugmesh.systems"
             # In-cluster app-store Kaniko push registry host (brand).
             - name: APPSTORE_BUILDER_REGISTRY
-              value: "registry.snapdragon.systems"
+              value: "registry.hugmesh.systems"
             # ── API-to-API mTLS (server side) ─────────────────────────────────
             # Enforce a client cert chaining to the cluster CA. The store passwords
             # come from /stores/application.properties (in-pod generated, loaded
@@ -148,7 +148,7 @@ spec:
             - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
             # Load the in-pod-generated store passwords (application.properties).
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
-            # R2DBC handle to the gateway_route_access Postgres (snapdragon-pki).
+            # R2DBC handle to the gateway_route_access Postgres (hugmesh-pki).
             # Least-privilege: admin-bff is the ONLY writer, so it logs in as its
             # OWN role `admin_bff` (SELECT/INSERT/UPDATE/DELETE on
             # gateway_route_access — NOT the DB owner). Password from its OWN ESO
@@ -160,12 +160,12 @@ spec:
                   name: route-access-admin-bff
                   key: password
             - name: ROUTE_ACCESS_R2DBC_URL
-              value: "r2dbc:postgresql://admin_bff:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway"
+              value: "r2dbc:postgresql://admin_bff:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.hugmesh-pki.svc.cluster.local:5432/gateway"
             # This BFF also owns the usage-analytics aggregation: it consumes the
             # Kafka usage-event bus into ClickHouse and serves /bff/admin/usage.
             # Hence the clickhouse profile + Kafka/ClickHouse wiring. The gateway
             # addresses this BFF by its stable k8s Service DNS
-            # (snapdragon-admin-bff-api.snapdragon-backend.svc) — there is no
+            # (hugmesh-admin-bff-api.hugmesh-backend.svc) — there is no
             # client-side service discovery, so the active profiles are exactly
             # casdoor + clickhouse and no DEFAULTZONE env is set.
             - name: SPRING_PROFILES_ACTIVE
@@ -177,7 +177,7 @@ spec:
             # Config datastore: the durable accounts / allowlist / sessions /
             # namespace-grants / iso_artifacts / gateway_route_access tables.
             # The app's application.yml defaults spring.r2dbc + spring.liquibase to
-            # a literal `snapdragon-pg` host that does NOT exist; OVERRIDE both here
+            # a literal `hugmesh-pg` host that does NOT exist; OVERRIDE both here
             # to the dedicated admin-bff-db (mirrors how federation overrides to
             # federation-db). R2DBC is the runtime handle; the JDBC handle is used
             # by Liquibase ONCE at startup. (The old dead SPRING_DATASOURCE_URL env
@@ -191,7 +191,7 @@ spec:
             # initdb/10-roles.sh. Password from its OWN ESO Secret
             # admin-bff-db-app-auth (the SAME the DB pod's ADMINBFF_APP_PASSWORD mounts).
             - name: SPRING_R2DBC_URL
-              value: "r2dbc:postgresql://admin-bff-db.snapdragon-backend.svc.cluster.local:5432/adminbff"
+              value: "r2dbc:postgresql://admin-bff-db.hugmesh-backend.svc.cluster.local:5432/adminbff"
             - name: SPRING_R2DBC_USERNAME
               value: "adminbff_app"
             - name: SPRING_R2DBC_PASSWORD
@@ -203,7 +203,7 @@ spec:
             # Liquibase keeps the owner role `adminbff` + the owner ESO Secret
             # admin-bff-db-auth (the SAME the DB pod's POSTGRES_PASSWORD mounts).
             - name: SPRING_LIQUIBASE_URL
-              value: "jdbc:postgresql://admin-bff-db.snapdragon-backend.svc.cluster.local:5432/adminbff"
+              value: "jdbc:postgresql://admin-bff-db.hugmesh-backend.svc.cluster.local:5432/adminbff"
             - name: SPRING_LIQUIBASE_USER
               value: "adminbff"
             - name: SPRING_LIQUIBASE_PASSWORD
@@ -212,11 +212,11 @@ spec:
                   name: admin-bff-db-auth
                   key: password
             - name: CASSANDRA_CONTACT_POINTS
-              value: "cassandra.snapdragon-pki.svc.cluster.local:9042"
+              value: "cassandra.hugmesh-pki.svc.cluster.local:9042"
             # ── Anubis PoW anti-scraper sidecar proxy (SUPERADMIN BFF surface) ──
             # The anubis package (GET /bff/admin/anubis/{status,metrics}) proxies
             # the Anubis management port. ANUBIS_ENABLED=true wires the BFF surface;
-            # the Anubis component itself (manifests/anubis, snapdragon-frontend) is a
+            # the Anubis component itself (manifests/anubis, hugmesh-frontend) is a
             # DEFAULT-OFF optional service created via the optional-services
             # ApplicationSet (apps/13a, installed flag in the installed-services
             # ConfigMap). MANAGEMENT_URL is the in-cluster Service DNS of the
@@ -226,7 +226,7 @@ spec:
             # structured "unreachable" instead of cascading 503s, so enabling the
             # proxy here is safe and it lights up the moment the operator flips Anubis on.
             - { name: ANUBIS_ENABLED,        value: "true" }
-            - { name: ANUBIS_MANAGEMENT_URL, value: "http://anubis.snapdragon-frontend.svc.cluster.local:9090" }
+            - { name: ANUBIS_MANAGEMENT_URL, value: "http://anubis.hugmesh-frontend.svc.cluster.local:9090" }
             # ── Cloud-backups effector (the Velero leg) — SHIPS DARK ───────────
             # BACKUPS_EFFECTOR_ENABLED gates the REAL VeleroBackupEffector
             # (app.backups.effector.enabled). DEFAULT-OFF: while false the
@@ -243,9 +243,9 @@ spec:
             - { name: BACKUPS_EFFECTOR_ENABLED,            value: "false" }
             - { name: BACKUPS_VELERO_NAMESPACE,            value: "velero" }
             - { name: BACKUPS_BRAND_NAMESPACE_SUFFIXES,    value: "be,fe" }
-            - { name: BACKUPS_INSTALLED_SERVICES_NAMESPACE, value: "snapdragon-backend" }
+            - { name: BACKUPS_INSTALLED_SERVICES_NAMESPACE, value: "hugmesh-backend" }
             # ── Forum admin/moderation console (the phpBB leg, via forum-bff) ──
-            # GO-LIVE: the snapdragon/forumapi extension is live + proven end-to-end
+            # GO-LIVE: the hugmesh/forumapi extension is live + proven end-to-end
             # (live smoke 2026-06-23), so turn on the admin forum-moderation proxy
             # (external.forum.enabled). The leg is hasRole('ADMIN')-gated end-to-end
             # and calls forum-bff (EXTERNAL_FORUM_BASE_URL default). By design it
@@ -344,7 +344,7 @@ spec:
           # kubelet httpGet (which presents none) would fail — so the probe is an
           # exec'd curl that PRESENTS this pod's own client cert (/pki PEM, same
           # material the keystore was built from) and validates the server cert
-          # against the cluster CA. --resolve maps the cert SAN (snapdragon-admin-bff-api)
+          # against the cluster CA. --resolve maps the cert SAN (hugmesh-admin-bff-api)
           # to loopback so hostname verification passes. Exercises mTLS end to end.
           readinessProbe:
             exec:
@@ -353,8 +353,8 @@ spec:
                 - -ec
                 - >-
                   curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
-                  --resolve snapdragon-admin-bff-api:8080:127.0.0.1
-                  https://snapdragon-admin-bff-api:8080/actuator/health/readiness
+                  --resolve hugmesh-admin-bff-api:8080:127.0.0.1
+                  https://hugmesh-admin-bff-api:8080/actuator/health/readiness
             initialDelaySeconds: 20
             periodSeconds: 10
           livenessProbe:
@@ -364,8 +364,8 @@ spec:
                 - -ec
                 - >-
                   curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
-                  --resolve snapdragon-admin-bff-api:8080:127.0.0.1
-                  https://snapdragon-admin-bff-api:8080/actuator/health/liveness
+                  --resolve hugmesh-admin-bff-api:8080:127.0.0.1
+                  https://hugmesh-admin-bff-api:8080/actuator/health/liveness
             initialDelaySeconds: 45
             periodSeconds: 15
           resources:
@@ -382,7 +382,7 @@ spec:
         # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
         - name: pki
           secret:
-            secretName: snapdragon-admin-bff-api-mtls
+            secretName: hugmesh-admin-bff-api-mtls
         # tmpfs for the assembled PKCS12 stores + the in-pod SSL properties.
         - name: stores
           emptyDir:

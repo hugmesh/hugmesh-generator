@@ -1,7 +1,7 @@
 # Akkoma — fediverse server (Pleroma fork, Elixir), replaces Mastodon. Postgres-
 # only (no Redis), lighter than Mastodon. Mastodon-API compatible, so the existing
-# snapdragon-mastodon-ui keeps working. Served on :4000; the be-gateway routes the
-# mastodon.snapdragon.systems host + /api/v1,/oauth here.
+# hugmesh-mastodon-ui keeps working. Served on :4000; the be-gateway routes the
+# mastodon.hugmesh.systems host + /api/v1,/oauth here.
 #
 # ⚠️ VALIDATE ON CLUSTER + one-time SETUP (Akkoma is stateful/Elixir; a bare
 # Deployment won't self-configure):
@@ -19,18 +19,18 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: akkoma-config
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
 data:
   config.exs: |
     import Config
     config :pleroma, Pleroma.Web.Endpoint,
-      url: [host: "mastodon.snapdragon.systems", scheme: "https", port: 443],
+      url: [host: "mastodon.hugmesh.systems", scheme: "https", port: 443],
       http: [ip: {0, 0, 0, 0}, port: 4000],
       secret_key_base: System.get_env("SECRET_KEY_BASE"),
       signing_salt: System.get_env("SIGNING_SALT")
     config :pleroma, :instance,
-      name: "Snapdragon",
-      email: "admin@snapdragon.systems",
+      name: "HugMesh",
+      email: "admin@hugmesh.systems",
       registrations_open: false
     # --- DOMAIN-LOCK MRF (homeserver.domainlock.enabled) — GATED / SHIPS DARK ---
     # The custom ForceLocalForUsers MRF (manifests/akkoma/mrf/, compiled into the
@@ -73,11 +73,11 @@ data:
       auth: :always,
       retries: 2
     config :pleroma, :instance,
-      notify_email: System.get_env("AKKOMA_SMTP_FROM", "noreply@snapdragon.systems")
+      notify_email: System.get_env("AKKOMA_SMTP_FROM", "noreply@hugmesh.systems")
     # --- Admin / moderation + Casdoor OIDC (ROLE_ADMIN + ROLE_MOD) ---
     # Akkoma/Pleroma admin & moderator are per-USER DB flags (users.is_admin /
     # users.is_moderator), NOT derived from OIDC claims automatically. OIDC login
-    # (ueberauth_oidcc against Casdoor / id.snapdragon.systems) signs users in as
+    # (ueberauth_oidcc against Casdoor / id.hugmesh.systems) signs users in as
     # NORMAL accounts only. The Casdoor 'moderator' group (ROLE_MOD) is mapped to
     # fediverse moderation by a PostSync reconcile Job (admin-sync-job.yaml) that
     # runs `pleroma_ctl user set <nick> --moderator` for ROLE_MOD members (and
@@ -89,7 +89,7 @@ data:
       providers: [
         # Casdoor OIDC — login only; moderation authority is the DB flag set by
         # the admin-sync Job, not this claim. clientId/secret from Vault/ESO.
-        oidc: {Ueberauth.Strategy.Oidcc, [issuer: "https://id.snapdragon.systems"]}
+        oidc: {Ueberauth.Strategy.Oidcc, [issuer: "https://id.hugmesh.systems"]}
       ]
     config :pleroma, Pleroma.Repo,
       adapter: Ecto.Adapters.Postgres,
@@ -112,8 +112,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: akkoma-proxy-nginx
-  namespace: snapdragon-backend
-  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   nginx.conf: |
     worker_processes 1;
@@ -149,7 +149,7 @@ data:
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: akkoma-db, namespace: snapdragon-backend, labels: { app.kubernetes.io/name: akkoma-db } }
+metadata: { name: akkoma-db, namespace: hugmesh-backend, labels: { app.kubernetes.io/name: akkoma-db } }
 spec:
   replicas: 1
   strategy: { type: Recreate }
@@ -179,19 +179,19 @@ spec:
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
-metadata: { name: akkoma-db, namespace: snapdragon-backend }
+metadata: { name: akkoma-db, namespace: hugmesh-backend }
 spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 20Gi } } }
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: akkoma-db, namespace: snapdragon-backend }
+metadata: { name: akkoma-db, namespace: hugmesh-backend }
 spec:
   selector: { app.kubernetes.io/name: akkoma-db }
   ports: [{ name: pg, port: 5432, targetPort: pg }]
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: akkoma, namespace: snapdragon-backend, labels: { app.kubernetes.io/name: akkoma } }
+metadata: { name: akkoma, namespace: hugmesh-backend, labels: { app.kubernetes.io/name: akkoma } }
 spec:
   replicas: 1
   strategy: { type: Recreate }
@@ -260,8 +260,8 @@ apiVersion: v1
 kind: Service
 metadata:
   name: akkoma-proxy
-  namespace: snapdragon-backend
-  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   type: ClusterIP
   selector: { app.kubernetes.io/name: akkoma }
@@ -269,14 +269,14 @@ spec:
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
-metadata: { name: akkoma-uploads, namespace: snapdragon-backend }
+metadata: { name: akkoma-uploads, namespace: hugmesh-backend }
 spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 20Gi } } }
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: akkoma
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels: { app.kubernetes.io/name: akkoma }
 spec:
   type: ClusterIP

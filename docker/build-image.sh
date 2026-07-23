@@ -3,7 +3,7 @@
 #
 # Baked into the image at /builder/build-image.sh (see docker/Dockerfile.image-gen)
 # and run by admin-bff-api's k8s Job as: /bin/sh /builder/build-image.sh
-# (jobs/image-gen-job.yaml in snapdragon-admin-bff-api — read-only source of
+# (jobs/image-gen-job.yaml in hugmesh-admin-bff-api — read-only source of
 # truth for the contract this script implements). Written in POSIX sh (no
 # bash-only syntax) because the Job invokes it via `/bin/sh <path>`, which
 # ignores this file's own shebang and runs it under whatever /bin/sh resolves
@@ -37,7 +37,7 @@
 #   IMAGE_SPEC_JSON   OPTIONAL, additive. Path to ONE materialized flat
 #                     ImageConfig JSON (the Studio worklist's per-image entry),
 #                     mounted from the per-build ConfigMap image-spec-${BUILD_ID}
-#                     at /etc/snapdragon/image-spec.json. When set (and the file
+#                     at /etc/hugmesh/image-spec.json. When set (and the file
 #                     exists) this worker derives the ENTIRE builder invocation
 #                     from that spec via the Studio's own `--print-command`
 #                     translator, instead of from the 6 IMAGE_TYPE/HARDWARE_CLASS
@@ -46,7 +46,7 @@
 #                     below.
 #
 # Volumes:
-#   /artifacts             the snapdragon-image-artifacts PVC, read-write.
+#   /artifacts             the hugmesh-image-artifacts PVC, read-write.
 #   /secrets/dial           OPTIONAL, read-only. The per-device DIAL PRIVATE key
 #                           (already minted and pushed to Vault by an earlier,
 #                           out-of-band step — this Job does not mint it). Must
@@ -68,7 +68,7 @@
 # The 6 IMAGE_TYPE/HARDWARE_CLASS env scalars can only express a tiny slice of a
 # real image (a platform + a role + a board/flavor). They cannot carry a domain
 # list, per-image branding, package add/drop deltas, users, home posture, etc.
-# The Studio (studio/snapdragon_studio) already owns the ONE authoritative
+# The Studio (studio/hugmesh_studio) already owns the ONE authoritative
 # ImageConfig->builder-flags translation, and this worker image bakes the whole
 # generator tree — studio/ and python3 included (docker/Dockerfile.image-gen
 # `COPY . .`; python3 is already a hard requirement below). So when a richer,
@@ -77,13 +77,13 @@
 #
 #   * The admin-bff-api ImageBuildOrchestrator writes ONE materialized flat
 #     ImageConfig JSON to a per-build ConfigMap (image-spec-${BUILD_ID}), mounts
-#     it read-only at /etc/snapdragon/image-spec.json, and sets the Job env
+#     it read-only at /etc/hugmesh/image-spec.json, and sets the Job env
 #     IMAGE_SPEC_JSON to that path. Rich values ride the FILE, never yamlSafe env
 #     scalars (the [A-Za-z0-9._-] env charset cannot carry a theme name or a
 #     domain list).
 #   * When IMAGE_SPEC_JSON names an existing file, this worker derives the exact
 #     builder invocation with the Studio's own headless translator:
-#         python3 -m snapdragon_studio --print-command \
+#         python3 -m hugmesh_studio --print-command \
 #             --config "$IMAGE_SPEC_JSON" --backend native \
 #             --generator-dir "$GENERATOR_DIR"
 #     (--print-command is Qt-free by a pinned Studio test; it fails LOUDLY on a
@@ -280,7 +280,7 @@
 set -eu
 
 # ── fixed locations ──────────────────────────────────────────────────────────
-GENERATOR_DIR="${GENERATOR_DIR:-/opt/snapdragon-generator}"
+GENERATOR_DIR="${GENERATOR_DIR:-/opt/hugmesh-generator}"
 DIAL_SECRET_DIR="${DIAL_SECRET_DIR:-/secrets/dial}"
 SCRATCH_PARENT="${SCRATCH_PARENT:-/artifacts/.scratch}"
 DIAL_USER_DEFAULT="${DIAL_USER:-bff-dial}"
@@ -310,13 +310,13 @@ fail_msg() { printf '[build-image] ERROR: %s\n' "$*" >&2; }
 # Discoverability only — the parity gap for the CLI/JOB channel is that the operator
 # can't SEE the four intents the Studio wizard frames, not that any image path is
 # missing (every path is already reachable via env / the make faces). The labels
-# mirror the Studio GUI reference (studio/snapdragon_studio/gui/pages/mode.py) so the
+# mirror the Studio GUI reference (studio/hugmesh_studio/gui/pages/mode.py) so the
 # build-matrix TAXO parity check has ONE golden set. This branch fires ONLY on an
 # explicit -h/--help/help positional; the real Job invokes with NO positional args
 # (env-driven), so resolve_build_target()/run_*_build() below are byte-identical.
 print_intents_guide() {
   cat <<'GUIDE'
-snapdragon build-image.sh — what do you want to build? (four intents)
+hugmesh build-image.sh — what do you want to build? (four intents)
 
 This worker is env-driven (IMAGE_TYPE + HARDWARE_CLASS; see the header comment for
 the full HARDWARE_CLASS grammar). The four intents the Studio wizard frames map onto
@@ -332,7 +332,7 @@ its flags/tokens like this — the same four choices, one clarity layer:
   2. Local Docker mesh — run a mesh on THIS machine in Docker (no image built)
        This builder builds IMAGES ONLY; it never runs a node. For the fourth choice
        run the non-build face instead:
-         python3 -m snapdragon_studio.core.local_mesh up --authkey-file <file>
+         python3 -m hugmesh_studio.core.local_mesh up --authkey-file <file>
          (or `make mesh-node-up AUTHKEY_FILE=<file>`)
        It reuses the shipped docker-compose.mesh.yml overlay — no image emission.
 
@@ -354,7 +354,7 @@ its flags/tokens like this — the same four choices, one clarity layer:
 The three IMAGE intents all resolve through resolve_build_target(); the Local Docker
 mesh intent is the ONE non-build face (core/local_mesh.py). To PERMANENTLY enroll a
 desktop with an admin keys folder + tray, use the installed end-user appliance
-`snapdragon-mesh-node` (clients/docker-mesh-node/install.sh) — a different surface.
+`hugmesh-mesh-node` (clients/docker-mesh-node/install.sh) — a different surface.
 GUIDE
 }
 case "${1:-}" in
@@ -876,7 +876,7 @@ resolve_spec_target() {
   # on a worklist envelope or an invalid identity — surface that as a FAILED
   # ingest, never a silent default.
   if SPEC_CMD="$(PYTHONPATH="${GENERATOR_DIR}/studio${PYTHONPATH:+:$PYTHONPATH}" \
-        python3 -m snapdragon_studio --print-command \
+        python3 -m hugmesh_studio --print-command \
         --config "$IMAGE_SPEC_JSON" --backend native \
         --generator-dir "$GENERATOR_DIR" 2>"$spec_err")"; then
     rm -f "$spec_err"

@@ -1,11 +1,11 @@
-# snapdragon-character-studio-ui — the VN character-studio Angular native-federation
+# hugmesh-character-studio-ui — the VN character-studio Angular native-federation
 # REMOTE (creator + chat surface). Its own nginx (own repo + pod) in the
-# snapdragon-frontend namespace, federated into the snapdragon.systems host: it
+# hugmesh-frontend namespace, federated into the hugmesh.systems host: it
 # serves a remoteEntry.json the host's loadRemoteModule consumes, mounted at
 # /character-studio (ROLE_USER floor). Talks to the always-present BFFs via the
 # same-origin /bff/** fe-gateway routes (no dedicated BFF in this slug yet).
 #
-# Repo (image source, to be built+pushed): github.com/Snapdragon-Systems/snapdragon-character-studio-ui
+# Repo (image source, to be built+pushed): github.com/Snapdragon-Systems/hugmesh-character-studio-ui
 #
 # OPTIONAL service (DEFAULT-OFF, admin gate): add/remove-by-command on a generated
 # USB. When the slug is deselected, gate_optional_services() prunes this Application
@@ -22,18 +22,18 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-character-studio-ui
-  namespace: snapdragon-frontend
+  name: hugmesh-character-studio-ui
+  namespace: hugmesh-frontend
   labels:
-    app: snapdragon-character-studio-ui
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-character-studio-ui
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   replicas: 1
   selector:
-    matchLabels: { app: snapdragon-character-studio-ui }
+    matchLabels: { app: hugmesh-character-studio-ui }
   template:
     metadata:
-      labels: { app: snapdragon-character-studio-ui }
+      labels: { app: hugmesh-character-studio-ui }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
       securityContext:
@@ -70,13 +70,13 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: snapdragon-character-studio-ui
-  namespace: snapdragon-frontend
+  name: hugmesh-character-studio-ui
+  namespace: hugmesh-frontend
   labels:
-    app: snapdragon-character-studio-ui
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-character-studio-ui
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
-  selector: { app: snapdragon-character-studio-ui }
+  selector: { app: hugmesh-character-studio-ui }
   # The federation_modules remote_entry_url points at this Service on :8080
-  # (http://snapdragon-character-studio-ui:8080/remoteEntry.json).
+  # (http://hugmesh-character-studio-ui:8080/remoteEntry.json).
   ports: [{ name: http, port: 8080, targetPort: http }]

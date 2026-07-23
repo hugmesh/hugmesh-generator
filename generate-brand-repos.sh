@@ -8,7 +8,7 @@
 # The output directory will contain a directory named <BRAND>-gitops/ with all
 # rendered Application CRDs under apps/. Push that directory to GitLab and the
 # ArgoCD app-of-apps root Application (specs/cluster/apps/00-app-of-apps-waved.yaml
-# — a plain directory.recurse Application named snapdragon-root-waved, NOT an
+# — a plain directory.recurse Application named hugmesh-root-waved, NOT an
 # ApplicationSet) will pick it up once registered.
 #
 # No external tools required beyond bash + sed + git.
@@ -69,7 +69,7 @@ source "$BRAND_CONF"
 : "${MESH_TAG:?brand config must set MESH_TAG}"
 
 # ── Validate the sourced brand fields (#15/#8/#12) ─────────────────────────────
-# The brand profile is, on a mesh node, SYNTHESISED by snapdragon-domain-reconcile
+# The brand profile is, on a mesh node, SYNTHESISED by hugmesh-domain-reconcile
 # from the SIGNED cross-domain #118 export — verified for AUTHENTICITY but NOT for
 # CONTENT. BRAND is then built into filesystem paths (BRAND_OUT below -> rm -rf /
 # mkdir / file writes, all as root from the reconcile cron) and every field lands
@@ -86,7 +86,7 @@ _die() { echo "[generate-brand-repos] FATAL: $*" >&2; exit 1; }
 # ORG is also lowercased->slugged below; require it to be safe to slug.
 [[ "$ORG" =~ ^[A-Za-z0-9._-]{1,63}$ ]] \
   || _die "invalid ORG '${ORG}' (allowed: A-Za-z0-9._- , 1..63)"
-# CLUSTER_DOMAIN: full DNS name (e.g. snapdragon.systems).
+# CLUSTER_DOMAIN: full DNS name (e.g. hugmesh.systems).
 [[ "$CLUSTER_DOMAIN" =~ $_DNS_NAME ]] \
   || _die "invalid CLUSTER_DOMAIN '${CLUSTER_DOMAIN}' (must be a DNS name)"
 # RELEASE_STATE: "internal" (DEFAULT, LAN/tailnet-only) or "public" (internet-
@@ -172,7 +172,7 @@ echo "[generate-brand-repos] Mesh tag:      ${MESH_TAG}"
 echo ""
 
 # Escape a string for the REPLACEMENT side of `sed s|...|...|` (mirrors the
-# _sed_rep_escape helper in specs/usr/sbin/snapdragon-branding): backslash first,
+# _sed_rep_escape helper in specs/usr/sbin/hugmesh-branding): backslash first,
 # then the ampersand (whole-match) and the `|` delimiter. Defense-in-depth on top
 # of the up-front allowlist above (the validated fields contain none of these, but
 # the escaping keeps the sink itself safe).
@@ -249,7 +249,7 @@ echo "[generate-brand-repos] Rendered ${rendered} templates → ${BRAND_OUT}"
 echo ""
 # NOTE (Phase 5): this thin <BRAND>-gitops/ tree is the app-of-apps CRD DIRECTORY
 # (12/13 ArgoCD Application CRDs, consumed by the directory.recurse root
-# 'snapdragon-root-waved'). It is a DIFFERENT mechanism from the per-app repos the
+# 'hugmesh-root-waved'). It is a DIFFERENT mechanism from the per-app repos the
 # scmProvider brand-repo ApplicationSet (apps/13d-brand-repos.yaml) discovers —
 # do NOT conflate them. The per-app FULL trees come from render-tenant-set.sh and
 # are pushed to tailnet-internal FORGEJO by scripts/publish-tenant-set.sh (NOT
@@ -260,6 +260,6 @@ echo "  2. Publish the app-of-apps CRD directory to tailnet-internal FORGEJO"
 echo "     under the tenant org (git init -b main; add; commit; push to"
 echo "     \${FORGEJO_BASE_URL}/${GITLAB_GROUP}/${BRAND}-gitops.git via an"
 echo "     Authorization: token header — see scripts/publish-tenant-set.sh for the"
-echo "     house auth idiom). The app-of-apps root 'snapdragon-root-waved' picks it up."
+echo "     house auth idiom). The app-of-apps root 'hugmesh-root-waved' picks it up."
 echo "  3. The per-APP FULL trees (render-tenant-set.sh) are published separately by"
 echo "     scripts/publish-tenant-set.sh and auto-discovered by apps/13d-brand-repos.yaml."

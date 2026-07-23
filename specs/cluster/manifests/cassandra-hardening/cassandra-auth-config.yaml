@@ -32,9 +32,9 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: cassandra-auth-config
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: db-hardening
     snapdragon.systems/ships: dark
 data:

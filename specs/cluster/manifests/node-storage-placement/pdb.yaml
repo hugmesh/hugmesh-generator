@@ -16,7 +16,7 @@ kind: PodDisruptionBudget
 metadata:
   name: PLACEHOLDER_SERVICE_NAME-node-storage   # <- assignment.service_name (rendered)
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/node-storage-pdb: "true"
   annotations:
     snapdragon.systems/node-storage-note: >-

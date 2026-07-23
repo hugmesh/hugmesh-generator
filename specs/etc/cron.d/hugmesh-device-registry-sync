@@ -1,0 +1,16 @@
+# hugmesh-device-registry-sync — Layer-B convergence timer (60s default).
+#
+# The TIMER half of the device-license-registry sync (the OpenRC service runs the
+# agent once at boot; this cron entry re-runs it every 60s). cronie reads
+# /etc/cron.d (the same mechanism provision.sh uses for /etc/cron.d/hugmesh-backup).
+# Installed ONLY on ADMIN-owned / mesh-extension (registry-enforced) nodes by
+# provision_device_registry().
+#
+# cron has 1-minute granularity, so the floor poll is 60s. The agent is FAIL-CLOSED
+# and idempotent: a failed fetch/verify keeps the last-good cache; a successful one
+# atomically swaps it + bumps last-good + (on the first verified sync) flips the
+# sshd enforcement gate. The authoritative fast path is the BFF push-with-ack
+# (FIX-REVOKE); this pull is the convergence FLOOR for missed pushes / reboots.
+#
+# Field order: min hour dom month dow user command
+* * * * * root /usr/sbin/hugmesh-device-registry-sync >> /var/log/hugmesh-device-registry-sync.log 2>&1

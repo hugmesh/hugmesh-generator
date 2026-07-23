@@ -5,7 +5,7 @@
 # headwind-db-auth-style password secret. Cloned from manifests/headwind/headwind.yaml's
 # shape (single-container app + PVC + Service), minus the DB leg.
 #
-# Lives in snapdragon-pki (shared control-plane namespace: harbor/vault/casdoor/
+# Lives in hugmesh-pki (shared control-plane namespace: harbor/vault/casdoor/
 # route-access-db/pki-gateway/superadmin-gateway/headwind all co-reside here), created
 # idempotently by apps/06-vault-pki.yaml / apps/20-gateway-pki.yaml.
 #
@@ -23,19 +23,19 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: attestation-server-data
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels: { app.kubernetes.io/name: attestation-server }
 spec:
   accessModes: [ReadWriteOnce]   # REQUIRED: SQLite WAL mode needs real POSIX locking — do NOT use an RWX/NFS-backed class
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 2Gi } }   # two small sqlite .db files, no upload blobs — generous headroom, not source-derived
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: attestation-server
-  namespace: snapdragon-pki
-  labels: { app.kubernetes.io/name: attestation-server, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/name: attestation-server, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1   # MUST stay 1 — two pods writing the same SQLite WAL files is unsafe; not horizontally scalable
   strategy: { type: Recreate }   # avoid two pods ever mounting the RWO PVC concurrently during a rollout
@@ -54,7 +54,7 @@ spec:
         seLinuxOptions: { type: container_t, level: "s0:c79" }  # next free MCS category (headwind-db holds c77, headwind holds c78 — docs/SECURITY.md)
       containers:
         - name: attestation-server
-          image: registry.snapdragon.systems/snapdragon/snapdragon-attestation-server:main
+          image: registry.hugmesh.systems/hugmesh/hugmesh-attestation-server:main
           imagePullPolicy: Always
           ports: [{ name: http, containerPort: 8080 }]
           workingDir: /data
@@ -146,7 +146,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: attestation-server
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels: { app.kubernetes.io/name: attestation-server }
 spec:
   type: ClusterIP

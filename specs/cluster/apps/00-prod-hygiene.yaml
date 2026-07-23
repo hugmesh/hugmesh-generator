@@ -9,7 +9,7 @@
 # Syncs EARLY (wave -2): after kyverno (apps/15-kyverno.yaml, wave -1 installs the
 # ClusterPolicy CRD) but it carries the PreSync hook at hook-wave -10 so the
 # RUNTIME gate runs before the app waves on EVERY sync. The namespace
-# snapdragon-policy is the same one the reserved-prefixes policy uses.
+# hugmesh-policy is the same one the reserved-prefixes policy uses.
 #
 # ⚠ ENV-SCOPED: this is a PROD gate. On an ENV=test build leave this app in place
 # (the runtime Job is harmless in test — a test cluster legitimately runs the
@@ -26,12 +26,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/prod-hygiene
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-policy
+    namespace: hugmesh-policy
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

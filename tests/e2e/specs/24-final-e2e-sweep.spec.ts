@@ -40,7 +40,7 @@ import {
 // SNAP_PREMINT_DIR (populated) turn it on; the lean/heavy Jobs set both.
 
 const LIVE = process.env['LIVE_GATEWAY'] === '1';
-const BE = process.env['SNAP_BE_GATEWAY'] ?? 'https://snapdragon-be-gateway.snapdragon-backend.svc.cluster.local:8443';
+const BE = process.env['SNAP_BE_GATEWAY'] ?? 'https://hugmesh-be-gateway.hugmesh-backend.svc.cluster.local:8443';
 
 test.describe('final sweep: scaled-concurrent population', () => {
   const pop = swarm();

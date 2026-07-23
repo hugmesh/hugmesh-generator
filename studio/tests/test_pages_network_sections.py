@@ -9,7 +9,7 @@ option for this in another table like with the node images."
     (-C) default back OFF — so the fix is to make the meaning VISIBLE, not to remove it.
   * Per-node: NO. Answered from the builders, not from UI convenience —
     ``build-rpi5-stage4.sh:1376`` gate_optional_services() prunes unselected slugs out of
-    the CLUSTER GitOps tree at ``${SYSROOT}/var/lib/snapdragon/cluster``, and ``:2958``
+    the CLUSTER GitOps tree at ``${SYSROOT}/var/lib/hugmesh/cluster``, and ``:2958``
     bakes that tree into EVERY cluster-class node. With app-of-apps recurse+prune, two
     nodes with different service sets = two conflicting desired states for one cluster,
     where the surviving tree DELETES the other's services. Studio's own model agrees:
@@ -27,32 +27,32 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core.config import ImageConfig                # noqa: E402
-from snapdragon_studio.core.platform_info import HostInfo            # noqa: E402
-from snapdragon_studio.gui import wizard as wizard_mod               # noqa: E402
-from snapdragon_studio.gui.qt import Qt, QtWidgets                   # noqa: E402
-from snapdragon_studio.gui.pages.network import NetworkPage          # noqa: E402
+from hugmesh_studio.core.config import ImageConfig                # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo            # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod               # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtWidgets                   # noqa: E402
+from hugmesh_studio.gui.pages.network import NetworkPage          # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
-                has_kvm=False, is_root=False, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture
@@ -144,7 +144,7 @@ def test_page_admits_the_node_scoped_registry_nuance(wiz):
 def test_no_per_node_service_table_was_invented(wiz):
     """Guard against the ungrounded fix: Studio's model has no per-node service axis
     (core/worklist.py WorklistEntry), so no per-node service table may exist."""
-    from snapdragon_studio.core.worklist import WorklistEntry
+    from hugmesh_studio.core.worklist import WorklistEntry
     fields = set(WorklistEntry.__dataclass_fields__)
     for service_field in ("optional_services", "tor_onion_service", "character_studio",
                           "edge_ai_service", "edge_ai_tts"):

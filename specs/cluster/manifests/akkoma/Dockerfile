@@ -1,4 +1,4 @@
-# Custom Akkoma image — upstream Akkoma + the Snapdragon ForceLocalForUsers MRF
+# Custom Akkoma image — upstream Akkoma + the HugMesh ForceLocalForUsers MRF
 # compiled in. This is the AUTHORITATIVE Mastodon-side leg of domain-lock: a plain
 # akkoma:stable cannot enforce per-actor local-only delivery, so we ship a derived
 # image with the custom MRF module baked into the release.
@@ -30,10 +30,10 @@ ARG AKKOMA_SOURCE_REF=REPLACE_WITH_AKKOMA_GIT_TAG
 #    the release. Use when the pinned base is the Akkoma BUILD/source image. ──────
 FROM ${AKKOMA_BASE} AS build
 ARG AKKOMA_SOURCE_REF
-LABEL org.opencontainers.image.title="snapdragon-akkoma" \
+LABEL org.opencontainers.image.title="hugmesh-akkoma" \
       org.opencontainers.image.description="Akkoma + ForceLocalForUsers MRF (domain-lock)" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
-      systems.snapdragon.akkoma.source-ref="${AKKOMA_SOURCE_REF}"
+      systems.hugmesh.akkoma.source-ref="${AKKOMA_SOURCE_REF}"
 
 # Akkoma source root inside the upstream image (commonly /opt/akkoma or the build
 # /usr/src/akkoma — confirm for the pinned base).
@@ -67,9 +67,9 @@ RUN set -eux; \
 FROM ${AKKOMA_BASE}
 ARG AKKOMA_SOURCE_REF
 LABEL org.opencontainers.image.licenses="AGPL-3.0-only" \
-      systems.snapdragon.akkoma.source-ref="${AKKOMA_SOURCE_REF}"
+      systems.hugmesh.akkoma.source-ref="${AKKOMA_SOURCE_REF}"
 COPY --from=build /opt/akkoma/_build /opt/akkoma/_build
 COPY --from=build /opt/akkoma/lib/pleroma/web/activity_pub/mrf/force_local_for_users_policy.ex \
                   /opt/akkoma/lib/pleroma/web/activity_pub/mrf/force_local_for_users_policy.ex
 # In-app AGPL source offer (a /static or env the instance surfaces to users).
-ENV AKKOMA_SOURCE_URL="https://github.com/Snapdragon-Systems/snapdragon-generator/tree/main/specs/cluster/manifests/akkoma"
+ENV AKKOMA_SOURCE_URL="https://github.com/Snapdragon-Systems/hugmesh-generator/tree/main/specs/cluster/manifests/akkoma"

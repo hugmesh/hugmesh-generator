@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  Run the ENTIRE Snapdragon stack locally on Docker Desktop for Windows:
+  Run the ENTIRE HugMesh stack locally on Docker Desktop for Windows:
   clone every repo, build every service containerized, and run it.
 
 .DESCRIPTION
@@ -27,7 +27,7 @@
 
 .PARAMETER GitBase
   Clone base URL. Default https://github.com/Snapdragon-Systems. Point at the
-  internal mirror on the VPN, e.g. https://gitlab.snapdragon.systems/snapdragon.
+  internal mirror on the VPN, e.g. https://gitlab.hugmesh.systems/hugmesh.
 
 .PARAMETER Social
   Also bring up the heavy Synapse/Mastodon social tier (the `social` profile).
@@ -46,7 +46,7 @@
 .EXAMPLE
   pwsh -File scripts\stack-up.ps1 -GhToken ghp_xxx
 .EXAMPLE
-  pwsh -File scripts\stack-up.ps1 -Env prod -CasdoorIssuer https://id.snapdragon.systems
+  pwsh -File scripts\stack-up.ps1 -Env prod -CasdoorIssuer https://id.hugmesh.systems
 .EXAMPLE
   pwsh -File scripts\stack-up.ps1 -Down
 #>
@@ -80,7 +80,7 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
 # ENV -> Casdoor issuer (test = local placeholder; prod = real, must be provided).
 if (-not $CasdoorIssuer) {
   if ($Env -eq 'prod') {
-    throw 'ENV=prod requires -CasdoorIssuer (e.g. https://id.snapdragon.systems).'
+    throw 'ENV=prod requires -CasdoorIssuer (e.g. https://id.hugmesh.systems).'
   }
   $CasdoorIssuer = 'http://localhost:8000'
 }

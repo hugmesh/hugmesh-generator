@@ -86,5 +86,5 @@ up through the same builder + `--print-plan` contract.
 ## Cross-references
 - Capability (done, x86): [docs/EDGE-AI.md](../docs/EDGE-AI.md)
 - Hardware profiles + scanner: `specs-x86/hwprofiles/`
-- Memory: `snapdragon-edge-ai-jetson`, `snapdragon-hardware-profiles`,
-  `snapdragon-all-options-all-menus`, `snapdragon-selinux-sync`.
+- Memory: `hugmesh-edge-ai-jetson`, `hugmesh-hardware-profiles`,
+  `hugmesh-all-options-all-menus`, `hugmesh-selinux-sync`.

@@ -1,12 +1,12 @@
-# Persistent storage for the snapdragon-wiki-bff-api Postgres data directory
+# Persistent storage for the hugmesh-wiki-bff-api Postgres data directory
 # (the wiki_page / wiki_attachment / wiki_audit_log tables).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: wiki-bff-db
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels: { app: wiki-bff-db }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 2Gi } }

@@ -63,10 +63,10 @@ ok "sliced the REAL allowlist-validation block from the builder"
 err() { echo "ERROR: $1" >&2; }
 # Defaults for all vars the slice touches; the case under test overrides one.
 _defaults() {
-    BRAND="snapdragon"; ORG="Snapdragon-Systems"
-    CLUSTER_DOMAIN="snapdragon.systems"; GAMES_DOMAIN="games.snapdragon.systems"
-    HOSTNAME="snapdragon-pki"; DEFAULT_USER="pi"
-    BRAND_TITLE="Snapdragon Systems"; RPI_CPU="cortex-a76"
+    BRAND="hugmesh"; ORG="Snapdragon-Systems"
+    CLUSTER_DOMAIN="hugmesh.systems"; GAMES_DOMAIN="games.hugmesh.systems"
+    HOSTNAME="hugmesh-pki"; DEFAULT_USER="pi"
+    BRAND_TITLE="HugMesh Systems"; RPI_CPU="cortex-a76"
     CROSS_TARGET="aarch64-unknown-linux-gnu"; RPI_KERNEL_IMG="kernel_2712.img"
 }
 # Returns 0 if the validation block ACCEPTS the current var-set, 1 if it REJECTs

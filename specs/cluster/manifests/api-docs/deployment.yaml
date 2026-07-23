@@ -1,18 +1,18 @@
-# snapdragon-api-docs — the API documentation Angular micro-frontend remote. Its
-# own nginx (own repo + pod) in the snapdragon-frontend namespace, federated into
-# the snapdragon.systems host: it serves a remoteEntry.json the host's
+# hugmesh-api-docs — the API documentation Angular micro-frontend remote. Its
+# own nginx (own repo + pod) in the hugmesh-frontend namespace, federated into
+# the hugmesh.systems host: it serves a remoteEntry.json the host's
 # loadRemoteModule consumes, mounted at /apidocs (admin role — the rendered
 # OpenAPI/spec docs are gated to ROLE_ADMIN, matching federation's spec floor).
-# Repo: github.com/Snapdragon-Systems/snapdragon-api-docs
+# Repo: github.com/Snapdragon-Systems/hugmesh-api-docs
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: snapdragon-api-docs, namespace: snapdragon-frontend, labels: { app: snapdragon-api-docs, app.kubernetes.io/part-of: snapdragon.systems } }
+metadata: { name: hugmesh-api-docs, namespace: hugmesh-frontend, labels: { app: hugmesh-api-docs, app.kubernetes.io/part-of: hugmesh.systems } }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-api-docs } }
+  selector: { matchLabels: { app: hugmesh-api-docs } }
   template:
-    metadata: { labels: { app: snapdragon-api-docs } }
+    metadata: { labels: { app: hugmesh-api-docs } }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
       securityContext:
@@ -27,5 +27,5 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: snapdragon-api-docs, namespace: snapdragon-frontend }
-spec: { selector: { app: snapdragon-api-docs }, ports: [{ name: http, port: 80, targetPort: http }] }
+metadata: { name: hugmesh-api-docs, namespace: hugmesh-frontend }
+spec: { selector: { app: hugmesh-api-docs }, ports: [{ name: http, port: 80, targetPort: http }] }

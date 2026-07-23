@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # seed-accounts.sh — seed the SAME identities the Playwright specs (tests/e2e/specs)
-# assume, into a REAL booted Snapdragon node, so the unchanged specs pass against
+# assume, into a REAL booted HugMesh node, so the unchanged specs pass against
 # a QEMU-booted image instead of the rootless mock stack (tests/stack).
 #
 # The specs expect:
-#   * an admin (Casdoor admin role):  admin@snapdragon.systems
+#   * an admin (Casdoor admin role):  admin@hugmesh.systems
 #   * five basic Gmail users:         alice,bob,carol,dave,eve @gmail.com
 #     (+ frank@gmail.com, invited-but-not-completed in spec 03)
 #   * one Discord allowlist entry:    dragoneer
@@ -38,7 +38,7 @@
 # ROLE_GAMES_ADMIN(derived) / ROLE_USER / pending — plus a games-realm native
 # player. `--roles DIR` renders, into DIR/roles/:
 #   * casdoor-systems-roles.json   — role->member grants for the SYSTEMS Casdoor
-#       (org "snapdragon"), to MERGE into manifests/casdoor init_data. NOTE it
+#       (org "hugmesh"), to MERGE into manifests/casdoor init_data. NOTE it
 #       grants ROLE_GAMES + ROLE_ADMIN to e2e-gamesadmin but does NOT put anyone
 #       in ROLE_GAMES_ADMIN — that derived role is materialized by the
 #       games-admin-sync Job ( = ROLE_GAMES ∩ (ROLE_ADMIN ∪ ROLE_MOD) ).
@@ -52,19 +52,19 @@
 set -euo pipefail
 
 # ── Identity defaults (kept in lock-step with tests/e2e/specs + mock-bff.mjs) ──
-ADMIN_EMAIL="${ADMIN_EMAIL:-admin@snapdragon.systems}"
+ADMIN_EMAIL="${ADMIN_EMAIL:-admin@hugmesh.systems}"
 GMAIL_USERS_DEFAULT="alice@gmail.com bob@gmail.com carol@gmail.com dave@gmail.com eve@gmail.com frank@gmail.com"
 DISCORD_USERS_DEFAULT="dragoneer"
 GMAIL_USERS="${GMAIL_USERS:-${GMAIL_USERS_DEFAULT}}"
 DISCORD_USERS="${DISCORD_USERS:-${DISCORD_USERS_DEFAULT}}"
-SVC_PASSWORD="${SVC_PASSWORD:-snapdragon-svc-pw}"
-CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-snapdragon.systems}"
+SVC_PASSWORD="${SVC_PASSWORD:-hugmesh-svc-pw}"
+CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-hugmesh.systems}"
 
 # ── RBAC role matrix (kept in lock-step with tests/e2e/specs/rbac-roles.ts) ──
 # Deterministic e2e password, same convention as the games harness (E2E_PASSWORD
 # default 'e2e-pass', per-user override via E2E_<UPPER>_PASSWORD).
 E2E_PASSWORD="${E2E_PASSWORD:-e2e-pass}"
-SYSTEMS_CASDOOR_ORG="${SYSTEMS_CASDOOR_ORG:-snapdragon}"
+SYSTEMS_CASDOOR_ORG="${SYSTEMS_CASDOOR_ORG:-hugmesh}"
 GAMES_CASDOOR_ORG="${GAMES_CASDOOR_ORG:-threewizards}"
 SYSTEMS_CASDOOR_URL="${SYSTEMS_CASDOOR_URL:-http://127.0.0.1:8000}"
 # SYSTEMS seed users: "username:ROLE_A,ROLE_B:passwordEnv". ROLE_GAMES_ADMIN is
@@ -115,7 +115,7 @@ usage() {
 cat <<EOF
 Usage: $0 (--emit DIR | --ssh HOST | --print) [OPTIONS]
 
-Seeds the identities the Playwright e2e specs assume into a real Snapdragon node.
+Seeds the identities the Playwright e2e specs assume into a real HugMesh node.
 
 Modes (at least one of --emit/--roles/--ssh/--print):
   --emit DIR        Render a KEYS provisioning payload into DIR (users.json +
@@ -354,7 +354,7 @@ EOF
     # runs it with KEYS_BASE set to the KEYS root, so it can read accounts.json.
     cat > "${dir}/seed/seed-bff.sh" <<'HOOK'
 #!/bin/bash
-# seed-bff.sh — provision.json `.run` hook. Seeds the Snapdragon BFF allowlist
+# seed-bff.sh — provision.json `.run` hook. Seeds the HugMesh BFF allowlist
 # (admin-managed) with the e2e identities from KEYS/accounts.json so the
 # Playwright specs pass against this node. Idempotent; failures are non-fatal
 # (the node still boots). Run with KEYS_BASE pointing at the KEYS root.
@@ -454,7 +454,7 @@ REMOTE
 # ── Mode C: emit the FULL Casdoor RBAC role matrix (systems + games) ────────
 # Renders DIR/roles/ with:
 #   casdoor-systems-roles.json   role->member grants to MERGE into the systems
-#                                Casdoor init_data (org "snapdragon"). Every seed
+#                                Casdoor init_data (org "hugmesh"). Every seed
 #                                user + the deterministic password it logs in with.
 #                                ROLE_GAMES_ADMIN is intentionally EMPTY (derived
 #                                by the games-admin-sync Job).
@@ -467,7 +467,7 @@ REMOTE
 
 # Casdoor's add-user rejects any name that isn't alphanumeric/hyphen/underline
 # (no leading/trailing/consecutive -_ ), so an email-shaped SYSTEMS_ROLE_USERS
-# spec (admin@snapdragon.systems, alice@gmail.com, …) can never be the Casdoor
+# spec (admin@hugmesh.systems, alice@gmail.com, …) can never be the Casdoor
 # `name` verbatim. Pass the ORIGINAL handle through unchanged when it's already
 # legal (every existing e2e-* spec); otherwise fold every disallowed run of
 # characters to a single hyphen and trim the ends. The sanitized string is used
@@ -573,7 +573,7 @@ ROLE_FORUM ROLE_FORUM_MOD ROLE_WIKI ROLE_GAMES ROLE_GAMES_ADMIN ROLE_USER"
         '{
            realm: "games",
            organization: $org,
-           note: "Native players only. The games admin appears via the systems->games sync (ROLE_GAMES_ADMIN -> admin), asserted by snapdragon-actions/e2e — NOT seeded here.",
+           note: "Native players only. The games admin appears via the systems->games sync (ROLE_GAMES_ADMIN -> admin), asserted by hugmesh-actions/e2e — NOT seeded here.",
            users: $users
          }' > "${dir}/casdoor-games-users.json"
 
@@ -582,19 +582,19 @@ ROLE_FORUM ROLE_FORUM_MOD ROLE_WIKI ROLE_GAMES ROLE_GAMES_ADMIN ROLE_USER"
     cat > "${dir}/apply-systems-roles.sh" <<'APPLY'
 #!/usr/bin/env bash
 # apply-systems-roles.sh — push the systems RBAC role matrix into a REAL Casdoor
-# (org "snapdragon") so the rbac-*.spec.ts JWT-role assertions work. Reads the
+# (org "hugmesh") so the rbac-*.spec.ts JWT-role assertions work. Reads the
 # sibling casdoor-systems-roles.json. Idempotent: add-user is skipped if present,
 # update-role overwrites the member set. Requires curl + jq + Casdoor admin creds.
 #
 #   CASDOOR_URL          (default http://127.0.0.1:8000)
 #   CASDOOR_ADMIN_USER   (default admin)
 #   CASDOOR_ADMIN_PASS   (required)
-#   CASDOOR_ORG          (default snapdragon)
+#   CASDOOR_ORG          (default hugmesh)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROLES_JSON="${HERE}/casdoor-systems-roles.json"
 BASE="${CASDOOR_URL:-http://127.0.0.1:8000}"
-ORG="${CASDOOR_ORG:-snapdragon}"
+ORG="${CASDOOR_ORG:-hugmesh}"
 AU="${CASDOOR_ADMIN_USER:-admin}"
 AP="${CASDOOR_ADMIN_PASS:?CASDOOR_ADMIN_PASS required}"
 CJ="$(mktemp)"; trap 'rm -f "${CJ}"' EXIT

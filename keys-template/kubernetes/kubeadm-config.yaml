@@ -19,8 +19,8 @@ controlPlaneEndpoint: "kube-api.headnet.internal:6443"
 apiServer:
   certSANs:
     - kube-api.headnet.internal
-    - snapdragon-pki
-    - snapdragon-pki.headnet.internal
+    - hugmesh-pki
+    - hugmesh-pki.headnet.internal
     - 127.0.0.1
 networking:
   podSubnet: "10.244.0.0/16"

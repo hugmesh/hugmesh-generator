@@ -36,8 +36,8 @@
 #     Service names, so this is always rule #1).
 #   - Intra-tier / self namespace: gateway->BFF, BFF->workload, etc.
 #   - Cross-tier control paths the tier actually needs (Postgres :5432, Cassandra
-#     :9042 in snapdragon-pki, Vault :8200 in ns `vault`, headscale in
-#     snapdragon-pki, ArgoCD reconcile + kube-apiserver in `devops`).
+#     :9042 in hugmesh-pki, Vault :8200 in ns `vault`, headscale in
+#     hugmesh-pki, ArgoCD reconcile + kube-apiserver in `devops`).
 #   - kube-apiserver: allowed via TCP/6443 to the cluster's NODE network CIDRs (NOT
 #     the 10.96.0.1/32 ClusterIP). WHY: kube-proxy DNATs the apiserver ClusterIP
 #     (10.96.0.1:443) to the real control-plane NODE backend (<node-ip>:6443), and
@@ -56,15 +56,15 @@
 # CIDR carve-outs reused verbatim from egress-vpn-interaction.yaml:
 #   10.244.0.0/16 (pod CIDR), 10.96.0.0/12 (service CIDR), 100.64.0.0/10 (tailnet).
 #
-# ── snapdragon-frontend — default-deny egress ─────────────────────────────────
+# ── hugmesh-frontend — default-deny egress ─────────────────────────────────
 # Frontend only ever talks to: DNS, itself (fe-gateway -> UIs), and the backend
 # tier (fe-gateway -> be-gateway /be + admin-bff /bff). No DB / Vault / Cassandra.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: tier-egress
-  namespace: snapdragon-frontend
-  labels: { app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-frontend
+  labels: { app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector: {}
   policyTypes: [Egress]
@@ -77,12 +77,12 @@ spec:
         - { protocol: TCP, port: 53 }
     # 2. self (fe-gateway -> UIs) + backend tier (fe-gateway -> be-gateway/admin-bff).
     - to:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
-    # 3. route-access-db (:5432) + Cassandra (:9042) live in snapdragon-pki; fe-gateway
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
+    # 3. route-access-db (:5432) + Cassandra (:9042) live in hugmesh-pki; fe-gateway
     #    reads route-access + Cassandra. Pin the namespace + ports.
     - to:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-pki } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-pki } }
       ports:
         - { protocol: TCP, port: 5432 }
         - { protocol: TCP, port: 9042 }
@@ -100,7 +100,7 @@ spec:
       ports:
         - { protocol: TCP, port: 6443 }
 ---
-# ── snapdragon-backend — default-deny egress ──────────────────────────────────
+# ── hugmesh-backend — default-deny egress ──────────────────────────────────
 # EXCLUDES the per-pod-egress-locked pods (akkoma/tuwunel/akkoma-db via
 # homeserver-egress.yaml) + the egress-proxy (its own policy, above) + the five
 # BFF/federation DB pods. Keep this NotIn set in sync with tier-ingress.yaml +
@@ -118,8 +118,8 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: tier-egress
-  namespace: snapdragon-backend
-  labels: { app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchExpressions:
@@ -144,12 +144,12 @@ spec:
     #    egress-proxy. Ports left open intra-tier (mesh-internal; ingress side is
     #    already constrained by tier-ingress/db-ingress/homeserver-isolation).
     - to:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
-    # 3. snapdragon-pki — route-access-db (:5432), Cassandra (:9042), Casdoor (JWT
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
+    # 3. hugmesh-pki — route-access-db (:5432), Cassandra (:9042), Casdoor (JWT
     #    validation, :8000), headscale (tailnet). The be-gateway + admin-bff-api +
     #    federation-api reach route-access-db/Cassandra/Casdoor here.
     - to:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-pki } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-pki } }
     # 4. Vault (:8200) in ns `vault` — ESO / PKI cert issuance + dynamic secrets.
     - to:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: vault } }
@@ -168,7 +168,7 @@ spec:
       ports:
         - { protocol: TCP, port: 6443 }
 ---
-# ── snapdragon-pki — default-deny egress ──────────────────────────────────────
+# ── hugmesh-pki — default-deny egress ──────────────────────────────────────
 # EXCLUDES route-access-db (initiates nothing outbound) + Cassandra (gossips
 # WITHIN the pki tier — covered by the self rule below, but it carries its own
 # isolation; a broad egress would widen it). Keep the NotIn list in sync with
@@ -177,8 +177,8 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: tier-egress
-  namespace: snapdragon-pki
-  labels: { app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchExpressions:
@@ -195,7 +195,7 @@ spec:
     # 2. self — Casdoor -> casdoor-pg/route-access-db/Cassandra; pki/superadmin
     #    gateways -> route-access-db/Cassandra; headscale intra-tier.
     - to:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-pki } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-pki } }
     # 3. Vault (:8200) — Casdoor/PKI cert + ESO dynamic secrets.
     - to:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: vault } }
@@ -214,16 +214,16 @@ spec:
       ports:
         - { protocol: TCP, port: 6443 }
 ---
-# ── snapdragon-games — default-deny egress ────────────────────────────────────
+# ── hugmesh-games — default-deny egress ────────────────────────────────────
 # Games BFF -> casdoor-games (self, JWT) -> casdoor-games-pg (self); games
 # workloads reached FROM backend (ingress side). Egress: DNS + self + backend
-# (snapdragon-actions sync handle) + the games-realm Casdoor stays intra-namespace.
+# (hugmesh-actions sync handle) + the games-realm Casdoor stays intra-namespace.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: tier-egress
-  namespace: snapdragon-games
-  labels: { app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-games
+  labels: { app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector: {}
   policyTypes: [Egress]
@@ -236,8 +236,8 @@ spec:
         - { protocol: TCP, port: 53 }
     # 2. self (games BFF -> casdoor-games -> casdoor-games-pg) + backend (sync).
     - to:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-games } }
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
     # 3. kube-apiserver — TCP/6443 to the NODE network CIDRs. REPLACES the broken
     #    `ipBlock: 10.96.0.1/32` (:443) ClusterIP carve-out (kube-proxy DNATs the
     #    apiserver ClusterIP to the control-plane node IP:6443; Calico evaluates egress
@@ -263,7 +263,7 @@ kind: NetworkPolicy
 metadata:
   name: tier-egress
   namespace: devops
-  labels: { app.kubernetes.io/part-of: snapdragon.systems }
+  labels: { app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector: {}
   policyTypes: [Egress]
@@ -279,11 +279,11 @@ spec:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }
     # 3. ArgoCD -> every workload namespace it manages (apply manifests).
     - to:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-pki } }
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-games } }
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-policy } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-pki } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-policy } }
     # 4. kube-apiserver — TCP/6443 to the NODE network CIDRs — ArgoCD apply.
     #    REPLACES the broken `ipBlock: 10.96.0.1/32` (:443) ClusterIP carve-out: this
     #    was the bug that WEDGED ArgoCD — kube-proxy DNATs the apiserver ClusterIP to
@@ -312,11 +312,11 @@ spec:
       ports:
         - { protocol: TCP, port: 443 }
 ---
-# ── snapdragon-backend / egress-proxy — dedicated default-deny egress ─────────
+# ── hugmesh-backend / egress-proxy — dedicated default-deny egress ─────────
 # The Squid egress-proxy (app=egress-proxy) is the federation egress PATH for the
 # homeserver tier: akkoma/tuwunel send all outbound HTTP/S federation THROUGH it
 # (homeserver-egress.yaml denies them direct egress). It is EXCLUDED from the
-# snapdragon-backend `tier-egress` podSelector NotIn above (which has no public
+# hugmesh-backend `tier-egress` podSelector NotIn above (which has no public
 # allow-set), so this scoped policy gives it the LEAST-PRIVILEGE egress it actually
 # needs — DNS + public 80/443 — without opening the whole backend tier. Without this
 # the backend tier-egress would black-hole the proxy and break akkoma/tuwunel
@@ -325,8 +325,8 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: egress-proxy-egress
-  namespace: snapdragon-backend
-  labels: { app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app: egress-proxy }

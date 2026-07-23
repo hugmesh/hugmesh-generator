@@ -1,6 +1,6 @@
 # service-catalog-builder — in-cluster Kaniko image builder for the SUPERADMIN Service Catalog
 
-The SUPERADMIN Service Catalog has four service sources (snapdragon-superadmin-appstore design):
+The SUPERADMIN Service Catalog has four service sources (hugmesh-superadmin-appstore design):
 
 | source | needs a build? | path |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ builder existed, so the admin-bff `AddServiceEffector` **guards** DOCKERFILE/ZIP
   `readOnlyRootFilesystem` (Kaniko workdir on `emptyDir`), `automountServiceAccountToken:false`,
   `ttlSecondsAfterFinished` + `activeDeadlineSeconds` reaping.
 
-- **`namespace-and-netpol.yaml`** — the `snapdragon-service-catalog-builds` namespace + a default-deny
+- **`namespace-and-netpol.yaml`** — the `hugmesh-service-catalog-builds` namespace + a default-deny
   ingress NetworkPolicy (build pods serve nothing; egress to the registry + DNS is left open
   like the other tier policies). ArgoCD-managed (listed in `kustomization.yaml`).
 

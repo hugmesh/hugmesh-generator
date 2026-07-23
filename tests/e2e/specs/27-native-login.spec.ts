@@ -58,7 +58,7 @@ test.describe('native login: our own form drives /bff/login (Casdoor never brows
 
     // The browser NEVER navigated to a Casdoor origin — native PKCE is server-side.
     for (const url of navigated) {
-      expect(url, `must not visit Casdoor: ${url}`).not.toMatch(/casdoor|id\.snapdragon\.systems/i);
+      expect(url, `must not visit Casdoor: ${url}`).not.toMatch(/casdoor|id\.hugmesh\.systems/i);
     }
 
     await shot(page, '27-native-login');

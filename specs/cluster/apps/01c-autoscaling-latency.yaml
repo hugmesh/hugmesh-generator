@@ -44,14 +44,14 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/autoscaling-latency
   destination:
     server: https://kubernetes.default.svc
     # ScaledObjects carry their own namespace (per-service); this is the
     # Application's default and is overridden by each manifest's metadata.namespace.
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
   # UNDARKENED (2026-06-23): auto-sync armed. ArgoCD now applies the ScaledObjects.
   # NOTE — infra dependency, not a gate: KEDA reads Prometheus; until Prometheus is
   # live the ScaledObjects simply hold at their fail-safe minReplicaCount (no

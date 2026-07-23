@@ -1,0 +1,36 @@
+# HugMesh external media-data configuration (rendered at image build).
+# Read by /usr/sbin/hugmesh-media-detect at every boot. ALL values are
+# overridable here on the installed system — the feature is configurable AND
+# optional, but ON by default for standalone desktops.
+#
+# The data device is a SEPARATE disk (kept across reinstalls) that holds the
+# Steam library and the gocryptfs Vaults store under MEDIA_MOUNT. It is detected
+# by LABEL when MEDIA_LABEL is set, otherwise by scanning attached non-root
+# partitions for the MEDIA_MARKERS directories (so an UNLABELED data disk — like
+# the btrfs /media disk on the reference host — is still found by content).
+
+# Master switch (true|false). --no-media-data sets this false at build.
+MEDIA_DATA_ENABLED="@@MEDIA_DATA@@"
+
+# Where the data device mounts, and the user that owns the desktop session.
+MEDIA_MOUNT="@@MEDIA_MOUNT@@"
+MEDIA_USER="@@DEFAULT_USER@@"
+
+# Detection: a filesystem LABEL to match (empty = content-scan), and the marker
+# directory names that identify the data device by content.
+MEDIA_LABEL="@@MEDIA_LABEL@@"
+MEDIA_MARKERS="@@MEDIA_MARKERS@@"
+
+# Steam: where the library lives + how Steam is delivered.
+#   native  : games-util/steam-launcher (DEFAULT); ~/.local/share/Steam is
+#             symlinked to STEAM_DIR so the install/library lives on the data disk.
+#   flatpak : com.valvesoftware.Steam, filesystem-granted access to STEAM_DIR.
+#   none    : don't wire Steam.
+STEAM_DIR="@@STEAM_DIR@@"
+STEAM_DELIVERY="@@STEAM_DELIVERY@@"
+
+# Vaults: a gocryptfs encrypted store. The CIPHERTEXT lives at VAULTS_DIR on the
+# data device; the user mounts the plaintext on demand with their passphrase
+# (gocryptfs VAULTS_DIR ~/Vaults/default). VAULTS_ENABLED wires the dir + tooling.
+VAULTS_DIR="@@VAULTS_DIR@@"
+VAULTS_ENABLED="@@VAULTS_ENABLED@@"

@@ -1,5 +1,5 @@
-# snapdragon-anubis — the Anubis proof-of-work anti-scraper gate that fronts the
-# public front door (snapdragon-fe-gateway). Anubis (github.com/TecharoHQ/anubis)
+# hugmesh-anubis — the Anubis proof-of-work anti-scraper gate that fronts the
+# public front door (hugmesh-fe-gateway). Anubis (github.com/TecharoHQ/anubis)
 # weighs each connection with a SHA-256 proof-of-work challenge before forwarding
 # it upstream, throttling AI scrapers / abusive bots off the public ingress.
 #
@@ -8,7 +8,7 @@
 #                          requests to the fe-gateway Service. This is what the
 #                          public ingress should point at (PoW-gate-in-front).
 #   * METRICS_BIND :9090 — internal-only Prometheus /metrics + /healthz listener.
-#                          The superadmin admin-bff (snapdragon-backend) reaches
+#                          The superadmin admin-bff (hugmesh-backend) reaches
 #                          THIS port via the in-cluster Service DNS to render
 #                          /bff/admin/anubis/{status,metrics}. Never published to
 #                          public ingress.
@@ -23,21 +23,21 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-anubis
-  namespace: snapdragon-frontend
+  name: hugmesh-anubis
+  namespace: hugmesh-frontend
   labels:
-    app: snapdragon-anubis
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-anubis
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/optional: "true"
     snapdragon.systems/slug: anubis
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-anubis } }
+  selector: { matchLabels: { app: hugmesh-anubis } }
   template:
-    metadata: { labels: { app: snapdragon-anubis } }
+    metadata: { labels: { app: hugmesh-anubis } }
     spec:
       # Co-locate with the rest of the front door (frontend Pis / x86 host carry
-      # this label), same as the snapdragon.systems web host + fe-gateway.
+      # this label), same as the hugmesh.systems web host + fe-gateway.
       nodeSelector: { snapdragon.systems/frontend: "true" }
       # POD-level hardening (mirrors the frontend/media-poisoner exemplars):
       # CIS K8s 5.2.6 (runAsNonRoot), 5.7.2 (seccomp RuntimeDefault). The upstream
@@ -70,7 +70,7 @@ spec:
             # ANUBIS_MANAGEMENT_URL points at. Default :9090 (admin-bff default).
             - { name: METRICS_BIND, value: ":9090" }
             # Upstream that verified requests are forwarded to: the fe-gateway.
-            - { name: TARGET,       value: "http://snapdragon-fe-gateway.snapdragon-frontend.svc.cluster.local:8080" }
+            - { name: TARGET,       value: "http://hugmesh-fe-gateway.hugmesh-frontend.svc.cluster.local:8080" }
             # PoW difficulty (leading-zero count). Mirrored to ANUBIS_DIFFICULTY on
             # the admin-bff purely for display; keep the two in sync if changed.
             - { name: DIFFICULTY,   value: "5" }
@@ -93,15 +93,15 @@ apiVersion: v1
 kind: Service
 metadata:
   name: anubis
-  namespace: snapdragon-frontend
+  namespace: hugmesh-frontend
   labels:
-    app: snapdragon-anubis
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-anubis
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
-  selector: { app: snapdragon-anubis }
+  selector: { app: hugmesh-anubis }
   ports:
     # Public PoW gate — the front-door ingress targets this port.
     - { name: gate,    port: 8923, targetPort: gate }
     # Internal management (metrics + /healthz) — the admin-bff reaches this via
-    # http://anubis.snapdragon-frontend.svc.cluster.local:9090 (ANUBIS_MANAGEMENT_URL).
+    # http://anubis.hugmesh-frontend.svc.cluster.local:9090 (ANUBIS_MANAGEMENT_URL).
     - { name: metrics, port: 9090, targetPort: metrics }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # run-qemu-e2e.sh — the QEMU analogue of tests/e2e/run-all.sh: validate a REAL
-# booted Snapdragon image with the EXISTING Playwright suite, instead of the
+# booted HugMesh image with the EXISTING Playwright suite, instead of the
 # rootless mock stack (tests/stack).
 #
 # Pipeline (mirrors run-all.sh's 5 phases):
@@ -121,7 +121,7 @@ case "${TARGET}" in x86|pi|both) ;; *) die "invalid --target '${TARGET}' (x86|pi
 
 autodetect_x86() {
     [ -n "${IMG}" ] && return 0
-    for c in "${WORK_DIR}"/*-x86-*.img "${WORK_DIR}"/snapdragon-host*.img "${WORK_DIR}"/*.img; do
+    for c in "${WORK_DIR}"/*-x86-*.img "${WORK_DIR}"/hugmesh-host*.img "${WORK_DIR}"/*.img; do
         [ -f "${c}" ] && { IMG="${c}"; return 0; }
     done
     return 1
@@ -226,8 +226,8 @@ if command -v jq >/dev/null 2>&1; then
         tmp="$(mktemp)"; jq '.run = ((.run // []) + ["seed/seed-bff.sh"] | unique)' "${PJ}" > "${tmp}" && mv "${tmp}" "${PJ}"
     else
         cat > "${PJ}" <<EOF
-{ "version": 1, "hostname": "snapdragon-e2e", "timezone": "UTC",
-  "snapdragon": { "role": "${ROLE}", "cluster_domain": "snapdragon.systems" },
+{ "version": 1, "hostname": "hugmesh-e2e", "timezone": "UTC",
+  "hugmesh": { "role": "${ROLE}", "cluster_domain": "hugmesh.systems" },
   "run": ["seed/seed-bff.sh"] }
 EOF
     fi

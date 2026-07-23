@@ -15,7 +15,7 @@
 # precedence:
 #   1. provision.json .headscale.server_url
 #   2. provision.json .mesh.endpoint
-#   3. the baked brand var HEADSCALE_URL (/etc/snapdragon/headscale-url)
+#   3. the baked brand var HEADSCALE_URL (/etc/hugmesh/headscale-url)
 #   4. DEFAULT: http://<this node's primary LAN IPv4>:8080
 # So a node provisioned before any public DNS exists is reachable by LAN peers,
 # and a public domain can be published later without re-imaging.
@@ -32,9 +32,9 @@ noise:
 # ACL policy — fleet full-mesh, file mode.
 #
 # Loads the shipped /etc/headscale/policy.hujson: a default-deny policy that
-# opens fleet-internal traffic (tag:snapdragon <-> tag:snapdragon, all ports)
+# opens fleet-internal traffic (tag:hugmesh <-> tag:hugmesh, all ports)
 # plus the cluster pod (10.244.0.0/16) and service (10.96.0.0/12) CIDRs, and
-# auto-approves those advertised subnet routes. Nodes self-apply tag:snapdragon
+# auto-approves those advertised subnet routes. Nodes self-apply tag:hugmesh
 # (+ a per-role tag) and advertise the two CIDRs at `tailscale up`; every node
 # runs --accept-routes, so pods/ClusterIPs become reachable cross-node "as one
 # LAN". keys-provision also runs `headscale policy set -f` on this file so the

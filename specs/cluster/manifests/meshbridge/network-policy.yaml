@@ -15,7 +15,7 @@
 # toggle), so a default build adds no policy and is byte-identical to today's
 # mainline.
 #
-# meshbridge carries app=snapdragon-meshbridge (NOT app.kubernetes.io/name in
+# meshbridge carries app=hugmesh-meshbridge (NOT app.kubernetes.io/name in
 # the homeserver NotIn set), so the homeserver-isolation/homeserver-egress
 # backstops do NOT select it — it is a distinct app with its own policy here.
 # It IS selected by the backend tier-egress policy (union semantics), but this
@@ -24,15 +24,15 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: meshbridge-allow
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: meshbridge
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/optional-service: meshbridge
 spec:
   podSelector:
     matchLabels:
-      app: snapdragon-meshbridge
+      app: hugmesh-meshbridge
   policyTypes: [Ingress, Egress]
   ingress:
     # Appservice transaction push FROM tuwunel ONLY (:8009). The pod selector
@@ -66,14 +66,14 @@ spec:
     # the node-id -> user mapping (60 s poll, fail-soft).
     - to:
         - podSelector:
-            matchLabels: { app: snapdragon-user-bff-api }
+            matchLabels: { app: hugmesh-user-bff-api }
       ports:
         - { protocol: TCP, port: 8080 }
-    # Casdoor token endpoint (snapdragon-pki:8000) — client-credentials mint
+    # Casdoor token endpoint (hugmesh-pki:8000) — client-credentials mint
     # for the SERVICE JWT the user-bff internal surface requires.
     - to:
         - namespaceSelector:
-            matchLabels: { kubernetes.io/metadata.name: snapdragon-pki }
+            matchLabels: { kubernetes.io/metadata.name: hugmesh-pki }
       ports:
         - { protocol: TCP, port: 8000 }
     # ── Radio / broker egress (LAN) ──────────────────────────────────────────
@@ -115,10 +115,10 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: meshbridge-tuwunel-interaction
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: meshbridge
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/optional-service: meshbridge
 spec:
   # Selects the TUWUNEL pod (this is the widening side; the bridge's own policy
@@ -131,7 +131,7 @@ spec:
     # the appservice-registration PostSync Job (admin-room command post).
     - from:
         - podSelector:
-            matchLabels: { app: snapdragon-meshbridge }
+            matchLabels: { app: hugmesh-meshbridge }
         - podSelector:
             matchLabels: { app: meshbridge-register }
       ports:
@@ -143,6 +143,6 @@ spec:
     # not loosen anything else.
     - to:
         - podSelector:
-            matchLabels: { app: snapdragon-meshbridge }
+            matchLabels: { app: hugmesh-meshbridge }
       ports:
         - { protocol: TCP, port: 8009 }

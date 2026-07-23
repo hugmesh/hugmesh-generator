@@ -1,13 +1,13 @@
 # lan-dns Corefile — CoreDNS configured as the LAN-facing wildcard resolver for
-# the brand domain. It answers EVERY name under snapdragon.systems (apex + any
+# the brand domain. It answers EVERY name under hugmesh.systems (apex + any
 # subdomain: id. / api. / matrix. / mastodon. / scale. / *) with the backend
 # ingress node's LAN IP, so a browser or the e2e runner on the LAN resolves the
 # brand subdomains to the cluster edge (where ingress-nginx already listens on
 # 80/443). Anything NOT under the brand domain is forwarded to upstream resolvers.
 #
 # Two templated values:
-#   - the brand domain — authored as snapdragon.systems here so the builder's
-#     rebrand_sysroot rewrites it to the brand's domain (e.g. snapdragon.test) in
+#   - the brand domain — authored as hugmesh.systems here so the builder's
+#     rebrand_sysroot rewrites it to the brand's domain (e.g. hugmesh.test) in
 #     the baked tree. The CoreDNS `template` regex therefore matches the concrete
 #     brand domain at apply time.
 #   - __LAN_INGRESS_IP__ — the backend ingress node InternalIP, PATCHED into this
@@ -22,7 +22,7 @@ metadata:
   namespace: kube-system
   labels:
     app.kubernetes.io/name: lan-dns
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 data:
   Corefile: |
     # Authoritative zone for the brand domain — wildcard -> backend ingress IP.
@@ -31,7 +31,7 @@ data:
     # domain is answered with the LAN ingress IP. (Avoiding a `match` regex also
     # keeps the zone rebrand-safe: the build's domain rewrite only has to touch
     # the zone name on the line below, not an escaped-dot regex.)
-    snapdragon.systems {
+    hugmesh.systems {
         errors
         # Every A query in this zone -> the LAN ingress IP.
         template IN A {

@@ -14,8 +14,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: casdoor-init-script
-  namespace: snapdragon-pki
-  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   reconcile.py: |
     #!/usr/bin/env python3
@@ -23,8 +23,8 @@ data:
     Pure stdlib (urllib) so the image needs no extra packages / network installs."""
     import json, os, time, urllib.request, urllib.parse, urllib.error, http.cookiejar
 
-    BASE = os.environ.get("CASDOOR_URL", "http://casdoor.snapdragon-pki.svc.cluster.local:8000")
-    ORG  = os.environ.get("CASDOOR_ORG", "snapdragon")
+    BASE = os.environ.get("CASDOOR_URL", "http://casdoor.hugmesh-pki.svc.cluster.local:8000")
+    ORG  = os.environ.get("CASDOOR_ORG", "hugmesh")
     ADMIN_USER = open("/secrets/admin/username").read().strip()
     ADMIN_PASS = open("/secrets/admin/password").read().strip()
 
@@ -76,7 +76,7 @@ data:
         # PR #280 fixed. reconcile_app() gives it the headscale-specific
         # redirectUris override below (its OIDC callback path is FIXED by the
         # headscale binary at "<server_url>/oidc/callback", not the generic
-        # "https://<name>.snapdragon.systems/callback" other apps use).
+        # "https://<name>.hugmesh.systems/callback" other apps use).
         "headscale": "ROLE_USER",
     }
 
@@ -126,11 +126,11 @@ data:
     # "groups" added 2026-07-09 (same Existing-Field mechanism as roles/permissions
     # above — mirrors, not guesses: this is the one other relation-shaped User field
     # in this list). headscale's OIDC config (keys-template/headscale/config.yaml
-    # allowed_groups: [snapdragon/headscale]) gates node-join on a literal "groups"
+    # allowed_groups: [hugmesh/headscale]) gates node-join on a literal "groups"
     # ID-token claim (confirmed against the headscale binary's own compiled string
     # table — "groups" appears alongside its oidc.allowed_groups config key).
     # Casdoor's User.Groups is what reconcile_superadmin() below writes
-    # snapdragon/headscale into (PR #280); without this attribute that membership
+    # hugmesh/headscale into (PR #280); without this attribute that membership
     # was written but NEVER reached any token, so the mesh-join gate could never
     # pass for anyone. LIVE-VERIFIED (tests/casdoor/test-jwt-custom-token.sh) that
     # this tokenAttribute emits the group's "<owner>/<name>" id string exactly —
@@ -153,9 +153,9 @@ data:
         secret = open(f"/secrets/apps/{name}").read().strip()
         appname = f"app-{name}"
         app = {
-            "owner": "admin", "name": appname, "displayName": f"snapdragon {name}",
+            "owner": "admin", "name": appname, "displayName": f"hugmesh {name}",
             "organization": ORG, "clientId": appname, "clientSecret": secret,
-            "redirectUris": [f"https://{name}.snapdragon.systems/callback"],
+            "redirectUris": [f"https://{name}.hugmesh.systems/callback"],
             # password grant kept (custom BFF login uses it) + authorization_code +
             # client_credentials (existing machine apps).
             "grantTypes": ["authorization_code", "client_credentials", "password"],
@@ -174,17 +174,17 @@ data:
         # byte-match APP_BFF_OIDC_REDIRECT_URI on the user-bff side; no browser ever
         # dereferences it) + a shorter access-token lifetime (refresh_token covers
         # longevity, keeping the held-JWT/MFA-freshness window short). Single-domain
-        # seed (…snapdragon.systems) matching the confidential apps' convention;
+        # seed (…hugmesh.systems) matching the confidential apps' convention;
         # per-brand hosts layer via the rebrand/handlebars path, not here.
         if name == "user-bff":
             app["grantTypes"] = app["grantTypes"] + ["refresh_token"]
-            app["redirectUris"] = ["https://snapdragon.systems/login/callback"]
+            app["redirectUris"] = ["https://hugmesh.systems/login/callback"]
             app["expireInHours"] = 4
         # headscale's OIDC callback path is FIXED by the headscale binary itself
         # at "<server_url>/oidc/callback" (confirmed in its compiled string
-        # table) — not the generic "https://<name>.snapdragon.systems/callback"
+        # table) — not the generic "https://<name>.hugmesh.systems/callback"
         # every other app gets. server_url defaults to the baked
-        # https://scale.snapdragon.systems (keys-template/headscale/config.yaml),
+        # https://scale.hugmesh.systems (keys-template/headscale/config.yaml),
         # so that is what we register here.
         # !!! CAVEAT: like user-bff's callback, this is a single-domain bootstrap
         # !!! seed. keys-provision CAN rewrite server_url at first boot (LAN-IP
@@ -195,7 +195,7 @@ data:
         # !!! server_url change (with the new value substituted here) is a
         # !!! follow-up, not yet automated.
         if name == "headscale":
-            app["redirectUris"] = ["https://scale.snapdragon.systems/oidc/callback"]
+            app["redirectUris"] = ["https://scale.hugmesh.systems/oidc/callback"]
         try:
             existing = call(f"/api/get-application?id=admin/{appname}")
         except urllib.error.HTTPError:
@@ -208,15 +208,15 @@ data:
             print(f"  added   {appname} (role {role})")
 
     def reconcile_desktop_client():
-        """D6+D8 / GEN-SSO #135 — seed the snapdragon-desktop PKCE PUBLIC client.
+        """D6+D8 / GEN-SSO #135 — seed the hugmesh-desktop PKCE PUBLIC client.
 
         The OIDC client the GOVERNED desktop images log into. sssd-oidc.conf.tmpl
-        references oidc_client_id=snapdragon-desktop with oidc_use_pkce=True, but the
+        references oidc_client_id=hugmesh-desktop with oidc_use_pkce=True, but the
         client was NEVER seeded in Casdoor. Without this client the desktop SSO login
         can obtain NO token, so the `desktop-sudo` sudo claim is never issuable AND the
         bearer forwarded to the BFF app-store registry never exists — i.e. the whole
         desktop-governance feature is inert (RESIDUAL #9a; see
-        specs/etc/snapdragon/desktop-governance/README.md). The `desktop-sudo`
+        specs/etc/hugmesh/desktop-governance/README.md). The `desktop-sudo`
         claim/role is what the admin-bff sudo-grant places on the user at the IdP; the
         on-device SSSD maps that claim into the local `desktop-sudo` group (oidc_group_
         claim=roles) and polkit gates sudo on it (default-deny). The `desktop-sudo`
@@ -224,7 +224,7 @@ data:
         (init-data-configmap.yaml).
 
         GEN-SSO #135 deposits the minted token to a device file (${XDG_RUNTIME_DIR}/
-        snapdragon/oidc-token); under casdoor's DEFAULT tokenFormat=JWT that file would
+        hugmesh/oidc-token); under casdoor's DEFAULT tokenFormat=JWT that file would
         contain totpSecret/recoveryCodes/password/passwordSalt. We seed it here with the
         SAME JWT-Custom allow-list as the systems apps so the on-device token is clean
         and carries the MFA claim AND the `roles` claim (incl. desktop-sudo) SSSD-OIDC
@@ -233,7 +233,7 @@ data:
         PUBLIC client: clientSecret is EMPTY (PKCE, no secret baked into the image),
         isPublic=True marks it as a public client; redirectUris are the native loopback
         + OOB URIs the desktop OIDC flow uses. Idempotent (update-if-exists).
-        Single-domain seed today, matching the confidential apps' `…snapdragon.systems`
+        Single-domain seed today, matching the confidential apps' `…hugmesh.systems`
         convention — per-brand domains are layered by the rebrand path, not by this
         bootstrap seed.
 
@@ -242,10 +242,10 @@ data:
         !!! validate against the deployed Casdoor. Failing this reconcile leaves the
         !!! feature ships-dark (no token => empty store + no sudo), not broken.
         """
-        appname = "snapdragon-desktop"
+        appname = "hugmesh-desktop"
         app = {
             "owner": "admin", "name": appname,
-            "displayName": "Snapdragon Desktop (PKCE)",
+            "displayName": "HugMesh Desktop (PKCE)",
             "organization": ORG, "clientId": appname,
             # PUBLIC client — NO secret (PKCE). Empty string, never read from Vault.
             "clientSecret": "",
@@ -308,7 +308,7 @@ data:
         ]
         # WebAuthn relying-party + TOTP issuer scope the platform brand.
         org["mfaRememberInHours"] = 0
-        org["websiteUrl"] = org.get("websiteUrl") or "https://snapdragon.systems"
+        org["websiteUrl"] = org.get("websiteUrl") or "https://hugmesh.systems"
         try:
             call(f"/api/update-organization?id={org_id}", org, "POST")
             print(f"  org-mfa: enabled MFA capability (WebAuthn+TOTP available, NOT required) on {ORG}")
@@ -437,7 +437,7 @@ data:
             secret = open("/secrets/webhook/secret").read().strip()
         except FileNotFoundError:
             secret = ""
-        url = ("http://signup-gate.snapdragon-pki.svc.cluster.local:8000"
+        url = ("http://signup-gate.hugmesh-pki.svc.cluster.local:8000"
                "/casdoor/webhook")
         webhook = {
             "owner": "admin", "name": "signup-gate-reconcile",
@@ -517,7 +517,7 @@ data:
 
         # --- Mesh-join: grant /headscale Casdoor group membership -----------------
         # headscale OIDC node-join GATES enrolment on allowed_groups:
-        # [snapdragon/headscale] (keys-template/headscale/config.yaml — this is the
+        # [hugmesh/headscale] (keys-template/headscale/config.yaml — this is the
         # group's real "<owner>/<name>" claim shape, LIVE-VERIFIED below, not a bare
         # "/headscale" path). ROLE_SUPERADMIN alone does NOT put
         # the user in that group, so without this a superadmin CANNOT join the mesh
@@ -541,7 +541,7 @@ data:
         # while SILENTLY not persisting membership — caught live by the same test.
         # The token's `groups` claim (via the JWT-Custom "Existing Field: Groups"
         # tokenAttribute) emits the group's internal "<owner>/<name>" id string —
-        # "snapdragon/headscale" — NOT a bare "/headscale" path
+        # "hugmesh/headscale" — NOT a bare "/headscale" path
         # (keys-template/headscale/config.yaml allowed_groups is set to match this
         # exactly). Re-validate this claim shape against any future Casdoor
         # version bump. NOTE: the claim itself is sourced from user.groups, not
@@ -560,7 +560,7 @@ data:
         if not group:
             # Seed the group — nothing else creates it. Virtual so it never collides
             # with a user's single physical group; top-level org group. The token
-            # claim value this produces is "snapdragon/headscale" (owner/name), not
+            # claim value this produces is "hugmesh/headscale" (owner/name), not
             # a bare "/headscale" path — see the LIVE-VERIFIED note above.
             new_group = {
                 "owner": ORG, "name": group_name,
@@ -639,13 +639,13 @@ data:
             reconcile_app(name, role)
         except Exception as e:
             print(f"  WARN {name}: {e}")
-    # D6+D8 / GEN-SSO #135 / RESIDUAL #9a: seed the snapdragon-desktop PKCE public
+    # D6+D8 / GEN-SSO #135 / RESIDUAL #9a: seed the hugmesh-desktop PKCE public
     # client (JWT-Custom). A failure here leaves the desktop feature ships-dark (no
     # token => empty store, no sudo claim), never broken — so we warn and continue.
     try:
         reconcile_desktop_client()
     except Exception as e:
-        print(f"  WARN snapdragon-desktop client: {e}")
+        print(f"  WARN hugmesh-desktop client: {e}")
     try:
         reconcile_google_provider()
     except Exception as e:
@@ -672,8 +672,8 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: casdoor-init
-  namespace: snapdragon-pki
-  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -697,9 +697,9 @@ spec:
           command: ["python3", "/script/reconcile.py"]
           env:
             - name: CASDOOR_URL
-              value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000"
+              value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000"
             - name: CASDOOR_ORG
-              value: "snapdragon"
+              value: "hugmesh"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

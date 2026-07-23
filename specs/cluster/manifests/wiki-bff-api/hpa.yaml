@@ -1,4 +1,4 @@
-# HorizontalPodAutoscaler for snapdragon-wiki-bff-api. Modelled byte-for-byte on
+# HorizontalPodAutoscaler for hugmesh-wiki-bff-api. Modelled byte-for-byte on
 # manifests/forum-bff-api/hpa.yaml: plain autoscaling/v2, Resource metrics only.
 # The wiki-bff is a stateless Spring Boot resource server, so it scales out cleanly
 # under load.
@@ -12,14 +12,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: snapdragon-wiki-bff-api
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-wiki-bff-api, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-wiki-bff-api
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-wiki-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-wiki-bff-api
+    name: hugmesh-wiki-bff-api
   minReplicas: 2
   maxReplicas: 6
   metrics:

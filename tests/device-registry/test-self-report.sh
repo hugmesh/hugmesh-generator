@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-self-report.sh — unit tests for the node-side ONE-SHOT LIVENESS self-report
-# (snapdragon-device-enrollment-report) of the machine_key_fp AUTO-CAPTURE flow.
+# (hugmesh-device-enrollment-report) of the machine_key_fp AUTO-CAPTURE flow.
 #
 # WHAT IT DOES (runs ANYWHERE with bash — no live BFF, no curl, no node): it SOURCES
 # the real script (its main() is guarded behind a BASH_SOURCE check so sourcing does
@@ -17,7 +17,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SCRIPT="${REPO}/specs/usr/sbin/snapdragon-device-enrollment-report"
+SCRIPT="${REPO}/specs/usr/sbin/hugmesh-device-enrollment-report"
 PROVISION="${REPO}/specs/etc/keys-provision/provision.sh"
 
 P=0; F=0
@@ -73,7 +73,7 @@ TMPENV="$(mktemp)"; trap 'rm -f "${TMPENV}"' EXIT
 cat > "${TMPENV}" <<EOF
 MACHINE_KEY_FP=nodekey:EXACT+VALUE/==
 MESH_ID=east-01
-BFF_EXPORT_URL=https://admin-bff.snapdragon-backend.svc:8443
+BFF_EXPORT_URL=https://admin-bff.hugmesh-backend.svc:8443
 EOF
 NODE_ENV="${TMPENV}"
 got="$(read_env MACHINE_KEY_FP)"
@@ -93,11 +93,11 @@ grep -q -- '--cert' "${SCRIPT}" \
     && ! grep -Eqi 'authorization:[[:space:]]*bearer|-H[^#]*bearer|bff_token=|--header[^#]*bearer' "${SCRIPT}" \
     && ok "presents an mTLS client cert, never a JWT/bearer token" \
     || bad "self-report uses a JWT/bearer (should be mTLS only)"
-grep -q 'snapdragon-device-enrollment-report' "${PROVISION}" \
+grep -q 'hugmesh-device-enrollment-report' "${PROVISION}" \
     && ok "provision.sh invokes the one-shot self-report" \
     || bad "provision.sh does NOT invoke the self-report"
 # The hook must be best-effort (|| true) so a failed report never blocks boot.
-grep -q 'snapdragon-device-enrollment-report 2>/dev/null || true' "${PROVISION}" \
+grep -q 'hugmesh-device-enrollment-report 2>/dev/null || true' "${PROVISION}" \
     && ok "provision hook is best-effort (|| true, never blocks boot)" \
     || bad "provision hook is NOT best-effort"
 

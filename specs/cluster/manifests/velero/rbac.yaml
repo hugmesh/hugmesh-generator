@@ -37,7 +37,7 @@ metadata:
   labels:
     app.kubernetes.io/name: cloud-backups
     app.kubernetes.io/component: effector
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 rules:
   # The effector server-side-applies (create+patch) Backup/Restore CRs and reads
   # them back. NO delete, NO other velero.io kinds (BSL/schedule/etc.), NO core
@@ -55,7 +55,7 @@ metadata:
   labels:
     app.kubernetes.io/name: cloud-backups
     app.kubernetes.io/component: effector
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -63,19 +63,19 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: backups-effector
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
 ---
-# ── (1b) effector MENU-READ authority — Role + RoleBinding in `snapdragon-backend` ─
+# ── (1b) effector MENU-READ authority — Role + RoleBinding in `hugmesh-backend` ─
 # The partner admin-bff effector's ConfigMapRunningServiceProvider reads the
 # per-brand installed-services ConfigMap
-# (`snapdragon-installed-services-<domainSlug>`, a single
-#  configMaps().inNamespace("snapdragon-backend").withName(cm).get()) to FILTER a
+# (`hugmesh-installed-services-<domainSlug>`, a single
+#  configMaps().inNamespace("hugmesh-backend").withName(cm).get()) to FILTER a
 # scoped admin's per-service backup menu down to their brand's real footprint. With
 # no `configmaps:get` here that read 403s and the provider FAILS SAFE to the full
 # documented catalog (a degraded menu, never a security hole) — but the correct
 # behaviour needs this minimal grant. ONLY `get` on core `configmaps` (the provider
 # does a named .get(), never list/watch). resourceNames is intentionally OMITTED:
-# the ConfigMap name is DYNAMIC per brand (prefix `snapdragon-installed-services`
+# the ConfigMap name is DYNAMIC per brand (prefix `hugmesh-installed-services`
 # + domain slug), and RBAC resourceNames has no prefix/wildcard match, so pinning
 # would silently break every brand but one. NO other verbs, NO other resources,
 # NO cluster scope. Same manual-sync authority half as (1): inert until Velero +
@@ -84,11 +84,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: backups-effector-menu-read
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: cloud-backups
     app.kubernetes.io/component: effector
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 rules:
   # Named .get() of the per-brand installed-services ConfigMap; the provider never
   # lists or watches. get only — no list, no watch, no write, no other resources.
@@ -100,11 +100,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: backups-effector-menu-read
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: cloud-backups
     app.kubernetes.io/component: effector
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -112,7 +112,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: backups-effector
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
 ---
 # ── (2) sweep SA — runs the status-sweep CronJob (in the `velero` namespace) ────
 apiVersion: v1
@@ -123,7 +123,7 @@ metadata:
   labels:
     app.kubernetes.io/name: cloud-backups
     app.kubernetes.io/component: sweep
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -134,7 +134,7 @@ metadata:
   labels:
     app.kubernetes.io/name: cloud-backups
     app.kubernetes.io/component: sweep
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 rules:
   # The sweep READS Backup/Restore .status.phase and ANNOTATES the CR with the
   # mirrored terminal state (the read half). It cannot create or delete CRs.
@@ -150,7 +150,7 @@ metadata:
   labels:
     app.kubernetes.io/name: cloud-backups
     app.kubernetes.io/component: sweep
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

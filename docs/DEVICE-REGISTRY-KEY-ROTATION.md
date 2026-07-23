@@ -15,12 +15,12 @@ before you start — the ORDER is load-bearing.
 
 The device-license registry is enforced by two fail-closed layers, both driven
 from ONE signed, unscoped per-mesh export (see the
-`snapdragon-device-license-registry` memory and `tests/device-registry/`):
+`hugmesh-device-license-registry` memory and `tests/device-registry/`):
 
-- **Layer B** — per-node sshd. `specs/usr/sbin/snapdragon-authorized-keys-lookup`
+- **Layer B** — per-node sshd. `specs/usr/sbin/hugmesh-authorized-keys-lookup`
   is the SOLE key source (`AuthorizedKeysFile none`). It verifies the export's
   detached Ed25519 signature against the **baked public half** at
-  `/etc/snapdragon/registry/registry-pub.ed25519` before authorising any key.
+  `/etc/hugmesh/registry/registry-pub.ed25519` before authorising any key.
 - **Layer A** — `specs/usr/sbin/gen-headscale-policy.sh` verifies the same
   signature on the control node before rendering the headscale SSH ACL.
 
@@ -37,7 +37,7 @@ reads it).
 
 ### Why rotation can brick the fleet
 
-`verify_sig()` in `specs/usr/lib/snapdragon/registry-verify.sh` is **fail-closed**:
+`verify_sig()` in `specs/usr/lib/hugmesh/registry-verify.sh` is **fail-closed**:
 if the signature does not verify against the baked public key, it returns
 non-zero, the lookup prints nothing, and sshd denies. So:
 
@@ -99,7 +99,7 @@ openssl pkey -in registry-signing-NEW.pem -pubout -outform DER \
    the one-line baked format.
 
 2. **Re-bake the PUBLIC half onto EVERY node's key-USB.** Replace
-   `/etc/snapdragon/registry/registry-pub.ed25519` on each node with
+   `/etc/hugmesh/registry/registry-pub.ed25519` on each node with
    `registry-pub-NEW.ed25519`. This is a PUBLIC file; it carries no secret.
    - This step does **not** break anything yet: the BFF is still signing with
      `K_old`, and a node that has the NEW public key but receives an OLD-key
@@ -122,7 +122,7 @@ openssl pkey -in registry-signing-NEW.pem -pubout -outform DER \
 
    ```sh
    # On each node (or via your config tool). The fingerprint must match the NEW key.
-   base64 -d /etc/snapdragon/registry/registry-pub.ed25519 \
+   base64 -d /etc/hugmesh/registry/registry-pub.ed25519 \
      | openssl pkey -pubin -inform DER -outform DER 2>/dev/null \
      | openssl dgst -sha256
    ```
@@ -175,7 +175,7 @@ the fleet-lockout. The runbook order exists specifically to make the failure mod
 The export generation is a **strict-monotonic** counter, enforced independently of
 the key:
 
-- the SYNC agent (`snapdragon-device-registry-sync` via
+- the SYNC agent (`hugmesh-device-registry-sync` via
   `check_monotonic` in `registry-verify.sh`) accepts a fetched export ONLY if
   `gen > last-good`;
 - the LOOKUP rejects a CACHED export whose `gen < last-good` (rollback of the
@@ -218,11 +218,11 @@ Recovery:
    on the registry signature, so a stranded node is still reachable this way.
 
 2. **Re-bake the correct public half.** Replace
-   `/etc/snapdragon/registry/registry-pub.ed25519` with the CURRENT
+   `/etc/hugmesh/registry/registry-pub.ed25519` with the CURRENT
    `registry-pub-NEW.ed25519` (the key the BFF is now signing with). Confirm with
    the fingerprint check in step 3.
 
-3. **Force a sync.** Run `snapdragon-device-registry-sync` (or wait for the 60s
+3. **Force a sync.** Run `hugmesh-device-registry-sync` (or wait for the 60s
    cron). It should now `accepted export gen=<new>` and converge. The two-phase
    bootstrap gate already flipped on this node, so enforcement resumes immediately.
 

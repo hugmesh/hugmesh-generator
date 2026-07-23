@@ -4,12 +4,12 @@
   // If present, provisioning copies this to /etc/headscale/policy.hujson and
   // (when headscale config has `policy.mode: file`) loads it with
   // `headscale policy set -f /etc/headscale/policy.hujson`. This is the fleet
-  // full-mesh policy: every member of tag:snapdragon reaches every other member
+  // full-mesh policy: every member of tag:hugmesh reaches every other member
   // on all ports, plus the cluster pod/service CIDRs, and nothing else
   // (default-deny; no internet-wide grant).
   //
-  // Membership: nodes self-apply tag:snapdragon at join
-  // (--advertise-tags=tag:snapdragon,tag:<role>). With OIDC join (Casdoor
+  // Membership: nodes self-apply tag:hugmesh at join
+  // (--advertise-tags=tag:hugmesh,tag:<role>). With OIDC join (Casdoor
   // /headscale group) the IdP gates who can enrol; the tagOwners below gate
   // which tags an enrolled node may claim. Both layers must agree.
   //
@@ -19,13 +19,13 @@
   "tagOwners": {
     // The owner MUST be a principal that owns the node's preauth/OIDC identity.
     // For preauth-key joins that is the headscale user the key was minted under
-    // ("snapdragon"). For OIDC joins you may instead use a group, e.g.
+    // ("hugmesh"). For OIDC joins you may instead use a group, e.g.
     // "group:headscale" mapped from the Casdoor /headscale group.
-    "tag:snapdragon": ["snapdragon"],
-    "tag:pki": ["snapdragon"],
-    "tag:be": ["snapdragon"],
-    "tag:fe": ["snapdragon"],
-    "tag:host": ["snapdragon"]
+    "tag:hugmesh": ["hugmesh"],
+    "tag:pki": ["hugmesh"],
+    "tag:be": ["hugmesh"],
+    "tag:fe": ["hugmesh"],
+    "tag:host": ["hugmesh"]
   },
 
   // Auto-approve exactly the cluster pod + service CIDRs advertised by fleet
@@ -33,13 +33,13 @@
   // (podSubnet/serviceSubnet) and provision.json .calico.pod_cidr.
   "autoApprovers": {
     "routes": {
-      "10.244.0.0/16": ["tag:snapdragon"],
-      "10.96.0.0/12": ["tag:snapdragon"]
+      "10.244.0.0/16": ["tag:hugmesh"],
+      "10.96.0.0/12": ["tag:hugmesh"]
     }
   },
 
   // Layer-A (device-license registry): the any-to-any
-  //   {src:[tag:snapdragon], dst:[tag:snapdragon:*]}
+  //   {src:[tag:hugmesh], dst:[tag:hugmesh:*]}
   // rule is DROPPED [FIX-DROPMESHRULE]. It exposed EVERY node's :22 to every
   // other node; that hole need not exist at any time. k8s pod/ClusterIP traffic
   // rides the CIDR data-plane rule below (NOT :22); SSH rides the ssh[] block.
@@ -49,7 +49,7 @@
   "acls": [
     {
       "action": "accept",
-      "src": ["tag:snapdragon"],
+      "src": ["tag:hugmesh"],
       "dst": ["10.244.0.0/16:*", "10.96.0.0/12:*"]
     }
   ],
@@ -62,8 +62,8 @@
   "ssh": [
     {
       "action": "accept",
-      "src": ["tag:snapdragon"],
-      "dst": ["tag:snapdragon"],
+      "src": ["tag:hugmesh"],
+      "dst": ["tag:hugmesh"],
       "users": ["@@TS_SSH_USER@@"]
     }
   ]

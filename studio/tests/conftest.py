@@ -1,4 +1,4 @@
-"""Make the snapdragon_studio package importable for the studio test suite.
+"""Make the hugmesh_studio package importable for the studio test suite.
 
 These tests target the pure-Python core (config / keyzip / validate) and do NOT
 need PySide6, so they run in plain CI without the GUI toolkit installed.
@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-# studio/ is the package root (contains snapdragon_studio/).
+# studio/ is the package root (contains hugmesh_studio/).
 _STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _STUDIO_ROOT not in sys.path:
     sys.path.insert(0, _STUDIO_ROOT)
@@ -24,7 +24,7 @@ def _host_independent_build_defaults(monkeypatch):
     healthy 32 GiB reading (cap auto-derives, warnings stay quiet). Tests that
     exercise the formulas pass explicit env/meminfo (which win) or re-monkeypatch
     the relevant seam themselves."""
-    from snapdragon_studio.core import host_resources
+    from hugmesh_studio.core import host_resources
     monkeypatch.setenv(host_resources.JOBS_ENV, "8")
     monkeypatch.delenv(host_resources.MEMORY_ENV, raising=False)
     healthy = {"MemTotal": 32 * host_resources.GIB,

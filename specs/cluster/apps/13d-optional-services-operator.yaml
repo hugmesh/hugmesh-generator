@@ -1,7 +1,7 @@
 # optional-services-operator — deploys the OptionalService CRD (the platform's FIRST
 # CRD), the least-privilege operator/BFF RBAC, and the inert per-slug seed CRs. This
 # is the desired-state API surface for the LIVE add/remove of an optional cluster
-# service; the reconciling controller lives in admin-bff (systems.snapdragon.adminbff.
+# service; the reconciling controller lives in admin-bff (systems.hugmesh.adminbff.
 # optionalservices) and SHIPS DARK (app.optional-services.reconcile.enabled=false).
 # See docs/OPTIONAL-SERVICES.md §7/§10 + manifests/optional-services-operator/.
 #
@@ -29,7 +29,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/optional-services-operator
   destination:
@@ -44,7 +44,7 @@ spec:
   # The admin-mutable desired-state fields diverge from the git seed at runtime; let
   # them (selfHeal keeps the CRD/RBAC/slug converged, not the toggle).
   ignoreDifferences:
-    - group: platform.snapdragon.systems
+    - group: platform.hugmesh.systems
       kind: OptionalService
       jsonPointers:
         - /spec/enabled

@@ -1,12 +1,12 @@
 # HashiCorp Vault — the cluster's secret store. External Secrets Operator (ESO)
-# reads from this Vault (KV v2, mount "secret/", base path "snapdragon/") via the
-# ClusterSecretStore "snapdragon-vault" and materializes the k8s Secrets the
+# reads from this Vault (KV v2, mount "secret/", base path "hugmesh/") via the
+# ClusterSecretStore "hugmesh-vault" and materializes the k8s Secrets the
 # workloads consume. The mTLS PKI (pki_int, see manifests/vault-pki) and the
 # planned etcd Transit-KMS both depend on this Vault, so it MUST survive restarts.
 #
 # PERSISTENT + AUTO-UNSEALING (no longer `server -dev`):
 #   * Storage   : Raft integrated storage on a PVC carved from the cluster-default
-#                 StorageClass "snapdragon-local" → the Raft data dir lands under
+#                 StorageClass "hugmesh-local" → the Raft data dir lands under
 #                 the LUKS2 /mnt/data on the pki node, so Vault's at-rest store is
 #                 encrypted by INHERITANCE (docs/ENCRYPTION-AT-REST.md layer 1/5).
 #   * Config    : a real (non-dev) HCL server config (config.hcl ConfigMap) — Raft
@@ -33,7 +33,7 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: vault
-  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: secrets }
+  labels: { app.kubernetes.io/part-of: hugmesh.systems, snapdragon.systems/tier: secrets }
 ---
 # Real (non-dev) Vault server config: Raft integrated storage + a TLS listener.
 apiVersion: v1
@@ -41,13 +41,13 @@ kind: ConfigMap
 metadata:
   name: vault-config
   namespace: vault
-  labels: { app: vault, app.kubernetes.io/part-of: snapdragon.systems }
+  labels: { app: vault, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   config.hcl: |
     ui = true
 
     # Raft integrated storage — persisted on the mounted PVC (/vault/data), which
-    # the snapdragon-local StorageClass places under the LUKS2 /mnt/data on the
+    # the hugmesh-local StorageClass places under the LUKS2 /mnt/data on the
     # pki node (encrypted at rest by inheritance). node_id is stable so a restart
     # rejoins its own single-node Raft cluster from the on-disk state.
     storage "raft" {
@@ -101,7 +101,7 @@ kind: ConfigMap
 metadata:
   name: vault-tls-init
   namespace: vault
-  labels: { app: vault, app.kubernetes.io/part-of: snapdragon.systems }
+  labels: { app: vault, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   gen-tls.sh: |
     #!/bin/sh
@@ -144,7 +144,7 @@ kind: ConfigMap
 metadata:
   name: vault-unseal
   namespace: vault
-  labels: { app: vault, app.kubernetes.io/part-of: snapdragon.systems }
+  labels: { app: vault, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   auto-unseal.sh: |
     #!/bin/sh
@@ -183,7 +183,7 @@ kind: StatefulSet
 metadata:
   name: vault
   namespace: vault
-  labels: { app: vault, app.kubernetes.io/part-of: snapdragon.systems }
+  labels: { app: vault, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   serviceName: vault
   replicas: 1   # single-node Raft; multi-replica HA is a documented follow-up
@@ -387,14 +387,14 @@ spec:
         - name: tmp
           emptyDir: {}
   volumeClaimTemplates:
-    # Raft integrated storage. snapdragon-local places it under the LUKS2
+    # Raft integrated storage. hugmesh-local places it under the LUKS2
     # /mnt/data on the pki node → encrypted at rest by inheritance.
     - metadata:
         name: data
         labels: { app: vault }
       spec:
         accessModes: [ReadWriteOnce]
-        storageClassName: snapdragon-local
+        storageClassName: hugmesh-local
         resources: { requests: { storage: 2Gi } }
 ---
 apiVersion: v1

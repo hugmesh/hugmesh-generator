@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Snapdragon docker mesh-node entrypoint (FD-09): join the Snapdragon tailnet using
+# HugMesh docker mesh-node entrypoint (FD-09): join the HugMesh tailnet using
 # LOCAL FILE KEYS, perform a one-line Casdoor login, and run as a background mesh
 # node. No OS flash — this is the THIRD onboarding form (alongside appliance images
 # and client desktops). Honors the register-and-approve node-admission flow: a
@@ -18,7 +18,7 @@ KEYS="${SNAP_KEYS_DIR:-/keys}"
 STATE_DIR="${SNAP_STATE_DIR:-/var/lib/tailscale}"
 ROLE="${SNAP_ROLE:-}"; [ -z "${ROLE}" ] && [ -f "${KEYS}/role" ] && ROLE="$(tr -d ' \n' < "${KEYS}/role")"
 ROLE="${ROLE:-user}"
-HOSTNAME_TS="${SNAP_HOSTNAME:-snapdragon-meshnode-$(hostname | tr -cd 'a-z0-9-' | cut -c1-20)}"
+HOSTNAME_TS="${SNAP_HOSTNAME:-hugmesh-meshnode-$(hostname | tr -cd 'a-z0-9-' | cut -c1-20)}"
 
 # ── Resolve the pre-auth key (local file keys) ──────────────────────
 AUTHKEY="${SNAP_AUTHKEY:-}"

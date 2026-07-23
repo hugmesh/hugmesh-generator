@@ -2,8 +2,8 @@
 test_progress_parse.py). The tracker turns the parser's phase_index stream into nested
 stage state + per-stage log slices for the GitHub-Actions-style ProgressPage tree.
 """
-from snapdragon_studio.core.progress_parse import platform_phases
-from snapdragon_studio.core.stage_tracker import (
+from hugmesh_studio.core.progress_parse import platform_phases
+from hugmesh_studio.core.stage_tracker import (
     DONE, FAILED, PENDING, RUNNING, SKIPPED, STOPPED, StageTracker)
 
 

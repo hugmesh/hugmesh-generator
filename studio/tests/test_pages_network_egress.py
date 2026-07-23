@@ -17,13 +17,13 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
 from types import SimpleNamespace  # noqa: E402
 
-from snapdragon_studio.core.config import ImageConfig  # noqa: E402
-from snapdragon_studio.gui.pages.network import NetworkPage  # noqa: E402
+from hugmesh_studio.core.config import ImageConfig  # noqa: E402
+from hugmesh_studio.gui.pages.network import NetworkPage  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -31,7 +31,7 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 @pytest.fixture(scope="module")
 def qapp():
-    from snapdragon_studio.gui.qt import QtWidgets
+    from hugmesh_studio.gui.qt import QtWidgets
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     yield app
 

@@ -10,14 +10,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: snapdragon-remote-fragment
-  namespace: snapdragon-frontend
-  labels: { app: snapdragon-remote-fragment, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-remote-fragment
+  namespace: hugmesh-frontend
+  labels: { app: hugmesh-remote-fragment, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-remote-fragment
+    name: hugmesh-remote-fragment
   minReplicas: 2
   maxReplicas: 6
   metrics:

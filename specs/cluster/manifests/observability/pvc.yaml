@@ -1,14 +1,14 @@
 # Persistent storage for the Uptrace metadata Postgres. With the previous
 # emptyDir, Uptrace's projects / dashboards / users were wiped on pod restart
 # (the telemetry itself lives in the shared ClickHouse, not here).
-# snapdragon-local (local-path provisioner) backs it on the backend node's disk.
+# hugmesh-local (local-path provisioner) backs it on the backend node's disk.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: uptrace-pg-data
   namespace: observability
-  labels: { app: uptrace-pg, app.kubernetes.io/part-of: snapdragon.systems }
+  labels: { app: uptrace-pg, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 2Gi } }

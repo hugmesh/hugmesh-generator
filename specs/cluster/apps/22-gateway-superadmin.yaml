@@ -1,7 +1,7 @@
-# snapdragon-superadmin-gateway — the TAILNET-ONLY front door for the SUPERADMIN
+# hugmesh-superadmin-gateway — the TAILNET-ONLY front door for the SUPERADMIN
 # infra control plane (the Service Catalog console + service-catalog-ui federated remote).
 #
-# ⚠ TAILNET-ONLY by THREE locks (snapdragon-superadmin-appstore design, V6):
+# ⚠ TAILNET-ONLY by THREE locks (hugmesh-superadmin-appstore design, V6):
 #   1. NETWORK: served ONLY by the internal ingress-nginx on the pki node
 #      (class nginx-internal, 11-ingress-nginx-internal.yaml), reachable on the pki
 #      node's :443 via the `superadmin.<domain> -> pki-node-IP` /etc/hosts alias
@@ -21,20 +21,20 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: snapdragon-gateway-superadmin
+  name: hugmesh-gateway-superadmin
   namespace: devops
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
-    path: specs/cluster/charts/snapdragon-gateway
+    path: specs/cluster/charts/hugmesh-gateway
     helm:
-      releaseName: snapdragon-superadmin-gateway
+      releaseName: hugmesh-superadmin-gateway
       values: |
         instance:
-          name: snapdragon-superadmin-gateway
-        # Cross-namespace mTLS client identity (Vault-PKI/ESO snapdragon-superadmin-gateway-mtls).
+          name: hugmesh-superadmin-gateway
+        # Cross-namespace mTLS client identity (Vault-PKI/ESO hugmesh-superadmin-gateway-mtls).
         keystore:
           enabled: true
         ingress:
@@ -45,7 +45,7 @@ spec:
           # /etc/hosts alias (VPN/LAN only).
           enabled: true
           className: nginx-internal
-          host: superadmin.snapdragon.systems
+          host: superadmin.hugmesh.systems
         nodeSelector:
           snapdragon.systems/pki: "true"
         seLinux:
@@ -64,38 +64,38 @@ spec:
                 name: route-access-superadmin-gateway
                 key: password
           - name: ROUTE_ACCESS_R2DBC_URL
-            value: r2dbc:postgresql://superadmin_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
+            value: r2dbc:postgresql://superadmin_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.hugmesh-pki.svc.cluster.local:5432/gateway
           # Present the downstream client cert to the now-mTLS admin-bff + the
           # remote-fragment nginx serving the service-catalog-ui (same as be-gateway).
-          - name: SNAPDRAGON_GATEWAY_MTLS_ENABLED
+          - name: HUGMESH_GATEWAY_MTLS_ENABLED
             value: "true"
         routes:
           # The SUPERADMIN Service Catalog BFF control plane (admin-bff /bff/superadmin/**).
           # Tailnet-only here; the route-access rows under this gateway gate it
           # ROLE_SUPERADMIN. https:// — admin-bff enforces mTLS (client-auth=need).
           - id: superadmin-bff
-            uri: https://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
+            uri: https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/superadmin/**
           # The service-catalog-ui federated REMOTE (remoteEntry + bundles), served by the
           # remote-fragment nginx fleet. The federation registration marks it
           # kind=remote-shell, visibility=internal, requiresRole=SUPERADMIN so it is
           # discoverable/authorized ONLY for superadmin over the tailnet.
           - id: superadmin-service-catalog-ui
-            uri: http://snapdragon-superadmin-service-catalog-ui.snapdragon-frontend.svc.cluster.local:8080
+            uri: http://hugmesh-superadmin-service-catalog-ui.hugmesh-frontend.svc.cluster.local:8080
             path: /superadmin/service-catalog/**
           # The federation manifest/bundles the superadmin console shell reads to
           # mount the service-catalog remote (the internal-visibility tier is enforced
           # inside federation-api by requiresRole=SUPERADMIN; this coarse row is the
           # tailnet-gateway floor). https:// — federation-api enforces mTLS.
           - id: superadmin-federation
-            uri: https://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080
+            uri: https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080
             path: /api/federation/**
           # Headwind MDM human console (JSP, no Angular guard — locks 1+2 [network +
           # route-access] are the enforcement boundary here, not lock 3; see the
           # Phase-1 spec §0). ROOT-context WAR mounted at /manage/**; StripPrefix=1
           # removes the platform-chosen /hmdm path segment before it reaches Tomcat.
           - id: headwind-console
-            uri: http://headwind.snapdragon-pki.svc.cluster.local:8080
+            uri: http://headwind.hugmesh-pki.svc.cluster.local:8080
             path: /hmdm/manage/**
             filters:
               - StripPrefix=1
@@ -105,7 +105,7 @@ spec:
           # inside (route-access role='PUBLIC', see 20-schema.sql). ROOT-context WAR
           # mounted at /rest/**.
           - id: headwind-checkin
-            uri: http://headwind.snapdragon-pki.svc.cluster.local:8080
+            uri: http://headwind.hugmesh-pki.svc.cluster.local:8080
             path: /hmdm/rest/**
             filters:
               - StripPrefix=1
@@ -114,7 +114,7 @@ spec:
           # /auditor/verify, /auditor/submit. Network-locked only (route-access
           # role='PUBLIC', see 20-schema.sql) — no app-layer auth.
           - id: attestation-auditor
-            uri: http://attestation-server.snapdragon-pki.svc.cluster.local:8080
+            uri: http://attestation-server.hugmesh-pki.svc.cluster.local:8080
             path: /attest/auditor/**
             filters:
               - StripPrefix=1
@@ -124,7 +124,7 @@ spec:
           # check-in gets swallowed by the console prefix route (route-access
           # role='PUBLIC', see 20-schema.sql).
           - id: attestation-status
-            uri: http://attestation-server.snapdragon-pki.svc.cluster.local:8080
+            uri: http://attestation-server.hugmesh-pki.svc.cluster.local:8080
             path: /attest/api/status
             filters:
               - StripPrefix=1
@@ -136,13 +136,13 @@ spec:
           # (route-access, see 20-schema.sql) is the only guard against open
           # self-signup.
           - id: attestation-console
-            uri: http://attestation-server.snapdragon-pki.svc.cluster.local:8080
+            uri: http://attestation-server.hugmesh-pki.svc.cluster.local:8080
             path: /attest/api/**
             filters:
               - StripPrefix=1
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-pki
+    namespace: hugmesh-pki
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

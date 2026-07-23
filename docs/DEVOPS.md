@@ -2,7 +2,7 @@
 
 All GitOps/CI/forge tooling runs in the **`devops`** namespace, pinned to the
 x86_64 host (the Pis are arm64) and storing data on the host's local disks +
-attached USB (the `snapdragon-local` StorageClass). Reachable only over the
+attached USB (the `hugmesh-local` StorageClass). Reachable only over the
 headscale/tailscale VPN — never exposed externally; **no keys are served on any
 web interface.**
 
@@ -12,7 +12,7 @@ web interface.**
 | **GitLab** (`apps/03-gitlab.yaml`) | Internal forge; pull-mirrors **every** Snapdragon-Systems repo; runs CI. Casdoor OIDC, admin-only, no public sign-up. | `gitlab.<domain>` over VPN |
 | **GitLab Runner** (`apps/04-gitlab-runner.yaml`) | Privileged CI runner on the x86 host (root + crossdev + qemu) — builds ISOs + images. | in-cluster |
 | **Binhost** (`apps/02-binhost.yaml`) | Gentoo binary-package host; serves `/binpkgs/{arm64,amd64}` over the VPN (hostPort 8086). | every Gentoo node |
-| **local-path** | StorageClass `snapdragon-local` from device disk (`/mnt/data`) + USB (`/mnt/usb`). | cluster default |
+| **local-path** | StorageClass `hugmesh-local` from device disk (`/mnt/data`) + USB (`/mnt/usb`). | cluster default |
 
 ## CI: build + deliver all ISOs and images
 
@@ -26,7 +26,7 @@ web interface.**
 **ISOs contain no keys** — KEYS material is supplied from the USB stick at first
 boot, never baked into or published with an ISO.
 
-The **admin UI** (`snapdragon-admin-ui`) shows download links to those latest
+The **admin UI** (`hugmesh-admin-ui`) shows download links to those latest
 ISO artifacts (admin-only; the BFF exposes `/bff/admin/isos`).
 
 ## Mirror the org into GitLab
@@ -44,8 +44,8 @@ source-of-truth is **scaffolded but not cut over**:
 - ✅ **Present (Phase 5/6 scaffold):** the Forgejo deploy (`apps/09-forgejo.yaml`),
   the catalog ApplicationSet (`apps/13-service-catalog.yaml`) — already configured
   with an `scmProvider` generator pointing at the **in-cluster Forgejo**
-  (`http://forgejo.snapdragon-pki.svc.cluster.local:3000`, `repositoryMatch
-  ^snapdragon-`) — and the deploy contract
+  (`http://forgejo.hugmesh-pki.svc.cluster.local:3000`, `repositoryMatch
+  ^hugmesh-`) — and the deploy contract
   (`specs/cluster/catalog/snapdragon-deploy.example.yaml`).
 - ⏳ **Remaining (live-gated):** the actual GitOps **source flip** needs a booted
   Forgejo + an admin + OIDC + the GitHub→Forgejo org mirror + a read token in the
@@ -66,9 +66,9 @@ emits arm64 binpkgs — both rsynced to the binhost PVC.
 
 Every generated host/node **and** client image **bakes** the auto-update plumbing,
 but it is **off by default** — a superadmin must **opt in** to activate it. A baked
-`snapdragon-update` poller (`/usr/local/sbin/snapdragon-update`) runs from an
-`/etc/cron.d/snapdragon-update` drop-in (cronie, OpenRC — not systemd) on the
-configured cadence, plus once at boot via the `snapdragon-update` OpenRC oneshot, but
+`hugmesh-update` poller (`/usr/local/sbin/hugmesh-update`) runs from an
+`/etc/cron.d/hugmesh-update` drop-in (cronie, OpenRC — not systemd) on the
+configured cadence, plus once at boot via the `hugmesh-update` OpenRC oneshot, but
 each poll **skips** unless the effective policy is `enabled:true`. When enabled, a
 poll pulls **only changed packages**
 (`emerge --getbinpkgonly --usepkgonly --update --deep --newuse @world`) from the
@@ -81,7 +81,7 @@ target (so a later opt-in actually fires), and the **poller is the runtime gate*
 **absence** of any policy means auto-update is **OFF** (fail-safe to off, never to a
 pull).
 
-**Superadmin opt-in** — the live `devops/snapdragon-update-policy` ConfigMap (and the
+**Superadmin opt-in** — the live `devops/hugmesh-update-policy` ConfigMap (and the
 optional KEYS-manifest `.update` block) **enable** and tune it:
 
 | key       | meaning                                              | default        |
@@ -93,6 +93,6 @@ optional KEYS-manifest `.update` block) **enable** and tune it:
 | `staging` | per board/role/`client` cadence (rollout waves)      | `{}`           |
 
 Control-plane nodes read the ConfigMap live each poll; worker/client nodes (no
-kubeconfig) fall back to the per-node `/etc/snapdragon/update.json` — still
+kubeconfig) fall back to the per-node `/etc/hugmesh/update.json` — still
 default-off. Deleting the ConfigMap reverts every node to the baked default (OFF); a
 superadmin sets `enabled:true` to opt a fleet in.

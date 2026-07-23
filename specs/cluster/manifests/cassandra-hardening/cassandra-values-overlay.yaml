@@ -39,7 +39,7 @@
 # satisfies BOTH the chart (cassandra-password) and the bootstrap Job (password).
 #
 # THEN (Stage 1 flip, in order — docs/CLUSTER-HARDENING-PLAN.md §H):
-#   1. Populate Vault: secret/snapdragon/cassandra-admin + .../cassandra-app-creds.
+#   1. Populate Vault: secret/hugmesh/cassandra-admin + .../cassandra-app-creds.
 #   2. Apply this overlay's ExternalSecrets so cassandra-admin + cassandra-app-creds
 #      materialize.
 #   3. Merge the values above into apps/00-cassandra.yaml; let the StatefulSet roll

@@ -9,7 +9,7 @@ Identity model (docs/MESHTASTIC-BRIDGE.md):
   anonymous node   -> @mesh-node-<hex8>         "<long name> · mesh !<hex8>"
 Registration rows come from user-bff (poll task, fail-soft last-good); LoRa
 node ids are radio-asserted, so registered attribution is always a DISTINCT
-virtual user and every bridged event carries com.snapdragon.mesh metadata.
+virtual user and every bridged event carries com.hugmesh.mesh metadata.
 
 Trust boundaries enforced here:
   - a room's mesh flag only counts when its SENDER held the power level the
@@ -33,8 +33,8 @@ from matrix_cs import ClientError, MatrixError
 
 log = logging.getLogger("meshbridge.core")
 
-MESH_STATE_TYPE = "systems.snapdragon.mesh.bridge"
-MESH_META_KEY = "com.snapdragon.mesh"
+MESH_STATE_TYPE = "systems.hugmesh.mesh.bridge"
+MESH_META_KEY = "com.hugmesh.mesh"
 
 _DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _LOCALPART_SAFE_RE = re.compile(r"[^a-z0-9._=/-]")

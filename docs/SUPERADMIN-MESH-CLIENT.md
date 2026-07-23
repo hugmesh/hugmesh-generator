@@ -13,10 +13,10 @@ State key: **✅ shipped** · **🚧 in-flight** · **🔭 planned / deferred**.
 from the optional Vault-sourced Secret `casdoor-superadmin`
 (`/secrets/superadmin/{username,password}`). When that Secret is present it:
 
-1. **creates/updates the Casdoor user** in org `snapdragon`,
+1. **creates/updates the Casdoor user** in org `hugmesh`,
 2. **assigns `ROLE_SUPERADMIN`** (control-plane authority — the
    superadmin infra console + arch/core image-build surface at the be-gateway), and
-3. **grants `snapdragon/headscale` Casdoor group membership** on the user
+3. **grants `hugmesh/headscale` Casdoor group membership** on the user
    record (`user.groups`) — the field the OIDC `groups` claim actually reads —
    and creates the `headscale` group if it does not exist yet. It ALSO
    attempts to record the member on the group object itself
@@ -29,17 +29,17 @@ from the optional Vault-sourced Secret `casdoor-superadmin`
    own `groups` field (`/api/get-user`) instead.
 
 Step 3 is what makes OIDC mesh-join possible. headscale's node-join is gated on
-`allowed_groups: [snapdragon/headscale]`
+`allowed_groups: [hugmesh/headscale]`
 ([`keys-template/headscale/config.yaml`](../keys-template/headscale/config.yaml)),
 so **`ROLE_SUPERADMIN` alone is not enough** — the user must be in that group
 for the OIDC `groups` claim to admit the node. The claim value is the group's
-internal `<owner>/<name>` id string (`snapdragon/headscale`), NOT a bare
+internal `<owner>/<name>` id string (`hugmesh/headscale`), NOT a bare
 `/headscale` path — LIVE-VERIFIED against a real minted token
 (`tests/casdoor/test-jwt-custom-token.sh`); an earlier draft of this doc and of
 `reconcile_superadmin()`'s own comments assumed the bare-path form, which was
 never actually minted. If no `casdoor-superadmin` Secret was generated,
 `reconcile_superadmin()` skips gracefully and the operator provisions the
-superadmin (user + `ROLE_SUPERADMIN` + `snapdragon/headscale` group) by hand in
+superadmin (user + `ROLE_SUPERADMIN` + `hugmesh/headscale` group) by hand in
 Casdoor.
 
 This also depends on the **Casdoor OAuth2 Application** headscale authenticates
@@ -65,14 +65,14 @@ tailscale up \
 
 Resolve `<headscale-url>` the same way the fleet does — precedence:
 `provision.json .headscale.server_url` → the DHCP/registry-advertised endpoint →
-the baked brand var `HEADSCALE_URL` (`/etc/snapdragon/headscale-url`). See
+the baked brand var `HEADSCALE_URL` (`/etc/hugmesh/headscale-url`). See
 [`keys-template/headscale/config.yaml`](../keys-template/headscale/config.yaml)
 and `specs/etc/keys-provision/provision.sh` for endpoint resolution.
 
 `tailscale up` prints an authentication URL. Open it and complete the **Casdoor
 OIDC login** with the superadmin's generated credential (the salted+hashed
 bootstrap credential produced by the key-USB key-generation flow — never
-committed). Because the user is in `snapdragon/headscale`, headscale admits the
+committed). Because the user is in `hugmesh/headscale`, headscale admits the
 node and the device joins the tailnet.
 
 At this point the node has **data-plane membership** — it is on the mesh and
@@ -84,11 +84,11 @@ always-emitted superadmin mesh rule). It does **not yet** have SSH reach.
 SSH destinations in the generated headscale policy key on **server-forced**
 tags, not self-advertised ones. `tag:superadmin` is the tag that grants the
 superadmin operator SSH reach, and it is force-assigned **only** by
-[`snapdragon-headscale-forcetags`](../specs/usr/sbin/snapdragon-headscale-forcetags)
+[`hugmesh-headscale-forcetags`](../specs/usr/sbin/hugmesh-headscale-forcetags)
 reading a manual allowlist on the **control (pki) node**:
 
 ```
-/etc/snapdragon/registry/superadmin-machines.txt   # one machine key per line
+/etc/hugmesh/registry/superadmin-machines.txt   # one machine key per line
 ```
 
 To grant the freshly-joined device SSH reach, the operator must, on the control
@@ -106,13 +106,13 @@ node:
    wrong/no node.)
 
 2. **Add that machine key** as its own line in
-   `/etc/snapdragon/registry/superadmin-machines.txt`.
+   `/etc/hugmesh/registry/superadmin-machines.txt`.
 
 3. **Run the force-tag pass** (or let the scheduled
    `gen-headscale-policy.sh` invoke it after the next verified export):
 
    ```sh
-   snapdragon-headscale-forcetags
+   hugmesh-headscale-forcetags
    ```
 
    It force-assigns `tag:superadmin` on every machine key in the allowlist. Once
@@ -138,8 +138,8 @@ trustworthy, non-self-asserted source of superadmin-operator identity exists.
 | Capability | How | State |
 | --- | --- | --- |
 | Casdoor user + `ROLE_SUPERADMIN` | `casdoor-init` `reconcile_superadmin()` | ✅ automated |
-| `snapdragon/headscale` group membership (OIDC mesh-join gate) | `casdoor-init` `reconcile_superadmin()` | ✅ automated |
+| `hugmesh/headscale` group membership (OIDC mesh-join gate) | `casdoor-init` `reconcile_superadmin()` | ✅ automated |
 | headscale's Casdoor OAuth2 Application (`app-headscale`) | `casdoor-init` reconcile.py `APPS` dict | ✅ automated |
 | Mesh join over OIDC | `tailscale up --login-server=… --ssh` + Casdoor login | ✅ automated |
 | Data-plane membership (`tag:mesh_*`) | forced on every approved node by the control node | ✅ automated |
-| SSH reach (`tag:superadmin`) | add machine key to `superadmin-machines.txt` + `snapdragon-headscale-forcetags` | 🔭 deliberately manual (FIX-SERVERTAG) |
+| SSH reach (`tag:superadmin`) | add machine key to `superadmin-machines.txt` + `hugmesh-headscale-forcetags` | 🔭 deliberately manual (FIX-SERVERTAG) |

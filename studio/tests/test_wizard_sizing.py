@@ -20,32 +20,32 @@ import pytest
 # must be set BEFORE the first QApplication is created
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core.platform_info import HostInfo          # noqa: E402
-from snapdragon_studio.gui import wizard as wizard_mod             # noqa: E402
-from snapdragon_studio.gui.qt import QtCore, QtGui, QtWidgets      # noqa: E402
-from snapdragon_studio.gui.wizard import StudioWizard, medium_size  # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo          # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod             # noqa: E402
+from hugmesh_studio.gui.qt import QtCore, QtGui, QtWidgets      # noqa: E402
+from hugmesh_studio.gui.wizard import StudioWizard, medium_size  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 # a canned host so wizard construction never probes the machine (docker info &c.)
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
-                has_kvm=False, is_root=False, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture
@@ -144,7 +144,7 @@ def test_keyzip_remember_roles_label_stays_short(wiz):
     The old label measured 1387px of un-wrappable minimum width; the whole page's
     minimum is now well under the medium.
     """
-    from snapdragon_studio.gui.pages.keyzip import KeyZipPage
+    from hugmesh_studio.gui.pages.keyzip import KeyZipPage
     page = [wiz.page(p) for p in wiz.pageIds()
             if isinstance(wiz.page(p), KeyZipPage)][0]
     assert len(page.remember_roles.text()) < 80, page.remember_roles.text()
@@ -246,7 +246,7 @@ def test_wizard_stays_user_resizable(wiz):
 def test_progress_page_no_longer_ratchets_the_window(wiz):
     """Root cause B, pinned at source: no page may resize the wizard."""
     import inspect
-    from snapdragon_studio.gui.pages import progress
+    from hugmesh_studio.gui.pages import progress
     src = inspect.getsource(progress.ProgressPage.initializePage)
     assert "resize(" not in src, "the progress page ratchet is back"
 

@@ -17,9 +17,9 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: cassandra-bootstrap-roles
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: db-hardening
     snapdragon.systems/ships: dark
 spec:
@@ -29,7 +29,7 @@ spec:
     metadata:
       labels:
         app: cassandra-bootstrap-roles
-        app.kubernetes.io/part-of: snapdragon.systems
+        app.kubernetes.io/part-of: hugmesh.systems
     spec:
       restartPolicy: Never
       securityContext:
@@ -48,7 +48,7 @@ spec:
             runAsNonRoot: true
             capabilities: { drop: ["ALL"] }
           env:
-            - { name: CASSANDRA_HOST, value: "cassandra.snapdragon-pki.svc.cluster.local" }
+            - { name: CASSANDRA_HOST, value: "cassandra.hugmesh-pki.svc.cluster.local" }
             - { name: CASSANDRA_PORT, value: "9042" }
             # TLS flip toggle — when the client_encryption leg is also enabled the
             # operator sets this true and mounts the cluster-CA truststore below.

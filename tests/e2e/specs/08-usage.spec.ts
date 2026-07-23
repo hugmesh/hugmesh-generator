@@ -11,7 +11,7 @@ import { onboard, shot } from './helpers';
 // host-level top-nav shortcut. This spec previously assumed a `nav-usage`
 // testid that no longer exists anywhere in the current UI.
 test('admin views live infra usage analytics (ClickHouse-backed)', async ({ page }) => {
-  await onboard(page, 'admin@snapdragon.systems'); // admin role; also generates events
+  await onboard(page, 'admin@hugmesh.systems'); // admin role; also generates events
 
   await page.getByTestId('profile-trigger').click();
   await page.getByTestId('menu-admin').click();

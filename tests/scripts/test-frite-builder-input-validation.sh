@@ -22,7 +22,7 @@
 #   * #16 (MED): DEFAULT_USER flows through the same render sink into the first-boot
 #     useradd/chpasswd (and media.conf shape) — covered by the username allowlist.
 #   * #17 (MED): rebrand_sysroot() does `sed -i s|..|${BRAND_TITLE/ORG/CLUSTER_DOMAIN/
-#     BRAND}|g` over the baked /etc/snapdragon tree with NO escaping.
+#     BRAND}|g` over the baked /etc/hugmesh tree with NO escaping.
 #
 # Fix asserted here (NO cross-build; runs anywhere with bash):
 #   (1) The up-front charset allowlists ACCEPT every legitimate default and REJECT
@@ -64,10 +64,10 @@ ok "sliced the REAL allowlist-validation block from the builder"
 err() { echo "ERROR: $1" >&2; }
 # Defaults for every var the slice touches; the case under test overrides one.
 _defaults() {
-    BRAND="snapdragon"; ORG="Snapdragon-Systems"
-    CLUSTER_DOMAIN="snapdragon.systems"
-    HOSTNAME="snapdragon-frite"; DEFAULT_USER="frite"
-    BRAND_TITLE="Snapdragon Systems"; RPI_CPU="cortex-a53"
+    BRAND="hugmesh"; ORG="Snapdragon-Systems"
+    CLUSTER_DOMAIN="hugmesh.systems"
+    HOSTNAME="hugmesh-frite"; DEFAULT_USER="frite"
+    BRAND_TITLE="HugMesh Systems"; RPI_CPU="cortex-a53"
     CROSS_TARGET="aarch64-unknown-linux-gnu"
 }
 # 0 if the validation block ACCEPTS the current var-set, 1 if it REJECTs (the

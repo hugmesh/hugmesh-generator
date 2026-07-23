@@ -40,7 +40,7 @@ DOCKERFILE="${GEN}/Dockerfile.build"
 if [ -f "${LIB}" ]; then
     ok "scripts/_host-guard-lib.sh exists"
     # /.dockerenv is THE load-bearing signal: it is the only container proof the
-    # operator's already-built (stale) snapdragon-builder image carries, and the
+    # operator's already-built (stale) hugmesh-builder image carries, and the
     # Docker daemon creates it at run time so it cannot go stale. Losing it
     # breaks every fleet build until the image is rebuilt.
     grep -qE '^HOSTGUARD_DOCKER_MARKER="/\.dockerenv"$' "${LIB}" \
@@ -58,7 +58,7 @@ if [ -f "${LIB}" ]; then
         bad "lib: hostguard_in_container lost its fail-safe 'return 1' fallthrough"
     fi
     # MUTATION-PROVEN DEAD SIGNAL: /proc/1/cgroup reads '0::/' (cgroup v2) inside
-    # snapdragon-builder:latest — no "docker" substring. Relying on it would
+    # hugmesh-builder:latest — no "docker" substring. Relying on it would
     # declare the FLEET CONTAINER a host and brick every build. It must never
     # come back as a decision input.
     if grep -vE '^[[:space:]]*#' "${LIB}" | grep -q '/proc/1/cgroup'; then
@@ -70,10 +70,10 @@ if [ -f "${LIB}" ]; then
     # hostguard_in_container itself honoured an env var, an env-forgeable path
     # into a host emerge would reopen the exact bug this library closes.
     if awk '/^hostguard_in_container\(\)/{g=1} g{print} g&&/^}$/{exit}' "${LIB}" \
-         | grep -vE '^[[:space:]]*#' | grep -q 'SNAPDRAGON_ASSUME_CONTAINER'; then
-        bad "lib: hostguard_in_container consults SNAPDRAGON_ASSUME_CONTAINER (must be mutation_allowed only)"
+         | grep -vE '^[[:space:]]*#' | grep -q 'HUGMESH_ASSUME_CONTAINER'; then
+        bad "lib: hostguard_in_container consults HUGMESH_ASSUME_CONTAINER (must be mutation_allowed only)"
     else
-        ok "lib: SNAPDRAGON_ASSUME_CONTAINER never reaches hostguard_in_container"
+        ok "lib: HUGMESH_ASSUME_CONTAINER never reaches hostguard_in_container"
     fi
     # NO ENV VAR MAY AUTHORIZE MUTATION. A `container=docker|podman|lxc|...` arm
     # shipped here in review and was mutation-proven to write the `*/*
@@ -338,14 +338,14 @@ if [ -f "${DOCKERFILE}" ] && [ -f "${LIB}" ]; then
     else
         bad "lib: HOSTGUARD_MARKER_FILE constant not found"
     fi
-    grep -qE '^LABEL org\.snapdragon\.builder-container="1"$' "${DOCKERFILE}" \
+    grep -qE '^LABEL org\.hugmesh\.builder-container="1"$' "${DOCKERFILE}" \
         && ok "Dockerfile.build: carries the auditable builder-container LABEL" \
         || bad "Dockerfile.build: lost the builder-container LABEL"
     # The marker must be baked in the FINAL stage, after the last crossdev-heavy
     # stage boundary, or it invalidates the hours-long cached layers.
     last_from="$(grep -nE '^FROM ' "${DOCKERFILE}" | tail -1 | cut -d: -f1 || true)"
     # The marker write is a backslash-continued RUN, so anchor on the redirect
-    # line itself (the `> /etc/snapdragon-builder-container` target).
+    # line itself (the `> /etc/hugmesh-builder-container` target).
     marker_ln="$(grep -nE "^[[:space:]]*> ${LIB_MARKER}\$" "${DOCKERFILE}" | head -1 | cut -d: -f1 || true)"
     if [ -n "${last_from}" ] && [ -n "${marker_ln}" ] && [ "${marker_ln}" -gt "${last_from}" ]; then
         ok "Dockerfile.build: marker is baked in the FINAL stage (line ${marker_ln} > FROM ${last_from})"
@@ -383,9 +383,9 @@ if [ -f "${LIB}" ]; then
       rm -f "${HOSTGUARD_DOCKER_MARKER}"
       if hostguard_in_container; then exit 14; fi
       # Override: NOT a container, but mutation explicitly allowed + warned.
-      if ! SNAPDRAGON_ASSUME_CONTAINER=1 hostguard_mutation_allowed 2>/dev/null; then exit 15; fi
+      if ! HUGMESH_ASSUME_CONTAINER=1 hostguard_mutation_allowed 2>/dev/null; then exit 15; fi
       # ...and the override must never make in_container lie.
-      if SNAPDRAGON_ASSUME_CONTAINER=1 hostguard_in_container; then exit 16; fi
+      if HUGMESH_ASSUME_CONTAINER=1 hostguard_in_container; then exit 16; fi
       # THE FORGEABLE-ENV CASE. With every file marker absent (= a real host), an
       # exported `container=` must NOT buy a container verdict and must NOT
       # authorize mutation. This is the arm cut in review after it was proven to

@@ -24,7 +24,7 @@
 # rebuild with the default CROSSDEV=1 to restore them (the shared x86 layers
 # stay cached, so only the crossdev stage is paid).
 #
-# Build:  make docker-image      (or: docker build -f Dockerfile.build -t snapdragon-builder .)
+# Build:  make docker-image      (or: docker build -f Dockerfile.build -t hugmesh-builder .)
 #         make docker-image CROSSDEV=0   — x86-only variant (no aarch64 toolchain)
 # Run:    make build-all         (Docker is the default path — see the Makefile)
 
@@ -72,9 +72,9 @@ FROM base AS toolchain
 # The portage profile/USE flags the host SELinux policy + grub EFI tools need.
 RUN mkdir -p /etc/portage/package.use && \
     printf '%s\n' 'sys-boot/grub:2 grub_platforms_efi-64' \
-      > /etc/portage/package.use/snapdragon-builder && \
+      > /etc/portage/package.use/hugmesh-builder && \
     printf '%s\n' 'sys-apps/util-linux caps' \
-      >> /etc/portage/package.use/snapdragon-builder
+      >> /etc/portage/package.use/hugmesh-builder
 
 # The FULL build/image/test toolchain the scripts call so the HOST needs none:
 #   sys-devel/crossdev          — builds the aarch64 cross-toolchain (below)
@@ -137,10 +137,10 @@ RUN crossdev --stable -t aarch64-unknown-linux-gnu
 # ── Stage 3b: the x86-only variant (CROSSDEV=0) ───────────────────────────────
 # No aarch64 cross-toolchain: ARM targets fail their aarch64-gcc prerequisite
 # check in this image. The marker file lets tooling (and humans in a shell)
-# tell the variants apart, since both are tagged snapdragon-builder.
+# tell the variants apart, since both are tagged hugmesh-builder.
 FROM toolchain AS cross-0
 RUN echo 'x86-only (built with CROSSDEV=0): no aarch64 cross-toolchain' \
-      > /etc/snapdragon-builder-variant
+      > /etc/hugmesh-builder-variant
 
 # ── Runtime defaults ──────────────────────────────────────────────────────────
 FROM cross-${CROSSDEV} AS final
@@ -204,7 +204,7 @@ RUN mkdir -p /etc/portage/package.use && \
       'sys-apps/attr static-libs' \
       'virtual/zlib static-libs' \
       'sys-libs/zlib static-libs' \
-      > /etc/portage/package.use/snapdragon-qemu-user
+      > /etc/portage/package.use/hugmesh-qemu-user
 # HOST-side (container /) build-backend keyword acceptance: the cross-emerge
 # resolves BDEPEND against THIS amd64 root, so the sysroot's per-board
 # specs-*/portage/package.accept_keywords files cannot cover the "to /" batch.
@@ -229,7 +229,7 @@ RUN mkdir -p /etc/portage/package.accept_keywords && \
       '# policycoreutils-3.11 RDEPENDs >=libsemanage-3.11 (pretend-resolve proven).' \
       'sys-libs/libsemanage ~amd64' \
       'sys-apps/policycoreutils ~amd64' \
-      > /etc/portage/package.accept_keywords/snapdragon-host-build-backends
+      > /etc/portage/package.accept_keywords/hugmesh-host-build-backends
 # Same host-half logic for USE: the tree's default PYTHON_TARGETS has moved past
 # this root's dev-lang/python:3.12, so the accepted setuptools-scm-10.2 chain
 # (vcs-versioning → setuptools-83 → jaraco-*) aborts the "to /" batch with
@@ -255,7 +255,7 @@ RUN mkdir -p /etc/portage/package.use && \
       '# policycoreutils -> libselinux[python], selinux-python -> audit[python].' \
       'sys-libs/libselinux python' \
       'sys-process/audit python' \
-      > /etc/portage/package.use/snapdragon-host-build-backends
+      > /etc/portage/package.use/hugmesh-host-build-backends
 RUN emerge --verbose --noreplace \
         sys-boot/shim \
         app-crypt/sbsigntools \
@@ -276,13 +276,13 @@ RUN emerge --verbose --noreplace \
 # FINAL stage, so the hours-long crossdev layers are untouched (see the rule at
 # the top of this stage).
 RUN printf '%s\n' \
-      'snapdragon builder container — build-*-stage4.sh may mutate THIS root'"'"'s /etc/portage.' \
-      > /etc/snapdragon-builder-container
-LABEL org.snapdragon.builder-container="1"
+      'hugmesh builder container — build-*-stage4.sh may mutate THIS root'"'"'s /etc/portage.' \
+      > /etc/hugmesh-builder-container
+LABEL org.hugmesh.builder-container="1"
 # The repo is bind-mounted here at runtime; output at /out. No ENTRYPOINT — we
 # do NOT want to hide `make`, so the container is a thin `make` wrapper. The
 # default CMD runs the whole fleet on the NATIVE (in-container, no-sudo) path
 # and writes to the mounted /out. Override by appending a make target to
-# `docker run ... snapdragon-builder <target>`.
+# `docker run ... hugmesh-builder <target>`.
 WORKDIR /src
 CMD ["make", "build-all", "NATIVE=1", "WORK_DIR=/out"]

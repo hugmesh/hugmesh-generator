@@ -1,0 +1,96 @@
+#!/bin/bash
+# hugmesh-backup — back up Kubernetes etcd and PostgreSQL databases to
+# attached storage and/or a mounted network share.
+#
+# Config: /etc/hugmesh/backup.json (written by keys-provision from the USB
+# KEYS manifest's "backup" block; can also be edited by hand — "by file").
+#
+# Destinations ("targets"):
+#   - "local": a path on attached M.2/USB storage (e.g. /mnt/data/backups)
+#   - "nfs"  : an NFS share mounted at backup.nfs.mountpoint
+#   - "cifs" : an SMB/CIFS share mounted at backup.cifs.mountpoint
+# Each selected target receives a copy of every artifact.
+set -uo pipefail
+
+CONF="${HUGMESH_BACKUP_CONF:-/etc/hugmesh/backup.json}"
+STAMP="$(date -u +%Y%m%d-%H%M%S)"
+KUBECONFIG="${KUBECONFIG:-/etc/kubernetes/admin.conf}"
+export KUBECONFIG
+
+log(){ echo "[hugmesh-backup $(date -u '+%FT%TZ')] $*"; }
+have(){ command -v "$1" >/dev/null 2>&1; }
+j(){ jq -r "$1" "${CONF}" 2>/dev/null; }
+
+[ -f "${CONF}" ] || { log "no config at ${CONF}"; exit 0; }
+have jq || { log "jq missing"; exit 1; }
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "${WORK}"' EXIT
+
+# ── Collect destination directories ────────────────────────────────
+declare -a DESTS=()
+mapfile -t TARGETS < <(j '.targets // ["local"] | .[]')
+for t in "${TARGETS[@]}"; do
+    case "${t}" in
+        local) d="$(j '.local.path // "/mnt/data/backups"')" ;;
+        nfs)   d="$(j '.nfs.mountpoint // "/mnt/backup-nfs"')/hugmesh" ;;
+        cifs)  d="$(j '.cifs.mountpoint // "/mnt/backup-cifs"')/hugmesh" ;;
+        *)     log "unknown target ${t}"; continue ;;
+    esac
+    if mkdir -p "${d}" 2>/dev/null; then DESTS+=("${d}"); else log "target ${t} (${d}) unwritable — skipping"; fi
+done
+[ "${#DESTS[@]}" -gt 0 ] || { log "no writable destinations"; exit 1; }
+log "destinations: ${DESTS[*]}"
+
+distribute() {  # distribute <file>
+    local f="$1" base; base="$(basename "$f")"
+    for d in "${DESTS[@]}"; do
+        cp -f "${f}" "${d}/${base}" && log "stored ${d}/${base}" || log "FAILED to store ${d}/${base}"
+    done
+}
+
+# ── etcd snapshot (control-plane only) ─────────────────────────────
+if [ "$(j '.etcd // false')" = "true" ]; then
+    if have etcdctl && [ -f /etc/kubernetes/pki/etcd/ca.crt ]; then
+        snap="${WORK}/etcd-${STAMP}.db"
+        ETCDCTL_API=3 etcdctl \
+            --endpoints=https://127.0.0.1:2379 \
+            --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+            --cert=/etc/kubernetes/pki/etcd/server.crt \
+            --key=/etc/kubernetes/pki/etcd/server.key \
+            snapshot save "${snap}" && distribute "${snap}" || log "etcd snapshot failed"
+    else
+        log "etcd backup requested but etcdctl/PKI not present (not a control-plane?)"
+    fi
+fi
+
+# ── PostgreSQL dumps (via kubectl exec into the DB pods) ───────────
+PG_N="$(j '.postgres // [] | length')"
+if [ "${PG_N}" -gt 0 ] && have kubectl; then
+    for ((i = 0; i < PG_N; i++)); do
+        ns="$(j ".postgres[$i].namespace // \"hugmesh-backend\"")"
+        sel="$(j ".postgres[$i].selector // \"app=postgres\"")"
+        db="$(j ".postgres[$i].database // \"\"")"
+        usr="$(j ".postgres[$i].user // \"postgres\"")"
+        pod="$(kubectl -n "${ns}" get pod -l "${sel}" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
+        [ -n "${pod}" ] || { log "no postgres pod for ${sel} in ${ns}"; continue; }
+        out="${WORK}/pg-${ns}-${db:-all}-${STAMP}.sql.gz"
+        if [ -n "${db}" ]; then
+            kubectl -n "${ns}" exec "${pod}" -- pg_dump -U "${usr}" "${db}" 2>/dev/null | gzip > "${out}"
+        else
+            kubectl -n "${ns}" exec "${pod}" -- pg_dumpall -U "${usr}" 2>/dev/null | gzip > "${out}"
+        fi
+        [ -s "${out}" ] && distribute "${out}" || log "pg dump for ${ns}/${pod} empty"
+    done
+fi
+
+# ── Retention (optional days) ──────────────────────────────────────
+RET="$(j '.retention_days // 0')"
+if [ "${RET}" -gt 0 ] 2>/dev/null; then
+    for d in "${DESTS[@]}"; do
+        find "${d}" -maxdepth 1 -type f -mtime "+${RET}" -delete 2>/dev/null || true
+    done
+    log "pruned backups older than ${RET} days"
+fi
+
+log "backup run complete"

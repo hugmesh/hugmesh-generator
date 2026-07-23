@@ -23,7 +23,7 @@
 #       archetype 'generator' and its residual sweep stays green.
 #   [C] --ref plumbing — pull-repo-base.sh --ref (fresh clone at a tag, cached
 #       re-pin, fail-closed bogus ref, --foreign refusal), render-repo-tree.sh
-#       --ref (tag content rendered, .snapdragon-base-ref marker written).
+#       --ref (tag content rendered, .hugmesh-base-ref marker written).
 #   [D] publish --pr — branch templating/update-<ref> pushed (main NEVER),
 #       Forgejo POST /pulls recorded, 409 -> open-list -> PATCH leg, provenance
 #       base.ref stamp, PAT never on any argv, marker/--ref mismatch refusal,
@@ -60,7 +60,7 @@ echo "== I5 templating suite: renames[] + generator archetype + --ref + --pr (he
 export BRAND="acme" BRAND_TITLE="Acme" ORG="Acme-Inc" CLUSTER_DOMAIN="acme.test"
 export HARBOR_PROJECT="" HEADSCALE_URL="" MESH_TAG="" NS_PREFIX=""
 export NPM_SCOPE="acme-inc" HOST_NAME="acme-host" ORG_SLUG="acme-inc"
-export GENERATOR_ORG_GROUP="acme-inc/snapdragon-generator" REPO_NAME="generator"
+export GENERATOR_ORG_GROUP="acme-inc/hugmesh-generator" REPO_NAME="generator"
 XTOK="NPM_SCOPE,HOST_NAME,GENERATOR_ORG_GROUP,REPO_NAME,ORG_SLUG"
 
 # run_recipe CASEID RECIPE_BODY TARGET [extra render-recipe args...] — writes the
@@ -75,7 +75,7 @@ run_recipe() {
 }
 mktree() { # mktree DIR — a minimal target tree with the rename-demo source
   local d="$1"; mkdir -p "${d}/docs" "${d}/sub"
-  printf '# Snapdragon tenant branding — fixture\nOLDLINE\n' > "${d}/docs/BRANDING.md"
+  printf '# HugMesh tenant branding — fixture\nOLDLINE\n' > "${d}/docs/BRANDING.md"
   printf 'x\n' > "${d}/sub/keep.txt"
 }
 
@@ -208,18 +208,18 @@ FIX="${WORK}/fixture-base"
 mkfixture() { # mkfixture DIR — the tiny fabricated generator base
   local d="$1"; rm -rf "$d"; mkdir -p "${d}/docs" "${d}/tests/stack"
   cat > "${d}/README.md" <<'EOF'
-# snapdragon-generator
+# hugmesh-generator
 
 Fixture build scripts that produce hardened images for the
-Snapdragon cluster — fabricated tiny base for the archetype test.
+HugMesh cluster — fabricated tiny base for the archetype test.
 EOF
   cat > "${d}/.gitlab-ci.yml" <<'EOF'
 include:
-  - project: Snapdragon-Systems/snapdragon-generator
+  - project: Snapdragon-Systems/hugmesh-generator
     file: ci/pentest-stage.yml
 stages: [verify]
 EOF
-  printf '# Snapdragon tenant branding — fixture\nfixture branding body\n' > "${d}/docs/BRANDING.md"
+  printf '# HugMesh tenant branding — fixture\nfixture branding body\n' > "${d}/docs/BRANDING.md"
   printf 'stack-up:\n\t@echo local mesh up\n.PHONY: stack-up\n' > "${d}/Makefile"
   printf '# local mesh compose fixture\nservices: {}\n' > "${d}/tests/stack/compose.local.yaml"
   printf '#!/usr/bin/env bash\n# fixture generate-brand-repos.sh (archetype marker)\n' > "${d}/generate-brand-repos.sh"
@@ -234,9 +234,9 @@ if ( cd "$REPO" && env -i PATH="$PATH" HOME="${HOME:-/tmp}" \
 else bad "B1 render failed: $(tail -n3 "${WORK}/B1.err" | tr '\n' ' ')"; fi
 BT="${OUTB}/acme-generator"
 grep -q "Acme cluster" "${BT}/README.md" 2>/dev/null \
-  && ! grep -q "Snapdragon cluster" "${BT}/README.md" 2>/dev/null \
+  && ! grep -q "HugMesh cluster" "${BT}/README.md" 2>/dev/null \
   && ok "B2 README title brand anchor landed (Acme cluster)" || bad "B2 README anchor"
-grep -q "acme-inc/snapdragon-generator" "${BT}/.gitlab-ci.yml" 2>/dev/null \
+grep -q "acme-inc/hugmesh-generator" "${BT}/.gitlab-ci.yml" 2>/dev/null \
   && ok "B3 ci-include-org anchor landed" || bad "B3 ci include"
 if [ -f "${BT}/docs/BRANDING-acme-inc.md" ] && [ ! -e "${BT}/docs/BRANDING.md" ] \
    && grep -q "Acme tenant branding" "${BT}/docs/BRANDING-acme-inc.md"; then
@@ -287,7 +287,7 @@ SRC="${WORK}/src-upstream"; mkfixture "$SRC"
   && git add -A && git -c user.email=t@t -c user.name=t commit -qm drift ) \
   || bad "C0 upstream fixture repo build"
 GITROOT="${WORK}/git"; mkdir -p "$GITROOT"
-git clone -q --bare "$SRC" "${GITROOT}/snapdragon-generator.git" 2>/dev/null || bad "C0 bare upstream"
+git clone -q --bare "$SRC" "${GITROOT}/hugmesh-generator.git" 2>/dev/null || bad "C0 bare upstream"
 
 CACHE="${WORK}/cache"
 BASE_OUT="$(env -i PATH="$PATH" HOME="${HOME:-/tmp}" \
@@ -322,9 +322,9 @@ if ( cd "$REPO" && env -i PATH="$PATH" HOME="${HOME:-/tmp}" \
       bash "$RRT" "$CONF" --enable-repo-tree --repo generator --archetype generator \
         --ref v1.2.3 --out-dir "$OUTC" ) >"${WORK}/C6.out" 2>"${WORK}/C6.err"; then
   CT="${OUTC}/acme-generator"
-  if [ "$(cat "${CT}/.snapdragon-base-ref" 2>/dev/null)" = "v1.2.3" ] \
+  if [ "$(cat "${CT}/.hugmesh-base-ref" 2>/dev/null)" = "v1.2.3" ] \
      && ! grep -q "DRIFT-AFTER-TAG" "${CT}/README.md" && grep -q "Acme cluster" "${CT}/README.md"; then
-    ok "C6 render --ref: tag content rendered + .snapdragon-base-ref marker written"
+    ok "C6 render --ref: tag content rendered + .hugmesh-base-ref marker written"
   else bad "C6 marker/content"; fi
 else bad "C6 render --ref failed: $(tail -n3 "${WORK}/C6.err" | tr '\n' ' ')"; fi
 

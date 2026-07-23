@@ -16,7 +16,7 @@ import re
 
 import pytest
 
-_PKG = pathlib.Path(__file__).resolve().parents[1] / "snapdragon_studio"
+_PKG = pathlib.Path(__file__).resolve().parents[1] / "hugmesh_studio"
 
 # (class, scoped enum type, members) triples: the enum members most easily reached
 # unscoped, and the scope they really live under (i.e. what the fix looks like). A class

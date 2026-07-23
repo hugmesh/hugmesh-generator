@@ -77,7 +77,7 @@
 #        AOSP gate), --force downgrades to a warning and proceeds;
 #        --headwind-signer-sha256 mismatch -> exit 3.
 #   (23) attest (Phase 3: self-hosted AttestationServer pairing via the
-#        Snapdragon-forked Auditor, package systems.snapdragon.auditor):
+#        HugMesh-forked Auditor, package systems.hugmesh.auditor):
 #        valid --auditor-apk/signer -> attestation.json
 #        {auditor_package, verdict:"operator-paired"}; ingest folds the
 #        attestation fields in; --auditor-signer-sha256 mismatch -> exit 3;
@@ -847,9 +847,9 @@ ING="${OUT}/device/${DEVID}/ingest.json"
 # value -- not silently treated as "not passed" and overridden.
 cp "${ENR}" "${ENR}.sdbak"
 jq '.superdomain = "corp-a.internal"' "${ENR}" > "${ENR}.tmp" && mv "${ENR}.tmp" "${ENR}"
-run ingest --device-id "${DEVID}" --out "${OUT}" --superdomain snapdragon.internal
-[ "${RC}" -eq 0 ] && [ "$(jq -r '.superdomain' "${ING}")" = "snapdragon.internal" ] \
-    && ok "(14) explicit --superdomain snapdragon.internal is honored over a differing enrollment-record value (not silently overridden)" \
+run ingest --device-id "${DEVID}" --out "${OUT}" --superdomain hugmesh.internal
+[ "${RC}" -eq 0 ] && [ "$(jq -r '.superdomain' "${ING}")" = "hugmesh.internal" ] \
+    && ok "(14) explicit --superdomain hugmesh.internal is honored over a differing enrollment-record value (not silently overridden)" \
     || bad "(14) explicit-superdomain-equals-default rc=${RC}, superdomain='$(jq -r '.superdomain' "${ING}" 2>/dev/null)'"
 mv "${ENR}.sdbak" "${ENR}"
 run ingest --device-id "${DEVID}" --out "${OUT}" --ingest-url https://registry.phone-test.invalid/self-report
@@ -1045,11 +1045,11 @@ run ingest --device-id "${DEVID}" --out "${OUT}"
     || bad "(22) v2 mdm positive fold wrong (rc=${RC}): $(jq -c '.mdm' "${ING}" 2>/dev/null)"
 
 # ── (23) attest (Phase 3: self-hosted AttestationServer pairing via the
-#      Snapdragon-forked Auditor) ──────────────────────────────────────────
+#      HugMesh-forked Auditor) ──────────────────────────────────────────
 reset_state
 rm -f "${STATE}/adb-getstate" "${STATE}/apksigner-digest"
 printf 'List of devices attached\n%s             device usb:1-4\n' "${SERIAL_A}" > "${STATE}/adb-devices"
-printf 'package:com.tailscale.ipn\npackage:systems.snapdragon.auditor\n' > "${STATE}/packages"
+printf 'package:com.tailscale.ipn\npackage:systems.hugmesh.auditor\n' > "${STATE}/packages"
 ATTEST_URL_T="https://attest.phone-test.invalid"
 DIGEST_AUD_OK="990e04f0864b19f14f84e0e432f7a393f297ab105a22c1e1b10b442a4a62c42"
 DIGEST_AUD_BAD="deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
@@ -1063,16 +1063,16 @@ run attest --out "${OUT}" --attestation-url "${ATTEST_URL_T}" --auditor-signer-s
 ATT="${OUT}/device/${DEVID}/attestation.json"
 [ -f "${ATT}" ] \
     && [ "$(jq -r '.device_id' "${ATT}")" = "${DEVID}" ] \
-    && [ "$(jq -r '.auditor_package' "${ATT}")" = "systems.snapdragon.auditor" ] \
+    && [ "$(jq -r '.auditor_package' "${ATT}")" = "systems.hugmesh.auditor" ] \
     && [ "$(jq -r '.verdict' "${ATT}")" = "operator-paired" ] \
     && [ "$(jq -r '.attestation_url' "${ATT}")" = "${ATTEST_URL_T}" ] \
-    && ok "(23) attestation.json: auditor_package=systems.snapdragon.auditor, verdict=operator-paired" \
+    && ok "(23) attestation.json: auditor_package=systems.hugmesh.auditor, verdict=operator-paired" \
     || bad "(23) attestation.json missing/wrong: $(cat "${ATT}" 2>/dev/null)"
 
 # ingest folds the attestation fields in (advisory/logged, D9).
 run ingest --device-id "${DEVID}" --out "${OUT}"
 [ "${RC}" -eq 0 ] \
-    && [ "$(jq -r '.auditor_package' "${ING}")" = "systems.snapdragon.auditor" ] \
+    && [ "$(jq -r '.auditor_package' "${ING}")" = "systems.hugmesh.auditor" ] \
     && [ "$(jq -r '.attestation_verdict' "${ING}")" = "operator-paired" ] \
     && [ "$(jq -r '.attestation_url' "${ING}")" = "${ATTEST_URL_T}" ] \
     && ok "(23) ingest folds the attestation fields in (auditor_package/attestation_verdict/attestation_url)" \

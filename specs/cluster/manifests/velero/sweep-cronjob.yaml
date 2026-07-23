@@ -23,7 +23,7 @@
 #
 # THEREFORE the sweep is SPLIT:
 #   * GENERATOR (this CronJob) — the CR-READ half: find Velero Backup/Restore CRs
-#     this platform created (label app.kubernetes.io/managed-by=snapdragon-admin-bff)
+#     this platform created (label app.kubernetes.io/managed-by=hugmesh-admin-bff)
 #     that have reached a TERMINAL .status.phase (Completed / Failed / PartiallyFailed
 #     / FailedValidation), and MIRROR that terminal state onto the CR as the
 #     annotation snapdragon.systems/catalog-status = complete|failed. This makes the
@@ -54,7 +54,7 @@ metadata:
   labels:
     app.kubernetes.io/name: cloud-backups
     app.kubernetes.io/component: sweep
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   # Inert until backups are deliberately enabled (see header).
   suspend: true
@@ -73,7 +73,7 @@ spec:
           labels:
             app.kubernetes.io/name: cloud-backups
             app.kubernetes.io/component: sweep
-            app.kubernetes.io/part-of: snapdragon.systems
+            app.kubernetes.io/part-of: hugmesh.systems
         spec:
           serviceAccountName: backups-sweep
           automountServiceAccountToken: true
@@ -103,12 +103,12 @@ spec:
               args:
                 - |
                   # CR-READ HALF of the split sweep. For each Velero Backup/Restore
-                  # CR this platform created (managed-by=snapdragon-admin-bff) that
+                  # CR this platform created (managed-by=hugmesh-admin-bff) that
                   # has reached a terminal phase, mirror the catalog-status onto the
                   # CR as an annotation the admin-bff reconciler reads. We NEVER
                   # write the admin-bff DB here (see file header).
                   set -eu
-                  SEL='app.kubernetes.io/managed-by=snapdragon-admin-bff'
+                  SEL='app.kubernetes.io/managed-by=hugmesh-admin-bff'
                   for KIND in backups.velero.io restores.velero.io; do
                     # phase is the only status we read; name+phase, one per line.
                     kubectl -n velero get "$KIND" -l "$SEL" \

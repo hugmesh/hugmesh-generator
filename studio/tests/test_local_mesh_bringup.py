@@ -23,10 +23,10 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from snapdragon_studio.core import local_stack_node as lsn_mod          # noqa: E402
-from snapdragon_studio.core.local_mesh_bootstrap import (               # noqa: E402
+from hugmesh_studio.core import local_stack_node as lsn_mod          # noqa: E402
+from hugmesh_studio.core.local_mesh_bootstrap import (               # noqa: E402
     LocalMeshBootstrap, LocalMeshBootstrapConfig)
-from snapdragon_studio.core.local_stack_node import (                   # noqa: E402
+from hugmesh_studio.core.local_stack_node import (                   # noqa: E402
     COLD_STACK_UP_TIMEOUT_S, M2_BOOTSTRAP_TIMEOUT_S, WARM_STACK_UP_TIMEOUT_S,
     LocalStackNode)
 
@@ -192,8 +192,8 @@ def test_bootstrap_m2_verb_streams_and_respects_the_host_guard(monkeypatch):
 
 
 # ── the GUI verbs ───────────────────────────────────────────────────────────────────
-from snapdragon_studio.gui.pages import localmesh as localmesh_mod     # noqa: E402
-from snapdragon_studio.gui.qt import QtWidgets                         # noqa: E402
+from hugmesh_studio.gui.pages import localmesh as localmesh_mod     # noqa: E402
+from hugmesh_studio.gui.qt import QtWidgets                         # noqa: E402
 
 
 @pytest.fixture
@@ -238,14 +238,14 @@ def test_m2_button_streams_the_build_into_the_log(qapp, monkeypatch):
     monkeypatch.setattr(
         LocalMeshBootstrap, "m2_bootstrap",
         lambda self, on_line=None, cancel=None:
-            (on_line and on_line("[m2] building snapdragon-parent")) or
+            (on_line and on_line("[m2] building hugmesh-parent")) or
             (True, ["[m2-bootstrap] ok: registry up"]),
         raising=True)
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     dlg.page.m2_btn.click()
     _drain(qapp, dlg.page)
     text = dlg.log.toPlainText()
-    assert "[m2] building snapdragon-parent" in text
+    assert "[m2] building hugmesh-parent" in text
 
 
 def test_cancel_button_shows_during_a_cancellable_verb_and_stops_it(qapp):

@@ -1,6 +1,6 @@
 # tuwunel — Matrix homeserver (Rust Conduit fork, replaces Synapse).
-# matrix.snapdragon.systems, backend namespace. Matrix-spec compatible, so
-# snapdragon-matrix-ui (in snapdragon-social-ui) is unchanged. Raw manifests
+# matrix.hugmesh.systems, backend namespace. Matrix-spec compatible, so
+# hugmesh-matrix-ui (in hugmesh-social-ui) is unchanged. Raw manifests
 # (no Helm chart). See manifests/tuwunel for image/config validation notes.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -10,12 +10,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/tuwunel
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

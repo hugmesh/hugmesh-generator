@@ -1,6 +1,6 @@
 """Headless --print-command: must work with no display and no Qt installed.
 
-The matrix harness drives `python -m snapdragon_studio --print-command --config X.json`
+The matrix harness drives `python -m hugmesh_studio --print-command --config X.json`
 for every role x platform x env — so the path must never import a Qt binding.
 """
 import json
@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from snapdragon_studio.core.config import ImageConfig
+from hugmesh_studio.core.config import ImageConfig
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -41,7 +41,7 @@ def _write_cfg(tmp_path, platform, mode, role, env):
 
 
 def test_print_command_in_process_never_imports_qt(tmp_path, capsys):
-    from snapdragon_studio import app
+    from hugmesh_studio import app
     before = {m for m in sys.modules if m.split(".")[0] in ("PySide6", "PyQt6")}
     for platform, mode, role, env in MATRIX:
         cfg, path = _write_cfg(tmp_path, platform, mode, role, env)
@@ -62,7 +62,7 @@ def test_print_command_subprocess_smoke(tmp_path, platform, mode, role, env):
     env_vars.pop("DISPLAY", None)          # prove no display is needed
     env_vars.pop("WAYLAND_DISPLAY", None)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", path,
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", path,
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -76,7 +76,7 @@ def test_print_command_config_round_trips_cli_args(tmp_path):
     reloaded = ImageConfig.load(path)
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", path,
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", path,
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -94,7 +94,7 @@ def test_print_command_new_iso_knobs_flow_through(tmp_path):
     explicit.save(str(p))
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -105,7 +105,7 @@ def test_print_command_new_iso_knobs_flow_through(tmp_path):
     p2 = tmp_path / "iso-knobs-auto.json"
     auto.save(str(p2))
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p2),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p2),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -123,7 +123,7 @@ def test_print_command_unaffiliated_bundle_default_normalized(tmp_path):
     cfg.save(str(p))
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -141,7 +141,7 @@ def test_print_command_unaffiliated_conflict_fails_loudly(tmp_path):
     cfg.save(str(p))
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode != 0
@@ -155,7 +155,7 @@ def test_headless_bad_input_exits_2_not_traceback(tmp_path, flag, capsys):
     never let a TypeError (non-dict JSON) or FileNotFoundError (missing --config) escape
     as a traceback + exit 1 — so a caller/bridge can distinguish bad-input (2) from an
     unexpected crash. (json.JSONDecodeError already exits 2; these two paths did not.)"""
-    from snapdragon_studio import app
+    from hugmesh_studio import app
     # (a) top-level JSON array -> from_dict TypeError normalized to ValueError -> exit 2
     arr = tmp_path / "arr.json"
     arr.write_text("[1, 2, 3]", encoding="utf-8")
@@ -191,7 +191,7 @@ def test_print_command_headscale_url_env_passthrough(tmp_path):
     cfg.save(str(p))
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -210,7 +210,7 @@ def test_print_command_new_option_fields_flow_through(tmp_path):
     cfg.save(str(p))
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -225,12 +225,12 @@ def test_print_command_rejects_worklist_envelope(tmp_path):
     --print-command fail LOUDLY — never silently degrade to a default config. Callers
     route envelopes through worklist.load_any / --print-commands instead."""
     p = tmp_path / "envelope.json"
-    p.write_text(json.dumps({"schema": "snapdragon-worklist/v1",
+    p.write_text(json.dumps({"schema": "hugmesh-worklist/v1",
                              "base": ImageConfig().to_dict(), "entries": []}),
                  encoding="utf-8")
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode != 0
@@ -248,7 +248,7 @@ def test_print_command_mesh_config_omitting_tailscale_sso_keeps_its_mesh(tmp_pat
                  encoding="utf-8")
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -283,7 +283,7 @@ def test_print_command_new_emitted_fields_ride_config_and_reach_argv(tmp_path):
     assert reloaded.packages_drop == "games-util/steam"
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -314,7 +314,7 @@ def test_print_command_iso_unset_flavor_resolves_to_single(tmp_path, platform, b
     cfg.save(str(p))
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -337,7 +337,7 @@ def test_print_command_arm_standalone_real_semantics(tmp_path):
     cfg.save(str(p))
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -350,7 +350,7 @@ def test_print_specs_emits_materialized_flat_specs(tmp_path):
     """The materialization BRIDGE: --print-specs expands a worklist envelope into one flat,
     fully-resolved ImageConfig JSON per materialized image (the spec the web IMAGE_SPEC_JSON /
     build-image.sh channel consumes). SECRET fields are blanked; --image selects one."""
-    from snapdragon_studio.core.worklist import WorklistConfig, WorklistEntry
+    from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry
     wl = WorklistConfig(
         base=ImageConfig(mode="mesh", brand="acme", local_pass="s3cret"),
         entries=[WorklistEntry(id="omnibus.x86", role="omnibus", platform="x86"),
@@ -360,7 +360,7 @@ def test_print_specs_emits_materialized_flat_specs(tmp_path):
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
 
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-specs", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-specs", "--config", str(p),
          "--generator-dir", GENERATOR_DIR],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -375,7 +375,7 @@ def test_print_specs_emits_materialized_flat_specs(tmp_path):
 
     # --image selects exactly one
     r1 = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-specs", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-specs", "--config", str(p),
          "--image", "1", "--generator-dir", GENERATOR_DIR],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r1.returncode == 0, r1.stderr
@@ -384,7 +384,7 @@ def test_print_specs_emits_materialized_flat_specs(tmp_path):
 
     # out-of-range fails loudly
     r2 = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-specs", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-specs", "--config", str(p),
          "--image", "9", "--generator-dir", GENERATOR_DIR],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r2.returncode == 2 and "out of range" in r2.stderr
@@ -416,7 +416,7 @@ def test_print_command_node_never_emits_a_calamares_installer_ui(tmp_path, role,
     cfg.save(str(p))
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -434,7 +434,7 @@ def test_print_command_desktop_installer_ui_unchanged(tmp_path, mode, role):
     cfg.save(str(p))
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr
@@ -446,7 +446,7 @@ def test_print_command_agrees_with_materialize_for_a_node(tmp_path):
     """PARITY: both call sites (app.py's flat path and worklist._materialize_one) must
     resolve identically — a node's printed argv must match its materialized argv. Drop
     either call site and this leg fails."""
-    from snapdragon_studio.core.worklist import WorklistConfig, WorklistEntry
+    from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry
     base = ImageConfig(mode="mesh", installer_ui="all")
     wl = WorklistConfig(base=base, entries=[WorklistEntry(role="pki", platform="x86")])
     _e, materialized = wl.materialize()[0]
@@ -456,7 +456,7 @@ def test_print_command_agrees_with_materialize_for_a_node(tmp_path):
     cfg.save(str(p))
     env_vars = dict(os.environ, PYTHONPATH=STUDIO_ROOT)
     r = subprocess.run(
-        [sys.executable, "-m", "snapdragon_studio", "--print-command", "--config", str(p),
+        [sys.executable, "-m", "hugmesh_studio", "--print-command", "--config", str(p),
          "--generator-dir", GENERATOR_DIR, "--backend", "native"],
         capture_output=True, text=True, timeout=60, env=env_vars, cwd=STUDIO_ROOT)
     assert r.returncode == 0, r.stderr

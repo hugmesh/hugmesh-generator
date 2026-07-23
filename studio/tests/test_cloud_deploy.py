@@ -22,17 +22,17 @@ import pytest
 # must be set BEFORE the first QApplication is created
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core import cloud_deploy as cloud_deploy_mod  # noqa: E402
-from snapdragon_studio.core.cloud_deploy import (  # noqa: E402
+from hugmesh_studio.core import cloud_deploy as cloud_deploy_mod  # noqa: E402
+from hugmesh_studio.core.cloud_deploy import (  # noqa: E402
     CloudDeploy, CloudDeployOptions,
 )
-from snapdragon_studio.gui import wizard as wizard_mod  # noqa: E402
-from snapdragon_studio.gui.pages import deploy as deploy_mod  # noqa: E402
-from snapdragon_studio.gui.pages import ModePage  # noqa: E402
-from snapdragon_studio.gui.qt import QtWidgets  # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
+from hugmesh_studio.gui.pages import deploy as deploy_mod  # noqa: E402
+from hugmesh_studio.gui.pages import ModePage  # noqa: E402
+from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -92,7 +92,7 @@ def _image(tmp_path, name="node.qcow2"):
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 def _drain_worker(qapp, host, timeout_ms=5000):
@@ -226,7 +226,7 @@ def test_driver_path_defaults_to_the_canonical_sysroot_location(monkeypatch):
     monkeypatch.delenv("SNAP_CLOUD_DEPLOY_CMD", raising=False)
     cd = CloudDeploy(GENERATOR_DIR)
     assert cd.driver_path == os.path.join(
-        GENERATOR_DIR, "specs", "usr", "sbin", "snapdragon-cloud-deploy")
+        GENERATOR_DIR, "specs", "usr", "sbin", "hugmesh-cloud-deploy")
 
 
 # ---- pure-core: preview purity + validate blockers ------------------------------
@@ -416,7 +416,7 @@ def test_deploy_module_imports_no_qtwebengine():
     page must not import it (directly or transitively)."""
     import sys
 
-    import snapdragon_studio.gui.pages.deploy as m
+    import hugmesh_studio.gui.pages.deploy as m
     with open(m.__file__, encoding="utf-8") as fh:
         assert "QtWebEngine" not in fh.read()
     assert not any("QtWebEngine" in name for name in sys.modules)

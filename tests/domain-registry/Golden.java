@@ -2,10 +2,10 @@
 // signature path. MANUAL REGEN TOOL ONLY (not wired into CI — generator CI is GitLab + has no JDK).
 //
 // This is a genuine SECOND implementation of the canonical encoding, INDEPENDENT of the bash
-// reconstruction in specs/usr/lib/snapdragon/domain-verify.sh:domain_canonical_bytes. The
+// reconstruction in specs/usr/lib/hugmesh/domain-verify.sh:domain_canonical_bytes. The
 // canonicalBytes byte-layout below is copied VERBATIM from the authoritative admin-bff signer
-//   snapdragon-admin-bff-api:
-//   src/main/java/systems/snapdragon/adminbff/domainregistry/DomainRegistryExportService.java
+//   hugmesh-admin-bff-api:
+//   src/main/java/systems/hugmesh/adminbff/domainregistry/DomainRegistryExportService.java
 //   static byte[] canonicalBytes(DomainExportBody) (the merged #118 version)
 // and the DomainEntry record shape from DomainExportModels.java. It builds the EXACT fixture the
 // offline test tests/domain-registry/test-domain-reconcile-verify.sh Case 0 uses (canon_ref()),

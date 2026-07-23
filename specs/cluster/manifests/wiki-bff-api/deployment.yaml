@@ -1,6 +1,6 @@
-# wiki-bff — the Backend-For-Frontend the snapdragon-wiki-ui talks to for the
+# wiki-bff — the Backend-For-Frontend the hugmesh-wiki-ui talks to for the
 # wiki surfaces (/bff/wiki/**): wiki pages, attachments, audit log, and access
-# control. It is a ClusterIP-only service in snapdragon-backend: nothing reaches
+# control. It is a ClusterIP-only service in hugmesh-backend: nothing reaches
 # it from outside except via the fe-gateway, which routes same-origin /bff/wiki/**
 # to it AND enforces the Casdoor role rules from the route DB first.
 # Defence-in-depth: wiki-bff re-checks role + ownership.
@@ -15,14 +15,14 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-wiki-bff-api
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-wiki-bff-api, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-wiki-bff-api
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-wiki-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-wiki-bff-api } }
+  selector: { matchLabels: { app: hugmesh-wiki-bff-api } }
   template:
-    metadata: { labels: { app: snapdragon-wiki-bff-api } }
+    metadata: { labels: { app: hugmesh-wiki-bff-api } }
     spec:
       nodeSelector: { snapdragon.systems/backend: "true" }
       securityContext:
@@ -35,7 +35,7 @@ spec:
       # ── API-to-API mTLS identity (build-keystore) ───────────────────────────
       # Mirrors the forum-bff-api/user-bff-api/gateway build-keystore initContainer:
       # turns the Vault-PKI-issued, ESO-synced TLS Secret
-      # (snapdragon-wiki-bff-api-mtls: tls.crt/tls.key/ca.crt) into keystore.p12
+      # (hugmesh-wiki-bff-api-mtls: tls.crt/tls.key/ca.crt) into keystore.p12
       # (identity) + truststore.p12 (cluster CA) for server.ssl.* to REQUIRE a
       # client cert chaining to the cluster CA. Store password generated in-pod,
       # kept only in the tmpfs /stores emptyDir, emitted into
@@ -53,9 +53,9 @@ spec:
             - |
               P="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
               openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
-                -certfile /pki/ca.crt -name snapdragon-wiki-bff-api \
+                -certfile /pki/ca.crt -name hugmesh-wiki-bff-api \
                 -out /stores/keystore.p12 -passout "pass:${P}"
-              keytool -importcert -noprompt -alias snapdragon-cluster-ca \
+              keytool -importcert -noprompt -alias hugmesh-cluster-ca \
                 -file /pki/ca.crt -keystore /stores/truststore.p12 \
                 -storetype PKCS12 -storepass "${P}"
               # FILENAME IS LOAD-BEARING — do NOT rename this back to
@@ -78,7 +78,7 @@ spec:
             - { name: pki,    mountPath: /pki, readOnly: true }
             - { name: stores, mountPath: /stores }
       containers:
-        - name: snapdragon-wiki-bff-api
+        - name: hugmesh-wiki-bff-api
           image: snapdragon-systems/wiki-bff-api:dev
           ports: [{ name: http, containerPort: 8080 }]
           securityContext:
@@ -99,7 +99,7 @@ spec:
             - { name: SSL_TRUST_STORE_TYPE, value: "PKCS12" }
             - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/stores/" }
             # OAuth2 resource server: validate the cluster Casdoor JWT itself.
-            - { name: CASDOOR_ISSUER_URI, value: "https://id.snapdragon.systems" }
+            - { name: CASDOOR_ISSUER_URI, value: "https://id.hugmesh.systems" }
             # APP_TENANCY_ISSUERS is deliberately NOT set here. Do not "fix" this by
             # adding it — doing so silently hides every existing wiki page and ACL.
             # Unset, commons' DomainRegistry seeds the back-compat single-issuer entry
@@ -108,7 +108,7 @@ spec:
             # wiki_attachment / wiki_audit_log / wiki_access each declare
             # `domain varchar(64) defaultValue="default"`).
             # Setting it to the gateway archetype's pattern
-            # ("https://id.snapdragon.systems=<brand>") makes domainOf() return "<brand>",
+            # ("https://id.hugmesh.systems=<brand>") makes domainOf() return "<brand>",
             # so every `WHERE domain = ...` read stops matching those "default" rows.
             # A single pair also leaves isMultiIssuer() false, so the fail-closed
             # multi-issuer decoder never activates: no 401, no error — the rows just
@@ -118,7 +118,7 @@ spec:
             # existing domain='default' rows first. Config alone is not enough.
             # ── Content datastore (wiki_page / wiki_attachment / wiki_audit_log) ─
             # The app's application.yml defaults spring.r2dbc + spring.liquibase to
-            # a literal `snapdragon-pg` host that does NOT exist; OVERRIDE both here
+            # a literal `hugmesh-pg` host that does NOT exist; OVERRIDE both here
             # to the dedicated wiki-bff-db. R2DBC is the runtime handle; the JDBC
             # handle is used by Liquibase ONCE at startup.
             # RUNTIME handle: log in as the dedicated NON-OWNER least-privilege role
@@ -126,7 +126,7 @@ spec:
             # Password from its OWN ESO Secret wiki-bff-db-app-auth (the SAME the DB
             # pod's WIKIBFF_APP_PASSWORD mounts).
             - name: SPRING_R2DBC_URL
-              value: "r2dbc:postgresql://wiki-bff-db.snapdragon-backend.svc.cluster.local:5432/wikibff"
+              value: "r2dbc:postgresql://wiki-bff-db.hugmesh-backend.svc.cluster.local:5432/wikibff"
             - name: SPRING_R2DBC_USERNAME
               value: "wikibff_app"
             - name: SPRING_R2DBC_PASSWORD
@@ -138,7 +138,7 @@ spec:
             # Liquibase keeps the owner role `wikibff` + the owner ESO Secret
             # wiki-bff-db-auth (the SAME the DB pod's POSTGRES_PASSWORD mounts).
             - name: SPRING_LIQUIBASE_URL
-              value: "jdbc:postgresql://wiki-bff-db.snapdragon-backend.svc.cluster.local:5432/wikibff"
+              value: "jdbc:postgresql://wiki-bff-db.hugmesh-backend.svc.cluster.local:5432/wikibff"
             - name: SPRING_LIQUIBASE_USER
               value: "wikibff"
             - name: SPRING_LIQUIBASE_PASSWORD
@@ -156,8 +156,8 @@ spec:
                 - -ec
                 - >-
                   curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
-                  --resolve snapdragon-wiki-bff-api:8080:127.0.0.1
-                  https://snapdragon-wiki-bff-api:8080/actuator/health/readiness
+                  --resolve hugmesh-wiki-bff-api:8080:127.0.0.1
+                  https://hugmesh-wiki-bff-api:8080/actuator/health/readiness
             initialDelaySeconds: 20
             periodSeconds: 10
           livenessProbe:
@@ -167,8 +167,8 @@ spec:
                 - -ec
                 - >-
                   curl -sf --cert /pki/tls.crt --key /pki/tls.key --cacert /pki/ca.crt
-                  --resolve snapdragon-wiki-bff-api:8080:127.0.0.1
-                  https://snapdragon-wiki-bff-api:8080/actuator/health/liveness
+                  --resolve hugmesh-wiki-bff-api:8080:127.0.0.1
+                  https://hugmesh-wiki-bff-api:8080/actuator/health/liveness
             initialDelaySeconds: 45
             periodSeconds: 15
           resources:
@@ -184,7 +184,7 @@ spec:
         # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
         - name: pki
           secret:
-            secretName: snapdragon-wiki-bff-api-mtls
+            secretName: hugmesh-wiki-bff-api-mtls
         # tmpfs for the assembled PKCS12 stores + the in-pod SSL properties.
         - name: stores
           emptyDir:

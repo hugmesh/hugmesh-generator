@@ -1,4 +1,4 @@
-# RUNNING — build, key, flash and provision a Snapdragon fleet
+# RUNNING — build, key, flash and provision a HugMesh fleet
 
 A single end-to-end runbook for a **new operator**. It walks the whole pipeline
 in order: prerequisites → clone → configure (`brand.conf` + build knobs) → build
@@ -120,8 +120,8 @@ missing-`make` caveat for real builds).
 ## 1. Clone the generator
 
 ```bash
-git clone https://github.com/Snapdragon-Systems/snapdragon-generator
-cd snapdragon-generator
+git clone https://github.com/Snapdragon-Systems/hugmesh-generator
+cd hugmesh-generator
 ```
 
 All build output lands in a **git-ignored** work directory — `./out` by default
@@ -139,8 +139,8 @@ never share a sysroot.
 
 ## 2. Configure — `brand.conf` + build knobs
 
-Everything is string-independent. The default brand is `snapdragon` /
-`snapdragon.systems`; you can build for any brand/domain. Precedence is always
+Everything is string-independent. The default brand is `hugmesh` /
+`hugmesh.systems`; you can build for any brand/domain. Precedence is always
 **built-in defaults < brand profile < CLI flags**, so an absent profile changes
 nothing.
 
@@ -155,10 +155,10 @@ cp brands/example.conf brands/acme.conf
 
 | Knob | Default | What it sets |
 |---|---|---|
-| `BRAND` | `snapdragon` | short slug → namespaces, gateway names, hostnames |
-| `BRAND_TITLE` | `Snapdragon Systems` | human title shown in UIs |
+| `BRAND` | `hugmesh` | short slug → namespaces, gateway names, hostnames |
+| `BRAND_TITLE` | `HugMesh Systems` | human title shown in UIs |
 | `ORG` | `Snapdragon-Systems` | GitHub org / container-image namespace |
-| `CLUSTER_DOMAIN` | `snapdragon.systems` | base domain (`id.`/`api.`/`matrix.`/`mastodon.` derived) |
+| `CLUSTER_DOMAIN` | `hugmesh.systems` | base domain (`id.`/`api.`/`matrix.`/`mastodon.` derived) |
 | `OPTIONAL_SERVICES` | `akkoma tuwunel phpbb games` (all) | which optional services to bake (see §2a) |
 | `GAMES_DOMAIN` | `games.<CLUSTER_DOMAIN>` | games portal host + OIDC issuer (see §2b) |
 | `GROW_POLICY` | `fill` | first-boot root-grow policy baked into the `.img` (see §2c) |
@@ -200,7 +200,7 @@ drives every games host + the games-realm OIDC issuer/redirect (parameterized by
 the builders + a casdoor-games re-seed on ArgoCD sync). Flip it to the TLD later:
 
 ```sh
-GAMES_DOMAIN="snapdragon.games"        # brand.conf — or --games-domain on the CLI
+GAMES_DOMAIN="hugmesh.games"        # brand.conf — or --games-domain on the CLI
 ```
 
 See [`docs/OPTIONAL-SERVICES.md`](OPTIONAL-SERVICES.md) for the TLD-flip checklist
@@ -238,7 +238,7 @@ of the README.
 ### 2e. Build ENV (`test` | `prod`) — baked at image creation
 
 Orthogonal to the brand: each image is stamped with a build ENV at creation,
-written to `/etc/snapdragon/env`. `--env test` (the **default**, LAN-first/safe)
+written to `/etc/hugmesh/env`. `--env test` (the **default**, LAN-first/safe)
 keeps the cluster wildcard-DNS app and prunes cloudflared/ACME; `--env prod` bakes
 the **real** public domain (keeps cloudflared/external-DNS/ACME, prunes LAN DNS)
 and prints a LOUD announced banner. You do not flip it at runtime. Full table:
@@ -290,7 +290,7 @@ Notes from the code:
 ### 3b. `make` (Docker builder)
 
 ```bash
-make local                 # the LAN .test fleet: ENV=test + brands/local.conf (snapdragon.test)
+make local                 # the LAN .test fleet: ENV=test + brands/local.conf (hugmesh.test)
 make prod                  # the PROD fleet: ENV=prod, real domain (announced)
 
 make build-all             # default fleet (3 Pi + x86 pki/be/fe/be+gpu); ENV defaults to test
@@ -315,7 +315,7 @@ Common `make` overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`, `HEADSCALE_URL=`,
 
 > **Scratch space:** the heavy stage4 build wants tens of GB. Point `WORK_DIR=` at
 > a roomy disk — e.g. a namespaced subdir of the portage scratch volume,
-> `WORK_DIR=/var/tmp/portage/snapdragon-build` (its own subdir, so it never
+> `WORK_DIR=/var/tmp/portage/hugmesh-build` (its own subdir, so it never
 > collides with portage's own per-package build dirs).
 
 > **Hardened standalone NVIDIA desktops:** `make x86-standalone` (or `make menu` →
@@ -364,14 +364,14 @@ Full flag reference: `./build-rpi5-stage4.sh --help` and
 > **Hardened radio defaults:** both builders disable **WiFi and Bluetooth** by
 > default to shrink the attack surface — at first boot a `/etc/local.d` action
 > `rfkill`-blocks both radios, their kernel modules are blacklisted
-> (`/etc/modprobe.d/snapdragon-radio-blacklist.conf`), and no WiFi/Bluetooth
+> (`/etc/modprobe.d/hugmesh-radio-blacklist.conf`), and no WiFi/Bluetooth
 > service is enabled. **Ethernet + the Tailscale tailnet are never touched.**
 > Re-enable per build with `--enable-wifi` / `--enable-bluetooth` (or
 > `ENABLE_WIFI=true` / `ENABLE_BLUETOOTH=true` in `brand.conf`/env).
 
 Artifacts are **brand- and UTC-timestamp-named** so test/prod runs never clobber:
 `<brand>-<arch>-<role>-<env>-<UTC>.<ext>` (e.g.
-`snapdragon-rpi5-arm64-frontend-test-20260610T193045Z.img`). The flash/QEMU
+`hugmesh-rpi5-arm64-frontend-test-20260610T193045Z.img`). The flash/QEMU
 helpers autodetect the newest matching image, so you rarely type the full name.
 
 ### 3d. Frite light-desktop image (Libre Computer Le/La Frite)
@@ -541,7 +541,7 @@ What each role gets:
 
 Review `keys-<role>/provision.json` before writing the stick — it carries the
 hostname, mesh endpoint, kubeadm role (`control-plane`/`worker`, `bootstrap`,
-`first`), node inventory, storage/LUKS, backups, and the `snapdragon.gitops`
+`first`), node inventory, storage/LUKS, backups, and the `hugmesh.gitops`
 toggle. Schema + examples: [`keys-template/README.md`](../keys-template/README.md).
 
 > The `build-all-roles.sh` run in §3c already generates `keys-pki`/`keys-backend`/
@@ -605,7 +605,7 @@ If you built ISOs instead of `.img`:
 
 ```bash
 # RPi5: loop-mount the role ISO and run the bundled installer
-sudo mount -o loop out/snapdragon-rpi5-arm64-pki-*.iso /mnt/iso
+sudo mount -o loop out/hugmesh-rpi5-arm64-pki-*.iso /mnt/iso
 sudo /mnt/iso/install.sh /dev/sdX           # SD card, or /dev/nvme0n1
 sudo umount /mnt/iso
 
@@ -646,13 +646,13 @@ never locked out.
 ## 8. Bring up the cluster
 
 Boot the **pki** node first — it is the Kubernetes control plane. If its KEYS
-`provision.json` sets `snapdragon.gitops.enabled=true`, `keys-provision` runs
+`provision.json` sets `hugmesh.gitops.enabled=true`, `keys-provision` runs
 `kubeadm init` + the GitOps bootstrap automatically. Otherwise do it by hand:
 
 ```bash
 # On the pki node, after kubeadm init:
 export KUBECONFIG=/etc/kubernetes/admin.conf
-sudo -E /var/lib/snapdragon/cluster/bootstrap/bootstrap.sh   # ArgoCD + the root app-of-apps
+sudo -E /var/lib/hugmesh/cluster/bootstrap/bootstrap.sh   # ArgoCD + the root app-of-apps
 
 # backend / frontend / x86-host nodes join automatically at first boot
 # (the kubeadm join token rides on their KEYS stick), or:

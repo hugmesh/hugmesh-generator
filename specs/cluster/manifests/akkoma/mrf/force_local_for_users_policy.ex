@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-# Snapdragon Systems — custom Akkoma MRF (Message Rewrite Facility) policy.
+# HugMesh Systems — custom Akkoma MRF (Message Rewrite Facility) policy.
 #
 # AGPL NOTICE: Akkoma is AGPL-3.0. This module is COMPILED INTO a derived Akkoma
 # image (see manifests/akkoma/Dockerfile) and therefore the whole image is a

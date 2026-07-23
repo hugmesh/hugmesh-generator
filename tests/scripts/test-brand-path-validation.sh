@@ -11,7 +11,7 @@
 #       writes; BRAND_OUT must resolve under OUT_DIR.
 #   #12 generate-brand-repos.sh         — brand/org/domain land on a `sed s|…|RHS|`
 #       replacement: escape + reject sed/shell metacharacters.
-#   #13 specs/usr/sbin/snapdragon-domain-reconcile — fail-closed CONTENT gate
+#   #13 specs/usr/sbin/hugmesh-domain-reconcile — fail-closed CONTENT gate
 #       (entry_fields_ok) after jq extraction.
 #   #15 generate-brand-repos.sh         — validate every sourced var
 #       (BRAND/ORG/CLUSTER_DOMAIN/HEADSCALE_URL/MESH_TAG/BRAND_TITLE).
@@ -19,7 +19,7 @@
 #       dot-sourced launch.env must be validated + single-quote-escaped.
 #
 # In every case we assert BOTH: the injection/traversal input is REJECTED, AND a
-# legitimate value (brand snapdragon, domain snapdragon.systems, role admin) still
+# legitimate value (brand hugmesh, domain hugmesh.systems, role admin) still
 # PASSES. Runs ANYWHERE with bash + sed (no root, no network, no crypto needed —
 # the validation gates fire before any openssl/keytool work).
 set -uo pipefail
@@ -27,7 +27,7 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 GEN_BRAND="${REPO}/generate-brand-repos.sh"
 GEN_KS="${REPO}/scripts/gen-keystores.sh"
-AGENT="${REPO}/specs/usr/sbin/snapdragon-domain-reconcile"
+AGENT="${REPO}/specs/usr/sbin/hugmesh-domain-reconcile"
 INSTALL="${REPO}/clients/docker-mesh-node/install.sh"
 
 for f in "${GEN_BRAND}" "${GEN_KS}" "${AGENT}" "${INSTALL}"; do
@@ -54,12 +54,12 @@ MESH_TAG=${PB_MESH}
 EOF
 }
 reset_prof() {
-  PB_BRAND=snapdragon
-  PB_TITLE="Snapdragon Systems"
+  PB_BRAND=hugmesh
+  PB_TITLE="HugMesh Systems"
   PB_ORG=Snapdragon-Systems
-  PB_DOMAIN=snapdragon.systems
-  PB_HS=https://headscale.snapdragon.systems
-  PB_MESH=tag:snapdragon
+  PB_DOMAIN=hugmesh.systems
+  PB_HS=https://headscale.hugmesh.systems
+  PB_MESH=tag:hugmesh
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -70,8 +70,8 @@ echo "-- #8/#12/#15 generate-brand-repos.sh --"
 # (clean) legit values MUST render 12 templates
 reset_prof; write_prof "${W}/clean.conf"
 if bash "${GEN_BRAND}" "${W}/clean.conf" --out-dir "${W}/out" >/dev/null 2>"${W}/e" \
-   && [ -d "${W}/out/snapdragon-gitops/apps" ]; then
-  ok "clean brand profile renders (snapdragon / snapdragon.systems)"
+   && [ -d "${W}/out/hugmesh-gitops/apps" ]; then
+  ok "clean brand profile renders (hugmesh / hugmesh.systems)"
 else
   bad "clean brand profile was rejected:"; sed 's/^/      /' "${W}/e"
 fi
@@ -134,14 +134,14 @@ grep -q "ERROR: invalid" "${W}/e" \
   || ok "#4 clean multi-domain rows pass validation"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# #13 snapdragon-domain-reconcile — fail-closed content gate (entry_fields_ok)
+# #13 hugmesh-domain-reconcile — fail-closed content gate (entry_fields_ok)
 # ─────────────────────────────────────────────────────────────────────────────
-echo "-- #13 snapdragon-domain-reconcile entry_fields_ok --"
+echo "-- #13 hugmesh-domain-reconcile entry_fields_ok --"
 # Source the agent (it guards main() under [ BASH_SOURCE == 0 ]) to unit-test the gate.
 # shellcheck source=/dev/null
 ( . "${AGENT}" 2>/dev/null
   rc=0
-  entry_fields_ok "snapdragon" "snapdragon.systems" "Snapdragon-Systems" "tag:snapdragon" 2>/dev/null || rc=1
+  entry_fields_ok "hugmesh" "hugmesh.systems" "Snapdragon-Systems" "tag:hugmesh" 2>/dev/null || rc=1
   exit $rc )
 [ $? -eq 0 ] && ok "#13 clean entry accepted" || bad "#13 clean entry wrongly rejected"
 
@@ -175,13 +175,13 @@ run_install --role user --image 'img$(id)'
 [ $? -ne 0 ] && ok "#18 injection --image rejected" || bad "#18 injection --image ACCEPTED"
 
 # clean install MUST succeed AND produce a launch.env that is safe to dot-source.
-run_install --role admin --name node-1 --image ghcr.io/snapdragon/mesh:1.2
-CFG="${MW}/cfg/snapdragon-mesh/launch.env"
+run_install --role admin --name node-1 --image ghcr.io/hugmesh/mesh:1.2
+CFG="${MW}/cfg/hugmesh-mesh/launch.env"
 if [ $? -eq 0 ] && [ -f "${CFG}" ]; then
   ok "#18 clean install succeeds"
   # source it and assert no code executed + literal values preserved
   out="$( ( . "${CFG}"; printf '%s|%s|%s' "${ROLE:-}" "${NAME:-}" "${IMAGE:-}" ) )"
-  [ "${out}" = "admin|node-1|ghcr.io/snapdragon/mesh:1.2" ] \
+  [ "${out}" = "admin|node-1|ghcr.io/hugmesh/mesh:1.2" ] \
     && ok "#18 launch.env dot-sources to literal values" \
     || bad "#18 launch.env sourced to '${out}'"
 else
@@ -203,7 +203,7 @@ if [ -r "${RH}" ] && grep -q '_hbdie' "${RH}"; then
   [ $? -ne 0 ] && grep -q "invalid CLUSTER_DOMAIN" "${W}/re" \
     && ok "render-handlebars newline CLUSTER_DOMAIN rejected (parity with sed engine)" \
     || bad "render-handlebars newline CLUSTER_DOMAIN ACCEPTED (opt-in engine still injectable)"
-  ( BRAND=snapdragon BRAND_TITLE=Snapdragon ORG=snapdragon CLUSTER_DOMAIN=snapdragon.systems \
+  ( BRAND=hugmesh BRAND_TITLE=HugMesh ORG=hugmesh CLUSTER_DOMAIN=hugmesh.systems \
     HEADSCALE_URL= MESH_TAG=; source "${W}/rhguards.sh" ) >"${W}/ro2" 2>"${W}/re2"
   [ $? -eq 0 ] && ok "render-handlebars legit brand accepted" \
     || bad "render-handlebars legit brand REJECTED: $(cat "${W}/re2")"

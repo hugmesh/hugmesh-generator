@@ -1,6 +1,6 @@
 # Tier-level network segmentation (Phase 3). Each app namespace becomes
 # default-deny for INGRESS except from the namespaces it actually serves. This
-# blocks lateral movement (e.g. snapdragon-games or observability -> snapdragon-pki
+# blocks lateral movement (e.g. hugmesh-games or observability -> hugmesh-pki
 # Casdoor/Cassandra). Only Ingress is constrained — egress (incl. DNS) is left
 # open so nothing breaks on that axis.
 #
@@ -14,10 +14,10 @@
 # The relocated SSO login adds an in-cluster HTTP path: user-bff -> admin-bff
 # `/bff/internal/**` (account/session + custody/stamp), and gateway -> admin-bff
 # `/bff/internal/session/exchange` (the bff_ -> custody-JWT swap). admin-bff-api,
-# user-bff-api and be-gateway all live in snapdragon-backend, and admin-bff-api is
-# NOT a *-db pod, so it is already admitted by the `snapdragon-backend` self rule
+# user-bff-api and be-gateway all live in hugmesh-backend, and admin-bff-api is
+# NOT a *-db pod, so it is already admitted by the `hugmesh-backend` self rule
 # below — no ingress change is required for this path. (fe-gateway -> admin-bff is
-# already covered by the snapdragon-frontend rule.) The app layer still gates the
+# already covered by the hugmesh-frontend rule.) The app layer still gates the
 # surface in depth via admin-bff's InternalTokenWebFilter (mTLS + X-Internal-Token);
 # the admin-bff-db / user-bff-db mutual denial is unaffected (db-ingress.yaml pins
 # each BFF DB to its own api only — user-bff never reaches admin-bff-DB).
@@ -35,12 +35,12 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: tier-ingress
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
 spec:
   # EXCLUDES route-access-db + Cassandra + Harbor from this BROAD namespace
   # admittance — they are isolated per-pod by db-ingress.yaml / harbor-ingress.yaml
   # (reachable only from the gateways + admin-bff-api/federation-api, and
-  # be-gateway + snapdragon-image-builds, respectively). k8s NetworkPolicy is
+  # be-gateway + hugmesh-image-builds, respectively). k8s NetworkPolicy is
   # additive with no exclude, so the broad from-set below MUST NOT select these
   # pods or it would re-admit the whole from-set to them (ADR-32 DB-hardening;
   # Harbor migration). Keep this NotIn list in sync with db-ingress.yaml /
@@ -61,14 +61,14 @@ spec:
   ingress:
     # casdoor / cassandra / route-access-db / pki-gateway / superadmin-gateway consumers.
     # NOTE: the TAILNET superadmin-gateway (apps/22-gateway-superadmin.yaml) deploys
-    # into THIS (snapdragon-pki) namespace, so it inherits this default-deny-except
+    # into THIS (hugmesh-pki) namespace, so it inherits this default-deny-except
     # policy: it is admitted from ingress-nginx-INTERNAL (the LAN/VPN facade) but NOT
     # from the public ingress-nginx (which is absent from this from-set) — exactly the
     # tailnet-only network lock the App-Store design requires (no public path, no
     # be-gateway forward of the superadmin host).
     - from:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-pki } }       # self (pki/superadmin-gateway -> casdoor/cassandra/headscale)
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }    # be-gateway + admin-bff -> route-access-db/cassandra/casdoor; headscale-forward -> pki-gateway
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-pki } }       # self (pki/superadmin-gateway -> casdoor/cassandra/headscale)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }    # be-gateway + admin-bff -> route-access-db/cassandra/casdoor; headscale-forward -> pki-gateway
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }                # ArgoCD reconcile
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx-internal } }# internal facade -> pki/superadmin-gateway (LAN/VPN)
 ---
@@ -76,7 +76,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: tier-ingress
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
 spec:
   # EXCLUDES the homeserver (akkoma/tuwunel), their proxy sidecars, and akkoma-db
   # from this BROAD namespace+frontend admittance — they are isolated per-pod by
@@ -104,8 +104,8 @@ spec:
   policyTypes: [Ingress]
   ingress:
     - from:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }    # self (be-gateway -> mastodon/matrix/api; admin-bff -> clickhouse/kafka; user-bff -> admin-bff /bff/internal SSO custody back-channel; gateway -> admin-bff /bff/internal/session/exchange)
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }   # fe-gateway -> be-gateway (/be) + admin-bff (/bff)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }    # self (be-gateway -> mastodon/matrix/api; admin-bff -> clickhouse/kafka; user-bff -> admin-bff /bff/internal SSO custody back-channel; gateway -> admin-bff /bff/internal/session/exchange)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }   # fe-gateway -> be-gateway (/be) + admin-bff (/bff)
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }                # ArgoCD reconcile
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }         # public facade -> be-gateway
 ---
@@ -113,13 +113,13 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: tier-ingress
-  namespace: snapdragon-frontend
+  namespace: hugmesh-frontend
 spec:
   podSelector: {}
   policyTypes: [Ingress]
   ingress:
     - from:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }   # self (fe-gateway -> UIs)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }   # self (fe-gateway -> UIs)
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }                # ArgoCD reconcile
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } }         # public facade -> fe-gateway
 ---
@@ -127,19 +127,19 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: tier-ingress
-  namespace: snapdragon-games
+  namespace: hugmesh-games
 spec:
   podSelector: {}
   policyTypes: [Ingress]
   ingress:
-    # snapdragon-games also hosts the GAMES-realm Casdoor (casdoor-games) + its
+    # hugmesh-games also hosts the GAMES-realm Casdoor (casdoor-games) + its
     # Postgres (casdoor-games-pg). The self rule covers the games BFF -> casdoor-games
     # (JWT validation) and casdoor-games -> casdoor-games-pg (intra-namespace DB);
-    # the snapdragon-backend rule additionally covers the snapdragon-actions
+    # the hugmesh-backend rule additionally covers the hugmesh-actions
     # ROLE_GAMES_ADMIN -> admin sync job -> casdoor-games. Egress is left open
     # (see header), so casdoor-games reaching its Postgres needs no egress rule.
     - from:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-games } }      # self (games BFF -> casdoor-games; casdoor-games -> casdoor-games-pg)
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }    # be-gateway -> games workloads; snapdragon-actions sync -> casdoor-games
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-frontend } }   # fe-gateway -> games UI
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-games } }      # self (games BFF -> casdoor-games; casdoor-games -> casdoor-games-pg)
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }    # be-gateway -> games workloads; hugmesh-actions sync -> casdoor-games
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-frontend } }   # fe-gateway -> games UI
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: devops } }                # ArgoCD reconcile

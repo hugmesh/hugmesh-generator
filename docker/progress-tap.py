@@ -5,7 +5,7 @@ forward_and_wait / progress_tap_run.
 Reads the builder's stdout on stdin, re-emits every line VERBATIM to this process's
 stdout (the k8s Job log, byte-for-byte and in order) and, as a best-effort NON-TERMINAL
 side channel, POSTs throttled phase->percent frames to PROGRESS_URL. It REUSES the exact
-Studio parser (snapdragon_studio.core.progress_parse.ProgressParser) that already loads
+Studio parser (hugmesh_studio.core.progress_parse.ProgressParser) that already loads
 progress-tables.json and drives the Studio GUI (gui/pages/progress.py) — no regex or
 phase table is copied worker-side. PYTHONPATH=<generator>/studio is set by the wrapper
 so the import below resolves; the sys.path insert is a belt-and-braces fallback.
@@ -42,7 +42,7 @@ if _GEN_DIR:
     sys.path.insert(0, os.path.join(_GEN_DIR, "studio"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "studio"))
 
-from snapdragon_studio.core.progress_parse import ProgressParser  # noqa: E402
+from hugmesh_studio.core.progress_parse import ProgressParser  # noqa: E402
 
 
 def _num_env(name, default):

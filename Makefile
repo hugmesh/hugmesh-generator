@@ -191,7 +191,7 @@ BRAND_PASS := BRAND='$(BRAND)' DOMAIN='$(DOMAIN)' HEADSCALE_URL='$(HEADSCALE_URL
 #              can chown the root-created artifacts back to them.
 # SUDO         only `sudo` when NOT already root. Inside the container (root)
 #              SUDO is empty, so the native scripts run sudo-free.
-IMAGE    ?= snapdragon-builder
+IMAGE    ?= hugmesh-builder
 HOST_UID := $(shell id -u)
 HOST_GID := $(shell id -g)
 SUDO     := $(shell [ "$$(id -u)" = 0 ] || echo sudo)
@@ -333,7 +333,7 @@ help: ## list targets
 	@echo "               optional HEADSCALE_URL=https://hs.acme.example). See brands/README.md."
 	@echo "  Build ENV:  ENV=test (DEFAULT, baked) = LAN-only (cluster wildcard DNS; no"
 	@echo "              Cloudflare/OAuth/SMTP). ENV=prod = real public domain (announced)."
-	@echo "              Shortcuts:  make local   (ENV=test BRAND=local -> snapdragon.test)"
+	@echo "              Shortcuts:  make local   (ENV=test BRAND=local -> hugmesh.test)"
 	@echo "                          make prod    (ENV=prod, real domain — creds from keys USB)"
 	@echo "  Output:     products land in ./out (WORK_DIR=$(CURDIR)/out; local + gitignored)."
 	@echo "              Per-arch build trees: ./out/snap-build-pi5 + ./out/snap-build-x86"
@@ -360,16 +360,16 @@ menu: ## interactive console menu to build images (progress + quit-without-stopp
 # (core/local_mesh.py), reusing the shipped docker-compose.mesh.yml overlay. No image
 # is emitted. AUTHKEY_FILE holds the tailnet/headscale auth key (keeps it off the argv).
 mesh-node-up: ## run a Local Docker mesh node on THIS machine (AUTHKEY_FILE=… [NODE_NAME=…] [LOGIN_SERVER=…])
-	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh up --authkey-file "$(AUTHKEY_FILE)" $(if $(NODE_NAME),--node-name "$(NODE_NAME)") $(if $(LOGIN_SERVER),--login-server "$(LOGIN_SERVER)") --generator-dir .
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.local_mesh up --authkey-file "$(AUTHKEY_FILE)" $(if $(NODE_NAME),--node-name "$(NODE_NAME)") $(if $(LOGIN_SERVER),--login-server "$(LOGIN_SERVER)") --generator-dir .
 
 mesh-node-down: ## stop the Local Docker mesh node on THIS machine
-	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh down --generator-dir .
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.local_mesh down --generator-dir .
 
 mesh-node-status: ## show whether the Local Docker mesh node is running
-	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh status --generator-dir .
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.local_mesh status --generator-dir .
 
 mesh-node-logs: ## tail the Local Docker mesh node's container logs
-	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh logs --generator-dir .
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.local_mesh logs --generator-dir .
 
 # ── Local Docker mesh FROM SCRATCH (generate creds + start a superadmin mesh) ────
 # The "generate & start a NEW local mesh from scratch" path: mint ALL credentials
@@ -390,16 +390,16 @@ _MESH_BOOTSTRAP_ARGS = --env "$(ENV)" $(if $(strip $(SOCIAL)),--social) \
   --generator-dir .
 
 mesh-bootstrap-plan: ## preview a from-scratch local mesh (creds + stack it WOULD start; no side effects)
-	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh_bootstrap plan $(_MESH_BOOTSTRAP_ARGS)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.local_mesh_bootstrap plan $(_MESH_BOOTSTRAP_ARGS)
 
 mesh-bootstrap-up: ## GENERATE creds + START a NEW superadmin local mesh from scratch (explicit; prod TTY-confirms)
-	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh_bootstrap up $(_MESH_BOOTSTRAP_ARGS)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.local_mesh_bootstrap up $(_MESH_BOOTSTRAP_ARGS)
 
 mesh-bootstrap-down: ## stop the from-scratch local mesh (stack + overlay)
-	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh_bootstrap down $(_MESH_BOOTSTRAP_ARGS)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.local_mesh_bootstrap down $(_MESH_BOOTSTRAP_ARGS)
 
 mesh-bootstrap-status: ## show whether the from-scratch local mesh (stack + overlay) is running
-	@PYTHONPATH=studio python3 -m snapdragon_studio.core.local_mesh_bootstrap status $(_MESH_BOOTSTRAP_ARGS)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.local_mesh_bootstrap status $(_MESH_BOOTSTRAP_ARGS)
 
 ## ── build ─────────────────────────────────────────────────────────────
 # Every build target dispatches: NATIVE unset -> re-invoke inside the builder
@@ -439,9 +439,9 @@ pentest-seed: ## seed pen-test ATTACKER + LOAD personas (delegates to tests/pent
 	$(if $(strip $(PENTEST_TOKENS_ENV)),PENTEST_TOKENS_ENV='$(PENTEST_TOKENS_ENV)') \
 	  bash tests/pentest/seed-personas.sh
 
-local: ## build the LAN .test fleet (ENV=test, BRAND=local -> snapdragon.test; no internet)
-	@echo "==> LOCAL build: ENV=test, brand=local (snapdragon.test). LAN-only — no public"
-	@echo "    internet, no Cloudflare, no OAuth/SMTP. Cluster wildcard DNS serves *.snapdragon.test."
+local: ## build the LAN .test fleet (ENV=test, BRAND=local -> hugmesh.test; no internet)
+	@echo "==> LOCAL build: ENV=test, brand=local (hugmesh.test). LAN-only — no public"
+	@echo "    internet, no Cloudflare, no OAuth/SMTP. Cluster wildcard DNS serves *.hugmesh.test."
 	@echo "    After boot, point your router/clients DNS at the backend node:53 (see docs/LOCAL-TESTING.md)."
 	$(MAKE) build-all ENV=test BRAND=local
 
@@ -452,22 +452,22 @@ prod: ## build the PROD fleet (ENV=prod, REAL domain) — announced; creds from 
 
 # go-live wizard — DEV PREVIEW of the on-device superadmin go-live wizard. This
 # is the repo-side CLI op (the thin front-end pattern in Makefile form) over the
-# SHARED driver at specs/usr/sbin/snapdragon-go-live. It runs the driver's
+# SHARED driver at specs/usr/sbin/hugmesh-go-live. It runs the driver's
 # `plan` (a DRY-RUN — it NEVER flips posture) against the repo copies, sandboxed
-# with GL_ETC_SNAPDRAGON pointing at a scratch dir so it can NEVER read/write the
-# host's /etc/snapdragon. On a real node you run `snapdragon-go-live` directly;
+# with GL_ETC_HUGMESH pointing at a scratch dir so it can NEVER read/write the
+# host's /etc/hugmesh. On a real node you run `hugmesh-go-live` directly;
 # the marker/posture switch is on-device only (see docs/GO-LIVE-WIZARD.md).
 #   make go-live                                  # preview byo-domain for DOMAIN
 #   make go-live PROVIDER=byo-domain DOMAIN=acme.example INGRESS_IP=203.0.113.10
 GOLIVE_PROVIDER ?= $(if $(strip $(PROVIDER)),$(PROVIDER),byo-domain)
-GOLIVE_DOMAIN   ?= $(if $(strip $(DOMAIN)),$(DOMAIN),snapdragon.systems)
+GOLIVE_DOMAIN   ?= $(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.systems)
 GOLIVE_OUT      ?= $(WORK_DIR)/go-live
 go-live: ## preview the on-device go-live wizard (DRY-RUN plan; PROVIDER=/DOMAIN=/INGRESS_IP= knobs)
 	@echo "==> go-live wizard PREVIEW (dry-run; posture is NEVER touched here)"
 	@mkdir -p '$(GOLIVE_OUT)/etc' '$(GOLIVE_OUT)/out'
-	GL_ETC_SNAPDRAGON='$(GOLIVE_OUT)/etc' \
-	GL_PROVIDERS_LIB='$(CURDIR)/specs/usr/lib/snapdragon/go-live-providers.sh' \
-	  bash specs/usr/sbin/snapdragon-go-live plan \
+	GL_ETC_HUGMESH='$(GOLIVE_OUT)/etc' \
+	GL_PROVIDERS_LIB='$(CURDIR)/specs/usr/lib/hugmesh/go-live-providers.sh' \
+	  bash specs/usr/sbin/hugmesh-go-live plan \
 	    --provider '$(GOLIVE_PROVIDER)' --domain '$(GOLIVE_DOMAIN)' \
 	    --out-dir '$(GOLIVE_OUT)/out' \
 	    $(if $(strip $(INGRESS_IP)),--ingress-ip '$(INGRESS_IP)') \
@@ -475,19 +475,19 @@ go-live: ## preview the on-device go-live wizard (DRY-RUN plan; PROVIDER=/DOMAIN
 	@echo "==> emitted under $(GOLIVE_OUT)/out (preview only). Real go-live is on-device."
 
 # go-live-menu — DEV PREVIEW of the on-device ncurses/whiptail CONSOLE front-end
-# (specs/usr/sbin/snapdragon-go-live-menu), the thin successor of the removed
+# (specs/usr/sbin/hugmesh-go-live-menu), the thin successor of the removed
 # #286 whiptail UX. It carries NO wizard logic: every action is a subcommand of
 # the SAME shared driver `make go-live` previews. It runs under the identical
-# GL_ETC_SNAPDRAGON sandbox so it can NEVER read/write the host's
-# /etc/snapdragon. On a real node you run `snapdragon-go-live-menu` directly.
+# GL_ETC_HUGMESH sandbox so it can NEVER read/write the host's
+# /etc/hugmesh. On a real node you run `hugmesh-go-live-menu` directly.
 go-live-menu: ## preview the on-device go-live CONSOLE menu (ncurses front-end; sandboxed)
 	@echo "==> go-live console menu PREVIEW (dry-run sandbox; host posture is NEVER touched)"
 	@mkdir -p '$(GOLIVE_OUT)/etc' '$(GOLIVE_OUT)/out'
-	GL_ETC_SNAPDRAGON='$(GOLIVE_OUT)/etc' \
-	GL_DRIVER='$(CURDIR)/specs/usr/sbin/snapdragon-go-live' \
-	GL_PROVIDERS_LIB='$(CURDIR)/specs/usr/lib/snapdragon/go-live-providers.sh' \
+	GL_ETC_HUGMESH='$(GOLIVE_OUT)/etc' \
+	GL_DRIVER='$(CURDIR)/specs/usr/sbin/hugmesh-go-live' \
+	GL_PROVIDERS_LIB='$(CURDIR)/specs/usr/lib/hugmesh/go-live-providers.sh' \
 	GL_OUT_DIR='$(GOLIVE_OUT)/out' \
-	  bash specs/usr/sbin/snapdragon-go-live-menu
+	  bash specs/usr/sbin/hugmesh-go-live-menu
 
 # ── MDM phone wizard (onboarding form — builds NO image) ──────────────
 # Thin delegates to the ONE driver, scripts/phone-wizard.sh: flash a USB-
@@ -594,7 +594,7 @@ phone-status: ## read-only: tools, device, tailnet, profile + escrow PRESENCE (n
 phone-mdm-enroll: ## Headwind MDM device-owner enrollment (fresh device only; HEADWIND_APK=+HEADWIND_SIGNER_SHA256= pin, HEADWIND_URL= into init.json)
 	@bash scripts/phone-wizard.sh mdm-enroll $(_PHONE_ARGS)
 
-phone-attest: ## install the pinned Snapdragon Auditor fork + guided AttestationServer pairing (AUDITOR_APK=+AUDITOR_SIGNER_SHA256=, ATTESTATION_URL=)
+phone-attest: ## install the pinned HugMesh Auditor fork + guided AttestationServer pairing (AUDITOR_APK=+AUDITOR_SIGNER_SHA256=, ATTESTATION_URL=)
 	@bash scripts/phone-wizard.sh attest $(_PHONE_ARGS)
 
 phone-wizard: ## interactive guided full phone flow (TTY): detect->fetch->flash->attest->mdm-enroll->enroll->profile->ingest
@@ -602,8 +602,8 @@ phone-wizard: ## interactive guided full phone flow (TTY): detect->fetch->flash-
 
 # ── Cloud deploy (publishes a PACKAGED image — builds NO image) ───────
 # Thin delegates to the shared Qt-free entrypoint
-# snapdragon_studio.core.cloud_deploy, which fronts the ONE canonical driver
-# specs/usr/sbin/snapdragon-cloud-deploy — the exact same face the Studio
+# hugmesh_studio.core.cloud_deploy, which fronts the ONE canonical driver
+# specs/usr/sbin/hugmesh-cloud-deploy — the exact same face the Studio
 # DeployPage and the ncurses deploy_screen drive. `plan` renders the provider
 # artifacts OFFLINE into OUT_DIR (readable scripts/policies/checklists; no
 # cloud API is touched); only apply/destroy mutate anything, and BOTH stay
@@ -639,16 +639,16 @@ _CLOUD_DEPLOY_ARGS = $${PROVIDER:+--provider "$$PROVIDER"} \
   --generator-dir .
 
 deploy-plan: ## render the cloud-deploy provider artifacts OFFLINE (PROVIDER= DEPLOY_IMAGE= [DOMAIN= REGION= CREDS_FILE= OUT_DIR= KEYS_DIR=])
-	@PYTHONPATH=studio python3 -m snapdragon_studio.core.cloud_deploy plan $(_CLOUD_DEPLOY_ARGS)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.cloud_deploy plan $(_CLOUD_DEPLOY_ARGS)
 
 deploy-apply: ## EXECUTE the rendered plan's apply.sh (driver TTY-confirms; REAL cloud resources + cost)
-	@PYTHONPATH=studio python3 -m snapdragon_studio.core.cloud_deploy apply $(_CLOUD_DEPLOY_ARGS)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.cloud_deploy apply $(_CLOUD_DEPLOY_ARGS)
 
 deploy-status: ## read the emitted state hints / print the provider check commands (never calls a cloud API)
-	@PYTHONPATH=studio python3 -m snapdragon_studio.core.cloud_deploy status $(_CLOUD_DEPLOY_ARGS)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.cloud_deploy status $(_CLOUD_DEPLOY_ARGS)
 
 deploy-destroy: ## run the rendered plan's destroy.sh (driver TTY-confirms)
-	@PYTHONPATH=studio python3 -m snapdragon_studio.core.cloud_deploy destroy $(_CLOUD_DEPLOY_ARGS)
+	@PYTHONPATH=studio python3 -m hugmesh_studio.core.cloud_deploy destroy $(_CLOUD_DEPLOY_ARGS)
 
 rebuild: ## from-scratch: wipe the work dir, then build the whole default fleet
 ifndef NATIVE
@@ -705,7 +705,7 @@ PREBUILD_JETSON_BOARD ?= orin-nano
 prebuild-binaries: ## prebuild a platform's role-union binpkg pool (ARCH=x86|rpi5|frite|jetson|orangepi5|orangepizero2 [BOARD=]); compile once, reuse via --usepkg
 	@_pl='$(ARCH)'; _list=$$(mktemp); \
 	 echo "==> computing $$_pl role-union package set (prebuild_union)"; \
-	 PYTHONPATH=studio python3 -m snapdragon_studio.core.prebuild_union "$$_pl" > "$$_list" \
+	 PYTHONPATH=studio python3 -m hugmesh_studio.core.prebuild_union "$$_pl" > "$$_list" \
 	   || { echo "prebuild_union failed for '$$_pl'"; rm -f "$$_list"; exit 1; }; \
 	 _atoms="$$(tr '\n' ' ' < "$$_list")"; \
 	 echo "==> $$_pl: $$(wc -l < "$$_list") atoms -> per-board binpkg pool (--packages-only, no image)"; \
@@ -866,7 +866,7 @@ docker-image: ## build the self-contained Gentoo builder image (LONG first time:
 # purely for the build-image.sh terminal ingest message to report which
 # generator revision produced the image; falls back to empty (not a fake
 # placeholder) outside a git checkout so the message suffix just stays absent.
-IMAGE_GEN_TAG ?= registry.snapdragon.systems/snapdragon/image-gen:latest
+IMAGE_GEN_TAG ?= registry.hugmesh.systems/hugmesh/image-gen:latest
 GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null)
 image-gen-docker-image: ## build the admin-bff-api image-gen Job worker (needs $(IMAGE) built first)
 	docker build -f docker/Dockerfile.image-gen --build-arg GIT_SHA=$(GIT_SHA) -t $(IMAGE_GEN_TAG) .
@@ -889,8 +889,8 @@ qemu-x86: ## boot an x86 role image in QEMU: make qemu-x86 ROLE=be+gpu
 
 qemu: qemu-$(if $(filter arm64,$(ARCH)),rpi,x86) ## boot ROLE/ARCH in QEMU (ARCH=x86|arm64)
 
-qemu-matrix: ## boot+assert size/load for matrix rows (opt-in; SNAPDRAGON_QEMU_E2E=1; MATRIX_FILTER=x86/be+gpu)
-	SNAPDRAGON_QEMU_E2E=$(if $(SNAPDRAGON_QEMU_E2E),$(SNAPDRAGON_QEMU_E2E),1) \
+qemu-matrix: ## boot+assert size/load for matrix rows (opt-in; HUGMESH_QEMU_E2E=1; MATRIX_FILTER=x86/be+gpu)
+	HUGMESH_QEMU_E2E=$(if $(HUGMESH_QEMU_E2E),$(HUGMESH_QEMU_E2E),1) \
 	  $(SUDO) tests/qemu/run-matrix-e2e.sh -w "$(WORK_DIR)" $(if $(MATRIX_FILTER),--only $(MATRIX_FILTER),)
 
 qemu-matrix-enumerate: ## dry-run enumerate every matrix row + its launcher/size/RAM (no boot, no build)
@@ -920,7 +920,7 @@ docker-build: ## DEPRECATED: builds now default to Docker — just run `make bui
 	@echo "Use NATIVE=1 for a local-Gentoo (host/in-container) build."
 
 ## ── LOCAL STACK (docker-compose; clone+build+run the whole platform) ──────────
-# Runs the ENTIRE Snapdragon platform on x86_64 via docker-compose, building every
+# Runs the ENTIRE HugMesh platform on x86_64 via docker-compose, building every
 # service from its cloned repo. Linux: `make stack-up`. Windows (Docker Desktop):
 # scripts/stack-up.ps1. See docs/LOCAL-STACK.md.
 #
@@ -936,12 +936,12 @@ GIT_REF         ?= main
 SOCIAL          ?=
 # ENV -> Casdoor issuer URI used by every service (overridable via CASDOOR_ISSUER).
 ifeq ($(ENV),prod)
-CASDOOR_ISSUER ?= https://id.$(if $(strip $(DOMAIN)),$(DOMAIN),snapdragon.systems)
+CASDOOR_ISSUER ?= https://id.$(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.systems)
 else
 CASDOOR_ISSUER ?= http://localhost:8000
 endif
 # External-IdP seam (Entra ID et al — see the azure-image provider's entra/ emit
-# from snapdragon-cloud-deploy): OIDC_ISSUER, when set NON-EMPTY, overrides the
+# from hugmesh-cloud-deploy): OIDC_ISSUER, when set NON-EMPTY, overrides the
 # derived CASDOOR_ISSUER above and rides the SAME CASDOOR_ISSUER_URI threading
 # below — the CASDOOR_* env NAMES are cross-repo bindings and are deliberately
 # NOT renamed. Default/empty = today's Casdoor-derived behavior, byte-for-byte.
@@ -992,7 +992,7 @@ STACK_TOR_PROFILE := $(if $(strip $(TOR)),--profile tor,)
 COMPOSE_CMD   ?= docker compose
 # ── private-maven cold-build wiring (see tests/stack/m2-bootstrap.sh) ──
 # Four Java services (admin/user/mod-bff, federation-api) resolve org-PRIVATE
-# systems.snapdragon:* maven artifacts at image-build time. `make
+# systems.hugmesh:* maven artifacts at image-build time. `make
 # stack-m2-bootstrap` builds those artifacts FROM SOURCE into a persistent
 # cache and serves them from a local registry container, writing
 # $(STACK_M2_ENV) (gitignored). Whenever that env file exists, every
@@ -1007,7 +1007,7 @@ STACK_M2_FLAGS    = $(if $(wildcard $(STACK_M2_ENV)),--env-file $(STACK_M2_ENV) 
 # compose call so the profile renders/runs (NOT needed for the core stack).
 STACK_SOCIAL_DEP := $(if $(strip $(SOCIAL)),stack-mastodon-env,)
 
-stack-clone: ## clone/update all snapdragon repos into ./.stack-src (idempotent; STACK_NO_CLONE=1 skips)
+stack-clone: ## clone/update all hugmesh repos into ./.stack-src (idempotent; STACK_NO_CLONE=1 skips)
 	@if [ -n "$(STACK_NO_CLONE)" ]; then \
 	  echo "==> stack-clone: SKIPPED (STACK_NO_CLONE=1) — building from $(STACK_SRC) as-is"; \
 	else \
@@ -1032,7 +1032,7 @@ stack-clone: ## clone/update all snapdragon repos into ./.stack-src (idempotent;
 # blocks every be-gateway-proxied request with "Blocked hosts: mastodon-web:3000"
 # — a 403 for EVERY role (mod/admin/user alike), independent of any Casdoor
 # role/route-access decision. Reproduced + fixed live against the running compose
-# stack (docker logs snapdragon-local-mastodon-web-1 showed the exact
+# stack (docker logs hugmesh-local-mastodon-web-1 showed the exact
 # HostAuthorization block on every /api/v1/**, /api/v2/**, /oauth/** call proxied
 # through the be-gateway).
 # Delegated to tests/stack/gen-mastodon-env.sh (shared with up-real.sh) so a
@@ -1044,7 +1044,7 @@ stack-clone: ## clone/update all snapdragon repos into ./.stack-src (idempotent;
 stack-mastodon-env:
 	@bash tests/stack/gen-mastodon-env.sh
 
-stack-m2-bootstrap: ## COLD-BUILD prereq: build the private systems.snapdragon maven artifacts FROM SOURCE + serve them from a local registry container
+stack-m2-bootstrap: ## COLD-BUILD prereq: build the private systems.hugmesh maven artifacts FROM SOURCE + serve them from a local registry container
 	bash tests/stack/m2-bootstrap.sh
 
 stack-build: stack-clone $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)

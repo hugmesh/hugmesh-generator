@@ -1,6 +1,6 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: snapdragon-backend
+namespace: hugmesh-backend
 resources:
   - pvc.yaml
   - deployment.yaml
@@ -11,7 +11,7 @@ resources:
 # harbor-registry imagePullSecret (ESO-materialized, see manifests/external-secrets),
 # patched in below — same pattern as manifests/games.
 images:
-  - { name: snapdragon-systems/snapdragon-media-poisoner, newName: registry.snapdragon.systems/snapdragon/snapdragon-media-poisoner, newTag: main }
+  - { name: snapdragon-systems/hugmesh-media-poisoner, newName: registry.hugmesh.systems/hugmesh/hugmesh-media-poisoner, newTag: main }
 patches:
   - target: { kind: Deployment }
     patch: |

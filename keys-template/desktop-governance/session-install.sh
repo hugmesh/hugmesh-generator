@@ -15,7 +15,7 @@
 # with the SAME precedence + fail-closed validation + sed-escape as provision.sh.
 #
 # IDEMPOTENT + GOVERNED-GATED + FAIL-CLOSED:
-#   * ungoverned image (no baked /etc/snapdragon/desktop-governance and no
+#   * ungoverned image (no baked /etc/hugmesh/desktop-governance and no
 #     KEYS/desktop-governance/) => render NOTHING, publish nothing, exit 0.
 #   * no resolvable domain OR a domain that is not a valid hostname => refuse to
 #     render (exit 0, ships-dark) — never emit a corrupted/injected config.
@@ -28,16 +28,16 @@ warn() { printf 'session-install: WARN %s\n' "$*" >&2; }
 # Where the GEN-SSO templates live. Prefer the baked sysroot copy; fall back to
 # the KEYS USB dir (KEYS_BASE exported by provision_run_hooks; this script's own
 # dir as a last resort when run by hand).
-GOV_DST="/etc/snapdragon/desktop-governance"
+GOV_DST="/etc/hugmesh/desktop-governance"
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC=""
 for cand in \
-    "/etc/snapdragon/desktop-governance" \
+    "/etc/hugmesh/desktop-governance" \
     "${KEYS_BASE:-}/desktop-governance" \
     "${SELF_DIR}" ; do
     [ -n "${cand}" ] || continue
     if [ -f "${cand}/discover/oidc-token-deposit.sh.tmpl" ] \
-       || [ -f "${cand}/autostart/snapdragon-desktop-sso.desktop.tmpl" ]; then
+       || [ -f "${cand}/autostart/hugmesh-desktop-sso.desktop.tmpl" ]; then
         SRC="${cand}"; break
     fi
 done
@@ -45,7 +45,7 @@ done
 # is_governed(): mirrors provision.sh desktop_governance_governed() — the image is
 # governed iff it carries the desktop-governance config dir (baked or on KEYS).
 is_governed() {
-    [ -d /etc/snapdragon/desktop-governance ] && return 0
+    [ -d /etc/hugmesh/desktop-governance ] && return 0
     [ -n "${KEYS_BASE:-}" ] && [ -d "${KEYS_BASE}/desktop-governance" ] && return 0
     return 1
 }
@@ -60,22 +60,22 @@ if [ -z "${SRC}" ]; then
 fi
 
 # ── Resolve this node's OWN domain — SAME precedence as provision.sh:
-#    manifest .client.primary_domain (via provision-resolved /etc/snapdragon/domains
+#    manifest .client.primary_domain (via provision-resolved /etc/hugmesh/domains
 #    here, since we run post-provision) -> first non-blank line of
-#    /etc/snapdragon/domains -> none. We read the domains marker provision wrote.
+#    /etc/hugmesh/domains -> none. We read the domains marker provision wrote.
 dom=""
-if [ -r /etc/snapdragon/domains ]; then
-    dom="$(grep -m1 -v '^[[:space:]]*$' /etc/snapdragon/domains 2>/dev/null | tr -d '[:space:]')"
+if [ -r /etc/hugmesh/domains ]; then
+    dom="$(grep -m1 -v '^[[:space:]]*$' /etc/hugmesh/domains 2>/dev/null | tr -d '[:space:]')"
 fi
 # Fallback: derive from the rendered Discover remote (api.<domain>/...) so we
 # track exactly the domain provision_desktop_governance() used.
-if [ -z "${dom}" ] && [ -r /etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo ]; then
+if [ -z "${dom}" ] && [ -r /etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo ]; then
     dom="$(sed -n 's#^Url=https://api\.\([a-z0-9.-]*\)/bff/desktop/registry/.*#\1#p' \
-            /etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo 2>/dev/null | head -n1)"
+            /etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo 2>/dev/null | head -n1)"
 fi
 
 if [ -z "${dom}" ]; then
-    warn "no resolvable node domain (/etc/snapdragon/domains / rendered remote) — refusing to render (ships-dark, no autostart)"
+    warn "no resolvable node domain (/etc/hugmesh/domains / rendered remote) — refusing to render (ships-dark, no autostart)"
     exit 0
 fi
 
@@ -105,12 +105,12 @@ render() {  # $1=src-tmpl  $2=dst  $3=mode
 # Render the two helper scripts into the writable governance dir.
 render "${SRC}/discover/oidc-token-deposit.sh.tmpl" \
        "${GOV_DST}/oidc-token-deposit.sh" 0755 || exit 0
-render "${SRC}/autostart/snapdragon-desktop-sso-start.sh.tmpl" \
-       "${GOV_DST}/snapdragon-desktop-sso-start.sh" 0755 || exit 0
+render "${SRC}/autostart/hugmesh-desktop-sso-start.sh.tmpl" \
+       "${GOV_DST}/hugmesh-desktop-sso-start.sh" 0755 || exit 0
 
 # Publish the XDG autostart entry honored by LXDE + XFCE (no OnlyShowIn).
-render "${SRC}/autostart/snapdragon-desktop-sso.desktop.tmpl" \
-       "/etc/xdg/autostart/snapdragon-desktop-sso.desktop" 0644 || exit 0
+render "${SRC}/autostart/hugmesh-desktop-sso.desktop.tmpl" \
+       "/etc/xdg/autostart/hugmesh-desktop-sso.desktop" 0644 || exit 0
 
 log "done — autostart published; bearer-forward now has a token depositor + a session-start invoker"
 exit 0

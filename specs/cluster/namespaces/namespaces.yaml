@@ -1,16 +1,16 @@
-# Snapdragon cluster namespaces. Each carries the snapdragon-*-gateway that
+# HugMesh cluster namespaces. Each carries the hugmesh-*-gateway that
 # fronts all of its traffic and validates the internal Casdoor OAuth2 JWT.
 #
 # Placement is by capability labels (booleans), not a single role, so the
 # x86_64 host can carry several. Workloads nodeSelect snapdragon.systems/<tier>=true:
-#   snapdragon-pki       pki=true        -> pki Pi (control-plane): headscale, Casdoor, auth
-#   snapdragon-backend   backend=true    -> backend Pis AND the x86_64 host
-#   snapdragon-frontend  frontend=true   -> frontend Pis AND the x86_64 host
-#   snapdragon-games     games=true,compute=gpu -> x86_64 host. ALSO hosts the
+#   hugmesh-pki       pki=true        -> pki Pi (control-plane): headscale, Casdoor, auth
+#   hugmesh-backend   backend=true    -> backend Pis AND the x86_64 host
+#   hugmesh-frontend  frontend=true   -> frontend Pis AND the x86_64 host
+#   hugmesh-games     games=true,compute=gpu -> x86_64 host. ALSO hosts the
 #                        SEPARATE GAMES-realm Casdoor (casdoor-games, org
 #                        "threewizards") + its Postgres (casdoor-games-pg) — an
 #                        independent identity provider from the systems Casdoor in
-#                        snapdragon-pki.
+#                        hugmesh-pki.
 #   devops               devops=true; ArgoCD additionally kubernetes.io/arch=amd64 (x86 ONLY)
 # The x86_64 host is labelled frontend=backend=games=devops=true (+compute=gpu),
 # so it runs all of those; the Pis keep only their own tier label.
@@ -25,9 +25,9 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: snapdragon-pki
+  name: hugmesh-pki
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: pki
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: latest
@@ -37,9 +37,9 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: snapdragon-backend
+  name: hugmesh-backend
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: backend
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: latest
@@ -49,9 +49,9 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: snapdragon-frontend
+  name: hugmesh-frontend
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: frontend
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: latest
@@ -61,9 +61,9 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: snapdragon-games
+  name: hugmesh-games
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: games
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: latest
@@ -75,19 +75,19 @@ kind: Namespace
 metadata:
   name: devops
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: devops
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/warn-version: latest
     pod-security.kubernetes.io/audit: restricted
     pod-security.kubernetes.io/audit-version: latest
 ---
-# snapdragon-policy — holds the cluster admission-policy plumbing: the
+# hugmesh-policy — holds the cluster admission-policy plumbing: the
 # reserved-prefixes ConfigMap (mirror of specs/cluster/reserved-prefixes.yaml)
 # read by the Kyverno ClusterPolicy that blocks vanity-shadowing route/host
 # collisions. No workloads; just policy data + (cluster-scoped) policy objects.
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: snapdragon-policy
-  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: devops }
+  name: hugmesh-policy
+  labels: { app.kubernetes.io/part-of: hugmesh.systems, snapdragon.systems/tier: devops }

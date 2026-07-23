@@ -87,7 +87,7 @@ def emitted(cfg, tmp, name):
     p = os.path.join(tmp, name + ".json")
     with open(p, "w") as fh:
         json.dump(cfg, fh)
-    r = subprocess.run([sys.executable, "-m", "snapdragon_studio", "--print-command",
+    r = subprocess.run([sys.executable, "-m", "hugmesh_studio", "--print-command",
                         "--config", p, "--generator-dir", gen, "--backend", "native"],
                        capture_output=True, text=True, timeout=120, env=env, cwd=studio)
     if r.returncode != 0:
@@ -131,7 +131,7 @@ fi
 # 5. Drift guard: the Studio's mirrored trigger tuple must equal the builder's live set.
 DRIFT="$(cd "${GEN}/studio" && PYTHONPATH=. "${PYTHON}" - "${TRIGGERS}" <<'PYEOF'
 import sys
-from snapdragon_studio.core.config import _CALAMARES_INSTALLER_UI
+from hugmesh_studio.core.config import _CALAMARES_INSTALLER_UI
 want = set(sys.argv[1].split())
 got = set(_CALAMARES_INSTALLER_UI)
 print("CLEAN" if got == want else f"studio mirrors {sorted(got)} but builder says {sorted(want)}")

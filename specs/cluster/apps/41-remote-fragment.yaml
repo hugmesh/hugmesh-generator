@@ -1,4 +1,4 @@
-# snapdragon-remote-fragment — multi-replica nginx + Spring-Native sync sidecar.
+# hugmesh-remote-fragment — multi-replica nginx + Spring-Native sync sidecar.
 # Pulls the ENABLED module-federation FRAGMENT bundles from the federation
 # manifest/bundles API and serves them STATICALLY (content-addressed, immutable,
 # cacheable) at /_fragments/<slug>/<contentHash>/...remoteEntry.json for the host's
@@ -6,17 +6,17 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: snapdragon-remote-fragment
+  name: hugmesh-remote-fragment
   namespace: devops
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/remote-fragment
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-frontend
+    namespace: hugmesh-frontend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

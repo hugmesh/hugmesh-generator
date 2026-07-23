@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # test-cloud-deploy-driver.sh — offline logic test for the cloud-deploy wizard:
-# the shared driver (specs/usr/sbin/snapdragon-cloud-deploy) + the provider
-# registry (specs/usr/lib/snapdragon/cloud-deploy-providers.sh), exercised
+# the shared driver (specs/usr/sbin/hugmesh-cloud-deploy) + the provider
+# registry (specs/usr/lib/hugmesh/cloud-deploy-providers.sh), exercised
 # end-to-end across all four providers. Mirrors tests/go-live/
 # test-go-live-driver.sh conventions.
 #
 # Runs ANYWHERE with just bash — NO root, NO network, NO cloud. It points the
-# driver's CD_ETC_SNAPDRAGON seam at a throwaway dir, and every cloud CLI the
+# driver's CD_ETC_HUGMESH seam at a throwaway dir, and every cloud CLI the
 # emitted scripts drive (aws/az/oc) is a PATH-shadow STUB owned by THIS test
 # that records argv into a log — a real CLI is never reachable.
 #
@@ -32,8 +32,8 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DRIVER="${REPO}/specs/usr/sbin/snapdragon-cloud-deploy"
-LIB="${REPO}/specs/usr/lib/snapdragon/cloud-deploy-providers.sh"
+DRIVER="${REPO}/specs/usr/sbin/hugmesh-cloud-deploy"
+LIB="${REPO}/specs/usr/lib/hugmesh/cloud-deploy-providers.sh"
 
 [ -r "${DRIVER}" ] || { echo "  FAIL driver missing: ${DRIVER}"; exit 1; }
 [ -r "${LIB}" ]    || { echo "  FAIL registry lib missing: ${LIB}"; exit 1; }
@@ -79,17 +79,17 @@ chmod +x "${STUB}/aws" "${STUB}/az" "${STUB}/oc"
 export ARGV_LOG
 
 # A fake image + a 0600 creds file whose CONTENTS must never leak into argv.
-IMG="${WORK}/snapdragon-x86.img"; truncate -s 4096 "${IMG}" 2>/dev/null || dd if=/dev/zero of="${IMG}" bs=1024 count=4 2>/dev/null
+IMG="${WORK}/hugmesh-x86.img"; truncate -s 4096 "${IMG}" 2>/dev/null || dd if=/dev/zero of="${IMG}" bs=1024 count=4 2>/dev/null
 CREDS="${WORK}/creds"; printf '[default]\naws_access_key_id=AKIATESTFAKEKEY00000\naws_secret_access_key=secretpayload-never-argv\n' > "${CREDS}"; chmod 0600 "${CREDS}"
 
 # Always invoke the driver with the seams pointing at the throwaway tree, stdin
 # from /dev/null so the "non-TTY" fail-safe path is exercised by default.
-cdd() { CD_ETC_SNAPDRAGON="${ETC}" CD_PROVIDERS_LIB="${LIB}" bash "${DRIVER}" "$@" </dev/null 2>&1; }
+cdd() { CD_ETC_HUGMESH="${ETC}" CD_PROVIDERS_LIB="${LIB}" bash "${DRIVER}" "$@" </dev/null 2>&1; }
 # Mutating-verb wrapper: stubs FIRST on PATH + the test-only confirmation seam.
-cdy() { PATH="${STUB}:${PATH}" CD_ASSUME_YES=1 CD_ETC_SNAPDRAGON="${ETC}" CD_PROVIDERS_LIB="${LIB}" bash "${DRIVER}" "$@" </dev/null 2>&1; }
+cdy() { PATH="${STUB}:${PATH}" CD_ASSUME_YES=1 CD_ETC_HUGMESH="${ETC}" CD_PROVIDERS_LIB="${LIB}" bash "${DRIVER}" "$@" </dev/null 2>&1; }
 # Non-TTY gate probe: stubs on PATH but NO assume-yes — if the confirmation gate
 # ever regressed, the leak lands in ARGV_LOG (and never reaches a real CLI).
-cdn() { PATH="${STUB}:${PATH}" CD_ETC_SNAPDRAGON="${ETC}" CD_PROVIDERS_LIB="${LIB}" bash "${DRIVER}" "$@" </dev/null 2>&1; }
+cdn() { PATH="${STUB}:${PATH}" CD_ETC_HUGMESH="${ETC}" CD_PROVIDERS_LIB="${LIB}" bash "${DRIVER}" "$@" </dev/null 2>&1; }
 
 echo "== cloud-deploy wizard: offline driver + 4-provider emission test =="
 
@@ -139,7 +139,7 @@ grep -q -- '--boot-mode uefi' "${AWSOUT}/apply.sh" && grep -q -- '--ena-support'
     && ok "aws-ec2 apply registers UEFI + ENA" || bad "aws-ec2 apply missing --boot-mode uefi/--ena-support"
 grep -q 'CONFIG_ENA_ETHERNET' "${AWSOUT}/checklist.md" && ok "aws-ec2 checklist carries the honest ENA kernel caveat" || bad "aws-ec2 checklist missing CONFIG_ENA_ETHERNET"
 grep -q 'vmie.amazonaws.com' "${AWSOUT}/vmimport-trust-policy.json" && ok "vmimport trust policy is the vmie service trust" || bad "vmimport trust policy wrong"
-grep -q "example-com-snapdragon-import" "${AWSOUT}/vmimport-role-policy.json" && ok "vmimport role policy scoped to the derived bucket" || bad "vmimport role policy not bucket-scoped"
+grep -q "example-com-hugmesh-import" "${AWSOUT}/vmimport-role-policy.json" && ok "vmimport role policy scoped to the derived bucket" || bad "vmimport role policy not bucket-scoped"
 grep -q 'KEYS' "${AWSOUT}/keys-volume.md" && grep -q 'KEYS_PREMOUNTED' "${AWSOUT}/keys-volume.md" \
     && ok "keys-volume.md documents the KEYS label + KEYS_PREMOUNTED hook" || bad "keys-volume.md incomplete"
 # plan purity: no cloud call, no creds read into artifacts, no state, nothing outside out.
@@ -150,8 +150,8 @@ grep -rq 'secretpayload-never-argv' "${AWSOUT}" && bad "plan artifacts CONTAIN c
 
 # azure-image --------------------------------------------------------------------
 AZOUT="${WORK}/out-az"
-VHD="${WORK}/snapdragon-x86.vhd"; truncate -s 4096 "${VHD}" 2>/dev/null || cp "${IMG}" "${VHD}"
-CD_ENTRA_TENANT="00000000-1111-2222-3333-444444444444" CD_ETC_SNAPDRAGON="${ETC}" CD_PROVIDERS_LIB="${LIB}" \
+VHD="${WORK}/hugmesh-x86.vhd"; truncate -s 4096 "${VHD}" 2>/dev/null || cp "${IMG}" "${VHD}"
+CD_ENTRA_TENANT="00000000-1111-2222-3333-444444444444" CD_ETC_HUGMESH="${ETC}" CD_PROVIDERS_LIB="${LIB}" \
     bash "${DRIVER}" plan --provider azure-image --image "${VHD}" --region westeurope --out-dir "${AZOUT}" </dev/null >/dev/null 2>&1
 for f in apply.sh destroy.sh image-builder-template.json keys-disk.md checklist.md \
          entra/README.md entra/app-registrations.md entra/claims-mapping.md \
@@ -187,7 +187,7 @@ fi
 
 # openshift-cnv ------------------------------------------------------------------
 OCOUT="${WORK}/out-oc"
-QCOW="${WORK}/snapdragon-x86.qcow2"; truncate -s 4096 "${QCOW}" 2>/dev/null || cp "${IMG}" "${QCOW}"
+QCOW="${WORK}/hugmesh-x86.qcow2"; truncate -s 4096 "${QCOW}" 2>/dev/null || cp "${IMG}" "${QCOW}"
 cdd plan --provider openshift-cnv --image "${QCOW}" --creds-file "${CREDS}" --out-dir "${OCOUT}" >/dev/null
 for f in datavolume.yaml vm.yaml oc-apply.sh scc-notes.md rhel-notes.md destroy.sh; do
     [ -s "${OCOUT}/${f}" ] && ok "openshift-cnv emitted ${f}" || bad "openshift-cnv did NOT emit ${f}"
@@ -248,8 +248,8 @@ out="$(cdy apply --provider generic-qcow2 --out-dir "${GENOUT}")"; rc=$?
 : > "${ARGV_LOG}"
 out="$(cdy apply --provider aws-ec2 --out-dir "${AWSOUT}" --creds-file "${CREDS}")"; rc=$?
 [ "${rc}" -eq 0 ] && ok "aws-ec2 apply ran against the stub (rc=0)" || { bad "aws-ec2 apply failed (rc=${rc})"; echo "${out}"; }
-grep -q "s3 cp ${IMG} s3://example-com-snapdragon-import/" "${ARGV_LOG}" && ok "argv: s3 upload of the image to the derived bucket" || { bad "argv missing s3 cp"; cat "${ARGV_LOG}"; }
-grep -q 'ec2 import-snapshot' "${ARGV_LOG}" && grep -q 'S3Bucket=example-com-snapdragon-import' "${ARGV_LOG}" \
+grep -q "s3 cp ${IMG} s3://example-com-hugmesh-import/" "${ARGV_LOG}" && ok "argv: s3 upload of the image to the derived bucket" || { bad "argv missing s3 cp"; cat "${ARGV_LOG}"; }
+grep -q 'ec2 import-snapshot' "${ARGV_LOG}" && grep -q 'S3Bucket=example-com-hugmesh-import' "${ARGV_LOG}" \
     && ok "argv: import-snapshot from the staged object" || bad "argv missing import-snapshot"
 grep -q 'iam create-role --role-name vmimport' "${ARGV_LOG}" && ok "argv: vmimport role created from the emitted policy JSONs" || bad "argv missing vmimport create-role"
 grep -q 'register-image' "${ARGV_LOG}" && grep -q -- '--boot-mode uefi' "${ARGV_LOG}" && grep -q -- '--ena-support' "${ARGV_LOG}" \

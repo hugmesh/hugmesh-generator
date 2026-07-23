@@ -43,7 +43,7 @@ net-misc/openssh
 net-firewall/iptables
 net-misc/socat
 # Egress VPN (split-tunnel, fail-closed) — wg-quick (WireGuard, first-class) +
-# openvpn (fallback) for the node-level snapdragon-egress-vpn OpenRC service
+# openvpn (fallback) for the node-level hugmesh-egress-vpn OpenRC service
 # (DEFAULT-OFF; pruned by the optional-services gate when not selected — PR6).
 net-vpn/wireguard-tools
 net-vpn/openvpn

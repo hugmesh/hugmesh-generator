@@ -88,17 +88,17 @@ ARGV_ALL="${WORK}/argv-all.log"; : > "${ARGV_ALL}"
 SERIAL="E2ESER0001"
 DEVID="phone-e2eser0001"          # sanitize_id(E2ESER0001)
 CODENAME="oriole"                 # Pixel 6, in scripts/phone-devices.tsv
-LOGIN_SERVER="https://headscale.snapdragon.invalid"
-HEADWIND_URL="https://headwind.snapdragon.invalid"
-ATTEST_URL="https://attestation.snapdragon.invalid"
-INGEST_URL="https://registry.snapdragon.invalid/bff/internal/phone-ingest"
+LOGIN_SERVER="https://headscale.hugmesh.invalid"
+HEADWIND_URL="https://headwind.hugmesh.invalid"
+ATTEST_URL="https://attestation.hugmesh.invalid"
+INGEST_URL="https://registry.hugmesh.invalid/bff/internal/phone-ingest"
 AUTHKEY_SENTINEL="tskey-auth-SECRET-e2e-DO-NOT-LEAK-0001"
 CGNAT_ADDR="100.64.7.42"
 
 # Real SHA-256 values as pinned APK signer digests (the stub apksigner emits
 # whichever the mock is currently loaded with; the wizard pins one — so the
 # string comparison the driver performs is genuine, and SIGNER_BAD really fires).
-SIGNER_OK="$(printf 'snapdragon-e2e-signer' | sha256sum | awk '{print $1}')"
+SIGNER_OK="$(printf 'hugmesh-e2e-signer' | sha256sum | awk '{print $1}')"
 SIGNER_BAD="$(printf 'attacker-signer'      | sha256sum | awk '{print $1}')"
 
 # ── Stateful mock device ───────────────────────────────────────────
@@ -167,7 +167,7 @@ case "${1:-}" in
         apk="${@: -1}"
         case "${apk}" in
             *headwind*|*hmdm*) echo 'package:com.hmdm.launcher'          >> "${S}/packages" ;;
-            *auditor*)         echo 'package:systems.snapdragon.auditor' >> "${S}/packages" ;;
+            *auditor*)         echo 'package:systems.hugmesh.auditor' >> "${S}/packages" ;;
             *tailscale*)       echo 'package:com.tailscale.ipn'          >> "${S}/packages" ;;
         esac
         exit 0 ;;
@@ -391,15 +391,15 @@ else
     bad "A4 pushed init.json missing/wrong at ${PUSHED_INIT}: $(cat "${PUSHED_INIT}" 2>/dev/null)"
 fi
 
-# A5 — attest: install the Snapdragon Auditor fork and pair to the AttestationServer.
+# A5 — attest: install the HugMesh Auditor fork and pair to the AttestationServer.
 clear_logs
 run attest --serial "${SERIAL}" --out "${OUT}" --attestation-url "${ATTEST_URL}" \
     --auditor-apk "${FIX}/auditor-fork.apk" --auditor-signer-sha256 "${SIGNER_OK}"
 ATT="${OUT}/device/${DEVID}/attestation.json"
 if [ "${RC}" -eq 0 ] && [ -f "${ATT}" ] \
-   && [ "$(jq -r '.auditor_package' "${ATT}")" = "systems.snapdragon.auditor" ] \
+   && [ "$(jq -r '.auditor_package' "${ATT}")" = "systems.hugmesh.auditor" ] \
    && [ "$(jq -r '.verdict'         "${ATT}")" = "operator-paired" ]; then
-    ok "A5 attest: auditor_package=systems.snapdragon.auditor, verdict=operator-paired"
+    ok "A5 attest: auditor_package=systems.hugmesh.auditor, verdict=operator-paired"
 else
     bad "A5 attest rc=${RC}"; echo "${OUT_TXT}"
 fi
@@ -467,7 +467,7 @@ if [ "${RC}" -eq 0 ] && [ -f "${ING}" ] \
    && [ "$(jq -r '.enterprise_profile.present' "${ING}")" = "true" ] \
    && [ "$(jq -r '.enterprise_profile.user_id' "${ING}")" = "10" ] \
    && [ "$(jq -r '.attestation_verdict'        "${ING}")" = "operator-paired" ] \
-   && [ "$(jq -r '.auditor_package'            "${ING}")" = "systems.snapdragon.auditor" ]; then
+   && [ "$(jq -r '.auditor_package'            "${ING}")" = "systems.hugmesh.auditor" ]; then
     ok "A7 ingest: phone-ingest/v2 folds enrollment+attest+profile (os=android, profile present, attested)"
 else
     bad "A7 ingest.json fields wrong: $(cat "${ING}" 2>/dev/null)"
@@ -489,7 +489,7 @@ fi
 if [ "$(jq -r '.login_server'        "${ING}")" = "${LOGIN_SERVER}" ] \
    && [ "$(jq -r '.marketing_name'   "${ING}")" = "Pixel 6" ] \
    && [ "$(jq -r '.role'             "${ING}")" = "user" ] \
-   && [ "$(jq -r '.superdomain'      "${ING}")" = "snapdragon.internal" ] \
+   && [ "$(jq -r '.superdomain'      "${ING}")" = "hugmesh.internal" ] \
    && [ "$(jq -r '.tailscale_hostname' "${ING}")" = "phone-e2e-host" ]; then
     ok "A7 ingest folds the identity facts: login_server, marketing_name, role, superdomain, hostname"
 else

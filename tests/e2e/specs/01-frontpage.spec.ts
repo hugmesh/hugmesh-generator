@@ -8,7 +8,7 @@ test('front page loads over generated certs and gates anonymous visitors to nati
   // the signed-in user's role-home remote. There is no static marketing splash
   // page any more, so the front door IS the native sign-in form.
   await expect(page).toHaveURL(/\/login/);
-  await expect(page.getByRole('heading', { level: 1, name: 'Snapdragon Systems' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'HugMesh Systems' })).toBeVisible();
   await expect(page.getByTestId('nav-login')).toBeVisible();
   await expect(page.getByTestId('login-view')).toBeVisible();
   await expect(page.getByTestId('login-username')).toBeVisible();

@@ -1,16 +1,16 @@
 #!/bin/sh
-# snapdragon-tor entrypoint — generate a managed torrc that maps a v3 onion :80 ->
+# hugmesh-tor entrypoint — generate a managed torrc that maps a v3 onion :80 ->
 # the in-compose fe-gateway ingress, then run tor in the foreground. The minted
 # .onion HOSTNAME (public — NOT the private key) is copied to the bind-mounted
 # /onion-out so the host/GUI can read it; the private key persists in the
 # tor-onion-keys named volume so the address is STABLE across restarts. This is the
-# single-container dev analogue of specs/.../snapdragon-tor-reconcile's key custody
+# single-container dev analogue of specs/.../hugmesh-tor-reconcile's key custody
 # model (docs/TOR-HIDDEN-SERVICE.md).
 set -eu
 
-UPSTREAM="${TOR_ONION_UPSTREAM:-snapdragon-fe-gateway:8080}"
+UPSTREAM="${TOR_ONION_UPSTREAM:-hugmesh-fe-gateway:8080}"
 DATA_DIR="/var/lib/tor"
-HS_DIR="${DATA_DIR}/snapdragon-onion"
+HS_DIR="${DATA_DIR}/hugmesh-onion"
 OUT_DIR="/onion-out"
 
 mkdir -p "$HS_DIR" "$OUT_DIR"
@@ -40,9 +40,9 @@ EOF
   if [ -s "$HS_DIR/hostname" ]; then
     cp "$HS_DIR/hostname" "$OUT_DIR/hostname"
     chmod 644 "$OUT_DIR/hostname" 2>/dev/null || true
-    echo "[snapdragon-tor] onion published for ${UPSTREAM} -> $(cat "$OUT_DIR/hostname")"
+    echo "[hugmesh-tor] onion published for ${UPSTREAM} -> $(cat "$OUT_DIR/hostname")"
   else
-    echo "[snapdragon-tor] WARNING: hostname not minted within 120s" >&2
+    echo "[hugmesh-tor] WARNING: hostname not minted within 120s" >&2
   fi
 ) &
 

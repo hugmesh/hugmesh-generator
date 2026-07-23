@@ -7,8 +7,8 @@ import {
 // 15 — Per-realm login.
 //
 // Two INDEPENDENT realms:
-//   * SYSTEMS Casdoor (org "snapdragon", issuer id.snapdragon.systems)
-//   * GAMES  Casdoor (org "threewizards", issuer id.snapdragon.games)
+//   * SYSTEMS Casdoor (org "hugmesh", issuer id.hugmesh.systems)
+//   * GAMES  Casdoor (org "threewizards", issuer id.hugmesh.games)
 //
 // What's testable TODAY vs what's pending:
 //   * SYSTEMS, mock stack: the mock-bff models exactly TWO role tiers it can
@@ -22,11 +22,11 @@ import {
 //     tests/qemu/seed-accounts.sh --roles. That login is exercised by spec 14
 //     (LIVE_GATEWAY); here we assert the seed CATALOGUE is internally consistent
 //     so the seeder + the live login agree on usernames/passwords/roles.
-//   * GAMES realm login is owned by snapdragon.games/e2e (roles.ts login()); we
+//   * GAMES realm login is owned by hugmesh.games/e2e (roles.ts login()); we
 //     only assert the cross-realm catalogue agrees (the e2e-player handle + the
 //     synced e2e-gamesadmin -> games admin expectation).
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@snapdragon.systems';
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@hugmesh.systems';
 // Deterministic native password every seeded/invited persona signs in with.
 const LOGIN_PASSWORD = process.env.E2E_PASSWORD || 'e2e-pass';
 
@@ -103,7 +103,7 @@ test.describe('RBAC: per-realm login', () => {
     // The systems-side source of that sync must be a games-admin-qualifying user.
     expect(systemsUser(syncedAdmin!.username).expectGamesAdmin,
       'the synced games admin must come from a ROLE_GAMES_ADMIN systems user').toBe(true);
-    // (The cross-realm sync assertion itself lives in snapdragon-actions/e2e.)
+    // (The cross-realm sync assertion itself lives in hugmesh-actions/e2e.)
   });
 
   // Full per-ROLE UI login (mod / games / gamesadmin / pending) against a real

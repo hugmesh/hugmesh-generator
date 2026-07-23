@@ -49,7 +49,7 @@ services:
 
 # repos[] TENANT-SET manifest (Phase 4): {name, archetype, installed, identity}.
 # `overlay` is now archetype-derived (templates/archetypes/<archetype>), NOT a
-# per-repo hand overlay; `base` defaults to snapdragon-<name>. Read as STRUCTURED
+# per-repo hand overlay; `base` defaults to hugmesh-<name>. Read as STRUCTURED
 # data by the Node driver (render-tenant-set.js) ONLY — never degraded to shell.
 # See brands/acme.yaml for a full N-repo example.
 repos:

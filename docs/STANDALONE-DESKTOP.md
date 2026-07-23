@@ -13,7 +13,7 @@ Three named variants:
 |------|--------|---------|-------------|
 | `standalone-thin`  | thin | LXDE / openbox | NVIDIA proprietary |
 | `standalone-thick` | full | **most-capable KDE Plasma workstation** | NVIDIA proprietary |
-| `standalone-unaffiliated` | full (thick) | KDE Plasma — **ZERO Snapdragon affiliation** (see below) | free / open (`all-free`) |
+| `standalone-unaffiliated` | full (thick) | KDE Plasma — **ZERO HugMesh affiliation** (see below) | free / open (`all-free`) |
 
 Each variant emits **all four artifacts**: a live ISO, the stage4 tarball, the
 `.fs.tar.xz` filesystem tarball, and an **installer ISO** (which writes a
@@ -21,10 +21,10 @@ LUKS2-encrypted system to disk).
 
 ## Unaffiliated plain desktop (`standalone-unaffiliated`)
 
-A **plain hardened Gentoo desktop with ZERO Snapdragon affiliation** — the
+A **plain hardened Gentoo desktop with ZERO HugMesh affiliation** — the
 thick/Plasma weight of the standalone posture, with every trace of the platform
 removed or neutralized. Nothing in the image names, brands, or phones home to
-Snapdragon:
+HugMesh:
 
 - **Neutral boot chain**: `GENTOO_LIVE` / `GENTOO_INSTALL` ISO volids,
   `gentoo.efi` UKI (with a `gentoo.install=` cmdline key), `GENTOO_ESP` /
@@ -33,7 +33,7 @@ Snapdragon:
 - **Neutral installer / hostname / artifacts**: neutral installer UI text, a
   "Gentoo Installer" desktop entry, default hostname `gentoo-desktop`, and
   artifact filenames `gentoo-x86-amd64-standalone-unaffiliated-<env>-<ts>.*`.
-- **No `snapdragon-*` tools or markers** (no `/etc/snapdragon` tree at all),
+- **No `hugmesh-*` tools or markers** (no `/etc/hugmesh` tree at all),
   **no bundled generator source**, **no k8s/mesh payload** (no
   containerd/kubelet/headscale/tailscale, no cluster GitOps tree, no
   keys-provision, no Casdoor SSO).
@@ -53,13 +53,13 @@ keyfile/YubiKey unlock factors, `--compress`, `--resume`, …).
 The posture is also an orthogonal flag: `--unaffiliated` folds onto any
 desktop/client role (`laptop` / `chromebook` / `desktop` / `standalone-*`) and
 forces the standalone posture plus the neutral identity. It is refused on
-cluster-node roles (a cluster node is Snapdragon platform machinery by
+cluster-node roles (a cluster node is HugMesh platform machinery by
 definition).
 
 ### Hard conflicts (builder exits non-zero)
 
 Unaffiliated means *no affiliation at all* — every flag that would bake a brand
-identity, brand assets, Snapdragon source, or platform machinery into the image
+identity, brand assets, HugMesh source, or platform machinery into the image
 is a **hard error**, not a silent override:
 
 - **Brand identity**: `--brand` / `--brand-title` / `--org` — there is no brand,
@@ -74,16 +74,16 @@ is a **hard error**, not a silent override:
 ### What survives, under neutral names
 
 The functional (non-affiliating) machinery is kept — renamed so nothing on the
-image says "snapdragon":
+image says "hugmesh":
 
-| Snapdragon builds | Unaffiliated build |
+| HugMesh builds | Unaffiliated build |
 |---|---|
-| `snapdragon-home-setup` + `/etc/snapdragon/home.conf` | `home-setup` + `/etc/gentoo/home.conf` (same create/adopt/archive/restore + eCryptfs machinery) |
-| `snapdragon-media-detect` (default ON) | `media-detect` + `/etc/gentoo/media.conf` — **default OFF**; kept only with an explicit `--media-data` |
-| `snapdragon-installer-autostart` / `snapdragon-calamares-install` | `gentoo-installer-autostart` / `gentoo-calamares-install` (same live-session Calamares/ncurses/CLI installer bridge) |
+| `hugmesh-home-setup` + `/etc/hugmesh/home.conf` | `home-setup` + `/etc/gentoo/home.conf` (same create/adopt/archive/restore + eCryptfs machinery) |
+| `hugmesh-media-detect` (default ON) | `media-detect` + `/etc/gentoo/media.conf` — **default OFF**; kept only with an explicit `--media-data` |
+| `hugmesh-installer-autostart` / `hugmesh-calamares-install` | `gentoo-installer-autostart` / `gentoo-calamares-install` (same live-session Calamares/ncurses/CLI installer bridge) |
 | LUKS2 FDE installer | unchanged — same installer, neutral UI text |
-| `SNAPDRAGON_LIVE` / `SNAPDRAGON_INSTALL` volids | `GENTOO_LIVE` / `GENTOO_INSTALL` |
-| `snapdragon.efi` UKI + `snapdragon.install=` cmdline key | `gentoo.efi` + `gentoo.install=` |
+| `HUGMESH_LIVE` / `HUGMESH_INSTALL` volids | `GENTOO_LIVE` / `GENTOO_INSTALL` |
+| `hugmesh.efi` UKI + `hugmesh.install=` cmdline key | `gentoo.efi` + `gentoo.install=` |
 
 Everything below this section (GPU drivers, local user, FDE + unlock factors,
 Secure Boot, home provisioning, `--kernel-builtin`, QEMU verification) applies
@@ -94,8 +94,8 @@ conflict above.
 is a standalone, manually-run gate that checks a build-output directory (live
 ISO, installer ISO, disk image, fs/stage4 tarballs, and the extracted sysroot)
 against every property claimed above — neutral volids/labels/GRUB titles, no
-`/etc/snapdragon` marker tree or bundled generator source, no k8s/mesh payload,
-and an attributed raw-string sweep (Qualcomm Snapdragon driver strings in
+`/etc/hugmesh` marker tree or bundled generator source, no k8s/mesh payload,
+and an attributed raw-string sweep (Qualcomm HugMesh driver strings in
 kernel/firmware are expected and not a failure). Run it against the artifacts
 produced by `make x86-standalone-unaffiliated`; see the script's own `--help`
 for options.
@@ -137,7 +137,7 @@ Use the big scratch disk for the heavy build (namespaced; never touches portage'
 own dirs):
 
 ```sh
-make x86-standalone WORK_DIR=/var/tmp/portage/snapdragon-build NATIVE=1
+make x86-standalone WORK_DIR=/var/tmp/portage/hugmesh-build NATIVE=1
 ```
 
 ## What each piece does
@@ -205,7 +205,7 @@ enrolled in its firmware:
 
 ### External media data device (Vaults + Steam) — default ON, optional
 A **separate** data disk (kept across reinstalls) holds `Steam/` and a gocryptfs
-`Vaults/` under `/media`. The installed system runs `snapdragon-media-detect` at
+`Vaults/` under `/media`. The installed system runs `hugmesh-media-detect` at
 every boot, which finds that disk by LABEL (`--media-label`) or by scanning
 attached non-root partitions for the marker dirs, mounts it at `/media` (nofail),
 installs `gocryptfs` for the vault, and points Steam's library at `/media/Steam`.
@@ -353,14 +353,14 @@ list; the composability contract above is identical to x86's.
 | `restore` | Decrypt + unpack an **encrypted full-home backup** (`--home-backup FILE\|auto`; `auto` scans attached USBs). |
 
 - `--home-encrypted` layers **per-user eCryptfs on top of the LUKS2 root** (login-password unwrapped) — the same double-layer this build host uses. Adds the kernel `ecryptfs.config` + `ecryptfs-utils` + wires `pam_ecryptfs`.
-- **Encrypted backup to a USB:** `scripts/archive-home.sh --user me --full --encrypt --output /run/media/USB/snapdragon-home-backup-me.tar.xz` (gpg AES256 / openssl). `--full` keeps your documents/media (drops only build/cache cruft); `--config-only` is the lean copy for bundling inside an ISO. Restore later with `--home-mode restore --home-backup auto`.
+- **Encrypted backup to a USB:** `scripts/archive-home.sh --user me --full --encrypt --output /run/media/USB/hugmesh-home-backup-me.tar.xz` (gpg AES256 / openssl). `--full` keeps your documents/media (drops only build/cache cruft); `--config-only` is the lean copy for bundling inside an ISO. Restore later with `--home-mode restore --home-backup auto`.
 
 ## Dockerized stack / mesh node in the home
 
-`--home-seed-code repos|stack|mesh` drops the whole Snapdragon source + a
-`docker-compose` runner into `~/snapdragon-stack`, so the box can run the entire
+`--home-seed-code repos|stack|mesh` drops the whole HugMesh source + a
+`docker-compose` runner into `~/hugmesh-stack`, so the box can run the entire
 stack locally (`stack`) or join a tailnet as a dockerized mesh node (`mesh`):
-`cd ~/snapdragon-stack && ./snapdragon-stack up` (or `mesh-up`).
+`cd ~/hugmesh-stack && ./hugmesh-stack up` (or `mesh-up`).
 
 ## Mesh / SSO toggles, distfiles, live ISO
 
@@ -375,7 +375,7 @@ graphical **Calamares** (Qt; Ubuntu-style), **text/ncurses** (`install-x86.sh --
 and **unattended CLI** (`install-x86.sh --unattended`, reads the baked manifest).
 `--cached` embeds the binpkg cache for **offline rebuild / fast reinstall**; `--uncached`
 (default) is lean. `--bundle-source` (standalone default) ships the generator source +
-`snapdragon-regenerate`, so the desktop can **build a fresh customized ISO**.
+`hugmesh-regenerate`, so the desktop can **build a fresh customized ISO**.
 
 ## Verifying images under emulation
 
@@ -390,7 +390,7 @@ and **unattended CLI** (`install-x86.sh --unattended`, reads the baked manifest)
 ## Desktop branding (boot screen / login / wallpaper / colours)
 
 Every desktop image (standalone **or** tailnet client; CLI, ncurses or graphical
-install) can be branded. Assets flow through one applier — `snapdragon-branding` —
+install) can be branded. Assets flow through one applier — `hugmesh-branding` —
 so the look is identical whether it was baked into the image or changed afterwards,
 and the boot → login → desktop chain stays visually consistent.
 
@@ -406,7 +406,7 @@ and the boot → login → desktop chain stays visually consistent.
 | `--brand-logo FILE` | Brand logo (greeter / about). |
 | `--accent-color '#RRGGBB'` | KDE accent colour. |
 | `--color-scheme FILE.colors` | KDE colour scheme. |
-| `--brand-locked` | Managed image: the **user cannot re-theme** (drops `/etc/snapdragon/branding.lock`). |
+| `--brand-locked` | Managed image: the **user cannot re-theme** (drops `/etc/hugmesh/branding.lock`). |
 
 Precedence (later wins): `--theme` → `--branding-dir` → individual file flags →
 `--accent-color`. A brand dir may contain `brand.conf`, `wallpaper.png`,
@@ -430,21 +430,21 @@ branded fleet run skips the unaffiliated role loudly (build it separately with
 
 ### Re-theming on the running desktop
 
-`snapdragon-branding` stays on the installed system, so the user can change the look
+`hugmesh-branding` stays on the installed system, so the user can change the look
 later (unless `--brand-locked` was set at build time):
 
 ```
-snapdragon-branding apply /path/to/branddir      # whole theme
-snapdragon-branding set-wallpaper ~/Pictures/x.png
-snapdragon-branding set-login-background x.png
-snapdragon-branding set-grub-background x.png
-snapdragon-branding set-accent '#3f5b8c'
-snapdragon-branding show                          # current brand + lock state
-snapdragon-branding lock | unlock                 # admin: freeze / release branding
+hugmesh-branding apply /path/to/branddir      # whole theme
+hugmesh-branding set-wallpaper ~/Pictures/x.png
+hugmesh-branding set-login-background x.png
+hugmesh-branding set-grub-background x.png
+hugmesh-branding set-accent '#3f5b8c'
+hugmesh-branding show                          # current brand + lock state
+hugmesh-branding lock | unlock                 # admin: freeze / release branding
 ```
 
 Wallpaper + colour scheme are applied in-session by a one-shot login autostart
-(`/etc/xdg/autostart/snapdragon-branding.desktop`) the first time a desktop starts,
+(`/etc/xdg/autostart/hugmesh-branding.desktop`) the first time a desktop starts,
 then it steps aside so the user's own choices stick. The GRUB background + lightdm
 greeter background are baked at build time so the very first boot is already branded.
 
@@ -461,14 +461,14 @@ routes, so mesh / tailscale / LAN traffic stays **direct** and never tunnels.
 | `--egress-vpn-locked` | **Managed node**: the VPN autoconnects and the user **cannot remove** it (an NM dispatcher re-asserts it if deleted). For tailscale-node images the admin controls egress. |
 
 Without `--egress-vpn-locked` the user **adds/removes/toggles** it freely (the network
-applet or `snapdragon-egress-vpn up|down|remove`). WireGuard is native to NM + the
+applet or `hugmesh-egress-vpn up|down|remove`). WireGuard is native to NM + the
 kernel (a `CONFIG_WIREGUARD` fragment + `wireguard-tools` are added automatically);
 OpenVPN pulls `networkmanager-openvpn` + `openvpn`.
 
 ```
-snapdragon-egress-vpn status        # name / locked / present / state / staged conf
-snapdragon-egress-vpn up | down     # toggle (down refused when locked, for non-root)
-snapdragon-egress-vpn remove        # delete (refused when locked, for non-root)
+hugmesh-egress-vpn status        # name / locked / present / state / staged conf
+hugmesh-egress-vpn up | down     # toggle (down refused when locked, for non-root)
+hugmesh-egress-vpn remove        # delete (refused when locked, for non-root)
 ```
 
 ## Monolithic kernel (`--kernel-builtin`)

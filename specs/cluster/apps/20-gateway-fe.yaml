@@ -1,24 +1,24 @@
-# snapdragon-fe-gateway — front door for snapdragon.systems (the Angular host
+# hugmesh-fe-gateway — front door for hugmesh.systems (the Angular host
 # front page) + the integrated matrix/mastodon social-ui micro-frontends.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: snapdragon-gateway-fe
+  name: hugmesh-gateway-fe
   namespace: devops
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
-    path: specs/cluster/charts/snapdragon-gateway
+    path: specs/cluster/charts/hugmesh-gateway
     helm:
-      releaseName: snapdragon-fe-gateway
+      releaseName: hugmesh-fe-gateway
       values: |
         instance:
-          name: snapdragon-fe-gateway
-        # Cross-namespace mTLS client identity (Vault-PKI/ESO snapdragon-fe-gateway-mtls).
+          name: hugmesh-fe-gateway
+        # Cross-namespace mTLS client identity (Vault-PKI/ESO hugmesh-fe-gateway-mtls).
         # The DOWNSTREAM (gateway -> BFF/federation) leg PRESENTS this client cert +
-        # validates backend server certs — gated on by SNAPDRAGON_GATEWAY_MTLS_ENABLED
+        # validates backend server certs — gated on by HUGMESH_GATEWAY_MTLS_ENABLED
         # below. PUBLIC/upstream callers (browsers via Cloudflare/ingress) are NOT asked
         # for a client cert; only the downstream leg to the now-mTLS https:// backends.
         keystore:
@@ -29,18 +29,18 @@ spec:
           # edge; this nginx Ingress is the in-cluster alternative/secondary
           # path. Either way only the gateway Service is exposed.
           className: nginx
-          host: snapdragon.systems
-          # VANITY SUBDOMAINS: admit *.snapdragon.systems so the ingress accepts
-          # <username>.snapdragon.systems and hands it to this gateway, where the
-          # Host=*.snapdragon.systems route (below) resolves the public profile.
+          host: hugmesh.systems
+          # VANITY SUBDOMAINS: admit *.hugmesh.systems so the ingress accepts
+          # <username>.hugmesh.systems and hands it to this gateway, where the
+          # Host=*.hugmesh.systems route (below) resolves the public profile.
           # The wildcard DNS (manifests/lan-dns in test; Cloudflare wildcard in
-          # prod) already points *.snapdragon.systems at the backend ingress; this
+          # prod) already points *.hugmesh.systems at the backend ingress; this
           # extraHosts entry makes the fe-gateway ingress admit the vanity hosts.
           # The reserved service hosts (id. api. matrix. mastodon. scale.
           # headscale.) are served by the BE gateway ingress + cloudflared, not
           # this one, so they are unaffected.
           extraHosts:
-            - "*.snapdragon.systems"
+            - "*.hugmesh.systems"
         nodeSelector:
           snapdragon.systems/frontend: "true"
         seLinux:
@@ -56,11 +56,11 @@ spec:
                 name: route-access-fe-gateway
                 key: password
           - name: ROUTE_ACCESS_R2DBC_URL
-            value: r2dbc:postgresql://fe_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
+            value: r2dbc:postgresql://fe_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.hugmesh-pki.svc.cluster.local:5432/gateway
           # Activate downstream client-cert presentation + backend-cert validation
-          # for the now-mTLS https:// BFF/federation backends (snapdragon-gateway repo).
+          # for the now-mTLS https:// BFF/federation backends (hugmesh-gateway repo).
           # Default off in the image; the UI remotes (port 80) and be-gateway stay http.
-          - name: SNAPDRAGON_GATEWAY_MTLS_ENABLED
+          - name: HUGMESH_GATEWAY_MTLS_ENABLED
             value: "true"
           # ── BFF session bridge: opaque bff_ → Spring SecurityContext ──────────
           # When enabled, the gateway's BffSessionAuthFilter calls admin-bff's
@@ -73,7 +73,7 @@ spec:
           # InternalTokenWebFilter — BLANK in dev → no-op on both sides).
           - { name: APP_BFF_SESSION_ENABLED, value: "true" }
           - name: BFF_BASE_URL
-            value: http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
+            value: http://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
           - name: INTERNAL_TOKEN
             valueFrom:
               secretKeyRef:
@@ -101,73 +101,73 @@ spec:
           # against, but share the identical architecture, so the fix is applied
           # here for consistency — NOT independently live-verified for those two.
           - id: matrix-ui
-            uri: http://snapdragon-matrix-ui.snapdragon-frontend.svc.cluster.local:80
+            uri: http://hugmesh-matrix-ui.hugmesh-frontend.svc.cluster.local:80
             path: /social/matrix/**
             filters:
               - StripPrefix=2
           - id: mastodon-ui
-            uri: http://snapdragon-mastodon-ui.snapdragon-frontend.svc.cluster.local:80
+            uri: http://hugmesh-mastodon-ui.hugmesh-frontend.svc.cluster.local:80
             path: /social/mastodon/**
             filters:
               - StripPrefix=2
           # phpBB forum micro-frontend remote, served at the apex PATH
-          # /social/forum/** (NOT a forum. subdomain — the *.snapdragon.systems
+          # /social/forum/** (NOT a forum. subdomain — the *.hugmesh.systems
           # vanity wildcard would swallow forum.<domain>). Congruent with the
           # matrix/mastodon shells. The phpBB pod itself is NEVER routed (backend-
-          # only, isolated in snapdragon-forum); only this Angular remote + the
+          # only, isolated in hugmesh-forum); only this Angular remote + the
           # /bff/forum BFF below are public. Role floor ROLE_FORUM (route-DB).
           - id: forum-ui
-            uri: http://snapdragon-forum-ui.snapdragon-frontend.svc.cluster.local:80
+            uri: http://hugmesh-forum-ui.hugmesh-frontend.svc.cluster.local:80
             path: /social/forum/**
             filters:
               - StripPrefix=2
           # login-ui is a STANDALONE Angular app built with base-href=/login/, so
           # StripPrefix=1 maps /login/<asset> back to the webroot nginx serves.
           - id: login-ui
-            uri: http://snapdragon-login-ui.snapdragon-frontend.svc.cluster.local:80
+            uri: http://hugmesh-login-ui.hugmesh-frontend.svc.cluster.local:80
             path: /login/**
             filters:
               - StripPrefix=1
           - id: admin-ui
-            uri: http://snapdragon-admin-ui.snapdragon-frontend.svc.cluster.local:80
+            uri: http://hugmesh-admin-ui.hugmesh-frontend.svc.cluster.local:80
             path: /admin/**
             filters:
               - StripPrefix=1
-          # Moderation micro-frontend remote (/mod/** -> snapdragon-mod-ui). Role
+          # Moderation micro-frontend remote (/mod/** -> hugmesh-mod-ui). Role
           # floor ROLE_MOD (route-DB), declared with the other path-scoped MFE
           # remotes; the host loads its remoteEntry after a moderator logs in.
           - id: mod-ui
-            uri: http://snapdragon-mod-ui.snapdragon-frontend.svc.cluster.local:80
+            uri: http://hugmesh-mod-ui.hugmesh-frontend.svc.cluster.local:80
             path: /mod/**
             filters:
               - StripPrefix=1
-          # Self-service user micro-frontend remote (/user/** -> snapdragon-user-ui).
+          # Self-service user micro-frontend remote (/user/** -> hugmesh-user-ui).
           # Role floor ROLE_USER (route-DB).
           - id: user-ui
-            uri: http://snapdragon-user-ui.snapdragon-frontend.svc.cluster.local:80
+            uri: http://hugmesh-user-ui.hugmesh-frontend.svc.cluster.local:80
             path: /user/**
             filters:
               - StripPrefix=1
           # Character Studio (VN) micro-frontend remote (/character-studio/** ->
-          # snapdragon-character-studio-ui on :8080, non-root nginx). Role floor
+          # hugmesh-character-studio-ui on :8080, non-root nginx). Role floor
           # ROLE_USER (route-DB). OPTIONAL slug `character-studio`:
           # gate_optional_services REMOVES this route when the slug is deselected.
           - id: character-studio-ui
-            uri: http://snapdragon-character-studio-ui.snapdragon-frontend.svc.cluster.local:8080
+            uri: http://hugmesh-character-studio-ui.hugmesh-frontend.svc.cluster.local:8080
             path: /character-studio/**
             filters:
               - StripPrefix=1
-          # API documentation micro-frontend remote (/apidocs/** -> snapdragon-api-docs).
+          # API documentation micro-frontend remote (/apidocs/** -> hugmesh-api-docs).
           # Role floor ROLE_ADMIN (route-DB) — the rendered OpenAPI/spec docs are
           # admin-only, matching federation's spec floor.
           - id: api-docs
-            uri: http://snapdragon-api-docs.snapdragon-frontend.svc.cluster.local:80
+            uri: http://hugmesh-api-docs.hugmesh-frontend.svc.cluster.local:80
             path: /apidocs/**
             filters:
               - StripPrefix=1
           # Same-origin BFFs: the /bff/** family proxies to the role BFFs in the
           # backend namespace, so the UIs' bff.service calls are first-party to
-          # snapdragon.systems. Spring Cloud Gateway matches FIRST-IN-DECLARED-ORDER,
+          # hugmesh.systems. Spring Cloud Gateway matches FIRST-IN-DECLARED-ORDER,
           # so the MORE SPECIFIC subpaths are declared BEFORE the /bff/** catch-all:
           #   /bff/mod/**  -> mod-bff-api   (ROLE_MOD,  +ADMIN superset)
           #   /bff/user/** -> user-bff-api  (ROLE_USER)
@@ -176,38 +176,38 @@ spec:
           #                  => ROLE_ADMIN). The fe-gateway enforces the route-DB
           #                  role rules before each proxy.
           # https:// — the three BFFs now enforce mTLS (client-auth=need); the
-          # gateway presents its client cert on these legs (SNAPDRAGON_GATEWAY_MTLS_ENABLED).
-          - id: snapdragon-mod-bff-api
-            uri: https://snapdragon-mod-bff-api.snapdragon-backend.svc.cluster.local:8080
+          # gateway presents its client cert on these legs (HUGMESH_GATEWAY_MTLS_ENABLED).
+          - id: hugmesh-mod-bff-api
+            uri: https://hugmesh-mod-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/mod/**
-          - id: snapdragon-user-bff-api
-            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+          - id: hugmesh-user-bff-api
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/user/**
-          # Forum BFF (/bff/forum/** -> snapdragon-forum-bff-api), the SINGLE
+          # Forum BFF (/bff/forum/** -> hugmesh-forum-bff-api), the SINGLE
           # browser->phpBB path. SIBLING of /bff/mod/** + /bff/user/** above (each a
           # non-overlapping prefix gated to its own role floor). The moderation
           # subpath is declared FIRST (more specific) so it keeps its ROLE_FORUM_MOD
           # gate; the /bff/forum/** floor (ROLE_FORUM) follows. Both BEFORE the
           # /bff/** admin-bff catch-all. https:// — forum-bff enforces mTLS
           # (client-auth=need); the gateway presents its client cert on this leg.
-          - id: snapdragon-forum-bff-api-moderation
-            uri: https://snapdragon-forum-bff-api.snapdragon-backend.svc.cluster.local:8080
+          - id: hugmesh-forum-bff-api-moderation
+            uri: https://hugmesh-forum-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/forum/moderation/**
-          - id: snapdragon-forum-bff-api
-            uri: https://snapdragon-forum-bff-api.snapdragon-backend.svc.cluster.local:8080
+          - id: hugmesh-forum-bff-api
+            uri: https://hugmesh-forum-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/forum/**
-          # Wiki BFF (/bff/wiki/** -> snapdragon-wiki-bff-api), the SINGLE
+          # Wiki BFF (/bff/wiki/** -> hugmesh-wiki-bff-api), the SINGLE
           # browser->wiki path. SIBLING of /bff/forum/** + /bff/mod/** above (non-
           # overlapping prefix, gated to its own role floor). The admin subpath is
           # declared FIRST (more specific) so it keeps its ROLE_ADMIN gate; the
           # /bff/wiki/** floor (ROLE_WIKI) follows. Both BEFORE the /bff/** admin-bff
           # catch-all. https:// — wiki-bff enforces mTLS (client-auth=need); the
           # gateway presents its client cert on this leg.
-          - id: snapdragon-wiki-bff-api-admin
-            uri: https://snapdragon-wiki-bff-api.snapdragon-backend.svc.cluster.local:8080
+          - id: hugmesh-wiki-bff-api-admin
+            uri: https://hugmesh-wiki-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/wiki/admin/**
-          - id: snapdragon-wiki-bff-api
-            uri: https://snapdragon-wiki-bff-api.snapdragon-backend.svc.cluster.local:8080
+          - id: hugmesh-wiki-bff-api
+            uri: https://hugmesh-wiki-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/wiki/**
           # SSO login/session/registration RELOCATED admin-bff -> user-bff-api: login
           # is a user concern, so the user BFF now owns /bff/login, /bff/register,
@@ -216,23 +216,23 @@ spec:
           # above — they MUST be declared FIRST to win the route match. (The internal
           # bff_->JWT exchange endpoint /bff/internal/** is NOT routed here: the
           # gateway's BffJwtExchangeWebFilter calls user-bff in-cluster directly.)
-          - id: snapdragon-user-bff-api-login
-            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+          - id: hugmesh-user-bff-api-login
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/login
-          - id: snapdragon-user-bff-api-register
-            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+          - id: hugmesh-user-bff-api-register
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/register/**
-          - id: snapdragon-user-bff-api-me
-            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+          - id: hugmesh-user-bff-api-me
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/me/**
-          - id: snapdragon-user-bff-api-session
-            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+          - id: hugmesh-user-bff-api-session
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/session
-          - id: snapdragon-user-bff-api-provision
-            uri: https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080
+          - id: hugmesh-user-bff-api-provision
+            uri: https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/provision/**
-          - id: snapdragon-admin-bff-api
-            uri: https://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
+          - id: hugmesh-admin-bff-api
+            uri: https://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/**
           # DB-hosted module-federation FRAGMENT bundles (user-profile/card +
           # admin "contained pages"). The authenticated host's loadRemoteModule
@@ -242,7 +242,7 @@ spec:
           # is enforced upstream and these are content-addressed (non-secret) bytes
           # — gated to the ROLE_USER floor (the host loads them after login).
           - id: remote-fragment
-            uri: http://snapdragon-remote-fragment.snapdragon-frontend.svc.cluster.local:80
+            uri: http://hugmesh-remote-fragment.hugmesh-frontend.svc.cluster.local:80
             path: /_fragments/**
           # Default cross-namespace scope: snapdragon.systems/be/** -> the backend
           # gateway (StripPrefix drops /be so /be/api -> /api at the be-gateway).
@@ -250,12 +250,12 @@ spec:
           # in the gateway/admin-bff repos) an admin can re-point this entry via
           # the routing DB + admin UI without a redeploy.
           - id: be-default
-            uri: http://snapdragon-be-gateway.snapdragon-backend.svc.cluster.local:8080
+            uri: http://hugmesh-be-gateway.hugmesh-backend.svc.cluster.local:8080
             path: /be/**
             filters:
               - StripPrefix=1
-          # --- VANITY SUBDOMAINS: <username>.snapdragon.systems ---
-          # A Host=*.snapdragon.systems predicate. Spring Cloud Gateway matches
+          # --- VANITY SUBDOMAINS: <username>.hugmesh.systems ---
+          # A Host=*.hugmesh.systems predicate. Spring Cloud Gateway matches
           # routes FIRST-IN-DECLARED-ORDER, so PRECEDENCE is everything here:
           #
           #   * The Host=*.<domain> wildcard predicate matches ANY single-label
@@ -291,9 +291,9 @@ spec:
           # already permitAll's `GET /api/federation/vanity/**`, so a direct hop is
           # the public path with no extra auth layer to satisfy.
           #
-          # HONEST CROSS-SERVICE CAVEAT (deferred — needs a snapdragon-gateway
+          # HONEST CROSS-SERVICE CAVEAT (deferred — needs a hugmesh-gateway
           # change, a THIRD repo): the shared gateway image's SecurityConfig
-          # (snapdragon-gateway repo) ends every chain with
+          # (hugmesh-gateway repo) ends every chain with
           # `anyExchange().authenticated()` and permits only a hardcoded
           # PUBLIC_PATHS allowlist (/api/auth, /api/registration, /api/login, the
           # login/registration/banned remotes). `/api/federation/vanity/**` is NOT
@@ -309,18 +309,18 @@ spec:
           # PUBLIC read at the federation app layer (permitAll GET vanity/**) — mTLS
           # only authenticates the GATEWAY pod to federation, not the end user.
           - id: vanity-subdomain
-            host: "*.snapdragon.systems"
-            uri: https://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080
+            host: "*.hugmesh.systems"
+            uri: https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080
             filters:
               - SetPath=/api/federation/vanity
-          # …then the snapdragon.systems Angular host catches everything else
+          # …then the hugmesh.systems Angular host catches everything else
           # (the apex + any path the routes above did not claim).
           - id: frontend-host
-            uri: http://snapdragon-systems-web.snapdragon-frontend.svc.cluster.local:80
+            uri: http://snapdragon-systems-web.hugmesh-frontend.svc.cluster.local:80
             path: /**
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-frontend
+    namespace: hugmesh-frontend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

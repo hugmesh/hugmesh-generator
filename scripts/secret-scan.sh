@@ -86,7 +86,7 @@ _scan_files() {
         # ${VAR:default} / ${VAR:-default}). The whole templating invariant is
         # that every secret stays ${ENV}/ESO, never a literal in git -- so a value
         # that IS an env reference is the COMPLIANT pattern, not a leak (e.g. a base
-        # PKI helper PASSWORD=${KEYSTORE_PASSWORD:-snapdragon}, or a Spring
+        # PKI helper PASSWORD=${KEYSTORE_PASSWORD:-hugmesh}, or a Spring
         # ${CASDOOR_ISSUER_URI:https://host} default). A genuine hardcoded literal
         # has no leading dollar.
         if (length(val) >= 12 && val !~ /^[A-Z][A-Z0-9_]+$/ && shannon(val) >= ethr && key !~ /(URL|URI|ENDPOINT|HOST)$/ && val !~ /^[$]/) {
@@ -177,7 +177,7 @@ metadata:
   name: example-harbor
 spec:
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     helm:
       values: |
         harborAdminPassword: ""

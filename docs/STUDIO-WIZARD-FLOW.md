@@ -10,23 +10,23 @@
 >
 > State key: **✅ shipped** · **🚧 in-flight** · **🔭 planned / deferred**.
 
-The wizard lives in [`studio/snapdragon_studio/gui/`](../studio/snapdragon_studio/gui/):
+The wizard lives in [`studio/hugmesh_studio/gui/`](../studio/hugmesh_studio/gui/):
 the page registry + mode-gated flow are in
-[`gui/wizard.py`](../studio/snapdragon_studio/gui/wizard.py); one module per page in
-[`gui/pages/`](../studio/snapdragon_studio/gui/pages/). The 4-choice first screen is
-[`gui/pages/mode.py`](../studio/snapdragon_studio/gui/pages/mode.py).
+[`gui/wizard.py`](../studio/hugmesh_studio/gui/wizard.py); one module per page in
+[`gui/pages/`](../studio/hugmesh_studio/gui/pages/). The 4-choice first screen is
+[`gui/pages/mode.py`](../studio/hugmesh_studio/gui/pages/mode.py).
 
 ---
 
 ## Screen 0 — Welcome
 
-[`welcome.py`](../studio/snapdragon_studio/gui/pages/welcome.py) — the intro blurb,
+[`welcome.py`](../studio/hugmesh_studio/gui/pages/welcome.py) — the intro blurb,
 config Load/Save, and the Fleet-build entry. Its subtitle names all four paths so the
 first thing the user reads matches the choice screen that follows.
 
 ## STEP 1 — What do you want to build? (the four choices)
 
-[`mode.py`](../studio/snapdragon_studio/gui/pages/mode.py) presents **exactly four**
+[`mode.py`](../studio/hugmesh_studio/gui/pages/mode.py) presents **exactly four**
 first-screen choices. Three build an image and commit `cfg.mode`; the fourth builds no
 image and runs a node locally.
 
@@ -35,16 +35,16 @@ image and runs a node locally.
 | **Mesh node** | `mesh` | Superadmin builds the server node image(s) — PKI / backend / frontend / GPU / edge-AI — that run a mesh on dedicated hardware. |
 | **Local Docker mesh** | *(none — side-flow)* | Run a mesh on THIS machine in Docker, no separate server hardware. Terminates in a **running dockerized node**, not an image. |
 | **Mesh desktop client** | `cloud` | A branded desktop that JOINS an existing mesh (tailnet + SSO); loads an admin key-zip / config link. |
-| **Standalone Gentoo desktop** | `standalone` | A personal hardened LUKS/SELinux desktop — or a plain UNAFFILIATED Gentoo desktop with zero Snapdragon branding. No mesh, no SSO. |
+| **Standalone Gentoo desktop** | `standalone` | A personal hardened LUKS/SELinux desktop — or a plain UNAFFILIATED Gentoo desktop with zero HugMesh branding. No mesh, no SSO. |
 
 **The Local Docker mesh choice is a first-class, functional choice** — not a stub. It
 builds no image, so it deliberately disables Next/Finish (`isComplete()` returns
 `False`) and reveals an inline **"Configure & run local mesh…"** launcher instead. The
-launcher opens [`gui/pages/localmesh.py`](../studio/snapdragon_studio/gui/pages/localmesh.py)
+launcher opens [`gui/pages/localmesh.py`](../studio/hugmesh_studio/gui/pages/localmesh.py)
 `LocalMeshDialog`, which drives
-[`core/local_mesh.py`](../studio/snapdragon_studio/core/local_mesh.py)
+[`core/local_mesh.py`](../studio/hugmesh_studio/core/local_mesh.py)
 `LocalMeshNode` — a thin subclass of the tray's
-[`core/mesh_node.py`](../studio/snapdragon_studio/core/mesh_node.py) `MeshNode`, so the
+[`core/mesh_node.py`](../studio/hugmesh_studio/core/mesh_node.py) `MeshNode`, so the
 wizard's "run a node here" and the tray's "run a node here" share **one** docker-compose
 lifecycle. The operator supplies a tailnet/headscale auth key (`TS_AUTHKEY`, required),
 an optional node name, and an optional self-hosted headscale login-server URL; the node
@@ -73,8 +73,8 @@ non-monotonically across a path). The conceptual steps:
 ## Per-path physical page sequence (what the user actually clicks through)
 
 Driven by `MODE_SKIPPED_PAGES` in
-[`core/config.py`](../studio/snapdragon_studio/core/config.py) and `StudioWizard.nextId()`
-in [`gui/wizard.py`](../studio/snapdragon_studio/gui/wizard.py). Only VISITED pages are
+[`core/config.py`](../studio/hugmesh_studio/core/config.py) and `StudioWizard.nextId()`
+in [`gui/wizard.py`](../studio/hugmesh_studio/gui/wizard.py). Only VISITED pages are
 collected into `cfg`.
 
 - **Mesh node** (`mesh`) — skips role/hardware/branding:
@@ -178,7 +178,7 @@ and the all-options-in-all-menus rule are in
 **Status (2026-07-16) — most of this section has shipped.** The **ncurses menu** and
 **CLI** four-choice parity, the **Local Docker mesh** face on both channels, and the
 **parity-enforcement** gate all landed in
-[#342](https://github.com/Snapdragon-Systems/snapdragon-generator/pull/342); the ncurses
+[#342](https://github.com/Snapdragon-Systems/hugmesh-generator/pull/342); the ncurses
 Local-mesh screen was later extended with the from-scratch bootstrapper (#346) and the
 RPi/Chromebook desktop surfacing (#351). The build-matrix `TAXO` bucket
 (`tests/build-matrix/check.sh` → `run_parity_taxonomy_checks`) proves all three
@@ -200,9 +200,9 @@ the marked bullet below). Per-subsection status is inline below:
   MENU column stays 118/0.
 - **✅ #342 (+ #346)** Add a **Local Docker mesh** screen that shells the same lifecycle as the
   Studio launcher — reuse a shared entrypoint over `core/mesh_node.py`'s compose lifecycle (a
-  small `snapdragon-mesh-node` helper), prompting for `TS_AUTHKEY` (masked) + optional
+  small `hugmesh-mesh-node` helper), prompting for `TS_AUTHKEY` (masked) + optional
   node name / login-server, so the menu does not reimplement compose. — realised by
-  `local_mesh_screen()` (shells `python3 -m snapdragon_studio.core.local_mesh`; masked
+  `local_mesh_screen()` (shells `python3 -m hugmesh_studio.core.local_mesh`; masked
   auth key via `ui_password`, node name, login server, up/down/status/logs); #346 added the
   from-scratch bootstrapper sub-screen.
 - **✅ #342** Drop hard step numbers in the screen headers in favour of the descriptive titles,
@@ -234,7 +234,7 @@ the marked bullet below). Per-subsection status is inline below:
   `print_intents_guide()` in `docker/build-image.sh` (fires on `-h`/`--help`/`help`; the real
   env-driven Job path is byte-identical).
 - **✅ #342** Document the **Local Docker mesh** as an explicit non-build subcommand
-  (e.g. `snapdragon-mesh-node up --authkey-file …`) so the CLI channel has a first-class
+  (e.g. `hugmesh-mesh-node up --authkey-file …`) so the CLI channel has a first-class
   face for the fourth choice instead of only the image builds. — realised by the
   `core/local_mesh.py` argparse CLI (`up`/`down`/`status`/`logs`, `--authkey-file`) and the
   Makefile `mesh-node-up` / `mesh-node-down` / `mesh-node-status` / `mesh-node-logs` targets;
@@ -244,7 +244,7 @@ the marked bullet below). Per-subsection status is inline below:
 - The Studio's step-2 machine tier is now **arch-first**: an architecture selector
   (x86-64 / ARM64 — extensible enum) over a **family-grouped, searchable device
   browser** sourced from
-  [`core/device_catalog.py`](../studio/snapdragon_studio/core/device_catalog.py) +
+  [`core/device_catalog.py`](../studio/hugmesh_studio/core/device_catalog.py) +
   `core/device-catalog.json`, with the #351 honesty statuses on every row
   (SUPPORTED / EXPERIMENTAL labelled + fail-loud / UNSUPPORTED visible-but-unselectable
   with the reason shown). A device IS a `(platform, board)` pair and its roles are

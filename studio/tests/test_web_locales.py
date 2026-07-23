@@ -10,8 +10,8 @@ Everything is Qt-free and never starts a container.
 """
 import os
 
-from snapdragon_studio.core.local_stack_node import LocalStackNode
-from snapdragon_studio.core.local_mesh_bootstrap import (
+from hugmesh_studio.core.local_stack_node import LocalStackNode
+from hugmesh_studio.core.local_mesh_bootstrap import (
     LocalMeshBootstrap,
     LocalMeshBootstrapConfig,
     _parse_web_locales,

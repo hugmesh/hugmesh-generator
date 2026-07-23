@@ -1,6 +1,6 @@
 # HorizontalPodAutoscalers for the social-ui federated remotes — ONE per remote
 # Deployment (matrix-ui, mastodon-ui, login-ui, admin-ui), each its own stateless
-# static nginx server in snapdragon-frontend (see deployment.yaml). Modelled
+# static nginx server in hugmesh-frontend (see deployment.yaml). Modelled
 # byte-for-byte on manifests/remote-fragment/hpa.yaml: plain autoscaling/v2,
 # Resource metrics only. Each remote scales out cleanly under load.
 #
@@ -14,14 +14,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: snapdragon-matrix-ui
-  namespace: snapdragon-frontend
-  labels: { app: snapdragon-matrix-ui, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-matrix-ui
+  namespace: hugmesh-frontend
+  labels: { app: hugmesh-matrix-ui, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-matrix-ui
+    name: hugmesh-matrix-ui
   minReplicas: 2
   maxReplicas: 6
   metrics:
@@ -37,14 +37,14 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: snapdragon-mastodon-ui
-  namespace: snapdragon-frontend
-  labels: { app: snapdragon-mastodon-ui, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-mastodon-ui
+  namespace: hugmesh-frontend
+  labels: { app: hugmesh-mastodon-ui, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-mastodon-ui
+    name: hugmesh-mastodon-ui
   minReplicas: 2
   maxReplicas: 6
   metrics:
@@ -60,14 +60,14 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: snapdragon-login-ui
-  namespace: snapdragon-frontend
-  labels: { app: snapdragon-login-ui, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-login-ui
+  namespace: hugmesh-frontend
+  labels: { app: hugmesh-login-ui, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-login-ui
+    name: hugmesh-login-ui
   minReplicas: 2
   maxReplicas: 6
   metrics:
@@ -83,14 +83,14 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: snapdragon-admin-ui
-  namespace: snapdragon-frontend
-  labels: { app: snapdragon-admin-ui, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-admin-ui
+  namespace: hugmesh-frontend
+  labels: { app: hugmesh-admin-ui, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-admin-ui
+    name: hugmesh-admin-ui
   minReplicas: 2
   maxReplicas: 6
   metrics:

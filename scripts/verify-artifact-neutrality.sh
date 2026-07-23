@@ -4,22 +4,22 @@
 # UNAFFILIATED build artifacts (the shipped guarantee of generator PR #260).
 #
 # Verifies, against a build-output directory, that every artifact is neutral:
-#   * artifact NAMES     — gentoo-*, never snapdragon-*
-#   * live ISO           — volid GENTOO_LIVE, snapdragon-free tree, bare
+#   * artifact NAMES     — gentoo-*, never hugmesh-*
+#   * live ISO           — volid GENTOO_LIVE, hugmesh-free tree, bare
 #                          EFI/BOOT/bootx64.efi boot path (live media boots the
 #                          bare grub stub BY DESIGN — no UKI is expected here),
 #                          grub.cfg carries the neutral gentoo.install= cmdline
-#                          key + CDLABEL GENTOO_LIVE and is snapdragon-free
-#   * live squashfs      — no /etc/snapdragon marker tree, /etc/gentoo present,
-#                          no snapdragon-* tools, no k8s payload, and the
+#                          key + CDLABEL GENTOO_LIVE and is hugmesh-free
+#   * live squashfs      — no /etc/hugmesh marker tree, /etc/gentoo present,
+#                          no hugmesh-* tools, no k8s payload, and the
 #                          gentoo-calamares-install bridge present
 #                          (listed via unsquashfs in the builder container)
-#   * installer ISO      — volid GENTOO_INSTALL, snapdragon-free tree,
+#   * installer ISO      — volid GENTOO_INSTALL, hugmesh-free tree,
 #                          gentoo-named embedded stage4
-#   * disk image         — snapdragon-free GPT partition names, FAT ESP labeled
+#   * disk image         — hugmesh-free GPT partition names, FAT ESP labeled
 #                          GENTOO_ESP, ESP carries EFI/BOOT/bootx64.efi
 #   * UKI (Secure Boot)  — a gentoo UKI is checked on the INSTALLED ESP and the
-#                          sysroot /boot (NOT the live ISO). A snapdragon-named
+#                          sysroot /boot (NOT the live ISO). A hugmesh-named
 #                          UKI FAILs. A missing UKI is a WARN, not a FAIL:
 #                          absence is a boot-chain regression, not a
 #                          brand-neutrality violation, and only neutrality
@@ -27,9 +27,9 @@
 #   * sysroot            — marker tree / tools / k8s / hostname neutrality
 #   * fs + stage4 tars   — same neutrality sweep over the tarball listings
 #                          (multi-GB xz — these passes take minutes)
-#   * raw-string sweep   — attributed 'snapdragon' hit count on the live ISO
+#   * raw-string sweep   — attributed 'hugmesh' hit count on the live ISO
 #                          (kernel/firmware legitimately carry Qualcomm
-#                          Snapdragon driver strings; hits are attributed,
+#                          HugMesh driver strings; hits are attributed,
 #                          never blanket-failed)
 #
 # Usage:
@@ -39,7 +39,7 @@
 #                     (gentoo-*.live.iso / *.installer.iso / *.img /
 #                      *.fs.tar.xz / *.stage4.tar.xz — any subset)
 #   [builder-image]   local container image providing unsquashfs, parted and
-#                     mdir (default: snapdragon-builder). Never pulled — this
+#                     mdir (default: hugmesh-builder). Never pulled — this
 #                     tool makes NO network access.
 #
 # Options:
@@ -57,7 +57,7 @@ set -u
 usage() { sed -n '2,53p' "$0"; }
 
 DIR=""
-BUILDER_IMG="snapdragon-builder"
+BUILDER_IMG="hugmesh-builder"
 SYSROOT=""
 WORKBASE="${TMPDIR:-/var/tmp}"
 npos=0
@@ -124,15 +124,15 @@ iso_extract() { # iso_extract <iso> <path-in-iso> <dest>
 # helper: neutrality sweep over a file listing (squashfs / tar / sysroot find)
 sweep_listing() { # sweep_listing <listing-file> <label>
   local lst="$1" what="$2" rc
-  ! grep -q 'etc/snapdragon' "$lst"; verdict $? \
-      "$what: no /etc/snapdragon marker tree" \
-      "$what: /etc/snapdragon marker tree present"
+  ! grep -q 'etc/hugmesh' "$lst"; verdict $? \
+      "$what: no /etc/hugmesh marker tree" \
+      "$what: /etc/hugmesh marker tree present"
   grep -q 'etc/gentoo' "$lst"; verdict $? \
       "$what: /etc/gentoo present" \
       "$what: /etc/gentoo missing"
-  ! grep -Eq 'bin/snapdragon-' "$lst"; rc=$?
-  if [ $rc -eq 0 ]; then ok "$what: no snapdragon-* tools"; else
-    bad "$what: snapdragon-* tools present: $(grep -E 'bin/snapdragon-' "$lst" | head -3 | tr '\n' ' ')"
+  ! grep -Eq 'bin/hugmesh-' "$lst"; rc=$?
+  if [ $rc -eq 0 ]; then ok "$what: no hugmesh-* tools"; else
+    bad "$what: hugmesh-* tools present: $(grep -E 'bin/hugmesh-' "$lst" | head -3 | tr '\n' ' ')"
   fi
   ! grep -Eq 'bin/(kubelet|kubeadm|kubectl|containerd)$' "$lst"; verdict $? \
       "$what: no k8s payload (kubelet/kubeadm/kubectl/containerd)" \
@@ -141,8 +141,8 @@ sweep_listing() { # sweep_listing <listing-file> <label>
 # helper: hostname value -> PASS/WARN/FAIL
 check_hostname() { # check_hostname <value> <label>
   local hn="$1" what="$2"
-  if echo "$hn" | grep -qi 'snapdragon'; then
-    bad "$what: hostname is snapdragon-branded: '$hn'"
+  if echo "$hn" | grep -qi 'hugmesh'; then
+    bad "$what: hostname is hugmesh-branded: '$hn'"
   elif echo "$hn" | grep -q 'gentoo'; then
     ok "$what: hostname is neutral ('$(echo "$hn" | grep gentoo | head -1)')"
   else
@@ -161,7 +161,7 @@ INST_ISOS=("${DIR%/}"/gentoo-*.installer.iso)
 IMGS=("${DIR%/}"/gentoo-*.img)
 FS_TARS=("${DIR%/}"/gentoo-*.fs.tar.xz)
 STAGE4_TARS=("${DIR%/}"/gentoo-*.stage4.tar.xz)
-SNAP_NAMED=("${DIR%/}"/snapdragon-*)
+SNAP_NAMED=("${DIR%/}"/hugmesh-*)
 
 if [ -z "$SYSROOT" ]; then
   SYSROOT="$(find "$DIR" -maxdepth 2 -type d -name sysroot 2>/dev/null | head -1)"
@@ -175,8 +175,8 @@ fi
 
 # --- 0. artifact names are neutral -------------------------------------------
 [ ${#SNAP_NAMED[@]} -eq 0 ]; verdict $? \
-    "artifact names: no snapdragon-named files in $DIR" \
-    "artifact names: snapdragon-named files present: ${SNAP_NAMED[*]:-}"
+    "artifact names: no hugmesh-named files in $DIR" \
+    "artifact names: hugmesh-named files present: ${SNAP_NAMED[*]:-}"
 
 # UKI evidence is gathered from the INSTALLED ESP and the sysroot /boot and
 # judged once, after both sections (the live ISO is deliberately NOT a UKI
@@ -196,9 +196,9 @@ for iso in "${LIVE_ISOS[@]}"; do
     bad "$b: could not list ISO tree"
     continue
   fi
-  ! grep -qi 'snapdragon' "$tree"; verdict $? \
-      "$b: no snapdragon-named paths in ISO tree" \
-      "$b: snapdragon-named paths in ISO tree: $(grep -i snapdragon "$tree" | head -3 | tr '\n' ' ')"
+  ! grep -qi 'hugmesh' "$tree"; verdict $? \
+      "$b: no hugmesh-named paths in ISO tree" \
+      "$b: hugmesh-named paths in ISO tree: $(grep -i hugmesh "$tree" | head -3 | tr '\n' ' ')"
   grep -qi '/efi/boot/bootx64\.efi$' "$tree"; verdict $? \
       "$b: bare EFI/BOOT/bootx64.efi present (live media boots this by design; no UKI expected on live media)" \
       "$b: EFI/BOOT/bootx64.efi missing from ISO tree"
@@ -213,9 +213,9 @@ for iso in "${LIVE_ISOS[@]}"; do
     grep -q 'GENTOO_LIVE' "$grub"; verdict $? \
         "$b: grub.cfg references CDLABEL GENTOO_LIVE" \
         "$b: GENTOO_LIVE label missing from grub.cfg"
-    ! grep -qi 'snapdragon' "$grub"; verdict $? \
-        "$b: grub.cfg is snapdragon-free" \
-        "$b: snapdragon token in grub.cfg: $(grep -i snapdragon "$grub" | head -2 | tr '\n' ' ')"
+    ! grep -qi 'hugmesh' "$grub"; verdict $? \
+        "$b: grub.cfg is hugmesh-free" \
+        "$b: hugmesh token in grub.cfg: $(grep -i hugmesh "$grub" | head -2 | tr '\n' ' ')"
   else
     bad "$b: could not extract grub.cfg from ISO (path: '${grub_path:-none found}')"
   fi
@@ -246,11 +246,11 @@ for iso in "${LIVE_ISOS[@]}"; do
   fi
 
   # attributed raw-string sweep (never blanket-failed: kernel/firmware carry
-  # legitimate Qualcomm Snapdragon driver strings)
-  hits="$(strings -a "$iso" 2>/dev/null | grep -ci 'snapdragon')" || hits=0
-  ok "$b: attributed raw-string sweep done — ${hits} 'snapdragon' hit(s) (qcom kernel/firmware strings are legitimate; top sources below if any)"
+  # legitimate Qualcomm HugMesh driver strings)
+  hits="$(strings -a "$iso" 2>/dev/null | grep -ci 'hugmesh')" || hits=0
+  ok "$b: attributed raw-string sweep done — ${hits} 'hugmesh' hit(s) (qcom kernel/firmware strings are legitimate; top sources below if any)"
   if [ "${hits:-0}" -gt 0 ]; then
-    strings -a "$iso" 2>/dev/null | grep -i 'snapdragon' | sort | uniq -c | sort -rn | head -10
+    strings -a "$iso" 2>/dev/null | grep -i 'hugmesh' | sort | uniq -c | sort -rn | head -10
   fi
 done
 
@@ -265,9 +265,9 @@ for iso in "${INST_ISOS[@]}"; do
     bad "$b: could not list ISO tree"
     continue
   fi
-  ! grep -qi 'snapdragon' "$tree"; verdict $? \
-      "$b: no snapdragon-named paths in ISO tree" \
-      "$b: snapdragon-named paths in ISO tree: $(grep -i snapdragon "$tree" | head -3 | tr '\n' ' ')"
+  ! grep -qi 'hugmesh' "$tree"; verdict $? \
+      "$b: no hugmesh-named paths in ISO tree" \
+      "$b: hugmesh-named paths in ISO tree: $(grep -i hugmesh "$tree" | head -3 | tr '\n' ' ')"
   if grep -q '^/stage4/' "$tree"; then
     grep -E '^/stage4/.+' "$tree" | grep -vq '/stage4/gentoo-'; rc=$?
     [ $rc -ne 0 ]; verdict $? \
@@ -278,8 +278,8 @@ for iso in "${INST_ISOS[@]}"; do
   while IFS= read -r sh_path; do
     f="$WORK/inst-script"; rm -f "$f"
     if iso_extract "$iso" "$sh_path" "$f" && [ -s "$f" ]; then
-      n="$(grep -ci 'snapdragon' "$f")" || n=0
-      [ "${n:-0}" -gt 0 ] && note "$b: installer script $sh_path carries ${n} 'snapdragon' token(s) (attributed, informational): $(grep -i snapdragon "$f" | head -2 | tr '\n' ' ')"
+      n="$(grep -ci 'hugmesh' "$f")" || n=0
+      [ "${n:-0}" -gt 0 ] && note "$b: installer script $sh_path carries ${n} 'hugmesh' token(s) (attributed, informational): $(grep -i hugmesh "$f" | head -2 | tr '\n' ' ')"
     fi
   done < <(grep -E '^/[^/]+\.sh$' "$tree")
 done
@@ -297,9 +297,9 @@ for img in "${IMGS[@]}"; do
     bad "$b: could not read partition table (parted in builder container failed)"
     continue
   fi
-  ! grep -qi 'snapdragon' "$pt"; verdict $? \
-      "$b: partition-table names are snapdragon-free" \
-      "$b: snapdragon token in partition table: $(grep -i snapdragon "$pt" | head -2 | tr '\n' ' ')"
+  ! grep -qi 'hugmesh' "$pt"; verdict $? \
+      "$b: partition-table names are hugmesh-free" \
+      "$b: hugmesh token in partition table: $(grep -i hugmesh "$pt" | head -2 | tr '\n' ' ')"
 
   esp_off="$(awk -F: '$5~/^fat/{gsub(/B/,"",$2); print $2; exit}' "$pt")"
   if [ -n "$esp_off" ]; then
@@ -319,9 +319,9 @@ for img in "${IMGS[@]}"; do
       grep -qi 'EFI/BOOT/BOOTX64\.EFI$' "$esp"; verdict $? \
           "$b: installed ESP carries EFI/BOOT/bootx64.efi" \
           "$b: EFI/BOOT/bootx64.efi missing from installed ESP"
-      ! grep -qi 'snapdragon' "$esp"; verdict $? \
-          "$b: installed ESP file names are snapdragon-free" \
-          "$b: snapdragon-named file on installed ESP: $(grep -i snapdragon "$esp" | head -2 | tr '\n' ' ')"
+      ! grep -qi 'hugmesh' "$esp"; verdict $? \
+          "$b: installed ESP file names are hugmesh-free" \
+          "$b: hugmesh-named file on installed ESP: $(grep -i hugmesh "$esp" | head -2 | tr '\n' ' ')"
       grep -Ei '/gentoo[^/]*\.efi$|EFI/LINUX/[^/]+\.efi$' "$esp" >> "$UKI_HITS" || true
     else
       bad "$b: could not list installed ESP contents (mdir in builder container failed)"
@@ -355,9 +355,9 @@ fi
 
 # --- 5. UKI verdict (installed ESP + sysroot /boot only) ----------------------
 if [ -s "$UKI_HITS" ]; then
-  ! grep -qi 'snapdragon' "$UKI_HITS"; verdict $? \
+  ! grep -qi 'hugmesh' "$UKI_HITS"; verdict $? \
       "UKI present on installed ESP / sysroot boot: $(head -2 "$UKI_HITS" | tr '\n' ' ')" \
-      "UKI found but snapdragon-named: $(grep -i snapdragon "$UKI_HITS" | head -2 | tr '\n' ' ')"
+      "UKI found but hugmesh-named: $(grep -i hugmesh "$UKI_HITS" | head -2 | tr '\n' ' ')"
 elif [ "$UKI_SOURCES" -gt 0 ]; then
   warn "no UKI (gentoo*.efi / EFI/Linux/*.efi) on the installed ESP or sysroot /boot — the build profile already wires the UKI chain (sys-kernel/dracut[uefi] + sys-apps/systemd-utils[boot], landed in #307), so a missing UKI is a genuine finding, NOT an expected or blocked state: the in-chroot 'dracut --uefi' step failed or was skipped and the Secure Boot chain has degraded to GRUB+vmlinuz. Check the builder log for 'dracut --uefi failed' / 'UKI skipped'. WARN not FAIL: absence is a boot-chain regression, not a brand-neutrality violation."
 elif [ "$total_found" -gt 0 ] || [ -n "$SYSROOT" ]; then

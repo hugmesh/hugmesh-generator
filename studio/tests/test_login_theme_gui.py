@@ -20,11 +20,11 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from snapdragon_studio.core import theme                      # noqa: E402
-from snapdragon_studio.core.config import ImageConfig         # noqa: E402
-from snapdragon_studio.gui import wizard as wizard_mod        # noqa: E402
-from snapdragon_studio.gui.pages._logintheme import LoginThemeGroup   # noqa: E402
-from snapdragon_studio.gui.qt import QtWidgets                # noqa: E402
+from hugmesh_studio.core import theme                      # noqa: E402
+from hugmesh_studio.core.config import ImageConfig         # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod        # noqa: E402
+from hugmesh_studio.gui.pages._logintheme import LoginThemeGroup   # noqa: E402
+from hugmesh_studio.gui.qt import QtWidgets                # noqa: E402
 
 GENERATOR_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -101,7 +101,7 @@ def test_cfg_login_theme_css_matches_the_group_composition(qapp):
 
 def test_preview_button_writes_the_substituted_page_and_opens_it(qapp, tmp_path,
                                                                  monkeypatch):
-    import snapdragon_studio.gui.pages._logintheme as lt
+    import hugmesh_studio.gui.pages._logintheme as lt
     opened = []
     monkeypatch.setattr(lt.QtGui.QDesktopServices, "openUrl",
                         staticmethod(lambda url: opened.append(url) or True))

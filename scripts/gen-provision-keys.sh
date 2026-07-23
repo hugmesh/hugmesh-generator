@@ -108,7 +108,7 @@ FOREIGN_MESH_TRUST_SRC="${FOREIGN_MESH_TRUST_SRC:-}"
 # PERMANENTLY INTERNAL (invariant I7): unlike CLUSTER_DOMAIN (the PUBLIC apex the
 # go-live wizard flips to a real domain), the superdomain is NEVER go-live-flipped and
 # never public. Default: <BRAND>.internal (matches the Studio's effective_superdomain()
-# = superdomain or f"{brand}.internal"; brand default 'snapdragon' => snapdragon.internal).
+# = superdomain or f"{brand}.internal"; brand default 'hugmesh' => hugmesh.internal).
 # Override with SUPERDOMAIN (env/brand.conf) or --superdomain to pin an explicit
 # internal zone. Precedence: built-in (<brand>.internal) < env/brand.conf < CLI flag.
 SUPERDOMAIN="${SUPERDOMAIN:-}"
@@ -350,9 +350,9 @@ rm -rf "${OUT_DIR}/examples"
 #     we honour that on the generated copy. (The static keys-template default + the
 #     image-baked specs/etc/{kubernetes/kubeadm-config,headscale/config}.yaml fallbacks
 #     are only used when KEYS lacks these files — flagged for follow-up alignment.)
-# PERMANENTLY INTERNAL (invariant I7): distinct from .snapdragon.cluster_domain (the
+# PERMANENTLY INTERNAL (invariant I7): distinct from .hugmesh.cluster_domain (the
 # PUBLIC apex the go-live wizard flips), NEVER go-live-flipped. ZERO builder flags.
-EFFECTIVE_SUPERDOMAIN="${SUPERDOMAIN:-${BRAND:-snapdragon}.internal}"
+EFFECTIVE_SUPERDOMAIN="${SUPERDOMAIN:-${BRAND:-hugmesh}.internal}"
 PROV="${OUT_DIR}/provision.json"
 if [ -f "${PROV}" ]; then
     SD="${EFFECTIVE_SUPERDOMAIN}" python3 - "${PROV}" "${OUT_DIR}/kubernetes/kubeadm-config.yaml" <<'PY'
@@ -596,7 +596,7 @@ fi
 
 mkdir -p "${OUT_DIR}/ssh"
 KEYFILE="${OUT_DIR}/ssh/${ADMIN}_ed25519"
-[ -f "${KEYFILE}" ] || { echo "==> Generating ed25519 keypair for ${ADMIN}"; ssh-keygen -t ed25519 -N '' -C "${ADMIN}@snapdragon" -f "${KEYFILE}" >/dev/null; }
+[ -f "${KEYFILE}" ] || { echo "==> Generating ed25519 keypair for ${ADMIN}"; ssh-keygen -t ed25519 -N '' -C "${ADMIN}@hugmesh" -f "${KEYFILE}" >/dev/null; }
 PUBKEY="$(cat "${KEYFILE}.pub")"
 
 # ── In-UI SSH-terminal key model: per-device HOST + BFF DIAL keypairs ───────────

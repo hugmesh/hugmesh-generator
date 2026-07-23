@@ -3,5 +3,5 @@
 # multilib hardened stage3 (ABI_X86_32) + the steam-overlay enabled — the builder
 # sets both up (see the native-steam block in build-x86-host-stage4.sh). The thin
 # mesh laptop/chromebook clients do NOT pull this (kept lean). The Steam library
-# is pointed at /media/Steam by snapdragon-media-detect at runtime.
+# is pointed at /media/Steam by hugmesh-media-detect at runtime.
 games-util/steam-launcher

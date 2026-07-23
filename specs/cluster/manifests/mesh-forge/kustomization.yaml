@@ -7,5 +7,5 @@ kind: Kustomization
 resources:
   - mesh-forge-expose.yaml
 commonLabels:
-  app.kubernetes.io/part-of: snapdragon.systems
+  app.kubernetes.io/part-of: hugmesh.systems
   app.kubernetes.io/name: mesh-forge

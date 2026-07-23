@@ -1,25 +1,25 @@
-# snapdragon-be-gateway — front door for backend APIs + matrix + mastodon.
+# hugmesh-be-gateway — front door for backend APIs + matrix + mastodon.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: snapdragon-gateway-be
+  name: hugmesh-gateway-be
   namespace: devops
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
-    path: specs/cluster/charts/snapdragon-gateway
+    path: specs/cluster/charts/hugmesh-gateway
     helm:
-      releaseName: snapdragon-be-gateway
+      releaseName: hugmesh-be-gateway
       values: |
         instance:
-          name: snapdragon-be-gateway
-        # Cross-namespace mTLS client identity (Vault-PKI/ESO snapdragon-be-gateway-mtls).
+          name: hugmesh-be-gateway
+        # Cross-namespace mTLS client identity (Vault-PKI/ESO hugmesh-be-gateway-mtls).
         # initContainer assembles keystore/truststore; server.ssl stays off so the
         # http readiness probe and the ingress hand-off are unaffected. The DOWNSTREAM
         # (gateway -> API) leg now PRESENTS this client cert + validates backend server
-        # certs — gated on by SNAPDRAGON_GATEWAY_MTLS_ENABLED below (snapdragon-gateway
+        # certs — gated on by HUGMESH_GATEWAY_MTLS_ENABLED below (hugmesh-gateway
         # repo, feat/mtls-client-presentation). PUBLIC/upstream callers are unaffected
         # (no client cert required of them).
         keystore:
@@ -27,22 +27,22 @@ spec:
         ingress:
           enabled: true
           # Cloudflare Tunnel (manifests/cloudflared) fronts api./matrix./
-          # mastodon.snapdragon.systems; this nginx Ingress is the in-cluster
+          # mastodon.hugmesh.systems; this nginx Ingress is the in-cluster
           # secondary path for the api host. Host routing for matrix/mastodon is
           # done by the gateway's Host predicates regardless of ingress.
           className: nginx
-          host: api.snapdragon.systems
+          host: api.hugmesh.systems
           # Also front the headscale endpoint; forwarded to the pki gateway (the
           # headscale-forward route) so external tailscale clients never hit pki direct.
           extraHosts:
-            - scale.snapdragon.systems
+            - scale.hugmesh.systems
             # games.<GAMES_DOMAIN> — the games portal host. Default GAMES_DOMAIN =
             # games.<CLUSTER_DOMAIN>, so this literal rebrands with the primary
             # domain; a custom GAMES_DOMAIN (e.g. the real .games TLD) is rewritten
             # by parameterize_games_domain() in the stage4 builders. The host route
             # is the `games` route below; the federation manifest greys it out when
             # the games slug is omitted (gate_optional_services prunes the route).
-            - games.snapdragon.systems
+            - games.hugmesh.systems
         nodeSelector:
           snapdragon.systems/backend: "true"
         seLinux:
@@ -58,14 +58,14 @@ spec:
                 name: route-access-be-gateway
                 key: password
           - name: ROUTE_ACCESS_R2DBC_URL
-            value: r2dbc:postgresql://be_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.snapdragon-pki.svc.cluster.local:5432/gateway
+            value: r2dbc:postgresql://be_gateway:$(ROUTE_ACCESS_DB_PASSWORD)@route-access-db.hugmesh-pki.svc.cluster.local:5432/gateway
           # Activate the DOWNSTREAM client-cert presentation + backend-cert
-          # validation in the gateway image (snapdragon-gateway repo). When true the
+          # validation in the gateway image (hugmesh-gateway repo). When true the
           # gateway's reactor-netty HttpClient loads /stores/keystore.p12 (this
           # gateway's identity) + /stores/truststore.p12 (cluster CA) and presents
           # the cert to the now-mTLS https:// backends below. Default off in the
           # image so dev/local/tests with plain-http backends are unaffected.
-          - name: SNAPDRAGON_GATEWAY_MTLS_ENABLED
+          - name: HUGMESH_GATEWAY_MTLS_ENABLED
             value: "true"
           # ── BFF session bridge: opaque bff_ → Spring SecurityContext ──────────
           # Same stanza as 20-gateway-fe.yaml: BffSessionAuthFilter introspects a
@@ -77,7 +77,7 @@ spec:
           # InternalTokenWebFilter — BLANK in dev → no-op on both sides).
           - { name: APP_BFF_SESSION_ENABLED, value: "true" }
           - name: BFF_BASE_URL
-            value: http://snapdragon-admin-bff-api.snapdragon-backend.svc.cluster.local:8080
+            value: http://hugmesh-admin-bff-api.hugmesh-backend.svc.cluster.local:8080
           - name: INTERNAL_TOKEN
             valueFrom:
               secretKeyRef:
@@ -89,48 +89,48 @@ spec:
           # this backend gateway and are forwarded to the pki gateway -> headscale,
           # so the pki gateway never faces the internet (no direct external path).
           - id: headscale-forward
-            host: scale.snapdragon.systems
-            uri: http://snapdragon-pki-gateway.snapdragon-pki.svc.cluster.local:8080
-          # --- Mastodon (mastodon.snapdragon.systems) — specific paths first ---
+            host: scale.hugmesh.systems
+            uri: http://hugmesh-pki-gateway.hugmesh-pki.svc.cluster.local:8080
+          # --- Mastodon (mastodon.hugmesh.systems) — specific paths first ---
           # ⚠️ REPOINTED to the akkoma-proxy mTLS sidecar (:4443, https) — the
           # homeservers are network-isolated (manifests/networkpolicy/homeserver-
           # isolation.yaml) and reachable only via the cluster-CA-mTLS proxy. The
-          # gateway PRESENTS its client cert here (SNAPDRAGON_GATEWAY_MTLS_ENABLED=true,
+          # gateway PRESENTS its client cert here (HUGMESH_GATEWAY_MTLS_ENABLED=true,
           # already set above) and validates the proxy's server cert against the
           # cluster CA. Route-DB gating is now ROLE_MASTODON/ROLE_MOD/ROLE_ADMIN
           # (per-platform access roles, see manifests/route-access/20-schema.sql),
           # not the broad ROLE_USER floor.
           # Mastodon's OAuth endpoints (authorize/token), gated /oauth/** distinctly.
           - id: mastodon-oauth
-            host: mastodon.snapdragon.systems
-            uri: https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443
+            host: mastodon.hugmesh.systems
+            uri: https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443
             path: /oauth/**
           # Mastodon REST API (statuses, timelines, …) under the mastodon host.
           - id: mastodon-api
-            host: mastodon.snapdragon.systems
-            uri: https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443
+            host: mastodon.hugmesh.systems
+            uri: https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443
             path: /api/v1/**
           # Everything else on the mastodon host (web UI, streaming, .well-known).
           - id: mastodon-web
-            host: mastodon.snapdragon.systems
-            uri: https://akkoma-proxy.snapdragon-backend.svc.cluster.local:4443
-          # --- Matrix (matrix.snapdragon.systems) ---
+            host: mastodon.hugmesh.systems
+            uri: https://akkoma-proxy.hugmesh-backend.svc.cluster.local:4443
+          # --- Matrix (matrix.hugmesh.systems) ---
           # ⚠️ REPOINTED to the tuwunel-proxy mTLS sidecar (:4443, https) — same
           # isolation + client-cert presentation as the mastodon routes above.
           # The Matrix client/server API. Present both as a host route and a
           # path route so /_matrix/** resolves whether or not the Host header is
           # the matrix subdomain (federation .well-known hits the apex too).
           - id: matrix-api
-            host: matrix.snapdragon.systems
-            uri: https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443
+            host: matrix.hugmesh.systems
+            uri: https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443
             path: /_matrix/**
           - id: matrix-wellknown
-            uri: https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443
+            uri: https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443
             path: /_matrix/**
           - id: matrix
-            host: matrix.snapdragon.systems
-            uri: https://tuwunel-proxy.snapdragon-backend.svc.cluster.local:4443
-          # --- Snapdragon Games (games.<GAMES_DOMAIN>) ---
+            host: matrix.hugmesh.systems
+            uri: https://tuwunel-proxy.hugmesh-backend.svc.cluster.local:4443
+          # --- HugMesh Games (games.<GAMES_DOMAIN>) ---
           # Host route for the games portal. Default GAMES_DOMAIN =
           # games.<CLUSTER_DOMAIN> so this literal rebrands with the primary domain
           # and rides the *.<primary> wildcard (CoreDNS in test, cloudflared in
@@ -139,14 +139,14 @@ spec:
           # ⚠ OPTIONAL slug `games`: gate_optional_services REMOVES this route (and
           # the extraHost above + the games route-access rows) when games is
           # deselected, so a games-less build does not 502 on games.<domain>.
-          # TODO(gateway wave): keep CanonicalSeed.java (snapdragon-gateway repo)
+          # TODO(gateway wave): keep CanonicalSeed.java (hugmesh-gateway repo)
           # + cloudflared games hostname in sync — see docs/OPTIONAL-SERVICES.md.
           - id: games
-            host: games.snapdragon.systems
-            uri: http://snapdragon-games.snapdragon-games.svc.cluster.local:8080
+            host: games.hugmesh.systems
+            uri: http://hugmesh-games.hugmesh-games.svc.cluster.local:8080
           # --- Games app-store per-instance HTTP CONSOLES (PR7) ---
           # /games/servers/<slug>/<name>/** path-routes to the per-instance HTTP console
-          # Services in snapdragon-games-instances. Raw L4 game protocols do NOT come here
+          # Services in hugmesh-games-instances. Raw L4 game protocols do NOT come here
           # (Spring Cloud Gateway is L7-only) — they are exposed per-instance via the
           # reserved-pool NodePort the admin-bff allocates (31000-31099); RCON/admin ports
           # stay tailnet-only ClusterIP and are never routed. This route is keyed on
@@ -158,25 +158,25 @@ spec:
           # ⚠ OPTIONAL slug `games`: gate_optional_services REMOVES this route + its
           # route-access rows when games is deselected (PR10).
           - id: games-servers-console
-            uri: http://games-instances-console.snapdragon-games-instances.svc.cluster.local:8080
+            uri: http://games-instances-console.hugmesh-games-instances.svc.cluster.local:8080
             path: /games/servers/**
-          # --- snapdragon-federation-api (api.snapdragon.systems) — the module-
+          # --- hugmesh-federation-api (api.hugmesh.systems) — the module-
           # federation registry/manifest/bundles API. MORE SPECIFIC than the
-          # /api/** snapdragon-api catch-all below, so it MUST be declared FIRST
+          # /api/** hugmesh-api catch-all below, so it MUST be declared FIRST
           # (Spring Cloud Gateway matches routes in declared order) or the broad
           # /api/** route would swallow /api/federation/**. Fine-grained authz
           # (modules/overrides=ADMIN, moderation=MOD/ADMIN, manifest GET +
           # bundles=authenticated) is enforced inside federation's SecurityConfig;
           # the route DB gates the coarse authenticated floor (ROLE_USER).
           # https:// — federation-api now enforces mTLS (client-auth=need); the
-          # gateway presents its client cert on this leg (SNAPDRAGON_GATEWAY_MTLS_ENABLED).
+          # gateway presents its client cert on this leg (HUGMESH_GATEWAY_MTLS_ENABLED).
           - id: federation-api
-            uri: https://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080
+            uri: https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080
             path: /api/federation/**
-          # --- Snapdragon Spring APIs (api.snapdragon.systems) ---
-          # https:// — snapdragon-api now enforces mTLS (client-auth=need).
-          - id: snapdragon-api
-            uri: https://snapdragon-api.snapdragon-backend.svc.cluster.local:8080
+          # --- HugMesh Spring APIs (api.hugmesh.systems) ---
+          # https:// — hugmesh-api now enforces mTLS (client-auth=need).
+          - id: hugmesh-api
+            uri: https://hugmesh-api.hugmesh-backend.svc.cluster.local:8080
             path: /api/**
           # --- edge-AI on ai.<domain> (OpenAI model API + analysis API + TTS API) --
           # /v1/analyze/** -> the analysis API (edge-ai-analysis slug) and
@@ -190,19 +190,19 @@ spec:
           # the catchall stops the last prune cleanly at `destination:` touching no
           # other route's comments.
           - id: edge-ai-analysis
-            host: ai.snapdragon.systems
-            uri: http://snapdragon-edge-ai-analysis.snapdragon-inference.svc.cluster.local:8080
+            host: ai.hugmesh.systems
+            uri: http://hugmesh-edge-ai-analysis.hugmesh-inference.svc.cluster.local:8080
             path: /v1/analyze/**
           - id: edge-ai-tts
-            host: ai.snapdragon.systems
-            uri: http://snapdragon-edge-ai-tts.snapdragon-inference.svc.cluster.local:8080
+            host: ai.hugmesh.systems
+            uri: http://hugmesh-edge-ai-tts.hugmesh-inference.svc.cluster.local:8080
             path: /v1/synthesize/**
           - id: edge-ai
-            host: ai.snapdragon.systems
-            uri: http://snapdragon-edge-ai.snapdragon-inference.svc.cluster.local:11434
+            host: ai.hugmesh.systems
+            uri: http://hugmesh-edge-ai.hugmesh-inference.svc.cluster.local:11434
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

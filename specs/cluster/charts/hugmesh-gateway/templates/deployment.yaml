@@ -1,0 +1,204 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "hugmesh-gateway.name" . }}
+  labels:
+    {{- include "hugmesh-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "hugmesh-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/routes: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "hugmesh-gateway.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "hugmesh-gateway.serviceAccountName" . }}
+      # The gateway is a Spring Cloud Gateway resource server: it validates the
+      # Casdoor JWT + routes to upstreams and NEVER calls the Kubernetes API, so
+      # its ServiceAccount token must not be mounted. NIST 800-53 AC-6 (least
+      # privilege), 800-190 §4.5.5; closes the SA-token theft -> API-access path.
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        {{- if .Values.seLinux.level }}
+        seLinuxOptions:
+          type: {{ .Values.seLinux.type | default "container_t" }}
+          level: {{ .Values.seLinux.level | quote }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.keystore.enabled }}
+      initContainers:
+        # Build the PKCS12 keystore (mTLS identity) + JRE truststore from the
+        # Vault-PKI-issued, ESO-synced PEM Secret
+        # ({{ .Values.keystore.secretName | default (printf "%s-mtls" .Values.instance.name) }}: tls.crt/tls.key/ca.crt).
+        # keytool + openssl ship in the JRE image, so reuse the gateway image.
+        # The store password is generated HERE, kept only in the tmpfs /stores
+        # emptyDir (never in git / a Secret / Vault), and emitted into a Spring
+        # properties file the app loads via SPRING_CONFIG_ADDITIONAL_LOCATION.
+        - name: build-keystore
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              P="$(openssl rand -base64 24 | tr -d '/+=' | cut -c1-24)"
+              # mTLS identity: key + cert -> PKCS12 (Spring reads PKCS12 natively)
+              openssl pkcs12 -export -inkey /pki/tls.key -in /pki/tls.crt \
+                -certfile /pki/ca.crt -name {{ .Values.instance.name }} \
+                -out /stores/keystore.p12 -passout "pass:${P}"
+              {{- if eq .Values.keystore.trustTier "WIDE" }}
+              # WIDE trust tier: import each CA from the all-domain bundle so the
+              # architecture-tier gateway accepts mTLS peers from any brand.
+              # Requires /pki/ca-bundle.crt (all domain roots, PEM-concatenated)
+              # in the ESO-synced Secret.
+              awk '/-----BEGIN CERTIFICATE-----/{n++; f="/tmp/ca-" n ".pem"} f{print >> f}' /pki/ca-bundle.crt
+              for _f in /tmp/ca-*.pem; do
+                _i=$(basename "${_f}" .pem | tr -cd '0-9')
+                keytool -importcert -noprompt \
+                  -alias {{ .Values.keystore.caAlias | quote }}-${_i} \
+                  -file "${_f}" -keystore /stores/truststore.p12 \
+                  -storetype PKCS12 -storepass "${P}"
+              done
+              {{- else }}
+              # NARROW trust tier (default): only the issuing domain CA — per-brand
+              # isolation at the mTLS trust anchor.
+              keytool -importcert -noprompt -alias {{ .Values.keystore.caAlias | quote }} \
+                -file /pki/ca.crt -keystore /stores/truststore.p12 \
+                -storetype PKCS12 -storepass "${P}"
+              {{- end }}
+              # Spring SSL config — picked up from file:/stores/ (added to
+              # SPRING_CONFIG_ADDITIONAL_LOCATION). server.ssl is opt-in via
+              # keystore.serverTls so probes/Service stay plaintext by default.
+              # FILENAME IS LOAD-BEARING — do NOT rename this back to
+              # application-tls.properties (or any application-<name>.properties).
+              # SPRING_CONFIG_ADDITIONAL_LOCATION only adds a SEARCH DIRECTORY; Spring
+              # auto-loads a profile-named doc (application-<name>.properties) from it ONLY
+              # when a profile literally named <name> is active. This chart activates
+              # only `routes`, never `tls`, so the old application-tls.properties was
+              # silently never loaded: hugmesh.tls.* fell back to the packaged
+              # application.yml's ${HUGMESH_TLS_KEY_STORE_PASSWORD:} -> "" (empty)
+              # and DownstreamMtlsConfig could not open the PKCS12 keystore. Plain
+              # application.properties loads UNCONDITIONALLY from the additional
+              # location, with no profile needed — and does NOT shadow the /config/
+              # route table, which shares no keys with this file.
+              umask 077
+              cat > /stores/application.properties <<EOF
+              hugmesh.tls.key-store=/stores/keystore.p12
+              hugmesh.tls.key-store-type=PKCS12
+              hugmesh.tls.key-store-password=${P}
+              hugmesh.tls.trust-store=/stores/truststore.p12
+              hugmesh.tls.trust-store-type=PKCS12
+              hugmesh.tls.trust-store-password=${P}
+              server.ssl.enabled={{ .Values.keystore.serverTls }}
+              server.ssl.key-store=/stores/keystore.p12
+              server.ssl.key-store-type=PKCS12
+              server.ssl.key-store-password=${P}
+              # TLS protocol floor — TLSv1.3 by default (forward-secret, AEAD-only,
+              # prerequisite for PQC hybrid key exchange). See docs/CRYPTO-AUDIT.md.
+              server.ssl.enabled-protocols={{ .Values.keystore.tlsProtocols | default "TLSv1.3" }}
+              EOF
+              {{- if .Values.keystore.pqcGroups }}
+              # POST-QUANTUM HYBRID KEY EXCHANGE (gated; only when pqcGroups set and
+              # the JVM supports the group). Prepend the hybrid group, keep classical
+              # fallbacks so a peer that can't do PQC still negotiates X25519/secp384r1.
+              echo "server.ssl.protocol=TLS" >> /stores/application.properties
+              echo "hugmesh.tls.named-groups={{ .Values.keystore.pqcGroups }},x25519,secp384r1,secp256r1" >> /stores/application.properties
+              {{- end }}
+              echo "keystore + truststore + application.properties built"
+          volumeMounts:
+            - { name: pki, mountPath: /pki, readOnly: true }
+            - { name: stores, mountPath: /stores }
+      {{- end }}
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+          env:
+            - name: SPRING_APPLICATION_NAME
+              value: {{ .Values.instance.name | quote }}
+            - name: PORT
+              value: {{ .Values.service.port | quote }}
+            - name: SPRING_CONFIG_ADDITIONAL_LOCATION
+              value: {{ if .Values.keystore.enabled }}"file:/config/,file:/stores/"{{ else }}"file:/config/"{{ end }}
+            # Spring only auto-loads a profile-named doc (application-{name}.yml)
+            # from an additional-location DIRECTORY when a profile literally named
+            # {name} is active — so the mounted application-routes.yml ConfigMap
+            # (this gateway's entire downstream route table) would otherwise
+            # silently never load, leaving only the packaged application.yml's
+            # placeholder fallback route active. Same root cause + fix as
+            # compose.local.yaml (generator#261); this is the cluster-deployment
+            # counterpart of that bug, never independently verified against a
+            # real cluster.
+            - name: SPRING_PROFILES_ACTIVE
+              value: "routes"
+            - name: CASDOOR_ISSUER_URI
+              value: {{ .Values.casdoor.issuerUri | quote }}
+            - name: CASDOOR_JWKS_URI
+              value: {{ .Values.casdoor.jwksUri | quote }}
+            - name: CASSANDRA_CONTACT_POINTS
+              value: {{ .Values.cassandra.contactPoints | quote }}
+            - name: CASSANDRA_KEYSPACE
+              value: {{ .Values.cassandra.keyspace | quote }}
+            - name: CASSANDRA_LOCAL_DC
+              value: {{ .Values.cassandra.localDc | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.probes.enabled }}
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: http }
+            initialDelaySeconds: 45
+            periodSeconds: 15
+          {{- end }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: routes
+              mountPath: /config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.keystore.enabled }}
+            - name: stores
+              mountPath: /stores
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: routes
+          configMap:
+            name: {{ include "hugmesh-gateway.name" . }}-routes
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.keystore.enabled }}
+        # Vault-PKI-issued mTLS material, synced by ESO (kubernetes.io/tls).
+        - name: pki
+          secret:
+            secretName: {{ .Values.keystore.secretName | default (printf "%s-mtls" .Values.instance.name) }}
+        # tmpfs for the assembled PKCS12 stores + the pod-local SSL properties.
+        - name: stores
+          emptyDir:
+            medium: Memory
+        {{- end }}

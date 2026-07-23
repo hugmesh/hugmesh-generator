@@ -41,7 +41,7 @@ import {
 const SUBJECT = systemsUser('e2e-mastodon-domainlocked');
 
 const BE = process.env['SNAP_BE_GATEWAY']
-  ?? 'https://snapdragon-be-gateway.snapdragon-backend.svc.cluster.local:8443';
+  ?? 'https://hugmesh-be-gateway.hugmesh-backend.svc.cluster.local:8443';
 
 /** The bounded window a negative peer observation is watched for — the same
  *  clock the spec-22 positive control is observed under (its delivery lands
@@ -86,7 +86,7 @@ test.describe('domain-lock × mod-ban: independent axes, no federation leak', ()
     test.skip(!subjectToken || !peerToken || !modJwt,
       'subject/peer Mastodon tokens or e2e-mod Casdoor JWT not provisioned for this run');
 
-    const subjectAcct = `${SUBJECT.username}@mastodon.snapdragon.systems`;
+    const subjectAcct = `${SUBJECT.username}@mastodon.hugmesh.systems`;
 
     // ── Phase 0: the peer follows the subject, so any leak WOULD deliver here. ──
     const followed = await peerFollow(request, peerToken, subjectAcct);

@@ -2,7 +2,7 @@
 streaming, secret staging and the commit/rollback terminal path — no Qt.
 
 After the go-live consolidation the Studio front-end is a THIN caller of the
-CANONICAL driver specs/usr/sbin/snapdragon-go-live (subcommands
+CANONICAL driver specs/usr/sbin/hugmesh-go-live (subcommands
 status|list|plan|commit|rollback), NOT the removed #286 engine scripts/go-live.sh.
 These tests pin the argv it assembles (subcommand + flags), that secrets never
 enter that argv, that the commit/rollback path adds NO -y/--yes bypass, and that
@@ -19,7 +19,7 @@ import subprocess
 
 import pytest
 
-from snapdragon_studio.core.golive_driver import (
+from hugmesh_studio.core.golive_driver import (
     GoLiveDriver, GoLiveOptions, DRIVER_REL, REGISTRY_REL,
 )
 
@@ -155,7 +155,7 @@ def test_run_streams_lines_from_the_driver(monkeypatch, tmp_path):
         seen["cwd"] = kwargs.get("cwd")
         return FakeProc()
 
-    monkeypatch.setattr("snapdragon_studio.core.golive_driver.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("hugmesh_studio.core.golive_driver.subprocess.Popen", fake_popen)
     lines = []
     code = d.run("plan", GoLiveOptions(provider="byo-domain", domain="example.org",
                                        ingress_ip="203.0.113.7"), on_line=lines.append)
@@ -193,7 +193,7 @@ def test_status_text_strips_ansi(monkeypatch, tmp_path):
         assert cmd == ["bash", f"./{DRIVER_REL}", "status"]
         return subprocess.CompletedProcess(cmd, 0, stdout="\x1b[1mGo-live status\x1b[0m\n  posture: INTERNAL\n")
 
-    monkeypatch.setattr("snapdragon_studio.core.golive_driver.subprocess.run", fake_run)
+    monkeypatch.setattr("hugmesh_studio.core.golive_driver.subprocess.run", fake_run)
     assert GoLiveDriver(str(tmp_path)).status_text() == "Go-live status\n  posture: INTERNAL"
 
 
@@ -237,7 +237,7 @@ def test_rollback_command_is_minimal_and_no_yes(tmp_path):
 
 def test_terminal_command_picks_the_first_available(monkeypatch, tmp_path):
     d = GoLiveDriver(str(tmp_path), is_root=True)
-    monkeypatch.setattr("snapdragon_studio.core.golive_driver.shutil.which",
+    monkeypatch.setattr("hugmesh_studio.core.golive_driver.shutil.which",
                         lambda b: "/usr/bin/konsole" if b == "konsole" else None)
     inner = ["bash", f"./{DRIVER_REL}", "commit", "--provider", "byo-domain"]
     cmd = d.terminal_command(inner)
@@ -248,7 +248,7 @@ def test_terminal_command_picks_the_first_available(monkeypatch, tmp_path):
 
 def test_run_commit_without_a_terminal_reports_the_manual_command(monkeypatch, tmp_path):
     d = GoLiveDriver(str(tmp_path), is_root=True)
-    monkeypatch.setattr("snapdragon_studio.core.golive_driver.shutil.which", lambda b: None)
+    monkeypatch.setattr("hugmesh_studio.core.golive_driver.shutil.which", lambda b: None)
     ok, msg = d.run_commit_in_terminal(GoLiveOptions(provider="byo-domain", domain="example.org"))
     assert not ok
     assert "yourself: " in msg and "commit" in msg and "example.org" in msg

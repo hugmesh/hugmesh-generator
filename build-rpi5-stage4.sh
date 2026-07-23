@@ -135,19 +135,19 @@ TIMEZONE="UTC"
 HOSTNAME=""
 ROLE="generic"          # generic | pki | backend | frontend | desktop
 DESKTOP="none"          # derived: 'light' for --role desktop, else none (--print-plan/banner display only)
-CLUSTER_DOMAIN="snapdragon.systems"
+CLUSTER_DOMAIN="hugmesh.systems"
 # Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix every
 # node joins. "" = builder default (legacy byte-identical). The Studio emits --superdomain
 # <effective> only for MESH builds; permanently internal, never the go-live apex.
 SUPERDOMAIN=""
-BRAND="snapdragon"                  # name slug (namespaces, gateways, hostnames)
-BRAND_TITLE="Snapdragon Systems"    # human-readable title
+BRAND="hugmesh"                  # name slug (namespaces, gateways, hostnames)
+BRAND_TITLE="HugMesh Systems"    # human-readable title
 ORG="Snapdragon-Systems"            # GitHub org / image namespace
 # Games portal domain. DEFAULT = SUBDOMAIN of the primary (games.<CLUSTER_DOMAIN>)
 # until the real .games TLD is obtained; flip with GAMES_DOMAIN=<brand>.games. The
-# default literal composes with rebrand_sysroot (snapdragon.systems->CLUSTER_DOMAIN).
+# default literal composes with rebrand_sysroot (hugmesh.systems->CLUSTER_DOMAIN).
 # Drives the games host + OIDC issuer/redirects via parameterize_games_domain().
-GAMES_DOMAIN="games.snapdragon.systems"
+GAMES_DOMAIN="games.hugmesh.systems"
 # ── DEFAULT-INCLUSION POLICY (user 2026-06-17) ───────────────────────
 # USER_LEVEL_SERVICES is the SINGLE source-of-truth set of user-level OPTIONAL
 # slugs (matches specs/cluster/optional-services.yaml; excludes the non-user-level
@@ -205,7 +205,7 @@ ENV="test"
 # internal (DEFAULT, safe): public ingress-nginx pruned, gateways forced to
 #   the nginx-internal class, tier-ingress NetworkPolicy admits only
 #   ingress-nginx-internal, host nftables firewall drops inbound 80/443 from
-#   outside the tailnet unless /etc/snapdragon/go-live exists.
+#   outside the tailnet unless /etc/hugmesh/go-live exists.
 # public: the above restrictions are lifted (rebuild-time go-live).
 RELEASE_STATE="internal"
 CONFIG_FILE=""                      # optional drop-in brand profile (sourced)
@@ -378,7 +378,7 @@ DESCRIPTION
     │   └── local.d/
     │       └── 01-firstboot.start.tmpl First-boot finaliser (templated)
     ├── usr/local/sbin/
-    │   └── snapdragon-backup           etcd + PostgreSQL backup engine
+    │   └── hugmesh-backup           etcd + PostgreSQL backup engine
     └── cluster/                    ArgoCD app-of-apps + GitOps payload
 
 OPTIONS
@@ -635,7 +635,7 @@ OPTIONS
         modules + no bluetooth service). (env/brand.conf: ENABLE_BLUETOOTH=true)
 
     --enable-games
-        Bake the Snapdragon Game Studio optional service + games.<CLUSTER_DOMAIN>
+        Bake the HugMesh Game Studio optional service + games.<CLUSTER_DOMAIN>
         subdomain. OPT-IN; OFF by default. Equivalent to adding 'games' to
         --optional-services. (env/brand.conf: ENABLE_GAMES=true)
 
@@ -659,7 +659,7 @@ OPTIONS
         brand.conf) to bake the node-level Tor onion service: net-vpn/tor + a reconcile
         agent that exposes the in-cluster fe-gateway as a v3 .onion (INBOUND reach with
         no public IP / DDNS). The v3 onion keypair is minted + persisted OFF-GIT under
-        /var/lib/tor/snapdragon-onion on first boot. DEFAULT-OFF; node-scoped (no effect
+        /var/lib/tor/hugmesh-onion on first boot. DEFAULT-OFF; node-scoped (no effect
         on CLIENT roles). Exclude with --exclude-services tor.
 
     --with-edge-ai-tts / --no-edge-ai-tts
@@ -681,7 +681,7 @@ OPTIONS
     --idp P
         Identity provider the baked services TRUST: casdoor (DEFAULT — the
         built-in IdP, zero change) | entra (Azure Entra ID) | aws (AWS Cognito) |
-        oidc (any other OIDC provider). External mode bakes /etc/snapdragon/
+        oidc (any other OIDC provider). External mode bakes /etc/hugmesh/
         idp.conf, rewrites the baked tree's issuer/JWKS pins, gates the Casdoor
         apps out and drops README-IDP.md stating what does NOT work externally
         (native /bff/login, MFA stamping, roles/groups, signup-gate — see
@@ -721,7 +721,7 @@ OPTIONS
 
   Build ENV (baked into the image)
     --env test|prod
-        Select the build ENV, BAKED into the image at /etc/snapdragon/env.
+        Select the build ENV, BAKED into the image at /etc/hugmesh/env.
         Default: test.
         test = LAN-only: the cluster wildcard-DNS app (09-lan-dns.yaml) is kept
                and authoritative; the go-live cloudflared/ACME app is pruned;
@@ -820,9 +820,9 @@ FILES
         <brand>-<board>-arm64-<role>-<env>-<UTC-stamp>.stage4.tar.xz  Final stage4 tarball
         <brand>-<board>-arm64-<role>-<env>-<UTC-stamp>.fs.tar.xz      Mounted-tree filesystem tarball
         <brand>-<board>-arm64-<role>-<env>-<UTC-stamp>.iso           Bootable ISO with installer (--iso)
-    e.g. snapdragon-rpi5-arm64-frontend-test-20260610T193045Z.img (--board rpi5, DEFAULT)
-         snapdragon-rpi4-arm64-frontend-test-20260610T193045Z.img (--board rpi4)
-         snapdragon-rpi3-arm64-desktop-test-20260610T193045Z.img  (--board rpi3, desktop-only)
+    e.g. hugmesh-rpi5-arm64-frontend-test-20260610T193045Z.img (--board rpi5, DEFAULT)
+         hugmesh-rpi4-arm64-frontend-test-20260610T193045Z.img (--board rpi4)
+         hugmesh-rpi3-arm64-desktop-test-20260610T193045Z.img  (--board rpi3, desktop-only)
     The <brand> prefix + <board>/<role>/<env> tokens keep the QEMU launchers and
     flash-disk.sh autodetect globs matching.
 
@@ -1206,9 +1206,9 @@ fi
 # charset at this earliest boundary so a value carrying sed/shell metacharacters,
 # a quote, or a newline can never reach a render sink or a sourced KEY=VALUE file.
 # Escaping at the render sink (_sed_rep_escape) is defense-in-depth on top of this.
-# Each regex below ACCEPTS every legitimate default (brand=snapdragon,
-# org=Snapdragon-Systems, domain=snapdragon.systems, user=pi, cpu=cortex-a76,
-# target=aarch64-unknown-linux-gnu, kernel_2712.img, title "Snapdragon Systems").
+# Each regex below ACCEPTS every legitimate default (brand=hugmesh,
+# org=Snapdragon-Systems, domain=hugmesh.systems, user=pi, cpu=cortex-a76,
+# target=aarch64-unknown-linux-gnu, kernel_2712.img, title "HugMesh Systems").
 _require_match() {  # <human-name> <value> <regex>
     [[ "$2" =~ $3 ]] || { err "invalid $1: '$2' (must match ${3})"; exit 1; }
 }
@@ -1366,7 +1366,7 @@ IMAGE_LOG_FILE="${WORK_DIR}/build-${BUILD_SUBDIR#wl-}.log"
 #   ${BRAND}-${BOARD}-arm64-${ROLE}-${ENV}-${BUILD_TS}.<ext>
 # (${BOARD} is "rpi5" [DEFAULT], "rpi4", or "rpi3" [desktop-only] — the
 #  ${BRAND}- prefix + role token keep the QEMU launchers' and flash-disk.sh's
-#  generic 'snapdragon-*-<role>-*' autodetect glob matching regardless of
+#  generic 'hugmesh-*-<role>-*' autodetect glob matching regardless of
 #  board; only launch-pi.sh's FIRST-preference rpi5-specific glob is
 #  board-specific, and it falls through to that same generic pattern for a
 #  --board rpi4/rpi3 artifact.)
@@ -1439,7 +1439,7 @@ harden_radios() {
     local sysroot="$1"
     mkdir -p "${sysroot}/etc/modprobe.d" "${sysroot}/etc/local.d" \
              "${sysroot}/etc/NetworkManager/conf.d"
-    local bl="${sysroot}/etc/modprobe.d/snapdragon-radio-blacklist.conf"
+    local bl="${sysroot}/etc/modprobe.d/hugmesh-radio-blacklist.conf"
     : > "${bl}"
     local act="${sysroot}/etc/local.d/02-radio-hardening.start"
 
@@ -1509,12 +1509,12 @@ GROWFS_EOF
 # ── ENV app-gate (deterministic prune of the BAKED apps/ tree) ─────────────
 # ArgoCD recurses specs/cluster/apps with recurse:true, so physically removing
 # a YAML from the baked copy is the gate (no live-cluster conditional needed).
-# Operates ONLY on ${SYSROOT}/var/lib/snapdragon/cluster/apps — never the repo.
+# Operates ONLY on ${SYSROOT}/var/lib/hugmesh/cluster/apps — never the repo.
 #   prod => prune the LAN wildcard-DNS app (public DNS is authoritative instead).
 #   test => prune the go-live cloudflared app (no Cloudflare/ACME on a LAN). The
 #           LAN wildcard-DNS app is kept ONLY for a `.test` domain, so it can
 #           never become authoritative for a real public domain (e.g. a default
-#           ENV=test build still on snapdragon.systems keeps neither edge).
+#           ENV=test build still on hugmesh.systems keeps neither edge).
 # ── OPTIONAL-SERVICE gate ───────────────────────────────────────────────────
 # Prune every OPTIONAL service (akkoma/tuwunel/phpbb/games) NOT selected in
 # OPTIONAL_SERVICES from the baked GitOps tree, enumerated by
@@ -1532,7 +1532,7 @@ GROWFS_EOF
 # installed-services ConfigMap + the optional-services ApplicationSet
 # (apps/13a-optional-services.yaml). See docs/OPTIONAL-SERVICES.md.
 #
-# ⚠ CROSS-REPO TODO (gateway wave): CanonicalSeed.java (snapdragon-gateway) +
+# ⚠ CROSS-REPO TODO (gateway wave): CanonicalSeed.java (hugmesh-gateway) +
 # the cloudflared configmap reserved hostnames must stay in sync with the rows
 # pruned here. NOT edited by this build (separate repo / image rebuild).
 _opt_selected() {
@@ -1540,7 +1540,7 @@ _opt_selected() {
     return 1
 }
 gate_optional_services() {
-    local tree="${SYSROOT}/var/lib/snapdragon/cluster"
+    local tree="${SYSROOT}/var/lib/hugmesh/cluster"
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     local slug
@@ -1564,7 +1564,7 @@ gate_optional_services() {
                 rm -f "${tree}/manifests/external-secrets/akkoma-externalsecrets.yaml"
                 _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" akkoma-externalsecrets.yaml
                 _opt_drop_route "${apps}/20-gateway-be.yaml" mastodon-oauth mastodon-api mastodon-web
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
                     '/api/v1/pleroma/admin/**' '/api/pleroma/admin/**' '/pleroma/admin/**'
                 ;;
             tuwunel)
@@ -1573,17 +1573,17 @@ gate_optional_services() {
                 rm -f "${tree}/manifests/external-secrets/tuwunel-externalsecrets.yaml"
                 _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" tuwunel-externalsecrets.yaml
                 _opt_drop_route "${apps}/20-gateway-be.yaml" matrix-api matrix-wellknown matrix
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
                     '/_matrix/**' '/.well-known/matrix/**' '/_synapse/**'
                 ;;
             phpbb)
                 rm -f "${apps}/30-phpbb.yaml" "${apps}/38-forum-bff-db.yaml" \
                       "${apps}/39-forum-bff-api.yaml" "${apps}/49-forum-ui.yaml"
                 rm -rf "${tree}/manifests/forum"
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" forum-ui snapdragon-forum-bff-api snapdragon-forum-bff-api-moderation
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" forum-ui hugmesh-forum-bff-api hugmesh-forum-bff-api-moderation
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
                     '/social/forum/**' '/bff/forum/admin/**' '/bff/forum/moderation/**' '/bff/forum/**'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
                     '/api/forum/admin/**'
                 ;;
             games)
@@ -1591,9 +1591,9 @@ gate_optional_services() {
                 rm -rf "${tree}/manifests/games" "${tree}/manifests/casdoor-games"
                 _opt_drop_route     "${apps}/20-gateway-be.yaml" games
                 _opt_drop_extrahost "${apps}/20-gateway-be.yaml" games.
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
                     '/games/api/admin/**' '/games/**'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
                     '/games/admin/**'
                 # ── GAMES APP-STORE (games-services control plane) — degrade with games ──
                 # The app-store rides the games slug (it needs the games namespace up), so
@@ -1608,10 +1608,10 @@ gate_optional_services() {
                 _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" games-services-admin-sync-job.yaml
                 _opt_drop_kustomize_line "${tree}/manifests/casdoor/kustomization.yaml" games-services-runner-sync-job.yaml
                 _opt_drop_route "${apps}/20-gateway-be.yaml" games-servers-console
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
                     '/bff/superadmin/games-services/**' '/bff/games-services/instances/**' \
                     '/bff/games-services/catalog/**' '/games/servers/**'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
                     '/admin/games-services/**'
                 ;;
             owncast)
@@ -1621,8 +1621,8 @@ gate_optional_services() {
                 # the user/admin live-stream panels grey out (installed-services "false").
                 rm -f "${apps}/52-owncast.yaml"
                 rm -rf "${tree}/manifests/owncast"
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" snapdragon-owncast-bff-api
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" hugmesh-owncast-bff-api
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
                     '/bff/owncast/admin/**' '/bff/owncast/**'
                 ;;
             character-studio)
@@ -1634,7 +1634,7 @@ gate_optional_services() {
                 rm -f "${apps}/49b-character-studio-ui.yaml"
                 rm -rf "${tree}/manifests/character-studio"
                 _opt_drop_route "${apps}/20-gateway-fe.yaml" character-studio-ui
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
                     '/character-studio/**'
                 ;;
             tube)
@@ -1646,11 +1646,11 @@ gate_optional_services() {
                 rm -rf "${tree}/manifests/tube"
                 rm -f "${tree}/manifests/external-secrets/tube-externalsecrets.yaml"
                 _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" tube-externalsecrets.yaml
-                _opt_drop_route "${apps}/20-gateway-fe.yaml" snapdragon-tube-bff-api tube-content
+                _opt_drop_route "${apps}/20-gateway-fe.yaml" hugmesh-tube-bff-api tube-content
                 _opt_drop_route "${apps}/20-gateway-be.yaml" tube-content
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-fe-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-fe-gateway \
                     '/bff/tube/**'
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
                     '/tube/content/**'
                 ;;
             egress-vpn)
@@ -1681,7 +1681,7 @@ gate_optional_services() {
                 # (app.workload-console.enabled=false), so even an un-pruned tree is inert.
                 rm -f "${apps}/14-workload-console-rbac.yaml"
                 rm -rf "${tree}/manifests/workload-console-rbac"
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
                     '/bff/superadmin/workloads/**' '/bff/admin/workloads/**'
                 ;;
             headwind)
@@ -1696,7 +1696,7 @@ gate_optional_services() {
                 rm -f "${tree}/manifests/external-secrets/headwind-externalsecrets.yaml"
                 _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" headwind-externalsecrets.yaml
                 _opt_drop_route "${apps}/22-gateway-superadmin.yaml" headwind-console headwind-checkin
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-superadmin-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-superadmin-gateway \
                     '/hmdm/manage/**' '/hmdm/rest/**'
                 ;;
             attestation-server)
@@ -1712,7 +1712,7 @@ gate_optional_services() {
                 rm -f "${tree}/manifests/external-secrets/attestation-server-externalsecrets.yaml"
                 _opt_drop_kustomize_line "${tree}/manifests/external-secrets/kustomization.yaml" attestation-server-externalsecrets.yaml
                 _opt_drop_route "${apps}/22-gateway-superadmin.yaml" attestation-auditor attestation-status attestation-console
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-superadmin-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-superadmin-gateway \
                     '/attest/auditor/**' '/attest/api/status' '/attest/api/create-account' '/attest/api/**'
                 ;;
             edge-ai)
@@ -1724,7 +1724,7 @@ gate_optional_services() {
                 rm -f "${apps}/54-edge-ai.yaml"
                 rm -rf "${tree}/manifests/edge-ai"
                 _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
                     '/v1/**'
                 ;;
             edge-ai-analysis)
@@ -1734,7 +1734,7 @@ gate_optional_services() {
                 rm -f "${apps}/55-edge-ai-analysis.yaml"
                 rm -rf "${tree}/manifests/edge-ai-analysis"
                 _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-analysis
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
                     '/v1/analyze/**'
                 ;;
             edge-ai-tts)
@@ -1746,7 +1746,7 @@ gate_optional_services() {
                 rm -f "${apps}/55b-edge-ai-tts.yaml"
                 rm -rf "${tree}/manifests/edge-ai-tts"
                 _opt_drop_route "${apps}/20-gateway-be.yaml" edge-ai-tts
-                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+                _opt_drop_rows  "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
                     '/v1/synthesize/**'
                 ;;
         esac
@@ -1876,14 +1876,14 @@ _opt_anubis_installed() {
 # Idempotent: rewrites only the `installed: "..."` field of the matching `slug:` element.
 _opt_render_appset_flag() {
     local slug="$1" val="$2"
-    local appset="${SYSROOT}/var/lib/snapdragon/cluster/apps/13a-optional-services.yaml"
+    local appset="${SYSROOT}/var/lib/hugmesh/cluster/apps/13a-optional-services.yaml"
     [ -f "${appset}" ] || return 0
     # Match a list element line `- { slug: <slug>, ..., installed: "true|false" }`
     # and rewrite ONLY its installed value (the slug token is the line anchor).
     sed -i -E "s#(\{[[:space:]]*slug:[[:space:]]*${slug}[[:space:]]*,.*installed:[[:space:]]*\")(true|false)(\")#\\1${val}\\3#" "${appset}"
 }
 _opt_render_installed_services() {
-    local cm="${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy/installed-services-configmap.yaml"
+    local cm="${SYSROOT}/var/lib/hugmesh/cluster/manifests/policy/installed-services-configmap.yaml"
     [ -f "${cm}" ] || return 0
     local slug val
     # The base optional services follow plain presence in OPTIONAL_SERVICES.
@@ -1933,7 +1933,7 @@ _opt_set_cr_enabled() {
 # _opt_anubis_installed decision used for the ConfigMap; coturn stays at its false
 # baseline (not in the selection loop, matching the ConfigMap).
 _opt_render_optionalservice_cr() {
-    local seed="${SYSROOT}/var/lib/snapdragon/cluster/manifests/optional-services-operator/seed-optionalservices.yaml"
+    local seed="${SYSROOT}/var/lib/hugmesh/cluster/manifests/optional-services-operator/seed-optionalservices.yaml"
     [ -f "${seed}" ] || return 0
     local slug val
     for slug in akkoma tuwunel phpbb games owncast tube character-studio edge-ai edge-ai-analysis edge-ai-tts; do
@@ -2049,7 +2049,7 @@ _mgd_velero() {  # tree endpoint(aws|url)
     local tree="$1" ep="$2"
     local bsl="${tree}/manifests/velero/backupstoragelocation.yaml"
     [ -f "${bsl}" ] || return 0
-    local bucket="${MANAGED_VELERO_BUCKET:-snapdragon-backups}"
+    local bucket="${MANAGED_VELERO_BUCKET:-hugmesh-backups}"
     local region="${MANAGED_VELERO_REGION:-us-east-1}"
     local s3url="${ep}"; [ "${ep}" = "aws" ] && s3url=""
     awk -v bucket="${bucket}" -v region="${region}" -v s3url="${s3url}" '
@@ -2089,14 +2089,14 @@ _mgd_fed_bundles() {  # tree endpoint
             pend=0
         }' "${dep}" > "${dep}.tmp" && mv "${dep}.tmp" "${dep}"
 }
-# Bake /etc/snapdragon/backing-services.conf (id=endpoint list; NO creds) +
+# Bake /etc/hugmesh/backing-services.conf (id=endpoint list; NO creds) +
 # README-MANAGED.md (the standing honesty notes) into the baked tree.
 _mgd_bake_readme() {  # tree
     local tree="$1"; local rd="${tree}/README-MANAGED.md"
     { echo "# Managed backing services (this image)"; echo
       echo "This image points one or more in-mesh backing services at a hosted cloud"
       echo "endpoint. Self-hosted is the platform default; only the ids listed in"
-      echo "\`/etc/snapdragon/backing-services.conf\` were repointed. Full runbooks:"
+      echo "\`/etc/hugmesh/backing-services.conf\` were repointed. Full runbooks:"
       echo "docs/MANAGED-SERVICES.md."; echo
       echo "## Selected"; echo
       local id ep
@@ -2119,7 +2119,7 @@ _mgd_bake_readme() {  # tree
     } > "${rd}"
 }
 gate_backing_services() {
-    local tree="${SYSROOT}/var/lib/snapdragon/cluster"
+    local tree="${SYSROOT}/var/lib/hugmesh/cluster"
     local apps="${tree}/apps"
     [ -d "${apps}" ] || return 0
     # #1 INVARIANT: empty selection => zero change. Tokens are WHITESPACE-separated
@@ -2155,20 +2155,20 @@ gate_backing_services() {
             smtp) : ;;  # pure creds/host via gen-cluster-secrets MAIL_*; recorded in the conf only
         esac
     done
-    mkdir -p "${SYSROOT}/etc/snapdragon"
+    mkdir -p "${SYSROOT}/etc/hugmesh"
     { echo "# Managed backing services baked into this image (see docs/MANAGED-SERVICES.md)."
       echo "# Self-hosted is the default; only the ids below were repointed at a hosted endpoint."
       echo "# Format: <id>=<endpoint>  (creds are NOT here — they ride ESO/Vault via the KEYS USB)."
       for id in ${_MGD_TIER12_IDS}; do _mgd_selected "${id}" || continue; echo "${id}=$(_mgd_endpoint "${id}")"; done
-    } > "${SYSROOT}/etc/snapdragon/backing-services.conf"
-    chmod 644 "${SYSROOT}/etc/snapdragon/backing-services.conf"
+    } > "${SYSROOT}/etc/hugmesh/backing-services.conf"
+    chmod 644 "${SYSROOT}/etc/hugmesh/backing-services.conf"
     _mgd_bake_readme "${tree}"
-    info "MANAGED_SERVICES: baked /etc/snapdragon/backing-services.conf + README-MANAGED.md"
+    info "MANAGED_SERVICES: baked /etc/hugmesh/backing-services.conf + README-MANAGED.md"
 }
 
 # Put the Anubis PoW gate genuinely IN FRONT of public ingress when installed.
-# The fe-gateway chart renders the public Ingress (host snapdragon.systems +
-# *.snapdragon.systems) with its backend Service overridable via the new
+# The fe-gateway chart renders the public Ingress (host hugmesh.systems +
+# *.hugmesh.systems) with its backend Service overridable via the new
 # `ingress.backendServiceName`/`ingress.backendServicePort` values. When Anubis is
 # installed we point that Ingress backend at the anubis Service (:8923); Anubis
 # forwards verified requests to the fe-gateway (its TARGET=fe-gateway:8080). When
@@ -2178,7 +2178,7 @@ gate_backing_services() {
 # fe-gateway Application carries the public web ingress.
 _opt_wire_anubis_ingress() {
     local installed="$1"
-    local fe="${SYSROOT}/var/lib/snapdragon/cluster/apps/20-gateway-fe.yaml"
+    local fe="${SYSROOT}/var/lib/hugmesh/cluster/apps/20-gateway-fe.yaml"
     [ -f "${fe}" ] || return 0
     # 1) Always strip any previously-wired override lines + their marker comment
     #    (idempotent reset, so re-running never accumulates duplicates).
@@ -2209,22 +2209,22 @@ _opt_wire_anubis_ingress() {
 }
 # Parameterize the games-realm OIDC identity on GAMES_DOMAIN (rebrand_sysroot does
 # not touch .games). Runs UNCONDITIONALLY and BEFORE rebrand so the default literal
-# games.snapdragon.systems composes with snapdragon.systems->CLUSTER_DOMAIN; a custom
+# games.hugmesh.systems composes with hugmesh.systems->CLUSTER_DOMAIN; a custom
 # GAMES_DOMAIN is rebrand-neutral. Fixes iss-strict games login on the subdomain default.
 parameterize_games_domain() {
-    local tree="${SYSROOT}/var/lib/snapdragon/cluster"
+    local tree="${SYSROOT}/var/lib/hugmesh/cluster"
     [ -d "${tree}" ] || return 0
     local f n=0
-    # URL-SCHEME-ANCHORED: only rewrite snapdragon.games when it is a HOST (right
+    # URL-SCHEME-ANCHORED: only rewrite hugmesh.games when it is a HOST (right
     # after the // of https://...), so the games-realm origin/issuer/redirect/website
     # URLs flip to ${GAMES_DOMAIN} while the canonical IMAGE repo paths
-    # (snapdragon-systems/snapdragon.games-backend, .../snapdragon.games/backend) are
+    # (snapdragon-systems/hugmesh.games-backend, .../hugmesh.games/backend) are
     # left untouched.
     while IFS= read -r -d '' f; do
-        if grep -q '//id\.snapdragon\.games\|//snapdragon\.games' "${f}" 2>/dev/null; then
+        if grep -q '//id\.hugmesh\.games\|//hugmesh\.games' "${f}" 2>/dev/null; then
             sed -i -E \
-                -e "s|//id\\.snapdragon\\.games|//id.${GAMES_DOMAIN}|g" \
-                -e "s|//snapdragon\\.games|//${GAMES_DOMAIN}|g" \
+                -e "s|//id\\.hugmesh\\.games|//id.${GAMES_DOMAIN}|g" \
+                -e "s|//hugmesh\\.games|//${GAMES_DOMAIN}|g" \
                 "${f}"
             n=$((n+1))
         fi
@@ -2232,16 +2232,16 @@ parameterize_games_domain() {
     info "Games domain: parameterized games host URLs -> ${GAMES_DOMAIN} in ${n} file(s)"
     # If the operator set a CUSTOM GAMES_DOMAIN (e.g. the real <brand>.games TLD),
     # the games PUBLIC host (gateway-be route host + ingress extraHost) must follow
-    # it; the default "games.snapdragon.systems" otherwise composes with rebrand.
-    if [ "${GAMES_DOMAIN}" != "games.snapdragon.systems" ]; then
+    # it; the default "games.hugmesh.systems" otherwise composes with rebrand.
+    if [ "${GAMES_DOMAIN}" != "games.hugmesh.systems" ]; then
         local be="${tree}/apps/20-gateway-be.yaml"
-        [ -f "${be}" ] && sed -i -E "s#games\\.snapdragon\\.systems#${GAMES_DOMAIN}#g" "${be}"
+        [ -f "${be}" ] && sed -i -E "s#games\\.hugmesh\\.systems#${GAMES_DOMAIN}#g" "${be}"
         info "Games domain: custom GAMES_DOMAIN — games host rewritten to ${GAMES_DOMAIN}"
     fi
 }
 
 gate_env_apps() {
-    local apps="${SYSROOT}/var/lib/snapdragon/cluster/apps"
+    local apps="${SYSROOT}/var/lib/hugmesh/cluster/apps"
     [ -d "${apps}" ] || return 0
     if [ "${ENV}" = "prod" ]; then
         rm -f "${apps}/09-lan-dns.yaml" && \
@@ -2276,7 +2276,7 @@ gate_env_apps() {
     # right after gate_env_apps() in the main build flow and enforces the
     # SAME posture independently, at the netfilter layer.
     if [ "${RELEASE_STATE:-internal}" != "public" ]; then
-        local cluster="${SYSROOT}/var/lib/snapdragon/cluster"
+        local cluster="${SYSROOT}/var/lib/hugmesh/cluster"
         local netpol="${cluster}/manifests/networkpolicy/tier-ingress.yaml"
 
         # a) The public ingress controller Application never ships — nothing
@@ -2315,60 +2315,60 @@ gate_env_apps() {
 # OpenRC oneshot (ordered before containerd/kubelet/tailscaled — see the
 # init.d depend()) + its 60s convergence cron UNCONDITIONALLY (core
 # hardening, not opt-in — unlike the STAGED vpn/tor/domain reconciles). Also
-# bakes /etc/snapdragon/release-state, parallel to the existing
-# /etc/snapdragon/cluster-domain bake below. The FIRST-EVER ruleset load
+# bakes /etc/hugmesh/release-state, parallel to the existing
+# /etc/hugmesh/cluster-domain bake below. The FIRST-EVER ruleset load
 # happens at first boot (the oneshot), rendered from this baked value + the
 # (absent-by-default) go-live marker, so there is no separate build-time
 # nftables.conf to keep in sync.
 bake_host_firewall() {
-    mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/usr/lib/snapdragon" "${SYSROOT}/etc/init.d" "${SYSROOT}/etc/cron.d" "${SYSROOT}/etc/snapdragon"
-    cp "${SHARED_SPECS}/usr/sbin/snapdragon-firewall-reconcile"   "${SYSROOT}/usr/sbin/snapdragon-firewall-reconcile"
-    chmod +x "${SYSROOT}/usr/sbin/snapdragon-firewall-reconcile"
-    cp "${SHARED_SPECS}/etc/init.d/snapdragon-firewall-reconcile" "${SYSROOT}/etc/init.d/snapdragon-firewall-reconcile"
-    chmod +x "${SYSROOT}/etc/init.d/snapdragon-firewall-reconcile"
-    cp "${SHARED_SPECS}/etc/cron.d/snapdragon-firewall-reconcile" "${SYSROOT}/etc/cron.d/snapdragon-firewall-reconcile"
+    mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/usr/lib/hugmesh" "${SYSROOT}/etc/init.d" "${SYSROOT}/etc/cron.d" "${SYSROOT}/etc/hugmesh"
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-firewall-reconcile"   "${SYSROOT}/usr/sbin/hugmesh-firewall-reconcile"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-firewall-reconcile"
+    cp "${SHARED_SPECS}/etc/init.d/hugmesh-firewall-reconcile" "${SYSROOT}/etc/init.d/hugmesh-firewall-reconcile"
+    chmod +x "${SYSROOT}/etc/init.d/hugmesh-firewall-reconcile"
+    cp "${SHARED_SPECS}/etc/cron.d/hugmesh-firewall-reconcile" "${SYSROOT}/etc/cron.d/hugmesh-firewall-reconcile"
     # ── Go-Live wizard: the human-facing effector of this same firewall-reconcile /
-    #    release-state mechanism (driver writes /etc/snapdragon/go-live; reconcile
+    #    release-state mechanism (driver writes /etc/hugmesh/go-live; reconcile
     #    converges <=60s). Baked unconditionally alongside reconcile — inert until the
     #    marker is written. Front-ends: -cli (thin CLI) and -menu (thin ncurses console).
-    cp "${SHARED_SPECS}/usr/sbin/snapdragon-go-live"              "${SYSROOT}/usr/sbin/snapdragon-go-live"
-    chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live"
-    cp "${SHARED_SPECS}/usr/sbin/snapdragon-go-live-cli"          "${SYSROOT}/usr/sbin/snapdragon-go-live-cli"
-    chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live-cli"
-    cp "${SHARED_SPECS}/usr/sbin/snapdragon-go-live-menu"         "${SYSROOT}/usr/sbin/snapdragon-go-live-menu"
-    chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live-menu"
-    cp "${SHARED_SPECS}/usr/lib/snapdragon/go-live-providers.sh"  "${SYSROOT}/usr/lib/snapdragon/go-live-providers.sh"
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-go-live"              "${SYSROOT}/usr/sbin/hugmesh-go-live"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-go-live"
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-go-live-cli"          "${SYSROOT}/usr/sbin/hugmesh-go-live-cli"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-go-live-cli"
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-go-live-menu"         "${SYSROOT}/usr/sbin/hugmesh-go-live-menu"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-go-live-menu"
+    cp "${SHARED_SPECS}/usr/lib/hugmesh/go-live-providers.sh"  "${SYSROOT}/usr/lib/hugmesh/go-live-providers.sh"
     # ── Cloud-deploy wizard: go-live's SIBLING driver+registry (plan/apply/status/
     #    destroy of a PACKAGED x86 image onto aws-ec2/azure-image/openshift-cnv/
     #    generic-qcow2). Baked beside the go-live set — inert until an operator runs
     #    it: plan is a pure offline render, apply/destroy are TTY-gated (no --yes).
-    cp "${SHARED_SPECS}/usr/sbin/snapdragon-cloud-deploy"         "${SYSROOT}/usr/sbin/snapdragon-cloud-deploy"
-    chmod +x "${SYSROOT}/usr/sbin/snapdragon-cloud-deploy"
-    cp "${SHARED_SPECS}/usr/lib/snapdragon/cloud-deploy-providers.sh" "${SYSROOT}/usr/lib/snapdragon/cloud-deploy-providers.sh"
-    echo "${RELEASE_STATE:-internal}" > "${SYSROOT}/etc/snapdragon/release-state"
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-cloud-deploy"         "${SYSROOT}/usr/sbin/hugmesh-cloud-deploy"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-cloud-deploy"
+    cp "${SHARED_SPECS}/usr/lib/hugmesh/cloud-deploy-providers.sh" "${SYSROOT}/usr/lib/hugmesh/cloud-deploy-providers.sh"
+    echo "${RELEASE_STATE:-internal}" > "${SYSROOT}/etc/hugmesh/release-state"
     # ── Go-Live web-UI effector: the 4th front-end (admin-bff's web console) can only
     #    RECORD a signed intent (it runs in a pod, can't touch this host's filesystem);
     #    this agent is what actually drives the SAME driver's commit/rollback for a
     #    web-originated intent. Baked alongside the driver it depends on (harmlessly
     #    inert without it — same fail-closed gate as every reconcile agent: missing
     #    verify lib / node.env / baked pubkey -> keep cache, exit 0, apply nothing).
-    cp "${SHARED_SPECS}/usr/sbin/snapdragon-go-live-reconcile"     "${SYSROOT}/usr/sbin/snapdragon-go-live-reconcile"
-    chmod +x "${SYSROOT}/usr/sbin/snapdragon-go-live-reconcile"
-    cp "${SHARED_SPECS}/usr/lib/snapdragon/golive-verify.sh"       "${SYSROOT}/usr/lib/snapdragon/golive-verify.sh"
-    cp "${SHARED_SPECS}/etc/init.d/snapdragon-go-live-reconcile"   "${SYSROOT}/etc/init.d/snapdragon-go-live-reconcile"
-    chmod +x "${SYSROOT}/etc/init.d/snapdragon-go-live-reconcile"
-    cp "${SHARED_SPECS}/etc/cron.d/snapdragon-go-live-reconcile"   "${SYSROOT}/etc/cron.d/snapdragon-go-live-reconcile"
-    info "RELEASE_STATE=${RELEASE_STATE:-internal}: baked the host nftables backstop (snapdragon-firewall-reconcile renders + loads the live ruleset at boot + every 60s) + the go-live wizard (driver/registry/CLI/ncurses front-ends) + the web-UI go-live effector (snapdragon-go-live-reconcile)"
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-go-live-reconcile"     "${SYSROOT}/usr/sbin/hugmesh-go-live-reconcile"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-go-live-reconcile"
+    cp "${SHARED_SPECS}/usr/lib/hugmesh/golive-verify.sh"       "${SYSROOT}/usr/lib/hugmesh/golive-verify.sh"
+    cp "${SHARED_SPECS}/etc/init.d/hugmesh-go-live-reconcile"   "${SYSROOT}/etc/init.d/hugmesh-go-live-reconcile"
+    chmod +x "${SYSROOT}/etc/init.d/hugmesh-go-live-reconcile"
+    cp "${SHARED_SPECS}/etc/cron.d/hugmesh-go-live-reconcile"   "${SYSROOT}/etc/cron.d/hugmesh-go-live-reconcile"
+    info "RELEASE_STATE=${RELEASE_STATE:-internal}: baked the host nftables backstop (hugmesh-firewall-reconcile renders + loads the live ruleset at boot + every 60s) + the go-live wizard (driver/registry/CLI/ncurses front-ends) + the web-UI go-live effector (hugmesh-go-live-reconcile)"
 }
 
 # Rewrites the cluster GitOps payload + role markers from the default
-# "snapdragon"/"snapdragon.systems" naming to ${BRAND}/${CLUSTER_DOMAIN}/${ORG}.
-# Internal install paths (/var/lib/snapdragon, /etc/snapdragon) and the
+# "hugmesh"/"hugmesh.systems" naming to ${BRAND}/${CLUSTER_DOMAIN}/${ORG}.
+# Internal install paths (/var/lib/hugmesh, /etc/hugmesh) and the
 # provisioning JSON key are intentionally NOT touched (tool vendor namespace).
 rebrand_sysroot() {
-    if [ "${BRAND}" = "snapdragon" ] && [ "${CLUSTER_DOMAIN}" = "snapdragon.systems" ] \
-       && [ "${ORG}" = "Snapdragon-Systems" ] && [ "${BRAND_TITLE}" = "Snapdragon Systems" ]; then
-        info "Branding: default (snapdragon) — no rebrand"
+    if [ "${BRAND}" = "hugmesh" ] && [ "${CLUSTER_DOMAIN}" = "hugmesh.systems" ] \
+       && [ "${ORG}" = "Snapdragon-Systems" ] && [ "${BRAND_TITLE}" = "HugMesh Systems" ]; then
+        info "Branding: default (hugmesh) — no rebrand"
         return 0
     fi
     banner "Rebranding baked config -> brand=${BRAND} domain=${CLUSTER_DOMAIN} org=${ORG}"
@@ -2376,7 +2376,7 @@ rebrand_sysroot() {
     # Harbor image-project segment (registry.<host>/<project>/<svc>). Defaults to the
     # brand; the HARBOR_PROJECT env is a first-class seam for a differently-named project.
     local _hproj; _hproj="$(_sed_rep_escape "${HARBOR_PROJECT:-${BRAND}}")"
-    local roots=("${SYSROOT}/var/lib/snapdragon/cluster" "${SYSROOT}/etc/snapdragon")
+    local roots=("${SYSROOT}/var/lib/hugmesh/cluster" "${SYSROOT}/etc/hugmesh")
     local f
     while IFS= read -r -d '' f; do
         # FROZEN k8s label-KEY / API-group namespace `snapdragon.systems/<suffix>` must NOT
@@ -2385,19 +2385,19 @@ rebrand_sysroot() {
         # quote, backtick); every HOST/URL form is preceded by a dot or slash. Protect the KEY
         # namespace behind a sentinel (first two -e), rebrand hosts/URLs/emails/CORS in the
         # middle, then restore the KEY namespace verbatim (last -e). The sentinel contains
-        # neither `snapdragon.systems` nor `snapdragon-`, so the middle rules skip it.
+        # neither `hugmesh.systems` nor `hugmesh-`, so the middle rules skip it.
         sed -i \
-            -e "s|^snapdragon\.systems/|@@SDSYSKEY@@/|g" \
-            -e "s|\([ {(,\"'\`]\)snapdragon\.systems/|\1@@SDSYSKEY@@/|g" \
-            -e "s|Snapdragon Systems|${BRAND_TITLE}|g" \
+            -e "s|^hugmesh\.systems/|@@SDSYSKEY@@/|g" \
+            -e "s|\([ {(,\"'\`]\)hugmesh\.systems/|\1@@SDSYSKEY@@/|g" \
+            -e "s|HugMesh Systems|${BRAND_TITLE}|g" \
             -e "s|snapdragon-systems/|${org_lc}/|g" \
             -e "s|Snapdragon-Systems|${ORG}|g" \
-            -e "s|//id\.snapdragon\.games|//id.${GAMES_DOMAIN}|g" \
-            -e "s|//snapdragon\.games|//${GAMES_DOMAIN}|g" \
-            -e "s|snapdragon\.systems|${CLUSTER_DOMAIN}|g" \
-            -e "s|\(registry\.[A-Za-z0-9.-]*\)/snapdragon/|\1/${_hproj}/|g" \
-            -e "s|snapdragon-|${BRAND}-|g" \
-            -e "s|@@SDSYSKEY@@/|snapdragon.systems/|g" \
+            -e "s|//id\.hugmesh\.games|//id.${GAMES_DOMAIN}|g" \
+            -e "s|//hugmesh\.games|//${GAMES_DOMAIN}|g" \
+            -e "s|hugmesh\.systems|${CLUSTER_DOMAIN}|g" \
+            -e "s|\(registry\.[A-Za-z0-9.-]*\)/hugmesh/|\1/${_hproj}/|g" \
+            -e "s|hugmesh-|${BRAND}-|g" \
+            -e "s|@@SDSYSKEY@@/|hugmesh.systems/|g" \
             "${f}"
     done < <(find "${roots[@]}" -type f -print0 2>/dev/null)
     info "Rebrand complete (compound names like '${BRAND}-systems-web' may want review)."
@@ -2411,8 +2411,8 @@ rebrand_sysroot() {
 # tests/scripts/test-idp-builder-functions.sh — never a real build.
 bake_idp_conf() {
     [ "${IDP}" = "casdoor" ] && return 0
-    mkdir -p "${SYSROOT}/etc/snapdragon"
-    cat > "${SYSROOT}/etc/snapdragon/idp.conf" <<EOF
+    mkdir -p "${SYSROOT}/etc/hugmesh"
+    cat > "${SYSROOT}/etc/hugmesh/idp.conf" <<EOF
 # Identity provider this image's services TRUST (--idp; docs/IDENTITY-PROVIDERS.md).
 # PUBLIC identifiers only — client SECRETS ride KEYS/Vault provisioning, never here.
 provider=${IDP}
@@ -2420,8 +2420,8 @@ issuer=${IDP_ISSUER}
 client_id=${IDP_CLIENT_ID}
 jwks_uri=${IDP_JWKS}
 EOF
-    chmod 0644 "${SYSROOT}/etc/snapdragon/idp.conf"
-    info "IdP: baked /etc/snapdragon/idp.conf (provider=${IDP}, 0644, no secrets)"
+    chmod 0644 "${SYSROOT}/etc/hugmesh/idp.conf"
+    info "IdP: baked /etc/hugmesh/idp.conf (provider=${IDP}, 0644, no secrets)"
 }
 
 rewrite_idp_sysroot() {
@@ -2446,7 +2446,7 @@ rewrite_idp_sysroot() {
                 "${f}"
             n=$((n+1))
         fi
-    done < <(find "${SYSROOT}/var/lib/snapdragon/cluster" "${SYSROOT}/etc/snapdragon" -type f -print0 2>/dev/null)
+    done < <(find "${SYSROOT}/var/lib/hugmesh/cluster" "${SYSROOT}/etc/hugmesh" -type f -print0 2>/dev/null)
     info "IdP: rewrote issuer -> ${IDP_ISSUER} + JWKS pins -> ${IDP_JWKS} in ${n} file(s)"
 }
 
@@ -2456,7 +2456,7 @@ gate_casdoor_apps() {
     # (same rm-from-the-baked-copy design as gate_env_apps/gate_optional_services;
     # the repo itself is never touched).
     [ "${IDP}" = "casdoor" ] && return 0
-    local tree="${SYSROOT}/var/lib/snapdragon/cluster"
+    local tree="${SYSROOT}/var/lib/hugmesh/cluster"
     [ -d "${tree}" ] || return 0
     rm -f "${tree}/apps/05-casdoor.yaml" "${tree}/apps/06-casdoor-games.yaml"
     rm -rf "${tree}/manifests/casdoor" "${tree}/manifests/casdoor-games"
@@ -2465,8 +2465,8 @@ gate_casdoor_apps() {
 
 write_idp_readme() {
     [ "${IDP}" = "casdoor" ] && return 0
-    mkdir -p "${SYSROOT}/etc/snapdragon"
-    cat > "${SYSROOT}/etc/snapdragon/README-IDP.md" <<EOF
+    mkdir -p "${SYSROOT}/etc/hugmesh"
+    cat > "${SYSROOT}/etc/hugmesh/README-IDP.md" <<EOF
 # External identity provider (--idp ${IDP})
 
 This image was built to TRUST an external OIDC provider:
@@ -2477,7 +2477,7 @@ This image was built to TRUST an external OIDC provider:
   jwks:      ${IDP_JWKS}
 
 What that changed in this image:
-  * /etc/snapdragon/idp.conf carries provider/issuer/client_id/jwks_uri (no secrets).
+  * /etc/hugmesh/idp.conf carries provider/issuer/client_id/jwks_uri (no secrets).
   * The baked cluster tree's issuer literals (https://id.<cluster-domain>) and
     in-cluster JWKS pins were rewritten to the values above, so resource servers
     VALIDATE tokens minted by your provider.
@@ -2495,8 +2495,8 @@ generator repo):
   * JWKS egress: the pki-namespace NetworkPolicy only allows in-cluster JWKS —
     HTTPS egress to your provider needs an egress-policy change on the cluster.
 EOF
-    chmod 0644 "${SYSROOT}/etc/snapdragon/README-IDP.md"
-    info "IdP: dropped /etc/snapdragon/README-IDP.md (the honest external-mode limits note)"
+    chmod 0644 "${SYSROOT}/etc/hugmesh/README-IDP.md"
+    info "IdP: dropped /etc/hugmesh/README-IDP.md (the honest external-mode limits note)"
 }
 
 apply_idp_external() {
@@ -2709,7 +2709,7 @@ resolve_stage4_packages() {
     # the base packages.list, so it is ADDED to the install set ONLY when 'tor' is selected
     # — an image without tor never carries it (parity with the egress-vpn package gate, just
     # inverted: ADD-when-selected vs prune-when-not). net-vpn/tor inherits USE=selinux from a
-    # SELinux node profile, giving the upstream tor_t confinement snapdragon_tor.te references.
+    # SELinux node profile, giving the upstream tor_t confinement hugmesh_tor.te references.
     if _opt_selected tor; then
         STAGE4_PACKAGES+=(net-vpn/tor)
         _rsp_info "OPTIONAL_SERVICES: tor selected — added net-vpn/tor to the node packages (v3 onion daemon; keypair off-git, minted first-boot)"
@@ -2839,7 +2839,7 @@ unset _exec_blockers
 # machine, so the container proof — not merely root+/etc/portage — gates it.
 if hostguard_mutation_allowed; then
     mkdir -p /etc/portage/package.accept_keywords
-    cat > /etc/portage/package.accept_keywords/snapdragon-host-build-backends <<'HOSTKW'
+    cat > /etc/portage/package.accept_keywords/hugmesh-host-build-backends <<'HOSTKW'
 # setuptools-scm's vcs-versioning backend: pure-python/arch-independent, often
 # keyworded amd64-first upstream. HOST-side twin of the sysroot's
 # package.accept_keywords/setuptools-scm-backend (see that file's rationale).
@@ -2872,7 +2872,7 @@ HOSTKW
     # the failed 2026-07-16 jetson sysroot). HOST twin of the sysroot's
     # package.use/python-targets seed — see that file's full rationale.
     mkdir -p /etc/portage/package.use
-    cat > /etc/portage/package.use/snapdragon-host-build-backends <<'HOSTPYUSE'
+    cat > /etc/portage/package.use/hugmesh-host-build-backends <<'HOSTPYUSE'
 # Keep the python3.12 target enabled for host-side (BDEPEND "to /") installs —
 # twin of the sysroot's package.use/python-targets (see that file's rationale).
 # python3_13 is enabled ALONGSIDE 3_12: the builder image's installed python
@@ -2889,7 +2889,7 @@ sys-libs/pam audit
 # the python-bindings halves of its dep chain: policycoreutils ->
 # libselinux[python] and selinux-python -> audit[python] (autounmask output of
 # the pretend resolve in the throwaway builder container; same two lines the
-# k8s-only snapdragon-cross-host-selinux seed carries, but the host policy
+# k8s-only hugmesh-cross-host-selinux seed carries, but the host policy
 # tools are needed for EVERY SELinux cross build, not just k8s roles).
 sys-libs/libselinux python
 sys-process/audit python
@@ -2930,7 +2930,7 @@ fi
 # the TARGET libselinux/audit; this covers the HOST x86 build tools — distinct configs.)
 if hostguard_mutation_allowed && [ "$(id -u)" -eq 0 ]; then
     mkdir -p /etc/portage/package.use
-    cat > /etc/portage/package.use/snapdragon-cross-host-selinux <<'HOSTSELINUX'
+    cat > /etc/portage/package.use/hugmesh-cross-host-selinux <<'HOSTSELINUX'
 # Auto-written by build-rpi5-stage4.sh (RPi CROSS build, --board rpi5|rpi4). The HOST x86 selinux-python/
 # policycoreutils toolchain — pulled to compile the docker/container policy that
 # containerd[selinux] requires — needs python bindings. Without this the cross_emerge
@@ -3253,7 +3253,7 @@ cp "${SPECS_DIR}/etc/fstab"                               "${SYSROOT}/etc/fstab"
 # rebuild), not just the disk-boot initramfs this build generates directly.
 if ${ENCRYPT_ROOT}; then
     mkdir -p "${SYSROOT}/etc/dracut.conf.d"
-    cp "${SPECS_DIR}/etc/dracut.conf.d/60-snapdragon-crypt.conf" "${SYSROOT}/etc/dracut.conf.d/"
+    cp "${SPECS_DIR}/etc/dracut.conf.d/60-hugmesh-crypt.conf" "${SYSROOT}/etc/dracut.conf.d/"
 fi
 
 # Everything below is arch-agnostic and shared with the x86 build -> SHARED_SPECS.
@@ -3336,19 +3336,19 @@ chmod +x "${SYSROOT}/usr/sbin/keys-provision"
 
 # Backup engine (etcd + PostgreSQL -> attached storage / network share)
 mkdir -p "${SYSROOT}/usr/local/sbin"
-cp "${SHARED_SPECS}/usr/local/sbin/snapdragon-backup"     "${SYSROOT}/usr/local/sbin/snapdragon-backup"
-chmod +x "${SYSROOT}/usr/local/sbin/snapdragon-backup"
+cp "${SHARED_SPECS}/usr/local/sbin/hugmesh-backup"     "${SYSROOT}/usr/local/sbin/hugmesh-backup"
+chmod +x "${SYSROOT}/usr/local/sbin/hugmesh-backup"
 
 # Opt-in host-binary auto-update poller + OpenRC boot oneshot (baked as PLUMBING).
 # The poller pulls changed binpkgs (deltas) from the node's PORTAGE_BINHOST and
 # kured-safe-reboots, but is DEFAULT-OFF: provision_update() bakes the /etc/cron.d
 # cadence timer + the boot oneshot is linked below, yet each poll SKIPS until a
-# superadmin sets enabled:true in the snapdragon-update-policy ConfigMap (fail-safe
+# superadmin sets enabled:true in the hugmesh-update-policy ConfigMap (fail-safe
 # to off). cronie + OpenRC (not systemd).
-cp "${SHARED_SPECS}/usr/local/sbin/snapdragon-update"     "${SYSROOT}/usr/local/sbin/snapdragon-update"
-chmod +x "${SYSROOT}/usr/local/sbin/snapdragon-update"
-cp "${SHARED_SPECS}/etc/init.d/snapdragon-update"         "${SYSROOT}/etc/init.d/snapdragon-update"
-chmod +x "${SYSROOT}/etc/init.d/snapdragon-update"
+cp "${SHARED_SPECS}/usr/local/sbin/hugmesh-update"     "${SYSROOT}/usr/local/sbin/hugmesh-update"
+chmod +x "${SYSROOT}/usr/local/sbin/hugmesh-update"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-update"         "${SYSROOT}/etc/init.d/hugmesh-update"
+chmod +x "${SYSROOT}/etc/init.d/hugmesh-update"
 
 mkdir -p "${SYSROOT}/etc/ssh/sshd_config.d"
 cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf"  "${SYSROOT}/etc/ssh/sshd_config.d/hardened.conf"
@@ -3359,71 +3359,71 @@ cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf"  "${SYSROOT}/etc/ssh/ss
 # the conf into sshd_config.d, enables the service+cron) when owner_type=ADMIN, so
 # baking them unconditionally does NOT alter the #66 owner-key path on core nodes.
 # The enforcement drop-in (device-registry.conf) + break-glass.conf + the cron are
-# STAGED under /etc/snapdragon/registry so provision installs them on ADMIN nodes
+# STAGED under /etc/hugmesh/registry so provision installs them on ADMIN nodes
 # only (device-registry.conf is gate-flipped on the first verified sync).
-mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/usr/lib/snapdragon" \
-         "${SYSROOT}/etc/snapdragon/registry" "${SYSROOT}/var/lib/snapdragon/device-registry"
-cp "${SHARED_SPECS}/usr/sbin/snapdragon-authorized-keys-lookup" "${SYSROOT}/usr/sbin/snapdragon-authorized-keys-lookup"
-cp "${SHARED_SPECS}/usr/sbin/snapdragon-device-registry-sync"   "${SYSROOT}/usr/sbin/snapdragon-device-registry-sync"
-chmod +x "${SYSROOT}/usr/sbin/snapdragon-authorized-keys-lookup" "${SYSROOT}/usr/sbin/snapdragon-device-registry-sync"
-cp "${SHARED_SPECS}/usr/lib/snapdragon/registry-verify.sh"      "${SYSROOT}/usr/lib/snapdragon/registry-verify.sh"
-cp "${SHARED_SPECS}/etc/init.d/snapdragon-device-registry-sync" "${SYSROOT}/etc/init.d/snapdragon-device-registry-sync"
-chmod +x "${SYSROOT}/etc/init.d/snapdragon-device-registry-sync"
+mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/usr/lib/hugmesh" \
+         "${SYSROOT}/etc/hugmesh/registry" "${SYSROOT}/var/lib/hugmesh/device-registry"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-authorized-keys-lookup" "${SYSROOT}/usr/sbin/hugmesh-authorized-keys-lookup"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-device-registry-sync"   "${SYSROOT}/usr/sbin/hugmesh-device-registry-sync"
+chmod +x "${SYSROOT}/usr/sbin/hugmesh-authorized-keys-lookup" "${SYSROOT}/usr/sbin/hugmesh-device-registry-sync"
+cp "${SHARED_SPECS}/usr/lib/hugmesh/registry-verify.sh"      "${SYSROOT}/usr/lib/hugmesh/registry-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-device-registry-sync" "${SYSROOT}/etc/init.d/hugmesh-device-registry-sync"
+chmod +x "${SYSROOT}/etc/init.d/hugmesh-device-registry-sync"
 # Staged (NOT placed into sshd_config.d / cron.d here — provision installs them on
 # ADMIN nodes only; device-registry.conf is gate-flipped on first verified sync).
-cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/device-registry.conf" "${SYSROOT}/etc/snapdragon/registry/device-registry.conf"
-cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/break-glass.conf"     "${SYSROOT}/etc/snapdragon/registry/break-glass.conf"
-cp "${SHARED_SPECS}/etc/cron.d/snapdragon-device-registry-sync" "${SYSROOT}/etc/snapdragon/registry/cron-device-registry-sync"
+cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/device-registry.conf" "${SYSROOT}/etc/hugmesh/registry/device-registry.conf"
+cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/break-glass.conf"     "${SYSROOT}/etc/hugmesh/registry/break-glass.conf"
+cp "${SHARED_SPECS}/etc/cron.d/hugmesh-device-registry-sync" "${SYSROOT}/etc/hugmesh/registry/cron-device-registry-sync"
 
 # ── Layer-A device-license-registry headscale policy (CONTROL/pki node only) ────
 # provision_headscale_policy_sync() ACTIVATES these only when headscale.enabled
 # (the control node). Inert on a non-control node. REUSES Layer-B's registry-verify.sh
 # + baked registry-pub.ed25519 (no duplication).
 cp "${SHARED_SPECS}/usr/sbin/gen-headscale-policy.sh"          "${SYSROOT}/usr/sbin/gen-headscale-policy.sh"
-cp "${SHARED_SPECS}/usr/sbin/snapdragon-headscale-forcetags"   "${SYSROOT}/usr/sbin/snapdragon-headscale-forcetags"
-chmod +x "${SYSROOT}/usr/sbin/gen-headscale-policy.sh" "${SYSROOT}/usr/sbin/snapdragon-headscale-forcetags"
-cp "${SHARED_SPECS}/etc/init.d/snapdragon-policy-sync"         "${SYSROOT}/etc/init.d/snapdragon-policy-sync"
-chmod +x "${SYSROOT}/etc/init.d/snapdragon-policy-sync"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-headscale-forcetags"   "${SYSROOT}/usr/sbin/hugmesh-headscale-forcetags"
+chmod +x "${SYSROOT}/usr/sbin/gen-headscale-policy.sh" "${SYSROOT}/usr/sbin/hugmesh-headscale-forcetags"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-policy-sync"         "${SYSROOT}/etc/init.d/hugmesh-policy-sync"
+chmod +x "${SYSROOT}/etc/init.d/hugmesh-policy-sync"
 cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson"     "${SYSROOT}/etc/headscale/policy.bootstrap.hujson"
 cp "${SHARED_SPECS}/etc/headscale/policy.hujson.tmpl"          "${SYSROOT}/etc/headscale/policy.hujson.tmpl"
-cp "${SHARED_SPECS}/etc/cron.d/snapdragon-policy-sync"         "${SYSROOT}/etc/snapdragon/registry/cron-policy-sync"
+cp "${SHARED_SPECS}/etc/cron.d/hugmesh-policy-sync"         "${SYSROOT}/etc/hugmesh/registry/cron-policy-sync"
 
 # ── Egress VPN (split-tunnel, fail-closed) — node-level, DEFAULT-OFF ────────────
 # Bake the OpenRC service + the split-tunnel runner into every node image. They
 # are INERT until enabled: the service is NOT linked into a runlevel here (the
 # optional-services gate / signed reconcile enables it), and with no
-# /etc/snapdragon/vpn/active.conf the runner is a no-op. Baking unconditionally
+# /etc/hugmesh/vpn/active.conf the runner is a no-op. Baking unconditionally
 # does NOT alter egress on a node that never selects the VPN.
-cp "${SHARED_SPECS}/etc/init.d/snapdragon-egress-vpn" "${SYSROOT}/etc/init.d/snapdragon-egress-vpn"
-chmod +x "${SYSROOT}/etc/init.d/snapdragon-egress-vpn"
-cp "${SHARED_SPECS}/usr/sbin/snapdragon-vpn-runner"   "${SYSROOT}/usr/sbin/snapdragon-vpn-runner"
-chmod +x "${SYSROOT}/usr/sbin/snapdragon-vpn-runner"
-mkdir -p "${SYSROOT}/etc/snapdragon/vpn"; chmod 0700 "${SYSROOT}/etc/snapdragon/vpn"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-egress-vpn" "${SYSROOT}/etc/init.d/hugmesh-egress-vpn"
+chmod +x "${SYSROOT}/etc/init.d/hugmesh-egress-vpn"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-vpn-runner"   "${SYSROOT}/usr/sbin/hugmesh-vpn-runner"
+chmod +x "${SYSROOT}/usr/sbin/hugmesh-vpn-runner"
+mkdir -p "${SYSROOT}/etc/hugmesh/vpn"; chmod 0700 "${SYSROOT}/etc/hugmesh/vpn"
 
 # ── Egress-VPN reconcile bridge (signed per-node export consumer) — DEFAULT-OFF ─
 # Bake the reconcile agent + its verify lib + the OpenRC service into every node
 # image. INERT until enabled (the optional-services gate enables the service + cron
 # when the egress-VPN service is selected; with no transport/assignment it is a
 # verified no-op). REUSES the baked registry-pub.ed25519 (Layer-B's key — never
-# re-bake). The cron drop-in is STAGED at /etc/snapdragon/registry (the gate places
+# re-bake). The cron drop-in is STAGED at /etc/hugmesh/registry (the gate places
 # it into /etc/cron.d on selection), mirroring the device-registry-sync staging.
-cp "${SHARED_SPECS}/usr/sbin/snapdragon-vpn-reconcile" "${SYSROOT}/usr/sbin/snapdragon-vpn-reconcile"
-chmod +x "${SYSROOT}/usr/sbin/snapdragon-vpn-reconcile"
-cp "${SHARED_SPECS}/usr/lib/snapdragon/vpn-verify.sh" "${SYSROOT}/usr/lib/snapdragon/vpn-verify.sh"
-cp "${SHARED_SPECS}/etc/init.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
-chmod +x "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
-cp "${SHARED_SPECS}/etc/cron.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-vpn-reconcile" "${SYSROOT}/usr/sbin/hugmesh-vpn-reconcile"
+chmod +x "${SYSROOT}/usr/sbin/hugmesh-vpn-reconcile"
+cp "${SHARED_SPECS}/usr/lib/hugmesh/vpn-verify.sh" "${SYSROOT}/usr/lib/hugmesh/vpn-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-vpn-reconcile" "${SYSROOT}/etc/init.d/hugmesh-vpn-reconcile"
+chmod +x "${SYSROOT}/etc/init.d/hugmesh-vpn-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/hugmesh-vpn-reconcile" "${SYSROOT}/etc/hugmesh/registry/cron-vpn-reconcile"
 
 # ── Tor v3 onion (hidden) service (signed-export-free; keypair minted first-boot) — DEFAULT-OFF ─
 # Bake the onion-service reconcile agent + its OpenRC oneshot + the 24h cron into every
 # node image. INERT until enabled: the optional-services gate links the DISTRO `tor`
 # service + this reconcile agent ONLY when 'tor' is selected (net-vpn/tor is added then).
 # The agent (ordered `before tor`) writes the managed /etc/tor/torrc + mints/persists the
-# v3 onion keypair OFF-GIT under /var/lib/tor/snapdragon-onion. The cron drop-in is STAGED
-# at /etc/snapdragon/registry (the gate places it into /etc/cron.d on selection).
-cp "${SHARED_SPECS}/usr/sbin/snapdragon-tor-reconcile"   "${SYSROOT}/usr/sbin/snapdragon-tor-reconcile";   chmod +x "${SYSROOT}/usr/sbin/snapdragon-tor-reconcile"
-cp "${SHARED_SPECS}/etc/init.d/snapdragon-tor-reconcile" "${SYSROOT}/etc/init.d/snapdragon-tor-reconcile"; chmod +x "${SYSROOT}/etc/init.d/snapdragon-tor-reconcile"
-cp "${SHARED_SPECS}/etc/cron.d/snapdragon-tor-reconcile"  "${SYSROOT}/etc/snapdragon/registry/cron-tor-reconcile"
+# v3 onion keypair OFF-GIT under /var/lib/tor/hugmesh-onion. The cron drop-in is STAGED
+# at /etc/hugmesh/registry (the gate places it into /etc/cron.d on selection).
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-tor-reconcile"   "${SYSROOT}/usr/sbin/hugmesh-tor-reconcile";   chmod +x "${SYSROOT}/usr/sbin/hugmesh-tor-reconcile"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-tor-reconcile" "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"; chmod +x "${SYSROOT}/etc/init.d/hugmesh-tor-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/hugmesh-tor-reconcile"  "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile"
 
 # ── Domain-registry -> brand-repo bridge (#4) — DEFAULT-OFF optional service ─────
 # Bake the reconcile agent + its source-and-extend verify lib (domain-verify.sh) +
@@ -3432,39 +3432,39 @@ cp "${SHARED_SPECS}/etc/cron.d/snapdragon-tor-reconcile"  "${SYSROOT}/etc/snapdr
 # real key the verify fail-closes; absent transport it keeps cache + emits nothing.
 # REUSES the baked registry-pub.ed25519 (Layer-B's key — never re-bake). The agent
 # drives the EXISTING gen-keystores.sh + generate-brand-repos.sh, so those two
-# generators are baked under /usr/share/snapdragon/generator for the agent to exec.
-# The cron drop-in is STAGED at /etc/snapdragon/registry (gate places it on select),
+# generators are baked under /usr/share/hugmesh/generator for the agent to exec.
+# The cron drop-in is STAGED at /etc/hugmesh/registry (gate places it on select),
 # mirroring the device-registry-sync / vpn-reconcile staging.
-cp "${SHARED_SPECS}/usr/sbin/snapdragon-domain-reconcile" "${SYSROOT}/usr/sbin/snapdragon-domain-reconcile"
-chmod +x "${SYSROOT}/usr/sbin/snapdragon-domain-reconcile"
-cp "${SHARED_SPECS}/usr/lib/snapdragon/domain-verify.sh" "${SYSROOT}/usr/lib/snapdragon/domain-verify.sh"
-cp "${SHARED_SPECS}/etc/init.d/snapdragon-domain-reconcile" "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile"
-chmod +x "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile"
-cp "${SHARED_SPECS}/etc/cron.d/snapdragon-domain-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-domain-reconcile"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-domain-reconcile" "${SYSROOT}/usr/sbin/hugmesh-domain-reconcile"
+chmod +x "${SYSROOT}/usr/sbin/hugmesh-domain-reconcile"
+cp "${SHARED_SPECS}/usr/lib/hugmesh/domain-verify.sh" "${SYSROOT}/usr/lib/hugmesh/domain-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-domain-reconcile" "${SYSROOT}/etc/init.d/hugmesh-domain-reconcile"
+chmod +x "${SYSROOT}/etc/init.d/hugmesh-domain-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/hugmesh-domain-reconcile" "${SYSROOT}/etc/hugmesh/registry/cron-domain-reconcile"
 # The two build-time generators the bridge drives at runtime (read-only payload).
-mkdir -p "${SYSROOT}/usr/share/snapdragon/generator/scripts" "${SYSROOT}/usr/share/snapdragon/generator/templates"
-cp "${SCRIPT_DIR}/scripts/gen-keystores.sh"     "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh"
-cp "${SCRIPT_DIR}/generate-brand-repos.sh"      "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh"
-cp -r "${SCRIPT_DIR}/templates/."               "${SYSROOT}/usr/share/snapdragon/generator/templates/"
-chmod +x "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh" "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh"
+mkdir -p "${SYSROOT}/usr/share/hugmesh/generator/scripts" "${SYSROOT}/usr/share/hugmesh/generator/templates"
+cp "${SCRIPT_DIR}/scripts/gen-keystores.sh"     "${SYSROOT}/usr/share/hugmesh/generator/scripts/gen-keystores.sh"
+cp "${SCRIPT_DIR}/generate-brand-repos.sh"      "${SYSROOT}/usr/share/hugmesh/generator/generate-brand-repos.sh"
+cp -r "${SCRIPT_DIR}/templates/."               "${SYSROOT}/usr/share/hugmesh/generator/templates/"
+chmod +x "${SYSROOT}/usr/share/hugmesh/generator/scripts/gen-keystores.sh" "${SYSROOT}/usr/share/hugmesh/generator/generate-brand-repos.sh"
 
-mkdir -p "${SYSROOT}/etc/snapdragon"
-echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
-echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
+mkdir -p "${SYSROOT}/etc/hugmesh"
+echo "${ROLE}"           > "${SYSROOT}/etc/hugmesh/role"
+echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/hugmesh/cluster-domain"
 # Orchestration superdomain (WS-SUPER-B): record the mesh plane the image joins.
 if [ -n "${SUPERDOMAIN}" ]; then
-    echo "${SUPERDOMAIN}" > "${SYSROOT}/etc/snapdragon/superdomain"
-    info "Baked orchestration superdomain -> /etc/snapdragon/superdomain (${SUPERDOMAIN})"
+    echo "${SUPERDOMAIN}" > "${SYSROOT}/etc/hugmesh/superdomain"
+    info "Baked orchestration superdomain -> /etc/hugmesh/superdomain (${SUPERDOMAIN})"
 fi
 # Runtime ENV marker (test|prod). Read by bootstrap/provision; also documents
 # the image's posture. test => LAN wildcard DNS authoritative; prod => public.
-echo "${ENV}"            > "${SYSROOT}/etc/snapdragon/env"
+echo "${ENV}"            > "${SYSROOT}/etc/hugmesh/env"
 # Bake the brand's mesh control-server URL so keys-provision can read it at
 # first boot (env does not survive to first boot). Empty = local-first: the
 # control node defaults server_url to its own LAN IP (resolve_endpoint).
 if [ -n "${HEADSCALE_URL:-}" ]; then
-    echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/snapdragon/headscale-url"
-    info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/snapdragon/headscale-url"
+    echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/hugmesh/headscale-url"
+    info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/hugmesh/headscale-url"
 fi
 if ${STANDALONE}; then
     # STANDALONE desktop: bake the marker so keys-provision skips all
@@ -3475,19 +3475,19 @@ if ${STANDALONE}; then
     # NOTE: a --role desktop build WITHOUT --standalone deliberately does NOT
     # write this marker (it wants headscale/tailscale mesh join). That means
     # provision.sh's non-standalone k8s block (provision_kubernetes/_calico/
-    # _vault/_backup/_update/_snapdragon) still runs on a ROLE_CLIENT sysroot
+    # _vault/_backup/_update/_hugmesh) still runs on a ROLE_CLIENT sysroot
     # with no containerd/kubeadm/kubelet binaries and no cluster tree — this
     # is safe ONLY because each of those functions self-guards on binary/
     # kubeconfig/manifest-key presence; keep that guard when touching them.
-    echo "true" > "${SYSROOT}/etc/snapdragon/standalone"
+    echo "true" > "${SYSROOT}/etc/hugmesh/standalone"
     info "Standalone desktop: local user '${DEFAULT_USER}', no mesh."
 fi
 # The cluster GitOps tree (ArgoCD/Casdoor apps) is meaningless on a client
 # desktop — it never runs kubeadm/joins the cluster — so skip it for
 # --role desktop (ROLE_CLIENT), same as the containerd/kubelet config above.
 if ! ${ROLE_CLIENT} && [ -d "${SHARED_SPECS}/cluster" ]; then
-    mkdir -p "${SYSROOT}/var/lib/snapdragon"
-    cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
+    mkdir -p "${SYSROOT}/var/lib/hugmesh"
+    cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/hugmesh/cluster"
     info "Installed cluster GitOps payload (role=${ROLE})"
     # Only parameterize the games host URLs when games is actually selected; when
     # games is opt-out (default) gate_optional_services prunes it below anyway.
@@ -3502,7 +3502,7 @@ fi
 
 # Apply the configured brand/domain to the baked tree (no-op for defaults).
 # Runs AFTER gate_env_apps so the surviving lan-dns/cloudflared manifests get
-# their snapdragon.systems -> ${CLUSTER_DOMAIN} rewrite too.
+# their hugmesh.systems -> ${CLUSTER_DOMAIN} rewrite too.
 rebrand_sysroot
 # I6.3: AFTER rebrand — idp.conf bake + issuer/JWKS rewrite + Casdoor-app gating +
 # README-IDP.md. casdoor default = guaranteed no-op (byte-identity).
@@ -3535,11 +3535,11 @@ mkdir -p "${SYSROOT}/etc/runlevels/default"
 # before keys-provision so provisioning sees the full disk (no-op in containers).
 DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision firewall auditd local)
 if ! ${ROLE_CLIENT}; then
-    # snapdragon-firewall-reconcile's files are only ever baked for cluster-node
+    # hugmesh-firewall-reconcile's files are only ever baked for cluster-node
     # roles (bake_host_firewall() is called from inside the `! ROLE_CLIENT &&
     # -d cluster` block above) — enabling the service here too, never on the
     # desktop branch below, mirrors build-x86-host-stage4.sh's own SVCS split.
-    DEFAULT_SVCS+=(snapdragon-firewall-reconcile snapdragon-go-live-reconcile containerd kubelet)
+    DEFAULT_SVCS+=(hugmesh-firewall-reconcile hugmesh-go-live-reconcile containerd kubelet)
 else
     # Desktop session bring-up: dbus + elogind (seat/login manager) + the
     # display-manager OpenRC service (provided by gui-libs/display-manager-init,
@@ -3561,9 +3561,9 @@ LIGHTDM
 fi
 # Opt-in host-binary auto-update: link the boot oneshot + cadence cron into the
 # default runlevel as PLUMBING (every node), but the poller is DEFAULT-OFF / INERT —
-# it pulls nothing until a superadmin sets enabled:true in the snapdragon-update-policy
+# it pulls nothing until a superadmin sets enabled:true in the hugmesh-update-policy
 # ConfigMap (fail-safe-to-OFF: an absent/unreachable policy => NO pull).
-DEFAULT_SVCS+=(snapdragon-update)
+DEFAULT_SVCS+=(hugmesh-update)
 # headscale runs on the PKI/identity node (and on a generic all-in-one image)
 if [ "${ROLE}" = "pki" ] || [ "${ROLE}" = "generic" ]; then
     DEFAULT_SVCS+=(headscale)
@@ -3574,36 +3574,36 @@ if ! ${SKIP_MESH} && ! ${SKIP_TAILSCALE}; then
 fi
 # Egress VPN (DEFAULT-OFF optional service): link the signed-export RECONCILE
 # agent into the default runlevel ONLY when egress-vpn is selected. The
-# snapdragon-egress-vpn service itself is NOT linked here — the reconcile agent
+# hugmesh-egress-vpn service itself is NOT linked here — the reconcile agent
 # enables it (rc-update add) once a verified assignment lands, so a selected-but-
 # unassigned node carries the agent + an inert service (no tunnel, no leak). The
-# 60s reconcile cron drop-in (staged at /etc/snapdragon/registry/cron-vpn-reconcile)
+# 60s reconcile cron drop-in (staged at /etc/hugmesh/registry/cron-vpn-reconcile)
 # is installed alongside.
 if _opt_selected egress-vpn; then
-    DEFAULT_SVCS+=(snapdragon-vpn-reconcile)
-    if [ -f "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile" ]; then
+    DEFAULT_SVCS+=(hugmesh-vpn-reconcile)
+    if [ -f "${SYSROOT}/etc/hugmesh/registry/cron-vpn-reconcile" ]; then
         mkdir -p "${SYSROOT}/etc/cron.d"
-        cp -f "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile" \
-              "${SYSROOT}/etc/cron.d/snapdragon-vpn-reconcile"
-        info "OPTIONAL_SERVICES: egress-vpn selected — linked snapdragon-vpn-reconcile + 60s cron"
+        cp -f "${SYSROOT}/etc/hugmesh/registry/cron-vpn-reconcile" \
+              "${SYSROOT}/etc/cron.d/hugmesh-vpn-reconcile"
+        info "OPTIONAL_SERVICES: egress-vpn selected — linked hugmesh-vpn-reconcile + 60s cron"
     fi
 fi
-# Tor v3 onion (hidden) service (DEFAULT-OFF optional service): link ONLY the snapdragon
+# Tor v3 onion (hidden) service (DEFAULT-OFF optional service): link ONLY the hugmesh
 # reconcile agent into the default runlevel when 'tor' is selected (net-vpn/tor is added
 # to the package set then, see below) — mirroring egress-vpn, which links only its
 # reconcile agent, not the daemon. The DISTRO `tor` service is NOT linked here: the
 # reconcile agent OWNS tor's lifecycle (writes the managed torrc, mints the v3 onion
-# keypair OFF-GIT under /var/lib/tor/snapdragon-onion, then `rc-service tor restart`),
+# keypair OFF-GIT under /var/lib/tor/hugmesh-onion, then `rc-service tor restart`),
 # avoiding any double-start. The 24h refresh cron (staged at
-# /etc/snapdragon/registry/cron-tor-reconcile) is installed alongside. Unselected =>
+# /etc/hugmesh/registry/cron-tor-reconcile) is installed alongside. Unselected =>
 # reconcile not linked + net-vpn/tor absent.
 if _opt_selected tor; then
-    DEFAULT_SVCS+=(snapdragon-tor-reconcile)
-    if [ -f "${SYSROOT}/etc/snapdragon/registry/cron-tor-reconcile" ]; then
+    DEFAULT_SVCS+=(hugmesh-tor-reconcile)
+    if [ -f "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile" ]; then
         mkdir -p "${SYSROOT}/etc/cron.d"
-        cp -f "${SYSROOT}/etc/snapdragon/registry/cron-tor-reconcile" \
-              "${SYSROOT}/etc/cron.d/snapdragon-tor-reconcile"
-        info "OPTIONAL_SERVICES: tor selected — linked snapdragon-tor-reconcile + 24h cron (reconcile agent owns the tor daemon)"
+        cp -f "${SYSROOT}/etc/hugmesh/registry/cron-tor-reconcile" \
+              "${SYSROOT}/etc/cron.d/hugmesh-tor-reconcile"
+        info "OPTIONAL_SERVICES: tor selected — linked hugmesh-tor-reconcile + 24h cron (reconcile agent owns the tor daemon)"
     fi
 fi
 # Domain-registry -> brand-repo bridge (#4, DEFAULT-OFF optional service): link the
@@ -3611,14 +3611,14 @@ fi
 # `domain-registry-bridge` service is selected. When unselected the OpenRC service
 # is never linked and no cron drop-in exists -> ZERO boot/cron execution (gate 1 of
 # 3; the placeholder-key + no-transport gates fail-close the rest). The 60s cron
-# (staged at /etc/snapdragon/registry/cron-domain-reconcile) is installed alongside.
+# (staged at /etc/hugmesh/registry/cron-domain-reconcile) is installed alongside.
 if _opt_selected domain-registry-bridge; then
-    DEFAULT_SVCS+=(snapdragon-domain-reconcile)
-    if [ -f "${SYSROOT}/etc/snapdragon/registry/cron-domain-reconcile" ]; then
+    DEFAULT_SVCS+=(hugmesh-domain-reconcile)
+    if [ -f "${SYSROOT}/etc/hugmesh/registry/cron-domain-reconcile" ]; then
         mkdir -p "${SYSROOT}/etc/cron.d"
-        cp -f "${SYSROOT}/etc/snapdragon/registry/cron-domain-reconcile" \
-              "${SYSROOT}/etc/cron.d/snapdragon-domain-reconcile"
-        info "OPTIONAL_SERVICES: domain-registry-bridge selected — linked snapdragon-domain-reconcile + 60s cron"
+        cp -f "${SYSROOT}/etc/hugmesh/registry/cron-domain-reconcile" \
+              "${SYSROOT}/etc/cron.d/hugmesh-domain-reconcile"
+        info "OPTIONAL_SERVICES: domain-registry-bridge selected — linked hugmesh-domain-reconcile + 60s cron"
     fi
 fi
 for svc in "${DEFAULT_SVCS[@]}"; do

@@ -1,1 +1,1 @@
-[serve-ui] https://localhost:8443  dist=/home/magus/GitHub/snapdragon-generator/tests/stack/.uidist
+[serve-ui] https://localhost:8443  dist=/home/magus/GitHub/hugmesh-generator/tests/stack/.uidist

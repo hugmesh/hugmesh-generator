@@ -1,4 +1,4 @@
-# compose.local.yaml — the ENTIRE Snapdragon platform, built from source and run
+# compose.local.yaml — the ENTIRE HugMesh platform, built from source and run
 # locally on x86_64 (Linux AND Docker Desktop for Windows).
 #
 # WHAT THIS IS: a docker-compose translation of the k8s topology in
@@ -24,8 +24,8 @@
 # Service names are the in-compose DNS the services resolve each other by — they
 # replace the k8s <svc>.<ns>.svc.cluster.local FQDNs (e.g.
 # r2dbc:postgresql://federation-db:5432/federation,
-# http://snapdragon-federation-api:8080).
-name: snapdragon-local
+# http://hugmesh-federation-api:8080).
+name: hugmesh-local
 
 # Pull in the heavy third-party social tier (Synapse + Mastodon web/sidekiq/
 # streaming + their Postgres/Redis) from the existing real-services compose.
@@ -141,7 +141,7 @@ services:
   # owncast-bff-db — owncast-bff's own Postgres (Liquibase-owned schema, EMPTY DB).
   # DB/user name "owncast_bff" matches the literal r2dbc URL owncast-bff-api's
   # deployment.yaml uses (specs/cluster/manifests/owncast/deployment.yaml) — the
-  # cluster manifest references a snapdragon-owncast-db host that has no dedicated
+  # cluster manifest references a hugmesh-owncast-db host that has no dedicated
   # manifest of its own yet (pre-existing cluster-side gap); this compose service
   # is the local-stack equivalent, named like its forum/wiki siblings.
   owncast-bff-db:
@@ -161,7 +161,7 @@ services:
   # tube-bff-db — tube-bff's own Postgres (Liquibase-owned schema, EMPTY DB).
   # DB/user name "tube_bff" matches the literal r2dbc URL tube-bff-api's
   # deployment.yaml uses (specs/cluster/manifests/tube/deployment.yaml) — same
-  # pre-existing cluster-side gap (no dedicated snapdragon-tube-db manifest yet)
+  # pre-existing cluster-side gap (no dedicated hugmesh-tube-db manifest yet)
   # as owncast-bff-db above.
   tube-bff-db:
     <<: *amd64
@@ -178,19 +178,19 @@ services:
       retries: 20
 
   # ════════════════════════════════════════════════════════════════════
-  #  GATEWAYS — ONE image (snapdragon-gateway), run 3x as pki/be/fe. The
+  #  GATEWAYS — ONE image (hugmesh-gateway), run 3x as pki/be/fe. The
   #  per-gateway route table is mounted from gateway-routes/<role>.yml into
   #  /config (SPRING_CONFIG_ADDITIONAL_LOCATION=file:/config/), translating
   #  specs/cluster/apps/20-gateway-{pki,be,fe}.yaml's routes to compose DNS.
   #  SPRING_APPLICATION_NAME differentiates the instance (per the chart).
   # ════════════════════════════════════════════════════════════════════
 
-  snapdragon-pki-gateway:
+  hugmesh-pki-gateway:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-gateway
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
     environment:
-      SPRING_APPLICATION_NAME: snapdragon-pki-gateway
+      SPRING_APPLICATION_NAME: hugmesh-pki-gateway
       PORT: "8080"
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
       # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
@@ -221,12 +221,12 @@ services:
       retries: 30
       start_period: 60s
 
-  snapdragon-be-gateway:
+  hugmesh-be-gateway:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-gateway
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
     environment:
-      SPRING_APPLICATION_NAME: snapdragon-be-gateway
+      SPRING_APPLICATION_NAME: hugmesh-be-gateway
       PORT: "8080"
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
       # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
@@ -249,15 +249,15 @@ services:
       # cluster-DNS 'http://admin-bff:8080', unresolvable in compose, so any browser
       # request reaching this gateway with a bff_ session cookie (e.g. /be/api/** via
       # the front door) would 503 session_backend_unavailable instead of authenticating.
-      APP_BFF_SESSION_BFF_BASE_URL: ${APP_BFF_SESSION_BFF_BASE_URL:-http://snapdragon-admin-bff-api:8080}
+      APP_BFF_SESSION_BFF_BASE_URL: ${APP_BFF_SESSION_BFF_BASE_URL:-http://hugmesh-admin-bff-api:8080}
     volumes:
       - ./gateway-routes/be:/config:ro
     depends_on:
       casdoor: { condition: service_started }
       cassandra: { condition: service_healthy }
       route-access-db: { condition: service_healthy }
-      snapdragon-federation-api: { condition: service_started }
-      snapdragon-api: { condition: service_started }
+      hugmesh-federation-api: { condition: service_started }
+      hugmesh-api: { condition: service_started }
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
       interval: 10s
@@ -267,12 +267,12 @@ services:
 
   # fe-gateway is the platform FRONT DOOR — published to the host so the browser
   # reaches the whole stack at http://localhost:${PUBLIC_HOST_PORT}.
-  snapdragon-fe-gateway:
+  hugmesh-fe-gateway:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-gateway
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
     environment:
-      SPRING_APPLICATION_NAME: snapdragon-fe-gateway
+      SPRING_APPLICATION_NAME: hugmesh-fe-gateway
       PORT: "8080"
       SPRING_CONFIG_ADDITIONAL_LOCATION: "file:/config/"
       # Spring only auto-loads a profile-named doc (application-{name}.yml) from an
@@ -296,7 +296,7 @@ services:
       # does NOT resolve in compose -> every authenticated /bff/** returns 503
       # session_backend_unavailable ("Failed to resolve 'admin-bff'"). Point it at the compose
       # admin-bff service so logged-in sessions (GET /bff/session, /bff/me, role-gated routes) work.
-      APP_BFF_SESSION_BFF_BASE_URL: ${APP_BFF_SESSION_BFF_BASE_URL:-http://snapdragon-admin-bff-api:8080}
+      APP_BFF_SESSION_BFF_BASE_URL: ${APP_BFF_SESSION_BFF_BASE_URL:-http://hugmesh-admin-bff-api:8080}
     volumes:
       - ./gateway-routes/fe:/config:ro
     ports:
@@ -305,7 +305,7 @@ services:
       casdoor: { condition: service_started }
       cassandra: { condition: service_healthy }
       route-access-db: { condition: service_healthy }
-      snapdragon-admin-bff-api: { condition: service_started }
+      hugmesh-admin-bff-api: { condition: service_started }
       snapdragon-systems-web: { condition: service_started }
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
@@ -320,10 +320,10 @@ services:
 
   # federation-api — module-federation registry + manifest/bundles (WebFlux +
   # R2DBC + Liquibase). specs/cluster/manifests/federation-api/deployment.yaml.
-  snapdragon-federation-api:
+  hugmesh-federation-api:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-federation-api
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-federation-api
     environment:
       # federation-api is the one Casdoor resource server that actually VALIDATES a
       # Casdoor JWT's iss in compose: the BFFs forward a caller/custody JWT here (mod
@@ -331,7 +331,7 @@ services:
       # poll). Casdoor stamps iss=http://casdoor:8000 (the in-DNS name login mints
       # through), so the resource server MUST validate against that — the browser-facing
       # http://localhost:8000 used elsewhere never matches a real token here and 401s
-      # EVERY forwarded/service call. (Cluster is uniform https://id.snapdragon.systems,
+      # EVERY forwarded/service call. (Cluster is uniform https://id.hugmesh.systems,
       # so this split is compose-only.)
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
       # Explicit in-DNS JWKS (key fetch) — same host, so discovery + validation agree.
@@ -343,13 +343,13 @@ services:
       SPRING_LIQUIBASE_USER: federation
       SPRING_LIQUIBASE_PASSWORD: federation
       APP_BUNDLES_STORAGE: filesystem
-      APP_BUNDLES_DIR: /var/snapdragon/federation/bundles
+      APP_BUNDLES_DIR: /var/hugmesh/federation/bundles
       MANIFEST_CACHE_ENABLED: "false"
       MANIFEST_CACHE_CASSANDRA: "cassandra:9042"
       MANIFEST_CACHE_KEYSPACE: snapdragon_federation
       MANIFEST_CACHE_LOCAL_DC: dc1
     volumes:
-      - federation-bundles:/var/snapdragon/federation/bundles
+      - federation-bundles:/var/hugmesh/federation/bundles
     depends_on:
       federation-db: { condition: service_healthy }
       casdoor: { condition: service_started }
@@ -366,10 +366,10 @@ services:
   # — only the "casdoor" profile is active so the route-DB CRUD surface comes up.
   # Analytics endpoints (/bff/admin/usage) are NOT exercised locally (documented
   # limitation).
-  snapdragon-admin-bff-api:
+  hugmesh-admin-bff-api:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-admin-bff-api
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-admin-bff-api
     environment:
       # admin-bff both RECEIVES and MINTS Casdoor JWTs on the native-login path:
       #  • RECEIVES — mod-bff forwards a caller/custody JWT to admin-bff's PUBLIC
@@ -382,7 +382,7 @@ services:
       #    admin-bff-api#205) custody-exchanges a native-login admin's bff_ session for a
       #    real Casdoor JWT (loopback to its own /bff/internal/session/exchange) and
       #    forwards THAT to federation-api. That leg ships dark behind app.bff-exchange.enabled.
-      # Cluster is uniform (https://id.snapdragon.systems everywhere Casdoor also stamps),
+      # Cluster is uniform (https://id.hugmesh.systems everywhere Casdoor also stamps),
       # so the issuer split is compose-only.
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
       # Turn ON admin-bff's decide custody-exchange (admin-bff-api#205) so a native-login
@@ -463,10 +463,10 @@ services:
   # repo set builds + runs. Each is a Spring OAuth2 resource server validating the
   # cluster Casdoor JWT. They get the admin-bff-db handle as a placeholder config
   # datastore; swap to dedicated DBs when their cluster manifests land.
-  snapdragon-mod-bff-api:
+  hugmesh-mod-bff-api:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-mod-bff-api
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-mod-bff-api
     environment:
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       # In-DNS JWKS: compose issuer-uri is the browser-facing localhost:8000 (unreachable in-container),
@@ -479,7 +479,7 @@ services:
       # which does not exist), so the client silently used its unresolvable
       # cluster-DNS default and every federation-backed /bff/{mod,user}/** call
       # 500'd ("Failed to resolve ...svc.cluster.local") in compose.
-      FEDERATION_API_BASE_URL: "http://snapdragon-federation-api:8080"
+      FEDERATION_API_BASE_URL: "http://hugmesh-federation-api:8080"
       # admin-bff base for BOTH the native-login session bridge (mod-bff-api#68's
       # BffCookieAuthenticationWebFilter introspects bff_ sessions against
       # GET /bff/internal/session/introspect) AND the ban/domain-lock desired-state
@@ -487,7 +487,7 @@ services:
       # cluster-DNS host, unresolvable in compose — without this every /bff/mod/**
       # request carrying a native-login bff_ cookie fails CLOSED (503), and mod
       # ban/domain-lock writes can never reach admin-bff.
-      ADMIN_BFF_BASE_URL: "http://snapdragon-admin-bff-api:8080"
+      ADMIN_BFF_BASE_URL: "http://hugmesh-admin-bff-api:8080"
       # Turn ON mod-bff's native-login bearer forwarding (mod-bff-api#72's
       # BearerForwardingFilter custody exchange — SHIPS DARK, enabled=false default).
       # Without it a native-login MOD/ADMIN passes mod-bff's own role gate but the
@@ -503,8 +503,8 @@ services:
       # (app.test-seed.enabled=false / APP_TEST_SEED_ENABLED unset); turned ON for the
       # test env so e2e seeding scripts can prime findings data (mod-bff-api#63).
       APP_TEST_SEED_ENABLED: "true"
-      # Placeholder config datastore (see the comment above snapdragon-mod-bff-api /
-      # snapdragon-user-bff-api higher up describing this): reuses admin-bff-db's
+      # Placeholder config datastore (see the comment above hugmesh-mod-bff-api /
+      # hugmesh-user-bff-api higher up describing this): reuses admin-bff-db's
       # adminbff database/credentials, no dedicated DB yet. Without this, Liquibase/
       # R2DBC fall back to the app's own default (a cluster-DNS Postgres host), which
       # doesn't resolve in compose and the container never boots.
@@ -517,8 +517,8 @@ services:
     depends_on:
       admin-bff-db: { condition: service_healthy }
       casdoor: { condition: service_started }
-      snapdragon-federation-api: { condition: service_started }
-      snapdragon-admin-bff-api: { condition: service_started }
+      hugmesh-federation-api: { condition: service_started }
+      hugmesh-admin-bff-api: { condition: service_started }
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
       interval: 10s
@@ -526,10 +526,10 @@ services:
       retries: 30
       start_period: 60s
 
-  snapdragon-user-bff-api:
+  hugmesh-user-bff-api:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-user-bff-api
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-user-bff-api
     environment:
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       # In-DNS JWKS: compose issuer-uri is the browser-facing localhost:8000 (unreachable in-container),
@@ -542,7 +542,7 @@ services:
       # which does not exist), so the client silently used its unresolvable
       # cluster-DNS default and every federation-backed /bff/{mod,user}/** call
       # 500'd ("Failed to resolve ...svc.cluster.local") in compose.
-      FEDERATION_API_BASE_URL: "http://snapdragon-federation-api:8080"
+      FEDERATION_API_BASE_URL: "http://hugmesh-federation-api:8080"
       # ── Native SSO login (POST /bff/login). login-ui renders a first-party
       #    username/password form and POSTs it to user-bff at /bff/login (via the front
       #    door). user-bff generates PKCE + state SERVER-SIDE, POSTs the credentials to
@@ -555,7 +555,7 @@ services:
       #    http://casdoor:8000, NEVER a browser-reachable URL):
       #      • the /api/login POST      -> APP_BFF_OIDC_LOGIN_BASE (CasdoorLoginConfig reads
       #        app.bff.oidc.login-base; its DEFAULT is the CLUSTER-DNS
-      #        http://casdoor.snapdragon-pki.svc.cluster.local:8000, which is UNREACHABLE in
+      #        http://casdoor.hugmesh-pki.svc.cluster.local:8000, which is UNREACHABLE in
       #        compose — so it MUST be set here or /bff/login times out. The browser-facing
       #        issuer is deliberately NEVER used for the login leg.)
       #      • the token exchange       -> APP_BFF_OIDC_ISSUER (auth-core OidcExchangeClient).
@@ -571,9 +571,9 @@ services:
       APP_BFF_OIDC_LOGIN_BASE: ${APP_BFF_OIDC_LOGIN_BASE:-http://casdoor:8000}
       APP_BFF_OIDC_CLIENT_ID: ${CASDOOR_APP_CLIENT_ID:-app-user-bff}
       APP_BFF_OIDC_CLIENT_SECRET: ${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}
-      APP_BFF_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://snapdragon-user-bff-api:8080/bff/auth/callback}
+      APP_BFF_OIDC_REDIRECT_URI: ${CASDOOR_APP_REDIRECT_URI:-http://hugmesh-user-bff-api:8080/bff/auth/callback}
       APP_BFF_CUSTODY_KEY: ${APP_BFF_CUSTODY_KEY:-c25hcGRyYWdvbi1kZXYtY3VzdG9keS1rZXktMzJieXQ=}
-      ADMIN_BFF_INTERNAL_BASE_URL: ${ADMIN_BFF_INTERNAL_BASE_URL:-http://snapdragon-admin-bff-api:8080}
+      ADMIN_BFF_INTERNAL_BASE_URL: ${ADMIN_BFF_INTERNAL_BASE_URL:-http://hugmesh-admin-bff-api:8080}
       # Homeserver-token custody for the hsproxy (/bff/user/{matrix,mastodon}/**): app.hs-token.key
       # encrypts the brokered Matrix/Mastodon access tokens AT REST. Without a key the HsTokenCipher
       # is INERT and the hsproxy 503s. Dev key (compose dev posture; any passphrase is folded to a
@@ -614,8 +614,8 @@ services:
     depends_on:
       admin-bff-db: { condition: service_healthy }
       casdoor: { condition: service_started }
-      snapdragon-admin-bff-api: { condition: service_started }
-      snapdragon-federation-api: { condition: service_started }
+      hugmesh-admin-bff-api: { condition: service_started }
+      hugmesh-federation-api: { condition: service_started }
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
       interval: 10s
@@ -623,19 +623,19 @@ services:
       retries: 30
       start_period: 60s
 
-  # snapdragon-actions — the Spring "actions" service behind the be-gateway
-  # /api/** route (the snapdragon-api Deployment in specs/cluster). The two-Casdoor
+  # hugmesh-actions — the Spring "actions" service behind the be-gateway
+  # /api/** route (the hugmesh-api Deployment in specs/cluster). The two-Casdoor
   # sync (systems<->games) is DEV-stubbed: both Casdoor URLs point at the single
   # local Casdoor with placeholder client creds, so the sync job is inert locally
   # (no games Casdoor in the local stack — documented limitation).
-  snapdragon-api:
+  hugmesh-api:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-actions
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-actions
     environment:
       SPRING_PROFILES_ACTIVE: casdoor
       CASDOOR_SYSTEMS_URL: "http://casdoor:8000"
-      CASDOOR_SYSTEMS_ORG: snapdragon
+      CASDOOR_SYSTEMS_ORG: hugmesh
       CASDOOR_SYSTEMS_CLIENT_ID: dev-systems-client
       CASDOOR_SYSTEMS_CLIENT_SECRET: dev-systems-secret
       CASDOOR_GAMES_URL: "http://casdoor:8000"
@@ -646,12 +646,12 @@ services:
       GM_SYNC_GAMES_ROLE: admin
     depends_on:
       casdoor: { condition: service_started }
-    # snapdragon-actions' Dockerfile EXPOSEs 8090 (unlike every other Spring
+    # hugmesh-actions' Dockerfile EXPOSEs 8090 (unlike every other Spring
     # service here, which defaults to 8080) — a healthcheck against :8080 always
     # fails (connection refused), which is why this container showed "unhealthy"
     # forever even though the app boots clean (verified live: its own boot log
     # says "Netty started on port 8090"). Keep in sync with the be-gateway's
-    # snapdragon-api route in gateway-routes/be/application-routes.yml, which had
+    # hugmesh-api route in gateway-routes/be/application-routes.yml, which had
     # the identical :8080 mismatch.
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8090/actuator/health/readiness || exit 1"]
@@ -667,17 +667,17 @@ services:
   # VALIDATE a forwarded Casdoor JWT (not their own login flow), so both
   # CASDOOR_ISSUER_URI and CASDOOR_JWKS_URI point at the in-DNS casdoor:8000 (the
   # host Casdoor actually stamps into iss) — same reasoning as admin-bff-api /
-  # snapdragon-federation-api above, NOT the browser-facing localhost:8000
+  # hugmesh-federation-api above, NOT the browser-facing localhost:8000
   # mod-bff/user-bff use for their own OIDC login legs.
-  snapdragon-forum-bff-api:
+  hugmesh-forum-bff-api:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-forum-bff-api
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-forum-bff-api
     environment:
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
       SPRING_PROFILES_ACTIVE: casdoor
-      # No phpBB pod in the local core stack (snapdragon-forum's phpBB extension is
+      # No phpBB pod in the local core stack (hugmesh-forum's phpBB extension is
       # a separate, isolated-namespace-only piece not wired here) — keep the
       # upstream stub-seam OFF so forum-bff boots clean and always-audits instead
       # of failing every forum call against an absent backend (documented
@@ -701,10 +701,10 @@ services:
       retries: 30
       start_period: 60s
 
-  snapdragon-wiki-bff-api:
+  hugmesh-wiki-bff-api:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-wiki-bff-api
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-wiki-bff-api
     environment:
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
@@ -726,10 +726,10 @@ services:
       retries: 30
       start_period: 60s
 
-  snapdragon-owncast-bff-api:
+  hugmesh-owncast-bff-api:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-owncast-bff-api
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-owncast-bff-api
     environment:
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
@@ -759,10 +759,10 @@ services:
   # live streaming backend (documented limitation, same class as forum's phpBB
   # omission above).
 
-  snapdragon-tube-bff-api:
+  hugmesh-tube-bff-api:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-tube-bff-api
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-tube-bff-api
     environment:
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://casdoor:8000}
       CASDOOR_JWKS_URI: ${CASDOOR_JWKS_URI:-http://casdoor:8000/.well-known/jwks}
@@ -796,58 +796,58 @@ services:
   #  with no matching Casdoor app it has no enabled fragments to pull, so it
   #  serves an empty set — fine for bring-up (documented limitation).
   # ════════════════════════════════════════════════════════════════════
-  snapdragon-remote-fragment:
+  hugmesh-remote-fragment:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-remote-fragment
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-remote-fragment
     environment:
       SYNC_MODE: loop
       SERVER_PORT: "8081"
       SYNC_TARGET_DIR: /usr/share/nginx/html
-      FEDERATION_BASE_URL: "http://snapdragon-federation-api:8080"
+      FEDERATION_BASE_URL: "http://hugmesh-federation-api:8080"
       CASDOOR_TOKEN_URL: "http://casdoor:8000/api/login/oauth/access_token"
-      CASDOOR_ORG: snapdragon
+      CASDOOR_ORG: hugmesh
       CASDOOR_CLIENT_ID: dev-fragment-sync-client
       CASDOOR_CLIENT_SECRET: dev-fragment-sync-secret
     depends_on:
-      snapdragon-federation-api: { condition: service_started }
+      hugmesh-federation-api: { condition: service_started }
       casdoor: { condition: service_started }
 
   # ════════════════════════════════════════════════════════════════════
   #  ANGULAR HOST + FEDERATED REMOTES (each Dockerfile -> nginx :80)
   # ════════════════════════════════════════════════════════════════════
 
-  # snapdragon.systems — the Angular host (front page). The fe-gateway catch-all
+  # hugmesh.systems — the Angular host (front page). The fe-gateway catch-all
   # route forwards /** here. specs/cluster/manifests/frontend/deployment.yaml.
   snapdragon-systems-web:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon.systems
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh.systems
     environment:
       CASDOOR_ISSUER: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       MATRIX_URL: ${MATRIX_URL:-http://localhost:8008}
       MASTODON_URL: ${MASTODON_URL:-http://localhost:3000}
       SOCIAL_UI_BASE: /social
 
-  snapdragon-admin-ui:
+  hugmesh-admin-ui:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-admin-ui
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-admin-ui
 
-  snapdragon-mod-ui:
+  hugmesh-mod-ui:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-mod-ui
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-mod-ui
 
-  snapdragon-user-ui:
+  hugmesh-user-ui:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-user-ui
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-user-ui
 
-  snapdragon-login-ui:
+  hugmesh-login-ui:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-login-ui
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-login-ui
       args:
         # WHICH TRANSLATION CATALOGS THIS IMAGE SHIPS. Comma-separated locale tags;
         # EMPTY (the default) => English-only, zero catalog files in the image and
@@ -886,50 +886,50 @@ services:
       # new value, NO image rebuild. Empty (the default) => shipped default brand.
       SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}
 
-  snapdragon-mastodon-ui:
+  hugmesh-mastodon-ui:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-mastodon-ui
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-mastodon-ui
 
-  snapdragon-matrix-ui:
+  hugmesh-matrix-ui:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-matrix-ui
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-matrix-ui
 
-  snapdragon-api-docs:
+  hugmesh-api-docs:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-api-docs
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-api-docs
 
   # forum-ui — mounted at /social/forum/** (a PATH remote, not a forum.<domain>
-  # subdomain — the *.snapdragon.systems vanity wildcard would swallow it),
+  # subdomain — the *.hugmesh.systems vanity wildcard would swallow it),
   # congruent with the matrix-ui/mastodon-ui shells at /social/matrix,
   # /social/mastodon (specs/cluster/apps/49-forum-ui.yaml). No env needed, same as
   # matrix-ui/mastodon-ui above.
-  snapdragon-forum-ui:
+  hugmesh-forum-ui:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-forum-ui
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-forum-ui
 
   # wiki-ui / owncast-ui / tube-ui — federated remotes added for the full local
   # repo set (same rationale as mod-ui/user-ui above): the cluster serves them via
   # the dynamic module-federation remote-fragment fleet rather than a fixed
   # gateway path, so they have no cluster route yet, but a direct /<slug>/** path
   # here (mirroring admin-ui/mod-ui/user-ui) is reachable + e2e-testable locally.
-  snapdragon-wiki-ui:
+  hugmesh-wiki-ui:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-wiki-ui
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-wiki-ui
 
-  snapdragon-owncast-ui:
+  hugmesh-owncast-ui:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-owncast-ui
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-owncast-ui
 
-  snapdragon-tube-ui:
+  hugmesh-tube-ui:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-tube-ui
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-tube-ui
 
   # character-studio-ui — mounted at /character-studio/** (already a canonical
   # cluster route-access row, specs/cluster/manifests/route-access/initdb/20-schema.sql).
@@ -937,12 +937,12 @@ services:
   # same-origin /bff/** routes (see specs/cluster/manifests/character-studio's own
   # comment — "no dedicated BFF in this slug yet"), so no BFF/DB service is added
   # for it here.
-  snapdragon-character-studio-ui:
+  hugmesh-character-studio-ui:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-character-studio-ui
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-character-studio-ui
 
-  # ── snapdragon-tor — v3 onion (hidden service) for the local mesh (OPT-IN) ──
+  # ── hugmesh-tor — v3 onion (hidden service) for the local mesh (OPT-IN) ──
   # Publishes the fe-gateway as a Tor v3 .onion, mirroring the NODE `tor` optional
   # service (docs/TOR-HIDDEN-SERVICE.md) for the LOCAL docker mesh — INBOUND
   # reachability with NO public IP / DNS / open ports. OPT-IN behind the `tor`
@@ -950,21 +950,21 @@ services:
   # never creates it, so the unprofiled stack is byte-identical to before. Built
   # from ./tor (multi-arch alpine+tor, NO platform pin) so it runs natively on
   # Linux docker AND Docker Desktop (Windows/macOS) and on arm64 hosts. tor
-  # resolves `snapdragon-fe-gateway` over the compose network and forwards the
+  # resolves `hugmesh-fe-gateway` over the compose network and forwards the
   # onion :80 there. The minted .onion hostname is copied to ./tor-onion/hostname
   # (gitignored) for the host/GUI to read; the private key persists in the
   # tor-onion-keys volume so the address is stable across restarts.
-  snapdragon-tor:
+  hugmesh-tor:
     profiles: ["tor"]
     build:
       context: ./tor
     environment:
-      TOR_ONION_UPSTREAM: ${TOR_ONION_UPSTREAM:-snapdragon-fe-gateway:8080}
+      TOR_ONION_UPSTREAM: ${TOR_ONION_UPSTREAM:-hugmesh-fe-gateway:8080}
     volumes:
-      - tor-onion-keys:/var/lib/tor/snapdragon-onion
+      - tor-onion-keys:/var/lib/tor/hugmesh-onion
       - ./tor-onion:/onion-out
     depends_on:
-      snapdragon-fe-gateway:
+      hugmesh-fe-gateway:
         condition: service_started
     restart: unless-stopped
 
@@ -977,7 +977,7 @@ volumes:
   owncast-bff-pg:
   tube-bff-pg:
   federation-bundles:
-  # v3 onion key custody for the OPT-IN snapdragon-tor service (`--profile tor`).
+  # v3 onion key custody for the OPT-IN hugmesh-tor service (`--profile tor`).
   # Persisting the key keeps the .onion address stable across restarts; only the
   # PUBLIC hostname is ever copied out (to ./tor-onion) — the key never leaves here.
   tor-onion-keys:

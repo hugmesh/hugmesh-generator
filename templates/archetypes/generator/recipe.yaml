@@ -3,16 +3,16 @@
 # ============================================================================
 #
 # Applied by scripts/tooling/render-recipe.js onto a read-only clone of THIS
-# repo (snapdragon-generator) — the tenant-set member the 13d ApplicationSet and
+# repo (hugmesh-generator) — the tenant-set member the 13d ApplicationSet and
 # GENERATOR_ORG_GROUP CI-include always PRESUMED existed at the tenant's forge
-# (<org-slug>/snapdragon-generator) but nothing ever rendered/published. NO
+# (<org-slug>/hugmesh-generator) but nothing ever rendered/published. NO
 # _skeleton on purpose: like a foreign base, the BASE IS REQUIRED — a "skeleton
 # generator" would be a non-functional placeholder masquerading as the build
 # system, so an unpullable base FAILS the render instead of emitting a lie.
 #
 # DELIBERATELY NARROW (the fork-and-tokenize ban, MESH-TEMPLATING.md:159, applies
-# doubly to a repo this size): 'snapdragon-generator' the NAME, every `snapdragon`
-# in scripts/specs/src, the snapdragon.systems/* label keys and X-Snapdragon-*
+# doubly to a repo this size): 'hugmesh-generator' the NAME, every `hugmesh`
+# in scripts/specs/src, the snapdragon.systems/* label keys and X-HugMesh-*
 # wire headers are upstream CODE/PROTOCOL identity and stay literal. Only the
 # README display brand, the CI include org/group, and the branding doc's per-org
 # FILENAME (the renames[] pilot) are tenant-scoped. The rendered tenant generator
@@ -37,9 +37,9 @@ edits:
     anchors:
       # README title-paragraph display brand: the images are built "for the
       # <BRAND_TITLE> cluster" in the tenant copy. Repo-identity `#
-      # snapdragon-generator` heading + code-path mentions stay literal.
+      # hugmesh-generator` heading + code-path mentions stay literal.
       - id: readme-title-brand
-        find: "Snapdragon cluster"
+        find: "HugMesh cluster"
         replace: "{{BRAND_TITLE}} cluster"
         required: true
   - file: .gitlab-ci.yml
@@ -48,13 +48,13 @@ edits:
       # Same single CI-include seam as every other archetype: the centralized
       # include org/group. PRESENCE-TOLERANT (required: false) — deliberately,
       # and unlike spring-bff/angular-mfe: the generator's OWN CI today carries
-      # NO `Snapdragon-Systems/snapdragon-generator` include (the other repos
+      # NO `Snapdragon-Systems/hugmesh-generator` include (the other repos
       # include FROM it; it does not include itself — verified against the real
       # base, where a required:true here would be a false DRIFT). The anchor
       # stays so the seam rebrands the moment the generator's CI ever adopts
       # the standard include, exactly the class-UNION no-op contract above.
       - id: ci-include-org
-        find: "Snapdragon-Systems/snapdragon-generator"
+        find: "Snapdragon-Systems/hugmesh-generator"
         replace: "{{GENERATOR_ORG_GROUP}}"
   - file: docs/BRANDING.md
     optional: false
@@ -62,7 +62,7 @@ edits:
       # The branding doc's own display brand — edited BEFORE the rename below
       # (edits[] always run first; they address PRE-rename paths).
       - id: branding-doc-title
-        find: "Snapdragon tenant branding"
+        find: "HugMesh tenant branding"
         replace: "{{BRAND_TITLE}} tenant branding"
         required: true
 

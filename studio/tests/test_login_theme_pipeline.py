@@ -18,8 +18,8 @@ import sys
 
 import pytest
 
-from snapdragon_studio.core import theme
-from snapdragon_studio.core.local_mesh_bootstrap import (
+from hugmesh_studio.core import theme
+from hugmesh_studio.core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshBootstrapConfig)
 
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -59,7 +59,7 @@ def test_compose_fails_closed_on_unknown_preset_and_bad_hex():
 def test_compose_file_passes_the_theme_env_to_the_login_ui_service():
     compose = open(os.path.join(_REPO, "tests", "stack", "compose.local.yaml"),
                    encoding="utf-8").read()
-    svc = compose.split("snapdragon-login-ui:", 1)[1].split("snapdragon-mastodon-ui:")[0]
+    svc = compose.split("hugmesh-login-ui:", 1)[1].split("hugmesh-mastodon-ui:")[0]
     assert "SNAP_THEME_CSS: ${SNAP_THEME_CSS:-}" in svc, (
         "the compose passthrough is the delivery leg — without it the Studio knob "
         "derives css that reaches no container")

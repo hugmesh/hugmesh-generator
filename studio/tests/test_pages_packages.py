@@ -11,13 +11,13 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core import package_catalog as pc          # noqa: E402
-from snapdragon_studio.core.config import ImageConfig             # noqa: E402
-from snapdragon_studio.gui.qt import Qt, QtWidgets                # noqa: E402
-from snapdragon_studio.gui.pages.packages_dialog import PackagesDialog  # noqa: E402
+from hugmesh_studio.core import package_catalog as pc          # noqa: E402
+from hugmesh_studio.core.config import ImageConfig             # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtWidgets                # noqa: E402
+from hugmesh_studio.gui.pages.packages_dialog import PackagesDialog  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -26,7 +26,7 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 def _thin_cfg():
@@ -98,7 +98,7 @@ def test_free_atom_add_is_validated(qapp):
     cfg = _thin_cfg()
     dlg = PackagesDialog(GENERATOR_DIR, cfg)
     # a valid atom not already in the catalog becomes a checked custom extra -> add.
-    custom = "dev-util/snapdragon-fake-atom"
+    custom = "dev-util/hugmesh-fake-atom"
     assert custom not in dlg.items
     dlg.free_atom_edit.setText(custom)
     dlg._add_free()

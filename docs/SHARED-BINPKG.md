@@ -100,7 +100,7 @@ pipeline compares CFLAGS before reuse.
   the `-mcpu` portage ignores.
 - **Preflight** (`pool_fingerprint_preflight`) runs in every build, just before
   the first `--usepkg` emerge:
-  - **absent stamp, EMPTY pool** → write `${PKGDIR}/.snapdragon-pool-fingerprint`
+  - **absent stamp, EMPTY pool** → write `${PKGDIR}/.hugmesh-pool-fingerprint`
     fresh, proceed silently (the normal fresh-pool path);
   - **absent stamp, pool already holds binpkgs** → adopt (stamp fresh) **but WARN
     loudly** naming the SIGILL risk + the flush command. An unstamped non-empty
@@ -160,7 +160,7 @@ make x86 RESUME=--resume                            # x86: MUST pass --resume (s
 > scratch. Always thread `RESUME=--resume` into the consuming x86 build. The ARM
 > boards have no such caveat (their pool survives a sysroot wipe).
 
-- **Union feed:** `python3 -m snapdragon_studio.core.prebuild_union <platform>`
+- **Union feed:** `python3 -m hugmesh_studio.core.prebuild_union <platform>`
   prints the sorted role-union atom list — `set().union` over the EXISTING
   `package_catalog.default_set` for every `(platform, role)` cell
   `role_cells()` enumerates from `ROLE_CHOICES`. **No new resolution logic.**

@@ -10,16 +10,16 @@ import subprocess
 
 import pytest
 
-from snapdragon_studio.core.build_driver import BuildDriver
-from snapdragon_studio.core.config import BUILDER_SCRIPTS, ImageConfig
-from snapdragon_studio.core.fleet import FLEET_SCRIPT, FleetConfig, FleetDriver
-from snapdragon_studio.core.platform_info import HostInfo
-from snapdragon_studio.core.validate import IdentityValidationError
+from hugmesh_studio.core.build_driver import BuildDriver
+from hugmesh_studio.core.config import BUILDER_SCRIPTS, ImageConfig
+from hugmesh_studio.core.fleet import FLEET_SCRIPT, FleetConfig, FleetDriver
+from hugmesh_studio.core.platform_info import HostInfo
+from hugmesh_studio.core.validate import IdentityValidationError
 
 
 def host(is_root=True, has_docker=True):
     return HostInfo(os="linux", is_gentoo=True, has_docker=has_docker, has_bash=True,
-                    has_kvm=False, is_root=is_root, builder_image="snapdragon-builder")
+                    has_kvm=False, is_root=is_root, builder_image="hugmesh-builder")
 
 
 def cfg_for(platform, tmp_path):
@@ -74,7 +74,7 @@ def test_docker_command_per_platform(platform, script, tmp_path):
     assert cmd[:4] == ["docker", "run", "--rm", "--privileged"]
     assert f"{d.generator_dir}:/src" in cmd            # generator dir mounted whole:
     assert f"{cfg.output_dir}:/out" in cmd             # every builder script reachable
-    assert cmd[-4:-1] == ["snapdragon-builder", "bash", "-c"]
+    assert cmd[-4:-1] == ["hugmesh-builder", "bash", "-c"]
     inner = shlex.split(cmd[-1])
     assert inner[0] == f"./{script}"
     assert inner[1:5] == ["-w", "/out", "-j", "4"]
@@ -92,7 +92,7 @@ def test_extra_flags_flow_through_driver(tmp_path):
 
 
 # ---- HEADSCALE_URL env passthrough (G2) -------------------------------------
-# HEADSCALE_URL is env-var-only by design (baked to /etc/snapdragon/headscale-url
+# HEADSCALE_URL is env-var-only by design (baked to /etc/hugmesh/headscale-url
 # by the x86/rpi5/frite builders; NO builder flag exists) — the driver must carry
 # it on BOTH backends: docker via `-e`, native via an `env` wrapper INSIDE the
 # sudo boundary (sudo env_reset would strip a plain export).
@@ -115,7 +115,7 @@ def test_headscale_url_docker_e_flag(tmp_path):
     cmd = BuildDriver(str(tmp_path), host()).command(cfg, "docker")
     i = cmd.index("-e")
     assert cmd[i + 1] == "HEADSCALE_URL=https://hs.acme.example"
-    assert i < cmd.index("snapdragon-builder")          # docker-run arg, not inner argv
+    assert i < cmd.index("hugmesh-builder")          # docker-run arg, not inner argv
     assert "HEADSCALE_URL" not in cmd[-1]               # not in the in-container argv
 
 
@@ -174,7 +174,7 @@ def test_preflight_ok_against_real_repo(tmp_path):
 
 
 # ---- docker builder image preflight ----------------------------------------
-# The Docker backend targets a local image tag ("snapdragon-builder", per
+# The Docker backend targets a local image tag ("hugmesh-builder", per
 # HostInfo.builder_image) that is never built automatically — preflight() must catch a
 # missing image (not just an unreachable daemon) and name the exact fix command, and the
 # GUI needs a boolean to decide whether to offer a "build it now" button.
@@ -188,7 +188,7 @@ def _mock_docker_inspect(monkeypatch, present: bool):
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0 if present else 1)
 
-    monkeypatch.setattr("snapdragon_studio.core.build_driver.subprocess.run", fake_run)
+    monkeypatch.setattr("hugmesh_studio.core.build_driver.subprocess.run", fake_run)
     return calls
 
 
@@ -197,7 +197,7 @@ def test_preflight_no_warning_when_builder_image_present(monkeypatch, tmp_path):
     d = BuildDriver(str(tmp_path), host(has_docker=True))
     cfg = cfg_for("x86", tmp_path)
     problems = d.preflight(cfg, "docker")
-    assert not any("snapdragon-builder" in p for p in problems)
+    assert not any("hugmesh-builder" in p for p in problems)
     assert not d.builder_image_missing("docker")
     assert calls and calls[0][:3] == ["docker", "image", "inspect"]
 
@@ -207,8 +207,8 @@ def test_preflight_warns_with_exact_command_when_builder_image_absent(monkeypatc
     d = BuildDriver(str(tmp_path), host(has_docker=True))
     cfg = cfg_for("x86", tmp_path)
     problems = d.preflight(cfg, "docker")
-    expected_cmd = "docker build -f Dockerfile.build -t snapdragon-builder ."
-    assert any(expected_cmd in p and "snapdragon-builder" in p for p in problems)
+    expected_cmd = "docker build -f Dockerfile.build -t hugmesh-builder ."
+    assert any(expected_cmd in p and "hugmesh-builder" in p for p in problems)
     assert d.builder_image_missing("docker")
 
 
@@ -220,7 +220,7 @@ def test_builder_image_missing_false_when_daemon_unreachable(monkeypatch, tmp_pa
     assert not d.builder_image_missing("docker")
     problems = d.preflight(cfg_for("x86", tmp_path), "docker")
     assert any("daemon is not reachable" in p for p in problems)
-    assert not any("snapdragon-builder' not found" in p for p in problems)
+    assert not any("hugmesh-builder' not found" in p for p in problems)
 
 
 # ---- fleet channel (G39): FleetDriver fronting scripts/build-all-roles.sh ----
@@ -293,7 +293,7 @@ def test_build_builder_image_runs_expected_command(monkeypatch, tmp_path):
     seen = {}
 
     class FakeProc:
-        stdout = iter(["Step 1/5 : FROM gentoo/stage3", "Successfully tagged snapdragon-builder"])
+        stdout = iter(["Step 1/5 : FROM gentoo/stage3", "Successfully tagged hugmesh-builder"])
 
         def wait(self):
             return 0
@@ -303,11 +303,11 @@ def test_build_builder_image_runs_expected_command(monkeypatch, tmp_path):
         seen["cwd"] = kwargs.get("cwd")
         return FakeProc()
 
-    monkeypatch.setattr("snapdragon_studio.core.build_driver.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("hugmesh_studio.core.build_driver.subprocess.Popen", fake_popen)
     lines = []
     code = d.build_builder_image(on_line=lines.append)
     assert code == 0
     assert seen["cmd"] == ["docker", "build", "-f", "Dockerfile.build", "-t",
-                           "snapdragon-builder", "."]
+                           "hugmesh-builder", "."]
     assert seen["cwd"] == gen
-    assert lines == ["Step 1/5 : FROM gentoo/stage3", "Successfully tagged snapdragon-builder"]
+    assert lines == ["Step 1/5 : FROM gentoo/stage3", "Successfully tagged hugmesh-builder"]

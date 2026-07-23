@@ -1,11 +1,11 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: snapdragon-forum
+namespace: hugmesh-forum
 resources:
   - namespace.yaml
   - network-policy.yaml     # default-deny + ingress only forum-bff/admin-bff/sync
   - phpbb-db.yaml           # Postgres 16 (hardened, least-privilege app role)
-  - phpbb.yaml              # phpBB + snapdragon/forum-api extension (backend-only)
+  - phpbb.yaml              # phpBB + hugmesh/forum-api extension (backend-only)
   - admin-sync-job.yaml     # Casdoor roles -> phpBB groups (declarative, stub-aware)
 
 # phpbb-db owns its hardening + the least-privilege app login role via initdb
@@ -24,12 +24,12 @@ configMapGenerator:
 generatorOptions:
   disableNameSuffixHash: true
 
-# The custom phpBB image (official phpBB + the baked snapdragon/forum-api extension)
+# The custom phpBB image (official phpBB + the baked hugmesh/forum-api extension)
 # pulls from the in-cluster Harbor container registry, like the first-party BFFs.
 # The CI in the phpBB image repo pushes :<branch> + :<sha>; we track :main for dev.
 # Pulls need the harbor-registry imagePullSecret (ESO-materialized).
 images:
-  - { name: snapdragon-systems/phpbb, newName: registry.snapdragon.systems/snapdragon/snapdragon-phpbb, newTag: main }
+  - { name: snapdragon-systems/phpbb, newName: registry.hugmesh.systems/hugmesh/hugmesh-phpbb, newTag: main }
 patches:
   # Add the harbor-registry pull secret to the phpbb workload (the python sync Job
   # pulls the public python:3.12-alpine, so scope the patch to the phpbb Deployment).

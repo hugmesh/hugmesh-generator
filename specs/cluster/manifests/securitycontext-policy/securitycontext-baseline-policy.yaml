@@ -2,7 +2,7 @@
 # Kyverno ClusterPolicy — Pod securityContext baseline (AUDIT / report-only).
 # =============================================================================
 # The GITOPS/ADMISSION layer of the container-hardening invariant. The audit
-# (snapdragon-pentest-standard: CIS K8s 5.2/5.3, NIST 800-190 §4.5, NIST 800-53
+# (hugmesh-pentest-standard: CIS K8s 5.2/5.3, NIST 800-190 §4.5, NIST 800-53
 # AC-6/SC-39) found that workloads set only POD-level seLinuxOptions and had NO
 # container-level securityContext, and that no admission policy enforced the
 # hardened pattern the media-poisoner exemplar already follows (runAsNonRoot +
@@ -22,7 +22,7 @@
 # the reserved-prefixes-policy ArgoCD Application (apps/16-reserved-prefixes-
 # policy.yaml -> manifests/policy), the same bundle as the reserved-prefix guard.
 #
-# SCOPE: only the Snapdragon application namespaces (snapdragon-*, devops). The
+# SCOPE: only the HugMesh application namespaces (hugmesh-*, devops). The
 # kube-system / kyverno / calico-system / ingress-nginx system namespaces are
 # excluded — their components legitimately need root/host access and are governed
 # by their own upstream charts.
@@ -31,17 +31,17 @@ kind: ClusterPolicy
 metadata:
   name: securitycontext-baseline
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     app.kubernetes.io/component: policy
   annotations:
     policies.kyverno.io/title: Pod securityContext baseline (audit)
-    policies.kyverno.io/category: Snapdragon Hardening
+    policies.kyverno.io/category: HugMesh Hardening
     policies.kyverno.io/severity: medium
     policies.kyverno.io/subject: Pod, Deployment, StatefulSet, DaemonSet, Job
     snapdragon.systems/control-ids: "CIS-K8s-5.2.5,5.2.6,5.2.7,5.2.8,5.2.9,5.3.2;NIST-800-190-4.5;NIST-800-53-AC-6,SC-39"
     policies.kyverno.io/description: >-
       Report-only (Audit) baseline asserting the media-poisoner hardened pattern
-      across the Snapdragon app namespaces: runAsNonRoot, every container drops
+      across the HugMesh app namespaces: runAsNonRoot, every container drops
       ALL capabilities, allowPrivilegeEscalation:false, seccompProfile
       RuntimeDefault, and automountServiceAccountToken:false. Reports drift; does
       NOT block. The Audit -> Enforce flip is sequenced in
@@ -63,10 +63,10 @@ spec:
           - resources:
               kinds: [Pod]
               namespaces:
-                - snapdragon-pki
-                - snapdragon-backend
-                - snapdragon-frontend
-                - snapdragon-games
+                - hugmesh-pki
+                - hugmesh-backend
+                - hugmesh-frontend
+                - hugmesh-games
                 - devops
       validate:
         message: >-
@@ -91,10 +91,10 @@ spec:
           - resources:
               kinds: [Pod]
               namespaces:
-                - snapdragon-pki
-                - snapdragon-backend
-                - snapdragon-frontend
-                - snapdragon-games
+                - hugmesh-pki
+                - hugmesh-backend
+                - hugmesh-frontend
+                - hugmesh-games
                 - devops
       validate:
         message: >-
@@ -122,10 +122,10 @@ spec:
           - resources:
               kinds: [Pod]
               namespaces:
-                - snapdragon-pki
-                - snapdragon-backend
-                - snapdragon-frontend
-                - snapdragon-games
+                - hugmesh-pki
+                - hugmesh-backend
+                - hugmesh-frontend
+                - hugmesh-games
                 - devops
       validate:
         message: >-
@@ -154,10 +154,10 @@ spec:
           - resources:
               kinds: [Pod]
               namespaces:
-                - snapdragon-pki
-                - snapdragon-backend
-                - snapdragon-frontend
-                - snapdragon-games
+                - hugmesh-pki
+                - hugmesh-backend
+                - hugmesh-frontend
+                - hugmesh-games
                 - devops
       validate:
         message: >-

@@ -1,6 +1,6 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# ESO config: the ClusterSecretStore "snapdragon-vault" + one ExternalSecret per
+# ESO config: the ClusterSecretStore "hugmesh-vault" + one ExternalSecret per
 # k8s Secret materialized from Vault. The ESO controller + CRDs themselves are
 # installed via Helm (apps/03-external-secrets.yaml).
 resources:
@@ -41,12 +41,12 @@ resources:
   # AttestationServer (GrapheneOS Hardware Trust Root) — DEFAULT-OFF optional-
   # service (slug attestation-server, optional-services.yaml). ONE ExternalSecret
   # (attestation-server-smtp) reusing the EXISTING shared outbound-mail Vault doc
-  # (secret/snapdragon/mail) — same document casdoor-smtp/akkoma-smtp already
+  # (secret/hugmesh/mail) — same document casdoor-smtp/akkoma-smtp already
   # read; no new Vault path. Deselecting attestation-server prunes THIS line +
   # the file via gate_optional_services(), same mechanism as headwind above.
   - attestation-server-externalsecrets.yaml   # attestation-server-smtp
   # coturn TURN/STUN long-term-credential SHARED SECRET (key `secret`), ESO/Vault
-  # only (secret/snapdragon/coturn-shared-secret) — NEVER inline. Materializes only
+  # only (secret/hugmesh/coturn-shared-secret) — NEVER inline. Materializes only
   # once that Vault path is populated; coturn is DEFAULT-OFF so a default build never
   # mounts it. The SAME Secret is consumed by both coturn (validates client creds)
   # and tuwunel (mints them) so there is one source of truth and no drift.
@@ -56,11 +56,11 @@ resources:
   # never inline. Materializes only once the velero namespace exists + the Vault
   # path is populated (ships dark with the rest of the cloud-backups feature).
   - velero-externalsecrets.yaml    # velero-cloud-credentials
-  # image-builder PUSH credential (ns snapdragon-image-builds, dockerconfigjson) —
+  # image-builder PUSH credential (ns hugmesh-image-builds, dockerconfigjson) —
   # now sourced from the Harbor PUSH-scoped robot account (distinct from the
   # harbor-registry pull-scoped robot secret above) that
   # manifests/harbor/harbor-provision-job.yaml mints and writes to
-  # secret/snapdragon/harbor-robots (push_name/push_secret). ESO/Vault only;
+  # secret/hugmesh/harbor-robots (push_name/push_secret). ESO/Vault only;
   # inert until the opt-in apps-optional/60-image-builder.yaml Application
   # creates the namespace (ships dark).
   - image-builder-externalsecrets.yaml   # image-builder-registry
@@ -72,11 +72,11 @@ resources:
   # never renders it: an operator uncomments this line AND sets
   # app.phone-lock.azure-intune.enabled=true on admin-bff to opt in. See
   # docs/MDM.md "MDM providers" + azure-intune-externalsecrets.yaml's header.
-  # - azure-intune-externalsecrets.yaml   # azure-intune-phone-lock (ns snapdragon-backend)
+  # - azure-intune-externalsecrets.yaml   # azure-intune-phone-lock (ns hugmesh-backend)
   # SSO OIDC secrets — user-bff OIDC client credential (user-bff-oidc, ns
-  # snapdragon-backend) + token custody key (user-bff-custody-key, ns
-  # snapdragon-backend) + shared BFF back-channel token (bff-internal-token,
-  # in BOTH snapdragon-backend AND snapdragon-frontend for gateway→admin-bff
-  # BffSessionAuthFilter). Vault paths: secret/snapdragon/user-bff-oidc,
-  # secret/snapdragon/user-bff-custody-key, secret/snapdragon/bff-internal-token.
+  # hugmesh-backend) + token custody key (user-bff-custody-key, ns
+  # hugmesh-backend) + shared BFF back-channel token (bff-internal-token,
+  # in BOTH hugmesh-backend AND hugmesh-frontend for gateway→admin-bff
+  # BffSessionAuthFilter). Vault paths: secret/hugmesh/user-bff-oidc,
+  # secret/hugmesh/user-bff-custody-key, secret/hugmesh/bff-internal-token.
   - sso-externalsecrets.yaml

@@ -1,12 +1,12 @@
 # Casdoor identity provider on an EXTERNAL Postgres (casdoor-pg) — no longer the
-# all-in-one bundled DB. Issues the OAuth2/OIDC JWTs every snapdragon-*-gateway
+# all-in-one bundled DB. Issues the OAuth2/OIDC JWTs every hugmesh-*-gateway
 # validates. Federated registration via Google + admin-created accounts.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: casdoor
-  namespace: snapdragon-pki
-  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }

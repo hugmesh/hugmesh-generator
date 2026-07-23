@@ -80,7 +80,7 @@
             "role": "standalone-thick"
           },
           {
-            "label": "Unaffiliated desktop \u2014 plain Gentoo, no Snapdragon (zero branding/tooling baked)",
+            "label": "Unaffiliated desktop \u2014 plain Gentoo, no HugMesh (zero branding/tooling baked)",
             "role": "standalone-unaffiliated"
           },
           {
@@ -154,7 +154,7 @@
             "role": "standalone-thick"
           },
           {
-            "label": "Unaffiliated desktop \u2014 plain Gentoo, no Snapdragon (zero branding/tooling baked)",
+            "label": "Unaffiliated desktop \u2014 plain Gentoo, no HugMesh (zero branding/tooling baked)",
             "role": "standalone-unaffiliated"
           },
           {
@@ -1631,7 +1631,7 @@
       },
       {
         "image_class": "desktop",
-        "label": "Unaffiliated desktop \u2014 plain Gentoo, no Snapdragon (zero branding/tooling baked)",
+        "label": "Unaffiliated desktop \u2014 plain Gentoo, no HugMesh (zero branding/tooling baked)",
         "platforms": [
           {
             "axes": {

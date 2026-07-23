@@ -30,25 +30,25 @@ const eff = (username: string) => {
 
 const CASES: Case[] = [
   // ── fe-gateway /admin/** = ROLE_ADMIN ───────────────────────────────────
-  { gw: 'snapdragon-fe-gateway', path: '/admin/usage', user: 'e2e-admin', expect: 'ALLOW', why: 'admin reaches the admin UI' },
-  { gw: 'snapdragon-fe-gateway', path: '/admin/usage', user: 'e2e-adminonly', expect: 'ALLOW', why: 'ROLE_ADMIN alone reaches /admin' },
-  { gw: 'snapdragon-fe-gateway', path: '/admin/usage', user: 'e2e-mod', expect: 'DENY', why: 'ROLE_MOD is NOT a superset of admin' },
-  { gw: 'snapdragon-fe-gateway', path: '/admin/usage', user: 'e2e-gamesonly', expect: 'DENY', why: 'plain games member denied admin UI' },
-  { gw: 'snapdragon-fe-gateway', path: '/admin/usage', user: 'e2e-user', expect: 'DENY', why: 'plain user denied admin UI' },
+  { gw: 'hugmesh-fe-gateway', path: '/admin/usage', user: 'e2e-admin', expect: 'ALLOW', why: 'admin reaches the admin UI' },
+  { gw: 'hugmesh-fe-gateway', path: '/admin/usage', user: 'e2e-adminonly', expect: 'ALLOW', why: 'ROLE_ADMIN alone reaches /admin' },
+  { gw: 'hugmesh-fe-gateway', path: '/admin/usage', user: 'e2e-mod', expect: 'DENY', why: 'ROLE_MOD is NOT a superset of admin' },
+  { gw: 'hugmesh-fe-gateway', path: '/admin/usage', user: 'e2e-gamesonly', expect: 'DENY', why: 'plain games member denied admin UI' },
+  { gw: 'hugmesh-fe-gateway', path: '/admin/usage', user: 'e2e-user', expect: 'DENY', why: 'plain user denied admin UI' },
 
   // ── be-gateway /api/admin/** = ROLE_ADMIN (NOT ROLE_MOD) ────────────────
-  { gw: 'snapdragon-be-gateway', path: '/api/admin/route-access', user: 'e2e-admin', expect: 'ALLOW', why: 'admin reaches the admin API' },
-  { gw: 'snapdragon-be-gateway', path: '/api/admin/route-access', user: 'e2e-mod', expect: 'DENY', why: 'mod DENIED the snapdragon admin API' },
-  { gw: 'snapdragon-be-gateway', path: '/api/admin/route-access', user: 'e2e-user', expect: 'DENY', why: 'user DENIED the admin API' },
+  { gw: 'hugmesh-be-gateway', path: '/api/admin/route-access', user: 'e2e-admin', expect: 'ALLOW', why: 'admin reaches the admin API' },
+  { gw: 'hugmesh-be-gateway', path: '/api/admin/route-access', user: 'e2e-mod', expect: 'DENY', why: 'mod DENIED the hugmesh admin API' },
+  { gw: 'hugmesh-be-gateway', path: '/api/admin/route-access', user: 'e2e-user', expect: 'DENY', why: 'user DENIED the admin API' },
 
   // ── fe-gateway /bff/admin/** = ROLE_ADMIN ───────────────────────────────
-  { gw: 'snapdragon-fe-gateway', path: '/bff/admin/allowlist', user: 'e2e-admin', expect: 'ALLOW', why: 'admin reaches the BFF admin allowlist' },
-  { gw: 'snapdragon-fe-gateway', path: '/bff/admin/allowlist', user: 'e2e-mod', expect: 'DENY', why: 'mod DENIED /bff/admin (stays ROLE_ADMIN)' },
+  { gw: 'hugmesh-fe-gateway', path: '/bff/admin/allowlist', user: 'e2e-admin', expect: 'ALLOW', why: 'admin reaches the BFF admin allowlist' },
+  { gw: 'hugmesh-fe-gateway', path: '/bff/admin/allowlist', user: 'e2e-mod', expect: 'DENY', why: 'mod DENIED /bff/admin (stays ROLE_ADMIN)' },
 
   // ── be-gateway akkoma moderation = ROLE_MOD (or ROLE_ADMIN superset) ─────
-  { gw: 'snapdragon-be-gateway', path: '/api/v1/pleroma/admin/config', user: 'e2e-mod', expect: 'ALLOW', why: 'mod reaches akkoma moderation REST' },
-  { gw: 'snapdragon-be-gateway', path: '/api/v1/pleroma/admin/config', user: 'e2e-admin', expect: 'ALLOW', why: 'admin (superset) reaches akkoma moderation' },
-  { gw: 'snapdragon-be-gateway', path: '/api/v1/pleroma/admin/config', user: 'e2e-user', expect: 'DENY', why: 'plain user DENIED akkoma moderation' },
+  { gw: 'hugmesh-be-gateway', path: '/api/v1/pleroma/admin/config', user: 'e2e-mod', expect: 'ALLOW', why: 'mod reaches akkoma moderation REST' },
+  { gw: 'hugmesh-be-gateway', path: '/api/v1/pleroma/admin/config', user: 'e2e-admin', expect: 'ALLOW', why: 'admin (superset) reaches akkoma moderation' },
+  { gw: 'hugmesh-be-gateway', path: '/api/v1/pleroma/admin/config', user: 'e2e-user', expect: 'DENY', why: 'plain user DENIED akkoma moderation' },
 
   // ── be-gateway Matrix/Mastodon PLATFORM-ACCESS floor (commit 0100d3b) ────
   // The broad ROLE_USER homeserver floor was REMOVED and replaced by the
@@ -59,26 +59,26 @@ const CASES: Case[] = [
   // platform-access personas (rbac-roles.ts) that model "a plain member who has
   // been granted their own homeserver" — the real successor to the old bare-
   // ROLE_USER expectation.
-  { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', user: 'e2e-mod', expect: 'ALLOW', why: 'mod is a paired superset on the ROLE_MATRIX-gated row (not auto-granted ROLE_USER)' },
-  { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', user: 'e2e-matrix', expect: 'ALLOW', why: 'ROLE_MATRIX holder reaches Matrix C-S API' },
-  { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', user: 'e2e-user', expect: 'DENY', why: 'plain ROLE_USER (no ROLE_MATRIX) no longer reaches the Matrix homeserver floor' },
-  { gw: 'snapdragon-be-gateway', path: '/api/v1/timelines/home', user: 'e2e-mod', expect: 'ALLOW', why: 'mod is a paired superset on the ROLE_MASTODON-gated row' },
-  { gw: 'snapdragon-be-gateway', path: '/api/v1/timelines/home', user: 'e2e-mastodon', expect: 'ALLOW', why: 'ROLE_MASTODON holder reaches Mastodon REST API' },
-  { gw: 'snapdragon-be-gateway', path: '/api/v1/timelines/home', user: 'e2e-user', expect: 'DENY', why: 'plain ROLE_USER (no ROLE_MASTODON) no longer reaches the Mastodon homeserver floor' },
+  { gw: 'hugmesh-be-gateway', path: '/_matrix/client/v3/sync', user: 'e2e-mod', expect: 'ALLOW', why: 'mod is a paired superset on the ROLE_MATRIX-gated row (not auto-granted ROLE_USER)' },
+  { gw: 'hugmesh-be-gateway', path: '/_matrix/client/v3/sync', user: 'e2e-matrix', expect: 'ALLOW', why: 'ROLE_MATRIX holder reaches Matrix C-S API' },
+  { gw: 'hugmesh-be-gateway', path: '/_matrix/client/v3/sync', user: 'e2e-user', expect: 'DENY', why: 'plain ROLE_USER (no ROLE_MATRIX) no longer reaches the Matrix homeserver floor' },
+  { gw: 'hugmesh-be-gateway', path: '/api/v1/timelines/home', user: 'e2e-mod', expect: 'ALLOW', why: 'mod is a paired superset on the ROLE_MASTODON-gated row' },
+  { gw: 'hugmesh-be-gateway', path: '/api/v1/timelines/home', user: 'e2e-mastodon', expect: 'ALLOW', why: 'ROLE_MASTODON holder reaches Mastodon REST API' },
+  { gw: 'hugmesh-be-gateway', path: '/api/v1/timelines/home', user: 'e2e-user', expect: 'DENY', why: 'plain ROLE_USER (no ROLE_MASTODON) no longer reaches the Mastodon homeserver floor' },
 
   // ── GAMES-ADMIN GATE — the heart of the requirement ─────────────────────
   // /games/admin/** (fe) + /games/api/admin/** (be) = ROLE_GAMES_ADMIN ONLY.
-  { gw: 'snapdragon-fe-gateway', path: '/games/admin/sessions', user: 'e2e-gamesadmin', expect: 'ALLOW', why: 'ROLE_GAMES ∩ ROLE_ADMIN earned ROLE_GAMES_ADMIN -> reaches games admin UI' },
-  { gw: 'snapdragon-fe-gateway', path: '/games/admin/sessions', user: 'e2e-gamesonly', expect: 'DENY', why: 'ROLE_GAMES alone is NOT games-admin (default-deny)' },
-  { gw: 'snapdragon-fe-gateway', path: '/games/admin/sessions', user: 'e2e-adminonly', expect: 'DENY', why: 'ROLE_ADMIN alone is NOT games-admin (default-deny)' },
-  { gw: 'snapdragon-fe-gateway', path: '/games/admin/sessions', user: 'e2e-mod', expect: 'DENY', why: 'ROLE_MOD alone is NOT games-admin' },
-  { gw: 'snapdragon-be-gateway', path: '/games/api/admin/role-grants', user: 'e2e-gamesadmin', expect: 'ALLOW', why: 'derived ROLE_GAMES_ADMIN reaches games admin API' },
-  { gw: 'snapdragon-be-gateway', path: '/games/api/admin/role-grants', user: 'e2e-gamesonly', expect: 'DENY', why: 'ROLE_GAMES alone denied games admin API' },
-  { gw: 'snapdragon-be-gateway', path: '/games/api/admin/role-grants', user: 'e2e-adminonly', expect: 'DENY', why: 'ROLE_ADMIN alone denied games admin API' },
+  { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions', user: 'e2e-gamesadmin', expect: 'ALLOW', why: 'ROLE_GAMES ∩ ROLE_ADMIN earned ROLE_GAMES_ADMIN -> reaches games admin UI' },
+  { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions', user: 'e2e-gamesonly', expect: 'DENY', why: 'ROLE_GAMES alone is NOT games-admin (default-deny)' },
+  { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions', user: 'e2e-adminonly', expect: 'DENY', why: 'ROLE_ADMIN alone is NOT games-admin (default-deny)' },
+  { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions', user: 'e2e-mod', expect: 'DENY', why: 'ROLE_MOD alone is NOT games-admin' },
+  { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants', user: 'e2e-gamesadmin', expect: 'ALLOW', why: 'derived ROLE_GAMES_ADMIN reaches games admin API' },
+  { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants', user: 'e2e-gamesonly', expect: 'DENY', why: 'ROLE_GAMES alone denied games admin API' },
+  { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants', user: 'e2e-adminonly', expect: 'DENY', why: 'ROLE_ADMIN alone denied games admin API' },
 
   // ── default-deny: an unmapped path is DENY for everyone, even admin ──────
-  { gw: 'snapdragon-be-gateway', path: '/infra/logs', user: 'e2e-admin', expect: 'DENY', why: 'no route row -> default-deny (infra/logs has no external route)' },
-  { gw: 'snapdragon-be-gateway', path: '/infra/logs', user: 'e2e-mod', expect: 'DENY', why: 'mod has no infra/logs route' },
+  { gw: 'hugmesh-be-gateway', path: '/infra/logs', user: 'e2e-admin', expect: 'DENY', why: 'no route row -> default-deny (infra/logs has no external route)' },
+  { gw: 'hugmesh-be-gateway', path: '/infra/logs', user: 'e2e-mod', expect: 'DENY', why: 'mod has no infra/logs route' },
 ];
 
 test.describe('RBAC: gateway route-access ALLOW/DENY (schema.sql contract)', () => {
@@ -93,13 +93,13 @@ test.describe('RBAC: gateway route-access ALLOW/DENY (schema.sql contract)', () 
     // Cross-check the gate property directly: no single granted role admits the
     // games-admin surface; only the derived intersection role does.
     for (const single of ['ROLE_GAMES', 'ROLE_ADMIN', 'ROLE_MOD', 'ROLE_USER']) {
-      expect(gatewayDecision('snapdragon-fe-gateway', '/games/admin/x', [single]),
+      expect(gatewayDecision('hugmesh-fe-gateway', '/games/admin/x', [single]),
         `${single} alone must NOT reach /games/admin`).toBe('DENY');
-      expect(gatewayDecision('snapdragon-be-gateway', '/games/api/admin/x', [single]),
+      expect(gatewayDecision('hugmesh-be-gateway', '/games/api/admin/x', [single]),
         `${single} alone must NOT reach /games/api/admin`).toBe('DENY');
     }
-    expect(gatewayDecision('snapdragon-fe-gateway', '/games/admin/x', ['ROLE_GAMES_ADMIN'])).toBe('ALLOW');
-    expect(gatewayDecision('snapdragon-be-gateway', '/games/api/admin/x', ['ROLE_GAMES_ADMIN'])).toBe('ALLOW');
+    expect(gatewayDecision('hugmesh-fe-gateway', '/games/admin/x', ['ROLE_GAMES_ADMIN'])).toBe('ALLOW');
+    expect(gatewayDecision('hugmesh-be-gateway', '/games/api/admin/x', ['ROLE_GAMES_ADMIN'])).toBe('ALLOW');
   });
 
   test('every seed user has a consistent effective role-set vs its expectGamesAdmin flag', async () => {

@@ -1,4 +1,4 @@
-# HorizontalPodAutoscaler for snapdragon-mod-ui. Modelled byte-for-byte on
+# HorizontalPodAutoscaler for hugmesh-mod-ui. Modelled byte-for-byte on
 # manifests/remote-fragment/hpa.yaml (the first HPA in the cluster): plain
 # autoscaling/v2, Resource metrics only. The mod UI is a stateless static nginx server, so it scales out cleanly under load.
 #
@@ -11,14 +11,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: snapdragon-mod-ui
-  namespace: snapdragon-frontend
-  labels: { app: snapdragon-mod-ui, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-mod-ui
+  namespace: hugmesh-frontend
+  labels: { app: hugmesh-mod-ui, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-mod-ui
+    name: hugmesh-mod-ui
   minReplicas: 2
   maxReplicas: 6
   metrics:

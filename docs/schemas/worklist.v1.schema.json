@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://snapdragon.systems/schemas/worklist.v1.schema.json",
-  "title": "Snapdragon worklist envelope (v1)",
+  "$id": "https://hugmesh.systems/schemas/worklist.v1.schema.json",
+  "title": "HugMesh worklist envelope (v1)",
   "description": "The frozen wire format for a mesh build worklist: an envelope around one base ImageConfig plus a list of per-image entries (one per role x platform). Emitted by the Studio (core/worklist.py WorklistConfig.to_dict) and the web admin-ui; validated by a Studio test AND the admin-bff bean validator (spec item 10). The `schema` key is the mandatory discriminator: ImageConfig.load rejects any JSON carrying it, and worklist.load_any routes it here. Anything WITHOUT a top-level `schema` key is a flat single-image ImageConfig and is NOT described by this schema.",
   "type": "object",
   "required": ["schema", "base", "entries"],
@@ -9,7 +9,7 @@
   "properties": {
     "schema": {
       "description": "Version discriminator. MUST be present and exact for the envelope to be recognized.",
-      "const": "snapdragon-worklist/v1"
+      "const": "hugmesh-worklist/v1"
     },
     "base": {
       "$ref": "#/$defs/imageConfig"

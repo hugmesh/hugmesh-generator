@@ -1,13 +1,13 @@
 # ClusterIP only — reachable solely through the fe-gateway's /bff/user/** route, so
-# /bff is same-origin with snapdragon.systems and is role-checked at the gateway.
+# /bff is same-origin with hugmesh.systems and is role-checked at the gateway.
 apiVersion: v1
 kind: Service
 metadata:
-  name: snapdragon-user-bff-api
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-user-bff-api }
+  name: hugmesh-user-bff-api
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-user-bff-api }
 spec:
   type: ClusterIP
-  selector: { app: snapdragon-user-bff-api }
+  selector: { app: hugmesh-user-bff-api }
   ports:
     - { name: http, port: 8080, targetPort: http }

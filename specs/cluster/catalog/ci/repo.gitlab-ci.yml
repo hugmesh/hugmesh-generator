@@ -2,7 +2,7 @@
 # repo.gitlab-ci.yml — the per-repo CI template the generator EMITS for repos
 # onboarded into the ArgoCD pipeline (the service-catalog ApplicationSet
 # apps/13-service-catalog.yaml + the per-brand handlebars-generated repos, see
-# memory snapdragon-multitenancy 3d + snapdragon-superadmin-appstore).
+# memory hugmesh-multitenancy 3d + hugmesh-superadmin-appstore).
 #
 # WHAT IT DOES: drop this file in (as `.gitlab-ci.yml`) when onboarding a repo —
 # either a per-brand generated repo or a service added through the superadmin
@@ -28,7 +28,7 @@
 # =============================================================================
 
 include:
-  - project: 'Snapdragon-Systems/snapdragon-generator'
+  - project: 'Snapdragon-Systems/hugmesh-generator'
     ref: main
     file: '/tests/pentest/ci/pentest-stage.gitlab-ci.yml'
 

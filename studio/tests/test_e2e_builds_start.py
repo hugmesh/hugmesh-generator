@@ -28,19 +28,19 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core.build_driver import BuildDriver as RealBuildDriver  # noqa: E402
-from snapdragon_studio.core.config import UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS   # noqa: E402
-from snapdragon_studio.core.mesh_node import MeshNode                            # noqa: E402
-from snapdragon_studio.core.platform_info import HostInfo                        # noqa: E402
-from snapdragon_studio.core import mesh_node as mesh_node_mod                    # noqa: E402
-from snapdragon_studio.core import worklist_driver as wd                         # noqa: E402
-from snapdragon_studio.gui import wizard as wizard_mod                           # noqa: E402
-from snapdragon_studio.gui.pages import ModePage                                 # noqa: E402
-from snapdragon_studio.gui.pages import localmesh as localmesh_mod               # noqa: E402
-from snapdragon_studio.gui.qt import Qt, QtWidgets                               # noqa: E402
+from hugmesh_studio.core.build_driver import BuildDriver as RealBuildDriver  # noqa: E402
+from hugmesh_studio.core.config import UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS   # noqa: E402
+from hugmesh_studio.core.mesh_node import MeshNode                            # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo                        # noqa: E402
+from hugmesh_studio.core import mesh_node as mesh_node_mod                    # noqa: E402
+from hugmesh_studio.core import worklist_driver as wd                         # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod                           # noqa: E402
+from hugmesh_studio.gui.pages import ModePage                                 # noqa: E402
+from hugmesh_studio.gui.pages import localmesh as localmesh_mod               # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtWidgets                               # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -49,26 +49,26 @@ GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 # and the build would never start (mirrors test_pages_progress's HOST). Native backend so
 # the dispatched argv is `bash ./<script> …` with no sudo prefix.
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
-                has_kvm=False, is_root=True, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=True, builder_image="hugmesh-builder")
 
 
 # ── shared fixtures (copied from test_pages_progress.py / test_wizard.py) ──────────────
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
-    # ProgressPage writes a tray build-status file — keep it out of the real ~/.snapdragon.
-    monkeypatch.setenv("SNAPDRAGON_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    # ProgressPage writes a tray build-status file — keep it out of the real ~/.hugmesh.
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture
@@ -353,7 +353,7 @@ def test_localmesh_launch_dispatches_compose_up(qapp, tmp_path, monkeypatch):
     dispatches with NO TS_AUTHKEY in os.environ, and the effective key reaches the
     subprocess env."""
     monkeypatch.delenv("TS_AUTHKEY", raising=False)   # prove start() no longer needs it in env
-    monkeypatch.setenv("HOME", str(tmp_path))         # isolate the default ~/.snapdragon workdir
+    monkeypatch.setenv("HOME", str(tmp_path))         # isolate the default ~/.hugmesh workdir
     monkeypatch.setattr(mesh_node_mod, "_compose_base", lambda: ["docker", "compose"])
 
     calls = []

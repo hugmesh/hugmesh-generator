@@ -13,10 +13,10 @@ PromQL query down to an `autoscaling/v2` HPA via KEDA's metrics-apiserver.
 
 | ScaledObject | Target Deployment | Namespace | min/max | trigger threshold |
 |---|---|---|---|---|
-| `snapdragon-fe-gateway-latency`   | `snapdragon-fe-gateway`   | `snapdragon-frontend` | 2 / 8 | 50 rps/replica |
-| `snapdragon-be-gateway-latency`   | `snapdragon-be-gateway`   | `snapdragon-backend`  | 2 / 8 | 50 rps/replica |
-| `snapdragon-admin-bff-api-latency`| `snapdragon-admin-bff-api`| `snapdragon-backend`  | 2 / 6 | 40 rps/replica |
-| `snapdragon-user-bff-api-latency` | `snapdragon-user-bff-api` | `snapdragon-backend`  | 2 / 6 | 60 rps/replica |
+| `hugmesh-fe-gateway-latency`   | `hugmesh-fe-gateway`   | `hugmesh-frontend` | 2 / 8 | 50 rps/replica |
+| `hugmesh-be-gateway-latency`   | `hugmesh-be-gateway`   | `hugmesh-backend`  | 2 / 8 | 50 rps/replica |
+| `hugmesh-admin-bff-api-latency`| `hugmesh-admin-bff-api`| `hugmesh-backend`  | 2 / 6 | 40 rps/replica |
+| `hugmesh-user-bff-api-latency` | `hugmesh-user-bff-api` | `hugmesh-backend`  | 2 / 6 | 60 rps/replica |
 
 The metric is `http_server_requests_seconds_count` — the Micrometer/Spring Boot
 Actuator server-request counter every first-party app already emits;

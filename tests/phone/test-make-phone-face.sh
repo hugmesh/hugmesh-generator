@@ -118,13 +118,13 @@ echo "-- 2) phone-mdm-enroll knob threading --"
 run_make phone-mdm-enroll \
   HEADWIND_APK=/apks/hmdm-dpc.apk \
   HEADWIND_SIGNER_SHA256=aa11bb22cc33dd44 \
-  HEADWIND_URL=https://superadmin.snapdragon.systems/hmdm \
+  HEADWIND_URL=https://superadmin.hugmesh.systems/hmdm \
   SERIAL=SERIAL123
 if [ "${RC}" -eq 0 ] && argv_is mdm-enroll --work-dir "${WD}" \
      --serial SERIAL123 \
      --headwind-apk /apks/hmdm-dpc.apk \
      --headwind-signer-sha256 aa11bb22cc33dd44 \
-     --headwind-url https://superadmin.snapdragon.systems/hmdm; then
+     --headwind-url https://superadmin.hugmesh.systems/hmdm; then
   ok "(2) HEADWIND_APK/HEADWIND_SIGNER_SHA256/HEADWIND_URL/SERIAL -> exact wizard argv"
 else
   bad "(2) phone-mdm-enroll rc=${RC} $(argv_show)"
@@ -135,11 +135,11 @@ echo "-- 3) phone-attest knob threading --"
 run_make phone-attest \
   AUDITOR_APK=/apks/auditor-fork.apk \
   AUDITOR_SIGNER_SHA256=ee55ff66aa77bb88 \
-  ATTESTATION_URL=https://superadmin.snapdragon.systems/attest
+  ATTESTATION_URL=https://superadmin.hugmesh.systems/attest
 if [ "${RC}" -eq 0 ] && argv_is attest --work-dir "${WD}" \
      --auditor-apk /apks/auditor-fork.apk \
      --auditor-signer-sha256 ee55ff66aa77bb88 \
-     --attestation-url https://superadmin.snapdragon.systems/attest; then
+     --attestation-url https://superadmin.hugmesh.systems/attest; then
   ok "(3) AUDITOR_APK/AUDITOR_SIGNER_SHA256/ATTESTATION_URL -> exact wizard argv"
 else
   bad "(3) phone-attest rc=${RC} $(argv_show)"

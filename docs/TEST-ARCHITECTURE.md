@@ -96,7 +96,7 @@ The role/RBAC e2e coverage is **partial**:
   (12–18).
 - ⏳ **Remaining:** there is **no full systems × games × forum cross-realm role
   matrix** yet (every role asserted across all three realms). The two-Casdoor
-  (systems `snapdragon` / games `threewizards`) boundary is exercised only at the
+  (systems `hugmesh` / games `threewizards`) boundary is exercised only at the
   superadmin edge today.
 
 ## The non-federation proof (domain-lock)

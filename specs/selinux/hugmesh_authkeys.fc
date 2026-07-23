@@ -1,0 +1,15 @@
+# hugmesh_authkeys.fc
+# Label the device-registry AuthorizedKeysCommand binary as the entrypoint
+# of hugmesh_authkeys_t, and the signed-export cache it reads as
+# hugmesh_authkeys_cache_t (sshd_t->hugmesh_authkeys_t domtrans + the
+# nobody-domain read in the .te then apply). provision_selinux()'s
+# first-boot relabel (setfiles / restorecon -RF /) applies these.
+#
+# The binary is copied to /usr/sbin by the (protected) build script; the
+# signed export + baked public key + node.env live under
+# /etc/hugmesh/registry (staged by provision_device_registry + written
+# by the sync agent).
+
+/usr/sbin/hugmesh-authorized-keys-lookup    --    gen_context(system_u:object_r:hugmesh_authkeys_exec_t,s0)
+
+/etc/hugmesh/registry(/.*)?                       gen_context(system_u:object_r:hugmesh_authkeys_cache_t,s0)

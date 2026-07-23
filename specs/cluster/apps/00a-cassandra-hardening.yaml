@@ -39,13 +39,13 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     # EMPTY overlay (renders nothing). Flip to manifests/cassandra-hardening to enable.
     path: specs/cluster/manifests/cassandra-hardening-empty
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-pki
+    namespace: hugmesh-pki
   # NO syncPolicy.automated — MANUAL sync only. Never auto-applies / self-heals /
   # prunes. Operator syncs deliberately at the flip step.
   syncPolicy:

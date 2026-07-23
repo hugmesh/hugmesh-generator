@@ -80,7 +80,7 @@ HOSTILE_PASS='p@ss|w&r<d>'\''"\5 end'
 run_ep() {  # run_ep [extra VAR=VAL...] -- cmd...
     env PATH="${SB}/bin:${PATH}" \
         SQL_HOST=headwind-db.example SQL_PORT=5432 SQL_BASE=headwind SQL_USER=headwind \
-        SQL_PASS="${HOSTILE_PASS}" PROTOCOL=http BASE_DOMAIN=superadmin.snapdragon.systems \
+        SQL_PASS="${HOSTILE_PASS}" PROTOCOL=http BASE_DOMAIN=superadmin.hugmesh.systems \
         ADMIN_EMAIL="o'brien&co@example.com" "$@"
 }
 
@@ -89,7 +89,7 @@ run_ep() {  # run_ep [extra VAR=VAL...] -- cmd...
 # $! IS the entrypoint's PID — that makes the (f1) exec proof exact.
 ( exec env PATH="${SB}/bin:${PATH}" \
       SQL_HOST=headwind-db.example SQL_PORT=5432 SQL_BASE=headwind SQL_USER=headwind \
-      SQL_PASS="${HOSTILE_PASS}" PROTOCOL=http BASE_DOMAIN=superadmin.snapdragon.systems \
+      SQL_PASS="${HOSTILE_PASS}" PROTOCOL=http BASE_DOMAIN=superadmin.hugmesh.systems \
       ADMIN_EMAIL="o'brien&co@example.com" \
       "${SB}/entrypoint.sh" "${SB}/bin/catalina-stub" run > "${SB}/run1.log" 2>&1 ) &
 EP_PID=$!
@@ -121,7 +121,7 @@ PY
             || bad "(b3) password mangled: got '${GOT_PASS}' want '${HOSTILE_PASS}'"
         [ "${GOT_URL}" = "jdbc:postgresql://headwind-db.example:5432/headwind" ] \
             && ok "(b4) JDBC.url assembled from SQL_HOST/PORT/BASE" || bad "(b4) JDBC.url: ${GOT_URL}"
-        [ "${GOT_BASE}" = "http://superadmin.snapdragon.systems" ] \
+        [ "${GOT_BASE}" = "http://superadmin.hugmesh.systems" ] \
             && ok "(b5) base.url = PROTOCOL://BASE_DOMAIN" || bad "(b5) base.url: ${GOT_BASE}"
     else
         bad "(b2) ROOT.xml is NOT well-formed XML (Tomcat would refuse the context)"
@@ -151,7 +151,7 @@ if [ -f "${INIT_SQL}" ]; then
     grep -q 'h-mdm\.com' "${INIT_SQL}" \
         && bad "(d2) upstream h-mdm.com URLs remain in init.sql" \
         || ok "(d2) zero h-mdm.com URLs remain (rewritten onto our base URL)"
-    grep -q 'http://superadmin\.snapdragon\.systems' "${INIT_SQL}" \
+    grep -q 'http://superadmin\.hugmesh\.systems' "${INIT_SQL}" \
         && ok "(d3) catalog URLs rewritten onto PROTOCOL://BASE_DOMAIN" \
         || bad "(d3) rewritten base URL absent from init.sql"
     grep -q '_ADMIN_EMAIL_\|_HMDM_VERSION_\|_HMDM_VARIANT_' "${INIT_SQL}" \

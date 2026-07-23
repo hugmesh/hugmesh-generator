@@ -5,7 +5,7 @@ resources:
   - pvc.yaml
 # The "uptrace-auth" (pg-password / project-token) and "clickhouse-auth"
 # (password) Secrets are now materialized by External Secrets Operator from Vault
-# (ClusterSecretStore "snapdragon-vault", remote paths secret/snapdragon/uptrace
-# and secret/snapdragon/clickhouse) — see manifests/external-secrets.
+# (ClusterSecretStore "hugmesh-vault", remote paths secret/hugmesh/uptrace
+# and secret/hugmesh/clickhouse) — see manifests/external-secrets.
 # The offline/USB path (KEYS/vault/secrets.json) is created by keys-provision.
 # The workloads keep their existing secretKeyRef usage unchanged.

@@ -184,7 +184,7 @@ done
 "$PY" - "$work/x86.txt" <<'PY' && ok parser-contract "indeterminate-until-first-banner + monotonic (direct ProgressParser)" || bad parser-contract "ProgressParser contract violated"
 import sys, os
 sys.path.insert(0, os.environ["PYTHONPATH"].split(":")[0])
-from snapdragon_studio.core.progress_parse import ProgressParser
+from hugmesh_studio.core.progress_parse import ProgressParser
 p = ProgressParser("x86")
 seen_banner = False
 last = -1

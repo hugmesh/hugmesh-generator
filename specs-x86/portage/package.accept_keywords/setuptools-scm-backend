@@ -9,7 +9,7 @@
 # (setuptools-scm 10.2.x + vcs-versioning 2.x) is still ~arch. Accept both
 # regardless of keywording (** — pure-python, arch-independent) so the chroot
 # takes the WORKING pair instead of dying mid-@stage4. Twin of the ARM builders'
-# host-side /etc/portage/package.accept_keywords/snapdragon-host-build-backends
+# host-side /etc/portage/package.accept_keywords/hugmesh-host-build-backends
 # and the ARM sysroots' setuptools-scm-backend files (#352/#360).
 dev-python/vcs-versioning **
 dev-python/setuptools-scm **

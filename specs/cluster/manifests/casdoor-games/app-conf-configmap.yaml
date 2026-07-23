@@ -14,8 +14,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: casdoor-games-app-conf
-  namespace: snapdragon-games
-  labels: { app: casdoor-games, app.kubernetes.io/part-of: snapdragon.games }
+  namespace: hugmesh-games
+  labels: { app: casdoor-games, app.kubernetes.io/part-of: hugmesh.games }
 data:
   app.conf: |
     appname = casdoor
@@ -41,10 +41,10 @@ data:
     logPostOnly = true
     # Public issuer (OIDC `iss` origin) of the games realm. Parameterized on
     # GAMES_DOMAIN by parameterize_games_domain() in the stage4 builders: the
-    # literal id.snapdragon.games is rewritten to id.${GAMES_DOMAIN} so the iss
+    # literal id.hugmesh.games is rewritten to id.${GAMES_DOMAIN} so the iss
     # the Casdoor stamps into every games JWT matches the actual games host (the
     # default GAMES_DOMAIN=games.<CLUSTER_DOMAIN> -> id.games.<CLUSTER_DOMAIN>).
-    # Leaving it as snapdragon.games would break iss-strict JWT validation on the
+    # Leaving it as hugmesh.games would break iss-strict JWT validation on the
     # subdomain default — see docs/OPTIONAL-SERVICES.md "Games subdomain".
-    origin = "https://id.snapdragon.games"
+    origin = "https://id.hugmesh.games"
     enableGzip = true

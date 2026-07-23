@@ -11,12 +11,12 @@ ready. Apply this diff to manifests/vault-pki/pki-init-configmap.yaml at Stage 2
 In the `for app in … ; do` list (currently ending `… akkoma-proxy tuwunel-proxy`),
 add `cassandra` so the role is created:
 
-    for app in snapdragon-pki-gateway snapdragon-be-gateway snapdragon-fe-gateway \
-               snapdragon-superadmin-gateway \
-               snapdragon-api snapdragon-admin-bff-api \
-               snapdragon-mod-bff-api snapdragon-user-bff-api \
-               snapdragon-forum-bff-api \
-               snapdragon-federation-api \
+    for app in hugmesh-pki-gateway hugmesh-be-gateway hugmesh-fe-gateway \
+               hugmesh-superadmin-gateway \
+               hugmesh-api hugmesh-admin-bff-api \
+               hugmesh-mod-bff-api hugmesh-user-bff-api \
+               hugmesh-forum-bff-api \
+               hugmesh-federation-api \
                route-access-db admin-bff-db mod-bff-db user-bff-db \
                federation-db forum-bff-db \
                cassandra \
@@ -25,6 +25,6 @@ add `cassandra` so the role is created:
 The existing role body already sets server_flag=true AND client_flag=true, so the
 issued `cassandra` cert supports BOTH the node server endpoint and the internode
 client handshake. CN/SANs are minted by the ExternalSecret
-(cassandra-tls-externalsecret.yaml) as cassandra.snapdragon-pki.svc.cluster.local
+(cassandra-tls-externalsecret.yaml) as cassandra.hugmesh-pki.svc.cluster.local
 (matches the Service DNS the clients verify), covered by the role's allowed_domains
 (svc.cluster.local). After editing, re-run the vault-pki-init Job (idempotent).

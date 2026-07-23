@@ -17,7 +17,7 @@ builder flags below.
 `--idp entra|aws|oidc --idp-issuer <https-url> [--idp-client-id <id>] [--idp-jwks <url>]`
 makes the builder, after the normal `rebrand_sysroot` pass:
 
-1. **bake `/etc/snapdragon/idp.conf`** (`provider` / `issuer` / `client_id` /
+1. **bake `/etc/hugmesh/idp.conf`** (`provider` / `issuer` / `client_id` /
    `jwks_uri`, mode `0644`, no secrets — issuer, client id and JWKS URL are all
    public identifiers);
 2. **re-point the baked cluster tree's issuer + JWKS pins** from the derived
@@ -49,7 +49,7 @@ build:
 |---|---|
 | **Native `/bff/login`** | user-bff calls Casdoor's proprietary `POST /api/login` (headless credential grant). Entra/Cognito have no headless password API (ROPC is legacy and blocks MFA/federated users) — external mode requires the browser redirect flow, which the native-login posture removed. |
 | **MFA step-up** | admin-bff stamps `Properties.mfa_satisfied` into the Casdoor user via the Casdoor API; the gateway reads that claim. Entra's analog is `acr`/`amr`/auth-context — different names, different types, no stamping API. |
-| **Role / group claims** | Casdoor emits the full platform role set and groups as `"<owner>/<name>"` strings (e.g. `snapdragon/headscale`). Entra `roles` are per-app appRole assignments scoped to one audience; `groups` are GUIDs. AWS Cognito emits `cognito:groups` (not `roles`). Consumers keyed on those exact claim names — headscale `allowed_groups`, Harbor `oidc_group_claim_name`, sssd `oidc_groups_allowlist` — need remapping. |
+| **Role / group claims** | Casdoor emits the full platform role set and groups as `"<owner>/<name>"` strings (e.g. `hugmesh/headscale`). Entra `roles` are per-app appRole assignments scoped to one audience; `groups` are GUIDs. AWS Cognito emits `cognito:groups` (not `roles`). Consumers keyed on those exact claim names — headscale `allowed_groups`, Harbor `oidc_group_claim_name`, sssd `oidc_groups_allowlist` — need remapping. |
 | **Pairwise subject** | Entra v2.0 `sub` is **pairwise per client**, so one human has different `sub`s across services. The canonical identity fold must key on the tenant-stable `oid` instead of `sub` — a resolver change in user-bff/auth-core. |
 | **Role-sync / signup-gate Jobs** | The Casdoor-API reconcile Jobs (role membership sync, signup-gate reverse proxy) have no external-IdP analog — they must be dropped or reimplemented against the provider's directory API (MS Graph / Cognito). |
 

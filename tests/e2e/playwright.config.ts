@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 
-// Drives the snapdragon.systems host (served over the GENERATED TLS cert with
+// Drives the hugmesh.systems host (served over the GENERATED TLS cert with
 // the GENERATED runtime values) and the federated Matrix/Mastodon/login/admin
 // micro-frontends. Run against the rootless integration stack (tests/stack).
 export default defineConfig({
@@ -12,7 +12,7 @@ export default defineConfig({
   retries: 1,
   // Reporters. `list` stays for the console; junit + json are the DURABLE
   // artifacts the test-runner Job copies onto the test-reports PVC and the
-  // admin-bff TestReportsController serves. The custom snapdragon reporter maps
+  // admin-bff TestReportsController serves. The custom hugmesh reporter maps
   // each test -> role via the `role:<x>` annotation/tag convention (see
   // specs/report-tags.ts) and emits summary.json{passed,failed,skipped,perRole[]}.
   // Output dir is overridable so the runner can write per-run-id paths on the PVC.
@@ -22,7 +22,7 @@ export default defineConfig({
     ['list'],
     ['junit', { outputFile: `${process.env.SNAP_REPORT_DIR || 'test-results'}/junit.xml` }],
     ['json', { outputFile: `${process.env.SNAP_REPORT_DIR || 'test-results'}/report.json` }],
-    ['./reporters/snapdragon-reporter.ts'],
+    ['./reporters/hugmesh-reporter.ts'],
   ],
   outputDir: process.env.SNAP_REPORT_DIR
     ? `${process.env.SNAP_REPORT_DIR}/test-results`

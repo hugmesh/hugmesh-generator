@@ -27,16 +27,16 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: akkoma-peer-config
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: akkoma-peer
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: test
 data:
   config.exs: |
     import Config
     # The peer publishes itself as peer.test — a DISTINCT origin from the system
-    # under test (mastodon.snapdragon.systems) so federation across the two is a
+    # under test (mastodon.hugmesh.systems) so federation across the two is a
     # real cross-origin delivery, not a same-instance timeline.
     config :pleroma, Pleroma.Web.Endpoint,
       url: [host: "peer.test", scheme: "https", port: 443],
@@ -61,7 +61,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: akkoma-peer-secrets
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: akkoma-peer
     snapdragon.systems/tier: test
@@ -78,10 +78,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: akkoma-peer-db
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: akkoma-peer-db
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: test
 spec:
   replicas: 1
@@ -124,7 +124,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: akkoma-peer-db
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels: { app.kubernetes.io/name: akkoma-peer-db, snapdragon.systems/tier: test }
 spec:
   selector: { app: akkoma-peer-db }
@@ -134,10 +134,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: akkoma-peer
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: akkoma-peer
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: test
 spec:
   replicas: 1
@@ -152,8 +152,8 @@ spec:
         # The prod-hygiene RUNTIME gate probes this seam endpoint; the test peer
         # answers seam=stub so the gate's "un-flipped stub" check ALSO flags it as
         # a non-prod component (belt to the tier:test pod check). FQDN host so the
-        # gate's probe pod (in snapdragon-policy) can reach it cross-namespace.
-        snapdragon.systems/seam-probe: "http://akkoma-peer.snapdragon-backend.svc.cluster.local:4000/api/v1/instance#seam"
+        # gate's probe pod (in hugmesh-policy) can reach it cross-namespace.
+        snapdragon.systems/seam-probe: "http://akkoma-peer.hugmesh-backend.svc.cluster.local:4000/api/v1/instance#seam"
     spec:
       securityContext:
         runAsNonRoot: true
@@ -193,7 +193,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: akkoma-peer
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: akkoma-peer
     snapdragon.systems/tier: test

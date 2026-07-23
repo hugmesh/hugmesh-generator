@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Snapdragon mesh-node — LINUX installer (FD-09). Installs the launcher, an app icon,
+# HugMesh mesh-node — LINUX installer (FD-09). Installs the launcher, an app icon,
 # app-menu entries (Up / Status / Leave), and OPTIONALLY a login autostart + a system
 # tray indicator — all into per-user XDG dirs, NO root required. Pairs with the
 # Windows install.ps1. See README.md.
@@ -16,9 +16,9 @@ APP_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
 ICON_SCALABLE="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor/scalable/apps"
 ICON_256="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor/256x256/apps"
 AUTOSTART_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/autostart"
-CFG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/snapdragon-mesh"
+CFG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/hugmesh-mesh"
 CFG="${CFG_DIR}/launch.env"
-ICON_NAME="snapdragon-mesh-node"
+ICON_NAME="hugmesh-mesh-node"
 
 KEYS=""; ROLE=""; HOST=""; IMAGE=""; AUTOSTART=0; TRAY=0; UNINSTALL=0
 while [ $# -gt 0 ]; do
@@ -41,12 +41,12 @@ refresh_caches() {
 }
 
 if [ "${UNINSTALL}" = 1 ]; then
-    rm -f "${BIN_DIR}/snapdragon-mesh-node" "${BIN_DIR}/snapdragon-mesh-ctl" "${BIN_DIR}/snapdragon-mesh-tray.py"
-    rm -f "${APP_DIR}/snapdragon-mesh-node.desktop" "${APP_DIR}/snapdragon-mesh-status.desktop" "${APP_DIR}/snapdragon-mesh-leave.desktop"
-    rm -f "${AUTOSTART_DIR}/snapdragon-mesh-node.desktop" "${AUTOSTART_DIR}/snapdragon-mesh-tray.desktop"
+    rm -f "${BIN_DIR}/hugmesh-mesh-node" "${BIN_DIR}/hugmesh-mesh-ctl" "${BIN_DIR}/hugmesh-mesh-tray.py"
+    rm -f "${APP_DIR}/hugmesh-mesh-node.desktop" "${APP_DIR}/hugmesh-mesh-status.desktop" "${APP_DIR}/hugmesh-mesh-leave.desktop"
+    rm -f "${AUTOSTART_DIR}/hugmesh-mesh-node.desktop" "${AUTOSTART_DIR}/hugmesh-mesh-tray.desktop"
     rm -f "${ICON_SCALABLE}/${ICON_NAME}.svg" "${ICON_256}/${ICON_NAME}.png"
     refresh_caches
-    echo "uninstalled snapdragon mesh-node (launcher, menu entries, autostart, tray). Config kept at ${CFG_DIR} (rm it to fully clean)."
+    echo "uninstalled hugmesh mesh-node (launcher, menu entries, autostart, tray). Config kept at ${CFG_DIR} (rm it to fully clean)."
     exit 0
 fi
 
@@ -55,7 +55,7 @@ fi
 KEYS_ABS="$(cd "${KEYS}" && pwd)"
 
 # ── Validate the values that get written into the SOURCED launch.env (#18) ─────
-# snapdragon-mesh-ctl dot-sources launch.env, so an unescaped value containing
+# hugmesh-mesh-ctl dot-sources launch.env, so an unescaped value containing
 # $(...)/`...`/;/newline would execute as the user. Validate up front (fail closed)
 # AND single-quote-escape on write (defense-in-depth). ROLE is a tiny enum; NAME/
 # IMAGE get a conservative charset allowlist (container name + OCI ref chars).
@@ -83,28 +83,28 @@ sq_emit() {
 mkdir -p "${BIN_DIR}" "${APP_DIR}" "${ICON_SCALABLE}" "${ICON_256}" "${CFG_DIR}"
 
 # 1) launcher + a tiny config-sourcing control wrapper
-install -m0755 "${SELF_DIR}/mesh-node.sh" "${BIN_DIR}/snapdragon-mesh-node"
-cat > "${BIN_DIR}/snapdragon-mesh-ctl" <<'CTL'
+install -m0755 "${SELF_DIR}/mesh-node.sh" "${BIN_DIR}/hugmesh-mesh-node"
+cat > "${BIN_DIR}/hugmesh-mesh-ctl" <<'CTL'
 #!/usr/bin/env sh
-# Reads ~/.config/snapdragon-mesh/launch.env and drives the mesh-node launcher.
+# Reads ~/.config/hugmesh-mesh/launch.env and drives the mesh-node launcher.
 set -eu
-CFG="${XDG_CONFIG_HOME:-$HOME/.config}/snapdragon-mesh/launch.env"
+CFG="${XDG_CONFIG_HOME:-$HOME/.config}/hugmesh-mesh/launch.env"
 [ -f "${CFG}" ] && . "${CFG}"
-LAUNCHER="$(dirname "$0")/snapdragon-mesh-node"
+LAUNCHER="$(dirname "$0")/hugmesh-mesh-node"
 case "${1:-up}" in
     up)   exec "${LAUNCHER}" --keys "${KEYS:?set KEYS in ${CFG}}" ${ROLE:+--role "${ROLE}"} ${NAME:+--name "${NAME}"} ${IMAGE:+--image "${IMAGE}"} ;;
     logs) exec "${LAUNCHER}" --logs ;;
     stop) exec "${LAUNCHER}" --stop ;;
-    *) echo "usage: snapdragon-mesh-ctl up|logs|stop" >&2; exit 2 ;;
+    *) echo "usage: hugmesh-mesh-ctl up|logs|stop" >&2; exit 2 ;;
 esac
 CTL
-chmod 0755 "${BIN_DIR}/snapdragon-mesh-ctl"
+chmod 0755 "${BIN_DIR}/hugmesh-mesh-ctl"
 
 # 2) launch config (single source of truth for the menu/tray/autostart)
 # Values are single-quote-escaped so this dot-sourced file can never execute
 # injected code (#18); ROLE/NAME/IMAGE were also charset-validated above.
 {
-    echo "# written by snapdragon mesh-node install.sh"
+    echo "# written by hugmesh mesh-node install.sh"
     sq_emit KEYS  "${KEYS_ABS}"
     sq_emit ROLE  "${ROLE}"
     sq_emit NAME  "${HOST}"
@@ -130,19 +130,19 @@ Categories=Network;System;
 StartupNotify=false
 EOF
 }
-mk_desktop snapdragon-mesh-node   "Snapdragon Mesh — Join"  "Join this machine to the Snapdragon mesh" "${BIN_DIR}/snapdragon-mesh-ctl up"   true
-mk_desktop snapdragon-mesh-status "Snapdragon Mesh — Status/Logs" "Follow the mesh-node logs"          "${BIN_DIR}/snapdragon-mesh-ctl logs" true
-mk_desktop snapdragon-mesh-leave  "Snapdragon Mesh — Leave" "Stop + remove the mesh-node container"    "${BIN_DIR}/snapdragon-mesh-ctl stop" false
+mk_desktop hugmesh-mesh-node   "HugMesh Mesh — Join"  "Join this machine to the HugMesh mesh" "${BIN_DIR}/hugmesh-mesh-ctl up"   true
+mk_desktop hugmesh-mesh-status "HugMesh Mesh — Status/Logs" "Follow the mesh-node logs"          "${BIN_DIR}/hugmesh-mesh-ctl logs" true
+mk_desktop hugmesh-mesh-leave  "HugMesh Mesh — Leave" "Stop + remove the mesh-node container"    "${BIN_DIR}/hugmesh-mesh-ctl stop" false
 
 # 5) optional: start the node at login
 if [ "${AUTOSTART}" = 1 ]; then
     mkdir -p "${AUTOSTART_DIR}"
-    cat > "${AUTOSTART_DIR}/snapdragon-mesh-node.desktop" <<EOF
+    cat > "${AUTOSTART_DIR}/hugmesh-mesh-node.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Snapdragon Mesh (autostart)
-Comment=Bring up the Snapdragon mesh node at login
-Exec=${BIN_DIR}/snapdragon-mesh-ctl up
+Name=HugMesh Mesh (autostart)
+Comment=Bring up the HugMesh mesh node at login
+Exec=${BIN_DIR}/hugmesh-mesh-ctl up
 Icon=${ICON_NAME}
 Terminal=false
 X-GNOME-Autostart-enabled=true
@@ -152,21 +152,21 @@ fi
 
 # 6) optional: system tray indicator
 if [ "${TRAY}" = 1 ]; then
-    install -m0755 "${SELF_DIR}/tray/snapdragon-mesh-tray.py" "${BIN_DIR}/snapdragon-mesh-tray.py"
+    install -m0755 "${SELF_DIR}/tray/hugmesh-mesh-tray.py" "${BIN_DIR}/hugmesh-mesh-tray.py"
     mkdir -p "${AUTOSTART_DIR}"
-    cat > "${AUTOSTART_DIR}/snapdragon-mesh-tray.desktop" <<EOF
+    cat > "${AUTOSTART_DIR}/hugmesh-mesh-tray.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=Snapdragon Mesh Tray
-Comment=Snapdragon mesh-node tray indicator
-Exec=${BIN_DIR}/snapdragon-mesh-tray.py
+Name=HugMesh Mesh Tray
+Comment=HugMesh mesh-node tray indicator
+Exec=${BIN_DIR}/hugmesh-mesh-tray.py
 Icon=${ICON_NAME}
 Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
     if python3 -c "import gi; gi.require_version('AyatanaAppIndicator3','0.1')" 2>/dev/null \
        || python3 -c "import gi; gi.require_version('AppIndicator3','0.1')" 2>/dev/null; then
-        echo "tray: installed (AppIndicator found). Launch now with: snapdragon-mesh-tray.py"
+        echo "tray: installed (AppIndicator found). Launch now with: hugmesh-mesh-tray.py"
     else
         echo "tray: installed, but no AppIndicator GI typelib found. Install one for the icon to appear, e.g.:"
         echo "      Debian/Ubuntu: gir1.2-ayatanaappindicator3-0.1 + python3-gi"
@@ -176,8 +176,8 @@ EOF
 fi
 
 refresh_caches
-echo "installed snapdragon mesh-node:"
-echo "  launcher : ${BIN_DIR}/snapdragon-mesh-node  (+ snapdragon-mesh-ctl)"
-echo "  menu     : 'Snapdragon Mesh — Join / Status / Leave'  (icon: ${ICON_NAME})"
+echo "installed hugmesh mesh-node:"
+echo "  launcher : ${BIN_DIR}/hugmesh-mesh-node  (+ hugmesh-mesh-ctl)"
+echo "  menu     : 'HugMesh Mesh — Join / Status / Leave'  (icon: ${ICON_NAME})"
 echo "  config   : ${CFG}  (KEYS=${KEYS_ABS} ROLE=${ROLE:-user})"
-echo "Ensure ${BIN_DIR} is on your PATH. Join now from the menu, or: snapdragon-mesh-ctl up"
+echo "Ensure ${BIN_DIR} is on your PATH. Join now from the menu, or: hugmesh-mesh-ctl up"

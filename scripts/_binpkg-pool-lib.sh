@@ -65,7 +65,7 @@ pool_fingerprint_of() {
 #       PRIMARY defense remains the per-board directory split (each board its own pkgdir).
 #   stamp == FP                   -> return 0 (safe to reuse).
 #   stamp != FP                   -> print a LOUD message to stderr, return 1 (caller aborts).
-# The stamp file is `${PKGDIR}/.snapdragon-pool-fingerprint`.
+# The stamp file is `${PKGDIR}/.hugmesh-pool-fingerprint`.
 # _pool_has_binpkgs PKGDIR -> 0 if the pool already holds binary packages (Packages
 # index or any gpkg/tbz2/xpak), else 1. Used to decide adopt-silently vs adopt-with-warning.
 _pool_has_binpkgs() {
@@ -81,7 +81,7 @@ _pool_has_binpkgs() {
 }
 pool_fingerprint_guard() {
     local pkgdir="$1" fp="${2:-}" fpfile
-    fpfile="${pkgdir%/}/.snapdragon-pool-fingerprint"
+    fpfile="${pkgdir%/}/.hugmesh-pool-fingerprint"
     [ -n "${fp}" ] || return 0
     mkdir -p "${pkgdir}" 2>/dev/null || true
     if [ -f "${fpfile}" ]; then

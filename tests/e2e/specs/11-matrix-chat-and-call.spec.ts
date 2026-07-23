@@ -3,7 +3,7 @@ import { onboard, matrixUserId, createRoom, joinRoom, shot } from './helpers';
 
 // End-to-end social flow: two onboarded users hold a text chat in a shared
 // Matrix room, then escalate to a real-WebRTC VOICE call signalled over that
-// same room (via snapdragon-matrix-ui's call module). The call module also
+// same room (via hugmesh-matrix-ui's call module). The call module also
 // carries video, but this test asserts the VOICE path specifically: a live
 // remote AUDIO track on both peers. Combines the 05 (chat) + 10 (call) flows
 // into the single "chat → call" journey a real user takes.

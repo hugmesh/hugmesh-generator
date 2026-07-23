@@ -14,7 +14,7 @@
 #   STACK_SRC   (default ./.stack-src)  where to clone the repos
 #   GIT_BASE    (default https://github.com/Snapdragon-Systems)  clone base URL.
 #               Point at the internal mirror on the VPN, e.g.
-#               GIT_BASE=https://gitlab.snapdragon.systems/snapdragon
+#               GIT_BASE=https://gitlab.hugmesh.systems/hugmesh
 #   GIT_REF     (default main)  branch/tag to check out
 #   USE_GH      (default auto)  "1" forces `gh repo clone`, "0" forces git clone
 #   GH_TOKEN / GITHUB_TOKEN     if set, used for an https token clone (CI / Windows)
@@ -27,7 +27,7 @@ GIT_BASE="${GIT_BASE:-https://github.com/Snapdragon-Systems}"
 GIT_REF="${GIT_REF:-main}"
 USE_GH="${USE_GH:-auto}"
 
-# The full first-party repo set the compose stack builds. snapdragon-generator
+# The full first-party repo set the compose stack builds. hugmesh-generator
 # itself is the repo this script ships in — it carries the cluster manifests but
 # is NOT a built container, so it is intentionally absent here.
 REPOS=(
@@ -62,7 +62,7 @@ REPOS=(
   snapdragon-character-studio-ui
 )
 
-echo "==> Cloning ${#REPOS[@]} Snapdragon repos into ${STACK_SRC}"
+echo "==> Cloning ${#REPOS[@]} HugMesh repos into ${STACK_SRC}"
 echo "    base=${GIT_BASE} ref=${GIT_REF}"
 mkdir -p "${STACK_SRC}"
 

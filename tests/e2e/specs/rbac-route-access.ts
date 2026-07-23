@@ -3,7 +3,7 @@
 // RBAC gateway specs assert against.
 //
 // WHY a TS mirror of schema.sql: the gateways that ENFORCE this table
-// (snapdragon-fe-gateway / -be-gateway / -pki-gateway) are README-only today
+// (hugmesh-fe-gateway / -be-gateway / -pki-gateway) are README-only today
 // (Phase 8/10), so the live deny/allow path cannot be hit yet. This file lets the
 // specs assert the CONTRACT the gateways must implement: given a role-set and a
 // URL, does the most-specific matching allow row admit the request? When a real
@@ -22,10 +22,10 @@
 //   * Everything not matched by an allow row is DENY (default-deny).
 
 export type Gateway =
-  | 'snapdragon-pki-gateway'
-  | 'snapdragon-be-gateway'
-  | 'snapdragon-fe-gateway'
-  | 'snapdragon-superadmin-gateway';   // tailnet-only infra control plane (ROLE_SUPERADMIN)
+  | 'hugmesh-pki-gateway'
+  | 'hugmesh-be-gateway'
+  | 'hugmesh-fe-gateway'
+  | 'hugmesh-superadmin-gateway';   // tailnet-only infra control plane (ROLE_SUPERADMIN)
 
 export interface RouteRule {
   gateway: Gateway;
@@ -44,69 +44,69 @@ export interface RouteRule {
 // no longer reaches Matrix or Mastodon; a platform ban is the ABSENCE of the role.
 export const ROUTE_ACCESS: RouteRule[] = [
   // pki-gateway
-  { gateway: 'snapdragon-pki-gateway', urlPattern: '/api/auth/**',    role: 'ROLE_USER' },
-  { gateway: 'snapdragon-pki-gateway', urlPattern: '/login/**',       role: 'ROLE_ANONYMOUS' },
-  { gateway: 'snapdragon-pki-gateway', urlPattern: '/.well-known/**', role: 'ROLE_ANONYMOUS' },
+  { gateway: 'hugmesh-pki-gateway', urlPattern: '/api/auth/**',    role: 'ROLE_USER' },
+  { gateway: 'hugmesh-pki-gateway', urlPattern: '/login/**',       role: 'ROLE_ANONYMOUS' },
+  { gateway: 'hugmesh-pki-gateway', urlPattern: '/.well-known/**', role: 'ROLE_ANONYMOUS' },
 
   // be-gateway — akkoma moderation (ROLE_MOD + ROLE_ADMIN superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/pleroma/admin/**', role: 'ROLE_MOD' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/pleroma/admin/**', role: 'ROLE_ADMIN' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/pleroma/admin/**',    role: 'ROLE_MOD' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/pleroma/admin/**',    role: 'ROLE_ADMIN' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/pleroma/admin/**',        role: 'ROLE_MOD' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/pleroma/admin/**',        role: 'ROLE_ADMIN' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/pleroma/admin/**', role: 'ROLE_MOD' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/pleroma/admin/**', role: 'ROLE_ADMIN' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/pleroma/admin/**',    role: 'ROLE_MOD' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/pleroma/admin/**',    role: 'ROLE_ADMIN' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/pleroma/admin/**',        role: 'ROLE_MOD' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/pleroma/admin/**',        role: 'ROLE_ADMIN' },
   // ── PER-PLATFORM ACCESS roles (ban/congruence foundation, commit 0100d3b) ──
   // Matrix client surface: /_matrix/** + the spec-required /.well-known/matrix/**
   // delegation + /_synapse/** (host-scoped Synapse-compat catch-all).
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/_matrix/**',               role: 'ROLE_MATRIX' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/_matrix/**',               role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/_matrix/**',               role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/.well-known/matrix/**',    role: 'ROLE_MATRIX' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/.well-known/matrix/**',    role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/.well-known/matrix/**',    role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/_synapse/**',              role: 'ROLE_MATRIX' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/_synapse/**',              role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/_synapse/**',              role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/_matrix/**',               role: 'ROLE_MATRIX' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/_matrix/**',               role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/_matrix/**',               role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/.well-known/matrix/**',    role: 'ROLE_MATRIX' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/.well-known/matrix/**',    role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/.well-known/matrix/**',    role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/_synapse/**',              role: 'ROLE_MATRIX' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/_synapse/**',              role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/_synapse/**',              role: 'ROLE_ADMIN' },   // (admin superset)
   // Mastodon client surface: /api/v1/** + /api/v2/** + /oauth/** + media/streaming.
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/**',                role: 'ROLE_MASTODON' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/**',                role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/**',                role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v2/**',                role: 'ROLE_MASTODON' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v2/**',                role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v2/**',                role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/oauth/**',                 role: 'ROLE_MASTODON' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/oauth/**',                 role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/oauth/**',                 role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/media/**',                 role: 'ROLE_MASTODON' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/media/**',                 role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/media/**',                 role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/streaming/**',      role: 'ROLE_MASTODON' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/streaming/**',      role: 'ROLE_MOD' },     // (mod superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/v1/streaming/**',      role: 'ROLE_ADMIN' },   // (admin superset)
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/admin/**',       role: 'ROLE_ADMIN' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/games/api/admin/**', role: 'ROLE_GAMES_ADMIN' },
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/**',             role: 'ROLE_USER' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/**',                role: 'ROLE_MASTODON' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/**',                role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/**',                role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v2/**',                role: 'ROLE_MASTODON' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v2/**',                role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v2/**',                role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/oauth/**',                 role: 'ROLE_MASTODON' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/oauth/**',                 role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/oauth/**',                 role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/media/**',                 role: 'ROLE_MASTODON' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/media/**',                 role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/media/**',                 role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/streaming/**',      role: 'ROLE_MASTODON' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/streaming/**',      role: 'ROLE_MOD' },     // (mod superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/v1/streaming/**',      role: 'ROLE_ADMIN' },   // (admin superset)
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/admin/**',       role: 'ROLE_ADMIN' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/games/api/admin/**', role: 'ROLE_GAMES_ADMIN' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/**',             role: 'ROLE_USER' },
 
   // fe-gateway
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/',                   role: 'ROLE_ANONYMOUS' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/social/matrix/**',   role: 'ROLE_USER' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/social/mastodon/**', role: 'ROLE_USER' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/login/**',           role: 'ROLE_ANONYMOUS' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/admin/**',           role: 'ROLE_ADMIN' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/games/admin/**',     role: 'ROLE_GAMES_ADMIN' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/login',          role: 'ROLE_ANONYMOUS' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/register/**',    role: 'ROLE_USER' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/provision/**',   role: 'ROLE_USER' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/me/**',          role: 'ROLE_USER' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/admin/**',       role: 'ROLE_ADMIN' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/',                   role: 'ROLE_ANONYMOUS' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/social/matrix/**',   role: 'ROLE_USER' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/social/mastodon/**', role: 'ROLE_USER' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/login/**',           role: 'ROLE_ANONYMOUS' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/admin/**',           role: 'ROLE_ADMIN' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/games/admin/**',     role: 'ROLE_GAMES_ADMIN' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/login',          role: 'ROLE_ANONYMOUS' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/register/**',    role: 'ROLE_USER' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/provision/**',   role: 'ROLE_USER' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/me/**',          role: 'ROLE_USER' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/admin/**',       role: 'ROLE_ADMIN' },
 
   // superadmin-gateway — TAILNET-ONLY infra control plane (apps/22-gateway-superadmin.yaml).
   // Every row here is ROLE_SUPERADMIN; there is NO down-cascade row for ROLE_ADMIN,
   // so admin is default-denied. NB /api/federation/** is ROLE_USER on the be-gateway
   // but ROLE_SUPERADMIN on THIS gateway — the gateway NAME scopes the decision.
-  { gateway: 'snapdragon-superadmin-gateway', urlPattern: '/bff/superadmin/**',      role: 'ROLE_SUPERADMIN' },
-  { gateway: 'snapdragon-superadmin-gateway', urlPattern: '/superadmin/service-catalog/**', role: 'ROLE_SUPERADMIN' },
-  { gateway: 'snapdragon-superadmin-gateway', urlPattern: '/api/federation/**',      role: 'ROLE_SUPERADMIN' },
+  { gateway: 'hugmesh-superadmin-gateway', urlPattern: '/bff/superadmin/**',      role: 'ROLE_SUPERADMIN' },
+  { gateway: 'hugmesh-superadmin-gateway', urlPattern: '/superadmin/service-catalog/**', role: 'ROLE_SUPERADMIN' },
+  { gateway: 'hugmesh-superadmin-gateway', urlPattern: '/api/federation/**',      role: 'ROLE_SUPERADMIN' },
 ];
 
 /** Translate a Spring path pattern (`/a/**`, `/a/b`) into a matcher + a

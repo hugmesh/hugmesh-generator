@@ -4,7 +4,7 @@ kind: Kustomization
 # is pruned from the baked prod tree by build-x86-host-stage4.sh gate_env_apps and
 # rejected by the prod-hygiene Kyverno ClusterPolicy on its snapdragon.systems/
 # tier: test label. Do NOT add prod workloads here.
-namespace: snapdragon-backend
+namespace: hugmesh-backend
 resources:
   - namespace-rbac.yaml   # SA + read-mostly ClusterRole + Job create/delete Role
   - pvc.yaml              # test-reports PVC (lean/ + heavy/ run artifacts)
@@ -28,5 +28,5 @@ generatorOptions:
   disableNameSuffixHash: true
   labels:
     app.kubernetes.io/name: test-runner
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/tier: test

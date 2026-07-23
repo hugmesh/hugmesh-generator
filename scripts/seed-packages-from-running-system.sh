@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# seed-packages-from-running-system.sh — emit a Snapdragon package list from THIS
+# seed-packages-from-running-system.sh — emit a HugMesh package list from THIS
 # running Gentoo box's explicitly-installed set (/var/lib/portage/world), so a
 # generated desktop image can "copy all installed programs" from the host.
 #

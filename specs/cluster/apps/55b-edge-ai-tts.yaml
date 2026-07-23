@@ -8,19 +8,19 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: snapdragon-edge-ai-tts
+  name: hugmesh-edge-ai-tts
   namespace: devops
   annotations:
     argocd.argoproj.io/sync-wave: "2"   # no dependency — same wave as edge-ai itself
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/edge-ai-tts
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-inference
+    namespace: hugmesh-inference
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

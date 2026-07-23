@@ -28,8 +28,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: akkoma-domainlock-sync-script
-  namespace: snapdragon-backend
-  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   sync.py: |
     #!/usr/bin/env python3
@@ -37,10 +37,10 @@ data:
     the ForceLocalForUsers MRF reads. Pure stdlib (urllib + subprocess)."""
     import json, os, base64, subprocess, urllib.request, urllib.error
 
-    CASDOOR = os.environ.get("CASDOOR_URL", "http://casdoor.snapdragon-pki.svc.cluster.local:8000")
-    ORG     = os.environ.get("CASDOOR_ORG", "snapdragon")
+    CASDOOR = os.environ.get("CASDOOR_URL", "http://casdoor.hugmesh-pki.svc.cluster.local:8000")
+    ORG     = os.environ.get("CASDOOR_ORG", "hugmesh")
     PLEROMA_CTL = os.environ.get("PLEROMA_CTL", "/opt/akkoma/bin/pleroma_ctl")
-    LOCAL_HOST  = os.environ.get("AKKOMA_HOST", "mastodon.snapdragon.systems")
+    LOCAL_HOST  = os.environ.get("AKKOMA_HOST", "mastodon.hugmesh.systems")
     # The Mastodon domain-lock marker role. Members are forced local-only.
     ROLE = "ROLE_MASTODON_DOMAINLOCKED"
 
@@ -95,8 +95,8 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: akkoma-domainlock-sync
-  namespace: snapdragon-backend
-  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: akkoma, app.kubernetes.io/part-of: hugmesh.systems }
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -122,10 +122,10 @@ spec:
           image: REPLACE_WITH_CUSTOM_AKKOMA_IMAGE   # built from manifests/akkoma/Dockerfile; pin a digest, match akkoma.yaml
           command: ["python3", "/script/sync.py"]
           env:
-            - { name: CASDOOR_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000" }
-            - { name: CASDOOR_ORG, value: "snapdragon" }
+            - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
+            - { name: CASDOOR_ORG, value: "hugmesh" }
             - { name: PLEROMA_CTL, value: "/opt/akkoma/bin/pleroma_ctl" }
-            - { name: AKKOMA_HOST, value: "mastodon.snapdragon.systems" }
+            - { name: AKKOMA_HOST, value: "mastodon.hugmesh.systems" }
           envFrom: [{ secretRef: { name: akkoma-secrets } }]
           securityContext:
             allowPrivilegeEscalation: false

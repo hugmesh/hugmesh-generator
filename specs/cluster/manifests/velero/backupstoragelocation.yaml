@@ -49,8 +49,8 @@ metadata:
   name: default
   namespace: velero
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
-    app.kubernetes.io/managed-by: snapdragon-generator
+    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/managed-by: hugmesh-generator
     snapdragon.systems/backup-scope: total
 spec:
   provider: aws
@@ -58,8 +58,8 @@ spec:
   default: true
   objectStorage:
     # Bucket for the encrypted backup repo. Generator-templated, non-secret.
-    bucket: snapdragon-backups
-    # All snapdragon backups live under one prefix so a per-brand BSL can carve a
+    bucket: hugmesh-backups
+    # All hugmesh backups live under one prefix so a per-brand BSL can carve a
     # sub-prefix (see template) without colliding with the total-cloud set.
     prefix: total
   # Credentials come from the ESO-materialized Secret — NEVER inline.
@@ -68,8 +68,8 @@ spec:
     key: cloud
   config:
     # S3/MinIO endpoint coordinates (non-secret). Generator-templated per deploy.
-    region: snapdragon
-    s3Url: http://minio.snapdragon-backend.svc.cluster.local:9000
+    region: hugmesh
+    s3Url: http://minio.hugmesh-backend.svc.cluster.local:9000
     s3ForcePathStyle: "true"
 ---
 # ── VolumeSnapshotLocation (filesystem/Kopia path) ──────────────────────────────
@@ -84,12 +84,12 @@ metadata:
   name: default
   namespace: velero
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
-    app.kubernetes.io/managed-by: snapdragon-generator
+    app.kubernetes.io/part-of: hugmesh.systems
+    app.kubernetes.io/managed-by: hugmesh-generator
 spec:
   provider: aws
   config:
-    region: snapdragon
+    region: hugmesh
 # ════════════════════════════════════════════════════════════════════════════════
 # PER-BRAND BSL TEMPLATE (DOMAIN destinations with a non-default name)
 # --------------------------------------------------------------------------------
@@ -106,21 +106,21 @@ spec:
 #   name: <BRAND-DESTINATION-REF>          # == backup_destination.destination_ref
 #   namespace: velero
 #   labels:
-#     app.kubernetes.io/part-of: snapdragon.systems
-#     app.kubernetes.io/managed-by: snapdragon-generator
+#     app.kubernetes.io/part-of: hugmesh.systems
+#     app.kubernetes.io/managed-by: hugmesh-generator
 #     snapdragon.systems/backup-scope: domain
 #     snapdragon.systems/domain: <brand-domain>
 # spec:
 #   provider: aws
 #   default: false
 #   objectStorage:
-#     bucket: <brand-bucket>               # may equal snapdragon-backups with a per-brand prefix
+#     bucket: <brand-bucket>               # may equal hugmesh-backups with a per-brand prefix
 #     prefix: <brand-domain>
 #   credential:
 #     name: velero-cloud-credentials       # or a per-brand ESO Secret (still ESO/Vault, never inline)
 #     key: cloud
 #   config:
-#     region: snapdragon
-#     s3Url: http://minio.snapdragon-backend.svc.cluster.local:9000
+#     region: hugmesh
+#     s3Url: http://minio.hugmesh-backend.svc.cluster.local:9000
 #     s3ForcePathStyle: "true"
 # ════════════════════════════════════════════════════════════════════════════════

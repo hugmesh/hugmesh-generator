@@ -15,7 +15,7 @@
 import http from 'node:http';
 
 const PORT = Number(process.env.PORT || 8401);
-const SERVER = process.env.MATRIX_SERVER_NAME || 'snapdragon.systems';
+const SERVER = process.env.MATRIX_SERVER_NAME || 'hugmesh.systems';
 const users = new Map();   // token -> userId
 const accounts = new Map();// userId -> {password}
 const rooms = new Map();   // roomId -> {members:Set, events:[]}

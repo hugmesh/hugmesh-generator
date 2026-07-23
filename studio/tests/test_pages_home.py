@@ -18,36 +18,36 @@ import pytest
 # must be set BEFORE the first QApplication is created
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core.config import (   # noqa: E402  (after the importorskip gate)
+from hugmesh_studio.core.config import (   # noqa: E402  (after the importorskip gate)
     SECRET_FIELDS, UNAFFILIATED_ROLE, WIZARD_PAGE_SLUGS, ImageConfig,
 )
-from snapdragon_studio.core.platform_info import HostInfo  # noqa: E402
-from snapdragon_studio.gui import wizard as wizard_mod  # noqa: E402
-from snapdragon_studio.gui.pages.home import HomePage, _MEDIA_DEFAULT  # noqa: E402
-from snapdragon_studio.gui.pages.system import SystemPage  # noqa: E402
-from snapdragon_studio.gui.qt import Qt, QtWidgets  # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
+from hugmesh_studio.gui.pages.home import HomePage, _MEDIA_DEFAULT  # noqa: E402
+from hugmesh_studio.gui.pages.system import SystemPage  # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtWidgets  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 # a canned host so wizard construction never probes the machine (docker info &c.)
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
-                has_kvm=False, is_root=False, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture

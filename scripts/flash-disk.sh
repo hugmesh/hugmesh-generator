@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# flash-disk.sh — flash a built Snapdragon OS artifact onto a real disk.
+# flash-disk.sh — flash a built HugMesh OS artifact onto a real disk.
 #
 # This is the OS-disk flasher (the counterpart to make-keys-usb.sh, which writes
 # the small provisioning KEYS stick). It writes a WHOLE-disk OS image:
@@ -49,7 +49,7 @@ usage() {
 cat <<EOF
 Usage: sudo $0 [OPTIONS] /dev/sdX
 
-  Flash a built Snapdragon OS artifact (.img preferred, .iso fallback) onto the
+  Flash a built HugMesh OS artifact (.img preferred, .iso fallback) onto the
   WHOLE target disk. The .img is self-partitioning (PARTUUID root, growroot).
 
 Options:
@@ -83,7 +83,7 @@ Examples:
   sudo $0 --arch x86 --role host --no-confirm /dev/nvme0n1
 
   # explicit artifact
-  sudo $0 --artifact /path/to/snapdragon-rpi5-arm64-backend-test-20260610T193045Z.img /dev/sdb
+  sudo $0 --artifact /path/to/hugmesh-rpi5-arm64-backend-test-20260610T193045Z.img /dev/sdb
 
   # just see what would be flashed (works without sudo)
   $0 --role frontend --list
@@ -136,19 +136,19 @@ fi
 
 # ── Artifact auto-pick ─────────────────────────────────────────────
 # Build the glob patterns. The 'host' role on x86 names artifacts
-# 'gentoo-x86-snapdragon-host-*', which still matches '*-host-*'; the generic
+# 'gentoo-x86-hugmesh-host-*', which still matches '*-host-*'; the generic
 # '*-<role>-*' pattern covers both arches' naming.
 #
 # Echoes nothing if no match. Prefers .img over .iso, newest mtime first.
 list_candidates() {
     local kind="$1"   # img | iso
     # Match BOTH naming conventions, newest-mtime-first, role-scoped first:
-    #   • snapdragon-* — the persistent .img artifact the QEMU launchers and the
-    #     .img builders agree on (snapdragon-rpi5-arm64-<role>-*.img,
-    #     snapdragon-host-amd64-*.img). This is the autodetect convention shared
+    #   • hugmesh-* — the persistent .img artifact the QEMU launchers and the
+    #     .img builders agree on (hugmesh-rpi5-arm64-<role>-*.img,
+    #     hugmesh-host-amd64-*.img). This is the autodetect convention shared
     #     with tests/qemu/launch-pi.sh and launch-x86.sh.
     #   • gentoo-*    — the existing ISO/installer naming
-    #     (gentoo-rpi5-arm64-<role>-k8s-*.iso, gentoo-x86-snapdragon-host-*.iso).
+    #     (gentoo-rpi5-arm64-<role>-k8s-*.iso, gentoo-x86-hugmesh-host-*.iso).
     # role-scoped globs come first so a matching role wins over a generic hit;
     # the trailing generic globs catch host/x86 names that don't carry the role
     # token. kernel/initramfs/squashfs blobs are filtered out (they share .img).
@@ -156,9 +156,9 @@ list_candidates() {
     # portably); our build artifacts have safe, glob-stable names.
     # shellcheck disable=SC2012
     ls -1t \
-        "${WORK_DIR}"/snapdragon-*-"${ROLE}"-*."${kind}" \
+        "${WORK_DIR}"/hugmesh-*-"${ROLE}"-*."${kind}" \
         "${WORK_DIR}"/gentoo-*-"${ROLE}"-*."${kind}" \
-        "${WORK_DIR}"/snapdragon-*"${ROLE}"*."${kind}" \
+        "${WORK_DIR}"/hugmesh-*"${ROLE}"*."${kind}" \
         "${WORK_DIR}"/gentoo-*"${ROLE}"*."${kind}" \
         2>/dev/null \
         | grep -ivE '/(.*-)?(kernel|initramfs|initrd|squashfs)[^/]*\.'"${kind}"'$' \
@@ -202,7 +202,7 @@ fi
 # Resolve the artifact (explicit wins; otherwise auto-pick).
 if [ -z "${ARTIFACT}" ]; then
     ARTIFACT="$(pick_artifact || true)"
-    [ -n "${ARTIFACT}" ] || dl_die "no snapdragon-*/gentoo-* ${ROLE} .img/.iso in ${WORK_DIR}. Build one, pass --artifact, or check --arch/--role (try: $0 --role ${ROLE} --list)."
+    [ -n "${ARTIFACT}" ] || dl_die "no hugmesh-*/gentoo-* ${ROLE} .img/.iso in ${WORK_DIR}. Build one, pass --artifact, or check --arch/--role (try: $0 --role ${ROLE} --list)."
 fi
 [ -f "${ARTIFACT}" ] || dl_die "artifact not found: ${ARTIFACT}"
 

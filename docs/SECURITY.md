@@ -1,4 +1,4 @@
-# Snapdragon security model
+# HugMesh security model
 
 Defense-in-depth: every application UI/API is a **distinct identity** at three
 layers, and the container runtime + network are confined to those identities.
@@ -33,24 +33,24 @@ Vault-managed mTLS keystore:
 
 | Application | k8s ServiceAccount | SELinux `seLinuxOptions` (level) | Casdoor user / role | JKS keystore (CN) |
 |---|---|---|---|---|
-| `snapdragon-pki-gateway` | `sa-pki-gateway` | `s0:c11` | `svc-pki-gateway` / `ROLE_GATEWAY` | `snapdragon-pki-gateway.snapdragon-pki.svc` |
-| `snapdragon-be-gateway` | `sa-be-gateway` | `s0:c12` | `svc-be-gateway` / `ROLE_GATEWAY` | `snapdragon-be-gateway.snapdragon-backend.svc` |
-| `snapdragon-fe-gateway` | `sa-fe-gateway` | `s0:c13` | `svc-fe-gateway` / `ROLE_GATEWAY` | `snapdragon-fe-gateway.snapdragon-frontend.svc` |
-| `snapdragon-gateway-superadmin` | `sa-gateway-superadmin` | `s0:c17` | `svc-gateway-superadmin` / `ROLE_GATEWAY` | `snapdragon-gateway-superadmin.snapdragon-pki.svc` |
-| `snapdragon-api` (actions) | `sa-api` | `s0:c22` | `svc-api` / `ROLE_API` | `snapdragon-api.snapdragon-backend.svc` |
-| `admin-bff` (api) | `sa-admin-bff` | `s0:c23` | `svc-admin-bff` / `ROLE_ADMIN_API` | `admin-bff.snapdragon-backend.svc` |
+| `hugmesh-pki-gateway` | `sa-pki-gateway` | `s0:c11` | `svc-pki-gateway` / `ROLE_GATEWAY` | `hugmesh-pki-gateway.hugmesh-pki.svc` |
+| `hugmesh-be-gateway` | `sa-be-gateway` | `s0:c12` | `svc-be-gateway` / `ROLE_GATEWAY` | `hugmesh-be-gateway.hugmesh-backend.svc` |
+| `hugmesh-fe-gateway` | `sa-fe-gateway` | `s0:c13` | `svc-fe-gateway` / `ROLE_GATEWAY` | `hugmesh-fe-gateway.hugmesh-frontend.svc` |
+| `hugmesh-gateway-superadmin` | `sa-gateway-superadmin` | `s0:c17` | `svc-gateway-superadmin` / `ROLE_GATEWAY` | `hugmesh-gateway-superadmin.hugmesh-pki.svc` |
+| `hugmesh-api` (actions) | `sa-api` | `s0:c22` | `svc-api` / `ROLE_API` | `hugmesh-api.hugmesh-backend.svc` |
+| `admin-bff` (api) | `sa-admin-bff` | `s0:c23` | `svc-admin-bff` / `ROLE_ADMIN_API` | `admin-bff.hugmesh-backend.svc` |
 | `admin-bff-db` | `sa-admin-bff-db` | `s0:c26` | (DB) | (non-Java: PEM, no JKS) |
-| `federation-api` | `sa-federation` | `s0:c24` | `svc-federation` / `ROLE_FEDERATION` | `federation-api.snapdragon-backend.svc` |
+| `federation-api` | `sa-federation` | `s0:c24` | `svc-federation` / `ROLE_FEDERATION` | `federation-api.hugmesh-backend.svc` |
 | `federation-db` | `sa-federation-db` | `s0:c25` | (DB) | (non-Java: PEM, no JKS) |
-| `mod-bff-api` | `sa-mod-bff` | `s0:c27` | `svc-mod-bff` / `ROLE_MOD_API` | `mod-bff.snapdragon-backend.svc` |
+| `mod-bff-api` | `sa-mod-bff` | `s0:c27` | `svc-mod-bff` / `ROLE_MOD_API` | `mod-bff.hugmesh-backend.svc` |
 | `mod-bff-db` | `sa-mod-bff-db` | `s0:c28` | (DB) | (non-Java: PEM, no JKS) |
-| `user-bff-api` | `sa-user-bff` | `s0:c29` | `svc-user-bff` / `ROLE_USER_API` | `user-bff.snapdragon-backend.svc` |
+| `user-bff-api` | `sa-user-bff` | `s0:c29` | `svc-user-bff` / `ROLE_USER_API` | `user-bff.hugmesh-backend.svc` |
 | `user-bff-db` | `sa-user-bff-db` | `s0:c38` | (DB) | (non-Java: PEM, no JKS) |
-| `forum-bff-api` | `sa-forum-bff` | `s0:c53` | `svc-forum-bff` / `ROLE_FORUM_API` | `forum-bff.snapdragon-backend.svc` |
+| `forum-bff-api` | `sa-forum-bff` | `s0:c53` | `svc-forum-bff` / `ROLE_FORUM_API` | `forum-bff.hugmesh-backend.svc` |
 | `forum-bff-db` | `sa-forum-bff-db` | `s0:c52` | (DB) | (non-Java: PEM, no JKS) |
-| `wiki-bff-api` | `sa-wiki-bff` | `s0:c69` | `svc-wiki-bff` / `ROLE_WIKI_API` | `wiki-bff.snapdragon-backend.svc` |
+| `wiki-bff-api` | `sa-wiki-bff` | `s0:c69` | `svc-wiki-bff` / `ROLE_WIKI_API` | `wiki-bff.hugmesh-backend.svc` |
 | `wiki-bff-db` | `sa-wiki-bff-db` | `s0:c68` | (DB) | (non-Java: PEM, no JKS) |
-| `service-catalog-ui` (no Deployment yet — see note) | `sa-service-catalog-ui` | `s0:c49` *(reserved)* | `svc-service-catalog-ui` / `ROLE_SUPERADMIN_UI` | `snapdragon-superadmin-service-catalog-ui.snapdragon-frontend.svc` |
+| `service-catalog-ui` (no Deployment yet — see note) | `sa-service-catalog-ui` | `s0:c49` *(reserved)* | `svc-service-catalog-ui` / `ROLE_SUPERADMIN_UI` | `hugmesh-superadmin-service-catalog-ui.hugmesh-frontend.svc` |
 | `service-catalog-builder` (Kaniko build pods) | (per-build) | `s0:c54` | (build pod) | (non-Java: no JKS) |
 | `route-access` | `sa-route-access` | `s0:c15` | (DB) | — |
 | `forgejo` (GitOps) | `sa-forgejo` | `s0:c16` | per-app svc user | — |
@@ -104,7 +104,7 @@ at bootstrap, and a JKS keystore issued by `gen-keystores.sh`. Each MCS category
 (`s0:cNN`) is **unique** — no two workloads may share one, so a compromised pod
 cannot read another's category-isolated volumes.
 
-> **service-catalog-ui note:** the rebranded `snapdragon-superadmin-service-catalog-ui`
+> **service-catalog-ui note:** the rebranded `hugmesh-superadmin-service-catalog-ui`
 > currently ships only a federation descriptor
 > (`manifests/federation-api/register-superadmin-service-catalog.descriptor.yaml`),
 > **not** a Deployment. Category `s0:c49` and SA `sa-service-catalog-ui` are
@@ -130,7 +130,7 @@ cannot read another's category-isolated volumes.
 > need **no new `specs/selinux/*.te`/`.fc` module**. **No new listening port** is
 > opened: auth/TLS reuse the existing Cassandra CQL `:9042` already covered by the
 > `db-ingress-cassandra` NetworkPolicy (PR #128). The credentials are ESO/Vault
-> only (`secret/snapdragon/cassandra-admin`, `…/cassandra-app-creds`) — never in
+> only (`secret/hugmesh/cassandra-admin`, `…/cassandra-app-creds`) — never in
 > git. See `docs/CLUSTER-HARDENING-PLAN.md` §H for the enable order.
 
 > **`velero` cloud-backups MCS note:** the opt-in/inert cloud-backups leg
@@ -157,7 +157,7 @@ cannot read another's category-isolated volumes.
 > `securityContext.seLinuxOptions.level` (`deployment.yaml`) and runs as the
 > dedicated SA `sa-coturn` (`service-account.yaml`,
 > `automountServiceAccountToken:false` — coturn needs no Kubernetes API). It
-> co-resides in `snapdragon-backend` with tuwunel (`s0:c32`) so they can share the
+> co-resides in `hugmesh-backend` with tuwunel (`s0:c32`) so they can share the
 > ESO-synced TURN long-term-credential secret (`coturn-shared-secret`), but the
 > unique MCS category keeps the two pods category-isolated. coturn ships dark
 > (RUNTIME-ONLY: no baked Application; gated by the apps/13a element +
@@ -172,19 +172,19 @@ cannot read another's category-isolated volumes.
 > |---|---|---|---|
 > | `localpath_provisioner` | `localpath_provisioner_t`, `localpath_provisioner_helper_t` | local-path-provisioner controller + busybox helper (pod, runtime transition) | `/mnt/{data,usb}/local-path` |
 > | `otel_collector` | `otel_collector_t` | otel-collector DaemonSet (pod, runtime transition) | (no host exec; `/var/log/pods`) |
-> | `snapdragon_authkeys` | `snapdragon_authkeys_t` (+ `snapdragon_authkeys_cache_t`) | the AuthorizedKeysCommand (sshd_t domtrans, runs as nobody) — **security-load-bearing** | `/usr/sbin/snapdragon-authorized-keys-lookup`; `/etc/snapdragon/registry` |
-> | `snapdragon_device_registry_sync` | `snapdragon_device_registry_sync_t` | Layer-B registry sync daemon (writes the export cache + the sshd_config.d drop-in, reloads sshd) | `/usr/sbin/snapdragon-device-registry-sync` |
-> | `snapdragon_breakglass` | (label only — `ssh_home_t`) | the loopback break-glass authorized_keys file so sshd reads it on enforcing | `/etc/ssh/break-glass.keys` |
-> | `snapdragon_vpn` | `snapdragon_vpn_runner_t`, `snapdragon_vpn_reconcile_t` (+ `snapdragon_vpn_etc_t`, `snapdragon_vpn_runtime_t`) | egress-VPN runner (net_admin: wg/tun + ip-rule kill-switch) + the signed-export reconcile agent | `/usr/sbin/snapdragon-vpn-runner`, `/usr/sbin/snapdragon-vpn-reconcile`; `/etc/snapdragon/vpn` |
-> | `snapdragon_node_storage` | `snapdragon_node_storage_t` (+ `snapdragon_node_storage_cache_t`) | node-storage reconcile agent (lsblk + FDE pool provision via provision.sh + kubectl nodePathMap patch) | `/usr/sbin/snapdragon-node-storage-reconcile`; `/var/lib/snapdragon/node-storage` |
-> | `snapdragon_domain_reconcile` | `snapdragon_domain_reconcile_t` (+ `snapdragon_domain_reconcile_cache_t`) | domain-registry -> brand-repo bridge (#4): mTLS-fetch + verify the signed cross-domain export, then exec gen-keystores.sh + generate-brand-repos.sh to emit per-domain CA + brand GitOps repos into a node-local staging dir (NO block-device admin — emits files only) | `/usr/sbin/snapdragon-domain-reconcile`; `/var/lib/snapdragon/domain-registry` |
-> | `snapdragon_policy_sync` | `snapdragon_policy_sync_t` | Layer-A headscale policy-sync agent (pki/control node only; renders + applies policy.hujson) | `/usr/sbin/gen-headscale-policy.sh` |
-> | `snapdragon_oidc_token` | (label only — `user_runtime_t`) | the per-user SSO OIDC-token deposit dir read by the desktop bearer-forward GEN-SSO artifact | `/run/user/%{uid}/snapdragon` |
+> | `hugmesh_authkeys` | `hugmesh_authkeys_t` (+ `hugmesh_authkeys_cache_t`) | the AuthorizedKeysCommand (sshd_t domtrans, runs as nobody) — **security-load-bearing** | `/usr/sbin/hugmesh-authorized-keys-lookup`; `/etc/hugmesh/registry` |
+> | `hugmesh_device_registry_sync` | `hugmesh_device_registry_sync_t` | Layer-B registry sync daemon (writes the export cache + the sshd_config.d drop-in, reloads sshd) | `/usr/sbin/hugmesh-device-registry-sync` |
+> | `hugmesh_breakglass` | (label only — `ssh_home_t`) | the loopback break-glass authorized_keys file so sshd reads it on enforcing | `/etc/ssh/break-glass.keys` |
+> | `hugmesh_vpn` | `hugmesh_vpn_runner_t`, `hugmesh_vpn_reconcile_t` (+ `hugmesh_vpn_etc_t`, `hugmesh_vpn_runtime_t`) | egress-VPN runner (net_admin: wg/tun + ip-rule kill-switch) + the signed-export reconcile agent | `/usr/sbin/hugmesh-vpn-runner`, `/usr/sbin/hugmesh-vpn-reconcile`; `/etc/hugmesh/vpn` |
+> | `hugmesh_node_storage` | `hugmesh_node_storage_t` (+ `hugmesh_node_storage_cache_t`) | node-storage reconcile agent (lsblk + FDE pool provision via provision.sh + kubectl nodePathMap patch) | `/usr/sbin/hugmesh-node-storage-reconcile`; `/var/lib/hugmesh/node-storage` |
+> | `hugmesh_domain_reconcile` | `hugmesh_domain_reconcile_t` (+ `hugmesh_domain_reconcile_cache_t`) | domain-registry -> brand-repo bridge (#4): mTLS-fetch + verify the signed cross-domain export, then exec gen-keystores.sh + generate-brand-repos.sh to emit per-domain CA + brand GitOps repos into a node-local staging dir (NO block-device admin — emits files only) | `/usr/sbin/hugmesh-domain-reconcile`; `/var/lib/hugmesh/domain-registry` |
+> | `hugmesh_policy_sync` | `hugmesh_policy_sync_t` | Layer-A headscale policy-sync agent (pki/control node only; renders + applies policy.hujson) | `/usr/sbin/gen-headscale-policy.sh` |
+> | `hugmesh_oidc_token` | (label only — `user_runtime_t`) | the per-user SSO OIDC-token deposit dir read by the desktop bearer-forward GEN-SSO artifact | `/run/user/%{uid}/hugmesh` |
 >
 > Each row is a **node module** that loads via the **build-host policy compile**
 > (the `.pp` is built on the x86 BUILD host, NOT first-boot — the Pi cannot run
 > the refpolicy devel toolchain). The shared registry cache type
-> `snapdragon_authkeys_cache_t` (declared in `snapdragon_authkeys.te`) is the
+> `hugmesh_authkeys_cache_t` (declared in `hugmesh_authkeys.te`) is the
 > on-disk handoff reused by the device-registry-sync, vpn-reconcile,
 > node-storage, and policy-sync domains. See §2 — note that today these custom
 > modules are authored but **not yet compiled/installed by any build step**;
@@ -229,7 +229,7 @@ cross-namespace calls.
 
 `provision_truststore()` builds a PKCS12 truststore (and installs the JKS
 truststore) from the **cluster CA / cert chain on the USB KEYS stick**, then
-publishes `kube-system/snapdragon-truststore`. Java containers mount it and run
+publishes `kube-system/hugmesh-truststore`. Java containers mount it and run
 with `-Djavax.net.ssl.trustStore=/pki/truststore.p12
 -Djavax.net.ssl.trustStoreType=PKCS12` (set via `JAVA_TOOL_OPTIONS` in the
 charts), so all Java IO trusts the cluster CA.
@@ -263,23 +263,23 @@ node). The mesh is governed by a **default-deny, tag-based ACL** shipped as
 `specs/etc/headscale/policy.hujson` and loaded with
 `policy.mode: file` + `headscale policy set` (run by `provision_headscale`).
 
-- **Membership tag.** Nodes self-apply `tag:snapdragon` (+ a per-role
+- **Membership tag.** Nodes self-apply `tag:hugmesh` (+ a per-role
   `tag:pki`/`tag:be`/`tag:fe`/`tag:host`) at join via
   `tailscale up --advertise-tags=...`. `tagOwners` restricts those tags to the
-  `snapdragon` headscale user (the preauth-key owner), so only enrolled nodes
-  can claim them. With OIDC join, the Casdoor `snapdragon/headscale` group
+  `hugmesh` headscale user (the preauth-key owner), so only enrolled nodes
+  can claim them. With OIDC join, the Casdoor `hugmesh/headscale` group
   gates enrolment (`allowed_groups`, matching the group's real `<owner>/<name>`
   claim shape — see `keys-template/headscale/config.yaml`) — two independent
   membership layers.
 - **Full intra-fleet mesh.** The only `accept` rules are
-  `tag:snapdragon → tag:snapdragon:*` (every node reaches every node, all ports)
-  and `tag:snapdragon → {10.244.0.0/16, 10.96.0.0/12}:*` (pods + ClusterIP
+  `tag:hugmesh → tag:hugmesh:*` (every node reaches every node, all ports)
+  and `tag:hugmesh → {10.244.0.0/16, 10.96.0.0/12}:*` (pods + ClusterIP
   services). There is **no internet-wide `*` grant and no exit-node access** —
   the tailnet is fleet-scoped.
 - **Pods/services as one LAN.** Each node advertises the cluster pod
   (`10.244.0.0/16`) and service (`10.96.0.0/12`) CIDRs
   (`--advertise-routes=...`) and accepts approved routes (`--accept-routes`).
-  `autoApprovers.routes` maps exactly those two CIDRs to `tag:snapdragon`, so
+  `autoApprovers.routes` maps exactly those two CIDRs to `tag:hugmesh`, so
   advertised subnet routes are **auto-approved** (no manual
   `headscale nodes approve-routes`); `provision_headscale` also backfills
   approval for any node that registered before the policy loaded.
@@ -298,7 +298,7 @@ The control server's `server_url` is resolved **local-first** at first boot by
 `provision_headscale` (`resolve_endpoint`), so a node provisioned before any
 public DNS exists is still reachable by its LAN peers. Precedence (highest
 first): `provision.json .headscale.server_url` → `.mesh.endpoint` → the baked
-brand `HEADSCALE_URL` (`/etc/snapdragon/headscale-url`, written at build time
+brand `HEADSCALE_URL` (`/etc/hugmesh/headscale-url`, written at build time
 because env does not survive to first boot) → **default** `http://<the pki
 node's primary RFC1918 LAN IPv4>:8080`. The single `server_url:` line in
 `/etc/headscale/config.yaml` is rewritten **in place** (idempotent) *before*
@@ -329,7 +329,7 @@ endpoint**, never a node IP, as `controlPlaneEndpoint`:
 - **First vs additional control-plane** is data-driven and idempotent. The
   **first** CP (`role=control-plane`, `bootstrap=true`, `first` defaults true)
   runs `kubeadm init --upload-certs` and persists fresh join material
-  (`/etc/snapdragon/kubeadm-join.cmd` + `kubeadm-certificate-key`, mode 0600).
+  (`/etc/hugmesh/kubeadm-join.cmd` + `kubeadm-certificate-key`, mode 0600).
   An **additional** CP (`first=false`, full `.kubernetes.join` incl.
   `certificate_key`) runs `kubeadm join … --control-plane --certificate-key`.
   The robust default keys off a probe of `https://<cp_dns_name>:6443/healthz`:
@@ -340,8 +340,8 @@ endpoint**, never a node IP, as `controlPlaneEndpoint`:
 - **Workers** (`role=worker`) `kubeadm join` the same `cp_dns_name:6443`. The
   `certSANs` in `kubeadm-config.yaml` cover the MagicDNS name, the control-node
   hostname, and loopback so additional CPs/clients validate the API cert.
-- **N-per-role is unconstrained on the mesh.** `tag:snapdragon` (+ per-role
-  tags) are all owned by the single `snapdragon` headscale user and the preauth
+- **N-per-role is unconstrained on the mesh.** `tag:hugmesh` (+ per-role
+  tags) are all owned by the single `hugmesh` headscale user and the preauth
   key is `reusable`, so `tagOwners` gates *which* tags a node may claim, not
   *how many* nodes — N nodes per role join and mesh with no policy change.
 

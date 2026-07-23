@@ -7,57 +7,57 @@
 #
 # Shape mirrors the only other PDB in the repo (node-storage-placement/pdb.yaml):
 # policy/v1, a single app-label selector, namespace inherited from this dir's
-# kustomization (snapdragon-frontend). Purely additive — a PDB constrains only
+# kustomization (hugmesh-frontend). Purely additive — a PDB constrains only
 # voluntary eviction, never scheduling or scale — so it cannot crash-loop or change
 # steady-state behaviour.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: snapdragon-matrix-ui
+  name: hugmesh-matrix-ui
   labels:
-    app: snapdragon-matrix-ui
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-matrix-ui
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: snapdragon-matrix-ui
+      app: hugmesh-matrix-ui
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: snapdragon-mastodon-ui
+  name: hugmesh-mastodon-ui
   labels:
-    app: snapdragon-mastodon-ui
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-mastodon-ui
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: snapdragon-mastodon-ui
+      app: hugmesh-mastodon-ui
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: snapdragon-login-ui
+  name: hugmesh-login-ui
   labels:
-    app: snapdragon-login-ui
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-login-ui
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: snapdragon-login-ui
+      app: hugmesh-login-ui
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: snapdragon-admin-ui
+  name: hugmesh-admin-ui
   labels:
-    app: snapdragon-admin-ui
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-admin-ui
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: snapdragon-admin-ui
+      app: hugmesh-admin-ui

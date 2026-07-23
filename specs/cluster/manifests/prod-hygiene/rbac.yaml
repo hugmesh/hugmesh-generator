@@ -2,16 +2,16 @@
 # cluster-wide (pods + their specs/labels/images/annotations, across all ns) and
 # to exec into the Vault pod for the seal-status probe + run the ephemeral
 # seam-probe pods. Least-privilege: read-mostly cluster-wide; pods/exec + create
-# scoped to the namespaces it probes (vault for the Vault exec, snapdragon-policy
+# scoped to the namespaces it probes (vault for the Vault exec, hugmesh-policy
 # for the ephemeral seam-probe curl pods).
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: prod-hygiene-gate
-  namespace: snapdragon-policy
+  namespace: hugmesh-policy
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     app.kubernetes.io/component: policy
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -19,7 +19,7 @@ kind: ClusterRole
 metadata:
   name: prod-hygiene-gate-read
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     app.kubernetes.io/component: policy
 rules:
   # Read every pod spec (images, args, labels, the seam-probe annotation) in all
@@ -33,7 +33,7 @@ kind: ClusterRoleBinding
 metadata:
   name: prod-hygiene-gate-read
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     app.kubernetes.io/component: policy
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -42,7 +42,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: prod-hygiene-gate
-    namespace: snapdragon-policy
+    namespace: hugmesh-policy
 ---
 # Vault exec (seal-status probe) — scoped to the vault namespace only.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -51,7 +51,7 @@ metadata:
   name: prod-hygiene-gate-vault-exec
   namespace: vault
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -66,7 +66,7 @@ metadata:
   name: prod-hygiene-gate-vault-exec
   namespace: vault
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -74,17 +74,17 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: prod-hygiene-gate
-    namespace: snapdragon-policy
+    namespace: hugmesh-policy
 ---
 # Ephemeral seam-probe pods (the `kubectl run --rm` curl) — scoped to
-# snapdragon-policy (the gate's own namespace; the probe pods run here).
+# hugmesh-policy (the gate's own namespace; the probe pods run here).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: prod-hygiene-gate-probe
-  namespace: snapdragon-policy
+  namespace: hugmesh-policy
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log"]
@@ -94,9 +94,9 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: prod-hygiene-gate-probe
-  namespace: snapdragon-policy
+  namespace: hugmesh-policy
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -104,4 +104,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: prod-hygiene-gate
-    namespace: snapdragon-policy
+    namespace: hugmesh-policy

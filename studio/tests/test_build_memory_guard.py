@@ -14,19 +14,19 @@ import uuid
 
 import pytest
 
-from snapdragon_studio.core import host_resources as hr
-from snapdragon_studio.core.build_driver import BuildDriver, docker_memory_args
-from snapdragon_studio.core.config import Domain, ImageConfig, User
-from snapdragon_studio.core.platform_info import HostInfo
-from snapdragon_studio.core.worklist import WorklistConfig, WorklistEntry
-from snapdragon_studio.core.worklist_driver import WorklistDriver
+from hugmesh_studio.core import host_resources as hr
+from hugmesh_studio.core.build_driver import BuildDriver, docker_memory_args
+from hugmesh_studio.core.config import Domain, ImageConfig, User
+from hugmesh_studio.core.platform_info import HostInfo
+from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry
+from hugmesh_studio.core.worklist_driver import WorklistDriver
 
 GIB = hr.GIB
 
 
 def host(is_root=True, has_docker=True, gentoo=True):
     return HostInfo(os="linux", is_gentoo=gentoo, has_docker=has_docker, has_bash=True,
-                    has_kvm=False, is_root=is_root, builder_image="snapdragon-builder")
+                    has_kvm=False, is_root=is_root, builder_image="hugmesh-builder")
 
 
 def cfg_for(tmp_path, **kw):
@@ -56,7 +56,7 @@ def test_docker_command_carries_the_memory_cap_in_the_wrapper_section(tmp_path, 
     i = cmd.index("--memory")
     assert cmd[i:i + 4] == ["--memory", "24576m", "--memory-swap", "24576m"]
     # DOCKER-RUN WRAPPER SECTION only: after --name (the #339 slot), before the image
-    assert cmd.index("--name") < i < cmd.index("snapdragon-builder")
+    assert cmd.index("--name") < i < cmd.index("hugmesh-builder")
     # memory-swap == memory -> ZERO container swap (no host swap-thrash)
     assert cmd[cmd.index("--memory-swap") + 1] == cmd[i + 1]
 
@@ -163,7 +163,7 @@ def test_host_awareness_applies_once_then_the_config_is_explicit_forever(tmp_pat
 
 
 def test_conftest_pin_keeps_suite_fresh_configs_at_8():
-    # belt and braces: the autouse SNAPDRAGON_BUILD_JOBS=8 pin makes every jobs-less
+    # belt and braces: the autouse HUGMESH_BUILD_JOBS=8 pin makes every jobs-less
     # config in the rest of the suite byte-stable at the historical 8
     assert ImageConfig().jobs == 8
 
@@ -300,13 +300,13 @@ def test_real_docker_run_lands_the_cap_on_hostconfig():
     """The flags the driver emits are exactly what docker enforces: start a capped
     throwaway container (the builder image when present, else the tiniest image at
     hand) and read HostConfig.Memory/MemorySwap back off the daemon."""
-    image = "snapdragon-builder"
+    image = "hugmesh-builder"
     if subprocess.run(["docker", "image", "inspect", image],
                       capture_output=True).returncode != 0:
         image = "busybox"
         if subprocess.run(["docker", "image", "inspect", image],
                           capture_output=True).returncode != 0:
-            pytest.skip("neither snapdragon-builder nor busybox image is present")
+            pytest.skip("neither hugmesh-builder nor busybox image is present")
     name = f"sd-memcap-proof-{uuid.uuid4().hex[:12]}"
     try:
         run = subprocess.run(

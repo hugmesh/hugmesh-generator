@@ -28,8 +28,8 @@ platform UI — not a cluster node.
 > the mount point for the standalone/LUKS posture on non-x86 hardware.
 > The standalone path also includes an **unaffiliated** variant
 > (`standalone-unaffiliated`, or `--unaffiliated` composed onto any client role):
-> a plain hardened Gentoo desktop with **zero Snapdragon affiliation** — neutral
-> boot chain/installer/hostname/artifacts, no `snapdragon-*` tools or markers —
+> a plain hardened Gentoo desktop with **zero HugMesh affiliation** — neutral
+> boot chain/installer/hostname/artifacts, no `hugmesh-*` tools or markers —
 > see [STANDALONE-DESKTOP.md](STANDALONE-DESKTOP.md#unaffiliated-plain-desktop-standalone-unaffiliated).
 
 - **✅ shipped:** the x86 laptop / thin-Chromebook / superadmin-desktop client arms
@@ -91,7 +91,7 @@ the native amd64 chroot build with grub-EFI.
   NVMe/AHCI/XHCI, ACPI/backlight/thermal, microcode) appended for client roles.
 - Desktop USE: a `@@CLIENT_USE@@` token in `make.conf.tmpl` (`X gtk dbus elogind`)
   set for client roles.
-- `PERSON_ROLE` + `DOMAINS` build flags → `/etc/snapdragon/{identity-role,domains}`
+- `PERSON_ROLE` + `DOMAINS` build flags → `/etc/hugmesh/{identity-role,domains}`
   markers (baked directly by the build); `provision_desktop_governance()` (in
   `specs/etc/keys-provision/provision.sh`) reads the `domains` marker at first boot
   to render the Casdoor/OIDC desktop-governance tie; person-role+domain in the
@@ -124,7 +124,7 @@ the native amd64 chroot build with grub-EFI.
   sub-devices (charger/extcon/sensors), the on-board cr50 TPM, and pstore-RAM.
   (`desktop.config` already carries the EC core + EC keyboard + pstore + i801.)
 - **superadmin device-password variant:** building with `--person-role superadmin`
-  bakes the marker `/etc/snapdragon/device-password-required`. At first boot,
+  bakes the marker `/etc/hugmesh/device-password-required`. At first boot,
   keys-provision's `provision_device_password()` sets the superadmin account's local
   login password from a **salted+hashed** value on the KEYS USB
   (`.client.device_password_hash`, else `secrets/device-password.hash`). Plaintext
@@ -159,10 +159,10 @@ the native amd64 chroot build with grub-EFI.
   **user install-requests**, and **admin remote-install** (one-click + an in-UI
   SSH terminal over the device-SSH-license). Rides the existing device-SSH-license
   transport. The client-side provisioning lives here
-  ([`specs/etc/snapdragon/desktop-governance/`](../specs/etc/snapdragon/desktop-governance/):
+  ([`specs/etc/hugmesh/desktop-governance/`](../specs/etc/hugmesh/desktop-governance/):
   polkit sudo rule, SSSD/OIDC config, Discover/Flatpak wiring, autostart SSO
   deposit scripts) and the server-side data/API is a full set of controllers in
-  `snapdragon-admin-bff-api` (catalog, install-requests, remote-install, sudo
+  `hugmesh-admin-bff-api` (catalog, install-requests, remote-install, sudo
   entitlement/step-up, SSH terminal). It **ships dark**: the registry + SSH
   transport default to `Noop` client implementations gated by
   `app.desktop.registry.enabled=false` / `app.desktop.remote-install.enabled=false`
@@ -182,9 +182,9 @@ the native amd64 chroot build with grub-EFI.
   "device_password_hash": "$y$...."   // any crypt(3) hash: $y$ yescrypt (preferred) or $6$ sha512crypt
 }
 ```
-The build bakes `/etc/snapdragon/{identity-role,domains,desktop-weight}` directly
+The build bakes `/etc/hugmesh/{identity-role,domains,desktop-weight}` directly
 (no provision step needed for those). For the superadmin variant the build also
-bakes `/etc/snapdragon/device-password-required`, and `provision_device_password()`
+bakes `/etc/hugmesh/device-password-required`, and `provision_device_password()`
 (called after `provision_users`) applies `device_password_hash` to the superadmin
 account at first boot. A later `provision_casdoor_desktop()` will wire the OIDC
 desktop login + the FD-07 keyslot. `device_registry.image_type=="client"` already

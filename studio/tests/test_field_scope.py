@@ -24,7 +24,7 @@ import re
 
 import pytest
 
-from snapdragon_studio.core.config import (
+from hugmesh_studio.core.config import (
     _ALL_CLASSES, _ALL_MODES, _ALL_PLATFORMS, _FIELD_PLATFORMS, _FIELD_SCOPE_OVERRIDES,
     _STANDALONE_CLASS_GATED_PLATFORMS,
     BUILDER_SCRIPTS,
@@ -169,7 +169,7 @@ def test_field_in_scope_is_fail_open_for_unknown_fields():
 def test_gating_scope_allows_delegates_to_core():
     """_gating.scope_allows is the wizard's name for field_in_scope; one implementation, so
     the GUI and the Qt-free channels cannot disagree about whether a field applies."""
-    from snapdragon_studio.gui.pages._gating import scope_allows
+    from hugmesh_studio.gui.pages._gating import scope_allows
     for mode, role in MODE_ROLE:
         cfg = ImageConfig(mode=mode, role=role, platform="x86")
         for fld in ("standalone", "home_mode", "theme", "bundle_source"):

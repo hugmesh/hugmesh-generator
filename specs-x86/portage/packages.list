@@ -1,4 +1,4 @@
-# amd64 snapdragon stage4 package list — BASE (role-independent, hardened k8s).
+# amd64 hugmesh stage4 package list — BASE (role-independent, hardened k8s).
 # One atom per line; lines starting with # are ignored.
 #
 # The vendor-agnostic GPU stack (Mesa/Vulkan/libva) lives in packages-gpu.list
@@ -84,5 +84,5 @@ sys-fs/lvm2
 
 # NOTE: headscale + tailscale are installed as static x86_64 binaries by
 # build-x86-host-stage4.sh (mesh phase), like the RPi image. ArgoCD,
-# snapdragon.games and the backend workloads are deployed INTO the cluster
+# hugmesh.games and the backend workloads are deployed INTO the cluster
 # by ArgoCD, not emerged here.

@@ -26,8 +26,8 @@ trap 'rm -rf "$work"' EXIT
 #    flat config — the exact single-image configs a user could build by hand.
 "$PY" - "$work" <<'PYEOF'
 import sys
-from snapdragon_studio.core.config import Domain, ImageConfig, User
-from snapdragon_studio.core.worklist import WorklistConfig, WorklistEntry
+from hugmesh_studio.core.config import Domain, ImageConfig, User
+from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry
 
 work = sys.argv[1]
 base = ImageConfig(mode="mesh", role="omnibus", platform="x86", brand="acme",
@@ -48,13 +48,13 @@ print(len(wl.entries))
 PYEOF
 
 # 2. Collect the envelope's per-image commands and diff each against the flat config's.
-mapfile -t multi < <("$PY" -m snapdragon_studio --print-commands \
+mapfile -t multi < <("$PY" -m hugmesh_studio --print-commands \
     --config "$work/envelope.json" --generator-dir "$GEN" --backend native)
 
 fail=0
 i=0
 for flat in "$work"/flat-*.json; do
-    one="$("$PY" -m snapdragon_studio --print-command \
+    one="$("$PY" -m hugmesh_studio --print-command \
         --config "$flat" --generator-dir "$GEN" --backend native)"
     if [[ "${multi[$i]:-<missing>}" != "$one" ]]; then
         echo "MISMATCH image $i"
@@ -73,7 +73,7 @@ if [[ "${#multi[@]}" -ne "$i" ]]; then
 fi
 
 # 3. --image <n> must isolate a single materialized image.
-single="$("$PY" -m snapdragon_studio --print-commands --image 1 \
+single="$("$PY" -m hugmesh_studio --print-commands --image 1 \
     --config "$work/envelope.json" --generator-dir "$GEN" --backend native)"
 if [[ "$single" != "${multi[1]}" ]]; then
     echo "MISMATCH --image 1"

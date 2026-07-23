@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-split-tunnel.sh — unit test for the split-tunnel routing logic in
-# /usr/sbin/snapdragon-vpn-runner (egress-VPN PR2).
+# /usr/sbin/hugmesh-vpn-runner (egress-VPN PR2).
 #
 # Proves, WITHOUT root (a recording fake `ip` captures every routing command),
 # the load-bearing routing INVARIANTS:
@@ -19,7 +19,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-RUNNER="${REPO}/specs/usr/sbin/snapdragon-vpn-runner"
+RUNNER="${REPO}/specs/usr/sbin/hugmesh-vpn-runner"
 [ -x "${RUNNER}" ] || chmod +x "${RUNNER}" 2>/dev/null || true
 [ -f "${RUNNER}" ] || { echo "  FAIL runner missing: ${RUNNER}"; exit 1; }
 
@@ -69,7 +69,7 @@ setup_active() {
 
 reset_log() { : > "${IPLOG}"; }
 
-echo "== snapdragon-vpn-runner split-tunnel unit test =="
+echo "== hugmesh-vpn-runner split-tunnel unit test =="
 
 # ── WireGuard up: assert the full rule + kill-switch invariant set ─────────────
 setup_active '[Interface]

@@ -1,5 +1,5 @@
 {
-  // ── Snapdragon Layer-A BOOTSTRAP headscale policy (device-license registry) ──
+  // ── HugMesh Layer-A BOOTSTRAP headscale policy (device-license registry) ──
   //
   // This is the MINIMAL policy baked into the image and applied by
   // provision_headscale during the bootstrap window — BEFORE the BFF
@@ -11,7 +11,7 @@
   // this bootstrap policy with the generated default-deny per-edge SSH block.
   //
   // DELIBERATE DIFFERENCE FROM #66's policy.hujson: the flat any-to-any
-  //   {src:[tag:snapdragon], dst:[tag:snapdragon:*]}
+  //   {src:[tag:hugmesh], dst:[tag:hugmesh:*]}
   // ACL (which exposed EVERY node's :22 to every other node) is DROPPED even
   // here, pre-export. That hole need not exist at ANY time — k8s pod/ClusterIP
   // traffic rides the 10.244/10.96 data-plane rule below (NOT :22), and SSH
@@ -22,13 +22,13 @@
   // hujson = JSON + comments + trailing commas; headscale parses it natively.
 
   // ── Who may apply which tags ──────────────────────────────────────────────
-  // tag:snapdragon STAYS self-applied (the data-plane MEMBERSHIP tag gating the
+  // tag:hugmesh STAYS self-applied (the data-plane MEMBERSHIP tag gating the
   // CIDR rule + route auto-approval); the mesh-join flow (preauth key,
-  // --advertise-tags=tag:snapdragon) is UNTOUCHED by Layer-A.
+  // --advertise-tags=tag:hugmesh) is UNTOUCHED by Layer-A.
   //
   // The SECURITY tags below — tag:dev_*, tag:dom_*, tag:mesh_*, tag:superadmin —
-  // are owned by the "snapdragon" control user ONLY and are SERVER-FORCED via
-  // `headscale nodes tag` at approval (snapdragon-headscale-forcetags). A node
+  // are owned by the "hugmesh" control user ONLY and are SERVER-FORCED via
+  // `headscale nodes tag` at approval (hugmesh-headscale-forcetags). A node
   // CANNOT self-advertise them; that is the FIX-SERVERTAG hardening that makes
   // the SSH dst non-forgeable. They appear in the bootstrap tagOwners so the
   // policy parses and forced-tag assignment is permitted even before the first
@@ -41,31 +41,31 @@
   // gates SELF-advertisement, which we forbid by never minting a preauth key for
   // these tags. (See FORCETAGS note in gen-headscale-policy.sh.)
   "tagOwners": {
-    "tag:snapdragon": ["snapdragon"],
-    "tag:pki": ["snapdragon"],
-    "tag:be": ["snapdragon"],
-    "tag:fe": ["snapdragon"],
-    "tag:host": ["snapdragon"],
-    "tag:superadmin": ["snapdragon"]
+    "tag:hugmesh": ["hugmesh"],
+    "tag:pki": ["hugmesh"],
+    "tag:be": ["hugmesh"],
+    "tag:fe": ["hugmesh"],
+    "tag:host": ["hugmesh"],
+    "tag:superadmin": ["hugmesh"]
   },
 
   // ── Subnet-route auto-approval (UNCHANGED from #66) ───────────────────────
   // Fleet nodes advertise the cluster pod + service CIDRs; auto-approve exactly
-  // those prefixes for tag:snapdragon. Keep in sync with kubeadm-config.yaml.
+  // those prefixes for tag:hugmesh. Keep in sync with kubeadm-config.yaml.
   "autoApprovers": {
     "routes": {
-      "10.244.0.0/16": ["tag:snapdragon"],
-      "10.96.0.0/12": ["tag:snapdragon"]
+      "10.244.0.0/16": ["tag:hugmesh"],
+      "10.96.0.0/12": ["tag:hugmesh"]
     }
   },
 
   // ── Access rules (default-deny; only these accepts apply) ─────────────────
   // KEPT: the k8s "one-LAN" pod/ClusterIP data-plane rule. DROPPED: the
-  // any-to-any tag:snapdragon -> tag:snapdragon:* rule (the :22 hole).
+  // any-to-any tag:hugmesh -> tag:hugmesh:* rule (the :22 hole).
   "acls": [
     {
       "action": "accept",
-      "src": ["tag:snapdragon"],
+      "src": ["tag:hugmesh"],
       "dst": ["10.244.0.0/16:*", "10.96.0.0/12:*"]
     }
   ],
@@ -81,8 +81,8 @@
   "ssh": [
     {
       "action": "accept",
-      "src": ["tag:snapdragon"],
-      "dst": ["tag:snapdragon"],
+      "src": ["tag:hugmesh"],
+      "dst": ["tag:hugmesh"],
       "users": ["@@TS_SSH_USER@@"]
     }
   ]

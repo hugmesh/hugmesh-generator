@@ -13,8 +13,8 @@
 #   * SSSD-OIDC conf is rendered with the per-domain id.<domain> issuer + the
 #     desktop-sudo claim->group mapping, mode 0600.
 #   * bearer-forward.sh is rendered (mode 0755) pointed at api.<domain>.
-#   * DOMAIN PRECEDENCE: /etc/snapdragon/domains first line beats
-#     .snapdragon.cluster_domain; .client.primary_domain beats both.
+#   * DOMAIN PRECEDENCE: /etc/hugmesh/domains first line beats
+#     .hugmesh.cluster_domain; .client.primary_domain beats both.
 #   * SHIPS-DARK / no-op: no baked templates dir => nothing rendered (not error);
 #     templates baked but NO domain => nothing rendered, no sudo granted.
 #
@@ -26,7 +26,7 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SRC="${REPO}/specs/etc/keys-provision/provision.sh"
-TPL_SRC="${REPO}/specs/etc/snapdragon/desktop-governance"
+TPL_SRC="${REPO}/specs/etc/hugmesh/desktop-governance"
 [ -f "${SRC}" ] || { echo "  FAIL provision.sh missing: ${SRC}"; exit 1; }
 [ -d "${TPL_SRC}" ] || { echo "  FAIL templates missing: ${TPL_SRC}"; exit 1; }
 
@@ -84,7 +84,7 @@ JSON
         }
         body="$(printf "%s\n%s" "${__GOV_HELPER_FN__}" "${__USERS_FN__}" \
             | sed -e "s#/etc/sudoers#${ETCROOT}/etc/sudoers#g" \
-                  -e "s#/etc/snapdragon/desktop-governance#${ETCROOT}/etc/snapdragon/desktop-governance#g")"
+                  -e "s#/etc/hugmesh/desktop-governance#${ETCROOT}/etc/hugmesh/desktop-governance#g")"
         eval "${body}"
         provision_users
     '
@@ -97,15 +97,15 @@ trap cleanup EXIT
 # Fresh sandbox: ETCROOT stands in for / (so /etc/... -> ${ETCROOT}/etc/...).
 # BASE stands in for the mounted KEYS USB.
 #   $1 = with-templates | no-templates | keys-templates
-#        with-templates : baked at /etc/snapdragon/desktop-governance
+#        with-templates : baked at /etc/hugmesh/desktop-governance
 #        keys-templates : only on the KEYS USB (KEYS/desktop-governance/)
 #        no-templates   : neither
 new_sandbox() {
     WORK="$(mktemp -d)"; SANDBOXES+=("${WORK}")
     ETCROOT="${WORK}/root"; BASE="${WORK}/keys"
-    mkdir -p "${ETCROOT}/etc/snapdragon" "${BASE}"
+    mkdir -p "${ETCROOT}/etc/hugmesh" "${BASE}"
     case "${1:-with-templates}" in
-        with-templates) cp -r "${TPL_SRC}" "${ETCROOT}/etc/snapdragon/desktop-governance" ;;
+        with-templates) cp -r "${TPL_SRC}" "${ETCROOT}/etc/hugmesh/desktop-governance" ;;
         keys-templates) cp -r "${TPL_SRC}" "${BASE}/desktop-governance" ;;
         no-templates)   : ;;
     esac
@@ -113,11 +113,11 @@ new_sandbox() {
 
 # Run provision_desktop_governance() in the sandbox.
 #   $1 = value for .client.primary_domain (empty => null)
-#   $2 = value for .snapdragon.cluster_domain (empty => null)
-#   $3 = first line to write into /etc/snapdragon/domains (empty => no file)
+#   $2 = value for .hugmesh.cluster_domain (empty => null)
+#   $3 = first line to write into /etc/hugmesh/domains (empty => no file)
 run_gov() {
     local pdom="$1" cdom="$2" domfile="$3"
-    [ -n "${domfile}" ] && printf '%s\n' "${domfile}" > "${ETCROOT}/etc/snapdragon/domains"
+    [ -n "${domfile}" ] && printf '%s\n' "${domfile}" > "${ETCROOT}/etc/hugmesh/domains"
     ETCROOT="${ETCROOT}" BASE="${BASE}" PDOM="${pdom}" CDOM="${cdom}" \
     bash -c '
         set -uo pipefail
@@ -127,14 +127,14 @@ run_gov() {
         jqm() {
             case "$1" in
                 *client.primary_domain*)     printf "%s\n" "${PDOM:-null}" ;;
-                *snapdragon.cluster_domain*) printf "%s\n" "${CDOM:-null}" ;;
+                *hugmesh.cluster_domain*) printf "%s\n" "${CDOM:-null}" ;;
                 *) printf "\n" ;;
             esac
         }
         # Redirect every absolute system path the function writes to into ETCROOT.
         body="$(printf "%s" "${__FN__}" \
-            | sed -e "s#/etc/snapdragon/desktop-governance#${ETCROOT}/etc/snapdragon/desktop-governance#g" \
-                  -e "s#/etc/snapdragon/domains#${ETCROOT}/etc/snapdragon/domains#g" \
+            | sed -e "s#/etc/hugmesh/desktop-governance#${ETCROOT}/etc/hugmesh/desktop-governance#g" \
+                  -e "s#/etc/hugmesh/domains#${ETCROOT}/etc/hugmesh/domains#g" \
                   -e "s#/etc/flatpak#${ETCROOT}/etc/flatpak#g" \
                   -e "s#/etc/polkit-1#${ETCROOT}/etc/polkit-1#g" \
                   -e "s#/etc/sssd#${ETCROOT}/etc/sssd#g" \
@@ -146,11 +146,11 @@ run_gov() {
 
 echo "== provision_desktop_governance() unit test =="
 
-# ── Case 1: full render, domain from /etc/snapdragon/domains ───────────────────
+# ── Case 1: full render, domain from /etc/hugmesh/domains ───────────────────
 new_sandbox with-templates
 run_gov "" "" "acme.example" >/dev/null 2>&1
 E="${ETCROOT}/etc"
-REPO_F="${E}/flatpak/remotes.d/snapdragon-discover.flatpakrepo"
+REPO_F="${E}/flatpak/remotes.d/hugmesh-discover.flatpakrepo"
 if [ -f "${REPO_F}" ]; then
     grep -q 'Url=https://api.acme.example/bff/desktop/registry/' "${REPO_F}" \
         && ok "Discover remote -> api.<domain>/bff/desktop/registry/ (domain substituted)" \
@@ -161,10 +161,10 @@ if [ -f "${REPO_F}" ]; then
 else
     bad "Discover .flatpakrepo not rendered"
 fi
-POLKIT="${E}/polkit-1/rules.d/49-snapdragon-desktop-sudo.rules"
+POLKIT="${E}/polkit-1/rules.d/49-hugmesh-desktop-sudo.rules"
 [ -f "${POLKIT}" ] && grep -q 'unix-group:desktop-sudo' "${POLKIT}" \
     && ok "polkit desktop-sudo gate installed" || bad "polkit gate missing/wrong"
-SSSD="${E}/sssd/conf.d/snapdragon-oidc.conf"
+SSSD="${E}/sssd/conf.d/hugmesh-oidc.conf"
 if [ -f "${SSSD}" ]; then
     grep -q 'oidc_issuer = https://id.acme.example/' "${SSSD}" \
         && ok "SSSD-OIDC issuer -> id.<domain> (domain substituted)" \
@@ -176,7 +176,7 @@ if [ -f "${SSSD}" ]; then
 else
     bad "SSSD-OIDC conf not rendered"
 fi
-BF="${E}/snapdragon/desktop-governance/bearer-forward.sh"
+BF="${E}/hugmesh/desktop-governance/bearer-forward.sh"
 if [ -f "${BF}" ]; then
     grep -q 'api.acme.example' "${BF}" && ok "bearer-forward points at api.<domain>" || bad "bearer-forward host wrong"
     mode="$(stat -c '%a' "${BF}" 2>/dev/null)"
@@ -193,8 +193,8 @@ run_gov "" "" "acme.example" >/dev/null 2>&1
 [ ! -f "${ETCROOT}/etc/flatpak/remotes.d/flathub.flatpakrepo" ] \
     && ok "Flathub-off removes the preset flathub.flatpakrepo" \
     || bad "preset flathub.flatpakrepo NOT removed"
-[ -f "${ETCROOT}/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo" ] \
-    && ok "our snapdragon-discover remote survives Flathub-off" || bad "our remote was removed"
+[ -f "${ETCROOT}/etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo" ] \
+    && ok "our hugmesh-discover remote survives Flathub-off" || bad "our remote was removed"
 
 # ── Case 3: no static sudoers — stock %wheel line commented out ────────────────
 new_sandbox with-templates
@@ -210,35 +210,35 @@ fi
 # ── Case 4: .client.primary_domain beats domains-file and cluster_domain ───────
 new_sandbox with-templates
 run_gov "primary.example" "cluster.example" "domainsfile.example" >/dev/null 2>&1
-grep -q 'api.primary.example' "${ETCROOT}/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo" \
+grep -q 'api.primary.example' "${ETCROOT}/etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo" \
     && ok ".client.primary_domain wins precedence" || bad "primary_domain precedence wrong"
 
 # ── Case 5: domains-file beats cluster_domain ──────────────────────────────────
 new_sandbox with-templates
 run_gov "" "cluster.example" "domainsfile.example" >/dev/null 2>&1
-grep -q 'api.domainsfile.example' "${ETCROOT}/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo" \
-    && ok "/etc/snapdragon/domains first line beats .snapdragon.cluster_domain" \
+grep -q 'api.domainsfile.example' "${ETCROOT}/etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo" \
+    && ok "/etc/hugmesh/domains first line beats .hugmesh.cluster_domain" \
     || bad "domains-file precedence wrong"
 
 # ── Case 6: cluster_domain fallback when no primary + no domains-file ──────────
 new_sandbox with-templates
 run_gov "" "cluster.example" "" >/dev/null 2>&1
-grep -q 'api.cluster.example' "${ETCROOT}/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo" \
-    && ok ".snapdragon.cluster_domain used as last-resort fallback" || bad "cluster_domain fallback wrong"
+grep -q 'api.cluster.example' "${ETCROOT}/etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo" \
+    && ok ".hugmesh.cluster_domain used as last-resort fallback" || bad "cluster_domain fallback wrong"
 
 # ── Case 7: SHIPS-DARK — no baked templates dir => no-op (not error) ───────────
 new_sandbox no-templates
 run_gov "" "" "acme.example" >/dev/null 2>&1; rc=$?
 [ "${rc}" -eq 0 ] && ok "no baked templates => clean no-op (return 0)" || bad "non-zero rc with no templates"
-[ ! -e "${ETCROOT}/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo" ] \
+[ ! -e "${ETCROOT}/etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo" ] \
     && ok "no baked templates => nothing rendered (ships-dark)" || bad "rendered config without templates"
 
 # ── Case 8: templates but NO domain => nothing rendered, no sudo granted ───────
 new_sandbox with-templates
 run_gov "" "" "" >/dev/null 2>&1
-[ ! -e "${ETCROOT}/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo" ] \
+[ ! -e "${ETCROOT}/etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo" ] \
     && ok "no domain => Discover remote NOT rendered (empty store)" || bad "remote rendered with no domain"
-[ ! -e "${ETCROOT}/etc/polkit-1/rules.d/49-snapdragon-desktop-sudo.rules" ] \
+[ ! -e "${ETCROOT}/etc/polkit-1/rules.d/49-hugmesh-desktop-sudo.rules" ] \
     && ok "no domain => no polkit gate written (no sudo granted)" || bad "polkit gate written with no domain"
 
 # ── Case 9: KEYS-USB fallback — templates only on KEYS, not baked ──────────────
@@ -246,11 +246,11 @@ run_gov "" "" "" >/dev/null 2>&1
 # ships KEYS/desktop-governance/ and provisioning renders from there.
 new_sandbox keys-templates
 run_gov "" "" "acme.example" >/dev/null 2>&1
-[ -f "${ETCROOT}/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo" ] \
-    && grep -q 'api.acme.example' "${ETCROOT}/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo" \
+[ -f "${ETCROOT}/etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo" ] \
+    && grep -q 'api.acme.example' "${ETCROOT}/etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo" \
     && ok "KEYS-USB fallback: renders from KEYS/desktop-governance/ when not baked" \
     || bad "KEYS-USB fallback did not render the Discover remote"
-[ -f "${ETCROOT}/etc/polkit-1/rules.d/49-snapdragon-desktop-sudo.rules" ] \
+[ -f "${ETCROOT}/etc/polkit-1/rules.d/49-hugmesh-desktop-sudo.rules" ] \
     && ok "KEYS-USB fallback: polkit sudo gate rendered" || bad "KEYS-USB fallback: no polkit gate"
 
 # ── Case 10: HIGH FIX — GOVERNED image suppresses static sudoers.d + wheel-sudo ─
@@ -314,7 +314,7 @@ grep -q 'alice ALL=(ALL) NOPASSWD: ALL' "${ETCROOT}/etc/sudoers.d/10-alice" 2>/d
 # the token into the environment.
 new_sandbox with-templates
 run_gov "" "" "acme.example" >/dev/null 2>&1
-BF="${ETCROOT}/etc/snapdragon/desktop-governance/bearer-forward.sh"
+BF="${ETCROOT}/etc/hugmesh/desktop-governance/bearer-forward.sh"
 if [ -f "${BF}" ]; then
     grep -q 'flatpak --user config --set http.extra-headers' "${BF}" \
         && ok "bearer-forward: writes header via flatpak --user (per-user scope)" \
@@ -329,9 +329,9 @@ if [ -f "${BF}" ]; then
     grep -q -- '--clear' "${BF}" \
         && ok "bearer-forward: supports --clear mode (invoked by the logout hook)" \
         || bad "bearer-forward: no --clear mode"
-    ! grep -q 'export SNAPDRAGON_REGISTRY_BEARER' "${BF}" \
+    ! grep -q 'export HUGMESH_REGISTRY_BEARER' "${BF}" \
         && ok "bearer-forward: does NOT export the bearer token into the environment" \
-        || bad "bearer-forward: still exports SNAPDRAGON_REGISTRY_BEARER (token leak)"
+        || bad "bearer-forward: still exports HUGMESH_REGISTRY_BEARER (token leak)"
 else
     bad "bearer-forward.sh not rendered"
 fi
@@ -344,8 +344,8 @@ for craft in 'evil.example/g; s/Title/HACKED' 'a&b\c.example' $'good.example\nin
     new_sandbox with-templates
     run_gov "${craft}" "" "" >/dev/null 2>&1; rc=$?
     if [ "${rc}" -eq 0 ] \
-       && [ ! -e "${ETCROOT}/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo" ] \
-       && [ ! -e "${ETCROOT}/etc/polkit-1/rules.d/49-snapdragon-desktop-sudo.rules" ]; then
+       && [ ! -e "${ETCROOT}/etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo" ] \
+       && [ ! -e "${ETCROOT}/etc/polkit-1/rules.d/49-hugmesh-desktop-sudo.rules" ]; then
         ok "malicious domain rejected fail-closed (no render, no sudo): $(printf '%q' "${craft}")"
     else
         bad "malicious domain NOT rejected (render or sudo happened): $(printf '%q' "${craft}") rc=${rc}"
@@ -355,7 +355,7 @@ done
 # of a stray sed command, exactly one Url line).
 new_sandbox with-templates
 run_gov "good.example" "" "" >/dev/null 2>&1
-REPO_F="${ETCROOT}/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo"
+REPO_F="${ETCROOT}/etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo"
 if [ -f "${REPO_F}" ] \
    && grep -q 'Url=https://api.good.example/bff/desktop/registry/' "${REPO_F}" \
    && ! grep -qi 'HACKED' "${REPO_F}"; then

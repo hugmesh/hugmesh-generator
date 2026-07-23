@@ -20,8 +20,8 @@ import re
 
 import pytest
 
-from snapdragon_studio.core import device_catalog as dc
-from snapdragon_studio.core.config import (
+from hugmesh_studio.core import device_catalog as dc
+from hugmesh_studio.core.config import (
     BUILDER_SCRIPTS, FRITE_BOARDS, JETSON_BOARDS, JETSON_ROLE_MAP, ORANGEPI5_BOARDS,
     ROLE_CHOICES, RPI5_ROLE_MAP, RPI_BOARDS, RPI_NODE_BOARDS,
 )
@@ -240,7 +240,7 @@ def test_buildable_iff_config_accepts_the_axes():
     """buildable(dev, mode, role) IFF the config/builder grammar accepts the device's
     (platform, board) for that role — the exact ROLE_CHOICES + rpi_boards_for_role
     predicate every emission channel consumes."""
-    from snapdragon_studio.core.config import rpi_boards_for_role
+    from hugmesh_studio.core.config import rpi_boards_for_role
     for d in CAT.devices:
         if d.status == "unsupported":
             continue

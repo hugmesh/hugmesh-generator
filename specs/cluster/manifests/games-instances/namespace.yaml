@@ -1,5 +1,5 @@
-# snapdragon-games-instances — DEDICATED namespace for the per-domain FOSS game-server
-# INSTANCES of the games app-store (distinct from snapdragon-games, which hosts the games
+# hugmesh-games-instances — DEDICATED namespace for the per-domain FOSS game-server
+# INSTANCES of the games app-store (distinct from hugmesh-games, which hosts the games
 # REALM + its Casdoor + the GPU games backend). Game-server instances run arbitrary
 # superadmin-curated FOSS container images, so they get the STRICTEST posture: a dedicated
 # namespace whose ONLY NetworkPolicy is default-deny (network-policy.yaml) + the enforced
@@ -7,7 +7,7 @@
 #
 # WHY A DEDICATED NAMESPACE (the forum precedent, intensified): k8s NetworkPolicy is
 # additive-allow within a namespace, so a per-pod policy cannot SUBTRACT a namespace-wide
-# tier allow. snapdragon-games carries a tier-ingress podSelector:{} allow (for the games
+# tier allow. hugmesh-games carries a tier-ingress podSelector:{} allow (for the games
 # realm + casdoor-games), which would let any of those reach an instance pod. Carving
 # instances into their OWN fresh namespace whose only policy is default-deny gives a REAL
 # isolation boundary — the instance pods admit ingress ONLY from be-gateway (HTTP console
@@ -19,12 +19,12 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: snapdragon-games-instances
+  name: hugmesh-games-instances
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     # Selectable by NetworkPolicy namespaceSelector (the be-gateway ingress allow keys
     # on this label).
-    kubernetes.io/metadata.name: snapdragon-games-instances
+    kubernetes.io/metadata.name: hugmesh-games-instances
     snapdragon.systems/tier: games-instances
     # ENFORCE the restricted Pod Security Standard at admission (not audit) — a curated
     # image that tries to run privileged / as root / with caps is REJECTED at the API

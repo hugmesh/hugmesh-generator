@@ -15,8 +15,8 @@
 # the foreign code is NEVER used as a base and NEVER pushed onward.
 #
 # The design MIRRORS the two proven fail-closed idioms already in this repo — the
-# baked-key detached-Ed25519 verifier (specs/usr/lib/snapdragon/registry-verify.sh)
-# and the reconcile quarantine->scan->promote gate (snapdragon-domain-reconcile) —
+# baked-key detached-Ed25519 verifier (specs/usr/lib/hugmesh/registry-verify.sh)
+# and the reconcile quarantine->scan->promote gate (hugmesh-domain-reconcile) —
 # and REUSES the existing primitives (provenance.sh verify, secret-scan.sh,
 # token-classifier.js / tokens.json). It does NOT re-implement crypto or scanning.
 #
@@ -98,7 +98,7 @@ FIB_MAX_DEPTH="${FIB_MAX_DEPTH:-24}"
 # provenance.sh manifest names + a Phase-7 SBOM sidecar).
 FIB_MANIFEST=".snapdragon-provenance.json"
 FIB_SIG=".snapdragon-provenance.json.sig"
-FIB_SBOM=".snapdragon-sbom.json"
+FIB_SBOM=".hugmesh-sbom.json"
 # Markers dropped into an ADMITTED snapshot (stripped before overlay-copy).
 FIB_ADMIT_STAMP=".snapdragon-mesh-admitted"
 FIB_FOREIGN_MARK=".foreign-mesh-id"
@@ -218,7 +218,7 @@ _fib_split_nv() {
 # Best-effort component set derived from the ACTUAL on-disk tree, INDEPENDENT of the
 # attacker-authored SBOM. This is the anti-omission corroboration for gate [d]: a
 # hostile mesh that VENDORS a CRITICAL dependency but omits/misdeclares it in its own
-# .snapdragon-sbom.json is still caught, because the floor is matched against
+# .hugmesh-sbom.json is still caught, because the floor is matched against
 # (SBOM ∪ THIS). Sources, all offline & parser-light:
 #   • vendored *.jar  filenames  (maven: <artifactId>-<version>.jar)
 #   • vendored *.whl / *.egg     filenames  (PEP 427: <name>-<version>-...)

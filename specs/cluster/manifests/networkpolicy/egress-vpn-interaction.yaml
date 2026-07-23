@@ -45,9 +45,9 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: egress-vpn-allow-marked
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/optional-service: egress-vpn
 spec:
   podSelector:

@@ -60,16 +60,16 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
     || bad "${BUILDER}: _validate_idp(casdoor) failed under set -e"
 
   SYSROOT="$(mktemp -d)"
-  mkdir -p "${SYSROOT}/var/lib/snapdragon/cluster/apps" "${SYSROOT}/etc/snapdragon"
-  printf 'issuer https://id.acme.example\njwks http://casdoor.snapdragon-pki.svc.cluster.local:8000/.well-known/jwks\n' \
-      > "${SYSROOT}/var/lib/snapdragon/cluster/apps/gw.yaml"
-  : > "${SYSROOT}/var/lib/snapdragon/cluster/apps/05-casdoor.yaml"
+  mkdir -p "${SYSROOT}/var/lib/hugmesh/cluster/apps" "${SYSROOT}/etc/hugmesh"
+  printf 'issuer https://id.acme.example\njwks http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks\n' \
+      > "${SYSROOT}/var/lib/hugmesh/cluster/apps/gw.yaml"
+  : > "${SYSROOT}/var/lib/hugmesh/cluster/apps/05-casdoor.yaml"
   before="$(find "${SYSROOT}" -type f | sort | xargs sha256sum 2>/dev/null)"
   apply_idp_external
   after="$(find "${SYSROOT}" -type f | sort | xargs sha256sum 2>/dev/null)"
   [ "${before}" = "${after}" ] && ok "${BUILDER}: apply_idp_external(casdoor) is a byte no-op" \
     || bad "${BUILDER}: apply_idp_external(casdoor) MUTATED the tree"
-  [ -e "${SYSROOT}/etc/snapdragon/idp.conf" ] && bad "${BUILDER}: casdoor baked an idp.conf" \
+  [ -e "${SYSROOT}/etc/hugmesh/idp.conf" ] && bad "${BUILDER}: casdoor baked an idp.conf" \
     || ok "${BUILDER}: casdoor baked NO idp.conf"
   rm -rf "${SYSROOT}"
 
@@ -102,10 +102,10 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   IDP_CLIENT_ID="app-mesh"
   IDP_JWKS="https://login.microsoftonline.com/t/v2.0/discovery/v2.0/keys"
   SYSROOT="$(mktemp -d)"
-  tree="${SYSROOT}/var/lib/snapdragon/cluster"
-  mkdir -p "${tree}/apps" "${tree}/manifests/casdoor" "${SYSROOT}/etc/snapdragon"
+  tree="${SYSROOT}/var/lib/hugmesh/cluster"
+  mkdir -p "${tree}/apps" "${tree}/manifests/casdoor" "${SYSROOT}/etc/hugmesh"
   # concrete-domain issuer + in-cluster jwks:
-  printf 'issuer: https://id.acme.example\njwks: http://casdoor.snapdragon-pki.svc.cluster.local:8000/.well-known/jwks\n' \
+  printf 'issuer: https://id.acme.example\njwks: http://casdoor.hugmesh-pki.svc.cluster.local:8000/.well-known/jwks\n' \
       > "${tree}/apps/gw.yaml"
   # concrete-domain jwks pin (must NOT half-rewrite):
   printf 'jwks: https://id.acme.example/.well-known/jwks\n' > "${tree}/apps/jwks.yaml"
@@ -116,7 +116,7 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
 
   apply_idp_external
 
-  ic="${SYSROOT}/etc/snapdragon/idp.conf"
+  ic="${SYSROOT}/etc/hugmesh/idp.conf"
   [ -f "${ic}" ] && ok "${BUILDER}: external baked idp.conf" || bad "${BUILDER}: no idp.conf baked"
   [ "$(stat -c '%a' "${ic}" 2>/dev/null)" = "644" ] && ok "${BUILDER}: idp.conf is 0644" || bad "${BUILDER}: idp.conf not 0644"
   grep -q "^provider=entra$" "${ic}" && grep -q "^client_id=app-mesh$" "${ic}" \
@@ -144,7 +144,7 @@ for BUILDER in build-x86-host-stage4.sh build-rpi5-stage4.sh; do
   [ ! -e "${tree}/apps/05-casdoor.yaml" ] && [ ! -e "${tree}/apps/06-casdoor-games.yaml" ] && [ ! -d "${tree}/manifests/casdoor" ] \
     && ok "${BUILDER}: Casdoor apps + manifests gated out" || bad "${BUILDER}: Casdoor tree NOT gated out"
 
-  rm="${SYSROOT}/etc/snapdragon/README-IDP.md"
+  rm="${SYSROOT}/etc/hugmesh/README-IDP.md"
   [ -f "${rm}" ] && grep -qi 'does NOT work' "${rm}" && grep -qi '/bff/login' "${rm}" \
     && ok "${BUILDER}: README-IDP.md dropped with the honest-limits text" || bad "${BUILDER}: README-IDP.md missing/incomplete"
   rm -rf "${SYSROOT}"

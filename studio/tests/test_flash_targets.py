@@ -8,8 +8,8 @@ that flash_argv produces a SAFE flash-disk.sh invocation (never a raw dd).
 import json
 import os
 
-from snapdragon_studio.core import flash_targets as ft
-from snapdragon_studio.core.flash_targets import FlashTarget
+from hugmesh_studio.core import flash_targets as ft
+from hugmesh_studio.core.flash_targets import FlashTarget
 
 GIB = 1 << 30
 
@@ -200,13 +200,13 @@ def test_assignment_argv_passes_the_concrete_artifact():
     a2 = ft.FlashAssignment(target=t2, entry_id="be.jetson", role="be", arch="arm64",
                             work_dir="/gen/out")
     v1 = ft.assignment_argv(a1, generator_dir="/gen",
-                            artifact="/gen/out/snapdragon-rpi5-arm64-backend-x.img")
+                            artifact="/gen/out/hugmesh-rpi5-arm64-backend-x.img")
     v2 = ft.assignment_argv(a2, generator_dir="/gen",
-                            artifact="/gen/out/snapdragon-jetson-arm64-backend-y.img")
+                            artifact="/gen/out/hugmesh-jetson-arm64-backend-y.img")
     assert v1 != v2                                # non-vacuous: the pick changes the argv
-    assert ("--artifact", "/gen/out/snapdragon-rpi5-arm64-backend-x.img") in \
+    assert ("--artifact", "/gen/out/hugmesh-rpi5-arm64-backend-x.img") in \
         zip(v1, v1[1:])
-    assert ("--artifact", "/gen/out/snapdragon-jetson-arm64-backend-y.img") in \
+    assert ("--artifact", "/gen/out/hugmesh-jetson-arm64-backend-y.img") in \
         zip(v2, v2[1:])
     assert "dd" not in v1 and "dd" not in v2
 
@@ -223,19 +223,19 @@ def test_snapshot_and_new_artifact_pick_the_entrys_own_image(tmp_path):
     """new_artifact returns exactly the image the entry's build ADDED (or rewrote)
     since its start baseline — never a pre-existing same-role image, never a
     kernel/initramfs/squashfs blob that shares the .img extension."""
-    old = tmp_path / "snapdragon-rpi5-arm64-backend-old.img"
+    old = tmp_path / "hugmesh-rpi5-arm64-backend-old.img"
     _touch(old, 1000)
     base = ft.snapshot_artifacts(str(tmp_path))
-    assert set(base) == {"snapdragon-rpi5-arm64-backend-old.img"}
+    assert set(base) == {"hugmesh-rpi5-arm64-backend-old.img"}
     # the entry's build produces a NEW same-role image + a kernel blob
-    _touch(tmp_path / "snapdragon-jetson-arm64-backend-new.img", 2000)
-    _touch(tmp_path / "snapdragon-jetson-kernel.img", 3000)   # filtered blob
+    _touch(tmp_path / "hugmesh-jetson-arm64-backend-new.img", 2000)
+    _touch(tmp_path / "hugmesh-jetson-kernel.img", 3000)   # filtered blob
     got = ft.new_artifact(str(tmp_path), base)
-    assert got == str(tmp_path / "snapdragon-jetson-arm64-backend-new.img")
+    assert got == str(tmp_path / "hugmesh-jetson-arm64-backend-new.img")
 
 
 def test_new_artifact_detects_a_rewritten_image_and_prefers_img_over_iso(tmp_path):
-    img = tmp_path / "snapdragon-rpi5-arm64-be-x.img"
+    img = tmp_path / "hugmesh-rpi5-arm64-be-x.img"
     _touch(img, 1000)
     base = ft.snapshot_artifacts(str(tmp_path))
     _touch(img, 5000)                                          # rebuilt in place
@@ -244,7 +244,7 @@ def test_new_artifact_detects_a_rewritten_image_and_prefers_img_over_iso(tmp_pat
 
 
 def test_new_artifact_empty_when_nothing_new_is_the_fail_safe(tmp_path):
-    _touch(tmp_path / "snapdragon-rpi5-arm64-be-x.img", 1000)
+    _touch(tmp_path / "hugmesh-rpi5-arm64-be-x.img", 1000)
     base = ft.snapshot_artifacts(str(tmp_path))
     assert ft.new_artifact(str(tmp_path), base) == ""          # skip, never glob-guess
     assert ft.new_artifact(str(tmp_path / "missing"), {}) == ""

@@ -15,34 +15,34 @@ import pytest
 # must be set BEFORE the first QApplication is created
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core.config import (ImageConfig, UNAFFILIATED_ROLE,  # noqa: E402
+from hugmesh_studio.core.config import (ImageConfig, UNAFFILIATED_ROLE,  # noqa: E402
                                            resolve_installer_ui_default)
-from snapdragon_studio.core.platform_info import HostInfo    # noqa: E402
-from snapdragon_studio.gui import wizard as wizard_mod       # noqa: E402
-from snapdragon_studio.gui.pages import build as build_mod   # noqa: E402
-from snapdragon_studio.gui.qt import Qt, QtWidgets           # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo    # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod       # noqa: E402
+from hugmesh_studio.gui.pages import build as build_mod   # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtWidgets           # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 # a canned host so wizard construction never probes the machine (docker info &c.)
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
-                has_kvm=False, is_root=False, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture
@@ -56,7 +56,7 @@ def wiz(qapp):
 
 def advance_to(wiz, page_cls):
     """Click Next until page_cls is current — failing loudly if the flow stalls."""
-    from snapdragon_studio.core.config import WIZARD_PAGE_SLUGS
+    from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS
     for _ in range(len(WIZARD_PAGE_SLUGS) + 1):
         page = wiz.currentPage()
         if isinstance(page, page_cls):
@@ -69,7 +69,7 @@ def advance_to(wiz, page_cls):
 
 
 def back_to(wiz, page_cls):
-    from snapdragon_studio.core.config import WIZARD_PAGE_SLUGS
+    from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS
     for _ in range(len(WIZARD_PAGE_SLUGS) + 1):
         page = wiz.currentPage()
         if isinstance(page, page_cls):
@@ -386,8 +386,8 @@ def test_askpass_mode_prints_password_and_exits_zero(monkeypatch, qapp):
     import contextlib
     import io
 
-    from snapdragon_studio import app
-    from snapdragon_studio.gui.qt import QtWidgets
+    from hugmesh_studio import app
+    from hugmesh_studio.gui.qt import QtWidgets
     monkeypatch.setattr(QtWidgets, "QApplication", lambda *a, **k: qapp)
     monkeypatch.setattr(QtWidgets.QInputDialog, "getText",
                         staticmethod(lambda *a, **k: ("s3cr3t-pw", True)))
@@ -401,8 +401,8 @@ def test_askpass_mode_prints_password_and_exits_zero(monkeypatch, qapp):
 def test_askpass_mode_cancel_returns_nonzero(monkeypatch, qapp):
     """A cancelled dialog exits non-zero so sudo aborts the elevation cleanly instead of
     treating an empty string as the password."""
-    from snapdragon_studio import app
-    from snapdragon_studio.gui.qt import QtWidgets
+    from hugmesh_studio import app
+    from hugmesh_studio.gui.qt import QtWidgets
     monkeypatch.setattr(QtWidgets, "QApplication", lambda *a, **k: qapp)
     monkeypatch.setattr(QtWidgets.QInputDialog, "getText",
                         staticmethod(lambda *a, **k: ("", False)))
@@ -482,7 +482,7 @@ def test_build_secure_boot_key_paths_persist_to_saved_configs(wiz, tmp_path):
     path = tmp_path / "cfg.json"
     warnings = wiz.cfg.save(str(path))
     assert warnings == []
-    from snapdragon_studio.core.config import ImageConfig
+    from hugmesh_studio.core.config import ImageConfig
     assert ImageConfig.load(str(path)).secureboot_key == "/media/KEYS/Keys/kernel_key.pem"
 
 

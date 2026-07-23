@@ -14,12 +14,12 @@ and nothing asserts readiness the host doesn't have (probes default-fail).
 """
 import os
 
-from snapdragon_studio.core import local_stack_node as lsn
-from snapdragon_studio.core.local_stack_node import (
+from hugmesh_studio.core import local_stack_node as lsn
+from hugmesh_studio.core.local_stack_node import (
     M2_BOOTSTRAP_HINT, M2_REGISTRY_CONTAINER, PREFLIGHT_MIN_FREE_GIB,
     PRIVATE_ARTIFACT_SERVICES, LocalStackNode,
 )
-from snapdragon_studio.core.local_mesh_bootstrap import (
+from hugmesh_studio.core.local_mesh_bootstrap import (
     LocalMeshBootstrap, LocalMeshBootstrapConfig,
 )
 
@@ -182,8 +182,8 @@ def test_probe_env_is_the_make_env(monkeypatch):
 # restart hands the registry a new bridge IP while the env file stays frozen
 # (proven live: preflight said green while curl of the frozen URL failed rc=7).
 
-_CHECK_TAIL = ("/groups/7/-/packages/maven/systems/snapdragon/snapdragon-parent/"
-               "2.7.0/snapdragon-parent-2.7.0.pom")
+_CHECK_TAIL = ("/groups/7/-/packages/maven/systems/hugmesh/hugmesh-parent/"
+               "2.7.0/hugmesh-parent-2.7.0.pom")
 
 
 def _write_env(tmp_path, body):

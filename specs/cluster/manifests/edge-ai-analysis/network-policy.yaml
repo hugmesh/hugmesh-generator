@@ -5,25 +5,25 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: snapdragon-edge-ai-analysis
-  namespace: snapdragon-inference
+  name: hugmesh-edge-ai-analysis
+  namespace: hugmesh-inference
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   podSelector:
-    matchLabels: { app: snapdragon-edge-ai-analysis }
+    matchLabels: { app: hugmesh-edge-ai-analysis }
   policyTypes: [Ingress, Egress]
   ingress:
     # be-gateway (tailnet/external callers via ai.<domain>/v1/analyze/**) and the
     # in-cluster Phase-A consumers (admin/user BFFs) reach :8080.
     - from:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
       ports:
         - { protocol: TCP, port: 8080 }
   egress:
     # the edge-ai Ollama model server (same namespace) on :11434
     - to:
-        - podSelector: { matchLabels: { app: snapdragon-edge-ai } }
+        - podSelector: { matchLabels: { app: hugmesh-edge-ai } }
       ports:
         - { protocol: TCP, port: 11434 }
     # cluster DNS

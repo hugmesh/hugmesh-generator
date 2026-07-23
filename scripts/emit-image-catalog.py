@@ -21,8 +21,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _GEN_ROOT = os.path.dirname(_HERE)                       # scripts/ -> repo root
 sys.path.insert(0, os.path.join(_GEN_ROOT, "studio"))
 
-from snapdragon_studio.core import device_catalog  # noqa: E402
-from snapdragon_studio.core.config import (  # noqa: E402
+from hugmesh_studio.core import device_catalog  # noqa: E402
+from hugmesh_studio.core.config import (  # noqa: E402
     DESKTOP_ROLES, FRITE_BOARDS, FRITE_DESKTOPS, FRITE_FLAVORS, JETSON_BOARDS, NODE_ROLES,
     ORANGEPI5_BOARDS, ORANGEPI5_FLAVORS, ORANGEPIZERO2_FLAVORS, PLATFORM_LABELS,
     ROLE_CHOICES, image_class, rpi_boards_for_role,

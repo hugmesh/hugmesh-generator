@@ -2,7 +2,7 @@
   "config": {
     "argv": [
       "/usr/bin/node",
-      "/home/magus/GitHub/snapdragon-generator/tests/e2e/node_modules/.bin/playwright",
+      "/home/magus/GitHub/hugmesh-generator/tests/e2e/node_modules/.bin/playwright",
       "test",
       "--list",
       "-c",
@@ -11,8 +11,8 @@
       "16-rbac-mod-sibling-scope",
       "18-rbac-phase8-10-pending"
     ],
-    "configFile": "/home/magus/GitHub/snapdragon-generator/tests/e2e/playwright.config.ts",
-    "rootDir": "/home/magus/GitHub/snapdragon-generator/tests/e2e/specs",
+    "configFile": "/home/magus/GitHub/hugmesh-generator/tests/e2e/playwright.config.ts",
+    "rootDir": "/home/magus/GitHub/hugmesh-generator/tests/e2e/specs",
     "failOnFlakyTests": false,
     "forbidOnly": false,
     "fullyParallel": false,
@@ -26,13 +26,13 @@
     "preserveOutput": "always",
     "projects": [
       {
-        "outputDir": "/home/magus/GitHub/snapdragon-generator/tests/e2e/test-results",
+        "outputDir": "/home/magus/GitHub/hugmesh-generator/tests/e2e/test-results",
         "repeatEach": 1,
         "retries": 1,
         "metadata": {},
         "id": "chromium",
         "name": "chromium",
-        "testDir": "/home/magus/GitHub/snapdragon-generator/tests/e2e/specs",
+        "testDir": "/home/magus/GitHub/hugmesh-generator/tests/e2e/specs",
         "testIgnore": [],
         "testMatch": [
           "**/*.@(spec|test).?(c|m)[jt]s?(x)"
@@ -59,7 +59,7 @@
         }
       ],
       [
-        "/home/magus/GitHub/snapdragon-generator/tests/e2e/reporters/snapdragon-reporter.ts",
+        "/home/magus/GitHub/hugmesh-generator/tests/e2e/reporters/hugmesh-reporter.ts",
         null
       ]
     ],
@@ -90,7 +90,7 @@
           "column": 6,
           "specs": [
             {
-              "title": "snapdragon-fe-gateway /admin/usage — e2e-admin => ALLOW (admin reaches the admin UI)",
+              "title": "hugmesh-fe-gateway /admin/usage — e2e-admin => ALLOW (admin reaches the admin UI)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -110,7 +110,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-fe-gateway /admin/usage — e2e-adminonly => ALLOW (ROLE_ADMIN alone reaches /admin)",
+              "title": "hugmesh-fe-gateway /admin/usage — e2e-adminonly => ALLOW (ROLE_ADMIN alone reaches /admin)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -130,7 +130,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-fe-gateway /admin/usage — e2e-mod => DENY (ROLE_MOD is NOT a superset of admin)",
+              "title": "hugmesh-fe-gateway /admin/usage — e2e-mod => DENY (ROLE_MOD is NOT a superset of admin)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -150,7 +150,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-fe-gateway /admin/usage — e2e-gamesonly => DENY (plain games member denied admin UI)",
+              "title": "hugmesh-fe-gateway /admin/usage — e2e-gamesonly => DENY (plain games member denied admin UI)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -170,7 +170,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-fe-gateway /admin/usage — e2e-user => DENY (plain user denied admin UI)",
+              "title": "hugmesh-fe-gateway /admin/usage — e2e-user => DENY (plain user denied admin UI)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -190,7 +190,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /api/admin/route-access — e2e-admin => ALLOW (admin reaches the admin API)",
+              "title": "hugmesh-be-gateway /api/admin/route-access — e2e-admin => ALLOW (admin reaches the admin API)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -210,7 +210,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /api/admin/route-access — e2e-mod => DENY (mod DENIED the snapdragon admin API)",
+              "title": "hugmesh-be-gateway /api/admin/route-access — e2e-mod => DENY (mod DENIED the hugmesh admin API)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -230,7 +230,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /api/admin/route-access — e2e-user => DENY (user DENIED the admin API)",
+              "title": "hugmesh-be-gateway /api/admin/route-access — e2e-user => DENY (user DENIED the admin API)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -250,7 +250,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-fe-gateway /bff/admin/allowlist — e2e-admin => ALLOW (admin reaches the BFF admin allowlist)",
+              "title": "hugmesh-fe-gateway /bff/admin/allowlist — e2e-admin => ALLOW (admin reaches the BFF admin allowlist)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -270,7 +270,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-fe-gateway /bff/admin/allowlist — e2e-mod => DENY (mod DENIED /bff/admin (stays ROLE_ADMIN))",
+              "title": "hugmesh-fe-gateway /bff/admin/allowlist — e2e-mod => DENY (mod DENIED /bff/admin (stays ROLE_ADMIN))",
               "ok": true,
               "tags": [],
               "tests": [
@@ -290,7 +290,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /api/v1/pleroma/admin/config — e2e-mod => ALLOW (mod reaches akkoma moderation REST)",
+              "title": "hugmesh-be-gateway /api/v1/pleroma/admin/config — e2e-mod => ALLOW (mod reaches akkoma moderation REST)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -310,7 +310,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /api/v1/pleroma/admin/config — e2e-admin => ALLOW (admin (superset) reaches akkoma moderation)",
+              "title": "hugmesh-be-gateway /api/v1/pleroma/admin/config — e2e-admin => ALLOW (admin (superset) reaches akkoma moderation)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -330,7 +330,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /api/v1/pleroma/admin/config — e2e-user => DENY (plain user DENIED akkoma moderation)",
+              "title": "hugmesh-be-gateway /api/v1/pleroma/admin/config — e2e-user => DENY (plain user DENIED akkoma moderation)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -350,7 +350,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /_matrix/client/v3/sync — e2e-mod => ALLOW (mod has a Matrix user floor (not auto-granted ROLE_USER))",
+              "title": "hugmesh-be-gateway /_matrix/client/v3/sync — e2e-mod => ALLOW (mod has a Matrix user floor (not auto-granted ROLE_USER))",
               "ok": true,
               "tags": [],
               "tests": [
@@ -370,7 +370,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /_matrix/client/v3/sync — e2e-user => ALLOW (user reaches Matrix C-S API)",
+              "title": "hugmesh-be-gateway /_matrix/client/v3/sync — e2e-user => ALLOW (user reaches Matrix C-S API)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -390,7 +390,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /api/v1/timelines/home — e2e-mod => ALLOW (mod has a Mastodon user floor)",
+              "title": "hugmesh-be-gateway /api/v1/timelines/home — e2e-mod => ALLOW (mod has a Mastodon user floor)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -410,7 +410,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /api/v1/timelines/home — e2e-user => ALLOW (user reaches Mastodon REST API)",
+              "title": "hugmesh-be-gateway /api/v1/timelines/home — e2e-user => ALLOW (user reaches Mastodon REST API)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -430,7 +430,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-fe-gateway /games/admin/sessions — e2e-gamesadmin => ALLOW (ROLE_GAMES ∩ ROLE_ADMIN earned ROLE_GAMES_ADMIN -> reaches games admin UI)",
+              "title": "hugmesh-fe-gateway /games/admin/sessions — e2e-gamesadmin => ALLOW (ROLE_GAMES ∩ ROLE_ADMIN earned ROLE_GAMES_ADMIN -> reaches games admin UI)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -450,7 +450,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-fe-gateway /games/admin/sessions — e2e-gamesonly => DENY (ROLE_GAMES alone is NOT games-admin (default-deny))",
+              "title": "hugmesh-fe-gateway /games/admin/sessions — e2e-gamesonly => DENY (ROLE_GAMES alone is NOT games-admin (default-deny))",
               "ok": true,
               "tags": [],
               "tests": [
@@ -470,7 +470,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-fe-gateway /games/admin/sessions — e2e-adminonly => DENY (ROLE_ADMIN alone is NOT games-admin (default-deny))",
+              "title": "hugmesh-fe-gateway /games/admin/sessions — e2e-adminonly => DENY (ROLE_ADMIN alone is NOT games-admin (default-deny))",
               "ok": true,
               "tags": [],
               "tests": [
@@ -490,7 +490,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-fe-gateway /games/admin/sessions — e2e-mod => DENY (ROLE_MOD alone is NOT games-admin)",
+              "title": "hugmesh-fe-gateway /games/admin/sessions — e2e-mod => DENY (ROLE_MOD alone is NOT games-admin)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -510,7 +510,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /games/api/admin/role-grants — e2e-gamesadmin => ALLOW (derived ROLE_GAMES_ADMIN reaches games admin API)",
+              "title": "hugmesh-be-gateway /games/api/admin/role-grants — e2e-gamesadmin => ALLOW (derived ROLE_GAMES_ADMIN reaches games admin API)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -530,7 +530,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /games/api/admin/role-grants — e2e-gamesonly => DENY (ROLE_GAMES alone denied games admin API)",
+              "title": "hugmesh-be-gateway /games/api/admin/role-grants — e2e-gamesonly => DENY (ROLE_GAMES alone denied games admin API)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -550,7 +550,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /games/api/admin/role-grants — e2e-adminonly => DENY (ROLE_ADMIN alone denied games admin API)",
+              "title": "hugmesh-be-gateway /games/api/admin/role-grants — e2e-adminonly => DENY (ROLE_ADMIN alone denied games admin API)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -570,7 +570,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /infra/logs — e2e-admin => DENY (no route row -> default-deny (infra/logs has no external route))",
+              "title": "hugmesh-be-gateway /infra/logs — e2e-admin => DENY (no route row -> default-deny (infra/logs has no external route))",
               "ok": true,
               "tags": [],
               "tests": [
@@ -590,7 +590,7 @@
               "column": 9
             },
             {
-              "title": "snapdragon-be-gateway /infra/logs — e2e-mod => DENY (mod has no infra/logs route)",
+              "title": "hugmesh-be-gateway /infra/logs — e2e-mod => DENY (mod has no infra/logs route)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -787,7 +787,7 @@
               "column": 9
             },
             {
-              "title": "mod DENIED /api/admin/route-access (snapdragon admin API)",
+              "title": "mod DENIED /api/admin/route-access (hugmesh admin API)",
               "ok": true,
               "tags": [],
               "tests": [
@@ -994,7 +994,7 @@
                     {
                       "type": "skip",
                       "location": {
-                        "file": "/home/magus/GitHub/snapdragon-generator/tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts",
+                        "file": "/home/magus/GitHub/hugmesh-generator/tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts",
                         "line": 22,
                         "column": 8
                       }
@@ -1023,7 +1023,7 @@
                     {
                       "type": "skip",
                       "location": {
-                        "file": "/home/magus/GitHub/snapdragon-generator/tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts",
+                        "file": "/home/magus/GitHub/hugmesh-generator/tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts",
                         "line": 29,
                         "column": 8
                       }
@@ -1052,7 +1052,7 @@
                     {
                       "type": "skip",
                       "location": {
-                        "file": "/home/magus/GitHub/snapdragon-generator/tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts",
+                        "file": "/home/magus/GitHub/hugmesh-generator/tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts",
                         "line": 37,
                         "column": 8
                       }
@@ -1089,7 +1089,7 @@
                     {
                       "type": "skip",
                       "location": {
-                        "file": "/home/magus/GitHub/snapdragon-generator/tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts",
+                        "file": "/home/magus/GitHub/hugmesh-generator/tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts",
                         "line": 46,
                         "column": 8
                       }
@@ -1126,7 +1126,7 @@
                     {
                       "type": "skip",
                       "location": {
-                        "file": "/home/magus/GitHub/snapdragon-generator/tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts",
+                        "file": "/home/magus/GitHub/hugmesh-generator/tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts",
                         "line": 57,
                         "column": 8
                       }
@@ -1163,7 +1163,7 @@
                     {
                       "type": "skip",
                       "location": {
-                        "file": "/home/magus/GitHub/snapdragon-generator/tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts",
+                        "file": "/home/magus/GitHub/hugmesh-generator/tests/e2e/specs/18-rbac-phase8-10-pending.spec.ts",
                         "line": 70,
                         "column": 8
                       }

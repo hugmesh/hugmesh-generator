@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# test-update-poller.sh — unit test for the snapdragon-update poller
-# (specs/usr/local/sbin/snapdragon-update), the OPT-IN (default-off) binpkg
+# test-update-poller.sh — unit test for the hugmesh-update poller
+# (specs/usr/local/sbin/hugmesh-update), the OPT-IN (default-off) binpkg
 # auto-update agent.
 #
 # Proves, WITHOUT root / real emerge / real cluster (the poller exposes test seams
@@ -18,7 +18,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-POLLER="${REPO}/specs/usr/local/sbin/snapdragon-update"
+POLLER="${REPO}/specs/usr/local/sbin/hugmesh-update"
 [ -f "${POLLER}" ] || { echo "  FAIL poller missing: ${POLLER}"; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "  SKIP jq not installed"; exit 0; }
 
@@ -86,11 +86,11 @@ EOF
 
 run_poller() {  # run_poller <root>  -> runs the REAL poller against the sandbox
     local ROOT="$1"
-    SNAPDRAGON_UPDATE_CONF="${ROOT}/etc/snapdragon/update.json" \
-    SNAPDRAGON_MAKE_CONF="${ROOT}/etc/portage/make.conf" \
-    SNAPDRAGON_KUBECONFIG="${ROOT}/etc/kubernetes/admin.conf" \
-    SNAPDRAGON_REBOOT_SENTINEL="${ROOT}/var/run/reboot-required" \
-    SNAPDRAGON_UPDATE_STATE="${ROOT}/var/lib/snapdragon/update" \
+    HUGMESH_UPDATE_CONF="${ROOT}/etc/hugmesh/update.json" \
+    HUGMESH_MAKE_CONF="${ROOT}/etc/portage/make.conf" \
+    HUGMESH_KUBECONFIG="${ROOT}/etc/kubernetes/admin.conf" \
+    HUGMESH_REBOOT_SENTINEL="${ROOT}/var/run/reboot-required" \
+    HUGMESH_UPDATE_STATE="${ROOT}/var/lib/hugmesh/update" \
     SU_EMERGE="${ROOT}/bin/emerge" \
     SU_KUBECTL="${ROOT}/bin/kubectl" \
     SU_DATE="${ROOT}/bin/date" \
@@ -101,7 +101,7 @@ run_poller() {  # run_poller <root>  -> runs the REAL poller against the sandbox
 }
 pulled() { [ -f "$1/emerge.argv" ]; }
 
-echo "== snapdragon-update poller unit test =="
+echo "== hugmesh-update poller unit test =="
 
 # ── (1) OPT-IN: reachable ConfigMap enabled:true => pulls, delta-only flags ───────
 ROOT="$(make_sandbox y '{"enabled":true}' 03:00 n)"

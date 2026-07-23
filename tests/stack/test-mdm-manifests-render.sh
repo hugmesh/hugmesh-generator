@@ -30,7 +30,7 @@
 #       ZERO GET handlers, so an httpGet probe can never succeed), the
 #       smtp-config-seeder sidecar is present + fed from Secret
 #       attestation-server-smtp, and the app images follow the
-#       registry.snapdragon.systems/snapdragon/... convention;
+#       registry.hugmesh.systems/hugmesh/... convention;
 #   (8) NEGATIVE CONTROLS, staged copies only (the repo tree is never mutated):
 #       a bogus resource entry makes the render FAIL nonzero (the render gate
 #       bites), and a staged PROTOCOL:https copy makes assertion (5) FAIL (the
@@ -187,11 +187,11 @@ grep -q 'name: smtp-config-seeder' "${ATT_DEP}" \
 grep -A2 'secretRef:' "${ATT_DEP}" | grep -q 'name: attestation-server-smtp' \
   && ok "(7) seeder is fed from Secret attestation-server-smtp (envFrom)" \
   || bad "(7) seeder's attestation-server-smtp secretRef missing"
-grep -q 'image: registry.snapdragon.systems/snapdragon/snapdragon-attestation-server:main' "${ATT_DEP}" \
-  && ok "(7) app image follows registry.snapdragon.systems/snapdragon/... (built-from-source convention)" \
+grep -q 'image: registry.hugmesh.systems/hugmesh/hugmesh-attestation-server:main' "${ATT_DEP}" \
+  && ok "(7) app image follows registry.hugmesh.systems/hugmesh/... (built-from-source convention)" \
   || bad "(7) attestation-server image ref off-convention"
-grep -q 'image: registry.snapdragon.systems/snapdragon/snapdragon-headwind:main' "${HW_DEP}" \
-  && ok "(7) headwind image follows registry.snapdragon.systems/snapdragon/... (built-from-source convention)" \
+grep -q 'image: registry.hugmesh.systems/hugmesh/hugmesh-headwind:main' "${HW_DEP}" \
+  && ok "(7) headwind image follows registry.hugmesh.systems/hugmesh/... (built-from-source convention)" \
   || bad "(7) headwind image ref off-convention"
 # the harbor pull-secret patches in both kustomizations actually landed
 grep -q 'harbor-registry' "${HW_DEP}" && grep -q 'harbor-registry' "${ATT_DEP}" \

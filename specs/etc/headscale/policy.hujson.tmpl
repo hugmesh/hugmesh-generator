@@ -1,5 +1,5 @@
 {
-  // ── Snapdragon Layer-A GENERATED headscale policy (device-license registry) ──
+  // ── HugMesh Layer-A GENERATED headscale policy (device-license registry) ──
   //
   // RENDERED at runtime by /usr/sbin/gen-headscale-policy.sh ONLY on the
   // headscale control (pki) node, from the SAME signed export Layer-B consumes
@@ -16,11 +16,11 @@
   // repeated in prose (an awk gsub would otherwise corrupt these comments). The
   // two markers are:
   //   * the tagOwners-dynamic marker — the per-node tag:dev_<fp> + per-domain
-  //       tag:dom_<domain> owners (all owned by the control "snapdragon" user;
+  //       tag:dom_<domain> owners (all owned by the control "hugmesh" user;
   //       NEVER self-applyable — they are SERVER-FORCED via
-  //       snapdragon-headscale-forcetags at approval).
+  //       hugmesh-headscale-forcetags at approval).
   //   * the ssh-edges marker — EXACTLY the predicate-permitted ssh accepts (one
-  //       per export node: src=advisory tag:snapdragon, dst=tag:dev_<fp>,
+  //       per export node: src=advisory tag:hugmesh, dst=tag:dev_<fp>,
   //       users=node-local privileged ssh user) PLUS the ALWAYS-emitted
   //       SUPERADMIN mesh rule (src:[tag:superadmin], dst:[tag:mesh_<MESH_ID>],
   //       users:[<ssh user>]).
@@ -28,47 +28,47 @@
   // The FOUR FIXES embodied here:
   //   [FIX-SERVERTAG]  security dst tags are server-forced, listed as control-
   //                    owned in tagOwners (no node self-advertises them).
-  //   [FIX-DROPMESHRULE] the any-to-any tag:snapdragon -> tag:snapdragon:* rule
+  //   [FIX-DROPMESHRULE] the any-to-any tag:hugmesh -> tag:hugmesh:* rule
   //                    is ABSENT; only the 10.244/10.96 CIDR data-plane rule is
   //                    kept (k8s, not SSH).
   //   [FIX-DENY22]     headscale ssh is itself default-deny, so the generated
   //                    ssh[] block (the ONLY accepts) IS the default-deny on :22.
   //   [FIX-OIDC-USERS] DEFERRED — src identity is still the advisory
-  //                    tag:snapdragon (the reusable preauth key still gates JOIN);
+  //                    tag:hugmesh (the reusable preauth key still gates JOIN);
   //                    per-operator SOURCE authenticity + per-key %f pinning stay
   //                    in Layer-B (the load-bearing boundary). See the PR body.
   //
   // hujson = JSON + comments + trailing commas; headscale parses it natively.
 
   // ── Who may apply which tags ──────────────────────────────────────────────
-  // tag:snapdragon stays self-applied (data-plane membership: CIDR rule + route
+  // tag:hugmesh stays self-applied (data-plane membership: CIDR rule + route
   // auto-approval ONLY; it is NO LONGER a :22 src/dst). tag:superadmin is
   // control-owned + force-assigned to superadmin OPERATOR identities only. The
   // dynamic per-node/per-domain tag owners are spliced at the marker below.
   "tagOwners": {
-    "tag:snapdragon": ["snapdragon"],
-    "tag:pki": ["snapdragon"],
-    "tag:be": ["snapdragon"],
-    "tag:fe": ["snapdragon"],
-    "tag:host": ["snapdragon"],
-    "tag:superadmin": ["snapdragon"]@@SNAPDRAGON_TAGOWNERS_DYNAMIC@@
+    "tag:hugmesh": ["hugmesh"],
+    "tag:pki": ["hugmesh"],
+    "tag:be": ["hugmesh"],
+    "tag:fe": ["hugmesh"],
+    "tag:host": ["hugmesh"],
+    "tag:superadmin": ["hugmesh"]@@HUGMESH_TAGOWNERS_DYNAMIC@@
   },
 
   // ── Subnet-route auto-approval (UNCHANGED) ────────────────────────────────
   "autoApprovers": {
     "routes": {
-      "10.244.0.0/16": ["tag:snapdragon"],
-      "10.96.0.0/12": ["tag:snapdragon"]
+      "10.244.0.0/16": ["tag:hugmesh"],
+      "10.96.0.0/12": ["tag:hugmesh"]
     }
   },
 
   // ── Access rules (default-deny) ───────────────────────────────────────────
   // KEPT: the k8s pod/ClusterIP "one-LAN" data-plane rule. The any-to-any
-  // tag:snapdragon -> tag:snapdragon:* :22 hole is DROPPED [FIX-DROPMESHRULE].
+  // tag:hugmesh -> tag:hugmesh:* :22 hole is DROPPED [FIX-DROPMESHRULE].
   "acls": [
     {
       "action": "accept",
-      "src": ["tag:snapdragon"],
+      "src": ["tag:hugmesh"],
       "dst": ["10.244.0.0/16:*", "10.96.0.0/12:*"]
     }
   ],
@@ -77,6 +77,6 @@
   // headscale ssh is default-deny; the accepts spliced below are the ONLY SSH
   // surface. Each export operator yields exactly one accept to its node's
   // server-forced tag:dev_<fp>; the SUPERADMIN mesh rule is always appended.
-  "ssh": [@@SNAPDRAGON_SSH_EDGES@@
+  "ssh": [@@HUGMESH_SSH_EDGES@@
   ]
 }

@@ -13,15 +13,15 @@ import sys
 
 import pytest
 
-from snapdragon_studio.core import build_sessions as bs
-from snapdragon_studio.core.config import ImageConfig
-from snapdragon_studio.core.worklist import WorklistConfig, WorklistEntry, synthesize
+from hugmesh_studio.core import build_sessions as bs
+from hugmesh_studio.core.config import ImageConfig
+from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry, synthesize
 
 
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
     # Same env override as tray.build_status_path — session records share the family.
-    monkeypatch.setenv("SNAPDRAGON_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
 
 
 def _standalone_wl(tmp_path, **kw):
@@ -74,7 +74,7 @@ def test_start_writes_running_record_and_finish_updates_it(tmp_path):
     assert on_disk.pid == os.getpid()
     assert on_disk.hostname == socket.gethostname()
     assert on_disk.blanked_secrets == ["local_pass"]
-    assert on_disk.config["schema"] == "snapdragon-worklist/v1"
+    assert on_disk.config["schema"] == "hugmesh-worklist/v1"
     assert on_disk.config["base"]["local_pass"] == ""      # secrets blanked, like save
     assert on_disk.workdir == bs.session_workdir(str(tmp_path / "out"), s.id)
     assert on_disk.log_path == os.path.join(on_disk.workdir, "build.log")
@@ -161,7 +161,7 @@ def test_is_stale_probes_pid_without_mutating(tmp_path):
 
 def test_save_is_best_effort_never_raises(tmp_path, monkeypatch):
     s = bs.new_session(_standalone_wl(tmp_path), str(tmp_path))
-    monkeypatch.setenv("SNAPDRAGON_STUDIO_STATE_DIR", "/proc/definitely/not/writable")
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", "/proc/definitely/not/writable")
     bs.start(s)                                        # must not raise
 
 

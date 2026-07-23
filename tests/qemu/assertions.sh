@@ -10,11 +10,11 @@ ok()   { echo "  PASS  $*"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL  $*"; FAIL=$((FAIL+1)); }
 check(){ if eval "$2" >/dev/null 2>&1; then ok "$1"; else bad "$1"; fi; }
 
-echo "== Snapdragon RPi 5 image — boot/provision assertions =="
+echo "== HugMesh RPi 5 image — boot/provision assertions =="
 echo "-- identity --"
 check "hostname provisioned (not default 'localhost')" \
     '[ -n "$(hostname)" ] && [ "$(hostname)" != "localhost" ] && [ "$(hostname)" != "gentoo" ]'
-check "/etc/snapdragon/role marker present"       '[ -f /etc/snapdragon/role ]'
+check "/etc/hugmesh/role marker present"       '[ -f /etc/hugmesh/role ]'
 
 echo "-- KEYS provisioning --"
 check "keys-provision ran (done marker)"          '[ -f /var/lib/keys-provision/done ]'

@@ -9,8 +9,8 @@ const DISCORD = ['dragoneer'];
 // testid that no longer exists anywhere in the current UI (see specs 08/09's
 // own fix for the identical stale-nav pattern).
 test('admin (Casdoor admin role) invites Gmail + Discord identities', async ({ page }) => {
-  // admin@snapdragon.systems is seeded with the admin role in the BFF.
-  await onboard(page, 'admin@snapdragon.systems');
+  // admin@hugmesh.systems is seeded with the admin role in the BFF.
+  await onboard(page, 'admin@hugmesh.systems');
   await page.getByTestId('profile-trigger').click();
   await page.getByTestId('menu-admin').click();
   await expect(page.getByTestId('admin-view')).toBeVisible();

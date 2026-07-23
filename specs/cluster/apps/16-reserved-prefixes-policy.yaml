@@ -1,6 +1,6 @@
 # reserved-prefixes-policy — the GitOps/ArgoCD enforcement layer of the
 # reserved-prefix rule. Applies:
-#   * snapdragon-policy/reserved-prefixes ConfigMap (in-cluster mirror of the
+#   * hugmesh-policy/reserved-prefixes ConfigMap (in-cluster mirror of the
 #     canonical source specs/cluster/reserved-prefixes.yaml), and
 #   * the Kyverno ClusterPolicy `reserved-prefixes` that reads it and blocks
 #     vanity-shadowing Ingress/HTTPRoute hosts + (defensively) reserved vanity
@@ -17,12 +17,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/policy
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-policy
+    namespace: hugmesh-policy
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     # Replace=false; ClusterPolicy is cluster-scoped but kustomize emits it fine.
@@ -41,7 +41,7 @@ spec:
     - group: ""
       kind: ConfigMap
       name: installed-services
-      namespace: snapdragon-policy
+      namespace: hugmesh-policy
       jsonPointers:
         - /data/akkoma
         - /data/tuwunel

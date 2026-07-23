@@ -1,0 +1,17 @@
+# hugmesh_node_storage.fc
+# Label the node-storage reconcile binary as the entrypoint of
+# hugmesh_node_storage_t and its private /var/lib cache as
+# hugmesh_node_storage_cache_t. The binary is copied to /usr/sbin by the
+# (protected) build script; the OpenRC init + cron are baked alongside.
+# provision_selinux()'s first-boot relabel (setfiles / restorecon -RF /)
+# applies these.
+#
+# The cache dir is created at runtime by the agent (mkdir -p
+# /var/lib/hugmesh/node-storage); labelling it here lets the agent manage
+# export.json/candidates/pool-manifest.json/last-good. The registry cache it
+# reads (/etc/hugmesh/registry/*) is labelled hugmesh_authkeys_cache_t by
+# hugmesh_authkeys.fc — the shared on-disk handoff (node.env + baked pubkey).
+
+/usr/sbin/hugmesh-node-storage-reconcile    --    gen_context(system_u:object_r:hugmesh_node_storage_exec_t,s0)
+
+/var/lib/hugmesh/node-storage(/.*)?               gen_context(system_u:object_r:hugmesh_node_storage_cache_t,s0)

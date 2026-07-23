@@ -31,10 +31,10 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: prod-hygiene-gate
-  namespace: snapdragon-policy
+  namespace: hugmesh-policy
   labels:
     app.kubernetes.io/name: prod-hygiene
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     app.kubernetes.io/component: policy
   annotations:
     argocd.argoproj.io/hook: PreSync
@@ -47,7 +47,7 @@ spec:
     metadata:
       labels:
         app: prod-hygiene-gate
-        app.kubernetes.io/part-of: snapdragon.systems
+        app.kubernetes.io/part-of: hugmesh.systems
     spec:
       restartPolicy: Never
       serviceAccountName: prod-hygiene-gate

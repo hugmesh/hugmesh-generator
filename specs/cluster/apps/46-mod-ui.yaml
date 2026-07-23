@@ -1,19 +1,19 @@
-# snapdragon-mod-ui — moderation Angular micro-frontend, served at /mod and
-# federated into the snapdragon.systems host. Frontend Pis.
+# hugmesh-mod-ui — moderation Angular micro-frontend, served at /mod and
+# federated into the hugmesh.systems host. Frontend Pis.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: snapdragon-mod-ui
+  name: hugmesh-mod-ui
   namespace: devops
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/mod-ui
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-frontend
+    namespace: hugmesh-frontend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

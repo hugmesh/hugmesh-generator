@@ -33,7 +33,7 @@ test.describe('non-federation: Mastodon domain-locked toot stays local', () => {
     const peerToken = process.env['SNAP_PEER_TOKEN'] ?? '';
     test.skip(!subjectToken || !peerToken, 'subject/peer Mastodon tokens not provisioned for this run');
 
-    const subjectAcct = `${SUBJECT.username}@mastodon.snapdragon.systems`;
+    const subjectAcct = `${SUBJECT.username}@mastodon.hugmesh.systems`;
 
     // The peer follows the subject, so a NON-locked user would federate here.
     const followed = await peerFollow(request, peerToken, subjectAcct);

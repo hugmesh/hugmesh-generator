@@ -15,8 +15,8 @@ Two complementary registration-time rules protect the username namespace:
 This document covers the **generator (GitOps) repo's** part of (2): the
 **Casdoor pre-signup gate** that runs the confusable engine in front of the
 platform's universal self-signup. The engine itself (the skeleton algorithm, the
-availability endpoint, the DB table) lives in **`snapdragon-federation-api`**;
-the per-layer registration checks live in `user-bff-api` / `snapdragon-actions` /
+availability endpoint, the DB table) lives in **`hugmesh-federation-api`**;
+the per-layer registration checks live in `user-bff-api` / `hugmesh-actions` /
 `admin-bff-api`. Those repos own their own changes — this doc summarizes the
 policy so the GitOps wiring is legible.
 
@@ -80,7 +80,7 @@ that gap.
 
 ### Mechanism — a thin reverse-proxy in front of the signup endpoints
 
-`signup-gate` (ns `snapdragon-pki`) is a small stdlib reverse-proxy. The
+`signup-gate` (ns `hugmesh-pki`) is a small stdlib reverse-proxy. The
 pki-gateway routes the two username-MINTING paths to it FIRST, before the
 `casdoor-*` routes:
 
@@ -140,11 +140,11 @@ proxy's `/casdoor/webhook` receiving path, which re-runs availability and
 ### Operational prerequisites / honest scope
 
 - **Federation availability endpoint must exist** — it is delivered by the
-  `snapdragon-federation-api` confusable PR (parallel work). Until it is live the
+  `hugmesh-federation-api` confusable PR (parallel work). Until it is live the
   fail-closed proxy would 503 every signup; deploy the federation change first, or
   set `AVAILABILITY_FAIL_OPEN=true` for the interim.
 - **Cross-namespace reachability** — the proxy calls
-  `snapdragon-federation-api.snapdragon-backend:8080` from `snapdragon-pki`. The
+  `hugmesh-federation-api.hugmesh-backend:8080` from `hugmesh-pki`. The
   NetworkPolicy tiers must admit `signup-gate` → federation-api:8080 (it does not
   today; add a from-rule when the netpol layer is activated — until then the
   default-allow dev posture lets it through).

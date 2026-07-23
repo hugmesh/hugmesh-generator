@@ -34,7 +34,7 @@ DEFAULT_EXCLUDES=(
     ".local/share/Trash" ".thumbnails" ".var/app/*/cache"
     "*.iso" "*.qcow2" "*.img" "VirtualBox VMs" ".vagrant.d"
     "Vaults" ".local/share/containers" ".docker"
-    "snapdragon-stack" "GitHub" "snap-standalone-build" "snap-home-feature" ".m2" "out"
+    "hugmesh-stack" "GitHub" "snap-standalone-build" "snap-home-feature" ".m2" "out"
 )
 # --config-only adds these so the lean archive that rides INSIDE an installer ISO
 # stays small (config + desktop only; no Documents/media/Downloads). --full keeps
@@ -59,7 +59,7 @@ Usage: $0 [--user NAME] [--output FILE] [--level 1-9] [--exclude PATH]...
   --exclude PATH    Extra exclude (relative to the home dir); repeatable.
   --force           Overwrite an existing output file.
 Use it as a USB backup to restore later:
-  ./archive-home.sh --user ${USER_NAME} --full --encrypt --output /run/media/USB/snapdragon-home-backup-${USER_NAME}.tar.xz
+  ./archive-home.sh --user ${USER_NAME} --full --encrypt --output /run/media/USB/hugmesh-home-backup-${USER_NAME}.tar.xz
   # then on the new system: install with --home-mode restore --home-backup auto
 Or bundle the lean copy into the installer:
   ./archive-home.sh --user ${USER_NAME} --config-only --output home-${USER_NAME}.tar.xz

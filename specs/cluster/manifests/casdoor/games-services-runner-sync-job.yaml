@@ -17,7 +17,7 @@
 # A DIRECT CLONE of games-admin-sync-job.yaml, sharing the SAME env-parameterized script
 # as games-services-admin-sync (just PRIV_ROLES=ROLE_MOD here). runAsNonRoot, drop ALL
 # caps, readOnlyRootFilesystem, idempotent, ArgoCD PostSync; SAME Casdoor admin-session
-# transport. Runs ENTIRELY inside the systems Casdoor (org "snapdragon").
+# transport. Runs ENTIRELY inside the systems Casdoor (org "hugmesh").
 #
 # !!! The Casdoor REST API shape is version-specific — validate against the deployed
 # !!! casbin/casdoor-all-in-one before relying on it in production.
@@ -25,8 +25,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: games-services-runner-sync-script
-  namespace: snapdragon-pki
-  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   sync.py: |
     #!/usr/bin/env python3
@@ -36,8 +36,8 @@ data:
     optional-services prune can drop one without affecting the other. Pure stdlib."""
     import json, os, time, urllib.request, urllib.error, http.cookiejar
 
-    BASE = os.environ.get("CASDOOR_URL", "http://casdoor.snapdragon-pki.svc.cluster.local:8000")
-    ORG  = os.environ.get("CASDOOR_ORG", "snapdragon")
+    BASE = os.environ.get("CASDOOR_URL", "http://casdoor.hugmesh-pki.svc.cluster.local:8000")
+    ORG  = os.environ.get("CASDOOR_ORG", "hugmesh")
     DERIVED_ROLE = os.environ.get("DERIVED_ROLE", "ROLE_GAMES_SERVICES_RUNNER")
     BASE_ROLE    = os.environ.get("BASE_ROLE", "ROLE_GAMES_SERVICES")
     PRIV_ROLES   = [r for r in os.environ.get("PRIV_ROLES", "ROLE_MOD").split(",") if r]
@@ -107,8 +107,8 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: games-services-runner-sync
-  namespace: snapdragon-pki
-  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -131,8 +131,8 @@ spec:
           image: python:3.12-alpine
           command: ["python3", "/script/sync.py"]
           env:
-            - { name: CASDOOR_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000" }
-            - { name: CASDOOR_ORG, value: "snapdragon" }
+            - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
+            - { name: CASDOOR_ORG, value: "hugmesh" }
             - { name: DERIVED_ROLE, value: "ROLE_GAMES_SERVICES_RUNNER" }
             - { name: BASE_ROLE,    value: "ROLE_GAMES_SERVICES" }
             - { name: PRIV_ROLES,   value: "ROLE_MOD" }

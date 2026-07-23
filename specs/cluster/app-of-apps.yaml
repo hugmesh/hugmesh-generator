@@ -2,18 +2,18 @@
 # ArgoCD then syncs every Application under cluster/apps/ from the GitOps repo.
 #
 # repoURL / targetRevision are patched at bootstrap time from
-# /etc/snapdragon/gitops.env (SNAPDRAGON_GITOPS_REPO / _REV), default below.
+# /etc/hugmesh/gitops.env (HUGMESH_GITOPS_REPO / _REV), default below.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: snapdragon-root
+  name: hugmesh-root
   namespace: devops
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/apps
     directory:

@@ -1,6 +1,6 @@
 # Serve your mesh — from nothing to a reachable login page
 
-This is the **end-to-end path**: generate an entire Snapdragon platform from scratch,
+This is the **end-to-end path**: generate an entire HugMesh platform from scratch,
 serve it **locally**, then (optionally) expose it **publicly** over a Tor **.onion**, a
 common **Dynamic-DNS** host, or a tunnel. It ties together two capabilities that already
 exist but are reached from different places — the **Local Mesh** bring-up (local serving)
@@ -48,7 +48,7 @@ At the end the plan/log prints the **local front door URL** and the superadmin u
 ## 2 — Expose it publicly (optional)
 
 Local serving is done. To make the mesh reachable from outside the LAN, run
-**Studio → Go Live** (or `snapdragon-go-live`; see [GO-LIVE-WIZARD.md](GO-LIVE-WIZARD.md)).
+**Studio → Go Live** (or `hugmesh-go-live`; see [GO-LIVE-WIZARD.md](GO-LIVE-WIZARD.md)).
 Every provider is **registry-driven**, so the same choices appear in the CLI, the ncurses
 menu, and Studio:
 

@@ -26,8 +26,8 @@
 # WORK_DIR/role selects one artifact everywhere:
 #
 #   1. --img FILE                     explicit, wins over everything
-#   2. ${WORK_DIR}/snapdragon-rpi5-arm64-${ROLE}-*.img   (newest, role match)
-#   3. ${WORK_DIR}/snapdragon-rpi5-*.img                 (newest, any role)
+#   2. ${WORK_DIR}/hugmesh-rpi5-arm64-${ROLE}-*.img   (newest, role match)
+#   3. ${WORK_DIR}/hugmesh-rpi5-*.img                 (newest, any role)
 #   4. ${WORK_DIR}/*.img (excluding *initramfs*/*kernel*) (newest)
 #
 # WORK_DIR defaults to ${REPO}/rpi5-stage4-build (same as the build scripts).
@@ -105,7 +105,7 @@ Lifecycle:
 
 Examples:
   $0 --role pki --foreground
-  $0 --img /var/tmp/snap/snapdragon-rpi5-arm64-pki-2026.0.img --ui-port 9443
+  $0 --img /var/tmp/snap/hugmesh-rpi5-arm64-pki-2026.0.img --ui-port 9443
   sudo $0 --kernel-from-img --role backend     # no kernel in WORK_DIR
 EOF
 exit "${1:-0}"
@@ -154,9 +154,9 @@ command -v qemu-img            >/dev/null || die "missing qemu-img"
 autodetect_img() {
     local d="$1" role="$2" c
     for c in \
-        "${d}"/snapdragon-rpi5-*-"${role}"-*.img \
-        "${d}"/snapdragon-rpi5-*.img \
-        "${d}"/snapdragon-*-"${role}"-*.img ; do
+        "${d}"/hugmesh-rpi5-*-"${role}"-*.img \
+        "${d}"/hugmesh-rpi5-*.img \
+        "${d}"/hugmesh-*-"${role}"-*.img ; do
         c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done

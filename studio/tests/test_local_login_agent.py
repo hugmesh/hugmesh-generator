@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from snapdragon_studio.core import local_login_agent as agent_mod
-from snapdragon_studio.core.local_login_agent import (
+from hugmesh_studio.core import local_login_agent as agent_mod
+from hugmesh_studio.core.local_login_agent import (
     LocalLoginAgent,
     Role,
     RolesManifest,
@@ -112,7 +112,7 @@ def _request(port, method, path, *, origin=GOOD_ORIGIN, local_header=True,
 def test_roles_returns_metadata_only(server):
     resp, data = _request(server, "GET", "/v1/roles")
     assert resp.status == 200
-    assert data["agent"] == "snapdragon-local-login"
+    assert data["agent"] == "hugmesh-local-login"
     assert data["version"] == 1
     ids = {r["id"] for r in data["roles"]}
     assert ids == {"brandowner", "moderator"}

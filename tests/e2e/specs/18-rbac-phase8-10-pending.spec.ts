@@ -8,7 +8,7 @@ import { test, expect } from '@playwright/test';
 // found these surfaces do not exist today:
 //
 //   * NO systems-host /games/admin UI mount, NO ROLE_GAMES/ROLE_MOD-conditional
-//     nav in the host shell (snapdragon-matrix-ui/projects/host).
+//     nav in the host shell (hugmesh-matrix-ui/projects/host).
 //   * NO app-level ROLE_MOD moderation UI (the Matrix UI kick/power-level is
 //     gated by MATRIX power levels, not the Casdoor ROLE_MOD).
 //   * SessionService only derives isAdmin (binary) — no isMod/isGames/isGamesAdmin.
@@ -22,7 +22,7 @@ test.describe('PENDING (Phase 8/10): systems host shell role-conditional nav', (
   test.skip('host shell shows admin nav for ROLE_ADMIN, hides it for ROLE_USER', async () => {
     // TODO(Phase8): when SessionService derives isAdmin from the Casdoor JWT
     // `roles` claim (not just the mock email), assert e2e-admin sees nav-admin and
-    // e2e-user does not. Surface: snapdragon-matrix-ui/projects/host nav.
+    // e2e-user does not. Surface: hugmesh-matrix-ui/projects/host nav.
     expect(true).toBe(true);
   });
 

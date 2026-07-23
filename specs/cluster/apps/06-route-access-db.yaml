@@ -1,5 +1,5 @@
 # route-access-db — Postgres source of truth for the gateway_route_access table
-# (role -> URL external-access rules). snapdragon-pki, ClusterIP. Applied with
+# (role -> URL external-access rules). hugmesh-pki, ClusterIP. Applied with
 # the route-access schema.sql seed via an initdb ConfigMap. Read by the three
 # gateways (R2DBC) and written by the admin-bff.
 apiVersion: argoproj.io/v1alpha1
@@ -10,12 +10,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/route-access
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-pki
+    namespace: hugmesh-pki
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

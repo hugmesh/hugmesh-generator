@@ -14,13 +14,13 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core.config import ROLE_CHOICES  # noqa: E402
-from snapdragon_studio.core.platform_info import HostInfo  # noqa: E402
-from snapdragon_studio.gui import wizard as wizard_mod  # noqa: E402
-from snapdragon_studio.gui.qt import Qt  # noqa: E402
+from hugmesh_studio.core.config import ROLE_CHOICES  # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
+from hugmesh_studio.gui.qt import Qt  # noqa: E402
 
 from _helpers import advance_to, pick_mode, pick_role, pick_platform  # noqa: E402
 
@@ -28,20 +28,20 @@ STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
-                has_kvm=False, is_root=False, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(scope="session")
 def qapp():
-    from snapdragon_studio.gui.qt import QtWidgets
+    from hugmesh_studio.gui.qt import QtWidgets
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture
@@ -72,7 +72,7 @@ def test_pickable_devices_span_the_mode_platform_union(wiz, mode):
     """The PICKABLE device rows span exactly the platform UNION of ROLE_CHOICES[mode] —
     no hardcoded list. jetson is NOT in standalone/cloud (mesh-only), so its devices are
     visible in the browser but never pickable here."""
-    from snapdragon_studio.core import device_catalog
+    from hugmesh_studio.core import device_catalog
     cat = device_catalog.load_catalog()
     pick_mode(wiz, mode)
     page = advance_to(wiz, wizard_mod.RolePage)

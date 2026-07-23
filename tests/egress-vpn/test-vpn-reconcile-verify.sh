@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-vpn-reconcile-verify.sh — unit test for /usr/lib/snapdragon/vpn-verify.sh
+# test-vpn-reconcile-verify.sh — unit test for /usr/lib/hugmesh/vpn-verify.sh
 # (the egress-VPN signed-export consumer, PR5).
 #
 # Proves, WITHOUT a node / a live BFF (ephemeral Ed25519 key + a hand-built signed
@@ -20,7 +20,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LIB="${REPO}/specs/usr/lib/snapdragon/vpn-verify.sh"
+LIB="${REPO}/specs/usr/lib/hugmesh/vpn-verify.sh"
 [ -r "${LIB}" ] || { echo "  FAIL verify lib missing: ${LIB}"; exit 1; }
 for t in openssl jq base64; do command -v "$t" >/dev/null || { echo "SKIP: need $t"; exit 0; }; done
 

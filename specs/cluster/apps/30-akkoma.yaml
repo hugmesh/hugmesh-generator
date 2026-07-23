@@ -1,5 +1,5 @@
-# Akkoma — fediverse server (replaces Mastodon). mastodon.snapdragon.systems,
-# backend namespace. Mastodon-API compatible, so snapdragon-mastodon-ui is
+# Akkoma — fediverse server (replaces Mastodon). mastodon.hugmesh.systems,
+# backend namespace. Mastodon-API compatible, so hugmesh-mastodon-ui is
 # unchanged. Raw manifests (no official Akkoma Helm chart). See manifests/akkoma
 # for the one-time setup/validation notes.
 apiVersion: argoproj.io/v1alpha1
@@ -10,12 +10,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/akkoma
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

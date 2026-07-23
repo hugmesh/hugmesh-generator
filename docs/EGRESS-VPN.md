@@ -14,7 +14,7 @@ PRs.
 
 ## Node-level, not a per-pod sidecar
 
-A NEW OpenRC service `/etc/init.d/snapdragon-egress-vpn` (Gentoo OpenRC; nodes are
+A NEW OpenRC service `/etc/init.d/hugmesh-egress-vpn` (Gentoo OpenRC; nodes are
 **-systemd**) brings up ONE `wg-quick` (or `openvpn`) interface per node that
 carries the node's public egress. Carrying the policy once per node — rather than
 a sidecar per pod — keeps the kill-switch + `ip rule` priorities in one place and
@@ -23,7 +23,7 @@ the one interface, selected by `fwmark`.
 
 ## Split-tunnel = `ip rule` PRIORITY + `Table=off`
 
-`/usr/sbin/snapdragon-vpn-runner` owns ALL routing (wg-quick is forced
+`/usr/sbin/hugmesh-vpn-runner` owns ALL routing (wg-quick is forced
 `Table = off`; OpenVPN runs `--route-noexec`). The VPN table (`176`) holds a
 SINGLE forward route, `default dev wg0`:
 
@@ -54,7 +54,7 @@ bypass the v4 kill-switch.
 > **Residual risk (by design):** fail-closed means a VPN provider outage takes the
 > assigned PUBLIC service offline (coturn relay / made-public egress) until the
 > tunnel recovers or the assignment is removed. This is the intended trade-off
-> over leaking the node WAN IP. Operators monitor via `snapdragon-vpn-runner
+> over leaking the node WAN IP. Operators monitor via `hugmesh-vpn-runner
 > status` / the reconcile agent's reported state.
 
 ## Secrets off-git
@@ -62,7 +62,7 @@ bypass the v4 kill-switch.
 The `.conf`/`.ovpn` ride the key-USB under `KEYS/vpn/<domain>/` (+ the build-side
 `keys-out/vpn/<domain>/`). `provision_vpn()` (in the keys-provision flow) reads
 ONLY the node's OWN domain and installs them `0600` root-owned into
-`/etc/snapdragon/vpn/`, pointing `active.conf` at the first config (WireGuard wins
+`/etc/hugmesh/vpn/`, pointing `active.conf` at the first config (WireGuard wins
 over OpenVPN). The runtime UI path instead delivers a config as a K8s Secret via
 ESO; Postgres holds only `secret_ref` + metadata. See `keys-template/vpn/README.md`.
 

@@ -1,4 +1,4 @@
-# Snapdragon CI — runs on the in-cluster GitLab Runner (privileged, x86_64 host).
+# HugMesh CI — runs on the in-cluster GitLab Runner (privileged, x86_64 host).
 # Builds every ISO + container image and DELIVERS the ISOs as release assets so
 # the admin UI can link to the latest builds. NOTE: ISOs contain NO keys — the
 # KEYS material is supplied from the USB stick at first boot, never baked in or
@@ -19,7 +19,7 @@ variables:
 lint:reserved-prefixes:
   stage: lint
   image: python:3-slim
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   script:
     - bash scripts/validate-reserved-prefixes.sh
 
@@ -33,7 +33,7 @@ lint:reserved-prefixes:
 lint:optional-services-exclude:
   stage: lint
   image: python:3-slim
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - pip install --quiet pyyaml
   script:
@@ -48,7 +48,7 @@ lint:optional-services-exclude:
 lint:download-verify:
   stage: lint
   image: bash:5
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   script:
     - bash tests/scripts/test-download-verify.sh
 
@@ -61,7 +61,7 @@ lint:download-verify:
 lint:cloud-package:
   stage: lint
   image: bash:5
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - apk add --no-cache coreutils findutils grep gawk
   script:
@@ -77,7 +77,7 @@ lint:cloud-package:
 lint:dracut-cross-lib:
   stage: lint
   image: bash:5
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   script:
     - bash tests/scripts/test-dracut-cross-lib.sh
 
@@ -93,7 +93,7 @@ lint:dracut-cross-lib:
 lint:media-poisoner-tls:
   stage: lint
   image: python:3-slim
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - apt-get update -qq && apt-get install -qq -y --no-install-recommends openssl >/dev/null
     - pip install --quiet fastapi uvicorn python-multipart
@@ -113,7 +113,7 @@ lint:media-poisoner-tls:
 lint:x86-kernel-net-symbols:
   stage: lint
   image: bash:5
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   script:
     - bash tests/scripts/test-x86-kernel-net-symbols.sh
 
@@ -127,7 +127,7 @@ lint:x86-kernel-net-symbols:
 lint:shellinj-regression:
   stage: lint
   image: bash:5
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - apk add --no-cache jq openssl
   script:
@@ -145,7 +145,7 @@ lint:shellinj-regression:
 lint:provision-keys-escrow-guard:
   stage: lint
   image: bash:5
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - apk add --no-cache jq openssl openssh-keygen python3 coreutils findutils grep sed
   script:
@@ -163,14 +163,14 @@ lint:provision-keys-escrow-guard:
 lint:phone-wizard:
   stage: lint
   image: bash:5
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - apk add --no-cache jq openssh-keygen coreutils findutils grep sed python3 libarchive-tools
   script:
     - bash tests/phone/test-phone-wizard.sh
 
 # MDM provider registry gate. Offline unit test for the pluggable MDM provider
-# registry (specs/usr/lib/snapdragon/mdm-providers.sh) the phone wizard drives —
+# registry (specs/usr/lib/hugmesh/mdm-providers.sh) the phone wizard drives —
 # the co-equal-provider analogue of the go-live provider registry. Sources the
 # lib and asserts its shape (MDM_PROVIDER_IDS + parallel assoc arrays + one
 # mdmp_emit_<id> per id, no orphans), that the DEFAULT is the SOVEREIGN provider
@@ -182,7 +182,7 @@ lint:phone-wizard:
 lint:mdm-providers:
   stage: lint
   image: bash:5
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - apk add --no-cache coreutils grep sed
   script:
@@ -199,7 +199,7 @@ lint:mdm-providers:
 lint:headwind-entrypoint:
   stage: lint
   image: bash:5
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - apk add --no-cache python3 coreutils findutils grep sed
   script:
@@ -226,7 +226,7 @@ lint:headwind-entrypoint:
 lint:phone-android-e2e:
   stage: lint
   image: bash:5
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - apk add --no-cache jq coreutils findutils grep sed gawk openssl
   script:
@@ -249,7 +249,7 @@ lint:phone-android-e2e:
 lint:make-phone-face:
   stage: lint
   image: bash:5
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - apk add --no-cache bash make coreutils grep sed
   script:
@@ -266,13 +266,13 @@ lint:make-phone-face:
 # headwind-admin and the dead HEADWIND_ADMIN_USERNAME/PASSWORD vars stay
 # removed, attestation probes stay tcpSocket (upstream serves NO GET routes),
 # the smtp seeder + its Secret are wired, and images follow the
-# registry.snapdragon.systems/snapdragon/... convention. Negative controls on
+# registry.hugmesh.systems/hugmesh/... convention. Negative controls on
 # STAGED COPIES prove the render gate and the PROTOCOL invariant both bite.
 # Cheap; no cluster, no privileged runner needed.
 lint:mdm-manifests-render:
   stage: lint
   image: bash:5
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - apk add --no-cache kubectl coreutils grep sed gawk
   script:
@@ -295,20 +295,20 @@ lint:mdm-manifests-render:
 lint:attestation-dockerfile-patches:
   stage: lint
   image: bash:5
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - apk add --no-cache coreutils grep sed
   script:
     - bash tests/stack/test-attestation-dockerfile-patches.sh
 
 # Studio identity-allowlist unit tests: the fail-closed validators in
-# studio/snapdragon_studio/core/validate.py (DNS-label / hostname / username /
+# studio/hugmesh_studio/core/validate.py (DNS-label / hostname / username /
 # accent allowlists + the trailing-newline re.fullmatch regression). Cheap; no
 # privileged runner needed.
 lint:studio-identity-validation:
   stage: lint
   image: python:3-slim
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - pip install --quiet pytest
   script:
@@ -324,7 +324,7 @@ lint:studio-identity-validation:
 lint:prod-hygiene:
   stage: lint
   image: python:3-slim
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   before_script:
     - pip install --quiet pyyaml
   script:
@@ -341,8 +341,8 @@ lint:prod-hygiene:
     - >
       find /tmp/prodbake/cluster -type f \( -name '*.yaml' -o -name '*.yml' \) -print0 |
       while IFS= read -r -d '' f; do
-        if grep -qE 'image:[[:space:]]*[^[:space:]:]*snapdragon[^[:space:]:]*:dev([[:space:]]|$)' "$f"; then
-          sed -i -E "s|(image:[[:space:]]*[^[:space:]:]*snapdragon[^[:space:]:]*):dev|\\1:${RELEASE_TAG}|g" "$f";
+        if grep -qE 'image:[[:space:]]*[^[:space:]:]*hugmesh[^[:space:]:]*:dev([[:space:]]|$)' "$f"; then
+          sed -i -E "s|(image:[[:space:]]*[^[:space:]:]*hugmesh[^[:space:]:]*):dev|\\1:${RELEASE_TAG}|g" "$f";
         fi;
       done
     # 1) the baked prod tree must PASS.
@@ -353,7 +353,7 @@ lint:prod-hygiene:
       cat > /tmp/prodbake/cluster/manifests/inject/bad.yaml <<'EOF'
       apiVersion: apps/v1
       kind: Deployment
-      metadata: { name: vault-injected, namespace: snapdragon-pki }
+      metadata: { name: vault-injected, namespace: hugmesh-pki }
       spec:
         selector: { matchLabels: { app: vault } }
         template:
@@ -372,7 +372,7 @@ lint:prod-hygiene:
 # with "GATE DID NOT BITE", so a new template that ships without fixtures is caught here.
 lint:pentest-templates:
   stage: lint
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   variables:
     NUCLEI_VERSION: "3.9.0"
   before_script:
@@ -420,7 +420,7 @@ lint:pentest-templates:
 # proxy) — no secret is committed.
 casdoor-jwt-custom-gate:
   stage: verify
-  tags: [snapdragon-x86, privileged]
+  tags: [hugmesh-x86, privileged]
   script:
     - bash tests/casdoor/test-jwt-custom-token.sh
   rules:
@@ -443,14 +443,14 @@ casdoor-jwt-custom-gate:
 # node-storage / egress-vpn consumer tests (which are otherwise CI-unwired today).
 domain-registry-reconcile-verify:
   stage: verify
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   script:
     - bash tests/domain-registry/test-domain-reconcile-verify.sh
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       changes:
-        - specs/usr/sbin/snapdragon-domain-reconcile
-        - specs/usr/lib/snapdragon/domain-verify.sh
+        - specs/usr/sbin/hugmesh-domain-reconcile
+        - specs/usr/lib/hugmesh/domain-verify.sh
         - tests/domain-registry/test-domain-reconcile-verify.sh
         - .gitlab-ci.yml
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
@@ -459,7 +459,7 @@ domain-registry-reconcile-verify:
 # on the runner host (the x86_64 node). Tag-select that runner.
 build:isos:
   stage: iso
-  tags: [snapdragon-x86, privileged]
+  tags: [hugmesh-x86, privileged]
   script:
     - ./scripts/build-all-roles.sh -j "$(nproc)"          # pki/backend/frontend (aarch64)
     - ./build-x86-host-stage4.sh -j "$(nproc)" -w x86-host-build
@@ -470,7 +470,7 @@ build:isos:
 
 build:images:
   stage: images
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   # Dispatch into the IN-CLUSTER Kaniko image-build pipeline
   # (specs/cluster/manifests/image-builder/) instead of the former echo STUB. The pipeline
   # is OPT-IN: its namespace ships only when an operator enables the ArgoCD Application
@@ -489,10 +489,10 @@ build:images:
     - if: '$CI_COMMIT_TAG'
   variables:
     # The in-cluster build namespace (must match manifests/image-builder/namespace-and-netpol.yaml).
-    BUILD_NAMESPACE: "snapdragon-image-builds"
+    BUILD_NAMESPACE: "hugmesh-image-builds"
     # The per-app source repo + Dockerfile + destination image. Override per pipeline
     # (CI variables / matrix) to build each first-party app. Destination matches the app
-    # kustomizations' newName convention (registry.snapdragon.systems/snapdragon/<app>:<tag>).
+    # kustomizations' newName convention (registry.hugmesh.systems/hugmesh/<app>:<tag>).
     # HARBOR MIGRATION: this hostname is now served by Harbor, not GitLab's bundled
     # registry (see specs/cluster/apps/03a-harbor.yaml) — the push credential the
     # build pod mounts (image-builder-registry, see the `script:` comment below) is
@@ -502,7 +502,7 @@ build:images:
     IMAGE_CONTEXT: "git://github.com/Snapdragon-Systems/snapdragon-gateway.git#${CI_COMMIT_SHA}"
     IMAGE_DOCKERFILE: "Dockerfile"
     # Where the built image lands. <app> is IMAGE_APP; the tags are computed in `script`.
-    DEST_REPO: "registry.snapdragon.systems/snapdragon/snapdragon-gateway"
+    DEST_REPO: "registry.hugmesh.systems/hugmesh/snapdragon-gateway"
   script:
     - |
       if [ -z "${IMAGE_BUILDER_ENABLED:-}" ]; then
@@ -524,7 +524,7 @@ build:images:
       echo "building ${IMAGE_APP}: immutable=${DEST_IMAGE}  moving=${DEST_IMAGE_MOVING}"
       # Render the ships-dark Kaniko Job template with this build's parameters and apply it
       # into the in-cluster build namespace. The template lives in the GitOps repo; the build
-      # pod (rootless Kaniko) pushes to registry.snapdragon.systems using the ESO-materialized
+      # pod (rootless Kaniko) pushes to registry.hugmesh.systems using the ESO-materialized
       # image-builder-registry dockerconfigjson. No secrets are passed from CI.
       BUILD_NAME="${IMAGE_APP}-${CI_COMMIT_SHORT_SHA}"
       # Use | as the sed delimiter (the git-ref CONTEXT contains '#', so '#' must not delimit).
@@ -540,7 +540,7 @@ build:images:
       kubectl -n "${BUILD_NAMESPACE}" wait --for=condition=complete \
         "job/image-build-${BUILD_NAME}" --timeout=1800s
 
-# NOTE: there is no longer a bundled `snapdragon-pentest-runner` image stage. The
+# NOTE: there is no longer a bundled `hugmesh-pentest-runner` image stage. The
 # pen-test is DEV/CI-pipeline-only: the `sca` + `dast` stages below run the OWASP
 # toolchain from PUBLIC images directly (owasp/dependency-check for SCA;
 # ghcr.io/zaproxy/zaproxy:stable, pulled by the harness, for DAST), and the reusable
@@ -551,7 +551,7 @@ build:images:
 # so the admin UI's download links never change.
 deliver:isos:
   stage: deliver
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   needs: ["build:isos"]
   script:
     - |
@@ -575,7 +575,7 @@ deliver:isos:
 #
 # snapdragon.games is DELIBERATELY EXCLUDED from this matrix: it is a DISTINCT
 # stack with its OWN .gitlab-ci.yml that runs SCA in its own pipeline (incl. its
-# Rust bridge) — see snapdragon-pentest-standard "TWO SEPARATE WORKFLOWS" + PR6.
+# Rust bridge) — see hugmesh-pentest-standard "TWO SEPARATE WORKFLOWS" + PR6.
 # Likewise the static sites (usidiamond.github.io) + the generator-meta repos that
 # carry no dependency manifest are out of scope here.
 sca:dependency-check:
@@ -583,7 +583,7 @@ sca:dependency-check:
   image:
     name: owasp/dependency-check:latest
     entrypoint: [""]
-  tags: [snapdragon-x86]
+  tags: [hugmesh-x86]
   parallel:
     matrix:
       - REPO:
@@ -606,7 +606,7 @@ sca:dependency-check:
           - snapdragon-remote-fragment
           - snapdragon-actions
           - snapdragon-api-docs
-          - snapdragon-generator
+          - hugmesh-generator
         # NOTE: snapdragon.games is intentionally NOT in this list — it owns its
         # own pipeline + SCA stage (the games two-Casdoor stack, incl. the Rust
         # snapdragon-bridge). Adding it here would double-scan + cross workflows.
@@ -626,7 +626,7 @@ sca:dependency-check:
   script:
     - >
       /usr/share/dependency-check/bin/dependency-check.sh
-      --project "snapdragon-${REPO}"
+      --project "hugmesh-${REPO}"
       --scan "src/${REPO}"
       --out "reports/${REPO}"
       --data ".nvd-cache"
@@ -667,7 +667,7 @@ sca:dependency-check:
 # on the privileged x86 runner, same tag convention as build:isos.
 .dast-base:
   stage: dast
-  tags: [snapdragon-x86, privileged]
+  tags: [hugmesh-x86, privileged]
   variables:
     # The harness reads creds for the throwaway TEST realm from CI variables at
     # runtime (masked/protected in GitLab) and never writes them to git. See
@@ -725,7 +725,7 @@ dast:main-full:
 # privileged x86 runner as the dast stage.
 .load-base:
   stage: load
-  tags: [snapdragon-x86, privileged]
+  tags: [hugmesh-x86, privileged]
   variables:
     PENTEST_REPORTS: "${CI_PROJECT_DIR}/out/pentest"
     # k6 load intensity — overridable per-schedule (a heavier nightly, a lighter

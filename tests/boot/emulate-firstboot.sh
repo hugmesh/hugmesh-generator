@@ -38,10 +38,10 @@ emulate_role() {
   "root": { "password_hash": "${HASH}" } }
 EOF
   cat > "${keys}/provision.json" <<EOF
-{ "version": 1, "hostname": "snapdragon-${role}", "timezone": "UTC",
+{ "version": 1, "hostname": "hugmesh-${role}", "timezone": "UTC",
   "headscale": { "enabled": false }, "tailscale": { "enabled": false },
   "kubernetes": { "role": "${krole}", "bootstrap": false },
-  "snapdragon": { "role": "${role}", "cluster_domain": "snapdragon.systems",
+  "hugmesh": { "role": "${role}", "cluster_domain": "hugmesh.systems",
                   "node_labels": { "snapdragon.systems/role": "${role}" } } }
 EOF
 
@@ -56,7 +56,7 @@ EOF
       (apt-get update -qq && apt-get install -y -qq jq passwd openssh-client procps iproute2 >/dev/null 2>&1) \
         || echo "[warn] apt unavailable; some assertions may fail"
       bash /usr/sbin/keys-provision || true
-      echo "----- assertions (role $(cat /etc/snapdragon/role 2>/dev/null || echo n/a)) -----"
+      echo "----- assertions (role $(cat /etc/hugmesh/role 2>/dev/null || echo n/a)) -----"
       P=0; F=0; ok(){ echo "  PASS $*"; P=$((P+1)); }; bad(){ echo "  FAIL $*"; F=$((F+1)); }
       id opsadmin >/dev/null 2>&1 && ok "user opsadmin created from users.json" || bad "user opsadmin"
       id -nG opsadmin 2>/dev/null | grep -qw wheel && ok "group wheel auto-created + assigned" || bad "wheel group"
@@ -64,7 +64,7 @@ EOF
       [ -f /etc/sudoers.d/10-opsadmin ] && ok "sudoers entry written" || bad "sudoers"
       [ -f /var/lib/keys-provision/users.created ] && ok "users.created marker" || bad "users.created marker"
       [ -f /var/lib/keys-provision/done ] && ok "done marker" || bad "done marker"
-      [ "$(cat /etc/hostname)" = "snapdragon-'"${role}"'" ] && ok "hostname applied" || bad "hostname ($(cat /etc/hostname))"
+      [ "$(cat /etc/hostname)" = "hugmesh-'"${role}"'" ] && ok "hostname applied" || bad "hostname ($(cat /etc/hostname))"
       ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1 && ok "SSH host keys generated" || bad "host keys"
       echo "  RESULT role: ${P} passed, ${F} failed"; [ "${F}" -eq 0 ]
     '

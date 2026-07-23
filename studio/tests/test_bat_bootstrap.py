@@ -1,6 +1,6 @@
 """The Windows bootstrap .bat — always-on Linux-side checks (no qemu, no Windows).
 
-``snapdragon-studio.bat`` is now a guided bootstrapper (detect / consent-gated winget
+``hugmesh-studio.bat`` is now a guided bootstrapper (detect / consent-gated winget
 installs / venv / launch). It cannot execute on Linux, but nearly all of its failure
 modes are TEXTUAL, so they are provable from the bytes of the file:
 
@@ -25,12 +25,12 @@ import re
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(STUDIO_ROOT)
-BAT_PATH = os.path.join(STUDIO_ROOT, "snapdragon-studio.bat")
+BAT_PATH = os.path.join(STUDIO_ROOT, "hugmesh-studio.bat")
 QEMU_E2E_PATH = os.path.join(REPO_ROOT, "tests", "qemu", "windows-studio-e2e.sh")
 GITATTRIBUTES_PATH = os.path.join(REPO_ROOT, ".gitattributes")
 README_PATH = os.path.join(STUDIO_ROOT, "README.md")
 
-LAUNCH_LINE = "python -m snapdragon_studio %*"
+LAUNCH_LINE = "python -m hugmesh_studio %*"
 WINGET_PYTHON_PIN = 'set "WINGET_PYTHON_ID=Python.Python.3.12"'
 WINGET_DOCKER_PIN = 'set "WINGET_DOCKER_ID=Docker.DockerDesktop"'
 
@@ -286,7 +286,7 @@ def test_no_digit_eating_redirects():
     sh_text = open(QEMU_E2E_PATH, encoding="utf-8").read()
     m = re.search(r"GUEST_RUNNER='([^']*)'", sh_text)
     assert m, "GUEST_RUNNER block missing from windows-studio-e2e.sh"
-    sources = [("snapdragon-studio.bat", "\n".join(_bat_lines())),
+    sources = [("hugmesh-studio.bat", "\n".join(_bat_lines())),
                ("windows-studio-e2e.sh GUEST_RUNNER", m.group(1))]
     for name, text in sources:
         for n, ln in enumerate(text.split("\n"), 1):

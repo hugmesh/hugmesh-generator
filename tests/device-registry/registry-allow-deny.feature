@@ -3,7 +3,7 @@
 # This is the Gherkin-READABLE companion to
 # tests/device-registry/test-registry-allow-deny.sh. The executable harness
 # evaluates the ONE auth predicate from the VERIFIED DESIGN
-# (snapdragon-device-license-registry memory) against BOTH fail-closed layers
+# (hugmesh-device-license-registry memory) against BOTH fail-closed layers
 # compiled from ONE signed, unscoped per-mesh export:
 #
 #   SUPERADMIN -> ALLOW iff P's node is in D.mesh_id AND offered key K is enrolled.
@@ -14,7 +14,7 @@
 #   MOD / USER -> DENY.
 #
 # HOW THE HARNESS BACKS EACH SCENARIO (honest about modeled-vs-needs-live-mesh):
-#   * Layer-B scenarios RUN THE REAL specs/usr/sbin/snapdragon-authorized-keys-lookup
+#   * Layer-B scenarios RUN THE REAL specs/usr/sbin/hugmesh-authorized-keys-lookup
 #     against a per-test fake-root (its absolute paths rewritten so an unprivileged
 #     run can stage node.env + the baked public key + a REAL signed export cache).
 #     The signature is a REAL detached Ed25519 over the REAL canonical bytes, baking
@@ -143,7 +143,7 @@ Feature: The device-license registry compiles to a default-deny ALLOW+DENY SSH b
     # cross-mesh reach requires being force-tagged tag:superadmin on THAT mesh's control node
 
   Scenario: Server-forced destination tags are not self-applyable (forged-tag DENY) [REAL-LAYER-A]
-    Then tag:dev_* and tag:superadmin are listed in tagOwners as owned by the control "snapdragon" user only
+    Then tag:dev_* and tag:superadmin are listed in tagOwners as owned by the control "hugmesh" user only
     And no preauth key lets a node self-advertise them
     # the live REJECTION of a forged --advertise-tags (forced tag WINS) is [MODEL: needs a live headscale]
 

@@ -1,18 +1,18 @@
-# snapdragon-mod-ui — the moderation Angular micro-frontend remote. Its own nginx
-# (own repo + pod) in the snapdragon-frontend namespace, federated into the
-# snapdragon.systems host: it serves a remoteEntry.json the host's loadRemoteModule
+# hugmesh-mod-ui — the moderation Angular micro-frontend remote. Its own nginx
+# (own repo + pod) in the hugmesh-frontend namespace, federated into the
+# hugmesh.systems host: it serves a remoteEntry.json the host's loadRemoteModule
 # consumes, mounted at /mod (mod role). Talks to mod-bff-api via the same-origin
 # /bff/mod/** fe-gateway route.
-# Repo: github.com/Snapdragon-Systems/snapdragon-mod-ui
+# Repo: github.com/Snapdragon-Systems/hugmesh-mod-ui
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: snapdragon-mod-ui, namespace: snapdragon-frontend, labels: { app: snapdragon-mod-ui, app.kubernetes.io/part-of: snapdragon.systems } }
+metadata: { name: hugmesh-mod-ui, namespace: hugmesh-frontend, labels: { app: hugmesh-mod-ui, app.kubernetes.io/part-of: hugmesh.systems } }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-mod-ui } }
+  selector: { matchLabels: { app: hugmesh-mod-ui } }
   template:
-    metadata: { labels: { app: snapdragon-mod-ui } }
+    metadata: { labels: { app: hugmesh-mod-ui } }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
       securityContext:
@@ -27,5 +27,5 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: snapdragon-mod-ui, namespace: snapdragon-frontend }
-spec: { selector: { app: snapdragon-mod-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
+metadata: { name: hugmesh-mod-ui, namespace: hugmesh-frontend }
+spec: { selector: { app: hugmesh-mod-ui }, ports: [{ name: http, port: 80, targetPort: http }] }

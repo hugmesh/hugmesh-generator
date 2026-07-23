@@ -19,8 +19,8 @@ apiServer:
   # and the LB VIP validate against these.
   certSANs:
     - kube-api.headnet.internal
-    - snapdragon-pki
-    - snapdragon-pki.headnet.internal
+    - hugmesh-pki
+    - hugmesh-pki.headnet.internal
     - 127.0.0.1
   # ── Encryption at rest for etcd Secrets ───────────────────────────
   # The apiserver encrypts Secret objects before writing them to etcd using the

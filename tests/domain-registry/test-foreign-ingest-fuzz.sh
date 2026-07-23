@@ -76,7 +76,7 @@ KEYFP="$(base64 -d "${TRUST}/${MESH}/foreign-provenance-pub.ed25519" 2>/dev/null
 # ── Fixture builders ────────────────────────────────────────────────────────────
 # A CLEAN foreign angular-mfe base carrying the archetype recipe's required upstream
 # anchors (so the positive control also renders). Not secrets; not our frozen
-# protocol constants (Snapdragon-Systems/ and @snapdragon/ are NOT snapdragon.systems/).
+# protocol constants (Snapdragon-Systems/ and @hugmesh/ are NOT snapdragon.systems/).
 mkclean_base() { # mkclean_base DIR
   local d="$1"
   mkdir -p "${d}/src"
@@ -84,9 +84,9 @@ mkclean_base() { # mkclean_base DIR
   printf '<html><head><title>Snapdragon Login (remote)</title></head><body></body></html>\n' > "${d}/src/index.html"
   printf 'include:\n  - project: Snapdragon-Systems/snapdragon-generator\n    file: ci.yml\n' > "${d}/.gitlab-ci.yml"
   printf 'export const remoteEntry = "login";\n' > "${d}/federation-base.js"
-  cat > "${d}/.snapdragon-sbom.json" <<'JSON'
+  cat > "${d}/.hugmesh-sbom.json" <<'JSON'
 { "bomFormat":"CycloneDX","specVersion":"1.5",
-  "metadata":{"component":{"name":"snapdragon-login-ui","version":"1.0.0"}},
+  "metadata":{"component":{"name":"hugmesh-login-ui","version":"1.0.0"}},
   "components":[{"name":"handlebars","version":"4.7.8"},{"name":"left-pad","version":"1.3.0"}] }
 JSON
 }
@@ -99,7 +99,7 @@ sign_base() {
   local tree; tree="$(_fib_tree_digest "$d")"
   cat > "${d}/.snapdragon-provenance.json" <<JSON
 { "schema":"snapdragon.systems/provenance/v1",
-  "base":{"repo":"snapdragon-login-ui","commitSha":"${pin}","meshId":"${mesh}","treeSha256":"${tree}","generation":${gen},"mode":"overlay"},
+  "base":{"repo":"hugmesh-login-ui","commitSha":"${pin}","meshId":"${mesh}","treeSha256":"${tree}","generation":${gen},"mode":"overlay"},
   "template":{"archetype":"angular-mfe"},
   "tenant":{"brand":"acme","org":"Acme-Inc","clusterDomain":"acme.test"} }
 JSON
@@ -247,23 +247,23 @@ PIN="$(digest_of nulheader)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
 run_gate nulheader "$B" "$MESH" "$PIN"; assert_reject "(NUL-cloaked frozen wire header X-Device-Terminal-StepUp)"
 
 # ── (9) SBOM ABSENT ──────────────────────────────────────────────────────────────
-B="${WORK}/nosbom"; mkclean_base "$B"; rm -f "${B}/.snapdragon-sbom.json"
+B="${WORK}/nosbom"; mkclean_base "$B"; rm -f "${B}/.hugmesh-sbom.json"
 PIN="$(digest_of nosbom)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
 run_gate nosbom "$B" "$MESH" "$PIN"; assert_reject "(SBOM absent)"
 
 # ── (9b) SBOM MALFORMED (not JSON) ───────────────────────────────────────────────
-B="${WORK}/badsbom"; mkclean_base "$B"; printf 'not json {{{\n' > "${B}/.snapdragon-sbom.json"
+B="${WORK}/badsbom"; mkclean_base "$B"; printf 'not json {{{\n' > "${B}/.hugmesh-sbom.json"
 PIN="$(digest_of badsbom)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
 run_gate badsbom "$B" "$MESH" "$PIN"; assert_reject "(SBOM malformed)"
 
 # ── (9c) SBOM EMPTY (zero components) ─────────────────────────────────────────────
-B="${WORK}/emptysbom"; mkclean_base "$B"; printf '{"bomFormat":"CycloneDX","components":[]}\n' > "${B}/.snapdragon-sbom.json"
+B="${WORK}/emptysbom"; mkclean_base "$B"; printf '{"bomFormat":"CycloneDX","components":[]}\n' > "${B}/.hugmesh-sbom.json"
 PIN="$(digest_of emptysbom)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
 run_gate emptysbom "$B" "$MESH" "$PIN"; assert_reject "(SBOM has zero components)"
 
 # ── (10) CRITICAL VULN dep in SBOM (matches the pinned advisory floor) ───────────
 B="${WORK}/vuln"; mkclean_base "$B"
-cat > "${B}/.snapdragon-sbom.json" <<'JSON'
+cat > "${B}/.hugmesh-sbom.json" <<'JSON'
 { "bomFormat":"CycloneDX","components":[{"name":"handlebars","version":"4.7.8"},{"name":"log4j-core","version":"2.14.1"}] }
 JSON
 PIN="$(digest_of vuln)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
@@ -275,7 +275,7 @@ run_gate vuln "$B" "$MESH" "$PIN"; assert_reject "(CRITICAL vuln dep log4j-core@
 #          corroborates against the ACTUAL tree (jar filename) and MUST reject.
 B="${WORK}/vulnjar"; mkclean_base "$B"; mkdir -p "${B}/libs"
 printf 'PK\x03\x04 fake jar bytes\n' > "${B}/libs/log4j-core-2.14.1.jar"
-cat > "${B}/.snapdragon-sbom.json" <<'JSON'
+cat > "${B}/.hugmesh-sbom.json" <<'JSON'
 { "bomFormat":"CycloneDX","components":[{"name":"handlebars","version":"4.7.8"}] }
 JSON
 PIN="$(digest_of vulnjar)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
@@ -299,7 +299,7 @@ run_gate vulnlock "$B" "$MESH" "$PIN"; assert_reject "(package-lock.json lodash@
 #          SBOM lists the vulnerable version under a group-prefixed name so the raw
 #          'name@version' never matches the floor; the normaliser strips the prefix.
 B="${WORK}/vulnname"; mkclean_base "$B"
-printf '{"bomFormat":"CycloneDX","components":[{"name":"org.apache.logging.log4j:log4j-core","version":"2.14.1"}]}\n' > "${B}/.snapdragon-sbom.json"
+printf '{"bomFormat":"CycloneDX","components":[{"name":"org.apache.logging.log4j:log4j-core","version":"2.14.1"}]}\n' > "${B}/.hugmesh-sbom.json"
 PIN="$(digest_of vulnname)"; sign_base "$B" "$PRIV" "$MESH" "$PIN" 5
 run_gate vulnname "$B" "$MESH" "$PIN"; assert_reject "(group-prefixed log4j-core@2.14.1 misdeclaration — name normalisation)"
 
@@ -610,7 +610,7 @@ FG
     MESH_TRUST_STORE="$TRUST" FOREIGN_FETCH_MAX_BYTES=4194304 FOREIGN_PINNED_TREE_SHA256="$(digest_of r6clone_anchor)" \
     bash "$PRB" --foreign --mesh "$MESH" --pinned-digest "$PIN64" login-ui >/dev/null 2>>"${WORK}/gate.err"
   R6_RC=$?
-  R6_CLONE_DIR="${CLONE_CACHE}/foreign/${MESH}/snapdragon-login-ui"
+  R6_CLONE_DIR="${CLONE_CACHE}/foreign/${MESH}/hugmesh-login-ui"
   R6_SZ="$(du -sb "$R6_CLONE_DIR" 2>/dev/null | awk '{print $1+0}')"
   if [ "$R6_RC" -ne 0 ] && [ "${R6_SZ:-0}" -lt 16777216 ]; then
     ok "(R6 fetch-time watchdog) unbounded hostile clone ABORTED mid-fetch (rc=${R6_RC}, clone bounded at ${R6_SZ}B < 16MiB)"
@@ -665,7 +665,7 @@ FG
     FOREIGN_PINNED_TREE_SHA256="$(digest_of r6checkout_anchor)" \
     bash "$PRB" --foreign --mesh "$MESH" --pinned-digest "$PINCO" login-ui >/dev/null 2>>"${WORK}/gate.err"
   CO_RC=$?
-  CO_DIR="${CO_CACHE}/foreign/${MESH}/snapdragon-login-ui"
+  CO_DIR="${CO_CACHE}/foreign/${MESH}/hugmesh-login-ui"
   CO_SZ="$(du -sb "$CO_DIR" 2>/dev/null | awk '{print $1+0}')"
   # bounded well under the 400 MiB runaway (8 MiB cap + watchdog grace), and fail-closed.
   if [ "$CO_RC" -ne 0 ] && [ "${CO_SZ:-0}" -lt 67108864 ]; then
@@ -703,7 +703,7 @@ if [ "${HAVE_RENDER}" -eq 1 ]; then
     if grep -rq '{{BRAND_TITLE}}' "$BO" 2>/dev/null; then bad "(legit) BRAND_TITLE unsubstituted"; fi
     if grep -rq 'Acme Portal Login (remote)' "$BO" 2>/dev/null; then ok "(legit) brand token substituted (title rebranded)"; else bad "(legit) brand rebrand not applied"; fi
     # gate markers + foreign attestation envelope must NOT ride into the emitted tree.
-    if [ -e "${BO}/.snapdragon-mesh-admitted" ] || [ -e "${BO}/.foreign-mesh-id" ] || [ -e "${BO}/.snapdragon-provenance.json" ] || [ -e "${BO}/.snapdragon-sbom.json" ]; then
+    if [ -e "${BO}/.snapdragon-mesh-admitted" ] || [ -e "${BO}/.foreign-mesh-id" ] || [ -e "${BO}/.snapdragon-provenance.json" ] || [ -e "${BO}/.hugmesh-sbom.json" ]; then
       bad "(legit) gate/foreign-attestation markers leaked into the emitted tree"
     else ok "(legit) gate markers + foreign attestation stripped from the emitted tree"; fi
   else
@@ -848,7 +848,7 @@ EOF
   [ -f "$LSTAMP" ] && ok "(launder) inbound gate left a persistent .snapdragon-mesh-admitted stamp" \
     || bad "(launder) no admission stamp: $(tail -2 "${WORK}/lprb.err")"
   # 2) durable foreign-clone origin signal (as fetch-mode would create).
-  mkdir -p "${LCACHE}/foreign/${MESH}"; cp -r "$LBASE" "${LCACHE}/foreign/${MESH}/snapdragon-login-ui"
+  mkdir -p "${LCACHE}/foreign/${MESH}"; cp -r "$LBASE" "${LCACHE}/foreign/${MESH}/hugmesh-login-ui"
   # 3) render the foreign-overlay tree through the gate.
   LOUT="${WORK}/lout"
   if (cd "$REPO" && MESH_REGISTRY="$LREG" bash "$RRT" "${BRANDCONF}" --enable-repo-tree --repo login-ui --archetype angular-mfe \
@@ -892,7 +892,7 @@ EOF
   # REMOVABLE foreign cache dir. Purged after render but before publish, the pre-fix
   # publish saw NO foreign signal, treated the foreign-DERIVED tree as own-mesh, and
   # re-signed+PUSHED it with no stamp re-verify. THE FIX: render writes a durable,
-  # OUR-authored .snapdragon-base-origin.json INTO BRAND_OUT that TRAVELS with the tree;
+  # OUR-authored .hugmesh-base-origin.json INTO BRAND_OUT that TRAVELS with the tree;
   # publish keys off THAT fail-closed. This case renders a foreign-overlay tree, then
   # `rm -rf`s the ENTIRE foreign cache (clone + quarantine stamp), then publishes: the
   # marker still forces the foreign path so publish REFUSES the now-stamp-less tree and
@@ -908,7 +908,7 @@ EOF
      LOGIN_UI_BASE_DIR="$CPBASE" OFFLINE=1 FIB_ADVISORY_FLOOR_DEFAULT="$ADVISORY" \
      FOREIGN_PINNED_TREE_SHA256="$CPANCHOR" \
      bash "$PRB" --foreign --mesh "$MESH" --pinned-digest "$CPPIN" login-ui >/dev/null 2>"${WORK}/cpprb.err"
-  mkdir -p "${CPCACHE}/foreign/${MESH}"; cp -r "$CPBASE" "${CPCACHE}/foreign/${MESH}/snapdragon-login-ui"
+  mkdir -p "${CPCACHE}/foreign/${MESH}"; cp -r "$CPBASE" "${CPCACHE}/foreign/${MESH}/hugmesh-login-ui"
   # render the foreign-overlay tree (writes the durable base-origin marker into BRAND_OUT).
   CPOUT="${WORK}/cpout"; rm -rf "$CPOUT"
   if (cd "$REPO" && MESH_REGISTRY="$LREG" bash "$RRT" "${BRANDCONF}" --enable-repo-tree --repo login-ui --archetype angular-mfe \
@@ -917,7 +917,7 @@ EOF
         --trust-store "$TRUST" --min-generation 0 --set APP_SLUG=login --set TITLE_WORD=Login >/dev/null 2>"${WORK}/cprender.err") \
      && [ -d "${CPOUT}/acme-login-ui" ]; then ok "(cache-purge) foreign-overlay tree rendered"
   else bad "(cache-purge) render failed: $(tail -3 "${WORK}/cprender.err")"; fi
-  CPMARK="${CPOUT}/acme-login-ui/.snapdragon-base-origin.json"
+  CPMARK="${CPOUT}/acme-login-ui/.hugmesh-base-origin.json"
   if [ -f "$CPMARK" ] \
      && [ "$(jq -r '.originMesh'   "$CPMARK" 2>/dev/null)" = "$MESH" ] \
      && [ "$(jq -r '.pinnedDigest' "$CPMARK" 2>/dev/null)" = "$CPPIN" ] \
@@ -928,7 +928,7 @@ EOF
   CPSTAMP="${CPCACHE}/.mesh-quarantine/login-ui/${MESH}-${CPPIN:0:16}/.snapdragon-mesh-admitted"
   [ -f "$CPSTAMP" ] && ok "(cache-purge) durable admission stamp present pre-purge" || bad "(cache-purge) no stamp pre-purge: $(tail -2 "${WORK}/cpprb.err")"
   rm -rf "${CPCACHE}/foreign" "${CPCACHE}/.mesh-quarantine"
-  { [ ! -e "${CPCACHE}/foreign/${MESH}/snapdragon-login-ui" ] && [ ! -f "$CPSTAMP" ]; } \
+  { [ ! -e "${CPCACHE}/foreign/${MESH}/hugmesh-login-ui" ] && [ ! -f "$CPSTAMP" ]; } \
     && ok "(cache-purge) foreign cache clone + quarantine stamp purged (pre-fix cache-scan is now blind)" \
     || bad "(cache-purge) cache not fully purged"
   # (NEW) publish WITH the durable marker present + cache/stamp gone -> MUST refuse, push nothing.

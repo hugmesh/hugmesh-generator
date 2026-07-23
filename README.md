@@ -1,10 +1,10 @@
-# snapdragon-generator
+# hugmesh-generator
 
 Crossdev / native build scripts that produce **hardened Gentoo images** for the
-Snapdragon cluster — three Raspberry Pi 5 (aarch64) role images plus an x86_64
+HugMesh cluster — three Raspberry Pi 5 (aarch64) role images plus an x86_64
 GPU host — and the **GitOps payload** that runs Casdoor, tuwunel (Matrix) + Akkoma (fediverse), the
-Spring APIs and snapdragon.games on them. Everything connects **behind
-`snapdragon.systems`** through per-namespace Spring Cloud Gateways.
+Spring APIs and hugmesh.games on them. Everything connects **behind
+`hugmesh.systems`** through per-namespace Spring Cloud Gateways.
 
 Every image boots, then provisions itself at first boot from a USB **FAT32
 `KEYS` partition** (users, SSH keys, passwords, certificates, headscale/k8s
@@ -54,9 +54,9 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   guard + test landed on `main` with the hardening pass).
 - **✅ Unified Spring baseline** — the baked GitOps payload now targets **Spring
   Boot 4.0.7 / Spring Cloud 2025.1.2** on Java 25, with the shared Maven artifacts
-  **`snapdragon-parent`** (metapom, 2.7.0), **`snapdragon-commons`** (shared
-  security/tenancy, `systems.snapdragon.commons.*`, 2.0.0) and the new
-  **`snapdragon-auth-core`** (2.3.0 — shared account/session/MFA/Casdoor-admin
+  **`hugmesh-parent`** (metapom, 2.7.0), **`hugmesh-commons`** (shared
+  security/tenancy, `systems.hugmesh.commons.*`, 2.0.0) and the new
+  **`hugmesh-auth-core`** (2.3.0 — shared account/session/MFA/Casdoor-admin
   infra; depends on commons; consumed by **user-bff + admin-bff only**).
   `federation-api` was migrated onto this baseline.
 - **✅ SSO auth model wired into the cluster payload (data plane)** — Casdoor is
@@ -75,7 +75,7 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   is no front-channel redirect, **Casdoor needs no public ingress**; Cloudflare
   fronts only the platform front door in prod. **Login/session/account logic has
   RELOCATED from admin-bff → user-bff** (the shared core lives in
-  `snapdragon-auth-core`); account/session **data stays in admin-bff-db**, reached
+  `hugmesh-auth-core`); account/session **data stays in admin-bff-db**, reached
   by user-bff via admin-bff `/bff/internal` over mTLS + `X-Internal-Token`. The
   generator leg of this relocation — the user-bff Casdoor confidential client with
   the internal redirect-uri, the relocated `/bff/login|register|me|session|provision`
@@ -90,7 +90,7 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   which drives the real form and asserts the browser never navigates to a Casdoor
   origin.
 - **✅ Casdoor MFA (TOTP + WebAuthn + recovery codes)** — enrollment/challenge live
-  in admin-bff via `snapdragon-auth-core`: `APP_CASDOOR_MFA_ENABLED` is baked
+  in admin-bff via `hugmesh-auth-core`: `APP_CASDOOR_MFA_ENABLED` is baked
   `"true"`, `APP_MFA_FACTOR_KEY` (ESO/Vault) encrypts enrolled TOTP secrets at
   rest, and `APP_MFA_WEBAUTHN_RP_ID`/`_ORIGINS` are branded per-tenant (not left
   on the dev-only `localhost` default); `login-ui`/`admin-ui` ship the
@@ -102,7 +102,7 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   it — see [`docs/ROUTE-ACCESS.md`](docs/ROUTE-ACCESS.md).
 - **✅ SCG-5 route config** — Spring Cloud Gateway 5.0 moved route config from
   `spring.cloud.gateway.routes` to `spring.cloud.gateway.server.webflux.routes`
-  (the legacy prefix silently binds nothing). The `snapdragon-gateway` chart
+  (the legacy prefix silently binds nothing). The `hugmesh-gateway` chart
   templates + every generator route file render the corrected namespace; the
   `routes:` lists in `apps/2x-gateway-*.yaml` are chart **values** the chart maps
   onto the new prefix.
@@ -115,9 +115,9 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   domain) is baked as the **4th** instance of the device-registry / egress-VPN /
   node-storage reconcile triad, and **ships DARK/inert** (optional-service gate,
   placeholder-pubkey crypto-fail-closed, `.domain_registry.enabled=false` default).
-  See `specs/usr/sbin/snapdragon-domain-reconcile`,
-  `specs/etc/init.d|cron.d/snapdragon-domain-reconcile`, the
-  `snapdragon_domain_reconcile` SELinux module, and `provision_domain_registry()`
+  See `specs/usr/sbin/hugmesh-domain-reconcile`,
+  `specs/etc/init.d|cron.d/hugmesh-domain-reconcile`, the
+  `hugmesh_domain_reconcile` SELinux module, and `provision_domain_registry()`
   in the KEYS engine.
 - **✅ Optional services (add/remove)** — akkoma / tuwunel / phpBB / games /
   owncast / LocalTube / **character-studio** (VN character-creator + chat remote,
@@ -137,7 +137,7 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
   nuclei + k6 as a **GitLab** pipeline stage, not a deployed CronJob).
 - **✅ Data-access standard** — the Spring services use **Spring Data R2DBC
   reactive repositories** (no raw SQL strings / inline `@Query`).
-- **✅ Wiki service (snapdragon-wiki-bff-api + snapdragon-wiki-ui)** — fully deployed; manifests in `specs/cluster/manifests/wiki-bff-api/` + `manifests/wiki-ui/`, ArgoCD apps `34a-wiki-bff-db`, `34b-wiki-bff-api`, `49a-wiki-ui`; fe-gateway routes `/bff/wiki/**` (#173, #176).
+- **✅ Wiki service (hugmesh-wiki-bff-api + hugmesh-wiki-ui)** — fully deployed; manifests in `specs/cluster/manifests/wiki-bff-api/` + `manifests/wiki-ui/`, ArgoCD apps `34a-wiki-bff-db`, `34b-wiki-bff-api`, `49a-wiki-ui`; fe-gateway routes `/bff/wiki/**` (#173, #176).
 - **✅ MDM phone MDM (fourth onboarding form)** — `scripts/phone-wizard.sh`
   flashes verified GrapheneOS onto a USB-connected Pixel (or onboards an
   existing GrapheneOS/stock-Android phone with no reflash), attests it to a
@@ -155,8 +155,8 @@ _As of 2026-07-17. State key: **✅ shipped** (on `main`) · **🚧 in-flight** 
 
 > The auth model is documented in depth in [`docs/SECURITY.md`](docs/SECURITY.md)
 > and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the application-side login
-> relocation + OIDC token-handler live in `snapdragon-user-bff-api`,
-> `snapdragon-admin-bff-api`, `snapdragon-auth-core` and the `snapdragon-gateway`
+> relocation + OIDC token-handler live in `hugmesh-user-bff-api`,
+> `hugmesh-admin-bff-api`, `hugmesh-auth-core` and the `hugmesh-gateway`
 > repos. A mesh node can validate tokens against the built-in **Casdoor** (the
 > default) or an external OIDC provider (Azure Entra ID / AWS Cognito / generic
 > OIDC) — see [`docs/IDENTITY-PROVIDERS.md`](docs/IDENTITY-PROVIDERS.md) for the
@@ -213,7 +213,7 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 - **✅ Node storage** — attach + register extra storage to a node, node-pinned
   local PV / local-path (FDE), capacity-aware scheduling. [`docs/NODE-STORAGE.md`](docs/NODE-STORAGE.md).
 - **✅ Games App-Store control plane**, **✅ owncast** + **✅ tube** (GPU-dependent
-  video), **✅ notifications in-app MVP + SSE real-time push** — notification bell (60 s polling) + `SseNotificationBus` per-user multicast stream (`GET /bff/user/notifications/events`, user-bff PR #72) + `NotificationToastService` bearer-fetch SSE toast (snapdragon.systems PR #104) are all shipped. And the **✅ superadmin Service Catalog**
+  video), **✅ notifications in-app MVP + SSE real-time push** — notification bell (60 s polling) + `SseNotificationBus` per-user multicast stream (`GET /bff/user/notifications/events`, user-bff PR #72) + `NotificationToastService` bearer-fetch SSE toast (hugmesh.systems PR #104) are all shipped. And the **✅ superadmin Service Catalog**
   (data layer + tailnet superadmin-gateway + Kaniko builder, PR #110).
   [`docs/GAMES-APPSTORE.md`](docs/GAMES-APPSTORE.md).
 - **✅ Device-license registry** — physical-ownership / domain-residency / SSH
@@ -232,8 +232,8 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 |---|---|---|
 | **pki** (RPi 5) | `./build-rpi5-stage4.sh --role pki` | k8s control plane, headscale, Casdoor, Cassandra, pki-gateway |
 | **backend** (RPi 5) | `./build-rpi5-stage4.sh --role backend` | tuwunel (Matrix) + Akkoma (fediverse), Spring APIs, DBs, be-gateway, LAN wildcard DNS (test) |
-| **frontend** (RPi 5) | `./build-rpi5-stage4.sh --role frontend` | snapdragon.systems Angular host + login/matrix/mastodon/wiki remotes, fe-gateway |
-| **host** (x86_64) | `sudo ./build-x86-host-stage4.sh` | GPU worker: ArgoCD, snapdragon.games, backend capacity |
+| **frontend** (RPi 5) | `./build-rpi5-stage4.sh --role frontend` | hugmesh.systems Angular host + login/matrix/mastodon/wiki remotes, fe-gateway |
+| **host** (x86_64) | `sudo ./build-x86-host-stage4.sh` | GPU worker: ArgoCD, hugmesh.games, backend capacity |
 | **edge_ai** (x86_64 / Jetson) | `./build-x86-host-stage4.sh --role edge_ai` | GPU inference node: serves an OpenAI-compatible model API (Ollama) to the mesh over k8s + tailnet; NVIDIA + CUDA + nvidia-device-plugin. See [docs/EDGE-AI.md](docs/EDGE-AI.md) |
 | **Frite light desktop** (Libre Computer, arm64) — *opt-in client* | `make frite` (or `./build-frite-stage4.sh`) | LEAN LXDE desktop on the Amlogic La Frite / Le Potato SBC; joins the tailnet + Casdoor login. LIVE + INSTALLER flavors, `--desktop light\|none` |
 | **Jetson Orin edge-AI** (NVIDIA Tegra234, arm64) — **EXPERIMENTAL** | `make jetson` (or `./build-jetson-stage4.sh --role edge_ai\|gpu-host\|full\|desktop`) | arm64 edge-AI node family on the Jetson Orin Nano/NX: same mesh + KEYS provisioning + shared cluster tree; mainline kernel (NO CUDA yet — the L4T/CUDA flavor is a documented stub). **Hardware validation pending** — see [`specs-jetson/README.md`](specs-jetson/README.md) |
@@ -253,13 +253,13 @@ ships a full multi-tenant platform. State key: **✅ shipped** (on `main`) ·
 ## Build ENV (`test`|`prod`) — baked at image creation
 
 Each image is stamped with a **build ENV** at creation time, written to
-`/etc/snapdragon/env` in the image and threaded through the whole build
+`/etc/hugmesh/env` in the image and threaded through the whole build
 (`--env test|prod` on every builder, `ENV=test|prod` through `make`). The ENV
 bakes the right posture into the image — you do **not** flip it at runtime.
 
 | | **`test`** (default) | **`prod`** |
 |---|---|---|
-| domain | `<brand>.test` (e.g. `snapdragon.test`) | the **real** domain (e.g. `snapdragon.systems`) |
+| domain | `<brand>.test` (e.g. `hugmesh.test`) | the **real** domain (e.g. `hugmesh.systems`) |
 | DNS mode | in-cluster **wildcard DNS** (`apps/09-lan-dns.yaml` kept — **only for a `.test` domain**) | public DNS / Cloudflare (`apps/12-cloudflared.yaml` kept) |
 | the other DNS app | `12-cloudflared.yaml` **pruned** from the baked tree (and `09-lan-dns.yaml` is **also** pruned if the domain is **not** `.test`, so an `ENV=test` build on a real domain keeps neither edge) | `09-lan-dns.yaml` **pruned** from the baked tree |
 | cloudflared / external-DNS / ACME | off | on (go-live edge; creds from the keys USB) |
@@ -269,11 +269,11 @@ bakes the right posture into the image — you do **not** flip it at runtime.
 
 The default is **`test`** (local-first / safe). `prod` is explicit and
 announced because it bakes the real public domain. The builders prune the
-ENV-irrelevant ArgoCD app from `/var/lib/snapdragon/cluster/apps` so ArgoCD only
+ENV-irrelevant ArgoCD app from `/var/lib/hugmesh/cluster/apps` so ArgoCD only
 ever syncs the right one for the baked ENV.
 
 ```bash
-make local                                  # ENV=test + brands/local.conf (snapdragon.test) — LAN fleet
+make local                                  # ENV=test + brands/local.conf (hugmesh.test) — LAN fleet
 make prod                                   # ENV=prod, real domain (announced)
 make build-all ENV=test BRAND=acme          # any brand, test
 make build-all ENV=prod BRAND=acme DOMAIN=acme.example
@@ -305,8 +305,8 @@ Two pieces make that work with zero internet:
    kubectl get node -l snapdragon.systems/backend=true \
      -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}'
    # point a client at it, then:
-   dig @<BACKEND_IP> id.snapdragon.test +short      # -> the backend node IP
-   curl -k https://id.snapdragon.test/              # reaches Casdoor via ingress
+   dig @<BACKEND_IP> id.hugmesh.test +short      # -> the backend node IP
+   curl -k https://id.hugmesh.test/              # reaches Casdoor via ingress
    ```
 
 2. **Internal cluster-CA TLS.** All certs chain to the internal cluster CA
@@ -319,8 +319,8 @@ wildcard resolver. See [`docs/LOCAL-TESTING.md`](docs/LOCAL-TESTING.md).
 
 ## Rebranding (brand profiles in `brands/`)
 
-Everything is **string-independent**: the default naming is `snapdragon` /
-`snapdragon.systems`, but you can build images for any brand/domain. A **brand
+Everything is **string-independent**: the default naming is `hugmesh` /
+`hugmesh.systems`, but you can build images for any brand/domain. A **brand
 profile** is a plain shell file the builders `source` (via `--config FILE`, or an
 auto-detected `./brand.conf`). Precedence is **built-in defaults < profile < CLI
 flags**, so an absent file changes nothing. See [`brands/README.md`](brands/).
@@ -329,7 +329,7 @@ Committed profiles live in [`brands/`](brands/):
 
 | File | Contains |
 |---|---|
-| [`brands/local.conf`](brands/local.conf) | the **LAN `.test` profile** — `snapdragon.test`, `MAIL_PROVIDER=none`, OAuth/Cloudflare off, local-first mesh. Used by `make local`. |
+| [`brands/local.conf`](brands/local.conf) | the **LAN `.test` profile** — `hugmesh.test`, `MAIL_PROVIDER=none`, OAuth/Cloudflare off, local-first mesh. Used by `make local`. |
 | [`brands/example.conf`](brands/example.conf) | a complete, safe-to-commit example (`example.test`) to copy. |
 | `brands/<yourbrand>.conf` | your brand's `BRAND` / `BRAND_TITLE` / `ORG` / `CLUSTER_DOMAIN` / `MAIL_PROVIDER` / mesh (no secrets). |
 | `../brand.conf` *(gitignored)* | the same vars **with** real passwords/tokens. |
@@ -345,8 +345,8 @@ make build-all BRAND=acme DOMAIN=acme.example   # DOMAIN= overrides the profile'
 
 At build time the baked cluster payload is rewritten — every namespace
 (`acme-pki`/`acme-backend`/…), gateway name, ingress host (`matrix.acme.example`),
-image org (`acme-inc/…`), title and hostname — from the snapdragon defaults to
-your brand. (Internal install paths like `/var/lib/snapdragon` and the
+image org (`acme-inc/…`), title and hostname — from the hugmesh defaults to
+your brand. (Internal install paths like `/var/lib/hugmesh` and the
 provisioning JSON key are kept as the tool's vendor namespace.) Never put real
 secrets in a committed `brands/*.conf`; those go in the gitignored `./brand.conf`
 or the environment.
@@ -416,7 +416,7 @@ platform falls back to its **native username/password login** (the first-party
 > handing the browser only an opaque `bff_` session (never a Casdoor JWT or URL).
 > The gateway swaps `bff_` → the custody JWT before its JWT/role checks.
 > Login/session/account logic is relocating from admin-bff → user-bff (shared in
-> `snapdragon-auth-core`); see [Current State](#current-state).
+> `hugmesh-auth-core`); see [Current State](#current-state).
 
 **OAuth federation providers (seeded into Casdoor when creds are present).**
 The provider seeding in the Casdoor init jobs is **read-if-present, else
@@ -430,7 +430,7 @@ skipped** — an absent client secret no-ops the provider:
   (Vault `casdoor-games: github_client_id/github_client_secret`).
 
 > The games realm is a **separate Casdoor** (org `threewizards`, issuer
-> `id.<domain.games>`) from the platform realm (org `snapdragon`); see
+> `id.<domain.games>`) from the platform realm (org `hugmesh`); see
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 **Mail (SMTP).** A `MAIL_PROVIDER` brand knob selects the mail posture;
@@ -477,7 +477,7 @@ the aarch64 cross-toolchain), then build images:
 ```bash
 make docker-image       # one-time: build the self-contained Gentoo builder image (LONG)
 
-make local              # LAN .test fleet: ENV=test + brands/local.conf (snapdragon.test)
+make local              # LAN .test fleet: ENV=test + brands/local.conf (hugmesh.test)
 make prod               # PROD fleet: ENV=prod, real domain (announced)
 
 make build-all          # the default fleet (3 Pi + x86 pki/be/fe/be+gpu), ENV defaults to test
@@ -501,8 +501,8 @@ images are distinguishable and runs never clobber each other:
 ```
 <brand>-<arch>-<role>-<env>-<UTC-stamp>.<ext>
 
-# e.g. (test)  snapdragon-rpi5-arm64-frontend-test-20260610T193045Z.img
-#      (prod)  snapdragon-x86-amd64-host-prod-20260610T193045Z.img
+# e.g. (test)  hugmesh-rpi5-arm64-frontend-test-20260610T193045Z.img
+#      (prod)  hugmesh-x86-amd64-host-prod-20260610T193045Z.img
 ```
 
 `<arch>` is `rpi5-arm64` or `x86-amd64`; `<env>` is `test` or `prod`; `<UTC-stamp>`
@@ -529,10 +529,10 @@ sudo ./build-x86-host-stage4.sh -j "$(nproc)"            # x86_64 GPU host (nati
 sudo ./scripts/make-keys-usb.sh /dev/sdY keys-pki        # FAT32 stick labelled KEYS (one per node)
 
 # 3. Flash the OS to each node's SD/NVMe (boot a Linux live env, mount the role's ISO)
-sudo mount -o loop rpi5-stage4-build/snapdragon-rpi5-arm64-pki-*.iso /mnt/iso
+sudo mount -o loop rpi5-stage4-build/hugmesh-rpi5-arm64-pki-*.iso /mnt/iso
 sudo /mnt/iso/install.sh /dev/sdX                        # SD card, or /dev/nvme0n1
 sudo umount /mnt/iso
-#    x86 host: boot the snapdragon-x86-amd64-*.iso live image, then run  install-x86.sh /dev/sdX  from it.
+#    x86 host: boot the hugmesh-x86-amd64-*.iso live image, then run  install-x86.sh /dev/sdX  from it.
 
 # 4. Boot each node with its KEYS stick inserted — first boot self-provisions.
 
@@ -543,21 +543,21 @@ sudo ./tests/qemu/run-qemu-test.sh --role pki
 ## Generate the cluster
 
 Boot the **pki** node first — it is the Kubernetes control plane. If its KEYS
-manifest sets `snapdragon.gitops.enabled=true`, `keys-provision` runs `kubeadm init`
+manifest sets `hugmesh.gitops.enabled=true`, `keys-provision` runs `kubeadm init`
 and the GitOps bootstrap automatically; otherwise run the bootstrap by hand on the
 pki node:
 
 ```bash
 # On the pki node, after kubeadm init:
 export KUBECONFIG=/etc/kubernetes/admin.conf
-sudo -E /var/lib/snapdragon/cluster/bootstrap/bootstrap.sh   # installs ArgoCD + the root app-of-apps
+sudo -E /var/lib/hugmesh/cluster/bootstrap/bootstrap.sh   # installs ArgoCD + the root app-of-apps
 
 # Backend / frontend / x86-host nodes join automatically at first boot (the kubeadm
 # join token rides on their KEYS stick) — or run  kubeadm join <pki>:6443 …  manually.
 
 # Watch ArgoCD converge the platform (Calico, Vault+ESO, Casdoor, Cassandra, the three
 # gateways behind ingress-nginx, Akkoma, tuwunel, Forgejo, the Spring APIs, the
-# frontends, snapdragon.games):
+# frontends, hugmesh.games):
 kubectl -n devops get applications
 kubectl get pods -A
 # ArgoCD admin password:
@@ -634,17 +634,17 @@ you are never locked out. Full schema + examples: [`keys-template/`](keys-templa
 ## Cluster / GitOps
 
 The cluster manifests live in [`specs/cluster/`](specs/cluster/) and are baked
-into every image at `/var/lib/snapdragon/cluster`. The pki node installs ArgoCD
-and a root app-of-apps; ArgoCD syncs the `snapdragon-gateway` Helm chart (one
+into every image at `/var/lib/hugmesh/cluster`. The pki node installs ArgoCD
+and a root app-of-apps; ArgoCD syncs the `hugmesh-gateway` Helm chart (one
 release per namespace, fronted by an **ingress-nginx** facade on the backend node),
 Casdoor, Cassandra, **Akkoma** (fediverse) + **tuwunel** (Matrix), **Forgejo**
 (in-cluster git on pki), the Spring APIs, the Angular host + federated remotes
-(login/matrix/mastodon/admin/wiki) and snapdragon.games. In `ENV=test` it also syncs
+(login/matrix/mastodon/admin/wiki) and hugmesh.games. In `ENV=test` it also syncs
 the in-cluster wildcard-DNS resolver (`apps/09-lan-dns.yaml`); in `ENV=prod` the
 cloudflared go-live edge instead. See
 [`specs/cluster/README.md`](specs/cluster/README.md).
 
-> **Gateway route config (SCG 5.0).** The `snapdragon-gateway` chart renders its
+> **Gateway route config (SCG 5.0).** The `hugmesh-gateway` chart renders its
 > `routes:` values into the **`spring.cloud.gateway.server.webflux.routes`**
 > namespace required by Spring Cloud Gateway 5.0 (the legacy
 > `spring.cloud.gateway.routes` prefix silently binds nothing). Authorization is
@@ -652,17 +652,17 @@ cloudflared go-live edge instead. See
 > Postgres table (`manifests/route-access/initdb/20-schema.sql`) read by the
 > gateway's `GatewayRouteAccessFilter`.
 
-### Vanity subdomains (`<username>.snapdragon.systems`)
+### Vanity subdomains (`<username>.hugmesh.systems`)
 
-A user can serve their PUBLIC profile at `https://<username>.snapdragon.systems`.
+A user can serve their PUBLIC profile at `https://<username>.hugmesh.systems`.
 The routing is:
 
 ```
-*.snapdragon.systems  ──►  backend ingress  ──►  fe-gateway
+*.hugmesh.systems  ──►  backend ingress  ──►  fe-gateway
    (wildcard DNS:                                  │  (apps/20-gateway-fe.yaml)
     lan-dns in test,                               │
     Cloudflare wildcard in prod)                   ▼
-   Host=*.snapdragon.systems route  ──►  federation-api  (direct, no be-gateway)
+   Host=*.hugmesh.systems route  ──►  federation-api  (direct, no be-gateway)
    (SetPath=/api/federation/vanity,        GET /api/federation/vanity
     Host header preserved)                 resolves the PUBLIC profile fragment
                                            by the first DNS label of the Host
@@ -670,17 +670,17 @@ The routing is:
 
 Three baked-in pieces make this work:
 
-1. **Wildcard DNS already points `*.snapdragon.systems` at the backend ingress** —
+1. **Wildcard DNS already points `*.hugmesh.systems` at the backend ingress** —
    `manifests/lan-dns` answers the whole brand zone (apex + every subdomain) with
    the ingress IP in `ENV=test`; the Cloudflare wildcard does so in `ENV=prod`.
    The reserved service subdomains (`id. api. matrix. mastodon. scale. headscale.`)
    are fronted by the **be-gateway** ingress + cloudflared, not the fe-gateway.
 
 2. **fe-gateway ingress admits the wildcard** — `apps/20-gateway-fe.yaml` adds
-   `ingress.extraHosts: ["*.snapdragon.systems"]`, so the nginx Ingress accepts the
+   `ingress.extraHosts: ["*.hugmesh.systems"]`, so the nginx Ingress accepts the
    vanity hosts and hands them to the gateway.
 
-3. **A `Host=*.snapdragon.systems` gateway route, ordered for PRECEDENCE.** Spring
+3. **A `Host=*.hugmesh.systems` gateway route, ordered for PRECEDENCE.** Spring
    Cloud Gateway matches routes **first-in-declared-order**, so the route is placed
    **after** the apex/path routes and **before** the `frontend-host` `Path=/**`
    catch-all. The `Host=*.<domain>` predicate matches `alice.<domain>` but **not**
@@ -698,20 +698,20 @@ Three baked-in pieces make this work:
 **Precedence summary (first-match wins, top to bottom):** the reserved service
 subdomains (`id. api. matrix. mastodon. scale. headscale.`) are claimed by the
 **be-gateway** ingress + the cloudflared rules *above* the wildcard, so they never
-reach the fe-gateway. The apex `snapdragon.systems` is not matched by
+reach the fe-gateway. The apex `hugmesh.systems` is not matched by
 `Host=*.<domain>` and falls through to `frontend-host`. Only the remaining
 `<username>.<domain>` hosts hit the vanity route. The cloudflared `*.<domain>` rule
 (`manifests/cloudflared`) is likewise ordered **after** the reserved hostnames and
 **before** the 404 catch-all.
 
 **Honest cross-service deferral (a THIRD repo).** The shared gateway image
-(`snapdragon-gateway`) ends its `SecurityConfig` with `anyExchange().authenticated()`
+(`hugmesh-gateway`) ends its `SecurityConfig` with `anyExchange().authenticated()`
 and permits only a hardcoded `PUBLIC_PATHS` allowlist (`/api/auth`,
 `/api/registration`, `/api/login`, the login/registration/banned remotes).
 `/api/federation/vanity/**` is **not** in it, so the fe-gateway pod would itself
 401 the anonymous vanity request before proxying. **To make the public vanity host
 reachable, `/api/federation/vanity/**` (or a `Host=*.<domain>` public rule) must be
-added to the gateway `PUBLIC_PATHS` in the `snapdragon-gateway` repo** — out of
+added to the gateway `PUBLIC_PATHS` in the `hugmesh-gateway` repo** — out of
 scope for this generator/federation-api pass and documented as a deferral. The
 generator side here (wildcard DNS already in place, fe-gateway ingress wildcard
 host, the ordered `Host=*.<domain>` route to federation-api, the cloudflared
@@ -729,9 +729,9 @@ deferrals — in the
 
 Cluster secrets are generated by
 [`scripts/gen-cluster-secrets.sh`](scripts/gen-cluster-secrets.sh) and pushed to
-**HashiCorp Vault** (KV v2, mount `secret/`, base path `snapdragon/`, tracking
+**HashiCorp Vault** (KV v2, mount `secret/`, base path `hugmesh/`, tracking
 the brand slug). The **External Secrets Operator** syncs them into k8s via the
-ClusterSecretStore **`snapdragon-vault`** (one ExternalSecret per Secret,
+ClusterSecretStore **`hugmesh-vault`** (one ExternalSecret per Secret,
 refreshed hourly) — the workloads keep their existing `secretKeyRef`s
 (`casdoor-google`, `clickhouse-auth`, `uptrace-auth`). The same values are also
 written to the KEYS stick at `vault/secrets.json` (with `vault/token` for online
@@ -754,7 +754,7 @@ Two rootless test suites run on this machine with Docker:
 Brings up a rootless stack — generated TLS certs + runtime values, plus
 multi-user **mock** Matrix/Mastodon/BFF servers — serves the built Angular host
 over HTTPS, and drives it with Playwright (browsers come from the local
-`snapdragongames-e2e` image, so no browser download). It proves, with
+`hugmeshgames-e2e` image, so no browser download). It proves, with
 screenshots in `tests/e2e/screenshots/`:
 
 1. front page loads over the **generated certs + values**,
@@ -809,9 +809,9 @@ for the full man-style reference. Highlights:
 | Flag | Default | Description |
 |---|---|---|
 | `-r, --role` | `generic` | `pki` \| `backend` \| `frontend` (RPi). Sets hostname, services, GitOps payload. |
-| `--env test\|prod` | `test` | **Build ENV, baked into `/etc/snapdragon/env`.** `test` = LAN-only (wildcard DNS kept, cloudflared/ACME pruned, internal CA); `prod` = real public domain (cloudflared/ACME kept, announced banner). See [Build ENV](#build-env-testprod-baked-at-image-creation). |
+| `--env test\|prod` | `test` | **Build ENV, baked into `/etc/hugmesh/env`.** `test` = LAN-only (wildcard DNS kept, cloudflared/ACME pruned, internal CA); `prod` = real public domain (cloudflared/ACME kept, announced banner). See [Build ENV](#build-env-testprod-baked-at-image-creation). |
 | `-C, --config FILE` | auto `./brand.conf` | Source a brand profile (e.g. `brands/local.conf`). |
-| `--cluster-domain` | `snapdragon.systems` | Base domain for gateways / Casdoor. |
+| `--cluster-domain` | `hugmesh.systems` | Base domain for gateways / Casdoor. |
 | `-w, --work-dir` | `./rpi5-stage4-build` | Git-ignored output directory. |
 | `-j, --jobs` | `$(nproc)` | Parallel emerge/make jobs. |
 | `--headscale-version` / `--tailscale-version` | pinned | Mesh binary versions. |
@@ -831,7 +831,7 @@ live list). Common overrides: `ENV=test|prod`, `BRAND=`, `DOMAIN=`,
 |---|---|
 | `make docker-image` (alias `docker`) | build the self-contained Gentoo builder image (LONG first time). |
 | `make menu` | interactive console build menu (`scripts/build-menu.sh`) — pick images with live progress; quit without stopping the build. On NixOS/SteamOS/no-`make` hosts, `scripts/studio-launch.sh --menu` reaches it too (see [`docs/NIXOS-STEAMOS.md`](docs/NIXOS-STEAMOS.md)). |
-| `make local` | ENV=test + `brands/local.conf` → the LAN `snapdragon.test` fleet. |
+| `make local` | ENV=test + `brands/local.conf` → the LAN `hugmesh.test` fleet. |
 | `make prod` | ENV=prod, real domain (announced; creds from the keys USB). |
 | `make build-all` / `make rebuild` | the default fleet (3 Pi + x86 pki/be/fe/be+gpu); `rebuild` wipes first. |
 | `make rpi` / `make rpi-<role>` | all 3 Pi roles / one Pi role (`rpi-frontend`). |
@@ -893,7 +893,7 @@ provisioning engine, the backup engine, and the `cluster/` GitOps payload).
 | `specs/etc/headscale/config.yaml` | Default headscale config (shared) |
 | `specs/etc/kubernetes/*`, `specs/etc/containerd/config.toml` | k8s + CRI config (shared) |
 | `specs/etc/local.d/01-firstboot.start.tmpl` | First-boot finaliser (fallback user, shared) |
-| `specs/usr/local/sbin/snapdragon-backup` | etcd + PostgreSQL backup engine (shared) |
+| `specs/usr/local/sbin/hugmesh-backup` | etcd + PostgreSQL backup engine (shared) |
 | `specs/cluster/**` | ArgoCD app-of-apps, gateway Helm chart, manifests, bootstrap (shared) |
 | `keys-template/**` | The KEYS USB template + schema docs |
 
@@ -901,17 +901,17 @@ provisioning engine, the backup engine, and the `cluster/` GitOps payload).
 
 This repo is the image/infra layer; application code lives in sibling repos —
 see the full table in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The
-`snapdragon.systems` host shell federates the per-feature remotes
-(`snapdragon-login-ui`, `snapdragon-matrix-ui`, `snapdragon-mastodon-ui`,
-`snapdragon-admin-ui`, `snapdragon-mod-ui`, `snapdragon-user-ui`,
-`snapdragon-forum-ui`, `snapdragon-wiki-ui`) over module federation, backed by the
-`snapdragon-{admin,mod,user,forum,wiki}-bff-api` Spring BFFs and
-`snapdragon-federation-api` (vanity-subdomain / public-profile resolver).
+`hugmesh.systems` host shell federates the per-feature remotes
+(`hugmesh-login-ui`, `hugmesh-matrix-ui`, `hugmesh-mastodon-ui`,
+`hugmesh-admin-ui`, `hugmesh-mod-ui`, `hugmesh-user-ui`,
+`hugmesh-forum-ui`, `hugmesh-wiki-ui`) over module federation, backed by the
+`hugmesh-{admin,mod,user,forum,wiki}-bff-api` Spring BFFs and
+`hugmesh-federation-api` (vanity-subdomain / public-profile resolver).
 
 The Spring services share a unified Maven baseline — **Spring Boot 4.0.7 /
-Spring Cloud 2025.1.2** on Java 25 — built on three shared artifacts: **`snapdragon-parent`**
-(metapom), **`snapdragon-commons`** (shared security/tenancy,
-`systems.snapdragon.commons.*`) and **`snapdragon-auth-core`** (shared
+Spring Cloud 2025.1.2** on Java 25 — built on three shared artifacts: **`hugmesh-parent`**
+(metapom), **`hugmesh-commons`** (shared security/tenancy,
+`systems.hugmesh.commons.*`) and **`hugmesh-auth-core`** (shared
 account/session/MFA/Casdoor-admin infra, consumed by **user-bff + admin-bff**).
 SSO login/session/account ownership is being **relocated from admin-bff →
 user-bff** (`login-ui` native form → `POST /bff/login` → user-bff PKCE + internal

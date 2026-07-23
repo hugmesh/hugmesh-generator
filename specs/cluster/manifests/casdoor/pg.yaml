@@ -2,24 +2,24 @@
 # image's bundled DB. Casdoor stores all orgs / roles / users / applications /
 # providers here, so state survives restarts and Casdoor is no longer pinned to
 # the single-pod all-in-one. Credentials come from the ESO-materialized Secret
-# "casdoor-db" (Vault path secret/snapdragon/casdoor-db) — never committed.
+# "casdoor-db" (Vault path secret/hugmesh/casdoor-db) — never committed.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: casdoor-pg-data
-  namespace: snapdragon-pki
-  labels: { app: casdoor-pg, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: casdoor-pg, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 5Gi } }
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: casdoor-pg
-  namespace: snapdragon-pki
-  labels: { app: casdoor-pg, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: casdoor-pg, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }
@@ -56,7 +56,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: casdoor-pg, namespace: snapdragon-pki }
+metadata: { name: casdoor-pg, namespace: hugmesh-pki }
 spec:
   selector: { app: casdoor-pg }
   ports: [{ name: pg, port: 5432, targetPort: pg }]

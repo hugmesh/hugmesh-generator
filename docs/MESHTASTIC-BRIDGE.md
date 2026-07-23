@@ -29,7 +29,7 @@ LoRa radios ──RF──> Meshtastic device ──serial/TCP──┐
                           └──┬────────────────────────────────▲─────────────┘
              CS API (as_token, ?user_id masquerade)           │ AS transactions push
                              v                                │ (PUT /_matrix/app/v1/…)
-                    tuwunel:8008  (in-namespace, snapdragon-backend)
+                    tuwunel:8008  (in-namespace, hugmesh-backend)
 ```
 
 - **Appservice, not bot accounts.** tuwunel (Conduit-family) supports
@@ -70,14 +70,14 @@ the per-device status + visibility feature (`private`/`friends`/`channels`).
 cryptographically authenticated — anyone with RF access can transmit as any
 node number. Registered attribution therefore renders as a *distinct virtual
 user* (`@mesh-alice`), never the user's real account, every bridged event
-carries `com.snapdragon.mesh` metadata (`{node, device, channel, registered,
+carries `com.hugmesh.mesh` metadata (`{node, device, channel, registered,
 rssi, snr}`), and the UI badges mesh-origin messages "via LoRa mesh". Treat
 mesh attribution as convenience, not authentication.
 
 ## Per-room opt-in
 
-Room state event **`systems.snapdragon.mesh.bridge`** (state key `""`,
-power-level-gated like `systems.snapdragon.vn.scene`):
+Room state event **`systems.hugmesh.mesh.bridge`** (state key `""`,
+power-level-gated like `systems.hugmesh.vn.scene`):
 
 ```json
 { "enabled": true, "device": "default", "meshChannel": 0 }
@@ -144,7 +144,7 @@ the planned follow-up; the ConfigMap is the operator surface until then.
 
 ## Secrets
 
-`meshbridge-appservice` (ESO ← Vault `snapdragon/meshbridge-appservice`):
+`meshbridge-appservice` (ESO ← Vault `hugmesh/meshbridge-appservice`):
 `as_token`, `hs_token` — the appservice registration pair (generate two long
 random strings at provision time); `oidc_client_id`/`oidc_client_secret` — the
 Casdoor client-credentials client (ROLE_SERVICE) for user-bff's internal

@@ -13,12 +13,12 @@ The databases in scope (each its own pod + PVC, ClusterIP-only):
 
 | DB | Namespace | Owner role / DB | Consumer(s) | Tables |
 |----|-----------|-----------------|-------------|--------|
-| `route-access-db` | snapdragon-pki | `gateway` / `gateway` | admin-bff (W), pki/be/fe-gateway (R) | `gateway_route_access` |
-| `federation-db` | snapdragon-backend | `federation` / `federation` | snapdragon-federation-api | `federation_modules`, `user_modules`, `moderation_requests`, `federation_override` |
-| `admin-bff-db` | snapdragon-backend | `adminbff` / `adminbff` | snapdragon-admin-bff-api | `account`, `allowlist`, `bff_session`, `namespace_grant`, `iso_artifacts`, `gateway_route_access` |
-| `mod-bff-db` | snapdragon-backend | `modbff` / `modbff` | snapdragon-mod-bff-api | `mod_action` |
-| `user-bff-db` | snapdragon-backend | `userbff` / `userbff` | snapdragon-user-bff-api | `user_profile`, `user_preference`, `user_block` |
-| `casdoor-pg` | snapdragon-pki | `casdoor` / `casdoor` | casdoor | (managed by Casdoor) |
+| `route-access-db` | hugmesh-pki | `gateway` / `gateway` | admin-bff (W), pki/be/fe-gateway (R) | `gateway_route_access` |
+| `federation-db` | hugmesh-backend | `federation` / `federation` | hugmesh-federation-api | `federation_modules`, `user_modules`, `moderation_requests`, `federation_override` |
+| `admin-bff-db` | hugmesh-backend | `adminbff` / `adminbff` | hugmesh-admin-bff-api | `account`, `allowlist`, `bff_session`, `namespace_grant`, `iso_artifacts`, `gateway_route_access` |
+| `mod-bff-db` | hugmesh-backend | `modbff` / `modbff` | hugmesh-mod-bff-api | `mod_action` |
+| `user-bff-db` | hugmesh-backend | `userbff` / `userbff` | hugmesh-user-bff-api | `user_profile`, `user_preference`, `user_block` |
+| `casdoor-pg` | hugmesh-pki | `casdoor` / `casdoor` | casdoor | (managed by Casdoor) |
 
 `casdoor-pg` already sources its single `casdoor` user from the ESO `casdoor-db`
 Secret and is Casdoor-managed; it is left as-is (no trivial least-privilege split
@@ -47,10 +47,10 @@ table owner the admin-bff's DDL path uses.
 | DB | Login role | Privileges | Used by (Deployment) | DB-pod env | ESO Secret (consumer) | Vault key |
 |----|-----------|-----------|----------------------|------------|-----------------------|-----------|
 | route-access-db | `gateway` (owner) | DDL/owner | — (DDL only) | `POSTGRES_PASSWORD` | `route-access-db-roles` | `route-access-db.owner_password` |
-| route-access-db | `admin_bff` | `SELECT,INSERT,UPDATE,DELETE` on `gateway_route_access` | snapdragon-admin-bff-api | `ROUTE_ACCESS_ADMIN_BFF_PASSWORD` | `route-access-admin-bff` | `route-access-db.admin_bff_password` |
-| route-access-db | `pki_gateway` | `SELECT` on `gateway_route_access` | snapdragon-pki-gateway | `ROUTE_ACCESS_PKI_GATEWAY_PASSWORD` | `route-access-pki-gateway` | `route-access-db.pki_gateway_password` |
-| route-access-db | `be_gateway` | `SELECT` on `gateway_route_access` | snapdragon-be-gateway | `ROUTE_ACCESS_BE_GATEWAY_PASSWORD` | `route-access-be-gateway` | `route-access-db.be_gateway_password` |
-| route-access-db | `fe_gateway` | `SELECT` on `gateway_route_access` | snapdragon-fe-gateway | `ROUTE_ACCESS_FE_GATEWAY_PASSWORD` | `route-access-fe-gateway` | `route-access-db.fe_gateway_password` |
+| route-access-db | `admin_bff` | `SELECT,INSERT,UPDATE,DELETE` on `gateway_route_access` | hugmesh-admin-bff-api | `ROUTE_ACCESS_ADMIN_BFF_PASSWORD` | `route-access-admin-bff` | `route-access-db.admin_bff_password` |
+| route-access-db | `pki_gateway` | `SELECT` on `gateway_route_access` | hugmesh-pki-gateway | `ROUTE_ACCESS_PKI_GATEWAY_PASSWORD` | `route-access-pki-gateway` | `route-access-db.pki_gateway_password` |
+| route-access-db | `be_gateway` | `SELECT` on `gateway_route_access` | hugmesh-be-gateway | `ROUTE_ACCESS_BE_GATEWAY_PASSWORD` | `route-access-be-gateway` | `route-access-db.be_gateway_password` |
+| route-access-db | `fe_gateway` | `SELECT` on `gateway_route_access` | hugmesh-fe-gateway | `ROUTE_ACCESS_FE_GATEWAY_PASSWORD` | `route-access-fe-gateway` | `route-access-db.fe_gateway_password` |
 | federation-db | `federation` (owner) | DDL/owner (Liquibase) | federation-api (Liquibase) | `POSTGRES_PASSWORD` | `federation-db-auth` | `federation-db.password` |
 | federation-db | `federation_app` | DML on all tables + USAGE on schema/sequences | federation-api (R2DBC runtime) | `FEDERATION_APP_PASSWORD` | `federation-db-app-auth` | `federation-db.app_password` |
 | admin-bff-db | `adminbff` (owner) | DDL/owner (Liquibase) | admin-bff (Liquibase) | `POSTGRES_PASSWORD` | `admin-bff-db-auth` | `admin-bff-db.password` |

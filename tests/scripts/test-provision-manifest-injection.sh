@@ -97,7 +97,7 @@ else bad "ssid NOT rejected: real embedded newline"; fi
 for c in US GB us De; do
   if country_ok "${c}"; then ok "country accepted: ${c}"; else bad "country rejected: ${c}"; fi
 done
-for h in node-1 host.example.com localhost a snapdragon.systems node-1.fleet.local; do
+for h in node-1 host.example.com localhost a hugmesh.systems node-1.fleet.local; do
   if hostname_ok "${h}"; then ok "hostname accepted: ${h}"; else bad "hostname rejected: ${h}"; fi
 done
 for s in 'My WiFi 5G' 'HomeNet' 'guest-2.4GHz' 'a.b'; do
@@ -143,7 +143,7 @@ for n in 'a b' 'a;reboot' 'a$(id)' 'a`id`' 'a|b' 'a"b' 'UP.PER' '' $'x\ny' 'a/b'
   else bad "cp_dns_name NOT rejected: $(printf %q "${n}")"; fi
 done
 # (B) legitimate values ACCEPTED
-for n in kube-api.snapdragon.internal cp.acme.internal kube-api.headnet.internal a.b.c; do
+for n in kube-api.hugmesh.internal cp.acme.internal kube-api.headnet.internal a.b.c; do
   if cp_dns_ok "${n}"; then ok "cp_dns_name accepted: ${n}"; else bad "cp_dns_name rejected: ${n}"; fi
 done
 # End-to-end (needs jq — provision.sh needs it too): a malicious cp_dns_name must RESOLVE to a
@@ -156,7 +156,7 @@ if command -v jq >/dev/null 2>&1; then
     awk '/^resolve_cp_dns_name\(\) \{/,/^\}/' "${PROV}"
     echo 'resolve_cp_dns_name 2>/dev/null'; } > "${CPW}/h.sh"
   # JSON with escaped \n + \" — jq -r un-escapes them into the real newlines/quotes the exploit uses.
-  printf '%s' '{"mesh":{"cp_dns_name":"kube-api.evil\"\n      type: \"A\"\n      value: \"6.6.6.6\"\n    - name: \"x","magic_dns_domain":"snapdragon.internal"}}' > "${CPW}/evil.json"
+  printf '%s' '{"mesh":{"cp_dns_name":"kube-api.evil\"\n      type: \"A\"\n      value: \"6.6.6.6\"\n    - name: \"x","magic_dns_domain":"hugmesh.internal"}}' > "${CPW}/evil.json"
   cpout="$(bash "${CPW}/h.sh" "${CPW}/evil.json")"
   if [ "$(printf '%s' "${cpout}" | wc -l)" -eq 0 ] && ! printf '%s' "${cpout}" | grep -q '6.6.6.6'; then
     ok "malicious cp_dns_name resolved to a single clean line (no injected A-record): ${cpout}"
@@ -183,14 +183,14 @@ for x in 'a b' 'a;b' 'a/b' 'evil' '' $'1.2\n3.4' '1.2.3.4 x' '10.0.0.1;reboot'; 
   if rej node_ip_ok "${x}"; then ok "node ip rejected: $(printf %q "${x}")"
   else bad "node ip NOT rejected: $(printf %q "${x}")"; fi
 done
-for x in $'w\n6.6.6.6 kube-api.snapdragon.internal' 'a b' 'a/b' 'a;b' '' $'x\ny' 'a"b'; do
+for x in $'w\n6.6.6.6 kube-api.hugmesh.internal' 'a b' 'a/b' 'a;b' '' $'x\ny' 'a"b'; do
   if rej node_name_ok "${x}"; then ok "node name rejected: $(printf %q "${x}")"
   else bad "node name NOT rejected: $(printf %q "${x}")"; fi
 done
 for x in 10.0.0.1 192.168.1.254 fe80::1 ::1; do
   if node_ip_ok "${x}"; then ok "node ip accepted: ${x}"; else bad "node ip rejected: ${x}"; fi
 done
-for x in pki0 node-1 kube-api.snapdragon.internal w0; do
+for x in pki0 node-1 kube-api.hugmesh.internal w0; do
   if node_name_ok "${x}"; then ok "node name accepted: ${x}"; else bad "node name rejected: ${x}"; fi
 done
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test-domain-reconcile-verify.sh — offline logic test for the domain-registry -> brand-repo
-# bridge (#4): the verify lib (specs/usr/lib/snapdragon/domain-verify.sh) + the agent's emit
-# seams (specs/usr/sbin/snapdragon-domain-reconcile sourced with DR_* env seams).
+# bridge (#4): the verify lib (specs/usr/lib/hugmesh/domain-verify.sh) + the agent's emit
+# seams (specs/usr/sbin/hugmesh-domain-reconcile sourced with DR_* env seams).
 #
 # Runs ANYWHERE with bash + jq + openssl + base64 — NO live mesh, NO BFF, NO network, NO root.
 # SKIPs (exit 0) only if a required tool is genuinely absent. It mirrors
@@ -25,8 +25,8 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LIB="${REPO}/specs/usr/lib/snapdragon/domain-verify.sh"
-AGENT="${REPO}/specs/usr/sbin/snapdragon-domain-reconcile"
+LIB="${REPO}/specs/usr/lib/hugmesh/domain-verify.sh"
+AGENT="${REPO}/specs/usr/sbin/hugmesh-domain-reconcile"
 GEN_KEYSTORES="${REPO}/scripts/gen-keystores.sh"
 GEN_BRAND_REPOS="${REPO}/generate-brand-repos.sh"
 

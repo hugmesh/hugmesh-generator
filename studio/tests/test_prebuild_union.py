@@ -9,8 +9,8 @@ import os
 
 import pytest
 
-from snapdragon_studio.core import package_catalog as pc
-from snapdragon_studio.core import prebuild_union as pu
+from hugmesh_studio.core import package_catalog as pc
+from hugmesh_studio.core import prebuild_union as pu
 
 _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

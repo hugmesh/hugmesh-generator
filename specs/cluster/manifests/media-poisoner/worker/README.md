@@ -1,10 +1,10 @@
-# snapdragon-media-poisoner (worker)
+# hugmesh-media-poisoner (worker)
 
 The **optional x86/GPU heavy-tier** worker that applies an AI-cloak / poison
 perturbation to image bytes **before** the homeserver ingests them. It is the
 server-side compute half of the *poison-before-ingest* design; the policy decision,
 the round-trip survival gate, and all honest UI copy live in
-`snapdragon-user-bff-api` (the only caller).
+`hugmesh-user-bff-api` (the only caller).
 
 > **Honesty contract.** This is **best-effort training-set hygiene, not a
 > guarantee.** Cloaks/poisons are removable by determined adversaries and by

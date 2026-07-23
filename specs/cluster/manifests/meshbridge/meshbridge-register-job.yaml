@@ -29,10 +29,10 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: meshbridge-register-script
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: meshbridge
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/optional-service: meshbridge
 data:
   register.py: |
@@ -43,11 +43,11 @@ data:
     treated as success."""
     import json, os, sys, time, urllib.request, urllib.error
 
-    MATRIX     = os.environ.get("MATRIX_URL", "http://tuwunel.snapdragon-backend.svc.cluster.local:8008")
-    SERVER     = os.environ.get("MATRIX_SERVER_NAME", "snapdragon.systems")
-    ADMIN_ROOM = os.environ.get("MATRIX_ADMIN_ROOM", "#admins:snapdragon.systems")
+    MATRIX     = os.environ.get("MATRIX_URL", "http://tuwunel.hugmesh-backend.svc.cluster.local:8008")
+    SERVER     = os.environ.get("MATRIX_SERVER_NAME", "hugmesh.systems")
+    ADMIN_ROOM = os.environ.get("MATRIX_ADMIN_ROOM", "#admins:hugmesh.systems")
     # The bridge's AS-push URL — must match the meshbridge Service (deployment.yaml).
-    AS_URL     = os.environ.get("MESHBRIDGE_AS_URL", "http://meshbridge.snapdragon-backend.svc.cluster.local:8009")
+    AS_URL     = os.environ.get("MESHBRIDGE_AS_URL", "http://meshbridge.hugmesh-backend.svc.cluster.local:8009")
 
     # Privileged Matrix access token (Secret tuwunel-admin, key token) — the same
     # ESO-materialized credential admin-sync uses. Never committed, never printed.
@@ -166,10 +166,10 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: meshbridge-register
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: meshbridge
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/optional-service: meshbridge
   annotations:
     argocd.argoproj.io/hook: PostSync
@@ -195,13 +195,13 @@ spec:
           image: python:3.12-alpine
           command: ["python3", "/script/register.py"]
           env:
-            - { name: MATRIX_URL,         value: "http://tuwunel.snapdragon-backend.svc.cluster.local:8008" }
-            - { name: MATRIX_SERVER_NAME, value: "snapdragon.systems" }
+            - { name: MATRIX_URL,         value: "http://tuwunel.hugmesh-backend.svc.cluster.local:8008" }
+            - { name: MATRIX_SERVER_NAME, value: "hugmesh.systems" }
             # Registration is issued by posting into this admin room (membership
             # of it IS server admin in Conduit-family — see admin-sync-job.yaml).
-            - { name: MATRIX_ADMIN_ROOM,  value: "#admins:snapdragon.systems" }
+            - { name: MATRIX_ADMIN_ROOM,  value: "#admins:hugmesh.systems" }
             # Where tuwunel will push AS transactions — the meshbridge Service.
-            - { name: MESHBRIDGE_AS_URL,  value: "http://meshbridge.snapdragon-backend.svc.cluster.local:8009" }
+            - { name: MESHBRIDGE_AS_URL,  value: "http://meshbridge.hugmesh-backend.svc.cluster.local:8009" }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

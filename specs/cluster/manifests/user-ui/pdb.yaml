@@ -1,4 +1,4 @@
-# PodDisruptionBudget for snapdragon-user-ui. This workload runs an HPA (hpa.yaml) with
+# PodDisruptionBudget for hugmesh-user-ui. This workload runs an HPA (hpa.yaml) with
 # minReplicas: 2 — an HA pair — so a voluntary disruption (node drain / cluster
 # upgrade) must never take BOTH pods at once. minAvailable: 1 lets a drain evict at
 # most one pod while guaranteeing the second keeps serving, so a rolling node
@@ -14,12 +14,12 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: snapdragon-user-ui
+  name: hugmesh-user-ui
   labels:
-    app: snapdragon-user-ui
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-user-ui
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: snapdragon-user-ui
+      app: hugmesh-user-ui

@@ -10,7 +10,7 @@
 #
 # Enable the social tier with:  make stack-up SOCIAL=1
 #                       or:     docker compose ... --profile social up -d
-name: snapdragon-local
+name: hugmesh-local
 
 services:
   synapse:

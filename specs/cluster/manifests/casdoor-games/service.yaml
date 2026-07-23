@@ -2,8 +2,8 @@ apiVersion: v1
 kind: Service
 metadata:
   name: casdoor-games
-  namespace: snapdragon-games
-  labels: { app: casdoor-games, app.kubernetes.io/part-of: snapdragon.games }
+  namespace: hugmesh-games
+  labels: { app: casdoor-games, app.kubernetes.io/part-of: hugmesh.games }
 spec:
   selector: { app: casdoor-games }
   ports:

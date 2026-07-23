@@ -16,11 +16,11 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: backups-effector
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: cloud-backups
     app.kubernetes.io/component: effector
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 # The admin-bff Deployment mounts this SA's token via automountServiceAccountToken
 # on the pod spec; no other pod in the namespace uses this SA.
 automountServiceAccountToken: false

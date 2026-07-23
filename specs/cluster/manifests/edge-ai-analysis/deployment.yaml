@@ -1,4 +1,4 @@
-# snapdragon-edge-ai-analysis — the TASK-ORIENTED analysis API in front of the raw
+# hugmesh-edge-ai-analysis — the TASK-ORIENTED analysis API in front of the raw
 # edge-AI model server. A small stateless FastAPI wrapper that turns Ollama's
 # OpenAI-compatible model API into structured "analysis" verdicts the mesh consumes:
 #   POST /v1/analyze/image/classify   — NSFW/abuse/policy classification (llava vision)
@@ -15,16 +15,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-edge-ai-analysis
-  namespace: snapdragon-inference
+  name: hugmesh-edge-ai-analysis
+  namespace: hugmesh-inference
   labels:
-    app: snapdragon-edge-ai-analysis
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-edge-ai-analysis
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-edge-ai-analysis } }
+  selector: { matchLabels: { app: hugmesh-edge-ai-analysis } }
   template:
-    metadata: { labels: { app: snapdragon-edge-ai-analysis } }
+    metadata: { labels: { app: hugmesh-edge-ai-analysis } }
     spec:
       securityContext:
         seLinuxOptions:
@@ -44,7 +44,7 @@ spec:
             - { name: http, containerPort: 8080, protocol: TCP }
           env:
             # The raw edge-AI model server (Ollama, same namespace).
-            - { name: EDGE_AI_UPSTREAM, value: "http://snapdragon-edge-ai.snapdragon-inference.svc.cluster.local:11434" }
+            - { name: EDGE_AI_UPSTREAM, value: "http://hugmesh-edge-ai.hugmesh-inference.svc.cluster.local:11434" }
             # task->model map + policy thresholds (the analysis config surface).
             - { name: ANALYSIS_VISION_MODEL,  valueFrom: { configMapKeyRef: { name: edge-ai-analysis, key: vision-model } } }
             - { name: ANALYSIS_REASON_MODEL,  valueFrom: { configMapKeyRef: { name: edge-ai-analysis, key: reason-model } } }

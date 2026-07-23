@@ -1,5 +1,5 @@
 {
-  "//": "Snapdragon: route Firefox through the local Privoxy(8118)->Squid(3128) chain by default. Mozilla enterprise policy, honored by both www-client/firefox and firefox-bin. Not locked, so the user can change it.",
+  "//": "HugMesh: route Firefox through the local Privoxy(8118)->Squid(3128) chain by default. Mozilla enterprise policy, honored by both www-client/firefox and firefox-bin. Not locked, so the user can change it.",
   "policies": {
     "Proxy": {
       "Mode": "manual",

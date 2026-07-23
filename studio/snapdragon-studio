@@ -1,4 +1,0 @@
-#!/usr/bin/env bash
-# Snapdragon Image Studio launcher (Linux/macOS). Runs the GUI from this checkout.
-here="$(cd "$(dirname "$0")" && pwd)"
-exec python3 -m snapdragon_studio "$@"

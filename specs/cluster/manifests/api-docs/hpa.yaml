@@ -1,4 +1,4 @@
-# HorizontalPodAutoscaler for snapdragon-api-docs. Modelled byte-for-byte on
+# HorizontalPodAutoscaler for hugmesh-api-docs. Modelled byte-for-byte on
 # manifests/remote-fragment/hpa.yaml (the first HPA in the cluster): plain
 # autoscaling/v2, Resource metrics only. The api-docs site is a stateless static nginx server, so it scales out cleanly under load.
 #
@@ -11,14 +11,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: snapdragon-api-docs
-  namespace: snapdragon-frontend
-  labels: { app: snapdragon-api-docs, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-api-docs
+  namespace: hugmesh-frontend
+  labels: { app: hugmesh-api-docs, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-api-docs
+    name: hugmesh-api-docs
   minReplicas: 2
   maxReplicas: 6
   metrics:

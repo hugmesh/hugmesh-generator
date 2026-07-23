@@ -1,5 +1,5 @@
-# snapdragon-service-catalog-builder — the SUPERADMIN Service Catalog Kaniko build namespace + its
-# default-deny ingress NetworkPolicy (snapdragon-superadmin-appstore design, V2 builder).
+# hugmesh-service-catalog-builder — the SUPERADMIN Service Catalog Kaniko build namespace + its
+# default-deny ingress NetworkPolicy (hugmesh-superadmin-appstore design, V2 builder).
 #
 # This Application syncs ONLY the build NAMESPACE + NetworkPolicy (manifests/service-catalog-builder
 # kustomization). The per-build Kaniko Job is a TEMPLATE the admin-bff AddService task
@@ -15,7 +15,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/service-catalog-builder
   destination:

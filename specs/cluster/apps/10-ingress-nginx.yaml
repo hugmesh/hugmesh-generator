@@ -3,7 +3,7 @@
 # The home router forwards public 443/80 to the BACKEND node; this controller runs
 # hostNetwork pinned to that node and terminates the edge, then hands off to the
 # Spring Cloud Gateways through the gateways' existing `className: nginx` Ingress
-# objects (see the snapdragon-gateway chart). It makes NO routing/authz decisions
+# objects (see the hugmesh-gateway chart). It makes NO routing/authz decisions
 # of its own — the be-gateway remains the routing authority (admin-ui/BFF + the
 # gateway routing tables). pki/frontend nodes stay off the public path; the pki
 # gateway is served only by a separate INTERNAL ingress-nginx on the pki node

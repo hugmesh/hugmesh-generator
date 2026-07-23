@@ -42,15 +42,15 @@ ok "extracted the real builder functions (decision + render + ingress reroute)"
 # ── Seed a sandbox baked tree (ConfigMap + fe-gateway app) ────────────────────
 seed_tree() {
     SYSROOT="${WORK}/sysroot-$1"; rm -rf "${SYSROOT}"
-    local pol="${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy"
-    local apps="${SYSROOT}/var/lib/snapdragon/cluster/apps"
+    local pol="${SYSROOT}/var/lib/hugmesh/cluster/manifests/policy"
+    local apps="${SYSROOT}/var/lib/hugmesh/cluster/apps"
     mkdir -p "${pol}" "${apps}"
     cp "${REPO}/specs/cluster/manifests/policy/installed-services-configmap.yaml" \
        "${pol}/installed-services-configmap.yaml"
     cp "${REPO}/specs/cluster/apps/20-gateway-fe.yaml" "${apps}/20-gateway-fe.yaml"
 }
-cm()  { echo "${SYSROOT}/var/lib/snapdragon/cluster/manifests/policy/installed-services-configmap.yaml"; }
-fe()  { echo "${SYSROOT}/var/lib/snapdragon/cluster/apps/20-gateway-fe.yaml"; }
+cm()  { echo "${SYSROOT}/var/lib/hugmesh/cluster/manifests/policy/installed-services-configmap.yaml"; }
+fe()  { echo "${SYSROOT}/var/lib/hugmesh/cluster/apps/20-gateway-fe.yaml"; }
 anubis_flag() { grep -E '^[[:space:]]*anubis:[[:space:]]*"(true|false)"' "$(cm)" | head -1 | grep -oE '(true|false)'; }
 routed_through_anubis() { grep -qE '^[[:space:]]*backendServiceName:[[:space:]]*anubis' "$(fe)"; }
 

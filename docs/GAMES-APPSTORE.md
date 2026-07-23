@@ -3,9 +3,9 @@
 A per-domain catalog of dockerized FOSS game servers. A **superadmin** curates a GLOBAL
 catalog and offers servers to specific domains; per-domain **games-services admins** enable
 offers and create/run instances; **runners** (mods) start/stop instances. The control plane
-lives in `snapdragon-admin-bff-api`; the operator UI is a federated remote in
-`snapdragon-admin-ui` at `/admin/games-services`. The player-facing server browser
-(`snapdragon.games`) is **out of scope** here.
+lives in `hugmesh-admin-bff-api`; the operator UI is a federated remote in
+`hugmesh-admin-ui` at `/admin/games-services`. The player-facing server browser
+(`hugmesh.games`) is **out of scope** here.
 
 This document covers the GENERATOR side (roles, sync Jobs, ApplicationSet, isolation, port
 exposure, degrade) — the control-plane data model + endpoints + reconciler live in the
@@ -42,11 +42,11 @@ the required AND at the gateway (any single input role is default-deny).
   Live per-instance Deployment/Service/PVC are rendered from the **admin-bff-written
   per-domain ConfigMaps** (`games-instances-<domain>`); admin-bff is the SINGLE writer, ArgoCD
   is apply-only, the Lease + `propagation_state` are the SOLE coordination.
-- `manifests/games-instances/` — dedicated `snapdragon-games-instances` namespace with
+- `manifests/games-instances/` — dedicated `hugmesh-games-instances` namespace with
   **enforced restricted PodSecurity**, a **default-deny ingress+egress NetworkPolicy** (narrow
   allows: be-gateway → instance HTTP console + DNS egress only), and a restrictive
   securityContext exemplar (runAsNonRoot, drop ALL caps, no privesc, seccomp RuntimeDefault,
-  readOnlyRootFS) + per-instance RWO world-save PVC on `snapdragon-local`.
+  readOnlyRootFS) + per-instance RWO world-save PVC on `hugmesh-local`.
 
 ## Port exposure
 

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Perturbation backends for snapdragon-media-poisoner.
+"""Perturbation backends for hugmesh-media-poisoner.
 
 This module hosts the actual image-perturbation logic. The shipped default is a
 small, CPU-portable, dependency-light perturbation so the worker is usable on any

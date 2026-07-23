@@ -6,19 +6,19 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: snapdragon-edge-ai-tts
-  namespace: snapdragon-inference
+  name: hugmesh-edge-ai-tts
+  namespace: hugmesh-inference
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   podSelector:
-    matchLabels: { app: snapdragon-edge-ai-tts }
+    matchLabels: { app: hugmesh-edge-ai-tts }
   policyTypes: [Ingress, Egress]
   ingress:
     # be-gateway (tailnet/external callers via ai.<domain>/v1/synthesize/**) reaches
     # :8080. No other in-cluster consumer today.
     - from:
-        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: snapdragon-backend } }
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: hugmesh-backend } }
       ports:
         - { protocol: TCP, port: 8080 }
   egress:

@@ -37,14 +37,14 @@
 #
 # Env knobs:
 #   SYNAPSE_SERVER_NAME   (default localhost)  Matrix server_name baked into config
-#   SYNAPSE_REG_SECRET    (default snapdragon-reg-secret) registration_shared_secret
+#   SYNAPSE_REG_SECRET    (default hugmesh-reg-secret) registration_shared_secret
 #   COMPOSE                (default "docker compose")  e.g. "podman compose"
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="${HERE}/compose.real.yaml"
 COMPOSE="${COMPOSE:-docker compose} -f ${COMPOSE_FILE}"
 export SYNAPSE_SERVER_NAME="${SYNAPSE_SERVER_NAME:-localhost}"
-export SYNAPSE_REG_SECRET="${SYNAPSE_REG_SECRET:-snapdragon-reg-secret}"
+export SYNAPSE_REG_SECRET="${SYNAPSE_REG_SECRET:-hugmesh-reg-secret}"
 MASTODON_ENV="${HERE}/.mastodon.env"
 
 echo "==> Real integration stack (compose.real.yaml)"

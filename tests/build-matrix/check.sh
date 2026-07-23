@@ -14,7 +14,7 @@
 #         row's OPT_*, call build_make_cmd; assert the composed make argv targets
 #         the right make target with ENV= (+ FRITE_* / JETSON_BOARD for the
 #         platform axes).
-#   GUI   write a config JSON for the row; `python3 -m snapdragon_studio
+#   GUI   write a config JSON for the row; `python3 -m hugmesh_studio
 #         --print-command` (headless, Qt-free) must emit a command containing the
 #         right builder + role/axes + env.
 #   JOB   extract docker/build-image.sh's resolve_build_target() (the admin
@@ -503,7 +503,7 @@ MENU_EOF
     grep -E '^(MENU|MENUTHR|FLEETTHR|UNAFFTHR|ROLESETTHR) FAIL' "${out}" >&2 || true
 }
 
-# ── channel 4: GUI — snapdragon_studio --print-command (headless, Qt-free) ──────
+# ── channel 4: GUI — hugmesh_studio --print-command (headless, Qt-free) ──────
 # Studio ids differ from the builder spellings in two places: rpi5 spells the
 # node roles out (be/fe <-> backend/frontend) and the jetson desktop role id is
 # disambiguated (jetson-desktop -> --role desktop). Exercise the Studio ids.
@@ -597,7 +597,7 @@ check_gui() { # platform role env board flavor desktop
     # let any warning the Studio legitimately writes to stderr land ahead of the argv
     # (stderr is unbuffered; a redirected stdout is block-buffered) and be executed as the
     # command. Diagnostics are preserved: stderr is appended to the tail only on failure.
-    if ! (cd studio && "${PYTHON}" -m snapdragon_studio --print-command \
+    if ! (cd studio && "${PYTHON}" -m hugmesh_studio --print-command \
             --config "${cfg}" --backend native --generator-dir "${REPO_DIR}") \
             >"${out}" 2>"${out}.err"; then
         cat "${out}.err" >>"${out}"
@@ -906,7 +906,7 @@ guithr() { # NAME CFG-JSON EXPECT...
     # it and gui_plan_from_command EXECUTES its first line). A merged stderr warning became
     # line 1 and was run as the command, failing every node-role probe with
     # "builder-rejected-argv". Stderr still surfaces in the FAIL tail below.
-    if ! (cd studio && "${PYTHON}" -m snapdragon_studio --print-command \
+    if ! (cd studio && "${PYTHON}" -m hugmesh_studio --print-command \
             --config "${cfg}" --backend native --generator-dir "${REPO_DIR}") \
             >"${out}" 2>"${out}.err"; then
         cat "${out}.err" >>"${out}"
@@ -1051,10 +1051,10 @@ run_gui_threading_checks() {
         '--packages-drop' 'app-editors/nano' 'PLAN:^PLAN_PACKAGES_DROP=app-editors/nano$'
     # ── orchestration superdomain (WS-SUPER-B): emitted (effective <brand>.internal) for
     # a MESH build, threaded to the builder's PLAN_SUPERDOMAIN; ABSENT for standalone
-    # (no orchestration plane). Default brand -> snapdragon.internal.
+    # (no orchestration plane). Default brand -> hugmesh.internal.
     guithr g-superdomain-mesh-x86 \
         '{"platform":"x86","role":"be","mode":"mesh","env":"test"}' \
-        '--superdomain snapdragon.internal' 'PLAN:^PLAN_SUPERDOMAIN=snapdragon.internal$'
+        '--superdomain hugmesh.internal' 'PLAN:^PLAN_SUPERDOMAIN=hugmesh.internal$'
     guithr g-superdomain-standalone-absent-x86 \
         '{"platform":"x86","role":"standalone-thick","mode":"standalone","env":"test"}' \
         '!--superdomain' 'PLAN:^PLAN_SUPERDOMAIN=$'
@@ -1101,7 +1101,7 @@ run_gui_threading_checks() {
     # WS-SUPER-B on ARM: the derived superdomain threads to the rpi5 builder's PLAN too.
     guithr g-superdomain-mesh-rpi5 \
         '{"platform":"rpi5","role":"be","mode":"mesh","env":"test"}' \
-        '--superdomain snapdragon.internal' 'PLAN:^PLAN_SUPERDOMAIN=snapdragon.internal$'
+        '--superdomain hugmesh.internal' 'PLAN:^PLAN_SUPERDOMAIN=hugmesh.internal$'
 
     # ── frite ──
     guithr g35-uboot-chain-frite \
@@ -1210,7 +1210,7 @@ run_negative_checks() {
         ./build-orangepi-zero2-stage4.sh --role '../../tmp/evil' -H myhost --print-plan
     # UNAFFILIATED desktop: branding flags are a HARD conflict (no brand identity
     # at all), and --unaffiliated composes onto desktop/client roles only — a
-    # cluster node is Snapdragon platform machinery by definition.
+    # cluster node is HugMesh platform machinery by definition.
     expect_fail "x86: unaffiliated role + --theme conflicts" \
         ./build-x86-host-stage4.sh --role standalone-unaffiliated --theme boogiepop --print-plan
     expect_fail "x86: --unaffiliated on a cluster role" \
@@ -1230,7 +1230,7 @@ run_negative_checks() {
     # GUI: an unknown platform must refuse to print a command
     printf '{"platform":"bogus","role":"pki","mode":"mesh","env":"test"}\n' >"${TMP_DIR}/neg.json"
     expect_fail "gui: unknown platform" \
-        env -C "${REPO_DIR}/studio" "${PYTHON}" -m snapdragon_studio --print-command \
+        env -C "${REPO_DIR}/studio" "${PYTHON}" -m hugmesh_studio --print-command \
             --config "${TMP_DIR}/neg.json" --backend native --generator-dir "${REPO_DIR}"
 }
 
@@ -1243,7 +1243,7 @@ gui_gate() { # NAME CFG-JSON FLAG-THAT-MUST-BE-ABSENT...
     local name="$1" json="$2"; shift 2
     local cfg="${TMP_DIR}/guigate.json" out="${TMP_DIR}/guigate.out"
     printf '%s\n' "${json}" >"${cfg}"
-    if ! (cd studio && "${PYTHON}" -m snapdragon_studio --print-command \
+    if ! (cd studio && "${PYTHON}" -m hugmesh_studio --print-command \
             --config "${cfg}" --backend native --generator-dir "${REPO_DIR}") >"${out}" 2>&1; then
         _fail GUIGATE "${name}" "--print-command exited non-zero (gating must DROP, not crash)" "${out}"
         NEG_FAIL=$((NEG_FAIL+1)); return
@@ -1295,11 +1295,11 @@ run_gui_gating_checks() {
     # single boot+root partition cannot boot LUKS2-encrypted (by design).
     printf '{"platform":"jetson","role":"edge_ai","mode":"mesh","env":"test","encrypt_root":true}\n' >"${TMP_DIR}/jet-enc.json"
     expect_fail "gui: jetson encrypt-root hard-blocked" \
-        env -C "${REPO_DIR}/studio" "${PYTHON}" -m snapdragon_studio --print-command \
+        env -C "${REPO_DIR}/studio" "${PYTHON}" -m hugmesh_studio --print-command \
             --config "${TMP_DIR}/jet-enc.json" --backend native --generator-dir "${REPO_DIR}"
     printf '{"platform":"jetson","role":"jetson-desktop","mode":"standalone","env":"test","standalone":true}\n' >"${TMP_DIR}/jet-sa.json"
     expect_fail "gui: jetson standalone hard-blocked" \
-        env -C "${REPO_DIR}/studio" "${PYTHON}" -m snapdragon_studio --print-command \
+        env -C "${REPO_DIR}/studio" "${PYTHON}" -m hugmesh_studio --print-command \
             --config "${TMP_DIR}/jet-sa.json" --backend native --generator-dir "${REPO_DIR}"
 }
 
@@ -1351,10 +1351,10 @@ run_flag_coverage() {
 TAXO_EXPECTED=16
 TAXO_PASS=0; TAXO_FAIL=0
 run_parity_taxonomy_checks() {
-    local mode_py="studio/snapdragon_studio/gui/pages/mode.py"
+    local mode_py="studio/hugmesh_studio/gui/pages/mode.py"
     local menu="scripts/build-menu.sh"
     local cli="docker/build-image.sh"
-    local users_py="studio/snapdragon_studio/gui/pages/users.py"
+    local users_py="studio/hugmesh_studio/gui/pages/users.py"
     local -a golden=("Mesh node" "Local Docker mesh" "Mesh desktop client" "Standalone Gentoo desktop")
     local label
 

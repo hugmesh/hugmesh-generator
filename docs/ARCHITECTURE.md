@@ -1,8 +1,8 @@
-# Snapdragon cluster architecture
+# HugMesh cluster architecture
 
-Everything connects **behind `snapdragon.systems`** through per-namespace
+Everything connects **behind `hugmesh.systems`** through per-namespace
 Spring Cloud Gateways that validate a single internal Casdoor OAuth2 JWT.
-Cloudflare maps the public `snapdragon.systems` / `snapdragon.games` names onto
+Cloudflare maps the public `hugmesh.systems` / `hugmesh.games` names onto
 those gateways (configured later, out of scope here).
 
 ## Nodes & images
@@ -11,8 +11,8 @@ those gateways (configured later, out of scope here).
 |---|---|---|---|
 | `pki` | `build-rpi5-stage4.sh --role pki` | aarch64 (RPi 5) | **Kubernetes control plane** + identity: headscale (mesh control), Casdoor, Cassandra, `snapdragon-pki-gateway` |
 | `backend` | `build-rpi5-stage4.sh --role backend` | aarch64 (RPi 5) | tuwunel (Matrix), Akkoma (fediverse), Spring APIs, databases, `snapdragon-be-gateway` |
-| `frontend` | `build-rpi5-stage4.sh --role frontend` | aarch64 (RPi 5) | `snapdragon.systems` Angular host federating `snapdragon-matrix-ui` + `snapdragon-mastodon-ui` + `snapdragon-wiki-ui` + login/admin/mod/user/forum remotes, `snapdragon-fe-gateway` |
-| `host` | `build-x86-host-stage4.sh` | x86_64 (desktop/server) | GPU worker: ArgoCD, GitLab/Runner/binhost (devops), `snapdragon.games`, owncast + tube (GPU-dependent video), heavy datastores (Kafka/ClickHouse/Uptrace), local-path/node-storage default (Mesa/Vulkan via `/dev/dri`) |
+| `frontend` | `build-rpi5-stage4.sh --role frontend` | aarch64 (RPi 5) | `hugmesh.systems` Angular host federating `snapdragon-matrix-ui` + `snapdragon-mastodon-ui` + `snapdragon-wiki-ui` + login/admin/mod/user/forum remotes, `snapdragon-fe-gateway` |
+| `host` | `build-x86-host-stage4.sh` | x86_64 (desktop/server) | GPU worker: ArgoCD, GitLab/Runner/binhost (devops), `hugmesh.games`, owncast + tube (GPU-dependent video), heavy datastores (Kafka/ClickHouse/Uptrace), local-path/node-storage default (Mesa/Vulkan via `/dev/dri`) |
 | `edge_ai` | `build-x86-host-stage4.sh --role edge_ai` (x86_64) **/** `build-jetson-stage4.sh --role edge_ai` (Jetson Orin Nano, arm64 crossdev — the x86 builder is amd64-only and cannot produce a Jetson image) | x86_64 / Jetson Orin Nano (arm64) | GPU **inference** node: Ollama serving an OpenAI-compatible model API (`/v1`) to the mesh over k8s (ClusterIP) + tailnet (`ai.<domain>` gateway route); NVIDIA proprietary + CUDA + `nvidia-device-plugin` (which also makes the GPU schedulable for owncast/coturn/tube voice+video). Model library is the `edge-ai-models` ConfigMap. See [EDGE-AI.md](EDGE-AI.md) |
 
 All nodes are hardened Gentoo, join one Kubernetes cluster, sit on one headscale
@@ -24,19 +24,19 @@ the right hardware.
 
 ```mermaid
 flowchart TD
-    CF["Cloudflare edge<br/>snapdragon.systems / snapdragon.games"]
-    CF --> FEGW["snapdragon-fe-gateway<br/>(snapdragon.systems)"]
+    CF["Cloudflare edge<br/>hugmesh.systems / hugmesh.games"]
+    CF --> FEGW["snapdragon-fe-gateway<br/>(hugmesh.systems)"]
     CF --> BEGW["snapdragon-be-gateway<br/>(api / matrix / mastodon .*)"]
 
-    subgraph FE["snapdragon-frontend (frontend Pis)"]
-        HOST["snapdragon.systems Angular host shell"]
+    subgraph FE["hugmesh-frontend (frontend Pis)"]
+        HOST["hugmesh.systems Angular host shell"]
         HOST --> MUI["snapdragon-matrix-ui"]
         HOST --> MASTUI["snapdragon-mastodon-ui"]
         HOST --> LOGINUI["snapdragon-login-ui"]
         HOST --> ADMINUI["snapdragon-admin-ui / mod-ui / user-ui / forum-ui / wiki-ui"]
     end
 
-    subgraph BE["snapdragon-backend (backend Pis)"]
+    subgraph BE["hugmesh-backend (backend Pis)"]
         TUW["tuwunel (Matrix homeserver)"]
         AKK["Akkoma (Mastodon-API fediverse)"]
         APIS["Spring APIs + DBs"]
@@ -45,13 +45,13 @@ flowchart TD
         PHPBB["phpBB (optional)"]
     end
 
-    subgraph PKI["snapdragon-pki (pki Pi — control plane)"]
+    subgraph PKI["hugmesh-pki (pki Pi — control plane)"]
         CAS["Casdoor (IdP)"]
         CASS["Cassandra"]
         HS["headscale (mesh control)"]
     end
 
-    subgraph INFER["snapdragon-inference (edge_ai GPU node — x86_64 or Jetson)"]
+    subgraph INFER["hugmesh-inference (edge_ai GPU node — x86_64 or Jetson)"]
         EDGEAI["edge-ai (Ollama /v1)"]
         EDGEAIAN["edge-ai-analysis"]
     end
@@ -59,7 +59,7 @@ flowchart TD
     subgraph X86["x86_64 GPU worker"]
         ARGO["ArgoCD"]
         DEVOPS["GitLab / Runner / binhost (devops)"]
-        GAMES["snapdragon.games studio"]
+        GAMES["hugmesh.games studio"]
         VIDEO["owncast + tube (GPU-dependent video)"]
         HEAVY["heavy datastores: Kafka / ClickHouse / Uptrace"]
         STORE["local-path / node-storage default"]
@@ -68,8 +68,8 @@ flowchart TD
     FEGW --> FE
     BEGW --> BE
     BE -. "games ns + argocd ns scheduled here" .-> X86
-    BEGW -. "ai.snapdragon.systems (tailnet-only, not on the public CF fan-out)" .-> INFER
-    BEGW -. "headscale-forward ONLY (scale.snapdragon.systems) — pki is NOT internet-facing" .-> PKIGW["snapdragon-pki-gateway<br/>(internal ingress on the pki node only)"]
+    BEGW -. "ai.hugmesh.systems (tailnet-only, not on the public CF fan-out)" .-> INFER
+    BEGW -. "headscale-forward ONLY (scale.hugmesh.systems) — pki is NOT internet-facing" .-> PKIGW["snapdragon-pki-gateway<br/>(internal ingress on the pki node only)"]
     PKIGW --> PKI
 
     subgraph SSO["SSO / native login — shipped, lit by default"]
@@ -91,7 +91,7 @@ flowchart TD
     class ROADMAP,WC,MFA,DESKGOV,NOTIFY planned;
 ```
 
-> The **superadmin Service Catalog** surface (tailnet-only `snapdragon-superadmin-gateway`
+> The **superadmin Service Catalog** surface (tailnet-only `hugmesh-superadmin-gateway`
 > + Kaniko build namespace) is now ✅ shipped on `main` but is reachable **only**
 > over the headscale tailnet via the internal ingress on the pki node — it is
 > deliberately off every public-ingress gateway, so it is not drawn on the public
@@ -100,7 +100,7 @@ flowchart TD
 ## The gateway pattern
 
 `snapdragon-gateway` (Spring Cloud Gateway) is deployed once per namespace from
-[one Helm chart](../specs/cluster/charts/snapdragon-gateway), differentiated by
+[one Helm chart](../specs/cluster/charts/hugmesh-gateway), differentiated by
 `SPRING_APPLICATION_NAME`. Modelled on the org's `snapdragon-gateway` /
 `snapdragon-id-gateway`:
 
@@ -118,7 +118,7 @@ flowchart TD
 
 ## Identity & login
 
-Casdoor (`id.snapdragon.systems`) is the single IdP, reached **only from inside
+Casdoor (`id.hugmesh.systems`) is the single IdP, reached **only from inside
 the cluster** (there is no public ingress to Casdoor; the browser never sees it):
 
 - **Admin-created accounts** sign in through the platform's **native login form**
@@ -126,7 +126,7 @@ the cluster** (there is no public ingress to Casdoor; the browser never sees it)
   drives Casdoor over the internal network.
 - **Google federation** handles public registration/sign-up.
 - **tuwunel** (Matrix homeserver, OIDC) and **Akkoma** (Mastodon-API-compatible
-  fediverse, OIDC) both SSO against Casdoor, so the `snapdragon.systems` front
+  fediverse, OIDC) both SSO against Casdoor, so the `hugmesh.systems` front
   page can show **Matrix / Mastodon links to logged-in users** and hand each
   module a service access token — the
   [`snapdragon-matrix-ui`](https://github.com/Snapdragon-Systems/snapdragon-matrix-ui)
@@ -158,7 +158,7 @@ stays dark to the internet).
 
 **Component ownership** (post auth-relocation):
 
-- **`snapdragon-auth-core`** (shared jar `systems.snapdragon:snapdragon-auth-core`) —
+- **`hugmesh-auth-core`** (shared jar `systems.hugmesh:hugmesh-auth-core`) —
   the stateful auth stack: `AccountStore`/`BffSession` (account + session + MFA),
   `OidcExchangeClient` (code→token + refresh), `BffCustodyCipher` (AES-256-GCM
   encrypt-at-rest for the held JWT), `SessionCookieService` (the opaque `bff_`
@@ -180,7 +180,7 @@ stays dark to the internet).
 - **`snapdragon-login-ui`** — the first-party **native username/password form** that
   POSTs to `/bff/login` and renders the MFA step-up when challenged; it never
   redirects the browser to Casdoor and holds no Casdoor URL.
-- **`snapdragon-generator`** (this repo) — the `app-user-bff` Casdoor confidential
+- **`hugmesh-generator`** (this repo) — the `app-user-bff` Casdoor confidential
   client (authorization_code grant + internal redirect-uri) + the permitAll
   `/bff/login` route-access seed (#156).
 
@@ -231,7 +231,7 @@ sequenceDiagram
 **Safety-flag posture.** Each piece above is individually gateable off
 (`app.bff.oidc.enabled` on user-bff/auth-core · `app.bff.custody-key` on
 `BffCustodyCipher` · `app.session.cookie.enabled` for the `bff_` cookie ·
-`snapdragon.gateway.bff-exchange.enabled` for the gateway swap ·
+`hugmesh.gateway.bff-exchange.enabled` for the gateway swap ·
 `__SNAP_OIDC_ENABLED__` on login-ui), but **none of them ship dark on `main`**:
 `specs/cluster/manifests/{user,admin,mod}-bff-api/deployment.yaml` bake
 `APP_BFF_OIDC_ENABLED` / `APP_SESSION_COOKIE_ENABLED` / `APP_BFF_EXCHANGE_ENABLED`
@@ -257,7 +257,7 @@ ciphers inert until those Secrets land.
   `InternalTokenWebFilter`; ships inert.
 - (prior) gateway live + raw-API security proven + the SCG-5 route-namespace bug fixed.
 - **gateway BFF-session filter (PR-2/5 / #171 merged)** — `BffJwtExchangeWebFilter`
-  (`bff_` → custody-JWT, pre-security, fail-closed, `snapdragon.gateway.bff-exchange.enabled`).
+  (`bff_` → custody-JWT, pre-security, fail-closed, `hugmesh.gateway.bff-exchange.enabled`).
 - **user-bff OIDC enable (PR-2/5 / #171 merged)** — user-bff OIDC login relocation +
   admin-bff internal client (`app.bff.oidc.enabled`).
 - **SSO custody-key + internal-token bootstrap (PR-3/5 / #172 merged)** — custody-key
@@ -299,11 +299,11 @@ The pki control-plane installs ArgoCD (pinned to the x86_64 worker) and a root
 syncs Casdoor, Cassandra, the three public gateways (behind an ingress-nginx
 facade) plus the tailnet-only superadmin gateway, Akkoma + tuwunel, Forgejo
 (in-cluster git), the Spring APIs, the frontend host, the matrix-ui / mastodon-ui
-remotes (the `social-ui` ArgoCD grouping), and snapdragon.games. See
+remotes (the `social-ui` ArgoCD grouping), and hugmesh.games. See
 [`specs/cluster/README.md`](../specs/cluster/README.md).
 
 > **GitOps source migration — ⏳ PARTIAL.** Today the root app-of-apps syncs from
-> the **GitHub** `snapdragon-generator` repo. The move to an **in-cluster Forgejo**
+> the **GitHub** `hugmesh-generator` repo. The move to an **in-cluster Forgejo**
 > source-of-truth is scaffolded — the Forgejo deploy (`apps/09-forgejo.yaml`), the
 > service-catalog `scmProvider` ApplicationSet (`apps/13-service-catalog.yaml`,
 > already configured to scan the in-cluster Forgejo) and the deploy contract
@@ -325,12 +325,12 @@ latency/memory-based scaling beyond CPU.
 
 Cluster secrets are generated once by
 [`scripts/gen-cluster-secrets.sh`](../scripts/gen-cluster-secrets.sh) and pushed
-to **HashiCorp Vault** (KV v2, mount `secret/`, base path `snapdragon/` — the
+to **HashiCorp Vault** (KV v2, mount `secret/`, base path `hugmesh/` — the
 base segment tracks the brand slug). The **External Secrets Operator** then
 materializes the k8s Secrets the workloads already consume — `casdoor-google`
-(`snapdragon-pki`), `clickhouse-auth` (`snapdragon-backend` + `observability`)
+(`hugmesh-pki`), `clickhouse-auth` (`hugmesh-backend` + `observability`)
 and `uptrace-auth` (`observability`) — via a ClusterSecretStore
-**`snapdragon-vault`** (provider `vault`, token auth from the `vault-token`
+**`hugmesh-vault`** (provider `vault`, token auth from the `vault-token`
 Secret in `external-secrets`), one ExternalSecret per Secret, refreshed hourly.
 Workload `secretKeyRef`s are unchanged.
 
@@ -346,7 +346,7 @@ unreachable.
 - **Storage:** `storage.devices[]` in the KEYS manifest mounts attached M.2/NVMe
   or USB disks and can relocate `containerd`/`kubelet` data onto them.
 - **Backups:** `backup.*` schedules etcd + PostgreSQL backups to attached
-  storage and/or an NFS/CIFS network share (`/usr/local/sbin/snapdragon-backup`).
+  storage and/or an NFS/CIFS network share (`/usr/local/sbin/hugmesh-backup`).
 
 ## Superadmin, multi-tenancy and the role cascade
 
@@ -359,7 +359,7 @@ domain-scoped, enforced at the gateway) governs every surface.
   boundary; one admin-bff ↔ one Casdoor org ↔ one homeserver per brand.
 - **Superadmin (✅ shipped):** a real code-enforced role owning device-licenses and
   domain CRUD. Its Service Catalog console + `service-catalog-ui` remote are served by the
-  tailnet-only `snapdragon-superadmin-gateway` (`apps/22-gateway-superadmin.yaml`)
+  tailnet-only `hugmesh-superadmin-gateway` (`apps/22-gateway-superadmin.yaml`)
   on the pki node's internal ingress — off every public gateway.
 - **Superadmin Service Catalog (✅ shipped on `main`):** the data layer (admin-bff
   service-curation / app-profile / service-deployment) **and** the infra legs —
@@ -416,7 +416,7 @@ backstops noted below may already be present but inert.
 
 | Repo | Role |
 |---|---|
-| `Snapdragon-Systems/snapdragon-generator` | This repo — image builders, provisioning, GitOps payload |
+| `Snapdragon-Systems/hugmesh-generator` | This repo — image builders, provisioning, GitOps payload |
 | `Snapdragon-Systems/snapdragon-gateway` | Shared Spring Cloud Gateway code/image |
 | `Snapdragon-Systems/snapdragon-pki-gateway` | PKI/identity gateway (Casdoor OAuth2, Postgres routes) — renamed from `snapdragon-id-gateway` |
 | `Snapdragon-Systems/snapdragon-be-gateway` | Backend gateway (per-node, reuses the shared gateway image) |

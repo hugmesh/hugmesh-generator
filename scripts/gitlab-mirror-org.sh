@@ -12,8 +12,8 @@
 set -euo pipefail
 
 ORG="${ORG:-Snapdragon-Systems}"
-GITLAB_URL="${GITLAB_URL:-https://gitlab.snapdragon.systems}"
-GITLAB_GROUP="${GITLAB_GROUP:-snapdragon}"
+GITLAB_URL="${GITLAB_URL:-https://gitlab.hugmesh.systems}"
+GITLAB_GROUP="${GITLAB_GROUP:-hugmesh}"
 : "${GITLAB_TOKEN:?set GITLAB_TOKEN (GitLab PAT, api scope)}"
 
 for t in gh curl jq; do command -v "$t" >/dev/null || { echo "need $t" >&2; exit 1; }; done

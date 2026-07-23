@@ -1,11 +1,11 @@
-# ClusterIP — reached only in-cluster by snapdragon-admin-bff-api (R2DBC runtime +
+# ClusterIP — reached only in-cluster by hugmesh-admin-bff-api (R2DBC runtime +
 # the JDBC handle Liquibase uses at startup). DNS:
-#   admin-bff-db.snapdragon-backend.svc.cluster.local:5432
+#   admin-bff-db.hugmesh-backend.svc.cluster.local:5432
 apiVersion: v1
 kind: Service
 metadata:
   name: admin-bff-db
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels: { app: admin-bff-db }
 spec:
   type: ClusterIP

@@ -15,7 +15,7 @@ out-of-band and never committed.
   **per-tenant Harbor** provisioning template ({{HARBOR_PROJECT}} / {{BRAND}}).
 - `scripts/provenance.sh` — **signed provenance** manifest writer/signer/verifier
   (Ed25519); the publish tail emits `.snapdragon-provenance.json` (+ `.sig`) per tree.
-- `specs/usr/sbin/snapdragon-domain-reconcile` — the **writeback** (`ack_generation`)
+- `specs/usr/sbin/hugmesh-domain-reconcile` — the **writeback** (`ack_generation`)
   is now wired into `main()` (enablement-gated behind `DOMAIN_ACK_URL`).
 
 ## Decision #1 — ApplicationSet scoping: PER-TENANT FORGEJO ORG (chosen)
@@ -46,7 +46,7 @@ scoped robots — no logic change.
 
 **Per-tenant multiplies cost and RE-INCURS the job's two documented gaps PER TENANT —
 DEFERRED prerequisites (recorded, not silently assumed):**
-1. `cluster-ca` is still NOT copied into `snapdragon-pki`, so the job skips Vault TLS
+1. `cluster-ca` is still NOT copied into `hugmesh-pki`, so the job skips Vault TLS
    verify (bearer-token-authenticated only). Per tenant this recurs.
 2. The Harbor REST shape is pinned to chart 1.16.x — a validate-before-prod scaffold.
 3. Per-tenant needs a per-tenant ArgoCD `harbor-provision` Application (03b) name/path
@@ -54,12 +54,12 @@ DEFERRED prerequisites (recorded, not silently assumed):**
    Harbor-instance `harbor-admin` credential is reused; only PROJECT+robots+Vault base
    are per-tenant).
 
-**Interim fallback if per-tenant is not activated:** keep the single shared `snapdragon`
+**Interim fallback if per-tenant is not activated:** keep the single shared `hugmesh`
 project (the non-templated upstream file) and push tenant images under a per-brand
 REPOSITORY PREFIX inside it — brands are then NOT registry-isolated until per-project lands.
 
 ## Forgejo push auth — the house way (out-of-band, never committed)
-- Mint a PAT out-of-band from `snapadmin` (or a dedicated `snapdragon-publisher` machine
+- Mint a PAT out-of-band from `snapadmin` (or a dedicated `hugmesh-publisher` machine
   user): `forgejo admin user generate-access-token --username snapadmin --scopes
   write:repository,write:organization`. Store in Vault KV `secret/<brand>/forgejo` prop
   `push_token`.
@@ -80,8 +80,8 @@ REPOSITORY PREFIX inside it — brands are then NOT registry-isolated until per-
 The publish tail creates/pushes each tree under its FULL directory name
 `<brand>-<repo>` (`$base`), NOT the brand-stripped `<repo>`. The 13d brand-repo
 ApplicationSet filters `repositoryMatch: "^<BRAND>-"` (and the default shared
-`13-service-catalog` filters `"^snapdragon-"`); a repo named `admin-bff-api` would
-match neither `^acme-` nor `^snapdragon-`, so ArgoCD would discover ZERO
+`13-service-catalog` filters `"^hugmesh-"`); a repo named `admin-bff-api` would
+match neither `^acme-` nor `^hugmesh-`, so ArgoCD would discover ZERO
 Applications and deliverable #2 (auto-discover + sync) would be dead end-to-end.
 Pushing as `acme-admin-bff-api` matches `^acme-`. Provenance still records the
 logical `tenant.repo=admin-bff-api` / `tenant.brand=acme` (the Forgejo repo name
@@ -102,4 +102,4 @@ release-time decision. When `PROVENANCE_SIGNING_KEY` is unset the manifest ships
 - ESO materializing `forgejo-scm-token` / the push token / `harbor-admin` from Vault.
 - admin-bff #118 `/bff/internal/domains/<dom>/reconcile-ack` ingest (endpoint absent).
 - Signing provenance with the real out-of-band production key.
-- `cluster-ca` copy into `snapdragon-pki` (Vault TLS verify gap in the harbor job).
+- `cluster-ca` copy into `hugmesh-pki` (Vault TLS verify gap in the harbor job).

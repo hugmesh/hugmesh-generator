@@ -1,6 +1,6 @@
 # kaniko-build-job.template.yaml — the per-build ROOTLESS Kaniko Job TEMPLATE for the
 # SUPERADMIN Service Catalog DOCKERFILE (iii) + ZIP-repo (iv) service sources
-# (snapdragon-superadmin-appstore design, V2: the build:images path was an echo STUB, no
+# (hugmesh-superadmin-appstore design, V2: the build:images path was an echo STUB, no
 # in-cluster builder existed — this is that builder).
 #
 # WHO INSTANTIATES IT: the admin-bff AddService task (the effector). When a service_deployment's
@@ -22,12 +22,12 @@
 #
 # ${PLACEHOLDERS} (bound by the AddService task per build):
 #   ${BUILD_NAME}      a DNS-safe per-build id (e.g. acme-test-owncast-<short-sha>)
-#   ${BUILD_NAMESPACE} the build namespace (default snapdragon-service-catalog-builds)
+#   ${BUILD_NAMESPACE} the build namespace (default hugmesh-service-catalog-builds)
 #   ${CONTEXT}         the Kaniko build context: git://<repo>#<ref> (DOCKERFILE in a repo) OR
 #                      the uploaded zip materialized to a context (ZIP); see docs.
 #   ${DOCKERFILE}      the Dockerfile path within the context (default Dockerfile)
 #   ${DEST_IMAGE}      the destination image ref WITH a tag/digest in the in-cluster registry
-#                      (e.g. registry.snapdragon.systems/<brand>/<service>:<sha>)
+#                      (e.g. registry.hugmesh.systems/<brand>/<service>:<sha>)
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -35,7 +35,7 @@ metadata:
   namespace: ${BUILD_NAMESPACE}
   labels:
     app.kubernetes.io/name: service-catalog-builder
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/appstore-build: "${BUILD_NAME}"
 spec:
   backoffLimit: 1

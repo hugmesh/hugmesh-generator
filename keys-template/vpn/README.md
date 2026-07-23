@@ -28,16 +28,16 @@ KEYS/
 ```
 
 - `<domain>` is the **brand / tenant domain** (matches `provision.json`
-  `.snapdragon.cluster_domain` — the node's own residency). `provision_vpn()`
+  `.hugmesh.cluster_domain` — the node's own residency). `provision_vpn()`
   reads ONLY `KEYS/vpn/<own-domain>/`; a config under another domain's directory is
   **never** installed on this node (per-tenant isolation, defence-in-depth — the
   runtime BFF/ESO path enforces the same domain scope).
 - Multiple `.conf`/`.ovpn` files per domain are allowed (e.g. one per provider
   region / per public service). The first verified Layer-B reconcile (PR5) or the
   runtime UI path selects which one is `active.conf`. At provision time **all** of
-  the own-domain configs are staged 0600 under `/etc/snapdragon/vpn/<name>.conf`;
-  the OpenRC service (`snapdragon-egress-vpn`, PR2) reads the symlinked
-  `/etc/snapdragon/vpn/active.conf`.
+  the own-domain configs are staged 0600 under `/etc/hugmesh/vpn/<name>.conf`;
+  the OpenRC service (`hugmesh-egress-vpn`, PR2) reads the symlinked
+  `/etc/hugmesh/vpn/active.conf`.
 - **Type detection**: a `.conf` is treated as WireGuard (`[Interface]` /
   `[Peer]` sections, `wg-quick`); a `.ovpn` is treated as OpenVPN. The runner
   type-sniffs the active file at start (PR2).

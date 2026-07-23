@@ -52,7 +52,7 @@ stamped from the **node's residency**, never the caller (`[FIX-NODEFAULT]`).
 
 ## Capacity
 
-- Capacity is **WaitForFirstConsumer** (the `snapdragon-local` StorageClass) + an API guard:
+- Capacity is **WaitForFirstConsumer** (the `hugmesh-local` StorageClass) + an API guard:
   an assign is rejected (422) when `committed + requested > pool.reserved_bytes`, or when an
   `is_exclusive` pool already has an active assignment.
 - The node-agent's `df` on the attached disk is **authoritative** over the operator's
@@ -67,7 +67,7 @@ stamped from the **node's residency**, never the caller (`[FIX-NODEFAULT]`).
    you own. The control plane stamps the pool's residency from the node.
 2. **Assign** (admin UI → `POST .../pools/{poolId}/assignments`): place a service on the pool
    (capacity-checked).
-3. **Provision** (node-agent, on the node): the `snapdragon-node-storage-reconcile` agent
+3. **Provision** (node-agent, on the node): the `hugmesh-node-storage-reconcile` agent
    (boot oneshot + 60s cron) fetches the **signed per-node export**, verifies it (detached
    Ed25519 over the canonical bytes against the baked key + strict-monotonic rollback guard —
    the SAME verifier as the device-license registry), then:

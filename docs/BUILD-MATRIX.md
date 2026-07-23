@@ -23,7 +23,7 @@ the same change**, plus a row (or axis) in the canonical matrix below.
 ### Four-choice taxonomy parity
 
 The Studio GUI's four-choice opening screen
-([`gui/pages/mode.py`](../studio/snapdragon_studio/gui/pages/mode.py); the flow is
+([`gui/pages/mode.py`](../studio/hugmesh_studio/gui/pages/mode.py); the flow is
 specced in [`docs/STUDIO-WIZARD-FLOW.md`](STUDIO-WIZARD-FLOW.md)) is the **reference**
 taxonomy — **Mesh node** / **Local Docker mesh** / **Mesh desktop client** /
 **Standalone Gentoo desktop**. Every channel that presents an opening choice mirrors
@@ -43,8 +43,8 @@ guide. Fail-closed: an expected pass count, shortfall = failure.
 
 **Local Docker mesh (choice ii) is the one non-build channel.** It builds no image and
 has **no matrix row and no emission** — it runs a dockerized node on the operator's own
-machine through [`core/local_mesh.py`](../studio/snapdragon_studio/core/local_mesh.py)'s
-Qt-free entrypoint (`python3 -m snapdragon_studio.core.local_mesh`, wrapped by
+machine through [`core/local_mesh.py`](../studio/hugmesh_studio/core/local_mesh.py)'s
+Qt-free entrypoint (`python3 -m hugmesh_studio.core.local_mesh`, wrapped by
 `make mesh-node-up`), shared verbatim by the GUI launcher, the ncurses `local_mesh_screen`,
 and the Makefile targets. It never enters `resolve_build_target`/`build_make_cmd`.
 
@@ -81,7 +81,7 @@ green on channels that do not offer it).
 | **CLI** | `./build-{rpi5,x86-host,frite,jetson,orangepi5,orangepi-zero2}-stage4.sh` | flags (`--role`, `--env`, `--board`, `--flavor`, `--desktop`, …) |
 | **make** | `Makefile` targets (`make x86-<role>`, `make rpi-<role>`, `make frite`, `make jetson-<role>`, `make orangepi5`, `make orangepizero2`, `make build-all`, `make build-everything`) | make vars (`ENV=`, `BRAND=`, `RPI_BOARD=`, `FRITE_*=`, `JETSON_*=`, `ORANGEPI5_*=`, `IMG_FLAGS=`, `STANDALONE_FLAGS=`) |
 | **ncurses menu** | `make menu` (`scripts/build-menu.sh`) | interactive screens persisting `OPT_*` state; composes the same make invocation |
-| **Studio GUI** | `studio/` (`python -m snapdragon_studio`) | wizard pages over `ImageConfig`; the same config drives the headless `--print-command` |
+| **Studio GUI** | `studio/` (`python -m hugmesh_studio`) | wizard pages over `ImageConfig`; the same config drives the headless `--print-command` |
 
 Note: `build-rpi5-stage4.sh` is a **single builder covering three boards** via
 `--board rpi5\|rpi4\|rpi3` (the `--board` axis, not a separate script per
@@ -89,7 +89,7 @@ board) — see "Board axes vs. new builders" below.
 
 **Arch-first device taxonomy** ✅ (Studio) / 🔭 (menu, CLI guided help): the Studio's
 machine tier now presents an architecture selector over a family-grouped **device
-catalog** (`studio/snapdragon_studio/core/device_catalog.py` +
+catalog** (`studio/hugmesh_studio/core/device_catalog.py` +
 `core/device-catalog.json`) with the #351 honesty statuses (supported / experimental
 labelled / unsupported visible-but-unselectable, reason shown). A device is exactly a
 `(platform, board)` pair and its roles are **derived** from `ROLE_CHOICES` +
@@ -182,7 +182,7 @@ no network, no docker/k8s, ~15 s:
    composes the right make target with `ENV=` (+ the `FRITE_*` /
    `JETSON_BOARD` make-vars).
 4. **GUI** — writes a per-row config JSON and asserts the Studio's headless,
-   Qt-free `python -m snapdragon_studio --print-command` emits a command with
+   Qt-free `python -m hugmesh_studio --print-command` emits a command with
    the right builder / role / axes / env. The 8 standalone-posture rows
    translate the JOB-grammar tokens to the real Studio semantics
    (`role=desktop` / `flavor=installer` + `standalone: true`, exactly like the
@@ -310,7 +310,7 @@ carried on the `flag-coverage.sh` allowlist with that documented reason:
 
 The **`prebuild-binaries ARCH=<platform> [BOARD=]`** make target computes the
 platform's role-union via the Qt-free `python3 -m
-snapdragon_studio.core.prebuild_union <platform>` module and invokes the builder
+hugmesh_studio.core.prebuild_union <platform>` module and invokes the builder
 once with `--packages-only` into the per-board pool (MAKE channel). The ncurses
 menu surfaces it as **Build → Prebuild shared binpkg pool** plus a **Shared
 distfiles** option; a non-gating `sharedbinpkg-*` smoke set (`prebuild-smoke.sh`

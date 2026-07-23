@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from snapdragon_studio.core.config import (
+from hugmesh_studio.core.config import (
     BUILDER_SCRIPTS,
     DESKTOP_ROLES,
     ENV_CHOICES,
@@ -352,7 +352,7 @@ def test_x86_mesh_roles_golden(role):
     # <brand>.internal). --superdomain rides the cluster/mesh identity block.
     assert args == ["--role", role, "--env", "test", "--local-user", "magus",
                     "--with-tailscale", "--with-sso",
-                    "--superdomain", "snapdragon.internal", *X86_TAIL]
+                    "--superdomain", "hugmesh.internal", *X86_TAIL]
     assert "--person-role" not in args
     assert "--domains" not in args
 
@@ -360,7 +360,7 @@ def test_x86_mesh_roles_golden(role):
 def test_x86_mesh_node_never_emits_person_role_even_with_domains_and_users():
     # Even when the superadmin fills in domains/users (they go to the mesh manifest),
     # a NODE-role x86 image carries NO --person-role/--domains at build time (FD-08).
-    from snapdragon_studio.core.config import Domain, User
+    from hugmesh_studio.core.config import Domain, User
     args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True, sso=True,
                        domains=[Domain(name="acme.example")],
                        users=[User(username="root", role="superadmin")]).to_cli_args()
@@ -533,7 +533,7 @@ def test_rpi5_roles_golden(role, builder_role):
     args = ImageConfig(mode="mesh", role=role, platform="rpi5", tailscale=True).to_cli_args()
     # WS-SUPER-B: mesh images record the derived orchestration superdomain.
     assert args == ["--role", builder_role, "--env", "test",
-                    "--superdomain", "snapdragon.internal"]
+                    "--superdomain", "hugmesh.internal"]
 
 
 def test_rpi5_standalone_desktop():
@@ -543,7 +543,7 @@ def test_rpi5_standalone_desktop():
                        standalone=True, local_user="alice", local_pass="s3cret",
                        encrypt_root=True, luks_pass="hunter2").to_cli_args()
     assert args == ["--role", "desktop", "--env", "test",
-                    "--superdomain", "snapdragon.internal",
+                    "--superdomain", "hugmesh.internal",
                     "--standalone", "--local-user", "alice", "--local-pass", "s3cret",
                     "--encrypt-root", "--luks-pass", "hunter2"]
 
@@ -573,7 +573,7 @@ def test_rpi5_board_unset_emits_nothing():
     golden test above (none of them pass board=...)."""
     args = ImageConfig(mode="mesh", role="pki", platform="rpi5", tailscale=True).to_cli_args()
     assert args == ["--role", "pki", "--env", "test",
-                    "--superdomain", "snapdragon.internal"]
+                    "--superdomain", "hugmesh.internal"]
     assert "--board" not in args
 
 
@@ -589,7 +589,7 @@ def test_rpi5_board_axis(board):
     args = ImageConfig(mode="mesh", role="be", platform="rpi5", tailscale=True,
                        board=board).to_cli_args()
     assert args == ["--role", "backend", "--board", board, "--env", "test",
-                    "--superdomain", "snapdragon.internal"]
+                    "--superdomain", "hugmesh.internal"]
 
 
 def test_rpi5_board_composes_with_desktop_standalone():
@@ -599,7 +599,7 @@ def test_rpi5_board_composes_with_desktop_standalone():
                        board="rpi4", standalone=True, local_user="alice",
                        encrypt_root=True).to_cli_args()
     assert args == ["--role", "desktop", "--board", "rpi4", "--env", "test",
-                    "--superdomain", "snapdragon.internal",
+                    "--superdomain", "hugmesh.internal",
                     "--standalone", "--local-user", "alice", "--encrypt-root"]
 
 
@@ -611,7 +611,7 @@ def test_rpi5_board_rpi3_composes_with_desktop_standalone():
                        board="rpi3", standalone=True, local_user="alice",
                        encrypt_root=True).to_cli_args()
     assert args == ["--role", "desktop", "--board", "rpi3", "--env", "test",
-                    "--superdomain", "snapdragon.internal",
+                    "--superdomain", "hugmesh.internal",
                     "--standalone", "--local-user", "alice", "--encrypt-root"]
 
 
@@ -699,7 +699,7 @@ def test_frite_board_flavor_desktop_matrix(board, flavor, desktop):
 def test_jetson_roles_golden(role, builder_role):
     args = ImageConfig(mode="mesh", role=role, platform="jetson", tailscale=True).to_cli_args()
     assert args == ["--role", builder_role, "--env", "test",
-                    "--superdomain", "snapdragon.internal"]
+                    "--superdomain", "hugmesh.internal"]
 
 
 def test_jetson_shared_arm_surface():
@@ -718,7 +718,7 @@ def test_jetson_board_axis(board):
     args = ImageConfig(mode="mesh", role="edge_ai", platform="jetson", tailscale=True,
                        board=board).to_cli_args()
     assert args == ["--role", "edge_ai", "--board", board, "--env", "test",
-                    "--superdomain", "snapdragon.internal"]
+                    "--superdomain", "hugmesh.internal"]
 
 
 # ---- env threading (test|prod baked per channel) ------------------------------
@@ -1528,7 +1528,7 @@ def test_capability_table_platforms_are_all_known():
 
 def test_superdomain_derivation_and_explicit():
     # "" derives <brand>.internal; an explicit value wins
-    assert ImageConfig().effective_superdomain() == "snapdragon.internal"
+    assert ImageConfig().effective_superdomain() == "hugmesh.internal"
     assert ImageConfig(brand="acme").effective_superdomain() == "acme.internal"
     assert ImageConfig(brand="acme", superdomain="mesh.acme.internal"
                        ).effective_superdomain() == "mesh.acme.internal"
@@ -1569,7 +1569,7 @@ def test_superdomain_round_trip_and_manifest(tmp_path):
 def test_superdomain_internal_suffix_accepted_by_validate_identity():
     # .internal must validate — the whole v1 depends on <brand>.internal being legal
     ImageConfig(mode="mesh", role="omnibus", platform="x86",
-                superdomain="snapdragon.internal").to_cli_args()   # must not raise
+                superdomain="hugmesh.internal").to_cli_args()   # must not raise
 
 
 def test_superdomain_injection_rejected():
@@ -1748,7 +1748,7 @@ def test_user_registration_from_dict_drops_unknown_future_key():
 
 def test_load_rejects_worklist_envelope(tmp_path):
     p = tmp_path / "wl.json"
-    p.write_text(json.dumps({"schema": "snapdragon-worklist/v1",
+    p.write_text(json.dumps({"schema": "hugmesh-worklist/v1",
                              "base": ImageConfig().to_dict(), "entries": []}),
                  encoding="utf-8")
     with pytest.raises(ValueError, match="worklist envelope"):
@@ -1850,7 +1850,7 @@ def test_enter_mesh_defaults_preserves_mesh_x86_golden():
     enter_mesh_defaults(cfg)
     assert cfg.to_cli_args() == ["--role", "omnibus", "--env", "test", "--local-user", "magus",
                                  "--with-tailscale", "--with-sso",
-                                 "--superdomain", "snapdragon.internal", *X86_TAIL]
+                                 "--superdomain", "hugmesh.internal", *X86_TAIL]
 
 
 def test_strip_platform_unsupported_clears_x86_only_fields_on_arm():

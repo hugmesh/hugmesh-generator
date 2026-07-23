@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # windows-studio-e2e.sh — boot a MINIMAL Windows desktop under QEMU and prove the SHIPPED
-# Windows launcher (studio/snapdragon-studio.bat -> `python -m snapdragon_studio %*`) runs
+# Windows launcher (studio/hugmesh-studio.bat -> `python -m hugmesh_studio %*`) runs
 # there and emits a builder command. This is the Windows leg of the Studio's headless
 # self-test: `--print-command` returns before app.py imports Qt, so it needs no display in
 # the guest (the build-matrix GUI column relies on the same property).
@@ -15,13 +15,13 @@
 #
 # The runner has TWO legs (both required for a PASS; no new guest prerequisites, so
 # existing operator images keep passing):
-#   1. DETECT leg: `snapdragon-studio.bat /detect > DETECT.txt` — the guided
+#   1. DETECT leg: `hugmesh-studio.bat /detect > DETECT.txt` — the guided
 #      bootstrapper's report mode (never prompts, never installs). Expected in the guest:
 #      DETECT_EXITCODE=0, `DETECT python=found` (Python on PATH is part of the operator
 #      image contract above), a DEFINITE pyside6/docker verdict either way (the minimal
 #      image usually reports missing for both — a docker-equipped image must also pass),
 #      and a winget line.
-#   2. MARKER leg (the UNCHANGED #345 contract): `snapdragon-studio.bat --print-command
+#   2. MARKER leg (the UNCHANGED #345 contract): `hugmesh-studio.bat --print-command
 #      --backend native > MARKER.txt` must exit 0 and emit a builder command — proving
 #      the bootstrapped .bat still honors the byte-compatible headless launch line.
 #
@@ -69,9 +69,9 @@ REM (handle 0 gets redirected; the token never lands in the file). wine cmd does
 REM reproduce this, so only the static guards (stage_payload + test_bat_bootstrap.py)
 REM catch a regression before a real boot.
 cd /d "%~dp0studio"
-call snapdragon-studio.bat /detect > DETECT.txt 2>&1
+call hugmesh-studio.bat /detect > DETECT.txt 2>&1
 >> DETECT.txt echo DETECT_EXITCODE=%ERRORLEVEL%
-call snapdragon-studio.bat --print-command --backend native > MARKER.txt 2>&1
+call hugmesh-studio.bat --print-command --backend native > MARKER.txt 2>&1
 >> MARKER.txt echo EXITCODE=%ERRORLEVEL%
 shutdown /s /t 0'
 
@@ -79,31 +79,31 @@ stage_payload() {   # $1 = staging dir
     local dest="$1"
     rm -rf "${dest}"; mkdir -p "${dest}/studio"
     # the launcher + the whole package (exclude caches / the venv / build junk); the
-    # .bat runs `python -m snapdragon_studio`, so the package must be importable from
+    # .bat runs `python -m hugmesh_studio`, so the package must be importable from
     # studio/ in the guest.
     rsync -a --exclude '__pycache__' --exclude '*.pyc' --exclude '.pytest_cache' \
-        "${STUDIO_DIR}/snapdragon_studio" "${STUDIO_DIR}/snapdragon-studio.bat" \
+        "${STUDIO_DIR}/hugmesh_studio" "${STUDIO_DIR}/hugmesh-studio.bat" \
         "${STUDIO_DIR}/requirements.txt" "${dest}/studio/"
     # every line CRLF: cmd is CRLF-native and the shipped .bat is goto-heavy (cmd's label
     # scanner breaks on LF), so the runner is written the same way for consistency.
     printf '%s\n' "${GUEST_RUNNER}" | sed 's/$/\r/' > "${dest}/run-selftest.bat"
     # fail LOUD if the runner or the shipped launcher lost their entrypoint before we ever boot.
-    grep -q 'python -m snapdragon_studio' "${dest}/studio/snapdragon-studio.bat" \
+    grep -q 'python -m hugmesh_studio' "${dest}/studio/hugmesh-studio.bat" \
         || { echo "payload validation FAILED: shipped .bat lost its entrypoint" >&2; exit 1; }
-    grep -q 'snapdragon-studio.bat --print-command' "${dest}/run-selftest.bat" \
+    grep -q 'hugmesh-studio.bat --print-command' "${dest}/run-selftest.bat" \
         || { echo "payload validation FAILED: guest runner lost its --print-command call" >&2; exit 1; }
     # the bootstrap-detect leg: runner calls /detect; the shipped .bat still carries the
     # DETECT vocabulary and the pinned winget IDs (the same lines test_bat_bootstrap.py pins).
-    grep -q 'snapdragon-studio.bat /detect' "${dest}/run-selftest.bat" \
+    grep -q 'hugmesh-studio.bat /detect' "${dest}/run-selftest.bat" \
         || { echo "payload validation FAILED: guest runner lost its /detect leg" >&2; exit 1; }
-    grep -q 'DETECT python=' "${dest}/studio/snapdragon-studio.bat" \
+    grep -q 'DETECT python=' "${dest}/studio/hugmesh-studio.bat" \
         || { echo "payload validation FAILED: shipped .bat lost its DETECT report" >&2; exit 1; }
-    grep -q 'set "WINGET_PYTHON_ID=Python.Python.3.12"' "${dest}/studio/snapdragon-studio.bat" \
+    grep -q 'set "WINGET_PYTHON_ID=Python.Python.3.12"' "${dest}/studio/hugmesh-studio.bat" \
         || { echo "payload validation FAILED: shipped .bat lost its pinned Python winget ID" >&2; exit 1; }
-    grep -q 'set "WINGET_DOCKER_ID=Docker.DockerDesktop"' "${dest}/studio/snapdragon-studio.bat" \
+    grep -q 'set "WINGET_DOCKER_ID=Docker.DockerDesktop"' "${dest}/studio/hugmesh-studio.bat" \
         || { echo "payload validation FAILED: shipped .bat lost its pinned Docker winget ID" >&2; exit 1; }
     # CRLF guard: an LF-normalized .bat would boot but die at the first goto label.
-    grep -qU $'\r' "${dest}/studio/snapdragon-studio.bat" \
+    grep -qU $'\r' "${dest}/studio/hugmesh-studio.bat" \
         || { echo "payload validation FAILED: shipped .bat is not CRLF (goto labels would break)" >&2; exit 1; }
     # digit-eating-redirect guard: `...%ERRORLEVEL%>> file` loses the digit on REAL
     # cmd.exe (digit-before->> parses as a stream handle); wine's cmd does not reproduce
@@ -133,12 +133,12 @@ if ${DRY_RUN}; then
     # round-trip proof: the guest runner + the shipped launcher are really IN the FAT and
     # readable back (the same mtools read-back the post-boot verdict uses).
     mcopy -i "${WORK}/payload.fat" "::/run-selftest.bat" "${WORK}/rb-runner.bat"
-    mcopy -i "${WORK}/payload.fat" "::/studio/snapdragon-studio.bat" "${WORK}/rb-launcher.bat"
-    grep -q 'snapdragon-studio.bat --print-command' "${WORK}/rb-runner.bat"
-    grep -q 'python -m snapdragon_studio' "${WORK}/rb-launcher.bat"
+    mcopy -i "${WORK}/payload.fat" "::/studio/hugmesh-studio.bat" "${WORK}/rb-launcher.bat"
+    grep -q 'hugmesh-studio.bat --print-command' "${WORK}/rb-runner.bat"
+    grep -q 'python -m hugmesh_studio' "${WORK}/rb-launcher.bat"
     # the detect leg survives the FAT round-trip too (same greps as stage_payload, read
     # back off the packed image — the packing half of the new leg, zero qemu needed).
-    grep -q 'snapdragon-studio.bat /detect' "${WORK}/rb-runner.bat"
+    grep -q 'hugmesh-studio.bat /detect' "${WORK}/rb-runner.bat"
     grep -q 'DETECT python=' "${WORK}/rb-launcher.bat"
     grep -q 'WINGET_PYTHON_ID=Python.Python.3.12' "${WORK}/rb-launcher.bat"
     grep -q 'WINGET_DOCKER_ID=Docker.DockerDesktop' "${WORK}/rb-launcher.bat"
@@ -236,6 +236,6 @@ if [ -n "${DETECT_FAIL}" ]; then
     echo "  docker only need a DEFINITE verdict either way — missing is fine on a minimal image.)"
     exit 1
 fi
-echo "PASS: the shipped snapdragon-studio.bat ran in the Windows guest — /detect reported"
+echo "PASS: the shipped hugmesh-studio.bat ran in the Windows guest — /detect reported"
 echo "  correctly AND the headless launch emitted a builder command."
 exit 0

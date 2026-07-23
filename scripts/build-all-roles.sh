@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-all-roles.sh — build the Snapdragon node images + each role's KEYS folder.
+# build-all-roles.sh — build the HugMesh node images + each role's KEYS folder.
 #
 # DEFAULT build set:
 #   * RPi 5 (aarch64):  pki, backend, frontend                 (build-rpi5-stage4.sh)
@@ -67,7 +67,7 @@
 # headless-only by design, not an oversight.)
 #
 # Pen-test build OPTION (DEV / CI-pipeline only) — run the OWASP pen-test harness
-# as part of the build (memory snapdragon-pentest-standard "an OPTION in the BUILD
+# as part of the build (memory hugmesh-pentest-standard "an OPTION in the BUILD
 # pipeline"). It is NOT a deployed runner; it drives tests/pentest/run-pentest.sh
 # against an env-test-build using PUBLIC images (owasp/dependency-check + zaproxy):
 #   PENTEST=1     ./scripts/build-all-roles.sh   # run the pen-test after the build
@@ -79,7 +79,7 @@
 # PENTEST_ONLY=1 runs ONLY the pen-test (skips the image builds + keys).
 #
 # Any extra args are passed through to BOTH builders, e.g.:
-#   ./scripts/build-all-roles.sh -j 16 --cluster-domain snapdragon.systems
+#   ./scripts/build-all-roles.sh -j 16 --cluster-domain hugmesh.systems
 #
 # Build ENV (baked at image creation) is just another pass-through flag:
 #   ./scripts/build-all-roles.sh --env test  --config brands/local.conf  # LAN fleet

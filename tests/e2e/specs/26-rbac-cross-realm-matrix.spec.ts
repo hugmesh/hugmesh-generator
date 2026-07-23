@@ -27,12 +27,12 @@ import { tags } from './report-tags';
 //
 // THREE REALMS, one decision oracle. The "realms" here are:
 //
-//   * SYSTEMS — org "snapdragon", issuer id.snapdragon.systems. Native roles are
+//   * SYSTEMS — org "hugmesh", issuer id.hugmesh.systems. Native roles are
 //     systems ROLE_* (ROLE_ADMIN/ROLE_MOD/ROLE_USER/…). Enforced by the systems
 //     fe/be/pki gateways (rbac-route-access.ROUTE_ACCESS, the schema.sql mirror).
-//   * GAMES — org "threewizards", issuer id.snapdragon.games, an INDEPENDENT
+//   * GAMES — org "threewizards", issuer id.hugmesh.games, an INDEPENDENT
 //     Casdoor. Native roles are lowercase ('player','admin'); the only systems→games
-//     link is the ROLE_GAMES_ADMIN→admin SYNC (owned by snapdragon-actions/e2e). A
+//     link is the ROLE_GAMES_ADMIN→admin SYNC (owned by hugmesh-actions/e2e). A
 //     games token carries NO systems ROLE_*. (The games NAMESPACE surfaces on the
 //     systems gateways — /games/admin/**, /games/api/admin/** — are gated on the
 //     DERIVED systems ROLE_GAMES_ADMIN, NOT on a games-realm token.)
@@ -65,11 +65,11 @@ import { tags } from './report-tags';
 // /bff/forum/admin/** + /api/forum/admin/** rows.
 interface ForumRule { gateway: Gateway; urlPattern: string; role: string; }
 const FORUM_ROUTES: ForumRule[] = [
-  { gateway: 'snapdragon-be-gateway', urlPattern: '/api/forum/admin/**',      role: 'ROLE_ADMIN' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/social/forum/**',         role: 'ROLE_FORUM' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/forum/admin/**',      role: 'ROLE_ADMIN' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/forum/moderation/**', role: 'ROLE_FORUM_MOD' },
-  { gateway: 'snapdragon-fe-gateway', urlPattern: '/bff/forum/**',            role: 'ROLE_FORUM' },
+  { gateway: 'hugmesh-be-gateway', urlPattern: '/api/forum/admin/**',      role: 'ROLE_ADMIN' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/social/forum/**',         role: 'ROLE_FORUM' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/forum/admin/**',      role: 'ROLE_ADMIN' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/forum/moderation/**', role: 'ROLE_FORUM_MOD' },
+  { gateway: 'hugmesh-fe-gateway', urlPattern: '/bff/forum/**',            role: 'ROLE_FORUM' },
 ];
 
 /** Most-specific-match decision over the LOCAL forum table (the same algorithm as
@@ -135,14 +135,14 @@ function multiTenantDecision(
 }
 
 // Representative own-realm RESOURCES per realm/role (the ALLOW positive controls).
-const SYSTEMS_ADMIN_PROBE = { gw: 'snapdragon-fe-gateway' as Gateway, path: '/admin/usage' };
-const SYSTEMS_MOD_PROBE   = { gw: 'snapdragon-be-gateway' as Gateway, path: '/api/v1/pleroma/admin/statuses' };
-const SYSTEMS_USER_PROBE  = { gw: 'snapdragon-be-gateway' as Gateway, path: '/api/v1/timelines/home' };
-const GAMES_ADMIN_PROBE   = { gw: 'snapdragon-fe-gateway' as Gateway, path: '/games/admin/sessions' };       // systems ROLE_GAMES_ADMIN
-const GAMES_API_PROBE     = { gw: 'snapdragon-be-gateway' as Gateway, path: '/games/api/admin/role-grants' }; // systems ROLE_GAMES_ADMIN
-const FORUM_USER_PROBE    = { gw: 'snapdragon-fe-gateway' as Gateway, path: '/bff/forum/topics' };            // ROLE_FORUM floor
-const FORUM_MOD_PROBE     = { gw: 'snapdragon-fe-gateway' as Gateway, path: '/bff/forum/moderation/queue' };  // ROLE_FORUM_MOD
-const FORUM_ADMIN_PROBE   = { gw: 'snapdragon-fe-gateway' as Gateway, path: '/bff/forum/admin/settings' };    // ROLE_ADMIN
+const SYSTEMS_ADMIN_PROBE = { gw: 'hugmesh-fe-gateway' as Gateway, path: '/admin/usage' };
+const SYSTEMS_MOD_PROBE   = { gw: 'hugmesh-be-gateway' as Gateway, path: '/api/v1/pleroma/admin/statuses' };
+const SYSTEMS_USER_PROBE  = { gw: 'hugmesh-be-gateway' as Gateway, path: '/api/v1/timelines/home' };
+const GAMES_ADMIN_PROBE   = { gw: 'hugmesh-fe-gateway' as Gateway, path: '/games/admin/sessions' };       // systems ROLE_GAMES_ADMIN
+const GAMES_API_PROBE     = { gw: 'hugmesh-be-gateway' as Gateway, path: '/games/api/admin/role-grants' }; // systems ROLE_GAMES_ADMIN
+const FORUM_USER_PROBE    = { gw: 'hugmesh-fe-gateway' as Gateway, path: '/bff/forum/topics' };            // ROLE_FORUM floor
+const FORUM_MOD_PROBE     = { gw: 'hugmesh-fe-gateway' as Gateway, path: '/bff/forum/moderation/queue' };  // ROLE_FORUM_MOD
+const FORUM_ADMIN_PROBE   = { gw: 'hugmesh-fe-gateway' as Gateway, path: '/bff/forum/admin/settings' };    // ROLE_ADMIN
 
 // ─────────────────────────────────────────────────────────────────────────────
 // (a) + DENY isolation — the SYSTEMS ↔ FORUM realm pair
@@ -260,7 +260,7 @@ test.describe('cross-realm matrix: SYSTEMS ↔ GAMES (independent Casdoor)', () 
 
   // (b) DENY isolation — the reverse direction: a SYSTEMS identity carries NO
   //     games-NATIVE role; even the synced games admin is materialized as a games
-  //     Casdoor ROW (owned by snapdragon-actions/e2e), NOT a token bleed.
+  //     Casdoor ROW (owned by hugmesh-actions/e2e), NOT a token bleed.
   test('(b) DENY: a systems identity carries no games-native role into the games realm '
     + '(the synced admin is a games ROW, not a systems-token claim) '
     + tags({ layer: 'casdoor' }), async () => {
@@ -302,7 +302,7 @@ test.describe('cross-realm matrix: ROLE_SUPERADMIN reach where designed', () => 
     + tags({ role: 'ROLE_SUPERADMIN', layer: 'gateway' }), async () => {
     const sa = effectiveSystemsRoles(systemsUser('e2e-superadmin'));
     expect(sa).toEqual(['ROLE_SUPERADMIN']);
-    expect(gatewayDecision('snapdragon-be-gateway', SYSTEMS_USER_PROBE.path, sa),
+    expect(gatewayDecision('hugmesh-be-gateway', SYSTEMS_USER_PROBE.path, sa),
       'a bare ROLE_SUPERADMIN holds no ROLE_USER on the public floor').toBe('DENY');
   });
 });

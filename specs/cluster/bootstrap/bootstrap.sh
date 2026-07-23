@@ -1,7 +1,7 @@
 #!/bin/bash
-# bootstrap.sh — install ArgoCD + the Snapdragon app-of-apps on the cluster.
+# bootstrap.sh — install ArgoCD + the HugMesh app-of-apps on the cluster.
 # Runs on the pki control-plane node (invoked by keys-provision when
-# snapdragon.gitops.enabled=true, or by hand). Idempotent.
+# hugmesh.gitops.enabled=true, or by hand). Idempotent.
 set -euo pipefail
 
 CLUSTER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,8 +9,8 @@ export KUBECONFIG="${KUBECONFIG:-/etc/kubernetes/admin.conf}"
 
 ARGOCD_VERSION="${ARGOCD_VERSION:-stable}"
 ARGOCD_NS="${ARGOCD_NS:-devops}"
-REPO="${SNAPDRAGON_GITOPS_REPO:-https://github.com/Snapdragon-Systems/snapdragon-generator.git}"
-REV="${SNAPDRAGON_GITOPS_REV:-main}"
+REPO="${HUGMESH_GITOPS_REPO:-https://github.com/Snapdragon-Systems/hugmesh-generator.git}"
+REV="${HUGMESH_GITOPS_REV:-main}"
 
 command -v kubectl >/dev/null || { echo "kubectl not found" >&2; exit 1; }
 kubectl version >/dev/null 2>&1 || { echo "no reachable cluster (KUBECONFIG=${KUBECONFIG})" >&2; exit 1; }
@@ -48,7 +48,7 @@ echo "==> Waiting for ArgoCD to be ready"
 kubectl -n "${ARGOCD_NS}" rollout status deploy/argocd-repo-server --timeout=300s || true
 
 # ── ArgoCD repository credential (PRIVATE GitOps repo) ─────────────
-# snapdragon-generator is a PRIVATE GitHub repo, so ArgoCD's repo-server needs a
+# hugmesh-generator is a PRIVATE GitHub repo, so ArgoCD's repo-server needs a
 # credential or EVERY git-path Application (vault, casdoor, harbor-provision,
 # forgejo, the app-of-apps itself) fails to sync with "authentication required:
 # Repository not found". Register it HERE — BEFORE the app-of-apps apply below —
@@ -66,7 +66,7 @@ kubectl -n "${ARGOCD_NS}" rollout status deploy/argocd-repo-server --timeout=300
 # A PUBLIC fork that needs no credential opts out with ARGOCD_REPO_PUBLIC=1.
 if [ -n "${ARGOCD_REPO_TOKEN:-}" ]; then
     echo "==> Registering ArgoCD repo credential for ${REPO} (from \$ARGOCD_REPO_TOKEN, never printed)"
-    kubectl -n "${ARGOCD_NS}" create secret generic snapdragon-generator-repo \
+    kubectl -n "${ARGOCD_NS}" create secret generic hugmesh-generator-repo \
         --from-literal=type=git \
         --from-literal=url="${REPO}" \
         --from-literal=username=x-access-token \
@@ -78,12 +78,12 @@ elif [ "${ARGOCD_REPO_PUBLIC:-0}" = "1" ]; then
     echo "==> ARGOCD_REPO_PUBLIC=1 — treating ${REPO} as PUBLIC; registering NO ArgoCD repository credential"
 else
     echo "FATAL: ARGOCD_REPO_TOKEN not set; the private repo ${REPO} needs an ArgoCD repository credential or every git-path Application (vault, casdoor, harbor-provision, forgejo, app-of-apps) will fail to sync with 'authentication required: Repository not found'." >&2
-    echo "       Provision it the house way: write a fine-grained read-only GitHub PAT (repo:read on snapdragon-generator only) to the offline KEYS USB at KEYS/gitops/repo-token (same custody as vault/token); keys-provision exports it as ARGOCD_REPO_TOKEN before running this script. For a PUBLIC fork that needs no credential, re-run with ARGOCD_REPO_PUBLIC=1." >&2
+    echo "       Provision it the house way: write a fine-grained read-only GitHub PAT (repo:read on hugmesh-generator only) to the offline KEYS USB at KEYS/gitops/repo-token (same custody as vault/token); keys-provision exports it as ARGOCD_REPO_TOKEN before running this script. For a PUBLIC fork that needs no credential, re-run with ARGOCD_REPO_PUBLIC=1." >&2
     exit 1
 fi
 
 echo "==> Applying root app-of-apps (ns=${ARGOCD_NS} repo=${REPO} rev=${REV})"
-sed -e "s#repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git#repoURL: ${REPO}#" \
+sed -e "s#repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git#repoURL: ${REPO}#" \
     -e "s#targetRevision: main#targetRevision: ${REV}#" \
     "${CLUSTER_DIR}/app-of-apps.yaml" | kubectl apply -f -
 
@@ -100,7 +100,7 @@ apiVersion: v1
 kind: Endpoints
 metadata:
   name: headscale
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
 subsets:
   - addresses:
       - ip: ${PKI_IP}
@@ -114,8 +114,8 @@ fi
 
 # ── LAN wildcard DNS — inject the ingress node IP (ENV=test only) ──────────────
 # The lan-dns CoreDNS resolver answers *.<domain> with an ingress node's LAN IP.
-# WHICH node depends on RELEASE_STATE (baked at /etc/snapdragon/release-state,
-# mirroring the /etc/snapdragon/cluster-domain bake):
+# WHICH node depends on RELEASE_STATE (baked at /etc/hugmesh/release-state,
+# mirroring the /etc/hugmesh/cluster-domain bake):
 #   * public  -> the BACKEND node (the router's 80/443 target; the public
 #     ingress-nginx, apps/10-ingress-nginx.yaml, is pinned there).
 #   * internal (DEFAULT) -> the PKI node instead. gate_env_apps() prunes
@@ -130,7 +130,7 @@ fi
 # and re-patches the live IP every run.
 echo "==> lan-dns wildcard resolver (ingress node IP; gated on RELEASE_STATE)"
 RELEASE_STATE="internal"
-[ -r /etc/snapdragon/release-state ] && RELEASE_STATE="$(cat /etc/snapdragon/release-state 2>/dev/null || echo internal)"
+[ -r /etc/hugmesh/release-state ] && RELEASE_STATE="$(cat /etc/hugmesh/release-state 2>/dev/null || echo internal)"
 BACKEND_IP="$(kubectl get node -l snapdragon.systems/backend=true -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
 [ -n "${BACKEND_IP}" ] || BACKEND_IP="$(kubectl get node "$(hostname)" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)"
 if [ "${RELEASE_STATE}" = "public" ]; then

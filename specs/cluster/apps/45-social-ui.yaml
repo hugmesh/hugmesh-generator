@@ -1,19 +1,19 @@
-# snapdragon-social-ui — Matrix + Mastodon Angular micro-frontends, served at
-# /social and federated into the snapdragon.systems host. Frontend Pis.
+# hugmesh-social-ui — Matrix + Mastodon Angular micro-frontends, served at
+# /social and federated into the hugmesh.systems host. Frontend Pis.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: snapdragon-social-ui
+  name: hugmesh-social-ui
   namespace: devops
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/social-ui
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-frontend
+    namespace: hugmesh-frontend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

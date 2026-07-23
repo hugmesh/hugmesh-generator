@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # test-casdoor-jwt-no-preferred-username.sh — OFFLINE account-takeover regression
-# lock for the snapdragon (systems) Casdoor realm. [2026-07-16]
+# lock for the hugmesh (systems) Casdoor realm. [2026-07-16]
 #
 # WHAT THIS GUARDS, and WHY it is a security gate (not cosmetics):
 #   user-bff historically folded an inbound token's `preferred_username` claim
@@ -8,7 +8,7 @@
 #   controls that claim collide with / take over another user's account. user-bff
 #   PR #124 removes that fold STRUCTURALLY. This test locks the COMPLEMENTARY
 #   config-level mitigation that ALSO holds the vector shut today: the platform's
-#   snapdragon-realm OAuth2 apps are `tokenFormat=JWT-Custom` with an allow-list
+#   hugmesh-realm OAuth2 apps are `tokenFormat=JWT-Custom` with an allow-list
 #   (JWT_CUSTOM_TOKEN_FIELDS / JWT_CUSTOM_TOKEN_ATTRIBUTES in
 #   specs/cluster/manifests/casdoor/init-job.yaml) that emits the identity as
 #   `name` and NEVER serializes a `preferred_username`.
@@ -25,7 +25,7 @@
 # same absence at runtime, but SKIPS on CI boxes without a docker/podman runtime).
 # This script is pure static file inspection — no container, no network, no swap.
 #
-# SCOPE: the `snapdragon` systems realm ONLY (specs/cluster/manifests/casdoor/).
+# SCOPE: the `hugmesh` systems realm ONLY (specs/cluster/manifests/casdoor/).
 # The `threewizards` games realm (specs/cluster/manifests/casdoor-games/) is a
 # SEPARATE realm that deliberately uses plain `tokenFormat: JWT` and is EXEMPT —
 # it is not consumed by user-bff's identity-key derivation.
@@ -41,7 +41,7 @@ P=0; F=0
 ok(){  echo "  PASS $*"; P=$((P+1)); }
 bad(){ echo "  FAIL $*"; F=$((F+1)); }
 
-echo "== casdoor JWT-Custom no-preferred_username static lock (snapdragon realm) =="
+echo "== casdoor JWT-Custom no-preferred_username static lock (hugmesh realm) =="
 
 if [ ! -f "${INIT_JOB}" ]; then
   echo "FAIL: ${INIT_JOB} not found (repo layout changed?)"
@@ -91,7 +91,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Check 3: NO snapdragon-realm app may use plain `tokenFormat: JWT` (which would
+# Check 3: NO hugmesh-realm app may use plain `tokenFormat: JWT` (which would
 # serialize the full user object incl. preferred_username AND the secrets D6+D8
 # strips). Only `JWT-Custom` is allowed here. The value pattern `"JWT"` (closing
 # quote right after JWT) matches plain JWT and does NOT match `"JWT-Custom"`.
@@ -99,10 +99,10 @@ fi
 # ---------------------------------------------------------------------------
 PLAIN_JWT="$(grep -rnE '"tokenFormat"[[:space:]]*:[[:space:]]*"JWT"' "${CASDOOR_DIR}" 2>/dev/null || true)"
 if [ -n "${PLAIN_JWT}" ]; then
-  bad "a snapdragon-realm app uses plain tokenFormat=JWT (full-user serialization re-opens preferred_username + the D6+D8 secret leak):"
+  bad "a hugmesh-realm app uses plain tokenFormat=JWT (full-user serialization re-opens preferred_username + the D6+D8 secret leak):"
   printf '%s\n' "${PLAIN_JWT}" | sed 's/^/         /'
 else
-  ok "no snapdragon-realm app uses plain tokenFormat=JWT (JWT-Custom allow-list intact)"
+  ok "no hugmesh-realm app uses plain tokenFormat=JWT (JWT-Custom allow-list intact)"
 fi
 
 echo ""

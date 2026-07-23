@@ -3,7 +3,7 @@
 # postgresql JDBC + Postgres-only Liquibase DDL) — matches the platform's
 # zero-MySQL norm, no exception needed.
 #
-# Lives in snapdragon-pki (shared control-plane namespace: harbor/vault/casdoor/
+# Lives in hugmesh-pki (shared control-plane namespace: harbor/vault/casdoor/
 # route-access-db/pki-gateway/superadmin-gateway all co-reside here), created
 # idempotently by apps/06-vault-pki.yaml / apps/20-gateway-pki.yaml. NO dedicated
 # namespace.yaml/network-policy.yaml here — tier-ingress.yaml already admits
@@ -21,8 +21,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: headwind-db
-  namespace: snapdragon-pki
-  labels: { app.kubernetes.io/name: headwind-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/name: headwind-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over an RWO PVC (phpbb-db.yaml precedent)
@@ -83,18 +83,18 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: headwind-db
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels: { app.kubernetes.io/name: headwind-db }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 5Gi } }
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: headwind-db
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels: { app.kubernetes.io/name: headwind-db }
 spec:
   type: ClusterIP

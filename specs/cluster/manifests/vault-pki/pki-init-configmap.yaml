@@ -2,7 +2,7 @@
 # image → the `vault` CLI is on PATH). Idempotent: safe to re-run / re-sync under
 # ArgoCD. Enables an intermediate PKI engine chained to the SAME cluster CA that
 # gen-keystores.sh produced (certs/cluster-ca.{crt,key}) — so certs Vault issues
-# validate against the existing truststore (kube-system/snapdragon-truststore +
+# validate against the existing truststore (kube-system/hugmesh-truststore +
 # the per-service truststores), and creates one issuing role per Java app.
 #
 # The cluster CA cert+key are mounted at /ca (tls.crt/tls.key) from the k8s
@@ -14,7 +14,7 @@ kind: ConfigMap
 metadata:
   name: vault-pki-init
   namespace: vault
-  labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: secrets }
+  labels: { app.kubernetes.io/part-of: hugmesh.systems, snapdragon.systems/tier: secrets }
 data:
   init-pki.sh: |
     #!/bin/sh
@@ -25,7 +25,7 @@ data:
     # Vault has NO static dev "root" token, so there is no insecure default here.
     export VAULT_ADDR="${VAULT_ADDR:-https://vault.vault.svc.cluster.local:8200}"
     export VAULT_TOKEN="${VAULT_TOKEN:-}"
-    DOMAIN="${CLUSTER_DOMAIN:-snapdragon.systems}"
+    DOMAIN="${CLUSTER_DOMAIN:-hugmesh.systems}"
     PKI="pki_int"
 
     # ── Crypto agility knobs (override via the Job env) ────────────────
@@ -76,7 +76,7 @@ data:
       echo "      For production, provision the cluster CA from the USB KEYS stick so issued" >&2
       echo "      certs chain to the same anchor as the offline gen-keystores.sh truststore." >&2
       vault write "${PKI}/root/generate/internal" \
-        common_name="${BRAND:-snapdragon} Vault Intermediate CA" ttl=43800h \
+        common_name="${BRAND:-hugmesh} Vault Intermediate CA" ttl=43800h \
         key_type="${PKI_KEY_TYPE}" key_bits="${PKI_KEY_BITS}" signature_bits="${PKI_SIG_BITS}" >/dev/null
     fi
 
@@ -90,7 +90,7 @@ data:
     #    akkoma-proxy / tuwunel-proxy = the homeserver mTLS PROXY sidecars
     #    (manifests/akkoma|tuwunel) — SERVER certs only (the be-gateway/mod-bff/
     #    admin-bff present THEIR existing client certs to these). They are NOT
-    #    snapdragon-* prefixed (they front the non-JVM homeservers), so the
+    #    hugmesh-* prefixed (they front the non-JVM homeservers), so the
     #    allowed_domains below covers the bare + .svc.cluster.local SANs.
     #
     #    *-db = the per-DB Postgres SERVER certs (DB-hardening PR-C1, SHIPS DARK).
@@ -104,8 +104,8 @@ data:
     #    server_flag+client_flag so the same cert can serve AND (future) present a
     #    client identity; the worker enforces ssl.CERT_REQUIRED against ca.crt.
     #    Handled separately below (not in the generic loop): the real Service is
-    #    named snapdragon-media-poisoner, not media-poisoner, so
-    #    media-poisoner-externalsecrets.yaml requests snapdragon-media-poisoner
+    #    named hugmesh-media-poisoner, not media-poisoner, so
+    #    media-poisoner-externalsecrets.yaml requests hugmesh-media-poisoner
     #    SANs the generic "${app},${app}.svc.cluster.local" pattern doesn't cover.
     #    harbor = the Harbor registry's expose.tls server cert (manifests/harbor
     #    via apps/03a-harbor.yaml) — the chart's bundled nginx front-end
@@ -114,13 +114,13 @@ data:
     #    real Service name is harbor-core, not harbor, so harbor-externalsecrets.yaml
     #    requests harbor-core SANs the generic "${app},${app}.svc.cluster.local"
     #    pattern doesn't cover.
-    for app in snapdragon-pki-gateway snapdragon-be-gateway snapdragon-fe-gateway \
-               snapdragon-superadmin-gateway \
-               snapdragon-api snapdragon-admin-bff-api \
-               snapdragon-mod-bff-api snapdragon-user-bff-api \
-               snapdragon-forum-bff-api \
-               snapdragon-wiki-bff-api \
-               snapdragon-federation-api \
+    for app in hugmesh-pki-gateway hugmesh-be-gateway hugmesh-fe-gateway \
+               hugmesh-superadmin-gateway \
+               hugmesh-api hugmesh-admin-bff-api \
+               hugmesh-mod-bff-api hugmesh-user-bff-api \
+               hugmesh-forum-bff-api \
+               hugmesh-wiki-bff-api \
+               hugmesh-federation-api \
                route-access-db admin-bff-db mod-bff-db user-bff-db \
                federation-db forum-bff-db wiki-bff-db \
                akkoma-proxy tuwunel-proxy; do
@@ -135,7 +135,7 @@ data:
 
     echo "==> role ${PKI}/roles/media-poisoner"
     vault write "${PKI}/roles/media-poisoner" \
-      allowed_domains="media-poisoner,snapdragon-media-poisoner,snapdragon-media-poisoner.snapdragon-backend,media-poisoner.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
+      allowed_domains="media-poisoner,hugmesh-media-poisoner,hugmesh-media-poisoner.hugmesh-backend,media-poisoner.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
       allow_subdomains=true allow_glob_domains=true allow_bare_domains=true \
       allow_localhost=false server_flag=true client_flag=true \
       key_type="${PKI_KEY_TYPE}" key_bits="${PKI_KEY_BITS}" signature_bits="${PKI_SIG_BITS}" \
@@ -143,7 +143,7 @@ data:
 
     echo "==> role ${PKI}/roles/harbor"
     vault write "${PKI}/roles/harbor" \
-      allowed_domains="harbor,harbor-core,harbor-core.snapdragon-pki,harbor.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
+      allowed_domains="harbor,harbor-core,harbor-core.hugmesh-pki,harbor.svc.cluster.local,svc.cluster.local,${DOMAIN}" \
       allow_subdomains=true allow_glob_domains=true allow_bare_domains=true \
       allow_localhost=false server_flag=true client_flag=true \
       key_type="${PKI_KEY_TYPE}" key_bits="${PKI_KEY_BITS}" signature_bits="${PKI_SIG_BITS}" \

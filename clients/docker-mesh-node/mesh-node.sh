@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# Snapdragon mesh-node — LINUX onboarding (FD-09). Make THIS machine a background
-# Snapdragon mesh node via Docker, using LOCAL FILE KEYS + a one-line Casdoor login.
+# HugMesh mesh-node — LINUX onboarding (FD-09). Make THIS machine a background
+# HugMesh mesh node via Docker, using LOCAL FILE KEYS + a one-line Casdoor login.
 # No OS flash. Mirrors mesh-node.ps1 (Windows). See README.md.
 #
 # Usage:
@@ -10,8 +10,8 @@
 # The keys dir mirrors the KEYS-USB layout (tailscale/authkey, login-server,
 # casdoor.json, role) the appliance images consume.
 set -eu
-IMAGE="${SNAP_MESH_IMAGE:-snapdragon/mesh-node:latest}"
-NAME="snapdragon-mesh-node"
+IMAGE="${SNAP_MESH_IMAGE:-hugmesh/mesh-node:latest}"
+NAME="hugmesh-mesh-node"
 KEYS=""; ROLE=""; HOST=""; BUILD=0; STOP=0; LOGS=0
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -48,7 +48,7 @@ docker rm -f "$NAME" >/dev/null 2>&1 || true
 # shellcheck disable=SC2086
 docker run -d --name "$NAME" --restart unless-stopped \
     -v "$KEYS_ABS:/keys:ro" \
-    -v snapdragon-meshnode-state:/var/lib/tailscale \
+    -v hugmesh-meshnode-state:/var/lib/tailscale \
     $TUN_ARGS \
     ${ROLE:+-e SNAP_ROLE="$ROLE"} \
     ${HOST:+-e SNAP_HOSTNAME="$HOST"} \

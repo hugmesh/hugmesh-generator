@@ -1,7 +1,7 @@
 # forum-admin-sync — reconciles Casdoor ROLE_ADMIN / ROLE_FORUM_MOD / ROLE_FORUM
-# membership into phpBB groups via the snapdragon/forum-api extension admin
+# membership into phpBB groups via the hugmesh/forum-api extension admin
 # endpoints over HTTP (ensureUser / setUserGroups / suspendUser). Runs IN the
-# isolated snapdragon-forum namespace (so it is admitted to phpbb by the
+# isolated hugmesh-forum namespace (so it is admitted to phpbb by the
 # network-policy same-ns podSelector). Mirrors the akkoma/tuwunel admin-sync
 # pattern but talks HTTP-to-extension (phpBB has no pleroma_ctl equivalent).
 #
@@ -28,46 +28,46 @@
 # crash-loops); the ROLE_ADMIN provisioning invariant is still attempted so a
 # freshly-synced cluster has admins. Flip true after that on-cluster validation.
 #
-# ENDPOINT CONTRACT (pinned to the SHIPPED snapdragon/forum-api extension —
+# ENDPOINT CONTRACT (pinned to the SHIPPED hugmesh/forum-api extension —
 # config/routing.yml + admin_controller.php):
-#   PUT /api/v1/snapdragon/users/{sub}/groups   (ROLE_ADMIN)
+#   PUT /api/v1/hugmesh/users/{sub}/groups   (ROLE_ADMIN)
 #   body GroupAssignment { casdoorSubject, group, roles[], lastSynced } -> 204.
 # converge_groups_for_sub() lazily ENSURES the user, so no separate ensure call is
 # needed. Auth = Casdoor JWT sent as BOTH `Authorization: Bearer` AND
-# `X-Snapdragon-JWT` (the extension enforces dual-header agreement when both are
+# `X-HugMesh-JWT` (the extension enforces dual-header agreement when both are
 # present, and apache only passes Authorization through via CGIPassAuth).
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: forum-admin-sync-script
-  namespace: snapdragon-forum
-  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-forum
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   sync.py: |
     #!/usr/bin/env python3
-    """Reconcile Casdoor forum roles -> phpBB groups via the snapdragon/forum-api
+    """Reconcile Casdoor forum roles -> phpBB groups via the hugmesh/forum-api
     extension admin endpoints. Pure stdlib (urllib) — no extra packages.
 
     DECLARATIVE de-provisioning: computes the target group per subject, then has
-    the extension converge — PUT /api/v1/snapdragon/users/{sub}/groups
+    the extension converge — PUT /api/v1/hugmesh/users/{sub}/groups
     (GroupAssignment{casdoorSubject,group,roles,lastSynced} -> 204; the SHIPPED
-    snapdragon/forum-api contract, config/routing.yml + admin_controller.php).
+    hugmesh/forum-api contract, config/routing.yml + admin_controller.php).
     converge_groups_for_sub() lazily ensures the user and REMOVES any
     forum-managed group not in the target. ROLE_ADMIN -> ADMINISTRATORS is
     enforced every tick.
 
     AUTH: the extension is fail-closed JWT-only. This job mints a Casdoor
     client-credentials token and sends it as BOTH `Authorization: Bearer` and
-    `X-Snapdragon-JWT` (dual-header agreement). Whether that app token carries
+    `X-HugMesh-JWT` (dual-header agreement). Whether that app token carries
     admin authority through the extension's server-side re-derivation is the
     open on-cluster validation gating FORUM_EXTERNAL_ENABLED (see the manifest
     header)."""
     import datetime, json, os, base64, urllib.parse, urllib.request, urllib.error
 
-    CASDOOR  = os.environ.get("CASDOOR_URL", "http://casdoor.snapdragon-pki.svc.cluster.local:8000")
-    ORG      = os.environ.get("CASDOOR_ORG", "snapdragon")
-    PHPBB    = os.environ.get("PHPBB_API", "http://phpbb.snapdragon-forum.svc.cluster.local:80")
+    CASDOOR  = os.environ.get("CASDOOR_URL", "http://casdoor.hugmesh-pki.svc.cluster.local:8000")
+    ORG      = os.environ.get("CASDOOR_ORG", "hugmesh")
+    PHPBB    = os.environ.get("PHPBB_API", "http://phpbb.hugmesh-forum.svc.cluster.local:80")
     ENABLED  = os.environ.get("FORUM_EXTERNAL_ENABLED", "false").lower() == "true"
     # Casdoor role -> phpBB target group. Order matters: ADMIN is the strongest.
     ROLE_GROUP = [
@@ -136,7 +136,7 @@ data:
     # must not wedge the PostSync hook.
     try:
         jwt = mint_token()
-        auth_headers = {"Authorization": "Bearer " + jwt, "X-Snapdragon-JWT": jwt}
+        auth_headers = {"Authorization": "Bearer " + jwt, "X-HugMesh-JWT": jwt}
     except Exception as e:
         print(f"forum-admin-sync: WARN cannot mint Casdoor client-credentials token ({e}) "
               f"— skipping all phpBB writes this tick")
@@ -151,7 +151,7 @@ data:
         if not ENABLED and group != "ADMINISTRATORS":
             continue
         try:
-            _send(f"{PHPBB}/api/v1/snapdragon/users/{urllib.parse.quote(sub, safe='')}/groups",
+            _send(f"{PHPBB}/api/v1/hugmesh/users/{urllib.parse.quote(sub, safe='')}/groups",
                   {"casdoorSubject": sub, "group": group, "roles": [role], "lastSynced": now},
                   method="PUT", headers=auth_headers)
             applied += 1
@@ -165,8 +165,8 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: forum-admin-sync
-  namespace: snapdragon-forum
-  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-forum
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.systems }
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -188,9 +188,9 @@ spec:
           image: python:3.12-alpine
           command: ["python3", "/script/sync.py"]
           env:
-            - { name: CASDOOR_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000" }
-            - { name: CASDOOR_ORG, value: "snapdragon" }
-            - { name: PHPBB_API,   value: "http://phpbb.snapdragon-forum.svc.cluster.local:80" }
+            - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
+            - { name: CASDOOR_ORG, value: "hugmesh" }
+            - { name: PHPBB_API,   value: "http://phpbb.hugmesh-forum.svc.cluster.local:80" }
             # DARK (false) — the endpoint contract is pinned to the shipped
             # extension, but flipping this needs the on-cluster proof that a
             # Casdoor client-credentials token re-derives ROLE_ADMIN in the
@@ -218,8 +218,8 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: forum-admin-sync-cron
-  namespace: snapdragon-forum
-  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-forum
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   schedule: "*/5 * * * *"
   concurrencyPolicy: Forbid
@@ -244,9 +244,9 @@ spec:
               image: python:3.12-alpine
               command: ["python3", "/script/sync.py"]
               env:
-                - { name: CASDOOR_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000" }
-                - { name: CASDOOR_ORG, value: "snapdragon" }
-                - { name: PHPBB_API,   value: "http://phpbb.snapdragon-forum.svc.cluster.local:80" }
+                - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
+                - { name: CASDOOR_ORG, value: "hugmesh" }
+                - { name: PHPBB_API,   value: "http://phpbb.hugmesh-forum.svc.cluster.local:80" }
                 # DARK — same gate as the PostSync Job above (client-credentials
                 # admin-authority proof pending; contract itself is pinned).
                 - { name: FORUM_EXTERNAL_ENABLED, value: "false" }

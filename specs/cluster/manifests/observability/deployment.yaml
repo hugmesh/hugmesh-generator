@@ -1,5 +1,5 @@
 # Observability (Uptrace + OpenTelemetry Collector). Admin-only, reached through
-# the snapdragon-pki gateway (ROLE_ADMIN). Every workload in every namespace
+# the hugmesh-pki gateway (ROLE_ADMIN). Every workload in every namespace
 # registers telemetry here: the OTel Collector DaemonSet tails each pod's logs
 # (tagged with its namespace) and receives OTLP traces/metrics, exporting all of
 # it to Uptrace (which stores in the shared ClickHouse). Admins grant users
@@ -7,7 +7,7 @@
 ---
 apiVersion: v1
 kind: Namespace
-metadata: { name: observability, labels: { app.kubernetes.io/part-of: snapdragon.systems, snapdragon.systems/tier: observability } }
+metadata: { name: observability, labels: { app.kubernetes.io/part-of: hugmesh.systems, snapdragon.systems/tier: observability } }
 ---
 # Uptrace backing Postgres (metadata; telemetry lives in ClickHouse).
 apiVersion: apps/v1
@@ -19,7 +19,7 @@ spec:
   template:
     metadata: { labels: { app: uptrace-pg } }
     spec:
-      # uptrace-pg-data is snapdragon-local — pin to the x86_64 host that holds
+      # uptrace-pg-data is hugmesh-local — pin to the x86_64 host that holds
       # the data disks so the PV mounts (it previously had no selector).
       nodeSelector: { kubernetes.io/arch: amd64 }
       securityContext:
@@ -53,20 +53,20 @@ data:
     listen:
       http: { addr: ":14318" }    # UI + API + OTLP/HTTP
       grpc: { addr: ":14317" }    # OTLP/gRPC
-    # Telemetry stored in the shared ClickHouse (snapdragon-backend).
+    # Telemetry stored in the shared ClickHouse (hugmesh-backend).
     ch:
-      dsn: "clickhouse://snap:${CLICKHOUSE_PASSWORD}@clickhouse.snapdragon-backend.svc.cluster.local:9000/uptrace?sslmode=disable"
+      dsn: "clickhouse://snap:${CLICKHOUSE_PASSWORD}@clickhouse.hugmesh-backend.svc.cluster.local:9000/uptrace?sslmode=disable"
     pg:
       dsn: "postgres://uptrace:${UPTRACE_PG_PASSWORD}@uptrace-pg:5432/uptrace?sslmode=disable"
     projects:
       - id: 1
-        name: snapdragon
+        name: hugmesh
         token: ${UPTRACE_PROJECT_TOKEN}
     # Auth is delegated to Casdoor via the pki gateway (OIDC); see docs.
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: uptrace, namespace: observability, labels: { app: uptrace, app.kubernetes.io/part-of: snapdragon.systems } }
+metadata: { name: uptrace, namespace: observability, labels: { app: uptrace, app.kubernetes.io/part-of: hugmesh.systems } }
 spec:
   replicas: 1
   selector: { matchLabels: { app: uptrace } }

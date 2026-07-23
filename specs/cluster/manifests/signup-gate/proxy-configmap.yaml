@@ -54,8 +54,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: signup-gate-proxy
-  namespace: snapdragon-pki
-  labels: { app: signup-gate, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: signup-gate, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   proxy.py: |
     #!/usr/bin/env python3
@@ -76,16 +76,16 @@ data:
     # --- config (env; no secrets in code) ------------------------------------
     LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "8080"))
     CASDOOR_URL = os.environ.get(
-        "CASDOOR_URL", "http://casdoor.snapdragon-pki.svc.cluster.local:8000"
+        "CASDOOR_URL", "http://casdoor.hugmesh-pki.svc.cluster.local:8000"
     ).rstrip("/")
     # federation availability endpoint base (INTERNAL/ROLE_SERVICE). Call the
     # Service DIRECTLY (resource-server JWT validation) — not via the be-gateway,
     # which would add a second auth hop. Requires a pki->backend NetworkPolicy.
     FEDERATION_URL = os.environ.get(
         "FEDERATION_URL",
-        "https://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080",
+        "https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080",
     ).rstrip("/")
-    CASDOOR_ORG = os.environ.get("CASDOOR_ORG", "snapdragon")
+    CASDOOR_ORG = os.environ.get("CASDOOR_ORG", "hugmesh")
     CLIENT_ID = os.environ.get("CASDOOR_CLIENT_ID", "app-signup-gate")
     CLIENT_SECRET = os.environ.get("CASDOOR_CLIENT_SECRET", "")
     WEBHOOK_SECRET = os.environ.get("WEBHOOK_SHARED_SECRET", "")

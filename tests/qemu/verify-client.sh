@@ -66,14 +66,14 @@ command -v ssh-keygen >/dev/null || die "need ssh-keygen"
 
 # ── Resolve the .img (mirror launch-x86.sh autodetect) ─────────────
 if [ -z "${IMG}" ]; then
-    for c in "${WORK_DIR}"/snapdragon-x86-*-"${ROLE}"-*.img "${WORK_DIR}"/snapdragon-x86-*.img; do
+    for c in "${WORK_DIR}"/hugmesh-x86-*-"${ROLE}"-*.img "${WORK_DIR}"/hugmesh-x86-*.img; do
         c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { IMG="${c}"; break; }
     done
 fi
 if [ -z "${IMG}" ] || [ ! -f "${IMG}" ]; then
     ${DRY_RUN} || die "no client .img found in ${WORK_DIR} (build one, or pass --img). role=${ROLE}"
-    IMG="${IMG:-<none-yet:${WORK_DIR}/snapdragon-x86-amd64-${ROLE}-${PERSON_ROLE}-*.img>}"
+    IMG="${IMG:-<none-yet:${WORK_DIR}/hugmesh-x86-amd64-${ROLE}-${PERSON_ROLE}-*.img>}"
     warn "dry-run: no .img resolved — using a placeholder (build it before a real run)"
 fi
 
@@ -196,8 +196,8 @@ while [ "${SECONDS}" -lt "${ssh_deadline}" ]; do
 done
 if ${SSH_OK}; then
     info "SSH up — deep assertions:"
-    got_role="$(ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'cat /etc/snapdragon/identity-role 2>/dev/null' || true)"
-    got_dom="$(ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'head -1 /etc/snapdragon/domains 2>/dev/null' || true)"
+    got_role="$(ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'cat /etc/hugmesh/identity-role 2>/dev/null' || true)"
+    got_dom="$(ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'head -1 /etc/hugmesh/domains 2>/dev/null' || true)"
     got_dm="$(ssh "${SSH_OPTS[@]}" "${SSH_USER}@localhost" 'rc-service display-manager status 2>/dev/null | head -1' || true)"
     [ "${got_role}" = "${PERSON_ROLE}" ] && info "  ✓ identity-role=${got_role}" || warn "  identity-role='${got_role}' (expected ${PERSON_ROLE})"
     [ -n "${got_dom}" ] && info "  ✓ domain marker='${got_dom}'" || warn "  domains marker empty"

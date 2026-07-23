@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-from snapdragon_studio.core.config import (
+from hugmesh_studio.core.config import (
     PLATFORM_DEFAULT_ROLE,
     Domain,
     ImageConfig,
@@ -21,7 +21,7 @@ from snapdragon_studio.core.config import (
     resolve_platform_defaults,
     roles_for_platform,
 )
-from snapdragon_studio.core.worklist import (
+from hugmesh_studio.core.worklist import (
     WORKLIST_SCHEMA,
     WorklistConfig,
     WorklistEntry,

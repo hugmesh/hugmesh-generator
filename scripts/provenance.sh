@@ -53,7 +53,7 @@ cmd="${1:-}"; shift || true
 
 # ── shared arg parse ────────────────────────────────────────────────────────
 REPO_DIR="" BRAND="" ORG="" CLUSTER_DOMAIN="" REPO="" ARCHETYPE=""
-BASE_SHA="" BASE_MODE="" RECIPE_SHA="" GEN_REPO="snapdragon-generator" GEN_COMMIT=""
+BASE_SHA="" BASE_MODE="" RECIPE_SHA="" GEN_REPO="hugmesh-generator" GEN_COMMIT=""
 ENGINE="handlebars" PRODUCED_AT="" KEY="" PUB="" ORIGIN_MESH="" BASE_REF=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -127,7 +127,7 @@ case "$cmd" in
       printf '{\n'
       printf '  "schema": "snapdragon.systems/provenance/v1",\n'
       printf '  "base": {\n'
-      printf '    "repo": "snapdragon-%s",\n' "$(_jesc "$REPO")"
+      printf '    "repo": "hugmesh-%s",\n' "$(_jesc "$REPO")"
       printf '    "commitSha": "%s",\n' "$(_jesc "$BASE_SHA")"
       # Versioned render (I5): base.ref is the tag/sha label the own-mesh base was
       # pulled at. OMITTED when empty so every pre-versioning manifest re-renders
@@ -153,7 +153,7 @@ case "$cmd" in
       printf '    "engine": "%s"\n' "$(_jesc "$ENGINE")"
       printf '  },\n'
       printf '  "generator": {\n'
-      printf '    "producedBy": "snapdragon-generator",\n'
+      printf '    "producedBy": "hugmesh-generator",\n'
       printf '    "runner": "%s",\n' "$(_jesc "$local_runner")"
       printf '    "producedAt": "%s"\n' "$(_jesc "$PRODUCED_AT")"
       printf '  },\n'

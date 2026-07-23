@@ -1,0 +1,16 @@
+# hugmesh-node-storage-reconcile — NODE-STORAGE convergence timer (60s default).
+#
+# The TIMER half of the node-storage reconcile (the OpenRC service runs the agent once at
+# boot; this cron entry re-runs it every 60s). cronie reads /etc/cron.d (the same mechanism
+# provision.sh uses for backups + the device-registry sync). Installed ONLY on nodes that
+# may host attached storage pools.
+#
+# cron has 1-minute granularity, so the floor poll is 60s. The agent is FAIL-CLOSED and
+# idempotent: a failed fetch/verify keeps the last-good cache; a successful one atomically
+# swaps it, bumps last-good, runs provision_storage --pool (idempotent), labels the node +
+# CAS-patches the local-path nodePathMap, and acks the applied generation. The authoritative
+# fast path is the BFF push-with-ack; this pull is the convergence FLOOR for missed pushes /
+# reboots / a freshly-attached disk.
+#
+# Field order: min hour dom month dow user command
+* * * * * root /usr/sbin/hugmesh-node-storage-reconcile >> /var/log/hugmesh-node-storage-reconcile.log 2>&1

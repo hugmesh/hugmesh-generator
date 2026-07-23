@@ -7,17 +7,17 @@ import os
 
 import pytest
 
-from snapdragon_studio.core.config import Domain, ImageConfig, User
-from snapdragon_studio.core.platform_info import HostInfo
-from snapdragon_studio.core import worklist_driver as wd
-from snapdragon_studio.core import build_driver as bd
-from snapdragon_studio.core.worklist_driver import WorklistDriver, key_profile
-from snapdragon_studio.core.worklist import WorklistConfig, WorklistEntry, synthesize
+from hugmesh_studio.core.config import Domain, ImageConfig, User
+from hugmesh_studio.core.platform_info import HostInfo
+from hugmesh_studio.core import worklist_driver as wd
+from hugmesh_studio.core import build_driver as bd
+from hugmesh_studio.core.worklist_driver import WorklistDriver, key_profile
+from hugmesh_studio.core.worklist import WorklistConfig, WorklistEntry, synthesize
 
 
 def host(is_root=True, has_docker=True):
     return HostInfo(os="linux", is_gentoo=True, has_docker=has_docker, has_bash=True,
-                    has_kvm=False, is_root=is_root, builder_image="snapdragon-builder")
+                    has_kvm=False, is_root=is_root, builder_image="hugmesh-builder")
 
 
 def _base(tmp_path):

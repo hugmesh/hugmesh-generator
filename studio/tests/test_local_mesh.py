@@ -17,37 +17,37 @@ import pytest
 # must be set BEFORE the first QApplication is created
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core.local_mesh import (  # noqa: E402  (after the importorskip gate)
+from hugmesh_studio.core.local_mesh import (  # noqa: E402  (after the importorskip gate)
     LocalMeshConfig, LocalMeshNode,
 )
-from snapdragon_studio.core.local_mesh_bootstrap import LocalMeshBootstrap  # noqa: E402
-from snapdragon_studio.core.mesh_node import MeshNode  # noqa: E402
-from snapdragon_studio.core.platform_info import HostInfo  # noqa: E402
-from snapdragon_studio.gui import wizard as wizard_mod  # noqa: E402
-from snapdragon_studio.gui.pages import localmesh as localmesh_mod  # noqa: E402
-from snapdragon_studio.gui.pages import ModePage  # noqa: E402
-from snapdragon_studio.gui.qt import QtWidgets  # noqa: E402
+from hugmesh_studio.core.local_mesh_bootstrap import LocalMeshBootstrap  # noqa: E402
+from hugmesh_studio.core.mesh_node import MeshNode  # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
+from hugmesh_studio.gui.pages import localmesh as localmesh_mod  # noqa: E402
+from hugmesh_studio.gui.pages import ModePage  # noqa: E402
+from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
-                has_kvm=False, is_root=False, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture
@@ -186,7 +186,7 @@ def test_dialog_has_both_mode_tabs(qapp):
 
 
 def test_bootstrap_plan_preview_populates_and_hides_prod_group(qapp):
-    from snapdragon_studio.core import local_mesh_bootstrap as bmod
+    from hugmesh_studio.core import local_mesh_bootstrap as bmod
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     # default test env: the plan preview is rendered and the prod-only group is hidden
     assert bmod.GEN_CLUSTER_SECRETS in dlg.plan_view.toPlainText()
@@ -293,7 +293,7 @@ def test_config_env_maps_the_overlay_vars():
     e = LocalMeshConfig(auth_key="  tskey-abc  ", node_name="n1",
                         login_server="https://hs.example.com").env()
     assert e["TS_AUTHKEY"] == "tskey-abc"                    # trimmed
-    assert e["SNAPDRAGON_NODE_NAME"] == "n1"
+    assert e["HUGMESH_NODE_NAME"] == "n1"
     assert e["TS_EXTRA_ARGS"] == "--accept-routes --login-server=https://hs.example.com"
     # bare config: only the accept-routes default, no node-name / login-server keys
     bare = LocalMeshConfig(auth_key="tskey-x").env()
@@ -316,7 +316,7 @@ def test_stage_writes_authkey_env(tmp_path):
     node._stage()
     env = _read_env(tmp_path / ".env")
     assert env["TS_AUTHKEY"] == "tskey-xyz"
-    assert env["SNAPDRAGON_NODE_NAME"] == "mynode"
+    assert env["HUGMESH_NODE_NAME"] == "mynode"
     assert env["TS_EXTRA_ARGS"] == "--accept-routes --login-server=https://hs.example.com"
 
 
@@ -342,5 +342,5 @@ def _read_env(path):
 
 
 def _stopped():
-    from snapdragon_studio.core.mesh_node import MeshStatus
+    from hugmesh_studio.core.mesh_node import MeshStatus
     return MeshStatus(running=False, detail="not started")

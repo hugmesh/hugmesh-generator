@@ -63,7 +63,7 @@ import re
 
 import pytest
 
-from snapdragon_studio.core.config import (
+from hugmesh_studio.core.config import (
     BUILDER_DEFAULT_POLICIES, BUILDER_DEFAULTS, BUILDER_SCRIPTS, ImageConfig,
     effective_installer_ui, image_class, roles_for_platform,
 )

@@ -6,7 +6,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BRAND="${BRAND:-snapdragon}"
+BRAND="${BRAND:-hugmesh}"
 # Mirror scripts/gen-keystores.sh SERVICES (the Java machine-users that get an
 # mTLS identity keystore).
 EXPECT=("${BRAND}-pki-gateway" "${BRAND}-be-gateway" "${BRAND}-fe-gateway"

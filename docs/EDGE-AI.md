@@ -1,6 +1,6 @@
 # Edge-AI — GPU inference node serving a model API to the mesh
 
-The **edge-AI** capability adds a GPU **inference node** to the Snapdragon mesh: a
+The **edge-AI** capability adds a GPU **inference node** to the HugMesh mesh: a
 node that runs an [Ollama](https://ollama.com)-based inference server and exposes an
 **OpenAI-compatible model API** (`/v1/chat/completions`, `/v1/embeddings`,
 `/v1/models`) to every other node and device — over **Kubernetes** (in-cluster
@@ -59,7 +59,7 @@ The `edge_ai` role defaults `--gpu-driver nvidia` and turns CUDA on; pass an exp
 **In-cluster (k8s).** Any pod calls the ClusterIP Service directly:
 
 ```
-http://snapdragon-edge-ai.snapdragon-inference.svc.cluster.local:11434/v1/chat/completions
+http://hugmesh-edge-ai.hugmesh-inference.svc.cluster.local:11434/v1/chat/completions
 ```
 
 **Tailnet / external.** The `be-gateway` carries a host route `ai.<CLUSTER_DOMAIN>`
@@ -142,7 +142,7 @@ verdicts**. The `edge-ai-analysis` optional service is a thin stateless wrapper
 | `POST /v1/analyze/log/summarize` | `{summary, severity, anomalies[]}` (llama triage) |
 
 It is reached at `https://ai.<domain>/v1/analyze/**` (be-gateway, `ROLE_USER` floor)
-and in-cluster at `http://snapdragon-edge-ai-analysis.snapdragon-inference.svc:8080`.
+and in-cluster at `http://hugmesh-edge-ai-analysis.hugmesh-inference.svc:8080`.
 Tenancy: the gateway-validated `X-Tenant-ID`/`X-User-ID` headers stamp every verdict.
 Config (task→model map, NSFW/abuse thresholds, `moderate-action`) is the
 `edge-ai-analysis` ConfigMap; the stable verdict schema is documented there.
@@ -152,7 +152,7 @@ Config (task→model map, NSFW/abuse thresholds, `moderate-action`) is the
 ./build-x86-host-stage4.sh --role edge_ai --with-edge-ai-analysis
 ```
 
-**This is the Phase-A foundation** ([memory: snapdragon-edge-ai-matrix-vn-characters]):
+**This is the Phase-A foundation** ([memory: hugmesh-edge-ai-matrix-vn-characters]):
 the on-prem hinge that the AIOps consumer (infra logs → `@system` Matrix DM) and the
 avatar vision-moderation hook (→ federation moderation queue) call. Those consumers
 live in the BFF/federation Java repos and land separately.
@@ -160,7 +160,7 @@ live in the BFF/federation Java repos and land separately.
 **Slug:** `edge-ai-analysis`, **DEFAULT-OFF**, `dependsOn: edge-ai` (greyed in the
 console when edge-ai is off). The container is a **separate build artifact** — its
 source is `specs/cluster/manifests/edge-ai-analysis/image/` (FastAPI + Pillow +
-imagehash); build + push `registry.snapdragon.systems/snapdragon/edge-ai-analysis:main`
+imagehash); build + push `registry.hugmesh.systems/hugmesh/edge-ai-analysis:main`
 then select the slug. Keep it deselected until the image is pushed (so no node
 ImagePull-fails). Everything stays on-prem — the wrapper only calls the in-cluster
 Ollama upstream.
@@ -183,7 +183,7 @@ on **both** `build-x86-host-stage4.sh` **and** `build-rpi5-stage4.sh` (unlike
 `edge-ai`/`edge-ai-analysis`, which are x86/GPU-only).
 
 It is reached at `https://ai.<domain>/v1/synthesize/**` (be-gateway, `ROLE_USER`
-floor) and in-cluster at `http://snapdragon-edge-ai-tts.snapdragon-inference.svc:8080`.
+floor) and in-cluster at `http://hugmesh-edge-ai-tts.hugmesh-inference.svc:8080`.
 Tenancy: the gateway-validated `X-Tenant-ID`/`X-User-ID` headers stamp every response.
 Config (model dir, default voice, Piper `length_scale`/`noise_scale`/`noise_w`,
 `max_chars`) is the `edge-ai-tts` ConfigMap.
@@ -209,7 +209,7 @@ Studio (platform-gated like it, not mode-gated like the GPU Edge-AI group);
 **Slug:** `edge-ai-tts`, **DEFAULT-OFF**, **NO `dependsOn`**. The container is a
 **separate build artifact** — its source is
 `specs/cluster/manifests/edge-ai-tts/image/` (FastAPI + piper-tts + onnxruntime,
-CPU); build + push `registry.snapdragon.systems/snapdragon/edge-ai-tts:main` then
+CPU); build + push `registry.hugmesh.systems/hugmesh/edge-ai-tts:main` then
 select the slug. Keep it deselected until the image is pushed (so no node
 ImagePull-fails). Everything stays on-prem — synthesis is local CPU work.
 
@@ -262,8 +262,8 @@ node and could not be exercised in CI. On first GPU-cluster bring-up, verify:
 3. **SELinux** (nodes boot ENFORCING): the device plugin requests `spc_t`. If it is
    denied, scan AVCs (`ausearch -m avc -ts recent`) and add a
    `nvidia_device_plugin` policy module under `specs/selinux/` — keep SELinux in
-   sync with the new role (see [SECURITY.md](SECURITY.md), [memory: snapdragon-selinux-sync]).
-4. **edge-ai pod**: `kubectl -n snapdragon-inference get deploy snapdragon-edge-ai`
+   sync with the new role (see [SECURITY.md](SECURITY.md), [memory: hugmesh-selinux-sync]).
+4. **edge-ai pod**: `kubectl -n hugmesh-inference get deploy hugmesh-edge-ai`
    becomes Ready; `curl http://<svc>:11434/v1/models` lists the preloaded models;
    `curl https://ai.<domain>/v1/chat/completions` (with a mesh token) returns a
    completion.
@@ -289,5 +289,5 @@ specs/cluster/manifests/route-access/initdb/20-schema.sql   # /v1/** ROLE_USER r
 specs/cluster/manifests/policy/installed-services-configmap.yaml  # edge-ai install-state
 build-x86-host-stage4.sh / build-rpi5-stage4.sh       # edge_ai role, flags, gate, PKGS, containerd runtime
 scripts/build-menu.sh                                 # role row + Edge-AI options
-studio/snapdragon_studio/{core/config.py,gui/wizard.py}   # ImageConfig fields + wizard group
+studio/hugmesh_studio/{core/config.py,gui/wizard.py}   # ImageConfig fields + wizard group
 ```

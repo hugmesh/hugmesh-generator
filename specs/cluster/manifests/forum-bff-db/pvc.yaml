@@ -1,12 +1,12 @@
-# Persistent storage for the snapdragon-forum-bff-api Postgres data directory
+# Persistent storage for the hugmesh-forum-bff-api Postgres data directory
 # (the forum_user_role / forum_action tables).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: forum-bff-db
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels: { app: forum-bff-db }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 2Gi } }

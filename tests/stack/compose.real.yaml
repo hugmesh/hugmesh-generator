@@ -15,7 +15,7 @@
 # entrypoint below self-heals its config on every start (see the synapse
 # service), so a bare `docker compose --profile social up -d` (e.g. `make
 # stack-up SOCIAL=1`) gets a working, registration-enabled Synapse too.
-name: snapdragon-real
+name: hugmesh-real
 
 services:
   # ── Identity: Casdoor (OAuth2/OIDC) + its Postgres ───────────────
@@ -70,7 +70,7 @@ services:
     environment:
       SYNAPSE_SERVER_NAME: ${SYNAPSE_SERVER_NAME:-localhost}
       SYNAPSE_REPORT_STATS: ${SYNAPSE_REPORT_STATS:-no}
-      SYNAPSE_REG_SECRET: ${SYNAPSE_REG_SECRET:-snapdragon-reg-secret}
+      SYNAPSE_REG_SECRET: ${SYNAPSE_REG_SECRET:-hugmesh-reg-secret}
     entrypoint:
       - sh
       - -c
@@ -92,12 +92,12 @@ services:
     healthcheck: { test: ["CMD-SHELL", "curl -sf http://localhost:8008/health || exit 1"], interval: 5s, retries: 30 }
 
   # ── Platform datastore: Cassandra (gateway revocation list + URL registry) ──
-  # The snapdragon services use Cassandra, NOT Redis. Redis appears below ONLY
+  # The hugmesh services use Cassandra, NOT Redis. Redis appears below ONLY
   # because Mastodon (third-party) hard-requires it; that Redis is scoped to
   # Mastodon and is not a platform component.
   cassandra:
     image: cassandra:5
-    environment: { CASSANDRA_CLUSTER_NAME: SnapdragonGatewayCluster, CASSANDRA_DC: dc1, MAX_HEAP_SIZE: 512M, HEAP_NEWSIZE: 128M }
+    environment: { CASSANDRA_CLUSTER_NAME: HugMeshGatewayCluster, CASSANDRA_DC: dc1, MAX_HEAP_SIZE: 512M, HEAP_NEWSIZE: 128M }
     volumes: [cassandra:/var/lib/cassandra]
     healthcheck: { test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"], interval: 10s, retries: 30, start_period: 60s }
 

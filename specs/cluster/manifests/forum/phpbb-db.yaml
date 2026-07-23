@@ -1,5 +1,5 @@
 # phpbb-db — dedicated Postgres 16 for phpBB (phpBB supports Postgres natively).
-# Lives in the isolated snapdragon-forum namespace; reachable ONLY from the phpbb
+# Lives in the isolated hugmesh-forum namespace; reachable ONLY from the phpbb
 # pod (+ the reconcile Job) per network-policy.yaml. ClusterIP-only, never routed.
 #
 # Postgres (not MariaDB/MySQL): parity with akkoma/tuwunel/the BFF dbs (the
@@ -13,16 +13,16 @@
 # owner role is reserved for the one-time install/migrate. Mirrors the
 # user-bff-db owner/app split (docs/POSTGRES-HARDENING.md).
 #
-# Encryption-at-rest: the PVC uses the hardened snapdragon-local storage class
+# Encryption-at-rest: the PVC uses the hardened hugmesh-local storage class
 # (LUKS2 node disks already merged) + etcd Secret encryption for the ESO-materialized
 # secrets; SCRAM password hashing. Confirm the kube-apiserver EncryptionConfiguration
-# + storage-class LUKS cover snapdragon-forum PVCs on the live cluster.
+# + storage-class LUKS cover hugmesh-forum PVCs on the live cluster.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: phpbb-db
-  namespace: snapdragon-forum
-  labels: { app.kubernetes.io/name: phpbb-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-forum
+  labels: { app.kubernetes.io/name: phpbb-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over a RWO PVC
@@ -95,18 +95,18 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: phpbb-db
-  namespace: snapdragon-forum
+  namespace: hugmesh-forum
   labels: { app.kubernetes.io/name: phpbb-db }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 5Gi } }
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: phpbb-db
-  namespace: snapdragon-forum
+  namespace: hugmesh-forum
   labels: { app.kubernetes.io/name: phpbb-db }
 spec:
   type: ClusterIP

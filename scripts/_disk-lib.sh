@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# _disk-lib.sh — SOURCED helper library for the Snapdragon disk-flashing layer.
+# _disk-lib.sh — SOURCED helper library for the HugMesh disk-flashing layer.
 #
 # Factors out the destructive-block-device safety that make-keys-usb.sh
 # pioneered (typed-device-path confirmation, child unmount, partition-name

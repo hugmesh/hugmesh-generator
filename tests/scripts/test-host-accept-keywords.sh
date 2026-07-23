@@ -11,7 +11,7 @@
 #
 # This guard asserts the acceptance exists in BOTH places (a revert fails here):
 #   * every ARM cross-builder writes /etc/portage/package.accept_keywords/
-#     snapdragon-host-build-backends at run time (works with ANY image state), and
+#     hugmesh-host-build-backends at run time (works with ANY image state), and
 #   * Dockerfile.build bakes the same file into the FINAL stage.
 set -euo pipefail
 
@@ -27,7 +27,7 @@ for s in build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh \
          build-orangepi-zero2-stage4.sh build-jetson-stage4.sh; do
     f="${GEN}/${s}"
     if [ ! -f "${f}" ]; then bad "${s}: script missing"; continue; fi
-    if grep -q 'package.accept_keywords/snapdragon-host-build-backends' "${f}" \
+    if grep -q 'package.accept_keywords/hugmesh-host-build-backends' "${f}" \
        && grep -q "dev-python/vcs-versioning \*\*" "${f}" \
        && grep -q "dev-python/setuptools-scm \*\*" "${f}"; then
         ok "${s}: writes the HOST-side vcs-versioning + setuptools-scm acceptance"
@@ -36,7 +36,7 @@ for s in build-frite-stage4.sh build-rpi5-stage4.sh build-orangepi5-stage4.sh \
     fi
 done
 
-if grep -q 'package.accept_keywords/snapdragon-host-build-backends' "${GEN}/Dockerfile.build" \
+if grep -q 'package.accept_keywords/hugmesh-host-build-backends' "${GEN}/Dockerfile.build" \
    && grep -q "dev-python/vcs-versioning \*\*" "${GEN}/Dockerfile.build" \
    && grep -q "dev-python/setuptools-scm \*\*" "${GEN}/Dockerfile.build"; then
     ok "Dockerfile.build: bakes the HOST-side acceptance (both atoms) into the FINAL stage"

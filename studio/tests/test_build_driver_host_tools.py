@@ -24,16 +24,16 @@ import os
 
 import pytest
 
-from snapdragon_studio.core import build_driver as bd
-from snapdragon_studio.core.build_driver import BuildDriver, _host_tool_present
-from snapdragon_studio.core.config import ImageConfig
-from snapdragon_studio.core.platform_info import HostInfo
+from hugmesh_studio.core import build_driver as bd
+from hugmesh_studio.core.build_driver import BuildDriver, _host_tool_present
+from hugmesh_studio.core.config import ImageConfig
+from hugmesh_studio.core.platform_info import HostInfo
 
 
 def host(is_root=True, has_docker=True, gentoo=True):
     # same shape as tests/test_build_memory_guard.py's helper
     return HostInfo(os="linux", is_gentoo=gentoo, has_docker=has_docker, has_bash=True,
-                    has_kvm=False, is_root=is_root, builder_image="snapdragon-builder")
+                    has_kvm=False, is_root=is_root, builder_image="hugmesh-builder")
 
 
 # ---- _host_tool_present: the PATH-independence contract ---------------------

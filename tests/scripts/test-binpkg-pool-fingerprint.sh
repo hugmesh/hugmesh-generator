@@ -64,10 +64,10 @@ fi
 # (1) absent stamp → written fresh, preflight passes
 POOL="${TMP}/pool-pi5"; mkdir -p "${POOL}"
 if pool_fingerprint_preflight "${POOL}" "${MC_A76}"; then
-    if [ "$(cat "${POOL}/.snapdragon-pool-fingerprint")" = "${FP_A76}" ]; then
+    if [ "$(cat "${POOL}/.hugmesh-pool-fingerprint")" = "${FP_A76}" ]; then
         ok "absent stamp: preflight writes the fingerprint fresh and passes"
     else
-        bad "fresh stamp content wrong: $(cat "${POOL}/.snapdragon-pool-fingerprint")"
+        bad "fresh stamp content wrong: $(cat "${POOL}/.hugmesh-pool-fingerprint")"
     fi
 else
     bad "fresh pool preflight returned non-zero"
@@ -84,7 +84,7 @@ if pool_fingerprint_preflight "${POOL_NE}" "${MC_A76}" 2>"${w1}"; then
     else
         bad "unstamped non-empty pool adopted SILENTLY (no warning): $(cat "${w1}")"
     fi
-    [ "$(cat "${POOL_NE}/.snapdragon-pool-fingerprint")" = "${FP_A76}" ] \
+    [ "$(cat "${POOL_NE}/.hugmesh-pool-fingerprint")" = "${FP_A76}" ] \
         && ok "unstamped non-empty pool got stamped after the warning" \
         || bad "unstamped non-empty pool was not stamped"
 else
@@ -116,7 +116,7 @@ else
     fi
 fi
 # and the stamp must NOT have been overwritten by the refused build
-[ "$(cat "${POOL}/.snapdragon-pool-fingerprint")" = "${FP_A76}" ] \
+[ "$(cat "${POOL}/.hugmesh-pool-fingerprint")" = "${FP_A76}" ] \
     && ok "refused build left the original a76 stamp intact" \
     || bad "refused build corrupted the stamp"
 

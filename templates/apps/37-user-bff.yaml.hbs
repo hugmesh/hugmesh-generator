@@ -1,5 +1,5 @@
 # {{BRAND_TITLE}} user-bff — user self-service BFF (ROLE_USER).
-# Generated from snapdragon-generator/templates/apps/37-user-bff.yaml.hbs
+# Generated from hugmesh-generator/templates/apps/37-user-bff.yaml.hbs
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -8,7 +8,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/user-bff-api
     kustomize:

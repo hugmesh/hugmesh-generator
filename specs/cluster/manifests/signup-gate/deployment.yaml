@@ -1,14 +1,14 @@
 # signup-gate — the Casdoor PRE-SIGNUP confusable/uniqueness gate (thin
 # reverse-proxy). See proxy-configmap.yaml for the full rationale + flow. Runs in
-# snapdragon-pki next to Casdoor; the gateways route self-signup POSTs here, it
+# hugmesh-pki next to Casdoor; the gateways route self-signup POSTs here, it
 # checks the federation username-availability endpoint, rejects collisions, and
 # transparently forwards everything else to casdoor:8000.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: signup-gate
-  namespace: snapdragon-pki
-  labels: { app: signup-gate, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: signup-gate, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 2
   selector: { matchLabels: { app: signup-gate } }
@@ -34,13 +34,13 @@ spec:
           env:
             - { name: LISTEN_PORT, value: "8080" }
             - name: CASDOOR_URL
-              value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000"
+              value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000"
             # federation availability endpoint (INTERNAL/ROLE_SERVICE). Called
             # cross-namespace pki->backend; the homeserver-isolation/tier policies
             # must admit signup-gate to federation-api:8080 (see README).
             - name: FEDERATION_URL
-              value: "https://snapdragon-federation-api.snapdragon-backend.svc.cluster.local:8080"
-            - { name: CASDOOR_ORG, value: "snapdragon" }
+              value: "https://hugmesh-federation-api.hugmesh-backend.svc.cluster.local:8080"
+            - { name: CASDOOR_ORG, value: "hugmesh" }
             # client-credentials SERVICE identity (app-signup-gate / ROLE_SERVICE).
             - name: CASDOOR_CLIENT_ID
               valueFrom: { secretKeyRef: { name: signup-gate-casdoor, key: clientId } }
@@ -77,8 +77,8 @@ apiVersion: v1
 kind: Service
 metadata:
   name: signup-gate
-  namespace: snapdragon-pki
-  labels: { app: signup-gate, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: signup-gate, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   selector: { app: signup-gate }
   ports:

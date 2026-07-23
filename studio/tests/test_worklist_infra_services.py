@@ -17,8 +17,8 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from snapdragon_studio.core.config import ImageConfig            # noqa: E402
-from snapdragon_studio.core.worklist import (                    # noqa: E402
+from hugmesh_studio.core.config import ImageConfig            # noqa: E402
+from hugmesh_studio.core.worklist import (                    # noqa: E402
     WorklistConfig, WorklistEntry, WORKLIST_INFRA_SERVICES)
 
 

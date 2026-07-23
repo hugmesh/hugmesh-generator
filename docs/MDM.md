@@ -23,7 +23,7 @@ mesh device end to end:
 
 ```
 detect ─► fetch (VERIFIED GrapheneOS -install- zip) ─► flash ─► attest
-(self-hosted AttestationServer pairing, via a Snapdragon-forked Auditor app)
+(self-hosted AttestationServer pairing, via a HugMesh-forked Auditor app)
 ─► mdm-enroll (Headwind MDM device-owner enrollment — MUST run before
 'profile', which permanently forecloses device-owner mode) ─► enroll
 (headscale tailnet join, register-and-approve) ─► profile (separately-encrypted
@@ -68,7 +68,7 @@ anything, and the destructive ones are gated.
 | `detect` | never | Read-only probe: adb/fastboot device list, serial, codename, current OS fingerprint. Prints `DEVICE_*` lines. |
 | `fetch` | work-dir | Resolve the `--channel` release, download the GrapheneOS `<codename>-install-<version>.zip`(+`.sig`) into `--work-dir`, verify the sshsig **fail-closed**, extract, write a `.verified-<sha256>` marker. Idempotent (a cached resolution next to its verified zip makes re-fetch fully offline). |
 | `flash` | **DESTRUCTIVE** | Wipe the phone and flash the VERIFIED artifact. Typed-serial confirmation on a TTY; non-TTY requires BOTH `--yes` AND a matching `--serial`. Refuses anything without a matching verification marker, and re-verifies the signature again before flashing. |
-| `attest` | device + out-dir | Install the signer-pinned Snapdragon-forked Auditor (`--auditor-apk`/`--auditor-signer-sha256`) and print the self-hosted [AttestationServer](#management-plane) pairing runbook (`--attestation-url`). The in-app QR scan cannot be driven over adb, so this is an **operator-attested** pairing (`verdict:"operator-paired"`), not a cryptographic verification by the wizard. Runs **before** `mdm-enroll` — see [Management plane](#management-plane) for why. Writes `attestation.json`. |
+| `attest` | device + out-dir | Install the signer-pinned HugMesh-forked Auditor (`--auditor-apk`/`--auditor-signer-sha256`) and print the self-hosted [AttestationServer](#management-plane) pairing runbook (`--attestation-url`). The in-app QR scan cannot be driven over adb, so this is an **operator-attested** pairing (`verdict:"operator-paired"`), not a cryptographic verification by the wizard. Runs **before** `mdm-enroll` — see [Management plane](#management-plane) for why. Writes `attestation.json`. |
 | `mdm-enroll` | device + out-dir | Enroll the phone as a Headwind MDM device-owner (`dpm set-device-owner com.hmdm.launcher/.AdminReceiver`) after a fail-closed fresh-device precondition (`pm list users` must show exactly one user AND `dumpsys account` must show zero accounts). Installs the signer-pinned DPC APK (`--headwind-apk`/`--headwind-signer-sha256`) and pushes a non-interactive `init.json` (`com.hmdm.BASE_URL=--headwind-url`) into its external files dir. **MUST run before `profile`** — see [Management plane](#management-plane). Writes `mdm.json`. |
 | `enroll` | out-dir | Add a running phone to the mesh — freshly flashed **or already-running**, GrapheneOS **or stock Android** (the OS probe records which; it never gates — see [Onboarding existing phones](#onboarding-existing-phones-no-reflash)). Guided tailnet join with keys from `--keys-dir` (docker-mesh-node layout) or `--login-server`/`--authkey-file`; verifies the tailnet join (a 100.64/10 address on the Tailscale `tun*` interface — Android names it `tun0`, not `tailscale0`) and writes the enrollment record. `--no-usb` drops adb entirely (guided handset-only runbook, operator-attested record; needs `--device-id` + `--codename`). |
 | `profile` | device + out-dir | Create the `enterprise` secondary user, generate + escrow its passphrase (vault-seed custody), operator sets the credential on the handset (default path). **This permanently forecloses device-owner mode** — see [Management plane](#management-plane); it must never run before `mdm-enroll`. |
@@ -107,7 +107,7 @@ Mesh + identity: `--keys-dir D` (docker-mesh-node layout — see
 URL, overrides keys-dir) · `--authkey-file F` (0600 file holding the one-time
 pre-auth key) · `--device-id ID` (stable id, `[a-z0-9-]`, default
 `phone-<sanitized serial>`) · `--superdomain D` (orchestration superdomain /
-MagicDNS base, default `snapdragon.internal`) · `--role
+MagicDNS base, default `hugmesh.internal`) · `--role
 user|mod|admin|superadmin` (default `user`, or the keys-dir `role` file).
 
 Profile custody: `--pass-file F` (0600 file supplying the profile passphrase;
@@ -122,7 +122,7 @@ Management-plane extras (see [Management plane](#management-plane)):
 `--headwind-signer-sha256 H` (pin the Headwind APK signer cert SHA-256;
 fail-closed when set) · `--headwind-url URL` (Headwind server base URL,
 written into the DPC's non-interactive `init.json` as `com.hmdm.BASE_URL`;
-env `HMDM_URL`) · `--auditor-apk F` (Snapdragon-forked Auditor APK to
+env `HMDM_URL`) · `--auditor-apk F` (HugMesh-forked Auditor APK to
 adb-install during `attest`) · `--auditor-signer-sha256 H` (pin the Auditor
 fork's release-cert SHA-256; fail-closed when set) · `--attestation-url URL`
 (self-hosted AttestationServer console URL, printed in the `attest` pairing
@@ -249,7 +249,7 @@ from [`GO-LIVE-WIZARD.md`](GO-LIVE-WIZARD.md), which is the canonical
 definition:
 
 > - **Orchestration superdomain** — `<brand>.internal` (default
->   `snapdragon.internal`), the headscale MagicDNS `base_domain` every mesh node
+>   `hugmesh.internal`), the headscale MagicDNS `base_domain` every mesh node
 >   joins. It is **permanently internal**: it carries the tailnet + `kube-api.<superdomain>`
 >   control-plane endpoint, is never routable, and is **never** go-live-flipped.
 >   It is delivered through the KEYS channel — `scripts/gen-provision-keys.sh`
@@ -257,7 +257,7 @@ definition:
 >   `--superdomain`, default `<BRAND>.internal`), which headscale consumes — so no
 >   go-live provider, DNS record set, or `RELEASE_STATE` transition ever touches it.
 
-The wizard's `--superdomain` flag (default `snapdragon.internal`) is this same
+The wizard's `--superdomain` flag (default `hugmesh.internal`) is this same
 value; it lands in `PLAN_SUPERDOMAIN`, the enrollment record, and the ingest
 record. A phone is a mesh *member*, never a go-live target — the public apex
 never applies to it.
@@ -281,7 +281,7 @@ runbook, then **verifies** the result over adb):
 1. Tailscale app → custom coordination server → the resolved login server.
 2. Authenticate with the one-time pre-auth key (SEC-08: single-use, 24 h
    expiry — mint a fresh one if it is stale), or via Casdoor OIDC with the
-   `snapdragon/headscale` group — the same gate the superadmin's own client
+   `hugmesh/headscale` group — the same gate the superadmin's own client
    join uses, see [`SUPERADMIN-MESH-CLIENT.md`](SUPERADMIN-MESH-CLIENT.md).
 3. ADR-14 register-and-approve: the node registers as PENDING and only joins
    after a superadmin approves it in the superadmin UI. (If the join-verify
@@ -420,7 +420,7 @@ the tracked "mdm.json is not folded into ingest.json" gap.
 **Merge-order note (cross-repo):** the `v2` bump is additive, but the BFF's
 `PhoneIngestRequest` DTO pattern-pins the accepted schema string. Widening it
 to accept both `phone-ingest/v1` and `phone-ingest/v2` is a coordinated
-snapdragon-admin-bff-api change that **must land first** — until it does, a
+hugmesh-admin-bff-api change that **must land first** — until it does, a
 `POST` of a `v2` record to a `v1`-only registry fails Bean Validation with a
 clean `400` (the record is still written to disk, so nothing is lost; only the
 POST leg fails). Once the BFF accepts both, v1 producers keep working (the
@@ -428,7 +428,7 @@ POST leg fails). Once the BFF accepts both, v1 producers keep working (the
 registry side.
 
 Default is **emit-only**. The dedicated registry endpoint is
-**`POST /bff/internal/device-registry/phone-ingest`** (snapdragon-admin-bff-api):
+**`POST /bff/internal/device-registry/phone-ingest`** (hugmesh-admin-bff-api):
 point `--ingest-url` at it with the mTLS identity flags
 (`--client-cert`/`--client-key`/`--ca`; the wizard fails closed without
 them), plus `--internal-token-file F` when the deployment arms the BFF's
@@ -442,7 +442,7 @@ fleet at `GET /bff/superadmin/phone-devices` (+ `/{deviceId}`). Do **not**
 point `--ingest-url` at `/bff/internal/device-enrollment/self-report` — that
 is a **different, disjoint contract**: the node-side `machineKeyFp`
 self-report used for headscale cluster-node reconciliation
-(`specs/usr/sbin/snapdragon-device-enrollment-report`), whose handler
+(`specs/usr/sbin/hugmesh-device-enrollment-report`), whose handler
 requires `machineKeyFp` — a `phone-ingest/v2` record posted there fails Bean
 Validation and lands nowhere useful.
 
@@ -457,7 +457,7 @@ on-phone resident daemon" — is **superseded**: Headwind's DPC agent
 device-owner mode on every phone that has run `mdm-enroll`. What is still
 true, and remains a deliberate v1 non-goal: **no first-party APK store** —
 `phone-wizard.sh` sideloads exactly two vetted, signer-pinned APKs (the
-Headwind DPC, the Snapdragon Auditor fork) plus the optional Tailscale APK;
+Headwind DPC, the HugMesh Auditor fork) plus the optional Tailscale APK;
 general app push/update/delete across a fleet is a Headwind CE console
 capability, reachable by an operator directly against the Headwind server, not
 something this wizard drives. Losing a phone that never ran `mdm-enroll`
@@ -481,7 +481,7 @@ enrolled) a Headwind DPC posture. So `phone_device.role` is **inventory
 telemetry, never an authorization input** — a phone can never grant its holder
 access it did not already have, and the ingest channel (`/bff/internal/**`,
 mTLS, device-reported) is stated in-code to "confer NO access." A guard test in
-`snapdragon-admin-bff-api` pins this invariant so it cannot regress.
+`hugmesh-admin-bff-api` pins this invariant so it cannot regress.
 
 Two device classes, and only one is remotely manageable:
 
@@ -521,7 +521,7 @@ step-up stands in for the physical-access assurance the provisioning side had.
 Endpoints: `POST /bff/superadmin/phone-devices/<id>/lock` (409 unless
 `management_mode = mesh_owned`), `.../unlock`, and `.../management`. Gateway
 RBAC needs no new row — the existing tailnet
-`snapdragon-superadmin-gateway` → `/bff/superadmin/** → ROLE_SUPERADMIN` floor
+`hugmesh-superadmin-gateway` → `/bff/superadmin/** → ROLE_SUPERADMIN` floor
 already governs them (longest-pattern-wins); the per-method `@PreAuthorize` is
 the fine gate.
 
@@ -581,7 +581,7 @@ thin seams make that safe:
 
 **The PUBLIC-fe-gateway caveat.** Unlike the superadmin lockout plane (tailnet-
 only, network-isolated), the fleet surface is reachable on the **public**
-`snapdragon-fe-gateway` at `/bff/admin/phone-fleet/**`. There is therefore **no
+`hugmesh-fe-gateway` at `/bff/admin/phone-fleet/**`. There is therefore **no
 tailnet defence-in-depth** in front of it: the **owner + domain predicate is the
 SOLE tenancy wall**, so both legs of it are load-bearing and every path
 fails closed. The gateway route-access seed carries a dedicated
@@ -620,7 +620,7 @@ lock/unlock**.
 Device management is a **pluggable provider registry**, not a single hard-coded
 backend. Two providers ship, both **primary and first-class** — the driver
 validates `--mdm-provider` against the registry
-([`specs/usr/lib/snapdragon/mdm-providers.sh`](../specs/usr/lib/snapdragon/mdm-providers.sh),
+([`specs/usr/lib/hugmesh/mdm-providers.sh`](../specs/usr/lib/hugmesh/mdm-providers.sh),
 mirroring the go-live wizard's `go-live-providers.sh`) and branches on each
 provider's *mechanism*, never on its id:
 
@@ -710,7 +710,7 @@ One confidential Graph app registration per Entra tenant:
    **Grant admin consent**.
 4. Seed Vault (never argv, never a manifest literal):
    ```
-   vault kv put secret/snapdragon/azure-intune \
+   vault kv put secret/hugmesh/azure-intune \
      TENANT_ID=<tenant-guid> CLIENT_ID=<app-guid> CLIENT_SECRET=<client-secret>
    ```
 5. Opt in: uncomment `azure-intune-externalsecrets.yaml` in the external-secrets
@@ -733,7 +733,7 @@ default-off cluster optional-services — **Headwind MDM**
 ([github.com/h-mdm](https://github.com/h-mdm), Apache-2.0,
 `specs/cluster/apps/23-headwind.yaml`) and the **GrapheneOS
 AttestationServer** (MIT, forked, `specs/cluster/apps/24-attestation-server.yaml`)
-— both merged to `main` as cluster manifests (namespace `snapdragon-pki`,
+— both merged to `main` as cluster manifests (namespace `hugmesh-pki`,
 tailnet-only, Harbor/superadmin devops posture, no public
 `*.CLUSTER_DOMAIN` surface). `scripts/phone-wizard.sh`'s `attest` and
 `mdm-enroll` verbs are the operator-facing glue that drives them from the
@@ -804,15 +804,15 @@ stock-Android device, and a resulting failure is a normal `exit 1`
 (precondition/tool failure) with the allow-list named as the likely cause —
 not treated as a driver defect.
 
-### `attest` — AttestationServer pairing via the Snapdragon-forked Auditor
+### `attest` — AttestationServer pairing via the HugMesh-forked Auditor
 
 `attest` installs our own fork of GrapheneOS's Auditor app — package
-`systems.snapdragon.auditor` (deliberately different from the stock
+`systems.hugmesh.auditor` (deliberately different from the stock
 `app.attestation.auditor`, so a pin is unambiguous and a stock install is
 never clobbered) — signer-pinned via `--auditor-signer-sha256`, using the same
 shared apksigner-verify helper `mdm-enroll` and `enroll` use. It then prints a
 runbook pointing the operator at the self-hosted AttestationServer console
-(`--attestation-url`, e.g. `https://attestation.snapdragon.systems`) to scan
+(`--attestation-url`, e.g. `https://attestation.hugmesh.systems`) to scan
 the pairing QR code from inside the Auditor app. **The in-app camera scan
 cannot be driven over adb** — this wizard performs no cryptographic
 verification of the attestation chain itself, so the pairing is recorded
@@ -836,8 +836,8 @@ own Auditor fork's identity — this is a build-time patch to
 GrapheneOS Auditor's published pin. Concretely:
 
 ```
-server AUDITOR_SIGNER_DIGEST  ===  Snapdragon Auditor fork's release-signing-cert SHA-256
-server ATTESTATION_DOMAIN     ===  fork's DOMAIN constant  ===  attestation.snapdragon.systems
+server AUDITOR_SIGNER_DIGEST  ===  HugMesh Auditor fork's release-signing-cert SHA-256
+server ATTESTATION_DOMAIN     ===  fork's DOMAIN constant  ===  attestation.hugmesh.systems
 ```
 
 These are **built and set together** — if `AUDITOR_SIGNER_DIGEST` does not
@@ -866,10 +866,10 @@ mismatch anywhere in the chain fails closed, never silently.
 | Thin Studio (GUI) face over the driver | — | 🔭 |
 | APK store (general fleet app push/update/delete beyond the wizard's own vetted, signer-pinned sideloads) | — | 🔭 (deliberate v1 non-goal; Headwind's own console can do this directly, see [Remote-management model](#remote-management-model)) |
 | Existing-device onboarding (GrapheneOS + stock Android, USB-guided or `--no-usb`, no reflash) | `enroll` | 🚧 |
-| Headwind MDM cluster optional-service (Postgres-backed, tailnet-only, `snapdragon-pki` namespace) | `specs/cluster/apps/23-headwind.yaml`, `specs/cluster/manifests/headwind/` | ✅ merged |
+| Headwind MDM cluster optional-service (Postgres-backed, tailnet-only, `hugmesh-pki` namespace) | `specs/cluster/apps/23-headwind.yaml`, `specs/cluster/manifests/headwind/` | ✅ merged |
 | GrapheneOS AttestationServer cluster optional-service (SQLite PVC, tailnet-only, forked Auditor identity baked in) | `specs/cluster/apps/24-attestation-server.yaml`, `specs/cluster/manifests/attestation-server/` | ✅ merged |
 | `mdm-enroll` verb — Headwind device-owner enrollment, fresh-device precondition (now checks accounts too, not just users — #393), signer-pinned DPC APK, `init.json` `BASE_URL` injection | `cmd_mdm_enroll()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | ✅ merged (#390, hardened #393) |
-| `attest` verb — Snapdragon-forked Auditor pairing to the self-hosted AttestationServer, operator-attested verdict | `cmd_attest()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | ✅ merged (#390) |
+| `attest` verb — HugMesh-forked Auditor pairing to the self-hosted AttestationServer, operator-attested verdict | `cmd_attest()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | ✅ merged (#390) |
 | 8-step wizard order (`attest`/`mdm-enroll` immediately post-flash, before `profile`) | `cmd_wizard()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | ✅ merged (#390) |
 | Auditor-fork ↔ AttestationServer signer-digest coupling (`AUDITOR_SIGNER_DIGEST`) | [Management plane](#management-plane) | ✅ server-side patch merged; digest itself is set at Auditor-fork release-signing time (operator step, outside this repo) |
 | OTA/update posture management (GrapheneOS updates itself; Headwind CE ships no OTA lever) | — | 🔭 |

@@ -1,19 +1,19 @@
-# snapdragon-forum DEFAULT-DENY + the narrow allow-list — the PRIMARY isolation
+# hugmesh-forum DEFAULT-DENY + the narrow allow-list — the PRIMARY isolation
 # control for the backend-only phpBB forum.
 #
 # phpBB has NO gateway route and NO ingress (route-access is NOT default-deny for
 # ungoverned paths, so the ONLY safe posture is "no route at all" — see the design
 # §2/§9). These policies make that real at the network layer: in the dedicated
-# snapdragon-forum namespace the ONLY ingress admitted to the phpbb pod is from
-#   * snapdragon-forum-bff-api  (the single browser->phpBB path, role/ban-gated)
-#   * snapdragon-admin-bff-api  (the admin Forum Console seam)
-#   * forum-admin-sync          (the reconcile Job, runs IN snapdragon-forum)
-# Everything else (the rest of snapdragon-backend, snapdragon-frontend, games,
+# hugmesh-forum namespace the ONLY ingress admitted to the phpbb pod is from
+#   * hugmesh-forum-bff-api  (the single browser->phpBB path, role/ban-gated)
+#   * hugmesh-admin-bff-api  (the admin Forum Console seam)
+#   * forum-admin-sync          (the reconcile Job, runs IN hugmesh-forum)
+# Everything else (the rest of hugmesh-backend, hugmesh-frontend, games,
 # observability) is DENIED. phpbb-db admits ingress ONLY from the phpbb pod (+ the
 # sync Job for the de-provisioning diff). This is intentionally STRICTER than
 # akkoma/tuwunel (which have no per-pod isolation).
 #
-# k8s NetworkPolicy is additive-allow within a namespace; because snapdragon-forum
+# k8s NetworkPolicy is additive-allow within a namespace; because hugmesh-forum
 # is a FRESH namespace with NO tier-ingress policy selecting it, the default-deny
 # below is authoritative (no broad allow to subtract). KEEP this the only ingress
 # policy in the namespace.
@@ -26,15 +26,15 @@
 # Job keeps its FORUM_EXTERNAL_ENABLED=false stub (see admin-sync-job.yaml —
 # client-credentials admin-authority proof pending).
 ---
-# ── default-deny ALL ingress in snapdragon-forum ───────────────────────────────
+# ── default-deny ALL ingress in hugmesh-forum ───────────────────────────────
 # Selects every pod (podSelector: {}). With no `ingress:` rules, all ingress is
 # denied; the specific allow policies below add back ONLY the legitimate callers.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: forum-default-deny-ingress
-  namespace: snapdragon-forum
-  labels: { app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-forum
+  labels: { app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector: {}
   policyTypes: [Ingress]
@@ -45,30 +45,30 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: forum-allow-phpbb-ingress
-  namespace: snapdragon-forum
-  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-forum
+  labels: { app.kubernetes.io/name: phpbb, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app.kubernetes.io/name: phpbb }
   policyTypes: [Ingress]
   ingress:
     - from:
-        # forum-bff-api (snapdragon-backend) — the SINGLE browser->phpBB path; it
+        # forum-bff-api (hugmesh-backend) — the SINGLE browser->phpBB path; it
         # presents the cluster-CA client cert + forwards the caller JWT. Matched by
         # the backend namespace label AND the app pod label (defence-in-depth: both
         # must hold).
         - namespaceSelector:
-            matchLabels: { kubernetes.io/metadata.name: snapdragon-backend }
+            matchLabels: { kubernetes.io/metadata.name: hugmesh-backend }
           podSelector:
-            matchLabels: { app: snapdragon-forum-bff-api }
-        # admin-bff-api (snapdragon-backend) — the admin Forum Console seam. (admin
+            matchLabels: { app: hugmesh-forum-bff-api }
+        # admin-bff-api (hugmesh-backend) — the admin Forum Console seam. (admin
         # actions traverse forum-bff today; admin-bff is allowed directly too so a
         # future direct admin path stays inside the boundary, not around it.)
         - namespaceSelector:
-            matchLabels: { kubernetes.io/metadata.name: snapdragon-backend }
+            matchLabels: { kubernetes.io/metadata.name: hugmesh-backend }
           podSelector:
-            matchLabels: { app: snapdragon-admin-bff-api }
-        # forum-admin-sync — the reconcile Job runs IN snapdragon-forum (same ns),
+            matchLabels: { app: hugmesh-admin-bff-api }
+        # forum-admin-sync — the reconcile Job runs IN hugmesh-forum (same ns),
         # so a same-namespace podSelector (no namespaceSelector) admits it.
         - podSelector:
             matchLabels: { app: forum-admin-sync }
@@ -86,8 +86,8 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: forum-allow-phpbb-db-ingress
-  namespace: snapdragon-forum
-  labels: { app.kubernetes.io/name: phpbb-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-forum
+  labels: { app.kubernetes.io/name: phpbb-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   podSelector:
     matchLabels: { app.kubernetes.io/name: phpbb-db }

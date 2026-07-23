@@ -46,7 +46,7 @@ assert ev is not None, "egress-vpn slug missing"
 assert ev["default"] in (False, "off"), f"default not off: {ev['default']!r}"
 assert ev.get("scope") == "node", "scope not node"
 assert "net-vpn/wireguard-tools" in ev.get("nodePackages", []), "nodePackages missing wireguard-tools"
-assert "snapdragon-vpn-reconcile" in ev.get("nodeServices", []), "nodeServices missing reconcile"
+assert "hugmesh-vpn-reconcile" in ev.get("nodeServices", []), "nodeServices missing reconcile"
 sys.exit(0)
 PY
 else
@@ -119,7 +119,7 @@ echo "${kept}" | grep -q 'net-vpn/openvpn' && ok "selected: net-vpn/openvpn kept
 # ── builder wires the reconcile service link only when selected ───────────────
 # (assert the conditional + the runlevel link exist in the builder source).
 grep -q '_opt_selected egress-vpn' "${BUILDER}" && ok "builder gates the reconcile link on _opt_selected egress-vpn" || bad "builder missing the egress-vpn service-link gate"
-grep -q 'DEFAULT_SVCS+=(snapdragon-vpn-reconcile)' "${BUILDER}" && ok "builder links snapdragon-vpn-reconcile when selected" || bad "builder missing the reconcile runlevel link"
+grep -q 'DEFAULT_SVCS+=(hugmesh-vpn-reconcile)' "${BUILDER}" && ok "builder links hugmesh-vpn-reconcile when selected" || bad "builder missing the reconcile runlevel link"
 
 echo "== RESULT: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ]

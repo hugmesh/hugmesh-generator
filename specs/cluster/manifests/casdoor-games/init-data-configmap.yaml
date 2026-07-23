@@ -1,6 +1,6 @@
 # casdoor-games declarative seed (init_data.json) for the GAMES realm — MIRRORED
-# from the canonical snapdragon.games Casdoor (casdoor/init_data.json.tpl):
-#   org         "threewizards"   (displayName "Snapdragon Games")
+# from the canonical hugmesh.games Casdoor (casdoor/init_data.json.tpl):
+#   org         "threewizards"   (displayName "HugMesh Games")
 #   application  "threewizards-app" (clientId twclient001), enableSignUp:false
 #   role catalog admin, player, uploader, mod, publisher,
 #                play-three-wizards, play-dodecahedron
@@ -33,11 +33,11 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: casdoor-games-init-data
-  namespace: snapdragon-games
-  labels: { app: casdoor-games, app.kubernetes.io/part-of: snapdragon.games }
+  namespace: hugmesh-games
+  labels: { app: casdoor-games, app.kubernetes.io/part-of: hugmesh.games }
 # NOTE: the websiteUrl/homepageUrl + redirectUris in the init_data.json below are
 # parameterized on GAMES_DOMAIN by parameterize_games_domain() in the stage4
-# builders (https://snapdragon.games -> https://${GAMES_DOMAIN}). They MUST point
+# builders (https://hugmesh.games -> https://${GAMES_DOMAIN}). They MUST point
 # at the real games host or the OAuth callback is rejected. The default GAMES_DOMAIN
 # serves games as a subdomain (games.<CLUSTER_DOMAIN>); flip to the .games TLD with
 # GAMES_DOMAIN=<brand>.games. Keep in sync with init-job.yaml (reconcile.py re-pins
@@ -49,8 +49,8 @@ data:
         {
           "owner": "admin",
           "name": "threewizards",
-          "displayName": "Snapdragon Games",
-          "websiteUrl": "https://snapdragon.games",
+          "displayName": "HugMesh Games",
+          "websiteUrl": "https://hugmesh.games",
           "favicon": "",
           "passwordType": "pbkdf2-salt",
           "phonePrefix": "1",
@@ -64,18 +64,18 @@ data:
         {
           "owner": "admin",
           "name": "threewizards-app",
-          "displayName": "Snapdragon Games",
+          "displayName": "HugMesh Games",
           "logo": "",
-          "homepageUrl": "https://snapdragon.games",
-          "description": "Snapdragon Games — Player Portal",
+          "homepageUrl": "https://hugmesh.games",
+          "description": "HugMesh Games — Player Portal",
           "organization": "threewizards",
           "cert": "cert-built-in",
           "enablePassword": true,
           "enableSignUp": false,
           "clientId": "twclient001",
           "redirectUris": [
-            "https://snapdragon.games/callback",
-            "https://snapdragon.games/silent-refresh.html"
+            "https://hugmesh.games/callback",
+            "https://hugmesh.games/silent-refresh.html"
           ],
           "tokenFormat": "JWT",
           "expireInHours": 168,

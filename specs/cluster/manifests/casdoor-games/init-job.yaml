@@ -17,8 +17,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: casdoor-games-init-script
-  namespace: snapdragon-games
-  labels: { app: casdoor-games, app.kubernetes.io/part-of: snapdragon.games }
+  namespace: hugmesh-games
+  labels: { app: casdoor-games, app.kubernetes.io/part-of: hugmesh.games }
 data:
   reconcile.py: |
     #!/usr/bin/env python3
@@ -27,7 +27,7 @@ data:
     (urllib) so the image needs no extra packages / network installs."""
     import json, os, time, urllib.request, urllib.parse, urllib.error, http.cookiejar
 
-    BASE = os.environ.get("CASDOOR_URL", "http://casdoor-games.snapdragon-games.svc.cluster.local:8000")
+    BASE = os.environ.get("CASDOOR_URL", "http://casdoor-games.hugmesh-games.svc.cluster.local:8000")
     ORG  = os.environ.get("CASDOOR_ORG", "threewizards")
     APP_NAME   = os.environ.get("CASDOOR_APP_NAME", "threewizards-app")
     CLIENT_ID  = os.environ.get("CASDOOR_CLIENT_ID", "twclient001")
@@ -64,17 +64,17 @@ data:
         # The threewizards-app client-secret (the games BFF's CASDOOR_CLIENT_SECRET).
         secret = open("/secrets/app/clientSecret").read().strip()
         app = {
-            "owner": "admin", "name": APP_NAME, "displayName": "Snapdragon Games",
+            "owner": "admin", "name": APP_NAME, "displayName": "HugMesh Games",
             "organization": ORG, "clientId": CLIENT_ID, "clientSecret": secret,
             "cert": "cert-built-in", "signingCert": "cert-built-in",
             # reconcile.py RE-PINS these redirectUris on EVERY ArgoCD PostSync, so
             # they MUST be parameterized on GAMES_DOMAIN at build time (the stage4
-            # parameterize_games_domain() rewrites https://snapdragon.games ->
+            # parameterize_games_domain() rewrites https://hugmesh.games ->
             # https://${GAMES_DOMAIN}) — otherwise each sync reverts them to the
             # wrong host and games OAuth breaks. Keep in sync with init-data-configmap.
             "redirectUris": [
-                "https://snapdragon.games/callback",
-                "https://snapdragon.games/silent-refresh.html",
+                "https://hugmesh.games/callback",
+                "https://hugmesh.games/silent-refresh.html",
             ],
             "grantTypes": ["authorization_code", "password", "client_credentials",
                            "token", "id_token"],
@@ -141,8 +141,8 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: casdoor-games-init
-  namespace: snapdragon-games
-  labels: { app: casdoor-games, app.kubernetes.io/part-of: snapdragon.games }
+  namespace: hugmesh-games
+  labels: { app: casdoor-games, app.kubernetes.io/part-of: hugmesh.games }
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -166,7 +166,7 @@ spec:
           command: ["python3", "/script/reconcile.py"]
           env:
             - name: CASDOOR_URL
-              value: "http://casdoor-games.snapdragon-games.svc.cluster.local:8000"
+              value: "http://casdoor-games.hugmesh-games.svc.cluster.local:8000"
             - name: CASDOOR_ORG
               value: "threewizards"
             - name: CASDOOR_APP_NAME

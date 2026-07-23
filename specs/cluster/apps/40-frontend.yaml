@@ -1,4 +1,4 @@
-# snapdragon.systems Angular host — the gateway-forwarded front page.
+# hugmesh.systems Angular host — the gateway-forwarded front page.
 # Frontend Pis.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -8,12 +8,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/frontend
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-frontend
+    namespace: hugmesh-frontend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

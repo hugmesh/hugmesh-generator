@@ -20,17 +20,17 @@ import pytest
 # must be set BEFORE the first QApplication is created
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core import phone_wizard as phone_wizard  # noqa: E402
-from snapdragon_studio.core.phone_wizard import (  # noqa: E402
+from hugmesh_studio.core import phone_wizard as phone_wizard  # noqa: E402
+from hugmesh_studio.core.phone_wizard import (  # noqa: E402
     PhoneWizard, PhoneWizardConfig,
 )
-from snapdragon_studio.gui import wizard as wizard_mod  # noqa: E402
-from snapdragon_studio.gui.pages import phone as phone_mod  # noqa: E402
-from snapdragon_studio.gui.pages import ModePage  # noqa: E402
-from snapdragon_studio.gui.qt import QtWidgets  # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
+from hugmesh_studio.gui.pages import phone as phone_mod  # noqa: E402
+from hugmesh_studio.gui.pages import ModePage  # noqa: E402
+from hugmesh_studio.gui.qt import QtWidgets  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -73,7 +73,7 @@ def _install_stub(tmp_path, monkeypatch, tsv=None):
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 def _drain_worker(qapp, host, timeout_ms=5000):
@@ -285,7 +285,7 @@ def test_phone_module_imports_no_qtwebengine():
     page must not import it (directly or transitively)."""
     import sys
 
-    import snapdragon_studio.gui.pages.phone as m
+    import hugmesh_studio.gui.pages.phone as m
     with open(m.__file__, encoding="utf-8") as fh:
         assert "QtWebEngine" not in fh.read()
     assert not any("QtWebEngine" in name for name in sys.modules)

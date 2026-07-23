@@ -11,9 +11,9 @@ node.start(), so MeshNode.start()'s inherited `${TS_AUTHKEY}` guard passes.
 """
 import os
 
-from snapdragon_studio.core import local_mesh
-from snapdragon_studio.core.local_mesh import LocalMeshNode, main
-from snapdragon_studio.core.mesh_node import MeshStatus
+from hugmesh_studio.core import local_mesh
+from hugmesh_studio.core.local_mesh import LocalMeshNode, main
+from hugmesh_studio.core.mesh_node import MeshStatus
 
 
 def test_up_reads_authkey_file_and_exports_ts_authkey(tmp_path, monkeypatch):
@@ -86,12 +86,12 @@ def test_module_imports_no_qt():
     import sys
     studio_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     probe = (
-        "import snapdragon_studio.core.local_mesh as m, sys;"
+        "import hugmesh_studio.core.local_mesh as m, sys;"
         "assert callable(m.main);"
         "assert m.ENV_AUTHKEY == 'TS_AUTHKEY';"
         "bad=[x for x in sys.modules if x.startswith(('PySide6','PyQt6','PyQt5'))];"
         "assert not bad, bad;"
-        "assert 'snapdragon_studio.gui' not in sys.modules"
+        "assert 'hugmesh_studio.gui' not in sys.modules"
     )
     env = dict(os.environ, PYTHONPATH=studio_root)
     r = subprocess.run([sys.executable, "-c", probe], env=env,

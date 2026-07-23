@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: casdoor
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels: { app: casdoor }
 spec:
   selector: { app: casdoor }

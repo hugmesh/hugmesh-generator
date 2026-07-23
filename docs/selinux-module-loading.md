@@ -32,9 +32,9 @@ This is **fleet/protected work, not applied in this PR.**
 
 3. **The node binaries the modules label are copied in** the arch-agnostic
    block (`build-rpi5-stage4.sh:1531` onward, "shared with the x86 build ->
-   SHARED_SPECS"): e.g. `snapdragon-authorized-keys-lookup` +
-   `snapdragon-device-registry-sync` at `build-rpi5-stage4.sh:1607-1610`, and
-   `snapdragon-vpn-runner` at `build-rpi5-stage4.sh:1640-1641`. The new modules'
+   SHARED_SPECS"): e.g. `hugmesh-authorized-keys-lookup` +
+   `hugmesh-device-registry-sync` at `build-rpi5-stage4.sh:1607-1610`, and
+   `hugmesh-vpn-runner` at `build-rpi5-stage4.sh:1640-1641`. The new modules'
    `.fc` files label these same paths; the `.pp` install (step c) must land
    **before** the first-boot relabel runs.
 
@@ -96,14 +96,14 @@ done
 
 Notes:
 - The label-only modules that ship **`.fc` with no `.te`**
-  (`snapdragon_breakglass`, `snapdragon_oidc_token`) have nothing for the devel
+  (`hugmesh_breakglass`, `hugmesh_oidc_token`) have nothing for the devel
   Makefile to compile into a standalone `.pp`. The fleet has two clean options:
   (1) fold their `.fc` lines into a sibling module's `.fc` that DOES have a `.te`
-  (e.g. add the break-glass line to `snapdragon_authkeys.fc`, the oidc-token
+  (e.g. add the break-glass line to `hugmesh_authkeys.fc`, the oidc-token
   line to the future desktop-session module), OR (2) add a one-line stub `.te`
   (`policy_module(<name>, 1.0.0)` + a `require {}` of the referenced base type:
   `ssh_home_t` / `user_runtime_t`) so the Makefile emits a `.pp` that carries the
-  file-context. Option (1) matches how `snapdragon_breakglass.fc` already
+  file-context. Option (1) matches how `hugmesh_breakglass.fc` already
   documents "no `.te` domain"; pick it unless a standalone module is wanted.
 - Build the devel Makefile, NOT `emake base` — the base policy is already built
   by `sec-policy/selinux-base` (see `build-rpi5-stage4.sh:1321-1332`). These are
@@ -149,14 +149,14 @@ uniform, correct path for all three images.)
 ## Verification the fleet should add
 
 - After (b), assert each expected `.pp` exists
-  (`snapdragon_authkeys.pp`, `snapdragon_device_registry_sync.pp`,
-  `snapdragon_vpn.pp`, `snapdragon_node_storage.pp`, `snapdragon_policy_sync.pp`,
+  (`hugmesh_authkeys.pp`, `hugmesh_device_registry_sync.pp`,
+  `hugmesh_vpn.pp`, `hugmesh_node_storage.pp`, `hugmesh_policy_sync.pp`,
   plus whatever the label-only modules resolve to per the (b) note); fail the
   build if any is missing (mirrors the `base.pp` failure mode the existing block
   already guards).
 - In the QEMU enforcing verification (`tests/qemu/`, PROTECTED), after
   `setenforce 1`, drive an SSH login on a registry-enforced node and confirm NO
-  `snapdragon_authkeys_t` / `snapdragon_device_registry_sync_t` AVC denials —
+  `hugmesh_authkeys_t` / `hugmesh_device_registry_sync_t` AVC denials —
   this is the security-load-bearing path. Collect the permissive-pass AVCs to
   narrow every rule tagged `# INFERRED-WIDE: narrow after QEMU enforcing AVC
   pass` in the `.te` files.

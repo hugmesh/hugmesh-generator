@@ -21,10 +21,10 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from snapdragon_studio.core.local_mesh_bootstrap import (   # noqa: E402
+from hugmesh_studio.core.local_mesh_bootstrap import (   # noqa: E402
     LocalMeshBootstrap, LocalMeshBootstrapConfig, discover_brands,
     expected_build_contexts)
-from snapdragon_studio.core.local_stack_node import LocalStackNode  # noqa: E402
+from hugmesh_studio.core.local_stack_node import LocalStackNode  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -96,7 +96,7 @@ def test_collect_bootstrap_drops_no_operator_visible_field(qapp_localmesh_page):
 def test_expected_contexts_derive_from_the_compose_file():
     ctx = expected_build_contexts(GENERATOR_DIR)
     assert len(ctx) >= 20
-    assert all(c.startswith("snapdragon") for c in ctx)
+    assert all(c.startswith("hugmesh") for c in ctx)
     assert len(ctx) == len(set(ctx))            # de-duplicated (gateway appears 3x)
 
 
@@ -111,7 +111,7 @@ def test_source_coverage_never_rounds_up(tmp_path):
 
 def test_discover_brands_leads_with_default_and_excludes_non_brand_conf():
     brands = discover_brands(GENERATOR_DIR)
-    assert brands[0] == "snapdragon"
+    assert brands[0] == "hugmesh"
     assert "domains" not in brands              # a CA registry, not a brand profile
     assert "example" in brands                  # brands/example.conf is real
 
@@ -119,10 +119,10 @@ def test_discover_brands_leads_with_default_and_excludes_non_brand_conf():
 # ── page fixture (offscreen; no wizard needed for the collect test) ────────────────
 @pytest.fixture
 def qapp_localmesh_page():
-    pytest.importorskip("snapdragon_studio.gui.qt",
+    pytest.importorskip("hugmesh_studio.gui.qt",
                         reason="no Qt binding (PySide6/PyQt6) installed")
-    from snapdragon_studio.gui.qt import QtWidgets
-    from snapdragon_studio.gui.pages.localmesh import LocalMeshPage
+    from hugmesh_studio.gui.qt import QtWidgets
+    from hugmesh_studio.gui.pages.localmesh import LocalMeshPage
     import types
     _ = QtWidgets.QApplication.instance() or QtWidgets.QApplication(["t"])
     shim = types.SimpleNamespace(generator_dir=GENERATOR_DIR, localmesh_selected=True)

@@ -5,11 +5,11 @@
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: snapdragon-be-gateway-latency
-  namespace: snapdragon-backend
+  name: hugmesh-be-gateway-latency
+  namespace: hugmesh-backend
   labels:
-    app.kubernetes.io/name: snapdragon-be-gateway
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/name: hugmesh-be-gateway
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/autoscaler: latency-rps
   annotations:
     snapdragon.systems/dark: "true"
@@ -18,7 +18,7 @@ spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-be-gateway       # = chart instance.name (apps/20-gateway-be.yaml)
+    name: hugmesh-be-gateway       # = chart instance.name (apps/20-gateway-be.yaml)
   minReplicaCount: 2                   # NEVER below 2; idleReplicaCount unset => no scale-to-zero
   maxReplicaCount: 8
   pollingInterval: 30
@@ -38,5 +38,5 @@ spec:
       metadata:
         serverAddress: http://prometheus-server.observability.svc.cluster.local:80
         query: |
-          sum(rate(http_server_requests_seconds_count{app_kubernetes_io_name="snapdragon-be-gateway"}[1m]))
+          sum(rate(http_server_requests_seconds_count{app_kubernetes_io_name="hugmesh-be-gateway"}[1m]))
         threshold: "50"

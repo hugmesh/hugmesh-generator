@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test-studio-launch.sh — hermetic checks for scripts/studio-launch.sh, the portable
 # NixOS / SteamOS / Arch / Debian / Fedora launcher (the POSIX sibling of the Windows
-# studio/snapdragon-studio.bat).
+# studio/hugmesh-studio.bat).
 #
 # NOTHING here builds/makes/dockers/installs or touches the network:
 #   • --detect only probes (python -c) and prints a report,
@@ -45,7 +45,7 @@ trap '[ -e "${VENV_DIR}" ] && { printf "ERROR: tests created %s — a launcher p
 
 # ── 1. static: syntax + the load-bearing PYTHONPATH export ──────────────────────────────
 "${BASH_BIN}" -n "${LAUNCH}" && _ok || _bad "bash -n: syntax error"
-# The fix vs studio/snapdragon-studio:3-4 (which computed `here` but never used it): the
+# The fix vs studio/hugmesh-studio:3-4 (which computed `here` but never used it): the
 # launcher MUST export PYTHONPATH=$REPO/studio so the module resolves from any CWD.
 grep -q 'export PYTHONPATH="${STUDIO_DIR}' "${LAUNCH}" \
     && _ok || _bad "launcher must export PYTHONPATH=studio (the load-bearing CWD fix)"
@@ -64,16 +64,16 @@ assert_no_venv "detect"
 
 # ── 3. PYTHONPATH proof: --print-command reaches the module from an UNRELATED cwd ───────
 # --print-command is a --arg other than --detect/--auto/--menu, so it takes the HEADLESS
-# path straight to `python3 -m snapdragon_studio` and emits a builder command line.
+# path straight to `python3 -m hugmesh_studio` and emits a builder command line.
 scratch="$(mktemp -d)"
 pc="$(cd "${scratch}" && "${BASH_BIN}" "${LAUNCH}" --print-command --backend native 2>/dev/null)"; prc=$?
 assert_eq   "print-command: exit 0"        "${prc}" 0
 assert_grep "print-command: builder emitted" "${pc}" 'build-[a-z0-9-]+-stage4\.sh'
 # Contrast: WITHOUT the launcher's PYTHONPATH export, the same module import fails from an
 # unrelated cwd — this is exactly the gap studio-launch.sh closes.
-( cd "${scratch}" && env -u PYTHONPATH python3 -m snapdragon_studio --print-command ) >/dev/null 2>&1
+( cd "${scratch}" && env -u PYTHONPATH python3 -m hugmesh_studio --print-command ) >/dev/null 2>&1
 crc=$?
-[ "${crc}" -ne 0 ] && _ok || _bad "contrast: bare 'python3 -m snapdragon_studio' unexpectedly imported from ${scratch}"
+[ "${crc}" -ne 0 ] && _ok || _bad "contrast: bare 'python3 -m hugmesh_studio' unexpectedly imported from ${scratch}"
 rm -rf "${scratch}"
 
 # ── 4. --menu: hands off to the ncurses menu, renders + quits under NO_TUI ──────────────

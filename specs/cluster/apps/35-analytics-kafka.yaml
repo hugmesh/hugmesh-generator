@@ -8,24 +8,24 @@
 # admin BFF degrades to the in-memory usage fallback (no Kafka producer connection)
 # until the broker attaches — which is exactly what the LEAN test tier asserts.
 #
-# Split from the former single auto-sync snapdragon-analytics app — the manifests
+# Split from the former single auto-sync hugmesh-analytics app — the manifests
 # were RESTRUCTURED (manifests/analytics/kafka), not deleted. See docs/HEAVY-TIER.md.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: snapdragon-analytics-kafka
+  name: hugmesh-analytics-kafka
   namespace: devops
   annotations:
     argocd.argoproj.io/sync-wave: "0"
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/analytics/kafka
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
   # MANUAL: no automated{} — operator opt-in only (heavy amd64).
   syncPolicy:
     syncOptions: [CreateNamespace=true]

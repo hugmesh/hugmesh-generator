@@ -1,22 +1,22 @@
-# snapdragon.games — runs on the x86_64 GPU worker (vendor-agnostic Mesa/Vulkan).
+# hugmesh.games — runs on the x86_64 GPU worker (vendor-agnostic Mesa/Vulkan).
 # The games BFF validates JWTs from the GAMES-realm Casdoor (casdoor-games), so it
 # syncs in wave "2" — AFTER casdoor-games (apps/06-casdoor-games, wave "1").
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: snapdragon-games
+  name: hugmesh-games
   namespace: devops
   annotations:
     argocd.argoproj.io/sync-wave: "2"
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/games
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-games
+    namespace: hugmesh-games
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

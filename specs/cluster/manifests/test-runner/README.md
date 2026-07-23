@@ -35,7 +35,7 @@ The orchestrator (`orchestrator.sh`, a tight `kubectl`/`curl` control loop) is a
 single long-lived pod that owns BOTH edges:
 
 1. **LEAN edge** — fires when the *required* (enumerated, NOT "every") workloads
-   in `snapdragon-frontend` + `-backend` + `-pki` have
+   in `hugmesh-frontend` + `-backend` + `-pki` have
    `availableReplicas == desired` **AND** their ArgoCD Applications are
    `Synced + Healthy` **AND** the seed/admin-sync Jobs are `Complete` (a positive
    seed signal). On the first all-ready it spawns `test-runner-lean`
@@ -54,7 +54,7 @@ Both Jobs write JUnit/JSON/summary + sanitized logs to the `test-reports` PVC an
 POST per-suite/per-role events to the admin-bff ingest endpoint
 (`/bff/admin/test-reports/ingest`, internal) so the admin-ui console streams live
 and the report list is durable. (The admin-bff side is PR #23 on
-snapdragon-admin-bff-api — the test-reports console backend.)
+hugmesh-admin-bff-api — the test-reports console backend.)
 
 ## ArgoCD gating
 
@@ -84,7 +84,7 @@ that keeps it (and the akkoma-peer) out of prod is `apps/00-prod-hygiene.yaml`
 | runtime prod-hygiene gate | `apps/00-prod-hygiene.yaml` `manifests/prod-hygiene/` | DONE |
 | non-federation specs 19-22 | `tests/e2e/specs/19-22-*.spec.ts` | DONE (skip honestly until peer+gate live) |
 | scaled-concurrent sweep | `tests/e2e/specs/24-final-e2e-sweep.spec.ts` + `swarm-driver.ts` | FRAMEWORK + representative scenarios (`docs/FINAL-E2E-SWEEP-MATRIX.md`) |
-| custom reporter (role/layer pivot, secret scrub, SSE) | `tests/e2e/reporters/snapdragon-reporter.ts` | DONE |
+| custom reporter (role/layer pivot, secret scrub, SSE) | `tests/e2e/reporters/hugmesh-reporter.ts` | DONE |
 
 Documented gaps (intentional, honest): the heavy/peer images carry the `:dev`
 floating tag pinned at build; the live federation/SSE/disabled-UI assertions

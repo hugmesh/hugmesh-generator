@@ -1,7 +1,7 @@
 # HTTPRoute (Gateway API) for the character-studio remote at the /character-studio
 # mountAt.
 #
-# ⚠ ROUTING-MODEL NOTE: the LIVE snapdragon mesh routes through Spring Cloud Gateway
+# ⚠ ROUTING-MODEL NOTE: the LIVE hugmesh mesh routes through Spring Cloud Gateway
 # (apps/20-gateway-{be,fe}.yaml helm values + the route-access DB), NOT the Gateway
 # API. The ACTIVE route for this remote is the `character-studio-ui` SCG route added
 # to apps/20-gateway-fe.yaml (path /character-studio/** -> this Service on :8080) +
@@ -16,20 +16,20 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: snapdragon-character-studio-ui
-  namespace: snapdragon-frontend
+  name: hugmesh-character-studio-ui
+  namespace: hugmesh-frontend
   labels:
-    app: snapdragon-character-studio-ui
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-character-studio-ui
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   # parentRefs MUST be set to the cluster's frontend Gateway when the Gateway API is
   # adopted (placeholder name below; matches the ingress-nginx/Envoy Gateway naming).
   parentRefs:
-    - name: snapdragon-fe-gateway
-      namespace: snapdragon-frontend
+    - name: hugmesh-fe-gateway
+      namespace: hugmesh-frontend
   rules:
     - matches:
         - path: { type: PathPrefix, value: /character-studio }
       backendRefs:
-        - name: snapdragon-character-studio-ui
+        - name: hugmesh-character-studio-ui
           port: 8080

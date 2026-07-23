@@ -1,7 +1,7 @@
-# snapdragon-update-policy — the LIVE superadmin OPT-IN switch for host-binary
+# hugmesh-update-policy — the LIVE superadmin OPT-IN switch for host-binary
 # auto-update.
 #
-# Every generated host/node + client image bakes the snapdragon-update poller (which
+# Every generated host/node + client image bakes the hugmesh-update poller (which
 # pulls changed binpkgs (deltas) from this binhost over the VPN and kured-safe-reboots),
 # but it is DEFAULT-OFF and FAIL-SAFE-TO-OFF: the ABSENCE of this ConfigMap (or an
 # unreachable cluster, or a node with no kubeconfig — e.g. a worker / client) means
@@ -10,13 +10,13 @@
 #
 # The superadmin UI edits .data.policy\.json (a single JSON object). Control-plane
 # nodes read it live each poll (kubectl get configmap); the value WINS over the baked
-# default + the per-node /etc/snapdragon/update.json. Worker / client nodes (no
-# kubeconfig) fall back to /etc/snapdragon/update.json => still OFF.
+# default + the per-node /etc/hugmesh/update.json. Worker / client nodes (no
+# kubeconfig) fall back to /etc/hugmesh/update.json => still OFF.
 #
 # Schema (all keys OPTIONAL; an omitted key keeps the default):
 #   enabled  bool    master switch. DEFAULT false. Set `true` to opt in / enable.
 #   cadence  cron    informational mirror of the cron the node runs (the node's
-#                    /etc/cron.d/snapdragon-update schedule is rendered by
+#                    /etc/cron.d/hugmesh-update schedule is rendered by
 #                    provision_update from the manifest; tighten the runtime gate
 #                    with `window` below, which the poller enforces live).
 #   window   "HH:MM-HH:MM"  only pull inside this local-time window ("" => any).
@@ -34,10 +34,10 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: snapdragon-update-policy
+  name: hugmesh-update-policy
   namespace: devops
   labels:
-    app.kubernetes.io/part-of: snapdragon-binhost
+    app.kubernetes.io/part-of: hugmesh-binhost
     snapdragon.systems/superadmin-editable: "true"
 data:
   policy.json: |

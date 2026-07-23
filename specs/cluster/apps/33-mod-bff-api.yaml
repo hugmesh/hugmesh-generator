@@ -1,6 +1,6 @@
-# mod-bff — Backend-For-Frontend for the snapdragon-mod-ui. ClusterIP in
-# snapdragon-backend; the ONLY way in is the fe-gateway /bff/mod/** route (same
-# origin as snapdragon.systems). Owns the mod_action audit table in mod-bff-db and
+# mod-bff — Backend-For-Frontend for the hugmesh-mod-ui. ClusterIP in
+# hugmesh-backend; the ONLY way in is the fe-gateway /bff/mod/** route (same
+# origin as hugmesh.systems). Owns the mod_action audit table in mod-bff-db and
 # calls federation-api (JWT-bearing WebClient) for moderation_requests.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -10,12 +10,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/mod-bff-api
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

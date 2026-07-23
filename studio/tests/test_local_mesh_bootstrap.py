@@ -12,13 +12,13 @@ import os
 
 import pytest
 
-from snapdragon_studio.core import local_mesh_bootstrap as boot_mod
-from snapdragon_studio.core.local_mesh_bootstrap import (
+from hugmesh_studio.core import local_mesh_bootstrap as boot_mod
+from hugmesh_studio.core.local_mesh_bootstrap import (
     SEED_SUPERADMIN_PASSWORD_ENV, SEED_SUPERADMIN_USERNAME_ENV,
     LocalMeshBootstrap, LocalMeshBootstrapConfig, main,
 )
-from snapdragon_studio.core.local_stack_node import LocalStackNode
-from snapdragon_studio.core.local_mesh import ENV_AUTHKEY, LocalMeshNode
+from hugmesh_studio.core.local_stack_node import LocalStackNode
+from hugmesh_studio.core.local_mesh import ENV_AUTHKEY, LocalMeshNode
 
 GENERATOR_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(GENERATOR_DIR)  # studio/tests -> studio -> repo root
@@ -174,7 +174,7 @@ def test_generate_creds_invokes_both_scripts_with_right_args_env(tmp_path, monke
         e = c["env"]
         # offline: VAULT_ADDR/TOKEN removed so the mint never hits a real Vault
         assert "VAULT_ADDR" not in e and "VAULT_TOKEN" not in e
-        assert e["BRAND"] == "snapdragon"
+        assert e["BRAND"] == "hugmesh"
         assert e["CASDOOR_SUPERADMIN_USERNAME"] == "megaadmin"
         assert e["NONINTERACTIVE"] == "1"
         assert e["CLUSTER_DOMAIN"] == "corp.example"   # prod pins the apex
@@ -334,7 +334,7 @@ def test_up_stops_if_superadmin_unreadable(tmp_path, monkeypatch):
 def test_prod_stack_node_threads_domain_test_does_not(tmp_path):
     # prod: the resolved apex is handed to LocalStackNode as DOMAIN, so `make
     # stack-up` derives CASDOOR_ISSUER=https://id.<domain> — matching the minted
-    # secrets and the plan, not the silent snapdragon.systems default.
+    # secrets and the plan, not the silent hugmesh.systems default.
     prod = _boot(tmp_path, env="prod", cluster_domain="corp.example",
                  auth_key="tskey-x")
     assert prod._stack_node().domain == "corp.example"
@@ -354,7 +354,7 @@ def test_stack_node_exports_domain_only_when_set(tmp_path, monkeypatch):
         captured["env"] = dict(env or {})
         return _R()
 
-    monkeypatch.setattr("snapdragon_studio.core.local_stack_node.subprocess.run",
+    monkeypatch.setattr("hugmesh_studio.core.local_stack_node.subprocess.run",
                         _fake_run)
     # start() gates on the cold-build preflight; pin it green so this test keeps
     # capturing the env of the `make stack-up` call itself.
@@ -513,11 +513,11 @@ def test_module_imports_no_qt():
     import sys
     studio_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     probe = (
-        "import snapdragon_studio.core.local_mesh_bootstrap as m, sys;"
+        "import hugmesh_studio.core.local_mesh_bootstrap as m, sys;"
         "assert callable(m.main);"
         "bad=[x for x in sys.modules if x.startswith(('PySide6','PyQt6','PyQt5'))];"
         "assert not bad, bad;"
-        "assert 'snapdragon_studio.gui' not in sys.modules"
+        "assert 'hugmesh_studio.gui' not in sys.modules"
     )
     env = dict(os.environ, PYTHONPATH=studio_root)
     r = subprocess.run([sys.executable, "-c", probe], env=env,

@@ -12,36 +12,36 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core.config import Domain, ImageConfig, User    # noqa: E402
-from snapdragon_studio.core.platform_info import HostInfo              # noqa: E402
-from snapdragon_studio.core import worklist_driver as wd               # noqa: E402
-from snapdragon_studio.core.worklist import (                         # noqa: E402
+from hugmesh_studio.core.config import Domain, ImageConfig, User    # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo              # noqa: E402
+from hugmesh_studio.core import worklist_driver as wd               # noqa: E402
+from hugmesh_studio.core.worklist import (                         # noqa: E402
     WorklistConfig, WorklistEntry, synthesize)
-from snapdragon_studio.gui import wizard as wizard_mod                 # noqa: E402
-from snapdragon_studio.gui.qt import Qt, QtWidgets                     # noqa: E402
-from snapdragon_studio.gui.pages.progress import _display_safe         # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod                 # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtWidgets                     # noqa: E402
+from hugmesh_studio.gui.pages.progress import _display_safe         # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
-                has_kvm=False, is_root=True, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=True, builder_image="hugmesh-builder")
 
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
     # ProgressPage now writes a tray build-status file; keep it out of the real
-    # ~/.snapdragon during tests.
-    monkeypatch.setenv("SNAPDRAGON_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    # ~/.hugmesh during tests.
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
 
 
 # A captured x86 builder stdout stream: ANSI-wrapped `==>` phase banners (design 2.9 says
@@ -107,7 +107,7 @@ def _install_replay_builddriver(monkeypatch, lines, code=0):
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture
@@ -143,7 +143,7 @@ def _install_fake_builddriver(monkeypatch, codes=None, on_run=None):
         def preflight_warnings(self, cfg, backend):
             # the REAL warning source (host_resources), so a test can pin the meminfo
             # snapshot and see the genuine aggregate/dedupe/log-line path fire
-            from snapdragon_studio.core import host_resources
+            from hugmesh_studio.core import host_resources
             return host_resources.low_memory_warnings(backend=backend)
 
         def command_string(self, cfg, backend=None):
@@ -342,7 +342,7 @@ def test_failed_row_leaves_indeterminate_busy_mode(wiz):
 
 def test_build_status_file_written_and_completes(monkeypatch, qapp, wiz, tmp_path):
     """The tray build-status channel: a run publishes a 'complete' status the tray polls."""
-    from snapdragon_studio.gui.tray import read_build_status
+    from hugmesh_studio.gui.tray import read_build_status
     _install_replay_builddriver(monkeypatch, CAPTURED_X86_STREAM, code=0)
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
                       brand="acme", output_dir=str(tmp_path / "out"))
@@ -357,7 +357,7 @@ def test_build_status_file_written_and_completes(monkeypatch, qapp, wiz, tmp_pat
 
 
 def test_build_status_file_reports_error_on_failure(monkeypatch, qapp, wiz, tmp_path):
-    from snapdragon_studio.gui.tray import read_build_status
+    from hugmesh_studio.gui.tray import read_build_status
     _install_replay_builddriver(monkeypatch, ["docker: no such image"], code=1)
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
                       brand="acme", output_dir=str(tmp_path / "out"))
@@ -415,7 +415,7 @@ def test_flash_group_hidden_until_all_ok_and_window_is_left_alone(monkeypatch, q
     a property of the wizard's screen-clamped default size (gui.wizard.medium_size), so
     the requirement is inverted: this page must leave the geometry exactly as it found
     it."""
-    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets", lambda: [])
+    monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets", lambda: [])
     _install_replay_builddriver(monkeypatch, CAPTURED_X86_STREAM, code=0)
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
                       brand="acme", output_dir=str(tmp_path / "out"))
@@ -434,10 +434,10 @@ def test_flash_group_hidden_until_all_ok_and_window_is_left_alone(monkeypatch, q
 def test_flash_group_reveals_on_ok_with_a_fake_target(monkeypatch, qapp, wiz, tmp_path):
     """With a (stubbed) attached target, an all-ok build reveals the flash dropdown and
     the Flash argv targets flash-disk.sh with SAFE args — no real dd is invoked."""
-    from snapdragon_studio.core.flash_targets import FlashTarget
+    from hugmesh_studio.core.flash_targets import FlashTarget
     fake = FlashTarget(path="/dev/sdz", size=16 * (1 << 30), model="Test SD",
                        transport="usb", removable=True, kind="usb")
-    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets", lambda: [fake])
+    monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets", lambda: [fake])
     _install_replay_builddriver(monkeypatch, CAPTURED_X86_STREAM, code=0)
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
                       brand="acme", output_dir=str(tmp_path / "out"))
@@ -454,10 +454,10 @@ def test_flash_group_reveals_on_ok_with_a_fake_target(monkeypatch, qapp, wiz, tm
 
 
 def test_failed_build_never_reveals_flash_group(monkeypatch, qapp, wiz, tmp_path):
-    from snapdragon_studio.core.flash_targets import FlashTarget
+    from hugmesh_studio.core.flash_targets import FlashTarget
     fake = FlashTarget(path="/dev/sdz", size=16 * (1 << 30), model="Test SD",
                        transport="usb", removable=True, kind="usb")
-    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets", lambda: [fake])
+    monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets", lambda: [fake])
     _install_replay_builddriver(monkeypatch, ["docker: no such image"], code=1)
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
                       brand="acme", output_dir=str(tmp_path / "out"))
@@ -472,7 +472,7 @@ def test_total_bar_chunk_resets_to_blue_on_a_second_run(monkeypatch, qapp, wiz, 
     """A first all-ok run turns the overall chunk GREEN; a second build on the SAME page
     instance (initializePage -> _reset) must put it back to BLUE, so the new run never
     renders green (or stays green under an 'Overall FAILED' label)."""
-    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets", lambda: [])
+    monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets", lambda: [])
     _install_replay_builddriver(monkeypatch, CAPTURED_X86_STREAM, code=0)
     cfg = ImageConfig(mode="standalone", role="standalone-thick", platform="x86",
                       brand="acme", output_dir=str(tmp_path / "out"))
@@ -492,10 +492,10 @@ def test_auto_flash_skips_when_device_identity_changed(monkeypatch, wiz):
     /dev/sdX is enumeration-order dependent. If a DIFFERENT removable disk takes the same
     node before completion, auto-flash must NOT write it (no human at the write): the
     re-scanned target's size/model must match the stashed identity."""
-    from snapdragon_studio.core.flash_targets import FlashTarget
+    from hugmesh_studio.core.flash_targets import FlashTarget
     selected = FlashTarget("/dev/sdb", 16 * (1 << 30), "SanDisk Ultra", "usb", True, "usb")
     swapped = FlashTarget("/dev/sdb", 32 * (1 << 30), "Some Other Stick", "usb", True, "usb")
-    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets",
+    monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets",
                         lambda: [swapped])          # same /dev path, different device
     page = _progress_page(wiz)
     wiz.flash_after = (True, selected)
@@ -507,9 +507,9 @@ def test_auto_flash_skips_when_device_identity_changed(monkeypatch, wiz):
 
 
 def test_auto_flash_fires_when_identity_matches(monkeypatch, wiz):
-    from snapdragon_studio.core.flash_targets import FlashTarget
+    from hugmesh_studio.core.flash_targets import FlashTarget
     selected = FlashTarget("/dev/sdb", 16 * (1 << 30), "SanDisk Ultra", "usb", True, "usb")
-    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets",
+    monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets",
                         lambda: [FlashTarget("/dev/sdb", 16 * (1 << 30), "SanDisk Ultra",
                                              "usb", True, "usb")])
     page = _progress_page(wiz)
@@ -579,7 +579,7 @@ def test_job_tree_lists_all_images_up_front_and_advances_states(monkeypatch, qap
 def test_stages_appear_under_job_from_phase_table_as_banners_cross(wiz):
     """(b) each job's children are the honest phase-table stages, and they advance
     done/running as the parser crosses the `==> ` banners (no invented taxonomy)."""
-    from snapdragon_studio.core.progress_parse import platform_phases
+    from hugmesh_studio.core.progress_parse import platform_phases
     page = _progress_page(wiz)
     page._reset()
     page._build_row(0, "acme-x86", "x86")
@@ -747,7 +747,7 @@ def test_low_memory_warning_logged_but_dispatch_proceeds(monkeypatch, qapp, wiz,
     reads tight, while the process-launch snapshot (_meminfo_cached, conftest-pinned)
     still says healthy — a Studio launched on a healthy host that got tight while the
     user configured must warn anyway."""
-    from snapdragon_studio.core import host_resources as hr
+    from hugmesh_studio.core import host_resources as hr
     tight = {"MemTotal": 32 * hr.GIB, "MemAvailable": 2 * hr.GIB,
              "SwapTotal": 4 * hr.GIB, "SwapFree": 0}
     monkeypatch.setattr(hr, "_meminfo_fresh", lambda: dict(tight))
@@ -766,7 +766,7 @@ def test_low_memory_warning_logged_but_dispatch_proceeds(monkeypatch, qapp, wiz,
 
 
 def test_no_warning_lines_on_a_healthy_host(monkeypatch, qapp, wiz, tmp_path):
-    from snapdragon_studio.core import host_resources as hr
+    from hugmesh_studio.core import host_resources as hr
     healthy = {"MemTotal": 32 * hr.GIB, "MemAvailable": 24 * hr.GIB,
                "SwapTotal": 4 * hr.GIB, "SwapFree": 4 * hr.GIB}
     monkeypatch.setattr(hr, "_meminfo_fresh", lambda: dict(healthy))
@@ -790,7 +790,7 @@ def _back_btn(wiz):
     # QWizard.WizardButton.BackButton), while PySide6 accepts both — so a test using
     # the unscoped form passes under PySide6 and the shipped code still crashes every
     # PyQt6 user. Mirror exactly what progress.py calls.
-    from snapdragon_studio.gui.qt import QtWidgets
+    from hugmesh_studio.gui.qt import QtWidgets
     return wiz.button(QtWidgets.QWizard.WizardButton.BackButton)
 
 
@@ -803,7 +803,7 @@ def test_back_is_disabled_while_a_build_is_in_flight(monkeypatch, qapp, wiz, tmp
     assert not page._all_terminal
     assert not _back_btn(wiz).isEnabled()      # in flight -> no stepping back
     # DRAIN the run before returning: an abandoned worker thread outlives this test,
-    # and its session record then lands in whatever $SNAPDRAGON_STUDIO_STATE_DIR the
+    # and its session record then lands in whatever $HUGMESH_STUDIO_STATE_DIR the
     # NEXT test has isolated to (each test gets its own tmp_path) — a cross-file
     # poisoner that surfaces as a wrong session count somewhere else entirely.
     _run_to_completion(qapp, page)
@@ -854,7 +854,7 @@ def test_auto_backend_is_resolved_before_it_lands_in_the_session_record(
     was handed STRAIGHT to new_session, so the durable record said ``backend: None``
     while WorklistDriver separately resolved ``backend or host.default_backend`` and
     really ran NATIVE. The record therefore could not say what ran, and a restart
-    (SnapdragonWizard restores ``build_backend = session.backend``) would re-resolve
+    (HugMeshWizard restores ``build_backend = session.backend``) would re-resolve
     against whatever the host default happened to be THEN — silently switching backends.
 
     The pinned HOST fixture is Gentoo without docker -> default_backend == "native".
@@ -871,7 +871,7 @@ def test_auto_backend_is_resolved_before_it_lands_in_the_session_record(
     assert page.driver.backend == "native"
     # ...and so does the artifact on disk, which is what the sessions list / tray read.
     import json
-    from snapdragon_studio.core import build_sessions
+    from hugmesh_studio.core import build_sessions
     with open(page._session.path()) as fh:
         assert json.load(fh)["backend"] == "native"
 
@@ -1185,7 +1185,7 @@ def test_watch_help_names_the_real_per_image_log_file(monkeypatch, qapp, wiz, tm
     and the session record use, never a hardcoded guess. The builders write
     IMAGE_LOG_FILE="${WORK_DIR}/build-${BUILD_SUBDIR#wl-}.log"; build_sessions is the twin.
     """
-    from snapdragon_studio.core import build_sessions
+    from hugmesh_studio.core import build_sessions
     _install_streaming_builddriver(monkeypatch, CAPTURED_X86_STREAM)
     _install_fake_genkeys(monkeypatch)
     _prime(wiz, _x86_worklist(tmp_path))
@@ -1213,7 +1213,7 @@ def test_watch_help_names_the_real_per_image_log_file(monkeypatch, qapp, wiz, tm
 
 def test_watch_help_follows_the_selected_job(monkeypatch, qapp, wiz, tmp_path):
     """(4) "updating with the selected job" — through the real selection funnel."""
-    from snapdragon_studio.core import build_sessions
+    from hugmesh_studio.core import build_sessions
     _install_streaming_builddriver(monkeypatch, CAPTURED_X86_STREAM)
     _install_fake_genkeys(monkeypatch)
     _prime(wiz, _x86_worklist(tmp_path))
@@ -1297,7 +1297,7 @@ def test_ansi_escapes_never_reach_any_operator_visible_surface(
 def test_display_safe_strips_escapes_but_keeps_real_text():
     """_display_safe is lossless for real text: it removes only bytes Qt cannot paint.
     TAB is deliberately kept (real layout in builder output, and Qt renders it)."""
-    from snapdragon_studio.gui.pages.progress import _display_safe
+    from hugmesh_studio.gui.pages.progress import _display_safe
     assert _display_safe("\x1b[1;36m==> Rebranding\x1b[0m") == "==> Rebranding"
     assert _display_safe("\x1b[A\x1b[72C [ !! ]") == " [ !! ]"      # cursor moves
     assert _display_safe("plain line") == "plain line"              # untouched

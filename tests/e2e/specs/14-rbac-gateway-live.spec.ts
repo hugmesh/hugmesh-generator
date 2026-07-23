@@ -4,7 +4,7 @@ import { gatewayDecision, effectiveRoles, Gateway } from './rbac-route-access';
 
 // 14 — LIVE gateway route-access enforcement (ACTIVATES when the gateways land).
 //
-// Phase 8/10: snapdragon-fe-gateway / -be-gateway / -pki-gateway are README-only
+// Phase 8/10: hugmesh-fe-gateway / -be-gateway / -pki-gateway are README-only
 // today and there is no real Casdoor in the rootless mock stack, so this whole
 // file is SKIPPED unless BOTH:
 //   * LIVE_GATEWAY=1            — a gateway that enforces gateway_route_access is up
@@ -25,21 +25,21 @@ import { gatewayDecision, effectiveRoles, Gateway } from './rbac-route-access';
 
 const LIVE = process.env.LIVE_GATEWAY === '1';
 const CASDOOR_URL = process.env.SYSTEMS_CASDOOR_URL || '';
-const CASDOOR_ORG = process.env.SYSTEMS_CASDOOR_ORG || 'snapdragon';
+const CASDOOR_ORG = process.env.SYSTEMS_CASDOOR_ORG || 'hugmesh';
 const CASDOOR_CLIENT_ID = process.env.SYSTEMS_CASDOOR_CLIENT_ID || '';
 const CASDOOR_CLIENT_SECRET = process.env.SYSTEMS_CASDOOR_CLIENT_SECRET || '';
 // Gateway base URLs (default to SNAP_BASE_URL for the fe-gateway; override per gw).
 const GW_BASE: Record<Gateway, string> = {
-  'snapdragon-fe-gateway': process.env.FE_GATEWAY_URL || process.env.SNAP_BASE_URL || 'https://localhost:8443',
-  'snapdragon-be-gateway': process.env.BE_GATEWAY_URL || 'https://api.localhost:8443',
-  'snapdragon-pki-gateway': process.env.PKI_GATEWAY_URL || 'https://id.localhost:8443',
+  'hugmesh-fe-gateway': process.env.FE_GATEWAY_URL || process.env.SNAP_BASE_URL || 'https://localhost:8443',
+  'hugmesh-be-gateway': process.env.BE_GATEWAY_URL || 'https://api.localhost:8443',
+  'hugmesh-pki-gateway': process.env.PKI_GATEWAY_URL || 'https://id.localhost:8443',
   // Tailnet-only; probed by spec 25 (its own LIVE describe), listed here only so
   // the Gateway record is total — spec 14's LIVE_PROBES never target it.
-  'snapdragon-superadmin-gateway': process.env.SUPERADMIN_GATEWAY_URL || 'https://superadmin.localhost:8443',
+  'hugmesh-superadmin-gateway': process.env.SUPERADMIN_GATEWAY_URL || 'https://superadmin.localhost:8443',
 };
 
 /** Real Casdoor password-grant for a seed user; returns the access token whose
- *  `roles` claim the gateway reads. Mirrors snapdragon.games e2e login() but at
+ *  `roles` claim the gateway reads. Mirrors hugmesh.games e2e login() but at
  *  the OIDC token endpoint (no UI). */
 async function casdoorToken(api: APIRequestContext, username: string): Promise<string> {
   const u = systemsUser(username);
@@ -66,14 +66,14 @@ async function casdoorToken(api: APIRequestContext, username: string): Promise<s
 // e2e-mastodon are included so the "a granted member reaches their own
 // homeserver" ALLOW case is still live-probed with a real persona.
 const LIVE_PROBES: { gw: Gateway; path: string; users: string[] }[] = [
-  { gw: 'snapdragon-fe-gateway', path: '/admin/usage', users: ['e2e-admin', 'e2e-adminonly', 'e2e-mod', 'e2e-user'] },
-  { gw: 'snapdragon-be-gateway', path: '/api/admin/route-access', users: ['e2e-admin', 'e2e-mod', 'e2e-user'] },
-  { gw: 'snapdragon-be-gateway', path: '/api/v1/pleroma/admin/config', users: ['e2e-mod', 'e2e-admin', 'e2e-user'] },
-  { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', users: ['e2e-mod', 'e2e-matrix', 'e2e-user'] },
-  { gw: 'snapdragon-be-gateway', path: '/api/v1/timelines/home', users: ['e2e-mod', 'e2e-mastodon', 'e2e-user'] },
-  { gw: 'snapdragon-fe-gateway', path: '/games/admin/sessions', users: ['e2e-gamesadmin', 'e2e-gamesonly', 'e2e-adminonly', 'e2e-mod'] },
-  { gw: 'snapdragon-be-gateway', path: '/games/api/admin/role-grants', users: ['e2e-gamesadmin', 'e2e-gamesonly', 'e2e-adminonly'] },
-  { gw: 'snapdragon-be-gateway', path: '/infra/logs', users: ['e2e-admin', 'e2e-mod'] }, // default-deny for all
+  { gw: 'hugmesh-fe-gateway', path: '/admin/usage', users: ['e2e-admin', 'e2e-adminonly', 'e2e-mod', 'e2e-user'] },
+  { gw: 'hugmesh-be-gateway', path: '/api/admin/route-access', users: ['e2e-admin', 'e2e-mod', 'e2e-user'] },
+  { gw: 'hugmesh-be-gateway', path: '/api/v1/pleroma/admin/config', users: ['e2e-mod', 'e2e-admin', 'e2e-user'] },
+  { gw: 'hugmesh-be-gateway', path: '/_matrix/client/v3/sync', users: ['e2e-mod', 'e2e-matrix', 'e2e-user'] },
+  { gw: 'hugmesh-be-gateway', path: '/api/v1/timelines/home', users: ['e2e-mod', 'e2e-mastodon', 'e2e-user'] },
+  { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions', users: ['e2e-gamesadmin', 'e2e-gamesonly', 'e2e-adminonly', 'e2e-mod'] },
+  { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants', users: ['e2e-gamesadmin', 'e2e-gamesonly', 'e2e-adminonly'] },
+  { gw: 'hugmesh-be-gateway', path: '/infra/logs', users: ['e2e-admin', 'e2e-mod'] }, // default-deny for all
 ];
 
 test.describe('RBAC: LIVE gateway route-access enforcement', () => {

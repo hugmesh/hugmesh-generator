@@ -4,7 +4,7 @@
 # installed:"false"). When NOT deployed, nothing references it — a default build
 # is byte-identical to a build without this feature.
 #
-# Lives in snapdragon-backend ALONGSIDE tuwunel: the bridge is a Matrix
+# Lives in hugmesh-backend ALONGSIDE tuwunel: the bridge is a Matrix
 # APPSERVICE (exclusive user namespace @mesh-.*), so it talks the plain
 # in-namespace CS API (tuwunel:8008, like the tuwunel-admin-sync Job) — NOT the
 # mTLS tuwunel-proxy:4443: appservice tokens are not user-custody tokens and
@@ -20,24 +20,24 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: snapdragon-meshbridge
-  namespace: snapdragon-backend
+  name: hugmesh-meshbridge
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: meshbridge
-    app: snapdragon-meshbridge
-    app.kubernetes.io/part-of: snapdragon.systems
+    app: hugmesh-meshbridge
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/optional-service: meshbridge
 spec:
   replicas: 1                  # single writer: per-device serial/TCP/MQTT sessions + txn dedupe are in-process
   selector:
     matchLabels:
-      app: snapdragon-meshbridge
+      app: hugmesh-meshbridge
   template:
     metadata:
       labels:
-        app: snapdragon-meshbridge
+        app: hugmesh-meshbridge
         app.kubernetes.io/name: meshbridge
-        app.kubernetes.io/part-of: snapdragon.systems
+        app.kubernetes.io/part-of: hugmesh.systems
         snapdragon.systems/optional-service: meshbridge
     spec:
       serviceAccountName: sa-meshbridge
@@ -60,7 +60,7 @@ spec:
       securityContext:
         # Unique MCS category s0:c76 (docs/SECURITY.md §3 matrix row). No two
         # workloads may share a category — meshbridge is isolated from tuwunel
-        # (c32) et al. even though it co-resides in snapdragon-backend.
+        # (c32) et al. even though it co-resides in hugmesh-backend.
         seLinuxOptions:
           type: container_t
           level: "s0:c76"
@@ -73,8 +73,8 @@ spec:
           command: ["python3", "/app/main.py"]
           env:
             # ── Matrix (tuwunel) — in-namespace CS API + AS listener ──────────
-            - { name: MATRIX_URL,         value: "http://tuwunel.snapdragon-backend.svc.cluster.local:8008" }
-            - { name: MATRIX_SERVER_NAME, value: "snapdragon.systems" }
+            - { name: MATRIX_URL,         value: "http://tuwunel.hugmesh-backend.svc.cluster.local:8008" }
+            - { name: MATRIX_SERVER_NAME, value: "hugmesh.systems" }
             # The AS HTTP listener (tuwunel pushes PUT /_matrix/app/v1/transactions
             # here) + /healthz share this port; must match the Service/registration.
             - { name: MESHBRIDGE_LISTEN_PORT, value: "8009" }
@@ -99,14 +99,14 @@ spec:
             # precedent). NOTE: user-bff-api also REQUIRES a cluster-CA mTLS
             # client cert at the transport layer (SSL_CLIENT_AUTH=need) — see
             # the network-policy header for the follow-up on that leg.
-            - { name: MESHBRIDGE_USERBFF_MESH_DEVICES_URL, value: "https://snapdragon-user-bff-api.snapdragon-backend.svc.cluster.local:8080/bff/user/internal/mesh-devices" }
+            - { name: MESHBRIDGE_USERBFF_MESH_DEVICES_URL, value: "https://hugmesh-user-bff-api.hugmesh-backend.svc.cluster.local:8080/bff/user/internal/mesh-devices" }
             - { name: MESHBRIDGE_REG_POLL_SECONDS, value: "60" }
             # ── Casdoor client-credentials (mints the SERVICE JWT above) ──────
             # In-cluster Casdoor token endpoint (same DNS the admin-sync Jobs +
             # signup-gate use). Client id/secret are ESO-mounted FILES from the
             # same meshbridge-appservice Secret — see the ESO header for the
             # (manual) client provisioning contract.
-            - { name: MESHBRIDGE_OIDC_TOKEN_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000/api/login/oauth/access_token" }
+            - { name: MESHBRIDGE_OIDC_TOKEN_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000/api/login/oauth/access_token" }
             - { name: MESHBRIDGE_OIDC_CLIENT_ID_FILE,     value: "/run/secrets/meshbridge/oidc_client_id" }
             - { name: MESHBRIDGE_OIDC_CLIENT_SECRET_FILE, value: "/run/secrets/meshbridge/oidc_client_secret" }
             # ── mTLS client identity for the user-bff leg (SSL_CLIENT_AUTH=need
@@ -118,7 +118,7 @@ spec:
             # ── OPTIONAL mesh-bff sync leg: node directory + mesh-room snapshot
             # push. Unset by default — mesh-bff-api is its own optional service;
             # the bridge is fully functional without it (user-bff leg only).
-            # - { name: MESHBRIDGE_MESHBFF_SYNC_URL, value: "https://snapdragon-mesh-bff-api.snapdragon-backend.svc.cluster.local:8080/bff/mesh/internal/bridge-sync" }
+            # - { name: MESHBRIDGE_MESHBFF_SYNC_URL, value: "https://hugmesh-mesh-bff-api.hugmesh-backend.svc.cluster.local:8080/bff/mesh/internal/bridge-sync" }
           ports:
             - { name: as-http, containerPort: 8009 }
           resources:
@@ -196,14 +196,14 @@ apiVersion: v1
 kind: Service
 metadata:
   name: meshbridge
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels:
     app.kubernetes.io/name: meshbridge
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/optional-service: meshbridge
 spec:
   type: ClusterIP
   selector:
-    app: snapdragon-meshbridge
+    app: hugmesh-meshbridge
   ports:
     - { name: as-http, port: 8009, targetPort: as-http }

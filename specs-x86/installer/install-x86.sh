@@ -1,5 +1,5 @@
 #!/bin/bash
-# Snapdragon x86_64 installer (hardened Gentoo desktop / k8s node, optional GPU).
+# HugMesh x86_64 installer (hardened Gentoo desktop / k8s node, optional GPU).
 # Run as root from a Linux/Gentoo live environment with this ISO mounted. Writes a
 # UEFI GPT disk and extracts the stage4 tarball.
 #
@@ -67,7 +67,7 @@ run_menu() {
     while read -r name size model; do
         items+=("${name}" "${size} ${model:-}")
     done < <(lsblk -dpno NAME,SIZE,MODEL 2>/dev/null | grep -vE '/loop|/sr[0-9]|/zram')
-    [ ${#items[@]} -gt 0 ] && DEV="$(whiptail --title "Snapdragon Installer" \
+    [ ${#items[@]} -gt 0 ] && DEV="$(whiptail --title "HugMesh Installer" \
         --menu "Choose the TARGET disk to install onto (it will be ERASED):" 20 70 8 \
         "${items[@]}" 3>&1 1>&2 2>&3)" || true
     whiptail --title "Disk encryption" --yesno "Encrypt the root filesystem with LUKS2 full-disk encryption?\n(You'll set a root-unlock passphrase, separate from your login.)" 11 70 \
@@ -83,16 +83,16 @@ run_menu() {
         adopt)   HOME_DEVICE_OVERRIDE="$(whiptail --inputbox "Existing home device (LABEL=…|UUID=…|/dev/…):" 9 70 "${HOME_DEVICE_OVERRIDE}" 3>&1 1>&2 2>&3)" || true ;;
         restore) HOME_BACKUP_OVERRIDE="$(whiptail --inputbox "Encrypted backup path (or 'auto' to scan USBs):" 9 70 "auto" 3>&1 1>&2 2>&3)" || true ;;
     esac
-    whiptail --title "Confirm" --yesno "Install Snapdragon onto:\n  ${DEV}\n  encrypt=${ENCRYPT}  home=${HOME_MODE_OVERRIDE:-<baked>}\n\nProceed? This ERASES ${DEV}." 13 70 || { echo "Aborted from menu."; exit 1; }
+    whiptail --title "Confirm" --yesno "Install HugMesh onto:\n  ${DEV}\n  encrypt=${ENCRYPT}  home=${HOME_MODE_OVERRIDE:-<baked>}\n\nProceed? This ERASES ${DEV}." 13 70 || { echo "Aborted from menu."; exit 1; }
     UNATTENDED=true   # the menu already collected + confirmed everything
 }
-# snapdragon.install=ncurses on the kernel cmdline (live boot menu) → menu mode.
-grep -qs 'snapdragon.install=ncurses' /proc/cmdline && INTERACTIVE=true
+# hugmesh.install=ncurses on the kernel cmdline (live boot menu) → menu mode.
+grep -qs 'hugmesh.install=ncurses' /proc/cmdline && INTERACTIVE=true
 ${INTERACTIVE} && run_menu
 
 # Unattended / kiosk install with no disk given: auto-select the largest FIXED
 # (non-removable) disk, so a hands-free `install-x86.sh --unattended` (or the
-# snapdragon.install=unattended boot entry) works without a TTY. Removable media —
+# hugmesh.install=unattended boot entry) works without a TTY. Removable media —
 # incl. the USB the live env booted from — is excluded (RM=1) so it is never wiped.
 auto_select_disk() {
     lsblk -dpnbo NAME,SIZE,TYPE,RM 2>/dev/null \
@@ -208,7 +208,7 @@ if ${ENCRYPT}; then
     # fstab: ESP at /boot (not /boot/efi), root via the decrypted mapper by UUID.
     ROOT_FS_UUID="$(blkid -s UUID -o value "${ROOT_DM}")"
     {
-        echo "# Snapdragon encrypted-root layout (installer-generated)"
+        echo "# HugMesh encrypted-root layout (installer-generated)"
         echo "UUID=${ROOT_FS_UUID}  /      ext4  noatime,errors=remount-ro  0 1"
         echo "PARTUUID=${ESP_PARTUUID}  /boot  vfat  noatime,nosuid,nodev,noexec,fmask=0077,dmask=0077  0 2"
         echo "tmpfs  /tmp  tmpfs  noatime,nosuid,nodev,noexec,size=2G  0 0"
@@ -271,15 +271,15 @@ else
 fi
 
 # ── Home provisioning (manifest-driven; CLI/menu overrides win) ──────────────
-# The image bakes /etc/snapdragon/home.conf (HOME_MODE/HOME_DEVICE/HOME_BACKUP).
+# The image bakes /etc/hugmesh/home.conf (HOME_MODE/HOME_DEVICE/HOME_BACKUP).
 # create  : nothing here — the first-boot helper sets it up.
 # archive : unpack the bundled $HOME tarball (only /home/<user> lands).
 # adopt   : mount an existing home device at /home (no format) via fstab.
 # restore : decrypt + unpack an encrypted full-home backup (USB or path).
 HM_MODE="archive"; HM_DEVICE=""; HM_BACKUP=""
-if [ -f /mnt/sdhost/etc/snapdragon/home.conf ]; then
+if [ -f /mnt/sdhost/etc/hugmesh/home.conf ]; then
     # shellcheck disable=SC1091
-    . /mnt/sdhost/etc/snapdragon/home.conf 2>/dev/null || true
+    . /mnt/sdhost/etc/hugmesh/home.conf 2>/dev/null || true
     HM_MODE="${HOME_MODE:-archive}"; HM_DEVICE="${HOME_DEVICE:-}"; HM_BACKUP="${HOME_BACKUP:-}"
 fi
 [ -n "${HOME_MODE_OVERRIDE}" ]   && HM_MODE="${HOME_MODE_OVERRIDE}"

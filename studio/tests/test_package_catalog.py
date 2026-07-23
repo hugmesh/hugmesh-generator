@@ -7,8 +7,8 @@ import os
 
 import pytest
 
-from snapdragon_studio.core import package_catalog as pc
-from snapdragon_studio.core.config import ImageConfig, ROLE_CHOICES, image_class
+from hugmesh_studio.core import package_catalog as pc
+from hugmesh_studio.core.config import ImageConfig, ROLE_CHOICES, image_class
 
 _GEN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

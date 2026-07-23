@@ -10,7 +10,7 @@ worked end-to-end:
 - headscale binary present, service started, listening on `:8080`
 - containerd / kubelet / kubeadm / kubectl present, kubeadm config staged
 - Kubernetes kernel modules + sysctls active
-- `jq` present and `/etc/snapdragon/role` marker written
+- `jq` present and `/etc/hugmesh/role` marker written
 
 ## What it does / doesn't cover
 
@@ -98,23 +98,23 @@ fragment) and `launch-x86.sh --gpu` attaches a virtio-GPU.
 
 ## Windows Studio `.bat` e2e (`windows-studio-e2e.sh`)
 
-Proves the SHIPPED Windows launcher works on real Windows. `snapdragon-studio.bat` is
+Proves the SHIPPED Windows launcher works on real Windows. `hugmesh-studio.bat` is
 the **guided bootstrapper** (see `studio/README.md`, "Run"): on automation args it goes
-straight to `python -m snapdragon_studio %*`, and `--print-command` is a
+straight to `python -m hugmesh_studio %*`, and `--print-command` is a
 **headless-safe** mode (app.py returns before importing Qt), so it exercises the whole
 launcher → module → builder-command path with no display. The harness packs the entire
 `studio/` tree onto a FAT **payload** disk (a stock Windows guest has no virtio-9p
 driver, so a shared FAT is the transport), boots the guest, runs the `.bat` **twice**,
 writes the results back to the FAT, and reads them back with `mtools` after power-off:
 
-1. **DETECT leg** (`snapdragon-studio.bat /detect > DETECT.txt`) — the bootstrapper's
+1. **DETECT leg** (`hugmesh-studio.bat /detect > DETECT.txt`) — the bootstrapper's
    report mode; it never prompts and never installs, so it needs **no new guest
    prerequisites** and existing operator images keep passing. The verdict requires
    `DETECT_EXITCODE=0`, `DETECT python=found` (Python on PATH is already part of the
    image contract below), a **definite** `DETECT pyside6=` and `DETECT docker=` verdict
    either way (`missing` is the expected answer on a minimal image — a docker-equipped
    image must also pass), and a `DETECT winget=` line.
-2. **MARKER leg** (unchanged) — `snapdragon-studio.bat --print-command --backend
+2. **MARKER leg** (unchanged) — `hugmesh-studio.bat --print-command --backend
    native > MARKER.txt` must exit `0` **and** emit a `build-*-stage4.sh` command.
 
 A missing `MARKER.txt` is still INCONCLUSIVE (guest hook/boot problem); a present
@@ -125,11 +125,11 @@ Because we cannot ship a Windows image, the guest is **operator-provided** (like
 Gentoo build prerequisites above):
 
 - a minimal **Windows desktop qcow2** (`WINDOWS_QEMU_IMAGE`) with **Python 3.10+ on
-  `PATH`** (so `python -m snapdragon_studio` runs) and `pip install -r requirements.txt`
+  `PATH`** (so `python -m hugmesh_studio` runs) and `pip install -r requirements.txt`
   is **not** needed for `--print-command` (it is Qt-free);
 - **autologon** to the desktop, and a **Startup / SetupComplete hook** that runs
   `D:\run-selftest.bat` — the tiny runner the harness places at the payload-disk root.
-  It `cd`s into `D:\studio`, runs the `/detect` leg, then `snapdragon-studio.bat
+  It `cd`s into `D:\studio`, runs the `/detect` leg, then `hugmesh-studio.bat
   --print-command --backend native`, appends the exit codes, and `shutdown /s /t 0`.
 
 The base image is never mutated (a throwaway qcow2 overlay is booted on top); the
@@ -148,7 +148,7 @@ WINDOWS_QEMU_IMAGE=/srv/vm/win-min.qcow2 ./tests/qemu/windows-studio-e2e.sh --ti
 Without `WINDOWS_QEMU_IMAGE` (or qemu/OVMF/mtools) the real-boot path **SKIPS cleanly**
 (`SKIP: …`, exit 0), so CI stays green. The always-run **offline** half of this proof —
 that the `.bat` targets the right entrypoint, that
-`python -m snapdragon_studio --print-command` really emits a builder command on Linux
+`python -m hugmesh_studio --print-command` really emits a builder command on Linux
 (`studio/tests/test_bat_launcher.py`), and the bootstrapper's static contract (CRLF,
 label resolution, pinned winget IDs, consent gating, the DETECT vocabulary — the same
 tokens this harness asserts; `studio/tests/test_bat_bootstrap.py`) — lives in the
@@ -195,11 +195,11 @@ tests/qemu/run-matrix-e2e.sh --dry-run
 make qemu-matrix-enumerate
 
 # real boot (operator supplies golden artifacts under WORK_DIR):
-SNAPDRAGON_QEMU_E2E=1 make qemu-matrix MATRIX_FILTER=x86/be+gpu
-SNAPDRAGON_QEMU_E2E=1 tests/qemu/run-matrix-e2e.sh --only jetson/edge_ai -w /srv/img
+HUGMESH_QEMU_E2E=1 make qemu-matrix MATRIX_FILTER=x86/be+gpu
+HUGMESH_QEMU_E2E=1 tests/qemu/run-matrix-e2e.sh --only jetson/edge_ai -w /srv/img
 ```
 
-Gated exactly like the Tor onion e2e: without `SNAPDRAGON_QEMU_E2E=1` (and qemu) the
+Gated exactly like the Tor onion e2e: without `HUGMESH_QEMU_E2E=1` (and qemu) the
 boot path **SKIPs cleanly** (exit 0), and a missing artifact for a row is a per-row SKIP,
 never a FAIL. EXPERIMENTAL boards (frite/jetson/orangepi) may be **INCONCLUSIVE** under
 `-M virt` (no vendor firmware) — recorded as soft-pass, not FAIL. Under TCG on an x86
@@ -212,4 +212,4 @@ enumeration + per-platform census, the launcher resolution, the pseudo-role tran
 the `(1 + 512 + ROOT_MiB + 1)` size formula, the `img_size=`-from-`--print-plan` parser,
 the `ram_mb` ceiling accessor, and the driver's `--dry-run` (118 rows) — all runs every
 pass with the gate unset. The pure Python view of the enumeration + maths is
-`studio/snapdragon_studio/core/build_matrix.py`.
+`studio/hugmesh_studio/core/build_matrix.py`.

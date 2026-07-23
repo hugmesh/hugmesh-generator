@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# qemu-boot-test.sh — boot a Snapdragon ISO (or installed disk) under QEMU/KVM with
+# qemu-boot-test.sh — boot a HugMesh ISO (or installed disk) under QEMU/KVM with
 # UEFI (OVMF) and report whether it boots. Used to verify the live ISO, the toram
 # boot path, and a full installer run onto a virtual disk — the boot-time behaviours
 # that can't be checked at build time.

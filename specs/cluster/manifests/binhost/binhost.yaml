@@ -15,7 +15,7 @@ kind: PersistentVolumeClaim
 metadata: { name: binpkgs, namespace: devops }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 50Gi } }
 ---
 apiVersion: v1

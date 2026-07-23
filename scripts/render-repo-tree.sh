@@ -90,7 +90,7 @@ declare -a SET_VALUES=()
 _RESERVED_SCALARS=" BRAND BRAND_TITLE ORG CLUSTER_DOMAIN NPM_SCOPE HOST_NAME GENERATOR_ORG_GROUP REPO_NAME ORG_SLUG HEADSCALE_URL MESH_TAG "
 # --ref <tag|sha>: pin the OWN-MESH base pull to a specific tag/branch/sha (plumbed
 # to pull-repo-base.sh --ref). The pinned ref is recorded as a one-line
-# `.snapdragon-base-ref` marker in BRAND_OUT so the publish tail can stamp
+# `.hugmesh-base-ref` marker in BRAND_OUT so the publish tail can stamp
 # provenance base.ref + derive the --pr branch name from it. Empty = today's
 # behavior (GIT_REF env / `main`), and NO marker is written — the default emitted
 # tree stays byte-identical.
@@ -238,9 +238,9 @@ NPM_SCOPE="$(echo "$NPM_SCOPE" | sed 's/^-*//; s/-*$//')"
 # HOST_NAME: the federation host name for this tenant.
 HOST_NAME="${BRAND}-host"
 # GENERATOR_ORG_GROUP: the CI include project — the tenant's own GitLab group
-# hosting the (upstream-named) generator. 'snapdragon-generator' is upstream code
+# hosting the (upstream-named) generator. 'hugmesh-generator' is upstream code
 # identity and stays literal; only the org/group is rebranded.
-GENERATOR_ORG_GROUP="${NPM_SCOPE}/snapdragon-generator"
+GENERATOR_ORG_GROUP="${NPM_SCOPE}/hugmesh-generator"
 # ORG_SLUG: the SAME ORG slug exposed as a PATH-SAFE FILENAME token (the generator
 # archetype's renames[] demo emits docs/BRANDING-<ORG_SLUG>.md). Single slug rule:
 # identical to NPM_SCOPE by construction — a second derivation would fork the rule.
@@ -342,7 +342,7 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
   #    tail writes/signs a FRESH provenance for what WE emit), and the markers are
   #    quarantine bookkeeping. Root-anchored: a same-named file in a SUBDIR is not
   #    an envelope and stays digest-covered/screened by the gate instead. ANY
-  #    pre-existing '.snapdragon-base-origin*' is ALSO stripped here (like the
+  #    pre-existing '.hugmesh-base-origin*' is ALSO stripped here (like the
   #    envelope) so an attacker-planted base-origin marker in the foreign base can
   #    never survive — OURS is written authoritatively AFTER the copy (below).
   _log "copying read-only base into ${BRAND_OUT} (excluding .git/node_modules/dist/.angular/target + attestation envelope/markers + any planted base-origin marker)"
@@ -351,15 +351,15 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
       --exclude='./.angular' --exclude='./target' \
       --exclude='./.snapdragon-provenance.json' \
       --exclude='./.snapdragon-provenance.json.sig' \
-      --exclude='./.snapdragon-sbom.json' \
+      --exclude='./.hugmesh-sbom.json' \
       --exclude='./.snapdragon-mesh-admitted' \
       --exclude='./.foreign-mesh-id' \
-      --exclude='./.snapdragon-base-ref' \
-      --exclude='./.snapdragon-base-origin*' -cf - . | tar -C "$BRAND_OUT" -xf -
+      --exclude='./.hugmesh-base-ref' \
+      --exclude='./.hugmesh-base-origin*' -cf - . | tar -C "$BRAND_OUT" -xf -
 
   # ── VERSIONED-RENDER MARKER (explicit --ref only) ───────────────────────────
   # One line, the pinned ref. TRAVELS WITH BRAND_OUT (same durable-marker idiom as
-  # .snapdragon-base-origin.json) so the publish tail can stamp provenance
+  # .hugmesh-base-origin.json) so the publish tail can stamp provenance
   # base.ref and derive the --pr branch `templating/update-<ref>` without being
   # separately told. A stale/planted marker in the BASE is stripped by the tar
   # exclude above; OURS is written after, authoritatively. No --ref => no marker
@@ -369,7 +369,7 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
   # the pull-repo-base.sh --ref path (which dies on an unresolvable ref). Ground
   # truth either way stays provenance base.commitSha.
   if [[ -n "$BASE_REF" ]]; then
-    printf '%s\n' "$BASE_REF" > "${BRAND_OUT}/.snapdragon-base-ref"
+    printf '%s\n' "$BASE_REF" > "${BRAND_OUT}/.hugmesh-base-ref"
     if [[ -n "$BASE_OVERRIDE" ]]; then
       _log "wrote base-ref marker ${BASE_REF} (NOTE: --base override — the ref is the operator's claim, not fetch-proven)"
     else
@@ -379,7 +379,7 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
 
   # ── Phase 7 DURABLE BASE-ORIGIN MARKER (foreign-mesh mode ONLY) ───────────────
   # The publish launder-belt's foreign-origin detection keyed SOLELY off the
-  # REMOVABLE foreign cache dir (${REPO_BASE_CACHE}/foreign/<mesh>/snapdragon-<repo>).
+  # REMOVABLE foreign cache dir (${REPO_BASE_CACHE}/foreign/<mesh>/hugmesh-<repo>).
   # A purge of that dir after render but before publish left publish blind: it
   # treated this foreign-DERIVED tree as own-mesh/skeleton and re-signed+pushed it
   # with NO admission-stamp re-verify. So for a foreign base we write OUR OWN
@@ -405,7 +405,7 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
     _admit_tree="$(sed -n 's/^tree-sha256=//p' "${BASE}/.snapdragon-mesh-admitted" 2>/dev/null | head -n1)"
     [[ "$_admit_tree" =~ ^[0-9a-f]{64}$ ]] \
       || _die "admitted snapshot stamp carries no valid tree-sha256 — cannot write base-origin marker (fail-closed)"
-    cat > "${BRAND_OUT}/.snapdragon-base-origin.json" <<JSON
+    cat > "${BRAND_OUT}/.hugmesh-base-origin.json" <<JSON
 {
   "schema": "snapdragon.systems/base-origin/v1",
   "originMesh": "${FOREIGN_MESH}",
@@ -413,7 +413,7 @@ if [[ -n "$BASE" && -d "$BASE" ]]; then
   "treeSha256": "${_admit_tree}"
 }
 JSON
-    _log "wrote durable base-origin marker .snapdragon-base-origin.json (mesh=${FOREIGN_MESH} pin=${PINNED_DIGEST} tree=${_admit_tree})"
+    _log "wrote durable base-origin marker .hugmesh-base-origin.json (mesh=${FOREIGN_MESH} pin=${PINNED_DIGEST} tree=${_admit_tree})"
   fi
 
   # 2) CLASS-A overlay: stage the archetype's whole-file .hbs (angular-mfe:

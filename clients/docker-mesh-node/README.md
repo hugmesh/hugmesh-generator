@@ -1,7 +1,7 @@
-# Snapdragon Docker mesh-node (FD-09)
+# HugMesh Docker mesh-node (FD-09)
 
 Turn **any Linux or Windows machine that already runs Docker** into a background
-Snapdragon mesh node — **no OS flash, no reinstall**. This is the *third* onboarding
+HugMesh mesh node — **no OS flash, no reinstall**. This is the *third* onboarding
 form, alongside the appliance images (Pi / x86) and the client desktop images
 (laptop / chromebook / desktop). It uses the **same local-file keys** the appliance
 images consume off the KEYS-USB, plus a **one-line Casdoor login**.
@@ -15,7 +15,7 @@ an admin hands out a copy-paste `docker run` to onboard a remote box.
 
 1. Reads keys from a local folder you point it at (mounted read-only at `/keys`).
 2. Starts `tailscaled` and runs `tailscale up` with the one-time pre-auth key,
-   registering this machine on the Snapdragon tailnet (Tailscale SSH enabled).
+   registering this machine on the HugMesh tailnet (Tailscale SSH enabled).
    - If the node is registered but **not yet approved**, it stays up and keeps
      retrying — it becomes reachable the moment a superadmin admits it
      (register-and-approve admission).
@@ -88,7 +88,7 @@ every shortcut and the tray.
 ./install.sh --uninstall
 ```
 
-The tray (`tray/snapdragon-mesh-tray.py`) needs an AppIndicator GI typelib —
+The tray (`tray/hugmesh-mesh-tray.py`) needs an AppIndicator GI typelib —
 Debian/Ubuntu `gir1.2-ayatanaappindicator3-0.1 python3-gi`, Fedora
 `libayatana-appindicator-gtk3 python3-gobject`. Without it the menu entries +
 autostart still work.
@@ -143,24 +143,24 @@ raw command — this is exactly what `mesh-node.sh` runs under the hood:
 
 **Linux (with kernel TUN):**
 ```sh
-docker run -d --name snapdragon-mesh-node --restart unless-stopped \
+docker run -d --name hugmesh-mesh-node --restart unless-stopped \
   --cap-add=NET_ADMIN --device=/dev/net/tun \
   -v "$PWD/mykeys:/keys:ro" \
-  -v snapdragon-meshnode-state:/var/lib/tailscale \
+  -v hugmesh-meshnode-state:/var/lib/tailscale \
   -e SNAP_ROLE=user \
-  snapdragon/mesh-node:latest
+  hugmesh/mesh-node:latest
 ```
 
 **Windows / Docker Desktop (userspace networking, no `--device`):**
 ```powershell
-docker run -d --name snapdragon-mesh-node --restart unless-stopped `
+docker run -d --name hugmesh-mesh-node --restart unless-stopped `
   -v "${PWD}\mykeys:/keys:ro" `
-  -v snapdragon-meshnode-state:/var/lib/tailscale `
+  -v hugmesh-meshnode-state:/var/lib/tailscale `
   -e SNAP_ROLE=user `
-  snapdragon/mesh-node:latest
+  hugmesh/mesh-node:latest
 ```
 
-Then `docker logs -f snapdragon-mesh-node` to follow the join + Casdoor login.
+Then `docker logs -f hugmesh-mesh-node` to follow the join + Casdoor login.
 
 ---
 
@@ -172,10 +172,10 @@ Anything in the keys folder can be overridden by env vars (handy for the raw
 | Var | Meaning |
 | --- | --- |
 | `SNAP_ROLE` | `user`\|`mod`\|`admin`\|`superadmin` (overrides `/keys/role`) |
-| `SNAP_HOSTNAME` | tailnet hostname (default `snapdragon-meshnode-<host>`) |
+| `SNAP_HOSTNAME` | tailnet hostname (default `hugmesh-meshnode-<host>`) |
 | `SNAP_AUTHKEY` | pre-auth key (overrides `/keys/tailscale/authkey`) |
 | `SNAP_LOGIN_SERVER` | headscale control URL (overrides `/keys/login-server`) |
-| `SNAP_MESH_IMAGE` | image tag the launchers run/build (default `snapdragon/mesh-node:latest`) |
+| `SNAP_MESH_IMAGE` | image tag the launchers run/build (default `hugmesh/mesh-node:latest`) |
 
 ---
 
@@ -190,7 +190,7 @@ Anything in the keys folder can be overridden by env vars (handy for the raw
 | `mesh-node.cmd` | double-clickable cmd.exe wrapper for the `.ps1` |
 | `install.sh` | Linux installer: app icon + menu entries + optional autostart/tray |
 | `install.ps1` | Windows installer: Start-Menu/Desktop shortcuts + optional autostart/tray |
-| `tray/snapdragon-mesh-tray.py` | Linux task-bar tray indicator (AppIndicator) |
-| `tray/snapdragon-mesh-tray.ps1` | Windows task-bar tray (NotifyIcon) |
+| `tray/hugmesh-mesh-tray.py` | Linux task-bar tray indicator (AppIndicator) |
+| `tray/hugmesh-mesh-tray.ps1` | Windows task-bar tray (NotifyIcon) |
 | `icons/` | app icon (`.svg` + `.png` for Linux, `.ico` for Windows) |
 | `keys.example/` | worked keys-folder layout (placeholders, no real secrets) |

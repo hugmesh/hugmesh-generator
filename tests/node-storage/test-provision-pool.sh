@@ -48,7 +48,7 @@ build_harness() {
 set -uo pipefail
 MANIFEST="${WORK}/manifest.json"
 FAKEROOT="${WORK}/root"
-mkdir -p "\${FAKEROOT}/etc/snapdragon/luks" "\${FAKEROOT}/mnt"
+mkdir -p "\${FAKEROOT}/etc/hugmesh/luks" "\${FAKEROOT}/mnt"
 : > "\${FAKEROOT}/etc/fstab"
 : > "\${FAKEROOT}/etc/crypttab"
 
@@ -63,7 +63,7 @@ jqe()  { jq -e "\$1" "\${MANIFEST}" >/dev/null 2>&1; }
 # two devices never collide (the part-suffix logic + the fstab UUID dedup both depend on
 # distinct devices). A non-digit suffix keeps part==dev (whole-disk fallback path).
 resolve_storage_dev() { echo "/dev/fake-\$(printf '%s' "\$1" | tr -dc 'a-z')"; }
-luks_keyfile() { echo "\${FAKEROOT}/etc/snapdragon/luks/test.key"; printf 'k' > "\${FAKEROOT}/etc/snapdragon/luks/test.key"; }
+luks_keyfile() { echo "\${FAKEROOT}/etc/hugmesh/luks/test.key"; printf 'k' > "\${FAKEROOT}/etc/hugmesh/luks/test.key"; }
 parted()    { :; }
 wipefs()    { :; }
 partprobe() { :; }
@@ -91,7 +91,7 @@ HARNESS
     # pool/nofail branches are). Replace each `[ -b "..." ]` with `true`.
     sed -e "s#/etc/fstab#${WORK}/root/etc/fstab#g" \
         -e "s#/etc/crypttab#${WORK}/root/etc/crypttab#g" \
-        -e "s#/etc/snapdragon/luks#${WORK}/root/etc/snapdragon/luks#g" \
+        -e "s#/etc/hugmesh/luks#${WORK}/root/etc/hugmesh/luks#g" \
         -e 's#\[ -b "[^"]*" \]#true#g' \
         "${WORK}/fns.sh" >> "${WORK}/harness.sh"
 }
@@ -100,7 +100,7 @@ run_case() {
     # $1 = manifest json, $2 = provision_storage args
     printf '%s' "$1" > "${WORK}/manifest.json"
     rm -rf "${WORK}/root"
-    command mkdir -p "${WORK}/root/etc/snapdragon/luks"
+    command mkdir -p "${WORK}/root/etc/hugmesh/luks"
     : > "${WORK}/root/etc/fstab"
     : > "${WORK}/root/etc/crypttab"
     build_harness
@@ -162,7 +162,7 @@ poolcount=$(count "/mnt/pool0" "${FSTAB}")
     || bad "--pool should provision pool only (system=${syscount} pool=${poolcount})"
 
 # 3. inert: a manifest with NO storage.devices is a clean no-op (returns 0, writes nothing).
-run_case '{"snapdragon":{}}' "--pool"
+run_case '{"hugmesh":{}}' "--pool"
 [ ! -s "${FSTAB}" ] \
     && ok "no .storage.devices -> inert no-op (today's behaviour exactly)" \
     || bad "empty manifest should write nothing to fstab"

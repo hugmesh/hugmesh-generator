@@ -1,4 +1,4 @@
-"""snapdragon-edge-ai-tts — CPU-default Piper text-to-speech for the VN voice feature
+"""hugmesh-edge-ai-tts — CPU-default Piper text-to-speech for the VN voice feature
 (B3). Stateless FastAPI wrapper around rhasspy/piper that synthesizes a short line of
 speech AND returns an even-split viseme timeline the matrix-ui VN client uses to drive
 2D mouth-shape lipsync (B3-PR2). ON-PREM: all synthesis is local CPU work; nothing
@@ -47,7 +47,7 @@ NOISE_SCALE = float(os.environ.get("TTS_NOISE_SCALE", "0.667"))
 NOISE_W = float(os.environ.get("TTS_NOISE_W", "0.8"))
 MAX_CHARS = int(os.environ.get("TTS_MAX_CHARS", "800"))  # short VN lines only
 
-app = FastAPI(title="snapdragon-edge-ai-tts", version="1.0")
+app = FastAPI(title="hugmesh-edge-ai-tts", version="1.0")
 
 
 def _now() -> str:

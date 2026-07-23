@@ -7,15 +7,15 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: kafka
-  namespace: snapdragon-backend
-  labels: { app: kafka, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: kafka, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   selector: { matchLabels: { app: kafka } }
   template:
     metadata: { labels: { app: kafka } }
     spec:
-      # Kafka's log dir is on snapdragon-local too — pin to the x86_64 host that
+      # Kafka's log dir is on hugmesh-local too — pin to the x86_64 host that
       # holds the data disks so the kafka-data PV mounts. nodeSelector, NOT a taint:
       # the shared x86 host stays schedulable for everything else.
       nodeSelector: { kubernetes.io/arch: amd64 }
@@ -44,11 +44,11 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: kafka-data
-  namespace: snapdragon-backend
-  labels: { app: kafka, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: kafka, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 5Gi } }
 # NOTE: there is no service-discovery registry in this analytics pipeline (or the
 # cluster) — nothing uses a DiscoveryClient / lb:// anywhere; gateways route by

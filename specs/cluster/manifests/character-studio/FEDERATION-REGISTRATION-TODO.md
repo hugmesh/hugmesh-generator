@@ -4,14 +4,14 @@ The `character-studio` slug must be registered as a federation module so the Ang
 host loads its remote at runtime and the public `/api/federation/capabilities`
 projection can grey it out when not installed. That registry row is a **Liquibase
 changeset**, and the `federation_modules` table + its changelog live in the
-**`snapdragon-federation-api`** repo — **NOT** in this generator repo. This file is
+**`hugmesh-federation-api`** repo — **NOT** in this generator repo. This file is
 the placeholder/TODO the optional-service contract requires until that repo's wave
 lands; the canonical metadata also lives inline in
 `specs/cluster/optional-services.yaml` (slug: character-studio → federationModule).
 
 ## Where to add it
 
-Repo: `Snapdragon-Systems/snapdragon-federation-api`
+Repo: `Snapdragon-Systems/hugmesh-federation-api`
 
 1. New file: `src/main/resources/db/changelog/036-register-character-studio-module.xml`
    (036 is the next free number after the current tail `035-user-modules-domain.xml`).
@@ -52,7 +52,7 @@ field-for-field, with the character-studio-specific slug / mountAt / role.
         'character-studio' slug is absent, so re-running over an existing DB is a
         no-op. remote_entry_url is the platform service-DNS placeholder the
         deployment's Service wires at runtime
-        (http://snapdragon-character-studio-ui:8080/remoteEntry.json).
+        (http://hugmesh-character-studio-ui:8080/remoteEntry.json).
     -->
 
     <changeSet id="036-1-register-character-studio-module" author="federation">
@@ -65,7 +65,7 @@ field-for-field, with the character-studio-specific slug / mountAt / role.
             <column name="slug" value="character-studio"/>
             <column name="display_name" value="Character Studio (VN)"/>
             <column name="kind" value="remote-shell"/>
-            <column name="remote_entry_url" value="http://snapdragon-character-studio-ui:8080/remoteEntry.json"/>
+            <column name="remote_entry_url" value="http://hugmesh-character-studio-ui:8080/remoteEntry.json"/>
             <column name="exposed_module" value="./routes"/>
             <column name="version" value="0.1.0"/>
             <column name="visibility" value="internal"/>

@@ -5,7 +5,7 @@ backups feature: installing Velero, provisioning the backup destination
 (`BackupStorageLocation`) + ESO/Vault credentials + least-privilege RBAC, and the
 status-sweep. The catalog, role gates, versioning, restore step-up, and the
 per-service menu live in the **admin-bff** (`cloudbackup` package: foundation
-PR #74 + the Velero effector PR #76); the UI lives in `snapdragon-admin-ui`.
+PR #74 + the Velero effector PR #76); the UI lives in `hugmesh-admin-ui`.
 
 The whole feature **ships dark** — installing Velero must NOT silently start real
 backups. Two independent gates keep it inert until a superadmin opts in.
@@ -50,11 +50,11 @@ provision the per-brand BSL in the same change that sets `destination_ref`.
 ## Credentials never touch git
 
 `velero-cloud-credentials` (key `cloud`, an AWS/S3 INI file) is **templated by ESO
-from Vault** at the **fixed path** `secret/snapdragon/velero`
+from Vault** at the **fixed path** `secret/hugmesh/velero`
 (`access_key_id` + `secret_access_key`) — the
 [`ExternalSecret`](../specs/cluster/manifests/external-secrets/velero-externalsecrets.yaml)
 hardcodes this single Vault path; there is **no per-brand substitution** (a
-non-default brand's credentials must also live under `secret/snapdragon/velero`
+non-default brand's credentials must also live under `secret/hugmesh/velero`
 today — writing to `secret/<brand>/velero` for a non-default brand goes
 nowhere ESO reads). The Velero server (`credentials.existingSecret`) and every
 BSL (`spec.credential`) reference the resulting Secret by name. No object-store
@@ -63,7 +63,7 @@ coordinates in the BSL are non-secret and generator-templated.
 
 ## RBAC scope (not cluster-admin)
 
-- `backups-effector` (SA in `snapdragon-backend`, the admin-bff's identity):
+- `backups-effector` (SA in `hugmesh-backend`, the admin-bff's identity):
   `create/get/list/patch` on `velero.io` `backups` + `restores` in the **`velero`
   namespace only**. No pods, secrets, exec, or cluster scope.
 - `backups-sweep` (SA in `velero`): `get/list/watch/patch` on the same CRs, to
@@ -81,7 +81,7 @@ DB credential, and (b) the CR label `snapdragon.systems/backup-set-id` is a *los
 slug of the raw id. So the sweep is **split**:
 
 - **Generator CronJob (`sweep-cronjob.yaml`)** — the CR-read half: finds Velero
-  CRs labelled `app.kubernetes.io/managed-by=snapdragon-admin-bff` that reached a
+  CRs labelled `app.kubernetes.io/managed-by=hugmesh-admin-bff` that reached a
   terminal `.status.phase` and mirrors it onto the CR as the annotation
   `snapdragon.systems/catalog-status=complete|failed`.
 - **Admin-bff reconciler (FOLLOW-ON, not built here)** — the catalog-write half: a
@@ -103,9 +103,9 @@ terminal" note without shipping a half-version that bypasses the BFF's DB model.
 
 Installing Velero does not enable backups. To go live:
 
-1. **Provision the object store** (bucket `snapdragon-backups`, an S3/MinIO
+1. **Provision the object store** (bucket `hugmesh-backups`, an S3/MinIO
    endpoint) and write `access_key_id` + `secret_access_key` to Vault at the
-   fixed path `secret/snapdragon/velero` (the ExternalSecret reads this exact
+   fixed path `secret/hugmesh/velero` (the ExternalSecret reads this exact
    path for every brand — there is no per-brand path today).
 2. **Sync `apps/55-velero.yaml`** (manual) — Velero server + node-agent + CRDs.
 3. **Sync `apps/56-velero-config.yaml`** (manual) — the `default` BSL (+ any

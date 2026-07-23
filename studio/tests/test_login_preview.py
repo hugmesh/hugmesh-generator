@@ -14,7 +14,7 @@ import re
 
 import pytest
 
-from snapdragon_studio.core import login_preview, theme
+from hugmesh_studio.core import login_preview, theme
 
 
 @pytest.fixture(scope="module")
@@ -35,7 +35,7 @@ def test_asset_is_the_real_login_page(asset):
 
 def test_asset_is_inert_and_carries_provenance(asset):
     assert "<script" not in asset          # frozen visual snapshot: no JS ever runs
-    assert re.search(r"snapdragon-login-ui commit [0-9a-f]{40}", asset), (
+    assert re.search(r"hugmesh-login-ui commit [0-9a-f]{40}", asset), (
         "the snapshot must record WHICH login-ui commit it captures, or drift "
         "becomes undetectable")
     # the honesty banner: what the preview does NOT claim, stated in the artifact.

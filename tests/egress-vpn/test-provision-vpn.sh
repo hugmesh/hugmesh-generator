@@ -6,12 +6,12 @@
 #   * OWN-DOMAIN-ONLY: only KEYS/vpn/<own-domain>/ is read; a config staged under
 #     ANOTHER tenant's domain is NEVER installed (per-domain isolation / cross-
 #     tenant DENY).
-#   * configs land in /etc/snapdragon/vpn/ mode 0600 root-owned.
+#   * configs land in /etc/hugmesh/vpn/ mode 0600 root-owned.
 #   * WireGuard .conf wins over .ovpn for active.conf; .ovpn becomes active only
 #     when no .conf exists.
 #   * FAIL-CLOSED / no-op: no own-domain dir, empty dir, or no domain at all ⇒
 #     nothing installed (service default-off).
-#   * .egress_vpn.domain overrides .snapdragon.cluster_domain.
+#   * .egress_vpn.domain overrides .hugmesh.cluster_domain.
 #
 # Technique: extract the provision_vpn() function body from the real script and
 # source it with stubbed helpers (jqm/log/warn/BASE + an /etc redirect), so the
@@ -34,10 +34,10 @@ FN="$(extract_fn)"
 [ -n "${FN}" ] || { echo "  FAIL could not extract provision_vpn()"; exit 1; }
 
 # Run provision_vpn() once in a sandbox. The function's only output side effect is
-# under the hard-coded /etc/snapdragon/vpn path, so we sed-rewrite that single
+# under the hard-coded /etc/hugmesh/vpn path, so we sed-rewrite that single
 # absolute path to point at the sandbox ${ETCROOT} and eval the REAL function body
 # with stubbed helpers (log/warn/jqm). Args:
-#   $1 = own domain returned for .snapdragon.cluster_domain
+#   $1 = own domain returned for .hugmesh.cluster_domain
 #   $2 = value returned for .egress_vpn.domain (empty => null)
 export __FN__="${FN}"
 run_vpn() {
@@ -50,11 +50,11 @@ run_vpn() {
         jqm() {
             case "$1" in
                 *egress_vpn.domain*)         printf "%s\n" "${EGRESS_DOM:-null}" ;;
-                *snapdragon.cluster_domain*) printf "%s\n" "${CLUSTER_DOM:-null}" ;;
+                *hugmesh.cluster_domain*) printf "%s\n" "${CLUSTER_DOM:-null}" ;;
                 *) printf "\n" ;;
             esac
         }
-        eval "$(printf "%s" "${__FN__}" | sed "s#/etc/snapdragon/vpn#${ETCROOT}/etc/snapdragon/vpn#g")"
+        eval "$(printf "%s" "${__FN__}" | sed "s#/etc/hugmesh/vpn#${ETCROOT}/etc/hugmesh/vpn#g")"
         provision_vpn
     '
 }
@@ -69,7 +69,7 @@ SANDBOXES=()
 cleanup(){ for d in "${SANDBOXES[@]:-}"; do rm -rf "${d}" 2>/dev/null; done; }
 trap cleanup EXIT
 
-VPN_ETC_REL="root/etc/snapdragon/vpn"
+VPN_ETC_REL="root/etc/hugmesh/vpn"
 
 echo "== provision_vpn() unit test =="
 
@@ -101,7 +101,7 @@ printf '[Interface]\nPrivateKey=NO\n'  > "${BASE}/vpn/brandx/x.conf"
 run_vpn "brandx" "override-dom" >/dev/null 2>&1
 ED="${WORK}/${VPN_ETC_REL}"
 [ -f "${ED}/o.conf" ] && [ ! -f "${ED}/x.conf" ] \
-    && ok ".egress_vpn.domain overrides .snapdragon.cluster_domain" \
+    && ok ".egress_vpn.domain overrides .hugmesh.cluster_domain" \
     || bad "override domain not honoured"
 
 # ── Case 3: WireGuard .conf wins over .ovpn for active.conf ────────────────────

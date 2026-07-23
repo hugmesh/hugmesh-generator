@@ -27,11 +27,11 @@ kind: ClusterPolicy
 metadata:
   name: prod-hygiene
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     app.kubernetes.io/component: policy
   annotations:
     policies.kyverno.io/title: Prod hygiene — no dev-only server / no test harness
-    policies.kyverno.io/category: Snapdragon Release
+    policies.kyverno.io/category: HugMesh Release
     policies.kyverno.io/severity: critical
     policies.kyverno.io/subject: Pod, Deployment, Job, any tier:test resource
     policies.kyverno.io/description: >-
@@ -108,7 +108,7 @@ spec:
             deny:
               conditions:
                 any:
-                  - key: "{{ regex_match('^.*snapdragon[^:[:space:]]*:dev$', element.image) }}"
+                  - key: "{{ regex_match('^.*hugmesh[^:[:space:]]*:dev$', element.image) }}"
                     operator: Equals
                     value: true
                   - key: "{{ regex_match('^.*-dev(:.*)?$', element.image) }}"

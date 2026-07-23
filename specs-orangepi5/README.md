@@ -224,7 +224,7 @@ Per the all-options-in-all-menus standing rule: `make orangepi5`,
 `frite-live`/`frite-installer` pattern — a single dedicated platform, not a
 role-loop the way RPi5's 3-cluster-role target is), `scripts/build-menu.sh`'s
 architecture picker + a dedicated board/flavor/desktop screen, the Studio
-(`studio/snapdragon_studio/core/config.py`'s `BUILDER_SCRIPTS`/`ROLE_CHOICES`/
+(`studio/hugmesh_studio/core/config.py`'s `BUILDER_SCRIPTS`/`ROLE_CHOICES`/
 `_orangepi5_args()`), and `tests/build-matrix/matrix.tsv` + `check.sh` all
 reach this platform through the same `--print-plan` contract as every other
 builder.

@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import os
 
-from snapdragon_studio.core.config import ImageConfig
-from snapdragon_studio.core.keyzip import KeyZipContents
+from hugmesh_studio.core.config import ImageConfig
+from hugmesh_studio.core.keyzip import KeyZipContents
 
 
 def _node() -> ImageConfig:

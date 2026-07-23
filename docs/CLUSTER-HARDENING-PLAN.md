@@ -16,7 +16,7 @@ Kubernetes STIG, FIPS 140-3 / 186-5. See also `docs/CRYPTO-AUDIT.md`,
 
 | Area | Change | Control IDs |
 |------|--------|-------------|
-| Stateless web tier | `frontend` (nginx UID 101), `snapdragon-apis` (JVM UID 1000, /stores+/tmp tmpfs), `binhost` (nginx-unprivileged UID 101, hostPort kept) — container securityContext: runAsNonRoot, drop ALL, allowPrivilegeEscalation:false, readOnlyRootFilesystem + emptyDirs, seccomp RuntimeDefault | CIS K8s 5.2.5–5.2.9, 5.7.2; NIST 800-190 §4.5; 800-53 AC-6/SC-39 |
+| Stateless web tier | `frontend` (nginx UID 101), `hugmesh-apis` (JVM UID 1000, /stores+/tmp tmpfs), `binhost` (nginx-unprivileged UID 101, hostPort kept) — container securityContext: runAsNonRoot, drop ALL, allowPrivilegeEscalation:false, readOnlyRootFilesystem + emptyDirs, seccomp RuntimeDefault | CIS K8s 5.2.5–5.2.9, 5.7.2; NIST 800-190 §4.5; 800-53 AC-6/SC-39 |
 | Admission (report-only) | Kyverno `securitycontext-baseline` ClusterPolicy in **Audit** mode + PSA namespace labels **warn+audit** (`restricted`) | CIS K8s 5.2/5.3; DISA K8s STIG; 800-190 §4.5 |
 | SSH/crypto | AEAD-only ciphers (dropped `aes256-ctr`), Ed25519-only host key + `HostKeyAlgorithms ssh-ed25519` | FIPS 186-5; 800-53 SC-8/SC-13/IA-5; DISA SSH STIG |
 | Gateway chart | `automountServiceAccountToken: false` | 800-53 AC-6; 800-190 §4.5.5 |
@@ -211,7 +211,7 @@ are the image's documented non-root user; **confirm against the running image**
 
 - **File:** `specs/cluster/apps/08-networkpolicy.yaml` → extend to cover
   `devops` (ArgoCD) + the observability/OTel paths; add the matching
-  `snapdragon-policy`-tier allow rules.
+  `hugmesh-policy`-tier allow rules.
 - **Control:** NIST 800-53 SC-7 (boundary protection), AC-4 (information flow);
   CIS K8s 5.3.2; 800-204A (microservice segmentation)
 - **Change:** add a namespace-scoped `default-deny` ingress+egress, then explicit
@@ -246,7 +246,7 @@ are the image's documented non-root user; **confirm against the running image**
   RFC1918+tailnet superset is the fail-safe default. **Residual (live-validate):**
   tighten this to the actual control-plane node /24 once known on the live cluster.
 - **egress-proxy (Squid) dedicated policy:** the `app=egress-proxy` pods are EXCLUDED
-  from the `snapdragon-backend` tier-egress `NotIn` (its allow-set has no public rule)
+  from the `hugmesh-backend` tier-egress `NotIn` (its allow-set has no public rule)
   and given their OWN least-privilege egress policy (`egress-proxy-egress`: DNS + public
   80/443) so akkoma/tuwunel federation keeps working without opening the whole tier.
 - **Documented default-allow gap (follow-up, not in this PR):** the five `*-bff-db` /
@@ -339,7 +339,7 @@ are the image's documented non-root user; **confirm against the running image**
   fabricated in a manifest. Fill `REPLACE_WITH_PINNED_AKKOMA_DIGEST` in the
   Dockerfile and replace every `:stable` ref with the SAME digest in one change.
 - **Validation:** the akkoma app + migrate Job + admin-sync + test peer all pull
-  the digest and boot; the rebrand `sed` is digest-neutral (no snapdragon token
+  the digest and boot; the rebrand `sed` is digest-neutral (no hugmesh token
   in the image ref).
 - **Blast radius:** federation (optional service). Pin all five refs to the
   identical digest atomically so the app and its Jobs run the same build.
@@ -362,8 +362,8 @@ read is refused) — the per-cluster roll itself is what remains live-gated.
 
 ### Stage 1 — authentication
 
-1. **Vault**: populate `secret/snapdragon/cassandra-admin` (`user`,`password`) and
-   `secret/snapdragon/cassandra-app-creds` (`admin-bff`,`pki-gateway`,`be-gateway`,
+1. **Vault**: populate `secret/hugmesh/cassandra-admin` (`user`,`password`) and
+   `secret/hugmesh/cassandra-app-creds` (`admin-bff`,`pki-gateway`,`be-gateway`,
    `fe-gateway`,`superadmin-gateway`,`federation`) — e.g. `openssl rand -base64 24`
    per key (wire into `gen-cluster-secrets`).
 2. Flip `apps/00a-cassandra-hardening.yaml` `source.path` →

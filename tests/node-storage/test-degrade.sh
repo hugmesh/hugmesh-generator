@@ -11,7 +11,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-AGENT="${REPO}/specs/usr/sbin/snapdragon-node-storage-reconcile"
+AGENT="${REPO}/specs/usr/sbin/hugmesh-node-storage-reconcile"
 OVERLAY="${REPO}/specs/cluster/manifests/node-storage-placement"
 APPSET="${REPO}/specs/cluster/apps/13b-node-storage.yaml"
 
@@ -126,9 +126,9 @@ check(appset["spec"]["generators"][0]["selector"]["matchLabels"]=={"state":"acti
 # ── replay: an ACTIVE assignment in the ConfigMap renders exactly one placement element ──
 import json
 sample = json.dumps([{"id":"a-1","service":"owncast","pvc":"owncast-data","nodeName":"pi-1",
-                      "poolPath":"/mnt/p1","namespace":"snapdragon-backend","requested":"4","state":"active"},
+                      "poolPath":"/mnt/p1","namespace":"hugmesh-backend","requested":"4","state":"active"},
                      {"id":"a-2","service":"db","pvc":"db-data","nodeName":"pi-2",
-                      "poolPath":"/mnt/p2","namespace":"snapdragon-backend","requested":"8","state":"revoked"}])
+                      "poolPath":"/mnt/p2","namespace":"hugmesh-backend","requested":"8","state":"revoked"}])
 parsed = json.loads(sample)  # what elementsYaml '{{ .elements }}' parses the ConfigMap string into
 sel = {"state":"active"}
 kept = [e for e in parsed if all(str(e.get(k))==str(v) for k,v in sel.items())]

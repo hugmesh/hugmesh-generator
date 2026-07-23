@@ -6,7 +6,7 @@
 # http://localhost:8088, Casdoor http://localhost:8000, social tier
 # Synapse + Mastodon), everything the UI e2e suites assume exists:
 #
-#   1. PERSONAS (Casdoor, org "snapdragon") — the standard set:
+#   1. PERSONAS (Casdoor, org "hugmesh") — the standard set:
 #        e2e-user / e2e-mod / e2e-admin / e2e-superadmin
 #        e2e-banned              (ban = ABSENCE of the platform access roles —
 #                                 seeded ROLE_USER only, the post-ban state;
@@ -54,7 +54,7 @@
 #   CASDOOR_ADMIN_USER    default admin
 #   CASDOOR_ADMIN_PASS    default 123      (the casbin/casdoor FRESH-BOOT dev
 #                                           default — override for anything else)
-#   CASDOOR_ORG           default snapdragon
+#   CASDOOR_ORG           default hugmesh
 #   CASDOOR_BRAND_B_URL   unset            (second-tenant Casdoor; enables leg 1b)
 #   SYNAPSE_URL           default http://localhost:8008
 #   SYNAPSE_SERVER_NAME   default localhost    (must match up-real.sh)
@@ -76,7 +76,7 @@ FRONT_DOOR="${FRONT_DOOR:-http://localhost:8088}"
 CASDOOR_URL="${CASDOOR_URL:-http://localhost:8000}"
 CASDOOR_ADMIN_USER="${CASDOOR_ADMIN_USER:-admin}"
 CASDOOR_ADMIN_PASS="${CASDOOR_ADMIN_PASS:-123}"
-CASDOOR_ORG="${CASDOOR_ORG:-snapdragon}"
+CASDOOR_ORG="${CASDOOR_ORG:-hugmesh}"
 # The confidential OAuth app user-bff drives NATIVE login through: user-bff POSTs the
 # username/password to the INTERNAL Casdoor /api/login with this app's OIDC/PKCE params,
 # gets an auth code, and exchanges it (authorization_code grant). The compose Casdoor has
@@ -86,7 +86,7 @@ CASDOOR_ORG="${CASDOOR_ORG:-snapdragon}"
 # registered app; NO browser ever visits it (native login has no front-channel redirect).
 CASDOOR_APP_CLIENT_ID="${CASDOOR_APP_CLIENT_ID:-app-user-bff}"
 CASDOOR_APP_SECRET="${CASDOOR_APP_SECRET:-dev-app-user-bff-secret}"
-CASDOOR_APP_REDIRECT_URI="${CASDOOR_APP_REDIRECT_URI:-http://snapdragon-user-bff-api:8080/bff/auth/callback}"
+CASDOOR_APP_REDIRECT_URI="${CASDOOR_APP_REDIRECT_URI:-http://hugmesh-user-bff-api:8080/bff/auth/callback}"
 CASDOOR_BRAND_B_URL="${CASDOOR_BRAND_B_URL:-}"
 SYNAPSE_URL="${SYNAPSE_URL:-http://localhost:8008}"
 SYNAPSE_SERVER_NAME="${SYNAPSE_SERVER_NAME:-localhost}"
@@ -116,7 +116,7 @@ curl -sf -o /dev/null --max-time 5 "${CASDOOR_URL}/" \
   || die "Casdoor ${CASDOOR_URL} is not answering — bring the stack up first: make stack-up"
 # The social-tier legs exec INSIDE the containers (register_new_matrix_user /
 # tootctl / rails runner). Find them by compose service name, whichever project
-# (snapdragon-local or snapdragon-real) is running them.
+# (hugmesh-local or hugmesh-real) is running them.
 find_ctr() { # <service-substring>
   docker ps --format '{{.Names}}' | grep -E "(^|[-_])$1([-_][0-9]+)?$" | head -1
 }
@@ -143,7 +143,7 @@ casdoor_login() { # <base-url>
     || die "Casdoor admin login failed at $1 (CASDOOR_ADMIN_USER/CASDOOR_ADMIN_PASS — the compose default is admin/123 on a FRESH casdoor volume)"
 }
 
-# A fresh compose Casdoor has NO snapdragon org and NO ROLE_* objects (the
+# A fresh compose Casdoor has NO hugmesh org and NO ROLE_* objects (the
 # cluster seeds them via manifests/casdoor/init-*; the compose stack does not —
 # docs/LOCAL-STACK.md "Casdoor is empty on first boot"). Ensure both so the
 # apply hook's round-trip update-role finds real role objects.
@@ -196,7 +196,7 @@ ensure_app() { # <base-url> <org>
   app="$(jq -n \
     --arg org "${org}" --arg cid "${CASDOOR_APP_CLIENT_ID}" \
     --arg secret "${CASDOOR_APP_SECRET}" --arg redirect "${CASDOOR_APP_REDIRECT_URI}" \
-    '{owner:"admin", name:$cid, displayName:"snapdragon user-bff", organization:$org,
+    '{owner:"admin", name:$cid, displayName:"hugmesh user-bff", organization:$org,
       clientId:$cid, clientSecret:$secret, redirectUris:[$redirect],
       grantTypes:["authorization_code","client_credentials","password","refresh_token"],
       expireInHours:168, enablePassword:true, enableSignUp:false,
@@ -230,13 +230,13 @@ ensure_app    "${CASDOOR_URL}" "${CASDOOR_ORG}"
 # "username:ROLES:passwordEnv" spec shape; appended exactly like
 # tests/pentest/seed-personas.sh appends its attacker/load pools.
 #
-# The ad-hoc identities below (admin@snapdragon.systems, alice../frank@gmail.com,
+# The ad-hoc identities below (admin@hugmesh.systems, alice../frank@gmail.com,
 # dragoneer, rbac-plain@/rbac-login-user@/rbac-pending@/rbac-approved@gmail.com)
 # are the sequential, stateful specs/02,04,05,06,07,08,09,13,15,17 personas — per helpers.ts's
 # onboard()/registerOnly() doc comment, native login has no self-registration
 # surface, so each must exist as a pre-seeded native Casdoor account (username
 # = the literal handle these specs hardcode) sharing the common E2E_PASSWORD.
-# admin@snapdragon.systems is the sole admin among them (spec 02/08/09
+# admin@hugmesh.systems is the sole admin among them (spec 02/08/09
 # exercise admin-only views); the rest are bare ROLE_USER (the
 # nav-matrix/nav-mastodon gate in menu.component.ts checks only
 # capabilities.installed() + session.fullyRegistered(), not a per-service
@@ -272,7 +272,7 @@ SUPERADMIN_PERSONA="${CASDOOR_SUPERADMIN_USERNAME:-e2e-superadmin}"
 EXTRA_SPECS="\
 ${SUPERADMIN_PERSONA}:ROLE_SUPERADMIN:E2E_SUPERADMIN_PASSWORD \
 e2e-banned:ROLE_USER:E2E_BANNED_PASSWORD \
-admin@snapdragon.systems:ROLE_ADMIN,ROLE_USER:E2E_PASSWORD \
+admin@hugmesh.systems:ROLE_ADMIN,ROLE_USER:E2E_PASSWORD \
 alice@gmail.com:ROLE_USER:E2E_PASSWORD \
 bob@gmail.com:ROLE_USER:E2E_PASSWORD \
 carol@gmail.com:ROLE_USER:E2E_PASSWORD \
@@ -441,7 +441,7 @@ mastodon_account() { # <user>
   local out
   # --email domain MUST be in this container's EMAIL_DOMAIN_ALLOWLIST
   # (tests/stack/.mastodon.env: EMAIL_DOMAIN_ALLOWLIST=e2e.local) — any other
-  # domain (e.g. the snapdragon.test this used to hardcode) is rejected outright
+  # domain (e.g. the hugmesh.test this used to hardcode) is rejected outright
   # with a generic "email unreachable" failure, regardless of MX reachability.
   out="$(docker exec "${MASTODON_CTR}" bin/tootctl accounts create "$1" \
           --email "$1@e2e.local" --confirmed --approve 2>&1)" \

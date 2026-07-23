@@ -1,7 +1,7 @@
 # tuwunel-admin-sync — maps Casdoor roles to Matrix authority. Conduit-family
 # (tuwunel) has NO homeserver moderator tier, so the two roles map differently:
 #   ROLE_ADMIN -> Matrix SERVER admin: MEMBERSHIP of the admin room
-#                 (#admins:snapdragon.systems). Conduit-family grants server admin
+#                 (#admins:hugmesh.systems). Conduit-family grants server admin
 #                 via that room membership, NOT a REST API or an OIDC-group claim.
 #   ROLE_MOD   -> per-ROOM MODERATOR (power level 50: ban/redact/kick) in the
 #                 managed community/public rooms, set via the admin bot's
@@ -13,7 +13,7 @@
 # readOnlyRootFilesystem, Vault-sourced admin token, idempotent, ArgoCD PostSync).
 #
 # Flow: read ROLE_ADMIN + ROLE_MOD membership from Casdoor, derive each member's
-# @<localpart>:snapdragon.systems MXID. ROLE_ADMIN members are invited/joined into
+# @<localpart>:hugmesh.systems MXID. ROLE_ADMIN members are invited/joined into
 # the server admin room (membership IS server admin: network-wide). ROLE_MOD
 # members are set to power level 50 in each managed room via the admin bot's
 # set-power-level command (room-scoped moderation only). The Matrix admin/mod
@@ -29,30 +29,30 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: tuwunel-admin-sync-script
-  namespace: snapdragon-backend
-  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   sync.py: |
     #!/usr/bin/env python3
     """Reconcile Casdoor roles into Matrix authority. Conduit-family has no
     homeserver moderator tier, so:
       ROLE_ADMIN -> server admin: membership of the admin room
-                    (#admins:snapdragon.systems).
+                    (#admins:hugmesh.systems).
       ROLE_MOD   -> per-room MODERATOR: power level 50 (ban/redact/kick) in each
                     managed community/public room, via the admin bot's
                     set-power-level command. NOT server admin, NOT #admins, NOT PL100.
     Pure stdlib (urllib) — no extra packages."""
     import json, os, time, urllib.request, urllib.error, http.cookiejar
 
-    CASDOOR = os.environ.get("CASDOOR_URL", "http://casdoor.snapdragon-pki.svc.cluster.local:8000")
-    ORG     = os.environ.get("CASDOOR_ORG", "snapdragon")
-    MATRIX  = os.environ.get("MATRIX_URL", "http://tuwunel.snapdragon-backend.svc.cluster.local:8008")
-    SERVER  = os.environ.get("MATRIX_SERVER_NAME", "snapdragon.systems")
-    ADMIN_ROOM = os.environ.get("MATRIX_ADMIN_ROOM", "#admins:snapdragon.systems")
+    CASDOOR = os.environ.get("CASDOOR_URL", "http://casdoor.hugmesh-pki.svc.cluster.local:8000")
+    ORG     = os.environ.get("CASDOOR_ORG", "hugmesh")
+    MATRIX  = os.environ.get("MATRIX_URL", "http://tuwunel.hugmesh-backend.svc.cluster.local:8008")
+    SERVER  = os.environ.get("MATRIX_SERVER_NAME", "hugmesh.systems")
+    ADMIN_ROOM = os.environ.get("MATRIX_ADMIN_ROOM", "#admins:hugmesh.systems")
     # Managed community/public rooms where ROLE_MOD gets room-level moderator (PL50).
     # Comma-separated room aliases; placeholder list — set to the real managed rooms.
     MANAGED_ROOMS = [r.strip() for r in os.environ.get(
-        "MATRIX_MANAGED_ROOMS", "#general:snapdragon.systems,#lounge:snapdragon.systems"
+        "MATRIX_MANAGED_ROOMS", "#general:hugmesh.systems,#lounge:hugmesh.systems"
     ).split(",") if r.strip()]
     # ROLE_ADMIN -> Matrix SERVER admin (admin-room membership). Network-wide.
     ADMIN_ROLES = ["ROLE_ADMIN"]
@@ -95,7 +95,7 @@ data:
         except urllib.error.HTTPError as e:
             print(f"  WARN get-role {role}: {e}"); return []
         users = (data.get("data") or {}).get("users") or []
-        # entries are "snapdragon/<name>" -> take the bare localpart
+        # entries are "hugmesh/<name>" -> take the bare localpart
         return [u.split("/")[-1] for u in users]
 
     def mxid(localpart):
@@ -185,8 +185,8 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: tuwunel-admin-sync
-  namespace: snapdragon-backend
-  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app.kubernetes.io/name: tuwunel, app.kubernetes.io/part-of: hugmesh.systems }
   annotations:
     argocd.argoproj.io/hook: PostSync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
@@ -209,15 +209,15 @@ spec:
           image: python:3.12-alpine
           command: ["python3", "/script/sync.py"]
           env:
-            - { name: CASDOOR_URL, value: "http://casdoor.snapdragon-pki.svc.cluster.local:8000" }
-            - { name: CASDOOR_ORG, value: "snapdragon" }
-            - { name: MATRIX_URL,  value: "http://tuwunel.snapdragon-backend.svc.cluster.local:8008" }
-            - { name: MATRIX_SERVER_NAME, value: "snapdragon.systems" }
+            - { name: CASDOOR_URL, value: "http://casdoor.hugmesh-pki.svc.cluster.local:8000" }
+            - { name: CASDOOR_ORG, value: "hugmesh" }
+            - { name: MATRIX_URL,  value: "http://tuwunel.hugmesh-backend.svc.cluster.local:8008" }
+            - { name: MATRIX_SERVER_NAME, value: "hugmesh.systems" }
             # ROLE_ADMIN -> server admin via membership of this room.
-            - { name: MATRIX_ADMIN_ROOM,  value: "#admins:snapdragon.systems" }
+            - { name: MATRIX_ADMIN_ROOM,  value: "#admins:hugmesh.systems" }
             # ROLE_MOD -> room-level moderator (PL50) in these managed community/
             # public rooms (placeholder list — set to the real managed rooms).
-            - { name: MATRIX_MANAGED_ROOMS, value: "#general:snapdragon.systems,#lounge:snapdragon.systems" }
+            - { name: MATRIX_MANAGED_ROOMS, value: "#general:hugmesh.systems,#lounge:hugmesh.systems" }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

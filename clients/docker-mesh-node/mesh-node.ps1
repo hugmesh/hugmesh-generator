@@ -1,6 +1,6 @@
 <#
-  Snapdragon mesh-node - WINDOWS onboarding (FD-09). Make THIS machine a background
-  Snapdragon mesh node via Docker Desktop, using LOCAL FILE KEYS + a one-line Casdoor
+  HugMesh mesh-node - WINDOWS onboarding (FD-09). Make THIS machine a background
+  HugMesh mesh node via Docker Desktop, using LOCAL FILE KEYS + a one-line Casdoor
   login. No OS flash. Mirrors mesh-node.sh (Linux). See README.md.
 
   Usage:
@@ -15,13 +15,13 @@ param(
   [string]$Keys,
   [string]$Role,
   [string]$Name,
-  [string]$Image = $(if ($env:SNAP_MESH_IMAGE) { $env:SNAP_MESH_IMAGE } else { "snapdragon/mesh-node:latest" }),
+  [string]$Image = $(if ($env:SNAP_MESH_IMAGE) { $env:SNAP_MESH_IMAGE } else { "hugmesh/mesh-node:latest" }),
   [switch]$Build,
   [switch]$Stop,
   [switch]$Logs
 )
 $ErrorActionPreference = "Stop"
-$Container = "snapdragon-mesh-node"
+$Container = "hugmesh-mesh-node"
 $SelfDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -42,7 +42,7 @@ docker rm -f $Container 2>$null | Out-Null
 $runArgs = @(
   "run","-d","--name",$Container,"--restart","unless-stopped",
   "-v","${KeysAbs}:/keys:ro",
-  "-v","snapdragon-meshnode-state:/var/lib/tailscale"
+  "-v","hugmesh-meshnode-state:/var/lib/tailscale"
 )
 if ($Role) { $runArgs += @("-e","SNAP_ROLE=$Role") }
 if ($Name) { $runArgs += @("-e","SNAP_HOSTNAME=$Name") }

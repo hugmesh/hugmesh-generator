@@ -1,6 +1,6 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: snapdragon-backend
+namespace: hugmesh-backend
 resources:
   - service-account.yaml
   - deployment.yaml            # Deployment (bridge) + Service meshbridge:8009 (AS push target)

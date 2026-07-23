@@ -13,14 +13,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: snapdragon-admin-bff-api
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-admin-bff-api, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-admin-bff-api
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-admin-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-admin-bff-api
+    name: hugmesh-admin-bff-api
   minReplicas: 2
   maxReplicas: 6
   metrics:

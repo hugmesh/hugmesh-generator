@@ -4,18 +4,18 @@
 # GROUNDS the admin-bff OptionalServiceReconciler (Lease-gated single writer) + the
 # natural follow-on admin-bff PUT /bff/superadmin/optional-services/{slug} endpoint.
 # Both run as the admin-bff pod's in-cluster ServiceAccount (backups-effector, ns
-# snapdragon-backend — the SAME SA the platform-capability probe + Velero effector
+# hugmesh-backend — the SAME SA the platform-capability probe + Velero effector
 # use; created in manifests/admin-bff-api/backups-effector-sa.yaml and named on the
 # admin-bff Deployment's serviceAccountName). No new SA; we only bind grants to it.
 #
 # The reconcile does EXACTLY these fabric8 calls (see the optionalservices package):
-#   • genericKubernetesResources(platform.snapdragon.systems/v1alpha1 OptionalService)
+#   • genericKubernetesResources(platform.hugmesh.systems/v1alpha1 OptionalService)
 #       .inNamespace("devops").list()                         -> optionalservices: get/list/watch
 #   • ...resource(cr).updateStatus()                          -> optionalservices/status: update/patch
 #   • genericKubernetesResources(argoproj.io/v1alpha1 ApplicationSet)
 #       .inNamespace("devops").withName("optional-services").get()/.update()
 #                                                             -> applicationsets: get/patch/update (that ONE name)
-#   • configMaps().inNamespace("snapdragon-policy").withName("installed-services")
+#   • configMaps().inNamespace("hugmesh-policy").withName("installed-services")
 #       .patch(...)                                            -> configmaps: get/patch/update (that ONE name)
 # The follow-on BFF mutation endpoint additionally create/update/patches the CR spec
 # (same SA, same pod) — included below so no second grant is needed for that wave.
@@ -47,16 +47,16 @@ metadata:
   labels:
     app.kubernetes.io/name: optional-services-operator
     app.kubernetes.io/component: operator-rbac
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 rules:
   # Reconcile READ of the desired-state objects. create/update/patch/delete are the
   # follow-on BFF mutation endpoint's grants (same SA); the reconcile loop itself
   # only exercises get/list/watch.
-  - apiGroups: ["platform.snapdragon.systems"]
+  - apiGroups: ["platform.hugmesh.systems"]
     resources: ["optionalservices"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Status subresource writes (observedGeneration / installed / phase / conditions).
-  - apiGroups: ["platform.snapdragon.systems"]
+  - apiGroups: ["platform.hugmesh.systems"]
     resources: ["optionalservices/status"]
     verbs: ["get", "update", "patch"]
   # The ONE ApplicationSet the controller is the single writer of. resourceNames
@@ -77,7 +77,7 @@ metadata:
   labels:
     app.kubernetes.io/name: optional-services-operator
     app.kubernetes.io/component: operator-rbac
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -85,9 +85,9 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: backups-effector
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
 ---
-# ── The greying/capability ConfigMap mirror (ns snapdragon-policy) ───────────────
+# ── The greying/capability ConfigMap mirror (ns hugmesh-policy) ───────────────
 # Pinned to the single `installed-services` ConfigMap. get + patch only (the
 # controller does a targeted merge-patch of the 12 controller-owned boolean keys;
 # it never replaces the whole object, so services.json / workloadConsole / the
@@ -96,11 +96,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: optional-services-configmap-writer
-  namespace: snapdragon-policy
+  namespace: hugmesh-policy
   labels:
     app.kubernetes.io/name: optional-services-operator
     app.kubernetes.io/component: operator-rbac
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
@@ -111,11 +111,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: optional-services-configmap-writer
-  namespace: snapdragon-policy
+  namespace: hugmesh-policy
   labels:
     app.kubernetes.io/name: optional-services-operator
     app.kubernetes.io/component: operator-rbac
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -123,4 +123,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: backups-effector
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend

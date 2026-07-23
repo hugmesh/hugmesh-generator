@@ -56,7 +56,7 @@ fi
 
 # 4. cross-language derivation parity: studio's image_log_name must mint the
 #    same 'build-' + <entry-id> + '.log' basename the shell derives.
-BS="${GEN}/studio/snapdragon_studio/core/build_sessions.py"
+BS="${GEN}/studio/hugmesh_studio/core/build_sessions.py"
 if [ -f "${BS}" ]; then
     grep -qE 'def image_log_name\(' "${BS}" \
         && ok "studio build_sessions.py: image_log_name helper present" \

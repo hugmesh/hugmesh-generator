@@ -1,20 +1,20 @@
-# snapdragon-forum-ui — the Angular forum micro-frontend remote that WRAPS phpBB
+# hugmesh-forum-ui — the Angular forum micro-frontend remote that WRAPS phpBB
 # (our own UI is the single source of truth; no phpBB HTML/CSS ever reaches the
-# browser). Its own nginx (own repo + pod) in the snapdragon-frontend namespace,
-# federated into the snapdragon.systems host: it serves a remoteEntry.json the
+# browser). Its own nginx (own repo + pod) in the hugmesh-frontend namespace,
+# federated into the hugmesh.systems host: it serves a remoteEntry.json the
 # host's loadRemoteModule consumes, mounted at /social/forum (forum role) —
 # congruent with the matrix/mastodon shells (/social/matrix, /social/mastodon).
 # Talks to forum-bff-api via the same-origin /bff/forum/** fe-gateway route.
-# Repo: github.com/Snapdragon-Systems/snapdragon-forum-ui
+# Repo: github.com/Snapdragon-Systems/hugmesh-forum-ui
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: { name: snapdragon-forum-ui, namespace: snapdragon-frontend, labels: { app: snapdragon-forum-ui, app.kubernetes.io/part-of: snapdragon.systems } }
+metadata: { name: hugmesh-forum-ui, namespace: hugmesh-frontend, labels: { app: hugmesh-forum-ui, app.kubernetes.io/part-of: hugmesh.systems } }
 spec:
   replicas: 1
-  selector: { matchLabels: { app: snapdragon-forum-ui } }
+  selector: { matchLabels: { app: hugmesh-forum-ui } }
   template:
-    metadata: { labels: { app: snapdragon-forum-ui } }
+    metadata: { labels: { app: hugmesh-forum-ui } }
     spec:
       nodeSelector: { snapdragon.systems/frontend: "true" }
       securityContext:
@@ -30,5 +30,5 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: { name: snapdragon-forum-ui, namespace: snapdragon-frontend }
-spec: { selector: { app: snapdragon-forum-ui }, ports: [{ name: http, port: 80, targetPort: http }] }
+metadata: { name: hugmesh-forum-ui, namespace: hugmesh-frontend }
+spec: { selector: { app: hugmesh-forum-ui }, ports: [{ name: http, port: 80, targetPort: http }] }

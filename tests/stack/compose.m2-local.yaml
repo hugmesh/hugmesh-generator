@@ -1,6 +1,6 @@
 # compose.m2-local.yaml — COLD-BUILD override: thread the LOCAL private-maven
 # registry (tests/stack/m2-bootstrap.sh) into the four Java services whose
-# Dockerfiles resolve org-private systems.snapdragon:* artifacts via their
+# Dockerfiles resolve org-private systems.hugmesh:* artifacts via their
 # committed settings.xml (${env.CI_API_V4_URL}/groups/${env.GITLAB_GROUP_ID}/
 # -/packages/maven). Everything else in compose.local.yaml is untouched.
 #
@@ -18,30 +18,30 @@
 # `# syntax=docker/dockerfile:1.7` + secret-mount syntax) is enabled by the
 # Makefile exporting DOCKER_BUILDKIT=1 on every stack compose call.
 services:
-  snapdragon-federation-api:
+  hugmesh-federation-api:
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-federation-api
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-federation-api
       args:
         CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
         GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
 
-  snapdragon-admin-bff-api:
+  hugmesh-admin-bff-api:
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-admin-bff-api
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-admin-bff-api
       args:
         CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
         GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
 
-  snapdragon-mod-bff-api:
+  hugmesh-mod-bff-api:
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-mod-bff-api
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-mod-bff-api
       args:
         CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
         GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
 
-  snapdragon-user-bff-api:
+  hugmesh-user-bff-api:
     build:
-      context: ${STACK_SRC:-../../.stack-src}/snapdragon-user-bff-api
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-user-bff-api
       args:
         CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
         GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}

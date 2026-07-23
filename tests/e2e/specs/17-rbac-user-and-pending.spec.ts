@@ -27,10 +27,10 @@ const MASTODON_USER = effectiveRoles(systemsUser('e2e-mastodon').roles, systemsU
 
 test.describe('RBAC: plain user surfaces (contract)', () => {
   const USER_ALLOWED = [
-    { gw: 'snapdragon-fe-gateway', path: '/social/matrix/room', what: 'Matrix MFE' },
-    { gw: 'snapdragon-fe-gateway', path: '/social/mastodon/feed', what: 'Mastodon MFE' },
-    { gw: 'snapdragon-fe-gateway', path: '/login/callback', what: 'login UI' },
-    { gw: 'snapdragon-fe-gateway', path: '/bff/me/namespaces', what: 'own profile' },
+    { gw: 'hugmesh-fe-gateway', path: '/social/matrix/room', what: 'Matrix MFE' },
+    { gw: 'hugmesh-fe-gateway', path: '/social/mastodon/feed', what: 'Mastodon MFE' },
+    { gw: 'hugmesh-fe-gateway', path: '/login/callback', what: 'login UI' },
+    { gw: 'hugmesh-fe-gateway', path: '/bff/me/namespaces', what: 'own profile' },
   ] as const;
   for (const c of USER_ALLOWED) {
     test(`user ALLOWED ${c.path} (${c.what})`, async () => {
@@ -39,16 +39,16 @@ test.describe('RBAC: plain user surfaces (contract)', () => {
   }
 
   const USER_DENIED = [
-    { gw: 'snapdragon-fe-gateway', path: '/admin/usage', what: 'admin UI' },
-    { gw: 'snapdragon-be-gateway', path: '/api/admin/route-access', what: 'admin API' },
-    { gw: 'snapdragon-fe-gateway', path: '/bff/admin/allowlist', what: 'BFF admin' },
-    { gw: 'snapdragon-be-gateway', path: '/api/v1/pleroma/admin/config', what: 'akkoma moderation' },
-    { gw: 'snapdragon-fe-gateway', path: '/games/admin/sessions', what: 'games admin UI' },
-    { gw: 'snapdragon-be-gateway', path: '/games/api/admin/role-grants', what: 'games admin API' },
+    { gw: 'hugmesh-fe-gateway', path: '/admin/usage', what: 'admin UI' },
+    { gw: 'hugmesh-be-gateway', path: '/api/admin/route-access', what: 'admin API' },
+    { gw: 'hugmesh-fe-gateway', path: '/bff/admin/allowlist', what: 'BFF admin' },
+    { gw: 'hugmesh-be-gateway', path: '/api/v1/pleroma/admin/config', what: 'akkoma moderation' },
+    { gw: 'hugmesh-fe-gateway', path: '/games/admin/sessions', what: 'games admin UI' },
+    { gw: 'hugmesh-be-gateway', path: '/games/api/admin/role-grants', what: 'games admin API' },
     // Homeserver BACKEND surfaces — REMOVED from the ROLE_USER floor by commit
     // 0100d3b; a plain member without the platform-access role is now denied.
-    { gw: 'snapdragon-be-gateway', path: '/_matrix/client/v3/sync', what: 'Matrix C-S API (needs ROLE_MATRIX)' },
-    { gw: 'snapdragon-be-gateway', path: '/api/v1/timelines/home', what: 'Mastodon REST (needs ROLE_MASTODON)' },
+    { gw: 'hugmesh-be-gateway', path: '/_matrix/client/v3/sync', what: 'Matrix C-S API (needs ROLE_MATRIX)' },
+    { gw: 'hugmesh-be-gateway', path: '/api/v1/timelines/home', what: 'Mastodon REST (needs ROLE_MASTODON)' },
   ] as const;
   for (const c of USER_DENIED) {
     test(`user DENIED ${c.path} (${c.what})`, async () => {
@@ -63,10 +63,10 @@ test.describe('RBAC: platform-access member reaches their own homeserver (contra
   // homeserver's backend surface (commit 0100d3b). e2e-matrix/e2e-mastodon hold
   // ROLE_MATRIX/ROLE_MASTODON respectively (+ ROLE_USER), matching rbac-roles.ts.
   test('e2e-matrix (ROLE_MATRIX) ALLOWED /_matrix/client/v3/sync (Matrix C-S API)', async () => {
-    expect(gatewayDecision('snapdragon-be-gateway', '/_matrix/client/v3/sync', MATRIX_USER)).toBe('ALLOW');
+    expect(gatewayDecision('hugmesh-be-gateway', '/_matrix/client/v3/sync', MATRIX_USER)).toBe('ALLOW');
   });
   test('e2e-mastodon (ROLE_MASTODON) ALLOWED /api/v1/timelines/home (Mastodon REST)', async () => {
-    expect(gatewayDecision('snapdragon-be-gateway', '/api/v1/timelines/home', MASTODON_USER)).toBe('ALLOW');
+    expect(gatewayDecision('hugmesh-be-gateway', '/api/v1/timelines/home', MASTODON_USER)).toBe('ALLOW');
   });
 });
 

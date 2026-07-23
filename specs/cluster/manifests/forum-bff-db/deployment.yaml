@@ -1,11 +1,11 @@
-# forum-bff-db — dedicated Postgres for snapdragon-forum-bff-api's config datastore
+# forum-bff-db — dedicated Postgres for hugmesh-forum-bff-api's config datastore
 # (the forum_user_role + forum_action tables the forum BFF owns). Lives in
-# snapdragon-backend next to the BFF it serves (NOT in snapdragon-forum — only
+# hugmesh-backend next to the BFF it serves (NOT in hugmesh-forum — only
 # phpBB + phpbb-db are isolated there; the BFF + its config DB sit with the other
 # BFFs). ClusterIP only.
 #
 # NOTE: like user-bff/admin-bff, the forum-bff app's application.yml defaults its
-# spring.r2dbc/spring.liquibase to a literal `snapdragon-pg` host that does NOT
+# spring.r2dbc/spring.liquibase to a literal `hugmesh-pg` host that does NOT
 # exist; this dedicated `forum-bff-db` Service is the real backing store and the
 # forum-bff Deployment OVERRIDES the R2DBC/Liquibase URLs to point here.
 #
@@ -26,8 +26,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: forum-bff-db
-  namespace: snapdragon-backend
-  labels: { app: forum-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: forum-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over a RWO PVC

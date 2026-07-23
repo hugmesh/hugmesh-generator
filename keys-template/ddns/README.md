@@ -1,7 +1,7 @@
 # KEYS / ddns — go-live Dynamic-DNS token (OPT-IN)
 
 This folder carries the single update token the go-live wizard's thin DDNS
-driver uses (`snapdragon-go-live plan --provider duckdns`, see
+driver uses (`hugmesh-go-live plan --provider duckdns`, see
 `docs/GO-LIVE-WIZARD.md`). It is **read-if-present**: absent => nothing consults
 it. The wizard's `plan`/`commit` writes the token here itself (mode 0600) — you
 normally never hand-edit this folder.

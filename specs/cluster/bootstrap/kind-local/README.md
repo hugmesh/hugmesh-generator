@@ -1,9 +1,9 @@
 # kind-local — local kind bring-up (Vault + PKI + Casdoor + Harbor)
 
 A reusable, local, single-node [kind](https://kind.sigs.k8s.io/) cluster that
-brings up a **curated slice** of the Snapdragon GitOps tree so you can
+brings up a **curated slice** of the HugMesh GitOps tree so you can
 validate the Vault → PKI → Casdoor → Harbor chain before it ever touches the
-real multi-Pi hardware. This targets the **CORE reference `snapdragon.systems`
+real multi-Pi hardware. This targets the **CORE reference `hugmesh.systems`
 apps/ tree** (`specs/cluster/apps/*.yaml` as committed to this repo) — it is
 NOT a brand-templated tenant bring-up (that's `templates/apps/*.hbs` +
 `brands/*.conf`, a separate rendering layer this script doesn't touch).
@@ -34,14 +34,14 @@ directly with `kubectl` — **not** via the root app-of-apps.
 | `apps/02-vault.yaml` | The cluster secret store — the thing being validated. |
 | `apps/06-vault-pki.yaml` | The PostSync Job that bootstraps `pki_int` + per-app issuing roles (including the `harbor` role added by the Harbor migration). |
 | `apps/03-external-secrets.yaml` | ESO controller + CRDs — required for anything to read from Vault. |
-| `apps/04-external-secrets-config.yaml` | The `ClusterSecretStore "snapdragon-vault"` + the `ExternalSecret`s that use it. |
+| `apps/04-external-secrets-config.yaml` | The `ClusterSecretStore "hugmesh-vault"` + the `ExternalSecret`s that use it. |
 | `apps/11-ingress-nginx-internal.yaml` | The `nginx-internal` IngressClass — Harbor's Ingress (from the migration branch) uses this class. The public `nginx` controller (`apps/10-ingress-nginx.yaml`) is skipped; nothing here needs public ingress. |
 | `apps/05-casdoor.yaml` | The identity provider + its own dedicated `casdoor-pg` Postgres (Casdoor has zero Cassandra dependency). |
 | `apps/03a-harbor.yaml` + `apps/03b-harbor-provision.yaml` | The registry being migrated onto Vault-PKI-issued TLS + Casdoor OIDC. Not yet on `main` — see "Harbor is unmerged" below. |
 
 Plus the two things that aren't ArgoCD `Application`s at all:
 `specs/cluster/namespaces/namespaces.yaml` (plain `kubectl apply`) and
-`specs/cluster/manifests/local-path` (the `snapdragon-local` StorageClass,
+`specs/cluster/manifests/local-path` (the `hugmesh-local` StorageClass,
 `kubectl apply -k`).
 
 ### Explicitly excluded
@@ -65,7 +65,7 @@ Casdoor, or Harbor.
 Found during the first real end-to-end bring-up of this tree (kind, not the
 real hardware) — none of these were exercised before:
 
-1. **ArgoCD has no git credential for the private `snapdragon-generator`
+1. **ArgoCD has no git credential for the private `hugmesh-generator`
    repo.** Every git-path `Application` in the curated set (Vault, vault-pki,
    external-secrets-config, Casdoor, harbor-provision) fails with
    `authentication required: Repository not found` without one. Fixed by the
@@ -76,7 +76,7 @@ real hardware) — none of these were exercised before:
    reads a fine-grained read-only PAT from the offline KEYS USB
    (`KEYS/gitops/repo-token`, same custody as `vault/token`), exports it as
    `ARGOCD_REPO_TOKEN`, and `bootstrap.sh` creates the
-   `snapdragon-generator-repo` repository Secret **before** applying the
+   `hugmesh-generator-repo` repository Secret **before** applying the
    app-of-apps (failing closed with a clear error if no token is available).
    For a local kind cluster there is no KEYS USB, so the same manual
    `ARGOCD_REPO_TOKEN` export remains a prerequisite here.
@@ -149,9 +149,9 @@ Env overrides (all optional):
 
 | Var | Default | Purpose |
 |---|---|---|
-| `KIND_CLUSTER_NAME` | `snapdragon-local` | kind cluster name |
-| `SNAPDRAGON_GITOPS_REPO` | `https://github.com/Snapdragon-Systems/snapdragon-generator.git` | repoURL rewritten into every non-Harbor Application (fork support, mirrors `bootstrap.sh`) |
-| `SNAPDRAGON_GITOPS_REV` | `main` | targetRevision rewritten into every non-Harbor Application |
+| `KIND_CLUSTER_NAME` | `hugmesh-local` | kind cluster name |
+| `HUGMESH_GITOPS_REPO` | `https://github.com/Snapdragon-Systems/hugmesh-generator.git` | repoURL rewritten into every non-Harbor Application (fork support, mirrors `bootstrap.sh`) |
+| `HUGMESH_GITOPS_REV` | `main` | targetRevision rewritten into every non-Harbor Application |
 | `HARBOR_BRANCH` | `feat/harbor-registry-migration` | branch the two Harbor Applications (+ `03b`'s manifests) are fetched from |
 | `VAULT_BRANCH` | `feat/kind-local-bringup` | branch `02-vault.yaml` (and, live, `manifests/vault`) is fetched from — carries the `vault-tls-init` openssl fix (bug #2 above) until it merges to `main`; drop it (or set to `main`) once merged |
 | `SKIP_VAULT_BOOTSTRAP` | `0` | set `1` to stop after applying the curated Applications, before the Vault init/unseal/PKI step |
@@ -159,7 +159,7 @@ Env overrides (all optional):
 
 ### Repo credentials (`ARGOCD_REPO_TOKEN`)
 
-`snapdragon-generator` is a **private** GitHub repo. ArgoCD's repo-server has
+`hugmesh-generator` is a **private** GitHub repo. ArgoCD's repo-server has
 no credential for it out of the box, so every git-path `Application` in the
 curated set fails to sync with `authentication required: Repository not
 found` until one is registered. The real cluster registers this on its own
@@ -201,7 +201,7 @@ re-running `vault operator init`.
    curated manifests actually select on — checked by grepping every
    `nodeSelector` in the included manifests; `kubernetes.io/arch=amd64` is
    already correct on a kind/amd64 node).
-3. Apply namespaces + the `snapdragon-local` StorageClass, and strip the
+3. Apply namespaces + the `hugmesh-local` StorageClass, and strip the
    default-class annotation from kind's own `standard` StorageClass (both
    would otherwise claim to be *the* cluster default).
 4. Install ArgoCD into namespace `devops`, pinned to
@@ -230,7 +230,7 @@ cluster.
 ## Reaching the real-looking hostnames from your dev machine
 
 The core manifests hardcode real reference-cluster hostnames
-(`registry.snapdragon.systems`, `*.snapdragon.systems`) rather than a
+(`registry.hugmesh.systems`, `*.hugmesh.systems`) rather than a
 templated `{{CLUSTER_DOMAIN}}` — that templating only applies to
 `templates/apps/*.hbs` for *other* tenant brands. There's no need to fake a
 different domain for this validation; you do need a way to resolve those
@@ -239,8 +239,8 @@ assumed). `kind-local.yaml` maps the node's hostNetwork `ingress-nginx-internal`
 ports out to the docker host at `:8080`/`:8443`, so from the dev machine:
 
 ```bash
-curl -k --resolve registry.snapdragon.systems:8443:127.0.0.1 https://registry.snapdragon.systems:8443/v2/
-curl -k --resolve scale.snapdragon.systems:8443:127.0.0.1  https://scale.snapdragon.systems:8443/
+curl -k --resolve registry.hugmesh.systems:8443:127.0.0.1 https://registry.hugmesh.systems:8443/v2/
+curl -k --resolve scale.hugmesh.systems:8443:127.0.0.1  https://scale.hugmesh.systems:8443/
 ```
 
 (`--resolve` only affects that one `curl` invocation — no system-wide DNS/hosts
@@ -249,7 +249,7 @@ change required.)
 ## Tear down
 
 ```bash
-kind delete cluster --name snapdragon-local
+kind delete cluster --name hugmesh-local
 ```
 
 (or whatever `KIND_CLUSTER_NAME` you used).

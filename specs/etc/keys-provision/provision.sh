@@ -60,7 +60,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # IPv4 and is only overridden by explicit config. Precedence (highest first):
 #   1. provision.json .headscale.server_url
 #   2. provision.json .mesh.endpoint
-#   3. the baked brand var HEADSCALE_URL (written to /etc/snapdragon/headscale-url
+#   3. the baked brand var HEADSCALE_URL (written to /etc/hugmesh/headscale-url
 #      at build time — env does not survive to first boot)
 #   4. DEFAULT: http://<primary-LAN-IPv4>:8080
 # Because peers also get MagicDNS (.mesh.magic_dns_domain) + the control node's
@@ -85,7 +85,7 @@ resolve_endpoint() {
     ep="$(jqm '.headscale.server_url // ""')"
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then ep="$(jqm '.mesh.endpoint // ""')"; fi
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
-        [ -r /etc/snapdragon/headscale-url ] && ep="$(tr -d '[:space:]' < /etc/snapdragon/headscale-url 2>/dev/null)"
+        [ -r /etc/hugmesh/headscale-url ] && ep="$(tr -d '[:space:]' < /etc/hugmesh/headscale-url 2>/dev/null)"
     fi
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
         local lan; lan="$(resolve_lan_ip)"
@@ -106,7 +106,7 @@ resolve_control_endpoint() {
     ep="$(jqm '.headscale.server_url // ""')"
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then ep="$(jqm '.mesh.endpoint // ""')"; fi
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
-        [ -r /etc/snapdragon/headscale-url ] && ep="$(tr -d '[:space:]' < /etc/snapdragon/headscale-url 2>/dev/null)"
+        [ -r /etc/hugmesh/headscale-url ] && ep="$(tr -d '[:space:]' < /etc/hugmesh/headscale-url 2>/dev/null)"
     fi
     if [ -z "${ep}" ] || [ "${ep}" = "null" ]; then
         local pki_ip n i
@@ -255,7 +255,7 @@ kf()   { printf '%s/%s\n' "${BASE}" "$1"; }                  # resolve KEYS path
 # ── Desktop-governance detection (shared signal) ────────────────────────────
 # Returns 0 (true) iff THIS image is desktop-governance-GOVERNED, i.e. it carries
 # the desktop-governance config templates either baked into the image
-# (/etc/snapdragon/desktop-governance) or supplied on the KEYS USB
+# (/etc/hugmesh/desktop-governance) or supplied on the KEYS USB
 # (KEYS/desktop-governance/). This is the SAME signal provision_desktop_governance()
 # keys off to decide whether to render the SSO-claim sudo gate, so the two stay in
 # lockstep. On a governed image, sudo MUST flow ONLY through the `desktop-sudo`
@@ -264,7 +264,7 @@ kf()   { printf '%s/%s\n' "${BASE}" "$1"; }                  # resolve KEYS path
 # provision_desktop_governance() installs the polkit gate. Non-governed images
 # keep their existing behavior unchanged.
 desktop_governance_governed() {
-    [ -d /etc/snapdragon/desktop-governance ] && return 0
+    [ -d /etc/hugmesh/desktop-governance ] && return 0
     [ -d "${BASE}/desktop-governance" ] && return 0
     return 1
 }
@@ -296,7 +296,7 @@ provision_users() {
         # `wheel` group from this user's supplementary groups so no KEYS user
         # ever gets STANDING root via the base image's `%wheel ALL=(ALL) ALL`
         # line. Non-wheel groups (audio/video/usb/...) are preserved. polkit's
-        # 49-snapdragon-desktop-sudo.rules is the sole escalation route.
+        # 49-hugmesh-desktop-sudo.rules is the sole escalation route.
         if desktop_governance_governed; then
             local _kept _gg; _kept=""
             IFS=',' read -ra _gg <<< "${groups}"
@@ -384,14 +384,14 @@ provision_users() {
 
 # ── superadmin DEVICE password (FD-04 / FD-06 superadmin client variant) ────────
 # A superadmin CLIENT device (built with `--person-role superadmin`) bakes the marker
-# /etc/snapdragon/device-password-required. Here we set that device's interactive
+# /etc/hugmesh/device-password-required. Here we set that device's interactive
 # login password from a SALTED+HASHED value supplied on the KEYS USB — the plaintext
 # NEVER touches git or the image (same custody model as the Casdoor superadmin-seed).
 # Precedence: manifest `.client.device_password_hash`, else KEYS `secrets/device-
 # password.hash`. The value must be a crypt(3) hash (e.g. `mkpasswd -m sha512crypt`
 # or `-m yescrypt`). FD-07 LUKS keyslot enrollment from this password is a separate
 # increment; here it sets the local account password only. See docs/CLIENT-IMAGES.md.
-DEVPW_MARKER="/etc/snapdragon/device-password-required"
+DEVPW_MARKER="/etc/hugmesh/device-password-required"
 provision_device_password() {
     [ -f "${DEVPW_MARKER}" ] || return 0
     local user hash
@@ -642,7 +642,7 @@ provision_headscale() {
     # During the bootstrap window — BEFORE the BFF /export exists / is reachable —
     # apply the MINIMAL baked bootstrap policy (tagOwners + autoApprovers + the
     # KEPT 10.244/10.96 data-plane rule + a single conservative @@TS_SSH_USER@@
-    # ssh rule, and NO any-to-any tag:snapdragon->tag:snapdragon:* hole). The
+    # ssh rule, and NO any-to-any tag:hugmesh->tag:hugmesh:* hole). The
     # FIRST verified Layer-A sync (gen-headscale-policy.sh, enabled by
     # provision_headscale_policy_sync) WHOLESALE re-renders /etc/headscale/
     # policy.hujson and re-applies it, replacing this bootstrap policy with the
@@ -735,7 +735,7 @@ provision_headscale() {
     # ── Fleet full-mesh ACL + subnet-route auto-approval + SSH ACL ────────
     # Load the fleet policy (tagOwners + autoApprovers + intra-fleet accepts +
     # the privileged-user-only Tailscale-SSH rule) so nodes can self-tag
-    # (tag:snapdragon/+role), their advertised pod + service routes are
+    # (tag:hugmesh/+role), their advertised pod + service routes are
     # auto-approved, and ONLY the privileged user may open a Tailscale-SSH
     # session. Idempotent: re-running just re-applies.
     if [ -n "${policy_file}" ] && [ -f "${policy_file}" ]; then
@@ -814,14 +814,14 @@ import sys, re, io
 cpname, tip = sys.argv[1], sys.argv[2]
 p = "/etc/headscale/config.yaml"
 txt = open(p).read()
-block = ("  # >>> snapdragon cp dns (managed)\n"
+block = ("  # >>> hugmesh cp dns (managed)\n"
          "  extra_records:\n"
          f"    - name: \"{cpname}\"\n"
          "      type: \"A\"\n"
          f"      value: \"{tip}\"\n"
-         "  # <<< snapdragon cp dns (managed)\n")
+         "  # <<< hugmesh cp dns (managed)\n")
 # Drop any prior managed block.
-txt = re.sub(r"  # >>> snapdragon cp dns \(managed\).*?  # <<< snapdragon cp dns \(managed\)\n",
+txt = re.sub(r"  # >>> hugmesh cp dns \(managed\).*?  # <<< hugmesh cp dns \(managed\)\n",
              "", txt, flags=re.S)
 # Insert under the top-level dns: mapping (after its first line).
 lines = txt.splitlines(keepends=True)
@@ -862,7 +862,7 @@ provision_tailscale() {
     # Control-node self-join: on the headscale node the KEYS stick carries no
     # tailscale/authkey (it MINTS keys). Fall back to the preauth key headscale
     # just minted for the fleet user so the control node also joins its own mesh
-    # (advertises tag:snapdragon + pod/service routes, --accept-routes). Without
+    # (advertises tag:hugmesh + pod/service routes, --accept-routes). Without
     # this the pki node stays off the tailnet and its pki-tier pods/ClusterIPs
     # (Vault, Casdoor, headscale, control-plane) are unreachable cross-node.
     if [ -z "${authkey}" ]; then
@@ -931,7 +931,7 @@ provision_tailscale() {
 # join lands), shipped FIRST and INDEPENDENT of policy.hujson.
 #
 # HOST-KEY MODEL (Option (A), the only defensible choice — see
-# snapdragon-device-license-registry memory):
+# hugmesh-device-license-registry memory):
 #   * owner_type==ADMIN (mesh-extension nodes): the registry IS the key source.
 #     We stage device-registry.conf (AuthorizedKeysFile none + AuthorizedKeysCommand
 #     + AuthorizedKeysCommandUser nobody), install break-glass.conf, bake node.env
@@ -954,8 +954,8 @@ provision_tailscale() {
 # end-user devices, not SSH-serving cluster nodes; they neither run the command
 # nor the sync agent (image_type=client is an inventory record, not an sshd host).
 provision_device_registry() {
-    local reg_dir=/etc/snapdragon/registry
-    local cache_dir=/var/lib/snapdragon/device-registry
+    local reg_dir=/etc/hugmesh/registry
+    local cache_dir=/var/lib/hugmesh/device-registry
 
     # (a) Resolve the OWNER TYPE / image class. Today only PRIMARY images exist
     # (the admin mesh-extension build path is the documented TODO), so the SAFE
@@ -988,12 +988,12 @@ provision_device_registry() {
     # The lookup + sync + verify helper are BAKED into the image rootfs by the
     # builders. Sanity-check they are present + executable (additive: a stale image
     # without them just stays in bootstrap, never bricks).
-    [ -x /usr/sbin/snapdragon-authorized-keys-lookup ] \
-        || warn "device-registry: /usr/sbin/snapdragon-authorized-keys-lookup missing from image (Layer-B will fail-closed deny until baked)"
-    [ -x /usr/sbin/snapdragon-device-registry-sync ] \
-        || warn "device-registry: /usr/sbin/snapdragon-device-registry-sync missing from image (no sync; cache stays empty)"
-    [ -r /usr/lib/snapdragon/registry-verify.sh ] \
-        || warn "device-registry: /usr/lib/snapdragon/registry-verify.sh missing from image (verify unavailable)"
+    [ -x /usr/sbin/hugmesh-authorized-keys-lookup ] \
+        || warn "device-registry: /usr/sbin/hugmesh-authorized-keys-lookup missing from image (Layer-B will fail-closed deny until baked)"
+    [ -x /usr/sbin/hugmesh-device-registry-sync ] \
+        || warn "device-registry: /usr/sbin/hugmesh-device-registry-sync missing from image (no sync; cache stays empty)"
+    [ -r /usr/lib/hugmesh/registry-verify.sh ] \
+        || warn "device-registry: /usr/lib/hugmesh/registry-verify.sh missing from image (verify unavailable)"
 
     # Install the break-glass drop-in (console/loopback-only, default-OFF — the
     # referenced /etc/ssh/break-glass.keys is absent, so it yields NO bypass until
@@ -1045,7 +1045,7 @@ provision_device_registry() {
     bff_url="$(jqm '.device_registry.bff_export_url // ""')"
     bff_cert="$(jqm '.device_registry.bff_client_cert // ""')"
     bff_key="$(jqm '.device_registry.bff_client_key // ""')"
-    bff_ca="$(jqm '.device_registry.bff_ca // "/etc/snapdragon/pki/ca-chain.crt"')"
+    bff_ca="$(jqm '.device_registry.bff_ca // "/etc/hugmesh/pki/ca-chain.crt"')"
 
     # Write node.env WRITE-ONCE for the identity fields (never a mutable self-claim
     # thereafter). If node.env already pins MACHINE_KEY_FP we keep it; we always
@@ -1088,16 +1088,16 @@ provision_device_registry() {
     [ -f "${cache_dir}/last-good-generation" ] || : > /dev/null
 
     # ── Enable the sync service (boot oneshot) + 60s cron (convergence floor) ──
-    if [ -f /etc/init.d/snapdragon-device-registry-sync ]; then
-        rc-update add snapdragon-device-registry-sync default 2>/dev/null \
-            && log "device-registry: enabled snapdragon-device-registry-sync (boot sync)" \
-            || warn "device-registry: rc-update add snapdragon-device-registry-sync failed"
+    if [ -f /etc/init.d/hugmesh-device-registry-sync ]; then
+        rc-update add hugmesh-device-registry-sync default 2>/dev/null \
+            && log "device-registry: enabled hugmesh-device-registry-sync (boot sync)" \
+            || warn "device-registry: rc-update add hugmesh-device-registry-sync failed"
     else
-        warn "device-registry: init.d/snapdragon-device-registry-sync not baked — no boot sync"
+        warn "device-registry: init.d/hugmesh-device-registry-sync not baked — no boot sync"
     fi
     if [ -f "${reg_dir}/cron-device-registry-sync" ]; then
-        cp -f "${reg_dir}/cron-device-registry-sync" /etc/cron.d/snapdragon-device-registry-sync
-        chmod 0644 /etc/cron.d/snapdragon-device-registry-sync
+        cp -f "${reg_dir}/cron-device-registry-sync" /etc/cron.d/hugmesh-device-registry-sync
+        chmod 0644 /etc/cron.d/hugmesh-device-registry-sync
         log "device-registry: installed 60s sync cron (convergence floor)"
     else
         warn "device-registry: cron drop-in not baked at ${reg_dir} — no 60s convergence poll"
@@ -1106,8 +1106,8 @@ provision_device_registry() {
     # Kick a first sync NOW (best-effort): if the BFF is already reachable this
     # immediately verifies + flips the enforcement gate; otherwise it keeps the
     # (empty) cache and the node stays in bootstrap (no brick).
-    if [ -x /usr/sbin/snapdragon-device-registry-sync ]; then
-        /usr/sbin/snapdragon-device-registry-sync 2>/dev/null || true
+    if [ -x /usr/sbin/hugmesh-device-registry-sync ]; then
+        /usr/sbin/hugmesh-device-registry-sync 2>/dev/null || true
     fi
 
     # ── One-shot LIVENESS self-report (machine_key_fp AUTO-CAPTURE, reconciliation) ─
@@ -1118,10 +1118,10 @@ provision_device_registry() {
     # no access (the trust gate is headscale + the superadmin assignment) and is
     # fail-soft: an unreachable BFF / missing cert is a no-op (NEVER blocks boot,
     # NEVER affects Layer-B SSH enforcement). admin-bff #68 (ships dark / advisory).
-    if [ -x /usr/sbin/snapdragon-device-enrollment-report ]; then
-        /usr/sbin/snapdragon-device-enrollment-report 2>/dev/null || true
+    if [ -x /usr/sbin/hugmesh-device-enrollment-report ]; then
+        /usr/sbin/hugmesh-device-enrollment-report 2>/dev/null || true
     else
-        warn "device-registry: /usr/sbin/snapdragon-device-enrollment-report missing from image (no liveness self-report; pending pick-list relies on headscale only)"
+        warn "device-registry: /usr/sbin/hugmesh-device-enrollment-report missing from image (no liveness self-report; pending pick-list relies on headscale only)"
     fi
 }
 
@@ -1131,26 +1131,26 @@ provision_device_registry() {
 # node — the one node that holds the headscale socket + binary + DB. This is the
 # SECOND enforcement layer off the SAME signed export Layer-B consumes (Layer-A is
 # ADVISORY on the SSH source until OIDC users land; Layer-B is the load-bearing
-# host boundary). The mesh-join flow (preauth key, self-applied tag:snapdragon) is
+# host boundary). The mesh-join flow (preauth key, self-applied tag:hugmesh) is
 # UNTOUCHED; only the ACL/SSH plane headscale enforces is re-architected.
 #
 # Called from provision_tailscale's control-node branch (AFTER the control node
 # has joined its own tailnet, so the socket + mesh are up), gated on
 # `have headscale` && .headscale.enabled==true.
 #
-# It (a) stages /etc/snapdragon/registry/node.env transport reuse — the SAME file
+# It (a) stages /etc/hugmesh/registry/node.env transport reuse — the SAME file
 # layout Layer-B reads (BFF_EXPORT_URL/CERT/KEY/CA + MESH_ID) PLUS a Layer-A-only
 # TS_SSH_USER (the node-local privileged ssh account the generated ssh `users`
 # list opens AS); (b) copies the BAKED registry-pub.ed25519 (REUSE Layer-B's
-# baked key — never re-bake); (c) enables snapdragon-policy-sync + installs the
+# baked key — never re-bake); (c) enables hugmesh-policy-sync + installs the
 # 60s cron; (d) kicks one best-effort gen-headscale-policy.sh. FAIL-SOFT: a
 # missing piece leaves the node on the baked bootstrap policy (no mesh outage).
 provision_headscale_policy_sync() {
     have headscale || return 0
     [ "$(jqm '.headscale.enabled // false')" = "true" ] || return 0
 
-    local reg_dir=/etc/snapdragon/registry
-    local cache_dir=/var/lib/snapdragon/headscale-policy
+    local reg_dir=/etc/hugmesh/registry
+    local cache_dir=/var/lib/hugmesh/headscale-policy
     mkdir -p "${reg_dir}" "${cache_dir}"
     chmod 0700 "${cache_dir}" 2>/dev/null || true   # control-node-only; root reads
 
@@ -1167,7 +1167,7 @@ provision_headscale_policy_sync() {
     bff_url="$(jqm '.device_registry.bff_export_url // ""')"
     bff_cert="$(jqm '.device_registry.bff_client_cert // ""')"
     bff_key="$(jqm '.device_registry.bff_client_key // ""')"
-    bff_ca="$(jqm '.device_registry.bff_ca // "/etc/snapdragon/pki/ca-chain.crt"')"
+    bff_ca="$(jqm '.device_registry.bff_ca // "/etc/hugmesh/pki/ca-chain.crt"')"
     ssh_user="$(resolve_ssh_user)"   # the LOCAL privileged unix account (NOT the operator)
 
     # Preserve an existing MACHINE_KEY_FP line if Layer-B already wrote node.env.
@@ -1178,7 +1178,7 @@ provision_headscale_policy_sync() {
     fi
     {
         echo "# device-registry node identity + BFF transport. Shared layout with"
-        echo "# Layer-B (snapdragon-device-registry-sync) + Layer-A (gen-headscale-policy.sh)."
+        echo "# Layer-B (hugmesh-device-registry-sync) + Layer-A (gen-headscale-policy.sh)."
         echo "# MACHINE_KEY_FP / MESH_ID are BAKED self-identity, never self-claimed."
         echo "MACHINE_KEY_FP=${existing_mkey}"
         echo "MESH_ID=${mesh_id}"
@@ -1208,22 +1208,22 @@ provision_headscale_policy_sync() {
     # Sanity: the renderer + forcetags + template must be baked into the image.
     [ -x /usr/sbin/gen-headscale-policy.sh ] \
         || warn "policy-sync: /usr/sbin/gen-headscale-policy.sh missing from image (no Layer-A render; staying on bootstrap policy)"
-    [ -x /usr/sbin/snapdragon-headscale-forcetags ] \
-        || warn "policy-sync: /usr/sbin/snapdragon-headscale-forcetags missing (server-forced dst tags NOT applied; generated edges won't match)"
+    [ -x /usr/sbin/hugmesh-headscale-forcetags ] \
+        || warn "policy-sync: /usr/sbin/hugmesh-headscale-forcetags missing (server-forced dst tags NOT applied; generated edges won't match)"
     [ -r /etc/headscale/policy.hujson.tmpl ] \
         || warn "policy-sync: /etc/headscale/policy.hujson.tmpl missing (renderer has no template; staying on bootstrap policy)"
 
     # ── Enable the boot sync service + 60s cron (convergence floor) ─────────────
-    if [ -f /etc/init.d/snapdragon-policy-sync ]; then
-        rc-update add snapdragon-policy-sync default 2>/dev/null \
-            && log "policy-sync: enabled snapdragon-policy-sync (boot render+apply)" \
-            || warn "policy-sync: rc-update add snapdragon-policy-sync failed"
+    if [ -f /etc/init.d/hugmesh-policy-sync ]; then
+        rc-update add hugmesh-policy-sync default 2>/dev/null \
+            && log "policy-sync: enabled hugmesh-policy-sync (boot render+apply)" \
+            || warn "policy-sync: rc-update add hugmesh-policy-sync failed"
     else
-        warn "policy-sync: init.d/snapdragon-policy-sync not baked — no boot sync"
+        warn "policy-sync: init.d/hugmesh-policy-sync not baked — no boot sync"
     fi
     if [ -f "${reg_dir}/cron-policy-sync" ]; then
-        cp -f "${reg_dir}/cron-policy-sync" /etc/cron.d/snapdragon-policy-sync
-        chmod 0644 /etc/cron.d/snapdragon-policy-sync
+        cp -f "${reg_dir}/cron-policy-sync" /etc/cron.d/hugmesh-policy-sync
+        chmod 0644 /etc/cron.d/hugmesh-policy-sync
         log "policy-sync: installed 60s render cron (convergence floor)"
     else
         warn "policy-sync: cron drop-in not baked at ${reg_dir} — no 60s convergence poll"
@@ -1283,7 +1283,7 @@ _distribute_kubeconfig() {
 # Label this control-plane node role=pki and remove the control-plane taint so
 # the pki-tier workloads (Vault, Casdoor, Cassandra, headscale) schedule here.
 _label_control_plane() {
-    local sr; sr="$(jqm '.snapdragon.role // "pki"')"
+    local sr; sr="$(jqm '.hugmesh.role // "pki"')"
     KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node "$(hostname)" "snapdragon.systems/role=${sr}" --overwrite 2>/dev/null || true
     # NODE-STORAGE: the control-plane (x86 host) holds the cluster disks (/mnt/data,
     # /mnt/usb), so it ALWAYS carries snapdragon.systems/local-path=true — the label
@@ -1337,7 +1337,7 @@ _is_first_control_plane() {
 #   1. KEYS/kubernetes/encryption-key on the USB stick (shared across control
 #      planes so every apiserver decrypts the same etcd) — preferred.
 #   2. else mint a fresh 32-byte key here (single-CP / dev) and persist it under
-#      /etc/snapdragon so an operator can copy it to additional CPs.
+#      /etc/hugmesh so an operator can copy it to additional CPs.
 # Provider: aescbc (AES-256-CBC, kube-native, no external KMS). A documented KMS
 # path (Vault Transit) is in docs/ENCRYPTION-AT-REST.md. Idempotent: never
 # rewrites an existing config (rotating the key would orphan existing Secrets).
@@ -1349,15 +1349,15 @@ ensure_encryption_config() {
         key="$(tr -d '[:space:]' < "${ksrc}" 2>/dev/null)"
         [ -n "${key}" ] && log "etcd encryption key loaded from KEYS (${ksrc#${BASE}/})"
     fi
-    if [ -z "${key}" ] && [ -f /etc/snapdragon/etcd-encryption.key ]; then
-        key="$(tr -d '[:space:]' < /etc/snapdragon/etcd-encryption.key 2>/dev/null)"
+    if [ -z "${key}" ] && [ -f /etc/hugmesh/etcd-encryption.key ]; then
+        key="$(tr -d '[:space:]' < /etc/hugmesh/etcd-encryption.key 2>/dev/null)"
     fi
     if [ -z "${key}" ]; then
         key="$(head -c 32 /dev/urandom | base64 -w0 2>/dev/null || head -c 32 /dev/urandom | base64 | tr -d '\n')"
-        mkdir -p /etc/snapdragon
-        printf '%s\n' "${key}" > /etc/snapdragon/etcd-encryption.key
-        chmod 0600 /etc/snapdragon/etcd-encryption.key
-        warn "minted a fresh etcd Secret-encryption key at /etc/snapdragon/etcd-encryption.key — COPY it to KEYS/kubernetes/encryption-key + every other control plane (or their etcd won't decrypt these Secrets)"
+        mkdir -p /etc/hugmesh
+        printf '%s\n' "${key}" > /etc/hugmesh/etcd-encryption.key
+        chmod 0600 /etc/hugmesh/etcd-encryption.key
+        warn "minted a fresh etcd Secret-encryption key at /etc/hugmesh/etcd-encryption.key — COPY it to KEYS/kubernetes/encryption-key + every other control plane (or their etcd won't decrypt these Secrets)"
     fi
     mkdir -p /etc/kubernetes
     umask 077
@@ -1439,14 +1439,14 @@ provision_kubernetes() {
                     # Persist fresh join material for additional CPs / workers so
                     # an operator can read it off this node (token + ca hash +
                     # certificate-key) without re-deriving by hand.
-                    mkdir -p /etc/snapdragon
-                    { kubeadm token create --print-join-command 2>/dev/null; } > /etc/snapdragon/kubeadm-join.cmd
+                    mkdir -p /etc/hugmesh
+                    { kubeadm token create --print-join-command 2>/dev/null; } > /etc/hugmesh/kubeadm-join.cmd
                     local ck
                     ck="$(kubeadm init phase upload-certs --upload-certs 2>/dev/null \
                             | grep -Eo '[0-9a-f]{64}' | tail -1)"
-                    [ -n "${ck}" ] && { echo "${ck}" > /etc/snapdragon/kubeadm-certificate-key; chmod 0600 /etc/snapdragon/kubeadm-certificate-key; }
-                    chmod 0600 /etc/snapdragon/kubeadm-join.cmd 2>/dev/null || true
-                    log "First control plane initialised; join material in /etc/snapdragon/kubeadm-join.cmd"
+                    [ -n "${ck}" ] && { echo "${ck}" > /etc/hugmesh/kubeadm-certificate-key; chmod 0600 /etc/hugmesh/kubeadm-certificate-key; }
+                    chmod 0600 /etc/hugmesh/kubeadm-join.cmd 2>/dev/null || true
+                    log "First control plane initialised; join material in /etc/hugmesh/kubeadm-join.cmd"
                 else
                     warn "kubeadm init failed — inspect ${LOG}"
                 fi
@@ -1593,11 +1593,11 @@ luks_open_or_format() {
         # Base options + any caller extras (node-storage appends `nofail`).
         local cryptopts="luks,tpm2-device=auto"
         [ -n "${extra_opts}" ] && cryptopts="${cryptopts},${extra_opts}"
-        printf '%s UUID=%s /etc/snapdragon/luks/%s.key %s\n' \
+        printf '%s UUID=%s /etc/hugmesh/luks/%s.key %s\n' \
             "${name}" "${puuid}" "${name}" "${cryptopts}" >> /etc/crypttab
         # Install the recovery keyfile off the read-only USB into a 0600 root path
         # so crypttab can read it at boot (TPM2 unlock makes it a fallback only).
-        install -Dm0600 "${keyfile}" "/etc/snapdragon/luks/${name}.key" 2>/dev/null || true
+        install -Dm0600 "${keyfile}" "/etc/hugmesh/luks/${name}.key" 2>/dev/null || true
         log "Added ${name} to /etc/crypttab (UUID=${puuid}, TPM2-or-keyfile unlock)" >&2
     fi
     luks_try_tpm2_enroll "${part}" "${keyfile}" >&2
@@ -1742,7 +1742,7 @@ provision_storage() {
 # ── Egress VPN — provider configs (per-domain, own-domain-only, 0600) ──
 # Installs the provider-downloaded VPN configs (ProtonVPN WireGuard `.conf`
 # FIRST-CLASS; OpenVPN `.ovpn` fallback) the egress-VPN OpenRC service
-# (snapdragon-egress-vpn, a DEFAULT-OFF optional service) uses for OUTGOING /
+# (hugmesh-egress-vpn, a DEFAULT-OFF optional service) uses for OUTGOING /
 # egress traffic on PUBLIC-facing flows (coturn UDP, made-public services, and —
 # only on explicit assignment — akkoma/matrix federation). The tailnet control
 # plane + cluster-internal traffic stay DIRECT (split-tunnel; see PR2 runner).
@@ -1751,7 +1751,7 @@ provision_storage() {
 # device-registry tenant scoping): the configs ride the key-USB under
 # KEYS/vpn/<domain>/ and this reads ONLY the node's OWN domain's directory — a
 # config staged under another tenant's domain is NEVER installed here. The node's
-# own domain is .egress_vpn.domain else .snapdragon.cluster_domain (the brand
+# own domain is .egress_vpn.domain else .hugmesh.cluster_domain (the brand
 # residency provision_hosts already uses). With no own-domain dir (or an empty
 # one) NOTHING is installed and the service stays stopped (fail-closed: public
 # flows fall back to the Squid egress-proxy / direct, never leak — see PR2).
@@ -1759,18 +1759,18 @@ provision_storage() {
 # This function does NOT start the service (default-off optional service; the
 # OpenRC service + split-tunnel runner ship in PR2, the signed-reconcile flip in
 # PR5). It only stages the own-domain configs 0600 root-owned into
-# /etc/snapdragon/vpn/ and points active.conf at the first config so a manually-
+# /etc/hugmesh/vpn/ and points active.conf at the first config so a manually-
 # started service has something to bring up. The runtime UI path delivers a
 # config via a K8s Secret (ESO) instead; this is the key-USB delivery path.
 provision_vpn() {
-    local vpn_etc=/etc/snapdragon/vpn
+    local vpn_etc=/etc/hugmesh/vpn
     # Resolve the node's OWN domain (residency). Precedence: explicit
-    # .egress_vpn.domain, else the brand .snapdragon.cluster_domain.
+    # .egress_vpn.domain, else the brand .hugmesh.cluster_domain.
     local dom
     dom="$(jqm '.egress_vpn.domain // ""')"
-    { [ -z "${dom}" ] || [ "${dom}" = "null" ]; } && dom="$(jqm '.snapdragon.cluster_domain // ""')"
+    { [ -z "${dom}" ] || [ "${dom}" = "null" ]; } && dom="$(jqm '.hugmesh.cluster_domain // ""')"
     if [ -z "${dom}" ] || [ "${dom}" = "null" ]; then
-        log "egress-vpn: no node domain (.egress_vpn.domain / .snapdragon.cluster_domain) — skipping (service stays off)"
+        log "egress-vpn: no node domain (.egress_vpn.domain / .hugmesh.cluster_domain) — skipping (service stays off)"
         return 0
     fi
 
@@ -1844,8 +1844,8 @@ provision_vpn() {
 # and wires the boot oneshot + 60s cron. It writes node.env's BFF transport if the
 # manifest carries it (mirroring provision_device_registry), reusing the SAME keys.
 provision_domain_registry() {
-    local reg_dir=/etc/snapdragon/registry
-    local cache_dir=/var/lib/snapdragon/domain-registry
+    local reg_dir=/etc/hugmesh/registry
+    local cache_dir=/var/lib/hugmesh/domain-registry
 
     # (1) Optional-service gate: only enable on an explicit manifest opt-in.
     local enabled; enabled="$(jqm '.domain_registry.enabled // false')"
@@ -1859,10 +1859,10 @@ provision_domain_registry() {
 
     # The agent + verify lib are BAKED by the builders (gated on the optional service).
     # Sanity-check (additive: a stale image without them just stays inert, never bricks).
-    [ -x /usr/sbin/snapdragon-domain-reconcile ] \
-        || warn "domain-registry: /usr/sbin/snapdragon-domain-reconcile missing from image (no bridge; nothing emitted)"
-    [ -r /usr/lib/snapdragon/domain-verify.sh ] \
-        || warn "domain-registry: /usr/lib/snapdragon/domain-verify.sh missing from image (verify unavailable)"
+    [ -x /usr/sbin/hugmesh-domain-reconcile ] \
+        || warn "domain-registry: /usr/sbin/hugmesh-domain-reconcile missing from image (no bridge; nothing emitted)"
+    [ -r /usr/lib/hugmesh/domain-verify.sh ] \
+        || warn "domain-registry: /usr/lib/hugmesh/domain-verify.sh missing from image (verify unavailable)"
 
     # (2) Assert the BAKED registry public verifying key is present (REUSED from Layer-B
     # — provision_device_registry / the builders stage it). NEVER generate or copy a new
@@ -1891,7 +1891,7 @@ provision_domain_registry() {
         bff_url="$(jqm '.domain_registry.bff_export_url // ""')"
         bff_cert="$(jqm '.domain_registry.bff_client_cert // ""')"
         bff_key="$(jqm '.domain_registry.bff_client_key // ""')"
-        bff_ca="$(jqm '.domain_registry.bff_ca // "/etc/snapdragon/pki/ca-chain.crt"')"
+        bff_ca="$(jqm '.domain_registry.bff_ca // "/etc/hugmesh/pki/ca-chain.crt"')"
         {
             echo "# domain-registry bridge node identity + BFF transport (#4). MACHINE_KEY_FP is"
             echo "# the ?node= PROVENANCE param only; the export body is the full cross-domain set."
@@ -1908,16 +1908,16 @@ provision_domain_registry() {
     # Enable the boot oneshot + 60s cron (convergence floor). The builders' optional-
     # service gate already linked the runlevel symlink + cron when selected; this is
     # belt-and-suspenders for a manifest-driven enable on a selected image.
-    if [ -f /etc/init.d/snapdragon-domain-reconcile ]; then
-        rc-update add snapdragon-domain-reconcile default 2>/dev/null \
-            && log "domain-registry: enabled snapdragon-domain-reconcile (boot reconcile)" \
-            || warn "domain-registry: rc-update add snapdragon-domain-reconcile failed"
+    if [ -f /etc/init.d/hugmesh-domain-reconcile ]; then
+        rc-update add hugmesh-domain-reconcile default 2>/dev/null \
+            && log "domain-registry: enabled hugmesh-domain-reconcile (boot reconcile)" \
+            || warn "domain-registry: rc-update add hugmesh-domain-reconcile failed"
     else
-        warn "domain-registry: init.d/snapdragon-domain-reconcile not baked — no boot reconcile (was domain-registry-bridge selected at build?)"
+        warn "domain-registry: init.d/hugmesh-domain-reconcile not baked — no boot reconcile (was domain-registry-bridge selected at build?)"
     fi
     if [ -f "${reg_dir}/cron-domain-reconcile" ]; then
-        cp -f "${reg_dir}/cron-domain-reconcile" /etc/cron.d/snapdragon-domain-reconcile
-        chmod 0644 /etc/cron.d/snapdragon-domain-reconcile
+        cp -f "${reg_dir}/cron-domain-reconcile" /etc/cron.d/hugmesh-domain-reconcile
+        chmod 0644 /etc/cron.d/hugmesh-domain-reconcile
         log "domain-registry: installed 60s reconcile cron (convergence floor)"
     fi
 }
@@ -1938,7 +1938,7 @@ provision_domain_registry() {
 # No admin config => empty store, no user has sudo. This is a no-op on non-client
 # (k8s) nodes and a no-op when the templates were not baked.
 provision_desktop_governance() {
-    local tpl=/etc/snapdragon/desktop-governance
+    local tpl=/etc/hugmesh/desktop-governance
     # Only client desktops carry the baked templates. Absent => not a governed
     # client image (or a cluster node). When NOT baked into the image, fall back
     # to the KEYS-USB copy at KEYS/desktop-governance/ (same delivery idiom as
@@ -1950,25 +1950,25 @@ provision_desktop_governance() {
             tpl="${BASE}/desktop-governance"
             log "desktop-governance: using KEYS-USB templates at ${tpl} (not baked into the image)"
         else
-            log "desktop-governance: no templates baked (/etc/snapdragon/desktop-governance) and none on KEYS (desktop-governance/) — skipping (not a governed client desktop)"
+            log "desktop-governance: no templates baked (/etc/hugmesh/desktop-governance) and none on KEYS (desktop-governance/) — skipping (not a governed client desktop)"
             return 0
         fi
     fi
 
     # Resolve this node's OWN domain. Precedence: manifest .client.primary_domain,
-    # else the first line of the baked /etc/snapdragon/domains, else
-    # .snapdragon.cluster_domain. This is the domain the registry host + OIDC
+    # else the first line of the baked /etc/hugmesh/domains, else
+    # .hugmesh.cluster_domain. This is the domain the registry host + OIDC
     # issuer are parameterized on.
     local dom
     dom="$(jqm '.client.primary_domain // ""')"
     if [ -z "${dom}" ] || [ "${dom}" = "null" ]; then
-        [ -r /etc/snapdragon/domains ] && dom="$(grep -m1 -v '^[[:space:]]*$' /etc/snapdragon/domains 2>/dev/null | tr -d '[:space:]')"
+        [ -r /etc/hugmesh/domains ] && dom="$(grep -m1 -v '^[[:space:]]*$' /etc/hugmesh/domains 2>/dev/null | tr -d '[:space:]')"
     fi
     if [ -z "${dom}" ] || [ "${dom}" = "null" ]; then
-        dom="$(jqm '.snapdragon.cluster_domain // ""')"
+        dom="$(jqm '.hugmesh.cluster_domain // ""')"
     fi
     if [ -z "${dom}" ] || [ "${dom}" = "null" ]; then
-        warn "desktop-governance: no node domain (.client.primary_domain / /etc/snapdragon/domains / .snapdragon.cluster_domain) — skipping (store stays empty, no sudo granted)"
+        warn "desktop-governance: no node domain (.client.primary_domain / /etc/hugmesh/domains / .hugmesh.cluster_domain) — skipping (store stays empty, no sudo granted)"
         return 0
     fi
     # FAIL-CLOSED domain validation. `dom` is interpolated into a sed replacement
@@ -2006,15 +2006,15 @@ provision_desktop_governance() {
 
     # ── 1. Discover/Flatpak -> BFF registry remote (Flathub OFF) ──────────────
     # Install our remote definition.
-    render_gov "${tpl}/flatpak/snapdragon-discover.flatpakrepo.tmpl" \
-               /etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo 0644
+    render_gov "${tpl}/flatpak/hugmesh-discover.flatpakrepo.tmpl" \
+               /etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo 0644
     # Add/refresh the remote in the system flatpak install (idempotent). Safe if
     # flatpak is not yet installed — we just skip the live add; the .flatpakrepo
     # preset is honored when flatpak/Discover land.
     if have flatpak; then
         flatpak remote-add --system --if-not-exists --no-gpg-verify \
-            snapdragon-discover "/etc/flatpak/remotes.d/snapdragon-discover.flatpakrepo" 2>/dev/null \
-            && log "desktop-governance: flatpak remote 'snapdragon-discover' added (system)" \
+            hugmesh-discover "/etc/flatpak/remotes.d/hugmesh-discover.flatpakrepo" 2>/dev/null \
+            && log "desktop-governance: flatpak remote 'hugmesh-discover' added (system)" \
             || warn "desktop-governance: flatpak remote-add returned non-zero (will be honored from the preset)"
         # Flathub + every other default backend OFF — sole source is our registry.
         local rm_name
@@ -2039,13 +2039,13 @@ provision_desktop_governance() {
     fi
 
     # ── 2. polkit SSO-claim sudo gate (no static sudoers) ─────────────────────
-    render_gov "${tpl}/polkit/49-snapdragon-desktop-sudo.rules" \
-               /etc/polkit-1/rules.d/49-snapdragon-desktop-sudo.rules 0644
+    render_gov "${tpl}/polkit/49-hugmesh-desktop-sudo.rules" \
+               /etc/polkit-1/rules.d/49-hugmesh-desktop-sudo.rules 0644
     # Defense-in-depth: ensure NO static sudo is granted. We do not write a
     # sudoers entry; we also strip a stock `%wheel ALL=(ALL) ALL` if a base image
     # shipped one, so the polkit/SSO path is the only escalation route.
     if [ -f /etc/sudoers ]; then
-        sed -i 's/^\(%wheel[[:space:]].*\)$/# \1  # snapdragon: sudo is SSO-claim gated via polkit (desktop-sudo)/' \
+        sed -i 's/^\(%wheel[[:space:]].*\)$/# \1  # hugmesh: sudo is SSO-claim gated via polkit (desktop-sudo)/' \
             /etc/sudoers 2>/dev/null || true
     fi
     # Belt-and-suspenders: provision_users() already suppresses the per-user
@@ -2072,7 +2072,7 @@ provision_desktop_governance() {
                     # named (non-%group) login user is a standing root grant —
                     # neutralize it (comment out the offending lines).
                     if grep -Eq '^[^#%[:space:]][^[:space:]]*[[:space:]]+ALL=\(ALL(:ALL)?\)' "${sdf}" 2>/dev/null; then
-                        sed -i -E 's/^([^#%[:space:]][^[:space:]]*[[:space:]]+ALL=\(ALL(:ALL)?\).*)$/# \1  # snapdragon: sudo is SSO-claim gated (desktop-sudo)/' \
+                        sed -i -E 's/^([^#%[:space:]][^[:space:]]*[[:space:]]+ALL=\(ALL(:ALL)?\).*)$/# \1  # hugmesh: sudo is SSO-claim gated (desktop-sudo)/' \
                             "${sdf}" 2>/dev/null \
                             && log "desktop-governance: neutralized standing sudoers.d grant in ${sdf}" || true
                     fi
@@ -2082,8 +2082,8 @@ provision_desktop_governance() {
     fi
 
     # ── 3. SSSD-OIDC claim->group mapping + bearer forwarder ──────────────────
-    render_gov "${tpl}/sssd/snapdragon-oidc.conf.tmpl" \
-               /etc/sssd/conf.d/snapdragon-oidc.conf 0600
+    render_gov "${tpl}/sssd/hugmesh-oidc.conf.tmpl" \
+               /etc/sssd/conf.d/hugmesh-oidc.conf 0600
     render_gov "${tpl}/discover/bearer-forward.sh.tmpl" \
                "${tpl}/bearer-forward.sh" 0755
 
@@ -2095,7 +2095,7 @@ provision_backup() {
     jqe '.backup' || return 0
     [ "$(jqm '.backup.enabled // false')" = "true" ] || return 0
     log "Configuring backups"
-    mkdir -p /etc/snapdragon
+    mkdir -p /etc/hugmesh
 
     # Mount any configured network shares (by file → fstab) so the backup
     # script can write to them. NFS and CIFS supported.
@@ -2123,7 +2123,7 @@ provision_backup() {
     if [ -n "${cifs_unc}" ] && [ "${cifs_unc}" != "null" ]; then
         cifs_cred="$(jqm '.backup.cifs.credentials_file // ""')"
         [ -n "${cifs_cred}" ] && [ -f "${BASE}/${cifs_cred}" ] && \
-            { install -Dm0600 "${BASE}/${cifs_cred}" /etc/snapdragon/cifs.cred; cifs_cred=/etc/snapdragon/cifs.cred; }
+            { install -Dm0600 "${BASE}/${cifs_cred}" /etc/hugmesh/cifs.cred; cifs_cred=/etc/hugmesh/cifs.cred; }
         # FAIL-CLOSED: cifs_unc + mountpoint are written whitespace-delimited into an
         # /etc/fstab line; a space or newline would inject a rogue mount. Validate both;
         # skip the share (no fstab write) on anything invalid.
@@ -2131,7 +2131,7 @@ provision_backup() {
             mkdir -p "${cifs_mp}"
             if ! grep -q "${cifs_mp}" /etc/fstab; then
                 printf '%s  %s  cifs  credentials=%s,_netdev,uid=0,gid=0,file_mode=0600,dir_mode=0700  0 0\n' \
-                    "${cifs_unc}" "${cifs_mp}" "${cifs_cred:-/etc/snapdragon/cifs.cred}" >> /etc/fstab
+                    "${cifs_unc}" "${cifs_mp}" "${cifs_cred:-/etc/hugmesh/cifs.cred}" >> /etc/fstab
             fi
             mount "${cifs_mp}" 2>/dev/null || warn "CIFS mount ${cifs_mp} deferred to boot"
             log "Configured CIFS backup share ${cifs_unc} -> ${cifs_mp}"
@@ -2140,31 +2140,31 @@ provision_backup() {
         fi
     fi
 
-    # Write the backup config the snapdragon-backup script reads, straight
+    # Write the backup config the hugmesh-backup script reads, straight
     # from the manifest (file-based config).
-    jq '.backup' "${MANIFEST}" > /etc/snapdragon/backup.json 2>/dev/null || true
+    jq '.backup' "${MANIFEST}" > /etc/hugmesh/backup.json 2>/dev/null || true
 
     # Schedule it via cron (cronie reads /etc/cron.d).
     local sched; sched="$(jqm '.backup.schedule // "0 3 * * *"')"
-    if [ -x /usr/local/sbin/snapdragon-backup ]; then
-        printf '%s root /usr/local/sbin/snapdragon-backup >> /var/log/snapdragon-backup.log 2>&1\n' "${sched}" \
-            > /etc/cron.d/snapdragon-backup
+    if [ -x /usr/local/sbin/hugmesh-backup ]; then
+        printf '%s root /usr/local/sbin/hugmesh-backup >> /var/log/hugmesh-backup.log 2>&1\n' "${sched}" \
+            > /etc/cron.d/hugmesh-backup
         log "Scheduled backups: ${sched}"
     else
-        warn "snapdragon-backup not installed in image"
+        warn "hugmesh-backup not installed in image"
     fi
 }
 
 # ── OPT-IN (default-off) host-binary auto-update (binpkg deltas from the binhost) ──
-# Bakes the snapdragon-update cron drop-in as ACTIVE PLUMBING on EVERY node + client
+# Bakes the hugmesh-update cron drop-in as ACTIVE PLUMBING on EVERY node + client
 # image, but the poller is DEFAULT-OFF: the ABSENCE of any policy means auto-update is
 # OFF (fail-safe to off, not to a pull). A superadmin OPTS IN by setting enabled:true
-# in the live snapdragon-update-policy ConfigMap (or the manifest's OPTIONAL ".update"
+# in the live hugmesh-update-policy ConfigMap (or the manifest's OPTIONAL ".update"
 # block, which can also ADJUST cadence/window/reboot/per-target+role staging). Cloned
 # from provision_backup()'s by-file + cron.d idiom; cronie reads /etc/cron.d (OpenRC,
 # not systemd).
 #
-# Self-sufficient: the poller is baked at /usr/local/sbin/snapdragon-update by the
+# Self-sufficient: the poller is baked at /usr/local/sbin/hugmesh-update by the
 # image builders, but if a target's builder did NOT bake it (e.g. a protected
 # builder we may not edit), this STAGES the cron drop-in pointing at the SAME path so
 # the plumbing is defined for a follow-up bake — provisioning never silently drops it.
@@ -2172,7 +2172,7 @@ provision_backup() {
 # ConfigMap still needs this baked cron to fire.
 provision_update() {
     local enabled cadence window reboot role board staged
-    mkdir -p /etc/snapdragon
+    mkdir -p /etc/hugmesh
 
     # OPT-IN (default-off): the cron + poller are baked as PLUMBING on every node, but
     # the poller pulls only when the effective policy says enabled:true. enabled
@@ -2188,10 +2188,10 @@ provision_update() {
     reboot="$(jqm '.update.reboot // "if-needed"')"
 
     # Per-target / per-role staging override: a maintenance-wave cadence keyed by the
-    # node's role (/etc/snapdragon/role) or board tag (frite:<board>) or "client".
+    # node's role (/etc/hugmesh/role) or board tag (frite:<board>) or "client".
     # Mirrors the ConfigMap's .staging map; the most specific match wins.
-    role="$(cat /etc/snapdragon/role 2>/dev/null || echo '')"
-    board="$(cat /etc/snapdragon/board 2>/dev/null || echo '')"
+    role="$(cat /etc/hugmesh/role 2>/dev/null || echo '')"
+    board="$(cat /etc/hugmesh/board 2>/dev/null || echo '')"
     if jqe '.update.staging' && [ "$(jqm '.update.staging | length')" != "0" ]; then
         local k
         for k in "${board}" "${role}" client; do
@@ -2206,12 +2206,12 @@ provision_update() {
     # Persist the effective policy as the by-file local config the poller reads
     # (tier 2). The live ConfigMap (tier 3) still wins on a reachable control node.
     if jqe '.update'; then
-        jq '.update' "${MANIFEST}" > /etc/snapdragon/update.json 2>/dev/null || true
+        jq '.update' "${MANIFEST}" > /etc/hugmesh/update.json 2>/dev/null || true
     else
         # No .update block => write the explicit default-OFF policy so the posture is
         # self-documenting on the node (absence of the block still means OFF / opt-in).
         printf '{"enabled":false,"cadence":"%s","window":"%s","reboot":"%s","staging":{}}\n' \
-            "${cadence}" "${window}" "${reboot}" > /etc/snapdragon/update.json
+            "${cadence}" "${window}" "${reboot}" > /etc/hugmesh/update.json
     fi
 
     # OPT-IN: always bake the cron drop-in as PLUMBING (so a later ConfigMap/local
@@ -2219,47 +2219,47 @@ provision_update() {
     # effective policy is enabled:true. There is NO provision-time "disable" branch:
     # default-off is enforced by the poller, never by withholding the cron (withholding
     # it would also make runtime opt-in via the ConfigMap impossible).
-    if [ -x /usr/local/sbin/snapdragon-update ]; then
+    if [ -x /usr/local/sbin/hugmesh-update ]; then
         mkdir -p /etc/cron.d
-        printf '%s root /usr/local/sbin/snapdragon-update >> /var/log/snapdragon-update.log 2>&1\n' \
-            "${cadence}" > /etc/cron.d/snapdragon-update
-        chmod 0644 /etc/cron.d/snapdragon-update
+        printf '%s root /usr/local/sbin/hugmesh-update >> /var/log/hugmesh-update.log 2>&1\n' \
+            "${cadence}" > /etc/cron.d/hugmesh-update
+        chmod 0644 /etc/cron.d/hugmesh-update
         log "auto-update plumbing baked: cadence='${cadence}' window='${window:-any}' reboot=${reboot}; poller is DEFAULT-OFF (opt in via enabled:true). provisioned enabled=${enabled}"
     else
         # Poller not baked into this image (e.g. a builder we could not edit). Stage the
         # cron plumbing so it is defined; the OpenRC oneshot + a follow-up bake install
         # it. The poller still gates default-off at runtime regardless.
-        mkdir -p /etc/snapdragon
-        printf '%s root /usr/local/sbin/snapdragon-update >> /var/log/snapdragon-update.log 2>&1\n' \
-            "${cadence}" > /etc/snapdragon/cron-update.staged
-        warn "snapdragon-update poller not baked in this image — staged the cron plumbing at /etc/snapdragon/cron-update.staged (needs a builder bake of /usr/local/sbin/snapdragon-update); poller remains default-off until opted in"
+        mkdir -p /etc/hugmesh
+        printf '%s root /usr/local/sbin/hugmesh-update >> /var/log/hugmesh-update.log 2>&1\n' \
+            "${cadence}" > /etc/hugmesh/cron-update.staged
+        warn "hugmesh-update poller not baked in this image — staged the cron plumbing at /etc/hugmesh/cron-update.staged (needs a builder bake of /usr/local/sbin/hugmesh-update); poller remains default-off until opted in"
     fi
 }
 
-# ── Snapdragon GitOps (ArgoCD app-of-apps) — control-plane only ────
-provision_snapdragon() {
+# ── HugMesh GitOps (ArgoCD app-of-apps) — control-plane only ────
+provision_hugmesh() {
     local role label
     # Node label hint (snapdragon.systems/role / compute) for scheduling.
-    label="$(jqm '.snapdragon.node_labels // {} | to_entries | map("\(.key)=\(.value)") | join(",")')"
+    label="$(jqm '.hugmesh.node_labels // {} | to_entries | map("\(.key)=\(.value)") | join(",")')"
     if [ -n "${label}" ] && [ "${label}" != "null" ] && [ -f /etc/kubernetes/admin.conf ]; then
         KUBECONFIG=/etc/kubernetes/admin.conf kubectl label node "$(hostname)" ${label//,/ } --overwrite 2>/dev/null || true
         log "Applied node labels: ${label}"
     fi
 
-    [ "$(jqm '.snapdragon.gitops.enabled // false')" = "true" ] || { log "Snapdragon GitOps disabled"; return 0; }
+    [ "$(jqm '.hugmesh.gitops.enabled // false')" = "true" ] || { log "HugMesh GitOps disabled"; return 0; }
     role="$(jqm '.kubernetes.role // "none"')"
     case "${role}" in control-plane|master|server) ;; *) log "Not a control-plane — skipping GitOps bootstrap"; return 0 ;; esac
     [ -f /etc/kubernetes/admin.conf ] || { warn "No kubeconfig yet — run cluster bootstrap after kubeadm init"; return 0; }
-    local bs=/var/lib/snapdragon/cluster/bootstrap/bootstrap.sh
+    local bs=/var/lib/hugmesh/cluster/bootstrap/bootstrap.sh
     [ -f "${bs}" ] || { warn "GitOps payload not baked into image"; return 0; }
 
     # ── ArgoCD repository credential token (out-of-band, offline KEYS USB) ──
     # bootstrap.sh registers a k8s Secret (labeled argocd.argoproj.io/
-    # secret-type=repository) so ArgoCD can clone the PRIVATE snapdragon-generator
+    # secret-type=repository) so ArgoCD can clone the PRIVATE hugmesh-generator
     # GitOps repo; without it every git-path Application fails to sync with
     # "authentication required: Repository not found". The token comes ONLY from
     # the offline KEYS USB (gitops/repo-token, override via
-    # .snapdragon.gitops.repo_token_file) — SAME custody as vault/token +
+    # .hugmesh.gitops.repo_token_file) — SAME custody as vault/token +
     # certs/cluster-ca.key + luks.key, NEVER git. Read it into a LOCAL (NOT
     # exported into the provisioning environment) and hand it to bootstrap.sh
     # scoped to that ONE invocation as $ARGOCD_REPO_TOKEN — exactly how the far
@@ -2270,7 +2270,7 @@ provision_snapdragon() {
     # bootstrap.sh fails closed for the private repo (it exits non-zero, which
     # here only warns via the `|| warn` below — it does not abort provisioning).
     local repo_token_file rt argocd_repo_token=""
-    repo_token_file="$(jqm '.snapdragon.gitops.repo_token_file // "gitops/repo-token"')"
+    repo_token_file="$(jqm '.hugmesh.gitops.repo_token_file // "gitops/repo-token"')"
     rt="${BASE}/${repo_token_file}"
     if [ -f "${rt}" ]; then
         argocd_repo_token="$(tr -d '[:space:]' < "${rt}" 2>/dev/null)"
@@ -2283,7 +2283,7 @@ provision_snapdragon() {
         warn "No ArgoCD repo token on KEYS (${repo_token_file}) — bootstrap.sh will fail closed for the private GitOps repo (write a read-only PAT there, same custody as vault/token)"
     fi
 
-    log "Bootstrapping ArgoCD + Snapdragon app-of-apps"
+    log "Bootstrapping ArgoCD + HugMesh app-of-apps"
     ARGOCD_REPO_TOKEN="${argocd_repo_token}" KUBECONFIG=/etc/kubernetes/admin.conf bash "${bs}" || warn "GitOps bootstrap returned non-zero"
 }
 
@@ -2304,7 +2304,7 @@ provision_vault() {
     local address kv_mount base_path token_file install_eso
     address="$(jqm '.vault.address // ""')"
     kv_mount="$(jqm '.vault.kv_mount // "secret"')"
-    base_path="$(jqm '.vault.base_path // "snapdragon"')"
+    base_path="$(jqm '.vault.base_path // "hugmesh"')"
     token_file="$(jqm '.vault.token_file // "vault/token"')"
     install_eso="$(jqm '.vault.install_eso // false')"
     [ "${address}" = "null" ] && address=""
@@ -2323,7 +2323,7 @@ provision_vault() {
                     -n external-secrets --from-literal=token="${token}" \
                     --dry-run=client -o yaml 2>/dev/null \
                     | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null; then
-                log "Created k8s Secret external-secrets/vault-token for ESO ClusterSecretStore 'snapdragon-vault'"
+                log "Created k8s Secret external-secrets/vault-token for ESO ClusterSecretStore 'hugmesh-vault'"
             else
                 warn "failed to create external-secrets/vault-token"
             fi
@@ -2335,7 +2335,7 @@ provision_vault() {
             # cannot start. Namespaces are also created by ArgoCD (CreateNamespace);
             # ensuring them here is idempotent.
             local gen_ns
-            for gen_ns in snapdragon-pki snapdragon-backend snapdragon-frontend; do
+            for gen_ns in hugmesh-pki hugmesh-backend hugmesh-frontend; do
                 KUBECONFIG="${kc}" kubectl create namespace "${gen_ns}" \
                     --dry-run=client -o yaml 2>/dev/null | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null \
                     || warn "could not ensure namespace ${gen_ns}"
@@ -2386,7 +2386,7 @@ provision_vault() {
         # (key ca.crt) in their namespace. Only the CERT is published (no CA key) —
         # the cert is public trust material. Seed it alongside the vault-token.
         local ca_ns
-        for ca_ns in vault snapdragon-pki snapdragon-backend snapdragon-frontend; do
+        for ca_ns in vault hugmesh-pki hugmesh-backend hugmesh-frontend; do
             KUBECONFIG="${kc}" kubectl create namespace "${ca_ns}" \
                 --dry-run=client -o yaml 2>/dev/null | KUBECONFIG="${kc}" kubectl apply -f - 2>/dev/null \
                 || warn "could not ensure namespace ${ca_ns}"
@@ -2513,7 +2513,7 @@ provision_run_hooks() {
 # their JRE. Java IO then trusts the cluster CA: the gateways/Spring services
 # run with -Djavax.net.ssl.trustStore pointing at this store.
 provision_truststore() {
-    local pki=/etc/snapdragon/pki
+    local pki=/etc/hugmesh/pki
     local cas=()
     [ -f "${BASE}/certs/cluster-ca.crt" ] && cas+=("${BASE}/certs/cluster-ca.crt")
     for c in "${BASE}/certs/"*.crt; do [ -f "${c}" ] && cas+=("${c}"); done
@@ -2533,10 +2533,10 @@ provision_truststore() {
 
     # Publish to the cluster so Java pods mount it (control-plane only).
     if [ -f /etc/kubernetes/admin.conf ] && have kubectl; then
-        KUBECONFIG=/etc/kubernetes/admin.conf kubectl create secret generic snapdragon-truststore \
+        KUBECONFIG=/etc/kubernetes/admin.conf kubectl create secret generic hugmesh-truststore \
             -n kube-system --from-file="${pki}/truststore.p12" \
             --dry-run=client -o yaml 2>/dev/null | KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f - 2>/dev/null \
-            && log "Published truststore as Secret kube-system/snapdragon-truststore" || true
+            && log "Published truststore as Secret kube-system/hugmesh-truststore" || true
     fi
 }
 
@@ -2582,7 +2582,7 @@ provision_hosts() {
     jqe '.nodes' || return 0
     local n i ip name dom facade pki_ip
     n="$(jqm '.nodes | length')"
-    dom="$(jqm '.snapdragon.cluster_domain // ""')"
+    dom="$(jqm '.hugmesh.cluster_domain // ""')"
     # Fail-closed: dom/facade/pki_ip and every node ip/name below are written VERBATIM into
     # /etc/hosts; a newline or whitespace in any of them injects arbitrary host lines (e.g.
     # mapping the control-plane name to an attacker IP = first-boot join MITM), the same class
@@ -2597,9 +2597,9 @@ provision_hosts() {
     # the pki node's INTERNAL ip (the pki node DNATs :443 -> pki gateway), so
     # VPN/LAN traffic — especially reaching headscale via the pki gateway — never
     # loops back out to the router/external IP. Public DNS still points the same
-    # name at the external IP. Override via .snapdragon.facade_host; defaults to
+    # name at the external IP. Override via .hugmesh.facade_host; defaults to
     # scale.<cluster_domain>.
-    facade="$(jqm '.snapdragon.facade_host // ""')"
+    facade="$(jqm '.hugmesh.facade_host // ""')"
     if [ -z "${facade}" ] || [ "${facade}" = "null" ]; then
         { [ -n "${dom}" ] && [ "${dom}" != "null" ]; } && facade="scale.${dom}" || facade=""
     fi
@@ -2621,9 +2621,9 @@ provision_hosts() {
     # then takes over (and survives a pki IP change).
     local cpname; cpname="$(resolve_cp_dns_name)"
     log "Writing /etc/hosts for ${n} cluster node(s)${facade:+ + facade ${facade}}${cpname:+ + cp ${cpname}}"
-    sed -i '/# >>> snapdragon nodes/,/# <<< snapdragon nodes/d' /etc/hosts 2>/dev/null || true
+    sed -i '/# >>> hugmesh nodes/,/# <<< hugmesh nodes/d' /etc/hosts 2>/dev/null || true
     {
-        echo "# >>> snapdragon nodes"
+        echo "# >>> hugmesh nodes"
         for ((i = 0; i < n; i++)); do
             ip="$(jqm ".nodes[$i].ip")"; name="$(jqm ".nodes[$i].name")"
             [ -n "${ip}" ] && [ "${ip}" != "null" ] && [ -n "${name}" ] || continue
@@ -2645,7 +2645,7 @@ provision_hosts() {
         [ -n "${facade}" ] && [ -n "${pki_ip}" ] && [ "${pki_ip}" != "null" ] && echo "${pki_ip} ${facade}"
         # Stable control-plane name -> pki IP (first-boot bridge before MagicDNS).
         [ -n "${cpname}" ] && [ -n "${pki_ip}" ] && [ "${pki_ip}" != "null" ] && echo "${pki_ip} ${cpname}"
-        echo "# <<< snapdragon nodes"
+        echo "# <<< hugmesh nodes"
     } >> /etc/hosts
 }
 
@@ -2658,7 +2658,7 @@ provision_binhost() {
         printf 'PORTAGE_BINHOST="%s"\nFEATURES="${FEATURES} getbinpkg"\n' "${url}" \
             > /etc/portage/make.conf/zz-binhost.conf
     elif ! grep -q 'PORTAGE_BINHOST' /etc/portage/make.conf 2>/dev/null; then
-        printf '\n# snapdragon binhost (binary OS updates over the VPN)\nPORTAGE_BINHOST="%s"\nFEATURES="${FEATURES} getbinpkg"\n' \
+        printf '\n# hugmesh binhost (binary OS updates over the VPN)\nPORTAGE_BINHOST="%s"\nFEATURES="${FEATURES} getbinpkg"\n' \
             "${url}" >> /etc/portage/make.conf
     fi
     log "Configured Gentoo binhost: ${url}"
@@ -2705,9 +2705,9 @@ EOF
 # continues to boot normally (shim falls through to unsigned-boot prompts until
 # the cert is confirmed, after which no further action is needed).
 provision_secureboot() {
-    local cert_pem="/etc/snapdragon/secureboot/sb.crt"
-    local cert_der="/etc/snapdragon/secureboot/sb.cer"
-    local esp_cert="/boot/efi/EFI/snapdragon/sb.cer"
+    local cert_pem="/etc/hugmesh/secureboot/sb.crt"
+    local cert_der="/etc/hugmesh/secureboot/sb.cer"
+    local esp_cert="/boot/efi/EFI/hugmesh/sb.cer"
     # Skip on Pi / non-EFI systems (no EFI runtime services).
     [ -d /sys/firmware/efi ] || { log "secureboot: non-EFI system — skipping cert enrollment"; return 0; }
     # Prefer DER cert from ESP (guaranteed fresh after each build); fall back to rootfs copy.
@@ -2760,7 +2760,7 @@ main() {
     # the mesh, run k8s, or wire Casdoor/OIDC SSO desktop governance. We still honour
     # ssh host keys, users, storage/LUKS, egress-VPN, secureboot, hooks and SELinux.
     local STANDALONE_IMG=false
-    [ -f /etc/snapdragon/standalone ] && { STANDALONE_IMG=true; log "STANDALONE image — skipping mesh / k8s / SSO governance provisioning"; }
+    [ -f /etc/hugmesh/standalone ] && { STANDALONE_IMG=true; log "STANDALONE image — skipping mesh / k8s / SSO governance provisioning"; }
 
     provision_ssh_host_keys
     provision_identity
@@ -2782,7 +2782,7 @@ main() {
         provision_kubernetes
         provision_backup
         provision_update     # OPT-IN binpkg auto-update plumbing (default-off; superadmin enables via ConfigMap; absence => off)
-        provision_snapdragon
+        provision_hugmesh
         provision_calico
         provision_vault
     fi

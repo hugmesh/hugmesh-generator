@@ -1,8 +1,8 @@
-# Snapdragon Mesh firmware — a thin fork overlay on Meshtastic
+# HugMesh Mesh firmware — a thin fork overlay on Meshtastic
 
 **"Meshtastic" is a registered trademark of Meshtastic LLC.** Nothing here is
 produced by, endorsed by, or affiliated with the Meshtastic project. Firmware
-built by this pipeline is branded **"Snapdragon Mesh firmware
+built by this pipeline is branded **"HugMesh Mesh firmware
 (Meshtastic-based)"** in every user-facing surface (device NODEINFO owner
 long-name prefix, release manifest, artifact filenames, this doc) — we never
 call our fork "Meshtastic" on its own. The upstream name is used here only in
@@ -14,7 +14,7 @@ This is **not** a fork of the Meshtastic firmware source tree living in this
 repo. It is a thin **overlay**: a pinned upstream tag, a small set of
 generated/patched files layered on top of a fresh clone of that tag, and an
 in-cluster build job that does the clone + overlay + compile + package. The
-overlay is designed to be the smallest change that gets Snapdragon three
+overlay is designed to be the smallest change that gets HugMesh three
 things:
 
 1. **Baked-in per-domain defaults** — `userPrefs.jsonc`, rendered from a
@@ -22,7 +22,7 @@ things:
    broker, admin key, owner name), so a flashed radio joins the right mesh
    with the right identity out of the box instead of needing a manual
    first-run wizard on the device itself.
-2. **One custom module** — `SnapdragonPresenceModule`, a compact, inert-by-
+2. **One custom module** — `HugMeshPresenceModule`, a compact, inert-by-
    default presence beacon, added as source + a small unified-diff patch
    against upstream's own module-registration site (never a hand-edited copy
    of the whole file).
@@ -59,15 +59,15 @@ happens.
 ```
 firmware/overlay/
 ├── userprefs/
-│   └── snapdragon-default.jsonc.hbs   templated userPrefs.jsonc
+│   └── hugmesh-default.jsonc.hbs   templated userPrefs.jsonc
 ├── modules/
-│   ├── SnapdragonPresenceModule.h     new module, upstream-shaped
-│   └── SnapdragonPresenceModule.cpp
+│   ├── HugMeshPresenceModule.h     new module, upstream-shaped
+│   └── HugMeshPresenceModule.cpp
 ├── patches/
-│   └── 0001-register-snapdragon-presence-module.patch
+│   └── 0001-register-hugmesh-presence-module.patch
 │       unified diff: 2 lines added to src/modules/Modules.cpp
 ├── variants/
-│   └── esp32s3/diy/snapdragon_esp32s3_sx1262/
+│   └── esp32s3/diy/hugmesh_esp32s3_sx1262/
 │       platformio.ini + variant.h     a new DIY-shaped board variant
 └── apply-overlay.sh                   the one script that reconstructs a
                                         buildable tree from (upstream tag +
@@ -78,12 +78,12 @@ firmware/overlay/
 `docker/build-image.sh`'s own portability constraint, since it runs inside
 the same class of minimal builder image) does, in order:
 
-1. Render `userprefs/snapdragon-default.jsonc.hbs` with the caller-supplied
+1. Render `userprefs/hugmesh-default.jsonc.hbs` with the caller-supplied
    token values and copy the result to `UPSTREAM_DIR/userPrefs.jsonc`
    (upstream's own root-level default-prefs file — see "Defaults" below).
-2. Copy `modules/SnapdragonPresenceModule.{h,cpp}` into
+2. Copy `modules/HugMeshPresenceModule.{h,cpp}` into
    `UPSTREAM_DIR/src/modules/`.
-3. Copy `variants/esp32s3/diy/snapdragon_esp32s3_sx1262/` into
+3. Copy `variants/esp32s3/diy/hugmesh_esp32s3_sx1262/` into
    `UPSTREAM_DIR/variants/esp32s3/diy/` (upstream's root `platformio.ini`
    globs `variants/*/diy/*/platformio.ini`, so this is picked up with no
    further wiring).
@@ -131,8 +131,8 @@ The upstream Meshtastic firmware is licensed GPL-3.0 (see upstream's own
 `firmware/overlay/patches/` is a derivative work compiled into the same
 binary and therefore carries the same license:
 
-- `SnapdragonPresenceModule.h` / `.cpp` open with a full GPL-3.0 header
-  (see those files) naming Snapdragon as the additional copyright holder
+- `HugMeshPresenceModule.h` / `.cpp` open with a full GPL-3.0 header
+  (see those files) naming HugMesh as the additional copyright holder
   for the new material, upstream Meshtastic LLC and contributors for the
   base `SinglePortModule`/`MeshModule` classes it derives from.
 - The patch file itself carries a one-line GPL-3.0 notice in its preamble.
@@ -161,7 +161,7 @@ binary and therefore carries the same license:
 fork:
 
 - Never labels its own build output, packaging, or UI surfaces as
-  "Meshtastic" standalone — always "Snapdragon Mesh firmware
+  "Meshtastic" standalone — always "HugMesh Mesh firmware
   (Meshtastic-based)" or "built from Meshtastic firmware v2.7.26.54e0d8d".
 - Does not use the Meshtastic logo or any confusingly similar mark.
 - Uses the name only nominatively (to truthfully identify what the fork is
@@ -174,36 +174,36 @@ Upstream's `bin/platformio-custom.py` reads `userPrefs.jsonc` (a JSONC file
 at the repo root — comments allowed, hence the extension) and turns every key
 into a `-DUSERPREFS_<KEY>=<value>` PlatformIO build flag, so these values are
 **compiled into the binary**, not read at runtime from a config file on the
-device. That is exactly the mechanism this overlay uses to bake Snapdragon
-per-domain defaults in: `overlay/userprefs/snapdragon-default.jsonc.hbs` is a
+device. That is exactly the mechanism this overlay uses to bake HugMesh
+per-domain defaults in: `overlay/userprefs/hugmesh-default.jsonc.hbs` is a
 Handlebars template (rendered by `apply-overlay.sh`, or in-cluster by
 `docker/build-firmware.sh` from `IMAGE_SPEC_JSON` fields — see
 `docs/MESH-FIRMWARE.md`) covering:
 
 | Token | Upstream key | Notes |
 |---|---|---|
-| `{{MESH_CHANNEL_NAME}}` | `USERPREFS_CHANNEL_0_NAME` | Snapdragon domain's default mesh channel. |
+| `{{MESH_CHANNEL_NAME}}` | `USERPREFS_CHANNEL_0_NAME` | HugMesh domain's default mesh channel. |
 | `{{MESH_CHANNEL_PSK_B64}}` | `USERPREFS_CHANNEL_0_PSK` | **Vault-injected at build time, never committed** — see "Secrets" below. |
 | `{{LORA_REGION}}` | `USERPREFS_CONFIG_LORA_REGION` | Region code (e.g. `US`, `EU_868`) — regulatory, must be correct for the shipping jurisdiction. |
-| owner long-name prefix | `USERPREFS_CONFIG_OWNER_LONG_NAME` | `"Snapdragon Mesh · "` prefix + per-build suffix, so a flashed radio self-identifies honestly on first boot (also satisfies the trademark note above at the device level). |
+| owner long-name prefix | `USERPREFS_CONFIG_OWNER_LONG_NAME` | `"HugMesh Mesh · "` prefix + per-build suffix, so a flashed radio self-identifies honestly on first boot (also satisfies the trademark note above at the device level). |
 | `{{MQTT_ENABLED}}` / `{{MQTT_ADDRESS}}` | `USERPREFS_MQTT_ENABLED` / `USERPREFS_MQTT_ADDRESS` | Points at the domain's own MQTT broker (the same `mqtt` device-attachment shape `meshbridge` speaks — see "Relationship to meshbridge" below), not a public broker. |
 | `{{ADMIN_KEY_B64}}` | `USERPREFS_USE_ADMIN_KEY_0` | **Vault-injected at build time, never committed** — the domain's admin public key, so the domain's admin console can remote-administer flashed radios over the mesh. |
 
-See `overlay/userprefs/snapdragon-default.jsonc.hbs` for the full template
+See `overlay/userprefs/hugmesh-default.jsonc.hbs` for the full template
 (all upstream keys listed in the task recon, including
 `USERPREFS_CHANNELS_TO_WRITE`, the 3-channel `_DOWNLINK_ENABLED` triad,
 `USERPREFS_LORACONFIG_MODEM_PRESET`, `USERPREFS_CONFIG_DEVICE_ROLE`, and
 `USERPREFS_OEM_TEXT`) with inline comments on every key.
 
-## Custom module: `SnapdragonPresenceModule`
+## Custom module: `HugMeshPresenceModule`
 
-A single new module (`overlay/modules/SnapdragonPresenceModule.{h,cpp}`,
-registered via `overlay/patches/0001-register-snapdragon-presence-module.patch`)
+A single new module (`overlay/modules/HugMeshPresenceModule.{h,cpp}`,
+registered via `overlay/patches/0001-register-hugmesh-presence-module.patch`)
 sending a compact presence beacon (firmware variant tag + battery percentage
 + uptime) on Meshtastic's private-application portnum range every ~15
 minutes (jittered, to avoid a fleet of radios transmitting in lockstep).
 It is a `SinglePortModule`, mirroring upstream's own `ReplyModule` shape, and
-is **compiled in but inert** unless `USERPREFS_SNAPDRAGON_PRESENCE=1` is set
+is **compiled in but inert** unless `USERPREFS_HUGMESH_PRESENCE=1` is set
 (so a userPrefs render can turn it off per-domain without a different
 firmware build). See the file's own header comment for the full design
 rationale, buffer-safety notes, and portnum choice.
@@ -215,11 +215,11 @@ rationale, buffer-safety notes, and portnum choice.
 | Heltec Mesh Node T114 V2 | `heltec-mesh-node-t114` | `.uf2` | nRF52840; drag-and-drop UF2 bootloader flashing. |
 | ELECROW ThinkNode M1 | `thinknode_m1` | `.uf2` | nRF52840, e-ink display; drag-and-drop UF2. |
 | Heltec V3 (generic ESP32-S3 + SX1262, e.g. "Meshnology ESP32 LoRa V4") | `heltec-v3` | `.factory.bin` / `.bin` | ESP32-S3; flash via `esptool.py` or the Meshtastic web flasher. |
-| Same class of board, Snapdragon DIY variant | `snapdragon-esp32s3-sx1262` (this overlay) | `.factory.bin` / `.bin` | Use when `heltec-v3`'s baked pinout doesn't match the actual board — see the variant's `variant.h` PINOUT TODOs; requires per-board pin confirmation before first flash. |
+| Same class of board, HugMesh DIY variant | `hugmesh-esp32s3-sx1262` (this overlay) | `.factory.bin` / `.bin` | Use when `heltec-v3`'s baked pinout doesn't match the actual board — see the variant's `variant.h` PINOUT TODOs; requires per-board pin confirmation before first flash. |
 
 nRF52-family boards (T114, ThinkNode M1) produce a `.uf2` — copy it onto the
 device's USB mass-storage bootloader volume, no special tooling needed.
-ESP32-S3-family boards (`heltec-v3`, the Snapdragon DIY variant) produce
+ESP32-S3-family boards (`heltec-v3`, the HugMesh DIY variant) produce
 `.factory.bin` (full-flash, offset 0x0, for `esptool.py write_flash` or the
 official Meshtastic web flasher) and a plain `.bin` (application partition
 only, for an already-provisioned device). Both are placed in `ARTIFACT_DIR`
@@ -236,7 +236,7 @@ against a hand-simulated tree here. What *has* been verified in this
 workspace:
 
 - `overlay/apply-overlay.sh` is POSIX-`sh`-valid (`sh -n`) and shellcheck-clean.
-- `overlay/patches/0001-register-snapdragon-presence-module.patch` applies
+- `overlay/patches/0001-register-hugmesh-presence-module.patch` applies
   cleanly (`git apply --check`, then a real `git apply`) against a small
   synthesized fixture in `overlay/patches/testdata/` that reproduces the
   exact anchor line upstream's `src/modules/Modules.cpp` carries at

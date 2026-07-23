@@ -32,7 +32,7 @@ export const DOMAINLOCK_ON = process.env['SNAP_DOMAINLOCK_ENABLED'] === '1';
  *  users we drive. Defaults to the in-cluster akkoma Service. */
 export const LOCAL_MASTODON =
   process.env['SNAP_MASTODON_BASE'] ??
-  'http://akkoma.snapdragon-backend.svc.cluster.local:4000';
+  'http://akkoma.hugmesh-backend.svc.cluster.local:4000';
 
 /** Skip-guard: returns a non-empty REASON string when these specs cannot run as
  *  real assertions (so the caller test.skip(reason)s honestly), else ''. */
@@ -83,7 +83,7 @@ export async function postLocalDirectStatus(
 }
 
 /** Have a follower account ON THE PEER follow `localAcct` (e.g. user@mastodon.
- *  snapdragon.systems) so the local user's public posts have a remote delivery
+ *  hugmesh.systems) so the local user's public posts have a remote delivery
  *  target. Uses the peer's Mastodon-compatible search+follow API. Returns true if
  *  the remote actor resolved on the peer at all (federation reachability). */
 export async function peerFollow(

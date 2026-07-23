@@ -121,13 +121,13 @@ PACKAGES_ADD=""          # --packages-add : atoms to add on top of the derived s
 PACKAGES_DROP=""         # --packages-drop: default-set atoms to remove (mandatory floor honored)
 TIMEZONE="UTC"
 HOSTNAME=""
-CLUSTER_DOMAIN="snapdragon.systems"
+CLUSTER_DOMAIN="hugmesh.systems"
 # Orchestration superdomain (WS-SUPER-B): the mesh control plane's MagicDNS suffix every
 # node joins. "" = builder default (legacy byte-identical). The Studio emits --superdomain
 # <effective> only for MESH builds; permanently internal, never the go-live apex.
 SUPERDOMAIN=""
-BRAND="snapdragon"
-BRAND_TITLE="Snapdragon Systems"
+BRAND="hugmesh"
+BRAND_TITLE="HugMesh Systems"
 ORG="Snapdragon-Systems"
 # ENV (test|prod) selector — same semantics as the cluster builders: it shapes
 # branding/creds and gates the baked cluster tree's env apps posture.
@@ -195,7 +195,7 @@ cat <<'MANEOF'
 NAME
     build-jetson-stage4.sh - Build a hardened Gentoo aarch64 image for the
     NVIDIA Jetson Orin family (Tegra234) — the arm64 edge-AI node platform —
-    joined to the Snapdragon Tailscale mesh. EXPERIMENTAL (hardware validation
+    joined to the HugMesh Tailscale mesh. EXPERIMENTAL (hardware validation
     pending; see specs-jetson/README.md).
 
 SYNOPSIS
@@ -739,7 +739,7 @@ harden_radios() {
     local sysroot="$1"
     mkdir -p "${sysroot}/etc/modprobe.d" "${sysroot}/etc/local.d" \
              "${sysroot}/etc/NetworkManager/conf.d"
-    local bl="${sysroot}/etc/modprobe.d/snapdragon-radio-blacklist.conf"; : > "${bl}"
+    local bl="${sysroot}/etc/modprobe.d/hugmesh-radio-blacklist.conf"; : > "${bl}"
     local act="${sysroot}/etc/local.d/02-radio-hardening.start"
     {
         echo "#!/bin/sh"
@@ -794,7 +794,7 @@ ZRAM_EOF
 
 # ── rebrand_sysroot (covers the baked cluster tree too, like rpi5/x86) ──
 rebrand_sysroot() {
-    [ "${BRAND}" = "snapdragon" ] && [ "${CLUSTER_DOMAIN}" = "snapdragon.systems" ] && return 0
+    [ "${BRAND}" = "hugmesh" ] && [ "${CLUSTER_DOMAIN}" = "hugmesh.systems" ] && return 0
     local _btitle _org _domain _brand _hproj
     _btitle="$(_sed_rep_escape "${BRAND_TITLE}")"
     _org="$(_sed_rep_escape "${ORG}")"
@@ -811,18 +811,18 @@ rebrand_sysroot() {
         # quote, backtick); every HOST/URL form is preceded by a dot or slash. Protect the KEY
         # namespace behind a sentinel (first two -e), rebrand hosts/URLs/emails/CORS in the
         # middle, then restore the KEY namespace verbatim (last -e). The sentinel contains
-        # neither `snapdragon.systems` nor `snapdragon-`, so the middle rules skip it.
+        # neither `hugmesh.systems` nor `hugmesh-`, so the middle rules skip it.
         sed -i \
-            -e "s|^snapdragon\.systems/|@@SDSYSKEY@@/|g" \
-            -e "s|\([ {(,\"'\`]\)snapdragon\.systems/|\1@@SDSYSKEY@@/|g" \
-            -e "s|Snapdragon Systems|${_btitle}|g" \
+            -e "s|^hugmesh\.systems/|@@SDSYSKEY@@/|g" \
+            -e "s|\([ {(,\"'\`]\)hugmesh\.systems/|\1@@SDSYSKEY@@/|g" \
+            -e "s|HugMesh Systems|${_btitle}|g" \
             -e "s|Snapdragon-Systems|${_org}|g" \
-            -e "s|snapdragon\.systems|${_domain}|g" \
-            -e "s|\(registry\.[A-Za-z0-9.-]*\)/snapdragon/|\1/${_hproj}/|g" \
-            -e "s|snapdragon-|${_brand}-|g" \
-            -e "s|@@SDSYSKEY@@/|snapdragon.systems/|g" \
+            -e "s|hugmesh\.systems|${_domain}|g" \
+            -e "s|\(registry\.[A-Za-z0-9.-]*\)/hugmesh/|\1/${_hproj}/|g" \
+            -e "s|hugmesh-|${_brand}-|g" \
+            -e "s|@@SDSYSKEY@@/|hugmesh.systems/|g" \
             "${f}"
-    done < <(find "${SYSROOT}/etc/snapdragon" "${SYSROOT}/var/lib/snapdragon/cluster" -type f -print0 2>/dev/null)
+    done < <(find "${SYSROOT}/etc/hugmesh" "${SYSROOT}/var/lib/hugmesh/cluster" -type f -print0 2>/dev/null)
 }
 
 # ── Stage4 package-set resolver (single source of truth) ──────────────────────
@@ -955,7 +955,7 @@ unset _exec_blockers
 # machine, so the container proof — not merely root+/etc/portage — gates it.
 if hostguard_mutation_allowed; then
     mkdir -p /etc/portage/package.accept_keywords
-    cat > /etc/portage/package.accept_keywords/snapdragon-host-build-backends <<'HOSTKW'
+    cat > /etc/portage/package.accept_keywords/hugmesh-host-build-backends <<'HOSTKW'
 # setuptools-scm's vcs-versioning backend: pure-python/arch-independent, often
 # keyworded amd64-first upstream. HOST-side twin of the sysroot's
 # package.accept_keywords/setuptools-scm-backend (see that file's rationale).
@@ -988,7 +988,7 @@ HOSTKW
     # the failed 2026-07-16 jetson sysroot). HOST twin of the sysroot's
     # package.use/python-targets seed — see that file's full rationale.
     mkdir -p /etc/portage/package.use
-    cat > /etc/portage/package.use/snapdragon-host-build-backends <<'HOSTPYUSE'
+    cat > /etc/portage/package.use/hugmesh-host-build-backends <<'HOSTPYUSE'
 # Keep the python3.12 target enabled for host-side (BDEPEND "to /") installs —
 # twin of the sysroot's package.use/python-targets (see that file's rationale).
 # python3_13 is enabled ALONGSIDE 3_12: the builder image's installed python
@@ -1005,7 +1005,7 @@ sys-libs/pam audit
 # the python-bindings halves of its dep chain: policycoreutils ->
 # libselinux[python] and selinux-python -> audit[python] (autounmask output of
 # the pretend resolve in the throwaway builder container; same two lines the
-# k8s-only snapdragon-cross-host-selinux seed carries, but the host policy
+# k8s-only hugmesh-cross-host-selinux seed carries, but the host policy
 # tools are needed for EVERY SELinux cross build, not just k8s roles).
 sys-libs/libselinux python
 sys-process/audit python
@@ -1046,7 +1046,7 @@ fi
 # the cross_emerge silently skips containerd and trips the payload assert.
 if [ "${ROLE_K8S}" != "none" ] && hostguard_mutation_allowed && [ "$(id -u)" -eq 0 ]; then
     mkdir -p /etc/portage/package.use
-    cat > /etc/portage/package.use/snapdragon-cross-host-selinux <<'HOSTSELINUX'
+    cat > /etc/portage/package.use/hugmesh-cross-host-selinux <<'HOSTSELINUX'
 # Auto-written by build-jetson-stage4.sh (Jetson CROSS build; same rationale as
 # the rpi5 builder). Safe to delete on a non-build host.
 sys-libs/libselinux python
@@ -1183,11 +1183,11 @@ cp "${SPECS_DIR}/etc/modules-load.d/jetson.conf" "${SYSROOT}/etc/modules-load.d/
 # rebuild), not just the disk-boot initramfs this build generates directly.
 if ${ENCRYPT_ROOT}; then
     mkdir -p "${SYSROOT}/etc/dracut.conf.d"
-    cp "${SPECS_DIR}/etc/dracut.conf.d/60-snapdragon-crypt.conf" "${SYSROOT}/etc/dracut.conf.d/"
+    cp "${SPECS_DIR}/etc/dracut.conf.d/60-hugmesh-crypt.conf" "${SYSROOT}/etc/dracut.conf.d/"
 else
     # Belt-and-suspenders for --resume sysroots: remove a stale dracut crypt
     # fragment left behind by a prior --encrypt-root build of this same sysroot.
-    rm -f "${SYSROOT}/etc/dracut.conf.d/60-snapdragon-crypt.conf"
+    rm -f "${SYSROOT}/etc/dracut.conf.d/60-hugmesh-crypt.conf"
 fi
 
 # ── Shared (arch-agnostic) mesh + provisioning + sshd — the SAME plumbing every
@@ -1226,60 +1226,60 @@ mkdir -p "${SYSROOT}/etc/ssh/sshd_config.d"
 cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/hardened.conf" "${SYSROOT}/etc/ssh/sshd_config.d/hardened.conf"
 
 # ── Layer-B device-license-registry sshd enforcement (INERT-on-core) ──
-mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/usr/lib/snapdragon" \
-         "${SYSROOT}/etc/snapdragon/registry" "${SYSROOT}/var/lib/snapdragon/device-registry"
-cp "${SHARED_SPECS}/usr/sbin/snapdragon-authorized-keys-lookup" "${SYSROOT}/usr/sbin/snapdragon-authorized-keys-lookup"
-cp "${SHARED_SPECS}/usr/sbin/snapdragon-device-registry-sync"   "${SYSROOT}/usr/sbin/snapdragon-device-registry-sync"
-chmod +x "${SYSROOT}/usr/sbin/snapdragon-authorized-keys-lookup" "${SYSROOT}/usr/sbin/snapdragon-device-registry-sync"
-cp "${SHARED_SPECS}/usr/lib/snapdragon/registry-verify.sh"      "${SYSROOT}/usr/lib/snapdragon/registry-verify.sh"
-cp "${SHARED_SPECS}/etc/init.d/snapdragon-device-registry-sync" "${SYSROOT}/etc/init.d/snapdragon-device-registry-sync"
-chmod +x "${SYSROOT}/etc/init.d/snapdragon-device-registry-sync"
-cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/device-registry.conf" "${SYSROOT}/etc/snapdragon/registry/device-registry.conf"
-cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/break-glass.conf"     "${SYSROOT}/etc/snapdragon/registry/break-glass.conf"
-cp "${SHARED_SPECS}/etc/cron.d/snapdragon-device-registry-sync" "${SYSROOT}/etc/snapdragon/registry/cron-device-registry-sync"
+mkdir -p "${SYSROOT}/usr/sbin" "${SYSROOT}/usr/lib/hugmesh" \
+         "${SYSROOT}/etc/hugmesh/registry" "${SYSROOT}/var/lib/hugmesh/device-registry"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-authorized-keys-lookup" "${SYSROOT}/usr/sbin/hugmesh-authorized-keys-lookup"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-device-registry-sync"   "${SYSROOT}/usr/sbin/hugmesh-device-registry-sync"
+chmod +x "${SYSROOT}/usr/sbin/hugmesh-authorized-keys-lookup" "${SYSROOT}/usr/sbin/hugmesh-device-registry-sync"
+cp "${SHARED_SPECS}/usr/lib/hugmesh/registry-verify.sh"      "${SYSROOT}/usr/lib/hugmesh/registry-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-device-registry-sync" "${SYSROOT}/etc/init.d/hugmesh-device-registry-sync"
+chmod +x "${SYSROOT}/etc/init.d/hugmesh-device-registry-sync"
+cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/device-registry.conf" "${SYSROOT}/etc/hugmesh/registry/device-registry.conf"
+cp "${SHARED_SPECS}/etc/ssh/sshd_config.d/break-glass.conf"     "${SYSROOT}/etc/hugmesh/registry/break-glass.conf"
+cp "${SHARED_SPECS}/etc/cron.d/hugmesh-device-registry-sync" "${SYSROOT}/etc/hugmesh/registry/cron-device-registry-sync"
 
 # ── Layer-A device-license-registry headscale policy (control node only) ──
 cp "${SHARED_SPECS}/usr/sbin/gen-headscale-policy.sh"          "${SYSROOT}/usr/sbin/gen-headscale-policy.sh"
-cp "${SHARED_SPECS}/usr/sbin/snapdragon-headscale-forcetags"   "${SYSROOT}/usr/sbin/snapdragon-headscale-forcetags"
-chmod +x "${SYSROOT}/usr/sbin/gen-headscale-policy.sh" "${SYSROOT}/usr/sbin/snapdragon-headscale-forcetags"
-cp "${SHARED_SPECS}/etc/init.d/snapdragon-policy-sync"         "${SYSROOT}/etc/init.d/snapdragon-policy-sync"
-chmod +x "${SYSROOT}/etc/init.d/snapdragon-policy-sync"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-headscale-forcetags"   "${SYSROOT}/usr/sbin/hugmesh-headscale-forcetags"
+chmod +x "${SYSROOT}/usr/sbin/gen-headscale-policy.sh" "${SYSROOT}/usr/sbin/hugmesh-headscale-forcetags"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-policy-sync"         "${SYSROOT}/etc/init.d/hugmesh-policy-sync"
+chmod +x "${SYSROOT}/etc/init.d/hugmesh-policy-sync"
 cp "${SHARED_SPECS}/etc/headscale/policy.bootstrap.hujson"     "${SYSROOT}/etc/headscale/policy.bootstrap.hujson"
 cp "${SHARED_SPECS}/etc/headscale/policy.hujson.tmpl"          "${SYSROOT}/etc/headscale/policy.hujson.tmpl"
-cp "${SHARED_SPECS}/etc/cron.d/snapdragon-policy-sync"         "${SYSROOT}/etc/snapdragon/registry/cron-policy-sync"
+cp "${SHARED_SPECS}/etc/cron.d/hugmesh-policy-sync"         "${SYSROOT}/etc/hugmesh/registry/cron-policy-sync"
 
 # ── Egress VPN (split-tunnel, fail-closed) — baked-but-INERT (default-off) ──
-cp "${SHARED_SPECS}/etc/init.d/snapdragon-egress-vpn" "${SYSROOT}/etc/init.d/snapdragon-egress-vpn"
-chmod +x "${SYSROOT}/etc/init.d/snapdragon-egress-vpn"
-cp "${SHARED_SPECS}/usr/sbin/snapdragon-vpn-runner"   "${SYSROOT}/usr/sbin/snapdragon-vpn-runner"
-chmod +x "${SYSROOT}/usr/sbin/snapdragon-vpn-runner"
-mkdir -p "${SYSROOT}/etc/snapdragon/vpn"; chmod 0700 "${SYSROOT}/etc/snapdragon/vpn"
-cp "${SHARED_SPECS}/usr/sbin/snapdragon-vpn-reconcile" "${SYSROOT}/usr/sbin/snapdragon-vpn-reconcile"
-chmod +x "${SYSROOT}/usr/sbin/snapdragon-vpn-reconcile"
-cp "${SHARED_SPECS}/usr/lib/snapdragon/vpn-verify.sh" "${SYSROOT}/usr/lib/snapdragon/vpn-verify.sh"
-cp "${SHARED_SPECS}/etc/init.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
-chmod +x "${SYSROOT}/etc/init.d/snapdragon-vpn-reconcile"
-cp "${SHARED_SPECS}/etc/cron.d/snapdragon-vpn-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-vpn-reconcile"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-egress-vpn" "${SYSROOT}/etc/init.d/hugmesh-egress-vpn"
+chmod +x "${SYSROOT}/etc/init.d/hugmesh-egress-vpn"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-vpn-runner"   "${SYSROOT}/usr/sbin/hugmesh-vpn-runner"
+chmod +x "${SYSROOT}/usr/sbin/hugmesh-vpn-runner"
+mkdir -p "${SYSROOT}/etc/hugmesh/vpn"; chmod 0700 "${SYSROOT}/etc/hugmesh/vpn"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-vpn-reconcile" "${SYSROOT}/usr/sbin/hugmesh-vpn-reconcile"
+chmod +x "${SYSROOT}/usr/sbin/hugmesh-vpn-reconcile"
+cp "${SHARED_SPECS}/usr/lib/hugmesh/vpn-verify.sh" "${SYSROOT}/usr/lib/hugmesh/vpn-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-vpn-reconcile" "${SYSROOT}/etc/init.d/hugmesh-vpn-reconcile"
+chmod +x "${SYSROOT}/etc/init.d/hugmesh-vpn-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/hugmesh-vpn-reconcile" "${SYSROOT}/etc/hugmesh/registry/cron-vpn-reconcile"
 
 # ── Opt-in host-binary auto-update (baked plumbing; poller DEFAULT-OFF) ──
 mkdir -p "${SYSROOT}/usr/local/sbin"
-cp "${SHARED_SPECS}/usr/local/sbin/snapdragon-update"     "${SYSROOT}/usr/local/sbin/snapdragon-update"
-chmod +x "${SYSROOT}/usr/local/sbin/snapdragon-update"
-cp "${SHARED_SPECS}/etc/init.d/snapdragon-update"         "${SYSROOT}/etc/init.d/snapdragon-update"
-chmod +x "${SYSROOT}/etc/init.d/snapdragon-update"
+cp "${SHARED_SPECS}/usr/local/sbin/hugmesh-update"     "${SYSROOT}/usr/local/sbin/hugmesh-update"
+chmod +x "${SYSROOT}/usr/local/sbin/hugmesh-update"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-update"         "${SYSROOT}/etc/init.d/hugmesh-update"
+chmod +x "${SYSROOT}/etc/init.d/hugmesh-update"
 
 # ── Domain-registry -> brand-repo bridge — baked-but-INERT (default-off) ──
-cp "${SHARED_SPECS}/usr/sbin/snapdragon-domain-reconcile" "${SYSROOT}/usr/sbin/snapdragon-domain-reconcile"
-chmod +x "${SYSROOT}/usr/sbin/snapdragon-domain-reconcile"
-cp "${SHARED_SPECS}/usr/lib/snapdragon/domain-verify.sh" "${SYSROOT}/usr/lib/snapdragon/domain-verify.sh"
-cp "${SHARED_SPECS}/etc/init.d/snapdragon-domain-reconcile" "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile"
-chmod +x "${SYSROOT}/etc/init.d/snapdragon-domain-reconcile"
-cp "${SHARED_SPECS}/etc/cron.d/snapdragon-domain-reconcile" "${SYSROOT}/etc/snapdragon/registry/cron-domain-reconcile"
-mkdir -p "${SYSROOT}/usr/share/snapdragon/generator/scripts" "${SYSROOT}/usr/share/snapdragon/generator/templates"
-cp "${SCRIPT_DIR}/scripts/gen-keystores.sh"  "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh"
-cp "${SCRIPT_DIR}/generate-brand-repos.sh"   "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh"
-cp -r "${SCRIPT_DIR}/templates/."            "${SYSROOT}/usr/share/snapdragon/generator/templates/"
-chmod +x "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh" "${SYSROOT}/usr/share/snapdragon/generator/generate-brand-repos.sh"
+cp "${SHARED_SPECS}/usr/sbin/hugmesh-domain-reconcile" "${SYSROOT}/usr/sbin/hugmesh-domain-reconcile"
+chmod +x "${SYSROOT}/usr/sbin/hugmesh-domain-reconcile"
+cp "${SHARED_SPECS}/usr/lib/hugmesh/domain-verify.sh" "${SYSROOT}/usr/lib/hugmesh/domain-verify.sh"
+cp "${SHARED_SPECS}/etc/init.d/hugmesh-domain-reconcile" "${SYSROOT}/etc/init.d/hugmesh-domain-reconcile"
+chmod +x "${SYSROOT}/etc/init.d/hugmesh-domain-reconcile"
+cp "${SHARED_SPECS}/etc/cron.d/hugmesh-domain-reconcile" "${SYSROOT}/etc/hugmesh/registry/cron-domain-reconcile"
+mkdir -p "${SYSROOT}/usr/share/hugmesh/generator/scripts" "${SYSROOT}/usr/share/hugmesh/generator/templates"
+cp "${SCRIPT_DIR}/scripts/gen-keystores.sh"  "${SYSROOT}/usr/share/hugmesh/generator/scripts/gen-keystores.sh"
+cp "${SCRIPT_DIR}/generate-brand-repos.sh"   "${SYSROOT}/usr/share/hugmesh/generator/generate-brand-repos.sh"
+cp -r "${SCRIPT_DIR}/templates/."            "${SYSROOT}/usr/share/hugmesh/generator/templates/"
+chmod +x "${SYSROOT}/usr/share/hugmesh/generator/scripts/gen-keystores.sh" "${SYSROOT}/usr/share/hugmesh/generator/generate-brand-repos.sh"
 
 # ── Cluster GitOps tree (k8s roles only) — the SAME shared specs/cluster tree
 # the rpi5/x86 node builders bake; the edge-ai manifests are arch-portable
@@ -1290,10 +1290,10 @@ chmod +x "${SYSROOT}/usr/share/snapdragon/generator/scripts/gen-keystores.sh" "$
 # activation at runtime. Revisit with hardware validation. ──────────
 if [ "${ROLE_K8S}" != "none" ]; then
     if [ -d "${SHARED_SPECS}/cluster" ]; then
-        mkdir -p "${SYSROOT}/var/lib/snapdragon"
-        rm -rf "${SYSROOT}/var/lib/snapdragon/cluster"
-        cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/snapdragon/cluster"
-        info "Baked shared cluster GitOps tree -> /var/lib/snapdragon/cluster (role=${ROLE})"
+        mkdir -p "${SYSROOT}/var/lib/hugmesh"
+        rm -rf "${SYSROOT}/var/lib/hugmesh/cluster"
+        cp -r "${SHARED_SPECS}/cluster" "${SYSROOT}/var/lib/hugmesh/cluster"
+        info "Baked shared cluster GitOps tree -> /var/lib/hugmesh/cluster (role=${ROLE})"
     else
         warn "shared specs/cluster tree not found — k8s role '${ROLE}' will have no baked GitOps tree"
     fi
@@ -1301,26 +1301,26 @@ fi
 
 # Node role + domain + env + board + kernel-flavor markers (read by
 # keys-provision / first-boot / the fleet inventory).
-mkdir -p "${SYSROOT}/etc/snapdragon"
-echo "${ROLE}"           > "${SYSROOT}/etc/snapdragon/role"
-echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/snapdragon/cluster-domain"
+mkdir -p "${SYSROOT}/etc/hugmesh"
+echo "${ROLE}"           > "${SYSROOT}/etc/hugmesh/role"
+echo "${CLUSTER_DOMAIN}" > "${SYSROOT}/etc/hugmesh/cluster-domain"
 # Orchestration superdomain (WS-SUPER-B): record the mesh plane the image joins.
 if [ -n "${SUPERDOMAIN}" ]; then
-    echo "${SUPERDOMAIN}" > "${SYSROOT}/etc/snapdragon/superdomain"
-    info "Baked orchestration superdomain -> /etc/snapdragon/superdomain (${SUPERDOMAIN})"
+    echo "${SUPERDOMAIN}" > "${SYSROOT}/etc/hugmesh/superdomain"
+    info "Baked orchestration superdomain -> /etc/hugmesh/superdomain (${SUPERDOMAIN})"
 fi
-echo "${ENV}"            > "${SYSROOT}/etc/snapdragon/env"
-echo "jetson:${JETSON_BOARD}" > "${SYSROOT}/etc/snapdragon/board"
-echo "${KERNEL_FLAVOR}"  > "${SYSROOT}/etc/snapdragon/kernel-flavor"
+echo "${ENV}"            > "${SYSROOT}/etc/hugmesh/env"
+echo "jetson:${JETSON_BOARD}" > "${SYSROOT}/etc/hugmesh/board"
+echo "${KERNEL_FLAVOR}"  > "${SYSROOT}/etc/hugmesh/kernel-flavor"
 if [ -n "${HEADSCALE_URL:-}" ]; then
-    echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/snapdragon/headscale-url"
-    info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/snapdragon/headscale-url"
+    echo "${HEADSCALE_URL}" > "${SYSROOT}/etc/hugmesh/headscale-url"
+    info "Baked HEADSCALE_URL=${HEADSCALE_URL} -> /etc/hugmesh/headscale-url"
 fi
 if ${STANDALONE}; then
     # STANDALONE desktop: bake the marker so keys-provision skips all
     # mesh-seeking no-ops and a normal LOCAL USER logs in with the build-set
     # password (mirrors build-x86-host-stage4.sh).
-    echo "true" > "${SYSROOT}/etc/snapdragon/standalone"
+    echo "true" > "${SYSROOT}/etc/hugmesh/standalone"
     info "Standalone desktop: local user '${DEFAULT_USER}', no mesh."
 fi
 rebrand_sysroot
@@ -1365,7 +1365,7 @@ echo "en_US.UTF-8 UTF-8" > "${SYSROOT}/etc/locale.gen"
 mkdir -p "${SYSROOT}/etc/runlevels/default"
 DEFAULT_SVCS=(sshd NetworkManager cronie haveged growroot keys-provision local)
 # Auto-update boot oneshot: baked plumbing, poller DEFAULT-OFF (see the shared note).
-DEFAULT_SVCS+=(snapdragon-update)
+DEFAULT_SVCS+=(hugmesh-update)
 if [ "${ROLE_K8S}" != "none" ]; then
     DEFAULT_SVCS+=(containerd kubelet)
 fi

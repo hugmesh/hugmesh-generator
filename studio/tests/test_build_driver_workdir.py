@@ -11,16 +11,16 @@ import os
 
 import pytest
 
-from snapdragon_studio.core.build_driver import BuildDriver
-from snapdragon_studio.core.config import ImageConfig
-from snapdragon_studio.core.platform_info import HostInfo
-from snapdragon_studio.core.worklist import synthesize
-from snapdragon_studio.core.worklist_driver import WorklistDriver
+from hugmesh_studio.core.build_driver import BuildDriver
+from hugmesh_studio.core.config import ImageConfig
+from hugmesh_studio.core.platform_info import HostInfo
+from hugmesh_studio.core.worklist import synthesize
+from hugmesh_studio.core.worklist_driver import WorklistDriver
 
 
 def host(is_root=True, has_docker=True):
     return HostInfo(os="linux", is_gentoo=True, has_docker=has_docker, has_bash=True,
-                    has_kvm=False, is_root=is_root, builder_image="snapdragon-builder")
+                    has_kvm=False, is_root=is_root, builder_image="hugmesh-builder")
 
 
 def cfg_for(tmp_path, **kw):

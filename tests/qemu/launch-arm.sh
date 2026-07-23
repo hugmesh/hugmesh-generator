@@ -22,8 +22,8 @@
 # ── Shared artifact autodetect convention (mirrors launch-pi.sh / flash-disk.sh) ──
 # One WORK_DIR/platform/board/role selects one artifact everywhere:
 #   1. --img FILE                                            explicit, wins
-#   2. ${WORK_DIR}/snapdragon-${platform}-${board}-arm64-${role}-*.img (newest)
-#   3. ${WORK_DIR}/snapdragon-${platform}-*.img                        (newest)
+#   2. ${WORK_DIR}/hugmesh-${platform}-${board}-arm64-${role}-*.img (newest)
+#   3. ${WORK_DIR}/hugmesh-${platform}-*.img                        (newest)
 #   4. ${WORK_DIR}/*.img (excluding kernel/initramfs/squashfs blobs)   (newest)
 # WORK_DIR defaults to ${REPO}/out (the ARM builders' own default work dir); the
 # kernel + DTB are taken from <work>/${BUILD_SUBDIR}/{sysroot,isoroot}/boot.
@@ -178,9 +178,9 @@ autodetect_img() {
     local d="$1" plat="$2" board="$3" role="$4" c pat_board
     pat_board="${board:+${board}-}"
     for c in \
-        "${d}"/snapdragon-"${plat}"-"${pat_board}"arm64-"${role}"-*.img \
-        "${d}"/snapdragon-"${plat}"-*-"${role}"-*.img \
-        "${d}"/snapdragon-"${plat}"-*.img ; do
+        "${d}"/hugmesh-"${plat}"-"${pat_board}"arm64-"${role}"-*.img \
+        "${d}"/hugmesh-"${plat}"-*-"${role}"-*.img \
+        "${d}"/hugmesh-"${plat}"-*.img ; do
         c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# m2-bootstrap.sh — build the PRIVATE systems.snapdragon Maven artifacts FROM
+# m2-bootstrap.sh — build the PRIVATE systems.hugmesh Maven artifacts FROM
 # SOURCE and serve them to `docker compose build` as a GitLab-shaped static
 # Maven registry container. This is the COLD-BUILD prerequisite for the four
 # Java services whose Dockerfiles resolve org-private artifacts
-# (snapdragon-admin-bff-api, snapdragon-user-bff-api, snapdragon-mod-bff-api,
-# snapdragon-federation-api): their committed settings.xml resolves
-# systems.snapdragon:* from
+# (hugmesh-admin-bff-api, hugmesh-user-bff-api, hugmesh-mod-bff-api,
+# hugmesh-federation-api): their committed settings.xml resolves
+# systems.hugmesh:* from
 #   ${env.CI_API_V4_URL}/groups/${env.GITLAB_GROUP_ID}/-/packages/maven
 # which exists only in the org's GitLab. On a dev box with no GitLab access
 # (or after a docker data-root wipe purged all images), `make stack-up` must
@@ -38,24 +38,24 @@
 # so no token — real or dummy — is ever needed locally.
 #
 # Env knobs:
-#   M2_CACHE        (default ~/.cache/snapdragon-stack-maven) persistent cache:
+#   M2_CACHE        (default ~/.cache/hugmesh-stack-maven) persistent cache:
 #                   src/ (pinned clones) + m2/ (maven repo, container-written)
 #   GIT_BASE        (default https://github.com/Snapdragon-Systems)
 #   MAVEN_IMAGE     (default maven:3.9-eclipse-temurin-25 — the libs target
 #                   maven.compiler.release=25)
 #   REGISTRY_IMAGE  (default busybox:stable — httpd serves the static tree)
-#   REGISTRY_NAME   (default snapdragon-m2-registry)
+#   REGISTRY_NAME   (default hugmesh-m2-registry)
 #   REGISTRY_PORT   (default 8080; in-container, never host-published)
 #   GITLAB_GROUP_ID (default 1 — any value works, it only shapes the URL)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-M2_CACHE="${M2_CACHE:-${HOME}/.cache/snapdragon-stack-maven}"
+M2_CACHE="${M2_CACHE:-${HOME}/.cache/hugmesh-stack-maven}"
 GIT_BASE="${GIT_BASE:-https://github.com/Snapdragon-Systems}"
 MAVEN_IMAGE="${MAVEN_IMAGE:-maven:3.9-eclipse-temurin-25}"
 REGISTRY_IMAGE="${REGISTRY_IMAGE:-busybox:stable}"
-REGISTRY_NAME="${REGISTRY_NAME:-snapdragon-m2-registry}"
+REGISTRY_NAME="${REGISTRY_NAME:-hugmesh-m2-registry}"
 REGISTRY_PORT="${REGISTRY_PORT:-8080}"
 GITLAB_GROUP_ID="${GITLAB_GROUP_ID:-1}"
 M2_ENV_FILE="${M2_ENV_FILE:-${HERE}/.m2-registry.env}"
@@ -64,21 +64,21 @@ M2_ENV_FILE="${M2_ENV_FILE:-${HERE}/.m2-registry.env}"
 # repo | commit SHA | artifactId | version | expected files (pom|jar|jar+tests)
 #
 # Version pins mirror what the SERVICES' current main poms require:
-#   snapdragon-parent    2.7.0  — every Java service's <parent>
-#   snapdragon-build-config 0.3.0 — managed by parent 2.7.0
-#   snapdragon-commons   2.0.0  — incl. the -tests classifier jar (admin-bff's
+#   hugmesh-parent    2.7.0  — every Java service's <parent>
+#   hugmesh-build-config 0.3.0 — managed by parent 2.7.0
+#   hugmesh-commons   2.0.0  — incl. the -tests classifier jar (admin-bff's
 #                                 test scope compiles against it even with
 #                                 -DskipTests, which skips execution only)
-#   snapdragon-auth-core 2.3.3  — user-bff-api main            (pre-PR#33 commit)
-#   snapdragon-auth-core 2.3.4  — admin-bff-api main (auth-core PR#33, 2026-07-15)
+#   hugmesh-auth-core 2.3.3  — user-bff-api main            (pre-PR#33 commit)
+#   hugmesh-auth-core 2.3.4  — admin-bff-api main (auth-core PR#33, 2026-07-15)
 # The org repos have NO git tags, hence SHA pins. Order matters: parent first
 # (everything else's <parent>), then build-config/commons, then auth-core.
 PINS=(
-  "snapdragon-parent|989b2ab47699a408e88202ea01ab634f6be992d3|snapdragon-parent|2.7.0|pom"
-  "snapdragon-build-config|7ef187d6d8b00761b2ab6f5f8e0b6f23851b32b8|snapdragon-build-config|0.3.0|jar"
-  "snapdragon-commons|2f2768669302497e0c54638e7a9d093460723b13|snapdragon-commons|2.0.0|jar+tests"
-  "snapdragon-auth-core|666f07bb2e4be03a0d46ce30cb52dac5599d86f4|snapdragon-auth-core|2.3.3|jar"
-  "snapdragon-auth-core|792b8e11781c963f331ca67896c1071d57223475|snapdragon-auth-core|2.3.4|jar"
+  "hugmesh-parent|989b2ab47699a408e88202ea01ab634f6be992d3|hugmesh-parent|2.7.0|pom"
+  "hugmesh-build-config|7ef187d6d8b00761b2ab6f5f8e0b6f23851b32b8|hugmesh-build-config|0.3.0|jar"
+  "hugmesh-commons|2f2768669302497e0c54638e7a9d093460723b13|hugmesh-commons|2.0.0|jar+tests"
+  "hugmesh-auth-core|666f07bb2e4be03a0d46ce30cb52dac5599d86f4|hugmesh-auth-core|2.3.3|jar"
+  "hugmesh-auth-core|792b8e11781c963f331ca67896c1071d57223475|hugmesh-auth-core|2.3.4|jar"
 )
 
 M2_REPO="${M2_CACHE}/m2/repository"
@@ -103,7 +103,7 @@ EOF
 fi
 
 have_artifact() { # artifactId version kind(pom|jar|jar+tests)
-  local base="${M2_REPO}/systems/snapdragon/$1/$2/$1-$2"
+  local base="${M2_REPO}/systems/hugmesh/$1/$2/$1-$2"
   [ -f "${base}.pom" ] || return 1
   case "$3" in
     pom)       : ;;
@@ -182,7 +182,7 @@ fi
 CI_API_V4_URL="http://${REGISTRY_IP}:${REGISTRY_PORT}"
 
 # Self-check: the exact URL shape the services' settings.xml will GET.
-CHECK_URL="${CI_API_V4_URL}/groups/${GITLAB_GROUP_ID}/-/packages/maven/systems/snapdragon/snapdragon-parent/2.7.0/snapdragon-parent-2.7.0.pom"
+CHECK_URL="${CI_API_V4_URL}/groups/${GITLAB_GROUP_ID}/-/packages/maven/systems/hugmesh/hugmesh-parent/2.7.0/hugmesh-parent-2.7.0.pom"
 for _ in 1 2 3 4 5; do
   curl -sf -o /dev/null "${CHECK_URL}" && break
   sleep 1

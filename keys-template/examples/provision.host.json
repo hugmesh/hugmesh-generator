@@ -1,7 +1,7 @@
 {
-  "_comment": "WORKER KEYS USB (x86_64 GPU host) = KEYS ONLY. No users.json or service config — those live only on the pki node. Carries join/mesh/CA keys + break-glass ssh/root.authorized_keys; joins the pki control-plane and is labelled for the games/GPU tier. ArgoCD schedules ArgoCD + snapdragon.games + backend capacity here; Vault/ESO deliver secrets.",
+  "_comment": "WORKER KEYS USB (x86_64 GPU host) = KEYS ONLY. No users.json or service config — those live only on the pki node. Carries join/mesh/CA keys + break-glass ssh/root.authorized_keys; joins the pki control-plane and is labelled for the games/GPU tier. ArgoCD schedules ArgoCD + hugmesh.games + backend capacity here; Vault/ESO deliver secrets.",
   "version": 1,
-  "hostname": "snapdragon-host",
+  "hostname": "hugmesh-host",
   "_comment_mesh": "Leave endpoint empty to default tailscale login_server to the pki node's LAN IP (works before public DNS). cp_dns_name is the stable control-plane name the kubeadm join targets over the mesh.",
   "mesh": {
     "endpoint": "",
@@ -12,7 +12,7 @@
     "enabled": true,
     "authkey_file": "tailscale/authkey",
     "login_server": "",
-    "up_args": "--advertise-tags=tag:snapdragon,tag:host --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false --ssh",
+    "up_args": "--advertise-tags=tag:hugmesh,tag:host --advertise-routes=10.244.0.0/16,10.96.0.0/12 --accept-routes --snat-subnet-routes=false --ssh",
     "ssh": true
   },
   "_comment_kubernetes": "Worker join. api_server left empty auto-targets cp_dns_name:6443 over the mesh. To run THIS node as an ADDITIONAL HA control-plane instead, set role=control-plane, bootstrap=true, first=false, and add join.certificate_key (from `kubeadm init phase upload-certs --upload-certs` on the first CP).",
@@ -26,9 +26,9 @@
       "ca_cert_hash": "sha256:REPLACE_WITH_CA_CERT_HASH"
     }
   },
-  "snapdragon": {
+  "hugmesh": {
     "role": "host",
-    "cluster_domain": "snapdragon.systems",
+    "cluster_domain": "hugmesh.systems",
     "node_labels": {
       "snapdragon.systems/frontend": "true",
       "snapdragon.systems/backend": "true",
@@ -39,12 +39,12 @@
   },
   "nodes": [
     {
-      "name": "snapdragon-pki",
+      "name": "hugmesh-pki",
       "ip": "10.0.0.10",
       "role": "pki"
     },
     {
-      "name": "snapdragon-host",
+      "name": "hugmesh-host",
       "ip": "10.0.0.30",
       "role": "host"
     }

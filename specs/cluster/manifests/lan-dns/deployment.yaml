@@ -13,7 +13,7 @@ metadata:
   namespace: kube-system
   labels:
     app.kubernetes.io/name: lan-dns
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single host-port binder per node

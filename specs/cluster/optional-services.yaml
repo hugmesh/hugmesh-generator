@@ -64,7 +64,7 @@
 #     rows in manifests/route-access/initdb/20-schema.sql. A leftover ROUTE to a
 #     deleted upstream => 502; a leftover ROLE row => stale 403 grant. Remove
 #     BOTH.
-#   * The gateway image's baked CanonicalSeed.java floor (snapdragon-GATEWAY
+#   * The gateway image's baked CanonicalSeed.java floor (hugmesh-GATEWAY
 #     repo) must match the pruned route-access rows or the in-image snapshot
 #     re-enforces removed rows on datastore fallback. That is a SEPARATE repo /
 #     image rebuild — tracked as a TODO for the gateway wave, NOT pruned here.
@@ -83,7 +83,7 @@ spec:
     # ── akkoma — fediverse / Mastodon-API homeserver ───────────────────────────
     - slug: akkoma
       displayName: "Akkoma (Mastodon)"
-      namespace: snapdragon-backend
+      namespace: hugmesh-backend
       default: on
       # ArgoCD Application YAMLs this slug OWNS (pruned when deselected). The
       # shared social-ui is listed under sharedApps, NOT here.
@@ -106,9 +106,9 @@ spec:
       # url_pattern this slug owns on the named gateway. Drop on removal so a
       # matched-but-upstream-absent route cannot stale-grant.
       routeAccessRows:
-        - { gateway: snapdragon-be-gateway, urlPattern: /api/v1/pleroma/admin/** }
-        - { gateway: snapdragon-be-gateway, urlPattern: /api/pleroma/admin/** }
-        - { gateway: snapdragon-be-gateway, urlPattern: /pleroma/admin/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /api/v1/pleroma/admin/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /api/pleroma/admin/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /pleroma/admin/** }
       # federation_modules registration (federation-api repo — separate wave).
       federationModule: { slug: akkoma, mountAt: /social/mastodon, changeset: "023-register-akkoma-module.xml" }
       casdoorSeed: null
@@ -116,7 +116,7 @@ spec:
     # ── tuwunel — Matrix homeserver (Conduit fork) ─────────────────────────────
     - slug: tuwunel
       displayName: "tuwunel (Matrix)"
-      namespace: snapdragon-backend
+      namespace: hugmesh-backend
       default: on
       apps:
         - apps/30-tuwunel.yaml
@@ -128,20 +128,20 @@ spec:
       gatewayHost: matrix.${CLUSTER_DOMAIN}
       gatewayRouteIds: [matrix-api, matrix-wellknown, matrix]
       routeAccessRows:
-        - { gateway: snapdragon-be-gateway, urlPattern: /_matrix/** }
-        - { gateway: snapdragon-be-gateway, urlPattern: /.well-known/matrix/** }
-        - { gateway: snapdragon-be-gateway, urlPattern: /_synapse/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /_matrix/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /.well-known/matrix/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /_synapse/** }
       federationModule: { slug: tuwunel, mountAt: /social/matrix, changeset: "024-register-tuwunel-module.xml" }
       casdoorSeed: null
 
     # ── phpbb — forum homeserver (backend-only, isolated namespace) ────────────
     # phpBB has NO gateway HOST and NO public ingress: it is reachable only as
-    # forum-bff's in-cluster upstream inside the snapdragon-forum default-deny ns.
+    # forum-bff's in-cluster upstream inside the hugmesh-forum default-deny ns.
     # The browser->phpBB path is the forum-bff (/bff/forum/**) + the forum-ui
     # micro-frontend (/social/forum/**), both on the fe-gateway.
     - slug: phpbb
       displayName: "phpBB (Forum)"
-      namespace: snapdragon-forum
+      namespace: hugmesh-forum
       default: on
       apps:
         - apps/30-phpbb.yaml
@@ -154,23 +154,23 @@ spec:
       esoKeys: []
       gatewayHost: null
       # fe-gateway route ids serving the forum UI + BFF (apps/20-gateway-fe.yaml).
-      gatewayRouteIds: [forum-ui, snapdragon-forum-bff-api, snapdragon-forum-bff-api-moderation]
+      gatewayRouteIds: [forum-ui, hugmesh-forum-bff-api, hugmesh-forum-bff-api-moderation]
       routeAccessRows:
-        - { gateway: snapdragon-fe-gateway, urlPattern: /social/forum/** }
-        - { gateway: snapdragon-fe-gateway, urlPattern: /bff/forum/admin/** }
-        - { gateway: snapdragon-fe-gateway, urlPattern: /bff/forum/moderation/** }
-        - { gateway: snapdragon-fe-gateway, urlPattern: /bff/forum/** }
-        - { gateway: snapdragon-be-gateway, urlPattern: /api/forum/admin/** }
+        - { gateway: hugmesh-fe-gateway, urlPattern: /social/forum/** }
+        - { gateway: hugmesh-fe-gateway, urlPattern: /bff/forum/admin/** }
+        - { gateway: hugmesh-fe-gateway, urlPattern: /bff/forum/moderation/** }
+        - { gateway: hugmesh-fe-gateway, urlPattern: /bff/forum/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /api/forum/admin/** }
       federationModule: { slug: forum, mountAt: /social/forum, changeset: "022-register-forum-module.xml" }
       casdoorSeed: null
 
-    # ── games — Snapdragon Game Studio (x86 GPU worker) + games-realm Casdoor ──
+    # ── games — HugMesh Game Studio (x86 GPU worker) + games-realm Casdoor ──
     # games owns its OWN Casdoor (casdoor-games, two-Casdoor architecture). The
     # public host is GAMES_DOMAIN (default games.${CLUSTER_DOMAIN}); see the
     # gamesDomain block + docs/OPTIONAL-SERVICES.md "Games subdomain".
     - slug: games
-      displayName: "Snapdragon Game Studio"
-      namespace: snapdragon-games
+      displayName: "HugMesh Game Studio"
+      namespace: hugmesh-games
       # DEFAULT-OFF (policy 2026-06-17): games is OPT-IN — add it explicitly
       # (--enable-games / 'games' in --optional-services / OPTIONAL_SERVICES=all).
       default: off
@@ -192,21 +192,21 @@ spec:
       esoFile: null
       esoKeys: [casdoor-games-db, casdoor-games-app]
       # NOTE: the games host is GAMES_DOMAIN (parameterized below), NOT a
-      # snapdragon.systems subdomain literal — see gamesDomain.
+      # hugmesh.systems subdomain literal — see gamesDomain.
       gatewayHost: games.${GAMES_DOMAIN}
       # games = the games portal host route; games-servers-console = the games app-store
       # per-instance HTTP console path-route (both pruned when games is deselected).
       gatewayRouteIds: [games, games-servers-console]
       routeAccessRows:
-        - { gateway: snapdragon-be-gateway, urlPattern: /games/api/admin/** }
-        - { gateway: snapdragon-be-gateway, urlPattern: /games/** }
-        - { gateway: snapdragon-fe-gateway, urlPattern: /games/admin/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /games/api/admin/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /games/** }
+        - { gateway: hugmesh-fe-gateway, urlPattern: /games/admin/** }
         # ── games-services control-plane rows (degrade with games) ──
-        - { gateway: snapdragon-be-gateway, urlPattern: /bff/superadmin/games-services/** }
-        - { gateway: snapdragon-be-gateway, urlPattern: /bff/games-services/instances/** }
-        - { gateway: snapdragon-be-gateway, urlPattern: /bff/games-services/catalog/** }
-        - { gateway: snapdragon-be-gateway, urlPattern: /games/servers/** }
-        - { gateway: snapdragon-fe-gateway, urlPattern: /admin/games-services/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /bff/superadmin/games-services/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /bff/games-services/instances/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /bff/games-services/catalog/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /games/servers/** }
+        - { gateway: hugmesh-fe-gateway, urlPattern: /admin/games-services/** }
       federationModule: { slug: games, mountAt: /games, changeset: "025-register-games-module.xml" }
       casdoorSeed: casdoor-games
 
@@ -217,7 +217,7 @@ spec:
     # media sidecar serves the signed-URL-gated content (/tube/content/**).
     - slug: tube
       displayName: "LocalTube (YouTube archive)"
-      namespace: snapdragon-tube
+      namespace: hugmesh-tube
       default: off
       apps:
         - apps/53-tube.yaml
@@ -226,10 +226,10 @@ spec:
       esoFile: manifests/external-secrets/tube-externalsecrets.yaml
       esoKeys: [tube-media-key, tube-token-dek]
       gatewayHost: null
-      gatewayRouteIds: [snapdragon-tube-bff-api, tube-content]
+      gatewayRouteIds: [hugmesh-tube-bff-api, tube-content]
       routeAccessRows:
-        - { gateway: snapdragon-fe-gateway, urlPattern: /bff/tube/** }
-        - { gateway: snapdragon-be-gateway, urlPattern: /tube/content/** }
+        - { gateway: hugmesh-fe-gateway, urlPattern: /bff/tube/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /tube/content/** }
       federationModule: { slug: tube, mountAt: /tube, changeset: "033-register-tube-module.xml" }
       casdoorSeed: null
 
@@ -238,7 +238,7 @@ spec:
     # admins may grant users ROLE_OWNCAST to broadcast. DEFAULT-OFF: GPU-gated.
     - slug: owncast
       displayName: "Owncast (live streaming)"
-      namespace: snapdragon-owncast
+      namespace: hugmesh-owncast
       default: off
       apps:
         - apps/52-owncast.yaml
@@ -247,19 +247,19 @@ spec:
       esoFile: null
       esoKeys: []
       gatewayHost: null
-      gatewayRouteIds: [snapdragon-owncast-bff-api]
+      gatewayRouteIds: [hugmesh-owncast-bff-api]
       routeAccessRows:
-        - { gateway: snapdragon-fe-gateway, urlPattern: /bff/owncast/admin/** }
-        - { gateway: snapdragon-fe-gateway, urlPattern: /bff/owncast/** }
+        - { gateway: hugmesh-fe-gateway, urlPattern: /bff/owncast/admin/** }
+        - { gateway: hugmesh-fe-gateway, urlPattern: /bff/owncast/** }
       federationModule: { slug: owncast, mountAt: /owncast, changeset: "031-register-owncast-module.xml" }
       casdoorSeed: null
 
     # ── character-studio — VN character-studio remote (creator + chat surface) ──
     # The VN (visual-novel) furry/anthro character-studio Angular native-federation
     # REMOTE: layered-2D character creator + chat surface, federated into the
-    # snapdragon.systems host at /character-studio (ROLE_USER floor). It is a pure
+    # hugmesh.systems host at /character-studio (ROLE_USER floor). It is a pure
     # FRONTEND micro-frontend served by its own non-root nginx pod in the
-    # snapdragon-frontend namespace (no dedicated BFF in this slug yet — it talks to
+    # hugmesh-frontend namespace (no dedicated BFF in this slug yet — it talks to
     # the always-present /bff/** routes), so — like user-ui/forum-ui — it carries NO
     # gateway HOST, NO per-service ESO, and just the one fe-gateway path route +
     # route-access row. DEFAULT-OFF (admin gate): add it explicitly
@@ -270,7 +270,7 @@ spec:
     # greys the entry out instead of 404/502.
     - slug: character-studio
       displayName: "Character Studio (VN)"
-      namespace: snapdragon-frontend
+      namespace: hugmesh-frontend
       default: off
       apps:
         - apps/49b-character-studio-ui.yaml
@@ -281,14 +281,14 @@ spec:
       gatewayHost: null
       gatewayRouteIds: [character-studio-ui]
       routeAccessRows:
-        - { gateway: snapdragon-fe-gateway, urlPattern: /character-studio/** }
-      # federation_modules registration lives in the SEPARATE snapdragon-federation-api
+        - { gateway: hugmesh-fe-gateway, urlPattern: /character-studio/** }
+      # federation_modules registration lives in the SEPARATE hugmesh-federation-api
       # repo (Liquibase changelog), NOT in this generator repo. The changeset to add
       # there is 036-register-character-studio-module.xml (next free number after 035),
       # mirroring 025-register-games-module.xml field-for-field with
       # slug=character-studio, kind=remote-shell, exposed_module=./routes,
       # mountAt=/character-studio, requiresRole=ROLE_USER,
-      # remote_entry_url=http://snapdragon-character-studio-ui:8080/remoteEntry.json,
+      # remote_entry_url=http://hugmesh-character-studio-ui:8080/remoteEntry.json,
       # plus a db.changelog-master.xml <include>. Documented in the generator manifest
       # dir (manifests/character-studio/FEDERATION-REGISTRATION-TODO.md) until that
       # repo's wave lands. mountAt/requiresRole/exposed are recorded inline here so the
@@ -298,7 +298,7 @@ spec:
         mountAt: /character-studio
         requiresRole: ROLE_USER
         exposed: ./routes
-        changeset: "036-register-character-studio-module.xml"   # in snapdragon-federation-api (separate repo)
+        changeset: "036-register-character-studio-module.xml"   # in hugmesh-federation-api (separate repo)
       casdoorSeed: null
 
     # ── edge-ai — GPU inference node serving an OpenAI-compatible model API ─────
@@ -312,7 +312,7 @@ spec:
     # this — and the existing GPU services (owncast/coturn/tube voice+video) — schedule.
     - slug: edge-ai
       displayName: "Edge AI (inference)"
-      namespace: snapdragon-inference
+      namespace: hugmesh-inference
       default: off
       apps:
         - apps/54-edge-ai.yaml
@@ -325,7 +325,7 @@ spec:
       gatewayHost: ai.${CLUSTER_DOMAIN}
       gatewayRouteIds: [edge-ai]
       routeAccessRows:
-        - { gateway: snapdragon-be-gateway, urlPattern: /v1/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /v1/** }
       federationModule: null
       casdoorSeed: null
 
@@ -335,13 +335,13 @@ spec:
     # server in-cluster. The on-prem hinge Phase-A consumers reach: AIOps (infra logs →
     # @system Matrix DM) and avatar vision moderation (→ mod queue). dependsOn edge-ai
     # (declared in the installed-services services.json so the console greys it when
-    # edge-ai is off); it lives in the same snapdragon-inference namespace and is pruned
+    # edge-ai is off); it lives in the same hugmesh-inference namespace and is pruned
     # WITH the edge-ai slug (or on its own deselection). The container image is a
     # SEPARATE build artifact (manifests/edge-ai-analysis/image) — keep this slug
     # DESELECTED until the image is built+pushed so no node tries to pull it.
     - slug: edge-ai-analysis
       displayName: "Edge AI — analysis API"
-      namespace: snapdragon-inference
+      namespace: hugmesh-inference
       default: off
       apps:
         - apps/55-edge-ai-analysis.yaml
@@ -354,7 +354,7 @@ spec:
       gatewayHost: ai.${CLUSTER_DOMAIN}
       gatewayRouteIds: [edge-ai-analysis]
       routeAccessRows:
-        - { gateway: snapdragon-be-gateway, urlPattern: /v1/analyze/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /v1/analyze/** }
       federationModule: null
       casdoorSeed: null
 
@@ -365,13 +365,13 @@ spec:
     # self-contained (the default voice is baked into the image; no upstream call at
     # request time), so it schedules ANYWHERE in the mesh and is wired on BOTH x86
     # AND rpi5 (edge-ai/edge-ai-analysis are x86/GPU-only). It lands in the same
-    # snapdragon-inference namespace as edge-ai for organizational locality only —
+    # hugmesh-inference namespace as edge-ai for organizational locality only —
     # pruned on its OWN deselection, never folded with edge-ai's. The container
     # image is a SEPARATE build artifact (manifests/edge-ai-tts/image) — keep this
     # slug DESELECTED until the image is built+pushed so no node tries to pull it.
     - slug: edge-ai-tts
       displayName: "Edge AI — voice synthesis (TTS)"
-      namespace: snapdragon-inference
+      namespace: hugmesh-inference
       default: off
       apps:
         - apps/55b-edge-ai-tts.yaml
@@ -385,13 +385,13 @@ spec:
       gatewayHost: ai.${CLUSTER_DOMAIN}
       gatewayRouteIds: [edge-ai-tts]
       routeAccessRows:
-        - { gateway: snapdragon-be-gateway, urlPattern: /v1/synthesize/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /v1/synthesize/** }
       federationModule: null
       casdoorSeed: null
 
     # ── coturn — TURN/STUN relay for Matrix WebRTC audio/video (DEFAULT-OFF) ───
     # coturn relays peer-to-peer Matrix (tuwunel) voice/video when a direct ICE
-    # path fails. It lands in snapdragon-backend ALONGSIDE tuwunel so the
+    # path fails. It lands in hugmesh-backend ALONGSIDE tuwunel so the
     # long-term-credential shared secret (Secret coturn-shared-secret, ESO-synced
     # from Vault) is reachable by BOTH coturn (validates client creds) and tuwunel
     # (mints them — turn_secret in tuwunel.toml references the SAME secret).
@@ -413,7 +413,7 @@ spec:
     # DEFERRED operator/cluster-topology work (docs/COTURN.md).
     - slug: coturn
       displayName: "coturn (TURN/STUN server)"
-      namespace: snapdragon-backend
+      namespace: hugmesh-backend
       default: off
       # RUNTIME-ONLY: no bootstrap Application (see header) — gated solely by the
       # 13a ApplicationSet element + the installed-services ConfigMap flag.
@@ -434,8 +434,8 @@ spec:
     # meshbridge attaches LoRa mesh radios (USB-serial, LoRa-WiFi TCP:4403, or a
     # WAN-linked mesh via Meshtastic's MQTT JSON integration) and bridges their
     # text traffic into tuwunel as a Matrix APPSERVICE (exclusive @mesh-.* user
-    # namespace; per-room opt-in via the systems.snapdragon.mesh.bridge state
-    # event). See docs/MESHTASTIC-BRIDGE.md. It lands in snapdragon-backend
+    # namespace; per-room opt-in via the systems.hugmesh.mesh.bridge state
+    # event). See docs/MESHTASTIC-BRIDGE.md. It lands in hugmesh-backend
     # ALONGSIDE tuwunel because the appservice speaks the plain in-namespace CS
     # API (tuwunel:8008) and receives AS transaction pushes on :8009 — neither
     # leg ever transits a gateway.
@@ -455,7 +455,7 @@ spec:
     # registration is a user-bff surface that user-bff already owns).
     - slug: meshbridge
       displayName: "Mesh radio bridge (Meshtastic ↔ Matrix)"
-      namespace: snapdragon-backend
+      namespace: hugmesh-backend
       default: off
       # RUNTIME-ONLY: no bootstrap Application (see header) — gated solely by the
       # 13a ApplicationSet element + the installed-services ConfigMap flag.
@@ -482,7 +482,7 @@ spec:
     # Application — so it owns NO apps[]/gatewayHost/routeAccessRows. Its gate is
     # NODE-LEVEL: when NOT selected, the build prunes net-vpn/wireguard-tools +
     # net-vpn/openvpn from the node packages.list AND does NOT link the
-    # snapdragon-vpn-reconcile service / cron (the snapdragon-egress-vpn service
+    # hugmesh-vpn-reconcile service / cron (the hugmesh-egress-vpn service
     # itself is always baked but inert). When selected, the reconcile service + cron
     # are linked so the node converges from the signed /export. The control plane
     # (vpn_config/vpn_node_assignment) lives in admin-bff; the K8s Secret carrying a
@@ -493,7 +493,7 @@ spec:
     # loosens akkoma/tuwunel egress ONTO the VPN only on an explicit assignment.
     - slug: egress-vpn
       displayName: "Egress VPN (split-tunnel)"
-      namespace: snapdragon-backend
+      namespace: hugmesh-backend
       default: off
       scope: node            # NODE service, not a cluster Application
       apps: []
@@ -508,19 +508,19 @@ spec:
       casdoorSeed: null
       # NODE-level gate artefacts (pruned/linked by gate_optional_services):
       nodePackages: [net-vpn/wireguard-tools, net-vpn/openvpn]
-      nodeServices: [snapdragon-egress-vpn, snapdragon-vpn-reconcile]
+      nodeServices: [hugmesh-egress-vpn, hugmesh-vpn-reconcile]
       # The per-service opt-in label the NetworkPolicy interaction keys off.
       vpnEgressLabel: snapdragon.systems/vpn-egress
 
     # ── tor — node-level v3 Tor onion (hidden) service (DEFAULT-OFF) ──────────
     # LIKE egress-vpn, tor is a NODE service (the DISTRO Tor daemon — net-vpn/tor,
-    # /etc/init.d/tor — plus a snapdragon reconcile agent on the MESH NODES), NOT a
+    # /etc/init.d/tor — plus a hugmesh reconcile agent on the MESH NODES), NOT a
     # cluster Application, so it owns NO apps[]/gatewayHost/routeAccessRows. Its gate
     # is NODE-LEVEL: when NOT selected the build omits net-vpn/tor from the node
-    # packages AND does NOT link the tor + snapdragon-tor-reconcile services (so the
+    # packages AND does NOT link the tor + hugmesh-tor-reconcile services (so the
     # daemon is simply absent). When selected, the reconcile agent (oneshot + 24h cron)
     # writes a managed /etc/tor/torrc, mints + PERSISTS the v3 onion keypair OFF-GIT
-    # under /var/lib/tor/snapdragon-onion (tor:tor 0700; never a Secret, never git) on
+    # under /var/lib/tor/hugmesh-onion (tor:tor 0700; never a Secret, never git) on
     # first boot, and exposes the in-cluster fe-gateway as a stable .onion — INBOUND
     # reachability with no public IP / DDNS / Cloudflare. The per-service opt-in label
     # (snapdragon.systems/tor-onion) keys the NetworkPolicy interaction
@@ -529,7 +529,7 @@ spec:
     # `tor` service (baked with the package, linked when selected) + our reconcile agent.
     - slug: tor
       displayName: "Tor (v3 hidden service)"
-      namespace: snapdragon-backend
+      namespace: hugmesh-backend
       default: off
       scope: node            # NODE service, not a cluster Application
       apps: []
@@ -545,12 +545,12 @@ spec:
       # NODE-level gate artefacts (added/linked by the SVCS/PKGS gates; the
       # NetworkPolicy is pruned by gate_optional_services when NOT selected):
       nodePackages: [net-vpn/tor]
-      nodeServices: [tor, snapdragon-tor-reconcile]
+      nodeServices: [tor, hugmesh-tor-reconcile]
       # The per-service opt-in label the NetworkPolicy interaction keys off.
       torOnionLabel: snapdragon.systems/tor-onion
       # The in-cluster upstream the v3 hidden service exposes (host:port). A HOST-level
       # Tor daemon can't resolve cluster DNS, so the node-local fe-gateway ingress is the
-      # default; override per node via /etc/snapdragon/tor/upstream.
+      # default; override per node via /etc/hugmesh/tor/upstream.
       torHiddenServiceUpstream: 127.0.0.1:8443
 
     # ── workloadConsole — podman/OpenShift-equivalent pod console (DEFAULT-OFF) ──
@@ -565,7 +565,7 @@ spec:
     # DB master flag + an active grant. The DANGEROUS surfaces are tailnet-only by deployment.
     - slug: workloadConsole
       displayName: "Workload Console"
-      namespace: snapdragon-backend
+      namespace: hugmesh-backend
       default: off
       apps:
         - apps/14-workload-console-rbac.yaml
@@ -580,26 +580,26 @@ spec:
       # auto-mounted federationModule.
       hiddenModule: { slug: workloadConsole, mountAt: /admin/workloads }
       routeAccessRows:
-        - { gateway: snapdragon-be-gateway, urlPattern: /bff/superadmin/workloads/** }
-        - { gateway: snapdragon-be-gateway, urlPattern: /bff/admin/workloads/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /bff/superadmin/workloads/** }
+        - { gateway: hugmesh-be-gateway, urlPattern: /bff/admin/workloads/** }
       federationModule: null
       casdoorSeed: null
 
     # ── headwind — Headwind MDM (Apache-2.0 Android device-owner DPC), devops-only ──
-    # Admin-only devops tool (Harbor/superadmin posture, ns snapdragon-pki),
+    # Admin-only devops tool (Harbor/superadmin posture, ns hugmesh-pki),
     # TAILNET-ONLY. Rides the EXISTING superadmin-gateway (apps/22-gateway-
     # superadmin.yaml) for its two routes rather than owning a gatewayHost/Ingress
     # of its own — same non-gatewayHost posture as workloadConsole immediately
     # above, and consistent with every other non-be/fe-gateway optional-service
     # (coturn/tube/owncast/meshbridge all set gatewayHost: null too). The
     # superadmin console itself resolves via a LITERAL host
-    # (superadmin.snapdragon.systems) + a LAN/VPN /etc/hosts alias, never a
+    # (superadmin.hugmesh.systems) + a LAN/VPN /etc/hosts alias, never a
     # public wildcard — the OPTIONAL headwind.<domain> friendly alias, if ever
     # added, is an `ingress.extraHosts` entry on that SAME Application, not a
     # second Ingress/Application.
     - slug: headwind
       displayName: "Headwind MDM (managed phones)"
-      namespace: snapdragon-pki
+      namespace: hugmesh-pki
       default: off
       apps:
         - apps/23-headwind.yaml
@@ -610,8 +610,8 @@ spec:
       gatewayHost: null
       gatewayRouteIds: [headwind-console, headwind-checkin]
       routeAccessRows:
-        - { gateway: snapdragon-superadmin-gateway, urlPattern: /hmdm/manage/** }  # human console, ROLE_SUPERADMIN
-        - { gateway: snapdragon-superadmin-gateway, urlPattern: /hmdm/rest/**   }  # device check-in, PUBLIC (own token; network-locked)
+        - { gateway: hugmesh-superadmin-gateway, urlPattern: /hmdm/manage/** }  # human console, ROLE_SUPERADMIN
+        - { gateway: hugmesh-superadmin-gateway, urlPattern: /hmdm/rest/**   }  # device check-in, PUBLIC (own token; network-locked)
       federationModule: null
       casdoorSeed: null
 
@@ -625,7 +625,7 @@ spec:
     # MUST be evaluated before the /attest/api/** console row.
     - slug: attestation-server
       displayName: "GrapheneOS AttestationServer (Hardware Trust Root)"
-      namespace: snapdragon-pki
+      namespace: hugmesh-pki
       default: off
       apps:
         - apps/24-attestation-server.yaml
@@ -636,16 +636,16 @@ spec:
       gatewayHost: null
       gatewayRouteIds: [attestation-auditor, attestation-status, attestation-console]
       routeAccessRows:
-        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/auditor/**        }  # device/Auditor-app check-in, PUBLIC (tailnet-locked)
-        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/api/status        }  # device-facing despite /api/ prefix, PUBLIC — must precede /attest/api/** below
-        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/api/create-account }  # explicit DENY: CreateAccountHandler has no app-layer auth — must precede /attest/api/** below
-        - { gateway: snapdragon-superadmin-gateway, urlPattern: /attest/api/**            }  # human console, ROLE_SUPERADMIN
+        - { gateway: hugmesh-superadmin-gateway, urlPattern: /attest/auditor/**        }  # device/Auditor-app check-in, PUBLIC (tailnet-locked)
+        - { gateway: hugmesh-superadmin-gateway, urlPattern: /attest/api/status        }  # device-facing despite /api/ prefix, PUBLIC — must precede /attest/api/** below
+        - { gateway: hugmesh-superadmin-gateway, urlPattern: /attest/api/create-account }  # explicit DENY: CreateAccountHandler has no app-layer auth — must precede /attest/api/** below
+        - { gateway: hugmesh-superadmin-gateway, urlPattern: /attest/api/**            }  # human console, ROLE_SUPERADMIN
       federationModule: null
       casdoorSeed: null
 
     # ── anubis — proof-of-work anti-scraper gate fronting public ingress ──────
     # Anubis (github.com/TecharoHQ, ghcr.io/techarohq/anubis) sits in front of the
-    # fe-gateway (TARGET=snapdragon-fe-gateway) on its :8923 PoW gate and exposes a
+    # fe-gateway (TARGET=hugmesh-fe-gateway) on its :8923 PoW gate and exposes a
     # :9090 metrics/health listener that the superadmin admin-bff proxies
     # (/bff/admin/anubis/{status,metrics}; ANUBIS_ENABLED/ANUBIS_MANAGEMENT_URL).
     #
@@ -664,7 +664,7 @@ spec:
     # ingress routes straight to the fe-gateway (direct, unshielded path).
     - slug: anubis
       displayName: "Anubis (anti-scraper PoW gate)"
-      namespace: snapdragon-frontend
+      namespace: hugmesh-frontend
       # SAFE TEST BASELINE. PROD flips this on at build time (ENV-conditional —
       # see the ENV policy note above); the operator can override either way.
       default: off
@@ -697,7 +697,7 @@ spec:
   # serves games as a SUBDOMAIN of the primary domain until the real .games TLD
   # is obtained; flip GAMES_DOMAIN=<brand>.games to switch (see the TLD-flip
   # section of docs/OPTIONAL-SERVICES.md). rebrand_sysroot rewrites the baked
-  # snapdragon.games literals to ${GAMES_DOMAIN}; these files carry the values:
+  # hugmesh.games literals to ${GAMES_DOMAIN}; these files carry the values:
   gamesDomain:
     knob: GAMES_DOMAIN
     default: "games.${CLUSTER_DOMAIN}"
@@ -709,4 +709,4 @@ spec:
     gatewayHostRoute:
       app: apps/20-gateway-be.yaml
       routeId: games
-      uri: http://snapdragon-games.snapdragon-games.svc.cluster.local:8080
+      uri: http://hugmesh-games.hugmesh-games.svc.cluster.local:8080

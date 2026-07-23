@@ -1,10 +1,10 @@
 # ClusterIP — reached only in-cluster: the admin-bff writes it, the three
-# snapdragon-*-gateway releases read it (R2DBC) to load their access rules.
+# hugmesh-*-gateway releases read it (R2DBC) to load their access rules.
 apiVersion: v1
 kind: Service
 metadata:
   name: route-access-db
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels: { app: route-access-db }
 spec:
   type: ClusterIP

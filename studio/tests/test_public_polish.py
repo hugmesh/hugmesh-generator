@@ -11,46 +11,46 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-import snapdragon_studio                                          # noqa: E402
-from snapdragon_studio import __version__, advanced_mode          # noqa: E402
-from snapdragon_studio.core.platform_info import HostInfo         # noqa: E402
-from snapdragon_studio.gui import branding_icon, styles           # noqa: E402
-from snapdragon_studio.gui import tray as tray_mod                # noqa: E402
-from snapdragon_studio.gui import wizard as wizard_mod            # noqa: E402
-from snapdragon_studio.gui.pages import fleet as fleet_mod        # noqa: E402
-from snapdragon_studio.gui.pages import golive as golive_mod      # noqa: E402
-from snapdragon_studio.gui.pages._widgets import _row             # noqa: E402
-from snapdragon_studio.gui.qt import BINDING, QtWidgets           # noqa: E402
+import hugmesh_studio                                          # noqa: E402
+from hugmesh_studio import __version__, advanced_mode          # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo         # noqa: E402
+from hugmesh_studio.gui import branding_icon, styles           # noqa: E402
+from hugmesh_studio.gui import tray as tray_mod                # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod            # noqa: E402
+from hugmesh_studio.gui.pages import fleet as fleet_mod        # noqa: E402
+from hugmesh_studio.gui.pages import golive as golive_mod      # noqa: E402
+from hugmesh_studio.gui.pages._widgets import _row             # noqa: E402
+from hugmesh_studio.gui.qt import BINDING, QtWidgets           # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 # A host that CANNOT build anything (no native Gentoo, no Docker) -> default_backend "none".
 NO_BACKEND = HostInfo(os="darwin", is_gentoo=False, has_docker=False, has_bash=True,
-                      has_kvm=False, is_root=False, builder_image="snapdragon-builder")
+                      has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 # A Docker-only host (Windows/mac with Docker Desktop, or non-Gentoo Linux).
 DOCKER = HostInfo(os="linux", is_gentoo=False, has_docker=True, has_bash=True,
-                  has_kvm=False, is_root=False, builder_image="snapdragon-builder")
+                  has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("SNAPDRAGON_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
 
 
 def _make_wizard(qapp, host=DOCKER):
     """A real StudioWizard with a pinned host (patched at wizard_mod.detect)."""
     orig = wizard_mod.detect
-    wizard_mod.detect = lambda builder_image="snapdragon-builder": host
+    wizard_mod.detect = lambda builder_image="hugmesh-builder": host
     try:
         return wizard_mod.StudioWizard(GENERATOR_DIR)
     finally:
@@ -120,7 +120,7 @@ def _fleet_button(welcome):
 
 
 def test_fleet_button_hidden_by_default(qapp, monkeypatch):
-    monkeypatch.delenv(snapdragon_studio.ADVANCED_ENV, raising=False)
+    monkeypatch.delenv(hugmesh_studio.ADVANCED_ENV, raising=False)
     assert advanced_mode() is False
     wiz = _make_wizard(qapp)
     assert _fleet_button(_welcome(wiz)) is None      # off the public first screen
@@ -128,7 +128,7 @@ def test_fleet_button_hidden_by_default(qapp, monkeypatch):
 
 
 def test_fleet_button_shown_in_advanced_mode(qapp, monkeypatch):
-    monkeypatch.setenv(snapdragon_studio.ADVANCED_ENV, "1")
+    monkeypatch.setenv(hugmesh_studio.ADVANCED_ENV, "1")
     assert advanced_mode() is True
     wiz = _make_wizard(qapp)
     assert _fleet_button(_welcome(wiz)) is not None
@@ -137,7 +137,7 @@ def test_fleet_button_shown_in_advanced_mode(qapp, monkeypatch):
 
 def test_fleet_entry_still_reachable_via_method_when_gated(qapp, monkeypatch):
     # gating hides the BUTTON, never removes the capability: _fleet() (and --fleet) work
-    monkeypatch.delenv(snapdragon_studio.ADVANCED_ENV, raising=False)
+    monkeypatch.delenv(hugmesh_studio.ADVANCED_ENV, raising=False)
     wiz = _make_wizard(qapp)
     _welcome(wiz)._fleet()
     assert getattr(wiz, "fleet_window", None) is not None and wiz.fleet_window.isVisible()

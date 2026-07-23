@@ -40,7 +40,7 @@
 #     the remote URL, and NEVER in any process argv.
 #
 # CONFIG:
-#   FORGEJO_BASE_URL  default http://forgejo.snapdragon-pki.svc.cluster.local:3000
+#   FORGEJO_BASE_URL  default http://forgejo.hugmesh-pki.svc.cluster.local:3000
 #                     (in-cluster svc DNS). From a build host on the tailnet, set
 #                     this to the tailnet-reachable Forgejo host (svc.cluster.local
 #                     does not resolve off-cluster).
@@ -72,7 +72,7 @@
 #             (NEVER main) and create-or-update a Forgejo PR (POST
 #             /api/v1/repos/{org}/{repo}/pulls; on 409 the existing open PR for
 #             that head branch is PATCHed). <version> = the base ref the tree was
-#             rendered at — read from the in-tree `.snapdragon-base-ref` marker
+#             rendered at — read from the in-tree `.hugmesh-base-ref` marker
 #             (render-repo-tree.sh --ref writes it) or passed with --ref; both
 #             present and disagreeing is a fail-closed refusal. The PR branch is
 #             REGENERATION OUTPUT: each re-render replaces it (forced refspec on
@@ -127,7 +127,7 @@ fi
 SET_DIR="$(cd "$SET_DIR" && pwd)"
 
 # ── config ───────────────────────────────────────────────────────────────────
-FORGEJO_BASE_URL="${FORGEJO_BASE_URL:-http://forgejo.snapdragon-pki.svc.cluster.local:3000}"
+FORGEJO_BASE_URL="${FORGEJO_BASE_URL:-http://forgejo.hugmesh-pki.svc.cluster.local:3000}"
 FORGEJO_ORG="${ORG_OVERRIDE:-${FORGEJO_ORG:-Snapdragon-Systems}}"
 FORGEJO_API_MODE="${FORGEJO_API_MODE:-rest}"
 FORGEJO_REMOTE_TEMPLATE="${FORGEJO_REMOTE_TEMPLATE:-${FORGEJO_BASE_URL%/}/${FORGEJO_ORG}/%s.git}"
@@ -216,7 +216,7 @@ forgejo_ensure_pr() {
   command -v curl >/dev/null 2>&1 || _die "curl required for FORGEJO_API_MODE=rest"
   local api="${FORGEJO_BASE_URL%/}/api/v1/repos/${FORGEJO_ORG}/${repo}/pulls"
   local title="templating: update ${repo} to base ${ver}"
-  local body="Automated tenant-set re-render at base ref \`${ver}\` (snapdragon-generator ${GEN_COMMIT}). The head branch is regenerated whole on every re-render at this ref; review and merge into main (main stays fast-forward-only, direct-push default unchanged)."
+  local body="Automated tenant-set re-render at base ref \`${ver}\` (hugmesh-generator ${GEN_COMMIT}). The head branch is regenerated whole on every re-render at this ref; review and merge into main (main stays fast-forward-only, direct-push default unchanged)."
   local payload; payload="$(jq -n --arg t "$title" --arg h "$branch" --arg b "$body" \
       '{title: $t, head: $h, base: "main", body: $b}')"
   PR_RESP_FILE="${PR_RESP_FILE:-$(umask 077 && mktemp)}"
@@ -292,7 +292,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources: []
 commonLabels:
-  app.kubernetes.io/part-of: snapdragon.systems
+  app.kubernetes.io/part-of: hugmesh.systems
   snapdragon.systems/brand: ${brand}
   snapdragon.systems/repo: ${repo}
 EOF
@@ -335,16 +335,16 @@ publish_one() {
   ensure_discovery_contract "$dir" "$brand" "$repo"
 
   # ── VERSIONED-RENDER ref (I5) ───────────────────────────────────────────────
-  # render-repo-tree.sh --ref writes a one-line `.snapdragon-base-ref` marker into
+  # render-repo-tree.sh --ref writes a one-line `.hugmesh-base-ref` marker into
   # the tree (same travels-with-the-tree idiom as the base-origin marker). It
   # feeds the provenance base.ref stamp and the --pr branch name. An explicit
   # --ref here must AGREE with a present marker — a disagreement means the
   # operator is publishing a tree rendered at a different version (fail-closed).
   local base_ref=""
-  if [[ -f "${dir}/.snapdragon-base-ref" ]]; then
-    base_ref="$(head -n1 "${dir}/.snapdragon-base-ref" | tr -d '\r')"
+  if [[ -f "${dir}/.hugmesh-base-ref" ]]; then
+    base_ref="$(head -n1 "${dir}/.hugmesh-base-ref" | tr -d '\r')"
     [[ "$base_ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,120}$ && "$base_ref" != *..* ]] \
-      || _die "in-tree .snapdragon-base-ref marker in ${base} is not a tag/branch/sha shape — refusing (fail-closed)"
+      || _die "in-tree .hugmesh-base-ref marker in ${base} is not a tag/branch/sha shape — refusing (fail-closed)"
   fi
   if [[ -n "$REF_OVERRIDE" ]]; then
     if [[ -n "$base_ref" && "$base_ref" != "$REF_OVERRIDE" ]]; then
@@ -354,7 +354,7 @@ publish_one() {
     # operator's --ref into provenance base.ref would be an unverified claim.
     # Fail closed: re-render with --ref so the marker travels with the tree.
     [[ -n "$base_ref" ]] \
-      || _die "--ref '${REF_OVERRIDE}' but ${base} carries no .snapdragon-base-ref marker (tree was rendered unpinned) — re-render with 'render-repo-tree.sh --ref ${REF_OVERRIDE}' so provenance base.ref is fetch-proven, not claimed"
+      || _die "--ref '${REF_OVERRIDE}' but ${base} carries no .hugmesh-base-ref marker (tree was rendered unpinned) — re-render with 'render-repo-tree.sh --ref ${REF_OVERRIDE}' so provenance base.ref is fetch-proven, not claimed"
   fi
 
   # provenance: capture the base commit sha + mode from the rendered tree's own
@@ -366,14 +366,14 @@ publish_one() {
   # ── Phase 7 LAUNDER-REFUSAL: never push a FOREIGN base that A's inbound gate
   #    did not admit ────────────────────────────────────────────────────────────
   # Foreign origin is detected by TWO signals, in priority order:
-  #   (1) DURABLE, PRIMARY — the in-tree base-origin marker (.snapdragon-base-origin.json)
+  #   (1) DURABLE, PRIMARY — the in-tree base-origin marker (.hugmesh-base-origin.json)
   #       render-repo-tree.sh --foreign-mesh writes into a foreign-overlay BRAND_OUT.
   #       It TRAVELS WITH THE TREE, so it SURVIVES a REPO_BASE_CACHE purge — closing
   #       the residual medium where deleting the foreign cache dir after render but
   #       before publish made this tail treat foreign-DERIVED bytes as own-mesh and
   #       re-sign+push them with NO stamp re-verify.
   #   (2) CORROBORATING, SECONDARY — a foreign cache clone at
-  #       ${REPO_BASE_CACHE}/foreign/<mesh>/snapdragon-<repo> (pull-repo-base.sh
+  #       ${REPO_BASE_CACHE}/foreign/<mesh>/hugmesh-<repo> (pull-repo-base.sh
   #       --foreign). It can be removed; the marker cannot (it is inside the tree we
   #       are about to publish).
   # If EITHER fires, publishing REQUIRES the base's inbound admission STAMP — the
@@ -391,7 +391,7 @@ publish_one() {
   #
   # DURABLE marker (primary): parse + shape-validate our own outbound base-origin
   # provenance. Present ONLY on a foreign-overlay tree; absent for own-mesh/skeleton.
-  local marker="${dir}/.snapdragon-base-origin.json"
+  local marker="${dir}/.hugmesh-base-origin.json"
   local marker_mesh="" marker_pin="" marker_tree=""
   if [[ -f "$marker" ]]; then
     command -v jq >/dev/null 2>&1 || _die "jq required to parse foreign base-origin marker ${marker} — fail-closed"
@@ -408,13 +408,13 @@ publish_one() {
   fi
   # CORROBORATING foreign cache clone (secondary) — same ambiguity guards as before.
   local fd foreign_dir=""
-  for fd in "${REPO_BASE_CACHE}"/foreign/*/"snapdragon-${repo}"; do
+  for fd in "${REPO_BASE_CACHE}"/foreign/*/"hugmesh-${repo}"; do
     [[ -d "$fd" ]] || continue
     [[ -z "$foreign_dir" ]] \
-      || _die "multiple foreign cache entries for snapdragon-${repo} (${foreign_dir}, ${fd}) — ambiguous base origin; purge the stale one before publishing"
+      || _die "multiple foreign cache entries for hugmesh-${repo} (${foreign_dir}, ${fd}) — ambiguous base origin; purge the stale one before publishing"
     foreign_dir="$fd"
   done
-  local cache_clone="${REPO_BASE_CACHE}/snapdragon-${repo}"
+  local cache_clone="${REPO_BASE_CACHE}/hugmesh-${repo}"
   local foreign_cache_mesh=""
   [[ -n "$foreign_dir" ]] && foreign_cache_mesh="$(basename "$(dirname "$foreign_dir")")"
 
@@ -424,13 +424,13 @@ publish_one() {
   if [[ -n "$marker_mesh" ]]; then
     origin_mesh="$marker_mesh"
     [[ -d "${cache_clone}/.git" ]] \
-      && _die "foreign base-origin marker present AND an own-mesh cache clone exists for snapdragon-${repo} — ambiguous base origin (provenance would lie); purge one before publishing"
+      && _die "foreign base-origin marker present AND an own-mesh cache clone exists for hugmesh-${repo} — ambiguous base origin (provenance would lie); purge one before publishing"
     if [[ -n "$foreign_cache_mesh" && "$foreign_cache_mesh" != "$origin_mesh" ]]; then
-      _die "base-origin marker mesh '${origin_mesh}' != foreign cache mesh '${foreign_cache_mesh}' for snapdragon-${repo} — ambiguous base origin; refusing (launder-refusal)"
+      _die "base-origin marker mesh '${origin_mesh}' != foreign cache mesh '${foreign_cache_mesh}' for hugmesh-${repo} — ambiguous base origin; refusing (launder-refusal)"
     fi
   elif [[ -n "$foreign_dir" ]]; then
     [[ -d "${cache_clone}/.git" ]] \
-      && _die "BOTH an own-mesh and a foreign base cache entry exist for snapdragon-${repo} — ambiguous base origin (provenance would lie); purge one before publishing"
+      && _die "BOTH an own-mesh and a foreign base cache entry exist for hugmesh-${repo} — ambiguous base origin (provenance would lie); purge one before publishing"
     origin_mesh="$foreign_cache_mesh"
     [[ "$origin_mesh" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] \
       || _die "foreign cache mesh dir '${origin_mesh}' is not a DNS label"
@@ -522,8 +522,8 @@ publish_one() {
   if [[ ! -d "${dir}/.git" ]]; then
     git -C "$dir" init -q -b main
   fi
-  git -C "$dir" config user.email "generator@snapdragon.systems" >/dev/null 2>&1 || true
-  git -C "$dir" config user.name  "snapdragon-generator" >/dev/null 2>&1 || true
+  git -C "$dir" config user.email "generator@hugmesh.systems" >/dev/null 2>&1 || true
+  git -C "$dir" config user.name  "hugmesh-generator" >/dev/null 2>&1 || true
   git -C "$dir" add -A
   if git -C "$dir" diff --cached --quiet 2>/dev/null; then
     _log "  nothing to commit (idempotent — tree already committed)"
@@ -531,7 +531,7 @@ publish_one() {
     # Deterministic commit env so re-render of the same inputs is stable-ish.
     GIT_AUTHOR_DATE="${SOURCE_DATE_EPOCH:+@${SOURCE_DATE_EPOCH}}" \
     GIT_COMMITTER_DATE="${SOURCE_DATE_EPOCH:+@${SOURCE_DATE_EPOCH}}" \
-      git -C "$dir" commit -q -m "publish ${brand}-${repo} tenant tree (snapdragon-generator ${GEN_COMMIT})"
+      git -C "$dir" commit -q -m "publish ${brand}-${repo} tenant tree (hugmesh-generator ${GEN_COMMIT})"
     _log "  committed tenant tree"
   fi
 
@@ -542,8 +542,8 @@ publish_one() {
 
   # Create/push under the FULL <brand>-<repo> dir name ($base), NOT the brand-
   # stripped $repo: the 13d brand-repo ApplicationSet filters repositoryMatch
-  # "^<BRAND>-" (and the default 13-service-catalog filters "^snapdragon-"), so a
-  # repo named "admin-bff-api" would never match "^acme-"/"^snapdragon-" and ArgoCD
+  # "^<BRAND>-" (and the default 13-service-catalog filters "^hugmesh-"), so a
+  # repo named "admin-bff-api" would never match "^acme-"/"^hugmesh-" and ArgoCD
   # would discover ZERO Applications. $base == "acme-admin-bff-api" matches. (#3)
   forgejo_ensure_repo "$base"
 
@@ -554,7 +554,7 @@ publish_one() {
   if [[ "$PR_MODE" -eq 1 ]]; then
     # ── PR DELIVERY (I5): branch push + create-or-update PR — NEVER main ──────
     [[ -n "$base_ref" ]] \
-      || _die "--pr for ${base} needs a base version: render with --ref (writes the in-tree .snapdragon-base-ref marker) or pass --ref here — the PR branch name embeds it (templating/update-<version>)"
+      || _die "--pr for ${base} needs a base version: render with --ref (writes the in-tree .hugmesh-base-ref marker) or pass --ref here — the PR branch name embeds it (templating/update-<version>)"
     local ver="${base_ref//\//-}"           # branch-name-safe version component
     local pr_branch="templating/update-${ver}"
     # Namespace hard-guard: the forced refspec below may ONLY ever target the

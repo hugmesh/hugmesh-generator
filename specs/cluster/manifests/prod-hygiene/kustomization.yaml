@@ -1,6 +1,6 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: snapdragon-policy
+namespace: hugmesh-policy
 resources:
   - rbac.yaml          # SA + read-mostly ClusterRole + Vault-exec + probe Roles
   - clusterpolicy.yaml # Kyverno admission backstop (no tier:test / dev vault / dev image)
@@ -21,5 +21,5 @@ generatorOptions:
   disableNameSuffixHash: true
   labels:
     app.kubernetes.io/name: prod-hygiene
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     app.kubernetes.io/component: policy

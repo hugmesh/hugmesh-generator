@@ -1,4 +1,4 @@
-# Snapdragon: Privoxy filtering proxy on 127.0.0.1:8118, chained to the local Squid
+# HugMesh: Privoxy filtering proxy on 127.0.0.1:8118, chained to the local Squid
 # cache (forward / 127.0.0.1:3128). Firefox is pointed at this (see the enterprise
 # policy), so the desktop browser gets ad/tracker filtering + local caching by default.
 confdir /etc/privoxy

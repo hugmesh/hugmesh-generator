@@ -26,11 +26,11 @@ from __future__ import annotations
 import os
 import re
 
-from snapdragon_studio.core.config import (
+from hugmesh_studio.core.config import (
     RPI5_ROLE_MAP, ImageConfig, field_in_scope, image_class, roles_for_platform,
     scope_violations,
 )
-from snapdragon_studio.core.config import _ALL_MODES as ALL_MODES  # single source: standalone|cloud|mesh
+from hugmesh_studio.core.config import _ALL_MODES as ALL_MODES  # single source: standalone|cloud|mesh
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)

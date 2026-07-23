@@ -5,11 +5,11 @@ client desktop (laptop / chromebook / desktop) WITHOUT rebuilding the image.
 
 At first boot `provision_desktop_governance()`
 (`specs/etc/keys-provision/provision.sh`) checks for baked templates at
-`/etc/snapdragon/desktop-governance/`; if absent, it uses **this** directory
+`/etc/hugmesh/desktop-governance/`; if absent, it uses **this** directory
 (`KEYS/desktop-governance/`) instead, then renders the templates into their live
 system locations, substituting the `@@CLUSTER_DOMAIN@@` placeholder with the
 node's own domain (resolved from `.client.primary_domain` →
-`/etc/snapdragon/domains` → `.snapdragon.cluster_domain`).
+`/etc/hugmesh/domains` → `.hugmesh.cluster_domain`).
 
 ## What it configures (all DEFAULT-DENY / ships-dark)
 
@@ -41,11 +41,11 @@ bearer-forward at login (Seam #2). Those are delivered by these NEW files +
 a KEYS `run[]` hook (all governed-gated + ships-dark):
 
 - `discover/oidc-token-deposit.sh.tmpl` → deposits the SSO access token at
-  `${XDG_RUNTIME_DIR}/snapdragon/oidc-token` (per-user, 0600, never exported,
+  `${XDG_RUNTIME_DIR}/hugmesh/oidc-token` (per-user, 0600, never exported,
   `--clear` on logout); inert when ungoverned / no token (empty store).
-- `autostart/snapdragon-desktop-sso.desktop.tmpl` → XDG autostart (LXDE + XFCE,
+- `autostart/hugmesh-desktop-sso.desktop.tmpl` → XDG autostart (LXDE + XFCE,
   no `OnlyShowIn`) → the session-start wrapper.
-- `autostart/snapdragon-desktop-sso-start.sh.tmpl` → session-start wrapper:
+- `autostart/hugmesh-desktop-sso-start.sh.tmpl` → session-start wrapper:
   clears stale token/header, installs an LXDE/XFCE `~/.bash_logout` clear (the
   merged bearer-forward's Plasma-only `shutdown/` hook never fires here), chains
   deposit → bearer-forward.
@@ -65,12 +65,12 @@ Add to your KEYS `provision.json` so it runs as root at end of first boot, after
 
 ### RESIDUAL #9a
 
-The desktop SSO login uses `oidc_client_id = snapdragon-desktop` (PKCE public
+The desktop SSO login uses `oidc_client_id = hugmesh-desktop` (PKCE public
 client). This PR seeds that client + the `desktop-sudo` role in `casdoor-init`
 (`specs/cluster/manifests/casdoor/`); without it SSO-sudo is inert.
 
 ## Files
 
-Mirror of `specs/etc/snapdragon/desktop-governance/` — edit in place if a domain
+Mirror of `specs/etc/hugmesh/desktop-governance/` — edit in place if a domain
 needs a different store title / remote layout, but keep `@@CLUSTER_DOMAIN@@`
 intact so first-boot domain substitution works.

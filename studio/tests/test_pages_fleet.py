@@ -36,38 +36,38 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core import build_sessions as bs                # noqa: E402
-from snapdragon_studio.core.fleet import FleetConfig, FleetDriver      # noqa: E402
-from snapdragon_studio.core.platform_info import HostInfo              # noqa: E402
-from snapdragon_studio.gui import wizard as wizard_mod                 # noqa: E402
-from snapdragon_studio.gui.pages import fleet as fleet_mod             # noqa: E402
-from snapdragon_studio.gui.qt import QtWidgets                         # noqa: E402
+from hugmesh_studio.core import build_sessions as bs                # noqa: E402
+from hugmesh_studio.core.fleet import FleetConfig, FleetDriver      # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo              # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod                 # noqa: E402
+from hugmesh_studio.gui.pages import fleet as fleet_mod             # noqa: E402
+from hugmesh_studio.gui.qt import QtWidgets                         # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=True, has_bash=True,
-                has_kvm=False, is_root=True, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=True, builder_image="hugmesh-builder")
 
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("SNAPDRAGON_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture
@@ -144,7 +144,7 @@ def _docker_golden(env_pairs, inner):
            "-v", "/fleet-out:/out"]
     for kv in env_pairs:
         cmd += ["-e", kv]
-    return cmd + ["-w", "/src", "snapdragon-builder", "bash", "-c", inner]
+    return cmd + ["-w", "/src", "hugmesh-builder", "bash", "-c", inner]
 
 
 GOLDEN_ARGV = {
@@ -564,7 +564,7 @@ def test_standalone_fleet_entry_still_works(qapp):
     """app.py's open_fleet() does ``from .gui.pages.fleet import FleetDialog`` then
     FleetDialog(generator_dir).show()/raise_() — the alias keeps that path working
     as its own top-level window (no wizard, no parent)."""
-    from snapdragon_studio.gui.pages.fleet import FleetDialog, FleetWindow
+    from hugmesh_studio.gui.pages.fleet import FleetDialog, FleetWindow
     assert FleetDialog is FleetWindow
     dlg = FleetDialog(GENERATOR_DIR)            # exactly app.py's construction
     dlg.show()

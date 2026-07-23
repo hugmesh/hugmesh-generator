@@ -11,26 +11,26 @@ wildcard DNS resolver.
 ## TL;DR
 
 ```bash
-make local          # builds the whole fleet for the LAN .test domain (snapdragon.test)
+make local          # builds the whole fleet for the LAN .test domain (hugmesh.test)
 ```
 
 Then do the **one-time resolver step** below, and browse to
-`https://id.snapdragon.test`, `https://snapdragon.test`, etc. from any LAN device.
+`https://id.hugmesh.test`, `https://hugmesh.test`, etc. from any LAN device.
 
 ## The build ENV selector (baked at image creation)
 
-`--env test|prod` is baked into the image (`/etc/snapdragon/env`) and drives:
+`--env test|prod` is baked into the image (`/etc/hugmesh/env`) and drives:
 
 | | `test` (default) | `prod` |
 |---|---|---|
-| domain | `<brand>.test` (e.g. `snapdragon.test`) | real domain (e.g. `snapdragon.systems`) |
+| domain | `<brand>.test` (e.g. `hugmesh.test`) | real domain (e.g. `hugmesh.systems`) |
 | DNS | in-cluster **wildcard DNS** (`apps/09-lan-dns.yaml`) | public DNS / Cloudflare (`apps/12-cloudflared.yaml`) |
 | certs | internal cluster CA (Vault-PKI) | cluster CA **+** ACME/public (additive) |
 | OAuth / SMTP / Cloudflare | optional / absent | from the keys USB |
 | build banner | quiet | **LOUD announced** (`BUILDING PROD IMAGE for <domain>`) |
 
 The builders **prune** the ENV-irrelevant ArgoCD app from the baked
-`/var/lib/snapdragon/cluster/apps` tree, so ArgoCD only ever syncs the right one:
+`/var/lib/hugmesh/cluster/apps` tree, so ArgoCD only ever syncs the right one:
 
 - `ENV=test` removes `apps/12-cloudflared.yaml` (no Cloudflare on a LAN).
 - `ENV=prod` removes `apps/09-lan-dns.yaml` (public DNS is authoritative).
@@ -38,14 +38,14 @@ The builders **prune** the ENV-irrelevant ArgoCD app from the baked
 How to select it:
 
 ```bash
-make local                                  # ENV=test + brands/local.conf (snapdragon.test)
+make local                                  # ENV=test + brands/local.conf (hugmesh.test)
 make prod                                   # ENV=prod, real domain (announced)
 make build-all ENV=test BRAND=acme          # any brand, test
 ./build-x86-host-stage4.sh --env test --config brands/local.conf --role be+gpu
 ./scripts/build-all-roles.sh --env test --config brands/local.conf
 ```
 
-`brands/local.conf` is the dedicated `.test` profile: `CLUSTER_DOMAIN=snapdragon.test`,
+`brands/local.conf` is the dedicated `.test` profile: `CLUSTER_DOMAIN=hugmesh.test`,
 `MAIL_PROVIDER=none`, OAuth/Cloudflare off, local-first mesh (empty `HEADSCALE_URL`),
 offline Vault.
 
@@ -83,17 +83,17 @@ IP on port 53. Then every LAN device resolves `*.<domain>` to the cluster.
 2. Point clients at it — pick ONE:
 
    - **Router (best, fleet-wide):** set the LAN DHCP "DNS server" to that IP. Every
-     device on the LAN now resolves `*.snapdragon.test` to the cluster.
+     device on the LAN now resolves `*.hugmesh.test` to the cluster.
    - **A single test machine (Linux/macOS):** add it as a nameserver, e.g.
      `echo "nameserver <BACKEND_IP>" | sudo tee /etc/resolv.conf` (or a
      `systemd-resolved` per-link DNS), or for just the brand domain use a
-     split-DNS entry pointing `snapdragon.test` at `<BACKEND_IP>`.
+     split-DNS entry pointing `hugmesh.test` at `<BACKEND_IP>`.
 
 3. Verify:
 
    ```bash
-   dig @<BACKEND_IP> id.snapdragon.test +short      # -> the backend node IP
-   curl -k https://id.snapdragon.test/               # reaches Casdoor via ingress
+   dig @<BACKEND_IP> id.hugmesh.test +short      # -> the backend node IP
+   curl -k https://id.hugmesh.test/               # reaches Casdoor via ingress
    ```
 
 That's it — no `/etc/hosts` edits per host, no public DNS, no Cloudflare. The

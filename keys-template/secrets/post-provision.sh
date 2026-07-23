@@ -10,7 +10,7 @@ set -euo pipefail
 
 echo "[post-provision] hook running; KEYS at ${KEYS_BASE:-<none>}"
 
-# Example: label this node for the snapdragon backend namespace once the
+# Example: label this node for the hugmesh backend namespace once the
 # kubeconfig exists (control-plane only).
 if [ -f /etc/kubernetes/admin.conf ]; then
     export KUBECONFIG=/etc/kubernetes/admin.conf

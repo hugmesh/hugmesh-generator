@@ -9,7 +9,7 @@ The platform splits into two tiers:
   BFFs + UIs.
 - **Optional services (this doc):** **akkoma** (Mastodon-API fediverse server),
   **tuwunel** (Matrix homeserver), **phpbb** (forum), **games** (the
-  snapdragon.games portal + its own games-realm Casdoor), **owncast** (HLS
+  hugmesh.games portal + its own games-realm Casdoor), **owncast** (HLS
   live-streaming, GPU-gated x86), **tube** (LocalTube YouTube archive, GPU-gated
   x86), **edge-ai** (GPU inference node serving an OpenAI-compatible model API to
   the mesh — DEFAULT-OFF, GPU-gated; auto-selected by the `edge_ai` node role; see
@@ -23,21 +23,21 @@ The platform splits into two tiers:
   model as egress-vpn (`scope: node`): add with `--with-tor` (x86/Studio/build-menu)
   or by listing `tor` in `OPTIONAL_SERVICES` (rpi5/brand.conf); exclude with
   `--exclude-services tor`. It owns **nodePackages: [net-vpn/tor]** + **nodeServices:
-  [tor, snapdragon-tor-reconcile]** (the distro Tor daemon + a reconcile agent) and
+  [tor, hugmesh-tor-reconcile]** (the distro Tor daemon + a reconcile agent) and
   exposes the in-cluster fe-gateway as a v3 `.onion` — INBOUND reach with no public IP
   / DDNS. The v3 onion keypair is minted + persisted OFF-GIT under
-  `/var/lib/tor/snapdragon-onion` on first boot; net-vpn/tor is omitted + the services
+  `/var/lib/tor/hugmesh-onion` on first boot; net-vpn/tor is omitted + the services
   unlinked when not selected. See [TOR-HIDDEN-SERVICE.md](TOR-HIDDEN-SERVICE.md).
 
   **coturn** (TURN/STUN relay for Matrix WebRTC audio/video) is a DEFAULT-OFF,
   **runtime-only** slug (anubis pattern: `apps: []`, no baked Application) that
-  lands in `snapdragon-backend` next to tuwunel so they share one TURN secret. When
+  lands in `hugmesh-backend` next to tuwunel so they share one TURN secret. When
   off, Matrix calls keep host-only ICE (`iceServers: []`) — byte-identical to
   mainline. See [`docs/COTURN.md`](COTURN.md).
 
   **meshbridge** (Meshtastic LoRa mesh ↔ Matrix bridge) is a DEFAULT-OFF,
   **runtime-only** slug (the coturn pattern: `apps: []`, no baked Application)
-  that lands in `snapdragon-backend` next to tuwunel: it is a Matrix APPSERVICE
+  that lands in `hugmesh-backend` next to tuwunel: it is a Matrix APPSERVICE
   (exclusive `@mesh-.*` user namespace, registered by a PostSync Job via the
   tuwunel admin room) speaking the in-namespace CS API, with radios attached by
   USB-serial, LoRa-WiFi TCP (:4403) or a Meshtastic MQTT-JSON broker. `dependsOn:
@@ -198,7 +198,7 @@ sudo ./build-x86-host-stage4.sh --env prod --optional-services "tuwunel games"
 sudo ./build-rpi5-stage4.sh     --env prod --optional-services "tuwunel games"
 ```
 
-Verify the baked tree (under `…/sysroot/var/lib/snapdragon/cluster`):
+Verify the baked tree (under `…/sysroot/var/lib/hugmesh/cluster`):
 
 ```sh
 ls apps/ | grep -E '30-akkoma|30-phpbb|38-forum|39-forum|49-forum'   # -> empty (pruned)
@@ -217,7 +217,7 @@ On the cluster, `argocd app list` shows no `akkoma`/`phpbb`/`forum-*` apps;
 Games is **opt-in** (see §3 — off by default; enable with `--enable-games`).
 **When games is enabled**, it normally lives at its own TLD, but **by default**
 it is served as a **subdomain of the primary domain** — `games.<CLUSTER_DOMAIN>`
-(e.g. `games.snapdragon.systems`) — until the real `.games` TLD is obtained. One
+(e.g. `games.hugmesh.systems`) — until the real `.games` TLD is obtained. One
 knob drives it (only consulted when games is selected):
 
 ```sh
@@ -227,10 +227,10 @@ GAMES_DOMAIN="games.${CLUSTER_DOMAIN}"   # brand.conf default
 
 `GAMES_DOMAIN` drives **every** games host, OIDC issuer, and redirect URI.
 `parameterize_games_domain()` (both builders, run **before** `rebrand_sysroot`)
-rewrites the **host** occurrences of `snapdragon.games` to `${GAMES_DOMAIN}` —
+rewrites the **host** occurrences of `hugmesh.games` to `${GAMES_DOMAIN}` —
 URL-scheme-anchored (only after `//`), so the games-realm
 origin/issuer/redirect/website URLs flip while the canonical **image** repo paths
-(`snapdragon.games-backend`) are left intact. The parameterized files:
+(`hugmesh.games-backend`) are left intact. The parameterized files:
 
 - `manifests/casdoor-games/app-conf-configmap.yaml` — `origin` (the OIDC `iss`);
 - `manifests/casdoor-games/init-data-configmap.yaml` — `redirectUris` +
@@ -241,18 +241,18 @@ origin/issuer/redirect/website URLs flip while the canonical **image** repo path
   enforces this as the expected `iss`).
 
 Plus the games **public host**: a be-gateway host route `id: games`
-(`games.<GAMES_DOMAIN>` → `snapdragon-games:8080`), its ingress `extraHosts`
+(`games.<GAMES_DOMAIN>` → `hugmesh-games:8080`), its ingress `extraHosts`
 entry, and the `/games/**` route-access floor — all added in
 `apps/20-gateway-be.yaml` + `20-schema.sql`.
 
-**Why this matters:** `rebrand_sysroot` rewrites `snapdragon.systems` and
-`snapdragon-` but historically **left `.games` untouched**, so on the subdomain
+**Why this matters:** `rebrand_sysroot` rewrites `hugmesh.systems` and
+`hugmesh-` but historically **left `.games` untouched**, so on the subdomain
 default the public host became `games.<primary>` while Casdoor still minted
-`iss=https://id.snapdragon.games` — the iss-strict `JwtIssuerValidator` then
+`iss=https://id.hugmesh.games` — the iss-strict `JwtIssuerValidator` then
 rejected **every** games token and login broke. The parameterization fixes that.
 
 Under the subdomain default, games **rides the existing `*.<primary>`
-wildcard** (CoreDNS catch-all in test; cloudflared `*.snapdragon.systems` catch +
+wildcard** (CoreDNS catch-all in test; cloudflared `*.hugmesh.systems` catch +
 the existing wildcard cert in prod) — **no new DNS record or cert** is required.
 
 ## 6. Games TLD flip (later, when you own `.games`)
@@ -260,7 +260,7 @@ the existing wildcard cert in prod) — **no new DNS record or cert** is require
 Set the knob to the real TLD and rebuild/re-seed:
 
 ```sh
-GAMES_DOMAIN="snapdragon.games"     # or <brand>.games
+GAMES_DOMAIN="hugmesh.games"     # or <brand>.games
 ```
 
 Everything (issuer, redirects, website, the gateway host + extraHost) follows.
@@ -280,7 +280,7 @@ Internal mTLS / `svc.cluster.local` SANs are unaffected.
 
 > **STATUS: build-time prune ✅ SHIPPED · build-time 13a render ✅ SHIPPED ·
 > federation `OverrideService` + public `GET /api/federation/capabilities` ✅ SHIPPED ·
-> host (snapdragon.systems) capabilities consumption + `menu.component` `enabled()`
+> host (hugmesh.systems) capabilities consumption + `menu.component` `enabled()`
 > greying ✅ SHIPPED · live admin-driven flip 🟡 CODE-COMPLETE, SHIPS DARK (the
 > `OptionalService` **CRD + controller** — §7.1; reconciler
 > `app.optional-services.reconcile.enabled=false` by default) · hardcoded-app
@@ -334,10 +334,10 @@ These admin-bff seams + the CRD reconcile bridge are described in §7.1 and §10
 
 ## 7.1. The `OptionalService` CRD + controller (the live-flip mechanism)
 
-The runtime desired-state object is a **CRD** (`optionalservices.platform.snapdragon.
+The runtime desired-state object is a **CRD** (`optionalservices.platform.hugmesh.
 systems`, the platform's first CRD — `kind: OptionalService`, `shortName: optsvc`,
 namespaced in `devops`), reconciled by a **Lease-gated single-writer controller** in
-`snapdragon-admin-bff-api` (`systems.snapdragon.adminbff.optionalservices.
+`hugmesh-admin-bff-api` (`systems.hugmesh.adminbff.optionalservices.
 OptionalServiceReconciler`, cloned from the `NodeStorageReconciler` /
 `Fabric8NodeStorageConfigMapWriter` precedent). The user chose the CRD over a watched
 ConfigMap or a git-committing reconciler: no DB migration, `kubectl`-native, directly
@@ -355,7 +355,7 @@ table.
      `installed` on the matching inline list-generator **element** (by `slug`); the
      ArgoCD ApplicationSet controller then creates/prunes `optional-<slug>` via the
      `installed:"true"` selector.
-   - **`installed-services` ConfigMap** (`snapdragon-policy`) — a targeted merge-patch
+   - **`installed-services` ConfigMap** (`hugmesh-policy`) — a targeted merge-patch
      of the matching greying boolean, keeping the admin console + host greying
      consistent.
 3. Each CR's `/status` (`phase`, `installed`, `observedGeneration`, `conditions`) is
@@ -430,7 +430,7 @@ When a service is **absent**, a user sees:
   `akkoma-externalsecrets.yaml` + `tuwunel-externalsecrets.yaml` so removing one
   homeserver never orphans the other's mTLS-proxy + admin-token half.
 - **CanonicalSeed.java floor (cross-repo):** the gateway image bakes a
-  route-access floor in `CanonicalSeed.java` (**snapdragon-gateway** repo) used as
+  route-access floor in `CanonicalSeed.java` (**hugmesh-gateway** repo) used as
   the in-memory fallback when Postgres/Cassandra are unreachable. It must match
   the route-access rows pruned here, or the in-image snapshot re-enforces removed
   rows on datastore fallback. The games host floor is now **baked in
@@ -444,22 +444,22 @@ When a service is **absent**, a user sees:
 
 **✅ SHIPPED (cross-repo waves now landed):**
 
-- **snapdragon-federation-api ✅:** the idempotent changesets
+- **hugmesh-federation-api ✅:** the idempotent changesets
   `023-register-akkoma-module.xml` / `024-register-tuwunel-module.xml` /
   `025-register-games-module.xml` (mirroring `022-register-forum-module.xml`) are in,
   and the **public** `GET /api/federation/capabilities` projection now drives
   logged-out greying (the `…/manifest` endpoint stays `authenticated()` +
   visibility-filtered).
-- **snapdragon-gateway ✅:** `CanonicalSeed.java`'s baked route-access floor now
+- **hugmesh-gateway ✅:** `CanonicalSeed.java`'s baked route-access floor now
   carries the `games.<GAMES_DOMAIN>` host floor in sync with the rows
   `gate_optional_services` prunes.
-- **snapdragon.systems (host) ✅:** the host shell consumes install-state at
+- **hugmesh.systems (host) ✅:** the host shell consumes install-state at
   bootstrap (HttpClient → the public capabilities endpoint) and `menu.component`'s
   `enabled()` greys out absent services (nav + data-driven home-services cards).
 
 **🟡 CODE-COMPLETE, SHIPS DARK (this wave):**
 
-- **snapdragon-admin-bff-api:** the `OptionalService` **CRD + Lease-gated
+- **hugmesh-admin-bff-api:** the `OptionalService` **CRD + Lease-gated
   reconcile controller** (§7.1) — the `service_state` Postgres table is **replaced**
   by the CRD (kubectl-native desired-state, no DB migration). The controller is the
   single writer of the 13a element list + the greying ConfigMap, reconciled from the
@@ -468,7 +468,7 @@ When a service is **absent**, a user sees:
   `kustomize build`, the pure `renderElements`/`renderInstalledServices` transforms +
   the fake-client reconcile composition (JUnit). See the PR for the validated-vs-
   cluster-gated split.
-- **snapdragon-generator:** the CRD/RBAC/seed bundle
+- **hugmesh-generator:** the CRD/RBAC/seed bundle
   (`manifests/optional-services-operator`), its `apps/13d` Application, the
   `ignoreDifferences` keystone on both roots + `apps/16`, and the
   `_opt_render_optionalservice_cr` build seeding.
@@ -493,13 +493,13 @@ When a service is **absent**, a user sees:
 `PUT /bff/superadmin/optional-services/{slug}` (mirroring
 `WorkloadSuperadminController`/`GoLiveController` + a step-up gate) that patches the CR
 via the fabric8 client admin-bff already holds, and a toggle screen in
-`snapdragon-superadmin-service-catalog-ui`. kubectl-first; BFF endpoint + UI later.
+`hugmesh-superadmin-service-catalog-ui`. kubectl-first; BFF endpoint + UI later.
 
 ## 11. Verification & rollback
 
 **Verify a build:**
 ```sh
-TREE=…/sysroot/var/lib/snapdragon/cluster
+TREE=…/sysroot/var/lib/hugmesh/cluster
 ls "$TREE/apps/"                                           # pruned apps gone
 grep -E '^  (akkoma|tuwunel|phpbb|games):' "$TREE/manifests/policy/installed-services-configmap.yaml"
 bash scripts/validate-reserved-prefixes.sh                # games host/extraHost reserved + consistent

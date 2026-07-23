@@ -1,5 +1,5 @@
 {
-  // Snapdragon fleet mesh ACL policy (headscale 0.23.x, file mode).
+  // HugMesh fleet mesh ACL policy (headscale 0.23.x, file mode).
   //
   // GOAL: a flat L3 mesh — every fleet node reaches every other fleet node on
   // every port, AND pods/ClusterIP services on one node are reachable from any
@@ -15,36 +15,36 @@
   // ── Who may apply which tags ──────────────────────────────────────────────
   // Tags are self-applied by each node at join via `tailscale up
   // --advertise-tags=...`. A node may only claim a tag whose owner is the
-  // headscale user its preauth key was minted under — here, "snapdragon"
-  // (see provision_headscale: `headscale users create snapdragon` + preauthkey
-  // --user snapdragon). tag:snapdragon is the fleet-wide membership tag; the
+  // headscale user its preauth key was minted under — here, "hugmesh"
+  // (see provision_headscale: `headscale users create hugmesh` + preauthkey
+  // --user hugmesh). tag:hugmesh is the fleet-wide membership tag; the
   // per-role tags are reserved for future segmentation (all owned by the same
   // user, so any node can self-tag).
   "tagOwners": {
-    "tag:snapdragon": ["snapdragon"],
-    "tag:pki": ["snapdragon"],
-    "tag:be": ["snapdragon"],
-    "tag:fe": ["snapdragon"],
-    "tag:host": ["snapdragon"]
+    "tag:hugmesh": ["hugmesh"],
+    "tag:pki": ["hugmesh"],
+    "tag:be": ["hugmesh"],
+    "tag:fe": ["hugmesh"],
+    "tag:host": ["hugmesh"]
   },
 
   // ── Subnet-route auto-approval ────────────────────────────────────────────
   // Each fleet node advertises the cluster-wide pod + service CIDRs
   // (--advertise-routes=10.244.0.0/16,10.96.0.0/12). Listing those exact
-  // prefixes here, owned by tag:snapdragon, makes headscale auto-approve them
+  // prefixes here, owned by tag:hugmesh, makes headscale auto-approve them
   // the moment a tagged node advertises them — no manual
   // `headscale nodes approve-routes` step. Routes outside these prefixes are
   // NOT auto-approved.
   "autoApprovers": {
     "routes": {
-      "10.244.0.0/16": ["tag:snapdragon"],
-      "10.96.0.0/12": ["tag:snapdragon"]
+      "10.244.0.0/16": ["tag:hugmesh"],
+      "10.96.0.0/12": ["tag:hugmesh"]
     }
   },
 
   // ── Access rules (default-deny; only these accepts apply) ─────────────────
   // Layer-A (device-license registry) [FIX-DROPMESHRULE]: the any-to-any
-  //   {src:[tag:snapdragon], dst:[tag:snapdragon:*]}
+  //   {src:[tag:hugmesh], dst:[tag:hugmesh:*]}
   // rule is DROPPED — it exposed EVERY node's :22 to every other node and that
   // hole need not exist at any time. NOTE: the builders now bake
   // policy.bootstrap.hujson AS the initial /etc/headscale/policy.hujson, so this
@@ -59,7 +59,7 @@
     // ClusterIP access). This is the rule Layer-A KEEPS.
     {
       "action": "accept",
-      "src": ["tag:snapdragon"],
+      "src": ["tag:hugmesh"],
       "dst": ["10.244.0.0/16:*", "10.96.0.0/12:*"]
     }
   ],
@@ -80,8 +80,8 @@
   "ssh": [
     {
       "action": "accept",
-      "src": ["tag:snapdragon"],
-      "dst": ["tag:snapdragon"],
+      "src": ["tag:hugmesh"],
+      "dst": ["tag:hugmesh"],
       "users": ["@@TS_SSH_USER@@"]
     }
   ]

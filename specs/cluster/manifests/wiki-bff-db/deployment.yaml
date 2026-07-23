@@ -1,10 +1,10 @@
-# wiki-bff-db — dedicated Postgres for snapdragon-wiki-bff-api's content datastore
+# wiki-bff-db — dedicated Postgres for hugmesh-wiki-bff-api's content datastore
 # (the wiki_page / wiki_attachment / wiki_audit_log tables the wiki BFF owns). Lives
-# in snapdragon-backend next to the BFF it serves (congruent with forum-bff-db /
+# in hugmesh-backend next to the BFF it serves (congruent with forum-bff-db /
 # admin-bff-db / user-bff-db / mod-bff-db). ClusterIP only.
 #
 # NOTE: like user-bff/admin-bff/forum-bff, the wiki-bff app's application.yml
-# defaults its spring.r2dbc/spring.liquibase to a literal `snapdragon-pg` host that
+# defaults its spring.r2dbc/spring.liquibase to a literal `hugmesh-pg` host that
 # does NOT exist; this dedicated `wiki-bff-db` Service is the real backing store and
 # the wiki-bff Deployment OVERRIDES the R2DBC/Liquibase URLs to point here.
 #
@@ -23,8 +23,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: wiki-bff-db
-  namespace: snapdragon-backend
-  labels: { app: wiki-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: wiki-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over a RWO PVC

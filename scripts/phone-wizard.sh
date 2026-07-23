@@ -6,7 +6,7 @@
 # USB-connected Google Pixel and turns it into an MDM-managed mesh device:
 #
 #   detect -> fetch (verified GrapheneOS -install- zip) -> flash -> attest
-#   (self-hosted AttestationServer pairing, via a Snapdragon-forked Auditor
+#   (self-hosted AttestationServer pairing, via a HugMesh-forked Auditor
 #   app) -> mdm-enroll (Headwind MDM device-owner enrollment — MUST run before
 #   'profile', which permanently forecloses device-owner mode) -> enroll
 #   (headscale tailnet join, register-and-approve) -> profile (a separately-
@@ -28,8 +28,8 @@
 # MANAGEMENT PLANE (Phase 3 — supersedes the earlier "no MDM agent" non-goal):
 # self-hosted Headwind MDM (com.hmdm.launcher/.AdminReceiver, set via adb
 # device-owner) is the on-phone DPC for every enrolled phone; self-hosted
-# GrapheneOS AttestationServer (paired via a Snapdragon-forked Auditor app,
-# package systems.snapdragon.auditor) is the hardware-rooted trust signal.
+# GrapheneOS AttestationServer (paired via a HugMesh-forked Auditor app,
+# package systems.hugmesh.auditor) is the hardware-rooted trust signal.
 # Both are tailnet-only optional-services on the existing cluster — no SaaS/
 # commercial MDM, no Google Play Integrity, no Google FCM/Pub/Sub dependency.
 # Attestation is advisory/logged (not enrollment-blocking) in v1. Remaining
@@ -63,9 +63,9 @@ source "${SCRIPT_DIR}/_download-lib.sh"
 # The single place that describes which device-management backends exist and how
 # each enrolls a handset. cmd_mdm_enroll dispatches on the provider's MECHANISM
 # (dpc-adb vs os-enrollment) read from this registry, and never hard-codes the
-# two providers. Mirrors how snapdragon-go-live sources go-live-providers.sh.
-MDM_PROVIDERS_LIB="${PW_MDM_PROVIDERS_LIB:-${REPO_DIR}/specs/usr/lib/snapdragon/mdm-providers.sh}"
-# shellcheck source=specs/usr/lib/snapdragon/mdm-providers.sh
+# two providers. Mirrors how hugmesh-go-live sources go-live-providers.sh.
+MDM_PROVIDERS_LIB="${PW_MDM_PROVIDERS_LIB:-${REPO_DIR}/specs/usr/lib/hugmesh/mdm-providers.sh}"
+# shellcheck source=specs/usr/lib/hugmesh/mdm-providers.sh
 source "${MDM_PROVIDERS_LIB}"
 
 # ── Pinned GrapheneOS supply-chain facts (see scripts/phone-allowed-signers) ─
@@ -73,12 +73,12 @@ GRAPHENE_IDENTITY="contact@grapheneos.org"
 GRAPHENE_NAMESPACE="factory images"
 GRAPHENE_SIGNER_FP_PIN="SHA256:AhgHif0mei+9aNyKLfMZBh2yptHdw/aN7Tlh/j2eFwM"
 
-# ── Snapdragon Auditor fork identity (Phase 3 attestation coupling) ────────
+# ── HugMesh Auditor fork identity (Phase 3 attestation coupling) ────────
 # applicationId is deliberately DIFFERENT from the stock GrapheneOS Auditor
 # (app.attestation.auditor) — avoids clobbering a stock install and keeps the
 # --auditor-signer-sha256 pin unambiguous. See docs/MDM.md for
-# the fork rationale (DOMAIN=attestation.snapdragon.systems, own release key).
-AUDITOR_PACKAGE="systems.snapdragon.auditor"
+# the fork rationale (DOMAIN=attestation.hugmesh.systems, own release key).
+AUDITOR_PACKAGE="systems.hugmesh.auditor"
 
 # ── Env seams (tests override these; defaults are the real thing) ──
 ADB="${PW_ADB:-adb}"
@@ -101,7 +101,7 @@ LOGIN_SERVER=""
 AUTHKEY_FILE=""
 PASS_FILE=""
 DEVICE_ID=""
-SUPERDOMAIN="snapdragon.internal"
+SUPERDOMAIN="hugmesh.internal"
 SUPERDOMAIN_SET=0
 ROLE=""
 ROLE_SET=0
@@ -195,7 +195,7 @@ Verbs:
   flash                DESTRUCTIVE: wipe the phone and flash the VERIFIED
                        artifact. Typed-serial confirmation on a TTY; non-TTY
                        requires BOTH --yes AND a matching --serial.
-  attest               Install the Snapdragon-forked Auditor (signer-pinned
+  attest               Install the HugMesh-forked Auditor (signer-pinned
                        via --auditor-signer-sha256) and print the pairing
                        runbook for the self-hosted AttestationServer at
                        --attestation-url. The in-app QR scan cannot be driven
@@ -289,7 +289,7 @@ Options:
   --headwind-url URL     Headwind server base URL, written into the DPC's
                          non-interactive init.json config
                          (com.hmdm.BASE_URL). Env: HMDM_URL.
-  --auditor-apk F        Snapdragon Auditor fork APK to adb-install during
+  --auditor-apk F        HugMesh Auditor fork APK to adb-install during
                          attest.
   --auditor-signer-sha256 H
                          Pin: Auditor APK signer cert SHA-256 (fail-closed
@@ -1064,7 +1064,7 @@ cmd_flash() {
 }
 
 # ── verb: attest ───────────────────────────────────────────────────
-# Installs the Snapdragon-forked Auditor and prints the AttestationServer
+# Installs the HugMesh-forked Auditor and prints the AttestationServer
 # pairing runbook. Runs FIRST among the two new Phase-3 verbs (before
 # mdm-enroll) because it needs no device-owner state and captures the
 # hardware trust root on the cleanest possible device state (see
@@ -1414,7 +1414,7 @@ cmd_enroll_no_usb() {
     echo "     coordination server:  ${LOGIN_SERVER}"
     echo "  3. Authenticate with the one-time pre-auth key (SEC-08: single-use,"
     echo "     24h expiry — mint a fresh one if it is stale), or via Casdoor"
-    echo "     OIDC with the snapdragon/headscale group."
+    echo "     OIDC with the hugmesh/headscale group."
     if [ "${SHOW_AUTHKEY}" -eq 1 ]; then
         if [ -n "${AUTHKEY_FILE}" ] && [ -f "${AUTHKEY_FILE}" ]; then
             echo "  --show-authkey: the pre-auth key follows on the NEXT line (shown once):"
@@ -1552,7 +1552,7 @@ cmd_enroll() {
     echo "     coordination server:  ${LOGIN_SERVER}"
     echo "  2. Authenticate with the one-time pre-auth key (SEC-08: single-use,"
     echo "     24h expiry — mint a fresh one if it is stale), or via Casdoor"
-    echo "     OIDC with the snapdragon/headscale group."
+    echo "     OIDC with the hugmesh/headscale group."
     if [ "${SHOW_AUTHKEY}" -eq 1 ]; then
         if [ -n "${AUTHKEY_FILE}" ] && [ -f "${AUTHKEY_FILE}" ]; then
             echo "  --show-authkey: the pre-auth key follows on the NEXT line (shown once):"

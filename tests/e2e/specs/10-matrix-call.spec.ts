@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { onboard, matrixUserId, createRoom, joinRoom, shot } from './helpers';
 
 // Real WebRTC: two browser contexts (fake media) establish a peer connection,
-// signalled over a shared Matrix room via the snapdragon-matrix-ui call module.
+// signalled over a shared Matrix room via the hugmesh-matrix-ui call module.
 test('two users hold a Matrix video call (WebRTC, room-signalled)', async ({ browser }) => {
   const a = await browser.newContext({ ignoreHTTPSErrors: true });
   const b = await browser.newContext({ ignoreHTTPSErrors: true });

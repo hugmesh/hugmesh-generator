@@ -44,21 +44,21 @@ spec:
         # cut-over from the hardcoded apps/30-*/50-* (see header) to avoid
         # duplicate-named Applications.
         elements:
-          - { slug: akkoma,  path: specs/cluster/manifests/akkoma,        namespace: snapdragon-backend,  installed: "false" }
-          - { slug: tuwunel, path: specs/cluster/manifests/tuwunel,       namespace: snapdragon-backend,  installed: "false" }
-          - { slug: phpbb,   path: specs/cluster/manifests/forum,         namespace: snapdragon-forum,    installed: "false" }
-          - { slug: games,   path: specs/cluster/manifests/games,         namespace: snapdragon-games,    installed: "false" }
+          - { slug: akkoma,  path: specs/cluster/manifests/akkoma,        namespace: hugmesh-backend,  installed: "false" }
+          - { slug: tuwunel, path: specs/cluster/manifests/tuwunel,       namespace: hugmesh-backend,  installed: "false" }
+          - { slug: phpbb,   path: specs/cluster/manifests/forum,         namespace: hugmesh-forum,    installed: "false" }
+          - { slug: games,   path: specs/cluster/manifests/games,         namespace: hugmesh-games,    installed: "false" }
           # owncast / tube — GPU-gated x86 optional services (DEFAULT-OFF). Same
           # runtime add/remove model: the installed flag here is mirrored from the
           # installed-services ConfigMap by _opt_render_installed_services. Scaffolded
           # "false" (DEFAULT-OFF baseline + the pre-cut-over no-collision rule).
-          - { slug: owncast, path: specs/cluster/manifests/owncast,       namespace: snapdragon-owncast,  installed: "false" }
-          - { slug: tube,    path: specs/cluster/manifests/tube,          namespace: snapdragon-tube,     installed: "false" }
+          - { slug: owncast, path: specs/cluster/manifests/owncast,       namespace: hugmesh-owncast,  installed: "false" }
+          - { slug: tube,    path: specs/cluster/manifests/tube,          namespace: hugmesh-tube,     installed: "false" }
           # character-studio — VN character-studio FRONTEND remote (DEFAULT-OFF, admin
           # gate). Same runtime add/remove model: the installed flag here is mirrored
           # from the installed-services ConfigMap by _opt_render_installed_services.
           # Scaffolded "false" (DEFAULT-OFF baseline + the pre-cut-over no-collision rule).
-          - { slug: character-studio, path: specs/cluster/manifests/character-studio, namespace: snapdragon-frontend, installed: "false" }
+          - { slug: character-studio, path: specs/cluster/manifests/character-studio, namespace: hugmesh-frontend, installed: "false" }
           # anubis — PUBLIC PoW shield. ENV-CONDITIONAL default: the generator's
           # _opt_render_installed_services() renders the installed-services
           # ConfigMap anubis flag ON for PROD builds ("all shields up") and OFF for
@@ -66,35 +66,35 @@ spec:
           # The scaffold value here stays "false" (the safe test baseline + the
           # pre-cut-over no-collision rule); the ConfigMap mirror is the real
           # toggle this selector reads at runtime.
-          - { slug: anubis,  path: specs/cluster/manifests/anubis,        namespace: snapdragon-frontend, installed: "false" }
+          - { slug: anubis,  path: specs/cluster/manifests/anubis,        namespace: hugmesh-frontend, installed: "false" }
           # coturn — TURN/STUN relay for Matrix WebRTC (DEFAULT-OFF, RUNTIME-ONLY).
           # Like anubis, coturn ships NO baked bootstrap Application: it is wired
           # ONLY here. installed:"false" is the SAFE DEFAULT (no pod, clients keep
           # host-only ICE). Flip to "true" (+ the installed-services ConfigMap
           # coturn flag) to add it on a LIVE cluster — the per-domain add/remove
-          # lever. lands in snapdragon-backend so it shares the TURN shared secret
+          # lever. lands in hugmesh-backend so it shares the TURN shared secret
           # with tuwunel.
-          - { slug: coturn,  path: specs/cluster/manifests/coturn,        namespace: snapdragon-backend,  installed: "false" }
+          - { slug: coturn,  path: specs/cluster/manifests/coturn,        namespace: hugmesh-backend,  installed: "false" }
           # meshbridge — Meshtastic LoRa mesh <-> Matrix bridge (DEFAULT-OFF,
           # RUNTIME-ONLY). Like coturn/anubis, meshbridge ships NO baked bootstrap
           # Application: it is wired ONLY here. installed:"false" is the SAFE
           # DEFAULT (no pod, no radios, no rooms bridged). Flip to "true" (+ the
           # installed-services ConfigMap meshbridge flag) to add it on a LIVE
-          # cluster — the per-domain add/remove lever. Lands in snapdragon-backend
+          # cluster — the per-domain add/remove lever. Lands in hugmesh-backend
           # so the appservice speaks the in-namespace tuwunel CS API (dependsOn
           # tuwunel — greyed in the console when the homeserver is off).
-          - { slug: meshbridge, path: specs/cluster/manifests/meshbridge,  namespace: snapdragon-backend,  installed: "false" }
+          - { slug: meshbridge, path: specs/cluster/manifests/meshbridge,  namespace: hugmesh-backend,  installed: "false" }
           # edge-ai — GPU inference node (OpenAI-compatible model API). DEFAULT-OFF,
           # GPU-gated; the edge_ai node role auto-selects it. installed flag mirrored
           # from the installed-services ConfigMap by _opt_render_installed_services.
-          - { slug: edge-ai, path: specs/cluster/manifests/edge-ai,       namespace: snapdragon-inference, installed: "false" }
+          - { slug: edge-ai, path: specs/cluster/manifests/edge-ai,       namespace: hugmesh-inference, installed: "false" }
           # edge-ai-analysis — task analysis API in front of edge-ai. DEFAULT-OFF,
           # dependsOn edge-ai. Image is a separate build artifact (keep off until built).
-          - { slug: edge-ai-analysis, path: specs/cluster/manifests/edge-ai-analysis, namespace: snapdragon-inference, installed: "false" }
+          - { slug: edge-ai-analysis, path: specs/cluster/manifests/edge-ai-analysis, namespace: hugmesh-inference, installed: "false" }
           # edge-ai-tts — Piper TTS + viseme timeline (VN voice, B3). DEFAULT-OFF, NO
           # dependsOn (CPU-only, self-contained). Image is a separate build artifact
           # (keep off until built).
-          - { slug: edge-ai-tts, path: specs/cluster/manifests/edge-ai-tts, namespace: snapdragon-inference, installed: "false" }
+          - { slug: edge-ai-tts, path: specs/cluster/manifests/edge-ai-tts, namespace: hugmesh-inference, installed: "false" }
         # Keep ONLY installed elements — a slug flipped to "false" is dropped and
         # its Application pruned. This is the runtime add/remove lever.
       selector:
@@ -104,12 +104,12 @@ spec:
     metadata:
       name: "optional-{{ .slug }}"
       labels:
-        app.kubernetes.io/part-of: snapdragon.systems
+        app.kubernetes.io/part-of: hugmesh.systems
         snapdragon.systems/optional-service: "{{ .slug }}"
     spec:
       project: default
       source:
-        repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+        repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
         targetRevision: main
         path: "{{ .path }}"
       destination:

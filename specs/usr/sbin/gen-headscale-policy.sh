@@ -8,22 +8,22 @@
 # FLOW (every step FAIL-CLOSED — on ANY fetch/verify/rollback failure KEEP the
 # last-APPLIED policy.hujson; NEVER wipe to allow-all; if the node has NEVER had
 # a verified export, keep the baked BOOTSTRAP policy):
-#   1. source /usr/lib/snapdragon/registry-verify.sh (REUSE Layer-B's
+#   1. source /usr/lib/hugmesh/registry-verify.sh (REUSE Layer-B's
 #      verify_export / canonical_bytes / verify_sig — NO duplication, so a
 #      canonicalisation drift can never split Layer-A from Layer-B).
-#   2. read /etc/snapdragon/registry/node.env (BFF_EXPORT_URL / BFF_CLIENT_CERT /
+#   2. read /etc/hugmesh/registry/node.env (BFF_EXPORT_URL / BFF_CLIENT_CERT /
 #      BFF_CLIENT_KEY / BFF_CA / MESH_ID — the SAME file + transport Layer-B
-#      uses) and the BAKED /etc/snapdragon/registry/registry-pub.ed25519.
+#      uses) and the BAKED /etc/hugmesh/registry/registry-pub.ed25519.
 #   3. fetch GET <BFF>/bff/admin/device-licenses/export?mesh=<MESH_ID> over the
 #      SAME in-cluster mTLS SUPERADMIN identity.
 #   4. verify_export against its OWN last-good cursor
-#      (/var/lib/snapdragon/headscale-policy/last-good-generation — independent
+#      (/var/lib/hugmesh/headscale-policy/last-good-generation — independent
 #      of Layer-B's cursor so the two layers reconcile at different cadences).
 #   5. render /etc/headscale/policy.hujson from policy.hujson.tmpl by walking
 #      .body.operators[] with jq into the ssh[] edges + the dynamic dst tagOwners.
 #   6. on a CONTENT CHANGE (hash differs) run `headscale policy set -f` (REQUIRED
 #      because headscale runs policy mode:file — DB is not the source in file
-#      mode) and force the server-assigned tags via snapdragon-headscale-forcetags.
+#      mode) and force the server-assigned tags via hugmesh-headscale-forcetags.
 #
 # THE FOUR FIXES (vs main's forgeable policy):
 #   [FIX-SERVERTAG]   dst tags (tag:dev_<fp>, tag:dom_<domain>, tag:mesh_<id>,
@@ -31,13 +31,13 @@
 #                     control-owned in tagOwners; a node cannot self-advertise
 #                     them, so the SSH destination is non-forgeable.
 #   [FIX-DROPMESHRULE] the rendered acls[] DROPS the any-to-any
-#                     tag:snapdragon->tag:snapdragon:* rule and KEEPS only the
+#                     tag:hugmesh->tag:hugmesh:* rule and KEEPS only the
 #                     10.244/10.96 CIDR data-plane rule (k8s, not SSH).
 #   [FIX-DENY22]      headscale ssh is default-deny; the generated ssh[] block
 #                     emits EXACTLY the predicate-permitted edges, so :22 is
 #                     default-deny.
 #   [FIX-OIDC-USERS]  DEFERRED. Until per-tenant Casdoor->headscale OIDC users
-#                     land, the SSH SOURCE side is the advisory tag:snapdragon
+#                     land, the SSH SOURCE side is the advisory tag:hugmesh
 #                     (the reusable preauth key still gates JOIN). The
 #                     load-bearing per-operator SOURCE authenticity + per-key %f
 #                     pinning stay in Layer-B. Layer-A is ADVISORY on the source
@@ -54,28 +54,28 @@
 
 set -uo pipefail
 
-NODE_ENV="/etc/snapdragon/registry/node.env"
-PUB_KEY="/etc/snapdragon/registry/registry-pub.ed25519"
-VERIFY_LIB="/usr/lib/snapdragon/registry-verify.sh"
+NODE_ENV="/etc/hugmesh/registry/node.env"
+PUB_KEY="/etc/hugmesh/registry/registry-pub.ed25519"
+VERIFY_LIB="/usr/lib/hugmesh/registry-verify.sh"
 
 # Layer-A keeps its OWN cache + monotonic cursor, separate from Layer-B's
-# /var/lib/snapdragon/device-registry, so the two layers can be reconciled at
+# /var/lib/hugmesh/device-registry, so the two layers can be reconciled at
 # different cadences (both read the same export generation; a node where only
 # one layer advanced is a transient, self-healing divergence).
-CACHE_DIR="/var/lib/snapdragon/headscale-policy"
+CACHE_DIR="/var/lib/hugmesh/headscale-policy"
 EXPORT_JSON="${CACHE_DIR}/export.json"
 LAST_GOOD="${CACHE_DIR}/last-good-generation"
 
 POLICY_OUT="/etc/headscale/policy.hujson"
 POLICY_TMPL="/etc/headscale/policy.hujson.tmpl"
-FORCETAGS="/usr/sbin/snapdragon-headscale-forcetags"
+FORCETAGS="/usr/sbin/hugmesh-headscale-forcetags"
 
 # Baked per-node privileged SSH local account (the Tailscale-SSH `users` value —
 # the LOCAL unix account a session opens AS, NOT the Casdoor operator). Source of
 # truth = node.env TS_SSH_USER (staged by provision_headscale_policy_sync from
 # resolve_ssh_user); falls back to "admin" so a partially-provisioned control
 # node still renders a usable policy rather than an empty users list.
-LOG_TAG="snapdragon-policy-sync"
+LOG_TAG="hugmesh-policy-sync"
 
 log()  { echo "[${LOG_TAG} $(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; command -v logger >/dev/null 2>&1 && logger -t "${LOG_TAG}" -- "$*" 2>/dev/null || true; }
 warn() { log "WARNING: $*"; }
@@ -118,7 +118,7 @@ _init() {
     BFF_URL="$(read_env BFF_EXPORT_URL)"     || BFF_URL=""
     MTLS_CERT="$(read_env BFF_CLIENT_CERT)"  || MTLS_CERT=""
     MTLS_KEY="$(read_env BFF_CLIENT_KEY)"    || MTLS_KEY=""
-    MTLS_CA="$(read_env BFF_CA)"             || MTLS_CA="/etc/snapdragon/pki/ca-chain.crt"
+    MTLS_CA="$(read_env BFF_CA)"             || MTLS_CA="/etc/hugmesh/pki/ca-chain.crt"
     TS_SSH_USER="$(read_env TS_SSH_USER)"    || TS_SSH_USER=""
     [ -n "${TS_SSH_USER}" ] || TS_SSH_USER="admin"
     MESH_TAG="tag:mesh_$(sanitise_tag "${MESH_ID}")"
@@ -174,13 +174,13 @@ render_policy() {
     #
     # tag:dev_<fp> uses a short, headscale-safe hash of the FULL machineKeyFp so
     # the ACL string is bounded + charset-clean while staying 1:1 with the fp.
-    # The SAME hash is computed by snapdragon-headscale-forcetags so the forced
+    # The SAME hash is computed by hugmesh-headscale-forcetags so the forced
     # tag matches the rendered dst EXACTLY.
     #
     # Compute dev-tag shorthashes in shell (sha256 first 12 hex of the fp) and
     # build BOTH the tagOwners suffix and the per-edge ssh accepts. Doing the
     # hash in shell keeps a single source of truth for the fp->tag mapping shared
-    # with snapdragon-headscale-forcetags (which sources dev_tag_for_fp below).
+    # with hugmesh-headscale-forcetags (which sources dev_tag_for_fp below).
     local fps fp short
     fps="$(jq -r '[ .body.operators[]?.machineKeyFp // empty ] | unique | .[]' "${export_json}" 2>/dev/null)"
 
@@ -196,14 +196,14 @@ render_policy() {
             *" ${short} "*) : ;;
             *)
                 to_suffix="${to_suffix},
-    \"tag:${short}\": [\"snapdragon\"]"
+    \"tag:${short}\": [\"hugmesh\"]"
                 seen_tags="${seen_tags} ${short}"
                 ;;
         esac
     done <<< "${fps}"
 
     # ssh edges: one accept per node (uniq by machineKeyFp). src is the ADVISORY
-    # tag:snapdragon (OPERATOR-IDENTITY open issue: no per-operator tailnet
+    # tag:hugmesh (OPERATOR-IDENTITY open issue: no per-operator tailnet
     # identity until OIDC users land). dst is the SERVER-FORCED tag:dev_<short>.
     # users is the node-local privileged ssh account.
     #
@@ -225,7 +225,7 @@ render_policy() {
         [ -n "${short}" ] || { warn "could not derive dev tag for an fp — skipping that edge (fail-closed: node unreachable, not over-broad)"; continue; }
         local edge
         edge="$(jq -cn --arg sshuser "${TS_SSH_USER}" --arg devtag "tag:${short}" \
-            '{action:"accept",src:["tag:snapdragon"],dst:[$devtag],users:[$sshuser]}' 2>/dev/null)"
+            '{action:"accept",src:["tag:hugmesh"],dst:[$devtag],users:[$sshuser]}' 2>/dev/null)"
         [ -n "${edge}" ] || continue
         ssh_splice="${ssh_splice},$(printf '\n    %s' "${edge}")"
     done <<< "${fps}"
@@ -236,8 +236,8 @@ render_policy() {
     awk '
         {
             line=$0
-            gsub(/@@SNAPDRAGON_TAGOWNERS_DYNAMIC@@/, ENVIRON["SNAP_TO_SUFFIX"], line)
-            gsub(/@@SNAPDRAGON_SSH_EDGES@@/, ENVIRON["SNAP_SSH_SPLICE"], line)
+            gsub(/@@HUGMESH_TAGOWNERS_DYNAMIC@@/, ENVIRON["SNAP_TO_SUFFIX"], line)
+            gsub(/@@HUGMESH_SSH_EDGES@@/, ENVIRON["SNAP_SSH_SPLICE"], line)
             print line
         }
     ' "${POLICY_TMPL}" > "${out}" 2>/dev/null || return 1
@@ -251,7 +251,7 @@ render_policy() {
 }
 
 # dev_tag_for_fp <machineKeyFp> -> "dev_<12hex>" (NO leading tag:). The canonical
-# fp->tag mapping. snapdragon-headscale-forcetags carries a BYTE-IDENTICAL copy of
+# fp->tag mapping. hugmesh-headscale-forcetags carries a BYTE-IDENTICAL copy of
 # this function (sourcing this file would execute main()) so the SERVER-FORCED tag
 # equals the rendered ssh dst EXACTLY. If you change the hash here, change it there
 # too (a drift makes the forced tag != the edge dst => the node is unreachable,
@@ -305,9 +305,9 @@ apply_policy() {
     # Force the server-assigned tags so freshly-approved nodes get
     # tag:dev_<fp>/tag:dom_<domain>/tag:mesh_<id> that the ssh edges name as dst.
     if [ -x "${FORCETAGS}" ]; then
-        "${FORCETAGS}" 2>/dev/null || warn "snapdragon-headscale-forcetags reported an error (some nodes may lack forced tags until next run)"
+        "${FORCETAGS}" 2>/dev/null || warn "hugmesh-headscale-forcetags reported an error (some nodes may lack forced tags until next run)"
     else
-        warn "snapdragon-headscale-forcetags missing — server-forced dst tags NOT applied; generated ssh edges will not match until it runs"
+        warn "hugmesh-headscale-forcetags missing — server-forced dst tags NOT applied; generated ssh edges will not match until it runs"
     fi
     return 0
 }

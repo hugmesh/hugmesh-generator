@@ -116,7 +116,7 @@ static_mode() {
   # (4) Floating first-party :dev image tags must have been pinned (the build's
   #     rewrite_prod_image_tags does this; this asserts it actually happened).
   local dev_imgs
-  dev_imgs="$(grep -rnE "${SELF[@]}" 'image:[[:space:]]*[^[:space:]:]*snapdragon[^[:space:]:]*:dev([[:space:]]|$)' "${tree}" 2>/dev/null || true)"
+  dev_imgs="$(grep -rnE "${SELF[@]}" 'image:[[:space:]]*[^[:space:]:]*hugmesh[^[:space:]:]*:dev([[:space:]]|$)' "${tree}" 2>/dev/null || true)"
   if [ -n "${dev_imgs}" ]; then
     fail "floating first-party :dev image tag(s) survived into the prod tree:"
     printf '      %s\n' "${dev_imgs}" >&2
@@ -193,7 +193,7 @@ runtime_mode() {
   liveimgs="$(kubectl get pods -A -o jsonpath='{range .items[*].spec.containers[*]}{.image}{"\n"}{end}' 2>/dev/null \
       | sort -u || true)"
   local baddev
-  baddev="$(printf '%s\n' "${liveimgs}" | grep -E '(snapdragon[^[:space:]:]*:dev$)|(-dev(:[^[:space:]]+)?$)' || true)"
+  baddev="$(printf '%s\n' "${liveimgs}" | grep -E '(hugmesh[^[:space:]:]*:dev$)|(-dev(:[^[:space:]]+)?$)' || true)"
   if [ -n "${baddev}" ]; then
     fail "running container image(s) use a dev tag/repo:"
     printf '      %s\n' ${baddev} >&2
@@ -212,10 +212,10 @@ runtime_mode() {
   #     answers {"<jsonkey>":"stub"} | "disabled" | "noop" and FAILS the gate.
   #     Pods WITHOUT the annotation are not seam-bearing and are skipped
   #     (default-real). A marker file aggregates failures across the while-subshell.
-  local PROBE_NS="${PROD_HYGIENE_PROBE_NS:-snapdragon-policy}"
+  local PROBE_NS="${PROD_HYGIENE_PROBE_NS:-hugmesh-policy}"
   local probes
   probes="$(kubectl get pods -A \
-      -o jsonpath='{range .items[*]}{.metadata.annotations.snapdragon\.systems/seam-probe}{"\n"}{end}' 2>/dev/null \
+      -o jsonpath='{range .items[*]}{.metadata.annotations.hugmesh\.systems/seam-probe}{"\n"}{end}' 2>/dev/null \
       | awk 'NF>0' | sort -u || true)"
   if [ -z "${probes}" ]; then
     ylw "  ~ no pods advertise a snapdragon.systems/seam-probe annotation (no seam-bearing services to verify)"

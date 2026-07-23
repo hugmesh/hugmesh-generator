@@ -2,7 +2,7 @@
 CLUSTER_DOMAIN autofill, secret-free previews, and the typed-domain flip arming.
 
 The wizard is a THIN front-end onto the CANONICAL driver
-specs/usr/sbin/snapdragon-go-live (subcommands status|list|plan|commit|rollback).
+specs/usr/sbin/hugmesh-go-live (subcommands status|list|plan|commit|rollback).
 Runs the REAL wizard on Qt's offscreen platform (no display needed) and is skipped
 whole when no Qt binding is installed — the rest of the suite stays pure-core.
 No test here ever flips posture: status_text is pinned, providers() is served from
@@ -15,11 +15,11 @@ import pytest
 # must be set BEFORE the first QApplication is created
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.gui.pages import golive as golive_mod   # noqa: E402
-from snapdragon_studio.gui.pages.golive import GOLIVE_PAGE_SLUGS  # noqa: E402
+from hugmesh_studio.gui.pages import golive as golive_mod   # noqa: E402
+from hugmesh_studio.gui.pages.golive import GOLIVE_PAGE_SLUGS  # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -39,9 +39,9 @@ def _pinned_status(monkeypatch):
 
 @pytest.fixture(scope="session")
 def qapp():
-    from snapdragon_studio.gui.qt import QtWidgets
+    from hugmesh_studio.gui.qt import QtWidgets
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture
@@ -157,7 +157,7 @@ def test_inputs_autofill_domain_from_the_bake(wiz, baked_domain):
 
 
 def test_inputs_page_blocks_next_without_a_domain(wiz, monkeypatch, tmp_path):
-    from snapdragon_studio.gui.qt import QtWidgets
+    from hugmesh_studio.gui.qt import QtWidgets
     monkeypatch.setenv("GOLIVE_CLUSTER_DOMAIN_FILE", str(tmp_path / "missing"))
     warned = []
     monkeypatch.setattr(QtWidgets.QMessageBox, "warning",
@@ -194,7 +194,7 @@ def test_generate_preview_shows_the_exact_driver_command(wiz, baked_domain):
     inputs.token_secret.setText("super-secret-token")
     gen = advance_to(wiz, golive_mod.GoLiveGeneratePage)
     cmd = gen.cmd.toPlainText()
-    assert "specs/usr/sbin/snapdragon-go-live" in cmd
+    assert "specs/usr/sbin/hugmesh-go-live" in cmd
     assert " plan " in cmd
     assert "--provider cloudflare-tunnel" in cmd
     assert f"--domain {baked_domain}" in cmd

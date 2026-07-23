@@ -40,7 +40,7 @@ metadata:
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 rules:
   # CRD presence checks (.customResourceDefinitions().withName(crd).get()). A named
   # .get() needs `get`; no list/watch, no create/patch/delete. resourceNames is
@@ -64,7 +64,7 @@ metadata:
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -72,7 +72,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: backups-effector
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
 ---
 # ── Namespaced reads: argocd-server Deployment in `argocd` ──────────────────────
 # (.apps().deployments().inNamespace("argocd").withName("argocd-server").get()).
@@ -87,7 +87,7 @@ metadata:
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
@@ -101,7 +101,7 @@ metadata:
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -109,7 +109,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: backups-effector
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
 ---
 # ── Namespaced reads: velero Deployment in `velero` ─────────────────────────────
 # (.apps().deployments().inNamespace("velero").withName("velero").get()). Same
@@ -122,7 +122,7 @@ metadata:
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments"]
@@ -136,7 +136,7 @@ metadata:
   labels:
     app.kubernetes.io/name: platform-capabilities
     app.kubernetes.io/component: probe-rbac
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -144,4 +144,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: backups-effector
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend

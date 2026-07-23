@@ -1,7 +1,7 @@
-# snapdragon-edge-ai-analysis — the analysis API wrapper image.
+# hugmesh-edge-ai-analysis — the analysis API wrapper image.
 # Build + push to the mesh registry the deployment expects:
-#   docker build -t registry.snapdragon.systems/snapdragon/edge-ai-analysis:main .
-#   docker push  registry.snapdragon.systems/snapdragon/edge-ai-analysis:main
+#   docker build -t registry.hugmesh.systems/hugmesh/edge-ai-analysis:main .
+#   docker push  registry.hugmesh.systems/hugmesh/edge-ai-analysis:main
 # Runs as non-root (uid 65532) with a read-only rootfs (the pod mounts an emptyDir at
 # /tmp). Stateless; delegates all inference to the in-cluster edge-ai Ollama upstream.
 FROM python:3.12-slim

@@ -104,7 +104,7 @@ check("node-storage-a-1" == a["spec"]["template"]["metadata"]["name"].replace("{
 for f in ("kustomization.yaml","pvc.yaml","placement-patch.yaml"):
     check(os.path.isfile(os.path.join(overlay,f)), "placement overlay has %s" % f, "placement overlay missing %s" % f)
 pvc = yaml.safe_load(open(os.path.join(overlay,"pvc.yaml")))
-check(pvc["kind"]=="PersistentVolumeClaim" and pvc["spec"]["storageClassName"]=="snapdragon-local", "PVC binds the node-pinned snapdragon-local StorageClass (WaitForFirstConsumer)", "PVC must use snapdragon-local")
+check(pvc["kind"]=="PersistentVolumeClaim" and pvc["spec"]["storageClassName"]=="hugmesh-local", "PVC binds the node-pinned hugmesh-local StorageClass (WaitForFirstConsumer)", "PVC must use hugmesh-local")
 patch = yaml.safe_load(open(os.path.join(overlay,"placement-patch.yaml")))
 na = patch["spec"]["template"]["spec"]["affinity"]["nodeAffinity"]
 keys = [m["key"] for term in na["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"] for m in term["matchExpressions"]]

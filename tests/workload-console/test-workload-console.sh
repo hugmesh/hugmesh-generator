@@ -41,7 +41,7 @@ svcs = {s["slug"]: s for s in d["spec"]["services"]}
 wc = svcs.get("workloadConsole")
 assert wc is not None, "workloadConsole slug missing"
 assert wc["default"] in (False, "off"), f"default not off: {wc['default']!r}"
-assert wc.get("namespace") == "snapdragon-backend", f"bad ns: {wc.get('namespace')}"
+assert wc.get("namespace") == "hugmesh-backend", f"bad ns: {wc.get('namespace')}"
 assert "apps/14-workload-console-rbac.yaml" in wc.get("apps", []), "app missing"
 rows = wc.get("routeAccessRows", [])
 pats = {r["urlPattern"] for r in rows}
@@ -66,9 +66,9 @@ if command -v python3 >/dev/null; then
   python3 - "${RBAC}" <<'PY'
 import sys, os, glob, yaml
 rbac = sys.argv[1]
-APP_TIER = {"snapdragon-backend","snapdragon-frontend","snapdragon-forum",
-            "snapdragon-games","snapdragon-games-instances","snapdragon-tube","snapdragon-owncast"}
-INFRA = {"snapdragon-pki","snapdragon-policy","vault","devops","observability","kube-system"}
+APP_TIER = {"hugmesh-backend","hugmesh-frontend","hugmesh-forum",
+            "hugmesh-games","hugmesh-games-instances","hugmesh-tube","hugmesh-owncast"}
+INFRA = {"hugmesh-pki","hugmesh-policy","vault","devops","observability","kube-system"}
 P=F=0
 def ok(m):
     global P; P+=1; print("  PASS "+m)
@@ -156,7 +156,7 @@ grep -q "workload-console-rbac" "${APP}" && ok "Application sources the RBAC man
 # ── 6. Route-access rows present in the canonical seed ──────────────────────────
 # Match the INSERT data row (a leading "(" + the gateway literal), NOT the comment lines
 # that merely describe the rows.
-row_present() { grep -qE "^\s*\('snapdragon-be-gateway',\s*'$1'" "${SCHEMA}"; }
+row_present() { grep -qE "^\s*\('hugmesh-be-gateway',\s*'$1'" "${SCHEMA}"; }
 row_present "/bff/superadmin/workloads/\*\*" && ok "superadmin route-access INSERT row seeded" || bad "superadmin route row missing from schema"
 row_present "/bff/admin/workloads/\*\*" && ok "admin route-access INSERT row seeded" || bad "admin route row missing from schema"
 
@@ -177,13 +177,13 @@ gate_wc() {  # $1 = OPTIONAL_SERVICES ; uses ${tree}
   if ! _opt_selected workloadConsole; then
     rm -f "${apps}/14-workload-console-rbac.yaml"
     rm -rf "${tree}/manifests/workload-console-rbac"
-    _opt_drop_rows "${tree}/manifests/route-access/initdb/20-schema.sql" snapdragon-be-gateway \
+    _opt_drop_rows "${tree}/manifests/route-access/initdb/20-schema.sql" hugmesh-be-gateway \
       '/bff/superadmin/workloads/**' '/bff/admin/workloads/**'
   fi
 }
 
 # Count only the INSERT data rows (not the descriptive comment lines).
-count_rows() { grep -cE "^\s*\('snapdragon-be-gateway',\s*'/bff/(super)?admin/workloads/\*\*'" "$1"; }
+count_rows() { grep -cE "^\s*\('hugmesh-be-gateway',\s*'/bff/(super)?admin/workloads/\*\*'" "$1"; }
 
 # DESELECTED (default): prune everything.
 tree="${WORK}/off"; seed_tree "${tree}"

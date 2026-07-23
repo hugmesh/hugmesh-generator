@@ -2,8 +2,8 @@
 # CANONICAL RESERVED PREFIX / USERNAME LIST — single auditable source of truth.
 # =============================================================================
 # These labels are RESERVED: a vanity username / profile handle
-# (<label>.snapdragon.systems, snapdragon.systems/<label>, and the equivalent
-# *.snapdragon.games surfaces) may NEVER be one of these, because each label is
+# (<label>.hugmesh.systems, snapdragon.systems/<label>, and the equivalent
+# *.hugmesh.games surfaces) may NEVER be one of these, because each label is
 # (or may become) a DEDICATED app path-prefix or subdomain route on the
 # fe/be/pki gateways. If a user could register one of these handles their vanity
 # host/path would SHADOW (or be shadowed by) a real platform route — a
@@ -11,7 +11,7 @@
 #
 #   * every dedicated fe/be/pki gateway route PREFIX (path first-segment),
 #   * every reserved service SUBDOMAIN (first DNS label),
-#   * the snapdragon.games app prefixes, and
+#   * the hugmesh.games app prefixes, and
 #   * defensive standard web names (well-known/favicon/robots/health/…).
 #
 # THE RULE (enforced here + in the app repos):
@@ -22,13 +22,13 @@
 # WHO ELSE HOLDS A COPY (keep in sync — see docs/RESERVED-PREFIXES.md):
 #   federation-api   ReservedNames  (vanity-resolve  VanityController)
 #   user-bff-api     ReservedNames  (profile DB / registration)
-#   snapdragon-actions             (registration guard)
+#   hugmesh-actions             (registration guard)
 #   admin-bff-api    ReservedNames  (admin route management)
 #   THIS repo (GitOps)             reserved-prefixes.yaml  <-- canonical source
 #
 # HOW IT IS ENFORCED IN THE CLUSTER:
 #   * reserved-prefixes-configmap.yaml mirrors the `reserved` list below into a
-#     ConfigMap (snapdragon-policy/reserved-prefixes) — the in-cluster auditable
+#     ConfigMap (hugmesh-policy/reserved-prefixes) — the in-cluster auditable
 #     copy the Kyverno policy reads at admission time.
 #   * manifests/policy/reserved-prefixes-policy.yaml (Kyverno ClusterPolicy)
 #     validates Ingress / Gateway-API HTTPRoute hosts (and, defensively, any
@@ -45,7 +45,7 @@
 apiVersion: v1
 kind: ReservedPrefixSpec          # informational kind (not a CRD) — a plain data doc
 metadata:
-  name: snapdragon-reserved-prefixes
+  name: hugmesh-reserved-prefixes
   # Bump when the list changes so app-repo copies can detect a newer source.
   # revision 1 -> 2: added the publicly-routable homeserver surface prefixes
   # (`media`, `_synapse`) that the route-access seed already deploys, plus the
@@ -64,14 +64,14 @@ metadata:
   # vanity `owncast.`/`wiki.` handle is forbidden before any future subdomain ships.
   # revision 3 -> 4: route-consistency check (stage 3) caught two DEPLOYED
   # publicly-routable prefixes the YAML was missing — `character-studio` (the
-  # `/character-studio/**` fe-gateway route to snapdragon-character-studio-ui,
+  # `/character-studio/**` fe-gateway route to hugmesh-character-studio-ui,
   # apps/20-gateway-fe.yaml route[character-studio-ui].path) and `v1` (the
   # `/v1/analyze/**` be-gateway route to the edge-ai-analysis service,
   # apps/20-gateway-be.yaml route[edge-ai-analysis].path, also seeded in
   # route-access schema.sql as url_pattern '/v1/analyze/**'). The app-repo
   # ReservedNames copies MUST add `character-studio` + `v1` too to stay in sync.
   # revision 4 -> 5: parity fix for the gateway CanonicalSeed fe() anonymous-SPA-
-  # shell + public-federation-reads rows added by snapdragon-gateway PR #72 (the
+  # shell + public-federation-reads rows added by hugmesh-gateway PR #72 (the
   # same rows were dual-write-added to route-access schema.sql, see
   # manifests/route-access/initdb/20-schema.sql fe-gateway section). Most of
   # those new url_patterns first-segment onto already-reserved labels (`assets`,
@@ -83,7 +83,7 @@ metadata:
   # `favicon` label, since the validator matches literal path segments, not
   # prefixes of them). The app-repo ReservedNames copies should add these four
   # too to stay in sync.
-  # revision 5 -> 6: route-consistency check flags `ai` (host `ai.snapdragon.systems`,
+  # revision 5 -> 6: route-consistency check flags `ai` (host `ai.hugmesh.systems`,
   # apps/20-gateway-be.yaml route[edge-ai].host + route[edge-ai-analysis].host — the
   # edge-AI inference tier, model API + `/v1/analyze/**` analysis API) as a DEPLOYED
   # publicly-routable host the YAML was missing, introduced by PR #189 (commit
@@ -91,7 +91,7 @@ metadata:
   # should add `ai` too to stay in sync.
   # revision 6 -> 7: reserve `hmdm` for the Headwind MDM optional-service's
   # tailnet-only superadmin-gateway routes (`/hmdm/manage/**` human console,
-  # `/hmdm/rest/**` device check-in — both on snapdragon-superadmin-gateway,
+  # `/hmdm/rest/**` device check-in — both on hugmesh-superadmin-gateway,
   # apps/22-gateway-superadmin.yaml). Ships ATOMICALLY with the route in the
   # same PR that adds apps/23-headwind.yaml (NOT a forum/phpbb-style forward-
   # reserve — see the "planned" subsection for that distinct category). The
@@ -99,7 +99,7 @@ metadata:
   # revision 7 -> 8: reserve `attest` for the AttestationServer optional-
   # service's tailnet-only superadmin-gateway routes (`/attest/auditor/**`
   # device/Auditor-app check-in, `/attest/api/status` device status,
-  # `/attest/api/**` human console — all on snapdragon-superadmin-gateway,
+  # `/attest/api/**` human console — all on hugmesh-superadmin-gateway,
   # apps/22-gateway-superadmin.yaml). Ships ATOMICALLY with the routes in the
   # same PR that adds apps/24-attestation-server.yaml — same rationale as
   # `hmdm`, the literal route first-segment, not the app name. The four
@@ -135,7 +135,7 @@ spec:
     - superadmin
     # `hmdm`: Headwind MDM's device console + device check-in are served at
     # /hmdm/manage/** and /hmdm/rest/** on the SAME TAILNET superadmin-gateway
-    # `superadmin` above is reserved for (snapdragon-superadmin-gateway,
+    # `superadmin` above is reserved for (hugmesh-superadmin-gateway,
     # apps/22-gateway-superadmin.yaml) — a DEDICATED first-segment route prefix,
     # same rationale as `superadmin`. The app-repo ReservedNames copies SHOULD
     # add `hmdm` too to stay in sync.
@@ -143,7 +143,7 @@ spec:
     # `attest`: AttestationServer's device/Auditor-app check-in + human console
     # are served at /attest/auditor/**, /attest/api/status, /attest/api/** on the
     # SAME TAILNET superadmin-gateway `superadmin` above is reserved for
-    # (snapdragon-superadmin-gateway, apps/22-gateway-superadmin.yaml) — a
+    # (hugmesh-superadmin-gateway, apps/22-gateway-superadmin.yaml) — a
     # DEDICATED first-segment route prefix, same rationale as `hmdm`. The
     # app-repo ReservedNames copies SHOULD add `attest` too to stay in sync.
     - attest
@@ -165,7 +165,7 @@ spec:
     - matrix
     - mastodon
     # `ai`: the edge-AI inference tier is served on its own host
-    # `ai.snapdragon.systems` (apps/20-gateway-be.yaml route[edge-ai].host +
+    # `ai.hugmesh.systems` (apps/20-gateway-be.yaml route[edge-ai].host +
     # route[edge-ai-analysis].host — the raw model API catchall plus the more
     # specific `/v1/analyze/**` analysis API) — a DEDICATED reserved host, so a
     # vanity `ai` handle would shadow it. Added by the route-consistency check
@@ -185,7 +185,7 @@ spec:
     # (gateway_route_access seed), a DEDICATED first-segment route prefix — so it
     # must be reserved too. Added by the route-consistency check (it is the ONE
     # deployed prefix beyond the original 60-label union). The app-repo
-    # ReservedNames copies (federation-api/user-bff-api/snapdragon-actions/
+    # ReservedNames copies (federation-api/user-bff-api/hugmesh-actions/
     # admin-bff-api) MUST add `pleroma` as well to stay in sync.
     - pleroma
     - oauth
@@ -230,7 +230,7 @@ spec:
     - argocd
     - gitlab
     - registry
-    # --- snapdragon.games app prefixes ---
+    # --- hugmesh.games app prefixes ---
     - games
     - play
     - wasm
@@ -278,7 +278,7 @@ spec:
     # PROACTIVELY so a user cannot squat the handle before the service ships. The
     # phpBB community forum is referenced as a planned/announced surface in
     # snapdragon.systems/src/app/announcements/announcement.model.ts. When the
-    # forum lands (a `forum.snapdragon.systems` subdomain + a be/fe gateway route),
+    # forum lands (a `forum.hugmesh.systems` subdomain + a be/fe gateway route),
     # move these up into the routable categories above; until then they are a
     # forward-reserve, NOT drift. The app-repo ReservedNames copies should add them
     # too so the handle is forbidden at registration before the route exists.

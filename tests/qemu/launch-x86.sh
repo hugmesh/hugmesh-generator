@@ -20,8 +20,8 @@
 # Same resolution order as launch-pi.sh so one WORK_DIR/role selects one
 # artifact everywhere:
 #   1. --img FILE                                       explicit
-#   2. ${WORK_DIR}/snapdragon-host-*-${ROLE}-*.img       (newest, role match)
-#   3. ${WORK_DIR}/snapdragon-host-*.img / snapdragon-x86-*.img
+#   2. ${WORK_DIR}/hugmesh-host-*-${ROLE}-*.img       (newest, role match)
+#   3. ${WORK_DIR}/hugmesh-host-*.img / hugmesh-x86-*.img
 #   4. ${WORK_DIR}/*.img (excluding kernel/initramfs/squashfs)
 # WORK_DIR defaults to ${REPO}/x86-host-build (build-x86-host-stage4.sh's
 # work dir; see its line `WORK_DIR="$(pwd)/x86-host-build"`); override with -w.
@@ -104,7 +104,7 @@ Lifecycle:
 
 Examples:
   $0 --foreground
-  $0 --img /var/tmp/snap/snapdragon-host-amd64-2026.0.img --ui-port 9443
+  $0 --img /var/tmp/snap/hugmesh-host-amd64-2026.0.img --ui-port 9443
   $0 --accel tcg --cpu max          # force pure emulation
 EOF
 exit "${1:-0}"
@@ -152,10 +152,10 @@ command -v qemu-img           >/dev/null || die "missing qemu-img"
 autodetect_img() {
     local d="$1" role="$2" c
     for c in \
-        "${d}"/snapdragon-host-*-"${role}"-*.img \
-        "${d}"/snapdragon-host-*.img \
-        "${d}"/snapdragon-x86-*.img \
-        "${d}"/snapdragon-*-"${role}"-*.img ; do
+        "${d}"/hugmesh-host-*-"${role}"-*.img \
+        "${d}"/hugmesh-host-*.img \
+        "${d}"/hugmesh-x86-*.img \
+        "${d}"/hugmesh-*-"${role}"-*.img ; do
         c="$(ls -1t ${c} 2>/dev/null | head -1 || true)"
         [ -n "${c}" ] && { printf '%s\n' "${c}"; return 0; }
     done

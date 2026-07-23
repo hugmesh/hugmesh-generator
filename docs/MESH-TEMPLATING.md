@@ -19,7 +19,7 @@ The Handlebars renderer (and the YAML schema loader) require **Node**. In this
 pilot they run on the **BUILD HOST only**, which is fine.
 
 On the mesh node, the brand profile is reconciled by a **fail-closed root cron**
-(`snapdragon-domain-reconcile`) that writes to the filesystem as **root**.
+(`hugmesh-domain-reconcile`) that writes to the filesystem as **root**.
 **Node must NEVER be invoked as root on that path.** When Phase 6 wires rendering
 onto the mesh node, the reconcile path MUST either:
 
@@ -90,7 +90,7 @@ rule) in both the sed script and the Handlebars wrapper.
 * **frozen protocol constants** — `snapdragon.systems/*` label KEYS and the
   `X-Snapdragon-Local` wire header are **out-of-scope-for-tokenization**: they are
   protocol/wire identity (not tenant brand) and must stay literal in every emitted
-  repo. A blind reverse-substitution that rebrands the literal `snapdragon` would
+  repo. A blind reverse-substitution that rebrands the literal `hugmesh` would
   corrupt these — do not tokenize them.
 
 ### Emit-time secret scanner — `scripts/secret-scan.sh` (fail-closed)
@@ -156,7 +156,7 @@ The `.conf` path is **not** removed; the two shapes stay compatible.
 
 Phase 1 templated only ArgoCD `Application` CRDs (thin pointer repos). Phase 2
 proves the **overlay-primary, skeleton-fallback** model on a real app repo:
-`snapdragon-login-ui`. It is **additive and opt-in** — no default path changes.
+`hugmesh-login-ui`. It is **additive and opt-in** — no default path changes.
 
 ## Two-tier maintenance model (fork-and-tokenize is BANNED)
 
@@ -179,9 +179,9 @@ proves the **overlay-primary, skeleton-fallback** model on a real app repo:
   | Overlay template | Token | Rebrands |
   |---|---|---|
   | `src/index.html.hbs` | `{{BRAND_TITLE}}` | the `<title>` tag |
-  | `package.json.hbs` | `{{NPM_SCOPE}}` (ORG-derived, lowercased slug) | the `@snapdragon/*` npm scope |
+  | `package.json.hbs` | `{{NPM_SCOPE}}` (ORG-derived, lowercased slug) | the `@hugmesh/*` npm scope |
   | `federation-base.js.hbs` | `{{HOST_NAME}}` (`<brand>-host`) | the federation host name |
-  | `.gitlab-ci.yml.hbs` | `{{GENERATOR_ORG_GROUP}}` (`<org-slug>/snapdragon-generator`) | the CI `include:` project org/group |
+  | `.gitlab-ci.yml.hbs` | `{{GENERATOR_ORG_GROUP}}` (`<org-slug>/hugmesh-generator`) | the CI `include:` project org/group |
 
   Deliberately **left untemplated** (grounding): `nginx.conf` (brand-neutral),
   `docker-entrypoint.d/*` (runtime env-injected), the `X-Snapdragon-Local` wire
@@ -299,7 +299,7 @@ Unchanged, now applied per-repo across the full set: `render-recipe.js`,
 
 # Phase 6 — hardening the ROOT mesh-node reconcile RENDER path
 
-The root cron `specs/usr/sbin/snapdragon-domain-reconcile` fetches a SIGNED
+The root cron `specs/usr/sbin/hugmesh-domain-reconcile` fetches a SIGNED
 (#118, Ed25519 + strict-monotonic) cross-domain export, synthesises a transient
 brand profile per entry, and drives the generator **as root**. The signature
 proves AUTHENTICITY, **not CONTENT** — a malicious-but-authentic export is the
@@ -538,7 +538,7 @@ lockout.
   client-cert required** (issuer must be in the cross-mesh CA trust bundle;
   anonymous/bearer pulls refused).
 * **`specs/cluster/manifests/mesh-harbor/`** — the cross-mesh domain-creation
-  publish Action: per-tenant Harbor project (`snapdragon-<brand>`), a pull-only
+  publish Action: per-tenant Harbor project (`hugmesh-<brand>`), a pull-only
   project-scoped robot for the foreign mesh (secret written once into Vault),
   a push-only robot for the tenant build. Extends the Phase-5 provision job's
   idempotent reconcile; the foreign mesh never receives admin or cross-project
@@ -599,8 +599,8 @@ markers). A missing optional `from` no-ops (presence-tolerant, like anchors);
 generator" would be a non-functional placeholder masquerading as the build
 system, so an unpullable base fails the render). This closes the gap where
 `GENERATOR_ORG_GROUP` / 13d presumed a tenant-hosted
-`<org-slug>/snapdragon-generator` that nothing ever rendered. Deliberately
-narrow: README display brand (`Snapdragon cluster` → `{{BRAND_TITLE}} cluster`),
+`<org-slug>/hugmesh-generator` that nothing ever rendered. Deliberately
+narrow: README display brand (`HugMesh cluster` → `{{BRAND_TITLE}} cluster`),
 the CI include org/group, and the branding doc — whose per-org FILENAME is the
 `renames[]` pilot (`docs/BRANDING.md` → `docs/BRANDING-{{ORG_SLUG}}.md`;
 `ORG_SLUG` is registered live in `tokens.json`, derived from the single ORG slug
@@ -609,7 +609,7 @@ rule, value-identical to `NPM_SCOPE`). Everything else — `Makefile`,
 tenant copy keeps `make stack-up` (building the local mesh) working; the
 hermetic archetype test asserts exactly that. `repos[]` rows take
 `{name: generator, archetype: generator}` (base resolves to
-`snapdragon-generator` via the standard `snapdragon-<name>` rule). The tenant
+`hugmesh-generator` via the standard `hugmesh-<name>` rule). The tenant
 seeds their OWN `brands/<brand>.yaml` in their copy; the pipeline never
 pre-writes one.
 
@@ -621,7 +621,7 @@ pre-writes one.
 cache, and a 40-hex sha is fetched directly (NOTE: sha fetch needs the server to
 allow sha-in-want — `uploadpack.allowAnySHA1InWant` or `allowReachableSHA1InWant`;
 some Forgejo/GitHub configs disable it, in which case pin a TAG instead). The
-overlay tree records the ref as a one-line `.snapdragon-base-ref` marker (same
+overlay tree records the ref as a one-line `.hugmesh-base-ref` marker (same
 travels-with-the-tree idiom as the Phase-7 base-origin marker; no `--ref` = no
 marker = byte-identical default trees), and the publish tail stamps it into the
 provenance as `base.ref` (omitted when absent — pre-versioning manifests

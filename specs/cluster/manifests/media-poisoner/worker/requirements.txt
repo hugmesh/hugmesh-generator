@@ -1,4 +1,4 @@
-# Lean, CPU-portable baseline for snapdragon-media-poisoner.
+# Lean, CPU-portable baseline for hugmesh-media-poisoner.
 # These three pins are all the SHIPPED (lean) perturbation needs, so the image
 # builds + runs on any arch, including a CPU-only test node. The GPU/SD-VAE PGD
 # and Glaze/Nightshade reference path adds torch + diffusers — kept OUT of this

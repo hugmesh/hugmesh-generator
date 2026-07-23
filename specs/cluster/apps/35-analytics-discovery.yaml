@@ -1,6 +1,6 @@
 # Analytics DISCOVERY FLOOR — the AUTO-sync floor of the split analytics bundle.
 #
-# The previous single snapdragon-analytics app (auto-sync prune+selfHeal over the
+# The previous single hugmesh-analytics app (auto-sync prune+selfHeal over the
 # whole kafka+clickhouse bundle) was split (see docs/HEAVY-TIER.md) into:
 #   * THIS app (35-analytics-discovery)  — AUTO-sync, lightweight, arch-agnostic:
 #       just the clickhouse/kafka ClusterIP Services, so their DNS always resolves
@@ -14,17 +14,17 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: snapdragon-analytics-discovery
+  name: hugmesh-analytics-discovery
   namespace: devops
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/analytics/discovery
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

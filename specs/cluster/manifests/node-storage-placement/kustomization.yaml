@@ -4,7 +4,7 @@
 # storage-pvc, storage-node, storage-requested-gi).
 #
 # It produces TWO things for the assigned service:
-#   1. a PVC (pvc.yaml) bound to the node-pinned local-path StorageClass (snapdragon-local) —
+#   1. a PVC (pvc.yaml) bound to the node-pinned local-path StorageClass (hugmesh-local) —
 #      WaitForFirstConsumer + the per-node nodePathMap entry (node-agent PR6) bind it on the
 #      pool's node, so the PV lands where the disk physically is (PV-BINDS-TO-CORRECT-NODE);
 #   2. a nodeAffinity patch (placement-patch.yaml) pinning the service's pod to that node, so

@@ -24,24 +24,24 @@ import pytest
 # must be set BEFORE the first QApplication is created
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
 import json                                                    # noqa: E402
 
-from snapdragon_studio.core import flash_targets as ft        # noqa: E402
-from snapdragon_studio.core.flash_targets import FlashTarget  # noqa: E402
-from snapdragon_studio.core.platform_info import HostInfo     # noqa: E402
-from snapdragon_studio.gui import wizard as wizard_mod        # noqa: E402
-from snapdragon_studio.gui.pages import _device_table as dt_mod  # noqa: E402
-from snapdragon_studio.gui.qt import Qt, QtCore, QtWidgets    # noqa: E402
+from hugmesh_studio.core import flash_targets as ft        # noqa: E402
+from hugmesh_studio.core.flash_targets import FlashTarget  # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo     # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod        # noqa: E402
+from hugmesh_studio.gui.pages import _device_table as dt_mod  # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtCore, QtWidgets    # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 GIB = 1 << 30
 
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
-                has_kvm=False, is_root=False, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 
 # two canned attached devices: a mounted, labelled USB stick and a bare (unmounted) SD
 SDB = FlashTarget("/dev/sdb", 16 * GIB, "SanDisk Ultra", "usb", True, "usb",
@@ -52,18 +52,18 @@ MMC = FlashTarget("/dev/mmcblk0", 32 * GIB, "SD32G", "", False, "mmc")
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("SNAPDRAGON_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture
@@ -76,7 +76,7 @@ def wiz(qapp):
 
 
 def advance_to(wiz, page_cls):
-    from snapdragon_studio.core.config import WIZARD_PAGE_SLUGS
+    from hugmesh_studio.core.config import WIZARD_PAGE_SLUGS
     for _ in range(len(WIZARD_PAGE_SLUGS) + 1):
         page = wiz.currentPage()
         if isinstance(page, page_cls):
@@ -243,12 +243,12 @@ def test_two_devices_take_two_different_images_and_flash_sequentially(monkeypatc
     # execution: sequential on ProgressPage, each argv a flash-disk.sh call — never dd.
     # Each entry's CONCRETE built image (recorded per entry during the run) rides
     # --artifact, so the per-row pick is honored even when role globs would collide.
-    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets",
+    monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets",
                         lambda: [SDB, MMC])
     page = _progress_page(wiz)
     page._entry_artifacts = {
-        "be.rpi5": "/out/snapdragon-rpi5-arm64-backend-1.img",
-        "omnibus.x86": "/out/snapdragon-host-amd64-2.img"}
+        "be.rpi5": "/out/hugmesh-rpi5-arm64-backend-1.img",
+        "omnibus.x86": "/out/hugmesh-host-amd64-2.img"}
     recorded = []
 
     def fake_start(target, argv=None):
@@ -262,9 +262,9 @@ def test_two_devices_take_two_different_images_and_flash_sequentially(monkeypatc
         assert "dd" not in argv
     assert ("--role", "be") in zip(recorded[0][1], recorded[0][1][1:])
     assert ("--role", "omnibus") in zip(recorded[1][1], recorded[1][1][1:])
-    assert ("--artifact", "/out/snapdragon-rpi5-arm64-backend-1.img") in \
+    assert ("--artifact", "/out/hugmesh-rpi5-arm64-backend-1.img") in \
         zip(recorded[0][1], recorded[0][1][1:])
-    assert ("--artifact", "/out/snapdragon-host-amd64-2.img") in \
+    assert ("--artifact", "/out/hugmesh-host-amd64-2.img") in \
         zip(recorded[1][1], recorded[1][1][1:])
 
 
@@ -276,7 +276,7 @@ def test_plan_toctou_identity_change_skips_that_device(monkeypatch, wiz):
     _set_role(build.device_table, 0, dt_mod.ROLE_FLASH)
     assert build.validatePage() is True and len(wiz.flash_plan) == 1
     swapped = FlashTarget("/dev/sdb", 64 * GIB, "Some Other Stick", "usb", True, "usb")
-    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets",
+    monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets",
                         lambda: [swapped])
     page = _progress_page(wiz)
     page._entry_artifacts = {wiz.flash_plan[0].entry_id: "/out/x.img"}
@@ -305,7 +305,7 @@ def test_plan_identity_recheck_is_fresh_per_assignment(monkeypatch, wiz):
     c1.setCurrentIndex(c1.findData("omnibus.x86"))
     assert build.validatePage() is True and len(wiz.flash_plan) == 2
     attached = [[SDB, MMC]]                     # mutated mid-run below
-    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets",
+    monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets",
                         lambda: list(attached[0]))
     page = _progress_page(wiz)
     page._entry_artifacts = {"be.rpi5": "/out/a.img", "omnibus.x86": "/out/b.img"}
@@ -332,7 +332,7 @@ def test_plan_without_a_recorded_artifact_fails_safe(monkeypatch, wiz):
     _populate(build.device_table, [SDB])
     _set_role(build.device_table, 0, dt_mod.ROLE_FLASH)
     assert build.validatePage() is True and len(wiz.flash_plan) == 1
-    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets",
+    monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets",
                         lambda: [SDB])
     page = _progress_page(wiz)
     page._entry_artifacts = {}                  # nothing recorded for this run
@@ -349,7 +349,7 @@ def test_abort_clears_the_flash_queue_so_no_chain_start_after_cancel(monkeypatch
     _flash_done must NOT chain-start the next destructive flash."""
     build = advance_to(wiz, wizard_mod.BuildPage)
     _populate(build.device_table, [SDB, MMC])
-    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets",
+    monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets",
                         lambda: [SDB, MMC])
     page = _progress_page(wiz)
     page._entry_artifacts = {"e1": "/out/a.img", "e2": "/out/b.img"}
@@ -436,7 +436,7 @@ def test_slow_scan_never_blocks_the_main_thread(monkeypatch, qapp, wiz):
     def slow_list_targets():
         release.wait(5.0)                                # a wedged lsblk
         return [SDB]
-    monkeypatch.setattr("snapdragon_studio.core.flash_targets.list_targets",
+    monkeypatch.setattr("hugmesh_studio.core.flash_targets.list_targets",
                         slow_list_targets)
     build = advance_to(wiz, wizard_mod.BuildPage)
     t0 = time.monotonic()
@@ -481,14 +481,14 @@ def test_run_records_each_entrys_artifact_by_snapshot_diff(wiz, tmp_path):
         with open(os.path.join(str(tmp_path), name), "w", encoding="utf-8") as fh:
             fh.write("x")
     page._on_entry_start(0)
-    _write("snapdragon-rpi5-arm64-backend-1.img")
+    _write("hugmesh-rpi5-arm64-backend-1.img")
     page._on_entry_done(0, 0)
     page._on_entry_start(1)
-    _write("snapdragon-jetson-arm64-backend-2.img")
+    _write("hugmesh-jetson-arm64-backend-2.img")
     page._on_entry_done(1, 0)
     assert page._entry_artifacts == {
-        "be.rpi5": os.path.join(str(tmp_path), "snapdragon-rpi5-arm64-backend-1.img"),
-        "be.jetson": os.path.join(str(tmp_path), "snapdragon-jetson-arm64-backend-2.img")}
+        "be.rpi5": os.path.join(str(tmp_path), "hugmesh-rpi5-arm64-backend-1.img"),
+        "be.jetson": os.path.join(str(tmp_path), "hugmesh-jetson-arm64-backend-2.img")}
     page.driver = None                          # keep the wiz teardown inert
 
 

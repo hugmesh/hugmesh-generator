@@ -16,7 +16,7 @@ for i in $(seq 1 20); do curl -s "${B}/bff/admin/isos" >/dev/null 2>&1 && break;
 echo "== admin BFF: route-access + ISO links =="
 # admin@ is seeded admin; register to create the account, grab the token.
 ATOK="$(curl -s -XPOST "${B}/bff/register/google" -H 'content-type: application/json' \
-  -d '{"email":"admin@snapdragon.systems"}' | jqp 'd["token"]')"
+  -d '{"email":"admin@hugmesh.systems"}' | jqp 'd["token"]')"
 [ -n "${ATOK}" ] && ok "admin session obtained" || bad "no admin token"
 
 n0="$(curl -s "${B}/bff/admin/route-access" -H "authorization: Bearer ${ATOK}" | jqp 'len(d["rules"])')"
@@ -24,7 +24,7 @@ n0="$(curl -s "${B}/bff/admin/route-access" -H "authorization: Bearer ${ATOK}" |
 
 n1="$(curl -s -XPOST "${B}/bff/admin/route-access" -H "authorization: Bearer ${ATOK}" \
   -H 'content-type: application/json' \
-  -d '{"gateway":"snapdragon-be-gateway","url_pattern":"/api/admin/**","role":"ROLE_ADMIN"}' | jqp 'len(d["rules"])')"
+  -d '{"gateway":"hugmesh-be-gateway","url_pattern":"/api/admin/**","role":"ROLE_ADMIN"}' | jqp 'len(d["rules"])')"
 [ "${n1}" -eq $((n0 + 1)) ] 2>/dev/null && ok "admin added a role->URL rule" || bad "add rule failed (${n1})"
 
 rid="$(curl -s "${B}/bff/admin/route-access" -H "authorization: Bearer ${ATOK}" | jqp 'd["rules"][-1]["id"]')"

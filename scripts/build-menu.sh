@@ -57,13 +57,13 @@ die()  { printf '%s[build-menu] ERROR:%s %s\n' "${C_RED}" "${C_RST}" "$*" >&2; e
 case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]*) UTF8=1 ;; *) UTF8=0 ;; esac
 # The Docker builder image tag (matches the Makefile's IMAGE), used to spot a
 # docker-path build whose in-container scripts are invisible to host pgrep.
-BUILDER_IMAGE="${IMAGE:-snapdragon-builder}"
+BUILDER_IMAGE="${IMAGE:-hugmesh-builder}"
 
 # ── Persistent state (user-writable; WORK_DIR/out is often root-owned) ──────────
 # Build state + saved menu options live here so a relaunch remembers your choices
 # AND can re-attach to a running build. Kept OUT of WORK_DIR on purpose: a NATIVE
 # build chowns WORK_DIR to root, which would make a state dir under it unwritable.
-STATE_DIR="${SNAP_MENU_STATE:-${XDG_STATE_HOME:-${HOME}/.local/state}/snapdragon-build-menu}"
+STATE_DIR="${SNAP_MENU_STATE:-${XDG_STATE_HOME:-${HOME}/.local/state}/hugmesh-build-menu}"
 mkdir -p "${STATE_DIR}" 2>/dev/null || STATE_DIR="$(mktemp -d)"
 PID_FILE="${STATE_DIR}/current.pid"
 META_FILE="${STATE_DIR}/current.meta"
@@ -259,7 +259,7 @@ if [ -z "${NO_TUI:-}" ] && [ -t 0 ] && [ -t 1 ] \
    && [ "${TERM:-dumb}" != dumb ] && command -v whiptail >/dev/null 2>&1; then
     HAVE_TUI=1
 fi
-WT_TITLE="Snapdragon Image Builder"
+WT_TITLE="HugMesh Image Builder"
 
 # _u STRING… — return STRING with the handful of non-ASCII glyphs the menu labels
 # use (em/en dash, ellipsis, guillemets, arrows, star, box-art, bullets) folded to
@@ -778,7 +778,7 @@ build_make_cmd() {
                 [ -n "${OPT_HOME_DEVICE}" ]  && bf+=" --home-device ${OPT_HOME_DEVICE}"
                 [ -n "${OPT_HOME_BACKUP}" ]  && bf+=" --home-backup ${OPT_HOME_BACKUP}"
                 [ "${OPT_HOME_ENCRYPTED}" = yes ] && bf+=" --home-encrypted"
-                # unaffiliated: --home-seed-code seeds the Snapdragon stack — hard conflict
+                # unaffiliated: --home-seed-code seeds the HugMesh stack — hard conflict
                 { [ "${unaff}" = no ] && [ -n "${OPT_HOME_SEED}" ] && [ "${OPT_HOME_SEED}" != none ]; } && bf+=" --home-seed-code ${OPT_HOME_SEED}"
                 [ -n "${OPT_HOME_ARCHIVE}" ] && bf+=" --include-home-archive ${OPT_HOME_ARCHIVE}"
                 ;;
@@ -980,10 +980,10 @@ draw_monitor() {
     [ -t 1 ] && printf '\033[2J\033[H' || printf '\n'
     if [ "${UTF8}" = 1 ]; then
         printf '%s%s  ╔══════════════════════════════════════════════════════════════════╗%s\n' "${C_BLD}" "${C_CYN}" "${C_RST}"
-        printf '%s%s  ║  Snapdragon Image Build — live monitor                            ║%s\n' "${C_BLD}" "${C_CYN}" "${C_RST}"
+        printf '%s%s  ║  HugMesh Image Build — live monitor                            ║%s\n' "${C_BLD}" "${C_CYN}" "${C_RST}"
         printf '%s%s  ╚══════════════════════════════════════════════════════════════════╝%s\n\n' "${C_BLD}" "${C_CYN}" "${C_RST}"
     else
-        printf '%s%s  == Snapdragon Image Build - live monitor ==%s\n\n' "${C_BLD}" "${C_CYN}" "${C_RST}"
+        printf '%s%s  == HugMesh Image Build - live monitor ==%s\n\n' "${C_BLD}" "${C_CYN}" "${C_RST}"
     fi
     printf '  %sBuilding:%s %s\n'   "${C_BLD}" "${C_RST}" "${desc}"
     printf '  %sPath:%s %s   %sElapsed:%s %02d:%02d:%02d   %sLog:%s %s\n\n' \
@@ -1168,7 +1168,7 @@ branding_screen() {
 # archive / restore an encrypted backup) + the optional source-code seed.
 home_screen() {
     # Optional arg 'noseed' (the unaffiliated desktop): hide the source-code seed
-    # row — --home-seed-code seeds the Snapdragon stack and is a hard conflict there.
+    # row — --home-seed-code seeds the HugMesh stack and is a hard conflict there.
     local noseed="${1:-}"
     while true; do
         local c
@@ -1197,7 +1197,7 @@ home_screen() {
             backup) OPT_HOME_BACKUP="$(ui_input "Home backup" "restore: the encrypted backup FILE, or 'auto' to find it on a USB (--home-backup; empty = none)" "${OPT_HOME_BACKUP}")" ;;
             enc)    OPT_HOME_ENCRYPTED="$([ "${OPT_HOME_ENCRYPTED}" = yes ] && echo no || echo yes)" ;;
             seed)   local sd
-                    sd="$(ui_menu "Seed source code" "--home-seed-code — drop the Snapdragon source tree into ~/snapdragon-stack:" \
+                    sd="$(ui_menu "Seed source code" "--home-seed-code — drop the HugMesh source tree into ~/hugmesh-stack:" \
                         none  "none  — no source seed (default)" \
                         repos "repos — just the code" \
                         stack "stack — code + docker-compose stack runner" \
@@ -1380,7 +1380,7 @@ single_role_screen() {
                 desktop "desktop — full desktop client image" \
                 standalone-thin "★ standalone-thin — hardened NVIDIA desktop (LXDE; no mesh/SSO)" \
                 standalone-thick "★ standalone-thick — most-capable Plasma NVIDIA desktop (no mesh/SSO)" \
-                standalone-unaffiliated "★ standalone-unaffiliated — UNAFFILIATED desktop: plain hardened Gentoo (thick/Plasma weight), NO Snapdragon" \
+                standalone-unaffiliated "★ standalone-unaffiliated — UNAFFILIATED desktop: plain hardened Gentoo (thick/Plasma weight), NO HugMesh" \
                 back "‹ back")" || return 0
             [ "${role}" = back ] && return 0
             case "${role}" in
@@ -1482,7 +1482,7 @@ standalone_screen() {
         unaff=yes; weight="UNAFFILIATED (plain Gentoo, thick weight)"
     fi
     prompt="Hardened NVIDIA standalone desktop — no mesh, no SSO, local login. Installed system is LUKS2-encrypted (you set the root passphrase at install)."
-    [ "${unaff}" = yes ] && prompt="UNAFFILIATED plain hardened Gentoo desktop — ZERO Snapdragon affiliation: no brand, no theme, no source seed, no mesh/SSO. The role presets the neutral identity; branding/seed options are hidden (they hard-conflict). Installed system is LUKS2-encrypted (you set the root passphrase at install)."
+    [ "${unaff}" = yes ] && prompt="UNAFFILIATED plain hardened Gentoo desktop — ZERO HugMesh affiliation: no brand, no theme, no source seed, no mesh/SSO. The role presets the neutral identity; branding/seed options are hidden (they hard-conflict). Installed system is LUKS2-encrypted (you set the root passphrase at install)."
     while :; do
         local media_l home_l
         media_l="$([ "${OPT_SA_MEDIA}" = yes ] && echo "ON (/media Vaults+Steam auto-detect)" || echo OFF)"
@@ -1563,7 +1563,7 @@ standalone_screen() {
 
 # ── STEP 1 — the four-choice opening screen (Studio ModePage parity) ────────────
 # A THIN clarity/router layer on TOP of the existing screens: the labels mirror the
-# Studio GUI reference (studio/snapdragon_studio/gui/pages/mode.py) verbatim so the
+# Studio GUI reference (studio/hugmesh_studio/gui/pages/mode.py) verbatim so the
 # build-matrix TAXO parity check has ONE golden set. It reorganises NAVIGATION only —
 # the three IMAGE choices funnel into the EXISTING screens (build_screen /
 # single_role_screen / standalone_screen), each of which already calls build_make_cmd
@@ -1623,13 +1623,13 @@ mode_screen() {
 
 # ── Local Docker mesh (fourth choice) — builds NO image ─────────────────────────
 # Shells the SAME Qt-free entrypoint the Studio wizard/tray drive
-# (python3 -m snapdragon_studio.core.local_mesh), so the menu never reimplements
+# (python3 -m hugmesh_studio.core.local_mesh), so the menu never reimplements
 # docker compose. The auth key is entered masked (ui_password — same non-persisted
 # contract as the SA_*/ARM_* secrets), written to a chmod-600 mktemp file under
 # STATE_DIR for the child, then shredded. Never persisted to menu.conf.
 local_mesh_screen() {
     if ! command -v python3 >/dev/null 2>&1; then
-        ui_msg "Local Docker mesh" "python3 is required to run a local mesh node (it drives the shared snapdragon_studio.core.local_mesh entrypoint). Install python3 and retry."
+        ui_msg "Local Docker mesh" "python3 is required to run a local mesh node (it drives the shared hugmesh_studio.core.local_mesh entrypoint). Install python3 and retry."
         return 0
     fi
     local authkey="" node_name="" login_server="" choice
@@ -1639,7 +1639,7 @@ local_mesh_screen() {
         choice="$(ui_menu "Local Docker mesh" \
             "Run a mesh on THIS machine in Docker — no image build, no server hardware. Provide a tailnet/headscale auth key; the dockerized node joins and serves locally. Masked input; never saved to ${CONF_FILE}." \
             authkey "Auth key (TS_AUTHKEY) . ${keyl}" \
-            name    "Node name ............ ${node_name:-<default: snapdragon-node>}" \
+            name    "Node name ............ ${node_name:-<default: hugmesh-node>}" \
             server  "Login server ......... ${login_server:-<Tailscale default coordinator>}" \
             up      "★ Start the local mesh node (docker compose up -d)" \
             stop    "Stop the local mesh node (docker compose down)" \
@@ -1649,7 +1649,7 @@ local_mesh_screen() {
             back    "‹ back")" || return 0
         case "${choice}" in
             authkey) authkey="$(ui_password "Auth key" "Tailnet/headscale auth key (tskey-… ; required to start)" "${authkey}")" ;;
-            name)    node_name="$(ui_input "Node name" "Optional hostname on the tailnet (blank = snapdragon-node)" "${node_name}")" ;;
+            name)    node_name="$(ui_input "Node name" "Optional hostname on the tailnet (blank = hugmesh-node)" "${node_name}")" ;;
             server)  login_server="$(ui_input "Login server" "Optional self-hosted headscale URL (blank = Tailscale default)" "${login_server}")" ;;
             up|stop|status|logs)
                 # menu verb -> entrypoint subcommand (only "stop" differs: -> "down")
@@ -1664,13 +1664,13 @@ local_mesh_screen() {
 # ── Local Docker mesh FROM SCRATCH (generate creds + start a superadmin mesh) ────
 # The "generate & start a NEW local mesh from scratch" path. Shells the SAME Qt-free
 # entrypoint the Studio dialog drives (python3 -m
-# snapdragon_studio.core.local_mesh_bootstrap), so the menu never reimplements the gen
+# hugmesh_studio.core.local_mesh_bootstrap), so the menu never reimplements the gen
 # scripts or docker compose. NON-destructive: `plan` only previews; `up` mints creds +
 # starts containers (prod additionally TTY-confirms, no bypass). The prod auth key is
 # entered masked and handed over via a chmod-600 mktemp file, then shredded.
 local_mesh_bootstrap_screen() {
     if ! command -v python3 >/dev/null 2>&1; then
-        ui_msg "Local mesh (from scratch)" "python3 is required (it drives the shared snapdragon_studio.core.local_mesh_bootstrap entrypoint)."
+        ui_msg "Local mesh (from scratch)" "python3 is required (it drives the shared hugmesh_studio.core.local_mesh_bootstrap entrypoint)."
         return 0
     fi
     local env="test" superadmin="superadmin" social="" tor="" domain="" authkey="" choice
@@ -1728,7 +1728,7 @@ _local_mesh_bootstrap_run() {
     fi
     args+=(--generator-dir "${REPO_DIR}")
     local out
-    out="$(PYTHONPATH="${REPO_DIR}/studio" python3 -m snapdragon_studio.core.local_mesh_bootstrap "${args[@]}" 2>&1)"
+    out="$(PYTHONPATH="${REPO_DIR}/studio" python3 -m hugmesh_studio.core.local_mesh_bootstrap "${args[@]}" 2>&1)"
     local rc=$?
     if [ -n "${keyfile}" ]; then
         trap - INT TERM EXIT
@@ -1755,7 +1755,7 @@ _local_mesh_run() {
     [ -n "${login_server}" ] && args+=(--login-server "${login_server}")
     args+=(--generator-dir "${REPO_DIR}")
     local out
-    out="$(PYTHONPATH="${REPO_DIR}/studio" python3 -m snapdragon_studio.core.local_mesh "${args[@]}" 2>&1)"
+    out="$(PYTHONPATH="${REPO_DIR}/studio" python3 -m hugmesh_studio.core.local_mesh "${args[@]}" 2>&1)"
     local rc=$?
     if [ -n "${keyfile}" ]; then
         trap - INT TERM EXIT
@@ -1766,8 +1766,8 @@ _local_mesh_run() {
 
 # ── Cloud deploy (sixth choice) — publishes a PACKAGED image, builds NO image ───
 # Shells the SAME Qt-free entrypoint the Studio DeployPage and the Makefile
-# deploy-* delegates drive (python3 -m snapdragon_studio.core.cloud_deploy), which
-# fronts the ONE canonical driver specs/usr/sbin/snapdragon-cloud-deploy — the menu
+# deploy-* delegates drive (python3 -m hugmesh_studio.core.cloud_deploy), which
+# fronts the ONE canonical driver specs/usr/sbin/hugmesh-cloud-deploy — the menu
 # never reimplements any gate (provider registry, validate_inputs, creds-present
 # check, apply/destroy confirmation). Pasted creds are entered masked (ui_password —
 # same non-persisted contract as the SA_*/ARM_* secrets and the phone auth key),
@@ -1775,7 +1775,7 @@ _local_mesh_run() {
 # then shredded. Never persisted to menu.conf.
 deploy_screen() {
     if ! command -v python3 >/dev/null 2>&1; then
-        ui_msg "Cloud deploy" "python3 is required (it drives the shared snapdragon_studio.core.cloud_deploy entrypoint)."
+        ui_msg "Cloud deploy" "python3 is required (it drives the shared hugmesh_studio.core.cloud_deploy entrypoint)."
         return 0
     fi
     local provider="" image="" domain="" region="" creds_file="" creds="" out_dir="" keys_dir="" choice
@@ -1879,7 +1879,7 @@ _deploy_run() {
             # own TTY confirmation prompts run untouched — never piped, never
             # detached, never bypassed.
             say "running: cloud-deploy ${verb} (foreground — output follows)"
-            PYTHONPATH="${REPO_DIR}/studio" python3 -m snapdragon_studio.core.cloud_deploy "${args[@]}"
+            PYTHONPATH="${REPO_DIR}/studio" python3 -m hugmesh_studio.core.cloud_deploy "${args[@]}"
             rc=$?
             if [ "${rc}" -eq 0 ]; then say "cloud-deploy ${verb}: OK"; else warn "cloud-deploy ${verb}: exit ${rc}"; fi
             # Pause so the driver's output survives the next menu redraw — but only
@@ -1888,7 +1888,7 @@ _deploy_run() {
             ;;
         *)
             local out
-            out="$(PYTHONPATH="${REPO_DIR}/studio" python3 -m snapdragon_studio.core.cloud_deploy "${args[@]}" 2>&1)"
+            out="$(PYTHONPATH="${REPO_DIR}/studio" python3 -m hugmesh_studio.core.cloud_deploy "${args[@]}" 2>&1)"
             rc=$?
             ui_msg "Cloud deploy — ${verb} (rc=${rc})" "${out:-(no output)}"
             ;;
@@ -2138,7 +2138,7 @@ _phone_mdm_settings() {
             hwapk)    headwind_apk="$(ui_input "Headwind DPC APK" "Path to the Headwind MDM DPC APK to adb-install during mdm-enroll (blank = require already-installed)" "${headwind_apk}")" ;;
             hwsigner) headwind_signer="$(ui_input "Headwind signer SHA-256" "Expected APK signing-cert SHA-256 (hex, no colons) — mdm-enroll fails closed on mismatch" "${headwind_signer}")" ;;
             hwurl)    headwind_url="$(ui_input "Headwind server URL" "Headwind base URL written into the DPC's init.json (blank = driver HMDM_URL env)" "${headwind_url}")" ;;
-            audapk)   auditor_apk="$(ui_input "Auditor fork APK" "Path to the Snapdragon Auditor fork APK to adb-install during attest (blank = require already-installed)" "${auditor_apk}")" ;;
+            audapk)   auditor_apk="$(ui_input "Auditor fork APK" "Path to the HugMesh Auditor fork APK to adb-install during attest (blank = require already-installed)" "${auditor_apk}")" ;;
             audsigner) auditor_signer="$(ui_input "Auditor signer SHA-256" "Expected Auditor signing-cert SHA-256 (hex, no colons) — attest fails closed on mismatch" "${auditor_signer}")" ;;
             atturl)   attestation_url="$(ui_input "AttestationServer URL" "Self-hosted AttestationServer console URL for the pairing runbook (blank = driver ATTEST_URL env)" "${attestation_url}")" ;;
             token)    token_file="$(ui_input "Ingest token FILE" "PATH to a 0600 file holding the X-Internal-Token value for ingest (the path is passed through; the value never touches argv or this menu)" "${token_file}")" ;;
@@ -2257,7 +2257,7 @@ confirm_quit() {
 
 # ── Entry point ─────────────────────────────────────────────────────────────────
 main() {
-    [ -f "${REPO_DIR}/Makefile" ] || die "must run inside the snapdragon-generator repo (no Makefile at ${REPO_DIR})"
+    [ -f "${REPO_DIR}/Makefile" ] || die "must run inside the hugmesh-generator repo (no Makefile at ${REPO_DIR})"
     if [ "${HAVE_TUI}" != 1 ]; then
         warn "whiptail/TTY not available — using the plain text menu (set NO_TUI= to re-enable; install dev-libs/newt for the rich UI)."
     fi

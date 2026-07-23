@@ -14,15 +14,15 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core import device_catalog  # noqa: E402
-from snapdragon_studio.core.config import ROLE_CHOICES  # noqa: E402
-from snapdragon_studio.core.platform_info import HostInfo  # noqa: E402
-from snapdragon_studio.gui import wizard as wizard_mod  # noqa: E402
-from snapdragon_studio.gui.pages.worklist import _COL_NOTES  # noqa: E402
-from snapdragon_studio.gui.qt import Qt, QtGui, QtWidgets  # noqa: E402
+from hugmesh_studio.core import device_catalog  # noqa: E402
+from hugmesh_studio.core.config import ROLE_CHOICES  # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo  # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod  # noqa: E402
+from hugmesh_studio.gui.pages.worklist import _COL_NOTES  # noqa: E402
+from hugmesh_studio.gui.qt import Qt, QtGui, QtWidgets  # noqa: E402
 
 from _helpers import advance_to, check_worklist_rows, pick_mode  # noqa: E402
 
@@ -30,7 +30,7 @@ STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
-                has_kvm=False, is_root=False, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=False, builder_image="hugmesh-builder")
 
 CAT = device_catalog.load_catalog()
 
@@ -38,14 +38,14 @@ CAT = device_catalog.load_catalog()
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(scope="session")
 def qapp():
-    from snapdragon_studio.gui.qt import QtWidgets
+    from hugmesh_studio.gui.qt import QtWidgets
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture
@@ -453,7 +453,7 @@ def test_roles_repopulate_from_catalog_derivation(wiz):
 # filter must check both. Real report: "the button ... with the 'All architectures'
 # dropdown selected should check fe/be/pki on x86 and arm".
 def _checked_ids(page):
-    from snapdragon_studio.gui.qt import Qt
+    from hugmesh_studio.gui.qt import Qt
     return {rid for rid, it in page.rows.items()
             if it.checkState(0) == Qt.CheckState.Checked}
 

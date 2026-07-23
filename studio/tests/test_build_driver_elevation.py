@@ -13,15 +13,15 @@ import subprocess
 
 import pytest
 
-from snapdragon_studio.core import build_driver as bd
-from snapdragon_studio.core.build_driver import BuildDriver
-from snapdragon_studio.core.config import ImageConfig
-from snapdragon_studio.core.platform_info import HostInfo
+from hugmesh_studio.core import build_driver as bd
+from hugmesh_studio.core.build_driver import BuildDriver
+from hugmesh_studio.core.config import ImageConfig
+from hugmesh_studio.core.platform_info import HostInfo
 
 
 def host(is_root=False, has_docker=True):
     return HostInfo(os="linux", is_gentoo=True, has_docker=has_docker, has_bash=True,
-                    has_kvm=False, is_root=is_root, builder_image="snapdragon-builder")
+                    has_kvm=False, is_root=is_root, builder_image="hugmesh-builder")
 
 
 def _cfg(tmp_path, platform="rpi5", role="pki"):
@@ -179,7 +179,7 @@ def test_askpass_helper_is_written_executable_and_self_contained(monkeypatch, tm
     p = bd._askpass_helper_path()
     assert p and os.access(p, os.X_OK)
     body = open(p, encoding="utf-8").read()
-    assert "--askpass" in body and "snapdragon_studio" in body
+    assert "--askpass" in body and "hugmesh_studio" in body
     assert body.startswith("#!")
 
 

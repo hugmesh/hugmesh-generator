@@ -1,5 +1,5 @@
-# user-bff-db — dedicated Postgres for snapdragon-user-bff-api's config datastore
-# (the user_profile / user_preference / user_block tables). snapdragon-backend,
+# user-bff-db — dedicated Postgres for hugmesh-user-bff-api's config datastore
+# (the user_profile / user_preference / user_block tables). hugmesh-backend,
 # ClusterIP. No initdb seed — user-bff owns its schema via Liquibase (applied by
 # the app at startup), so this DB just needs to exist EMPTY.
 #
@@ -17,12 +17,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/user-bff-db
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

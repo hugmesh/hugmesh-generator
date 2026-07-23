@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# HugMesh Image Studio launcher (Linux/macOS). Runs the GUI from this checkout.
+here="$(cd "$(dirname "$0")" && pwd)"
+exec python3 -m hugmesh_studio "$@"

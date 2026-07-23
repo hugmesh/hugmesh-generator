@@ -1,4 +1,4 @@
-# HorizontalPodAutoscaler for snapdragon-wiki-ui. Modelled byte-for-byte on
+# HorizontalPodAutoscaler for hugmesh-wiki-ui. Modelled byte-for-byte on
 # manifests/forum-ui/hpa.yaml: plain autoscaling/v2, Resource metrics only.
 # The wiki UI is a stateless static nginx server, so it scales out cleanly under load.
 #
@@ -11,14 +11,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: snapdragon-wiki-ui
-  namespace: snapdragon-frontend
-  labels: { app: snapdragon-wiki-ui, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-wiki-ui
+  namespace: hugmesh-frontend
+  labels: { app: hugmesh-wiki-ui, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-wiki-ui
+    name: hugmesh-wiki-ui
   minReplicas: 2
   maxReplicas: 6
   metrics:

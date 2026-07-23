@@ -28,7 +28,7 @@ metadata:
   name: {{BRAND}}-brand-repos
   namespace: devops
   labels:
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
     snapdragon.systems/brand: "{{BRAND}}"
 spec:
   goTemplate: true
@@ -38,7 +38,7 @@ spec:
         gitea:
           # PER-TENANT org (decision #1). Publish tail pushes here (FORGEJO_ORG={{ORG}}).
           owner: {{ORG}}
-          api: http://forgejo.snapdragon-pki.svc.cluster.local:3000
+          api: http://forgejo.hugmesh-pki.svc.cluster.local:3000
           allBranches: false
           tokenRef:
             secretName: forgejo-scm-token
@@ -52,7 +52,7 @@ spec:
     metadata:
       name: "{{ .repository }}"
       labels:
-        app.kubernetes.io/part-of: snapdragon.systems
+        app.kubernetes.io/part-of: hugmesh.systems
         snapdragon.systems/brand: "{{BRAND}}"
         snapdragon.systems/catalog: "true"
     spec:

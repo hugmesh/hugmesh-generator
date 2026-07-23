@@ -6,8 +6,8 @@ level snapshot; tests that need the auto path override env/meminfo per-call.
 """
 import pytest
 
-from snapdragon_studio.core import host_resources as hr
-from snapdragon_studio.core.host_resources import (
+from hugmesh_studio.core import host_resources as hr
+from hugmesh_studio.core.host_resources import (
     GIB, MIB, build_memory_flag, default_build_memory_bytes, default_jobs,
     low_memory_warnings, read_meminfo,
 )
@@ -86,14 +86,14 @@ def test_flag_auto_from_meminfo():
 
 @pytest.mark.parametrize("off", ["0", "off", "OFF", "none", "None"])
 def test_flag_disabled_by_env(off):
-    assert build_memory_flag(env={"SNAPDRAGON_BUILD_MEMORY": off},
+    assert build_memory_flag(env={"HUGMESH_BUILD_MEMORY": off},
                              meminfo=mi(total=INCIDENT_TOTAL)) is None
 
 
 def test_flag_env_value_passes_through_verbatim():
-    assert build_memory_flag(env={"SNAPDRAGON_BUILD_MEMORY": "16g"},
+    assert build_memory_flag(env={"HUGMESH_BUILD_MEMORY": "16g"},
                              meminfo=mi(total=INCIDENT_TOTAL)) == "16g"
-    assert build_memory_flag(env={"SNAPDRAGON_BUILD_MEMORY": "8192m"},
+    assert build_memory_flag(env={"HUGMESH_BUILD_MEMORY": "8192m"},
                              meminfo={}) == "8192m"
 
 
@@ -117,13 +117,13 @@ def test_jobs_healthy_incident_box_keeps_8():
 
 def test_jobs_env_override_wins():
     assert default_jobs(nproc=8, meminfo=mi(total=INCIDENT_TOTAL, avail=24 * GIB),
-                        env={"SNAPDRAGON_BUILD_JOBS": "3"}) == 3
+                        env={"HUGMESH_BUILD_JOBS": "3"}) == 3
 
 
 @pytest.mark.parametrize("bad", ["abc", "0", "-4", ""])
 def test_jobs_invalid_env_override_falls_through(bad):
     assert default_jobs(nproc=8, meminfo=mi(total=INCIDENT_TOTAL, avail=24 * GIB),
-                        env={"SNAPDRAGON_BUILD_JOBS": bad}) == 8
+                        env={"HUGMESH_BUILD_JOBS": bad}) == 8
 
 
 def test_jobs_unknown_memory_is_the_old_flat8_contract():

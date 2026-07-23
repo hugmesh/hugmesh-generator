@@ -1,5 +1,5 @@
-# Bundle storage for snapdragon-federation-api's filesystem BundleStorage
-# (app.bundles.storage=filesystem, app.bundles.dir=/var/snapdragon/federation/bundles).
+# Bundle storage for hugmesh-federation-api's filesystem BundleStorage
+# (app.bundles.storage=filesystem, app.bundles.dir=/var/hugmesh/federation/bundles).
 # FilesystemBundleStorage writes content-addressed bundle bytes here
 # (<dir>/<slug>/<contentHash>/...). The pod runs readOnlyRootFilesystem: true, so
 # this MUST be a real writable volume, not the root fs.
@@ -12,9 +12,9 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: federation-bundles
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-federation-api }
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-federation-api }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 5Gi } }

@@ -18,40 +18,40 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-pytest.importorskip("snapdragon_studio.gui.qt",
+pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
-from snapdragon_studio.core import build_sessions as bs                # noqa: E402
-from snapdragon_studio.core.config import Domain, ImageConfig, User   # noqa: E402
-from snapdragon_studio.core.platform_info import HostInfo             # noqa: E402
-from snapdragon_studio.core import worklist_driver as wd              # noqa: E402
-from snapdragon_studio.core.worklist import (                        # noqa: E402
+from hugmesh_studio.core import build_sessions as bs                # noqa: E402
+from hugmesh_studio.core.config import Domain, ImageConfig, User   # noqa: E402
+from hugmesh_studio.core.platform_info import HostInfo             # noqa: E402
+from hugmesh_studio.core import worklist_driver as wd              # noqa: E402
+from hugmesh_studio.core.worklist import (                        # noqa: E402
     WorklistConfig, WorklistEntry, synthesize)
-from snapdragon_studio.gui import wizard as wizard_mod                # noqa: E402
-from snapdragon_studio.gui.qt import QtWidgets                        # noqa: E402
+from hugmesh_studio.gui import wizard as wizard_mod                # noqa: E402
+from hugmesh_studio.gui.qt import QtWidgets                        # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
 
 HOST = HostInfo(os="linux", is_gentoo=True, has_docker=False, has_bash=True,
-                has_kvm=False, is_root=True, builder_image="snapdragon-builder")
+                has_kvm=False, is_root=True, builder_image="hugmesh-builder")
 
 
 @pytest.fixture(autouse=True)
 def _pinned_host(monkeypatch):
     monkeypatch.setattr(wizard_mod, "detect",
-                        lambda builder_image="snapdragon-builder": HOST)
+                        lambda builder_image="hugmesh-builder": HOST)
 
 
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("SNAPDRAGON_STUDIO_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("HUGMESH_STUDIO_STATE_DIR", str(tmp_path / "state"))
 
 
 @pytest.fixture(scope="session")
 def qapp():
     return (QtWidgets.QApplication.instance()
-            or QtWidgets.QApplication(["snapdragon-studio-tests"]))
+            or QtWidgets.QApplication(["hugmesh-studio-tests"]))
 
 
 @pytest.fixture
@@ -191,7 +191,7 @@ def test_mesh_manifest_lands_in_the_session_dir(monkeypatch, qapp, wiz, tmp_path
     _run_to_completion(qapp, page)
     s = bs.load_all()[0]
     assert page._manifest_path == os.path.join(s.workdir,
-                                               "snapdragon-mesh-manifest.json")
+                                               "hugmesh-mesh-manifest.json")
     assert os.path.isfile(page._manifest_path)
 
 
@@ -358,7 +358,7 @@ def test_restart_resume_does_not_ratchet_on(monkeypatch, qapp, wiz, tmp_path):
 
 
 def test_restart_refused_while_running_elsewhere(qapp, wiz, tmp_path):
-    from snapdragon_studio.gui.pages.sessions_widget import PreviousBuildsWidget
+    from hugmesh_studio.gui.pages.sessions_widget import PreviousBuildsWidget
     s = bs.new_session(synthesize(_standalone_cfg(tmp_path)), GENERATOR_DIR)
     bs.start(s)                                    # running, pid = us, alive -> refuse
     ok, why = PreviousBuildsWidget.can_restart(s)
@@ -367,7 +367,7 @@ def test_restart_refused_while_running_elsewhere(qapp, wiz, tmp_path):
 
 
 def test_restart_with_deleted_workdir_offers_redo(qapp, wiz, tmp_path):
-    from snapdragon_studio.gui.pages.sessions_widget import PreviousBuildsWidget
+    from hugmesh_studio.gui.pages.sessions_widget import PreviousBuildsWidget
     s = bs.new_session(synthesize(_standalone_cfg(tmp_path)), GENERATOR_DIR)
     bs.start(s)
     bs.finish(s, "complete")

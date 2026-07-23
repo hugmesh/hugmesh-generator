@@ -1,4 +1,4 @@
-"""snapdragon-edge-ai-analysis — task-oriented analysis API over the edge-AI model
+"""hugmesh-edge-ai-analysis — task-oriented analysis API over the edge-AI model
 server. Stateless FastAPI wrapper that turns Ollama's OpenAI-compatible model API into
 structured verdicts the mesh consumes (image NSFW/abuse classify + perceptual-hash, log
 triage). ON-PREM: it only calls the in-cluster Ollama upstream; nothing leaves the mesh.
@@ -28,14 +28,14 @@ from fastapi import FastAPI, Header, HTTPException
 from PIL import Image
 from pydantic import BaseModel
 
-UPSTREAM = os.environ.get("EDGE_AI_UPSTREAM", "http://snapdragon-edge-ai.snapdragon-inference.svc.cluster.local:11434").rstrip("/")
+UPSTREAM = os.environ.get("EDGE_AI_UPSTREAM", "http://hugmesh-edge-ai.hugmesh-inference.svc.cluster.local:11434").rstrip("/")
 VISION_MODEL = os.environ.get("ANALYSIS_VISION_MODEL", "llava:7b")
 REASON_MODEL = os.environ.get("ANALYSIS_REASON_MODEL", "llama3.2:3b")
 NSFW_THRESHOLD = float(os.environ.get("ANALYSIS_NSFW_THRESHOLD", "0.7"))
 ABUSE_THRESHOLD = float(os.environ.get("ANALYSIS_ABUSE_THRESHOLD", "0.7"))
 MODERATE_ACTION = os.environ.get("ANALYSIS_MODERATE_ACTION", "reject")  # reject (fail-closed) | flag
 
-app = FastAPI(title="snapdragon-edge-ai-analysis", version="1.0")
+app = FastAPI(title="hugmesh-edge-ai-analysis", version="1.0")
 
 
 def _now() -> str:

@@ -35,7 +35,7 @@ build-x86-host-stage4.sh --role be \
 For each selected id the build (a) prunes the in-mesh workload (its ArgoCD
 Application + manifests dir), (b) repoints the consumer endpoint env value(s) at
 `<endpoint>`, (c) keeps the ESO Secret names/Vault paths so the operator's hosted
-creds flow through unchanged, and (d) bakes `/etc/snapdragon/backing-services.conf`
+creds flow through unchanged, and (d) bakes `/etc/hugmesh/backing-services.conf`
 + `README-MANAGED.md` into the image.
 
 Fail-closed: an unknown id, a **tier-3** (docs-only) id, or a malformed/empty
@@ -59,7 +59,7 @@ Optional companions (env / brand.conf): `MANAGED_VELERO_BUCKET`,
 
 | Service | AWS / Azure target | Difficulty | Blocking specifics | v1 |
 |---|---|---|---|---|
-| Velero object store | S3 / Blob | **Trivial** | already aws-plugin + INI creds; edit the BSL coordinates, seed `snapdragon/velero`; Azure = plugin initContainer swap | **coded** |
+| Velero object store | S3 / Blob | **Trivial** | already aws-plugin + INI creds; edit the BSL coordinates, seed `hugmesh/velero`; Azure = plugin initContainer swap | **coded** |
 | SMTP | SES / ACS | **Trivial** | pure data change through `gen-cluster-secrets` `MAIL_*`; zero manifest edits | **coded** |
 | Kafka | MSK / Event Hubs | Easy | 1 env value (`admin-bff-api`); TLS+SASL props added out of band (none today) | **coded** |
 | ClickHouse | ClickHouse Cloud | Easy | 3 endpoint literals; no AWS/Azure first-party | **coded** |
@@ -113,7 +113,7 @@ VALUES already read on the self-hosted path.
 2. Build with `--managed-service velero-objectstore=aws` (real S3, drops the
    in-cluster `s3Url`) or `=https://<s3-compatible-host>`; set
    `MANAGED_VELERO_BUCKET` / `MANAGED_VELERO_REGION` if not the defaults
-   (`snapdragon-backups` / `us-east-1`).
+   (`hugmesh-backups` / `us-east-1`).
 3. Seed creds: `MANAGED_VELERO_ACCESS_KEY_ID=… MANAGED_VELERO_SECRET_ACCESS_KEY=…`
    before `gen-cluster-secrets.sh`.
 4. **Azure**: swap the plugin initContainer in `apps/55-velero.yaml` to
@@ -203,8 +203,8 @@ make stack-up MANAGED_ADMIN_BFF_R2DBC_URL='r2dbc:postgresql://my.rds:5432/adminb
 
 The read side that a future web management surface (admin-bff / admin-ui) would use
 to display installed vs managed state relies on the per-brand
-`snapdragon-installed-services-<domainSlug>` ConfigMap — which **the generator never
-emits** (only the singular `installed-services` in `snapdragon-policy`). So the
+`hugmesh-installed-services-<domainSlug>` ConfigMap — which **the generator never
+emits** (only the singular `installed-services` in `hugmesh-policy`). So the
 admin-bff per-brand filter always falls back to the full catalog. A web
 "backing-services" surface must either emit the per-brand ConfigMap or point the
 provider at the policy ConfigMap — **do not depend on the per-brand CM existing**.

@@ -1,4 +1,4 @@
-# HorizontalPodAutoscaler for snapdragon-forum-bff-api. Modelled byte-for-byte on
+# HorizontalPodAutoscaler for hugmesh-forum-bff-api. Modelled byte-for-byte on
 # manifests/remote-fragment/hpa.yaml (the first HPA in the cluster): plain
 # autoscaling/v2, Resource metrics only. The forum-bff is a stateless Spring Boot resource server, so it scales out cleanly under load.
 #
@@ -11,14 +11,14 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: snapdragon-forum-bff-api
-  namespace: snapdragon-backend
-  labels: { app: snapdragon-forum-bff-api, app.kubernetes.io/part-of: snapdragon.systems }
+  name: hugmesh-forum-bff-api
+  namespace: hugmesh-backend
+  labels: { app: hugmesh-forum-bff-api, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: snapdragon-forum-bff-api
+    name: hugmesh-forum-bff-api
   minReplicas: 2
   maxReplicas: 6
   metrics:

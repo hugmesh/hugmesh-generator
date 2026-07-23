@@ -1,4 +1,4 @@
-# Snapdragon Image Studio — GUI dependency.
+# HugMesh Image Studio — GUI dependency.
 # PySide6 is the primary (LGPL, simple Windows packaging via PyInstaller). The code also
 # runs on PyQt6 if that is what is already installed (the gui/qt.py shim picks either).
 PySide6>=6.5 ; platform_system != ""

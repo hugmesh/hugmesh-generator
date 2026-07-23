@@ -1,4 +1,4 @@
-# snapdragon-generator docs index
+# hugmesh-generator docs index
 
 The doc set for the image/infra layer. State key used throughout:
 **✅ shipped** (on `main`) · **🚧 in-flight** (open branch/PR) · **🔭 planned**

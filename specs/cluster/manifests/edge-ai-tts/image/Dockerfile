@@ -1,7 +1,7 @@
-# snapdragon-edge-ai-tts — the CPU-default Piper TTS image (VN voice feature, B3).
+# hugmesh-edge-ai-tts — the CPU-default Piper TTS image (VN voice feature, B3).
 # Build + push to the mesh registry the deployment expects (manifests = follow-up PR):
-#   docker build -t registry.snapdragon.systems/snapdragon/edge-ai-tts:main .
-#   docker push  registry.snapdragon.systems/snapdragon/edge-ai-tts:main
+#   docker build -t registry.hugmesh.systems/hugmesh/edge-ai-tts:main .
+#   docker push  registry.hugmesh.systems/hugmesh/edge-ai-tts:main
 # CPU-ONLY: python:3.12-slim + onnxruntime (CPU). No nvidia base, no CUDA. Piper is
 # real-time on CPU for short VN lines; a GPU variant is a later optional flag.
 # Runs as non-root (uid 65532) and is read-only-rootfs friendly (the pod mounts an

@@ -1,13 +1,13 @@
-# Persistent storage for the snapdragon-admin-bff-api Postgres data directory
+# Persistent storage for the hugmesh-admin-bff-api Postgres data directory
 # (durable accounts / allowlist / sessions / namespace-grants / iso_artifacts /
 # gateway_route_access).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: admin-bff-db
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels: { app: admin-bff-db }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 2Gi } }

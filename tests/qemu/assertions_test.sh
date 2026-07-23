@@ -48,10 +48,10 @@ ok_if  assert_runtime_load "${work}/c_blank.log" 512   # no marker, no oom -> so
 
 echo "── resolve_artifact: newest match, blobs excluded, empty when none ──"
 rdir="${work}/wd"; mkdir -p "${rdir}"
-: > "${rdir}/snapdragon-x86-be+gpu-prod-ts.img"
-: > "${rdir}/snapdragon-x86-vmlinuz-kernel.img"   # a kernel blob — must NOT be picked
+: > "${rdir}/hugmesh-x86-be+gpu-prod-ts.img"
+: > "${rdir}/hugmesh-x86-vmlinuz-kernel.img"   # a kernel blob — must NOT be picked
 got="$(resolve_artifact x86 '' be+gpu "${rdir}")"
-[ "$(basename "${got}")" = "snapdragon-x86-be+gpu-prod-ts.img" ] && _ok || _bad "resolve picked '${got}'"
+[ "$(basename "${got}")" = "hugmesh-x86-be+gpu-prod-ts.img" ] && _ok || _bad "resolve picked '${got}'"
 [ -z "$(resolve_artifact rpi5 rpi5 backend "${work}/empty")" ] && _ok || _bad "resolve should be empty for a missing dir"
 
 echo "── assert_build_load: reads the real host_resources caps (no boot) ──"
@@ -74,9 +74,9 @@ STUB
 chmod +x "${work}/plan-stub.sh" "${work}/launch-stub.sh"
 
 # A resolvable, within-limit artifact for the x86/be+gpu row (1 MiB << 9730 MiB ceiling).
-bdir="${work}/boot-wd"; mkdir -p "${bdir}"; truncate -s 1M "${bdir}/snapdragon-x86-be+gpu-prod-ts.img"
+bdir="${work}/boot-wd"; mkdir -p "${bdir}"; truncate -s 1M "${bdir}/hugmesh-x86-be+gpu-prod-ts.img"
 
-out="$(SNAPDRAGON_QEMU_E2E=1 \
+out="$(HUGMESH_QEMU_E2E=1 \
       SNAP_QEMU_PLAN_CMD="bash ${work}/plan-stub.sh" \
       SNAP_QEMU_LAUNCH_CMD="bash ${work}/launch-stub.sh" \
       bash "${DRIVER}" --only x86/be+gpu -w "${bdir}" 2>&1)"
@@ -88,14 +88,14 @@ echo "${res}" | grep -qE 'fail=0'    && _ok || _bad "unexpected failure (${res})
 echo "${res}" | grep -qE 'pass=[2-9]' && _ok || _bad "pass did not increment (${res})"
 
 echo "── DRIVER WIRING: an OVERSIZE artifact FAILS the row (assertion really runs) ──"
-odir="${work}/over-wd"; mkdir -p "${odir}"; truncate -s $((600*1024*1024)) "${odir}/snapdragon-x86-be+gpu-prod-ts.img"
+odir="${work}/over-wd"; mkdir -p "${odir}"; truncate -s $((600*1024*1024)) "${odir}/hugmesh-x86-be+gpu-prod-ts.img"
 # plan stub says img_size=1 → ceiling 515 MiB, so the 600 MiB artifact must FAIL.
 cat > "${work}/plan-tiny.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "FLAGS_EFFECTIVE: role=$2 img_size=1"
 STUB
 chmod +x "${work}/plan-tiny.sh"
-out2="$(SNAPDRAGON_QEMU_E2E=1 \
+out2="$(HUGMESH_QEMU_E2E=1 \
        SNAP_QEMU_PLAN_CMD="bash ${work}/plan-tiny.sh" \
        SNAP_QEMU_LAUNCH_CMD="bash ${work}/launch-stub.sh" \
        bash "${DRIVER}" --only x86/be+gpu -w "${odir}" 2>&1)"

@@ -33,7 +33,7 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-AGENT="${REPO}/specs/usr/sbin/snapdragon-domain-reconcile"
+AGENT="${REPO}/specs/usr/sbin/hugmesh-domain-reconcile"
 GEN_BRAND_REPOS_SH="${REPO}/generate-brand-repos.sh"
 SECRET_SCAN_SH="${REPO}/scripts/secret-scan.sh"
 TOKEN_CLASSIFIER="${REPO}/scripts/tooling/token-classifier.js"
@@ -199,7 +199,7 @@ echo
 echo "-- (d) protocol-namespace override (snapdragon.systems/*, X-Snapdragon-Local) --"
 # d1: dotted/slashed brand/org/mesh -> validators reject on the reconcile path.
 new_case
-mkexport1 "${WORK}/d.json" 'snapdragon.systems/domain' acme.test 'snapdragon.systems/domain' 'tag:snapdragon.systems'
+mkexport1 "${WORK}/d.json" 'snapdragon.systems/domain' acme.test 'snapdragon.systems/domain' 'tag:hugmesh.systems'
 render_brand_repos "${WORK}/d.json" >/dev/null 2>&1
 assert_not_promoted "(d)" 'snapdragon.systems/domain'
 assert_contained "(d)"
@@ -209,7 +209,7 @@ if command -v node >/dev/null && [ -r "${TOKEN_CLASSIFIER}" ]; then
     if node -e '
       const c = require(process.argv[1]);
       // Genuine frozen protocol CONSTANTS: label-key namespace (with slash), wire
-      // header, subprotocol prefix. (The tag:snapdragon.systems mesh form is rejected
+      // header, subprotocol prefix. (The tag:hugmesh.systems mesh form is rejected
       // by the DNS/mesh VALIDATOR on the reconcile path — asserted in d1 above — not
       // by isFrozen, whose label-ns match is the slashed 'snapdragon.systems/' key.)
       const frozen = ["snapdragon.systems/domain","X-Snapdragon-Local","snapdragon.device-terminal.stepup.x"];

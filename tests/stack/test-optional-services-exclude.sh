@@ -104,7 +104,7 @@ fi
 # SYSROOT is what the builder expects; the tree lives under it.
 seed_tree() {
   SYSROOT="${WORK}/sysroot-$1"; rm -rf "${SYSROOT}"
-  local tree="${SYSROOT}/var/lib/snapdragon/cluster"
+  local tree="${SYSROOT}/var/lib/hugmesh/cluster"
   mkdir -p "${tree}/apps" "${tree}/manifests/external-secrets" \
            "${tree}/manifests/route-access/initdb" "${tree}/manifests/policy"
   # The per-slug owned apps + manifest dirs (copy the real ones so the gate's

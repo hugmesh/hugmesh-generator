@@ -14,8 +14,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: casdoor-app-conf
-  namespace: snapdragon-pki
-  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   app.conf.template: |
     appname = casdoor
@@ -38,7 +38,7 @@ data:
     verificationCodeTimeout = 10
     initScore = 0
     logPostOnly = true
-    origin = "https://id.snapdragon.systems"
+    origin = "https://id.hugmesh.systems"
     enableGzip = true
     # ── SMTP (optional, absent-by-default) ──────────────────────────────────
     # Outbound mail for email-verification / password-reset. Sourced from env

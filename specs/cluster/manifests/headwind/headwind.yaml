@@ -1,5 +1,5 @@
 # headwind — Headwind MDM (Apache-2.0), Tomcat9/JDK11 WAR server, packaging=war ROOT
-# context. Admin-only devops tool (namespace snapdragon-pki), TAILNET-ONLY, reached
+# context. Admin-only devops tool (namespace hugmesh-pki), TAILNET-ONLY, reached
 # via the EXISTING apps/22-gateway-superadmin.yaml Application (see that file's new
 # `headwind-console`/`headwind-checkin` routes and optional-services.yaml's headwind
 # slug) — NOT its own Ingress. StripPrefix=1 on those gateway routes rewrites the
@@ -8,18 +8,18 @@
 #
 # WAR PROVENANCE: BUILD-FROM-SOURCE, baked into a custom image pushed to the
 # in-cluster Harbor registry — mirrors the phpBB precedent exactly
-# (manifests/forum/kustomization.yaml: official-upstream + a Snapdragon-owned
+# (manifests/forum/kustomization.yaml: official-upstream + a HugMesh-owned
 # build, tracked via images:/newName+newTag). NOT the upstream Docker recipe
 # (which itself curls an unsigned prebuilt WAR from h-mdm.com at build time —
 # pinning that image by digest would only pin the download *recipe*, not the
 # WAR's actual source provenance). See §3 of the top-level spec for the full
-# rationale. Image: registry.snapdragon.systems/snapdragon/snapdragon-headwind:main
+# rationale. Image: registry.hugmesh.systems/hugmesh/hugmesh-headwind:main
 # (built FROM tomcat:9-jdk11/eclipse-temurin, Maven-built ROOT.war baked into
 # webapps/, explicit non-root USER — mirrors phpbb.yaml's rootless rationale;
 # stock tomcat:9-jdk11 runs as root, so the custom Dockerfile needs USER + a
 # chown of /usr/local/tomcat/{work,logs,temp}).
 #
-# snapdragon-pki is NOT in the Kyverno digest-pin enforced-namespace list
+# hugmesh-pki is NOT in the Kyverno digest-pin enforced-namespace list
 # (verified: manifests/workload-console-rbac/deploy-provenance-policy.yaml lists
 # only backend/frontend/forum/games/games-instances/tube/owncast), so a mutable
 # :main tag is admission-legal here, matching harbor/vault's own tag-pin posture.
@@ -52,8 +52,8 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: headwind-config
-  namespace: snapdragon-pki
-  labels: { app.kubernetes.io/name: headwind, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/name: headwind, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   # VERIFIED real env shape (github.com/h-mdm/hmdm-docker docker-entrypoint.sh):
   # these are templated into $CATALINA_BASE/conf/Catalina/localhost/ROOT.xml as
@@ -61,7 +61,7 @@ data:
   # injects each key here directly as a container env var — SQL_USER is the
   # single OWNER role, used for BOTH Liquibase-migrate and runtime (see header
   # comment; verified not separable).
-  SQL_HOST: headwind-db.snapdragon-pki.svc.cluster.local
+  SQL_HOST: headwind-db.hugmesh-pki.svc.cluster.local
   SQL_PORT: "5432"
   SQL_BASE: headwind
   SQL_USER: headwind
@@ -73,14 +73,14 @@ data:
   # context_template.xml: the entrypoint substitutes _BASE_DOMAIN_ into the
   # context's `base.url` Parameter (_PROTOCOL_://_BASE_DOMAIN_) — this key is
   # exactly what the derived docker-entrypoint.sh reads.
-  BASE_DOMAIN: superadmin.snapdragon.systems
+  BASE_DOMAIN: superadmin.hugmesh.systems
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: headwind
-  namespace: snapdragon-pki
-  labels: { app.kubernetes.io/name: headwind, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app.kubernetes.io/name: headwind, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over the RWO files PVC (phpbb.yaml precedent)
@@ -99,7 +99,7 @@ spec:
         seLinuxOptions: { type: container_t, level: "s0:c78" }  # next free MCS category (headwind-db takes c77)
       containers:
         - name: headwind
-          image: registry.snapdragon.systems/snapdragon/snapdragon-headwind:main
+          image: registry.hugmesh.systems/hugmesh/hugmesh-headwind:main
           ports:
             - { name: http, containerPort: 8080 }
             - { name: mqtt, containerPort: 31000, protocol: TCP }
@@ -159,11 +159,11 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: headwind-data
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels: { app.kubernetes.io/name: headwind }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 10Gi } }
 ---
 # ClusterIP only. :8080 is consumed by the superadmin-gateway's two new routes
@@ -173,7 +173,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: headwind
-  namespace: snapdragon-pki
+  namespace: hugmesh-pki
   labels: { app.kubernetes.io/name: headwind }
 spec:
   type: ClusterIP

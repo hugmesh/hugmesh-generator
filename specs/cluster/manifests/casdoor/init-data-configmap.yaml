@@ -54,18 +54,18 @@
 # gateway's OR-of-allow-rows table yields the required AND (holding any single input
 # role never reaches the games-services admin/runner surface — default-deny).
 #
-# THIS IS THE SYSTEMS CASDOOR (org "snapdragon"). The games realm is a SEPARATE,
+# THIS IS THE SYSTEMS CASDOOR (org "hugmesh"). The games realm is a SEPARATE,
 # INDEPENDENT Casdoor (manifests/casdoor-games, org "threewizards") that mirrors the
-# canonical snapdragon.games realm. That games Casdoor has its OWN native users and
+# canonical hugmesh.games realm. That games Casdoor has its OWN native users and
 # roles — GitHub-OAuth players plus player / uploader / mod / publisher / play-three-
 # wizards / play-dodecahedron — which need NOT exist here in systems, and the systems
 # roles above (ROLE_GAMES, ROLE_GAMES_ADMIN, the svc-* service identities, etc.) need
 # NOT exist in the games realm. The TWO realms are wired together by EXACTLY ONE
-# automatic, scheduled mirror, run by snapdragon-actions (manifests/snapdragon-apis):
+# automatic, scheduled mirror, run by hugmesh-actions (manifests/hugmesh-apis):
 #       ROLE_GAMES_ADMIN (systems)  ->  admin (games)
 # i.e. "only admins/mods who hold the games role in systems are added automatically"
 # as games admins. Granting a normal user ROLE_GAMES here does NOT auto-create a games
-# login: that on-demand provisioning is a separate admin-UI snapdragon-action (future),
+# login: that on-demand provisioning is a separate admin-UI hugmesh-action (future),
 # NOT this scheduled job and NOT the games-admin intersection Job below.
 #
 # ROLE_MATRIX ("Matrix Access") and ROLE_MASTODON ("Mastodon Access") are the
@@ -146,17 +146,17 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: casdoor-init-data
-  namespace: snapdragon-pki
-  labels: { app: casdoor, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-pki
+  labels: { app: casdoor, app.kubernetes.io/part-of: hugmesh.systems }
 data:
   init_data.json: |
     {
       "organizations": [
         {
           "owner": "admin",
-          "name": "snapdragon",
-          "displayName": "Snapdragon Systems",
-          "websiteUrl": "https://snapdragon.systems",
+          "name": "hugmesh",
+          "displayName": "HugMesh Systems",
+          "websiteUrl": "https://hugmesh.systems",
           "passwordType": "pbkdf2-salt",
           "languages": ["en"],
           "enableSoftDeletion": false,
@@ -164,39 +164,39 @@ data:
         }
       ],
       "roles": [
-        { "owner": "snapdragon", "name": "ROLE_ADMIN",     "displayName": "Platform Admin",  "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_SUPERADMIN",    "displayName": "Platform Superadmin", "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_IMAGE_BUILDER", "displayName": "Image Builder",       "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_MOD",       "displayName": "Network Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_MATRIX",    "displayName": "Matrix Access",   "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_MASTODON",  "displayName": "Mastodon Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_MATRIX_DOMAINLOCKED",   "displayName": "Matrix local-only",   "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_MASTODON_DOMAINLOCKED", "displayName": "Mastodon local-only", "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_MATRIX_EXTERNAL_CLIENT",   "displayName": "Matrix external client",   "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_MASTODON_EXTERNAL_CLIENT", "displayName": "Mastodon external client", "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_GAMES",       "displayName": "Games Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_GAMES_ADMIN", "displayName": "Games Namespace Admin", "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_GAMES_SERVICES",        "displayName": "Games App-Store Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_GAMES_SERVICES_ADMIN",  "displayName": "Games App-Store Admin",  "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_GAMES_SERVICES_RUNNER", "displayName": "Games App-Store Runner", "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "desktop-sudo", "displayName": "Desktop SSO sudo (governed desktop polkit gate)", "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_TUBE",    "displayName": "Tube Access",    "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_OWNCAST", "displayName": "Owncast Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_WIKI",      "displayName": "Wiki Access",     "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_FORUM",     "displayName": "Forum Access",    "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_FORUM_MOD", "displayName": "Forum Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_GATEWAY",   "displayName": "Gateway service", "users": ["snapdragon/svc-pki-gateway","snapdragon/svc-be-gateway","snapdragon/svc-fe-gateway"], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_API",       "displayName": "API service",     "users": ["snapdragon/svc-api"], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_ADMIN_API", "displayName": "Admin API",       "users": ["snapdragon/svc-admin-bff"], "roles": [], "domains": [], "isEnabled": true },
-        { "owner": "snapdragon", "name": "ROLE_SERVICE",   "displayName": "Internal service-to-service", "users": ["snapdragon/svc-signup-gate"], "roles": [], "domains": [], "isEnabled": true }
+        { "owner": "hugmesh", "name": "ROLE_ADMIN",     "displayName": "Platform Admin",  "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_SUPERADMIN",    "displayName": "Platform Superadmin", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_IMAGE_BUILDER", "displayName": "Image Builder",       "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MOD",       "displayName": "Network Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MATRIX",    "displayName": "Matrix Access",   "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MASTODON",  "displayName": "Mastodon Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MATRIX_DOMAINLOCKED",   "displayName": "Matrix local-only",   "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MASTODON_DOMAINLOCKED", "displayName": "Mastodon local-only", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MATRIX_EXTERNAL_CLIENT",   "displayName": "Matrix external client",   "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_MASTODON_EXTERNAL_CLIENT", "displayName": "Mastodon external client", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES",       "displayName": "Games Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES_ADMIN", "displayName": "Games Namespace Admin", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES_SERVICES",        "displayName": "Games App-Store Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES_SERVICES_ADMIN",  "displayName": "Games App-Store Admin",  "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GAMES_SERVICES_RUNNER", "displayName": "Games App-Store Runner", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "desktop-sudo", "displayName": "Desktop SSO sudo (governed desktop polkit gate)", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_TUBE",    "displayName": "Tube Access",    "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_OWNCAST", "displayName": "Owncast Access", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_WIKI",      "displayName": "Wiki Access",     "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_FORUM",     "displayName": "Forum Access",    "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_FORUM_MOD", "displayName": "Forum Moderator", "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_USER",      "displayName": "Member",          "users": [], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_GATEWAY",   "displayName": "Gateway service", "users": ["hugmesh/svc-pki-gateway","hugmesh/svc-be-gateway","hugmesh/svc-fe-gateway"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_API",       "displayName": "API service",     "users": ["hugmesh/svc-api"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_ADMIN_API", "displayName": "Admin API",       "users": ["hugmesh/svc-admin-bff"], "roles": [], "domains": [], "isEnabled": true },
+        { "owner": "hugmesh", "name": "ROLE_SERVICE",   "displayName": "Internal service-to-service", "users": ["hugmesh/svc-signup-gate"], "roles": [], "domains": [], "isEnabled": true }
       ],
       "users": [
-        { "owner": "snapdragon", "name": "svc-pki-gateway", "displayName": "svc-pki-gateway", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
-        { "owner": "snapdragon", "name": "svc-be-gateway",  "displayName": "svc-be-gateway",  "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
-        { "owner": "snapdragon", "name": "svc-fe-gateway",  "displayName": "svc-fe-gateway",  "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
-        { "owner": "snapdragon", "name": "svc-api",         "displayName": "svc-api",         "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
-        { "owner": "snapdragon", "name": "svc-admin-bff",   "displayName": "svc-admin-bff",   "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
-        { "owner": "snapdragon", "name": "svc-signup-gate", "displayName": "svc-signup-gate", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false }
+        { "owner": "hugmesh", "name": "svc-pki-gateway", "displayName": "svc-pki-gateway", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "hugmesh", "name": "svc-be-gateway",  "displayName": "svc-be-gateway",  "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "hugmesh", "name": "svc-fe-gateway",  "displayName": "svc-fe-gateway",  "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "hugmesh", "name": "svc-api",         "displayName": "svc-api",         "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "hugmesh", "name": "svc-admin-bff",   "displayName": "svc-admin-bff",   "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false },
+        { "owner": "hugmesh", "name": "svc-signup-gate", "displayName": "svc-signup-gate", "type": "normal-user", "isAdmin": false, "isForbidden": false, "isDeleted": false }
       ]
     }

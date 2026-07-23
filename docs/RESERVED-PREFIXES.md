@@ -7,12 +7,12 @@ A **reserved label** is a username / vanity-profile handle that a user may
 path-prefix or subdomain route** on the platform gateways. Vanity profiles are
 addressed as:
 
-- `<username>.snapdragon.systems` (a subdomain; resolved by the fe-gateway
-  `Host=*.snapdragon.systems` route → federation-api, see
+- `<username>.hugmesh.systems` (a subdomain; resolved by the fe-gateway
+  `Host=*.hugmesh.systems` route → federation-api, see
   [`docs/ROUTE-ACCESS.md`](ROUTE-ACCESS.md) and the cluster README "Vanity
-  subdomains"), and the equivalent `*.snapdragon.games` surfaces.
+  subdomains"), and the equivalent `*.hugmesh.games` surfaces.
 
-If a user could register, say, `admin`, then `admin.snapdragon.systems` /
+If a user could register, say, `admin`, then `admin.hugmesh.systems` /
 `snapdragon.systems/admin` would **shadow** (or be shadowed by) the real
 platform route — a **vanity-collision**. The reserved set forbids exactly those
 labels.
@@ -21,7 +21,7 @@ The reserved set is the **union** of:
 
 - every dedicated **fe/be/pki gateway route prefix** (path first-segment),
 - every reserved service **subdomain** (first DNS label),
-- the **snapdragon.games** app prefixes, and
+- the **hugmesh.games** app prefixes, and
 - defensive standard **web names** (`well-known`, `favicon`, `robots`,
   `health`/`healthz`, `metrics`, …).
 
@@ -72,7 +72,7 @@ excluded so the username namespace isn't needlessly shrunk:
 - the akkoma-proxy / tuwunel-proxy **mTLS sidecars** (reached only behind the
   already-reserved `mastodon.` / `matrix.` hosts),
 - `*-db` / `*-pg` **datastores**, `kafka` / `eureka` / `cassandra` / `clickhouse`
-  brokers, `lan-dns`, and the `snapdragon-*-api` / `-ui` / `-web` pod helpers
+  brokers, `lan-dns`, and the `hugmesh-*-api` / `-ui` / `-web` pod helpers
   (each reached via its **reserved path/host prefix**, not by its bare branded
   Service name — which sed-rebrands per deployer anyway).
 
@@ -84,8 +84,8 @@ be reserved" rule — which would be **red on day one** — is avoided.
 
 | Layer | Where | What it enforces |
 |---|---|---|
-| **vanity-resolve** | `federation-api` `VanityController` / `ReservedNames` | refuses a reserved first-label when resolving `<user>.snapdragon.systems` |
-| **profile DB / registration** | `user-bff-api` `ReservedNames`, `snapdragon-actions` | a profile/handle can't be saved/registered with a reserved name |
+| **vanity-resolve** | `federation-api` `VanityController` / `ReservedNames` | refuses a reserved first-label when resolving `<user>.hugmesh.systems` |
+| **profile DB / registration** | `user-bff-api` `ReservedNames`, `hugmesh-actions` | a profile/handle can't be saved/registered with a reserved name |
 | **admin-route management** | `admin-bff-api` `ReservedNames` | an admin can't create a route-access row that conflicts with a reserved name |
 | **GitOps / admission** *(this repo)* | Kyverno `ClusterPolicy` + ConfigMap | blocks vanity-shadowing Ingress/HTTPRoute hosts + reserved vanity CRD handles at admission/sync |
 | **route-federation consistency** *(this repo)* | `scripts/validate-reserved-prefixes.sh` (CI lint) | asserts the canonical set ⊇ every deployed route prefix; fails on drift |
@@ -101,7 +101,7 @@ single auditable source of truth and drift is caught at build *and* sync time.
 - [`specs/cluster/reserved-prefixes.yaml`](../specs/cluster/reserved-prefixes.yaml)
   — the source.
 - [`specs/cluster/manifests/policy/reserved-prefixes-configmap.yaml`](../specs/cluster/manifests/policy/reserved-prefixes-configmap.yaml)
-  — a ConfigMap (`snapdragon-policy/reserved-prefixes`) that mirrors the list
+  — a ConfigMap (`hugmesh-policy/reserved-prefixes`) that mirrors the list
   into the cluster as `reserved.json`. This is the **auditable in-cluster copy**
   the Kyverno policy reads, so the policy and the source can't drift.
 - Regenerate the mirror with
@@ -115,8 +115,8 @@ is a Kyverno `ClusterPolicy` (`validationFailureAction: Enforce`) that reads the
 reserved list **from the ConfigMap** (single source) and:
 
 1. **rejects an Ingress** whose host's first DNS label under
-   `*.snapdragon.systems` / `*.snapdragon.games` is reserved (unless the object
-   is a platform component, `app.kubernetes.io/part-of=snapdragon.systems`),
+   `*.hugmesh.systems` / `*.hugmesh.games` is reserved (unless the object
+   is a platform component, `app.kubernetes.io/part-of=hugmesh.systems`),
 2. **rejects a Gateway-API `HTTPRoute`** on the same hostname rule, and
 3. **defensively rejects** a `VanityClaim`/`Profile`/`User` CRD whose handle is
    reserved — **inert** until such a CRD exists (the kind won't match), so it is
@@ -161,7 +161,7 @@ The script runs **five stages** (each fails the build on a violation):
    reserved gateway hosts);
 4. **scoped Service-name drift**: `reserved ⊇` the **publicly-routable Services**
    — those a gateway route `uri` actually targets — **minus** the explicit
-   internal allowlist (the mTLS proxies, `*-db`/`*-pg`, the `snapdragon-*`
+   internal allowlist (the mTLS proxies, `*-db`/`*-pg`, the `hugmesh-*`
    family, casdoor/headscale/signup-gate). A routed Service whose public
    first-label is neither reserved nor allowlisted is drift. This is the
    **scoped** check — it never demands a label for a non-routable internal
@@ -185,7 +185,7 @@ The script runs **five stages** (each fails the build on a violation):
 3. Run `scripts/sync-reserved-configmap.sh` to regenerate the ConfigMap mirror.
 4. Run `scripts/validate-reserved-prefixes.sh` — it must PASS.
 5. **Add the same label to the app-repo `ReservedNames` copies**
-   (federation-api / user-bff-api / snapdragon-actions / admin-bff-api) so the
+   (federation-api / user-bff-api / hugmesh-actions / admin-bff-api) so the
    resolve/registration/admin layers agree.
 
 ## Honest scope / deferrals
@@ -202,7 +202,7 @@ The script runs **five stages** (each fails the build on a violation):
   `reserved.json` as a build artifact the app repos pull.
 - `pleroma` (revision 1) and now `_synapse` / `media` / `forum` / `phpbb`
   (revision 2) were added to the canonical set; the four app repos
-  (`federation-api` / `user-bff-api` / `snapdragon-actions` / `admin-bff-api`)
+  (`federation-api` / `user-bff-api` / `hugmesh-actions` / `admin-bff-api`)
   must add the same labels to reach parity (the code-copy assertion FAILs until
   they do — that is the intended signal).
 - The scoped Service-name drift check (stage 4) keys on the route `uri` host, so

@@ -5,7 +5,7 @@ matrix (tests/build-matrix/matrix.tsv) under qemu-system and asserts boot-marker
 SIZE + runtime LOAD via tests/qemu/run-matrix-e2e.sh. It NEVER builds anything.
 
 SKIPPED by default (like test_tor_onion_e2e.py): the boot walk needs qemu, operator
-artifacts, and — under TCG on an x86 host — many hours. Enable with SNAPDRAGON_QEMU_E2E=1
+artifacts, and — under TCG on an x86 host — many hours. Enable with HUGMESH_QEMU_E2E=1
 (and qemu installed). Everything ELSE in this file is HERMETIC and always runs: the
 matrix enumeration, the launcher resolution, the pseudo-role translation, the compact
 image-size formula, the ``img_size=``-from-``--print-plan`` parser, and the shell
@@ -18,8 +18,8 @@ import subprocess
 
 import pytest
 
-from snapdragon_studio.core import build_matrix as bm
-from snapdragon_studio.core import device_catalog as dc
+from hugmesh_studio.core import build_matrix as bm
+from hugmesh_studio.core import device_catalog as dc
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -36,8 +36,8 @@ EXPECTED_COUNTS = {"frite": 38, "jetson": 14, "orangepi5": 14,
 _qemu = shutil.which("qemu-system-x86_64")
 
 _gated = pytest.mark.skipif(
-    os.environ.get("SNAPDRAGON_QEMU_E2E") != "1" or _qemu is None,
-    reason="matrix QEMU e2e is opt-in — set SNAPDRAGON_QEMU_E2E=1 with qemu installed")
+    os.environ.get("HUGMESH_QEMU_E2E") != "1" or _qemu is None,
+    reason="matrix QEMU e2e is opt-in — set HUGMESH_QEMU_E2E=1 with qemu installed")
 
 
 # ── always-run: the harness exists + is executable ───────────────────────────────
@@ -150,8 +150,8 @@ def test_driver_subset_filter():
 
 
 def test_driver_boot_path_skips_clean_without_opt_in(monkeypatch):
-    # no SNAPDRAGON_QEMU_E2E → SKIP clean (exit 0), never a FAIL (windows-studio-e2e shape).
-    env = {k: v for k, v in os.environ.items() if k != "SNAPDRAGON_QEMU_E2E"}
+    # no HUGMESH_QEMU_E2E → SKIP clean (exit 0), never a FAIL (windows-studio-e2e shape).
+    env = {k: v for k, v in os.environ.items() if k != "HUGMESH_QEMU_E2E"}
     r = subprocess.run(["bash", DRIVER, "--only", "x86/be+gpu"], env=env,
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0
@@ -164,7 +164,7 @@ def test_driver_boot_path_skips_when_no_artifact_even_opted_in(tmp_path):
     # (This is exactly why the no-build sandbox skips: no golden images, not "always skip".)
     stub = tmp_path / "launch-stub.sh"
     stub.write_text("#!/usr/bin/env bash\nexit 0\n"); stub.chmod(0o755)
-    env = {**os.environ, "SNAPDRAGON_QEMU_E2E": "1",
+    env = {**os.environ, "HUGMESH_QEMU_E2E": "1",
            "SNAP_QEMU_LAUNCH_CMD": f"bash {stub}"}
     r = subprocess.run(["bash", DRIVER, "--only", "x86/be+gpu", "-w", str(tmp_path)],
                        env=env, capture_output=True, text=True, timeout=180)
@@ -189,8 +189,8 @@ def test_driver_really_boots_and_asserts_with_a_present_artifact(tmp_path):
         "exit 0\n")
     launch.chmod(0o755)
     wd = tmp_path / "wd"; wd.mkdir()
-    (wd / "snapdragon-x86-be+gpu-prod-ts.img").write_bytes(b"\0" * (1 << 20))  # 1 MiB << ceiling
-    env = {**os.environ, "SNAPDRAGON_QEMU_E2E": "1",
+    (wd / "hugmesh-x86-be+gpu-prod-ts.img").write_bytes(b"\0" * (1 << 20))  # 1 MiB << ceiling
+    env = {**os.environ, "HUGMESH_QEMU_E2E": "1",
            "SNAP_QEMU_PLAN_CMD": f"bash {plan}", "SNAP_QEMU_LAUNCH_CMD": f"bash {launch}"}
     r = subprocess.run(["bash", DRIVER, "--only", "x86/be+gpu", "-w", str(wd)],
                        env=env, capture_output=True, text=True, timeout=180)
@@ -210,9 +210,9 @@ def test_driver_fails_the_row_when_the_image_is_oversize(tmp_path):
     launch = tmp_path / "launch.sh"
     launch.write_text("#!/usr/bin/env bash\nexit 0\n"); launch.chmod(0o755)
     wd = tmp_path / "wd"; wd.mkdir()
-    with open(wd / "snapdragon-x86-be+gpu-prod-ts.img", "wb") as fh:
+    with open(wd / "hugmesh-x86-be+gpu-prod-ts.img", "wb") as fh:
         fh.truncate(600 * (1 << 20))             # 600 MiB sparse > 515 MiB ceiling
-    env = {**os.environ, "SNAPDRAGON_QEMU_E2E": "1",
+    env = {**os.environ, "HUGMESH_QEMU_E2E": "1",
            "SNAP_QEMU_PLAN_CMD": f"bash {plan}", "SNAP_QEMU_LAUNCH_CMD": f"bash {launch}"}
     r = subprocess.run(["bash", DRIVER, "--only", "x86/be+gpu", "-w", str(wd)],
                        env=env, capture_output=True, text=True, timeout=180)

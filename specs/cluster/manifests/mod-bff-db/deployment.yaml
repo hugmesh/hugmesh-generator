@@ -1,9 +1,9 @@
-# mod-bff-db — dedicated Postgres for snapdragon-mod-bff-api's config datastore
-# (the mod_action table the moderation BFF owns). Lives in snapdragon-backend
+# mod-bff-db — dedicated Postgres for hugmesh-mod-bff-api's config datastore
+# (the mod_action table the moderation BFF owns). Lives in hugmesh-backend
 # next to the BFF it serves. ClusterIP only.
 #
 # NOTE: like admin-bff, the mod-bff app's application.yml defaults its
-# spring.r2dbc/spring.liquibase to a literal `snapdragon-pg` host that does NOT
+# spring.r2dbc/spring.liquibase to a literal `hugmesh-pg` host that does NOT
 # exist anywhere in the cluster; this dedicated `mod-bff-db` Service is the real
 # backing store, and the mod-bff Deployment OVERRIDES the R2DBC/Liquibase URLs to
 # point here (mirrors how federation-db backs federation, admin-bff-db backs admin-bff).
@@ -25,8 +25,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mod-bff-db
-  namespace: snapdragon-backend
-  labels: { app: mod-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: mod-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over a RWO PVC

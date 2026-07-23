@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "hugmesh-gateway.name" . }}
+  labels:
+    {{- include "hugmesh-gateway.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "hugmesh-gateway.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+{{- if .Values.serviceAccount.create }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "hugmesh-gateway.serviceAccountName" . }}
+  labels:
+    {{- include "hugmesh-gateway.labels" . | nindent 4 }}
+{{- end }}
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "hugmesh-gateway.name" . }}
+  labels:
+    {{- include "hugmesh-gateway.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- /* PoW shield: the public Ingress backend defaults to THIS gateway Service,
+         but when an anti-scraper PoW gate (Anubis) is installed the generator sets
+         ingress.backendServiceName/Port so the public front door routes THROUGH
+         the PoW gate first (it forwards verified traffic to this gateway). */ -}}
+  {{- $beName := default (include "hugmesh-gateway.name" .) .Values.ingress.backendServiceName }}
+  {{- $bePort := default .Values.service.port .Values.ingress.backendServicePort }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $beName }}
+                port:
+                  number: {{ $bePort }}
+    {{- range .Values.ingress.extraHosts }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $beName }}
+                port:
+                  number: {{ $bePort }}
+    {{- end }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    - hosts: [{{ .Values.ingress.host | quote }}]
+      secretName: {{ include "hugmesh-gateway.name" . }}-tls
+  {{- end }}
+{{- end }}
