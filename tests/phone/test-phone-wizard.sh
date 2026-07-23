@@ -1250,6 +1250,135 @@ else
     ok "(25) SECRET HYGIENE: the wizard has NO azure tenant/client-secret argv flag (custody is server-side only)"
 fi
 
+# ── (26) MDM EMIT e2e: real headwind fold + registry-driven 3rd provider +
+#         runtime azure-secret sweep (ADDENDUM 2026-07-22) ────────────────────
+# Complements (22)/(25): (22) proves the headwind adb path but never asserts
+# mdm_provider in the record; (25) proves the azure path end-to-end but
+# SYNTHESIZES a headwind mdm.json by hand and checks secret hygiene only
+# STRUCTURALLY (no secret flag in source) + at the registry layer. Here:
+#   (A) a REAL default (no --mdm-provider flag) headwind mdm-enroll -> ingest
+#       fold, asserting mdm_provider=headwind top-level + nested through ingest;
+#   (B) a SYNTHETIC third provider injected via the PW_MDM_PROVIDERS_LIB seam
+#       proves the driver is REGISTRY-DRIVEN — plan threads it and mdm-enroll
+#       dispatches its emit with ZERO driver edits (the id is nowhere in the
+#       driver source), mirroring go-live's GL_PROVIDERS_LIB seam;
+#   (C) a RUNTIME secret sweep: azure mdm-enroll run with hostile tenant/client-
+#       secret env present must leak NONE of it to stdout or any stub argv log.
+
+# ── (26A) REAL headwind (default provider) mdm-enroll -> ingest fold ──────────
+reset_state
+rm -f "${STATE}/adb-getstate" "${STATE}/dpm-fail"
+printf 'List of devices attached\n%s             device usb:1-4\n' "${SERIAL_A}" > "${STATE}/adb-devices"
+printf 'package:com.tailscale.ipn\npackage:com.hmdm.launcher\n' > "${STATE}/packages"
+printf '%s\n' "${DIGEST_HW_OK}" > "${STATE}/apksigner-digest"
+clear_logs
+# NO --mdm-provider flag: the sovereign default must be selected implicitly.
+run mdm-enroll --out "${OUT}" --headwind-url "${HEADWIND_URL_T}" --headwind-signer-sha256 "${DIGEST_HW_OK}"
+[ "${RC}" -eq 0 ] && ok "(26A) default (no --mdm-provider) mdm-enroll exits 0 (sovereign headwind default)" \
+    || { bad "(26A) default headwind mdm-enroll rc=${RC}"; echo "${OUT_TXT}"; }
+grep -q 'dpm set-device-owner com.hmdm.launcher/.AdminReceiver' "${LOGD}/adb.log" \
+    && ok "(26A) default provider takes the DPC adb path (dpm set-device-owner in adb.log)" \
+    || { bad "(26A) default provider did not take the dpc-adb path"; cat "${LOGD}/adb.log"; }
+HW26_MDM="${OUT}/device/${DEVID}/mdm.json"
+[ -f "${HW26_MDM}" ] \
+    && [ "$(jq -r '.mdm_provider' "${HW26_MDM}")" = "headwind" ] \
+    && [ "$(jq -r '.set_via' "${HW26_MDM}")" = "adb-device-owner" ] \
+    && [ "$(jq -r '.intune_device_id' "${HW26_MDM}")" = "" ] \
+    && ok "(26A) real headwind mdm.json carries mdm_provider=headwind, set_via=adb-device-owner, empty intune id" \
+    || bad "(26A) headwind mdm.json provider fields wrong: $(jq -c '{mdm_provider,set_via,intune_device_id}' "${HW26_MDM}" 2>/dev/null)"
+# fold it through a REAL ingest (25 synthesizes the record; this runs the driver).
+run ingest --device-id "${DEVID}" --codename "${CODENAME}" --out "${OUT}"
+HW26_ING="${OUT}/device/${DEVID}/ingest.json"
+[ "${RC}" -eq 0 ] \
+    && [ "$(jq -r '.mdm_provider' "${HW26_ING}")" = "headwind" ] \
+    && [ "$(jq -r '.mdm.provider' "${HW26_ING}")" = "headwind" ] \
+    && [ "$(jq -r '.mdm.set_via' "${HW26_ING}")" = "adb-device-owner" ] \
+    && [ "$(jq -r '.intune_device_id' "${HW26_ING}")" = "" ] \
+    && ok "(26A) real headwind ingest folds mdm_provider=headwind top-level + nested mdm.provider/set_via" \
+    || bad "(26A) headwind ingest fold wrong: $(jq -c '{mdm_provider,intune_device_id,mdm}' "${HW26_ING}" 2>/dev/null)"
+
+# ── (26B) registry-driven dispatch: a SYNTHETIC 3rd provider, no driver edit ──
+# Point the driver's registry seam at a lib that SOURCES the real registry then
+# appends one os-enrollment provider ("acme-mdm"). If the driver truly branches
+# on the registry (mechanism + mdmp_emit) and never hard-codes the id set, this
+# new provider validates in plan and enrolls via its emit with NO code change.
+SYNTH_LIB="${WORK}/mdm-providers-synth.sh"
+cat > "${SYNTH_LIB}" <<SYNTH
+# shellcheck shell=bash
+source "${REPO}/specs/usr/lib/snapdragon/mdm-providers.sh"
+MDM_PROVIDER_IDS+=(acme-mdm)
+MDM_PROVIDER_LABEL[acme-mdm]="ACME Test MDM (synthetic)"
+MDM_PROVIDER_MECH[acme-mdm]="os-enrollment"
+MDM_PROVIDER_STATUS[acme-mdm]="full"
+MDM_PROVIDER_SOVEREIGNTY[acme-mdm]="cloud"
+MDM_PROVIDER_EMITS[acme-mdm]="synthetic os-enrollment provider for the registry-driven test"
+mdmp_emit_acme-mdm() {
+    local out="\$1"
+    printf 'ACME-SYNTHETIC-RUNBOOK-MARKER — os-enrollment (registry-driven, no driver edit)\n' > "\${out}/runbook.txt"
+    return 0
+}
+SYNTH
+# the new id must NOT appear anywhere in the driver source (registry-driven).
+if grep -qF -- 'acme-mdm' "${DRIVER}"; then
+    bad "(26B) the driver hard-codes 'acme-mdm' — the id must live ONLY in the registry"
+else
+    ok "(26B) the synthetic provider id appears NOWHERE in the driver source (registry-driven, not hard-coded)"
+fi
+# plan threads the synthetic provider purely from the registry.
+run PW_MDM_PROVIDERS_LIB="${SYNTH_LIB}" plan --codename "${CODENAME}" --mdm-provider acme-mdm
+[ "${RC}" -eq 0 ] && [ "$(plan_val MDM_PROVIDER)" = "acme-mdm" ] \
+    && [ "$(plan_val MDM_MECHANISM)" = "os-enrollment" ] && [ "$(plan_val MDM_SOVEREIGNTY)" = "cloud" ] \
+    && ok "(26B) plan accepts + threads the registry-injected acme-mdm (provider/mechanism/sovereignty), no driver edit" \
+    || bad "(26B) plan did not thread the synthetic provider (rc=${RC}, provider=$(plan_val MDM_PROVIDER), mech=$(plan_val MDM_MECHANISM))"
+# mdm-enroll DISPATCHES the synthetic provider's emit via the registry.
+reset_state; clear_logs
+ACME_DEVID="phone-acme-test"
+run PW_MDM_PROVIDERS_LIB="${SYNTH_LIB}" mdm-enroll --mdm-provider acme-mdm --out "${OUT}" --device-id "${ACME_DEVID}"
+[ "${RC}" -eq 0 ] && has "ACME-SYNTHETIC-RUNBOOK-MARKER" \
+    && ok "(26B) mdm-enroll dispatches the synthetic provider's registry emit (its runbook prints), no driver edit" \
+    || { bad "(26B) synthetic mdm-enroll rc=${RC}, marker missing"; echo "${OUT_TXT}"; }
+[ ! -s "${LOGD}/adb.log" ] && ok "(26B) synthetic os-enrollment provider made ZERO adb calls (mechanism-branched)" \
+    || { bad "(26B) synthetic provider touched adb"; cat "${LOGD}/adb.log"; }
+ACME_MDM="${OUT}/device/${ACME_DEVID}/mdm.json"
+[ -f "${ACME_MDM}" ] && [ "$(jq -r '.mdm_provider' "${ACME_MDM}")" = "acme-mdm" ] \
+    && [ "$(jq -r '.set_via' "${ACME_MDM}")" = "intune-os-enrollment" ] \
+    && ok "(26B) synthetic provider mdm.json records mdm_provider=acme-mdm via the shared os-enrollment path" \
+    || bad "(26B) synthetic mdm.json wrong: $(cat "${ACME_MDM}" 2>/dev/null)"
+
+# ── (26C) RUNTIME azure-secret sweep through the full wizard ──────────────────
+# (25) proves no tenant/client-secret FLAG exists (structural). This proves the
+# RUNTIME: even with hostile azure credential material present in the process
+# environment, the wizard leaks none of it to stdout or any stub tool's argv.
+reset_state; clear_logs
+AZ26_DEVID="phone-az-secret-test"
+AZ26_INTUNE_ID="abcdef00-1122-3344-5566-778899aabbcc"
+FAKE_AZ_TENANT="TENANT-a1b2c3-must-never-appear"
+FAKE_AZ_CLIENT="CLIENTID-d4e5f6-must-never-appear"
+FAKE_AZ_SECRET="CLIENTSECRET-g7h8i9-must-never-appear"
+# env-only custody: pass the hostile creds as process env (pw forwards VAR=VAL).
+run TENANT_ID="${FAKE_AZ_TENANT}" AZURE_TENANT_ID="${FAKE_AZ_TENANT}" \
+    CLIENT_ID="${FAKE_AZ_CLIENT}" AZURE_CLIENT_ID="${FAKE_AZ_CLIENT}" \
+    CLIENT_SECRET="${FAKE_AZ_SECRET}" AZURE_CLIENT_SECRET="${FAKE_AZ_SECRET}" \
+    mdm-enroll --mdm-provider azure-intune --out "${OUT}" \
+    --device-id "${AZ26_DEVID}" --intune-device-id "${AZ26_INTUNE_ID}"
+[ "${RC}" -eq 0 ] && ok "(26C) azure mdm-enroll exits 0 with hostile azure creds present in the env" \
+    || { bad "(26C) azure mdm-enroll rc=${RC}"; echo "${OUT_TXT}"; }
+AZ26_LEAK=0
+for secret in "${FAKE_AZ_TENANT}" "${FAKE_AZ_CLIENT}" "${FAKE_AZ_SECRET}"; do
+    grep -qF -- "${secret}" <<<"${OUT_TXT}" && { bad "(26C) azure credential material LEAKED to wizard stdout"; AZ26_LEAK=1; }
+    for t in adb.log fastboot.log curl.log; do
+        grep -qF -- "${secret}" "${LOGD}/${t}" 2>/dev/null && { bad "(26C) azure credential material LEAKED onto ${t} argv"; AZ26_LEAK=1; }
+    done
+done
+[ "${AZ26_LEAK}" -eq 0 ] \
+    && ok "(26C) RUNTIME secret sweep clean: no tenant/client-id/client-secret on stdout or any stub argv (custody is server-side only)" \
+    || bad "(26C) RUNTIME secret sweep found azure credential leaks (see above)"
+# and the recorded intune device id is NOT a secret — it may (and must) appear.
+AZ26_MDM="${OUT}/device/${AZ26_DEVID}/mdm.json"
+[ -f "${AZ26_MDM}" ] && [ "$(jq -r '.intune_device_id' "${AZ26_MDM}")" = "${AZ26_INTUNE_ID}" ] \
+    && ok "(26C) the non-secret intune_device_id IS recorded (the only azure input the wizard accepts)" \
+    || bad "(26C) intune_device_id not recorded: $(cat "${AZ26_MDM}" 2>/dev/null)"
+
 echo
 echo "== phone-wizard test: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ] || exit 1
