@@ -311,7 +311,7 @@ ORANGEPIZERO2_PASS    := ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
 
 .DEFAULT_GOAL := help
 .PHONY: help menu mesh-node-up mesh-node-down mesh-node-status mesh-node-logs go-live go-live-menu clean build-all build-everything matrix-check pentest pentest-seed rebuild \
-        rpi x86 omnibus frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
+        rpi x86 omnibus prebuild-binaries frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
         orangepizero2 orangepizero2-live orangepizero2-installer \
         phone-plan phone-detect phone-fetch phone-flash phone-mdm-enroll phone-attest phone-enroll phone-profile phone-rotate-profile-pass phone-remove-profile phone-ingest phone-status phone-wizard \
         deploy-plan deploy-apply deploy-status deploy-destroy \
@@ -686,6 +686,39 @@ else
 	$(X86) --role omnibus
 	$(chown-artifacts)
 endif
+
+# ── prebuild-binaries: compile a platform's role-UNION binpkg pool ONCE ─────────
+# (shared-binpkg track, Lane 4c)  ARCH=<platform> [BOARD=<board>]
+# Computes the role-union atom list via the Qt-free Studio module, then invokes the
+# platform's builder ONE time with --packages-only (populate PKGDIR under
+# FEATURES=buildpkg, then exit BEFORE any image assembly — emits nothing
+# image-shaped) + the union via --packages-add, into the PER-BOARD pkgdir. Later
+# per-role image builds reuse it via --usepkg (guarded by the pool fingerprint).
+# PER-BOARD: the pi builder's --board selects the Lane-2 snap-build-pi5/-pi4/-pi3
+# subdir; a BOARD= override is threaded to the pi family (its -mcpu split is the one
+# that needs distinct pools — see docs/SHARED-BINPKG.md). USE note: the pool is
+# built under the chosen prebuild role's USE; a later role whose USE differs rebuilds
+# just those atoms (--binpkg-respect-use=y + --newuse) — SAFE, never a wrong reuse.
+PREBUILD_ROLE_X86     ?= omnibus
+PREBUILD_ROLE_RPI     ?= backend
+PREBUILD_JETSON_BOARD ?= orin-nano
+prebuild-binaries: ## prebuild a platform's role-union binpkg pool (ARCH=x86|rpi5|frite|jetson|orangepi5|orangepizero2 [BOARD=]); compile once, reuse via --usepkg
+	@_pl='$(ARCH)'; _list=$$(mktemp); \
+	 echo "==> computing $$_pl role-union package set (prebuild_union)"; \
+	 PYTHONPATH=studio python3 -m snapdragon_studio.core.prebuild_union "$$_pl" > "$$_list" \
+	   || { echo "prebuild_union failed for '$$_pl'"; rm -f "$$_list"; exit 1; }; \
+	 _atoms="$$(tr '\n' ' ' < "$$_list")"; \
+	 echo "==> $$_pl: $$(wc -l < "$$_list") atoms -> per-board binpkg pool (--packages-only, no image)"; \
+	 case "$$_pl" in \
+	   x86)           $(X86) --role $(PREBUILD_ROLE_X86) --packages-only --packages-add "$$_atoms" ;; \
+	   rpi5)          $(RPI) $(if $(BOARD),--board $(BOARD),) --role $(PREBUILD_ROLE_RPI) --packages-only --packages-add "$$_atoms" ;; \
+	   frite)         $(FRITE_BUILD) --board $(FRITE_BOARD) --flavor installer --desktop light --packages-only --packages-add "$$_atoms" ;; \
+	   jetson)        $(JETSON_BUILD) --board $(PREBUILD_JETSON_BOARD) --role $(JETSON_ROLE) --packages-only --packages-add "$$_atoms" ;; \
+	   orangepi5)     $(ORANGEPI5_BUILD) --board $(ORANGEPI5_BOARD) --flavor installer --packages-only --packages-add "$$_atoms" ;; \
+	   orangepizero2) $(ORANGEPIZERO2_BUILD) --flavor installer --packages-only --packages-add "$$_atoms" ;; \
+	   *) echo "prebuild-binaries: ARCH must be x86|rpi5|frite|jetson|orangepi5|orangepizero2 (got '$$_pl')"; rm -f "$$_list"; exit 1 ;; \
+	 esac; \
+	 rm -f "$$_list"
 
 # Extra builder flags threaded to the standalone-desktop targets (the menu / CLI
 # passes e.g. STANDALONE_FLAGS='--local-user alice --local-pass s3cret --nvidia-driver proprietary').

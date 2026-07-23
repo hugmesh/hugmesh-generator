@@ -73,11 +73,19 @@ source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
 # scripts/_host-guard-lib.sh.
 # shellcheck source=scripts/_host-guard-lib.sh
 source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
+# Per-board binpkg-pool fingerprint guard (shared-binpkg track): the load-bearing
+# SIGILL safety net — REFUSES --usepkg reuse of a pool whose (CHOST + exact
+# CFLAGS/-mcpu + profile) fingerprint != this build's. All aarch64 boards share
+# CHOST but differ in -mcpu, and portage's --binpkg-respect-use ignores CFLAGS.
+# shellcheck source=scripts/_binpkg-pool-lib.sh
+source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 # shellcheck source=scripts/_dracut-cross-lib.sh
 source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 
 WORK_DIR=""
 BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-jetson}"  # per-arch isolation (never shares the Pi/Frite/x86 sysroot)
+DISTDIR_SRC="${SNAP_DISTDIR_SRC:-}"   # --distdir DIR / SNAP_DISTDIR_SRC env: shared READ-ONLY distfiles cache (arch-independent sources → safe fleet-wide). Empty = private per-build DISTDIR only.
+PACKAGES_ONLY=false   # --packages-only: prebuild the per-board binpkg pool then exit BEFORE image assembly (kernel/img/iso/tar). Host/CI build-phase flag, NOT a Studio ImageConfig field.
 CROSS_TARGET="aarch64-unknown-linux-gnu"
 REL_VERSION="2026.0"
 
@@ -266,6 +274,9 @@ OPTIONS
 
   General
     -w, --work-dir DIR  products land here (default ./out).
+    --distdir DIR       reuse a shared READ-ONLY distfiles cache (or SNAP_DISTDIR_SRC
+                        env); arch-independent sources, safe fleet-wide. New fetches
+                        still land in the private build tree. Empty = private only.
     -j, --jobs N        parallel jobs (default nproc).
     --print-plan        resolve + validate all flags, print the build plan
                         (PLAN_KEY=VALUE lines) and exit 0 — no root, no writes,
@@ -310,6 +321,8 @@ fi
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -w|--work-dir)        WORK_DIR="$2";              shift 2 ;;
+        --distdir)            DISTDIR_SRC="$2";           shift 2 ;;
+        --packages-only)      PACKAGES_ONLY=true;         shift ;;
         --build-subdir)       BUILD_SUBDIR="$2";          shift 2 ;;
         -s|--specs-dir)       SPECS_DIR="$2";             shift 2 ;;
         -t|--target)          CROSS_TARGET="$2";          shift 2 ;;
@@ -624,6 +637,9 @@ if ${PRINT_PLAN}; then
     _plan ARTIFACTS          "${_ARTS}"
     _plan ARTIFACT_PREFIX    "${BRAND}-jetson-${JETSON_BOARD}-arm64-${ROLE}-${ENV}-<timestamp>"
     _plan WORK_DIR           "${WORK_DIR}"
+    # Per-board binpkg pool + prebuild mode (shared-binpkg). Additive PLAN_ keys.
+    _plan PKGDIR             "${BUILD_ROOT}/pkgdir"
+    _plan PACKAGES_ONLY      "$(${PACKAGES_ONLY} && echo 1 || echo 0)"
     _plan JOBS               "${JOBS}"
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
@@ -1139,6 +1155,24 @@ cp "${SPECS_DIR}/portage/package.use/"*             "${SYSROOT}/etc/portage/pack
 cp "${SPECS_DIR}/portage/package.env/"*             "${SYSROOT}/etc/portage/package.env/"
 cp "${SPECS_DIR}/portage/env/"*.conf                "${SYSROOT}/etc/portage/env/" 2>/dev/null || true
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
+# Shared READ-ONLY distfiles (Lane 3) — SB-RO-DISTFILES-BEGIN
+# distfiles are arch-independent SOURCE tarballs, so ONE fleet-wide cache is safe
+# across every board (NO ABI/-mcpu risk — mirrors the x86 builder's
+# PORTAGE_RO_DISTDIRS reuse). --distdir DIR (or SNAP_DISTDIR_SRC in the env)
+# exposes that cache READ-ONLY: new fetches still land in this build's PRIVATE
+# ${BUILD_ROOT}/distfiles (DISTDIR), so the shared pool is never written. Unlike
+# x86 (which emerges INSIDE a chroot and bind-mounts the dir under the sysroot),
+# this builder emerges on the HOST with PORTAGE_CONFIGROOT=${SYSROOT}, so
+# PORTAGE_RO_DISTDIRS points straight at the host path. A set-but-bad path WARNs
+# and is ignored (correct artifact, just re-downloads) — mirrors x86's shape-check.
+if [ -n "${DISTDIR_SRC}" ] && [ ! -d "${DISTDIR_SRC}" ]; then
+    warn "--distdir: not a directory: ${DISTDIR_SRC} — IGNORING it (sources re-download into ${BUILD_ROOT}/distfiles)."
+elif [ -n "${DISTDIR_SRC}" ]; then
+    grep -q 'PORTAGE_RO_DISTDIRS' "${SYSROOT}/etc/portage/make.conf" 2>/dev/null \
+        || printf 'PORTAGE_RO_DISTDIRS="%s"\n' "${DISTDIR_SRC}" >> "${SYSROOT}/etc/portage/make.conf"
+    info "Distfiles: reusing shared cache ${DISTDIR_SRC} via PORTAGE_RO_DISTDIRS (read-only; new fetches -> ${BUILD_ROOT}/distfiles)"
+fi
+# SB-RO-DISTFILES-END
 
 cp "${SPECS_DIR}/etc/fstab" "${SYSROOT}/etc/fstab"
 mkdir -p "${SYSROOT}/etc/modules-load.d"
@@ -1371,7 +1405,14 @@ cross_emerge() {
     ROOT="${SYSROOT}" SYSROOT="${SYSROOT}" PORTAGE_CONFIGROOT="${SYSROOT}" \
     EMERGE_LOG_DIR="${BUILD_ROOT}/log" PORTAGE_DEPCACHEDIR="${BUILD_ROOT}/edb" \
     PORTAGE_TMPDIR="${BUILD_ROOT}/tmp" \
-    "${CROSS_TARGET}-emerge" --jobs="${JOBS}" --load-average="${JOBS}" --with-bdeps=n "$@"
+    "${CROSS_TARGET}-emerge" --jobs="${JOBS}" --load-average="${JOBS}" --with-bdeps=n \
+        --usepkg=y --binpkg-respect-use=y "$@"
+    # --usepkg=y: CONSUME the binpkgs FEATURES=buildpkg already produces, so
+    # re-runs / multi-role builds don't recompile the arm64 world from source
+    # (mirrors the Pi5 builder). SAFE: PKGDIR is ${BUILD_ROOT}/pkgdir under this
+    # board's OWN BUILD_SUBDIR (snap-build-jetson) — reuse is same-board only,
+    # never across boards (different -mcpu ⇒ SIGILL). --binpkg-respect-use=y
+    # rejects a binpkg whose recorded USE ≠ the current config (rebuilds it).
 }
 
 # Don't cross-rebuild the toolchain (fails under crossdev). Same as Pi5/Frite.
@@ -1396,6 +1437,16 @@ if ${IMAGE_ONLY}; then
 else
 
 banner "Phase 1: Cross-building @system (hardened)"
+# ── binpkg-pool fingerprint preflight (shared-binpkg SIGILL guard) ─────────────
+# Before the FIRST --usepkg cross_emerge consumes ${BUILD_ROOT}/pkgdir, verify the
+# pool's fingerprint (CHOST + exact CFLAGS/-mcpu + CXXFLAGS + profile, read from the
+# rendered make.conf) matches THIS build. portage's --binpkg-respect-use checks USE
+# only, never CFLAGS — so this is the ONLY check that catches a cross-board (different
+# -mcpu) pool being reused, which would SIGILL at runtime. Fresh pool ⇒ stamped;
+# mismatch ⇒ abort. Belt-and-suspenders over the per-board BUILD_SUBDIR isolation.
+pool_fingerprint_preflight "${BUILD_ROOT}/pkgdir" "${SYSROOT}/etc/portage/make.conf" "${PROFILE_PATH:-}" \
+    || { err "binpkg pool ABI mismatch (see above) — refusing --usepkg reuse."; exit 1; }
+
 cross_emerge --oneshot --update sys-apps/baselayout
 cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" @system \
     || warn "@system had package failures (--keep-going); continuing"
@@ -1449,6 +1500,19 @@ if [ "${DESKTOP}" = "light" ] && [ ! -e "${SYSROOT}/etc/init.d/display-manager" 
     exit 1
 fi
 info "stage4 payload assert OK (${#REQUIRED_BINS[@]} role binaries present)."
+
+# ── --packages-only: prebuild the binpkg pool, then STOP before image assembly ──
+# The cross_emerge above populated PKGDIR (${BUILD_ROOT}/pkgdir) under
+# FEATURES=buildpkg, and the payload assert just confirmed the pool built the role
+# set. In --packages-only mode we exit NOW — before mesh, the kernel, the boot tree
+# and the stage4 tarball — so the ONLY output is the per-board binpkg pool a later
+# per-role image build reuses via --usepkg (guarded by the fingerprint preflight).
+# The pool lives in ${BUILD_ROOT}/pkgdir (outside the sysroot), so it is never
+# stripped. We emit NOTHING image-shaped.
+if ${PACKAGES_ONLY}; then
+    info "--packages-only: per-board binpkg pool prebuilt at ${BUILD_ROOT}/pkgdir — skipping image assembly (PLAN_PACKAGES_ONLY=1)"
+    exit 0
+fi
 
 # ── Phase 2.5: mesh VPN (headscale + tailscale) — same as Pi5/Frite ─
 if ${SKIP_MESH}; then

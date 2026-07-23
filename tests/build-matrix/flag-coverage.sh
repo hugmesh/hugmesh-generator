@@ -85,6 +85,12 @@ orangepizero2 --target — host-side cross-toolchain plumbing, deliberately not 
 orangepizero2 --role — undocumented marker-only escape hatch (no real role axis; path-traversal-gated in the builder)
 orangepizero2 --live — pure alias of '--flavor live' (the fielded axis)
 orangepizero2 --installer — pure alias of '--flavor installer' (the fielded axis)
+all --packages-only — host/CI PREBUILD-phase flag (shared-binpkg): run the emerge that populates PKGDIR then exit BEFORE image assembly; NOT a Studio ImageConfig field (same class as --specs-dir; driven by the prebuild-binaries make target, not a GUI knob)
+rpi5 --distdir — host-side build plumbing (shared READ-ONLY distfiles cache path); NOT a GUI knob on ARM (same class as --specs-dir). x86 DOES field it; the cross builders take it as host plumbing only
+frite --distdir — host-side build plumbing (shared READ-ONLY distfiles cache path); NOT a GUI knob on ARM (same class as --specs-dir)
+jetson --distdir — host-side build plumbing (shared READ-ONLY distfiles cache path); NOT a GUI knob on ARM (same class as --specs-dir)
+orangepi5 --distdir — host-side build plumbing (shared READ-ONLY distfiles cache path); NOT a GUI knob on ARM (same class as --specs-dir)
+orangepizero2 --distdir — host-side build plumbing (shared READ-ONLY distfiles cache path); NOT a GUI knob on ARM (same class as --specs-dir)
 EOF
 
 allow_reason() { # platform flag -> print reason, rc 0 if allowlisted

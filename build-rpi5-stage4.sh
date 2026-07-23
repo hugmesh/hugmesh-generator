@@ -63,17 +63,36 @@ source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
 # scripts/_host-guard-lib.sh.
 # shellcheck source=scripts/_host-guard-lib.sh
 source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
+# Per-board binpkg-pool fingerprint guard (shared-binpkg track): the load-bearing
+# SIGILL safety net — REFUSES --usepkg reuse of a pool whose (CHOST + exact
+# CFLAGS/-mcpu + profile) fingerprint != this build's. rpi5/rpi4/rpi3 share this
+# builder + CHOST but differ in -mcpu, and portage's --binpkg-respect-use ignores CFLAGS.
+# shellcheck source=scripts/_binpkg-pool-lib.sh
+source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 # shellcheck source=scripts/_dracut-cross-lib.sh
 source "${SCRIPT_DIR}/scripts/_dracut-cross-lib.sh"
 
 WORK_DIR=""
-# Per-arch build subdirectory under WORK_DIR. The heavy, ARCH-SPECIFIC build
+# Per-BOARD build subdirectory under WORK_DIR. The heavy, ARCH-SPECIFIC build
 # tree (sysroot, ISO staging, distfiles, pkgdir, seed/binary downloads) lives
 # under WORK_DIR/${BUILD_SUBDIR} so the aarch64 (Pi) and amd64 (x86) builds NEVER
 # share a sysroot when they run against the same WORK_DIR (e.g. build-all-roles).
-# Override with --build-subdir NAME or BUILD_SUBDIR=NAME in the env. The finished
-# PRODUCTS (.img/.iso/.fs.tar.xz/stage4/keys-*) still land in WORK_DIR itself.
-BUILD_SUBDIR="${BUILD_SUBDIR:-snap-build-pi5}"
+#
+# CRITICAL — the default is PER-BOARD, not per-arch (SIGILL safety): this ONE
+# builder builds rpi5/rpi4/rpi3, all CHOST=aarch64-unknown-linux-gnu but DIFFERENT
+# -mcpu (cortex-a76 / -a72 / -a53). cortex-a76 is ARMv8.2-A (LSE atomics, dotprod);
+# a53/a72 are ARMv8.0-A. A binpkg (--usepkg) or object tuned for a76 SIGILLs when
+# run on an a53/a72. portage's --binpkg-respect-use checks USE ONLY, never
+# -mcpu/CFLAGS, so the ONLY guard against cross-board binpkg reuse is keeping each
+# board's pkgdir in its OWN directory. The default subdir is therefore
+# snap-build-pi5 / -pi4 / -pi3, resolved from --board AFTER arg-parse (see the
+# per-board resolution just after select_board), NOT a single shared snap-build-pi5.
+# Override with --build-subdir NAME or BUILD_SUBDIR=NAME in the env (an explicit
+# override — e.g. a worklist wl-<id> — always wins over the per-board default).
+# The finished PRODUCTS (.img/.iso/.fs.tar.xz/stage4/keys-*) still land in WORK_DIR.
+BUILD_SUBDIR="${BUILD_SUBDIR:-}"   # empty sentinel ⇒ per-board default resolved after --board (SIGILL isolation); env/--build-subdir override wins
+DISTDIR_SRC="${SNAP_DISTDIR_SRC:-}"   # --distdir DIR / SNAP_DISTDIR_SRC env: shared READ-ONLY distfiles cache (arch-independent sources → safe fleet-wide). Empty = private per-build DISTDIR only.
+PACKAGES_ONLY=false   # --packages-only: prebuild the per-board binpkg pool then exit BEFORE image assembly (kernel/img/iso/tar). Host/CI build-phase flag, NOT a Studio ImageConfig field.
 CROSS_TARGET="aarch64-unknown-linux-gnu"
 REL_VERSION="2026.0"
 # ── BOARD TABLE (--board rpi5 [DEFAULT] | rpi4 | rpi3 [desktop-only]) ──────
@@ -370,18 +389,36 @@ OPTIONS
         the current working directory; local + gitignored).
 
     --build-subdir NAME
-        Per-arch subdirectory under --work-dir that holds the heavy,
+        Per-BOARD subdirectory under --work-dir that holds the heavy,
         ARCH-SPECIFIC build tree (sysroot, ISO staging, distfiles,
         pkgdir, seed tarball, emerge caches).  Default: snap-build-pi5
-        (also settable via BUILD_SUBDIR=NAME).  This keeps the aarch64
-        (Pi) and amd64 (x86) builds from ever sharing a sysroot when
-        they run against the same --work-dir (e.g. build-all-roles.sh).
+        for --board rpi5, snap-build-pi4 for rpi4, snap-build-pi3 for
+        rpi3 (also settable via BUILD_SUBDIR=NAME; an explicit value
+        always wins over the per-board default).  This keeps the aarch64
+        (Pi) and amd64 (x86) builds from ever sharing a sysroot when they
+        run against the same --work-dir (e.g. build-all-roles.sh), AND —
+        critically — keeps each Pi board's binpkg pool (pkgdir) separate:
+        rpi5/rpi4/rpi3 share one CHOST but differ in -mcpu (cortex-a76 /
+        -a72 / -a53), so a cortex-a76 binpkg reused (--usepkg) into an
+        a53/a72 image would SIGILL at runtime.  portage's
+        --binpkg-respect-use checks USE only, never -mcpu, so this
+        directory split is the guard.
 
     -s, --specs-dir DIR
         Path to the aarch64/RPi5-specific specs directory.  Default:
         specs-rpi5/ next to this script.  Use this to point at a
         customised copy.  (The arch-agnostic specs/ tree is always read
         from next to this script.)
+
+    --distdir DIR
+        Reuse a shared READ-ONLY distfiles (source-tarball) cache instead
+        of re-downloading sources (also settable via SNAP_DISTDIR_SRC in
+        the env).  distfiles are arch-independent, so ONE fleet-wide cache
+        is safe across every board — no ABI/-mcpu risk (mirrors the x86
+        builder's PORTAGE_RO_DISTDIRS reuse).  Exposed read-only: new
+        fetches still land in this build's private BUILD_ROOT/distfiles,
+        so the shared pool is never written.  A set-but-nonexistent path
+        WARNs and is ignored (sources re-download).  Empty = private only.
 
   Toolchain
     -t, --target TUPLE
@@ -768,8 +805,9 @@ FILES
         <brand>-<board>-arm64-<role>-<env>-<stamp>.stage4.tar.xz   Final stage4 tarball
         keys-<role>/                Per-role provisioning keys (build-all-roles)
         build.log                   Full build log
-    <work-dir>/snap-build-pi5/      per-arch heavy build tree (--build-subdir; shared by
-                                     ALL THREE boards — rpi5/rpi4/rpi3 are all aarch64)
+    <work-dir>/snap-build-pi5/      per-BOARD heavy build tree (--build-subdir; the default
+                                     is snap-build-pi5/-pi4/-pi3 by --board, NEVER shared
+                                     across boards — different -mcpu ⇒ SIGILL if binpkgs cross)
         sysroot/                    Cross-compiled aarch64 root filesystem
         distfiles/                  Portage source archives
         pkgdir/                     Binary packages
@@ -828,6 +866,8 @@ fi
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -w|--work-dir)        WORK_DIR="$2";           shift 2 ;;
+        --distdir)            DISTDIR_SRC="$2";        shift 2 ;;
+        --packages-only)      PACKAGES_ONLY=true;      shift   ;;
         --build-subdir)       BUILD_SUBDIR="$2";       shift 2 ;;
         -s|--specs-dir)       SPECS_DIR="$2";          shift 2 ;;
         -t|--target)          CROSS_TARGET="$2";       shift 2 ;;
@@ -1046,6 +1086,26 @@ select_board() {
     BOARD_DESC="${desc}"
 }
 select_board
+
+# ── Per-board pkgdir isolation (SIGILL safety net) ─────────────────────────────
+# Now that --board is parsed + validated by select_board (and BEFORE BUILD_ROOT is
+# derived), fill the DEFAULT heavy-tree subdir from the board. rpi5/rpi4/rpi3 share
+# this ONE builder + CHOST but differ in -mcpu (a76/a72/a53); a cortex-a76 binpkg
+# run on an a53/a72 SIGILLs, and --usepkg/--binpkg-respect-use NEVER checks -mcpu.
+# Keeping each board's pkgdir (${BUILD_ROOT}/pkgdir) in its OWN directory is the
+# only guard — so before this fix the single shared snap-build-pi5 default let a
+# later `--board rpi4` build --usepkg cortex-a76 binaries into an a72 image. An
+# explicit --build-subdir / env BUILD_SUBDIR (worklist wl-<id>, or a deliberately
+# shared custom pool) is a non-empty sentinel and ALWAYS wins; we only fill the
+# default when it was left unset.
+if [ -z "${BUILD_SUBDIR}" ]; then
+    case "${BOARD}" in
+        rpi5) BUILD_SUBDIR="snap-build-pi5" ;;
+        rpi4) BUILD_SUBDIR="snap-build-pi4" ;;
+        rpi3) BUILD_SUBDIR="snap-build-pi3" ;;
+        *)    BUILD_SUBDIR="snap-build-${BOARD}" ;;  # unreachable: select_board already validated BOARD
+    esac
+fi
 
 # Reconcile the legacy SKIP_ISO switch with the new BUILD_ISO design. The ISO is
 # now opt-in: SKIP_ISO is simply the negation of BUILD_ISO so the existing
@@ -2508,6 +2568,15 @@ if ${PRINT_PLAN}; then
     _plan ARTIFACTS          "${_ARTS}"
     _plan ARTIFACT_PREFIX    "${BRAND}-${BOARD}-arm64-${ROLE}-${ENV}-<timestamp>"
     _plan WORK_DIR           "${WORK_DIR}"
+    # Per-board heavy-tree dir + binpkg pool (SIGILL isolation): rpi5/rpi4/rpi3
+    # resolve to snap-build-pi5/-pi4/-pi3 so their -mcpu-specific binpkgs NEVER
+    # cross. Additive PLAN_ keys (grep -qx consumers unaffected); also the
+    # machine-greppable seam the Lane-2 board-distinctness test probes.
+    _plan BUILD_SUBDIR       "${BUILD_SUBDIR}"
+    _plan PKGDIR             "${BUILD_ROOT}/pkgdir"
+    # Prebuild mode (shared-binpkg): 1 ⇒ populate PKGDIR then exit before image
+    # assembly. Additive PLAN_ key.
+    _plan PACKAGES_ONLY      "$(${PACKAGES_ONLY} && echo 1 || echo 0)"
     _plan JOBS               "${JOBS}"
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
@@ -3127,6 +3196,24 @@ fi
 
 # Templated portage specs
 render_template "${SPECS_DIR}/portage/make.conf.tmpl"     "${SYSROOT}/etc/portage/make.conf"
+# Shared READ-ONLY distfiles (Lane 3) — SB-RO-DISTFILES-BEGIN
+# distfiles are arch-independent SOURCE tarballs, so ONE fleet-wide cache is safe
+# across every board (NO ABI/-mcpu risk — mirrors the x86 builder's
+# PORTAGE_RO_DISTDIRS reuse). --distdir DIR (or SNAP_DISTDIR_SRC in the env)
+# exposes that cache READ-ONLY: new fetches still land in this build's PRIVATE
+# ${BUILD_ROOT}/distfiles (DISTDIR), so the shared pool is never written. Unlike
+# x86 (which emerges INSIDE a chroot and bind-mounts the dir under the sysroot),
+# this builder emerges on the HOST with PORTAGE_CONFIGROOT=${SYSROOT}, so
+# PORTAGE_RO_DISTDIRS points straight at the host path. A set-but-bad path WARNs
+# and is ignored (correct artifact, just re-downloads) — mirrors x86's shape-check.
+if [ -n "${DISTDIR_SRC}" ] && [ ! -d "${DISTDIR_SRC}" ]; then
+    warn "--distdir: not a directory: ${DISTDIR_SRC} — IGNORING it (sources re-download into ${BUILD_ROOT}/distfiles)."
+elif [ -n "${DISTDIR_SRC}" ]; then
+    grep -q 'PORTAGE_RO_DISTDIRS' "${SYSROOT}/etc/portage/make.conf" 2>/dev/null \
+        || printf 'PORTAGE_RO_DISTDIRS="%s"\n' "${DISTDIR_SRC}" >> "${SYSROOT}/etc/portage/make.conf"
+    info "Distfiles: reusing shared cache ${DISTDIR_SRC} via PORTAGE_RO_DISTDIRS (read-only; new fetches -> ${BUILD_ROOT}/distfiles)"
+fi
+# SB-RO-DISTFILES-END
 render_template "${SPECS_DIR}/portage/env/cross-go.conf.tmpl" "${SYSROOT}/etc/portage/env/cross-go.conf"
 
 # The arm64 stage3's python FLOATS — the current seed ships ONLY python3.14, but
@@ -3618,6 +3705,17 @@ else
     info "Keeping crossdev/seed toolchain (set REBUILD_TOOLCHAIN=true to cross-rebuild it)"
 fi
 
+# ── binpkg-pool fingerprint preflight (shared-binpkg SIGILL guard) ─────────────
+# Before the FIRST --usepkg cross_emerge consumes ${BUILD_ROOT}/pkgdir, verify the
+# pool's fingerprint (CHOST + exact CFLAGS/-mcpu + CXXFLAGS + profile, read from the
+# rendered make.conf) matches THIS build. rpi5/rpi4/rpi3 differ only in -mcpu, and
+# portage's --binpkg-respect-use checks USE only, never CFLAGS — so this is the ONLY
+# check that catches a cortex-a76 pool being reused for an a72/a53 build (SIGILL).
+# Fresh pool ⇒ stamped; mismatch ⇒ abort. Belt-and-suspenders over the per-board
+# BUILD_SUBDIR isolation (Lane 2).
+pool_fingerprint_preflight "${BUILD_ROOT}/pkgdir" "${SYSROOT}/etc/portage/make.conf" "${PROFILE_PATH:-}" \
+    || { err "binpkg pool ABI mismatch (see above) — refusing --usepkg reuse."; exit 1; }
+
 cross_emerge --oneshot --update sys-apps/baselayout
 cross_emerge --update --deep --newuse --keep-going "${CROSS_EXCLUDE[@]}" @system \
     || warn "@system had package failures (--keep-going); continuing"
@@ -3688,6 +3786,19 @@ if [ "${DESKTOP}" = "light" ] && [ ! -e "${SYSROOT}/etc/init.d/display-manager" 
     exit 1
 fi
 info "Stage4 payload verified (${_payload_bins[*]})"
+
+# ── --packages-only: prebuild the binpkg pool, then STOP before image assembly ──
+# The cross_emerge above populated PKGDIR (${BUILD_ROOT}/pkgdir) under
+# FEATURES=buildpkg, and the payload assert just confirmed the pool built the role
+# set. In --packages-only mode we exit NOW — before boot config, mesh, the kernel,
+# and img/tar assembly — so the ONLY output is the PER-BOARD binpkg pool a later
+# per-role image build reuses via --usepkg (guarded by the fingerprint preflight).
+# The pool lives in ${BUILD_ROOT}/pkgdir (outside the sysroot, per-board via the
+# Lane-2 subdir), so it is never stripped. We emit NOTHING image-shaped.
+if ${PACKAGES_ONLY}; then
+    info "--packages-only: per-board binpkg pool prebuilt at ${BUILD_ROOT}/pkgdir — skipping image assembly (PLAN_PACKAGES_ONLY=1)"
+    exit 0
+fi
 
 # ── 7a. Boot config (AFTER firmware is merged) ─────────────────────
 # Written now — not in the spec-install phase — so raspberrypi-firmware's

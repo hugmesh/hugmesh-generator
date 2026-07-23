@@ -33,6 +33,11 @@ source "${SCRIPT_DIR}/scripts/_passhash-lib.sh"
 # drop a requested artifact hours in. See scripts/_host-guard-lib.sh.
 # shellcheck source=scripts/_host-guard-lib.sh
 source "${SCRIPT_DIR}/scripts/_host-guard-lib.sh"
+# Per-board binpkg-pool fingerprint guard (shared-binpkg track): the load-bearing
+# SIGILL safety net over directory isolation — REFUSES --usepkg reuse of a pool
+# whose (CHOST + exact CFLAGS/-mcpu + profile) fingerprint != this build's.
+# shellcheck source=scripts/_binpkg-pool-lib.sh
+source "${SCRIPT_DIR}/scripts/_binpkg-pool-lib.sh"
 
 # ── Defaults ───────────────────────────────────────────────────────
 WORK_DIR=""
@@ -348,6 +353,12 @@ INSTALLER_UI=""
 # installed system can rebuild/extend packages OFFLINE and reinstall fast; UNCACHED
 # is lean (no caches). Empty = uncached (default).
 ISO_CACHED=false
+# --packages-only : PREBUILD mode. Run the chroot payload emerge (populating PKGDIR
+# under FEATURES=buildpkg) then exit 0 BEFORE Phase 6 (mesh) / kernel / image
+# assembly. Emits NOTHING image-shaped — the only output is the binpkg pool a later
+# per-role image build reuses via --usepkg (--resume into this same sysroot). This
+# is a host/CI build-phase flag, NOT a Studio ImageConfig field (like --specs-dir).
+PACKAGES_ONLY=false
 # --bundle-source : ship the generator source in the image (/usr/src/snapdragon-
 # generator) + a regenerate helper, so you can build a fresh customized ISO from the
 # running desktop. Default ON for standalone (self-hosting appliance).
@@ -855,6 +866,8 @@ while [[ $# -gt 0 ]]; do
         --home-seed-code-from) HOME_SEED_CODE_FROM="$2"; shift 2 ;;
         # Reuse a Gentoo distfiles cache from an attached/mounted drive (skip re-downloads).
         --distdir) DISTDIR_SRC="$2"; shift 2 ;;
+        # PREBUILD the binpkg pool then stop before image assembly (shared-binpkg).
+        --packages-only) PACKAGES_ONLY=true; shift ;;
         # Live ISO: add a "copy to RAM (removable)" boot path so the stick can be pulled.
         --live-toram) LIVE_TORAM=true; shift ;;
         --no-live-toram) LIVE_TORAM=false; shift ;;
@@ -1669,6 +1682,9 @@ if ${PRINT_PLAN}; then
     _plan ARTIFACTS          "${_ARTS}"
     _plan ARTIFACT_PREFIX    "${BRAND}-x86-amd64-${_PLAN_ROLE_TAG}-${ENV}-<timestamp>"
     _plan WORK_DIR           "${WORK_DIR:-$(pwd)/out}"
+    # Prebuild mode (shared-binpkg): 1 ⇒ populate PKGDIR then exit before image
+    # assembly. Additive PLAN_ key (grep -qx consumers unaffected).
+    _plan PACKAGES_ONLY      "$(${PACKAGES_ONLY} && echo 1 || echo 0)"
     _plan JOBS               "${JOBS}"
     _plan BRAND              "${BRAND}"
     _plan CLUSTER_DOMAIN     "${CLUSTER_DOMAIN}"
@@ -3035,6 +3051,16 @@ chmod 440 "${SYSROOT}/etc/sudoers.d/build-notty"
 banner "Installing spec files"
 mkdir -p "${SYSROOT}/etc/portage/"{package.use,package.accept_keywords,package.license,package.mask,profile,env}
 render_template "${SPECS_DIR}/portage/make.conf.tmpl" "${SYSROOT}/etc/portage/make.conf"
+# ── binpkg-pool fingerprint preflight (shared-binpkg SIGILL guard) ─────────────
+# Before the chroot payload emerge consumes ${SYSROOT}/var/cache/binpkgs via
+# --usepkg (EMERGE_DEFAULT_OPTS), verify the pool's fingerprint (CHOST + exact
+# CFLAGS + profile, read from the just-rendered make.conf) matches THIS build.
+# portage's --binpkg-respect-use checks USE only, never CFLAGS, so this is the only
+# CFLAGS-level check before reuse. A fresh pool is stamped; a mismatch aborts.
+# (x86 is a single amd64 pool, but this still catches a stray reuse across a
+# profile/CFLAGS/ABI change — the same class the aarch64 -mcpu split guards against.)
+pool_fingerprint_preflight "${SYSROOT}/var/cache/binpkgs" "${SYSROOT}/etc/portage/make.conf" "" \
+    || { err "binpkg pool ABI mismatch (see above) — refusing --usepkg reuse."; exit 1; }
 # Native Steam is a 32-bit app: enable the multilib ABI so its deps build with
 # ABI_X86_32 (the amd64-hardened stage3 seed is multilib-capable). Scoped to the
 # native-Steam gaming desktops; every other image stays pure 64-bit.
@@ -4296,6 +4322,21 @@ if [ -n "\${missing}" ]; then
     exit 1
 fi
 CHROOT
+
+# ── --packages-only: prebuild the binpkg pool, then STOP before image assembly ──
+# The chroot emerge above populated PKGDIR (${SYSROOT}/var/cache/binpkgs) under
+# FEATURES=buildpkg. In --packages-only mode we exit NOW — before Phase 6 (mesh),
+# the kernel, and image/ISO/squashfs assembly — so the ONLY output is the binpkg
+# pool a later per-role image build reuses via --usepkg (--resume into this same
+# sysroot). We never reach the Phase-8 clean that strips the cache (x86 keeps its
+# binpkgs simply by never getting there — same effect as the --cached keep-branch),
+# and we emit NOTHING image-shaped.
+if ${PACKAGES_ONLY}; then
+    ISO_CACHED=true   # belt-and-suspenders: the strip is downstream of this exit anyway
+    info "--packages-only: binpkg pool prebuilt at ${SYSROOT}/var/cache/binpkgs — skipping image assembly (PLAN_PACKAGES_ONLY=1)"
+    info "No kernel, no mesh, no img/iso/tar emitted; reuse via a later --role build with --usepkg (--resume)."
+    exit 0
+fi
 
 # ── 6. Mesh VPN (amd64 static binaries) ────────────────────────────
 if ${SKIP_MESH}; then
