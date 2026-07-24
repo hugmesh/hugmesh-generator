@@ -1442,6 +1442,44 @@ run plan --device-class toaster
     && ok "(27) --device-class toaster -> exit 1 (validated)" \
     || bad "(27) bad-class rc=${RC}, want 1, out='${OUT_TXT}'"
 
+# ── (28) thin desktop (§8b): the OFFLINE plan surface + the fail-closed
+#      option gates (the full mocked-adb provisioning lifecycle lives in
+#      tests/phone/e2e-quest-thin-desktop.sh) ──
+run plan mdm-enroll --device-class quest --codename eureka --thin-desktop \
+    --thin-desktop-hosts frite,box2.hugmesh.internal --headwind-url https://hmdm.invalid
+if [ "${RC}" -eq 0 ] && hasline "PLAN_THIN_DESKTOP=enabled" \
+   && hasline "PLAN_THIN_DESKTOP_HOSTS=frite,box2.hugmesh.internal" \
+   && hasline "PLAN_MOONLIGHT_SIGNER_FP=unpinned" \
+   && hasline "PLAN_STEPS=adb-sanity,quest-identity,fresh-device-advisory,dpc-install,set-device-owner,push-init-json,xr-chat-provision,thin-desktop-provision,record"; then
+    ok "(28) plan mdm-enroll --thin-desktop: enabled + hosts + unpinned signer + thin-desktop-provision step"
+else
+    bad "(28) thin-desktop plan surface wrong rc=${RC}, out='${OUT_TXT}'"
+fi
+run plan mdm-enroll --device-class quest --codename eureka --headwind-url https://hmdm.invalid
+if [ "${RC}" -eq 0 ] && hasline "PLAN_THIN_DESKTOP=disabled" \
+   && hasline "PLAN_STEPS=adb-sanity,quest-identity,fresh-device-advisory,dpc-install,set-device-owner,push-init-json,xr-chat-provision,record"; then
+    ok "(28) un-toggled default: PLAN_THIN_DESKTOP=disabled, NO thin-desktop-provision step"
+else
+    bad "(28) thin-desktop default plan wrong rc=${RC}, out='${OUT_TXT}'"
+fi
+run THIN_DESKTOP_HOSTS=frite plan mdm-enroll --device-class quest --codename eureka \
+    --thin-desktop --headwind-url https://hmdm.invalid
+hasline "PLAN_THIN_DESKTOP_HOSTS=frite" \
+    && ok "(28) THIN_DESKTOP_HOSTS env seam supplies the default host list" \
+    || bad "(28) env-seam hosts missing, out='${OUT_TXT}'"
+run plan --thin-desktop
+[ "${RC}" -eq 2 ] && has "quest capability" \
+    && ok "(28) --thin-desktop on the phone class -> exit 2 with the rationale" \
+    || bad "(28) phone-class thin-desktop rc=${RC}, want 2, out='${OUT_TXT}'"
+run plan --device-class quest --moonlight-apk /tmp/m.apk
+[ "${RC}" -eq 1 ] && has "need --thin-desktop" \
+    && ok "(28) a stray --moonlight-apk without the toggle -> exit 1" \
+    || bad "(28) stray-knob rc=${RC}, want 1, out='${OUT_TXT}'"
+run plan --device-class quest --thin-desktop --thin-desktop-hosts 'frite,Bad_Host!'
+[ "${RC}" -eq 1 ] && has "invalid --thin-desktop-hosts entry" \
+    && ok "(28) a non-DNS host entry -> exit 1 (charset fenced)" \
+    || bad "(28) bad-host rc=${RC}, want 1, out='${OUT_TXT}'"
+
 echo
 echo "== phone-wizard test: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ] || exit 1

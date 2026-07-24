@@ -109,6 +109,7 @@ def test_page_slugs_map_to_the_right_pages(wiz):
     ProgressPage lands in WS-REVIEWUI, so it is None-tolerant until registered."""
     expect = {"welcome": wizard_mod.WelcomePage, "mode": wizard_mod.ModePage,
               "localmesh": wizard_mod.LocalMeshPage, "phone": wizard_mod.PhonePage,
+              "quest": wizard_mod.QuestPage,
               "deploy": wizard_mod.DeployPage, "idp": wizard_mod.IdpPage,
               "role": wizard_mod.RolePage, "worklist": wizard_mod.WorklistPage,
               "hardware": wizard_mod.HardwarePage, "branding": wizard_mod.BrandingPage,
@@ -282,7 +283,24 @@ def test_phone_side_flow_reaches_terminal_page_and_skips_images(wiz):
     assert wiz.localmesh_selected is False
     assert wiz.cfg.mode == before                       # phone never sets cfg.mode
     assert page.nextId() == -1 and page.isFinalPage()   # terminal: Finish, no image
-    for slug in ("localmesh", "deploy", "role", "hardware", "branding", "build"):
+    for slug in ("localmesh", "quest", "deploy", "role", "hardware", "branding", "build"):
+        assert not wiz.hasVisitedPage(wiz._page_ids[slug])
+
+
+def test_quest_side_flow_reaches_terminal_page_and_skips_images(wiz):
+    """MDM Quest headset is a non-image side-flow (the phone's twin): the radio
+    routes Mode → Quest (terminal, nextId==-1), leaves cfg.mode an image mode
+    untouched, and no image page (role/hardware/branding/build) — nor the other
+    side-flows — is ever visited."""
+    pick_mode(wiz, "quest")
+    before = wiz.cfg.mode
+    page = advance_to(wiz, wizard_mod.QuestPage)
+    assert wiz.quest_selected is True
+    assert wiz.phone_selected is False
+    assert wiz.localmesh_selected is False
+    assert wiz.cfg.mode == before                       # quest never sets cfg.mode
+    assert page.nextId() == -1 and page.isFinalPage()   # terminal: Finish, no image
+    for slug in ("localmesh", "phone", "deploy", "role", "hardware", "branding", "build"):
         assert not wiz.hasVisitedPage(wiz._page_ids[slug])
 
 
@@ -299,7 +317,7 @@ def test_deploy_side_flow_reaches_terminal_page_and_skips_images(wiz):
     assert wiz.localmesh_selected is False
     assert wiz.cfg.mode == before                       # deploy never sets cfg.mode
     assert page.nextId() == -1 and page.isFinalPage()   # terminal: Finish, no image
-    for slug in ("localmesh", "phone", "role", "hardware", "branding", "build"):
+    for slug in ("localmesh", "phone", "quest", "role", "hardware", "branding", "build"):
         assert not wiz.hasVisitedPage(wiz._page_ids[slug])
 
 

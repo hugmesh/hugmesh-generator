@@ -130,6 +130,32 @@ else
   bad "(2) phone-mdm-enroll rc=${RC} $(argv_show)"
 fi
 
+# ── (2b) quest-mdm-enroll thin-desktop threading (§8b) ───────────────────────
+# The quest-* face rides --device-class quest FIRST (_QUEST_ARGS), then the
+# same _PHONE_ARGS seam — the four thin-desktop knobs thread like every other
+# knob, and stay ABSENT (byte-identical argv) when unset.
+echo "-- 2b) quest-mdm-enroll thin-desktop knob threading --"
+run_make quest-mdm-enroll \
+  THIN_DESKTOP=1 \
+  MOONLIGHT_APK=/apks/moonlight.apk \
+  MOONLIGHT_SIGNER_SHA256=cc33dd44ee55ff66 \
+  THIN_DESKTOP_HOSTS=frite,box2.hugmesh.internal
+if [ "${RC}" -eq 0 ] && argv_is mdm-enroll --device-class quest --work-dir "${WD}" \
+     --thin-desktop \
+     --moonlight-apk /apks/moonlight.apk \
+     --moonlight-signer-sha256 cc33dd44ee55ff66 \
+     --thin-desktop-hosts frite,box2.hugmesh.internal; then
+  ok "(2b) THIN_DESKTOP/MOONLIGHT_APK/MOONLIGHT_SIGNER_SHA256/THIN_DESKTOP_HOSTS -> exact quest argv"
+else
+  bad "(2b) quest-mdm-enroll rc=${RC} $(argv_show)"
+fi
+run_make quest-mdm-enroll
+if [ "${RC}" -eq 0 ] && argv_is mdm-enroll --device-class quest --work-dir "${WD}"; then
+  ok "(2b) unset thin-desktop knobs -> NO thin-desktop flag on the quest argv (byte-identity)"
+else
+  bad "(2b) quest-mdm-enroll unset rc=${RC} $(argv_show)"
+fi
+
 # ── (3) phone-attest threading ────────────────────────────────────────────────
 echo "-- 3) phone-attest knob threading --"
 run_make phone-attest \

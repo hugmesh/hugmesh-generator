@@ -117,6 +117,16 @@ class PhoneWizardConfig:
     headwind_url: str = ""
     headwind_config: str = ""
     xr_chat_url: str = ""
+    # ── thin desktop (§8b, quest only, opt-in) ───────────────────────────────────
+    # thin_desktop maps to the bare --thin-desktop toggle; the other three are
+    # path/hex/name values riding the matching driver flags (the Makefile
+    # THIN_DESKTOP=1 / MOONLIGHT_APK= / MOONLIGHT_SIGNER_SHA256= /
+    # THIN_DESKTOP_HOSTS= knobs). The driver's fail-closed gates still decide:
+    # phone-class or knobs-without-toggle die there with the rationale.
+    thin_desktop: bool = False
+    moonlight_apk: str = ""
+    moonlight_signer: str = ""
+    thin_desktop_hosts: str = ""    # comma list of thin-client tailnet names
 
     def to_cli_args(self) -> list[str]:
         """The driver flags (no verb, no secret). --device-class rides FIRST when set
@@ -156,6 +166,17 @@ class PhoneWizardConfig:
             args += ["--headwind-config", self.headwind_config.strip()]
         if self.xr_chat_url.strip():
             args += ["--xr-chat-url", self.xr_chat_url.strip()]
+        # Thin desktop (quest §8b): the toggle FIRST, then its value knobs — the
+        # driver refuses value knobs without the toggle, so the GUI face only
+        # ever emits them together (collect() blanks them when un-toggled).
+        if self.thin_desktop:
+            args += ["--thin-desktop"]
+        if self.moonlight_apk.strip():
+            args += ["--moonlight-apk", self.moonlight_apk.strip()]
+        if self.moonlight_signer.strip():
+            args += ["--moonlight-signer-sha256", self.moonlight_signer.strip()]
+        if self.thin_desktop_hosts.strip():
+            args += ["--thin-desktop-hosts", self.thin_desktop_hosts.strip()]
         return args
 
 

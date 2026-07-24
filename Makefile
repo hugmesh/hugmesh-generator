@@ -554,6 +554,10 @@ _PHONE_ARGS = --work-dir "$$PHONE_WORK_DIR" \
   $${HEADWIND_URL:+--headwind-url "$$HEADWIND_URL"} \
   $${HEADWIND_CONFIG:+--headwind-config "$$HEADWIND_CONFIG"} \
   $${XR_CHAT_URL:+--xr-chat-url "$$XR_CHAT_URL"} \
+  $${THIN_DESKTOP:+--thin-desktop} \
+  $${MOONLIGHT_APK:+--moonlight-apk "$$MOONLIGHT_APK"} \
+  $${MOONLIGHT_SIGNER_SHA256:+--moonlight-signer-sha256 "$$MOONLIGHT_SIGNER_SHA256"} \
+  $${THIN_DESKTOP_HOSTS:+--thin-desktop-hosts "$$THIN_DESKTOP_HOSTS"} \
   $${AUDITOR_APK:+--auditor-apk "$$AUDITOR_APK"} \
   $${AUDITOR_SIGNER_SHA256:+--auditor-signer-sha256 "$$AUDITOR_SIGNER_SHA256"} \
   $${ATTESTATION_URL:+--attestation-url "$$ATTESTATION_URL"} \
@@ -609,8 +613,11 @@ phone-wizard: ## interactive guided full phone flow (TTY): detect->fetch->flash-
 # surface is the 4-verb subset that exists for the class (fetch/flash/attest/
 # profile are UNSUPPORTED for quest and the driver refuses them with the
 # rationale — see docs/MDM.md). Extra knobs: HEADWIND_CONFIG= (the Headwind
-# configuration the headset self-selects into, i.e. the app-push lever) and
-# XR_CHAT_URL= (the https XR-chat entry URL provisioned during mdm-enroll).
+# configuration the headset self-selects into, i.e. the app-push lever),
+# XR_CHAT_URL= (the https XR-chat entry URL provisioned during mdm-enroll)
+# and the opt-in thin-desktop set — THIN_DESKTOP=1 MOONLIGHT_APK=
+# MOONLIGHT_SIGNER_SHA256= THIN_DESKTOP_HOSTS= (Moonlight sideload + managed
+# thin-client host list; the node side is the x86 builder's --with-sunshine).
 _QUEST_ARGS = --device-class quest $(_PHONE_ARGS)
 
 quest-plan: ## dry-run the Quest MDM wizard: validate knobs + quest catalog, print PLAN_* lines ([PLAN_VERB=mdm-enroll] plans one verb)
@@ -619,7 +626,7 @@ quest-plan: ## dry-run the Quest MDM wizard: validate knobs + quest catalog, pri
 quest-detect: ## read-only probe of the USB-connected Quest (Developer Mode must be ON; prints the runbook when it is not)
 	@bash scripts/phone-wizard.sh detect $(_QUEST_ARGS)
 
-quest-mdm-enroll: ## Headwind MDM device-owner enrollment + XR-chat URL provisioning (HEADWIND_APK= HEADWIND_URL= [HEADWIND_CONFIG= XR_CHAT_URL=])
+quest-mdm-enroll: ## Headwind MDM device-owner enrollment + XR-chat URL + opt-in thin desktop (HEADWIND_APK= HEADWIND_URL= [HEADWIND_CONFIG= XR_CHAT_URL= THIN_DESKTOP=1 MOONLIGHT_APK= MOONLIGHT_SIGNER_SHA256= THIN_DESKTOP_HOSTS=])
 	@bash scripts/phone-wizard.sh mdm-enroll $(_QUEST_ARGS)
 
 quest-enroll: ## join the headset to the mesh tailnet (TAILSCALE_APK= sideload; KEYS_DIR= or LOGIN_SERVER=+AUTHKEY_FILE=)

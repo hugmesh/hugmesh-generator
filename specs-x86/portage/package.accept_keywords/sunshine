@@ -1,0 +1,4 @@
+# Sunshine stream host (--with-sunshine thin-desktop images only — this file
+# is copied into the sysroot ONLY when that flag is set, mirroring 'steam').
+# games-util/sunshine and its libcamera-era deps are ~amd64 in ::gentoo.
+games-util/sunshine ~amd64

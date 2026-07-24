@@ -60,7 +60,9 @@ Headwind/Auditor/ingest-token knobs file-path-only); the Studio face is 🔭
 `scripts/phone-wizard.sh <verb> [options]`. The **default posture is
 dry-run/read-only**: only `fetch`, `flash`, `attest`, `mdm-enroll`, `enroll`,
 `profile`, `rotate-profile-pass`, `remove-profile` and `ingest` change
-anything, and the destructive ones are gated.
+anything, and the destructive ones are gated. The table below is the **phone**
+(default) device class; `--device-class quest` narrows it to a 4-verb chain —
+see [Quest headsets](#quest-headsets-meta-quest-33s----device-class-quest).
 
 | Verb | Mutates? | What it does |
 | --- | --- | --- |
@@ -355,6 +357,155 @@ the superadmin UI, then confirm a `100.64/10` tailnet address there or via
 | Join verified by | polling the Tailscale `tun*` interface for a `100.64/10` address | operator, mesh-side, after the fact |
 | `enrollment.json` `verification` | `adb-heuristic` (best-effort, spoofable getprop signal — see above) | `operator-attested` |
 | `enrollment.json` `tailscale_ip` | the polled address | `null` |
+
+## Quest headsets (Meta Quest 3/3S) — `--device-class quest`
+
+`--device-class quest` onboards a **Meta Quest 3 (`eureka`) or Quest 3S
+(`panther`)** as another MDM-managed Android device on the mesh — **as-is, on
+Horizon OS**: this wizard never reflashes a headset. The class changes three
+things and nothing else — the codename **catalog**, the **verb subset**, and a
+fail-closed **identity pin** — every custody rule above (masked auth key,
+0600 `--authkey-file`, dry-run-by-default `plan`) applies unchanged.
+
+- **Class-scoped catalog** — quest codenames resolve against
+  [`scripts/quest-devices.tsv`](../scripts/quest-devices.tsv) (exit 4 on
+  anything else, same as the phone catalog). The split is load-bearing:
+  **`panther` is BOTH the Pixel 7 (phone catalog) and the Quest 3S (quest
+  catalog)** — the class picks which catalog a codename means, and detection
+  pins the rest: `ro.product.manufacturer` must be `oculus`/`Meta`
+  (USB vendor id `2833`) or the quest path refuses the device outright. A
+  fastboot-state device is likewise refused (that is a handset bootloader,
+  not a Quest).
+- **The quest verb chain is `detect → mdm-enroll → enroll → ingest`**
+  (`wizard` guides exactly those four; `plan` previews them):
+  - `detect` — requires **Developer Mode ON** (a Meta developer account,
+    enabled per-headset in the Meta Horizon phone app). When the headset is
+    not adb-visible the driver prints the full Developer-Mode + udev
+    (vendor `2833`) runbook instead of a bare failure.
+  - `mdm-enroll` — the same Headwind device-owner enrollment (signer-pinned
+    DPC APK, `init.json` `com.hmdm.BASE_URL` + `com.hmdm.CONFIG`), with the
+    phone's fresh-device gates downgraded to **advisories**: Horizon OS setup
+    requires a Meta account, so `dpm set-device-owner` is the real arbiter and
+    its refusal (with the hint) is the gate. `--headwind-config` is the
+    app-push lever; `--xr-chat-url` (https-only — WebXR needs a secure
+    context) records the XR-chat entry URL in `mdm.json`, prints the Headwind
+    web-page-app console runbook, and fires a `VIEW` intent so the operator
+    can confirm the room loads in the headset browser.
+  - `enroll` — the same tailnet join with a **sideload runbook** for the
+    Tailscale APK (no Play/Horizon-store carry on a managed headset) and the
+    **same `tun0` 100.64/10 join verification** as phones. Default device id
+    `quest-<sanitized serial>`.
+  - `ingest` — the `phone-ingest/v2` record with `device_class:"quest"`
+    (plus the honest registry-gap warning until the registry grows the field).
+- **Unsupported, fail-closed with rationale (exit 2):** `fetch`/`flash`
+  (GrapheneOS artifacts are Pixel-only; Horizon OS cannot be reflashed),
+  `attest` (the Auditor/AttestationServer trust root requires GrapheneOS-class
+  hardware-attestation profiles — **no attestation tier exists for Quest**),
+  and the `profile` verbs (Horizon OS's user model is Meta-account-bound; no
+  separately-encrypted GrapheneOS-style secondary user to escrow).
+  `--mdm-provider azure-intune` is refused for the class too: Horizon OS has
+  no Intune/Company-Portal support — a Quest is managed via the `dpc-adb`
+  provider (Headwind) only.
+
+**All four faces** drive the one driver: CLI (`make quest-plan` /
+`quest-detect` / `quest-mdm-enroll` / `quest-enroll` / `quest-ingest` /
+`quest-status` / `quest-wizard`, with `HEADWIND_CONFIG=` / `XR_CHAT_URL=`
+knobs), ncurses (`quest_screen` under the "MDM Quest headset" opening choice —
+quest verbs only, Headwind sub-screen, XR-chat URL knob), Studio GUI
+(`QuestPage`, the ModePage "MDM Quest headset" side-flow — streamed verbs
+off-thread, guided `wizard` handed to a terminal), and the raw
+`scripts/phone-wizard.sh <verb> --device-class quest`. A live headset smoke is
+`make quest-plan CODENAME=eureka` (offline dry-run) then `make quest-detect`
+with the Quest USB-attached.
+
+## Thin desktop (Quest ⇄ thin-client node, tailnet-only) — `--thin-desktop`
+
+An **opt-in** capability pair (§8b of the XR-chat design; see
+[`docs/XR-CHAT.md`](XR-CHAT.md)): a mesh-enrolled Quest opens a usable
+**virtual desktop of one of the mesh's thin-client x86 desktop nodes** over
+the tailnet — never off-mesh. Transport is **Sunshine** (self-hosted stream
+host, GPLv3) on the node + **Moonlight** (`com.limelight`) on the headset;
+pairing and streaming ride tailnet IPs/MagicDNS names only.
+
+### Quest side — `--thin-desktop` on `mdm-enroll` (quest class only)
+
+`mdm-enroll --thin-desktop` provisions the headset as the Moonlight terminal,
+riding the SAME two-leg pattern as the XR-chat URL provisioning above:
+
+- **Immediate (this wizard):** sideload the Moonlight APK with the same
+  operator-custody + signer-pin path as every APK this wizard trusts —
+  `--moonlight-apk <file>` + `--moonlight-signer-sha256 <hex>` (fail-closed
+  apksigner verify of the on-device APK; exit 3 on mismatch). Then push the
+  **managed host list** (`--thin-desktop-hosts frite,box2.hugmesh.internal`,
+  env `THIN_DESKTOP_HOSTS`; lowercase tailnet DNS names, charset fenced
+  fail-closed) as `hugmesh-thin-desktop-hosts.json` into Moonlight's external
+  files dir — the exact `init.json` push mechanics. **Honesty note:**
+  Moonlight does not auto-import that file (no managed-config surface exists
+  in moonlight-android); it is the on-device custody record and the
+  Headwind-push target — the operator adds each host in Moonlight by its
+  tailnet name.
+- **Durable (Headwind, app-push):** the printed console runbook — upload the
+  same Moonlight APK as an application in the device's CONFIGURATION
+  (`--headwind-config`, the app-push lever) and add the host-list file to
+  that configuration's **Files**, so every headset on the configuration
+  converges without adb.
+- **Pairing (operator, per node):** Moonlight on the headset adds the node by
+  tailnet name → shows a **PIN** → the operator enters it in the Sunshine web
+  UI at `https://localhost:47990` **on that node's console** (or an SSH
+  tunnel) — the pairing UI is loopback-only by design, never mesh-reachable.
+
+Gates (all fail-closed, before any adb call): `--thin-desktop` is
+**quest-class only** (exit 2 with rationale on phones — there is no
+phone-class thin-desktop terminal in v1); the Moonlight/host knobs **require**
+the toggle (exit 1); bad host charset exits 1. `mdm.json` records
+`thin_desktop` + `thin_desktop_hosts` uniformly (`false`/`[]` when off — an
+un-toggled run's adb traffic is byte-identical to before the feature).
+Faces: CLI `make quest-mdm-enroll THIN_DESKTOP=1 MOONLIGHT_APK=…
+MOONLIGHT_SIGNER_SHA256=… THIN_DESKTOP_HOSTS=…`; ncurses `quest_screen` →
+"Thin desktop" sub-screen; Studio `QuestPage` → "Thin desktop" toggle group.
+E2E: `tests/phone/e2e-quest-thin-desktop.sh` (mocked adb, ordered sequence +
+pushed-file content + every failure path).
+
+### Node side — `build-x86-host-stage4.sh --with-sunshine`
+
+The generator bakes the stream host into **tailnet CLIENT desktop images**
+(default-off; warn-dropped on cluster roles — no desktop session to stream —
+and on tailnet-less desktops: standalone/unaffiliated/`--skip-tailscale`; a
+composable `--standalone --with-tailscale` desktop stays eligible):
+
+- **Package** `games-util/sunshine` (own flag-gated package list + `~amd64`
+  keyword file, the `--steam` pattern).
+- **Mesh fence** `hugmesh-sunshine-firewall` — a reconcile-family member (one
+  script, one OpenRC oneshot ordered before `tailscaled`, one clearly-scoped
+  nftables table `hugmesh_thin_desktop`, 60s cron): stream ports **TCP 47984,
+  47989, 48010 + UDP 47998-48002** admitted ONLY `iifname tailscale0` AND
+  `saddr 100.64.0.0/10` (both conditions — a spoofed CGNAT source on the LAN
+  iface stays dropped), dropped everywhere else; **web UI TCP 47990
+  loopback-only**. Sunshine has no native bind-to-interface option, so this
+  netfilter fence IS the "bound to the tailscale iface only" guarantee.
+  Fail-closed: render/apply errors keep the existing ruleset.
+- **Session service** — `/etc/xdg/autostart/hugmesh-sunshine.desktop` →
+  `hugmesh-sunshine-session`: Sunshine must run *inside* the user's desktop
+  session (display capture + uinput), and this fleet's desktop images are
+  **OpenRC**, so the XDG autostart wrapper is the deliberate equivalent of
+  the design's "systemd user service" (documented divergence; idempotent per
+  user, waits for `tailscale0`, launches with the managed
+  `/etc/hugmesh/thin-desktop/sunshine.conf` — `upnp off`,
+  `origin_web_ui_allowed pc`, default port base).
+- **Studio/menu parity:** Studio RolePage "Client desktop options" tri-state
+  (G34 `--with-sunshine`/`--no-sunshine`), ncurses x86 options
+  "Thin-desktop host" toggle, flag-coverage + build-matrix `check.sh` probes.
+
+### WiVRn — the sibling path (documented stub, not rolled out)
+
+Where Moonlight streams the node's **2D desktop** into a flat panel in the
+headset, **WiVRn** streams a **native OpenXR app** (the shadows-of-the-net
+PCVR build) from the same node to the same headset as actual room-scale VR.
+v1 ships a config stub only — `/etc/hugmesh/thin-desktop/wivrn.toml.example`
+(baked by `--with-sunshine`) documents the mesh-honest defaults (TCP+UDP 9757
+fenced to the tailscale iface exactly like the Sunshine port set, tailnet
+pairing only). The full rollout (package + fence extension + session unit) is
+tracked follow-up work.
 
 ## Enterprise profile — escrowed credential custody
 
@@ -863,7 +1014,12 @@ mismatch anywhere in the chain fails closed, never silently.
 | Offline `plan` dry-run + `REDACTED` secret discipline | `plan` / `--print-plan` | 🚧 |
 | `make phone-*` thin face (host-side delegates; secrets stay file-path knobs) — all 13 verbs incl. `phone-mdm-enroll`/`phone-attest` | `Makefile` | 🚧 |
 | Thin ncurses-menu face over the driver (all 13 verbs + MDM/attestation knob sub-screen, non-build precedent) | `phone_screen` in [`scripts/build-menu.sh`](../scripts/build-menu.sh) | ✅ |
-| Thin Studio (GUI) face over the driver | — | 🔭 |
+| Thin Studio (GUI) face over the driver (phone + quest side-flows off the ModePage; streamed verbs off-thread, TTY verbs handed to a terminal) | `PhonePage` / `QuestPage` in `studio/hugmesh_studio/gui/pages/` | ✅ |
+| Quest device class (`--device-class quest`): class-scoped catalog, oculus/Meta identity pin, 4-verb chain, unsupported verbs fail-closed w/ rationale | [`scripts/quest-devices.tsv`](../scripts/quest-devices.tsv) + `require_class_supports` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | ✅ merged (#450) |
+| Quest XR-chat URL provisioning (`--headwind-config` app-push lever + `--xr-chat-url` https-only, mdm.json record, VIEW-intent verify) | `cmd_mdm_enroll()` in [`scripts/phone-wizard.sh`](../scripts/phone-wizard.sh) | ✅ merged (#450) |
+| `make quest-*` thin face (7 quest verbs; `HEADWIND_CONFIG=`/`XR_CHAT_URL=` knobs) | `Makefile` | ✅ merged (#450) |
+| Thin ncurses quest face (`quest_screen`: quest verbs only, Headwind sub-screen, XR-chat knob) | `quest_screen` in [`scripts/build-menu.sh`](../scripts/build-menu.sh) | ✅ |
+| Quest mocked-adb e2e (real command-sequence assertions incl. unauthorized-headset, no-dev-mode, wrong-vendor, unsupported-verb paths) | [`tests/phone/e2e-quest-join.sh`](../tests/phone/e2e-quest-join.sh) | ✅ merged (#450) |
 | APK store (general fleet app push/update/delete beyond the wizard's own vetted, signer-pinned sideloads) | — | 🔭 (deliberate v1 non-goal; Headwind's own console can do this directly, see [Remote-management model](#remote-management-model)) |
 | Existing-device onboarding (GrapheneOS + stock Android, USB-guided or `--no-usb`, no reflash) | `enroll` | 🚧 |
 | Headwind MDM cluster optional-service (Postgres-backed, tailnet-only, `hugmesh-pki` namespace) | `specs/cluster/apps/23-headwind.yaml`, `specs/cluster/manifests/headwind/` | ✅ merged |
@@ -882,15 +1038,12 @@ Tracked here per the driver's header. Still 🔭, by design. The earlier
 now delivered (see [Management plane](#management-plane)); only the
 APK-store half of that non-goal still stands (see the Summary table).
 
-- **Thin Studio (GUI) face** — over the driver's verbs, exactly like
-  the Local Docker mesh and go-live precedents (driver owns all logic; faces
-  stay thin, no build-matrix row). The `make phone-*` face is ✅ complete —
-  all 13 verbs, including `phone-mdm-enroll` and `phone-attest` (with the
+- ~~**Thin Studio (GUI) face**~~ — **delivered** (see the Summary table): the
+  `make phone-*`/`quest-*` faces, the ncurses `phone_screen`/`quest_screen`
+  and the Studio `PhonePage`/`QuestPage` are all thin faces over the one
+  driver (driver owns all logic; no build-matrix row), with the
   `HEADWIND_*`/`AUDITOR_*`/`ATTESTATION_URL`/`INTERNAL_TOKEN_FILE` knobs
-  forwarded file-path-only, per the custody pattern) — and the **ncurses-menu
-  face is ✅ complete** (`phone_screen` wraps all 13 verbs; the MDM/attestation
-  sub-screen threads the same knobs, ingest token as a file path only). Only
-  the Studio face remains 🔭.
+  forwarded file-path-only per the custody pattern.
 - **Casdoor SSO for Headwind** — nothing in this recon confirmed Headwind has
   OIDC/SAML support (its own auth is local username/password behind a
   pluggable `HmdmAuthInterface`); until that is independently confirmed,

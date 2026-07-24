@@ -1,0 +1,31 @@
+# /etc/hugmesh/thin-desktop/wivrn.toml.example — WiVRn sibling-path CONFIG STUB
+# (documented, NOT enabled — see docs/MDM.md 'Thin desktop', WiVRn subsection).
+#
+# WiVRn (https://github.com/WiVRn/WiVRn) is the OpenXR streaming runtime for
+# the SAME node/headset pair this image's Sunshine/Moonlight thin desktop uses:
+# where Moonlight streams the node's 2D DESKTOP into a flat panel in the
+# headset, WiVRn streams a native OpenXR app (e.g. the shadows-of-the-net PCVR
+# build) as ACTUAL room-scale VR. Same transport posture: tailnet-only, never
+# off-mesh.
+#
+# This is a stub on purpose (v1 ships Sunshine only):
+#   * no games-util/wivrn / GURU package is baked by --with-sunshine — rolling
+#     it out means adding the package + its own avahi/port fence + a session
+#     unit, tracked as follow-up work in docs/MDM.md;
+#   * the values below are the mesh-honest defaults an operator enabling WiVRn
+#     by hand should keep: TCP+UDP 9757 fenced to the tailscale iface exactly
+#     like the Sunshine port set (extend the hugmesh_thin_desktop nftables
+#     table), and pairing over the tailnet only.
+#
+# [general]
+# Encoder auto-selection; scale down first on constrained thin clients.
+# scale = 0.8
+#
+# [encoder]
+# encoder = "vaapi"        # x86 iGPU nodes; "nvenc" on the NVIDIA desktops
+# codec = "h265"
+# bitrate = 50000000       # 50 Mb/s is comfortable on an in-room tailnet DERP-free path
+#
+# TCP+UDP 9757 must be admitted ONLY on the tailscale iface (mirror the
+# Sunshine rules in /usr/sbin/hugmesh-sunshine-firewall); the headset connects
+# to this node's tailnet MagicDNS name.

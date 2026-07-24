@@ -96,6 +96,8 @@ OPT_X86_EDGE_AI_ANALYSIS="no" # yes => also bake the edge-ai-analysis task API (
 OPT_EDGE_AI_TTS="no"          # yes => --with-edge-ai-tts: Piper TTS + viseme timeline (VN voice, separate image)
 # ── Tor v3 onion (hidden) service — node-scoped optional, DEFAULT-OFF ──────────
 OPT_TOR_ONION="no"            # yes => --with-tor: expose the in-cluster fe-gateway as a v3 .onion
+# ── Thin-desktop stream host (Sunshine, §8b) — client desktops, DEFAULT-OFF ────
+OPT_SUNSHINE="no"             # yes => --with-sunshine: Sunshine + mesh fence + session autostart (tailnet client desktops; builder warn-drops elsewhere)
 # Mesh-node identity provider (I6). casdoor = built-in default (emits NOTHING —
 # argv byte-identical); entra|aws|oidc = external OIDC (issuer/client/jwks are
 # PUBLIC identifiers, safe to persist; client SECRETS are never a flag here).
@@ -219,6 +221,7 @@ save_conf() {
         printf 'OPT_X86_EDGE_AI_ANALYSIS=%q\n' "${OPT_X86_EDGE_AI_ANALYSIS}"
         printf 'OPT_EDGE_AI_TTS=%q\n'   "${OPT_EDGE_AI_TTS}"
         printf 'OPT_TOR_ONION=%q\n'     "${OPT_TOR_ONION}"
+        printf 'OPT_SUNSHINE=%q\n'      "${OPT_SUNSHINE}"
         printf 'OPT_IDP=%q\n'           "${OPT_IDP}"
         printf 'OPT_IDP_ISSUER=%q\n'    "${OPT_IDP_ISSUER}"
         printf 'OPT_IDP_CLIENT_ID=%q\n' "${OPT_IDP_CLIENT_ID}"
@@ -742,6 +745,10 @@ build_make_cmd() {
                 case ",${OPT_SERVICES}," in *,games,*) bf+=" --enable-games" ;; esac
             fi
             [ "${OPT_TOR_ONION}" = yes ] && bf+=" --with-tor"
+            # Thin-desktop stream host (§8b): meaningful on the tailnet CLIENT
+            # desktop targets; on cluster roles the builder's guard makes it a
+            # loud, harmless no-op (the --with-tor convention).
+            [ "${OPT_SUNSHINE}" = yes ] && bf+=" --with-sunshine"
             # External IdP (I6): casdoor default adds NOTHING (byte-identical). An
             # external provider threads --idp + issuer + client-id [+ jwks]; issuer
             # and jwks are double-quoted as one shell word (survives both make legs).
@@ -1380,6 +1387,7 @@ options_screen() {
             services "Optional services ... ${OPT_SERVICES:-<default: akkoma,tuwunel,phpbb>}" \
             managed  "Managed backing svcs  ${OPT_MANAGED_SERVICES:-<all self-hosted>}   (point a datastore at a hosted cloud endpoint; default self-hosted)" \
             tor      "Tor v3 onion ........ $([ "${OPT_TOR_ONION}" = yes ] && echo on || echo off)   (node service; exposes fe-gateway as .onion; default off)" \
+            sunshine "Thin-desktop host ... $([ "${OPT_SUNSHINE}" = yes ] && echo on || echo off)   (Sunshine on tailnet CLIENT desktops; Quest/Moonlight opens it; default off)" \
             idp      "Identity provider ... ${OPT_IDP}$([ "${OPT_IDP}" != casdoor ] && echo " (${OPT_IDP_ISSUER:-issuer unset})")   (mesh-node token IdP; casdoor=built-in default)" \
             charstudio "Character Studio (VN) $([ "${OPT_CHARACTER_STUDIO}" = yes ] && echo on || echo off)   (frontend remote at /character-studio; default off)" \
             charforge "Character Forge (3D)  $([ "${OPT_CHARACTER_FORGE}" = yes ] && echo on || echo off)   (3D maker: BFF db+api + remote at /character-forge; default off)" \
@@ -1408,6 +1416,7 @@ options_screen() {
             services) services_screen ;;
             managed) managed_services_screen ;;
             tor)     OPT_TOR_ONION="$([ "${OPT_TOR_ONION}" = yes ] && echo no || echo yes)" ;;
+            sunshine) OPT_SUNSHINE="$([ "${OPT_SUNSHINE}" = yes ] && echo no || echo yes)" ;;
             idp)     idp_screen ;;
             charstudio) OPT_CHARACTER_STUDIO="$([ "${OPT_CHARACTER_STUDIO}" = yes ] && echo no || echo yes)"
                         services_sync_charstudio ;;   # the checklist mirrors the toggle
@@ -1678,9 +1687,10 @@ standalone_screen() {
 # the three IMAGE choices funnel into the EXISTING screens (build_screen /
 # single_role_screen / standalone_screen), each of which already calls build_make_cmd
 # verbatim, so emission stays byte-identical. The fourth choice (Local Docker mesh)
-# builds NO image and never touches build_make_cmd. The MDM phone choice
-# (phone_screen) likewise builds NO image — it drives scripts/phone-wizard.sh and is
-# NOT part of the four-label golden taxonomy (it sits outside mode.py's ModePage).
+# builds NO image and never touches build_make_cmd. The MDM phone and MDM Quest
+# headset choices (phone_screen / quest_screen) likewise build NO image — both drive
+# scripts/phone-wizard.sh (quest via --device-class quest) and are NOT part of the
+# four-label golden taxonomy.
 mode_screen() {
     local choice
     while :; do
@@ -1691,6 +1701,7 @@ mode_screen() {
             client     "Mesh desktop client — a branded desktop that JOINS an existing mesh (tailnet + SSO)" \
             standalone "Standalone Gentoo desktop — hardened personal / UNAFFILIATED desktop (no mesh/SSO)" \
             phone      "MDM phone — flash a USB Pixel with VERIFIED GrapheneOS + enroll it in the mesh (no image built)" \
+            quest      "MDM Quest headset — enroll a USB Meta Quest 3/3S as an MDM-managed mesh device (no image built, no flash)" \
             deploy     "Cloud deploy — publish a cloud-packaged x86 image to a cloud provider (no image built)" \
             advanced   "Advanced — all build targets & fleet options (the full menu)" \
             back "‹ back to main menu")" || return 0
@@ -1718,6 +1729,10 @@ mode_screen() {
             # Pixel handset + enroll it in the mesh). Like localmesh it never touches
             # build_make_cmd — the driver owns ALL the logic, phone_screen stays thin.
             phone)      phone_screen ;;
+            # → the MDM phone driver again, quest device class: onboard a Meta Quest
+            # 3/3S AS-IS (Horizon OS keeps its firmware — no flash). Same driver,
+            # same custody posture; quest_screen stays thin like phone_screen.
+            quest)      quest_screen ;;
             # → the THIRD non-build choice: deploy the OUTPUT of a build (an already
             # cloud-packaged x86 artifact) via the canonical cloud-deploy driver.
             # Like localmesh/phone it never touches build_make_cmd — the driver owns
@@ -2317,6 +2332,212 @@ _phone_run() {
         _phone_shred_key
     fi
     if [ "${rc}" -eq 0 ]; then say "phone-wizard ${verb}: OK"; else warn "phone-wizard ${verb}: exit ${rc}"; fi
+    # Pause so the driver's output survives the next menu redraw — but only when a
+    # human is actually attached (tests call this with stdin redirected).
+    if [ -t 0 ]; then read -r -p "press Enter to return to the menu… " _ </dev/tty || true; fi
+    return 0
+}
+
+# ── MDM Quest headset (Meta Quest 3/3S) — enrolls a HEADSET, builds NO image ──
+# phone_screen's quest twin: the SAME driver (scripts/phone-wizard.sh) with
+# --device-class quest, which selects the quest catalog (quest-devices.tsv —
+# `panther` is BOTH the Pixel 7 and the Quest 3S, so the class picks the catalog)
+# and the quest verb subset. A Quest is onboarded AS-IS: Horizon OS cannot be
+# reflashed by this wizard, so there is no fetch/flash/attest/profile here — the
+# driver refuses them fail-closed with the per-verb rationale (GrapheneOS is
+# Pixel-only; no Auditor tier exists on Horizon OS; the user model is
+# Meta-account-bound). Same custody posture as phone_screen: every setting is
+# FUNCTION-LOCAL (never save_conf'd), the auth key is masked and travels by
+# chmod-600 mktemp file (--authkey-file) shredded after the run, and runs are
+# FOREGROUND (the driver prints operator runbooks and the guided wizard prompts).
+quest_screen() {
+    local wiz="${SNAP_PHONE_WIZARD:-${SCRIPT_DIR}/phone-wizard.sh}"
+    if [ ! -x "${wiz}" ]; then
+        ui_msg "MDM Quest headset" "driver not found/executable: ${wiz}\n\nThis checkout has no MDM phone wizard (see docs/MDM.md)."
+        return 0
+    fi
+    local codename="" serial="" keys_dir="" login_server="" authkey="" role="" choice
+    # Management-plane knobs (Headwind DPC + the XR-chat entry URL) — file-path/
+    # URL/hex-digest/name values only, never secrets. No Auditor/attestation knobs:
+    # attest is unsupported for the quest class (see above).
+    local headwind_apk="" headwind_signer="" headwind_url="" headwind_config=""
+    local xr_chat_url=""
+    # Thin desktop (§8b, opt-in): the toggle + its Moonlight/host-list knobs —
+    # same custody posture (paths/digests/names, never secrets, never persisted).
+    local thin_desktop=no moonlight_apk="" moonlight_signer="" thin_desktop_hosts=""
+    while :; do
+        local keyl mdml tdl
+        keyl="$([ -n "${authkey}" ] && echo '(set)' || echo '(unset — enroll then expects your own custody)')"
+        mdml="$([ -n "${headwind_apk}${headwind_signer}${headwind_url}${headwind_config}" ] && echo '(customized)' || echo '(driver defaults / HMDM_URL env)')"
+        tdl="$([ "${thin_desktop}" = yes ] && echo "on (${thin_desktop_hosts:-no hosts yet})" || echo off)"
+        choice="$(ui_menu "MDM Quest headset" \
+            "Enroll a USB-connected Meta Quest 3/3S as an MDM-managed mesh device — no image build, no flash (the headset keeps Horizon OS). PREREQUISITE: Developer Mode ON (the driver prints the full runbook when the headset is not adb-visible). Masked auth key; never saved to ${CONF_FILE}." \
+            device  "Device codename ...... ${codename:-<detect at run>}" \
+            serial  "Serial ............... ${serial:-<auto when exactly 1 device>}" \
+            keys    "Keys dir ............. ${keys_dir:-<none — use server/auth key below>}" \
+            server  "Login server ......... ${login_server:-<from keys-dir>}" \
+            authkey "Auth key ............. ${keyl}" \
+            role    "Mesh role ............ ${role:-<driver default: user>}" \
+            mdm     "Headwind MDM ......... ${mdml}" \
+            xrchat  "XR-chat URL .......... ${xr_chat_url:-<not provisioned>}" \
+            thin    "Thin desktop ......... ${tdl}   (Moonlight + Sunshine host list; opt-in)" \
+            wizard  "★ Guided wizard (detect → mdm-enroll → enroll → ingest)" \
+            plan    "Preview the plan (dry-run — touches NOTHING)" \
+            detect  "Detect the connected headset (read-only; Developer-Mode runbook)" \
+            mdm-enroll "Make the Headwind DPC device owner + provision the XR-chat entry URL" \
+            enroll  "Enroll in the mesh (Tailscale sideload + tun0 join verify)" \
+            ingest  "Emit the device-registry ingest record (device_class=quest)" \
+            status  "Status (read-only)" \
+            back    "‹ back")" || return 0
+        case "${choice}" in
+            device)
+                # Picker fed LIVE from the driver's own vetted QUEST catalog (the
+                # driver FAILS CLOSED, exit 4, on any codename not in it — no bypass
+                # here; the manufacturer probe pins the device to oculus/Meta).
+                local tsv devs=() cn nm
+                tsv="$(dirname "${wiz}")/quest-devices.tsv"
+                if [ -f "${tsv}" ]; then
+                    while IFS=$'\t' read -r cn nm; do
+                        case "${cn}" in ''|'#'*) continue ;; esac
+                        devs+=("${cn}" "${nm} (${cn})")
+                    done <"${tsv}"
+                fi
+                if [ "${#devs[@]}" -eq 0 ]; then
+                    codename="$(ui_input "Device codename" "Quest codename (blank = detect at run)" "${codename}")"
+                else
+                    cn="$(ui_menu "Device" "The vetted Quest device catalog ($(basename "${tsv}"))." \
+                        detect "<detect at run — probe the connected headset>" "${devs[@]}")" || cn=""
+                    case "${cn}" in detect) codename="" ;; "") : ;; *) codename="${cn}" ;; esac
+                fi ;;
+            serial)  serial="$(ui_input "Serial" "Target headset serial (blank = auto when exactly one device is connected)" "${serial}")" ;;
+            keys)    keys_dir="$(ui_input "Keys dir" "Keys dir, docker-mesh-node layout: login-server, tailscale/authkey, role (blank = use the server/auth-key fields)" "${keys_dir}")" ;;
+            server)  login_server="$(ui_input "Login server" "Headscale control URL (blank = the keys-dir login-server file)" "${login_server}")" ;;
+            authkey) authkey="$(ui_password "Auth key" "One-time tailnet/headscale pre-auth key (blank = unset; the enroll runbook then expects it from your own custody)" "${authkey}")" ;;
+            role)    local prev_role="${role}"
+                     role="$(ui_menu "Mesh role" "Mesh role for the enrollment record" \
+                        default    "<driver default — user, or the keys-dir role file>" \
+                        user       "user" \
+                        mod        "mod" \
+                        admin      "admin" \
+                        superadmin "superadmin")" || role="${prev_role}"
+                     [ "${role}" = default ] && role="" ;;
+            mdm)     _quest_mdm_settings ;;
+            xrchat)  xr_chat_url="$(ui_input "XR-chat URL" "https:// XR-chat entry URL provisioned during mdm-enroll (WebXR needs a secure context; blank = do not provision). mdm-enroll records it in mdm.json, prints the Headwind web-page-app runbook and fires a VIEW intent to confirm the room loads in the headset browser." "${xr_chat_url}")" ;;
+            thin)    _quest_thin_desktop_settings ;;
+            wizard|plan|detect|mdm-enroll|enroll|ingest|status)
+                _quest_run "${choice}" "${authkey}" "${codename}" "${serial}" "${keys_dir}" "${login_server}" "${role}" \
+                    "${headwind_apk}" "${headwind_signer}" "${headwind_url}" "${headwind_config}" "${xr_chat_url}" \
+                    "${thin_desktop}" "${moonlight_apk}" "${moonlight_signer}" "${thin_desktop_hosts}" ;;
+            back|"") return 0 ;;
+        esac
+    done
+}
+
+# _quest_mdm_settings — sub-screen editing quest_screen's Headwind knob locals
+# (bash dynamic scoping, the _phone_mdm_settings pattern: state stays function-
+# local to quest_screen — nothing is ever save_conf'd). All values are paths/
+# URLs/digests/names, not secrets. --headwind-config is the app-push lever:
+# applications in that Headwind CONFIGURATION (e.g. the XR-chat web-page entry)
+# are pushed by the Headwind server to the headset.
+_quest_mdm_settings() {
+    local mchoice
+    while :; do
+        mchoice="$(ui_menu "Headwind MDM settings" \
+            "Management-plane extras for mdm-enroll. Blank = driver default (HMDM_URL env still applies driver-side). The signer digest is the SHA-256 pin the driver refuses to install without." \
+            hwapk    "Headwind DPC APK ......... ${headwind_apk:-<unset>}" \
+            hwsigner "Headwind signer SHA-256 .. ${headwind_signer:-<unset>}" \
+            hwurl    "Headwind server URL ...... ${headwind_url:-<driver env HMDM_URL>}" \
+            hwconfig "Headwind CONFIGURATION ... ${headwind_config:-<unset — app-push lever>}" \
+            back     "‹ back")" || return 0
+        case "${mchoice}" in
+            hwapk)    headwind_apk="$(ui_input "Headwind DPC APK" "Path to the Headwind MDM DPC APK to adb-install during mdm-enroll (blank = require already-installed)" "${headwind_apk}")" ;;
+            hwsigner) headwind_signer="$(ui_input "Headwind signer SHA-256" "Expected APK signing-cert SHA-256 (hex, no colons) — mdm-enroll fails closed on mismatch" "${headwind_signer}")" ;;
+            hwurl)    headwind_url="$(ui_input "Headwind server URL" "Headwind base URL written into the DPC's init.json (blank = driver HMDM_URL env)" "${headwind_url}")" ;;
+            hwconfig) headwind_config="$(ui_input "Headwind CONFIGURATION" "Headwind CONFIGURATION the headset self-selects into (init.json com.hmdm.CONFIG) — apps in it (e.g. the XR-chat web-page entry) are pushed to the headset" "${headwind_config}")" ;;
+            back|"")  return 0 ;;
+        esac
+    done
+}
+
+# _quest_thin_desktop_settings — sub-screen editing quest_screen's thin-desktop
+# knob locals (bash dynamic scoping, the _quest_mdm_settings pattern: state stays
+# function-local to quest_screen — nothing is ever persisted to menu.conf). The
+# toggle is the driver's own opt-in gate: the Moonlight/host knobs only ride argv
+# while it is ON (the driver refuses them without --thin-desktop, fail-closed).
+_quest_thin_desktop_settings() {
+    local tchoice
+    while :; do
+        tchoice="$(ui_menu "Thin desktop (Moonlight → Sunshine over the tailnet)" \
+            "Opt-in quest capability, provisioned during mdm-enroll: sideload the Moonlight streaming client (signer-pinned like every sideload) + push the managed thin-client host list, so the headset opens a Sunshine-hosted virtual desktop of a mesh node over the tailnet ONLY. The node side is the x86 builder's --with-sunshine item — docs/MDM.md 'Thin desktop'." \
+            toggle "Thin desktop ............ $([ "${thin_desktop}" = yes ] && echo on || echo off)" \
+            mlapk  "Moonlight APK ........... ${moonlight_apk:-<unset — require already-installed>}" \
+            mlsigner "Moonlight signer SHA-256  ${moonlight_signer:-<unpinned>}" \
+            hosts  "Thin-client hosts ....... ${thin_desktop_hosts:-<none — pushes an empty managed list>}" \
+            back   "‹ back")" || return 0
+        case "${tchoice}" in
+            toggle)   thin_desktop="$([ "${thin_desktop}" = yes ] && echo no || echo yes)" ;;
+            mlapk)    moonlight_apk="$(ui_input "Moonlight APK" "Path to the Moonlight APK to adb-install during mdm-enroll (blank = require already-installed on the headset)" "${moonlight_apk}")" ;;
+            mlsigner) moonlight_signer="$(ui_input "Moonlight signer SHA-256" "Expected APK signing-cert SHA-256 (hex, no colons) — mdm-enroll fails closed on mismatch" "${moonlight_signer}")" ;;
+            hosts)    thin_desktop_hosts="$(ui_input "Thin-client hosts" "Comma-separated thin-client tailnet names (lowercase MagicDNS, e.g. frite,box2.hugmesh.internal) written into the managed host-list file pushed to the headset" "${thin_desktop_hosts}")" ;;
+            back|"")  return 0 ;;
+        esac
+    done
+}
+
+# _quest_run VERB AUTHKEY CODENAME SERIAL KEYS_DIR LOGIN_SERVER ROLE
+#            HEADWIND_APK HEADWIND_SIGNER HEADWIND_URL HEADWIND_CONFIG XR_CHAT_URL
+#            THIN_DESKTOP MOONLIGHT_APK MOONLIGHT_SIGNER THIN_DESKTOP_HOSTS
+# — one FOREGROUND child invocation of the driver with --device-class quest riding
+# FIRST (the Makefile _QUEST_ARGS shape), then the shared flags in _phone_run's
+# order (no --channel: a headset has no GrapheneOS release channel), then the
+# Headwind/XR management-plane flags, then the opt-in thin-desktop set (toggle
+# first — the driver refuses the value knobs without it). Auth-key custody is
+# _phone_run's exactly: a chmod-600 mktemp file (off the argv / process table)
+# named --authkey-file at the argv TAIL, shredded after the run with the
+# INT/TERM/EXIT trap covering a mid-run Ctrl-C (_phone_shred_key reads the
+# caller's local ${keyfile}).
+_quest_run() {
+    local verb="$1" authkey="$2" codename="$3" serial="$4" keys_dir="$5" login_server="$6" role="$7"
+    local headwind_apk="${8:-}" headwind_signer="${9:-}" headwind_url="${10:-}"
+    local headwind_config="${11:-}" xr_chat_url="${12:-}"
+    local thin_desktop="${13:-no}" moonlight_apk="${14:-}" moonlight_signer="${15:-}"
+    local thin_desktop_hosts="${16:-}"
+    local wiz="${SNAP_PHONE_WIZARD:-${SCRIPT_DIR}/phone-wizard.sh}"
+    local -a args=("${verb}" --device-class quest)
+    [ -n "${codename}" ]     && args+=(--codename "${codename}")
+    [ -n "${serial}" ]       && args+=(--serial "${serial}")
+    [ -n "${keys_dir}" ]     && args+=(--keys-dir "${keys_dir}")
+    [ -n "${login_server}" ] && args+=(--login-server "${login_server}")
+    [ -n "${role}" ]         && args+=(--role "${role}")
+    [ -n "${headwind_apk}" ]    && args+=(--headwind-apk "${headwind_apk}")
+    [ -n "${headwind_signer}" ] && args+=(--headwind-signer-sha256 "${headwind_signer}")
+    [ -n "${headwind_url}" ]    && args+=(--headwind-url "${headwind_url}")
+    [ -n "${headwind_config}" ] && args+=(--headwind-config "${headwind_config}")
+    [ -n "${xr_chat_url}" ]     && args+=(--xr-chat-url "${xr_chat_url}")
+    # Thin desktop: value knobs ONLY while the toggle is on — the driver dies 1
+    # on a stray --moonlight-*/--thin-desktop-hosts without --thin-desktop.
+    if [ "${thin_desktop}" = yes ]; then
+        args+=(--thin-desktop)
+        [ -n "${moonlight_apk}" ]      && args+=(--moonlight-apk "${moonlight_apk}")
+        [ -n "${moonlight_signer}" ]   && args+=(--moonlight-signer-sha256 "${moonlight_signer}")
+        [ -n "${thin_desktop_hosts}" ] && args+=(--thin-desktop-hosts "${thin_desktop_hosts}")
+    fi
+    local keyfile=""
+    if [ -n "${authkey}" ]; then
+        keyfile="$(mktemp "${STATE_DIR}/phonekey.XXXXXX")" || { ui_msg "MDM Quest headset" "could not create a temp file for the auth key"; return 0; }
+        chmod 600 "${keyfile}" 2>/dev/null || true
+        printf '%s' "${authkey}" >"${keyfile}"
+        args+=(--authkey-file "${keyfile}")
+        trap '_phone_shred_key' INT TERM EXIT
+    fi
+    say "running: scripts/phone-wizard.sh ${verb} --device-class quest (foreground — output follows)"
+    "${wiz}" "${args[@]}"
+    local rc=$?
+    if [ -n "${keyfile}" ]; then
+        trap - INT TERM EXIT
+        _phone_shred_key
+    fi
+    if [ "${rc}" -eq 0 ]; then say "phone-wizard ${verb} (quest): OK"; else warn "phone-wizard ${verb} (quest): exit ${rc}"; fi
     # Pause so the driver's output survives the next menu redraw — but only when a
     # human is actually attached (tests call this with stdin redirected).
     if [ -t 0 ]; then read -r -p "press Enter to return to the menu… " _ </dev/tty || true; fi

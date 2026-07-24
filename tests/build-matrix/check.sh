@@ -891,7 +891,9 @@ run_threading_checks() {
 # Expectation grammar: 'token'  must appear in the printed command
 #                      '!token' must NOT appear in the printed command
 #                      'PLAN:pat' / 'PLAN:!pat'  must (not) match the plan output
-GUITHR_EXPECTED=57   # fail-closed: keep in sync with the guithr call list below
+GUITHR_EXPECTED=62   # fail-closed: keep in sync with the guithr call list below
+                     # (was stale at 57 while 61 probes existed — the main merge
+                     # added probes without bumping it; 62 = those 61 + sunshine)
                      # (51 + packages_add/packages_drop, WS-BUILDER emission flip;
                      # + superdomain mesh-x86/mesh-rpi5/standalone-absent, WS-SUPER-B;
                      # + chromebook standalone-desktop discoverability)
@@ -1030,8 +1032,14 @@ run_gui_threading_checks() {
         '{"platform":"x86","role":"standalone-thick","mode":"standalone","env":"test","media_data":"off","media_label":"DATA","no_vaults":true}' \
         '--no-media-data' '--media-label DATA' '--no-vaults' 'PLAN:media_data=false'
     guithr g34-force-off-tristates \
-        '{"platform":"x86","role":"be","mode":"mesh","env":"test","aide":"off","tor_onion_service":"off","character_studio":"off","character_forge":"off","edge_ai_service":"off"}' \
-        '--no-aide' '--no-tor' '--no-character-studio' '--no-character-forge' '--no-edge-ai'
+        '{"platform":"x86","role":"be","mode":"mesh","env":"test","aide":"off","tor_onion_service":"off","character_studio":"off","character_forge":"off","edge_ai_service":"off","sunshine":"off"}' \
+        '--no-aide' '--no-tor' '--no-character-studio' '--no-character-forge' '--no-edge-ai' '--no-sunshine'
+    # sunshine (thin-desktop stream host, §8b): the with-channel on a tailnet
+    # CLIENT desktop — the only surface the builder applies it to (elsewhere it
+    # warn-drops, the loud-harmless-no-op convention).
+    guithr g34-with-sunshine-client \
+        '{"platform":"x86","role":"laptop","mode":"cloud","env":"test","sunshine":true}' \
+        '--with-sunshine'
     # character-forge (3D maker multi-app slug): the lone tri-state flag pair on
     # BOTH channels of the tri-state (with/no), plus the slug through the
     # --optional-services checklist path (x86 + rpi5 parity below).

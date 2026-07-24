@@ -193,6 +193,48 @@ class QuestPage(QtWidgets.QWizardPage):
         self.xr_chat_enabled.toggled.connect(self.xr_chat_url.setEnabled)
         lay.addWidget(_row("XR-chat URL", self.xr_chat_url))
 
+        # ── Thin desktop (§8b — toggle + Moonlight APK/pin + host list) ───────────
+        # Same opt-in shape as the XR-chat toggle above: the value fields are
+        # greyed until the capability is enabled and collect() emits them ONLY
+        # while it is on — the driver refuses value knobs without --thin-desktop.
+        self.thin_desktop_enabled = QtWidgets.QCheckBox(
+            "Thin desktop: provision Moonlight + the thin-client host list during mdm-enroll")
+        self.thin_desktop_enabled.setToolTip(
+            "Opt-in quest capability: sideload the Moonlight streaming client "
+            "(operator-supplied APK, signer-pinned like every other sideload) and "
+            "push the managed list of thin-client tailnet names, so the headset can "
+            "open a Sunshine-hosted virtual desktop of a mesh node over the tailnet "
+            "ONLY. mdm-enroll also prints the Headwind app-push runbook (durable "
+            "fleet distribution) and the Moonlight/Sunshine PIN pairing runbook. "
+            "The node side is the x86 builder's --with-sunshine provisioning item — "
+            "see docs/MDM.md 'Thin desktop'.")
+        lay.addWidget(self.thin_desktop_enabled)
+        self.moonlight_apk = QtWidgets.QLineEdit()
+        self.moonlight_apk.setPlaceholderText(
+            "path to the Moonlight APK (blank = require already-installed)")
+        ml_row = QtWidgets.QHBoxLayout()
+        ml_row.addWidget(self.moonlight_apk, 1)
+        self.moonlight_browse = QtWidgets.QPushButton("Browse…")
+        self.moonlight_browse.clicked.connect(self._browse_moonlight)
+        ml_row.addWidget(self.moonlight_browse)
+        self._moonlight_row = self._wrap(ml_row)
+        lay.addWidget(_row("Moonlight APK", self._moonlight_row))
+        self.moonlight_signer = QtWidgets.QLineEdit()
+        self.moonlight_signer.setPlaceholderText(
+            "expected APK signing-cert SHA-256 (hex; mdm-enroll fails closed on mismatch)")
+        lay.addWidget(_row("Moonlight signer SHA-256", self.moonlight_signer))
+        self.thin_desktop_hosts = QtWidgets.QLineEdit()
+        self.thin_desktop_hosts.setPlaceholderText(
+            "comma-separated thin-client tailnet names (e.g. frite,box2.hugmesh.internal)")
+        self.thin_desktop_hosts.setToolTip(
+            "Written into the managed host-list file pushed to the headset "
+            "(Moonlight external files dir) and mirrored in mdm.json. Lowercase "
+            "tailnet DNS names only — the driver validates the charset fail-closed.")
+        lay.addWidget(_row("Thin-client hosts", self.thin_desktop_hosts))
+        for w in (self._moonlight_row, self.moonlight_signer, self.thin_desktop_hosts):
+            w.setEnabled(False)
+            self.thin_desktop_enabled.toggled.connect(w.setEnabled)
+
         # Verb buttons — a grid so the seven actions wrap tidily.
         self._buttons: dict[str, QtWidgets.QPushButton] = {}
         grid = QtWidgets.QGridLayout()
@@ -262,6 +304,12 @@ class QuestPage(QtWidgets.QWizardPage):
         if f:
             self.headwind_apk.setText(f)
 
+    def _browse_moonlight(self):
+        f, _sel = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Moonlight APK", self.moonlight_apk.text(), "APK (*.apk);;All files (*)")
+        if f:
+            self.moonlight_apk.setText(f)
+
     def _codename_value(self) -> str:
         # Same genuine-selection rule as PhonePage._codename_value (see its comment on
         # why currentData() alone is unsafe on an editable combo).
@@ -276,7 +324,10 @@ class QuestPage(QtWidgets.QWizardPage):
         """Widgets -> PhoneWizardConfig with device_class pinned to "quest"
         (auth_key transient — never persisted). channel is deliberately left at ""
         (a GrapheneOS release-channel knob; meaningless for a class with no
-        fetch/flash). The XR-chat URL is emitted ONLY while the toggle is on."""
+        fetch/flash). The XR-chat URL is emitted ONLY while its toggle is on, and
+        the thin-desktop value knobs ONLY while THAT toggle is on (the driver
+        refuses --moonlight-*/--thin-desktop-hosts without --thin-desktop)."""
+        td_on = self.thin_desktop_enabled.isChecked()
         return PhoneWizardConfig(
             device_class="quest",
             codename=self._codename_value(),
@@ -292,6 +343,10 @@ class QuestPage(QtWidgets.QWizardPage):
             headwind_config=self.headwind_config.text().strip(),
             xr_chat_url=(self.xr_chat_url.text().strip()
                          if self.xr_chat_enabled.isChecked() else ""),
+            thin_desktop=td_on,
+            moonlight_apk=(self.moonlight_apk.text().strip() if td_on else ""),
+            moonlight_signer=(self.moonlight_signer.text().strip() if td_on else ""),
+            thin_desktop_hosts=(self.thin_desktop_hosts.text().strip() if td_on else ""),
         )
 
     def _refresh_available(self):

@@ -31,6 +31,7 @@ from ...core.config import (
     rpi_boards_for_role,
 )
 from ._widgets import _row, status_badge
+from .network import _tri_state, _tri_value
 
 # canonical machine order — x86 first (the default platform), matching today's
 # default-platform behaviour; ARM boards follow in a stable order.
@@ -252,6 +253,21 @@ class RolePage(QtWidgets.QWizardPage):
         self.steam.addItems(["(default)", "native", "flatpak", "none"])
         cl.addWidget(_row("Desktop weight", self.desktop))
         cl.addWidget(_row("Steam delivery", self.steam))
+        # Thin-desktop stream host (Sunshine; §8b) — tri-state like the Network
+        # page's service toggles (G34: on / force-off / leave builder default).
+        self.sunshine = QtWidgets.QCheckBox(
+            "Thin-desktop stream host (Sunshine) — stream this desktop to mesh "
+            "headsets over the tailnet only (default off)")
+        self.sunshine.setTristate(True)
+        self.sunshine.setToolTip(
+            "Bakes Sunshine + a mesh-scoped nftables fence (stream ports admitted "
+            "ONLY on the tailscale interface from 100.64/10; pairing web UI "
+            "loopback-only) + an in-session autostart, so a mesh-enrolled Quest "
+            "running Moonlight (the MDM Quest wizard's thin-desktop toggle) can "
+            "open this desktop. Tailnet CLIENT desktops only — the builder "
+            "warn-drops it on cluster roles and on tailnet-less desktops "
+            "(standalone needs --with-tailscale). See docs/MDM.md 'Thin desktop'.")
+        cl.addWidget(self.sunshine)
         # --capable composes onto ANY client/standalone role (G21) — before this
         # checkbox it was only implicit via role standalone-thick.
         self.capable = QtWidgets.QCheckBox(
@@ -620,6 +636,7 @@ class RolePage(QtWidgets.QWizardPage):
             self.desktop.setCurrentText(c.desktop)
         if c.steam:
             self.steam.setCurrentText(c.steam)
+        self.sunshine.setCheckState(_tri_state(c.sunshine))
         # one config field triple mirrored into every box's u-boot widget set (G35)
         for url_w, defconfig_w, skip_w in (
                 (self.frite_uboot_url, self.frite_uboot_defconfig, self.frite_skip_uboot),
@@ -777,6 +794,10 @@ class RolePage(QtWidgets.QWizardPage):
             c.desktop = "" if (weight == "(default)" or not x86_client) else weight
         steam = self.steam.currentText()
         c.steam = "" if (steam == "(default)" or not x86_client) else steam
+        # sunshine: tri-state (True / "off" / False-as-default); False when the
+        # client box is not on this build's surface — mirrors steam's x86_client
+        # blanking so a stale value never rides a server/ARM argv.
+        c.sunshine = _tri_value(self.sunshine) if x86_client else False
         # machine-profile preset (folded from Hardware): NON_ARGV round-trip field.
         # x86-only (the picker is hidden on ARM devices) so a stale x86 profile can't
         # linger on an ARM build's saved config.

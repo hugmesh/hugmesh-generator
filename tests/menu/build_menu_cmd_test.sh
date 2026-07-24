@@ -665,6 +665,118 @@ assert_eq "phone_screen: captured _phone_run argv matches the driven field selec
 [ -s "${_UI_INPUT_Q}" ]    && _bad "phone_screen: ui_input queue not fully consumed: $(cat "${_UI_INPUT_Q}")"   || _ok
 [ -s "${_UI_PASSWORD_Q}" ] && _bad "phone_screen: ui_password queue not fully consumed"                          || _ok
 
+# ── MDM Quest headset (quest_screen/_quest_run) — mirrors the phone block ──────
+# The quest track is a NON-BUILD choice riding the SAME driver with
+# --device-class quest: it must never touch build_make_cmd, never persist state
+# (no OPT_QUEST_*, save_conf untouched), run FOREGROUND only, keep the auth-key
+# custody (0600 STATE_DIR file, shredded), and — the class contract — never
+# surface the GrapheneOS-only verbs (fetch/flash/attest/profile) the driver
+# refuses fail-closed for a headset.
+assert_grep "quest: opening item present"          '^[[:space:]]*quest[[:space:]]+"MDM Quest headset '  "${MENU_SH}"
+assert_grep "quest: routed to quest_screen"        '^[[:space:]]*quest\)[[:space:]]+quest_screen '      "${MENU_SH}"
+assert_grep "quest: wizard label carries the 4-step quest order" \
+    'detect → mdm-enroll → enroll → ingest' "${MENU_SH}"
+assert_grep "quest: dispatch case covers the 7 quest verbs" \
+    'wizard\|plan\|detect\|mdm-enroll\|enroll\|ingest\|status\)' "${MENU_SH}"
+assert_ngrep "quest: no OPT_QUEST_* state"         'OPT_QUEST' "${MENU_SH}"
+quest_region="$(sed -n '/^quest_screen() {/,/^}/p' "${MENU_SH}"; sed -n '/^_quest_run() {/,/^}/p' "${MENU_SH}"; sed -n '/^_quest_mdm_settings() {/,/^}/p' "${MENU_SH}"; sed -n '/^_quest_thin_desktop_settings() {/,/^}/p' "${MENU_SH}")"
+case "${quest_region}" in
+    *'--xr-chat-url'*) _ok ;;
+    *) _fail "quest: region extraction vacuous (quest_screen/_quest_run not found)" ;;
+esac
+printf '%s' "${quest_region}" | grep -q 'setsid'       && _fail "quest: setsid in quest region (must run foreground)" || _ok
+printf '%s' "${quest_region}" | grep -q 'launch_build' && _fail "quest: launch_build in quest region (must run foreground)" || _ok
+printf '%s' "${quest_region}" | grep -q 'save_conf'    && _fail "quest: save_conf in quest region (state must stay function-local)" || _ok
+# class contract: the unsupported verbs are ABSENT from the quest surface — no
+# pickable item and no dispatch tag for any of them (the phone screen keeps
+# them; the quest screen must never offer what the driver refuses).
+for _qverb in fetch flash attest profile rotate-profile-pass remove-profile; do
+    printf '%s' "${quest_region}" | grep -qE "^[[:space:]]*${_qverb}[[:space:]]+\"" \
+        && _fail "quest: unsupported verb '${_qverb}' offered as a menu item" || _ok
+done
+printf '%s' "${quest_region}" | grep -q -- '--channel' \
+    && _fail "quest: --channel in quest region (no GrapheneOS release channel on a headset)" || _ok
+# the class flag rides FIRST after the verb (the Makefile _QUEST_ARGS shape)
+printf '%s' "${quest_region}" | grep -qF -- '("${verb}" --device-class quest)' \
+    && _ok || _fail "quest: _quest_run does not pin --device-class quest first"
+
+# save_conf stays quest-free: a fresh save leaks no quest material.
+reset_opts; save_conf
+grep -qiE 'quest|headwind|xr_chat' "${CONF_FILE}" && _fail "conf: quest/headwind state leaked into menu.conf" || _ok
+
+# ── _quest_run behavioural checks against the same stub driver ─────────────────
+# Fresh capture dir so nothing bleeds between the phone and quest assertions
+# (PHONE_STUB_OUT is read by the stub at CHILD runtime).
+QUEST_STUB_OUT="${SNAP_MENU_STATE}/quest-stub-out"; mkdir -p "${QUEST_STUB_OUT}"
+_PHONE_STUB_OUT_SAVED="${PHONE_STUB_OUT}"
+PHONE_STUB_OUT="${QUEST_STUB_OUT}"; export PHONE_STUB_OUT
+
+# all settings set: full deterministic argv — verb first, --device-class quest
+# pinned immediately after, shared flags in the _phone_run order (NO --channel),
+# management-plane flags next, the thin-desktop set (toggle FIRST, then its
+# value knobs), the auth key OFF the argv (0600 file at tail).
+QUEST_SECRET='tskey-auth-Qu3st Secret!'
+_quest_run enroll "${QUEST_SECRET}" eureka Q1TEST "" "https://hs.example" user \
+    /apks/hmdm.apk AABB11 https://hmdm.example xr-fleet https://mesh.example/chat3d \
+    yes /apks/moonlight.apk CCDD22 frite,box2.hugmesh.internal </dev/null >/dev/null 2>&1
+assert_eq "quest run: argv (class first, options in order, secret off-argv)" \
+    "$(head -n -2 "${QUEST_STUB_OUT}/argv")" \
+    "$(printf '%s\n' enroll --device-class quest --codename eureka --serial Q1TEST --login-server https://hs.example --role user \
+        --headwind-apk /apks/hmdm.apk --headwind-signer-sha256 AABB11 --headwind-url https://hmdm.example \
+        --headwind-config xr-fleet --xr-chat-url https://mesh.example/chat3d \
+        --thin-desktop --moonlight-apk /apks/moonlight.apk --moonlight-signer-sha256 CCDD22 \
+        --thin-desktop-hosts frite,box2.hugmesh.internal)"
+grep -qF -- "${QUEST_SECRET}" "${QUEST_STUB_OUT}/argv" && _fail "quest run: auth key leaked onto argv" || _ok
+case "$(cat "${QUEST_STUB_OUT}/key-path")" in
+    "${SNAP_MENU_STATE}"/phonekey.*) _ok ;;
+    *) _fail "quest run: keyfile not under STATE_DIR: $(cat "${QUEST_STUB_OUT}/key-path")" ;;
+esac
+assert_eq "quest run: keyfile content is the secret" "$(cat "${QUEST_STUB_OUT}/key-content")" "${QUEST_SECRET}"
+assert_eq "quest run: keyfile mode 600 at child runtime" "$(cat "${QUEST_STUB_OUT}/key-mode")" "600"
+[ -e "$(cat "${QUEST_STUB_OUT}/key-path")" ] && _fail "quest run: keyfile survived (must be shredded)" || _ok
+
+# nothing set: the class flag is the ONLY flag — no empty/bogus flags, no keyfile
+rm -f "${QUEST_STUB_OUT}/key-path"
+_quest_run status "" "" "" "" "" "" "" "" "" "" "" </dev/null >/dev/null 2>&1
+assert_eq "quest run: bare verb argv keeps the class pin" \
+    "$(cat "${QUEST_STUB_OUT}/argv")" "$(printf '%s\n' status --device-class quest)"
+[ -e "${QUEST_STUB_OUT}/key-path" ] && _fail "quest run: keyfile staged with no auth key" || _ok
+
+# a failing driver must not kill the sourced-menu shell (set -e is absent by design)
+PHONE_STUB_RC=7 _quest_run status "" "" "" "" "" "" "" "" "" "" "" </dev/null >/dev/null 2>&1
+assert_eq "quest run: nonzero driver rc survives" "$?" "0"
+PHONE_STUB_OUT="${_PHONE_STUB_OUT_SAVED}"; export PHONE_STUB_OUT
+
+# ── quest_screen(): drive its OWN choice-to-local-variable case block ───────────
+# The phone_screen walk's twin: stub _quest_run (capture argv) and refill the
+# ui_* FIFO queue files, then walk quest_screen through every field — device
+# (input path: no quest-devices.tsv sits next to the stub driver) -> serial ->
+# keys -> server -> authkey -> role -> the Headwind sub-screen (all 4 knobs) ->
+# xrchat -> the thin-desktop sub-screen (toggle + all 3 knobs) -> plan -> back —
+# proving the case labels mutate the RIGHT locals and land in _quest_run's 16
+# positional slots in order.
+QUEST_SCREEN_ARGV="${SNAP_MENU_STATE}/quest-screen-argv"
+_quest_run() { printf '%s\n' "$@" >"${QUEST_SCREEN_ARGV}"; }
+printf '%s\n' device serial keys server authkey role admin \
+              mdm hwapk hwsigner hwurl hwconfig back \
+              xrchat thin toggle mlapk mlsigner hosts back plan back >"${_UI_MENU_Q}"
+printf '%s\n' eureka Q9HEADSET "" "https://hs.example.test" \
+              /apks/hmdm.apk AABB11 https://hmdm.example.test xr-fleet \
+              "https://mesh.example.test/chat3d" \
+              /apks/moonlight.apk CCDD22 "frite,box2.hugmesh.internal" >"${_UI_INPUT_Q}"
+printf '%s\n' "tskey-auth-Qu3st Secret!"                                          >"${_UI_PASSWORD_Q}"
+
+quest_screen
+
+expected_quest_argv="$(printf '%s\n' plan "tskey-auth-Qu3st Secret!" eureka Q9HEADSET "" "https://hs.example.test" admin \
+    /apks/hmdm.apk AABB11 https://hmdm.example.test xr-fleet "https://mesh.example.test/chat3d" \
+    yes /apks/moonlight.apk CCDD22 "frite,box2.hugmesh.internal")"
+assert_eq "quest_screen: captured _quest_run argv matches the driven field selections" \
+    "$(cat "${QUEST_SCREEN_ARGV}" 2>/dev/null)" "${expected_quest_argv}"
+[ -s "${_UI_MENU_Q}" ]     && _bad "quest_screen: ui_menu queue not fully consumed: $(cat "${_UI_MENU_Q}")"     || _ok
+[ -s "${_UI_INPUT_Q}" ]    && _bad "quest_screen: ui_input queue not fully consumed: $(cat "${_UI_INPUT_Q}")"   || _ok
+[ -s "${_UI_PASSWORD_Q}" ] && _bad "quest_screen: ui_password queue not fully consumed"                          || _ok
+
 # ── mesh-bootstrap: the Tor toggle threads --with-tor into the shared entrypoint ──
 # _local_mesh_bootstrap_run shells `python3 -m hugmesh_studio.core.local_mesh_bootstrap`
 # with an args array; stub python3 to CAPTURE that argv and prove the tor param (arg 7)

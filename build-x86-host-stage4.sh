@@ -416,6 +416,15 @@ MEDIA_LABEL=""          # --media-label : match the data device by FS LABEL (els
 MEDIA_MARKERS="Steam Vaults"   # marker dir names that identify the data device by content
 STEAM_DIR="/media/Steam"
 STEAM_DELIVERY="native"   # --steam : native (DEFAULT; steam-overlay + multilib) | flatpak | none
+# ── Thin-desktop stream host (§8b) — CLIENT desktops on the tailnet, opt-in ──
+# --with-sunshine bakes Sunshine (games-util/sunshine) + the mesh-scoped
+# nftables fence (hugmesh-sunshine-firewall: stream ports tailnet-only, pairing
+# web UI loopback-only) + the in-session XDG-autostart launcher, so a
+# mesh-enrolled Quest running Moonlight (the quest wizard's --thin-desktop leg)
+# can open this node's desktop OVER THE TAILNET ONLY. DEFAULT-OFF; a no-op
+# with a warning on non-client roles and on desktops without a tailnet
+# (standalone/unaffiliated/--skip-tailscale). See docs/MDM.md 'Thin desktop'.
+WANT_SUNSHINE=false
 VAULTS_DIR="/media/Vaults"
 VAULTS_ENABLED=true     # --no-vaults disables gocryptfs / the /media/Vaults wiring
 # ── Secure Boot + KEYS USB (mirror the model this host already uses) ──────────
@@ -552,7 +561,7 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             /bff/login, MFA stamping, roles/groups, signup-gate —
                             docs/IDENTITY-PROVIDERS.md). Fail-closed validation.
       --idp-issuer URL      External OIDC issuer (https:// — REQUIRED unless
-                            --idp casdoor; must byte-match the token `iss`).
+                            --idp casdoor; must byte-match the token 'iss').
       --idp-client-id ID    External OIDC client id (public identifier; REQUIRED
                             unless --idp casdoor. Client SECRETS are never flags).
       --idp-jwks URL        External JWKS override. Empty derives per provider:
@@ -605,7 +614,7 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             standalone-thick role.
       --local-user NAME     Standalone local login account (default: ${DEFAULT_USER}).
       --local-pass PASS     Password for the local user. Hashed at build time
-                            (yescrypt, $6$ fallback); the plaintext is NEVER baked.
+                            (yescrypt, \$6\$ fallback); the plaintext is NEVER baked.
   GPU driver — all common cards; FREE (open) drivers are the default (GPU roles):
       --gpu-driver VALUE    all-free (DEFAULT — open Mesa for every vendor; any GPU;
                             NVIDIA=nouveau) | nvidia-free (nouveau) | nvidia
@@ -637,6 +646,14 @@ build-x86-host-stage4.sh — hardened Gentoo amd64 k8s/GPU worker image.
                             content-scan for the Steam/Vaults marker dirs).
       --steam DELIVERY      native (DEFAULT; steam-overlay + multilib, gaming
                             desktops only) | flatpak | none. Library → /media/Steam.
+      --with-sunshine       Thin-desktop stream host (CLIENT desktops on the
+                            tailnet only; DEFAULT-OFF): bake Sunshine + the
+                            mesh-scoped nftables fence (stream ports admitted
+                            ONLY on the tailscale iface from 100.64/10; pairing
+                            web UI 47990 loopback-only) + an in-session XDG
+                            autostart. Pairs with the Quest wizard's
+                            --thin-desktop Moonlight leg (docs/MDM.md).
+      --no-sunshine         Force it off (override a brand.conf default).
       --no-vaults           Don't install gocryptfs / wire /media/Vaults.
   Seed from a running system + bake a home directory:
       --seed-packages-from FILE  Append a package list (e.g. produced by
@@ -937,6 +954,8 @@ while [[ $# -gt 0 ]]; do
         --no-media-data) MEDIA_DATA=false; MEDIA_DATA_FORCED=off; shift ;;
         --media-label) MEDIA_LABEL="$2"; shift 2 ;;
         --steam) STEAM_DELIVERY="$2"; shift 2 ;;            # flatpak|native|none
+        --with-sunshine) WANT_SUNSHINE=true; shift ;;       # thin-desktop stream host (client desktops)
+        --no-sunshine) WANT_SUNSHINE=false; shift ;;
         --no-vaults) VAULTS_ENABLED=false; shift ;;
         # ── Seed-from-running-system + home archive ──
         --seed-packages-from) SEED_PACKAGES_FROM="$2"; shift 2 ;;
@@ -1333,6 +1352,20 @@ STEAM_NATIVE=false
 if [ "${STEAM_DELIVERY}" = "native" ] && ${ROLE_CLIENT} && ${MEDIA_DATA} \
    && { ${STANDALONE} || [ "${DESKTOP}" = "full" ]; }; then
     STEAM_NATIVE=true
+fi
+# Thin-desktop stream host (--with-sunshine): CLIENT desktops WITH a tailnet
+# only. Sunshine streams THIS node's desktop session and the fence admits it
+# exclusively on the tailscale iface — a server/cluster role has no desktop
+# session to stream, and a standalone/unaffiliated/--skip-tailscale desktop
+# has no tailnet for the fence to admit. Warn-and-drop (the --with-tor
+# client-role convention), never a hard error.
+if ${WANT_SUNSHINE} && ! ${ROLE_CLIENT}; then
+    warn "--with-sunshine on a non-client role has no effect (Sunshine streams a desktop session; this role has none) — dropping it."
+    WANT_SUNSHINE=false
+fi
+if ${WANT_SUNSHINE} && { ${SKIP_TAILSCALE} || ${UNAFFILIATED}; }; then
+    warn "--with-sunshine needs the tailnet (the fence admits stream traffic ONLY on the tailscale iface); this desktop has none (standalone/unaffiliated/--skip-tailscale) — dropping it."
+    WANT_SUNSHINE=false
 fi
 [ -n "${UNLOCK_KEYFILE}" ] && { case "${UNLOCK_KEYFILE}" in boot|login) ;; *) err "--unlock-keyfile must be: boot | login"; exit 1 ;; esac; }
 [ -n "${UNLOCK_YUBIKEY}" ] && { case "${UNLOCK_YUBIKEY}" in boot|login) ;; *) err "--unlock-yubikey must be: boot | login"; exit 1 ;; esac; }
@@ -3133,6 +3166,7 @@ for akf in "${SPECS_DIR}/portage/package.accept_keywords/"*; do
         amd-pro) ${AMD_PRO} || continue ;;
         intel-pro) ${INTEL_PRO} || continue ;;
         steam)   ${STEAM_NATIVE} || continue ;;
+        sunshine) ${WANT_SUNSHINE} || continue ;;
         home-encrypted) ${HOME_ENCRYPTED} || continue ;;
         seed-code)      ${WANT_DOCKER}    || continue ;;
         calamares)      ${WANT_CALAMARES} || continue ;;
@@ -3920,6 +3954,43 @@ if ${WANT_PROXY_STACK}; then
     SVCS+=(squid privoxy)
     info "Proxy stack staged: Squid(127.0.0.1:3128) <- Privoxy(127.0.0.1:8118) <- Firefox policy"
 fi
+# ── Thin-desktop stream host (--with-sunshine, client desktops on the tailnet) ──
+# Sunshine must run INSIDE the user's desktop session (display capture + uinput),
+# so its launcher is XDG autostart via a wrapper — the OpenRC-image equivalent
+# of a systemd user unit (this fleet's desktops are OpenRC; see docs/MDM.md
+# 'Thin desktop'). The mesh fence is its own reconcile-family member: one
+# script, one init.d oneshot, one clearly-scoped nftables table
+# (hugmesh_thin_desktop), plus the 60s cron — installed DIRECTLY (not staged):
+# the capability is decided at build time by this flag, unlike the
+# optional-service crons a later selection step links.
+if ${WANT_SUNSHINE}; then
+    cp "${SHARED_SPECS}/usr/sbin/hugmesh-sunshine-firewall" "${SYSROOT}/usr/sbin/hugmesh-sunshine-firewall"
+    chmod +x "${SYSROOT}/usr/sbin/hugmesh-sunshine-firewall"
+    cp "${SHARED_SPECS}/etc/init.d/hugmesh-sunshine-firewall" "${SYSROOT}/etc/init.d/hugmesh-sunshine-firewall"
+    chmod +x "${SYSROOT}/etc/init.d/hugmesh-sunshine-firewall"
+    mkdir -p "${SYSROOT}/etc/cron.d"
+    cp "${SHARED_SPECS}/etc/cron.d/hugmesh-sunshine-firewall" "${SYSROOT}/etc/cron.d/hugmesh-sunshine-firewall"
+    SVCS+=(hugmesh-sunshine-firewall)
+    cp "${SHARED_SPECS}/usr/bin/hugmesh-sunshine-session" "${SYSROOT}/usr/bin/hugmesh-sunshine-session"
+    chmod +x "${SYSROOT}/usr/bin/hugmesh-sunshine-session"
+    mkdir -p "${SYSROOT}/etc/hugmesh/thin-desktop"
+    cp "${SHARED_SPECS}/etc/hugmesh/thin-desktop/sunshine.conf"       "${SYSROOT}/etc/hugmesh/thin-desktop/sunshine.conf"
+    # WiVRn sibling path: documented CONFIG STUB only (native-OpenXR streaming
+    # of the shadows-of-the-net PCVR build to the same headset) — no package,
+    # no service; the stub names the follow-up work. docs/MDM.md 'Thin desktop'.
+    cp "${SHARED_SPECS}/etc/hugmesh/thin-desktop/wivrn.toml.example"  "${SYSROOT}/etc/hugmesh/thin-desktop/wivrn.toml.example"
+    mkdir -p "${SYSROOT}/etc/xdg/autostart"
+    cat > "${SYSROOT}/etc/xdg/autostart/hugmesh-sunshine.desktop" <<'DESK'
+[Desktop Entry]
+Type=Application
+Name=HugMesh thin-desktop stream host (Sunshine)
+Comment=Streams this desktop session to mesh-enrolled headsets over the tailnet only (pairing UI: https://localhost:47990)
+Exec=/usr/bin/hugmesh-sunshine-session
+Terminal=false
+X-GNOME-Autostart-enabled=true
+DESK
+    info "Thin desktop staged: Sunshine (in-session XDG autostart) + hugmesh-sunshine-firewall (stream ports tailnet-only, web UI loopback-only) + WiVRn config stub"
+fi
 if ${SNORT_IDS}; then
     mkdir -p "${SYSROOT}/etc/snort/rules" "${SYSROOT}/var/log/snort"
     cp "${SHARED_SPECS}/etc/snort/snort.conf"        "${SYSROOT}/etc/snort/snort.conf"
@@ -4163,6 +4234,9 @@ if ${ROLE_CLIENT}; then
     # Native Steam (games-util/steam-launcher) for the gaming desktops only.
     ${STEAM_NATIVE} && [ -f "${SPECS_DIR}/portage/packages-steam-native.list" ] \
         && PKG_LISTS+=("${SPECS_DIR}/portage/packages-steam-native.list")
+    # Thin-desktop stream host (--with-sunshine, tailnet client desktops only).
+    ${WANT_SUNSHINE} && [ -f "${SPECS_DIR}/portage/packages-sunshine.list" ] \
+        && PKG_LISTS+=("${SPECS_DIR}/portage/packages-sunshine.list")
 fi
 # --seed-packages-from FILE: append a package list seeded from a running system
 # ("copy all installed programs"). Appended LAST so it augments the curated set.

@@ -1,0 +1,42 @@
+#!/bin/bash
+# hugmesh-sunshine-session — start the Sunshine stream host INSIDE the user's
+# desktop session (launched by /etc/xdg/autostart/hugmesh-sunshine.desktop on
+# images built --with-sunshine). Sunshine must run in-session: it captures the
+# session's display and injects input via uinput, so a system service would
+# stream a black screen — this wrapper is the OpenRC-image equivalent of a
+# systemd *user* unit (this fleet's desktops are OpenRC + XDG autostart; see
+# docs/MDM.md 'Thin desktop' for the divergence note).
+#
+# Behaviour:
+#   * no sunshine binary -> exit 0 quietly (nothing to do);
+#   * already running for THIS user -> exit 0 (idempotent across session
+#     restarts — no double-capture);
+#   * waits up to ~60s for the tailscale iface: the fence
+#     (hugmesh-sunshine-firewall) admits stream traffic ONLY there, so
+#     starting earlier is harmless but pointless; starts anyway after the
+#     wait so a not-yet-approved node still gets its pairing UI on loopback;
+#   * launches with the MANAGED config /etc/hugmesh/thin-desktop/sunshine.conf
+#     (upnp off, loopback-scoped web UI origin — the mesh fence owns network
+#     reachability). Per-user pairing state stays in ~/.config/sunshine as
+#     usual. Logs to ~/.local/state/hugmesh/sunshine.log.
+
+set -u
+
+CONF="/etc/hugmesh/thin-desktop/sunshine.conf"
+TS_IFACE="${HUGMESH_TS_IFACE:-tailscale0}"
+
+command -v sunshine >/dev/null 2>&1 || exit 0
+pgrep -u "$(id -u)" -x sunshine >/dev/null 2>&1 && exit 0
+
+for _ in $(seq 1 30); do
+    ip link show "${TS_IFACE}" >/dev/null 2>&1 && break
+    sleep 2
+done
+
+LOG_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/hugmesh"
+mkdir -p "${LOG_DIR}"
+if [ -r "${CONF}" ]; then
+    exec sunshine "${CONF}" >> "${LOG_DIR}/sunshine.log" 2>&1
+else
+    exec sunshine >> "${LOG_DIR}/sunshine.log" 2>&1
+fi

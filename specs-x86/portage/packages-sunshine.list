@@ -1,0 +1,4 @@
+# Thin-desktop stream host (--with-sunshine, client desktops only).
+# Sunshine self-hosts the Moonlight-protocol stream of this node's desktop
+# session; reachability is fenced to the tailnet by hugmesh-sunshine-firewall.
+games-util/sunshine

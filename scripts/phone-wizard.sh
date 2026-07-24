@@ -51,6 +51,15 @@
 # profile verbs (Horizon OS's user model is Meta-account-bound) are
 # UNSUPPORTED for quest and fail closed with the rationale — see docs/MDM.md.
 #
+# THIN DESKTOP (ADDENDUM §8b, quest only, opt-in): --thin-desktop rides
+# mdm-enroll and provisions the headset as a Moonlight terminal for a
+# Sunshine-hosted virtual desktop of a thin-client mesh node, tailnet-only:
+# Moonlight APK sideload (same operator-custody + signer-pin path as every
+# other APK), managed thin-client host-list file pushed like init.json, and
+# the Headwind app-push runbook for durable fleet distribution. The node side
+# (Sunshine bound to the tailscale iface, mesh-scoped firewall, session
+# service) is the x86 builder's opt-in --with-sunshine — docs/MDM.md.
+#
 # SECRET-CUSTODY MODEL: no secret ever travels on argv, in PLAN output, or to
 # stdout/logs (REDACTED presence markers only). The tailscale pre-auth key and
 # the enterprise-profile passphrase move via 0600 files only (--authkey-file /
@@ -92,6 +101,20 @@ GRAPHENE_SIGNER_FP_PIN="SHA256:AhgHif0mei+9aNyKLfMZBh2yptHdw/aN7Tlh/j2eFwM"
 # --auditor-signer-sha256 pin unambiguous. See docs/MDM.md for
 # the fork rationale (DOMAIN=attestation.hugmesh.systems, own release key).
 AUDITOR_PACKAGE="systems.hugmesh.auditor"
+
+# ── Thin-desktop capability (quest class, §8b) ─────────────────────────
+# Moonlight (moonlight-android, GPLv3) is the streaming client the headset uses
+# to open a Sunshine-hosted virtual desktop of a thin-client node OVER THE
+# TAILNET ONLY. Same APK custody model as every other sideload this wizard
+# trusts: operator-supplied file + optional fail-closed signer pin; durable
+# fleet distribution is the Headwind configuration (app-push), never a store.
+MOONLIGHT_PACKAGE="com.limelight"
+# The managed host-list provisioning file (thin-client tailnet names) pushed to
+# Moonlight's external files dir — the SAME push mechanics as the Headwind DPC's
+# init.json. Moonlight does NOT auto-import it (v1 honesty): it is the on-device
+# custody record + the Headwind configuration-Files push target; the operator
+# adds each host in Moonlight by its tailnet name and pairs via PIN.
+THIN_DESKTOP_HOSTS_FILE="hugmesh-thin-desktop-hosts.json"
 
 # ── Env seams (tests override these; defaults are the real thing) ──
 ADB="${PW_ADB:-adb}"
@@ -135,6 +158,10 @@ HEADWIND_SIGNER_SHA256=""
 HEADWIND_URL="${HMDM_URL:-}"
 HEADWIND_CONFIG=""
 XRCHAT_URL="${XR_CHAT_URL:-}"
+THIN_DESKTOP=0               # --thin-desktop: opt-in quest thin-desktop capability
+MOONLIGHT_APK=""
+MOONLIGHT_SIGNER_SHA256=""
+THIN_DESKTOP_HOSTS_LIST="${THIN_DESKTOP_HOSTS:-}"   # comma list of thin-client tailnet names
 AUDITOR_APK=""
 AUDITOR_SIGNER_SHA256=""
 ATTESTATION_URL="${ATTEST_URL:-}"
@@ -334,6 +361,25 @@ Options:
                          records the URL in mdm.json, and on a quest fires a
                          VIEW intent so the operator can confirm the room
                          loads in the headset browser. Env: XR_CHAT_URL.
+  --thin-desktop         (quest only, opt-in) provision the thin-desktop
+                         capability during mdm-enroll: install the Moonlight
+                         streaming client (--moonlight-apk, signer-pinned)
+                         and push the managed thin-client host list so the
+                         headset can open a Sunshine-hosted virtual desktop
+                         of a mesh node OVER THE TAILNET ONLY. Prints the
+                         Headwind app-push console runbook (durable fleet
+                         distribution) + the Moonlight/Sunshine PIN pairing
+                         runbook. See docs/MDM.md 'Thin desktop'.
+  --moonlight-apk F      Moonlight APK to adb-install during mdm-enroll
+                         (needs --thin-desktop; without it, mdm-enroll
+                         requires ${MOONLIGHT_PACKAGE} already installed).
+  --moonlight-signer-sha256 H
+                         Pin: Moonlight APK signer cert SHA-256 (fail-closed
+                         if set — same apksigner verify as every sideload).
+  --thin-desktop-hosts L Comma-separated thin-client tailnet names (MagicDNS,
+                         e.g. frite,box2.hugmesh.internal) written into the
+                         managed host-list provisioning file pushed to the
+                         headset. Env: THIN_DESKTOP_HOSTS.
   --auditor-apk F        HugMesh Auditor fork APK to adb-install during
                          attest.
   --auditor-signer-sha256 H
@@ -381,8 +427,9 @@ Env seams (tests): PW_ADB, PW_FASTBOOT, PW_RELEASES_URL, PW_ALLOWED_SIGNERS,
   PW_EXPECTED_SIGNER_FP (empty allowed ONLY with PW_ALLOWED_SIGNERS overridden),
   PW_SKIP_FP_PIN=1, PW_JOIN_TIMEOUT, PW_POLL_INTERVAL,
   PW_FASTBOOT_REAPPEAR_TIMEOUT.
-  Also: HMDM_URL / ATTEST_URL / XR_CHAT_URL supply default --headwind-url /
-  --attestation-url / --xr-chat-url values (an explicit flag always wins).
+  Also: HMDM_URL / ATTEST_URL / XR_CHAT_URL / THIN_DESKTOP_HOSTS supply default
+  --headwind-url / --attestation-url / --xr-chat-url / --thin-desktop-hosts
+  values (an explicit flag always wins).
 
 Exit codes:
   0 success   1 usage/runtime error   2 missing tool / precondition / refused
@@ -489,6 +536,36 @@ require_quest_device() {
         oculus|meta) : ;;
         *) pw_die 2 "device ${s} reports manufacturer '${mfr:-unknown}', not oculus/Meta — refusing the quest path (use --device-class phone for handsets; codenames overlap across vendors)" ;;
     esac
+}
+
+# ── Thin-desktop option gate (fail-closed, §8b) ────────────────────
+# Runs for EVERY verb (main() calls it right after validate_device_class) so a
+# mis-scoped combination dies up front with the rationale — before any adb
+# probe, mirroring require_class_supports. Rules:
+#   * the Moonlight/host-list knobs REQUIRE the --thin-desktop toggle (all
+#     opt-in — a stray knob without the capability is an operator error, not
+#     something to silently half-provision);
+#   * --thin-desktop is a QUEST capability: the streamed desktop is opened in
+#     the headset; the phone class has no thin-desktop terminal in v1;
+#   * every host entry must be a bare DNS name (tailnet MagicDNS name like
+#     'frite' or 'frite.<superdomain>') — the list is interpolated into a
+#     provisioning JSON and the Headwind runbook, so the charset is fenced.
+validate_thin_desktop() {
+    if [ "${THIN_DESKTOP}" -eq 0 ]; then
+        [ -z "${MOONLIGHT_APK}${MOONLIGHT_SIGNER_SHA256}${THIN_DESKTOP_HOSTS_LIST}" ] \
+            || pw_die 1 "--moonlight-apk/--moonlight-signer-sha256/--thin-desktop-hosts need --thin-desktop (the capability is opt-in; see docs/MDM.md 'Thin desktop')"
+        return 0
+    fi
+    is_quest || pw_die 2 "--thin-desktop is a --device-class quest capability: it provisions the Moonlight streaming client on a HEADSET (the Sunshine thin-client desktop is opened in VR) — there is no phone-class thin-desktop terminal in v1 (see docs/MDM.md 'Thin desktop')"
+    if [ -n "${THIN_DESKTOP_HOSTS_LIST}" ]; then
+        local h
+        local -a _td_hosts
+        IFS=',' read -r -a _td_hosts <<<"${THIN_DESKTOP_HOSTS_LIST}"
+        for h in "${_td_hosts[@]}"; do
+            [[ "${h}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$ ]] \
+                || pw_die 1 "invalid --thin-desktop-hosts entry '${h}' (each comma-separated entry must be a lowercase tailnet DNS name, e.g. frite or frite.hugmesh.internal)"
+        done
+    fi
 }
 
 # Operator runbook for a Quest that is not reachable over adb: Developer Mode
@@ -935,6 +1012,9 @@ cmd_plan() {
         attest)     steps="adb-sanity,auditor-install,pairing-runbook,record" ;;
         mdm-enroll) if is_quest; then
                         steps="adb-sanity,quest-identity,fresh-device-advisory,dpc-install,set-device-owner,push-init-json,xr-chat-provision,record"
+                        # the opt-in thin-desktop leg rides mdm-enroll, after the
+                        # XR-chat provisioning and before the record is written.
+                        [ "${THIN_DESKTOP}" -eq 1 ] && steps="adb-sanity,quest-identity,fresh-device-advisory,dpc-install,set-device-owner,push-init-json,xr-chat-provision,thin-desktop-provision,record"
                     elif [ "$(mdmp_mechanism "${MDM_PROVIDER}")" = "os-enrollment" ]; then
                         steps="os-enrollment-runbook,record-intune-device-id"
                     else
@@ -981,6 +1061,9 @@ PLAN_INTUNE_DEVICE_ID=${INTUNE_DEVICE_ID:-unset}
 PLAN_HEADWIND_URL=${HEADWIND_URL:-unset}
 PLAN_HEADWIND_CONFIG=${HEADWIND_CONFIG:-unset}
 PLAN_XR_CHAT_URL=${XRCHAT_URL:-unset}
+PLAN_THIN_DESKTOP=$([ "${THIN_DESKTOP}" -eq 1 ] && echo enabled || echo disabled)
+PLAN_THIN_DESKTOP_HOSTS=${THIN_DESKTOP_HOSTS_LIST:-unset}
+PLAN_MOONLIGHT_SIGNER_FP=${MOONLIGHT_SIGNER_SHA256:-unpinned}
 PLAN_HEADWIND_SIGNER_FP=${HEADWIND_SIGNER_SHA256:-unpinned}
 PLAN_ATTESTATION_URL=${ATTESTATION_URL:-unset}
 PLAN_AUDITOR_SIGNER_FP=${AUDITOR_SIGNER_SHA256:-unpinned}
@@ -1542,9 +1625,91 @@ cmd_mdm_enroll_dpc() {
         fi
     fi
 
+    # ── Thin-desktop provisioning (quest only, opt-in — §8b) ───────────
+    # Two legs, mirroring the XR-chat pattern above:
+    #   IMMEDIATE (this wizard): sideload the Moonlight streaming client with
+    #   the SAME operator-custody + apksigner signer-pin path every other APK
+    #   this wizard trusts uses (Tailscale/Headwind/Auditor), then push the
+    #   managed thin-client host list into Moonlight's external files dir
+    #   (the init.json push mechanics).
+    #   DURABLE (Headwind, app-push): the console runbook — the Moonlight APK
+    #   as an application in the device's CONFIGURATION plus the host-list
+    #   file in that configuration's Files — so every headset on the
+    #   configuration converges without adb.
+    # Pairing stays operator-driven BY DESIGN: Moonlight shows a PIN in the
+    # headset; the operator enters it in the Sunshine web UI on the thin
+    # client (loopback-only, https://localhost:47990). Streaming rides the
+    # tailnet only — Sunshine's ports are firewalled to the tailscale iface.
+    if [ "${THIN_DESKTOP}" -eq 1 ]; then
+        local ml_pkg="${MOONLIGHT_PACKAGE}"
+        if [ -n "${MOONLIGHT_APK}" ]; then
+            [ -f "${MOONLIGHT_APK}" ] || pw_die 1 "--moonlight-apk not found: ${MOONLIGHT_APK}"
+            pw_info "installing ${MOONLIGHT_APK}"
+            "${ADB}" -s "${s}" install -r "${MOONLIGHT_APK}" || pw_die 1 "adb install of the Moonlight APK failed"
+        fi
+        if ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -qx "package:${ml_pkg}"; then
+            if [ -n "${MOONLIGHT_APK}" ]; then
+                pw_die 1 "installed the APK but ${ml_pkg} is not listed — wrong APK?"
+            fi
+            pw_die 1 "no --moonlight-apk given and ${ml_pkg} is not installed — pass --moonlight-apk (thin desktop needs the Moonlight client)"
+        fi
+        verify_installed_signer "${s}" "${ml_pkg}" "${MOONLIGHT_SIGNER_SHA256}" "Moonlight" "--moonlight-signer-sha256"
+
+        # Managed host-list provisioning file (thin-client tailnet names).
+        # Moonlight does NOT auto-import it (v1 honesty — there is no managed-
+        # config surface in moonlight-android): it is the on-device custody
+        # record + the exact file the Headwind configuration's Files push
+        # distributes fleet-wide; the operator adds each host by this name.
+        local ml_ext="/sdcard/Android/data/${ml_pkg}/files" tmp_hosts hosts_json
+        if [ -n "${THIN_DESKTOP_HOSTS_LIST}" ]; then
+            hosts_json="$(jq -cn --arg csv "${THIN_DESKTOP_HOSTS_LIST}" '$csv | split(",")')"
+        else
+            hosts_json="[]"
+            pw_warn "no --thin-desktop-hosts given — pushing an EMPTY managed host list (add thin-client tailnet names later, or re-run with --thin-desktop-hosts)"
+        fi
+        "${ADB}" -s "${s}" shell mkdir -p "${ml_ext}" >/dev/null 2>&1 || true
+        tmp_hosts="$(mktemp)"
+        jq -n --argjson hosts "${hosts_json}" \
+              --arg superdomain "${SUPERDOMAIN}" \
+              --arg generated_at "$(now_iso)" \
+            '{schema:"thin-desktop-hosts/v1", superdomain:$superdomain,
+              hosts:$hosts, generated_at:$generated_at}' \
+            > "${tmp_hosts}"
+        "${ADB}" -s "${s}" push "${tmp_hosts}" "${ml_ext}/${THIN_DESKTOP_HOSTS_FILE}" >/dev/null 2>&1 \
+            || { rm -f "${tmp_hosts}"; pw_die 1 "adb push of ${THIN_DESKTOP_HOSTS_FILE} to ${ml_ext} failed"; }
+        rm -f "${tmp_hosts}"
+        pw_info "thin-desktop host list pushed: ${ml_ext}/${THIN_DESKTOP_HOSTS_FILE} (hosts: ${THIN_DESKTOP_HOSTS_LIST:-none yet})"
+
+        echo
+        echo "== Thin desktop (Moonlight -> Sunshine over the tailnet) =="
+        echo "  DURABLE fleet distribution (Headwind console, app-push):"
+        echo "  1. Headwind console (${HEADWIND_URL}) -> Applications -> Add:"
+        echo "     upload the SAME Moonlight APK (package ${ml_pkg}) and add it to"
+        echo "     the configuration this device gets (${HEADWIND_CONFIG:-no --headwind-config given})."
+        echo "  2. In that configuration's Files, add ${THIN_DESKTOP_HOSTS_FILE}"
+        echo "     (path ${ml_ext}) so every headset on it converges without adb."
+        echo "  PAIRING (per thin-client host, operator-driven):"
+        echo "  3. On the headset: Moonlight -> add each thin-client host by its"
+        echo "     tailnet name (${THIN_DESKTOP_HOSTS_LIST:-see the pushed host list}) -> a PIN appears."
+        echo "  4. On that thin client: enter the PIN in the Sunshine web UI"
+        echo "     (https://localhost:47990 — loopback-only by design; use the"
+        echo "     node's console or an SSH tunnel, never expose the web UI)."
+        echo "  Streaming rides the tailnet ONLY: the node's Sunshine ports are"
+        echo "  firewalled to the tailscale interface (see docs/MDM.md 'Thin"
+        echo "  desktop' + the generator's --with-sunshine provisioning)."
+        echo
+    fi
+
     local rec_dir="${OUT_DIR}/device/${DEVICE_ID}" rec
     mkdir -p "${rec_dir}"
     rec="${rec_dir}/mdm.json"
+    # thin_desktop is recorded on EVERY dpc record (false for the phone class
+    # and un-toggled quests) so the record schema stays uniform; the hosts
+    # array mirrors exactly what the provisioning file on the device carries.
+    local td_hosts_json="[]"
+    if [ "${THIN_DESKTOP}" -eq 1 ] && [ -n "${THIN_DESKTOP_HOSTS_LIST}" ]; then
+        td_hosts_json="$(jq -cn --arg csv "${THIN_DESKTOP_HOSTS_LIST}" '$csv | split(",")')"
+    fi
     jq -n \
         --arg device_id "${DEVICE_ID}" \
         --arg serial "${s}" \
@@ -1554,12 +1719,15 @@ cmd_mdm_enroll_dpc() {
         --arg headwind_url "${HEADWIND_URL}" \
         --arg headwind_config "${HEADWIND_CONFIG}" \
         --arg xr_chat_url "${XRCHAT_URL}" \
+        --argjson thin_desktop "$([ "${THIN_DESKTOP}" -eq 1 ] && echo true || echo false)" \
+        --argjson thin_desktop_hosts "${td_hosts_json}" \
         --arg os "${OS_ID}" \
         --arg enrolled_at "$(now_iso)" \
         '{device_id:$device_id, serial:$serial, device_class:$device_class,
           mdm_provider:$mdm_provider, dpc_package:$dpc_package,
           headwind_url:$headwind_url, headwind_config:$headwind_config,
-          xr_chat_url:$xr_chat_url, os:$os, intune_device_id:"",
+          xr_chat_url:$xr_chat_url, thin_desktop:$thin_desktop,
+          thin_desktop_hosts:$thin_desktop_hosts, os:$os, intune_device_id:"",
           set_via:"adb-device-owner", enrolled_at:$enrolled_at}' \
         > "${rec}"
     pw_info "mdm record written: ${rec}"
@@ -2343,10 +2511,12 @@ cmd_wizard_quest() {
     fi
     resolve_device_id
 
+    local td_note=""
+    [ "${THIN_DESKTOP}" -eq 1 ] && td_note=" (+ thin desktop: Moonlight + host list)"
     if [ -n "${DEVICE_ID}" ] && [ -f "${OUT_DIR}/device/${DEVICE_ID}/mdm.json" ]; then
         if wiz_confirm "Step 2/4 — MDM enrollment record already exists; re-enroll (fails if device-owner is already set)?"; then cmd_mdm_enroll; fi
     else
-        if wiz_confirm "Step 2/4 — enroll the headset as a Headwind MDM device-owner${XRCHAT_URL:+ (+ provision the XR-chat URL)}?"; then cmd_mdm_enroll; fi
+        if wiz_confirm "Step 2/4 — enroll the headset as a Headwind MDM device-owner${XRCHAT_URL:+ (+ provision the XR-chat URL)}${td_note}?"; then cmd_mdm_enroll; fi
     fi
 
     if [ -n "${DEVICE_ID}" ] && [ -f "${OUT_DIR}/device/${DEVICE_ID}/enrollment.json" ]; then
@@ -2491,6 +2661,10 @@ main() {
             --headwind-url)          _need_arg "$1" $#; HEADWIND_URL="$2"; shift 2 ;;
             --headwind-config)       _need_arg "$1" $#; HEADWIND_CONFIG="$2"; shift 2 ;;
             --xr-chat-url)           _need_arg "$1" $#; XRCHAT_URL="$2"; shift 2 ;;
+            --thin-desktop)          THIN_DESKTOP=1; shift ;;
+            --moonlight-apk)         _need_arg "$1" $#; MOONLIGHT_APK="$2"; shift 2 ;;
+            --moonlight-signer-sha256) _need_arg "$1" $#; MOONLIGHT_SIGNER_SHA256="$2"; shift 2 ;;
+            --thin-desktop-hosts)    _need_arg "$1" $#; THIN_DESKTOP_HOSTS_LIST="$2"; shift 2 ;;
             --auditor-apk)           _need_arg "$1" $#; AUDITOR_APK="$2"; shift 2 ;;
             --auditor-signer-sha256) _need_arg "$1" $#; AUDITOR_SIGNER_SHA256="$2"; shift 2 ;;
             --attestation-url)       _need_arg "$1" $#; ATTESTATION_URL="$2"; shift 2 ;;
@@ -2521,6 +2695,10 @@ main() {
     apply_colors
     validate_profile_name
     validate_device_class
+    # Thin-desktop gate runs for EVERY verb, right after the class is known:
+    # a phone-class --thin-desktop (or a stray Moonlight knob without the
+    # toggle) dies here with the rationale before any adb/tool probe.
+    validate_thin_desktop
     # The class picks the codename catalog (see the header comment at the
     # PHONE/QUEST_DEVICES_TSV definitions — `panther` exists in BOTH).
     is_quest && DEVICES_TSV="${QUEST_DEVICES_TSV}"

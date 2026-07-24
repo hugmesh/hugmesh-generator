@@ -1193,12 +1193,27 @@ def test_g33_nvidia_cuda_and_grub_theme():
 
 def test_g34_force_off_tristates():
     args = ImageConfig(mode="mesh", role="omnibus", platform="x86", tailscale=True,
-                       aide="off", tor_onion_service="off",
+                       aide="off", tor_onion_service="off", sunshine="off",
                        character_studio="off", edge_ai_service="off").to_cli_args()
     assert "--no-aide" in args
     assert "--no-tor" in args
+    assert "--no-sunshine" in args
     assert "--no-character-studio" in args
     assert "--no-edge-ai" in args
+
+
+def test_g34_sunshine_tristate_client_desktop():
+    # thin-desktop stream host (§8b): on/off/default on a tailnet CLIENT desktop —
+    # the surface the builder actually applies it to.
+    on = ImageConfig(mode="cloud", role="laptop", platform="x86", tailscale=True,
+                     sunshine=True).to_cli_args()
+    assert "--with-sunshine" in on
+    off = ImageConfig(mode="cloud", role="laptop", platform="x86", tailscale=True,
+                      sunshine="off").to_cli_args()
+    assert "--no-sunshine" in off
+    default = ImageConfig(mode="cloud", role="laptop", platform="x86",
+                          tailscale=True).to_cli_args()
+    assert "--with-sunshine" not in default and "--no-sunshine" not in default
 
 
 def test_g34_tristate_bool_backcompat():
@@ -1438,6 +1453,9 @@ _FIELD_PROBE = {
     "edge_ai_analysis": {"edge_ai_analysis": True},
     "edge_ai_tts": {"edge_ai_tts": True},
     "tor_onion_service": {"tor_onion_service": True},
+    # thin-desktop stream host (§8b): plain on tri-state; the builder warn-drops
+    # it on inapplicable roles, so the probe needs no client role.
+    "sunshine": {"sunshine": True},
     "character_studio": {"character_studio": True},
     "character_forge": {"character_forge": True},
     # mesh-node identity provider (I6): the casdoor default emits NOTHING, so every

@@ -47,7 +47,9 @@ platform UI — not a cluster node.
 > `laptop` / `chromebook` / `desktop` roles build identically from the CLI, the
 > `make x86-<role>` targets, the ncurses menu (`make menu`) and the Studio GUI —
 > and the menu/GUI now surface the **whole** client flag surface (desktop weight
-> + Steam delivery, home provisioning create/adopt/archive/restore + eCryptfs,
+> + Steam delivery, the opt-in `--with-sunshine` thin-desktop stream host
+> (tailnet-only Sunshine for mesh headsets — see [MDM.md](MDM.md) "Thin
+> desktop"), home provisioning create/adopt/archive/restore + eCryptfs,
 > the per-piece branding overrides, `--installer-ui`, plus an extra-flags escape
 > hatch for anything unfielded). This parity is enforced by the build-matrix
 > harness (`make matrix-check`) — see [BUILD-MATRIX.md](BUILD-MATRIX.md).

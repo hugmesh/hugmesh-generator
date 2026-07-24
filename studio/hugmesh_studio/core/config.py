@@ -488,8 +488,8 @@ _FIELD_PLATFORMS: dict[str, tuple[str, ...]] = {
     # managed backing services (I8/M2) — the two node builders parse --managed-service;
     # a mesh-node cluster concern, so scoped to the only builders that bake a cluster tree.
     "managed_services": _X86_RPI5,
-    # client desktop weight / steam / media.
-    "desktop": ("x86", "frite"), "steam": _X86,
+    # client desktop weight / steam / sunshine thin-desktop host / media.
+    "desktop": ("x86", "frite"), "steam": _X86, "sunshine": _X86,
     "media_data": _X86, "media_label": _X86, "no_vaults": _X86,
     # encryption (jetson hard-blocks encrypt-root; luks_pass alone still emits everywhere).
     "encrypt_root": _ENC_PLATFORMS, "luks_pass": _ALL_PLATFORMS,
@@ -1436,6 +1436,13 @@ class ImageConfig:
     # ── client desktop weight / gaming delivery (x86 client roles; frite: light|none) ──
     desktop: str = ""                  # --desktop: x86 thin|full; frite light|none ("" = default)
     steam: str = ""                    # --steam native|flatpak|none ("" = builder default)
+    # ── thin-desktop stream host (§8b) — x86 tailnet client desktops, default off ──
+    # Sunshine + the mesh-scoped nftables fence + in-session autostart, so a
+    # mesh-enrolled Quest (Moonlight, the quest wizard's --thin-desktop leg) can
+    # open this desktop over the tailnet ONLY. The builder warn-drops it on
+    # non-client roles and tailnet-less desktops (standalone/unaffiliated/
+    # --skip-tailscale) — the loud-harmless-no-op convention.
+    sunshine: bool | str = False       # tri-state: --with-sunshine / --no-sunshine
     # ── external media data device (Steam library + gocryptfs Vaults; x86 standalone) ──
     media_data: bool | str = ""        # tri-state: --media-data / --no-media-data (builder default ON)
     media_label: str = ""              # --media-label
@@ -2127,6 +2134,12 @@ class ImageConfig:
         # the empty default emits nothing (byte-identity).
         a += self._managed_services_args()
         a += self._character_studio_args()
+        # character_forge shares character_studio's x86+rpi5 surface — this call
+        # was MISSING on the rpi5 branch (a main-merge artifact: the rpi5 builder
+        # parses --with/--no-character-forge and the capability table declares
+        # _X86_RPI5, but no rpi5 argv ever carried it; flag-coverage's forward
+        # check + test_g34_rpi5_character_forge_tristate_both_ways caught it).
+        a += self._character_forge_args()
         a += self._edge_ai_tts_args()
         # mesh-node identity provider (I6) — rpi5 shares the x86 node-builder
         # surface; the casdoor default emits nothing (byte-identity).
@@ -2375,6 +2388,14 @@ class ImageConfig:
             a += ["--desktop", self.desktop]
         if self.steam:
             a += ["--steam", self.steam]
+        # Thin-desktop stream host (Sunshine; §8b) — x86 tailnet client desktops.
+        # Tri-state (G34): --no-sunshine can force a brand.conf default OFF; the
+        # builder warn-drops the flag on roles/desktops it cannot apply to.
+        sun = self._tri(self.sunshine)
+        if sun == "on":
+            a += ["--with-sunshine"]
+        elif sun == "off":
+            a += ["--no-sunshine"]
         # external media-data device (Steam library + gocryptfs Vaults); default ON.
         md = self._tri(self.media_data)
         if md == "on":

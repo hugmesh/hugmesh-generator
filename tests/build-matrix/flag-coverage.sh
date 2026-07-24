@@ -170,7 +170,14 @@ SAMPLES = {
     # edge_ai_runtime/models fields above) — a plain on/off tri-state like character_studio.
     "edge_ai_tts": [{"edge_ai_tts": "on"}, {"edge_ai_tts": "off"}],
     "tor_onion_service": [{"tor_onion_service": "on"}, {"tor_onion_service": "off"}],
+    # sunshine (thin-desktop stream host, §8b): plain on/off tri-state; the builder
+    # warn-drops it on inapplicable roles, so the sample needs no client role.
+    "sunshine": [{"sunshine": "on"}, {"sunshine": "off"}],
     "character_studio": [{"character_studio": "on"}, {"character_studio": "off"}],
+    # character_forge (3D maker multi-app slug): same tri-state shape as
+    # character_studio. Sample was MISSING when the field landed via the main
+    # merge — the vocabulary assert below is exactly what caught it.
+    "character_forge": [{"character_forge": "on"}, {"character_forge": "off"}],
     # idp (I6): the external-OIDC combo fields the --idp/--idp-issuer/--idp-client-id
     # [--idp-jwks] flags. casdoor (the default) emits nothing by design, so the sample
     # must pick an external provider + its required issuer/client-id (mirrors
