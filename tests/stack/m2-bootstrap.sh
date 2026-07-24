@@ -63,22 +63,26 @@ M2_ENV_FILE="${M2_ENV_FILE:-${HERE}/.m2-registry.env}"
 # ── the pinned build matrix ────────────────────────────────────────────────────
 # repo | commit SHA | artifactId | version | expected files (pom|jar|jar+tests)
 #
-# Version pins mirror what the SERVICES' current main poms require:
-#   hugmesh-parent    2.7.0  — every Java service's <parent>
-#   hugmesh-build-config 0.3.0 — managed by parent 2.7.0
-#   hugmesh-commons   2.0.0  — incl. the -tests classifier jar (admin-bff's
-#                                 test scope compiles against it even with
-#                                 -DskipTests, which skips execution only)
-#   hugmesh-auth-core 2.3.3  — user-bff-api main            (pre-PR#33 commit)
-#   hugmesh-auth-core 2.3.4  — admin-bff-api main (auth-core PR#33, 2026-07-15)
-# The org repos have NO git tags, hence SHA pins. Order matters: parent first
-# (everything else's <parent>), then build-config/commons, then auth-core.
+# Version pins mirror what the SERVICES' current main poms require (all four BFFs
+# resolve systems.hugmesh:hugmesh-parent:2.8.0 after the Snapdragon->HugMesh rebrand;
+# these SHAs are each sibling repo's current main, whose pom declares exactly the
+# systems.hugmesh:* coordinate+version below — the pre-rebrand pins built
+# systems.snapdragon:*@2.7.0 which no longer matches have_artifact's hugmesh path):
+#   hugmesh-build-config 0.5.0 — parent's PMD/spotbugs ruleset plugin dep. It has NO
+#                                 <parent> of its own, so it BUILDS FIRST (standalone).
+#   hugmesh-parent    2.8.0  — every Java service's <parent>; its own build resolves
+#                                 hugmesh-build-config, so build-config MUST precede it.
+#   hugmesh-commons   2.1.0  — incl. the -tests classifier jar (admin-bff's test scope
+#                                 compiles against it even with -DskipTests).
+#   hugmesh-auth-core 2.4.0  — user-bff + admin-bff main (the old 2.3.3/2.3.4 split
+#                                 collapsed to one coordinate-only-renamed 2.4.0).
+# The org repos have NO git tags, hence SHA pins. Order matters: build-config FIRST
+# (parent's plugin dep), then parent (everything else's <parent>), then commons/auth-core.
 PINS=(
-  "hugmesh-parent|989b2ab47699a408e88202ea01ab634f6be992d3|hugmesh-parent|2.7.0|pom"
-  "hugmesh-build-config|7ef187d6d8b00761b2ab6f5f8e0b6f23851b32b8|hugmesh-build-config|0.3.0|jar"
-  "hugmesh-commons|2f2768669302497e0c54638e7a9d093460723b13|hugmesh-commons|2.0.0|jar+tests"
-  "hugmesh-auth-core|666f07bb2e4be03a0d46ce30cb52dac5599d86f4|hugmesh-auth-core|2.3.3|jar"
-  "hugmesh-auth-core|792b8e11781c963f331ca67896c1071d57223475|hugmesh-auth-core|2.3.4|jar"
+  "hugmesh-build-config|7f5f643d8f08ced145569d3a9db6b4be8849516f|hugmesh-build-config|0.5.0|jar"
+  "hugmesh-parent|389f34e98c6da846b21bda9e1553cf1418dc92eb|hugmesh-parent|2.8.0|pom"
+  "hugmesh-commons|4eaeb58876fb389f8929caff99aae3a06de22586|hugmesh-commons|2.1.0|jar+tests"
+  "hugmesh-auth-core|140d061dfd73f7da05bbc989e967929d5c4bb78f|hugmesh-auth-core|2.4.0|jar"
 )
 
 M2_REPO="${M2_CACHE}/m2/repository"
@@ -136,7 +140,14 @@ build_one() { # repo -> mvn install from ${SRC_DIR}/<repo> into the cached m2
     -v "${M2_CACHE}/m2:/usr/share/maven/ref" \
     -v "${dir}:/work" -w /work \
     "${MAVEN_IMAGE}" \
-    mvn -B -ntp -s /usr/share/maven/ref/settings-docker.xml install -DskipTests
+    # -Dhugmesh.analysis.skip=true is the parent POM's OWN single switch for the
+    # spotbugs/pmd/checkstyle gates (all three use <skip>${hugmesh.analysis.skip}</skip>);
+    # the standard per-plugin skip properties are IGNORED because the parent hardcodes
+    # <skip> to this property. This is a cache-population build reproducing the artifacts
+    # the org registry would serve — re-running a dependency's quality gates here is wrong
+    # (and auth-core 2.4.0 has 8 latent spotbugs findings that would fail the cold-build).
+    mvn -B -ntp -s /usr/share/maven/ref/settings-docker.xml install -DskipTests \
+        -Dhugmesh.analysis.skip=true
 }
 
 echo "==> Private-maven bootstrap (cache: ${M2_CACHE})"
@@ -173,7 +184,7 @@ _start_registry() { # force-(re)create a fresh container from ${M2_REPO}
 # top-level .NetworkSettings.IPAddress key (map has no entry on docker 29).
 _registry_ip() { docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${REGISTRY_NAME}"; }
 # Self-check the EXACT URL shape the services' settings.xml will GET (5 quick tries).
-CHECK_PATH="groups/${GITLAB_GROUP_ID}/-/packages/maven/systems/hugmesh/hugmesh-parent/2.7.0/hugmesh-parent-2.7.0.pom"
+CHECK_PATH="groups/${GITLAB_GROUP_ID}/-/packages/maven/systems/hugmesh/hugmesh-parent/2.8.0/hugmesh-parent-2.8.0.pom"
 _registry_serves() { # $1 = base http://IP:PORT ; returns 0 iff the parent POM is served
   local _; for _ in 1 2 3 4 5; do curl -sf -o /dev/null "$1/${CHECK_PATH}" && return 0; sleep 1; done; return 1
 }

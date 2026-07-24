@@ -666,12 +666,19 @@ class LocalMeshBootstrap:
             log.append(line)
             if on_line is not None:
                 on_line(line)
+        # NOTE: these refusals MUST stream via _note(). _MeshWorker's stream mode
+        # deliberately discards the returned lines (they normally already streamed),
+        # so a plain `return False, [...]` here is INVISIBLE in the GUI — the operator
+        # sees the "generating credentials…" line and then nothing at all.
         ok, why = self.guard_host_local()
         if not ok:
-            return False, [why]
+            _note(why)
+            return False, log
         problems = self.validate()
         if problems:
-            return False, ["cannot start:", *(f"  - {p}" for p in problems)]
+            for _ln in ["cannot start:", *(f"  - {p}" for p in problems)]:
+                _note(_ln)
+            return False, log
 
         # Host preflight BEFORE any side effect (no creds are minted for a host
         # that cannot build/run the stack). On failure the operator gets a SHORT
@@ -679,9 +686,11 @@ class LocalMeshBootstrap:
         # of a wall of compose noise 30 minutes into a doomed cold build.
         problems = self.preflight()
         if problems:
-            return False, ["preflight failed — nothing was generated or started. "
-                           "Fix, then retry:",
-                           *(f"  - {p}" for p in problems)]
+            for _ln in ["preflight failed — nothing was generated or started. "
+                        "Fix, then retry:",
+                        *(f"  - {p}" for p in problems)]:
+                _note(_ln)
+            return False, log
 
         ok, msg = self.generate_creds()
         _note(f"[creds] {msg}")

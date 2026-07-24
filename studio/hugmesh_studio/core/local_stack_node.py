@@ -39,8 +39,8 @@ M2_BOOTSTRAP_HINT = "run `make stack-m2-bootstrap` first"
 # The registry-readiness probe fetches a REAL artifact through the exact URL
 # shape the services' settings.xml (and the compose build args) will use — the
 # same artifact m2-bootstrap.sh self-checks after standing the registry up.
-_M2_CHECK_ARTIFACT = ("systems/hugmesh/hugmesh-parent/2.7.0/"
-                      "hugmesh-parent-2.7.0.pom")
+_M2_CHECK_ARTIFACT = ("systems/hugmesh/hugmesh-parent/2.8.0/"
+                      "hugmesh-parent-2.8.0.pom")
 _M2_PROBE_TIMEOUT_S = 3.0
 # compose.local.yaml sets `name: hugmesh-local`, so built images are named
 # <project>-<service>. These four services resolve PRIVATE maven artifacts at

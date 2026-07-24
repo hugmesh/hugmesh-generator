@@ -13,6 +13,7 @@ Every probe is mocked BOTH ways here — no test talks to a real docker daemon,
 and nothing asserts readiness the host doesn't have (probes default-fail).
 """
 import os
+import re
 
 from hugmesh_studio.core import local_stack_node as lsn
 from hugmesh_studio.core.local_stack_node import (
@@ -182,8 +183,41 @@ def test_probe_env_is_the_make_env(monkeypatch):
 # restart hands the registry a new bridge IP while the env file stays frozen
 # (proven live: preflight said green while curl of the frozen URL failed rc=7).
 
-_CHECK_TAIL = ("/groups/7/-/packages/maven/systems/hugmesh/hugmesh-parent/"
-               "2.7.0/hugmesh-parent-2.7.0.pom")
+# DERIVED from the module constant — never a second hardcoded copy. A duplicated
+# literal here is exactly why the 2.7.0 -> 2.8.0 drift went unnoticed: the test
+# asserted the stale value it had copied, so it stayed green while the real probe
+# 404'd. test_check_artifact_matches_the_m2_bootstrap_script below pins the constant
+# to the SHELL side (the only other place the coordinate lives).
+_CHECK_TAIL = f"/groups/7/-/packages/maven/{lsn._M2_CHECK_ARTIFACT}"
+
+
+def test_check_artifact_matches_the_m2_bootstrap_script():
+    """DRIFT GUARD: the preflight's check artifact and tests/stack/m2-bootstrap.sh's
+    own self-check + parent PIN must name the SAME hugmesh-parent coordinate.
+
+    They are two hardcoded copies on opposite sides of the language boundary, and
+    when the rebrand bumped the shell side to hugmesh-parent 2.8.0 but left this
+    Python constant at 2.7.0, preflight 404'd forever -> "cold build required but
+    the registry is not up" -> the GUI's local-mesh bring-up refused. Nothing else
+    compares them, so this test is the only thing standing between that recurring."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    gen = os.path.dirname(os.path.dirname(here))
+    script = os.path.join(gen, "tests", "stack", "m2-bootstrap.sh")
+    src = open(script, encoding="utf-8").read()
+
+    m = re.search(r'CHECK_PATH="[^"]*?/packages/maven/(\S+?\.pom)"', src)
+    assert m, "CHECK_PATH not found in m2-bootstrap.sh (shape drift?)"
+    assert m.group(1) == lsn._M2_CHECK_ARTIFACT, (
+        f"preflight probes {lsn._M2_CHECK_ARTIFACT} but m2-bootstrap.sh serves/"
+        f"self-checks {m.group(1)} — they must name the same artifact")
+
+    # ...and that coordinate must be the version the PINS actually build+install.
+    pin = re.search(r'"hugmesh-parent\|[0-9a-f]{40}\|hugmesh-parent\|([^|]+)\|', src)
+    assert pin, "hugmesh-parent PIN not found in m2-bootstrap.sh"
+    assert f"hugmesh-parent/{pin.group(1)}/hugmesh-parent-{pin.group(1)}.pom" \
+        == lsn._M2_CHECK_ARTIFACT.split("systems/hugmesh/", 1)[-1], (
+        f"PINS build hugmesh-parent {pin.group(1)} but preflight probes "
+        f"{lsn._M2_CHECK_ARTIFACT}")
 
 
 def _write_env(tmp_path, body):
