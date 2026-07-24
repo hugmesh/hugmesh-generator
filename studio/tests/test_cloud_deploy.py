@@ -64,6 +64,18 @@ if [ "$1" = "list" ]; then
     printf '\n'
     printf 'All providers are fully implemented. plan --provider ID emits artifacts.\n'
 fi
+# A thin stand-in for the REAL driver's `==> ` progress banners (see
+# specs/usr/sbin/hugmesh-cloud-deploy's cmd_plan() and
+# specs/usr/lib/hugmesh/cloud-deploy-providers.sh's aws-ec2 apply.sh) — proving
+# DeployPage's ProgressParser wiring end-to-end against the SAME literal banner
+# text progress-tables.json's clouddeploy-plan/clouddeploy-apply tracks key on.
+if [ "$1" = "plan" ]; then
+    echo "==> Rendering provider artifacts"
+    echo "==> Plan summary ready"
+elif [ "$1" = "apply" ]; then
+    echo "==> Uploading image to S3"
+    echo "==> Recording apply state"
+fi
 echo "stub ran verb=$1"
 exit "${CD_STUB_RC:-0}"
 """
@@ -409,6 +421,102 @@ def test_deploy_page_plan_streams_off_thread_and_preview_live_refreshes(qapp, tm
     assert argv[0] == "plan"
     assert "--provider" in argv and "aws-ec2" in argv
     assert "stub ran verb=plan" in dlg.log.toPlainText()
+
+
+# ---- GUI: determinate progress bar (plan/apply banner tracks) ------------------
+
+def test_deploy_page_progress_bar_hidden_until_a_verb_runs(qapp, tmp_path, monkeypatch):
+    _install_stub(tmp_path, monkeypatch)
+    dlg = deploy_mod.DeployDialog(str(tmp_path))
+    dlg.show()   # offscreen: makes isVisible() meaningful (the test_golive_wizard.py idiom)
+    assert dlg.page.progress_bar.isVisible() is False
+    assert dlg.page.progress_label.isVisible() is False
+
+
+def test_deploy_page_new_progress_parser_keys_apply_by_provider(qapp, tmp_path, monkeypatch):
+    _install_stub(tmp_path, monkeypatch)
+    dlg = deploy_mod.DeployDialog(str(tmp_path))
+    page = dlg.page
+    dlg.provider.setCurrentIndex(dlg.provider.findData("aws-ec2"))
+    plan_parser = page._new_progress_parser("plan")
+    apply_parser = page._new_progress_parser("apply")
+    assert [ph["label"] for ph in plan_parser.phases] == \
+        ["Render provider artifacts", "Plan summary ready"]
+    assert apply_parser.phases[0]["label"] == "Upload image to S3"
+    # generic-qcow2 emits no apply script at all — honestly empty, not fabricated
+    dlg.provider.setCurrentIndex(dlg.provider.findData("generic-qcow2"))
+    assert page._new_progress_parser("apply").phases == []
+
+
+def test_deploy_page_on_worker_line_advances_the_progress_bar(qapp, tmp_path, monkeypatch):
+    _install_stub(tmp_path, monkeypatch)
+    dlg = deploy_mod.DeployDialog(str(tmp_path))
+    dlg.show()   # offscreen: makes isVisible() meaningful (the test_golive_wizard.py idiom)
+    dlg.provider.setCurrentIndex(dlg.provider.findData("aws-ec2"))
+    page = dlg.page
+    page._parser = page._new_progress_parser("apply")
+    page._reset_progress(active=True)
+    assert page.progress_bar.isVisible() and page.progress_label.isVisible()
+    assert page.progress_bar.minimum() == page.progress_bar.maximum() == 0   # indeterminate
+
+    page._on_worker_line("==> Uploading image to S3")
+    assert page.progress_bar.maximum() == 100
+    assert page.progress_bar.value() == 0
+    assert page.progress_label.text() == "Upload image to S3"
+
+    page._on_worker_line("==> Recording apply state")   # aws-ec2's LAST of 5 phases
+    assert page.progress_bar.value() == 80              # phase 4 of 5
+    assert page.progress_label.text() == "Record apply state"
+
+    page._verb_done(True)
+    assert page.progress_bar.value() == 100
+    assert page.progress_label.text() == "done"
+
+
+def test_deploy_page_progress_bar_holds_last_percent_on_failure(qapp, tmp_path, monkeypatch):
+    _install_stub(tmp_path, monkeypatch)
+    dlg = deploy_mod.DeployDialog(str(tmp_path))
+    dlg.provider.setCurrentIndex(dlg.provider.findData("aws-ec2"))
+    page = dlg.page
+    page._parser = page._new_progress_parser("apply")
+    page._reset_progress(active=True)
+    page._on_worker_line("==> Uploading image to S3")
+    page._verb_done(False)
+    assert page.progress_label.text() == "FAILED"
+    assert page.progress_bar.value() == 0   # held at the last known percent, never 100
+
+
+def test_deploy_page_status_and_destroy_never_show_a_progress_bar(qapp, tmp_path, monkeypatch):
+    """status is a fast read-only check; destroy is TTY-terminal-only (no line stream
+    to feed) — neither is in _PROGRESS_VERBS, so _launch never arms a parser for them."""
+    _install_stub(tmp_path, monkeypatch)
+    dlg = deploy_mod.DeployDialog(str(tmp_path))
+    dlg.show()   # offscreen: makes isVisible() meaningful (the test_golive_wizard.py idiom)
+    page = dlg.page
+    assert "status" not in deploy_mod._PROGRESS_VERBS
+    assert "destroy" not in deploy_mod._PROGRESS_VERBS
+    dlg.provider.setCurrentIndex(dlg.provider.findData("generic-qcow2"))
+    dlg._run_stream("status", "Status")
+    _drain_worker(qapp, page)
+    assert page.progress_bar.isVisible() is False
+
+
+def test_deploy_page_apply_progress_reaches_100_through_the_real_worker(qapp, tmp_path, monkeypatch):
+    """End-to-end through the actual _MeshWorker/stub driver (not the direct-call unit
+    tests above) — proves the wiring from _launch through _on_worker_line to
+    _verb_done, not just the individual methods in isolation."""
+    out = _install_stub(tmp_path, monkeypatch)
+    dlg = deploy_mod.DeployDialog(str(tmp_path))
+    dlg.show()   # offscreen: makes isVisible() meaningful (the test_golive_wizard.py idiom)
+    (out / "argv").unlink()
+    dlg.provider.setCurrentIndex(dlg.provider.findData("aws-ec2"))
+    dlg.image.setText(_image(tmp_path))
+    dlg.ack.setChecked(True)
+    dlg._apply_clicked()
+    _drain_worker(qapp, dlg.page)
+    assert dlg.page.progress_bar.isVisible() is True
+    assert dlg.page.progress_bar.value() == 100
+    assert dlg.page.progress_label.text() == "done"
 
 
 def test_deploy_module_imports_no_qtwebengine():

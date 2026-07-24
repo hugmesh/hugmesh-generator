@@ -167,6 +167,10 @@ cmd_list() {
 }
 
 # ── Sub: plan (DEFAULT — dry-run; NEVER flips posture) ───────────────────────────
+# The two `==> ` lines below are a determinate-progress banner pair the Studio GUI's
+# GoLiveGeneratePage parses (core/progress_parse.py track_phases("golive-plan"), the
+# SAME forward-only banner mechanism the image builders use) — keep exactly 2 and keep
+# progress-tables.json's "golive-plan" phases' `any` substrings matching if you reword them.
 cmd_plan() {
     local provider="$1" out="$2"
     load_context; load_registry
@@ -181,9 +185,11 @@ cmd_plan() {
         warn "no --ingress-ip / --tunnel-cname supplied — record VALUES will be placeholders"
     fi
 
+    echo "==> Rendering provider artifacts"
     log "planning provider=${provider} domain=${GL_DOMAIN:-<unset>} out=${out} (DRY-RUN — posture untouched)"
     glp_emit "${provider}" "${out}" || die "provider '${provider}' emit failed"
 
+    echo "==> Plan summary ready"
     echo
     echo "== go-live PLAN (preview only — nothing has flipped) =="
     echo "provider:  ${provider} — $(glp_label "${provider}") [$(glp_is_full "${provider}" && echo IMPLEMENTED || echo STUB)]"

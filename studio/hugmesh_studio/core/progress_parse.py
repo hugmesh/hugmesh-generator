@@ -12,6 +12,17 @@ or a nonzero exit mark failure.
 Matching is forward-only (monotonic): each banner advances to the EARLIEST not-yet-passed
 phase whose pattern matches, so conditional / SKIPPED banners never move the bar backwards
 and a build that skips a phase simply steps over it.
+
+GENERALIZATION (2026-07): the table's ``platforms`` map is the image-BUILD axis (keyed by
+build platform). Non-image-build tracks that stream a subprocess line-by-line the same way
+(the go-live wizard's ``plan``, the cloud-deploy wizard's ``plan``/``apply``) are NOT builds
+and don't have a "platform" — they live in the table's sibling ``tracks`` map instead
+(:func:`track_phases`), keyed by track id and optionally nested by provider (a cloud-deploy
+provider's emitted ``apply.sh`` differs a lot between aws-ec2/azure-image/openshift-cnv, the
+same way an image build differs between x86/rpi5). :class:`ProgressParser` accepts either an
+image ``platform`` (unchanged contract) or an explicit ``phases`` table (the track path) —
+the SAME ``==> `` banner regex and forward-only matching drive both, exactly the reuse this
+module's docstring always intended.
 """
 from __future__ import annotations
 
@@ -66,6 +77,49 @@ def declared_callsites(platform: str) -> int:
     return _TABLES["platforms"][platform or "x86"]["banner_callsites"]
 
 
+# ── non-image-build TRACKS (go-live plan, cloud-deploy plan/apply, …) ─────────────────
+# Sibling of the platforms map above: same table shape (``banner_callsites`` + ``phases``),
+# just not keyed by build platform. A track entry is either FLAT (one ``phases`` list used
+# for every provider — go-live/cloud-deploy ``plan``, which render quickly regardless of
+# provider) or nested under ``providers`` (cloud-deploy ``apply``, whose emitted apply.sh
+# genuinely differs per provider — the aws-ec2/azure-image/openshift-cnv split).
+def tracks() -> list[str]:
+    return list(_TABLES.get("tracks", {}))
+
+
+def _track_entry(track: str, provider: str = "") -> dict | None:
+    entry = _TABLES.get("tracks", {}).get(track)
+    if entry is None:
+        return None
+    if "providers" in entry:
+        return entry["providers"].get(provider or "")
+    return entry
+
+
+def track_phases(track: str, provider: str = "") -> list[dict]:
+    """The ordered phase table for a TRACK (optionally narrowed to ``provider`` for a
+    track nested by provider, e.g. ``clouddeploy-apply``). Unknown track/provider ->
+    ``[]`` — honestly no known phases, so a fed line never matches anything and the
+    caller's :class:`ProgressParser` stays indeterminate throughout (never a crash, never
+    a fabricated phase, mirroring platform_phases' unknown-platform fallback in spirit —
+    except here there is no single sane default to fall back to across unrelated tracks)."""
+    entry = _track_entry(track, provider)
+    return list(entry["phases"]) if entry else []
+
+
+def track_pattern_count(track: str, provider: str = "") -> int:
+    """Total match patterns for one track/provider — the track analogue of
+    :func:`pattern_count`, for a drift probe pinning banner call-sites in the driver
+    script / provider emit template against the table."""
+    return sum(len(ph["any"]) for ph in track_phases(track, provider))
+
+
+def track_declared_callsites(track: str, provider: str = "") -> int:
+    """The ``banner_callsites`` annotation for one track/provider."""
+    entry = _track_entry(track, provider)
+    return entry["banner_callsites"] if entry else 0
+
+
 @dataclass
 class ProgressState:
     phase_index: int          # -1 = no known phase reached yet (indeterminate)
@@ -83,9 +137,18 @@ class ProgressParser:
     (or call :meth:`state`). Call :meth:`finalize` with the process exit code to settle
     the terminal state (100% on success, failed on nonzero)."""
 
-    def __init__(self, platform: str):
-        self.platform = platform or "x86"
-        self.phases = platform_phases(self.platform)
+    def __init__(self, platform: str | None = None, *, phases: list[dict] | None = None):
+        """``platform`` (the original, unchanged contract) looks up an image-BUILD
+        table, falling back to x86 for an unknown platform. Pass ``phases=`` instead
+        (a track's phase list, e.g. ``track_phases("golive-plan")``) to drive the exact
+        same forward-only banner matching over a non-build track — the two are mutually
+        exclusive; ``phases=`` wins if both are given."""
+        if phases is not None:
+            self.platform = platform or ""
+            self.phases = phases
+        else:
+            self.platform = platform or "x86"
+            self.phases = platform_phases(self.platform)
         self.phase_count = len(self.phases)
         self.phase_index = -1
         self._emerge_cur = 0

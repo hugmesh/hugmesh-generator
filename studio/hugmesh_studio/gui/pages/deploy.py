@@ -43,9 +43,15 @@ import types
 
 from ..qt import QtCore, QtGui, QtWidgets
 from ...core.cloud_deploy import CloudDeploy, CloudDeployOptions
+from ...core.progress_parse import ProgressParser, track_phases
 from ._scroll import scrollable
 from ._widgets import _row
 from .localmesh import _MeshWorker
+
+# Verbs that get a determinate progress bar (the streamed, actually-time-taking ones).
+# status is read-only/instant (no track table); destroy is TTY-terminal-only (no line
+# stream to feed, same reasoning as GoLiveFlipPage) — neither gets a bar.
+_PROGRESS_VERBS = ("plan", "apply")
 
 
 class DeployPage(QtWidgets.QWizardPage):
@@ -231,6 +237,24 @@ class DeployPage(QtWidgets.QWizardPage):
         brow.addStretch(1)
         lay.addLayout(brow)
 
+        # ── determinate progress (ProgressPage's exact bar+label convention) — Plan
+        # and Apply stream real banner lines the driver / the provider's emitted
+        # apply.sh echo (progress-tables.json's "clouddeploy-plan"/"clouddeploy-apply"
+        # tracks); hidden until one of those verbs actually runs. Status is a fast
+        # read-only check and Destroy is TTY-terminal-only (no line stream to feed),
+        # so neither verb ever shows this bar.
+        prow = QtWidgets.QHBoxLayout()
+        self.progress_bar = QtWidgets.QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
+        prow.addWidget(self.progress_bar, 1)
+        self.progress_label = QtWidgets.QLabel("")
+        self.progress_label.setVisible(False)
+        prow.addWidget(self.progress_label)
+        lay.addLayout(prow)
+        self._parser: ProgressParser | None = None
+
         self.status = QtWidgets.QLabel("")
         self.status.setWordWrap(True)
         lay.addWidget(self.status)
@@ -399,13 +423,48 @@ class DeployPage(QtWidgets.QWizardPage):
         self.cancel_btn.setVisible(True)
         self.cancel_btn.setEnabled(True)
         cd = self.cd
+        self._parser = self._new_progress_parser(verb) if verb in _PROGRESS_VERBS else None
+        self._reset_progress(active=self._parser is not None)
         self.worker = _MeshWorker(
             lambda on_line, c: (cd.run(verb, on_line, c) == 0, []),
             parent=self, stream=True, cancel=cancel)
-        self.worker.line.connect(self.log.appendPlainText)
+        self.worker.line.connect(self._on_worker_line)
         self.worker.done.connect(self._verb_done)
         self.completeChanged.emit()
         self.worker.start()
+
+    # ── determinate progress (mirrors ProgressPage._apply_state, one row's worth) ──
+    def _new_progress_parser(self, verb: str) -> ProgressParser:
+        """``apply`` is keyed by provider (its emitted apply.sh genuinely differs —
+        aws-ec2's EBS import-snapshot poll vs azure-image's blob upload vs
+        openshift-cnv's oc apply); ``plan`` is the same 2-banner render for every
+        provider. An unrecognised/no-apply-script provider (e.g. generic-qcow2)
+        honestly yields an empty phase table — the bar just stays indeterminate."""
+        if verb == "apply":
+            return ProgressParser(phases=track_phases("clouddeploy-apply", self.collect().provider))
+        return ProgressParser(phases=track_phases("clouddeploy-plan"))
+
+    def _reset_progress(self, active: bool) -> None:
+        self.progress_bar.setVisible(active)
+        self.progress_label.setVisible(active)
+        if active:
+            self.progress_bar.setRange(0, 0)      # indeterminate/busy until the first banner
+            self.progress_bar.setValue(0)
+            self.progress_label.setText("starting…")
+
+    def _apply_progress_state(self, state) -> None:
+        if state.percent is None:
+            self.progress_bar.setRange(0, 0)      # honest: no known phase yet
+        else:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(state.percent)
+        if state.phase_label:
+            self.progress_label.setText(state.phase_label)
+
+    def _on_worker_line(self, line: str) -> None:
+        self.log.appendPlainText(line)
+        if self._parser is not None:
+            self._apply_progress_state(self._parser.feed(line))
 
     def _cancel_clicked(self):
         w = self.worker
@@ -419,10 +478,18 @@ class DeployPage(QtWidgets.QWizardPage):
         self._running = False
         self.cancel_btn.setVisible(False)
         self._set_verbs_enabled(True)
+        if self._parser is not None:
+            self._apply_progress_state(self._parser.finalize(0 if ok else 1))
+            self.progress_label.setText("done" if ok else "FAILED")
         self.status.setText("Done." if ok else "FAILED (see log).")
         self.completeChanged.emit()
 
     # ── TTY verbs (destroy) — deferred to a terminal ─────────────────────────────
+    # NOTE — deliberately NO progress bar for this path (unlike plan/apply above):
+    # run_verb_in_terminal launches a DETACHED terminal emulator (no piped stdout, by
+    # design — the driver's confirmation gate needs a real TTY and this front-end adds
+    # no bypass), so there is no line stream to feed a ProgressParser. Same reasoning
+    # as GoLiveFlipPage.
     def _run_terminal(self, verb: str):
         if self._running:
             return

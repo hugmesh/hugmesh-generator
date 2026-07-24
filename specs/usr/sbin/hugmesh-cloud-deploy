@@ -158,6 +158,10 @@ cmd_list() {
 }
 
 # ── Sub: plan (DEFAULT — PURE offline render; NEVER mutates anything) ────────────
+# The two `==> ` lines below are a determinate-progress banner pair the Studio GUI's
+# DeployPage parses (core/progress_parse.py track_phases("clouddeploy-plan"), the SAME
+# forward-only banner mechanism the image builders use) — keep exactly 2 and keep
+# progress-tables.json's "clouddeploy-plan" phases' `any` substrings matching if reworded.
 cmd_plan() {
     local provider="$1" out="$2"
     load_context; load_registry
@@ -181,10 +185,12 @@ cmd_plan() {
         warn "no --creds-file supplied — 'apply' will refuse until one is given (plan itself never reads credentials)"
     fi
 
+    echo "==> Rendering provider artifacts"
     log "planning provider=${provider} domain=${CD_DOMAIN:-<unset>} out=${out} (PURE — nothing mutated)"
     cdp_emit "${provider}" "${out}" || die "provider '${provider}' emit failed"
     emit_idp_artifacts "${provider}" "${out}"
 
+    echo "==> Plan summary ready"
     echo
     echo "== cloud-deploy PLAN (preview only — nothing has been created) =="
     echo "provider:  ${provider} — $(cdp_label "${provider}") [$(cdp_is_full "${provider}" && echo IMPLEMENTED || echo STUB)]"
@@ -287,6 +293,9 @@ require_creds() {
 }
 
 # ── Sub: apply (TTY-confirmed; runs the plan's emitted apply script) ─────────────
+# The emitted apply.sh/oc-apply.sh itself carries the `==> ` progress banners (see
+# cloud-deploy-providers.sh's cdp_emit_<provider> functions) — this driver only runs
+# it, so its own stdout here carries whatever that script echoes straight through.
 cmd_apply() {
     local provider="$1" out="$2"
     load_context; load_registry

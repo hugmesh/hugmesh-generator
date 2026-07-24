@@ -182,6 +182,11 @@ GATE
 #   destroy.sh                   deregister the AMI + delete snapshot/S3 object
 #   keys-volume.md               how the node finds its KEYS volume on EC2
 #   checklist.md                 the honest caveats (ENA kernel config, UEFI, …)
+#
+# apply.sh's `==> ` lines are the determinate-progress banners the Studio GUI's
+# DeployPage parses for this provider (core/progress_parse.py
+# track_phases("clouddeploy-apply", "aws-ec2")) — keep exactly 5 and keep
+# progress-tables.json's aws-ec2 phases' `any` substrings matching if reworded.
 cdp_emit_aws-ec2() {
     local out="$1"
     local now; now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -220,11 +225,13 @@ fi
 confirm "Upload ${IMAGE} to s3://${BUCKET}/${KEY} and register AMI '${AMI_NAME}' in ${REGION}?"
 
 # 1. Staging bucket (create-if-missing; mb on an existing own bucket errors -> tolerated).
+echo "==> Uploading image to S3"
 aws --region "${REGION}" s3 mb "s3://${BUCKET}" 2>/dev/null || true
 aws --region "${REGION}" s3 cp "${IMAGE}" "s3://${BUCKET}/${KEY}" || die "s3 upload failed"
 
 # 2. The vmimport SERVICE ROLE (AWS's fixed name; create-if-missing from the
 #    emitted policy JSONs sitting beside this script).
+echo "==> Ensuring the vmimport IAM role"
 if ! aws iam get-role --role-name vmimport >/dev/null 2>&1; then
     aws iam create-role --role-name vmimport \
         --assume-role-policy-document "file://${HERE}/vmimport-trust-policy.json" \
@@ -235,6 +242,7 @@ if ! aws iam get-role --role-name vmimport >/dev/null 2>&1; then
 fi
 
 # 3. Import the RAW image as an EBS snapshot and wait for it.
+echo "==> Importing EBS snapshot (may take a while)"
 TASK="$(aws --region "${REGION}" ec2 import-snapshot \
     --description "hugmesh cloud-deploy ${KEY}" \
     --disk-container "Format=RAW,UserBucket={S3Bucket=${BUCKET},S3Key=${KEY}}" \
@@ -257,6 +265,7 @@ done
 
 # 4. Register the AMI: UEFI boot + ENA — the two hard requirements from the
 #    checklist (the x86 image is a UEFI/GPT stage4; ENA needs CONFIG_ENA_ETHERNET).
+echo "==> Registering the AMI"
 AMI="$(aws --region "${REGION}" ec2 register-image \
     --name "${AMI_NAME}" \
     --architecture x86_64 --virtualization-type hvm \
@@ -266,6 +275,7 @@ AMI="$(aws --region "${REGION}" ec2 register-image \
     --query 'ImageId' --output text)" || die "register-image failed"
 
 # 5. State hints for `hugmesh-cloud-deploy status` + destroy.sh (paths only).
+echo "==> Recording apply state"
 mkdir -p "${HERE}/state"
 printf '%s\n' "${TASK}" > "${HERE}/state/import-task-id"
 printf '%s\n' "${SNAP}" > "${HERE}/state/snapshot-id"
@@ -419,6 +429,11 @@ BODY
 #   keys-disk.md                 Azure data disk labelled KEYS
 #   destroy.sh                   delete the image + staged blob
 #   checklist.md                 Gen2-only + hv_* kernel caveats
+#
+# apply.sh's `==> ` lines are the determinate-progress banners the Studio GUI's
+# DeployPage parses for this provider (core/progress_parse.py
+# track_phases("clouddeploy-apply", "azure-image")) — keep exactly 5 and keep
+# progress-tables.json's azure-image phases' `any` substrings matching if reworded.
 cdp_emit_azure-image() {
     local out="$1"
     local now; now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -468,9 +483,11 @@ az account show >/dev/null 2>&1 \
     || die "no active Azure session — run 'az login' (device code/browser) first; this script never handles your password"
 confirm "Upload ${IMAGE} to ${SA}/${CONTAINER}/${BLOB} and create Gen2 image '${IMG}' in ${LOCATION}?"
 
+echo "==> Creating resource group"
 az group create --name "${RG}" --location "${LOCATION}" --output none || die "group create failed"
 # Storage account create-if-missing (name is globally unique; an existing own
 # account in this group is fine — the error from a re-run is tolerated).
+echo "==> Creating storage account and container"
 az storage account create --name "${SA}" --resource-group "${RG}" \
     --location "${LOCATION}" --sku Standard_LRS --allow-blob-public-access false \
     --output none 2>/dev/null || true
@@ -478,14 +495,17 @@ az storage container create --account-name "${SA}" --name "${CONTAINER}" \
     --auth-mode login --output none || die "container create failed"
 # --type page: Azure images REQUIRE page blobs (the fixed-VHD packaging already
 # rounded the size to whole MiB for exactly this).
+echo "==> Uploading VHD blob"
 az storage blob upload --account-name "${SA}" --container-name "${CONTAINER}" \
     --name "${BLOB}" --file "${IMAGE}" --type page --auth-mode login \
     --overwrite --output none || die "blob upload failed"
+echo "==> Creating Gen2 managed image"
 az image create --resource-group "${RG}" --name "${IMG}" \
     --os-type Linux --hyper-v-generation V2 \
     --source "https://${SA}.blob.core.windows.net/${CONTAINER}/${BLOB}" \
     --output none || die "image create failed"
 
+echo "==> Recording apply state"
 mkdir -p "${HERE}/state"
 printf '%s\n' "${RG}"  > "${HERE}/state/resource-group"
 printf '%s\n' "${IMG}" > "${HERE}/state/image-name"
@@ -747,6 +767,11 @@ BODY
 #   scc-notes.md      restricted-v2 / Routes-vs-Ingress / no-Calico deltas
 #   rhel-notes.md     plain-RHEL libvirt alternative (virt-install one-liner)
 #   destroy.sh        oc delete of both
+#
+# oc-apply.sh's `==> ` lines are the determinate-progress banners the Studio GUI's
+# DeployPage parses for this provider (core/progress_parse.py
+# track_phases("clouddeploy-apply", "openshift-cnv")) — keep exactly 3 and keep
+# progress-tables.json's openshift-cnv phases' `any` substrings matching if reworded.
 cdp_emit_openshift-cnv() {
     local out="$1"
     local now; now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -834,9 +859,12 @@ die() { echo "apply[openshift-cnv]: $*" >&2; exit 1; }
 [ -r "${CREDS}" ] || die "kubeconfig not readable: ${CREDS}"
 export KUBECONFIG="${CREDS}"
 confirm "oc apply the ${NS} DataVolume + VirtualMachine to the CURRENT kubeconfig cluster?"
+echo "==> Ensuring namespace"
 oc get ns "${NS}" >/dev/null 2>&1 || oc create namespace "${NS}" || die "namespace create failed"
+echo "==> Applying DataVolume and VirtualMachine"
 oc apply -f "${HERE}/datavolume.yaml" || die "datavolume apply failed"
 oc apply -f "${HERE}/vm.yaml"         || die "vm apply failed"
+echo "==> Recording apply state"
 mkdir -p "${HERE}/state"
 printf '%s\n' "${NS}" > "${HERE}/state/namespace"
 echo "apply[openshift-cnv]: DONE — watch the import: oc get dv -n ${NS} ; start: virtctl start -n ${NS} <vm>"

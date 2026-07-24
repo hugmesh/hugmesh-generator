@@ -27,6 +27,7 @@ from ..qt import QtCore, QtGui, QtWidgets, Signal
 from ..branding_icon import brand_icon
 from ..wizard import _file_picker, _row
 from ...core.golive_driver import GoLiveDriver, GoLiveOptions, _NO_DOMAIN_MECHANISMS
+from ...core.progress_parse import ProgressParser, track_phases
 
 # exactly one page per slug, same order — mirrors WIZARD_PAGE_SLUGS' role for the
 # build wizard (tests pin each slug to its page class)
@@ -361,11 +362,27 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
         bl.addWidget(self.preview_btn); bl.addWidget(self.generate_btn)
         bl.addWidget(self.open_btn); bl.addStretch(1)
         lay.addLayout(bl)
+        # ── determinate progress (the honest banner-phase parser, ProgressPage's
+        # exact bar+label convention) — `plan` emits the two `==> ` banners
+        # hugmesh-go-live's cmd_plan() carries (see progress-tables.json's
+        # "golive-plan" track); hidden until a run actually starts, and indeterminate
+        # (busy) until the first known banner lands, exactly like the build page.
+        prow = QtWidgets.QHBoxLayout()
+        self.progress_bar = QtWidgets.QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
+        prow.addWidget(self.progress_bar, 1)
+        self.progress_label = QtWidgets.QLabel("")
+        self.progress_label.setVisible(False)
+        prow.addWidget(self.progress_label)
+        lay.addLayout(prow)
         self.log = QtWidgets.QPlainTextEdit()
         self.log.setReadOnly(True)
         lay.addWidget(self.log, 1)
         self.worker = None
         self._staged = []
+        self._parser: ProgressParser | None = None
 
     def initializePage(self):
         self._preview()
@@ -394,10 +411,34 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
             self._staged.append(run_opts.token_file)
         self.generate_btn.setEnabled(False)
         self.log.appendPlainText("\n=== generating go-live artifacts (plan) ===")
+        self._parser = ProgressParser(phases=track_phases("golive-plan"))
+        self._reset_progress()
         self.worker = _DriverWorker(d, "plan", run_opts)
-        self.worker.line.connect(lambda s: self.log.appendPlainText(s))
+        self.worker.line.connect(self._on_line)
         self.worker.done.connect(self._finished)
         self.worker.start()
+
+    # ── determinate progress (mirrors ProgressPage._apply_state, one row's worth) ──
+    def _reset_progress(self) -> None:
+        self.progress_bar.setVisible(True)
+        self.progress_label.setVisible(True)
+        self.progress_bar.setRange(0, 0)      # indeterminate/busy until the first banner
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("starting…")
+
+    def _apply_progress_state(self, state) -> None:
+        if state.percent is None:
+            self.progress_bar.setRange(0, 0)  # honest: no known phase yet
+        else:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(state.percent)
+        if state.phase_label:
+            self.progress_label.setText(state.phase_label)
+
+    def _on_line(self, line: str) -> None:
+        self.log.appendPlainText(line)
+        if self._parser is not None:
+            self._apply_progress_state(self._parser.feed(line))
 
     def _finished(self, code):
         for p in self._staged:
@@ -407,6 +448,9 @@ class GoLiveGeneratePage(QtWidgets.QWizardPage):
                 pass
         self._staged = []
         self.log.appendPlainText(f"=== plan exited {code} ===")
+        if self._parser is not None:
+            self._apply_progress_state(self._parser.finalize(code))
+            self.progress_label.setText("done" if code == 0 else "FAILED")
         if code == 0:
             out = self.wiz.opts.out_dir or self.wiz.driver.default_out_dir
             self.log.appendPlainText(f"artifacts in {out} — 'Open artifacts folder' shows them")
@@ -458,6 +502,17 @@ class GoLiveVerifyPage(QtWidgets.QWizardPage):
 
 
 class GoLiveFlipPage(QtWidgets.QWizardPage):
+    """NOTE — deliberately NO progress bar here (unlike GoLiveGeneratePage): the flip
+    runs ``commit`` via :meth:`GoLiveDriver.run_commit_in_terminal`, which launches a
+    DETACHED terminal emulator (``Popen(..., start_new_session=True)``, no piped
+    stdout) — by design, since the driver's confirmation gate requires a real TTY and
+    this front-end adds no -y/--yes bypass. There is therefore no line stream to feed a
+    :class:`~...core.progress_parse.ProgressParser`, and the commit itself (write a
+    marker file, optionally one more file) is near-instantaneous once confirmed — a bar
+    with nothing honest to show would be exactly the fabricated-percent this module's
+    design explicitly refuses. If a future change makes commit observable (e.g. an
+    embedded pty pane), wire it the same way GoLiveGeneratePage does."""
+
     def __init__(self, wiz):
         super().__init__()
         self.wiz = wiz

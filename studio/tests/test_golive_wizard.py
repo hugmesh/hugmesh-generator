@@ -18,6 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("hugmesh_studio.gui.qt",
                     reason="no Qt binding (PySide6/PyQt6) installed")
 
+from hugmesh_studio.core.progress_parse import ProgressParser, track_phases  # noqa: E402
 from hugmesh_studio.gui.pages import golive as golive_mod   # noqa: E402
 from hugmesh_studio.gui.pages.golive import GOLIVE_PAGE_SLUGS  # noqa: E402
 
@@ -208,6 +209,56 @@ def test_generate_preflight_names_a_missing_token(wiz, baked_domain):
     advance_to(wiz, golive_mod.GoLiveInputsPage)   # token left empty
     gen = advance_to(wiz, golive_mod.GoLiveGeneratePage)
     assert "needs a token" in gen.log.toPlainText()
+
+
+# ---- generate: determinate progress bar (the golive-plan banner track) ------------
+
+def test_generate_page_progress_bar_hidden_until_a_run_starts(wiz, baked_domain):
+    pick_model(wiz, "tunnel")
+    advance_to(wiz, golive_mod.GoLiveInputsPage)
+    gen = advance_to(wiz, golive_mod.GoLiveGeneratePage)
+    assert gen.progress_bar.isVisible() is False
+    assert gen.progress_label.isVisible() is False
+
+
+def test_generate_page_progress_bar_tracks_the_golive_plan_banners(wiz, baked_domain):
+    pick_model(wiz, "tunnel")
+    advance_to(wiz, golive_mod.GoLiveInputsPage)
+    gen = advance_to(wiz, golive_mod.GoLiveGeneratePage)
+    # drive the exact wiring _generate() would (without spawning the real driver
+    # subprocess/thread): a fresh parser over the golive-plan track, then feed it
+    # the SAME two banner lines specs/usr/sbin/hugmesh-go-live's cmd_plan() echoes.
+    gen._parser = ProgressParser(phases=track_phases("golive-plan"))
+    gen._reset_progress()
+    assert gen.progress_bar.isVisible() and gen.progress_label.isVisible()
+    assert gen.progress_bar.minimum() == gen.progress_bar.maximum() == 0   # indeterminate
+    assert gen.progress_label.text() == "starting…"
+
+    gen._on_line("==> Rendering provider artifacts")
+    assert gen.progress_bar.maximum() == 100          # now determinate
+    assert gen.progress_bar.value() == 0
+    assert gen.progress_label.text() == "Render provider artifacts"
+
+    gen._on_line("==> Plan summary ready")
+    assert gen.progress_bar.value() == 50
+    assert gen.progress_label.text() == "Plan summary ready"
+
+    gen._finished(0)
+    assert gen.progress_bar.value() == 100
+    assert gen.progress_label.text() == "done"
+
+
+def test_generate_page_progress_bar_holds_last_percent_on_failure(wiz, baked_domain):
+    pick_model(wiz, "tunnel")
+    advance_to(wiz, golive_mod.GoLiveInputsPage)
+    gen = advance_to(wiz, golive_mod.GoLiveGeneratePage)
+    gen._parser = ProgressParser(phases=track_phases("golive-plan"))
+    gen._reset_progress()
+    gen._on_line("==> Rendering provider artifacts")
+    gen._finished(1)
+    assert gen.progress_label.text() == "FAILED"
+    # finalize() on a nonzero code never claims 100 — held at the last known percent
+    assert gen.progress_bar.value() == 0
 
 
 # ---- verify: off-device checklist + posture recheck (no driver verify subcommand) --

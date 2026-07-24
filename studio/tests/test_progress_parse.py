@@ -166,3 +166,107 @@ def test_unknown_platform_falls_back_to_x86():
     # never crash on an unrecognised builder — coarse x86 phases instead
     st = pp.parse_lines("no-such-platform", [_banner("Verifying prerequisites")])
     assert st.phase_index >= 0
+
+
+# ── non-image-build TRACKS (go-live plan, cloud-deploy plan/apply) ───────────────────
+# Sibling drift probe to test_banner_drift_probe above: these driver scripts don't have
+# a shared `banner()` bash function (they are thin subcommand dispatchers, not builders),
+# so the call-site shape is a bare `echo "==> ..."` rather than `banner "..."` — same
+# banner_regex (`^==>\s*(.*)$`), same forward-only matcher, same drift-probe DISCIPLINE.
+_GOLIVE_SCRIPT = "specs/usr/sbin/hugmesh-go-live"
+_CLOUDDEPLOY_SCRIPT = "specs/usr/sbin/hugmesh-cloud-deploy"
+_CLOUDDEPLOY_PROVIDERS_SCRIPT = "specs/usr/lib/hugmesh/cloud-deploy-providers.sh"
+_TRACK_BANNER_ECHO = re.compile(r'^\s*echo "==> ')
+
+
+def _count_track_banner_echoes(rel_path: str) -> int:
+    with open(os.path.join(_GEN, rel_path), encoding="utf-8") as fh:
+        return sum(1 for ln in fh if _TRACK_BANNER_ECHO.match(ln))
+
+
+def test_tracks_lists_the_known_tracks():
+    assert set(pp.tracks()) == {"golive-plan", "clouddeploy-plan", "clouddeploy-apply"}
+
+
+def test_golive_plan_track_banner_drift_probe():
+    n = _count_track_banner_echoes(_GOLIVE_SCRIPT)
+    assert n == pp.track_pattern_count("golive-plan"), (
+        f"{_GOLIVE_SCRIPT}: {n} '==>' echoes vs "
+        f"{pp.track_pattern_count('golive-plan')} table patterns — update progress-tables.json")
+    assert n == pp.track_declared_callsites("golive-plan")
+
+
+def test_clouddeploy_plan_track_banner_drift_probe():
+    n = _count_track_banner_echoes(_CLOUDDEPLOY_SCRIPT)
+    assert n == pp.track_pattern_count("clouddeploy-plan"), (
+        f"{_CLOUDDEPLOY_SCRIPT}: {n} '==>' echoes vs "
+        f"{pp.track_pattern_count('clouddeploy-plan')} table patterns — update progress-tables.json")
+    assert n == pp.track_declared_callsites("clouddeploy-plan")
+
+
+@pytest.mark.parametrize("provider", ["aws-ec2", "azure-image", "openshift-cnv"])
+def test_clouddeploy_apply_provider_banners_present_verbatim(provider):
+    """Each provider's emit function renders its apply.sh via a quoted heredoc, so the
+    literal `echo "==> ..."` text lives straight in cloud-deploy-providers.sh — assert
+    every table pattern for this provider is present verbatim (catches a reword that
+    forgot to update progress-tables.json, without the fragility of trying to slice one
+    provider's function body out of a file whose azure-image emit ALSO embeds a JSON
+    heredoc with its own brace-at-column-0 lines)."""
+    with open(os.path.join(_GEN, _CLOUDDEPLOY_PROVIDERS_SCRIPT), encoding="utf-8") as fh:
+        text = fh.read()
+    phases = pp.track_phases("clouddeploy-apply", provider)
+    assert phases, f"no phase table for provider {provider}"
+    for ph in phases:
+        for pat in ph["any"]:
+            assert f'echo "==> {pat}"' in text, f"{provider}: banner {pat!r} not found verbatim"
+
+
+def test_clouddeploy_apply_total_banner_count_matches_the_three_provider_tables():
+    n = _count_track_banner_echoes(_CLOUDDEPLOY_PROVIDERS_SCRIPT)
+    total = sum(pp.track_declared_callsites("clouddeploy-apply", pid)
+                for pid in ("aws-ec2", "azure-image", "openshift-cnv"))
+    assert n == total, (
+        f"{_CLOUDDEPLOY_PROVIDERS_SCRIPT}: {n} '==>' echoes vs {total} declared across "
+        "aws-ec2/azure-image/openshift-cnv — a stray or missing banner, or a "
+        "generic-qcow2 apply.sh nobody taught the table about")
+
+
+def test_clouddeploy_apply_unknown_or_no_apply_script_provider_is_empty():
+    # generic-qcow2 emits NO apply script (cdp_apply_script returns "") — honestly no
+    # phases, so the GUI's bar just stays indeterminate rather than fabricating one.
+    assert pp.track_phases("clouddeploy-apply", "generic-qcow2") == []
+    assert pp.track_phases("clouddeploy-apply", "no-such-provider") == []
+    assert pp.track_phases("no-such-track") == []
+
+
+def test_golive_and_clouddeploy_plan_are_flat_tracks_same_for_every_provider():
+    # plan is a quick, provider-agnostic offline render for both drivers — one phases
+    # list serves every provider, unlike the nested clouddeploy-apply track.
+    assert pp.track_phases("golive-plan") == pp.track_phases("golive-plan", "byo-domain")
+    assert [ph["label"] for ph in pp.track_phases("golive-plan")] == [
+        "Render provider artifacts", "Plan summary ready"]
+    assert pp.track_phases("clouddeploy-plan") == pp.track_phases("clouddeploy-plan", "aws-ec2")
+
+
+def test_parser_phases_kwarg_drives_a_track_the_same_way_platform_drives_a_build():
+    p = pp.ProgressParser(phases=pp.track_phases("golive-plan"))
+    st = p.feed(_banner("Rendering provider artifacts"))
+    assert st.phase_index == 0 and st.percent == 0
+    st = p.feed(_banner("Plan summary ready"))
+    assert st.phase_index == 1 and st.percent == 50
+    st = p.finalize(0)
+    assert st.percent == 100 and st.done and not st.failed
+
+
+def test_parser_phases_kwarg_with_empty_table_stays_indeterminate_but_still_finalizes():
+    p = pp.ProgressParser(phases=[])
+    st = p.feed(_banner("anything at all"))
+    assert st.percent is None and st.phase_index == -1
+    st = p.finalize(0)
+    assert st.percent == 100 and st.done   # finalize() never depends on phase_count
+
+
+def test_parser_platform_contract_is_unchanged_by_the_phases_kwarg():
+    p = pp.ProgressParser("x86")
+    assert p.phases == pp.platform_phases("x86")
+    assert p.platform == "x86"

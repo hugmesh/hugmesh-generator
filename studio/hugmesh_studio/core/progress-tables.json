@@ -6,7 +6,8 @@
     "ansi_regex": "\\x1b\\[[0-9;]*[A-Za-z]",
     "emerge_regex": ">>> (?:Emerging|Installing) \\((\\d+) of (\\d+)\\)",
     "failure_regex": "^\\s*!!",
-    "matching": "A phase is reached when a banner line contains ANY of that phase's `any` substrings. Matching is forward-only (monotonic): the parser advances to the earliest not-yet-passed phase whose pattern matches, so conditional/SKIPPED banners never regress the bar. Alternative banners for the SAME boundary (e.g. 'Installing mesh VPN' vs 'Mesh VPN SKIPPED') are grouped into one phase but counted as distinct patterns for the drift probe."
+    "matching": "A phase is reached when a banner line contains ANY of that phase's `any` substrings. Matching is forward-only (monotonic): the parser advances to the earliest not-yet-passed phase whose pattern matches, so conditional/SKIPPED banners never regress the bar. Alternative banners for the SAME boundary (e.g. 'Installing mesh VPN' vs 'Mesh VPN SKIPPED') are grouped into one phase but counted as distinct patterns for the drift probe.",
+    "tracks_purpose": "The sibling `tracks` map covers non-image-build tracks that stream a subprocess line-by-line the SAME way (go-live `plan`, cloud-deploy `plan`/`apply`) but have no build platform to key on. A FLAT track (golive-plan, clouddeploy-plan) uses one phases list for every provider — both drivers' `plan` is a quick, provider-agnostic offline render. A NESTED track (clouddeploy-apply) keys `providers` by cloud-deploy provider id, because the emitted apply.sh genuinely differs per provider (aws-ec2's EBS import-snapshot poll loop vs azure-image's blob upload vs openshift-cnv's oc apply), the same way an image build differs by platform. generic-qcow2 has no apply script (cdp_apply_script returns empty) so it has no entry — track_phases() honestly returns [] for it, staying indeterminate. See core/progress_parse.py:track_phases()."
   },
   "platforms": {
     "x86": {
@@ -133,6 +134,54 @@
         {"label": "Phase 5: Live image", "any": ["Phase 5: Building LIVE image"]},
         {"label": "Phase 6: Installer image", "any": ["Phase 6: Building INSTALLER image"]}
       ]
+    }
+  },
+  "tracks": {
+    "golive-plan": {
+      "banner_callsites": 2,
+      "phases": [
+        {"label": "Render provider artifacts", "any": ["Rendering provider artifacts"]},
+        {"label": "Plan summary ready", "any": ["Plan summary ready"]}
+      ]
+    },
+    "clouddeploy-plan": {
+      "banner_callsites": 2,
+      "phases": [
+        {"label": "Render provider artifacts", "any": ["Rendering provider artifacts"]},
+        {"label": "Plan summary ready", "any": ["Plan summary ready"]}
+      ]
+    },
+    "clouddeploy-apply": {
+      "providers": {
+        "aws-ec2": {
+          "banner_callsites": 5,
+          "phases": [
+            {"label": "Upload image to S3", "any": ["Uploading image to S3"]},
+            {"label": "Ensure vmimport IAM role", "any": ["Ensuring the vmimport IAM role"]},
+            {"label": "Import EBS snapshot (may take a while)", "any": ["Importing EBS snapshot (may take a while)"]},
+            {"label": "Register AMI (UEFI + ENA)", "any": ["Registering the AMI"]},
+            {"label": "Record apply state", "any": ["Recording apply state"]}
+          ]
+        },
+        "azure-image": {
+          "banner_callsites": 5,
+          "phases": [
+            {"label": "Create resource group", "any": ["Creating resource group"]},
+            {"label": "Create storage account + container", "any": ["Creating storage account and container"]},
+            {"label": "Upload VHD blob", "any": ["Uploading VHD blob"]},
+            {"label": "Create Gen2 managed image", "any": ["Creating Gen2 managed image"]},
+            {"label": "Record apply state", "any": ["Recording apply state"]}
+          ]
+        },
+        "openshift-cnv": {
+          "banner_callsites": 3,
+          "phases": [
+            {"label": "Ensure namespace", "any": ["Ensuring namespace"]},
+            {"label": "Apply DataVolume + VirtualMachine", "any": ["Applying DataVolume and VirtualMachine"]},
+            {"label": "Record apply state", "any": ["Recording apply state"]}
+          ]
+        }
+      }
     }
   }
 }
