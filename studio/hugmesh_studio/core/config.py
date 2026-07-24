@@ -56,7 +56,7 @@ _IDP_URL_RE = re.compile(r"^https://[A-Za-z0-9][A-Za-z0-9._:/%=+-]*$")
 _IDP_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 
 # Managed backing-service endpoint (I8/M2 — the RHS of --managed-service id=<endpoint>).
-# The value flows onto argv AND into the root-baked /etc/snapdragon/backing-services.conf,
+# The value flows onto argv AND into the root-baked /etc/hugmesh/backing-services.conf,
 # so it must be shell/sed-safe: reject quotes, spaces, |, &, ;, $, backticks, <, >, (, ).
 # The allowed set covers host[:port], comma broker-lists (kafka), http(s):// URLs,
 # bucket@endpoint (federation-bundles) and the bare 'aws' sentinel (velero-objectstore).

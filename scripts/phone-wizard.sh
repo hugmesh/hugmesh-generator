@@ -471,9 +471,12 @@ resolve_keys() {
 # ── Device probing ─────────────────────────────────────────────────
 FB_SERIALS=()
 ADB_SERIALS=()
+ADB_UNUSABLE=()   # attached over adb but NOT in the usable `device` state (unauthorized /
+                  # no-permissions / offline / recovery …) — tracked so a phone that IS
+                  # plugged in but not ready yields an ACTIONABLE message, not "no device".
 list_devices() {
-    FB_SERIALS=(); ADB_SERIALS=()
-    local out line s state
+    FB_SERIALS=(); ADB_SERIALS=(); ADB_UNUSABLE=()
+    local out line s state rest
     out="$("${FASTBOOT}" devices 2>/dev/null || true)"
     while IFS= read -r line; do
         s="$(awk '{print $1}' <<<"${line}")"
@@ -485,10 +488,27 @@ list_devices() {
         case "${line}" in ''|'List of devices'*|\**) continue ;; esac
         s="$(awk '{print $1}' <<<"${line}")"
         state="$(awk '{print $2}' <<<"${line}")"
+        # `adb devices -l` renders the no-permissions state as "no permissions (...)",
+        # so $2 is the bare word "no"; keep the rest of the line for a precise hint.
+        rest="$(awk '{$1="";sub(/^[[:space:]]+/,"");print}' <<<"${line}")"
+        [ -n "${s}" ] || continue
         case "${state}" in
             device) ADB_SERIALS+=("${s}") ;;
-            unauthorized) pw_warn "device ${s} is UNAUTHORIZED — accept the USB-debugging prompt on the handset" ;;
-            *) : ;;
+            unauthorized)
+                ADB_UNUSABLE+=("${s}")
+                pw_warn "device ${s} is UNAUTHORIZED — unlock the phone and tap 'Allow USB debugging' (check 'always allow'), then retry" ;;
+            no)   # "no permissions" — a Linux udev / plugdev issue, NOT the phone
+                ADB_UNUSABLE+=("${s}")
+                pw_warn "device ${s}: ${rest:-no permissions} — a Linux USB permissions issue. Install the android-udev rules (or add your user to the 'plugdev' group), then 'adb kill-server; adb start-server' and retry" ;;
+            offline)
+                ADB_UNUSABLE+=("${s}")
+                pw_warn "device ${s} is OFFLINE — replug the USB cable and re-accept the debugging prompt, then retry" ;;
+            recovery|sideload|bootloader|host)
+                ADB_UNUSABLE+=("${s}")
+                pw_warn "device ${s} is in '${state}' mode (not normal adb) — boot the phone into the OS with USB debugging enabled, then retry" ;;
+            *)
+                ADB_UNUSABLE+=("${s}")
+                pw_warn "device ${s} is in adb state '${state}' (${rest:-not usable}) — not ready for adb; resolve the above and retry" ;;
         esac
     done <<<"${out}"
 }
@@ -513,7 +533,10 @@ choose_device() {
         pw_die 4 "device with serial '${SERIAL}' is not connected (connected: $(printf '%s ' ${all[@]+"${all[@]}"}))"
     fi
     case "${#all[@]}" in
-        0) pw_die 2 "no device detected — connect the phone over USB (adb: enable USB debugging; fastboot: boot the bootloader) and retry" ;;
+        0) if [ "${#ADB_UNUSABLE[@]}" -gt 0 ]; then
+               pw_die 2 "a phone IS attached over USB (${ADB_UNUSABLE[*]}) but not ready for adb — see the warning(s) above (usually: unlock + 'Allow USB debugging', or fix the Linux udev/plugdev permissions)"
+           fi
+           pw_die 2 "no device detected — connect the phone over USB (adb: enable USB debugging; fastboot: boot the bootloader) and retry" ;;
         1) SEL_SERIAL="${all[0]%%:*}"; SEL_STATE="${all[0]##*:}" ;;
         *) pw_die 2 "multiple devices connected — pass --serial. Connected: $(printf '%s ' "${all[@]}")" ;;
     esac

@@ -406,6 +406,21 @@ printf 'List of devices attached\n%s unauthorized usb:1-4\n' "${SERIAL_A}" > "${
 run detect
 has "UNAUTHORIZED" && ok "(5) unauthorized device warns about the USB-debugging prompt" \
     || bad "(5) no unauthorized warning"
+[ "${RC}" -eq 2 ] && has "IS attached" \
+    && ok "(5) unauthorized: 'a phone IS attached but not ready' (not a bare 'no device detected')" \
+    || bad "(5) unauthorized did not surface the attached-but-unready message (rc=${RC})"
+# no permissions (Linux udev/plugdev): the phone IS attached but adb cannot claim it —
+# the historical *) : ;; branch swallowed this, so a plugged-in Pixel read as "no device".
+printf 'List of devices attached\n%s no permissions (udev rules?); see [http://x]  usb:1-4\n' "${SERIAL_A}" > "${STATE}/adb-devices"
+run detect
+[ "${RC}" -eq 2 ] && has "udev" && has "IS attached" \
+    && ok "(5) no-permissions surfaces the udev/plugdev fix + counts the phone as attached" \
+    || { bad "(5) no-permissions state not surfaced (rc=${RC})"; echo "${OUT_TXT}"; }
+# offline
+printf 'List of devices attached\n%s offline usb:1-4\n' "${SERIAL_A}" > "${STATE}/adb-devices"
+run detect
+[ "${RC}" -eq 2 ] && has "OFFLINE" && ok "(5) offline device surfaces a replug hint (not swallowed)" \
+    || { bad "(5) offline state not surfaced (rc=${RC})"; echo "${OUT_TXT}"; }
 
 # ── (6) [REAL] fetch happy path ──────────────────────────────────────────────
 reset_state; clear_logs
@@ -1305,7 +1320,7 @@ HW26_ING="${OUT}/device/${DEVID}/ingest.json"
 SYNTH_LIB="${WORK}/mdm-providers-synth.sh"
 cat > "${SYNTH_LIB}" <<SYNTH
 # shellcheck shell=bash
-source "${REPO}/specs/usr/lib/snapdragon/mdm-providers.sh"
+source "${REPO}/specs/usr/lib/hugmesh/mdm-providers.sh"
 MDM_PROVIDER_IDS+=(acme-mdm)
 MDM_PROVIDER_LABEL[acme-mdm]="ACME Test MDM (synthetic)"
 MDM_PROVIDER_MECH[acme-mdm]="os-enrollment"
