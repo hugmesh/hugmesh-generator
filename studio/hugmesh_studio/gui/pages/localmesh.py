@@ -145,7 +145,13 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         self.log.setReadOnly(True)
         lay.addWidget(self.log, 1)
 
+        # Run the gate ONCE now that every widget it touches exists: the operator
+        # should see WHY 'Generate & start' is disabled before clicking it, not
+        # only after toggling the checkbox.
+        self._sync_boot_gate()
+
     # ── wizard-flow contract ─────────────────────────────────────────────────────
+
     def nextId(self) -> int:
         # Terminal branch: no image follows a docker mesh. HugMeshWizard.nextId's
         # skip walk is -1-safe (_dynamically_skipped returns False for nid < 0).
@@ -619,8 +625,9 @@ class LocalMeshPage(QtWidgets.QWizardPage):
         for b in (self.start_btn, self.stop_btn, self.logs_btn, self.boot_down_btn,
                   self.boot_clean_btn, self.preflight_btn, self.m2_btn):
             b.setEnabled(on)
-        # the bootstrap start additionally requires the acknowledgement
-        self.boot_start_btn.setEnabled(on and self.ack.isChecked())
+        # the bootstrap start additionally requires the acknowledgement — and carries
+        # the "why am I disabled?" tooltip, so route it through the one gate.
+        self._sync_boot_gate()
 
     # ── JOIN handlers ────────────────────────────────────────────────────────────
     def _refresh_status(self):
@@ -686,7 +693,24 @@ class LocalMeshPage(QtWidgets.QWizardPage):
     def _sync_boot_gate(self):
         # The from-scratch start is gated behind the explicit acknowledgement — nothing
         # is generated or started on mere selection (non-destructive by default).
-        self.boot_start_btn.setEnabled(self.ack.isChecked() and not self._running)
+        acked = self.ack.isChecked()
+        self.boot_start_btn.setEnabled(acked and not self._running)
+        # A disabled button that explains nothing reads as "the app is broken": the
+        # click does nothing, and the "Acknowledge the plan first." status line below
+        # is UNREACHABLE precisely because the button is disabled. Say why, on the
+        # control itself and in the status line, before anyone clicks.
+        self.boot_start_btn.setToolTip(
+            "Mint credentials and bring up the whole local mesh. On a cold box this "
+            "also builds the maven prerequisites first, automatically."
+            if acked else
+            "Disabled until the acknowledgement above is ticked — nothing is "
+            "generated or started on mere selection.")
+        # getattr: this gate also runs during construction, BEFORE the shared status
+        # label exists (and _set_verbs_enabled can reach it early too).
+        status = getattr(self, "status", None)
+        if status is not None and not acked and not self._running:
+            status.setText("Tick the acknowledgement above to enable "
+                           "'Generate && start'.")
 
     def _bootstrap_up(self):
         if not self.ack.isChecked():

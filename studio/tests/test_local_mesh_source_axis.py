@@ -272,6 +272,23 @@ def test_the_gui_exposes_stop_and_clean_as_separate_verbs():
     assert "cancelled — nothing was removed" in handler, "declining must be a no-op"
 
 
+def test_disabled_start_says_why(qapp_localmesh_page):
+    """"Generate & start" is disabled until the acknowledgement is ticked. A disabled
+    button that explains nothing reads as a broken app — and the "Acknowledge the plan
+    first." status line is unreachable precisely BECAUSE the button is disabled."""
+    page = qapp_localmesh_page
+    page.ack.setChecked(False)
+    assert not page.boot_start_btn.isEnabled()
+    tip = page.boot_start_btn.toolTip()
+    assert "acknowledgement" in tip.lower(), f"no reason given: {tip!r}"
+    assert "tick the acknowledgement" in page.status.text().lower()
+
+    page.ack.setChecked(True)
+    assert page.boot_start_btn.isEnabled()
+    assert "acknowledgement" not in page.boot_start_btn.toolTip().lower(), \
+        "the stale 'why disabled' reason survived into the enabled state"
+
+
 def test_discover_brands_leads_with_default_and_excludes_non_brand_conf():
     brands = discover_brands(GENERATOR_DIR)
     assert brands[0] == "hugmesh"
