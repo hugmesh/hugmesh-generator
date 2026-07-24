@@ -48,7 +48,12 @@ const SCRIPTS = path.join(REPO_ROOT, 'scripts');
 // base REQUIRED like a foreign base (no _skeleton: a skeleton generator would be
 // a non-functional lie), recipe-only rebrand + the renames[] demo. The tenant's
 // hosted copy 13d/GENERATOR_ORG_GROUP always presumed is now actually rendered.
-const ARCHETYPES = new Set(['spring-bff', 'angular-mfe', 'gateway', 'generator']);
+// 'angular-host': the native-federation HOST-shell class (exemplar = the site
+// shell, published as hugmesh-host-shell, so repos[].name `host-shell` resolves
+// through the normal pull; see templates/archetypes/angular-host/README.md).
+// 'remote-fragment': the runtime federation-bundle sync pod (split out of
+// 'gateway' — its deploy/** is base-owned, brand surface = one CI anchor).
+const ARCHETYPES = new Set(['spring-bff', 'angular-mfe', 'angular-host', 'remote-fragment', 'gateway', 'generator']);
 // RESERVED brand scalars: validated/derived tenant-brand identity that render-
 // repo-tree.sh exports (behind DNS/forbidden-char guards) from the signed brand
 // .conf. A repos[].identity key is PER-REPO identity, never brand — so an identity

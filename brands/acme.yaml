@@ -85,7 +85,14 @@ repos:
   - { name: character-studio-ui,          archetype: angular-mfe, installed: true, identity: { app_slug: character-studio, title_word: Studio } }
   - { name: superadmin-service-catalog-ui, archetype: angular-mfe, installed: true, identity: { app_slug: service-catalog,  title_word: Catalog } }
 
-  # ── Gateway / infra class (3) ─────────────────────────────────────────────
+  # ── Gateway / infra class (2) ─────────────────────────────────────────────
   - { name: gateway,         archetype: gateway, installed: true, identity: { profile: be } }
   - { name: actions,         archetype: gateway, installed: true }
-  - { name: remote-fragment, archetype: gateway, installed: true }
+
+  # ── Remote-fragment class (1): runtime federation-bundle delivery pod ──────
+  # Split out of the gateway class — the fragment's deploy/** is BASE-OWNED (not
+  # an archetype class-A overlay like the gateway's) and its brand surface is a
+  # single CI-include anchor, so it is its own archetype (templates/archetypes/
+  # remote-fragment). The base IS the example codebase; there is no runnable
+  # skeleton. See docs/FEDERATION-EXAMPLES.md, "remote-fragment runtime bundles".
+  - { name: remote-fragment, archetype: remote-fragment, installed: true }

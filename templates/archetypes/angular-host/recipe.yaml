@@ -1,0 +1,47 @@
+# ============================================================================
+# angular-host/recipe.yaml — ANCHORED brand-delta edits for the HOST-SHELL class.
+# ============================================================================
+#
+# EXEMPLAR MEMBER = the native-federation HOST shell, published as
+# `hugmesh-host-shell` (historically clonable as `snapdragon.systems`; same
+# tree). repos[].name must be a DNS LABEL and that published name is one, so the
+# manifest row `host-shell` resolves through pull-repo-base.sh's normal
+# hugmesh-<name> lookup. HOST_SHELL_BASE_DIR / --base remain available for
+# offline or pinned runs. See README.md.
+#
+# The host source is near-zero-token: the shell's views/guards/session logic are
+# CODE identity; only three brand seams exist —
+#   * federation.config.js: the host's federation NAME (hugmesh-host ->
+#     <BRAND>-host, the HOST_NAME derived scalar);
+#   * src/index.html: the browser-tab title;
+#   * .gitlab-ci.yml: the centralized pentest-stage include org/group.
+# The per-tenant remote SET is NOT a source edit at all — it is the runtime
+# manifest surface (assets floor + the DB-driven /api/federation/manifest union;
+# see docs/FEDERATION-EXAMPLES.md).
+edits:
+  - file: federation.config.js
+    optional: false
+    anchors:
+      # The host's own federation name. Remotes never dial it by name at runtime
+      # (the host is a consumer), but the fleet keeps it brand-true for logs +
+      # the federation-base default.
+      - id: host-federation-name
+        find: "hugmeshHost({ name: 'hugmesh-host' })"
+        replace: "hugmeshHost({ name: '{{HOST_NAME}}' })"
+        required: true
+  - file: src/index.html
+    optional: false
+    anchors:
+      # Browser-tab title = the brand title, whole (the host is THE site shell —
+      # no per-UI role word, unlike the angular-mfe tab-title anchor).
+      - id: tab-title
+        find: "<title>HugMesh</title>"
+        replace: "<title>{{BRAND_TITLE}}</title>"
+        required: true
+  - file: .gitlab-ci.yml
+    optional: false
+    anchors:
+      - id: ci-include-org
+        find: "Snapdragon-Systems/snapdragon-generator"
+        replace: "{{GENERATOR_ORG_GROUP}}"
+        required: true

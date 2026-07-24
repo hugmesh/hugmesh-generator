@@ -305,6 +305,16 @@ EOF
 # provenance manifest can record it. Falls back to "unknown".
 infer_archetype() {
   local dir="$1"
+  # ORDER-SAFE: the two SPECIFIC markers below must fire BEFORE the broader
+  # class rules they would otherwise be swallowed by.
+  #   * a HOST tree carries federation-base.js at root exactly like an MFE, so
+  #     its unambiguous marker (the static remote-manifest floor) is tested
+  #     BEFORE the angular-mfe rule;
+  #   * the remote-fragment tree is a Maven build (pom.xml) exactly like a BFF,
+  #     so its unambiguous marker (the systems.hugmesh.fragment source
+  #     package) is tested BEFORE the pom.xml spring-bff rule.
+  if [[ -f "${dir}/src/assets/federation.manifest.json" ]]; then echo "angular-host"; return; fi
+  if [[ -d "${dir}/src/main/java/systems/hugmesh/fragment" ]]; then echo "remote-fragment"; return; fi
   if [[ -f "${dir}/federation-base.js" || -f "${dir}/package.json" && -f "${dir}/build.js" ]]; then echo "angular-mfe"; return; fi
   if [[ -f "${dir}/pom.xml" || -f "${dir}/build.gradle" || -f "${dir}/build.gradle.kts" ]]; then echo "spring-bff"; return; fi
   if [[ -d "${dir}/deploy" && -f "${dir}/deploy/ingress.yaml" ]]; then echo "gateway"; return; fi

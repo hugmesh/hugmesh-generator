@@ -30,6 +30,33 @@ wiki / forum-ui + api-docs + character-studio-ui + superadmin-service-catalog-ui
 ## Files
 
 - `recipe.yaml`, `federation-base.js.hbs` (class-A), `_identity.env` (drift oracle,
-  login-ui upstream values), `_skeleton/` — a BOOTABLE zero-dep static holding page
-  (`npm ci && npm run build` works OFFLINE; unlike spring-bff, the MFE skeleton is
-  genuinely bootable).
+  login-ui upstream values), `_skeleton/` — a RUNNABLE minimal Angular 22
+  native-federation remote in the house shape (user-ui-pinned dep majors,
+  `snapdragonRemote` federation config exposing `./routes`, standalone+signals
+  component with `[textContent]` bindings — Angular's double-curly interpolation
+  would trip the renderer's fail-closed brand-token scan — `--sd-*` palette
+  floor, CORS nginx.conf on 8080, nginx-unprivileged Dockerfile, fleet CI,
+  karma/jasmine spec). `npm ci && npm run build` in a rendered tree is a real
+  `@angular-architects/native-federation:build` (registry access required — the
+  old zero-dep holding page is gone).
+
+## Honest package-lock regeneration (procedure)
+
+`_skeleton/package-lock.json.hbs` is a REAL `npm install`-resolved lockfile with
+ONLY the two name fields re-tokenized — never hand-edit dependency entries. To
+regenerate (dep bump, Angular major move):
+
+1. Render the skeleton with a throwaway identity, e.g.
+   `OFFLINE=1 scripts/render-repo-tree.sh brands/example.conf --enable-repo-tree \
+      --repo hello-ui --archetype angular-mfe --out-dir /tmp/lockgen \
+      --set APP_SLUG=hello --set TITLE_WORD=Hello`
+2. In the rendered tree run `npm install` (a full resolve against the registry),
+   then prove it: `npm ci && npm run build`.
+3. Copy the produced `package-lock.json` back to
+   `_skeleton/package-lock.json.hbs`, replacing ONLY the top-level `"name"` and
+   the `packages[""].name` values with `@<NPM_SCOPE-token>/<APP_SLUG-token>`
+   (the same two mustache tokens package.json.hbs carries — nothing else is
+   tokenized; integrity hashes stay byte-exact, and the `sha512-` SRI prefix is
+   what keeps the secret-scan entropy gate green).
+4. Re-render + `npm ci && npm run build` once more to prove the tokenized
+   lockfile still round-trips.

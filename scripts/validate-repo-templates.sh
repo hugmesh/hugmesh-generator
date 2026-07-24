@@ -56,6 +56,13 @@ if [[ -z "$REPO" ]]; then
   case "$ARCHETYPE" in
     spring-bff)   REPO="admin-bff-api" ;;
     angular-mfe)  REPO="login-ui" ;;
+    # The host-shell exemplar is the native-federation site shell. It is
+    # published under the DNS label `hugmesh-host-shell` (same tree as the
+    # historical `snapdragon.systems` site repo), so pull-repo-base.sh's normal
+    # hugmesh-<name> resolution reaches it like any other member — no override
+    # needed. HOST_SHELL_BASE_DIR / --base still work as offline escape hatches.
+    angular-host) REPO="host-shell" ;;
+    remote-fragment) REPO="remote-fragment" ;;
     gateway)      REPO="gateway" ;;
     generator)    REPO="generator" ;;   # exemplar member IS the generator itself
     *) _die "no default exemplar repo for archetype '${ARCHETYPE}' — pass --repo" ;;

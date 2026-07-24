@@ -18,6 +18,13 @@
 # find  = the UPSTREAM literal (drift oracle: validate-repo-templates.sh asserts
 #         it is still present in a freshly-pulled base).
 # replace = the tenant-branded form (CLUSTER_DOMAIN / BRAND_TITLE / GENERATOR_ORG_GROUP).
+#
+# SKELETON APP_SLUG CONSTRAINT: the base-absent _skeleton is a RUNNABLE example
+# BFF whose Java package is systems.hugmesh.<app_slug>. Java packages cannot
+# contain '-', so a repos[].identity app_slug destined for a SKELETON render of
+# this archetype MUST match [a-z0-9]+ (lowercase alphanumeric, no hyphens).
+# Overlay-on-base renders are unaffected (the recipe below never touches
+# packages). See _skeleton/README.md.hbs, "APP_SLUG constraint".
 edits:
   - file: src/main/resources/application.yml
     optional: false          # every Spring BFF has an application.yml
