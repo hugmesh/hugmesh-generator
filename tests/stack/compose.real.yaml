@@ -113,11 +113,30 @@ services:
     image: redis:7-alpine
     healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 20 }
 
+  # One-shot: load the Mastodon schema. `mastodon-db` is an EMPTY postgres, and
+  # mastodon-web/sidekiq query `users` on boot — both died with
+  #   PG::UndefinedTable: ERROR: relation "users" does not exist
+  # on `make stack-up SOCIAL=1`. tests/stack/up-real.sh has always run
+  # `run --rm mastodon-web bundle exec rails db:prepare` by hand before starting
+  # the web tier; this makes the plain compose path (which the Studio bootstrap
+  # uses) self-heal the same way, instead of requiring a terminal detour.
+  # db:prepare is idempotent — it creates+migrates, or no-ops on a loaded schema.
+  mastodon-init:
+    image: ghcr.io/mastodon/mastodon:v4.3.1
+    profiles: [social]
+    restart: "no"
+    command: ["bundle", "exec", "rails", "db:prepare"]
+    env_file: [.mastodon.env]
+    depends_on:
+      mastodon-db: { condition: service_healthy }
+      mastodon-redis: { condition: service_healthy }
+
   mastodon-web:
     image: ghcr.io/mastodon/mastodon:v4.3.1
     command: ["bundle", "exec", "puma", "-C", "config/puma.rb"]
     env_file: [.mastodon.env]
     depends_on:
+      mastodon-init: { condition: service_completed_successfully }
       mastodon-db: { condition: service_healthy }
       mastodon-redis: { condition: service_healthy }
     ports: ["3000:3000"]
@@ -127,6 +146,7 @@ services:
     command: ["bundle", "exec", "sidekiq"]
     env_file: [.mastodon.env]
     depends_on:
+      mastodon-init: { condition: service_completed_successfully }
       mastodon-db: { condition: service_healthy }
       mastodon-redis: { condition: service_healthy }
 

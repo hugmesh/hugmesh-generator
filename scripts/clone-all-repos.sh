@@ -30,36 +30,45 @@ USE_GH="${USE_GH:-auto}"
 # The full first-party repo set the compose stack builds. hugmesh-generator
 # itself is the repo this script ships in — it carries the cluster manifests but
 # is NOT a built container, so it is intentionally absent here.
+#
+# These names are BOTH the remote repo name AND the directory name compose
+# resolves as a build context (${STACK_SRC}/<name> in tests/stack/compose.local.yaml
+# + compose.m2-local.yaml), so the two must agree exactly — a mismatch fails the
+# build with "unable to prepare context: path ... not found" before a single
+# image starts. studio/tests/test_local_mesh_source_axis.py pins that agreement.
 REPOS=(
   # ── Gateways (ONE image, run 3x as pki/be/fe via SPRING_APPLICATION_NAME) ──
-  snapdragon-gateway
+  hugmesh-gateway
   # ── Spring backend services ──
-  snapdragon-federation-api
-  snapdragon-admin-bff-api
-  snapdragon-mod-bff-api
-  snapdragon-user-bff-api
-  snapdragon-actions
+  hugmesh-federation-api
+  hugmesh-admin-bff-api
+  hugmesh-mod-bff-api
+  hugmesh-user-bff-api
+  hugmesh-actions
   # ── Static fragment fleet (sync image; the nginx image is public upstream) ──
-  snapdragon-remote-fragment
+  hugmesh-remote-fragment
   # ── Angular host + federated remotes (each Dockerfile -> nginx) ──
-  snapdragon.systems
-  snapdragon-admin-ui
-  snapdragon-mod-ui
-  snapdragon-user-ui
-  snapdragon-login-ui
-  snapdragon-mastodon-ui
-  snapdragon-matrix-ui
-  snapdragon-api-docs
+  # NOTE: the host shell's repo is hugmesh-host-shell — it did NOT follow the
+  # mechanical snapdragon-* -> hugmesh-* rename (it was `snapdragon.systems`, a
+  # domain-shaped name, and there is no `hugmesh.systems` repo).
+  hugmesh-host-shell
+  hugmesh-admin-ui
+  hugmesh-mod-ui
+  hugmesh-user-ui
+  hugmesh-login-ui
+  hugmesh-mastodon-ui
+  hugmesh-matrix-ui
+  hugmesh-api-docs
   # ── forum/wiki/owncast/tube/character-studio UI+BFF pairs ──
-  snapdragon-forum-ui
-  snapdragon-forum-bff-api
-  snapdragon-wiki-ui
-  snapdragon-wiki-bff-api
-  snapdragon-owncast-ui
-  snapdragon-owncast-bff-api
-  snapdragon-tube-ui
-  snapdragon-tube-bff-api
-  snapdragon-character-studio-ui
+  hugmesh-forum-ui
+  hugmesh-forum-bff-api
+  hugmesh-wiki-ui
+  hugmesh-wiki-bff-api
+  hugmesh-owncast-ui
+  hugmesh-owncast-bff-api
+  hugmesh-tube-ui
+  hugmesh-tube-bff-api
+  hugmesh-character-studio-ui
 )
 
 echo "==> Cloning ${#REPOS[@]} HugMesh repos into ${STACK_SRC}"
@@ -83,8 +92,38 @@ clone_url() { # repo -> full clone URL (token-injected if a token is present)
   fi
 }
 
+# ── pre-rename checkout migration ─────────────────────────────────────────────
+# The org renamed every service repo snapdragon-* -> hugmesh-* (and
+# snapdragon.systems -> hugmesh-host-shell). A ./.stack-src populated before that
+# holds the old DIRECTORY names, which compose no longer resolves. Rename in
+# place rather than re-clone: same git objects, no multi-GB re-download, and the
+# stale dirs don't linger as dead weight. Only ever renames INTO a free name, so
+# a tree that already has both is left untouched.
+legacy_name() { # canonical name -> pre-rename name ("" if there is none)
+  case "$1" in
+    hugmesh-host-shell) printf 'snapdragon.systems' ;;
+    hugmesh-*)          printf 'snapdragon-%s' "${1#hugmesh-}" ;;
+    *)                  printf '' ;;
+  esac
+}
+
+migrate_legacy_dir() { # canonical name
+  local new="$1" old
+  old="$(legacy_name "${new}")"
+  [ -n "${old}" ]                       || return 0
+  [ -d "${STACK_SRC}/${old}/.git" ]     || return 0
+  [ ! -e "${STACK_SRC}/${new}" ]        || return 0
+  echo "  ~~ ${old} -> ${new}: renaming pre-rename checkout in place"
+  mv "${STACK_SRC}/${old}" "${STACK_SRC}/${new}"
+  # Re-point at the canonical URL (the old one only resolves via GitHub's rename
+  # redirect). Deliberately NOT the token-injecting helper above: that would
+  # persist a credential into .git/config.
+  git -C "${STACK_SRC}/${new}" remote set-url origin "${GIT_BASE}/${new}.git" 2>/dev/null || true
+}
+
 ok=0 fail=0
 for repo in "${REPOS[@]}"; do
+  migrate_legacy_dir "${repo}"
   dest="${STACK_SRC}/${repo}"
   if [ -d "${dest}/.git" ]; then
     echo "  -- ${repo}: present, updating (${GIT_REF})"

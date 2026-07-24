@@ -46,6 +46,65 @@ x-amd64: &amd64
 
 services:
   # ════════════════════════════════════════════════════════════════════
+  #  ONE-SHOT INITIALISERS. Both fill a gap between what the datastore images
+  #  ship and what the apps assume a CLUSTER already provisioned for them. They
+  #  run to completion, then the services that need them start.
+  # ════════════════════════════════════════════════════════════════════
+
+  # The three gateways open a CqlSession on `snapdragon_gateway` (frozen protocol
+  # name — NOT rebranded) and federation-api caches manifests in
+  # `snapdragon_federation`. Spring Data's schema-action CREATE_IF_NOT_EXISTS makes
+  # the TABLES but never the KEYSPACE, and the stock cassandra:5 image ships none,
+  # so all three gateways crash-looped on
+  #   InvalidKeyspaceException: Invalid keyspace snapdragon_gateway
+  # and the FRONT DOOR never opened — which then surfaces confusingly downstream as
+  # `make stack-seed` reporting "front door http://localhost:8088 is not answering".
+  # In-cluster these keyspaces are provisioned outside the app; locally this is that
+  # step. RF=1/SimpleStrategy: single-node dev cluster.
+  cassandra-init:
+    <<: *amd64
+    image: cassandra:5
+    restart: "no"
+    depends_on:
+      cassandra: { condition: service_healthy }
+    command:
+      - /bin/sh
+      - -c
+      - |
+        cqlsh cassandra 9042 -e "
+          CREATE KEYSPACE IF NOT EXISTS snapdragon_gateway
+            WITH replication = {'class':'SimpleStrategy','replication_factor':1};
+          CREATE KEYSPACE IF NOT EXISTS snapdragon_federation
+            WITH replication = {'class':'SimpleStrategy','replication_factor':1};"
+
+  # admin-bff's Liquibase changelog GRANTs table privileges to the cluster's
+  # per-machine-user role `admin_bff` (ESO provisions it in-cluster). The compose
+  # DB only has the owner `adminbff`, so the migration aborted on
+  #   ERROR: role "admin_bff" does not exist [Failed SQL: GRANT ... TO admin_bff]
+  # and admin-bff-api exited. Created as a NOLOGIN role: it exists purely so the
+  # GRANT resolves — nothing connects as it locally. Idempotent, and a one-shot
+  # service rather than an initdb.d script on purpose: initdb.d only ever runs on a
+  # FRESH volume, so it would silently skip every existing local stack.
+  admin-bff-db-init:
+    <<: *amd64
+    image: postgres:16-alpine
+    restart: "no"
+    environment:
+      PGPASSWORD: adminbff
+    depends_on:
+      admin-bff-db: { condition: service_healthy }
+    command:
+      - /bin/sh
+      - -c
+      - |
+        psql -h admin-bff-db -U adminbff -d adminbff -v ON_ERROR_STOP=1 -c "
+          DO \$\$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'admin_bff') THEN
+              CREATE ROLE admin_bff NOLOGIN;
+            END IF;
+          END \$\$;"
+
+  # ════════════════════════════════════════════════════════════════════
   #  DATASTORES (postgres:16-alpine x3 + Cassandra). Cassandra + Casdoor +
   #  casdoor-db come from compose.real.yaml (included above); the three
   #  per-service Postgres instances are platform components defined here.
@@ -213,9 +272,15 @@ services:
     depends_on:
       casdoor: { condition: service_started }
       cassandra: { condition: service_healthy }
+      cassandra-init: { condition: service_completed_successfully }
       route-access-db: { condition: service_healthy }
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      # /actuator/** is role-gated by the gateway's own SecurityConfig (INFRA_PATHS ->
+      # GAME-MASTER/ADMIN/SUPERADMIN), so an UNAUTHENTICATED probe ALWAYS gets 401 and
+      # `curl -sf` reports the container unhealthy forever while it is serving traffic
+      # perfectly well (verified: GET / -> 200 with all three "unhealthy"). A 401 proves
+      # both that the app is up and that its security chain is wired; 000/5xx do not.
+      test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/actuator/health/readiness); [ \"$$code\" = 200 ] || [ \"$$code\" = 401 ]"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -255,11 +320,17 @@ services:
     depends_on:
       casdoor: { condition: service_started }
       cassandra: { condition: service_healthy }
+      cassandra-init: { condition: service_completed_successfully }
       route-access-db: { condition: service_healthy }
       hugmesh-federation-api: { condition: service_started }
       hugmesh-api: { condition: service_started }
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      # /actuator/** is role-gated by the gateway's own SecurityConfig (INFRA_PATHS ->
+      # GAME-MASTER/ADMIN/SUPERADMIN), so an UNAUTHENTICATED probe ALWAYS gets 401 and
+      # `curl -sf` reports the container unhealthy forever while it is serving traffic
+      # perfectly well (verified: GET / -> 200 with all three "unhealthy"). A 401 proves
+      # both that the app is up and that its security chain is wired; 000/5xx do not.
+      test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/actuator/health/readiness); [ \"$$code\" = 200 ] || [ \"$$code\" = 401 ]"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -304,11 +375,17 @@ services:
     depends_on:
       casdoor: { condition: service_started }
       cassandra: { condition: service_healthy }
+      cassandra-init: { condition: service_completed_successfully }
       route-access-db: { condition: service_healthy }
       hugmesh-admin-bff-api: { condition: service_started }
       snapdragon-systems-web: { condition: service_started }
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
+      # /actuator/** is role-gated by the gateway's own SecurityConfig (INFRA_PATHS ->
+      # GAME-MASTER/ADMIN/SUPERADMIN), so an UNAUTHENTICATED probe ALWAYS gets 401 and
+      # `curl -sf` reports the container unhealthy forever while it is serving traffic
+      # perfectly well (verified: GET / -> 200 with all three "unhealthy"). A 401 proves
+      # both that the app is up and that its security chain is wired; 000/5xx do not.
+      test: ["CMD-SHELL", "code=$$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/actuator/health/readiness); [ \"$$code\" = 200 ] || [ \"$$code\" = 401 ]"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -447,9 +524,11 @@ services:
       # login-ui MFA enroll/challenge pages + the e2e MFA specs need it live).
       APP_MFA_FACTOR_KEY: ${APP_MFA_FACTOR_KEY:-c25hcGRyYWdvbi1kZXYtbWZhLWZhY3Rvci1rZXktMzJieXRl}
     depends_on:
+      admin-bff-db-init: { condition: service_completed_successfully }
       admin-bff-db: { condition: service_healthy }
       route-access-db: { condition: service_healthy }
       cassandra: { condition: service_healthy }
+      cassandra-init: { condition: service_completed_successfully }
       casdoor: { condition: service_started }
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/actuator/health/readiness || exit 1"]
@@ -773,6 +852,22 @@ services:
       SPRING_LIQUIBASE_URL: "jdbc:postgresql://tube-bff-db:5432/tube_bff"
       SPRING_LIQUIBASE_USER: tube_bff
       SPRING_LIQUIBASE_PASSWORD: tube_bff
+      # tube.google.* is ESO-projected from Vault in-cluster. TokenCipher decodes the
+      # DEK in its CONSTRUCTOR, so a blank value is not "fails closed when the connect
+      # endpoints are exercised" — the whole service refuses to start:
+      #   IllegalStateException: tube.google.dek is required (ESO-projected from Vault)
+      #   but was blank
+      # These are DEV-ONLY placeholders of the required shape (base64 of 32 bytes),
+      # identical in spirit to the repo's own application-test.yml values, and exist
+      # only so the local stack boots. They encrypt nothing real: no Google OAuth
+      # client is configured locally, so no refresh token is ever minted. Override via
+      # the environment to exercise the real Google-connect path.
+      TUBE_GOOGLE_DEK: "${TUBE_GOOGLE_DEK:-MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=}"
+      TUBE_GOOGLE_STATE_HMAC_KEY: "${TUBE_GOOGLE_STATE_HMAC_KEY:-MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=}"
+      # Same story one bean over: TubeMediaTokenService refuses to construct without
+      # a media-signing key ("TUBE_MEDIA_KEY is not set — tube media URL signing
+      # cannot function"). Dev-only placeholder, same shape + provenance as above.
+      TUBE_MEDIA_KEY: "${TUBE_MEDIA_KEY:-MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=}"
     depends_on:
       tube-bff-db: { condition: service_healthy }
       casdoor: { condition: service_started }
@@ -817,12 +912,15 @@ services:
   #  ANGULAR HOST + FEDERATED REMOTES (each Dockerfile -> nginx :80)
   # ════════════════════════════════════════════════════════════════════
 
-  # hugmesh.systems — the Angular host (front page). The fe-gateway catch-all
+  # hugmesh-host-shell — the Angular host (front page). The fe-gateway catch-all
   # route forwards /** here. specs/cluster/manifests/frontend/deployment.yaml.
+  # The SERVICE name stays snapdragon-systems-web on purpose: it is the compose
+  # DNS name the fe-gateway routes target (gateway-routes/fe/application-routes.yml),
+  # not a build context — renaming it would need both sides changed together.
   snapdragon-systems-web:
     <<: *amd64
     build:
-      context: ${STACK_SRC:-../../.stack-src}/hugmesh.systems
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-host-shell
     environment:
       CASDOOR_ISSUER: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       MATRIX_URL: ${MATRIX_URL:-http://localhost:8008}

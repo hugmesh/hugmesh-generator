@@ -1,8 +1,24 @@
 # compose.m2-local.yaml — COLD-BUILD override: thread the LOCAL private-maven
-# registry (tests/stack/m2-bootstrap.sh) into the four Java services whose
-# Dockerfiles resolve org-private systems.hugmesh:* artifacts via their
-# committed settings.xml (${env.CI_API_V4_URL}/groups/${env.GITLAB_GROUP_ID}/
-# -/packages/maven). Everything else in compose.local.yaml is untouched.
+# registry (tests/stack/m2-bootstrap.sh) into EVERY Java service whose Dockerfile
+# resolves org-private systems.hugmesh:* artifacts via its committed settings.xml
+# (${env.CI_API_V4_URL}/groups/${env.GITLAB_GROUP_ID}/-/packages/maven).
+# Everything else in compose.local.yaml is untouched.
+#
+# "Every" is load-bearing: the forum/wiki/owncast/tube BFFs were added to
+# compose.local.yaml after this override was written and were silently left out,
+# so a cold build reached them with an EMPTY CI_API_V4_URL, resolved
+# systems.hugmesh:hugmesh-parent against a nonsense URL, and failed — after the
+# four wired services had already built. They parent on hugmesh-parent 2.8.0 and
+# take the same two ARGs as the original four; there is nothing service-specific
+# here. studio/tests/test_local_mesh_source_axis.py cross-checks this file
+# against the cloned Dockerfiles whenever .stack-src is populated.
+#
+# The gateway trio and hugmesh-api are here for a second-order reason: their
+# repos depend on systems.hugmesh:hugmesh-commons but ship NO settings.xml and
+# declare NO build args, so scripts/patch-stack-src.sh injects both into the
+# cloned checkout (see wire_local_maven_registry there). Once patched they are
+# ordinary consumers of these two args — and the ONE image the gateway trio
+# shares is built three times, once per service, so all three need them.
 #
 # NOT included by hand: `make stack-up`/`stack-build` auto-append
 #   --env-file tests/stack/.m2-registry.env -f tests/stack/compose.m2-local.yaml
@@ -42,6 +58,62 @@ services:
   hugmesh-user-bff-api:
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-user-bff-api
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
+
+  hugmesh-forum-bff-api:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-forum-bff-api
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
+
+  hugmesh-wiki-bff-api:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-wiki-bff-api
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
+
+  hugmesh-owncast-bff-api:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-owncast-bff-api
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
+
+  hugmesh-tube-bff-api:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-tube-bff-api
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
+
+  hugmesh-pki-gateway:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
+
+  hugmesh-be-gateway:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
+
+  hugmesh-fe-gateway:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-gateway
+      args:
+        CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
+        GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}
+
+  hugmesh-api:
+    build:
+      context: ${STACK_SRC:-../../.stack-src}/hugmesh-actions
       args:
         CI_API_V4_URL: ${CI_API_V4_URL:?private-maven registry not bootstrapped - run 'make stack-m2-bootstrap' first}
         GITLAB_GROUP_ID: ${GITLAB_GROUP_ID:-1}

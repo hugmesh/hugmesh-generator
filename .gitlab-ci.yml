@@ -39,6 +39,19 @@ lint:optional-services-exclude:
   script:
     - bash tests/stack/test-optional-services-exclude.sh
 
+# Local-stack source-patch gate. Unit-tests scripts/patch-stack-src.sh (the
+# post-clone pass that rewrites files in ./.stack-src which `docker compose build`
+# then consumes) against synthetic checkouts: the pre-rename private dependency is
+# dropped and NOTHING else is, single-line <dependency> elements and prose survive,
+# a clean pom is byte-identical, a checkout that IMPORTS the package is refused
+# rather than mangled, and every patch is idempotent. No network/docker needed.
+lint:patch-stack-src:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - bash tests/stack/test-patch-stack-src.sh
+
 # Supply-chain download-verification gate. Unit-tests scripts/_download-lib.sh
 # (sha256/sha512 + publisher-manifest verification ABORTS on tamper, fails closed
 # on an absent manifest entry, stage3 DIGESTS extraction) AND grep-asserts that

@@ -999,6 +999,9 @@ COMPOSE_CMD   ?= docker compose
 # build-capable stack call auto-includes the committed override
 # $(STACK_M2_COMPOSE), threading CI_API_V4_URL/GITLAB_GROUP_ID as build args.
 # Without it, builds still work IF the images/artifacts are already local.
+# The registry container name m2-bootstrap.sh creates (its own REGISTRY_NAME
+# default). Declared here so `stack-clean` can remove it.
+M2_REGISTRY_NAME ?= hugmesh-m2-registry
 STACK_M2_ENV     := tests/stack/.m2-registry.env
 STACK_M2_COMPOSE := tests/stack/compose.m2-local.yaml
 STACK_M2_FLAGS    = $(if $(wildcard $(STACK_M2_ENV)),--env-file $(STACK_M2_ENV) -f $(STACK_M2_COMPOSE),)
@@ -1064,6 +1067,21 @@ stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real 
 
 stack-down: ## stop the local stack and drop its volumes
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor down -v
+
+# stack-down PLUS the disk: the ~26 images this stack BUILT (`--rmi local` — only
+# images with no registry name, i.e. ours; never the pulled postgres/cassandra/
+# mastodon bases other projects may share), any orphaned containers, and the
+# private-maven registry container + its cache. Scoped to THIS compose project on
+# purpose: no `docker system prune`, so nothing outside the local mesh is touched.
+# The m2 cache is a rebuildable artifact (`make stack-m2-bootstrap` re-creates it
+# from source), which is why it goes with the images rather than surviving.
+stack-clean: ## stop the local stack AND remove the images it built + the m2 registry/cache
+	@echo "==> Removing the local stack: containers, volumes, and the images IT built."
+	@echo "    Pulled base images (postgres/cassandra/mastodon/...) are KEPT."
+	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) --profile social --profile tor down -v --rmi local --remove-orphans
+	@docker rm -f $(M2_REGISTRY_NAME) >/dev/null 2>&1 || true
+	@rm -f $(STACK_M2_ENV)
+	@echo '==> Clean. Next bring-up is a COLD build: run "make stack-m2-bootstrap", then "make stack-up".'
 
 stack-logs: ## tail logs from the running local stack
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_PROFILE) $(STACK_TOR_PROFILE) logs -f --tail=100

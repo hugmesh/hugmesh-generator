@@ -421,11 +421,27 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
         brow = QtWidgets.QHBoxLayout()
         self.boot_start_btn = QtWidgets.QPushButton("Generate && start")
-        self.boot_down_btn = QtWidgets.QPushButton("Stop")
+        self.boot_down_btn = QtWidgets.QPushButton("Stop mesh")
         self.boot_start_btn.clicked.connect(self._bootstrap_up)
         self.boot_down_btn.clicked.connect(self._bootstrap_down)
+        self.boot_down_btn.setToolTip(
+            "`make stack-down` + stop the mesh overlay: every container goes away "
+            "and the stack's data volumes are dropped. The IMAGES stay, so the next "
+            "start is a warm (fast) bring-up.")
         brow.addWidget(self.boot_start_btn)
         brow.addWidget(self.boot_down_btn)
+        # Disk reclamation, separated from Stop on purpose: stopping is routine,
+        # deleting ~26 built images is not, and conflating them would make a warm
+        # restart cost an hour-long rebuild.
+        self.boot_clean_btn = QtWidgets.QPushButton("Stop && clean Docker…")
+        self.boot_clean_btn.setToolTip(
+            "`make stack-clean`: stops everything, drops the volumes AND removes the "
+            "images this stack BUILT, plus the private-maven registry container and "
+            "its cache. Pulled base images (postgres/cassandra/mastodon/…) are kept, "
+            "and no `docker system prune` is ever run — nothing outside the local "
+            "mesh is touched. The next start is a COLD build (hours). Asks first.")
+        self.boot_clean_btn.clicked.connect(self._bootstrap_clean)
+        brow.addWidget(self.boot_clean_btn)
         # Host readiness WITHOUT committing to anything: the same preflight `up`
         # runs (docker daemon, buildx-in-env, disk headroom, maven prerequisites),
         # surfaced on demand so problems appear BEFORE the operator acknowledges.
@@ -601,7 +617,7 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     def _set_verbs_enabled(self, on: bool):
         for b in (self.start_btn, self.stop_btn, self.logs_btn, self.boot_down_btn,
-                  self.preflight_btn, self.m2_btn):
+                  self.boot_clean_btn, self.preflight_btn, self.m2_btn):
             b.setEnabled(on)
         # the bootstrap start additionally requires the acknowledgement
         self.boot_start_btn.setEnabled(on and self.ack.isChecked())
@@ -696,6 +712,34 @@ class LocalMeshPage(QtWidgets.QWizardPage):
 
     def _bootstrap_down(self):
         self._launch("Stopping the stack", self.boot.down)
+
+    def _bootstrap_clean(self):
+        """Stop AND reclaim disk. Destructive and slow to undo (the next start is a
+        cold build), so it confirms first — and the confirmation says exactly what
+        is removed and what is NOT, rather than a generic 'are you sure?'."""
+        if QtWidgets.QMessageBox.question(
+                self, "Stop and clean Docker?",
+                "This stops the local mesh and then REMOVES:\n"
+                "  • every container of this stack, and its data volumes\n"
+                "  • the ~26 images this stack BUILT\n"
+                "  • the private-maven registry container and its cache\n\n"
+                "It does NOT touch pulled base images (postgres, cassandra, "
+                "mastodon, …), images from other projects, or anything outside this "
+                "compose project — no `docker system prune` is run.\n\n"
+                "The next start will be a COLD build (hours). Continue?",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No
+        ) != QtWidgets.QMessageBox.StandardButton.Yes:
+            self.log.appendPlainText("[stack-clean] cancelled — nothing was removed.")
+            return
+        self.boot = LocalMeshBootstrap(self.generator_dir, self.collect_bootstrap())
+        boot = self.boot
+        self.log.appendPlainText("[stack-clean] stopping the mesh and removing its "
+                                 "containers, volumes and built images …")
+        self._launch("Stopping and cleaning Docker",
+                     lambda on_line, cancel: boot.clean(on_line=on_line, cancel=cancel),
+                     stream=True, cancellable=True)
 
     def _check_readiness(self):
         """Read-only host preflight on demand — the exact probes `up` gates on,

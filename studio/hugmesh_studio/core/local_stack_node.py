@@ -510,6 +510,15 @@ class LocalStackNode:
     def stop(self) -> tuple[bool, str]:
         return self._make("stack-down", timeout=300)
 
+    def clean(self, on_line=None, cancel=None) -> tuple[bool, str]:
+        """`make stack-clean` — stop the stack AND reclaim its disk: the ~26 images
+        this stack BUILT, its volumes, orphaned containers, and the private-maven
+        registry container + cache. Scoped to this compose project: pulled base
+        images (postgres/cassandra/mastodon/…) that other projects may share are
+        KEPT, and no `docker system prune` is ever issued. Streams like the other
+        long actions — removing 26 images is not instant."""
+        return self._make("stack-clean", timeout=900, on_line=on_line, cancel=cancel)
+
     def status(self) -> StackStatus:
         base = _compose_base()
         if not base or not os.path.exists(self.compose_file):

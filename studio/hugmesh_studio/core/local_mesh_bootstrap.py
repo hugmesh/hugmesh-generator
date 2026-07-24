@@ -101,6 +101,21 @@ _CONTEXT_RE = re.compile(r"\$\{STACK_SRC[^}]*\}/(hugmesh[A-Za-z0-9._-]+)")
 _COMPOSE_LOCAL = os.path.join("tests", "stack", "compose.local.yaml")
 
 
+def _tail(msg: str, limit: int = 600) -> str:
+    """The LAST ``limit`` chars of a command's captured output — never the first.
+
+    Every `make stack-*` recipe prints its banner and then the whole clone/build
+    transcript BEFORE anything fails, so a head slice reports "==> Cloning 24
+    HugMesh repos into …" and hides the one line that says what actually broke.
+    That is not hypothetical: a live bring-up failure surfaced in the GUI as the
+    clone banner while the real cause ("unable to prepare context: path
+    …/.stack-src/hugmesh-remote-fragment not found") sat ~40 lines further down,
+    off the end of the slice. The tail always carries the failure. An ellipsis
+    marks a truncated head so the reader knows output was dropped."""
+    msg = (msg or "").strip()
+    return msg if len(msg) <= limit else "…" + msg[-limit:]
+
+
 def discover_brands(generator_dir: str) -> list[str]:
     """Brand slugs with a real shell profile at brands/<slug>.conf — the ONLY files
     gen-cluster-secrets.sh:36-38 and the builders ever source. DEFAULT_BRAND leads even
@@ -649,7 +664,7 @@ class LocalMeshBootstrap:
         if not ok:
             return False, [why]
         ok, msg = self._stack_node().m2_bootstrap(on_line=on_line, cancel=cancel)
-        return ok, [f"[m2-bootstrap] {'ok' if ok else 'FAILED'}: {msg[-600:]}"]
+        return ok, [f"[m2-bootstrap] {'ok' if ok else 'FAILED'}: {_tail(msg)}"]
 
     def up(self, on_line=None, cancel=None) -> tuple[bool, list[str]]:
         """The from-scratch bring-up. Returns (ok, log-lines). NO secret VALUE ever
@@ -708,7 +723,7 @@ class LocalMeshBootstrap:
 
         stack = self._stack_node()
         ok, msg = stack.start(on_line=on_line, cancel=cancel)
-        _note(f"[stack-up] {'ok' if ok else 'FAILED'}: {msg[:400]}")
+        _note(f"[stack-up] {'ok' if ok else 'FAILED'}: {_tail(msg)}")
         if not ok:
             return False, log
 
@@ -720,7 +735,7 @@ class LocalMeshBootstrap:
             SEED_SUPERADMIN_USERNAME_ENV: sa["username"],
             SEED_SUPERADMIN_PASSWORD_ENV: sa["password"],
         }, on_line=on_line, cancel=cancel)
-        _note(f"[stack-seed] {'ok' if ok else 'FAILED'}: {msg[:400]}")
+        _note(f"[stack-seed] {'ok' if ok else 'FAILED'}: {_tail(msg)}")
         if not ok:
             return False, log
 
@@ -731,7 +746,7 @@ class LocalMeshBootstrap:
             # export it — same gap local_mesh.main() closes before start()).
             os.environ[ENV_AUTHKEY] = self.cfg.auth_key.strip()
             ok, msg = mesh.start()
-            _note(f"[mesh-overlay] {'ok' if ok else 'FAILED'}: {msg[:400]}")
+            _note(f"[mesh-overlay] {'ok' if ok else 'FAILED'}: {_tail(msg)}")
             if not ok:
                 return False, log
         else:
@@ -775,9 +790,21 @@ class LocalMeshBootstrap:
         overlay (LocalMeshNode.stop())."""
         log: list[str] = []
         ok_stack, msg = self._stack_node().stop()
-        log.append(f"[stack-down] {'ok' if ok_stack else 'FAILED'}: {msg[:400]}")
+        log.append(f"[stack-down] {'ok' if ok_stack else 'FAILED'}: {_tail(msg)}")
         ok_mesh, msg = self._mesh_node().stop()
-        log.append(f"[mesh-overlay down] {'ok' if ok_mesh else 'FAILED'}: {msg[:400]}")
+        log.append(f"[mesh-overlay down] {'ok' if ok_mesh else 'FAILED'}: {_tail(msg)}")
+        return (ok_stack and ok_mesh), log
+
+    def clean(self, on_line=None, cancel=None) -> tuple[bool, list[str]]:
+        """Tear down AND reclaim disk: the mesh overlay stops, then `make stack-clean`
+        removes the stack's containers, volumes and the images it built. DESTRUCTIVE
+        by design (every caller confirms first) — the next bring-up is a cold build.
+        Never touches images this stack did not build."""
+        log: list[str] = []
+        ok_mesh, msg = self._mesh_node().stop()
+        log.append(f"[mesh-overlay down] {'ok' if ok_mesh else 'FAILED'}: {_tail(msg)}")
+        ok_stack, msg = self._stack_node().clean(on_line=on_line, cancel=cancel)
+        log.append(f"[stack-clean] {'ok' if ok_stack else 'FAILED'}: {_tail(msg)}")
         return (ok_stack and ok_mesh), log
 
     def status(self) -> list[str]:
