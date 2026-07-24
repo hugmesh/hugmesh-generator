@@ -1,0 +1,29 @@
+# scripts/quest-devices.tsv — MDM Quest/Oculus headset device catalog
+# (--device-class quest targets for scripts/phone-wizard.sh).
+#
+# Provenance: verified 2026-07-19 against Meta Horizon OS developer docs +
+# device build-prop dumps (FreeXR eureka/panther toolchains, XDA): the Meta
+# Quest 3 family Horizon OS ships today. The wizard FAILS CLOSED on any
+# codename not listed here (exit 4) — same policy as phone-devices.tsv.
+#
+# Identification facts the driver enforces in code (not here):
+#   - USB vendor id 2833 (Oculus/Meta — the Linux udev ATTR{idVendor} value);
+#   - adb: ro.product.device = <codename>, ro.product.manufacturer = oculus
+#     (Horizon OS reports the pre-rebrand "oculus" string; the driver also
+#     accepts "meta" case-insensitively in case a future build renames it).
+#
+# NOTE the deliberate catalog split: `panther` is ALSO the Pixel 7's GrapheneOS
+# codename in phone-devices.tsv. The --device-class flag selects WHICH catalog
+# a codename resolves against, and the manufacturer probe (require_quest_device)
+# keeps a Pixel from ever being driven down the quest path — codenames alone
+# are NOT globally unique across vendors.
+#
+# To extend: confirm the new headset's ro.product.device value from an
+# authoritative source (Meta developer docs / a real device probe), then append
+# a row below.
+#
+# Format: one device per row, exactly two TAB-separated columns:
+#   <codename>	<marketing name>
+# '#' lines and blank lines are ignored.
+eureka	Meta Quest 3
+panther	Meta Quest 3S

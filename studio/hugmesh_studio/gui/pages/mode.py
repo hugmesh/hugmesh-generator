@@ -1,6 +1,6 @@
-"""ModePage — STEP 1: pick ONE of six clearly-distinct things to build.
+"""ModePage — STEP 1: pick ONE of seven clearly-distinct things to build.
 
-The first-screen choices map onto the EXISTING three emission modes plus three
+The first-screen choices map onto the EXISTING three emission modes plus four
 non-image side-flows (design step1Taxonomy):
 
   - MESH NODE            -> cfg.mode="mesh"        (superadmin builds node images)
@@ -8,16 +8,17 @@ non-image side-flows (design step1Taxonomy):
   - MESH DESKTOP CLIENT  -> cfg.mode="cloud"       (branded tailnet + SSO client)
   - STANDALONE GENTOO    -> cfg.mode="standalone"  (hardened/unaffiliated personal desktop)
   - MDM PHONE            -> NO cfg.mode            (side-flow: flash+enroll a Pixel HERE)
+  - MDM QUEST HEADSET    -> NO cfg.mode            (side-flow: enroll a Meta Quest 3/3S HERE)
   - CLOUD DEPLOY         -> NO cfg.mode            (side-flow: publish a packaged image to a cloud)
 
 cfg.mode stays exactly {"standalone","cloud","mesh"} — unchanged — so to_cli_args() /
 materialize() / the mesh manifest stay byte-identical for equivalent selections. The
-LOCAL DOCKER MESH, MDM PHONE and CLOUD DEPLOY choices build no image, so they never
-set cfg.mode: validatePage raises the transient ``wiz.localmesh_selected`` /
-``wiz.phone_selected`` / ``wiz.deploy_selected`` flag and Next flows into the
-registered LocalMeshPage / PhonePage / DeployPage (the operator rejected the old
-modal popout), each dynamically skipping itself on every image-mode flow via
-applies_to().
+LOCAL DOCKER MESH, MDM PHONE, MDM QUEST HEADSET and CLOUD DEPLOY choices build no
+image, so they never set cfg.mode: validatePage raises the transient
+``wiz.localmesh_selected`` / ``wiz.phone_selected`` / ``wiz.quest_selected`` /
+``wiz.deploy_selected`` flag and Next flows into the registered LocalMeshPage /
+PhonePage / QuestPage / DeployPage (the operator rejected the old modal popout),
+each dynamically skipping itself on every image-mode flow via applies_to().
 """
 from __future__ import annotations
 
@@ -35,16 +36,17 @@ class ModePage(QtWidgets.QWizardPage):
         self.setTitle("What do you want to build?")
         self.setSubTitle(
             "Pick one. Three of these build an image; LOCAL DOCKER MESH runs a mesh on "
-            "this machine right now, MDM PHONE flashes + enrolls a USB Pixel, and "
-            "CLOUD DEPLOY publishes an already-packaged image to a cloud provider.")
+            "this machine right now, MDM PHONE flashes + enrolls a USB Pixel, MDM "
+            "QUEST HEADSET enrolls a Meta Quest 3/3S, and CLOUD DEPLOY publishes an "
+            "already-packaged image to a cloud provider.")
         lay = QtWidgets.QVBoxLayout(self)
         self.group = QtWidgets.QButtonGroup(self)
-        # SIX clearly-distinct choices, in the spec's STEP-1 order. Each carries
+        # SEVEN clearly-distinct choices, in the spec's STEP-1 order. Each carries
         # property("mode"): the three IMAGE choices commit cfg.mode in validatePage
-        # exactly as before; "localmesh", "phone" and "deploy" are transient side-flows
-        # that never touch cfg.mode. The DEFAULT is chosen by id (standalone) below,
-        # NOT by index, so a visual reorder can't change which choice the no-pick
-        # default flow exercises.
+        # exactly as before; "localmesh", "phone", "quest" and "deploy" are transient
+        # side-flows that never touch cfg.mode. The DEFAULT is chosen by id
+        # (standalone) below, NOT by index, so a visual reorder can't change which
+        # choice the no-pick default flow exercises.
         self.modes = [
             ("mesh", "Mesh node",
              "Superadmin: build the server node image(s) — PKI, backend, frontend, GPU, "
@@ -61,6 +63,10 @@ class ModePage(QtWidgets.QWizardPage):
             ("phone", "MDM phone",
              "Flash a USB Pixel with VERIFIED GrapheneOS and enroll it in the mesh — "
              "no image build. Runs the same driver right here."),
+            ("quest", "MDM Quest headset",
+             "Enroll a USB Meta Quest 3/3S as an MDM-managed mesh device (Headwind + "
+             "tailnet + XR-chat URL) — no image build, no flash. Same driver, quest "
+             "device class."),
             ("deploy", "Cloud deploy",
              "Publish an already-built, cloud-packaged x86 image to a cloud provider "
              "(AWS / Azure / OpenShift / any qcow2 host) — no image build. Plans are "
@@ -126,14 +132,13 @@ class ModePage(QtWidgets.QWizardPage):
         # MDM PHONE is likewise a side-flow, not an image build: it commits NOTHING to
         # cfg.mode, advancing into the registered PhonePage via its own transient flag.
         self.wiz.phone_selected = (mid == "phone")
+        # MDM QUEST HEADSET mirrors the phone side-flow: same driver, quest device
+        # class — commits NOTHING to cfg.mode, advancing into the registered QuestPage.
+        self.wiz.quest_selected = (mid == "quest")
         # CLOUD DEPLOY is the third side-flow: it publishes an EXISTING packaged image
         # and commits NOTHING to cfg.mode, advancing into the registered DeployPage.
         self.wiz.deploy_selected = (mid == "deploy")
-        if mid == "localmesh":
-            return True
-        if mid == "phone":
-            return True
-        if mid == "deploy":
+        if mid in ("localmesh", "phone", "quest", "deploy"):
             return True
         prev = self.wiz.cfg.mode
         self.wiz.cfg.mode = mid

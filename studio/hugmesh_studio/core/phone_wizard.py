@@ -50,6 +50,11 @@ from dataclasses import dataclass
 ENV_DRIVER = "SNAP_PHONE_WIZARD"
 DRIVER_REL = ("scripts", "phone-wizard.sh")
 DEVICES_TSV = "phone-devices.tsv"
+# The quest catalog SITS NEXT TO the driver too (scripts/quest-devices.tsv). The
+# split is deliberate driver policy: `panther` is BOTH the Pixel 7 (phone catalog)
+# and the Quest 3S (quest catalog) — --device-class picks WHICH catalog a codename
+# resolves against, and the driver's manufacturer probe pins the device.
+QUEST_DEVICES_TSV = "quest-devices.tsv"
 
 # Read-only / non-interactive verbs the GUI drives directly (streamed line-by-line).
 # flash + wizard are DELIBERATELY absent — they need a TTY and go to a terminal.
@@ -57,6 +62,13 @@ STREAM_VERBS = ("plan", "detect", "fetch", "enroll", "profile", "ingest", "statu
 # The two verbs whose confirmation/guided prompts REQUIRE a real TTY the GUI has no
 # stdin for (phone-wizard.sh:924 flash typed-serial, :1820 wizard `[ -t 0 ] || die`).
 TERMINAL_VERBS = ("flash", "wizard")
+# The quest device class is the 4-verb onboarding subset (fetch/flash/attest/profile
+# are UNSUPPORTED for quest — the driver refuses them fail-closed with the rationale,
+# see require_class_supports in phone-wizard.sh). mdm-enroll IS streamable on quest:
+# the phone fresh-device gates become non-interactive ADVISORIES there (Horizon OS
+# setup requires a Meta account, so `dpm set-device-owner` is the real arbiter).
+QUEST_STREAM_VERBS = ("plan", "detect", "mdm-enroll", "enroll", "ingest", "status")
+QUEST_TERMINAL_VERBS = ("wizard",)
 
 # Terminal emulators the flash/wizard deferral can run in, most-specific first; each
 # entry is (binary, exec-style args that precede the command argv). Copied from the
@@ -94,15 +106,30 @@ class PhoneWizardConfig:
     work_dir: str = ""
     out: str = ""
     auth_key: str = ""      # transient secret — staged to a 0600 file, never argv
+    # ── device class + the quest management-plane knobs ──────────────────────────
+    # device_class="" means the driver's phone default (NO flag emitted, so every
+    # existing phone argv stays byte-identical); "quest" selects the quest catalog +
+    # verb subset. The headwind/XR knobs are paths/URLs/names — never secrets — and
+    # map 1:1 onto driver flags (the Makefile HEADWIND_CONFIG=/XR_CHAT_URL= knobs).
+    device_class: str = ""
+    headwind_apk: str = ""
+    headwind_signer: str = ""
+    headwind_url: str = ""
+    headwind_config: str = ""
+    xr_chat_url: str = ""
 
     def to_cli_args(self) -> list[str]:
-        """The driver flags (no verb, no secret). The shared subset the ncurses sets
-        (codename, channel, serial, keys-dir, login-server, role) is emitted in the
-        SAME order _phone_run marshals it (build-menu.sh:1841-1846), so the argv reads
-        identically across the two faces; --work-dir/--out (real driver flags the
-        ncurses does not set) are appended after and only when non-empty. Empty knobs
-        emit nothing."""
+        """The driver flags (no verb, no secret). --device-class rides FIRST when set
+        (mirroring the Makefile's ``_QUEST_ARGS = --device-class quest $(_PHONE_ARGS)``
+        shape); then the shared subset the ncurses sets (codename, channel, serial,
+        keys-dir, login-server, role) in the SAME order _phone_run marshals it
+        (build-menu.sh:1841-1846), so the argv reads identically across the faces;
+        --work-dir/--out and the headwind/XR management-plane flags (real driver
+        flags) are appended after and only when non-empty. Empty knobs emit
+        nothing."""
         args: list[str] = []
+        if self.device_class.strip():
+            args += ["--device-class", self.device_class.strip()]
         if self.codename.strip():
             args += ["--codename", self.codename.strip()]
         if self.channel.strip():
@@ -119,6 +146,16 @@ class PhoneWizardConfig:
             args += ["--work-dir", self.work_dir.strip()]
         if self.out.strip():
             args += ["--out", self.out.strip()]
+        if self.headwind_apk.strip():
+            args += ["--headwind-apk", self.headwind_apk.strip()]
+        if self.headwind_signer.strip():
+            args += ["--headwind-signer-sha256", self.headwind_signer.strip()]
+        if self.headwind_url.strip():
+            args += ["--headwind-url", self.headwind_url.strip()]
+        if self.headwind_config.strip():
+            args += ["--headwind-config", self.headwind_config.strip()]
+        if self.xr_chat_url.strip():
+            args += ["--xr-chat-url", self.xr_chat_url.strip()]
         return args
 
 
@@ -146,8 +183,12 @@ class PhoneWizard:
     def devices_tsv(self) -> str:
         """The device catalog SITS NEXT TO the driver (the ncurses reads
         ``$(dirname "${wiz}")/phone-devices.tsv``, build-menu.sh:1778) so a stubbed
-        driver can ship its own catalog through the same env seam."""
-        return os.path.join(os.path.dirname(self.driver_path), DEVICES_TSV)
+        driver can ship its own catalog through the same env seam. CLASS-SCOPED,
+        exactly like the driver (main() switches DEVICES_TSV on --device-class):
+        quest resolves quest-devices.tsv — `panther` is BOTH the Pixel 7 and the
+        Quest 3S, so the class must pick the catalog."""
+        name = QUEST_DEVICES_TSV if self.cfg.device_class.strip() == "quest" else DEVICES_TSV
+        return os.path.join(os.path.dirname(self.driver_path), name)
 
     # ── availability + catalog ───────────────────────────────────────────────────
     def available(self) -> tuple[bool, str]:

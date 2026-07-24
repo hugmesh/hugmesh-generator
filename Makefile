@@ -314,6 +314,7 @@ ORANGEPIZERO2_PASS    := ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
         rpi x86 omnibus prebuild-binaries frite frite-live frite-installer jetson orangepi5 orangepi5-live orangepi5-installer \
         orangepizero2 orangepizero2-live orangepizero2-installer \
         phone-plan phone-detect phone-fetch phone-flash phone-mdm-enroll phone-attest phone-enroll phone-profile phone-rotate-profile-pass phone-remove-profile phone-ingest phone-status phone-wizard \
+        quest-plan quest-detect quest-mdm-enroll quest-enroll quest-ingest quest-status quest-wizard \
         deploy-plan deploy-apply deploy-status deploy-destroy \
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate \
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
@@ -524,8 +525,8 @@ export PHONE_WORK_DIR SERIAL CODENAME CHANNEL GRAPHENE_VERSION OUT_DIR \
   KEYS_DIR LOGIN_SERVER AUTHKEY_FILE PASS_FILE DEVICE_ID SUPERDOMAIN \
   PHONE_ROLE PROFILE_NAME TAILSCALE_APK APK_SIGNER_SHA256 INGEST_URL \
   CLIENT_CERT CLIENT_KEY CA INTERNAL_TOKEN_FILE HEADWIND_APK \
-  HEADWIND_SIGNER_SHA256 HEADWIND_URL AUDITOR_APK AUDITOR_SIGNER_SHA256 \
-  ATTESTATION_URL \
+  HEADWIND_SIGNER_SHA256 HEADWIND_URL HEADWIND_CONFIG XR_CHAT_URL \
+  AUDITOR_APK AUDITOR_SIGNER_SHA256 ATTESTATION_URL \
   YES FORCE FORCE_FWUPD RESOLVE SHOW_AUTHKEY PLAN_VERB
 _PHONE_ARGS = --work-dir "$$PHONE_WORK_DIR" \
   $${SERIAL:+--serial "$$SERIAL"} \
@@ -551,6 +552,8 @@ _PHONE_ARGS = --work-dir "$$PHONE_WORK_DIR" \
   $${HEADWIND_APK:+--headwind-apk "$$HEADWIND_APK"} \
   $${HEADWIND_SIGNER_SHA256:+--headwind-signer-sha256 "$$HEADWIND_SIGNER_SHA256"} \
   $${HEADWIND_URL:+--headwind-url "$$HEADWIND_URL"} \
+  $${HEADWIND_CONFIG:+--headwind-config "$$HEADWIND_CONFIG"} \
+  $${XR_CHAT_URL:+--xr-chat-url "$$XR_CHAT_URL"} \
   $${AUDITOR_APK:+--auditor-apk "$$AUDITOR_APK"} \
   $${AUDITOR_SIGNER_SHA256:+--auditor-signer-sha256 "$$AUDITOR_SIGNER_SHA256"} \
   $${ATTESTATION_URL:+--attestation-url "$$ATTESTATION_URL"} \
@@ -599,6 +602,37 @@ phone-attest: ## install the pinned HugMesh Auditor fork + guided AttestationSer
 
 phone-wizard: ## interactive guided full phone flow (TTY): detect->fetch->flash->attest->mdm-enroll->enroll->profile->ingest
 	@bash scripts/phone-wizard.sh wizard $(_PHONE_ARGS)
+
+# ── MDM Quest / Oculus headset (same driver, --device-class quest) ─────
+# A Meta Quest 3/3S as another MDM-managed Android device on the mesh. SAME
+# thin-delegate pattern and knobs as the phone-* targets above; the quest
+# surface is the 4-verb subset that exists for the class (fetch/flash/attest/
+# profile are UNSUPPORTED for quest and the driver refuses them with the
+# rationale — see docs/MDM.md). Extra knobs: HEADWIND_CONFIG= (the Headwind
+# configuration the headset self-selects into, i.e. the app-push lever) and
+# XR_CHAT_URL= (the https XR-chat entry URL provisioned during mdm-enroll).
+_QUEST_ARGS = --device-class quest $(_PHONE_ARGS)
+
+quest-plan: ## dry-run the Quest MDM wizard: validate knobs + quest catalog, print PLAN_* lines ([PLAN_VERB=mdm-enroll] plans one verb)
+	@bash scripts/phone-wizard.sh plan $(PLAN_VERB) $(_QUEST_ARGS)
+
+quest-detect: ## read-only probe of the USB-connected Quest (Developer Mode must be ON; prints the runbook when it is not)
+	@bash scripts/phone-wizard.sh detect $(_QUEST_ARGS)
+
+quest-mdm-enroll: ## Headwind MDM device-owner enrollment + XR-chat URL provisioning (HEADWIND_APK= HEADWIND_URL= [HEADWIND_CONFIG= XR_CHAT_URL=])
+	@bash scripts/phone-wizard.sh mdm-enroll $(_QUEST_ARGS)
+
+quest-enroll: ## join the headset to the mesh tailnet (TAILSCALE_APK= sideload; KEYS_DIR= or LOGIN_SERVER=+AUTHKEY_FILE=)
+	@bash scripts/phone-wizard.sh enroll $(_QUEST_ARGS)
+
+quest-ingest: ## emit the device-registry record (device_class=quest; registry POST is a documented cross-repo gap)
+	@bash scripts/phone-wizard.sh ingest $(_QUEST_ARGS)
+
+quest-status: ## read-only: tools, headset, tailnet presence
+	@bash scripts/phone-wizard.sh status $(_QUEST_ARGS)
+
+quest-wizard: ## interactive guided quest flow (TTY): detect->mdm-enroll->enroll->ingest
+	@bash scripts/phone-wizard.sh wizard $(_QUEST_ARGS)
 
 # ── Cloud deploy (publishes a PACKAGED image — builds NO image) ───────
 # Thin delegates to the shared Qt-free entrypoint

@@ -1394,6 +1394,54 @@ AZ26_MDM="${OUT}/device/${AZ26_DEVID}/mdm.json"
     && ok "(26C) the non-secret intune_device_id IS recorded (the only azure input the wizard accepts)" \
     || bad "(26C) intune_device_id not recorded: $(cat "${AZ26_MDM}" 2>/dev/null)"
 
+# ── (27) --device-class quest: plan gates + the class-scoped catalogs
+#      (ADDENDUM 2026-07-19; the full quest lifecycle lives in
+#      tests/phone/e2e-quest-join.sh — this group pins the OFFLINE plan
+#      surface: catalog split, class validation, unsupported-verb refusal) ──
+# hasline: WHOLE-LINE exact match for the machine-readable PLAN_K=V lines
+# (substring would let PLAN_DEVICE_NAME=Meta Quest 3 pass for "Meta Quest 3S").
+hasline() { grep -qxF -- "$1" <<<"${OUT_TXT}"; }
+clear_logs
+run plan enroll --device-class quest --codename eureka --login-server https://hs.invalid
+if [ "${RC}" -eq 0 ] && hasline "PLAN_DEVICE_CLASS=quest" \
+   && hasline "PLAN_DEVICE_NAME=Meta Quest 3" \
+   && hasline "PLAN_STEPS=adb-sanity,quest-identity,tailscale-app,join-runbook,verify-join,record"; then
+    ok "(27) plan enroll (quest): eureka -> Meta Quest 3, quest-identity step present, class line emitted"
+else
+    bad "(27) plan-enroll-quest rc=${RC}, out='${OUT_TXT}'"
+fi
+[ ! -s "${LOGD}/curl.log" ] \
+    && ok "(27) quest plan stayed fully OFFLINE (zero curl calls)" \
+    || bad "(27) quest plan touched the network"; : > "${LOGD}/curl.log"
+run plan wizard --device-class quest --codename panther --login-server https://hs.invalid
+if [ "${RC}" -eq 0 ] && hasline "PLAN_DEVICE_NAME=Meta Quest 3S" \
+   && hasline "PLAN_STEPS=detect,mdm-enroll,enroll,ingest" \
+   && hasline "PLAN_ZIP_URL=not-applicable"; then
+    ok "(27) plan wizard (quest): panther -> Meta Quest 3S, 4-step flow, no GrapheneOS artifact"
+else
+    bad "(27) plan-wizard-quest rc=${RC}, out='${OUT_TXT}'"
+fi
+run plan wizard --codename panther
+hasline "PLAN_DEVICE_NAME=Pixel 7" && hasline "PLAN_DEVICE_CLASS=phone" \
+    && ok "(27) the SAME codename in phone class -> Pixel 7 (catalogs are class-scoped)" \
+    || bad "(27) phone-panther resolution wrong, out='${OUT_TXT}'"
+run plan flash --device-class quest
+[ "${RC}" -eq 2 ] && has "UNSUPPORTED" \
+    && ok "(27) plan flash (quest) -> exit 2 UNSUPPORTED at plan time" \
+    || bad "(27) plan-flash-quest rc=${RC}, want 2, out='${OUT_TXT}'"
+run plan attest --device-class quest
+[ "${RC}" -eq 2 ] && has "Auditor" \
+    && ok "(27) plan attest (quest) -> exit 2 with the no-Auditor-tier rationale" \
+    || bad "(27) plan-attest-quest rc=${RC}, want 2, out='${OUT_TXT}'"
+run plan enroll --device-class quest --codename oriole --login-server https://hs.invalid
+[ "${RC}" -eq 4 ] \
+    && ok "(27) a Pixel codename is unknown in the quest catalog -> exit 4" \
+    || bad "(27) quest-oriole rc=${RC}, want 4, out='${OUT_TXT}'"
+run plan --device-class toaster
+[ "${RC}" -eq 1 ] && has "must be phone|quest" \
+    && ok "(27) --device-class toaster -> exit 1 (validated)" \
+    || bad "(27) bad-class rc=${RC}, want 1, out='${OUT_TXT}'"
+
 echo
 echo "== phone-wizard test: ${P} passed, ${F} failed =="
 [ "${F}" -eq 0 ] || exit 1

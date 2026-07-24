@@ -90,7 +90,8 @@ MODE_DEFAULT_ROLE = {
 # between are terminal or dynamically skipped anyway. Non-node modes statically
 # skip "idp" via MODE_SKIPPED_PAGES below, so client/standalone flows keep today's
 # behaviour byte-identically.
-WIZARD_PAGE_SLUGS = ("welcome", "mode", "localmesh", "phone", "deploy", "idp", "role",
+WIZARD_PAGE_SLUGS = ("welcome", "mode", "localmesh", "phone", "quest", "deploy",
+                     "idp", "role",
                      "worklist", "hardware", "branding", "network", "keyzip",
                      "domains", "users", "system", "home", "build", "progress")
 MODE_SKIPPED_PAGES = {

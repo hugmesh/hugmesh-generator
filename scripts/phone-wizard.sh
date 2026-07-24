@@ -38,6 +38,19 @@
 # `attest --attestation-verdict-source api` mode, GrapheneOS QR provisioning)
 # is tracked in docs/MDM.md.
 #
+# DEVICE CLASSES (ADDENDUM 2026-07-19): --device-class phone|quest. `quest`
+# onboards a Meta Quest 3 / Quest 3S (Horizon OS, USB vendor id 2833) as
+# another MDM-managed Android device on the mesh: detect -> mdm-enroll
+# (Headwind device-owner + XR-chat URL provisioning) -> enroll (Tailscale
+# sideload + the SAME tun0/CGNAT join verify — Horizon OS is Android, so the
+# VpnService interface is tun0 there too) -> ingest. Codenames resolve against
+# scripts/quest-devices.tsv (NOT phone-devices.tsv — `panther` is BOTH the
+# Quest 3S and the Pixel 7, so the class picks the catalog and a manufacturer
+# probe pins the device). fetch/flash (GrapheneOS is Pixel-only), attest
+# (no Auditor/AttestationServer support on Horizon OS) and the enterprise
+# profile verbs (Horizon OS's user model is Meta-account-bound) are
+# UNSUPPORTED for quest and fail closed with the rationale — see docs/MDM.md.
+#
 # SECRET-CUSTODY MODEL: no secret ever travels on argv, in PLAN output, or to
 # stdout/logs (REDACTED presence markers only). The tailscale pre-auth key and
 # the enterprise-profile passphrase move via 0600 files only (--authkey-file /
@@ -85,11 +98,18 @@ ADB="${PW_ADB:-adb}"
 FASTBOOT="${PW_FASTBOOT:-fastboot}"
 RELEASES_URL="${PW_RELEASES_URL:-https://releases.grapheneos.org}"
 ALLOWED_SIGNERS="${PW_ALLOWED_SIGNERS:-${SCRIPT_DIR}/phone-allowed-signers}"
-DEVICES_TSV="${SCRIPT_DIR}/phone-devices.tsv"
+# Class-scoped device catalogs: --device-class selects which one codenames
+# resolve against (main() switches DEVICES_TSV after the parse). `panther` is
+# both the Pixel 7 (phone catalog) and the Quest 3S (quest catalog) — vendor
+# codenames are NOT globally unique, so ONE catalog cannot serve both classes.
+PHONE_DEVICES_TSV="${SCRIPT_DIR}/phone-devices.tsv"
+QUEST_DEVICES_TSV="${SCRIPT_DIR}/quest-devices.tsv"
+DEVICES_TSV="${PHONE_DEVICES_TSV}"
 JOIN_TIMEOUT="${PW_JOIN_TIMEOUT:-300}"      # seconds to wait for the tailnet tun iface
 POLL_INTERVAL="${PW_POLL_INTERVAL:-5}"      # seconds between polls
 
 # ── Options (defaults) ─────────────────────────────────────────────
+DEVICE_CLASS="phone"
 SERIAL=""
 CODENAME=""
 CHANNEL="stable"
@@ -113,6 +133,8 @@ INTUNE_DEVICE_ID=""          # (azure-intune) the Graph managedDevice id the loc
 HEADWIND_APK=""
 HEADWIND_SIGNER_SHA256=""
 HEADWIND_URL="${HMDM_URL:-}"
+HEADWIND_CONFIG=""
+XRCHAT_URL="${XR_CHAT_URL:-}"
 AUDITOR_APK=""
 AUDITOR_SIGNER_SHA256=""
 ATTESTATION_URL="${ATTEST_URL:-}"
@@ -179,6 +201,13 @@ Usage: $0 <verb> [options]
   dry-run/read-only: only 'fetch', 'flash', 'attest', 'mdm-enroll', 'enroll',
   'profile', 'rotate-profile-pass', 'remove-profile' and 'ingest' change
   anything, and the destructive ones are gated.
+
+  --device-class quest onboards a Meta Quest 3/3S (Horizon OS) instead:
+  detect -> mdm-enroll (Headwind device-owner + --xr-chat-url provisioning)
+  -> enroll (Tailscale sideload, same tun0 join verify) -> ingest. Codenames
+  resolve against scripts/quest-devices.tsv; fetch/flash/attest and the
+  profile verbs are UNSUPPORTED for quest and fail closed with the rationale
+  (see docs/MDM.md).
 
 Verbs:
   plan [verb]          Dry-run (DEFAULT target: wizard). Validates options +
@@ -250,7 +279,13 @@ Verbs:
 Options:
   --serial S             Target device serial (required when several devices
                          are connected; compared against what is detected).
-  --codename C           Device codename (see scripts/phone-devices.tsv).
+  --device-class C       phone (default) | quest. Selects the codename catalog
+                         (phone-devices.tsv vs quest-devices.tsv — 'panther'
+                         is BOTH the Pixel 7 and the Quest 3S) and the verb
+                         surface; quest pins the device to manufacturer
+                         oculus/Meta (USB vendor id 2833) fail-closed.
+  --codename C           Device codename (see scripts/phone-devices.tsv, or
+                         scripts/quest-devices.tsv with --device-class quest).
   --channel CH           Release channel: stable|beta|alpha. Default: ${CHANNEL}
   --graphene-version V   Pin an exact release (skips channel resolution).
   --work-dir D           Artifact dir. Default: ${WORK_DIR}
@@ -289,6 +324,16 @@ Options:
   --headwind-url URL     Headwind server base URL, written into the DPC's
                          non-interactive init.json config
                          (com.hmdm.BASE_URL). Env: HMDM_URL.
+  --headwind-config NAME Headwind CONFIGURATION the device self-selects into
+                         (init.json com.hmdm.CONFIG) — the app-push lever:
+                         apps in that configuration (e.g. the XR-chat web-page
+                         entry) are pushed by the Headwind server.
+  --xr-chat-url URL      XR-chat entry URL to provision during mdm-enroll
+                         (https:// only — WebXR needs a secure context).
+                         Prints the Headwind web-page-app console runbook,
+                         records the URL in mdm.json, and on a quest fires a
+                         VIEW intent so the operator can confirm the room
+                         loads in the headset browser. Env: XR_CHAT_URL.
   --auditor-apk F        HugMesh Auditor fork APK to adb-install during
                          attest.
   --auditor-signer-sha256 H
@@ -336,8 +381,8 @@ Env seams (tests): PW_ADB, PW_FASTBOOT, PW_RELEASES_URL, PW_ALLOWED_SIGNERS,
   PW_EXPECTED_SIGNER_FP (empty allowed ONLY with PW_ALLOWED_SIGNERS overridden),
   PW_SKIP_FP_PIN=1, PW_JOIN_TIMEOUT, PW_POLL_INTERVAL,
   PW_FASTBOOT_REAPPEAR_TIMEOUT.
-  Also: HMDM_URL / ATTEST_URL supply default --headwind-url /
-  --attestation-url values (an explicit flag always wins).
+  Also: HMDM_URL / ATTEST_URL / XR_CHAT_URL supply default --headwind-url /
+  --attestation-url / --xr-chat-url values (an explicit flag always wins).
 
 Exit codes:
   0 success   1 usage/runtime error   2 missing tool / precondition / refused
@@ -372,13 +417,15 @@ validate_profile_name() {
 }
 
 # Resolve DEVICE_ID: explicit --device-id (sanitized) wins; else derive from
-# the serial. Empty when neither is known yet (plan prints a placeholder).
+# the serial, prefixed by the device class (phone-<serial> / quest-<serial> —
+# the class prefix keeps a fleet's registry ids self-describing). Empty when
+# neither is known yet (plan prints a placeholder).
 resolve_device_id() {
     if [ -n "${DEVICE_ID}" ]; then
         DEVICE_ID="$(sanitize_id "${DEVICE_ID}")"
         [ -n "${DEVICE_ID}" ] || pw_die 1 "--device-id reduced to empty after sanitising (use [a-z0-9-])"
     elif [ -n "${SERIAL}" ]; then
-        DEVICE_ID="phone-$(sanitize_id "${SERIAL}")"
+        DEVICE_ID="${DEVICE_CLASS}-$(sanitize_id "${SERIAL}")"
     fi
 }
 
@@ -397,7 +444,68 @@ require_codename() {
     # the parent — the `|| pw_die 4` would swallow it and mislabel a missing
     # catalog as an unknown codename. Check the file here, in the main shell.
     [ -f "${DEVICES_TSV}" ] || pw_die 2 "device catalog missing: ${DEVICES_TSV}"
-    DEVICE_NAME="$(catalog_lookup "${CODENAME}")" || pw_die 4 "unknown codename '${CODENAME}' — not in ${DEVICES_TSV}. Check https://grapheneos.org/releases and extend the catalog if this is a new device."
+    local extend_hint="Check https://grapheneos.org/releases and extend the catalog if this is a new device."
+    is_quest && extend_hint="Confirm the headset's ro.product.device value from an authoritative source and extend the catalog if this is a new headset."
+    DEVICE_NAME="$(catalog_lookup "${CODENAME}")" || pw_die 4 "unknown codename '${CODENAME}' — not in ${DEVICES_TSV}. ${extend_hint}"
+}
+
+# ── Device class (phone | quest) ───────────────────────────────────
+is_quest() { [ "${DEVICE_CLASS}" = "quest" ]; }
+
+validate_device_class() {
+    case "${DEVICE_CLASS}" in
+        phone|quest) : ;;
+        *) pw_die 1 "--device-class must be phone|quest (got '${DEVICE_CLASS}')" ;;
+    esac
+}
+
+# Fail-closed capability gate: verbs a class cannot support die 2 WITH the
+# rationale, up front — never a cryptic mid-flow tool error. Phone supports
+# everything; quest excludes the GrapheneOS-only and profile-custody verbs.
+require_class_supports() {
+    is_quest || return 0
+    case "$1" in
+        fetch|flash)
+            pw_die 2 "'$1' is UNSUPPORTED for --device-class quest: GrapheneOS artifacts are Pixel-only and Horizon OS cannot be reflashed by this wizard — a Quest is onboarded as-is (detect -> mdm-enroll -> enroll -> ingest)" ;;
+        attest)
+            pw_die 2 "'attest' is UNSUPPORTED for --device-class quest: the Auditor/AttestationServer trust root requires GrapheneOS-class hardware-attestation device profiles; Horizon OS cannot run GrapheneOS or the HugMesh Auditor fork, so no attestation tier exists for Quest (see docs/MDM.md)" ;;
+        profile|rotate-profile-pass|remove-profile)
+            pw_die 2 "'$1' is UNSUPPORTED for --device-class quest: Horizon OS's user model is Meta-account-bound (no separately-encrypted GrapheneOS-style secondary user), so there is no escrowed enterprise-profile custody surface on a Quest" ;;
+        *) : ;;
+    esac
+}
+
+# Quest identity pin (fail-closed): the codename catalogs overlap across
+# vendors (panther = Pixel 7 AND Quest 3S), so the class flag alone is not
+# enough — a device driven down the quest path must actually BE a
+# Quest/Horizon-OS device. Manufacturer probe over adb: Horizon OS reports
+# ro.product.manufacturer=oculus (pre-rebrand string; 'meta' accepted too in
+# case a future build renames it). USB vendor id 2833 is the same identity at
+# the USB layer (the Linux udev ATTR{idVendor} value).
+require_quest_device() {
+    local s="$1" mfr
+    mfr="$("${ADB}" -s "${s}" shell getprop ro.product.manufacturer 2>/dev/null | tr -d '\r\n' || true)"
+    case "$(tr '[:upper:]' '[:lower:]' <<<"${mfr}")" in
+        oculus|meta) : ;;
+        *) pw_die 2 "device ${s} reports manufacturer '${mfr:-unknown}', not oculus/Meta — refusing the quest path (use --device-class phone for handsets; codenames overlap across vendors)" ;;
+    esac
+}
+
+# Operator runbook for a Quest that is not reachable over adb: Developer Mode
+# is the adb gate on Horizon OS (there is no Android developer-options menu).
+quest_devmode_guidance() {
+    echo
+    echo "== Quest Developer-Mode runbook (adb needs Developer Mode ON) =="
+    echo "  1. The Meta account on the headset must belong to (or join) a"
+    echo "     developer organization: set one up at developers.meta.com."
+    echo "  2. In the Meta Horizon phone app: Devices -> select the headset ->"
+    echo "     Headset settings -> Developer Mode -> ON, then reboot the headset."
+    echo "  3. Connect USB-C and put the headset ON — accept the"
+    echo "     'Allow USB debugging' prompt INSIDE the headset."
+    echo "  4. Linux hosts: the headset's USB vendor id is 2833 — add a udev rule"
+    echo "     (e.g. SUBSYSTEM==\"usb\", ATTR{idVendor}==\"2833\", MODE=\"0666\")"
+    echo "     and replug if adb shows no device."
+    echo
 }
 
 validate_channel() {
@@ -413,6 +521,14 @@ validate_channel() {
 validate_mdm_provider() {
     if ! mdmp_known "${MDM_PROVIDER}"; then
         pw_die 1 "--mdm-provider must be one of: ${MDM_PROVIDER_IDS[*]} (got '${MDM_PROVIDER}')"
+    fi
+    # Class × provider gate (fail-closed): a Quest can only be managed by a
+    # dpc-adb provider (Headwind device-owner over adb). os-enrollment
+    # providers are OS-level (Entra registration / Company Portal) and
+    # Microsoft Intune has no Horizon OS support — refuse up front with the
+    # rationale instead of printing an Intune runbook the headset can't follow.
+    if is_quest && [ "$(mdmp_mechanism "${MDM_PROVIDER}")" != "dpc-adb" ]; then
+        pw_die 2 "--mdm-provider ${MDM_PROVIDER} is UNSUPPORTED for --device-class quest: its mechanism is '$(mdmp_mechanism "${MDM_PROVIDER}")' (OS-level enrollment), and Horizon OS has no Intune/Company-Portal support — a Quest is managed via the dpc-adb provider (headwind) only (see docs/MDM.md)"
     fi
 }
 
@@ -496,7 +612,11 @@ list_devices() {
             device) ADB_SERIALS+=("${s}") ;;
             unauthorized)
                 ADB_UNUSABLE+=("${s}")
-                pw_warn "device ${s} is UNAUTHORIZED — unlock the phone and tap 'Allow USB debugging' (check 'always allow'), then retry" ;;
+                if is_quest; then
+                    pw_warn "device ${s} is UNAUTHORIZED — put the headset ON and accept the 'Allow USB debugging' prompt INSIDE the headset (it only renders while worn)"
+                else
+                    pw_warn "device ${s} is UNAUTHORIZED — unlock the phone and tap 'Allow USB debugging' (check 'always allow'), then retry"
+                fi ;;
             no)   # "no permissions" — a Linux udev / plugdev issue, NOT the phone
                 ADB_UNUSABLE+=("${s}")
                 pw_warn "device ${s}: ${rest:-no permissions} — a Linux USB permissions issue. Install the android-udev rules (or add your user to the 'plugdev' group), then 'adb kill-server; adb start-server' and retry" ;;
@@ -533,10 +653,19 @@ choose_device() {
         pw_die 4 "device with serial '${SERIAL}' is not connected (connected: $(printf '%s ' ${all[@]+"${all[@]}"}))"
     fi
     case "${#all[@]}" in
-        0) if [ "${#ADB_UNUSABLE[@]}" -gt 0 ]; then
-               pw_die 2 "a phone IS attached over USB (${ADB_UNUSABLE[*]}) but not ready for adb — see the warning(s) above (usually: unlock + 'Allow USB debugging', or fix the Linux udev/plugdev permissions)"
-           fi
-           pw_die 2 "no device detected — connect the phone over USB (adb: enable USB debugging; fastboot: boot the bootloader) and retry" ;;
+        0)
+            if [ "${#ADB_UNUSABLE[@]}" -gt 0 ]; then
+                if is_quest; then
+                    quest_devmode_guidance
+                    pw_die 2 "a headset IS attached over USB (${ADB_UNUSABLE[*]}) but not ready for adb — see the warning(s) above (put the headset ON and accept the in-headset prompt, or fix the Linux udev/plugdev permissions; runbook above)"
+                fi
+                pw_die 2 "a phone IS attached over USB (${ADB_UNUSABLE[*]}) but not ready for adb — see the warning(s) above (usually: unlock + 'Allow USB debugging', or fix the Linux udev/plugdev permissions)"
+            fi
+            if is_quest; then
+                quest_devmode_guidance
+                pw_die 2 "no Quest detected over adb — Developer Mode must be ON and the in-headset USB-debugging prompt accepted (runbook above); then retry"
+            fi
+            pw_die 2 "no device detected — connect the phone over USB (adb: enable USB debugging; fastboot: boot the bootloader) and retry" ;;
         1) SEL_SERIAL="${all[0]%%:*}"; SEL_STATE="${all[0]##*:}" ;;
         *) pw_die 2 "multiple devices connected — pass --serial. Connected: $(printf '%s ' "${all[@]}")" ;;
     esac
@@ -739,6 +868,9 @@ verify_installed_signer() {
 # ── verb: plan ─────────────────────────────────────────────────────
 cmd_plan() {
     local target="${1:-wizard}"
+    # Plan validates class support up front: `plan flash --device-class quest`
+    # dies 2 with the rationale rather than printing an unexecutable plan.
+    [ "${target}" = "plan" ] || require_class_supports "${target}"
     validate_channel
     validate_mdm_provider
     validate_intune_device_id
@@ -750,21 +882,27 @@ cmd_plan() {
         name="${DEVICE_NAME}"
     fi
 
-    version="${GRAPHENE_VERSION}"
-    if [ -z "${version}" ]; then
-        if [ "${RESOLVE}" -eq 1 ]; then
-            [ -n "${CODENAME}" ] || pw_die 1 "--resolve needs --codename"
-            resolve_version
-            version="${GRAPHENE_VERSION}"
-        else
-            version="resolve-at-fetch"
+    if is_quest; then
+        # No GrapheneOS artifact exists for a Quest — nothing to resolve/fetch.
+        version="not-applicable"
+        zip_url="not-applicable"
+        sig_url="not-applicable"
+    else
+        version="${GRAPHENE_VERSION}"
+        if [ -z "${version}" ]; then
+            if [ "${RESOLVE}" -eq 1 ]; then
+                [ -n "${CODENAME}" ] || pw_die 1 "--resolve needs --codename"
+                resolve_version
+                version="${GRAPHENE_VERSION}"
+            else
+                version="resolve-at-fetch"
+            fi
         fi
+        local cn_disp="${CODENAME:-<codename>}" v_disp="${version}"
+        [ "${version}" = "resolve-at-fetch" ] && v_disp="<version>"
+        zip_url="${RELEASES_URL}/${cn_disp}-install-${v_disp}.zip"
+        sig_url="${zip_url}.sig"
     fi
-
-    local cn_disp="${CODENAME:-<codename>}" v_disp="${version}"
-    [ "${version}" = "resolve-at-fetch" ] && v_disp="<version>"
-    zip_url="${RELEASES_URL}/${cn_disp}-install-${v_disp}.zip"
-    sig_url="${zip_url}.sig"
 
     fp_disp="$(effective_signer_fp)"; [ -n "${fp_disp}" ] || fp_disp="unpinned"
 
@@ -783,17 +921,29 @@ cmd_plan() {
     ingest_disp="${INGEST_URL:-emit-only}"
 
     case "${target}" in
-        wizard)     steps="detect,fetch,flash,attest,mdm-enroll,enroll,profile,ingest" ;;
+        wizard)     if is_quest; then
+                        # The quest guided flow is the 4-step onboarding: no
+                        # fetch/flash (no GrapheneOS), no attest (no Auditor
+                        # tier on Horizon OS), no profile (Meta-account-bound
+                        # user model) — see require_class_supports.
+                        steps="detect,mdm-enroll,enroll,ingest"
+                    else
+                        steps="detect,fetch,flash,attest,mdm-enroll,enroll,profile,ingest"
+                    fi ;;
         fetch)      steps="resolve-version,download,verify,extract" ;;
         flash)      steps="preflight,detect,verify-artifact,confirm,unlock,flash-all,lock" ;;
         attest)     steps="adb-sanity,auditor-install,pairing-runbook,record" ;;
-        mdm-enroll) if [ "$(mdmp_mechanism "${MDM_PROVIDER}")" = "os-enrollment" ]; then
+        mdm-enroll) if is_quest; then
+                        steps="adb-sanity,quest-identity,fresh-device-advisory,dpc-install,set-device-owner,push-init-json,xr-chat-provision,record"
+                    elif [ "$(mdmp_mechanism "${MDM_PROVIDER}")" = "os-enrollment" ]; then
                         steps="os-enrollment-runbook,record-intune-device-id"
                     else
                         steps="adb-sanity,fresh-device-precondition,dpc-install,set-device-owner,push-init-json,record"
                     fi ;;
         enroll)     if [ "${NO_USB}" -eq 1 ]; then
                         steps="join-runbook,record-operator-attested"
+                    elif is_quest; then
+                        steps="adb-sanity,quest-identity,tailscale-app,join-runbook,verify-join,record"
                     else
                         steps="adb-sanity,tailscale-app,join-runbook,verify-join,record"
                     fi ;;
@@ -804,6 +954,7 @@ cmd_plan() {
 
     cat <<EOF
 PLAN_VERB=${target}
+PLAN_DEVICE_CLASS=${DEVICE_CLASS}
 PLAN_SERIAL=${serial_disp}
 PLAN_CODENAME=${CODENAME:-detect-at-run}
 PLAN_DEVICE_NAME=${name:-unknown}
@@ -828,6 +979,8 @@ PLAN_MDM_MECHANISM=$(mdmp_mechanism "${MDM_PROVIDER}")
 PLAN_MDM_SOVEREIGNTY=$(mdmp_sovereignty "${MDM_PROVIDER}")
 PLAN_INTUNE_DEVICE_ID=${INTUNE_DEVICE_ID:-unset}
 PLAN_HEADWIND_URL=${HEADWIND_URL:-unset}
+PLAN_HEADWIND_CONFIG=${HEADWIND_CONFIG:-unset}
+PLAN_XR_CHAT_URL=${XRCHAT_URL:-unset}
 PLAN_HEADWIND_SIGNER_FP=${HEADWIND_SIGNER_SHA256:-unpinned}
 PLAN_ATTESTATION_URL=${ATTESTATION_URL:-unset}
 PLAN_AUDITOR_SIGNER_FP=${AUDITOR_SIGNER_SHA256:-unpinned}
@@ -839,17 +992,26 @@ EOF
 cmd_detect() {
     require_android_tools
     choose_device
-    local cn fpq="" nm
+    local cn fpq="" nm mfr=""
+    if is_quest; then
+        # A Quest never presents the Android fastboot interface to this wizard;
+        # a fastboot-state device in quest class is a misclassified handset.
+        [ "${SEL_STATE}" = "adb" ] || pw_die 2 "device ${SEL_SERIAL} is in fastboot — that is a handset bootloader, not a Quest (use --device-class phone)"
+        require_quest_device "${SEL_SERIAL}"
+    fi
     cn="$(probe_codename "${SEL_SERIAL}" "${SEL_STATE}")"
     nm="$(catalog_lookup "${cn}" 2>/dev/null || echo "unknown (not in ${DEVICES_TSV##*/})")"
     if [ "${SEL_STATE}" = "adb" ]; then
         fpq="$("${ADB}" -s "${SEL_SERIAL}" shell getprop ro.build.fingerprint 2>/dev/null | tr -d '\r\n' || true)"
+        mfr="$("${ADB}" -s "${SEL_SERIAL}" shell getprop ro.product.manufacturer 2>/dev/null | tr -d '\r\n' || true)"
     fi
     cat <<EOF
+DEVICE_CLASS=${DEVICE_CLASS}
 DEVICE_SERIAL=${SEL_SERIAL}
 DEVICE_STATE=${SEL_STATE}
 DEVICE_CODENAME=${cn:-unknown}
 DEVICE_NAME=${nm}
+DEVICE_MANUFACTURER=${mfr:-unavailable}
 DEVICE_FINGERPRINT=${fpq:-unavailable}
 EOF
     # Feed later steps in the wizard flow.
@@ -859,6 +1021,7 @@ EOF
 
 # ── verb: fetch ────────────────────────────────────────────────────
 cmd_fetch() {
+    require_class_supports fetch
     require_tool ssh-keygen "install net-misc/openssh"
     require_tool sha256sum "install sys-apps/coreutils"
     [ -f "${ALLOWED_SIGNERS}" ] || pw_die 2 "allowed_signers file missing: ${ALLOWED_SIGNERS}"
@@ -928,6 +1091,7 @@ cmd_fetch() {
 
 # ── verb: flash ────────────────────────────────────────────────────
 cmd_flash() {
+    require_class_supports flash
     require_android_tools
     require_tool ssh-keygen "install net-misc/openssh"
     require_tool sha256sum "install sys-apps/coreutils"
@@ -1102,6 +1266,7 @@ cmd_flash() {
 # (verdict:"operator-paired"), never a claimed cryptographic pass. Attestation
 # is advisory/logged in v1 (D9) — never a hard enrollment-blocking precondition.
 cmd_attest() {
+    require_class_supports attest
     require_android_tools
     require_jq
     [ -n "${ATTESTATION_URL}" ] || pw_die 1 "attest needs --attestation-url (or ATTEST_URL) — the self-hosted AttestationServer console URL"
@@ -1195,12 +1360,22 @@ cmd_mdm_enroll_dpc() {
     require_android_tools
     require_jq
     [ -n "${HEADWIND_URL}" ] || pw_die 1 "mdm-enroll needs --headwind-url (or HMDM_URL) — the DPC's non-interactive init.json config target"
+    # XR-chat provisioning rides mdm-enroll (Headwind app-push conventions).
+    # WebXR requires a secure context — a non-https entry URL can never start
+    # an immersive session in the headset browser, so refuse it up front.
+    if [ -n "${XRCHAT_URL}" ]; then
+        case "${XRCHAT_URL}" in
+            https://*) : ;;
+            *) pw_die 1 "--xr-chat-url must be https:// (WebXR immersive sessions require a secure context; got '${XRCHAT_URL}')" ;;
+        esac
+    fi
 
     choose_device
     local s="${SEL_SERIAL}"
     local state
     state="$("${ADB}" -s "${s}" get-state 2>/dev/null | tr -d '\r\n' || true)"
     [ "${state}" = "device" ] || pw_die 2 "mdm-enroll needs the device up in adb (state: ${state:-none}) — complete first-boot setup, enable USB debugging, and retry"
+    is_quest && require_quest_device "${s}"
 
     if [ -z "${CODENAME}" ]; then
         CODENAME="$(probe_codename "${s}" adb)"
@@ -1218,7 +1393,17 @@ cmd_mdm_enroll_dpc() {
     users_out="$("${ADB}" -s "${s}" shell pm list users 2>/dev/null | tr -d '\r')"
     user_count="$(awk '$0 ~ /UserInfo\{/ {c++} END{print c+0}' <<<"${users_out}")"
     if [ "${user_count}" -ne 1 ]; then
-        if [ "${FORCE}" -eq 1 ]; then
+        if is_quest; then
+            # QUEST DIVERGENCE (deliberate, documented in docs/MDM.md): the
+            # phone gate fails closed because a Pixel CAN be reflashed to
+            # retry. A Quest cannot — and Horizon OS's own setup adds a Meta
+            # account/user state this wizard cannot avoid, while AOSP exempts
+            # accounts whose authenticator declares
+            # DEVICE_OR_PROFILE_OWNER_ALLOWED from the dpm gate. So here the
+            # precondition is an un-suppressible ADVISORY and the
+            # `dpm set-device-owner` result itself is the arbiter.
+            pw_warn "headset reports ${user_count} users (Horizon OS shared-mode/secondary users) — device-owner mode may be foreclosed; letting dpm set-device-owner decide"
+        elif [ "${FORCE}" -eq 1 ]; then
             pw_warn "device already reports ${user_count} users/profiles (want exactly 1) — device-owner mode may already be foreclosed; continuing under --force, dpm set-device-owner may fail"
         else
             pw_die 2 "a secondary user/account already exists — device-owner mode is no longer obtainable; reflash to retry"
@@ -1235,7 +1420,13 @@ cmd_mdm_enroll_dpc() {
     accounts_out="$("${ADB}" -s "${s}" shell dumpsys account 2>/dev/null | tr -d '\r')"
     account_count="$(grep -c 'Account {' <<<"${accounts_out}" || true)"
     if [ "${account_count}" -gt 0 ]; then
-        if [ "${FORCE}" -eq 1 ]; then
+        if is_quest; then
+            # Same quest divergence as the user gate above: Developer Mode
+            # itself REQUIRES a signed-in Meta account, so "zero accounts" is
+            # unreachable on an adb-visible Quest. dpm decides; a refusal is
+            # reported below with the factory-reset guidance.
+            pw_warn "headset has ${account_count} account(s) (the Meta account Developer Mode requires) — letting dpm set-device-owner decide (AOSP exempts DEVICE_OR_PROFILE_OWNER_ALLOWED authenticators)"
+        elif [ "${FORCE}" -eq 1 ]; then
             pw_warn "device already has ${account_count} account(s) added — device-owner mode may already be foreclosed; continuing under --force, dpm set-device-owner may fail"
         else
             pw_die 2 "device already has ${account_count} account(s) added — device-owner mode is no longer obtainable; reflash to retry"
@@ -1253,11 +1444,20 @@ cmd_mdm_enroll_dpc() {
     # — so this advisory prints un-suppressibly before every attempt, and a
     # resulting failure on stock Android is a normal exit-1 (not a wizard bug).
     probe_os "${s}"
-    case "${OS_ID}" in
-        grapheneos) pw_info "device OS: GrapheneOS — device-owner via adb is the reliable path here" ;;
-        android)    pw_warn "device OS: stock Android${OS_VERSION:+ ${OS_VERSION}} — device-owner via adb is BEST-EFFORT on certified stock builds (Play Protect's DPC allow-list may block provisioning; a resulting failure is not a wizard bug)" ;;
-        *)          pw_warn "device OS could not be determined — proceeding, but device-owner via adb is unverified on this build" ;;
-    esac
+    if is_quest; then
+        # Horizon OS is Android-derived (probe_os classifies it os=android via
+        # ro.build.version.release) but the stock-Android Play-Protect advisory
+        # does not apply: there is no Play Protect DPC allow-list on Horizon OS,
+        # and adb device-owner enrollment is the established path third-party
+        # Quest MDMs use.
+        pw_info "device OS: Horizon OS (Android-derived${OS_VERSION:+, release ${OS_VERSION}}) — adb device-owner enrollment is the established Quest MDM path (no Play Protect DPC allow-list applies)"
+    else
+        case "${OS_ID}" in
+            grapheneos) pw_info "device OS: GrapheneOS — device-owner via adb is the reliable path here" ;;
+            android)    pw_warn "device OS: stock Android${OS_VERSION:+ ${OS_VERSION}} — device-owner via adb is BEST-EFFORT on certified stock builds (Play Protect's DPC allow-list may block provisioning; a resulting failure is not a wizard bug)" ;;
+            *)          pw_warn "device OS could not be determined — proceeding, but device-owner via adb is unverified on this build" ;;
+        esac
+    fi
 
     # Install the Headwind DPC APK (signer-pinned via the same apksigner-
     # verify logic 'enroll' uses for the Tailscale APK).
@@ -1281,7 +1481,11 @@ cmd_mdm_enroll_dpc() {
     dpm_out="$("${ADB}" -s "${s}" shell dpm set-device-owner "${pkg}/.AdminReceiver" 2>&1 | tr -d '\r' || true)"
     if ! grep -q '^Success:' <<<"${dpm_out}"; then
         local hint=""
-        [ "${OS_ID}" = "android" ] && hint=" (stock-Android Play Protect's DPC allow-list is the likely cause — see the advisory above)"
+        if is_quest; then
+            hint=" (a set-up Quest can refuse device-owner once account/user state forecloses it — factory-reset the headset and re-run mdm-enroll in the post-reset window, right after Developer Mode is back on and BEFORE anything else is added)"
+        elif [ "${OS_ID}" = "android" ]; then
+            hint=" (stock-Android Play Protect's DPC allow-list is the likely cause — see the advisory above)"
+        fi
         pw_die 1 "dpm set-device-owner failed: ${dpm_out}${hint}"
     fi
     pw_info "device owner set: ${dpm_out}"
@@ -1298,11 +1502,45 @@ cmd_mdm_enroll_dpc() {
     local ext_dir="/sdcard/Android/data/${pkg}/files" tmp_init
     "${ADB}" -s "${s}" shell mkdir -p "${ext_dir}" >/dev/null 2>&1 || true
     tmp_init="$(mktemp)"
-    jq -n --arg base_url "${HEADWIND_URL}" '{"com.hmdm.BASE_URL":$base_url}' > "${tmp_init}"
+    # com.hmdm.CONFIG (upstream-confirmed init.json key, same source as
+    # BASE_URL — updateSettingsFromFile()) names the Headwind CONFIGURATION
+    # the device self-selects into. This is the app-push lever: everything
+    # that configuration lists (including the XR-chat web-page pseudo-app
+    # below) is pushed to the device by the Headwind server, not by adb.
+    jq -n --arg base_url "${HEADWIND_URL}" --arg config "${HEADWIND_CONFIG}" \
+        '{"com.hmdm.BASE_URL":$base_url}
+         + (if $config != "" then {"com.hmdm.CONFIG":$config} else {} end)' \
+        > "${tmp_init}"
     "${ADB}" -s "${s}" push "${tmp_init}" "${ext_dir}/init.json" >/dev/null 2>&1 \
         || { rm -f "${tmp_init}"; pw_die 1 "adb push of init.json to ${ext_dir} failed"; }
     rm -f "${tmp_init}"
-    pw_info "init.json pushed: ${ext_dir}/init.json (com.hmdm.BASE_URL=${HEADWIND_URL})"
+    pw_info "init.json pushed: ${ext_dir}/init.json (com.hmdm.BASE_URL=${HEADWIND_URL}${HEADWIND_CONFIG:+, com.hmdm.CONFIG=${HEADWIND_CONFIG}})"
+
+    # ── XR-chat entry-URL provisioning (Headwind app-push conventions) ──
+    # Durable provisioning is SERVER-side: a Headwind "web page" application
+    # entry in the device's configuration puts a launcher shortcut on every
+    # device that gets that configuration — the wizard cannot create console
+    # objects, so it prints the console runbook and records the URL. On a
+    # Quest it additionally fires a VIEW intent so the operator can confirm
+    # the room actually opens in the headset browser (a real, observable
+    # provisioning smoke — non-fatal: the shortcut push is Headwind's job).
+    if [ -n "${XRCHAT_URL}" ]; then
+        echo
+        echo "== XR-chat URL provisioning (Headwind console, app-push) =="
+        echo "  1. Headwind console (${HEADWIND_URL}) -> Applications -> Add,"
+        echo "     type 'Web page': URL ${XRCHAT_URL}, name 'XR chat'."
+        echo "  2. Add that application to the configuration this device gets"
+        echo "     (${HEADWIND_CONFIG:-no --headwind-config given}) — Headwind pushes the"
+        echo "     launcher shortcut to every device on that configuration."
+        echo
+        if is_quest; then
+            if "${ADB}" -s "${s}" shell am start -a android.intent.action.VIEW -d "${XRCHAT_URL}" >/dev/null 2>&1; then
+                pw_info "XR-chat URL launch-verified on the headset (VIEW intent -> headset browser): put the headset on and confirm the room loads"
+            else
+                pw_warn "could not fire the VIEW intent for ${XRCHAT_URL} — verify the URL manually in the headset browser (the Headwind shortcut push above is unaffected)"
+            fi
+        fi
+    fi
 
     local rec_dir="${OUT_DIR}/device/${DEVICE_ID}" rec
     mkdir -p "${rec_dir}"
@@ -1310,15 +1548,19 @@ cmd_mdm_enroll_dpc() {
     jq -n \
         --arg device_id "${DEVICE_ID}" \
         --arg serial "${s}" \
+        --arg device_class "${DEVICE_CLASS}" \
         --arg mdm_provider "${MDM_PROVIDER}" \
         --arg dpc_package "${pkg}" \
         --arg headwind_url "${HEADWIND_URL}" \
+        --arg headwind_config "${HEADWIND_CONFIG}" \
+        --arg xr_chat_url "${XRCHAT_URL}" \
         --arg os "${OS_ID}" \
         --arg enrolled_at "$(now_iso)" \
-        '{device_id:$device_id, serial:$serial, mdm_provider:$mdm_provider,
-          dpc_package:$dpc_package, headwind_url:$headwind_url, os:$os,
-          intune_device_id:"", set_via:"adb-device-owner",
-          enrolled_at:$enrolled_at}' \
+        '{device_id:$device_id, serial:$serial, device_class:$device_class,
+          mdm_provider:$mdm_provider, dpc_package:$dpc_package,
+          headwind_url:$headwind_url, headwind_config:$headwind_config,
+          xr_chat_url:$xr_chat_url, os:$os, intune_device_id:"",
+          set_via:"adb-device-owner", enrolled_at:$enrolled_at}' \
         > "${rec}"
     pw_info "mdm record written: ${rec}"
     echo
@@ -1503,6 +1745,10 @@ cmd_enroll() {
     local state
     state="$("${ADB}" -s "${s}" get-state 2>/dev/null | tr -d '\r\n' || true)"
     if [ "${state}" != "device" ]; then
+        if is_quest; then
+            quest_devmode_guidance
+            pw_die 2 "enroll needs the headset up in adb (state: ${state:-none}) — follow the Developer-Mode runbook above and retry"
+        fi
         echo
         echo "  The device is not reachable over adb (state: ${state:-none}). On the handset:"
         echo "    1. Finish first-boot setup in the OWNER profile."
@@ -1512,6 +1758,7 @@ cmd_enroll() {
         echo
         pw_die 2 "enroll needs the device up in adb — follow the handset steps above and retry"
     fi
+    is_quest && require_quest_device "${s}"
 
     if [ -z "${CODENAME}" ]; then
         CODENAME="$(probe_codename "${s}" adb)"
@@ -1528,7 +1775,11 @@ cmd_enroll() {
     probe_os "${s}"
     case "${OS_ID}" in
         grapheneos) : ;;
-        android)    pw_info "device OS: stock Android${OS_VERSION:+ ${OS_VERSION}} — supported for enroll ('flash' remains GrapheneOS/Pixel-only)" ;;
+        android)    if is_quest; then
+                        pw_info "device OS: Horizon OS (Android-derived${OS_VERSION:+, release ${OS_VERSION}}) — supported for enroll; the Tailscale VpnService interface is tun0 here exactly as on a handset"
+                    else
+                        pw_info "device OS: stock Android${OS_VERSION:+ ${OS_VERSION}} — supported for enroll ('flash' remains GrapheneOS/Pixel-only)"
+                    fi ;;
         unknown)
             [ "${FORCE}" -eq 1 ] || pw_die 2 "could not determine the device OS (adb getprop returned nothing usable) — pass --force to enroll anyway"
             pw_warn "device OS could not be determined — continuing under --force (recorded as os=unknown)"
@@ -1547,9 +1798,17 @@ cmd_enroll() {
             pw_die 1 "installed the APK but ${pkg} is not listed — wrong APK?"
         fi
         echo
-        echo "  Tailscale is not installed. On the handset, install it from the"
-        echo "  Play Store ('Tailscale') or drop a vetted APK and re-run with"
-        echo "  --tailscale-apk. Waiting up to ${JOIN_TIMEOUT}s for it to appear…"
+        if is_quest; then
+            echo "  Tailscale is not installed. Horizon OS has NO Play Store and the"
+            echo "  Meta Horizon Store does not carry Tailscale — SIDELOAD a vetted"
+            echo "  APK by re-running with --tailscale-apk (the app then appears in"
+            echo "  the headset under Library -> Unknown Sources)."
+            echo "  Waiting up to ${JOIN_TIMEOUT}s for it to appear…"
+        else
+            echo "  Tailscale is not installed. On the handset, install it from the"
+            echo "  Play Store ('Tailscale') or drop a vetted APK and re-run with"
+            echo "  --tailscale-apk. Waiting up to ${JOIN_TIMEOUT}s for it to appear…"
+        fi
         echo
         local waited=0
         while ! "${ADB}" -s "${s}" shell pm list packages 2>/dev/null | tr -d '\r' | grep -qx "package:${pkg}"; do
@@ -1570,9 +1829,17 @@ cmd_enroll() {
     # (adb shell command lines are visible in device-side logcat/ps) and is
     # only displayed with an explicit --show-authkey.
     echo
-    echo "== tailnet join runbook (operator performs these on the handset) =="
-    echo "  1. Open the Tailscale app -> Settings -> Accounts -> use a CUSTOM"
-    echo "     coordination server:  ${LOGIN_SERVER}"
+    if is_quest; then
+        echo "== tailnet join runbook (operator performs these INSIDE the headset) =="
+        echo "  1. Put the headset ON. Open Tailscale from Library -> Unknown"
+        echo "     Sources -> Settings -> Accounts -> use a CUSTOM coordination"
+        echo "     server:  ${LOGIN_SERVER}"
+        echo "     (accept the Android VPN-permission dialog when it appears)"
+    else
+        echo "== tailnet join runbook (operator performs these on the handset) =="
+        echo "  1. Open the Tailscale app -> Settings -> Accounts -> use a CUSTOM"
+        echo "     coordination server:  ${LOGIN_SERVER}"
+    fi
     echo "  2. Authenticate with the one-time pre-auth key (SEC-08: single-use,"
     echo "     24h expiry — mint a fresh one if it is stale), or via Casdoor"
     echo "     OIDC with the hugmesh/headscale group."
@@ -1681,6 +1948,7 @@ set_profile_credential() {
 
 # ── verb: profile ──────────────────────────────────────────────────
 cmd_profile() {
+    require_class_supports profile
     require_android_tools
     require_jq
     choose_device
@@ -1733,6 +2001,7 @@ cmd_profile() {
 
 # ── verb: rotate-profile-pass ──────────────────────────────────────
 cmd_rotate_profile_pass() {
+    require_class_supports rotate-profile-pass
     require_android_tools
     require_jq
     choose_device
@@ -1763,6 +2032,7 @@ cmd_rotate_profile_pass() {
 
 # ── verb: remove-profile ───────────────────────────────────────────
 cmd_remove_profile() {
+    require_class_supports remove-profile
     require_android_tools
     choose_device
     local s="${SEL_SERIAL}"
@@ -1899,6 +2169,7 @@ cmd_ingest() {
     local ingest="${rec_dir}/ingest.json"
     jq -n \
         --arg device_id "${DEVICE_ID}" \
+        --arg device_class "${DEVICE_CLASS}" \
         --arg serial "${serial}" \
         --arg codename "${codename}" \
         --arg marketing_name "${DEVICE_NAME}" \
@@ -1924,7 +2195,7 @@ cmd_ingest() {
         --arg mdm_enrolled_at "${mdm_enrolled_at}" \
         --arg enrolled_at "${enrolled_at}" \
         --arg generated_at "$(now_iso)" \
-        '{schema:"phone-ingest/v2", device_id:$device_id, device_class:"phone",
+        '{schema:"phone-ingest/v2", device_id:$device_id, device_class:$device_class,
           serial:$serial, codename:$codename, marketing_name:$marketing_name,
           os:$os, os_version:$os_version, superdomain:$superdomain,
           login_server:$login_server, tailscale_ip:$tailscale_ip,
@@ -1944,6 +2215,12 @@ cmd_ingest() {
     pw_info "ingest record written: ${ingest}"
 
     if [ -n "${INGEST_URL}" ]; then
+        # HONEST CAPABILITY NOTE (quest): the admin-bff phone-ingest endpoint
+        # validates device_class and today accepts only "phone" — a quest
+        # record POSTs cleanly once the BFF learns the class, but until that
+        # cross-repo change lands the server 400s it (the record file above
+        # is still written; emit-only is the supported quest path in v1).
+        is_quest && pw_warn "the phone-ingest registry endpoint currently accepts device_class:\"phone\" only — this quest POST may be rejected (400) until admin-bff-api learns device_class:\"quest\"; the record is preserved either way"
         # Mirror the device-enrollment-report transport: mTLS client identity,
         # --fail, JSON body. Fail-closed on missing identity material.
         require_tool curl "install net-misc/curl"
@@ -2044,8 +2321,53 @@ wiz_confirm() {
     esac
 }
 
+# Quest guided flow — the 4-step subset of the phone wizard that exists for
+# the class (see require_class_supports for why fetch/flash/attest/profile
+# are absent): detect -> mdm-enroll (device-owner + XR-chat provisioning,
+# BEFORE any further account/user state accrues) -> enroll -> ingest.
+cmd_wizard_quest() {
+    resolve_keys
+    [ -n "${LOGIN_SERVER}" ] || pw_die 1 "no login server — pass --login-server URL or --keys-dir with a login-server file"
+    [ -n "${HEADWIND_URL}" ] || pw_die 1 "no --headwind-url (or HMDM_URL) — the Headwind DPC's non-interactive config target, needed by Step 2 (mdm-enroll)"
+
+    echo "== MDM Quest wizard =="
+    echo "Guided flow: detect -> mdm-enroll -> enroll -> ingest."
+    echo "fetch/flash (GrapheneOS is Pixel-only), attest (no Auditor tier on"
+    echo "Horizon OS) and the enterprise profile (Meta-account-bound user model)"
+    echo "do not exist for a Quest — see docs/MDM.md. mdm-enroll runs FIRST so"
+    echo "device-owner mode is claimed before any further account state accrues."
+    echo
+
+    if wiz_confirm "Step 1/4 — detect the USB-connected Quest (Developer Mode must be ON)?"; then
+        cmd_detect
+    fi
+    resolve_device_id
+
+    if [ -n "${DEVICE_ID}" ] && [ -f "${OUT_DIR}/device/${DEVICE_ID}/mdm.json" ]; then
+        if wiz_confirm "Step 2/4 — MDM enrollment record already exists; re-enroll (fails if device-owner is already set)?"; then cmd_mdm_enroll; fi
+    else
+        if wiz_confirm "Step 2/4 — enroll the headset as a Headwind MDM device-owner${XRCHAT_URL:+ (+ provision the XR-chat URL)}?"; then cmd_mdm_enroll; fi
+    fi
+
+    if [ -n "${DEVICE_ID}" ] && [ -f "${OUT_DIR}/device/${DEVICE_ID}/enrollment.json" ]; then
+        if wiz_confirm "Step 3/4 — enrollment record already exists; re-enroll?"; then cmd_enroll; fi
+    else
+        if wiz_confirm "Step 3/4 — enroll the headset in the mesh (tailnet join)?"; then cmd_enroll; fi
+    fi
+    resolve_device_id
+
+    if wiz_confirm "Step 4/4 — emit the device-registry ingest record?"; then cmd_ingest; fi
+
+    echo
+    pw_info "quest wizard complete — records under ${OUT_DIR}/device/${DEVICE_ID:-<device-id>}/"
+}
+
 cmd_wizard() {
     [ -t 0 ] || pw_die 2 "the wizard is interactive and needs a TTY — use the individual verbs (detect/fetch/flash/attest/mdm-enroll/enroll/profile/ingest) for scripting"
+    if is_quest; then
+        cmd_wizard_quest
+        return 0
+    fi
 
     # Front-load every downstream step's hard, knowable-in-advance
     # preconditions BEFORE Step 3's destructive flash runs — otherwise an
@@ -2146,6 +2468,7 @@ main() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --serial)              _need_arg "$1" $#; SERIAL="$2"; shift 2 ;;
+            --device-class)        _need_arg "$1" $#; DEVICE_CLASS="$2"; shift 2 ;;
             --codename)            _need_arg "$1" $#; CODENAME="$2"; shift 2 ;;
             --channel)             _need_arg "$1" $#; CHANNEL="$2"; shift 2 ;;
             --graphene-version)    _need_arg "$1" $#; GRAPHENE_VERSION="$2"; shift 2 ;;
@@ -2166,6 +2489,8 @@ main() {
             --headwind-apk)          _need_arg "$1" $#; HEADWIND_APK="$2"; shift 2 ;;
             --headwind-signer-sha256) _need_arg "$1" $#; HEADWIND_SIGNER_SHA256="$2"; shift 2 ;;
             --headwind-url)          _need_arg "$1" $#; HEADWIND_URL="$2"; shift 2 ;;
+            --headwind-config)       _need_arg "$1" $#; HEADWIND_CONFIG="$2"; shift 2 ;;
+            --xr-chat-url)           _need_arg "$1" $#; XRCHAT_URL="$2"; shift 2 ;;
             --auditor-apk)           _need_arg "$1" $#; AUDITOR_APK="$2"; shift 2 ;;
             --auditor-signer-sha256) _need_arg "$1" $#; AUDITOR_SIGNER_SHA256="$2"; shift 2 ;;
             --attestation-url)       _need_arg "$1" $#; ATTESTATION_URL="$2"; shift 2 ;;
@@ -2195,6 +2520,10 @@ main() {
     done
     apply_colors
     validate_profile_name
+    validate_device_class
+    # The class picks the codename catalog (see the header comment at the
+    # PHONE/QUEST_DEVICES_TSV definitions — `panther` exists in BOTH).
+    is_quest && DEVICES_TSV="${QUEST_DEVICES_TSV}"
 
     # --print-plan anywhere plans the given verb instead of running it.
     if [ "${PRINT_PLAN}" -eq 1 ] && [ "${verb}" != "plan" ]; then

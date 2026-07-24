@@ -20,7 +20,7 @@ from ..core import worklist as worklist_mod
 from .pages import (
     BrandingPage, BuildPage, DeployPage, DomainsPage, HardwarePage, HomePage, IdpPage,
     KeyZipPage, LocalMeshPage, ModePage, NetworkPage, PhonePage, ProgressPage,
-    RolePage, SystemPage, UsersPage, WelcomePage, WorklistPage,
+    QuestPage, RolePage, SystemPage, UsersPage, WelcomePage, WorklistPage,
 )
 # re-exported for golive.py (and any other page set) — the helpers moved to
 # gui/pages/_widgets.py with the page split, but this module stays their
@@ -29,7 +29,8 @@ from .pages._widgets import _file_picker, _row  # noqa: F401
 
 __all__ = [
     "StudioWizard", "medium_size", "centred_top_left",
-    "WelcomePage", "ModePage", "LocalMeshPage", "PhonePage", "DeployPage", "IdpPage",
+    "WelcomePage", "ModePage", "LocalMeshPage", "PhonePage", "QuestPage",
+    "DeployPage", "IdpPage",
     "RolePage", "WorklistPage", "HardwarePage",
     "BrandingPage", "NetworkPage", "KeyZipPage", "DomainsPage", "UsersPage",
     "SystemPage", "HomePage", "BuildPage", "ProgressPage",
@@ -112,6 +113,10 @@ class StudioWizard(QtWidgets.QWizard):
         # transient: ModePage's MDM PHONE choice — read by PhonePage.applies_to(),
         # likewise NEVER persisted into cfg (the phone is not an image mode).
         self.phone_selected = False
+        # transient: ModePage's MDM QUEST HEADSET choice — read by
+        # QuestPage.applies_to(), likewise NEVER persisted into cfg (a headset is
+        # not an image mode).
+        self.quest_selected = False
         # transient: ModePage's CLOUD DEPLOY choice — read by DeployPage.applies_to(),
         # likewise NEVER persisted into cfg (a deploy is not an image mode).
         self.deploy_selected = False
@@ -143,7 +148,8 @@ class StudioWizard(QtWidgets.QWizard):
         # until then it is None and the flow terminates on BuildPage — the None-filter
         # keeps the slug->id map aligned and the drift assert fail-loud.
         page_ctors = [
-            WelcomePage, ModePage, LocalMeshPage, PhonePage, DeployPage, IdpPage,
+            WelcomePage, ModePage, LocalMeshPage, PhonePage, QuestPage, DeployPage,
+            IdpPage,
             RolePage, WorklistPage, HardwarePage, BrandingPage, NetworkPage, KeyZipPage,
             DomainsPage, UsersPage, SystemPage, HomePage, BuildPage, ProgressPage,
         ]
