@@ -109,6 +109,17 @@ class MeshNode:
             return False, str(e)
 
     def stop(self) -> tuple[bool, str]:
+        # NOT-STARTED IS NOT A FAILURE. The overlay only ever attaches on the prod
+        # path (a real tailnet auth key); the DEFAULT LAN-only bring-up never stages
+        # it, so its workdir does not exist and `subprocess.run(cwd=...)` raised
+        #   [Errno 2] No such file or directory: '~/.hugmesh/mesh-node'
+        # — which every Stop / Stop-and-clean then reported as
+        # "[mesh-overlay down] FAILED", making a perfectly good teardown look broken
+        # and dragging the caller's overall result to False. Same "is it staged?"
+        # signal status() already uses.
+        staged = os.path.join(self.workdir, "docker-compose.mesh.yml")
+        if not os.path.isdir(self.workdir) or not os.path.exists(staged):
+            return True, "mesh overlay not started — nothing to stop"
         try:
             r = subprocess.run(self._compose("down"), cwd=self.workdir, env=self._env(),
                                capture_output=True, text=True, timeout=300)

@@ -47,7 +47,7 @@ from . import theme
 from .config import IDP_CHOICES, IDP_LABELS, _IDP_CLIENT_ID_RE, _IDP_URL_RE, \
     idp_effective_jwks
 from .local_mesh import ENV_AUTHKEY, LocalMeshConfig, LocalMeshNode
-from .local_stack_node import LocalStackNode
+from .local_stack_node import M2_BOOTSTRAP_HINT, LocalStackNode
 from .mesh_node import MeshNode
 
 # The two credential generators (repo-relative). Reused VERBATIM via subprocess
@@ -700,6 +700,23 @@ class LocalMeshBootstrap:
         # actionable plan — e.g. "run `make stack-m2-bootstrap` first" — instead
         # of a wall of compose noise 30 minutes into a doomed cold build.
         problems = self.preflight()
+        # SELF-HEAL THE ONE PREREQUISITE WE CAN. After "Stop & clean" (or on a fresh
+        # box) the ONLY blocker is usually the local private-maven registry, and the
+        # fix is a button the operator has to know to press first — a cliff that made
+        # "clean, then start a new mesh" look broken. If that is the sole problem, run
+        # it here and re-check; anything else still refuses, because the rest of
+        # preflight (docker daemon, buildx, disk headroom) is not ours to fix.
+        if problems and all(M2_BOOTSTRAP_HINT in p for p in problems):
+            _note("[m2-bootstrap] the private-maven registry is not up — building it "
+                  "now (the one prerequisite of a cold build); this is exactly what "
+                  "the 'Build maven prereqs (m2)' button does.")
+            ok_m2, m2_log = self.m2_bootstrap(on_line=on_line, cancel=cancel)
+            for _ln in m2_log:
+                _note(_ln)
+            if not ok_m2:
+                _note("[m2-bootstrap] FAILED — nothing was generated or started.")
+                return False, log
+            problems = self.preflight()
         if problems:
             for _ln in ["preflight failed — nothing was generated or started. "
                         "Fix, then retry:",
@@ -805,6 +822,16 @@ class LocalMeshBootstrap:
         log.append(f"[mesh-overlay down] {'ok' if ok_mesh else 'FAILED'}: {_tail(msg)}")
         ok_stack, msg = self._stack_node().clean(on_line=on_line, cancel=cancel)
         log.append(f"[stack-clean] {'ok' if ok_stack else 'FAILED'}: {_tail(msg)}")
+        if ok_stack:
+            # Say what to do next, in the log the operator is already reading. After a
+            # clean there are no service images and no maven registry, so "start" is a
+            # COLD build — and it now bootstraps the registry itself (see up()), which
+            # is the part that previously needed insider knowledge.
+            log.append("[stack-clean] done — every container, volume and built image "
+                       "of this stack is gone (other projects' images untouched).")
+            log.append("[stack-clean] to start a NEW mesh: press 'Generate & start'. "
+                       "It rebuilds the maven prerequisites automatically, then does a "
+                       "full COLD build (hours) — output streams here.")
         return (ok_stack and ok_mesh), log
 
     def status(self) -> list[str]:

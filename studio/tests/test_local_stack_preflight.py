@@ -343,14 +343,21 @@ def test_start_runs_stack_up_when_preflight_green(monkeypatch):
 
 # ── bootstrap wiring: up() fails fast with the SHORT plan, before any mint ──────
 
+_M2_PROBLEM = (f"cold build required but the local maven registry is not up "
+               f"(.m2-registry.env missing) — {M2_BOOTSTRAP_HINT}")
+
+
 def test_bootstrap_up_stops_on_preflight_with_short_plan(tmp_path, monkeypatch):
     monkeypatch.setattr(LocalMeshBootstrap, "guard_host_local",
                         lambda self: (True, ""), raising=True)
-    monkeypatch.setattr(
-        LocalMeshBootstrap, "preflight",
-        lambda self: [f"cold build required but the local maven registry is not "
-                      f"up (.m2-registry.env missing) — {M2_BOOTSTRAP_HINT}"],
-        raising=True)
+    monkeypatch.setattr(LocalMeshBootstrap, "preflight",
+                        lambda self: [_M2_PROBLEM], raising=True)
+    # up() first TRIES to build the registry itself (the self-heal below); stub it
+    # failing so this test still exercises the refusal path — and so no test ever
+    # shells out to a real `make stack-m2-bootstrap`.
+    monkeypatch.setattr(LocalMeshBootstrap, "m2_bootstrap",
+                        lambda self, on_line=None, cancel=None: (False, ["[m2] nope"]),
+                        raising=True)
 
     def _boom(self):  # pragma: no cover - the assertion IS the test
         raise AssertionError("creds must NOT be minted when preflight fails")
@@ -359,12 +366,65 @@ def test_bootstrap_up_stops_on_preflight_with_short_plan(tmp_path, monkeypatch):
     b = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(out_dir=str(tmp_path)))
     ok, log = b.up()
     assert ok is False
-    # SHORT: a header + one actionable line — not a wall of compose noise
-    assert len(log) == 2
-    assert "preflight failed" in log[0]
-    assert M2_BOOTSTRAP_HINT in log[1]
+    # SHORT: the attempt + its failure, no wall of compose noise, and never silent
+    assert any("[m2-bootstrap] FAILED" in ln for ln in log)
+    assert len(log) <= 4
     # nothing was generated
     assert not os.path.exists(b.secrets_json)
+
+
+def test_bootstrap_up_builds_the_maven_prereq_itself_then_continues(tmp_path, monkeypatch):
+    """The "clean, then start a new mesh" cliff: after Stop & clean the only blocker
+    is the private-maven registry, and pressing Start used to just refuse with a hint
+    naming a DIFFERENT button. up() now runs that prerequisite itself and carries on."""
+    monkeypatch.setattr(LocalMeshBootstrap, "guard_host_local",
+                        lambda self: (True, ""), raising=True)
+    calls = {"preflight": 0, "m2": 0}
+
+    def _preflight(self):
+        calls["preflight"] += 1
+        return [_M2_PROBLEM] if calls["preflight"] == 1 else []   # cleared by the build
+
+    def _m2(self, on_line=None, cancel=None):
+        calls["m2"] += 1
+        return True, ["[m2-bootstrap] ok"]
+
+    monkeypatch.setattr(LocalMeshBootstrap, "preflight", _preflight, raising=True)
+    monkeypatch.setattr(LocalMeshBootstrap, "m2_bootstrap", _m2, raising=True)
+    monkeypatch.setattr(LocalMeshBootstrap, "generate_creds",
+                        lambda self: (False, "stop here — past the gate is enough"),
+                        raising=True)
+
+    b = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(out_dir=str(tmp_path)))
+    ok, log = b.up()
+    assert calls["m2"] == 1, "the maven prerequisite was not built"
+    assert calls["preflight"] == 2, "preflight was not re-checked after the build"
+    assert not any("preflight failed" in ln for ln in log), \
+        "it refused even though the build cleared the only problem"
+    assert any("[creds]" in ln for ln in log), "never reached the next step"
+
+
+def test_bootstrap_up_does_not_self_heal_problems_it_cannot_fix(tmp_path, monkeypatch):
+    """Only the maven prerequisite is ours to fix. A dead docker daemon (or any other
+    problem alongside it) must still refuse — building maven artifacts would not help
+    and would waste minutes before the same failure."""
+    monkeypatch.setattr(LocalMeshBootstrap, "guard_host_local",
+                        lambda self: (True, ""), raising=True)
+    monkeypatch.setattr(LocalMeshBootstrap, "preflight",
+                        lambda self: [_M2_PROBLEM, "docker daemon is not reachable"],
+                        raising=True)
+
+    def _boom(self, on_line=None, cancel=None):  # pragma: no cover
+        raise AssertionError("must not build maven prereqs for an unrelated problem")
+    monkeypatch.setattr(LocalMeshBootstrap, "m2_bootstrap", _boom, raising=True)
+    monkeypatch.setattr(LocalMeshBootstrap, "generate_creds",
+                        lambda self: (_ for _ in ()).throw(AssertionError("no mint")),
+                        raising=True)
+
+    b = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(out_dir=str(tmp_path)))
+    ok, log = b.up()
+    assert ok is False
+    assert any("preflight failed" in ln for ln in log)
 
 
 def test_bootstrap_preflight_delegates_to_stack_node(tmp_path, monkeypatch):

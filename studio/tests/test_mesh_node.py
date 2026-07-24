@@ -116,3 +116,22 @@ def test_config_without_profile_selects_nothing(tmp_path):
                        cwd=node.workdir, env=env, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     assert "tailscale" not in r.stdout.split()
+
+
+def test_stop_is_a_no_op_when_the_overlay_was_never_started(tmp_path):
+    """The DEFAULT (LAN-only) bring-up never stages the overlay, so its workdir does
+    not exist. stop() used to let subprocess raise
+      [Errno 2] No such file or directory: '~/.hugmesh/mesh-node'
+    which every Stop / Stop-and-clean reported as "[mesh-overlay down] FAILED",
+    making a good teardown look broken and dragging the caller's result to False."""
+    node = MeshNode(GENERATOR_DIR, workdir=str(tmp_path / "never-created"))
+    ok, msg = node.stop()
+    assert ok is True
+    assert "not started" in msg
+
+
+def test_stop_is_a_no_op_when_the_workdir_exists_but_nothing_was_staged(tmp_path):
+    wd = tmp_path / "empty"
+    wd.mkdir()
+    ok, msg = MeshNode(GENERATOR_DIR, workdir=str(wd)).stop()
+    assert ok is True and "not started" in msg
