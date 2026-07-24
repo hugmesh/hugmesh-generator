@@ -338,6 +338,12 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   ('hugmesh-fe-gateway',  '/api/federation/vanity',       'PUBLIC', true),  -- public (vanity profile/collection resolve)
   ('hugmesh-fe-gateway',  '/api/federation/vanity/**',    'PUBLIC', true),  -- public (vanity profile/collection resolve)
   ('hugmesh-fe-gateway',  '/api/federation/capabilities', 'PUBLIC', true),  -- public (install-state capabilities projection)
+  -- The LOGGED-IN home page's second read: the host shell (federationApiBase:"")
+  -- fetches /api/federation/manifest on the front-door origin to hydrate the
+  -- service cards' module wiring. ROLE_USER (not PUBLIC): federation-api's own
+  -- SecurityConfig requires an authenticated caller and ManifestService
+  -- role/visibility-filters the payload — the row mirrors that floor exactly.
+  ('hugmesh-fe-gateway',  '/api/federation/manifest',     'ROLE_USER', true),  -- logged-in home page module manifest
   ('hugmesh-fe-gateway',  '/social/matrix/**',     'ROLE_USER',      true),
   ('hugmesh-fe-gateway',  '/social/mastodon/**',   'ROLE_USER',      true),
   -- phpBB forum micro-frontend UI (hugmesh-forum-ui at /social/forum/**),

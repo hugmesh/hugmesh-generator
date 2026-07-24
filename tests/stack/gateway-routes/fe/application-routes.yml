@@ -176,6 +176,22 @@ spring:
               uri: http://hugmesh-admin-bff-api:8080
               predicates:
                 - Path=/bff/**
+            # The HOME PAGE's data reads. The host shell is built with
+            # federationApiBase:"" — it fetches /api/federation/capabilities (the
+            # service-card install-state projection) and /api/federation/manifest on
+            # the FRONT-DOOR origin. Without these routes the /** catch-all served the
+            # shell's own index.html where the SPA expected JSON, so the front page
+            # rendered ZERO service cards while every service was up. Forwarded
+            # DIRECT to federation-api (capabilities is permitAll there; manifest is
+            # authenticated + filtered by ManifestService). NOTE: the fe-gateway's own
+            # security floor still requires a session — anonymous front pages show no
+            # cards until the gateway repo's PUBLIC_PATHS learns capabilities (the
+            # same deferral specs/cluster/apps/20-gateway-fe.yaml documents for
+            # vanity resolves).
+            - id: federation-home-reads
+              uri: http://hugmesh-federation-api:8080
+              predicates:
+                - Path=/api/federation/capabilities,/api/federation/manifest
             # DB-hosted module-federation FRAGMENT bundles (static fleet).
             - id: remote-fragment
               uri: http://hugmesh-remote-fragment:8081

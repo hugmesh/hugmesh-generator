@@ -223,12 +223,56 @@ ensure_app() { # <base-url> <org>
   fi
 }
 
+# The MACHINE client the remote-fragment sync sidecar mints its service JWT with
+# (compose.local.yaml hands it CASDOOR_CLIENT_ID/SECRET, default
+# dev-fragment-sync-client/dev-fragment-sync-secret). In-cluster this app is
+# provisioned outside the stack (ESO/Vault); locally NOBODY created it, so every
+# sync tick died with `invalid_client` -> 401, the shared web root stayed empty,
+# and the front page had no service cards. client_credentials ONLY (no browser
+# redirect, no password grant) — it is a machine account, not a login surface.
+FRAGMENT_SYNC_CLIENT_ID="${FRAGMENT_SYNC_CLIENT_ID:-dev-fragment-sync-client}"
+FRAGMENT_SYNC_CLIENT_SECRET="${FRAGMENT_SYNC_CLIENT_SECRET:-dev-fragment-sync-secret}"
+ensure_fragment_sync_client() { # <base-url> <org>
+  local base="$1" org="$2" app
+  app="$(jq -n \
+    --arg org "${org}" --arg cid "${FRAGMENT_SYNC_CLIENT_ID}" \
+    --arg secret "${FRAGMENT_SYNC_CLIENT_SECRET}" \
+    '{owner:"admin", name:$cid, displayName:"hugmesh fragment-sync (machine)", organization:$org,
+      clientId:$cid, clientSecret:$secret, redirectUris:[],
+      grantTypes:["client_credentials"],
+      expireInHours:168, enablePassword:false, enableSignUp:false,
+      tokenFormat:"JWT-Custom", tokenSigningMethod:"RS256",
+      tokenFields:["Id","Name"],
+      tokenAttributes:[
+        {name:"roles",       category:"Existing Field", value:"Roles",       type:"Array"},
+        {name:"permissions", category:"Existing Field", value:"Permissions", type:"Array"}
+      ]}')"
+  if curl -s -b "${CJ}" "${base}/api/get-application?id=admin/${FRAGMENT_SYNC_CLIENT_ID}" | jq -e '.data.name // empty | length > 0' >/dev/null; then
+    curl -s -b "${CJ}" "${base}/api/update-application?id=admin/${FRAGMENT_SYNC_CLIENT_ID}" \
+      -H 'content-type: application/json' -d "${app}" >/dev/null
+    log "machine app ${FRAGMENT_SYNC_CLIENT_ID} updated"
+  else
+    curl -s -b "${CJ}" "${base}/api/add-application" -H 'content-type: application/json' -d "${app}" >/dev/null
+    curl -s -b "${CJ}" "${base}/api/get-application?id=admin/${FRAGMENT_SYNC_CLIENT_ID}" | jq -e '.data.name // empty | length > 0' >/dev/null \
+      || die "could not create Casdoor application ${FRAGMENT_SYNC_CLIENT_ID} at ${base}"
+    log "machine app ${FRAGMENT_SYNC_CLIENT_ID} created (client_credentials only)"
+  fi
+  # SELF-VERIFY the exact mint the sidecar performs — a created-but-unmintable app
+  # (wrong grant type, secret drift) would reproduce the silent empty-web-root state.
+  curl -s --max-time 10 -X POST "${base}/api/login/oauth/access_token" \
+      -d "grant_type=client_credentials&client_id=${FRAGMENT_SYNC_CLIENT_ID}&client_secret=${FRAGMENT_SYNC_CLIENT_SECRET}" \
+    | jq -e '.access_token // empty | length > 0' >/dev/null \
+    || die "fragment-sync machine client cannot mint a token (grant_type=client_credentials)"
+  log "machine app ${FRAGMENT_SYNC_CLIENT_ID} mint self-check OK"
+}
+
 # ══ LEG 1: Casdoor personas (reuses seed-accounts.sh --roles + its apply hook) ══
 log "leg 1: Casdoor personas at ${CASDOOR_URL} (org ${CASDOOR_ORG})"
 casdoor_login "${CASDOOR_URL}"
 ensure_org    "${CASDOOR_URL}" "${CASDOOR_ORG}"
 ensure_roles  "${CASDOOR_URL}" "${CASDOOR_ORG}"
 ensure_app    "${CASDOOR_URL}" "${CASDOOR_ORG}"
+ensure_fragment_sync_client "${CASDOOR_URL}" "${CASDOOR_ORG}"
 
 # The standard persona set = the base seed-accounts.sh matrix (user/mod/admin/
 # domain-locked/…) PLUS the three the UI suites additionally assume. Same
