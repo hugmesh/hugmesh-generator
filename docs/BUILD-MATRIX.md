@@ -280,10 +280,12 @@ them against the Studio's *real* emission vocabulary (computed by exercising
 both directions: a builder flag with no Studio field and no documented
 allowlist reason, or a Studio-emitted flag no builder parses, fails the run.
 Every probe family is fail-closed behind an expected-count gate. Current
-totals:
-118 cells × 5 channels + 75 threading probes (24 menu + 51 GUI) + 43
-negatives (31 CLI/channel + 12 GUI gating) + 12 flag-coverage checks =
-**720 checks**.
+totals (as reported by the harness bucket summary):
+118 cells × 5 channels + 91 threading probes (30 menu + 61 GUI — incl. the 4
+`character-forge` probes: the tri-state flag pair on x86 AND rpi5 plus the
+`--optional-services` checklist path) + 46 negatives + 30 flag-coverage checks
++ 16 taxonomy-parity + 6 web-catalog honesty =
+**779 checks**.
 
 ```sh
 make matrix-check                 # or: bash tests/build-matrix/check.sh

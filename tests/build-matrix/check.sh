@@ -891,6 +891,7 @@ run_threading_checks() {
 # Expectation grammar: 'token'  must appear in the printed command
 #                      '!token' must NOT appear in the printed command
 #                      'PLAN:pat' / 'PLAN:!pat'  must (not) match the plan output
+GUITHR_EXPECTED=61   # fail-closed: keep in sync with the guithr call list below
 GUITHR_EXPECTED=62   # fail-closed: keep in sync with the guithr call list below
                      # (was stale at 57 while 61 probes existed — the main merge
                      # added probes without bumping it; 62 = those 61 + sunshine)

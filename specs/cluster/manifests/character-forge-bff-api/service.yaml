@@ -1,10 +1,10 @@
 # ClusterIP only — reachable solely through the fe-gateway's /bff/character-forge/** route, so
-# /bff is same-origin with snapdragon.systems and is role-checked at the gateway.
+# /bff is same-origin with hugmesh.systems and is role-checked at the gateway.
 apiVersion: v1
 kind: Service
 metadata:
   name: snapdragon-character-forge-bff-api
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels: { app: snapdragon-character-forge-bff-api }
 spec:
   type: ClusterIP

@@ -112,7 +112,7 @@ metadata:
   # same PR that adds apps/{38b,39b,49c}-character-forge-*.yaml — same rationale
   # as `hmdm`/`attest`, a DEDICATED first-segment route prefix. ALSO reserves the
   # games-side slugs `games-character-forge` (the 3D maker published into
-  # snapdragon.games as a wasm-game) + `games-shadows-of-the-net` (the XR chat
+  # hugmesh.games as a wasm-game) + `games-shadows-of-the-net` (the XR chat
   # room game) per the existing games-* naming pattern (games-rpg-maker /
   # games-vn-maker siblings; see docs/XR-CHAT.md). The four app-repo
   # ReservedNames copies should add all three labels too to stay in sync.
@@ -258,7 +258,7 @@ spec:
     - games-three-wizards
     - games-vn-maker
     # games-side slugs of the XR-chat track (revision 9; docs/XR-CHAT.md): the
-    # character-forge 3D maker published into snapdragon.games as a wasm-game +
+    # character-forge 3D maker published into hugmesh.games as a wasm-game +
     # the "Shadows of the Net" XR chat room game. Same games-* naming pattern as
     # games-rpg-maker/games-vn-maker above.
     - games-character-forge

@@ -1,6 +1,6 @@
 # snapdragon-character-forge-ui — the Character Forge (3D character maker) Angular
-# native-federation REMOTE. Its own nginx pod in the snapdragon-frontend namespace,
-# federated into the snapdragon.systems host: it serves a remoteEntry.json the
+# native-federation REMOTE. Its own nginx pod in the hugmesh-frontend namespace,
+# federated into the hugmesh.systems host: it serves a remoteEntry.json the
 # host's loadRemoteModule consumes, mounted at /character-forge (ROLE_USER floor).
 # It embeds the Godot WASM 3D maker from its own same-origin assets and talks to
 # its OWN BFF via the same-origin /bff/character-forge/** fe-gateway route (plus
@@ -27,10 +27,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: snapdragon-character-forge-ui
-  namespace: snapdragon-frontend
+  namespace: hugmesh-frontend
   labels:
     app: snapdragon-character-forge-ui
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   replicas: 1
   selector:
@@ -74,10 +74,10 @@ apiVersion: v1
 kind: Service
 metadata:
   name: snapdragon-character-forge-ui
-  namespace: snapdragon-frontend
+  namespace: hugmesh-frontend
   labels:
     app: snapdragon-character-forge-ui
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   selector: { app: snapdragon-character-forge-ui }
   # The federation_modules remote_entry_url points at this Service on :8080

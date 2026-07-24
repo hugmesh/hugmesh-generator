@@ -55,7 +55,7 @@ reset_opts() {
     OPT_IMGFLAGS="" OPT_X86_EDGE_AI=no OPT_EDGE_AI_RUNTIME=ollama
     OPT_EDGE_AI_MODELS="" OPT_EDGE_AI_MODEL_DEFAULT="" OPT_X86_EDGE_AI_ANALYSIS=no
     OPT_EDGE_AI_TTS=no
-    OPT_TOR_ONION=no OPT_CHARACTER_STUDIO=no OPT_SERVICES="" OPT_INSTALLER_UI=""
+    OPT_TOR_ONION=no OPT_CHARACTER_STUDIO=no OPT_CHARACTER_FORGE=no OPT_SERVICES="" OPT_INSTALLER_UI=""
     OPT_EXTRA_FLAGS=""
     OPT_BR_WALLPAPER="" OPT_BR_GRUB_BG="" OPT_BR_LOGIN_BG="" OPT_BR_LOGO=""
     OPT_BR_ACCENT="" OPT_BR_SCHEME=""
@@ -141,6 +141,28 @@ OPT_SERVICES="character-studio"; OPT_CHARACTER_STUDIO=no; services_sync_charstud
 assert_eq  "sync: last slug -> none"    "${OPT_SERVICES}" "none"
 OPT_SERVICES=""; OPT_CHARACTER_STUDIO=yes; services_sync_charstudio
 assert_eq  "sync: untouched stays"      "${OPT_SERVICES}" ""
+
+# checklist<->lone-toggle consistency: character-forge (3D multi-app slug) mirrors
+# character-studio's shape exactly (services_sync_charforge)
+reset_opts; OPT_SERVICES="akkoma,character-forge" OPT_CHARACTER_FORGE=yes
+build_make_cmd x86-fe "fe" 1
+assert_has "charforge: in list"         "character-forge"
+assert_one_flags "charforge"
+# legacy conf (toggle only, checklist never touched) still threads --with-character-forge
+reset_opts; OPT_CHARACTER_FORGE=yes
+build_make_cmd x86-fe "fe" 1
+assert_has "charforge legacy: flag"     "--with-character-forge"
+assert_not "charforge legacy: no list"  "--optional-services"
+
+# services_sync_charforge: the lone toggle edits a SET checklist (both ways)
+OPT_SERVICES="akkoma"; OPT_CHARACTER_FORGE=yes; services_sync_charforge
+assert_eq  "cf sync: toggle-on adds"    "${OPT_SERVICES}" "akkoma,character-forge"
+OPT_CHARACTER_FORGE=no; services_sync_charforge
+assert_eq  "cf sync: toggle-off removes" "${OPT_SERVICES}" "akkoma"
+OPT_SERVICES="character-forge"; OPT_CHARACTER_FORGE=no; services_sync_charforge
+assert_eq  "cf sync: last slug -> none" "${OPT_SERVICES}" "none"
+OPT_SERVICES=""; OPT_CHARACTER_FORGE=yes; services_sync_charforge
+assert_eq  "cf sync: untouched stays"   "${OPT_SERVICES}" ""
 
 # ── edge-AI knobs: GPU roles opt in; edge_ai role is always-on ──────────────────
 reset_opts; OPT_X86_EDGE_AI=yes OPT_EDGE_AI_RUNTIME=vllm OPT_EDGE_AI_MODELS="llama3.2:3b,nomic-embed-text"

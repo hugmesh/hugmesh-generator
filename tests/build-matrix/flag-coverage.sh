@@ -174,6 +174,7 @@ SAMPLES = {
     # warn-drops it on inapplicable roles, so the sample needs no client role.
     "sunshine": [{"sunshine": "on"}, {"sunshine": "off"}],
     "character_studio": [{"character_studio": "on"}, {"character_studio": "off"}],
+    # character-forge (3D maker multi-app slug) — same plain on/off tri-state shape.
     # character_forge (3D maker multi-app slug): same tri-state shape as
     # character_studio. Sample was MISSING when the field landed via the main
     # merge — the vocabulary assert below is exactly what caught it.

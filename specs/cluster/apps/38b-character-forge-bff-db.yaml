@@ -1,6 +1,6 @@
 # character-forge-bff-db — dedicated Postgres for snapdragon-character-forge-bff-api's
 # datastore (the character_forge_character table: saved 3D character configs). In
-# snapdragon-backend with the other BFF dbs (forum-bff-db/wiki-bff-db). Lands
+# hugmesh-backend with the other BFF dbs (forum-bff-db/wiki-bff-db). Lands
 # BEFORE character-forge-bff-api (39b) so the DB + least-privilege roles exist
 # when the BFF boots its Liquibase migration.
 # OPTIONAL service (DEFAULT-OFF, admin gate): pruned by gate_optional_services()
@@ -14,12 +14,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/character-forge-bff-db
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-backend
+    namespace: hugmesh-backend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

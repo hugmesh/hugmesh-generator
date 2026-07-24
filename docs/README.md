@@ -41,7 +41,8 @@ The doc set for the image/infra layer. State key used throughout:
 
 ## Optional services & platform features
 
-- [`OPTIONAL-SERVICES.md`](OPTIONAL-SERVICES.md) — akkoma/tuwunel/phpBB/games/owncast/tube/character-studio add/remove framework (✅ build-time, 🚧 live cut-over).
+- [`OPTIONAL-SERVICES.md`](OPTIONAL-SERVICES.md) — akkoma/tuwunel/phpBB/games/owncast/tube/character-studio/character-forge add/remove framework (✅ build-time, 🚧 live cut-over).
+- [`XR-CHAT.md`](XR-CHAT.md) — "Shadows of the Net" XR chat room + the Character Forge (3D) multi-app slug (DEFAULT-OFF; WebXR/Quest + desktop face-tracking architecture, coturn dependency note).
 - [`MESHTASTIC-BRIDGE.md`](MESHTASTIC-BRIDGE.md) — Meshtastic LoRa mesh ↔ Matrix bridge, a DEFAULT-OFF runtime-only optional service (Matrix appservice + LoRa radio transports over USB-serial / TCP / MQTT).
 - [`EGRESS-VPN.md`](EGRESS-VPN.md) — outgoing public egress via operator `.conf`.
 - [`NODE-STORAGE.md`](NODE-STORAGE.md) — attach + register node-pinned storage.

@@ -1,4 +1,4 @@
-# Optional Services — add/remove by command (akkoma · tuwunel · phpBB · games · owncast · tube · character-studio)
+# Optional Services — add/remove by command (akkoma · tuwunel · phpBB · games · owncast · tube · character-studio · character-forge)
 
 ## 1. Purpose & scope
 
@@ -15,7 +15,11 @@ The platform splits into two tiers:
   the mesh — DEFAULT-OFF, GPU-gated; auto-selected by the `edge_ai` node role; see
   [EDGE-AI.md](EDGE-AI.md)), **character-studio** (the VN character-studio frontend
   remote — character creator + chat surface mounted at `/character-studio`, ROLE_USER;
-  DEFAULT-OFF, admin gate). (Plus the non-user-level optional slugs **egress-vpn**
+  DEFAULT-OFF, admin gate), **character-forge** (the Character Forge 3D character
+  maker + XR-chat avatar source — a MULTI-APP slug shaped like phpbb: BFF db + BFF
+  api at `/bff/character-forge/**` + frontend remote mounted at `/character-forge`,
+  ROLE_USER; DEFAULT-OFF, admin gate; see [XR-CHAT.md](XR-CHAT.md)). (Plus the
+  non-user-level optional slugs **egress-vpn**
   / **tor** / **workloadConsole** / **anubis** / **coturn** / **meshbridge**, gated
   by the same registry.)
 
@@ -66,7 +70,7 @@ registry is that missing list). Each service entry carries:
 
 | field | meaning |
 |---|---|
-| `slug` | `akkoma` / `tuwunel` / `phpbb` / `games` / `owncast` / `tube` / `character-studio` (+ `egress-vpn` / `tor` / `workloadConsole` / `anubis`) |
+| `slug` | `akkoma` / `tuwunel` / `phpbb` / `games` / `owncast` / `tube` / `character-studio` / `character-forge` (+ `egress-vpn` / `tor` / `workloadConsole` / `anubis`) |
 | `namespace` | the k8s namespace it lands in |
 | `apps` | the ArgoCD Application YAMLs it **owns** (pruned on removal) |
 | `sharedApps` | apps shared with another slug (e.g. `45-social-ui.yaml`); pruned only when **all** owners are deselected |
@@ -76,7 +80,7 @@ registry is that missing list). Each service entry carries:
 | `routeAccessRows` | the `gateway_route_access` rows it owns (dropped so a matched route to a deleted upstream cannot 502 / stale-grant) |
 | `federationModule` | the `federation_modules` registration (federation-api wave) |
 | `casdoorSeed` | a dedicated Casdoor it owns (games → `casdoor-games`) |
-| `default` | `akkoma`/`tuwunel`/`phpbb` → `on`; **`games`/`owncast`/`tube`/`character-studio` → `off` (opt-in; owncast/tube are GPU-gated x86; character-studio is an admin-gated frontend remote)** |
+| `default` | `akkoma`/`tuwunel`/`phpbb` → `on`; **`games`/`owncast`/`tube`/`character-studio`/`character-forge` → `off` (opt-in; owncast/tube are GPU-gated x86; character-studio is an admin-gated frontend remote; character-forge is an admin-gated multi-app slug — BFF db + BFF api + UI remote)** |
 
 There is also a `gamesDomain` block (the `GAMES_DOMAIN` knob + the
 parameterized files) — see §5.
@@ -92,7 +96,7 @@ the `federation_modules` seed.
 | Tier | Slugs | When baked |
 |---|---|---|
 | **DEFAULT-ON** (the built-in default when no selection is given) | `akkoma`, `tuwunel` (Matrix), `phpbb` | always, unless `EXCLUDE_SERVICES` removes them |
-| **DEFAULT-OFF** (must be specifically added) | `games`, `owncast`, `tube`, `character-studio` — and any future user-level service | only when explicitly selected |
+| **DEFAULT-OFF** (must be specifically added) | `games`, `owncast`, `tube`, `character-studio`, `character-forge` — and any future user-level service | only when explicitly selected |
 | **FULL-SET** | `OPTIONAL_SERVICES=all` / `--all-services` | every user-level slug — rpi5 **and** x86 builders |
 
 > ⚠ **`games` is DEFAULT-OFF** (it was previously default-on). Add it with
@@ -100,6 +104,10 @@ the `federation_modules` seed.
 > or via the full set. `owncast`/`tube` are GPU-gated x86 services, also off by default.
 > `character-studio` is an admin-gated frontend remote, off by default — add it with
 > `--with-character-studio`, by naming `character-studio` in `OPTIONAL_SERVICES`, or via the full set.
+> `character-forge` (the 3D character maker + XR-chat avatar source, a phpbb-shaped
+> multi-app slug: BFF db + BFF api + UI remote) is likewise off by default — add it
+> with `--with-character-forge`, by naming `character-forge` in `OPTIONAL_SERVICES`,
+> or via the full set. See [XR-CHAT.md](XR-CHAT.md).
 
 Two inputs, in precedence order **built-in default (`akkoma tuwunel phpbb`;
 games/owncast/tube OFF) < `brand.conf` < `--optional-services` CLI flag**:
@@ -120,7 +128,7 @@ games/owncast/tube OFF) < `brand.conf` < `--optional-services` CLI flag**:
 
 **FULL-SET sentinel.** `OPTIONAL_SERVICES=all` (and the equivalent `--all-services`
 CLI flag) expands to **every user-level slug** (`akkoma tuwunel phpbb games owncast
-tube character-studio`) right after arg parsing — before `EXCLUDE_SERVICES`, so the subtractive knob
+tube character-studio character-forge`) right after arg parsing — before `EXCLUDE_SERVICES`, so the subtractive knob
 still removes from it (e.g. `--all-services --exclude-services "games"` bakes
 everything *except* games). A bare `all` anywhere in the list expands the whole token.
 
@@ -142,7 +150,7 @@ EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the res
 > Precedence summary: `OPTIONAL_SERVICES` (default `akkoma tuwunel phpbb`) is the
 > positive allow-list (built-in < brand.conf < `--optional-services`; `all` expands
 > to the full set), then the opt-in folds (games; on x86 also edge-ai / tor /
-> character-studio) fold their slugs in, then **`EXCLUDE_SERVICES` subtracts last**.
+> character-studio / character-forge) fold their slugs in, then **`EXCLUDE_SERVICES` subtracts last**.
 >
 > **Both builders.** The FULL-SET sentinel (`OPTIONAL_SERVICES=all` /
 > `--all-services`) **and** the subtractive `EXCLUDE_SERVICES` / `--exclude-services`
@@ -150,7 +158,7 @@ EXCLUDE_SERVICES="phpbb tuwunel"        # forum-less + Matrix-less, keep the res
 > **and `build-x86-host-stage4.sh`** with the same resolution order (built-in
 > default respecting env/brand.conf < `all`-sentinel expansion < the opt-in folds <
 > the EXCLUDE subtraction LAST). On x86 the subtraction runs after **every** opt-in
-> fold (games / edge-ai / tor / character-studio / edge-ai-analysis / edge-ai-tts),
+> fold (games / edge-ai / tor / character-studio / character-forge / edge-ai-analysis / edge-ai-tts),
 > so an excluded slug is force-OFF there too regardless of how it was selected.
 > `edge-ai-tts` (Piper TTS + viseme timeline, VN voice) is CPU-only and carries NO
 > `edge-ai` dependency — unlike `edge-ai-analysis` its opt-in fold is wired in
@@ -362,8 +370,8 @@ table.
    updated so `kubectl get optsvc` shows the effective state.
 
 **Closed slug set (verified against `optional-services.yaml` + the ConfigMap + 13a):**
-the CRD enum is the **12 cluster-service slugs** — `akkoma tuwunel phpbb games owncast
-tube character-studio anubis coturn edge-ai edge-ai-analysis edge-ai-tts`. Deliberately
+the CRD enum is the **13 cluster-service slugs** — `akkoma tuwunel phpbb games owncast
+tube character-studio character-forge anubis coturn edge-ai edge-ai-analysis edge-ai-tts`. Deliberately
 EXCLUDED: `workloadConsole` (ConfigMap boolean but no 13a element — its RBAC is the
 hardcoded `apps/14-workload-console-rbac.yaml`; left build-determined) and the NODE
 services `egress-vpn`/`tor` (no cluster Application, no ConfigMap boolean — a separate
@@ -478,7 +486,8 @@ When a service is **absent**, a user sees:
 - **The cut-over.** Delete the hardcoded `apps/30-akkoma.yaml` /
   `apps/30-tuwunel.yaml` / `apps/30-phpbb.yaml` (+ `apps/38`/`39`/`49-forum-*`) /
   `apps/50-games.yaml` / `apps/52-owncast.yaml` / `apps/53-tube.yaml` /
-  `apps/49b-character-studio-ui.yaml` and let the ApplicationSet own the surviving
+  `apps/49b-character-studio-ui.yaml` / `apps/{38b,39b}-character-forge-bff-*.yaml` +
+  `apps/49c-character-forge-ui.yaml` and let the ApplicationSet own the surviving
   workloads — coordinating the ESO split, route-access rows, stateful-svc scale-to-
   zero, and the `CanonicalSeed.java` gateway floor (§9). THEN set
   `app.optional-services.reconcile.enabled=true` (with the Lease under multi-replica).

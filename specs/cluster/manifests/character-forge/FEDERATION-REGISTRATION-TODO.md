@@ -4,14 +4,14 @@ The `character-forge` slug must be registered as a federation module so the Angu
 host loads its remote at runtime and the public `/api/federation/capabilities`
 projection can grey it out when not installed. That registry row is a **Liquibase
 changeset**, and the `federation_modules` table + its changelog live in the
-**`snapdragon-federation-api`** repo — **NOT** in this generator repo. This file is
+**`hugmesh-federation-api`** repo — **NOT** in this generator repo. This file is
 the placeholder/TODO the optional-service contract requires until that repo's wave
 lands; the canonical metadata also lives inline in
 `specs/cluster/optional-services.yaml` (slug: character-forge → federationModule).
 
 ## Where to add it
 
-Repo: `Snapdragon-Systems/snapdragon-federation-api`
+Repo: `Snapdragon-Systems/hugmesh-federation-api`
 
 1. New file: `src/main/resources/db/changelog/037-register-character-forge-module.xml`
    (036 is already reserved for character-studio — see
@@ -84,7 +84,7 @@ field-for-field, with the character-forge-specific slug / mountAt / role.
 The `character-forge` label is reserved in `specs/cluster/reserved-prefixes.yaml`
 (revision 9) together with the games-side `games-character-forge` +
 `games-shadows-of-the-net` labels. The four app-repo ReservedNames copies
-(federation-api, user-bff-api, snapdragon-actions, admin-bff-api) must add the same
+(federation-api, user-bff-api, hugmesh-actions, admin-bff-api) must add the same
 labels in the same wave — `scripts/validate-reserved-prefixes.sh`'s code-copy
 assertion flags the drift when the sibling repos are present in CI.
 

@@ -270,6 +270,16 @@ SERVICE_ALLOW_EXACT = {
     # casdoor's /api/signup + /api/login (manifests/signup-gate). Reached only via
     # those specific paths, never a public username first-label of its own.
     "signup-gate",
+    # the host-shell web Service KEPT its pre-rebrand name (the rebrand renamed the
+    # hugmesh-* family pattern below but not this Service) — reached only via the
+    # frontend-host /** catch-all, never a public first-label of its own.
+    "snapdragon-systems-web",
+    # character-forge Services keep the repo's DESIGN-locked snapdragon-* names
+    # (the repo was CREATED as snapdragon-character-forge-bff-api; docs/XR-CHAT.md).
+    # Both are reached only via the reserved `/character-forge/**` +
+    # `/bff/character-forge/**` route prefixes (stage 3/5-enforced), never a public
+    # first-label of their own.
+    "snapdragon-character-forge-bff-api", "snapdragon-character-forge-ui",
 }
 # Regex patterns for routed-but-internal Service families:
 #   * ALL `hugmesh-*` Services — the platform's own gateways / BFFs / UIs /

@@ -1,11 +1,11 @@
 # character-forge-bff-db — dedicated Postgres for snapdragon-character-forge-bff-api's
 # datastore (the character_forge_character table the character-forge BFF owns:
-# saved 3D character configs, one-active-per-owner). Lives in snapdragon-backend
+# saved 3D character configs, one-active-per-owner). Lives in hugmesh-backend
 # next to the BFF it serves, with the other BFF dbs (forum-bff-db/wiki-bff-db).
 # ClusterIP only.
 #
 # NOTE: like user-bff/admin-bff, the character-forge-bff app's application.yml defaults its
-# spring.r2dbc/spring.liquibase to a literal `snapdragon-pg` host that does NOT
+# spring.r2dbc/spring.liquibase to a literal `hugmesh-pg` host that does NOT
 # exist; this dedicated `character-forge-bff-db` Service is the real backing store and the
 # character-forge-bff Deployment OVERRIDES the R2DBC/Liquibase URLs to point here.
 #
@@ -26,8 +26,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: character-forge-bff-db
-  namespace: snapdragon-backend
-  labels: { app: character-forge-bff-db, app.kubernetes.io/part-of: snapdragon.systems }
+  namespace: hugmesh-backend
+  labels: { app: character-forge-bff-db, app.kubernetes.io/part-of: hugmesh.systems }
 spec:
   replicas: 1
   strategy: { type: Recreate }   # single writer over a RWO PVC

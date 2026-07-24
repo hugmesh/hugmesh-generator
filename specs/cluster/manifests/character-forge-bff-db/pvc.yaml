@@ -4,9 +4,9 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: character-forge-bff-db
-  namespace: snapdragon-backend
+  namespace: hugmesh-backend
   labels: { app: character-forge-bff-db }
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: snapdragon-local
+  storageClassName: hugmesh-local
   resources: { requests: { storage: 2Gi } }

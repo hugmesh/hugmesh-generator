@@ -63,11 +63,11 @@ done
 ok "extracted the real gate + helper functions from build-rpi5-stage4.sh"
 
 # ── The user-level OPTIONAL services this requirement targets ─────────────────
-USER_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio"
+USER_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"
 # DEFAULT-INCLUSION POLICY (user 2026-06-17): the built-in default when NO
 # OPTIONAL_SERVICES is given, and the DEFAULT-OFF set that must be explicitly added.
 DEFAULT_ON="akkoma tuwunel phpbb"
-DEFAULT_OFF="games owncast tube character-studio"
+DEFAULT_OFF="games owncast tube character-studio character-forge"
 
 # resolve_selection — mirror the BUILDER's OPTIONAL_SERVICES resolution so the test
 # tracks it: (1) built-in default when unset, (2) the `all` sentinel expands to the
@@ -116,7 +116,8 @@ seed_tree() {
   # owned apps
   for a in 30-akkoma 30-tuwunel 30-phpbb 38-forum-bff-db 39-forum-bff-api 49-forum-ui \
            45-social-ui 06-casdoor-games 50-games 13c-games-instances 52-owncast 53-tube \
-           49b-character-studio-ui; do
+           49b-character-studio-ui \
+           38b-character-forge-bff-db 39b-character-forge-bff-api 49c-character-forge-ui; do
     [ -f "${SRC}/apps/${a}.yaml" ] && cp "${SRC}/apps/${a}.yaml" "${tree}/apps/"
   done
   cp "${SRC}/apps/20-gateway-be.yaml" "${tree}/apps/" 2>/dev/null || :
@@ -128,7 +129,8 @@ seed_tree() {
   done
   # owned manifest dirs
   for m in akkoma tuwunel forum forum-bff-db forum-bff-api forum-ui games casdoor-games \
-           games-instances owncast tube character-studio casdoor; do
+           games-instances owncast tube character-studio casdoor \
+           character-forge character-forge-bff-api character-forge-bff-db; do
     [ -d "${SRC}/manifests/${m}" ] && cp -r "${SRC}/manifests/${m}" "${tree}/manifests/"
   done
   export SYSROOT
@@ -141,10 +143,14 @@ declare -A OWNED_APP=(
   [akkoma]="30-akkoma.yaml"   [tuwunel]="30-tuwunel.yaml" [phpbb]="30-phpbb.yaml"
   [games]="50-games.yaml"     [owncast]="52-owncast.yaml" [tube]="53-tube.yaml"
   [character-studio]="49b-character-studio-ui.yaml"
+  # character-forge is MULTI-APP (BFF db + BFF api + UI); the representative app/dir
+  # here + the dedicated spot-check block below covers the other two of each.
+  [character-forge]="49c-character-forge-ui.yaml"
 )
 declare -A OWNED_DIR=(
   [akkoma]="akkoma" [tuwunel]="tuwunel" [phpbb]="forum" [games]="games"
   [owncast]="owncast" [tube]="tube" [character-studio]="character-studio"
+  [character-forge]="character-forge"
 )
 
 ENV="test"   # the gate's anubis ENV branch reads this
@@ -187,6 +193,16 @@ grep -q "'/tube/content/\*\*'" "${TREE}/manifests/route-access/initdb/20-schema.
 # character-studio excluded (default-off): its ONE fe-gateway route + route-access row removed.
 grep -q 'id: character-studio-ui' "${TREE}/apps/20-gateway-fe.yaml" && bad "character-studio gateway route survived" || ok "character-studio: fe-gateway character-studio-ui route removed"
 grep -q "'/character-studio/\*\*'" "${TREE}/manifests/route-access/initdb/20-schema.sql" && bad "character-studio row survived" || ok "character-studio: /character-studio route-access row removed"
+# character-forge excluded (default-off): the MULTI-APP slug's TWO fe-gateway routes,
+# TWO route-access rows, and all THREE apps + THREE manifest dirs removed.
+grep -q 'id: character-forge-ui' "${TREE}/apps/20-gateway-fe.yaml" && bad "character-forge UI gateway route survived" || ok "character-forge: fe-gateway character-forge-ui route removed"
+grep -q 'id: snapdragon-character-forge-bff-api' "${TREE}/apps/20-gateway-fe.yaml" && bad "character-forge BFF gateway route survived" || ok "character-forge: fe-gateway BFF route removed"
+grep -q "'/character-forge/\*\*'" "${TREE}/manifests/route-access/initdb/20-schema.sql" && bad "character-forge UI row survived" || ok "character-forge: /character-forge route-access row removed"
+grep -q "'/bff/character-forge/\*\*'" "${TREE}/manifests/route-access/initdb/20-schema.sql" && bad "character-forge BFF row survived" || ok "character-forge: /bff/character-forge route-access row removed"
+[ ! -f "${TREE}/apps/38b-character-forge-bff-db.yaml" ] && [ ! -f "${TREE}/apps/39b-character-forge-bff-api.yaml" ] \
+  && ok "character-forge: BFF db + api Applications OMITTED (multi-app)" || bad "character-forge: a BFF Application survived exclusion"
+[ ! -d "${TREE}/manifests/character-forge-bff-api" ] && [ ! -d "${TREE}/manifests/character-forge-bff-db" ] \
+  && ok "character-forge: BFF api + db manifest dirs OMITTED (multi-app)" || bad "character-forge: a BFF manifest dir survived exclusion"
 
 # ── 3) INCLUDED: each user-level slug kept => present + ConfigMap/13a 'true' ──
 echo "-- INCLUDED (all user services): apps + manifests present, ConfigMap+13a 'true' --"
@@ -278,7 +294,7 @@ if [ -f "${BUILDER_X86}" ]; then
   grep -q 'OPTIONAL_SERVICES="${OPTIONAL_SERVICES:-akkoma tuwunel phpbb}"' "${BUILDER_X86}" \
     && ok "x86: built-in default is 'akkoma tuwunel phpbb' (env/brand.conf-respecting)" \
     || bad "x86: built-in default is not the env-respecting 'akkoma tuwunel phpbb'"
-  grep -q 'USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio"' "${BUILDER_X86}" \
+  grep -q 'USER_LEVEL_SERVICES="akkoma tuwunel phpbb games owncast tube character-studio character-forge"' "${BUILDER_X86}" \
     && ok "x86: USER_LEVEL_SERVICES matches the rpi5 user-level set" \
     || bad "x86: USER_LEVEL_SERVICES missing or diverged from rpi5"
   grep -q -- '--all-services' "${BUILDER_X86}" && ok "x86: accepts --all-services CLI flag" || bad "x86: missing --all-services flag"

@@ -1,5 +1,5 @@
 # snapdragon-character-forge-ui — the Character Forge (3D character maker) Angular
-# micro-frontend, federated into the snapdragon.systems host at /character-forge
+# micro-frontend, federated into the hugmesh.systems host at /character-forge
 # (ROLE_USER floor). Frontend Pis. Embeds the Godot WASM maker from its own
 # same-origin assets; saves via /bff/character-forge/** (39b). OPTIONAL service
 # (DEFAULT-OFF, admin gate): pruned by gate_optional_services() when the
@@ -14,12 +14,12 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/Snapdragon-Systems/snapdragon-generator.git
+    repoURL: https://github.com/Snapdragon-Systems/hugmesh-generator.git
     targetRevision: main
     path: specs/cluster/manifests/character-forge
   destination:
     server: https://kubernetes.default.svc
-    namespace: snapdragon-frontend
+    namespace: hugmesh-frontend
   syncPolicy:
     automated: { prune: true, selfHeal: true }
     syncOptions: [CreateNamespace=true]

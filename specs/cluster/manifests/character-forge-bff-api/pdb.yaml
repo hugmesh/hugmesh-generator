@@ -17,7 +17,7 @@ metadata:
   name: snapdragon-character-forge-bff-api
   labels:
     app: snapdragon-character-forge-bff-api
-    app.kubernetes.io/part-of: snapdragon.systems
+    app.kubernetes.io/part-of: hugmesh.systems
 spec:
   minAvailable: 1
   selector:

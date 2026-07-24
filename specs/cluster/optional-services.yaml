@@ -308,7 +308,7 @@ spec:
     # "Shadows of the Net" XR chat room (docs/XR-CHAT.md). A MULTI-APP slug shaped
     # like phpbb (BFF db + BFF api + UI remote), combined with the character-studio
     # frontend pattern:
-    #   * character-forge-bff-db  (38b) — dedicated Postgres, snapdragon-backend
+    #   * character-forge-bff-db  (38b) — dedicated Postgres, hugmesh-backend
     #   * character-forge-bff-api (39b) — Spring BFF at /bff/character-forge/**
     #     (ROLE_USER floor; Char3DConfig CRUD + active-config lookup + VN→3D /map)
     #   * snapdragon-character-forge-ui (49c) — Angular native-federation remote at
@@ -329,8 +329,8 @@ spec:
     - slug: character-forge
       displayName: "Character Forge (3D)"
       # Primary namespace = where the BFF + its DB land (the UI remote lands in
-      # snapdragon-frontend via its own Application, like phpbb's forum-ui).
-      namespace: snapdragon-backend
+      # hugmesh-frontend via its own Application, like phpbb's forum-ui).
+      namespace: hugmesh-backend
       default: off
       apps:
         - apps/38b-character-forge-bff-db.yaml
@@ -346,9 +346,9 @@ spec:
       gatewayHost: null
       gatewayRouteIds: [character-forge-ui, snapdragon-character-forge-bff-api]
       routeAccessRows:
-        - { gateway: snapdragon-fe-gateway, urlPattern: /character-forge/** }
-        - { gateway: snapdragon-fe-gateway, urlPattern: /bff/character-forge/** }
-      # federation_modules registration lives in the SEPARATE snapdragon-federation-api
+        - { gateway: hugmesh-fe-gateway, urlPattern: /character-forge/** }
+        - { gateway: hugmesh-fe-gateway, urlPattern: /bff/character-forge/** }
+      # federation_modules registration lives in the SEPARATE hugmesh-federation-api
       # repo (Liquibase changelog), NOT in this generator repo. 036 is reserved for
       # character-studio, so character-forge takes the next free number, 037. See
       # manifests/character-forge/FEDERATION-REGISTRATION-TODO.md for the exact
@@ -359,7 +359,7 @@ spec:
         mountAt: /character-forge
         requiresRole: ROLE_USER
         exposed: ./routes
-        changeset: "037-register-character-forge-module.xml"   # in snapdragon-federation-api (separate repo)
+        changeset: "037-register-character-forge-module.xml"   # in hugmesh-federation-api (separate repo)
       casdoorSeed: null
 
     # ── edge-ai — GPU inference node serving an OpenAI-compatible model API ─────
