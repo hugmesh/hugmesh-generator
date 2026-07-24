@@ -41,6 +41,10 @@ tests/stack/.m2-registry.env
 # seed-e2e.sh workdir — rendered role JSON (deterministic test passwords) +
 # pre-minted per-persona JWTs. Runtime-only; never commit.
 tests/stack/.seed-e2e/
+# Per-machine TLS CA + leaf for the https front door (`make stack-certs`).
+# PRIVATE KEYS — never commit (unlike tests/stack/certs, the committed
+# mock-stack FIXTURES, this CA may be imported into the operator's browser).
+tests/stack/.tls-front/
 # The OPT-IN hugmesh-tor service (`make stack-up TOR=1`) copies the minted
 # PUBLIC .onion hostname here for the host/GUI to read (the private key stays in
 # the tor-onion-keys volume). Runtime-only, machine-specific; never commit.

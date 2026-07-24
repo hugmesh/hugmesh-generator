@@ -319,7 +319,7 @@ ORANGEPIZERO2_PASS    := ORANGEPIZERO2_FLAVOR='$(ORANGEPIZERO2_FLAVOR)'
         flash qemu qemu-rpi qemu-x86 qemu-matrix qemu-matrix-enumerate \
         playwright-deps e2e ci ci-quick docker-image ensure-image image-gen-docker-image \
         docker docker-build local prod \
-        stack-clone stack-mastodon-env stack-m2-bootstrap stack-build stack-up stack-down stack-logs stack-ps
+        stack-clone stack-mastodon-env stack-m2-bootstrap stack-certs stack-build stack-up stack-down stack-logs stack-ps
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z0-9_.+-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -965,6 +965,14 @@ docker-build: ## DEPRECATED: builds now default to Docker — just run `make bui
 STACK_COMPOSE   := tests/stack/compose.local.yaml
 STACK_SRC       ?= $(CURDIR)/.stack-src
 PUBLIC_HOST_PORT ?= 8088
+# HTTPS twin of the front door (the https-front TLS terminator in the compose
+# file proxies it to the same fe-gateway). 8488 pairs with 8088; 8443 is NOT
+# the default because dev boxes commonly have something else on it already.
+PUBLIC_HTTPS_PORT ?= 8488
+# Per-machine TLS material for the https front door — minted by `make
+# stack-certs` (gen-certs.sh), gitignored. NOT tests/stack/certs: those are
+# committed mock-stack fixtures whose CA key is public in the repo.
+STACK_TLS_DIR   := tests/stack/.tls-front
 GIT_BASE        ?= https://github.com/Snapdragon-Systems
 GIT_REF         ?= main
 SOCIAL          ?=
@@ -1013,6 +1021,7 @@ MANAGED_WIKI_BFF_R2DBC_URL     ?=
 MANAGED_WIKI_BFF_LIQUIBASE_URL  ?=
 STACK_ENV := STACK_SRC='$(STACK_SRC)' CASDOOR_ISSUER_URI='$(CASDOOR_ISSUER)' \
              PUBLIC_HOST_PORT='$(PUBLIC_HOST_PORT)' \
+             PUBLIC_HTTPS_PORT='$(PUBLIC_HTTPS_PORT)' \
              SNAP_WEB_LOCALES='$(SNAP_WEB_LOCALES)' \
              MANAGED_ADMIN_BFF_R2DBC_URL='$(MANAGED_ADMIN_BFF_R2DBC_URL)' \
              MANAGED_ADMIN_BFF_LIQUIBASE_URL='$(MANAGED_ADMIN_BFF_LIQUIBASE_URL)' \
@@ -1084,14 +1093,27 @@ stack-mastodon-env:
 stack-m2-bootstrap: ## COLD-BUILD prereq: build the private systems.hugmesh maven artifacts FROM SOURCE + serve them from a local registry container
 	bash tests/stack/m2-bootstrap.sh
 
-stack-build: stack-clone $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
+# Idempotent: mints only when the leaf is absent, so an existing CA (one the
+# operator may have imported into a browser trust store) is never silently
+# rotated out from under them. ENV=prod with DOMAIN set also puts the real
+# domain in the SANs; localhost/127.0.0.1 are ALWAYS included (gen-certs.sh).
+stack-certs: ## mint the per-machine TLS CA + leaf for the https front door (idempotent; rm -rf tests/stack/.tls-front to re-mint)
+	@if [ ! -f '$(STACK_TLS_DIR)/server.crt' ]; then \
+	  SNAP_DOMAIN='$(if $(strip $(DOMAIN)),$(DOMAIN),hugmesh.systems)' \
+	    bash tests/stack/gen-certs.sh '$(STACK_TLS_DIR)'; \
+	else \
+	  echo "==> stack-certs: $(STACK_TLS_DIR)/server.crt present - keeping it (rm -rf $(STACK_TLS_DIR) to re-mint)"; \
+	fi
+
+stack-build: stack-clone stack-certs $(STACK_SOCIAL_DEP) ## build every service from its cloned repo (no run)
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
 
-stack-up: stack-clone $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
+stack-up: stack-clone stack-certs $(STACK_SOCIAL_DEP) ## clone -> build -> run the FULL stack (ENV=test|prod; SOCIAL=1 adds matrix/mastodon)
 	@echo "==> Local stack: ENV=$(ENV), issuer=$(CASDOOR_ISSUER), host port=$(PUBLIC_HOST_PORT), social=$(if $(strip $(SOCIAL)),on,off)$(if $(wildcard $(STACK_M2_ENV)), m2-registry=on,)"
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) build
 	$(STACK_ENV) $(COMPOSE_CMD) -f $(STACK_COMPOSE) $(STACK_M2_FLAGS) $(STACK_PROFILE) $(STACK_TOR_PROFILE) up -d
-	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  | Casdoor: http://localhost:8000"
+	@echo "==> Up. Front door: http://localhost:$(PUBLIC_HOST_PORT)  |  https://localhost:$(PUBLIC_HTTPS_PORT)  | Casdoor: http://localhost:8000"
+	@echo "    (https uses the per-machine CA $(STACK_TLS_DIR)/ca.crt - import it to trust, or accept the browser warning)"
 	@echo "    Logs: make stack-logs   Down: make stack-down"
 
 stack-seed: ## seed Casdoor identity (org+roles+app-user-bff+personas) for real SSO login; SOCIAL=1 also seeds Matrix/Mastodon
