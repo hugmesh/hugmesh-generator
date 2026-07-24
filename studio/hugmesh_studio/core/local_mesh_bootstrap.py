@@ -806,8 +806,20 @@ class LocalMeshBootstrap:
         """Tear down BOTH composed projects: the stack (make stack-down) + the mesh
         overlay (LocalMeshNode.stop())."""
         log: list[str] = []
-        ok_stack, msg = self._stack_node().stop()
-        log.append(f"[stack-down] {'ok' if ok_stack else 'FAILED'}: {_tail(msg)}")
+        stack = self._stack_node()
+        # WHAT the stop did, in words. `make stack-down` echoes its whole STACK_ENV
+        # command line and compose says nothing when there is nothing to remove, so a
+        # successful stop rendered as a wall of env vars and no outcome — reported as
+        # "tried stopping and nothing happened". Sample the state FIRST, then say so.
+        before = stack.status()
+        ok_stack, msg = stack.stop()
+        if ok_stack:
+            log.append("[stack-down] ok: " + (f"stopped the platform stack ({before.detail}) "
+                                              f"and dropped its volumes"
+                                              if before.running else
+                                              "nothing was running — no containers to stop"))
+        else:
+            log.append(f"[stack-down] FAILED: {_tail(msg)}")
         ok_mesh, msg = self._mesh_node().stop()
         log.append(f"[mesh-overlay down] {'ok' if ok_mesh else 'FAILED'}: {_tail(msg)}")
         return (ok_stack and ok_mesh), log

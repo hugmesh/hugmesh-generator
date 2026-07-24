@@ -29,6 +29,7 @@ from hugmesh_studio.core.local_mesh_bootstrap import (               # noqa: E40
 from hugmesh_studio.core.local_stack_node import (                   # noqa: E402
     COLD_STACK_UP_TIMEOUT_S, M2_BOOTSTRAP_TIMEOUT_S, WARM_STACK_UP_TIMEOUT_S,
     LocalStackNode)
+from hugmesh_studio.core.mesh_node import MeshNode                   # noqa: E402
 
 STUDIO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GENERATOR_DIR = os.path.dirname(STUDIO_ROOT)
@@ -275,3 +276,51 @@ def test_open_web_ui_opens_the_stack_front_door(qapp, monkeypatch):
     dlg = localmesh_mod.LocalMeshDialog(GENERATOR_DIR)
     dlg.page.open_web_btn.click()
     assert opened == ["http://localhost:8088"]
+
+
+# ── Stop says WHAT it did ──────────────────────────────────────────────────────────
+def test_stop_says_nothing_was_running_instead_of_echoing_the_make_env(monkeypatch, tmp_path):
+    """`make stack-down` echoes its whole STACK_ENV command line and compose prints
+    nothing when there is nothing to remove, so a SUCCESSFUL stop rendered as a wall
+    of env vars with no outcome — reported as "tried stopping and nothing happened"."""
+    from hugmesh_studio.core.local_stack_node import StackStatus
+    monkeypatch.setattr(LocalStackNode, "status",
+                        lambda self: StackStatus(running=False, detail="not started"),
+                        raising=True)
+    monkeypatch.setattr(LocalStackNode, "stop",
+                        lambda self: (True, "STACK_SRC='/x' CASDOOR_ISSUER_URI='y' "
+                                            "PUBLIC_HOST_PORT='8088' docker compose ... down -v"),
+                        raising=True)
+    monkeypatch.setattr(MeshNode, "stop", lambda self: (True, "not started"), raising=True)
+    ok, log = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(out_dir=str(tmp_path))).down()
+    assert ok is True
+    line = next(ln for ln in log if ln.startswith("[stack-down]"))
+    assert "nothing was running" in line
+    assert "STACK_SRC" not in line, "the make env wall leaked into the operator-facing line"
+
+
+def test_stop_reports_what_it_stopped_when_something_was_running(monkeypatch, tmp_path):
+    from hugmesh_studio.core.local_stack_node import StackStatus
+    monkeypatch.setattr(LocalStackNode, "status",
+                        lambda self: StackStatus(running=True, detail="44 container(s)"),
+                        raising=True)
+    monkeypatch.setattr(LocalStackNode, "stop", lambda self: (True, "noise"), raising=True)
+    monkeypatch.setattr(MeshNode, "stop", lambda self: (True, "not started"), raising=True)
+    ok, log = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(out_dir=str(tmp_path))).down()
+    line = next(ln for ln in log if ln.startswith("[stack-down]"))
+    assert "44 container(s)" in line and "dropped its volumes" in line
+
+
+def test_a_failed_stop_still_shows_the_error_tail(monkeypatch, tmp_path):
+    from hugmesh_studio.core.local_stack_node import StackStatus
+    monkeypatch.setattr(LocalStackNode, "status",
+                        lambda self: StackStatus(running=True, detail="3 container(s)"),
+                        raising=True)
+    monkeypatch.setattr(LocalStackNode, "stop",
+                        lambda self: (False, "banner\n" + "noise\n" * 300 + "permission denied"),
+                        raising=True)
+    monkeypatch.setattr(MeshNode, "stop", lambda self: (True, "not started"), raising=True)
+    ok, log = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(out_dir=str(tmp_path))).down()
+    assert ok is False
+    line = next(ln for ln in log if ln.startswith("[stack-down]"))
+    assert line.endswith("permission denied"), "the failure tail must survive"

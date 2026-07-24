@@ -176,9 +176,22 @@ echo "==> Artifacts: ${built} built, ${skipped} already cached"
 _start_registry() { # force-(re)create a fresh container from ${M2_REPO}
   docker rm -f "${REGISTRY_NAME}" >/dev/null 2>&1 || true
   echo "==> Starting registry container ${REGISTRY_NAME} (${REGISTRY_IMAGE})"
+  # The empty-bind guard, NOT paranoia — a reboot reproduces it deterministically:
+  # dockerd honours --restart unless-stopped within seconds of boot, BEFORE a
+  # late-mounting /home (its own filesystem here) is up, so the bind grabs the
+  # EMPTY underlay directory and the registry serves 404s for everything. Content
+  # appearing on the real /home later never reaches the container: the bind was
+  # resolved at container START. Waiting inside would therefore wait forever —
+  # instead EXIT, so the restart policy retries; each retry re-resolves the bind,
+  # and the first one after /home lands serves the real artifacts.
   docker run -d --name "${REGISTRY_NAME}" --restart unless-stopped \
     -v "${M2_REPO}:/www/groups/${GITLAB_GROUP_ID}/-/packages/maven:ro" \
-    "${REGISTRY_IMAGE}" httpd -f -p "${REGISTRY_PORT}" -h /www >/dev/null
+    "${REGISTRY_IMAGE}" sh -c "\
+      if [ -z \"\$(ls -A /www/groups/${GITLAB_GROUP_ID}/-/packages/maven 2>/dev/null)\" ]; then \
+        echo 'bind mount is EMPTY (is /home mounted yet?) — exiting so the restart policy re-binds'; \
+        exit 1; \
+      fi; \
+      exec httpd -f -p ${REGISTRY_PORT} -h /www" >/dev/null
 }
 # Range over Networks: newer docker engines no longer populate the legacy
 # top-level .NetworkSettings.IPAddress key (map has no entry on docker 29).

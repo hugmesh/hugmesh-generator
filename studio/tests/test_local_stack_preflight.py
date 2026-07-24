@@ -433,3 +433,23 @@ def test_bootstrap_preflight_delegates_to_stack_node(tmp_path, monkeypatch):
                         lambda self: list(sentinel), raising=True)
     b = LocalMeshBootstrap(GENERATOR_DIR, LocalMeshBootstrapConfig(out_dir=str(tmp_path)))
     assert b.preflight() == sentinel
+
+
+def test_m2_registry_container_carries_the_empty_bind_boot_guard():
+    """A reboot reproduces this deterministically: dockerd honours the registry's
+    restart policy within seconds of boot, BEFORE a late-mounting /home (its own
+    filesystem) is up, so the bind grabs the EMPTY underlay dir and every artifact
+    404s until someone recreates the container by hand. The container command must
+    refuse to serve an empty bind — exit, so each restart-policy retry re-resolves
+    the bind and the first one after /home lands serves for real. (Waiting inside
+    instead would wait forever: the bind is resolved at container start.)"""
+    path = os.path.join(GENERATOR_DIR, "tests", "stack", "m2-bootstrap.sh")
+    with open(path, encoding="utf-8") as fh:
+        sh = fh.read()
+    start = sh[sh.index("_start_registry()"):]
+    body = start[:start.index("\n}")]
+    assert "ls -A /www/groups" in body and "exit 1" in body, \
+        "the empty-bind guard is gone — a reboot will serve 404s again"
+    assert "exec httpd" in body, "the guard must exec httpd only after the check"
+    assert body.index("exit 1") < body.index("exec httpd"), \
+        "the guard must run BEFORE the server starts"
