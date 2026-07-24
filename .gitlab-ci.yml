@@ -39,6 +39,23 @@ lint:optional-services-exclude:
   script:
     - bash tests/stack/test-optional-services-exclude.sh
 
+# Merge-conflict-marker gate. A WIP checkpoint PR once merged an UNRESOLVED
+# conflict hunk into tests/stack/gateway-routes/fe/application-routes.yml — a file
+# the fe-gateway parses at STARTUP, so the platform front door crash-looped on
+# `<<<<<<< HEAD` until someone read the container log. Nothing else catches this
+# class: YAML/shell linters only run on the files they know, and a marker is valid
+# text to git. Cheap grep, whole tree, fails on the first marker.
+lint:conflict-markers:
+  stage: lint
+  image: python:3-slim
+  tags: [hugmesh-x86]
+  script:
+    - |
+      if grep -rn --binary-files=without-match -E '^(<{7}( |$)|={7}$|>{7}( |$))'            --exclude-dir=.git --exclude-dir=.stack-src --exclude-dir=node_modules .; then
+        echo "unresolved merge-conflict markers committed (see matches above)"; exit 1
+      fi
+      echo "no conflict markers"
+
 # Local-stack source-patch gate. Unit-tests scripts/patch-stack-src.sh (the
 # post-clone pass that rewrites files in ./.stack-src which `docker compose build`
 # then consumes) against synthetic checkouts: the pre-rename private dependency is

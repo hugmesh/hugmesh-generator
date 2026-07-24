@@ -466,6 +466,13 @@ services:
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-admin-bff-api
     environment:
+      # The Casdoor ORGANIZATION logins resolve against. The seed (seed-e2e.sh)
+      # creates org `hugmesh`, but this repo's application.yml still defaults to
+      # the pre-rename `snapdragon` — so every native login failed with
+      #   "The user: snapdragon/e2e-admin doesn't exist"
+      # immediately after a seed that verified the persona. One value, both
+      # sides: keep it equal to seed-e2e.sh's CASDOOR_ORG default.
+      CASDOOR_ORG: ${CASDOOR_ORG:-hugmesh}
       # admin-bff both RECEIVES and MINTS Casdoor JWTs on the native-login path:
       #  • RECEIVES — mod-bff forwards a caller/custody JWT to admin-bff's PUBLIC
       #    surface for a native-login mod's ban / domain-lock write (mod-bff-api#70's
@@ -565,6 +572,13 @@ services:
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-mod-bff-api
     environment:
+      # The Casdoor ORGANIZATION logins resolve against. The seed (seed-e2e.sh)
+      # creates org `hugmesh`, but this repo's application.yml still defaults to
+      # the pre-rename `snapdragon` — so every native login failed with
+      #   "The user: snapdragon/e2e-admin doesn't exist"
+      # immediately after a seed that verified the persona. One value, both
+      # sides: keep it equal to seed-e2e.sh's CASDOOR_ORG default.
+      CASDOOR_ORG: ${CASDOOR_ORG:-hugmesh}
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       # In-DNS JWKS: compose issuer-uri is the browser-facing localhost:8000 (unreachable in-container),
       # so point key retrieval at the container Casdoor or the resource server 500s every authed call.
@@ -628,6 +642,13 @@ services:
     build:
       context: ${STACK_SRC:-../../.stack-src}/hugmesh-user-bff-api
     environment:
+      # The Casdoor ORGANIZATION logins resolve against. The seed (seed-e2e.sh)
+      # creates org `hugmesh`, but this repo's application.yml still defaults to
+      # the pre-rename `snapdragon` — so every native login failed with
+      #   "The user: snapdragon/e2e-admin doesn't exist"
+      # immediately after a seed that verified the persona. One value, both
+      # sides: keep it equal to seed-e2e.sh's CASDOOR_ORG default.
+      CASDOOR_ORG: ${CASDOOR_ORG:-hugmesh}
       CASDOOR_ISSUER_URI: ${CASDOOR_ISSUER_URI:-http://localhost:8000}
       # In-DNS JWKS: compose issuer-uri is the browser-facing localhost:8000 (unreachable in-container),
       # so point key retrieval at the container Casdoor or the resource server 500s every authed call.

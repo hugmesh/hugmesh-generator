@@ -149,19 +149,17 @@ spring:
               uri: http://hugmesh-forum-bff-api:8080
               predicates:
                 - Path=/bff/forum/**
-<<<<<<< HEAD
             # character-forge BFF — same sibling shape (non-overlapping
             # /bff/character-forge/** prefix, ROLE_USER row seeded in 20-schema.sql).
+            # The service name is snapdragon-character-forge-bff-api on purpose: the
+            # repo was CREATED under that DESIGN-locked name (docs/XR-CHAT.md) and
+            # never carried a pre-rename hugmesh form.
             - id: snapdragon-character-forge-bff-api
               uri: http://snapdragon-character-forge-bff-api:8080
               predicates:
                 - Path=/bff/character-forge/**
-            - id: snapdragon-wiki-bff-api
-              uri: http://snapdragon-wiki-bff-api:8080
-=======
             - id: hugmesh-wiki-bff-api
               uri: http://hugmesh-wiki-bff-api:8080
->>>>>>> origin/main
               predicates:
                 - Path=/bff/wiki/**
             - id: hugmesh-owncast-bff-api
