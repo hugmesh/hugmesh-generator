@@ -220,6 +220,17 @@ spec:
           - id: hugmesh-wiki-bff-api
             uri: https://hugmesh-wiki-bff-api.hugmesh-backend.svc.cluster.local:8080
             path: /bff/wiki/**
+          # Mesh BFF (/bff/mesh/** -> snapdragon-mesh-bff-api): the LoRa mesh
+          # node directory / mesh-enabled rooms / my-devices surfaces. SIBLING of
+          # the wiki/forum/mod rows above (non-overlapping prefix, own role floor
+          # ROLE_MESH — see route-access), declared BEFORE the /bff/** admin-bff
+          # catch-all. https:// — mesh-bff enforces mTLS (client-auth=need); the
+          # gateway presents its client cert on this leg. The bridge-sync ingest
+          # (/bff/mesh/internal/**) is NOT routed here: the meshbridge daemon
+          # calls the service in-cluster directly (ROLE_SERVICE + mTLS).
+          - id: snapdragon-mesh-bff-api
+            uri: https://snapdragon-mesh-bff-api.snapdragon-backend.svc.cluster.local:8080
+            path: /bff/mesh/**
           # Character Forge BFF (/bff/character-forge/** -> snapdragon-character-forge-
           # bff-api): saved 3D character configs + the VN→3D /map endpoint. SIBLING of
           # /bff/forum/** + /bff/wiki/** above (non-overlapping prefix, ROLE_USER

@@ -502,6 +502,16 @@ INSERT INTO gateway_route_access (gateway, url_pattern, role, allow) VALUES
   -- Do NOT pair ROLE_ADMIN on the ROLE_WIKI floor row: the gateway admin-bypass
   -- already passes admins through; pairing ROLE_ADMIN would incorrectly expose
   -- every wiki-floor endpoint to admins who have not been granted wiki access.
+  ('snapdragon-fe-gateway',  '/bff/wiki/admin/**',  'ROLE_ADMIN', true),  -- wiki admin-console seam (admin-only, end-to-end)
+  ('snapdragon-fe-gateway',  '/bff/wiki/**',        'ROLE_WIKI',  true),  -- wiki BFF (wiki-access floor)
+  -- Mesh BFF (/bff/mesh/** -> snapdragon-mesh-bff-api): LoRa mesh node
+  -- directory / rooms / my-devices. ROLE_MESH = "may use the mesh surfaces"
+  -- (granted by admin, same grant model as ROLE_WIKI). Do NOT pair ROLE_ADMIN
+  -- here: the gateway admin-bypass already passes admins through (the wiki-row
+  -- rationale above applies verbatim). The internal bridge-sync surface
+  -- (/bff/mesh/internal/**) is not gateway-routed at all.
+  ('snapdragon-fe-gateway',  '/bff/mesh/**',        'ROLE_MESH',  true),  -- mesh BFF (mesh-access floor)
+  -- Owncast BFF (/bff/owncast/** -> snapdragon-owncast-bff-api). Admins reach
   ('hugmesh-fe-gateway',  '/bff/wiki/admin/**',  'ROLE_ADMIN', true),  -- wiki admin-console seam (admin-only, end-to-end)
   ('hugmesh-fe-gateway',  '/bff/wiki/**',        'ROLE_WIKI',  true),  -- wiki BFF (wiki-access floor)
   -- Character Forge BFF (/bff/character-forge/** -> snapdragon-character-forge-bff-

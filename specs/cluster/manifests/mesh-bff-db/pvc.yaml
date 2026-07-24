@@ -1,0 +1,12 @@
+# Persistent storage for the snapdragon-mesh-bff-api Postgres data directory
+# (the mesh_node_directory + mesh_room tables).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mesh-bff-db
+  namespace: snapdragon-backend
+  labels: { app: mesh-bff-db }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: snapdragon-local
+  resources: { requests: { storage: 2Gi } }
