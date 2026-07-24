@@ -375,6 +375,50 @@ patch_gateway_cassandra_migrations() { # <repo-checkout-dir>
   fi
 }
 
+# ── patch: give every path-mounted UI the base-href login-ui already has ──────
+# The fe-gateway mounts each UI under a path (/admin/, /wiki/, /social/forum/ …),
+# but only login-ui builds with `-- --base-href=/login/`. Every other UI ships
+# <base href="/"> with RELATIVE hashed assets, so direct navigation makes the
+# browser fetch /main-<hash>.js from the WEBROOT — the /** catch-all forwards
+# that to the host shell, whose SPA fallback returns index.html as text/html,
+# and the page renders COMPLETELY BLANK (live case: /admin/ and /api-docs/;
+# login was the ONLY page that worked, for exactly this reason).
+# UPSTREAM FIX: one flag per UI repo Dockerfile, copying login-ui's pattern.
+ui_base_href() { # repo -> mount path ("" = not a path-mounted UI)
+  case "$1" in
+    hugmesh-admin-ui)             printf '/admin/' ;;
+    hugmesh-mod-ui)               printf '/mod/' ;;
+    hugmesh-user-ui)              printf '/user/' ;;
+    hugmesh-api-docs)             printf '/api-docs/' ;;
+    hugmesh-wiki-ui)              printf '/wiki/' ;;
+    hugmesh-owncast-ui)           printf '/owncast/' ;;
+    hugmesh-tube-ui)              printf '/tube/' ;;
+    hugmesh-character-studio-ui)  printf '/character-studio/' ;;
+    hugmesh-forum-ui)             printf '/social/forum/' ;;
+    hugmesh-matrix-ui)            printf '/social/matrix/' ;;
+    hugmesh-mastodon-ui)          printf '/social/mastodon/' ;;
+    *)                            printf '' ;;
+  esac
+}
+
+fix_ui_base_href() { # <repo-checkout-dir>
+  local d="$1" df="$1/Dockerfile" slug
+  slug="$(ui_base_href "$(basename "$1")")"
+  [ -n "${slug}" ] && [ -f "${df}" ]      || return 0
+  grep -q -- '--base-href' "${df}"        && return 0   # already correct (login-ui pattern)
+  grep -qE '^RUN npm run build' "${df}"   || {
+    echo "  ! $(basename "${d}")/Dockerfile: no single-line 'RUN npm run build' to anchor --base-href — NOT patched" >&2
+    return 0
+  }
+  sed -i -E "s#^(RUN npm run build[A-Za-z:_-]*)( --prod)?\$#\1\2 -- --base-href=${slug}#" "${df}"
+  grep -q -- "--base-href=${slug}" "${df}" || {
+    echo "  ! $(basename "${d}")/Dockerfile: --base-href injection failed" >&2
+    return 0
+  }
+  echo "  ~ $(basename "${d}")/Dockerfile: --base-href=${slug} injected (login-ui pattern)"
+  patched=$((patched+1))
+}
+
 if [ ! -d "${STACK_SRC}" ]; then
   echo "==> patch-stack-src: ${STACK_SRC} does not exist (nothing to patch)"
   exit 0
@@ -387,6 +431,7 @@ for dir in "${STACK_SRC}"/*/; do
   drop_pre_rename_commons_dep "${dir%/}"
   wire_local_maven_registry "${dir%/}"
   pin_federation_to_one_copy "${dir%/}"
+  fix_ui_base_href "${dir%/}"
   patch_gateway_cassandra_migrations "${dir%/}"
 done
 echo "==> patch-stack-src: ${scanned} checkout(s) scanned, ${patched} patched"

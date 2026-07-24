@@ -276,6 +276,25 @@ else bad "the pass aborted on a checkout with no src/"; fi
 check "checkouts AFTER the src-less one are still patched" \
       "$(grep -c 'maven-default-http-blocker' "${SRC12}/zzz-later/settings.xml" || true)" "1"
 
+echo "== 16. path-mounted UIs get --base-href; login-ui and non-UI repos are untouched =="
+SRC13="${WORK}/m"
+mkdir -p "${SRC13}/hugmesh-admin-ui" "${SRC13}/hugmesh-login-ui" "${SRC13}/hugmesh-gateway2"
+printf 'FROM node:24-alpine AS build\nRUN npm ci\nRUN npm run build:admin\n' > "${SRC13}/hugmesh-admin-ui/Dockerfile"
+printf 'FROM node:24-alpine AS build\nRUN npm run build:login -- --base-href=/login/\n' > "${SRC13}/hugmesh-login-ui/Dockerfile"
+printf 'FROM node:24-alpine AS build\nRUN npm run build\n' > "${SRC13}/hugmesh-gateway2/Dockerfile"
+cp "${SRC13}/hugmesh-login-ui/Dockerfile" "${WORK}/login-before"
+cp "${SRC13}/hugmesh-gateway2/Dockerfile" "${WORK}/nonui-before"
+bash "${PATCH_SH}" "${SRC13}" >/dev/null
+check "admin build line gains the flag" \
+      "$(grep -c -- 'build:admin -- --base-href=/admin/$' "${SRC13}/hugmesh-admin-ui/Dockerfile" || true)" "1"
+if diff -q "${WORK}/login-before" "${SRC13}/hugmesh-login-ui/Dockerfile" >/dev/null; then ok "login-ui (already correct) untouched"
+else bad "rewrote login-ui's already-correct build"; fi
+if diff -q "${WORK}/nonui-before" "${SRC13}/hugmesh-gateway2/Dockerfile" >/dev/null; then ok "a repo with no mount mapping is untouched"
+else bad "patched a repo that is not a path-mounted UI"; fi
+bash "${PATCH_SH}" "${SRC13}" >/dev/null
+check "idempotent (flag not doubled)" \
+      "$(grep -o -- '--base-href' "${SRC13}/hugmesh-admin-ui/Dockerfile" | wc -l | tr -d ' ')" "1"
+
 echo
 echo "== ${pass} passed, ${fail} failed =="
 [ "${fail}" -eq 0 ]
